@@ -151,33 +151,75 @@
     geocoder_country_code: "ru",
     geocoder_language: "ru",
     geocoder_result_limit: 5,
-    store_address_map_enabled: false
+    store_address_map_enabled: false,
+    delivery_zone_polygon_provider: "Leaflet-Geoman"
   };
   let systemMapDraft = { ...systemMapOriginal };
+  let systemDeliveryZonePolygonDraftMode = false;
+  let systemDeliveryZonePolygonCancelConfirm = false;
+  let systemDeliveryZonePolygonOriginal = {
+    delivery_zone_polygon_provider: "Leaflet-Geoman",
+    delivery_zone_polygon_enabled: false
+  };
+  let systemDeliveryZonePolygonDraft = { ...systemDeliveryZonePolygonOriginal };
   let deliveryLeafletMap = null;
   let deliveryLeafletTileLayer = null;
   let deliveryLeafletSearchMarker = null;
   let deliveryLeafletBranchMarkersLayer = null;
+  let deliveryLeafletZonePassiveLayer = null;
+  let deliveryLeafletZoneEditLayer = null;
+  let deliveryLeafletZoneDraftLayer = null;
+  let deliveryLeafletZoneVertexLayer = null;
+  let deliveryLeafletZoneMidpointLayer = null;
   let storeLeafletMap = null;
   let storeLeafletTileLayer = null;
   let storeLeafletMarker = null;
   let storeLeafletClickBound = false;
   let deliveryMapConfigCache = null;
   let storeAddressMapModeCache = false;
+  let deliveryMapAccountsLoaded = false;
+  let deliveryMapAccountsLoadingPromise = null;
+  let deliveryMapAccountsProviderName = "";
+  let deliveryMapAccountsOriginal = [];
+  let deliveryMapAccountsDraft = [];
+  let deliveryMapAccountsAddMode = false;
+  let deliveryMapAccountsAddDraft = null;
+  let deliveryMapAccountsEditId = "";
+  let deliveryMapAccountsEditDraft = null;
+  const deliveryMapAccountsRevealState = new Map();
+  const DELIVERY_MAP_CONFIG_TAB_KEY = "delivery:map-config";
+  const DELIVERY_ZONE_CREATE_TAB_KEY = "delivery-zone:create";
   let selectedDeliveryStoreCity = null;
   let selectedDeliveryStoreCityLocation = null;
   let searchedMapCity = null;
+  let deliveryCreateMenuOpen = false;
   const deliveryMapSearchPopoverState = {
     open: false,
     items: [],
     status: "",
     mode: "idle"
   };
-  let infoPopoverOpen = false;
   const deliveryMapCityLocationCache = new Map();
+  const deliveryZonesState = {
+    loaded: false,
+    items: [],
+    selectedId: null,
+    snapshot: null,
+    mode: "view",
+    drawMode: "idle",
+    hoverLatLng: null,
+    mapFocusedKey: "",
+    editLayerKey: "",
+    pointMenuOpen: false,
+    pointMenuLatLng: null,
+    contextMenuOpen: false,
+    contextMenuLatLng: null,
+    contextMenuZoneId: 0
+  };
   let deliveryStoreCityLocationRequestKey = "";
   const DELIVERY_MAP_DEFAULT_CENTER = [61.524, 105.3188];
   const DELIVERY_MAP_DEFAULT_ZOOM = 3;
+  const DELIVERY_ZONE_MIDPOINT_MIN_ZOOM = 15;
 
   function applyBrandFromTenant(tenant) {
     if (!tenant) return;
@@ -623,6 +665,10 @@
     const storesList = document.getElementById("storesList");
     const storesEmpty = document.getElementById("storesEmpty");
     const settingsAddOrderBtn = document.getElementById("settingsAddOrderBtn");
+    const settingsCreateMenuWrap = document.getElementById("settingsCreateMenuWrap");
+    const settingsDeliveryCreateMenu = document.getElementById("settingsDeliveryCreateMenu");
+    const settingsDeliveryCreateConditionBtn = document.getElementById("settingsDeliveryCreateConditionBtn");
+    const settingsDeliveryCreateZoneBtn = document.getElementById("settingsDeliveryCreateZoneBtn");
     const settingsDeliveryMapSearchToolbar = document.getElementById("settingsDeliveryMapSearchToolbar");
     const settingsDeliveryMapSearchWrap = document.getElementById("settingsDeliveryMapSearchWrap");
     const settingsDeliveryMapSearchPopover = document.getElementById("settingsDeliveryMapSearchPopover");
@@ -633,13 +679,11 @@
     const settingsDeliveryMapSearchInput = document.getElementById("settingsDeliveryMapSearchInput");
     const settingsDeliveryMapSearchStatus = document.getElementById("settingsDeliveryMapSearchStatus");
     const settingsDeliveryMapResults = document.getElementById("settingsDeliveryMapResults");
-    const settingsDeliveryMapInfoWrap = document.getElementById("settingsDeliveryMapInfoWrap");
-    const settingsDeliveryMapInfoBtn = document.getElementById("settingsDeliveryMapInfoBtn");
-    const settingsDeliveryMapInfoPopover = document.getElementById("settingsDeliveryMapInfoPopover");
     const settingsDeliveryCitySelector = document.getElementById("settingsDeliveryCitySelector");
     const settingsDeliveryCityChip = document.getElementById("settingsDeliveryCityChip");
     const settingsDeliveryCityChipText = document.getElementById("settingsDeliveryCityChipText");
     const settingsDeliveryCityDropdown = document.getElementById("settingsDeliveryCityDropdown");
+    const settingsDeliveryMapConfigBtn = document.getElementById("settingsDeliveryMapConfigBtn");
     const settingsChatWidgetSwitchWrap = document.getElementById("settingsChatWidgetSwitchWrap");
     const settingsChatWidgetEnabledSwitch = document.getElementById("settingsChatWidgetEnabledSwitch");
     const settingsTenantCardItems = settingsTenantCards
@@ -678,6 +722,34 @@
       return normalizeChatToggleEnabledValue(rawValue);
     }
 
+    function syncDeliveryMapConfigButtonVisibility(section) {
+      if (!settingsDeliveryMapConfigBtn) return;
+      const activeSection = typeof section === "string"
+        ? section
+        : String(document.body.getAttribute("data-settings-section") || "");
+      settingsDeliveryMapConfigBtn.classList.toggle(
+        "hidden",
+        activeSection !== "delivery" || !isStoreAddressMapModeEnabled()
+      );
+    }
+
+    function closeDeliveryCreateMenu() {
+      deliveryCreateMenuOpen = false;
+      if (settingsDeliveryCreateMenu) settingsDeliveryCreateMenu.classList.add("hidden");
+    }
+
+    function syncDeliveryCreateMenuAvailability() {
+      if (!settingsDeliveryCreateZoneBtn) return;
+      settingsDeliveryCreateZoneBtn.classList.toggle("hidden", !isDeliveryZoneFeatureAvailable());
+    }
+
+    function openDeliveryCreateMenu() {
+      syncDeliveryCreateMenuAvailability();
+      if (!settingsDeliveryCreateMenu) return;
+      deliveryCreateMenuOpen = true;
+      settingsDeliveryCreateMenu.classList.remove("hidden");
+    }
+
     function syncSettingsToolbarControls(section) {
       const isChats = section === "chats";
       const isDelivery = section === "delivery";
@@ -687,9 +759,7 @@
       if (settingsDeliveryMapSearchToolbar) {
         settingsDeliveryMapSearchToolbar.classList.toggle("hidden", !isDelivery);
       }
-      if (settingsDeliveryMapInfoWrap) {
-        settingsDeliveryMapInfoWrap.classList.toggle("hidden", !isDelivery);
-      }
+      syncDeliveryMapConfigButtonVisibility(section);
       if (settingsDeliveryCitySelector && !isDelivery) {
         settingsDeliveryCitySelector.classList.add("hidden");
       }
@@ -705,10 +775,15 @@
       }
       if (isDelivery) {
         renderDeliveryCitySelector();
+        if (settingsAddOrderBtn) {
+          settingsAddOrderBtn.title = "Добавить";
+          settingsAddOrderBtn.setAttribute("aria-label", "Добавить");
+        }
+        syncDeliveryCreateMenuAvailability();
       } else {
         closeDeliveryCityDropdown();
         closeDeliveryMapSearchPopover();
-        closeDeliveryMapInfoPopover();
+        closeDeliveryCreateMenu();
       }
     }
 
@@ -807,6 +882,7 @@
     const printApiCard = document.getElementById("settingsPrintApiCard");
     const systemPollingCard = document.getElementById("settingsSystemPollingCard");
     const systemMapCard = document.getElementById("settingsSystemMapCard");
+    const systemDeliveryZonePolygonCard = document.getElementById("settingsSystemDeliveryZonePolygonCard");
     const systemTelegramBotCard = document.getElementById("settingsSystemTelegramBotCard");
     const telegramAppCard = document.getElementById("settingsTelegramAppCard");
     const maxAppCard = document.getElementById("settingsMaxAppCard");
@@ -829,6 +905,7 @@
     const printApiPanel = document.getElementById("settingsPrintApiPanel");
     const systemPollingPanel = document.getElementById("settingsSystemPollingPanel");
     const systemMapPanel = document.getElementById("settingsSystemMapPanel");
+    const systemDeliveryZonePolygonPanel = document.getElementById("settingsSystemDeliveryZonePolygonPanel");
     const systemTelegramBotPanel = document.getElementById("settingsSystemTelegramBotPanel");
     const settingsNotificationsPanel = document.getElementById("settingsNotificationsPanel");
     const globalTelegramBindings = document.getElementById("globalTelegramBindings");
@@ -947,6 +1024,14 @@
     const settingsSystemMapCancelBtn = document.getElementById("settingsSystemMapCancelBtn");
     const settingsSystemMapFooterView = document.getElementById("settingsSystemMapFooterView");
     const settingsSystemMapFooterEdit = document.getElementById("settingsSystemMapFooterEdit");
+    let settingsSystemMapPolygonProvider = document.getElementById("settingsSystemMapPolygonProvider");
+    const settingsSystemDeliveryZonePolygonEnabled = document.getElementById("settingsSystemDeliveryZonePolygonEnabled");
+    const settingsSystemDeliveryZonePolygonProvider = document.getElementById("settingsSystemDeliveryZonePolygonProvider");
+    const settingsSystemDeliveryZonePolygonEditBtn = document.getElementById("settingsSystemDeliveryZonePolygonEditBtn");
+    const settingsSystemDeliveryZonePolygonSaveBtn = document.getElementById("settingsSystemDeliveryZonePolygonSaveBtn");
+    const settingsSystemDeliveryZonePolygonCancelBtn = document.getElementById("settingsSystemDeliveryZonePolygonCancelBtn");
+    const settingsSystemDeliveryZonePolygonFooterView = document.getElementById("settingsSystemDeliveryZonePolygonFooterView");
+    const settingsSystemDeliveryZonePolygonFooterEdit = document.getElementById("settingsSystemDeliveryZonePolygonFooterEdit");
     const settingsSystemTelegramBotUsername = document.getElementById("settingsSystemTelegramBotUsername");
     const settingsSystemTelegramBotToken = document.getElementById("settingsSystemTelegramBotToken");
     const settingsSystemTelegramWebhookUrl = document.getElementById("settingsSystemTelegramWebhookUrl");
@@ -970,6 +1055,11 @@
     const STORE_ADDRESS_ALLOWED_ROOT_CITY_KEYS = new Set(
       STORE_ADDRESS_ALLOWED_ROOT_CITIES.map((cityName) => String(cityName || "").trim().toLowerCase().replace(/ё/g, "е"))
     );
+    const STORE_ADDRESS_ALLOWED_ROOT_CITY_COORDS = Object.freeze({
+      [normalizeStoreCitySearchKey("Новоалтайск")]: Object.freeze({ lat: 53.412156, lng: 83.9320738 }),
+      [normalizeStoreCitySearchKey("Барнаул")]: Object.freeze({ lat: 53.3475493, lng: 83.7788448 }),
+      [normalizeStoreCitySearchKey("Новосибирск")]: Object.freeze({ lat: 55.028191, lng: 82.9211489 }),
+    });
 
     const storesState = {
       loaded: false,
@@ -2200,6 +2290,12 @@
         ? 5
         : Number(geocoderResultLimitRaw);
       const storeAddressMapEnabled = Boolean(source.store_address_map_enabled);
+      const tenantApiKeyRequired = Boolean(source.tenant_api_key_required);
+      const tenantApiKeyConfigured = Boolean(source.tenant_api_key_configured);
+      const tenantApiKeyMissing = Boolean(source.tenant_api_key_missing);
+      const tenantActiveAccountId = String(source.tenant_active_account_id || "").trim();
+      const tenantTileUrlResolved = Boolean(source.tenant_tile_url_resolved);
+      const deliveryZonePolygonProvider = String(source.delivery_zone_polygon_provider || "").trim() || "Leaflet-Geoman";
       return {
         provider_name: providerName,
         tile_url: tileUrl,
@@ -2216,6 +2312,25 @@
           ? Math.max(1, Math.min(10, Math.round(geocoderResultLimitValue)))
           : 5,
         store_address_map_enabled: storeAddressMapEnabled,
+        tenant_api_key_required: tenantApiKeyRequired,
+        tenant_api_key_configured: tenantApiKeyConfigured,
+        tenant_api_key_missing: tenantApiKeyMissing,
+        tenant_active_account_id: tenantActiveAccountId,
+        tenant_tile_url_resolved: tenantTileUrlResolved,
+        delivery_zone_polygon_provider: deliveryZonePolygonProvider,
+      };
+    }
+
+    function normalizeSystemDeliveryZonePolygonConfig(values) {
+      const source = values && typeof values === "object" ? values : {};
+      const provider = String(
+        source.delivery_zone_polygon_provider
+        || source.provider
+        || ""
+      ).trim() || "Leaflet-Geoman";
+      return {
+        delivery_zone_polygon_provider: provider,
+        delivery_zone_polygon_enabled: Boolean(source.delivery_zone_polygon_enabled),
       };
     }
 
@@ -2229,12 +2344,39 @@
       return Boolean(storeAddressMapModeCache || (systemMapOriginal && systemMapOriginal.store_address_map_enabled));
     }
 
+    function isDeliveryZoneFeatureAvailable(config = null) {
+      return isStoreAddressMapModeEnabled(config);
+    }
+
     function hasConfiguredMap(config) {
       return Boolean(config && String(config.tile_url || "").trim());
     }
 
     function hasConfiguredMapGeocoder(config) {
       return Boolean(config && String(config.geocoder_search_url || "").trim());
+    }
+
+    function buildMapNotConfiguredMessage(config, mode = "preview") {
+      const normalized = config && typeof config === "object" ? config : {};
+      if (normalized.tenant_api_key_missing) {
+        return mode === "store"
+          ? "Добавьте и выберите активный API key в разделе «Доставка -> Настройка карты», чтобы открыть карту филиала."
+          : "Добавьте и выберите активный API key в разделе «Доставка -> Настройка карты», чтобы показать подложку здесь.";
+      }
+      return mode === "store"
+        ? "Сначала настройте карту в разделе «Системные -> Карта»."
+        : "Заполните параметры провайдера в разделе «Системные -> Карта», чтобы показать подложку здесь.";
+    }
+
+    async function fetchTenantMapConfig() {
+      try {
+        const res = await authFetch("/api/admin/tenant/map-provider-config");
+        const data = await res.json();
+        return data || null;
+      } catch (err) {
+        console.error("Не удалось загрузить resolved-конфигурацию карты tenant:", err);
+        return null;
+      }
     }
 
     function parseMapSubdomains(value) {
@@ -2255,6 +2397,28 @@
       settingsSystemMapCancelBtn.innerHTML = '<i class="fas fa-times"></i>';
     }
 
+    function resetSystemDeliveryZonePolygonCancelButton() {
+      if (!settingsSystemDeliveryZonePolygonCancelBtn) return;
+      systemDeliveryZonePolygonCancelConfirm = false;
+      settingsSystemDeliveryZonePolygonCancelBtn.classList.remove("is-confirm");
+      settingsSystemDeliveryZonePolygonCancelBtn.title = "Отменить";
+      settingsSystemDeliveryZonePolygonCancelBtn.setAttribute("aria-label", "Отменить");
+      settingsSystemDeliveryZonePolygonCancelBtn.innerHTML = '<i class="fas fa-times"></i>';
+    }
+
+    function readSystemDeliveryZonePolygonFormValues() {
+      return {
+        delivery_zone_polygon_provider: String((settingsSystemDeliveryZonePolygonProvider && settingsSystemDeliveryZonePolygonProvider.value) || "").trim(),
+        delivery_zone_polygon_enabled: Boolean(settingsSystemDeliveryZonePolygonEnabled && settingsSystemDeliveryZonePolygonEnabled.checked),
+      };
+    }
+
+    function applySystemDeliveryZonePolygonFormValues(values) {
+      const config = normalizeSystemDeliveryZonePolygonConfig(values);
+      if (settingsSystemDeliveryZonePolygonProvider) settingsSystemDeliveryZonePolygonProvider.value = config.delivery_zone_polygon_provider;
+      if (settingsSystemDeliveryZonePolygonEnabled) settingsSystemDeliveryZonePolygonEnabled.checked = Boolean(config.delivery_zone_polygon_enabled);
+    }
+
     function readSystemMapFormValues() {
       return {
         provider_name: String((settingsSystemMapProviderName && settingsSystemMapProviderName.value) || "").trim(),
@@ -2268,6 +2432,7 @@
         geocoder_language: String((settingsSystemMapGeocoderLanguage && settingsSystemMapGeocoderLanguage.value) || "").trim(),
         geocoder_result_limit: String((settingsSystemMapGeocoderResultLimit && settingsSystemMapGeocoderResultLimit.value) || "").trim(),
         store_address_map_enabled: Boolean(settingsSystemMapStoreAddressEnabled && settingsSystemMapStoreAddressEnabled.checked),
+        delivery_zone_polygon_provider: String((settingsSystemMapPolygonProvider && settingsSystemMapPolygonProvider.value) || "").trim(),
       };
     }
 
@@ -2284,6 +2449,8 @@
       if (settingsSystemMapGeocoderLanguage) settingsSystemMapGeocoderLanguage.value = config.geocoder_language;
       if (settingsSystemMapGeocoderResultLimit) settingsSystemMapGeocoderResultLimit.value = String(config.geocoder_result_limit);
       if (settingsSystemMapStoreAddressEnabled) settingsSystemMapStoreAddressEnabled.checked = Boolean(config.store_address_map_enabled);
+      ensureSystemMapPolygonField();
+      if (settingsSystemMapPolygonProvider) settingsSystemMapPolygonProvider.value = config.delivery_zone_polygon_provider;
     }
 
     function setSystemMapDraftMode(enabled) {
@@ -2331,6 +2498,11 @@
       if (settingsSystemMapStoreAddressEnabled) {
         settingsSystemMapStoreAddressEnabled.disabled = !systemMapDraftMode;
       }
+      ensureSystemMapPolygonField();
+      if (settingsSystemMapPolygonProvider) {
+        settingsSystemMapPolygonProvider.disabled = !systemMapDraftMode;
+        settingsSystemMapPolygonProvider.readOnly = !systemMapDraftMode;
+      }
       if (settingsSystemMapFooterView) {
         settingsSystemMapFooterView.classList.toggle("hidden", systemMapDraftMode);
       }
@@ -2342,9 +2514,29 @@
       }
     }
 
+    function setSystemDeliveryZonePolygonDraftMode(enabled) {
+      systemDeliveryZonePolygonDraftMode = Boolean(enabled);
+      if (settingsSystemDeliveryZonePolygonProvider) {
+        settingsSystemDeliveryZonePolygonProvider.disabled = !systemDeliveryZonePolygonDraftMode;
+        settingsSystemDeliveryZonePolygonProvider.readOnly = !systemDeliveryZonePolygonDraftMode;
+      }
+      if (settingsSystemDeliveryZonePolygonEnabled) {
+        settingsSystemDeliveryZonePolygonEnabled.disabled = !systemDeliveryZonePolygonDraftMode;
+      }
+      if (settingsSystemDeliveryZonePolygonFooterView) {
+        settingsSystemDeliveryZonePolygonFooterView.classList.toggle("hidden", systemDeliveryZonePolygonDraftMode);
+      }
+      if (settingsSystemDeliveryZonePolygonFooterEdit) {
+        settingsSystemDeliveryZonePolygonFooterEdit.classList.toggle("hidden", !systemDeliveryZonePolygonDraftMode);
+      }
+      if (!systemDeliveryZonePolygonDraftMode) {
+        resetSystemDeliveryZonePolygonCancelButton();
+      }
+    }
+
     function cancelSystemMapDraft() {
       systemMapDraft = { ...systemMapOriginal };
-      deliveryMapConfigCache = { ...systemMapOriginal };
+      deliveryMapConfigCache = null;
       storeAddressMapModeCache = Boolean(systemMapOriginal.store_address_map_enabled);
       applySystemMapFormValues(systemMapOriginal);
       applyStoreAddressModeUi();
@@ -2352,17 +2544,18 @@
       setSystemMapDraftMode(false);
     }
 
+    function cancelSystemDeliveryZonePolygonDraft() {
+      systemDeliveryZonePolygonDraft = { ...systemDeliveryZonePolygonOriginal };
+      applySystemDeliveryZonePolygonFormValues(systemDeliveryZonePolygonOriginal);
+      setSystemDeliveryZonePolygonDraftMode(false);
+      syncDeliveryCreateMenuAvailability();
+    }
+
     function clearDeliveryMapSearchMarker() {
       if (deliveryLeafletSearchMarker && deliveryLeafletMap) {
         deliveryLeafletMap.removeLayer(deliveryLeafletSearchMarker);
       }
       deliveryLeafletSearchMarker = null;
-    }
-
-    function closeDeliveryMapInfoPopover() {
-      infoPopoverOpen = false;
-      if (settingsDeliveryMapInfoPopover) settingsDeliveryMapInfoPopover.classList.add("hidden");
-      if (settingsDeliveryMapInfoBtn) settingsDeliveryMapInfoBtn.setAttribute("aria-expanded", "false");
     }
 
     function closeDeliveryMapSearchPopover() {
@@ -2468,6 +2661,17 @@
       syncDeliveryMapSearchClearButton();
     }
 
+    function syncDeliveryMapToolbarInteractivity() {
+      const canSearch = Boolean(hasConfiguredMapGeocoder(deliveryMapConfigCache) && !isDeliveryZonePlacingMode());
+      setDeliveryMapSearchEnabled(canSearch);
+      if (settingsDeliveryCityChip) {
+        settingsDeliveryCityChip.disabled = isDeliveryZonePlacingMode();
+      }
+      if (isDeliveryZonePlacingMode()) {
+        closeDeliveryCityDropdown();
+      }
+    }
+
     function normalizeDeliveryMapCityName(value) {
       return String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
     }
@@ -2553,6 +2757,7 @@
       }
 
       settingsDeliveryCitySelector.classList.toggle("hidden", !isDelivery);
+      settingsDeliveryCityChip.disabled = isDeliveryZonePlacingMode();
       updateDeliveryCityChipText();
       settingsDeliveryCityDropdown.innerHTML = "";
 
@@ -2626,9 +2831,12 @@
       }
       deliveryLeafletBranchMarkersLayer.clearLayers();
       const stores = getVisibleDeliveryMapStores();
+      const interactive = !isDeliveryZonePlacingMode();
       stores.forEach((store) => {
-        const marker = window.L.marker([store.lat, store.lng]);
-        marker.bindPopup(buildDeliveryMapStorePopup(store));
+        const marker = window.L.marker([store.lat, store.lng], { interactive });
+        if (interactive) {
+          marker.bindPopup(buildDeliveryMapStorePopup(store));
+        }
         deliveryLeafletBranchMarkersLayer.addLayer(marker);
       });
       return stores;
@@ -2834,10 +3042,16 @@
         if (!data || !data.ok || !data.data) return;
         systemMapOriginal = normalizeSystemMapConfig(data.data);
         systemMapDraft = { ...systemMapOriginal };
-        deliveryMapConfigCache = { ...systemMapOriginal };
+        systemDeliveryZonePolygonOriginal = {
+          delivery_zone_polygon_provider: systemMapOriginal.delivery_zone_polygon_provider || "Leaflet-Geoman",
+          delivery_zone_polygon_enabled: Boolean(systemMapOriginal.store_address_map_enabled)
+        };
+        systemDeliveryZonePolygonDraft = { ...systemDeliveryZonePolygonOriginal };
+        deliveryMapConfigCache = null;
         storeAddressMapModeCache = Boolean(systemMapOriginal.store_address_map_enabled);
         applySystemMapFormValues(systemMapOriginal);
         applyStoreAddressModeUi();
+        syncDeliveryMapConfigAvailability();
         setSystemMapDraftMode(false);
       } catch (err) {
         console.error("Failed to load system map settings:", err);
@@ -2854,10 +3068,16 @@
         if (!data || !data.ok || !data.data) return null;
         systemMapOriginal = normalizeSystemMapConfig(data.data);
         systemMapDraft = { ...systemMapOriginal };
-        deliveryMapConfigCache = { ...systemMapOriginal };
+        systemDeliveryZonePolygonOriginal = {
+          delivery_zone_polygon_provider: systemMapOriginal.delivery_zone_polygon_provider || "Leaflet-Geoman",
+          delivery_zone_polygon_enabled: Boolean(systemMapOriginal.store_address_map_enabled)
+        };
+        systemDeliveryZonePolygonDraft = { ...systemDeliveryZonePolygonOriginal };
+        deliveryMapConfigCache = null;
         storeAddressMapModeCache = Boolean(systemMapOriginal.store_address_map_enabled);
         applySystemMapFormValues(systemMapOriginal);
         applyStoreAddressModeUi();
+        syncDeliveryMapConfigAvailability();
         setSystemMapDraftMode(false);
         return data.data;
       } catch (err) {
@@ -2866,9 +3086,43 @@
       }
     }
 
+    async function loadSystemDeliveryZonePolygonSettings() {
+      try {
+        const res = await authFetch("/api/admin/system/delivery-zone-polygon");
+        const data = await res.json();
+        if (!data || !data.ok || !data.data) return;
+        systemDeliveryZonePolygonOriginal = normalizeSystemDeliveryZonePolygonConfig(data.data);
+        systemDeliveryZonePolygonDraft = { ...systemDeliveryZonePolygonOriginal };
+        applySystemDeliveryZonePolygonFormValues(systemDeliveryZonePolygonOriginal);
+        setSystemDeliveryZonePolygonDraftMode(false);
+        syncDeliveryCreateMenuAvailability();
+      } catch (err) {
+        console.error("Failed to load delivery zone polygon settings:", err);
+      }
+    }
+
+    async function saveSystemDeliveryZonePolygonSettings(payload) {
+      try {
+        const res = await authFetch("/api/admin/system/delivery-zone-polygon", {
+          method: "PUT",
+          body: JSON.stringify(payload || {})
+        });
+        const data = await res.json();
+        if (!data || !data.ok || !data.data) return null;
+        systemDeliveryZonePolygonOriginal = normalizeSystemDeliveryZonePolygonConfig(data.data);
+        systemDeliveryZonePolygonDraft = { ...systemDeliveryZonePolygonOriginal };
+        applySystemDeliveryZonePolygonFormValues(systemDeliveryZonePolygonOriginal);
+        setSystemDeliveryZonePolygonDraftMode(false);
+        syncDeliveryCreateMenuAvailability();
+        return data.data;
+      } catch (err) {
+        console.error("Failed to save delivery zone polygon settings:", err);
+        return null;
+      }
+    }
+
     function showDeliveryMapEmpty(message) {
       closeDeliveryMapSearchPopover();
-      closeDeliveryMapInfoPopover();
       if (settingsDeliveryMapEmpty) {
         settingsDeliveryMapEmpty.classList.remove("hidden");
         const textEl = settingsDeliveryMapEmpty.querySelector(".settings-delivery-map-empty-text");
@@ -2944,7 +3198,6 @@
 
     async function searchDeliveryMapCities() {
       const query = String((settingsDeliveryMapSearchInput && settingsDeliveryMapSearchInput.value) || "").trim();
-      closeDeliveryMapInfoPopover();
       closeDeliveryCityDropdown();
       deliveryMapSearchPopoverState.open = true;
       if (!query) {
@@ -2994,8 +3247,10 @@
     async function refreshDeliveryMapPreview(forceReload = false) {
       if (!settingsDeliveryMapBlock || !settingsDeliveryMapCanvas || !settingsDeliveryMapEmpty) return;
       if (!forceReload && deliveryMapConfigCache) {
+        storeAddressMapModeCache = Boolean(deliveryMapConfigCache.store_address_map_enabled);
+        syncDeliveryMapConfigAvailability();
         if (!hasConfiguredMap(deliveryMapConfigCache)) {
-          showDeliveryMapEmpty("Заполните параметры провайдера в разделе «Системные -> Карта», чтобы показать подложку здесь.");
+          showDeliveryMapEmpty(buildMapNotConfiguredMessage(deliveryMapConfigCache));
           return;
         }
         if (!window.L) {
@@ -3005,16 +3260,18 @@
         applyDeliveryMapConfig(deliveryMapConfigCache, { resetView: forceReload });
         setDeliveryMapSearchEnabled(hasConfiguredMapGeocoder(deliveryMapConfigCache));
         refreshDeliveryMapSelection();
+        syncDeliveryMapConfigAvailability();
         return;
       }
 
       try {
-        const res = await authFetch("/api/admin/system/map-provider");
-        const data = await res.json();
+        const data = await fetchTenantMapConfig();
         const config = normalizeSystemMapConfig(data && data.data ? data.data : null);
         deliveryMapConfigCache = { ...config };
+        storeAddressMapModeCache = Boolean(config.store_address_map_enabled);
+        syncDeliveryMapConfigAvailability();
         if (!hasConfiguredMap(config)) {
-          showDeliveryMapEmpty("Заполните параметры провайдера в разделе «Системные -> Карта», чтобы показать подложку здесь.");
+          showDeliveryMapEmpty(buildMapNotConfiguredMessage(config));
           return;
         }
         if (!window.L) {
@@ -3024,9 +3281,10 @@
         applyDeliveryMapConfig(config, { resetView: forceReload });
         setDeliveryMapSearchEnabled(hasConfiguredMapGeocoder(config));
         refreshDeliveryMapSelection();
+        syncDeliveryMapConfigAvailability();
       } catch (err) {
         console.error("Failed to refresh delivery map preview:", err);
-        showDeliveryMapEmpty("Не удалось загрузить системную настройку карты.");
+        showDeliveryMapEmpty("Не удалось загрузить настройку карты tenant.");
       }
     }
 
@@ -3243,11 +3501,10 @@
     }
 
     async function ensureStoreAddressMapConfig() {
-      if (deliveryMapConfigCache && hasConfiguredMap(deliveryMapConfigCache)) {
+      if (deliveryMapConfigCache) {
         return deliveryMapConfigCache;
       }
-      const res = await authFetch("/api/admin/system/map-provider");
-      const data = await res.json();
+      const data = await fetchTenantMapConfig();
       const config = normalizeSystemMapConfig(data && data.data ? data.data : null);
       deliveryMapConfigCache = { ...config };
       return config;
@@ -3345,7 +3602,7 @@
       try {
         const config = await ensureStoreAddressMapConfig();
         if (!hasConfiguredMap(config)) {
-          setStoreAddressMapModalStatus("Сначала настройте карту в разделе «Системные -> Карта».", "error");
+          setStoreAddressMapModalStatus(buildMapNotConfiguredMessage(config, "store"), "error");
           if (settingsStoreAddressMapModal) settingsStoreAddressMapModal.classList.remove("hidden");
           return;
         }
@@ -3433,6 +3690,7 @@
       if (imagesPanel) imagesPanel.classList.toggle("hidden", tabId !== "images");
       if (printApiPanel) printApiPanel.classList.toggle("hidden", tabId !== "print-api");
       if (systemMapPanel) systemMapPanel.classList.toggle("hidden", tabId !== "system-map");
+      if (systemDeliveryZonePolygonPanel) systemDeliveryZonePolygonPanel.classList.toggle("hidden", tabId !== "system-delivery-zone-polygon");
       if (systemTelegramBotPanel) systemTelegramBotPanel.classList.toggle("hidden", tabId !== "system-telegram-bot");
       if (systemPollingPanel) systemPollingPanel.classList.toggle("hidden", tabId !== "system-polling");
       if (settingsStorePanel) settingsStorePanel.classList.toggle("hidden", !tabId.startsWith("store-"));
@@ -3457,6 +3715,9 @@
       }
       if (tabId === "system-map") {
         loadSystemMapSettings();
+      }
+      if (tabId === "system-delivery-zone-polygon") {
+        loadSystemDeliveryZonePolygonSettings();
       }
       if (tabId === "system-telegram-bot") {
         loadSystemTelegramSettings();
@@ -3523,6 +3784,7 @@
           if (tabId === "images" && imagesCard) imagesCard.classList.remove("is-active");
           if (tabId === "print-api" && printApiCard) printApiCard.classList.remove("is-active");
           if (tabId === "system-map" && systemMapCard) systemMapCard.classList.remove("is-active");
+          if (tabId === "system-delivery-zone-polygon" && systemDeliveryZonePolygonCard) systemDeliveryZonePolygonCard.classList.remove("is-active");
           if (tabId === "system-telegram-bot" && systemTelegramBotCard) systemTelegramBotCard.classList.remove("is-active");
           if (tabId === "system-polling" && systemPollingCard) systemPollingCard.classList.remove("is-active");
           if (tabId.startsWith("store-")) {
@@ -3570,6 +3832,7 @@
       if (tabId === "images" && imagesCard) imagesCard.classList.add("is-active");
       if (tabId === "print-api" && printApiCard) printApiCard.classList.add("is-active");
       if (tabId === "system-map" && systemMapCard) systemMapCard.classList.add("is-active");
+      if (tabId === "system-delivery-zone-polygon" && systemDeliveryZonePolygonCard) systemDeliveryZonePolygonCard.classList.add("is-active");
       if (tabId === "system-telegram-bot" && systemTelegramBotCard) systemTelegramBotCard.classList.add("is-active");
       if (tabId === "system-polling" && systemPollingCard) systemPollingCard.classList.add("is-active");
     }
@@ -3745,6 +4008,12 @@
       });
     }
 
+    if (systemDeliveryZonePolygonCard) {
+      systemDeliveryZonePolygonCard.addEventListener("click", () => {
+        ensureTab("system-delivery-zone-polygon", "Полигоны доставки");
+      });
+    }
+
     if (systemTelegramBotCard) {
       systemTelegramBotCard.addEventListener("click", () => {
         ensureTab("system-telegram-bot", "Telegram \u0431\u043e\u0442");
@@ -3847,6 +4116,45 @@
       });
     }
 
+    if (settingsSystemDeliveryZonePolygonEditBtn) {
+      settingsSystemDeliveryZonePolygonEditBtn.addEventListener("click", () => {
+        systemDeliveryZonePolygonDraft = { ...systemDeliveryZonePolygonOriginal };
+        applySystemDeliveryZonePolygonFormValues(systemDeliveryZonePolygonDraft);
+        setSystemDeliveryZonePolygonDraftMode(true);
+        if (settingsSystemDeliveryZonePolygonProvider) {
+          settingsSystemDeliveryZonePolygonProvider.focus();
+          settingsSystemDeliveryZonePolygonProvider.select();
+        }
+      });
+    }
+
+    if (settingsSystemDeliveryZonePolygonCancelBtn) {
+      settingsSystemDeliveryZonePolygonCancelBtn.addEventListener("click", () => {
+        if (!systemDeliveryZonePolygonDraftMode) return;
+        if (!systemDeliveryZonePolygonCancelConfirm) {
+          systemDeliveryZonePolygonCancelConfirm = true;
+          settingsSystemDeliveryZonePolygonCancelBtn.classList.add("is-confirm");
+          settingsSystemDeliveryZonePolygonCancelBtn.textContent = "Отменить";
+          settingsSystemDeliveryZonePolygonCancelBtn.title = "Подтвердить отмену";
+          settingsSystemDeliveryZonePolygonCancelBtn.setAttribute("aria-label", "Подтвердить отмену");
+          return;
+        }
+        cancelSystemDeliveryZonePolygonDraft();
+      });
+    }
+
+    if (settingsSystemDeliveryZonePolygonSaveBtn) {
+      settingsSystemDeliveryZonePolygonSaveBtn.addEventListener("click", async () => {
+        if (!systemDeliveryZonePolygonDraftMode) return;
+        const nextDraft = normalizeSystemDeliveryZonePolygonConfig(readSystemDeliveryZonePolygonFormValues());
+        systemDeliveryZonePolygonDraft = { ...nextDraft };
+        const saved = await saveSystemDeliveryZonePolygonSettings(systemDeliveryZonePolygonDraft);
+        if (!saved) {
+          alert("Не удалось сохранить настройки полигонов доставки.");
+        }
+      });
+    }
+
     if (settingsSystemTelegramEditBtn) {
       settingsSystemTelegramEditBtn.addEventListener("click", () => {
         systemTelegramDraft = { ...systemTelegramOriginal };
@@ -3911,7 +4219,8 @@
       settingsSystemMapGeocoderSearchUrl,
       settingsSystemMapGeocoderCountryCode,
       settingsSystemMapGeocoderLanguage,
-      settingsSystemMapGeocoderResultLimit
+      settingsSystemMapGeocoderResultLimit,
+      settingsSystemMapPolygonProvider
     ].forEach((input) => {
       if (!input) return;
       input.addEventListener("input", () => {
@@ -3919,6 +4228,23 @@
         resetSystemMapCancelButton();
       });
     });
+
+    [
+      settingsSystemDeliveryZonePolygonProvider
+    ].forEach((input) => {
+      if (!input) return;
+      input.addEventListener("input", () => {
+        if (!systemDeliveryZonePolygonDraftMode) return;
+        resetSystemDeliveryZonePolygonCancelButton();
+      });
+    });
+
+    if (settingsSystemDeliveryZonePolygonEnabled) {
+      settingsSystemDeliveryZonePolygonEnabled.addEventListener("change", () => {
+        if (!systemDeliveryZonePolygonDraftMode) return;
+        resetSystemDeliveryZonePolygonCancelButton();
+      });
+    }
 
     [
       settingsSystemTelegramBotUsername,
@@ -5196,7 +5522,9 @@
     function getStoreAllowedRootCityItems() {
       return STORE_ADDRESS_ALLOWED_ROOT_CITIES.map((cityName) => {
         const cacheKey = normalizeStoreCitySearchKey(cityName);
-        return storeAddressSuggestCache.cities.get(cacheKey) || createStoreAddressCityItem(cityName);
+        return enrichStoreAddressCityItem(
+          storeAddressSuggestCache.cities.get(cacheKey) || createStoreAddressCityItem(cityName)
+        );
       }).filter(Boolean);
     }
 
@@ -5504,9 +5832,41 @@
       return normalizeStoreCitySearchKey(city);
     }
 
+    function getStoreAllowedRootCityCoords(cityName) {
+      const cacheKey = getStoreAddressCacheCityKey(cityName);
+      if (!cacheKey) return null;
+      const coords = STORE_ADDRESS_ALLOWED_ROOT_CITY_COORDS[cacheKey];
+      if (!coords || !hasStoreAddressMapPoint(coords.lat, coords.lng)) return null;
+      return {
+        lat: normalizeStoreMapCoordinate(coords.lat),
+        lng: normalizeStoreMapCoordinate(coords.lng),
+      };
+    }
+
+    function enrichStoreAddressCityItem(item) {
+      const selectionItem = cloneStoreAddressSelectionItem(item, "city");
+      if (!selectionItem) return null;
+      if (hasStoreAddressMapPoint(selectionItem.lat, selectionItem.lng)) {
+        return selectionItem;
+      }
+      const cacheKey = getStoreAddressCacheCityKey(selectionItem.city_name || selectionItem.value || selectionItem.label);
+      const cachedItem = cacheKey ? storeAddressSuggestCache.cities.get(cacheKey) : null;
+      if (cachedItem && hasStoreAddressMapPoint(cachedItem.lat, cachedItem.lng)) {
+        selectionItem.lat = normalizeStoreMapCoordinate(cachedItem.lat);
+        selectionItem.lng = normalizeStoreMapCoordinate(cachedItem.lng);
+        return selectionItem;
+      }
+      const fallbackCoords = getStoreAllowedRootCityCoords(selectionItem.city_name || selectionItem.value || selectionItem.label);
+      if (!fallbackCoords) return selectionItem;
+      selectionItem.lat = fallbackCoords.lat;
+      selectionItem.lng = fallbackCoords.lng;
+      return selectionItem;
+    }
+
     function createStoreAddressCityItem(cityName) {
       const value = normalizeStoreAddressSuggestValue(cityName);
       if (!value) return null;
+      const coords = getStoreAllowedRootCityCoords(value);
       return {
         stage: "city",
         label: value,
@@ -5520,6 +5880,8 @@
         street_name: "",
         house_number: "",
         full_address: value,
+        lat: coords ? coords.lat : null,
+        lng: coords ? coords.lng : null,
       };
     }
 
@@ -5720,7 +6082,7 @@
     }
 
     function setStoreResolvedCity(item) {
-      const selectionItem = cloneStoreAddressSelectionItem(item, "city");
+      const selectionItem = enrichStoreAddressCityItem(item);
       if (!selectionItem) {
         storeAddressSelectionState.city = "";
         storeAddressSelectionState.resolvedCity = null;
@@ -5861,7 +6223,7 @@
       if (stage === "city") {
         list.forEach((item) => {
           if (!isStoreAllowedRootCityName(item && (item.city_name || item.value || item.label))) return;
-          const cityItem = cloneStoreAddressSelectionItem({
+          const cityItem = enrichStoreAddressCityItem({
             stage: "city",
             label: item && (item.label || item.city_name || item.value),
             value: item && (item.value || item.city_name || item.label),
@@ -5870,7 +6232,9 @@
             normalized_city: item && item.normalized_city,
             context_locality: item && item.context_locality,
             object_type: "city",
-          }, "city");
+            lat: item && item.lat,
+            lng: item && item.lng,
+          });
           if (!cityItem) return;
           storeAddressSuggestCache.cities.set(normalizeStoreCitySearchKey(cityItem.value), cityItem);
         });
@@ -9436,12 +9800,20 @@
     const settingsDeliveryHome = document.getElementById("settingsDeliveryHome");
     const settingsDeliveryHomeList = document.getElementById("settingsDeliveryHomeList");
     const settingsDeliveryHomeEmpty = document.getElementById("settingsDeliveryHomeEmpty");
+    const settingsDeliveryZonesHomeList = document.getElementById("settingsDeliveryZonesHomeList");
+    const settingsDeliveryZonesHomeEmpty = document.getElementById("settingsDeliveryZonesHomeEmpty");
     const deliverySettingsList = settingsDeliveryHomeList;
     const deliveryEmpty = settingsDeliveryHomeEmpty;
     const settingsDeliveryEmpty = settingsDeliveryHome;
     const settingsDeliveryPanel = document.getElementById("settingsDeliveryPanel");
     const settingsDeliveryFooter = document.getElementById("settingsDeliveryFooter");
+    const settingsDeliveryZonePanel = document.getElementById("settingsDeliveryZonePanel");
+    const settingsDeliveryZoneFooter = document.getElementById("settingsDeliveryZoneFooter");
+    const settingsDeliveryMapConfigPanel = document.getElementById("settingsDeliveryMapConfigPanel");
+    const settingsDeliveryMapConfigFooter = document.getElementById("settingsDeliveryMapConfigFooter");
     const settingsDeliverySubtitle = document.getElementById("settingsDeliverySubtitle");
+    const settingsDeliveryZoneSubtitle = document.getElementById("settingsDeliveryZoneSubtitle");
+    const settingsDeliveryMapConfigSubtitle = document.getElementById("settingsDeliveryMapConfigSubtitle");
     const settingsDeliveryName = document.getElementById("settingsDeliveryName");
     const settingsDeliveryCost = document.getElementById("settingsDeliveryCost");
     const settingsDeliveryMinOrder = document.getElementById("settingsDeliveryMinOrder");
@@ -9453,6 +9825,81 @@
     const settingsDeliveryDeleteBtn = document.getElementById("settingsDeliveryDeleteBtn");
     const deliveryStoresList = document.getElementById("deliveryStoresList");
     const settingsDeliveryDefaultStore = document.getElementById("settingsDeliveryDefaultStore");
+    const settingsDeliveryMapConfigGuide = document.getElementById("settingsDeliveryMapConfigGuide");
+    const settingsDeliveryMapAccountAddBtn = document.getElementById("settingsDeliveryMapAccountAddBtn");
+    const settingsDeliveryMapAccountAddWrap = document.getElementById("settingsDeliveryMapAccountAddWrap");
+    const settingsDeliveryMapAccountAddApiKey = document.getElementById("settingsDeliveryMapAccountAddApiKey");
+    const settingsDeliveryMapAccountAddLogin = document.getElementById("settingsDeliveryMapAccountAddLogin");
+    const settingsDeliveryMapAccountAddPassword = document.getElementById("settingsDeliveryMapAccountAddPassword");
+    const settingsDeliveryMapAccountAddConfirmBtn = document.getElementById("settingsDeliveryMapAccountAddConfirmBtn");
+    const settingsDeliveryMapAccountAddCancelBtn = document.getElementById("settingsDeliveryMapAccountAddCancelBtn");
+    const settingsDeliveryMapAccountsList = document.getElementById("settingsDeliveryMapAccountsList");
+    const settingsDeliveryMapAccountsEmpty = document.getElementById("settingsDeliveryMapAccountsEmpty");
+    const settingsDeliveryMapConfigSaveBtn = document.getElementById("settingsDeliveryMapConfigSaveBtn");
+    const settingsDeliveryMapConfigResetBtn = document.getElementById("settingsDeliveryMapConfigResetBtn");
+    const settingsDeliveryZoneGeometryHint = document.getElementById("settingsDeliveryZoneGeometryHint");
+    const settingsDeliveryZoneName = document.getElementById("settingsDeliveryZoneName");
+    const settingsDeliveryZoneColor = document.getElementById("settingsDeliveryZoneColor");
+    const settingsDeliveryZoneEtaMinutes = document.getElementById("settingsDeliveryZoneEtaMinutes");
+    const settingsDeliveryZoneActive = document.getElementById("settingsDeliveryZoneActive");
+    const deliveryZoneStoresList = document.getElementById("deliveryZoneStoresList");
+    const settingsDeliveryZonePriceTiers = document.getElementById("settingsDeliveryZonePriceTiers");
+    const settingsDeliveryZoneAddTierBtn = document.getElementById("settingsDeliveryZoneAddTierBtn");
+    const settingsDeliveryZoneEditBtn = document.getElementById("settingsDeliveryZoneEditBtn");
+    const settingsDeliveryZoneSaveBtn = document.getElementById("settingsDeliveryZoneSaveBtn");
+    const settingsDeliveryZoneSaveText = document.getElementById("settingsDeliveryZoneSaveText");
+    const settingsDeliveryZoneResetBtn = document.getElementById("settingsDeliveryZoneResetBtn");
+    const settingsDeliveryZoneDeleteBtn = document.getElementById("settingsDeliveryZoneDeleteBtn");
+    const settingsDeliveryZoneMapOverlay = document.getElementById("settingsDeliveryZoneMapOverlay");
+    const settingsDeliveryZoneMapHint = document.getElementById("settingsDeliveryZoneMapHint");
+    const settingsDeliveryZoneUndoBtn = document.getElementById("settingsDeliveryZoneUndoBtn");
+    const settingsDeliveryZoneClearPointsBtn = document.getElementById("settingsDeliveryZoneClearPointsBtn");
+    const settingsDeliveryZoneAddPolygonBtn = document.getElementById("settingsDeliveryZoneAddPolygonBtn");
+    const settingsDeliveryZoneRemovePolygonBtn = document.getElementById("settingsDeliveryZoneRemovePolygonBtn");
+    const settingsDeliveryZonePointMenu = document.getElementById("settingsDeliveryZonePointMenu");
+    const settingsDeliveryZonePointMenuFinishBtn = document.getElementById("settingsDeliveryZonePointMenuFinishBtn");
+    const settingsDeliveryZonePointMenuContinueBtn = document.getElementById("settingsDeliveryZonePointMenuContinueBtn");
+    const settingsDeliveryZonePointMenuRemoveLastBtn = document.getElementById("settingsDeliveryZonePointMenuRemoveLastBtn");
+    const settingsDeliveryZoneContextMenu = document.getElementById("settingsDeliveryZoneContextMenu");
+    const settingsDeliveryZoneContextEditBtn = document.getElementById("settingsDeliveryZoneContextEditBtn");
+    const settingsDeliveryZoneContextDeleteBtn = document.getElementById("settingsDeliveryZoneContextDeleteBtn");
+
+    function ensureSystemMapPolygonField() {
+      if (systemDeliveryZonePolygonCard) {
+        systemDeliveryZonePolygonCard.classList.add("hidden");
+      }
+      if (systemDeliveryZonePolygonPanel) {
+        systemDeliveryZonePolygonPanel.classList.add("hidden");
+      }
+      if (settingsSystemMapPolygonProvider || !systemMapPanel) {
+        return settingsSystemMapPolygonProvider;
+      }
+      const layout = systemMapPanel.querySelector(".settings-system-map-layout");
+      if (!layout) return null;
+      const group = document.createElement("div");
+      group.className = "settings-system-map-group";
+      group.innerHTML = `
+        <div class="settings-system-map-group-title">ПОЛИГОНЫ ДОСТАВКИ</div>
+        <div class="settings-site-field">
+          <label class="field-label">PROVIDER</label>
+          <span class="field-hint">Инструмент рисования и редактирования зон. Отдельная регистрация не нужна.</span>
+          <input class="control" type="text" id="settingsSystemMapPolygonProvider" placeholder="Leaflet-Geoman" autocomplete="off" readonly onfocus="this.removeAttribute('readonly')" />
+        </div>
+      `;
+      layout.appendChild(group);
+      settingsSystemMapPolygonProvider = group.querySelector("#settingsSystemMapPolygonProvider");
+      if (settingsSystemMapPolygonProvider) {
+        settingsSystemMapPolygonProvider.disabled = !systemMapDraftMode;
+        settingsSystemMapPolygonProvider.readOnly = !systemMapDraftMode;
+        settingsSystemMapPolygonProvider.addEventListener("input", () => {
+          if (!systemMapDraftMode) return;
+          resetSystemMapCancelButton();
+        });
+      }
+      return settingsSystemMapPolygonProvider;
+    }
+
+    ensureSystemMapPolygonField();
 
     const deliverySettingsState = {
       loaded: false,
@@ -9472,6 +9919,307 @@
         event.preventDefault();
         settingsDeliveryTabs.scrollLeft += event.deltaY;
       }, { passive: false });
+    }
+
+    function createEmptyDeliveryMapAccountDraft() {
+      return {
+        id: "",
+        api_key: "",
+        login: "",
+        password: "",
+        is_active: false
+      };
+    }
+
+    function cloneDeliveryMapAccountDraft(draft) {
+      const source = draft && typeof draft === "object" ? draft : {};
+      return {
+        id: String(source.id || ""),
+        api_key: String(source.api_key || ""),
+        login: String(source.login || ""),
+        password: String(source.password || ""),
+        is_active: Boolean(source.is_active)
+      };
+    }
+
+    function cloneDeliveryMapAccounts(items) {
+      return Array.isArray(items) ? items.map((item) => cloneDeliveryMapAccountDraft(item)) : [];
+    }
+
+    function createEmptyDeliveryZoneTierDraft() {
+      return {
+        min_order_amount: "",
+        delivery_cost: ""
+      };
+    }
+
+    function cloneDeliveryZoneTierDraft(tier) {
+      const source = tier && typeof tier === "object" ? tier : {};
+      return {
+        min_order_amount: String(source.min_order_amount ?? ""),
+        delivery_cost: String(source.delivery_cost ?? "")
+      };
+    }
+
+    function normalizeDeliveryZone(zone) {
+      const source = zone && typeof zone === "object" ? zone : {};
+      const normalizedId = Number(source.id);
+      return {
+        ...source,
+        id: Number.isFinite(normalizedId) ? normalizedId : 0,
+        name: String(source.name || ""),
+        color: String(source.color || "#ff7a00").trim() || "#ff7a00",
+        eta_minutes: source.eta_minutes == null || source.eta_minutes === "" ? null : Number(source.eta_minutes) || 0,
+        is_active: Number(source.is_active) === 1 ? 1 : 0,
+        store_ids: Array.isArray(source.store_ids)
+          ? source.store_ids.map((value) => Number(value)).filter((value) => Number.isFinite(value) && value > 0)
+          : [],
+        price_tiers: Array.isArray(source.price_tiers)
+          ? source.price_tiers.map((tier) => ({
+            min_order_amount: tier && tier.min_order_amount != null ? Number(tier.min_order_amount) || 0 : 0,
+            delivery_cost: tier && tier.delivery_cost != null ? Number(tier.delivery_cost) || 0 : 0,
+            sort_order: tier && tier.sort_order != null ? Number(tier.sort_order) || 0 : 0
+          }))
+          : [],
+        geometry: normalizeDeliveryZoneGeometryValue(source.geometry)
+      };
+    }
+
+    function createDeliveryZoneDraftFromZone(zone) {
+      const normalized = normalizeDeliveryZone(zone);
+      return {
+        name: String(normalized.name || ""),
+        color: String(normalized.color || "#ff7a00"),
+        eta_minutes: normalized.eta_minutes == null ? "" : String(normalized.eta_minutes),
+        is_active: Number(normalized.is_active) === 1,
+        store_ids: Array.isArray(normalized.store_ids) ? normalized.store_ids.slice() : [],
+        price_tiers: Array.isArray(normalized.price_tiers) && normalized.price_tiers.length
+          ? normalized.price_tiers.map((tier) => cloneDeliveryZoneTierDraft(tier))
+          : [createEmptyDeliveryZoneTierDraft()],
+        geometry: normalizeDeliveryZoneGeometryValue(normalized.geometry)
+      };
+    }
+
+    function createEmptyDeliveryZoneDraft() {
+      return {
+        name: "",
+        color: "#ff7a00",
+        eta_minutes: "",
+        is_active: true,
+        store_ids: [],
+        price_tiers: [createEmptyDeliveryZoneTierDraft()],
+        geometry: null
+      };
+    }
+
+    function cloneDeliveryZoneDraft(draft) {
+      const source = draft && typeof draft === "object" ? draft : {};
+      return {
+        name: String(source.name || ""),
+        color: String(source.color || "#ff7a00"),
+        eta_minutes: String(source.eta_minutes ?? ""),
+        is_active: Boolean(source.is_active),
+        store_ids: Array.isArray(source.store_ids) ? source.store_ids.slice() : [],
+        price_tiers: Array.isArray(source.price_tiers) && source.price_tiers.length
+          ? source.price_tiers.map((tier) => cloneDeliveryZoneTierDraft(tier))
+          : [createEmptyDeliveryZoneTierDraft()],
+        geometry: normalizeDeliveryZoneGeometryValue(source.geometry)
+      };
+    }
+
+    function serializeDeliveryZoneDraft(draft) {
+      const source = cloneDeliveryZoneDraft(draft);
+      return JSON.stringify({
+        ...source,
+        store_ids: source.store_ids.slice().sort((a, b) => a - b),
+      });
+    }
+
+    function createEmptyDeliveryZoneUiState(options = {}) {
+      const nextMode = String(options.mode || "").trim() || "placing";
+      return {
+        mode: nextMode,
+        draft_points: Array.isArray(options.draft_points)
+          ? options.draft_points
+            .map((point) => ({
+              lat: Number(point && point.lat),
+              lng: Number(point && point.lng),
+            }))
+            .filter((point) => Number.isFinite(point.lat) && Number.isFinite(point.lng))
+          : [],
+        selected_polygon_index: Number.isInteger(options.selected_polygon_index)
+          ? Number(options.selected_polygon_index)
+          : -1,
+      };
+    }
+
+    function cloneDeliveryZoneUiState(uiState) {
+      const source = uiState && typeof uiState === "object" ? uiState : {};
+      return createEmptyDeliveryZoneUiState(source);
+    }
+
+    function ensureDeliveryZoneTabUiState(tab) {
+      if (!isDeliveryZoneTab(tab)) {
+        return createEmptyDeliveryZoneUiState({ mode: "idle" });
+      }
+      if (!tab.uiState || typeof tab.uiState !== "object") {
+        const polygonsCount = countDeliveryZonePolygons(tab && tab.draft && tab.draft.geometry);
+        tab.uiState = createEmptyDeliveryZoneUiState({
+          mode: polygonsCount > 0 ? "view" : "placing",
+          selected_polygon_index: polygonsCount > 0 ? 0 : -1,
+        });
+      }
+      tab.uiState = cloneDeliveryZoneUiState(tab.uiState);
+      if (
+        tab.uiState.mode !== "placing"
+        && tab.uiState.mode !== "editing"
+        && tab.uiState.mode !== "view"
+        && tab.uiState.mode !== "idle"
+      ) {
+        tab.uiState.mode = countDeliveryZonePolygons(tab && tab.draft && tab.draft.geometry) > 0 ? "view" : "placing";
+      }
+      return tab.uiState;
+    }
+
+    function serializeDeliveryZoneUiState(uiState) {
+      const source = cloneDeliveryZoneUiState(uiState);
+      return JSON.stringify({
+        mode: source.mode,
+        draft_points: source.draft_points,
+      });
+    }
+
+    function normalizeDeliveryZoneGeometryValue(value) {
+      let source = value;
+      if (typeof source === "string") {
+        try {
+          source = JSON.parse(source);
+        } catch (_) {
+          return null;
+        }
+      }
+      if (!source || typeof source !== "object") return null;
+      if (source.type === "Feature") {
+        source = source.geometry;
+      }
+      if (!source || typeof source !== "object") return null;
+      const geometryType = String(source.type || "").trim();
+      if (geometryType === "Polygon" && Array.isArray(source.coordinates)) {
+        return {
+          type: "MultiPolygon",
+          coordinates: [source.coordinates]
+        };
+      }
+      if (geometryType !== "MultiPolygon" || !Array.isArray(source.coordinates)) return null;
+      return {
+        type: "MultiPolygon",
+        coordinates: source.coordinates
+      };
+    }
+
+    function normalizeDeliveryMapAccountSummary(item) {
+      const source = item && typeof item === "object" ? item : {};
+      return {
+        id: String(source.id || ""),
+        is_active: Boolean(source.is_active),
+        api_key: String(source.api_key || ""),
+        api_key_masked: String(source.api_key_masked || ""),
+        has_login: Boolean(source.has_login),
+        has_password: Boolean(source.has_password)
+      };
+    }
+
+    function buildDeliveryMapGuideText(providerName) {
+      const normalizedProvider = String(providerName || "").trim();
+      if (normalizedProvider.toLowerCase() === "thunderforest") {
+        return "Зарегистрируйтесь на thunderforest.com, откройте Dashboard -> API Keys, скопируйте ключ и добавьте его ниже. Логин и пароль можно сохранить рядом как памятку.";
+      }
+      if (normalizedProvider) {
+        return `Провайдер карты: ${normalizedProvider}. Добавьте API key ниже; логин и пароль можно сохранить рядом как памятку.`;
+      }
+      return "Добавьте API key ниже; логин и пароль можно сохранить рядом как памятку.";
+    }
+
+    function maskDeliveryMapSecret(value) {
+      const raw = String(value || "").trim();
+      if (!raw || raw === "__saved__") return "";
+      if (raw.length <= 2) return `${raw.slice(0, 1)}•`;
+      if (raw.length <= 8) return `${raw.slice(0, 1)}••••${raw.slice(-1)}`;
+      return `${raw.slice(0, 4)}••••${raw.slice(-4)}`;
+    }
+
+    function isDeliveryMapConfigTab(tab) {
+      return Boolean(tab && String(tab.key || "") === DELIVERY_MAP_CONFIG_TAB_KEY);
+    }
+
+    function createDeliveryMapConfigTab() {
+      return {
+        key: DELIVERY_MAP_CONFIG_TAB_KEY,
+        entityType: "map-config",
+        id: null,
+        mode: "map-config",
+        snapshot: null,
+        draft: null
+      };
+    }
+
+    function getDeliveryMapConfigTab() {
+      return getDeliveryTabByKey(DELIVERY_MAP_CONFIG_TAB_KEY);
+    }
+
+    function clearDeliveryMapRevealState() {
+      deliveryMapAccountsRevealState.clear();
+    }
+
+    function resetDeliveryMapAccountsTransientState() {
+      deliveryMapAccountsAddMode = false;
+      deliveryMapAccountsAddDraft = createEmptyDeliveryMapAccountDraft();
+      deliveryMapAccountsEditId = "";
+      deliveryMapAccountsEditDraft = createEmptyDeliveryMapAccountDraft();
+      clearDeliveryMapRevealState();
+    }
+
+    function buildDeliveryMapAccountClientId() {
+      return `map-account-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    }
+
+    function setActiveDeliveryMapDraftAccount(accountId) {
+      const targetId = String(accountId || "");
+      deliveryMapAccountsDraft = cloneDeliveryMapAccounts(deliveryMapAccountsDraft).map((item, index) => ({
+        ...item,
+        is_active: targetId ? String(item.id || "") === targetId : index === 0
+      }));
+    }
+
+    function getDeliveryMapAccountDraftById(accountId) {
+      return cloneDeliveryMapAccounts(deliveryMapAccountsDraft).find((item) => String(item.id || "") === String(accountId || "")) || null;
+    }
+
+    function applyDeliveryMapAccountSummaryMeta(summary, fullItem = null) {
+      const source = summary && typeof summary === "object" ? summary : {};
+      const revealSource = fullItem && typeof fullItem === "object" ? fullItem : null;
+      return {
+        id: String(source.id || (revealSource && revealSource.id) || ""),
+        is_active: Boolean(source.is_active || (revealSource && revealSource.is_active)),
+        api_key: String(source.api_key || (revealSource && revealSource.api_key) || ""),
+        api_key_masked: String(source.api_key_masked || ""),
+        has_login: Boolean(source.has_login || (revealSource && revealSource.login)),
+        has_password: Boolean(source.has_password || (revealSource && revealSource.password))
+      };
+    }
+
+    function getDeliveryMapRevealEntry(accountId) {
+      return deliveryMapAccountsRevealState.get(String(accountId || "")) || null;
+    }
+
+    function setDeliveryMapRevealEntry(accountId, payload) {
+      const key = String(accountId || "");
+      if (!key) return;
+      deliveryMapAccountsRevealState.set(key, payload && typeof payload === "object" ? payload : {});
+    }
+
+    function removeDeliveryMapRevealEntry(accountId) {
+      deliveryMapAccountsRevealState.delete(String(accountId || ""));
     }
 
     if (settingsDeliveryMapSearchInput) {
@@ -9513,26 +10261,17 @@
           return;
         }
         closeDeliveryMapSearchPopover();
-        closeDeliveryMapInfoPopover();
         renderDeliveryCitySelector();
         if (settingsDeliveryCitySelector) settingsDeliveryCitySelector.classList.add("is-open");
         settingsDeliveryCityChip.setAttribute("aria-expanded", "true");
       });
     }
-    if (settingsDeliveryMapInfoBtn) {
-      settingsDeliveryMapInfoBtn.addEventListener("click", (event) => {
+    if (settingsDeliveryMapConfigBtn) {
+      settingsDeliveryMapConfigBtn.addEventListener("click", (event) => {
+        event.preventDefault();
         event.stopPropagation();
-        const isHidden = settingsDeliveryMapInfoWrap && settingsDeliveryMapInfoWrap.classList.contains("hidden");
-        if (isHidden) return;
-        if (infoPopoverOpen) {
-          closeDeliveryMapInfoPopover();
-          return;
-        }
-        closeDeliveryMapSearchPopover();
-        closeDeliveryCityDropdown();
-        infoPopoverOpen = true;
-        if (settingsDeliveryMapInfoPopover) settingsDeliveryMapInfoPopover.classList.remove("hidden");
-        settingsDeliveryMapInfoBtn.setAttribute("aria-expanded", "true");
+        if (settingsDeliveryMapConfigBtn.classList.contains("hidden")) return;
+        openDeliveryMapConfigTab();
       });
     }
     document.addEventListener("click", (event) => {
@@ -9543,8 +10282,19 @@
       if (settingsDeliveryMapSearchWrap && !settingsDeliveryMapSearchWrap.contains(target)) {
         closeDeliveryMapSearchPopover();
       }
-      if (settingsDeliveryMapInfoWrap && !settingsDeliveryMapInfoWrap.contains(target)) {
-        closeDeliveryMapInfoPopover();
+      if (
+        settingsDeliveryZonePointMenu
+        && !settingsDeliveryZonePointMenu.classList.contains("hidden")
+        && !settingsDeliveryZonePointMenu.contains(target)
+      ) {
+        closeDeliveryZonePointMenu();
+      }
+      if (
+        settingsDeliveryZoneContextMenu
+        && !settingsDeliveryZoneContextMenu.classList.contains("hidden")
+        && !settingsDeliveryZoneContextMenu.contains(target)
+      ) {
+        closeDeliveryZoneContextMenu();
       }
       const storeAddressWraps = [settingsStoreCityWrap, settingsStoreAddressLookupWrap, settingsStoreAddressWrap, settingsStoreHouseWrap].filter(Boolean);
       if (storeAddressWraps.length && !storeAddressWraps.some((wrap) => wrap.contains(target))) {
@@ -9555,12 +10305,12 @@
       if (event.key !== "Escape") return;
       closeDeliveryCityDropdown();
       closeDeliveryMapSearchPopover();
-      closeDeliveryMapInfoPopover();
+      closeDeliveryZonePointMenu();
+      closeDeliveryZoneContextMenu();
       closeStoreAddressSuggestPopover();
     });
     setDeliveryMapSearchEnabled(false);
     closeDeliveryMapSearchPopover();
-    closeDeliveryMapInfoPopover();
     syncDeliveryMapSearchClearButton();
     renderDeliveryCitySelector();
     closeStoreAddressSuggestPopover();
@@ -9630,6 +10380,7 @@
       const normalized = normalizeDeliverySetting(setting);
       return {
         key: `delivery:${normalized.id}`,
+        entityType: "delivery",
         id: normalized.id,
         mode: "edit",
         snapshot: normalized,
@@ -9640,6 +10391,7 @@
     function createNewDeliveryTab() {
       return {
         key: DELIVERY_CREATE_TAB_KEY,
+        entityType: "delivery",
         id: null,
         mode: "create",
         snapshot: null,
@@ -9647,7 +10399,41 @@
       };
     }
 
+    function isDeliveryZoneTab(tab) {
+      return Boolean(tab && String(tab.entityType || "") === "zone");
+    }
+
+    function createDeliveryZoneEditTab(zone) {
+      const normalized = normalizeDeliveryZone(zone);
+      const polygonsCount = countDeliveryZonePolygons(normalized.geometry);
+      return {
+        key: `delivery-zone:${normalized.id}`,
+        entityType: "zone",
+        id: normalized.id,
+        mode: "edit",
+        snapshot: normalized,
+        draft: createDeliveryZoneDraftFromZone(normalized),
+        uiState: createEmptyDeliveryZoneUiState({
+          mode: polygonsCount > 0 ? "view" : "placing",
+          selected_polygon_index: polygonsCount > 0 ? 0 : -1,
+        })
+      };
+    }
+
+    function createNewDeliveryZoneTab() {
+      return {
+        key: DELIVERY_ZONE_CREATE_TAB_KEY,
+        entityType: "zone",
+        id: null,
+        mode: "create",
+        snapshot: null,
+        draft: createEmptyDeliveryZoneDraft(),
+        uiState: createEmptyDeliveryZoneUiState({ mode: "placing" })
+      };
+    }
+
     function getDeliveryTabTitle(tab) {
+      if (isDeliveryMapConfigTab(tab)) return "Карта";
       if (!tab) return "Настройка доставки";
       const draftName = String(tab.draft && tab.draft.name || "").trim();
       if (draftName) return draftName;
@@ -9666,6 +10452,38 @@
 
     function getActiveDeliveryTab() {
       return getDeliveryTabByKey(deliveryTabsState.activeKey);
+    }
+
+    function getDeliveryTabByEntityId(entityType, id) {
+      return deliveryTabsState.tabs.find((tab) => (
+        String(tab && tab.entityType || "") === String(entityType || "")
+        && Number(tab && tab.id || 0) === Number(id || 0)
+      )) || null;
+    }
+
+    function getDeliveryTabById(id) {
+      return getDeliveryTabByEntityId("delivery", id);
+    }
+
+    function getDeliveryZoneTabById(id) {
+      return getDeliveryTabByEntityId("zone", id);
+    }
+
+    function getDeliveryTabTitle(tab) {
+      if (isDeliveryMapConfigTab(tab)) return "Карта";
+      if (isDeliveryZoneTab(tab)) {
+        const zoneDraftName = String(tab && tab.draft && tab.draft.name || "").trim();
+        if (zoneDraftName) return zoneDraftName;
+        const zoneSnapshotName = String(tab && tab.snapshot && tab.snapshot.name || "").trim();
+        if (zoneSnapshotName) return zoneSnapshotName;
+        return tab && tab.mode === "create" ? "Новая зона" : "Зона доставки";
+      }
+      if (!tab) return "Настройка доставки";
+      const draftName = String(tab.draft && tab.draft.name || "").trim();
+      if (draftName) return draftName;
+      const snapshotName = String(tab.snapshot && tab.snapshot.name || "").trim();
+      if (snapshotName) return snapshotName;
+      return tab.mode === "create" ? "Новая настройка" : "Настройка доставки";
     }
 
     function readDeliveryFormDraft() {
@@ -9703,6 +10521,7 @@
 
     function persistActiveDeliveryDraft() {
       const activeTab = getActiveDeliveryTab();
+      if (isDeliveryMapConfigTab(activeTab)) return;
       if (!activeTab || !settingsDeliveryPanel || settingsDeliveryPanel.classList.contains("hidden")) return;
       activeTab.draft = readDeliveryFormDraft();
     }
@@ -9789,6 +10608,377 @@
       });
     }
 
+    function countDeliveryZonePolygons(geometry) {
+      const normalized = normalizeDeliveryZoneGeometryValue(geometry);
+      return normalized && Array.isArray(normalized.coordinates) ? normalized.coordinates.length : 0;
+    }
+
+    function getDeliveryZoneTabUiState(tab) {
+      return cloneDeliveryZoneUiState(ensureDeliveryZoneTabUiState(tab));
+    }
+
+    function setDeliveryZoneTabUiState(tab, patch = {}) {
+      if (!isDeliveryZoneTab(tab)) return createEmptyDeliveryZoneUiState({ mode: "idle" });
+      const current = ensureDeliveryZoneTabUiState(tab);
+      tab.uiState = createEmptyDeliveryZoneUiState({
+        ...current,
+        ...patch,
+      });
+      return cloneDeliveryZoneUiState(tab.uiState);
+    }
+
+    function getActiveDeliveryZoneUiState() {
+      const activeTab = getActiveDeliveryTab();
+      return isDeliveryZoneTab(activeTab) ? getDeliveryZoneTabUiState(activeTab) : createEmptyDeliveryZoneUiState({ mode: "idle" });
+    }
+
+    function isDeliveryZonePlacingMode(tab = getActiveDeliveryTab()) {
+      if (!isDeliveryZoneTab(tab)) return false;
+      return String(getDeliveryZoneTabUiState(tab).mode || "") === "placing";
+    }
+
+    function isDeliveryZoneEditingMode(tab = getActiveDeliveryTab()) {
+      if (!isDeliveryZoneTab(tab)) return false;
+      return String(getDeliveryZoneTabUiState(tab).mode || "") === "editing";
+    }
+
+    function isDeliveryZoneViewMode(tab = getActiveDeliveryTab()) {
+      if (!isDeliveryZoneTab(tab)) return false;
+      return String(getDeliveryZoneTabUiState(tab).mode || "") === "view";
+    }
+
+    function getDeliveryZoneDraftPoints(tab = getActiveDeliveryTab()) {
+      if (!isDeliveryZoneTab(tab)) return [];
+      return getDeliveryZoneTabUiState(tab).draft_points || [];
+    }
+
+    function getDeliveryZoneSelectedPolygonIndex(tab = getActiveDeliveryTab()) {
+      if (!isDeliveryZoneTab(tab)) return -1;
+      const uiState = getDeliveryZoneTabUiState(tab);
+      const polygonsCount = countDeliveryZonePolygons(tab && tab.draft && tab.draft.geometry);
+      if (!polygonsCount) return -1;
+      const rawIndex = Number(uiState.selected_polygon_index);
+      if (!Number.isInteger(rawIndex) || rawIndex < 0) return 0;
+      return Math.min(rawIndex, polygonsCount - 1);
+    }
+
+    function setActiveDeliveryZonePointMenu(open, latLng = null) {
+      if (open) {
+        closeDeliveryZoneContextMenu();
+      }
+      deliveryZonesState.pointMenuOpen = Boolean(open);
+      deliveryZonesState.pointMenuLatLng = open && latLng ? {
+        lat: Number(latLng.lat),
+        lng: Number(latLng.lng),
+      } : null;
+      positionDeliveryZonePointMenu();
+      syncDeliveryZoneMapOverlay();
+    }
+
+    function closeDeliveryZonePointMenu() {
+      setActiveDeliveryZonePointMenu(false, null);
+    }
+
+    function positionDeliveryZoneContextMenu() {
+      if (!settingsDeliveryZoneContextMenu) return;
+      const shouldShow = Boolean(
+        deliveryLeafletMap
+        && settingsDeliveryMapBlock
+        && deliveryZonesState.contextMenuOpen
+        && deliveryZonesState.contextMenuLatLng
+      );
+      settingsDeliveryZoneContextMenu.classList.toggle("hidden", !shouldShow);
+      if (!shouldShow) return;
+      const anchor = window.L.latLng(deliveryZonesState.contextMenuLatLng.lat, deliveryZonesState.contextMenuLatLng.lng);
+      const point = deliveryLeafletMap.latLngToContainerPoint(anchor);
+      const mapRect = settingsDeliveryMapBlock.getBoundingClientRect();
+      const menuRect = settingsDeliveryZoneContextMenu.getBoundingClientRect();
+      const maxLeft = Math.max(12, mapRect.width - menuRect.width - 12);
+      const maxTop = Math.max(12, mapRect.height - menuRect.height - 12);
+      const left = Math.min(Math.max(12, point.x + 12), maxLeft);
+      const top = Math.min(Math.max(12, point.y - 8), maxTop);
+      settingsDeliveryZoneContextMenu.style.left = `${Math.round(left)}px`;
+      settingsDeliveryZoneContextMenu.style.top = `${Math.round(top)}px`;
+    }
+
+    function setActiveDeliveryZoneContextMenu(open, zoneId = 0, latLng = null) {
+      if (open) {
+        closeDeliveryZonePointMenu();
+      }
+      deliveryZonesState.contextMenuOpen = Boolean(open);
+      deliveryZonesState.contextMenuZoneId = open ? Number(zoneId || 0) : 0;
+      deliveryZonesState.contextMenuLatLng = open && latLng ? {
+        lat: Number(latLng.lat),
+        lng: Number(latLng.lng),
+      } : null;
+      positionDeliveryZoneContextMenu();
+    }
+
+    function closeDeliveryZoneContextMenu() {
+      deliveryZonesState.contextMenuOpen = false;
+      deliveryZonesState.contextMenuZoneId = 0;
+      deliveryZonesState.contextMenuLatLng = null;
+      if (settingsDeliveryZoneContextMenu) {
+        settingsDeliveryZoneContextMenu.classList.add("hidden");
+      }
+    }
+
+    function getDeliveryZoneLastDraftPoint(tab = getActiveDeliveryTab()) {
+      const points = getDeliveryZoneDraftPoints(tab);
+      return points.length ? points[points.length - 1] : null;
+    }
+
+    function isDeliveryZoneTabDirty(tab) {
+      if (!isDeliveryZoneTab(tab)) return false;
+      const draft = cloneDeliveryZoneDraft(tab.draft);
+      const snapshotDraft = tab.snapshot ? createDeliveryZoneDraftFromZone(tab.snapshot) : createEmptyDeliveryZoneDraft();
+      if (serializeDeliveryZoneDraft(draft) !== serializeDeliveryZoneDraft(snapshotDraft)) {
+        return true;
+      }
+      return getDeliveryZoneDraftPoints(tab).length > 0;
+    }
+
+    function formatDeliveryZoneTierSummary(zone) {
+      const tiers = Array.isArray(zone && zone.price_tiers) ? zone.price_tiers : [];
+      if (!tiers.length) return "Нет тарифов";
+      const firstTier = tiers[0] || {};
+      const minOrder = Number(firstTier.min_order_amount) || 0;
+      const deliveryCost = Number(firstTier.delivery_cost) || 0;
+      return minOrder > 0
+        ? `От ${minOrder} ₽ → ${deliveryCost} ₽`
+        : `${deliveryCost} ₽ доставка`;
+    }
+
+    function renderDeliveryZonesHomeList(items) {
+      if (!settingsDeliveryZonesHomeList) return;
+      settingsDeliveryZonesHomeList.innerHTML = "";
+      const list = Array.isArray(items) ? items : [];
+      if (settingsDeliveryZonesHomeEmpty) {
+        settingsDeliveryZonesHomeEmpty.classList.toggle("hidden", list.length > 0);
+      }
+
+      list.forEach((zone) => {
+        const normalized = normalizeDeliveryZone(zone);
+        const activeTab = getActiveDeliveryTab();
+        const row = document.createElement("button");
+        row.type = "button";
+        row.className = "delivery-home-card settings-card settings-delivery-zone-card";
+        row.dataset.id = String(normalized.id);
+        row.classList.toggle("is-active", Boolean(isDeliveryZoneTab(activeTab) && Number(activeTab.id || 0) === normalized.id));
+
+        const avatar = document.createElement("div");
+        avatar.className = "product-avatar";
+        avatar.innerHTML = `<span class="delivery-home-card-swatch" style="background:${normalized.color || "#ff7a00"}"></span>`;
+
+        const info = document.createElement("div");
+        info.className = "delivery-home-card-info";
+
+        const title = document.createElement("div");
+        title.className = "delivery-home-card-title";
+        title.textContent = normalized.name || `Зона #${normalized.id}`;
+
+        const subtitle = document.createElement("div");
+        subtitle.className = "delivery-home-card-meta";
+        const etaText = normalized.eta_minutes != null && normalized.eta_minutes !== ""
+          ? `${normalized.eta_minutes} мин`
+          : "Без времени";
+        subtitle.textContent = `${formatDeliveryZoneTierSummary(normalized)} • ${etaText}`;
+
+        const action = document.createElement("div");
+        action.className = "delivery-home-card-action";
+
+        const badge = document.createElement("span");
+        badge.className = "badge";
+        badge.textContent = "Открыть";
+
+        info.appendChild(title);
+        info.appendChild(subtitle);
+        action.appendChild(badge);
+        row.appendChild(avatar);
+        row.appendChild(info);
+        row.appendChild(action);
+        row.addEventListener("click", () => {
+          openDeliveryZoneTab(normalized);
+        });
+        settingsDeliveryZonesHomeList.appendChild(row);
+      });
+    }
+
+    function renderDeliveryZoneStoresCheckboxes(storeIds = []) {
+      if (!deliveryZoneStoresList) return;
+      deliveryZoneStoresList.innerHTML = "";
+      const stores = storesState.items || [];
+      if (!stores.length) {
+        deliveryZoneStoresList.innerHTML = '<div class="muted">Нет филиалов</div>';
+        return;
+      }
+      stores.forEach((store) => {
+        const label = document.createElement("label");
+        label.className = "switch delivery-store-switch";
+
+        const input = document.createElement("input");
+        input.className = "switch-input";
+        input.type = "checkbox";
+        input.value = store.id;
+        input.checked = storeIds.includes(store.id);
+
+        const ui = document.createElement("span");
+        ui.className = "switch-ui";
+
+        const text = document.createElement("span");
+        text.className = "switch-text";
+        text.textContent = store.name || `Филиал #${store.id}`;
+
+        label.appendChild(input);
+        label.appendChild(ui);
+        label.appendChild(text);
+        deliveryZoneStoresList.appendChild(label);
+      });
+    }
+
+    function getSelectedDeliveryZoneStoreIds() {
+      if (!deliveryZoneStoresList) return [];
+      return Array.from(deliveryZoneStoresList.querySelectorAll("input[type=\"checkbox\"]:checked"))
+        .map((checkbox) => Number(checkbox.value))
+        .filter((value) => Number.isFinite(value) && value > 0);
+    }
+
+    function renderDeliveryZonePriceTiers(items) {
+      if (!settingsDeliveryZonePriceTiers) return;
+      const list = Array.isArray(items) && items.length ? items : [createEmptyDeliveryZoneTierDraft()];
+      settingsDeliveryZonePriceTiers.innerHTML = "";
+
+      list.forEach((tier, index) => {
+        const row = document.createElement("div");
+        row.className = "settings-delivery-zone-tier-row";
+        row.setAttribute("data-zone-tier-row", String(index));
+
+        const minField = document.createElement("div");
+        minField.className = "settings-site-field";
+        minField.innerHTML = `<label class="field-label">ОТ СУММЫ</label><input class="control" type="number" min="0" step="1" data-zone-tier-field="min_order_amount" value="${String(tier && tier.min_order_amount != null ? tier.min_order_amount : "")}">`;
+
+        const costField = document.createElement("div");
+        costField.className = "settings-site-field";
+        costField.innerHTML = `<label class="field-label">СТОИМОСТЬ ДОСТАВКИ</label><input class="control" type="number" min="0" step="1" data-zone-tier-field="delivery_cost" value="${String(tier && tier.delivery_cost != null ? tier.delivery_cost : "")}">`;
+
+        const removeBtn = document.createElement("button");
+        removeBtn.type = "button";
+        removeBtn.className = "btn btn-secondary settings-delivery-zone-tier-remove";
+        removeBtn.setAttribute("data-zone-tier-remove", String(index));
+        removeBtn.setAttribute("aria-label", "Удалить порог");
+        removeBtn.innerHTML = '<i class="fas fa-times"></i>';
+
+        row.appendChild(minField);
+        row.appendChild(costField);
+        row.appendChild(removeBtn);
+        settingsDeliveryZonePriceTiers.appendChild(row);
+      });
+    }
+
+    function readDeliveryZonePriceTiersFromDom() {
+      if (!settingsDeliveryZonePriceTiers) return [];
+      return Array.from(settingsDeliveryZonePriceTiers.querySelectorAll("[data-zone-tier-row]"))
+        .map((row) => ({
+          min_order_amount: String((row.querySelector('[data-zone-tier-field=\"min_order_amount\"]') || {}).value || ""),
+          delivery_cost: String((row.querySelector('[data-zone-tier-field=\"delivery_cost\"]') || {}).value || "")
+        }));
+    }
+
+    function buildDeliveryZoneGeometryHint(tab) {
+      const draft = cloneDeliveryZoneDraft(tab && tab.draft ? tab.draft : createEmptyDeliveryZoneDraft());
+      const polygonsCount = countDeliveryZonePolygons(draft.geometry);
+      if (polygonsCount > 0) {
+        return `Полигонов в зоне: ${polygonsCount}. Для добавления или правки используйте инструменты на карте.`;
+      }
+      return tab && tab.mode === "create"
+        ? "Нарисуйте первый полигон на карте. При необходимости можно добавить ещё один полигон этой же зоне."
+        : "У зоны пока нет полигонов. Нарисуйте их на карте, чтобы сохранить настройку.";
+    }
+
+    function buildDeliveryZoneGeometryHint(tab) {
+      if (!isDeliveryZoneTab(tab)) {
+        return "1. Кликайте по карте, чтобы поставить точки\n2. Следите за линией и заливкой будущей зоны\n3. Нажмите на последнюю точку и выберите «Завершить»\n4. После создания можно двигать точки мышкой";
+      }
+      if (isDeliveryZonePlacingMode(tab)) {
+        return "1. Кликайте по карте, чтобы поставить точки\n2. После второй точки на линиях появляются точки для вставки новых вершин\n3. Нажмите на последнюю точку и выберите «Завершить»\n4. После создания можно уточнять форму зоны";
+      }
+      if (isDeliveryZoneEditingMode(tab)) {
+        return "1. Основные точки показывают вершины выбранного полигона\n2. Точки на линиях вставляют новые вершины между существующими\n3. Потяните любую активную точку, чтобы изменить форму зоны\n4. После правки сохраните изменения";
+      }
+      return "1. Зона открыта в режиме просмотра\n2. Основные точки показывают вершины выбранного полигона\n3. Нажмите «Редактировать», чтобы включить перетаскивание точек\n4. После включения редактирования появятся и точки на линиях";
+    }
+
+    function updateDeliveryZoneGeometryHint(tab) {
+      if (!settingsDeliveryZoneGeometryHint) return;
+      settingsDeliveryZoneGeometryHint.textContent = buildDeliveryZoneGeometryHint(tab);
+    }
+
+    function syncDeliveryZoneEditButton(tab = getActiveDeliveryTab()) {
+      if (!settingsDeliveryZoneEditBtn) return;
+      const showEdit = Boolean(
+        isDeliveryZoneTab(tab)
+        && tab.mode !== "create"
+        && countDeliveryZonePolygons(tab && tab.draft && tab.draft.geometry) > 0
+        && !isDeliveryZoneEditingMode(tab)
+      );
+      settingsDeliveryZoneEditBtn.classList.toggle("hidden", !showEdit);
+    }
+
+    function readDeliveryZoneFormDraft() {
+      const currentGeometry = syncActiveDeliveryZoneDraftGeometryFromMap();
+      return {
+        name: String(settingsDeliveryZoneName && settingsDeliveryZoneName.value || ""),
+        color: String(settingsDeliveryZoneColor && settingsDeliveryZoneColor.value || "#ff7a00"),
+        eta_minutes: String(settingsDeliveryZoneEtaMinutes && settingsDeliveryZoneEtaMinutes.value || ""),
+        is_active: Boolean(settingsDeliveryZoneActive && settingsDeliveryZoneActive.checked),
+        store_ids: getSelectedDeliveryZoneStoreIds(),
+        price_tiers: readDeliveryZonePriceTiersFromDom(),
+        geometry: currentGeometry || normalizeDeliveryZoneGeometryValue(getActiveDeliveryTab() && getActiveDeliveryTab().draft && getActiveDeliveryTab().draft.geometry)
+      };
+    }
+
+    function applyDeliveryZoneFormDraft(tab) {
+      const draft = cloneDeliveryZoneDraft(tab && tab.draft ? tab.draft : createEmptyDeliveryZoneDraft());
+      if (settingsDeliveryZoneSubtitle) {
+        settingsDeliveryZoneSubtitle.textContent = tab && tab.mode === "create"
+          ? "Новая зона"
+          : `ID ${tab && tab.id ? tab.id : "—"}`;
+      }
+      if (settingsDeliveryZoneSaveText) {
+        settingsDeliveryZoneSaveText.textContent = tab && tab.mode === "create" ? "Создать" : "Сохранить";
+      }
+      if (settingsDeliveryZoneDeleteBtn) {
+        settingsDeliveryZoneDeleteBtn.classList.toggle("hidden", !tab || tab.mode === "create");
+      }
+      syncDeliveryZoneEditButton(tab);
+      if (settingsDeliveryZoneName) settingsDeliveryZoneName.value = draft.name;
+      if (settingsDeliveryZoneColor) settingsDeliveryZoneColor.value = draft.color || "#ff7a00";
+      if (settingsDeliveryZoneEtaMinutes) settingsDeliveryZoneEtaMinutes.value = draft.eta_minutes;
+      if (settingsDeliveryZoneActive) settingsDeliveryZoneActive.checked = Boolean(draft.is_active);
+      renderDeliveryZoneStoresCheckboxes(draft.store_ids);
+      renderDeliveryZonePriceTiers(draft.price_tiers);
+      updateDeliveryZoneGeometryHint(tab);
+    }
+
+    function openDeliveryZoneTab(zone) {
+      const normalized = normalizeDeliveryZone(zone);
+      let tab = getDeliveryZoneTabById(normalized.id);
+      if (!tab) {
+        tab = createDeliveryZoneEditTab(normalized);
+        deliveryTabsState.tabs.push(tab);
+      }
+      setActiveDeliveryTab(tab.key);
+    }
+
+    function openNewDeliveryZoneTab() {
+      let tab = getDeliveryTabByKey(DELIVERY_ZONE_CREATE_TAB_KEY);
+      if (!tab) {
+        tab = createNewDeliveryZoneTab();
+        deliveryTabsState.tabs.push(tab);
+      }
+      setActiveDeliveryTab(tab.key);
+    }
+
     function renderDeliveryWorkspace() {
       const isDeliverySection = document.body.getAttribute("data-settings-section") === "delivery";
       if (settingsDeliveryTabsHeader) settingsDeliveryTabsHeader.classList.toggle("hidden", !isDeliverySection);
@@ -9796,17 +10986,42 @@
         if (settingsDeliveryHome) settingsDeliveryHome.classList.add("hidden");
         if (settingsDeliveryPanel) settingsDeliveryPanel.classList.add("hidden");
         if (settingsDeliveryFooter) settingsDeliveryFooter.classList.add("hidden");
+        if (settingsDeliveryZonePanel) settingsDeliveryZonePanel.classList.add("hidden");
+        if (settingsDeliveryZoneFooter) settingsDeliveryZoneFooter.classList.add("hidden");
+        if (settingsDeliveryMapConfigPanel) settingsDeliveryMapConfigPanel.classList.add("hidden");
+        if (settingsDeliveryMapConfigFooter) settingsDeliveryMapConfigFooter.classList.add("hidden");
+        syncDeliveryZoneMapEditing();
         return;
       }
 
       renderDeliveryTabs();
       const activeTab = getActiveDeliveryTab();
       const showHome = !activeTab;
+      const showMapConfig = isDeliveryMapConfigTab(activeTab);
+      const showZone = isDeliveryZoneTab(activeTab);
       if (settingsDeliveryHome) settingsDeliveryHome.classList.toggle("hidden", !showHome);
-      if (settingsDeliveryPanel) settingsDeliveryPanel.classList.toggle("hidden", showHome);
-      if (settingsDeliveryFooter) settingsDeliveryFooter.classList.toggle("hidden", showHome);
-      if (showHome) return;
+      if (settingsDeliveryPanel) settingsDeliveryPanel.classList.toggle("hidden", showHome || showMapConfig || showZone);
+      if (settingsDeliveryFooter) settingsDeliveryFooter.classList.toggle("hidden", showHome || showMapConfig || showZone);
+      if (settingsDeliveryZonePanel) settingsDeliveryZonePanel.classList.toggle("hidden", !showZone);
+      if (settingsDeliveryZoneFooter) settingsDeliveryZoneFooter.classList.toggle("hidden", !showZone);
+      if (settingsDeliveryMapConfigPanel) settingsDeliveryMapConfigPanel.classList.toggle("hidden", !showMapConfig);
+      if (settingsDeliveryMapConfigFooter) settingsDeliveryMapConfigFooter.classList.toggle("hidden", !showMapConfig);
+      if (showHome) {
+        syncDeliveryZoneMapEditing();
+        return;
+      }
+      if (showMapConfig) {
+        renderDeliveryMapAccountsPanel();
+        syncDeliveryZoneMapEditing();
+        return;
+      }
+      if (showZone) {
+        applyDeliveryZoneFormDraft(activeTab);
+        syncDeliveryZoneMapEditing();
+        return;
+      }
       applyDeliveryFormDraft(activeTab);
+      syncDeliveryZoneMapEditing();
     }
 
     function goToDeliveryHome() {
@@ -9815,7 +11030,11 @@
       deliverySettingsState.selectedId = null;
       deliverySettingsState.snapshot = null;
       deliverySettingsState.mode = "view";
+      deliveryZonesState.selectedId = null;
+      deliveryZonesState.snapshot = null;
+      deliveryZonesState.mode = "view";
       renderDeliveryHomeList(deliverySettingsState.items);
+      renderDeliveryZonesHomeList(deliveryZonesState.items);
       renderDeliveryWorkspace();
     }
 
@@ -9829,34 +11048,87 @@
         persistActiveDeliveryDraft();
       }
       deliveryTabsState.activeKey = nextTab.key;
-      deliverySettingsState.selectedId = nextTab.id || null;
-      deliverySettingsState.snapshot = nextTab.snapshot ? { ...nextTab.snapshot } : null;
-      deliverySettingsState.mode = nextTab.mode;
+      if (isDeliveryZoneTab(nextTab)) {
+        deliverySettingsState.selectedId = null;
+        deliverySettingsState.snapshot = null;
+        deliverySettingsState.mode = "view";
+        deliveryZonesState.selectedId = nextTab.id || null;
+        deliveryZonesState.snapshot = nextTab.snapshot ? { ...nextTab.snapshot } : null;
+        deliveryZonesState.mode = nextTab.mode;
+      } else {
+        deliverySettingsState.selectedId = nextTab.id || null;
+        deliverySettingsState.snapshot = nextTab.snapshot ? { ...nextTab.snapshot } : null;
+        deliverySettingsState.mode = nextTab.mode;
+        deliveryZonesState.selectedId = null;
+        deliveryZonesState.snapshot = null;
+        deliveryZonesState.mode = "view";
+      }
       renderDeliveryHomeList(deliverySettingsState.items);
+      renderDeliveryZonesHomeList(deliveryZonesState.items);
       renderDeliveryWorkspace();
+      if (isDeliveryMapConfigTab(nextTab)) {
+        loadDeliveryMapAccounts();
+        if (settingsDeliveryMapAccountAddBtn) settingsDeliveryMapAccountAddBtn.focus();
+        return;
+      }
+      if (isDeliveryZoneTab(nextTab)) {
+        if (settingsDeliveryZoneName) settingsDeliveryZoneName.focus();
+        return;
+      }
       if (settingsDeliveryName) settingsDeliveryName.focus();
     }
 
-    function closeDeliveryTab(key) {
+    function closeDeliveryTab(key, options = {}) {
       const index = deliveryTabsState.tabs.findIndex((tab) => String(tab && tab.key || "") === String(key || ""));
       if (index < 0) return;
+      const closingTab = deliveryTabsState.tabs[index] || null;
       const wasActive = deliveryTabsState.activeKey === key;
+      if (wasActive) {
+        persistActiveDeliveryDraft();
+      }
+      if (
+        !options.force
+        && isDeliveryZoneTab(closingTab)
+        && isDeliveryZoneTabDirty(closingTab)
+        && !window.confirm("Закрыть вкладку зоны доставки без сохранения?")
+      ) {
+        return;
+      }
       deliveryTabsState.tabs.splice(index, 1);
+      if (isDeliveryMapConfigTab(closingTab)) {
+        resetDeliveryMapAccountsTransientState();
+      }
       if (wasActive) {
         const nextTab = deliveryTabsState.tabs[index] || deliveryTabsState.tabs[index - 1] || null;
         deliveryTabsState.activeKey = nextTab ? nextTab.key : "";
       }
       const nextActiveTab = getActiveDeliveryTab();
       if (nextActiveTab) {
-        deliverySettingsState.selectedId = nextActiveTab.id || null;
-        deliverySettingsState.snapshot = nextActiveTab.snapshot ? { ...nextActiveTab.snapshot } : null;
-        deliverySettingsState.mode = nextActiveTab.mode;
+        if (isDeliveryZoneTab(nextActiveTab)) {
+          deliverySettingsState.selectedId = null;
+          deliverySettingsState.snapshot = null;
+          deliverySettingsState.mode = "view";
+          deliveryZonesState.selectedId = nextActiveTab.id || null;
+          deliveryZonesState.snapshot = nextActiveTab.snapshot ? { ...nextActiveTab.snapshot } : null;
+          deliveryZonesState.mode = nextActiveTab.mode;
+        } else {
+          deliverySettingsState.selectedId = nextActiveTab.id || null;
+          deliverySettingsState.snapshot = nextActiveTab.snapshot ? { ...nextActiveTab.snapshot } : null;
+          deliverySettingsState.mode = nextActiveTab.mode;
+          deliveryZonesState.selectedId = null;
+          deliveryZonesState.snapshot = null;
+          deliveryZonesState.mode = "view";
+        }
       } else {
         deliverySettingsState.selectedId = null;
         deliverySettingsState.snapshot = null;
         deliverySettingsState.mode = "view";
+        deliveryZonesState.selectedId = null;
+        deliveryZonesState.snapshot = null;
+        deliveryZonesState.mode = "view";
       }
       renderDeliveryHomeList(deliverySettingsState.items);
+      renderDeliveryZonesHomeList(deliveryZonesState.items);
       renderDeliveryWorkspace();
     }
 
@@ -9879,13 +11151,46 @@
       setActiveDeliveryTab(tab.key);
     }
 
-    function syncDeliveryTabsWithItems(items) {
+    function openDeliveryMapConfigTab() {
+      if (!isStoreAddressMapModeEnabled()) return;
+      let tab = getDeliveryMapConfigTab();
+      if (!tab) {
+        tab = createDeliveryMapConfigTab();
+        deliveryTabsState.tabs.push(tab);
+      }
+      setActiveDeliveryTab(tab.key);
+    }
+
+    function syncDeliveryTabsWithItems(items, zones = deliveryZonesState.items) {
       const list = Array.isArray(items) ? items.map((item) => normalizeDeliverySetting(item)) : [];
+      const zoneList = Array.isArray(zones) ? zones.map((item) => normalizeDeliveryZone(item)) : [];
       const byId = new Map(list.map((item) => [item.id, item]));
+      const zonesById = new Map(zoneList.map((item) => [item.id, item]));
+
       deliveryTabsState.tabs = deliveryTabsState.tabs
-        .filter((tab) => tab.mode === "create" || byId.has(Number(tab.id || 0)))
+        .filter((tab) => {
+          if (isDeliveryMapConfigTab(tab)) return true;
+          if (tab && tab.key === DELIVERY_CREATE_TAB_KEY) return true;
+          if (tab && tab.key === DELIVERY_ZONE_CREATE_TAB_KEY) return true;
+          if (isDeliveryZoneTab(tab)) return zonesById.has(Number(tab.id || 0));
+          return byId.has(Number(tab && tab.id || 0));
+        })
         .map((tab) => {
-          if (tab.mode === "create") return tab;
+          if (isDeliveryMapConfigTab(tab)) return tab;
+          if (tab && tab.key === DELIVERY_CREATE_TAB_KEY) return tab;
+          if (tab && tab.key === DELIVERY_ZONE_CREATE_TAB_KEY) return tab;
+          if (isDeliveryZoneTab(tab)) {
+            const freshZone = zonesById.get(Number(tab.id || 0));
+            if (!freshZone) return tab;
+            const previousSnapshot = tab.snapshot ? createDeliveryZoneDraftFromZone(tab.snapshot) : null;
+            const nextSnapshot = createDeliveryZoneDraftFromZone(freshZone);
+            const draftMatchesSnapshot = previousSnapshot && serializeDeliveryZoneDraft(tab.draft) === serializeDeliveryZoneDraft(previousSnapshot);
+            return {
+              ...tab,
+              snapshot: freshZone,
+              draft: draftMatchesSnapshot ? nextSnapshot : cloneDeliveryZoneDraft(tab.draft)
+            };
+          }
           const fresh = byId.get(Number(tab.id || 0));
           if (!fresh) return tab;
           const previousSnapshot = tab.snapshot ? createDeliveryDraftFromSetting(tab.snapshot) : null;
@@ -9911,6 +11216,503 @@
         console.error("Не удалось загрузить настройки доставки:", err);
         return null;
       }
+    }
+
+    async function fetchDeliveryZones() {
+      try {
+        const res = await authFetch("/api/admin/tenant/delivery-zones");
+        const data = await res.json();
+        return data || null;
+      } catch (err) {
+        console.error("Не удалось загрузить зоны доставки:", err);
+        return null;
+      }
+    }
+
+    async function createDeliveryZone(payload) {
+      try {
+        const res = await authFetch("/api/admin/tenant/delivery-zones", {
+          method: "POST",
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        return data || null;
+      } catch (err) {
+        console.error("Не удалось создать зону доставки:", err);
+        return null;
+      }
+    }
+
+    async function updateDeliveryZone(id, payload) {
+      try {
+        const res = await authFetch(`/api/admin/tenant/delivery-zones/${encodeURIComponent(id)}`, {
+          method: "PUT",
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        return data || null;
+      } catch (err) {
+        console.error("Не удалось обновить зону доставки:", err);
+        return null;
+      }
+    }
+
+    async function deleteDeliveryZone(id) {
+      try {
+        const res = await authFetch(`/api/admin/tenant/delivery-zones/${encodeURIComponent(id)}`, {
+          method: "DELETE"
+        });
+        const data = await res.json();
+        return data || null;
+      } catch (err) {
+        console.error("Не удалось удалить зону доставки:", err);
+        return null;
+      }
+    }
+
+    async function fetchDeliveryMapAccounts() {
+      try {
+        const res = await authFetch("/api/admin/tenant/map-provider-accounts");
+        const data = await res.json();
+        return data || null;
+      } catch (err) {
+        console.error("Не удалось загрузить настройки карты tenant:", err);
+        return null;
+      }
+    }
+
+    async function saveDeliveryMapAccounts(items) {
+      try {
+        const res = await authFetch("/api/admin/tenant/map-provider-accounts", {
+          method: "PUT",
+          body: JSON.stringify({ items: Array.isArray(items) ? items : [] })
+        });
+        const data = await res.json();
+        return data || null;
+      } catch (err) {
+        console.error("Не удалось сохранить настройки карты tenant:", err);
+        return null;
+      }
+    }
+
+    async function revealDeliveryMapAccount(accountId) {
+      try {
+        const res = await authFetch(`/api/admin/tenant/map-provider-accounts/${encodeURIComponent(accountId)}/reveal`);
+        const data = await res.json();
+        return data || null;
+      } catch (err) {
+        console.error("Не удалось показать данные API карты:", err);
+        return null;
+      }
+    }
+
+    function syncDeliveryMapGuide() {
+      if (settingsDeliveryMapConfigSubtitle) {
+        settingsDeliveryMapConfigSubtitle.textContent = deliveryMapAccountsProviderName
+          ? `Провайдер: ${deliveryMapAccountsProviderName}`
+          : "Добавьте tenant-ключи карты";
+      }
+      if (settingsDeliveryMapConfigGuide) {
+        settingsDeliveryMapConfigGuide.textContent = buildDeliveryMapGuideText(deliveryMapAccountsProviderName);
+      }
+    }
+
+    function applyDeliveryMapAddFormValues() {
+      const draft = cloneDeliveryMapAccountDraft(deliveryMapAccountsAddDraft);
+      if (settingsDeliveryMapAccountAddApiKey) settingsDeliveryMapAccountAddApiKey.value = draft.api_key;
+      if (settingsDeliveryMapAccountAddLogin) settingsDeliveryMapAccountAddLogin.value = draft.login;
+      if (settingsDeliveryMapAccountAddPassword) settingsDeliveryMapAccountAddPassword.value = draft.password;
+      if (settingsDeliveryMapAccountAddWrap) settingsDeliveryMapAccountAddWrap.classList.toggle("hidden", !deliveryMapAccountsAddMode);
+    }
+
+    function openDeliveryMapAddForm() {
+      deliveryMapAccountsAddMode = true;
+      deliveryMapAccountsAddDraft = createEmptyDeliveryMapAccountDraft();
+      applyDeliveryMapAddFormValues();
+      if (settingsDeliveryMapAccountAddApiKey) settingsDeliveryMapAccountAddApiKey.focus();
+    }
+
+    function closeDeliveryMapAddForm() {
+      deliveryMapAccountsAddMode = false;
+      deliveryMapAccountsAddDraft = createEmptyDeliveryMapAccountDraft();
+      applyDeliveryMapAddFormValues();
+    }
+
+    function updateDeliveryMapAddDraftFromInputs() {
+      deliveryMapAccountsAddDraft = {
+        id: "",
+        api_key: String((settingsDeliveryMapAccountAddApiKey && settingsDeliveryMapAccountAddApiKey.value) || "").trim(),
+        login: String((settingsDeliveryMapAccountAddLogin && settingsDeliveryMapAccountAddLogin.value) || "").trim(),
+        password: String((settingsDeliveryMapAccountAddPassword && settingsDeliveryMapAccountAddPassword.value) || "").trim(),
+        is_active: !deliveryMapAccountsDraft.length
+      };
+      return cloneDeliveryMapAccountDraft(deliveryMapAccountsAddDraft);
+    }
+
+    function buildDeliveryMapDraftPayload() {
+      const draftItems = cloneDeliveryMapAccounts(deliveryMapAccountsDraft);
+      return draftItems.map((item) => ({
+        id: String(item.id || buildDeliveryMapAccountClientId()),
+        api_key: String(item.api_key || "").trim(),
+        login: String(item.login || "").trim() || null,
+        password: String(item.password || "").trim() || null,
+        is_active: Boolean(item.is_active)
+      }));
+    }
+
+    function renderDeliveryMapAccountsPanel() {
+      syncDeliveryMapGuide();
+      applyDeliveryMapAddFormValues();
+
+      if (!settingsDeliveryMapAccountsList) return;
+      settingsDeliveryMapAccountsList.innerHTML = "";
+
+      const originalSummaries = new Map(
+        (Array.isArray(deliveryMapAccountsOriginal) ? deliveryMapAccountsOriginal : [])
+          .map((item) => [String(item.id || ""), normalizeDeliveryMapAccountSummary(item)])
+      );
+      const list = cloneDeliveryMapAccounts(deliveryMapAccountsDraft);
+
+      if (settingsDeliveryMapAccountsEmpty) {
+        settingsDeliveryMapAccountsEmpty.classList.toggle("hidden", list.length > 0);
+      }
+
+      list.forEach((item) => {
+        const itemId = String(item.id || "");
+        const originalSummary = originalSummaries.get(itemId)
+          ? normalizeDeliveryMapAccountSummary(originalSummaries.get(itemId))
+          : null;
+        const summary = {
+          id: itemId,
+          is_active: Boolean(item.is_active),
+          api_key: String(item.api_key || "").trim() && String(item.api_key || "").trim() !== "__saved__"
+            ? String(item.api_key || "").trim()
+            : String((originalSummary && originalSummary.api_key) || ""),
+          has_login: String(item.login || "").trim() === "__saved__"
+            ? Boolean(originalSummary && originalSummary.has_login)
+            : Boolean(String(item.login || "").trim()),
+          has_password: String(item.password || "").trim() === "__saved__"
+            ? Boolean(originalSummary && originalSummary.has_password)
+            : Boolean(String(item.password || "").trim())
+        };
+        const revealEntry = getDeliveryMapRevealEntry(itemId);
+        const isRevealOpen = Boolean(revealEntry && revealEntry.open);
+        const isRevealLoading = Boolean(revealEntry && revealEntry.loading);
+        const isEditOpen = String(deliveryMapAccountsEditId || "") === itemId;
+        const editDraft = isEditOpen ? cloneDeliveryMapAccountDraft(deliveryMapAccountsEditDraft) : createEmptyDeliveryMapAccountDraft();
+
+        const card = document.createElement("div");
+        card.className = `settings-delivery-map-account-card${item.is_active ? " is-active" : ""}`;
+
+        const row = document.createElement("div");
+        row.className = "settings-delivery-map-account-row";
+
+        const radioWrap = document.createElement("label");
+        radioWrap.className = "settings-delivery-map-account-radio";
+        const radio = document.createElement("input");
+        radio.type = "radio";
+        radio.name = "delivery-map-active-account";
+        radio.checked = Boolean(item.is_active);
+        radio.addEventListener("change", () => {
+          setActiveDeliveryMapDraftAccount(itemId);
+          renderDeliveryMapAccountsPanel();
+        });
+        radioWrap.appendChild(radio);
+
+        const main = document.createElement("div");
+        main.className = "settings-delivery-map-account-main";
+
+        const key = document.createElement("div");
+        key.className = "settings-delivery-map-account-key";
+        key.textContent = summary.api_key || "Ключ скрыт";
+
+        main.appendChild(key);
+
+        const actions = document.createElement("div");
+        actions.className = "settings-delivery-map-account-actions";
+
+        const viewBtn = document.createElement("button");
+        viewBtn.type = "button";
+        viewBtn.className = "btn btn-icon btn-sm btn-secondary settings-delivery-map-account-icon-btn";
+        viewBtn.title = isRevealOpen ? "Скрыть данные API" : "Просмотреть данные API";
+        viewBtn.setAttribute("aria-label", isRevealOpen ? "Скрыть данные API" : "Просмотреть данные API");
+        viewBtn.innerHTML = '<i class="fas fa-eye"></i>';
+        viewBtn.disabled = isRevealLoading;
+        viewBtn.addEventListener("click", async () => {
+          if (isRevealOpen) {
+            removeDeliveryMapRevealEntry(itemId);
+            renderDeliveryMapAccountsPanel();
+            return;
+          }
+          setDeliveryMapRevealEntry(itemId, { open: true, loading: true });
+          renderDeliveryMapAccountsPanel();
+          const data = await revealDeliveryMapAccount(itemId);
+          if (!data || !data.ok || !data.item) {
+            alert("Не удалось показать данные API.");
+            removeDeliveryMapRevealEntry(itemId);
+            renderDeliveryMapAccountsPanel();
+            return;
+          }
+          setDeliveryMapRevealEntry(itemId, {
+            open: true,
+            loading: false,
+            item: cloneDeliveryMapAccountDraft(data.item)
+          });
+          renderDeliveryMapAccountsPanel();
+        });
+
+        const editBtn = document.createElement("button");
+        editBtn.type = "button";
+        editBtn.className = "btn btn-icon btn-sm btn-secondary settings-delivery-map-account-icon-btn";
+        editBtn.title = isEditOpen ? "Скрыть редактирование" : "Редактировать";
+        editBtn.setAttribute("aria-label", isEditOpen ? "Скрыть редактирование" : "Редактировать");
+        editBtn.innerHTML = '<i class="fas fa-pencil-alt"></i>';
+        editBtn.addEventListener("click", async () => {
+          if (isEditOpen) {
+            deliveryMapAccountsEditId = "";
+            deliveryMapAccountsEditDraft = createEmptyDeliveryMapAccountDraft();
+            renderDeliveryMapAccountsPanel();
+            return;
+          }
+
+          let nextDraft = cloneDeliveryMapAccountDraft(item);
+          const data = await revealDeliveryMapAccount(itemId);
+          if (data && data.ok && data.item) {
+            nextDraft = cloneDeliveryMapAccountDraft(data.item);
+          }
+          deliveryMapAccountsEditId = itemId;
+          deliveryMapAccountsEditDraft = nextDraft;
+          renderDeliveryMapAccountsPanel();
+        });
+
+        actions.appendChild(viewBtn);
+        actions.appendChild(editBtn);
+        row.appendChild(radioWrap);
+        row.appendChild(main);
+        row.appendChild(actions);
+        card.appendChild(row);
+
+        if (isRevealOpen) {
+          const reveal = document.createElement("div");
+          reveal.className = "settings-delivery-map-account-reveal";
+          if (isRevealLoading) {
+            reveal.textContent = "Загрузка данных API...";
+          } else {
+            const revealedItem = cloneDeliveryMapAccountDraft(revealEntry && revealEntry.item);
+            const revealFields = [
+              { label: "ЛОГИН", value: revealedItem.login, type: "text" },
+              { label: "ПАРОЛЬ", value: revealedItem.password, type: "text" }
+            ].filter((field) => Boolean(String(field.value || "").trim()));
+            if (!revealFields.length) {
+              const empty = document.createElement("div");
+              empty.className = "field-hint settings-delivery-map-account-reveal-empty";
+              empty.textContent = "Данные входа не заполнены.";
+              reveal.appendChild(empty);
+            } else {
+              const grid = document.createElement("div");
+              grid.className = "settings-delivery-map-account-reveal-grid";
+              revealFields.forEach((field) => {
+                const wrap = document.createElement("div");
+                wrap.className = "settings-site-field";
+                const label = document.createElement("label");
+                label.className = "field-label";
+                label.textContent = field.label;
+                const input = document.createElement("input");
+                input.className = "control";
+                input.type = field.type;
+                input.readOnly = true;
+                input.value = String(field.value || "");
+                wrap.appendChild(label);
+                wrap.appendChild(input);
+                grid.appendChild(wrap);
+              });
+              reveal.appendChild(grid);
+            }
+          }
+          card.appendChild(reveal);
+        }
+
+        if (isEditOpen) {
+          const edit = document.createElement("div");
+          edit.className = "settings-delivery-map-account-edit";
+          const grid = document.createElement("div");
+          grid.className = "settings-delivery-map-account-editor-grid";
+
+          [
+            { key: "api_key", label: "API KEY", type: "text", placeholder: "Введите API key" },
+            { key: "login", label: "ЛОГИН", type: "text", placeholder: "Необязательно" },
+            { key: "password", label: "ПАРОЛЬ", type: "password", placeholder: "Необязательно" }
+          ].forEach((field) => {
+            const wrap = document.createElement("div");
+            wrap.className = "settings-site-field";
+            const label = document.createElement("label");
+            label.className = "field-label";
+            label.textContent = field.label;
+            const input = document.createElement("input");
+            input.className = "control";
+            input.type = field.type;
+            input.placeholder = field.placeholder;
+            input.value = String(editDraft[field.key] || "");
+            input.addEventListener("input", () => {
+              deliveryMapAccountsEditDraft = {
+                ...cloneDeliveryMapAccountDraft(deliveryMapAccountsEditDraft),
+                [field.key]: String(input.value || "")
+              };
+            });
+            wrap.appendChild(label);
+            wrap.appendChild(input);
+            grid.appendChild(wrap);
+          });
+
+          const inlineActions = document.createElement("div");
+          inlineActions.className = "settings-delivery-map-account-inline-actions";
+
+          const cancelBtn = document.createElement("button");
+          cancelBtn.type = "button";
+          cancelBtn.className = "btn btn-secondary btn-sm";
+          cancelBtn.textContent = "Отмена";
+          cancelBtn.addEventListener("click", () => {
+            deliveryMapAccountsEditId = "";
+            deliveryMapAccountsEditDraft = createEmptyDeliveryMapAccountDraft();
+            renderDeliveryMapAccountsPanel();
+          });
+
+          const applyBtn = document.createElement("button");
+          applyBtn.type = "button";
+          applyBtn.className = "btn btn-primary btn-sm";
+          applyBtn.textContent = "Сохранить";
+          applyBtn.addEventListener("click", () => {
+            const nextDraft = cloneDeliveryMapAccountDraft(deliveryMapAccountsEditDraft);
+            if (!String(nextDraft.api_key || "").trim()) {
+              alert("Введите API key.");
+              return;
+            }
+            deliveryMapAccountsDraft = cloneDeliveryMapAccounts(deliveryMapAccountsDraft).map((entry) => (
+              String(entry.id || "") === itemId
+                ? {
+                    ...entry,
+                    api_key: String(nextDraft.api_key || "").trim(),
+                    login: String(nextDraft.login || "").trim(),
+                    password: String(nextDraft.password || "").trim()
+                  }
+                : entry
+            ));
+            deliveryMapAccountsEditId = "";
+            deliveryMapAccountsEditDraft = createEmptyDeliveryMapAccountDraft();
+            removeDeliveryMapRevealEntry(itemId);
+            renderDeliveryMapAccountsPanel();
+          });
+
+          inlineActions.appendChild(cancelBtn);
+          inlineActions.appendChild(applyBtn);
+          edit.appendChild(grid);
+          edit.appendChild(inlineActions);
+          card.appendChild(edit);
+        }
+
+        settingsDeliveryMapAccountsList.appendChild(card);
+      });
+    }
+
+    function applyLoadedDeliveryMapAccounts(data) {
+      if (typeof (data && data.enabled) === "boolean") {
+        storeAddressMapModeCache = Boolean(data.enabled);
+      }
+      if (!isStoreAddressMapModeEnabled()) {
+        syncDeliveryMapConfigAvailability();
+        return;
+      }
+      deliveryMapAccountsLoaded = true;
+      deliveryMapAccountsProviderName = String(data && data.provider_name || "").trim();
+      deliveryMapAccountsOriginal = Array.isArray(data && data.items)
+        ? data.items.map((item) => normalizeDeliveryMapAccountSummary(item))
+        : [];
+      deliveryMapAccountsDraft = deliveryMapAccountsOriginal.map((item) => ({
+        id: item.id,
+        api_key: item.api_key,
+        login: item.has_login ? "__saved__" : "",
+        password: item.has_password ? "__saved__" : "",
+        api_key_masked: item.api_key_masked,
+        has_login: item.has_login,
+        has_password: item.has_password,
+        is_active: item.is_active
+      }));
+      resetDeliveryMapAccountsTransientState();
+      renderDeliveryMapAccountsPanel();
+      renderDeliveryHomeList(deliverySettingsState.items);
+      renderDeliveryWorkspace();
+    }
+
+    async function loadDeliveryMapAccounts(force = false) {
+      if (!isStoreAddressMapModeEnabled()) {
+        deliveryMapAccountsLoaded = false;
+        deliveryMapAccountsProviderName = "";
+        deliveryMapAccountsOriginal = [];
+        deliveryMapAccountsDraft = [];
+        resetDeliveryMapAccountsTransientState();
+        renderDeliveryMapAccountsPanel();
+        return null;
+      }
+
+      if (deliveryMapAccountsLoadingPromise && !force) {
+        return deliveryMapAccountsLoadingPromise;
+      }
+
+      if (deliveryMapAccountsLoaded && !force) {
+        renderDeliveryMapAccountsPanel();
+        return {
+          ok: true,
+          provider_name: deliveryMapAccountsProviderName,
+          items: deliveryMapAccountsOriginal
+        };
+      }
+
+      deliveryMapAccountsLoadingPromise = (async () => {
+        const data = await fetchDeliveryMapAccounts();
+        if (!data || !data.ok) return null;
+        applyLoadedDeliveryMapAccounts(data);
+        return data;
+      })().finally(() => {
+        deliveryMapAccountsLoadingPromise = null;
+      });
+
+      return deliveryMapAccountsLoadingPromise;
+    }
+
+    function resetDeliveryMapAccountsToOriginal() {
+      deliveryMapAccountsDraft = (Array.isArray(deliveryMapAccountsOriginal) ? deliveryMapAccountsOriginal : []).map((item) => ({
+        id: item.id,
+        api_key: item.api_key,
+        login: item.has_login ? "__saved__" : "",
+        password: item.has_password ? "__saved__" : "",
+        api_key_masked: item.api_key_masked,
+        has_login: item.has_login,
+        has_password: item.has_password,
+        is_active: item.is_active
+      }));
+      resetDeliveryMapAccountsTransientState();
+      renderDeliveryMapAccountsPanel();
+    }
+
+    function syncDeliveryMapConfigAvailability() {
+      syncDeliveryMapConfigButtonVisibility();
+      if (isStoreAddressMapModeEnabled()) {
+        renderDeliveryHomeList(deliverySettingsState.items);
+        renderDeliveryWorkspace();
+        return;
+      }
+
+      deliveryTabsState.tabs = deliveryTabsState.tabs.filter((tab) => !isDeliveryMapConfigTab(tab));
+      if (deliveryTabsState.activeKey === DELIVERY_MAP_CONFIG_TAB_KEY) {
+        deliveryTabsState.activeKey = "";
+      }
+      deliveryMapAccountsLoaded = false;
+      deliveryMapAccountsProviderName = "";
+      deliveryMapAccountsOriginal = [];
+      deliveryMapAccountsDraft = [];
+      resetDeliveryMapAccountsTransientState();
+      renderDeliveryHomeList(deliverySettingsState.items);
+      renderDeliveryWorkspace();
     }
 
     async function createDeliverySetting(payload) {
@@ -10182,11 +11984,30 @@
       renderDeliveryWorkspace();
     }
 
+    async function loadDeliveryZones() {
+      const data = await fetchDeliveryZones();
+      if (!data || !data.ok) return;
+      const items = Array.isArray(data.items) ? data.items.map((item) => normalizeDeliveryZone(item)) : [];
+      deliveryZonesState.loaded = true;
+      deliveryZonesState.items = items;
+      syncDeliveryTabsWithItems(deliverySettingsState.items, items);
+      renderDeliveryZonesHomeList(items);
+      renderDeliveryWorkspace();
+      refreshDeliveryZoneLayers();
+    }
+
     function startCreateDeliverySetting() {
       openNewDeliveryTab();
       deliverySettingsState.selectedId = null;
       deliverySettingsState.snapshot = null;
       deliverySettingsState.mode = "create";
+    }
+
+    function startCreateDeliveryZone() {
+      openNewDeliveryZoneTab();
+      deliveryZonesState.selectedId = null;
+      deliveryZonesState.snapshot = null;
+      deliveryZonesState.mode = "create";
     }
 
     if (settingsDeliveryTabs) {
@@ -10210,6 +12031,50 @@
         event.preventDefault();
         event.stopPropagation();
         goToDeliveryHome();
+      });
+    }
+
+    resetDeliveryMapAccountsTransientState();
+
+    if (settingsDeliveryMapAccountAddBtn) {
+      settingsDeliveryMapAccountAddBtn.addEventListener("click", () => {
+        if (deliveryMapAccountsAddMode) {
+          closeDeliveryMapAddForm();
+          return;
+        }
+        openDeliveryMapAddForm();
+      });
+    }
+
+    if (settingsDeliveryMapAccountAddCancelBtn) {
+      settingsDeliveryMapAccountAddCancelBtn.addEventListener("click", () => {
+        closeDeliveryMapAddForm();
+      });
+    }
+
+    if (settingsDeliveryMapAccountAddConfirmBtn) {
+      settingsDeliveryMapAccountAddConfirmBtn.addEventListener("click", () => {
+        const nextDraft = updateDeliveryMapAddDraftFromInputs();
+        if (!String(nextDraft.api_key || "").trim()) {
+          alert("Введите API key.");
+          if (settingsDeliveryMapAccountAddApiKey) settingsDeliveryMapAccountAddApiKey.focus();
+          return;
+        }
+
+        const nextItems = cloneDeliveryMapAccounts(deliveryMapAccountsDraft);
+        nextItems.push({
+          id: buildDeliveryMapAccountClientId(),
+          api_key: String(nextDraft.api_key || "").trim(),
+          login: String(nextDraft.login || "").trim(),
+          password: String(nextDraft.password || "").trim(),
+          is_active: nextItems.length === 0
+        });
+        deliveryMapAccountsDraft = nextItems;
+        if (!deliveryMapAccountsDraft.some((item) => item.is_active)) {
+          setActiveDeliveryMapDraftAccount(String(deliveryMapAccountsDraft[0] && deliveryMapAccountsDraft[0].id || ""));
+        }
+        closeDeliveryMapAddForm();
+        renderDeliveryMapAccountsPanel();
       });
     }
 
@@ -10245,8 +12110,7 @@
           renderDeliveryWorkspace();
           syncDeliveryMapStoresState();
           setActiveRightTab("");
-
-          // Load stores first for checkboxes, then load delivery settings
+          // Load stores first for delivery conditions, zones and map context.
           if (!storesState.loaded) {
             fetchStores().then((data) => {
               if (data && data.ok) {
@@ -10255,18 +12119,26 @@
                 syncDeliveryMapStoresState();
               }
               loadDeliverySettings();
+              loadDeliveryZones();
               refreshDeliveryMapPreview(true);
             });
           } else {
             loadDeliverySettings();
+            loadDeliveryZones();
             refreshDeliveryMapPreview(true);
           }
         } else {
           persistActiveDeliveryDraft();
+          stopDeliveryZoneMapModes();
           if (settingsDeliveryTabsHeader) settingsDeliveryTabsHeader.classList.add("hidden");
           if (settingsDeliveryPanel) settingsDeliveryPanel.classList.add("hidden");
           if (settingsDeliveryFooter) settingsDeliveryFooter.classList.add("hidden");
+          if (settingsDeliveryZonePanel) settingsDeliveryZonePanel.classList.add("hidden");
+          if (settingsDeliveryZoneFooter) settingsDeliveryZoneFooter.classList.add("hidden");
+          if (settingsDeliveryMapConfigPanel) settingsDeliveryMapConfigPanel.classList.add("hidden");
+          if (settingsDeliveryMapConfigFooter) settingsDeliveryMapConfigFooter.classList.add("hidden");
           if (settingsDeliveryEmpty) settingsDeliveryEmpty.classList.add("hidden");
+          closeDeliveryCreateMenu();
         }
       });
     });
@@ -10276,7 +12148,11 @@
       settingsAddOrderBtn.addEventListener("click", () => {
         const section = document.body.getAttribute("data-settings-section");
         if (section === "delivery") {
-          startCreateDeliverySetting();
+          if (deliveryCreateMenuOpen) {
+            closeDeliveryCreateMenu();
+          } else {
+            openDeliveryCreateMenu();
+          }
         }
       });
     }
@@ -10285,6 +12161,26 @@
       settingsDeliverySaveBtn.addEventListener("click", async () => {
         const activeTab = getActiveDeliveryTab();
         if (!activeTab) return;
+        if (isDeliveryMapConfigTab(activeTab)) {
+          const payload = buildDeliveryMapDraftPayload();
+          if (payload.length > 20) {
+            alert("Можно сохранить не больше 20 API.");
+            return;
+          }
+          if (payload.some((item) => !String(item.api_key || "").trim())) {
+            alert("У каждого API должен быть заполнен ключ.");
+            return;
+          }
+          const saveResult = await saveDeliveryMapAccounts(payload);
+          if (!saveResult || !saveResult.ok) {
+            alert("Не удалось сохранить настройки карты.");
+            return;
+          }
+          applyLoadedDeliveryMapAccounts(saveResult);
+          deliveryMapConfigCache = null;
+          refreshDeliveryMapPreview(true);
+          return;
+        }
         const draft = readDeliveryFormDraft();
         activeTab.draft = cloneDeliveryDraft(draft);
         const nextPayload = {
@@ -10377,6 +12273,10 @@
       settingsDeliveryResetBtn.addEventListener("click", () => {
         const activeTab = getActiveDeliveryTab();
         if (!activeTab) return;
+        if (isDeliveryMapConfigTab(activeTab)) {
+          resetDeliveryMapAccountsToOriginal();
+          return;
+        }
         activeTab.draft = activeTab.mode === "create"
           ? createEmptyDeliveryDraft()
           : createDeliveryDraftFromSetting(activeTab.snapshot);
@@ -10388,6 +12288,38 @@
         }
         if (!deliverySettingsState.snapshot) return;
         fillDeliverySettingForm(deliverySettingsState.snapshot);
+      });
+    }
+
+    if (settingsDeliveryMapConfigSaveBtn) {
+      settingsDeliveryMapConfigSaveBtn.addEventListener("click", async () => {
+        const activeTab = getActiveDeliveryTab();
+        if (!isDeliveryMapConfigTab(activeTab)) return;
+        const payload = buildDeliveryMapDraftPayload();
+        if (payload.length > 20) {
+          alert("Можно сохранить не больше 20 API.");
+          return;
+        }
+        if (payload.some((item) => !String(item.api_key || "").trim())) {
+          alert("У каждого API должен быть заполнен ключ.");
+          return;
+        }
+        const saveResult = await saveDeliveryMapAccounts(payload);
+        if (!saveResult || !saveResult.ok) {
+          alert("Не удалось сохранить настройки карты.");
+          return;
+        }
+        applyLoadedDeliveryMapAccounts(saveResult);
+        deliveryMapConfigCache = null;
+        refreshDeliveryMapPreview(true);
+      });
+    }
+
+    if (settingsDeliveryMapConfigResetBtn) {
+      settingsDeliveryMapConfigResetBtn.addEventListener("click", () => {
+        const activeTab = getActiveDeliveryTab();
+        if (!isDeliveryMapConfigTab(activeTab)) return;
+        resetDeliveryMapAccountsToOriginal();
       });
     }
 
@@ -10420,6 +12352,1764 @@
     }
 
     // --- Фото товаров (images settings) ---
+    function getDeliveryZoneStoreMap() {
+      return new Map(
+        (Array.isArray(storesState.items) ? storesState.items : [])
+          .map((store) => [Number(store && store.id), store])
+          .filter(([id]) => Number.isFinite(id) && id > 0)
+      );
+    }
+
+    function getDeliveryZoneStoreItems(zone) {
+      const storeMap = getDeliveryZoneStoreMap();
+      return (Array.isArray(zone && zone.store_ids) ? zone.store_ids : [])
+        .map((storeId) => storeMap.get(Number(storeId)))
+        .filter(Boolean);
+    }
+
+    function isDeliveryZoneVisible(zone) {
+      const activeCityKey = normalizeDeliveryMapCityName(getActiveDeliveryMapCityName());
+      if (!activeCityKey) return true;
+      const storeItems = getDeliveryZoneStoreItems(zone);
+      if (!storeItems.length) return false;
+      return storeItems.some((store) => normalizeDeliveryMapCityName(store && store.city) === activeCityKey);
+    }
+
+    function getVisibleDeliveryZoneItems(items = deliveryZonesState.items) {
+      const list = Array.isArray(items) ? items.map((item) => normalizeDeliveryZone(item)) : [];
+      return list.filter((zone) => isDeliveryZoneVisible(zone));
+    }
+
+    function buildDeliveryZoneStyle(zoneLike, options = {}) {
+      const zone = zoneLike && typeof zoneLike === "object" ? zoneLike : {};
+      const color = String(zone.color || "#ff7a00").trim() || "#ff7a00";
+      const isActive = Boolean(options.active);
+      const isSelected = Boolean(options.selected);
+      return {
+        color,
+        weight: isSelected ? 4 : (isActive ? 3 : 2),
+        opacity: isSelected ? 1 : (isActive ? 0.95 : 0.78),
+        fillColor: color,
+        fillOpacity: isSelected ? 0.32 : (isActive ? 0.24 : 0.14),
+        dashArray: isActive ? "" : "6 4",
+      };
+    }
+
+    function normalizeDeliveryZoneDraftPoint(point) {
+      const lat = Number(point && point.lat);
+      const lng = Number(point && point.lng);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+      return { lat, lng };
+    }
+
+    function cloneDeliveryZoneDraftPoints(points) {
+      return Array.isArray(points)
+        ? points.map((point) => normalizeDeliveryZoneDraftPoint(point)).filter(Boolean)
+        : [];
+    }
+
+    function getDeliveryZoneDraftLatLngs(points) {
+      return cloneDeliveryZoneDraftPoints(points).map((point) => window.L.latLng(point.lat, point.lng));
+    }
+
+    function buildDeliveryZonePolygonCoordinatesFromPoints(points) {
+      const normalizedPoints = cloneDeliveryZoneDraftPoints(points);
+      if (normalizedPoints.length < 3) return null;
+      const ring = normalizedPoints.map((point) => [point.lng, point.lat]);
+      const [firstLng, firstLat] = ring[0];
+      const [lastLng, lastLat] = ring[ring.length - 1];
+      if (firstLng !== lastLng || firstLat !== lastLat) {
+        ring.push([firstLng, firstLat]);
+      }
+      return [ring];
+    }
+
+    function getDeliveryZonePolygonPointsFromGeometry(geometry, polygonIndex = 0) {
+      const normalized = normalizeDeliveryZoneGeometryValue(geometry);
+      if (!normalized || !Array.isArray(normalized.coordinates) || !normalized.coordinates.length) return [];
+      const nextIndex = Math.max(0, Math.min(Number(polygonIndex) || 0, normalized.coordinates.length - 1));
+      const polygon = normalized.coordinates[nextIndex];
+      const ring = Array.isArray(polygon) && polygon.length ? polygon[0] : null;
+      if (!Array.isArray(ring) || !ring.length) return [];
+      const points = ring
+        .map((coord) => ({
+          lng: Number(Array.isArray(coord) ? coord[0] : null),
+          lat: Number(Array.isArray(coord) ? coord[1] : null),
+        }))
+        .filter((point) => Number.isFinite(point.lat) && Number.isFinite(point.lng));
+      if (points.length > 1) {
+        const first = points[0];
+        const last = points[points.length - 1];
+        if (first.lat === last.lat && first.lng === last.lng) {
+          points.pop();
+        }
+      }
+      return points;
+    }
+
+    function buildDeliveryZoneGeometryWithUpdatedPolygon(geometry, polygonIndex, points) {
+      const normalized = normalizeDeliveryZoneGeometryValue(geometry);
+      const polygonCoordinates = buildDeliveryZonePolygonCoordinatesFromPoints(points);
+      if (!normalized || !Array.isArray(normalized.coordinates) || !normalized.coordinates.length || !polygonCoordinates) {
+        return null;
+      }
+      const nextIndex = Math.max(0, Math.min(Number(polygonIndex) || 0, normalized.coordinates.length - 1));
+      const nextCoordinates = normalized.coordinates.map((polygon, index) => (
+        index === nextIndex ? polygonCoordinates : polygon
+      ));
+      return {
+        type: "MultiPolygon",
+        coordinates: nextCoordinates,
+      };
+    }
+
+    function buildDeliveryZoneMidpointPoint(startPoint, endPoint) {
+      return normalizeDeliveryZoneDraftPoint({
+        lat: (Number(startPoint && startPoint.lat) + Number(endPoint && endPoint.lat)) / 2,
+        lng: (Number(startPoint && startPoint.lng) + Number(endPoint && endPoint.lng)) / 2,
+      });
+    }
+
+    function buildDeliveryZoneMidpointDescriptors(points, options = {}) {
+      const normalizedPoints = cloneDeliveryZoneDraftPoints(points);
+      const isClosed = Boolean(options.closed);
+      const descriptors = [];
+      if (normalizedPoints.length < 2) return descriptors;
+      const limit = isClosed ? normalizedPoints.length : normalizedPoints.length - 1;
+      for (let index = 0; index < limit; index += 1) {
+        const nextIndex = isClosed ? (index + 1) % normalizedPoints.length : index + 1;
+        const startPoint = normalizedPoints[index];
+        const endPoint = normalizedPoints[nextIndex];
+        if (!startPoint || !endPoint) continue;
+        const midpoint = buildDeliveryZoneMidpointPoint(startPoint, endPoint);
+        if (!midpoint) continue;
+        descriptors.push({
+          segment_index: index,
+          insert_index: index + 1,
+          point: midpoint,
+        });
+      }
+      return descriptors;
+    }
+
+    function shouldShowDeliveryZoneMidpointHandles() {
+      return Boolean(deliveryLeafletMap && typeof deliveryLeafletMap.getZoom === "function" && deliveryLeafletMap.getZoom() >= DELIVERY_ZONE_MIDPOINT_MIN_ZOOM);
+    }
+
+    function setDeliveryMapDraggingEnabled(enabled) {
+      if (!deliveryLeafletMap || !deliveryLeafletMap.dragging) return;
+      try {
+        if (enabled) {
+          deliveryLeafletMap.dragging.enable();
+        } else {
+          deliveryLeafletMap.dragging.disable();
+        }
+      } catch (_) {}
+    }
+
+    function buildDeliveryZoneHandleIcon(type, options = {}) {
+      if (!window.L) return null;
+      const handleType = type === "midpoint" ? "midpoint" : "main";
+      const classes = [
+        "settings-delivery-zone-handle",
+        `settings-delivery-zone-handle--${handleType}`,
+      ];
+      if (options.last) classes.push("is-last");
+      if (options.passive) classes.push("settings-delivery-zone-handle--passive");
+      const boxSize = handleType === "midpoint" ? 12 : 16;
+      const iconSize = boxSize + 6;
+      const color = String(options.color || "#ff7a00").trim() || "#ff7a00";
+      return window.L.divIcon({
+        className: classes.join(" "),
+        html: `<span class="settings-delivery-zone-handle-dot" style="--handle-color:${color}"></span>`,
+        iconSize: [iconSize, iconSize],
+        iconAnchor: [iconSize / 2, iconSize / 2],
+      });
+    }
+
+    function buildDeliveryZoneMapHint(tab) {
+      if (!isDeliveryZoneTab(tab)) return "";
+      const pointsCount = getDeliveryZoneDraftPoints(tab).length;
+      const polygonsCount = countDeliveryZonePolygons(tab && tab.draft && tab.draft.geometry);
+      if (isDeliveryZonePlacingMode(tab)) {
+        if (pointsCount <= 0) return "Поставьте первую точку зоны";
+        if (pointsCount === 1) return "Поставьте следующую точку";
+        if (pointsCount === 2) return "После второй точки на линии появится вспомогательная точка";
+        return "Нажмите на последнюю точку, чтобы завершить или продолжить контур";
+      }
+      if (isDeliveryZoneEditingMode(tab) && polygonsCount > 0) {
+        return "Тяните основные точки или точки на линиях, чтобы менять форму зоны";
+      }
+      if (isDeliveryZoneViewMode(tab) && polygonsCount > 0) {
+        return "Нажмите «Редактировать», чтобы включить активные точки полигона";
+      }
+      if (polygonsCount > 0) {
+        return "Зона создана. Точки можно двигать мышкой";
+      }
+      return "Поставьте первую точку зоны";
+    }
+
+    function positionDeliveryZonePointMenu() {
+      if (!settingsDeliveryZonePointMenu) return;
+      const shouldShow = Boolean(
+        deliveryLeafletMap
+        && settingsDeliveryMapBlock
+        && deliveryZonesState.pointMenuOpen
+        && deliveryZonesState.pointMenuLatLng
+      );
+      settingsDeliveryZonePointMenu.classList.toggle("hidden", !shouldShow);
+      if (!shouldShow) return;
+      const anchor = window.L.latLng(deliveryZonesState.pointMenuLatLng.lat, deliveryZonesState.pointMenuLatLng.lng);
+      const point = deliveryLeafletMap.latLngToContainerPoint(anchor);
+      const mapRect = settingsDeliveryMapBlock.getBoundingClientRect();
+      const menuRect = settingsDeliveryZonePointMenu.getBoundingClientRect();
+      const maxLeft = Math.max(12, mapRect.width - menuRect.width - 12);
+      const maxTop = Math.max(12, mapRect.height - menuRect.height - 12);
+      const left = Math.min(Math.max(12, point.x + 12), maxLeft);
+      const top = Math.min(Math.max(12, point.y - 8), maxTop);
+      settingsDeliveryZonePointMenu.style.left = `${Math.round(left)}px`;
+      settingsDeliveryZonePointMenu.style.top = `${Math.round(top)}px`;
+    }
+
+    function syncDeliveryZoneMapOverlay() {
+      const activeTab = getActiveDeliveryTab();
+      const showOverlay = Boolean(
+        document.body.getAttribute("data-settings-section") === "delivery"
+        && isDeliveryZoneFeatureAvailable()
+        && isDeliveryZoneTab(activeTab)
+        && deliveryLeafletMap
+        && settingsDeliveryMapCanvas
+        && !settingsDeliveryMapCanvas.classList.contains("hidden")
+      );
+      if (settingsDeliveryZoneMapOverlay) {
+        settingsDeliveryZoneMapOverlay.classList.toggle("hidden", !showOverlay);
+      }
+      if (!showOverlay) {
+        deliveryZonesState.pointMenuOpen = false;
+        deliveryZonesState.pointMenuLatLng = null;
+        if (settingsDeliveryZonePointMenu) settingsDeliveryZonePointMenu.classList.add("hidden");
+        syncDeliveryZoneEditButton(null);
+        return;
+      }
+      const uiState = getDeliveryZoneTabUiState(activeTab);
+      const pointsCount = uiState.draft_points.length;
+      const polygonsCount = countDeliveryZonePolygons(activeTab && activeTab.draft && activeTab.draft.geometry);
+      const selectedIndex = getDeliveryZoneSelectedPolygonIndex(activeTab);
+      const isEditing = isDeliveryZoneEditingMode(activeTab);
+      if (settingsDeliveryZoneMapHint) {
+        settingsDeliveryZoneMapHint.textContent = buildDeliveryZoneMapHint(activeTab);
+      }
+      if (settingsDeliveryZoneUndoBtn) {
+        settingsDeliveryZoneUndoBtn.disabled = pointsCount <= 0;
+      }
+      if (settingsDeliveryZoneClearPointsBtn) {
+        settingsDeliveryZoneClearPointsBtn.disabled = pointsCount <= 0;
+      }
+      if (settingsDeliveryZoneAddPolygonBtn) {
+        const canAddPolygon = polygonsCount > 0 && isEditing;
+        settingsDeliveryZoneAddPolygonBtn.classList.toggle("hidden", !canAddPolygon);
+      }
+      if (settingsDeliveryZoneRemovePolygonBtn) {
+        const canRemovePolygon = polygonsCount > 0 && isEditing && selectedIndex >= 0;
+        settingsDeliveryZoneRemovePolygonBtn.classList.toggle("hidden", !canRemovePolygon);
+      }
+      if (settingsDeliveryZonePointMenuFinishBtn) {
+        settingsDeliveryZonePointMenuFinishBtn.disabled = pointsCount < 3;
+      }
+      syncDeliveryZoneEditButton(activeTab);
+      positionDeliveryZonePointMenu();
+    }
+
+    function setActiveDeliveryZoneUiMode(mode, options = {}) {
+      const activeTab = getActiveDeliveryTab();
+      if (!isDeliveryZoneTab(activeTab)) return null;
+      const current = getDeliveryZoneTabUiState(activeTab);
+      const nextMode = String(mode || "").trim() || current.mode || "placing";
+      const nextState = {
+        ...current,
+        mode: nextMode,
+      };
+      if (options.clearDraftPoints) {
+        nextState.draft_points = [];
+      }
+      if (options.selectedPolygonIndex !== undefined) {
+        nextState.selected_polygon_index = Number.isInteger(options.selectedPolygonIndex)
+          ? Number(options.selectedPolygonIndex)
+          : -1;
+      }
+      setDeliveryZoneTabUiState(activeTab, nextState);
+      if (options.closePointMenu !== false) {
+        closeDeliveryZonePointMenu();
+      }
+      return getDeliveryZoneTabUiState(activeTab);
+    }
+
+    function enterActiveDeliveryZoneEditMode() {
+      const activeTab = getActiveDeliveryTab();
+      if (!isDeliveryZoneTab(activeTab)) return null;
+      closeDeliveryZonePointMenu();
+      closeDeliveryZoneContextMenu();
+      const polygonsCount = countDeliveryZonePolygons(activeTab && activeTab.draft && activeTab.draft.geometry);
+      if (polygonsCount <= 0) {
+        startActiveDeliveryZonePolygonPlacement();
+        return getDeliveryZoneTabUiState(activeTab);
+      }
+      const selectedIndex = getDeliveryZoneSelectedPolygonIndex(activeTab);
+      setActiveDeliveryZoneUiMode("editing", {
+        selectedPolygonIndex: selectedIndex >= 0 ? selectedIndex : 0,
+      });
+      syncDeliveryZoneMapEditing();
+      return getDeliveryZoneTabUiState(activeTab);
+    }
+
+    function exitActiveDeliveryZoneEditMode(options = {}) {
+      const activeTab = getActiveDeliveryTab();
+      if (!isDeliveryZoneTab(activeTab)) return null;
+      const polygonsCount = countDeliveryZonePolygons(activeTab && activeTab.draft && activeTab.draft.geometry);
+      const nextMode = polygonsCount > 0 && activeTab.mode === "edit" ? "view" : (polygonsCount > 0 ? "editing" : "placing");
+      setActiveDeliveryZoneUiMode(nextMode, {
+        selectedPolygonIndex: polygonsCount > 0 ? Math.max(0, getDeliveryZoneSelectedPolygonIndex(activeTab)) : -1,
+      });
+      if (options.syncMap !== false) {
+        syncDeliveryZoneMapEditing();
+      }
+      return getDeliveryZoneTabUiState(activeTab);
+    }
+
+    function updateActiveDeliveryZoneDraftPoints(nextPoints, options = {}) {
+      const activeTab = getActiveDeliveryTab();
+      if (!isDeliveryZoneTab(activeTab)) return [];
+      setDeliveryZoneTabUiState(activeTab, {
+        draft_points: cloneDeliveryZoneDraftPoints(nextPoints),
+      });
+      if (options.closePointMenu !== false) {
+        closeDeliveryZonePointMenu();
+      }
+      return getDeliveryZoneDraftPoints(activeTab);
+    }
+
+    function replaceActiveDeliveryZoneGeometry(geometry, options = {}) {
+      const activeTab = getActiveDeliveryTab();
+      if (!isDeliveryZoneTab(activeTab)) return null;
+      const normalizedGeometry = normalizeDeliveryZoneGeometryValue(geometry);
+      activeTab.draft = {
+        ...cloneDeliveryZoneDraft(activeTab.draft),
+        geometry: normalizedGeometry,
+      };
+      const polygonsCount = countDeliveryZonePolygons(normalizedGeometry);
+      if (polygonsCount <= 0) {
+        setDeliveryZoneTabUiState(activeTab, {
+          mode: "placing",
+          selected_polygon_index: -1,
+        });
+      } else if (options.keepSelection) {
+        setDeliveryZoneTabUiState(activeTab, {
+          mode: "editing",
+          selected_polygon_index: getDeliveryZoneSelectedPolygonIndex(activeTab),
+        });
+      } else {
+        const selectedPolygonIndex = Number.isInteger(options.selectedPolygonIndex)
+          ? Number(options.selectedPolygonIndex)
+          : Math.max(0, polygonsCount - 1);
+        setDeliveryZoneTabUiState(activeTab, {
+          mode: "editing",
+          selected_polygon_index: Math.min(selectedPolygonIndex, polygonsCount - 1),
+        });
+      }
+      return normalizedGeometry;
+    }
+
+    function startActiveDeliveryZonePolygonPlacement() {
+      const activeTab = getActiveDeliveryTab();
+      if (!isDeliveryZoneTab(activeTab)) return;
+      setActiveDeliveryZoneUiMode("placing", {
+        clearDraftPoints: true,
+      });
+      deliveryZonesState.hoverLatLng = null;
+      syncDeliveryZoneMapEditing();
+    }
+
+    function removeLastActiveDeliveryZoneDraftPoint() {
+      const activeTab = getActiveDeliveryTab();
+      if (!isDeliveryZoneTab(activeTab)) return;
+      const points = getDeliveryZoneDraftPoints(activeTab);
+      if (!points.length) return;
+      points.pop();
+      updateActiveDeliveryZoneDraftPoints(points);
+      syncDeliveryZoneMapEditing();
+    }
+
+    function clearActiveDeliveryZoneDraftPoints() {
+      const activeTab = getActiveDeliveryTab();
+      if (!isDeliveryZoneTab(activeTab)) return;
+      updateActiveDeliveryZoneDraftPoints([]);
+      deliveryZonesState.hoverLatLng = null;
+      syncDeliveryZoneMapEditing();
+    }
+
+    function finishActiveDeliveryZoneDraftPolygon() {
+      const activeTab = getActiveDeliveryTab();
+      if (!isDeliveryZoneTab(activeTab)) return false;
+      const points = getDeliveryZoneDraftPoints(activeTab);
+      const polygonCoordinates = buildDeliveryZonePolygonCoordinatesFromPoints(points);
+      if (!polygonCoordinates) return false;
+      const currentGeometry = normalizeDeliveryZoneGeometryValue(activeTab.draft && activeTab.draft.geometry);
+      const nextCoordinates = currentGeometry && Array.isArray(currentGeometry.coordinates)
+        ? currentGeometry.coordinates.map((polygon) => Array.isArray(polygon) ? polygon.slice() : polygon)
+        : [];
+      nextCoordinates.push(polygonCoordinates);
+      replaceActiveDeliveryZoneGeometry({
+        type: "MultiPolygon",
+        coordinates: nextCoordinates,
+      }, {
+        selectedPolygonIndex: nextCoordinates.length - 1,
+      });
+      updateActiveDeliveryZoneDraftPoints([]);
+      deliveryZonesState.hoverLatLng = null;
+      syncDeliveryZoneMapEditing();
+      return true;
+    }
+
+    function deleteSelectedActiveDeliveryZonePolygon() {
+      const activeTab = getActiveDeliveryTab();
+      if (!isDeliveryZoneTab(activeTab)) return false;
+      const geometry = normalizeDeliveryZoneGeometryValue(activeTab.draft && activeTab.draft.geometry);
+      if (!geometry || !Array.isArray(geometry.coordinates) || !geometry.coordinates.length) return false;
+      const selectedIndex = getDeliveryZoneSelectedPolygonIndex(activeTab);
+      if (selectedIndex < 0) return false;
+      const nextCoordinates = geometry.coordinates.filter((_, index) => index !== selectedIndex);
+      replaceActiveDeliveryZoneGeometry(
+        nextCoordinates.length
+          ? { type: "MultiPolygon", coordinates: nextCoordinates }
+          : null,
+        {
+          selectedPolygonIndex: nextCoordinates.length ? Math.max(0, Math.min(selectedIndex, nextCoordinates.length - 1)) : -1,
+        }
+      );
+      syncDeliveryZoneMapEditing();
+      return true;
+    }
+
+    function selectActiveDeliveryZonePolygon(index) {
+      const activeTab = getActiveDeliveryTab();
+      if (!isDeliveryZoneTab(activeTab)) return;
+      const polygonsCount = countDeliveryZonePolygons(activeTab && activeTab.draft && activeTab.draft.geometry);
+      if (!polygonsCount) return;
+      closeDeliveryZoneContextMenu();
+      const nextIndex = Math.max(0, Math.min(Number(index) || 0, polygonsCount - 1));
+      setDeliveryZoneTabUiState(activeTab, {
+        selected_polygon_index: nextIndex,
+      });
+      syncDeliveryZoneMapEditing();
+    }
+
+    function syncDeliveryZoneDraftGeometryIfEditing(tab = getActiveDeliveryTab()) {
+      if (!isDeliveryZoneTab(tab) || isDeliveryZonePlacingMode(tab) || deliveryZonesState.editLayerKey !== tab.key) return null;
+      return syncActiveDeliveryZoneDraftGeometryFromMap();
+    }
+
+    function refreshActiveDeliveryZoneDraftPreviewOnly() {
+      const activeTab = getActiveDeliveryTab();
+      renderActiveDeliveryZoneDraftPreview(activeTab);
+      renderActiveDeliveryZoneCustomHandles(activeTab);
+      syncDeliveryZoneMapOverlay();
+    }
+
+    function stopDeliveryZoneMapModes() {
+      if (!deliveryLeafletMap || !deliveryLeafletMap.pm) return;
+      try {
+        if (typeof deliveryLeafletMap.pm.disableDraw === "function") {
+          deliveryLeafletMap.pm.disableDraw();
+        }
+      } catch (_) {}
+      try {
+        if (typeof deliveryLeafletMap.pm.disableGlobalEditMode === "function") {
+          deliveryLeafletMap.pm.disableGlobalEditMode();
+        }
+      } catch (_) {}
+      try {
+        if (typeof deliveryLeafletMap.pm.disableGlobalRemovalMode === "function") {
+          deliveryLeafletMap.pm.disableGlobalRemovalMode();
+        }
+      } catch (_) {}
+    }
+
+    function clearDeliveryZoneLayers() {
+      if (deliveryLeafletZonePassiveLayer) {
+        deliveryLeafletZonePassiveLayer.clearLayers();
+      }
+      if (deliveryLeafletZoneEditLayer) {
+        deliveryLeafletZoneEditLayer.clearLayers();
+      }
+      if (deliveryLeafletZoneDraftLayer) {
+        deliveryLeafletZoneDraftLayer.clearLayers();
+      }
+      if (deliveryLeafletZoneVertexLayer) {
+        deliveryLeafletZoneVertexLayer.clearLayers();
+      }
+      if (deliveryLeafletZoneMidpointLayer) {
+        deliveryLeafletZoneMidpointLayer.clearLayers();
+      }
+      deliveryZonesState.editLayerKey = "";
+    }
+
+    function fitDeliveryZoneLayerGroup(layerGroup) {
+      if (!deliveryLeafletMap || !window.L || !layerGroup || typeof layerGroup.getBounds !== "function") return false;
+      const bounds = layerGroup.getBounds();
+      if (!bounds || !bounds.isValid || !bounds.isValid()) return false;
+      deliveryLeafletMap.fitBounds(bounds, { padding: [32, 32] });
+      return true;
+    }
+
+    function bindEditableDeliveryZoneLayer(layer) {
+      if (!layer) return;
+      const syncGeometry = () => {
+        const activeTab = getActiveDeliveryTab();
+        if (!isDeliveryZoneTab(activeTab)) return;
+        syncActiveDeliveryZoneDraftGeometryFromMap();
+        updateDeliveryZoneGeometryHint(activeTab);
+        syncDeliveryZoneMapOverlay();
+      };
+      layer.off("pm:edit", syncGeometry);
+      layer.on("pm:edit", syncGeometry);
+      layer.off("pm:update", syncGeometry);
+      layer.on("pm:update", syncGeometry);
+      layer.on("pm:remove", () => {
+        window.setTimeout(syncGeometry, 0);
+      });
+    }
+
+    function ensureDeliveryZoneMapTools() {
+      if (!deliveryLeafletMap || !window.L) return false;
+      if (!deliveryLeafletZonePassiveLayer) {
+        deliveryLeafletZonePassiveLayer = window.L.layerGroup().addTo(deliveryLeafletMap);
+      }
+      if (!deliveryLeafletZoneEditLayer) {
+        deliveryLeafletZoneEditLayer = window.L.featureGroup().addTo(deliveryLeafletMap);
+      }
+      if (!deliveryLeafletZoneDraftLayer) {
+        deliveryLeafletZoneDraftLayer = window.L.layerGroup().addTo(deliveryLeafletMap);
+      }
+      if (!deliveryLeafletZoneVertexLayer) {
+        deliveryLeafletZoneVertexLayer = window.L.layerGroup().addTo(deliveryLeafletMap);
+      }
+      if (!deliveryLeafletZoneMidpointLayer) {
+        deliveryLeafletZoneMidpointLayer = window.L.layerGroup().addTo(deliveryLeafletMap);
+      }
+      if (!deliveryLeafletMap.__deliveryZoneCustomReady) {
+        deliveryLeafletMap.on("click", (event) => {
+          const activeTab = getActiveDeliveryTab();
+          if (!isDeliveryZoneTab(activeTab) || !isDeliveryZonePlacingMode(activeTab)) return;
+          const nextPoints = getDeliveryZoneDraftPoints(activeTab);
+          nextPoints.push({
+            lat: Number(event && event.latlng && event.latlng.lat),
+            lng: Number(event && event.latlng && event.latlng.lng),
+          });
+          updateActiveDeliveryZoneDraftPoints(nextPoints);
+          deliveryZonesState.hoverLatLng = event && event.latlng ? {
+            lat: Number(event.latlng.lat),
+            lng: Number(event.latlng.lng),
+          } : null;
+          refreshActiveDeliveryZoneDraftPreviewOnly();
+        });
+        deliveryLeafletMap.on("mousemove", (event) => {
+          const activeTab = getActiveDeliveryTab();
+          if (!isDeliveryZoneTab(activeTab) || !isDeliveryZonePlacingMode(activeTab)) return;
+          deliveryZonesState.hoverLatLng = event && event.latlng ? {
+            lat: Number(event.latlng.lat),
+            lng: Number(event.latlng.lng),
+          } : null;
+          refreshActiveDeliveryZoneDraftPreviewOnly();
+        });
+        deliveryLeafletMap.on("mouseout", () => {
+          if (!isDeliveryZonePlacingMode()) return;
+          deliveryZonesState.hoverLatLng = null;
+          refreshActiveDeliveryZoneDraftPreviewOnly();
+        });
+        deliveryLeafletMap.on("move zoom", () => {
+          positionDeliveryZonePointMenu();
+          closeDeliveryZoneContextMenu();
+        });
+        deliveryLeafletMap.on("zoomend moveend", () => {
+          renderActiveDeliveryZoneCustomHandles(getActiveDeliveryTab());
+        });
+        deliveryLeafletMap.__deliveryZoneCustomReady = true;
+      }
+      return true;
+    }
+
+    function renderPassiveDeliveryZoneLayer(zone, options = {}) {
+      if (!deliveryLeafletMap || !window.L || !deliveryLeafletZonePassiveLayer) return;
+      const normalized = normalizeDeliveryZone(zone);
+      if (!normalized.geometry) return;
+      const interactive = options.interactive !== false;
+      const geoJsonLayer = window.L.geoJSON(normalized.geometry, {
+        style: buildDeliveryZoneStyle(normalized),
+        interactive,
+      });
+      geoJsonLayer.eachLayer((layer) => {
+        layer.options.pmIgnore = true;
+        if (typeof layer.setStyle === "function") {
+          layer.setStyle(buildDeliveryZoneStyle(normalized));
+        }
+        if (interactive) {
+          layer.on("click", () => {
+            if (isDeliveryZonePlacingMode()) return;
+            openDeliveryZoneTab(normalized);
+          });
+          layer.on("contextmenu", (event) => {
+            if (event && event.originalEvent) {
+              if (window.L && window.L.DomEvent && typeof window.L.DomEvent.stop === "function") {
+                window.L.DomEvent.stop(event.originalEvent);
+              } else {
+                event.originalEvent.preventDefault();
+                event.originalEvent.stopPropagation();
+              }
+            }
+            openDeliveryZoneContextMenuForZone(normalized, event && event.latlng ? event.latlng : null);
+          });
+        }
+        deliveryLeafletZonePassiveLayer.addLayer(layer);
+      });
+    }
+
+    function mountActiveDeliveryZoneDraftOnMap(tab, options = {}) {
+      if (!deliveryLeafletZoneEditLayer || !window.L) return;
+      deliveryLeafletZoneEditLayer.clearLayers();
+      deliveryZonesState.editLayerKey = "";
+      const activeTab = tab || getActiveDeliveryTab();
+      if (!isDeliveryZoneTab(activeTab)) return;
+      const draft = cloneDeliveryZoneDraft(activeTab.draft);
+      if (!draft.geometry) return;
+      const enableEditing = Boolean(options.enableEditing);
+      const interactive = options.interactive !== false;
+      const selectedPolygonIndex = getDeliveryZoneSelectedPolygonIndex(activeTab);
+      const geoJsonLayer = window.L.geoJSON(draft.geometry, {
+        style: buildDeliveryZoneStyle(draft, { active: true }),
+        interactive,
+      });
+      let pieceIndex = 0;
+      geoJsonLayer.eachLayer((layer) => {
+        layer.options.pmIgnore = false;
+        if (typeof layer.setStyle === "function") {
+          layer.setStyle(buildDeliveryZoneStyle(draft, {
+            active: true,
+            selected: interactive && pieceIndex === selectedPolygonIndex,
+          }));
+        }
+        layer.__deliveryZonePieceIndex = pieceIndex;
+        layer.off("click");
+        if (interactive) {
+          layer.on("click", (event) => {
+            if (event && event.originalEvent) {
+              event.originalEvent.preventDefault();
+              event.originalEvent.stopPropagation();
+            }
+            if (isDeliveryZonePlacingMode(activeTab)) return;
+            selectActiveDeliveryZonePolygon(layer.__deliveryZonePieceIndex);
+          });
+          layer.on("contextmenu", (event) => {
+            if (event && event.originalEvent) {
+              if (window.L && window.L.DomEvent && typeof window.L.DomEvent.stop === "function") {
+                window.L.DomEvent.stop(event.originalEvent);
+              } else {
+                event.originalEvent.preventDefault();
+                event.originalEvent.stopPropagation();
+              }
+            }
+            if (isDeliveryZonePlacingMode(activeTab)) return;
+            selectActiveDeliveryZonePolygon(layer.__deliveryZonePieceIndex);
+            openDeliveryZoneContextMenuForZone(activeTab.snapshot || activeTab.draft || {}, event && event.latlng ? event.latlng : null, {
+              activate: false,
+            });
+          });
+        }
+        if (layer.pm && typeof layer.pm.disable === "function") {
+          try {
+            layer.pm.disable();
+          } catch (_) {}
+        }
+        if (enableEditing && layer.pm && typeof layer.pm.enable === "function") {
+          try {
+            layer.pm.enable({
+              allowSelfIntersection: true,
+              snappable: true,
+            });
+          } catch (_) {}
+        }
+        if (enableEditing) {
+          bindEditableDeliveryZoneLayer(layer);
+        }
+        deliveryLeafletZoneEditLayer.addLayer(layer);
+        pieceIndex += 1;
+      });
+      deliveryZonesState.editLayerKey = activeTab.key;
+    }
+
+    function renderActiveDeliveryZoneDraftPreview(tab) {
+      if (!deliveryLeafletZoneDraftLayer || !window.L) return;
+      deliveryLeafletZoneDraftLayer.clearLayers();
+      if (!isDeliveryZoneTab(tab) || !isDeliveryZonePlacingMode(tab)) return;
+      const draft = cloneDeliveryZoneDraft(tab.draft);
+      const draftPoints = getDeliveryZoneDraftPoints(tab);
+      const latLngs = getDeliveryZoneDraftLatLngs(draftPoints);
+      const hoverLatLng = deliveryZonesState.hoverLatLng
+        ? window.L.latLng(deliveryZonesState.hoverLatLng.lat, deliveryZonesState.hoverLatLng.lng)
+        : null;
+      const previewColor = String(draft.color || "#ff7a00").trim() || "#ff7a00";
+
+      if (latLngs.length >= 2) {
+        const lineLatLngs = hoverLatLng ? latLngs.concat([hoverLatLng]) : latLngs;
+        window.L.polyline(lineLatLngs, {
+          color: previewColor,
+          weight: 3,
+          opacity: 0.92,
+          dashArray: "10 8",
+          interactive: false,
+        }).addTo(deliveryLeafletZoneDraftLayer);
+      } else if (latLngs.length === 1 && hoverLatLng) {
+        window.L.polyline([latLngs[0], hoverLatLng], {
+          color: previewColor,
+          weight: 3,
+          opacity: 0.92,
+          dashArray: "10 8",
+          interactive: false,
+        }).addTo(deliveryLeafletZoneDraftLayer);
+      }
+
+      const previewPolygonLatLngs = latLngs.length >= 2
+        ? (hoverLatLng ? latLngs.concat([hoverLatLng]) : (latLngs.length >= 3 ? latLngs : null))
+        : null;
+      if (previewPolygonLatLngs && previewPolygonLatLngs.length >= 3) {
+        window.L.polygon(previewPolygonLatLngs, {
+          color: previewColor,
+          weight: 2,
+          opacity: 0.8,
+          dashArray: "10 8",
+          fillColor: previewColor,
+          fillOpacity: 0.22,
+          interactive: false,
+        }).addTo(deliveryLeafletZoneDraftLayer);
+      }
+    }
+
+    function getActiveDeliveryZonePolygonLayer(polygonIndex = getDeliveryZoneSelectedPolygonIndex()) {
+      if (!deliveryLeafletZoneEditLayer) return null;
+      let foundLayer = null;
+      deliveryLeafletZoneEditLayer.eachLayer((layer) => {
+        if (foundLayer) return;
+        if (Number(layer && layer.__deliveryZonePieceIndex) === Number(polygonIndex)) {
+          foundLayer = layer;
+        }
+      });
+      return foundLayer;
+    }
+
+    function previewActiveDeliveryZonePolygonPoints(points, polygonIndex = getDeliveryZoneSelectedPolygonIndex()) {
+      const layer = getActiveDeliveryZonePolygonLayer(polygonIndex);
+      if (!layer || typeof layer.setLatLngs !== "function") return;
+      const latLngs = getDeliveryZoneDraftLatLngs(points);
+      if (latLngs.length < 3) return;
+      layer.setLatLngs([latLngs]);
+      if (typeof layer.redraw === "function") {
+        layer.redraw();
+      }
+    }
+
+    function attachDeliveryZoneHandleDragLifecycle(marker, handlers = {}) {
+      if (!marker) return;
+      marker.on("dragstart", () => {
+        closeDeliveryZonePointMenu();
+        closeDeliveryZoneContextMenu();
+        setDeliveryMapDraggingEnabled(false);
+        if (typeof handlers.onStart === "function") {
+          handlers.onStart();
+        }
+      });
+      marker.on("drag", (event) => {
+        if (typeof handlers.onDrag === "function") {
+          handlers.onDrag(event);
+        }
+      });
+      marker.on("dragend", (event) => {
+        setDeliveryMapDraggingEnabled(true);
+        if (typeof handlers.onEnd === "function") {
+          handlers.onEnd(event);
+        }
+      });
+    }
+
+    function renderDeliveryZonePlacingHandles(tab) {
+      if (!window.L || !deliveryLeafletZoneVertexLayer || !deliveryLeafletZoneMidpointLayer) return;
+      const draft = cloneDeliveryZoneDraft(tab.draft);
+      const points = cloneDeliveryZoneDraftPoints(getDeliveryZoneDraftPoints(tab));
+      const color = String(draft.color || "#ff7a00").trim() || "#ff7a00";
+      points.forEach((point, index) => {
+        const isLast = index === points.length - 1;
+        const marker = window.L.marker([point.lat, point.lng], {
+          icon: buildDeliveryZoneHandleIcon("main", { color, last: isLast }),
+          interactive: isLast,
+          draggable: false,
+          keyboard: false,
+          bubblingMouseEvents: false,
+          zIndexOffset: isLast ? 1200 : 1100,
+        });
+        if (isLast) {
+          marker.on("click", (event) => {
+            if (event && event.originalEvent) {
+              if (window.L && window.L.DomEvent && typeof window.L.DomEvent.stop === "function") {
+                window.L.DomEvent.stop(event.originalEvent);
+              } else {
+                event.originalEvent.preventDefault();
+                event.originalEvent.stopPropagation();
+              }
+            }
+            const lastPoint = getDeliveryZoneLastDraftPoint(tab);
+            if (!lastPoint) return;
+            setActiveDeliveryZonePointMenu(true, lastPoint);
+          });
+        }
+        deliveryLeafletZoneVertexLayer.addLayer(marker);
+      });
+      if (!shouldShowDeliveryZoneMidpointHandles()) return;
+      buildDeliveryZoneMidpointDescriptors(points).forEach((descriptor) => {
+        const marker = window.L.marker([descriptor.point.lat, descriptor.point.lng], {
+          icon: buildDeliveryZoneHandleIcon("midpoint", { color }),
+          interactive: true,
+          draggable: true,
+          keyboard: false,
+          bubblingMouseEvents: false,
+          zIndexOffset: 1050,
+        });
+        attachDeliveryZoneHandleDragLifecycle(marker, {
+          onEnd: (event) => {
+            const nextPoint = normalizeDeliveryZoneDraftPoint(event && event.target && event.target.getLatLng ? event.target.getLatLng() : null);
+            if (!nextPoint) {
+              syncDeliveryZoneMapEditing();
+              return;
+            }
+            const nextPoints = cloneDeliveryZoneDraftPoints(getDeliveryZoneDraftPoints(tab));
+            nextPoints.splice(descriptor.insert_index, 0, nextPoint);
+            updateActiveDeliveryZoneDraftPoints(nextPoints);
+            syncDeliveryZoneMapEditing();
+          },
+        });
+        deliveryLeafletZoneMidpointLayer.addLayer(marker);
+      });
+    }
+
+    function renderDeliveryZoneEditingHandles(tab) {
+      if (!window.L || !deliveryLeafletZoneVertexLayer || !deliveryLeafletZoneMidpointLayer) return;
+      const selectedPolygonIndex = getDeliveryZoneSelectedPolygonIndex(tab);
+      const points = getDeliveryZonePolygonPointsFromGeometry(tab && tab.draft && tab.draft.geometry, selectedPolygonIndex);
+      if (!points.length) return;
+      const color = String(tab && tab.draft && tab.draft.color || "#ff7a00").trim() || "#ff7a00";
+      const isEditing = isDeliveryZoneEditingMode(tab);
+      points.forEach((point, index) => {
+        const marker = window.L.marker([point.lat, point.lng], {
+          icon: buildDeliveryZoneHandleIcon("main", { color, passive: !isEditing }),
+          interactive: isEditing,
+          draggable: isEditing,
+          keyboard: false,
+          bubblingMouseEvents: false,
+          zIndexOffset: 1100,
+        });
+        if (isEditing) {
+          attachDeliveryZoneHandleDragLifecycle(marker, {
+            onDrag: (event) => {
+              const nextPoint = normalizeDeliveryZoneDraftPoint(event && event.target && event.target.getLatLng ? event.target.getLatLng() : null);
+              if (!nextPoint) return;
+              const previewPoints = points.map((item, itemIndex) => (
+                itemIndex === index ? nextPoint : item
+              ));
+              previewActiveDeliveryZonePolygonPoints(previewPoints, selectedPolygonIndex);
+            },
+            onEnd: (event) => {
+              const nextPoint = normalizeDeliveryZoneDraftPoint(event && event.target && event.target.getLatLng ? event.target.getLatLng() : null);
+              if (!nextPoint) {
+                syncDeliveryZoneMapEditing();
+                return;
+              }
+              const nextPoints = points.map((item, itemIndex) => (
+                itemIndex === index ? nextPoint : item
+              ));
+              const nextGeometry = buildDeliveryZoneGeometryWithUpdatedPolygon(tab && tab.draft && tab.draft.geometry, selectedPolygonIndex, nextPoints);
+              if (nextGeometry) {
+                replaceActiveDeliveryZoneGeometry(nextGeometry, { keepSelection: true });
+              }
+              syncDeliveryZoneMapEditing();
+            },
+          });
+        }
+        deliveryLeafletZoneVertexLayer.addLayer(marker);
+      });
+
+      if (!isEditing || !shouldShowDeliveryZoneMidpointHandles()) return;
+      buildDeliveryZoneMidpointDescriptors(points, { closed: true }).forEach((descriptor) => {
+        const marker = window.L.marker([descriptor.point.lat, descriptor.point.lng], {
+          icon: buildDeliveryZoneHandleIcon("midpoint", { color }),
+          interactive: true,
+          draggable: true,
+          keyboard: false,
+          bubblingMouseEvents: false,
+          zIndexOffset: 1050,
+        });
+        attachDeliveryZoneHandleDragLifecycle(marker, {
+          onDrag: (event) => {
+            const nextPoint = normalizeDeliveryZoneDraftPoint(event && event.target && event.target.getLatLng ? event.target.getLatLng() : null);
+            if (!nextPoint) return;
+            const previewPoints = points.slice();
+            previewPoints.splice(descriptor.insert_index, 0, nextPoint);
+            previewActiveDeliveryZonePolygonPoints(previewPoints, selectedPolygonIndex);
+          },
+          onEnd: (event) => {
+            const nextPoint = normalizeDeliveryZoneDraftPoint(event && event.target && event.target.getLatLng ? event.target.getLatLng() : null);
+            if (!nextPoint) {
+              syncDeliveryZoneMapEditing();
+              return;
+            }
+            const nextPoints = points.slice();
+            nextPoints.splice(descriptor.insert_index, 0, nextPoint);
+            const nextGeometry = buildDeliveryZoneGeometryWithUpdatedPolygon(tab && tab.draft && tab.draft.geometry, selectedPolygonIndex, nextPoints);
+            if (nextGeometry) {
+              replaceActiveDeliveryZoneGeometry(nextGeometry, { keepSelection: true });
+            }
+            syncDeliveryZoneMapEditing();
+          },
+        });
+        deliveryLeafletZoneMidpointLayer.addLayer(marker);
+      });
+    }
+
+    function renderActiveDeliveryZoneCustomHandles(tab = getActiveDeliveryTab()) {
+      if (deliveryLeafletZoneVertexLayer) {
+        deliveryLeafletZoneVertexLayer.clearLayers();
+      }
+      if (deliveryLeafletZoneMidpointLayer) {
+        deliveryLeafletZoneMidpointLayer.clearLayers();
+      }
+      if (!isDeliveryZoneTab(tab) || !deliveryLeafletMap || !window.L) return;
+      if (isDeliveryZonePlacingMode(tab)) {
+        renderDeliveryZonePlacingHandles(tab);
+        return;
+      }
+      if (countDeliveryZonePolygons(tab && tab.draft && tab.draft.geometry) <= 0) return;
+      renderDeliveryZoneEditingHandles(tab);
+    }
+
+    function collectDeliveryZoneGeometryFromEditLayer() {
+      if (!deliveryLeafletZoneEditLayer) return null;
+      const coordinates = [];
+      deliveryLeafletZoneEditLayer.eachLayer((layer) => {
+        if (!layer || typeof layer.toGeoJSON !== "function") return;
+        const feature = layer.toGeoJSON();
+        const normalized = normalizeDeliveryZoneGeometryValue(feature && feature.geometry ? feature.geometry : feature);
+        if (!normalized || !Array.isArray(normalized.coordinates)) return;
+        normalized.coordinates.forEach((polygon) => {
+          coordinates.push(polygon);
+        });
+      });
+      if (!coordinates.length) return null;
+      return {
+        type: "MultiPolygon",
+        coordinates,
+      };
+    }
+
+    function syncActiveDeliveryZoneDraftGeometryFromMap() {
+      const activeTab = getActiveDeliveryTab();
+      if (!isDeliveryZoneTab(activeTab)) return null;
+      const geometry = collectDeliveryZoneGeometryFromEditLayer();
+      activeTab.draft = {
+        ...cloneDeliveryZoneDraft(activeTab.draft),
+        geometry,
+      };
+      return geometry;
+    }
+
+    function refreshDeliveryZoneLayers() {
+      syncDeliveryZoneMapEditing();
+    }
+
+    function openDeliveryZoneContextMenuForZone(zoneLike, latLng, options = {}) {
+      const normalized = normalizeDeliveryZone(zoneLike);
+      if (!normalized.id || !latLng || isDeliveryZonePlacingMode()) return;
+      if (options.activate !== false) {
+        openDeliveryZoneTab(normalized);
+      }
+      setActiveDeliveryZoneContextMenu(true, normalized.id, latLng);
+    }
+
+    function syncDeliveryZoneMapEditing() {
+      const isDeliverySection = document.body.getAttribute("data-settings-section") === "delivery";
+      const featureAvailable = isDeliveryZoneFeatureAvailable();
+      const activeTab = getActiveDeliveryTab();
+      const activeZoneTab = isDeliveryZoneTab(activeTab) ? activeTab : null;
+
+      if (activeZoneTab) {
+        syncDeliveryZoneDraftGeometryIfEditing(activeZoneTab);
+      }
+
+      if (settingsDeliveryMapBlock) {
+        settingsDeliveryMapBlock.classList.toggle(
+          "is-zone-editing",
+          Boolean(isDeliverySection && featureAvailable && activeZoneTab && deliveryLeafletMap && isDeliveryZoneEditingMode(activeZoneTab))
+        );
+        settingsDeliveryMapBlock.classList.toggle(
+          "is-zone-placing",
+          Boolean(isDeliverySection && featureAvailable && activeZoneTab && deliveryLeafletMap && isDeliveryZonePlacingMode(activeZoneTab))
+        );
+      }
+
+      if (!isDeliverySection || !featureAvailable || !deliveryLeafletMap || !window.L) {
+        deliveryZonesState.drawMode = "idle";
+        deliveryZonesState.hoverLatLng = null;
+        deliveryZonesState.pointMenuOpen = false;
+        deliveryZonesState.pointMenuLatLng = null;
+        closeDeliveryZoneContextMenu();
+        stopDeliveryZoneMapModes();
+        clearDeliveryZoneLayers();
+        if (settingsDeliveryZonePointMenu) {
+          settingsDeliveryZonePointMenu.classList.add("hidden");
+        }
+        deliveryZonesState.mapFocusedKey = "";
+        syncDeliveryMapToolbarInteractivity();
+        syncDeliveryZoneMapOverlay();
+        return;
+      }
+
+      if (!ensureDeliveryZoneMapTools()) return;
+
+      deliveryLeafletZonePassiveLayer.clearLayers();
+      const activeZoneId = activeZoneTab && activeZoneTab.mode === "edit" ? Number(activeZoneTab.id || 0) : 0;
+      const isPlacing = Boolean(activeZoneTab && isDeliveryZonePlacingMode(activeZoneTab));
+      if (!isPlacing) {
+        deliveryZonesState.hoverLatLng = null;
+      } else {
+        closeDeliveryZoneContextMenu();
+      }
+      getVisibleDeliveryZoneItems().forEach((zone) => {
+        if (activeZoneId > 0 && Number(zone.id || 0) === activeZoneId) return;
+        renderPassiveDeliveryZoneLayer(zone, { interactive: !isPlacing });
+      });
+
+      stopDeliveryZoneMapModes();
+      renderDeliveryMapBranchMarkers();
+      mountActiveDeliveryZoneDraftOnMap(activeZoneTab, {
+        interactive: !isPlacing,
+        enableEditing: false,
+      });
+      renderActiveDeliveryZoneDraftPreview(activeZoneTab);
+      renderActiveDeliveryZoneCustomHandles(activeZoneTab);
+
+      if (!activeZoneTab) {
+        deliveryZonesState.drawMode = "idle";
+        deliveryZonesState.mapFocusedKey = "";
+        closeDeliveryZoneContextMenu();
+        syncDeliveryMapToolbarInteractivity();
+        syncDeliveryZoneMapOverlay();
+        return;
+      }
+
+      deliveryZonesState.drawMode = isPlacing ? "placing" : (isDeliveryZoneEditingMode(activeZoneTab) ? "editing" : "view");
+      updateDeliveryZoneGeometryHint(activeZoneTab);
+      syncDeliveryMapToolbarInteractivity();
+      syncDeliveryZoneMapOverlay();
+
+      if (countDeliveryZonePolygons(activeZoneTab.draft && activeZoneTab.draft.geometry) > 0) {
+        if (deliveryZonesState.mapFocusedKey !== activeZoneTab.key) {
+          fitDeliveryZoneLayerGroup(deliveryLeafletZoneEditLayer);
+          deliveryZonesState.mapFocusedKey = activeZoneTab.key;
+        }
+        return;
+      }
+
+      deliveryZonesState.mapFocusedKey = "";
+    }
+
+    function persistActiveDeliveryDraft() {
+      const activeTab = getActiveDeliveryTab();
+      if (!activeTab || isDeliveryMapConfigTab(activeTab)) return;
+      if (isDeliveryZoneTab(activeTab)) {
+        if (!settingsDeliveryZonePanel || settingsDeliveryZonePanel.classList.contains("hidden")) return;
+        activeTab.draft = cloneDeliveryZoneDraft(readDeliveryZoneFormDraft());
+        activeTab.uiState = cloneDeliveryZoneUiState(getActiveDeliveryZoneUiState());
+        return;
+      }
+      if (!settingsDeliveryPanel || settingsDeliveryPanel.classList.contains("hidden")) return;
+      activeTab.draft = readDeliveryFormDraft();
+    }
+
+    function showDeliveryMapEmpty(message) {
+      closeDeliveryMapSearchPopover();
+      closeDeliveryZoneContextMenu();
+      if (settingsDeliveryMapEmpty) {
+        settingsDeliveryMapEmpty.classList.remove("hidden");
+        const textEl = settingsDeliveryMapEmpty.querySelector(".settings-delivery-map-empty-text");
+        if (textEl && message) textEl.textContent = message;
+      }
+      if (settingsDeliveryMapCanvas) {
+        settingsDeliveryMapCanvas.classList.add("hidden");
+      }
+      if (deliveryLeafletTileLayer && deliveryLeafletMap) {
+        deliveryLeafletMap.removeLayer(deliveryLeafletTileLayer);
+        deliveryLeafletTileLayer = null;
+      }
+      stopDeliveryZoneMapModes();
+      clearDeliveryZoneLayers();
+      clearDeliveryMapSearchMarker();
+      clearDeliveryMapBranchMarkers();
+      if (settingsDeliveryMapBlock) {
+        settingsDeliveryMapBlock.classList.remove("is-zone-editing");
+        settingsDeliveryMapBlock.classList.remove("is-zone-placing");
+      }
+      if (settingsDeliveryZoneMapOverlay) settingsDeliveryZoneMapOverlay.classList.add("hidden");
+      if (settingsDeliveryZonePointMenu) settingsDeliveryZonePointMenu.classList.add("hidden");
+      setDeliveryMapSearchEnabled(false);
+      if (settingsDeliveryCityChip) settingsDeliveryCityChip.disabled = true;
+    }
+
+    function destroyDeliveryMapPreview() {
+      closeDeliveryZoneContextMenu();
+      stopDeliveryZoneMapModes();
+      clearDeliveryZoneLayers();
+      if (deliveryLeafletMap) {
+        deliveryLeafletMap.remove();
+        deliveryLeafletMap = null;
+      }
+      deliveryLeafletTileLayer = null;
+      deliveryLeafletSearchMarker = null;
+      deliveryLeafletBranchMarkersLayer = null;
+      deliveryLeafletZonePassiveLayer = null;
+      deliveryLeafletZoneEditLayer = null;
+      deliveryLeafletZoneDraftLayer = null;
+      deliveryLeafletZoneVertexLayer = null;
+      deliveryLeafletZoneMidpointLayer = null;
+      if (settingsDeliveryMapBlock) {
+        settingsDeliveryMapBlock.classList.remove("is-zone-editing");
+        settingsDeliveryMapBlock.classList.remove("is-zone-placing");
+      }
+      if (settingsDeliveryZoneMapOverlay) settingsDeliveryZoneMapOverlay.classList.add("hidden");
+      if (settingsDeliveryZonePointMenu) settingsDeliveryZonePointMenu.classList.add("hidden");
+    }
+
+    function applyDeliveryMapConfig(config, options = {}) {
+      if (!settingsDeliveryMapCanvas || !window.L) return false;
+      const normalized = normalizeSystemMapConfig(config);
+      const maxZoom = normalized.max_zoom;
+      const tileOptions = {
+        attribution: normalized.attribution || "",
+        maxZoom,
+      };
+      const subdomains = parseMapSubdomains(normalized.subdomains);
+      if (subdomains.length) {
+        tileOptions.subdomains = subdomains;
+      }
+
+      showDeliveryMapCanvas();
+
+      if (!deliveryLeafletMap) {
+        deliveryLeafletMap = window.L.map(settingsDeliveryMapCanvas, {
+          zoomControl: true,
+          attributionControl: true,
+        }).setView(DELIVERY_MAP_DEFAULT_CENTER, DELIVERY_MAP_DEFAULT_ZOOM);
+      }
+
+      if (deliveryLeafletTileLayer) {
+        deliveryLeafletMap.removeLayer(deliveryLeafletTileLayer);
+        deliveryLeafletTileLayer = null;
+      }
+
+      deliveryLeafletTileLayer = window.L.tileLayer(normalized.tile_url, tileOptions);
+      deliveryLeafletTileLayer.addTo(deliveryLeafletMap);
+      ensureDeliveryZoneMapTools();
+      if (options.resetView) {
+        closeDeliveryMapSearchPopover();
+        clearDeliveryMapSearchMarker();
+        clearDeliveryMapBranchMarkers();
+        clearDeliveryZoneLayers();
+        deliveryLeafletMap.setView(DELIVERY_MAP_DEFAULT_CENTER, DELIVERY_MAP_DEFAULT_ZOOM);
+      }
+      window.setTimeout(() => {
+        if (deliveryLeafletMap) deliveryLeafletMap.invalidateSize();
+        syncDeliveryZoneMapEditing();
+      }, 0);
+      return true;
+    }
+
+    function refreshDeliveryMapSelection() {
+      renderDeliveryCitySelector();
+      if (!deliveryLeafletMap || !window.L) return;
+      const stores = renderDeliveryMapBranchMarkers();
+      if (searchedMapCity) {
+        const focused = focusDeliveryMapLocation(searchedMapCity, {
+          showMarker: true,
+          popupLabel: searchedMapCity.popup_label || searchedMapCity.label
+        });
+        if (!focused && !fitDeliveryMapToStores(stores)) {
+          deliveryLeafletMap.setView(DELIVERY_MAP_DEFAULT_CENTER, DELIVERY_MAP_DEFAULT_ZOOM);
+        }
+        updateDeliveryMapStatusFromSelection();
+        refreshDeliveryZoneLayers();
+        return;
+      }
+
+      clearDeliveryMapSearchMarker();
+      if (fitDeliveryMapToStores(stores)) {
+        updateDeliveryMapStatusFromSelection();
+        refreshDeliveryZoneLayers();
+        return;
+      }
+
+      const activeViewport = getActiveDeliveryMapViewport();
+      if (activeViewport && focusDeliveryMapLocation(activeViewport, { showMarker: false })) {
+        updateDeliveryMapStatusFromSelection();
+        refreshDeliveryZoneLayers();
+        return;
+      }
+
+      if (getSelectedDeliveryStoreCityLabel()) {
+        ensureSelectedDeliveryStoreCityLocation();
+      }
+      deliveryLeafletMap.setView(DELIVERY_MAP_DEFAULT_CENTER, DELIVERY_MAP_DEFAULT_ZOOM);
+      updateDeliveryMapStatusFromSelection();
+      refreshDeliveryZoneLayers();
+    }
+
+    async function refreshDeliveryMapPreview(forceReload = false) {
+      if (!settingsDeliveryMapBlock || !settingsDeliveryMapCanvas || !settingsDeliveryMapEmpty) return;
+      if (!forceReload && deliveryMapConfigCache) {
+        storeAddressMapModeCache = Boolean(deliveryMapConfigCache.store_address_map_enabled);
+        syncDeliveryMapConfigAvailability();
+        if (!hasConfiguredMap(deliveryMapConfigCache)) {
+          showDeliveryMapEmpty(buildMapNotConfiguredMessage(deliveryMapConfigCache));
+          return;
+        }
+        if (!window.L) {
+          showDeliveryMapEmpty("Leaflet не подключён. Проверьте assets карты.");
+          return;
+        }
+        applyDeliveryMapConfig(deliveryMapConfigCache, { resetView: forceReload });
+        setDeliveryMapSearchEnabled(hasConfiguredMapGeocoder(deliveryMapConfigCache));
+        refreshDeliveryMapSelection();
+        syncDeliveryMapConfigAvailability();
+        return;
+      }
+
+      try {
+        const data = await fetchTenantMapConfig();
+        const config = normalizeSystemMapConfig(data && data.data ? data.data : null);
+        deliveryMapConfigCache = { ...config };
+        storeAddressMapModeCache = Boolean(config.store_address_map_enabled);
+        syncDeliveryMapConfigAvailability();
+        if (!hasConfiguredMap(config)) {
+          showDeliveryMapEmpty(buildMapNotConfiguredMessage(config));
+          return;
+        }
+        if (!window.L) {
+          showDeliveryMapEmpty("Leaflet не подключён. Проверьте assets карты.");
+          return;
+        }
+        applyDeliveryMapConfig(config, { resetView: true });
+        setDeliveryMapSearchEnabled(hasConfiguredMapGeocoder(config));
+        refreshDeliveryMapSelection();
+      } catch (err) {
+        console.error("Failed to refresh delivery map preview:", err);
+        showDeliveryMapEmpty("Не удалось загрузить настройки карты.");
+      } finally {
+        syncDeliveryMapConfigAvailability();
+      }
+    }
+
+    function syncDeliveryMapConfigAvailability() {
+      syncDeliveryMapConfigButtonVisibility();
+      syncDeliveryCreateMenuAvailability();
+      if (isStoreAddressMapModeEnabled()) {
+        renderDeliveryHomeList(deliverySettingsState.items);
+        renderDeliveryZonesHomeList(deliveryZonesState.items);
+        renderDeliveryWorkspace();
+        refreshDeliveryZoneLayers();
+        return;
+      }
+
+      deliveryTabsState.tabs = deliveryTabsState.tabs.filter((tab) => !isDeliveryMapConfigTab(tab));
+      if (deliveryTabsState.activeKey === DELIVERY_MAP_CONFIG_TAB_KEY) {
+        deliveryTabsState.activeKey = "";
+      }
+      deliveryMapAccountsLoaded = false;
+      deliveryMapAccountsProviderName = "";
+      deliveryMapAccountsOriginal = [];
+      deliveryMapAccountsDraft = [];
+      resetDeliveryMapAccountsTransientState();
+      stopDeliveryZoneMapModes();
+      clearDeliveryZoneLayers();
+      renderDeliveryHomeList(deliverySettingsState.items);
+      renderDeliveryZonesHomeList(deliveryZonesState.items);
+      renderDeliveryWorkspace();
+    }
+
+    function upsertDeliveryZoneInState(zone) {
+      const normalized = normalizeDeliveryZone(zone);
+      const nextItems = Array.isArray(deliveryZonesState.items) ? deliveryZonesState.items.slice() : [];
+      const index = nextItems.findIndex((item) => Number(item && item.id) === normalized.id);
+      if (index >= 0) {
+        nextItems[index] = normalized;
+      } else {
+        nextItems.push(normalized);
+      }
+      deliveryZonesState.items = nextItems;
+      return normalized;
+    }
+
+    function removeDeliveryZoneFromState(id) {
+      const zoneId = Number(id);
+      deliveryZonesState.items = (Array.isArray(deliveryZonesState.items) ? deliveryZonesState.items : [])
+        .filter((item) => Number(item && item.id) !== zoneId);
+    }
+
+    async function deleteDeliveryZoneById(zoneId) {
+      const normalizedZoneId = Number(zoneId);
+      if (!Number.isFinite(normalizedZoneId) || normalizedZoneId <= 0) return false;
+      const deleteResult = await deleteDeliveryZone(normalizedZoneId);
+      if (!deleteResult || !deleteResult.ok) return false;
+
+      removeDeliveryZoneFromState(normalizedZoneId);
+      closeDeliveryZoneContextMenu();
+
+      const zoneTab = getDeliveryZoneTabById(normalizedZoneId);
+      if (zoneTab) {
+        closeDeliveryTab(zoneTab.key, { force: true });
+      } else {
+        syncDeliveryTabsWithItems(deliverySettingsState.items, deliveryZonesState.items);
+        renderDeliveryHomeList(deliverySettingsState.items);
+        renderDeliveryZonesHomeList(deliveryZonesState.items);
+        renderDeliveryWorkspace();
+      }
+      refreshDeliveryZoneLayers();
+      return true;
+    }
+
+    function updateActiveDeliveryZoneDraft(patch = {}, options = {}) {
+      const activeTab = getActiveDeliveryTab();
+      if (!isDeliveryZoneTab(activeTab)) return null;
+      const nextDraft = {
+        ...cloneDeliveryZoneDraft(activeTab.draft),
+        ...patch,
+      };
+      activeTab.draft = cloneDeliveryZoneDraft(nextDraft);
+      if (options.renderTiers) {
+        renderDeliveryZonePriceTiers(activeTab.draft.price_tiers);
+      }
+      if (options.syncMap) {
+        syncDeliveryZoneMapEditing();
+      }
+      if (options.refreshTabs) {
+        renderDeliveryTabs();
+      }
+      return activeTab.draft;
+    }
+
+    function normalizeDeliveryZonePriceTiersForSave(items) {
+      const list = Array.isArray(items) ? items : [];
+      const normalized = [];
+      for (let index = 0; index < list.length; index += 1) {
+        const tier = list[index] && typeof list[index] === "object" ? list[index] : {};
+        const minOrderRaw = String(tier.min_order_amount ?? "").trim();
+        const deliveryCostRaw = String(tier.delivery_cost ?? "").trim();
+        if (!minOrderRaw && !deliveryCostRaw) continue;
+        if (!minOrderRaw || !deliveryCostRaw) {
+          return {
+            ok: false,
+            error: "Заполните обе суммы в каждом тарифном пороге.",
+          };
+        }
+        const minOrder = Number(minOrderRaw);
+        const deliveryCost = Number(deliveryCostRaw);
+        if (!Number.isFinite(minOrder) || minOrder < 0 || !Number.isFinite(deliveryCost) || deliveryCost < 0) {
+          return {
+            ok: false,
+            error: "Суммы тарифов должны быть положительными числами или нулём.",
+          };
+        }
+        normalized.push({
+          min_order_amount: Math.round(minOrder),
+          delivery_cost: Math.round(deliveryCost),
+        });
+      }
+      if (!normalized.length) {
+        return {
+          ok: false,
+          error: "Добавьте хотя бы один тариф для зоны доставки.",
+        };
+      }
+      normalized.sort((left, right) => left.min_order_amount - right.min_order_amount);
+      return {
+        ok: true,
+        items: normalized.map((tier, index) => ({
+          ...tier,
+          sort_order: index,
+        })),
+      };
+    }
+
+    function buildActiveDeliveryZoneSavePayload() {
+      const activeTab = getActiveDeliveryTab();
+      if (!isDeliveryZoneTab(activeTab)) return { ok: false, error: "ZONE_TAB_REQUIRED" };
+      const draft = cloneDeliveryZoneDraft(readDeliveryZoneFormDraft());
+      activeTab.draft = cloneDeliveryZoneDraft(draft);
+
+      const name = String(draft.name || "").trim();
+      if (!name) {
+        return { ok: false, error: "Введите название зоны доставки.", focus: settingsDeliveryZoneName };
+      }
+
+      const storeIds = Array.isArray(draft.store_ids) ? draft.store_ids.slice() : [];
+      if (!storeIds.length) {
+        return { ok: false, error: "Выберите хотя бы один филиал для зоны.", focus: deliveryZoneStoresList };
+      }
+
+      const tiersResult = normalizeDeliveryZonePriceTiersForSave(draft.price_tiers);
+      if (!tiersResult.ok) {
+        return { ok: false, error: tiersResult.error, focus: settingsDeliveryZonePriceTiers };
+      }
+
+      if (getDeliveryZoneDraftPoints(activeTab).length > 0) {
+        return {
+          ok: false,
+          error: "Завершите текущий контур через последнюю точку или очистите его.",
+          focus: settingsDeliveryMapBlock,
+        };
+      }
+
+      const geometry = normalizeDeliveryZoneGeometryValue(draft.geometry);
+      if (!geometry || countDeliveryZonePolygons(geometry) === 0) {
+        return { ok: false, error: "Поставьте точки на карте и завершите контур через последнюю точку.", focus: settingsDeliveryMapBlock };
+      }
+      if (!geometry || countDeliveryZonePolygons(geometry) === 0) {
+        return { ok: false, error: "Нарисуйте хотя бы один полигон на карте.", focus: settingsDeliveryMapBlock };
+      }
+
+      const etaValue = String(draft.eta_minutes ?? "").trim();
+      const etaMinutes = etaValue ? Number(etaValue) : null;
+      if (etaValue && (!Number.isFinite(etaMinutes) || etaMinutes < 0)) {
+        return { ok: false, error: "Время доставки должно быть положительным числом.", focus: settingsDeliveryZoneEtaMinutes };
+      }
+
+      return {
+        ok: true,
+        payload: {
+          name,
+          color: String(draft.color || "#ff7a00").trim() || "#ff7a00",
+          eta_minutes: etaValue ? Math.round(etaMinutes) : null,
+          is_active: draft.is_active ? 1 : 0,
+          store_ids: storeIds,
+          price_tiers: tiersResult.items,
+          geometry,
+        },
+      };
+    }
+
+    function focusDeliveryZoneField(target) {
+      if (!target || typeof target.focus !== "function") return;
+      target.focus();
+      if (typeof target.scrollIntoView === "function") {
+        target.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      }
+    }
+
+    if (settingsCreateMenuWrap) {
+      settingsCreateMenuWrap.addEventListener("click", (event) => {
+        event.stopPropagation();
+      });
+    }
+
+    if (settingsDeliveryCreateConditionBtn) {
+      settingsDeliveryCreateConditionBtn.addEventListener("click", () => {
+        closeDeliveryCreateMenu();
+        startCreateDeliverySetting();
+      });
+    }
+
+    if (settingsDeliveryCreateZoneBtn) {
+      settingsDeliveryCreateZoneBtn.addEventListener("click", () => {
+        closeDeliveryCreateMenu();
+        if (!isDeliveryZoneFeatureAvailable()) {
+          alert("Зоны доставки доступны только когда включены карта и сервис полигонов.");
+          return;
+        }
+        startCreateDeliveryZone();
+      });
+    }
+
+    document.addEventListener("click", (event) => {
+      if (!deliveryCreateMenuOpen) return;
+      if (settingsCreateMenuWrap && settingsCreateMenuWrap.contains(event.target)) return;
+      closeDeliveryCreateMenu();
+    });
+
+    document.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") return;
+      if (deliveryCreateMenuOpen) {
+        closeDeliveryCreateMenu();
+      }
+    });
+
+    if (settingsDeliveryZoneAddTierBtn) {
+      settingsDeliveryZoneAddTierBtn.addEventListener("click", () => {
+        const activeTab = getActiveDeliveryTab();
+        if (!isDeliveryZoneTab(activeTab)) return;
+        const currentTiers = readDeliveryZonePriceTiersFromDom();
+        currentTiers.push(createEmptyDeliveryZoneTierDraft());
+        updateActiveDeliveryZoneDraft({ price_tiers: currentTiers }, { renderTiers: true });
+      });
+    }
+
+    if (settingsDeliveryZonePriceTiers) {
+      settingsDeliveryZonePriceTiers.addEventListener("click", (event) => {
+        const removeButton = event.target && event.target.closest
+          ? event.target.closest("[data-zone-tier-remove]")
+          : null;
+        if (!removeButton) return;
+        const activeTab = getActiveDeliveryTab();
+        if (!isDeliveryZoneTab(activeTab)) return;
+        const index = Number(removeButton.getAttribute("data-zone-tier-remove"));
+        const currentTiers = readDeliveryZonePriceTiersFromDom();
+        const nextTiers = currentTiers.filter((_, tierIndex) => tierIndex !== index);
+        updateActiveDeliveryZoneDraft(
+          { price_tiers: nextTiers.length ? nextTiers : [createEmptyDeliveryZoneTierDraft()] },
+          { renderTiers: true }
+        );
+      });
+
+      settingsDeliveryZonePriceTiers.addEventListener("input", () => {
+        const activeTab = getActiveDeliveryTab();
+        if (!isDeliveryZoneTab(activeTab)) return;
+        updateActiveDeliveryZoneDraft({ price_tiers: readDeliveryZonePriceTiersFromDom() });
+      });
+    }
+
+    [
+      settingsDeliveryZoneName,
+      settingsDeliveryZoneEtaMinutes,
+    ].forEach((input) => {
+      if (!input) return;
+      input.addEventListener("input", () => {
+        const activeTab = getActiveDeliveryTab();
+        if (!isDeliveryZoneTab(activeTab)) return;
+        updateActiveDeliveryZoneDraft(readDeliveryZoneFormDraft(), { refreshTabs: input === settingsDeliveryZoneName });
+      });
+    });
+
+    if (settingsDeliveryZoneColor) {
+      settingsDeliveryZoneColor.addEventListener("input", () => {
+        const activeTab = getActiveDeliveryTab();
+        if (!isDeliveryZoneTab(activeTab)) return;
+        updateActiveDeliveryZoneDraft(readDeliveryZoneFormDraft(), { syncMap: true });
+      });
+    }
+
+    if (settingsDeliveryZoneActive) {
+      settingsDeliveryZoneActive.addEventListener("change", () => {
+        const activeTab = getActiveDeliveryTab();
+        if (!isDeliveryZoneTab(activeTab)) return;
+        updateActiveDeliveryZoneDraft(readDeliveryZoneFormDraft());
+      });
+    }
+
+    if (deliveryZoneStoresList) {
+      deliveryZoneStoresList.addEventListener("change", () => {
+        const activeTab = getActiveDeliveryTab();
+        if (!isDeliveryZoneTab(activeTab)) return;
+        updateActiveDeliveryZoneDraft(readDeliveryZoneFormDraft(), { syncMap: true });
+      });
+    }
+
+    if (settingsDeliveryZoneUndoBtn) {
+      settingsDeliveryZoneUndoBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        removeLastActiveDeliveryZoneDraftPoint();
+      });
+    }
+
+    if (settingsDeliveryZoneClearPointsBtn) {
+      settingsDeliveryZoneClearPointsBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        clearActiveDeliveryZoneDraftPoints();
+      });
+    }
+
+    if (settingsDeliveryZoneAddPolygonBtn) {
+      settingsDeliveryZoneAddPolygonBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        startActiveDeliveryZonePolygonPlacement();
+      });
+    }
+
+    if (settingsDeliveryZoneRemovePolygonBtn) {
+      settingsDeliveryZoneRemovePolygonBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!deleteSelectedActiveDeliveryZonePolygon()) {
+          alert("Сначала выберите полигон зоны на карте.");
+        }
+      });
+    }
+
+    if (settingsDeliveryZonePointMenuContinueBtn) {
+      settingsDeliveryZonePointMenuContinueBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        closeDeliveryZonePointMenu();
+      });
+    }
+
+    if (settingsDeliveryZonePointMenuRemoveLastBtn) {
+      settingsDeliveryZonePointMenuRemoveLastBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        removeLastActiveDeliveryZoneDraftPoint();
+      });
+    }
+
+    if (settingsDeliveryZonePointMenuFinishBtn) {
+      settingsDeliveryZonePointMenuFinishBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!finishActiveDeliveryZoneDraftPolygon()) {
+          alert("Для завершения зоны нужно поставить минимум 3 точки.");
+        }
+      });
+    }
+
+    if (settingsDeliveryZoneEditBtn) {
+      settingsDeliveryZoneEditBtn.addEventListener("click", () => {
+        enterActiveDeliveryZoneEditMode();
+      });
+    }
+
+    if (settingsDeliveryZoneContextEditBtn) {
+      settingsDeliveryZoneContextEditBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const zoneId = Number(deliveryZonesState.contextMenuZoneId || 0);
+        if (!zoneId) return;
+        const zone = (Array.isArray(deliveryZonesState.items) ? deliveryZonesState.items : [])
+          .find((item) => Number(item && item.id) === zoneId);
+        closeDeliveryZoneContextMenu();
+        if (!zone) return;
+        openDeliveryZoneTab(zone);
+        enterActiveDeliveryZoneEditMode();
+      });
+    }
+
+    if (settingsDeliveryZoneContextDeleteBtn) {
+      settingsDeliveryZoneContextDeleteBtn.addEventListener("click", async (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const zoneId = Number(deliveryZonesState.contextMenuZoneId || 0);
+        if (!zoneId) return;
+        if (!confirm("Удалить эту зону доставки?")) return;
+        const deleted = await deleteDeliveryZoneById(zoneId);
+        if (!deleted) {
+          alert("Не удалось удалить зону доставки.");
+        }
+      });
+    }
+
+    if (settingsDeliveryZoneSaveBtn) {
+      settingsDeliveryZoneSaveBtn.addEventListener("click", async () => {
+        const activeTab = getActiveDeliveryTab();
+        if (!isDeliveryZoneTab(activeTab)) return;
+        const saveState = buildActiveDeliveryZoneSavePayload();
+        if (!saveState.ok) {
+          alert(saveState.error || "Не удалось подготовить зону доставки.");
+          focusDeliveryZoneField(saveState.focus);
+          return;
+        }
+
+        const idleText = settingsDeliveryZoneSaveText ? settingsDeliveryZoneSaveText.textContent : "Сохранить";
+        settingsDeliveryZoneSaveBtn.disabled = true;
+        if (settingsDeliveryZoneSaveText) settingsDeliveryZoneSaveText.textContent = "Сохранение...";
+        try {
+          let saveResult = null;
+          if (activeTab.mode === "create") {
+            saveResult = await createDeliveryZone(saveState.payload);
+          } else if (activeTab.id) {
+            saveResult = await updateDeliveryZone(activeTab.id, saveState.payload);
+          }
+          if (!saveResult || !saveResult.ok || !saveResult.item) {
+            alert(activeTab.mode === "create"
+              ? "Не удалось создать зону доставки."
+              : "Не удалось сохранить изменения зоны.");
+            return;
+          }
+
+          const savedZone = upsertDeliveryZoneInState(saveResult.item);
+          activeTab.key = `delivery-zone:${savedZone.id}`;
+          activeTab.entityType = "zone";
+          activeTab.id = savedZone.id;
+          activeTab.mode = "edit";
+          activeTab.snapshot = savedZone;
+          activeTab.draft = createDeliveryZoneDraftFromZone(savedZone);
+          activeTab.uiState = createEmptyDeliveryZoneUiState({
+            mode: "view",
+            selected_polygon_index: 0,
+          });
+          deliveryTabsState.activeKey = activeTab.key;
+          deliveryZonesState.selectedId = savedZone.id;
+          deliveryZonesState.snapshot = { ...savedZone };
+          deliveryZonesState.mode = "edit";
+          deliveryZonesState.hoverLatLng = null;
+          closeDeliveryZonePointMenu();
+          syncDeliveryTabsWithItems(deliverySettingsState.items, deliveryZonesState.items);
+          renderDeliveryHomeList(deliverySettingsState.items);
+          renderDeliveryZonesHomeList(deliveryZonesState.items);
+          renderDeliveryWorkspace();
+          refreshDeliveryZoneLayers();
+        } finally {
+          settingsDeliveryZoneSaveBtn.disabled = false;
+          if (settingsDeliveryZoneSaveText) settingsDeliveryZoneSaveText.textContent = idleText || "Сохранить";
+        }
+      });
+    }
+
+    if (settingsDeliveryZoneResetBtn) {
+      settingsDeliveryZoneResetBtn.addEventListener("click", () => {
+        const activeTab = getActiveDeliveryTab();
+        if (!isDeliveryZoneTab(activeTab)) return;
+        activeTab.draft = activeTab.mode === "create"
+          ? createEmptyDeliveryZoneDraft()
+          : createDeliveryZoneDraftFromZone(activeTab.snapshot);
+        deliveryZonesState.mapFocusedKey = "";
+        activeTab.uiState = createEmptyDeliveryZoneUiState({
+          mode: countDeliveryZonePolygons(activeTab.draft.geometry) > 0
+            ? (activeTab.mode === "create" ? "editing" : "view")
+            : "placing",
+          selected_polygon_index: countDeliveryZonePolygons(activeTab.draft.geometry) > 0 ? 0 : -1,
+        });
+        deliveryZonesState.hoverLatLng = null;
+        closeDeliveryZonePointMenu();
+        applyDeliveryZoneFormDraft(activeTab);
+        syncDeliveryZoneMapEditing();
+      });
+    }
+
+    if (settingsDeliveryZoneDeleteBtn) {
+      settingsDeliveryZoneDeleteBtn.addEventListener("click", async () => {
+        const activeTab = getActiveDeliveryTab();
+        if (!isDeliveryZoneTab(activeTab) || !activeTab.id) return;
+        if (!confirm("Удалить эту зону доставки?")) return;
+        const deleted = await deleteDeliveryZoneById(activeTab.id);
+        if (!deleted) {
+          alert("Не удалось удалить зону доставки.");
+          return;
+        }
+      });
+    }
+
     async function saveChatSettingsPayload(button, payload, errorText, onSuccess) {
       if (!payload || typeof payload !== "object") return;
       const idleText = button ? String(button.textContent || "") : "";

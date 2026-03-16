@@ -1,7 +1,7 @@
 {
   "telegram_env_enabled": false,
   "telegram_tenant_enabled": false,
-  "updated_at": "2026-03-14T14:37:50.864Z",
+  "updated_at": "2026-03-15T12:38:51.450Z",
   "provider_name": "Thunderforest",
   "tile_url": "https://api.thunderforest.com/atlas/{z}/{x}/{y}.png?apikey=c062dec927e34ab9b90c18fae6cbcb8e",
   "attribution": "<a href=\"https://www.thunderforest.com/\" target=\"_blank\">&copy; Thunderforest</a> <a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\">&copy; OpenStreetMap contributors</a>",
@@ -12,5 +12,7 @@
   "geocoder_country_code": "ru",
   "geocoder_language": "ru",
   "geocoder_result_limit": 5,
-  "store_address_map_enabled": true
+  "store_address_map_enabled": true,
+  "delivery_zone_polygon_provider": "Leaflet-Geoman",
+  "delivery_zone_polygon_enabled": true
 }

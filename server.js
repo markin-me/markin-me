@@ -23,6 +23,7 @@ const {
   getBootstrappedPollingState,
   getEffectiveTelegramBotConfig,
   getEffectiveMapProviderConfig,
+  getEffectiveDeliveryZonePolygonConfig,
   normalizeTelegramBotUsername,
   normalizeTelegramBotToken,
   normalizeTelegramWebhookUrl,
@@ -37,6 +38,7 @@ const {
   normalizeMapGeocoderLanguage,
   normalizeMapGeocoderResultLimit,
   normalizeMapStoreAddressEnabled,
+  normalizeDeliveryZonePolygonProvider,
 } = require('./data/system-settings');
 const { searchSystemMapGeocoder, searchSystemAddressSuggest } = require('./data/map-geocoder');
 const { searchLocalAddressSuggest } = require('./data/local-address-index');
@@ -354,6 +356,10 @@ function getSystemTelegramConfig(sourceState = readSystemSettings()) {
 
 function getSystemMapConfig(sourceState = readSystemSettings()) {
   return getEffectiveMapProviderConfig(sourceState);
+}
+
+function getSystemDeliveryZonePolygonConfig(sourceState = readSystemSettings()) {
+  return getEffectiveDeliveryZonePolygonConfig(sourceState);
 }
 
 async function removeTelegramWebhook(token) {
@@ -1496,6 +1502,13 @@ app.get('/api/admin/system/map-provider', authMiddleware, (req, res) => {
   });
 });
 
+app.get('/api/admin/system/delivery-zone-polygon', authMiddleware, (req, res) => {
+  return res.json({
+    ok: true,
+    data: getSystemDeliveryZonePolygonConfig(),
+  });
+});
+
 app.put('/api/admin/system/map-provider', authMiddleware, (req, res) => {
   const body = req.body || {};
   const hasProviderName = hasOwn(body, 'provider_name');
@@ -1509,6 +1522,7 @@ app.put('/api/admin/system/map-provider', authMiddleware, (req, res) => {
   const hasGeocoderLanguage = hasOwn(body, 'geocoder_language');
   const hasGeocoderResultLimit = hasOwn(body, 'geocoder_result_limit');
   const hasStoreAddressMapEnabled = hasOwn(body, 'store_address_map_enabled');
+  const hasDeliveryZonePolygonProvider = hasOwn(body, 'delivery_zone_polygon_provider');
 
   if (
     !hasProviderName
@@ -1522,6 +1536,7 @@ app.put('/api/admin/system/map-provider', authMiddleware, (req, res) => {
     && !hasGeocoderLanguage
     && !hasGeocoderResultLimit
     && !hasStoreAddressMapEnabled
+    && !hasDeliveryZonePolygonProvider
   ) {
     return res.status(400).json({ ok: false, error: 'NO_FIELDS' });
   }
@@ -1560,6 +1575,9 @@ app.put('/api/admin/system/map-provider', authMiddleware, (req, res) => {
   const storeAddressMapEnabled = hasStoreAddressMapEnabled
     ? normalizeMapStoreAddressEnabled(body.store_address_map_enabled)
     : Boolean(currentConfig.store_address_map_enabled);
+  const deliveryZonePolygonProvider = hasDeliveryZonePolygonProvider
+    ? normalizeDeliveryZonePolygonProvider(body.delivery_zone_polygon_provider)
+    : normalizeDeliveryZonePolygonProvider(currentConfig.delivery_zone_polygon_provider);
   const hasTileConfig = Boolean(providerName || tileUrl || attribution || subdomains);
   const hasGeocoderConfig = Boolean(geocoderProviderName || geocoderSearchUrl);
 
@@ -1600,6 +1618,8 @@ app.put('/api/admin/system/map-provider', authMiddleware, (req, res) => {
       geocoder_language: geocoderLanguage,
       geocoder_result_limit: geocoderResultLimit,
       store_address_map_enabled: storeAddressMapEnabled,
+      delivery_zone_polygon_provider: deliveryZonePolygonProvider,
+      delivery_zone_polygon_enabled: storeAddressMapEnabled,
     },
     { defaults: runtimePollingState }
   );
@@ -1611,6 +1631,40 @@ app.put('/api/admin/system/map-provider', authMiddleware, (req, res) => {
   return res.json({
     ok: true,
     data: getSystemMapConfig(savedState),
+  });
+});
+
+app.put('/api/admin/system/delivery-zone-polygon', authMiddleware, (req, res) => {
+  const body = req.body || {};
+  const hasProvider = hasOwn(body, 'delivery_zone_polygon_provider');
+  const hasEnabled = hasOwn(body, 'delivery_zone_polygon_enabled');
+
+  if (!hasProvider && !hasEnabled) {
+    return res.status(400).json({ ok: false, error: 'NO_FIELDS' });
+  }
+
+  const currentConfig = getSystemDeliveryZonePolygonConfig();
+  const currentMapConfig = getSystemMapConfig();
+  const provider = hasProvider
+    ? normalizeDeliveryZonePolygonProvider(body.delivery_zone_polygon_provider)
+    : currentConfig.delivery_zone_polygon_provider;
+  const enabled = Boolean(currentMapConfig.store_address_map_enabled);
+
+  const savedState = writeSystemSettings(
+    {
+      delivery_zone_polygon_provider: provider,
+      delivery_zone_polygon_enabled: enabled,
+    },
+    { defaults: runtimePollingState }
+  );
+
+  if (!savedState) {
+    return res.status(500).json({ ok: false, error: 'SYSTEM_SETTINGS_WRITE_FAILED' });
+  }
+
+  return res.json({
+    ok: true,
+    data: getSystemDeliveryZonePolygonConfig(savedState),
   });
 });
 

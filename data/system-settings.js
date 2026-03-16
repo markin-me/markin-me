@@ -99,6 +99,15 @@ function normalizeMapStoreAddressEnabled(value) {
   return Boolean(value);
 }
 
+function normalizeDeliveryZonePolygonProvider(value) {
+  const raw = normalizeString(value);
+  return raw || 'Leaflet-Geoman';
+}
+
+function normalizeDeliveryZonePolygonEnabled(value) {
+  return Boolean(value);
+}
+
 function readSystemSettings() {
   try {
     if (!fs.existsSync(SYSTEM_SETTINGS_FILE)) return null;
@@ -216,6 +225,18 @@ function writeSystemSettings(nextState, options = {}) {
         : normalizeMapStoreAddressEnabled(currentState.store_address_map_enabled);
     }
 
+    if (hasOwn(currentState, 'delivery_zone_polygon_provider') || hasOwn(nextState, 'delivery_zone_polygon_provider')) {
+      payload.delivery_zone_polygon_provider = hasOwn(nextState, 'delivery_zone_polygon_provider')
+        ? normalizeDeliveryZonePolygonProvider(nextState.delivery_zone_polygon_provider)
+        : normalizeDeliveryZonePolygonProvider(currentState.delivery_zone_polygon_provider);
+    }
+
+    if (hasOwn(currentState, 'delivery_zone_polygon_enabled') || hasOwn(nextState, 'delivery_zone_polygon_enabled')) {
+      payload.delivery_zone_polygon_enabled = hasOwn(nextState, 'delivery_zone_polygon_enabled')
+        ? normalizeDeliveryZonePolygonEnabled(nextState.delivery_zone_polygon_enabled)
+        : normalizeDeliveryZonePolygonEnabled(currentState.delivery_zone_polygon_enabled);
+    }
+
     fs.writeFileSync(SYSTEM_SETTINGS_FILE, JSON.stringify(payload, null, 2), 'utf8');
     return payload;
   } catch (e) {
@@ -264,6 +285,7 @@ function getEffectiveMapProviderConfig(sourceState = readSystemSettings()) {
   const source = sourceState && typeof sourceState === 'object' ? sourceState : {};
   const maxZoom = normalizeMapMaxZoom(source.max_zoom);
   const geocoderResultLimit = normalizeMapGeocoderResultLimit(source.geocoder_result_limit);
+  const mapEnabled = normalizeMapStoreAddressEnabled(source.store_address_map_enabled);
 
   return {
     provider_name: normalizeMapProviderName(source.provider_name),
@@ -276,7 +298,18 @@ function getEffectiveMapProviderConfig(sourceState = readSystemSettings()) {
     geocoder_country_code: normalizeMapGeocoderCountryCode(source.geocoder_country_code) || 'ru',
     geocoder_language: normalizeMapGeocoderLanguage(source.geocoder_language) || 'ru',
     geocoder_result_limit: geocoderResultLimit == null ? 5 : geocoderResultLimit,
-    store_address_map_enabled: normalizeMapStoreAddressEnabled(source.store_address_map_enabled),
+    store_address_map_enabled: mapEnabled,
+    delivery_zone_polygon_provider: normalizeDeliveryZonePolygonProvider(source.delivery_zone_polygon_provider),
+    delivery_zone_polygon_enabled: mapEnabled,
+  };
+}
+
+function getEffectiveDeliveryZonePolygonConfig(sourceState = readSystemSettings()) {
+  const source = sourceState && typeof sourceState === 'object' ? sourceState : {};
+  const mapEnabled = normalizeMapStoreAddressEnabled(source.store_address_map_enabled);
+  return {
+    delivery_zone_polygon_provider: normalizeDeliveryZonePolygonProvider(source.delivery_zone_polygon_provider),
+    delivery_zone_polygon_enabled: mapEnabled,
   };
 }
 
@@ -286,6 +319,7 @@ module.exports = {
   getBootstrappedPollingState,
   getEffectiveTelegramBotConfig,
   getEffectiveMapProviderConfig,
+  getEffectiveDeliveryZonePolygonConfig,
   normalizeTelegramBotUsername,
   normalizeTelegramBotToken,
   normalizeTelegramWebhookUrl,
@@ -300,4 +334,6 @@ module.exports = {
   normalizeMapGeocoderLanguage,
   normalizeMapGeocoderResultLimit,
   normalizeMapStoreAddressEnabled,
+  normalizeDeliveryZonePolygonProvider,
+  normalizeDeliveryZonePolygonEnabled,
 };

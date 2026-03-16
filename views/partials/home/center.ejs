@@ -29,16 +29,6 @@
               </div>
             </div>
           </div>
-          <div class="settings-delivery-map-info-wrap hidden" id="settingsDeliveryMapInfoWrap">
-            <button class="icon-btn settings-delivery-map-info-btn" id="settingsDeliveryMapInfoBtn" type="button" aria-haspopup="dialog" aria-expanded="false" aria-label="Информация о карте доставки">
-              <i class="fas fa-info"></i>
-            </button>
-            <div class="settings-delivery-map-info-popover hidden" id="settingsDeliveryMapInfoPopover" role="dialog" aria-label="Информация о карте доставки">
-              <div class="settings-delivery-map-info-title">Карта доставки</div>
-              <div class="settings-delivery-map-info-text">Подключается из системных настроек и пока используется как подложка для будущих зон.</div>
-              <div class="settings-delivery-map-info-note">Параметры провайдера и геокодера настраиваются в разделе «Системные -&gt; Карта».</div>
-            </div>
-          </div>
           <div class="new-order-right-select-wrap cash-toolbar-filter settings-delivery-city-selector hidden" id="settingsDeliveryCitySelector">
             <button class="new-order-right-select-trigger cash-toolbar-filter-trigger" id="settingsDeliveryCityChip" type="button" aria-haspopup="listbox" aria-expanded="false" aria-label="Выбрать город на карте доставки">
               <span class="cash-toolbar-filter-main">
@@ -49,9 +39,24 @@
             </button>
             <div class="new-order-right-select-menu no-scrollbar" id="settingsDeliveryCityDropdown" role="listbox" aria-label="Город карты доставки"></div>
           </div>
-          <button class="btn btn-icon btn-primary" id="settingsAddOrderBtn" type="button" title="Новый филиал" aria-label="Новая точка продаж">
-            <i class="fas fa-plus"></i>
+          <button class="icon-btn hidden" id="settingsDeliveryMapConfigBtn" type="button" title="Настройка карты" aria-label="Настройка карты">
+            <i class="fas fa-cog"></i>
           </button>
+          <div class="settings-create-menu-wrap" id="settingsCreateMenuWrap">
+            <button class="btn btn-icon btn-primary" id="settingsAddOrderBtn" type="button" title="Новый филиал" aria-label="Новая точка продаж">
+              <i class="fas fa-plus"></i>
+            </button>
+            <div class="settings-create-menu hidden" id="settingsDeliveryCreateMenu" role="menu" aria-label="Создание настроек доставки">
+              <button class="settings-create-menu-item" id="settingsDeliveryCreateConditionBtn" type="button" role="menuitem">
+                <span class="settings-create-menu-item-title">Условия доставки</span>
+                <span class="settings-create-menu-item-text">Обычная настройка без зон</span>
+              </button>
+              <button class="settings-create-menu-item hidden" id="settingsDeliveryCreateZoneBtn" type="button" role="menuitem">
+                <span class="settings-create-menu-item-title">Зона доставки</span>
+                <span class="settings-create-menu-item-text">Нарисовать полигоны на карте</span>
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -230,6 +235,36 @@
             <div class="settings-delivery-map-empty-text">Заполните параметры провайдера в разделе «Системные -> Карта», чтобы показать подложку здесь.</div>
           </div>
           <div class="settings-delivery-map-canvas hidden" id="settingsDeliveryMapCanvas"></div>
+          <div class="settings-delivery-zone-map-overlay hidden" id="settingsDeliveryZoneMapOverlay">
+            <div class="settings-delivery-zone-map-hint" id="settingsDeliveryZoneMapHint">Поставьте первую точку зоны</div>
+            <div class="settings-delivery-zone-map-actions">
+              <button class="btn btn-secondary btn-sm settings-delivery-zone-map-action-btn" type="button" id="settingsDeliveryZoneUndoBtn">
+                <i class="fas fa-undo"></i>
+                <span>Назад</span>
+              </button>
+              <button class="btn btn-secondary btn-sm settings-delivery-zone-map-action-btn" type="button" id="settingsDeliveryZoneClearPointsBtn">
+                <i class="fas fa-eraser"></i>
+                <span>Очистить точки</span>
+              </button>
+              <button class="btn btn-secondary btn-sm settings-delivery-zone-map-action-btn hidden" type="button" id="settingsDeliveryZoneAddPolygonBtn">
+                <i class="fas fa-plus"></i>
+                <span>Добавить полигон</span>
+              </button>
+              <button class="btn btn-secondary btn-sm settings-delivery-zone-map-action-btn hidden" type="button" id="settingsDeliveryZoneRemovePolygonBtn">
+                <i class="fas fa-trash"></i>
+                <span>Удалить полигон</span>
+              </button>
+            </div>
+          </div>
+          <div class="settings-delivery-zone-point-menu hidden" id="settingsDeliveryZonePointMenu">
+            <button class="settings-delivery-zone-point-menu-item" type="button" id="settingsDeliveryZonePointMenuFinishBtn">Завершить</button>
+            <button class="settings-delivery-zone-point-menu-item" type="button" id="settingsDeliveryZonePointMenuContinueBtn">Продолжить</button>
+            <button class="settings-delivery-zone-point-menu-item is-danger" type="button" id="settingsDeliveryZonePointMenuRemoveLastBtn">Удалить последнюю точку</button>
+          </div>
+          <div class="settings-delivery-zone-context-menu hidden" id="settingsDeliveryZoneContextMenu">
+            <button class="settings-delivery-zone-context-menu-item" type="button" id="settingsDeliveryZoneContextEditBtn">Редактировать</button>
+            <button class="settings-delivery-zone-context-menu-item is-danger" type="button" id="settingsDeliveryZoneContextDeleteBtn">Удалить</button>
+          </div>
         </div>
       </div>
     </div>
@@ -296,6 +331,17 @@
             <div class="order-col">
               <div class="product-title">Карта</div>
               <div class="muted">Провайдер, tile URL, атрибуция и масштаб</div>
+            </div>
+            <div class="order-col">
+              <span class="badge">Открыть</span>
+            </div>
+          </button>
+
+          <button class="order-row product-row settings-card" id="settingsSystemDeliveryZonePolygonCard" type="button">
+            <div class="product-avatar"><i class="fas fa-draw-polygon"></i></div>
+            <div class="order-col">
+              <div class="product-title">Полигоны доставки</div>
+              <div class="muted">Сервис рисования зон для карты</div>
             </div>
             <div class="order-col">
               <span class="badge">Открыть</span>

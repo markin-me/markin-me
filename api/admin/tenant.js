@@ -64,8 +64,31 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
       sql: "smallint unsigned DEFAULT NULL COMMENT 'Guest chat TTL in days'"
     }
   ];
+  const tenantMapProviderColumns = [
+    {
+      name: 'map_provider_accounts_json',
+      sql: "text DEFAULT NULL COMMENT 'JSON list of tenant map provider accounts'"
+    }
+  ];
+  const MAP_PROVIDER_KEEP_VALUE = '__saved__';
+  const MAP_PROVIDER_API_KEY_PLACEHOLDER_TEST_RE = /(\{\{\s*api[_-]?key\s*\}\}|\{\s*api[_-]?key\s*\}|%API[_-]?KEY%|\$API[_-]?KEY\$)/i;
+  const MAP_PROVIDER_API_KEY_PLACEHOLDER_REPLACE_RE = /(\{\{\s*api[_-]?key\s*\}\}|\{\s*api[_-]?key\s*\}|%API[_-]?KEY%|\$API[_-]?KEY\$)/gi;
+  const MAP_PROVIDER_API_KEY_QUERY_PARAM_TEST_RE = /([?&](?:apikey|api_key|access_token)=)([^&#]*)/i;
+  const MAP_PROVIDER_API_KEY_QUERY_PARAM_REPLACE_RE = /([?&](?:apikey|api_key|access_token)=)([^&#]*)/gi;
+  const DELIVERY_ZONE_DEFAULT_COLOR = '#ff7a00';
+  const DELIVERY_ZONE_MAX_NAME_LENGTH = 255;
+  const DELIVERY_ZONE_MAX_PRICE_TIERS = 20;
+  const deliveryZoneTables = Object.freeze({
+    zones: 'ten_delivery_zones',
+    stores: 'ten_delivery_zone_stores',
+    tiers: 'ten_delivery_zone_price_tiers',
+  });
   let tenantChatColumnsReady = false;
   let ensureTenantChatColumnsPromise = null;
+  let tenantMapProviderColumnsReady = false;
+  let ensureTenantMapProviderColumnsPromise = null;
+  let deliveryZoneTablesReady = false;
+  let ensureDeliveryZoneTablesPromise = null;
   let orderDeliveryTypeColumnsReady = false;
   let ensureOrderDeliveryTypeColumnsPromise = null;
   let storeAddressIdentityColumnsReady = false;
@@ -394,6 +417,248 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
     return true;
   }
 
+  function normalizeMapProviderAccountString(value, maxLength = 1024) {
+    if (value === undefined || value === null) return '';
+    return String(value).trim().slice(0, maxLength);
+  }
+
+  function normalizeMapProviderAccountId(value, index = 0) {
+    const source = String(value || '')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, '-')
+      .replace(/-{2,}/g, '-')
+      .replace(/^[-_]+|[-_]+$/g, '')
+      .slice(0, 64);
+    if (source) return source;
+    return `map-account-${index + 1}`;
+  }
+
+  function normalizeMapProviderAccountBoolean(value, fallback = false) {
+    if (value === undefined || value === null || value === '') return fallback;
+    if (typeof value === 'boolean') return value;
+    const normalized = String(value).trim().toLowerCase();
+    if (!normalized) return fallback;
+    if (normalized === '1' || normalized === 'true' || normalized === 'on' || normalized === 'yes') return true;
+    if (normalized === '0' || normalized === 'false' || normalized === 'off' || normalized === 'no') return false;
+    return helpers.toBool(value, fallback);
+  }
+
+  function cloneMapProviderAccount(account, index = 0) {
+    const source = account && typeof account === 'object' ? account : {};
+    return {
+      id: normalizeMapProviderAccountId(source.id, index),
+      api_key: normalizeMapProviderAccountString(source.api_key, 1024),
+      login: normalizeMapProviderAccountString(source.login, 320) || null,
+      password: normalizeMapProviderAccountString(source.password, 320) || null,
+      is_active: normalizeMapProviderAccountBoolean(source.is_active, false),
+    };
+  }
+
+  function parseTenantMapProviderAccounts(rawValue) {
+    if (Array.isArray(rawValue)) {
+      return rawValue;
+    }
+    if (typeof rawValue === 'string') {
+      const trimmed = rawValue.trim();
+      if (!trimmed) return [];
+      try {
+        const parsed = JSON.parse(trimmed);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch (_) {
+        return [];
+      }
+    }
+    return [];
+  }
+
+  function sanitizeTenantMapProviderAccounts(rawValue) {
+    const parsed = parseTenantMapProviderAccounts(rawValue);
+    if (parsed.length > 20) {
+      return { ok: false, error: 'MAP_PROVIDER_ACCOUNTS_LIMIT_EXCEEDED' };
+    }
+
+    const normalized = [];
+    const seenIds = new Set();
+    let activeIndex = -1;
+
+    for (let index = 0; index < parsed.length; index += 1) {
+      const source = parsed[index];
+      if (!source || typeof source !== 'object' || Array.isArray(source)) {
+        return { ok: false, error: 'BAD_MAP_PROVIDER_ACCOUNTS' };
+      }
+
+      const next = cloneMapProviderAccount(source, index);
+      if (!next.api_key) {
+        return { ok: false, error: 'MAP_PROVIDER_API_KEY_REQUIRED' };
+      }
+
+      let nextId = next.id;
+      let suffix = 2;
+      while (seenIds.has(nextId)) {
+        nextId = `${next.id}-${suffix}`;
+        suffix += 1;
+      }
+      seenIds.add(nextId);
+      next.id = nextId;
+
+      if (next.is_active && activeIndex === -1) {
+        activeIndex = normalized.length;
+      }
+      next.is_active = false;
+      normalized.push(next);
+    }
+
+    if (normalized.length && activeIndex === -1) {
+      activeIndex = 0;
+    }
+    if (activeIndex >= 0 && normalized[activeIndex]) {
+      normalized[activeIndex].is_active = true;
+    }
+
+    return { ok: true, items: normalized };
+  }
+
+  function maskMapProviderSecret(value) {
+    const raw = normalizeMapProviderAccountString(value, 1024);
+    if (!raw) return '';
+    if (raw.length <= 2) return `${raw[0]}•`;
+    if (raw.length <= 8) return `${raw.slice(0, 1)}••••${raw.slice(-1)}`;
+    return `${raw.slice(0, 4)}••••${raw.slice(-4)}`;
+  }
+
+  function serializeTenantMapProviderAccountsForClient(rawValue) {
+    const sanitized = sanitizeTenantMapProviderAccounts(rawValue);
+    if (!sanitized.ok) return [];
+    return sanitized.items.map((item) => ({
+      id: String(item.id || ''),
+      is_active: item.is_active === true,
+      api_key: String(item.api_key || ''),
+      api_key_masked: maskMapProviderSecret(item.api_key),
+      has_login: Boolean(item.login),
+      has_password: Boolean(item.password),
+    }));
+  }
+
+  function serializeTenantForClient(tenant, extra = {}) {
+    if (!tenant || typeof tenant !== 'object') return null;
+    const source = { ...tenant };
+    delete source.map_provider_accounts_json;
+    return { ...source, ...extra };
+  }
+
+  function buildTenantMapProviderResponse(tenantRow) {
+    const config = getEffectiveMapProviderConfig();
+    return {
+      enabled: Boolean(config.store_address_map_enabled),
+      provider_name: String(config.provider_name || '').trim(),
+      items: serializeTenantMapProviderAccountsForClient(tenantRow && tenantRow.map_provider_accounts_json),
+    };
+  }
+
+  function getActiveTenantMapProviderAccount(rawValue) {
+    const sanitized = sanitizeTenantMapProviderAccounts(rawValue);
+    if (!sanitized.ok || !sanitized.items.length) return null;
+    return sanitized.items.find((item) => item && item.is_active === true) || sanitized.items[0] || null;
+  }
+
+  function resolveTenantMapTileUrl(tileUrl, apiKey) {
+    const rawTileUrl = normalizeMapProviderAccountString(tileUrl, 4096);
+    const normalizedApiKey = normalizeMapProviderAccountString(apiKey, 1024);
+    const hasPlaceholder = MAP_PROVIDER_API_KEY_PLACEHOLDER_TEST_RE.test(rawTileUrl);
+    const hasQueryParam = MAP_PROVIDER_API_KEY_QUERY_PARAM_TEST_RE.test(rawTileUrl);
+    const requiresApiKey = hasPlaceholder || hasQueryParam;
+
+    if (!requiresApiKey) {
+      return {
+        tile_url: rawTileUrl,
+        requires_api_key: false,
+        has_active_api_key: Boolean(normalizedApiKey),
+        resolved_with_active_api_key: false,
+      };
+    }
+
+    if (!normalizedApiKey) {
+      return {
+        tile_url: '',
+        requires_api_key: true,
+        has_active_api_key: false,
+        resolved_with_active_api_key: false,
+      };
+    }
+
+    const encodedApiKey = encodeURIComponent(normalizedApiKey);
+    const resolvedTileUrl = rawTileUrl
+      .replace(MAP_PROVIDER_API_KEY_PLACEHOLDER_REPLACE_RE, encodedApiKey)
+      .replace(MAP_PROVIDER_API_KEY_QUERY_PARAM_REPLACE_RE, `$1${encodedApiKey}`);
+
+    return {
+      tile_url: resolvedTileUrl,
+      requires_api_key: true,
+      has_active_api_key: true,
+      resolved_with_active_api_key: true,
+    };
+  }
+
+  function buildTenantResolvedMapConfigResponse(tenantRow) {
+    const baseConfig = getEffectiveMapProviderConfig();
+    const activeAccount = getActiveTenantMapProviderAccount(tenantRow && tenantRow.map_provider_accounts_json);
+    const resolvedTile = resolveTenantMapTileUrl(baseConfig.tile_url, activeAccount && activeAccount.api_key);
+    const maxZoomValue = Number(baseConfig.max_zoom);
+    const geocoderResultLimitValue = Number(baseConfig.geocoder_result_limit);
+
+    return {
+      provider_name: String(baseConfig.provider_name || '').trim(),
+      tile_url: String(resolvedTile.tile_url || '').trim(),
+      attribution: String(baseConfig.attribution || '').trim(),
+      max_zoom: Number.isFinite(maxZoomValue) ? maxZoomValue : 22,
+      subdomains: String(baseConfig.subdomains || '').trim(),
+      geocoder_provider_name: String(baseConfig.geocoder_provider_name || '').trim(),
+      geocoder_search_url: String(baseConfig.geocoder_search_url || '').trim(),
+      geocoder_country_code: String(baseConfig.geocoder_country_code || 'ru').trim() || 'ru',
+      geocoder_language: String(baseConfig.geocoder_language || 'ru').trim() || 'ru',
+      geocoder_result_limit: Number.isFinite(geocoderResultLimitValue) ? geocoderResultLimitValue : 5,
+      store_address_map_enabled: Boolean(baseConfig.store_address_map_enabled),
+      tenant_api_key_required: Boolean(resolvedTile.requires_api_key),
+      tenant_api_key_configured: Boolean(activeAccount && activeAccount.api_key),
+      tenant_api_key_missing: Boolean(
+        baseConfig.store_address_map_enabled
+        && resolvedTile.requires_api_key
+        && !(activeAccount && activeAccount.api_key)
+      ),
+      tenant_active_account_id: activeAccount ? String(activeAccount.id || '') : null,
+      tenant_tile_url_resolved: Boolean(resolvedTile.resolved_with_active_api_key),
+    };
+  }
+
+  function mergeTenantMapProviderAccountsWithExisting(nextItems, currentItems) {
+    const currentSanitized = sanitizeTenantMapProviderAccounts(currentItems);
+    const currentById = new Map(
+      currentSanitized.ok
+        ? currentSanitized.items.map((item) => [String(item.id || ''), item])
+        : []
+    );
+
+    return parseTenantMapProviderAccounts(nextItems).map((item, index) => {
+      const source = item && typeof item === 'object' ? { ...item } : {};
+      const sourceId = normalizeMapProviderAccountId(source.id, index);
+      const current = currentById.get(sourceId);
+      if (!current) return source;
+
+      if (String(source.api_key || '').trim() === MAP_PROVIDER_KEEP_VALUE) {
+        source.api_key = current.api_key;
+      }
+      if (String(source.login || '').trim() === MAP_PROVIDER_KEEP_VALUE) {
+        source.login = current.login;
+      }
+      if (String(source.password || '').trim() === MAP_PROVIDER_KEEP_VALUE) {
+        source.password = current.password;
+      }
+
+      return source;
+    });
+  }
+
   function makePrintApiToken() {
     return crypto.randomBytes(32).toString('hex');
   }
@@ -446,6 +711,404 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
       });
 
     return ensureTenantChatColumnsPromise;
+  }
+
+  async function ensureTenantMapProviderColumns() {
+    if (tenantMapProviderColumnsReady) return true;
+    if (ensureTenantMapProviderColumnsPromise) return ensureTenantMapProviderColumnsPromise;
+
+    ensureTenantMapProviderColumnsPromise = (async () => {
+      const [columnRows] = await db.query('SHOW COLUMNS FROM ten_tenants');
+      const existing = new Set(
+        (Array.isArray(columnRows) ? columnRows : [])
+          .map((row) => String(row?.Field || '').trim())
+          .filter(Boolean)
+      );
+
+      for (const column of tenantMapProviderColumns) {
+        if (existing.has(column.name)) continue;
+        try {
+          await db.query(`ALTER TABLE ten_tenants ADD COLUMN \`${column.name}\` ${column.sql}`);
+          existing.add(column.name);
+        } catch (err) {
+          if (String(err?.code || '') === 'ER_DUP_FIELDNAME') {
+            existing.add(column.name);
+            continue;
+          }
+          throw err;
+        }
+      }
+
+      tenantMapProviderColumnsReady = tenantMapProviderColumns.every((column) => existing.has(column.name));
+      return tenantMapProviderColumnsReady;
+    })()
+      .catch((err) => {
+        ensureTenantMapProviderColumnsPromise = null;
+        throw err;
+      })
+      .finally(() => {
+        if (tenantMapProviderColumnsReady) {
+          ensureTenantMapProviderColumnsPromise = null;
+        }
+      });
+
+    return ensureTenantMapProviderColumnsPromise;
+  }
+
+  async function ensureDeliveryZoneTables() {
+    if (deliveryZoneTablesReady) return true;
+    if (ensureDeliveryZoneTablesPromise) return ensureDeliveryZoneTablesPromise;
+
+    ensureDeliveryZoneTablesPromise = (async () => {
+      await db.query(`
+        CREATE TABLE IF NOT EXISTS \`${deliveryZoneTables.zones}\` (
+          id bigint unsigned NOT NULL AUTO_INCREMENT,
+          tenant_id bigint unsigned NOT NULL,
+          name varchar(255) NOT NULL,
+          color varchar(16) NOT NULL DEFAULT '${DELIVERY_ZONE_DEFAULT_COLOR}',
+          eta_minutes int unsigned DEFAULT NULL,
+          is_active tinyint(1) NOT NULL DEFAULT 1,
+          geometry_json longtext NOT NULL COMMENT 'GeoJSON MultiPolygon',
+          created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          PRIMARY KEY (id),
+          KEY idx_tenant_id (tenant_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
+      `);
+
+      await db.query(`
+        CREATE TABLE IF NOT EXISTS \`${deliveryZoneTables.stores}\` (
+          id bigint unsigned NOT NULL AUTO_INCREMENT,
+          delivery_zone_id bigint unsigned NOT NULL,
+          store_id bigint unsigned NOT NULL,
+          tenant_id bigint unsigned NOT NULL,
+          created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (id),
+          UNIQUE KEY uniq_zone_store (delivery_zone_id, store_id),
+          KEY idx_tenant_zone (tenant_id, delivery_zone_id),
+          KEY idx_tenant_store (tenant_id, store_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
+      `);
+
+      await db.query(`
+        CREATE TABLE IF NOT EXISTS \`${deliveryZoneTables.tiers}\` (
+          id bigint unsigned NOT NULL AUTO_INCREMENT,
+          delivery_zone_id bigint unsigned NOT NULL,
+          tenant_id bigint unsigned NOT NULL,
+          min_order_amount decimal(10,2) NOT NULL DEFAULT 0.00,
+          delivery_cost decimal(10,2) NOT NULL DEFAULT 0.00,
+          sort_order int unsigned NOT NULL DEFAULT 0,
+          created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          PRIMARY KEY (id),
+          KEY idx_tenant_zone (tenant_id, delivery_zone_id),
+          KEY idx_tenant_zone_sort (tenant_id, delivery_zone_id, sort_order)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
+      `);
+
+      deliveryZoneTablesReady = true;
+      return true;
+    })()
+      .catch((err) => {
+        ensureDeliveryZoneTablesPromise = null;
+        throw err;
+      })
+      .finally(() => {
+        if (deliveryZoneTablesReady) {
+          ensureDeliveryZoneTablesPromise = null;
+        }
+      });
+
+    return ensureDeliveryZoneTablesPromise;
+  }
+
+  function normalizeDeliveryZoneText(value, maxLength = DELIVERY_ZONE_MAX_NAME_LENGTH) {
+    const raw = value == null ? '' : String(value).trim();
+    if (!raw) return '';
+    return raw.slice(0, maxLength);
+  }
+
+  function normalizeDeliveryZoneColor(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return DELIVERY_ZONE_DEFAULT_COLOR;
+    if (/^#[0-9a-f]{6}$/i.test(raw)) return raw.toLowerCase();
+    if (/^#[0-9a-f]{3}$/i.test(raw)) {
+      const [, r, g, b] = raw.toLowerCase();
+      return `#${r}${r}${g}${g}${b}${b}`;
+    }
+    return DELIVERY_ZONE_DEFAULT_COLOR;
+  }
+
+  function normalizeDeliveryZoneEtaMinutes(value) {
+    if (value == null || value === '') return null;
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return null;
+    return Math.max(0, Math.round(numeric));
+  }
+
+  function normalizeDeliveryZoneMoney(value) {
+    if (value == null || value === '') return null;
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return null;
+    return Math.max(0, Number(numeric.toFixed(2)));
+  }
+
+  function normalizeDeliveryZoneCoordinate(value, min, max) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return null;
+    if (numeric < min || numeric > max) return null;
+    return Number(numeric.toFixed(7));
+  }
+
+  function normalizeDeliveryZonePoint(point) {
+    if (!Array.isArray(point) || point.length < 2) return null;
+    const lng = normalizeDeliveryZoneCoordinate(point[0], -180, 180);
+    const lat = normalizeDeliveryZoneCoordinate(point[1], -90, 90);
+    if (lat === null || lng === null) return null;
+    return [lng, lat];
+  }
+
+  function closeDeliveryZoneRing(points) {
+    if (!Array.isArray(points) || !points.length) return points;
+    const first = points[0];
+    const last = points[points.length - 1];
+    if (!first || !last) return points;
+    if (first[0] === last[0] && first[1] === last[1]) return points;
+    return points.concat([[first[0], first[1]]]);
+  }
+
+  function normalizeDeliveryZoneRing(ring) {
+    if (!Array.isArray(ring)) return null;
+    const normalized = ring
+      .map((point) => normalizeDeliveryZonePoint(point))
+      .filter(Boolean);
+    const closed = closeDeliveryZoneRing(normalized);
+    return Array.isArray(closed) && closed.length >= 4 ? closed : null;
+  }
+
+  function normalizeDeliveryZonePolygon(polygon) {
+    if (!Array.isArray(polygon)) return null;
+    const rings = polygon
+      .map((ring) => normalizeDeliveryZoneRing(ring))
+      .filter(Boolean);
+    return rings.length ? rings : null;
+  }
+
+  function normalizeDeliveryZoneGeometry(rawValue) {
+    let source = rawValue;
+    if (typeof source === 'string') {
+      try {
+        source = JSON.parse(source);
+      } catch (_) {
+        return null;
+      }
+    }
+    if (!source || typeof source !== 'object') return null;
+    if (source.type === 'Feature') {
+      source = source.geometry;
+    }
+    if (!source || typeof source !== 'object') return null;
+    let type = String(source.type || '').trim();
+    let coordinates = source.coordinates;
+
+    if (type === 'Polygon') {
+      type = 'MultiPolygon';
+      coordinates = [coordinates];
+    }
+    if (type !== 'MultiPolygon' || !Array.isArray(coordinates)) return null;
+
+    const polygons = coordinates
+      .map((polygon) => normalizeDeliveryZonePolygon(polygon))
+      .filter(Boolean);
+    if (!polygons.length) return null;
+
+    return {
+      type: 'MultiPolygon',
+      coordinates: polygons,
+    };
+  }
+
+  function normalizeDeliveryZonePriceTier(rawTier) {
+    const source = rawTier && typeof rawTier === 'object' ? rawTier : {};
+    const minOrderAmount = normalizeDeliveryZoneMoney(source.min_order_amount);
+    const deliveryCost = normalizeDeliveryZoneMoney(source.delivery_cost);
+    if (minOrderAmount === null || deliveryCost === null) return null;
+    return {
+      min_order_amount: minOrderAmount,
+      delivery_cost: deliveryCost,
+    };
+  }
+
+  function sanitizeDeliveryZonePriceTiers(rawTiers) {
+    const list = Array.isArray(rawTiers) ? rawTiers : [];
+    const normalized = [];
+    for (const tier of list) {
+      const nextTier = normalizeDeliveryZonePriceTier(tier);
+      if (!nextTier) continue;
+      normalized.push(nextTier);
+    }
+    if (!normalized.length) {
+      return { ok: false, error: 'DELIVERY_ZONE_PRICE_TIERS_REQUIRED' };
+    }
+    if (normalized.length > DELIVERY_ZONE_MAX_PRICE_TIERS) {
+      return { ok: false, error: 'DELIVERY_ZONE_PRICE_TIERS_LIMIT' };
+    }
+    normalized.sort((a, b) => {
+      if (a.min_order_amount !== b.min_order_amount) {
+        return a.min_order_amount - b.min_order_amount;
+      }
+      return a.delivery_cost - b.delivery_cost;
+    });
+    return {
+      ok: true,
+      items: normalized.map((tier, index) => ({
+        ...tier,
+        sort_order: index,
+      })),
+    };
+  }
+
+  async function sanitizeDeliveryZoneStoreIds(tenantId, rawStoreIds) {
+    const uniqueStoreIds = Array.from(new Set(
+      (Array.isArray(rawStoreIds) ? rawStoreIds : [])
+        .map((value) => Number(value))
+        .filter((value) => Number.isFinite(value) && value > 0)
+    ));
+    if (!uniqueStoreIds.length) {
+      return { ok: false, error: 'DELIVERY_ZONE_STORE_REQUIRED' };
+    }
+
+    const placeholders = uniqueStoreIds.map(() => '?').join(', ');
+    const [rows] = await db.query(
+      `SELECT id FROM ten_stores WHERE tenant_id=? AND id IN (${placeholders})`,
+      [tenantId, ...uniqueStoreIds]
+    );
+    const existing = new Set(
+      (Array.isArray(rows) ? rows : [])
+        .map((row) => Number(row && row.id))
+        .filter((value) => Number.isFinite(value) && value > 0)
+    );
+    if (existing.size !== uniqueStoreIds.length) {
+      return { ok: false, error: 'DELIVERY_ZONE_STORE_NOT_FOUND' };
+    }
+    return { ok: true, items: uniqueStoreIds };
+  }
+
+  async function sanitizeDeliveryZonePayload(tenantId, payload) {
+    const source = payload && typeof payload === 'object' ? payload : {};
+    const name = normalizeDeliveryZoneText(source.name);
+    if (!name) {
+      return { ok: false, error: 'DELIVERY_ZONE_NAME_REQUIRED' };
+    }
+
+    const geometry = normalizeDeliveryZoneGeometry(source.geometry);
+    if (!geometry) {
+      return { ok: false, error: 'DELIVERY_ZONE_GEOMETRY_REQUIRED' };
+    }
+
+    const storeIdsResult = await sanitizeDeliveryZoneStoreIds(tenantId, source.store_ids);
+    if (!storeIdsResult.ok) return storeIdsResult;
+
+    const tiersResult = sanitizeDeliveryZonePriceTiers(source.price_tiers);
+    if (!tiersResult.ok) return tiersResult;
+
+    return {
+      ok: true,
+      item: {
+        name,
+        color: normalizeDeliveryZoneColor(source.color),
+        eta_minutes: normalizeDeliveryZoneEtaMinutes(source.eta_minutes),
+        is_active: helpers.toBool(source.is_active, true) ? 1 : 0,
+        geometry,
+        store_ids: storeIdsResult.items,
+        price_tiers: tiersResult.items,
+      },
+    };
+  }
+
+  function serializeDeliveryZoneRow(row, extras = {}) {
+    const source = row && typeof row === 'object' ? row : {};
+    return {
+      id: Number(source.id || 0),
+      tenant_id: Number(source.tenant_id || 0),
+      name: String(source.name || '').trim(),
+      color: normalizeDeliveryZoneColor(source.color),
+      eta_minutes: source.eta_minutes == null ? null : Number(source.eta_minutes),
+      is_active: Number(source.is_active) === 1 ? 1 : 0,
+      geometry: normalizeDeliveryZoneGeometry(source.geometry_json),
+      created_at: source.created_at || null,
+      updated_at: source.updated_at || null,
+      store_ids: Array.isArray(extras.store_ids) ? extras.store_ids.map((value) => Number(value)).filter((value) => Number.isFinite(value) && value > 0) : [],
+      price_tiers: Array.isArray(extras.price_tiers)
+        ? extras.price_tiers.map((tier, index) => ({
+          min_order_amount: normalizeDeliveryZoneMoney(tier && tier.min_order_amount) ?? 0,
+          delivery_cost: normalizeDeliveryZoneMoney(tier && tier.delivery_cost) ?? 0,
+          sort_order: tier && tier.sort_order != null ? Number(tier.sort_order) : index,
+        }))
+        : [],
+    };
+  }
+
+  async function loadDeliveryZonesForTenant(tenantId) {
+    await ensureDeliveryZoneTables();
+    const [rows] = await db.query(
+      `SELECT id, tenant_id, name, color, eta_minutes, is_active, geometry_json, created_at, updated_at
+       FROM \`${deliveryZoneTables.zones}\`
+       WHERE tenant_id=?
+       ORDER BY id ASC`,
+      [tenantId]
+    );
+
+    const zoneIds = (Array.isArray(rows) ? rows : [])
+      .map((row) => Number(row && row.id))
+      .filter((value) => Number.isFinite(value) && value > 0);
+    const storeMap = new Map();
+    const tiersMap = new Map();
+
+    if (zoneIds.length) {
+      const placeholders = zoneIds.map(() => '?').join(', ');
+      const [storeRows] = await db.query(
+        `SELECT delivery_zone_id, store_id
+         FROM \`${deliveryZoneTables.stores}\`
+         WHERE tenant_id=? AND delivery_zone_id IN (${placeholders})`,
+        [tenantId, ...zoneIds]
+      );
+      (Array.isArray(storeRows) ? storeRows : []).forEach((row) => {
+        const zoneId = Number(row && row.delivery_zone_id);
+        const storeId = Number(row && row.store_id);
+        if (!Number.isFinite(zoneId) || !Number.isFinite(storeId)) return;
+        if (!storeMap.has(zoneId)) storeMap.set(zoneId, []);
+        storeMap.get(zoneId).push(storeId);
+      });
+
+      const [tierRows] = await db.query(
+        `SELECT delivery_zone_id, min_order_amount, delivery_cost, sort_order
+         FROM \`${deliveryZoneTables.tiers}\`
+         WHERE tenant_id=? AND delivery_zone_id IN (${placeholders})
+         ORDER BY delivery_zone_id ASC, sort_order ASC, id ASC`,
+        [tenantId, ...zoneIds]
+      );
+      (Array.isArray(tierRows) ? tierRows : []).forEach((row) => {
+        const zoneId = Number(row && row.delivery_zone_id);
+        if (!Number.isFinite(zoneId)) return;
+        if (!tiersMap.has(zoneId)) tiersMap.set(zoneId, []);
+        tiersMap.get(zoneId).push({
+          min_order_amount: row.min_order_amount,
+          delivery_cost: row.delivery_cost,
+          sort_order: row.sort_order,
+        });
+      });
+    }
+
+    return (Array.isArray(rows) ? rows : []).map((row) => serializeDeliveryZoneRow(row, {
+      store_ids: storeMap.get(Number(row && row.id)) || [],
+      price_tiers: tiersMap.get(Number(row && row.id)) || [],
+    }));
+  }
+
+  async function loadDeliveryZoneForTenant(tenantId, zoneId) {
+    const items = await loadDeliveryZonesForTenant(tenantId);
+    return items.find((item) => Number(item && item.id) === Number(zoneId)) || null;
   }
 
   async function ensureOrderDeliveryTypeColumns() {
@@ -1296,7 +1959,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
         [tenantId]
       );
 
-      res.json({ ok: true, url, tenant: rows[0] || null });
+      res.json({ ok: true, url, tenant: serializeTenantForClient(rows[0] || null) });
     } catch (err) {
       console.error('Ошибка загрузки tenant ассета:', err);
       res.status(500).json({ ok: false, error: 'UPLOAD_ERROR' });
@@ -1360,7 +2023,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
         [tenantId]
       );
 
-      res.json({ ok: true, url, tenant: rows[0] || null });
+      res.json({ ok: true, url, tenant: serializeTenantForClient(rows[0] || null) });
     } catch (err) {
       console.error('Ошибка загрузки звука:', err);
       res.status(500).json({ ok: false, error: 'UPLOAD_ERROR' });
@@ -1409,15 +2072,166 @@ async function fetchStoreWithHours(tenantId, storeId) {
 
       res.json({
         ok: true,
-        tenant: {
-          ...tenant,
+        tenant: serializeTenantForClient(tenant, {
           telegram_mini_app_url: telegramMiniAppUrl,
           max_mini_app_url: maxMiniAppUrl
-        }
+        })
       });
     } catch (err) {
       console.error('Ошибка получения tenant профиля:', err);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.get('/map-provider-accounts', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+
+      if (!tenantId) {
+        return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+      }
+
+      await ensureTenantMapProviderColumns();
+
+      const [rows] = await db.query(
+        'SELECT id, map_provider_accounts_json FROM ten_tenants WHERE id=? LIMIT 1',
+        [tenantId]
+      );
+
+      if (!rows.length) {
+        return res.status(404).json({ ok: false, error: 'TENANT_NOT_FOUND' });
+      }
+
+      return res.json({
+        ok: true,
+        ...buildTenantMapProviderResponse(rows[0]),
+      });
+    } catch (err) {
+      console.error('Map provider accounts load error:', err);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.get('/map-provider-config', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+
+      if (!tenantId) {
+        return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+      }
+
+      await ensureTenantMapProviderColumns();
+
+      const [rows] = await db.query(
+        'SELECT id, map_provider_accounts_json FROM ten_tenants WHERE id=? LIMIT 1',
+        [tenantId]
+      );
+
+      if (!rows.length) {
+        return res.status(404).json({ ok: false, error: 'TENANT_NOT_FOUND' });
+      }
+
+      return res.json({
+        ok: true,
+        data: buildTenantResolvedMapConfigResponse(rows[0]),
+      });
+    } catch (err) {
+      console.error('Tenant map provider config load error:', err);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.put('/map-provider-accounts', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+
+      if (!tenantId) {
+        return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+      }
+
+      await ensureTenantMapProviderColumns();
+
+      if (!Object.prototype.hasOwnProperty.call(req.body || {}, 'items')) {
+        return res.status(400).json({ ok: false, error: 'MAP_PROVIDER_ITEMS_REQUIRED' });
+      }
+
+      const [rows] = await db.query(
+        'SELECT id, map_provider_accounts_json FROM ten_tenants WHERE id=? LIMIT 1',
+        [tenantId]
+      );
+
+      if (!rows.length) {
+        return res.status(404).json({ ok: false, error: 'TENANT_NOT_FOUND' });
+      }
+
+      const mergedItems = mergeTenantMapProviderAccountsWithExisting(
+        (req.body || {}).items,
+        rows[0].map_provider_accounts_json
+      );
+      const sanitized = sanitizeTenantMapProviderAccounts(mergedItems);
+      if (!sanitized.ok) {
+        return res.status(400).json({ ok: false, error: sanitized.error || 'BAD_MAP_PROVIDER_ACCOUNTS' });
+      }
+
+      const serializedItems = sanitized.items.length ? JSON.stringify(sanitized.items) : null;
+      await db.query(
+        'UPDATE ten_tenants SET map_provider_accounts_json=? WHERE id=?',
+        [serializedItems, tenantId]
+      );
+
+      return res.json({
+        ok: true,
+        ...buildTenantMapProviderResponse({ map_provider_accounts_json: serializedItems }),
+      });
+    } catch (err) {
+      console.error('Map provider accounts save error:', err);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.get('/map-provider-accounts/:accountId/reveal', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      const requestedId = normalizeMapProviderAccountId(req.params.accountId, 0);
+
+      if (!tenantId) {
+        return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+      }
+
+      await ensureTenantMapProviderColumns();
+
+      const [rows] = await db.query(
+        'SELECT id, map_provider_accounts_json FROM ten_tenants WHERE id=? LIMIT 1',
+        [tenantId]
+      );
+
+      if (!rows.length) {
+        return res.status(404).json({ ok: false, error: 'TENANT_NOT_FOUND' });
+      }
+
+      const sanitized = sanitizeTenantMapProviderAccounts(rows[0].map_provider_accounts_json);
+      if (!sanitized.ok) {
+        return res.status(404).json({ ok: false, error: 'MAP_PROVIDER_ACCOUNT_NOT_FOUND' });
+      }
+
+      const item = sanitized.items.find((entry) => String(entry.id || '') === requestedId);
+      if (!item) {
+        return res.status(404).json({ ok: false, error: 'MAP_PROVIDER_ACCOUNT_NOT_FOUND' });
+      }
+
+      return res.json({
+        ok: true,
+        item: {
+          id: item.id,
+          api_key: item.api_key,
+          login: item.login,
+          password: item.password,
+          is_active: item.is_active === true,
+        },
+      });
+    } catch (err) {
+      console.error('Map provider account reveal error:', err);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });
 
@@ -1524,6 +2338,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
       }
 
       await ensureTenantChatColumns();
+      await ensureTenantMapProviderColumns();
 
       const [currentRows] = await db.query(
         'SELECT * FROM ten_tenants WHERE id=? LIMIT 1',
@@ -1715,7 +2530,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
         [tenantId]
       );
 
-      res.json({ ok: true, tenant: rows[0] || null });
+      res.json({ ok: true, tenant: serializeTenantForClient(rows[0] || null) });
     } catch (err) {
       console.error('Ошибка обновления tenant профиля:', err);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
@@ -2481,6 +3296,192 @@ async function fetchStoreWithHours(tenantId, storeId) {
     } catch (err) {
       console.error('Ошибка загрузки иконки:', err);
       res.status(500).json({ ok: false, error: 'UPLOAD_ERROR' });
+    }
+  });
+
+  // ------------------------------
+  // Delivery Zones CRUD
+  // ------------------------------
+
+  router.get('/delivery-zones', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+
+      const items = await loadDeliveryZonesForTenant(tenantId);
+      return res.json({ ok: true, items });
+    } catch (err) {
+      console.error('Ошибка получения зон доставки:', err);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.post('/delivery-zones', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+
+      const payload = await sanitizeDeliveryZonePayload(tenantId, req.body || {});
+      if (!payload.ok) {
+        return res.status(400).json({ ok: false, error: payload.error || 'BAD_PAYLOAD' });
+      }
+
+      const nextZone = payload.item;
+      await ensureDeliveryZoneTables();
+      const [result] = await db.query(
+        `INSERT INTO \`${deliveryZoneTables.zones}\` (tenant_id, name, color, eta_minutes, is_active, geometry_json)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [
+          tenantId,
+          nextZone.name,
+          nextZone.color,
+          nextZone.eta_minutes,
+          nextZone.is_active,
+          JSON.stringify(nextZone.geometry),
+        ]
+      );
+
+      const zoneId = Number(result && result.insertId);
+      if (nextZone.store_ids.length) {
+        const values = nextZone.store_ids.map((storeId) => [zoneId, storeId, tenantId]);
+        const placeholders = values.map(() => '(?, ?, ?)').join(', ');
+        await db.query(
+          `INSERT INTO \`${deliveryZoneTables.stores}\` (delivery_zone_id, store_id, tenant_id) VALUES ${placeholders}`,
+          values.flat()
+        );
+      }
+
+      if (nextZone.price_tiers.length) {
+        const values = nextZone.price_tiers.map((tier) => ([
+          zoneId,
+          tenantId,
+          tier.min_order_amount,
+          tier.delivery_cost,
+          tier.sort_order,
+        ]));
+        const placeholders = values.map(() => '(?, ?, ?, ?, ?)').join(', ');
+        await db.query(
+          `INSERT INTO \`${deliveryZoneTables.tiers}\` (delivery_zone_id, tenant_id, min_order_amount, delivery_cost, sort_order) VALUES ${placeholders}`,
+          values.flat()
+        );
+      }
+
+      const item = await loadDeliveryZoneForTenant(tenantId, zoneId);
+      return res.json({ ok: true, item });
+    } catch (err) {
+      console.error('Ошибка создания зоны доставки:', err);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.put('/delivery-zones/:id', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      const zoneId = helpers.numOrNull(req.params.id);
+      if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+      if (!zoneId) return res.status(400).json({ ok: false, error: 'ID_REQUIRED' });
+
+      const current = await loadDeliveryZoneForTenant(tenantId, zoneId);
+      if (!current) {
+        return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+      }
+
+      const mergedPayload = {
+        name: Object.prototype.hasOwnProperty.call(req.body || {}, 'name') ? req.body.name : current.name,
+        color: Object.prototype.hasOwnProperty.call(req.body || {}, 'color') ? req.body.color : current.color,
+        eta_minutes: Object.prototype.hasOwnProperty.call(req.body || {}, 'eta_minutes') ? req.body.eta_minutes : current.eta_minutes,
+        is_active: Object.prototype.hasOwnProperty.call(req.body || {}, 'is_active') ? req.body.is_active : current.is_active,
+        geometry: Object.prototype.hasOwnProperty.call(req.body || {}, 'geometry') ? req.body.geometry : current.geometry,
+        store_ids: Object.prototype.hasOwnProperty.call(req.body || {}, 'store_ids') ? req.body.store_ids : current.store_ids,
+        price_tiers: Object.prototype.hasOwnProperty.call(req.body || {}, 'price_tiers') ? req.body.price_tiers : current.price_tiers,
+      };
+      const payload = await sanitizeDeliveryZonePayload(tenantId, mergedPayload);
+      if (!payload.ok) {
+        return res.status(400).json({ ok: false, error: payload.error || 'BAD_PAYLOAD' });
+      }
+
+      const nextZone = payload.item;
+      await ensureDeliveryZoneTables();
+      await db.query(
+        `UPDATE \`${deliveryZoneTables.zones}\`
+         SET name=?, color=?, eta_minutes=?, is_active=?, geometry_json=?, updated_at=NOW()
+         WHERE tenant_id=? AND id=?`,
+        [
+          nextZone.name,
+          nextZone.color,
+          nextZone.eta_minutes,
+          nextZone.is_active,
+          JSON.stringify(nextZone.geometry),
+          tenantId,
+          zoneId,
+        ]
+      );
+
+      await db.query(
+        `DELETE FROM \`${deliveryZoneTables.stores}\` WHERE tenant_id=? AND delivery_zone_id=?`,
+        [tenantId, zoneId]
+      );
+      await db.query(
+        `DELETE FROM \`${deliveryZoneTables.tiers}\` WHERE tenant_id=? AND delivery_zone_id=?`,
+        [tenantId, zoneId]
+      );
+
+      if (nextZone.store_ids.length) {
+        const storeValues = nextZone.store_ids.map((storeId) => [zoneId, storeId, tenantId]);
+        const storePlaceholders = storeValues.map(() => '(?, ?, ?)').join(', ');
+        await db.query(
+          `INSERT INTO \`${deliveryZoneTables.stores}\` (delivery_zone_id, store_id, tenant_id) VALUES ${storePlaceholders}`,
+          storeValues.flat()
+        );
+      }
+
+      if (nextZone.price_tiers.length) {
+        const tierValues = nextZone.price_tiers.map((tier) => ([
+          zoneId,
+          tenantId,
+          tier.min_order_amount,
+          tier.delivery_cost,
+          tier.sort_order,
+        ]));
+        const tierPlaceholders = tierValues.map(() => '(?, ?, ?, ?, ?)').join(', ');
+        await db.query(
+          `INSERT INTO \`${deliveryZoneTables.tiers}\` (delivery_zone_id, tenant_id, min_order_amount, delivery_cost, sort_order) VALUES ${tierPlaceholders}`,
+          tierValues.flat()
+        );
+      }
+
+      const item = await loadDeliveryZoneForTenant(tenantId, zoneId);
+      return res.json({ ok: true, item });
+    } catch (err) {
+      console.error('Ошибка обновления зоны доставки:', err);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.delete('/delivery-zones/:id', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      const zoneId = helpers.numOrNull(req.params.id);
+      if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+      if (!zoneId) return res.status(400).json({ ok: false, error: 'ID_REQUIRED' });
+
+      await ensureDeliveryZoneTables();
+      await db.query(
+        `DELETE FROM \`${deliveryZoneTables.stores}\` WHERE tenant_id=? AND delivery_zone_id=?`,
+        [tenantId, zoneId]
+      );
+      await db.query(
+        `DELETE FROM \`${deliveryZoneTables.tiers}\` WHERE tenant_id=? AND delivery_zone_id=?`,
+        [tenantId, zoneId]
+      );
+      await db.query(
+        `DELETE FROM \`${deliveryZoneTables.zones}\` WHERE tenant_id=? AND id=?`,
+        [tenantId, zoneId]
+      );
+      return res.json({ ok: true });
+    } catch (err) {
+      console.error('Ошибка удаления зоны доставки:', err);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });
 

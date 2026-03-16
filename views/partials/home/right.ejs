@@ -1086,6 +1086,44 @@
         </div>
       </div>
 
+      <div class="info-card settings-right-panel settings-right-panel-fixed-footer hidden" id="settingsSystemDeliveryZonePolygonPanel">
+        <div class="settings-panel-scroll">
+          <div class="settings-system-map-layout">
+            <div class="settings-site-field settings-site-inline-switch settings-system-telegram-switch-field">
+              <div class="settings-system-telegram-switch-copy">
+                <label class="field-label">ПОЛИГОНЫ ДОСТАВКИ</label>
+                <span class="field-hint">Включает создание и редактирование зон доставки на карте tenant-а</span>
+              </div>
+              <label class="switch">
+                <input class="switch-input" type="checkbox" id="settingsSystemDeliveryZonePolygonEnabled" />
+                <span class="switch-ui" aria-hidden="true"></span>
+                <span class="switch-text">Включено</span>
+              </label>
+            </div>
+            <div class="settings-system-map-group">
+              <div class="settings-site-field">
+                <label class="field-label">PROVIDER</label>
+                <span class="field-hint">Сервис рисования и редактирования полигонов на карте</span>
+                <input class="control" type="text" id="settingsSystemDeliveryZonePolygonProvider" placeholder="Leaflet-Geoman" autocomplete="off" readonly onfocus="this.removeAttribute('readonly')" />
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="panel-footer">
+          <div class="product-footer-actions">
+            <div class="product-footer-view" id="settingsSystemDeliveryZonePolygonFooterView">
+              <button class="product-footer-btn product-footer-edit" id="settingsSystemDeliveryZonePolygonEditBtn" type="button">Редактировать</button>
+            </div>
+            <div class="product-footer-edit-mode hidden" id="settingsSystemDeliveryZonePolygonFooterEdit">
+              <button class="product-footer-btn product-footer-cancel" id="settingsSystemDeliveryZonePolygonCancelBtn" type="button" title="Отменить" aria-label="Отменить">
+                <i class="fas fa-times"></i>
+              </button>
+              <button class="product-footer-btn product-footer-save" id="settingsSystemDeliveryZonePolygonSaveBtn" type="button">Сохранить</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div class="info-card settings-right-panel settings-right-panel-fixed-footer hidden" id="settingsSystemTelegramBotPanel">
         <div class="settings-panel-scroll">
           <div class="settings-system-telegram-layout">
@@ -1152,12 +1190,29 @@
         <div class="settings-panel-scroll">
           <div class="settings-list-header">
             <div class="settings-list-title">Главная</div>
-            <div class="settings-list-subtitle">Пока здесь настройки доставки</div>
+            <div class="settings-list-subtitle">Условия и зоны доставки tenant-а</div>
           </div>
-          <div class="settings-list" id="settingsDeliveryHomeList"></div>
-          <div class="settings-delivery-home-empty hidden" id="settingsDeliveryHomeEmpty">
-            <div class="info-title">Нет настроек доставки</div>
-            <div class="info-text">Создайте первую настройку через кнопку «+», чтобы затем привязать к ней будущие зоны.</div>
+          <div class="settings-delivery-home-section">
+            <div class="settings-delivery-home-section-head">
+              <div class="settings-delivery-home-section-title">Условия доставки</div>
+              <div class="settings-delivery-home-section-text">Обычные тарифы без зон</div>
+            </div>
+            <div class="settings-list" id="settingsDeliveryHomeList"></div>
+            <div class="settings-delivery-home-empty hidden" id="settingsDeliveryHomeEmpty">
+              <div class="info-title">Нет условий доставки</div>
+              <div class="info-text">Создайте первую настройку через кнопку «+».</div>
+            </div>
+          </div>
+          <div class="settings-delivery-home-section">
+            <div class="settings-delivery-home-section-head">
+              <div class="settings-delivery-home-section-title">Зоны доставки</div>
+              <div class="settings-delivery-home-section-text">Полигоны на карте с собственными тарифами</div>
+            </div>
+            <div class="settings-list" id="settingsDeliveryZonesHomeList"></div>
+            <div class="settings-delivery-home-empty hidden" id="settingsDeliveryZonesHomeEmpty">
+              <div class="info-title">Зон пока нет</div>
+              <div class="info-text">Нажмите «+» и выберите «Зона доставки», чтобы начать рисовать на карте.</div>
+            </div>
           </div>
         </div>
       </div>
@@ -1207,6 +1262,116 @@
           </form>
         </div>
       </div>
+
+      <div class="info-card settings-right-panel hidden" id="settingsDeliveryMapConfigPanel">
+        <div class="settings-panel-scroll">
+          <div class="settings-list-header">
+            <div class="settings-list-title">Настройка карты</div>
+            <div class="settings-list-subtitle" id="settingsDeliveryMapConfigSubtitle">—</div>
+          </div>
+          <div class="settings-site-form">
+            <div class="settings-site-field">
+              <div class="settings-delivery-map-accounts-note" id="settingsDeliveryMapConfigGuide">
+                Зарегистрируйтесь на thunderforest.com, откройте Dashboard -> API Keys, скопируйте ключ и добавьте его ниже. Логин и пароль можно сохранить рядом как памятку.
+              </div>
+            </div>
+            <div class="settings-site-field">
+              <button class="btn btn-secondary settings-delivery-map-account-add-btn" type="button" id="settingsDeliveryMapAccountAddBtn">
+                <i class="fas fa-plus"></i>
+                <span>Добавить API</span>
+              </button>
+            </div>
+            <div class="settings-site-field hidden" id="settingsDeliveryMapAccountAddWrap">
+              <div class="settings-delivery-map-account-editor">
+                <div class="settings-delivery-map-account-editor-grid">
+                  <div class="settings-site-field">
+                    <label class="field-label" for="settingsDeliveryMapAccountAddApiKey">API KEY</label>
+                    <input class="control" type="text" id="settingsDeliveryMapAccountAddApiKey" placeholder="Введите API key" autocomplete="off" readonly onfocus="this.removeAttribute('readonly')" />
+                  </div>
+                  <div class="settings-site-field">
+                    <label class="field-label" for="settingsDeliveryMapAccountAddLogin">ЛОГИН</label>
+                    <input class="control" type="text" id="settingsDeliveryMapAccountAddLogin" placeholder="Необязательно" autocomplete="off" readonly onfocus="this.removeAttribute('readonly')" />
+                  </div>
+                  <div class="settings-site-field">
+                    <label class="field-label" for="settingsDeliveryMapAccountAddPassword">ПАРОЛЬ</label>
+                    <input class="control" type="password" id="settingsDeliveryMapAccountAddPassword" placeholder="Необязательно" autocomplete="new-password" />
+                  </div>
+                </div>
+                <div class="settings-delivery-map-account-editor-actions">
+                  <button class="btn btn-primary settings-delivery-map-account-action-btn" type="button" id="settingsDeliveryMapAccountAddConfirmBtn">
+                    Сохранить
+                  </button>
+                  <button class="btn btn-secondary settings-delivery-map-account-action-btn" type="button" id="settingsDeliveryMapAccountAddCancelBtn">
+                    Отмена
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div class="settings-site-field">
+              <div class="settings-delivery-map-account-list" id="settingsDeliveryMapAccountsList"></div>
+              <div class="settings-delivery-home-empty hidden" id="settingsDeliveryMapAccountsEmpty">
+                <div class="info-title">API ещё не добавлены</div>
+                <div class="info-text">Добавьте первый ключ и выберите его активным для карты этого tenant.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="info-card settings-right-panel hidden" id="settingsDeliveryZonePanel">
+        <div class="settings-panel-scroll">
+          <div class="settings-list-header">
+            <div class="settings-list-title">Зона доставки</div>
+            <div class="settings-list-subtitle" id="settingsDeliveryZoneSubtitle">—</div>
+          </div>
+          <form class="settings-site-form" id="settingsDeliveryZoneForm">
+            <div class="settings-site-field">
+              <div class="settings-delivery-zone-geometry-note" id="settingsDeliveryZoneGeometryHint">
+                1. Кликайте по карте, чтобы поставить точки
+                2. Следите за линией и заливкой будущей зоны
+                3. Нажмите на последнюю точку и выберите «Завершить»
+                4. После создания можно двигать точки мышкой
+              </div>
+            </div>
+            <div class="settings-site-field">
+              <label class="field-label">НАЗВАНИЕ</label>
+              <input class="control" type="text" id="settingsDeliveryZoneName" placeholder="Например: Центральный район" />
+            </div>
+            <div class="settings-delivery-zone-grid">
+              <div class="settings-site-field">
+                <label class="field-label">ЦВЕТ</label>
+                <input class="control settings-delivery-zone-color" type="color" id="settingsDeliveryZoneColor" value="#ff7a00" />
+              </div>
+              <div class="settings-site-field">
+                <label class="field-label">ВРЕМЯ ДОСТАВКИ, МИН</label>
+                <input class="control" type="number" id="settingsDeliveryZoneEtaMinutes" min="0" step="1" placeholder="40" />
+              </div>
+            </div>
+            <div class="settings-site-field">
+              <label class="field-label">ФИЛИАЛЫ</label>
+              <div class="delivery-stores-list" id="deliveryZoneStoresList"></div>
+            </div>
+            <div class="settings-site-field">
+              <div class="settings-delivery-zone-tier-head">
+                <label class="field-label">ТАРИФЫ ПО СУММЕ ЗАКАЗА</label>
+                <button class="btn btn-secondary btn-sm" type="button" id="settingsDeliveryZoneAddTierBtn">
+                  <i class="fas fa-plus"></i>
+                  <span>Добавить порог</span>
+                </button>
+              </div>
+              <div class="settings-delivery-zone-tier-list" id="settingsDeliveryZonePriceTiers"></div>
+            </div>
+            <div class="settings-site-field">
+              <label class="field-label">СТАТУС</label>
+              <label class="switch">
+                <input class="switch-input" type="checkbox" id="settingsDeliveryZoneActive" checked />
+                <span class="switch-ui" aria-hidden="true"></span>
+                <span class="switch-text">Активна</span>
+              </label>
+            </div>
+          </form>
+        </div>
+      </div>
     </div>
     <div class="panel-footer hidden" id="settingsDeliveryFooter">
       <div class="stores-form-actions settings-footer-actions">
@@ -1218,6 +1383,32 @@
         </button>
         <button class="settings-footer-btn settings-footer-btn--delete" type="button" id="settingsDeliveryDeleteBtn" title="Удалить" aria-label="Удалить">
           <i class="fas fa-trash"></i>
+        </button>
+      </div>
+    </div>
+    <div class="panel-footer hidden" id="settingsDeliveryZoneFooter">
+      <div class="stores-form-actions settings-footer-actions">
+        <button class="settings-footer-btn settings-footer-btn--edit hidden" type="button" id="settingsDeliveryZoneEditBtn">
+          <span>Редактировать</span>
+        </button>
+        <button class="settings-footer-btn settings-footer-btn--save" type="button" id="settingsDeliveryZoneSaveBtn">
+          <span id="settingsDeliveryZoneSaveText">Сохранить</span>
+        </button>
+        <button class="settings-footer-btn settings-footer-btn--cancel" type="button" id="settingsDeliveryZoneResetBtn" title="Сбросить" aria-label="Сбросить">
+          <i class="fas fa-times"></i>
+        </button>
+        <button class="settings-footer-btn settings-footer-btn--delete" type="button" id="settingsDeliveryZoneDeleteBtn" title="Удалить" aria-label="Удалить">
+          <i class="fas fa-trash"></i>
+        </button>
+      </div>
+    </div>
+    <div class="panel-footer hidden" id="settingsDeliveryMapConfigFooter">
+      <div class="stores-form-actions settings-footer-actions">
+        <button class="settings-footer-btn settings-footer-btn--save" type="button" id="settingsDeliveryMapConfigSaveBtn">
+          <span>Сохранить</span>
+        </button>
+        <button class="settings-footer-btn settings-footer-btn--cancel" type="button" id="settingsDeliveryMapConfigResetBtn" title="Сбросить" aria-label="Сбросить">
+          <i class="fas fa-times"></i>
         </button>
       </div>
     </div>
