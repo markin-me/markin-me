@@ -61,3 +61,9 @@ npm run address:service:start
 http://127.0.0.1:3400/health
 
 Если сервис живой, увидишь либо {"ok":true}, либо UNAUTHORIZED. Оба варианта означают, что он запустился.
+
+
+
+npm run address:service:install
+npm run address:service:db:check
+npm run address:service:start

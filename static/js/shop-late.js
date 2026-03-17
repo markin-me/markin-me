@@ -12875,7 +12875,7 @@ function openCartSheet() {
       <div class="shop-address-form-row shop-address-form-row--full hidden" data-a="lookup-wrap">
         <label class="shop-address-form-sr-label" for="shopSheetAddrLookup">Адрес</label>
         <div class="shop-address-lookup">
-          <input class="control" data-a="lookup" id="shopSheetAddrLookup" type="text" placeholder="Адрес" aria-label="Адрес" autocomplete="off" />
+          <input class="control" data-a="lookup" id="shopSheetAddrLookup" type="text" placeholder="Адрес" aria-label="Адрес" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" />
           <div class="shop-address-lookup-popover hidden" data-a="lookup-popover" role="dialog" aria-label="Подсказки адреса">
             <div class="shop-address-lookup-status" data-a="lookup-status"></div>
             <div class="shop-address-lookup-results" data-a="lookup-results"></div>
@@ -12884,29 +12884,29 @@ function openCartSheet() {
       </div>
       <div class="shop-address-form-row shop-address-form-row--full">
         <label class="shop-address-form-sr-label" for="shopSheetAddrStreet">Улица</label>
-        <input class="control" data-a="street" id="shopSheetAddrStreet" type="text" placeholder="Улица" aria-label="Улица" />
+        <input class="control" data-a="street" id="shopSheetAddrStreet" type="text" placeholder="Улица" aria-label="Улица" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" />
       </div>
       <div class="shop-address-form-row shop-address-form-row--grid">
         <div class="shop-address-form-field">
           <label class="shop-address-form-sr-label" for="shopSheetAddrHouse">Дом</label>
-          <input class="control" data-a="house" id="shopSheetAddrHouse" type="text" placeholder="Дом" aria-label="Дом" />
+          <input class="control" data-a="house" id="shopSheetAddrHouse" type="text" placeholder="Дом" aria-label="Дом" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" />
         </div>
         <div class="shop-address-form-field">
           <label class="shop-address-form-sr-label" for="shopSheetAddrEntrance">Подъезд</label>
-          <input class="control" data-a="entrance" id="shopSheetAddrEntrance" type="text" placeholder="Подъезд" aria-label="Подъезд" />
+          <input class="control" data-a="entrance" id="shopSheetAddrEntrance" type="text" placeholder="Подъезд" aria-label="Подъезд" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" />
         </div>
         <div class="shop-address-form-field">
           <label class="shop-address-form-sr-label" for="shopSheetAddrFloor">Этаж</label>
-          <input class="control" data-a="floor" id="shopSheetAddrFloor" type="text" placeholder="Этаж" aria-label="Этаж" />
+          <input class="control" data-a="floor" id="shopSheetAddrFloor" type="text" placeholder="Этаж" aria-label="Этаж" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" />
         </div>
         <div class="shop-address-form-field">
           <label class="shop-address-form-sr-label" for="shopSheetAddrApartment">Квартира</label>
-          <input class="control" data-a="apartment" id="shopSheetAddrApartment" type="text" placeholder="Квартира" aria-label="Квартира" />
+          <input class="control" data-a="apartment" id="shopSheetAddrApartment" type="text" placeholder="Квартира" aria-label="Квартира" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" />
         </div>
       </div>
       <div class="shop-address-form-row shop-address-form-row--full">
         <label class="shop-address-form-sr-label" for="shopSheetAddrComment">Комментарий курьеру</label>
-        <input class="control" data-a="comment" id="shopSheetAddrComment" type="text" placeholder="Комментарий курьеру" aria-label="Комментарий курьеру" />
+        <input class="control" data-a="comment" id="shopSheetAddrComment" type="text" placeholder="Комментарий курьеру" aria-label="Комментарий курьеру" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" />
       </div>
     </div>
     <div class="shop-address-form-actions">
@@ -17999,29 +17999,29 @@ function renderSheetAddressList() {
       <div class="shop-address-form-grid">
         <div class="shop-address-form-row shop-address-form-row--full">
           <label class="shop-address-form-sr-label" for="shopProfileAddrStreet">Улица</label>
-          <input class="control" data-a="street" id="shopProfileAddrStreet" type="text" placeholder="Улица" aria-label="Улица" />
+          <input class="control" data-a="street" id="shopProfileAddrStreet" type="text" placeholder="Улица" aria-label="Улица" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" />
         </div>
         <div class="shop-address-form-row shop-address-form-row--grid">
           <div class="shop-address-form-field">
             <label class="shop-address-form-sr-label" for="shopProfileAddrHouse">Дом</label>
-            <input class="control" data-a="house" id="shopProfileAddrHouse" type="text" placeholder="Дом" aria-label="Дом" />
+            <input class="control" data-a="house" id="shopProfileAddrHouse" type="text" placeholder="Дом" aria-label="Дом" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" />
           </div>
           <div class="shop-address-form-field">
             <label class="shop-address-form-sr-label" for="shopProfileAddrEntrance">Подъезд</label>
-            <input class="control" data-a="entrance" id="shopProfileAddrEntrance" type="text" placeholder="Подъезд" aria-label="Подъезд" />
+            <input class="control" data-a="entrance" id="shopProfileAddrEntrance" type="text" placeholder="Подъезд" aria-label="Подъезд" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" />
           </div>
           <div class="shop-address-form-field">
             <label class="shop-address-form-sr-label" for="shopProfileAddrFloor">Этаж</label>
-            <input class="control" data-a="floor" id="shopProfileAddrFloor" type="text" placeholder="Этаж" aria-label="Этаж" />
+            <input class="control" data-a="floor" id="shopProfileAddrFloor" type="text" placeholder="Этаж" aria-label="Этаж" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" />
           </div>
           <div class="shop-address-form-field">
             <label class="shop-address-form-sr-label" for="shopProfileAddrApartment">Квартира</label>
-            <input class="control" data-a="apartment" id="shopProfileAddrApartment" type="text" placeholder="Квартира" aria-label="Квартира" />
+            <input class="control" data-a="apartment" id="shopProfileAddrApartment" type="text" placeholder="Квартира" aria-label="Квартира" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" />
           </div>
         </div>
         <div class="shop-address-form-row shop-address-form-row--full">
           <label class="shop-address-form-sr-label" for="shopProfileAddrComment">Комментарий</label>
-          <input class="control" data-a="comment" id="shopProfileAddrComment" type="text" placeholder="Комментарий" aria-label="Комментарий" />
+          <input class="control" data-a="comment" id="shopProfileAddrComment" type="text" placeholder="Комментарий" aria-label="Комментарий" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" />
         </div>
       </div>
       <button type="button" class="btn btn-primary" style="width:100%; margin-top:10px;" data-a="add">Добавить адрес</button>
@@ -22139,6 +22139,11 @@ function setBottomNavActive(tab) {
     address.type = "text";
     address.placeholder = "Улица / Дом / Подъезд / Этаж / Квартира";
     address.readOnly = !!hasAddressEditor;
+    address.autocomplete = "new-password";
+    address.setAttribute("autocorrect", "off");
+    address.setAttribute("autocapitalize", "off");
+    address.setAttribute("spellcheck", "false");
+    address.setAttribute("data-lpignore", "true");
     address.setAttribute("data-role", "delivery-address");
     address.value = getSelectedAddressLine() || draft.delivery_address || "";
 
