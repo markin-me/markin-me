@@ -6,7 +6,17 @@
   centerPartial: '../partials/home/center',
   rightPartial: '../partials/home/right',
   extraPartial: null,
+  pageStyles: activePage === 'settings'
+    ? [
+      '/static/vendor/leaflet/leaflet.css',
+      'https://unpkg.com/@geoman-io/leaflet-geoman-free@2.19.2/dist/leaflet-geoman.css'
+    ]
+    : [],
   pageScripts: activePage === 'settings'
-    ? ['/static/js/settings-tenant.js']
+    ? [
+      '/static/vendor/leaflet/leaflet.js',
+      'https://unpkg.com/@geoman-io/leaflet-geoman-free@2.19.2/dist/leaflet-geoman.umd.js',
+      '/static/js/settings-tenant.js'
+    ]
     : []
 }) %>

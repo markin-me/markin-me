@@ -12863,40 +12863,50 @@ function openCartSheet() {
   addressFormView.innerHTML = `
     <div class="shop-address-form-grid">
       <div class="shop-address-form-row shop-address-form-row--full">
-        <label class="field-label">Город</label>
-        <div class="custom-select" data-a="city">
-          <button type="button" class="custom-select-trigger control">
+        <label class="shop-address-form-sr-label" for="shopSheetAddrCityTrigger">Город</label>
+        <div class="custom-select shop-address-city-select" data-a="city" data-placeholder="Город">
+          <button type="button" class="custom-select-trigger control" id="shopSheetAddrCityTrigger" aria-label="Город">
             <span class="custom-select-value"></span>
             <i class="fas fa-chevron-down custom-select-arrow" aria-hidden="true"></i>
           </button>
           <div class="custom-select-dropdown hidden"></div>
         </div>
       </div>
+      <div class="shop-address-form-row shop-address-form-row--full hidden" data-a="lookup-wrap">
+        <label class="shop-address-form-sr-label" for="shopSheetAddrLookup">Адрес</label>
+        <div class="shop-address-lookup">
+          <input class="control" data-a="lookup" id="shopSheetAddrLookup" type="text" placeholder="Адрес" aria-label="Адрес" autocomplete="off" />
+          <div class="shop-address-lookup-popover hidden" data-a="lookup-popover" role="dialog" aria-label="Подсказки адреса">
+            <div class="shop-address-lookup-status" data-a="lookup-status"></div>
+            <div class="shop-address-lookup-results" data-a="lookup-results"></div>
+          </div>
+        </div>
+      </div>
       <div class="shop-address-form-row shop-address-form-row--full">
-        <label class="field-label">Улица</label>
-        <input class="control" data-a="street" type="text" />
+        <label class="shop-address-form-sr-label" for="shopSheetAddrStreet">Улица</label>
+        <input class="control" data-a="street" id="shopSheetAddrStreet" type="text" placeholder="Улица" aria-label="Улица" />
       </div>
       <div class="shop-address-form-row shop-address-form-row--grid">
         <div class="shop-address-form-field">
-          <label class="field-label">Дом</label>
-          <input class="control" data-a="house" type="text" />
+          <label class="shop-address-form-sr-label" for="shopSheetAddrHouse">Дом</label>
+          <input class="control" data-a="house" id="shopSheetAddrHouse" type="text" placeholder="Дом" aria-label="Дом" />
         </div>
         <div class="shop-address-form-field">
-          <label class="field-label">Подъезд</label>
-          <input class="control" data-a="entrance" type="text" />
+          <label class="shop-address-form-sr-label" for="shopSheetAddrEntrance">Подъезд</label>
+          <input class="control" data-a="entrance" id="shopSheetAddrEntrance" type="text" placeholder="Подъезд" aria-label="Подъезд" />
         </div>
         <div class="shop-address-form-field">
-          <label class="field-label">Этаж</label>
-          <input class="control" data-a="floor" type="text" />
+          <label class="shop-address-form-sr-label" for="shopSheetAddrFloor">Этаж</label>
+          <input class="control" data-a="floor" id="shopSheetAddrFloor" type="text" placeholder="Этаж" aria-label="Этаж" />
         </div>
         <div class="shop-address-form-field">
-          <label class="field-label">Квартира</label>
-          <input class="control" data-a="apartment" type="text" />
+          <label class="shop-address-form-sr-label" for="shopSheetAddrApartment">Квартира</label>
+          <input class="control" data-a="apartment" id="shopSheetAddrApartment" type="text" placeholder="Квартира" aria-label="Квартира" />
         </div>
       </div>
       <div class="shop-address-form-row shop-address-form-row--full">
-        <label class="field-label">Комментарий курьеру</label>
-        <input class="control" data-a="comment" type="text" />
+        <label class="shop-address-form-sr-label" for="shopSheetAddrComment">Комментарий курьеру</label>
+        <input class="control" data-a="comment" id="shopSheetAddrComment" type="text" placeholder="Комментарий курьеру" aria-label="Комментарий курьеру" />
       </div>
     </div>
     <div class="shop-address-form-actions">
@@ -12905,6 +12915,314 @@ function openCartSheet() {
     </div>
   `;
   addressWrap.appendChild(addressFormView);
+
+  const formGet = (k) => addressFormView.querySelector(`[data-a="${k}"]`);
+  let sheetAddressFormResolved = null;
+  const sheetAddressLookupState = {
+    open: false,
+    items: [],
+    activeIndex: -1,
+    status: "",
+    mode: "idle",
+    debounceTimer: null,
+    requestSeq: 0,
+  };
+
+  function renderSheetAddressLookupPopover() {
+    const popover = formGet("lookup-popover");
+    const statusEl = formGet("lookup-status");
+    const resultsEl = formGet("lookup-results");
+    if (!popover || !statusEl || !resultsEl) return;
+
+    statusEl.textContent = sheetAddressLookupState.status || "";
+    statusEl.classList.toggle("hidden", !sheetAddressLookupState.status);
+    statusEl.classList.toggle("is-error", sheetAddressLookupState.mode === "error");
+    statusEl.classList.toggle("is-loading", sheetAddressLookupState.mode === "loading");
+
+    resultsEl.innerHTML = "";
+    sheetAddressLookupState.items.forEach((item, index) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "shop-address-lookup-item" + (index === sheetAddressLookupState.activeIndex ? " is-active" : "");
+
+      const title = document.createElement("div");
+      title.className = "shop-address-lookup-item-title";
+      title.textContent = buildAddressLookupSuggestionTitle(
+        item,
+        str(formGet("city")?.dataset?.value || item?.city_name || "").trim()
+      );
+      button.appendChild(title);
+
+      const metaText = str(item?.context_locality || item?.city_name || item?.subtitle || "").trim();
+      if (metaText) {
+        const meta = document.createElement("div");
+        meta.className = "shop-address-lookup-item-meta";
+        meta.textContent = metaText;
+        button.appendChild(meta);
+      }
+
+      button.addEventListener("mouseenter", () => {
+        if (sheetAddressLookupState.activeIndex === index) return;
+        sheetAddressLookupState.activeIndex = index;
+        renderSheetAddressLookupPopover();
+      });
+      button.addEventListener("click", async () => {
+        await applySheetAddressLookupSuggestion(item);
+      });
+
+      resultsEl.appendChild(button);
+    });
+
+    popover.classList.toggle(
+      "hidden",
+      !sheetAddressLookupState.open && !sheetAddressLookupState.items.length && !sheetAddressLookupState.status
+    );
+  }
+
+  function clearSheetAddressLookupDebounce() {
+    if (!sheetAddressLookupState.debounceTimer) return;
+    clearTimeout(sheetAddressLookupState.debounceTimer);
+    sheetAddressLookupState.debounceTimer = null;
+  }
+
+  function closeSheetAddressLookupPopover() {
+    clearSheetAddressLookupDebounce();
+    sheetAddressLookupState.requestSeq += 1;
+    sheetAddressLookupState.open = false;
+    sheetAddressLookupState.items = [];
+    sheetAddressLookupState.activeIndex = -1;
+    sheetAddressLookupState.status = "";
+    sheetAddressLookupState.mode = "idle";
+    renderSheetAddressLookupPopover();
+  }
+
+  function setSheetAddressLookupStatus(message, mode = "idle") {
+    sheetAddressLookupState.status = str(message).trim();
+    sheetAddressLookupState.mode = str(mode).trim() || "idle";
+    if (sheetAddressLookupState.mode !== "idle" || sheetAddressLookupState.items.length) {
+      sheetAddressLookupState.open = true;
+    }
+    renderSheetAddressLookupPopover();
+  }
+
+  function setSheetAddressLookupItems(items) {
+    sheetAddressLookupState.items = Array.isArray(items) ? items.slice() : [];
+    sheetAddressLookupState.activeIndex = sheetAddressLookupState.items.length ? 0 : -1;
+    if (sheetAddressLookupState.items.length) {
+      sheetAddressLookupState.open = true;
+      if (
+        sheetAddressLookupState.mode === "idle"
+        || sheetAddressLookupState.mode === "loading"
+        || sheetAddressLookupState.mode === "empty"
+      ) {
+        sheetAddressLookupState.mode = "ready";
+      }
+    }
+    renderSheetAddressLookupPopover();
+  }
+
+  function resetSheetAddressFormResolvedState(source = null) {
+    sheetAddressFormResolved = extractResolvedAddressState(source);
+  }
+
+  function clearSheetAddressFormResolution({ syncLookupFromFields = true, clearLookup = false } = {}) {
+    const current = sheetAddressFormResolved || {};
+    sheetAddressFormResolved = {
+      address_ref: null,
+      selected_object_type: null,
+      resolved_city_source_key: current.resolved_city_source_key || null,
+      address_context_locality: null,
+      address_normalized_display: null,
+      lat: null,
+      lng: null,
+      delivery_zone_id: null,
+      delivery_store_id: null,
+    };
+
+    const lookupInput = formGet("lookup");
+    if (!lookupInput) return;
+    if (clearLookup) {
+      lookupInput.value = "";
+      return;
+    }
+    if (syncLookupFromFields) {
+      lookupInput.value = buildAddressLookupDisplay({
+        city: formGet("city")?.dataset?.value || "",
+        street: formGet("street")?.value || "",
+        house: formGet("house")?.value || "",
+        address_context_locality: "",
+      });
+    }
+  }
+
+  function syncSheetAddressLookupResolutionFromInputValue(value) {
+    if (shouldPreserveAddressLookupResolution(sheetAddressFormResolved, value)) {
+      sheetAddressFormResolved = {
+        ...(sheetAddressFormResolved || {}),
+        address_normalized_display: str(value).trim() || null,
+        lat: null,
+        lng: null,
+        delivery_zone_id: null,
+        delivery_store_id: null,
+      };
+      return;
+    }
+    clearSheetAddressFormResolution({ syncLookupFromFields: false });
+  }
+
+  async function applySheetAddressLookupSuggestion(item) {
+    const selectedItem = item && typeof item === "object" ? item : null;
+    if (!selectedItem) return;
+    const city = str(formGet("city")?.dataset?.value || "").trim();
+    const selectedType = getAddressLookupItemType(selectedItem);
+    if (selectedType !== "address") {
+      const nextCity = str(selectedItem.city_name || city).trim();
+      if (nextCity) {
+        populateCitySelect(formGet("city"), nextCity);
+      }
+      const nextState = buildAddressLookupIntermediateState(selectedItem, nextCity || city, sheetAddressFormResolved);
+      if (formGet("lookup")) {
+        formGet("lookup").value = str(nextState.address_normalized_display).trim();
+        formGet("lookup").focus();
+        const caretPos = formGet("lookup").value.length;
+        try {
+          formGet("lookup").setSelectionRange(caretPos, caretPos);
+        } catch (_) {}
+      }
+      if (formGet("street")) {
+        formGet("street").value = selectedType === "street"
+          ? str(selectedItem.street_name || selectedItem.value || selectedItem.label).trim()
+          : "";
+      }
+      if (formGet("house")) formGet("house").value = "";
+      sheetAddressFormResolved = nextState;
+      closeSheetAddressLookupPopover();
+      return;
+    }
+
+    const subtotal = computeCartTotals(cartItemsResolved()).total;
+    try {
+      const json = await apiJson("/api/public/address-resolve", {
+        method: "POST",
+        body: {
+          subtotal,
+          city,
+          street: selectedItem.street_name || "",
+          house: selectedItem.house_number || "",
+          address_ref: selectedItem.source_key || "",
+          selected_object_type: selectedItem.object_type || "address",
+          address_context_locality: selectedItem.context_locality || selectedItem.city_name || "",
+          address_normalized_display: selectedItem.full_address || selectedItem.value || selectedItem.label || "",
+          lat: selectedItem.lat,
+          lng: selectedItem.lng,
+        },
+      });
+      const data = json?.data || {};
+      if (data.city) {
+        populateCitySelect(formGet("city"), data.city);
+      }
+      if (formGet("lookup")) {
+        formGet("lookup").value = str(data.address_normalized_display || buildAddressLookupDisplay(data)).trim();
+      }
+      if (formGet("street")) formGet("street").value = str(data.street || selectedItem.street_name || "").trim();
+      if (formGet("house")) formGet("house").value = str(data.house || selectedItem.house_number || "").trim();
+      sheetAddressFormResolved = {
+        ...extractResolvedAddressState({
+          address_ref: data.address_ref,
+          selected_object_type: data.selected_object_type,
+          resolved_city_source_key: data.resolved_city_source_key,
+          address_context_locality: data.context_locality,
+          address_normalized_display: data.address_normalized_display,
+          lat: data.lat,
+          lng: data.lng,
+          delivery_zone_id: data.delivery_zone_id,
+          delivery_store_id: data.delivery_store_id,
+        }),
+        _lookup_prefix: str(data.address_normalized_display || buildAddressLookupDisplay(data)).trim() || null,
+      };
+      closeSheetAddressLookupPopover();
+      if (typeof updateMobileDeliveryProgress === "function") {
+        Promise.resolve(updateMobileDeliveryProgress()).catch(() => {});
+      }
+    } catch (error) {
+      console.error(error);
+      setSheetAddressLookupItems([]);
+      setSheetAddressLookupStatus("Не удалось получить адрес.", "error");
+    }
+  }
+
+  async function searchSheetAddressLookupSuggestions(query, requestId) {
+    const normalizedQuery = str(query).trim();
+    const city = str(formGet("city")?.dataset?.value || "").trim();
+    const continuation = getAddressLookupContinuationInfo(normalizedQuery, sheetAddressFormResolved);
+    const apiQuery = str(continuation.query).trim();
+    const minLength = continuation.stage === "house" ? 1 : 2;
+    if (!apiQuery || apiQuery.length < minLength) {
+      closeSheetAddressLookupPopover();
+      return;
+    }
+    if (!city) {
+      setSheetAddressLookupItems([]);
+      setSheetAddressLookupStatus("Сначала выберите город.", "error");
+      return;
+    }
+    sheetAddressLookupState.open = true;
+    setSheetAddressLookupStatus("Ищем адрес...", "loading");
+    try {
+      const params = new URLSearchParams({
+        stage: continuation.stage,
+        q: apiQuery,
+        city,
+      });
+      if (continuation.citySourceKey) {
+        params.set("city_source_key", continuation.citySourceKey);
+      }
+      if (continuation.selectedSourceKey) {
+        params.set("selected_source_key", continuation.selectedSourceKey);
+      }
+      const response = await fetch(`/api/public/address-suggest?${params.toString()}`, {
+        headers: {
+          "x-tenant-id": String(tenantId),
+        },
+      });
+      const json = await response.json().catch(() => null);
+      if (!response.ok || !json?.ok) {
+        throw new Error(json?.error || "ADDRESS_SUGGEST_FAILED");
+      }
+      if (requestId !== sheetAddressLookupState.requestSeq) return;
+      const items = Array.isArray(json?.data?.items) ? json.data.items : [];
+      if (!items.length) {
+        setSheetAddressLookupItems([]);
+        setSheetAddressLookupStatus("Ничего не найдено.", "empty");
+        return;
+      }
+      setSheetAddressLookupItems(items);
+      setSheetAddressLookupStatus(`Поиск: ${str(json?.data?.scope_label || city).trim()}`, "ready");
+    } catch (error) {
+      if (requestId !== sheetAddressLookupState.requestSeq) return;
+      console.error(error);
+      setSheetAddressLookupItems([]);
+      setSheetAddressLookupStatus("Не удалось получить подсказки адреса.", "error");
+    }
+  }
+
+  function scheduleSheetAddressLookupSuggestions() {
+    if (!isAddressMapModeEnabled() || !formGet("lookup")) return;
+    const normalizedValue = str(formGet("lookup")?.value || "").trim();
+    const continuation = getAddressLookupContinuationInfo(normalizedValue, sheetAddressFormResolved);
+    const minLength = continuation.stage === "house" ? 1 : 2;
+    clearSheetAddressLookupDebounce();
+    sheetAddressLookupState.requestSeq += 1;
+    if (!normalizedValue || str(continuation.query).trim().length < minLength) {
+      closeSheetAddressLookupPopover();
+      return;
+    }
+    const requestId = sheetAddressLookupState.requestSeq;
+    sheetAddressLookupState.debounceTimer = setTimeout(() => {
+      sheetAddressLookupState.debounceTimer = null;
+      searchSheetAddressLookupSuggestions(normalizedValue, requestId);
+    }, 180);
+  }
 
   const footer = document.createElement("div");
   footer.className = "shop-cart-sheet-footer";
@@ -13925,7 +14243,8 @@ function applySheetAddressTitle(backMode = "cart") {
       openCartSheetCtx.addressBackMode = backMode || "cart";
     }
 
-    const get = (k) => addressFormView.querySelector(`[data-a="${k}"]`);
+    const addressMapModeEnabled = isAddressMapModeEnabled();
+    const get = formGet;
     const setVal = (k, v) => {
       const el = get(k);
       if (el) el.value = str(v || "");
@@ -13937,6 +14256,14 @@ function applySheetAddressTitle(backMode = "cart") {
       return;
     }
     populateCitySelect(get("city"), prefill?.city);
+    resetSheetAddressFormResolvedState(addressMapModeEnabled ? (prefill || null) : null);
+    if (get("lookup-wrap")) {
+      get("lookup-wrap").classList.toggle("hidden", !addressMapModeEnabled);
+    }
+    if (get("lookup")) {
+      get("lookup").value = addressMapModeEnabled ? buildAddressLookupDisplay(prefill || {}) : "";
+    }
+    closeSheetAddressLookupPopover();
 
     setVal("street", prefill?.street);
     setVal("house", prefill?.house);
@@ -13987,7 +14314,7 @@ function applySheetAddressTitle(backMode = "cart") {
     }
 
     setTimeout(() => {
-      try { get("street")?.focus?.(); } catch {}
+      try { (addressMapModeEnabled ? get("lookup") : get("street"))?.focus?.(); } catch {}
     }, 0);
   }
 
@@ -14592,15 +14919,7 @@ function renderSheetAddressList() {
   btn.addEventListener("click", async () => {
     const authorized = await requireAuthForCheckout({ isSheet: true });
     if (!authorized) return;
-    await refreshAddressState();
-    // pickup mode — go directly to checkout (no delivery address needed)
-    if (window._deliveryMode === "pickup" && window._selectedPickupStoreId) {
-      showSheetCheckout();
-    } else if (getSelectedAddressLine()) {
-      showSheetCheckout();
-    } else {
-      showSheetAddressList();
-    }
+    await startCheckoutFlow({ isSheet: true });
   });
 
   backBtn.addEventListener("click", () => showSheetCart());
@@ -14610,7 +14929,88 @@ function renderSheetAddressList() {
     showSheetAddressForm(null, null, backMode);
   });
 
-  const formGet = (k) => addressFormView.querySelector(`[data-a="${k}"]`);
+  const sheetLookupInput = formGet("lookup");
+  if (sheetLookupInput) {
+    sheetLookupInput.addEventListener("input", () => {
+      if (!isAddressMapModeEnabled()) return;
+      syncSheetAddressLookupResolutionFromInputValue(sheetLookupInput.value);
+      scheduleSheetAddressLookupSuggestions();
+    });
+    sheetLookupInput.addEventListener("focus", () => {
+      if (!isAddressMapModeEnabled()) return;
+      if (str(sheetLookupInput.value).trim().length >= 2) {
+        scheduleSheetAddressLookupSuggestions();
+      }
+    });
+    sheetLookupInput.addEventListener("keydown", async (event) => {
+      if (!sheetAddressLookupState.open || !sheetAddressLookupState.items.length) return;
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        sheetAddressLookupState.activeIndex = Math.min(
+          sheetAddressLookupState.items.length - 1,
+          sheetAddressLookupState.activeIndex + 1
+        );
+        renderSheetAddressLookupPopover();
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        sheetAddressLookupState.activeIndex = Math.max(0, sheetAddressLookupState.activeIndex - 1);
+        renderSheetAddressLookupPopover();
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeSheetAddressLookupPopover();
+        return;
+      }
+      if (event.key === "Enter") {
+        const activeItem = sheetAddressLookupState.items[sheetAddressLookupState.activeIndex] || sheetAddressLookupState.items[0];
+        if (!activeItem) return;
+        event.preventDefault();
+        await applySheetAddressLookupSuggestion(activeItem);
+      }
+    });
+  }
+
+  const sheetCitySelect = formGet("city");
+  if (sheetCitySelect) {
+    sheetCitySelect.addEventListener("change", () => {
+      if (!isAddressMapModeEnabled()) return;
+      closeSheetAddressLookupPopover();
+      resetSheetAddressFormResolvedState(null);
+      if (formGet("lookup")) formGet("lookup").value = "";
+      if (formGet("street")) formGet("street").value = "";
+      if (formGet("house")) formGet("house").value = "";
+    });
+  }
+
+  ["street", "house"].forEach((key) => {
+    const input = formGet(key);
+    if (!input) return;
+    input.addEventListener("input", () => {
+      if (!isAddressMapModeEnabled()) return;
+      const resolved = sheetAddressFormResolved || {};
+      if (
+        !resolved.address_ref
+        && resolved.lat == null
+        && resolved.lng == null
+        && !resolved.delivery_zone_id
+        && !resolved.delivery_store_id
+      ) {
+        return;
+      }
+      clearSheetAddressFormResolution({ syncLookupFromFields: true });
+    });
+  });
+
+  document.addEventListener("click", (event) => {
+    const lookupWrap = formGet("lookup-wrap");
+    if (!lookupWrap || !lookupWrap.contains(event.target)) {
+      closeSheetAddressLookupPopover();
+    }
+  });
+
   const saveBtn = formGet("save");
   const cancelBtn = formGet("cancel");
 
@@ -14625,13 +15025,57 @@ function renderSheetAddressList() {
   saveBtn?.addEventListener("click", async () => {
     const payload = normalizeAddressPayload({
       city: formGet("city")?.dataset?.value || "",
+      address_normalized_display: isAddressMapModeEnabled() ? formGet("lookup")?.value : "",
       street: formGet("street")?.value,
       house: formGet("house")?.value,
       entrance: formGet("entrance")?.value,
       floor: formGet("floor")?.value,
       apartment: formGet("apartment")?.value,
       comment: formGet("comment")?.value,
+      ...(isAddressMapModeEnabled() ? (sheetAddressFormResolved || {}) : {}),
     });
+    if (!payload.city) return alert("Укажите город");
+    if (!payload.street || !payload.house) {
+      saveBtn.disabled = true;
+      saveBtn.textContent = "РЎРѕС…СЂР°РЅСЏРµРјвЂ¦";
+
+      try {
+        const me = await fetchMeSafe();
+        const token = getCustomerToken();
+
+        if (me && token) {
+          if (sheetEditingId) {
+            await apiJson(`/api/public/me/addresses/${sheetEditingId}`, { method: "PUT", body: payload });
+          } else {
+            await apiJson("/api/public/me/addresses", { method: "POST", body: { ...payload, is_default: 1 } });
+          }
+          await refreshAddressState({ force: true });
+        } else {
+          saveAddressDraft(payload);
+          setSelectedAddress({ ...payload, _local: true });
+        }
+
+        syncSelectedAddressToCheckoutDraft();
+        updateAddressChip();
+        const backMode = openCartSheetCtx?.addressBackMode || "cart";
+        if (backMode === "profile") {
+          returnToProfileFromSheet();
+        } else if (backMode === "checkout") {
+          showSheetCheckout();
+        } else if (backMode === "header") {
+          showSheetAddressList("header");
+        } else {
+          showSheetCart();
+        }
+      } catch (e) {
+        console.error(e);
+        alert("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕС…СЂР°РЅРёС‚СЊ Р°РґСЂРµСЃ");
+      } finally {
+        saveBtn.disabled = false;
+        saveBtn.textContent = "РЎРѕС…СЂР°РЅРёС‚СЊ";
+      }
+      return;
+    }
 
     if (!payload.street) return alert("Укажите улицу");
     if (!payload.house) return alert("Укажите дом");
@@ -15252,7 +15696,15 @@ function renderSheetAddressList() {
 
   function openLoginSheet({ onSuccess, fromCheckout = false } = {}) {
     if (!window.AppModal) return;
-    const wrap = buildLoginContent({ onSuccess });
+    let completedSuccessfully = false;
+    const wrappedOnSuccess = (...args) => {
+      completedSuccessfully = true;
+      if (typeof onSuccess === "function") {
+        return onSuccess(...args);
+      }
+      return undefined;
+    };
+    const wrap = buildLoginContent({ onSuccess: wrappedOnSuccess });
     setAppModalMode("shop");
     if (fromCheckout && openCartSheetCtx) {
       setCartSheetFooterMode(openCartSheetCtx, "hidden");
@@ -15278,6 +15730,13 @@ function renderSheetAddressList() {
         if (fromCheckout && openCartSheetCtx) {
           const hasItems = cartItemsResolved().length > 0;
           setCartSheetFooterMode(openCartSheetCtx, hasItems ? "cart" : "hidden");
+        }
+        if (fromCheckout && !completedSuccessfully) {
+          setTimeout(() => {
+            if (!window.AppModal?.isOpen?.()) {
+              openCartSheet();
+            }
+          }, 0);
         }
         sheetNavigationState.type = null;
         sheetNavigationState.screen = null;
@@ -15660,6 +16119,130 @@ function renderSheetAddressList() {
     if (!listEl || !listEl.isConnected) return false;
     if (window.AppModal?.body && !window.AppModal.body.contains(listEl)) return false;
     return true;
+  }
+
+  function waitForUiTick() {
+    return new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  function hasSavedCustomerAddresses() {
+    return Array.isArray(state?.addresses) && state.addresses.length > 0;
+  }
+
+  function hasSelectedCheckoutAddress() {
+    return !!str(getSelectedAddressLine()).trim();
+  }
+
+  function getCheckoutAddressPrefill() {
+    const draft = typeof loadAddressDraft === "function" ? loadAddressDraft() : null;
+    return draft || state.selectedAddress || null;
+  }
+
+  async function ensureCheckoutSheetContextReady() {
+    if (!hasLiveCartSheetContext()) {
+      openCartSheet();
+    }
+    if (!hasLiveCartSheetContext()) {
+      await waitForUiTick();
+    }
+    return hasLiveCartSheetContext() ? openCartSheetCtx : null;
+  }
+
+  async function openSheetCheckoutFlow() {
+    const ctx = await ensureCheckoutSheetContextReady();
+    if (!ctx || typeof ctx.showSheetCheckout !== "function") return false;
+    await ctx.showSheetCheckout();
+    return true;
+  }
+
+  async function openSheetCheckoutAddressFlow({ preferredMode, hasAddresses }) {
+    const ctx = await ensureCheckoutSheetContextReady();
+    if (!ctx) return false;
+    if (preferredMode === "pickup") {
+      if (typeof ctx.showSheetAddressList === "function") {
+        ctx.showSheetAddressList("checkout");
+        return true;
+      }
+      return false;
+    }
+    if (hasAddresses) {
+      if (typeof ctx.showSheetAddressList === "function") {
+        ctx.showSheetAddressList("checkout");
+        return true;
+      }
+      return false;
+    }
+    if (typeof ctx.showSheetAddressForm === "function") {
+      await ctx.showSheetAddressForm(getCheckoutAddressPrefill(), null, "checkout");
+      return true;
+    }
+    if (typeof ctx.showSheetAddressList === "function") {
+      ctx.showSheetAddressList("checkout");
+      return true;
+    }
+    return false;
+  }
+
+  async function openDesktopCheckoutFlow() {
+    if (!elCheckoutContent) return false;
+    showCheckoutView();
+    await openCheckoutView({
+      container: elCheckoutContent,
+      onBack: showCartView,
+      hasAddressEditor: true,
+      isSheet: false,
+      actions: { submitBtn: elCheckoutSubmitBtn, backBtn: elCheckoutBackBtn },
+    });
+    return true;
+  }
+
+  async function openDesktopCheckoutAddressFlow({ preferredMode, hasAddresses }) {
+    if (preferredMode === "pickup") {
+      if (typeof showPickupListView === "function") {
+        showPickupListView("checkout");
+      } else if (typeof showAddressListView === "function") {
+        showAddressListView("checkout", { preferredMode: "pickup" });
+      }
+      return true;
+    }
+    if (hasAddresses) {
+      if (typeof showAddressListView === "function") {
+        showAddressListView("checkout", { preferredMode: "delivery" });
+        return true;
+      }
+      return false;
+    }
+    if (typeof showAddressFormView === "function") {
+      await showAddressFormView(getCheckoutAddressPrefill(), null, "checkout");
+      return true;
+    }
+    return false;
+  }
+
+  async function startCheckoutFlow({ isSheet, forceAddressRefresh = true } = {}) {
+    await refreshAddressState({ force: !!forceAddressRefresh });
+
+    const isPickupMode = window._deliveryMode === "pickup";
+    const hasPickupStore = Number(window._selectedPickupStoreId || 0) > 0;
+    const hasAddresses = hasSavedCustomerAddresses();
+    const hasSelectedAddress = hasSelectedCheckoutAddress();
+
+    if (isPickupMode) {
+      if (hasPickupStore) {
+        return isSheet ? openSheetCheckoutFlow() : openDesktopCheckoutFlow();
+      }
+      return isSheet
+        ? openSheetCheckoutAddressFlow({ preferredMode: "pickup", hasAddresses })
+        : openDesktopCheckoutAddressFlow({ preferredMode: "pickup", hasAddresses });
+    }
+
+    if (hasSelectedAddress) {
+      return isSheet ? openSheetCheckoutFlow() : openDesktopCheckoutFlow();
+    }
+
+    return isSheet
+      ? openSheetCheckoutAddressFlow({ preferredMode: "delivery", hasAddresses })
+      : openDesktopCheckoutAddressFlow({ preferredMode: "delivery", hasAddresses });
   }
 
   function buildRepeatVariantLabel(rawLabel, rawGroupTitle) {
@@ -17415,30 +17998,30 @@ function renderSheetAddressList() {
     addressFormCard.innerHTML = `
       <div class="shop-address-form-grid">
         <div class="shop-address-form-row shop-address-form-row--full">
-          <label class="field-label">Улица</label>
-          <input class="control" data-a="street" type="text" />
+          <label class="shop-address-form-sr-label" for="shopProfileAddrStreet">Улица</label>
+          <input class="control" data-a="street" id="shopProfileAddrStreet" type="text" placeholder="Улица" aria-label="Улица" />
         </div>
         <div class="shop-address-form-row shop-address-form-row--grid">
           <div class="shop-address-form-field">
-            <label class="field-label">Дом</label>
-            <input class="control" data-a="house" type="text" />
+            <label class="shop-address-form-sr-label" for="shopProfileAddrHouse">Дом</label>
+            <input class="control" data-a="house" id="shopProfileAddrHouse" type="text" placeholder="Дом" aria-label="Дом" />
           </div>
           <div class="shop-address-form-field">
-            <label class="field-label">Подъезд</label>
-            <input class="control" data-a="entrance" type="text" />
+            <label class="shop-address-form-sr-label" for="shopProfileAddrEntrance">Подъезд</label>
+            <input class="control" data-a="entrance" id="shopProfileAddrEntrance" type="text" placeholder="Подъезд" aria-label="Подъезд" />
           </div>
           <div class="shop-address-form-field">
-            <label class="field-label">Этаж</label>
-            <input class="control" data-a="floor" type="text" />
+            <label class="shop-address-form-sr-label" for="shopProfileAddrFloor">Этаж</label>
+            <input class="control" data-a="floor" id="shopProfileAddrFloor" type="text" placeholder="Этаж" aria-label="Этаж" />
           </div>
           <div class="shop-address-form-field">
-            <label class="field-label">Квартира</label>
-            <input class="control" data-a="apartment" type="text" />
+            <label class="shop-address-form-sr-label" for="shopProfileAddrApartment">Квартира</label>
+            <input class="control" data-a="apartment" id="shopProfileAddrApartment" type="text" placeholder="Квартира" aria-label="Квартира" />
           </div>
         </div>
         <div class="shop-address-form-row shop-address-form-row--full">
-          <label class="field-label">Комментарий</label>
-          <input class="control" data-a="comment" type="text" />
+          <label class="shop-address-form-sr-label" for="shopProfileAddrComment">Комментарий</label>
+          <input class="control" data-a="comment" id="shopProfileAddrComment" type="text" placeholder="Комментарий" aria-label="Комментарий" />
         </div>
       </div>
       <button type="button" class="btn btn-primary" style="width:100%; margin-top:10px;" data-a="add">Добавить адрес</button>
@@ -19851,57 +20434,25 @@ function renderSheetAddressList() {
     const me = await fetchMeSafe();
     if (me) return true;
 
-    const continueToCheckout = async () => {
-      await refreshAddressState();
-      if (isSheet) {
-        const resolveShowCheckout = () => {
-          if (!openCartSheetCtx) return null;
-          if (typeof openCartSheetCtx.showSheetCheckout !== "function") return null;
-          return openCartSheetCtx.showSheetCheckout;
-        };
-
-        let showSheetCheckoutFn = resolveShowCheckout();
-        if (!showSheetCheckoutFn || !openCartSheetCtx?.listEl?.isConnected) {
-          openCartSheet();
-        }
-        showSheetCheckoutFn = resolveShowCheckout();
-        if (!showSheetCheckoutFn) {
-          await new Promise((resolve) => setTimeout(resolve, 0));
-          showSheetCheckoutFn = resolveShowCheckout();
-        }
-        if (showSheetCheckoutFn) {
-          await showSheetCheckoutFn();
-          if (sheetNavigationState.screen !== "checkout") {
-            await new Promise((resolve) => setTimeout(resolve, 0));
-            await showSheetCheckoutFn();
-          }
-        }
-        return;
-      }
-      if (!elCheckoutContent) return;
-      showCheckoutView();
-      await openCheckoutView({
-        container: elCheckoutContent,
-        onBack: showCartView,
-        hasAddressEditor: true,
-        isSheet: false,
-        actions: { submitBtn: elCheckoutSubmitBtn, backBtn: elCheckoutBackBtn },
-      });
-    };
-
     if (isSheet) {
       openLoginSheet({
         onSuccess: async () => {
-          // После логина из сценария "Оформить" на мобилке
-          // принудительно продолжаем именно checkout-flow.
-          closeShopSheetIfOpen();
-          setActiveNav("cart");
-          await continueToCheckout();
+          if (window.AppModal?.isOpen?.()) {
+            window.AppModal.close("sheet");
+          }
+          setTimeout(() => {
+            void startCheckoutFlow({ isSheet: true, forceAddressRefresh: true });
+          }, 0);
         },
         fromCheckout: true,
       });
     } else {
-      await openProfilePanel(null, { forceOpen: true, onLoginSuccess: () => { continueToCheckout(); } });
+      await openProfilePanel(null, {
+        forceOpen: true,
+        onLoginSuccess: () => {
+          void startCheckoutFlow({ isSheet: false, forceAddressRefresh: true });
+        },
+      });
     }
     return false;
   }
@@ -20001,6 +20552,7 @@ function setBottomNavActive(tab) {
     if (orderConfigCache) return orderConfigCache;
     const json = await apiJson("/api/public/order-config");
     orderConfigCache = json.data;
+    window.__shopOrderConfig = json.data || null;
     return orderConfigCache;
   }
 
@@ -20011,6 +20563,44 @@ function setBottomNavActive(tab) {
     const json = await apiJson("/api/public/delivery-settings");
     deliverySettingsCache = json.data || null;
     return deliverySettingsCache;
+  }
+
+  let deliveryQuoteCache = { key: "", data: null };
+
+  async function getDeliveryQuote(subtotal) {
+    const amount = roundPrice(Number(subtotal || 0));
+    const address = state.selectedAddress ? normalizeAddressPayload(state.selectedAddress) : null;
+    const cacheKey = JSON.stringify({
+      subtotal: amount,
+      address_id: state.selectedAddress?.id || null,
+      street: address?.street || "",
+      house: address?.house || "",
+      lat: address?.lat ?? null,
+      lng: address?.lng ?? null,
+      delivery_zone_id: address?.delivery_zone_id ?? null,
+      delivery_store_id: address?.delivery_store_id ?? null,
+    });
+    if (deliveryQuoteCache.key === cacheKey && deliveryQuoteCache.data) {
+      return deliveryQuoteCache.data;
+    }
+
+    const body = { subtotal: amount };
+    if (state.selectedAddress?.id) {
+      body.delivery_address_id = Number(state.selectedAddress.id);
+    }
+    if (address) {
+      body.address = address;
+    }
+
+    const json = await apiJson("/api/public/delivery-quote", {
+      method: "POST",
+      body,
+    });
+    deliveryQuoteCache = {
+      key: cacheKey,
+      data: json.data || null,
+    };
+    return deliveryQuoteCache.data;
   }
 
   /**
@@ -20033,10 +20623,11 @@ function setBottomNavActive(tab) {
       return;
     }
     let data;
+    const items = cartItemsResolved();
+    const cartTotal = computeCartTotals(items).total;
     try {
-      data = await getDeliverySettings();
+      data = await getDeliveryQuote(cartTotal);
     } catch (e) {
-      const cartTotal = computeCartTotals(cartItemsResolved()).total;
       if (elMobileCartTotal) elMobileCartTotal.innerHTML = "<strong>" + money(cartTotal) + "</strong>";
       if (elCartTotal) elCartTotal.innerHTML = "<strong>" + money(cartTotal) + "</strong>";
       if (elMobileDeliveryProgressWrap) elMobileDeliveryProgressWrap.classList.add("hidden");
@@ -20045,8 +20636,6 @@ function setBottomNavActive(tab) {
     }
     const deliveryCost = Number(data?.delivery_cost || 0) || 0;
     const freeFrom = data?.free_delivery_from != null ? Number(data.free_delivery_from) : null;
-    const items = cartItemsResolved();
-    const cartTotal = computeCartTotals(items).total;
     const deliveryApplied = freeFrom != null && cartTotal >= freeFrom ? 0 : deliveryCost;
     const setTotalHtml = (el, total, applied) => {
       if (!el) return;
@@ -20777,19 +21366,48 @@ function setBottomNavActive(tab) {
     const baseOrderTotal = roundPrice(Number(cartTotals.total || 0));
 
     const cfg = await getOrderConfig();
-    let deliverySettings = null;
+    let defaultDeliverySettings = null;
     try {
-      deliverySettings = await getDeliverySettings();
+      defaultDeliverySettings = await getDeliverySettings();
     } catch (err) {
       console.error("Failed to load delivery settings:", err);
     }
-    const deliveryRules = {
-      cost: Number(deliverySettings?.delivery_cost || 0),
-      minOrder: Number(deliverySettings?.min_order_amount || 0),
-      freeFrom: deliverySettings?.free_delivery_from != null ? Number(deliverySettings.free_delivery_from) : null,
-      hasSettings: Boolean(deliverySettings?.has_settings),
+    let deliveryQuote = null;
+    try {
+      deliveryQuote = await getDeliveryQuote(baseOrderTotal);
+    } catch (err) {
+      console.error("Failed to load delivery quote:", err);
+    }
+    let deliveryRules = {
+      cost: Number(deliveryQuote?.delivery_cost || 0),
+      minOrder: Number(deliveryQuote?.min_order_amount || 0),
+      freeFrom: deliveryQuote?.free_delivery_from != null ? Number(deliveryQuote.free_delivery_from) : null,
+      hasSettings: Boolean(deliveryQuote?.has_settings),
+      source: str(deliveryQuote?.source || "default"),
+      zoneId: deliveryQuote?.delivery_zone_id != null ? Number(deliveryQuote.delivery_zone_id) : null,
+      zoneName: str(deliveryQuote?.delivery_zone_name || "").trim() || null,
+      storeId: deliveryQuote?.delivery_store_id != null ? Number(deliveryQuote.delivery_store_id) : null,
+      etaMinutes: deliveryQuote?.eta_minutes != null ? Number(deliveryQuote.eta_minutes) : null,
     };
     const draft = loadCheckoutDraft();
+
+    function resolveCheckoutEtaMinutes() {
+      if (deliveryRules?.etaMinutes != null) {
+        const quoteEta = Number(deliveryRules.etaMinutes);
+        if (Number.isFinite(quoteEta) && quoteEta >= 0) return quoteEta;
+      }
+      const defaultEtaRaw = defaultDeliverySettings?.eta_minutes;
+      if (defaultEtaRaw != null) {
+        const defaultEta = Number(defaultEtaRaw);
+        if (Number.isFinite(defaultEta) && defaultEta >= 0) return defaultEta;
+      }
+      return null;
+    }
+
+    function getCheckoutEtaLabel() {
+      const etaMinutes = resolveCheckoutEtaMinutes();
+      return etaMinutes == null ? "40-80 мин" : `${etaMinutes} мин`;
+    }
 
     const me = await fetchMeSafe(); // если залогинен — подставим
     const promo = { value: draft.promo_code || "" };
@@ -20901,6 +21519,22 @@ function setBottomNavActive(tab) {
     const orderTotal = previewSummary
       ? roundPrice(Number(previewSummary.items_total || 0))
       : roundPrice(Math.max(0, baseOrderTotal - customerOrderDiscountAmount));
+    try {
+      deliveryQuote = await getDeliveryQuote(orderTotal);
+      deliveryRules = {
+        cost: Number(deliveryQuote?.delivery_cost || 0),
+        minOrder: Number(deliveryQuote?.min_order_amount || 0),
+        freeFrom: deliveryQuote?.free_delivery_from != null ? Number(deliveryQuote.free_delivery_from) : null,
+        hasSettings: Boolean(deliveryQuote?.has_settings),
+        source: str(deliveryQuote?.source || "default"),
+        zoneId: deliveryQuote?.delivery_zone_id != null ? Number(deliveryQuote.delivery_zone_id) : null,
+        zoneName: str(deliveryQuote?.delivery_zone_name || "").trim() || null,
+        storeId: deliveryQuote?.delivery_store_id != null ? Number(deliveryQuote.delivery_store_id) : null,
+        etaMinutes: deliveryQuote?.eta_minutes != null ? Number(deliveryQuote.eta_minutes) : null,
+      };
+    } catch (err) {
+      console.error("Failed to refresh delivery quote:", err);
+    }
     const checkoutTotalWithDelivery = orderTotal + getDeliveryCostForTotal(orderTotal);
     function setCheckoutSubmitLabel(payableTotal = checkoutTotalWithDelivery) {
       const label = `Заказать · ${money(payableTotal)}`;
@@ -21920,7 +22554,7 @@ function setBottomNavActive(tab) {
     const asapNowLabel = document.createElement("button");
     asapNowLabel.type = "button";
     asapNowLabel.className = "shop-checkout-select shop-checkout-date-display shop-checkout-time-static-label";
-    asapNowLabel.textContent = "40-80 мин";
+    asapNowLabel.textContent = getCheckoutEtaLabel();
     asapNowLabel.disabled = true;
     asapNowWrap.appendChild(asapNowLabel);
     timeRow.appendChild(asapNowWrap);
@@ -22139,6 +22773,9 @@ function setBottomNavActive(tab) {
       if (todayAtTimeLabel) {
         todayAtTimeLabel.textContent = showAtTimePair ? "Сегодня" : "Сейчас";
       }
+      if (asapNowLabel) {
+        asapNowLabel.textContent = getCheckoutEtaLabel();
+      }
       dateSection.style.display = isOnDate ? "" : "none";
       todayAtTimeWrap.style.display = (showAtTimePair || showAsapPair) ? "" : "none";
       timeSlotsWrapAtTime.style.display = showAtTimePair ? "" : "none";
@@ -22236,19 +22873,20 @@ function setBottomNavActive(tab) {
       registerCheckoutCleanup(() => paySelect.destroy());
     }
 
-    const changeAmounts = [500, 1000, 2000, 5000].filter(v => v > currentPayableTotal);
-    const changeOptions = [
-      { code: "", title: "Сдача не нужна" },
-      ...changeAmounts.map(v => ({ code: String(v), title: String(v) })),
-      { code: "custom", title: "Другая сумма" },
-    ];
-    const isCustomChange = draft.change_from && !changeAmounts.includes(draft.change_from);
-    const changeDefault = isCustomChange ? "custom" : (draft.change_from ? String(draft.change_from) : "");
-    const changeSelect = buildTimeWheelPicker(changeOptions, changeDefault);
-    if (changeSelect && typeof changeSelect.destroy === "function") {
-      registerCheckoutCleanup(() => changeSelect.destroy());
+    const changePresetBaseAmounts = [500, 1000, 2000, 5000];
+    const draftChangeFrom = Number(draft.change_from || 0);
+    const isDraftPresetChange = changePresetBaseAmounts.includes(draftChangeFrom);
+    let changePresetAmounts = changePresetBaseAmounts.filter(v => v > currentPayableTotal);
+    let changeMode = "none";
+    let selectedChangePreset = null;
+    if (draftChangeFrom > 0) {
+      if (isDraftPresetChange && changePresetAmounts.includes(draftChangeFrom)) {
+        changeMode = "preset";
+        selectedChangePreset = draftChangeFrom;
+      } else if (!isDraftPresetChange) {
+        changeMode = "custom";
+      }
     }
-
     const payWrap = document.createElement("div");
     const payLabel = document.createElement("label");
     payLabel.className = "field-label";
@@ -22276,7 +22914,13 @@ function setBottomNavActive(tab) {
     changeLabel.textContent = "Сдача";
     changeLabel.style.display = "none";
     changeWrap.appendChild(changeLabel);
-    changeWrap.appendChild(changeSelect.root);
+
+    const changeCashScroll = document.createElement("div");
+    changeCashScroll.className = "shop-checkout-change-scroll no-scrollbar";
+    const changeCashChips = document.createElement("div");
+    changeCashChips.className = "shop-checkout-change-chips";
+    changeCashScroll.appendChild(changeCashChips);
+    changeWrap.appendChild(changeCashScroll);
 
     const changeNonCashHint = document.createElement("button");
     changeNonCashHint.type = "button";
@@ -22292,16 +22936,127 @@ function setBottomNavActive(tab) {
     changeCustomInput.type = "number";
     changeCustomInput.min = String(minChangeAmount);
     changeCustomInput.placeholder = `Больше ${Math.ceil(currentPayableTotal)}`;
-    changeCustomInput.value = isCustomChange ? String(draft.change_from) : "";
-    changeCustomInput.style.display = isCustomChange ? "" : "none";
+    changeCustomInput.value = changeMode === "custom" && draftChangeFrom > 0 ? String(draftChangeFrom) : "";
     changeCustomInput.addEventListener("blur", () => {
       const val = parseInt(changeCustomInput.value, 10);
       if (val && val <= currentPayableTotal) {
         changeCustomInput.value = "";
         alert(`Сумма должна быть больше ${Math.ceil(currentPayableTotal)} ₽`);
       }
+      updatePaymentSummaryRows();
     });
-    changeWrap.appendChild(changeCustomInput);
+    changeCustomInput.addEventListener("input", () => {
+      updatePaymentSummaryRows();
+    });
+
+    function getAvailableChangeAmounts() {
+      return changePresetBaseAmounts.filter(v => v > currentPayableTotal);
+    }
+
+    function syncChangeCustomInputMeta() {
+      const minAmount = Math.ceil(currentPayableTotal) + 1;
+      const placeholder = `Больше ${Math.ceil(currentPayableTotal)}`;
+      changeCustomInput.min = String(minAmount);
+      changeCustomInput.placeholder = placeholder;
+      changeCustomInput.size = Math.max(10, placeholder.length + 1);
+      changeCustomInput.style.width = `${Math.max(10, placeholder.length + 1)}ch`;
+    }
+
+    function scrollCashChangeIntoView(target) {
+      if (!target || paySelect.getValue() !== "cash") return;
+      requestAnimationFrame(() => {
+        try {
+          target.scrollIntoView({ inline: "nearest", block: "nearest", behavior: "smooth" });
+        } catch {}
+      });
+    }
+
+    function createChangeChip(label, opts = {}) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "shop-checkout-change-chip" + (opts.active ? " is-active" : "");
+      btn.textContent = label;
+      if (typeof opts.onClick === "function") {
+        btn.addEventListener("click", opts.onClick);
+      }
+      return btn;
+    }
+
+    function renderChangeCashChips() {
+      changeCashChips.innerHTML = "";
+      let activeNode = null;
+
+      const noneChip = createChangeChip("Без сдачи", {
+        active: changeMode === "none",
+        onClick: () => {
+          changeMode = "none";
+          selectedChangePreset = null;
+          refreshChangeVisibility();
+        },
+      });
+      if (changeMode === "none") activeNode = noneChip;
+      changeCashChips.appendChild(noneChip);
+
+      changePresetAmounts.forEach((amount) => {
+        const presetChip = createChangeChip(String(amount), {
+          active: changeMode === "preset" && Number(selectedChangePreset) === Number(amount),
+          onClick: () => {
+            changeMode = "preset";
+            selectedChangePreset = amount;
+            refreshChangeVisibility();
+          },
+        });
+        if (changeMode === "preset" && Number(selectedChangePreset) === Number(amount)) {
+          activeNode = presetChip;
+        }
+        changeCashChips.appendChild(presetChip);
+      });
+
+      if (changeMode === "custom") {
+        const customWrap = document.createElement("div");
+        customWrap.className = "shop-checkout-change-chip shop-checkout-change-chip--custom is-active";
+        customWrap.appendChild(changeCustomInput);
+        changeCashChips.appendChild(customWrap);
+        activeNode = customWrap;
+        if (paySelect.getValue() === "cash") {
+          requestAnimationFrame(() => {
+            try {
+              changeCustomInput.focus();
+              const caretPos = changeCustomInput.value.length;
+              changeCustomInput.setSelectionRange(caretPos, caretPos);
+            } catch {}
+            scrollCashChangeIntoView(customWrap);
+          });
+        }
+      } else {
+        const customChip = createChangeChip("Другая сумма", {
+          onClick: () => {
+            changeMode = "custom";
+            selectedChangePreset = null;
+            refreshChangeVisibility();
+          },
+        });
+        changeCashChips.appendChild(customChip);
+      }
+
+      if (activeNode && changeMode !== "custom" && paySelect.getValue() === "cash") {
+        scrollCashChangeIntoView(activeNode);
+      }
+    }
+
+    changeCashScroll.addEventListener("wheel", (event) => {
+      if (!event) return;
+      if (changeCashScroll.scrollWidth <= changeCashScroll.clientWidth + 1) return;
+      const deltaX = Number(event.deltaX || 0);
+      const deltaY = Number(event.deltaY || 0);
+      const rawDelta = Math.abs(deltaX) > Math.abs(deltaY) ? deltaX : deltaY;
+      if (!Number.isFinite(rawDelta) || Math.abs(rawDelta) < 0.5) return;
+      event.preventDefault();
+      changeCashScroll.scrollLeft += rawDelta;
+    }, { passive: false });
+
+    syncChangeCustomInputMeta();
+    renderChangeCashChips();
 
     const payMethodRow = document.createElement("div");
     payMethodRow.className = "shop-checkout-method-block";
@@ -22332,6 +23087,43 @@ function setBottomNavActive(tab) {
     deliveryInfoWrap.appendChild(deliveryMinNote);
 
     wrap.appendChild(deliveryInfoWrap);
+
+    function getSelectedPaymentTitle() {
+      const code = str(paySelect.getValue()).trim();
+      if (!code) return "";
+      const payment = payments.find((item) => str(item?.code).trim() === code);
+      return str(payment?.title).trim();
+    }
+
+    const paymentSummaryRow = document.createElement("div");
+    paymentSummaryRow.className = "shop-checkout-grid-row";
+    const paymentSummaryLabel = document.createElement("div");
+    paymentSummaryLabel.className = "muted";
+    paymentSummaryLabel.textContent = "Оплата";
+    const paymentSummaryValue = document.createElement("div");
+    paymentSummaryRow.appendChild(paymentSummaryLabel);
+    paymentSummaryRow.appendChild(paymentSummaryValue);
+    wrap.appendChild(paymentSummaryRow);
+
+    const changeFromSummaryRow = document.createElement("div");
+    changeFromSummaryRow.className = "shop-checkout-grid-row";
+    const changeFromSummaryLabel = document.createElement("div");
+    changeFromSummaryLabel.className = "muted";
+    changeFromSummaryLabel.textContent = "Сдача с";
+    const changeFromSummaryValue = document.createElement("div");
+    changeFromSummaryRow.appendChild(changeFromSummaryLabel);
+    changeFromSummaryRow.appendChild(changeFromSummaryValue);
+    wrap.appendChild(changeFromSummaryRow);
+
+    const changeAmountSummaryRow = document.createElement("div");
+    changeAmountSummaryRow.className = "shop-checkout-grid-row";
+    const changeAmountSummaryLabel = document.createElement("div");
+    changeAmountSummaryLabel.className = "muted";
+    changeAmountSummaryLabel.textContent = "Сдача";
+    const changeAmountSummaryValue = document.createElement("div");
+    changeAmountSummaryRow.appendChild(changeAmountSummaryLabel);
+    changeAmountSummaryRow.appendChild(changeAmountSummaryValue);
+    wrap.appendChild(changeAmountSummaryRow);
 
     const totalBeforeCustomerDiscount = roundPrice(Number(cartTotals.total || 0));
     const itemLevelDiscount = roundPrice(Number(cartTotals.totalDiscount || 0));
@@ -22608,26 +23400,42 @@ function setBottomNavActive(tab) {
       }
     }
 
+    function updatePaymentSummaryRows() {
+      const paymentTitle = getSelectedPaymentTitle();
+      paymentSummaryValue.textContent = paymentTitle;
+      paymentSummaryRow.style.display = paymentTitle ? "" : "none";
+
+      const changeFromValue = Number(getChangeFromValue() || 0);
+      const showChangeRows = paySelect.getValue() === "cash" && changeFromValue > currentPayableTotal;
+      if (!showChangeRows) {
+        changeFromSummaryRow.style.display = "none";
+        changeAmountSummaryRow.style.display = "none";
+        changeFromSummaryValue.textContent = "";
+        changeAmountSummaryValue.textContent = "";
+        return;
+      }
+
+      const changeAmount = roundPrice(changeFromValue - currentPayableTotal);
+      changeFromSummaryValue.textContent = money(changeFromValue);
+      changeAmountSummaryValue.textContent = money(changeAmount);
+      changeFromSummaryRow.style.display = "";
+      changeAmountSummaryRow.style.display = "";
+    }
+
     function updateChangeOptions(nextTotal) {
       currentPayableTotal = nextTotal;
-      const amounts = [500, 1000, 2000, 5000].filter(v => v > currentPayableTotal);
-      const options = [
-        { code: "", title: "Сдача не нужна" },
-        ...amounts.map(v => ({ code: String(v), title: String(v) })),
-        { code: "custom", title: "Другая сумма" },
-      ];
-      const currentValue = changeSelect.getValue();
-      const isCustom = currentValue === "custom";
-      const nextValue = isCustom ? "custom" : (options.find(o => o.code === currentValue) ? currentValue : "");
-      changeSelect.setOptions(options, nextValue);
-
-      const minAmount = Math.ceil(currentPayableTotal) + 1;
-      changeCustomInput.min = String(minAmount);
-      changeCustomInput.placeholder = `Больше ${Math.ceil(currentPayableTotal)}`;
+      changePresetAmounts = getAvailableChangeAmounts();
+      if (changeMode === "preset" && !changePresetAmounts.includes(Number(selectedChangePreset))) {
+        changeMode = "none";
+        selectedChangePreset = null;
+      }
+      syncChangeCustomInputMeta();
       if (changeCustomInput.value) {
         const val = parseInt(changeCustomInput.value, 10);
         if (val && val <= currentPayableTotal) changeCustomInput.value = "";
       }
+      renderChangeCashChips();
+      updatePaymentSummaryRows();
     }
 
     function updateDeliveryPricing() {
@@ -22673,6 +23481,7 @@ function setBottomNavActive(tab) {
 
       if (totalValue) totalValue.textContent = money(payableTotal);
       setCheckoutSubmitLabel(payableTotal);
+      updatePaymentSummaryRows();
 
       if (actions?.submitBtn) {
         const shouldBlock = isDelivery && deliveryRules.minOrder > 0 && orderTotal < deliveryRules.minOrder;
@@ -22683,27 +23492,26 @@ function setBottomNavActive(tab) {
     function refreshChangeVisibility() {
       const isCash = paySelect.getValue() === "cash";
       changeWrap.style.display = "";
-      changeSelect.root.style.display = isCash ? "" : "none";
+      changeCashScroll.style.display = isCash ? "" : "none";
       changeNonCashHint.style.display = isCash ? "none" : "";
-      const isCustom = changeSelect.getValue() === "custom";
-      const showCustomInput = isCash && isCustom;
-      changeCustomInput.style.display = showCustomInput ? "" : "none";
-      changeWrap.classList.toggle("is-combined", showCustomInput);
+      changeWrap.classList.toggle("is-cash", isCash);
+      if (isCash) {
+        renderChangeCashChips();
+      }
+      updatePaymentSummaryRows();
     }
     paySelect.root.addEventListener("change", clearPaymentInvalidState);
     paySelect.root.addEventListener("change", refreshChangeVisibility);
-    changeSelect.root.addEventListener("change", refreshChangeVisibility);
     refreshChangeVisibility();
     updateDeliveryPricing();
 
     function getChangeFromValue() {
-      const val = changeSelect.getValue();
-      if (!val) return null;
-      if (val === "custom") {
+      if (changeMode === "none") return null;
+      if (changeMode === "custom") {
         const customVal = parseInt(changeCustomInput.value, 10);
-        return customVal > 0 ? customVal : null;
+        return customVal > currentPayableTotal ? customVal : null;
       }
-      return Number(val);
+      return Number(selectedChangePreset || 0) || null;
     }
 
       if (hasAddressEditor) {
@@ -22928,6 +23736,21 @@ function setBottomNavActive(tab) {
         method_code: methodSelect.getValue() || methodDefault || "takeaway",
         delivery_address: str(address.value).trim() || null,
         delivery_address_id: (methodSelect.getValue() || methodDefault || "takeaway") === "delivery" && state.selectedAddress?.id ? Number(state.selectedAddress.id) : null,
+        delivery_address_city: (methodSelect.getValue() || methodDefault || "takeaway") === "delivery" ? str(state.selectedAddress?.city || "").trim() || null : null,
+        delivery_address_street: (methodSelect.getValue() || methodDefault || "takeaway") === "delivery" ? str(state.selectedAddress?.street || "").trim() || null : null,
+        delivery_address_house: (methodSelect.getValue() || methodDefault || "takeaway") === "delivery" ? str(state.selectedAddress?.house || "").trim() || null : null,
+        delivery_address_entrance: (methodSelect.getValue() || methodDefault || "takeaway") === "delivery" ? str(state.selectedAddress?.entrance || "").trim() || null : null,
+        delivery_address_floor: (methodSelect.getValue() || methodDefault || "takeaway") === "delivery" ? str(state.selectedAddress?.floor || "").trim() || null : null,
+        delivery_address_apartment: (methodSelect.getValue() || methodDefault || "takeaway") === "delivery" ? str(state.selectedAddress?.apartment || "").trim() || null : null,
+        delivery_address_ref: (methodSelect.getValue() || methodDefault || "takeaway") === "delivery" ? str(state.selectedAddress?.address_ref || "").trim() || null : null,
+        delivery_selected_object_type: (methodSelect.getValue() || methodDefault || "takeaway") === "delivery" ? str(state.selectedAddress?.selected_object_type || "").trim() || null : null,
+        delivery_resolved_city_source_key: (methodSelect.getValue() || methodDefault || "takeaway") === "delivery" ? str(state.selectedAddress?.resolved_city_source_key || "").trim() || null : null,
+        delivery_address_context_locality: (methodSelect.getValue() || methodDefault || "takeaway") === "delivery" ? str(state.selectedAddress?.address_context_locality || "").trim() || null : null,
+        delivery_address_normalized_display: (methodSelect.getValue() || methodDefault || "takeaway") === "delivery" ? str(state.selectedAddress?.address_normalized_display || "").trim() || null : null,
+        delivery_address_lat: (methodSelect.getValue() || methodDefault || "takeaway") === "delivery" ? state.selectedAddress?.lat ?? null : null,
+        delivery_address_lng: (methodSelect.getValue() || methodDefault || "takeaway") === "delivery" ? state.selectedAddress?.lng ?? null : null,
+        delivery_zone_id: (methodSelect.getValue() || methodDefault || "takeaway") === "delivery" ? state.selectedAddress?.delivery_zone_id ?? null : null,
+        delivery_store_id: (methodSelect.getValue() || methodDefault || "takeaway") === "delivery" ? state.selectedAddress?.delivery_store_id ?? null : null,
         pickup_store_id: selectedPickupStoreId || null,
         comment: getCommentValue() || null,
         address_comment: (draft && draft.address_comment) ? str(draft.address_comment).trim() || null : null,
@@ -23305,15 +24128,7 @@ function initShopLate() {
         elCheckoutBtn.addEventListener("click", async () => {
           const authorized = await requireAuthForCheckout({ isSheet: false });
           if (!authorized) return;
-          if (!elCheckoutContent) return;
-          showCheckoutView();
-          await openCheckoutView({
-            container: elCheckoutContent,
-            onBack: showCartView,
-            hasAddressEditor: true,
-            isSheet: false,
-            actions: { submitBtn: elCheckoutSubmitBtn, backBtn: elCheckoutBackBtn },
-          });
+          await startCheckoutFlow({ isSheet: false });
         });
       }
 

@@ -12,10 +12,16 @@
 
     const stores = window._pickupStores || [];
     const cities = [...new Set(stores.map(s => s.city).filter(Boolean))].sort();
+    const placeholder = str(
+      wrapEl.dataset.placeholder
+      || trigger.getAttribute("aria-label")
+      || "Выберите"
+    ).trim() || "Выберите";
     const current = (selectedValue && cities.includes(selectedValue)) ? selectedValue : (cities[0] || "");
 
     wrapEl.dataset.value = current;
-    valueEl.textContent = current || "—";
+    valueEl.textContent = current || placeholder;
+    valueEl.classList.toggle("is-placeholder", !current);
     dropdown.innerHTML = "";
 
     cities.forEach(c => {
@@ -27,10 +33,12 @@
         e.stopPropagation();
         wrapEl.dataset.value = c;
         valueEl.textContent = c;
+        valueEl.classList.remove("is-placeholder");
         dropdown.querySelectorAll(".custom-select-option").forEach(o => o.classList.remove("is-selected"));
         opt.classList.add("is-selected");
         dropdown.classList.add("hidden");
         wrapEl.classList.remove("is-open");
+        wrapEl.dispatchEvent(new Event("change"));
       });
       dropdown.appendChild(opt);
     });
@@ -204,6 +212,11 @@
   const elPickupList = $("#shopPickupList");
 
   const elAddrCity = $("#shopAddrCity");
+  const elAddrLookupWrap = $("#shopAddrLookupWrap");
+  const elAddrLookup = $("#shopAddrLookup");
+  const elAddrLookupPopover = $("#shopAddrLookupPopover");
+  const elAddrLookupStatus = $("#shopAddrLookupStatus");
+  const elAddrLookupResults = $("#shopAddrLookupResults");
   const elAddrStreet = $("#shopAddrStreet");
   const elAddrHouse = $("#shopAddrHouse");
   const elAddrEntrance = $("#shopAddrEntrance");
@@ -361,6 +374,14 @@
     } catch {
       return null;
     }
+  }
+
+  function isAddressMapModeEnabled() {
+    const tenant = getTenantFromStorage();
+    if (tenant && Object.prototype.hasOwnProperty.call(tenant, "store_address_map_enabled")) {
+      return Boolean(tenant.store_address_map_enabled);
+    }
+    return Boolean(window.__shopOrderConfig && window.__shopOrderConfig.storeAddressMapEnabled);
   }
 
   function getPriceRoundingSettings() {
@@ -765,12 +786,22 @@
     addresses: [],
     selectedAddress: null,
     addressEditingId: null,
+    _addressFormResolved: null,
     _addressFormBackMode: null,
     _addressListBackMode: null,
     _addressListMode: "delivery",
     _addressPendingAddress: null,
     _addressPendingPickupStoreId: null,
     _selectedPickupCity: null,
+  };
+  const addressLookupState = {
+    open: false,
+    items: [],
+    activeIndex: -1,
+    status: "",
+    mode: "idle",
+    requestSeq: 0,
+    debounceTimer: null,
   };
   let mobileUiState = {
     isMobile: false,
@@ -4186,6 +4217,213 @@
     try { localStorage.removeItem(ADDRESS_DRAFT_KEY); } catch {}
   }
 
+  function normalizeAddressCoordinate(value, axis = "lat") {
+    const raw = str(value).trim();
+    if (!raw) return null;
+    const numeric = Number(raw);
+    if (!Number.isFinite(numeric)) return null;
+    const limit = axis === "lat" ? 90 : 180;
+    if (numeric < -limit || numeric > limit) return null;
+    return Number(numeric.toFixed(7));
+  }
+
+  function normalizeAddressId(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric <= 0) return null;
+    return Math.round(numeric);
+  }
+
+  function buildAddressLookupDisplay(address) {
+    const source = address && typeof address === "object" ? address : {};
+    const city = str(source.city).trim();
+    const locality = str(source.address_context_locality || source.context_locality).trim();
+    const street = str(source.street).trim();
+    const house = str(source.house).trim();
+    const normalized = str(source.address_normalized_display).trim();
+    const base = [street, house].filter(Boolean).join(", ").trim() || normalized;
+    if (!base) return "";
+    if (!locality || locality.toLowerCase() === city.toLowerCase()) return base;
+    if (base.toLowerCase().startsWith(locality.toLowerCase())) return base;
+    return `${locality}, ${base}`;
+  }
+
+  function getAddressLookupItemType(item) {
+    const rawType = str(item && (item.object_type || item.selected_object_type)).trim().toLowerCase();
+    if (rawType === "street") return "street";
+    if (rawType === "context-locality" || rawType === "place" || rawType === "context") return "context-locality";
+    return "address";
+  }
+
+  function buildAddressLookupSelectionDisplay(item, cityValue = "") {
+    const source = item && typeof item === "object" ? item : {};
+    const itemType = getAddressLookupItemType(source);
+    const city = str(cityValue || source.city_name).trim();
+    const context = str(source.context_locality || source.city_name || city).trim();
+    if (itemType === "context-locality") {
+      return context ? `${context}, ` : "";
+    }
+
+    const street = str(source.street_name || source.value || source.label).trim();
+    const house = str(source.house_number || source.house).trim();
+    const display = buildAddressLookupDisplay({
+      city,
+      street,
+      house: itemType === "address" ? house : "",
+      address_context_locality: context,
+      address_normalized_display: str(source.full_address || source.value || source.label).trim() || street,
+    });
+    if (itemType === "street" && display) {
+      return `${display}, `.replace(/\s*,\s*$/, ", ");
+    }
+    return display;
+  }
+
+  function buildAddressLookupSuggestionTitle(item, cityValue = "") {
+    const source = item && typeof item === "object" ? item : {};
+    const itemType = getAddressLookupItemType(source);
+    if (itemType === "context-locality") {
+      return str(source.context_locality || source.city_name || source.value || source.label).trim();
+    }
+    if (itemType === "street") {
+      return str(source.street_name || source.value || source.label).trim();
+    }
+    return buildAddressLookupDisplay({
+      city: str(cityValue || source.city_name).trim(),
+      street: str(source.street_name || source.value || source.label).trim(),
+      house: str(source.house_number || source.house).trim(),
+      address_context_locality: str(source.context_locality || source.city_name).trim(),
+      address_normalized_display: str(source.full_address || source.value || source.label).trim(),
+    }) || str(source.full_address || source.value || source.label).trim();
+  }
+
+  function buildAddressLookupIntermediateState(item, cityValue = "", currentResolved = null) {
+    const source = item && typeof item === "object" ? item : {};
+    const current = currentResolved && typeof currentResolved === "object" ? currentResolved : {};
+    const display = buildAddressLookupSelectionDisplay(source, cityValue);
+    return {
+      address_ref: str(source.source_key || source.selected_source_key).trim() || null,
+      selected_object_type: getAddressLookupItemType(source),
+      resolved_city_source_key: str(current.resolved_city_source_key || source.locality_source_key).trim() || null,
+      address_context_locality: str(source.context_locality || source.city_name).trim() || null,
+      address_normalized_display: display || null,
+      lat: null,
+      lng: null,
+      delivery_zone_id: null,
+      delivery_store_id: null,
+      _lookup_prefix: display || null,
+    };
+  }
+
+  function shouldPreserveAddressLookupResolution(resolvedState, nextValue) {
+    const resolved = resolvedState && typeof resolvedState === "object" ? resolvedState : {};
+    const selectedType = str(resolved.selected_object_type).trim().toLowerCase();
+    if (selectedType !== "street" && selectedType !== "context-locality") return false;
+    const lookupValue = str(nextValue).trim().toLowerCase();
+    const prefix = str(resolved._lookup_prefix || resolved.address_normalized_display).trim().toLowerCase();
+    if (!lookupValue || !prefix) return false;
+    return lookupValue === prefix || lookupValue.startsWith(prefix);
+  }
+
+  function extractResolvedAddressState(source) {
+    const address = source && typeof source === "object" ? source : {};
+    return {
+      address_ref: str(address.address_ref).trim() || null,
+      selected_object_type: str(address.selected_object_type).trim() || null,
+      resolved_city_source_key: str(address.resolved_city_source_key).trim() || null,
+      address_context_locality: str(address.address_context_locality || address.context_locality).trim() || null,
+      address_normalized_display: str(address.address_normalized_display).trim() || buildAddressLookupDisplay(address) || null,
+      lat: normalizeAddressCoordinate(address.lat, "lat"),
+      lng: normalizeAddressCoordinate(address.lng, "lng"),
+      delivery_zone_id: normalizeAddressId(address.delivery_zone_id),
+      delivery_store_id: normalizeAddressId(address.delivery_store_id),
+    };
+  }
+
+  function resetAddressFormResolvedState(source = null) {
+    state._addressFormResolved = extractResolvedAddressState(source);
+  }
+
+  function clearAddressFormResolution({ syncLookupFromFields = true, clearLookup = false } = {}) {
+    const current = state._addressFormResolved || {};
+    state._addressFormResolved = {
+      address_ref: null,
+      selected_object_type: null,
+      resolved_city_source_key: current.resolved_city_source_key || null,
+      address_context_locality: null,
+      address_normalized_display: null,
+      lat: null,
+      lng: null,
+      delivery_zone_id: null,
+      delivery_store_id: null,
+    };
+    if (elAddrLookup) {
+      if (clearLookup) {
+        elAddrLookup.value = "";
+      } else if (syncLookupFromFields) {
+        elAddrLookup.value = buildAddressLookupDisplay({
+          city: elAddrCity?.dataset?.value || "",
+          street: elAddrStreet?.value || "",
+          house: elAddrHouse?.value || "",
+          address_context_locality: "",
+        });
+      }
+    }
+  }
+
+  function syncAddressLookupResolutionFromInputValue(value) {
+    if (shouldPreserveAddressLookupResolution(state._addressFormResolved, value)) {
+      state._addressFormResolved = {
+        ...(state._addressFormResolved || {}),
+        address_normalized_display: str(value).trim() || null,
+        lat: null,
+        lng: null,
+        delivery_zone_id: null,
+        delivery_store_id: null,
+      };
+      return;
+    }
+    clearAddressFormResolution({ syncLookupFromFields: false });
+  }
+
+  function getAddressLookupContinuationInfo(value, resolvedState = null) {
+    const lookupValue = str(value).trim();
+    const currentResolved = resolvedState && typeof resolvedState === "object" ? resolvedState : {};
+    const selectedType = getAddressLookupItemType(currentResolved);
+    const selectedSourceKey = str(currentResolved.address_ref).trim();
+    const citySourceKey = str(currentResolved.resolved_city_source_key).trim();
+    if (!lookupValue) {
+      return {
+        preserve: false,
+        stage: "address",
+        query: "",
+        selectedSourceKey: "",
+        citySourceKey,
+      };
+    }
+
+    if (shouldPreserveAddressLookupResolution(currentResolved, lookupValue)) {
+      const prefix = str(currentResolved._lookup_prefix || currentResolved.address_normalized_display).trim();
+      const suffix = prefix && lookupValue.toLowerCase().startsWith(prefix.toLowerCase())
+        ? str(lookupValue.slice(prefix.length)).trim()
+        : lookupValue;
+      return {
+        preserve: true,
+        stage: selectedType === "street" && suffix ? "house" : "address",
+        query: suffix || lookupValue,
+        selectedSourceKey: selectedType === "street" || selectedType === "context-locality" ? selectedSourceKey : "",
+        citySourceKey,
+      };
+    }
+
+    return {
+      preserve: false,
+      stage: "address",
+      query: lookupValue,
+      selectedSourceKey: "",
+      citySourceKey,
+    };
+  }
+
   function normalizeAddressPayload(p) {
     const a = p && typeof p === "object" ? p : {};
     const out = {
@@ -4196,11 +4434,24 @@
       floor: str(a.floor).trim(),
       apartment: str(a.apartment).trim(),
       comment: str(a.comment).trim(),
+      address_ref: str(a.address_ref).trim() || null,
+      selected_object_type: str(a.selected_object_type).trim() || null,
+      resolved_city_source_key: str(a.resolved_city_source_key).trim() || null,
+      address_context_locality: str(a.address_context_locality || a.context_locality).trim() || null,
+      address_normalized_display: str(a.address_normalized_display).trim() || buildAddressLookupDisplay(a) || null,
+      lat: normalizeAddressCoordinate(a.lat, "lat"),
+      lng: normalizeAddressCoordinate(a.lng, "lng"),
+      delivery_zone_id: normalizeAddressId(a.delivery_zone_id),
+      delivery_store_id: normalizeAddressId(a.delivery_store_id),
     };
     if (!out.entrance) out.entrance = null;
     if (!out.floor) out.floor = null;
     if (!out.apartment) out.apartment = null;
     if (!out.comment) out.comment = null;
+    if (out.lat == null || out.lng == null) {
+      out.delivery_zone_id = null;
+      out.delivery_store_id = null;
+    }
     return out;
   }
 
@@ -4225,6 +4476,57 @@
     return state.selectedAddress ? formatAddressLine(state.selectedAddress) : "";
   }
 
+  const HEADER_STREET_TYPE_PREFIX_RE = /^\s*(?:(?:улица|ул\.?)|(?:проспект|просп\.?|пр-т|пр-кт)|(?:переулок|пер\.?)|(?:проезд|пр-д)|(?:бульвар|бул\.?|б-р)|(?:площадь|пл\.?)|(?:шоссе|ш\.?)|(?:аллея|ал\.?)|(?:набережная|наб\.?)|(?:тупик|туп\.?)|(?:тракт|тр\.?)|(?:линия|лин\.?)|(?:микрорайон|мкр\.?|мкрн\.?)|(?:квартал|кв-л)|(?:дорога|дор\.?))\s+/i;
+  const HEADER_STREET_TYPE_SUFFIX_RE = /\s+(?:(?:улица|ул\.?)|(?:проспект|просп\.?|пр-т|пр-кт)|(?:переулок|пер\.?)|(?:проезд|пр-д)|(?:бульвар|бул\.?|б-р)|(?:площадь|пл\.?)|(?:шоссе|ш\.?)|(?:аллея|ал\.?)|(?:набережная|наб\.?)|(?:тупик|туп\.?)|(?:тракт|тр\.?)|(?:линия|лин\.?)|(?:микрорайон|мкр\.?|мкрн\.?)|(?:квартал|кв-л)|(?:дорога|дор\.?))\.?\s*$/i;
+
+  function normalizeHeaderStreetName(streetRaw) {
+    const street = str(streetRaw).trim();
+    if (!street) return "";
+    const strippedPrefix = street.replace(HEADER_STREET_TYPE_PREFIX_RE, "").trim();
+    const strippedSuffix = strippedPrefix.replace(HEADER_STREET_TYPE_SUFFIX_RE, "").trim();
+    return strippedSuffix || strippedPrefix || street;
+  }
+
+  function formatHeaderAddressStreetHouseApartment(a) {
+    if (!a) return "";
+    const street = normalizeHeaderStreetName(a.street) || str(a.street).trim();
+    const house = str(a.house).trim();
+    const apartment = str(a.apartment).trim();
+
+    const base = [street, house].filter(Boolean).join(" ").trim();
+    if (!base) return "";
+    if (!apartment) return base;
+    return `${base}, кв ${apartment}`;
+  }
+
+  function formatHeaderPickupStoreAddress(store) {
+    if (!store) return "";
+    const rawAddress = str(store.address).trim();
+    const fallback = rawAddress || str(store.name).trim();
+    if (!rawAddress) return fallback;
+
+    const parts = rawAddress.split(",").map((part) => str(part).trim()).filter(Boolean);
+    if (!parts.length) return fallback;
+
+    let house = "";
+    let street = "";
+    for (let i = parts.length - 1; i >= 0; i -= 1) {
+      const part = parts[i];
+      if (!/\d/.test(part)) continue;
+      house = part;
+      street = i > 0 ? parts[i - 1] : "";
+      break;
+    }
+
+    if (!street) {
+      street = parts.length >= 2 ? parts[parts.length - 2] : parts[parts.length - 1];
+    }
+
+    const normalizedStreet = normalizeHeaderStreetName(street);
+    const compact = [normalizedStreet, house].filter(Boolean).join(" ").trim();
+    return compact || fallback;
+  }
+
   function formatAddressStreetHouseApartment(a) {
     if (!a) return "";
     const street = str(a.street).trim();
@@ -4235,6 +4537,250 @@
     if (!base) return "";
     if (!apartment) return base;
     return `${base}, кв ${apartment}`;
+  }
+
+  function getAddressLookupCityValue() {
+    return str(elAddrCity?.dataset?.value || "").trim();
+  }
+
+  function clearAddressLookupDebounce() {
+    if (!addressLookupState.debounceTimer) return;
+    clearTimeout(addressLookupState.debounceTimer);
+    addressLookupState.debounceTimer = null;
+  }
+
+  function renderAddressLookupPopover() {
+    if (!elAddrLookupPopover || !elAddrLookupStatus || !elAddrLookupResults) return;
+    const isVisible = addressLookupState.open && (
+      addressLookupState.mode !== "idle" ||
+      addressLookupState.items.length > 0
+    );
+    elAddrLookupPopover.classList.toggle("hidden", !isVisible);
+
+    const statusText = str(addressLookupState.status).trim();
+    elAddrLookupStatus.textContent = statusText;
+    elAddrLookupStatus.classList.toggle("hidden", !statusText);
+    elAddrLookupStatus.classList.toggle("is-error", addressLookupState.mode === "error");
+    elAddrLookupStatus.classList.toggle("is-loading", addressLookupState.mode === "loading");
+
+    elAddrLookupResults.innerHTML = "";
+    addressLookupState.items.forEach((item, index) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "shop-address-lookup-item";
+      if (index === addressLookupState.activeIndex) button.classList.add("is-active");
+      button.setAttribute("aria-selected", index === addressLookupState.activeIndex ? "true" : "false");
+
+      const title = document.createElement("div");
+      title.className = "shop-address-lookup-item-title";
+      title.textContent = buildAddressLookupSuggestionTitle(item, getAddressLookupCityValue());
+      button.appendChild(title);
+
+      const metaText = str(item.context_locality || item.city_name).trim();
+      if (metaText) {
+        const meta = document.createElement("div");
+        meta.className = "shop-address-lookup-item-meta";
+        meta.textContent = metaText;
+        button.appendChild(meta);
+      }
+
+      button.addEventListener("mouseenter", () => {
+        if (addressLookupState.activeIndex === index) return;
+        addressLookupState.activeIndex = index;
+        renderAddressLookupPopover();
+      });
+      button.addEventListener("click", async () => {
+        await applyAddressLookupSuggestion(item);
+      });
+
+      elAddrLookupResults.appendChild(button);
+    });
+  }
+
+  function closeAddressLookupPopover() {
+    clearAddressLookupDebounce();
+    addressLookupState.requestSeq += 1;
+    addressLookupState.open = false;
+    addressLookupState.items = [];
+    addressLookupState.activeIndex = -1;
+    addressLookupState.status = "";
+    addressLookupState.mode = "idle";
+    renderAddressLookupPopover();
+  }
+
+  function setAddressLookupStatus(message, mode = "idle") {
+    addressLookupState.status = str(message).trim();
+    addressLookupState.mode = str(mode).trim() || "idle";
+    if (addressLookupState.mode !== "idle" || addressLookupState.items.length) {
+      addressLookupState.open = true;
+    }
+    renderAddressLookupPopover();
+  }
+
+  function setAddressLookupItems(items) {
+    addressLookupState.items = Array.isArray(items) ? items.slice() : [];
+    addressLookupState.activeIndex = addressLookupState.items.length ? 0 : -1;
+    if (addressLookupState.items.length) {
+      addressLookupState.open = true;
+      if (addressLookupState.mode === "idle" || addressLookupState.mode === "loading" || addressLookupState.mode === "empty") {
+        addressLookupState.mode = "ready";
+      }
+    }
+    renderAddressLookupPopover();
+  }
+
+  async function applyAddressLookupSuggestion(item) {
+    const selectedItem = item && typeof item === "object" ? item : null;
+    if (!selectedItem) return;
+    const city = getAddressLookupCityValue();
+    const selectedType = getAddressLookupItemType(selectedItem);
+    if (selectedType !== "address") {
+      const nextCity = str(selectedItem.city_name || city).trim();
+      if (nextCity && elAddrCity) {
+        initCustomSelect(elAddrCity, nextCity);
+      }
+      const nextState = buildAddressLookupIntermediateState(selectedItem, nextCity || city, state._addressFormResolved);
+      if (elAddrLookup) {
+        elAddrLookup.value = str(nextState.address_normalized_display).trim();
+        elAddrLookup.focus();
+        const caretPos = elAddrLookup.value.length;
+        try {
+          elAddrLookup.setSelectionRange(caretPos, caretPos);
+        } catch (_) {}
+      }
+      if (elAddrStreet) {
+        elAddrStreet.value = selectedType === "street"
+          ? str(selectedItem.street_name || selectedItem.value || selectedItem.label).trim()
+          : "";
+      }
+      if (elAddrHouse) elAddrHouse.value = "";
+      state._addressFormResolved = nextState;
+      closeAddressLookupPopover();
+      return;
+    }
+
+    const subtotal = computeCartTotals(cartItemsResolved()).total;
+    try {
+      const json = await apiJson("/api/public/address-resolve", {
+        method: "POST",
+        body: {
+          subtotal,
+          city,
+          street: selectedItem.street_name || "",
+          house: selectedItem.house_number || "",
+          address_ref: selectedItem.source_key || "",
+          selected_object_type: selectedItem.object_type || "address",
+          address_context_locality: selectedItem.context_locality || selectedItem.city_name || "",
+          address_normalized_display: selectedItem.full_address || selectedItem.value || selectedItem.label || "",
+          lat: selectedItem.lat,
+          lng: selectedItem.lng,
+        },
+      });
+      const data = json?.data || {};
+      if (data.city && elAddrCity) {
+        initCustomSelect(elAddrCity, data.city);
+      }
+      if (elAddrLookup) {
+        elAddrLookup.value = str(data.address_normalized_display || buildAddressLookupDisplay(data)).trim();
+      }
+      if (elAddrStreet) elAddrStreet.value = str(data.street || selectedItem.street_name || "").trim();
+      if (elAddrHouse) elAddrHouse.value = str(data.house || selectedItem.house_number || "").trim();
+      state._addressFormResolved = {
+        ...extractResolvedAddressState({
+          address_ref: data.address_ref,
+          selected_object_type: data.selected_object_type,
+          resolved_city_source_key: data.resolved_city_source_key,
+          address_context_locality: data.context_locality,
+          address_normalized_display: data.address_normalized_display,
+          lat: data.lat,
+          lng: data.lng,
+          delivery_zone_id: data.delivery_zone_id,
+          delivery_store_id: data.delivery_store_id,
+        }),
+        _lookup_prefix: str(data.address_normalized_display || buildAddressLookupDisplay(data)).trim() || null,
+      };
+      closeAddressLookupPopover();
+      if (typeof updateMobileDeliveryProgress === "function") {
+        Promise.resolve(updateMobileDeliveryProgress()).catch(() => {});
+      }
+    } catch (error) {
+      console.error(error);
+      setAddressLookupItems([]);
+      setAddressLookupStatus("Не удалось получить адрес.", "error");
+    }
+  }
+
+  async function searchAddressLookupSuggestions(query, requestId) {
+    const normalizedQuery = str(query).trim();
+    const city = getAddressLookupCityValue();
+    const continuation = getAddressLookupContinuationInfo(normalizedQuery, state._addressFormResolved);
+    const apiQuery = str(continuation.query).trim();
+    const minLength = continuation.stage === "house" ? 1 : 2;
+    if (!apiQuery || apiQuery.length < minLength) {
+      closeAddressLookupPopover();
+      return;
+    }
+    if (!city) {
+      setAddressLookupItems([]);
+      setAddressLookupStatus("Сначала выберите город.", "error");
+      return;
+    }
+    addressLookupState.open = true;
+    setAddressLookupStatus("Ищем адрес...", "loading");
+    try {
+      const params = new URLSearchParams({
+        stage: continuation.stage,
+        q: apiQuery,
+        city,
+      });
+      if (continuation.citySourceKey) {
+        params.set("city_source_key", continuation.citySourceKey);
+      }
+      if (continuation.selectedSourceKey) {
+        params.set("selected_source_key", continuation.selectedSourceKey);
+      }
+      const response = await fetch(`/api/public/address-suggest?${params.toString()}`, {
+        headers: {
+          "x-tenant-id": String(tenantId),
+        },
+      });
+      const json = await response.json().catch(() => null);
+      if (!response.ok || !json?.ok) {
+        throw new Error(json?.error || "ADDRESS_SUGGEST_FAILED");
+      }
+      if (requestId !== addressLookupState.requestSeq) return;
+      const items = Array.isArray(json?.data?.items) ? json.data.items : [];
+      if (!items.length) {
+        setAddressLookupItems([]);
+        setAddressLookupStatus("Ничего не найдено.", "empty");
+        return;
+      }
+      setAddressLookupItems(items);
+      setAddressLookupStatus(`Поиск: ${str(json?.data?.scope_label || city).trim()}`, "ready");
+    } catch (error) {
+      if (requestId !== addressLookupState.requestSeq) return;
+      console.error(error);
+      setAddressLookupItems([]);
+      setAddressLookupStatus("Не удалось получить подсказки адреса.", "error");
+    }
+  }
+
+  function scheduleAddressLookupSuggestions() {
+    if (!isAddressMapModeEnabled() || !elAddrLookup) return;
+    const normalizedValue = str(elAddrLookup.value).trim();
+    const continuation = getAddressLookupContinuationInfo(normalizedValue, state._addressFormResolved);
+    const minLength = continuation.stage === "house" ? 1 : 2;
+    clearAddressLookupDebounce();
+    addressLookupState.requestSeq += 1;
+    if (!normalizedValue || str(continuation.query).trim().length < minLength) {
+      closeAddressLookupPopover();
+      return;
+    }
+    const requestId = addressLookupState.requestSeq;
+    addressLookupState.debounceTimer = setTimeout(() => {
+      addressLookupState.debounceTimer = null;
+      searchAddressLookupSuggestions(normalizedValue, requestId);
+    }, 180);
   }
 
   function isDesktopViewport() {
@@ -4254,7 +4800,7 @@
 
   function getCartHeaderAddressLine() {
     const pickupStore = getHeaderPickupStore();
-    if (pickupStore) return str(pickupStore.address || pickupStore.name || "").trim();
+    if (pickupStore) return formatHeaderPickupStoreAddress(pickupStore);
     if (isDesktopViewport()) {
       return formatAddressStreetHouseApartment(state.selectedAddress);
     }
@@ -4295,8 +4841,8 @@
 
     const address = state.selectedAddress || null;
     const candidateIds = [
-      Number(address?.store_id || 0),
       Number(address?.delivery_store_id || 0),
+      Number(address?.store_id || 0),
       Number(getActiveStoreId() || 0),
     ].filter((id) => Number.isFinite(id) && id > 0);
 
@@ -4457,7 +5003,7 @@ function updateHeaderAddressWidget() {
     const stores = window._pickupStores || [];
     const store = stores.find((s) => Number(s.id) === Number(window._selectedPickupStoreId));
     if (store) {
-      textEl.textContent = store.address || store.name || "Самовывоз";
+      textEl.textContent = formatHeaderPickupStoreAddress(store) || "Самовывоз";
       textEl.classList.remove("is-placeholder");
       hasAddressText = true;
       if (iconEl) {
@@ -4475,14 +5021,15 @@ function updateHeaderAddressWidget() {
     }
     const a = state.selectedAddress;
     if (a) {
-      const parts = [];
-      const street = str(a.street).trim();
-      const house = str(a.house).trim();
-      if (street || house) parts.push([street, house].filter(Boolean).join(" "));
-      if (a.apartment) parts.push("кв " + str(a.apartment).trim());
-      textEl.textContent = parts.join(", ");
-      textEl.classList.remove("is-placeholder");
-      hasAddressText = true;
+      const headerAddressText = formatHeaderAddressStreetHouseApartment(a);
+      if (headerAddressText) {
+        textEl.textContent = headerAddressText;
+        textEl.classList.remove("is-placeholder");
+        hasAddressText = true;
+      } else {
+        textEl.textContent = "Укажите адрес доставки";
+        textEl.classList.add("is-placeholder");
+      }
     } else {
       textEl.textContent = "Укажите адрес доставки";
       textEl.classList.add("is-placeholder");
@@ -4722,6 +5269,9 @@ function setSheetHeaderMode(
     updateAddressChip();
     updateHeaderAddressWidget();
     syncSelectedAddressToCheckoutDraft();
+    if (typeof updateMobileDeliveryProgress === "function") {
+      Promise.resolve(updateMobileDeliveryProgress()).catch(() => {});
+    }
 
     // ???В корзине пусто?? checkout ? ??????? ????
     try {
@@ -4857,6 +5407,7 @@ async function showAddressFormView(prefill, editingId, backMode) {
 
   cleanupDesktopFavoritesPanelIfNeeded();
   setHeaderFavoritesButtonActive(false);
+  const addressMapModeEnabled = isAddressMapModeEnabled();
   state.addressEditingId = editingId ? Number(editingId) : null;
   state._addressFormBackMode = backMode || (state.selectedAddress ? "list" : "cart");
   cartViewMode = "address";
@@ -4877,6 +5428,14 @@ async function showAddressFormView(prefill, editingId, backMode) {
   if (elAddrCity) {
     initCustomSelect(elAddrCity, prefill?.city);
   }
+  resetAddressFormResolvedState(addressMapModeEnabled ? (prefill || null) : null);
+  if (elAddrLookupWrap) {
+    elAddrLookupWrap.classList.toggle("hidden", !addressMapModeEnabled);
+  }
+  if (elAddrLookup) {
+    elAddrLookup.value = addressMapModeEnabled ? buildAddressLookupDisplay(prefill || {}) : "";
+  }
+  closeAddressLookupPopover();
   if (elAddrStreet) elAddrStreet.value = str(prefill?.street || "");
   if (elAddrHouse) elAddrHouse.value = str(prefill?.house || "");
   if (elAddrEntrance) elAddrEntrance.value = str(prefill?.entrance || "");
@@ -4915,7 +5474,11 @@ async function showAddressFormView(prefill, editingId, backMode) {
 
   setCartFooterMode("hidden");
   queueMobileUiStateSync("showAddressFormView");
-  setTimeout(() => { try { elAddrStreet?.focus?.(); } catch {} }, 0);
+  setTimeout(() => {
+    try {
+      (addressMapModeEnabled ? elAddrLookup : elAddrStreet)?.focus?.();
+    } catch {}
+  }, 0);
 }
 
 function showPickupListView(backMode = "checkout") {
@@ -5843,6 +6406,75 @@ async function initAddresses() {
     });
   }
 
+  if (elAddrLookup) {
+    elAddrLookup.addEventListener("input", () => {
+      if (!isAddressMapModeEnabled()) return;
+      syncAddressLookupResolutionFromInputValue(elAddrLookup.value);
+      scheduleAddressLookupSuggestions();
+    });
+    elAddrLookup.addEventListener("focus", () => {
+      if (!isAddressMapModeEnabled()) return;
+      if (str(elAddrLookup.value).trim().length >= 2) {
+        scheduleAddressLookupSuggestions();
+      }
+    });
+    elAddrLookup.addEventListener("keydown", async (event) => {
+      if (!addressLookupState.open || !addressLookupState.items.length) return;
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        addressLookupState.activeIndex = Math.min(addressLookupState.items.length - 1, addressLookupState.activeIndex + 1);
+        renderAddressLookupPopover();
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        addressLookupState.activeIndex = Math.max(0, addressLookupState.activeIndex - 1);
+        renderAddressLookupPopover();
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeAddressLookupPopover();
+        return;
+      }
+      if (event.key === "Enter") {
+        const activeItem = addressLookupState.items[addressLookupState.activeIndex] || addressLookupState.items[0];
+        if (!activeItem) return;
+        event.preventDefault();
+        await applyAddressLookupSuggestion(activeItem);
+      }
+    });
+  }
+
+  if (elAddrCity) {
+    elAddrCity.addEventListener("change", () => {
+      if (!isAddressMapModeEnabled()) return;
+      closeAddressLookupPopover();
+      resetAddressFormResolvedState(null);
+      if (elAddrLookup) elAddrLookup.value = "";
+      if (elAddrStreet) elAddrStreet.value = "";
+      if (elAddrHouse) elAddrHouse.value = "";
+    });
+  }
+
+  [elAddrStreet, elAddrHouse].forEach((input) => {
+    if (!input) return;
+    input.addEventListener("input", () => {
+      if (!isAddressMapModeEnabled()) return;
+      const resolved = state._addressFormResolved || {};
+      if (!resolved.address_ref && resolved.lat == null && resolved.lng == null && !resolved.delivery_zone_id && !resolved.delivery_store_id) {
+        return;
+      }
+      clearAddressFormResolution({ syncLookupFromFields: true });
+    });
+  });
+
+  document.addEventListener("click", (event) => {
+    if (!elAddrLookupWrap || !elAddrLookupWrap.contains(event.target)) {
+      closeAddressLookupPopover();
+    }
+  });
+
   // ??????
   if (elAddressCancelBtn) {
     elAddressCancelBtn.addEventListener("click", () => {
@@ -5874,13 +6506,80 @@ async function initAddresses() {
     elAddressSaveBtn.addEventListener("click", async () => {
       const payload = normalizeAddressPayload({
         city: elAddrCity?.dataset?.value || "",
+        address_normalized_display: isAddressMapModeEnabled() ? elAddrLookup?.value : "",
         street: elAddrStreet?.value,
         house: elAddrHouse?.value,
         entrance: elAddrEntrance?.value,
         floor: elAddrFloor?.value,
         apartment: elAddrApartment?.value,
         comment: elAddrComment?.value,
+        ...(isAddressMapModeEnabled() ? (state._addressFormResolved || {}) : {}),
       });
+      if (!payload.city) return alert("Укажите город");
+      if (!payload.street || !payload.house) {
+        elAddressSaveBtn.disabled = true;
+        elAddressSaveBtn.textContent = "РЎРѕС…СЂР°РЅРµРЅРёРµ...";
+
+        try {
+          const me = await fetchMeSafe();
+          const token = getCustomerToken();
+
+          if (me && token) {
+            if (state.addressEditingId) {
+              await apiJson(`/api/public/me/addresses/${state.addressEditingId}`, {
+                method: "PUT",
+                body: payload,
+              });
+            } else {
+              await apiJson("/api/public/me/addresses", {
+                method: "POST",
+                body: { ...payload, is_default: 1 },
+              });
+            }
+            await refreshAddressState({ force: true });
+
+            if (state._addressFormBackMode === "profile") {
+              await openProfilePanel(null, { forceOpen: true, initialTab: "addresses" });
+            } else if (state._addressFormBackMode === "checkout" && elCheckoutContent) {
+              showCheckoutView();
+              openCheckoutView({
+                container: elCheckoutContent,
+                onBack: showCartView,
+                hasAddressEditor: true,
+                isSheet: false,
+                actions: { submitBtn: elCheckoutSubmitBtn, backBtn: elCheckoutBackBtn },
+              });
+            } else {
+              showCartView();
+            }
+          } else {
+            saveAddressDraft(payload);
+            setSelectedAddress({ ...payload, _local: true });
+
+            if (state._addressFormBackMode === "profile") {
+              await openProfilePanel(null, { forceOpen: true, initialTab: "addresses" });
+            } else if (state._addressFormBackMode === "checkout" && elCheckoutContent) {
+              showCheckoutView();
+              openCheckoutView({
+                container: elCheckoutContent,
+                onBack: showCartView,
+                hasAddressEditor: true,
+                isSheet: false,
+                actions: { submitBtn: elCheckoutSubmitBtn, backBtn: elCheckoutBackBtn },
+              });
+            } else {
+              showCartView();
+            }
+          }
+        } catch (e) {
+          console.error(e);
+          alert("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕС…СЂР°РЅРёС‚СЊ Р°РґСЂРµСЃ");
+        } finally {
+          elAddressSaveBtn.disabled = false;
+          elAddressSaveBtn.textContent = "РЎРѕС…СЂР°РЅРёС‚СЊ";
+        }
+        return;
+      }
 
       if (!payload.street) return alert("Укажите улицу");
       if (!payload.house) return alert("Укажите дом");

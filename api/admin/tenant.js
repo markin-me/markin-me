@@ -4,6 +4,38 @@ const crypto = require('crypto');
 const multer = require('multer');
 const bcrypt = require('bcryptjs');
 const { domainToASCII } = require('url');
+const { getEffectiveTelegramBotConfig } = require('../../data/system-settings');
+const { geocodeStoreAddress } = require('../../data/map-geocoder');
+const {
+  ensureTenantMapConfigColumns,
+  getTenantMapConfigRow,
+  normalizeTenantMapConfig,
+  saveTenantMapConfig,
+} = require('../../data/tenant-map-config');
+const {
+  normalizeLocalAddressText,
+  searchLocalAddressSuggest,
+  resolveLocalityByInput,
+  getLocalAddressIndexRowBySourceKey,
+} = require('../../data/local-address-index');
+const {
+  normalizeHouseToken: normalizeAddressServiceHouseToken,
+  isHouseToken: isAddressServiceHouseToken,
+  extractHouseToken: extractAddressServiceHouseToken,
+  removeHouseToken: removeAddressServiceHouseToken,
+} = require('../../services/address-service/src/normalization');
+const {
+  isAddressServiceConfigured,
+  resolveAddress: resolveAddressThroughService,
+} = require('../../data/address-service-client');
+const {
+  buildLegacyDeliveryPriceTiers,
+  deriveLegacyDeliveryFieldsFromTiers,
+  normalizeDeliveryEtaMinutes: normalizeDeliveryEtaMinutesShared,
+  normalizeDeliveryMoney: normalizeDeliveryMoneyShared,
+  normalizeDeliveryPriceTiersForOutput,
+  sanitizeDeliveryPriceTiers,
+} = require('../../data/delivery-price-tiers');
 
 module.exports = function makeAdminTenantRouter({ db, helpers }) {
   const router = express.Router();
@@ -46,10 +78,36 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
       sql: "smallint unsigned DEFAULT NULL COMMENT 'Guest chat TTL in days'"
     }
   ];
+  const tenantMapProviderColumns = [
+    {
+      name: 'map_provider_accounts_json',
+      sql: "text DEFAULT NULL COMMENT 'JSON list of tenant map provider accounts'"
+    }
+  ];
+  const MAP_PROVIDER_KEEP_VALUE = '__saved__';
+  const MAP_PROVIDER_API_KEY_PLACEHOLDER_TEST_RE = /(\{\{\s*api[_-]?key\s*\}\}|\{\s*api[_-]?key\s*\}|%API[_-]?KEY%|\$API[_-]?KEY\$)/i;
+  const MAP_PROVIDER_API_KEY_PLACEHOLDER_REPLACE_RE = /(\{\{\s*api[_-]?key\s*\}\}|\{\s*api[_-]?key\s*\}|%API[_-]?KEY%|\$API[_-]?KEY\$)/gi;
+  const MAP_PROVIDER_API_KEY_QUERY_PARAM_TEST_RE = /([?&](?:apikey|api_key|access_token)=)([^&#]*)/i;
+  const MAP_PROVIDER_API_KEY_QUERY_PARAM_REPLACE_RE = /([?&](?:apikey|api_key|access_token)=)([^&#]*)/gi;
+  const DELIVERY_ZONE_DEFAULT_COLOR = '#ff7a00';
+  const DELIVERY_ZONE_MAX_NAME_LENGTH = 255;
+  const DELIVERY_ZONE_MAX_PRICE_TIERS = 20;
+  const deliveryZoneTables = Object.freeze({
+    zones: 'ten_delivery_zones',
+    stores: 'ten_delivery_zone_stores',
+    tiers: 'ten_delivery_zone_price_tiers',
+  });
+  const deliverySettingPriceTiersTable = 'ten_delivery_setting_price_tiers';
   let tenantChatColumnsReady = false;
   let ensureTenantChatColumnsPromise = null;
+  let tenantMapProviderColumnsReady = false;
+  let ensureTenantMapProviderColumnsPromise = null;
+  let deliveryZoneTablesReady = false;
+  let ensureDeliveryZoneTablesPromise = null;
   let orderDeliveryTypeColumnsReady = false;
   let ensureOrderDeliveryTypeColumnsPromise = null;
+  let storeAddressIdentityColumnsReady = false;
+  let ensureStoreAddressIdentityColumnsPromise = null;
 
   function normalizeSubdomain(value) {
     if (value === undefined || value === null) return null;
@@ -374,6 +432,254 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
     return true;
   }
 
+  function normalizeMapProviderAccountString(value, maxLength = 1024) {
+    if (value === undefined || value === null) return '';
+    return String(value).trim().slice(0, maxLength);
+  }
+
+  function normalizeMapProviderAccountId(value, index = 0) {
+    const source = String(value || '')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, '-')
+      .replace(/-{2,}/g, '-')
+      .replace(/^[-_]+|[-_]+$/g, '')
+      .slice(0, 64);
+    if (source) return source;
+    return `map-account-${index + 1}`;
+  }
+
+  function normalizeMapProviderAccountBoolean(value, fallback = false) {
+    if (value === undefined || value === null || value === '') return fallback;
+    if (typeof value === 'boolean') return value;
+    const normalized = String(value).trim().toLowerCase();
+    if (!normalized) return fallback;
+    if (normalized === '1' || normalized === 'true' || normalized === 'on' || normalized === 'yes') return true;
+    if (normalized === '0' || normalized === 'false' || normalized === 'off' || normalized === 'no') return false;
+    return helpers.toBool(value, fallback);
+  }
+
+  function cloneMapProviderAccount(account, index = 0) {
+    const source = account && typeof account === 'object' ? account : {};
+    return {
+      id: normalizeMapProviderAccountId(source.id, index),
+      api_key: normalizeMapProviderAccountString(source.api_key, 1024),
+      login: normalizeMapProviderAccountString(source.login, 320) || null,
+      password: normalizeMapProviderAccountString(source.password, 320) || null,
+      is_active: normalizeMapProviderAccountBoolean(source.is_active, false),
+    };
+  }
+
+  function parseTenantMapProviderAccounts(rawValue) {
+    if (Array.isArray(rawValue)) {
+      return rawValue;
+    }
+    if (typeof rawValue === 'string') {
+      const trimmed = rawValue.trim();
+      if (!trimmed) return [];
+      try {
+        const parsed = JSON.parse(trimmed);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch (_) {
+        return [];
+      }
+    }
+    return [];
+  }
+
+  function sanitizeTenantMapProviderAccounts(rawValue) {
+    const parsed = parseTenantMapProviderAccounts(rawValue);
+    if (parsed.length > 20) {
+      return { ok: false, error: 'MAP_PROVIDER_ACCOUNTS_LIMIT_EXCEEDED' };
+    }
+
+    const normalized = [];
+    const seenIds = new Set();
+    let activeIndex = -1;
+
+    for (let index = 0; index < parsed.length; index += 1) {
+      const source = parsed[index];
+      if (!source || typeof source !== 'object' || Array.isArray(source)) {
+        return { ok: false, error: 'BAD_MAP_PROVIDER_ACCOUNTS' };
+      }
+
+      const next = cloneMapProviderAccount(source, index);
+      if (!next.api_key) {
+        return { ok: false, error: 'MAP_PROVIDER_API_KEY_REQUIRED' };
+      }
+
+      let nextId = next.id;
+      let suffix = 2;
+      while (seenIds.has(nextId)) {
+        nextId = `${next.id}-${suffix}`;
+        suffix += 1;
+      }
+      seenIds.add(nextId);
+      next.id = nextId;
+
+      if (next.is_active && activeIndex === -1) {
+        activeIndex = normalized.length;
+      }
+      next.is_active = false;
+      normalized.push(next);
+    }
+
+    if (normalized.length && activeIndex === -1) {
+      activeIndex = 0;
+    }
+    if (activeIndex >= 0 && normalized[activeIndex]) {
+      normalized[activeIndex].is_active = true;
+    }
+
+    return { ok: true, items: normalized };
+  }
+
+  function maskMapProviderSecret(value) {
+    const raw = normalizeMapProviderAccountString(value, 1024);
+    if (!raw) return '';
+    if (raw.length <= 2) return `${raw[0]}•`;
+    if (raw.length <= 8) return `${raw.slice(0, 1)}••••${raw.slice(-1)}`;
+    return `${raw.slice(0, 4)}••••${raw.slice(-4)}`;
+  }
+
+  function serializeTenantMapProviderAccountsForClient(rawValue) {
+    const sanitized = sanitizeTenantMapProviderAccounts(rawValue);
+    if (!sanitized.ok) return [];
+    return sanitized.items.map((item) => ({
+      id: String(item.id || ''),
+      is_active: item.is_active === true,
+      api_key: String(item.api_key || ''),
+      api_key_masked: maskMapProviderSecret(item.api_key),
+      has_login: Boolean(item.login),
+      has_password: Boolean(item.password),
+    }));
+  }
+
+  function serializeTenantForClient(tenant, extra = {}) {
+    if (!tenant || typeof tenant !== 'object') return null;
+    const source = { ...tenant };
+    delete source.map_provider_accounts_json;
+    return { ...source, ...extra };
+  }
+
+  function buildTenantMapProviderResponse(tenantRow) {
+    const config = normalizeTenantMapConfig(tenantRow);
+    return {
+      enabled: Boolean(config.store_address_map_enabled),
+      provider_name: String(config.provider_name || '').trim(),
+      items: serializeTenantMapProviderAccountsForClient(tenantRow && tenantRow.map_provider_accounts_json),
+    };
+  }
+
+  function getActiveTenantMapProviderAccount(rawValue) {
+    const sanitized = sanitizeTenantMapProviderAccounts(rawValue);
+    if (!sanitized.ok || !sanitized.items.length) return null;
+    return sanitized.items.find((item) => item && item.is_active === true) || sanitized.items[0] || null;
+  }
+
+  function resolveTenantMapTileUrl(tileUrl, apiKey) {
+    const rawTileUrl = normalizeMapProviderAccountString(tileUrl, 4096);
+    const normalizedApiKey = normalizeMapProviderAccountString(apiKey, 1024);
+    const hasPlaceholder = MAP_PROVIDER_API_KEY_PLACEHOLDER_TEST_RE.test(rawTileUrl);
+    const queryParamMatch = rawTileUrl.match(MAP_PROVIDER_API_KEY_QUERY_PARAM_TEST_RE);
+    const queryParamValue = queryParamMatch ? String(queryParamMatch[2] || '').trim() : '';
+    const requiresQueryParamReplacement = Boolean(queryParamMatch) && (
+      !queryParamValue || MAP_PROVIDER_API_KEY_PLACEHOLDER_TEST_RE.test(queryParamValue)
+    );
+    const requiresApiKey = hasPlaceholder || requiresQueryParamReplacement;
+
+    if (!requiresApiKey) {
+      return {
+        tile_url: rawTileUrl,
+        requires_api_key: false,
+        has_active_api_key: Boolean(normalizedApiKey),
+        resolved_with_active_api_key: false,
+      };
+    }
+
+    if (!normalizedApiKey) {
+      return {
+        tile_url: '',
+        requires_api_key: true,
+        has_active_api_key: false,
+        resolved_with_active_api_key: false,
+      };
+    }
+
+    const encodedApiKey = encodeURIComponent(normalizedApiKey);
+    const resolvedTileUrl = rawTileUrl
+      .replace(MAP_PROVIDER_API_KEY_PLACEHOLDER_REPLACE_RE, encodedApiKey)
+      .replace(MAP_PROVIDER_API_KEY_QUERY_PARAM_REPLACE_RE, `$1${encodedApiKey}`);
+
+    return {
+      tile_url: resolvedTileUrl,
+      requires_api_key: true,
+      has_active_api_key: true,
+      resolved_with_active_api_key: true,
+    };
+  }
+
+  function buildTenantResolvedMapConfigResponse(tenantRow) {
+    const baseConfig = normalizeTenantMapConfig(tenantRow);
+    const activeAccount = getActiveTenantMapProviderAccount(tenantRow && tenantRow.map_provider_accounts_json);
+    const resolvedTile = resolveTenantMapTileUrl(baseConfig.tile_url, activeAccount && activeAccount.api_key);
+    const maxZoomValue = Number(baseConfig.max_zoom);
+    const geocoderResultLimitValue = Number(baseConfig.geocoder_result_limit);
+
+    return {
+      provider_name: String(baseConfig.provider_name || '').trim(),
+      tile_url: String(resolvedTile.tile_url || '').trim(),
+      attribution: String(baseConfig.attribution || '').trim(),
+      max_zoom: Number.isFinite(maxZoomValue) ? maxZoomValue : 22,
+      subdomains: String(baseConfig.subdomains || '').trim(),
+      geocoder_provider_name: String(baseConfig.geocoder_provider_name || '').trim(),
+      geocoder_search_url: String(baseConfig.geocoder_search_url || '').trim(),
+      geocoder_country_code: String(baseConfig.geocoder_country_code || 'ru').trim() || 'ru',
+      geocoder_language: String(baseConfig.geocoder_language || 'ru').trim() || 'ru',
+      geocoder_result_limit: Number.isFinite(geocoderResultLimitValue) ? geocoderResultLimitValue : 5,
+      store_address_map_enabled: Boolean(baseConfig.store_address_map_enabled),
+      delivery_zone_polygon_provider: String(baseConfig.delivery_zone_polygon_provider || 'Leaflet-Geoman').trim() || 'Leaflet-Geoman',
+      delivery_zone_polygon_enabled: Boolean(baseConfig.store_address_map_enabled),
+      tenant_api_key_required: Boolean(resolvedTile.requires_api_key),
+      tenant_api_key_configured: Boolean(activeAccount && activeAccount.api_key),
+      tenant_api_key_missing: Boolean(
+        baseConfig.store_address_map_enabled
+        && resolvedTile.requires_api_key
+        && !(activeAccount && activeAccount.api_key)
+      ),
+      tenant_active_account_id: activeAccount ? String(activeAccount.id || '') : null,
+      tenant_tile_url_resolved: Boolean(resolvedTile.resolved_with_active_api_key),
+    };
+  }
+
+  function mergeTenantMapProviderAccountsWithExisting(nextItems, currentItems) {
+    const currentSanitized = sanitizeTenantMapProviderAccounts(currentItems);
+    const currentById = new Map(
+      currentSanitized.ok
+        ? currentSanitized.items.map((item) => [String(item.id || ''), item])
+        : []
+    );
+
+    return parseTenantMapProviderAccounts(nextItems).map((item, index) => {
+      const source = item && typeof item === 'object' ? { ...item } : {};
+      const sourceId = normalizeMapProviderAccountId(source.id, index);
+      const current = currentById.get(sourceId);
+      if (!current) return source;
+
+      if (String(source.api_key || '').trim() === MAP_PROVIDER_KEEP_VALUE) {
+        source.api_key = current.api_key;
+      }
+      if (String(source.login || '').trim() === MAP_PROVIDER_KEEP_VALUE) {
+        source.login = current.login;
+      }
+      if (String(source.password || '').trim() === MAP_PROVIDER_KEEP_VALUE) {
+        source.password = current.password;
+      }
+
+      return source;
+    });
+  }
+
   function makePrintApiToken() {
     return crypto.randomBytes(32).toString('hex');
   }
@@ -426,6 +732,335 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
       });
 
     return ensureTenantChatColumnsPromise;
+  }
+
+  async function ensureTenantMapProviderColumns() {
+    return ensureTenantMapConfigColumns(db);
+  }
+
+  async function ensureDeliveryZoneTables() {
+    if (deliveryZoneTablesReady) return true;
+    if (ensureDeliveryZoneTablesPromise) return ensureDeliveryZoneTablesPromise;
+
+    ensureDeliveryZoneTablesPromise = (async () => {
+      await db.query(`
+        CREATE TABLE IF NOT EXISTS \`${deliveryZoneTables.zones}\` (
+          id bigint unsigned NOT NULL AUTO_INCREMENT,
+          tenant_id bigint unsigned NOT NULL,
+          name varchar(255) NOT NULL,
+          color varchar(16) NOT NULL DEFAULT '${DELIVERY_ZONE_DEFAULT_COLOR}',
+          eta_minutes int unsigned DEFAULT NULL,
+          is_active tinyint(1) NOT NULL DEFAULT 1,
+          geometry_json longtext NOT NULL COMMENT 'GeoJSON MultiPolygon',
+          created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          PRIMARY KEY (id),
+          KEY idx_tenant_id (tenant_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
+      `);
+
+      await db.query(`
+        CREATE TABLE IF NOT EXISTS \`${deliveryZoneTables.stores}\` (
+          id bigint unsigned NOT NULL AUTO_INCREMENT,
+          delivery_zone_id bigint unsigned NOT NULL,
+          store_id bigint unsigned NOT NULL,
+          tenant_id bigint unsigned NOT NULL,
+          created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (id),
+          UNIQUE KEY uniq_zone_store (delivery_zone_id, store_id),
+          KEY idx_tenant_zone (tenant_id, delivery_zone_id),
+          KEY idx_tenant_store (tenant_id, store_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
+      `);
+
+      await db.query(`
+        CREATE TABLE IF NOT EXISTS \`${deliveryZoneTables.tiers}\` (
+          id bigint unsigned NOT NULL AUTO_INCREMENT,
+          delivery_zone_id bigint unsigned NOT NULL,
+          tenant_id bigint unsigned NOT NULL,
+          min_order_amount decimal(10,2) NOT NULL DEFAULT 0.00,
+          delivery_cost decimal(10,2) NOT NULL DEFAULT 0.00,
+          sort_order int unsigned NOT NULL DEFAULT 0,
+          created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          PRIMARY KEY (id),
+          KEY idx_tenant_zone (tenant_id, delivery_zone_id),
+          KEY idx_tenant_zone_sort (tenant_id, delivery_zone_id, sort_order)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
+      `);
+
+      deliveryZoneTablesReady = true;
+      return true;
+    })()
+      .catch((err) => {
+        ensureDeliveryZoneTablesPromise = null;
+        throw err;
+      })
+      .finally(() => {
+        if (deliveryZoneTablesReady) {
+          ensureDeliveryZoneTablesPromise = null;
+        }
+      });
+
+    return ensureDeliveryZoneTablesPromise;
+  }
+
+  function normalizeDeliveryZoneText(value, maxLength = DELIVERY_ZONE_MAX_NAME_LENGTH) {
+    const raw = value == null ? '' : String(value).trim();
+    if (!raw) return '';
+    return raw.slice(0, maxLength);
+  }
+
+  function normalizeDeliveryZoneColor(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return DELIVERY_ZONE_DEFAULT_COLOR;
+    if (/^#[0-9a-f]{6}$/i.test(raw)) return raw.toLowerCase();
+    if (/^#[0-9a-f]{3}$/i.test(raw)) {
+      const [, r, g, b] = raw.toLowerCase();
+      return `#${r}${r}${g}${g}${b}${b}`;
+    }
+    return DELIVERY_ZONE_DEFAULT_COLOR;
+  }
+
+  function normalizeDeliveryZoneEtaMinutes(value) {
+    return normalizeDeliveryEtaMinutesShared(value);
+  }
+
+  function normalizeDeliveryZoneMoney(value) {
+    return normalizeDeliveryMoneyShared(value);
+  }
+
+  function normalizeDeliveryZoneCoordinate(value, min, max) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return null;
+    if (numeric < min || numeric > max) return null;
+    return Number(numeric.toFixed(7));
+  }
+
+  function normalizeDeliveryZonePoint(point) {
+    if (!Array.isArray(point) || point.length < 2) return null;
+    const lng = normalizeDeliveryZoneCoordinate(point[0], -180, 180);
+    const lat = normalizeDeliveryZoneCoordinate(point[1], -90, 90);
+    if (lat === null || lng === null) return null;
+    return [lng, lat];
+  }
+
+  function closeDeliveryZoneRing(points) {
+    if (!Array.isArray(points) || !points.length) return points;
+    const first = points[0];
+    const last = points[points.length - 1];
+    if (!first || !last) return points;
+    if (first[0] === last[0] && first[1] === last[1]) return points;
+    return points.concat([[first[0], first[1]]]);
+  }
+
+  function normalizeDeliveryZoneRing(ring) {
+    if (!Array.isArray(ring)) return null;
+    const normalized = ring
+      .map((point) => normalizeDeliveryZonePoint(point))
+      .filter(Boolean);
+    const closed = closeDeliveryZoneRing(normalized);
+    return Array.isArray(closed) && closed.length >= 4 ? closed : null;
+  }
+
+  function normalizeDeliveryZonePolygon(polygon) {
+    if (!Array.isArray(polygon)) return null;
+    const rings = polygon
+      .map((ring) => normalizeDeliveryZoneRing(ring))
+      .filter(Boolean);
+    return rings.length ? rings : null;
+  }
+
+  function normalizeDeliveryZoneGeometry(rawValue) {
+    let source = rawValue;
+    if (typeof source === 'string') {
+      try {
+        source = JSON.parse(source);
+      } catch (_) {
+        return null;
+      }
+    }
+    if (!source || typeof source !== 'object') return null;
+    if (source.type === 'Feature') {
+      source = source.geometry;
+    }
+    if (!source || typeof source !== 'object') return null;
+    let type = String(source.type || '').trim();
+    let coordinates = source.coordinates;
+
+    if (type === 'Polygon') {
+      type = 'MultiPolygon';
+      coordinates = [coordinates];
+    }
+    if (type !== 'MultiPolygon' || !Array.isArray(coordinates)) return null;
+
+    const polygons = coordinates
+      .map((polygon) => normalizeDeliveryZonePolygon(polygon))
+      .filter(Boolean);
+    if (!polygons.length) return null;
+
+    return {
+      type: 'MultiPolygon',
+      coordinates: polygons,
+    };
+  }
+
+  function normalizeDeliveryZonePriceTier(rawTier) {
+    const source = sanitizeDeliveryPriceTiers([rawTier], {
+      requiredError: 'DELIVERY_ZONE_PRICE_TIERS_REQUIRED',
+      limitError: 'DELIVERY_ZONE_PRICE_TIERS_LIMIT',
+    });
+    return source.ok && source.items[0] ? source.items[0] : null;
+  }
+
+  function sanitizeDeliveryZonePriceTiers(rawTiers) {
+    return sanitizeDeliveryPriceTiers(rawTiers, {
+      requiredError: 'DELIVERY_ZONE_PRICE_TIERS_REQUIRED',
+      limitError: 'DELIVERY_ZONE_PRICE_TIERS_LIMIT',
+    });
+  }
+
+  async function sanitizeDeliveryZoneStoreIds(tenantId, rawStoreIds) {
+    const uniqueStoreIds = Array.from(new Set(
+      (Array.isArray(rawStoreIds) ? rawStoreIds : [])
+        .map((value) => Number(value))
+        .filter((value) => Number.isFinite(value) && value > 0)
+    ));
+    if (!uniqueStoreIds.length) {
+      return { ok: false, error: 'DELIVERY_ZONE_STORE_REQUIRED' };
+    }
+
+    const placeholders = uniqueStoreIds.map(() => '?').join(', ');
+    const [rows] = await db.query(
+      `SELECT id FROM ten_stores WHERE tenant_id=? AND id IN (${placeholders})`,
+      [tenantId, ...uniqueStoreIds]
+    );
+    const existing = new Set(
+      (Array.isArray(rows) ? rows : [])
+        .map((row) => Number(row && row.id))
+        .filter((value) => Number.isFinite(value) && value > 0)
+    );
+    if (existing.size !== uniqueStoreIds.length) {
+      return { ok: false, error: 'DELIVERY_ZONE_STORE_NOT_FOUND' };
+    }
+    return { ok: true, items: uniqueStoreIds };
+  }
+
+  async function sanitizeDeliveryZonePayload(tenantId, payload) {
+    const source = payload && typeof payload === 'object' ? payload : {};
+    const name = normalizeDeliveryZoneText(source.name);
+    if (!name) {
+      return { ok: false, error: 'DELIVERY_ZONE_NAME_REQUIRED' };
+    }
+
+    const geometry = normalizeDeliveryZoneGeometry(source.geometry);
+    if (!geometry) {
+      return { ok: false, error: 'DELIVERY_ZONE_GEOMETRY_REQUIRED' };
+    }
+
+    const storeIdsResult = await sanitizeDeliveryZoneStoreIds(tenantId, source.store_ids);
+    if (!storeIdsResult.ok) return storeIdsResult;
+
+    const tiersResult = sanitizeDeliveryZonePriceTiers(source.price_tiers);
+    if (!tiersResult.ok) return tiersResult;
+
+    return {
+      ok: true,
+      item: {
+        name,
+        color: normalizeDeliveryZoneColor(source.color),
+        eta_minutes: normalizeDeliveryZoneEtaMinutes(source.eta_minutes),
+        is_active: helpers.toBool(source.is_active, true) ? 1 : 0,
+        geometry,
+        store_ids: storeIdsResult.items,
+        price_tiers: tiersResult.items,
+      },
+    };
+  }
+
+  function serializeDeliveryZoneRow(row, extras = {}) {
+    const source = row && typeof row === 'object' ? row : {};
+    return {
+      id: Number(source.id || 0),
+      tenant_id: Number(source.tenant_id || 0),
+      name: String(source.name || '').trim(),
+      color: normalizeDeliveryZoneColor(source.color),
+      eta_minutes: source.eta_minutes == null ? null : Number(source.eta_minutes),
+      is_active: Number(source.is_active) === 1 ? 1 : 0,
+      geometry: normalizeDeliveryZoneGeometry(source.geometry_json),
+      created_at: source.created_at || null,
+      updated_at: source.updated_at || null,
+      store_ids: Array.isArray(extras.store_ids) ? extras.store_ids.map((value) => Number(value)).filter((value) => Number.isFinite(value) && value > 0) : [],
+      price_tiers: Array.isArray(extras.price_tiers)
+        ? extras.price_tiers.map((tier, index) => ({
+          min_order_amount: normalizeDeliveryZoneMoney(tier && tier.min_order_amount) ?? 0,
+          delivery_cost: normalizeDeliveryZoneMoney(tier && tier.delivery_cost) ?? 0,
+          sort_order: tier && tier.sort_order != null ? Number(tier.sort_order) : index,
+        }))
+        : [],
+    };
+  }
+
+  async function loadDeliveryZonesForTenant(tenantId) {
+    await ensureDeliveryZoneTables();
+    const [rows] = await db.query(
+      `SELECT id, tenant_id, name, color, eta_minutes, is_active, geometry_json, created_at, updated_at
+       FROM \`${deliveryZoneTables.zones}\`
+       WHERE tenant_id=?
+       ORDER BY id ASC`,
+      [tenantId]
+    );
+
+    const zoneIds = (Array.isArray(rows) ? rows : [])
+      .map((row) => Number(row && row.id))
+      .filter((value) => Number.isFinite(value) && value > 0);
+    const storeMap = new Map();
+    const tiersMap = new Map();
+
+    if (zoneIds.length) {
+      const placeholders = zoneIds.map(() => '?').join(', ');
+      const [storeRows] = await db.query(
+        `SELECT delivery_zone_id, store_id
+         FROM \`${deliveryZoneTables.stores}\`
+         WHERE tenant_id=? AND delivery_zone_id IN (${placeholders})`,
+        [tenantId, ...zoneIds]
+      );
+      (Array.isArray(storeRows) ? storeRows : []).forEach((row) => {
+        const zoneId = Number(row && row.delivery_zone_id);
+        const storeId = Number(row && row.store_id);
+        if (!Number.isFinite(zoneId) || !Number.isFinite(storeId)) return;
+        if (!storeMap.has(zoneId)) storeMap.set(zoneId, []);
+        storeMap.get(zoneId).push(storeId);
+      });
+
+      const [tierRows] = await db.query(
+        `SELECT delivery_zone_id, min_order_amount, delivery_cost, sort_order
+         FROM \`${deliveryZoneTables.tiers}\`
+         WHERE tenant_id=? AND delivery_zone_id IN (${placeholders})
+         ORDER BY delivery_zone_id ASC, sort_order ASC, id ASC`,
+        [tenantId, ...zoneIds]
+      );
+      (Array.isArray(tierRows) ? tierRows : []).forEach((row) => {
+        const zoneId = Number(row && row.delivery_zone_id);
+        if (!Number.isFinite(zoneId)) return;
+        if (!tiersMap.has(zoneId)) tiersMap.set(zoneId, []);
+        tiersMap.get(zoneId).push({
+          min_order_amount: row.min_order_amount,
+          delivery_cost: row.delivery_cost,
+          sort_order: row.sort_order,
+        });
+      });
+    }
+
+    return (Array.isArray(rows) ? rows : []).map((row) => serializeDeliveryZoneRow(row, {
+      store_ids: storeMap.get(Number(row && row.id)) || [],
+      price_tiers: tiersMap.get(Number(row && row.id)) || [],
+    }));
+  }
+
+  async function loadDeliveryZoneForTenant(tenantId, zoneId) {
+    const items = await loadDeliveryZonesForTenant(tenantId);
+    return items.find((item) => Number(item && item.id) === Number(zoneId)) || null;
   }
 
   async function ensureOrderDeliveryTypeColumns() {
@@ -629,25 +1264,593 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
   );
 }
 
-  async function fetchStoreWithHours(tenantId, storeId) {
-    const [rows] = await db.query(
-    `SELECT tenant_id, id, code, name, address, city, phone, timezone, is_active, use_global_hours, use_delivery_hours, created_at, updated_at
+function normalizeStoreCoordinateValue(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? Number(numeric.toFixed(7)) : null;
+}
+
+function parseStoreCoordinate(value, axis) {
+  const numeric = helpers.numOrNull(value);
+  if (numeric === null) return { value: null };
+  const limit = axis === 'lat' ? 90 : 180;
+  if (numeric < -limit || numeric > limit) {
+    return { error: axis === 'lat' ? 'INVALID_LAT' : 'INVALID_LNG' };
+  }
+  return { value: Number(Number(numeric).toFixed(7)) };
+}
+
+async function ensureStoreAddressIdentityColumns() {
+  if (storeAddressIdentityColumnsReady) return true;
+  if (ensureStoreAddressIdentityColumnsPromise) return ensureStoreAddressIdentityColumnsPromise;
+
+  ensureStoreAddressIdentityColumnsPromise = (async () => {
+    const [columnRows] = await db.query('SHOW COLUMNS FROM ten_stores');
+    const existing = new Set((Array.isArray(columnRows) ? columnRows : []).map((row) => String(row?.Field || '').trim()).filter(Boolean));
+    const requiredColumns = [
+      { name: 'address_ref', sql: "VARCHAR(255) NULL AFTER address" },
+      { name: 'address_raw_input', sql: "VARCHAR(512) NULL AFTER address_ref" },
+      { name: 'address_normalized_display', sql: "VARCHAR(512) NULL AFTER address_raw_input" },
+      { name: 'address_street', sql: "VARCHAR(255) NULL AFTER address_normalized_display" },
+      { name: 'address_house', sql: "VARCHAR(128) NULL AFTER address_street" },
+      { name: 'address_context_locality', sql: "VARCHAR(255) NULL AFTER address_house" },
+    ];
+
+    for (const column of requiredColumns) {
+      if (existing.has(column.name)) continue;
+      try {
+        await db.query(`ALTER TABLE ten_stores ADD COLUMN \`${column.name}\` ${column.sql}`);
+        existing.add(column.name);
+      } catch (err) {
+        if (String(err?.code || '') === 'ER_DUP_FIELDNAME') {
+          existing.add(column.name);
+          continue;
+        }
+        throw err;
+      }
+    }
+
+    storeAddressIdentityColumnsReady = requiredColumns.every((column) => existing.has(column.name));
+    return storeAddressIdentityColumnsReady;
+  })()
+    .catch((err) => {
+      ensureStoreAddressIdentityColumnsPromise = null;
+      throw err;
+    })
+    .finally(() => {
+      if (storeAddressIdentityColumnsReady) {
+        ensureStoreAddressIdentityColumnsPromise = null;
+      }
+    });
+
+  return ensureStoreAddressIdentityColumnsPromise;
+}
+
+function normalizeStoreRecord(store) {
+  if (!store || typeof store !== 'object') return store;
+  return {
+    ...store,
+    lat: normalizeStoreCoordinateValue(store.lat),
+    lng: normalizeStoreCoordinateValue(store.lng),
+    address_ref: helpers.strOrNull(store.address_ref),
+    address_raw_input: helpers.strOrNull(store.address_raw_input),
+    address_normalized_display: helpers.strOrNull(store.address_normalized_display),
+    address_street: helpers.strOrNull(store.address_street),
+    address_house: helpers.strOrNull(store.address_house),
+    address_context_locality: helpers.strOrNull(store.address_context_locality),
+  };
+}
+
+function getStoreGeocodingHttpStatus(errorCode) {
+  if (errorCode === 'ADDRESS_REQUIRED' || errorCode === 'CITY_REQUIRED' || errorCode === 'CITY_SELECTION_REQUIRED' || errorCode === 'HOUSE_REQUIRED' || errorCode === 'GEOCODER_NOT_CONFIGURED') return 400;
+  if (errorCode === 'ADDRESS_NOT_FOUND' || errorCode === 'ADDRESS_CITY_NOT_FOUND' || errorCode === 'ADDRESS_COORDINATES_NOT_FOUND') return 400;
+  if (errorCode === 'ADDRESS_SELECTION_REQUIRED') return 409;
+  if (errorCode === 'ADDRESS_SERVICE_NOT_CONFIGURED' || errorCode === 'ADDRESS_SERVICE_UNAVAILABLE' || errorCode === 'ADDRESS_SERVICE_TIMEOUT') return 503;
+  if (errorCode === 'ADDRESS_CONFIRMATION_REQUIRED') return 409;
+  return 502;
+}
+
+function buildStoreGeocodeQuery(address, city) {
+  const parts = [
+    helpers.strOrNull(city),
+    helpers.strOrNull(address),
+  ].filter(Boolean);
+  return parts.length ? parts.join(', ') : helpers.strOrNull(address);
+}
+
+function normalizeStoreComparableStreet(value) {
+  return normalizeLocalAddressText(value)
+    .replace(/\b(?:улица|ул|переулок|пер|проспект|пр-кт|проезд|пр-д|шоссе|площадь|пл|бульвар|бул|набережная|наб|микрорайон|мкр|квартал|кв-л)\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function isStoreOrdinalAddressPair(token, nextToken) {
+  return /^\d+$/.test(String(token || '').trim()) && /^(й|я|ый|ая)$/.test(String(nextToken || '').trim());
+}
+
+function isStoreStandaloneHouseToken(token) {
+  return isAddressServiceHouseToken(token);
+}
+
+function buildStoreAddressComparableParts(value) {
+  const houseToken = extractAddressServiceHouseToken(value);
+  const streetText = houseToken
+    ? removeAddressServiceHouseToken(value, houseToken)
+    : normalizeLocalAddressText(value);
+  return {
+    street: normalizeStoreComparableStreet(streetText),
+    house: normalizeAddressServiceHouseToken(houseToken),
+  };
+}
+
+function normalizeStoreAddressComparable(value) {
+  const parts = buildStoreAddressComparableParts(value);
+  return [parts.street, parts.house].filter(Boolean).join('|');
+}
+
+function hasMaterialStoreNormalizationDifference(inputCity, inputAddress, normalizedCity, normalizedAddress) {
+  const cityChanged = normalizeLocalAddressText(inputCity) !== normalizeLocalAddressText(normalizedCity);
+  const addressChanged = normalizeStoreAddressComparable(inputAddress) !== normalizeStoreAddressComparable(normalizedAddress);
+  return cityChanged || addressChanged;
+}
+
+function buildStoreNormalizationPayload(candidate) {
+  return {
+    city: helpers.strOrNull(candidate && candidate.city),
+    address: helpers.strOrNull(candidate && candidate.address),
+    address_street: helpers.strOrNull(candidate && candidate.address_street),
+    address_house: helpers.strOrNull(candidate && candidate.address_house),
+    resolved_city_source_key: helpers.strOrNull(candidate && candidate.resolved_city_source_key),
+    selected_source_key: helpers.strOrNull(candidate && candidate.selected_source_key),
+    selected_object_type: helpers.strOrNull(candidate && candidate.selected_object_type),
+    selected_context_locality: helpers.strOrNull(candidate && candidate.selected_context_locality),
+    typed_house_part: helpers.strOrNull(candidate && candidate.typed_house_part),
+  };
+}
+
+function buildStoreSavedAddress(baseCityName, contextLocality, addressLabel) {
+  const baseCity = helpers.strOrNull(baseCityName);
+  const context = helpers.strOrNull(contextLocality);
+  const address = helpers.strOrNull(addressLabel);
+  if (!address) return null;
+  if (!context) return address;
+  if (normalizeLocalAddressText(baseCity) === normalizeLocalAddressText(context)) return address;
+  if (normalizeLocalAddressText(address).startsWith(normalizeLocalAddressText(context))) return address;
+  return `${context}, ${address}`;
+}
+
+function buildStoreStreetHouseLabel(streetValue, houseValue) {
+  const street = helpers.strOrNull(streetValue);
+  const house = helpers.strOrNull(houseValue);
+  if (!street) return null;
+  return [street, house].filter(Boolean).join(', ');
+}
+
+function isStoreAddressMapModeEnabled(config = null) {
+  if (config && typeof config === 'object') {
+    return Boolean(config.store_address_map_enabled);
+  }
+  return false;
+}
+
+function buildManualStoreLocation(address, city, options = {}) {
+  const normalizedStreet = helpers.strOrNull(options.addressStreet);
+  const normalizedHouse = helpers.strOrNull(options.addressHouse);
+  const normalizedCity = helpers.strOrNull(city);
+  const contextLocality = helpers.strOrNull(options.addressContextLocality || options.selectedContextLocality);
+  const shortAddress = helpers.strOrNull(address) || buildStoreStreetHouseLabel(normalizedStreet, normalizedHouse);
+  const savedAddress = buildStoreSavedAddress(normalizedCity, contextLocality || normalizedCity, shortAddress) || shortAddress;
+  if (!normalizedCity) {
+    return { ok: false, error: 'CITY_REQUIRED' };
+  }
+  if (!savedAddress) {
+    return { ok: false, error: 'ADDRESS_REQUIRED' };
+  }
+  return {
+    ok: true,
+    data: {
+      city: normalizedCity,
+      address: savedAddress,
+      lat: null,
+      lng: null,
+      address_ref: null,
+      address_raw_input: savedAddress,
+      address_normalized_display: savedAddress,
+      address_street: normalizedStreet,
+      address_house: normalizedHouse,
+      address_context_locality: contextLocality,
+      resolved_city_source_key: null,
+      selected_source_key: null,
+      selected_object_type: null,
+      selected_context_locality: contextLocality,
+      typed_house_part: helpers.strOrNull(options.typedHousePart) || normalizedHouse,
+    },
+  };
+}
+
+function parseAddressServiceRootCityCode(value) {
+  const raw = helpers.strOrNull(value);
+  if (!raw) return null;
+  if (raw.startsWith('root-city:')) {
+    return raw.slice('root-city:'.length) || null;
+  }
+  return raw;
+}
+
+async function resolveStoreLocationByAddress(address, city, options = {}) {
+  const normalizedStreet = helpers.strOrNull(options.addressStreet);
+  const normalizedHouse = helpers.strOrNull(options.addressHouse);
+  const normalizedAddress = helpers.strOrNull(address) || buildStoreStreetHouseLabel(normalizedStreet, normalizedHouse);
+  const normalizedCity = helpers.strOrNull(city);
+  if (!normalizedCity) {
+    return { ok: false, error: 'CITY_SELECTION_REQUIRED' };
+  }
+  if (!normalizedAddress) {
+    return { ok: false, error: 'ADDRESS_REQUIRED' };
+  }
+
+  if (isAddressServiceConfigured()) {
+    const rootCityCode = parseAddressServiceRootCityCode(options.resolvedCitySourceKey);
+    const serviceResult = await resolveAddressThroughService({
+      city: normalizedCity,
+      city_code: rootCityCode,
+      address: normalizedAddress,
+      address_street: normalizedStreet,
+      address_house: normalizedHouse,
+      selected_source_key: helpers.strOrNull(options.selectedSourceKey),
+      selected_object_type: helpers.strOrNull(options.selectedObjectType),
+      selected_context_locality: helpers.strOrNull(options.selectedContextLocality),
+      typed_house_part: helpers.strOrNull(options.typedHousePart),
+      raw_input: normalizedAddress,
+      confirm_normalized: helpers.toBool(options.confirmNormalized, false),
+    });
+    if (!serviceResult || !serviceResult.ok) {
+      return {
+        ok: false,
+        error: serviceResult && serviceResult.error ? serviceResult.error : 'ADDRESS_SERVICE_UNAVAILABLE',
+      };
+    }
+    if (serviceResult.data && serviceResult.data.needs_choice) {
+      const candidates = Array.isArray(serviceResult.data.candidates) ? serviceResult.data.candidates : [];
+      if (candidates.length === 1) {
+        const candidate = candidates[0];
+        return {
+          ok: false,
+          error: 'ADDRESS_CONFIRMATION_REQUIRED',
+          data: {
+            normalization: {
+              city: normalizedCity,
+              address: helpers.strOrNull(candidate && (candidate.display || candidate.value || candidate.label)),
+              address_street: normalizedStreet,
+              address_house: normalizedHouse,
+              resolved_city_source_key: helpers.strOrNull(options.resolvedCitySourceKey),
+              selected_source_key: helpers.strOrNull(candidate && candidate.source_key),
+              selected_object_type: helpers.strOrNull(candidate && candidate.object_type),
+              selected_context_locality: helpers.strOrNull(candidate && (candidate.context_display || candidate.context_locality || candidate.city_name)),
+              typed_house_part: helpers.strOrNull(options.typedHousePart),
+            },
+          },
+        };
+      }
+      return { ok: false, error: 'ADDRESS_SELECTION_REQUIRED' };
+    }
+
+    const serviceData = serviceResult.data || {};
+    const resolvedDisplay = helpers.strOrNull(serviceData.normalized_display) || normalizedAddress;
+    const contextLocality = helpers.strOrNull(serviceData.context_display) || normalizedCity;
+    const resolvedSelectedSourceKey = helpers.strOrNull(options.selectedSourceKey)
+      || helpers.strOrNull(serviceData.selected_source_key)
+      || helpers.strOrNull(serviceData.address_ref);
+    const resolvedSelectedObjectType = helpers.strOrNull(options.selectedObjectType)
+      || helpers.strOrNull(serviceData.selected_object_type)
+      || 'address';
+    const resolvedTypedHousePart = helpers.strOrNull(options.typedHousePart)
+      || helpers.strOrNull(serviceData.typed_house_part);
+    const resolvedStreet = helpers.strOrNull(serviceData.street_display) || normalizedStreet;
+    const resolvedHouse = helpers.strOrNull(serviceData.house_number) || normalizedHouse || resolvedTypedHousePart;
+    let lat = normalizeStoreCoordinateValue(serviceData.lat);
+    let lng = normalizeStoreCoordinateValue(serviceData.lng);
+    if (lat === null || lng === null) {
+      const serviceQuery = buildStoreGeocodeQuery(resolvedDisplay, contextLocality || normalizedCity);
+      if (serviceQuery) {
+        const geocode = await geocodeStoreAddress(serviceQuery, { sourceState: options.mapConfig || null });
+        if (geocode && geocode.ok && geocode.data && geocode.data.item) {
+          lat = normalizeStoreCoordinateValue(geocode.data.item.lat);
+          lng = normalizeStoreCoordinateValue(geocode.data.item.lng);
+        }
+      }
+    }
+    return {
+      ok: true,
+      data: {
+        city: normalizedCity,
+        address: buildStoreSavedAddress(normalizedCity, contextLocality, resolvedDisplay) || resolvedDisplay,
+        lat,
+        lng,
+        address_ref: helpers.strOrNull(serviceData.address_ref),
+        address_raw_input: normalizedAddress,
+        address_normalized_display: resolvedDisplay,
+        address_street: resolvedStreet,
+        address_house: resolvedHouse,
+        address_context_locality: contextLocality,
+        resolved_city_source_key: helpers.strOrNull(options.resolvedCitySourceKey),
+        selected_source_key: resolvedSelectedSourceKey,
+        selected_object_type: resolvedSelectedObjectType,
+        selected_context_locality: contextLocality,
+        typed_house_part: resolvedTypedHousePart,
+      },
+    };
+  }
+
+  const resolvedCity = await resolveLocalityByInput(normalizedCity, {
+    sourceKey: helpers.strOrNull(options.resolvedCitySourceKey),
+    rootOnly: true,
+  });
+  if (!resolvedCity) {
+    return { ok: false, error: 'CITY_SELECTION_REQUIRED' };
+  }
+
+  const selectedSourceKey = helpers.strOrNull(options.selectedSourceKey);
+  const selectedObjectType = helpers.strOrNull(options.selectedObjectType);
+  const selectedContextLocality = helpers.strOrNull(options.selectedContextLocality);
+  const typedHousePart = helpers.strOrNull(options.typedHousePart);
+  const confirmNormalized = helpers.toBool(options.confirmNormalized, false);
+  if (
+    selectedObjectType === 'context-locality' &&
+    normalizeLocalAddressText(normalizedAddress) === normalizeLocalAddressText(selectedContextLocality)
+  ) {
+    return { ok: false, error: 'ADDRESS_REQUIRED' };
+  }
+  let selectedRow = null;
+  if (selectedSourceKey) {
+    selectedRow = await getLocalAddressIndexRowBySourceKey(selectedSourceKey);
+  }
+
+  const createCandidate = (addressLabel, config = {}) => {
+    const actualLocality = helpers.strOrNull(config.actualLocality || selectedContextLocality || resolvedCity.name) || resolvedCity.name;
+    const shortAddress = helpers.strOrNull(addressLabel);
+    const savedAddress = buildStoreSavedAddress(resolvedCity.name, actualLocality, shortAddress);
+    return {
+      city: resolvedCity.name,
+      address: savedAddress,
+      address_ref: helpers.strOrNull(config.selectedSourceKey),
+      address_raw_input: normalizedAddress,
+      address_normalized_display: savedAddress || shortAddress,
+      address_street: helpers.strOrNull(config.addressStreet || normalizedStreet),
+      address_house: helpers.strOrNull(config.addressHouse || normalizedHouse || config.typedHousePart),
+      address_context_locality: helpers.strOrNull(actualLocality),
+      lat: config.lat === undefined ? null : normalizeStoreCoordinateValue(config.lat),
+      lng: config.lng === undefined ? null : normalizeStoreCoordinateValue(config.lng),
+      is_exact_address: helpers.toBool(config.isExactAddress, false),
+      resolved_city_source_key: helpers.strOrNull(resolvedCity.source_key),
+      selected_source_key: helpers.strOrNull(config.selectedSourceKey),
+      selected_object_type: helpers.strOrNull(config.selectedObjectType),
+      selected_context_locality: helpers.strOrNull(actualLocality),
+      typed_house_part: helpers.strOrNull(config.typedHousePart),
+      lookup_city: actualLocality,
+      lookup_address: shortAddress,
+    };
+  };
+
+  let candidate = null;
+  if (selectedRow && selectedObjectType === 'address' && String(selectedRow.object_type || '').trim() === 'address') {
+    candidate = createCandidate(helpers.strOrNull(selectedRow.label), {
+      actualLocality: helpers.strOrNull(selectedRow.locality_name),
+      lat: selectedRow.lat,
+      lng: selectedRow.lng,
+      isExactAddress: true,
+      selectedSourceKey: helpers.strOrNull(selectedRow.source_key),
+      selectedObjectType: 'address',
+    });
+  } else if (
+    selectedRow
+    && (selectedObjectType === 'street' || selectedObjectType === 'typed-address')
+    && String(selectedRow.object_type || '').trim() === 'street'
+  ) {
+    const streetLabel = helpers.strOrNull(selectedRow.label) || helpers.strOrNull(selectedRow.street_name);
+    const normalizedStreetInput = normalizeLocalAddressText(streetLabel);
+    const normalizedAddressInput = normalizeLocalAddressText(normalizedAddress);
+    let housePart = typedHousePart || normalizedHouse || normalizedAddress;
+    if (normalizedStreetInput && normalizedAddressInput.startsWith(normalizedStreetInput)) {
+      housePart = normalizedAddress.slice(streetLabel.length).replace(/^[,\s]+/, '').trim();
+    }
+    if (!housePart) {
+      return { ok: false, error: 'HOUSE_REQUIRED' };
+    }
+    const localSearch = await searchLocalAddressSuggest('house', housePart, {
+      city: resolvedCity.name,
+      citySourceKey: helpers.strOrNull(resolvedCity.source_key),
+      selectedSourceKey: helpers.strOrNull(selectedRow.source_key),
+      limit: 12,
+    });
+    if (localSearch && localSearch.ok) {
+      const normalizedHousePart = normalizeAddressServiceHouseToken(housePart);
+      const exactAddressItems = (Array.isArray(localSearch.data && localSearch.data.items) ? localSearch.data.items : [])
+        .filter((item) => (
+          String(item && item.object_type || '').trim() === 'address'
+          && normalizeAddressServiceHouseToken(item && item.house_number) === normalizedHousePart
+        ));
+      if (exactAddressItems.length > 1) {
+        return { ok: false, error: 'ADDRESS_SELECTION_REQUIRED' };
+      }
+      const exactAddressItem = exactAddressItems[0] || null;
+      if (exactAddressItem) {
+        candidate = createCandidate([streetLabel, helpers.strOrNull(exactAddressItem.house_number)].filter(Boolean).join(', '), {
+          actualLocality: helpers.strOrNull(exactAddressItem.context_locality || exactAddressItem.city_name),
+          addressStreet: streetLabel,
+          addressHouse: helpers.strOrNull(exactAddressItem.house_number),
+          lat: exactAddressItem.lat,
+          lng: exactAddressItem.lng,
+          isExactAddress: true,
+          selectedSourceKey: helpers.strOrNull(exactAddressItem.source_key),
+          selectedObjectType: 'address',
+        });
+      } else {
+        candidate = createCandidate([streetLabel, housePart].filter(Boolean).join(', '), {
+          actualLocality: helpers.strOrNull(selectedRow.locality_name),
+          addressStreet: streetLabel,
+          addressHouse: helpers.strOrNull(housePart),
+          selectedSourceKey: helpers.strOrNull(selectedRow.source_key),
+          selectedObjectType: 'street',
+          typedHousePart: helpers.strOrNull(housePart),
+        });
+      }
+    }
+  }
+
+  if (!candidate) {
+    const localSearch = await searchLocalAddressSuggest('address', normalizedAddress, {
+      city: resolvedCity.name,
+      citySourceKey: resolvedCity.source_key,
+      limit: 12,
+    });
+    if (localSearch && localSearch.ok) {
+      const normalizedTypedHouse = normalizeAddressServiceHouseToken(extractAddressServiceHouseToken(normalizedAddress));
+      const exactAddressItems = (Array.isArray(localSearch.data && localSearch.data.items) ? localSearch.data.items : [])
+        .filter((item) => (
+          String(item && item.object_type || '').trim() === 'address'
+          && (!normalizedTypedHouse || normalizeAddressServiceHouseToken(item && item.house_number) === normalizedTypedHouse)
+        ));
+      if (exactAddressItems.length > 1) {
+        return { ok: false, error: 'ADDRESS_SELECTION_REQUIRED' };
+      }
+      const exactAddressItem = exactAddressItems[0] || null;
+      if (exactAddressItem) {
+        candidate = createCandidate(helpers.strOrNull(exactAddressItem.value || exactAddressItem.label), {
+          actualLocality: helpers.strOrNull(exactAddressItem.context_locality || exactAddressItem.city_name),
+          lat: exactAddressItem.lat,
+          lng: exactAddressItem.lng,
+          isExactAddress: true,
+          selectedSourceKey: helpers.strOrNull(exactAddressItem.source_key),
+          selectedObjectType: 'address',
+        });
+      }
+    }
+  }
+
+  if (!candidate) {
+    candidate = createCandidate(normalizedAddress, {
+      actualLocality: selectedContextLocality || resolvedCity.name,
+      selectedObjectType: null,
+    });
+  }
+
+  const comparableInputAddress = buildStoreSavedAddress(
+    resolvedCity.name,
+    selectedContextLocality || (selectedRow && helpers.strOrNull(selectedRow.locality_name)),
+    normalizedAddress
+  ) || normalizedAddress;
+
+  if (!confirmNormalized && hasMaterialStoreNormalizationDifference(normalizedCity, comparableInputAddress, candidate.city, candidate.address)) {
+    return {
+      ok: false,
+      error: 'ADDRESS_CONFIRMATION_REQUIRED',
+      data: {
+        normalization: buildStoreNormalizationPayload(candidate),
+      },
+    };
+  }
+
+  if (candidate.lat !== null && candidate.lng !== null) {
+    return {
+      ok: true,
+      data: {
+        city: candidate.city,
+        address: candidate.address,
+        address_ref: candidate.address_ref,
+        address_raw_input: candidate.address_raw_input,
+        address_normalized_display: candidate.address_normalized_display,
+        lat: candidate.lat,
+        lng: candidate.lng,
+        resolved_city_source_key: candidate.resolved_city_source_key,
+        selected_source_key: candidate.selected_source_key,
+        selected_object_type: candidate.selected_object_type,
+        selected_context_locality: candidate.selected_context_locality,
+        typed_house_part: candidate.typed_house_part,
+      },
+    };
+  }
+
+  const query = buildStoreGeocodeQuery(candidate.lookup_address || candidate.address, candidate.lookup_city || candidate.city);
+  if (!query) {
+    return { ok: false, error: 'ADDRESS_REQUIRED' };
+  }
+  const geocode = await geocodeStoreAddress(query, { sourceState: options.mapConfig || null });
+  if (!geocode || !geocode.ok || !geocode.data || !geocode.data.item) {
+    return { ok: false, error: geocode && geocode.error ? geocode.error : 'GEOCODER_UPSTREAM_ERROR' };
+  }
+  const item = geocode.data.item;
+  const cityName = helpers.strOrNull(item.city_name);
+  const lat = normalizeStoreCoordinateValue(item.lat);
+  const lng = normalizeStoreCoordinateValue(item.lng);
+  if (!cityName) return { ok: false, error: 'ADDRESS_CITY_NOT_FOUND' };
+  if (lat === null || lng === null) return { ok: false, error: 'ADDRESS_COORDINATES_NOT_FOUND' };
+  const finalizedCandidate = candidate && candidate.is_exact_address
+    ? candidate
+    : {
+      ...candidate,
+      city: resolvedCity.name,
+      address: buildStoreSavedAddress(
+        resolvedCity.name,
+        candidate.selected_context_locality || cityName,
+        candidate.lookup_address || candidate.address || normalizedAddress
+      ) || candidate.address,
+    };
+  if (
+    !confirmNormalized &&
+    finalizedCandidate &&
+    hasMaterialStoreNormalizationDifference(normalizedCity, comparableInputAddress, finalizedCandidate.city, finalizedCandidate.address)
+  ) {
+    return {
+      ok: false,
+      error: 'ADDRESS_CONFIRMATION_REQUIRED',
+      data: {
+        normalization: buildStoreNormalizationPayload(finalizedCandidate),
+      },
+    };
+  }
+  return {
+    ok: true,
+    data: {
+      city: finalizedCandidate.city || cityName,
+      address: finalizedCandidate.address || normalizedAddress,
+      address_ref: finalizedCandidate.address_ref,
+      address_raw_input: finalizedCandidate.address_raw_input || normalizedAddress,
+      address_normalized_display: finalizedCandidate.address_normalized_display || finalizedCandidate.address || normalizedAddress,
+      address_street: finalizedCandidate.address_street || normalizedStreet,
+      address_house: finalizedCandidate.address_house || normalizedHouse || finalizedCandidate.typed_house_part || null,
+      address_context_locality: finalizedCandidate.address_context_locality || finalizedCandidate.selected_context_locality || null,
+      lat,
+      lng,
+      resolved_city_source_key: finalizedCandidate.resolved_city_source_key,
+      selected_source_key: finalizedCandidate.selected_source_key,
+      selected_object_type: finalizedCandidate.selected_object_type,
+      selected_context_locality: finalizedCandidate.selected_context_locality,
+      typed_house_part: finalizedCandidate.typed_house_part,
+    },
+  };
+}
+
+async function fetchStoreWithHours(tenantId, storeId) {
+  await ensureStoreAddressIdentityColumns();
+  const [rows] = await db.query(
+    `SELECT tenant_id, id, code, name, address, address_ref, address_raw_input, address_normalized_display, address_street, address_house, address_context_locality, city, floor, apartment, cabinet, address_comment, lat, lng, phone, timezone, is_active, use_global_hours, use_delivery_hours, created_at, updated_at
        FROM ten_stores
        WHERE tenant_id=? AND id=? LIMIT 1`,
     [tenantId, storeId]
   );
-    if (!rows.length) return null;
-    const store = rows[0];
-    const hoursRows = await loadStoreHoursForStores(tenantId, [storeId]);
-    const hoursMap = organizeStoreHours(hoursRows);
-    store.hours = hoursMap.get(storeId) || [];
-    const deliveryRows = await loadStoreDeliveryHoursForStores(tenantId, [storeId]);
-    const deliveryMap = organizeStoreHours(deliveryRows);
-    store.delivery_hours = deliveryMap.get(storeId) || [];
-    store.use_global_hours = Number(store.use_global_hours) === 1 ? 1 : 0;
-    store.use_delivery_hours = Number(store.use_delivery_hours) === 1 ? 1 : 0;
-    return store;
-  }
+  if (!rows.length) return null;
+  const store = normalizeStoreRecord(rows[0]);
+  const hoursRows = await loadStoreHoursForStores(tenantId, [storeId]);
+  const hoursMap = organizeStoreHours(hoursRows);
+  store.hours = hoursMap.get(storeId) || [];
+  const deliveryRows = await loadStoreDeliveryHoursForStores(tenantId, [storeId]);
+  const deliveryMap = organizeStoreHours(deliveryRows);
+  store.delivery_hours = deliveryMap.get(storeId) || [];
+  store.use_global_hours = Number(store.use_global_hours) === 1 ? 1 : 0;
+  store.use_delivery_hours = Number(store.use_delivery_hours) === 1 ? 1 : 0;
+  return store;
+}
 
   // ------------------------------
   // Upload: tenant assets (logo/favicon)
@@ -715,7 +1918,7 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
         [tenantId]
       );
 
-      res.json({ ok: true, url, tenant: rows[0] || null });
+      res.json({ ok: true, url, tenant: serializeTenantForClient(rows[0] || null) });
     } catch (err) {
       console.error('Ошибка загрузки tenant ассета:', err);
       res.status(500).json({ ok: false, error: 'UPLOAD_ERROR' });
@@ -779,7 +1982,7 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
         [tenantId]
       );
 
-      res.json({ ok: true, url, tenant: rows[0] || null });
+      res.json({ ok: true, url, tenant: serializeTenantForClient(rows[0] || null) });
     } catch (err) {
       console.error('Ошибка загрузки звука:', err);
       res.status(500).json({ ok: false, error: 'UPLOAD_ERROR' });
@@ -828,17 +2031,396 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
 
       res.json({
         ok: true,
-        tenant: {
-          ...tenant,
+        tenant: serializeTenantForClient(tenant, {
           telegram_mini_app_url: telegramMiniAppUrl,
           max_mini_app_url: maxMiniAppUrl
-        }
+        })
       });
     } catch (err) {
       console.error('Ошибка получения tenant профиля:', err);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });
+
+  router.get('/map-provider-accounts', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+
+      if (!tenantId) {
+        return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+      }
+
+      await ensureTenantMapProviderColumns();
+
+      const tenantRow = await getTenantMapConfigRow(db, tenantId, { includeAccounts: true });
+      if (!tenantRow) {
+        return res.status(404).json({ ok: false, error: 'TENANT_NOT_FOUND' });
+      }
+
+      return res.json({
+        ok: true,
+        ...buildTenantMapProviderResponse(tenantRow),
+      });
+    } catch (err) {
+      console.error('Map provider accounts load error:', err);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.get('/map-provider-config', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+
+      if (!tenantId) {
+        return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+      }
+
+      await ensureTenantMapProviderColumns();
+
+      const tenantRow = await getTenantMapConfigRow(db, tenantId, { includeAccounts: true });
+      if (!tenantRow) {
+        return res.status(404).json({ ok: false, error: 'TENANT_NOT_FOUND' });
+      }
+
+      return res.json({
+        ok: true,
+        data: buildTenantResolvedMapConfigResponse(tenantRow),
+      });
+    } catch (err) {
+      console.error('Tenant map provider config load error:', err);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.put('/map-provider-config', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+
+      if (!tenantId) {
+        return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+      }
+
+      const saveResult = await saveTenantMapConfig(db, tenantId, req.body || {});
+      if (!saveResult.ok) {
+        const status = saveResult.error === 'TENANT_NOT_FOUND' ? 404 : 400;
+        return res.status(status).json({ ok: false, error: saveResult.error || 'BAD_REQUEST' });
+      }
+
+      return res.json({
+        ok: true,
+        data: buildTenantResolvedMapConfigResponse(saveResult.row),
+      });
+    } catch (err) {
+      console.error('Tenant map provider config save error:', err);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.put('/map-provider-accounts', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+
+      if (!tenantId) {
+        return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+      }
+
+      await ensureTenantMapProviderColumns();
+
+      if (!Object.prototype.hasOwnProperty.call(req.body || {}, 'items')) {
+        return res.status(400).json({ ok: false, error: 'MAP_PROVIDER_ITEMS_REQUIRED' });
+      }
+
+      const tenantRow = await getTenantMapConfigRow(db, tenantId, { includeAccounts: true });
+      if (!tenantRow) {
+        return res.status(404).json({ ok: false, error: 'TENANT_NOT_FOUND' });
+      }
+
+      const mergedItems = mergeTenantMapProviderAccountsWithExisting(
+        (req.body || {}).items,
+        tenantRow.map_provider_accounts_json
+      );
+      const sanitized = sanitizeTenantMapProviderAccounts(mergedItems);
+      if (!sanitized.ok) {
+        return res.status(400).json({ ok: false, error: sanitized.error || 'BAD_MAP_PROVIDER_ACCOUNTS' });
+      }
+
+      const serializedItems = sanitized.items.length ? JSON.stringify(sanitized.items) : null;
+      await db.query(
+        'UPDATE ten_tenants SET map_provider_accounts_json=? WHERE id=?',
+        [serializedItems, tenantId]
+      );
+
+      return res.json({
+        ok: true,
+        ...buildTenantMapProviderResponse({ ...tenantRow, map_provider_accounts_json: serializedItems }),
+      });
+    } catch (err) {
+      console.error('Map provider accounts save error:', err);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.get('/map-provider-accounts/:accountId/reveal', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      const requestedId = normalizeMapProviderAccountId(req.params.accountId, 0);
+
+      if (!tenantId) {
+        return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+      }
+
+      await ensureTenantMapProviderColumns();
+
+      const [rows] = await db.query(
+        'SELECT id, map_provider_accounts_json FROM ten_tenants WHERE id=? LIMIT 1',
+        [tenantId]
+      );
+
+      if (!rows.length) {
+        return res.status(404).json({ ok: false, error: 'TENANT_NOT_FOUND' });
+      }
+
+      const sanitized = sanitizeTenantMapProviderAccounts(rows[0].map_provider_accounts_json);
+      if (!sanitized.ok) {
+        return res.status(404).json({ ok: false, error: 'MAP_PROVIDER_ACCOUNT_NOT_FOUND' });
+      }
+
+      const item = sanitized.items.find((entry) => String(entry.id || '') === requestedId);
+      if (!item) {
+        return res.status(404).json({ ok: false, error: 'MAP_PROVIDER_ACCOUNT_NOT_FOUND' });
+      }
+
+      return res.json({
+        ok: true,
+        item: {
+          id: item.id,
+          api_key: item.api_key,
+          login: item.login,
+          password: item.password,
+          is_active: item.is_active === true,
+        },
+      });
+    } catch (err) {
+      console.error('Map provider account reveal error:', err);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  function sanitizeGeneralDeliveryPriceTiers(rawTiers) {
+    return sanitizeDeliveryPriceTiers(rawTiers, {
+      requiredError: 'DELIVERY_SETTING_PRICE_TIERS_REQUIRED',
+      limitError: 'DELIVERY_SETTING_PRICE_TIERS_LIMIT',
+    });
+  }
+
+  function serializeDeliverySettingRow(row, extras = {}) {
+    const source = row && typeof row === 'object' ? row : {};
+    const storeIds = Array.isArray(extras.store_ids)
+      ? extras.store_ids.map((value) => Number(value)).filter((value) => Number.isFinite(value) && value > 0)
+      : [];
+    const tiers = normalizeDeliveryPriceTiersForOutput(extras.price_tiers);
+    const priceTiers = tiers.length ? tiers : buildLegacyDeliveryPriceTiers(source);
+    const legacy = deriveLegacyDeliveryFieldsFromTiers(priceTiers);
+    const defaultStoreId = source.default_store_id == null ? null : Number(source.default_store_id);
+    return {
+      id: Number(source.id || 0),
+      tenant_id: Number(source.tenant_id || 0),
+      name: String(source.name || '').trim(),
+      eta_minutes: source.eta_minutes == null ? null : Number(source.eta_minutes),
+      delivery_cost: Number(legacy.delivery_cost || 0),
+      min_order_amount: Number(legacy.min_order_amount || 0),
+      free_delivery_from: legacy.free_delivery_from != null ? Number(legacy.free_delivery_from) : null,
+      default_store_id: Number.isFinite(defaultStoreId) && defaultStoreId > 0 ? defaultStoreId : null,
+      is_active: Number(source.is_active) === 1 ? 1 : 0,
+      created_at: source.created_at || null,
+      updated_at: source.updated_at || null,
+      store_ids: storeIds,
+      price_tiers: priceTiers,
+    };
+  }
+
+  async function loadDeliverySettingsForTenant(tenantId, settingId = null) {
+    const params = [tenantId];
+    const whereParts = ['tenant_id=?'];
+    if (settingId != null) {
+      whereParts.push('id=?');
+      params.push(settingId);
+    }
+
+    let rows = [];
+    let hasEtaColumn = true;
+    try {
+      const [settingsRows] = await db.query(
+        `SELECT id, tenant_id, name, eta_minutes, delivery_cost, min_order_amount, free_delivery_from, default_store_id, is_active, created_at, updated_at
+         FROM ten_delivery_settings
+         WHERE ${whereParts.join(' AND ')}
+         ORDER BY id ASC`,
+        params
+      );
+      rows = Array.isArray(settingsRows) ? settingsRows : [];
+    } catch (error) {
+      if (String(error && error.code || '') !== 'ER_BAD_FIELD_ERROR') throw error;
+      hasEtaColumn = false;
+      const [settingsRows] = await db.query(
+        `SELECT id, tenant_id, name, delivery_cost, min_order_amount, free_delivery_from, default_store_id, is_active, created_at, updated_at
+         FROM ten_delivery_settings
+         WHERE ${whereParts.join(' AND ')}
+         ORDER BY id ASC`,
+        params
+      );
+      rows = Array.isArray(settingsRows) ? settingsRows : [];
+    }
+
+    const settingIds = rows
+      .map((row) => Number(row && row.id))
+      .filter((value) => Number.isFinite(value) && value > 0);
+    const storeMap = new Map();
+    const tiersMap = new Map();
+
+    if (settingIds.length) {
+      const placeholders = settingIds.map(() => '?').join(',');
+      const [links] = await db.query(
+        `SELECT delivery_setting_id, store_id
+         FROM ten_delivery_settings_stores
+         WHERE tenant_id=? AND delivery_setting_id IN (${placeholders})`,
+        [tenantId, ...settingIds]
+      );
+      (Array.isArray(links) ? links : []).forEach((link) => {
+        const key = Number(link && link.delivery_setting_id);
+        const storeId = Number(link && link.store_id);
+        if (!Number.isFinite(key) || !Number.isFinite(storeId) || storeId <= 0) return;
+        if (!storeMap.has(key)) storeMap.set(key, []);
+        storeMap.get(key).push(storeId);
+      });
+
+      try {
+        const [tierRows] = await db.query(
+          `SELECT delivery_setting_id, min_order_amount, delivery_cost, sort_order
+           FROM \`${deliverySettingPriceTiersTable}\`
+           WHERE tenant_id=? AND delivery_setting_id IN (${placeholders})
+           ORDER BY delivery_setting_id ASC, sort_order ASC, id ASC`,
+          [tenantId, ...settingIds]
+        );
+        (Array.isArray(tierRows) ? tierRows : []).forEach((tier) => {
+          const key = Number(tier && tier.delivery_setting_id);
+          if (!Number.isFinite(key)) return;
+          if (!tiersMap.has(key)) tiersMap.set(key, []);
+          tiersMap.get(key).push({
+            min_order_amount: tier.min_order_amount,
+            delivery_cost: tier.delivery_cost,
+            sort_order: tier.sort_order,
+          });
+        });
+      } catch (error) {
+        if (String(error && error.code || '') !== 'ER_NO_SUCH_TABLE') throw error;
+      }
+    }
+
+    return rows.map((row) => serializeDeliverySettingRow(
+      hasEtaColumn ? row : { ...row, eta_minutes: null },
+      {
+        store_ids: storeMap.get(Number(row && row.id)) || [],
+        price_tiers: tiersMap.get(Number(row && row.id)) || [],
+      }
+    ));
+  }
+
+  function buildDeliverySettingPayload(body, current = null) {
+    const source = body && typeof body === 'object' ? body : {};
+    const snapshot = current && typeof current === 'object' ? current : null;
+    const name = source.name !== undefined ? helpers.strOrNull(source.name) : (snapshot ? snapshot.name : null);
+    if (!name) return { ok: false, error: 'NAME_REQUIRED' };
+
+    const storeIds = source.store_ids !== undefined
+      ? (Array.isArray(source.store_ids)
+        ? Array.from(new Set(source.store_ids.map(Number).filter((value) => Number.isFinite(value) && value > 0)))
+        : [])
+      : (snapshot && Array.isArray(snapshot.store_ids) ? snapshot.store_ids.slice() : []);
+
+    let defaultStoreId = source.default_store_id !== undefined
+      ? helpers.numOrNull(source.default_store_id)
+      : (snapshot ? snapshot.default_store_id : null);
+    if (defaultStoreId != null && storeIds.length && !storeIds.includes(defaultStoreId)) {
+      defaultStoreId = null;
+    }
+
+    let tiers = null;
+    if (source.price_tiers !== undefined) {
+      const tiersResult = sanitizeGeneralDeliveryPriceTiers(source.price_tiers);
+      if (!tiersResult.ok) return tiersResult;
+      tiers = tiersResult.items;
+    } else if (
+      source.delivery_cost !== undefined
+      || source.min_order_amount !== undefined
+      || source.free_delivery_from !== undefined
+    ) {
+      tiers = buildLegacyDeliveryPriceTiers({
+        delivery_cost: source.delivery_cost !== undefined ? source.delivery_cost : (snapshot ? snapshot.delivery_cost : 0),
+        min_order_amount: source.min_order_amount !== undefined ? source.min_order_amount : (snapshot ? snapshot.min_order_amount : 0),
+        free_delivery_from: source.free_delivery_from !== undefined ? source.free_delivery_from : (snapshot ? snapshot.free_delivery_from : null),
+      });
+    } else {
+      tiers = normalizeDeliveryPriceTiersForOutput(snapshot && snapshot.price_tiers);
+    }
+
+    if (!Array.isArray(tiers) || !tiers.length) {
+      tiers = buildLegacyDeliveryPriceTiers({ delivery_cost: 0, min_order_amount: 0, free_delivery_from: null });
+    }
+
+    const legacy = deriveLegacyDeliveryFieldsFromTiers(tiers);
+    return {
+      ok: true,
+      item: {
+        name,
+        eta_minutes: source.eta_minutes !== undefined
+          ? normalizeDeliveryEtaMinutesShared(source.eta_minutes)
+          : (snapshot ? snapshot.eta_minutes : null),
+        delivery_cost: Number(legacy.delivery_cost || 0),
+        min_order_amount: Number(legacy.min_order_amount || 0),
+        free_delivery_from: legacy.free_delivery_from != null ? Number(legacy.free_delivery_from) : null,
+        is_active: source.is_active !== undefined
+          ? (helpers.toBool(source.is_active, true) ? 1 : 0)
+          : (snapshot && Number(snapshot.is_active) === 1 ? 1 : 0),
+        store_ids: storeIds,
+        default_store_id: defaultStoreId,
+        price_tiers: tiers,
+      },
+    };
+  }
+
+  async function replaceDeliverySettingStores(tenantId, settingId, storeIds) {
+    await db.query(
+      'DELETE FROM ten_delivery_settings_stores WHERE tenant_id=? AND delivery_setting_id=?',
+      [tenantId, settingId]
+    );
+    if (!Array.isArray(storeIds) || !storeIds.length) return;
+    const linkValues = storeIds.map((storeId) => [settingId, storeId, tenantId]);
+    const linkPlaceholders = linkValues.map(() => '(?, ?, ?)').join(',');
+    await db.query(
+      `INSERT INTO ten_delivery_settings_stores (delivery_setting_id, store_id, tenant_id) VALUES ${linkPlaceholders}`,
+      linkValues.flat()
+    );
+  }
+
+  async function replaceDeliverySettingPriceTiers(tenantId, settingId, priceTiers) {
+    await db.query(
+      `DELETE FROM \`${deliverySettingPriceTiersTable}\` WHERE tenant_id=? AND delivery_setting_id=?`,
+      [tenantId, settingId]
+    );
+    if (!Array.isArray(priceTiers) || !priceTiers.length) return;
+    const tierValues = priceTiers.map((tier) => ([
+      settingId,
+      tenantId,
+      Number(tier.min_order_amount || 0),
+      Number(tier.delivery_cost || 0),
+      Number(tier.sort_order || 0),
+    ]));
+    const tierPlaceholders = tierValues.map(() => '(?, ?, ?, ?, ?)').join(', ');
+    await db.query(
+      `INSERT INTO \`${deliverySettingPriceTiersTable}\` (delivery_setting_id, tenant_id, min_order_amount, delivery_cost, sort_order) VALUES ${tierPlaceholders}`,
+      tierValues.flat()
+    );
+  }
 
   /**
    * PUT /api/admin/tenant
@@ -943,6 +2525,7 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       }
 
       await ensureTenantChatColumns();
+      await ensureTenantMapProviderColumns();
 
       const [currentRows] = await db.query(
         'SELECT * FROM ten_tenants WHERE id=? LIMIT 1',
@@ -1134,7 +2717,7 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
         [tenantId]
       );
 
-      res.json({ ok: true, tenant: rows[0] || null });
+      res.json({ ok: true, tenant: serializeTenantForClient(rows[0] || null) });
     } catch (err) {
       console.error('Ошибка обновления tenant профиля:', err);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
@@ -1219,11 +2802,12 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
 
   router.get('/stores', async (req, res) => {
     try {
+      await ensureStoreAddressIdentityColumns();
       const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
       if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
 
       const [rows] = await db.query(
-        `SELECT tenant_id, id, code, name, address, city, phone, timezone, is_active, use_global_hours, use_delivery_hours, created_at, updated_at
+        `SELECT tenant_id, id, code, name, address, address_ref, address_raw_input, address_normalized_display, address_street, address_house, address_context_locality, city, floor, apartment, cabinet, address_comment, lat, lng, phone, timezone, is_active, use_global_hours, use_delivery_hours, created_at, updated_at
          FROM ten_stores
          WHERE tenant_id=?
          ORDER BY id ASC`,
@@ -1236,7 +2820,7 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       const hoursMap = organizeStoreHours(hoursRows);
       const deliveryMap = organizeStoreHours(deliveryRows);
       const enriched = stores.map((store) => ({
-        ...store,
+        ...normalizeStoreRecord(store),
         use_global_hours: Number(store.use_global_hours) === 1 ? 1 : 0,
         use_delivery_hours: Number(store.use_delivery_hours) === 1 ? 1 : 0,
         hours: hoursMap.get(Number(store.id)) || []
@@ -1250,13 +2834,33 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
     }
   });
 
-    router.post('/stores', async (req, res) => {
+  router.post('/stores', async (req, res) => {
       try {
+      await ensureStoreAddressIdentityColumns();
       const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
       const name = helpers.strOrNull(req.body.name);
       const codeInput = helpers.strOrNull(req.body.code);
+      const cityInput = helpers.strOrNull(req.body.city);
       const address = helpers.strOrNull(req.body.address);
-      const city = helpers.strOrNull(req.body.city);
+      const addressStreet = helpers.strOrNull(req.body.address_street);
+      const addressHouse = helpers.strOrNull(req.body.address_house);
+      const addressContextLocality = helpers.strOrNull(req.body.address_context_locality);
+      const resolvedCitySourceKey = helpers.strOrNull(req.body.resolved_city_source_key);
+      const selectedSourceKey = helpers.strOrNull(req.body.selected_source_key);
+      const selectedObjectType = helpers.strOrNull(req.body.selected_object_type);
+      const selectedContextLocality = helpers.strOrNull(req.body.selected_context_locality);
+      const typedHousePart = helpers.strOrNull(req.body.typed_house_part);
+      const confirmNormalized = helpers.toBool(req.body.confirm_normalized, false);
+      const floor = helpers.strOrNull(req.body.floor);
+      const apartment = helpers.strOrNull(req.body.apartment);
+      const cabinet = helpers.strOrNull(req.body.cabinet);
+      const addressComment = helpers.strOrNull(req.body.address_comment);
+      const latResult = req.body.lat !== undefined ? parseStoreCoordinate(req.body.lat, 'lat') : null;
+      if (latResult && latResult.error) return res.status(400).json({ ok: false, error: latResult.error });
+      const lngResult = req.body.lng !== undefined ? parseStoreCoordinate(req.body.lng, 'lng') : null;
+      if (lngResult && lngResult.error) return res.status(400).json({ ok: false, error: lngResult.error });
+      const explicitLat = latResult ? latResult.value : undefined;
+      const explicitLng = lngResult ? lngResult.value : undefined;
       const phone = helpers.strOrNull(req.body.phone);
       let timezone = helpers.strOrNull(req.body.timezone);
       const isActive = helpers.toBool(req.body.is_active, true) ? 1 : 0;
@@ -1264,12 +2868,41 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       const useDeliveryHours = helpers.toBool(req.body.use_delivery_hours, false) ? 1 : 0;
       const hoursPayload = Array.isArray(req.body.hours) ? req.body.hours : null;
       const deliveryHoursPayload = Array.isArray(req.body.delivery_hours) ? req.body.delivery_hours : null;
-
       if (!tenantId) {
         return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
       }
       if (!name) {
         return res.status(400).json({ ok: false, error: 'NAME_REQUIRED' });
+      }
+
+      const tenantMapConfig = await getTenantMapConfigRow(db, tenantId, { includeAccounts: true });
+      const storeAddressMapEnabled = isStoreAddressMapModeEnabled(tenantMapConfig);
+
+      const useResolvedMapAddress = storeAddressMapEnabled && Boolean(selectedSourceKey && selectedObjectType);
+      const location = useResolvedMapAddress
+        ? await resolveStoreLocationByAddress(address, cityInput, {
+          addressStreet,
+          addressHouse,
+          resolvedCitySourceKey,
+          selectedSourceKey,
+          selectedObjectType,
+          selectedContextLocality: addressContextLocality || selectedContextLocality,
+          typedHousePart,
+          confirmNormalized,
+          mapConfig: tenantMapConfig,
+        })
+        : buildManualStoreLocation(address, cityInput, {
+          addressStreet,
+          addressHouse,
+          addressContextLocality: addressContextLocality || selectedContextLocality,
+          typedHousePart,
+        });
+      if (!location.ok) {
+        return res.status(getStoreGeocodingHttpStatus(location.error)).json({
+          ok: false,
+          error: location.error,
+          normalization: location.data && location.data.normalization ? location.data.normalization : undefined,
+        });
       }
 
       if (!timezone) {
@@ -1291,8 +2924,32 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       }
 
       await db.query(
-        'INSERT INTO ten_stores (tenant_id, id, code, name, address, city, phone, timezone, is_active, use_global_hours, use_delivery_hours) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
-        [tenantId, nextId, code, name, address, city, phone, timezone, isActive, useGlobalHours, useDeliveryHours]
+        'INSERT INTO ten_stores (tenant_id, id, code, name, address, address_ref, address_raw_input, address_normalized_display, address_street, address_house, address_context_locality, city, floor, apartment, cabinet, address_comment, lat, lng, phone, timezone, is_active, use_global_hours, use_delivery_hours) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+        [
+          tenantId,
+          nextId,
+          code,
+          name,
+          location.data.address,
+          location.data.address_ref || null,
+          location.data.address_raw_input || address,
+          location.data.address_normalized_display || location.data.address,
+          location.data.address_street || addressStreet,
+          location.data.address_house || addressHouse,
+          location.data.address_context_locality || addressContextLocality || location.data.selected_context_locality || null,
+          location.data.city,
+          floor,
+          apartment,
+          cabinet,
+          addressComment,
+          explicitLat !== undefined ? explicitLat : location.data.lat,
+          explicitLng !== undefined ? explicitLng : location.data.lng,
+          phone,
+          timezone,
+          isActive,
+          useGlobalHours,
+          useDeliveryHours,
+        ]
       );
 
       if (hoursPayload !== null) {
@@ -1312,13 +2969,14 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
 
     router.patch('/stores/:id', async (req, res) => {
       try {
+        await ensureStoreAddressIdentityColumns();
         const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
         const id = helpers.numOrNull(req.params.id);
         if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
         if (!id) return res.status(400).json({ ok: false, error: 'ID_REQUIRED' });
 
         const [existingRows] = await db.query(
-          'SELECT tenant_id, id, code, name, address, city, phone, timezone, is_active FROM ten_stores WHERE tenant_id=? AND id=? LIMIT 1',
+          'SELECT tenant_id, id, code, name, address, address_ref, address_raw_input, address_normalized_display, address_street, address_house, address_context_locality, city, floor, apartment, cabinet, address_comment, lat, lng, phone, timezone, is_active FROM ten_stores WHERE tenant_id=? AND id=? LIMIT 1',
           [tenantId, id]
         );
         if (!existingRows.length) {
@@ -1329,7 +2987,26 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
         const name = req.body.name !== undefined ? helpers.strOrNull(req.body.name) : undefined;
         const code = req.body.code !== undefined ? helpers.strOrNull(req.body.code) : undefined;
         const address = req.body.address !== undefined ? helpers.strOrNull(req.body.address) : undefined;
+        const addressStreet = req.body.address_street !== undefined ? helpers.strOrNull(req.body.address_street) : undefined;
+        const addressHouse = req.body.address_house !== undefined ? helpers.strOrNull(req.body.address_house) : undefined;
+        const addressContextLocality = req.body.address_context_locality !== undefined ? helpers.strOrNull(req.body.address_context_locality) : undefined;
         const city = req.body.city !== undefined ? helpers.strOrNull(req.body.city) : undefined;
+        const resolvedCitySourceKey = req.body.resolved_city_source_key !== undefined ? helpers.strOrNull(req.body.resolved_city_source_key) : undefined;
+        const selectedSourceKey = req.body.selected_source_key !== undefined ? helpers.strOrNull(req.body.selected_source_key) : undefined;
+        const selectedObjectType = req.body.selected_object_type !== undefined ? helpers.strOrNull(req.body.selected_object_type) : undefined;
+        const selectedContextLocality = req.body.selected_context_locality !== undefined ? helpers.strOrNull(req.body.selected_context_locality) : undefined;
+        const typedHousePart = req.body.typed_house_part !== undefined ? helpers.strOrNull(req.body.typed_house_part) : undefined;
+        const confirmNormalized = req.body.confirm_normalized !== undefined ? helpers.toBool(req.body.confirm_normalized, false) : false;
+        const floor = req.body.floor !== undefined ? helpers.strOrNull(req.body.floor) : undefined;
+        const apartment = req.body.apartment !== undefined ? helpers.strOrNull(req.body.apartment) : undefined;
+        const cabinet = req.body.cabinet !== undefined ? helpers.strOrNull(req.body.cabinet) : undefined;
+        const addressComment = req.body.address_comment !== undefined ? helpers.strOrNull(req.body.address_comment) : undefined;
+        const latResult = req.body.lat !== undefined ? parseStoreCoordinate(req.body.lat, 'lat') : null;
+        if (latResult && latResult.error) return res.status(400).json({ ok: false, error: latResult.error });
+        const lngResult = req.body.lng !== undefined ? parseStoreCoordinate(req.body.lng, 'lng') : null;
+        if (lngResult && lngResult.error) return res.status(400).json({ ok: false, error: lngResult.error });
+        const lat = latResult ? latResult.value : undefined;
+        const lng = lngResult ? lngResult.value : undefined;
         const phone = req.body.phone !== undefined ? helpers.strOrNull(req.body.phone) : undefined;
         const timezone = req.body.timezone !== undefined ? helpers.strOrNull(req.body.timezone) : undefined;
         const useGlobalHours = req.body.use_global_hours !== undefined ? (helpers.toBool(req.body.use_global_hours, false) ? 1 : 0) : undefined;
@@ -1341,6 +3018,15 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
         if (name !== undefined && !name) {
           return res.status(400).json({ ok: false, error: 'NAME_REQUIRED' });
         }
+        if (city !== undefined && !city) {
+          return res.status(400).json({ ok: false, error: 'CITY_REQUIRED' });
+        }
+        if (address !== undefined && !address && addressStreet === undefined) {
+          return res.status(400).json({ ok: false, error: 'ADDRESS_REQUIRED' });
+        }
+
+        const tenantMapConfig = await getTenantMapConfigRow(db, tenantId, { includeAccounts: true });
+        const storeAddressMapEnabled = isStoreAddressMapModeEnabled(tenantMapConfig);
 
         if (code !== undefined && code !== existing.code) {
           if (code) {
@@ -1354,6 +3040,65 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
           }
         }
 
+        let resolvedLocation = null;
+        let finalLat = lat;
+        let finalLng = lng;
+        const nextCityForGeocode = city !== undefined ? city : helpers.strOrNull(existing.city);
+        const nextContextLocality = addressContextLocality !== undefined
+          ? addressContextLocality
+          : helpers.strOrNull(existing.address_context_locality);
+        const nextAddressStreet = addressStreet !== undefined ? addressStreet : helpers.strOrNull(existing.address_street);
+        const nextAddressHouse = addressHouse !== undefined ? addressHouse : helpers.strOrNull(existing.address_house);
+        const nextAddressForGeocode = address !== undefined
+          ? address
+          : (buildStoreSavedAddress(
+            nextCityForGeocode,
+            nextContextLocality || nextCityForGeocode,
+            buildStoreStreetHouseLabel(nextAddressStreet, nextAddressHouse)
+          ) || helpers.strOrNull(existing.address));
+        if (
+          (address !== undefined && address !== helpers.strOrNull(existing.address))
+          || (addressStreet !== undefined && addressStreet !== helpers.strOrNull(existing.address_street))
+          || (addressHouse !== undefined && addressHouse !== helpers.strOrNull(existing.address_house))
+          || (addressContextLocality !== undefined && addressContextLocality !== helpers.strOrNull(existing.address_context_locality))
+          || (city !== undefined && city !== helpers.strOrNull(existing.city))
+        ) {
+          const useResolvedMapAddress = storeAddressMapEnabled && Boolean(selectedSourceKey && selectedObjectType);
+          const location = useResolvedMapAddress
+            ? await resolveStoreLocationByAddress(nextAddressForGeocode, nextCityForGeocode, {
+              addressStreet: nextAddressStreet,
+              addressHouse: nextAddressHouse,
+              resolvedCitySourceKey,
+              selectedSourceKey,
+              selectedObjectType,
+              selectedContextLocality: nextContextLocality || selectedContextLocality,
+              typedHousePart,
+              confirmNormalized,
+              mapConfig: tenantMapConfig,
+            })
+            : buildManualStoreLocation(nextAddressForGeocode, nextCityForGeocode, {
+              addressStreet: nextAddressStreet,
+              addressHouse: nextAddressHouse,
+              addressContextLocality: nextContextLocality,
+              typedHousePart,
+            });
+          if (!location.ok) {
+            return res.status(getStoreGeocodingHttpStatus(location.error)).json({
+              ok: false,
+              error: location.error,
+              normalization: location.data && location.data.normalization ? location.data.normalization : undefined,
+            });
+          }
+          resolvedLocation = location.data;
+          if (storeAddressMapEnabled) {
+            if (finalLat === undefined) finalLat = resolvedLocation.lat;
+            if (finalLng === undefined) finalLng = resolvedLocation.lng;
+          } else {
+            if (finalLat === undefined) finalLat = null;
+            if (finalLng === undefined) finalLng = null;
+          }
+        }
+
         const updates = [];
         const params = [];
         if (name !== undefined) {
@@ -1364,13 +3109,64 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
           updates.push('code=?');
           params.push(code);
         }
-        if (address !== undefined) {
+        if (address !== undefined || resolvedLocation) {
           updates.push('address=?');
-          params.push(address);
+          params.push(resolvedLocation ? resolvedLocation.address : address);
         }
-        if (city !== undefined) {
+        if (addressStreet !== undefined || resolvedLocation) {
+          updates.push('address_street=?');
+          params.push(resolvedLocation ? (resolvedLocation.address_street || nextAddressStreet || null) : addressStreet);
+        }
+        if (addressHouse !== undefined || resolvedLocation) {
+          updates.push('address_house=?');
+          params.push(resolvedLocation ? (resolvedLocation.address_house || nextAddressHouse || null) : addressHouse);
+        }
+        if (addressContextLocality !== undefined || resolvedLocation) {
+          updates.push('address_context_locality=?');
+          params.push(resolvedLocation
+            ? (resolvedLocation.address_context_locality || nextContextLocality || resolvedLocation.selected_context_locality || null)
+            : addressContextLocality);
+        }
+        if (resolvedLocation) {
+          updates.push('address_ref=?');
+          params.push(storeAddressMapEnabled ? (resolvedLocation.address_ref || null) : null);
+          updates.push('address_raw_input=?');
+          params.push(resolvedLocation.address_raw_input || nextAddressForGeocode || null);
+          updates.push('address_normalized_display=?');
+          params.push(resolvedLocation.address_normalized_display || resolvedLocation.address || null);
+          updates.push('city=?');
+          params.push(resolvedLocation.city);
+          updates.push('lat=?');
+          params.push(finalLat);
+          updates.push('lng=?');
+          params.push(finalLng);
+        } else if (address === undefined && addressStreet === undefined && addressHouse === undefined && city !== undefined) {
           updates.push('city=?');
           params.push(city);
+        }
+        if (!resolvedLocation && lat !== undefined) {
+          updates.push('lat=?');
+          params.push(lat);
+        }
+        if (!resolvedLocation && lng !== undefined) {
+          updates.push('lng=?');
+          params.push(lng);
+        }
+        if (floor !== undefined) {
+          updates.push('floor=?');
+          params.push(floor);
+        }
+        if (apartment !== undefined) {
+          updates.push('apartment=?');
+          params.push(apartment);
+        }
+        if (cabinet !== undefined) {
+          updates.push('cabinet=?');
+          params.push(cabinet);
+        }
+        if (addressComment !== undefined) {
+          updates.push('address_comment=?');
+          params.push(addressComment);
         }
         if (phone !== undefined) {
           updates.push('phone=?');
@@ -1696,6 +3492,192 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
   });
 
   // ------------------------------
+  // Delivery Zones CRUD
+  // ------------------------------
+
+  router.get('/delivery-zones', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+
+      const items = await loadDeliveryZonesForTenant(tenantId);
+      return res.json({ ok: true, items });
+    } catch (err) {
+      console.error('Ошибка получения зон доставки:', err);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.post('/delivery-zones', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+
+      const payload = await sanitizeDeliveryZonePayload(tenantId, req.body || {});
+      if (!payload.ok) {
+        return res.status(400).json({ ok: false, error: payload.error || 'BAD_PAYLOAD' });
+      }
+
+      const nextZone = payload.item;
+      await ensureDeliveryZoneTables();
+      const [result] = await db.query(
+        `INSERT INTO \`${deliveryZoneTables.zones}\` (tenant_id, name, color, eta_minutes, is_active, geometry_json)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [
+          tenantId,
+          nextZone.name,
+          nextZone.color,
+          nextZone.eta_minutes,
+          nextZone.is_active,
+          JSON.stringify(nextZone.geometry),
+        ]
+      );
+
+      const zoneId = Number(result && result.insertId);
+      if (nextZone.store_ids.length) {
+        const values = nextZone.store_ids.map((storeId) => [zoneId, storeId, tenantId]);
+        const placeholders = values.map(() => '(?, ?, ?)').join(', ');
+        await db.query(
+          `INSERT INTO \`${deliveryZoneTables.stores}\` (delivery_zone_id, store_id, tenant_id) VALUES ${placeholders}`,
+          values.flat()
+        );
+      }
+
+      if (nextZone.price_tiers.length) {
+        const values = nextZone.price_tiers.map((tier) => ([
+          zoneId,
+          tenantId,
+          tier.min_order_amount,
+          tier.delivery_cost,
+          tier.sort_order,
+        ]));
+        const placeholders = values.map(() => '(?, ?, ?, ?, ?)').join(', ');
+        await db.query(
+          `INSERT INTO \`${deliveryZoneTables.tiers}\` (delivery_zone_id, tenant_id, min_order_amount, delivery_cost, sort_order) VALUES ${placeholders}`,
+          values.flat()
+        );
+      }
+
+      const item = await loadDeliveryZoneForTenant(tenantId, zoneId);
+      return res.json({ ok: true, item });
+    } catch (err) {
+      console.error('Ошибка создания зоны доставки:', err);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.put('/delivery-zones/:id', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      const zoneId = helpers.numOrNull(req.params.id);
+      if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+      if (!zoneId) return res.status(400).json({ ok: false, error: 'ID_REQUIRED' });
+
+      const current = await loadDeliveryZoneForTenant(tenantId, zoneId);
+      if (!current) {
+        return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+      }
+
+      const mergedPayload = {
+        name: Object.prototype.hasOwnProperty.call(req.body || {}, 'name') ? req.body.name : current.name,
+        color: Object.prototype.hasOwnProperty.call(req.body || {}, 'color') ? req.body.color : current.color,
+        eta_minutes: Object.prototype.hasOwnProperty.call(req.body || {}, 'eta_minutes') ? req.body.eta_minutes : current.eta_minutes,
+        is_active: Object.prototype.hasOwnProperty.call(req.body || {}, 'is_active') ? req.body.is_active : current.is_active,
+        geometry: Object.prototype.hasOwnProperty.call(req.body || {}, 'geometry') ? req.body.geometry : current.geometry,
+        store_ids: Object.prototype.hasOwnProperty.call(req.body || {}, 'store_ids') ? req.body.store_ids : current.store_ids,
+        price_tiers: Object.prototype.hasOwnProperty.call(req.body || {}, 'price_tiers') ? req.body.price_tiers : current.price_tiers,
+      };
+      const payload = await sanitizeDeliveryZonePayload(tenantId, mergedPayload);
+      if (!payload.ok) {
+        return res.status(400).json({ ok: false, error: payload.error || 'BAD_PAYLOAD' });
+      }
+
+      const nextZone = payload.item;
+      await ensureDeliveryZoneTables();
+      await db.query(
+        `UPDATE \`${deliveryZoneTables.zones}\`
+         SET name=?, color=?, eta_minutes=?, is_active=?, geometry_json=?, updated_at=NOW()
+         WHERE tenant_id=? AND id=?`,
+        [
+          nextZone.name,
+          nextZone.color,
+          nextZone.eta_minutes,
+          nextZone.is_active,
+          JSON.stringify(nextZone.geometry),
+          tenantId,
+          zoneId,
+        ]
+      );
+
+      await db.query(
+        `DELETE FROM \`${deliveryZoneTables.stores}\` WHERE tenant_id=? AND delivery_zone_id=?`,
+        [tenantId, zoneId]
+      );
+      await db.query(
+        `DELETE FROM \`${deliveryZoneTables.tiers}\` WHERE tenant_id=? AND delivery_zone_id=?`,
+        [tenantId, zoneId]
+      );
+
+      if (nextZone.store_ids.length) {
+        const storeValues = nextZone.store_ids.map((storeId) => [zoneId, storeId, tenantId]);
+        const storePlaceholders = storeValues.map(() => '(?, ?, ?)').join(', ');
+        await db.query(
+          `INSERT INTO \`${deliveryZoneTables.stores}\` (delivery_zone_id, store_id, tenant_id) VALUES ${storePlaceholders}`,
+          storeValues.flat()
+        );
+      }
+
+      if (nextZone.price_tiers.length) {
+        const tierValues = nextZone.price_tiers.map((tier) => ([
+          zoneId,
+          tenantId,
+          tier.min_order_amount,
+          tier.delivery_cost,
+          tier.sort_order,
+        ]));
+        const tierPlaceholders = tierValues.map(() => '(?, ?, ?, ?, ?)').join(', ');
+        await db.query(
+          `INSERT INTO \`${deliveryZoneTables.tiers}\` (delivery_zone_id, tenant_id, min_order_amount, delivery_cost, sort_order) VALUES ${tierPlaceholders}`,
+          tierValues.flat()
+        );
+      }
+
+      const item = await loadDeliveryZoneForTenant(tenantId, zoneId);
+      return res.json({ ok: true, item });
+    } catch (err) {
+      console.error('Ошибка обновления зоны доставки:', err);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.delete('/delivery-zones/:id', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      const zoneId = helpers.numOrNull(req.params.id);
+      if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+      if (!zoneId) return res.status(400).json({ ok: false, error: 'ID_REQUIRED' });
+
+      await ensureDeliveryZoneTables();
+      await db.query(
+        `DELETE FROM \`${deliveryZoneTables.stores}\` WHERE tenant_id=? AND delivery_zone_id=?`,
+        [tenantId, zoneId]
+      );
+      await db.query(
+        `DELETE FROM \`${deliveryZoneTables.tiers}\` WHERE tenant_id=? AND delivery_zone_id=?`,
+        [tenantId, zoneId]
+      );
+      await db.query(
+        `DELETE FROM \`${deliveryZoneTables.zones}\` WHERE tenant_id=? AND id=?`,
+        [tenantId, zoneId]
+      );
+      return res.json({ ok: true });
+    } catch (err) {
+      console.error('Ошибка удаления зоны доставки:', err);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  // ------------------------------
   // Delivery Settings CRUD
   // ------------------------------
 
@@ -1707,6 +3689,8 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
     try {
       const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
       if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+      const items = await loadDeliverySettingsForTenant(tenantId);
+      return res.json({ ok: true, items });
 
       const [settings] = await db.query(
         `SELECT id, tenant_id, name, delivery_cost, min_order_amount, free_delivery_from, default_store_id, is_active, created_at, updated_at
@@ -1761,6 +3745,33 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
     try {
       const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
       if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+
+      const payloadResult = buildDeliverySettingPayload(req.body);
+      if (!payloadResult.ok) {
+        return res.status(400).json({ ok: false, error: payloadResult.error });
+      }
+      const nextSetting = payloadResult.item;
+
+      const [insertedSettingResult] = await db.query(
+        `INSERT INTO ten_delivery_settings (tenant_id, name, eta_minutes, delivery_cost, min_order_amount, free_delivery_from, default_store_id, is_active)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          tenantId,
+          nextSetting.name,
+          nextSetting.eta_minutes,
+          nextSetting.delivery_cost,
+          nextSetting.min_order_amount,
+          nextSetting.free_delivery_from,
+          nextSetting.default_store_id,
+          nextSetting.is_active,
+        ]
+      );
+      const createdSettingId = Number(insertedSettingResult && insertedSettingResult.insertId || 0);
+      await replaceDeliverySettingStores(tenantId, createdSettingId, nextSetting.store_ids);
+      await replaceDeliverySettingPriceTiers(tenantId, createdSettingId, nextSetting.price_tiers);
+
+      const savedSettings = await loadDeliverySettingsForTenant(tenantId, createdSettingId);
+      return res.json({ ok: true, item: savedSettings[0] || null });
 
       const name = helpers.strOrNull(req.body.name);
       if (!name) return res.status(400).json({ ok: false, error: 'NAME_REQUIRED' });
@@ -1819,6 +3830,50 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       if (!id) return res.status(400).json({ ok: false, error: 'ID_REQUIRED' });
 
       // Проверяем существование
+      const currentItems = await loadDeliverySettingsForTenant(tenantId, id);
+      const current = currentItems[0] || null;
+      if (!current) {
+        return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+      }
+
+      const payloadResult = buildDeliverySettingPayload(req.body, current);
+      if (!payloadResult.ok) {
+        return res.status(400).json({ ok: false, error: payloadResult.error });
+      }
+      const nextSetting = payloadResult.item;
+
+      await db.query(
+        `UPDATE ten_delivery_settings
+         SET name=?, eta_minutes=?, delivery_cost=?, min_order_amount=?, free_delivery_from=?, default_store_id=?, is_active=?, updated_at=NOW()
+         WHERE tenant_id=? AND id=?`,
+        [
+          nextSetting.name,
+          nextSetting.eta_minutes,
+          nextSetting.delivery_cost,
+          nextSetting.min_order_amount,
+          nextSetting.free_delivery_from,
+          nextSetting.default_store_id,
+          nextSetting.is_active,
+          tenantId,
+          id,
+        ]
+      );
+
+      if (req.body.store_ids !== undefined) {
+        await replaceDeliverySettingStores(tenantId, id, nextSetting.store_ids);
+      }
+      if (
+        req.body.price_tiers !== undefined
+        || req.body.delivery_cost !== undefined
+        || req.body.min_order_amount !== undefined
+        || req.body.free_delivery_from !== undefined
+      ) {
+        await replaceDeliverySettingPriceTiers(tenantId, id, nextSetting.price_tiers);
+      }
+
+      const items = await loadDeliverySettingsForTenant(tenantId, id);
+      return res.json({ ok: true, item: items[0] || null });
+
       const [existing] = await db.query(
         'SELECT id FROM ten_delivery_settings WHERE tenant_id=? AND id=? LIMIT 1',
         [tenantId, id]
@@ -1932,6 +3987,10 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       if (!id) return res.status(400).json({ ok: false, error: 'ID_REQUIRED' });
 
       // Удаляем связи
+      await db.query(
+        `DELETE FROM \`${deliverySettingPriceTiersTable}\` WHERE tenant_id=? AND delivery_setting_id=?`,
+        [tenantId, id]
+      );
       await db.query(
         'DELETE FROM ten_delivery_settings_stores WHERE tenant_id=? AND delivery_setting_id=?',
         [tenantId, id]
@@ -2102,7 +4161,7 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
         [tenantId, storeId, token, expiresAt, secretKey]
       );
 
-      const botUsername = (process.env.TELEGRAM_BOT_USERNAME || '').trim();
+      const botUsername = getEffectiveTelegramBotConfig().telegram_bot_username;
       const link = botUsername ? `https://t.me/${botUsername}?start=${token}` : null;
 
       res.json({ ok: true, token, link, expires_at: expiresAt.toISOString() });

@@ -5,6 +5,35 @@ const path = require('path');
 const multer = require('multer');
 const { sendNewOrderNotification } = require('../telegramNotifications');
 const { sendOrderToPrintBot } = require('../printPush');
+const {
+  getEffectiveTelegramBotConfig,
+} = require('../../data/system-settings');
+const { geocodeStoreAddress } = require('../../data/map-geocoder');
+const { getTenantMapConfig } = require('../../data/tenant-map-config');
+const {
+  normalizeLocalAddressText,
+  resolveLocalityByInput,
+  getLocalAddressIndexRowBySourceKey,
+  searchLocalAddressSuggest,
+} = require('../../data/local-address-index');
+const {
+  isAddressServiceConfigured,
+  suggestCities: suggestAddressServiceCities,
+  suggestAddresses: suggestAddressServiceAddresses,
+  resolveAddress: resolveAddressThroughService,
+} = require('../../data/address-service-client');
+const {
+  buildDeliveryQuote,
+  loadDefaultDeliverySettings,
+} = require('../../data/delivery-quote');
+const {
+  customerAddressSelectFields: sharedCustomerAddressSelectFields,
+  ensureCustomerAddressIdentityColumns: ensureSharedCustomerAddressIdentityColumns,
+  loadCustomerAddressById: loadSharedCustomerAddressById,
+  normalizeCustomerAddressPayload: normalizeSharedCustomerAddressPayload,
+  resolveCustomerAddressPayload: resolveSharedCustomerAddressPayload,
+  serializeCustomerAddress: serializeSharedCustomerAddress,
+} = require('../../data/customer-address');
 const discountHelpers = require('../helpers/discounts');
 const {
   makeLinkToken,
@@ -27,6 +56,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
   let ensureOrderDeliveryTypeColumnsPromise = null;
   let discountProductConfigColumnReady = false;
   let ensureDiscountProductConfigColumnPromise = null;
+  let customerAddressIdentityColumnsReady = false;
+  let ensureCustomerAddressIdentityColumnsPromise = null;
   const PUBLIC_CACHE_TTL_MS = Object.freeze({
     categories: 30000,
     cartUpsell: 15000,
@@ -124,6 +155,324 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       });
 
     return ensureDiscountProductConfigColumnPromise;
+  }
+
+  const customerAddressSelectFields = `
+    id, tenant_id, store_id, customer_id, city, street, house, entrance, floor, apartment, comment,
+    is_default, is_active, created_at, updated_at,
+    address_ref, selected_object_type, resolved_city_source_key, address_context_locality, address_normalized_display,
+    lat, lng, delivery_zone_id, delivery_store_id
+  `;
+
+  function isStoreAddressMapModeEnabled(config = null) {
+    if (config && typeof config === 'object') {
+      return Boolean(config.store_address_map_enabled);
+    }
+    return false;
+  }
+
+  function normalizePublicCoordinateValue(value, axis = 'lat') {
+    if (value == null || value === '') return null;
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return null;
+    const limit = axis === 'lat' ? 90 : 180;
+    if (numeric < -limit || numeric > limit) return null;
+    return Number(numeric.toFixed(7));
+  }
+
+  function parsePublicCoordinate(value, axis = 'lat') {
+    if (value === undefined) return { value: undefined };
+    if (value === null || value === '') return { value: null };
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) {
+      return { error: axis === 'lat' ? 'INVALID_LAT' : 'INVALID_LNG' };
+    }
+    const limit = axis === 'lat' ? 90 : 180;
+    if (numeric < -limit || numeric > limit) {
+      return { error: axis === 'lat' ? 'INVALID_LAT' : 'INVALID_LNG' };
+    }
+    return { value: Number(numeric.toFixed(7)) };
+  }
+
+  function normalizePositiveIntOrNull(value) {
+    if (value == null || value === '') return null;
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric <= 0) return null;
+    return Math.round(numeric);
+  }
+
+  function buildCustomerStreetHouseLabel(streetValue, houseValue) {
+    const street = helpers.strOrNull(streetValue);
+    const house = helpers.strOrNull(houseValue);
+    if (!street) return null;
+    return [street, house].filter(Boolean).join(', ');
+  }
+
+  function buildCustomerLookupDisplay(cityValue, contextLocalityValue, streetValue, houseValue, fallbackValue = null) {
+    const city = helpers.strOrNull(cityValue);
+    const contextLocality = helpers.strOrNull(contextLocalityValue);
+    const baseLabel = buildCustomerStreetHouseLabel(streetValue, houseValue) || helpers.strOrNull(fallbackValue);
+    if (!baseLabel) return null;
+    if (!contextLocality) return baseLabel;
+    if (normalizeLocalAddressText(contextLocality) === normalizeLocalAddressText(city)) return baseLabel;
+    if (normalizeLocalAddressText(baseLabel).startsWith(normalizeLocalAddressText(contextLocality))) return baseLabel;
+    return `${contextLocality}, ${baseLabel}`;
+  }
+
+  function serializeCustomerAddress(row) {
+    const source = row && typeof row === 'object' ? row : {};
+    return {
+      ...source,
+      address_ref: helpers.strOrNull(source.address_ref),
+      selected_object_type: helpers.strOrNull(source.selected_object_type),
+      resolved_city_source_key: helpers.strOrNull(source.resolved_city_source_key),
+      address_context_locality: helpers.strOrNull(source.address_context_locality),
+      address_normalized_display: helpers.strOrNull(source.address_normalized_display),
+      lat: normalizePublicCoordinateValue(source.lat, 'lat'),
+      lng: normalizePublicCoordinateValue(source.lng, 'lng'),
+      delivery_zone_id: normalizePositiveIntOrNull(source.delivery_zone_id),
+      delivery_store_id: normalizePositiveIntOrNull(source.delivery_store_id),
+    };
+  }
+
+  async function ensureCustomerAddressIdentityColumns() {
+    if (customerAddressIdentityColumnsReady) return true;
+    if (ensureCustomerAddressIdentityColumnsPromise) return ensureCustomerAddressIdentityColumnsPromise;
+
+    ensureCustomerAddressIdentityColumnsPromise = (async () => {
+      const [columnRows] = await db.query('SHOW COLUMNS FROM cust_customer_addresses');
+      const existing = new Set(
+        (Array.isArray(columnRows) ? columnRows : [])
+          .map((row) => String(row?.Field || '').trim())
+          .filter(Boolean)
+      );
+      const requiredColumns = [
+        { name: 'address_ref', sql: "VARCHAR(255) NULL AFTER house" },
+        { name: 'selected_object_type', sql: "VARCHAR(64) NULL AFTER address_ref" },
+        { name: 'resolved_city_source_key', sql: "VARCHAR(255) NULL AFTER selected_object_type" },
+        { name: 'address_context_locality', sql: "VARCHAR(255) NULL AFTER resolved_city_source_key" },
+        { name: 'address_normalized_display', sql: "VARCHAR(512) NULL AFTER address_context_locality" },
+        { name: 'lat', sql: "DECIMAL(10,7) NULL AFTER address_normalized_display" },
+        { name: 'lng', sql: "DECIMAL(10,7) NULL AFTER lat" },
+        { name: 'delivery_zone_id', sql: "BIGINT UNSIGNED NULL AFTER lng" },
+        { name: 'delivery_store_id', sql: "BIGINT UNSIGNED NULL AFTER delivery_zone_id" },
+      ];
+
+      for (const column of requiredColumns) {
+        if (existing.has(column.name)) continue;
+        try {
+          await db.query(`ALTER TABLE cust_customer_addresses ADD COLUMN \`${column.name}\` ${column.sql}`);
+          existing.add(column.name);
+        } catch (error) {
+          if (String(error?.code || '') === 'ER_DUP_FIELDNAME') {
+            existing.add(column.name);
+            continue;
+          }
+          throw error;
+        }
+      }
+
+      customerAddressIdentityColumnsReady = requiredColumns.every((column) => existing.has(column.name));
+      return customerAddressIdentityColumnsReady;
+    })()
+      .catch((error) => {
+        ensureCustomerAddressIdentityColumnsPromise = null;
+        throw error;
+      })
+      .finally(() => {
+        if (customerAddressIdentityColumnsReady) {
+          ensureCustomerAddressIdentityColumnsPromise = null;
+        }
+      });
+
+    return ensureCustomerAddressIdentityColumnsPromise;
+  }
+
+  function normalizeCustomerAddressPayload(source) {
+    const body = source && typeof source === 'object' ? source : {};
+    const latResult = parsePublicCoordinate(body.lat, 'lat');
+    if (latResult.error) return { ok: false, error: latResult.error };
+    const lngResult = parsePublicCoordinate(body.lng, 'lng');
+    if (lngResult.error) return { ok: false, error: lngResult.error };
+
+    const city = helpers.strOrNull(body.city);
+    const street = String(body.street || '').trim();
+    const house = String(body.house || '').trim();
+    const addressContextLocality = helpers.strOrNull(body.address_context_locality || body.context_locality);
+    const lookupDisplay = buildCustomerLookupDisplay(
+      city,
+      addressContextLocality,
+      street,
+      house,
+      body.address_normalized_display || body.address
+    );
+    const lat = latResult.value === undefined ? null : latResult.value;
+    const lng = lngResult.value === undefined ? null : lngResult.value;
+
+    return {
+      ok: true,
+      data: {
+        city,
+        street,
+        house,
+        entrance: helpers.strOrNull(body.entrance),
+        floor: helpers.strOrNull(body.floor),
+        apartment: helpers.strOrNull(body.apartment),
+        comment: helpers.strOrNull(body.comment),
+        address_ref: helpers.strOrNull(body.address_ref || body.selected_source_key),
+        selected_object_type: helpers.strOrNull(body.selected_object_type),
+        resolved_city_source_key: helpers.strOrNull(body.resolved_city_source_key),
+        address_context_locality: addressContextLocality,
+        address_normalized_display: lookupDisplay,
+        lat,
+        lng,
+        delivery_zone_id: lat != null && lng != null ? normalizePositiveIntOrNull(body.delivery_zone_id) : null,
+        delivery_store_id: lat != null && lng != null ? normalizePositiveIntOrNull(body.delivery_store_id) : null,
+      },
+    };
+  }
+
+  async function loadCustomerAddressById(tenantId, customerId, addressId) {
+    if (!tenantId || !customerId || !addressId) return null;
+    await ensureCustomerAddressIdentityColumns();
+    const [rows] = await db.query(
+      `SELECT ${customerAddressSelectFields}
+       FROM cust_customer_addresses
+       WHERE tenant_id=? AND customer_id=? AND id=? AND is_active=1
+       LIMIT 1`,
+      [tenantId, customerId, addressId]
+    );
+    return rows && rows[0] ? serializeCustomerAddress(rows[0]) : null;
+  }
+
+  async function resolvePublicAddressPayload(tenantId, storeId, payload = {}) {
+    const normalizedResult = normalizeCustomerAddressPayload(payload);
+    if (!normalizedResult.ok) return normalizedResult;
+
+    const data = normalizedResult.data;
+    let city = data.city;
+    let street = data.street;
+    let house = data.house;
+    let addressRef = data.address_ref;
+    let selectedObjectType = data.selected_object_type;
+    let resolvedCitySourceKey = data.resolved_city_source_key;
+    let contextLocality = data.address_context_locality;
+    let normalizedDisplay = data.address_normalized_display;
+    let lat = data.lat;
+    let lng = data.lng;
+
+    if (!resolvedCitySourceKey && city) {
+      const resolvedCity = await resolveLocalityByInput(city, { rootOnly: true });
+      resolvedCitySourceKey = resolvedCity && resolvedCity.source_key ? String(resolvedCity.source_key).trim() : null;
+    }
+
+    if (addressRef) {
+      const selectedRow = await getLocalAddressIndexRowBySourceKey(addressRef);
+      if (selectedRow) {
+        if (!city) city = helpers.strOrNull(payload.city) || helpers.strOrNull(selectedRow.locality_name);
+        if (!contextLocality) contextLocality = helpers.strOrNull(selectedRow.locality_name);
+        if (!street) street = helpers.strOrNull(selectedRow.street_name) || helpers.strOrNull(selectedRow.label);
+        if (!house) house = helpers.strOrNull(selectedRow.house_number);
+        if (!normalizedDisplay) {
+          normalizedDisplay = buildCustomerLookupDisplay(city, contextLocality, street, house, selectedRow.label || selectedRow.full_address);
+        }
+        if (lat == null) lat = normalizePublicCoordinateValue(selectedRow.lat, 'lat');
+        if (lng == null) lng = normalizePublicCoordinateValue(selectedRow.lng, 'lng');
+        if (!selectedObjectType) selectedObjectType = helpers.strOrNull(selectedRow.object_type) || 'address';
+      }
+    }
+
+    if (isAddressServiceConfigured() && (addressRef || normalizedDisplay || buildCustomerStreetHouseLabel(street, house))) {
+      try {
+        const serviceResult = await resolveAddressThroughService({
+          city,
+          city_code: resolvedCitySourceKey ? String(resolvedCitySourceKey).replace(/^root-city:/, '') : null,
+          address: normalizedDisplay || buildCustomerStreetHouseLabel(street, house),
+          address_street: street,
+          address_house: house,
+          selected_source_key: addressRef,
+          selected_object_type: selectedObjectType,
+          selected_context_locality: contextLocality,
+          raw_input: normalizedDisplay || buildCustomerStreetHouseLabel(street, house),
+          confirm_normalized: true,
+        });
+        if (serviceResult && serviceResult.ok && serviceResult.data) {
+          const serviceData = serviceResult.data;
+          city = helpers.strOrNull(city) || helpers.strOrNull(serviceData.city_name) || city;
+          street = helpers.strOrNull(serviceData.street_display) || street;
+          house = helpers.strOrNull(serviceData.house_number) || house;
+          contextLocality = helpers.strOrNull(serviceData.context_display) || contextLocality || city;
+          normalizedDisplay = buildCustomerLookupDisplay(
+            city,
+            contextLocality,
+            street,
+            house,
+            serviceData.normalized_display || normalizedDisplay
+          );
+          addressRef = helpers.strOrNull(serviceData.address_ref) || addressRef;
+          selectedObjectType = helpers.strOrNull(serviceData.selected_object_type) || selectedObjectType || 'address';
+          if (lat == null) lat = normalizePublicCoordinateValue(serviceData.lat, 'lat');
+          if (lng == null) lng = normalizePublicCoordinateValue(serviceData.lng, 'lng');
+        }
+      } catch (error) {
+        console.warn('resolve public address via service failed:', error);
+      }
+    }
+
+    if ((lat == null || lng == null) && (normalizedDisplay || (street && house))) {
+      const geocodeQuery = [contextLocality || city, normalizedDisplay || buildCustomerStreetHouseLabel(street, house)]
+        .filter(Boolean)
+        .join(', ');
+      if (geocodeQuery) {
+        const tenantMapConfig = await getTenantMapConfig(db, tenantId);
+        const geocode = await geocodeStoreAddress(geocodeQuery, { sourceState: tenantMapConfig || {} });
+        if (geocode && geocode.ok && geocode.data && geocode.data.item) {
+          lat = normalizePublicCoordinateValue(geocode.data.item.lat, 'lat');
+          lng = normalizePublicCoordinateValue(geocode.data.item.lng, 'lng');
+          if (!city) city = helpers.strOrNull(geocode.data.item.city_name) || city;
+        }
+      }
+    }
+
+    if (!street) {
+      return { ok: false, error: 'STREET_REQUIRED' };
+    }
+    if (!house) {
+      return { ok: false, error: 'HOUSE_REQUIRED' };
+    }
+
+    const quote = await buildDeliveryQuote({
+      db,
+      tenantId,
+      storeId,
+      subtotal: payload && payload.subtotal != null ? Number(payload.subtotal || 0) : 0,
+      address: { lat, lng },
+    });
+
+    return {
+      ok: true,
+      data: {
+        city: city || null,
+        street,
+        house,
+        context_locality: contextLocality || null,
+        address_ref: addressRef || null,
+        selected_object_type: selectedObjectType || null,
+        resolved_city_source_key: resolvedCitySourceKey || null,
+        address_normalized_display: buildCustomerLookupDisplay(city, contextLocality, street, house, normalizedDisplay),
+        lat,
+        lng,
+        delivery_zone_id: quote.delivery_zone_id,
+        delivery_zone_name: quote.delivery_zone_name,
+        delivery_store_id: quote.delivery_store_id,
+        delivery_cost: quote.delivery_cost,
+        min_order_amount: quote.min_order_amount,
+        free_delivery_from: quote.free_delivery_from,
+        eta_minutes: quote.eta_minutes,
+        source: quote.source,
+        quote_source: quote.source,
+      },
+    };
   }
 
   // ------------------------------
@@ -3084,12 +3433,11 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const token = str(req.headers['x-customer-token']);
       const customer = await getCustomerByToken(tenantId, token);
       if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+      await ensureSharedCustomerAddressIdentityColumns(db);
 
       const [addresses] = await db.query(
         `SELECT
-           id, city, street, house, entrance, floor, apartment, comment,
-           is_default, is_active,
-           created_at, updated_at
+           ${sharedCustomerAddressSelectFields}
          FROM cust_customer_addresses
          WHERE tenant_id=? AND customer_id=? AND is_active=1
          ORDER BY is_default DESC, updated_at DESC, id DESC`,
@@ -3100,7 +3448,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         ok: true,
         data: {
           customer,
-          addresses: Array.isArray(addresses) ? addresses : [],
+          addresses: Array.isArray(addresses) ? addresses.map((row) => serializeSharedCustomerAddress(helpers, row)) : [],
         },
       });
     } catch (e) {
@@ -3193,6 +3541,141 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     } catch (err) {
       console.error('Р С›РЎв‚¬Р С‘Р В±Р С”Р В° Р С—Р С•Р В»РЎС“РЎвЂЎР ВµР Р…Р С‘РЎРЏ РЎвЂљР С•РЎвЂЎР ВµР С” Р С—РЎР‚Р С•Р Т‘Р В°Р В¶:', err);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.get('/address-suggest', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const stage = String((req.query && req.query.stage) || 'address').trim().toLowerCase() || 'address';
+      const query = String((req.query && req.query.q) || '').trim();
+      const city = String((req.query && req.query.city) || '').trim();
+      const citySourceKey = String((req.query && req.query.city_source_key) || '').trim();
+      const selectedSourceKey = String((req.query && req.query.selected_source_key) || '').trim();
+
+      if (isAddressServiceConfigured()) {
+        const result = stage === 'city'
+          ? await suggestAddressServiceCities(query, { limit: req.query && req.query.limit })
+          : await suggestAddressServiceAddresses(query, {
+            stage,
+            city,
+            cityCode: citySourceKey ? citySourceKey.replace(/^root-city:/, '') : '',
+            selectedSourceKey,
+            limit: req.query && req.query.limit,
+          });
+        if (!result || !result.ok) {
+          const error = result && result.error ? result.error : 'ADDRESS_SERVICE_UNAVAILABLE';
+          const status = (
+            error === 'STAGE_REQUIRED'
+            || error === 'QUERY_REQUIRED'
+            || error === 'CITY_REQUIRED'
+          ) ? 400 : 503;
+          return res.status(status).json({ ok: false, error });
+        }
+        return res.json({ ok: true, data: result.data });
+      }
+
+      const result = await searchLocalAddressSuggest(stage, query, {
+        city,
+        citySourceKey,
+        selectedSourceKey,
+        tenantId,
+      });
+      if (!result || !result.ok) {
+        const error = result && result.error ? result.error : 'LOCAL_ADDRESS_INDEX_FAILED';
+        const status = (
+          error === 'STAGE_REQUIRED'
+          || error === 'QUERY_REQUIRED'
+          || error === 'CITY_REQUIRED'
+        ) ? 400 : error === 'LOCAL_ADDRESS_INDEX_NOT_READY' ? 503 : 502;
+        return res.status(status).json({ ok: false, error });
+      }
+
+      return res.json({ ok: true, data: result.data });
+    } catch (error) {
+      console.error(error);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.post('/address-resolve', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const result = await resolveSharedCustomerAddressPayload({
+        db,
+        helpers,
+        tenantId,
+        storeId,
+        payload: req.body || {},
+      });
+      if (!result || !result.ok) {
+        const error = result && result.error ? result.error : 'ADDRESS_RESOLVE_FAILED';
+        return res.status(400).json({ ok: false, error });
+      }
+      return res.json({ ok: true, data: result.data });
+    } catch (error) {
+      console.error(error);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.post('/delivery-quote', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const subtotal = Math.max(0, Number(req.body?.subtotal || req.body?.total || 0) || 0);
+      const token = str(req.headers['x-customer-token']);
+      const customer = token ? await getCustomerByToken(tenantId, token) : null;
+      const deliveryAddressId = normalizePositiveIntOrNull(req.body && req.body.delivery_address_id);
+      let address = null;
+
+      if (deliveryAddressId && customer) {
+        address = await loadSharedCustomerAddressById({
+          db,
+          helpers,
+          tenantId,
+          customerId: customer.id,
+          addressId: deliveryAddressId,
+        });
+      }
+
+      if (!address) {
+        const source = req.body && typeof req.body.address === 'object'
+          ? req.body.address
+          : (req.body || {});
+        const normalizedResult = normalizeSharedCustomerAddressPayload(helpers, source);
+        if (!normalizedResult.ok) {
+          return res.status(400).json({ ok: false, error: normalizedResult.error });
+        }
+        address = normalizedResult.data;
+      }
+
+      const quote = await buildDeliveryQuote({
+        db,
+        tenantId,
+        storeId,
+        subtotal,
+        address,
+      });
+
+      return res.json({
+        ok: true,
+        data: {
+          source: quote.source,
+          has_settings: Boolean(quote.has_settings),
+          delivery_cost: Number(quote.delivery_cost || 0),
+          min_order_amount: Number(quote.min_order_amount || 0),
+          free_delivery_from: quote.free_delivery_from != null ? Number(quote.free_delivery_from) : null,
+          eta_minutes: quote.eta_minutes != null ? Number(quote.eta_minutes) : null,
+          delivery_zone_id: quote.delivery_zone_id != null ? Number(quote.delivery_zone_id) : null,
+          delivery_zone_name: quote.delivery_zone_name || null,
+          delivery_store_id: quote.delivery_store_id != null ? Number(quote.delivery_store_id) : null,
+        },
+      });
+    } catch (error) {
+      console.error(error);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });
 
@@ -3381,19 +3864,18 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const token = str(req.headers['x-customer-token']);
       const customer = await getCustomerByToken(tenantId, token);
       if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+      await ensureSharedCustomerAddressIdentityColumns(db);
 
       const [rows] = await db.query(
         `SELECT
-           id, city, street, house, entrance, floor, apartment, comment,
-           is_default, is_active,
-           created_at, updated_at
+           ${sharedCustomerAddressSelectFields}
          FROM cust_customer_addresses
          WHERE tenant_id=? AND customer_id=? AND is_active=1
          ORDER BY is_default DESC, updated_at DESC, id DESC`,
         [tenantId, customer.id]
       );
 
-      res.json({ ok: true, data: rows });
+      res.json({ ok: true, data: Array.isArray(rows) ? rows.map((row) => serializeSharedCustomerAddress(helpers, row)) : [] });
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
@@ -3408,17 +3890,20 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const token = str(req.headers['x-customer-token']);
       const customer = await getCustomerByToken(tenantId, token);
       if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+      await ensureSharedCustomerAddressIdentityColumns(db);
 
-      const city = helpers.strOrNull(req.body.city);
-      const street = helpers.strOrNull(req.body.street);
-      const house = helpers.strOrNull(req.body.house);
-      if (!street) return res.status(400).json({ ok: false, error: 'STREET_REQUIRED' });
-      if (!house) return res.status(400).json({ ok: false, error: 'HOUSE_REQUIRED' });
-
-      const entrance = helpers.strOrNull(req.body.entrance);
-      const floor = helpers.strOrNull(req.body.floor);
-      const apartment = helpers.strOrNull(req.body.apartment);
-      const comment = helpers.strOrNull(req.body.comment);
+      const payloadResult = normalizeSharedCustomerAddressPayload(helpers, req.body);
+      if (!payloadResult.ok) {
+        return res.status(400).json({ ok: false, error: payloadResult.error });
+      }
+      const payload = payloadResult.data;
+      const city = payload.city;
+      const street = payload.street;
+      const house = payload.house;
+      const entrance = payload.entrance;
+      const floor = payload.floor;
+      const apartment = payload.apartment;
+      const comment = payload.comment;
 
       let isDefault = helpers.toBool(req.body.is_default, false) ? 1 : 0;
 
@@ -3444,9 +3929,31 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
       const [r] = await conn.query(
         `INSERT INTO cust_customer_addresses
-         (tenant_id, customer_id, city, street, house, entrance, floor, apartment, comment, is_default, is_active)
-         VALUES (?,?,?,?,?,?,?,?,?,?,1)`,
-        [tenantId, customer.id, city, street, house, entrance, floor, apartment, comment, isDefault]
+         (tenant_id, customer_id, city, street, house, entrance, floor, apartment, comment, is_default, is_active,
+          address_ref, selected_object_type, resolved_city_source_key, address_context_locality, address_normalized_display,
+          lat, lng, delivery_zone_id, delivery_store_id)
+         VALUES (?,?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,?,?)`,
+        [
+          tenantId,
+          customer.id,
+          city,
+          street,
+          house,
+          entrance,
+          floor,
+          apartment,
+          comment,
+          isDefault,
+          payload.address_ref,
+          payload.selected_object_type,
+          payload.resolved_city_source_key,
+          payload.address_context_locality,
+          payload.address_normalized_display,
+          payload.lat,
+          payload.lng,
+          payload.delivery_zone_id,
+          payload.delivery_store_id,
+        ]
       );
 
       await conn.commit();
@@ -3470,22 +3977,25 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const token = str(req.headers['x-customer-token']);
       const customer = await getCustomerByToken(tenantId, token);
       if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+      await ensureSharedCustomerAddressIdentityColumns(db);
 
       const addressId = Number(req.params.id);
       if (!Number.isFinite(addressId) || addressId <= 0) {
         return res.status(400).json({ ok: false, error: 'BAD_ID' });
       }
 
-      const city = helpers.strOrNull(req.body.city);
-      const street = helpers.strOrNull(req.body.street);
-      const house = helpers.strOrNull(req.body.house);
-      if (!street) return res.status(400).json({ ok: false, error: 'STREET_REQUIRED' });
-      if (!house) return res.status(400).json({ ok: false, error: 'HOUSE_REQUIRED' });
-
-      const entrance = helpers.strOrNull(req.body.entrance);
-      const floor = helpers.strOrNull(req.body.floor);
-      const apartment = helpers.strOrNull(req.body.apartment);
-      const comment = helpers.strOrNull(req.body.comment);
+      const payloadResult = normalizeSharedCustomerAddressPayload(helpers, req.body);
+      if (!payloadResult.ok) {
+        return res.status(400).json({ ok: false, error: payloadResult.error });
+      }
+      const payload = payloadResult.data;
+      const city = payload.city;
+      const street = payload.street;
+      const house = payload.house;
+      const entrance = payload.entrance;
+      const floor = payload.floor;
+      const apartment = payload.apartment;
+      const comment = payload.comment;
 
       const makeDefault = helpers.toBool(req.body.is_default, false) ? 1 : 0;
 
@@ -3514,9 +4024,31 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
       await conn.query(
         `UPDATE cust_customer_addresses
-         SET city=?, street=?, house=?, entrance=?, floor=?, apartment=?, comment=?${makeDefault === 1 ? ', is_default=1' : ''}
+         SET city=?, street=?, house=?, entrance=?, floor=?, apartment=?, comment=?,
+             address_ref=?, selected_object_type=?, resolved_city_source_key=?, address_context_locality=?, address_normalized_display=?,
+             lat=?, lng=?, delivery_zone_id=?, delivery_store_id=?${makeDefault === 1 ? ', is_default=1' : ''}
          WHERE tenant_id=? AND customer_id=? AND id=?`,
-        [city, street, house, entrance, floor, apartment, comment, tenantId, customer.id, addressId]
+        [
+          city,
+          street,
+          house,
+          entrance,
+          floor,
+          apartment,
+          comment,
+          payload.address_ref,
+          payload.selected_object_type,
+          payload.resolved_city_source_key,
+          payload.address_context_locality,
+          payload.address_normalized_display,
+          payload.lat,
+          payload.lng,
+          payload.delivery_zone_id,
+          payload.delivery_store_id,
+          tenantId,
+          customer.id,
+          addressId,
+        ]
       );
 
       await conn.commit();
@@ -8847,6 +9379,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
       const storeIsOpen = isStoreOpenNow(storeHours, storeTimezone);
       const deliveryIsOpen = isStoreDeliveryOpenNow(deliveryHours, storeTimezone);
+      const tenantMapConfig = await getTenantMapConfig(db, tenantId);
 
       res.json({
         ok: true,
@@ -8859,7 +9392,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           storeDeliveryHours: deliveryHours,
           storeTimezone,
           storeIsOpen,
-          deliveryIsOpen
+          deliveryIsOpen,
+          storeAddressMapEnabled: isStoreAddressMapModeEnabled(tenantMapConfig),
         }
       });
     } catch (e) {
@@ -12582,35 +13116,63 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const itemsJson = JSON.stringify(normItems);
       let deliveryCost = 0;
       const isDeliveryMethod = str(methodCode).trim() === 'delivery';
+      const deliveryAddressId = (isDeliveryMethod && Number.isFinite(Number(req.body.delivery_address_id)) && Number(req.body.delivery_address_id) > 0)
+        ? Number(req.body.delivery_address_id)
+        : null;
       if (isDeliveryMethod) {
-        let minOrderAmount = 0;
-        let freeDeliveryFrom = null;
-
-        const [settings] = await db.query(
-          `SELECT ds.delivery_cost, ds.min_order_amount, ds.free_delivery_from, ds.default_store_id
-           FROM ten_delivery_settings ds
-           JOIN ten_delivery_settings_stores dss ON dss.delivery_setting_id = ds.id AND dss.tenant_id = ds.tenant_id
-           WHERE ds.tenant_id=? AND dss.store_id=? AND ds.is_active=1
-           LIMIT 1`,
-          [tenantId, storeId]
-        );
-
-        if (settings.length) {
-          const s = settings[0];
-          deliveryCost = Number(s.delivery_cost || 0);
-          minOrderAmount = Number(s.min_order_amount || 0);
-          freeDeliveryFrom = s.free_delivery_from != null ? Number(s.free_delivery_from) : null;
-          if (s.default_store_id != null && Number.isFinite(Number(s.default_store_id))) {
-            orderStoreId = Number(s.default_store_id);
+        let resolvedDeliveryAddress = null;
+        if (deliveryAddressId && authCustomer) {
+          resolvedDeliveryAddress = await loadSharedCustomerAddressById({
+            db,
+            helpers,
+            tenantId,
+            customerId: authCustomer.id,
+            addressId: deliveryAddressId,
+          });
+          if (!resolvedDeliveryAddress) {
+            return res.status(404).json({ ok: false, error: 'ADDRESS_NOT_FOUND' });
           }
         }
+
+        const inlineAddressResult = normalizeSharedCustomerAddressPayload(helpers, {
+          city: req.body.delivery_address_city,
+          street: req.body.delivery_address_street,
+          house: req.body.delivery_address_house,
+          entrance: req.body.delivery_address_entrance,
+          floor: req.body.delivery_address_floor,
+          apartment: req.body.delivery_address_apartment,
+          comment: req.body.address_comment,
+          address_ref: req.body.delivery_address_ref,
+          selected_object_type: req.body.delivery_selected_object_type,
+          resolved_city_source_key: req.body.delivery_resolved_city_source_key,
+          address_context_locality: req.body.delivery_address_context_locality,
+          address_normalized_display: req.body.delivery_address_normalized_display || req.body.delivery_address,
+          lat: req.body.delivery_address_lat,
+          lng: req.body.delivery_address_lng,
+          delivery_zone_id: req.body.delivery_zone_id,
+          delivery_store_id: req.body.delivery_store_id,
+        });
+        if (!inlineAddressResult.ok) {
+          return res.status(400).json({ ok: false, error: inlineAddressResult.error });
+        }
+
+        const deliveryQuote = await buildDeliveryQuote({
+          db,
+          tenantId,
+          storeId,
+          subtotal: total,
+          address: resolvedDeliveryAddress || inlineAddressResult.data,
+        });
+
+        const minOrderAmount = Number(deliveryQuote.min_order_amount || 0);
 
         if (minOrderAmount > 0 && total < minOrderAmount) {
           return res.status(409).json({ ok: false, error: 'MIN_ORDER', min_order_amount: minOrderAmount });
         }
 
-        if (freeDeliveryFrom != null && total >= freeDeliveryFrom) {
-          deliveryCost = 0;
+        deliveryCost = Number(deliveryQuote.delivery_cost || 0);
+        if (deliveryQuote.delivery_store_id != null && Number.isFinite(Number(deliveryQuote.delivery_store_id))) {
+          orderStoreId = Number(deliveryQuote.delivery_store_id);
         }
 
         total += deliveryCost;
@@ -12663,9 +13225,6 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       if (!statusId) return res.status(500).json({ ok: false, error: 'NO_STATUSES' });
 
       const addrLine = (str(methodCode).trim() === 'delivery') ? deliveryAddress : null;
-      const deliveryAddressId = (str(methodCode).trim() === 'delivery' && Number.isFinite(Number(req.body.delivery_address_id)) && Number(req.body.delivery_address_id) > 0)
-        ? Number(req.body.delivery_address_id)
-        : null;
 
       const comment = helpers.strOrNull(req.body.comment);
       const addressComment = helpers.strOrNull(req.body.address_comment);
@@ -12915,7 +13474,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             if (ordersEvents && typeof ordersEvents.publish === 'function') {
               ordersEvents.publish(tenantId, orderStoreId, 'order.created', payload);
             }
-            const botToken = process.env.TELEGRAM_BOT_TOKEN;
+            const botToken = getEffectiveTelegramBotConfig().telegram_bot_token;
             if (botToken) {
               sendNewOrderNotification(tenantId, orderStoreId, payload, { db, botToken }).catch((err) =>
                 console.error('Telegram new order notify:', err)
@@ -13068,38 +13627,21 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const storeId = helpers.getStoreId(req);
 
       // Р ВРЎвЂ°Р ВµР С Р Р…Р В°РЎРѓРЎвЂљРЎР‚Р С•Р в„–Р С”РЎС“ Р Т‘Р С•РЎРѓРЎвЂљР В°Р Р†Р С”Р С‘, Р С—РЎР‚Р С‘Р Р†РЎРЏР В·Р В°Р Р…Р Р…РЎС“РЎР‹ Р С” РЎвЂљР ВµР С”РЎС“РЎвЂ°Р ВµР СРЎС“ РЎвЂћР С‘Р В»Р С‘Р В°Р В»РЎС“
-      const [settings] = await db.query(
-        `SELECT ds.id, ds.name, ds.delivery_cost, ds.min_order_amount, ds.free_delivery_from, ds.is_active
-         FROM ten_delivery_settings ds
-         JOIN ten_delivery_settings_stores dss ON dss.delivery_setting_id = ds.id AND dss.tenant_id = ds.tenant_id
-         WHERE ds.tenant_id=? AND dss.store_id=? AND ds.is_active=1
-         LIMIT 1`,
-        [tenantId, storeId]
-      );
-
-      if (!settings.length) {
-        // Р СњР ВµРЎвЂљ Р Р…Р В°РЎРѓРЎвЂљРЎР‚Р С•Р ВµР С” - Р Т‘Р С•РЎРѓРЎвЂљР В°Р Р†Р С”Р В° Р В±Р ВµРЎРѓР С—Р В»Р В°РЎвЂљР Р…Р В°РЎРЏ, Р В±Р ВµР В· Р С•Р С–РЎР‚Р В°Р Р…Р С‘РЎвЂЎР ВµР Р…Р С‘Р в„–
-        return res.json({
-          ok: true,
-          data: {
-            delivery_cost: 0,
-            min_order_amount: 0,
-            free_delivery_from: null,
-            has_settings: false
-          }
-        });
-      }
-
-      const s = settings[0];
-      res.json({
+      // РС‰РµРј РЅР°СЃС‚СЂРѕР№РєСѓ РґРѕСЃС‚Р°РІРєРё, РїСЂРёРІСЏР·Р°РЅРЅСѓСЋ Рє С‚РµРєСѓС‰РµРјСѓ С„РёР»РёР°Р»Сѓ
+      const defaultSettings = await loadDefaultDeliverySettings(db, tenantId, storeId);
+      return res.json({
         ok: true,
         data: {
-          delivery_cost: Number(s.delivery_cost || 0),
-          min_order_amount: Number(s.min_order_amount || 0),
-          free_delivery_from: s.free_delivery_from != null ? Number(s.free_delivery_from) : null,
-          has_settings: true
+          delivery_cost: Number(defaultSettings.delivery_cost || 0),
+          min_order_amount: Number(defaultSettings.min_order_amount || 0),
+          free_delivery_from: defaultSettings.free_delivery_from != null ? Number(defaultSettings.free_delivery_from) : null,
+          eta_minutes: defaultSettings.eta_minutes != null ? Number(defaultSettings.eta_minutes) : null,
+          price_tiers: Array.isArray(defaultSettings.price_tiers) ? defaultSettings.price_tiers : [],
+          has_settings: Boolean(defaultSettings.has_settings)
         }
       });
+
+        // Р СњР ВµРЎвЂљ Р Р…Р В°РЎРѓРЎвЂљРЎР‚Р С•Р ВµР С” - Р Т‘Р С•РЎРѓРЎвЂљР В°Р Р†Р С”Р В° Р В±Р ВµРЎРѓР С—Р В»Р В°РЎвЂљР Р…Р В°РЎРЏ, Р В±Р ВµР В· Р С•Р С–РЎР‚Р В°Р Р…Р С‘РЎвЂЎР ВµР Р…Р С‘Р в„–
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });

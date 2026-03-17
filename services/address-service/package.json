@@ -1,0 +1,19 @@
+{
+  "name": "markin-me-address-service",
+  "private": true,
+  "version": "1.0.0",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/server.js",
+    "db:check": "node scripts/check-db.js",
+    "db:init": "node scripts/run-sql.js sql/001_init.sql",
+    "export:mysql-local": "node scripts/export-mysql-local-index.js",
+    "import:gar": "node scripts/import-gar-fias-jsonl.js",
+    "import:osm": "node scripts/import-osm-geojson.js"
+  },
+  "dependencies": {
+    "dotenv": "^17.2.3",
+    "express": "^5.2.1",
+    "pg": "^8.13.1"
+  }
+}
