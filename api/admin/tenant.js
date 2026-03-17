@@ -7,7 +7,7 @@ const dns = require('dns').promises;
 const http = require('http');
 const https = require('https');
 const { execFile } = require('child_process');
-const { domainToASCII } = require('url');
+const { domainToASCII, domainToUnicode } = require('url');
 const chatTempRuntime = require('../chatTemp');
 
 module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
@@ -141,6 +141,63 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
       .filter(Boolean);
   }
 
+  function normalizePublicHost(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+    try {
+      const parsed = new URL(raw.includes('://') ? raw : `https://${raw}`);
+      return String(parsed.host || '').trim().toLowerCase();
+    } catch (_) {
+      return raw
+        .replace(/^https?:\/\//i, '')
+        .split('/')[0]
+        .trim()
+        .toLowerCase();
+    }
+  }
+
+  function resolveTenantSubdomainBaseHost(req) {
+    const candidates = [
+      process.env.TENANT_SUBDOMAIN_BASE_DOMAIN,
+      process.env.TENANT_BASE_DOMAIN,
+      process.env.APP_BASE_DOMAIN,
+      process.env.PUBLIC_BASE_DOMAIN,
+      process.env.SITE_BASE_DOMAIN
+    ];
+    for (const candidate of candidates) {
+      const host = normalizePublicHost(candidate);
+      if (host) return host;
+    }
+    if (req) {
+      const forwardedHost = firstHeaderValue(req.headers['x-forwarded-host'], req.get('host') || '');
+      const fallbackHost = normalizePublicHost(forwardedHost);
+      if (fallbackHost) return fallbackHost;
+    }
+    return 'posham-admin.ru';
+  }
+
+  function resolveTenantSubdomainProtocol(req, baseHost) {
+    const explicit = String(process.env.TENANT_SUBDOMAIN_PROTOCOL || '').trim().toLowerCase();
+    if (explicit === 'http' || explicit === 'https') return explicit;
+    if (String(process.env.TENANT_SUBDOMAIN_HTTPS_ENABLED || '').trim() === '1') return 'https';
+    const host = String(baseHost || '').trim().toLowerCase();
+    if (!host) return 'http';
+    if (host.includes('localhost') || /^\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?$/.test(host)) {
+      const currentProtocol = String((req && req.protocol) || 'http').trim().toLowerCase();
+      return currentProtocol === 'https' ? 'https' : 'http';
+    }
+    return 'http';
+  }
+
+  function buildTenantSubdomainUrl(tenant, req) {
+    const subdomain = helpers.strOrNull(tenant && tenant.subdomain);
+    if (!subdomain) return null;
+    const baseHost = resolveTenantSubdomainBaseHost(req);
+    if (!baseHost) return null;
+    const protocol = resolveTenantSubdomainProtocol(req, baseHost);
+    return `${protocol}://${subdomain}.${baseHost}`;
+  }
+
   function parseCommandArgs(value) {
     const raw = String(value || '').trim();
     if (!raw) return [];
@@ -155,17 +212,22 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
     return raw.split(/\s+/).map((item) => String(item || '').trim()).filter(Boolean);
   }
 
-  function getTenantDomainSetup() {
+  function getTenantDomainSetup(req = null) {
     const aRecords = parseEnvList(
       process.env.TENANT_DOMAIN_A_RECORDS
       || process.env.TENANT_DOMAIN_A_RECORD
       || '141.8.198.215'
     );
+    const subdomainBaseHost = resolveTenantSubdomainBaseHost(req);
+    const subdomainProtocol = resolveTenantSubdomainProtocol(req, subdomainBaseHost);
     return {
       a_records: aRecords,
       auto_connect_enabled: process.env.TENANT_DOMAIN_AUTOCONNECT_ENABLED === '1',
       auto_connect_include_www: process.env.TENANT_DOMAIN_AUTOCONNECT_INCLUDE_WWW !== '0',
-      check_path: '/.well-known/tenant-domain-check'
+      check_path: '/.well-known/tenant-domain-check',
+      subdomain_base_host: subdomainBaseHost,
+      subdomain_protocol: subdomainProtocol,
+      subdomain_https_enabled: subdomainProtocol === 'https'
     };
   }
 
@@ -211,11 +273,16 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
 
   function normalizeTenantDomainRow(row) {
     if (!row || typeof row !== 'object') return null;
+    const rawDomain = helpers.strOrNull(row.domain);
+    const rawDomainAscii = helpers.strOrNull(row.domain_ascii);
+    const displayDomain = helpers.strOrNull(
+      domainToUnicode(rawDomain || rawDomainAscii || '') || rawDomain || rawDomainAscii
+    );
     return {
       id: Number(row.id || 0) || 0,
       tenant_id: Number(row.tenant_id || 0) || 0,
-      domain: helpers.strOrNull(row.domain),
-      domain_ascii: helpers.strOrNull(row.domain_ascii),
+      domain: displayDomain,
+      domain_ascii: rawDomainAscii,
       is_primary: Number(row.is_primary) === 1,
       created_at: row.created_at || null,
       updated_at: row.updated_at || null
@@ -385,7 +452,7 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
       'DELETE FROM ten_tenant_domains WHERE tenant_id=? AND id=? LIMIT 1',
       [tenantId, domainId]
     );
-    return syncTenantPrimaryDomain(tenantId);
+    return syncTenantPrimaryDomain(tenantId, { legacyDomain: null, legacyAscii: null });
   }
 
   async function setPrimaryTenantDomain(tenantId, domainId) {
@@ -414,13 +481,15 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
     const protocol = firstHeaderValue(forwardedProto, req.protocol || 'https');
     const hostHeader = firstHeaderValue(forwardedHost, req.get('host') || 'localhost:3000');
     const baseUrl = `${protocol}://${hostHeader}`;
+    const subdomainShopUrl = buildTenantSubdomainUrl(nextTenant, req);
     return {
       ...nextTenant,
       domains,
       primary_domain_id: primaryDomain ? Number(primaryDomain.id) : null,
+      subdomain_shop_url: subdomainShopUrl,
       telegram_mini_app_url: `${baseUrl}/tg-app?tenant_id=${tenant.id}`,
       max_mini_app_url: `${baseUrl}/max-app?tenant_id=${tenant.id}`,
-      domain_setup: getTenantDomainSetup()
+      domain_setup: getTenantDomainSetup(req)
     };
   }
 
@@ -529,7 +598,7 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
     return result;
   }
 
-  function runTenantDomainAutoconnect({ domainAscii, includeWww }) {
+  function runTenantDomainAutomation({ domainAscii, includeWww, disconnect = false }) {
     const runnerBin = String(process.env.TENANT_DOMAIN_AUTOCONNECT_RUNNER || '').trim();
     const runnerArgs = parseCommandArgs(process.env.TENANT_DOMAIN_AUTOCONNECT_RUNNER_ARGS);
     const scriptPath = path.join(process.cwd(), 'scripts', 'connect-tenant-domain.js');
@@ -538,6 +607,9 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
       ? runnerArgs.slice()
       : [scriptPath];
     args.push(`--domain=${domainAscii}`);
+    if (disconnect) {
+      args.push('--disconnect');
+    }
     if (includeWww) args.push('--include-www');
     return new Promise((resolve, reject) => {
       execFile(command, args, { timeout: 180000, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
@@ -3049,6 +3121,124 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
     }
   });
 
+  router.post('/domains', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      if (!tenantId) {
+        return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+      }
+
+      const normalized = normalizeCustomDomain(req.body.domain);
+      if (normalized.invalid || !normalized.provided || !normalized.ascii) {
+        return res.status(400).json({ ok: false, error: 'INVALID_CUSTOM_DOMAIN' });
+      }
+
+      const makePrimary = helpers.toBool(req.body.make_primary, false);
+      try {
+        await addOrReuseTenantDomain(tenantId, normalized, { makePrimary });
+      } catch (err) {
+        if (err && err.code === 'CUSTOM_DOMAIN_TAKEN') {
+          return res.status(409).json({ ok: false, error: 'CUSTOM_DOMAIN_TAKEN' });
+        }
+        throw err;
+      }
+
+      const [rows] = await db.query(
+        'SELECT * FROM ten_tenants WHERE id=? LIMIT 1',
+        [tenantId]
+      );
+      return res.json({ ok: true, tenant: await buildTenantResponse(rows[0] || null, req) });
+    } catch (err) {
+      console.error('add-domain error:', err);
+      return res.status(500).json({ ok: false, error: 'DOMAIN_SAVE_FAILED' });
+    }
+  });
+
+  router.patch('/domains/:id', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      const domainId = Number(req.params.id);
+      if (!tenantId) {
+        return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+      }
+      if (!Number.isFinite(domainId) || domainId <= 0) {
+        return res.status(400).json({ ok: false, error: 'BAD_DOMAIN_ID' });
+      }
+
+      const [rows] = await db.query(
+        'SELECT id FROM ten_tenant_domains WHERE tenant_id=? AND id=? LIMIT 1',
+        [tenantId, domainId]
+      );
+      if (!rows.length) {
+        return res.status(404).json({ ok: false, error: 'DOMAIN_NOT_FOUND' });
+      }
+
+      if (helpers.toBool(req.body.is_primary, false)) {
+        await setPrimaryTenantDomain(tenantId, domainId);
+      }
+
+      const [tenantRows] = await db.query(
+        'SELECT * FROM ten_tenants WHERE id=? LIMIT 1',
+        [tenantId]
+      );
+      return res.json({ ok: true, tenant: await buildTenantResponse(tenantRows[0] || null, req) });
+    } catch (err) {
+      console.error('update-domain error:', err);
+      return res.status(500).json({ ok: false, error: 'DOMAIN_UPDATE_FAILED' });
+    }
+  });
+
+  router.delete('/domains/:id', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      const domainId = Number(req.params.id);
+      if (!tenantId) {
+        return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+      }
+      if (!Number.isFinite(domainId) || domainId <= 0) {
+        return res.status(400).json({ ok: false, error: 'BAD_DOMAIN_ID' });
+      }
+
+      const [rows] = await db.query(
+        'SELECT id, domain_ascii FROM ten_tenant_domains WHERE tenant_id=? AND id=? LIMIT 1',
+        [tenantId, domainId]
+      );
+      if (!rows.length) {
+        return res.status(404).json({ ok: false, error: 'DOMAIN_NOT_FOUND' });
+      }
+
+      const domainAscii = helpers.strOrNull(rows[0].domain_ascii);
+      await removeTenantDomain(tenantId, domainId);
+
+      let automation = null;
+      try {
+        const setup = getTenantDomainSetup();
+        if (setup.auto_connect_enabled && domainAscii) {
+          automation = await runTenantDomainAutomation({
+            domainAscii,
+            includeWww: setup.auto_connect_include_www,
+            disconnect: true
+          });
+        }
+      } catch (automationErr) {
+        console.error('disconnect-domain automation error:', automationErr);
+      }
+
+      const [tenantRows] = await db.query(
+        'SELECT * FROM ten_tenants WHERE id=? LIMIT 1',
+        [tenantId]
+      );
+      return res.json({
+        ok: true,
+        tenant: await buildTenantResponse(tenantRows[0] || null, req),
+        automation
+      });
+    } catch (err) {
+      console.error('delete-domain error:', err);
+      return res.status(500).json({ ok: false, error: 'DOMAIN_DELETE_FAILED' });
+    }
+  });
+
   router.post('/connect-domain', async (req, res) => {
     try {
       const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
@@ -3077,25 +3267,21 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
         return res.status(400).json({ ok: false, error: 'INVALID_CUSTOM_DOMAIN' });
       }
 
+      await ensureTenantDomainsTable();
+
       const nextDomain = normalized.provided ? normalized.unicode : helpers.strOrNull(current.custom_domain);
       const nextDomainAscii = normalized.provided ? normalized.ascii : helpers.strOrNull(current.custom_domain_ascii);
       if (!nextDomainAscii) {
         return res.status(400).json({ ok: false, error: 'NO_DOMAIN' });
       }
 
-      const [existsDomain] = await db.query(
-        'SELECT id FROM ten_tenants WHERE custom_domain_ascii=? AND id<>? LIMIT 1',
-        [nextDomainAscii, tenantId]
-      );
-      if (existsDomain.length > 0) {
+      const domainAvailable = await ensureTenantDomainAvailable(tenantId, nextDomainAscii);
+      if (!domainAvailable) {
         return res.status(409).json({ ok: false, error: 'CUSTOM_DOMAIN_TAKEN' });
       }
 
       if (normalized.provided) {
-        await db.query(
-          'UPDATE ten_tenants SET custom_domain=?, custom_domain_ascii=? WHERE id=?',
-          [nextDomain, nextDomainAscii, tenantId]
-        );
+        await addOrReuseTenantDomain(tenantId, normalized, { makePrimary: false });
       }
 
       const precheck = await performTenantDomainCheck({ tenantId, domainAscii: nextDomainAscii });
@@ -3103,7 +3289,7 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
         return res.status(409).json({ ok: false, error: 'DOMAIN_DNS_NOT_READY', result: precheck });
       }
 
-      const automation = await runTenantDomainAutoconnect({
+      const automation = await runTenantDomainAutomation({
         domainAscii: nextDomainAscii,
         includeWww: setup.auto_connect_include_www
       });
@@ -3115,7 +3301,7 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
 
       return res.json({
         ok: true,
-        tenant: buildTenantResponse(updatedRows[0] || null, req),
+        tenant: await buildTenantResponse(updatedRows[0] || null, req),
         result: await performTenantDomainCheck({ tenantId, domainAscii: nextDomainAscii }),
         automation
       });

@@ -21,6 +21,12 @@ function run(command, args) {
   execFileSync(command, args, { stdio: 'inherit' });
 }
 
+function removeIfExists(targetPath) {
+  if (!fs.existsSync(targetPath)) return false;
+  fs.unlinkSync(targetPath);
+  return true;
+}
+
 function buildHttpConfig({ domain, includeWww, upstream, acmeWebroot, clientMaxBodySize }) {
   const names = includeWww ? `${domain} www.${domain}` : domain;
   return `server {
@@ -39,6 +45,7 @@ function buildHttpConfig({ domain, includeWww, upstream, acmeWebroot, clientMaxB
         proxy_pass ${upstream};
         proxy_http_version 1.1;
         proxy_set_header Host $host;
+        proxy_set_header X-Tenant-Domain-Managed 1;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
@@ -83,6 +90,7 @@ server {
         proxy_pass ${upstream};
         proxy_http_version 1.1;
         proxy_set_header Host $host;
+        proxy_set_header X-Tenant-Domain-Managed 1;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
@@ -122,6 +130,7 @@ function main() {
   const sslOptionsPath = process.env.TENANT_DOMAIN_AUTOCONNECT_SSL_OPTIONS_PATH || '/etc/letsencrypt/options-ssl-nginx.conf';
   const sslDhParamPath = process.env.TENANT_DOMAIN_AUTOCONNECT_SSL_DHPARAM_PATH || '/etc/letsencrypt/ssl-dhparams.pem';
   const certbotEmail = String(process.env.TENANT_DOMAIN_AUTOCONNECT_CERTBOT_EMAIL || '').trim();
+  const disconnectOnly = getArg('disconnect') === true;
 
   ensureDir(sitesAvailableDir);
   ensureDir(sitesEnabledDir);
@@ -130,6 +139,23 @@ function main() {
 
   const confPath = path.join(sitesAvailableDir, `${sitePrefix}${domain}.conf`);
   const enabledPath = path.join(sitesEnabledDir, `${sitePrefix}${domain}.conf`);
+
+  if (disconnectOnly) {
+    const removedEnabled = removeIfExists(enabledPath);
+    const removedConf = removeIfExists(confPath);
+    run(nginxBin, ['-t']);
+    execFileSync('sh', ['-lc', reloadCommand], { stdio: 'inherit' });
+    process.stdout.write(
+      JSON.stringify({
+        ok: true,
+        domain,
+        disconnected: true,
+        removed_enabled: removedEnabled,
+        removed_conf: removedConf
+      })
+    );
+    return;
+  }
 
   fs.writeFileSync(
     confPath,

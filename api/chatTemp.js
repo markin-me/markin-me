@@ -866,6 +866,9 @@ async function notifyPushPeerAboutMessage(tenantId, clientId, senderActor, messa
     type: "chat_message",
     tenant_id: Number(tenantId),
     client_id: Number(clientId),
+    message_id: messageIdRaw.slice(0, 120),
+    peer_actor: peerActor,
+    open_chat: true,
     title,
     body: preview,
     url,
@@ -1134,6 +1137,38 @@ function normalizeClientId(value) {
   const n = Number(raw);
   if (!Number.isFinite(n) || n <= 0) return null;
   return String(Math.trunc(n));
+}
+
+async function resolveCustomerClientIdByToken(tenantId, customerToken) {
+  const token = String(customerToken || "").trim();
+  if (!token) return null;
+  const [rows] = await db.query(
+    `SELECT c.id AS customer_id
+       FROM cust_customer_sessions s
+       JOIN cust_customers c
+         ON c.tenant_id = s.tenant_id
+        AND c.id = s.customer_id
+      WHERE s.tenant_id = ?
+        AND s.token = ?
+        AND s.is_active = 1
+        AND c.is_active = 1
+      LIMIT 1`,
+    [Number(tenantId), token]
+  );
+  const customerId = normalizeClientId(rows?.[0]?.customer_id);
+  return customerId || null;
+}
+
+async function resolveIncomingActorClientId(req, tenantId) {
+  const explicitClientId = normalizeClientId(req.query.client_id ?? req.query.clientId ?? "");
+  const customerToken = String(req.headers["x-customer-token"] || "").trim();
+  if (!customerToken) return explicitClientId;
+  try {
+    const customerClientId = await resolveCustomerClientIdByToken(tenantId, customerToken);
+    return customerClientId || explicitClientId;
+  } catch {
+    return explicitClientId;
+  }
 }
 
 function normalizePushClientId(value, actorKey) {
@@ -2570,6 +2605,13 @@ async function persistThreadTypingState(tenantId, clientId, actorKey, typingStat
 function notifyThreadChange(tenantId, clientId, updatedAt = "", options = {}) {
   const messageChanged = options?.messageChanged !== false;
   const typingChanged = options?.typingChanged === true;
+  const readDirection = options?.readDirection === "in" || options?.readDirection === "out"
+    ? options.readDirection
+    : "";
+  const readMessageIds = (Array.isArray(options?.readMessageIds) ? options.readMessageIds : [])
+    .map((id) => String(id || "").trim())
+    .filter(Boolean);
+  const readAt = String(options?.readAt || "");
   const key = getThreadKey(tenantId, clientId);
   if (key) {
     const set = threadWaiters.get(key);
@@ -2578,6 +2620,9 @@ function notifyThreadChange(tenantId, clientId, updatedAt = "", options = {}) {
         updatedAt: String(updatedAt || ""),
         messageChanged,
         typingChanged,
+        readDirection,
+        readMessageIds,
+        readAt,
       };
       Array.from(set).forEach((resolve) => {
         try { resolve(payload); } catch {}
@@ -2589,6 +2634,9 @@ function notifyThreadChange(tenantId, clientId, updatedAt = "", options = {}) {
       message_changed: messageChanged,
       typing_changed: typingChanged,
       updated_at: String(updatedAt || ""),
+      read_direction: readDirection,
+      read_message_ids: readMessageIds,
+      read_at: readAt,
     });
   }
   if (messageChanged || typingChanged) {
@@ -3995,6 +4043,11 @@ function makeChatTempRouter() {
         message_changed: payload.message_changed === true,
         typing_changed: payload.typing_changed === true,
         updated_at: String(payload.updated_at || ""),
+        read_direction: String(payload.read_direction || ""),
+        read_message_ids: Array.isArray(payload.read_message_ids)
+          ? payload.read_message_ids.map((id) => String(id || "").trim()).filter(Boolean)
+          : [],
+        read_at: String(payload.read_at || ""),
         typing: getPeerTypingForActor(tenantId, clientId, actorKey),
         timeout: false,
       }));
@@ -4081,6 +4134,11 @@ function makeChatTempRouter() {
           message_changed: messageChanged,
           typing_changed: typingChanged,
           updated_at: nextUpdatedAt,
+          read_direction: String(waitResult?.readDirection || ""),
+          read_message_ids: Array.isArray(waitResult?.readMessageIds)
+            ? waitResult.readMessageIds.map((id) => String(id || "").trim()).filter(Boolean)
+            : [],
+          read_at: String(waitResult?.readAt || ""),
           typing: nextTyping,
           timeout: waitResult?.timeout === true,
         },
@@ -4327,6 +4385,7 @@ function makeChatTempRouter() {
 
       const updatedAt = new Date();
       const readAt = new Date();
+      let changedIds = hasFilterIds ? ids.slice() : [];
 
       let query = `
         UPDATE chat_messages
@@ -4345,6 +4404,17 @@ function makeChatTempRouter() {
       const changed = Number(result?.affectedRows || 0) > 0;
 
       if (changed) {
+        if (!changedIds.length) {
+          const [readRows] = await conn.query(
+            `SELECT message_id
+               FROM chat_messages
+              WHERE tenant_id = ? AND client_id = ? AND direction = ? AND read_at = ?`,
+            [tenantId, clientId, unreadDirection, readAt]
+          );
+          changedIds = (Array.isArray(readRows) ? readRows : [])
+            .map((row) => String(row?.message_id || "").trim())
+            .filter(Boolean);
+        }
         await ensureThreadRow(conn, tenantId, clientId, {
           meta: sanitizeMeta(req.body?.meta || {}),
           updatedAt,
@@ -4356,7 +4426,11 @@ function makeChatTempRouter() {
       conn.release();
       conn = null;
       if (changed) {
-        notifyThreadChange(tenantId, clientId, updatedAt.toISOString());
+        notifyThreadChange(tenantId, clientId, updatedAt.toISOString(), {
+          readDirection: unreadDirection,
+          readMessageIds: changedIds,
+          readAt: readAt.toISOString(),
+        });
         scheduleTenantUnreadRefresh(tenantId);
       }
 
@@ -4683,11 +4757,12 @@ function makeChatTempRouter() {
       const tenantId = getTenantId(req);
       const actorKey = getRequestReactionActor(req);
       if (actorKey === "in") {
-        const clientId = normalizeClientId(req.query.client_id ?? req.query.clientId ?? "");
+        const clientId = await resolveIncomingActorClientId(req, tenantId);
         const snapshot = await readClientUnreadSnapshot(tenantId, clientId);
         return res.json({
           ok: true,
           data: {
+            client_id: Number(clientId || 0),
             unread_total: Number(snapshot.total || 0),
             total: Number(snapshot.total || 0),
             updated_at: String(snapshot.updatedAt || ""),
@@ -4720,7 +4795,7 @@ function makeChatTempRouter() {
       const tenantId = getTenantId(req);
       const actorKey = getRequestReactionActor(req);
       const clientId = actorKey === "in"
-        ? normalizeClientId(req.query.client_id ?? req.query.clientId ?? "")
+        ? await resolveIncomingActorClientId(req, tenantId)
         : "";
 
       if (actorKey === "in" && !clientId) {
@@ -4794,7 +4869,7 @@ function makeChatTempRouter() {
       const sinceRevision = hasSinceRevision ? Math.trunc(sinceRevisionRaw) : -1;
 
       if (actorKey === "in") {
-        const clientId = normalizeClientId(req.query.client_id ?? req.query.clientId ?? "");
+        const clientId = await resolveIncomingActorClientId(req, tenantId);
         const currentSnapshot = await readClientUnreadSnapshot(tenantId, clientId);
         const currentTotal = Number(currentSnapshot.total || 0);
         const currentRevision = Number(currentSnapshot.revision || 0);
@@ -4805,6 +4880,7 @@ function makeChatTempRouter() {
           return res.json({
             ok: true,
             data: {
+              client_id: Number(clientId || 0),
               changed: true,
               unread_total: currentTotal,
               total: currentTotal,
@@ -4828,6 +4904,7 @@ function makeChatTempRouter() {
         return res.json({
           ok: true,
           data: {
+            client_id: Number(clientId || 0),
             changed,
             unread_total: nextTotal,
             total: nextTotal,

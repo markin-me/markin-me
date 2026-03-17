@@ -541,12 +541,18 @@
       <div class="info-card settings-right-panel settings-right-panel-fixed-footer hidden" id="settingsDomainPanel">
         <div class="settings-site-form settings-panel-scroll">
           <div class="settings-site-field">
-            <label class="field-label">ВАШ ДОМЕН</label>
-            <input class="control" type="text" placeholder="site.ru" data-tenant-input="custom_domain" data-site-input="custom_domain" id="domainInput" />
+            <label class="field-label">ПОДКЛЮЧЕННЫЕ ДОМЕНЫ</label>
+            <div class="domain-managed-list" id="domainList"></div>
             <div class="field-hint hidden" id="domainConnectedHint"></div>
           </div>
 
-          <div class="settings-site-field">
+          <div class="settings-site-field hidden" id="domainNewField">
+            <label class="field-label">НОВЫЙ ДОМЕН</label>
+            <input class="control" type="text" placeholder="site.ru" data-tenant-input="custom_domain" data-site-input="custom_domain" id="domainInput" />
+            <div class="field-hint" id="domainPrimaryHint">Основной домен используется в ссылках на витрину и мини-приложения.</div>
+          </div>
+
+          <div class="settings-site-field hidden" id="domainInstructionField">
             <label class="field-label">КАК ПОДКЛЮЧИТЬ</label>
             <div class="domain-instructions">
               <div class="domain-step-list">
@@ -586,7 +592,7 @@
             </div>
           </div>
 
-          <div class="settings-site-field">
+          <div class="settings-site-field hidden" id="domainActionField">
             <div class="domain-action-row">
               <button class="btn btn-primary btn-sm" type="button" id="domainCheckBtn">
                 <i class="fas fa-sync-alt"></i> Проверить домен
@@ -595,10 +601,10 @@
                 <i class="fas fa-bolt"></i> Подключить автоматически
               </button>
             </div>
-            <div class="field-hint" id="domainConnectHint">Сначала сохраните домен и пропишите две A-записи.</div>
+            <div class="field-hint" id="domainConnectHint">Добавьте домен, пропишите две A-записи и затем запустите автоподключение.</div>
           </div>
 
-          <div class="settings-site-field" id="domainCheckResults">
+          <div class="settings-site-field hidden" id="domainCheckResults">
             <label class="field-label">СТАТУС ПОДКЛЮЧЕНИЯ</label>
             <div class="domain-check-list">
               <div class="domain-check-item" id="domainCheckDns">
@@ -628,7 +634,10 @@
               <button class="product-footer-btn product-footer-cancel" id="settingsDomainCancelBtn" type="button" title="Отменить" aria-label="Отменить">
                 <i class="fas fa-times"></i>
               </button>
-              <button class="product-footer-btn product-footer-save" id="settingsDomainSaveBtn" type="button">Сохранить</button>
+              <button class="product-footer-btn product-footer-more hidden" id="settingsDomainAddBtn" type="button" title="Добавить домен" aria-label="Добавить домен">
+                <i class="fas fa-plus"></i>
+              </button>
+              <button class="product-footer-btn product-footer-save" id="settingsDomainSaveBtn" type="button">Добавить</button>
             </div>
           </div>
         </div>

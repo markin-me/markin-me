@@ -7082,6 +7082,16 @@ body.page-shop .shop-company-chat-btn:active{
   -webkit-tap-highlight-color: transparent;
 }
 
+body.page-shop .shop-company-chat-btn.is-active,
+body.page-shop .shop-company-chat-btn.is-active:hover,
+body.page-shop .shop-company-chat-btn.is-active:focus,
+body.page-shop .shop-company-chat-btn.is-active:focus-visible,
+body.page-shop .shop-company-chat-btn.is-active:active{
+  background: color-mix(in srgb, var(--color-primary) 16%, var(--color-surface));
+  color: var(--color-primary);
+  box-shadow: 0 0 0 1px var(--primary-25), 0 8px 20px rgba(249,115,22,.16);
+}
+
 body.page-shop .shop-company-chat-btn > i,
 body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
   pointer-events: none;
@@ -7090,6 +7100,7 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
 
 .shop-company-chat-overlay{
   --shop-chat-mobile-keyboard-inset: 0px;
+  --shop-chat-android-viewport-shift: 0px;
   --shop-chat-scroll-down-composer-extra: 0px;
   position: fixed;
   inset: 0;
@@ -8279,26 +8290,27 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
 
 .shop-company-chat-reaction-pill{
   margin: 0;
-  position: static;
+  position: relative;
   appearance: none;
   -webkit-appearance: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   transform-origin: center;
-  min-height: 34px;
-  min-width: 34px;
+  min-height: 26px;
+  min-width: 26px;
   padding: 0 2px;
   border-radius: 0;
   border: 0;
   background: transparent;
   box-shadow: none;
-  font-size: 30px;
+  font-size: 23px;
   line-height: 1;
   cursor: pointer;
   outline: none;
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
+  will-change: transform, filter, opacity;
   z-index: 1;
 }
 
@@ -8316,8 +8328,19 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
 }
 
 .shop-company-chat-reaction-pill.is-reaction-pop{
-  animation: shop-company-chat-reaction-pill-pop 240ms cubic-bezier(.18,.88,.24,1.18) both;
+  animation: shop-company-chat-reaction-pill-pop 520ms cubic-bezier(.16,1.18,.3,1) both;
   animation-delay: var(--reaction-pop-delay, 0ms);
+}
+
+.shop-company-chat-reaction-pill.is-reaction-pop::after{
+  content: none;
+  animation: none;
+}
+
+.shop-company-chat-reaction-pill.is-reaction-leave{
+  pointer-events: none;
+  animation: shop-company-chat-reaction-pill-leave 240ms cubic-bezier(.42,0,.2,1) both;
+  animation-delay: var(--reaction-leave-delay, 0ms);
 }
 
 .shop-company-chat-reactions{
@@ -8345,25 +8368,44 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
 }
 
 .shop-company-chat-row.is-agent .shop-company-chat-reaction-pill + .shop-company-chat-reaction-pill{
-  margin-left: -12px;
+  margin-left: -9px;
 }
 
 .shop-company-chat-row.is-user .shop-company-chat-reaction-pill + .shop-company-chat-reaction-pill{
-  margin-right: -12px;
+  margin-right: -9px;
 }
 
 @keyframes shop-company-chat-reaction-pill-pop{
   0%{
     opacity: 0;
-    transform: translateY(8px) scale(.7);
+    transform: translateY(14px) scale(.36) rotate(-16deg);
   }
-  68%{
+  38%{
     opacity: 1;
-    transform: translateY(-2px) scale(1.12);
+    transform: translateY(-9px) scale(1.42) rotate(8deg);
+  }
+  62%{
+    opacity: 1;
+    transform: translateY(2px) scale(.9) rotate(-5deg);
+  }
+  82%{
+    opacity: 1;
+    transform: translateY(-2px) scale(1.12) rotate(2deg);
   }
   100%{
     opacity: 1;
-    transform: translateY(0) scale(1);
+    transform: translateY(0) scale(1) rotate(0deg);
+  }
+}
+
+@keyframes shop-company-chat-reaction-pill-leave{
+  0%{
+    opacity: 1;
+    transform: translateY(0) scale(1) rotate(0deg);
+  }
+  100%{
+    opacity: 0;
+    transform: translateY(-8px) scale(.52) rotate(10deg);
   }
 }
 
@@ -8372,6 +8414,14 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
     animation: none;
     opacity: 1;
     transform: none;
+  }
+  .shop-company-chat-reaction-pill.is-reaction-pop::after{
+    animation: none;
+    content: none;
+  }
+  .shop-company-chat-reaction-pill.is-reaction-leave{
+    animation: none;
+    opacity: 0;
   }
 }
 
@@ -8537,21 +8587,22 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
   display: flex;
   align-items: center;
   flex-wrap: nowrap;
-  gap: 4px;
+  gap: 3px;
   padding: 2px;
   overflow: hidden;
 }
 
 .shop-company-chat-context-reaction{
-  width: 32px;
-  height: 32px;
+  width: 24px;
+  height: 24px;
   border: 0;
   background: transparent;
-  border-radius: 8px;
+  border-radius: 6px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
+  font-size: 17px;
   transition: transform var(--dur-fast) var(--ease-smooth), opacity var(--dur-fast) var(--ease-smooth);
 }
 
@@ -8570,11 +8621,11 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
 
 .shop-company-chat-context-menu.is-reactions-expanded .shop-company-chat-context-reactions{
   display: grid;
-  grid-template-columns: repeat(8, 30px);
+  grid-template-columns: repeat(8, 24px);
   justify-content: start;
   align-content: start;
-  gap: 4px;
-  width: min(284px, calc(100vw - 36px));
+  gap: 3px;
+  width: min(228px, calc(100vw - 36px));
   max-height: min(40vh, 216px);
   overflow-y: auto;
   overflow-x: hidden;
@@ -8828,9 +8879,9 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
   display: flex;
   flex-wrap: nowrap;
   align-items: center;
-  gap: 4px;
-  padding: 4px 6px;
-  max-width: min(332px, calc(100vw - 16px));
+  gap: 3px;
+  padding: 3px 5px;
+  max-width: min(250px, calc(100vw - 16px));
   border-radius: 999px;
   border: 1px solid color-mix(in srgb, var(--color-border), transparent 22%);
   background:
@@ -8857,11 +8908,11 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
 
 .shop-company-chat-reaction-bar.is-expanded{
   display: grid;
-  grid-template-columns: repeat(8, 32px);
+  grid-template-columns: repeat(8, 24px);
   justify-content: start;
   align-content: start;
-  gap: 4px;
-  width: min(300px, calc(100vw - 16px));
+  gap: 3px;
+  width: min(228px, calc(100vw - 16px));
   max-height: min(44vh, 236px);
   overflow-y: auto;
   overflow-x: hidden;
@@ -8872,16 +8923,16 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
 }
 
 .shop-company-chat-reaction-btn{
-  width: 32px;
-  height: 32px;
+  width: 24px;
+  height: 24px;
   appearance: none;
   -webkit-appearance: none;
   border: 0;
   background: transparent;
-  border-radius: 8px;
+  border-radius: 6px;
   display: grid;
   place-items: center;
-  font-size: 22px;
+  font-size: 17px;
   line-height: 1;
   cursor: pointer;
   outline: none;
@@ -8915,8 +8966,8 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
 }
 
 .shop-company-chat-reaction-close{
-  width: 32px;
-  height: 32px;
+  width: 24px;
+  height: 24px;
   border: 0;
   background: transparent;
   border-radius: 999px;
@@ -9269,8 +9320,8 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
 }
 
 .shop-company-chat-emoji-glyph--reaction{
-  width: 28px;
-  height: 28px;
+  width: 21px;
+  height: 21px;
   display: block;
   overflow: visible;
   filter: none !important;
@@ -9281,8 +9332,8 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
 }
 
 .shop-company-chat-emoji-glyph--pill{
-  width: 34px;
-  height: 34px;
+  width: 26px;
+  height: 26px;
   display: block;
   border-radius: 999px;
   background-color: transparent !important;
@@ -9743,6 +9794,18 @@ body.page-shop.shop-company-chat-open{
     padding-bottom: var(--shop-chat-mobile-keyboard-inset);
   }
 
+  .shop-company-chat-feed,
+  .shop-company-chat-composer,
+  .shop-company-chat-selection-toolbar{
+    transform: translate3d(0, var(--shop-chat-android-viewport-shift), 0);
+    will-change: transform;
+  }
+
+  .shop-company-chat-modal__body,
+  .shop-company-chat-overlay.is-mobile-keyboard-open .shop-company-chat-modal__body{
+    transition: none;
+  }
+
   .shop-company-chat-modal__body.is-emoji-sheet-open{
     padding-bottom: max(
       var(--shop-chat-mobile-keyboard-inset),
@@ -9812,24 +9875,24 @@ body.page-shop.shop-company-chat-open{
   }
 
   .shop-company-chat-reaction-bar{
-    gap: 4px;
-    padding: 5px 6px;
+    gap: 3px;
+    padding: 4px 5px;
   }
 
   .shop-company-chat-reaction-btn,
   .shop-company-chat-reaction-close{
-    width: 34px;
-    height: 34px;
+    width: 26px;
+    height: 26px;
   }
 
   .shop-company-chat-reaction-btn{
-    font-size: 24px;
+    font-size: 18px;
   }
 
   .shop-company-chat-reaction-pill{
-    min-height: 34px;
-    min-width: 34px;
-    font-size: 26px;
+    min-height: 26px;
+    min-width: 26px;
+    font-size: 20px;
     bottom: -10px;
   }
 

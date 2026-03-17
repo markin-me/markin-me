@@ -35,6 +35,11 @@
   const CHAT_UNANSWERED_ALERT_DELAY_MS = 5000;
   const CHAT_PUSH_SYNC_DEBOUNCE_MS = 180;
   const CHAT_PUSH_SUBSCRIPTION_CLIENT_ID = 0;
+  const CHAT_AUTO_OPEN_QUERY_PARAM = "open_chat";
+  const CHAT_AUTO_OPEN_SOURCE_PARAM = "chat_source";
+  const CHAT_AUTO_OPEN_CLIENT_ID_PARAM = "chat_client_id";
+  const CHAT_AUTO_OPEN_MESSAGE_ID_PARAM = "chat_message_id";
+  const CHAT_MESSAGE_JUMP_BOTTOM_GAP_PX = 14;
   const CHAT_CLIENTS_PAGE_SIZE = 20;
   const CHAT_CLIENTS_LOAD_MORE_THRESHOLD_PX = 140;
   const CHAT_CLIENTS_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
@@ -331,6 +336,8 @@
   let emojiDatasetPromise = null;
   let emojiPopoverMode = "composer";
   let emojiPopoverReactionMessageId = "";
+  let pendingNotificationChatOpenRequest = null;
+  let pendingNotificationMessageFocus = null;
   let attachmentDraftDbPromise = null;
   let attachPreviewDraftPersistTimer = 0;
   let attachPreviewDraftRestoreToken = 0;
@@ -1173,6 +1180,75 @@
     const n = Number(clientId);
     if (Number.isFinite(n) && n > 0) return String(Math.trunc(n));
     return "";
+  }
+
+  function normalizeChatNotificationOpenRequest(rawRequest) {
+    const source = rawRequest && typeof rawRequest === "object" ? rawRequest : {};
+    const openRaw = source.open_chat ?? source.openChat ?? source.open;
+    const shouldOpen = (
+      openRaw === true
+      || openRaw === 1
+      || String(openRaw || "").trim().toLowerCase() === "1"
+      || String(openRaw || "").trim().toLowerCase() === "true"
+    );
+    const sourceValue = String(
+      source.chat_source
+      ?? source.chatSource
+      ?? source.source
+      ?? ""
+    ).trim().toLowerCase();
+    const clientId = normalizeClientIdKey(
+      source.chat_client_id
+      ?? source.client_id
+      ?? source.clientId
+    );
+    if (!clientId) return null;
+    if (!shouldOpen && sourceValue !== "push") return null;
+    return {
+      open: true,
+      source: sourceValue || "push",
+      clientId,
+      messageId: String(
+        source.chat_message_id
+        ?? source.message_id
+        ?? source.messageId
+        ?? ""
+      ).trim().slice(0, 120),
+    };
+  }
+
+  function readChatNotificationOpenRequestFromLocation() {
+    try {
+      const currentUrl = new URL(window.location.href);
+      return normalizeChatNotificationOpenRequest({
+        open_chat: currentUrl.searchParams.get(CHAT_AUTO_OPEN_QUERY_PARAM),
+        chat_source: currentUrl.searchParams.get(CHAT_AUTO_OPEN_SOURCE_PARAM),
+        chat_client_id: currentUrl.searchParams.get(CHAT_AUTO_OPEN_CLIENT_ID_PARAM),
+        chat_message_id: currentUrl.searchParams.get(CHAT_AUTO_OPEN_MESSAGE_ID_PARAM),
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  function clearChatNotificationOpenRequestFromLocation() {
+    try {
+      const currentUrl = new URL(window.location.href);
+      let changed = false;
+      [
+        CHAT_AUTO_OPEN_QUERY_PARAM,
+        CHAT_AUTO_OPEN_SOURCE_PARAM,
+        CHAT_AUTO_OPEN_CLIENT_ID_PARAM,
+        CHAT_AUTO_OPEN_MESSAGE_ID_PARAM,
+      ].forEach((key) => {
+        if (!currentUrl.searchParams.has(key)) return;
+        currentUrl.searchParams.delete(key);
+        changed = true;
+      });
+      if (!changed) return;
+      const nextUrl = currentUrl.pathname + currentUrl.search + currentUrl.hash;
+      window.history.replaceState(window.history.state, "", nextUrl);
+    } catch {}
   }
 
   function getThreadMutationVersion(clientId) {
@@ -2184,6 +2260,11 @@
       timeout: data.timeout === true,
       messageChanged: data.message_changed === true,
       typingChanged: data.typing_changed === true,
+      readDirection: String(data.read_direction || ""),
+      readMessageIds: Array.isArray(data.read_message_ids)
+        ? data.read_message_ids.map((id) => String(id || "").trim()).filter(Boolean)
+        : [],
+      readAt: String(data.read_at || ""),
       typing: data.typing && typeof data.typing === "object" ? data.typing : null,
     };
   }
@@ -2996,6 +3077,8 @@
         applyPeerTypingState(activeId, payload.typing);
       }
 
+      applyImmediateThreadReadPayload(activeId, payload);
+
       if (payload.changed !== true && payload.message_changed !== true) return;
 
       const knownUpdatedAt = String(state.remoteThreadUpdatedAt[activeId] || "");
@@ -3137,6 +3220,8 @@
             if (waited?.typing && typeof waited.typing === "object") {
               applyPeerTypingState(activeId, waited.typing);
             }
+
+            applyImmediateThreadReadPayload(activeId, waited);
 
             const messageChanged = waited?.messageChanged === true
               || (
@@ -3976,7 +4061,7 @@
         const startAt = ctx.currentTime + 0.002;
         const master = ctx.createGain();
         master.gain.setValueAtTime(0.0001, startAt);
-        master.gain.exponentialRampToValueAtTime(0.06, startAt + 0.012);
+        master.gain.exponentialRampToValueAtTime(0.095, startAt + 0.012);
         master.gain.exponentialRampToValueAtTime(0.0001, startAt + 0.17);
         master.connect(ctx.destination);
 
@@ -3998,7 +4083,7 @@
         oscB.frequency.setValueAtTime(1760, startAt + 0.05);
         oscB.frequency.exponentialRampToValueAtTime(1480, startAt + 0.145);
         gainB.gain.setValueAtTime(0.0001, startAt + 0.045);
-        gainB.gain.exponentialRampToValueAtTime(0.7, startAt + 0.072);
+        gainB.gain.exponentialRampToValueAtTime(0.85, startAt + 0.072);
         gainB.gain.exponentialRampToValueAtTime(0.0001, startAt + 0.17);
         oscB.connect(gainB);
         gainB.connect(master);
@@ -4690,28 +4775,63 @@
     syncComposerRichPreview({});
   }
 
-  function scrollToMessageInThread(messageId) {
+  function scrollToMessageInThread(messageId, options = {}) {
     if (!dom.center.messages || !dom.center.messagesWrap) return;
     const key = String(messageId || "");
-    if (!key) return;
+    if (!key) return false;
 
     const wrap = dom.center.messagesWrap;
     const target = $$(".chat-message", dom.center.messages)
       .find((node) => String(node.getAttribute("data-message-id") || "") === key);
-    if (!target) return;
+    if (!target) return false;
 
     const wrapRect = wrap.getBoundingClientRect();
     const targetRect = target.getBoundingClientRect();
     const offsetTop = targetRect.top - wrapRect.top;
+    const placement = options.placement === "bottom" ? "bottom" : "center";
+    const gap = Math.max(0, Number(options.bottomGapPx || CHAT_MESSAGE_JUMP_BOTTOM_GAP_PX));
     const centeredTop = wrap.scrollTop + offsetTop - ((wrap.clientHeight - targetRect.height) / 2);
-    const nextTop = Math.max(0, centeredTop);
+    const bottomAlignedTop = wrap.scrollTop + offsetTop + targetRect.height - Math.max(0, wrap.clientHeight - gap);
+    const nextTop = Math.max(0, placement === "bottom" ? bottomAlignedTop : centeredTop);
+    const behavior = options.behavior === "auto" ? "auto" : "smooth";
 
-    wrap.scrollTo({ top: nextTop, behavior: "smooth" });
+    wrap.scrollTo({ top: nextTop, behavior });
     target.classList.add("is-jump-highlight");
     if (target.__jumpTimer) clearTimeout(target.__jumpTimer);
     target.__jumpTimer = window.setTimeout(() => {
       target.classList.remove("is-jump-highlight");
     }, 1200);
+    return true;
+  }
+
+  function queuePendingNotificationMessageFocus(messageId, clientId) {
+    const normalizedMessageId = String(messageId || "").trim();
+    const normalizedClientId = normalizeClientIdKey(clientId);
+    if (!normalizedMessageId || !normalizedClientId) return false;
+    pendingNotificationMessageFocus = {
+      clientId: normalizedClientId,
+      messageId: normalizedMessageId,
+    };
+    return true;
+  }
+
+  function flushPendingNotificationMessageFocus() {
+    const pending = pendingNotificationMessageFocus && typeof pendingNotificationMessageFocus === "object"
+      ? pendingNotificationMessageFocus
+      : null;
+    if (!pending) return false;
+    const activeClientId = normalizeClientIdKey(state.activeClientId);
+    if (!activeClientId || pending.clientId !== activeClientId) return false;
+    const focused = scrollToMessageInThread(pending.messageId, {
+      placement: "bottom",
+      behavior: "auto",
+      bottomGapPx: CHAT_MESSAGE_JUMP_BOTTOM_GAP_PX,
+    });
+    if (!focused) return false;
+    pendingNotificationMessageFocus = null;
+    saveThreadScrollPosition(state.activeClientId);
+    updateMessagesScrollDownButton();
+    return true;
   }
 
   function ensureDeleteConfirmUi() {
@@ -4917,8 +5037,8 @@
   function getEmojiAtlasRenderCellSize(glyphClassName) {
     const cls = String(glyphClassName || "");
     if (!cls) return 24;
-    if (cls.indexOf("shop-company-chat-emoji-glyph--reaction") !== -1 || cls.indexOf("chat-emoji-glyph--reaction") !== -1) return 28;
-    if (cls.indexOf("shop-company-chat-emoji-glyph--pill") !== -1 || cls.indexOf("chat-emoji-glyph--pill") !== -1) return 34;
+    if (cls.indexOf("shop-company-chat-emoji-glyph--reaction") !== -1 || cls.indexOf("chat-emoji-glyph--reaction") !== -1) return 21;
+    if (cls.indexOf("shop-company-chat-emoji-glyph--pill") !== -1 || cls.indexOf("chat-emoji-glyph--pill") !== -1) return 26;
     if (cls.indexOf("shop-company-chat-emoji-glyph--composer") !== -1 || cls.indexOf("chat-emoji-glyph--composer") !== -1) return 30;
     if (cls.indexOf("shop-company-chat-emoji-glyph--picker") !== -1 || cls.indexOf("chat-emoji-glyph--picker") !== -1) return 24;
     if (
@@ -5145,14 +5265,15 @@
     return items;
   }
 
-  function getThreadReactionRenderKey(clientId, messageId) {
+  function getThreadReactionRenderKey(clientId, messageId, fallbackKey) {
     const clientKey = normalizeClientIdKey(clientId) || "thread";
-    const entryKey = String(messageId || "").trim();
+    const entryKey = String(messageId || "").trim() || String(fallbackKey || "").trim();
+    if (!entryKey) return "";
     return `${clientKey}:${entryKey}`;
   }
 
-  function getPendingThreadReactionOverride(clientId, messageId) {
-    const key = getThreadReactionRenderKey(clientId, messageId);
+  function getPendingThreadReactionOverride(clientId, messageId, fallbackKey) {
+    const key = getThreadReactionRenderKey(clientId, messageId, fallbackKey);
     if (!key) return null;
     const pending = pendingThreadReactionOverrides.get(key);
     if (!pending) return null;
@@ -5165,8 +5286,8 @@
     return pending;
   }
 
-  function setPendingThreadReactionOverride(clientId, messageId, reaction) {
-    const key = getThreadReactionRenderKey(clientId, messageId);
+  function setPendingThreadReactionOverride(clientId, messageId, reaction, fallbackKey) {
+    const key = getThreadReactionRenderKey(clientId, messageId, fallbackKey);
     if (!key) return;
     pendingThreadReactionOverrides.set(key, {
       actor: CHAT_REACTION_ACTOR,
@@ -5175,23 +5296,22 @@
     });
   }
 
-  function clearPendingThreadReactionOverride(clientId, messageId) {
-    const key = getThreadReactionRenderKey(clientId, messageId);
+  function clearPendingThreadReactionOverride(clientId, messageId, fallbackKey) {
+    const key = getThreadReactionRenderKey(clientId, messageId, fallbackKey);
     if (!key) return;
     pendingThreadReactionOverrides.delete(key);
     pendingThreadReactionPopKeys.delete(key);
   }
 
-  function applyPendingThreadReactionOverrideToMessage(clientId, message) {
+  function applyPendingThreadReactionOverrideToMessage(clientId, message, fallbackKey) {
     if (!message || typeof message !== "object") return message;
     const messageId = String(message.id || "").trim();
-    if (!messageId) return message;
-    const pending = getPendingThreadReactionOverride(clientId, messageId);
+    const pending = getPendingThreadReactionOverride(clientId, messageId, fallbackKey);
     if (!pending) return message;
     const remoteActorReaction = String(getMessageActorReaction(message, pending.actor) || "");
     const expectedReaction = String(pending.reaction || "");
     if (normalizeReactionValue(remoteActorReaction) === normalizeReactionValue(expectedReaction)) {
-      clearPendingThreadReactionOverride(clientId, messageId);
+      clearPendingThreadReactionOverride(clientId, messageId, fallbackKey);
       return message;
     }
     const clonedMessage = { ...message, reactions: { ...ensureMessageReactions(message) } };
@@ -5202,45 +5322,125 @@
   }
 
   function applyPendingThreadReactionOverridesToMessages(clientId, messages) {
-    return (Array.isArray(messages) ? messages : []).map((message) => (
-      applyPendingThreadReactionOverrideToMessage(clientId, message)
+    return (Array.isArray(messages) ? messages : []).map((message, index) => (
+      applyPendingThreadReactionOverrideToMessage(
+        clientId,
+        message,
+        getThreadMessageRenderKey(message, index)
+      )
     ));
   }
 
-  function markPendingThreadReactionPop(clientId, messageId) {
-    const key = getThreadReactionRenderKey(clientId, messageId);
+  function markPendingThreadReactionPop(clientId, messageId, fallbackKey) {
+    const key = getThreadReactionRenderKey(clientId, messageId, fallbackKey);
     if (!key) return;
     pendingThreadReactionPopKeys.add(key);
   }
 
-  function getThreadReactionRenderSignature(reactionItems) {
-    return (Array.isArray(reactionItems) ? reactionItems : [])
-      .map((item) => {
-        const actor = String(item && item.actor || "").trim();
-        const reaction = normalizeReactionValue(item && item.reaction || "");
-        return actor && reaction ? `${actor}:${reaction}` : "";
-      })
-      .filter(Boolean)
-      .join("|");
+  function getThreadReactionAnimationItemKey(actor, reaction) {
+    const actorKey = actor === "in" ? "in" : actor === "out" ? "out" : "";
+    const reactionValue = normalizeReactionValue(reaction || "");
+    if (!actorKey || !reactionValue) return "";
+    return `${actorKey}:${reactionValue}`;
   }
 
-  function shouldAnimateThreadReaction(clientId, messageId, reactionItems) {
-    const key = getThreadReactionRenderKey(clientId, messageId);
-    if (!key) return false;
-    const signature = getThreadReactionRenderSignature(reactionItems);
-    const prevSignature = threadReactionRenderSignatures.get(key);
+  function createThreadReactionRenderState(reactionItems) {
+    const state = {
+      in: "",
+      inRaw: "",
+      out: "",
+      outRaw: "",
+      signature: "",
+    };
+    (Array.isArray(reactionItems) ? reactionItems : []).forEach((item) => {
+      const actorKey = String(item && item.actor || "").trim();
+      const normalizedActor = actorKey === "in" ? "in" : actorKey === "out" ? "out" : "";
+      const reactionRawValue = String(item && item.reaction || "").trim().normalize("NFC");
+      const reactionValue = normalizeReactionValue(reactionRawValue);
+      if (!normalizedActor || !reactionValue) return;
+      state[normalizedActor] = reactionValue;
+      state[normalizedActor + "Raw"] = reactionRawValue;
+    });
+    state.signature = ["out", "in"]
+      .map((actorKey) => getThreadReactionAnimationItemKey(actorKey, state[actorKey]))
+      .filter(Boolean)
+      .join("|");
+    return state;
+  }
+
+  function getThreadReactionLeavingItems(prevState, nextState) {
+    if (!prevState || typeof prevState !== "object") return [];
+    const leavingItems = [];
+    ["out", "in"].forEach((actorKey) => {
+      const prevReaction = String(prevState[actorKey] || "");
+      const nextReaction = String(nextState && nextState[actorKey] || "");
+      if (!prevReaction || prevReaction === nextReaction) return;
+      const prevReactionRaw = String(prevState[actorKey + "Raw"] || prevReaction || "");
+      leavingItems.push({
+        actor: actorKey,
+        reaction: prevReactionRaw,
+        itemKey: getThreadReactionAnimationItemKey(actorKey, prevReaction),
+      });
+    });
+    return leavingItems;
+  }
+
+  function getThreadReactionAnimationMeta(clientId, messageId, reactionItems, fallbackKey) {
+    const key = getThreadReactionRenderKey(clientId, messageId, fallbackKey);
+    if (!key) return { animateAny: false, itemKeys: new Set(), leavingItems: [] };
+    const nextState = createThreadReactionRenderState(reactionItems);
+    const prevState = threadReactionRenderSignatures.get(key);
     const hasPendingLocalPop = pendingThreadReactionPopKeys.has(key);
-    threadReactionRenderSignatures.set(key, signature);
-    if (!signature) {
+    const animatedItemKeys = new Set();
+    const leavingItems = getThreadReactionLeavingItems(prevState, nextState);
+    threadReactionRenderSignatures.set(key, nextState);
+    if (!nextState.signature) {
       pendingThreadReactionPopKeys.delete(key);
-      return false;
+      return { animateAny: false, itemKeys: animatedItemKeys, leavingItems };
     }
     if (hasPendingLocalPop) {
       pendingThreadReactionPopKeys.delete(key);
-      return true;
+      const localItemKey = getThreadReactionAnimationItemKey(CHAT_REACTION_ACTOR, nextState[CHAT_REACTION_ACTOR]);
+      if (localItemKey) animatedItemKeys.add(localItemKey);
+      return {
+        animateAny: animatedItemKeys.size > 0,
+        itemKeys: animatedItemKeys,
+        leavingItems,
+      };
     }
-    if (prevSignature === undefined) return false;
-    return prevSignature !== signature;
+    if (!prevState || typeof prevState !== "object") {
+      return { animateAny: false, itemKeys: animatedItemKeys, leavingItems };
+    }
+    ["out", "in"].forEach((actorKey) => {
+      const nextReaction = String(nextState[actorKey] || "");
+      const prevReaction = String(prevState[actorKey] || "");
+      if (!nextReaction || prevReaction === nextReaction) return;
+      const itemKey = getThreadReactionAnimationItemKey(actorKey, nextReaction);
+      if (itemKey) animatedItemKeys.add(itemKey);
+    });
+    return {
+      animateAny: animatedItemKeys.size > 0,
+      itemKeys: animatedItemKeys,
+      leavingItems,
+    };
+  }
+
+  function bindThreadReactionLeavingCleanup(reactionsWrap, bubble) {
+    if (!reactionsWrap || !bubble || reactionsWrap.dataset.leaveCleanupBound === "1") return;
+    reactionsWrap.dataset.leaveCleanupBound = "1";
+    reactionsWrap.addEventListener("animationend", (event) => {
+      const target = event.target;
+      if (!target || !target.classList || !target.classList.contains("is-reaction-leave")) return;
+      if (target.parentNode === reactionsWrap) {
+        reactionsWrap.removeChild(target);
+      }
+      if (!reactionsWrap.querySelector(".chat-message-reaction-pill")) {
+        bubble.classList.remove("has-reaction");
+        if (reactionsWrap.parentNode === bubble) {
+          bubble.removeChild(reactionsWrap);
+        }
+      }
+    });
   }
 
   function normalizePhoneDigits(value) { return String(value || "").replace(/\D+/g, ""); }
@@ -6499,6 +6699,46 @@
     return set.size;
   }
 
+  function collectUnreadIncomingBelowViewportMessageIds(clientId = state.activeClientId) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key || Number(state.activeClientId) !== Number(key)) return [];
+    if (!dom.center.messagesWrap || !dom.center.messages) return [];
+
+    const wrapRect = dom.center.messagesWrap.getBoundingClientRect();
+    const bottomEdge = wrapRect.bottom - 6;
+    if (!Number.isFinite(bottomEdge)) return [];
+
+    const out = [];
+    dom.center.messages.querySelectorAll(".chat-message[data-message-id]").forEach((node) => {
+      const id = String(node.getAttribute("data-message-id") || "");
+      if (!id) return;
+      const msg = findThreadMessage(key, id);
+      if (!msg || msg.direction !== "in" || isMessageRead(msg)) return;
+      const rect = node.getBoundingClientRect();
+      if (rect.bottom <= bottomEdge) return;
+      out.push(id);
+    });
+    return out;
+  }
+
+  function getScrollDownBadgeCount(clientId = state.activeClientId) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return 0;
+    const ids = new Set();
+    const pendingSet = getPendingScrollMessageIdSet(key);
+    if (pendingSet) {
+      pendingSet.forEach((id) => {
+        const value = String(id || "");
+        if (value) ids.add(value);
+      });
+    }
+    collectUnreadIncomingBelowViewportMessageIds(key).forEach((id) => {
+      const value = String(id || "");
+      if (value) ids.add(value);
+    });
+    return ids.size;
+  }
+
   function animateCountBadgeTick(badge) {
     if (!badge) return;
     badge.classList.remove("is-count-tick");
@@ -6629,18 +6869,18 @@
     if (!wrap || !btn) return;
 
     const hiddenDistance = wrap.scrollHeight - wrap.clientHeight - wrap.scrollTop;
-    const pending = getPendingScrollNewCount();
-    const shouldShow = pending > 0 || hiddenDistance >= CHAT_SCROLL_DOWN_SHOW_DISTANCE_PX;
+    const badgeCount = getScrollDownBadgeCount();
+    const shouldShow = badgeCount > 0 || hiddenDistance >= CHAT_SCROLL_DOWN_SHOW_DISTANCE_PX;
     btn.classList.toggle("hidden", !shouldShow);
 
     const badge = dom.center.scrollDownBadge;
     if (!badge) return;
-    if (pending <= 0) {
+    if (badgeCount <= 0) {
       badge.textContent = "";
       badge.classList.add("hidden");
       return;
     }
-    const nextText = pending > 99 ? "99+" : String(pending);
+    const nextText = badgeCount > 99 ? "99+" : String(badgeCount);
     if (badge.textContent !== nextText) {
       badge.textContent = nextText;
       animateCountBadgeTick(badge);
@@ -7114,6 +7354,54 @@
     if (Number(state.activeClientId) === Number(clientId)) renderMessages();
     applyClientFilter();
     return true;
+  }
+
+  function applyOutgoingReadReceipt(clientId, messageIds, options = {}) {
+    const key = normalizeClientIdKey(clientId);
+    const ids = (Array.isArray(messageIds) ? messageIds : [])
+      .map((id) => String(id || "").trim())
+      .filter(Boolean);
+    if (!key || !ids.length) return false;
+
+    const readAtRaw = String(options.readAt || "").trim();
+    const parsedReadAt = readAtRaw ? new Date(readAtRaw) : null;
+    const readAtIso = parsedReadAt && !Number.isNaN(parsedReadAt.getTime())
+      ? parsedReadAt.toISOString()
+      : new Date().toISOString();
+
+    let changed = false;
+    ids.forEach((messageId) => {
+      const msg = findThreadMessage(key, messageId);
+      if (!msg || msg.direction !== "out") return;
+      const hadReadAt = !!msg.readAt;
+      const hadDeliveredAt = !!msg.deliveredAt;
+      const prevStatus = getOutgoingDeliveryStatus(msg);
+      msg.deliveryStatus = "read";
+      if (!msg.deliveredAt) msg.deliveredAt = readAtIso;
+      if (!msg.readAt) msg.readAt = readAtIso;
+      if (prevStatus !== "read" || !hadReadAt || !hadDeliveredAt) {
+        changed = true;
+      }
+    });
+
+    if (!changed) return false;
+    markThreadMutated(key);
+    saveStore();
+    if (Number(state.activeClientId) === Number(key)) renderMessages();
+    applyClientFilter();
+    return true;
+  }
+
+  function applyImmediateThreadReadPayload(clientId, payload = {}) {
+    const direction = String(payload.read_direction || payload.readDirection || "").toLowerCase();
+    if (direction !== "out") return false;
+    const ids = Array.isArray(payload.read_message_ids)
+      ? payload.read_message_ids
+      : (Array.isArray(payload.readMessageIds) ? payload.readMessageIds : []);
+    if (!ids.length) return false;
+    return applyOutgoingReadReceipt(clientId, ids, {
+      readAt: String(payload.read_at || payload.readAt || ""),
+    });
   }
 
   function scheduleOutgoingDeliveryProgress(clientId, messageId) {
@@ -8216,7 +8504,7 @@
     return dayNode;
   }
 
-  function createThreadMessageNode(msg) {
+  function createThreadMessageNode(msg, renderKey) {
     const messageId = String(msg.id || "");
     const time = `${fmtTime(msg.createdAt) || ""}${msg.editedAt ? " • изм." : ""}`;
     const outgoingStatus = msg.direction === "out" ? getOutgoingDeliveryStatus(msg) : "";
@@ -8319,18 +8607,25 @@
     }
 
     const reactionItems = getMessageReactionItems(msg);
-    if (reactionItems.length && bubble) {
-      const animateReactionPop = shouldAnimateThreadReaction(state.activeClientId, messageId, reactionItems);
+    const reactionAnimationMeta = getThreadReactionAnimationMeta(
+      state.activeClientId,
+      messageId,
+      reactionItems,
+      renderKey
+    );
+    if ((reactionItems.length || reactionAnimationMeta.leavingItems.length) && bubble) {
       const reactionsWrap = document.createElement("div");
-      reactionsWrap.className = `chat-message-reactions${animateReactionPop ? " is-reaction-pop" : ""}`;
+      reactionsWrap.className = `chat-message-reactions${reactionAnimationMeta.animateAny ? " is-reaction-pop" : ""}`;
       bubble.classList.add("has-reaction");
 
       reactionItems.forEach((itemReaction, reactionIndex) => {
         const reactionBtn = document.createElement("button");
         reactionBtn.type = "button";
-        reactionBtn.className = `chat-message-reaction-pill${animateReactionPop ? " is-reaction-pop" : ""}`;
+        const reactionItemKey = getThreadReactionAnimationItemKey(itemReaction && itemReaction.actor, itemReaction && itemReaction.reaction);
+        const shouldAnimateItem = reactionAnimationMeta.itemKeys.has(reactionItemKey);
+        reactionBtn.className = `chat-message-reaction-pill${shouldAnimateItem ? " is-reaction-pop" : ""}`;
         reactionBtn.style.zIndex = String(10 + reactionIndex);
-        if (animateReactionPop) {
+        if (shouldAnimateItem) {
           reactionBtn.style.setProperty("--reaction-pop-delay", `${reactionIndex * 32}ms`);
         }
         reactionBtn.setAttribute("data-chat-msg-reaction-toggle", messageId);
@@ -8341,6 +8636,18 @@
         setEmojiGlyph(reactionBtn, itemReaction.reaction, "chat-emoji-glyph chat-emoji-glyph--pill");
         reactionsWrap.appendChild(reactionBtn);
       });
+
+      if (reactionAnimationMeta.leavingItems.length) {
+        bindThreadReactionLeavingCleanup(reactionsWrap, bubble);
+        reactionAnimationMeta.leavingItems.forEach((itemReaction, reactionIndex) => {
+          const reactionGhost = document.createElement("span");
+          reactionGhost.className = "chat-message-reaction-pill is-reaction-leave";
+          reactionGhost.style.zIndex = String(Math.max(0, reactionIndex));
+          reactionGhost.setAttribute("aria-hidden", "true");
+          setEmojiGlyph(reactionGhost, itemReaction.reaction, "chat-emoji-glyph chat-emoji-glyph--pill");
+          reactionsWrap.appendChild(reactionGhost);
+        });
+      }
 
       bubble.appendChild(reactionsWrap);
     }
@@ -8376,9 +8683,18 @@
       const currentSignature = current && current.dataset
         ? String(current.dataset.renderSignature || "")
         : "";
-      const nextNode = current && currentSignature === signature
-        ? setThreadRenderDescriptor(current, key, signature)
-        : setThreadRenderDescriptor(descriptor.create(), key, signature);
+      let nextNode = null;
+      if (current && currentSignature === signature) {
+        nextNode = setThreadRenderDescriptor(current, key, signature);
+      } else if (current && current.parentNode === container) {
+        nextNode = setThreadRenderDescriptor(descriptor.create(), key, signature);
+        container.replaceChild(nextNode, current);
+        if (anchor === current) {
+          anchor = nextNode;
+        }
+      } else {
+        nextNode = setThreadRenderDescriptor(descriptor.create(), key, signature);
+      }
 
       if (nextNode !== anchor) {
         container.insertBefore(nextNode, anchor);
@@ -8460,10 +8776,11 @@
         prevDayKey = dayKey;
       }
 
+      const renderKey = `client:${activeClientKey}:${getThreadMessageRenderKey(msg, index)}`;
       descriptors.push({
-        key: `client:${activeClientKey}:${getThreadMessageRenderKey(msg, index)}`,
+        key: renderKey,
         signature: getThreadMessageRenderSignature(msg),
-        create: () => createThreadMessageNode(msg),
+        create: () => createThreadMessageNode(msg, renderKey),
       });
     });
     reconcileThreadMessageNodes(descriptors);
@@ -8490,6 +8807,7 @@
     if (!skipPinnedBottomEnforce) {
       enforcePinnedBottomForActiveThread("renderMessages:end");
     }
+    flushPendingNotificationMessageFocus();
   }
 
   function sendMessage(text, options = {}) {
@@ -10203,6 +10521,72 @@
     return state.clientsLoadInFlight;
   }
 
+  async function ensureClientAvailableForNotificationOpen(clientId) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return null;
+    let client = (state.clients || []).find((row) => Number(row?.id) === Number(key)) || null;
+    if (client) return client;
+
+    await pullRemoteSummaries([key]).catch(console.error);
+    const summary = state.remoteSummariesByClient && state.remoteSummariesByClient[key];
+    if (!summary) return null;
+
+    state.clients = filterOpenChatClients(mergeRemoteClients(state.clients || [], [summary]));
+    state.clients.forEach((row) => {
+      if (Number(row?.id) === Number(key)) seedThread(row);
+    });
+    applyClientFilter();
+    writeCachedClientsRows(state.clients);
+
+    client = (state.clients || []).find((row) => Number(row?.id) === Number(key)) || null;
+    return client;
+  }
+
+  async function flushPendingNotificationChatOpenRequest() {
+    const request = normalizeChatNotificationOpenRequest(pendingNotificationChatOpenRequest);
+    if (!request) return false;
+    if (!syncChatWidgetEnabledFromTenant({ reload: true, resume: true })) return false;
+
+    pendingNotificationChatOpenRequest = null;
+    clearChatNotificationOpenRequestFromLocation();
+    if (request.messageId) {
+      queuePendingNotificationMessageFocus(request.messageId, request.clientId);
+    }
+
+    await loadClients().catch(console.error);
+    const client = await ensureClientAvailableForNotificationOpen(request.clientId);
+    if (!client) return false;
+
+    const hiddenBySearch = !(state.filteredClients || []).some((row) => Number(row?.id) === Number(client.id));
+    if (hiddenBySearch && dom.left.search) {
+      state.q = "";
+      dom.left.search.value = "";
+      applyClientFilter();
+    }
+
+    if (Number(state.activeClientId) !== Number(client.id)) {
+      await selectClient(client.id);
+      return true;
+    }
+
+    suppressMessageAlertUntil = Date.now() + 3000;
+    pullThreadFromRemote(client.id, { skipReadMark: true, ignoreIncomingBadge: true }).catch(console.error);
+    syncActiveThreadReadState({ clientId: client.id });
+    return true;
+  }
+
+  function queueNotificationChatOpenRequest(rawRequest, options = {}) {
+    const normalized = normalizeChatNotificationOpenRequest(rawRequest);
+    if (!normalized) return false;
+    pendingNotificationChatOpenRequest = normalized;
+    if (options.clearLocation === true) {
+      clearChatNotificationOpenRequestFromLocation();
+    }
+    if (options.defer === true) return true;
+    flushPendingNotificationChatOpenRequest().catch(console.error);
+    return true;
+  }
+
   function initComposer() {
     if (!Object.keys(emojiCategories).length) {
       emojiCategories = normalizeEmojiCategoryMap(EMOJI_FALLBACK_CATEGORIES);
@@ -10341,6 +10725,7 @@
   }
 
   function init() {
+    pendingNotificationChatOpenRequest = pendingNotificationChatOpenRequest || readChatNotificationOpenRequestFromLocation();
     state.chatWidgetEnabled = getTenantChatWidgetEnabledFromStorage();
     setSidebarChatNavVisibility(state.chatWidgetEnabled !== false);
     setChatBootstrapLoading(state.chatWidgetEnabled !== false);
@@ -10407,6 +10792,19 @@
     syncSelectionUi();
     renderMessages();
     syncChatWidgetEnabledFromTenant({ reload: true, resume: true });
+    flushPendingNotificationChatOpenRequest().catch(console.error);
+
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.addEventListener("message", (event) => {
+        const rawData = event && event.data && typeof event.data === "object" ? event.data : null;
+        const eventType = String(rawData && rawData.type || "").trim().toLowerCase();
+        if (eventType !== "chat-notification-click") return;
+        const payload = rawData && rawData.payload && typeof rawData.payload === "object"
+          ? rawData.payload
+          : rawData;
+        queueNotificationChatOpenRequest(payload, { clearLocation: false });
+      });
+    }
 
     const syncReadOnForeground = () => {
       if (!isChatWidgetEnabledRuntime()) return;

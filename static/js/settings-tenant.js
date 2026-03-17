@@ -99,9 +99,12 @@
   let tenantStockDeductStatusId = null;
   let domainSetup = null;
   let domainDraftMode = false;
+  let domainManageMode = false;
   let domainCancelConfirm = false;
   let domainOriginalValue = "";
   let domainAsciiValue = "";
+  let tenantDomains = [];
+  let selectedTenantDomainId = null;
   let telegramDraftMode = false;
   let telegramCancelConfirm = false;
   let telegramOriginal = {
@@ -234,19 +237,46 @@
   }
 
   var _shopUrl = "";
+  var _subdomainShopUrl = "";
 
   function updateShopLink(tenant) {
     const customDomain = tenant && tenant.custom_domain ? String(tenant.custom_domain).trim() : "";
     const subdomain = tenant && tenant.subdomain ? String(tenant.subdomain).trim() : "";
-    const protocol = window.location.protocol || "http:";
-    const hostname = String(window.location.hostname || "");
-    const isLocal = hostname.endsWith("localhost");
-    const port = isLocal && window.location.port ? `:${window.location.port}` : "";
+    const setup = tenant && tenant.domain_setup ? tenant.domain_setup : null;
+    const configuredSubdomainUrl = tenant && tenant.subdomain_shop_url ? String(tenant.subdomain_shop_url).trim() : "";
+    const configuredProtocol = setup && setup.subdomain_protocol ? `${String(setup.subdomain_protocol).trim().replace(/:$/, "")}:` : "";
+    const configuredBaseHost = setup && setup.subdomain_base_host ? String(setup.subdomain_base_host).trim() : "";
+    const fallbackHostname = String(window.location.hostname || "");
+    const fallbackIsLocal = fallbackHostname.endsWith("localhost");
+    const fallbackPort = fallbackIsLocal && window.location.port ? `:${window.location.port}` : "";
+    const fallbackProtocol = window.location.protocol || "http:";
+    const fallbackBaseHost = configuredBaseHost || `${fallbackHostname}${fallbackPort}`;
+    const subdomainProtocol = configuredProtocol || fallbackProtocol;
+    _subdomainShopUrl = configuredSubdomainUrl || (subdomain ? `${subdomainProtocol}//${subdomain}.${fallbackBaseHost}` : "");
     if (customDomain) {
-      _shopUrl = `${protocol}//${customDomain}${port}`;
+      _shopUrl = `${window.location.protocol || "https:"}//${customDomain}`;
       return;
     }
-    _shopUrl = subdomain ? `${protocol}//${subdomain}.${hostname}${port}` : "";
+    _shopUrl = _subdomainShopUrl;
+  }
+
+  function renderSubdomainLinkParts() {
+    var suffix = document.getElementById("subdomainSuffix");
+    var prefix = document.getElementById("subdomainPrefix");
+    var input = document.getElementById("subdomainInput");
+    var wrap = input ? input.closest(".control-subdomain-wrap") : null;
+    var setup = domainSetup || {};
+    var hostname = String(setup.subdomain_base_host || window.location.hostname || "localhost").trim();
+    var protocol = String(setup.subdomain_protocol || "").trim().replace(/:$/, "");
+    var fallbackProtocol = String(window.location.protocol || "http:").replace(/:$/, "");
+    var isLocal = hostname.endsWith("localhost") && !hostname.includes(":");
+    var port = !setup.subdomain_base_host && isLocal && window.location.port ? ":" + window.location.port : "";
+    if (prefix) prefix.textContent = (protocol || fallbackProtocol) + "://";
+    if (suffix) suffix.textContent = "." + hostname + port;
+    if (wrap && input && !wrap.dataset.subdomainClickBound) {
+      wrap.dataset.subdomainClickBound = "1";
+      wrap.addEventListener("click", function () { input.focus(); });
+    }
   }
 
   function normalizeDomainList(value) {
@@ -282,6 +312,134 @@
         connectHint.textContent = "Сначала нажмите «Проверить домен», затем «Подключить автоматически».";
       } else {
         connectHint.textContent = "Сначала сохраните домен и пропишите две A-записи.";
+      }
+    }
+  }
+
+  function normalizeTenantDomains(value) {
+    if (!Array.isArray(value)) return [];
+    return value.map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const id = Number(item.id || 0) || 0;
+      const domain = String(item.domain || "").trim();
+      const domainAscii = String(item.domain_ascii || "").trim().toLowerCase();
+      if (!id || !domainAscii) return null;
+      return {
+        id,
+        domain,
+        domain_ascii: domainAscii,
+        is_primary: Number(item.is_primary) === 1 || item.is_primary === true
+      };
+    }).filter(Boolean).sort((a, b) => {
+      if (a.is_primary && !b.is_primary) return -1;
+      if (!a.is_primary && b.is_primary) return 1;
+      return a.id - b.id;
+    });
+  }
+
+  function getPrimaryTenantDomain() {
+    return tenantDomains.find((item) => item.is_primary) || tenantDomains[0] || null;
+  }
+
+  function getSelectedTenantDomain() {
+    if (selectedTenantDomainId) {
+      const selected = tenantDomains.find((item) => item.id === selectedTenantDomainId);
+      if (selected) return selected;
+    }
+    return getPrimaryTenantDomain();
+  }
+
+  function syncSelectedTenantDomain() {
+    const selected = getSelectedTenantDomain();
+    selectedTenantDomainId = selected ? selected.id : null;
+    return selected;
+  }
+
+  function renderTenantDomains() {
+    const listEl = document.getElementById("domainList");
+    const connectedHintEl = document.getElementById("domainConnectedHint");
+    const primaryHintEl = document.getElementById("domainPrimaryHint");
+    const selected = syncSelectedTenantDomain();
+
+    if (listEl) {
+      if (!tenantDomains.length) {
+        listEl.innerHTML = '<div class="domain-managed-empty">Пока не добавлено ни одного кастомного домена.</div>';
+      } else {
+        listEl.innerHTML = tenantDomains.map((item) => {
+          const label = item.domain || item.domain_ascii;
+          const isPrimary = item.is_primary;
+          const isSelected = selected && selected.id === item.id;
+          return `
+            <div class="domain-managed-item${isPrimary ? ' is-primary' : ''}${isSelected ? ' is-selected' : ''}" data-domain-id="${item.id}">
+              <div class="domain-managed-meta">
+                <span class="domain-managed-domain">${label}</span>
+                ${isPrimary ? '<span class="domain-managed-badge">Основной</span>' : ''}
+              </div>
+              ${domainManageMode ? `
+              <div class="domain-managed-actions">
+                ${isPrimary ? '' : '<button class="domain-managed-btn" type="button" data-domain-action="primary" title="Сделать основным" aria-label="Сделать основным"><i class="fas fa-star"></i></button>'}
+                <button class="domain-managed-btn is-danger" type="button" data-domain-action="delete" title="Удалить домен" aria-label="Удалить домен"><i class="fas fa-trash"></i></button>
+              </div>
+              ` : ''}
+            </div>
+          `;
+        }).join("");
+      }
+    }
+
+    if (connectedHintEl) {
+      const primaryDomain = getPrimaryTenantDomain();
+      if (primaryDomain) {
+        connectedHintEl.textContent = `Основной домен: ${primaryDomain.domain || primaryDomain.domain_ascii}`;
+        connectedHintEl.classList.remove("hidden");
+      } else {
+        connectedHintEl.textContent = "";
+        connectedHintEl.classList.add("hidden");
+      }
+    }
+
+    if (primaryHintEl) {
+      const selectedLabel = selected ? (selected.domain || selected.domain_ascii) : "";
+      primaryHintEl.textContent = selectedLabel
+        ? `Сейчас выбран домен: ${selectedLabel}. Основной домен используется в ссылках на витрину и мини-приложения.`
+        : "Основной домен используется в ссылках на витрину и мини-приложения.";
+    }
+  }
+
+  function getCurrentDomainValue() {
+    const domainInputEl = document.getElementById("domainInput");
+    const inputValue = String((domainInputEl && domainInputEl.value) || "").trim();
+    if (domainDraftMode && inputValue) return inputValue;
+    const selected = getSelectedTenantDomain();
+    return selected ? String(selected.domain || selected.domain_ascii || "").trim() : inputValue;
+  }
+
+  function applyDomainSetup(tenant) {
+    domainSetup = tenant && tenant.domain_setup ? tenant.domain_setup : null;
+    tenantDomains = normalizeTenantDomains(tenant && tenant.domains);
+    const primaryDomain = getPrimaryTenantDomain();
+    domainOriginalValue = primaryDomain ? String(primaryDomain.domain || "") : "";
+    domainAsciiValue = primaryDomain ? String(primaryDomain.domain_ascii || "") : "";
+    const aRecords = normalizeDomainList(domainSetup && domainSetup.a_records);
+    const primaryARecord = aRecords[0] || "141.8.198.215";
+    const aRootEl = document.getElementById("domainARecordRoot");
+    const aWwwEl = document.getElementById("domainARecordWww");
+    const connectBtn = document.getElementById("domainConnectBtn");
+    const connectHint = document.getElementById("domainConnectHint");
+    const autoConnectEnabled = !!(domainSetup && domainSetup.auto_connect_enabled);
+
+    if (aRootEl) aRootEl.textContent = primaryARecord;
+    if (aWwwEl) aWwwEl.textContent = primaryARecord;
+    renderTenantDomains();
+    renderSubdomainLinkParts();
+    if (connectBtn) connectBtn.disabled = !autoConnectEnabled || !getCurrentDomainValue();
+    if (connectHint) {
+      if (!autoConnectEnabled) {
+        connectHint.textContent = "Автоподключение домена временно недоступно.";
+      } else if (tenantDomains.length) {
+        connectHint.textContent = "Сначала нажмите «Проверить домен», затем «Подключить автоматически».";
+      } else {
+        connectHint.textContent = "Сначала добавьте домен и пропишите две A-записи.";
       }
     }
   }
@@ -2192,7 +2350,12 @@
 
     const domainCard = document.getElementById("settingsDomainCard");
     const domainInputEl = document.getElementById("domainInput");
+    const domainNewFieldEl = document.getElementById("domainNewField");
+    const domainInstructionFieldEl = document.getElementById("domainInstructionField");
+    const domainActionFieldEl = document.getElementById("domainActionField");
+    const domainCheckResultsEl = document.getElementById("domainCheckResults");
     const domainEditBtn = document.getElementById("settingsDomainEditBtn");
+    const domainAddBtn = document.getElementById("settingsDomainAddBtn");
     const domainSaveBtn = document.getElementById("settingsDomainSaveBtn");
     const domainCancelBtn = document.getElementById("settingsDomainCancelBtn");
     const domainFooterView = document.getElementById("settingsDomainFooterView");
@@ -2226,52 +2389,84 @@
     }
 
     function renderDomainViewState() {
+      const autoConnectEnabled = !!(domainSetup && domainSetup.auto_connect_enabled);
+      const activeDomainValue = getCurrentDomainValue();
       if (domainInputEl) {
-        domainInputEl.value = domainOriginalValue || domainAsciiValue || "";
-      }
-      if (domainConnectedHintEl) {
-        if (domainOriginalValue) {
-          domainConnectedHintEl.textContent = "\u0423 \u0412\u0430\u0441 \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d \u0434\u043e\u043c\u0435\u043d: " + domainOriginalValue;
-          domainConnectedHintEl.classList.remove("hidden");
+        if (domainDraftMode) {
+          // keep typed value while adding a new domain
         } else {
-          domainConnectedHintEl.textContent = "";
-          domainConnectedHintEl.classList.add("hidden");
+          const selected = getSelectedTenantDomain();
+          domainInputEl.value = selected
+            ? String(selected.domain || selected.domain_ascii || "")
+            : (domainOriginalValue || domainAsciiValue || "");
         }
       }
+      if (domainNewFieldEl) domainNewFieldEl.classList.toggle("hidden", !domainDraftMode);
+      if (domainInstructionFieldEl) domainInstructionFieldEl.classList.toggle("hidden", !domainManageMode);
+      if (domainActionFieldEl) domainActionFieldEl.classList.toggle("hidden", !domainManageMode);
+      if (domainCheckResultsEl) domainCheckResultsEl.classList.toggle("hidden", !domainManageMode);
+      if (domainInputEl) domainInputEl.readOnly = !domainDraftMode;
+      if (domainFooterView) domainFooterView.classList.toggle("hidden", domainDraftMode || domainManageMode);
+      if (domainFooterEdit) domainFooterEdit.classList.toggle("hidden", !(domainDraftMode || domainManageMode));
+      if (domainAddBtn) domainAddBtn.classList.toggle("hidden", !domainManageMode || domainDraftMode);
+      if (domainSaveBtn) domainSaveBtn.classList.toggle("hidden", !domainDraftMode);
+      renderTenantDomains();
+      const connectBtnEl = document.getElementById("domainConnectBtn");
+      if (connectBtnEl) {
+        connectBtnEl.disabled = !domainManageMode || !autoConnectEnabled || !activeDomainValue;
+      }
+      const checkBtnEl = document.getElementById("domainCheckBtn");
+      if (checkBtnEl) checkBtnEl.disabled = !domainManageMode || !activeDomainValue;
     }
 
     function setDomainDraftMode(enabled) {
       domainDraftMode = Boolean(enabled);
-      if (domainInputEl) domainInputEl.readOnly = !domainDraftMode;
-      if (domainFooterView) domainFooterView.classList.toggle("hidden", domainDraftMode);
-      if (domainFooterEdit) domainFooterEdit.classList.toggle("hidden", !domainDraftMode);
+      if (domainDraftMode) domainManageMode = false;
       if (domainAsciiInfoHintEl && !domainDraftMode) domainAsciiInfoHintEl.classList.add("hidden");
-      if (!domainDraftMode) {
-        resetDomainCancelButton();
-        renderDomainViewState();
-      }
+      resetDomainCancelButton();
+      renderDomainViewState();
+    }
+
+    function setDomainManageMode(enabled) {
+      domainManageMode = Boolean(enabled);
+      if (domainManageMode) domainDraftMode = false;
+      resetDomainCancelButton();
+      renderDomainViewState();
     }
 
     function cancelDomainDraft() {
-      if (domainInputEl) domainInputEl.value = domainOriginalValue || "";
-      setDomainDraftMode(false);
+      if (domainInputEl) domainInputEl.value = "";
+      if (domainDraftMode) {
+        setDomainDraftMode(false);
+      } else {
+        setDomainManageMode(false);
+      }
     }
 
     if (domainEditBtn) {
       domainEditBtn.addEventListener("click", () => {
+        setDomainManageMode(true);
+      });
+    }
+
+    if (domainAddBtn) {
+      domainAddBtn.addEventListener("click", () => {
         setDomainDraftMode(true);
-        if (domainInputEl) domainInputEl.value = domainOriginalValue || domainAsciiValue || "";
+        if (domainInputEl) domainInputEl.value = "";
         if (domainAsciiInfoHintEl) domainAsciiInfoHintEl.classList.add("hidden");
         if (domainInputEl) {
           domainInputEl.focus();
-          domainInputEl.select();
         }
       });
     }
 
     if (domainCancelBtn) {
       domainCancelBtn.addEventListener("click", () => {
-        if (!domainDraftMode) return;
+        if (!domainDraftMode && !domainManageMode) return;
+        if (!domainDraftMode) {
+          cancelDomainDraft();
+          return;
+        }
         if (!domainCancelConfirm) {
           domainCancelConfirm = true;
           domainCancelBtn.classList.add("is-confirm");
@@ -2288,7 +2483,24 @@
       domainSaveBtn.addEventListener("click", async () => {
         if (!domainDraftMode || !domainInputEl) return;
         const value = String(domainInputEl.value || "").trim();
-        const data = await updateTenantFields({ custom_domain: value || null });
+        if (!value) {
+          alert("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0434\u043e\u043c\u0435\u043d.");
+          return;
+        }
+        if (!value) {
+          alert("Введите домен.");
+          return;
+        }
+        let data = null;
+        try {
+          const res = await authFetch("/api/admin/tenant/domains", {
+            method: "POST",
+            body: JSON.stringify({ domain: value, make_primary: tenantDomains.length === 0 ? 1 : 0 })
+          });
+          data = await res.json();
+        } catch (err) {
+          data = null;
+        }
         if (!data || !data.ok) {
           if (data && data.error === "CUSTOM_DOMAIN_TAKEN") {
             alert("\u042d\u0442\u043e\u0442 \u0434\u043e\u043c\u0435\u043d \u0443\u0436\u0435 \u043f\u0440\u0438\u0432\u044f\u0437\u0430\u043d \u043a \u0434\u0440\u0443\u0433\u043e\u043c\u0443 \u0442\u0435\u043d\u0430\u043d\u0442\u0443.");
@@ -2303,12 +2515,10 @@
           updateTenantCache(data.tenant);
           applyBrandFromTenant(data.tenant);
           updateShopLink(data.tenant);
-          domainOriginalValue = String(data.tenant.custom_domain || "");
-          domainAsciiValue = String(data.tenant.custom_domain_ascii || toAsciiHostForDisplay(domainOriginalValue) || "");
+          const nextDomains = normalizeTenantDomains(data.tenant.domains);
+          const added = nextDomains.find((item) => item.domain_ascii === toAsciiHostForDisplay(value));
+          selectedTenantDomainId = added ? added.id : selectedTenantDomainId;
           applyDomainSetup(data.tenant);
-        } else {
-          domainOriginalValue = value;
-          domainAsciiValue = toAsciiHostForDisplay(domainOriginalValue);
         }
         setDomainDraftMode(false);
       });
@@ -2330,6 +2540,59 @@
     }
 
     setDomainDraftMode(false);
+
+    const domainListEl = document.getElementById("domainList");
+    if (domainListEl) {
+      domainListEl.addEventListener("click", async (event) => {
+        const actionBtn = event.target.closest("[data-domain-action]");
+        const itemEl = event.target.closest("[data-domain-id]");
+        if (!itemEl) return;
+        const domainId = Number(itemEl.getAttribute("data-domain-id") || 0);
+        if (!domainId) return;
+        selectedTenantDomainId = domainId;
+
+        if (!actionBtn) {
+          renderDomainViewState();
+          return;
+        }
+
+        const action = actionBtn.getAttribute("data-domain-action");
+        if (action === "primary") {
+          const res = await authFetch(`/api/admin/tenant/domains/${domainId}`, {
+            method: "PATCH",
+            body: JSON.stringify({ is_primary: 1 })
+          });
+          const data = await res.json();
+          if (data && data.ok && data.tenant) {
+            updateTenantCache(data.tenant);
+            applyBrandFromTenant(data.tenant);
+            updateShopLink(data.tenant);
+            applyDomainSetup(data.tenant);
+            renderDomainViewState();
+          } else {
+            alert("Не удалось сделать домен основным.");
+          }
+          return;
+        }
+
+        if (action === "delete") {
+          if (!window.confirm("Удалить домен?")) return;
+          const res = await authFetch(`/api/admin/tenant/domains/${domainId}`, {
+            method: "DELETE"
+          });
+          const data = await res.json();
+          if (data && data.ok && data.tenant) {
+            updateTenantCache(data.tenant);
+            applyBrandFromTenant(data.tenant);
+            updateShopLink(data.tenant);
+            applyDomainSetup(data.tenant);
+            renderDomainViewState();
+          } else {
+            alert("Не удалось удалить домен.");
+          }
+        }
+      });
+    }
 
     if (telegramAppCard) {
       telegramAppCard.addEventListener("click", () => {
@@ -2952,16 +3215,7 @@
 
     // Заполняем префикс/суффикс субдомена
     (function () {
-      var suffix = document.getElementById("subdomainSuffix");
-      var prefix = document.getElementById("subdomainPrefix");
-      var input = document.getElementById("subdomainInput");
-      var wrap = input ? input.closest(".control-subdomain-wrap") : null;
-      var hostname = location.hostname || "localhost";
-      var isLocal = hostname.endsWith("localhost");
-      var port = isLocal && location.port ? ":" + location.port : "";
-      if (prefix) prefix.textContent = location.protocol + "//";
-      if (suffix) suffix.textContent = "." + hostname + port;
-      if (wrap && input) wrap.addEventListener("click", function () { input.focus(); });
+      renderSubdomainLinkParts();
     })();
 
     // Subdomain actions: go to site & copy link
@@ -2969,13 +3223,13 @@
     var subdomainCopyLinkBtn = document.getElementById("subdomainCopyLinkBtn");
     if (subdomainGoBtn) {
       subdomainGoBtn.addEventListener("click", function () {
-        if (_shopUrl) window.open(_shopUrl, "_blank");
+        if (_subdomainShopUrl) window.open(_subdomainShopUrl, "_blank");
       });
     }
     if (subdomainCopyLinkBtn) {
       subdomainCopyLinkBtn.addEventListener("click", function () {
-        if (!_shopUrl) return;
-        navigator.clipboard.writeText(_shopUrl).then(function () {
+        if (!_subdomainShopUrl) return;
+        navigator.clipboard.writeText(_subdomainShopUrl).then(function () {
           var icon = subdomainCopyLinkBtn.querySelector("i");
           if (icon) {
             icon.className = "fas fa-check";
@@ -3022,7 +3276,7 @@
       }
 
       checkBtn.addEventListener("click", async function () {
-        var domain = domainInput.value.trim();
+        var domain = getCurrentDomainValue();
         if (!domain) return;
 
         resultsBlock.classList.remove("hidden");
@@ -3074,14 +3328,25 @@
     (function () {
       var connectBtn = document.getElementById("domainConnectBtn");
       var connectHint = document.getElementById("domainConnectHint");
-      var domainInput = document.getElementById("domainInput");
       var checkBtn = document.getElementById("domainCheckBtn");
-      if (!connectBtn || !domainInput) return;
+      if (!connectBtn) return;
 
       connectBtn.addEventListener("click", async function () {
-        var domain = String(domainInput.value || "").trim();
-        if (!domain || domainDraftMode) {
+        var domain = getCurrentDomainValue();
+        if (domainDraftMode) {
+          alert("\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u0441\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u0435 \u0434\u043e\u043c\u0435\u043d.");
+          return;
+        }
+        if (domainDraftMode) {
           alert("Сначала сохраните домен.");
+          return;
+        }
+        if (!domain) {
+          alert("\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u0434\u043e\u0431\u0430\u0432\u044c\u0442\u0435 \u0434\u043e\u043c\u0435\u043d.");
+          return;
+        }
+        if (!domain) {
+          alert("РЎРЅР°С‡Р°Р»Р° РґРѕР±Р°РІСЊС‚Рµ РґРѕРјРµРЅ.");
           return;
         }
 
@@ -3111,8 +3376,6 @@
             updateTenantCache(data.tenant);
             applyBrandFromTenant(data.tenant);
             updateShopLink(data.tenant);
-            domainOriginalValue = String(data.tenant.custom_domain || "");
-            domainAsciiValue = String(data.tenant.custom_domain_ascii || toAsciiHostForDisplay(domainOriginalValue) || "");
             applyDomainSetup(data.tenant);
             renderDomainViewState();
           }
@@ -3127,9 +3390,7 @@
           alert("Не удалось подключить домен автоматически.");
         } finally {
           connectBtn.innerHTML = originalHtml;
-          if (domainSetup && domainSetup.auto_connect_enabled) {
-            connectBtn.disabled = false;
-          }
+          connectBtn.disabled = !(domainSetup && domainSetup.auto_connect_enabled && getCurrentDomainValue());
         }
       });
     })();

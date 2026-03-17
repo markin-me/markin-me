@@ -137,7 +137,6 @@
   const CHAT_THREAD_PAGE_MAX_SIZE = 200;
   const CHAT_DROP_IMAGE_EXT_RE = /\.(png|jpe?g|webp|gif|bmp|svg|avif|heic|heif)$/i;
   const CHAT_AUTOSCROLL_MS = 170;
-  const CHAT_KEYBOARD_INSET_ANIMATION_MS = 220;
   const CHAT_EMOJI_SHEET_SETTLE_MS = 280;
   const CHAT_SCROLL_DOWN_SHOW_DISTANCE_PX = 6;
   const CHAT_REACTION_PENDING_TTL_MS = 10000;
@@ -149,6 +148,9 @@
   const CHAT_ASSISTANT_QUICK_REPLY_DELAY_MAX_MS = 2400;
   const CHAT_MESSAGE_ALERT_COOLDOWN_MS = 900;
   const CHAT_PUSH_SYNC_DEBOUNCE_MS = 180;
+  const CHAT_PUSH_MESSAGE_FOCUS_RETRY_MS = 140;
+  const CHAT_PUSH_MESSAGE_FOCUS_MAX_RETRIES = 24;
+  const CHAT_PUSH_MESSAGE_FOCUS_MAX_HISTORY_PAGES = 6;
   const MAX_IMAGE_DATA_URL_LENGTH = 50 * 1024 * 1024;
   const IMAGE_OPTIMIZE_SKIP_BELOW_BYTES = 700 * 1024;
   const IMAGE_OPTIMIZE_TARGET_BYTES = 900 * 1024;
@@ -252,6 +254,11 @@
     .map(function (item) { return String(item.question || ""); });
   const CHAT_QUICK_QUESTIONS_MAX = 6;
   const CHAT_SETTINGS_API_URL = "/api/public/tenant/chat-settings";
+  const CHAT_AUTO_OPEN_QUERY_PARAM = "open_chat";
+  const CHAT_AUTO_OPEN_SOURCE_PARAM = "chat_source";
+  const CHAT_AUTO_OPEN_CLIENT_ID_PARAM = "chat_client_id";
+  const CHAT_AUTO_OPEN_MESSAGE_ID_PARAM = "chat_message_id";
+  const CHAT_MESSAGE_JUMP_BOTTOM_GAP_PX = 14;
   const CHAT_ASSISTANT_GENDER_MALE = "m";
   const CHAT_ASSISTANT_GENDER_FEMALE = "f";
   const DEFAULT_CHAT_ASSISTANT_GENDER = CHAT_ASSISTANT_GENDER_MALE;
@@ -351,6 +358,13 @@
   let closeFeedPersistToken = 0;
   let mobileKeyboardInsetSyncRaf = 0;
   let mobileKeyboardViewportSyncBound = false;
+  let mobileKeyboardViewportBaseBottom = 0;
+  let mobileKeyboardLastViewportBottom = 0;
+  let mobileKeyboardViewportMotionRaf = 0;
+  let mobileKeyboardViewportMotionUntil = 0;
+  let mobileKeyboardViewportMotionLastBottom = 0;
+  let mobileKeyboardViewportVisualShift = 0;
+  let mobileKeyboardTrackedFeedBottomDistance = null;
   let sharedPullInFlight = false;
   let sharedHistoryHasMore = false;
   let sharedHistoryNextBeforeId = null;
@@ -387,6 +401,9 @@
   let feedDropDragDepth = 0;
   let pendingFeedNewCount = 0;
   let pendingFeedMessageIds = new Set();
+  let visibleReadSyncRaf = 0;
+  let visibleReadSyncForce = false;
+  let visibleReadSyncFlushRemote = false;
   let hasLoadedSharedThreadOnce = false;
   let lastFeedScrollTop = null;
   let lastFeedViewportState = null;
@@ -400,6 +417,7 @@
   let unreadWaitLoopToken = 0;
   let unreadWaitAbortController = null;
   let unreadEventSource = null;
+  let unreadSnapshotRefreshPromise = null;
   let peerTypingState = { active: false, text: "", updatedAt: "", expiresAt: "" };
   let peerTypingUpdatedAt = "";
   let peerTypingHideTimer = 0;
@@ -859,6 +877,40 @@
     renderUnreadBadge(liveEntries);
   }
 
+  function collectUnreadAgentBelowViewportMessageIds(entries) {
+    if (!feed || !thread) return [];
+    const unreadIds = new Set(collectUnreadAgentMessageIds(entries));
+    if (!unreadIds.size) return [];
+
+    const bottomEdge = feed.getBoundingClientRect().bottom - 6;
+    if (!Number.isFinite(bottomEdge)) return [];
+
+    const belowIds = [];
+    thread.querySelectorAll(".shop-company-chat-row[data-message-id]").forEach(function (row) {
+      const id = String(row.getAttribute("data-message-id") || "").trim();
+      if (!id || !unreadIds.has(id)) return;
+      const rect = row.getBoundingClientRect();
+      if (rect.bottom <= bottomEdge) return;
+      unreadIds.delete(id);
+      belowIds.push(id);
+    });
+
+    return belowIds;
+  }
+
+  function getFeedScrollDownBadgeCount(entries) {
+    const ids = new Set();
+    pendingFeedMessageIds.forEach(function (id) {
+      const value = String(id || "").trim();
+      if (value) ids.add(value);
+    });
+    collectUnreadAgentBelowViewportMessageIds(entries).forEach(function (id) {
+      const value = String(id || "").trim();
+      if (value) ids.add(value);
+    });
+    return ids.size;
+  }
+
   function getFeedViewportStateSnapshot() {
     if (!feed) return null;
     const top = normalizePersistedFeedTop(Number(feed.scrollTop || 0));
@@ -1070,7 +1122,23 @@
     if (!isFeedViewportRestoreSatisfied(pendingFeedRestoreState)) return false;
     pendingFeedRestoreState = null;
     pendingFeedRestoreMutationVersion = sharedThreadMutationVersion;
+    saveFeedScrollPosition({ force: true, persist: true });
+    syncPendingFeedCountByViewport();
+    updateScrollDownButton();
+    renderUnreadBadge(liveEntries);
+    scheduleVisibleChatReadSync();
     return true;
+  }
+
+  function clearPendingFeedRestoreState() {
+    pendingFeedRestoreState = null;
+    pendingFeedRestoreMutationVersion = sharedThreadMutationVersion;
+  }
+
+  function clearPendingPushMessageFocusRetry() {
+    if (!pendingPushMessageFocusRetryTimer) return;
+    window.clearTimeout(pendingPushMessageFocusRetryTimer);
+    pendingPushMessageFocusRetryTimer = 0;
   }
 
   function cancelDeferredClosedFeedPersist() {
@@ -1200,7 +1268,6 @@
     if (!badge) return;
 
     const localUnreadCount = getUnreadAgentCount(entries);
-    const pendingCount = Math.max(0, Number(pendingFeedNewCount || 0));
     const isOpen = overlay.classList.contains("is-open");
     if (isOpen) {
       unreadServerTotal = localUnreadCount;
@@ -1208,7 +1275,9 @@
     }
     const serverUnreadCount = Math.max(0, Number(unreadServerTotal || 0));
     const unreadCount = unreadStatePrimed ? serverUnreadCount : localUnreadCount;
-    const displayCount = isOpen ? pendingCount : unreadCount;
+    const displayCount = isOpen
+      ? getFeedScrollDownBadgeCount(entries)
+      : unreadCount;
 
     if (displayCount <= 0) {
       badge.textContent = "";
@@ -1221,6 +1290,12 @@
     badge.textContent = value;
     badge.classList.remove("hidden");
     openBtn.setAttribute("data-unread-count", value);
+  }
+
+  function syncOpenButtonActiveState() {
+    const isOpen = overlay.classList.contains("is-open");
+    openBtn.classList.toggle("is-active", isOpen);
+    openBtn.setAttribute("aria-expanded", isOpen ? "true" : "false");
   }
 
   function isChatTabActiveForRead() {
@@ -1444,7 +1519,7 @@
         const startAt = ctx.currentTime + 0.002;
         const master = ctx.createGain();
         master.gain.setValueAtTime(0.0001, startAt);
-        master.gain.exponentialRampToValueAtTime(0.06, startAt + 0.012);
+        master.gain.exponentialRampToValueAtTime(0.095, startAt + 0.012);
         master.gain.exponentialRampToValueAtTime(0.0001, startAt + 0.17);
         master.connect(ctx.destination);
 
@@ -1466,7 +1541,7 @@
         oscB.frequency.setValueAtTime(1760, startAt + 0.05);
         oscB.frequency.exponentialRampToValueAtTime(1480, startAt + 0.145);
         gainB.gain.setValueAtTime(0.0001, startAt + 0.045);
-        gainB.gain.exponentialRampToValueAtTime(0.7, startAt + 0.072);
+        gainB.gain.exponentialRampToValueAtTime(0.85, startAt + 0.072);
         gainB.gain.exponentialRampToValueAtTime(0.0001, startAt + 0.17);
         oscB.connect(gainB);
         gainB.connect(master);
@@ -1833,9 +1908,55 @@
     return overlay.classList.contains("is-open") && isChatTabActiveForRead();
   }
 
+  function isAgentEntryRead(entry) {
+    const rawStatus = String(entry && entry.deliveryStatus || "").toLowerCase();
+    return !!(entry && (entry.read === true || entry.readAt || rawStatus === "read"));
+  }
+
+  function collectUnreadAgentMessageIds(entries) {
+    return (Array.isArray(entries) ? entries : [])
+      .filter(function (entry) {
+        return entry && entry.role === "agent" && !isAgentEntryRead(entry);
+      })
+      .map(function (entry) { return String(entry && entry.id || "").trim(); })
+      .filter(Boolean);
+  }
+
+  function collectVisibleUnreadAgentMessageIds(entries) {
+    if (!feed || !thread) return [];
+    const unreadIds = new Set(collectUnreadAgentMessageIds(entries));
+    if (!unreadIds.size) return [];
+
+    const feedRect = feed.getBoundingClientRect();
+    const topEdge = feedRect.top + 6;
+    const bottomEdge = feedRect.bottom - 6;
+    if (bottomEdge <= topEdge) return [];
+
+    const visibleIds = [];
+    thread.querySelectorAll(".shop-company-chat-row[data-message-id]").forEach(function (row) {
+      const id = String(row.getAttribute("data-message-id") || "").trim();
+      if (!id || !unreadIds.has(id)) return;
+      const rect = row.getBoundingClientRect();
+      const isVisible = rect.bottom > topEdge && rect.top < bottomEdge;
+      if (!isVisible) return;
+      unreadIds.delete(id);
+      visibleIds.push(id);
+    });
+
+    return visibleIds;
+  }
+
   function applyReadReceiptsToAgentEntries(entries, options) {
     const list = Array.isArray(entries) ? entries : [];
-    const shouldMarkRead = shouldMarkAgentMessagesRead(options);
+    const opts = options || {};
+    const shouldMarkRead = shouldMarkAgentMessagesRead(opts);
+    const targetReadIds = opts.force === true
+      ? null
+      : new Set(
+          (Array.isArray(opts.messageIds) ? opts.messageIds : [])
+            .map(function (id) { return String(id || "").trim(); })
+            .filter(Boolean)
+        );
     const nowIso = new Date().toISOString();
     let changed = false;
     const readIds = [];
@@ -1844,8 +1965,9 @@
       if (!entry || entry.role !== "agent") return;
 
       const rawStatus = String(entry.deliveryStatus || "").toLowerCase();
-      const isRead = entry.read === true || !!entry.readAt || rawStatus === "read";
+      const isRead = isAgentEntryRead(entry);
       const isDelivered = !!entry.deliveredAt || rawStatus === "delivered" || isRead;
+      const messageId = String(entry.id || "").trim();
 
       if (!isDelivered) {
         entry.deliveryStatus = "delivered";
@@ -1854,9 +1976,9 @@
       }
 
       if (!shouldMarkRead) return;
+      if (opts.force !== true && (!messageId || !targetReadIds || !targetReadIds.has(messageId))) return;
 
       if (!isRead) {
-        const messageId = String(entry.id || "");
         entry.read = true;
         entry.deliveryStatus = "read";
         entry.deliveredAt = entry.deliveredAt || nowIso;
@@ -1874,6 +1996,25 @@
     });
 
     return { changed, readIds };
+  }
+
+  function scheduleVisibleChatReadSync(options) {
+    const opts = options || {};
+    if (opts.force === true) visibleReadSyncForce = true;
+    if (opts.flushRemote === true) visibleReadSyncFlushRemote = true;
+    if (visibleReadSyncRaf) return;
+    visibleReadSyncRaf = requestAnimationFrame(function () {
+      const force = visibleReadSyncForce;
+      const flushRemote = visibleReadSyncFlushRemote;
+      visibleReadSyncRaf = 0;
+      visibleReadSyncForce = false;
+      visibleReadSyncFlushRemote = false;
+      syncVisibleChatReadState({
+        force: force,
+        flushRemote: flushRemote,
+        preserveViewport: true,
+      });
+    });
   }
 
   function getTenantId() {
@@ -1905,6 +2046,9 @@
   const customerChatClientIdByTokenPrefix = "shop_company_chat_customer_id_for_token_t" + tenantId + "_";
   const customerChatClientIdByIdentityPrefix = "shop_company_chat_customer_id_for_identity_t" + tenantId + "_";
   const webPushVapidStorageKey = "shop_company_chat_push_vapid_t" + tenantId;
+  let pendingPushChatOpenRequest = null;
+  let pendingPushMessageFocus = null;
+  let pendingPushMessageFocusRetryTimer = 0;
 
   function getTenantFromLocalStorage() {
     try {
@@ -2305,15 +2449,7 @@
   }
 
   function rebuildHotQuestionAliases() {
-    const quickConfig = Array.isArray(chatRuntimeSettings.quickQuestionsConfig)
-      ? chatRuntimeSettings.quickQuestionsConfig
-      : cloneDefaultChatQuickQuestionItems();
-    const orderItem = quickConfig.find(function (item) {
-      if (!item || item.enabled === false) return false;
-      const id = String(item.id || "").toLowerCase();
-      const type = String(item.type || "").toLowerCase();
-      return id === CHAT_QUICK_ORDER_ID || type === "order";
-    });
+    const orderItem = getEnabledOrderQuickQuestionConfig();
     const orderAliases = [HOT_QUESTION_ORDER_KEY, HOT_QUESTION_ORDER_KEY_ALT];
 
     const addNormalizedAlias = function (target, value) {
@@ -2325,7 +2461,24 @@
     addNormalizedAlias(orderAliases, CHAT_QUICK_ORDER_QUESTION);
     if (orderItem) addNormalizedAlias(orderAliases, orderItem.question);
 
-    applyAliasSet(hotQuestionAliases.order, orderAliases);
+    applyAliasSet(hotQuestionAliases.order, orderItem ? orderAliases : []);
+  }
+
+  function getEnabledOrderQuickQuestionConfig() {
+    if (chatRuntimeSettings.quickQuestionsEnabled === false) return null;
+    const quickConfig = Array.isArray(chatRuntimeSettings.quickQuestionsConfig)
+      ? chatRuntimeSettings.quickQuestionsConfig
+      : cloneDefaultChatQuickQuestionItems();
+    return quickConfig.find(function (item) {
+      if (!item || item.enabled === false) return false;
+      const id = String(item.id || "").toLowerCase();
+      const type = String(item.type || "").toLowerCase();
+      return id === CHAT_QUICK_ORDER_ID || type === "order";
+    }) || null;
+  }
+
+  function isOrderQuickQuestionEnabled() {
+    return !!getEnabledOrderQuickQuestionConfig();
   }
 
   function normalizeAssistantGenderValue(rawValue) {
@@ -2475,6 +2628,7 @@
     if (enabled) {
       openBtn.removeAttribute("aria-hidden");
       openBtn.removeAttribute("tabindex");
+      syncOpenButtonActiveState();
       if (!overlay.classList.contains("is-open")) {
         startUnreadPolling();
       }
@@ -2489,6 +2643,8 @@
     webPushSyncQueuedClientId = "";
     openBtn.setAttribute("aria-hidden", "true");
     openBtn.setAttribute("tabindex", "-1");
+    openBtn.classList.remove("is-active");
+    openBtn.setAttribute("aria-expanded", "false");
     openBtn.removeAttribute("data-unread-count");
     if (unreadBadge) {
       unreadBadge.textContent = "";
@@ -3062,6 +3218,125 @@
     } else {
       finalizeProfileSwitch();
     }
+    return true;
+  }
+
+  function normalizePushChatOpenRequest(rawRequest) {
+    const source = rawRequest && typeof rawRequest === "object" ? rawRequest : {};
+    const openRaw = source.open_chat ?? source.openChat ?? source.open;
+    const shouldOpen = (
+      openRaw === true
+      || openRaw === 1
+      || String(openRaw || "").trim().toLowerCase() === "1"
+      || String(openRaw || "").trim().toLowerCase() === "true"
+    );
+    const sourceValue = String(
+      source.chat_source
+      ?? source.chatSource
+      ?? source.source
+      ?? ""
+    ).trim().toLowerCase();
+    if (!shouldOpen && sourceValue !== "push") return null;
+    const clientIdRaw = Number(
+      source.chat_client_id
+      ?? source.client_id
+      ?? source.clientId
+      ?? 0
+    );
+    const clientId = Number.isFinite(clientIdRaw) && clientIdRaw > 0
+      ? String(Math.trunc(clientIdRaw))
+      : "";
+    const messageId = String(
+      source.chat_message_id
+      ?? source.message_id
+      ?? source.messageId
+      ?? ""
+    ).trim().slice(0, 120);
+    return {
+      open: true,
+      source: sourceValue || "push",
+      clientId: clientId,
+      messageId: messageId,
+    };
+  }
+
+  function readPushChatOpenRequestFromLocation() {
+    try {
+      const currentUrl = new URL(window.location.href);
+      return normalizePushChatOpenRequest({
+        open_chat: currentUrl.searchParams.get(CHAT_AUTO_OPEN_QUERY_PARAM),
+        chat_source: currentUrl.searchParams.get(CHAT_AUTO_OPEN_SOURCE_PARAM),
+        chat_client_id: currentUrl.searchParams.get(CHAT_AUTO_OPEN_CLIENT_ID_PARAM),
+        chat_message_id: currentUrl.searchParams.get(CHAT_AUTO_OPEN_MESSAGE_ID_PARAM),
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  function clearPushChatOpenRequestFromLocation() {
+    try {
+      const currentUrl = new URL(window.location.href);
+      let changed = false;
+      [
+        CHAT_AUTO_OPEN_QUERY_PARAM,
+        CHAT_AUTO_OPEN_SOURCE_PARAM,
+        CHAT_AUTO_OPEN_CLIENT_ID_PARAM,
+        CHAT_AUTO_OPEN_MESSAGE_ID_PARAM,
+      ].forEach(function (key) {
+        if (!currentUrl.searchParams.has(key)) return;
+        currentUrl.searchParams.delete(key);
+        changed = true;
+      });
+      if (!changed) return;
+      const nextUrl = currentUrl.pathname + currentUrl.search + currentUrl.hash;
+      window.history.replaceState(window.history.state, "", nextUrl);
+    } catch {}
+  }
+
+  function syncGuestProfileFromPushChatRequest(request) {
+    const normalized = normalizePushChatOpenRequest(request);
+    if (!normalized || !normalized.clientId) return false;
+    if (getCustomerToken()) return false;
+    const currentProfile = normalizeChatClientProfile(chatClientProfile);
+    if (currentProfile.isGuest !== true) return false;
+    if (String(currentProfile.id || "") === normalized.clientId) return false;
+    try {
+      localStorage.setItem(guestChatClientKey, normalized.clientId);
+    } catch {}
+    refreshChatClientProfileIfNeeded({ pull: false });
+    return true;
+  }
+
+  function flushPendingPushChatOpenRequest() {
+    const request = normalizePushChatOpenRequest(pendingPushChatOpenRequest);
+    if (!request) return false;
+    if (chatRuntimeSettings.isEnabled === false) return false;
+    pendingPushChatOpenRequest = null;
+    clearPushChatOpenRequestFromLocation();
+    syncGuestProfileFromPushChatRequest(request);
+    if (request.messageId) {
+      queuePendingPushMessageFocus(request.messageId, request.clientId || getActiveChatClientId());
+    }
+    suppressIncomingAlertsFor(1800);
+    if (overlay.classList.contains("is-open")) {
+      pullSharedThreadFromServer({ force: true }).catch(function () {});
+      return true;
+    }
+    openCompanyChat();
+    return true;
+  }
+
+  function queuePushChatOpenRequest(rawRequest, options) {
+    const normalized = normalizePushChatOpenRequest(rawRequest);
+    if (!normalized) return false;
+    pendingPushChatOpenRequest = normalized;
+    const opts = options || {};
+    if (opts.clearLocation === true) {
+      clearPushChatOpenRequestFromLocation();
+    }
+    if (opts.defer === true) return true;
+    flushPendingPushChatOpenRequest();
     return true;
   }
 
@@ -3786,13 +4061,25 @@
     const total = Number.isFinite(totalRaw) && totalRaw > 0 ? Math.trunc(totalRaw) : 0;
     const revisionRaw = Number(data.revision || 0);
     const revision = Number.isFinite(revisionRaw) && revisionRaw > 0 ? Math.trunc(revisionRaw) : 0;
+    const clientId = String(data.client_id ?? data.clientId ?? "").trim();
     return {
+      clientId: clientId,
       total: total,
       revision: revision,
       updatedAt: String(data.updated_at || data.updatedAt || ""),
       changed: data.changed === true,
       timeout: data.timeout === true,
     };
+  }
+
+  function syncChatProfileFromUnreadSnapshot(snapshot) {
+    const normalizedClientId = String(snapshot && snapshot.clientId || "").trim();
+    if (!normalizedClientId) return;
+    const token = getCustomerToken();
+    if (!token) return;
+    getStableCustomerChatClientId(token, normalizedClientId, getCustomerCache());
+    if (String(getActiveChatClientId() || "") === normalizedClientId && chatClientProfile.isGuest !== true) return;
+    refreshChatClientProfileIfNeeded({ pull: overlay.classList.contains("is-open") });
   }
 
   async function fetchUnreadSnapshot(options) {
@@ -3806,6 +4093,24 @@
       signal: opts.signal,
     });
     return normalizeUnreadSnapshot(json && json.data ? json.data : {});
+  }
+
+  function refreshUnreadSnapshot(options) {
+    if (!chatRuntimeSettings.isEnabled) return Promise.resolve(null);
+    if (overlay.classList.contains("is-open")) return Promise.resolve(null);
+    if (unreadSnapshotRefreshPromise) return unreadSnapshotRefreshPromise;
+    const opts = options || {};
+    unreadSnapshotRefreshPromise = fetchUnreadSnapshot({ signal: opts.signal })
+      .then(function (snapshot) {
+        return applyUnreadSnapshot(snapshot, { notify: opts.notify === true });
+      })
+      .catch(function () {
+        return null;
+      })
+      .finally(function () {
+        unreadSnapshotRefreshPromise = null;
+      });
+    return unreadSnapshotRefreshPromise;
   }
 
   async function waitUnreadSnapshotChange(options) {
@@ -3853,6 +4158,7 @@
   function applyUnreadSnapshot(snapshot, options) {
     const opts = options || {};
     const normalized = normalizeUnreadSnapshot(snapshot || {});
+    syncChatProfileFromUnreadSnapshot(normalized);
     const prevTotal = Math.max(0, Number(unreadServerTotal || 0));
     unreadServerTotal = normalized.total;
     unreadServerRevision = normalized.revision;
@@ -4040,6 +4346,13 @@
     const prevTop = feed.scrollTop;
     const isChatOpen = overlay.classList.contains("is-open");
     const wasPinnedToBottom = isChatOpen ? shouldKeepFeedPinnedToBottom() : false;
+    const pendingPushFocusBeforeRender = pendingPushMessageFocus
+      && typeof pendingPushMessageFocus === "object"
+      ? {
+          clientId: String(pendingPushMessageFocus.clientId || "").trim(),
+          messageId: String(pendingPushMessageFocus.messageId || "").trim(),
+        }
+      : null;
     liveEntries = entries;
     sharedThreadUpdatedAt = remoteUpdatedAt;
     renderThread();
@@ -4049,10 +4362,27 @@
       maybeNotifyIncomingAgentMessage(latestIncomingAgentEntry);
     }
     const shouldAutoScrollIncoming = isChatOpen && hasIncomingAgentMessages && wasPinnedToBottom;
+    const canRestorePushFocus = pendingPushFocusBeforeRender
+      && pendingPushFocusBeforeRender.messageId
+      && (
+        !pendingPushFocusBeforeRender.clientId
+        || pendingPushFocusBeforeRender.clientId === String(getActiveChatClientId() || "").trim()
+      );
     if (shouldAutoScrollIncoming) {
       scrollToBottom(false);
     } else {
       feed.scrollTop = prevTop;
+    }
+    if (canRestorePushFocus) {
+      const restoredFocus = scrollToMessage(pendingPushFocusBeforeRender.messageId, {
+        placement: "bottom",
+        behavior: "auto",
+        bottomGapPx: CHAT_MESSAGE_JUMP_BOTTOM_GAP_PX,
+      });
+      if (restoredFocus) {
+        pendingPushMessageFocus = null;
+        clearPendingFeedRestoreState();
+      }
     }
     tryApplyPendingFeedRestoreState();
     updateScrollDownButton();
@@ -4372,9 +4702,13 @@
     }
   }
 
-  function startUnreadPolling() {
+  function startUnreadPolling(options) {
+    const opts = options || {};
     if (!chatRuntimeSettings.isEnabled) return;
     if (overlay.classList.contains("is-open")) return;
+    if (opts.forceRefresh === true || !unreadStatePrimed) {
+      refreshUnreadSnapshot({ notify: false }).catch(function () {});
+    }
     if (CHAT_SSE_ENABLED) {
       stopSharedThreadSseConnection();
       startUnreadSseConnection();
@@ -4388,9 +4722,8 @@
     (async function runUnreadWaitLoop() {
       if (!unreadStatePrimed) {
         try {
-          const initialSnapshot = await fetchUnreadSnapshot();
+          await refreshUnreadSnapshot({ notify: false });
           if (!unreadWaitLoopStarted || loopToken !== unreadWaitLoopToken) return;
-          applyUnreadSnapshot(initialSnapshot, { notify: false });
         } catch {}
       }
 
@@ -4426,9 +4759,16 @@
     const forceRead = opts.force === true;
     if (!forceRead && !overlay.classList.contains("is-open")) return false;
     if (!forceRead && !isChatTabActiveForRead()) return false;
+    if (!forceRead && pendingFeedRestoreState && typeof pendingFeedRestoreState === "object") return false;
     const keepBottom = opts.preserveViewport === true ? false : shouldKeepFeedPinnedToBottom();
     const prevTop = feed.scrollTop;
-    const readState = applyReadReceiptsToAgentEntries(liveEntries, { force: forceRead });
+    const readIdsToMark = forceRead
+      ? collectUnreadAgentMessageIds(liveEntries)
+      : collectVisibleUnreadAgentMessageIds(liveEntries);
+    const readState = applyReadReceiptsToAgentEntries(liveEntries, {
+      force: forceRead,
+      messageIds: readIdsToMark,
+    });
     const changed = !!(readState && readState.changed);
     const readIds = Array.isArray(readState && readState.readIds) ? readState.readIds : [];
     const immediateRemote = opts.flushRemote === true;
@@ -4521,8 +4861,8 @@
   function getEmojiAtlasRenderCellSize(glyphClassName) {
     const cls = String(glyphClassName || "");
     if (!cls) return 24;
-    if (cls.indexOf("shop-company-chat-emoji-glyph--reaction") !== -1) return 28;
-    if (cls.indexOf("shop-company-chat-emoji-glyph--pill") !== -1) return 34;
+    if (cls.indexOf("shop-company-chat-emoji-glyph--reaction") !== -1) return 21;
+    if (cls.indexOf("shop-company-chat-emoji-glyph--pill") !== -1) return 26;
     if (cls.indexOf("shop-company-chat-emoji-glyph--composer") !== -1) return 30;
     if (cls.indexOf("shop-company-chat-emoji-glyph--picker") !== -1) return 24;
     if (
@@ -4793,14 +5133,15 @@
     return isAdminClientChatMode ? "admin-client-chat" : "shop-client-chat";
   }
 
-  function getReactionRenderKey(messageId) {
+  function getReactionRenderKey(messageId, fallbackKey) {
     const scopeKey = getReactionRenderScopeKey();
-    const entryKey = String(messageId || "").trim();
+    const entryKey = String(messageId || "").trim() || String(fallbackKey || "").trim();
+    if (!entryKey) return "";
     return `${scopeKey}:${entryKey}`;
   }
 
-  function getPendingReactionOverride(messageId) {
-    const key = getReactionRenderKey(messageId);
+  function getPendingReactionOverride(messageId, fallbackKey) {
+    const key = getReactionRenderKey(messageId, fallbackKey);
     if (!key) return null;
     const pending = pendingReactionOverrides.get(key);
     if (!pending) return null;
@@ -4813,8 +5154,8 @@
     return pending;
   }
 
-  function setPendingReactionOverride(messageId, reaction) {
-    const key = getReactionRenderKey(messageId);
+  function setPendingReactionOverride(messageId, reaction, fallbackKey) {
+    const key = getReactionRenderKey(messageId, fallbackKey);
     if (!key) return;
     pendingReactionOverrides.set(key, {
       actor: CHAT_REACTION_ACTOR,
@@ -4823,23 +5164,22 @@
     });
   }
 
-  function clearPendingReactionOverride(messageId) {
-    const key = getReactionRenderKey(messageId);
+  function clearPendingReactionOverride(messageId, fallbackKey) {
+    const key = getReactionRenderKey(messageId, fallbackKey);
     if (!key) return;
     pendingReactionOverrides.delete(key);
     pendingReactionPopKeys.delete(key);
   }
 
-  function applyPendingReactionOverrideToEntry(entry) {
+  function applyPendingReactionOverrideToEntry(entry, fallbackKey) {
     if (!entry || typeof entry !== "object" || entry.type !== "message") return entry;
     const messageId = String(entry.id || "").trim();
-    if (!messageId) return entry;
-    const pending = getPendingReactionOverride(messageId);
+    const pending = getPendingReactionOverride(messageId, fallbackKey);
     if (!pending) return entry;
     const remoteActorReaction = String(getEntryActorReaction(entry, pending.actor) || "");
     const expectedReaction = String(pending.reaction || "");
     if (normalizeReactionValue(remoteActorReaction) === normalizeReactionValue(expectedReaction)) {
-      clearPendingReactionOverride(messageId);
+      clearPendingReactionOverride(messageId, fallbackKey);
       return entry;
     }
     const clonedEntry = { ...entry, reactions: { ...ensureEntryReactions(entry) } };
@@ -4850,45 +5190,124 @@
   }
 
   function applyPendingReactionOverridesToEntries(entries) {
-    return (Array.isArray(entries) ? entries : []).map(function (entry) {
-      return applyPendingReactionOverrideToEntry(entry);
+    return (Array.isArray(entries) ? entries : []).map(function (entry, index) {
+      return applyPendingReactionOverrideToEntry(entry, getEntryRenderKey(entry, index));
     });
   }
 
-  function markPendingReactionPop(messageId) {
-    const key = getReactionRenderKey(messageId);
+  function markPendingReactionPop(messageId, fallbackKey) {
+    const key = getReactionRenderKey(messageId, fallbackKey);
     if (!key) return;
     pendingReactionPopKeys.add(key);
   }
 
-  function getReactionRenderSignature(reactionItems) {
-    return (Array.isArray(reactionItems) ? reactionItems : [])
-      .map(function (item) {
-        const actor = String(item && item.actor || "").trim();
-        const reaction = normalizeReactionValue(item && item.reaction || "");
-        return actor && reaction ? `${actor}:${reaction}` : "";
+  function getReactionAnimationItemKey(actor, reaction) {
+    const actorKey = actor === "out" ? "out" : actor === "in" ? "in" : "";
+    const reactionValue = normalizeReactionValue(reaction || "");
+    if (!actorKey || !reactionValue) return "";
+    return `${actorKey}:${reactionValue}`;
+  }
+
+  function createReactionRenderState(reactionItems) {
+    const state = {
+      in: "",
+      inRaw: "",
+      out: "",
+      outRaw: "",
+      signature: "",
+    };
+    (Array.isArray(reactionItems) ? reactionItems : []).forEach(function (item) {
+      const actorKey = String(item && item.actor || "").trim();
+      const itemKey = actorKey === "out" ? "out" : actorKey === "in" ? "in" : "";
+      const reactionRawValue = String(item && item.reaction || "").trim().normalize("NFC");
+      const reactionValue = normalizeReactionValue(reactionRawValue);
+      if (!itemKey || !reactionValue) return;
+      state[itemKey] = reactionValue;
+      state[itemKey + "Raw"] = reactionRawValue;
+    });
+    state.signature = ["out", "in"]
+      .map(function (actorKey) {
+        const itemKey = getReactionAnimationItemKey(actorKey, state[actorKey]);
+        return itemKey;
       })
       .filter(Boolean)
       .join("|");
+    return state;
   }
 
-  function shouldAnimateReaction(reactionItems, messageId) {
-    const key = getReactionRenderKey(messageId);
-    if (!key) return false;
-    const signature = getReactionRenderSignature(reactionItems);
-    const prevSignature = reactionRenderSignatures.get(key);
+  function getReactionLeavingItems(prevState, nextState) {
+    if (!prevState || typeof prevState !== "object") return [];
+    const leavingItems = [];
+    ["out", "in"].forEach(function (actorKey) {
+      const prevReaction = String(prevState[actorKey] || "");
+      const nextReaction = String(nextState && nextState[actorKey] || "");
+      if (!prevReaction || prevReaction === nextReaction) return;
+      const prevReactionRaw = String(prevState[actorKey + "Raw"] || prevReaction || "");
+      leavingItems.push({
+        actor: actorKey,
+        reaction: prevReactionRaw,
+        itemKey: getReactionAnimationItemKey(actorKey, prevReaction),
+      });
+    });
+    return leavingItems;
+  }
+
+  function getReactionAnimationMeta(reactionItems, messageId, fallbackKey) {
+    const key = getReactionRenderKey(messageId, fallbackKey);
+    if (!key) return { animateAny: false, itemKeys: new Set(), leavingItems: [] };
+    const nextState = createReactionRenderState(reactionItems);
+    const prevState = reactionRenderSignatures.get(key);
     const hasPendingLocalPop = pendingReactionPopKeys.has(key);
-    reactionRenderSignatures.set(key, signature);
-    if (!signature) {
+    const animatedItemKeys = new Set();
+    const leavingItems = getReactionLeavingItems(prevState, nextState);
+    reactionRenderSignatures.set(key, nextState);
+    if (!nextState.signature) {
       pendingReactionPopKeys.delete(key);
-      return false;
+      return { animateAny: false, itemKeys: animatedItemKeys, leavingItems: leavingItems };
     }
     if (hasPendingLocalPop) {
       pendingReactionPopKeys.delete(key);
-      return true;
+      const localItemKey = getReactionAnimationItemKey(CHAT_REACTION_ACTOR, nextState[CHAT_REACTION_ACTOR]);
+      if (localItemKey) animatedItemKeys.add(localItemKey);
+      return {
+        animateAny: animatedItemKeys.size > 0,
+        itemKeys: animatedItemKeys,
+        leavingItems: leavingItems,
+      };
     }
-    if (prevSignature === undefined) return false;
-    return prevSignature !== signature;
+    if (!prevState || typeof prevState !== "object") {
+      return { animateAny: false, itemKeys: animatedItemKeys, leavingItems: leavingItems };
+    }
+    ["out", "in"].forEach(function (actorKey) {
+      const nextReaction = String(nextState[actorKey] || "");
+      const prevReaction = String(prevState[actorKey] || "");
+      if (!nextReaction || prevReaction === nextReaction) return;
+      const itemKey = getReactionAnimationItemKey(actorKey, nextReaction);
+      if (itemKey) animatedItemKeys.add(itemKey);
+    });
+    return {
+      animateAny: animatedItemKeys.size > 0,
+      itemKeys: animatedItemKeys,
+      leavingItems: leavingItems,
+    };
+  }
+
+  function bindReactionLeavingCleanup(reactionsWrap, bubble) {
+    if (!reactionsWrap || !bubble || reactionsWrap.dataset.leaveCleanupBound === "1") return;
+    reactionsWrap.dataset.leaveCleanupBound = "1";
+    reactionsWrap.addEventListener("animationend", function (event) {
+      const target = event.target;
+      if (!target || !target.classList || !target.classList.contains("is-reaction-leave")) return;
+      if (target.parentNode === reactionsWrap) {
+        reactionsWrap.removeChild(target);
+      }
+      if (!reactionsWrap.querySelector(".shop-company-chat-reaction-pill")) {
+        bubble.classList.remove("has-reaction");
+        if (reactionsWrap.parentNode === bubble) {
+          bubble.removeChild(reactionsWrap);
+        }
+      }
+    });
   }
 
   function getReplyPreviewText(text) {
@@ -5260,6 +5679,9 @@
       feed.addEventListener("pointerdown", function (event) {
         const target = event.target;
         if (target && target.closest && target.closest("button,a,input,textarea,[contenteditable='true']")) return;
+        if (shouldUseNativeMobileEmojiKeyboard() && hasFocusedChatTextInput()) {
+          return;
+        }
         if (document.activeElement === feed) return;
         try {
           feed.focus({ preventScroll: true });
@@ -5499,9 +5921,11 @@
     void overlay.offsetWidth;
     overlay.classList.add("is-open");
     overlay.setAttribute("aria-hidden", "false");
+    syncOpenButtonActiveState();
     document.body.classList.add("shop-company-chat-open");
     maybeShowNotificationPermissionPrompt();
     lockBackgroundPageScrollForChat();
+    captureMobileKeyboardViewportBaseBottom({ force: true });
     scheduleScrollDownComposerExtraOffsetSync();
     scheduleMobileKeyboardInsetSync();
     renderTypingIndicator();
@@ -5523,9 +5947,15 @@
               return remoteCreateSharedMessage(welcomeMessage);
             });
           }
-          const restored = restoreFeedScrollPosition({ preferPersisted: true });
-          if (!restored) {
-            scrollToBottom(false, true);
+          const focusedPushMessage = flushPendingPushMessageFocus();
+          if (!focusedPushMessage) {
+            const restored = restoreFeedScrollPosition({ preferPersisted: true });
+            if (!restored) {
+              scrollToBottom(false, true);
+            } else {
+              syncPendingFeedCountByViewport();
+              updateScrollDownButton();
+            }
           } else {
             syncPendingFeedCountByViewport();
             updateScrollDownButton();
@@ -5557,7 +5987,7 @@
           }
           setChatBootstrapLoading(false);
           startSharedThreadPolling();
-          syncVisibleChatReadState({ preserveViewport: true });
+          scheduleVisibleChatReadSync({ preserveViewport: true });
           restorePersistedAttachPreviewDraft(getActiveChatClientId()).catch(function () {});
         });
     });
@@ -5580,6 +6010,7 @@
     resetFeedImageDrop();
     overlay.classList.remove("is-open");
     overlay.setAttribute("aria-hidden", "true");
+    syncOpenButtonActiveState();
     window.setTimeout(function () {
       if (overlay.classList.contains("is-open")) return;
       overlay.hidden = true;
@@ -6367,16 +6798,119 @@
     hideReactionBar();
   }
 
-  function scrollToMessage(messageId) {
+  function scrollToMessage(messageId, options) {
     const id = String(messageId || "");
-    if (!id) return;
+    if (!id) return false;
     const messageNode = thread.querySelector('[data-message-id="' + cssEscape(id) + '"]');
-    if (!messageNode) return;
-    messageNode.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
+    if (!messageNode) return false;
+    const opts = options || {};
+    const placement = opts.placement === "bottom" ? "bottom" : "center";
+    const behavior = opts.behavior === "auto" ? "auto" : "smooth";
+    if (placement === "bottom" && feed) {
+      const feedRect = feed.getBoundingClientRect();
+      const nodeRect = messageNode.getBoundingClientRect();
+      const offsetTop = nodeRect.top - feedRect.top + feed.scrollTop;
+      const gap = Math.max(0, Number(opts.bottomGapPx || CHAT_MESSAGE_JUMP_BOTTOM_GAP_PX));
+      const desiredTop = offsetTop + nodeRect.height - Math.max(0, feed.clientHeight - gap);
+      const maxTop = Math.max(0, feed.scrollHeight - feed.clientHeight);
+      const nextTop = Math.max(0, Math.min(desiredTop, maxTop));
+      if (behavior === "auto") {
+        stopFeedSmoothScroll();
+        feed.scrollTop = nextTop;
+      } else {
+        feed.scrollTo({ top: nextTop, behavior: "smooth" });
+      }
+      syncPendingFeedCountByViewport();
+      updateScrollDownButton();
+      saveFeedScrollPosition();
+    } else {
+      messageNode.scrollIntoView({ behavior: behavior, block: "center", inline: "nearest" });
+    }
     messageNode.classList.add("is-reply-highlight");
     window.setTimeout(function () {
       messageNode.classList.remove("is-reply-highlight");
     }, 620);
+    return true;
+  }
+
+  function queuePendingPushMessageFocus(messageId, clientId) {
+    const normalizedMessageId = String(messageId || "").trim();
+    if (!normalizedMessageId) return false;
+    clearPendingPushMessageFocusRetry();
+    pendingPushMessageFocus = {
+      clientId: String(clientId || getActiveChatClientId() || "").trim(),
+      messageId: normalizedMessageId,
+      retries: 0,
+      historyLoads: 0,
+    };
+    return true;
+  }
+
+  function schedulePendingPushMessageFocusRetry(delayMs) {
+    const pending = pendingPushMessageFocus && typeof pendingPushMessageFocus === "object"
+      ? pendingPushMessageFocus
+      : null;
+    if (!pending) return false;
+    if (Number(pending.retries || 0) >= CHAT_PUSH_MESSAGE_FOCUS_MAX_RETRIES) return false;
+    if (pendingPushMessageFocusRetryTimer) return true;
+    const nextDelay = Math.max(40, Number(delayMs) || CHAT_PUSH_MESSAGE_FOCUS_RETRY_MS);
+    pendingPushMessageFocusRetryTimer = window.setTimeout(function () {
+      pendingPushMessageFocusRetryTimer = 0;
+      requestAnimationFrame(function () {
+        flushPendingPushMessageFocus();
+      });
+    }, nextDelay);
+    return true;
+  }
+
+  function flushPendingPushMessageFocus() {
+    const pending = pendingPushMessageFocus && typeof pendingPushMessageFocus === "object"
+      ? pendingPushMessageFocus
+      : null;
+    if (!pending) {
+      clearPendingPushMessageFocusRetry();
+      return false;
+    }
+    const activeClientId = String(getActiveChatClientId() || "").trim();
+    if (pending.clientId && activeClientId && pending.clientId !== activeClientId) {
+      clearPendingPushMessageFocusRetry();
+      return false;
+    }
+    const focused = scrollToMessage(pending.messageId, {
+      placement: "bottom",
+      behavior: "auto",
+      bottomGapPx: CHAT_MESSAGE_JUMP_BOTTOM_GAP_PX,
+    });
+    if (!focused) {
+      pending.retries = Number(pending.retries || 0) + 1;
+      const messageInEntries = getAllEntries().some(function (entry) {
+        return entry && entry.type === "message" && String(entry.id || "") === pending.messageId;
+      });
+      if (
+        !messageInEntries
+        && hasLoadedSharedThreadOnce
+        && sharedHistoryHasMore === true
+        && sharedHistoryLoading !== true
+        && Number(pending.historyLoads || 0) < CHAT_PUSH_MESSAGE_FOCUS_MAX_HISTORY_PAGES
+      ) {
+        pending.historyLoads = Number(pending.historyLoads || 0) + 1;
+        loadOlderSharedMessagesFromServer({
+          limit: CHAT_THREAD_PAGE_SIZE,
+          preserveHistory: true,
+        })
+          .catch(function () {})
+          .finally(function () {
+            schedulePendingPushMessageFocusRetry();
+          });
+        return false;
+      }
+      schedulePendingPushMessageFocusRetry(messageInEntries ? 60 : CHAT_PUSH_MESSAGE_FOCUS_RETRY_MS);
+      return false;
+    }
+    pendingPushMessageFocus = null;
+    clearPendingFeedRestoreState();
+    clearPendingPushMessageFocusRetry();
+    return true;
   }
 
   function toggleSelectedMessage(messageId) {
@@ -6975,7 +7509,7 @@
     return strip.childElementCount > 0 ? strip : null;
   }
 
-  function createMessageNode(entry) {
+  function createMessageNode(entry, renderKey) {
     const row = document.createElement("div");
     row.className = "shop-company-chat-row is-" + (entry.role || "agent");
     if (selectedMessageIds.size > 0) row.classList.add("is-selection-mode");
@@ -7091,18 +7625,20 @@
     }
 
     const reactionItems = getEntryReactionItems(entry);
-    if (reactionItems.length) {
-      const animateReactionPop = shouldAnimateReaction(reactionItems, entry.id);
+    const reactionAnimationMeta = getReactionAnimationMeta(reactionItems, entry.id, renderKey);
+    if (reactionItems.length || reactionAnimationMeta.leavingItems.length) {
       bubble.classList.add("has-reaction");
       const reactionsWrap = document.createElement("div");
-      reactionsWrap.className = "shop-company-chat-reactions" + (animateReactionPop ? " is-reaction-pop" : "");
+      reactionsWrap.className = "shop-company-chat-reactions" + (reactionAnimationMeta.animateAny ? " is-reaction-pop" : "");
 
       reactionItems.forEach(function (itemReaction, reactionIndex) {
         const reaction = document.createElement("button");
         reaction.type = "button";
-        reaction.className = "shop-company-chat-reaction-pill" + (animateReactionPop ? " is-reaction-pop" : "");
+        const reactionItemKey = getReactionAnimationItemKey(itemReaction && itemReaction.actor, itemReaction && itemReaction.reaction);
+        const shouldAnimateItem = reactionAnimationMeta.itemKeys.has(reactionItemKey);
+        reaction.className = "shop-company-chat-reaction-pill" + (shouldAnimateItem ? " is-reaction-pop" : "");
         reaction.style.zIndex = String(10 + Number(reactionIndex || 0));
-        if (animateReactionPop) {
+        if (shouldAnimateItem) {
           reaction.style.setProperty("--reaction-pop-delay", String(Number(reactionIndex || 0) * 32) + "ms");
         }
         reaction.dataset.messageId = String(entry.id || "");
@@ -7113,6 +7649,18 @@
         setEmojiGlyph(reaction, itemReaction.reaction, "shop-company-chat-emoji-glyph shop-company-chat-emoji-glyph--pill");
         reactionsWrap.appendChild(reaction);
       });
+
+      if (reactionAnimationMeta.leavingItems.length) {
+        bindReactionLeavingCleanup(reactionsWrap, bubble);
+        reactionAnimationMeta.leavingItems.forEach(function (itemReaction, reactionIndex) {
+          const ghost = document.createElement("span");
+          ghost.className = "shop-company-chat-reaction-pill is-reaction-leave";
+          ghost.style.zIndex = String(Math.max(0, Number(reactionIndex || 0)));
+          ghost.setAttribute("aria-hidden", "true");
+          setEmojiGlyph(ghost, itemReaction.reaction, "shop-company-chat-emoji-glyph shop-company-chat-emoji-glyph--pill");
+          reactionsWrap.appendChild(ghost);
+        });
+      }
 
       bubble.appendChild(reactionsWrap);
     }
@@ -7159,7 +7707,7 @@
     return row;
   }
 
-  function renderEntry(entry) {
+  function renderEntry(entry, renderKey) {
     if (entry.type === "welcome") {
       return createWelcomeNode(entry.text || "");
     }
@@ -7168,7 +7716,7 @@
       return createOptionsNode(entry);
     }
 
-    return createMessageNode(entry);
+    return createMessageNode(entry, renderKey);
   }
 
   function safeRenderSignature(value) {
@@ -7294,9 +7842,18 @@
       const currentSignature = current && current.dataset
         ? String(current.dataset.renderSignature || "")
         : "";
-      const nextNode = current && currentSignature === signature
-        ? setRenderDescriptor(current, key, signature)
-        : setRenderDescriptor(descriptor.create(), key, signature);
+      let nextNode = null;
+      if (current && currentSignature === signature) {
+        nextNode = setRenderDescriptor(current, key, signature);
+      } else if (current && current.parentNode === thread) {
+        nextNode = setRenderDescriptor(descriptor.create(), key, signature);
+        thread.replaceChild(nextNode, current);
+        if (anchor === current) {
+          anchor = nextNode;
+        }
+      } else {
+        nextNode = setRenderDescriptor(descriptor.create(), key, signature);
+      }
 
       if (nextNode !== anchor) {
         thread.insertBefore(nextNode, anchor);
@@ -7331,11 +7888,12 @@
         });
         prevDay = entry.day;
       }
+      const renderKey = getEntryRenderKey(entry, index);
       descriptors.push({
-        key: getEntryRenderKey(entry, index),
+        key: renderKey,
         signature: getEntryRenderSignature(entry),
         create: function () {
-          return renderEntry(entry);
+          return renderEntry(entry, renderKey);
         },
       });
     });
@@ -7364,6 +7922,8 @@
     syncSelectionUi();
     renderTypingIndicator();
     applyThreadImageLoadingStrategy();
+    scheduleVisibleChatReadSync();
+    flushPendingPushMessageFocus();
   }
 
   function hideReactionBar() {
@@ -8546,25 +9106,159 @@
     });
   }
 
-  function setMobileKeyboardInset(valuePx) {
+  function getCurrentMobileViewportBottom() {
+    const viewport = window.visualViewport;
+    const viewportOffsetTop = viewport ? Number(viewport.offsetTop || 0) : 0;
+    const viewportHeight = viewport ? Number(viewport.height || 0) : 0;
+    const viewportBottom = (
+      Number.isFinite(viewportHeight)
+      && viewportHeight > 0
+      && Number.isFinite(viewportOffsetTop)
+      && viewportOffsetTop >= 0
+    )
+      ? viewportOffsetTop + viewportHeight
+      : 0;
+    const fallbackBottom = Math.max(
+      Number(window.innerHeight || 0),
+      Number(document.documentElement && document.documentElement.clientHeight || 0)
+    );
+    return Math.max(0, Math.round(Math.max(viewportBottom, fallbackBottom)));
+  }
+
+  function captureMobileKeyboardViewportBaseBottom(options) {
+    const opts = options || {};
+    const nextBottom = getCurrentMobileViewportBottom();
+    if (!nextBottom) return mobileKeyboardViewportBaseBottom;
+    if (opts.force === true || !mobileKeyboardViewportBaseBottom || nextBottom > mobileKeyboardViewportBaseBottom) {
+      mobileKeyboardViewportBaseBottom = nextBottom;
+    }
+    return mobileKeyboardViewportBaseBottom;
+  }
+
+  function setMobileKeyboardTrackedFeedBottomDistance(value) {
+    const next = Number(value);
+    if (!Number.isFinite(next) || next < 0) {
+      mobileKeyboardTrackedFeedBottomDistance = null;
+      return null;
+    }
+    mobileKeyboardTrackedFeedBottomDistance = Math.max(0, next);
+    return mobileKeyboardTrackedFeedBottomDistance;
+  }
+
+  function rememberMobileKeyboardTrackedFeedBottomDistance(options) {
+    if (!isAndroidMobileBrowser()) return null;
+    const snapshot = getFeedBottomDistanceSnapshot();
+    if (snapshot == null) return mobileKeyboardTrackedFeedBottomDistance;
+    const opts = options || {};
+    if (opts.force === true || mobileKeyboardTrackedFeedBottomDistance == null) {
+      return setMobileKeyboardTrackedFeedBottomDistance(snapshot);
+    }
+    return mobileKeyboardTrackedFeedBottomDistance;
+  }
+
+  function isMobileKeyboardViewportCompressed(viewportBottom) {
+    const currentBottom = Number(viewportBottom || 0);
+    const baseBottom = Number(mobileKeyboardViewportBaseBottom || 0);
+    if (!Number.isFinite(currentBottom) || currentBottom <= 0) return false;
+    if (!Number.isFinite(baseBottom) || baseBottom <= 0) return false;
+    return currentBottom < (baseBottom - 6);
+  }
+
+  function setAndroidKeyboardViewportVisualShift(valuePx) {
+    const raw = Number(valuePx || 0);
+    const next = Number.isFinite(raw) && Math.abs(raw) >= 1 ? Math.round(raw) : 0;
+    if (mobileKeyboardViewportVisualShift === next) return next;
+    mobileKeyboardViewportVisualShift = next;
+    overlay.style.setProperty("--shop-chat-android-viewport-shift", String(next) + "px");
+    return next;
+  }
+
+  function computeAndroidKeyboardViewportVisualShift(viewportBottom) {
+    if (!isAndroidMobileBrowser()) return 0;
+    if (!overlay.classList.contains("is-open") || !modalBody) return 0;
+    const currentBottom = Number(viewportBottom || 0);
+    if (!Number.isFinite(currentBottom) || currentBottom <= 0) return 0;
+
+    const bodyRect = modalBody.getBoundingClientRect();
+    const bodyBottom = Number(bodyRect && bodyRect.bottom || 0);
+    if (!Number.isFinite(bodyBottom) || bodyBottom <= 0) return 0;
+
+    const baseBottom = Number(mobileKeyboardViewportBaseBottom || 0);
+    const maxCompensation = Number.isFinite(baseBottom) && baseBottom > 0
+      ? Math.max(0, Math.abs(baseBottom - currentBottom))
+      : Number.POSITIVE_INFINITY;
+    const desiredShift = currentBottom - bodyBottom;
+    const limitedShift = Number.isFinite(maxCompensation)
+      ? Math.max(-maxCompensation, Math.min(maxCompensation, desiredShift))
+      : desiredShift;
+
+    if (
+      !hasFocusedChatTextInput()
+      && !isMobileKeyboardViewportCompressed(currentBottom)
+      && Math.abs(limitedShift) < 1
+    ) {
+      return 0;
+    }
+    return limitedShift;
+  }
+
+  function setMobileKeyboardInset(valuePx, options) {
+    const opts = options || {};
     const raw = Number(valuePx || 0);
     const rounded = Number.isFinite(raw) ? Math.max(0, Math.round(raw)) : 0;
     const next = rounded < 8 ? 0 : rounded;
     const prev = Number(overlay.dataset.keyboardInset || 0);
-    const feedBottomDistanceBefore = getFeedBottomDistanceSnapshot();
-    if (prev === next) {
+    const forceFeedBottomSync = opts.forceFeedBottomSync === true;
+    const viewportBottom = Number(opts.viewportBottom || 0);
+    const currentFeedBottomDistance = getFeedBottomDistanceSnapshot();
+    const trackedFeedBottomDistance = Number(mobileKeyboardTrackedFeedBottomDistance);
+    const shouldUseTrackedFeedBottomDistance = isAndroidMobileBrowser() && (
+      forceFeedBottomSync
+      || prev > 0
+      || next > 0
+      || hasFocusedChatTextInput()
+      || isMobileKeyboardViewportCompressed(viewportBottom)
+    );
+    const targetFeedBottomDistance = shouldUseTrackedFeedBottomDistance && Number.isFinite(trackedFeedBottomDistance)
+      ? trackedFeedBottomDistance
+      : currentFeedBottomDistance;
+    if (next <= 0 && !hasFocusedChatTextInput()) {
+      const currentViewportBottom = Number.isFinite(viewportBottom) && viewportBottom > 0
+        ? viewportBottom
+        : getCurrentMobileViewportBottom();
+      if (
+        !mobileKeyboardViewportBaseBottom
+        || currentViewportBottom >= (Number(mobileKeyboardViewportBaseBottom || 0) - 6)
+      ) {
+        captureMobileKeyboardViewportBaseBottom({ force: true });
+      }
+    }
+    if (prev === next && !forceFeedBottomSync) {
       scheduleScrollDownComposerExtraOffsetSync();
       return;
     }
-    overlay.dataset.keyboardInset = String(next);
-    overlay.style.setProperty("--shop-chat-mobile-keyboard-inset", String(next) + "px");
-    overlay.classList.toggle("is-mobile-keyboard-open", next > 0);
+    if (prev !== next) {
+      overlay.dataset.keyboardInset = String(next);
+      overlay.style.setProperty("--shop-chat-mobile-keyboard-inset", String(next) + "px");
+      overlay.classList.toggle("is-mobile-keyboard-open", next > 0);
+    }
     scheduleScrollDownComposerExtraOffsetSync();
-    if (feedBottomDistanceBefore != null) {
-      if (isAndroidMobileBrowser()) {
-        applyFeedBottomDistanceSnapshot(feedBottomDistanceBefore);
-      } else {
-        stabilizeFeedBottomDistance(feedBottomDistanceBefore, CHAT_KEYBOARD_INSET_ANIMATION_MS);
+    if (targetFeedBottomDistance != null) {
+      applyFeedBottomDistanceSnapshot(targetFeedBottomDistance);
+      requestAnimationFrame(function () {
+        applyFeedBottomDistanceSnapshot(targetFeedBottomDistance);
+      });
+    }
+    if (isAndroidMobileBrowser()) {
+      if (targetFeedBottomDistance != null && (
+        next > 0
+        || forceFeedBottomSync
+        || hasFocusedChatTextInput()
+        || isMobileKeyboardViewportCompressed(viewportBottom)
+      )) {
+        setMobileKeyboardTrackedFeedBottomDistance(targetFeedBottomDistance);
+      } else if (!hasFocusedChatTextInput()) {
+        setMobileKeyboardTrackedFeedBottomDistance(currentFeedBottomDistance);
       }
     }
   }
@@ -8578,6 +9272,7 @@
     if (!overlay.classList.contains("is-open")) return 0;
     if (!shouldUseNativeMobileEmojiKeyboard()) return 0;
     if (!hasFocusedChatTextInput()) return 0;
+    captureMobileKeyboardViewportBaseBottom();
     const viewport = window.visualViewport;
     if (!viewport) return 0;
     const viewportOffsetTop = Number(viewport.offsetTop || 0);
@@ -8587,12 +9282,94 @@
     const rect = overlay.getBoundingClientRect();
     const viewportBottom = viewportOffsetTop + viewportHeight;
     const overlap = Number(rect && rect.bottom || 0) - viewportBottom;
-    if (!Number.isFinite(overlap) || overlap <= 0) return 0;
-    return overlap;
+    const fallbackInset = !isAndroidMobileBrowser() && mobileKeyboardViewportBaseBottom > 0
+      ? Math.max(0, mobileKeyboardViewportBaseBottom - viewportBottom)
+      : 0;
+    const nextInset = Math.max(
+      0,
+      Number.isFinite(overlap) ? overlap : 0,
+      fallbackInset
+    );
+    return nextInset;
   }
 
   function syncMobileKeyboardInsetNow() {
-    setMobileKeyboardInset(computeMobileKeyboardInset());
+    const viewportBottom = getCurrentMobileViewportBottom();
+    const prevViewportBottom = mobileKeyboardLastViewportBottom || viewportBottom;
+    mobileKeyboardLastViewportBottom = viewportBottom;
+    const viewportChanged = Math.abs(viewportBottom - prevViewportBottom) >= 1;
+    const forceFeedBottomSync = viewportChanged && (
+      hasFocusedChatTextInput()
+      || isMobileKeyboardViewportCompressed(prevViewportBottom)
+      || isMobileKeyboardViewportCompressed(viewportBottom)
+    );
+    setMobileKeyboardInset(computeMobileKeyboardInset(), {
+      forceFeedBottomSync: forceFeedBottomSync,
+      viewportBottom: viewportBottom,
+    });
+    setAndroidKeyboardViewportVisualShift(computeAndroidKeyboardViewportVisualShift(viewportBottom));
+  }
+
+  function stopAndroidKeyboardViewportMotionSync() {
+    if (mobileKeyboardViewportMotionRaf) {
+      cancelAnimationFrame(mobileKeyboardViewportMotionRaf);
+      mobileKeyboardViewportMotionRaf = 0;
+    }
+    mobileKeyboardViewportMotionUntil = 0;
+    mobileKeyboardViewportMotionLastBottom = 0;
+    setAndroidKeyboardViewportVisualShift(0);
+  }
+
+  function scheduleAndroidKeyboardViewportMotionSync(durationMs) {
+    if (!isAndroidMobileBrowser()) return;
+    if (!overlay.classList.contains("is-open")) return;
+    const now = typeof performance !== "undefined" && typeof performance.now === "function"
+      ? performance.now()
+      : Date.now();
+    const duration = Math.max(160, Number(durationMs || 0) || 0);
+    mobileKeyboardViewportMotionUntil = Math.max(mobileKeyboardViewportMotionUntil, now + duration);
+    if (mobileKeyboardViewportMotionRaf) return;
+
+    const step = function () {
+      mobileKeyboardViewportMotionRaf = 0;
+      if (!overlay.classList.contains("is-open")) {
+        stopAndroidKeyboardViewportMotionSync();
+        return;
+      }
+
+      syncMobileKeyboardInsetNow();
+
+      const currentBottom = getCurrentMobileViewportBottom();
+      const prevBottom = mobileKeyboardViewportMotionLastBottom || currentBottom;
+      mobileKeyboardViewportMotionLastBottom = currentBottom;
+      const viewportChanged = Math.abs(currentBottom - prevBottom) >= 1;
+      const currentNow = typeof performance !== "undefined" && typeof performance.now === "function"
+        ? performance.now()
+        : Date.now();
+
+      if (viewportChanged) {
+        mobileKeyboardViewportMotionUntil = Math.max(mobileKeyboardViewportMotionUntil, currentNow + 140);
+      }
+
+      if (
+        hasFocusedChatTextInput()
+        || isMobileKeyboardViewportCompressed(currentBottom)
+        || currentNow < mobileKeyboardViewportMotionUntil
+      ) {
+        mobileKeyboardViewportMotionRaf = requestAnimationFrame(step);
+        return;
+      }
+
+      mobileKeyboardViewportMotionUntil = 0;
+      mobileKeyboardViewportMotionLastBottom = 0;
+    };
+
+    mobileKeyboardViewportMotionRaf = requestAnimationFrame(step);
+  }
+
+  function handleMobileKeyboardViewportSyncEvent() {
+    scheduleMobileKeyboardInsetSync();
+    scheduleAndroidKeyboardViewportMotionSync(260);
   }
 
   function scheduleMobileKeyboardInsetSync() {
@@ -8606,7 +9383,11 @@
   function scheduleMobileKeyboardInsetSyncBurst() {
     scheduleMobileKeyboardInsetSync();
     if (isAndroidMobileBrowser()) {
+      scheduleAndroidKeyboardViewportMotionSync(520);
       window.setTimeout(scheduleMobileKeyboardInsetSync, 40);
+      window.setTimeout(scheduleMobileKeyboardInsetSync, 120);
+      window.setTimeout(scheduleMobileKeyboardInsetSync, 260);
+      window.setTimeout(scheduleMobileKeyboardInsetSync, 420);
       return;
     }
     window.setTimeout(scheduleMobileKeyboardInsetSync, 60);
@@ -8614,15 +9395,22 @@
     window.setTimeout(scheduleMobileKeyboardInsetSync, 320);
   }
 
+  function scheduleAndroidFocusedComposerLift() {
+    if (!isAndroidMobileBrowser()) return;
+    if (!overlay.classList.contains("is-open")) return;
+    rememberMobileKeyboardTrackedFeedBottomDistance({ force: true });
+    scheduleAndroidKeyboardViewportMotionSync(720);
+  }
+
   function bindMobileKeyboardViewportSync() {
     if (mobileKeyboardViewportSyncBound) return;
     mobileKeyboardViewportSyncBound = true;
     const viewport = window.visualViewport;
     if (viewport) {
-      viewport.addEventListener("resize", scheduleMobileKeyboardInsetSync);
-      viewport.addEventListener("scroll", scheduleMobileKeyboardInsetSync);
+      viewport.addEventListener("resize", handleMobileKeyboardViewportSyncEvent);
+      viewport.addEventListener("scroll", handleMobileKeyboardViewportSyncEvent);
     }
-    window.addEventListener("orientationchange", scheduleMobileKeyboardInsetSync);
+    window.addEventListener("orientationchange", handleMobileKeyboardViewportSyncEvent);
   }
 
   function unbindMobileKeyboardViewportSync() {
@@ -8630,18 +9418,23 @@
     mobileKeyboardViewportSyncBound = false;
     const viewport = window.visualViewport;
     if (viewport) {
-      viewport.removeEventListener("resize", scheduleMobileKeyboardInsetSync);
-      viewport.removeEventListener("scroll", scheduleMobileKeyboardInsetSync);
+      viewport.removeEventListener("resize", handleMobileKeyboardViewportSyncEvent);
+      viewport.removeEventListener("scroll", handleMobileKeyboardViewportSyncEvent);
     }
-    window.removeEventListener("orientationchange", scheduleMobileKeyboardInsetSync);
+    window.removeEventListener("orientationchange", handleMobileKeyboardViewportSyncEvent);
     if (mobileKeyboardInsetSyncRaf) {
       cancelAnimationFrame(mobileKeyboardInsetSyncRaf);
       mobileKeyboardInsetSyncRaf = 0;
     }
+    stopAndroidKeyboardViewportMotionSync();
     if (scrollDownComposerOffsetRaf) {
       cancelAnimationFrame(scrollDownComposerOffsetRaf);
       scrollDownComposerOffsetRaf = 0;
     }
+    mobileKeyboardViewportBaseBottom = 0;
+    mobileKeyboardLastViewportBottom = 0;
+    mobileKeyboardViewportVisualShift = 0;
+    mobileKeyboardTrackedFeedBottomDistance = null;
     setScrollDownComposerExtraOffset(0);
     setMobileKeyboardInset(0);
   }
@@ -8746,7 +9539,8 @@
 
   function updateScrollDownButton() {
     const hiddenDistance = feed.scrollHeight - feed.clientHeight - feed.scrollTop;
-    const hasPending = pendingFeedNewCount > 0;
+    const badgeCount = getFeedScrollDownBadgeCount(liveEntries);
+    const hasPending = badgeCount > 0;
     const shouldShow = hasPending || hiddenDistance >= CHAT_SCROLL_DOWN_SHOW_DISTANCE_PX;
     scrollDownBtn.classList.toggle("hidden", !shouldShow);
 
@@ -8758,7 +9552,7 @@
       return;
     }
 
-    const nextText = pendingFeedNewCount > 99 ? "99+" : String(pendingFeedNewCount);
+    const nextText = badgeCount > 99 ? "99+" : String(badgeCount);
     if (badge.textContent !== nextText) {
       badge.textContent = nextText;
       animateCountBadgeTick(badge);
@@ -9355,9 +10149,10 @@
     if (!activeClientId) return;
     const userMessageId = String(opts.userMessageId || "").trim();
     const markQuickQuestionRead = opts.quickQuestion === true && !!userMessageId;
+    const orderQuickQuestionEnabled = isOrderQuickQuestionEnabled();
 
     const phoneCandidate = extractPhoneCandidateFromHotQuestionText(userText);
-    if (phoneCandidate) {
+    if (phoneCandidate && orderQuickQuestionEnabled) {
       emulateAssistantTypingBeforeReply(activeClientId, function () {
         if (markQuickQuestionRead) {
           setMessageDeliveryStatus(userMessageId, "read");
@@ -9376,7 +10171,7 @@
       return;
     }
 
-    if (isWhereIsOrderHotQuestion(normalized)) {
+    if (orderQuickQuestionEnabled && isWhereIsOrderHotQuestion(normalized)) {
       emulateAssistantTypingBeforeReply(activeClientId, function () {
         if (markQuickQuestionRead) {
           setMessageDeliveryStatus(userMessageId, "read");
@@ -9906,7 +10701,10 @@
     });
 
     attachPreviewCaption.addEventListener("focus", function () {
+      captureMobileKeyboardViewportBaseBottom({ force: true });
+      rememberMobileKeyboardTrackedFeedBottomDistance({ force: true });
       scheduleMobileKeyboardInsetSyncBurst();
+      scheduleAndroidFocusedComposerLift();
     });
 
     attachPreviewCaption.addEventListener("blur", function () {
@@ -9930,6 +10728,7 @@
   }
 
   function startChatRuntime() {
+    pendingPushChatOpenRequest = pendingPushChatOpenRequest || readPushChatOpenRequestFromLocation();
     preloadEmojiAtlas();
     initMessageAlerts();
     bindEmojiPopoverGuard();
@@ -9940,13 +10739,15 @@
     setupComposerRichPreview();
   // probeEmojiAssetsAvailability intentionally deferred until first chat open
     ensureChatBootstrapLoader();
+    refreshChatClientProfileIfNeeded({ pull: false });
     renderUnreadBadge(liveEntries);
     if (!chatRuntimeSettings.isEnabled) {
       stopSharedThreadPolling();
       stopUnreadPolling();
       return;
     }
-    startUnreadPolling();
+    startUnreadPolling({ forceRefresh: true });
+    flushPendingPushChatOpenRequest();
   }
 
   initChatRuntimeSettings({ fetchRemote: true, force: true, refreshUi: true })
@@ -9965,7 +10766,19 @@
       ?? detail.enabled;
     if (rawEnabled === undefined) return;
     applyLiveChatWidgetEnabledPatch(rawEnabled);
+    flushPendingPushChatOpenRequest();
   });
+
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.addEventListener("message", function (event) {
+      const payload = event && event.data && typeof event.data === "object"
+        ? (event.data.payload && typeof event.data.payload === "object" ? event.data.payload : event.data)
+        : null;
+      const eventType = String(event && event.data && event.data.type || "").trim().toLowerCase();
+      if (eventType !== "chat-notification-click") return;
+      queuePushChatOpenRequest(payload, { clearLocation: false });
+    });
+  }
 
   if ("serviceWorker" in navigator && navigator.serviceWorker.ready) {
     navigator.serviceWorker.ready
@@ -10050,6 +10863,11 @@
 
   document.addEventListener("visibilitychange", function () {
     if (document.visibilityState !== "visible") {
+      if (overlay.classList.contains("is-open")) {
+        saveFeedScrollPosition({ force: true, persist: true });
+      } else {
+        persistFeedScrollPositionSnapshot();
+      }
       if (!CHAT_SSE_ENABLED) {
         stopSharedThreadPolling();
       }
@@ -10063,7 +10881,7 @@
       syncReadOnForeground();
       return;
     }
-    startUnreadPolling();
+    startUnreadPolling({ forceRefresh: true });
   });
 
   window.addEventListener("focus", function () {
@@ -10076,7 +10894,19 @@
       syncReadOnForeground();
       return;
     }
-    startUnreadPolling();
+    refreshChatClientProfileIfNeeded({ pull: false });
+    unreadStatePrimed = false;
+    startUnreadPolling({ forceRefresh: true });
+  });
+
+  window.addEventListener("pageshow", function () {
+    if (overlay.classList.contains("is-open")) {
+      syncReadOnForeground();
+      return;
+    }
+    refreshChatClientProfileIfNeeded({ pull: false });
+    unreadStatePrimed = false;
+    startUnreadPolling({ forceRefresh: true });
   });
 
   window.addEventListener("pagehide", function () {
@@ -10108,7 +10938,7 @@
     if (key === "tenant") {
       initChatRuntimeSettings({ fetchRemote: false, refreshUi: true }).catch(function () {});
       if (!overlay.classList.contains("is-open")) {
-        startUnreadPolling();
+        startUnreadPolling({ forceRefresh: true });
       }
       return;
     }
@@ -10116,8 +10946,22 @@
     refreshChatClientProfileIfNeeded({ pull: overlay.classList.contains("is-open") });
     if (!overlay.classList.contains("is-open")) {
       unreadStatePrimed = false;
-      startUnreadPolling();
+      startUnreadPolling({ forceRefresh: true });
     }
+  });
+
+  // Same-tab customer auth/profile updates do not fire window.storage.
+  window.addEventListener("shop:customer-profile-changed", function () {
+    refreshChatClientProfileIfNeeded({ pull: overlay.classList.contains("is-open") });
+    if (overlay.classList.contains("is-open")) {
+      queueWebPushSubscriptionSync({
+        clientId: getActiveChatClientId(),
+        immediate: true,
+      });
+      return;
+    }
+    unreadStatePrimed = false;
+    startUnreadPolling({ forceRefresh: true });
   });
 
   function clearTouchGesture() {
@@ -10247,7 +11091,10 @@
   });
 
   input.addEventListener("focus", function () {
+    captureMobileKeyboardViewportBaseBottom({ force: true });
+    rememberMobileKeyboardTrackedFeedBottomDistance({ force: true });
     scheduleMobileKeyboardInsetSyncBurst();
+    scheduleAndroidFocusedComposerLift();
   });
 
   input.addEventListener("blur", function () {
@@ -10825,8 +11672,19 @@
   });
 
   feed.addEventListener("scroll", function () {
+    if (
+      isAndroidMobileBrowser()
+      && (
+        overlay.classList.contains("is-mobile-keyboard-open")
+        || hasFocusedChatTextInput()
+        || isMobileKeyboardViewportCompressed(mobileKeyboardLastViewportBottom)
+      )
+    ) {
+      setMobileKeyboardTrackedFeedBottomDistance(getFeedBottomDistanceSnapshot());
+    }
     saveFeedScrollPosition();
     syncPendingFeedCountByViewport();
+    scheduleVisibleChatReadSync();
     hideContextMenu();
     if (!reactionBar.classList.contains("hidden")) {
       hideReactionBar();

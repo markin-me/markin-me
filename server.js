@@ -60,6 +60,48 @@ let telegramEnvPollingHandle = null;
 let telegramTenantPollingHandle = null;
 let fatalErrorLogged = false;
 
+function normalizeConfiguredHost(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  try {
+    const parsed = new URL(raw.includes('://') ? raw : `https://${raw}`);
+    return normalizeHostForMatch(parsed.hostname || raw);
+  } catch (e) {
+    return normalizeHostForMatch(raw);
+  }
+}
+
+function buildTrustedAdminHosts() {
+  const hosts = new Set(['localhost', '127.0.0.1', '::1']);
+  const add = (value) => {
+    const normalized = normalizeConfiguredHost(value);
+    if (normalized) hosts.add(normalized);
+  };
+  const addList = (value) => {
+    String(value || '')
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .forEach(add);
+  };
+  addList(process.env.ADMIN_ALLOWED_HOSTS);
+  add(process.env.ADMIN_BASE_URL);
+  add(process.env.APP_BASE_URL);
+  add(process.env.PUBLIC_BASE_URL);
+  add(process.env.SITE_BASE_URL);
+  add(process.env.ORDER_LINK_BASE);
+  add(process.env.TENANT_BASE_DOMAIN);
+  add(process.env.APP_BASE_DOMAIN);
+  add(process.env.PUBLIC_BASE_DOMAIN);
+  add(process.env.SITE_BASE_DOMAIN);
+  addList(process.env.TENANT_DOMAIN_A_RECORDS);
+  add('posham-admin.ru');
+  add('www.posham-admin.ru');
+  return hosts;
+}
+
+const TRUSTED_ADMIN_HOSTS = buildTrustedAdminHosts();
+
 function nowMs() {
   return Number(process.hrtime.bigint()) / 1e6;
 }
@@ -516,6 +558,27 @@ function normalizeHostForMatch(hostname) {
   return ascii || host;
 }
 
+function isTrustedAdminHost(hostname) {
+  const host = normalizeHostForMatch(hostname);
+  return Boolean(host && TRUSTED_ADMIN_HOSTS.has(host));
+}
+
+function isManagedTenantDomainRequest(req) {
+  const raw = req && req.headers ? req.headers['x-tenant-domain-managed'] : '';
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  return String(value || '').trim() === '1';
+}
+
+function isMissingTenantDomainsTableError(err) {
+  return Boolean(
+    err
+    && (
+      err.code === 'ER_NO_SUCH_TABLE'
+      || /ten_tenant_domains/i.test(String(err.message || ''))
+    )
+  );
+}
+
 async function resolveTenant(req) {
   const host = normalizeHostForMatch(req.hostname);
   const queryTenantId = Number(req.query.tenant_id);
@@ -545,12 +608,33 @@ async function findTenantByHost(hostname) {
   const cached = getFreshCachedValue(tenantLookupCache, cacheKey);
   if (cached.hit) return cached.value;
 
-  // Split lookup to keep index-friendly predicates and avoid expensive OR scans.
-  const [asciiRows] = await db.query(
-    'SELECT * FROM ten_tenants WHERE custom_domain_ascii=? LIMIT 1',
-    [host]
-  );
-  let tenant = asciiRows[0] || null;
+  let tenant = null;
+
+  try {
+    const [domainRows] = await db.query(
+      `SELECT t.*
+         FROM ten_tenant_domains d
+         JOIN ten_tenants t ON t.id = d.tenant_id
+        WHERE d.domain_ascii=?
+        ORDER BY d.is_primary DESC, d.id ASC
+        LIMIT 1`,
+      [host]
+    );
+    tenant = domainRows[0] || null;
+  } catch (err) {
+    if (!isMissingTenantDomainsTableError(err)) {
+      throw err;
+    }
+  }
+
+  if (!tenant) {
+    // Legacy fallback for tenants that have not been migrated yet.
+    const [asciiRows] = await db.query(
+      'SELECT * FROM ten_tenants WHERE custom_domain_ascii=? LIMIT 1',
+      [host]
+    );
+    tenant = asciiRows[0] || null;
+  }
 
   if (!tenant) {
     const [legacyRows] = await db.query(
@@ -579,6 +663,33 @@ async function isTenantHost(req) {
   if (tenant) req._resolvedTenant = tenant;
   return Boolean(tenant && tenant.id);
 }
+
+app.use(async (req, res, next) => {
+  const route = String(req.path || '');
+  const isAdminRoute = (
+    route === '/login'
+    || route === '/register'
+    || route.startsWith('/dashboard')
+    || route.startsWith('/api/auth')
+    || route.startsWith('/api/admin')
+  );
+
+  if (!isAdminRoute) return next();
+
+  try {
+    const tenantHost = await isTenantHost(req);
+    if (tenantHost) return next();
+    if (!isTrustedAdminHost(req.hostname) || isManagedTenantDomainRequest(req)) {
+      if (route.startsWith('/api/')) {
+        return res.status(404).json({ ok: false, error: 'TENANT_NOT_FOUND' });
+      }
+      return res.status(404).send('Домен не подключен');
+    }
+  } catch (err) {
+    console.error('Tenant admin pre-guard error:', err);
+  }
+  return next();
+});
 
 async function renderShop(req, res) {
   try {
@@ -611,7 +722,23 @@ app.use(async (req, res, next) => {
 
   try {
     const tenantHost = await isTenantHost(req);
-    if (!tenantHost) return next();
+    if (!tenantHost) {
+      if (!isTrustedAdminHost(req.hostname) || isManagedTenantDomainRequest(req)) {
+        if (route.startsWith('/api/')) {
+          return res.status(404).json({ ok: false, error: 'TENANT_NOT_FOUND' });
+        }
+        return res.status(404).send('Домен не подключен');
+      }
+    }
+    if (!tenantHost) {
+      if (isManagedTenantDomainRequest(req)) {
+        if (route.startsWith('/api/')) {
+          return res.status(404).json({ ok: false, error: 'TENANT_NOT_FOUND' });
+        }
+        return res.status(404).send('Домен не подключен');
+      }
+      return next();
+    }
 
     if (route.startsWith('/api/')) {
       return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
@@ -923,28 +1050,104 @@ self.addEventListener('push', function (event) {
       body: body,
       tag: tag,
       renotify: true,
-      data: { url: url }
+      data: {
+        url: url,
+        type: String((payload && payload.type) || ''),
+        client_id: normalizeNotificationClientId(payload && payload.client_id),
+        message_id: String((payload && payload.message_id) || '').trim().slice(0, 120),
+        open_chat: payload && payload.open_chat === true
+      }
     })
   );
 });
 self.addEventListener('notificationclick', function (event) {
   event.notification.close();
   var data = event.notification && event.notification.data ? event.notification.data : {};
-  var targetUrl = data && data.url ? String(data.url) : '/shop';
+  var targetUrl = buildNotificationTargetUrl(data);
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function (clientList) {
-      for (var i = 0; i < clientList.length; i += 1) {
-        var client = clientList[i];
-        if (!client || !client.url) continue;
-        if (client.url.indexOf(targetUrl) !== -1) {
-          return client.focus();
-        }
+      var matchedClient = findNotificationClientByPath(clientList, targetUrl);
+      if (matchedClient) {
+        return Promise.resolve(
+          typeof matchedClient.focus === 'function' ? matchedClient.focus() : matchedClient
+        ).then(function (client) {
+          var targetClient = client || matchedClient;
+          try {
+            if (targetClient && typeof targetClient.postMessage === 'function') {
+              targetClient.postMessage(buildNotificationPostMessageData(data));
+            }
+          } catch {}
+          return targetClient;
+        });
       }
       if (self.clients.openWindow) return self.clients.openWindow(targetUrl);
       return null;
     })
   );
 });
+
+function normalizeNotificationClientId(value) {
+  var n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return '';
+  return String(Math.trunc(n));
+}
+
+function parseSameOriginNotificationUrl(urlValue) {
+  try {
+    var parsed = new URL(String(urlValue || ''), self.location.origin);
+    if (parsed.origin !== self.location.origin) return null;
+    return parsed;
+  } catch (err) {
+    return null;
+  }
+}
+
+function buildNotificationTargetUrl(data) {
+  var baseUrl = data && data.url ? String(data.url) : '/shop';
+  var parsed = parseSameOriginNotificationUrl(baseUrl);
+  if (!parsed) return baseUrl;
+  var type = String((data && data.type) || '').trim().toLowerCase();
+  var shouldOpenChat = !!(data && data.open_chat === true && type === 'chat_message');
+  if (shouldOpenChat) {
+    parsed.searchParams.set('open_chat', '1');
+    parsed.searchParams.set('chat_source', 'push');
+    var clientId = normalizeNotificationClientId(data && data.client_id);
+    if (clientId) parsed.searchParams.set('chat_client_id', clientId);
+    var messageId = String((data && data.message_id) || '').trim();
+    if (messageId) parsed.searchParams.set('chat_message_id', messageId.slice(0, 120));
+  }
+  return parsed.pathname + parsed.search + parsed.hash;
+}
+
+function findNotificationClientByPath(clientList, targetUrl) {
+  var targetParsed = parseSameOriginNotificationUrl(targetUrl);
+  var targetPath = targetParsed ? String(targetParsed.pathname || '') : '';
+  if (!targetPath) return null;
+  for (var i = 0; i < clientList.length; i += 1) {
+    var client = clientList[i];
+    if (!client || !client.url) continue;
+    var clientParsed = parseSameOriginNotificationUrl(client.url);
+    if (!clientParsed) continue;
+    if (String(clientParsed.pathname || '') === targetPath) {
+      return client;
+    }
+  }
+  return null;
+}
+
+function buildNotificationPostMessageData(data) {
+  return {
+    type: 'chat-notification-click',
+    payload: {
+      type: String((data && data.type) || ''),
+      open_chat: data && data.open_chat === true,
+      chat_source: 'push',
+      chat_client_id: normalizeNotificationClientId(data && data.client_id),
+      chat_message_id: String((data && data.message_id) || '').trim().slice(0, 120),
+      url: String((data && data.url) || '')
+    }
+  };
+}
 `;
 app.get('/sw.js', (req, res) => {
   res.setHeader('Content-Type', 'application/javascript');
@@ -990,7 +1193,31 @@ app.use(async (req, res, next) => {
       req._resolvedTenant = tenant;
       return renderShop(req, res);
     }
+    if (isManagedTenantDomainRequest(req)) {
+      return res.status(404).send('Домен не подключен');
+    }
   } catch (e) { /* ignore */ }
+  return next();
+});
+
+app.use(async (req, res, next) => {
+  if (
+    req.path.startsWith('/api')
+    || req.path.startsWith('/static')
+    || req.path.startsWith('/dashboard')
+    || req.path === '/manifest.json'
+    || req.path === '/sw.js'
+    || req.path === '/max-app'
+  ) return next();
+  try {
+    const tenant = await findTenantByHost(req.hostname);
+    if (tenant) return next();
+    if (isManagedTenantDomainRequest(req) || !isTrustedAdminHost(req.hostname)) {
+      return res.status(404).send('Домен не подключен');
+    }
+  } catch (err) {
+    console.error('Tenant public pre-guard error:', err);
+  }
   return next();
 });
 

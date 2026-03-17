@@ -676,17 +676,33 @@
   function getCustomerToken() {
     try { return localStorage.getItem(CUSTOMER_TOKEN_KEY) || ""; } catch { return ""; }
   }
+  function dispatchCustomerProfileChanged(reason) {
+    if (typeof window === "undefined") return;
+    try {
+      const detail = {
+        reason: String(reason || ""),
+        tenantId: Number(tenantId) || 0,
+        tokenKey: CUSTOMER_TOKEN_KEY,
+        cacheKey: CUSTOMER_CACHE_KEY,
+        hasToken: !!getCustomerToken(),
+        customer: getCustomerCache(),
+      };
+      window.dispatchEvent(new CustomEvent("shop:customer-profile-changed", { detail: detail }));
+    } catch {}
+  }
   function setCustomerToken(t) {
     try {
       if (!t) localStorage.removeItem(CUSTOMER_TOKEN_KEY);
       else localStorage.setItem(CUSTOMER_TOKEN_KEY, String(t));
     } catch {}
+    dispatchCustomerProfileChanged("token");
   }
   function setCustomerCache(c) {
     try {
       if (!c) localStorage.removeItem(CUSTOMER_CACHE_KEY);
       else localStorage.setItem(CUSTOMER_CACHE_KEY, JSON.stringify(c));
     } catch {}
+    dispatchCustomerProfileChanged("cache");
   }
   function getCustomerCache() {
     try {
@@ -701,6 +717,7 @@
     meBootstrapPromise = null;
     meBootstrapToken = "";
     meBootstrapLoaded = false;
+    dispatchCustomerProfileChanged("clear");
   }
 
   // -----------------------------
@@ -1133,14 +1150,18 @@
   async function syncStorefrontChatWidgetStateOnBoot() {
     const cachedEnabled = isStorefrontChatWidgetEnabled();
     syncStorefrontChatButtonVisibility(cachedEnabled);
-    if (cachedEnabled) loadShopChat();
+    if (cachedEnabled) {
+      ensureShopChatLoaded().catch(function () {});
+    }
 
     const resolved = await resolveStorefrontChatWidgetEnabledFromApi(cachedEnabled);
     if (resolved === cachedEnabled) return;
 
     persistStorefrontChatWidgetEnabled(resolved);
     syncStorefrontChatButtonVisibility(resolved);
-    if (resolved) loadShopChat();
+    if (resolved) {
+      ensureShopChatLoaded().catch(function () {});
+    }
     broadcastStorefrontChatWidgetChanged(resolved);
   }
 
@@ -1159,7 +1180,9 @@
     if (seq !== chatWidgetChangeApplySeq) return;
     persistStorefrontChatWidgetEnabled(enabled);
     syncStorefrontChatButtonVisibility(enabled);
-    if (enabled) loadShopChat();
+    if (enabled) {
+      ensureShopChatLoaded().catch(function () {});
+    }
     broadcastStorefrontChatWidgetChanged(enabled);
   }
 

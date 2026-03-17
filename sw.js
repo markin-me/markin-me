@@ -80,7 +80,13 @@ self.addEventListener("push", function (event) {
       renotify: true,
       silent: false,
       vibrate: [140, 50, 140],
-      data: { url: url },
+      data: {
+        url: url,
+        type: String((payload && payload.type) || ""),
+        client_id: normalizeNotificationClientId(payload && payload.client_id),
+        message_id: String((payload && payload.message_id) || "").trim().slice(0, 120),
+        open_chat: payload && payload.open_chat === true,
+      },
     })
   );
 });
@@ -88,21 +94,91 @@ self.addEventListener("push", function (event) {
 self.addEventListener("notificationclick", function (event) {
   event.notification.close();
   var data = event.notification && event.notification.data ? event.notification.data : {};
-  var targetUrl = data && data.url ? String(data.url) : "/shop";
+  var targetUrl = buildNotificationTargetUrl(data);
   event.waitUntil(
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then(function (clientList) {
-      for (var i = 0; i < clientList.length; i += 1) {
-        var client = clientList[i];
-        if (!client || !client.url) continue;
-        if (client.url.indexOf(targetUrl) !== -1) {
-          return client.focus();
-        }
+      var matchedClient = findNotificationClientByPath(clientList, targetUrl);
+      if (matchedClient) {
+        return Promise.resolve(
+          typeof matchedClient.focus === "function" ? matchedClient.focus() : matchedClient
+        ).then(function (client) {
+          var targetClient = client || matchedClient;
+          try {
+            if (targetClient && typeof targetClient.postMessage === "function") {
+              targetClient.postMessage(buildNotificationPostMessageData(data));
+            }
+          } catch {}
+          return targetClient;
+        });
       }
       if (self.clients.openWindow) return self.clients.openWindow(targetUrl);
       return null;
     })
   );
 });
+
+function normalizeNotificationClientId(value) {
+  var n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return "";
+  return String(Math.trunc(n));
+}
+
+function parseSameOriginNotificationUrl(urlValue) {
+  try {
+    var parsed = new URL(String(urlValue || ""), self.location.origin);
+    if (parsed.origin !== self.location.origin) return null;
+    return parsed;
+  } catch (err) {
+    return null;
+  }
+}
+
+function buildNotificationTargetUrl(data) {
+  var baseUrl = data && data.url ? String(data.url) : "/shop";
+  var parsed = parseSameOriginNotificationUrl(baseUrl);
+  if (!parsed) return baseUrl;
+  var type = String((data && data.type) || "").trim().toLowerCase();
+  var shouldOpenChat = !!(data && data.open_chat === true && type === "chat_message");
+  if (shouldOpenChat) {
+    parsed.searchParams.set("open_chat", "1");
+    parsed.searchParams.set("chat_source", "push");
+    var clientId = normalizeNotificationClientId(data && data.client_id);
+    if (clientId) parsed.searchParams.set("chat_client_id", clientId);
+    var messageId = String((data && data.message_id) || "").trim();
+    if (messageId) parsed.searchParams.set("chat_message_id", messageId.slice(0, 120));
+  }
+  return parsed.pathname + parsed.search + parsed.hash;
+}
+
+function findNotificationClientByPath(clientList, targetUrl) {
+  var targetParsed = parseSameOriginNotificationUrl(targetUrl);
+  var targetPath = targetParsed ? String(targetParsed.pathname || "") : "";
+  if (!targetPath) return null;
+  for (var i = 0; i < clientList.length; i += 1) {
+    var client = clientList[i];
+    if (!client || !client.url) continue;
+    var clientParsed = parseSameOriginNotificationUrl(client.url);
+    if (!clientParsed) continue;
+    if (String(clientParsed.pathname || "") === targetPath) {
+      return client;
+    }
+  }
+  return null;
+}
+
+function buildNotificationPostMessageData(data) {
+  return {
+    type: "chat-notification-click",
+    payload: {
+      type: String((data && data.type) || ""),
+      open_chat: data && data.open_chat === true,
+      chat_source: "push",
+      chat_client_id: normalizeNotificationClientId(data && data.client_id),
+      chat_message_id: String((data && data.message_id) || "").trim().slice(0, 120),
+      url: String((data && data.url) || ""),
+    },
+  };
+}
 
 var SW_VERSION = "courier-screen-v1";
 var CORE_CACHE_NAME = "core-" + SW_VERSION;
