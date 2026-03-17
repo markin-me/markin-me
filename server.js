@@ -690,7 +690,27 @@ app.get('/manifest.json', async (req, res) => {
     });
   } catch (err) {
     console.error('Ошибка генерации manifest:', err);
-    res.status(500).json({});
+    const appType = normalizeManifestApp(req?.query?.app);
+    const startPath = normalizeManifestStartPath(req?.query?.start, {
+      appType,
+      tenantHostShop: false,
+    });
+    const fallbackTitle = appType === 'admin' ? 'Админка' : 'Магазин';
+    res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Vary', 'Host');
+    res.json({
+      id: appType === 'admin' ? '/pwa/admin/fallback' : '/pwa/shop/fallback',
+      name: fallbackTitle,
+      short_name: fallbackTitle,
+      start_url: startPath,
+      scope: appType === 'admin' ? '/dashboard/' : '/shop',
+      display: 'standalone',
+      orientation: 'portrait',
+      background_color: '#ffffff',
+      theme_color: '#ffffff',
+      icons: [],
+    });
   }
 });
 

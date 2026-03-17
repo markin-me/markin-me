@@ -747,7 +747,8 @@
             ${cartItems.length ? cartItems.map((item) => {
               const type = String(item?.type || "product");
               const qty = Math.max(1, Number(item?.qty || 1));
-              const qtyEditable = isRightOrderAutoQtyEditable(item);
+              const isGiftReward = isGiftRewardCartItem(item);
+              const qtyEditable = !isGiftReward && isRightOrderAutoQtyEditable(item);
               const autoFreeQty = getRightOrderAutoFreeQty(item);
               const isAutoAddItem = isRightOrderAutoAddItem(item);
               const unitPrice = roundPrice(Number(item?.unit_price || 0));
@@ -758,7 +759,8 @@
               const discountPercent = hasDiscount && oldSum > 0
                 ? Math.max(1, Math.round(((oldSum - sum) / oldSum) * 100))
                 : 0;
-              const title = String(item?.name || (type === "combo" ? "РљРѕРјР±Рѕ" : "РўРѕРІР°СЂ"));
+              const titleBase = String(item?.name || (type === "combo" ? "РљРѕРјР±Рѕ" : "РўРѕРІР°СЂ"));
+              const title = isGiftReward ? `${titleBase} (Подарок)` : titleBase;
               const sections = Array.isArray(item?.sections) ? item.sections : [];
               const optionRows = type === "product"
                 ? (() => {
@@ -852,7 +854,7 @@
                   && Number.isFinite(Number(row.sectionIndex))
                   && Number(row.sectionIndex) >= 0;
                 const canRemoveProductRow = row.rowKind === "product" && row.variantValues.length > 1;
-                const removeBtn = (canRemoveProductRow || canRemoveComboSection)
+                const removeBtn = !isGiftReward && (canRemoveProductRow || canRemoveComboSection)
                   ? `
                     <button
                       type="button"
@@ -867,13 +869,13 @@
                     >×</button>
                   `
                   : "";
-                const optionIcon = row.rowKind === "option"
+                const optionIcon = row.rowKind === "option" && !isGiftReward
                   ? `<button type="button" class="new-order-right-cart-variant-chip new-order-right-cart-variant-option-icon" data-action="right-cart-open-product" data-order-id="${Number(active?.id || 0)}" data-cart-item-id="${Number(item?.id || 0)}" data-product-id="${Number(item?.product_id || 0)}" title="РћРїС†РёРё С‚РѕРІР°СЂР°"><i class="fas fa-sliders-h"></i></button>`
                   : "";
-                const productOptionIcon = row.rowKind === "product" && row.hasOptions
+                const productOptionIcon = row.rowKind === "product" && row.hasOptions && !isGiftReward
                   ? `<button type="button" class="new-order-right-cart-variant-chip new-order-right-cart-variant-option-icon" data-action="right-cart-open-product" data-order-id="${Number(active?.id || 0)}" data-cart-item-id="${Number(item?.id || 0)}" data-product-id="${Number(item?.product_id || 0)}" title="РћРїС†РёРё С‚РѕРІР°СЂР°"><i class="fas fa-sliders-h"></i></button>`
                   : "";
-                const chips = row.variantValues.length > 1
+                const chips = row.variantValues.length > 1 && !isGiftReward
                   ? `
                     <div class="new-order-right-cart-variant-scroll no-scrollbar">
                       <div class="new-order-right-cart-variant-row">
@@ -895,7 +897,7 @@
                     </div>
                   `
                   : "";
-                const optionQtyControls = row.rowKind === "option" && row.showQtyControls
+                const optionQtyControls = row.rowKind === "option" && row.showQtyControls && !isGiftReward
                   ? `
                     <div class="new-order-right-cart-ing-controls">
                       <button type="button" class="new-order-right-cart-ing-btn${row.canMinus ? "" : " is-disabled"}" data-action="right-cart-option-qty-minus" data-order-id="${Number(active?.id || 0)}" data-cart-item-id="${Number(item?.id || 0)}" data-option-index="${Number(row.optionIndex || 0)}">−</button>
@@ -904,7 +906,7 @@
                     </div>
                   `
                   : "";
-                const optionRemoveBtn = row.rowKind === "option"
+                const optionRemoveBtn = row.rowKind === "option" && !isGiftReward
                   ? `
                     <button
                       type="button"
@@ -926,6 +928,14 @@
                         const ingName = String(ing?.ingredient_name || "").trim();
                         const qty = Number(ing?.qty || 0);
                         const unitLabel = String(ing?.unit_label || "").trim();
+                        if (isGiftReward) {
+                          return `
+                            <div class="new-order-right-cart-ing-row">
+                              <div class="new-order-right-cart-ing-qty">${escapeHtml(String(qty))}${unitLabel ? ` ${escapeHtml(unitLabel)}` : ""}</div>
+                              <div class="new-order-right-cart-ing-name" title="${escapeHtml(ingName)}">${escapeHtml(ingName)}</div>
+                            </div>
+                          `;
+                        }
                         const min = Number(ing?.qty_min ?? 0);
                         const max = Number(ing?.qty_max ?? qty);
                         const canMinus = qty > min;
@@ -960,7 +970,7 @@
                     </div>
                   `
                   : "";
-                const productControlsRow = row.rowKind !== "option" && row.variantValues.length <= 1 && (removeBtn || productOptionIcon)
+                const productControlsRow = row.rowKind !== "option" && row.variantValues.length <= 1 && !isGiftReward && (removeBtn || productOptionIcon)
                   ? `<div class="new-order-right-cart-option-controls-row">${removeBtn}${productOptionIcon}</div>`
                   : "";
                 const rowClass = row.rowKind === "combo"
@@ -996,6 +1006,7 @@
                     >
                       <i class="fas fa-trash"></i>
                     </button>
+                    ${isGiftReward ? "" : `
                     <button
                       type="button"
                       class="new-order-right-cart-item-copy"
@@ -1007,6 +1018,7 @@
                     >
                       <i class="far fa-copy"></i>
                     </button>
+                    `}
                     ${type === "combo" && Number(item?.combo_id || 0) > 0 ? `
                     <button
                       type="button"
@@ -1021,7 +1033,7 @@
                       <i class="fas fa-sliders-h"></i>
                     </button>
                     ` : ""}
-                    ${qty > 1 ? `
+                    ${!isGiftReward && qty > 1 ? `
                     <button
                       type="button"
                       class="new-order-right-cart-item-split"
@@ -1038,6 +1050,11 @@
                   <article class="new-order-right-cart-item">
                   <div class="new-order-right-cart-left">
                     <div class="new-order-right-cart-thumb">${renderCartThumb(item)}</div>
+                    ${isGiftReward ? `
+                    <div class="qty-pill qty-pill--muted new-order-right-cart-qty is-disabled" data-qty-wrap>
+                      <span class="qty-pill__center" data-qty-value>${qty}</span>
+                    </div>
+                    ` : `
                     <div class="qty-pill qty-pill--muted new-order-right-cart-qty" data-qty-wrap>
                       <button
                         class="qty-pill__btn qty-pill__btn--minus${(qty <= 0 || !qtyEditable) ? " is-disabled" : ""}"
@@ -1057,6 +1074,7 @@
                         ${qtyEditable ? "" : "disabled aria-disabled=\"true\""}
                       >+</button>
                     </div>
+                    `}
                   </div>
                   <div class="new-order-right-cart-item-main">
                     <div class="new-order-right-cart-item-title">${qty} × ${escapeHtml(title)}</div>
@@ -2110,6 +2128,10 @@
     return Number(group?.allow_customer_qty ?? 1) === 1;
   }
 
+  function isGiftRewardCartItem(item) {
+    return Number(item?.is_gift_reward || 0) === 1;
+  }
+
   function markRightOrderAutoAddDismissedByCartItem(orderId, item) {
     if (Number(item?.auto_add || 0) !== 1) return;
     const pid = Number(item?.product_id || 0);
@@ -2777,6 +2799,8 @@
         variant_group_id: variantGroupId,
         variant_value_index: variantValueIndex,
         variant_label: String(item?.variant?.label || "").trim() || null,
+        is_gift_reward: isGiftRewardCartItem(item) ? 1 : 0,
+        gift_reward_id: Number(item?.gift_reward_id || 0) > 0 ? Number(item.gift_reward_id) : null,
         auto_add: Number(item?.auto_add || 0) === 1 ? 1 : 0,
         auto_add_group_id: Number(item?.auto_add_group_id || 0) > 0 ? Number(item.auto_add_group_id) : null,
         line_total: lineTotal,
@@ -4931,6 +4955,8 @@
 
     return JSON.stringify({
       productId,
+      isGiftReward: Number(item?.is_gift_reward || 0) === 1 ? 1 : 0,
+      giftRewardId: Number(item?.gift_reward_id || 0) > 0 ? Number(item.gift_reward_id) : 0,
       variantIndex,
       options,
       ingredients,
@@ -10955,6 +10981,8 @@
       ingredients: [],
       auto_add: autoAdd,
       auto_add_group_id: autoAddGroupId,
+      is_gift_reward: Number(orderItem?.is_gift_reward || 0) === 1 ? 1 : 0,
+      gift_reward_id: Number(orderItem?.gift_reward_id || 0) > 0 ? Number(orderItem.gift_reward_id) : null,
       unit_price_before_discount: oldUnitPrice > unitPrice ? oldUnitPrice : 0,
       unit_price: unitPrice,
       sum: lineTotal,
@@ -10981,6 +11009,8 @@
     else state.optionSelections.delete(productId);
 
     const qty = Math.max(1, Number(orderItem?.qty || orderItem?.quantity || 1));
+    const lineTotal = roundPrice(Number(orderItem?.line_total ?? orderItem?.total ?? orderItem?.total_price ?? 0));
+    const oldLineTotal = roundPrice(Number(orderItem?.discount?.original_line_total || orderItem?.old_line_total || 0));
     const cartItem = buildCartItemFromProduct(productId, qty);
     if (!cartItem) return buildFallbackCartProductItem(orderItem);
     cartItem.id = Date.now() + Math.floor(Math.random() * 10000);
@@ -10988,6 +11018,11 @@
     cartItem.auto_add_group_id = cartItem.auto_add === 1 && Number(orderItem?.auto_add_group_id || 0) > 0
       ? Number(orderItem.auto_add_group_id)
       : null;
+    cartItem.is_gift_reward = Number(orderItem?.is_gift_reward || 0) === 1 ? 1 : 0;
+    cartItem.gift_reward_id = Number(orderItem?.gift_reward_id || 0) > 0 ? Number(orderItem.gift_reward_id) : null;
+    cartItem.unit_price = qty > 0 ? roundPrice(lineTotal / qty) : 0;
+    cartItem.unit_price_before_discount = oldLineTotal > lineTotal && qty > 0 ? roundPrice(oldLineTotal / qty) : 0;
+    cartItem.sum = lineTotal;
     return cartItem;
   }
 

@@ -1494,7 +1494,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       }
 
       const [existingRows] = await db.query(
-        `SELECT id, public_id, customer_id, promo_code, address_comment, cutlery_qty, discounts_json
+        `SELECT id, public_id, customer_id, promo_code, address_comment, cutlery_qty, discounts_json, items
          FROM order_orders
          WHERE tenant_id=? AND store_id=? AND id=? AND is_active=1
          LIMIT 1`,
@@ -1504,6 +1504,11 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         return res.status(404).json({ ok: false, error: "NOT_FOUND" });
       }
       const existing = existingRows[0] || {};
+      let previousItems = [];
+      try {
+        const parsedExistingItems = existing?.items ? JSON.parse(existing.items) : [];
+        if (Array.isArray(parsedExistingItems)) previousItems = parsedExistingItems;
+      } catch {}
 
       const methodCode = String(req.body?.method_code || "").trim();
       const paymentCode = String(req.body?.payment_code || "").trim();
@@ -1671,6 +1676,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           variant_group_id: Number(rawItem?.variant_group_id || 0) || null,
           variant_value_index: Number.isFinite(Number(rawItem?.variant_value_index)) ? Number(rawItem.variant_value_index) : null,
           variant_label: helpers.strOrNull(rawItem?.variant_label),
+          is_gift_reward: Number(rawItem?.is_gift_reward || 0) === 1 ? 1 : 0,
+          gift_reward_id: Number(rawItem?.gift_reward_id || 0) > 0 ? Number(rawItem.gift_reward_id) : null,
           line_total: lineTotal,
           old_line_total: originalLineTotal,
         });
@@ -2124,6 +2131,31 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           id,
         ]
       );
+
+      const previousGiftRewardIds = new Set(
+        previousItems
+          .map((item) => Number(item?.gift_reward_id || 0))
+          .filter((rewardId, index, source) => rewardId > 0 && source.indexOf(rewardId) === index)
+      );
+      const nextGiftRewardIds = new Set(
+        items
+          .map((item) => Number(item?.gift_reward_id || 0))
+          .filter((rewardId, index, source) => rewardId > 0 && source.indexOf(rewardId) === index)
+      );
+      const removedGiftRewardIds = [...previousGiftRewardIds].filter((rewardId) => !nextGiftRewardIds.has(rewardId));
+      const rewardCustomerId = Number(existing?.customer_id || customerId || 0);
+      if (removedGiftRewardIds.length && rewardCustomerId > 0) {
+        await db.query(
+          `UPDATE mkt_discount_rewards
+              SET status='available', used_at=NULL, updated_at=NOW()
+            WHERE tenant_id=?
+              AND customer_id=?
+              AND reward_type='gift'
+              AND status='used'
+              AND id IN (?)`,
+          [tenantId, rewardCustomerId, removedGiftRewardIds]
+        );
+      }
 
       const payload = await fetchOrderPayload(tenantId, storeId, id);
       if (payload && ordersEvents && typeof ordersEvents.publish === "function") {

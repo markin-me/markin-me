@@ -25,6 +25,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
   const router = express.Router();
   let orderDeliveryTypeColumnsReady = false;
   let ensureOrderDeliveryTypeColumnsPromise = null;
+  let discountProductConfigColumnReady = false;
+  let ensureDiscountProductConfigColumnPromise = null;
   const PUBLIC_CACHE_TTL_MS = Object.freeze({
     categories: 30000,
     cartUpsell: 15000,
@@ -54,11 +56,11 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       const requiredColumns = [
         {
           name: 'require_client_data',
-          sql: "TINYINT(1) NOT NULL DEFAULT 1 COMMENT 'Обязательны ли данные клиента (имя/телефон)'",
+          sql: "TINYINT(1) NOT NULL DEFAULT 1 COMMENT 'РћР±СЏР·Р°С‚РµР»СЊРЅС‹ Р»Рё РґР°РЅРЅС‹Рµ РєР»РёРµРЅС‚Р° (РёРјСЏ/С‚РµР»РµС„РѕРЅ)'",
         },
         {
           name: 'show_on_site',
-          sql: "TINYINT(1) NOT NULL DEFAULT 1 COMMENT 'Показывать способ на сайте'",
+          sql: "TINYINT(1) NOT NULL DEFAULT 1 COMMENT 'РџРѕРєР°Р·С‹РІР°С‚СЊ СЃРїРѕСЃРѕР± РЅР° СЃР°Р№С‚Рµ'",
         },
       ];
 
@@ -90,6 +92,38 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       });
 
     return ensureOrderDeliveryTypeColumnsPromise;
+  }
+
+  async function ensureDiscountProductConfigColumn() {
+    if (discountProductConfigColumnReady) return true;
+    if (ensureDiscountProductConfigColumnPromise) return ensureDiscountProductConfigColumnPromise;
+
+    ensureDiscountProductConfigColumnPromise = (async () => {
+      const [columnRows] = await db.query('SHOW COLUMNS FROM mkt_discount_products');
+      const existing = new Set((Array.isArray(columnRows) ? columnRows : []).map((row) => String(row?.Field || '').trim()).filter(Boolean));
+      if (!existing.has('product_config_json')) {
+        try {
+          await db.query('ALTER TABLE mkt_discount_products ADD COLUMN `product_config_json` LONGTEXT NULL AFTER `combo_id`');
+          existing.add('product_config_json');
+        } catch (err) {
+          if (String(err?.code || '') !== 'ER_DUP_FIELDNAME') throw err;
+          existing.add('product_config_json');
+        }
+      }
+      discountProductConfigColumnReady = existing.has('product_config_json');
+      return discountProductConfigColumnReady;
+    })()
+      .catch((err) => {
+        ensureDiscountProductConfigColumnPromise = null;
+        throw err;
+      })
+      .finally(() => {
+        if (discountProductConfigColumnReady) {
+          ensureDiscountProductConfigColumnPromise = null;
+        }
+      });
+
+    return ensureDiscountProductConfigColumnPromise;
   }
 
   // ------------------------------
@@ -604,7 +638,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       || '\u041e\u043f\u0435\u0440\u0430\u0442\u043e\u0440';
     const quickQuestionsConfig = parseTenantChatQuickQuestionsConfig(row.chat_quick_questions_json);
     const quickQuestions = buildEnabledChatQuickQuestionLabels(quickQuestionsConfig);
-    return {
+    const snapshot = {
       assistant_name: assistantName,
       assistant_gender: assistantGender,
       welcome_message: welcomeMessage,
@@ -615,6 +649,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       quick_questions_enabled: quickQuestionsEnabled,
       is_enabled: isEnabled,
     };
+    if (!publicDiscountText(row?.name).trim()) snapshot.name = 'Товар';
+    return snapshot;
   }
 
   function normalizePhoneLookupCandidates(phoneRaw) {
@@ -879,8 +915,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
   }
 
   /**
-   * РњРёРЅРёРјР°Р»СЊРЅР°СЏ РІРѕР·РјРѕР¶РЅР°СЏ С†РµРЅР° С‚РѕРІР°СЂР° СЃ СѓС‡С‘С‚РѕРј РІР°СЂРёР°РЅС‚РѕРІ (РїРѕСЂС†РёР№/РѕР±СЉС‘РјРѕРІ).
-   * Р•СЃР»Рё Сѓ С‚РѕРІР°СЂР° РµСЃС‚СЊ РІР°СЂРёР°РЅС‚С‹ вЂ” РїРµСЂРµР±РёСЂР°РµРј РІСЃРµ Р·РЅР°С‡РµРЅРёСЏ Рё РІРѕР·РІСЂР°С‰Р°РµРј РјРёРЅРёРјСѓРј; РёРЅР°С‡Рµ вЂ” Р±Р°Р·РѕРІСѓСЋ С†РµРЅСѓ.
+   * Р СљР С‘Р Р…Р С‘Р СР В°Р В»РЎРЉР Р…Р В°РЎРЏ Р Р†Р С•Р В·Р СР С•Р В¶Р Р…Р В°РЎРЏ РЎвЂ Р ВµР Р…Р В° РЎвЂљР С•Р Р†Р В°РЎР‚Р В° РЎРѓ РЎС“РЎвЂЎРЎвЂРЎвЂљР С•Р С Р Р†Р В°РЎР‚Р С‘Р В°Р Р…РЎвЂљР С•Р Р† (Р С—Р С•РЎР‚РЎвЂ Р С‘Р в„–/Р С•Р В±РЎР‰РЎвЂР СР С•Р Р†).
+   * Р вЂўРЎРѓР В»Р С‘ РЎС“ РЎвЂљР С•Р Р†Р В°РЎР‚Р В° Р ВµРЎРѓРЎвЂљРЎРЉ Р Р†Р В°РЎР‚Р С‘Р В°Р Р…РЎвЂљРЎвЂ№ РІР‚вЂќ Р С—Р ВµРЎР‚Р ВµР В±Р С‘РЎР‚Р В°Р ВµР С Р Р†РЎРѓР Вµ Р В·Р Р…Р В°РЎвЂЎР ВµР Р…Р С‘РЎРЏ Р С‘ Р Р†Р С•Р В·Р Р†РЎР‚Р В°РЎвЂ°Р В°Р ВµР С Р СР С‘Р Р…Р С‘Р СРЎС“Р С; Р С‘Р Р…Р В°РЎвЂЎР Вµ РІР‚вЂќ Р В±Р В°Р В·Р С•Р Р†РЎС“РЎР‹ РЎвЂ Р ВµР Р…РЎС“.
    */
   async function computeMinPriceForProduct(product, variant, getConversionFactor, roundPrice) {
     const basePrice = Number(product.price || 0);
@@ -1001,8 +1037,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
   }
 
   /**
-   * РћР±РѕРіР°С‚РёС‚СЊ С‚РѕРІР°СЂС‹ РёРЅС„РѕСЂРјР°С†РёРµР№ Рѕ СЃРєРёРґРєР°С…
-   * @param {Object[]} rows - РјР°СЃСЃРёРІ С‚РѕРІР°СЂРѕРІ
+   * Р С›Р В±Р С•Р С–Р В°РЎвЂљР С‘РЎвЂљРЎРЉ РЎвЂљР С•Р Р†Р В°РЎР‚РЎвЂ№ Р С‘Р Р…РЎвЂћР С•РЎР‚Р СР В°РЎвЂ Р С‘Р ВµР в„– Р С• РЎРѓР С”Р С‘Р Т‘Р С”Р В°РЎвЂ¦
+   * @param {Object[]} rows - Р СР В°РЎРѓРЎРѓР С‘Р Р† РЎвЂљР С•Р Р†Р В°РЎР‚Р С•Р Р†
    * @param {number} tenantId
    * @param {number} storeId
    */
@@ -1012,7 +1048,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     const productIds = rows.map(r => Number(r.id)).filter(Boolean);
     if (!productIds.length) return;
 
-    // РџРѕР»СѓС‡Р°РµРј РєР°С‚РµРіРѕСЂРёРё РґР»СЏ РєР°Р¶РґРѕРіРѕ С‚РѕРІР°СЂР°
+    // Р СџР С•Р В»РЎС“РЎвЂЎР В°Р ВµР С Р С”Р В°РЎвЂљР ВµР С–Р С•РЎР‚Р С‘Р С‘ Р Т‘Р В»РЎРЏ Р С”Р В°Р В¶Р Т‘Р С•Р С–Р С• РЎвЂљР С•Р Р†Р В°РЎР‚Р В°
     const placeholders = productIds.map(() => '?').join(',');
     const [catRows] = await db.query(
       `SELECT product_id, category_id FROM prod_product_categories
@@ -1027,7 +1063,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       catByProduct.get(pid).push(Number(r.category_id));
     }
 
-    // РџРѕР»СѓС‡Р°РµРј РІСЃРµ Р°РєС‚РёРІРЅС‹Рµ СЃРєРёРґРєРё РЅР° С‚РѕРІР°СЂС‹ Рё РєР°С‚РµРіРѕСЂРёРё
+    // Р СџР С•Р В»РЎС“РЎвЂЎР В°Р ВµР С Р Р†РЎРѓР Вµ Р В°Р С”РЎвЂљР С‘Р Р†Р Р…РЎвЂ№Р Вµ РЎРѓР С”Р С‘Р Т‘Р С”Р С‘ Р Р…Р В° РЎвЂљР С•Р Р†Р В°РЎР‚РЎвЂ№ Р С‘ Р С”Р В°РЎвЂљР ВµР С–Р С•РЎР‚Р С‘Р С‘
     const [discountRows] = await db.query(
       `SELECT d.*, dp.product_id, dp.category_id, dp.combo_id
        FROM mkt_discounts d
@@ -1037,7 +1073,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       [tenantId, storeId, ...productIds]
     );
 
-    // Р“СЂСѓРїРїРёСЂСѓРµРј СЃРєРёРґРєРё РїРѕ С‚РѕРІР°СЂР°Рј Рё РєР°С‚РµРіРѕСЂРёСЏРј
+    // Р вЂњРЎР‚РЎС“Р С—Р С—Р С‘РЎР‚РЎС“Р ВµР С РЎРѓР С”Р С‘Р Т‘Р С”Р С‘ Р С—Р С• РЎвЂљР С•Р Р†Р В°РЎР‚Р В°Р С Р С‘ Р С”Р В°РЎвЂљР ВµР С–Р С•РЎР‚Р С‘РЎРЏР С
     const discountsByProduct = new Map();
     const discountsByCategory = new Map();
 
@@ -1054,13 +1090,13 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       }
     }
 
-    // РџСЂРёРјРµРЅСЏРµРј СЃРєРёРґРєРё Рє РєР°Р¶РґРѕРјСѓ С‚РѕРІР°СЂСѓ
+    // Р СџРЎР‚Р С‘Р СР ВµР Р…РЎРЏР ВµР С РЎРѓР С”Р С‘Р Т‘Р С”Р С‘ Р С” Р С”Р В°Р В¶Р Т‘Р С•Р СРЎС“ РЎвЂљР С•Р Р†Р В°РЎР‚РЎС“
     for (const row of rows) {
       const pid = Number(row.id);
       const discounts = [];
       const seenIds = new Set();
 
-      // РџСЂСЏРјС‹Рµ СЃРєРёРґРєРё РЅР° С‚РѕРІР°СЂ
+      // Р СџРЎР‚РЎРЏР СРЎвЂ№Р Вµ РЎРѓР С”Р С‘Р Т‘Р С”Р С‘ Р Р…Р В° РЎвЂљР С•Р Р†Р В°РЎР‚
       const directDiscounts = discountsByProduct.get(pid) || [];
       for (const d of directDiscounts) {
         if (!seenIds.has(d.id) && discountHelpers.isDiscountActive(d)) {
@@ -1069,7 +1105,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         }
       }
 
-      // РЎРєРёРґРєРё РїРѕ РєР°С‚РµРіРѕСЂРёСЏРј С‚РѕРІР°СЂР°
+      // Р РЋР С”Р С‘Р Т‘Р С”Р С‘ Р С—Р С• Р С”Р В°РЎвЂљР ВµР С–Р С•РЎР‚Р С‘РЎРЏР С РЎвЂљР С•Р Р†Р В°РЎР‚Р В°
       const cats = catByProduct.get(pid) || [];
       for (const catId of cats) {
         const catDiscounts = discountsByCategory.get(catId) || [];
@@ -1082,7 +1118,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       }
 
       if (discounts.length > 0) {
-        // РЎРѕСЂС‚РёСЂСѓРµРј РїРѕ РїСЂРёРѕСЂРёС‚РµС‚Сѓ
+        // Р РЋР С•РЎР‚РЎвЂљР С‘РЎР‚РЎС“Р ВµР С Р С—Р С• Р С—РЎР‚Р С‘Р С•РЎР‚Р С‘РЎвЂљР ВµРЎвЂљРЎС“
         discounts.sort((a, b) => (b.priority || 0) - (a.priority || 0));
         const best = discounts[0];
         const price = Number(row.display_price || row.price || 0);
@@ -1135,7 +1171,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
   }
 
   function makeToken32() {
-    // session/public id вЂ“ 32 hex or uuid without dashes
+    // session/public id РІР‚вЂњ 32 hex or uuid without dashes
     if (crypto.randomUUID) return crypto.randomUUID().replaceAll('-', '');
     return crypto.randomBytes(16).toString('hex');
   }
@@ -1199,7 +1235,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
   }
 
   async function getActiveStatusIdDefault(tenantId, storeId) {
-    // РїСЂРѕР±СѓРµРј "new", РµСЃР»Рё РЅРµС‚ вЂ” РїРµСЂРІС‹Р№ Р°РєС‚РёРІРЅС‹Р№ РїРѕ sort
+    // Р С—РЎР‚Р С•Р В±РЎС“Р ВµР С "new", Р ВµРЎРѓР В»Р С‘ Р Р…Р ВµРЎвЂљ РІР‚вЂќ Р С—Р ВµРЎР‚Р Р†РЎвЂ№Р в„– Р В°Р С”РЎвЂљР С‘Р Р†Р Р…РЎвЂ№Р в„– Р С—Р С• sort
     const [r1] = await db.query(
       `SELECT id FROM order_statuses WHERE tenant_id=? AND store_id=? AND code='new' AND is_active=1 LIMIT 1`,
       [tenantId, storeId]
@@ -1258,13 +1294,14 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       );
     } catch {}
 
-    return {
+    const data = {
       id: Number(r.customer_id),
       name: r.name,
       phone: r.phone,
       birthday: r.birthday || null,
       photo: r.photo || null,
     };
+    return data;
   }
 
 
@@ -1389,7 +1426,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       deliveryCost = stored && stored > 0 ? stored : computed;
     }
 
-    return {
+    const snapshot = {
       id: r.id,
       public_id: r.public_id || null,
       created_at: helpers.utcToStoreDateTime(r.created_at_utc ?? r.created_at, storeTimezone),
@@ -1728,6 +1765,121 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     return crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex');
   }
 
+  function normalizePublicProductConfigPayload(value, fallbackProductId = null) {
+    const source = parsePublicDiscountObject(value, null);
+    if (!source || typeof source !== 'object' || Array.isArray(source)) return null;
+    const productId = toPositiveIntOrNull(source.product_id || fallbackProductId);
+    if (!productId) return null;
+    const options = (Array.isArray(source.options) ? source.options : [])
+      .map((option) => ({
+        id: toPositiveIntOrNull(option?.id),
+        qty: Math.max(1, Number(option?.qty ?? option?.quantity ?? 1) || 1),
+        target_product_id: toPositiveIntOrNull(option?.target_product_id || option?.product_id),
+        variant_group_id: toPositiveIntOrNull(option?.variant_group_id),
+        variant_value_index: toNonNegativeIntOrNull(option?.variant_value_index),
+      }))
+      .filter((option) => option.id)
+      .sort((a, b) => (
+        a.id - b.id
+        || Number(a.target_product_id || 0) - Number(b.target_product_id || 0)
+        || Number(a.variant_group_id || 0) - Number(b.variant_group_id || 0)
+        || Number(a.variant_value_index || 0) - Number(b.variant_value_index || 0)
+      ));
+    const ingredients = (Array.isArray(source.ingredients) ? source.ingredients : [])
+      .map((ingredient) => ({
+        ingredient_id: toPositiveIntOrNull(ingredient?.ingredient_id || ingredient?.product_id),
+        qty: Number(ingredient?.qty ?? ingredient?.quantity ?? 0),
+      }))
+      .filter((ingredient) => ingredient.ingredient_id)
+      .sort((a, b) => a.ingredient_id - b.ingredient_id);
+    return {
+      type: 'product',
+      product_id: productId,
+      variant_group_id: toPositiveIntOrNull(source.variant_group_id),
+      variant_value_index: toNonNegativeIntOrNull(source.variant_value_index),
+      options,
+      ingredients,
+    };
+  }
+
+  function buildPublicProductConfigSignature(value, fallbackProductId = null) {
+    const payload = normalizePublicProductConfigPayload(value, fallbackProductId);
+    if (!payload) return null;
+    return crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+  }
+
+  function normalizePublicProductConfigMode(value, fallback = 'any') {
+    const raw = publicDiscountText(value).toLowerCase();
+    if (raw === 'exact') return 'exact';
+    if (raw === 'any') return 'any';
+    const fallbackRaw = publicDiscountText(fallback).toLowerCase();
+    return fallbackRaw === 'exact' ? 'exact' : 'any';
+  }
+
+  function getPublicDiscountProductsConfigMode(discountOrMechanic, fallback = 'any') {
+    const source = discountOrMechanic && typeof discountOrMechanic === 'object'
+      ? discountOrMechanic
+      : {};
+    const mechanic = parsePublicDiscountObject(
+      source?.mechanic_config_json ?? source,
+      {}
+    );
+    return normalizePublicProductConfigMode(
+      source?.products_config_mode ?? mechanic?.products_config_mode,
+      fallback
+    );
+  }
+
+  function normalizePublicDiscountTargetRow(row, fallbackMode = 'any') {
+    if (!row || typeof row !== 'object') return null;
+    const productId = Number(row?.product_id || row?.entity_id || row?.id || 0);
+    const categoryId = Number(row?.category_id || row?.entity_id || row?.id || 0);
+    const comboId = Number(row?.combo_id || row?.entity_id || row?.id || 0);
+    const explicitType = publicDiscountText(row?.entity_type || row?.target_type).toLowerCase();
+    const entityType = ['product', 'category', 'combo'].includes(explicitType)
+      ? explicitType
+      : (productId > 0
+          ? 'product'
+          : categoryId > 0
+            ? 'category'
+            : comboId > 0
+              ? 'combo'
+              : '');
+    if (!entityType) return null;
+    const configMode = entityType === 'product'
+      ? normalizePublicProductConfigMode(row?.config_mode ?? fallbackMode, fallbackMode)
+      : 'any';
+    return {
+      ...row,
+      entity_type: entityType,
+      product_id: productId > 0 ? productId : null,
+      category_id: categoryId > 0 ? categoryId : null,
+      combo_id: comboId > 0 ? comboId : null,
+      config_mode: configMode,
+      product_config: entityType === 'product'
+        ? normalizePublicProductConfigPayload(row?.product_config ?? row?.product_config_json, productId)
+        : null,
+    };
+  }
+
+  function buildPublicGiftRewardSelectionKey(row, index = 0) {
+    const productId = Number(row?.product_id ?? row?.entity_id ?? row?.id ?? 0) || 0;
+    const signature = buildPublicProductConfigSignature(
+      row?.product_config ?? row?.product_config_json,
+      productId
+    ) || 'any';
+    const safeIndex = Math.max(0, Math.trunc(Number(index || 0) || 0));
+    return `${productId}:${signature}:${safeIndex}`;
+  }
+
+  function addPublicExactProductSignature(map, productId, signature) {
+    if (!(productId > 0) || !signature) return;
+    if (!map.has(productId)) {
+      map.set(productId, new Set());
+    }
+    map.get(productId).add(signature);
+  }
+
   function extractFavoritePreview(item) {
     const snapshot = item && typeof item === 'object' ? item : {};
     const isCombo = str(snapshot.type || '').toLowerCase() === 'combo';
@@ -1990,7 +2142,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         return res.status(400).json({ ok: false, error: 'BIRTHDAY_REQUIRED' });
       }
 
-      // РёС‰РµРј РєР»РёРµРЅС‚Р°
+      // Р С‘РЎвЂ°Р ВµР С Р С”Р В»Р С‘Р ВµР Р…РЎвЂљР В°
       const [ex] = await db.query(
         `SELECT c.id, c.name, c.phone, DATE_FORMAT(c.birthday, '%Y-%m-%d') AS birthday, c.is_active, c.phone_verified_at,
                 t.tg_login_enabled, t.max_login_enabled
@@ -2004,7 +2156,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       let customerId = null;
 
       if (!ex.length) {
-        // СЃРѕР·РґР°С‘Рј РЅРѕРІРѕРіРѕ РєР»РёРµРЅС‚Р°
+        // РЎРѓР С•Р В·Р Т‘Р В°РЎвЂР С Р Р…Р С•Р Р†Р С•Р С–Р С• Р С”Р В»Р С‘Р ВµР Р…РЎвЂљР В°
         const [ins] = await db.query(
           `INSERT INTO cust_customers
            (tenant_id, name, phone, birthday, is_active, registration_date)
@@ -2024,12 +2176,12 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
 
         customerId = Number(c.id);
 
-        // РµСЃР»Рё birthday СѓР¶Рµ РµСЃС‚СЊ вЂ” РїСЂРѕРІРµСЂСЏРµРј
+        // Р ВµРЎРѓР В»Р С‘ birthday РЎС“Р В¶Р Вµ Р ВµРЎРѓРЎвЂљРЎРЉ РІР‚вЂќ Р С—РЎР‚Р С•Р Р†Р ВµРЎР‚РЎРЏР ВµР С
         if (c.birthday && String(c.birthday) !== String(birthday)) {
           return res.status(401).json({ ok: false, error: 'WRONG_BIRTHDAY' });
         }
 
-        // РµСЃР»Рё birthday Р±С‹Р» NULL вЂ” Р·Р°РїРёС€РµРј (РїРµСЂРІС‹Р№ РІС…РѕРґ)
+        // Р ВµРЎРѓР В»Р С‘ birthday Р В±РЎвЂ№Р В» NULL РІР‚вЂќ Р В·Р В°Р С—Р С‘РЎв‚¬Р ВµР С (Р С—Р ВµРЎР‚Р Р†РЎвЂ№Р в„– Р Р†РЎвЂ¦Р С•Р Т‘)
         if (!c.birthday) {
           await db.query(
             `UPDATE cust_customers SET birthday=? WHERE tenant_id=? AND id=?`,
@@ -2038,10 +2190,10 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         }
       }
 
-      // СЃРѕР·РґР°С‘Рј СЃРµСЃСЃРёСЋ
+      // РЎРѓР С•Р В·Р Т‘Р В°РЎвЂР С РЎРѓР ВµРЎРѓРЎРѓР С‘РЎР‹
       const token = makeToken32();
 
-      // СЃСЂРѕРє 30 РґРЅРµР№
+      // РЎРѓРЎР‚Р С•Р С” 30 Р Т‘Р Р…Р ВµР в„–
       await dualWriteSession(db, {
         tenantId,
         storeId: 1,
@@ -3017,7 +3169,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         [tenantId]
       );
 
-      // Р”Р»СЏ РєР°Р¶РґРѕРіРѕ С„РёР»РёР°Р»Р° Р·Р°РіСЂСѓР¶Р°РµРј С‡Р°СЃС‹ СЂР°Р±РѕС‚С‹ Рё РїСЂРѕРІРµСЂСЏРµРј СЃС‚Р°С‚СѓСЃ
+      // Р вЂќР В»РЎРЏ Р С”Р В°Р В¶Р Т‘Р С•Р С–Р С• РЎвЂћР С‘Р В»Р С‘Р В°Р В»Р В° Р В·Р В°Р С–РЎР‚РЎС“Р В¶Р В°Р ВµР С РЎвЂЎР В°РЎРѓРЎвЂ№ РЎР‚Р В°Р В±Р С•РЎвЂљРЎвЂ№ Р С‘ Р С—РЎР‚Р С•Р Р†Р ВµРЎР‚РЎРЏР ВµР С РЎРѓРЎвЂљР В°РЎвЂљРЎС“РЎРѓ
       const storesWithHours = await Promise.all(rows.map(async (store) => {
         const [storeHours] = await db.query(
           `SELECT day_of_week, opens_at, closes_at, is_closed
@@ -3039,7 +3191,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
       res.json({ ok: true, stores: storesWithHours });
     } catch (err) {
-      console.error('РћС€РёР±РєР° РїРѕР»СѓС‡РµРЅРёСЏ С‚РѕС‡РµРє РїСЂРѕРґР°Р¶:', err);
+      console.error('Р С›РЎв‚¬Р С‘Р В±Р С”Р В° Р С—Р С•Р В»РЎС“РЎвЂЎР ВµР Р…Р С‘РЎРЏ РЎвЂљР С•РЎвЂЎР ВµР С” Р С—РЎР‚Р С•Р Т‘Р В°Р В¶:', err);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });
@@ -3155,7 +3307,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
         if (!file) return res.status(400).json({ ok: false, error: 'PHOTO_REQUIRED' });
 
-        // РЎРѕР·РґР°С‘Рј WebP-РІР°СЂРёР°РЅС‚ Р°РІР°С‚Р°СЂР° (РѕСЂРёРіРёРЅР°Р» РѕСЃС‚Р°С‘С‚СЃСЏ РєР°Рє fallback)
+        // Р РЋР С•Р В·Р Т‘Р В°РЎвЂР С WebP-Р Р†Р В°РЎР‚Р С‘Р В°Р Р…РЎвЂљ Р В°Р Р†Р В°РЎвЂљР В°РЎР‚Р В° (Р С•РЎР‚Р С‘Р С–Р С‘Р Р…Р В°Р В» Р С•РЎРѓРЎвЂљР В°РЎвЂРЎвЂљРЎРѓРЎРЏ Р С”Р В°Р С” fallback)
         const originalPath = file.path || path.join(__dirname, '..', '..', 'static', 'uploads', 'avatars', file.filename);
         const [tenantRows] = await db.query(
           'SELECT img_webp_quality, img_main_width, img_webp_aggressive, img_delete_original FROM ten_tenants WHERE id=? LIMIT 1',
@@ -3710,7 +3862,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
       }
 
-      // РџСЂРѕРІРµСЂСЏРµРј, С‡С‚Рѕ Р·Р°РєР°Р· РїСЂРёРЅР°РґР»РµР¶РёС‚ РєР»РёРµРЅС‚Сѓ
+      // Р СџРЎР‚Р С•Р Р†Р ВµРЎР‚РЎРЏР ВµР С, РЎвЂЎРЎвЂљР С• Р В·Р В°Р С”Р В°Р В· Р С—РЎР‚Р С‘Р Р…Р В°Р Т‘Р В»Р ВµР В¶Р С‘РЎвЂљ Р С”Р В»Р С‘Р ВµР Р…РЎвЂљРЎС“
       if (Number(payload.customer_id) !== Number(customer.id)) {
         return res.status(403).json({ ok: false, error: 'FORBIDDEN' });
       }
@@ -3723,7 +3875,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
   });
 
   // ------------------------------
-  // РЎРєРёРґРєРё РєР»РёРµРЅС‚Р°
+  // Р РЋР С”Р С‘Р Т‘Р С”Р С‘ Р С”Р В»Р С‘Р ВµР Р…РЎвЂљР В°
   // ------------------------------
   // GET /api/public/me/favorites
   router.get('/me/favorites', async (req, res) => {
@@ -3923,6 +4075,2339 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     }
   });
 
+  function publicDiscountText(value) {
+    return typeof value === 'string' ? value.trim() : '';
+  }
+
+  function parsePublicDiscountObject(value, fallback = {}) {
+    if (!value) return fallback;
+    if (typeof value === 'object' && !Array.isArray(value)) return value;
+    if (typeof value === 'string') {
+      try {
+        const parsed = JSON.parse(value);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          return parsed;
+        }
+      } catch {}
+    }
+    return fallback;
+  }
+
+  function normalizePublicMechanicType(value) {
+    const raw = publicDiscountText(value).toLowerCase();
+    if (['simple_discount', 'buy_x_get_y', 'threshold', 'loyalty_progress'].includes(raw)) return raw;
+    return 'simple_discount';
+  }
+
+  function getPublicSimpleDiscountVariant(discount) {
+    const config = parsePublicDiscountObject(discount?.mechanic_config_json, {});
+    const fallback = publicDiscountText(discount?.activation_mode).toLowerCase() === 'promo_code'
+      ? 'promo_code'
+      : publicDiscountText(discount?.discount_type).toLowerCase();
+    const raw = publicDiscountText(config?.simple_variant ?? config?.variant ?? fallback).toLowerCase();
+    if (['promo_code', 'percent', 'fixed', 'special_price'].includes(raw)) return raw;
+    return fallback === 'promo_code' ? 'promo_code' : 'percent';
+  }
+
+  function isPublicPromoSimpleDiscount(discount) {
+    return normalizePublicMechanicType(discount?.mechanic_type) === 'simple_discount'
+      && getPublicSimpleDiscountVariant(discount) === 'promo_code';
+  }
+
+  function isPublicAutomaticSimpleDiscount(discount) {
+    return normalizePublicMechanicType(discount?.mechanic_type) === 'simple_discount'
+      && getPublicSimpleDiscountVariant(discount) !== 'promo_code';
+  }
+
+
+  function formatPublicDiscountBadgeText(discountType, discountValue) {
+    const type = publicDiscountText(discountType).toLowerCase();
+    const value = Number(discountValue);
+    if (!Number.isFinite(value) || value <= 0) return '';
+    if (type === 'percent') return '-' + Math.round(value) + '%';
+    if (type === 'fixed') return '-' + value + ' \u20bd';
+    if (type === 'special_price') return String(value) + ' \u20bd';
+    return '';
+  }
+
+  function formatPublicApplyScopeText(applyTo) {
+    const raw = publicDiscountText(applyTo).toLowerCase();
+    if (raw === 'order') return '\u041d\u0430 \u0432\u0435\u0441\u044c \u0437\u0430\u043a\u0430\u0437';
+    if (raw === 'product') return '\u041d\u0430 \u0442\u043e\u0432\u0430\u0440\u044b';
+    if (raw === 'category') return '\u041d\u0430 \u043a\u0430\u0442\u0435\u0433\u043e\u0440\u0438\u0438 \u0442\u043e\u0432\u0430\u0440\u043e\u0432';
+    if (raw === 'combo') return '\u041d\u0430 \u043a\u043e\u043c\u0431\u043e';
+    return '';
+  }
+
+  function buildPublicDiscountBenefitCard(discount) {
+    return {
+      id: Number(discount?.id || 0),
+      kind: 'discount',
+      title: publicDiscountText(discount?.title) || '\u0421\u043a\u0438\u0434\u043a\u0430',
+      description: publicDiscountText(discount?.description),
+      badge_text: formatPublicDiscountBadgeText(discount?.discount_type, discount?.discount_value),
+      apply_scope_text: formatPublicApplyScopeText(discount?.apply_to),
+      expires_at: discount?.ends_at || null,
+      is_stackable: Number(discount?.is_stackable || 0) === 1,
+      priority: Number(discount?.priority || 0),
+      discount_type: publicDiscountText(discount?.discount_type).toLowerCase() || 'percent',
+      discount_value: Number(discount?.discount_value || 0),
+      apply_to: publicDiscountText(discount?.apply_to).toLowerCase() || 'order',
+      min_order_amount: discount?.min_order_amount != null ? Number(discount.min_order_amount || 0) : null,
+      max_discount_amount: discount?.max_discount_amount != null ? Number(discount.max_discount_amount || 0) : null,
+    };
+  }
+
+  function getPublicPromoRewardMeta(discount) {
+    const config = parsePublicDiscountObject(discount?.mechanic_config_json, {});
+    const reward = parsePublicDiscountObject(config?.promo_reward, {});
+    const rewardType = publicDiscountText(
+      reward?.reward_type
+        ?? (
+          ['gift', 'product_discount'].includes(publicDiscountText(reward?.reward_kind).toLowerCase())
+            ? 'product'
+            : 'discount'
+        )
+    ).toLowerCase() === 'product'
+      ? 'product'
+      : 'discount';
+    const productRewardType = ['gift', 'product_discount'].includes(publicDiscountText(reward?.product_reward_type ?? reward?.reward_kind).toLowerCase())
+      ? publicDiscountText(reward?.product_reward_type ?? reward?.reward_kind).toLowerCase()
+      : 'gift';
+
+    if (rewardType === 'product') {
+      if (productRewardType === 'gift') {
+        return {
+          badge_text: '\u041f\u043e\u0434\u0430\u0440\u043e\u043a',
+          description: publicDiscountText(discount?.description) || '\u041f\u043e\u0434\u0430\u0440\u043e\u043a \u043f\u043e \u043f\u0440\u043e\u043c\u043e\u043a\u043e\u0434\u0443',
+          apply_scope_text: '\u041d\u0430 \u0442\u043e\u0432\u0430\u0440\u044b',
+        };
+      }
+      return {
+        badge_text: formatPublicDiscountBadgeText(reward?.discount_type, reward?.discount_value) || '\u0421\u043a\u0438\u0434\u043a\u0430',
+        description: publicDiscountText(discount?.description) || '\u0421\u043a\u0438\u0434\u043a\u0430 \u043d\u0430 \u0442\u043e\u0432\u0430\u0440 \u043f\u043e \u043f\u0440\u043e\u043c\u043e\u043a\u043e\u0434\u0443',
+        apply_scope_text: '\u041d\u0430 \u0442\u043e\u0432\u0430\u0440\u044b',
+      };
+    }
+
+    return {
+      badge_text: formatPublicDiscountBadgeText(reward?.discount_type, reward?.discount_value) || '\u0421\u043a\u0438\u0434\u043a\u0430',
+      description: publicDiscountText(discount?.description) || '\u0421\u043a\u0438\u0434\u043a\u0430 \u043f\u043e \u043f\u0440\u043e\u043c\u043e\u043a\u043e\u0434\u0443',
+      apply_scope_text: formatPublicApplyScopeText(reward?.apply_to ?? discount?.apply_to),
+    };
+  }
+
+  function buildPublicPromoCodeCards(discount, promoRows, customerId) {
+    const rewardMeta = getPublicPromoRewardMeta(discount);
+    return (Array.isArray(promoRows) ? promoRows : [])
+      .filter((row) => {
+        const codeMode = publicDiscountText(row?.code_mode).toLowerCase();
+        const assignedCustomerId = Number(row?.assigned_customer_id || 0);
+        if (codeMode === 'shared') return true;
+        return assignedCustomerId > 0 && assignedCustomerId === Number(customerId || 0);
+      })
+      .map((row) => ({
+        id: Number(row?.id || 0),
+        kind: 'promo_code',
+        title: publicDiscountText(discount?.title) || '\u041f\u0440\u043e\u043c\u043e\u043a\u043e\u0434',
+        description: rewardMeta.description,
+        badge_text: rewardMeta.badge_text,
+        apply_scope_text: rewardMeta.apply_scope_text,
+        expires_at: discount?.ends_at || null,
+        code: publicDiscountText(row?.code),
+        is_copyable: true,
+        is_stackable: Number(discount?.is_stackable || 0) === 1,
+        usage_limit: row?.usage_limit == null ? null : Number(row.usage_limit || 0),
+        usage_count: Number(row?.usage_count || 0),
+        status_text: publicDiscountText(row?.code_mode).toLowerCase() === 'shared'
+          ? '\u041e\u0431\u0449\u0438\u0439'
+          : '\u041f\u0435\u0440\u0441\u043e\u043d\u0430\u043b\u044c\u043d\u044b\u0439',
+      }))
+      .filter((card) => card.code);
+  }
+
+  function toPublicRewardStatusText(status) {
+    const raw = publicDiscountText(status).toLowerCase();
+    if (raw === 'used') return '\u0418\u0441\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u043d\u043e';
+    if (raw === 'expired') return '\u0418\u0441\u0442\u0435\u043a\u043b\u043e';
+    return '\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u043e';
+  }
+
+  function getDiscountTargetEntityType(row) {
+    const explicitType = publicDiscountText(row?.entity_type || row?.target_type || row?.type).toLowerCase();
+    if (['product', 'category', 'combo'].includes(explicitType)) return explicitType;
+    if (Number(row?.product_id || 0) > 0) return 'product';
+    if (Number(row?.category_id || 0) > 0) return 'category';
+    if (Number(row?.combo_id || 0) > 0) return 'combo';
+    return '';
+  }
+
+  function buildGenericDiscountTargetSets(rows) {
+    const productIds = new Set();
+    const anyProductIds = new Set();
+    const exactProductSignaturesByProductId = new Map();
+    const categoryIds = new Set();
+    const comboIds = new Set();
+
+    (Array.isArray(rows) ? rows : []).forEach((row) => {
+      const entityType = getDiscountTargetEntityType(row);
+      const productId = Number(row?.product_id ?? row?.entity_id ?? row?.id ?? 0);
+      const categoryId = Number(row?.category_id ?? row?.entity_id ?? row?.id ?? 0);
+      const comboId = Number(row?.combo_id ?? row?.entity_id ?? row?.id ?? 0);
+      if (entityType === 'product' && productId > 0) {
+        productIds.add(productId);
+        const configMode = normalizePublicProductConfigMode(row?.config_mode, 'any');
+        const signature = configMode === 'exact'
+          ? buildPublicProductConfigSignature(row?.product_config ?? row?.product_config_json, productId)
+          : null;
+        if (signature) {
+          addPublicExactProductSignature(exactProductSignaturesByProductId, productId, signature);
+        } else if (configMode !== 'exact') {
+          anyProductIds.add(productId);
+        }
+        return;
+      }
+      if (entityType === 'category' && categoryId > 0) {
+        categoryIds.add(categoryId);
+        return;
+      }
+      if (entityType === 'combo' && comboId > 0) {
+        comboIds.add(comboId);
+      }
+    });
+
+    return { productIds, anyProductIds, exactProductSignaturesByProductId, categoryIds, comboIds };
+  }
+
+  function buildPublicProductTargetSets(rows) {
+    const targetSets = buildGenericDiscountTargetSets(rows);
+    return {
+      productIds: targetSets.productIds,
+      anyProductIds: targetSets.anyProductIds,
+      exactProductSignaturesByProductId: targetSets.exactProductSignaturesByProductId,
+      categoryIds: targetSets.categoryIds,
+    };
+  }
+
+  function matchDiscountTargetProduct(targetSets, item) {
+    if (!item || item.type === 'combo') return false;
+    const productId = Number(item?.product_id || 0);
+    if (!(productId > 0)) return false;
+    if (targetSets?.anyProductIds instanceof Set && targetSets.anyProductIds.has(productId)) {
+      return true;
+    }
+    const exactSignatures = targetSets?.exactProductSignaturesByProductId instanceof Map
+      ? targetSets.exactProductSignaturesByProductId.get(productId)
+      : null;
+    if (!exactSignatures || !exactSignatures.size) return false;
+    const itemSignature = buildFavoriteSignature(item);
+    return !!(itemSignature && exactSignatures.has(itemSignature));
+  }
+
+  function matchDiscountTargetCategory(targetSets, item, productCategoriesMap) {
+    if (!item || item.type === 'combo') return false;
+    const productId = Number(item?.product_id || 0);
+    if (!(productId > 0)) return false;
+    const categoryIds = productCategoriesMap.get(productId) || [];
+    return categoryIds.some((categoryId) => targetSets?.categoryIds?.has(Number(categoryId || 0)));
+  }
+
+  function matchDiscountTargetCombo(targetSets, item) {
+    return !!(item?.type === 'combo' && targetSets?.comboIds?.has(Number(item?.combo_id || 0)));
+  }
+
+  function matchDiscountTargetScope(targetSets, item, productCategoriesMap, scope = 'product') {
+    const normalizedScope = publicDiscountText(scope).toLowerCase() || 'product';
+    if (normalizedScope === 'product') {
+      return matchDiscountTargetProduct(targetSets, item);
+    }
+    if (normalizedScope === 'category') {
+      return matchDiscountTargetCategory(targetSets, item, productCategoriesMap);
+    }
+    if (normalizedScope === 'combo') {
+      return matchDiscountTargetCombo(targetSets, item);
+    }
+    return matchDiscountTargetProduct(targetSets, item)
+      || matchDiscountTargetCategory(targetSets, item, productCategoriesMap)
+      || matchDiscountTargetCombo(targetSets, item);
+  }
+
+  function buildPublicDiscountPreviewTargets(discount, rows) {
+    const applyTo = publicDiscountText(discount?.apply_to).toLowerCase();
+    if (!['product', 'category'].includes(applyTo)) {
+      return { productIds: new Set(), categoryIds: new Set() };
+    }
+    return buildPublicProductTargetSets(rows);
+  }
+
+  function clonePreviewItems(items) {
+    return (Array.isArray(items) ? items : []).map((item) => ({ ...item }));
+  }
+
+  function getPreviewItemsTotal(items) {
+    return roundPromoMoney(
+      (Array.isArray(items) ? items : []).reduce((sum, item) => sum + Number(item?.line_total || 0), 0)
+    );
+  }
+
+  function computeSimpleDiscountPreviewOutcome({
+    discount,
+    baseItems,
+    baseItemsTotal,
+    productCategoriesMap,
+    targetSets,
+  }) {
+    if (!discount) {
+      return { items: clonePreviewItems(baseItems), itemsTotal: roundPromoMoney(baseItemsTotal || 0), discountAmount: 0 };
+    }
+
+    const items = clonePreviewItems(baseItems);
+    const itemsTotal = roundPromoMoney(baseItemsTotal || 0);
+    const applyTo = publicDiscountText(discount?.apply_to).toLowerCase();
+
+    if (applyTo === 'order') {
+      const minOrderAmount = discount?.min_order_amount != null ? Number(discount.min_order_amount || 0) : 0;
+      if (minOrderAmount > 0 && itemsTotal < minOrderAmount) {
+        return { items, itemsTotal, discountAmount: 0 };
+      }
+      const discountAmount = discountHelpers.calculateDiscount(
+        itemsTotal,
+        discount?.discount_type,
+        Number(discount?.discount_value || 0),
+        discount?.max_discount_amount != null ? Number(discount.max_discount_amount) : null
+      );
+      return {
+        items,
+        itemsTotal: roundPromoMoney(Math.max(0, itemsTotal - Number(discountAmount || 0))),
+        discountAmount: roundPromoMoney(discountAmount),
+      };
+    }
+
+    const sets = targetSets || { productIds: new Set(), categoryIds: new Set() };
+    let discountAmount = 0;
+    for (const item of items) {
+      const matches = matchDiscountTargetScope(sets, item, productCategoriesMap, applyTo);
+      if (!matches) continue;
+
+      const lineTotal = Number(item?.line_total || 0);
+      const lineDiscount = discountHelpers.calculateDiscount(
+        lineTotal,
+        discount?.discount_type,
+        Number(discount?.discount_value || 0),
+        discount?.max_discount_amount != null ? Number(discount.max_discount_amount) : null
+      );
+      if (!(lineDiscount > 0)) continue;
+      item.line_total = roundPromoMoney(Math.max(0, lineTotal - lineDiscount));
+      discountAmount += lineDiscount;
+    }
+
+    return {
+      items,
+      itemsTotal: getPreviewItemsTotal(items),
+      discountAmount: roundPromoMoney(discountAmount),
+    };
+  }
+
+  function createManualDiscountCard(discount, outcome, extra = {}) {
+    return {
+      ...buildPublicDiscountBenefitCard(discount),
+      discount_amount: roundPromoMoney(outcome?.discountAmount || 0),
+      is_stackable: Number(discount?.is_stackable || 0) === 1,
+      is_selected: false,
+      disabled_reason: '',
+      source: extra.source || 'discount',
+      reward_id: extra.rewardId || null,
+      products: Array.isArray(extra.products) ? extra.products : [],
+    };
+  }
+
+  function parsePublicRewardPayload(row) {
+    return parsePublicDiscountObject(row?.reward_payload_json, {});
+  }
+
+  function buildRewardTargetPayload(rows, configMode = 'any') {
+    return (Array.isArray(rows) ? rows : [])
+      .map((row) => {
+        const productId = Number(row?.product_id ?? row?.entity_id ?? 0) || null;
+        const categoryId = Number(row?.category_id ?? row?.entity_id ?? 0) || null;
+        const comboId = Number(row?.combo_id ?? row?.entity_id ?? 0) || null;
+        const entityTypeRaw = publicDiscountText(row?.entity_type).toLowerCase();
+        const entityType = ['product', 'category', 'combo'].includes(entityTypeRaw)
+          ? entityTypeRaw
+          : (productId ? 'product' : (categoryId ? 'category' : (comboId ? 'combo' : '')));
+        if (!entityType) return null;
+        return {
+          entity_type: entityType,
+          entity_id: entityType === 'product'
+            ? productId
+            : entityType === 'category'
+              ? categoryId
+              : comboId,
+          product_id: productId,
+          category_id: categoryId,
+          combo_id: comboId,
+          config_mode: entityType === 'product'
+            ? normalizePublicProductConfigMode(row?.config_mode ?? configMode, configMode)
+            : 'any',
+          product_config: entityType === 'product'
+            ? normalizePublicProductConfigPayload(row?.product_config ?? row?.product_config_json, productId)
+            : null,
+        };
+      })
+      .filter(Boolean);
+  }
+
+  function getRewardPayloadTargetRows(payload) {
+    const source = Array.isArray(payload?.targets) && payload.targets.length
+      ? payload.targets
+      : (Array.isArray(payload?.products) ? payload.products : []);
+    return buildRewardTargetPayload(source);
+  }
+
+  function attachRewardSourceMetadata(payload, meta = {}) {
+    const nextPayload = payload && typeof payload === 'object' ? { ...payload } : {};
+    nextPayload.source_kind = publicDiscountText(meta.sourceKind ?? nextPayload.source_kind).toLowerCase() || null;
+    nextPayload.source_discount_id = Number(meta.sourceDiscountId ?? nextPayload.source_discount_id ?? 0) || null;
+    nextPayload.source_promo_code_id = Number(meta.sourcePromoCodeId ?? nextPayload.source_promo_code_id ?? 0) || null;
+    nextPayload.source_code = publicDiscountText(meta.sourceCode ?? nextPayload.source_code) || null;
+    nextPayload.source_title = publicDiscountText(meta.sourceTitle ?? nextPayload.source_title) || null;
+    nextPayload.claimed_from = publicDiscountText(meta.claimedFrom ?? nextPayload.claimed_from).toLowerCase() || null;
+    return nextPayload;
+  }
+
+
+  function normalizePublicGiftRewardProducts(products, availableProductIds = null) {
+    const availableIds = availableProductIds instanceof Set ? availableProductIds : null;
+    return (Array.isArray(products) ? products : []).map((product) => {
+      const productId = Number(product?.id || product?.product_id || 0) || null;
+      const isAvailable = availableIds
+        ? (productId > 0 && availableIds.has(productId))
+        : (product?.is_available !== false);
+      return {
+        ...product,
+        id: productId,
+        is_available: isAvailable,
+      };
+    });
+  }
+
+  function buildPublicGiftRewardCard(rewardRow, availableProductIds = null) {
+    const payload = parsePublicRewardPayload(rewardRow);
+    const products = normalizePublicGiftRewardProducts(payload?.products, availableProductIds);
+    const firstProduct = products[0] || null;
+    const count = products.length;
+    const countText = count > 1 ? ', ' + count + ' \u0442\u043e\u0432\u0430\u0440\u0430' : '';
+    const hasUnavailableProducts = products.some((product) => product?.id > 0 && product?.is_available !== true);
+    return {
+      id: Number(rewardRow?.id || 0),
+      discount_id: Number(payload?.source_discount_id || rewardRow?.discount_id || 0) || null,
+      kind: 'gift',
+      title: publicDiscountText(payload?.title) || '\u041f\u043e\u0434\u0430\u0440\u043e\u043a',
+      description: publicDiscountText(payload?.description) || publicDiscountText(firstProduct?.title),
+      badge_text: publicDiscountText(payload?.badge_text) || '\u041f\u043e\u0434\u0430\u0440\u043e\u043a',
+      apply_scope_text: count
+        ? (publicDiscountText(firstProduct?.title) || '\u0422\u043e\u0432\u0430\u0440') + countText
+        : '\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u044b\u0439 \u043f\u043e\u0434\u0430\u0440\u043e\u043a',
+      expires_at: null,
+      is_selected: false,
+      is_applicable: Number(rewardRow?.id || 0) > 0,
+      disabled_reason: hasUnavailableProducts ? 'GIFT_UNAVAILABLE' : '',
+      action_mode: 'receive',
+      is_receivable: Number(rewardRow?.id || 0) > 0 && count > 0 && !hasUnavailableProducts,
+      has_unavailable_products: hasUnavailableProducts,
+      reward_id: Number(rewardRow?.id || 0) || null,
+      reward_status: toPublicRewardStatusText(rewardRow?.status),
+      product_count: count,
+      photo_url: firstProduct?.photo_url || null,
+      total_value: Number(payload?.total_value || 0),
+      products,
+      reward_preview: {
+        kind: 'gift',
+        title: publicDiscountText(payload?.title) || '\u041f\u043e\u0434\u0430\u0440\u043e\u043a',
+        description: publicDiscountText(payload?.description) || publicDiscountText(firstProduct?.title),
+        badge_text: publicDiscountText(payload?.badge_text) || '\u041f\u043e\u0434\u0430\u0440\u043e\u043a',
+        apply_scope_text: count
+          ? (publicDiscountText(firstProduct?.title) || '\u0422\u043e\u0432\u0430\u0440') + countText
+          : '\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u044b\u0439 \u043f\u043e\u0434\u0430\u0440\u043e\u043a',
+        photo_url: firstProduct?.photo_url || null,
+        products,
+      },
+    };
+  }
+
+  async function loadPublicGiftRewardAvailableProductIds(tenantId, storeId, rewardRows, queryRunner = null) {
+    const productIds = [...new Set(
+      (Array.isArray(rewardRows) ? rewardRows : []).flatMap((rewardRow) => {
+        const payload = parsePublicRewardPayload(rewardRow);
+        return (Array.isArray(payload?.products) ? payload.products : [])
+          .map((product) => Number(product?.id || product?.product_id || 0))
+          .filter((id) => id > 0);
+      })
+    )];
+    if (!productIds.length) return new Set();
+    const availableProducts = await loadCheckoutBenefitRewardClaimProducts(
+      queryRunner,
+      tenantId,
+      storeId,
+      productIds
+    );
+    return new Set(
+      (Array.isArray(availableProducts) ? availableProducts : [])
+        .map((product) => Number(product?.product_id || 0))
+        .filter((id) => id > 0)
+    );
+  }
+
+  function buildPublicRewardDiscountSource(rewardRow) {
+    const payload = parsePublicRewardPayload(rewardRow);
+    const discount = {
+      id: Number(rewardRow?.id || 0),
+      title: publicDiscountText(payload?.title) || '\u0421\u043a\u0438\u0434\u043a\u0430',
+      description: publicDiscountText(payload?.description),
+      discount_type: publicDiscountText(payload?.discount_type || 'percent').toLowerCase() || 'percent',
+      discount_value: Number(payload?.discount_value || 0),
+      apply_to: publicDiscountText(payload?.apply_to || 'order').toLowerCase() || 'order',
+      max_discount_amount: payload?.max_discount_amount != null ? Number(payload.max_discount_amount || 0) : null,
+      min_order_amount: payload?.min_order_amount != null ? Number(payload.min_order_amount || 0) : null,
+      is_stackable: payload?.is_stackable ? 1 : 0,
+    };
+    const targetRows = getRewardPayloadTargetRows(payload);
+    return {
+      discount,
+      targetRows,
+      targetSets: buildDiscountProductTargetSets(targetRows),
+      rewardId: Number(rewardRow?.id || 0) || null,
+      payload,
+    };
+  }
+
+  function normalizePublicProgressSlotCount(value) {
+    const normalized = Number(value || 0);
+    if (!Number.isFinite(normalized)) return 0;
+    return Math.max(0, Math.floor(normalized));
+  }
+
+  function getPublicProgressDisplayValue(progressBasis, progressValue, thresholdValue, pendingRewardCount) {
+    const basis = publicDiscountText(progressBasis).toLowerCase() || 'orders';
+    const threshold = Number(thresholdValue || 0);
+    const current = Number(progressValue || 0);
+    const pendingCount = normalizePublicProgressSlotCount(pendingRewardCount);
+    if (!(threshold > 0)) return Math.max(0, current);
+
+    if (basis === 'amount') {
+      if (pendingCount > 0) return threshold;
+      const remainder = current % threshold;
+      if (remainder === 0 && current > 0) return Math.min(current, threshold);
+      return Math.max(0, Math.min(threshold, remainder || current));
+    }
+
+    const normalizedThreshold = normalizePublicProgressSlotCount(threshold);
+    const normalizedCurrent = normalizePublicProgressSlotCount(current);
+    if (!(normalizedThreshold > 0)) return normalizedCurrent;
+    if (pendingCount > 0) return normalizedThreshold;
+    const remainder = normalizedCurrent % normalizedThreshold;
+    if (remainder === 0 && normalizedCurrent > 0) return Math.min(normalizedCurrent, normalizedThreshold);
+    return Math.max(0, Math.min(normalizedThreshold, remainder || normalizedCurrent));
+  }
+
+  function normalizePublicProgressPendingRewardMode(value) {
+    return publicDiscountText(value).toLowerCase() === 'single_pending' ? 'single_pending' : 'stack';
+  }
+
+  function getPublicProgressRewardQty(mechanic) {
+    const rewardQty = Number(mechanic?.reward_qty || 0);
+    if (!Number.isFinite(rewardQty) || rewardQty <= 0) return 1;
+    return Math.max(1, Math.floor(rewardQty));
+  }
+
+  function getPublicProgressBenefitState(discount, progressRow) {
+    const mechanic = parsePublicDiscountObject(discount?.mechanic_config_json, {});
+    const progressBasis = publicDiscountText(mechanic?.progress_basis).toLowerCase() || 'orders';
+    const thresholdValue = Number(mechanic?.threshold_value || mechanic?.buy_qty || 0);
+    const progressValue = Number(progressRow?.progress_value || 0);
+    const pendingRewardCount = Number(progressRow?.pending_reward_count || 0);
+    const rewardKind = publicDiscountText(mechanic?.reward_kind).toLowerCase() || 'gift';
+    const rewardQty = getPublicProgressRewardQty(mechanic);
+    const pendingRewardMode = normalizePublicProgressPendingRewardMode(mechanic?.pending_reward_mode);
+    const rewardConfig = parsePublicDiscountObject(mechanic?.reward, {});
+    const displayProgressValue = getPublicProgressDisplayValue(
+      progressBasis,
+      progressValue,
+      thresholdValue,
+      pendingRewardCount
+    );
+    const progressRatio = thresholdValue > 0
+      ? Math.max(0, Math.min(1, Number(displayProgressValue || 0) / thresholdValue))
+      : 0;
+    const redemptionMode = publicDiscountText(mechanic?.redemption_mode).toLowerCase() || 'reset';
+    const rewardText = rewardKind === 'promo_code'
+      ? '\u041f\u0440\u043e\u043c\u043e\u043a\u043e\u0434'
+      : rewardKind === 'discount'
+        ? '\u0421\u043a\u0438\u0434\u043a\u0430'
+        : '\u041f\u043e\u0434\u0430\u0440\u043e\u043a';
+    const progressText = progressBasis === 'amount'
+      ? `${Math.min(displayProgressValue, thresholdValue || displayProgressValue)} / ${thresholdValue || 0} \u20bd`
+      : `${Math.min(displayProgressValue, thresholdValue || displayProgressValue)} / ${thresholdValue || 0}`;
+    return {
+      mechanic,
+      progressBasis,
+      thresholdValue,
+      progressValue,
+      pendingRewardCount,
+      rewardKind,
+      rewardQty,
+      pendingRewardMode,
+      rewardConfig,
+      displayProgressValue,
+      progressRatio,
+      redemptionMode,
+      rewardText,
+      progressText,
+    };
+  }
+
+  function getPublicProgressQualifyingScopeMode(discount) {
+    const mechanic = parsePublicDiscountObject(discount?.mechanic_config_json, {});
+    const scopeMode = publicDiscountText(mechanic?.qualifying_scope_mode).toLowerCase();
+    return ['product', 'category'].includes(scopeMode) ? scopeMode : 'none';
+  }
+
+  function getPublicProgressInteractionMode(discount, state = null) {
+    const progressState = state && typeof state === 'object'
+      ? state
+      : getPublicProgressBenefitState(discount, null);
+    if (
+      publicDiscountText(progressState?.progressBasis).toLowerCase() === 'items'
+      && ['product', 'category'].includes(getPublicProgressQualifyingScopeMode(discount))
+    ) {
+      return 'products_sheet';
+    }
+    return 'info_modal';
+  }
+
+  function getPublicProgressClaimMode(discount, state = null) {
+    const progressState = state && typeof state === 'object'
+      ? state
+      : getPublicProgressBenefitState(discount, null);
+    return publicDiscountText(progressState?.rewardKind).toLowerCase() === 'gift'
+      ? 'gift_sheet'
+      : 'direct';
+  }
+
+  function collectPublicProgressQualifyingCategoryIds(discount) {
+    const mechanic = parsePublicDiscountObject(discount?.mechanic_config_json, {});
+    return [...new Set(
+      (Array.isArray(mechanic?.qualifying_items) ? mechanic.qualifying_items : [])
+        .map((row) => {
+          const entityType = publicDiscountText(row?.entity_type).toLowerCase();
+          if (entityType && entityType !== 'category') return 0;
+          return Number(row?.category_id ?? row?.entity_id ?? row?.id ?? 0);
+        })
+        .filter((id) => id > 0)
+    )];
+  }
+
+  function collectPublicProgressRewardProductIds(discount) {
+    const mechanic = parsePublicDiscountObject(discount?.mechanic_config_json, {});
+    const giftProductIds = (Array.isArray(mechanic?.reward?.gift_products) ? mechanic.reward.gift_products : [])
+      .map((row) => Number(row?.entity_id ?? row?.product_id ?? row?.id ?? 0))
+      .filter((id) => id > 0);
+    const discountProductIds = (Array.isArray(mechanic?.reward?.discount?.products) ? mechanic.reward.discount.products : [])
+      .map((row) => Number(row?.entity_id ?? row?.product_id ?? row?.id ?? 0))
+      .filter((id) => id > 0);
+    return [...new Set([...giftProductIds, ...discountProductIds])];
+  }
+
+  function buildPublicProgressGiftRewardPreview(discount, state, productsMap, availableRewardProductIds = null) {
+    const payload = buildGiftRewardPayload(discount, state?.mechanic || {}, productsMap);
+    const products = normalizePublicGiftRewardProducts(payload?.products, availableRewardProductIds)
+      .filter((product) => product?.is_available === true);
+    const firstProduct = products[0] || null;
+    const productCount = products.length;
+    const countText = productCount > 1 ? `, ${productCount} товара` : '';
+    return {
+      kind: 'gift',
+      icon_kind: 'gift',
+      title: publicDiscountText(payload?.title) || 'Подарок',
+      description: publicDiscountText(payload?.description) || publicDiscountText(firstProduct?.title),
+      badge_text: publicDiscountText(payload?.badge_text) || 'Подарок',
+      apply_scope_text: productCount
+        ? `${publicDiscountText(firstProduct?.title) || 'Товар'}${countText}`
+        : (state?.rewardText || 'Подарок'),
+      photo_url: publicDiscountText(firstProduct?.photo_url) || null,
+      product_count: productCount,
+      total_value: Number(payload?.total_value || 0),
+      products,
+    };
+  }
+
+  function buildPublicProgressDiscountRewardPreview(discount, state, productsMap) {
+    const payload = buildDiscountRewardPayload(discount, state?.mechanic || {}, productsMap);
+    const products = Array.isArray(payload?.products) ? payload.products : [];
+    return {
+      kind: 'discount',
+      icon_kind: 'discount',
+      title: publicDiscountText(payload?.title) || 'Скидка',
+      description: publicDiscountText(payload?.description),
+      badge_text: formatPublicDiscountBadgeText(payload?.discount_type, payload?.discount_value) || 'Скидка',
+      apply_scope_text: formatPublicApplyScopeText(payload?.apply_to) || 'Скидка',
+      discount_type: publicDiscountText(payload?.discount_type || 'percent').toLowerCase() || 'percent',
+      discount_value: Number(payload?.discount_value || 0),
+      max_discount_amount: payload?.max_discount_amount != null ? Number(payload.max_discount_amount || 0) : null,
+      min_order_amount: payload?.min_order_amount != null ? Number(payload.min_order_amount || 0) : null,
+      is_stackable: Number(payload?.is_stackable || 0) === 1 || payload?.is_stackable === true,
+      products,
+      photo_url: null,
+    };
+  }
+
+  function buildPublicProgressPromoRewardPreview(discount, state) {
+    const reward = parsePublicDiscountObject(state?.mechanic?.reward, {});
+    const promoSource = parsePublicDiscountObject(reward?.promo_code, {});
+    const sourceCode = publicDiscountText(promoSource?.source_code);
+    return {
+      kind: 'promo_code',
+      icon_kind: 'promo_code',
+      title: publicDiscountText(discount?.title) || 'Промокод',
+      description: publicDiscountText(discount?.description) || 'Промокод в подарок',
+      badge_text: 'Промокод',
+      apply_scope_text: sourceCode ? `Источник: ${sourceCode}` : 'Промокод в подарок',
+      code_preview: sourceCode || null,
+      source_code: sourceCode || null,
+    };
+  }
+
+  function buildPublicProgressRewardPreview(discount, state, productsMap = new Map(), availableRewardProductIds = null) {
+    if (!discount) return null;
+    const rewardKind = publicDiscountText(state?.rewardKind).toLowerCase() || 'gift';
+    if (rewardKind === 'discount') {
+      return buildPublicProgressDiscountRewardPreview(discount, state, productsMap);
+    }
+    if (rewardKind === 'promo_code') {
+      return buildPublicProgressPromoRewardPreview(discount, state);
+    }
+    return buildPublicProgressGiftRewardPreview(discount, state, productsMap, availableRewardProductIds);
+  }
+
+  function buildPublicProgressRewardSlot(state, rewardPreview) {
+    const preview = rewardPreview && typeof rewardPreview === 'object' ? rewardPreview : {};
+    const previewProducts = Array.isArray(preview?.products) ? preview.products : [];
+    const firstProduct = previewProducts[0] || null;
+    const rewardKind = publicDiscountText(preview?.kind || state?.rewardKind).toLowerCase() || 'gift';
+    return {
+      kind: rewardKind,
+      icon_kind: rewardKind,
+      title: publicDiscountText(preview?.title) || state?.rewardText || 'Награда',
+      badge_text: publicDiscountText(preview?.badge_text) || state?.rewardText || 'Награда',
+      subtitle: publicDiscountText(preview?.apply_scope_text),
+      photo_url: rewardKind === 'gift'
+        ? (publicDiscountText(preview?.photo_url || firstProduct?.photo_url) || null)
+        : null,
+      product_count: Number(preview?.product_count || previewProducts.length || 0),
+      code_preview: publicDiscountText(preview?.code_preview || preview?.source_code) || null,
+      is_claimable: Number(state?.pendingRewardCount || 0) > 0,
+      pending_reward_count: Number(state?.pendingRewardCount || 0),
+    };
+  }
+
+  function buildPublicProgressBenefitCard(discount, progressRow, progressVisual = null, extra = null) {
+    const state = getPublicProgressBenefitState(discount, progressRow);
+    const rewardPreview = extra && typeof extra === 'object' ? (extra.rewardPreview || null) : null;
+    return {
+      id: Number(discount?.id || 0),
+      kind: 'progress',
+      title: publicDiscountText(discount?.title) || '\u041d\u0430\u043a\u043e\u043f\u0438\u0442\u0435\u043b\u044c\u043d\u0430\u044f \u0430\u043a\u0446\u0438\u044f',
+      description: publicDiscountText(discount?.description) || `\u041f\u0440\u043e\u0433\u0440\u0435\u0441\u0441: ${state.progressText}`,
+      badge_text: state.pendingRewardCount > 0 ? `${state.pendingRewardCount}` : state.progressText,
+      apply_scope_text: state.pendingRewardCount > 0 ? `\u041c\u043e\u0436\u043d\u043e \u0437\u0430\u0431\u0440\u0430\u0442\u044c: ${state.rewardText}` : `\u0421\u043b\u0435\u0434\u0443\u044e\u0449\u0430\u044f \u043d\u0430\u0433\u0440\u0430\u0434\u0430: ${state.rewardText}`,
+      expires_at: discount?.ends_at || null,
+      is_claimable: state.pendingRewardCount > 0,
+      pending_reward_count: state.pendingRewardCount,
+      progress_value: state.progressValue,
+      progress_display_value: state.displayProgressValue,
+      threshold_value: state.thresholdValue,
+      progress_basis: state.progressBasis,
+      progress_ratio: state.progressRatio,
+      reward_kind: state.rewardKind,
+      reward_qty: state.rewardQty,
+      pending_reward_mode: state.pendingRewardMode,
+      claim_mode: getPublicProgressClaimMode(discount, state),
+      reward_config: state.rewardConfig,
+      discount_id: Number(discount?.id || 0),
+      redemption_mode: state.redemptionMode,
+      interaction_mode: extra && typeof extra === 'object'
+        ? (publicDiscountText(extra.interactionMode).toLowerCase() || getPublicProgressInteractionMode(discount, state))
+        : getPublicProgressInteractionMode(discount, state),
+      qualifying_scope_mode: extra && typeof extra === 'object'
+        ? (publicDiscountText(extra.qualifyingScopeMode).toLowerCase() || getPublicProgressQualifyingScopeMode(discount))
+        : getPublicProgressQualifyingScopeMode(discount),
+      reward_preview: rewardPreview,
+      progress_visual: progressVisual && typeof progressVisual === 'object' ? progressVisual : null,
+    };
+  }
+
+  function buildPublicRewardPromoCard(rewardRow) {
+    const payload = parsePublicRewardPayload(rewardRow);
+    const code = publicDiscountText(payload?.code || payload?.source_code);
+    return {
+      id: Number(rewardRow?.id || 0),
+      kind: 'promo_code',
+      title: publicDiscountText(payload?.title) || '\u041f\u0440\u043e\u043c\u043e\u043a\u043e\u0434',
+      description: publicDiscountText(payload?.description),
+      badge_text: publicDiscountText(payload?.badge_text) || '\u041d\u0430\u0433\u0440\u0430\u0434\u0430',
+      apply_scope_text: publicDiscountText(payload?.apply_scope_text),
+      expires_at: payload?.expires_at || null,
+      code,
+      is_copyable: false,
+      is_stackable: Number(payload?.is_stackable || 0) === 1 || payload?.is_stackable === true,
+      usage_limit: null,
+      usage_count: 0,
+      status_text: publicDiscountText(payload?.status_text) || '\u041d\u0430\u0433\u0440\u0430\u0434\u0430',
+      is_applicable: Number(rewardRow?.id || 0) > 0,
+      disabled_reason: '',
+      is_selected: false,
+      source: 'reward_promo',
+      action_mode: 'select',
+      reward_id: Number(rewardRow?.id || 0) || null,
+      products: Array.isArray(payload?.products) ? payload.products : [],
+    };
+  }
+
+  function buildPublicCompletedSourcePromoCardFromRewardRow(rewardRow) {
+    const payload = parsePublicRewardPayload(rewardRow);
+    return {
+      id: `completed_source_promo_${Number(rewardRow?.id || 0)}`,
+      kind: 'completed',
+      title: publicDiscountText(payload?.source_code) || '\u041f\u0440\u043e\u043c\u043e\u043a\u043e\u0434',
+      description: publicDiscountText(payload?.source_title) || publicDiscountText(payload?.title),
+      status_text: '\u0417\u0430\u0432\u0435\u0440\u0448\u0435\u043d\u043e',
+      completed_at: rewardRow?.claimed_at || rewardRow?.updated_at || rewardRow?.created_at || null,
+      source_kind: publicDiscountText(payload?.source_kind).toLowerCase() || 'promo_code',
+    };
+  }
+
+  function buildPublicCompletedRewardCardFromRewardRow(rewardRow) {
+    const payload = parsePublicRewardPayload(rewardRow);
+    const rewardType = publicDiscountText(rewardRow?.reward_type).toLowerCase();
+    const title = publicDiscountText(payload?.title)
+      || (rewardType === 'promo_code'
+        ? '\u041f\u0440\u043e\u043c\u043e\u043a\u043e\u0434'
+        : rewardType === 'discount'
+          ? '\u0421\u043a\u0438\u0434\u043a\u0430'
+          : '\u041f\u043e\u0434\u0430\u0440\u043e\u043a');
+    return {
+      id: `completed_reward_${Number(rewardRow?.id || 0)}`,
+      kind: rewardType === 'promo_code' ? 'promo_code' : rewardType === 'discount' ? 'discount' : 'gift',
+      title,
+      description: publicDiscountText(payload?.description),
+      status_text: toPublicRewardStatusText(rewardRow?.status),
+      completed_at: rewardRow?.used_at || rewardRow?.updated_at || rewardRow?.created_at || null,
+      source_kind: publicDiscountText(payload?.source_kind).toLowerCase() || rewardType,
+    };
+  }
+
+  function buildPublicCompletedCardsFromRewardRows(rewardRows) {
+    const completed = [];
+    const seenKeys = new Set();
+    for (const rewardRow of Array.isArray(rewardRows) ? rewardRows : []) {
+      const payload = parsePublicRewardPayload(rewardRow);
+      const sourcePromoId = Number(payload?.source_promo_code_id || 0);
+      if (
+        sourcePromoId > 0
+        && publicDiscountText(payload?.claimed_from).toLowerCase() === 'promo'
+      ) {
+        const sourceKey = `source_promo_${Number(rewardRow?.id || 0)}`;
+        if (!seenKeys.has(sourceKey)) {
+          seenKeys.add(sourceKey);
+          completed.push(buildPublicCompletedSourcePromoCardFromRewardRow(rewardRow));
+        }
+      }
+
+      const rewardType = publicDiscountText(rewardRow?.reward_type).toLowerCase();
+      const rewardStatus = publicDiscountText(rewardRow?.status).toLowerCase();
+      if (rewardStatus === 'available' || !['discount', 'promo_code'].includes(rewardType)) continue;
+      const rewardKey = `reward_${Number(rewardRow?.id || 0)}`;
+      if (seenKeys.has(rewardKey)) continue;
+      seenKeys.add(rewardKey);
+      completed.push(buildPublicCompletedRewardCardFromRewardRow(rewardRow));
+    }
+    return completed;
+  }
+
+  async function loadCustomerAssignedPromoDiscounts(tenantId, storeId, customerId) {
+    if (!(Number(customerId || 0) > 0)) return [];
+    const [rows] = await db.query(
+      `SELECT DISTINCT d.*
+         FROM mkt_discount_promo_codes pc
+         INNER JOIN mkt_discounts d
+           ON d.id = pc.discount_id
+          AND d.tenant_id = pc.tenant_id
+        WHERE pc.tenant_id = ?
+          AND (pc.store_id = ? OR pc.store_id = 0 OR pc.store_id IS NULL)
+          AND pc.assigned_customer_id = ?
+          AND pc.is_active = 1
+          AND d.is_active = 1`,
+      [tenantId, storeId, customerId]
+    );
+
+    return (Array.isArray(rows) ? rows : [])
+      .filter((discount) => discountHelpers.isDiscountActive(discount) && isPublicPromoSimpleDiscount(discount));
+  }
+
+  let ensureDiscountRuntimeTablesPromise = null;
+  let discountRuntimeTablesReady = false;
+
+  function isDiscountRuntimeTableMissingError(error) {
+    if (String(error?.code || '') !== 'ER_NO_SUCH_TABLE') return false;
+    const message = String(error?.sqlMessage || error?.message || '').toLowerCase();
+    return message.includes('mkt_discount_rewards') || message.includes('mkt_discount_progress');
+  }
+
+  async function ensureDiscountRuntimeTables() {
+    if (discountRuntimeTablesReady) return;
+    if (!ensureDiscountRuntimeTablesPromise) {
+      ensureDiscountRuntimeTablesPromise = (async () => {
+        await db.query(
+          `CREATE TABLE IF NOT EXISTS \`mkt_discount_progress\` (
+             \`id\` int UNSIGNED NOT NULL AUTO_INCREMENT,
+             \`tenant_id\` int NOT NULL DEFAULT '1',
+             \`customer_id\` int NOT NULL,
+             \`discount_id\` int UNSIGNED NOT NULL,
+             \`progress_value\` decimal(12,2) NOT NULL DEFAULT '0.00',
+             \`pending_reward_count\` int UNSIGNED NOT NULL DEFAULT '0',
+             \`created_at\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+             \`updated_at\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+             PRIMARY KEY (\`id\`),
+             UNIQUE KEY \`uq_mkt_discount_progress_customer\` (\`tenant_id\`,\`customer_id\`,\`discount_id\`),
+             KEY \`idx_mkt_discount_progress_discount\` (\`tenant_id\`,\`discount_id\`)
+           ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+        );
+        await db.query(
+          `CREATE TABLE IF NOT EXISTS \`mkt_discount_rewards\` (
+             \`id\` int UNSIGNED NOT NULL AUTO_INCREMENT,
+             \`tenant_id\` int NOT NULL DEFAULT '1',
+             \`customer_id\` int NOT NULL,
+             \`discount_id\` int UNSIGNED NOT NULL,
+             \`reward_type\` enum('gift','promo_code','discount') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'gift',
+             \`reward_payload_json\` longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+             \`status\` enum('available','used','expired') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'available',
+             \`claimed_at\` timestamp NULL DEFAULT NULL,
+             \`used_at\` timestamp NULL DEFAULT NULL,
+             \`created_at\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+             \`updated_at\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+             PRIMARY KEY (\`id\`),
+             KEY \`idx_mkt_discount_rewards_customer_status\` (\`tenant_id\`,\`customer_id\`,\`status\`),
+             KEY \`idx_mkt_discount_rewards_discount\` (\`tenant_id\`,\`discount_id\`)
+           ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+        );
+        discountRuntimeTablesReady = true;
+      })().catch((error) => {
+        discountRuntimeTablesReady = false;
+        throw error;
+      }).finally(() => {
+        ensureDiscountRuntimeTablesPromise = null;
+      });
+    }
+    await ensureDiscountRuntimeTablesPromise;
+  }
+
+  async function loadCustomerRewardRows(tenantId, customerId, { statuses = null, rewardType = null } = {}) {
+    if (!(Number(customerId || 0) > 0)) return [];
+    const params = [tenantId, customerId];
+    let statusSql = '';
+    const normalizedStatuses = Array.isArray(statuses)
+      ? [...new Set(statuses.map((status) => publicDiscountText(status).toLowerCase()).filter(Boolean))]
+      : [];
+    if (normalizedStatuses.length) {
+      statusSql = ' AND r.status IN (?)';
+      params.push(normalizedStatuses);
+    }
+    let typeSql = '';
+    if (rewardType) {
+      typeSql = ' AND r.reward_type = ?';
+      params.push(rewardType);
+    }
+    const sql = `SELECT r.*, d.title AS discount_title, d.description AS discount_description
+       FROM mkt_discount_rewards r
+       LEFT JOIN mkt_discounts d
+         ON d.id = r.discount_id
+        AND d.tenant_id = r.tenant_id
+      WHERE r.tenant_id = ?
+        AND r.customer_id = ?
+        ${statusSql}${typeSql}
+      ORDER BY r.created_at DESC, r.id DESC`;
+    let rows;
+    try {
+      [rows] = await db.query(sql, params);
+    } catch (error) {
+      if (!isDiscountRuntimeTableMissingError(error)) throw error;
+      await ensureDiscountRuntimeTables();
+      [rows] = await db.query(sql, params);
+    }
+    return Array.isArray(rows) ? rows : [];
+  }
+
+  async function loadCustomerAvailableRewardRows(tenantId, customerId, rewardType = null) {
+    return loadCustomerRewardRows(tenantId, customerId, {
+      statuses: ['available'],
+      rewardType,
+    });
+  }
+
+  async function loadCustomerProgressMap(tenantId, customerId, discountIds) {
+    const ids = Array.isArray(discountIds)
+      ? [...new Set(discountIds.map((id) => Number(id)).filter((id) => id > 0))]
+      : [];
+    if (!(Number(customerId || 0) > 0) || !ids.length) return new Map();
+    const sql = `SELECT *
+       FROM mkt_discount_progress
+      WHERE tenant_id = ?
+        AND customer_id = ?
+        AND discount_id IN (?)`;
+    let rows;
+    try {
+      [rows] = await db.query(sql, [tenantId, customerId, ids]);
+    } catch (error) {
+      if (!isDiscountRuntimeTableMissingError(error)) throw error;
+      await ensureDiscountRuntimeTables();
+      [rows] = await db.query(sql, [tenantId, customerId, ids]);
+    }
+    return new Map(
+      (Array.isArray(rows) ? rows : []).map((row) => [Number(row?.discount_id || 0), row])
+    );
+  }
+
+  async function loadCheckoutRewardProductsByIds(tenantId, productIds) {
+    const ids = [...new Set((Array.isArray(productIds) ? productIds : []).map((id) => Number(id)).filter((id) => id > 0))];
+    if (!ids.length) return new Map();
+    const [rows] = await db.query(
+      `SELECT id, name, price, old_price, photos_json
+         FROM prod_products
+        WHERE tenant_id = ? AND id IN (?)`,
+      [tenantId, ids]
+    );
+    const result = new Map();
+    for (const row of Array.isArray(rows) ? rows : []) {
+      let photoUrl = null;
+      try {
+        const photos = JSON.parse(row?.photos_json || '[]');
+        if (Array.isArray(photos) && photos.length) {
+          photoUrl = getThumbUrl(photos[0]) || photos[0];
+        }
+      } catch {}
+      result.set(Number(row?.id || 0), {
+        id: Number(row?.id || 0),
+        title: publicDiscountText(row?.name),
+        price: Number(row?.price || row?.old_price || 0),
+        photo_url: photoUrl,
+      });
+    }
+    return result;
+  }
+
+  async function loadCheckoutProductCategoriesMap(tenantId, productIds) {
+    const ids = [...new Set((Array.isArray(productIds) ? productIds : []).map((id) => Number(id)).filter((id) => id > 0))];
+    if (!ids.length) return new Map();
+    const [rows] = await db.query(
+      `SELECT product_id, category_id
+         FROM prod_product_categories
+        WHERE tenant_id = ? AND product_id IN (?)`,
+      [tenantId, ids]
+    );
+    const result = new Map();
+    for (const row of Array.isArray(rows) ? rows : []) {
+      const productId = Number(row?.product_id || 0);
+      const categoryId = Number(row?.category_id || 0);
+      if (!(productId > 0) || !(categoryId > 0)) continue;
+      if (!result.has(productId)) result.set(productId, []);
+      result.get(productId).push(categoryId);
+    }
+    return result;
+  }
+
+  function buildCheckoutBenefitProductSnapshot(row) {
+    const productId = Number(row?.id || 0);
+    if (!(productId > 0)) return null;
+    let photos = [];
+    try {
+      const rawPhotos = JSON.parse(row?.photos_json || '[]');
+      if (Array.isArray(rawPhotos)) {
+        photos = rawPhotos
+          .map((photo) => getThumbUrl(photo) || photo)
+          .filter(Boolean);
+      }
+    } catch {}
+    const price = Number(row?.price || row?.old_price || 0);
+    const oldPrice = Number(row?.old_price || 0);
+    const snapshot = {
+      type: 'product',
+      product_id: productId,
+      name: publicDiscountText(row?.name) || 'Товар',
+      description_short: publicDiscountText(row?.description_short),
+      qty: 1,
+      price,
+      old_price: oldPrice > price ? oldPrice : 0,
+      line_total: price,
+      stock_qty: row?.stock_qty != null ? Number(row.stock_qty) : null,
+      is_available: row?.is_available != null
+        ? (Number(row.is_available || 0) === 1 || row.is_available === true)
+        : (row?.stock_qty == null || Number(row.stock_qty) > 0),
+      photos,
+    };
+    if (!publicDiscountText(row?.name).trim()) snapshot.name = 'Товар';
+    if (!publicDiscountText(row?.name).trim()) snapshot.name = "\u0422\u043e\u0432\u0430\u0440";
+    return snapshot;
+  }
+
+  async function loadCheckoutBenefitProductSnapshotsByIds(tenantId, productIds) {
+    const ids = [...new Set((Array.isArray(productIds) ? productIds : []).map((id) => Number(id)).filter((id) => id > 0))];
+    if (!ids.length) return [];
+    const [rows] = await db.query(
+      `SELECT id, name, description_short, price, old_price, photos_json
+         FROM prod_products
+        WHERE tenant_id = ?
+          AND id IN (?)
+          AND is_active = 1
+          AND site_visibility = 1
+        ORDER BY name ASC, id ASC`,
+      [tenantId, ids]
+    );
+    return (Array.isArray(rows) ? rows : [])
+      .map((row) => buildCheckoutBenefitProductSnapshot(row))
+      .filter(Boolean);
+  }
+
+  async function loadCheckoutBenefitProductSnapshotsByCategoryIds(tenantId, categoryIds) {
+    const ids = [...new Set((Array.isArray(categoryIds) ? categoryIds : []).map((id) => Number(id)).filter((id) => id > 0))];
+    if (!ids.length) return [];
+    const [rows] = await db.query(
+      `SELECT DISTINCT p.id, p.name, p.description_short, p.price, p.old_price, p.photos_json
+         FROM prod_product_categories pc
+         INNER JOIN prod_products p
+           ON p.tenant_id = pc.tenant_id
+          AND p.id = pc.product_id
+        WHERE pc.tenant_id = ?
+          AND pc.category_id IN (?)
+          AND p.is_active = 1
+          AND p.site_visibility = 1
+        ORDER BY p.name ASC, p.id ASC`,
+      [tenantId, ids]
+    );
+    return (Array.isArray(rows) ? rows : [])
+      .map((row) => buildCheckoutBenefitProductSnapshot(row))
+      .filter(Boolean);
+  }
+
+  async function loadCheckoutBenefitRewardClaimProducts(queryRunner, tenantId, storeId, productIds) {
+    const ids = [...new Set((Array.isArray(productIds) ? productIds : []).map((id) => Number(id)).filter((id) => id > 0))];
+    if (!ids.length) return [];
+    const runner = queryRunner && typeof queryRunner.query === 'function' ? queryRunner : db;
+    const [rows] = await runner.query(
+      `SELECT p.id, p.name, p.description_short, p.price, p.old_price, p.photos_json,
+              s.qty AS stock_qty
+         FROM prod_products p
+         LEFT JOIN prod_product_stocks s
+           ON s.tenant_id = p.tenant_id
+          AND s.store_id = ?
+          AND s.product_id = p.id
+        WHERE p.tenant_id = ?
+          AND p.id IN (?)
+          AND p.is_active = 1
+          AND p.site_visibility = 1
+        ORDER BY p.name ASC, p.id ASC`,
+      [storeId, tenantId, ids]
+    );
+    return (Array.isArray(rows) ? rows : [])
+      .map((row) => ({
+        ...row,
+        is_available: row?.stock_qty == null || Number(row.stock_qty) > 0,
+      }))
+      .map((row) => buildCheckoutBenefitProductSnapshot(row))
+      .filter((row) => row?.is_available === true);
+  }
+
+  async function loadPromoSourceRowById(conn, tenantId, storeId, promoCodeId) {
+    const normalizedPromoCodeId = Number(promoCodeId || 0);
+    if (!(normalizedPromoCodeId > 0)) return null;
+    const [rows] = await conn.query(
+      `SELECT pc.id AS promo_code_id,
+              pc.discount_id,
+              pc.store_id AS promo_store_id,
+              pc.code,
+              pc.code_mode,
+              pc.is_active AS promo_is_active,
+              pc.usage_limit AS promo_usage_limit,
+              pc.usage_count AS promo_usage_count,
+              pc.assigned_customer_id,
+              d.*
+         FROM mkt_discount_promo_codes pc
+         INNER JOIN mkt_discounts d
+           ON d.id = pc.discount_id
+          AND d.tenant_id = pc.tenant_id
+          AND (d.store_id = pc.store_id OR d.store_id = 0 OR d.store_id IS NULL)
+        WHERE pc.tenant_id = ?
+          AND (pc.store_id = ? OR pc.store_id = 0 OR pc.store_id IS NULL)
+          AND pc.id = ?
+        ORDER BY pc.store_id DESC, pc.id DESC
+        LIMIT 1`,
+      [tenantId, storeId, normalizedPromoCodeId]
+    );
+    return Array.isArray(rows) && rows.length ? rows[0] : null;
+  }
+
+  async function loadDiscountTargetRows(conn, tenantId, discountId) {
+    const normalizedDiscountId = Number(discountId || 0);
+    if (!(normalizedDiscountId > 0)) return [];
+    await ensureDiscountProductConfigColumn();
+    const [rows] = await conn.query(
+      `SELECT dp.product_id,
+              dp.category_id,
+              dp.combo_id,
+              dp.product_config_json,
+              d.mechanic_config_json
+         FROM mkt_discount_products dp
+         INNER JOIN mkt_discounts d
+           ON d.id = dp.discount_id
+          AND d.tenant_id = dp.tenant_id
+        WHERE dp.tenant_id = ?
+          AND dp.discount_id = ?`,
+      [tenantId, normalizedDiscountId]
+    );
+    return (Array.isArray(rows) ? rows : [])
+      .map((row) => normalizePublicDiscountTargetRow(
+        row,
+        getPublicDiscountProductsConfigMode(row, 'any')
+      ))
+      .filter(Boolean);
+  }
+
+  async function insertCustomerRewardRow(conn, {
+    tenantId,
+    customerId,
+    discountId,
+    rewardType,
+    payload,
+  }) {
+    const normalizedCustomerId = Number(customerId || 0);
+    const normalizedDiscountId = Number(discountId || 0);
+    const normalizedRewardType = publicDiscountText(rewardType).toLowerCase();
+    if (!(normalizedCustomerId > 0) || !(normalizedDiscountId > 0)) {
+      throw new Error('INVALID_REWARD_TARGET');
+    }
+    if (!['gift', 'discount', 'promo_code'].includes(normalizedRewardType)) {
+      throw new Error('INVALID_REWARD_TYPE');
+    }
+    const [result] = await conn.query(
+      `INSERT INTO mkt_discount_rewards
+       (tenant_id, customer_id, discount_id, reward_type, reward_payload_json, status, claimed_at)
+       VALUES (?, ?, ?, ?, ?, 'available', NOW())`,
+      [
+        tenantId,
+        normalizedCustomerId,
+        normalizedDiscountId,
+        normalizedRewardType,
+        JSON.stringify(payload || {}),
+      ]
+    );
+    return Number(result?.insertId || 0) || null;
+  }
+
+  async function buildRewardPayloadFromPromoSource(conn, {
+    tenantId,
+    storeId,
+    discount,
+    promoRow,
+    generatedCode = '',
+  }) {
+    const sourceDiscountId = Number(discount?.id || discount?.discount_id || 0);
+    const targetRows = await loadDiscountTargetRows(conn, tenantId, sourceDiscountId);
+    const productIds = targetRows
+      .map((row) => Number(row?.product_id || 0))
+      .filter((id) => id > 0);
+    const productsMap = await loadCheckoutRewardProductsByIds(tenantId, productIds);
+    const rewardMeta = getPublicPromoRewardMeta(discount);
+    const runtimeConfig = getPromoRuntimeConfig(discount);
+
+    if (runtimeConfig.rewardType === 'discount' || runtimeConfig.productRewardType === 'product_discount') {
+      return {
+        rewardType: 'discount',
+        payload: attachRewardSourceMetadata(
+          buildRuntimeDiscountRewardPayload({
+            title: publicDiscountText(discount?.title) || '\u0421\u043a\u0438\u0434\u043a\u0430',
+            description: rewardMeta.description || publicDiscountText(discount?.description),
+            discountType: runtimeConfig.discountType,
+            discountValue: runtimeConfig.discountValue,
+            applyTo: runtimeConfig.rewardType === 'discount' ? runtimeConfig.applyTo : 'product',
+            maxDiscountAmount: discount?.max_discount_amount != null ? Number(discount.max_discount_amount || 0) : null,
+            minOrderAmount: discount?.min_order_amount != null ? Number(discount.min_order_amount || 0) : null,
+            isStackable: Number(discount?.is_stackable || 0) === 1,
+            targetRows,
+            productsMap,
+            configMode: normalizePublicProductConfigMode(
+              parsePublicDiscountObject(discount?.mechanic_config_json, {})?.products_config_mode,
+              'any'
+            ),
+            extra: {
+              badge_text: rewardMeta.badge_text,
+              apply_scope_text: rewardMeta.apply_scope_text,
+              expires_at: discount?.ends_at || null,
+            },
+          }),
+          {
+            sourceKind: 'promo_code',
+            sourceDiscountId: sourceDiscountId || null,
+            sourcePromoCodeId: Number(promoRow?.promo_code_id || 0) || null,
+            sourceCode: publicDiscountText(promoRow?.code),
+            sourceTitle: publicDiscountText(discount?.title),
+            claimedFrom: 'promo',
+          }
+        ),
+      };
+    }
+
+    if (runtimeConfig.productRewardType === 'gift') {
+      return {
+        rewardType: 'gift',
+        payload: attachRewardSourceMetadata(
+          buildRuntimeGiftRewardPayload({
+            title: publicDiscountText(discount?.title) || '\u041f\u043e\u0434\u0430\u0440\u043e\u043a',
+            description: rewardMeta.description || publicDiscountText(discount?.description),
+            targetRows,
+            productsMap,
+            configMode: normalizePublicProductConfigMode(
+              parsePublicDiscountObject(discount?.mechanic_config_json, {})?.products_config_mode,
+              'any'
+            ),
+            extra: {
+              apply_scope_text: rewardMeta.apply_scope_text,
+            },
+          }),
+          {
+            sourceKind: 'promo_code',
+            sourceDiscountId: sourceDiscountId || null,
+            sourcePromoCodeId: Number(promoRow?.promo_code_id || 0) || null,
+            sourceCode: publicDiscountText(promoRow?.code),
+            sourceTitle: publicDiscountText(discount?.title),
+            claimedFrom: 'promo',
+          }
+        ),
+      };
+    }
+
+    const rewardCode = publicDiscountText(generatedCode)
+      || await generateUniqueRewardPromoCode(conn, tenantId, storeId, publicDiscountText(promoRow?.code) || 'BONUS');
+    const data = {
+      rewardType: 'promo_code',
+      payload: attachRewardSourceMetadata(
+        buildRuntimePromoRewardPayload({
+          title: publicDiscountText(discount?.title) || '\u041f\u0440\u043e\u043c\u043e\u043a\u043e\u0434',
+          description: rewardMeta.description || publicDiscountText(discount?.description),
+          code: rewardCode,
+          statusText: '\u041d\u0430\u0433\u0440\u0430\u0434\u0430',
+          badgeText: rewardMeta.badge_text || '\u041d\u0430\u0433\u0440\u0430\u0434\u0430',
+          applyScopeText: rewardMeta.apply_scope_text,
+          isStackable: Number(discount?.is_stackable || 0) === 1,
+          expiresAt: discount?.ends_at || null,
+          runtimeConfig,
+          targetRows,
+          productsMap,
+          configMode: normalizePublicProductConfigMode(
+            parsePublicDiscountObject(discount?.mechanic_config_json, {})?.products_config_mode,
+            'any'
+          ),
+        }),
+        {
+          sourceKind: 'promo_code',
+          sourceDiscountId: sourceDiscountId || null,
+          sourcePromoCodeId: Number(promoRow?.promo_code_id || 0) || null,
+          sourceCode: publicDiscountText(promoRow?.code),
+          sourceTitle: publicDiscountText(discount?.title),
+          claimedFrom: 'promo',
+        }
+      ),
+    };
+  }
+
+  function collectLoyaltyProgressGiftRewardTargetRows(mechanic) {
+    const configMode = normalizePublicProductConfigMode(
+      mechanic?.gift_products_config_mode ?? mechanic?.reward?.gift_products_config_mode,
+      'any'
+    );
+    return (Array.isArray(mechanic?.reward?.gift_products) ? mechanic.reward.gift_products : [])
+      .map((row) => ({
+        ...row,
+        product_id: Number(row?.entity_id || row?.product_id || row?.id || 0),
+        config_mode: normalizePublicProductConfigMode(row?.config_mode ?? configMode, configMode),
+      }))
+      .filter((row) => Number(row?.product_id || 0) > 0);
+  }
+
+  function buildGiftRewardPayloadFromTargetRows(discount, targetRows, productsMap) {
+    const configMode = normalizePublicProductConfigMode(
+      Array.isArray(targetRows) && targetRows.length
+        ? targetRows[0]?.config_mode
+        : 'any',
+      'any'
+    );
+    const payload = buildRuntimeGiftRewardPayload({
+      title: publicDiscountText(discount?.title) || 'Подарок',
+      description: publicDiscountText(discount?.description),
+      targetRows,
+      productsMap,
+      configMode,
+    });
+    if (!publicDiscountText(discount?.title).trim()) payload.title = 'Подарок';
+    if (!publicDiscountText(discount?.title).trim()) payload.title = "\u041f\u043e\u0434\u0430\u0440\u043e\u043a";
+    return payload;
+  }
+
+  async function buildRewardPayloadFromLoyaltyProgress(conn, {
+    tenantId,
+    storeId,
+    discount,
+    selectedRewardProductId = null,
+    selectedRewardSelectionKey = null,
+    selectedRewardProductConfig = null,
+  }) {
+    const mechanic = parsePublicDiscountObject(discount?.mechanic_config_json, {});
+    const rewardKind = publicDiscountText(mechanic?.reward_kind).toLowerCase() || 'gift';
+    const sourceDiscountId = Number(discount?.id || 0) || null;
+
+    if (rewardKind === 'discount') {
+      const productIds = (Array.isArray(mechanic?.reward?.discount?.products) ? mechanic.reward.discount.products : [])
+        .map((row) => Number(row?.entity_id || row?.product_id || row?.id || 0))
+        .filter((id) => id > 0);
+      const productsMap = await loadCheckoutRewardProductsByIds(tenantId, productIds);
+      return {
+        rewardType: 'discount',
+        payload: attachRewardSourceMetadata(
+          buildDiscountRewardPayload(discount, mechanic, productsMap),
+          {
+            sourceKind: 'loyalty_progress',
+            sourceDiscountId,
+            sourceTitle: publicDiscountText(discount?.title),
+            claimedFrom: 'loyalty',
+          }
+        ),
+      };
+    }
+
+    if (rewardKind === 'promo_code') {
+      const promoSource = parsePublicDiscountObject(mechanic?.reward?.promo_code, {});
+      const sourcePromoRow = await loadPromoSourceRowById(
+        conn,
+        tenantId,
+        storeId,
+        Number(promoSource?.source_promo_code_id || 0)
+      );
+      if (!sourcePromoRow) {
+        throw Object.assign(new Error('PROMO_INVALID'), { code: 'PROMO_INVALID' });
+      }
+      const rewardCode = await generateUniqueRewardPromoCode(
+        conn,
+        tenantId,
+        storeId,
+        publicDiscountText(promoSource?.source_code || sourcePromoRow?.code) || 'BONUS'
+      );
+      const rewardDefinition = await buildRewardPayloadFromPromoSource(conn, {
+        tenantId,
+        storeId,
+        discount: sourcePromoRow,
+        promoRow: sourcePromoRow,
+        generatedCode: rewardCode,
+      });
+      rewardDefinition.payload = attachRewardSourceMetadata(rewardDefinition.payload, {
+        sourceKind: 'loyalty_progress',
+        sourceDiscountId,
+        sourcePromoCodeId: Number(promoSource?.source_promo_code_id || sourcePromoRow?.promo_code_id || 0) || null,
+        sourceCode: publicDiscountText(promoSource?.source_code || sourcePromoRow?.code),
+        sourceTitle: publicDiscountText(discount?.title),
+        claimedFrom: 'loyalty',
+      });
+      return rewardDefinition;
+    }
+
+    const rewardTargetRows = collectLoyaltyProgressGiftRewardTargetRows(mechanic);
+    const normalizedSelectedRewardProductId = Number(selectedRewardProductId || 0);
+    const normalizedSelectedRewardSelectionKey = publicDiscountText(selectedRewardSelectionKey);
+    const selectedTargetRows = normalizedSelectedRewardSelectionKey
+      ? (() => {
+          const targetRow = rewardTargetRows.find((row, index) => (
+            buildPublicGiftRewardSelectionKey(row, index) === normalizedSelectedRewardSelectionKey
+          )) || null;
+          return targetRow ? [targetRow] : [];
+        })()
+      : normalizedSelectedRewardProductId > 0
+      ? (() => {
+          const targetRow = rewardTargetRows.find((row) => Number(row?.product_id || 0) === normalizedSelectedRewardProductId) || null;
+          return targetRow ? [targetRow] : [];
+        })()
+      : rewardTargetRows;
+    if (!selectedTargetRows.length) {
+      throw Object.assign(new Error('REWARD_NOT_APPLICABLE'), { code: 'REWARD_NOT_APPLICABLE' });
+    }
+    const productsMap = await loadCheckoutRewardProductsByIds(
+      tenantId,
+      [...new Set(selectedTargetRows.map((row) => Number(row?.product_id || 0)).filter((id) => id > 0))]
+    );
+    return {
+      rewardType: 'gift',
+      payload: attachRewardSourceMetadata(
+        buildGiftRewardPayloadFromTargetRows(
+          discount,
+          selectedTargetRows.map((row) => {
+            if (normalizePublicProductConfigMode(row?.config_mode, 'any') !== 'any') return row;
+            const productId = Number(row?.product_id || 0);
+            const selectedConfig = normalizePublicProductConfigPayload(selectedRewardProductConfig, productId);
+            if (!selectedConfig) return row;
+            return {
+              ...row,
+              product_config: selectedConfig,
+            };
+          }),
+          productsMap
+        ),
+        {
+          sourceKind: 'loyalty_progress',
+          sourceDiscountId,
+          sourceTitle: publicDiscountText(discount?.title),
+          claimedFrom: 'loyalty',
+        }
+      ),
+    };
+  }
+
+  function applyClaimedProgressRedemption({
+    progressValue,
+    pendingRewardCount,
+    claimedCount = 1,
+    thresholdValue,
+    pendingRewardMode,
+  }) {
+    const safePendingRewardCount = Math.max(0, Number(pendingRewardCount || 0));
+    const safeClaimedCount = Math.max(0, Math.min(safePendingRewardCount, Math.floor(Number(claimedCount || 0) || 0)));
+    const nextPendingRewardCount = Math.max(0, safePendingRewardCount - safeClaimedCount);
+    const normalizedThreshold = Number(thresholdValue || 0);
+    const normalizedPendingMode = normalizePublicProgressPendingRewardMode(pendingRewardMode);
+    let nextProgressValue = Math.max(0, Number(progressValue || 0));
+
+    if (normalizedPendingMode === 'single_pending') {
+      if (nextPendingRewardCount <= 0) {
+        nextProgressValue = 0;
+      } else if (normalizedThreshold > 0) {
+        nextProgressValue = Math.min(nextProgressValue, normalizedThreshold);
+      }
+    }
+
+    return {
+      progressValue: roundPromoMoney(nextProgressValue),
+      pendingRewardCount: nextPendingRewardCount,
+    };
+  }
+
+  function parsePublicProgressOrderItems(rawItems) {
+    let items = rawItems;
+    if (typeof items === 'string') {
+      try {
+        items = JSON.parse(items);
+      } catch {
+        items = [];
+      }
+    }
+    if (!Array.isArray(items)) return [];
+    return items
+      .map((rawItem) => {
+        if (!rawItem || typeof rawItem !== 'object') return null;
+        const productId = Number(rawItem?.product_id || rawItem?.id || rawItem?.product?.id || 0);
+        const qtyRaw = Number(rawItem?.qty ?? rawItem?.quantity ?? 0);
+        const qty = Number.isFinite(qtyRaw) && qtyRaw > 0 ? Math.max(1, Math.floor(qtyRaw)) : 1;
+        const lineTotalRaw = Number(rawItem?.line_total ?? rawItem?.total ?? rawItem?.total_price ?? 0);
+        const priceRaw = Number(rawItem?.price ?? rawItem?.unit_price ?? 0);
+        const photos = Array.isArray(rawItem?.photos)
+          ? rawItem.photos.map((photo) => publicDiscountText(photo)).filter(Boolean)
+          : [];
+        const fallbackPhoto = publicDiscountText(
+          rawItem?.product_photo || rawItem?.photo || rawItem?.photo_url || rawItem?.product?.photo_url
+        );
+        const normalizedType = publicDiscountText(
+          rawItem?.type || (Number(rawItem?.combo_id || rawItem?.combo?.id || 0) > 0 ? 'combo' : 'product')
+        ).toLowerCase() || 'product';
+        const optionItems = ([
+          ...(Array.isArray(rawItem?.option_items) ? rawItem.option_items : []),
+          ...(Array.isArray(rawItem?.options) ? rawItem.options : []),
+        ])
+          .map((option) => ({
+            id: Number(option?.id || 0) || null,
+            qty: Math.max(1, Number(option?.qty ?? option?.quantity ?? 1) || 1),
+            target_product_id: Number(option?.target_product_id || option?.product_id || 0) || null,
+            variant_group_id: Number(option?.variant_group_id || 0) || null,
+            variant_value_index: Number.isFinite(Number(option?.variant_value_index))
+              ? Number(option.variant_value_index)
+              : null,
+          }))
+          .filter((option) => Number(option?.id || 0) > 0);
+        const ingredients = (Array.isArray(rawItem?.ingredients) ? rawItem.ingredients : [])
+          .map((ingredient) => ({
+            ingredient_id: Number(ingredient?.ingredient_id || ingredient?.product_id || 0) || null,
+            qty: Number(ingredient?.qty ?? ingredient?.quantity ?? 0) || 0,
+          }))
+          .filter((ingredient) => Number(ingredient?.ingredient_id || 0) > 0);
+        const variantGroupId = Number(rawItem?.variant_group_id || 0);
+        const variantValueIndex = Number(rawItem?.variant_value_index);
+        return {
+          type: normalizedType,
+          product_id: productId > 0 ? productId : null,
+          qty,
+          line_total: Number.isFinite(lineTotalRaw)
+            ? lineTotalRaw
+            : (Number.isFinite(priceRaw) ? Number(priceRaw * qty) : 0),
+          auto_add: Number(rawItem?.auto_add || 0) === 1 ? 1 : 0,
+          title: publicDiscountText(
+            rawItem?.product_name || rawItem?.name || rawItem?.title || rawItem?.product?.name || rawItem?.product?.title
+          ) || '\u0422\u043e\u0432\u0430\u0440',
+          photo_url: photos[0] || fallbackPhoto || '',
+          option_items: optionItems,
+          ingredients,
+          variant_group_id: Number.isFinite(variantGroupId) && variantGroupId > 0 ? variantGroupId : null,
+          variant_value_index: Number.isFinite(variantValueIndex) && variantValueIndex >= 0
+            ? variantValueIndex
+            : null,
+        };
+      })
+      .filter(Boolean);
+  }
+
+  function collectCheckoutLoyaltyMatchedItems(discount, items, productCategoriesMap) {
+    const mechanic = parsePublicDiscountObject(discount?.mechanic_config_json, {});
+    const scopeMode = publicDiscountText(mechanic?.qualifying_scope_mode).toLowerCase() || 'none';
+    const targets = buildPublicProductTargetSets(mechanic?.qualifying_items || []);
+    const sourceItems = (Array.isArray(items) ? items : []).filter((item) => Number(item?.auto_add || 0) !== 1);
+
+    return sourceItems.filter((item) => {
+      if (scopeMode === 'none') return true;
+      return matchDiscountTargetScope(targets, item, productCategoriesMap, scopeMode);
+    });
+  }
+
+  function computeCheckoutLoyaltyProgressIncrement(discount, items, productCategoriesMap) {
+    const mechanic = parsePublicDiscountObject(discount?.mechanic_config_json, {});
+    const progressBasis = publicDiscountText(mechanic?.progress_basis).toLowerCase() || 'orders';
+    const matchedItems = collectCheckoutLoyaltyMatchedItems(discount, items, productCategoriesMap);
+
+    if (!matchedItems.length) return 0;
+    if (progressBasis === 'amount') {
+      return roundPromoMoney(matchedItems.reduce((sum, item) => sum + Number(item?.line_total || 0), 0));
+    }
+    if (progressBasis === 'items') {
+      return matchedItems.reduce((sum, item) => sum + Math.max(1, Number(item?.qty || 0)), 0);
+    }
+    return 1;
+  }
+
+  function collectPublicProgressQualifyingProductIds(discount) {
+    const mechanic = parsePublicDiscountObject(discount?.mechanic_config_json, {});
+    return [...new Set(
+      (Array.isArray(mechanic?.qualifying_items) ? mechanic.qualifying_items : [])
+        .map((row) => {
+          const entityType = publicDiscountText(row?.entity_type).toLowerCase();
+          if (entityType && entityType !== 'product') return 0;
+          return Number(row?.product_id ?? row?.entity_id ?? row?.id ?? 0);
+        })
+        .filter((id) => id > 0)
+    )];
+  }
+
+  function normalizePublicProgressVisualProductEntry(entry, productsMap) {
+    if (!entry || typeof entry !== 'object') return null;
+    const productId = Number(entry?.product_id || 0);
+    const product = productId > 0 ? (productsMap.get(productId) || null) : null;
+    const title = publicDiscountText(entry?.title || entry?.name || product?.title) || '\u0422\u043e\u0432\u0430\u0440';
+    const photoUrl = publicDiscountText(
+      entry?.photo_url
+      || entry?.photo
+      || product?.photo_url
+    );
+    return {
+      product_id: productId > 0 ? productId : null,
+      title,
+      photo_url: photoUrl || null,
+    };
+  }
+
+  function buildPublicProgressFallbackUnits(discount, productsMap, count) {
+    const safeCount = normalizePublicProgressSlotCount(count);
+    if (!(safeCount > 0)) return [];
+
+    const mechanic = parsePublicDiscountObject(discount?.mechanic_config_json, {});
+    const sourceRows = Array.isArray(mechanic?.qualifying_items) ? mechanic.qualifying_items : [];
+    const baseUnits = sourceRows
+      .map((row) => {
+        const entityType = publicDiscountText(row?.entity_type).toLowerCase();
+        if (entityType && entityType !== 'product') return null;
+        return normalizePublicProgressVisualProductEntry({
+          product_id: Number(row?.product_id ?? row?.entity_id ?? row?.id ?? 0),
+          title: publicDiscountText(row?.title || row?.name),
+          photo_url: publicDiscountText(row?.photo || row?.photo_url),
+        }, productsMap);
+      })
+      .filter(Boolean);
+
+    if (!baseUnits.length) return [];
+    return Array.from({ length: safeCount }, (_, index) => ({ ...baseUnits[index % baseUnits.length] }));
+  }
+
+  function buildPublicProgressOrderSlots(state) {
+    const slotCount = normalizePublicProgressSlotCount(state?.thresholdValue);
+    if (!(slotCount > 0)) return null;
+    const filledCount = Math.max(
+      0,
+      Math.min(slotCount, normalizePublicProgressSlotCount(state?.displayProgressValue))
+    );
+    return {
+      mode: 'orders',
+      slot_count: slotCount,
+      filled_count: filledCount,
+      slots: Array.from({ length: slotCount }, (_, index) => ({
+        index: index + 1,
+        kind: 'order',
+        is_filled: index < filledCount,
+      })),
+    };
+  }
+
+  function buildPublicProgressAmountVisual(state) {
+    const thresholdValue = Math.max(0, Number(state?.thresholdValue || 0));
+    return {
+      mode: 'amount',
+      current_value: Math.max(0, Number(state?.displayProgressValue || 0)),
+      threshold_value: thresholdValue,
+      progress_ratio: thresholdValue > 0
+        ? Math.max(0, Math.min(1, Number(state?.progressRatio || 0)))
+        : 0,
+    };
+  }
+
+  function buildPublicProgressItemsVisual({
+    discount,
+    state,
+    orders,
+    productCategoriesMap,
+    productsMap,
+  }) {
+    const slotCount = normalizePublicProgressSlotCount(state?.thresholdValue);
+    if (!(slotCount > 0)) return null;
+
+    const filledCount = Math.max(
+      0,
+      Math.min(slotCount, normalizePublicProgressSlotCount(state?.displayProgressValue))
+    );
+    const discountStoreId = Number(discount?.store_id || 0);
+    const scopedOrders = discountStoreId > 0
+      ? orders.filter((order) => Number(order?.store_id || 0) === discountStoreId)
+      : orders;
+    const recentUnits = [];
+
+    for (const order of scopedOrders) {
+      const matchedItems = collectCheckoutLoyaltyMatchedItems(
+        discount,
+        Array.isArray(order?.items) ? order.items : [],
+        productCategoriesMap
+      );
+      for (const matchedItem of matchedItems) {
+        const normalizedUnit = normalizePublicProgressVisualProductEntry(matchedItem, productsMap) || {
+          product_id: Number(matchedItem?.product_id || 0) || null,
+          title: publicDiscountText(matchedItem?.title) || '\u0422\u043e\u0432\u0430\u0440',
+          photo_url: null,
+        };
+        const qty = Math.max(1, Number(matchedItem?.qty || 0));
+        for (let index = 0; index < qty; index += 1) {
+          recentUnits.push(normalizedUnit);
+          if (recentUnits.length > slotCount) recentUnits.shift();
+        }
+      }
+    }
+
+    const fallbackUnits = buildPublicProgressFallbackUnits(discount, productsMap, filledCount);
+    const filledUnits = recentUnits.slice(-filledCount).map((unit) => ({ ...unit }));
+    while (filledUnits.length < filledCount) {
+      const fallbackUnit = fallbackUnits[filledUnits.length] || null;
+      filledUnits.push(fallbackUnit ? { ...fallbackUnit } : null);
+    }
+
+    return {
+      mode: 'items',
+      slot_count: slotCount,
+      filled_count: filledCount,
+      slots: Array.from({ length: slotCount }, (_, index) => {
+        if (index >= filledCount) {
+          return {
+            index: index + 1,
+            kind: 'item',
+            is_filled: false,
+            product_id: null,
+            title: '',
+            photo_url: null,
+          };
+        }
+        const unit = filledUnits[index] || null;
+        return {
+          index: index + 1,
+          kind: 'item',
+          is_filled: true,
+          product_id: Number(unit?.product_id || 0) || null,
+          title: publicDiscountText(unit?.title),
+          photo_url: publicDiscountText(unit?.photo_url) || null,
+        };
+      }),
+    };
+  }
+
+  async function loadCustomerProgressHistoryOrders(tenantId, customerId) {
+    if (!(Number(customerId || 0) > 0)) return [];
+    const [rows] = await db.query(
+      `SELECT id, store_id, items
+         FROM order_orders
+        WHERE tenant_id = ?
+          AND customer_id = ?
+        ORDER BY created_at ASC, id ASC`,
+      [tenantId, customerId]
+    );
+    return (Array.isArray(rows) ? rows : [])
+      .map((row) => ({
+        id: Number(row?.id || 0),
+        store_id: Number(row?.store_id || 0),
+        items: parsePublicProgressOrderItems(row?.items),
+      }))
+      .filter((row) => row.id > 0);
+  }
+
+  async function buildCustomerProgressVisualMap({
+    tenantId,
+    storeId,
+    customerId,
+    discounts,
+    progressMap,
+  }) {
+    const discountRows = Array.isArray(discounts)
+      ? discounts.filter((discount) => Number(discount?.id || 0) > 0)
+      : [];
+    if (!discountRows.length) return new Map();
+
+    const orders = customerId > 0
+      ? await loadCustomerProgressHistoryOrders(tenantId, customerId)
+      : [];
+    const historyProductIds = [...new Set(
+      orders.flatMap((order) => (
+        (Array.isArray(order?.items) ? order.items : [])
+          .map((item) => Number(item?.product_id || 0))
+          .filter((id) => id > 0)
+      ))
+    )];
+    const qualifyingProductIds = [...new Set(
+      discountRows.flatMap((discount) => collectPublicProgressQualifyingProductIds(discount))
+    )];
+    const rewardProductIds = [...new Set(
+      discountRows.flatMap((discount) => collectPublicProgressRewardProductIds(discount))
+    )];
+    const [productCategoriesMap, productsMap, availableRewardProducts] = await Promise.all([
+      historyProductIds.length
+        ? loadCheckoutProductCategoriesMap(tenantId, historyProductIds)
+        : Promise.resolve(new Map()),
+      [...new Set([...historyProductIds, ...qualifyingProductIds, ...rewardProductIds])].length
+        ? loadCheckoutRewardProductsByIds(
+            tenantId,
+            [...new Set([...historyProductIds, ...qualifyingProductIds, ...rewardProductIds])]
+          )
+        : Promise.resolve(new Map()),
+      rewardProductIds.length
+        ? loadCheckoutBenefitRewardClaimProducts(
+            null,
+            tenantId,
+            storeId,
+            rewardProductIds
+          )
+        : Promise.resolve([]),
+    ]);
+    const availableRewardProductIds = new Set(
+      (Array.isArray(availableRewardProducts) ? availableRewardProducts : [])
+        .map((product) => Number(product?.product_id || 0))
+        .filter((id) => id > 0)
+    );
+
+    const visualMap = new Map();
+    const rewardPreviewMap = new Map();
+    for (const discount of discountRows) {
+      const discountId = Number(discount?.id || 0);
+      const state = getPublicProgressBenefitState(discount, progressMap.get(discountId) || null);
+      const rewardPreview = buildPublicProgressRewardPreview(discount, state, productsMap, availableRewardProductIds);
+      const rewardSlot = buildPublicProgressRewardSlot(state, rewardPreview);
+      let visual = null;
+      if (state.progressBasis === 'amount') {
+        visual = buildPublicProgressAmountVisual(state);
+      } else if (state.progressBasis === 'items') {
+        visual = buildPublicProgressItemsVisual({
+          discount,
+          state,
+          orders,
+          productCategoriesMap,
+          productsMap,
+        });
+      } else {
+        visual = buildPublicProgressOrderSlots(state);
+      }
+      if (visual && typeof visual === 'object') {
+        visual = {
+          ...visual,
+          reward_slot: rewardSlot,
+        };
+      } else {
+        visual = {
+          mode: publicDiscountText(state.progressBasis).toLowerCase() || 'orders',
+          reward_slot: rewardSlot,
+        };
+      }
+      visualMap.set(discountId, visual);
+      rewardPreviewMap.set(discountId, rewardPreview);
+    }
+    return { visualMap, rewardPreviewMap };
+  }
+
+  async function buildPublicProgressBenefitCards({ tenantId, storeId, customerId, discounts }) {
+    const discountRows = Array.isArray(discounts)
+      ? discounts.filter((discount) => Number(discount?.id || 0) > 0)
+      : [];
+    if (!discountRows.length) return [];
+
+    const progressMap = await loadCustomerProgressMap(
+      tenantId,
+      customerId,
+      discountRows.map((discount) => Number(discount?.id || 0))
+    );
+    const {
+      visualMap: progressVisualMap,
+      rewardPreviewMap,
+    } = await buildCustomerProgressVisualMap({
+      tenantId,
+      storeId,
+      customerId,
+      discounts: discountRows,
+      progressMap,
+    });
+
+    return discountRows.map((discount) => {
+      const discountId = Number(discount?.id || 0);
+      return buildPublicProgressBenefitCard(
+        discount,
+        progressMap.get(discountId) || null,
+        progressVisualMap.get(discountId) || null,
+        {
+          rewardPreview: rewardPreviewMap.get(discountId) || null,
+          interactionMode: getPublicProgressInteractionMode(discount),
+          qualifyingScopeMode: getPublicProgressQualifyingScopeMode(discount),
+        }
+      );
+    });
+  }
+
+  async function generateUniqueRewardPromoCode(conn, tenantId, storeId, baseCode) {
+    const seed = publicDiscountText(baseCode).toUpperCase() || 'BONUS';
+    for (let attempt = 0; attempt < 25; attempt += 1) {
+      const suffix = crypto.randomBytes(3).toString('hex').toUpperCase();
+      const nextCode = `${seed}-${suffix}`.slice(0, 64);
+      const [rows] = await conn.query(
+        `SELECT id
+           FROM mkt_discount_promo_codes
+          WHERE tenant_id = ?
+            AND (store_id = ? OR store_id = 0 OR store_id IS NULL)
+            AND code = ?
+          LIMIT 1`,
+        [tenantId, storeId, nextCode]
+      );
+      if (!Array.isArray(rows) || !rows.length) return nextCode;
+    }
+    return `${seed}-${Date.now()}`.slice(0, 64);
+  }
+
+  function normalizeSelectedRewardIds(value) {
+    if (!Array.isArray(value)) return [];
+    return [...new Set(
+      value
+        .map((entry) => Number(entry))
+        .filter((entry) => Number.isInteger(entry) && entry > 0)
+    )];
+  }
+
+  function normalizeSelectedRewardItems(value) {
+    if (!Array.isArray(value)) return [];
+    return value
+      .map((entry) => {
+        if (!entry || typeof entry !== 'object') return null;
+        const productId = Number(entry?.product_id || 0);
+        if (!(productId > 0)) return null;
+        return {
+          selection_key: publicDiscountText(entry?.selection_key),
+          product_id: productId,
+          product_config: normalizePublicProductConfigPayload(entry?.product_config, productId),
+        };
+      })
+      .filter(Boolean);
+  }
+
+  function normalizeSelectedDiscountId(value) {
+    const id = Number(value);
+    return Number.isInteger(id) && id > 0 ? id : null;
+  }
+
+  async function loadDiscountTargetRowsMap(tenantId, discountIds) {
+    const ids = [...new Set((Array.isArray(discountIds) ? discountIds : []).map((id) => Number(id)).filter((id) => id > 0))];
+    if (!ids.length) return new Map();
+    await ensureDiscountProductConfigColumn();
+    const [rows] = await db.query(
+      `SELECT dp.discount_id,
+              dp.product_id,
+              dp.category_id,
+              dp.combo_id,
+              dp.product_config_json,
+              d.mechanic_config_json
+         FROM mkt_discount_products dp
+         INNER JOIN mkt_discounts d
+           ON d.id = dp.discount_id
+          AND d.tenant_id = dp.tenant_id
+        WHERE dp.tenant_id = ?
+          AND dp.discount_id IN (?)`,
+      [tenantId, ids]
+    );
+    const result = new Map();
+    for (const row of Array.isArray(rows) ? rows : []) {
+      const discountId = Number(row?.discount_id || 0);
+      if (!(discountId > 0)) continue;
+      if (!result.has(discountId)) result.set(discountId, []);
+      const normalizedRow = normalizePublicDiscountTargetRow(
+        row,
+        getPublicDiscountProductsConfigMode(row, 'any')
+      );
+      if (normalizedRow) {
+        result.get(discountId).push(normalizedRow);
+      }
+    }
+    return result;
+  }
+
+  function chooseDefaultDiscountCard(cards, requestedId = null) {
+    const availableCards = Array.isArray(cards)
+      ? cards.filter((card) => Number(card?.discount_amount || 0) > 0)
+      : [];
+    if (!availableCards.length) return null;
+    const requestedDiscountId = normalizeSelectedDiscountId(requestedId);
+    if (requestedDiscountId !== null) {
+      const requestedCard = availableCards.find((card) => Number(card?.id || 0) === requestedDiscountId);
+      if (requestedCard) return requestedCard;
+    }
+    return availableCards.slice().sort((a, b) => {
+      const amountDiff = Number(b?.discount_amount || 0) - Number(a?.discount_amount || 0);
+      if (amountDiff !== 0) return amountDiff;
+      const priorityDiff = Number(b?.priority || 0) - Number(a?.priority || 0);
+      if (priorityDiff !== 0) return priorityDiff;
+      return Number(a?.id || 0) - Number(b?.id || 0);
+    })[0] || null;
+  }
+
+
+  function buildRewardProductsPayload(items, productsMap, configMode = 'any') {
+    return (Array.isArray(items) ? items : [])
+      .map((item) => {
+        const productId = Number(item?.entity_id || item?.product_id || item?.id || 0);
+        if (!(productId > 0)) return null;
+        const product = productsMap.get(productId) || null;
+        const productConfig = normalizePublicProductConfigPayload(item?.product_config ?? item?.product_config_json, productId);
+        return {
+          id: productId,
+          title: publicDiscountText(item?.title) || publicDiscountText(product?.title) || '\u0422\u043e\u0432\u0430\u0440',
+          photo_url: product?.photo_url || null,
+          price: Number(product?.price || 0),
+          config_mode: normalizePublicProductConfigMode(item?.config_mode ?? configMode, configMode),
+          product_config: productConfig,
+        };
+      })
+      .filter(Boolean);
+  }
+
+  function buildGiftRewardPayload(discount, mechanic, productsMap) {
+    const configMode = normalizePublicProductConfigMode(
+      mechanic?.gift_products_config_mode ?? mechanic?.reward?.gift_products_config_mode,
+      'any'
+    );
+    return buildRuntimeGiftRewardPayload({
+      title: publicDiscountText(discount?.title) || '\u041f\u043e\u0434\u0430\u0440\u043e\u043a',
+      description: publicDiscountText(discount?.description),
+      targetRows: mechanic?.reward?.gift_products,
+      productsMap,
+      configMode,
+    });
+    const products = buildRewardProductsPayload(mechanic?.reward?.gift_products, productsMap);
+    return {
+      title: publicDiscountText(discount?.title) || '\u041f\u043e\u0434\u0430\u0440\u043e\u043a',
+      description: publicDiscountText(discount?.description),
+      badge_text: '\u041f\u043e\u0434\u0430\u0440\u043e\u043a',
+      total_value: roundPromoMoney(products.reduce((sum, product) => sum + Number(product?.price || 0), 0)),
+      products,
+    };
+  }
+
+  function buildDiscountRewardPayload(discount, mechanic, productsMap) {
+    const reward = parsePublicDiscountObject(mechanic?.reward, {});
+    const rewardDiscount = parsePublicDiscountObject(reward?.discount, {});
+    const configMode = normalizePublicProductConfigMode(
+      rewardDiscount?.products_config_mode ?? mechanic?.reward_products_config_mode,
+      'any'
+    );
+    return buildRuntimeDiscountRewardPayload({
+      title: publicDiscountText(discount?.title) || '\u0421\u043a\u0438\u0434\u043a\u0430',
+      description: publicDiscountText(discount?.description),
+      discountType: rewardDiscount?.discount_type || discount?.discount_type || 'percent',
+      discountValue: rewardDiscount?.discount_value || 0,
+      applyTo: rewardDiscount?.apply_to || discount?.apply_to || 'order',
+      maxDiscountAmount: discount?.max_discount_amount != null ? Number(discount.max_discount_amount || 0) : null,
+      minOrderAmount: discount?.min_order_amount != null ? Number(discount.min_order_amount || 0) : null,
+      isStackable: Number(discount?.is_stackable || 0) === 1,
+      targetRows: rewardDiscount?.products,
+      productsMap,
+      configMode,
+    });
+    return {
+      title: publicDiscountText(discount?.title) || '\u0421\u043a\u0438\u0434\u043a\u0430',
+      description: publicDiscountText(discount?.description),
+      discount_type: publicDiscountText(rewardDiscount?.discount_type || discount?.discount_type || 'percent').toLowerCase() || 'percent',
+      discount_value: Number(rewardDiscount?.discount_value || 0),
+      apply_to: publicDiscountText(rewardDiscount?.apply_to || discount?.apply_to || 'order').toLowerCase() || 'order',
+      max_discount_amount: discount?.max_discount_amount != null ? Number(discount.max_discount_amount || 0) : null,
+      min_order_amount: discount?.min_order_amount != null ? Number(discount.min_order_amount || 0) : null,
+      is_stackable: Number(discount?.is_stackable || 0) === 1,
+      products: buildRewardProductsPayload(rewardDiscount?.products, productsMap),
+    };
+  }
+
+  async function buildCustomerBenefitsResponse({ tenantId, storeId, customerId }) {
+    const customerDiscounts = await loadCustomerBenefitDiscountRows(tenantId, storeId, customerId);
+    const automaticDiscountRows = customerDiscounts.filter((discount) => isPublicAutomaticSimpleDiscount(discount));
+    const automaticDiscountIds = automaticDiscountRows
+      .map((discount) => Number(discount?.id || 0))
+      .filter((id) => id > 0);
+    let automaticTargetsByDiscountId = new Map();
+    let automaticTargetProductsMap = new Map();
+    if (automaticDiscountIds.length) {
+      automaticTargetsByDiscountId = await loadDiscountTargetRowsMap(tenantId, automaticDiscountIds);
+      automaticTargetProductsMap = await loadCheckoutRewardProductsByIds(
+        tenantId,
+        [...new Set(
+          [...automaticTargetsByDiscountId.values()].flatMap((rows) => (
+            (Array.isArray(rows) ? rows : [])
+              .map((row) => Number(row?.product_id || 0))
+              .filter((id) => id > 0)
+          ))
+        )]
+      );
+    }
+    const automaticDiscounts = automaticDiscountRows.map((discount) => ({
+      ...buildPublicDiscountBenefitCard(discount),
+      products: buildRewardProductsPayload(
+        automaticTargetsByDiscountId.get(Number(discount?.id || 0)) || [],
+        automaticTargetProductsMap,
+        getPublicDiscountProductsConfigMode(discount, 'any')
+      ),
+    }));
+
+    const promoDiscounts = customerDiscounts.filter((discount) => isPublicPromoSimpleDiscount(discount));
+    const promoDiscountIds = promoDiscounts
+      .map((discount) => Number(discount?.id || 0))
+      .filter((id) => id > 0);
+
+    let promoCodes = [];
+    let promoTargetsByDiscountId = new Map();
+    let promoTargetProductsMap = new Map();
+    if (promoDiscountIds.length) {
+      const [promoRows] = await db.query(
+        `SELECT id, discount_id, code, code_mode, usage_limit, usage_count, assigned_customer_id, is_active
+           FROM mkt_discount_promo_codes
+          WHERE tenant_id = ?
+            AND (store_id = ? OR store_id = 0 OR store_id IS NULL)
+            AND discount_id IN (?)
+            AND is_active = 1`,
+        [tenantId, storeId, promoDiscountIds]
+      );
+      const promoRowsByDiscountId = new Map();
+      for (const row of Array.isArray(promoRows) ? promoRows : []) {
+        const discountId = Number(row?.discount_id || 0);
+        if (!(discountId > 0)) continue;
+        if (!promoRowsByDiscountId.has(discountId)) promoRowsByDiscountId.set(discountId, []);
+        promoRowsByDiscountId.get(discountId).push(row);
+      }
+      promoTargetsByDiscountId = await loadDiscountTargetRowsMap(tenantId, promoDiscountIds);
+      promoTargetProductsMap = await loadCheckoutRewardProductsByIds(
+        tenantId,
+        [...new Set(
+          [...promoTargetsByDiscountId.values()].flatMap((rows) => (
+            (Array.isArray(rows) ? rows : [])
+              .map((row) => Number(row?.product_id || 0))
+              .filter((id) => id > 0)
+          ))
+        )]
+      );
+      promoCodes = promoDiscounts.flatMap((discount) => {
+        const targetRows = promoTargetsByDiscountId.get(Number(discount?.id || 0)) || [];
+        return buildPublicPromoCodeCards(
+          discount,
+          promoRowsByDiscountId.get(Number(discount?.id || 0)) || [],
+          customerId
+        ).map((card) => ({
+          ...card,
+          products: buildRewardProductsPayload(
+            targetRows,
+            promoTargetProductsMap,
+            getPublicDiscountProductsConfigMode(discount, 'any')
+          ),
+        }));
+      });
+    }
+
+    const rewardRows = await loadCustomerAvailableRewardRows(tenantId, customerId);
+    const availableGiftRewardProductIds = await loadPublicGiftRewardAvailableProductIds(tenantId, storeId, rewardRows);
+    const giftRewards = rewardRows
+      .filter((row) => publicDiscountText(row?.reward_type).toLowerCase() === 'gift')
+      .map((row) => buildPublicGiftRewardCard(row, availableGiftRewardProductIds));
+    const rewardDiscounts = rewardRows
+      .filter((row) => publicDiscountText(row?.reward_type).toLowerCase() === 'discount')
+      .map((row) => {
+        const rewardSource = buildPublicRewardDiscountSource(row);
+        return {
+          ...buildPublicDiscountBenefitCard(rewardSource.discount),
+          products: Array.isArray(rewardSource?.payload?.products) ? rewardSource.payload.products : [],
+        };
+      });
+
+    const loyaltyDiscounts = customerDiscounts.filter((discount) => normalizePublicMechanicType(discount?.mechanic_type) === 'loyalty_progress');
+    const progress = await buildPublicProgressBenefitCards({
+      tenantId,
+      storeId,
+      customerId,
+      discounts: loyaltyDiscounts,
+    });
+
+    return {
+      discounts: [...automaticDiscounts, ...rewardDiscounts],
+      promo_codes: promoCodes,
+      gifts: giftRewards,
+      progress,
+    };
+  }
+
+  async function loadCustomerBenefitDiscountRows(tenantId, storeId, customerId) {
+    const [customerCats] = await db.query(
+      `SELECT category_id
+         FROM cust_customer_category_links
+        WHERE tenant_id = ? AND customer_id = ?`,
+      [tenantId, customerId]
+    ).catch((err) => {
+      console.warn('cust_customer_category_links not available for /me/benefits:', err?.code || err?.message || err);
+      return [[]];
+    });
+
+    const categoryIdSet = new Set(
+      (Array.isArray(customerCats) ? customerCats : [])
+        .map((row) => Number(row?.category_id || 0))
+        .filter((id) => id > 0)
+    );
+
+    const [rows] = await db.query(
+      `SELECT d.id, d.store_id, d.title, d.description, d.discount_type, d.discount_value,
+              d.apply_to, d.min_order_amount, d.max_discount_amount, d.is_stackable,
+              d.usage_limit, d.usage_per_customer, d.usage_count,
+              d.starts_at, d.ends_at, d.schedule_days, d.schedule_time_start, d.schedule_time_end,
+              d.priority, d.is_active, d.activation_mode, d.reward_type, d.promo_code_mode,
+              d.unique_code_usage_limit, d.mechanic_type, d.mechanic_config_json,
+              dc.target_type, dc.customer_id, dc.customer_category_id
+         FROM mkt_discounts d
+         LEFT JOIN mkt_discount_customers dc
+           ON dc.discount_id = d.id
+          AND dc.tenant_id = d.tenant_id
+        WHERE d.tenant_id = ?
+          AND (d.store_id = ? OR d.store_id = 0 OR d.store_id IS NULL)
+          AND d.is_active = 1`,
+      [tenantId, storeId]
+    );
+
+    const byDiscountId = new Map();
+    for (const row of Array.isArray(rows) ? rows : []) {
+      const discountId = Number(row?.id || 0);
+      if (!(discountId > 0)) continue;
+
+      let entry = byDiscountId.get(discountId);
+      if (!entry) {
+        entry = {
+          discount: { ...row },
+          hasTargets: false,
+          matches: false,
+        };
+        byDiscountId.set(discountId, entry);
+      }
+
+      const hasTargetRow = Boolean(
+        publicDiscountText(row?.target_type)
+        || Number(row?.customer_id || 0) > 0
+        || Number(row?.customer_category_id || 0) > 0
+      );
+      if (!hasTargetRow) continue;
+
+      entry.hasTargets = true;
+      if (publicDiscountText(row?.target_type).toLowerCase() === 'all') {
+        entry.matches = true;
+      }
+      if (Number(row?.customer_id || 0) === Number(customerId || 0)) {
+        entry.matches = true;
+      }
+      if (categoryIdSet.has(Number(row?.customer_category_id || 0))) {
+        entry.matches = true;
+      }
+    }
+
+    return [...byDiscountId.values()]
+      .filter((entry) => {
+        if (!entry?.discount) return false;
+        if (!discountHelpers.isDiscountActive(entry.discount)) return false;
+        return !entry.hasTargets || entry.matches;
+      })
+      .map((entry) => entry.discount)
+      .sort((a, b) => {
+        const priorityDiff = Number(b?.priority || 0) - Number(a?.priority || 0);
+        if (priorityDiff !== 0) return priorityDiff;
+        return Number(a?.id || 0) - Number(b?.id || 0);
+      });
+  }
+
+  router.get('/me/benefits', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const token = str(req.headers['x-customer-token']);
+      const customer = await getCustomerByToken(tenantId, token);
+      if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+
+      const data = await buildCustomerBenefitsResponse({
+        tenantId,
+        storeId,
+        customerId: customer.id,
+      });
+
+      return res.json({
+        ok: true,
+        data,
+      });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
   router.get('/me/discounts', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
@@ -3933,8 +6418,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
       const customerId = customer.id;
 
-      // РџРѕР»СѓС‡Р°РµРј СЃРєРёРґРєРё, РїСЂРёРІСЏР·Р°РЅРЅС‹Рµ РЅР°РїСЂСЏРјСѓСЋ Рє РєР»РёРµРЅС‚Сѓ
-      // store_id = 0 РёР»Рё СЃРѕРІРїР°РґР°РµС‚ СЃ С‚РµРєСѓС‰РёРј store_id - СЃРєРёРґРєР° РїСЂРёРјРµРЅРёРјР°
+      // Р СџР С•Р В»РЎС“РЎвЂЎР В°Р ВµР С РЎРѓР С”Р С‘Р Т‘Р С”Р С‘, Р С—РЎР‚Р С‘Р Р†РЎРЏР В·Р В°Р Р…Р Р…РЎвЂ№Р Вµ Р Р…Р В°Р С—РЎР‚РЎРЏР СРЎС“РЎР‹ Р С” Р С”Р В»Р С‘Р ВµР Р…РЎвЂљРЎС“
+      // store_id = 0 Р С‘Р В»Р С‘ РЎРѓР С•Р Р†Р С—Р В°Р Т‘Р В°Р ВµРЎвЂљ РЎРѓ РЎвЂљР ВµР С”РЎС“РЎвЂ°Р С‘Р С store_id - РЎРѓР С”Р С‘Р Т‘Р С”Р В° Р С—РЎР‚Р С‘Р СР ВµР Р…Р С‘Р СР В°
       const [directDiscounts] = await db.query(
         `SELECT d.id, d.store_id, d.title, d.description, d.discount_type, d.discount_value,
                 d.apply_to, d.min_order_amount, d.max_discount_amount, d.is_stackable,
@@ -3948,7 +6433,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         [tenantId, storeId, customerId]
       );
 
-      // РџРѕР»СѓС‡Р°РµРј РєР°С‚РµРіРѕСЂРёРё РєР»РёРµРЅС‚Р° РёР· С‚Р°Р±Р»РёС†С‹ СЃРІСЏР·РµР№ (РµСЃР»Рё С‚Р°Р±Р»РёС†Р° СЃСѓС‰РµСЃС‚РІСѓРµС‚)
+      // Р СџР С•Р В»РЎС“РЎвЂЎР В°Р ВµР С Р С”Р В°РЎвЂљР ВµР С–Р С•РЎР‚Р С‘Р С‘ Р С”Р В»Р С‘Р ВµР Р…РЎвЂљР В° Р С‘Р В· РЎвЂљР В°Р В±Р В»Р С‘РЎвЂ РЎвЂ№ РЎРѓР Р†РЎРЏР В·Р ВµР в„– (Р ВµРЎРѓР В»Р С‘ РЎвЂљР В°Р В±Р В»Р С‘РЎвЂ Р В° РЎРѓРЎС“РЎвЂ°Р ВµРЎРѓРЎвЂљР Р†РЎС“Р ВµРЎвЂљ)
       let categoryIds = [];
       try {
         const [customerCats] = await db.query(
@@ -3957,11 +6442,11 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         );
         categoryIds = customerCats.map(c => Number(c.category_id));
       } catch (catErr) {
-        // РўР°Р±Р»РёС†Р° РјРѕР¶РµС‚ РЅРµ СЃСѓС‰РµСЃС‚РІРѕРІР°С‚СЊ - РїСЂРѕРїСѓСЃРєР°РµРј
-        console.warn('cust_customer_category_links РЅРµ РЅР°Р№РґРµРЅР°, РїСЂРѕРїСѓСЃРєР°РµРј:', catErr.code);
+        // Р СћР В°Р В±Р В»Р С‘РЎвЂ Р В° Р СР С•Р В¶Р ВµРЎвЂљ Р Р…Р Вµ РЎРѓРЎС“РЎвЂ°Р ВµРЎРѓРЎвЂљР Р†Р С•Р Р†Р В°РЎвЂљРЎРЉ - Р С—РЎР‚Р С•Р С—РЎС“РЎРѓР С”Р В°Р ВµР С
+        console.warn('cust_customer_category_links Р Р…Р Вµ Р Р…Р В°Р в„–Р Т‘Р ВµР Р…Р В°, Р С—РЎР‚Р С•Р С—РЎС“РЎРѓР С”Р В°Р ВµР С:', catErr.code);
       }
 
-      // РџРѕР»СѓС‡Р°РµРј СЃРєРёРґРєРё РїРѕ РєР°С‚РµРіРѕСЂРёСЏРј РєР»РёРµРЅС‚Р°
+      // Р СџР С•Р В»РЎС“РЎвЂЎР В°Р ВµР С РЎРѓР С”Р С‘Р Т‘Р С”Р С‘ Р С—Р С• Р С”Р В°РЎвЂљР ВµР С–Р С•РЎР‚Р С‘РЎРЏР С Р С”Р В»Р С‘Р ВµР Р…РЎвЂљР В°
       let categoryDiscounts = [];
       if (categoryIds.length > 0) {
         const [catDisc] = await db.query(
@@ -3979,14 +6464,14 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         categoryDiscounts = catDisc;
       }
 
-      // РћР±СЉРµРґРёРЅСЏРµРј Рё СѓРґР°Р»СЏРµРј РґСѓР±Р»РёРєР°С‚С‹
+      // Р С›Р В±РЎР‰Р ВµР Т‘Р С‘Р Р…РЎРЏР ВµР С Р С‘ РЎС“Р Т‘Р В°Р В»РЎРЏР ВµР С Р Т‘РЎС“Р В±Р В»Р С‘Р С”Р В°РЎвЂљРЎвЂ№
       const allDiscounts = [...directDiscounts, ...categoryDiscounts];
       const uniqueDiscounts = [];
       const seenIds = new Set();
 
       for (const discount of allDiscounts) {
         if (!seenIds.has(discount.id)) {
-          // Р”РѕР±Р°РІР»СЏРµРј С„Р»Р°Рі Р°РєС‚РёРІРЅРѕСЃС‚Рё РґР»СЏ РѕС‚РѕР±СЂР°Р¶РµРЅРёСЏ РЅР° С„СЂРѕРЅС‚РµРЅРґРµ
+          // Р вЂќР С•Р В±Р В°Р Р†Р В»РЎРЏР ВµР С РЎвЂћР В»Р В°Р С– Р В°Р С”РЎвЂљР С‘Р Р†Р Р…Р С•РЎРѓРЎвЂљР С‘ Р Т‘Р В»РЎРЏ Р С•РЎвЂљР С•Р В±РЎР‚Р В°Р В¶Р ВµР Р…Р С‘РЎРЏ Р Р…Р В° РЎвЂћРЎР‚Р С•Р Р…РЎвЂљР ВµР Р…Р Т‘Р Вµ
           discount.is_currently_active = discountHelpers.isDiscountActive(discount);
           uniqueDiscounts.push(discount);
           seenIds.add(discount.id);
@@ -4034,9 +6519,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
   });
 
   /**
-   * РљРѕРјР±Рѕ-Р±Р»РѕРєРё РґР»СЏ РєР»РёРµРЅС‚Р°: С‚РѕР»СЊРєРѕ Р±Р»РѕРєРё Рё С‚РѕР»СЊРєРѕ С‚РѕРІР°СЂС‹, РґРѕСЃС‚СѓРїРЅС‹Рµ РЅР° СЃР°Р№С‚Рµ
-   * (is_active=1, site_visibility=1). РўРѕРІР°СЂС‹ СЃ РѕСЃС‚Р°С‚РєРѕРј 0 / РІС‹РєР»СЋС‡РµРЅРЅС‹Рµ РІ Р±Р»РѕРєРµ РѕСЃС‚Р°СЋС‚СЃСЏ,
-   * РЅРѕ РІ РѕС‚РІРµС‚ РЅРµ РїРѕРїР°РґР°СЋС‚ вЂ” РєР»РёРµРЅС‚ РёС… РЅРµ РІРёРґРёС‚.
+   * Р С™Р С•Р СР В±Р С•-Р В±Р В»Р С•Р С”Р С‘ Р Т‘Р В»РЎРЏ Р С”Р В»Р С‘Р ВµР Р…РЎвЂљР В°: РЎвЂљР С•Р В»РЎРЉР С”Р С• Р В±Р В»Р С•Р С”Р С‘ Р С‘ РЎвЂљР С•Р В»РЎРЉР С”Р С• РЎвЂљР С•Р Р†Р В°РЎР‚РЎвЂ№, Р Т‘Р С•РЎРѓРЎвЂљРЎС“Р С—Р Р…РЎвЂ№Р Вµ Р Р…Р В° РЎРѓР В°Р в„–РЎвЂљР Вµ
+   * (is_active=1, site_visibility=1). Р СћР С•Р Р†Р В°РЎР‚РЎвЂ№ РЎРѓ Р С•РЎРѓРЎвЂљР В°РЎвЂљР С”Р С•Р С 0 / Р Р†РЎвЂ№Р С”Р В»РЎР‹РЎвЂЎР ВµР Р…Р Р…РЎвЂ№Р Вµ Р Р† Р В±Р В»Р С•Р С”Р Вµ Р С•РЎРѓРЎвЂљР В°РЎР‹РЎвЂљРЎРѓРЎРЏ,
+   * Р Р…Р С• Р Р† Р С•РЎвЂљР Р†Р ВµРЎвЂљ Р Р…Р Вµ Р С—Р С•Р С—Р В°Р Т‘Р В°РЎР‹РЎвЂљ РІР‚вЂќ Р С”Р В»Р С‘Р ВµР Р…РЎвЂљ Р С‘РЎвЂ¦ Р Р…Р Вµ Р Р†Р С‘Р Т‘Р С‘РЎвЂљ.
    */
   router.get('/combo-blocks', async (req, res) => {
     try {
@@ -4090,7 +6575,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
   });
 
   /**
-   * РћРґРёРЅ РєРѕРјР±Рѕ-РЅР°Р±РѕСЂ РґР»СЏ РјР°РіР°Р·РёРЅР°: РґР°РЅРЅС‹Рµ РєРѕРјР±Рѕ + Р±Р»РѕРєРё СЃ С‚РѕРІР°СЂР°РјРё (РґР»СЏ СЌРєСЂР°РЅР° РІС‹Р±РѕСЂР°).
+   * Р С›Р Т‘Р С‘Р Р… Р С”Р С•Р СР В±Р С•-Р Р…Р В°Р В±Р С•РЎР‚ Р Т‘Р В»РЎРЏ Р СР В°Р С–Р В°Р В·Р С‘Р Р…Р В°: Р Т‘Р В°Р Р…Р Р…РЎвЂ№Р Вµ Р С”Р С•Р СР В±Р С• + Р В±Р В»Р С•Р С”Р С‘ РЎРѓ РЎвЂљР С•Р Р†Р В°РЎР‚Р В°Р СР С‘ (Р Т‘Р В»РЎРЏ РЎРЊР С”РЎР‚Р В°Р Р…Р В° Р Р†РЎвЂ№Р В±Р С•РЎР‚Р В°).
    */
   router.get('/combos/:id', async (req, res) => {
     try {
@@ -4218,9 +6703,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
   }
 
   /**
-   * РљРѕРјР±Рѕ-РЅР°Р±РѕСЂС‹ РґР»СЏ РєР°С‚Р°Р»РѕРіР°: РїРѕ РєР°С‚РµРіРѕСЂРёРё (category_code), СЃ min_price Рё С„РѕС‚Рѕ РґР»СЏ 2x2 СЃРµС‚РєРё.
-   * РЎР°РјР°СЏ РЅРёР·РєР°СЏ С†РµРЅР° В«РћС‚ X Р В»: РїРѕ РєР°Р¶РґРѕРјСѓ Р±Р»РѕРєСѓ Р±РµСЂС‘Рј min_select С‚РѕРІР°СЂРѕРІ СЃ РЅР°РёРјРµРЅСЊС€РµР№ РІРѕР·РјРѕР¶РЅРѕР№ С†РµРЅРѕР№
-   * (СЃ СѓС‡С‘С‚РѕРј РІР°СЂРёР°РЅС‚РѕРІ/РїРѕСЂС†РёР№ вЂ” Р±РµСЂС‘С‚СЃСЏ РјРёРЅРёРјСѓРј РїРѕ РІСЃРµРј РІР°СЂРёР°РЅС‚Р°Рј С‚РѕРІР°СЂР°), СЃСѓРјРјРёСЂСѓРµРј, РїСЂРёРјРµРЅСЏРµРј СЃРєРёРґРєСѓ РєРѕРјР±Рѕ.
+   * Р С™Р С•Р СР В±Р С•-Р Р…Р В°Р В±Р С•РЎР‚РЎвЂ№ Р Т‘Р В»РЎРЏ Р С”Р В°РЎвЂљР В°Р В»Р С•Р С–Р В°: Р С—Р С• Р С”Р В°РЎвЂљР ВµР С–Р С•РЎР‚Р С‘Р С‘ (category_code), РЎРѓ min_price Р С‘ РЎвЂћР С•РЎвЂљР С• Р Т‘Р В»РЎРЏ 2x2 РЎРѓР ВµРЎвЂљР С”Р С‘.
+   * Р РЋР В°Р СР В°РЎРЏ Р Р…Р С‘Р В·Р С”Р В°РЎРЏ РЎвЂ Р ВµР Р…Р В° Р’В«Р С›РЎвЂљ X Р В Р’В»: Р С—Р С• Р С”Р В°Р В¶Р Т‘Р С•Р СРЎС“ Р В±Р В»Р С•Р С”РЎС“ Р В±Р ВµРЎР‚РЎвЂР С min_select РЎвЂљР С•Р Р†Р В°РЎР‚Р С•Р Р† РЎРѓ Р Р…Р В°Р С‘Р СР ВµР Р…РЎРЉРЎв‚¬Р ВµР в„– Р Р†Р С•Р В·Р СР С•Р В¶Р Р…Р С•Р в„– РЎвЂ Р ВµР Р…Р С•Р в„–
+   * (РЎРѓ РЎС“РЎвЂЎРЎвЂРЎвЂљР С•Р С Р Р†Р В°РЎР‚Р С‘Р В°Р Р…РЎвЂљР С•Р Р†/Р С—Р С•РЎР‚РЎвЂ Р С‘Р в„– РІР‚вЂќ Р В±Р ВµРЎР‚РЎвЂРЎвЂљРЎРѓРЎРЏ Р СР С‘Р Р…Р С‘Р СРЎС“Р С Р С—Р С• Р Р†РЎРѓР ВµР С Р Р†Р В°РЎР‚Р С‘Р В°Р Р…РЎвЂљР В°Р С РЎвЂљР С•Р Р†Р В°РЎР‚Р В°), РЎРѓРЎС“Р СР СР С‘РЎР‚РЎС“Р ВµР С, Р С—РЎР‚Р С‘Р СР ВµР Р…РЎРЏР ВµР С РЎРѓР С”Р С‘Р Т‘Р С”РЎС“ Р С”Р С•Р СР В±Р С•.
    */
   async function getCombosForCategory(tenantId, storeId, categoryId) {
     const [[catRow]] = await db.query(
@@ -4490,7 +6975,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       await enrichProductsWithDisplayPrice(rows, tenantId);
       await enrichProductsWithDiscounts(rows, tenantId, storeId);
 
-      // Р”РѕР±Р°РІР»СЏРµРј РґР°РЅРЅС‹Рµ РґРµС„РѕР»С‚РЅРѕРіРѕ РІР°СЂРёР°РЅС‚Р° РґР»СЏ РєРѕСЂСЂРµРєС‚РЅРѕРіРѕ РґРѕР±Р°РІР»РµРЅРёСЏ РІ РєРѕСЂР·РёРЅСѓ
+      // Р вЂќР С•Р В±Р В°Р Р†Р В»РЎРЏР ВµР С Р Т‘Р В°Р Р…Р Р…РЎвЂ№Р Вµ Р Т‘Р ВµРЎвЂћР С•Р В»РЎвЂљР Р…Р С•Р С–Р С• Р Р†Р В°РЎР‚Р С‘Р В°Р Р…РЎвЂљР В° Р Т‘Р В»РЎРЏ Р С”Р С•РЎР‚РЎР‚Р ВµР С”РЎвЂљР Р…Р С•Р С–Р С• Р Т‘Р С•Р В±Р В°Р Р†Р В»Р ВµР Р…Р С‘РЎРЏ Р Р† Р С”Р С•РЎР‚Р В·Р С‘Р Р…РЎС“
       const upsellProductIds = rows.map(r => Number(r.id)).filter(Boolean);
       if (upsellProductIds.length) {
         const phUpsell = upsellProductIds.map(() => '?').join(',');
@@ -4564,11 +7049,11 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         return res.json(cached);
       }
 
-      // Р‘С‹СЃС‚СЂС‹Р№ "lite" СЂРµР¶РёРј РґР»СЏ РїРµСЂРІРѕРіРѕ СЌРєСЂР°РЅР° РІРёС‚СЂРёРЅС‹:
-      // - РјРёРЅРёРјР°Р»СЊРЅС‹Р№ РЅР°Р±РѕСЂ РїРѕР»РµР№
-      // - СѓРїСЂРѕС‰С‘РЅРЅР°СЏ РґРѕСЃС‚СѓРїРЅРѕСЃС‚СЊ (С‚РѕР»СЊРєРѕ РїРѕ stock_qty)
-      // - РѕРіСЂР°РЅРёС‡РµРЅРёРµ РєРѕР»РёС‡РµСЃС‚РІР°
-      // РќСѓР¶РµРЅ, С‡С‚РѕР±С‹ LCP-РєР°СЂС‚РёРЅРєР° РЅР°С‡РёРЅР°Р»Р° РіСЂСѓР·РёС‚СЊСЃСЏ СЃСЂР°Р·Сѓ, Р° РЅРµ РїРѕСЃР»Рµ С‚СЏР¶С‘Р»С‹С… РїРѕРґР·Р°РїСЂРѕСЃРѕРІ.
+      // Р вЂРЎвЂ№РЎРѓРЎвЂљРЎР‚РЎвЂ№Р в„– "lite" РЎР‚Р ВµР В¶Р С‘Р С Р Т‘Р В»РЎРЏ Р С—Р ВµРЎР‚Р Р†Р С•Р С–Р С• РЎРЊР С”РЎР‚Р В°Р Р…Р В° Р Р†Р С‘РЎвЂљРЎР‚Р С‘Р Р…РЎвЂ№:
+      // - Р СР С‘Р Р…Р С‘Р СР В°Р В»РЎРЉР Р…РЎвЂ№Р в„– Р Р…Р В°Р В±Р С•РЎР‚ Р С—Р С•Р В»Р ВµР в„–
+      // - РЎС“Р С—РЎР‚Р С•РЎвЂ°РЎвЂР Р…Р Р…Р В°РЎРЏ Р Т‘Р С•РЎРѓРЎвЂљРЎС“Р С—Р Р…Р С•РЎРѓРЎвЂљРЎРЉ (РЎвЂљР С•Р В»РЎРЉР С”Р С• Р С—Р С• stock_qty)
+      // - Р С•Р С–РЎР‚Р В°Р Р…Р С‘РЎвЂЎР ВµР Р…Р С‘Р Вµ Р С”Р С•Р В»Р С‘РЎвЂЎР ВµРЎРѓРЎвЂљР Р†Р В°
+      // Р СњРЎС“Р В¶Р ВµР Р…, РЎвЂЎРЎвЂљР С•Р В±РЎвЂ№ LCP-Р С”Р В°РЎР‚РЎвЂљР С‘Р Р…Р С”Р В° Р Р…Р В°РЎвЂЎР С‘Р Р…Р В°Р В»Р В° Р С–РЎР‚РЎС“Р В·Р С‘РЎвЂљРЎРЉРЎРѓРЎРЏ РЎРѓРЎР‚Р В°Р В·РЎС“, Р В° Р Р…Р Вµ Р С—Р С•РЎРѓР В»Р Вµ РЎвЂљРЎРЏР В¶РЎвЂР В»РЎвЂ№РЎвЂ¦ Р С—Р С•Р Т‘Р В·Р В°Р С—РЎР‚Р С•РЎРѓР С•Р Р†.
       if (lite) {
         // "all"
         const [all] = await db.query(
@@ -4788,7 +7273,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     }
   });
 
-  // Р‘Р°С‚С‡-Р·Р°РіСЂСѓР·РєР° РїСЂРѕРґСѓРєС‚РѕРІ РїРѕ РЅРµСЃРєРѕР»СЊРєРёРј РєР°С‚РµРіРѕСЂРёСЏРј Р·Р° РѕРґРёРЅ Р·Р°РїСЂРѕСЃ
+  // Р вЂР В°РЎвЂљРЎвЂЎ-Р В·Р В°Р С–РЎР‚РЎС“Р В·Р С”Р В° Р С—РЎР‚Р С•Р Т‘РЎС“Р С”РЎвЂљР С•Р Р† Р С—Р С• Р Р…Р ВµРЎРѓР С”Р С•Р В»РЎРЉР С”Р С‘Р С Р С”Р В°РЎвЂљР ВµР С–Р С•РЎР‚Р С‘РЎРЏР С Р В·Р В° Р С•Р Т‘Р С‘Р Р… Р В·Р В°Р С—РЎР‚Р С•РЎРѓ
   router.post('/products/batch/categories', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
@@ -4810,21 +7295,21 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         return res.json(cached);
       }
 
-      // РћРїСЂРµРґРµР»СЏРµРј "all"-РєР°С‚РµРіРѕСЂРёСЋ
+      // Р С›Р С—РЎР‚Р ВµР Т‘Р ВµР В»РЎРЏР ВµР С "all"-Р С”Р В°РЎвЂљР ВµР С–Р С•РЎР‚Р С‘РЎР‹
       const [allRows] = await db.query(
         `SELECT id FROM prod_categories WHERE tenant_id=? AND code='all' LIMIT 1`,
         [tenantId]
       );
       const allCategoryId = allRows.length ? Number(allRows[0].id) : null;
 
-      // Р Р°Р·РґРµР»СЏРµРј: РѕР±С‹С‡РЅС‹Рµ РєР°С‚РµРіРѕСЂРёРё Рё "all"
+      // Р В Р В°Р В·Р Т‘Р ВµР В»РЎРЏР ВµР С: Р С•Р В±РЎвЂ№РЎвЂЎР Р…РЎвЂ№Р Вµ Р С”Р В°РЎвЂљР ВµР С–Р С•РЎР‚Р С‘Р С‘ Р С‘ "all"
       const normalIds = categoryIds.filter(id => id !== allCategoryId);
       const hasAll = allCategoryId && categoryIds.includes(allCategoryId);
 
       const productIsAvailableSql = getProductIsAvailableSql('p', 's');
       const allProducts = []; // { ...product, _category_id }
 
-      // Р—Р°РіСЂСѓР¶Р°РµРј РїСЂРѕРґСѓРєС‚С‹ РѕР±С‹С‡РЅС‹С… РєР°С‚РµРіРѕСЂРёР№ РѕРґРЅРёРј Р·Р°РїСЂРѕСЃРѕРј
+      // Р вЂ”Р В°Р С–РЎР‚РЎС“Р В¶Р В°Р ВµР С Р С—РЎР‚Р С•Р Т‘РЎС“Р С”РЎвЂљРЎвЂ№ Р С•Р В±РЎвЂ№РЎвЂЎР Р…РЎвЂ№РЎвЂ¦ Р С”Р В°РЎвЂљР ВµР С–Р С•РЎР‚Р С‘Р в„– Р С•Р Т‘Р Р…Р С‘Р С Р В·Р В°Р С—РЎР‚Р С•РЎРѓР С•Р С
       if (normalIds.length) {
         const ph = normalIds.map(() => '?').join(',');
         const [rows] = await db.query(
@@ -4872,7 +7357,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         }
       }
 
-      // Р—Р°РіСЂСѓР¶Р°РµРј РїСЂРѕРґСѓРєС‚С‹ "all"-РєР°С‚РµРіРѕСЂРёРё
+      // Р вЂ”Р В°Р С–РЎР‚РЎС“Р В¶Р В°Р ВµР С Р С—РЎР‚Р С•Р Т‘РЎС“Р С”РЎвЂљРЎвЂ№ "all"-Р С”Р В°РЎвЂљР ВµР С–Р С•РЎР‚Р С‘Р С‘
       if (hasAll) {
         const [rows] = await db.query(
           `SELECT p.*, ? AS _category_id, pc.sort_order AS link_sort_order,
@@ -4918,11 +7403,11 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         }
       }
 
-      // РћР±РѕРіР°С‰Р°РµРј РІСЃРµ РїСЂРѕРґСѓРєС‚С‹ Р·Р° РѕРґРёРЅ РїСЂРѕС…РѕРґ
+      // Р С›Р В±Р С•Р С–Р В°РЎвЂ°Р В°Р ВµР С Р Р†РЎРѓР Вµ Р С—РЎР‚Р С•Р Т‘РЎС“Р С”РЎвЂљРЎвЂ№ Р В·Р В° Р С•Р Т‘Р С‘Р Р… Р С—РЎР‚Р С•РЎвЂ¦Р С•Р Т‘
       await enrichProductsWithDisplayPrice(allProducts, tenantId);
       await enrichProductsWithDiscounts(allProducts, tenantId, storeId);
 
-      // Р“СЂСѓРїРїРёСЂСѓРµРј РїРѕ category_id
+      // Р вЂњРЎР‚РЎС“Р С—Р С—Р С‘РЎР‚РЎС“Р ВµР С Р С—Р С• category_id
       const productsByCategory = {};
       for (const id of categoryIds) productsByCategory[id] = [];
       for (const p of allProducts) {
@@ -4930,7 +7415,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         if (productsByCategory[cid]) productsByCategory[cid].push(p);
       }
 
-      // Р—Р°РіСЂСѓР¶Р°РµРј РєРѕРјР±Рѕ РґР»СЏ РІСЃРµС… РєР°С‚РµРіРѕСЂРёР№ РїР°СЂР°Р»Р»РµР»СЊРЅРѕ
+      // Р вЂ”Р В°Р С–РЎР‚РЎС“Р В¶Р В°Р ВµР С Р С”Р С•Р СР В±Р С• Р Т‘Р В»РЎРЏ Р Р†РЎРѓР ВµРЎвЂ¦ Р С”Р В°РЎвЂљР ВµР С–Р С•РЎР‚Р С‘Р в„– Р С—Р В°РЎР‚Р В°Р В»Р В»Р ВµР В»РЎРЉР Р…Р С•
       const combosResults = await mapWithConcurrency(categoryIds, 4, async (id) => {
         try {
           const combos = await getCombosForCategoryCached(tenantId, storeId, id);
@@ -5387,7 +7872,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         const unit = str(unitShortTitle || '').trim();
         if (!rawValue) return '';
         if (!unit) return rawValue;
-        const hasLetters = /[a-zа-я]/i.test(rawValue);
+        const hasLetters = /[a-zР°-СЏ]/i.test(rawValue);
         return hasLetters ? rawValue : `${rawValue} ${unit}`;
       };
       const getSimpleVariantPrice = (basePrice, values, selectedIndex, discountTiers) => {
@@ -5959,7 +8444,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         return res.json(cached);
       }
 
-      // РџРѕР»СѓС‡Р°РµРј РіСЂСѓРїРїСѓ РѕРїС†РёР№
+      // Р СџР С•Р В»РЎС“РЎвЂЎР В°Р ВµР С Р С–РЎР‚РЎС“Р С—Р С—РЎС“ Р С•Р С—РЎвЂ Р С‘Р в„–
       let group;
       try {
         const [rows] = await db.query(
@@ -5981,7 +8466,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
       }
 
-      // РџРѕР»СѓС‡Р°РµРј СЌР»РµРјРµРЅС‚С‹ РѕРїС†РёРё (С‚РѕР»СЊРєРѕ Р°РєС‚РёРІРЅС‹Рµ С‚РѕРІР°СЂС‹)
+      // Р СџР С•Р В»РЎС“РЎвЂЎР В°Р ВµР С РЎРЊР В»Р ВµР СР ВµР Р…РЎвЂљРЎвЂ№ Р С•Р С—РЎвЂ Р С‘Р С‘ (РЎвЂљР С•Р В»РЎРЉР С”Р С• Р В°Р С”РЎвЂљР С‘Р Р†Р Р…РЎвЂ№Р Вµ РЎвЂљР С•Р Р†Р В°РЎР‚РЎвЂ№)
       const [items] = await db.query(
         `SELECT 
            i.id,
@@ -6053,10 +8538,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         [storeId, tenantId, id, storeId, storeId, storeId]
       );
 
-      // РЎРѕР±РёСЂР°РµРј РІСЃРµ product_id РґР»СЏ Р·Р°РіСЂСѓР·РєРё РІР°СЂРёР°РЅС‚РѕРІ
+      // Р РЋР С•Р В±Р С‘РЎР‚Р В°Р ВµР С Р Р†РЎРѓР Вµ product_id Р Т‘Р В»РЎРЏ Р В·Р В°Р С–РЎР‚РЎС“Р В·Р С”Р С‘ Р Р†Р В°РЎР‚Р С‘Р В°Р Р…РЎвЂљР С•Р Р†
       const productIds = items.map(item => Number(item.target_product_id)).filter(Number.isFinite);
       
-      // Р—Р°РіСЂСѓР¶Р°РµРј РІР°СЂРёР°РЅС‚С‹ РґР»СЏ РІСЃРµС… С‚РѕРІР°СЂРѕРІ-РѕРїС†РёР№ РѕРґРЅРёРј Р·Р°РїСЂРѕСЃРѕРј
+      // Р вЂ”Р В°Р С–РЎР‚РЎС“Р В¶Р В°Р ВµР С Р Р†Р В°РЎР‚Р С‘Р В°Р Р…РЎвЂљРЎвЂ№ Р Т‘Р В»РЎРЏ Р Р†РЎРѓР ВµРЎвЂ¦ РЎвЂљР С•Р Р†Р В°РЎР‚Р С•Р Р†-Р С•Р С—РЎвЂ Р С‘Р в„– Р С•Р Т‘Р Р…Р С‘Р С Р В·Р В°Р С—РЎР‚Р С•РЎРѓР С•Р С
       let variantsByProductId = new Map();
       let tiersByGroupId = new Map();
       if (productIds.length > 0) {
@@ -6083,7 +8568,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           [tenantId, ...productIds]
         );
 
-        // РЎРѕР±РёСЂР°РµРј РІСЃРµ id РіСЂСѓРїРї РІР°СЂРёР°РЅС‚РѕРІ, С‡С‚РѕР±С‹ РїРѕРґС‚СЏРЅСѓС‚СЊ СЃРєРёРґРєРё/РЅР°РґР±Р°РІРєРё
+        // Р РЋР С•Р В±Р С‘РЎР‚Р В°Р ВµР С Р Р†РЎРѓР Вµ id Р С–РЎР‚РЎС“Р С—Р С— Р Р†Р В°РЎР‚Р С‘Р В°Р Р…РЎвЂљР С•Р Р†, РЎвЂЎРЎвЂљР С•Р В±РЎвЂ№ Р С—Р С•Р Т‘РЎвЂљРЎРЏР Р…РЎС“РЎвЂљРЎРЉ РЎРѓР С”Р С‘Р Т‘Р С”Р С‘/Р Р…Р В°Р Т‘Р В±Р В°Р Р†Р С”Р С‘
         const variantGroupIds = Array.from(
           new Set(variantAssignments.map((va) => Number(va.variant_group_id)).filter(Number.isFinite))
         );
@@ -6106,7 +8591,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           }
         }
         
-        // Р“СЂСѓРїРїРёСЂСѓРµРј РІР°СЂРёР°РЅС‚С‹ РїРѕ product_id
+        // Р вЂњРЎР‚РЎС“Р С—Р С—Р С‘РЎР‚РЎС“Р ВµР С Р Р†Р В°РЎР‚Р С‘Р В°Р Р…РЎвЂљРЎвЂ№ Р С—Р С• product_id
         for (const va of variantAssignments) {
           const pid = Number(va.product_id);
           if (!variantsByProductId.has(pid)) {
@@ -6114,7 +8599,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           }
           const groupDefaultIdx = va.group_default_value_index != null ? Number(va.group_default_value_index) : null;
           const assignmentDefaultIdx = va.assignment_default_value_index != null ? Number(va.assignment_default_value_index) : null;
-          // РћРїСЂРµРґРµР»СЏРµРј РґРµС„РѕР»С‚РЅС‹Р№ РёРЅРґРµРєСЃ: СЃРЅР°С‡Р°Р»Р° РёР· РїСЂРёРІСЏР·РєРё, РїРѕС‚РѕРј РёР· РіСЂСѓРїРїС‹
+          // Р С›Р С—РЎР‚Р ВµР Т‘Р ВµР В»РЎРЏР ВµР С Р Т‘Р ВµРЎвЂћР С•Р В»РЎвЂљР Р…РЎвЂ№Р в„– Р С‘Р Р…Р Т‘Р ВµР С”РЎРѓ: РЎРѓР Р…Р В°РЎвЂЎР В°Р В»Р В° Р С‘Р В· Р С—РЎР‚Р С‘Р Р†РЎРЏР В·Р С”Р С‘, Р С—Р С•РЎвЂљР С•Р С Р С‘Р В· Р С–РЎР‚РЎС“Р С—Р С—РЎвЂ№
           const defaultIdx = assignmentDefaultIdx != null ? assignmentDefaultIdx : groupDefaultIdx;
           const groupId = Number(va.variant_group_id);
           variantsByProductId.get(pid).push({
@@ -6131,7 +8616,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         }
       }
 
-      // РќРѕСЂРјР°Р»РёР·СѓРµРј СЌР»РµРјРµРЅС‚С‹
+      // Р СњР С•РЎР‚Р СР В°Р В»Р С‘Р В·РЎС“Р ВµР С РЎРЊР В»Р ВµР СР ВµР Р…РЎвЂљРЎвЂ№
       const normalizedItems = items.map((item) => {
         const photos = safeJsonArray(item.product_photos_json);
         const productId = Number(item.target_product_id);
@@ -6150,7 +8635,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           qty_max: Number(item.qty_max ?? 1),
           is_active: Number(item.is_active || 0) === 1,
           sort_order: Number(item.sort_order || 0),
-          // Р’Р°СЂРёР°РЅС‚С‹ С‚РѕРІР°СЂР°-РѕРїС†РёРё
+          // Р вЂ™Р В°РЎР‚Р С‘Р В°Р Р…РЎвЂљРЎвЂ№ РЎвЂљР С•Р Р†Р В°РЎР‚Р В°-Р С•Р С—РЎвЂ Р С‘Р С‘
           variants: variants,
         };
       });
@@ -6294,8 +8779,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
   }
 
   // ------------------------------
-  // order-config (РґР»СЏ РѕС„РѕСЂРјР»РµРЅРёСЏ)
-  // Р’РђР–РќРћ: С‚РІРѕР№ С„СЂРѕРЅС‚ Р¶РґС‘С‚ methods / payments / timeOptions
+  // order-config (Р Т‘Р В»РЎРЏ Р С•РЎвЂћР С•РЎР‚Р СР В»Р ВµР Р…Р С‘РЎРЏ)
+  // Р вЂ™Р С’Р вЂ“Р СњР С›: РЎвЂљР Р†Р С•Р в„– РЎвЂћРЎР‚Р С•Р Р…РЎвЂљ Р В¶Р Т‘РЎвЂРЎвЂљ methods / payments / timeOptions
   // ------------------------------
   router.get('/order-config', async (req, res) => {
     try {
@@ -6319,7 +8804,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         [tenantId, storeId]
       );
 
-      // РџР•Р Р•РРњР•РќРћР’РђРќРћ: order_delivery_types (Р±С‹РІС€Р°СЏ order_methods)
+      // Р СџР вЂўР В Р вЂўР ВР СљР вЂўР СњР С›Р вЂ™Р С’Р СњР С›: order_delivery_types (Р В±РЎвЂ№Р Р†РЎв‚¬Р В°РЎРЏ order_methods)
       const [methods] = await db.query(
         `SELECT id, code, title, icon, sort, is_default, require_client_data
          FROM order_delivery_types
@@ -6435,6 +8920,2225 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     }
   });
 
+  function normalizeOrderPromoCode(value) {
+    return str(value).replace(/\s+/g, '').toUpperCase();
+  }
+
+  function normalizeCheckoutPreviewItems(rawItems) {
+    let items = rawItems;
+    if (typeof items === 'string') {
+      try {
+        items = JSON.parse(items);
+      } catch {
+        items = [];
+      }
+    }
+
+    const normalizedItems = [];
+    const productIds = new Set();
+    let subtotalBeforeDiscount = 0;
+    let itemsBaseTotal = 0;
+
+    for (const rawItem of Array.isArray(items) ? items : []) {
+      if (!rawItem || typeof rawItem !== 'object') continue;
+
+      const type = publicDiscountText(
+        rawItem?.type || (Number(rawItem?.combo_id || rawItem?.combo?.id || 0) > 0 ? 'combo' : 'product')
+      ).toLowerCase() || 'product';
+      const qtyRaw = Number(rawItem?.qty ?? rawItem?.quantity ?? 1);
+      const qty = Number.isFinite(qtyRaw) && qtyRaw > 0 ? Math.max(1, Math.trunc(qtyRaw)) : 1;
+      const lineTotalRaw = Number(
+        rawItem?.line_total
+        ?? rawItem?.total
+        ?? rawItem?.total_price
+        ?? ((Number(rawItem?.price ?? rawItem?.unit_price ?? 0) || 0) * qty)
+      );
+      const lineTotal = roundPromoMoney(Math.max(0, Number.isFinite(lineTotalRaw) ? lineTotalRaw : 0));
+      const originalLineTotalRaw = Number(
+        rawItem?.original_line_total
+        ?? rawItem?.old_line_total
+        ?? rawItem?.discount?.original_line_total
+        ?? lineTotal
+      );
+      const originalLineTotal = roundPromoMoney(
+        Math.max(lineTotal, Number.isFinite(originalLineTotalRaw) ? originalLineTotalRaw : lineTotal)
+      );
+
+      if (type === 'combo') {
+        const comboId = Number(rawItem?.combo_id || rawItem?.combo?.id || 0) || null;
+        if (!comboId) continue;
+        const item = {
+          type: 'combo',
+          combo_id: comboId,
+          qty,
+          line_total: lineTotal,
+          combo_title: publicDiscountText(rawItem?.combo_title || rawItem?.name) || null,
+          auto_add: Number(rawItem?.auto_add || 0) === 1 ? 1 : 0,
+        };
+        if (originalLineTotal > lineTotal) {
+          item.discount = { original_line_total: originalLineTotal };
+        }
+        normalizedItems.push(item);
+        subtotalBeforeDiscount += originalLineTotal;
+        itemsBaseTotal += lineTotal;
+        continue;
+      }
+
+      const productId = Number(rawItem?.product_id || rawItem?.id || rawItem?.product?.id || 0) || null;
+      if (!productId) continue;
+      productIds.add(productId);
+
+      const item = {
+        type: 'product',
+        product_id: productId,
+        qty,
+        line_total: lineTotal,
+        auto_add: Number(rawItem?.auto_add || 0) === 1 ? 1 : 0,
+        variant_group_id: toPositiveIntOrNull(rawItem?.variant_group_id),
+        variant_value_index: toNonNegativeIntOrNull(rawItem?.variant_value_index),
+        option_items: (Array.isArray(rawItem?.option_items) ? rawItem.option_items : (Array.isArray(rawItem?.options) ? rawItem.options : []))
+          .map((option) => ({
+            id: toPositiveIntOrNull(option?.id || option?.option_item_id),
+            qty: Math.max(1, Number(option?.qty ?? option?.quantity ?? 1) || 1),
+            target_product_id: toPositiveIntOrNull(option?.target_product_id || option?.product_id),
+            variant_group_id: toPositiveIntOrNull(option?.variant_group_id),
+            variant_value_index: toNonNegativeIntOrNull(option?.variant_value_index),
+          }))
+          .filter((option) => option.id),
+        ingredients: (Array.isArray(rawItem?.ingredients) ? rawItem.ingredients : [])
+          .map((ingredient) => ({
+            ingredient_id: toPositiveIntOrNull(ingredient?.ingredient_id || ingredient?.product_id),
+            qty: Number(ingredient?.qty ?? ingredient?.quantity ?? 0),
+          }))
+          .filter((ingredient) => ingredient.ingredient_id),
+      };
+      item.product_config = normalizePublicProductConfigPayload(item, productId);
+      if (originalLineTotal > lineTotal) {
+        item.discount = { original_line_total: originalLineTotal };
+      }
+      normalizedItems.push(item);
+      subtotalBeforeDiscount += originalLineTotal;
+      itemsBaseTotal += lineTotal;
+    }
+
+    return {
+      items: normalizedItems,
+      productIds: [...productIds],
+      subtotalBeforeDiscount: roundPromoMoney(subtotalBeforeDiscount),
+      itemsBaseTotal: roundPromoMoney(itemsBaseTotal),
+    };
+  }
+
+  function normalizeCheckoutDiscountSource(value) {
+    const raw = publicDiscountText(value).toLowerCase();
+    return ['discount', 'reward_discount'].includes(raw) ? raw : null;
+  }
+
+  function normalizeCheckoutPromoSource(value) {
+    const raw = publicDiscountText(value).toLowerCase();
+    return ['promo_code', 'reward_promo'].includes(raw) ? raw : null;
+  }
+
+  function isPromoRewardRedeemAction(discount) {
+    const config = parsePublicDiscountObject(discount?.mechanic_config_json, {});
+    const reward = parsePublicDiscountObject(config?.promo_reward, {});
+    const explicitMode = publicDiscountText(
+      reward?.action_mode ?? reward?.issue_mode ?? reward?.runtime_mode
+    ).toLowerCase();
+    if (['redeem', 'redeem_reward'].includes(explicitMode)) return true;
+    const runtime = getPromoRuntimeConfig(discount);
+    return runtime.rewardType === 'product';
+  }
+
+  function buildRuntimeDiscountRewardPayload({
+    title,
+    description,
+    discountType,
+    discountValue,
+    applyTo,
+    maxDiscountAmount = null,
+    minOrderAmount = null,
+    isStackable = false,
+    targetRows = [],
+    productsMap = new Map(),
+    configMode = 'any',
+    extra = {},
+  }) {
+    return {
+      title: publicDiscountText(title) || '\u0421\u043a\u0438\u0434\u043a\u0430',
+      description: publicDiscountText(description),
+      discount_type: publicDiscountText(discountType || 'percent').toLowerCase() || 'percent',
+      discount_value: Number(discountValue || 0),
+      apply_to: publicDiscountText(applyTo || 'order').toLowerCase() || 'order',
+      max_discount_amount: maxDiscountAmount != null ? Number(maxDiscountAmount || 0) : null,
+      min_order_amount: minOrderAmount != null ? Number(minOrderAmount || 0) : null,
+      is_stackable: Number(isStackable || 0) === 1 || isStackable === true,
+      targets: buildRewardTargetPayload(targetRows, configMode),
+      products: buildRewardProductsPayload(targetRows, productsMap, configMode),
+      ...extra,
+    };
+  }
+
+  function buildRuntimeGiftRewardPayload({
+    title,
+    description,
+    targetRows = [],
+    productsMap = new Map(),
+    configMode = 'any',
+    extra = {},
+  }) {
+    const products = buildRewardProductsPayload(targetRows, productsMap, configMode);
+    return {
+      title: publicDiscountText(title) || '\u041f\u043e\u0434\u0430\u0440\u043e\u043a',
+      description: publicDiscountText(description),
+      badge_text: '\u041f\u043e\u0434\u0430\u0440\u043e\u043a',
+      total_value: roundPromoMoney(products.reduce((sum, product) => sum + Number(product?.price || 0), 0)),
+      products,
+      targets: buildRewardTargetPayload(targetRows, configMode),
+      ...extra,
+    };
+  }
+
+  function buildRuntimePromoRewardPayload({
+    title,
+    description,
+    code,
+    statusText = '\u041d\u0430\u0433\u0440\u0430\u0434\u0430',
+    badgeText = '\u041d\u0430\u0433\u0440\u0430\u0434\u0430',
+    applyScopeText = '',
+    isStackable = false,
+    expiresAt = null,
+    runtimeConfig = {},
+    targetRows = [],
+    productsMap = new Map(),
+    configMode = 'any',
+    extra = {},
+  }) {
+    return {
+      title: publicDiscountText(title) || '\u041f\u0440\u043e\u043c\u043e\u043a\u043e\u0434',
+      description: publicDiscountText(description),
+      code: publicDiscountText(code),
+      badge_text: publicDiscountText(badgeText) || '\u041d\u0430\u0433\u0440\u0430\u0434\u0430',
+      status_text: publicDiscountText(statusText) || '\u041d\u0430\u0433\u0440\u0430\u0434\u0430',
+      apply_scope_text: publicDiscountText(applyScopeText),
+      expires_at: expiresAt || null,
+      is_stackable: Number(isStackable || 0) === 1 || isStackable === true,
+      promo_reward_type: publicDiscountText(runtimeConfig?.rewardType || 'discount').toLowerCase() || 'discount',
+      product_reward_type: publicDiscountText(runtimeConfig?.productRewardType || 'gift').toLowerCase() || 'gift',
+      discount_type: publicDiscountText(runtimeConfig?.discountType || 'percent').toLowerCase() || 'percent',
+      discount_value: Number(runtimeConfig?.discountValue || 0),
+      apply_to: publicDiscountText(runtimeConfig?.applyTo || 'order').toLowerCase() || 'order',
+      max_discount_amount: runtimeConfig?.maxDiscountAmount != null ? Number(runtimeConfig.maxDiscountAmount || 0) : null,
+      min_order_amount: runtimeConfig?.minOrderAmount != null ? Number(runtimeConfig.minOrderAmount || 0) : null,
+      targets: buildRewardTargetPayload(targetRows, configMode),
+      products: buildRewardProductsPayload(targetRows, productsMap, configMode),
+      ...extra,
+    };
+  }
+
+  function getPromoRuntimeConfig(discount) {
+    const config = parsePublicDiscountObject(discount?.mechanic_config_json, {});
+    const reward = parsePublicDiscountObject(config?.promo_reward, {});
+    const rewardKind = publicDiscountText(reward?.reward_kind).toLowerCase();
+    const rewardType = publicDiscountText(
+      reward?.reward_type ?? (['gift', 'product_discount'].includes(rewardKind) ? 'product' : 'discount')
+    ).toLowerCase() === 'product'
+      ? 'product'
+      : 'discount';
+    const productRewardType = ['gift', 'product_discount'].includes(publicDiscountText(reward?.product_reward_type ?? rewardKind).toLowerCase())
+      ? publicDiscountText(reward?.product_reward_type ?? rewardKind).toLowerCase()
+      : 'gift';
+
+    return {
+      rewardType,
+      productRewardType,
+      applyTo: publicDiscountText(reward?.apply_to ?? discount?.apply_to).toLowerCase() || 'order',
+      discountType: publicDiscountText(reward?.discount_type ?? discount?.discount_type).toLowerCase() || 'percent',
+      discountValue: Number(reward?.discount_value ?? discount?.discount_value ?? 0),
+    };
+  }
+
+  function buildDiscountProductTargetSets(rows) {
+    return buildGenericDiscountTargetSets(rows);
+  }
+
+  function roundPromoMoney(value) {
+    return Math.round(Number(value || 0) * 100) / 100;
+  }
+
+
+  function mergeItemDiscountMeta(item, title, amount, originalLineTotal) {
+    const discountAmount = Number(amount || 0);
+    if (!(discountAmount > 0) || !item) return;
+
+    if (item.discount) {
+      item.discount.amount = roundPromoMoney(Number(item.discount.amount || 0) + discountAmount);
+      return;
+    }
+
+    item.discount = {
+      id: null,
+      title: title || '\u041f\u0440\u043e\u043c\u043e\u043a\u043e\u0434',
+      amount: roundPromoMoney(discountAmount),
+      original_line_total: roundPromoMoney(originalLineTotal),
+    };
+  }
+
+  function buildPromoUsageRecord(discount, promoRow, discountAmount, extra = {}) {
+    return {
+      discount_id: Number(discount?.discount_id || discount?.id || 0),
+      promo_code_id: Number(promoRow?.promo_code_id || 0) || null,
+      title: publicDiscountText(discount?.title) || '\u041f\u0440\u043e\u043c\u043e\u043a\u043e\u0434',
+      discount_type: extra.discount_type || null,
+      discount_value: extra.discount_value ?? null,
+      discount_amount: roundPromoMoney(Number(discountAmount || 0)),
+      apply_to: extra.apply_to || 'promo_code',
+      product_id: extra.product_id || null,
+    };
+  }
+
+  function buildDiscountUsageRecord(discount, discountAmount, extra = {}) {
+    return {
+      discount_id: Number(discount?.discount_id || discount?.id || 0),
+      promo_code_id: null,
+      title: publicDiscountText(discount?.title) || '\u0421\u043a\u0438\u0434\u043a\u0430',
+      discount_type: extra.discount_type || publicDiscountText(discount?.discount_type).toLowerCase() || null,
+      discount_value: extra.discount_value ?? Number(discount?.discount_value ?? 0),
+      discount_amount: roundPromoMoney(Number(discountAmount || 0)),
+      apply_to: extra.apply_to || publicDiscountText(discount?.apply_to).toLowerCase() || 'discount',
+      product_id: extra.product_id || null,
+    };
+  }
+
+  function cloneCheckoutBenefitItems(items) {
+    return (Array.isArray(items) ? items : []).map((item) => {
+      const next = item && typeof item === 'object' ? { ...item } : {};
+      if (next.discount && typeof next.discount === 'object') {
+        next.discount = { ...next.discount };
+      }
+      return next;
+    });
+  }
+
+  function isCheckoutBenefitStackable(entry) {
+    return Number(entry?.is_stackable || 0) === 1 || entry?.is_stackable === true;
+  }
+
+  function canCombineCheckoutBenefits(discount, promo) {
+    if (!discount || !promo) return true;
+    return isCheckoutBenefitStackable(discount) && isCheckoutBenefitStackable(promo);
+  }
+
+
+  function buildDiscountPreviewDisabledReason(errorCode) {
+    switch (publicDiscountText(errorCode).toUpperCase()) {
+      case 'DISCOUNT_NOT_APPLICABLE':
+        return '\u041d\u0435 \u043f\u043e\u0434\u0445\u043e\u0434\u0438\u0442 \u043a \u0442\u0435\u043a\u0443\u0449\u0435\u043c\u0443 \u0437\u0430\u043a\u0430\u0437\u0443.';
+      case 'DISCOUNT_NOT_AVAILABLE':
+        return '\u0421\u0435\u0439\u0447\u0430\u0441 \u044d\u0442\u0430 \u0441\u043a\u0438\u0434\u043a\u0430 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430 \u0434\u043b\u044f \u044d\u0442\u043e\u0433\u043e \u043a\u043b\u0438\u0435\u043d\u0442\u0430.';
+      case 'DISCOUNT_INVALID':
+      default:
+        return '\u0421\u043a\u0438\u0434\u043a\u0430 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430.';
+    }
+  }
+
+  function getRewardPromoRuntimeConfig(payload) {
+    return {
+      rewardType: publicDiscountText(payload?.promo_reward_type || 'discount').toLowerCase() || 'discount',
+      productRewardType: publicDiscountText(payload?.product_reward_type || 'gift').toLowerCase() || 'gift',
+      applyTo: publicDiscountText(payload?.apply_to || 'order').toLowerCase() || 'order',
+      discountType: publicDiscountText(payload?.discount_type || 'percent').toLowerCase() || 'percent',
+      discountValue: Number(payload?.discount_value || 0),
+      maxDiscountAmount: payload?.max_discount_amount != null ? Number(payload.max_discount_amount || 0) : null,
+      minOrderAmount: payload?.min_order_amount != null ? Number(payload.min_order_amount || 0) : null,
+    };
+  }
+
+  function computeCheckoutPromoPreviewEffect({
+    runtimeConfig,
+    targetSets,
+    sourceItems,
+    sourceItemsTotal = null,
+    productCategoriesMap,
+  }) {
+    const previewItems = cloneCheckoutBenefitItems(sourceItems);
+    const itemsTotalBeforePromo = sourceItemsTotal != null
+      ? roundPromoMoney(Number(sourceItemsTotal || 0))
+      : roundPromoMoney(previewItems.reduce((sum, item) => sum + Number(item?.line_total || 0), 0));
+    const rewardType = publicDiscountText(runtimeConfig?.rewardType || 'discount').toLowerCase() || 'discount';
+    const productRewardType = publicDiscountText(runtimeConfig?.productRewardType || 'gift').toLowerCase() || 'gift';
+    const applyTo = publicDiscountText(runtimeConfig?.applyTo || 'order').toLowerCase() || 'order';
+    const discountType = publicDiscountText(runtimeConfig?.discountType || 'percent').toLowerCase() || 'percent';
+    const discountValue = Number(runtimeConfig?.discountValue || 0);
+    const maxDiscountAmount = runtimeConfig?.maxDiscountAmount != null
+      ? Number(runtimeConfig.maxDiscountAmount || 0)
+      : null;
+    const minOrderAmount = runtimeConfig?.minOrderAmount != null
+      ? Number(runtimeConfig.minOrderAmount || 0)
+      : null;
+    const resolvedTargets = targetSets || { productIds: new Set(), categoryIds: new Set(), comboIds: new Set() };
+
+    if (rewardType === 'discount') {
+      if (applyTo === 'order') {
+        if (minOrderAmount > 0 && itemsTotalBeforePromo < minOrderAmount) {
+          return {
+            isApplicable: false,
+            disabledReason: buildPromoPreviewDisabledReason('PROMO_NOT_APPLICABLE'),
+            discountAmount: 0,
+            itemsTotalAfterPromo: itemsTotalBeforePromo,
+            items: previewItems,
+          };
+        }
+
+        const promoOrderDiscount = discountHelpers.calculateDiscount(
+          itemsTotalBeforePromo,
+          discountType,
+          discountValue,
+          maxDiscountAmount
+        );
+        if (!(promoOrderDiscount > 0)) {
+          return {
+            isApplicable: false,
+            disabledReason: buildPromoPreviewDisabledReason('PROMO_NOT_APPLICABLE'),
+            discountAmount: 0,
+            itemsTotalAfterPromo: itemsTotalBeforePromo,
+            items: previewItems,
+          };
+        }
+
+        return {
+          isApplicable: true,
+          disabledReason: '',
+          discountAmount: roundPromoMoney(promoOrderDiscount),
+          itemsTotalAfterPromo: roundPromoMoney(Math.max(0, itemsTotalBeforePromo - promoOrderDiscount)),
+          items: previewItems,
+        };
+      }
+
+      let promoItemsDiscount = 0;
+      for (const item of previewItems) {
+        const matchesScope = matchDiscountTargetScope(resolvedTargets, item, productCategoriesMap, applyTo);
+        if (!matchesScope) continue;
+
+        const promoItemDiscount = discountHelpers.calculateDiscount(
+          Number(item.line_total || 0),
+          discountType,
+          discountValue,
+          maxDiscountAmount
+        );
+        if (!(promoItemDiscount > 0)) continue;
+
+        item.line_total = roundPromoMoney(Math.max(0, Number(item.line_total || 0) - promoItemDiscount));
+        promoItemsDiscount += promoItemDiscount;
+      }
+
+      if (!(promoItemsDiscount > 0)) {
+        return {
+          isApplicable: false,
+          disabledReason: buildPromoPreviewDisabledReason('PROMO_NOT_APPLICABLE'),
+          discountAmount: 0,
+          itemsTotalAfterPromo: itemsTotalBeforePromo,
+          items: previewItems,
+        };
+      }
+
+      return {
+        isApplicable: true,
+        disabledReason: '',
+        discountAmount: roundPromoMoney(promoItemsDiscount),
+        itemsTotalAfterPromo: roundPromoMoney(Math.max(0, itemsTotalBeforePromo - promoItemsDiscount)),
+        items: previewItems,
+      };
+    }
+
+    if (productRewardType === 'gift') {
+      if (resolvedTargets.productIds.size < 1) {
+        return {
+          isApplicable: false,
+          disabledReason: buildPromoPreviewDisabledReason('PROMO_NOT_APPLICABLE'),
+          discountAmount: 0,
+          itemsTotalAfterPromo: itemsTotalBeforePromo,
+          items: previewItems,
+        };
+      }
+      return {
+        isApplicable: true,
+        disabledReason: '',
+        discountAmount: 0,
+        itemsTotalAfterPromo: itemsTotalBeforePromo,
+        items: previewItems,
+      };
+    }
+
+    let rewardItemsDiscount = 0;
+    for (const item of previewItems) {
+      const matchesReward = matchDiscountTargetScope(resolvedTargets, item, productCategoriesMap, 'any');
+      if (!matchesReward) continue;
+
+      const rewardDiscount = discountHelpers.calculateDiscount(
+        Number(item.line_total || 0),
+        discountType,
+        discountValue,
+        maxDiscountAmount
+      );
+      if (!(rewardDiscount > 0)) continue;
+
+      item.line_total = roundPromoMoney(Math.max(0, Number(item.line_total || 0) - rewardDiscount));
+      rewardItemsDiscount += rewardDiscount;
+    }
+
+    if (!(rewardItemsDiscount > 0)) {
+      return {
+        isApplicable: false,
+        disabledReason: buildPromoPreviewDisabledReason('PROMO_NOT_APPLICABLE'),
+        discountAmount: 0,
+        itemsTotalAfterPromo: itemsTotalBeforePromo,
+        items: previewItems,
+      };
+    }
+
+    return {
+      isApplicable: true,
+      disabledReason: '',
+      discountAmount: roundPromoMoney(rewardItemsDiscount),
+      itemsTotalAfterPromo: roundPromoMoney(Math.max(0, itemsTotalBeforePromo - rewardItemsDiscount)),
+      items: previewItems,
+    };
+  }
+
+  function resolveSelectedCheckoutDiscountEntry({
+    selectedDiscountId,
+    selectedDiscountSource,
+    discountEntries,
+    allDiscountRows,
+  }) {
+    const normalizedId = normalizeSelectedDiscountId(selectedDiscountId);
+    if (normalizedId === null) {
+      return { entry: null, errorCode: '' };
+    }
+    const source = normalizeCheckoutDiscountSource(selectedDiscountSource) || 'discount';
+    const entry = (Array.isArray(discountEntries) ? discountEntries : []).find((item) => (
+      publicDiscountText(item?.source).toLowerCase() === source
+      && Number(item?.selectionId || 0) === normalizedId
+    )) || null;
+    if (entry) {
+      return { entry, errorCode: '' };
+    }
+    if (source === 'discount') {
+      const knownAutomaticDiscount = (Array.isArray(allDiscountRows) ? allDiscountRows : [])
+        .find((discount) => Number(discount?.id || 0) === normalizedId && isPublicAutomaticSimpleDiscount(discount));
+      return {
+        entry: null,
+        errorCode: knownAutomaticDiscount ? 'DISCOUNT_NOT_AVAILABLE' : 'DISCOUNT_INVALID',
+      };
+    }
+    return { entry: null, errorCode: 'DISCOUNT_INVALID' };
+  }
+
+  function resolveSelectedCheckoutPromoEntry({
+    promoCode,
+    selectedPromoSource,
+    selectedPromoRewardId,
+    promoEntries,
+  }) {
+    const normalizedCode = normalizeOrderPromoCode(promoCode);
+    if (!normalizedCode) {
+      return { entry: null, errorCode: '' };
+    }
+    const source = normalizeCheckoutPromoSource(selectedPromoSource) || 'promo_code';
+    const rewardId = Number(selectedPromoRewardId || 0) || null;
+    const entry = (Array.isArray(promoEntries) ? promoEntries : []).find((item) => {
+      const sameSource = publicDiscountText(item?.source).toLowerCase() === source;
+      if (!sameSource) return false;
+      if (source === 'reward_promo') {
+        return Number(item?.rewardId || 0) === Number(rewardId || 0)
+          && normalizeOrderPromoCode(item?.card?.code) === normalizedCode;
+      }
+      return normalizeOrderPromoCode(item?.card?.code) === normalizedCode;
+    }) || null;
+    if (entry && publicDiscountText(entry?.card?.action_mode).toLowerCase() === 'select') {
+      return { entry, errorCode: '' };
+    }
+    return { entry: null, errorCode: 'PROMO_INVALID' };
+  }
+
+  function resolveSelectedCheckoutDiscount({ selectedDiscountId, availableDiscounts, allDiscountRows }) {
+    const normalizedId = normalizeSelectedDiscountId(selectedDiscountId);
+    if (normalizedId === null) {
+      return { discount: null, errorCode: '' };
+    }
+
+    const availableDiscount = (Array.isArray(availableDiscounts) ? availableDiscounts : [])
+      .find((discount) => Number(discount?.id || 0) === normalizedId) || null;
+    if (availableDiscount) {
+      return { discount: availableDiscount, errorCode: '' };
+    }
+
+    const knownAutomaticDiscount = (Array.isArray(allDiscountRows) ? allDiscountRows : [])
+      .find((discount) => Number(discount?.id || 0) === normalizedId && isPublicAutomaticSimpleDiscount(discount));
+
+    return {
+      discount: null,
+      errorCode: knownAutomaticDiscount ? 'DISCOUNT_NOT_AVAILABLE' : 'DISCOUNT_INVALID',
+    };
+  }
+
+  function applySelectedDiscountToItems({
+    discount,
+    items,
+    targetRows,
+    productCategoriesMap,
+    applyItemMeta = false,
+    collectUsageRecords = false,
+  }) {
+    const nextItems = cloneCheckoutBenefitItems(items);
+    const applyTo = publicDiscountText(discount?.apply_to).toLowerCase() || 'order';
+    const maxDiscountAmount = discount?.max_discount_amount != null ? Number(discount.max_discount_amount) : null;
+    const discountType = publicDiscountText(discount?.discount_type).toLowerCase() || 'percent';
+    const discountValue = Number(discount?.discount_value || 0);
+    const baseItemsTotal = roundPromoMoney(
+      nextItems.reduce((sum, item) => sum + Number(item?.line_total || 0), 0)
+    );
+
+    if (applyTo === 'order') {
+      const minOrderAmount = discount?.min_order_amount != null ? Number(discount.min_order_amount || 0) : 0;
+      if (minOrderAmount > 0 && baseItemsTotal < minOrderAmount) {
+        return {
+          isApplicable: false,
+          errorCode: 'DISCOUNT_NOT_APPLICABLE',
+          discountAmount: 0,
+          items: nextItems,
+          itemsTotalAfterDiscount: baseItemsTotal,
+          usageRecords: [],
+        };
+      }
+
+      const orderDiscountAmount = discountHelpers.calculateDiscount(
+        baseItemsTotal,
+        discountType,
+        discountValue,
+        maxDiscountAmount
+      );
+      if (!(orderDiscountAmount > 0)) {
+        return {
+          isApplicable: false,
+          errorCode: 'DISCOUNT_NOT_APPLICABLE',
+          discountAmount: 0,
+          items: nextItems,
+          itemsTotalAfterDiscount: baseItemsTotal,
+          usageRecords: [],
+        };
+      }
+
+      return {
+        isApplicable: true,
+        errorCode: '',
+        discountAmount: roundPromoMoney(orderDiscountAmount),
+        items: nextItems,
+        itemsTotalAfterDiscount: roundPromoMoney(Math.max(0, baseItemsTotal - orderDiscountAmount)),
+        usageRecords: collectUsageRecords
+          ? [buildDiscountUsageRecord(discount, orderDiscountAmount, { apply_to: 'order' })]
+          : [],
+      };
+    }
+
+    const targets = buildDiscountProductTargetSets(targetRows);
+    let itemDiscountTotal = 0;
+    const usageRecords = [];
+
+    for (const item of nextItems) {
+      const matches = matchDiscountTargetScope(targets, item, productCategoriesMap, applyTo === 'combo' ? 'combo' : applyTo || 'any');
+      if (!matches) continue;
+
+      const baseLineTotal = roundPromoMoney(Number(item?.line_total || 0));
+      const lineDiscountAmount = discountHelpers.calculateDiscount(
+        baseLineTotal,
+        discountType,
+        discountValue,
+        maxDiscountAmount
+      );
+      if (!(lineDiscountAmount > 0)) continue;
+
+      item.line_total = roundPromoMoney(Math.max(0, baseLineTotal - lineDiscountAmount));
+      if (applyItemMeta) {
+        mergeItemDiscountMeta(
+          item,
+          publicDiscountText(discount?.title) || '\u0421\u043a\u0438\u0434\u043a\u0430',
+          lineDiscountAmount,
+          item?.discount?.original_line_total || baseLineTotal
+        );
+      }
+
+      itemDiscountTotal += lineDiscountAmount;
+      if (collectUsageRecords) {
+        usageRecords.push(buildDiscountUsageRecord(discount, lineDiscountAmount, {
+          apply_to: applyTo,
+          product_id: item?.type === 'product' ? Number(item?.product_id || 0) || null : null,
+        }));
+      }
+    }
+
+    if (!(itemDiscountTotal > 0)) {
+      return {
+        isApplicable: false,
+        errorCode: 'DISCOUNT_NOT_APPLICABLE',
+        discountAmount: 0,
+        items: nextItems,
+        itemsTotalAfterDiscount: baseItemsTotal,
+        usageRecords,
+      };
+    }
+
+    return {
+      isApplicable: true,
+      errorCode: '',
+      discountAmount: roundPromoMoney(itemDiscountTotal),
+      items: nextItems,
+      itemsTotalAfterDiscount: roundPromoMoney(
+        nextItems.reduce((sum, item) => sum + Number(item?.line_total || 0), 0)
+      ),
+      usageRecords,
+    };
+  }
+
+
+  function addCheckoutPreviewBreakdownAmount(targetMap, key, title, amount) {
+    const normalizedKey = publicDiscountText(key) || ('row_' + (targetMap.size + 1));
+    const normalizedTitle = publicDiscountText(title) || '\u0421\u043a\u0438\u0434\u043a\u0430';
+    const normalizedAmount = roundPromoMoney(Number(amount || 0));
+    if (!(normalizedAmount > 0)) return;
+
+    const current = targetMap.get(normalizedKey);
+    if (current) {
+      current.amount = roundPromoMoney(Number(current.amount || 0) + normalizedAmount);
+      return;
+    }
+
+    targetMap.set(normalizedKey, {
+      key: normalizedKey,
+      title: normalizedTitle,
+      amount: normalizedAmount,
+    });
+  }
+
+  function buildCheckoutBenefitSelectionEntryKey(source, id) {
+    const normalizedSource = publicDiscountText(source).toLowerCase();
+    const normalizedId = Number(id || 0);
+    if (!normalizedSource || !(normalizedId > 0)) return '';
+    return `${normalizedSource}:${normalizedId}`;
+  }
+
+  function buildCheckoutBenefitSelectionStateKey(discountKey = '', promoKey = '') {
+    const normalizedDiscountKey = publicDiscountText(discountKey);
+    const normalizedPromoKey = publicDiscountText(promoKey);
+    if (!normalizedDiscountKey && !normalizedPromoKey) return '__base__';
+    if (normalizedDiscountKey && normalizedPromoKey) {
+      return `${normalizedDiscountKey}|${normalizedPromoKey}`;
+    }
+    return normalizedDiscountKey || normalizedPromoKey || '__base__';
+  }
+
+  function cloneCheckoutPreviewBreakdownMap(sourceMap) {
+    const result = new Map();
+    if (!(sourceMap instanceof Map)) return result;
+    for (const [key, entry] of sourceMap.entries()) {
+      result.set(key, entry && typeof entry === 'object' ? { ...entry } : entry);
+    }
+    return result;
+  }
+
+  function resolveCheckoutPreviewDeliveryAmount(methodCode, itemsTotalAfterBenefits, deliveryRules = null) {
+    if (publicDiscountText(methodCode).toLowerCase() !== 'delivery') return 0;
+    const deliveryCost = Number(deliveryRules?.cost || 0);
+    const freeFrom = deliveryRules?.freeFrom != null
+      ? Number(deliveryRules.freeFrom)
+      : null;
+    if (freeFrom != null && Number(itemsTotalAfterBenefits || 0) >= freeFrom) return 0;
+    return roundPromoMoney(deliveryCost);
+  }
+
+  function buildCheckoutPreviewSummarySnapshot({
+    subtotalBeforeDiscount,
+    itemsTotalAfterBenefits,
+    methodCode,
+    deliveryRules,
+    breakdownMap,
+  }) {
+    const normalizedSubtotal = roundPromoMoney(Number(subtotalBeforeDiscount || 0));
+    const normalizedItemsTotal = roundPromoMoney(Number(itemsTotalAfterBenefits || 0));
+    const delivery = resolveCheckoutPreviewDeliveryAmount(
+      methodCode,
+      normalizedItemsTotal,
+      deliveryRules
+    );
+    const discountBreakdown = [...(breakdownMap instanceof Map ? breakdownMap.values() : [])]
+      .filter((entry) => Number(entry?.amount || 0) > 0)
+      .map((entry) => ({
+        key: publicDiscountText(entry?.key),
+        title: publicDiscountText(entry?.title) || '\u0421\u043a\u0438\u0434\u043a\u0430',
+        amount: roundPromoMoney(Number(entry?.amount || 0)),
+      }));
+    const discountTotal = roundPromoMoney(
+      Math.max(0, normalizedSubtotal - normalizedItemsTotal)
+    );
+    return {
+      subtotal: normalizedSubtotal,
+      items_total: normalizedItemsTotal,
+      delivery: roundPromoMoney(delivery),
+      discount_total: discountTotal,
+      total: roundPromoMoney(normalizedItemsTotal + Number(delivery || 0)),
+      discount_breakdown: discountBreakdown,
+    };
+  }
+
+  function buildCheckoutBenefitsClientCalculationMatrix({
+    subtotalBeforeDiscount,
+    itemsBaseTotal,
+    methodCode,
+    deliveryRules,
+    discountEntries,
+    promoEntries,
+    productCategoriesMap,
+  }) {
+    const summaryStates = {};
+    const normalizedDiscountEntries = Array.isArray(discountEntries) ? discountEntries : [];
+    const normalizedPromoEntries = Array.isArray(promoEntries) ? promoEntries : [];
+
+    summaryStates.__base__ = buildCheckoutPreviewSummarySnapshot({
+      subtotalBeforeDiscount,
+      itemsTotalAfterBenefits: itemsBaseTotal,
+      methodCode,
+      deliveryRules,
+      breakdownMap: new Map(),
+    });
+
+    normalizedPromoEntries.forEach((promoEntry) => {
+      const promoKey = buildCheckoutBenefitSelectionEntryKey(
+        promoEntry?.source,
+        promoEntry?.source === 'reward_promo'
+          ? promoEntry?.rewardId
+          : promoEntry?.card?.id
+      );
+      if (!promoKey) return;
+      const promoBreakdownMap = new Map();
+      let promoItemsTotal = roundPromoMoney(Number(itemsBaseTotal || 0));
+      if (promoEntry?.baseOutcome?.isApplicable) {
+        promoItemsTotal = roundPromoMoney(Number(promoEntry.baseOutcome.itemsTotalAfterPromo || promoItemsTotal));
+        addCheckoutPreviewBreakdownAmount(
+          promoBreakdownMap,
+          `promo_${Number(promoEntry?.rewardId || promoEntry?.card?.id || 0)}`,
+          publicDiscountText(promoEntry?.card?.title) || '\u041f\u0440\u043e\u043c\u043e\u043a\u043e\u0434',
+          Number(promoEntry?.baseOutcome?.discountAmount || 0)
+        );
+      }
+      summaryStates[buildCheckoutBenefitSelectionStateKey('', promoKey)] =
+        buildCheckoutPreviewSummarySnapshot({
+        subtotalBeforeDiscount,
+        itemsTotalAfterBenefits: promoItemsTotal,
+        methodCode,
+        deliveryRules,
+        breakdownMap: promoBreakdownMap,
+      });
+    });
+
+    normalizedDiscountEntries.forEach((discountEntry) => {
+      const discountKey = buildCheckoutBenefitSelectionEntryKey(
+        discountEntry?.source,
+        discountEntry?.selectionId
+      );
+      if (!discountKey) return;
+
+      const discountBreakdownMap = new Map();
+      let discountItemsTotal = roundPromoMoney(Number(itemsBaseTotal || 0));
+      const discountOutcome = discountEntry?.outcome?.isApplicable ? discountEntry.outcome : null;
+      if (discountOutcome) {
+        discountItemsTotal = roundPromoMoney(Number(discountOutcome.itemsTotalAfterDiscount || discountItemsTotal));
+        addCheckoutPreviewBreakdownAmount(
+          discountBreakdownMap,
+          `discount_${Number(discountEntry?.sourceDiscountId || discountEntry?.selectionId || 0)}`,
+          publicDiscountText(discountEntry?.card?.title) || '\u0421\u043a\u0438\u0434\u043a\u0430',
+          Number(discountOutcome.discountAmount || 0)
+        );
+      }
+
+      const discountSummary = buildCheckoutPreviewSummarySnapshot({
+        subtotalBeforeDiscount,
+        itemsTotalAfterBenefits: discountItemsTotal,
+        methodCode,
+        deliveryRules,
+        breakdownMap: discountBreakdownMap,
+      });
+      summaryStates[buildCheckoutBenefitSelectionStateKey(discountKey, '')] = discountSummary;
+
+      normalizedPromoEntries.forEach((promoEntry) => {
+        const promoKey = buildCheckoutBenefitSelectionEntryKey(
+          promoEntry?.source,
+          promoEntry?.source === 'reward_promo'
+            ? promoEntry?.rewardId
+            : promoEntry?.card?.id
+        );
+        if (!promoKey) return;
+        if (!canCombineCheckoutBenefits(discountEntry?.card, promoEntry?.card)) return;
+
+        const pairBreakdownMap = cloneCheckoutPreviewBreakdownMap(discountBreakdownMap);
+        let pairItemsTotal = discountItemsTotal;
+        let pairPromoOutcome = null;
+        if (discountOutcome) {
+          pairPromoOutcome = computeCheckoutPromoPreviewEffect({
+            runtimeConfig: promoEntry?.runtimeConfig,
+            targetSets: promoEntry?.targetSets,
+            sourceItems: discountOutcome.items,
+            sourceItemsTotal: discountOutcome.itemsTotalAfterDiscount,
+            productCategoriesMap,
+          });
+        } else {
+          pairPromoOutcome = promoEntry?.baseOutcome || null;
+        }
+
+        if (pairPromoOutcome?.isApplicable) {
+          pairItemsTotal = roundPromoMoney(Number(pairPromoOutcome.itemsTotalAfterPromo || pairItemsTotal));
+          addCheckoutPreviewBreakdownAmount(
+            pairBreakdownMap,
+            `promo_${Number(promoEntry?.rewardId || promoEntry?.card?.id || 0)}`,
+            publicDiscountText(promoEntry?.card?.title) || '\u041f\u0440\u043e\u043c\u043e\u043a\u043e\u0434',
+            Number(pairPromoOutcome.discountAmount || 0)
+          );
+        }
+
+        summaryStates[buildCheckoutBenefitSelectionStateKey(discountKey, promoKey)] =
+          buildCheckoutPreviewSummarySnapshot({
+            subtotalBeforeDiscount,
+            itemsTotalAfterBenefits: pairItemsTotal,
+            methodCode,
+            deliveryRules,
+            breakdownMap: pairBreakdownMap,
+          });
+      });
+    });
+
+    return {
+      version: 1,
+      summary_states: summaryStates,
+    };
+  }
+
+
+  function buildPromoPreviewDisabledReason(errorCode) {
+    switch (publicDiscountText(errorCode).toUpperCase()) {
+      case 'PROMO_LIMIT_REACHED':
+        return '\u041b\u0438\u043c\u0438\u0442 \u043f\u0440\u043e\u043c\u043e\u043a\u043e\u0434\u0430 \u0438\u0441\u0447\u0435\u0440\u043f\u0430\u043d.';
+      case 'PROMO_CUSTOMER_LIMIT_REACHED':
+        return '\u0412\u044b \u0443\u0436\u0435 \u0438\u0441\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u043b\u0438 \u044d\u0442\u043e\u0442 \u043f\u0440\u043e\u043c\u043e\u043a\u043e\u0434 \u043c\u0430\u043a\u0441\u0438\u043c\u0430\u043b\u044c\u043d\u043e\u0435 \u0447\u0438\u0441\u043b\u043e \u0440\u0430\u0437.';
+      case 'PROMO_NOT_APPLICABLE':
+        return '\u041d\u0435 \u043f\u043e\u0434\u0445\u043e\u0434\u0438\u0442 \u043a \u0442\u0435\u043a\u0443\u0449\u0435\u043c\u0443 \u0437\u0430\u043a\u0430\u0437\u0443.';
+      case 'PROMO_NOT_AVAILABLE':
+      default:
+        return '\u0421\u0435\u0439\u0447\u0430\u0441 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u0435\u043d \u0434\u043b\u044f \u044d\u0442\u043e\u0433\u043e \u043a\u043b\u0438\u0435\u043d\u0442\u0430.';
+    }
+  }
+
+  async function buildCheckoutBenefitsPreviewData({
+    tenantId,
+    storeId,
+    customer,
+    draft,
+  }) {
+    const customerId = Number(customer?.id || 0) || null;
+    const normalizedDraft = draft && typeof draft === 'object' ? draft : {};
+    const promoCode = normalizeOrderPromoCode(normalizedDraft?.promo_code);
+    const selectedDiscountId = normalizeSelectedDiscountId(normalizedDraft?.selected_discount_id);
+    const selectedDiscountSource = normalizeCheckoutDiscountSource(normalizedDraft?.selected_discount_source)
+      || (selectedDiscountId !== null ? 'discount' : null);
+    const selectedPromoSource = normalizeCheckoutPromoSource(normalizedDraft?.selected_promo_source)
+      || (promoCode ? 'promo_code' : null);
+    const selectedPromoRewardId = normalizeSelectedDiscountId(normalizedDraft?.selected_promo_reward_id);
+    const methodCode = publicDiscountText(normalizedDraft?.method_code).toLowerCase() || 'takeaway';
+    const {
+      items: normalizedItems,
+      productIds,
+      subtotalBeforeDiscount,
+      itemsBaseTotal,
+    } = normalizeCheckoutPreviewItems(normalizedDraft?.items);
+
+    const customerBenefitDiscountRows = customerId > 0
+      ? await loadCustomerBenefitDiscountRows(tenantId, storeId, customerId)
+      : [];
+    const automaticDiscountRows = customerBenefitDiscountRows.filter((discount) => isPublicAutomaticSimpleDiscount(discount));
+    const automaticDiscounts = customerId > 0
+      ? await discountHelpers.getActiveDiscountsForCustomer(db, tenantId, storeId, customerId)
+      : [];
+    const rewardRows = customerId > 0
+      ? await loadCustomerRewardRows(tenantId, customerId, { statuses: ['available', 'used', 'expired'] })
+      : [];
+    const availableRewardRows = rewardRows.filter((row) => publicDiscountText(row?.status).toLowerCase() === 'available');
+    const completedCards = buildPublicCompletedCardsFromRewardRows(rewardRows);
+    const redeemedSourcePromoIds = new Set(
+      rewardRows
+        .map((row) => {
+          const payload = parsePublicRewardPayload(row);
+          return publicDiscountText(payload?.claimed_from).toLowerCase() === 'promo'
+            ? Number(payload?.source_promo_code_id || 0)
+            : 0;
+        })
+        .filter((id) => id > 0)
+    );
+    const breakdownMap = new Map();
+
+    const productCategoriesMap = await loadCheckoutProductCategoriesMap(tenantId, productIds);
+
+    const baseItems = cloneCheckoutBenefitItems(normalizedItems);
+    const discountTargetsById = await loadDiscountTargetRowsMap(
+      tenantId,
+      automaticDiscounts.map((discount) => Number(discount?.id || 0))
+    );
+    const discountTargetPreviewProductsMap = await loadCheckoutRewardProductsByIds(
+      tenantId,
+      [...new Set(
+        [...discountTargetsById.values()].flatMap((rows) => (
+          (Array.isArray(rows) ? rows : [])
+            .map((row) => Number(row?.product_id || 0))
+            .filter((id) => id > 0)
+        ))
+      )]
+    );
+    const discountEntries = [];
+    const discountCards = automaticDiscounts.map((discount) => {
+      const discountId = Number(discount?.id || 0);
+      const targetRows = discountTargetsById.get(discountId) || [];
+      const outcome = applySelectedDiscountToItems({
+        discount,
+        items: baseItems,
+        targetRows,
+        productCategoriesMap,
+      });
+      const isSelected = selectedDiscountSource === 'discount'
+        && selectedDiscountId !== null
+        && discountId === selectedDiscountId;
+      const card = {
+        ...buildPublicDiscountBenefitCard(discount),
+        discount_amount: roundPromoMoney(Number(outcome?.discountAmount || 0)),
+        is_applicable: outcome?.isApplicable === true,
+        disabled_reason: outcome?.isApplicable ? '' : buildDiscountPreviewDisabledReason(outcome?.errorCode),
+        is_selected: Boolean(isSelected),
+        source: 'discount',
+        reward_id: null,
+        products: buildRewardProductsPayload(
+          targetRows,
+          discountTargetPreviewProductsMap,
+          getPublicDiscountProductsConfigMode(discount, 'any')
+        ),
+      };
+      discountEntries.push({
+        source: 'discount',
+        selectionId: discountId,
+        rewardId: null,
+        sourceDiscountId: discountId,
+        discount,
+        targetRows,
+        outcome,
+        card,
+      });
+      return card;
+    });
+
+    for (const rewardRow of availableRewardRows) {
+      if (publicDiscountText(rewardRow?.reward_type).toLowerCase() !== 'discount') continue;
+      const rewardSource = buildPublicRewardDiscountSource(rewardRow);
+      const rewardId = Number(rewardSource?.rewardId || rewardRow?.id || 0);
+      const outcome = applySelectedDiscountToItems({
+        discount: rewardSource.discount,
+        items: baseItems,
+        targetRows: rewardSource.targetRows || [],
+        productCategoriesMap,
+      });
+      const isSelected = selectedDiscountSource === 'reward_discount'
+        && selectedDiscountId !== null
+        && rewardId === selectedDiscountId;
+      const card = {
+        ...buildPublicDiscountBenefitCard(rewardSource.discount),
+        discount_amount: roundPromoMoney(Number(outcome?.discountAmount || 0)),
+        is_applicable: outcome?.isApplicable === true,
+        disabled_reason: outcome?.isApplicable ? '' : buildDiscountPreviewDisabledReason(outcome?.errorCode),
+        is_selected: Boolean(isSelected),
+        source: 'reward_discount',
+        reward_id: rewardId || null,
+        products: Array.isArray(rewardSource?.payload?.products) ? rewardSource.payload.products : [],
+      };
+      discountEntries.push({
+        source: 'reward_discount',
+        selectionId: rewardId,
+        rewardId,
+        sourceDiscountId: Number(rewardRow?.discount_id || 0) || null,
+        discount: rewardSource.discount,
+        targetRows: rewardSource.targetRows || [],
+        outcome,
+        rewardRow,
+        card,
+      });
+      discountCards.push(card);
+    }
+
+    const {
+      entry: selectedDiscountEntry,
+    } = resolveSelectedCheckoutDiscountEntry({
+      selectedDiscountId,
+      selectedDiscountSource,
+      discountEntries,
+      allDiscountRows: automaticDiscountRows,
+    });
+    const selectedDiscountCard = selectedDiscountEntry?.card || null;
+    const selectedDiscount = selectedDiscountEntry?.discount || null;
+    const selectedDiscountOutcome = selectedDiscountEntry?.outcome?.isApplicable
+      ? selectedDiscountEntry.outcome
+      : null;
+
+    const itemsAfterSelectedDiscount = selectedDiscountOutcome?.isApplicable
+      ? cloneCheckoutBenefitItems(selectedDiscountOutcome.items)
+      : cloneCheckoutBenefitItems(baseItems);
+    let itemsTotalAfterBenefits = selectedDiscountOutcome?.isApplicable
+      ? roundPromoMoney(selectedDiscountOutcome.itemsTotalAfterDiscount)
+      : roundPromoMoney(itemsBaseTotal);
+
+    if (selectedDiscountOutcome?.isApplicable && Number(selectedDiscountOutcome.discountAmount || 0) > 0) {
+      addCheckoutPreviewBreakdownAmount(
+        breakdownMap,
+        `discount_${Number(selectedDiscount?.id || 0)}`,
+        publicDiscountText(selectedDiscount?.title) || '\u0421\u043a\u0438\u0434\u043a\u0430',
+        Number(selectedDiscountOutcome.discountAmount || 0)
+      );
+    }
+
+    const promoDiscounts = customerBenefitDiscountRows.filter((discount) => isPublicPromoSimpleDiscount(discount));
+    const promoDiscountIds = promoDiscounts
+      .map((discount) => Number(discount?.id || 0))
+      .filter((id) => id > 0);
+
+    let promoRowsByDiscountId = new Map();
+    let promoTargetsByDiscountId = new Map();
+    let promoCustomerUsageMap = new Map();
+    let promoTargetPreviewProductsMap = new Map();
+
+    if (promoDiscountIds.length) {
+      const [promoRows] = await db.query(
+        `SELECT id AS promo_code_id, discount_id, code, code_mode, usage_limit, usage_count,
+                assigned_customer_id, is_active
+           FROM mkt_discount_promo_codes
+          WHERE tenant_id = ?
+            AND (store_id = ? OR store_id = 0 OR store_id IS NULL)
+            AND discount_id IN (?)`,
+        [tenantId, storeId, promoDiscountIds]
+      );
+
+      for (const row of Array.isArray(promoRows) ? promoRows : []) {
+        const discountId = Number(row?.discount_id || 0);
+        if (!(discountId > 0)) continue;
+        if (!promoRowsByDiscountId.has(discountId)) promoRowsByDiscountId.set(discountId, []);
+        promoRowsByDiscountId.get(discountId).push(row);
+      }
+      promoTargetsByDiscountId = await loadDiscountTargetRowsMap(tenantId, promoDiscountIds);
+      promoTargetPreviewProductsMap = await loadCheckoutRewardProductsByIds(
+        tenantId,
+        [...new Set(
+          [...promoTargetsByDiscountId.values()].flatMap((rows) => (
+            (Array.isArray(rows) ? rows : [])
+              .map((row) => Number(row?.product_id || 0))
+              .filter((id) => id > 0)
+          ))
+        )]
+      );
+
+      if (customerId > 0) {
+        const [promoUsageRows] = await db.query(
+          `SELECT discount_id, COUNT(*) AS usage_count
+             FROM mkt_discount_usage
+            WHERE tenant_id = ? AND customer_id = ? AND discount_id IN (?)
+            GROUP BY discount_id`,
+          [tenantId, customerId, promoDiscountIds]
+        );
+        promoCustomerUsageMap = new Map(
+          (Array.isArray(promoUsageRows) ? promoUsageRows : []).map((row) => [
+            Number(row?.discount_id || 0),
+            Number(row?.usage_count || 0),
+          ])
+        );
+      }
+    }
+
+    function computeRegularPromoPreviewOutcome(discount, promoRow, targetSets) {
+      const previewItems = cloneCheckoutBenefitItems(baseItems);
+      const itemsTotalBeforePromo = roundPromoMoney(
+        previewItems.reduce((sum, item) => sum + Number(item?.line_total || 0), 0)
+      );
+
+      if (!promoRow || !discount) {
+        return {
+          isApplicable: false,
+          disabledReason: buildPromoPreviewDisabledReason('PROMO_INVALID'),
+          discountAmount: 0,
+          itemsTotalAfterPromo: itemsTotalBeforePromo,
+          items: previewItems,
+        };
+      }
+
+      if (Number(promoRow?.is_active || 0) !== 1 || !discountHelpers.isDiscountActive(discount)) {
+        return {
+          isApplicable: false,
+          disabledReason: buildPromoPreviewDisabledReason('PROMO_NOT_AVAILABLE'),
+          discountAmount: 0,
+          itemsTotalAfterPromo: itemsTotalBeforePromo,
+          items: previewItems,
+        };
+      }
+
+      if (Number(promoRow?.usage_limit || 0) > 0 && Number(promoRow?.usage_count || 0) >= Number(promoRow?.usage_limit || 0)) {
+        return {
+          isApplicable: false,
+          disabledReason: buildPromoPreviewDisabledReason('PROMO_LIMIT_REACHED'),
+          discountAmount: 0,
+          itemsTotalAfterPromo: itemsTotalBeforePromo,
+          items: previewItems,
+        };
+      }
+
+      if (Number(promoRow?.assigned_customer_id || 0) > 0 && Number(promoRow?.assigned_customer_id || 0) !== Number(customerId || 0)) {
+        return {
+          isApplicable: false,
+          disabledReason: buildPromoPreviewDisabledReason('PROMO_NOT_AVAILABLE'),
+          discountAmount: 0,
+          itemsTotalAfterPromo: itemsTotalBeforePromo,
+          items: previewItems,
+        };
+      }
+
+      if (Number(discount?.usage_per_customer || 0) > 0 && Number(customerId || 0) > 0) {
+        const customerUsageCount = Number(promoCustomerUsageMap.get(Number(discount?.id || 0)) || 0);
+        if (customerUsageCount >= Number(discount?.usage_per_customer || 0)) {
+          return {
+            isApplicable: false,
+            disabledReason: buildPromoPreviewDisabledReason('PROMO_CUSTOMER_LIMIT_REACHED'),
+            discountAmount: 0,
+            itemsTotalAfterPromo: itemsTotalBeforePromo,
+            items: previewItems,
+          };
+        }
+      }
+
+      return computeCheckoutPromoPreviewEffect({
+        runtimeConfig: {
+          ...getPromoRuntimeConfig(discount),
+          maxDiscountAmount: discount?.max_discount_amount != null ? Number(discount.max_discount_amount || 0) : null,
+          minOrderAmount: discount?.min_order_amount != null ? Number(discount.min_order_amount || 0) : null,
+        },
+        targetSets,
+        sourceItems: baseItems,
+        sourceItemsTotal: itemsTotalBeforePromo,
+        productCategoriesMap,
+      });
+    }
+
+    const promoEntries = [];
+    const promoCards = [];
+    for (const discount of promoDiscounts) {
+      const rewardMeta = getPublicPromoRewardMeta(discount);
+      const rows = promoRowsByDiscountId.get(Number(discount?.id || 0)) || [];
+      const targetRows = promoTargetsByDiscountId.get(Number(discount?.id || 0)) || [];
+      const targetSets = buildDiscountProductTargetSets(targetRows);
+      const actionMode = isPromoRewardRedeemAction(discount) ? 'redeem_reward' : 'select';
+      for (const row of rows) {
+        const codeMode = publicDiscountText(row?.code_mode).toLowerCase();
+        const assignedCustomerId = Number(row?.assigned_customer_id || 0);
+        if (codeMode === 'unique' && (!(assignedCustomerId > 0) || assignedCustomerId !== Number(customerId || 0))) {
+          continue;
+        }
+        if (redeemedSourcePromoIds.has(Number(row?.promo_code_id || 0))) continue;
+
+        const code = publicDiscountText(row?.code);
+        if (!code) continue;
+
+        const outcome = computeRegularPromoPreviewOutcome(discount, row, targetSets);
+        const isSelected = actionMode === 'select'
+          && selectedPromoSource === 'promo_code'
+          && promoCode
+          && normalizeOrderPromoCode(code) === promoCode;
+        const card = {
+          id: Number(row?.promo_code_id || 0),
+          kind: 'promo_code',
+          title: publicDiscountText(discount?.title) || '\u041f\u0440\u043e\u043c\u043e\u043a\u043e\u0434',
+          description: rewardMeta.description,
+          badge_text: rewardMeta.badge_text,
+          apply_scope_text: rewardMeta.apply_scope_text,
+          expires_at: discount?.ends_at || null,
+          code,
+          is_copyable: true,
+          is_stackable: isCheckoutBenefitStackable(discount),
+          usage_limit: row?.usage_limit == null ? null : Number(row.usage_limit || 0),
+          usage_count: Number(row?.usage_count || 0),
+          status_text: codeMode === 'shared' ? '\u041e\u0431\u0449\u0438\u0439' : '\u041f\u0435\u0440\u0441\u043e\u043d\u0430\u043b\u044c\u043d\u044b\u0439',
+          is_applicable: outcome.isApplicable === true,
+          disabled_reason: outcome.isApplicable ? '' : outcome.disabledReason,
+          is_selected: Boolean(isSelected),
+          source: 'promo_code',
+          action_mode: actionMode,
+          reward_id: null,
+          products: buildRewardProductsPayload(
+            targetRows,
+            promoTargetPreviewProductsMap,
+            getPublicDiscountProductsConfigMode(discount, 'any')
+          ),
+        };
+        promoCards.push(card);
+        promoEntries.push({
+          source: 'promo_code',
+          rewardId: null,
+          selectionCode: code,
+          discount,
+          promoRow: row,
+          runtimeConfig: {
+            ...getPromoRuntimeConfig(discount),
+            maxDiscountAmount: discount?.max_discount_amount != null ? Number(discount.max_discount_amount || 0) : null,
+            minOrderAmount: discount?.min_order_amount != null ? Number(discount.min_order_amount || 0) : null,
+          },
+          targetSets,
+          baseOutcome: outcome,
+          card,
+        });
+      }
+    }
+
+    for (const rewardRow of availableRewardRows) {
+      if (publicDiscountText(rewardRow?.reward_type).toLowerCase() !== 'promo_code') continue;
+      const payload = parsePublicRewardPayload(rewardRow);
+      const targetRows = getRewardPayloadTargetRows(payload);
+      const targetSets = buildDiscountProductTargetSets(targetRows);
+      const runtimeConfig = getRewardPromoRuntimeConfig(payload);
+      const baseOutcome = computeCheckoutPromoPreviewEffect({
+        runtimeConfig,
+        targetSets,
+        sourceItems: baseItems,
+        sourceItemsTotal: itemsBaseTotal,
+        productCategoriesMap,
+      });
+      const isSelected = selectedPromoSource === 'reward_promo'
+        && selectedPromoRewardId !== null
+        && Number(rewardRow?.id || 0) === Number(selectedPromoRewardId || 0)
+        && normalizeOrderPromoCode(payload?.code || payload?.source_code) === promoCode;
+      const card = {
+        ...buildPublicRewardPromoCard(rewardRow),
+        is_applicable: baseOutcome.isApplicable === true,
+        disabled_reason: baseOutcome.isApplicable ? '' : baseOutcome.disabledReason,
+        is_selected: Boolean(isSelected),
+      };
+      promoCards.push(card);
+      promoEntries.push({
+        source: 'reward_promo',
+        rewardId: Number(rewardRow?.id || 0) || null,
+        selectionCode: publicDiscountText(payload?.code || payload?.source_code),
+        discount: {
+          id: Number(payload?.source_discount_id || rewardRow?.discount_id || 0) || null,
+          title: publicDiscountText(payload?.title) || publicDiscountText(rewardRow?.discount_title),
+          is_stackable: Number(payload?.is_stackable || 0) === 1 || payload?.is_stackable === true,
+        },
+        promoRow: {
+          promo_code_id: Number(payload?.source_promo_code_id || 0) || null,
+          code: publicDiscountText(payload?.code || payload?.source_code),
+        },
+        runtimeConfig,
+        targetSets,
+        baseOutcome,
+        rewardRow,
+        card,
+      });
+    }
+
+    const { entry: selectedPromoEntry } = resolveSelectedCheckoutPromoEntry({
+      promoCode,
+      selectedPromoSource,
+      selectedPromoRewardId,
+      promoEntries,
+    });
+    const selectedPromoCard = selectedPromoEntry?.card || null;
+    let promoOutcomeForSummary = null;
+    if (
+      selectedPromoEntry
+      && selectedPromoEntry?.baseOutcome?.isApplicable
+      && (!selectedDiscountOutcome?.isApplicable || canCombineCheckoutBenefits(selectedDiscountCard, selectedPromoCard))
+    ) {
+      promoOutcomeForSummary = selectedDiscountOutcome?.isApplicable
+        ? computeCheckoutPromoPreviewEffect({
+            runtimeConfig: selectedPromoEntry.runtimeConfig,
+            targetSets: selectedPromoEntry.targetSets,
+            sourceItems: itemsAfterSelectedDiscount,
+            sourceItemsTotal: selectedDiscountOutcome.itemsTotalAfterDiscount,
+            productCategoriesMap,
+          })
+        : selectedPromoEntry.baseOutcome;
+      if (promoOutcomeForSummary?.isApplicable) {
+        itemsTotalAfterBenefits = roundPromoMoney(promoOutcomeForSummary.itemsTotalAfterPromo);
+      }
+      if (Number(promoOutcomeForSummary?.discountAmount || 0) > 0) {
+        addCheckoutPreviewBreakdownAmount(
+          breakdownMap,
+          `promo_${Number(selectedPromoCard?.reward_id || selectedPromoCard?.id || 0)}`,
+          publicDiscountText(selectedPromoCard?.title) || '\u041f\u0440\u043e\u043c\u043e\u043a\u043e\u0434',
+          Number(promoOutcomeForSummary.discountAmount || 0)
+        );
+      }
+    }
+
+    const availableGiftRewardProductIds = await loadPublicGiftRewardAvailableProductIds(tenantId, storeId, availableRewardRows);
+    const giftCards = availableRewardRows
+      .filter((row) => publicDiscountText(row?.reward_type).toLowerCase() === 'gift')
+      .map((row) => buildPublicGiftRewardCard(row, availableGiftRewardProductIds));
+
+    const loyaltyDiscounts = customerBenefitDiscountRows.filter(
+      (discount) => normalizePublicMechanicType(discount?.mechanic_type) === 'loyalty_progress'
+    );
+    const progress = await buildPublicProgressBenefitCards({
+      tenantId,
+      storeId,
+      customerId,
+      discounts: loyaltyDiscounts,
+    });
+
+    let deliveryRules = null;
+    if (methodCode === 'delivery') {
+      const [settings] = await db.query(
+        `SELECT ds.delivery_cost, ds.free_delivery_from
+           FROM ten_delivery_settings ds
+           JOIN ten_delivery_settings_stores dss
+             ON dss.delivery_setting_id = ds.id
+            AND dss.tenant_id = ds.tenant_id
+          WHERE ds.tenant_id = ?
+            AND dss.store_id = ?
+            AND ds.is_active = 1
+          LIMIT 1`,
+        [tenantId, storeId]
+      );
+      if (Array.isArray(settings) && settings.length) {
+        const current = settings[0];
+        deliveryRules = {
+          cost: Number(current?.delivery_cost || 0),
+          freeFrom: current?.free_delivery_from != null ? Number(current.free_delivery_from) : null,
+        };
+      }
+    }
+    const clientCalculation = buildCheckoutBenefitsClientCalculationMatrix({
+      subtotalBeforeDiscount,
+      itemsBaseTotal,
+      methodCode,
+      deliveryRules,
+      discountEntries,
+      promoEntries,
+      productCategoriesMap,
+    });
+    const summary = buildCheckoutPreviewSummarySnapshot({
+      subtotalBeforeDiscount,
+      itemsTotalAfterBenefits,
+      methodCode,
+      deliveryRules,
+      breakdownMap,
+    });
+
+    return {
+      discounts: discountCards,
+      promo_codes: promoCards,
+      gifts: giftCards,
+      progress,
+      completed: completedCards,
+      summary,
+      client_calculation: clientCalculation,
+    };
+  }
+
+  async function resolveCheckoutProgressClaimContext({
+    tenantId,
+    storeId,
+    customer,
+    draft,
+    discountId,
+  }) {
+    const customerId = Number(customer?.id || 0) || null;
+    const normalizedDiscountId = Number(discountId || 0);
+    if (!(normalizedDiscountId > 0) || !(customerId > 0)) {
+      throw Object.assign(new Error('DISCOUNT_INVALID'), { code: 'DISCOUNT_INVALID' });
+    }
+
+    const preview = await buildCheckoutBenefitsPreviewData({
+      tenantId,
+      storeId,
+      customer,
+      draft,
+    });
+    const progressCard = (Array.isArray(preview?.progress) ? preview.progress : [])
+      .find((entry) => Number(entry?.discount_id || entry?.id || 0) === normalizedDiscountId);
+    if (!progressCard) {
+      throw Object.assign(new Error('DISCOUNT_INVALID'), { code: 'DISCOUNT_INVALID' });
+    }
+    if (progressCard?.is_claimable !== true || Number(progressCard?.pending_reward_count || 0) < 1) {
+      throw Object.assign(new Error('DISCOUNT_NOT_APPLICABLE'), { code: 'DISCOUNT_NOT_APPLICABLE' });
+    }
+
+    const customerBenefitDiscountRows = await loadCustomerBenefitDiscountRows(tenantId, storeId, customerId);
+    const loyaltyDiscount = customerBenefitDiscountRows.find((discount) => (
+      Number(discount?.id || 0) === normalizedDiscountId
+      && normalizePublicMechanicType(discount?.mechanic_type) === 'loyalty_progress'
+    )) || null;
+    if (!loyaltyDiscount) {
+      throw Object.assign(new Error('DISCOUNT_NOT_AVAILABLE'), { code: 'DISCOUNT_NOT_AVAILABLE' });
+    }
+
+    return {
+      customerId,
+      preview,
+      progressCard,
+      loyaltyDiscount,
+    };
+  }
+
+  async function buildCheckoutProgressGiftClaimOptionsData({
+    tenantId,
+    storeId,
+    customer,
+    draft,
+    discountId,
+    queryRunner = null,
+  }) {
+    const {
+      progressCard,
+      loyaltyDiscount,
+    } = await resolveCheckoutProgressClaimContext({
+      tenantId,
+      storeId,
+      customer,
+      draft,
+      discountId,
+    });
+
+    if (publicDiscountText(progressCard?.reward_kind).toLowerCase() !== 'gift') {
+      throw Object.assign(new Error('DISCOUNT_NOT_APPLICABLE'), { code: 'DISCOUNT_NOT_APPLICABLE' });
+    }
+
+    const mechanic = parsePublicDiscountObject(loyaltyDiscount?.mechanic_config_json, {});
+    const rewardTargetRows = collectLoyaltyProgressGiftRewardTargetRows(mechanic);
+    const productIds = [...new Set(
+      rewardTargetRows
+        .map((row) => Number(row?.product_id || 0))
+        .filter((id) => id > 0)
+    )];
+    const selectionLimit = Math.max(0, Number(progressCard?.pending_reward_count || 0));
+    const productSnapshots = await loadCheckoutBenefitRewardClaimProducts(
+      queryRunner,
+      tenantId,
+      storeId,
+      productIds
+    );
+    const productSnapshotMap = new Map(
+      productSnapshots.map((item) => [Number(item?.product_id || 0), item])
+    );
+
+    const items = [];
+    rewardTargetRows.forEach((targetRow, targetIndex) => {
+      const productId = Number(targetRow?.product_id || 0);
+      if (!(productId > 0)) return;
+      const snapshot = productSnapshotMap.get(productId);
+      if (!snapshot || snapshot.is_available !== true) return;
+      const stockQty = snapshot.stock_qty != null ? Math.max(0, Math.floor(Number(snapshot.stock_qty || 0))) : null;
+      items.push({
+        ...snapshot,
+        config_mode: normalizePublicProductConfigMode(targetRow?.config_mode, 'any'),
+        product_config: normalizePublicProductConfigPayload(
+          targetRow?.product_config ?? targetRow?.product_config_json,
+          productId
+        ),
+        selection_key: buildPublicGiftRewardSelectionKey(targetRow, targetIndex),
+        max_selectable_qty: stockQty == null
+          ? selectionLimit
+          : Math.max(0, Math.min(selectionLimit, stockQty)),
+      });
+    });
+
+    const data = {
+      discount_id: Number(progressCard?.discount_id || progressCard?.id || 0) || null,
+      title: publicDiscountText(loyaltyDiscount?.title) || 'Накопительная акция',
+      description: publicDiscountText(loyaltyDiscount?.description),
+      pending_reward_count: selectionLimit,
+      selection_limit: selectionLimit,
+      reward_qty: Number(progressCard?.reward_qty || 1) || 1,
+      pending_reward_mode: normalizePublicProgressPendingRewardMode(progressCard?.pending_reward_mode),
+      items,
+    };
+    if (!publicDiscountText(loyaltyDiscount?.title).trim()) data.title = 'Накопительная акция';
+    if (!publicDiscountText(loyaltyDiscount?.title).trim()) {
+      data.title = "\u041d\u0430\u043a\u043e\u043f\u0438\u0442\u0435\u043b\u044c\u043d\u0430\u044f \u0430\u043a\u0446\u0438\u044f";
+    }
+    return data;
+  }
+
+  async function buildCheckoutProgressProductsSheetData({
+    tenantId,
+    storeId,
+    customerId,
+    discountId,
+  }) {
+    const normalizedDiscountId = Number(discountId || 0);
+    if (!(normalizedDiscountId > 0) || !(Number(customerId || 0) > 0)) {
+      throw Object.assign(new Error('DISCOUNT_INVALID'), { code: 'DISCOUNT_INVALID' });
+    }
+
+    const customerBenefitDiscountRows = await loadCustomerBenefitDiscountRows(tenantId, storeId, customerId);
+    const loyaltyDiscount = customerBenefitDiscountRows.find((discount) => (
+      Number(discount?.id || 0) === normalizedDiscountId
+      && normalizePublicMechanicType(discount?.mechanic_type) === 'loyalty_progress'
+    )) || null;
+    if (!loyaltyDiscount) {
+      throw Object.assign(new Error('DISCOUNT_NOT_AVAILABLE'), { code: 'DISCOUNT_NOT_AVAILABLE' });
+    }
+
+    if (getPublicProgressInteractionMode(loyaltyDiscount) !== 'products_sheet') {
+      throw Object.assign(new Error('DISCOUNT_NOT_APPLICABLE'), { code: 'DISCOUNT_NOT_APPLICABLE' });
+    }
+
+    const qualifyingScopeMode = getPublicProgressQualifyingScopeMode(loyaltyDiscount);
+    let items = [];
+    if (qualifyingScopeMode === 'product') {
+      const mechanic = parsePublicDiscountObject(loyaltyDiscount?.mechanic_config_json, {});
+      const rows = Array.isArray(mechanic?.qualifying_items) ? mechanic.qualifying_items : [];
+      const productRows = rows
+        .map((row) => {
+          const entityType = publicDiscountText(row?.entity_type).toLowerCase();
+          if (entityType && entityType !== 'product') return null;
+          const productId = Number(row?.product_id ?? row?.entity_id ?? row?.id ?? 0);
+          if (!(productId > 0)) return null;
+          return {
+            product_id: productId,
+            config_mode: normalizePublicProductConfigMode(
+              row?.config_mode ?? mechanic?.qualifying_items_config_mode,
+              'any'
+            ),
+            product_config: normalizePublicProductConfigPayload(
+              row?.product_config ?? row?.product_config_json,
+              productId
+            ),
+          };
+        })
+        .filter(Boolean);
+      const snapshots = await loadCheckoutBenefitProductSnapshotsByIds(
+        tenantId,
+        productRows.map((row) => Number(row?.product_id || 0))
+      );
+      const snapshotMap = new Map(
+        (Array.isArray(snapshots) ? snapshots : []).map((snapshot) => [Number(snapshot?.product_id || 0), snapshot])
+      );
+      items = productRows
+        .map((row) => {
+          const snapshot = snapshotMap.get(Number(row?.product_id || 0));
+          if (!snapshot) return null;
+          return {
+            ...snapshot,
+            config_mode: row.config_mode,
+            product_config: row.product_config,
+          };
+        })
+        .filter(Boolean);
+    } else if (qualifyingScopeMode === 'category') {
+      items = await loadCheckoutBenefitProductSnapshotsByCategoryIds(
+        tenantId,
+        collectPublicProgressQualifyingCategoryIds(loyaltyDiscount)
+      );
+    }
+
+    const data = {
+      discount_id: normalizedDiscountId,
+      qualifying_scope_mode: qualifyingScopeMode,
+      title: publicDiscountText(loyaltyDiscount?.title) || 'Подходящие товары',
+      description: publicDiscountText(loyaltyDiscount?.description),
+      items,
+    };
+    if (!publicDiscountText(loyaltyDiscount?.title).trim()) data.title = 'Подходящие товары';
+    if (!publicDiscountText(loyaltyDiscount?.title).trim()) {
+      data.title = "\u041f\u043e\u0434\u0445\u043e\u0434\u044f\u0449\u0438\u0435 \u0442\u043e\u0432\u0430\u0440\u044b";
+    }
+    return data;
+  }
+
+  router.post('/checkout/benefits/preview', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const token = str(req.headers['x-customer-token']);
+      const customer = await getCustomerByToken(tenantId, token);
+      if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+
+      const data = await buildCheckoutBenefitsPreviewData({
+        tenantId,
+        storeId,
+        customer,
+        draft: req.body,
+      });
+
+      return res.json({ ok: true, data });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.post('/checkout/benefits/progress-products', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const token = str(req.headers['x-customer-token']);
+      const customer = await getCustomerByToken(tenantId, token);
+      if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+
+      const data = await buildCheckoutProgressProductsSheetData({
+        tenantId,
+        storeId,
+        customerId: Number(customer?.id || 0),
+        discountId: Number(req.body?.discount_id || 0),
+      });
+
+      return res.json({ ok: true, data });
+    } catch (e) {
+      if (['DISCOUNT_INVALID', 'DISCOUNT_NOT_AVAILABLE', 'DISCOUNT_NOT_APPLICABLE'].includes(String(e?.code || e?.message || ''))) {
+        return res.status(409).json({ ok: false, error: String(e?.code || e?.message || 'DISCOUNT_INVALID') });
+      }
+      console.error(e);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.post('/checkout/benefits/claim-progress-options', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const token = str(req.headers['x-customer-token']);
+      const customer = await getCustomerByToken(tenantId, token);
+      if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+
+      const data = await buildCheckoutProgressGiftClaimOptionsData({
+        tenantId,
+        storeId,
+        customer,
+        draft: req.body,
+        discountId: Number(req.body?.discount_id || 0),
+      });
+
+      return res.json({ ok: true, data });
+    } catch (e) {
+      if (['DISCOUNT_INVALID', 'DISCOUNT_NOT_AVAILABLE', 'DISCOUNT_NOT_APPLICABLE'].includes(String(e?.code || e?.message || ''))) {
+        return res.status(409).json({ ok: false, error: String(e?.code || e?.message || 'DISCOUNT_INVALID') });
+      }
+      console.error(e);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.post('/checkout/benefits/receive-gift', async (req, res) => {
+    let conn = null;
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const token = str(req.headers['x-customer-token']);
+      const customer = await getCustomerByToken(tenantId, token);
+      if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+
+      const customerId = Number(customer?.id || 0) || null;
+      const rewardId = Number(req.body?.reward_id || 0);
+      if (!(rewardId > 0) || !(customerId > 0)) {
+        return res.status(409).json({ ok: false, error: 'REWARD_INVALID' });
+      }
+
+      await ensureDiscountRuntimeTables();
+      conn = await db.getConnection();
+      await conn.beginTransaction();
+
+      const [rows] = await conn.query(
+        `SELECT *
+           FROM mkt_discount_rewards
+          WHERE tenant_id = ?
+            AND customer_id = ?
+            AND id = ?
+            AND reward_type = 'gift'
+            AND status = 'available'
+          LIMIT 1`,
+        [tenantId, customerId, rewardId]
+      );
+      const rewardRow = Array.isArray(rows) && rows.length ? rows[0] : null;
+      if (!rewardRow) {
+        await conn.rollback();
+        return res.status(409).json({ ok: false, error: 'REWARD_INVALID' });
+      }
+
+      const payload = parsePublicRewardPayload(rewardRow);
+      const products = Array.isArray(payload?.products) ? payload.products : [];
+      if (!products.length) {
+        await conn.rollback();
+        return res.status(409).json({ ok: false, error: 'REWARD_NOT_APPLICABLE' });
+      }
+
+      const availableProducts = await loadCheckoutBenefitRewardClaimProducts(
+        conn,
+        tenantId,
+        helpers.getStoreId(req),
+        products.map((product) => Number(product?.id || 0)).filter((id) => id > 0)
+      );
+      const availableProductIds = new Set(
+        availableProducts.map((product) => Number(product?.product_id || 0)).filter((id) => id > 0)
+      );
+      const hasUnavailableProducts = products.some((product) => !availableProductIds.has(Number(product?.id || 0)));
+      if (hasUnavailableProducts || !availableProducts.length) {
+        await conn.rollback();
+        return res.status(409).json({ ok: false, error: 'REWARD_NOT_APPLICABLE' });
+      }
+
+      await conn.query(
+        `UPDATE mkt_discount_rewards
+            SET status = 'used', used_at = NOW(), updated_at = NOW()
+          WHERE tenant_id = ?
+            AND customer_id = ?
+            AND id = ?
+            AND status = 'available'`,
+        [tenantId, customerId, rewardId]
+      );
+
+      await conn.commit();
+      conn.release();
+      conn = null;
+
+      return res.json({
+        ok: true,
+        data: {
+          reward_id: rewardId,
+          products,
+        },
+      });
+    } catch (e) {
+      if (conn) {
+        try { await conn.rollback(); } catch {}
+        try { conn.release(); } catch {}
+      }
+      console.error(e);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.post('/checkout/benefits/restore-gift', async (req, res) => {
+    let conn = null;
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const token = str(req.headers['x-customer-token']);
+      const customer = await getCustomerByToken(tenantId, token);
+      if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+
+      const customerId = Number(customer?.id || 0) || null;
+      const rewardId = Number(req.body?.reward_id || 0);
+      if (!(rewardId > 0) || !(customerId > 0)) {
+        return res.status(409).json({ ok: false, error: 'REWARD_INVALID' });
+      }
+
+      await ensureDiscountRuntimeTables();
+      conn = await db.getConnection();
+      await conn.beginTransaction();
+
+      const [rows] = await conn.query(
+        `SELECT id
+           FROM mkt_discount_rewards
+          WHERE tenant_id = ?
+            AND customer_id = ?
+            AND id = ?
+            AND reward_type = 'gift'
+            AND status = 'used'
+          LIMIT 1`,
+        [tenantId, customerId, rewardId]
+      );
+      const rewardRow = Array.isArray(rows) && rows.length ? rows[0] : null;
+      if (!rewardRow) {
+        await conn.rollback();
+        return res.status(409).json({ ok: false, error: 'REWARD_INVALID' });
+      }
+
+      await conn.query(
+        `UPDATE mkt_discount_rewards
+            SET status = 'available', used_at = NULL, updated_at = NOW()
+          WHERE tenant_id = ?
+            AND customer_id = ?
+            AND id = ?
+            AND reward_type = 'gift'
+            AND status = 'used'`,
+        [tenantId, customerId, rewardId]
+      );
+
+      await conn.commit();
+      conn.release();
+      conn = null;
+
+      return res.json({
+        ok: true,
+        data: {
+          reward_id: rewardId,
+        },
+      });
+    } catch (e) {
+      if (conn) {
+        try { await conn.rollback(); } catch {}
+        try { conn.release(); } catch {}
+      }
+      console.error(e);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.post('/checkout/benefits/redeem-promo', async (req, res) => {
+    let conn = null;
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const token = str(req.headers['x-customer-token']);
+      const customer = await getCustomerByToken(tenantId, token);
+      if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+
+      const customerId = Number(customer?.id || 0) || null;
+      const promoCodeId = Number(req.body?.promo_code_id || 0);
+      if (!(promoCodeId > 0) || !(customerId > 0)) {
+        return res.status(409).json({ ok: false, error: 'PROMO_INVALID' });
+      }
+
+      const preview = await buildCheckoutBenefitsPreviewData({
+        tenantId,
+        storeId,
+        customer,
+        draft: req.body,
+      });
+      const previewCard = (Array.isArray(preview?.promo_codes) ? preview.promo_codes : [])
+        .find((card) => Number(card?.id || 0) === promoCodeId && publicDiscountText(card?.source).toLowerCase() === 'promo_code');
+      if (!previewCard || publicDiscountText(previewCard?.action_mode).toLowerCase() !== 'redeem_reward') {
+        return res.status(409).json({ ok: false, error: 'PROMO_INVALID' });
+      }
+
+      await ensureDiscountRuntimeTables();
+      conn = await db.getConnection();
+      await conn.beginTransaction();
+
+      const promoRow = await loadPromoSourceRowById(conn, tenantId, storeId, promoCodeId);
+      if (!promoRow || !discountHelpers.isPromoSimpleDiscount(promoRow) || !discountHelpers.isDiscountActive(promoRow)) {
+        await conn.rollback();
+        return res.status(409).json({ ok: false, error: 'PROMO_INVALID' });
+      }
+
+      if (Number(promoRow.promo_is_active || 0) !== 1) {
+        await conn.rollback();
+        return res.status(409).json({ ok: false, error: 'PROMO_NOT_AVAILABLE' });
+      }
+
+      if (
+        Number(promoRow.promo_usage_limit || 0) > 0
+        && Number(promoRow.promo_usage_count || 0) >= Number(promoRow.promo_usage_limit || 0)
+      ) {
+        await conn.rollback();
+        return res.status(409).json({ ok: false, error: 'PROMO_LIMIT_REACHED' });
+      }
+
+      if (
+        Number(promoRow.assigned_customer_id || 0) > 0
+        && Number(promoRow.assigned_customer_id || 0) !== Number(customerId || 0)
+      ) {
+        await conn.rollback();
+        return res.status(409).json({ ok: false, error: 'PROMO_NOT_AVAILABLE' });
+      }
+
+      const customerCategoryIds = await discountHelpers.getCustomerCategoryIds(db, tenantId, customerId);
+      const [promoAudienceRows] = await conn.query(
+        `SELECT target_type, customer_id, customer_category_id
+           FROM mkt_discount_customers
+          WHERE tenant_id = ? AND discount_id = ?`,
+        [tenantId, Number(promoRow.discount_id || 0)]
+      );
+      if (!discountHelpers.matchDiscountAudience(promoAudienceRows, customerId, customerCategoryIds)) {
+        await conn.rollback();
+        return res.status(409).json({ ok: false, error: 'PROMO_NOT_AVAILABLE' });
+      }
+
+      if (Number(promoRow.usage_per_customer || 0) > 0) {
+        const [[promoCustomerUsage]] = await conn.query(
+          `SELECT COUNT(*) AS usage_count
+             FROM mkt_discount_usage
+            WHERE tenant_id = ? AND discount_id = ? AND customer_id = ?`,
+          [tenantId, Number(promoRow.discount_id || 0), Number(customerId || 0)]
+        );
+        if (Number(promoCustomerUsage?.usage_count || 0) >= Number(promoRow.usage_per_customer || 0)) {
+          await conn.rollback();
+          return res.status(409).json({ ok: false, error: 'PROMO_CUSTOMER_LIMIT_REACHED' });
+        }
+      }
+
+      const {
+        items: previewItems,
+        productIds,
+        itemsBaseTotal,
+      } = normalizeCheckoutPreviewItems(req.body?.items);
+      const productCategoriesMap = await loadCheckoutProductCategoriesMap(tenantId, productIds);
+      const targetRows = await loadDiscountTargetRows(conn, tenantId, Number(promoRow.discount_id || 0));
+      const effect = computeCheckoutPromoPreviewEffect({
+        runtimeConfig: {
+          ...getPromoRuntimeConfig(promoRow),
+          maxDiscountAmount: promoRow?.max_discount_amount != null ? Number(promoRow.max_discount_amount || 0) : null,
+          minOrderAmount: promoRow?.min_order_amount != null ? Number(promoRow.min_order_amount || 0) : null,
+        },
+        targetSets: buildDiscountProductTargetSets(targetRows),
+        sourceItems: previewItems,
+        sourceItemsTotal: itemsBaseTotal,
+        productCategoriesMap,
+      });
+      if (!effect?.isApplicable) {
+        await conn.rollback();
+        return res.status(409).json({ ok: false, error: 'PROMO_NOT_APPLICABLE' });
+      }
+
+      const rewardDefinition = await buildRewardPayloadFromPromoSource(conn, {
+        tenantId,
+        storeId,
+        discount: promoRow,
+        promoRow,
+      });
+      await insertCustomerRewardRow(conn, {
+        tenantId,
+        customerId,
+        discountId: Number(promoRow.discount_id || 0),
+        rewardType: rewardDefinition.rewardType,
+        payload: rewardDefinition.payload,
+      });
+
+      await conn.commit();
+      conn.release();
+      conn = null;
+
+      const data = await buildCheckoutBenefitsPreviewData({
+        tenantId,
+        storeId,
+        customer,
+        draft: req.body,
+      });
+      return res.json({ ok: true, data });
+    } catch (e) {
+      if (conn) {
+        try { await conn.rollback(); } catch {}
+        try { conn.release(); } catch {}
+      }
+      console.error(e);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.post('/checkout/benefits/claim-progress', async (req, res) => {
+    let conn = null;
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const token = str(req.headers['x-customer-token']);
+      const customer = await getCustomerByToken(tenantId, token);
+      if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+
+      const customerId = Number(customer?.id || 0) || null;
+      const discountId = Number(req.body?.discount_id || 0);
+      if (!(discountId > 0) || !(customerId > 0)) {
+        return res.status(409).json({ ok: false, error: 'DISCOUNT_INVALID' });
+      }
+      const {
+        progressCard,
+        loyaltyDiscount,
+      } = await resolveCheckoutProgressClaimContext({
+        tenantId,
+        storeId,
+        customer,
+        draft: req.body,
+        discountId,
+      });
+
+      await ensureDiscountRuntimeTables();
+      conn = await db.getConnection();
+      await conn.beginTransaction();
+
+      const [progressRows] = await conn.query(
+        `SELECT *
+           FROM mkt_discount_progress
+          WHERE tenant_id = ? AND customer_id = ? AND discount_id = ?
+          LIMIT 1`,
+        [tenantId, customerId, discountId]
+      );
+      const progressRow = Array.isArray(progressRows) && progressRows.length ? progressRows[0] : null;
+      if (!progressRow || Number(progressRow?.pending_reward_count || 0) < 1) {
+        await conn.rollback();
+        return res.status(409).json({ ok: false, error: 'DISCOUNT_NOT_APPLICABLE' });
+      }
+      const mechanic = parsePublicDiscountObject(loyaltyDiscount?.mechanic_config_json, {});
+      const rewardKind = publicDiscountText(progressCard?.reward_kind || mechanic?.reward_kind).toLowerCase() || 'gift';
+      const pendingRewardMode = normalizePublicProgressPendingRewardMode(
+        progressCard?.pending_reward_mode || mechanic?.pending_reward_mode
+      );
+      let selectedRewardItems = normalizeSelectedRewardItems(req.body?.selected_reward_items);
+      const selectedRewardProductIds = Array.isArray(req.body?.selected_reward_product_ids)
+        ? req.body.selected_reward_product_ids
+            .map((id) => Number(id || 0))
+            .filter((id) => id > 0)
+        : [];
+      if (!selectedRewardItems.length && selectedRewardProductIds.length) {
+        selectedRewardItems = selectedRewardProductIds.map((productId) => ({
+          selection_key: '',
+          product_id: productId,
+          product_config: null,
+        }));
+      }
+      let claimedCount = 1;
+
+      if (rewardKind === 'gift') {
+        const claimOptions = await buildCheckoutProgressGiftClaimOptionsData({
+          tenantId,
+          storeId,
+          customer,
+          draft: req.body,
+          discountId,
+          queryRunner: conn,
+        });
+        const selectionLimit = Math.max(0, Number(claimOptions?.selection_limit || 0));
+        if (!selectionLimit || !claimOptions?.items?.length) {
+          await conn.rollback();
+          return res.status(409).json({ ok: false, error: 'DISCOUNT_NOT_APPLICABLE' });
+        }
+        if (!selectedRewardItems.length || selectedRewardItems.length > selectionLimit) {
+          await conn.rollback();
+          return res.status(409).json({ ok: false, error: 'DISCOUNT_NOT_APPLICABLE' });
+        }
+
+        const optionItems = Array.isArray(claimOptions?.items) ? claimOptions.items : [];
+        const optionMap = new Map();
+        const optionProductMap = new Map();
+        optionItems.forEach((item) => {
+          const selectionKey = publicDiscountText(item?.selection_key);
+          const productId = Number(item?.product_id || 0);
+          if (selectionKey) optionMap.set(selectionKey, item);
+          if (productId > 0) {
+            if (!optionProductMap.has(productId)) optionProductMap.set(productId, []);
+            optionProductMap.get(productId).push(item);
+          }
+        });
+        const selectedCounts = new Map();
+        const selectedProductUsage = new Map();
+        const selectedResolvedItems = [];
+        for (const selectedItem of selectedRewardItems) {
+          const requestedProductId = Number(selectedItem?.product_id || 0);
+          const requestedSelectionKey = publicDiscountText(selectedItem?.selection_key);
+          let option = requestedSelectionKey ? (optionMap.get(requestedSelectionKey) || null) : null;
+          if (!option && requestedProductId > 0) {
+            const productOptions = optionProductMap.get(requestedProductId) || [];
+            const usedCount = Number(selectedProductUsage.get(requestedProductId) || 0);
+            option = productOptions[usedCount] || productOptions[0] || null;
+            selectedProductUsage.set(requestedProductId, usedCount + 1);
+          }
+          if (!option) {
+            await conn.rollback();
+            return res.status(409).json({ ok: false, error: 'REWARD_NOT_APPLICABLE' });
+          }
+          const resolvedSelectionKey = publicDiscountText(option?.selection_key) || String(requestedProductId);
+          selectedCounts.set(resolvedSelectionKey, Number(selectedCounts.get(resolvedSelectionKey) || 0) + 1);
+          selectedResolvedItems.push({
+            selection_key: resolvedSelectionKey,
+            product_id: Number(option?.product_id || requestedProductId || 0),
+            product_config: normalizePublicProductConfigPayload(
+              selectedItem?.product_config,
+              Number(option?.product_id || requestedProductId || 0)
+            ),
+          });
+        }
+        for (const [selectionKey, count] of selectedCounts.entries()) {
+          const option = optionMap.get(selectionKey) || null;
+          const maxSelectableQty = Math.max(0, Number(option?.max_selectable_qty || 0));
+          if (!(maxSelectableQty > 0) || count > maxSelectableQty) {
+            await conn.rollback();
+            return res.status(409).json({ ok: false, error: 'REWARD_NOT_APPLICABLE' });
+          }
+        }
+
+        for (const selectedItem of selectedResolvedItems) {
+          const rewardDefinition = await buildRewardPayloadFromLoyaltyProgress(conn, {
+            tenantId,
+            storeId,
+            discount: loyaltyDiscount,
+            selectedRewardProductId: selectedItem.product_id,
+            selectedRewardSelectionKey: selectedItem.selection_key,
+            selectedRewardProductConfig: selectedItem.product_config,
+          });
+          await insertCustomerRewardRow(conn, {
+            tenantId,
+            customerId,
+            discountId,
+            rewardType: rewardDefinition.rewardType,
+            payload: rewardDefinition.payload,
+          });
+        }
+        claimedCount = selectedResolvedItems.length;
+      } else {
+        const rewardDefinition = await buildRewardPayloadFromLoyaltyProgress(conn, {
+          tenantId,
+          storeId,
+          discount: loyaltyDiscount,
+        });
+        await insertCustomerRewardRow(conn, {
+          tenantId,
+          customerId,
+          discountId,
+          rewardType: rewardDefinition.rewardType,
+          payload: rewardDefinition.payload,
+        });
+        claimedCount = 1;
+      }
+
+      const nextProgressState = applyClaimedProgressRedemption({
+        progressValue: Number(progressRow?.progress_value || 0),
+        pendingRewardCount: Number(progressRow?.pending_reward_count || 0),
+        claimedCount,
+        thresholdValue: Number(progressCard?.threshold_value || 0),
+        pendingRewardMode,
+      });
+      await conn.query(
+        `UPDATE mkt_discount_progress
+            SET progress_value = ?, pending_reward_count = ?, updated_at = NOW()
+          WHERE tenant_id = ? AND customer_id = ? AND discount_id = ?`,
+        [
+          nextProgressState.progressValue,
+          nextProgressState.pendingRewardCount,
+          tenantId,
+          customerId,
+          discountId,
+        ]
+      );
+
+      await conn.commit();
+      conn.release();
+      conn = null;
+
+      const data = await buildCheckoutBenefitsPreviewData({
+        tenantId,
+        storeId,
+        customer,
+        draft: req.body,
+      });
+      return res.json({ ok: true, data });
+    } catch (e) {
+      if (conn) {
+        try { await conn.rollback(); } catch {}
+        try { conn.release(); } catch {}
+      }
+      if (e?.code === 'PROMO_INVALID') {
+        return res.status(409).json({ ok: false, error: 'PROMO_INVALID' });
+      }
+      if (['DISCOUNT_INVALID', 'DISCOUNT_NOT_AVAILABLE', 'DISCOUNT_NOT_APPLICABLE', 'REWARD_NOT_APPLICABLE'].includes(String(e?.code || e?.message || ''))) {
+        return res.status(409).json({ ok: false, error: String(e?.code || e?.message || 'DISCOUNT_NOT_APPLICABLE') });
+      }
+      console.error(e);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
   // ------------------------------
   // create order
   // ------------------------------
@@ -6521,7 +11225,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       let customerPhone = helpers.normalizePhone(req.body.customer_phone);
 
       if (authCustomer) {
-        customerPhone = authCustomer.phone; // С‚РµР»РµС„РѕРЅ РЅРµ РјРµРЅСЏРµРј
+        customerPhone = authCustomer.phone; // РЎвЂљР ВµР В»Р ВµРЎвЂћР С•Р Р… Р Р…Р Вµ Р СР ВµР Р…РЎРЏР ВµР С
         if (!customerName) customerName = authCustomer.name || (requireClientData ? '\u041a\u043b\u0438\u0435\u043d\u0442' : null);
       } else {
         if (requireClientData && !customerPhone) return res.status(400).json({ ok: false, error: 'PHONE_REQUIRED' });
@@ -6536,7 +11240,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         );
         if (ex.length) {
           customerId = Number(ex[0].id);
-          // РѕР±РЅРѕРІРёРј РёРјСЏ РµСЃР»Рё РїСЂРёС€Р»Рѕ
+          // Р С•Р В±Р Р…Р С•Р Р†Р С‘Р С Р С‘Р СРЎРЏ Р ВµРЎРѓР В»Р С‘ Р С—РЎР‚Р С‘РЎв‚¬Р В»Р С•
           if (customerName) {
             await db.query(
               `UPDATE cust_customers SET name=? WHERE tenant_id=? AND id=?`,
@@ -6554,7 +11258,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         }
       }
 
-      // product_ids С‚РѕР»СЊРєРѕ Сѓ РѕР±С‹С‡РЅС‹С… С‚РѕРІР°СЂРѕРІ; РєРѕРјР±Рѕ РїСЂРёС…РѕРґСЏС‚ СЃ type === 'combo'
+      // product_ids РЎвЂљР С•Р В»РЎРЉР С”Р С• РЎС“ Р С•Р В±РЎвЂ№РЎвЂЎР Р…РЎвЂ№РЎвЂ¦ РЎвЂљР С•Р Р†Р В°РЎР‚Р С•Р Р†; Р С”Р С•Р СР В±Р С• Р С—РЎР‚Р С‘РЎвЂ¦Р С•Р Т‘РЎРЏРЎвЂљ РЎРѓ type === 'combo'
       const ids = items
         .filter(it => it.type !== 'combo')
         .map(it => Number(it.product_id))
@@ -6562,7 +11266,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const hasCombos = items.some(it => it.type === 'combo');
       if (!ids.length && !hasCombos) return res.status(400).json({ ok: false, error: 'BAD_ITEMS' });
 
-      // availability check for products (stock + ingredients) вЂ” С‚РѕР»СЊРєРѕ РµСЃР»Рё РІ Р·Р°РєР°Р·Рµ РµСЃС‚СЊ РѕР±С‹С‡РЅС‹Рµ С‚РѕРІР°СЂС‹
+      // availability check for products (stock + ingredients) РІР‚вЂќ РЎвЂљР С•Р В»РЎРЉР С”Р С• Р ВµРЎРѓР В»Р С‘ Р Р† Р В·Р В°Р С”Р В°Р В·Р Вµ Р ВµРЎРѓРЎвЂљРЎРЉ Р С•Р В±РЎвЂ№РЎвЂЎР Р…РЎвЂ№Р Вµ РЎвЂљР С•Р Р†Р В°РЎР‚РЎвЂ№
       if (ids.length) {
         const [availability] = await db.query(
           `SELECT p.id,
@@ -6681,12 +11385,12 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         nonAutoItemsTotal += lineTotal;
       }
 
-      // ============ Р РђРЎР§Р•Рў РЎРљРР”РћРљ ============
-      // РџРѕР»СѓС‡Р°РµРј СЃРєРёРґРєРё РєР»РёРµРЅС‚Р° (РїСЂРёРІСЏР·Р°РЅРЅС‹Рµ РЅР°РїСЂСЏРјСѓСЋ РёР»Рё С‡РµСЂРµР· РєР°С‚РµРіРѕСЂРёРё)
+      // ============ Р В Р С’Р РЋР В§Р вЂўР Сћ Р РЋР С™Р ВР вЂќР С›Р С™ ============
+      // Р СџР С•Р В»РЎС“РЎвЂЎР В°Р ВµР С РЎРѓР С”Р С‘Р Т‘Р С”Р С‘ Р С”Р В»Р С‘Р ВµР Р…РЎвЂљР В° (Р С—РЎР‚Р С‘Р Р†РЎРЏР В·Р В°Р Р…Р Р…РЎвЂ№Р Вµ Р Р…Р В°Р С—РЎР‚РЎРЏР СРЎС“РЎР‹ Р С‘Р В»Р С‘ РЎвЂЎР ВµРЎР‚Р ВµР В· Р С”Р В°РЎвЂљР ВµР С–Р С•РЎР‚Р С‘Р С‘)
       let orderDiscountAmount = 0;
       const appliedDiscounts = [];
       
-      // РџРѕР»СѓС‡Р°РµРј РєР°С‚РµРіРѕСЂРёРё С‚РѕРІР°СЂРѕРІ РґР»СЏ РїСЂРѕРІРµСЂРєРё СЃРєРёРґРѕРє
+      // Р СџР С•Р В»РЎС“РЎвЂЎР В°Р ВµР С Р С”Р В°РЎвЂљР ВµР С–Р С•РЎР‚Р С‘Р С‘ РЎвЂљР С•Р Р†Р В°РЎР‚Р С•Р Р† Р Т‘Р В»РЎРЏ Р С—РЎР‚Р С•Р Р†Р ВµРЎР‚Р С”Р С‘ РЎРѓР С”Р С‘Р Т‘Р С•Р С”
       const productCategoriesMap = new Map();
       if (ids.length) {
         const catPlaceholders = ids.map(() => '?').join(',');
@@ -6702,28 +11406,98 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         }
       }
 
-      // РџРѕР»СѓС‡Р°РµРј Р°РєС‚РёРІРЅС‹Рµ СЃРєРёРґРєРё РґР»СЏ РєР»РёРµРЅС‚Р° Рё С‚РѕРІР°СЂРѕРІ
-      const customerDiscounts = await discountHelpers.getActiveDiscountsForCustomer(db, tenantId, storeId, customerId);
+      // Р СџР С•Р В»РЎС“РЎвЂЎР В°Р ВµР С Р В°Р С”РЎвЂљР С‘Р Р†Р Р…РЎвЂ№Р Вµ РЎРѓР С”Р С‘Р Т‘Р С”Р С‘ Р Т‘Р В»РЎРЏ Р С”Р В»Р С‘Р ВµР Р…РЎвЂљР В° Р С‘ РЎвЂљР С•Р Р†Р В°РЎР‚Р С•Р Р†
+      const customerCategoryIds = customerId
+        ? await discountHelpers.getCustomerCategoryIds(db, tenantId, customerId)
+        : [];
+      const customerBenefitDiscountRows = customerId
+        ? await loadCustomerBenefitDiscountRows(tenantId, storeId, customerId)
+        : [];
+      const automaticBenefitDiscountRows = customerBenefitDiscountRows.filter((discount) => isPublicAutomaticSimpleDiscount(discount));
+      const availableBenefitDiscounts = customerId
+        ? await discountHelpers.getActiveDiscountsForCustomer(db, tenantId, storeId, customerId)
+        : [];
+      const selectedDiscountId = normalizeSelectedDiscountId(req.body.selected_discount_id);
+      const selectedDiscountSource = normalizeCheckoutDiscountSource(req.body.selected_discount_source)
+        || (selectedDiscountId !== null ? 'discount' : null);
+      const promoCode = normalizeOrderPromoCode(req.body.promo_code);
+      const selectedPromoSource = normalizeCheckoutPromoSource(req.body.selected_promo_source)
+        || (promoCode ? 'promo_code' : null);
+      const selectedPromoRewardId = normalizeSelectedDiscountId(req.body.selected_promo_reward_id);
+      const availableRewardRows = customerId
+        ? await loadCustomerAvailableRewardRows(tenantId, customerId)
+        : [];
+      const availableRewardDiscountRows = availableRewardRows.filter((row) => publicDiscountText(row?.reward_type).toLowerCase() === 'discount');
+      const availableRewardPromoRows = availableRewardRows.filter((row) => publicDiscountText(row?.reward_type).toLowerCase() === 'promo_code');
+      const benefitDiscountTargetsById = await loadDiscountTargetRowsMap(
+        tenantId,
+        availableBenefitDiscounts.map((discount) => Number(discount?.id || 0))
+      );
+      const discountEntries = [];
+      for (const discount of availableBenefitDiscounts) {
+        const discountId = Number(discount?.id || 0);
+        discountEntries.push({
+          source: 'discount',
+          selectionId: discountId,
+          rewardId: null,
+          discount,
+          targetRows: benefitDiscountTargetsById.get(discountId) || [],
+          rewardRow: null,
+        });
+      }
+      for (const rewardRow of availableRewardDiscountRows) {
+        const rewardSource = buildPublicRewardDiscountSource(rewardRow);
+        const rewardId = Number(rewardRow?.id || 0) || null;
+        discountEntries.push({
+          source: 'reward_discount',
+          selectionId: rewardId,
+          rewardId,
+          discount: rewardSource.discount,
+          targetRows: rewardSource.targetRows || [],
+          rewardRow,
+        });
+      }
+      const { entry: selectedDiscountEntry, errorCode: selectedDiscountResolveError } = resolveSelectedCheckoutDiscountEntry({
+        selectedDiscountId,
+        selectedDiscountSource,
+        discountEntries,
+        allDiscountRows: automaticBenefitDiscountRows,
+      });
+      const selectedDiscount = selectedDiscountEntry?.discount || null;
+      const selectedRewardDiscountRow = publicDiscountText(selectedDiscountEntry?.source).toLowerCase() === 'reward_discount'
+        ? selectedDiscountEntry?.rewardRow || null
+        : null;
+      if (selectedDiscountId !== null && !selectedDiscount) {
+        return res.status(409).json({ ok: false, error: selectedDiscountResolveError || 'DISCOUNT_INVALID' });
+      }
+      const customerDiscounts = [];
+      await ensureDiscountProductConfigColumn();
       
-      // РњР°РїР° СЃРєРёРґРѕРє РґР»СЏ С‚РѕРІР°СЂРѕРІ (product_id -> discount)
+      // Р СљР В°Р С—Р В° РЎРѓР С”Р С‘Р Т‘Р С•Р С” Р Т‘Р В»РЎРЏ РЎвЂљР С•Р Р†Р В°РЎР‚Р С•Р Р† (product_id -> discount)
       const productDiscountMap = new Map();
       
-      // Р”Р»СЏ РєР°Р¶РґРѕРіРѕ С‚РѕРІР°СЂР° РїСЂРѕРІРµСЂСЏРµРј РїСЂРёРјРµРЅРёРјС‹Рµ СЃРєРёРґРєРё
+      // Р вЂќР В»РЎРЏ Р С”Р В°Р В¶Р Т‘Р С•Р С–Р С• РЎвЂљР С•Р Р†Р В°РЎР‚Р В° Р С—РЎР‚Р С•Р Р†Р ВµРЎР‚РЎРЏР ВµР С Р С—РЎР‚Р С‘Р СР ВµР Р…Р С‘Р СРЎвЂ№Р Вµ РЎРѓР С”Р С‘Р Т‘Р С”Р С‘
       for (const pid of ids) {
         const categoryIds = productCategoriesMap.get(pid) || [];
-        const productDiscounts = await discountHelpers.getActiveDiscountsForProduct(db, tenantId, storeId, pid, categoryIds);
+        const productDiscounts = await discountHelpers.getActiveDiscountsForProduct(
+          db,
+          tenantId,
+          storeId,
+          pid,
+          categoryIds,
+          customerDiscounts
+        );
         
         if (productDiscounts.length > 0) {
-          // Р‘РµСЂРµРј Р»СѓС‡С€СѓСЋ СЃРєРёРґРєСѓ (СЃ РЅР°РёРІС‹СЃС€РёРј РїСЂРёРѕСЂРёС‚РµС‚РѕРј)
-          const bestDiscount = productDiscounts[0];
-          productDiscountMap.set(pid, bestDiscount);
+          // Р вЂР ВµРЎР‚Р ВµР С Р В»РЎС“РЎвЂЎРЎв‚¬РЎС“РЎР‹ РЎРѓР С”Р С‘Р Т‘Р С”РЎС“ (РЎРѓ Р Р…Р В°Р С‘Р Р†РЎвЂ№РЎРѓРЎв‚¬Р С‘Р С Р С—РЎР‚Р С‘Р С•РЎР‚Р С‘РЎвЂљР ВµРЎвЂљР С•Р С)
+          productDiscountMap.set(pid, productDiscounts);
         }
       }
 
       const normItems = [];
       let total = 0;
 
-      // РЎРѕР±РёСЂР°РµРј РІСЃРµ option_item_ids РґР»СЏ РїРѕР»СѓС‡РµРЅРёСЏ РёРЅС„РѕСЂРјР°С†РёРё РёР· Р‘Р”
+      // Р РЋР С•Р В±Р С‘РЎР‚Р В°Р ВµР С Р Р†РЎРѓР Вµ option_item_ids Р Т‘Р В»РЎРЏ Р С—Р С•Р В»РЎС“РЎвЂЎР ВµР Р…Р С‘РЎРЏ Р С‘Р Р…РЎвЂћР С•РЎР‚Р СР В°РЎвЂ Р С‘Р С‘ Р С‘Р В· Р вЂР вЂќ
       const allOptionItemIds = [];
       for (const it of items) {
         const optionIds = Array.isArray(it.option_item_ids) ? it.option_item_ids : [];
@@ -6735,7 +11509,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         });
       }
 
-      // РџРѕР»СѓС‡Р°РµРј РёРЅС„РѕСЂРјР°С†РёСЋ РѕР± РѕРїС†РёСЏС… РёР· Р‘Р”
+      // Р СџР С•Р В»РЎС“РЎвЂЎР В°Р ВµР С Р С‘Р Р…РЎвЂћР С•РЎР‚Р СР В°РЎвЂ Р С‘РЎР‹ Р С•Р В± Р С•Р С—РЎвЂ Р С‘РЎРЏРЎвЂ¦ Р С‘Р В· Р вЂР вЂќ
       const optionItemsMap = new Map();
       if (allOptionItemIds.length) {
         const placeholders = allOptionItemIds.map(() => '?').join(',');
@@ -6883,28 +11657,28 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         const basePrice = Number(p.price || 0);
         const oldPrice = Number(p.old_price || 0);
 
-        // Р’РђР–РќРћ: РёСЃРїРѕР»СЊР·СѓРµРј line_total РёР· Р·Р°РїСЂРѕСЃР° (СѓР¶Рµ РїРѕСЃС‡РёС‚Р°РЅ РЅР° С„СЂРѕРЅС‚Рµ)
-        // РќРµ РїРµСЂРµСЃС‡РёС‚С‹РІР°РµРј С†РµРЅСѓ Р·Р°РЅРѕРІРѕ, С‡С‚РѕР±С‹ РёР·Р±РµР¶Р°С‚СЊ РґРІРѕР№РЅРѕРіРѕ РїРѕРґСЃС‡РµС‚Р° Р±Р°Р·РѕРІРѕР№ С†РµРЅС‹
+        // Р вЂ™Р С’Р вЂ“Р СњР С›: Р С‘РЎРѓР С—Р С•Р В»РЎРЉР В·РЎС“Р ВµР С line_total Р С‘Р В· Р В·Р В°Р С—РЎР‚Р С•РЎРѓР В° (РЎС“Р В¶Р Вµ Р С—Р С•РЎРѓРЎвЂЎР С‘РЎвЂљР В°Р Р… Р Р…Р В° РЎвЂћРЎР‚Р С•Р Р…РЎвЂљР Вµ)
+        // Р СњР Вµ Р С—Р ВµРЎР‚Р ВµРЎРѓРЎвЂЎР С‘РЎвЂљРЎвЂ№Р Р†Р В°Р ВµР С РЎвЂ Р ВµР Р…РЎС“ Р В·Р В°Р Р…Р С•Р Р†Р С•, РЎвЂЎРЎвЂљР С•Р В±РЎвЂ№ Р С‘Р В·Р В±Р ВµР В¶Р В°РЎвЂљРЎРЉ Р Т‘Р Р†Р С•Р в„–Р Р…Р С•Р С–Р С• Р С—Р С•Р Т‘РЎРѓРЎвЂЎР ВµРЎвЂљР В° Р В±Р В°Р В·Р С•Р Р†Р С•Р в„– РЎвЂ Р ВµР Р…РЎвЂ№
         const lineTotalFromRequest = Number(it.line_total);
         const useLineTotalFromRequest = Number.isFinite(lineTotalFromRequest) && lineTotalFromRequest >= 0;
 
-        // РћР±СЂР°Р±Р°С‚С‹РІР°РµРј РѕРїС†РёРё (С‚РѕР»СЊРєРѕ РґР»СЏ СЃРѕС…СЂР°РЅРµРЅРёСЏ СЃРѕСЃС‚Р°РІР°, РЅРµ РґР»СЏ РїРµСЂРµСЃС‡РµС‚Р° С†РµРЅС‹)
+        // Р С›Р В±РЎР‚Р В°Р В±Р В°РЎвЂљРЎвЂ№Р Р†Р В°Р ВµР С Р С•Р С—РЎвЂ Р С‘Р С‘ (РЎвЂљР С•Р В»РЎРЉР С”Р С• Р Т‘Р В»РЎРЏ РЎРѓР С•РЎвЂ¦РЎР‚Р В°Р Р…Р ВµР Р…Р С‘РЎРЏ РЎРѓР С•РЎРѓРЎвЂљР В°Р Р†Р В°, Р Р…Р Вµ Р Т‘Р В»РЎРЏ Р С—Р ВµРЎР‚Р ВµРЎРѓРЎвЂЎР ВµРЎвЂљР В° РЎвЂ Р ВµР Р…РЎвЂ№)
         const options = [];
         
-        // РЎРѕР±РёСЂР°РµРј РѕРїС†РёРё: РёСЃРїРѕР»СЊР·СѓРµРј option_items РёР· Р·Р°РїСЂРѕСЃР° (СЃ qty), РµСЃР»Рё РµСЃС‚СЊ, РёРЅР°С‡Рµ option_item_ids
+        // Р РЋР С•Р В±Р С‘РЎР‚Р В°Р ВµР С Р С•Р С—РЎвЂ Р С‘Р С‘: Р С‘РЎРѓР С—Р С•Р В»РЎРЉР В·РЎС“Р ВµР С option_items Р С‘Р В· Р В·Р В°Р С—РЎР‚Р С•РЎРѓР В° (РЎРѓ qty), Р ВµРЎРѓР В»Р С‘ Р ВµРЎРѓРЎвЂљРЎРЉ, Р С‘Р Р…Р В°РЎвЂЎР Вµ option_item_ids
         const optionItemsFromRequest = Array.isArray(it.option_items) && it.option_items.length > 0
           ? it.option_items
           : [];
         const optionIdsFromRequest = Array.isArray(it.option_item_ids) ? it.option_item_ids : [];
         
-        // РЎРѕР·РґР°РµРј map РґР»СЏ Р±С‹СЃС‚СЂРѕРіРѕ РїРѕРёСЃРєР° qty Рё РІР°СЂРёР°РЅС‚РѕРІ РёР· Р·Р°РїСЂРѕСЃР°
+        // Р РЋР С•Р В·Р Т‘Р В°Р ВµР С map Р Т‘Р В»РЎРЏ Р В±РЎвЂ№РЎРѓРЎвЂљРЎР‚Р С•Р С–Р С• Р С—Р С•Р С‘РЎРѓР С”Р В° qty Р С‘ Р Р†Р В°РЎР‚Р С‘Р В°Р Р…РЎвЂљР С•Р Р† Р С‘Р В· Р В·Р В°Р С—РЎР‚Р С•РЎРѓР В°
         const qtyMap = new Map();
-        const optionVariantsMap = new Map(); // Р’Р°СЂРёР°РЅС‚С‹ РґР»СЏ РєР°Р¶РґРѕР№ РѕРїС†РёРё
+        const optionVariantsMap = new Map(); // Р вЂ™Р В°РЎР‚Р С‘Р В°Р Р…РЎвЂљРЎвЂ№ Р Т‘Р В»РЎРЏ Р С”Р В°Р В¶Р Т‘Р С•Р в„– Р С•Р С—РЎвЂ Р С‘Р С‘
         optionItemsFromRequest.forEach(opt => {
           const id = Number(opt.id);
           if (Number.isFinite(id) && id > 0) {
             qtyMap.set(id, Math.max(1, Number(opt.qty || opt.quantity || 1)));
-            // РЎРѕС…СЂР°РЅСЏРµРј РґР°РЅРЅС‹Рµ Рѕ РІР°СЂРёР°РЅС‚Рµ РѕРїС†РёРё, РµСЃР»Рё РµСЃС‚СЊ
+            // Р РЋР С•РЎвЂ¦РЎР‚Р В°Р Р…РЎРЏР ВµР С Р Т‘Р В°Р Р…Р Р…РЎвЂ№Р Вµ Р С• Р Р†Р В°РЎР‚Р С‘Р В°Р Р…РЎвЂљР Вµ Р С•Р С—РЎвЂ Р С‘Р С‘, Р ВµРЎРѓР В»Р С‘ Р ВµРЎРѓРЎвЂљРЎРЉ
             if (opt.variant_group_id != null && opt.variant_value_index != null) {
               optionVariantsMap.set(id, {
                 variant_group_id: Number(opt.variant_group_id),
@@ -6916,7 +11690,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           }
         });
 
-        // РћР±СЂР°Р±Р°С‚С‹РІР°РµРј РѕРїС†РёРё: РёСЃРїРѕР»СЊР·СѓРµРј option_item_ids РєР°Рє РѕСЃРЅРѕРІРЅРѕР№ СЃРїРёСЃРѕРє
+        // Р С›Р В±РЎР‚Р В°Р В±Р В°РЎвЂљРЎвЂ№Р Р†Р В°Р ВµР С Р С•Р С—РЎвЂ Р С‘Р С‘: Р С‘РЎРѓР С—Р С•Р В»РЎРЉР В·РЎС“Р ВµР С option_item_ids Р С”Р В°Р С” Р С•РЎРѓР Р…Р С•Р Р†Р Р…Р С•Р в„– РЎРѓР С—Р С‘РЎРѓР С•Р С”
         const allOptionIds = new Set();
         optionItemsFromRequest.forEach(opt => {
           const id = Number(opt.id);
@@ -6929,11 +11703,11 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
         for (const optId of allOptionIds) {
           const optInfo = optionItemsMap.get(optId);
-          if (!optInfo) continue; // РџСЂРѕРїСѓСЃРєР°РµРј РѕРїС†РёРё, РєРѕС‚РѕСЂС‹С… РЅРµС‚ РІ Р‘Р”
+          if (!optInfo) continue; // Р СџРЎР‚Р С•Р С—РЎС“РЎРѓР С”Р В°Р ВµР С Р С•Р С—РЎвЂ Р С‘Р С‘, Р С”Р С•РЎвЂљР С•РЎР‚РЎвЂ№РЎвЂ¦ Р Р…Р ВµРЎвЂљ Р Р† Р вЂР вЂќ
 
-          const optQty = qtyMap.get(optId) || 1; // РљРѕР»РёС‡РµСЃС‚РІРѕ РёР· Р·Р°РїСЂРѕСЃР° РёР»Рё 1 РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ
-          const optPrice = optInfo.price; // Р¦РµРЅР° РІСЃРµРіРґР° РёР· Р‘Р”
-          // РќР• РґРѕР±Р°РІР»СЏРµРј Рє optionsTotal - С†РµРЅР° СѓР¶Рµ СѓС‡С‚РµРЅР° РІ line_total
+          const optQty = qtyMap.get(optId) || 1; // Р С™Р С•Р В»Р С‘РЎвЂЎР ВµРЎРѓРЎвЂљР Р†Р С• Р С‘Р В· Р В·Р В°Р С—РЎР‚Р С•РЎРѓР В° Р С‘Р В»Р С‘ 1 Р С—Р С• РЎС“Р СР С•Р В»РЎвЂЎР В°Р Р…Р С‘РЎР‹
+          const optPrice = optInfo.price; // Р В¦Р ВµР Р…Р В° Р Р†РЎРѓР ВµР С–Р Т‘Р В° Р С‘Р В· Р вЂР вЂќ
+          // Р СњР вЂў Р Т‘Р С•Р В±Р В°Р Р†Р В»РЎРЏР ВµР С Р С” optionsTotal - РЎвЂ Р ВµР Р…Р В° РЎС“Р В¶Р Вµ РЎС“РЎвЂЎРЎвЂљР ВµР Р…Р В° Р Р† line_total
 
           const optionEntry = {
             id: optId,
@@ -6943,7 +11717,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             target_product_id: optInfo.target_product_id || undefined,
           };
           
-          // Р”РѕР±Р°РІР»СЏРµРј РґР°РЅРЅС‹Рµ Рѕ РІР°СЂРёР°РЅС‚Рµ РѕРїС†РёРё, РµСЃР»Рё РµСЃС‚СЊ
+          // Р вЂќР С•Р В±Р В°Р Р†Р В»РЎРЏР ВµР С Р Т‘Р В°Р Р…Р Р…РЎвЂ№Р Вµ Р С• Р Р†Р В°РЎР‚Р С‘Р В°Р Р…РЎвЂљР Вµ Р С•Р С—РЎвЂ Р С‘Р С‘, Р ВµРЎРѓР В»Р С‘ Р ВµРЎРѓРЎвЂљРЎРЉ
           const optVariant = optionVariantsMap.get(optId);
           if (optVariant) {
             optionEntry.variant_group_id = optVariant.variant_group_id;
@@ -6955,12 +11729,12 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           options.push(optionEntry);
         }
 
-        // РћР±СЂР°Р±Р°С‚С‹РІР°РµРј РёРЅРіСЂРµРґРёРµРЅС‚С‹ (С‚РѕР»СЊРєРѕ РґР»СЏ СЃРѕС…СЂР°РЅРµРЅРёСЏ СЃРѕСЃС‚Р°РІР°, РЅРµ РґР»СЏ РїРµСЂРµСЃС‡РµС‚Р° С†РµРЅС‹)
+        // Р С›Р В±РЎР‚Р В°Р В±Р В°РЎвЂљРЎвЂ№Р Р†Р В°Р ВµР С Р С‘Р Р…Р С–РЎР‚Р ВµР Т‘Р С‘Р ВµР Р…РЎвЂљРЎвЂ№ (РЎвЂљР С•Р В»РЎРЉР С”Р С• Р Т‘Р В»РЎРЏ РЎРѓР С•РЎвЂ¦РЎР‚Р В°Р Р…Р ВµР Р…Р С‘РЎРЏ РЎРѓР С•РЎРѓРЎвЂљР В°Р Р†Р В°, Р Р…Р Вµ Р Т‘Р В»РЎРЏ Р С—Р ВµРЎР‚Р ВµРЎРѓРЎвЂЎР ВµРЎвЂљР В° РЎвЂ Р ВµР Р…РЎвЂ№)
         const ingredients = [];
         
         const cartIngredients = Array.isArray(it.ingredients) ? it.ingredients : [];
         if (cartIngredients.length) {
-          // РџРѕР»СѓС‡Р°РµРј РёРЅС„РѕСЂРјР°С†РёСЋ РѕР± РёРЅРіСЂРµРґРёРµРЅС‚Р°С… РёР· Р‘Р”
+          // Р СџР С•Р В»РЎС“РЎвЂЎР В°Р ВµР С Р С‘Р Р…РЎвЂћР С•РЎР‚Р СР В°РЎвЂ Р С‘РЎР‹ Р С•Р В± Р С‘Р Р…Р С–РЎР‚Р ВµР Т‘Р С‘Р ВµР Р…РЎвЂљР В°РЎвЂ¦ Р С‘Р В· Р вЂР вЂќ
           const ingIds = cartIngredients.map(ci => Number(ci.ingredient_id)).filter(n => Number.isFinite(n) && n > 0);
           if (ingIds.length) {
             const [ingRows] = await db.query(
@@ -6985,11 +11759,11 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
             const ingMap = new Map(ingRows.map(r => [Number(r.ingredient_id), r]));
             
-            // Р¤СѓРЅРєС†РёСЏ РґР»СЏ РїРѕР»СѓС‡РµРЅРёСЏ С„Р°РєС‚РѕСЂР° РєРѕРЅРІРµСЂС‚Р°С†РёРё РјРµР¶РґСѓ РµРґРёРЅРёС†Р°РјРё
+            // Р В¤РЎС“Р Р…Р С”РЎвЂ Р С‘РЎРЏ Р Т‘Р В»РЎРЏ Р С—Р С•Р В»РЎС“РЎвЂЎР ВµР Р…Р С‘РЎРЏ РЎвЂћР В°Р С”РЎвЂљР С•РЎР‚Р В° Р С”Р С•Р Р…Р Р†Р ВµРЎР‚РЎвЂљР В°РЎвЂ Р С‘Р С‘ Р СР ВµР В¶Р Т‘РЎС“ Р ВµР Т‘Р С‘Р Р…Р С‘РЎвЂ Р В°Р СР С‘
             async function getConversionFactor(fromUnitId, toUnitId, productIdForPul = null) {
               if (!fromUnitId || !toUnitId || Number(fromUnitId) === Number(toUnitId)) return 1;
               
-              // РџСЂСЏРјР°СЏ РєРѕРЅРІРµСЂС‚Р°С†РёСЏ РёР· prod_unit_conversions
+              // Р СџРЎР‚РЎРЏР СР В°РЎРЏ Р С”Р С•Р Р…Р Р†Р ВµРЎР‚РЎвЂљР В°РЎвЂ Р С‘РЎРЏ Р С‘Р В· prod_unit_conversions
               const [direct] = await db.query(
                 `SELECT factor FROM prod_unit_conversions 
                  WHERE tenant_id=? AND from_unit_id=? AND to_unit_id=? AND is_active=1 LIMIT 1`,
@@ -6997,7 +11771,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
               );
               if (direct.length && direct[0].factor) return Number(direct[0].factor);
               
-              // РћР±СЂР°С‚РЅР°СЏ РєРѕРЅРІРµСЂС‚Р°С†РёСЏ
+              // Р С›Р В±РЎР‚Р В°РЎвЂљР Р…Р В°РЎРЏ Р С”Р С•Р Р…Р Р†Р ВµРЎР‚РЎвЂљР В°РЎвЂ Р С‘РЎРЏ
               const [inverse] = await db.query(
                 `SELECT factor FROM prod_unit_conversions 
                  WHERE tenant_id=? AND from_unit_id=? AND to_unit_id=? AND is_active=1 LIMIT 1`,
@@ -7005,7 +11779,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
               );
               if (inverse.length && inverse[0].factor) return 1 / Number(inverse[0].factor);
               
-              // РљРѕРЅРІРµСЂС‚Р°С†РёСЏ С‡РµСЂРµР· prod_product_unit_links (РµСЃР»Рё СѓРєР°Р·Р°РЅ product_id)
+              // Р С™Р С•Р Р…Р Р†Р ВµРЎР‚РЎвЂљР В°РЎвЂ Р С‘РЎРЏ РЎвЂЎР ВµРЎР‚Р ВµР В· prod_product_unit_links (Р ВµРЎРѓР В»Р С‘ РЎС“Р С”Р В°Р В·Р В°Р Р… product_id)
               if (productIdForPul) {
                 const [pul] = await db.query(
                   `SELECT factor FROM prod_product_unit_links
@@ -7026,7 +11800,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
               const ingInfo = ingMap.get(ingId);
               if (!ingInfo) continue;
 
-              // РџРµСЂРµРІРѕРґРёРј quantity РІ Р±Р°Р·РѕРІСѓСЋ РµРґРёРЅРёС†Сѓ РёР·РјРµСЂРµРЅРёСЏ
+              // Р СџР ВµРЎР‚Р ВµР Р†Р С•Р Т‘Р С‘Р С quantity Р Р† Р В±Р В°Р В·Р С•Р Р†РЎС“РЎР‹ Р ВµР Т‘Р С‘Р Р…Р С‘РЎвЂ РЎС“ Р С‘Р В·Р СР ВµРЎР‚Р ВµР Р…Р С‘РЎРЏ
               let qtyInBase = ingQty;
               const ingredientBaseQty = ingInfo.ingredient_base_qty != null && Number(ingInfo.ingredient_base_qty) > 0 
                 ? Number(ingInfo.ingredient_base_qty) 
@@ -7034,7 +11808,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
               const ingredientUnitId = Number(ingInfo.unit_id || 0);
               const ingredientBaseUnitId = Number(ingInfo.ingredient_base_unit_id || 0);
               
-              // Р•СЃР»Рё РµРґРёРЅРёС†Р° РёР·РјРµСЂРµРЅРёСЏ РёРЅРіСЂРµРґРёРµРЅС‚Р° РѕС‚Р»РёС‡Р°РµС‚СЃСЏ РѕС‚ Р±Р°Р·РѕРІРѕР№, РєРѕРЅРІРµСЂС‚РёСЂСѓРµРј
+              // Р вЂўРЎРѓР В»Р С‘ Р ВµР Т‘Р С‘Р Р…Р С‘РЎвЂ Р В° Р С‘Р В·Р СР ВµРЎР‚Р ВµР Р…Р С‘РЎРЏ Р С‘Р Р…Р С–РЎР‚Р ВµР Т‘Р С‘Р ВµР Р…РЎвЂљР В° Р С•РЎвЂљР В»Р С‘РЎвЂЎР В°Р ВµРЎвЂљРЎРѓРЎРЏ Р С•РЎвЂљ Р В±Р В°Р В·Р С•Р Р†Р С•Р в„–, Р С”Р С•Р Р…Р Р†Р ВµРЎР‚РЎвЂљР С‘РЎР‚РЎС“Р ВµР С
               if (ingredientUnitId && ingredientBaseUnitId && ingredientUnitId !== ingredientBaseUnitId) {
                 const factor = await getConversionFactor(ingredientUnitId, ingredientBaseUnitId, ingId);
                 if (factor != null && factor > 0) {
@@ -7042,49 +11816,49 @@ window.location.replace(${JSON.stringify(redirectUrl)});
                 }
               }
 
-              // Р Р°СЃСЃС‡РёС‚С‹РІР°РµРј С†РµРЅСѓ СЃ СѓС‡РµС‚РѕРј base_qty
+              // Р В Р В°РЎРѓРЎРѓРЎвЂЎР С‘РЎвЂљРЎвЂ№Р Р†Р В°Р ВµР С РЎвЂ Р ВµР Р…РЎС“ РЎРѓ РЎС“РЎвЂЎР ВµРЎвЂљР С•Р С base_qty
               let ingPricePerUnit = 0;
               
               if (ingInfo.price_override != null) {
-                // Р•СЃР»Рё РµСЃС‚СЊ price_override - РёСЃРїРѕР»СЊР·СѓРµРј РµРіРѕ РєР°Рє С†РµРЅСѓ Р·Р° РµРґРёРЅРёС†Сѓ РІ Р±Р°Р·РѕРІРѕР№ РµРґРёРЅРёС†Рµ РёР·РјРµСЂРµРЅРёСЏ
+                // Р вЂўРЎРѓР В»Р С‘ Р ВµРЎРѓРЎвЂљРЎРЉ price_override - Р С‘РЎРѓР С—Р С•Р В»РЎРЉР В·РЎС“Р ВµР С Р ВµР С–Р С• Р С”Р В°Р С” РЎвЂ Р ВµР Р…РЎС“ Р В·Р В° Р ВµР Т‘Р С‘Р Р…Р С‘РЎвЂ РЎС“ Р Р† Р В±Р В°Р В·Р С•Р Р†Р С•Р в„– Р ВµР Т‘Р С‘Р Р…Р С‘РЎвЂ Р Вµ Р С‘Р В·Р СР ВµРЎР‚Р ВµР Р…Р С‘РЎРЏ
                 ingPricePerUnit = Number(ingInfo.price_override);
               } else {
-                // Р Р°СЃСЃС‡РёС‚С‹РІР°РµРј С†РµРЅСѓ Р·Р° РµРґРёРЅРёС†Сѓ РёР· base_qty
+                // Р В Р В°РЎРѓРЎРѓРЎвЂЎР С‘РЎвЂљРЎвЂ№Р Р†Р В°Р ВµР С РЎвЂ Р ВµР Р…РЎС“ Р В·Р В° Р ВµР Т‘Р С‘Р Р…Р С‘РЎвЂ РЎС“ Р С‘Р В· base_qty
                 const ingredientPrice = Number(ingInfo.ingredient_price || 0);
                 
                 if (ingredientBaseQty > 0 && ingredientPrice > 0) {
-                  // Р¦РµРЅР° Р·Р° РµРґРёРЅРёС†Сѓ (РІ Р±Р°Р·РѕРІРѕР№ РµРґРёРЅРёС†Рµ) = С†РµРЅР° С‚РѕРІР°СЂР° / base_qty
+                  // Р В¦Р ВµР Р…Р В° Р В·Р В° Р ВµР Т‘Р С‘Р Р…Р С‘РЎвЂ РЎС“ (Р Р† Р В±Р В°Р В·Р С•Р Р†Р С•Р в„– Р ВµР Т‘Р С‘Р Р…Р С‘РЎвЂ Р Вµ) = РЎвЂ Р ВµР Р…Р В° РЎвЂљР С•Р Р†Р В°РЎР‚Р В° / base_qty
                   ingPricePerUnit = ingredientPrice / ingredientBaseQty;
                 } else if (ingredientPrice > 0) {
                   ingPricePerUnit = ingredientPrice;
                 }
               }
               
-              // РС‚РѕРіРѕРІР°СЏ С†РµРЅР° РёРЅРіСЂРµРґРёРµРЅС‚Р° = С†РµРЅР° Р·Р° РµРґРёРЅРёС†Сѓ * РєРѕР»РёС‡РµСЃС‚РІРѕ (РІ Р±Р°Р·РѕРІРѕР№ РµРґРёРЅРёС†Рµ)
-              // РќР• РґРѕР±Р°РІР»СЏРµРј Рє ingredientsTotal - С†РµРЅР° СѓР¶Рµ СѓС‡С‚РµРЅР° РІ line_total
+              // Р ВРЎвЂљР С•Р С–Р С•Р Р†Р В°РЎРЏ РЎвЂ Р ВµР Р…Р В° Р С‘Р Р…Р С–РЎР‚Р ВµР Т‘Р С‘Р ВµР Р…РЎвЂљР В° = РЎвЂ Р ВµР Р…Р В° Р В·Р В° Р ВµР Т‘Р С‘Р Р…Р С‘РЎвЂ РЎС“ * Р С”Р С•Р В»Р С‘РЎвЂЎР ВµРЎРѓРЎвЂљР Р†Р С• (Р Р† Р В±Р В°Р В·Р С•Р Р†Р С•Р в„– Р ВµР Т‘Р С‘Р Р…Р С‘РЎвЂ Р Вµ)
+              // Р СњР вЂў Р Т‘Р С•Р В±Р В°Р Р†Р В»РЎРЏР ВµР С Р С” ingredientsTotal - РЎвЂ Р ВµР Р…Р В° РЎС“Р В¶Р Вµ РЎС“РЎвЂЎРЎвЂљР ВµР Р…Р В° Р Р† line_total
               const ingTotal = ingPricePerUnit * qtyInBase;
 
-              // Р”Р»СЏ СЃРѕС…СЂР°РЅРµРЅРёСЏ: price РґРѕР»Р¶РЅР° Р±С‹С‚СЊ С†РµРЅРѕР№ Р·Р° РµРґРёРЅРёС†Сѓ РІ С‚РѕР№ РµРґРёРЅРёС†Рµ РёР·РјРµСЂРµРЅРёСЏ, РІ РєРѕС‚РѕСЂРѕР№ СѓРєР°Р·Р°РЅРѕ quantity
-              // ingPricePerUnit - СЌС‚Рѕ С†РµРЅР° Р·Р° РµРґРёРЅРёС†Сѓ РІ Р±Р°Р·РѕРІРѕР№ РµРґРёРЅРёС†Рµ (base_unit_id)
-              // quantity (ingQty) СѓРєР°Р·Р°РЅРѕ РІ unit_id
-              // РќСѓР¶РЅРѕ РїРµСЂРµСЃС‡РёС‚Р°С‚СЊ С†РµРЅСѓ Р·Р° РµРґРёРЅРёС†Сѓ РґР»СЏ unit_id
+              // Р вЂќР В»РЎРЏ РЎРѓР С•РЎвЂ¦РЎР‚Р В°Р Р…Р ВµР Р…Р С‘РЎРЏ: price Р Т‘Р С•Р В»Р В¶Р Р…Р В° Р В±РЎвЂ№РЎвЂљРЎРЉ РЎвЂ Р ВµР Р…Р С•Р в„– Р В·Р В° Р ВµР Т‘Р С‘Р Р…Р С‘РЎвЂ РЎС“ Р Р† РЎвЂљР С•Р в„– Р ВµР Т‘Р С‘Р Р…Р С‘РЎвЂ Р Вµ Р С‘Р В·Р СР ВµРЎР‚Р ВµР Р…Р С‘РЎРЏ, Р Р† Р С”Р С•РЎвЂљР С•РЎР‚Р С•Р в„– РЎС“Р С”Р В°Р В·Р В°Р Р…Р С• quantity
+              // ingPricePerUnit - РЎРЊРЎвЂљР С• РЎвЂ Р ВµР Р…Р В° Р В·Р В° Р ВµР Т‘Р С‘Р Р…Р С‘РЎвЂ РЎС“ Р Р† Р В±Р В°Р В·Р С•Р Р†Р С•Р в„– Р ВµР Т‘Р С‘Р Р…Р С‘РЎвЂ Р Вµ (base_unit_id)
+              // quantity (ingQty) РЎС“Р С”Р В°Р В·Р В°Р Р…Р С• Р Р† unit_id
+              // Р СњРЎС“Р В¶Р Р…Р С• Р С—Р ВµРЎР‚Р ВµРЎРѓРЎвЂЎР С‘РЎвЂљР В°РЎвЂљРЎРЉ РЎвЂ Р ВµР Р…РЎС“ Р В·Р В° Р ВµР Т‘Р С‘Р Р…Р С‘РЎвЂ РЎС“ Р Т‘Р В»РЎРЏ unit_id
               let priceForDisplay = ingPricePerUnit;
               
-              // Р•СЃР»Рё quantity РІ С‚РѕР№ Р¶Рµ РµРґРёРЅРёС†Рµ, С‡С‚Рѕ Рё Р±Р°Р·РѕРІР°СЏ, price СѓР¶Рµ РїСЂР°РІРёР»СЊРЅС‹Р№
+              // Р вЂўРЎРѓР В»Р С‘ quantity Р Р† РЎвЂљР С•Р в„– Р В¶Р Вµ Р ВµР Т‘Р С‘Р Р…Р С‘РЎвЂ Р Вµ, РЎвЂЎРЎвЂљР С• Р С‘ Р В±Р В°Р В·Р С•Р Р†Р В°РЎРЏ, price РЎС“Р В¶Р Вµ Р С—РЎР‚Р В°Р Р†Р С‘Р В»РЎРЉР Р…РЎвЂ№Р в„–
               if (ingredientUnitId && ingredientBaseUnitId && ingredientUnitId !== ingredientBaseUnitId && ingQty > 0) {
-                // Р•СЃР»Рё РµРґРёРЅРёС†С‹ СЂР°Р·РЅС‹Рµ, РїРµСЂРµСЃС‡РёС‚С‹РІР°РµРј С†РµРЅСѓ Р·Р° РµРґРёРЅРёС†Сѓ РІ unit_id
+                // Р вЂўРЎРѓР В»Р С‘ Р ВµР Т‘Р С‘Р Р…Р С‘РЎвЂ РЎвЂ№ РЎР‚Р В°Р В·Р Р…РЎвЂ№Р Вµ, Р С—Р ВµРЎР‚Р ВµРЎРѓРЎвЂЎР С‘РЎвЂљРЎвЂ№Р Р†Р В°Р ВµР С РЎвЂ Р ВµР Р…РЎС“ Р В·Р В° Р ВµР Т‘Р С‘Р Р…Р С‘РЎвЂ РЎС“ Р Р† unit_id
                 const factor = await getConversionFactor(ingredientUnitId, ingredientBaseUnitId, ingId);
                 if (factor != null && factor > 0) {
-                  // priceForDisplay = С†РµРЅР° Р·Р° РµРґРёРЅРёС†Сѓ РІ unit_id
-                  // Р•СЃР»Рё quantity РІ unit_id, Р° С†РµРЅР° Р·Р° РµРґРёРЅРёС†Сѓ РІ base_unit_id = ingPricePerUnit,
-                  // С‚Рѕ С†РµРЅР° Р·Р° unit_id = ingPricePerUnit * factor
-                  // (РїРѕС‚РѕРјСѓ С‡С‚Рѕ 1 unit_id = factor * base_unit_id)
+                  // priceForDisplay = РЎвЂ Р ВµР Р…Р В° Р В·Р В° Р ВµР Т‘Р С‘Р Р…Р С‘РЎвЂ РЎС“ Р Р† unit_id
+                  // Р вЂўРЎРѓР В»Р С‘ quantity Р Р† unit_id, Р В° РЎвЂ Р ВµР Р…Р В° Р В·Р В° Р ВµР Т‘Р С‘Р Р…Р С‘РЎвЂ РЎС“ Р Р† base_unit_id = ingPricePerUnit,
+                  // РЎвЂљР С• РЎвЂ Р ВµР Р…Р В° Р В·Р В° unit_id = ingPricePerUnit * factor
+                  // (Р С—Р С•РЎвЂљР С•Р СРЎС“ РЎвЂЎРЎвЂљР С• 1 unit_id = factor * base_unit_id)
                   priceForDisplay = ingPricePerUnit * factor;
                 }
               }
 
-              // РђР»СЊС‚РµСЂРЅР°С‚РёРІРЅС‹Р№ СЂР°СЃС‡РµС‚: РµСЃР»Рё total СѓР¶Рµ РїРѕСЃС‡РёС‚Р°РЅ, РјРѕР¶РЅРѕ РёСЃРїРѕР»СЊР·РѕРІР°С‚СЊ РµРіРѕ
-              // priceForDisplay = ingTotal / ingQty (РµСЃР»Рё ingQty > 0)
+              // Р С’Р В»РЎРЉРЎвЂљР ВµРЎР‚Р Р…Р В°РЎвЂљР С‘Р Р†Р Р…РЎвЂ№Р в„– РЎР‚Р В°РЎРѓРЎвЂЎР ВµРЎвЂљ: Р ВµРЎРѓР В»Р С‘ total РЎС“Р В¶Р Вµ Р С—Р С•РЎРѓРЎвЂЎР С‘РЎвЂљР В°Р Р…, Р СР С•Р В¶Р Р…Р С• Р С‘РЎРѓР С—Р С•Р В»РЎРЉР В·Р С•Р Р†Р В°РЎвЂљРЎРЉ Р ВµР С–Р С•
+              // priceForDisplay = ingTotal / ingQty (Р ВµРЎРѓР В»Р С‘ ingQty > 0)
               if (ingQty > 0 && ingTotal > 0) {
                 priceForDisplay = ingTotal / ingQty;
               }
@@ -7102,14 +11876,14 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           }
         }
 
-        // РћР±СЂР°Р±Р°С‚С‹РІР°РµРј РІР°СЂРёР°РЅС‚С‹ (С‚РѕР»СЊРєРѕ РґР»СЏ СЃРѕС…СЂР°РЅРµРЅРёСЏ СЃРѕСЃС‚Р°РІР°, РЅРµ РґР»СЏ РїРµСЂРµСЃС‡РµС‚Р° С†РµРЅС‹)
+        // Р С›Р В±РЎР‚Р В°Р В±Р В°РЎвЂљРЎвЂ№Р Р†Р В°Р ВµР С Р Р†Р В°РЎР‚Р С‘Р В°Р Р…РЎвЂљРЎвЂ№ (РЎвЂљР С•Р В»РЎРЉР С”Р С• Р Т‘Р В»РЎРЏ РЎРѓР С•РЎвЂ¦РЎР‚Р В°Р Р…Р ВµР Р…Р С‘РЎРЏ РЎРѓР С•РЎРѓРЎвЂљР В°Р Р†Р В°, Р Р…Р Вµ Р Т‘Р В»РЎРЏ Р С—Р ВµРЎР‚Р ВµРЎРѓРЎвЂЎР ВµРЎвЂљР В° РЎвЂ Р ВµР Р…РЎвЂ№)
         let variantData = null;
         const variantGroupId = Number(it.variant_group_id);
         const variantValueIndex = Number(it.variant_value_index);
         const variantLabel = str(it.variant_label || "");
         
         if (variantGroupId && Number.isFinite(variantValueIndex)) {
-          // РџРѕР»СѓС‡Р°РµРј РёРЅС„РѕСЂРјР°С†РёСЋ Рѕ РіСЂСѓРїРїРµ РІР°СЂРёР°РЅС‚РѕРІ РёР· Р‘Р”
+          // Р СџР С•Р В»РЎС“РЎвЂЎР В°Р ВµР С Р С‘Р Р…РЎвЂћР С•РЎР‚Р СР В°РЎвЂ Р С‘РЎР‹ Р С• Р С–РЎР‚РЎС“Р С—Р С—Р Вµ Р Р†Р В°РЎР‚Р С‘Р В°Р Р…РЎвЂљР С•Р Р† Р С‘Р В· Р вЂР вЂќ
           const [variantGroupRows] = await db.query(
             `SELECT id, title, unit_id
              FROM prod_variant_groups
@@ -7122,7 +11896,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             const vg = variantGroupRows[0];
             const groupTitle = str(vg.title || "");
             
-            // РџРѕР»СѓС‡Р°РµРј Р·РЅР°С‡РµРЅРёРµ РІР°СЂРёР°РЅС‚Р°
+            // Р СџР С•Р В»РЎС“РЎвЂЎР В°Р ВµР С Р В·Р Р…Р В°РЎвЂЎР ВµР Р…Р С‘Р Вµ Р Р†Р В°РЎР‚Р С‘Р В°Р Р…РЎвЂљР В°
             const [variantValuesRows] = await db.query(
               `SELECT \`values\`
                FROM prod_variant_groups
@@ -7141,7 +11915,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
               } catch {}
             }
             
-            // Р•СЃР»Рё variant_label СЃРѕРґРµСЂР¶РёС‚ "РќР°Р·РІР°РЅРёРµ: Р·РЅР°С‡РµРЅРёРµ", РёР·РІР»РµРєР°РµРј Р·РЅР°С‡РµРЅРёРµ
+            // Р вЂўРЎРѓР В»Р С‘ variant_label РЎРѓР С•Р Т‘Р ВµРЎР‚Р В¶Р С‘РЎвЂљ "Р СњР В°Р В·Р Р†Р В°Р Р…Р С‘Р Вµ: Р В·Р Р…Р В°РЎвЂЎР ВµР Р…Р С‘Р Вµ", Р С‘Р В·Р Р†Р В»Р ВµР С”Р В°Р ВµР С Р В·Р Р…Р В°РЎвЂЎР ВµР Р…Р С‘Р Вµ
             if (variantLabel.includes(":")) {
               const parts = variantLabel.split(":");
               if (parts.length > 1) {
@@ -7149,22 +11923,22 @@ window.location.replace(${JSON.stringify(redirectUrl)});
               }
             }
             
-            // Р’Р°СЂРёР°РЅС‚С‹ РЅРµ РґРѕР±Р°РІР»СЏСЋС‚ РґРѕРїР»Р°С‚Сѓ - РѕРЅРё РїРµСЂРµСЃС‡РёС‚С‹РІР°СЋС‚ С†РµРЅСѓ РїСЂРѕРїРѕСЂС†РёРѕРЅР°Р»СЊРЅРѕ РєРѕР»РёС‡РµСЃС‚РІСѓ
-            // variant_unit_price СѓР¶Рµ СѓС‡С‚РµРЅР° РІ line_total, РїРѕСЌС‚РѕРјСѓ price_diff РІСЃРµРіРґР° 0
+            // Р вЂ™Р В°РЎР‚Р С‘Р В°Р Р…РЎвЂљРЎвЂ№ Р Р…Р Вµ Р Т‘Р С•Р В±Р В°Р Р†Р В»РЎРЏРЎР‹РЎвЂљ Р Т‘Р С•Р С—Р В»Р В°РЎвЂљРЎС“ - Р С•Р Р…Р С‘ Р С—Р ВµРЎР‚Р ВµРЎРѓРЎвЂЎР С‘РЎвЂљРЎвЂ№Р Р†Р В°РЎР‹РЎвЂљ РЎвЂ Р ВµР Р…РЎС“ Р С—РЎР‚Р С•Р С—Р С•РЎР‚РЎвЂ Р С‘Р С•Р Р…Р В°Р В»РЎРЉР Р…Р С• Р С”Р С•Р В»Р С‘РЎвЂЎР ВµРЎРѓРЎвЂљР Р†РЎС“
+            // variant_unit_price РЎС“Р В¶Р Вµ РЎС“РЎвЂЎРЎвЂљР ВµР Р…Р В° Р Р† line_total, Р С—Р С•РЎРЊРЎвЂљР С•Р СРЎС“ price_diff Р Р†РЎРѓР ВµР С–Р Т‘Р В° 0
             variantData = {
               variant_group_id: variantGroupId,
               variant_value_index: variantValueIndex,
               group_title: groupTitle,
               unit_id: Number(vg.unit_id || 0) || undefined,
               value: variantValue,
-              label: variantValue, // Р”Р»СЏ РѕС‚РѕР±СЂР°Р¶РµРЅРёСЏ
-              price_diff: 0, // Р’Р°СЂРёР°РЅС‚С‹ РЅРµ РёРјРµСЋС‚ РґРѕРїР»Р°С‚С‹, С†РµРЅР° СѓР¶Рµ СѓС‡С‚РµРЅР° РІ variant_unit_price
+              label: variantValue, // Р вЂќР В»РЎРЏ Р С•РЎвЂљР С•Р В±РЎР‚Р В°Р В¶Р ВµР Р…Р С‘РЎРЏ
+              price_diff: 0, // Р вЂ™Р В°РЎР‚Р С‘Р В°Р Р…РЎвЂљРЎвЂ№ Р Р…Р Вµ Р С‘Р СР ВµРЎР‹РЎвЂљ Р Т‘Р С•Р С—Р В»Р В°РЎвЂљРЎвЂ№, РЎвЂ Р ВµР Р…Р В° РЎС“Р В¶Р Вµ РЎС“РЎвЂЎРЎвЂљР ВµР Р…Р В° Р Р† variant_unit_price
             };
           }
         }
 
-        // РСЃРїРѕР»СЊР·СѓРµРј line_total РёР· Р·Р°РїСЂРѕСЃР° (СѓР¶Рµ РїРѕСЃС‡РёС‚Р°РЅ РЅР° С„СЂРѕРЅС‚Рµ)
-        // Р•СЃР»Рё line_total РЅРµ РїРµСЂРµРґР°РЅ, РёСЃРїРѕР»СЊР·СѓРµРј Р±Р°Р·РѕРІСѓСЋ С†РµРЅСѓ С‚РѕРІР°СЂР° (РґР»СЏ С‚РѕРІР°СЂРѕРІ Р±РµР· РѕРїС†РёР№/РІР°СЂРёР°РЅС‚РѕРІ/СЃРѕСЃС‚Р°РІР°)
+        // Р ВРЎРѓР С—Р С•Р В»РЎРЉР В·РЎС“Р ВµР С line_total Р С‘Р В· Р В·Р В°Р С—РЎР‚Р С•РЎРѓР В° (РЎС“Р В¶Р Вµ Р С—Р С•РЎРѓРЎвЂЎР С‘РЎвЂљР В°Р Р… Р Р…Р В° РЎвЂћРЎР‚Р С•Р Р…РЎвЂљР Вµ)
+        // Р вЂўРЎРѓР В»Р С‘ line_total Р Р…Р Вµ Р С—Р ВµРЎР‚Р ВµР Т‘Р В°Р Р…, Р С‘РЎРѓР С—Р С•Р В»РЎРЉР В·РЎС“Р ВµР С Р В±Р В°Р В·Р С•Р Р†РЎС“РЎР‹ РЎвЂ Р ВµР Р…РЎС“ РЎвЂљР С•Р Р†Р В°РЎР‚Р В° (Р Т‘Р В»РЎРЏ РЎвЂљР С•Р Р†Р В°РЎР‚Р С•Р Р† Р В±Р ВµР В· Р С•Р С—РЎвЂ Р С‘Р в„–/Р Р†Р В°РЎР‚Р С‘Р В°Р Р…РЎвЂљР С•Р Р†/РЎРѓР С•РЎРѓРЎвЂљР В°Р Р†Р В°)
         const autoRule = autoRulesByProduct.get(pid);
         let unitPrice = basePrice;
         let paidQty = qty;
@@ -7183,13 +11957,30 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           lineTotal = roundPrice(useLineTotalFromRequest ? lineTotalFromRequest : unitPrice * paidQty);
         }
 
-        // Р Р°СЃС‡РµС‚ СЃРєРёРґРєРё РґР»СЏ С‚РѕРІР°СЂР°
-        // РќР• РїСЂРёРјРµРЅСЏРµРј СЃРєРёРґРєСѓ РµСЃР»Рё:
-        // - line_total СѓР¶Рµ РїРµСЂРµРґР°РЅ СЃ С„СЂРѕРЅС‚Р° (СЃРєРёРґРєР° СѓР¶Рµ СѓС‡С‚РµРЅР° РІ С†РµРЅРµ)
-        // - СЌС‚Рѕ auto-add С‚РѕРІР°СЂ
+        // Р В Р В°РЎРѓРЎвЂЎР ВµРЎвЂљ РЎРѓР С”Р С‘Р Т‘Р С”Р С‘ Р Т‘Р В»РЎРЏ РЎвЂљР С•Р Р†Р В°РЎР‚Р В°
+        // Р СњР вЂў Р С—РЎР‚Р С‘Р СР ВµР Р…РЎРЏР ВµР С РЎРѓР С”Р С‘Р Т‘Р С”РЎС“ Р ВµРЎРѓР В»Р С‘:
+        // - line_total РЎС“Р В¶Р Вµ Р С—Р ВµРЎР‚Р ВµР Т‘Р В°Р Р… РЎРѓ РЎвЂћРЎР‚Р С•Р Р…РЎвЂљР В° (РЎРѓР С”Р С‘Р Т‘Р С”Р В° РЎС“Р В¶Р Вµ РЎС“РЎвЂЎРЎвЂљР ВµР Р…Р В° Р Р† РЎвЂ Р ВµР Р…Р Вµ)
+        // - РЎРЊРЎвЂљР С• auto-add РЎвЂљР С•Р Р†Р В°РЎР‚
         let itemDiscountAmount = 0;
         let itemAppliedDiscount = null;
-        const productDiscount = productDiscountMap.get(pid);
+        const productDiscountCandidates = Array.isArray(productDiscountMap.get(pid))
+          ? productDiscountMap.get(pid)
+          : [];
+        const productDiscount = productDiscountCandidates.find((candidate) => (
+          matchDiscountTargetScope(
+            buildDiscountProductTargetSets(candidate?.targetRows || []),
+            {
+              type: 'product',
+              product_id: pid,
+              option_items: options,
+              ingredients,
+              variant_group_id: variantData?.variant_group_id ?? null,
+              variant_value_index: variantData?.variant_value_index ?? null,
+            },
+            productCategoriesMap,
+            publicDiscountText(candidate?.apply_to).toLowerCase() || 'product'
+          )
+        )) || null;
         if (productDiscount && !autoRule && !useLineTotalFromRequest) {
           itemDiscountAmount = discountHelpers.calculateDiscount(
             lineTotal,
@@ -7211,10 +12002,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             appliedDiscounts.push(itemAppliedDiscount);
           }
         } else if (productDiscount && !autoRule && useLineTotalFromRequest) {
-          // Р•СЃР»Рё line_total РїРµСЂРµРґР°РЅ СЃ С„СЂРѕРЅС‚Р°, РЅРѕ РµСЃС‚СЊ СЃРєРёРґРєР° вЂ” СЃРѕС…СЂР°РЅСЏРµРј РёРЅС„РѕСЂРјР°С†РёСЋ Рѕ СЃРєРёРґРєРµ
-          // Р±РµР· РїРѕРІС‚РѕСЂРЅРѕРіРѕ СЂР°СЃС‡С‘С‚Р° (СЃРєРёРґРєР° СѓР¶Рµ СѓС‡С‚РµРЅР° РІ line_total)
+          // Р вЂўРЎРѓР В»Р С‘ line_total Р С—Р ВµРЎР‚Р ВµР Т‘Р В°Р Р… РЎРѓ РЎвЂћРЎР‚Р С•Р Р…РЎвЂљР В°, Р Р…Р С• Р ВµРЎРѓРЎвЂљРЎРЉ РЎРѓР С”Р С‘Р Т‘Р С”Р В° РІР‚вЂќ РЎРѓР С•РЎвЂ¦РЎР‚Р В°Р Р…РЎРЏР ВµР С Р С‘Р Р…РЎвЂћР С•РЎР‚Р СР В°РЎвЂ Р С‘РЎР‹ Р С• РЎРѓР С”Р С‘Р Т‘Р С”Р Вµ
+          // Р В±Р ВµР В· Р С—Р С•Р Р†РЎвЂљР С•РЎР‚Р Р…Р С•Р С–Р С• РЎР‚Р В°РЎРѓРЎвЂЎРЎвЂРЎвЂљР В° (РЎРѓР С”Р С‘Р Т‘Р С”Р В° РЎС“Р В¶Р Вµ РЎС“РЎвЂЎРЎвЂљР ВµР Р…Р В° Р Р† line_total)
           const estimatedDiscount = discountHelpers.calculateDiscount(
-            unitPrice * paidQty, // Р¦РµРЅР° Р±РµР· СЃРєРёРґРєРё
+            unitPrice * paidQty, // Р В¦Р ВµР Р…Р В° Р В±Р ВµР В· РЎРѓР С”Р С‘Р Т‘Р С”Р С‘
             productDiscount.discount_type,
             Number(productDiscount.discount_value),
             productDiscount.max_discount_amount ? Number(productDiscount.max_discount_amount) : null
@@ -7235,12 +12026,12 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           }
         }
         
-        // Р•СЃР»Рё line_total РїРµСЂРµРґР°РЅ СЃ С„СЂРѕРЅС‚Р° - РёСЃРїРѕР»СЊР·СѓРµРј РµРіРѕ РєР°Рє РµСЃС‚СЊ (СЃРєРёРґРєР° СѓР¶Рµ РїСЂРёРјРµРЅРµРЅР°)
-        // РРЅР°С‡Рµ - РІС‹С‡РёС‚Р°РµРј СЃРєРёРґРєСѓ
+        // Р вЂўРЎРѓР В»Р С‘ line_total Р С—Р ВµРЎР‚Р ВµР Т‘Р В°Р Р… РЎРѓ РЎвЂћРЎР‚Р С•Р Р…РЎвЂљР В° - Р С‘РЎРѓР С—Р С•Р В»РЎРЉР В·РЎС“Р ВµР С Р ВµР С–Р С• Р С”Р В°Р С” Р ВµРЎРѓРЎвЂљРЎРЉ (РЎРѓР С”Р С‘Р Т‘Р С”Р В° РЎС“Р В¶Р Вµ Р С—РЎР‚Р С‘Р СР ВµР Р…Р ВµР Р…Р В°)
+        // Р ВР Р…Р В°РЎвЂЎР Вµ - Р Р†РЎвЂ№РЎвЂЎР С‘РЎвЂљР В°Р ВµР С РЎРѓР С”Р С‘Р Т‘Р С”РЎС“
         const lineTotalAfterDiscount = useLineTotalFromRequest ? lineTotal : roundPrice(lineTotal - itemDiscountAmount);
         total += lineTotalAfterDiscount;
 
-        // РџРѕР»СѓС‡Р°РµРј С„РѕС‚Рѕ С‚РѕРІР°СЂР° РґР»СЏ СЃРѕС…СЂР°РЅРµРЅРёСЏ РІ Р·Р°РєР°Р·Рµ
+        // Р СџР С•Р В»РЎС“РЎвЂЎР В°Р ВµР С РЎвЂћР С•РЎвЂљР С• РЎвЂљР С•Р Р†Р В°РЎР‚Р В° Р Т‘Р В»РЎРЏ РЎРѓР С•РЎвЂ¦РЎР‚Р В°Р Р…Р ВµР Р…Р С‘РЎРЏ Р Р† Р В·Р В°Р С”Р В°Р В·Р Вµ
         let photos = [];
         try {
           if (p.photos_json) {
@@ -7249,24 +12040,30 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           }
         } catch {}
 
+        const isGiftReward = Number(it?.is_gift_reward || 0) === 1;
+        const giftRewardId = Number(it?.gift_reward_id || 0) > 0 ? Number(it.gift_reward_id) : null;
         const itemEntry = {
           product_id: pid,
           name: p.name,
           qty,
-          price: unitPrice,
+          price: isGiftReward ? 0 : unitPrice,
           old_price: oldPrice,
           line_total: lineTotalAfterDiscount,
-          photos, // РЎРѕС…СЂР°РЅСЏРµРј С„РѕС‚Рѕ РґР»СЏ РѕС‚С‡РµС‚РѕРІ
-          options: options.length > 0 ? options : undefined, // РЎРѕС…СЂР°РЅСЏРµРј РѕРїС†РёРё С‚РѕР»СЊРєРѕ РµСЃР»Рё РѕРЅРё РµСЃС‚СЊ
-          ingredients: ingredients.length > 0 ? ingredients : undefined, // РЎРѕС…СЂР°РЅСЏРµРј РёРЅРіСЂРµРґРёРµРЅС‚С‹ С‚РѕР»СЊРєРѕ РµСЃР»Рё РѕРЅРё РµСЃС‚СЊ
-          variants: variantData ? [variantData] : undefined, // РЎРѕС…СЂР°РЅСЏРµРј РІР°СЂРёР°РЅС‚С‹ С‚РѕР»СЊРєРѕ РµСЃР»Рё РѕРЅРё РµСЃС‚СЊ
-          auto_add: Number(it.auto_add || 0) === 1 ? 1 : 0, // Р”Р»СЏ СЃРѕСЂС‚РёСЂРѕРІРєРё: Р°РІС‚РѕРґРѕР±Р°РІР»РµРЅРёСЏ (РїСЂРёР±РѕСЂС‹) РІ РєРѕРЅРµС† СЃРїРёСЃРєР°
+          photos, // Р РЋР С•РЎвЂ¦РЎР‚Р В°Р Р…РЎРЏР ВµР С РЎвЂћР С•РЎвЂљР С• Р Т‘Р В»РЎРЏ Р С•РЎвЂљРЎвЂЎР ВµРЎвЂљР С•Р Р†
+          options: options.length > 0 ? options : undefined, // Р РЋР С•РЎвЂ¦РЎР‚Р В°Р Р…РЎРЏР ВµР С Р С•Р С—РЎвЂ Р С‘Р С‘ РЎвЂљР С•Р В»РЎРЉР С”Р С• Р ВµРЎРѓР В»Р С‘ Р С•Р Р…Р С‘ Р ВµРЎРѓРЎвЂљРЎРЉ
+          ingredients: ingredients.length > 0 ? ingredients : undefined, // Р РЋР С•РЎвЂ¦РЎР‚Р В°Р Р…РЎРЏР ВµР С Р С‘Р Р…Р С–РЎР‚Р ВµР Т‘Р С‘Р ВµР Р…РЎвЂљРЎвЂ№ РЎвЂљР С•Р В»РЎРЉР С”Р С• Р ВµРЎРѓР В»Р С‘ Р С•Р Р…Р С‘ Р ВµРЎРѓРЎвЂљРЎРЉ
+          variants: variantData ? [variantData] : undefined, // Р РЋР С•РЎвЂ¦РЎР‚Р В°Р Р…РЎРЏР ВµР С Р Р†Р В°РЎР‚Р С‘Р В°Р Р…РЎвЂљРЎвЂ№ РЎвЂљР С•Р В»РЎРЉР С”Р С• Р ВµРЎРѓР В»Р С‘ Р С•Р Р…Р С‘ Р ВµРЎРѓРЎвЂљРЎРЉ
+          auto_add: Number(it.auto_add || 0) === 1 ? 1 : 0, // Р вЂќР В»РЎРЏ РЎРѓР С•РЎР‚РЎвЂљР С‘РЎР‚Р С•Р Р†Р С”Р С‘: Р В°Р Р†РЎвЂљР С•Р Т‘Р С•Р В±Р В°Р Р†Р В»Р ВµР Р…Р С‘РЎРЏ (Р С—РЎР‚Р С‘Р В±Р С•РЎР‚РЎвЂ№) Р Р† Р С”Р С•Р Р…Р ВµРЎвЂ  РЎРѓР С—Р С‘РЎРѓР С”Р В°
         };
         
-        // Р”РѕР±Р°РІР»СЏРµРј РёРЅС„РѕСЂРјР°С†РёСЋ Рѕ СЃРєРёРґРєРµ РµСЃР»Рё РµСЃС‚СЊ
+        // Р вЂќР С•Р В±Р В°Р Р†Р В»РЎРЏР ВµР С Р С‘Р Р…РЎвЂћР С•РЎР‚Р СР В°РЎвЂ Р С‘РЎР‹ Р С• РЎРѓР С”Р С‘Р Т‘Р С”Р Вµ Р ВµРЎРѓР В»Р С‘ Р ВµРЎРѓРЎвЂљРЎРЉ
+        if (isGiftReward) {
+          itemEntry.is_gift_reward = 1;
+          itemEntry.gift_reward_id = giftRewardId;
+        }
         if (itemAppliedDiscount) {
-          // original_line_total - С†РµРЅР° РґРѕ СЃРєРёРґРєРё
-          // РСЃРїРѕР»СЊР·СѓРµРј РїРµСЂРµРґР°РЅРЅС‹Р№ original_line_total, РµСЃР»Рё РµСЃС‚СЊ (СЃ СѓС‡С‘С‚РѕРј РІР°СЂРёР°РЅС‚Р°)
+          // original_line_total - РЎвЂ Р ВµР Р…Р В° Р Т‘Р С• РЎРѓР С”Р С‘Р Т‘Р С”Р С‘
+          // Р ВРЎРѓР С—Р С•Р В»РЎРЉР В·РЎС“Р ВµР С Р С—Р ВµРЎР‚Р ВµР Т‘Р В°Р Р…Р Р…РЎвЂ№Р в„– original_line_total, Р ВµРЎРѓР В»Р С‘ Р ВµРЎРѓРЎвЂљРЎРЉ (РЎРѓ РЎС“РЎвЂЎРЎвЂРЎвЂљР С•Р С Р Р†Р В°РЎР‚Р С‘Р В°Р Р…РЎвЂљР В°)
           const originalLineTotalFromRequest = Number(it.original_line_total) || 0;
           const originalLineTotal = originalLineTotalFromRequest > 0
             ? roundPrice(originalLineTotalFromRequest)
@@ -7286,10 +12083,36 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
       if (!normItems.length) return res.status(400).json({ ok: false, error: 'NO_PRODUCTS' });
 
-      // РџСЂРёРјРµРЅСЏРµРј СЃРєРёРґРєРё РєР»РёРµРЅС‚Р° РЅР° РІРµСЃСЊ Р·Р°РєР°Р· (РµСЃР»Рё РµСЃС‚СЊ)
-      const orderDiscountsForCustomer = await discountHelpers.getOrderDiscounts(db, tenantId, storeId, customerId, total);
+      if (selectedDiscount) {
+        const selectedDiscountOutcome = applySelectedDiscountToItems({
+          discount: selectedDiscount,
+          items: normItems,
+          targetRows: Array.isArray(selectedDiscountEntry?.targetRows) ? selectedDiscountEntry.targetRows : [],
+          productCategoriesMap,
+          applyItemMeta: true,
+          collectUsageRecords: true,
+        });
+        if (!selectedDiscountOutcome?.isApplicable) {
+          return res.status(409).json({ ok: false, error: selectedDiscountOutcome?.errorCode || 'DISCOUNT_NOT_APPLICABLE' });
+        }
+        orderDiscountAmount += roundPrice(Number(selectedDiscountOutcome.discountAmount || 0));
+        total = roundPrice(Number(selectedDiscountOutcome.itemsTotalAfterDiscount || total));
+        normItems.length = 0;
+        normItems.push(...selectedDiscountOutcome.items);
+        appliedDiscounts.push(...(Array.isArray(selectedDiscountOutcome.usageRecords) ? selectedDiscountOutcome.usageRecords : []));
+      }
+
+      // Р СџРЎР‚Р С‘Р СР ВµР Р…РЎРЏР ВµР С РЎРѓР С”Р С‘Р Т‘Р С”Р С‘ Р С”Р В»Р С‘Р ВµР Р…РЎвЂљР В° Р Р…Р В° Р Р†Р ВµРЎРѓРЎРЉ Р В·Р В°Р С”Р В°Р В· (Р ВµРЎРѓР В»Р С‘ Р ВµРЎРѓРЎвЂљРЎРЉ)
+      const orderDiscountsForCustomer = await discountHelpers.getOrderDiscounts(
+        db,
+        tenantId,
+        storeId,
+        customerId,
+        total,
+        customerDiscounts
+      );
       if (orderDiscountsForCustomer.length > 0) {
-        // РџСЂРёРјРµРЅСЏРµРј СЃРєРёРґРєРё СЃ СѓС‡РµС‚РѕРј is_stackable
+        // Р СџРЎР‚Р С‘Р СР ВµР Р…РЎРЏР ВµР С РЎРѓР С”Р С‘Р Т‘Р С”Р С‘ РЎРѓ РЎС“РЎвЂЎР ВµРЎвЂљР С•Р С is_stackable
         const { totalDiscount, appliedDiscounts: orderApplied } = discountHelpers.applyBestDiscounts(orderDiscountsForCustomer, total);
         if (totalDiscount > 0) {
           orderDiscountAmount += totalDiscount;
@@ -7306,6 +12129,453 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           }
         }
       }
+
+      const selectedRewardPromoRow = selectedPromoSource === 'reward_promo'
+        ? (availableRewardPromoRows.find((row) => Number(row?.id || 0) === Number(selectedPromoRewardId || 0)) || null)
+        : null;
+
+      if (promoCode) {
+        if (selectedPromoSource === 'reward_promo') {
+          if (!selectedRewardPromoRow) {
+            return res.status(409).json({ ok: false, error: 'PROMO_INVALID' });
+          }
+
+          const rewardPayload = parsePublicRewardPayload(selectedRewardPromoRow);
+          const rewardCode = normalizeOrderPromoCode(rewardPayload?.code || rewardPayload?.source_code);
+          if (!rewardCode || rewardCode !== promoCode) {
+            return res.status(409).json({ ok: false, error: 'PROMO_INVALID' });
+          }
+
+          const rewardPromoDiscount = {
+            id: Number(rewardPayload?.source_discount_id || selectedRewardPromoRow?.discount_id || 0) || null,
+            discount_id: Number(rewardPayload?.source_discount_id || selectedRewardPromoRow?.discount_id || 0) || null,
+            title: publicDiscountText(rewardPayload?.title) || publicDiscountText(selectedRewardPromoRow?.discount_title),
+            is_stackable: Number(rewardPayload?.is_stackable || 0) === 1 || rewardPayload?.is_stackable === true,
+          };
+          if (selectedDiscount && !canCombineCheckoutBenefits(selectedDiscount, rewardPromoDiscount)) {
+            return res.status(409).json({ ok: false, error: 'BENEFITS_CONFLICT' });
+          }
+
+          const rewardPromoRuntime = getRewardPromoRuntimeConfig(rewardPayload);
+          const rewardPromoTargetRows = getRewardPayloadTargetRows(rewardPayload);
+          const rewardPromoTargets = buildDiscountProductTargetSets(rewardPromoTargetRows);
+          const rewardPromoMaxDiscountAmount = rewardPromoRuntime?.maxDiscountAmount != null
+            ? Number(rewardPromoRuntime.maxDiscountAmount || 0)
+            : null;
+          const rewardPromoUsageSource = {
+            discount_id: Number(rewardPayload?.source_discount_id || selectedRewardPromoRow?.discount_id || 0) || null,
+            title: publicDiscountText(rewardPayload?.title) || '\u041f\u0440\u043e\u043c\u043e\u043a\u043e\u0434',
+            is_stackable: rewardPromoDiscount.is_stackable,
+          };
+          const rewardPromoUsageRow = {
+            promo_code_id: null,
+            code: publicDiscountText(rewardPayload?.code || rewardPayload?.source_code),
+          };
+
+          if (rewardPromoRuntime.rewardType === 'discount') {
+            if (rewardPromoRuntime.applyTo === 'order') {
+              const promoOrderDiscount = discountHelpers.calculateDiscount(
+                total,
+                rewardPromoRuntime.discountType,
+                rewardPromoRuntime.discountValue,
+                rewardPromoMaxDiscountAmount
+              );
+              if (!(promoOrderDiscount > 0)) {
+                return res.status(409).json({ ok: false, error: 'PROMO_NOT_APPLICABLE' });
+              }
+              total = roundPrice(total - promoOrderDiscount);
+              orderDiscountAmount += promoOrderDiscount;
+              appliedDiscounts.push(buildPromoUsageRecord(rewardPromoUsageSource, rewardPromoUsageRow, promoOrderDiscount, {
+                apply_to: 'order',
+                discount_type: rewardPromoRuntime.discountType,
+                discount_value: rewardPromoRuntime.discountValue,
+              }));
+            } else {
+              let rewardPromoItemsDiscount = 0;
+
+              for (const item of normItems) {
+                if (item.type === 'combo') continue;
+                const matchesScope = matchDiscountTargetScope(
+                  rewardPromoTargets,
+                  item,
+                  productCategoriesMap,
+                  rewardPromoRuntime.applyTo
+                );
+                if (!matchesScope) continue;
+
+                const baseLineTotal = roundPrice(Number(item.line_total || 0));
+                const promoItemDiscount = discountHelpers.calculateDiscount(
+                  baseLineTotal,
+                  rewardPromoRuntime.discountType,
+                  rewardPromoRuntime.discountValue,
+                  rewardPromoMaxDiscountAmount
+                );
+                if (!(promoItemDiscount > 0)) continue;
+
+                item.line_total = roundPrice(baseLineTotal - promoItemDiscount);
+                mergeItemDiscountMeta(
+                  item,
+                  publicDiscountText(rewardPromoUsageSource?.title) || '\u041f\u0440\u043e\u043c\u043e\u043a\u043e\u0434',
+                  promoItemDiscount,
+                  item.discount?.original_line_total || baseLineTotal
+                );
+                rewardPromoItemsDiscount += promoItemDiscount;
+                appliedDiscounts.push(buildPromoUsageRecord(rewardPromoUsageSource, rewardPromoUsageRow, promoItemDiscount, {
+                  apply_to: rewardPromoRuntime.applyTo,
+                  discount_type: rewardPromoRuntime.discountType,
+                  discount_value: rewardPromoRuntime.discountValue,
+                  product_id: Number(item.product_id || 0) || null,
+                }));
+              }
+
+              if (!(rewardPromoItemsDiscount > 0)) {
+                return res.status(409).json({ ok: false, error: 'PROMO_NOT_APPLICABLE' });
+              }
+
+              orderDiscountAmount += rewardPromoItemsDiscount;
+              total = roundPrice(total - rewardPromoItemsDiscount);
+            }
+          } else if (rewardPromoRuntime.productRewardType === 'gift') {
+            const rewardProductIds = [...rewardPromoTargets.productIds];
+            if (!rewardProductIds.length) {
+              return res.status(409).json({ ok: false, error: 'PROMO_NOT_APPLICABLE' });
+            }
+
+            const [rewardProducts] = await db.query(
+              `SELECT id, name, price, old_price, photos_json
+                 FROM prod_products
+                WHERE tenant_id = ? AND id IN (?) AND is_active = 1 AND site_visibility = 1`,
+              [tenantId, rewardProductIds]
+            );
+            const rewardProductsById = new Map(
+              (Array.isArray(rewardProducts) ? rewardProducts : []).map((row) => [Number(row?.id || 0), row])
+            );
+
+            let giftCount = 0;
+            let giftDiscountAmount = 0;
+            for (const rewardProductId of rewardProductIds) {
+              const rewardProduct = rewardProductsById.get(Number(rewardProductId || 0));
+              if (!rewardProduct) continue;
+              giftCount += 1;
+              giftDiscountAmount += Number(rewardProduct.price || 0);
+              let photos = [];
+              try {
+                const parsedPhotos = JSON.parse(rewardProduct.photos_json || '[]');
+                if (Array.isArray(parsedPhotos)) photos = parsedPhotos;
+              } catch {}
+
+              normItems.push({
+                product_id: Number(rewardProduct.id || 0),
+                name: rewardProduct.name,
+                qty: 1,
+                price: 0,
+                old_price: Number(rewardProduct.price || rewardProduct.old_price || 0),
+                line_total: 0,
+                photos,
+                auto_add: 1,
+              });
+            }
+
+            if (!(giftCount > 0)) {
+              return res.status(409).json({ ok: false, error: 'PROMO_NOT_APPLICABLE' });
+            }
+
+            orderDiscountAmount += roundPrice(giftDiscountAmount);
+            appliedDiscounts.push(buildPromoUsageRecord(rewardPromoUsageSource, rewardPromoUsageRow, giftDiscountAmount, {
+              apply_to: 'gift',
+            }));
+          } else {
+            let rewardItemsDiscount = 0;
+            for (const item of normItems) {
+              if (item.type === 'combo') continue;
+              const matchesReward = matchDiscountTargetScope(
+                rewardPromoTargets,
+                item,
+                productCategoriesMap,
+                'any'
+              );
+              if (!matchesReward) continue;
+
+              const baseLineTotal = roundPrice(Number(item.line_total || 0));
+              const rewardDiscount = discountHelpers.calculateDiscount(
+                baseLineTotal,
+                rewardPromoRuntime.discountType,
+                rewardPromoRuntime.discountValue,
+                rewardPromoMaxDiscountAmount
+              );
+              if (!(rewardDiscount > 0)) continue;
+
+              item.line_total = roundPrice(baseLineTotal - rewardDiscount);
+              mergeItemDiscountMeta(
+                item,
+                publicDiscountText(rewardPromoUsageSource?.title) || '\u041f\u0440\u043e\u043c\u043e\u043a\u043e\u0434',
+                rewardDiscount,
+                item.discount?.original_line_total || baseLineTotal
+              );
+              rewardItemsDiscount += rewardDiscount;
+              appliedDiscounts.push(buildPromoUsageRecord(rewardPromoUsageSource, rewardPromoUsageRow, rewardDiscount, {
+                apply_to: 'product',
+                discount_type: rewardPromoRuntime.discountType,
+                discount_value: rewardPromoRuntime.discountValue,
+                product_id: Number(item.product_id || 0) || null,
+              }));
+            }
+
+            if (!(rewardItemsDiscount > 0)) {
+              return res.status(409).json({ ok: false, error: 'PROMO_NOT_APPLICABLE' });
+            }
+
+            orderDiscountAmount += rewardItemsDiscount;
+            total = roundPrice(total - rewardItemsDiscount);
+          }
+        } else {
+          const [[promoRow]] = await db.query(
+          `SELECT pc.id AS promo_code_id, pc.discount_id, pc.code, pc.code_mode, pc.is_active AS promo_is_active,
+                  pc.usage_limit AS promo_usage_limit, pc.usage_count AS promo_usage_count, pc.assigned_customer_id,
+                  d.*
+             FROM mkt_discount_promo_codes pc
+             INNER JOIN mkt_discounts d
+               ON d.id = pc.discount_id
+              AND d.tenant_id = pc.tenant_id
+              AND (d.store_id = pc.store_id OR d.store_id = 0 OR d.store_id IS NULL)
+            WHERE pc.tenant_id = ?
+              AND (pc.store_id = ? OR pc.store_id = 0 OR pc.store_id IS NULL)
+              AND UPPER(REPLACE(pc.code, ' ', '')) = ?
+            ORDER BY pc.store_id DESC, pc.id DESC
+            LIMIT 1`,
+          [tenantId, orderStoreId, promoCode]
+        );
+
+        if (!promoRow || !discountHelpers.isPromoSimpleDiscount(promoRow) || !discountHelpers.isDiscountActive(promoRow)) {
+          return res.status(409).json({ ok: false, error: 'PROMO_INVALID' });
+        }
+        if (isPromoRewardRedeemAction(promoRow)) {
+          return res.status(409).json({ ok: false, error: 'PROMO_INVALID' });
+        }
+
+        if (Number(promoRow.promo_is_active || 0) !== 1) {
+          return res.status(409).json({ ok: false, error: 'PROMO_NOT_AVAILABLE' });
+        }
+
+        if (Number(promoRow.promo_usage_limit || 0) > 0 && Number(promoRow.promo_usage_count || 0) >= Number(promoRow.promo_usage_limit || 0)) {
+          return res.status(409).json({ ok: false, error: 'PROMO_LIMIT_REACHED' });
+        }
+
+        if (Number(promoRow.assigned_customer_id || 0) > 0 && Number(promoRow.assigned_customer_id || 0) !== Number(customerId || 0)) {
+          return res.status(409).json({ ok: false, error: 'PROMO_NOT_AVAILABLE' });
+        }
+
+        const [promoAudienceRows] = await db.query(
+          `SELECT target_type, customer_id, customer_category_id
+             FROM mkt_discount_customers
+            WHERE tenant_id = ? AND discount_id = ?`,
+          [tenantId, Number(promoRow.discount_id || 0)]
+        );
+
+        if (!discountHelpers.matchDiscountAudience(promoAudienceRows, customerId, customerCategoryIds)) {
+          return res.status(409).json({ ok: false, error: 'PROMO_NOT_AVAILABLE' });
+        }
+
+        if (Number(promoRow.usage_per_customer || 0) > 0 && Number(customerId || 0) > 0) {
+          const [[promoCustomerUsage]] = await db.query(
+            `SELECT COUNT(*) AS usage_count
+               FROM mkt_discount_usage
+              WHERE tenant_id = ? AND discount_id = ? AND customer_id = ?`,
+            [tenantId, Number(promoRow.discount_id || 0), Number(customerId || 0)]
+          );
+          if (Number(promoCustomerUsage?.usage_count || 0) >= Number(promoRow.usage_per_customer || 0)) {
+            return res.status(409).json({ ok: false, error: 'PROMO_CUSTOMER_LIMIT_REACHED' });
+          }
+        }
+
+        if (selectedDiscount && !canCombineCheckoutBenefits(selectedDiscount, promoRow)) {
+          return res.status(409).json({ ok: false, error: 'BENEFITS_CONFLICT' });
+        }
+
+        const promoRuntime = getPromoRuntimeConfig(promoRow);
+        const promoTargetRows = await loadDiscountTargetRows(db, tenantId, Number(promoRow.discount_id || 0));
+        const promoTargets = buildDiscountProductTargetSets(promoTargetRows);
+
+        if (promoRuntime.rewardType === 'discount') {
+          if (promoRuntime.applyTo === 'order') {
+            const promoOrderDiscount = discountHelpers.calculateDiscount(
+              total,
+              promoRuntime.discountType,
+              promoRuntime.discountValue,
+              promoRow.max_discount_amount ? Number(promoRow.max_discount_amount) : null
+            );
+            if (!(promoOrderDiscount > 0)) {
+              return res.status(409).json({ ok: false, error: 'PROMO_NOT_APPLICABLE' });
+            }
+            total = roundPrice(total - promoOrderDiscount);
+            orderDiscountAmount += promoOrderDiscount;
+            appliedDiscounts.push(buildPromoUsageRecord(promoRow, promoRow, promoOrderDiscount, {
+              apply_to: 'order',
+              discount_type: promoRuntime.discountType,
+              discount_value: promoRuntime.discountValue,
+            }));
+          } else {
+            let promoItemsDiscount = 0;
+
+            for (const item of normItems) {
+              if (item.type === 'combo') continue;
+              const matchesScope = matchDiscountTargetScope(
+                promoTargets,
+                item,
+                productCategoriesMap,
+                promoRuntime.applyTo
+              );
+              if (!matchesScope) continue;
+
+              const baseLineTotal = roundPrice(Number(item.line_total || 0));
+              const promoItemDiscount = discountHelpers.calculateDiscount(
+                baseLineTotal,
+                promoRuntime.discountType,
+                promoRuntime.discountValue,
+                promoRow.max_discount_amount ? Number(promoRow.max_discount_amount) : null
+              );
+              if (!(promoItemDiscount > 0)) continue;
+
+              item.line_total = roundPrice(baseLineTotal - promoItemDiscount);
+              mergeItemDiscountMeta(
+                item,
+                publicDiscountText(promoRow.title) || '\u041f\u0440\u043e\u043c\u043e\u043a\u043e\u0434',
+                promoItemDiscount,
+                item.discount?.original_line_total || baseLineTotal
+              );
+              promoItemsDiscount += promoItemDiscount;
+              appliedDiscounts.push(buildPromoUsageRecord(promoRow, promoRow, promoItemDiscount, {
+                apply_to: promoRuntime.applyTo,
+                discount_type: promoRuntime.discountType,
+                discount_value: promoRuntime.discountValue,
+                product_id: Number(item.product_id || 0) || null,
+              }));
+            }
+
+            if (!(promoItemsDiscount > 0)) {
+              return res.status(409).json({ ok: false, error: 'PROMO_NOT_APPLICABLE' });
+            }
+
+            orderDiscountAmount += promoItemsDiscount;
+            total = roundPrice(total - promoItemsDiscount);
+          }
+        } else if (promoRuntime.productRewardType === 'gift') {
+          const rewardProductIds = [...promoTargets.productIds];
+          if (!rewardProductIds.length) {
+            return res.status(409).json({ ok: false, error: 'PROMO_NOT_APPLICABLE' });
+          }
+
+          const [rewardProducts] = await db.query(
+            `SELECT id, name, price, old_price, photos_json
+               FROM prod_products
+              WHERE tenant_id = ? AND id IN (?) AND is_active = 1 AND site_visibility = 1`,
+            [tenantId, rewardProductIds]
+          );
+
+          const rewardProductsById = new Map(
+            (Array.isArray(rewardProducts) ? rewardProducts : []).map((row) => [Number(row?.id || 0), row])
+          );
+
+          let giftCount = 0;
+          let giftDiscountAmount = 0;
+          for (const rewardProductId of rewardProductIds) {
+            const rewardProduct = rewardProductsById.get(Number(rewardProductId || 0));
+            if (!rewardProduct) continue;
+            giftCount += 1;
+            giftDiscountAmount += Number(rewardProduct.price || 0);
+            let photos = [];
+            try {
+              const parsedPhotos = JSON.parse(rewardProduct.photos_json || '[]');
+              if (Array.isArray(parsedPhotos)) photos = parsedPhotos;
+            } catch {}
+
+            normItems.push({
+              product_id: Number(rewardProduct.id || 0),
+              name: rewardProduct.name,
+              qty: 1,
+              price: 0,
+              old_price: Number(rewardProduct.price || rewardProduct.old_price || 0),
+              line_total: 0,
+              photos,
+              auto_add: 1,
+            });
+          }
+
+          if (!(giftCount > 0)) {
+            return res.status(409).json({ ok: false, error: 'PROMO_NOT_APPLICABLE' });
+          }
+
+          orderDiscountAmount += roundPrice(giftDiscountAmount);
+          appliedDiscounts.push(buildPromoUsageRecord(promoRow, promoRow, giftDiscountAmount, {
+            apply_to: 'gift',
+          }));
+        } else {
+          let rewardItemsDiscount = 0;
+          for (const item of normItems) {
+            if (item.type === 'combo') continue;
+            const matchesReward = matchDiscountTargetScope(
+              promoTargets,
+              item,
+              productCategoriesMap,
+              'any'
+            );
+            if (!matchesReward) continue;
+
+            const baseLineTotal = roundPrice(Number(item.line_total || 0));
+            const rewardDiscount = discountHelpers.calculateDiscount(
+              baseLineTotal,
+              promoRuntime.discountType,
+              promoRuntime.discountValue,
+              promoRow.max_discount_amount ? Number(promoRow.max_discount_amount) : null
+            );
+            if (!(rewardDiscount > 0)) continue;
+
+            item.line_total = roundPrice(baseLineTotal - rewardDiscount);
+            mergeItemDiscountMeta(
+              item,
+              publicDiscountText(promoRow.title) || '\u041f\u0440\u043e\u043c\u043e\u043a\u043e\u0434',
+              rewardDiscount,
+              item.discount?.original_line_total || baseLineTotal
+            );
+            rewardItemsDiscount += rewardDiscount;
+            appliedDiscounts.push(buildPromoUsageRecord(promoRow, promoRow, rewardDiscount, {
+              apply_to: 'product',
+              discount_type: promoRuntime.discountType,
+              discount_value: promoRuntime.discountValue,
+              product_id: Number(item.product_id || 0) || null,
+            }));
+          }
+
+          if (!(rewardItemsDiscount > 0)) {
+            return res.status(409).json({ ok: false, error: 'PROMO_NOT_APPLICABLE' });
+          }
+
+          orderDiscountAmount += rewardItemsDiscount;
+          total = roundPrice(total - rewardItemsDiscount);
+        }
+        }
+      }
+
+      const rewardUsageIds = [
+        Number(selectedRewardDiscountRow?.id || 0),
+        selectedPromoSource === 'reward_promo' ? Number(selectedRewardPromoRow?.id || 0) : 0,
+      ].filter((id) => Number.isInteger(id) && id > 0);
+      const benefitNormItems = normItems.filter((item) => Number(item?.is_gift_reward || 0) !== 1);
+      const loyaltyProgressUpdates = customerId
+        ? customerBenefitDiscountRows
+            .filter((discount) => normalizePublicMechanicType(discount?.mechanic_type) === 'loyalty_progress')
+          .map((discount) => {
+              const mechanic = parsePublicDiscountObject(discount?.mechanic_config_json, {});
+              return {
+                discountId: Number(discount?.id || 0),
+                increment: computeCheckoutLoyaltyProgressIncrement(discount, benefitNormItems, productCategoriesMap),
+                thresholdValue: Number(mechanic?.threshold_value || 0),
+                rewardQty: getPublicProgressRewardQty(mechanic),
+                pendingRewardMode: normalizePublicProgressPendingRewardMode(mechanic?.pending_reward_mode),
+              };
+            })
+            .filter((entry) => entry.discountId > 0 && Number(entry.increment || 0) > 0)
+        : [];
 
       const discountsJson = appliedDiscounts.length > 0 ? JSON.stringify(appliedDiscounts) : null;
 
@@ -7346,17 +12616,17 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         total += deliveryCost;
       }
 
-      // Timezone С„РёР»РёР°Р»Р°, Рє РєРѕС‚РѕСЂРѕРјСѓ РїСЂРёРІСЏР·Р°РЅ Р·Р°РєР°Р· (orderStoreId)
+      // Timezone РЎвЂћР С‘Р В»Р С‘Р В°Р В»Р В°, Р С” Р С”Р С•РЎвЂљР С•РЎР‚Р С•Р СРЎС“ Р С—РЎР‚Р С‘Р Р†РЎРЏР В·Р В°Р Р… Р В·Р В°Р С”Р В°Р В· (orderStoreId)
       const storeTimezone = await getStoreTimezone(tenantId, orderStoreId);
 
-      // РђРґСЂРµСЃ Рё С‚РѕС‡РєР° СЃР°РјРѕРІС‹РІРѕР·Р° РЅСѓР¶РЅС‹ РґР»СЏ РїСЂРѕРІРµСЂРєРё РґСѓР±Р»СЏ (С‡РёС‚Р°РµРј РґРѕ РЅРµС‘)
+      // Р С’Р Т‘РЎР‚Р ВµРЎРѓ Р С‘ РЎвЂљР С•РЎвЂЎР С”Р В° РЎРѓР В°Р СР С•Р Р†РЎвЂ№Р Р†Р С•Р В·Р В° Р Р…РЎС“Р В¶Р Р…РЎвЂ№ Р Т‘Р В»РЎРЏ Р С—РЎР‚Р С•Р Р†Р ВµРЎР‚Р С”Р С‘ Р Т‘РЎС“Р В±Р В»РЎРЏ (РЎвЂЎР С‘РЎвЂљР В°Р ВµР С Р Т‘Р С• Р Р…Р ВµРЎвЂ)
       const deliveryAddress = helpers.strOrNull(req.body.delivery_address);
       const pickupStoreId = Number.isFinite(Number(req.body.pickup_store_id)) ? Number(req.body.pickup_store_id) : null;
       const addrForDup = (deliveryAddress && String(deliveryAddress).trim()) ? String(deliveryAddress).trim() : '';
       const pickupIdForDup = (pickupStoreId && Number.isFinite(pickupStoreId)) ? pickupStoreId : 0;
 
-      // РЎРµСЂРІРµСЂРЅР°СЏ Р·Р°С‰РёС‚Р° РѕС‚ РґСѓР±Р»РµР№ (РґРІРѕР№РЅР°СЏ РѕС‚РїСЂР°РІРєР° / РїРѕРІС‚РѕСЂ Р·Р°РїСЂРѕСЃР°). РћРєРЅРѕ 60 СЃРµРє.
-      // created_at РІ Р‘Р” С…СЂР°РЅРёС‚СЃСЏ РІ UTC вЂ” СЃСЂР°РІРЅРёРІР°РµРј С‚РѕР¶Рµ РІ UTC.
+      // Р РЋР ВµРЎР‚Р Р†Р ВµРЎР‚Р Р…Р В°РЎРЏ Р В·Р В°РЎвЂ°Р С‘РЎвЂљР В° Р С•РЎвЂљ Р Т‘РЎС“Р В±Р В»Р ВµР в„– (Р Т‘Р Р†Р С•Р в„–Р Р…Р В°РЎРЏ Р С•РЎвЂљР С—РЎР‚Р В°Р Р†Р С”Р В° / Р С—Р С•Р Р†РЎвЂљР С•РЎР‚ Р В·Р В°Р С—РЎР‚Р С•РЎРѓР В°). Р С›Р С”Р Р…Р С• 60 РЎРѓР ВµР С”.
+      // created_at Р Р† Р вЂР вЂќ РЎвЂ¦РЎР‚Р В°Р Р…Р С‘РЎвЂљРЎРѓРЎРЏ Р Р† UTC РІР‚вЂќ РЎРѓРЎР‚Р В°Р Р†Р Р…Р С‘Р Р†Р В°Р ВµР С РЎвЂљР С•Р В¶Р Вµ Р Р† UTC.
       const forceNew = req.body.force_new === true || req.body.force_new === 'true';
       if (!forceNew) {
         const dupThresholdStr = helpers.formatUtcDateTime(Date.now() - 60000);
@@ -7399,7 +12669,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
       const comment = helpers.strOrNull(req.body.comment);
       const addressComment = helpers.strOrNull(req.body.address_comment);
-      const promoCode = helpers.strOrNull(req.body.promo_code);
+      const promoCodeForOrder = promoCode || null;
 
       const cutleryQty = Math.max(0, Number(req.body.cutlery_qty || 0));
       const changeFrom = Number.isFinite(Number(req.body.change_from)) ? Number(req.body.change_from) : null;
@@ -7408,13 +12678,16 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
       const publicId = makeUuid36();
 
-      // created_at РІ Р‘Р” СЃРѕС…СЂР°РЅСЏРµРј С‚РѕР»СЊРєРѕ РІ UTC.
+      // created_at Р Р† Р вЂР вЂќ РЎРѓР С•РЎвЂ¦РЎР‚Р В°Р Р…РЎРЏР ВµР С РЎвЂљР С•Р В»РЎРЉР С”Р С• Р Р† UTC.
       const createdAt = helpers.formatUtcDateTime(Date.now());
       let stockDeductedAt = null;
       let stockDocumentId = null;
       let stockChangedProductIds = [];
 
       let orderId = null;
+      if (customerId && (rewardUsageIds.length || loyaltyProgressUpdates.length)) {
+        await ensureDiscountRuntimeTables();
+      }
       const conn = await db.getConnection();
       try {
         await conn.beginTransaction();
@@ -7452,7 +12725,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           }
         }
 
-        // Р’РђР–РќРћ: РЅРёРєР°РєРёС… updated_at С‚СѓС‚ РЅРµС‚ (РІ С‚РІРѕРµР№ С‚Р°Р±Р»РёС†Рµ order_orders РµРіРѕ РЅРµС‚)
+        // Р вЂ™Р С’Р вЂ“Р СњР С›: Р Р…Р С‘Р С”Р В°Р С”Р С‘РЎвЂ¦ updated_at РЎвЂљРЎС“РЎвЂљ Р Р…Р ВµРЎвЂљ (Р Р† РЎвЂљР Р†Р С•Р ВµР в„– РЎвЂљР В°Р В±Р В»Р С‘РЎвЂ Р Вµ order_orders Р ВµР С–Р С• Р Р…Р ВµРЎвЂљ)
         const [r] = await conn.query(
           `INSERT INTO order_orders
            (tenant_id, store_id, customer_id, customer_name, customer_phone, promo_code,
@@ -7468,7 +12741,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             customerId,
             customerName,
             customerPhone,
-            promoCode,
+            promoCodeForOrder,
             addrLine,
             deliveryAddressId,
             pickupStoreId,
@@ -7511,6 +12784,79 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           );
         }
 
+        if (rewardUsageIds.length && customerId) {
+          await conn.query(
+            `UPDATE mkt_discount_rewards
+                SET status = 'used', used_at = NOW(), updated_at = NOW()
+              WHERE tenant_id = ?
+                AND customer_id = ?
+                AND status = 'available'
+                AND id IN (?)`,
+            [tenantId, customerId, rewardUsageIds]
+          );
+        }
+
+        if (loyaltyProgressUpdates.length && customerId) {
+          const [existingProgressRows] = await conn.query(
+            `SELECT discount_id, progress_value, pending_reward_count
+               FROM mkt_discount_progress
+              WHERE tenant_id = ? AND customer_id = ? AND discount_id IN (?)`,
+            [tenantId, customerId, loyaltyProgressUpdates.map((entry) => entry.discountId)]
+          );
+          const existingProgressMap = new Map(
+            (Array.isArray(existingProgressRows) ? existingProgressRows : []).map((row) => [
+              Number(row?.discount_id || 0),
+              row,
+            ])
+          );
+
+          for (const progressUpdate of loyaltyProgressUpdates) {
+            const discountId = Number(progressUpdate?.discountId || 0);
+            if (!(discountId > 0)) continue;
+            const currentRow = existingProgressMap.get(discountId) || null;
+            const currentProgressValue = Number(currentRow?.progress_value || 0);
+            const currentPendingRewardCount = Number(currentRow?.pending_reward_count || 0);
+            const increment = Number(progressUpdate?.increment || 0);
+            const thresholdValue = Number(progressUpdate?.thresholdValue || 0);
+            const rewardQty = getPublicProgressRewardQty({ reward_qty: progressUpdate?.rewardQty });
+            const pendingRewardMode = normalizePublicProgressPendingRewardMode(progressUpdate?.pendingRewardMode);
+            let nextProgressValue = currentProgressValue;
+            let nextPendingRewardCount = currentPendingRewardCount;
+
+            if (!(pendingRewardMode === 'single_pending' && currentPendingRewardCount > 0)) {
+              const rawNextProgressValue = roundPromoMoney(currentProgressValue + increment);
+              const completedBefore = thresholdValue > 0 ? Math.floor(currentProgressValue / thresholdValue) : 0;
+              const completedAfter = thresholdValue > 0 ? Math.floor(rawNextProgressValue / thresholdValue) : 0;
+              const gainedThresholds = Math.max(0, completedAfter - completedBefore);
+              const gainedRewards = gainedThresholds * rewardQty;
+
+              nextProgressValue = rawNextProgressValue;
+              nextPendingRewardCount = Math.max(0, currentPendingRewardCount + gainedRewards);
+
+              if (pendingRewardMode === 'single_pending' && gainedThresholds > 0 && thresholdValue > 0) {
+                nextProgressValue = Math.min(rawNextProgressValue, thresholdValue);
+              }
+            }
+
+            await conn.query(
+              `INSERT INTO mkt_discount_progress
+               (tenant_id, customer_id, discount_id, progress_value, pending_reward_count)
+               VALUES (?, ?, ?, ?, ?)
+               ON DUPLICATE KEY UPDATE
+                 progress_value = VALUES(progress_value),
+                 pending_reward_count = VALUES(pending_reward_count),
+                 updated_at = NOW()`,
+              [
+                tenantId,
+                customerId,
+                discountId,
+                nextProgressValue,
+                nextPendingRewardCount,
+              ]
+            );
+          }
+        }
+
         await conn.commit();
       } catch (txErr) {
         await conn.rollback();
@@ -7526,21 +12872,37 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       }
       conn.release();
 
-      // Р—Р°РїРёСЃС‹РІР°РµРј РёСЃРїРѕР»СЊР·РѕРІР°РЅРёРµ СЃРєРёРґРѕРє
+      // Р вЂ”Р В°Р С—Р С‘РЎРѓРЎвЂ№Р Р†Р В°Р ВµР С Р С‘РЎРѓР С—Р С•Р В»РЎРЉР В·Р С•Р Р†Р В°Р Р…Р С‘Р Вµ РЎРѓР С”Р С‘Р Т‘Р С•Р С”
       res.json({ ok: true, data: { id: orderId, public_id: publicId } });
 
       // Heavy post-actions run in background, response is already sent.
       setImmediate(async () => {
         try {
+          const usageMap = new Map();
           for (const appliedDiscount of appliedDiscounts) {
+            const discountId = Number(appliedDiscount?.discount_id || 0);
+            if (!(discountId > 0)) continue;
+            const promoCodeId = Number(appliedDiscount?.promo_code_id || 0) || 0;
+            const key = `${discountId}:${promoCodeId}`;
+            const usageRecord = usageMap.get(key) || {
+              discount_id: discountId,
+              promo_code_id: promoCodeId || null,
+              discount_amount: 0,
+            };
+            usageRecord.discount_amount += Number(appliedDiscount?.discount_amount || 0);
+            usageMap.set(key, usageRecord);
+          }
+
+          for (const usageRecord of usageMap.values()) {
             try {
               await discountHelpers.recordDiscountUsage(
                 db,
                 tenantId,
-                appliedDiscount.discount_id,
+                usageRecord.discount_id,
                 orderId,
                 customerId,
-                appliedDiscount.discount_amount
+                usageRecord.discount_amount,
+                usageRecord.promo_code_id || null
               );
             } catch (discountErr) {
               console.error('Failed to record discount usage:', discountErr);
@@ -7634,12 +12996,12 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         [storeId, tenantId]
       );
 
-      // РЎРѕР±РёСЂР°РµРј РїСЂРѕРґСѓРєС‚С‹ РґР»СЏ СЂР°СЃС‡С‘С‚Р° display_price
+      // Р РЋР С•Р В±Р С‘РЎР‚Р В°Р ВµР С Р С—РЎР‚Р С•Р Т‘РЎС“Р С”РЎвЂљРЎвЂ№ Р Т‘Р В»РЎРЏ РЎР‚Р В°РЎРѓРЎвЂЎРЎвЂРЎвЂљР В° display_price
       const productIds = [...new Set(rows.map(r => Number(r.product_id)).filter(Boolean))];
       const displayPriceMap = new Map();
 
       if (productIds.length > 0) {
-        // Р¤РѕСЂРјРёСЂСѓРµРј РјР°СЃСЃРёРІ РїСЂРѕРґСѓРєС‚РѕРІ РґР»СЏ enrichProductsWithDisplayPrice
+        // Р В¤Р С•РЎР‚Р СР С‘РЎР‚РЎС“Р ВµР С Р СР В°РЎРѓРЎРѓР С‘Р Р† Р С—РЎР‚Р С•Р Т‘РЎС“Р С”РЎвЂљР С•Р Р† Р Т‘Р В»РЎРЏ enrichProductsWithDisplayPrice
         const productsForEnrich = rows.map(r => ({
           id: Number(r.product_id),
           price: Number(r.product_price || 0),
@@ -7648,7 +13010,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           base_qty: r.product_base_qty,
         }));
 
-        // РЈРґР°Р»СЏРµРј РґСѓР±Р»РёРєР°С‚С‹ РїРѕ id
+        // Р Р€Р Т‘Р В°Р В»РЎРЏР ВµР С Р Т‘РЎС“Р В±Р В»Р С‘Р С”Р В°РЎвЂљРЎвЂ№ Р С—Р С• id
         const uniqueProducts = [];
         const seenIds = new Set();
         for (const p of productsForEnrich) {
@@ -7698,14 +13060,14 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
   /**
    * GET /api/public/delivery-settings
-   * Р’РѕР·РІСЂР°С‰Р°РµС‚ РЅР°СЃС‚СЂРѕР№РєРё РґРѕСЃС‚Р°РІРєРё РґР»СЏ С‚РµРєСѓС‰РµРіРѕ С„РёР»РёР°Р»Р°
+   * Р вЂ™Р С•Р В·Р Р†РЎР‚Р В°РЎвЂ°Р В°Р ВµРЎвЂљ Р Р…Р В°РЎРѓРЎвЂљРЎР‚Р С•Р в„–Р С”Р С‘ Р Т‘Р С•РЎРѓРЎвЂљР В°Р Р†Р С”Р С‘ Р Т‘Р В»РЎРЏ РЎвЂљР ВµР С”РЎС“РЎвЂ°Р ВµР С–Р С• РЎвЂћР С‘Р В»Р С‘Р В°Р В»Р В°
    */
   router.get('/delivery-settings', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
 
-      // РС‰РµРј РЅР°СЃС‚СЂРѕР№РєСѓ РґРѕСЃС‚Р°РІРєРё, РїСЂРёРІСЏР·Р°РЅРЅСѓСЋ Рє С‚РµРєСѓС‰РµРјСѓ С„РёР»РёР°Р»Сѓ
+      // Р ВРЎвЂ°Р ВµР С Р Р…Р В°РЎРѓРЎвЂљРЎР‚Р С•Р в„–Р С”РЎС“ Р Т‘Р С•РЎРѓРЎвЂљР В°Р Р†Р С”Р С‘, Р С—РЎР‚Р С‘Р Р†РЎРЏР В·Р В°Р Р…Р Р…РЎС“РЎР‹ Р С” РЎвЂљР ВµР С”РЎС“РЎвЂ°Р ВµР СРЎС“ РЎвЂћР С‘Р В»Р С‘Р В°Р В»РЎС“
       const [settings] = await db.query(
         `SELECT ds.id, ds.name, ds.delivery_cost, ds.min_order_amount, ds.free_delivery_from, ds.is_active
          FROM ten_delivery_settings ds
@@ -7716,7 +13078,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       );
 
       if (!settings.length) {
-        // РќРµС‚ РЅР°СЃС‚СЂРѕРµРє - РґРѕСЃС‚Р°РІРєР° Р±РµСЃРїР»Р°С‚РЅР°СЏ, Р±РµР· РѕРіСЂР°РЅРёС‡РµРЅРёР№
+        // Р СњР ВµРЎвЂљ Р Р…Р В°РЎРѓРЎвЂљРЎР‚Р С•Р ВµР С” - Р Т‘Р С•РЎРѓРЎвЂљР В°Р Р†Р С”Р В° Р В±Р ВµРЎРѓР С—Р В»Р В°РЎвЂљР Р…Р В°РЎРЏ, Р В±Р ВµР В· Р С•Р С–РЎР‚Р В°Р Р…Р С‘РЎвЂЎР ВµР Р…Р С‘Р в„–
         return res.json({
           ok: true,
           data: {
@@ -7746,4 +13108,3 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
   return router;
 };
-
