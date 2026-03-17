@@ -542,52 +542,60 @@
         <div class="settings-site-form settings-panel-scroll">
           <div class="settings-site-field">
             <label class="field-label">ВАШ ДОМЕН</label>
-            <div class="control-with-action">
-              <input class="control" type="text" placeholder="example.com" data-tenant-input="custom_domain" data-site-input="custom_domain" id="domainInput" />
-              <button class="control-inline-btn" type="button" id="domainAsciiInfoBtn" title="Информация" aria-label="Информация">
-                <i class="fas fa-info-circle"></i>
+            <input class="control" type="text" placeholder="site.ru" data-tenant-input="custom_domain" data-site-input="custom_domain" id="domainInput" />
+            <div class="field-hint hidden" id="domainConnectedHint"></div>
+          </div>
+
+          <div class="settings-site-field">
+            <label class="field-label">КАК ПОДКЛЮЧИТЬ</label>
+            <div class="domain-instructions">
+              <div class="domain-step-list">
+                <div class="domain-step">
+                  <span class="domain-step-index">1</span>
+                  <span class="domain-step-text">Откройте DNS-настройки вашего домена у регистратора.</span>
+                </div>
+                <div class="domain-step">
+                  <span class="domain-step-index">2</span>
+                  <span class="domain-step-text">Создайте две A-записи, как показано ниже.</span>
+                </div>
+                <div class="domain-step">
+                  <span class="domain-step-index">3</span>
+                  <span class="domain-step-text">Вернитесь сюда, нажмите «Проверить домен», а затем «Подключить автоматически».</span>
+                </div>
+              </div>
+
+              <div class="domain-record-list">
+                <div class="domain-record-item">
+                  <span class="domain-record-host">@</span>
+                  <span class="domain-record-type">A</span>
+                  <span class="domain-record-value" id="domainARecordRoot">141.8.198.215</span>
+                  <button class="control-inline-btn" type="button" data-copy-domain-value="domainARecordRoot" title="Скопировать IP" aria-label="Скопировать IP">
+                    <i class="fas fa-copy"></i>
+                  </button>
+                </div>
+                <div class="domain-record-item">
+                  <span class="domain-record-host">www</span>
+                  <span class="domain-record-type">A</span>
+                  <span class="domain-record-value" id="domainARecordWww">141.8.198.215</span>
+                  <button class="control-inline-btn" type="button" data-copy-domain-value="domainARecordWww" title="Скопировать IP" aria-label="Скопировать IP">
+                    <i class="fas fa-copy"></i>
+                  </button>
+                </div>
+              </div>
+              <p class="domain-dns-hint muted">Если DNS обновляется не сразу, подождите несколько минут и повторите проверку.</p>
+            </div>
+          </div>
+
+          <div class="settings-site-field">
+            <div class="domain-action-row">
+              <button class="btn btn-primary btn-sm" type="button" id="domainCheckBtn">
+                <i class="fas fa-sync-alt"></i> Проверить домен
+              </button>
+              <button class="btn btn-primary btn-sm" type="button" id="domainConnectBtn">
+                <i class="fas fa-bolt"></i> Подключить автоматически
               </button>
             </div>
-            <div class="field-hint hidden" id="domainConnectedHint"></div>
-            <div class="field-hint hidden" id="domainAsciiInfoHint"></div>
-          </div>
-
-          <div class="settings-site-field">
-            <label class="field-label">ВАРИАНТ 1: NS-СЕРВЕРЫ</label>
-            <div class="domain-instructions">
-              <p class="domain-dns-hint">Зайдите в панель управления регистратора вашего домена и укажите следующие NS-серверы:</p>
-              <div class="domain-ns-list">
-                <div class="domain-ns-item">
-                  <span class="domain-ns-value" id="domainNs1">ns1.sprinthost.ru</span>
-                  <button class="control-inline-btn" type="button" data-copy-ns="ns1" title="Скопировать"><i class="fas fa-copy"></i></button>
-                </div>
-                <div class="domain-ns-item">
-                  <span class="domain-ns-value" id="domainNs2">ns2.sprinthost.ru</span>
-                  <button class="control-inline-btn" type="button" data-copy-ns="ns2" title="Скопировать"><i class="fas fa-copy"></i></button>
-                </div>
-              </div>
-              <p class="domain-dns-hint muted">Полное делегирование домена. Изменение NS может занять до 24 часов.</p>
-            </div>
-          </div>
-
-          <div class="settings-site-field">
-            <label class="field-label">ВАРИАНТ 2: A-ЗАПИСЬ</label>
-            <div class="domain-instructions">
-              <p class="domain-dns-hint">Если не хотите менять NS-серверы, создайте A-запись у регистратора домена:</p>
-              <div class="domain-ns-list">
-                <div class="domain-ns-item">
-                  <span class="domain-ns-value" id="domainARecord">141.8.192.15</span>
-                  <button class="control-inline-btn" type="button" data-copy-ns="a-record" title="Скопировать"><i class="fas fa-copy"></i></button>
-                </div>
-              </div>
-              <p class="domain-dns-hint muted">Укажите тип записи A, имя @ (или пустое), значение — IP-адрес выше.</p>
-            </div>
-          </div>
-
-          <div class="settings-site-field">
-            <button class="btn btn-primary btn-sm" type="button" id="domainCheckBtn">
-              <i class="fas fa-sync-alt"></i> Проверить подключение
-            </button>
+            <div class="field-hint" id="domainConnectHint">Сначала сохраните домен и пропишите две A-записи.</div>
           </div>
 
           <div class="settings-site-field" id="domainCheckResults">
@@ -595,12 +603,12 @@
             <div class="domain-check-list">
               <div class="domain-check-item" id="domainCheckDns">
                 <span class="domain-check-icon"><i class="fas fa-circle"></i></span>
-                <span class="domain-check-text">DNS-записи</span>
+                <span class="domain-check-text">A-записи</span>
                 <span class="domain-check-status" id="domainCheckDnsStatus"></span>
               </div>
               <div class="domain-check-item" id="domainCheckHttp">
                 <span class="domain-check-icon"><i class="fas fa-circle"></i></span>
-                <span class="domain-check-text">Доступность сайта</span>
+                <span class="domain-check-text">Сайт отвечает</span>
                 <span class="domain-check-status" id="domainCheckHttpStatus"></span>
               </div>
               <div class="domain-check-item" id="domainCheckSsl">

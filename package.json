@@ -6,7 +6,8 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "thumbs": "node scripts/generate-product-thumbs.js",
-    "emoji:atlas": "node scripts/build-emoji-atlas.js"
+    "emoji:atlas": "node scripts/build-emoji-atlas.js",
+    "domain:connect": "node scripts/connect-tenant-domain.js"
   },
   "keywords": [],
   "author": "",

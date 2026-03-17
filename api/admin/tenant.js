@@ -3,6 +3,10 @@ const path = require('path');
 const crypto = require('crypto');
 const multer = require('multer');
 const bcrypt = require('bcryptjs');
+const dns = require('dns').promises;
+const http = require('http');
+const https = require('https');
+const { execFile } = require('child_process');
 const { domainToASCII } = require('url');
 const chatTempRuntime = require('../chatTemp');
 
@@ -55,6 +59,8 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
   let ensureTenantChatColumnsPromise = null;
   let orderDeliveryTypeColumnsReady = false;
   let ensureOrderDeliveryTypeColumnsPromise = null;
+  let tenantDomainsTableReady = false;
+  let ensureTenantDomainsTablePromise = null;
 
   async function publishTenantChatWidgetChanged(tenantId, enabled) {
     try {
@@ -120,6 +126,430 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
     }
 
     return { provided: true, unicode: host, ascii };
+  }
+
+  function firstHeaderValue(raw, fallback = '') {
+    if (!raw) return fallback;
+    if (Array.isArray(raw)) return String(raw[0]).trim();
+    return String(raw).split(',')[0].trim();
+  }
+
+  function parseEnvList(value) {
+    return String(value || '')
+      .split(',')
+      .map((item) => String(item || '').trim())
+      .filter(Boolean);
+  }
+
+  function parseCommandArgs(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return [];
+    if (raw.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          return parsed.map((item) => String(item || '').trim()).filter(Boolean);
+        }
+      } catch (_) {}
+    }
+    return raw.split(/\s+/).map((item) => String(item || '').trim()).filter(Boolean);
+  }
+
+  function getTenantDomainSetup() {
+    const aRecords = parseEnvList(
+      process.env.TENANT_DOMAIN_A_RECORDS
+      || process.env.TENANT_DOMAIN_A_RECORD
+      || '141.8.198.215'
+    );
+    return {
+      a_records: aRecords,
+      auto_connect_enabled: process.env.TENANT_DOMAIN_AUTOCONNECT_ENABLED === '1',
+      auto_connect_include_www: process.env.TENANT_DOMAIN_AUTOCONNECT_INCLUDE_WWW !== '0',
+      check_path: '/.well-known/tenant-domain-check'
+    };
+  }
+
+  function isMissingTenantDomainsTableError(err) {
+    return Boolean(
+      err
+      && (
+        err.code === 'ER_NO_SUCH_TABLE'
+        || /ten_tenant_domains/i.test(String(err.message || ''))
+      )
+    );
+  }
+
+  async function ensureTenantDomainsTable() {
+    if (tenantDomainsTableReady) return;
+    if (ensureTenantDomainsTablePromise) return ensureTenantDomainsTablePromise;
+    ensureTenantDomainsTablePromise = (async () => {
+      try {
+        await db.query(`
+          CREATE TABLE IF NOT EXISTS ten_tenant_domains (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            tenant_id BIGINT UNSIGNED NOT NULL,
+            domain VARCHAR(255) NOT NULL,
+            domain_ascii VARCHAR(255) NOT NULL,
+            is_primary TINYINT(1) NOT NULL DEFAULT 0,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            UNIQUE KEY uq_tenant_domains_ascii (domain_ascii),
+            KEY idx_tenant_domains_tenant (tenant_id),
+            KEY idx_tenant_domains_primary (tenant_id, is_primary, id)
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        `);
+        tenantDomainsTableReady = true;
+      } finally {
+        if (!tenantDomainsTableReady) {
+          ensureTenantDomainsTablePromise = null;
+        }
+      }
+    })();
+    return ensureTenantDomainsTablePromise;
+  }
+
+  function normalizeTenantDomainRow(row) {
+    if (!row || typeof row !== 'object') return null;
+    return {
+      id: Number(row.id || 0) || 0,
+      tenant_id: Number(row.tenant_id || 0) || 0,
+      domain: helpers.strOrNull(row.domain),
+      domain_ascii: helpers.strOrNull(row.domain_ascii),
+      is_primary: Number(row.is_primary) === 1,
+      created_at: row.created_at || null,
+      updated_at: row.updated_at || null
+    };
+  }
+
+  async function getTenantDomainsRaw(tenantId) {
+    await ensureTenantDomainsTable();
+    const [rows] = await db.query(
+      `SELECT id, tenant_id, domain, domain_ascii, is_primary, created_at, updated_at
+       FROM ten_tenant_domains
+       WHERE tenant_id=?
+       ORDER BY is_primary DESC, id ASC`,
+      [tenantId]
+    );
+    return Array.isArray(rows) ? rows.map(normalizeTenantDomainRow).filter(Boolean) : [];
+  }
+
+  async function syncTenantPrimaryDomain(tenantId, options = {}) {
+    await ensureTenantDomainsTable();
+    const providedLegacyDomain = Object.prototype.hasOwnProperty.call(options, 'legacyDomain')
+      ? helpers.strOrNull(options.legacyDomain)
+      : undefined;
+    const providedLegacyAscii = Object.prototype.hasOwnProperty.call(options, 'legacyAscii')
+      ? helpers.strOrNull(options.legacyAscii)
+      : undefined;
+
+    let legacyDomain = providedLegacyDomain;
+    let legacyAscii = providedLegacyAscii;
+    if (legacyDomain === undefined || legacyAscii === undefined) {
+      const [tenantRows] = await db.query(
+        'SELECT custom_domain, custom_domain_ascii FROM ten_tenants WHERE id=? LIMIT 1',
+        [tenantId]
+      );
+      const currentTenant = tenantRows[0] || {};
+      if (legacyDomain === undefined) legacyDomain = helpers.strOrNull(currentTenant.custom_domain);
+      if (legacyAscii === undefined) legacyAscii = helpers.strOrNull(currentTenant.custom_domain_ascii);
+    }
+
+    if (legacyAscii) {
+      const [sameDomainRows] = await db.query(
+        'SELECT id, tenant_id FROM ten_tenant_domains WHERE domain_ascii=? LIMIT 1',
+        [legacyAscii]
+      );
+      const sameDomain = sameDomainRows[0] || null;
+      if (!sameDomain) {
+        await db.query(
+          'INSERT INTO ten_tenant_domains (tenant_id, domain, domain_ascii, is_primary) VALUES (?, ?, ?, 0)',
+          [tenantId, legacyDomain || legacyAscii, legacyAscii]
+        );
+      } else if (Number(sameDomain.tenant_id) === Number(tenantId)) {
+        await db.query(
+          'UPDATE ten_tenant_domains SET domain=? WHERE id=?',
+          [legacyDomain || legacyAscii, sameDomain.id]
+        );
+      }
+    }
+
+    let domains = await getTenantDomainsRaw(tenantId);
+    if (!domains.length) {
+      await db.query(
+        'UPDATE ten_tenants SET custom_domain=NULL, custom_domain_ascii=NULL WHERE id=?',
+        [tenantId]
+      );
+      return [];
+    }
+
+    let primary = domains.find((item) => item.is_primary) || null;
+    if (!primary && legacyAscii) {
+      primary = domains.find((item) => item.domain_ascii === legacyAscii) || null;
+    }
+    if (!primary) primary = domains[0] || null;
+
+    await db.query(
+      'UPDATE ten_tenant_domains SET is_primary = CASE WHEN id=? THEN 1 ELSE 0 END WHERE tenant_id=?',
+      [primary.id, tenantId]
+    );
+    await db.query(
+      'UPDATE ten_tenants SET custom_domain=?, custom_domain_ascii=? WHERE id=?',
+      [primary.domain || primary.domain_ascii, primary.domain_ascii, tenantId]
+    );
+
+    domains = domains.map((item) => ({
+      ...item,
+      is_primary: Number(item.id) === Number(primary.id)
+    }));
+    domains.sort((a, b) => {
+      if (a.is_primary && !b.is_primary) return -1;
+      if (!a.is_primary && b.is_primary) return 1;
+      return Number(a.id || 0) - Number(b.id || 0);
+    });
+    return domains;
+  }
+
+  async function ensureTenantDomainAvailable(tenantId, domainAscii, ignoreId = null) {
+    await ensureTenantDomainsTable();
+    const params = [domainAscii];
+    let sql = 'SELECT id, tenant_id FROM ten_tenant_domains WHERE domain_ascii=?';
+    if (ignoreId !== null && ignoreId !== undefined) {
+      sql += ' AND id<>?';
+      params.push(ignoreId);
+    }
+    sql += ' LIMIT 1';
+    const [domainRows] = await db.query(sql, params);
+    const takenDomain = domainRows[0] || null;
+    if (takenDomain && Number(takenDomain.tenant_id) !== Number(tenantId)) {
+      return false;
+    }
+    const [legacyRows] = await db.query(
+      'SELECT id FROM ten_tenants WHERE custom_domain_ascii=? AND id<>? LIMIT 1',
+      [domainAscii, tenantId]
+    );
+    return legacyRows.length === 0;
+  }
+
+  async function addOrReuseTenantDomain(tenantId, normalizedDomain, options = {}) {
+    await ensureTenantDomainsTable();
+    const makePrimary = Boolean(options.makePrimary);
+    const includeDomain = normalizedDomain && normalizedDomain.provided && normalizedDomain.ascii;
+    if (!includeDomain) {
+      throw new Error('INVALID_CUSTOM_DOMAIN');
+    }
+
+    const domainUnicode = normalizedDomain.unicode || normalizedDomain.ascii;
+    const domainAscii = normalizedDomain.ascii;
+    const available = await ensureTenantDomainAvailable(tenantId, domainAscii);
+    if (!available) {
+      const err = new Error('CUSTOM_DOMAIN_TAKEN');
+      err.code = 'CUSTOM_DOMAIN_TAKEN';
+      throw err;
+    }
+
+    const [existingRows] = await db.query(
+      'SELECT id FROM ten_tenant_domains WHERE tenant_id=? AND domain_ascii=? LIMIT 1',
+      [tenantId, domainAscii]
+    );
+    let domainId = existingRows[0] ? Number(existingRows[0].id) : 0;
+    if (domainId > 0) {
+      await db.query(
+        'UPDATE ten_tenant_domains SET domain=? WHERE id=?',
+        [domainUnicode, domainId]
+      );
+    } else {
+      const [insertResult] = await db.query(
+        'INSERT INTO ten_tenant_domains (tenant_id, domain, domain_ascii, is_primary) VALUES (?, ?, ?, 0)',
+        [tenantId, domainUnicode, domainAscii]
+      );
+      domainId = Number(insertResult.insertId || 0);
+    }
+
+    const existingTenantDomains = await getTenantDomainsRaw(tenantId);
+    const shouldMakePrimary = makePrimary || existingTenantDomains.length === 1;
+    if (shouldMakePrimary && domainId > 0) {
+      await db.query(
+        'UPDATE ten_tenant_domains SET is_primary = CASE WHEN id=? THEN 1 ELSE 0 END WHERE tenant_id=?',
+        [domainId, tenantId]
+      );
+    }
+
+    const domains = await syncTenantPrimaryDomain(tenantId);
+    return domains.find((item) => Number(item.id) === Number(domainId)) || null;
+  }
+
+  async function removeTenantDomain(tenantId, domainId) {
+    await ensureTenantDomainsTable();
+    await db.query(
+      'DELETE FROM ten_tenant_domains WHERE tenant_id=? AND id=? LIMIT 1',
+      [tenantId, domainId]
+    );
+    return syncTenantPrimaryDomain(tenantId);
+  }
+
+  async function setPrimaryTenantDomain(tenantId, domainId) {
+    await ensureTenantDomainsTable();
+    await db.query(
+      'UPDATE ten_tenant_domains SET is_primary = CASE WHEN id=? THEN 1 ELSE 0 END WHERE tenant_id=?',
+      [domainId, tenantId]
+    );
+    return syncTenantPrimaryDomain(tenantId);
+  }
+
+  async function buildTenantResponse(tenant, req) {
+    if (!tenant) return null;
+    const domains = await syncTenantPrimaryDomain(Number(tenant.id), {
+      legacyDomain: tenant.custom_domain,
+      legacyAscii: tenant.custom_domain_ascii
+    });
+    const primaryDomain = domains.find((item) => item.is_primary) || null;
+    const nextTenant = {
+      ...tenant,
+      custom_domain: primaryDomain ? (primaryDomain.domain || primaryDomain.domain_ascii) : null,
+      custom_domain_ascii: primaryDomain ? primaryDomain.domain_ascii : null
+    };
+    const forwardedProto = req.headers['x-forwarded-proto'];
+    const forwardedHost = req.headers['x-forwarded-host'];
+    const protocol = firstHeaderValue(forwardedProto, req.protocol || 'https');
+    const hostHeader = firstHeaderValue(forwardedHost, req.get('host') || 'localhost:3000');
+    const baseUrl = `${protocol}://${hostHeader}`;
+    return {
+      ...nextTenant,
+      domains,
+      primary_domain_id: primaryDomain ? Number(primaryDomain.id) : null,
+      telegram_mini_app_url: `${baseUrl}/tg-app?tenant_id=${tenant.id}`,
+      max_mini_app_url: `${baseUrl}/max-app?tenant_id=${tenant.id}`,
+      domain_setup: getTenantDomainSetup()
+    };
+  }
+
+  function requestRemote(protocol, options) {
+    const client = protocol === 'https' ? https : http;
+    return new Promise((resolve, reject) => {
+      const req = client.request(options, (res) => {
+        const chunks = [];
+        res.on('data', (chunk) => chunks.push(chunk));
+        res.on('end', () => {
+          resolve({
+            statusCode: Number(res.statusCode || 0),
+            headers: res.headers || {},
+            body: Buffer.concat(chunks).toString('utf8')
+          });
+        });
+      });
+      req.on('error', reject);
+      req.setTimeout(Number(options.timeout || 5000), () => {
+        req.destroy(new Error('timeout'));
+      });
+      req.end();
+    });
+  }
+
+  async function performTenantDomainCheck({ tenantId, domainAscii }) {
+    const result = {
+      dns: false,
+      http: false,
+      ssl: false,
+      dns_detail: '',
+      http_detail: '',
+      ssl_detail: ''
+    };
+    const setup = getTenantDomainSetup();
+    const expectedARecords = Array.isArray(setup.a_records) ? setup.a_records : [];
+    let resolvedAddresses = [];
+
+    try {
+      resolvedAddresses = await dns.resolve4(domainAscii);
+      const matchingAddress = resolvedAddresses.find((address) => expectedARecords.includes(address));
+      if (matchingAddress) {
+        result.dns = true;
+        result.dns_detail = `A-записи настроены: ${resolvedAddresses.join(', ')}`;
+      } else {
+        result.dns_detail = expectedARecords.length
+          ? `Ожидаем IP ${expectedARecords.join(', ')}`
+          : `Найдены IP: ${resolvedAddresses.join(', ')}`;
+      }
+    } catch (e) {
+      result.dns_detail = e && e.code === 'ENOTFOUND' ? 'A-запись не найдена' : 'Не удалось проверить A-запись';
+    }
+
+    if (result.dns) {
+      try {
+        const httpResponse = await requestRemote('http', {
+          hostname: domainAscii,
+          port: 80,
+          path: '/',
+          timeout: 5000
+        });
+        if (httpResponse.statusCode >= 200 && httpResponse.statusCode < 400) {
+          result.http = true;
+          result.http_detail = httpResponse.statusCode >= 300
+            ? 'Есть редирект на сайт'
+            : 'Сайт отвечает';
+        } else {
+          result.http_detail = `HTTP ${httpResponse.statusCode}`;
+        }
+      } catch (e) {
+        result.http_detail = e && e.message === 'timeout' ? 'Сайт не ответил вовремя' : 'Сайт недоступен';
+      }
+
+      try {
+        const httpsResponse = await requestRemote('https', {
+          hostname: domainAscii,
+          port: 443,
+          path: setup.check_path,
+          timeout: 5000,
+          rejectUnauthorized: true
+        });
+        let payload = null;
+        try {
+          payload = JSON.parse(String(httpsResponse.body || '{}'));
+        } catch (_) {}
+        if (
+          httpsResponse.statusCode >= 200
+          && httpsResponse.statusCode < 300
+          && payload
+          && payload.ok
+          && Number(payload.tenant_id) === Number(tenantId)
+        ) {
+          result.ssl = true;
+          result.ssl_detail = 'Сертификат активен';
+        } else {
+          result.ssl_detail = 'Сертификат еще не готов';
+        }
+      } catch (e) {
+        result.ssl_detail = 'Сертификат еще не готов';
+      }
+    } else {
+      result.http_detail = 'Сначала настройте A-записи';
+      result.ssl_detail = 'Сначала настройте A-записи';
+    }
+
+    return result;
+  }
+
+  function runTenantDomainAutoconnect({ domainAscii, includeWww }) {
+    const runnerBin = String(process.env.TENANT_DOMAIN_AUTOCONNECT_RUNNER || '').trim();
+    const runnerArgs = parseCommandArgs(process.env.TENANT_DOMAIN_AUTOCONNECT_RUNNER_ARGS);
+    const scriptPath = path.join(process.cwd(), 'scripts', 'connect-tenant-domain.js');
+    const command = runnerBin || process.execPath;
+    const args = runnerBin
+      ? runnerArgs.slice()
+      : [scriptPath];
+    args.push(`--domain=${domainAscii}`);
+    if (includeWww) args.push('--include-www');
+    return new Promise((resolve, reject) => {
+      execFile(command, args, { timeout: 180000, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
+        if (err) {
+          err.stdout = stdout;
+          err.stderr = stderr;
+          reject(err);
+          return;
+        }
+        resolve({ stdout, stderr });
+      });
+    });
   }
 
   function normalizeChatAssistantGender(value) {
@@ -843,6 +1273,8 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
         return res.status(404).json({ ok: false, error: 'TENANT_NOT_FOUND' });
       }
 
+      return res.json({ ok: true, tenant: await buildTenantResponse(rows[0], req) });
+
       const tenant = rows[0];
 
       // Вычисляем ссылку для Telegram mini app без хранения в БД.
@@ -901,6 +1333,8 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       const siteName = req.body.site_name !== undefined ? helpers.strOrNull(req.body.site_name) : undefined;
       const siteDescription = req.body.site_description !== undefined ? helpers.strOrNull(req.body.site_description) : undefined;
       const subdomain = req.body.subdomain !== undefined ? normalizeSubdomain(req.body.subdomain) : undefined;
+      await ensureTenantDomainsTable();
+
       const customDomainNormalized = normalizeCustomDomain(req.body.custom_domain);
       if (customDomainNormalized.invalid) {
         return res.status(400).json({ ok: false, error: 'INVALID_CUSTOM_DOMAIN' });
@@ -1167,11 +1601,8 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       }
 
       if (customDomainNormalized.provided && nextCustomDomainAscii) {
-        const [existsDomain] = await db.query(
-          'SELECT id FROM ten_tenants WHERE custom_domain_ascii=? AND id<>? LIMIT 1',
-          [nextCustomDomainAscii, tenantId]
-        );
-        if (existsDomain.length > 0) {
+        const domainAvailable = await ensureTenantDomainAvailable(tenantId, nextCustomDomainAscii);
+        if (!domainAvailable) {
           return res.status(409).json({ ok: false, error: 'CUSTOM_DOMAIN_TAKEN' });
         }
       }
@@ -1203,7 +1634,26 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
         await publishTenantChatWidgetChanged(tenantId, nextChatWidgetEnabledResolved);
       }
 
-      res.json({ ok: true, tenant: rows[0] || null });
+      if (customDomainNormalized.provided) {
+        if (nextCustomDomainAscii) {
+          await addOrReuseTenantDomain(tenantId, customDomainNormalized, { makePrimary: true });
+        } else if (helpers.strOrNull(current.custom_domain_ascii)) {
+          const [currentDomainRows] = await db.query(
+            'SELECT id FROM ten_tenant_domains WHERE tenant_id=? AND domain_ascii=? LIMIT 1',
+            [tenantId, current.custom_domain_ascii]
+          );
+          if (currentDomainRows.length > 0) {
+            await removeTenantDomain(tenantId, Number(currentDomainRows[0].id));
+          } else {
+            await db.query(
+              'UPDATE ten_tenants SET custom_domain=NULL, custom_domain_ascii=NULL WHERE id=?',
+              [tenantId]
+            );
+          }
+        }
+      }
+
+      res.json({ ok: true, tenant: await buildTenantResponse(rows[0] || null, req) });
     } catch (err) {
       console.error('Ошибка обновления tenant профиля:', err);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
@@ -2521,9 +2971,15 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
   // ───────── Проверка подключения домена ─────────
   router.post('/check-domain', async (req, res) => {
     try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
       const normalized = normalizeCustomDomain(req.body.domain);
       const domain = normalized.ascii || '';
       if (!domain) return res.json({ ok: false, error: 'NO_DOMAIN' });
+
+      return res.json({
+        ok: true,
+        result: await performTenantDomainCheck({ tenantId, domainAscii: domain })
+      });
 
       const dns = require('dns').promises;
       const http = require('http');
@@ -2590,6 +3046,82 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
     } catch (err) {
       console.error('check-domain error:', err);
       res.status(500).json({ ok: false, error: 'CHECK_FAILED' });
+    }
+  });
+
+  router.post('/connect-domain', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      if (!tenantId) {
+        return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+      }
+
+      const setup = getTenantDomainSetup();
+      if (!setup.auto_connect_enabled) {
+        return res.status(403).json({ ok: false, error: 'AUTO_CONNECT_DISABLED' });
+      }
+
+      const [rows] = await db.query(
+        'SELECT * FROM ten_tenants WHERE id=? LIMIT 1',
+        [tenantId]
+      );
+      if (!rows.length) {
+        return res.status(404).json({ ok: false, error: 'TENANT_NOT_FOUND' });
+      }
+
+      const current = rows[0];
+      const normalized = req.body.domain !== undefined
+        ? normalizeCustomDomain(req.body.domain)
+        : { provided: false };
+      if (normalized.invalid) {
+        return res.status(400).json({ ok: false, error: 'INVALID_CUSTOM_DOMAIN' });
+      }
+
+      const nextDomain = normalized.provided ? normalized.unicode : helpers.strOrNull(current.custom_domain);
+      const nextDomainAscii = normalized.provided ? normalized.ascii : helpers.strOrNull(current.custom_domain_ascii);
+      if (!nextDomainAscii) {
+        return res.status(400).json({ ok: false, error: 'NO_DOMAIN' });
+      }
+
+      const [existsDomain] = await db.query(
+        'SELECT id FROM ten_tenants WHERE custom_domain_ascii=? AND id<>? LIMIT 1',
+        [nextDomainAscii, tenantId]
+      );
+      if (existsDomain.length > 0) {
+        return res.status(409).json({ ok: false, error: 'CUSTOM_DOMAIN_TAKEN' });
+      }
+
+      if (normalized.provided) {
+        await db.query(
+          'UPDATE ten_tenants SET custom_domain=?, custom_domain_ascii=? WHERE id=?',
+          [nextDomain, nextDomainAscii, tenantId]
+        );
+      }
+
+      const precheck = await performTenantDomainCheck({ tenantId, domainAscii: nextDomainAscii });
+      if (!precheck.dns) {
+        return res.status(409).json({ ok: false, error: 'DOMAIN_DNS_NOT_READY', result: precheck });
+      }
+
+      const automation = await runTenantDomainAutoconnect({
+        domainAscii: nextDomainAscii,
+        includeWww: setup.auto_connect_include_www
+      });
+
+      const [updatedRows] = await db.query(
+        'SELECT * FROM ten_tenants WHERE id=? LIMIT 1',
+        [tenantId]
+      );
+
+      return res.json({
+        ok: true,
+        tenant: buildTenantResponse(updatedRows[0] || null, req),
+        result: await performTenantDomainCheck({ tenantId, domainAscii: nextDomainAscii }),
+        automation
+      });
+    } catch (err) {
+      console.error('connect-domain error:', err);
+      return res.status(500).json({ ok: false, error: 'CONNECT_FAILED' });
     }
   });
 

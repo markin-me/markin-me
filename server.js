@@ -617,6 +617,14 @@ app.use(async (req, res, next) => {
       return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
     }
 
+    if (
+      route === '/login'
+      || route === '/register'
+      || route.startsWith('/dashboard')
+    ) {
+      return res.redirect(302, '/');
+    }
+
     return renderShop(req, res);
   } catch (err) {
     console.error('Admin host guard error:', err);
@@ -942,6 +950,29 @@ app.get('/sw.js', (req, res) => {
   res.setHeader('Content-Type', 'application/javascript');
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   res.send(serviceWorkerScript);
+});
+
+app.get('/.well-known/tenant-domain-check', async (req, res) => {
+  try {
+    const hostAscii = normalizeHostForMatch(req.hostname);
+    const tenant = await findTenantByHost(hostAscii);
+    if (!tenant) {
+      return res.status(404).json({ ok: false, error: 'TENANT_NOT_FOUND' });
+    }
+    return res.json({
+      ok: true,
+      host: req.hostname,
+      host_ascii: hostAscii,
+      tenant_id: Number(tenant.id),
+      tenant_name: tenant.name || null,
+      custom_domain: tenant.custom_domain || null,
+      custom_domain_ascii: tenant.custom_domain_ascii || null,
+      subdomain: tenant.subdomain || null
+    });
+  } catch (err) {
+    console.error('tenant-domain-check error:', err);
+    return res.status(500).json({ ok: false, error: 'CHECK_FAILED' });
+  }
 });
 
 app.use(async (req, res, next) => {

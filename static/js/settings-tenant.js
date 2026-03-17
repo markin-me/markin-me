@@ -97,6 +97,7 @@
   let activeStoreId = getActiveStoreIdFromStorage();
   let tenantStockDeductMode = "on_create";
   let tenantStockDeductStatusId = null;
+  let domainSetup = null;
   let domainDraftMode = false;
   let domainCancelConfirm = false;
   let domainOriginalValue = "";
@@ -235,12 +236,54 @@
   var _shopUrl = "";
 
   function updateShopLink(tenant) {
+    const customDomain = tenant && tenant.custom_domain ? String(tenant.custom_domain).trim() : "";
     const subdomain = tenant && tenant.subdomain ? String(tenant.subdomain).trim() : "";
     const protocol = window.location.protocol || "http:";
     const hostname = String(window.location.hostname || "");
     const isLocal = hostname.endsWith("localhost");
     const port = isLocal && window.location.port ? `:${window.location.port}` : "";
+    if (customDomain) {
+      _shopUrl = `${protocol}//${customDomain}${port}`;
+      return;
+    }
     _shopUrl = subdomain ? `${protocol}//${subdomain}.${hostname}${port}` : "";
+  }
+
+  function normalizeDomainList(value) {
+    if (Array.isArray(value)) {
+      return value.map((item) => String(item || "").trim()).filter(Boolean);
+    }
+    if (typeof value === "string") {
+      return value
+        .split(",")
+        .map((item) => String(item || "").trim())
+        .filter(Boolean);
+    }
+    return [];
+  }
+
+  function applyDomainSetup(tenant) {
+    domainSetup = tenant && tenant.domain_setup ? tenant.domain_setup : null;
+    const aRecords = normalizeDomainList(domainSetup && domainSetup.a_records);
+    const primaryARecord = aRecords[0] || "141.8.198.215";
+    const aRootEl = document.getElementById("domainARecordRoot");
+    const aWwwEl = document.getElementById("domainARecordWww");
+    const connectBtn = document.getElementById("domainConnectBtn");
+    const connectHint = document.getElementById("domainConnectHint");
+    const autoConnectEnabled = !!(domainSetup && domainSetup.auto_connect_enabled);
+
+    if (aRootEl) aRootEl.textContent = primaryARecord;
+    if (aWwwEl) aWwwEl.textContent = primaryARecord;
+    if (connectBtn) connectBtn.disabled = !autoConnectEnabled || !domainOriginalValue;
+    if (connectHint) {
+      if (!autoConnectEnabled) {
+        connectHint.textContent = "Автоподключение домена временно недоступно.";
+      } else if (domainOriginalValue) {
+        connectHint.textContent = "Сначала нажмите «Проверить домен», затем «Подключить автоматически».";
+      } else {
+        connectHint.textContent = "Сначала сохраните домен и пропишите две A-записи.";
+      }
+    }
   }
 
   async function updateTenantFields(payload) {
@@ -395,6 +438,7 @@
       }
       domainOriginalValue = String(tenant.custom_domain || "");
       domainAsciiValue = String(tenant.custom_domain_ascii || "");
+      applyDomainSetup(tenant);
       const settingsPriceRoundingModeInput = document.getElementById("settingsPriceRoundingMode");
       const settingsPriceRoundingPrecisionInput = document.getElementById("settingsPriceRoundingPrecision");
       if (settingsPriceRoundingModeInput && !settingsPriceRoundingModeInput.value) {
@@ -2182,9 +2226,8 @@
     }
 
     function renderDomainViewState() {
-      const asciiViewValue = domainAsciiValue || toAsciiHostForDisplay(domainOriginalValue);
       if (domainInputEl) {
-        domainInputEl.value = asciiViewValue || domainOriginalValue || "";
+        domainInputEl.value = domainOriginalValue || domainAsciiValue || "";
       }
       if (domainConnectedHintEl) {
         if (domainOriginalValue) {
@@ -2262,6 +2305,7 @@
           updateShopLink(data.tenant);
           domainOriginalValue = String(data.tenant.custom_domain || "");
           domainAsciiValue = String(data.tenant.custom_domain_ascii || toAsciiHostForDisplay(domainOriginalValue) || "");
+          applyDomainSetup(data.tenant);
         } else {
           domainOriginalValue = value;
           domainAsciiValue = toAsciiHostForDisplay(domainOriginalValue);
@@ -2941,12 +2985,12 @@
       });
     }
 
-    // NS copy buttons
-    document.querySelectorAll("[data-copy-ns]").forEach(function (btn) {
+    document.querySelectorAll("[data-copy-domain-value]").forEach(function (btn) {
       btn.addEventListener("click", function () {
-        var nsEl = btn.previousElementSibling;
-        if (!nsEl) return;
-        navigator.clipboard.writeText(nsEl.textContent.trim()).then(function () {
+        var targetId = btn.getAttribute("data-copy-domain-value");
+        var valueEl = targetId ? document.getElementById(targetId) : null;
+        if (!valueEl) return;
+        navigator.clipboard.writeText(valueEl.textContent.trim()).then(function () {
           var icon = btn.querySelector("i");
           if (icon) {
             icon.className = "fas fa-check";
@@ -2959,6 +3003,8 @@
     // Domain check button
     (function () {
       var checkBtn = document.getElementById("domainCheckBtn");
+      var connectBtn = document.getElementById("domainConnectBtn");
+      var connectHint = document.getElementById("domainConnectHint");
       var resultsBlock = document.getElementById("domainCheckResults");
       var domainInput = document.getElementById("domainInput");
       if (!checkBtn || !resultsBlock || !domainInput) return;
@@ -2969,7 +3015,10 @@
         var icon = item.querySelector(".domain-check-icon");
         var status = item.querySelector(".domain-check-status");
         if (icon) { icon.className = "domain-check-icon is-" + state; }
-        if (status) { status.textContent = statusText || ""; }
+        if (status) {
+          status.textContent = statusText || "";
+          status.classList.toggle("is-strong", state === "ok");
+        }
       }
 
       checkBtn.addEventListener("click", async function () {
@@ -2985,10 +3034,8 @@
         if (btnIcon) btnIcon.className = "fas fa-spinner fa-spin";
 
         try {
-          var token = typeof getAuthToken === "function" ? getAuthToken() : null;
-          var res = await fetch("/api/admin/tenant/check-domain", {
+          var res = await authFetch("/api/admin/tenant/check-domain", {
             method: "POST",
-            headers: Object.assign({ "Content-Type": "application/json" }, token ? { Authorization: "Bearer " + token } : {}),
             body: JSON.stringify({ domain: domain })
           });
           var data = await res.json();
@@ -2997,6 +3044,18 @@
             setCheckState("domainCheckDns", r.dns ? "ok" : "fail", r.dns ? r.dns_detail : r.dns_detail);
             setCheckState("domainCheckHttp", r.http ? "ok" : "fail", r.http_detail);
             setCheckState("domainCheckSsl", r.ssl ? "ok" : "fail", r.ssl_detail);
+            if (connectHint) {
+              if (r.ssl) {
+                connectHint.textContent = "Домен уже подключен и работает по HTTPS.";
+              } else if (r.dns) {
+                connectHint.textContent = "DNS найден. Теперь нажмите «Подключить автоматически».";
+              } else {
+                connectHint.textContent = "Сначала пропишите две A-записи у регистратора домена.";
+              }
+            }
+            if (connectBtn && domainSetup && domainSetup.auto_connect_enabled) {
+              connectBtn.disabled = !r.dns;
+            }
           } else {
             setCheckState("domainCheckDns", "fail", "Ошибка проверки");
             setCheckState("domainCheckHttp", "fail", "Ошибка проверки");
@@ -3009,6 +3068,69 @@
         }
         checkBtn.disabled = false;
         if (btnIcon) btnIcon.className = "fas fa-sync-alt";
+      });
+    })();
+
+    (function () {
+      var connectBtn = document.getElementById("domainConnectBtn");
+      var connectHint = document.getElementById("domainConnectHint");
+      var domainInput = document.getElementById("domainInput");
+      var checkBtn = document.getElementById("domainCheckBtn");
+      if (!connectBtn || !domainInput) return;
+
+      connectBtn.addEventListener("click", async function () {
+        var domain = String(domainInput.value || "").trim();
+        if (!domain || domainDraftMode) {
+          alert("Сначала сохраните домен.");
+          return;
+        }
+
+        var originalHtml = connectBtn.innerHTML;
+        connectBtn.disabled = true;
+        connectBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Подключаем';
+        if (connectHint) {
+          connectHint.textContent = "Подключаем домен и выпускаем сертификат. Это может занять пару минут.";
+        }
+
+        try {
+          var res = await authFetch("/api/admin/tenant/connect-domain", {
+            method: "POST",
+            body: JSON.stringify({ domain: domain })
+          });
+          var data = await res.json();
+          if (!data || !data.ok) {
+            if (connectHint) {
+              connectHint.textContent = data && data.error === "DOMAIN_DNS_NOT_READY"
+                ? "Сначала пропишите две A-записи и дождитесь обновления DNS."
+                : "Не удалось подключить домен автоматически.";
+            }
+            alert(data && data.error ? String(data.error) : "Не удалось подключить домен автоматически.");
+            return;
+          }
+          if (data.tenant) {
+            updateTenantCache(data.tenant);
+            applyBrandFromTenant(data.tenant);
+            updateShopLink(data.tenant);
+            domainOriginalValue = String(data.tenant.custom_domain || "");
+            domainAsciiValue = String(data.tenant.custom_domain_ascii || toAsciiHostForDisplay(domainOriginalValue) || "");
+            applyDomainSetup(data.tenant);
+            renderDomainViewState();
+          }
+          if (connectHint) {
+            connectHint.textContent = "Домен подключен. Финально проверяем сайт и сертификат.";
+          }
+          if (checkBtn) checkBtn.click();
+        } catch (err) {
+          if (connectHint) {
+            connectHint.textContent = "Не удалось подключить домен автоматически.";
+          }
+          alert("Не удалось подключить домен автоматически.");
+        } finally {
+          connectBtn.innerHTML = originalHtml;
+          if (domainSetup && domainSetup.auto_connect_enabled) {
+            connectBtn.disabled = false;
+          }
+        }
       });
     })();
 
