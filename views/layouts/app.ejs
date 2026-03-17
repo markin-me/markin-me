@@ -6,6 +6,8 @@
   <%
     const appManifestStartPath = typeof currentPath === 'string' && currentPath ? currentPath : '/dashboard/cash';
     const appManifestTitle = typeof pageTitle === 'string' && pageTitle.trim() ? pageTitle.trim() : 'Админка';
+    const appPageStyles = Array.isArray(typeof pageStyles !== 'undefined' ? pageStyles : null) ? pageStyles : [];
+    const appPageScripts = Array.isArray(typeof pageScripts !== 'undefined' ? pageScripts : null) ? pageScripts : [];
     const appManifestHref = manifestUrl({
       appType: 'admin',
       startPath: appManifestStartPath,
@@ -52,8 +54,8 @@
 
   <link rel="stylesheet" href="<%= assetUrl('/static/css/style.css') %>" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
-  <% if (Array.isArray(pageStyles)) { %>
-    <% pageStyles.forEach(function (src) { %>
+  <% if (appPageStyles.length) { %>
+    <% appPageStyles.forEach(function (src) { %>
       <link rel="stylesheet" href="<%= assetUrl(src) %>" />
     <% }) %>
   <% } %>
@@ -392,8 +394,8 @@
     })();
   </script>
 
-  <% if (Array.isArray(pageScripts)) { %>
-    <% pageScripts.forEach(function (src) { %>
+  <% if (appPageScripts.length) { %>
+    <% appPageScripts.forEach(function (src) { %>
       <script src="<%= assetUrl(src) %>"></script>
     <% }) %>
   <% } %>

@@ -22,24 +22,15 @@ const {
   writeSystemSettings,
   getBootstrappedPollingState,
   getEffectiveTelegramBotConfig,
-  getEffectiveMapProviderConfig,
-  getEffectiveDeliveryZonePolygonConfig,
   normalizeTelegramBotUsername,
   normalizeTelegramBotToken,
   normalizeTelegramWebhookUrl,
-  normalizeMapProviderName,
-  normalizeMapTileUrl,
-  normalizeMapAttribution,
-  normalizeMapMaxZoom,
-  normalizeMapSubdomains,
-  normalizeMapGeocoderProviderName,
-  normalizeMapGeocoderSearchUrl,
-  normalizeMapGeocoderCountryCode,
-  normalizeMapGeocoderLanguage,
-  normalizeMapGeocoderResultLimit,
-  normalizeMapStoreAddressEnabled,
-  normalizeDeliveryZonePolygonProvider,
 } = require('./data/system-settings');
+const {
+  getTenantMapConfig,
+  normalizeTenantMapConfig,
+  saveTenantMapConfig,
+} = require('./data/tenant-map-config');
 const { searchSystemMapGeocoder, searchSystemAddressSuggest } = require('./data/map-geocoder');
 const { searchLocalAddressSuggest } = require('./data/local-address-index');
 const {
@@ -100,31 +91,6 @@ function nowMs() {
 
 function hasOwn(target, key) {
   return Boolean(target) && Object.prototype.hasOwnProperty.call(target, key);
-}
-
-function isAbsoluteHttpUrl(value) {
-  try {
-    const parsed = new URL(String(value || '').trim());
-    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
-  } catch (_) {
-    return false;
-  }
-}
-
-function isValidMapTileUrl(value) {
-  const raw = String(value || '').trim();
-  if (!raw) return false;
-  if (!raw.includes('{z}') || !raw.includes('{x}') || !raw.includes('{y}')) return false;
-  const candidate = raw
-    .replace('{s}', 'a')
-    .replace('{z}', '0')
-    .replace('{x}', '0')
-    .replace('{y}', '0');
-  return isAbsoluteHttpUrl(candidate);
-}
-
-function isValidGeocoderSearchUrl(value) {
-  return isAbsoluteHttpUrl(value);
 }
 
 function buildMapGeocoderScopeLabel(scope, countryCode) {
@@ -352,14 +318,6 @@ Object.assign(runtimePollingState, getBootstrappedPollingState(runtimePollingSta
 
 function getSystemTelegramConfig(sourceState = readSystemSettings()) {
   return getEffectiveTelegramBotConfig(sourceState);
-}
-
-function getSystemMapConfig(sourceState = readSystemSettings()) {
-  return getEffectiveMapProviderConfig(sourceState);
-}
-
-function getSystemDeliveryZonePolygonConfig(sourceState = readSystemSettings()) {
-  return getEffectiveDeliveryZonePolygonConfig(sourceState);
 }
 
 async function removeTelegramWebhook(token) {
@@ -800,10 +758,14 @@ async function isTenantHost(req) {
 async function renderShop(req, res) {
   try {
     const tenant = req._resolvedTenant || await resolveTenant(req);
+    const mapConfig = normalizeTenantMapConfig(tenant);
+    const tenantView = tenant && typeof tenant === 'object'
+      ? { ...tenant, store_address_map_enabled: Boolean(mapConfig.store_address_map_enabled) }
+      : tenant;
 
     const pageTitle = (tenant && (tenant.site_name || tenant.name)) ? (tenant.site_name || tenant.name) : 'Магазин';
-    const tenantId = tenant && tenant.id ? tenant.id : 1;
-    res.render('pages/shop', { pageTitle, tenant, tenantId });
+    const tenantId = tenantView && tenantView.id ? tenantView.id : 1;
+    res.render('pages/shop', { pageTitle, tenant: tenantView, tenantId });
   } catch (err) {
     console.error('Ошибка загрузки страницы:', err);
     res.status(500).send('Ошибка загрузки страницы');
@@ -1495,182 +1457,115 @@ app.put('/api/admin/system/telegram-bot', authMiddleware, async (req, res) => {
   });
 });
 
-app.get('/api/admin/system/map-provider', authMiddleware, (req, res) => {
-  return res.json({
-    ok: true,
-    data: getSystemMapConfig(),
-  });
+app.get('/api/admin/system/map-provider', authMiddleware, async (req, res) => {
+  try {
+    const tenantId = helpers.getTenantId(req);
+    const config = await getTenantMapConfig(db, tenantId);
+    if (!config) {
+      return res.status(404).json({ ok: false, error: 'TENANT_NOT_FOUND' });
+    }
+    return res.json({
+      ok: true,
+      data: config,
+    });
+  } catch (err) {
+    console.error('Tenant system map config load error:', err);
+    return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+  }
 });
 
-app.get('/api/admin/system/delivery-zone-polygon', authMiddleware, (req, res) => {
-  return res.json({
-    ok: true,
-    data: getSystemDeliveryZonePolygonConfig(),
-  });
+app.get('/api/admin/system/delivery-zone-polygon', authMiddleware, async (req, res) => {
+  try {
+    const tenantId = helpers.getTenantId(req);
+    const config = await getTenantMapConfig(db, tenantId);
+    if (!config) {
+      return res.status(404).json({ ok: false, error: 'TENANT_NOT_FOUND' });
+    }
+    return res.json({
+      ok: true,
+      data: {
+        delivery_zone_polygon_provider: config.delivery_zone_polygon_provider,
+        delivery_zone_polygon_enabled: Boolean(config.store_address_map_enabled),
+      },
+    });
+  } catch (err) {
+    console.error('Tenant delivery zone polygon config load error:', err);
+    return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+  }
 });
 
-app.put('/api/admin/system/map-provider', authMiddleware, (req, res) => {
-  const body = req.body || {};
-  const hasProviderName = hasOwn(body, 'provider_name');
-  const hasTileUrl = hasOwn(body, 'tile_url');
-  const hasAttribution = hasOwn(body, 'attribution');
-  const hasMaxZoom = hasOwn(body, 'max_zoom');
-  const hasSubdomains = hasOwn(body, 'subdomains');
-  const hasGeocoderProviderName = hasOwn(body, 'geocoder_provider_name');
-  const hasGeocoderSearchUrl = hasOwn(body, 'geocoder_search_url');
-  const hasGeocoderCountryCode = hasOwn(body, 'geocoder_country_code');
-  const hasGeocoderLanguage = hasOwn(body, 'geocoder_language');
-  const hasGeocoderResultLimit = hasOwn(body, 'geocoder_result_limit');
-  const hasStoreAddressMapEnabled = hasOwn(body, 'store_address_map_enabled');
-  const hasDeliveryZonePolygonProvider = hasOwn(body, 'delivery_zone_polygon_provider');
+app.put('/api/admin/system/map-provider', authMiddleware, async (req, res) => {
+  try {
+    const tenantId = helpers.getTenantId(req);
+    const saveResult = await saveTenantMapConfig(db, tenantId, req.body || {});
+    if (!saveResult.ok) {
+      const status = saveResult.error === 'TENANT_NOT_FOUND' ? 404 : 400;
+      return res.status(status).json({ ok: false, error: saveResult.error || 'BAD_REQUEST' });
+    }
 
-  if (
-    !hasProviderName
-    && !hasTileUrl
-    && !hasAttribution
-    && !hasMaxZoom
-    && !hasSubdomains
-    && !hasGeocoderProviderName
-    && !hasGeocoderSearchUrl
-    && !hasGeocoderCountryCode
-    && !hasGeocoderLanguage
-    && !hasGeocoderResultLimit
-    && !hasStoreAddressMapEnabled
-    && !hasDeliveryZonePolygonProvider
-  ) {
-    return res.status(400).json({ ok: false, error: 'NO_FIELDS' });
+    const [tenantRows] = await db.query('SELECT * FROM ten_tenants WHERE id=? LIMIT 1', [tenantId]);
+    if (tenantRows[0]) {
+      cacheTenantRecord(tenantRows[0]);
+    }
+
+    return res.json({
+      ok: true,
+      data: saveResult.data,
+    });
+  } catch (err) {
+    console.error('Tenant system map config save error:', err);
+    return res.status(500).json({ ok: false, error: 'DB_ERROR' });
   }
-
-  const currentConfig = getSystemMapConfig();
-  const providerName = hasProviderName
-    ? normalizeMapProviderName(body.provider_name)
-    : currentConfig.provider_name;
-  const tileUrl = hasTileUrl
-    ? normalizeMapTileUrl(body.tile_url)
-    : currentConfig.tile_url;
-  const attribution = hasAttribution
-    ? normalizeMapAttribution(body.attribution)
-    : currentConfig.attribution;
-  const maxZoom = hasMaxZoom
-    ? normalizeMapMaxZoom(body.max_zoom)
-    : currentConfig.max_zoom;
-  const subdomains = hasSubdomains
-    ? normalizeMapSubdomains(body.subdomains)
-    : currentConfig.subdomains;
-  const geocoderProviderName = hasGeocoderProviderName
-    ? normalizeMapGeocoderProviderName(body.geocoder_provider_name)
-    : currentConfig.geocoder_provider_name;
-  const geocoderSearchUrl = hasGeocoderSearchUrl
-    ? normalizeMapGeocoderSearchUrl(body.geocoder_search_url)
-    : currentConfig.geocoder_search_url;
-  const geocoderCountryCode = hasGeocoderCountryCode
-    ? normalizeMapGeocoderCountryCode(body.geocoder_country_code)
-    : currentConfig.geocoder_country_code;
-  const geocoderLanguage = hasGeocoderLanguage
-    ? normalizeMapGeocoderLanguage(body.geocoder_language)
-    : currentConfig.geocoder_language;
-  const geocoderResultLimit = hasGeocoderResultLimit
-    ? normalizeMapGeocoderResultLimit(body.geocoder_result_limit)
-    : currentConfig.geocoder_result_limit;
-  const storeAddressMapEnabled = hasStoreAddressMapEnabled
-    ? normalizeMapStoreAddressEnabled(body.store_address_map_enabled)
-    : Boolean(currentConfig.store_address_map_enabled);
-  const deliveryZonePolygonProvider = hasDeliveryZonePolygonProvider
-    ? normalizeDeliveryZonePolygonProvider(body.delivery_zone_polygon_provider)
-    : normalizeDeliveryZonePolygonProvider(currentConfig.delivery_zone_polygon_provider);
-  const hasTileConfig = Boolean(providerName || tileUrl || attribution || subdomains);
-  const hasGeocoderConfig = Boolean(geocoderProviderName || geocoderSearchUrl);
-
-  if (hasTileConfig) {
-    if (!tileUrl) {
-      return res.status(400).json({ ok: false, error: 'TILE_URL_REQUIRED' });
-    }
-    if (!isValidMapTileUrl(tileUrl)) {
-      return res.status(400).json({ ok: false, error: 'INVALID_TILE_URL' });
-    }
-    if (maxZoom == null || maxZoom < 0 || maxZoom > 22) {
-      return res.status(400).json({ ok: false, error: 'INVALID_MAX_ZOOM' });
-    }
-  }
-
-  if (hasGeocoderConfig) {
-    if (!geocoderSearchUrl) {
-      return res.status(400).json({ ok: false, error: 'GEOCODER_SEARCH_URL_REQUIRED' });
-    }
-    if (!isValidGeocoderSearchUrl(geocoderSearchUrl)) {
-      return res.status(400).json({ ok: false, error: 'INVALID_GEOCODER_SEARCH_URL' });
-    }
-    if (geocoderResultLimit == null || geocoderResultLimit < 1 || geocoderResultLimit > 10) {
-      return res.status(400).json({ ok: false, error: 'INVALID_GEOCODER_RESULT_LIMIT' });
-    }
-  }
-
-  const savedState = writeSystemSettings(
-    {
-      provider_name: providerName,
-      tile_url: tileUrl,
-      attribution,
-      max_zoom: maxZoom,
-      subdomains,
-      geocoder_provider_name: geocoderProviderName,
-      geocoder_search_url: geocoderSearchUrl,
-      geocoder_country_code: geocoderCountryCode,
-      geocoder_language: geocoderLanguage,
-      geocoder_result_limit: geocoderResultLimit,
-      store_address_map_enabled: storeAddressMapEnabled,
-      delivery_zone_polygon_provider: deliveryZonePolygonProvider,
-      delivery_zone_polygon_enabled: storeAddressMapEnabled,
-    },
-    { defaults: runtimePollingState }
-  );
-
-  if (!savedState) {
-    return res.status(500).json({ ok: false, error: 'SYSTEM_SETTINGS_WRITE_FAILED' });
-  }
-
-  return res.json({
-    ok: true,
-    data: getSystemMapConfig(savedState),
-  });
 });
 
-app.put('/api/admin/system/delivery-zone-polygon', authMiddleware, (req, res) => {
-  const body = req.body || {};
-  const hasProvider = hasOwn(body, 'delivery_zone_polygon_provider');
-  const hasEnabled = hasOwn(body, 'delivery_zone_polygon_enabled');
+app.put('/api/admin/system/delivery-zone-polygon', authMiddleware, async (req, res) => {
+  try {
+    const body = req.body || {};
+    const hasProvider = hasOwn(body, 'delivery_zone_polygon_provider');
+    const hasEnabled = hasOwn(body, 'delivery_zone_polygon_enabled');
 
-  if (!hasProvider && !hasEnabled) {
-    return res.status(400).json({ ok: false, error: 'NO_FIELDS' });
+    if (!hasProvider && !hasEnabled) {
+      return res.status(400).json({ ok: false, error: 'NO_FIELDS' });
+    }
+
+    const payload = {};
+    if (hasProvider) {
+      payload.delivery_zone_polygon_provider = body.delivery_zone_polygon_provider;
+    }
+    if (hasEnabled) {
+      payload.store_address_map_enabled = body.delivery_zone_polygon_enabled;
+    }
+
+    const tenantId = helpers.getTenantId(req);
+    const saveResult = await saveTenantMapConfig(db, tenantId, payload);
+    if (!saveResult.ok) {
+      const status = saveResult.error === 'TENANT_NOT_FOUND' ? 404 : 400;
+      return res.status(status).json({ ok: false, error: saveResult.error || 'BAD_REQUEST' });
+    }
+
+    const [tenantRows] = await db.query('SELECT * FROM ten_tenants WHERE id=? LIMIT 1', [tenantId]);
+    if (tenantRows[0]) {
+      cacheTenantRecord(tenantRows[0]);
+    }
+
+    return res.json({
+      ok: true,
+      data: {
+        delivery_zone_polygon_provider: saveResult.data.delivery_zone_polygon_provider,
+        delivery_zone_polygon_enabled: Boolean(saveResult.data.store_address_map_enabled),
+      },
+    });
+  } catch (err) {
+    console.error('Tenant delivery zone polygon config save error:', err);
+    return res.status(500).json({ ok: false, error: 'DB_ERROR' });
   }
-
-  const currentConfig = getSystemDeliveryZonePolygonConfig();
-  const currentMapConfig = getSystemMapConfig();
-  const provider = hasProvider
-    ? normalizeDeliveryZonePolygonProvider(body.delivery_zone_polygon_provider)
-    : currentConfig.delivery_zone_polygon_provider;
-  const enabled = Boolean(currentMapConfig.store_address_map_enabled);
-
-  const savedState = writeSystemSettings(
-    {
-      delivery_zone_polygon_provider: provider,
-      delivery_zone_polygon_enabled: enabled,
-    },
-    { defaults: runtimePollingState }
-  );
-
-  if (!savedState) {
-    return res.status(500).json({ ok: false, error: 'SYSTEM_SETTINGS_WRITE_FAILED' });
-  }
-
-  return res.json({
-    ok: true,
-    data: getSystemDeliveryZonePolygonConfig(savedState),
-  });
 });
 
 app.get('/api/admin/system/map-geocode', authMiddleware, async (req, res) => {
   const query = String((req.query && req.query.q) || '').trim();
-  const result = await searchSystemMapGeocoder(query);
+  const tenantId = helpers.getTenantId(req);
+  const tenantMapConfig = await getTenantMapConfig(db, tenantId);
+  const result = await searchSystemMapGeocoder(query, { sourceState: tenantMapConfig || {} });
   if (!result || !result.ok) {
     const error = result && result.error ? result.error : 'GEOCODER_UPSTREAM_ERROR';
     const status = error === 'QUERY_REQUIRED' || error === 'GEOCODER_NOT_CONFIGURED' ? 400 : 502;
@@ -1684,7 +1579,13 @@ app.get('/api/admin/system/address-suggest', authMiddleware, async (req, res) =>
   const query = String((req.query && req.query.q) || '').trim();
   const city = String((req.query && req.query.city) || '').trim();
   const street = String((req.query && req.query.street) || '').trim();
-  const result = await searchSystemAddressSuggest(stage, query, { city, street });
+  const tenantId = helpers.getTenantId(req);
+  const tenantMapConfig = await getTenantMapConfig(db, tenantId);
+  const result = await searchSystemAddressSuggest(stage, query, {
+    city,
+    street,
+    sourceState: tenantMapConfig || {},
+  });
   if (!result || !result.ok) {
     const error = result && result.error ? result.error : 'GEOCODER_UPSTREAM_ERROR';
     const status = (

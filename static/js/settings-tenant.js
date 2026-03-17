@@ -2379,6 +2379,27 @@
       }
     }
 
+    async function syncStoreAddressModeFromTenantConfig(forceReload = false) {
+      if (systemMapDraftMode) {
+        storeAddressMapModeCache = Boolean(systemMapDraft && systemMapDraft.store_address_map_enabled);
+        applyStoreAddressModeUi();
+        syncStoreAddressInputAvailability();
+        return storeAddressMapModeCache;
+      }
+      let config = null;
+      if (!forceReload && deliveryMapConfigCache) {
+        config = normalizeSystemMapConfig(deliveryMapConfigCache);
+      } else {
+        const data = await fetchTenantMapConfig();
+        config = normalizeSystemMapConfig(data && data.data ? data.data : null);
+        deliveryMapConfigCache = { ...config };
+      }
+      storeAddressMapModeCache = Boolean(config && config.store_address_map_enabled);
+      applyStoreAddressModeUi();
+      syncStoreAddressInputAvailability();
+      return storeAddressMapModeCache;
+    }
+
     function parseMapSubdomains(value) {
       const raw = String(value || "").trim();
       if (!raw) return [];
@@ -3502,11 +3523,13 @@
 
     async function ensureStoreAddressMapConfig() {
       if (deliveryMapConfigCache) {
+        storeAddressMapModeCache = Boolean(deliveryMapConfigCache.store_address_map_enabled);
         return deliveryMapConfigCache;
       }
       const data = await fetchTenantMapConfig();
       const config = normalizeSystemMapConfig(data && data.data ? data.data : null);
       deliveryMapConfigCache = { ...config };
+      storeAddressMapModeCache = Boolean(config.store_address_map_enabled);
       return config;
     }
 
@@ -8579,6 +8602,7 @@
     }
 
     async function loadStores() {
+      await syncStoreAddressModeFromTenantConfig();
       const data = await fetchStores();
       if (!data || !data.ok) return;
       const items = Array.isArray(data.stores) ? data.stores : [];
@@ -9815,6 +9839,9 @@
     const settingsDeliveryZoneSubtitle = document.getElementById("settingsDeliveryZoneSubtitle");
     const settingsDeliveryMapConfigSubtitle = document.getElementById("settingsDeliveryMapConfigSubtitle");
     const settingsDeliveryName = document.getElementById("settingsDeliveryName");
+    const settingsDeliveryEtaMinutes = document.getElementById("settingsDeliveryEtaMinutes");
+    const settingsDeliveryPriceTiers = document.getElementById("settingsDeliveryPriceTiers");
+    const settingsDeliveryAddTierBtn = document.getElementById("settingsDeliveryAddTierBtn");
     const settingsDeliveryCost = document.getElementById("settingsDeliveryCost");
     const settingsDeliveryMinOrder = document.getElementById("settingsDeliveryMinOrder");
     const settingsDeliveryFreeFrom = document.getElementById("settingsDeliveryFreeFrom");
@@ -10320,17 +10347,49 @@
       const source = setting && typeof setting === "object" ? setting : {};
       const normalizedId = Number(source.id);
       const defaultStoreId = source.default_store_id == null ? null : Number(source.default_store_id);
+      const etaMinutes = source.eta_minutes == null || source.eta_minutes === "" ? null : Number(source.eta_minutes);
+      const priceTiers = Array.isArray(source.price_tiers) && source.price_tiers.length
+        ? source.price_tiers.map((tier) => ({
+          min_order_amount: tier && tier.min_order_amount != null ? Number(tier.min_order_amount) || 0 : 0,
+          delivery_cost: tier && tier.delivery_cost != null ? Number(tier.delivery_cost) || 0 : 0,
+          sort_order: tier && tier.sort_order != null ? Number(tier.sort_order) || 0 : 0,
+        }))
+        : [
+          {
+            min_order_amount: source.min_order_amount == null ? 0 : Number(source.min_order_amount) || 0,
+            delivery_cost: source.delivery_cost == null ? 0 : Number(source.delivery_cost) || 0,
+            sort_order: 0,
+          },
+          ...(source.free_delivery_from == null ? [] : [{
+            min_order_amount: Number(source.free_delivery_from) || 0,
+            delivery_cost: 0,
+            sort_order: 1,
+          }]),
+        ];
+      priceTiers.sort((left, right) => {
+        if (left.min_order_amount !== right.min_order_amount) {
+          return left.min_order_amount - right.min_order_amount;
+        }
+        if ((left.sort_order || 0) !== (right.sort_order || 0)) {
+          return (left.sort_order || 0) - (right.sort_order || 0);
+        }
+        return left.delivery_cost - right.delivery_cost;
+      });
+      const firstTier = priceTiers[0] || { min_order_amount: 0, delivery_cost: 0 };
+      const freeTier = priceTiers.find((tier) => Number(tier.delivery_cost || 0) <= 0) || null;
       return {
         ...source,
         id: Number.isFinite(normalizedId) ? normalizedId : 0,
-        delivery_cost: source.delivery_cost == null ? 0 : Number(source.delivery_cost) || 0,
-        min_order_amount: source.min_order_amount == null ? 0 : Number(source.min_order_amount) || 0,
-        free_delivery_from: source.free_delivery_from == null ? null : Number(source.free_delivery_from) || 0,
+        eta_minutes: Number.isFinite(etaMinutes) ? etaMinutes : null,
+        delivery_cost: Number(firstTier.delivery_cost || 0),
+        min_order_amount: Number(firstTier.min_order_amount || 0),
+        free_delivery_from: freeTier ? Number(freeTier.min_order_amount || 0) : null,
         is_active: Number(source.is_active) === 1 ? 1 : 0,
         default_store_id: Number.isFinite(defaultStoreId) && defaultStoreId > 0 ? defaultStoreId : null,
         store_ids: Array.isArray(source.store_ids)
           ? source.store_ids.map((value) => Number(value)).filter((value) => Number.isFinite(value) && value > 0)
-          : []
+          : [],
+        price_tiers: priceTiers,
       };
     }
 
@@ -10338,24 +10397,30 @@
       const normalized = normalizeDeliverySetting(setting);
       return {
         name: String(normalized.name || ""),
+        eta_minutes: normalized.eta_minutes == null ? "" : String(normalized.eta_minutes),
         delivery_cost: normalized.delivery_cost ? String(normalized.delivery_cost) : "",
         min_order_amount: normalized.min_order_amount ? String(normalized.min_order_amount) : "",
         free_delivery_from: normalized.free_delivery_from == null ? "" : String(normalized.free_delivery_from),
         is_active: Number(normalized.is_active) === 1,
         store_ids: Array.isArray(normalized.store_ids) ? normalized.store_ids.slice() : [],
-        default_store_id: normalized.default_store_id
+        default_store_id: normalized.default_store_id,
+        price_tiers: Array.isArray(normalized.price_tiers) && normalized.price_tiers.length
+          ? normalized.price_tiers.map((tier) => cloneDeliveryZoneTierDraft(tier))
+          : [createEmptyDeliveryZoneTierDraft()],
       };
     }
 
     function createEmptyDeliveryDraft() {
       return {
         name: "",
+        eta_minutes: "",
         delivery_cost: "",
         min_order_amount: "",
         free_delivery_from: "",
         is_active: true,
         store_ids: [],
-        default_store_id: null
+        default_store_id: null,
+        price_tiers: [createEmptyDeliveryZoneTierDraft()],
       };
     }
 
@@ -10363,12 +10428,16 @@
       const source = draft && typeof draft === "object" ? draft : {};
       return {
         name: String(source.name || ""),
+        eta_minutes: String(source.eta_minutes ?? ""),
         delivery_cost: String(source.delivery_cost || ""),
         min_order_amount: String(source.min_order_amount || ""),
         free_delivery_from: String(source.free_delivery_from || ""),
         is_active: Boolean(source.is_active),
         store_ids: Array.isArray(source.store_ids) ? source.store_ids.slice() : [],
-        default_store_id: source.default_store_id == null ? null : Number(source.default_store_id)
+        default_store_id: source.default_store_id == null ? null : Number(source.default_store_id),
+        price_tiers: Array.isArray(source.price_tiers) && source.price_tiers.length
+          ? source.price_tiers.map((tier) => cloneDeliveryZoneTierDraft(tier))
+          : [createEmptyDeliveryZoneTierDraft()],
       };
     }
 
@@ -10442,6 +10511,30 @@
       return tab.mode === "create" ? "Новая настройка" : "Настройка доставки";
     }
 
+    function syncDeliveryDraftLegacyFields(draft) {
+      const normalized = normalizeDeliverySetting({
+        delivery_cost: draft && draft.delivery_cost,
+        min_order_amount: draft && draft.min_order_amount,
+        free_delivery_from: draft && draft.free_delivery_from,
+        price_tiers: draft && draft.price_tiers,
+      });
+      if (settingsDeliveryCost) settingsDeliveryCost.value = normalized.delivery_cost ? String(normalized.delivery_cost) : "";
+      if (settingsDeliveryMinOrder) settingsDeliveryMinOrder.value = normalized.min_order_amount ? String(normalized.min_order_amount) : "";
+      if (settingsDeliveryFreeFrom) settingsDeliveryFreeFrom.value = normalized.free_delivery_from == null ? "" : String(normalized.free_delivery_from);
+    }
+
+    function formatDeliverySettingTierSummary(setting) {
+      const normalized = normalizeDeliverySetting(setting);
+      const tiers = Array.isArray(normalized.price_tiers) ? normalized.price_tiers : [];
+      if (!tiers.length) return "Нет тарифов";
+      const firstTier = tiers[0] || {};
+      const minOrder = Number(firstTier.min_order_amount) || 0;
+      const deliveryCost = Number(firstTier.delivery_cost) || 0;
+      return minOrder > 0
+        ? `От ${minOrder} ₽ -> ${deliveryCost} ₽`
+        : `${deliveryCost} ₽ доставка`;
+    }
+
     function getDeliveryTabByKey(key) {
       return deliveryTabsState.tabs.find((tab) => String(tab && tab.key || "") === String(key || "")) || null;
     }
@@ -10487,15 +10580,19 @@
     }
 
     function readDeliveryFormDraft() {
-      return {
+      const draft = {
         name: String(settingsDeliveryName && settingsDeliveryName.value || ""),
+        eta_minutes: String(settingsDeliveryEtaMinutes && settingsDeliveryEtaMinutes.value || ""),
         delivery_cost: String(settingsDeliveryCost && settingsDeliveryCost.value || ""),
         min_order_amount: String(settingsDeliveryMinOrder && settingsDeliveryMinOrder.value || ""),
         free_delivery_from: String(settingsDeliveryFreeFrom && settingsDeliveryFreeFrom.value || ""),
         is_active: Boolean(settingsDeliveryActive && settingsDeliveryActive.checked),
         store_ids: getSelectedDeliveryStoreIds(),
-        default_store_id: getSelectedDefaultDeliveryStoreId()
+        default_store_id: getSelectedDefaultDeliveryStoreId(),
+        price_tiers: readDeliverySettingPriceTiersFromDom()
       };
+      syncDeliveryDraftLegacyFields(draft);
+      return draft;
     }
 
     function applyDeliveryFormDraft(tab) {
@@ -10512,11 +10609,32 @@
         settingsDeliveryDeleteBtn.classList.toggle("hidden", !tab || tab.mode === "create");
       }
       if (settingsDeliveryName) settingsDeliveryName.value = draft.name;
+      if (settingsDeliveryEtaMinutes) settingsDeliveryEtaMinutes.value = draft.eta_minutes;
       if (settingsDeliveryCost) settingsDeliveryCost.value = draft.delivery_cost;
       if (settingsDeliveryMinOrder) settingsDeliveryMinOrder.value = draft.min_order_amount;
       if (settingsDeliveryFreeFrom) settingsDeliveryFreeFrom.value = draft.free_delivery_from;
       if (settingsDeliveryActive) settingsDeliveryActive.checked = Boolean(draft.is_active);
+      renderDeliverySettingPriceTiers(draft.price_tiers);
+      syncDeliveryDraftLegacyFields(draft);
       renderDeliveryStoresCheckboxes(draft.store_ids, draft.default_store_id);
+    }
+
+    function updateActiveDeliveryDraft(patch = {}, options = {}) {
+      const activeTab = getActiveDeliveryTab();
+      if (!activeTab || isDeliveryZoneTab(activeTab) || isDeliveryMapConfigTab(activeTab)) return null;
+      const nextDraft = {
+        ...cloneDeliveryDraft(activeTab.draft || createEmptyDeliveryDraft()),
+        ...patch,
+      };
+      activeTab.draft = cloneDeliveryDraft(nextDraft);
+      syncDeliveryDraftLegacyFields(activeTab.draft);
+      if (options.renderTiers) {
+        renderDeliverySettingPriceTiers(activeTab.draft.price_tiers);
+      }
+      if (options.refreshTabs) {
+        renderDeliveryTabs();
+      }
+      return activeTab.draft;
     }
 
     function persistActiveDeliveryDraft() {
@@ -10585,8 +10703,10 @@
 
         const subtitle = document.createElement("div");
         subtitle.className = "delivery-home-card-meta";
-        const costText = normalized.delivery_cost > 0 ? `${normalized.delivery_cost} ₽` : "Бесплатно";
-        subtitle.textContent = `${costText} • ${normalized.store_ids.length} филиал(ов)`;
+        const etaText = normalized.eta_minutes != null && normalized.eta_minutes !== ""
+          ? `${normalized.eta_minutes} мин`
+          : "Без времени";
+        subtitle.textContent = `${formatDeliverySettingTierSummary(normalized)} • ${etaText}`;
 
         const action = document.createElement("div");
         action.className = "delivery-home-card-action";
@@ -10784,6 +10904,7 @@
           : "Без времени";
         subtitle.textContent = `${formatDeliveryZoneTierSummary(normalized)} • ${etaText}`;
 
+
         const action = document.createElement("div");
         action.className = "delivery-home-card-action";
 
@@ -10881,6 +11002,47 @@
         .map((row) => ({
           min_order_amount: String((row.querySelector('[data-zone-tier-field=\"min_order_amount\"]') || {}).value || ""),
           delivery_cost: String((row.querySelector('[data-zone-tier-field=\"delivery_cost\"]') || {}).value || "")
+        }));
+    }
+
+    function renderDeliverySettingPriceTiers(items) {
+      if (!settingsDeliveryPriceTiers) return;
+      const list = Array.isArray(items) && items.length ? items : [createEmptyDeliveryZoneTierDraft()];
+      settingsDeliveryPriceTiers.innerHTML = "";
+
+      list.forEach((tier, index) => {
+        const row = document.createElement("div");
+        row.className = "settings-delivery-zone-tier-row";
+        row.setAttribute("data-delivery-tier-row", String(index));
+
+        const minField = document.createElement("div");
+        minField.className = "settings-site-field";
+        minField.innerHTML = `<label class="field-label">ОТ СУММЫ</label><input class="control" type="number" min="0" step="1" data-delivery-tier-field="min_order_amount" value="${String(tier && tier.min_order_amount != null ? tier.min_order_amount : "")}">`;
+
+        const costField = document.createElement("div");
+        costField.className = "settings-site-field";
+        costField.innerHTML = `<label class="field-label">СТОИМОСТЬ ДОСТАВКИ</label><input class="control" type="number" min="0" step="1" data-delivery-tier-field="delivery_cost" value="${String(tier && tier.delivery_cost != null ? tier.delivery_cost : "")}">`;
+
+        const removeBtn = document.createElement("button");
+        removeBtn.type = "button";
+        removeBtn.className = "btn btn-secondary settings-delivery-zone-tier-remove";
+        removeBtn.setAttribute("data-delivery-tier-remove", String(index));
+        removeBtn.setAttribute("aria-label", "Удалить порог");
+        removeBtn.innerHTML = '<i class="fas fa-times"></i>';
+
+        row.appendChild(minField);
+        row.appendChild(costField);
+        row.appendChild(removeBtn);
+        settingsDeliveryPriceTiers.appendChild(row);
+      });
+    }
+
+    function readDeliverySettingPriceTiersFromDom() {
+      if (!settingsDeliveryPriceTiers) return [];
+      return Array.from(settingsDeliveryPriceTiers.querySelectorAll("[data-delivery-tier-row]"))
+        .map((row) => ({
+          min_order_amount: String((row.querySelector('[data-delivery-tier-field=\"min_order_amount\"]') || {}).value || ""),
+          delivery_cost: String((row.querySelector('[data-delivery-tier-field=\"delivery_cost\"]') || {}).value || "")
         }));
     }
 
@@ -11784,9 +11946,11 @@
 
         const subtitle = document.createElement("div");
         subtitle.className = "muted";
-        const costText = setting.delivery_cost > 0 ? `${setting.delivery_cost} ₽` : "Бесплатно";
-        const storesCount = Array.isArray(setting.store_ids) ? setting.store_ids.length : 0;
-        subtitle.textContent = `${costText} • ${storesCount} филиал(ов)`;
+        const normalized = normalizeDeliverySetting(setting);
+        const etaText = normalized.eta_minutes != null && normalized.eta_minutes !== ""
+          ? `${normalized.eta_minutes} мин`
+          : "Без времени";
+        subtitle.textContent = `${formatDeliverySettingTierSummary(normalized)} • ${etaText}`;
 
         info.appendChild(title);
         info.appendChild(subtitle);
@@ -11868,6 +12032,19 @@
         const currentDefault = settingsDeliveryDefaultStore && settingsDeliveryDefaultStore.value ? Number(settingsDeliveryDefaultStore.value) : null;
         const keepDefault = currentDefault != null && selected.includes(currentDefault) ? currentDefault : null;
         updateDeliveryDefaultStoreSelect(selected, keepDefault);
+        updateActiveDeliveryDraft({
+          store_ids: selected,
+          default_store_id: keepDefault,
+        });
+      });
+    }
+
+    if (settingsDeliveryDefaultStore) {
+      settingsDeliveryDefaultStore.addEventListener("change", () => {
+        updateActiveDeliveryDraft({
+          store_ids: getSelectedDeliveryStoreIds(),
+          default_store_id: getSelectedDefaultDeliveryStoreId(),
+        });
       });
     }
 
@@ -11885,16 +12062,17 @@
 
     function fillDeliverySettingForm(setting) {
       if (!setting) return;
+      const normalized = normalizeDeliverySetting(setting);
       if (settingsDeliverySubtitle) {
         settingsDeliverySubtitle.textContent = `ID ${setting.id}`;
       }
-      if (settingsDeliveryName) settingsDeliveryName.value = setting.name || "";
-      if (settingsDeliveryCost) settingsDeliveryCost.value = setting.delivery_cost || "";
-      if (settingsDeliveryMinOrder) settingsDeliveryMinOrder.value = setting.min_order_amount || "";
-      if (settingsDeliveryFreeFrom) settingsDeliveryFreeFrom.value = setting.free_delivery_from || "";
-      if (settingsDeliveryActive) settingsDeliveryActive.checked = Number(setting.is_active) === 1;
-      const storeIds = setting.store_ids || [];
-      const defaultStoreId = setting.default_store_id != null ? Number(setting.default_store_id) : null;
+      if (settingsDeliveryName) settingsDeliveryName.value = normalized.name || "";
+      if (settingsDeliveryEtaMinutes) settingsDeliveryEtaMinutes.value = normalized.eta_minutes == null ? "" : String(normalized.eta_minutes);
+      if (settingsDeliveryActive) settingsDeliveryActive.checked = Number(normalized.is_active) === 1;
+      renderDeliverySettingPriceTiers(normalized.price_tiers);
+      syncDeliveryDraftLegacyFields(normalized);
+      const storeIds = normalized.store_ids || [];
+      const defaultStoreId = normalized.default_store_id != null ? Number(normalized.default_store_id) : null;
       renderDeliveryStoresCheckboxes(storeIds, defaultStoreId);
     }
 
@@ -11909,10 +12087,12 @@
       if (mode === "create") {
         if (settingsDeliverySubtitle) settingsDeliverySubtitle.textContent = "Новая настройка";
         if (settingsDeliveryName) settingsDeliveryName.value = "";
+        if (settingsDeliveryEtaMinutes) settingsDeliveryEtaMinutes.value = "";
         if (settingsDeliveryCost) settingsDeliveryCost.value = "";
         if (settingsDeliveryMinOrder) settingsDeliveryMinOrder.value = "";
         if (settingsDeliveryFreeFrom) settingsDeliveryFreeFrom.value = "";
         if (settingsDeliveryActive) settingsDeliveryActive.checked = true;
+        renderDeliverySettingPriceTiers([createEmptyDeliveryZoneTierDraft()]);
         renderDeliveryStoresCheckboxes([], null);
       } else if (setting) {
         fillDeliverySettingForm(setting);
@@ -12183,14 +12363,21 @@
         }
         const draft = readDeliveryFormDraft();
         activeTab.draft = cloneDeliveryDraft(draft);
+        const tiersResult = normalizeDeliverySettingPriceTiersForSave(draft.price_tiers);
+        if (!tiersResult.ok) {
+          alert(tiersResult.error);
+          return;
+        }
         const nextPayload = {
           name: String(draft.name || "").trim() || null,
+          eta_minutes: String(draft.eta_minutes || "").trim() ? Number(draft.eta_minutes) || 0 : null,
           delivery_cost: Number(draft.delivery_cost) || 0,
           min_order_amount: Number(draft.min_order_amount) || 0,
           free_delivery_from: String(draft.free_delivery_from || "").trim() ? Number(draft.free_delivery_from) : null,
           is_active: draft.is_active ? 1 : 0,
           store_ids: Array.isArray(draft.store_ids) ? draft.store_ids.slice() : [],
-          default_store_id: draft.default_store_id
+          default_store_id: draft.default_store_id,
+          price_tiers: tiersResult.items
         };
 
         if (!nextPayload.name) {
@@ -13752,6 +13939,20 @@
       };
     }
 
+    function normalizeDeliverySettingPriceTiersForSave(items) {
+      const result = normalizeDeliveryZonePriceTiersForSave(items);
+      if (!result.ok) {
+        if (result.error === "Добавьте хотя бы один тариф для зоны доставки.") {
+          return {
+            ok: false,
+            error: "Добавьте хотя бы один тариф для общей доставки.",
+          };
+        }
+        return result;
+      }
+      return result;
+    }
+
     function buildActiveDeliveryZoneSavePayload() {
       const activeTab = getActiveDeliveryTab();
       if (!isDeliveryZoneTab(activeTab)) return { ok: false, error: "ZONE_TAB_REQUIRED" };
@@ -13853,6 +14054,60 @@
         closeDeliveryCreateMenu();
       }
     });
+
+    if (settingsDeliveryAddTierBtn) {
+      settingsDeliveryAddTierBtn.addEventListener("click", () => {
+        const activeTab = getActiveDeliveryTab();
+        if (!activeTab || isDeliveryZoneTab(activeTab) || isDeliveryMapConfigTab(activeTab)) return;
+        const currentTiers = readDeliverySettingPriceTiersFromDom();
+        currentTiers.push(createEmptyDeliveryZoneTierDraft());
+        updateActiveDeliveryDraft({ price_tiers: currentTiers }, { renderTiers: true });
+      });
+    }
+
+    if (settingsDeliveryPriceTiers) {
+      settingsDeliveryPriceTiers.addEventListener("click", (event) => {
+        const removeButton = event.target && event.target.closest
+          ? event.target.closest("[data-delivery-tier-remove]")
+          : null;
+        if (!removeButton) return;
+        const activeTab = getActiveDeliveryTab();
+        if (!activeTab || isDeliveryZoneTab(activeTab) || isDeliveryMapConfigTab(activeTab)) return;
+        const index = Number(removeButton.getAttribute("data-delivery-tier-remove"));
+        const currentTiers = readDeliverySettingPriceTiersFromDom();
+        const nextTiers = currentTiers.filter((_, tierIndex) => tierIndex !== index);
+        updateActiveDeliveryDraft(
+          { price_tiers: nextTiers.length ? nextTiers : [createEmptyDeliveryZoneTierDraft()] },
+          { renderTiers: true }
+        );
+      });
+
+      settingsDeliveryPriceTiers.addEventListener("input", () => {
+        const activeTab = getActiveDeliveryTab();
+        if (!activeTab || isDeliveryZoneTab(activeTab) || isDeliveryMapConfigTab(activeTab)) return;
+        updateActiveDeliveryDraft({ price_tiers: readDeliverySettingPriceTiersFromDom() });
+      });
+    }
+
+    [
+      settingsDeliveryName,
+      settingsDeliveryEtaMinutes,
+    ].forEach((input) => {
+      if (!input) return;
+      input.addEventListener("input", () => {
+        const activeTab = getActiveDeliveryTab();
+        if (!activeTab || isDeliveryZoneTab(activeTab) || isDeliveryMapConfigTab(activeTab)) return;
+        updateActiveDeliveryDraft(readDeliveryFormDraft(), { refreshTabs: input === settingsDeliveryName });
+      });
+    });
+
+    if (settingsDeliveryActive) {
+      settingsDeliveryActive.addEventListener("change", () => {
+        const activeTab = getActiveDeliveryTab();
+        if (!activeTab || isDeliveryZoneTab(activeTab) || isDeliveryMapConfigTab(activeTab)) return;
+        updateActiveDeliveryDraft(readDeliveryFormDraft());
+      });
+    }
 
     if (settingsDeliveryZoneAddTierBtn) {
       settingsDeliveryZoneAddTierBtn.addEventListener("click", () => {

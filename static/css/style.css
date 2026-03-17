@@ -667,6 +667,19 @@ html[data-sidebar-collapsed="1"] .app-grid{
   min-height:0;
 }
 
+body.page-home .page-col-center,
+body.page-home .page-col-right{
+  position:relative;
+}
+
+body.page-home .page-col-center{
+  z-index:3;
+}
+
+body.page-home .page-col-right{
+  z-index:1;
+}
+
 body.page-home .page-col-right .panel{
   min-height:calc(100vh - var(--header-height) - var(--column-bottom-gap));
 }

@@ -242,6 +242,22 @@
     return streetPart;
   }
 
+  function getDeliveryZoneName(order) {
+    return String(order && order.delivery_zone_name || "").trim();
+  }
+
+  function buildDeliveryZoneLabel(order) {
+    var zoneName = getDeliveryZoneName(order);
+    return zoneName ? "Зона доставки: " + zoneName : "";
+  }
+
+  function shouldShowDeliveryZone(order, resolver) {
+    if (!order || String(order.method_code || "").trim() !== "delivery") return false;
+    if (!getDeliveryZoneName(order)) return false;
+    if (typeof resolver !== "function") return false;
+    return resolver(order) === true;
+  }
+
   function buildOrderStageCycleButtonHtml(options) {
     var config = options && typeof options === "object" ? options : {};
     var orderId = Number(config.orderId || 0);
@@ -587,6 +603,9 @@
     var clientInfoWrap = options && options.clientInfoWrap ? options.clientInfoWrap : null;
     var helpers = options && options.helpers ? options.helpers : {};
     var treatOrderCommentAsAddressComment = Boolean(options && options.treatOrderCommentAsAddressComment);
+    var showDeliveryZoneResolver = typeof (options && options.showDeliveryZone) === "function"
+      ? options.showDeliveryZone
+      : function () { return false; };
     var printButtons = footerEl ? queryAll(footerEl, '[data-action="order-print"]') : [];
     var infoEls = {
       empty: queryAll(root, '[data-info="empty"]'),
@@ -617,6 +636,8 @@
       deliveryUrgent: queryAll(root, '[data-info="delivery-urgent"]'),
       deliveryIntervalRow: queryAll(root, '[data-info="delivery-interval-row"]'),
       deliveryInterval: queryAll(root, '[data-info="delivery-interval"]'),
+      deliveryZoneRow: queryAll(root, '[data-info="delivery-zone-row"]'),
+      deliveryZone: queryAll(root, '[data-info="delivery-zone"]'),
       deliveryAddressTitle: queryAll(root, '[data-info="delivery-address-title"]'),
       deliveryAddress: queryAll(root, '[data-info="delivery-address"]'),
       deliveryAddressComment: queryAll(root, '[data-info="delivery-address-comment"]'),
@@ -718,6 +739,7 @@
         setTextAll(infoEls.deliveryInterval, "—");
         setTextAll(infoEls.deliveryAddressTitle, "Адрес доставки");
         setTextAll(infoEls.deliveryAddress, "—");
+        setTextAll(infoEls.deliveryZone, "");
         setTextAll(infoEls.deliveryAddressCommentText, "");
         setTextAll(infoEls.orderCommentText, "");
         setTextAll(infoEls.refundBadge, "");
@@ -738,6 +760,7 @@
         setHiddenAll(infoEls.refundHistoryBlock, true);
         setHiddenAll(infoEls.deliveryUrgent, true);
         setHiddenAll(infoEls.deliveryIntervalRow, true);
+        setHiddenAll(infoEls.deliveryZoneRow, true);
         setHiddenAll(infoEls.deliveryAddressComment, true);
         setHiddenAll(infoEls.orderCommentBlock, true);
         setHiddenAll(infoEls.discountInfoBtn, true);
@@ -846,6 +869,10 @@
       setTextAll(infoEls.deliveryType, order.method_title || (order.method_code === "pickup" ? "Самовывоз" : "Доставка") || "—");
       setTextAll(infoEls.deliveryDatetime, formatDateTime(order.created_at) || "—");
       setTextAll(infoEls.deliveryAddressTitle, order.method_code === "pickup" ? "Адрес самовывоза" : "Адрес доставки");
+
+      var zoneVisible = shouldShowDeliveryZone(order, showDeliveryZoneResolver);
+      setTextAll(infoEls.deliveryZone, zoneVisible ? buildDeliveryZoneLabel(order) : "");
+      setHiddenAll(infoEls.deliveryZoneRow, !zoneVisible);
 
       var intervalText = formatScheduleText(order, { includeTitle: false }) || String(order.time_option_title || "").trim();
       setTextAll(infoEls.deliveryInterval, intervalText || "—");

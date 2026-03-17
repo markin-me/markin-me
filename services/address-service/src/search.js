@@ -1142,30 +1142,19 @@ async function buildScopedHouseItemsByStreet(db, rootCity, rootScope, streetRow,
   if (!searchRootCityIds.length) {
     return [];
   }
-  const streetSourceKey = String(streetRow && (streetRow.street_source_key || streetRow.source_key) || '').trim();
-  const localityDisplay = String(streetRow && (streetRow.context_display || streetRow.locality_display) || '').trim();
   const params = [
     searchRootCityIds,
     `${requestedHouse}%`,
+    streetSearchValue,
   ];
   const conditions = [
     'is_active = TRUE',
     "object_type = 'address'",
     'root_city_id = ANY($1::int[])',
     'normalized_house LIKE $2',
+    'street_display = $3',
   ];
-  if (streetSourceKey) {
-    params.push(streetSourceKey);
-    conditions.push('street_source_key = $3');
-  } else {
-    params.push(streetSearchValue);
-    conditions.push('street_display = $3');
-    if (localityDisplay) {
-      params.push(localityDisplay);
-      conditions.push("COALESCE(context_display, locality_display) = $4");
-    }
-  }
-  params.push(Math.max(limit * 6, config.queryLimit * 6));
+  params.push(Math.max(limit * 16, config.queryLimit * 16));
   const sql = `
     SELECT id,
            source_key,

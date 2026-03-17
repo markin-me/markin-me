@@ -202,6 +202,10 @@
     rightDeliverySettings: null,
     rightDeliverySettingsReady: false,
     rightDeliverySettingsLoading: false,
+    rightDeliveryQuoteByOrder: new Map(),
+    rightDeliveryQuoteKeyByOrder: new Map(),
+    rightDeliveryQuoteLoadingByOrder: new Set(),
+    rightDeliveryQuoteReqSeqByOrder: new Map(),
     rightDatePickerMonthByOrder: new Map(),
     rightPickupStores: [],
     rightClientLookupCache: new Map(),
@@ -255,10 +259,21 @@
     cacheManifest: null,
   };
 
+  let rightOrderTabsRerenderQueued = false;
+
   let resolveLoadReady = null;
   const loadReadyPromise = new Promise((resolve) => {
     resolveLoadReady = resolve;
   });
+
+  function queueRenderRightOrderTabs() {
+    if (rightOrderTabsRerenderQueued) return;
+    rightOrderTabsRerenderQueued = true;
+    Promise.resolve().then(() => {
+      rightOrderTabsRerenderQueued = false;
+      renderRightOrderTabs();
+    });
+  }
   function markLoadReady() {
     if (!resolveLoadReady) return;
     resolveLoadReady();
@@ -383,12 +398,18 @@
       });
     }
     const cartSummary = getRightOrderCheckoutSummary(active);
+    void ensureRightDeliveryQuoteFresh(active, cartSummary, { render: true });
     const cartItems = cartSummary.cartItems;
     const orderPayableTotal = cartSummary.payableTotal;
+    const asapEtaLabel = cartSummary.isDeliveryMethod && Number(cartSummary.etaMinutes || 0) > 0
+      ? `${Math.round(Number(cartSummary.etaMinutes || 0))} мин`
+      : "40-80 мин";
     const deliveryProgressAriaValue = Math.round(cartSummary.progress);
-    const deliveryProgressLabelHtml = cartSummary.freeReached
+    const deliveryProgressLabelHtml = cartSummary.deliveryProgressState === "reached"
       ? `Бесплатная доставка <i class="fas fa-check shop-delivery-check" aria-hidden="true"></i>`
-      : `${cartSummary.deliveryCost > 0 ? `Доставка <strong>${escapeHtml(toMoney(cartSummary.deliveryCost))}</strong>. ` : ""}Ещё <strong>${escapeHtml(toMoney(cartSummary.leftForFree))}</strong> до бесплатной доставки`;
+      : cartSummary.deliveryProgressState === "neutral-no-threshold"
+        ? "Бесплатная доставка не настроена"
+        : `${cartSummary.deliveryCost > 0 ? `Доставка <strong>${escapeHtml(toMoney(cartSummary.deliveryCost))}</strong>. ` : ""}Ещё <strong>${escapeHtml(toMoney(cartSummary.leftForFree))}</strong> до бесплатной доставки`;
     const clearArmedUntil = Number(state.rightCartClearConfirmUntilByOrder.get(Number(active?.id || 0)) || 0);
     const clearActionEnabled = isEditCheckout || cartItems.length > 0;
     const clearArmed = clearArmedUntil > Date.now() && clearActionEnabled;
@@ -480,7 +501,7 @@
         <div class="shop-cart-delivery-progress-bar" role="progressbar" aria-valuenow="${deliveryProgressAriaValue}" aria-valuemin="0" aria-valuemax="100">
           <div class="shop-cart-delivery-progress-fill" style="width:${cartSummary.progress}%"></div>
         </div>
-        <div class="shop-cart-delivery-progress-label ${cartSummary.freeReached ? "is-free" : ""}">${deliveryProgressLabelHtml}</div>
+        <div class="shop-cart-delivery-progress-label ${cartSummary.deliveryProgressState === "reached" ? "is-free" : ""}">${deliveryProgressLabelHtml}</div>
       </div>
       <div class="shop-cart-footer">
         <div class="shop-cart-footer-actions">
@@ -665,7 +686,7 @@
           ${cookWhenKind === "asap" ? `
             <div class="new-order-right-form-field">
               <span class="new-order-right-form-label">Р”Р°С‚Р° Рё РІСЂРµРјСЏ</span>
-              <div class="new-order-right-time-hint is-single"><span>40-80 РјРёРЅ</span></div>
+              <div class="new-order-right-time-hint is-single"><span>${escapeHtml(asapEtaLabel)}</span></div>
             </div>
           ` : cookWhenKind === "at_time" ? `
             <div class="new-order-right-form-field">
@@ -1080,7 +1101,7 @@
     `;
     if (rightFooterEl) {
       rightFooterEl.innerHTML = rightFooterHtml;
-      rightFooterEl.classList.toggle("hidden", !cartItems.length);
+      rightFooterEl.classList.remove("hidden");
     }
   }
 
@@ -1565,6 +1586,198 @@
       state.rightDeliverySettingsReady = true;
       schedulePersistBootstrapSnapshot();
       renderRightOrderTabs();
+    }
+  }
+
+  function normalizeRightDeliveryQuote(source) {
+    const src = source && typeof source === "object" ? source : {};
+    const normalizeMoney = (value) => {
+      const numeric = Number(value);
+      return Number.isFinite(numeric) ? Math.max(0, roundPrice(numeric)) : 0;
+    };
+    const normalizePositive = (value) => {
+      const numeric = Number(value);
+      return Number.isFinite(numeric) && numeric > 0 ? Math.round(numeric) : null;
+    };
+    const freeRaw = Number(src?.free_delivery_from);
+    return {
+      source: String(src?.source || "default").trim() || "default",
+      has_settings: src?.has_settings === false ? false : true,
+      delivery_cost: normalizeMoney(src?.delivery_cost),
+      min_order_amount: normalizeMoney(src?.min_order_amount),
+      free_delivery_from: Number.isFinite(freeRaw) && freeRaw > 0 ? roundPrice(freeRaw) : null,
+      eta_minutes: normalizePositive(src?.eta_minutes),
+      delivery_zone_id: normalizePositive(src?.delivery_zone_id),
+      delivery_zone_name: String(src?.delivery_zone_name || "").trim() || null,
+      delivery_store_id: normalizePositive(src?.delivery_store_id),
+    };
+  }
+
+  function clearRightDeliveryQuote(orderId, requestKey = null, opts = {}) {
+    const id = Number(orderId || 0);
+    if (!(id > 0)) return;
+    const hadQuote = state.rightDeliveryQuoteByOrder.has(id);
+    state.rightDeliveryQuoteByOrder.delete(id);
+    state.rightDeliveryQuoteLoadingByOrder.delete(id);
+    if (requestKey == null) {
+      state.rightDeliveryQuoteKeyByOrder.delete(id);
+    } else {
+      state.rightDeliveryQuoteKeyByOrder.set(id, String(requestKey));
+    }
+    if (opts?.render && hadQuote) queueRenderRightOrderTabs();
+  }
+
+  function getRightOrderQuoteStoreId(order) {
+    const explicitStoreId = Number(order?.storeId || 0);
+    if (Number.isFinite(explicitStoreId) && explicitStoreId > 0) return explicitStoreId;
+    return 0;
+  }
+
+  function getRightOrderStoredAddressDraft(orderId, order = null) {
+    const id = Number(orderId || 0);
+    const form = order?.form && typeof order.form === "object" ? order.form : {};
+    if (state.rightAddressDraftByOrder.has(id)) {
+      return normalizeRightAddressDraft(state.rightAddressDraftByOrder.get(id), getDefaultRightAddressCity());
+    }
+    if (form.deliveryAddressDraft && typeof form.deliveryAddressDraft === "object") {
+      return normalizeRightAddressDraft(form.deliveryAddressDraft, getDefaultRightAddressCity());
+    }
+    const selectedId = Number(state.rightAddressSelectedIdByOrder.get(id) || form.deliveryAddressId || 0);
+    if (selectedId > 0) {
+      const rows = Array.isArray(state.rightClientAddressesByOrder.get(id)) ? state.rightClientAddressesByOrder.get(id) : [];
+      const selectedRow = rows.find((row) => Number(row?.id || 0) === selectedId) || null;
+      if (selectedRow) {
+        return getAddressDraftFromClientAddress(selectedRow, getDefaultRightAddressCity());
+      }
+    }
+    return null;
+  }
+
+  function hasRightOrderQuoteAddressData(draft) {
+    const next = normalizeRightAddressDraft(draft, getDefaultRightAddressCity());
+    return Boolean(
+      next.city
+      && (
+        next.address_normalized_display
+        || next.street
+        || next.house
+        || next.address_ref
+        || (next.lat != null && next.lng != null)
+      )
+    );
+  }
+
+  function buildRightOrderQuoteAddress(draft) {
+    const next = normalizeRightAddressDraft(draft, getDefaultRightAddressCity());
+    if (!hasRightOrderQuoteAddressData(next)) return null;
+    return {
+      city: next.city || null,
+      street: next.street || null,
+      house: next.house || null,
+      entrance: next.entrance || null,
+      floor: next.floor || null,
+      apartment: next.apartment || null,
+      comment: next.comment || null,
+      address_ref: next.address_ref || null,
+      selected_object_type: next.selected_object_type || null,
+      resolved_city_source_key: next.resolved_city_source_key || null,
+      address_context_locality: next.address_context_locality || null,
+      address_normalized_display: next.address_normalized_display || null,
+      lat: next.lat,
+      lng: next.lng,
+      delivery_zone_id: next.delivery_zone_id,
+      delivery_store_id: next.delivery_store_id,
+    };
+  }
+
+  function buildRightOrderDeliveryQuoteRequest(order, summary) {
+    const orderId = Number(order?.id || 0);
+    if (!(orderId > 0)) return null;
+    const methodCode = String(summary?.methodCode || order?.form?.pickupMethod || "").trim();
+    if (!isDeliveryMethodCode(methodCode)) {
+      return {
+        orderId,
+        key: `pickup:${methodCode}`,
+        address: null,
+        headers: null,
+        subtotal: Number(summary?.subtotalAfterCustomerDiscount || 0) || 0,
+      };
+    }
+    const addressDraft = getRightOrderStoredAddressDraft(orderId, order);
+    const address = buildRightOrderQuoteAddress(addressDraft);
+    const storeId = getRightOrderQuoteStoreId(order);
+    const key = JSON.stringify({
+      storeId: storeId > 0 ? storeId : 0,
+      methodCode,
+      subtotal: roundPrice(Number(summary?.subtotalAfterCustomerDiscount || 0) || 0),
+      address,
+    });
+    return {
+      orderId,
+      key,
+      address,
+      subtotal: roundPrice(Number(summary?.subtotalAfterCustomerDiscount || 0) || 0),
+      headers: storeId > 0 ? { "x-store-id": String(storeId) } : undefined,
+    };
+  }
+
+  async function ensureRightDeliveryQuoteFresh(order, summary, opts = {}) {
+    const request = buildRightOrderDeliveryQuoteRequest(order, summary);
+    const orderId = Number(request?.orderId || order?.id || 0);
+    if (!(orderId > 0) || !request) return null;
+
+    if (!request.address) {
+      const previousKey = state.rightDeliveryQuoteKeyByOrder.get(orderId);
+      if (previousKey !== request.key || state.rightDeliveryQuoteByOrder.has(orderId)) {
+        clearRightDeliveryQuote(orderId, request.key, { render: Boolean(opts?.render) });
+      } else {
+        state.rightDeliveryQuoteLoadingByOrder.delete(orderId);
+      }
+      return null;
+    }
+
+    const previousKey = state.rightDeliveryQuoteKeyByOrder.get(orderId);
+    const hasCached = state.rightDeliveryQuoteByOrder.has(orderId);
+    const isLoading = state.rightDeliveryQuoteLoadingByOrder.has(orderId);
+    if (!opts?.force && previousKey === request.key && (hasCached || isLoading)) {
+      return hasCached ? state.rightDeliveryQuoteByOrder.get(orderId) || null : null;
+    }
+
+    if (previousKey !== request.key || !hasCached) {
+      state.rightDeliveryQuoteByOrder.delete(orderId);
+      state.rightDeliveryQuoteKeyByOrder.set(orderId, request.key);
+      if (previousKey !== request.key && opts?.render) {
+        queueRenderRightOrderTabs();
+      }
+    }
+
+    const requestSeq = Number(state.rightDeliveryQuoteReqSeqByOrder.get(orderId) || 0) + 1;
+    state.rightDeliveryQuoteReqSeqByOrder.set(orderId, requestSeq);
+    state.rightDeliveryQuoteLoadingByOrder.add(orderId);
+
+    try {
+      const json = await apiJson("/api/public/delivery-quote", {
+        method: "POST",
+        headers: request.headers,
+        body: JSON.stringify({
+          subtotal: request.subtotal,
+          address: request.address,
+        }),
+      });
+      if (Number(state.rightDeliveryQuoteReqSeqByOrder.get(orderId) || 0) !== requestSeq) return null;
+      const quote = normalizeRightDeliveryQuote(json?.data || null);
+      state.rightDeliveryQuoteByOrder.set(orderId, quote);
+      state.rightDeliveryQuoteKeyByOrder.set(orderId, request.key);
+      state.rightDeliveryQuoteLoadingByOrder.delete(orderId);
+      if (opts?.render) {
+        const isActive = Number(state.rightActiveOrderId || 0) === orderId;
+        if (isActive) queueRenderRightOrderTabs();
+      }
+      return quote;
+    } catch {
+      if (Number(state.rightDeliveryQuoteReqSeqByOrder.get(orderId) || 0) !== requestSeq) return null;
+      clearRightDeliveryQuote(orderId, request.key, { render: Boolean(opts?.render) });
+      return null;
     }
   }
 
@@ -2329,12 +2542,14 @@
     const form = order.form && typeof order.form === "object" ? { ...order.form } : {};
     form.cartItems = normalizeRightOrderCartItemsWithAutoAdd(id, cartItems);
     state.rightOrders[index] = { ...order, form };
+    invalidateRightDeliveryQuote(id);
     if (opts?.render) renderRightOrderTabs();
     return true;
   }
 
   function getRightOrderCheckoutSummary(order) {
     const form = order?.form && typeof order.form === "object" ? order.form : {};
+    const orderId = Number(order?.id || 0);
     const cartItems = Array.isArray(form?.cartItems) ? form.cartItems : [];
     const subtotal = roundPrice(cartItems.reduce((sum, item) => sum + getRightOrderCartLineTotal(item), 0));
     const cartItemsCount = cartItems.reduce((sum, item) => sum + Math.max(1, Number(item?.qty || 1)), 0);
@@ -2346,9 +2561,26 @@
     const settings = state.rightDeliverySettings && typeof state.rightDeliverySettings === "object"
       ? state.rightDeliverySettings
       : null;
-    const deliveryCost = Math.max(0, Number(settings?.delivery_cost || 0));
-    const freeDeliveryFromRaw = Number(settings?.free_delivery_from);
-    const freeDeliveryFrom = Number.isFinite(freeDeliveryFromRaw) && freeDeliveryFromRaw > 0 ? freeDeliveryFromRaw : null;
+    const settingsDeliveryCost = Math.max(0, Number(settings?.delivery_cost || 0));
+    const settingsFreeDeliveryFromRaw = Number(settings?.free_delivery_from);
+    const settingsFreeDeliveryFrom = Number.isFinite(settingsFreeDeliveryFromRaw) && settingsFreeDeliveryFromRaw > 0
+      ? settingsFreeDeliveryFromRaw
+      : null;
+    const settingsMinOrderAmountRaw = Number(settings?.min_order_amount);
+    const settingsMinOrderAmount = Number.isFinite(settingsMinOrderAmountRaw) && settingsMinOrderAmountRaw > 0
+      ? settingsMinOrderAmountRaw
+      : 0;
+    const quote = orderId > 0 ? (state.rightDeliveryQuoteByOrder.get(orderId) || null) : null;
+    const deliveryCost = quote
+      ? Math.max(0, Number(quote?.delivery_cost || 0))
+      : settingsDeliveryCost;
+    const quoteFreeDeliveryFrom = Number.isFinite(Number(quote?.free_delivery_from)) && Number(quote?.free_delivery_from) > 0
+      ? Number(quote.free_delivery_from)
+      : null;
+    const freeDeliveryFrom = quoteFreeDeliveryFrom != null ? quoteFreeDeliveryFrom : settingsFreeDeliveryFrom;
+    const minOrderAmount = quote
+      ? Math.max(0, Number(quote?.min_order_amount || 0))
+      : settingsMinOrderAmount;
     const deliveryApplied = isDeliveryMethod
       ? (freeDeliveryFrom != null && subtotalAfterCustomerDiscount >= freeDeliveryFrom ? 0 : deliveryCost)
       : 0;
@@ -2358,7 +2590,12 @@
       : 0;
     const freeReached = freeDeliveryFrom != null && subtotalAfterCustomerDiscount >= freeDeliveryFrom;
     const leftForFree = freeDeliveryFrom != null ? Math.max(0, Math.ceil(freeDeliveryFrom - subtotalAfterCustomerDiscount)) : 0;
-    const showDeliveryProgress = isDeliveryMethod && freeDeliveryFrom != null && freeDeliveryFrom > 0 && cartItems.length > 0;
+    const deliveryProgressState = !isDeliveryMethod
+      ? "hidden"
+      : freeDeliveryFrom != null && freeDeliveryFrom > 0
+        ? (freeReached ? "reached" : "progress")
+        : "neutral-no-threshold";
+    const showDeliveryProgress = isDeliveryMethod;
     return {
       cartItems,
       cartItemsCount,
@@ -2367,13 +2604,23 @@
       customerOrderDiscount,
       customerOrderDiscountTitles: Array.isArray(customerDiscountSummary?.titles) ? customerDiscountSummary.titles : [],
       customerOrderAppliedDiscounts: Array.isArray(customerDiscountSummary?.appliedDiscounts) ? customerDiscountSummary.appliedDiscounts : [],
+      deliveryQuote: quote,
+      deliveryQuoteSource: quote?.source || null,
       deliveryCost,
       deliveryApplied,
+      minOrderAmount,
       freeDeliveryFrom,
       freeReached,
       leftForFree,
       progress,
+      deliveryProgressState,
       showDeliveryProgress,
+      etaMinutes: quote && Number.isFinite(Number(quote?.eta_minutes)) && Number(quote.eta_minutes) > 0
+        ? Number(quote.eta_minutes)
+        : null,
+      deliveryZoneId: quote?.delivery_zone_id != null ? Number(quote.delivery_zone_id) : null,
+      deliveryZoneName: String(quote?.delivery_zone_name || "").trim() || null,
+      deliveryStoreId: quote?.delivery_store_id != null ? Number(quote.delivery_store_id) : null,
       payableTotal,
       isDeliveryMethod,
       methodCode,
@@ -2606,13 +2853,21 @@
         customerOrderDiscount: 0,
         customerOrderDiscountTitles: [],
         customerOrderAppliedDiscounts: [],
+        deliveryQuote: null,
+        deliveryQuoteSource: null,
         deliveryCost: 0,
         deliveryApplied: 0,
+        minOrderAmount: 0,
         freeDeliveryFrom: null,
         freeReached: false,
         leftForFree: 0,
         progress: 0,
+        deliveryProgressState: "hidden",
         showDeliveryProgress: false,
+        etaMinutes: null,
+        deliveryZoneId: null,
+        deliveryZoneName: null,
+        deliveryStoreId: null,
         payableTotal: 0,
         isDeliveryMethod: true,
         methodCode: "delivery",
@@ -2626,6 +2881,12 @@
     const id = Number(orderId || 0);
     if (!(id > 0)) return -1;
     return (Array.isArray(state.rightOrders) ? state.rightOrders : []).findIndex((order) => Number(order?.id || 0) === id);
+  }
+
+  function invalidateRightDeliveryQuote(orderId) {
+    const id = Number(orderId || 0);
+    if (!(id > 0)) return;
+    clearRightDeliveryQuote(id, null, { render: false });
   }
 
   function resetRightCartClearState(orderId, opts = {}) {
@@ -3093,7 +3354,6 @@
     const submitMode = String(order?.mode || "add").toLowerCase();
     const editOrderId = Number(order?.editOrderId || 0);
     const isEditSubmit = submitMode === "edit" && editOrderId > 0;
-    const summary = getRightOrderCheckoutSummary(order);
     const cartItems = Array.isArray(form.cartItems) ? form.cartItems : [];
     if (!cartItems.length) {
       showNewOrderAlert("\u041a\u043e\u0440\u0437\u0438\u043d\u0430 \u043f\u0443\u0441\u0442\u0430");
@@ -3138,9 +3398,19 @@
     const timeOptionCode = cookWhenOptions.includes(rawTimeOptionCode) ? rawTimeOptionCode : fallbackCookWhenCode;
     const isDeliveryMethod = isDeliveryMethodCode(methodCode);
     const isPickupMethod = isPickupLikeMethod(methodCode);
+    if (isDeliveryMethod) {
+      const refreshBaseSummary = getRightOrderCheckoutSummary(order);
+      await ensureRightDeliveryQuoteFresh(order, refreshBaseSummary, { force: true, render: true });
+      order = state.rightOrders[index] || order;
+    }
+    const summary = getRightOrderCheckoutSummary(order);
     const deliveryAddress = String(form.address || "").trim();
     if (isDeliveryMethod && !deliveryAddress) {
       showNewOrderAlert("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0430\u0434\u0440\u0435\u0441 \u0434\u043e\u0441\u0442\u0430\u0432\u043a\u0438");
+      return;
+    }
+    if (isDeliveryMethod && Number(summary.minOrderAmount || 0) > 0 && Number(summary.subtotalAfterCustomerDiscount || 0) < Number(summary.minOrderAmount || 0)) {
+      showNewOrderAlert(`\u041c\u0438\u043d\u0438\u043c\u0430\u043b\u044c\u043d\u0430\u044f \u0441\u0443\u043c\u043c\u0430 \u0437\u0430\u043a\u0430\u0437\u0430 ${toMoney(summary.minOrderAmount)}`);
       return;
     }
     let pickupStoreId = null;
@@ -3211,6 +3481,7 @@
     }
     const selectedOrderStatusId = isEditSubmit ? Number(form.orderStatusId || 0) : 0;
     const initialOrderStatusId = isEditSubmit ? Number(form.orderStatusInitialId || 0) : 0;
+    const deliveryAddressDraft = isDeliveryMethod ? getRightOrderStoredAddressDraft(id, order) : null;
 
     const payload = {
       customer_name: customerName,
@@ -3229,6 +3500,24 @@
       change_from: changeFrom,
       items,
     };
+    if (isDeliveryMethod && deliveryAddressDraft) {
+      payload.delivery_address_city = deliveryAddressDraft.city || null;
+      payload.delivery_address_street = deliveryAddressDraft.street || null;
+      payload.delivery_address_house = deliveryAddressDraft.house || null;
+      payload.delivery_address_entrance = deliveryAddressDraft.entrance || null;
+      payload.delivery_address_floor = deliveryAddressDraft.floor || null;
+      payload.delivery_address_apartment = deliveryAddressDraft.apartment || null;
+      payload.address_comment = deliveryAddressDraft.comment || null;
+      payload.delivery_address_ref = deliveryAddressDraft.address_ref || null;
+      payload.delivery_selected_object_type = deliveryAddressDraft.selected_object_type || null;
+      payload.delivery_resolved_city_source_key = deliveryAddressDraft.resolved_city_source_key || null;
+      payload.delivery_address_context_locality = deliveryAddressDraft.address_context_locality || null;
+      payload.delivery_address_normalized_display = deliveryAddressDraft.address_normalized_display || null;
+      payload.delivery_address_lat = deliveryAddressDraft.lat;
+      payload.delivery_address_lng = deliveryAddressDraft.lng;
+      payload.delivery_zone_id = deliveryAddressDraft.delivery_zone_id;
+      payload.delivery_store_id = deliveryAddressDraft.delivery_store_id;
+    }
 
     if (withPayment) {
       const paymentPayload = await openRightOrderPaymentDraft(order);
@@ -3629,19 +3918,7 @@
 
   function formatClientAddressLine(address) {
     if (!address || typeof address !== "object") return "";
-    const street = repairUtf8Mojibake(String(address.street || "").trim());
-    const house = repairUtf8Mojibake(String(address.house || "").trim());
-    const entrance = repairUtf8Mojibake(String(address.entrance || "").trim());
-    const floor = repairUtf8Mojibake(String(address.floor || "").trim());
-    const apartment = repairUtf8Mojibake(String(address.apartment || "").trim());
-    const comment = repairUtf8Mojibake(String(address.comment || "").trim());
-    const base = [street, house ? `д. ${house}` : ""].filter(Boolean).join(", ");
-    const details = [
-      entrance ? `под. ${entrance}` : "",
-      floor ? `эт. ${floor}` : "",
-      apartment ? `кв. ${apartment}` : "",
-    ].filter(Boolean).join(", ");
-    return [base, details, comment].filter(Boolean).join(", ");
+    return buildRightAddressLine(getAddressDraftFromClientAddress(address, getDefaultRightAddressCity()));
   }
 
   async function lookupClientByPhoneForRightOrder(orderId, phoneValue) {
@@ -3678,6 +3955,7 @@
           address: formatClientAddressLine(primaryAddress),
           addresses,
           discounts,
+          primaryAddressId: Number(primaryAddress?.id || 0) || 0,
         };
       }
       state.rightClientLookupCache.set(cacheKey, payload);
@@ -3693,12 +3971,31 @@
       form.name = payload.name || form.name || "";
       form.address = payload.address || form.address || "";
       state.rightClientAddressesByOrder.set(Number(orderId || 0), Array.isArray(payload.addresses) ? payload.addresses : []);
+      const primaryAddress = (Array.isArray(payload.addresses) ? payload.addresses : []).find(
+        (item) => Number(item?.id || 0) === Number(payload.primaryAddressId || 0)
+      ) || null;
+      if (Number(payload.primaryAddressId || 0) > 0) {
+        state.rightAddressSelectedIdByOrder.set(Number(orderId || 0), Number(payload.primaryAddressId || 0));
+      } else {
+        state.rightAddressSelectedIdByOrder.delete(Number(orderId || 0));
+      }
+      state.rightAddressEditingIdByOrder.set(Number(orderId || 0), 0);
+      if (primaryAddress) {
+        state.rightAddressDraftByOrder.set(
+          Number(orderId || 0),
+          getAddressDraftFromClientAddress(primaryAddress, getDefaultRightAddressCity())
+        );
+      }
       const discounts = Array.isArray(payload.discounts) ? payload.discounts : [];
       state.rightClientDiscountsByClientId.set(Number(payload.clientId || 0), discounts);
     } else {
       form.clientId = null;
       state.rightClientAddressesByOrder.set(Number(orderId || 0), []);
+      state.rightAddressSelectedIdByOrder.delete(Number(orderId || 0));
+      state.rightAddressEditingIdByOrder.delete(Number(orderId || 0));
+      state.rightAddressDraftByOrder.delete(Number(orderId || 0));
     }
+    invalidateRightDeliveryQuote(Number(orderId || 0));
     state.rightOrders[index] = { ...order, form };
     renderRightOrderTabs();
   }
@@ -3717,7 +4014,34 @@
       form[key] = value;
     }
     state.rightOrders[index] = { ...order, form };
+    if (key === "pickupMethod" || key === "address" || key === "clientId") {
+      invalidateRightDeliveryQuote(id);
+    }
   }
+
+  let rightAddressMapModeEnabled = null;
+  let rightAddressMapModePromise = null;
+  const rightAddressLookupState = {
+    orderId: 0,
+    requestSeq: 0,
+    debounceTimer: 0,
+    closeTimer: 0,
+    items: [],
+    activeIndex: -1,
+    open: false,
+    status: "",
+    statusMode: "idle",
+    selectedStreet: null,
+    selectedAddress: null,
+    addressRef: "",
+    selectedObjectType: "",
+    resolvedCitySourceKey: "",
+    contextLocality: "",
+    lat: null,
+    lng: null,
+    deliveryZoneId: null,
+    deliveryStoreId: null,
+  };
 
   function getRightAddressOverlayElements() {
     const backdrop = document.getElementById("newOrderRightAddressOverlay");
@@ -3725,6 +4049,11 @@
     const list = document.getElementById("newOrderRightAddressList");
     const newBtn = document.getElementById("newOrderRightAddressNewBtn");
     const city = document.getElementById("newOrderRightAddressCity");
+    const lookupWrap = document.getElementById("newOrderRightAddressLookupWrap");
+    const lookup = document.getElementById("newOrderRightAddressLookup");
+    const lookupPopover = document.getElementById("newOrderRightAddressLookupPopover");
+    const lookupStatus = document.getElementById("newOrderRightAddressLookupStatus");
+    const lookupResults = document.getElementById("newOrderRightAddressLookupResults");
     const street = document.getElementById("newOrderRightAddressStreet");
     const house = document.getElementById("newOrderRightAddressHouse");
     const entrance = document.getElementById("newOrderRightAddressEntrance");
@@ -3733,7 +4062,26 @@
     const comment = document.getElementById("newOrderRightAddressComment");
     const saveBtn = document.getElementById("newOrderRightAddressSaveBtn");
     const cancelBtn = document.getElementById("newOrderRightAddressCancelBtn");
-    return { backdrop, listWrap, list, newBtn, city, street, house, entrance, floor, apartment, comment, saveBtn, cancelBtn };
+    return {
+      backdrop,
+      listWrap,
+      list,
+      newBtn,
+      city,
+      lookupWrap,
+      lookup,
+      lookupPopover,
+      lookupStatus,
+      lookupResults,
+      street,
+      house,
+      entrance,
+      floor,
+      apartment,
+      comment,
+      saveBtn,
+      cancelBtn,
+    };
   }
 
   function ensureRightAddressOverlay() {
@@ -3763,6 +4111,16 @@
                 <i class="fas fa-chevron-down custom-select-arrow" aria-hidden="true"></i>
               </button>
               <div class="custom-select-dropdown hidden"></div>
+            </div>
+          </label>
+          <label class="new-order-right-form-field hidden" id="newOrderRightAddressLookupWrap">
+            <span class="new-order-right-form-label">Адрес</span>
+            <div class="shop-address-lookup">
+              <input id="newOrderRightAddressLookup" class="control" type="text" autocomplete="off" />
+              <div class="shop-address-lookup-popover hidden" id="newOrderRightAddressLookupPopover" role="dialog" aria-label="Подсказки адреса">
+                <div class="shop-address-lookup-status" id="newOrderRightAddressLookupStatus"></div>
+                <div class="shop-address-lookup-results" id="newOrderRightAddressLookupResults"></div>
+              </div>
             </div>
           </label>
           <label class="new-order-right-form-field">
@@ -3805,9 +4163,94 @@
     document.body.appendChild(wrap);
   }
 
+  function normalizeRightAddressCoordinate(value, axis = "lat") {
+    const numeric = Number(value);
+    const limit = axis === "lat" ? 90 : 180;
+    if (!Number.isFinite(numeric) || numeric < -limit || numeric > limit) return null;
+    return Number(numeric.toFixed(7));
+  }
+
+  function normalizeRightAddressText(value) {
+    return repairUtf8Mojibake(String(value || "").replace(/\s+/g, " ").trim());
+  }
+
+  function normalizeRightAddressKey(value) {
+    return normalizeRightAddressText(value).toLowerCase();
+  }
+
+  function buildRightAddressLookupText(cityValue, contextLocalityValue, streetValue, houseValue, fallbackValue = "") {
+    const city = normalizeRightAddressText(cityValue);
+    const contextLocality = normalizeRightAddressText(contextLocalityValue);
+    const street = normalizeRightAddressText(streetValue);
+    const house = normalizeRightAddressText(houseValue);
+    const fallback = normalizeRightAddressText(fallbackValue);
+    const base = [street, house].filter(Boolean).join(", ") || fallback;
+    if (!base) return "";
+    if (!contextLocality) return base;
+    if (normalizeRightAddressKey(contextLocality) === normalizeRightAddressKey(city)) return base;
+    if (normalizeRightAddressKey(base).startsWith(normalizeRightAddressKey(contextLocality))) return base;
+    return `${contextLocality}, ${base}`;
+  }
+
+  function createBlankRightAddressDraft(overrides = {}) {
+    return {
+      city: getDefaultRightAddressCity(),
+      street: "",
+      house: "",
+      entrance: "",
+      floor: "",
+      apartment: "",
+      comment: "",
+      address_ref: null,
+      selected_object_type: null,
+      resolved_city_source_key: null,
+      address_context_locality: null,
+      address_normalized_display: null,
+      lat: null,
+      lng: null,
+      delivery_zone_id: null,
+      delivery_store_id: null,
+      ...overrides,
+    };
+  }
+
+  function normalizeRightAddressDraft(source, fallbackCity = "") {
+    const item = source && typeof source === "object" ? source : {};
+    const base = createBlankRightAddressDraft({
+      city: fallbackCity || getDefaultRightAddressCity(),
+    });
+    return {
+      ...base,
+      city: normalizeRightAddressText(item.city || base.city),
+      street: normalizeRightAddressText(item.street),
+      house: normalizeRightAddressText(item.house),
+      entrance: normalizeRightAddressText(item.entrance),
+      floor: normalizeRightAddressText(item.floor),
+      apartment: normalizeRightAddressText(item.apartment),
+      comment: normalizeRightAddressText(item.comment),
+      address_ref: normalizeRightAddressText(item.address_ref) || null,
+      selected_object_type: normalizeRightAddressText(item.selected_object_type) || null,
+      resolved_city_source_key: normalizeRightAddressText(item.resolved_city_source_key) || null,
+      address_context_locality: normalizeRightAddressText(item.address_context_locality) || null,
+      address_normalized_display: normalizeRightAddressText(item.address_normalized_display) || null,
+      lat: normalizeRightAddressCoordinate(item.lat, "lat"),
+      lng: normalizeRightAddressCoordinate(item.lng, "lng"),
+      delivery_zone_id: Number.isFinite(Number(item.delivery_zone_id)) && Number(item.delivery_zone_id) > 0
+        ? Number(item.delivery_zone_id)
+        : null,
+      delivery_store_id: Number.isFinite(Number(item.delivery_store_id)) && Number(item.delivery_store_id) > 0
+        ? Number(item.delivery_store_id)
+        : null,
+    };
+  }
+
   function normalizeClientAddressRow(row) {
     const item = row && typeof row === "object" ? row : {};
-    const text = (value) => repairUtf8Mojibake(String(value || "").trim());
+    const text = (value) => normalizeRightAddressText(value);
+    const normalizeInt = (value) => {
+      const numeric = Number(value);
+      return Number.isFinite(numeric) && numeric > 0 ? Math.round(numeric) : null;
+    };
     return {
       id: Number(item.id || 0),
       city: text(item.city),
@@ -3817,29 +4260,51 @@
       floor: text(item.floor),
       apartment: text(item.apartment),
       comment: text(item.comment),
+      address_ref: text(item.address_ref),
+      selected_object_type: text(item.selected_object_type),
+      resolved_city_source_key: text(item.resolved_city_source_key),
+      address_context_locality: text(item.address_context_locality),
+      address_normalized_display: text(item.address_normalized_display),
+      lat: normalizeRightAddressCoordinate(item.lat, "lat"),
+      lng: normalizeRightAddressCoordinate(item.lng, "lng"),
+      delivery_zone_id: normalizeInt(item.delivery_zone_id),
+      delivery_store_id: normalizeInt(item.delivery_store_id),
       is_default: Number(item.is_default || 0),
     };
   }
 
   function getAddressDraftFromClientAddress(row, fallbackCity = "") {
-    const a = normalizeClientAddressRow(row);
-    return {
-      city: String(a.city || fallbackCity || getDefaultRightAddressCity()).trim(),
-      street: a.street,
-      house: a.house,
-      entrance: a.entrance,
-      floor: a.floor,
-      apartment: a.apartment,
-      comment: a.comment,
-    };
+    return normalizeRightAddressDraft(normalizeClientAddressRow(row), fallbackCity);
+  }
+
+  function buildRightAddressLookupDisplay(draft) {
+    const next = normalizeRightAddressDraft(draft);
+    if (next.selected_object_type === "street") {
+      const streetValue = buildRightAddressLookupText(
+        next.city,
+        next.address_context_locality,
+        next.street,
+        "",
+        next.address_normalized_display
+      );
+      return streetValue ? `${streetValue}, ` : "";
+    }
+    return buildRightAddressLookupText(
+      next.city,
+      next.address_context_locality,
+      next.street,
+      next.house,
+      next.address_normalized_display
+    );
   }
 
   function formatClientAddressShort(row, forcedCity = "") {
-    const a = normalizeClientAddressRow(row);
-    const city = repairUtf8Mojibake(String(forcedCity || a.city || getDefaultRightAddressCity()).trim());
+    const a = normalizeRightAddressDraft(normalizeClientAddressRow(row), forcedCity);
+    const city = normalizeRightAddressText(forcedCity || a.city || getDefaultRightAddressCity());
+    const mainAddress = buildRightAddressLookupText(city, a.address_context_locality, a.street, a.house, a.address_normalized_display);
     const parts = [
       city,
-      [a.street, a.house].filter(Boolean).join(" "),
+      mainAddress,
       a.entrance ? `подъезд ${a.entrance}` : "",
       a.floor ? `этаж ${a.floor}` : "",
       a.apartment ? `кв ${a.apartment}` : "",
@@ -3893,6 +4358,13 @@
       const json = await apiJson(`/api/admin/clients/${clientId}/addresses`);
       const list = (Array.isArray(json?.data) ? json.data : []).map(normalizeClientAddressRow).filter((a) => a.id > 0);
       state.rightClientAddressesByOrder.set(id, list);
+      const selectedId = Number(state.rightAddressSelectedIdByOrder.get(id) || 0);
+      if (selectedId > 0 && !state.rightAddressDraftByOrder.has(id)) {
+        const selectedRow = list.find((row) => Number(row?.id || 0) === selectedId) || null;
+        if (selectedRow) {
+          state.rightAddressDraftByOrder.set(id, getAddressDraftFromClientAddress(selectedRow, getDefaultRightAddressCity()));
+        }
+      }
       return list;
     } catch {
       state.rightClientAddressesByOrder.set(id, []);
@@ -3926,7 +4398,7 @@
     `).join("");
   }
 
-  function initRightAddressCitySelect(wrapEl, selectedValue) {
+  function initRightAddressCitySelect(wrapEl, selectedValue, onChange = null) {
     if (!wrapEl || !wrapEl.classList.contains("custom-select")) return;
     const trigger = wrapEl.querySelector(".custom-select-trigger");
     const valueEl = wrapEl.querySelector(".custom-select-value");
@@ -3957,6 +4429,7 @@
         opt.classList.add("is-selected");
         dropdown.classList.add("hidden");
         wrapEl.classList.remove("is-open");
+        if (typeof onChange === "function") onChange(c);
       });
       dropdown.appendChild(opt);
     });
@@ -3984,9 +4457,387 @@
     document.addEventListener("click", closeHandler);
   }
 
+  async function ensureRightAddressMapMode(forceReload = false) {
+    if (!forceReload && rightAddressMapModeEnabled !== null) return rightAddressMapModeEnabled;
+    if (!forceReload && rightAddressMapModePromise) return rightAddressMapModePromise;
+    rightAddressMapModePromise = (async () => {
+      try {
+        const json = await apiJson("/api/admin/tenant/map-provider-config");
+        rightAddressMapModeEnabled = Boolean(json?.data?.store_address_map_enabled);
+      } catch {
+        rightAddressMapModeEnabled = false;
+      } finally {
+        rightAddressMapModePromise = null;
+      }
+      return rightAddressMapModeEnabled;
+    })();
+    return rightAddressMapModePromise;
+  }
+
+  function resetRightAddressLookupState() {
+    if (rightAddressLookupState.debounceTimer) clearTimeout(rightAddressLookupState.debounceTimer);
+    if (rightAddressLookupState.closeTimer) clearTimeout(rightAddressLookupState.closeTimer);
+    rightAddressLookupState.requestSeq = 0;
+    rightAddressLookupState.items = [];
+    rightAddressLookupState.activeIndex = -1;
+    rightAddressLookupState.open = false;
+    rightAddressLookupState.status = "";
+    rightAddressLookupState.statusMode = "idle";
+    rightAddressLookupState.selectedStreet = null;
+    rightAddressLookupState.selectedAddress = null;
+    rightAddressLookupState.addressRef = "";
+    rightAddressLookupState.selectedObjectType = "";
+    rightAddressLookupState.resolvedCitySourceKey = "";
+    rightAddressLookupState.contextLocality = "";
+    rightAddressLookupState.lat = null;
+    rightAddressLookupState.lng = null;
+    rightAddressLookupState.deliveryZoneId = null;
+    rightAddressLookupState.deliveryStoreId = null;
+  }
+
+  function createRightAddressSuggestionItem(source, fallbackType = "address") {
+    const item = source && typeof source === "object" ? source : {};
+    const objectType = normalizeRightAddressText(item.object_type || fallbackType) || fallbackType;
+    return {
+      stage: normalizeRightAddressText(item.stage || (objectType === "address" ? "house" : "address")) || "address",
+      object_type: objectType,
+      source_key: normalizeRightAddressText(item.source_key),
+      label: normalizeRightAddressText(item.label || item.value || item.full_address || item.street_name),
+      value: normalizeRightAddressText(item.value || item.label || item.full_address || item.street_name),
+      full_address: normalizeRightAddressText(item.full_address || item.value || item.label),
+      city_name: normalizeRightAddressText(item.city_name),
+      context_locality: normalizeRightAddressText(item.context_locality),
+      street_name: normalizeRightAddressText(item.street_name || item.label || item.value),
+      house_number: normalizeRightAddressText(item.house_number),
+      lat: normalizeRightAddressCoordinate(item.lat, "lat"),
+      lng: normalizeRightAddressCoordinate(item.lng, "lng"),
+    };
+  }
+
+  function getRightAddressItemType(item) {
+    return normalizeRightAddressText(item?.object_type || item?.type || item?.stage || "").toLowerCase();
+  }
+
+  function getRightAddressStreetValue(item) {
+    return normalizeRightAddressText(item?.street_name || item?.value || item?.label);
+  }
+
+  function getRightAddressHouseValue(item) {
+    return normalizeRightAddressText(item?.house_number);
+  }
+
+  function closeRightAddressLookupPopover() {
+    const { lookupPopover } = getRightAddressOverlayElements();
+    if (lookupPopover) lookupPopover.classList.add("hidden");
+    rightAddressLookupState.open = false;
+  }
+
+  function getRightAddressSuggestionTitle(item, cityValue = "") {
+    const type = getRightAddressItemType(item);
+    if (type === "street") {
+      return buildRightAddressLookupText(
+        cityValue,
+        item?.context_locality || item?.city_name,
+        getRightAddressStreetValue(item),
+        "",
+        item?.full_address || item?.value || item?.label
+      ) || getRightAddressStreetValue(item);
+    }
+    if (type === "context-locality") {
+      return normalizeRightAddressText(item?.value || item?.label || item?.context_locality);
+    }
+    return normalizeRightAddressText(item?.full_address || item?.value || item?.label);
+  }
+
+  function getRightAddressSuggestionMeta(item, cityValue = "") {
+    const type = getRightAddressItemType(item);
+    const locality = normalizeRightAddressText(item?.context_locality || item?.city_name);
+    if (!locality) return "";
+    if (type === "context-locality") return `Поиск: ${cityValue || locality}`;
+    return locality;
+  }
+
+  function renderRightAddressLookupPopover() {
+    const { city, lookupPopover, lookupStatus, lookupResults } = getRightAddressOverlayElements();
+    if (!lookupPopover || !lookupStatus || !lookupResults) return;
+    lookupStatus.textContent = rightAddressLookupState.status || "";
+    lookupResults.innerHTML = "";
+    const cityValue = normalizeRightAddressText(city?.dataset?.value || "");
+    const items = Array.isArray(rightAddressLookupState.items) ? rightAddressLookupState.items : [];
+    items.forEach((item, index) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "shop-address-lookup-item" + (index === rightAddressLookupState.activeIndex ? " is-active" : "");
+      button.addEventListener("mousedown", (event) => event.preventDefault());
+      button.addEventListener("click", () => applyRightAddressSuggestion(item));
+      const title = document.createElement("div");
+      title.className = "shop-address-lookup-item-title";
+      title.textContent = getRightAddressSuggestionTitle(item, cityValue);
+      button.appendChild(title);
+      const metaText = getRightAddressSuggestionMeta(item, cityValue);
+      if (metaText) {
+        const meta = document.createElement("div");
+        meta.className = "shop-address-lookup-item-meta";
+        meta.textContent = metaText;
+        button.appendChild(meta);
+      }
+      lookupResults.appendChild(button);
+    });
+    const show = Boolean(rightAddressLookupState.status || items.length);
+    lookupPopover.classList.toggle("hidden", !show);
+    rightAddressLookupState.open = show;
+  }
+
+  function getRightAddressLookupContinuation(query) {
+    const selectedStreet = rightAddressLookupState.selectedStreet;
+    if (!selectedStreet || !selectedStreet.source_key) return { preserve: false, housePart: "" };
+    const normalizedQuery = normalizeRightAddressText(query);
+    const streetValue = normalizeRightAddressText(getRightAddressStreetValue(selectedStreet));
+    if (!normalizedQuery || !streetValue) return { preserve: false, housePart: "" };
+    const streetIndex = normalizeRightAddressKey(normalizedQuery).lastIndexOf(normalizeRightAddressKey(streetValue));
+    if (streetIndex < 0) return { preserve: false, housePart: "" };
+    return {
+      preserve: true,
+      housePart: normalizedQuery.slice(streetIndex + streetValue.length).replace(/^[,\s]+/, "").trim(),
+    };
+  }
+
+  function applyRightAddressLookupManualState(value) {
+    const nextValue = normalizeRightAddressText(value);
+    if (!nextValue) {
+      rightAddressLookupState.selectedStreet = null;
+      rightAddressLookupState.selectedAddress = null;
+      rightAddressLookupState.addressRef = "";
+      rightAddressLookupState.selectedObjectType = "";
+      rightAddressLookupState.contextLocality = "";
+      rightAddressLookupState.lat = null;
+      rightAddressLookupState.lng = null;
+      rightAddressLookupState.deliveryZoneId = null;
+      rightAddressLookupState.deliveryStoreId = null;
+      return;
+    }
+    const selectedStreet = rightAddressLookupState.selectedStreet;
+    if (!selectedStreet) {
+      rightAddressLookupState.selectedAddress = null;
+      rightAddressLookupState.addressRef = "";
+      rightAddressLookupState.selectedObjectType = "";
+      rightAddressLookupState.lat = null;
+      rightAddressLookupState.lng = null;
+      rightAddressLookupState.deliveryZoneId = null;
+      rightAddressLookupState.deliveryStoreId = null;
+      return;
+    }
+    const streetValue = normalizeRightAddressText(getRightAddressStreetValue(selectedStreet));
+    if (!streetValue || normalizeRightAddressKey(nextValue).indexOf(normalizeRightAddressKey(streetValue)) < 0) {
+      rightAddressLookupState.selectedStreet = null;
+      rightAddressLookupState.selectedAddress = null;
+      rightAddressLookupState.addressRef = "";
+      rightAddressLookupState.selectedObjectType = "";
+      rightAddressLookupState.lat = null;
+      rightAddressLookupState.lng = null;
+      rightAddressLookupState.deliveryZoneId = null;
+      rightAddressLookupState.deliveryStoreId = null;
+      return;
+    }
+    if (rightAddressLookupState.selectedAddress) {
+      const selectedHouse = normalizeRightAddressText(getRightAddressHouseValue(rightAddressLookupState.selectedAddress));
+      const continuation = getRightAddressLookupContinuation(nextValue);
+      if (!selectedHouse || normalizeRightAddressKey(continuation.housePart) !== normalizeRightAddressKey(selectedHouse)) {
+        rightAddressLookupState.selectedAddress = null;
+        rightAddressLookupState.addressRef = rightAddressLookupState.selectedStreet?.source_key || "";
+        rightAddressLookupState.selectedObjectType = rightAddressLookupState.selectedStreet ? "street" : "";
+        rightAddressLookupState.lat = null;
+        rightAddressLookupState.lng = null;
+        rightAddressLookupState.deliveryZoneId = null;
+        rightAddressLookupState.deliveryStoreId = null;
+      }
+    }
+  }
+
+  async function searchRightAddressSuggestions(query, requestId) {
+    const { city } = getRightAddressOverlayElements();
+    const cityValue = normalizeRightAddressText(city?.dataset?.value || "");
+    const normalizedQuery = normalizeRightAddressText(query);
+    if (!cityValue || !normalizedQuery) {
+      rightAddressLookupState.items = [];
+      rightAddressLookupState.activeIndex = -1;
+      rightAddressLookupState.status = "";
+      renderRightAddressLookupPopover();
+      closeRightAddressLookupPopover();
+      return;
+    }
+
+    const continuation = getRightAddressLookupContinuation(normalizedQuery);
+    const useHouseStage = Boolean(continuation.preserve && continuation.housePart && rightAddressLookupState.selectedStreet?.source_key);
+    const params = new URLSearchParams({
+      stage: useHouseStage ? "house" : "address",
+      q: useHouseStage ? continuation.housePart : normalizedQuery,
+      city: cityValue,
+    });
+    if (rightAddressLookupState.resolvedCitySourceKey) {
+      params.set("city_source_key", rightAddressLookupState.resolvedCitySourceKey);
+    }
+    if (useHouseStage) {
+      params.set("selected_source_key", rightAddressLookupState.selectedStreet.source_key);
+    } else if (rightAddressLookupState.selectedObjectType === "context-locality" && rightAddressLookupState.addressRef) {
+      params.set("selected_source_key", rightAddressLookupState.addressRef);
+    }
+
+    rightAddressLookupState.status = `Поиск: ${cityValue}`;
+    rightAddressLookupState.statusMode = "loading";
+    renderRightAddressLookupPopover();
+
+    try {
+      const json = await apiJson(`/api/admin/system/address-suggest-local?${params.toString()}`);
+      if (requestId !== rightAddressLookupState.requestSeq) return;
+      const sourceItems = Array.isArray(json?.data?.items) ? json.data.items : [];
+      const items = sourceItems
+        .map((item) => createRightAddressSuggestionItem(item))
+        .filter((item) => {
+          const type = getRightAddressItemType(item);
+          if (useHouseStage) return type === "address";
+          return type === "address" || type === "street" || type === "context-locality";
+        });
+      rightAddressLookupState.items = items;
+      rightAddressLookupState.activeIndex = items.length ? 0 : -1;
+      rightAddressLookupState.status = items.length ? `Поиск: ${json?.data?.scope_label || cityValue}` : "Ничего не найдено.";
+      rightAddressLookupState.statusMode = items.length ? "ready" : "empty";
+      renderRightAddressLookupPopover();
+    } catch {
+      if (requestId !== rightAddressLookupState.requestSeq) return;
+      rightAddressLookupState.items = [];
+      rightAddressLookupState.activeIndex = -1;
+      rightAddressLookupState.status = "Не удалось получить подсказки адреса.";
+      rightAddressLookupState.statusMode = "error";
+      renderRightAddressLookupPopover();
+    }
+  }
+
+  function scheduleRightAddressSuggestions() {
+    const { lookup } = getRightAddressOverlayElements();
+    if (!lookup || !rightAddressMapModeEnabled) {
+      closeRightAddressLookupPopover();
+      return;
+    }
+    applyRightAddressLookupManualState(lookup.value);
+    if (rightAddressLookupState.debounceTimer) clearTimeout(rightAddressLookupState.debounceTimer);
+    const requestId = ++rightAddressLookupState.requestSeq;
+    rightAddressLookupState.debounceTimer = window.setTimeout(() => {
+      rightAddressLookupState.debounceTimer = 0;
+      void searchRightAddressSuggestions(lookup.value, requestId);
+    }, 180);
+  }
+
+  function focusRightAddressLookupEnd() {
+    const { lookup } = getRightAddressOverlayElements();
+    if (!lookup) return;
+    const nextLength = String(lookup.value || "").length;
+    try {
+      lookup.setSelectionRange(nextLength, nextLength);
+    } catch {}
+  }
+
+  function applyRightAddressSuggestion(item) {
+    const elements = getRightAddressOverlayElements();
+    if (!elements.lookup || !elements.street || !elements.house) return;
+    const selection = createRightAddressSuggestionItem(item);
+    const type = getRightAddressItemType(selection);
+    const cityValue = normalizeRightAddressText(elements.city?.dataset?.value || "");
+    const contextLocality = normalizeRightAddressText(selection.context_locality || selection.city_name || cityValue);
+    if (type === "context-locality") {
+      rightAddressLookupState.selectedStreet = null;
+      rightAddressLookupState.selectedAddress = null;
+      rightAddressLookupState.addressRef = selection.source_key || "";
+      rightAddressLookupState.selectedObjectType = "context-locality";
+      rightAddressLookupState.contextLocality = contextLocality;
+      rightAddressLookupState.lat = null;
+      rightAddressLookupState.lng = null;
+      rightAddressLookupState.deliveryZoneId = null;
+      rightAddressLookupState.deliveryStoreId = null;
+      elements.lookup.value = contextLocality ? `${contextLocality}, ` : "";
+      elements.street.value = "";
+      elements.house.value = "";
+      closeRightAddressLookupPopover();
+      elements.lookup.focus();
+      focusRightAddressLookupEnd();
+      return;
+    }
+
+    const streetValue = getRightAddressStreetValue(selection);
+    const houseValue = getRightAddressHouseValue(selection);
+    elements.street.value = streetValue;
+    elements.house.value = type === "address" ? houseValue : "";
+    rightAddressLookupState.contextLocality = contextLocality;
+    rightAddressLookupState.selectedStreet = createRightAddressSuggestionItem({
+      ...selection,
+      object_type: "street",
+      street_name: streetValue,
+      house_number: "",
+      full_address: buildRightAddressLookupText(cityValue, contextLocality, streetValue, "", streetValue),
+    }, "street");
+    rightAddressLookupState.selectedAddress = type === "address"
+      ? createRightAddressSuggestionItem({
+        ...selection,
+        object_type: "address",
+        street_name: streetValue,
+        house_number: houseValue,
+        full_address: buildRightAddressLookupText(cityValue, contextLocality, streetValue, houseValue, selection.full_address),
+      }, "address")
+      : null;
+    rightAddressLookupState.addressRef = selection.source_key || "";
+    rightAddressLookupState.selectedObjectType = type === "address" ? "address" : "street";
+    rightAddressLookupState.lat = type === "address" ? selection.lat : null;
+    rightAddressLookupState.lng = type === "address" ? selection.lng : null;
+    rightAddressLookupState.deliveryZoneId = null;
+    rightAddressLookupState.deliveryStoreId = null;
+    elements.lookup.value = type === "address"
+      ? buildRightAddressLookupText(cityValue, contextLocality, streetValue, houseValue, selection.full_address)
+      : `${buildRightAddressLookupText(cityValue, contextLocality, streetValue, "", selection.full_address)}, `;
+    closeRightAddressLookupPopover();
+    elements.lookup.focus();
+    focusRightAddressLookupEnd();
+  }
+
+  function hydrateRightAddressLookupStateFromDraft(draft) {
+    const next = normalizeRightAddressDraft(draft);
+    resetRightAddressLookupState();
+    rightAddressLookupState.addressRef = next.address_ref || "";
+    rightAddressLookupState.selectedObjectType = next.selected_object_type || "";
+    rightAddressLookupState.resolvedCitySourceKey = next.resolved_city_source_key || "";
+    rightAddressLookupState.contextLocality = next.address_context_locality || "";
+    rightAddressLookupState.lat = next.lat;
+    rightAddressLookupState.lng = next.lng;
+    rightAddressLookupState.deliveryZoneId = next.delivery_zone_id;
+    rightAddressLookupState.deliveryStoreId = next.delivery_store_id;
+    if (next.street) {
+      rightAddressLookupState.selectedStreet = createRightAddressSuggestionItem({
+        source_key: next.selected_object_type === "street" ? next.address_ref : "",
+        object_type: "street",
+        city_name: next.city,
+        context_locality: next.address_context_locality || next.city,
+        street_name: next.street,
+        full_address: buildRightAddressLookupText(next.city, next.address_context_locality, next.street, "", next.address_normalized_display),
+      }, "street");
+    }
+    if (next.street && next.house && next.selected_object_type === "address") {
+      rightAddressLookupState.selectedAddress = createRightAddressSuggestionItem({
+        source_key: next.address_ref,
+        object_type: "address",
+        city_name: next.city,
+        context_locality: next.address_context_locality || next.city,
+        street_name: next.street,
+        house_number: next.house,
+        full_address: buildRightAddressLookupText(next.city, next.address_context_locality, next.street, next.house, next.address_normalized_display),
+        lat: next.lat,
+        lng: next.lng,
+      }, "address");
+    }
+  }
+
   function closeRightAddressOverlay() {
     const { backdrop } = getRightAddressOverlayElements();
     if (!backdrop) return;
+    closeRightAddressLookupPopover();
     backdrop.classList.add("hidden");
     backdrop.onclick = null;
   }
@@ -3999,33 +4850,66 @@
   }
 
   function buildRightAddressLine(parts) {
-    const city = repairUtf8Mojibake(String(parts?.city || "").trim());
-    const street = repairUtf8Mojibake(String(parts?.street || "").trim());
-    const house = repairUtf8Mojibake(String(parts?.house || "").trim());
-    const entrance = repairUtf8Mojibake(String(parts?.entrance || "").trim());
-    const floor = repairUtf8Mojibake(String(parts?.floor || "").trim());
-    const apartment = repairUtf8Mojibake(String(parts?.apartment || "").trim());
-    const comment = repairUtf8Mojibake(String(parts?.comment || "").trim());
-    const head = [city ? `г. ${city}` : "", street ? `ул. ${street}` : "", house ? `д. ${house}` : ""].filter(Boolean).join(", ");
+    const next = normalizeRightAddressDraft(parts);
+    const city = normalizeRightAddressText(next.city);
+    const entrance = normalizeRightAddressText(next.entrance);
+    const floor = normalizeRightAddressText(next.floor);
+    const apartment = normalizeRightAddressText(next.apartment);
+    const comment = normalizeRightAddressText(next.comment);
+    const addressLabel = buildRightAddressLookupText(
+      city,
+      next.address_context_locality,
+      next.street,
+      next.house,
+      next.address_normalized_display
+    );
+    const head = [city ? `г. ${city}` : "", addressLabel].filter(Boolean).join(", ");
     const details = [entrance ? `под. ${entrance}` : "", floor ? `эт. ${floor}` : "", apartment ? `кв. ${apartment}` : ""].filter(Boolean).join(", ");
     return [head, details, comment].filter(Boolean).join(", ");
   }
 
-  function fillRightAddressInputs(draft) {
-    const { city, street, house, entrance, floor, apartment, comment } = getRightAddressOverlayElements();
+  function fillRightAddressInputs(draft, orderId = 0) {
+    const {
+      city,
+      lookupWrap,
+      lookup,
+      street,
+      house,
+      entrance,
+      floor,
+      apartment,
+      comment,
+    } = getRightAddressOverlayElements();
     if (!city || !street || !house || !entrance || !floor || !apartment || !comment) return;
-    initRightAddressCitySelect(city, repairUtf8Mojibake(String(draft?.city || "")));
-    street.value = repairUtf8Mojibake(String(draft?.street || ""));
-    house.value = repairUtf8Mojibake(String(draft?.house || ""));
-    entrance.value = repairUtf8Mojibake(String(draft?.entrance || ""));
-    floor.value = repairUtf8Mojibake(String(draft?.floor || ""));
-    apartment.value = repairUtf8Mojibake(String(draft?.apartment || ""));
-    comment.value = repairUtf8Mojibake(String(draft?.comment || ""));
+    const next = normalizeRightAddressDraft(draft);
+    initRightAddressCitySelect(city, next.city, () => {
+      if (!rightAddressMapModeEnabled) return;
+      resetRightAddressLookupState();
+      if (lookup) lookup.value = "";
+      street.value = "";
+      house.value = "";
+      closeRightAddressLookupPopover();
+      if (orderId > 0) {
+        state.rightAddressDraftByOrder.set(
+          orderId,
+          normalizeRightAddressDraft({ ...next, city: city.dataset.value || next.city }, city.dataset.value || next.city)
+        );
+      }
+    });
+    if (lookupWrap) lookupWrap.classList.toggle("hidden", !rightAddressMapModeEnabled);
+    hydrateRightAddressLookupStateFromDraft(next);
+    if (lookup) lookup.value = rightAddressMapModeEnabled ? buildRightAddressLookupDisplay(next) : "";
+    street.value = next.street;
+    house.value = next.house;
+    entrance.value = next.entrance;
+    floor.value = next.floor;
+    apartment.value = next.apartment;
+    comment.value = next.comment;
   }
 
   function readRightAddressInputs() {
-    const { city, street, house, entrance, floor, apartment, comment } = getRightAddressOverlayElements();
-    return {
+    const { city, lookup, street, house, entrance, floor, apartment, comment } = getRightAddressOverlayElements();
+    return normalizeRightAddressDraft({
       city: String(city?.dataset?.value || "").trim(),
       street: String(street?.value || "").trim(),
       house: String(house?.value || "").trim(),
@@ -4033,33 +4917,126 @@
       floor: String(floor?.value || "").trim(),
       apartment: String(apartment?.value || "").trim(),
       comment: String(comment?.value || "").trim(),
-    };
+      address_ref: rightAddressMapModeEnabled ? (rightAddressLookupState.addressRef || null) : null,
+      selected_object_type: rightAddressMapModeEnabled ? (rightAddressLookupState.selectedObjectType || null) : null,
+      resolved_city_source_key: rightAddressMapModeEnabled ? (rightAddressLookupState.resolvedCitySourceKey || null) : null,
+      address_context_locality: rightAddressMapModeEnabled ? (rightAddressLookupState.contextLocality || null) : null,
+      address_normalized_display: rightAddressMapModeEnabled ? (normalizeRightAddressText(lookup?.value || "") || null) : null,
+      lat: rightAddressMapModeEnabled ? rightAddressLookupState.lat : null,
+      lng: rightAddressMapModeEnabled ? rightAddressLookupState.lng : null,
+      delivery_zone_id: rightAddressMapModeEnabled ? rightAddressLookupState.deliveryZoneId : null,
+      delivery_store_id: rightAddressMapModeEnabled ? rightAddressLookupState.deliveryStoreId : null,
+    });
   }
 
   async function openRightAddressOverlay(orderId) {
     const id = Number(orderId || 0);
     if (!(id > 0)) return;
     ensureRightAddressOverlay();
-    const { backdrop, newBtn, saveBtn, cancelBtn } = getRightAddressOverlayElements();
+    rightAddressMapModeEnabled = await ensureRightAddressMapMode();
+    const { backdrop, newBtn, saveBtn, cancelBtn, lookup, street, house, lookupWrap } = getRightAddressOverlayElements();
     if (!backdrop || !saveBtn || !cancelBtn) return;
+    rightAddressLookupState.orderId = id;
 
     await loadClientAddressesForRightOrder(id);
     const rows = Array.isArray(state.rightClientAddressesByOrder.get(id)) ? state.rightClientAddressesByOrder.get(id) : [];
 
-    const draft = state.rightAddressDraftByOrder.get(id) || {
-      city: getDefaultRightAddressCity(),
-      street: "",
-      house: "",
-      entrance: "",
-      floor: "",
-      apartment: "",
-      comment: "",
-    };
+    const existingSelectedId = Number(state.rightAddressSelectedIdByOrder.get(id) || 0);
     const defaultSelected = rows.find((a) => Number(a.is_default || 0) === 1) || rows[0] || null;
-    state.rightAddressSelectedIdByOrder.set(id, Number(defaultSelected?.id || 0) || 0);
+    const selectedRow = rows.find((a) => Number(a.id || 0) === existingSelectedId) || defaultSelected || null;
+    const draftSource = state.rightAddressDraftByOrder.has(id)
+      ? state.rightAddressDraftByOrder.get(id)
+      : (selectedRow ? getAddressDraftFromClientAddress(selectedRow, getDefaultRightAddressCity()) : createBlankRightAddressDraft());
+    const draft = normalizeRightAddressDraft(draftSource, getDefaultRightAddressCity());
+    state.rightAddressSelectedIdByOrder.set(id, Number(selectedRow?.id || 0) || 0);
     state.rightAddressEditingIdByOrder.set(id, 0);
-    fillRightAddressInputs(draft);
+    fillRightAddressInputs(draft, id);
     renderRightAddressList(id);
+    if (lookupWrap) lookupWrap.classList.toggle("hidden", !rightAddressMapModeEnabled);
+
+    if (lookup) {
+      lookup.oninput = () => {
+        scheduleRightAddressSuggestions();
+      };
+      lookup.onkeydown = (event) => {
+        if (!rightAddressLookupState.open) {
+          if (event.key === "ArrowDown") {
+            scheduleRightAddressSuggestions();
+            event.preventDefault();
+          }
+          return;
+        }
+        const items = Array.isArray(rightAddressLookupState.items) ? rightAddressLookupState.items : [];
+        if (event.key === "ArrowDown") {
+          event.preventDefault();
+          if (!items.length) return;
+          rightAddressLookupState.activeIndex = Math.min(items.length - 1, rightAddressLookupState.activeIndex + 1);
+          renderRightAddressLookupPopover();
+          return;
+        }
+        if (event.key === "ArrowUp") {
+          event.preventDefault();
+          if (!items.length) return;
+          rightAddressLookupState.activeIndex = Math.max(0, rightAddressLookupState.activeIndex - 1);
+          renderRightAddressLookupPopover();
+          return;
+        }
+        if (event.key === "Enter") {
+          const active = items[rightAddressLookupState.activeIndex] || items[0] || null;
+          if (active) {
+            event.preventDefault();
+            applyRightAddressSuggestion(active);
+          }
+          return;
+        }
+        if (event.key === "Escape") {
+          closeRightAddressLookupPopover();
+        }
+      };
+      lookup.onfocus = () => {
+        if (!rightAddressMapModeEnabled) return;
+        if (normalizeRightAddressText(lookup.value)) {
+          scheduleRightAddressSuggestions();
+        }
+      };
+      lookup.onblur = () => {
+        if (rightAddressLookupState.closeTimer) clearTimeout(rightAddressLookupState.closeTimer);
+        rightAddressLookupState.closeTimer = window.setTimeout(() => {
+          closeRightAddressLookupPopover();
+        }, 120);
+      };
+    }
+    if (street) {
+      street.oninput = () => {
+        if (!rightAddressMapModeEnabled) return;
+        const streetValue = normalizeRightAddressText(street.value);
+        const selectedStreetValue = normalizeRightAddressText(getRightAddressStreetValue(rightAddressLookupState.selectedStreet));
+        if (!selectedStreetValue || normalizeRightAddressKey(streetValue) !== normalizeRightAddressKey(selectedStreetValue)) {
+          rightAddressLookupState.selectedStreet = null;
+          rightAddressLookupState.selectedAddress = null;
+          rightAddressLookupState.addressRef = "";
+          rightAddressLookupState.selectedObjectType = "";
+          rightAddressLookupState.lat = null;
+          rightAddressLookupState.lng = null;
+          rightAddressLookupState.deliveryZoneId = null;
+          rightAddressLookupState.deliveryStoreId = null;
+        }
+      };
+    }
+    if (house) {
+      house.oninput = () => {
+        if (!rightAddressMapModeEnabled) return;
+        if (rightAddressLookupState.selectedAddress) {
+          rightAddressLookupState.selectedAddress = null;
+          rightAddressLookupState.addressRef = rightAddressLookupState.selectedStreet?.source_key || "";
+          rightAddressLookupState.selectedObjectType = rightAddressLookupState.selectedStreet ? "street" : "";
+          rightAddressLookupState.lat = null;
+          rightAddressLookupState.lng = null;
+          rightAddressLookupState.deliveryZoneId = null;
+          rightAddressLookupState.deliveryStoreId = null;
+        }
+      };
+    }
 
     backdrop.classList.remove("hidden");
     backdrop.onclick = (e) => {
@@ -4084,7 +5061,7 @@
         if (!row) return;
         state.rightAddressEditingIdByOrder.set(id, addrId);
         state.rightAddressSelectedIdByOrder.set(id, addrId);
-        fillRightAddressInputs(getAddressDraftFromClientAddress(row, getDefaultRightAddressCity()));
+        fillRightAddressInputs(getAddressDraftFromClientAddress(row, getDefaultRightAddressCity()), id);
         renderRightAddressList(id);
         return;
       }
@@ -4109,15 +5086,7 @@
       newBtn.onclick = () => {
         state.rightAddressEditingIdByOrder.set(id, 0);
         state.rightAddressSelectedIdByOrder.set(id, 0);
-        fillRightAddressInputs({
-          city: getDefaultRightAddressCity(),
-          street: "",
-          house: "",
-          entrance: "",
-          floor: "",
-          apartment: "",
-          comment: "",
-        });
+        fillRightAddressInputs(createBlankRightAddressDraft(), id);
         renderRightAddressList(id);
       };
     }
@@ -4135,15 +5104,34 @@
         await apiJson(`/api/admin/clients/${clientId}/addresses/${editingAddressId}`, {
           method: "PUT",
           body: JSON.stringify({
-            street: next.street,
-            house: next.house,
+            city: next.city || null,
+            street: next.street || null,
+            house: next.house || null,
             entrance: next.entrance || null,
             floor: next.floor || null,
             apartment: next.apartment || null,
             comment: next.comment || null,
+            address_ref: next.address_ref,
+            selected_object_type: next.selected_object_type,
+            resolved_city_source_key: next.resolved_city_source_key,
+            address_context_locality: next.address_context_locality,
+            address_normalized_display: next.address_normalized_display,
+            lat: next.lat,
+            lng: next.lng,
+            delivery_zone_id: next.delivery_zone_id,
+            delivery_store_id: next.delivery_store_id,
           }),
         });
-        await loadClientAddressesForRightOrder(id);
+        const list = await loadClientAddressesForRightOrder(id);
+        const updated = list.find((row) => Number(row.id || 0) === editingAddressId) || null;
+        if (updated) {
+          const selectedDraft = getAddressDraftFromClientAddress(updated, next.city || getDefaultRightAddressCity());
+          state.rightAddressDraftByOrder.set(id, selectedDraft);
+          updateRightOrderFormField(id, "address", buildRightAddressLine(selectedDraft));
+          closeRightAddressOverlay();
+          renderRightOrderTabs();
+          return;
+        }
       } else if (selectedAddressId > 0) {
         const list = Array.isArray(state.rightClientAddressesByOrder.get(id)) ? state.rightClientAddressesByOrder.get(id) : [];
         const selectedRow = list.find((a) => Number(a.id) === selectedAddressId) || null;
@@ -4155,22 +5143,41 @@
           renderRightOrderTabs();
           return;
         }
-      } else if (clientId > 0 && next.street && next.house) {
-        await apiJson(`/api/admin/clients/${clientId}/addresses`, {
+      } else if (clientId > 0 && (next.city || next.street || next.house || next.address_normalized_display)) {
+        const createdJson = await apiJson(`/api/admin/clients/${clientId}/addresses`, {
           method: "POST",
           body: JSON.stringify({
-            street: next.street,
-            house: next.house,
+            city: next.city || null,
+            street: next.street || null,
+            house: next.house || null,
             entrance: next.entrance || null,
             floor: next.floor || null,
             apartment: next.apartment || null,
             comment: next.comment || null,
+            address_ref: next.address_ref,
+            selected_object_type: next.selected_object_type,
+            resolved_city_source_key: next.resolved_city_source_key,
+            address_context_locality: next.address_context_locality,
+            address_normalized_display: next.address_normalized_display,
+            lat: next.lat,
+            lng: next.lng,
+            delivery_zone_id: next.delivery_zone_id,
+            delivery_store_id: next.delivery_store_id,
             is_default: false,
           }),
         });
+        const createdAddressId = Number(createdJson?.id || 0);
         const list = await loadClientAddressesForRightOrder(id);
-        const created = list[0] || null;
-        if (created) state.rightAddressSelectedIdByOrder.set(id, Number(created.id || 0));
+        const created = list.find((row) => Number(row.id || 0) === createdAddressId) || null;
+        if (created) {
+          state.rightAddressSelectedIdByOrder.set(id, Number(created.id || 0));
+          const createdDraft = getAddressDraftFromClientAddress(created, next.city || getDefaultRightAddressCity());
+          state.rightAddressDraftByOrder.set(id, createdDraft);
+          updateRightOrderFormField(id, "address", buildRightAddressLine(createdDraft));
+          closeRightAddressOverlay();
+          renderRightOrderTabs();
+          return;
+        }
       }
 
       state.rightAddressDraftByOrder.set(id, next);
@@ -4193,16 +5200,24 @@
       const storeAddress = getStoreAddressForPickupLikeMethod();
       if (!storeAddress) return;
       form.address = storeAddress;
+      state.rightAddressDraftByOrder.delete(id);
+      state.rightAddressSelectedIdByOrder.delete(id);
+      state.rightAddressEditingIdByOrder.delete(id);
+      invalidateRightDeliveryQuote(id);
       state.rightOrders[index] = { ...order, form };
       return;
     }
 
-    const clientAddresses = await loadClientAddressesForRightOrder(id);
-    const primaryAddress = (Array.isArray(clientAddresses) ? clientAddresses : []).find((item) => Number(item?.is_default || 0) === 1)
+      const clientAddresses = await loadClientAddressesForRightOrder(id);
+      const primaryAddress = (Array.isArray(clientAddresses) ? clientAddresses : []).find((item) => Number(item?.is_default || 0) === 1)
       || (Array.isArray(clientAddresses) ? clientAddresses[0] : null)
       || null;
     if (!primaryAddress) return;
+    state.rightAddressSelectedIdByOrder.set(id, Number(primaryAddress?.id || 0) || 0);
+    state.rightAddressEditingIdByOrder.set(id, 0);
+    state.rightAddressDraftByOrder.set(id, getAddressDraftFromClientAddress(primaryAddress, getDefaultRightAddressCity()));
     form.address = formatClientAddressLine(primaryAddress);
+    invalidateRightDeliveryQuote(id);
     state.rightOrders[index] = { ...order, form };
   }
 
@@ -11453,6 +12468,29 @@
       cartItems,
     };
 
+    const sessionAddressDraft = String(src?.method_code || "").trim().toLowerCase() === "delivery"
+      ? normalizeRightAddressDraft({
+        city: src?.delivery_address_city || "",
+        street: src?.delivery_address_street || "",
+        house: src?.delivery_address_house || "",
+        entrance: src?.delivery_address_entrance || "",
+        floor: src?.delivery_address_floor || "",
+        apartment: src?.delivery_address_apartment || "",
+        comment: src?.address_comment || "",
+        address_ref: src?.delivery_address_ref || null,
+        selected_object_type: src?.delivery_selected_object_type || null,
+        resolved_city_source_key: src?.delivery_resolved_city_source_key || null,
+        address_context_locality: src?.delivery_address_context_locality || null,
+        address_normalized_display: src?.delivery_address_normalized_display || src?.address || null,
+        lat: src?.delivery_address_lat,
+        lng: src?.delivery_address_lng,
+        delivery_zone_id: src?.delivery_zone_id,
+        delivery_store_id: src?.delivery_store_id,
+      }, getDefaultRightAddressCity())
+      : null;
+    const hasSessionAddressDraft = sessionAddressDraft && hasRightOrderQuoteAddressData(sessionAddressDraft);
+    const deliveryAddressId = Number(src?.delivery_address_id || 0);
+
     return {
       activeCategoryId: CHECKOUT_SCREEN_ID,
       quantities: {},
@@ -11460,6 +12498,8 @@
       ingredientStateByProduct: {},
       optionSelections: {},
       rightOrders: [draft],
+      rightAddressDraftByOrder: hasSessionAddressDraft ? { [draft.id]: sessionAddressDraft } : {},
+      rightAddressSelectedIdByOrder: deliveryAddressId > 0 ? { [draft.id]: deliveryAddressId } : {},
       rightActiveOrderId: Number(draft.id || 0) || null,
     };
   }
@@ -11471,6 +12511,8 @@
       selectedVariants: mapToObject(state.selectedVariants),
       ingredientStateByProduct: mapOfMapsToObject(state.ingredientStateByProduct),
       optionSelections: serializeOptionSelectionsMap(state.optionSelections),
+      rightAddressDraftByOrder: mapToObject(state.rightAddressDraftByOrder),
+      rightAddressSelectedIdByOrder: mapToObject(state.rightAddressSelectedIdByOrder),
       rightOrders: deepCloneJson(Array.isArray(state.rightOrders) ? state.rightOrders : [], []),
       rightActiveOrderId: Number(state.rightActiveOrderId || 0) || null,
     };
@@ -11486,6 +12528,25 @@
     state.selectedVariants = objectToMap(src.selectedVariants || {});
     state.ingredientStateByProduct = objectToMapOfMaps(src.ingredientStateByProduct || {});
     state.optionSelections = deserializeOptionSelectionsMap(src.optionSelections || {});
+    state.rightAddressDraftByOrder = objectToMap(src.rightAddressDraftByOrder || {});
+    state.rightAddressDraftByOrder.forEach((value, key) => {
+      state.rightAddressDraftByOrder.set(key, normalizeRightAddressDraft(value, getDefaultRightAddressCity()));
+    });
+    state.rightAddressSelectedIdByOrder = objectToMap(src.rightAddressSelectedIdByOrder || {});
+    state.rightAddressSelectedIdByOrder.forEach((value, key) => {
+      const numeric = Number(value || 0);
+      if (Number.isFinite(numeric) && numeric > 0) {
+        state.rightAddressSelectedIdByOrder.set(key, numeric);
+      } else {
+        state.rightAddressSelectedIdByOrder.delete(key);
+      }
+    });
+    state.rightAddressEditingIdByOrder = new Map();
+    state.rightClientAddressesByOrder = new Map();
+    state.rightDeliveryQuoteByOrder = new Map();
+    state.rightDeliveryQuoteKeyByOrder = new Map();
+    state.rightDeliveryQuoteLoadingByOrder = new Set();
+    state.rightDeliveryQuoteReqSeqByOrder = new Map();
     state.rightOrders = Array.isArray(src.rightOrders)
       ? deepCloneJson(src.rightOrders, []).map((row) => normalizeRightOrderDraft(row))
       : [];

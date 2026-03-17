@@ -1228,17 +1228,26 @@
               <label class="field-label">НАЗВАНИЕ</label>
               <input class="control" type="text" id="settingsDeliveryName" placeholder="Например: Доставка по городу" required />
             </div>
-            <div class="settings-site-field">
-              <label class="field-label">СТОИМОСТЬ ДОСТАВКИ</label>
-              <input class="control" type="number" id="settingsDeliveryCost" placeholder="0" min="0" step="1" />
+            <div class="settings-delivery-zone-grid">
+              <div class="settings-site-field">
+                <label class="field-label">ВРЕМЯ ДОСТАВКИ, МИН</label>
+                <input class="control" type="number" id="settingsDeliveryEtaMinutes" placeholder="40" min="0" step="1" />
+              </div>
             </div>
             <div class="settings-site-field">
-              <label class="field-label">МИНИМАЛЬНАЯ СУММА ЗАКАЗА</label>
-              <input class="control" type="number" id="settingsDeliveryMinOrder" placeholder="0" min="0" step="1" />
+              <div class="settings-delivery-zone-tier-head">
+                <label class="field-label">ТАРИФЫ ПО СУММЕ ЗАКАЗА</label>
+                <button class="btn btn-secondary btn-sm" type="button" id="settingsDeliveryAddTierBtn">
+                  <i class="fas fa-plus"></i>
+                  <span>Добавить порог</span>
+                </button>
+              </div>
+              <div class="settings-delivery-zone-tier-list" id="settingsDeliveryPriceTiers"></div>
             </div>
-            <div class="settings-site-field">
-              <label class="field-label">БЕСПЛАТНАЯ ДОСТАВКА ОТ</label>
-              <input class="control" type="number" id="settingsDeliveryFreeFrom" placeholder="Оставьте пустым, если нет" min="0" step="1" />
+            <div class="hidden" aria-hidden="true">
+              <input class="control" type="number" id="settingsDeliveryCost" placeholder="0" min="0" step="1" tabindex="-1" />
+              <input class="control" type="number" id="settingsDeliveryMinOrder" placeholder="0" min="0" step="1" tabindex="-1" />
+              <input class="control" type="number" id="settingsDeliveryFreeFrom" placeholder="Оставьте пустым, если нет" min="0" step="1" tabindex="-1" />
             </div>
             <div class="settings-site-field">
               <label class="field-label">ФИЛИАЛЫ</label>

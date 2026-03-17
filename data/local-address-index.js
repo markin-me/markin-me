@@ -604,18 +604,20 @@ async function searchLocalAddressRowsInScope(baseLocality, query, options = {}) 
     const scopeLocalities = await getLocalitySearchScope(baseLocality);
     localityIds = scopeLocalities.map((item) => Number(item && item.id)).filter(Boolean);
     scopeLabelName = String(baseLocality.name || '').trim() || String(selectedRow.locality_name || '').trim();
-    prefixSql = `
-      (
-        (idx.object_type='street' AND idx.street_name=?)
-        OR
-        (idx.object_type='address' AND idx.street_name=?)
-      )
-      AND
-    `;
-    prefixParams = [
-      selectedStreetName,
-      selectedStreetName,
-    ];
+    if (selectedStreetName) {
+      prefixSql = `
+        (
+          (idx.object_type='street' AND LOWER(TRIM(idx.street_name)) = LOWER(TRIM(?)))
+          OR
+          (idx.object_type='address' AND LOWER(TRIM(idx.street_name)) = LOWER(TRIM(?)))
+        )
+        AND
+      `;
+      prefixParams = [
+        selectedStreetName,
+        selectedStreetName,
+      ];
+    }
   } else {
     const scopeLocalities = await getLocalitySearchScope(baseLocality);
     localityIds = scopeLocalities.map((item) => Number(item && item.id)).filter(Boolean);
@@ -764,6 +766,7 @@ function buildLocalAddressItems(rows, localityName) {
       stage: 'address',
       source_key: String(row && row.source_key || '').trim(),
       locality_source_key: String(row && row.locality_source_key || '').trim(),
+      locality_id: Number(row && row.locality_id) || null,
       city_name: String(row && row.locality_name || localityName || '').trim(),
       context_locality: String(row && row.locality_name || localityName || '').trim(),
       normalized_city: String(row && row.locality_normalized_name || normalizeLocalAddressText(localityName)).trim(),
@@ -873,6 +876,9 @@ async function searchLocalAddressSuggest(stage, query, options = {}) {
     const selectedRow = selectedSourceKey
       ? await getLocalAddressIndexRowBySourceKey(selectedSourceKey)
       : null;
+    const selectedLocalityId = selectedRow && Number(selectedRow.locality_id)
+      ? Number(selectedRow.locality_id)
+      : 0;
     const scopedRows = await searchLocalAddressRowsInScope(locality, normalizedQuery, { selectedRow });
     const prefersAddress = normalizedStage === 'house' || (normalizedStage === 'address' && isHouseLikeLocalAddressQuery(normalizedQuery));
     const normalizedHousePart = normalizeLocalHouseNumber(
@@ -907,6 +913,11 @@ async function searchLocalAddressSuggest(stage, query, options = {}) {
           ? (rightType === 'address' ? 0 : (rightType === 'street' ? 1 : 2))
           : (rightType === 'street' ? 0 : (rightType === 'context-locality' ? 1 : 2));
         if (leftRank !== rightRank) return leftRank - rightRank;
+        if (normalizedStage === 'house' && selectedLocalityId > 0) {
+          const leftLocalityRank = Number(leftEntry.item && leftEntry.item.locality_id || 0) === selectedLocalityId ? 0 : 1;
+          const rightLocalityRank = Number(rightEntry.item && rightEntry.item.locality_id || 0) === selectedLocalityId ? 0 : 1;
+          if (leftLocalityRank !== rightLocalityRank) return leftLocalityRank - rightLocalityRank;
+        }
         const leftCityRank = String(leftEntry.item && leftEntry.item.normalized_city || '').trim() === baseNormalizedCity ? 0 : 1;
         const rightCityRank = String(rightEntry.item && rightEntry.item.normalized_city || '').trim() === baseNormalizedCity ? 0 : 1;
         if (leftCityRank !== rightCityRank) return leftCityRank - rightCityRank;

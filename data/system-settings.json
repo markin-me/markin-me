@@ -1,7 +1,7 @@
 {
   "telegram_env_enabled": false,
   "telegram_tenant_enabled": false,
-  "updated_at": "2026-03-15T12:38:51.450Z",
+  "updated_at": "2026-03-16T14:16:33.511Z",
   "provider_name": "Thunderforest",
   "tile_url": "https://api.thunderforest.com/atlas/{z}/{x}/{y}.png?apikey=c062dec927e34ab9b90c18fae6cbcb8e",
   "attribution": "<a href=\"https://www.thunderforest.com/\" target=\"_blank\">&copy; Thunderforest</a> <a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\">&copy; OpenStreetMap contributors</a>",

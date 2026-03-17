@@ -4,8 +4,14 @@ const crypto = require('crypto');
 const multer = require('multer');
 const bcrypt = require('bcryptjs');
 const { domainToASCII } = require('url');
-const { getEffectiveTelegramBotConfig, getEffectiveMapProviderConfig } = require('../../data/system-settings');
+const { getEffectiveTelegramBotConfig } = require('../../data/system-settings');
 const { geocodeStoreAddress } = require('../../data/map-geocoder');
+const {
+  ensureTenantMapConfigColumns,
+  getTenantMapConfigRow,
+  normalizeTenantMapConfig,
+  saveTenantMapConfig,
+} = require('../../data/tenant-map-config');
 const {
   normalizeLocalAddressText,
   searchLocalAddressSuggest,
@@ -22,6 +28,14 @@ const {
   isAddressServiceConfigured,
   resolveAddress: resolveAddressThroughService,
 } = require('../../data/address-service-client');
+const {
+  buildLegacyDeliveryPriceTiers,
+  deriveLegacyDeliveryFieldsFromTiers,
+  normalizeDeliveryEtaMinutes: normalizeDeliveryEtaMinutesShared,
+  normalizeDeliveryMoney: normalizeDeliveryMoneyShared,
+  normalizeDeliveryPriceTiersForOutput,
+  sanitizeDeliveryPriceTiers,
+} = require('../../data/delivery-price-tiers');
 
 module.exports = function makeAdminTenantRouter({ db, helpers }) {
   const router = express.Router();
@@ -83,6 +97,7 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
     stores: 'ten_delivery_zone_stores',
     tiers: 'ten_delivery_zone_price_tiers',
   });
+  const deliverySettingPriceTiersTable = 'ten_delivery_setting_price_tiers';
   let tenantChatColumnsReady = false;
   let ensureTenantChatColumnsPromise = null;
   let tenantMapProviderColumnsReady = false;
@@ -548,7 +563,7 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
   }
 
   function buildTenantMapProviderResponse(tenantRow) {
-    const config = getEffectiveMapProviderConfig();
+    const config = normalizeTenantMapConfig(tenantRow);
     return {
       enabled: Boolean(config.store_address_map_enabled),
       provider_name: String(config.provider_name || '').trim(),
@@ -566,8 +581,12 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
     const rawTileUrl = normalizeMapProviderAccountString(tileUrl, 4096);
     const normalizedApiKey = normalizeMapProviderAccountString(apiKey, 1024);
     const hasPlaceholder = MAP_PROVIDER_API_KEY_PLACEHOLDER_TEST_RE.test(rawTileUrl);
-    const hasQueryParam = MAP_PROVIDER_API_KEY_QUERY_PARAM_TEST_RE.test(rawTileUrl);
-    const requiresApiKey = hasPlaceholder || hasQueryParam;
+    const queryParamMatch = rawTileUrl.match(MAP_PROVIDER_API_KEY_QUERY_PARAM_TEST_RE);
+    const queryParamValue = queryParamMatch ? String(queryParamMatch[2] || '').trim() : '';
+    const requiresQueryParamReplacement = Boolean(queryParamMatch) && (
+      !queryParamValue || MAP_PROVIDER_API_KEY_PLACEHOLDER_TEST_RE.test(queryParamValue)
+    );
+    const requiresApiKey = hasPlaceholder || requiresQueryParamReplacement;
 
     if (!requiresApiKey) {
       return {
@@ -601,7 +620,7 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
   }
 
   function buildTenantResolvedMapConfigResponse(tenantRow) {
-    const baseConfig = getEffectiveMapProviderConfig();
+    const baseConfig = normalizeTenantMapConfig(tenantRow);
     const activeAccount = getActiveTenantMapProviderAccount(tenantRow && tenantRow.map_provider_accounts_json);
     const resolvedTile = resolveTenantMapTileUrl(baseConfig.tile_url, activeAccount && activeAccount.api_key);
     const maxZoomValue = Number(baseConfig.max_zoom);
@@ -619,6 +638,8 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
       geocoder_language: String(baseConfig.geocoder_language || 'ru').trim() || 'ru',
       geocoder_result_limit: Number.isFinite(geocoderResultLimitValue) ? geocoderResultLimitValue : 5,
       store_address_map_enabled: Boolean(baseConfig.store_address_map_enabled),
+      delivery_zone_polygon_provider: String(baseConfig.delivery_zone_polygon_provider || 'Leaflet-Geoman').trim() || 'Leaflet-Geoman',
+      delivery_zone_polygon_enabled: Boolean(baseConfig.store_address_map_enabled),
       tenant_api_key_required: Boolean(resolvedTile.requires_api_key),
       tenant_api_key_configured: Boolean(activeAccount && activeAccount.api_key),
       tenant_api_key_missing: Boolean(
@@ -714,45 +735,7 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
   }
 
   async function ensureTenantMapProviderColumns() {
-    if (tenantMapProviderColumnsReady) return true;
-    if (ensureTenantMapProviderColumnsPromise) return ensureTenantMapProviderColumnsPromise;
-
-    ensureTenantMapProviderColumnsPromise = (async () => {
-      const [columnRows] = await db.query('SHOW COLUMNS FROM ten_tenants');
-      const existing = new Set(
-        (Array.isArray(columnRows) ? columnRows : [])
-          .map((row) => String(row?.Field || '').trim())
-          .filter(Boolean)
-      );
-
-      for (const column of tenantMapProviderColumns) {
-        if (existing.has(column.name)) continue;
-        try {
-          await db.query(`ALTER TABLE ten_tenants ADD COLUMN \`${column.name}\` ${column.sql}`);
-          existing.add(column.name);
-        } catch (err) {
-          if (String(err?.code || '') === 'ER_DUP_FIELDNAME') {
-            existing.add(column.name);
-            continue;
-          }
-          throw err;
-        }
-      }
-
-      tenantMapProviderColumnsReady = tenantMapProviderColumns.every((column) => existing.has(column.name));
-      return tenantMapProviderColumnsReady;
-    })()
-      .catch((err) => {
-        ensureTenantMapProviderColumnsPromise = null;
-        throw err;
-      })
-      .finally(() => {
-        if (tenantMapProviderColumnsReady) {
-          ensureTenantMapProviderColumnsPromise = null;
-        }
-      });
-
-    return ensureTenantMapProviderColumnsPromise;
+    return ensureTenantMapConfigColumns(db);
   }
 
   async function ensureDeliveryZoneTables() {
@@ -840,17 +823,11 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
   }
 
   function normalizeDeliveryZoneEtaMinutes(value) {
-    if (value == null || value === '') return null;
-    const numeric = Number(value);
-    if (!Number.isFinite(numeric)) return null;
-    return Math.max(0, Math.round(numeric));
+    return normalizeDeliveryEtaMinutesShared(value);
   }
 
   function normalizeDeliveryZoneMoney(value) {
-    if (value == null || value === '') return null;
-    const numeric = Number(value);
-    if (!Number.isFinite(numeric)) return null;
-    return Math.max(0, Number(numeric.toFixed(2)));
+    return normalizeDeliveryMoneyShared(value);
   }
 
   function normalizeDeliveryZoneCoordinate(value, min, max) {
@@ -929,43 +906,18 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
   }
 
   function normalizeDeliveryZonePriceTier(rawTier) {
-    const source = rawTier && typeof rawTier === 'object' ? rawTier : {};
-    const minOrderAmount = normalizeDeliveryZoneMoney(source.min_order_amount);
-    const deliveryCost = normalizeDeliveryZoneMoney(source.delivery_cost);
-    if (minOrderAmount === null || deliveryCost === null) return null;
-    return {
-      min_order_amount: minOrderAmount,
-      delivery_cost: deliveryCost,
-    };
+    const source = sanitizeDeliveryPriceTiers([rawTier], {
+      requiredError: 'DELIVERY_ZONE_PRICE_TIERS_REQUIRED',
+      limitError: 'DELIVERY_ZONE_PRICE_TIERS_LIMIT',
+    });
+    return source.ok && source.items[0] ? source.items[0] : null;
   }
 
   function sanitizeDeliveryZonePriceTiers(rawTiers) {
-    const list = Array.isArray(rawTiers) ? rawTiers : [];
-    const normalized = [];
-    for (const tier of list) {
-      const nextTier = normalizeDeliveryZonePriceTier(tier);
-      if (!nextTier) continue;
-      normalized.push(nextTier);
-    }
-    if (!normalized.length) {
-      return { ok: false, error: 'DELIVERY_ZONE_PRICE_TIERS_REQUIRED' };
-    }
-    if (normalized.length > DELIVERY_ZONE_MAX_PRICE_TIERS) {
-      return { ok: false, error: 'DELIVERY_ZONE_PRICE_TIERS_LIMIT' };
-    }
-    normalized.sort((a, b) => {
-      if (a.min_order_amount !== b.min_order_amount) {
-        return a.min_order_amount - b.min_order_amount;
-      }
-      return a.delivery_cost - b.delivery_cost;
+    return sanitizeDeliveryPriceTiers(rawTiers, {
+      requiredError: 'DELIVERY_ZONE_PRICE_TIERS_REQUIRED',
+      limitError: 'DELIVERY_ZONE_PRICE_TIERS_LIMIT',
     });
-    return {
-      ok: true,
-      items: normalized.map((tier, index) => ({
-        ...tier,
-        sort_order: index,
-      })),
-    };
   }
 
   async function sanitizeDeliveryZoneStoreIds(tenantId, rawStoreIds) {
@@ -1474,12 +1426,11 @@ function buildStoreStreetHouseLabel(streetValue, houseValue) {
   return [street, house].filter(Boolean).join(', ');
 }
 
-function isStoreAddressMapModeEnabled() {
-  try {
-    return Boolean(getEffectiveMapProviderConfig().store_address_map_enabled);
-  } catch (_) {
-    return false;
+function isStoreAddressMapModeEnabled(config = null) {
+  if (config && typeof config === 'object') {
+    return Boolean(config.store_address_map_enabled);
   }
+  return false;
 }
 
 function buildManualStoreLocation(address, city, options = {}) {
@@ -1602,7 +1553,7 @@ async function resolveStoreLocationByAddress(address, city, options = {}) {
     if (lat === null || lng === null) {
       const serviceQuery = buildStoreGeocodeQuery(resolvedDisplay, contextLocality || normalizedCity);
       if (serviceQuery) {
-        const geocode = await geocodeStoreAddress(serviceQuery);
+        const geocode = await geocodeStoreAddress(serviceQuery, { sourceState: options.mapConfig || null });
         if (geocode && geocode.ok && geocode.data && geocode.data.item) {
           lat = normalizeStoreCoordinateValue(geocode.data.item.lat);
           lng = normalizeStoreCoordinateValue(geocode.data.item.lng);
@@ -1714,11 +1665,15 @@ async function resolveStoreLocationByAddress(address, city, options = {}) {
     });
     if (localSearch && localSearch.ok) {
       const normalizedHousePart = normalizeAddressServiceHouseToken(housePart);
-      const exactAddressItem = (Array.isArray(localSearch.data && localSearch.data.items) ? localSearch.data.items : [])
-        .find((item) => (
+      const exactAddressItems = (Array.isArray(localSearch.data && localSearch.data.items) ? localSearch.data.items : [])
+        .filter((item) => (
           String(item && item.object_type || '').trim() === 'address'
           && normalizeAddressServiceHouseToken(item && item.house_number) === normalizedHousePart
         ));
+      if (exactAddressItems.length > 1) {
+        return { ok: false, error: 'ADDRESS_SELECTION_REQUIRED' };
+      }
+      const exactAddressItem = exactAddressItems[0] || null;
       if (exactAddressItem) {
         candidate = createCandidate([streetLabel, helpers.strOrNull(exactAddressItem.house_number)].filter(Boolean).join(', '), {
           actualLocality: helpers.strOrNull(exactAddressItem.context_locality || exactAddressItem.city_name),
@@ -1751,11 +1706,15 @@ async function resolveStoreLocationByAddress(address, city, options = {}) {
     });
     if (localSearch && localSearch.ok) {
       const normalizedTypedHouse = normalizeAddressServiceHouseToken(extractAddressServiceHouseToken(normalizedAddress));
-      const exactAddressItem = (Array.isArray(localSearch.data && localSearch.data.items) ? localSearch.data.items : [])
-        .find((item) => (
+      const exactAddressItems = (Array.isArray(localSearch.data && localSearch.data.items) ? localSearch.data.items : [])
+        .filter((item) => (
           String(item && item.object_type || '').trim() === 'address'
           && (!normalizedTypedHouse || normalizeAddressServiceHouseToken(item && item.house_number) === normalizedTypedHouse)
         ));
+      if (exactAddressItems.length > 1) {
+        return { ok: false, error: 'ADDRESS_SELECTION_REQUIRED' };
+      }
+      const exactAddressItem = exactAddressItems[0] || null;
       if (exactAddressItem) {
         candidate = createCandidate(helpers.strOrNull(exactAddressItem.value || exactAddressItem.label), {
           actualLocality: helpers.strOrNull(exactAddressItem.context_locality || exactAddressItem.city_name),
@@ -1816,7 +1775,7 @@ async function resolveStoreLocationByAddress(address, city, options = {}) {
   if (!query) {
     return { ok: false, error: 'ADDRESS_REQUIRED' };
   }
-  const geocode = await geocodeStoreAddress(query);
+  const geocode = await geocodeStoreAddress(query, { sourceState: options.mapConfig || null });
   if (!geocode || !geocode.ok || !geocode.data || !geocode.data.item) {
     return { ok: false, error: geocode && geocode.error ? geocode.error : 'GEOCODER_UPSTREAM_ERROR' };
   }
@@ -2093,18 +2052,14 @@ async function fetchStoreWithHours(tenantId, storeId) {
 
       await ensureTenantMapProviderColumns();
 
-      const [rows] = await db.query(
-        'SELECT id, map_provider_accounts_json FROM ten_tenants WHERE id=? LIMIT 1',
-        [tenantId]
-      );
-
-      if (!rows.length) {
+      const tenantRow = await getTenantMapConfigRow(db, tenantId, { includeAccounts: true });
+      if (!tenantRow) {
         return res.status(404).json({ ok: false, error: 'TENANT_NOT_FOUND' });
       }
 
       return res.json({
         ok: true,
-        ...buildTenantMapProviderResponse(rows[0]),
+        ...buildTenantMapProviderResponse(tenantRow),
       });
     } catch (err) {
       console.error('Map provider accounts load error:', err);
@@ -2122,21 +2077,41 @@ async function fetchStoreWithHours(tenantId, storeId) {
 
       await ensureTenantMapProviderColumns();
 
-      const [rows] = await db.query(
-        'SELECT id, map_provider_accounts_json FROM ten_tenants WHERE id=? LIMIT 1',
-        [tenantId]
-      );
-
-      if (!rows.length) {
+      const tenantRow = await getTenantMapConfigRow(db, tenantId, { includeAccounts: true });
+      if (!tenantRow) {
         return res.status(404).json({ ok: false, error: 'TENANT_NOT_FOUND' });
       }
 
       return res.json({
         ok: true,
-        data: buildTenantResolvedMapConfigResponse(rows[0]),
+        data: buildTenantResolvedMapConfigResponse(tenantRow),
       });
     } catch (err) {
       console.error('Tenant map provider config load error:', err);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.put('/map-provider-config', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+
+      if (!tenantId) {
+        return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+      }
+
+      const saveResult = await saveTenantMapConfig(db, tenantId, req.body || {});
+      if (!saveResult.ok) {
+        const status = saveResult.error === 'TENANT_NOT_FOUND' ? 404 : 400;
+        return res.status(status).json({ ok: false, error: saveResult.error || 'BAD_REQUEST' });
+      }
+
+      return res.json({
+        ok: true,
+        data: buildTenantResolvedMapConfigResponse(saveResult.row),
+      });
+    } catch (err) {
+      console.error('Tenant map provider config save error:', err);
       return res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });
@@ -2155,18 +2130,14 @@ async function fetchStoreWithHours(tenantId, storeId) {
         return res.status(400).json({ ok: false, error: 'MAP_PROVIDER_ITEMS_REQUIRED' });
       }
 
-      const [rows] = await db.query(
-        'SELECT id, map_provider_accounts_json FROM ten_tenants WHERE id=? LIMIT 1',
-        [tenantId]
-      );
-
-      if (!rows.length) {
+      const tenantRow = await getTenantMapConfigRow(db, tenantId, { includeAccounts: true });
+      if (!tenantRow) {
         return res.status(404).json({ ok: false, error: 'TENANT_NOT_FOUND' });
       }
 
       const mergedItems = mergeTenantMapProviderAccountsWithExisting(
         (req.body || {}).items,
-        rows[0].map_provider_accounts_json
+        tenantRow.map_provider_accounts_json
       );
       const sanitized = sanitizeTenantMapProviderAccounts(mergedItems);
       if (!sanitized.ok) {
@@ -2181,7 +2152,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
 
       return res.json({
         ok: true,
-        ...buildTenantMapProviderResponse({ map_provider_accounts_json: serializedItems }),
+        ...buildTenantMapProviderResponse({ ...tenantRow, map_provider_accounts_json: serializedItems }),
       });
     } catch (err) {
       console.error('Map provider accounts save error:', err);
@@ -2234,6 +2205,222 @@ async function fetchStoreWithHours(tenantId, storeId) {
       return res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });
+
+  function sanitizeGeneralDeliveryPriceTiers(rawTiers) {
+    return sanitizeDeliveryPriceTiers(rawTiers, {
+      requiredError: 'DELIVERY_SETTING_PRICE_TIERS_REQUIRED',
+      limitError: 'DELIVERY_SETTING_PRICE_TIERS_LIMIT',
+    });
+  }
+
+  function serializeDeliverySettingRow(row, extras = {}) {
+    const source = row && typeof row === 'object' ? row : {};
+    const storeIds = Array.isArray(extras.store_ids)
+      ? extras.store_ids.map((value) => Number(value)).filter((value) => Number.isFinite(value) && value > 0)
+      : [];
+    const tiers = normalizeDeliveryPriceTiersForOutput(extras.price_tiers);
+    const priceTiers = tiers.length ? tiers : buildLegacyDeliveryPriceTiers(source);
+    const legacy = deriveLegacyDeliveryFieldsFromTiers(priceTiers);
+    const defaultStoreId = source.default_store_id == null ? null : Number(source.default_store_id);
+    return {
+      id: Number(source.id || 0),
+      tenant_id: Number(source.tenant_id || 0),
+      name: String(source.name || '').trim(),
+      eta_minutes: source.eta_minutes == null ? null : Number(source.eta_minutes),
+      delivery_cost: Number(legacy.delivery_cost || 0),
+      min_order_amount: Number(legacy.min_order_amount || 0),
+      free_delivery_from: legacy.free_delivery_from != null ? Number(legacy.free_delivery_from) : null,
+      default_store_id: Number.isFinite(defaultStoreId) && defaultStoreId > 0 ? defaultStoreId : null,
+      is_active: Number(source.is_active) === 1 ? 1 : 0,
+      created_at: source.created_at || null,
+      updated_at: source.updated_at || null,
+      store_ids: storeIds,
+      price_tiers: priceTiers,
+    };
+  }
+
+  async function loadDeliverySettingsForTenant(tenantId, settingId = null) {
+    const params = [tenantId];
+    const whereParts = ['tenant_id=?'];
+    if (settingId != null) {
+      whereParts.push('id=?');
+      params.push(settingId);
+    }
+
+    let rows = [];
+    let hasEtaColumn = true;
+    try {
+      const [settingsRows] = await db.query(
+        `SELECT id, tenant_id, name, eta_minutes, delivery_cost, min_order_amount, free_delivery_from, default_store_id, is_active, created_at, updated_at
+         FROM ten_delivery_settings
+         WHERE ${whereParts.join(' AND ')}
+         ORDER BY id ASC`,
+        params
+      );
+      rows = Array.isArray(settingsRows) ? settingsRows : [];
+    } catch (error) {
+      if (String(error && error.code || '') !== 'ER_BAD_FIELD_ERROR') throw error;
+      hasEtaColumn = false;
+      const [settingsRows] = await db.query(
+        `SELECT id, tenant_id, name, delivery_cost, min_order_amount, free_delivery_from, default_store_id, is_active, created_at, updated_at
+         FROM ten_delivery_settings
+         WHERE ${whereParts.join(' AND ')}
+         ORDER BY id ASC`,
+        params
+      );
+      rows = Array.isArray(settingsRows) ? settingsRows : [];
+    }
+
+    const settingIds = rows
+      .map((row) => Number(row && row.id))
+      .filter((value) => Number.isFinite(value) && value > 0);
+    const storeMap = new Map();
+    const tiersMap = new Map();
+
+    if (settingIds.length) {
+      const placeholders = settingIds.map(() => '?').join(',');
+      const [links] = await db.query(
+        `SELECT delivery_setting_id, store_id
+         FROM ten_delivery_settings_stores
+         WHERE tenant_id=? AND delivery_setting_id IN (${placeholders})`,
+        [tenantId, ...settingIds]
+      );
+      (Array.isArray(links) ? links : []).forEach((link) => {
+        const key = Number(link && link.delivery_setting_id);
+        const storeId = Number(link && link.store_id);
+        if (!Number.isFinite(key) || !Number.isFinite(storeId) || storeId <= 0) return;
+        if (!storeMap.has(key)) storeMap.set(key, []);
+        storeMap.get(key).push(storeId);
+      });
+
+      try {
+        const [tierRows] = await db.query(
+          `SELECT delivery_setting_id, min_order_amount, delivery_cost, sort_order
+           FROM \`${deliverySettingPriceTiersTable}\`
+           WHERE tenant_id=? AND delivery_setting_id IN (${placeholders})
+           ORDER BY delivery_setting_id ASC, sort_order ASC, id ASC`,
+          [tenantId, ...settingIds]
+        );
+        (Array.isArray(tierRows) ? tierRows : []).forEach((tier) => {
+          const key = Number(tier && tier.delivery_setting_id);
+          if (!Number.isFinite(key)) return;
+          if (!tiersMap.has(key)) tiersMap.set(key, []);
+          tiersMap.get(key).push({
+            min_order_amount: tier.min_order_amount,
+            delivery_cost: tier.delivery_cost,
+            sort_order: tier.sort_order,
+          });
+        });
+      } catch (error) {
+        if (String(error && error.code || '') !== 'ER_NO_SUCH_TABLE') throw error;
+      }
+    }
+
+    return rows.map((row) => serializeDeliverySettingRow(
+      hasEtaColumn ? row : { ...row, eta_minutes: null },
+      {
+        store_ids: storeMap.get(Number(row && row.id)) || [],
+        price_tiers: tiersMap.get(Number(row && row.id)) || [],
+      }
+    ));
+  }
+
+  function buildDeliverySettingPayload(body, current = null) {
+    const source = body && typeof body === 'object' ? body : {};
+    const snapshot = current && typeof current === 'object' ? current : null;
+    const name = source.name !== undefined ? helpers.strOrNull(source.name) : (snapshot ? snapshot.name : null);
+    if (!name) return { ok: false, error: 'NAME_REQUIRED' };
+
+    const storeIds = source.store_ids !== undefined
+      ? (Array.isArray(source.store_ids)
+        ? Array.from(new Set(source.store_ids.map(Number).filter((value) => Number.isFinite(value) && value > 0)))
+        : [])
+      : (snapshot && Array.isArray(snapshot.store_ids) ? snapshot.store_ids.slice() : []);
+
+    let defaultStoreId = source.default_store_id !== undefined
+      ? helpers.numOrNull(source.default_store_id)
+      : (snapshot ? snapshot.default_store_id : null);
+    if (defaultStoreId != null && storeIds.length && !storeIds.includes(defaultStoreId)) {
+      defaultStoreId = null;
+    }
+
+    let tiers = null;
+    if (source.price_tiers !== undefined) {
+      const tiersResult = sanitizeGeneralDeliveryPriceTiers(source.price_tiers);
+      if (!tiersResult.ok) return tiersResult;
+      tiers = tiersResult.items;
+    } else if (
+      source.delivery_cost !== undefined
+      || source.min_order_amount !== undefined
+      || source.free_delivery_from !== undefined
+    ) {
+      tiers = buildLegacyDeliveryPriceTiers({
+        delivery_cost: source.delivery_cost !== undefined ? source.delivery_cost : (snapshot ? snapshot.delivery_cost : 0),
+        min_order_amount: source.min_order_amount !== undefined ? source.min_order_amount : (snapshot ? snapshot.min_order_amount : 0),
+        free_delivery_from: source.free_delivery_from !== undefined ? source.free_delivery_from : (snapshot ? snapshot.free_delivery_from : null),
+      });
+    } else {
+      tiers = normalizeDeliveryPriceTiersForOutput(snapshot && snapshot.price_tiers);
+    }
+
+    if (!Array.isArray(tiers) || !tiers.length) {
+      tiers = buildLegacyDeliveryPriceTiers({ delivery_cost: 0, min_order_amount: 0, free_delivery_from: null });
+    }
+
+    const legacy = deriveLegacyDeliveryFieldsFromTiers(tiers);
+    return {
+      ok: true,
+      item: {
+        name,
+        eta_minutes: source.eta_minutes !== undefined
+          ? normalizeDeliveryEtaMinutesShared(source.eta_minutes)
+          : (snapshot ? snapshot.eta_minutes : null),
+        delivery_cost: Number(legacy.delivery_cost || 0),
+        min_order_amount: Number(legacy.min_order_amount || 0),
+        free_delivery_from: legacy.free_delivery_from != null ? Number(legacy.free_delivery_from) : null,
+        is_active: source.is_active !== undefined
+          ? (helpers.toBool(source.is_active, true) ? 1 : 0)
+          : (snapshot && Number(snapshot.is_active) === 1 ? 1 : 0),
+        store_ids: storeIds,
+        default_store_id: defaultStoreId,
+        price_tiers: tiers,
+      },
+    };
+  }
+
+  async function replaceDeliverySettingStores(tenantId, settingId, storeIds) {
+    await db.query(
+      'DELETE FROM ten_delivery_settings_stores WHERE tenant_id=? AND delivery_setting_id=?',
+      [tenantId, settingId]
+    );
+    if (!Array.isArray(storeIds) || !storeIds.length) return;
+    const linkValues = storeIds.map((storeId) => [settingId, storeId, tenantId]);
+    const linkPlaceholders = linkValues.map(() => '(?, ?, ?)').join(',');
+    await db.query(
+      `INSERT INTO ten_delivery_settings_stores (delivery_setting_id, store_id, tenant_id) VALUES ${linkPlaceholders}`,
+      linkValues.flat()
+    );
+  }
+
+  async function replaceDeliverySettingPriceTiers(tenantId, settingId, priceTiers) {
+    await db.query(
+      `DELETE FROM \`${deliverySettingPriceTiersTable}\` WHERE tenant_id=? AND delivery_setting_id=?`,
+      [tenantId, settingId]
+    );
+    if (!Array.isArray(priceTiers) || !priceTiers.length) return;
+    const tierValues = priceTiers.map((tier) => ([
+      settingId,
+      tenantId,
+      Number(tier.min_order_amount || 0),
+      Number(tier.delivery_cost || 0),
+      Number(tier.sort_order || 0),
+    ]));
+    const tierPlaceholders = tierValues.map(() => '(?, ?, ?, ?, ?)').join(', ');
+    await db.query(
+      `INSERT INTO \`${deliverySettingPriceTiersTable}\` (delivery_setting_id, tenant_id, min_order_amount, delivery_cost, sort_order) VALUES ${tierPlaceholders}`,
+      tierValues.flat()
+    );
+  }
 
   /**
    * PUT /api/admin/tenant
@@ -2681,14 +2868,15 @@ async function fetchStoreWithHours(tenantId, storeId) {
       const useDeliveryHours = helpers.toBool(req.body.use_delivery_hours, false) ? 1 : 0;
       const hoursPayload = Array.isArray(req.body.hours) ? req.body.hours : null;
       const deliveryHoursPayload = Array.isArray(req.body.delivery_hours) ? req.body.delivery_hours : null;
-      const storeAddressMapEnabled = isStoreAddressMapModeEnabled();
-
       if (!tenantId) {
         return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
       }
       if (!name) {
         return res.status(400).json({ ok: false, error: 'NAME_REQUIRED' });
       }
+
+      const tenantMapConfig = await getTenantMapConfigRow(db, tenantId, { includeAccounts: true });
+      const storeAddressMapEnabled = isStoreAddressMapModeEnabled(tenantMapConfig);
 
       const useResolvedMapAddress = storeAddressMapEnabled && Boolean(selectedSourceKey && selectedObjectType);
       const location = useResolvedMapAddress
@@ -2701,6 +2889,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
           selectedContextLocality: addressContextLocality || selectedContextLocality,
           typedHousePart,
           confirmNormalized,
+          mapConfig: tenantMapConfig,
         })
         : buildManualStoreLocation(address, cityInput, {
           addressStreet,
@@ -2825,7 +3014,6 @@ async function fetchStoreWithHours(tenantId, storeId) {
         const hoursPayload = Array.isArray(req.body.hours) ? req.body.hours : null;
         const deliveryHoursPayload = Array.isArray(req.body.delivery_hours) ? req.body.delivery_hours : null;
         const isActive = req.body.is_active !== undefined ? (helpers.toBool(req.body.is_active, true) ? 1 : 0) : undefined;
-        const storeAddressMapEnabled = isStoreAddressMapModeEnabled();
 
         if (name !== undefined && !name) {
           return res.status(400).json({ ok: false, error: 'NAME_REQUIRED' });
@@ -2836,6 +3024,9 @@ async function fetchStoreWithHours(tenantId, storeId) {
         if (address !== undefined && !address && addressStreet === undefined) {
           return res.status(400).json({ ok: false, error: 'ADDRESS_REQUIRED' });
         }
+
+        const tenantMapConfig = await getTenantMapConfigRow(db, tenantId, { includeAccounts: true });
+        const storeAddressMapEnabled = isStoreAddressMapModeEnabled(tenantMapConfig);
 
         if (code !== undefined && code !== existing.code) {
           if (code) {
@@ -2883,6 +3074,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
               selectedContextLocality: nextContextLocality || selectedContextLocality,
               typedHousePart,
               confirmNormalized,
+              mapConfig: tenantMapConfig,
             })
             : buildManualStoreLocation(nextAddressForGeocode, nextCityForGeocode, {
               addressStreet: nextAddressStreet,
@@ -3497,6 +3689,8 @@ async function fetchStoreWithHours(tenantId, storeId) {
     try {
       const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
       if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+      const items = await loadDeliverySettingsForTenant(tenantId);
+      return res.json({ ok: true, items });
 
       const [settings] = await db.query(
         `SELECT id, tenant_id, name, delivery_cost, min_order_amount, free_delivery_from, default_store_id, is_active, created_at, updated_at
@@ -3551,6 +3745,33 @@ async function fetchStoreWithHours(tenantId, storeId) {
     try {
       const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
       if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+
+      const payloadResult = buildDeliverySettingPayload(req.body);
+      if (!payloadResult.ok) {
+        return res.status(400).json({ ok: false, error: payloadResult.error });
+      }
+      const nextSetting = payloadResult.item;
+
+      const [insertedSettingResult] = await db.query(
+        `INSERT INTO ten_delivery_settings (tenant_id, name, eta_minutes, delivery_cost, min_order_amount, free_delivery_from, default_store_id, is_active)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          tenantId,
+          nextSetting.name,
+          nextSetting.eta_minutes,
+          nextSetting.delivery_cost,
+          nextSetting.min_order_amount,
+          nextSetting.free_delivery_from,
+          nextSetting.default_store_id,
+          nextSetting.is_active,
+        ]
+      );
+      const createdSettingId = Number(insertedSettingResult && insertedSettingResult.insertId || 0);
+      await replaceDeliverySettingStores(tenantId, createdSettingId, nextSetting.store_ids);
+      await replaceDeliverySettingPriceTiers(tenantId, createdSettingId, nextSetting.price_tiers);
+
+      const savedSettings = await loadDeliverySettingsForTenant(tenantId, createdSettingId);
+      return res.json({ ok: true, item: savedSettings[0] || null });
 
       const name = helpers.strOrNull(req.body.name);
       if (!name) return res.status(400).json({ ok: false, error: 'NAME_REQUIRED' });
@@ -3609,6 +3830,50 @@ async function fetchStoreWithHours(tenantId, storeId) {
       if (!id) return res.status(400).json({ ok: false, error: 'ID_REQUIRED' });
 
       // Проверяем существование
+      const currentItems = await loadDeliverySettingsForTenant(tenantId, id);
+      const current = currentItems[0] || null;
+      if (!current) {
+        return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+      }
+
+      const payloadResult = buildDeliverySettingPayload(req.body, current);
+      if (!payloadResult.ok) {
+        return res.status(400).json({ ok: false, error: payloadResult.error });
+      }
+      const nextSetting = payloadResult.item;
+
+      await db.query(
+        `UPDATE ten_delivery_settings
+         SET name=?, eta_minutes=?, delivery_cost=?, min_order_amount=?, free_delivery_from=?, default_store_id=?, is_active=?, updated_at=NOW()
+         WHERE tenant_id=? AND id=?`,
+        [
+          nextSetting.name,
+          nextSetting.eta_minutes,
+          nextSetting.delivery_cost,
+          nextSetting.min_order_amount,
+          nextSetting.free_delivery_from,
+          nextSetting.default_store_id,
+          nextSetting.is_active,
+          tenantId,
+          id,
+        ]
+      );
+
+      if (req.body.store_ids !== undefined) {
+        await replaceDeliverySettingStores(tenantId, id, nextSetting.store_ids);
+      }
+      if (
+        req.body.price_tiers !== undefined
+        || req.body.delivery_cost !== undefined
+        || req.body.min_order_amount !== undefined
+        || req.body.free_delivery_from !== undefined
+      ) {
+        await replaceDeliverySettingPriceTiers(tenantId, id, nextSetting.price_tiers);
+      }
+
+      const items = await loadDeliverySettingsForTenant(tenantId, id);
+      return res.json({ ok: true, item: items[0] || null });
+
       const [existing] = await db.query(
         'SELECT id FROM ten_delivery_settings WHERE tenant_id=? AND id=? LIMIT 1',
         [tenantId, id]
@@ -3722,6 +3987,10 @@ async function fetchStoreWithHours(tenantId, storeId) {
       if (!id) return res.status(400).json({ ok: false, error: 'ID_REQUIRED' });
 
       // Удаляем связи
+      await db.query(
+        `DELETE FROM \`${deliverySettingPriceTiersTable}\` WHERE tenant_id=? AND delivery_setting_id=?`,
+        [tenantId, id]
+      );
       await db.query(
         'DELETE FROM ten_delivery_settings_stores WHERE tenant_id=? AND delivery_setting_id=?',
         [tenantId, id]
