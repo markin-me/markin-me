@@ -611,16 +611,33 @@ async function findTenantByHost(hostname) {
   let tenant = null;
 
   try {
-    const [domainRows] = await db.query(
-      `SELECT t.*
-         FROM ten_tenant_domains d
-         JOIN ten_tenants t ON t.id = d.tenant_id
-        WHERE d.domain_ascii=?
-        ORDER BY d.is_primary DESC, d.id ASC
-        LIMIT 1`,
-      [host]
-    );
-    tenant = domainRows[0] || null;
+    try {
+      const [domainRows] = await db.query(
+        `SELECT t.*
+           FROM ten_tenant_domains d
+           JOIN ten_tenants t ON t.id = d.tenant_id
+          WHERE d.domain_ascii=?
+            AND d.is_enabled=1
+          ORDER BY d.id ASC
+          LIMIT 1`,
+        [host]
+      );
+      tenant = domainRows[0] || null;
+    } catch (err) {
+      if (String(err?.code || '') !== 'ER_BAD_FIELD_ERROR') {
+        throw err;
+      }
+      const [domainRows] = await db.query(
+        `SELECT t.*
+           FROM ten_tenant_domains d
+           JOIN ten_tenants t ON t.id = d.tenant_id
+          WHERE d.domain_ascii=?
+          ORDER BY d.id ASC
+          LIMIT 1`,
+        [host]
+      );
+      tenant = domainRows[0] || null;
+    }
   } catch (err) {
     if (!isMissingTenantDomainsTableError(err)) {
       throw err;

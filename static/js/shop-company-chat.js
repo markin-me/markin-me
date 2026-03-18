@@ -138,6 +138,7 @@
   const CHAT_DROP_IMAGE_EXT_RE = /\.(png|jpe?g|webp|gif|bmp|svg|avif|heic|heif)$/i;
   const CHAT_AUTOSCROLL_MS = 170;
   const CHAT_EMOJI_SHEET_SETTLE_MS = 280;
+  const CHAT_ATTACHMENT_BOTTOM_PIN_MS = 900;
   const CHAT_SCROLL_DOWN_SHOW_DISTANCE_PX = 6;
   const CHAT_REACTION_PENDING_TTL_MS = 10000;
   const CHAT_TYPING_HEARTBEAT_MS = 500;
@@ -148,6 +149,7 @@
   const CHAT_ASSISTANT_QUICK_REPLY_DELAY_MAX_MS = 2400;
   const CHAT_MESSAGE_ALERT_COOLDOWN_MS = 900;
   const CHAT_PUSH_SYNC_DEBOUNCE_MS = 180;
+  const CHAT_LOCAL_OUTGOING_VISUAL_STABLE_MS = 12000;
   const CHAT_PUSH_MESSAGE_FOCUS_RETRY_MS = 140;
   const CHAT_PUSH_MESSAGE_FOCUS_MAX_RETRIES = 24;
   const CHAT_PUSH_MESSAGE_FOCUS_MAX_HISTORY_PAGES = 6;
@@ -364,6 +366,9 @@
   let mobileKeyboardViewportMotionUntil = 0;
   let mobileKeyboardViewportMotionLastBottom = 0;
   let mobileKeyboardViewportVisualShift = 0;
+  let mobilePageScrollRepairRaf = 0;
+  let mobilePageScrollRepairUntil = 0;
+  let shortFeedTouchBlockGesture = null;
   let mobileKeyboardTrackedFeedBottomDistance = null;
   let sharedPullInFlight = false;
   let sharedHistoryHasMore = false;
@@ -499,6 +504,15 @@
 
   function isFeedPinnedToBottom() {
     return (feed.scrollHeight - feed.clientHeight - feed.scrollTop) <= 28;
+  }
+
+  function getFeedMaxScrollTop() {
+    if (!feed) return 0;
+    return Math.max(0, Number(feed.scrollHeight || 0) - Number(feed.clientHeight || 0));
+  }
+
+  function isFeedVerticallyScrollable() {
+    return getFeedMaxScrollTop() > 1;
   }
 
   function animateCountBadgeTick(badge) {
@@ -959,6 +973,52 @@
     return true;
   }
 
+  function scheduleMessageAttachmentBottomPin(messageId, options) {
+    if (!feed || !thread || !overlay.classList.contains("is-open")) return false;
+    const id = String(messageId || "").trim();
+    if (!id) return false;
+    const opts = options || {};
+    const rawBottomDistance = Number(opts.bottomDistance);
+    const targetBottomDistance = Number.isFinite(rawBottomDistance) && rawBottomDistance >= 0
+      ? rawBottomDistance
+      : 0;
+    const timeoutMs = Math.max(180, Number(opts.timeoutMs || CHAT_ATTACHMENT_BOTTOM_PIN_MS));
+    const row = thread.querySelector(
+      '.shop-company-chat-row[data-message-id="' + cssEscape(id) + '"]'
+    );
+    const applyPinnedBottom = function () {
+      if (!overlay.classList.contains("is-open")) return;
+      applyFeedBottomDistanceSnapshot(targetBottomDistance);
+      saveFeedScrollPosition({ force: true });
+    };
+    const scheduleApply = function () {
+      requestAnimationFrame(function () {
+        applyPinnedBottom();
+        requestAnimationFrame(applyPinnedBottom);
+      });
+    };
+
+    scheduleApply();
+    if (!row) return true;
+
+    const pendingImages = Array.from(
+      row.querySelectorAll(".shop-company-chat-attachment-image")
+    ).filter(function (img) {
+      return img instanceof HTMLImageElement && !img.complete;
+    });
+    if (!pendingImages.length) return true;
+
+    window.setTimeout(scheduleApply, timeoutMs);
+    pendingImages.forEach(function (img) {
+      const handleDone = function () {
+        scheduleApply();
+      };
+      img.addEventListener("load", handleDone, { once: true });
+      img.addEventListener("error", handleDone, { once: true });
+    });
+    return true;
+  }
+
   function stopEmojiSheetBottomDistanceStabilization() {
     if (emojiSheetSettleRaf) {
       cancelAnimationFrame(emojiSheetSettleRaf);
@@ -1368,7 +1428,7 @@
       return notificationPermissionPromptEl;
     }
     if (!modalBody || !modalBody.isConnected) return null;
-    const promptHost = feed && feed.isConnected ? feed : modalBody;
+    const promptHost = modalBody;
     const node = document.createElement("div");
     node.className = "shop-company-chat-permission-prompt hidden";
     node.setAttribute("aria-live", "polite");
@@ -2865,7 +2925,9 @@
 
   function stableSerialize(value) {
     try {
-      return JSON.stringify(value || []);
+      return JSON.stringify(value || [], function (key, currentValue) {
+        return key && key.charAt(0) === "_" ? undefined : currentValue;
+      });
     } catch {
       return "[]";
     }
@@ -2883,6 +2945,59 @@
     if (safeA > safeB) return 1;
     if (safeA < safeB) return -1;
     return 0;
+  }
+
+  function markLocalOutgoingEntryRemotePending(entry, pending) {
+    if (!entry || entry.type !== "message" || entry.role !== "user") return false;
+    if (pending === true) {
+      entry._localPendingRemoteCreate = true;
+    } else {
+      delete entry._localPendingRemoteCreate;
+    }
+    return true;
+  }
+
+  function protectLocalOutgoingEntry(entry, durationMs) {
+    if (!entry || entry.type !== "message" || entry.role !== "user") return false;
+    const duration = Math.max(1200, Number(durationMs || CHAT_LOCAL_OUTGOING_VISUAL_STABLE_MS));
+    entry._localVisualStableUntil = Date.now() + duration;
+    return true;
+  }
+
+  function isProtectedLocalOutgoingEntry(entry) {
+    if (!entry || entry.type !== "message" || entry.role !== "user") return false;
+    if (entry._localPendingRemoteCreate === true) return true;
+    const stableUntil = Number(entry._localVisualStableUntil || 0);
+    return Number.isFinite(stableUntil) && stableUntil > Date.now();
+  }
+
+  function getEntryCreatedAtEpochMs(entry) {
+    const raw = entry && entry.createdAt ? new Date(String(entry.createdAt)).getTime() : 0;
+    return Number.isFinite(raw) ? raw : 0;
+  }
+
+  function mergeProtectedLocalOutgoingEntries(remoteEntries, currentEntries) {
+    const out = Array.isArray(remoteEntries) ? remoteEntries.slice() : [];
+    const seenIds = new Set(out.map(function (entry) {
+      return String(entry && entry.id || "").trim();
+    }).filter(Boolean));
+    let changed = false;
+
+    (Array.isArray(currentEntries) ? currentEntries : []).forEach(function (entry) {
+      const id = String(entry && entry.id || "").trim();
+      if (!id || seenIds.has(id) || !isProtectedLocalOutgoingEntry(entry)) return;
+      seenIds.add(id);
+      out.push(entry);
+      changed = true;
+    });
+
+    if (!changed) return out;
+    out.sort(function (a, b) {
+      const diff = getEntryCreatedAtEpochMs(a) - getEntryCreatedAtEpochMs(b);
+      if (diff !== 0) return diff;
+      return String(a && a.id || "").localeCompare(String(b && b.id || ""), "ru");
+    });
+    return out;
   }
 
   function ensureGuestChatClientId(forceNew) {
@@ -3910,6 +4025,11 @@
     );
     const updatedAt = String(json && json.data && json.data.updated_at || "");
     if (updatedAt) sharedThreadUpdatedAt = updatedAt;
+    const currentEntry = findMessageEntry(payload.id);
+    if (currentEntry) {
+      markLocalOutgoingEntryRemotePending(currentEntry, false);
+      protectLocalOutgoingEntry(currentEntry);
+    }
   }
 
   async function remotePatchSharedMessage(messageId, patch) {
@@ -4260,11 +4380,14 @@
     const preserveHistory = opts.preserveHistory === true && !appendOlder;
     const incomingEntries = applyPendingReactionOverridesToEntries(Array.isArray(mappedEntries) ? mappedEntries : []);
     const currentEntries = Array.isArray(liveEntries) ? liveEntries : [];
-    const entries = appendOlder
+    let entries = appendOlder
       ? mergeSharedEntryLists(incomingEntries, currentEntries)
       : preserveHistory
         ? mergeSharedEntryLists(currentEntries, incomingEntries)
         : incomingEntries;
+    if (!appendOlder && !preserveHistory) {
+      entries = mergeProtectedLocalOutgoingEntries(entries, currentEntries);
+    }
     const remoteUpdatedAt = String(updatedAt || "");
     if (appendOlder || !preserveHistory) {
       updateSharedHistoryStateFromPage(opts.page);
@@ -4361,17 +4484,18 @@
       applyPeerTypingState(null, { forceInactive: true });
       maybeNotifyIncomingAgentMessage(latestIncomingAgentEntry);
     }
-    const shouldAutoScrollIncoming = isChatOpen && hasIncomingAgentMessages && wasPinnedToBottom;
     const canRestorePushFocus = pendingPushFocusBeforeRender
       && pendingPushFocusBeforeRender.messageId
       && (
         !pendingPushFocusBeforeRender.clientId
         || pendingPushFocusBeforeRender.clientId === String(getActiveChatClientId() || "").trim()
       );
-    if (shouldAutoScrollIncoming) {
+    const shouldKeepBottomPinned = isChatOpen && wasPinnedToBottom && !canRestorePushFocus;
+    if (shouldKeepBottomPinned) {
       scrollToBottom(false);
     } else {
       feed.scrollTop = prevTop;
+      updateScrollDownButton();
     }
     if (canRestorePushFocus) {
       const restoredFocus = scrollToMessage(pendingPushFocusBeforeRender.messageId, {
@@ -5348,6 +5472,76 @@
     return isImageAttachment(entry.attachment) ? entry.attachment : null;
   }
 
+  function applyAttachmentImageNodeState(img, attachment) {
+    if (!(img instanceof HTMLImageElement) || !isImageAttachment(attachment)) return false;
+    const nextSrc = String(getAttachmentImageSrc(attachment) || "").trim();
+    if (!nextSrc) return false;
+    const attachmentWidth = Math.max(0, Number(attachment.width || 0));
+    const attachmentHeight = Math.max(0, Number(attachment.height || 0));
+    img.alt = String(attachment.name || "\u0424\u043e\u0442\u043e");
+    if (attachmentWidth > 0 && attachmentHeight > 0) {
+      img.width = attachmentWidth;
+      img.height = attachmentHeight;
+    } else {
+      img.removeAttribute("width");
+      img.removeAttribute("height");
+    }
+    img.draggable = false;
+    img.loading = "lazy";
+    img.decoding = "async";
+    if (String(img.getAttribute("src") || "").trim() !== nextSrc) {
+      img.setAttribute("src", nextSrc);
+      img.src = nextSrc;
+    }
+    return true;
+  }
+
+  function patchRenderedMessageAttachment(entry) {
+    if (!entry || !thread) return false;
+    const id = String(entry.id || "").trim();
+    if (!id) return false;
+    const attachment = getEntryImageAttachment(entry);
+    if (!attachment) return false;
+    const nextSrc = String(getAttachmentImageSrc(attachment) || "").trim();
+    if (!nextSrc) return false;
+
+    const row = thread.querySelector(
+      '.shop-company-chat-row[data-message-id="' + cssEscape(id) + '"]'
+    );
+    if (!row) return false;
+    const bubble = row.querySelector('.shop-company-chat-bubble[data-message-id="' + cssEscape(id) + '"]');
+    if (!bubble) return false;
+    const img = bubble.querySelector(".shop-company-chat-attachment-image");
+    if (!(img instanceof HTMLImageElement)) return false;
+    row.dataset.renderSignature = getEntryRenderSignature(entry);
+    bubble.classList.add("has-attachment");
+    if (String(entry.text || "").trim()) {
+      bubble.classList.remove("has-attachment-only");
+    } else {
+      bubble.classList.add("has-attachment-only");
+    }
+
+    const finalizePatch = function () {
+      applyAttachmentImageNodeState(img, attachment);
+      row.dataset.renderSignature = getEntryRenderSignature(entry);
+      applyThreadImageLoadingStrategy();
+      saveFeedScrollPosition({ force: true });
+      updateScrollDownButton();
+    };
+
+    if (String(img.getAttribute("src") || "").trim() === nextSrc) {
+      finalizePatch();
+      return true;
+    }
+
+    const preloader = new Image();
+    preloader.decoding = "async";
+    preloader.onload = finalizePatch;
+    preloader.onerror = finalizePatch;
+    preloader.src = nextSrc;
+    return true;
+  }
+
   function isCacheableThreadImageSrc(rawValue) {
     const value = String(rawValue || "").trim();
     if (!value || /^data:/i.test(value) || /^blob:/i.test(value)) return false;
@@ -5783,9 +5977,135 @@
     return "";
   }
 
+  function restoreLockedPageScrollForChat() {
+    if (!chatBodyScrollLockState) return false;
+    const lockedY = Math.max(0, Number(chatBodyScrollLockY || 0));
+    const bodyStyle = document.body.style;
+    const docEl = document.documentElement;
+    const htmlStyle = docEl ? docEl.style : null;
+    const expectedTop = "-" + String(lockedY) + "px";
+
+    if (bodyStyle.position !== "fixed") bodyStyle.position = "fixed";
+    if (bodyStyle.top !== expectedTop) bodyStyle.top = expectedTop;
+    if (bodyStyle.left !== "0px" && bodyStyle.left !== "0") bodyStyle.left = "0";
+    if (bodyStyle.right !== "0px" && bodyStyle.right !== "0") bodyStyle.right = "0";
+    if (bodyStyle.width !== "100%") bodyStyle.width = "100%";
+    if (bodyStyle.height !== "100%") bodyStyle.height = "100%";
+    if (bodyStyle.overflow !== "hidden") bodyStyle.overflow = "hidden";
+    if (bodyStyle.overscrollBehavior !== "none") bodyStyle.overscrollBehavior = "none";
+
+    if (htmlStyle) {
+      if (htmlStyle.overflow !== "hidden") htmlStyle.overflow = "hidden";
+      if (htmlStyle.overscrollBehavior !== "none") htmlStyle.overscrollBehavior = "none";
+      if (htmlStyle.height !== "100%") htmlStyle.height = "100%";
+    }
+    return true;
+  }
+
+  function focusChatTextField(field, options) {
+    const node = field || null;
+    if (!node || typeof node.focus !== "function") return false;
+    if ("disabled" in node && node.disabled) return false;
+    const opts = options || {};
+    const preventScroll = opts.preventScroll !== false;
+    restoreLockedPageScrollForChat();
+    try {
+      if (preventScroll) {
+        node.focus({ preventScroll: true });
+      } else {
+        node.focus();
+      }
+    } catch {
+      try {
+        node.focus();
+      } catch {
+        return false;
+      }
+    }
+    restoreLockedPageScrollForChat();
+    return document.activeElement === node;
+  }
+
+  function repairLockedPageScrollForChat() {
+    if (!chatBodyScrollLockState || !overlay.classList.contains("is-open") || !isIOSMobileBrowser()) {
+      return false;
+    }
+    const expectedY = Math.max(0, Number(chatBodyScrollLockY || 0));
+    const currentY = Math.max(
+      0,
+      Number(window.pageYOffset || window.scrollY || document.documentElement.scrollTop || 0)
+    );
+    const expectedTop = "-" + String(expectedY) + "px";
+    const bodyStyle = document.body.style;
+    const shouldRepair = (
+      Math.abs(currentY - expectedY) >= 1
+      || bodyStyle.position !== "fixed"
+      || bodyStyle.top !== expectedTop
+    );
+    if (!shouldRepair) return false;
+    restoreLockedPageScrollForChat();
+    return true;
+  }
+
+  function armLockedPageScrollRepair(durationMs) {
+    if (!isIOSMobileBrowser()) return;
+    const duration = Math.max(160, Number(durationMs || 0) || 0);
+    mobilePageScrollRepairUntil = Math.max(mobilePageScrollRepairUntil, Date.now() + duration);
+  }
+
+  function disarmLockedPageScrollRepair() {
+    mobilePageScrollRepairUntil = 0;
+  }
+
+  function shouldRunLockedPageScrollRepair() {
+    if (!chatBodyScrollLockState || !overlay.classList.contains("is-open") || !isIOSMobileBrowser()) {
+      return false;
+    }
+    if (hasFocusedChatTextInput()) return true;
+    return Date.now() < Number(mobilePageScrollRepairUntil || 0);
+  }
+
+  function scheduleLockedPageScrollRepair() {
+    if (!shouldRunLockedPageScrollRepair()) {
+      return;
+    }
+    if (mobilePageScrollRepairRaf) return;
+    mobilePageScrollRepairRaf = requestAnimationFrame(function () {
+      mobilePageScrollRepairRaf = 0;
+      if (!shouldRunLockedPageScrollRepair()) return;
+      repairLockedPageScrollForChat();
+    });
+  }
+
+  function handleLockedPageScrollRepairEvent() {
+    scheduleLockedPageScrollRepair();
+  }
+
+  function shouldGuardIOSNativeTextFocus(node) {
+    if (!node || typeof node.focus !== "function") return false;
+    if (!isIOSMobileBrowser() || !shouldUseNativeMobileEmojiKeyboard()) return false;
+    if (!overlay.classList.contains("is-open")) return false;
+    if (document.activeElement === node) return false;
+    if ("disabled" in node && node.disabled) return false;
+    return true;
+  }
+
+  function guardIOSNativeTextFocus(event) {
+    const node = event && event.currentTarget ? event.currentTarget : null;
+    if (!shouldGuardIOSNativeTextFocus(node)) return;
+    event.preventDefault();
+    armLockedPageScrollRepair(900);
+    captureMobileKeyboardViewportBaseBottom({ force: true });
+    focusChatTextField(node);
+    scheduleMobileKeyboardInsetSyncBurst();
+    scheduleLockedPageScrollRepair();
+  }
+
   function lockBackgroundPageScrollForChat() {
     if (chatBodyScrollLockState) return;
     const bodyStyle = document.body.style;
+    const docEl = document.documentElement;
+    const htmlStyle = docEl ? docEl.style : null;
     chatBodyScrollLockY = Math.max(
       0,
       Number(window.pageYOffset || window.scrollY || document.documentElement.scrollTop || 0)
@@ -5796,8 +6116,12 @@
       left: String(bodyStyle.left || ""),
       right: String(bodyStyle.right || ""),
       width: String(bodyStyle.width || ""),
+      height: String(bodyStyle.height || ""),
       overflow: String(bodyStyle.overflow || ""),
       overscrollBehavior: String(bodyStyle.overscrollBehavior || ""),
+      htmlOverflow: String(htmlStyle && htmlStyle.overflow || ""),
+      htmlOverscrollBehavior: String(htmlStyle && htmlStyle.overscrollBehavior || ""),
+      htmlHeight: String(htmlStyle && htmlStyle.height || ""),
     };
 
     bodyStyle.position = "fixed";
@@ -5805,21 +6129,36 @@
     bodyStyle.left = "0";
     bodyStyle.right = "0";
     bodyStyle.width = "100%";
+    bodyStyle.height = "100%";
     bodyStyle.overflow = "hidden";
     bodyStyle.overscrollBehavior = "none";
+    if (htmlStyle) {
+      htmlStyle.overflow = "hidden";
+      htmlStyle.overscrollBehavior = "none";
+      htmlStyle.height = "100%";
+    }
+    restoreLockedPageScrollForChat();
   }
 
   function unlockBackgroundPageScrollForChat() {
     if (!chatBodyScrollLockState) return;
     const bodyStyle = document.body.style;
+    const docEl = document.documentElement;
+    const htmlStyle = docEl ? docEl.style : null;
     const savedY = Math.max(0, Number(chatBodyScrollLockY || 0));
     bodyStyle.position = chatBodyScrollLockState.position;
     bodyStyle.top = chatBodyScrollLockState.top;
     bodyStyle.left = chatBodyScrollLockState.left;
     bodyStyle.right = chatBodyScrollLockState.right;
     bodyStyle.width = chatBodyScrollLockState.width;
+    bodyStyle.height = chatBodyScrollLockState.height;
     bodyStyle.overflow = chatBodyScrollLockState.overflow;
     bodyStyle.overscrollBehavior = chatBodyScrollLockState.overscrollBehavior;
+    if (htmlStyle) {
+      htmlStyle.overflow = chatBodyScrollLockState.htmlOverflow;
+      htmlStyle.overscrollBehavior = chatBodyScrollLockState.htmlOverscrollBehavior;
+      htmlStyle.height = chatBodyScrollLockState.htmlHeight;
+    }
     chatBodyScrollLockState = null;
     chatBodyScrollLockY = 0;
     if (overlay.classList.contains("is-open")) return;
@@ -5917,6 +6256,11 @@
     hideEmojiPopover();
     bindMobileKeyboardViewportSync();
     setMobileKeyboardInset(0);
+    const shouldLockPageBeforeOpen = isIOSMobileBrowser();
+    if (shouldLockPageBeforeOpen) {
+      lockBackgroundPageScrollForChat();
+      captureMobileKeyboardViewportBaseBottom({ force: true });
+    }
     overlay.hidden = false;
     void overlay.offsetWidth;
     overlay.classList.add("is-open");
@@ -5924,8 +6268,20 @@
     syncOpenButtonActiveState();
     document.body.classList.add("shop-company-chat-open");
     maybeShowNotificationPermissionPrompt();
-    lockBackgroundPageScrollForChat();
-    captureMobileKeyboardViewportBaseBottom({ force: true });
+    if (!shouldLockPageBeforeOpen) {
+      lockBackgroundPageScrollForChat();
+      captureMobileKeyboardViewportBaseBottom({ force: true });
+    }
+    syncIosOverlayViewportShift();
+    requestAnimationFrame(syncIosOverlayViewportShift);
+    requestAnimationFrame(function () {
+      requestAnimationFrame(syncIosOverlayViewportShift);
+    });
+    scheduleLockedPageScrollRepair();
+    syncIosKeyboardSheetLock({
+      viewportHeight: getIosSheetViewportHeight(),
+      allowShrink: true,
+    });
     scheduleScrollDownComposerExtraOffsetSync();
     scheduleMobileKeyboardInsetSync();
     renderTypingIndicator();
@@ -5980,7 +6336,7 @@
           }
           syncComposerRichPreview({});
           if (!shouldUseNativeMobileEmojiKeyboard()) {
-            input.focus();
+            focusChatTextField(input);
             scheduleMobileKeyboardInsetSyncBurst();
           } else {
             setMobileKeyboardInset(0);
@@ -6305,7 +6661,7 @@
     hideContextMenu();
     hideReactionBar();
     hideEmojiPopover();
-    input.focus();
+    focusChatTextField(input);
     return true;
   }
 
@@ -6321,7 +6677,7 @@
     clearReplyDraft();
     editingMessageId = String(entry.id || "");
     input.value = String(entry.text || "");
-    input.focus();
+    focusChatTextField(input);
     const pos = input.value.length;
     input.setSelectionRange(pos, pos);
     syncComposerRichPreview({});
@@ -7568,9 +7924,15 @@
       const attachmentWrap = document.createElement("div");
       attachmentWrap.className = "shop-company-chat-attachment";
       const img = document.createElement("img");
+      const attachmentWidth = Math.max(0, Number(imageAttachment.width || 0));
+      const attachmentHeight = Math.max(0, Number(imageAttachment.height || 0));
       img.className = "shop-company-chat-attachment-image";
       img.src = getAttachmentImageSrc(imageAttachment);
       img.alt = String(imageAttachment.name || "\u0424\u043e\u0442\u043e");
+      if (attachmentWidth > 0 && attachmentHeight > 0) {
+        img.width = attachmentWidth;
+        img.height = attachmentHeight;
+      }
       img.draggable = false;
       img.loading = "lazy";
       img.decoding = "async";
@@ -8041,9 +8403,9 @@
     if (shouldUseNativeMobileEmojiKeyboard()) {
       hideEmojiPopover();
       if (normalizedTarget === "attach-preview") {
-        attachPreviewCaption.focus();
+        focusChatTextField(attachPreviewCaption);
       } else if (!input.disabled) {
-        input.focus();
+        focusChatTextField(input);
       }
       return;
     }
@@ -8084,9 +8446,9 @@
     if (shouldUseNativeMobileEmojiKeyboard() && mode !== "reaction") {
       hideEmojiPopover();
       if (normalizedTarget === "attach-preview") {
-        attachPreviewCaption.focus();
+        focusChatTextField(attachPreviewCaption);
       } else if (!input.disabled) {
-        input.focus();
+        focusChatTextField(input);
       }
       return;
     }
@@ -8322,7 +8684,7 @@
         attachPreviewCaption.value.slice(0, startPreview) +
         value +
         attachPreviewCaption.value.slice(endPreview);
-      attachPreviewCaption.focus();
+      focusChatTextField(attachPreviewCaption);
       const nextPreviewPos = startPreview + value.length;
       attachPreviewCaption.setSelectionRange(nextPreviewPos, nextPreviewPos);
       return;
@@ -8331,7 +8693,7 @@
     const start = input.selectionStart ?? input.value.length;
     const end = input.selectionEnd ?? input.value.length;
     input.value = input.value.slice(0, start) + value + input.value.slice(end);
-    input.focus();
+    focusChatTextField(input);
     const pos = start + value.length;
     input.setSelectionRange(pos, pos);
     syncComposerRichPreview({});
@@ -9059,6 +9421,100 @@
     return Number.isFinite(parsed) ? parsed : 0;
   }
 
+  function getMobileChatSheetTopOffsetPx() {
+    const rootStyles = window.getComputedStyle(document.documentElement);
+    const bodyStyles = document.body ? window.getComputedStyle(document.body) : null;
+    const headerHeight = Math.max(
+      parseCssLengthPx(rootStyles.getPropertyValue("--header-height")),
+      parseCssLengthPx(bodyStyles && bodyStyles.getPropertyValue("--header-height"))
+    );
+    const topGap = Math.max(
+      parseCssLengthPx(rootStyles.getPropertyValue("--shop-sheet-top-gap")),
+      parseCssLengthPx(bodyStyles && bodyStyles.getPropertyValue("--shop-sheet-top-gap"))
+    );
+    return Math.max(0, Math.round(headerHeight + topGap));
+  }
+
+  function clearIosKeyboardSheetLock() {
+    delete overlay.dataset.iosSheetViewportHeight;
+    delete overlay.dataset.iosSheetHeight;
+    overlay.style.removeProperty("--shop-chat-ios-sheet-height");
+    overlay.classList.remove("is-ios-sheet-locked");
+  }
+
+  function clearIosOverlayViewportShift() {
+    delete overlay.dataset.iosOverlayShift;
+    overlay.style.removeProperty("--shop-chat-ios-overlay-shift");
+  }
+
+  function getIosSheetViewportHeight() {
+    const viewport = window.visualViewport;
+    const visualViewportHeight = viewport ? Number(viewport.height || 0) : 0;
+    if (Number.isFinite(visualViewportHeight) && visualViewportHeight > 0) {
+      return Math.max(0, Math.round(visualViewportHeight));
+    }
+    return Math.max(
+      0,
+      Math.round(
+        Math.max(
+          Number(window.innerHeight || 0),
+          Number(document.documentElement && document.documentElement.clientHeight || 0)
+        )
+      )
+    );
+  }
+
+  function syncIosOverlayViewportShift() {
+    if (!isIOSMobileBrowser() || !overlay.classList.contains("is-open")) {
+      clearIosOverlayViewportShift();
+      return 0;
+    }
+    const rect = overlay.getBoundingClientRect();
+    const currentShift = Number(overlay.dataset.iosOverlayShift || 0);
+    const currentTop = Number(rect && rect.top || 0);
+    if (!Number.isFinite(currentTop)) return currentShift || 0;
+    const nextShiftRaw = currentShift - currentTop;
+    const nextShift = Math.abs(nextShiftRaw) < 1 ? 0 : Math.round(nextShiftRaw);
+    if (nextShift === currentShift) return nextShift;
+    if (!nextShift) {
+      clearIosOverlayViewportShift();
+      return 0;
+    }
+    overlay.dataset.iosOverlayShift = String(nextShift);
+    overlay.style.setProperty("--shop-chat-ios-overlay-shift", String(nextShift) + "px");
+    return nextShift;
+  }
+
+  function syncIosKeyboardSheetLock(options) {
+    if (!isIOSMobileBrowser() || !isMobileChatViewport() || !overlay.classList.contains("is-open")) {
+      clearIosKeyboardSheetLock();
+      return;
+    }
+
+    const opts = options || {};
+    const hintedViewportHeight = Number(opts.viewportHeight || 0);
+    const viewportHeight = Number.isFinite(hintedViewportHeight) && hintedViewportHeight > 0
+      ? Math.round(hintedViewportHeight)
+      : getIosSheetViewportHeight();
+    if (!Number.isFinite(viewportHeight) || viewportHeight <= 0) return;
+
+    const prevBaseHeight = Number(overlay.dataset.iosSheetViewportHeight || 0);
+    const allowShrink = opts.allowShrink === true;
+    const nextBaseHeight = allowShrink
+      ? viewportHeight
+      : Math.max(prevBaseHeight || 0, viewportHeight);
+    if (!Number.isFinite(nextBaseHeight) || nextBaseHeight <= 0) return;
+
+    const topOffset = getMobileChatSheetTopOffsetPx();
+    const nextHeight = Math.max(0, Math.round(nextBaseHeight - topOffset));
+    if (nextHeight <= 0) return;
+
+    overlay.dataset.iosSheetViewportHeight = String(nextBaseHeight);
+    overlay.dataset.iosSheetHeight = String(nextHeight);
+    overlay.style.setProperty("--shop-chat-ios-sheet-height", String(nextHeight) + "px");
+    overlay.classList.add("is-ios-sheet-locked");
+  }
+
   function getElementOuterHeightPx(node) {
     if (!node || !node.isConnected) return 0;
     const rect = node.getBoundingClientRect();
@@ -9106,7 +9562,7 @@
     });
   }
 
-  function getCurrentMobileViewportBottom() {
+  function getVisualViewportBottom() {
     const viewport = window.visualViewport;
     const viewportOffsetTop = viewport ? Number(viewport.offsetTop || 0) : 0;
     const viewportHeight = viewport ? Number(viewport.height || 0) : 0;
@@ -9118,10 +9574,18 @@
     )
       ? viewportOffsetTop + viewportHeight
       : 0;
+    return Math.max(0, Math.round(viewportBottom));
+  }
+
+  function getCurrentMobileViewportBottom() {
+    const viewportBottom = getVisualViewportBottom();
     const fallbackBottom = Math.max(
       Number(window.innerHeight || 0),
       Number(document.documentElement && document.documentElement.clientHeight || 0)
     );
+    if (isIOSMobileBrowser() && viewportBottom > 0) {
+      return viewportBottom;
+    }
     return Math.max(0, Math.round(Math.max(viewportBottom, fallbackBottom)));
   }
 
@@ -9206,7 +9670,8 @@
     const opts = options || {};
     const raw = Number(valuePx || 0);
     const rounded = Number.isFinite(raw) ? Math.max(0, Math.round(raw)) : 0;
-    const next = rounded < 8 ? 0 : rounded;
+    const zeroThreshold = isIOSMobileBrowser() ? 2 : 8;
+    const next = rounded < zeroThreshold ? 0 : rounded;
     const prev = Number(overlay.dataset.keyboardInset || 0);
     const forceFeedBottomSync = opts.forceFeedBottomSync === true;
     const viewportBottom = Number(opts.viewportBottom || 0);
@@ -9279,10 +9744,13 @@
     const viewportHeight = Number(viewport.height || 0);
     if (!Number.isFinite(viewportHeight) || viewportHeight <= 0) return 0;
     if (!Number.isFinite(viewportOffsetTop) || viewportOffsetTop < 0) return 0;
-    const rect = overlay.getBoundingClientRect();
     const viewportBottom = viewportOffsetTop + viewportHeight;
-    const overlap = Number(rect && rect.bottom || 0) - viewportBottom;
-    const fallbackInset = !isAndroidMobileBrowser() && mobileKeyboardViewportBaseBottom > 0
+    const keyboardAnchor = modal || modalBody || overlay;
+    const anchorRect = keyboardAnchor ? keyboardAnchor.getBoundingClientRect() : null;
+    const anchorBottom = Number(anchorRect && anchorRect.bottom || 0);
+    const overlap = anchorBottom - viewportBottom;
+    const needsFallbackInset = !Number.isFinite(anchorBottom) || anchorBottom <= 0;
+    const fallbackInset = !isAndroidMobileBrowser() && needsFallbackInset && mobileKeyboardViewportBaseBottom > 0
       ? Math.max(0, mobileKeyboardViewportBaseBottom - viewportBottom)
       : 0;
     const nextInset = Math.max(
@@ -9298,6 +9766,10 @@
     const prevViewportBottom = mobileKeyboardLastViewportBottom || viewportBottom;
     mobileKeyboardLastViewportBottom = viewportBottom;
     const viewportChanged = Math.abs(viewportBottom - prevViewportBottom) >= 1;
+    syncIosOverlayViewportShift();
+    syncIosKeyboardSheetLock({
+      viewportHeight: getIosSheetViewportHeight(),
+    });
     const forceFeedBottomSync = viewportChanged && (
       hasFocusedChatTextInput()
       || isMobileKeyboardViewportCompressed(prevViewportBottom)
@@ -9308,6 +9780,17 @@
       viewportBottom: viewportBottom,
     });
     setAndroidKeyboardViewportVisualShift(computeAndroidKeyboardViewportVisualShift(viewportBottom));
+    // Continuous body relock during keyboard viewport sync causes visible jitter on iOS.
+    // Keep the relock only for Android where viewport motion compensation needs it.
+    if (chatBodyScrollLockState && isAndroidMobileBrowser()) {
+      restoreLockedPageScrollForChat();
+    }
+    if (chatBodyScrollLockState && isIOSMobileBrowser()) {
+      scheduleLockedPageScrollRepair();
+    }
+    if (isIOSMobileBrowser()) {
+      requestAnimationFrame(syncIosOverlayViewportShift);
+    }
   }
 
   function stopAndroidKeyboardViewportMotionSync() {
@@ -9320,8 +9803,9 @@
     setAndroidKeyboardViewportVisualShift(0);
   }
 
+  // Reused on iOS as a high-frequency viewport sampler so keyboard motion stays fluid.
   function scheduleAndroidKeyboardViewportMotionSync(durationMs) {
-    if (!isAndroidMobileBrowser()) return;
+    if (!isAndroidMobileBrowser() && !isIOSMobileBrowser()) return;
     if (!overlay.classList.contains("is-open")) return;
     const now = typeof performance !== "undefined" && typeof performance.now === "function"
       ? performance.now()
@@ -9369,6 +9853,7 @@
 
   function handleMobileKeyboardViewportSyncEvent() {
     scheduleMobileKeyboardInsetSync();
+    scheduleLockedPageScrollRepair();
     scheduleAndroidKeyboardViewportMotionSync(260);
   }
 
@@ -9382,6 +9867,7 @@
 
   function scheduleMobileKeyboardInsetSyncBurst() {
     scheduleMobileKeyboardInsetSync();
+    scheduleLockedPageScrollRepair();
     if (isAndroidMobileBrowser()) {
       scheduleAndroidKeyboardViewportMotionSync(520);
       window.setTimeout(scheduleMobileKeyboardInsetSync, 40);
@@ -9390,16 +9876,37 @@
       window.setTimeout(scheduleMobileKeyboardInsetSync, 420);
       return;
     }
+    if (isIOSMobileBrowser()) {
+      scheduleAndroidKeyboardViewportMotionSync(520);
+      window.setTimeout(scheduleLockedPageScrollRepair, 40);
+      window.setTimeout(scheduleLockedPageScrollRepair, 120);
+      window.setTimeout(scheduleLockedPageScrollRepair, 260);
+      window.setTimeout(scheduleLockedPageScrollRepair, 420);
+      window.setTimeout(scheduleMobileKeyboardInsetSync, 40);
+      window.setTimeout(scheduleMobileKeyboardInsetSync, 120);
+      window.setTimeout(scheduleMobileKeyboardInsetSync, 260);
+      window.setTimeout(scheduleMobileKeyboardInsetSync, 420);
+      return;
+    }
+    window.setTimeout(scheduleLockedPageScrollRepair, 40);
+    window.setTimeout(scheduleLockedPageScrollRepair, 120);
+    window.setTimeout(scheduleLockedPageScrollRepair, 260);
+    window.setTimeout(scheduleLockedPageScrollRepair, 420);
     window.setTimeout(scheduleMobileKeyboardInsetSync, 60);
     window.setTimeout(scheduleMobileKeyboardInsetSync, 180);
     window.setTimeout(scheduleMobileKeyboardInsetSync, 320);
   }
 
   function scheduleAndroidFocusedComposerLift() {
-    if (!isAndroidMobileBrowser()) return;
     if (!overlay.classList.contains("is-open")) return;
-    rememberMobileKeyboardTrackedFeedBottomDistance({ force: true });
-    scheduleAndroidKeyboardViewportMotionSync(720);
+    if (isAndroidMobileBrowser()) {
+      rememberMobileKeyboardTrackedFeedBottomDistance({ force: true });
+      scheduleAndroidKeyboardViewportMotionSync(720);
+      return;
+    }
+    if (isIOSMobileBrowser()) {
+      scheduleAndroidKeyboardViewportMotionSync(720);
+    }
   }
 
   function bindMobileKeyboardViewportSync() {
@@ -9411,6 +9918,7 @@
       viewport.addEventListener("scroll", handleMobileKeyboardViewportSyncEvent);
     }
     window.addEventListener("orientationchange", handleMobileKeyboardViewportSyncEvent);
+    window.addEventListener("scroll", handleLockedPageScrollRepairEvent, { passive: true });
   }
 
   function unbindMobileKeyboardViewportSync() {
@@ -9422,10 +9930,16 @@
       viewport.removeEventListener("scroll", handleMobileKeyboardViewportSyncEvent);
     }
     window.removeEventListener("orientationchange", handleMobileKeyboardViewportSyncEvent);
+    window.removeEventListener("scroll", handleLockedPageScrollRepairEvent);
     if (mobileKeyboardInsetSyncRaf) {
       cancelAnimationFrame(mobileKeyboardInsetSyncRaf);
       mobileKeyboardInsetSyncRaf = 0;
     }
+    if (mobilePageScrollRepairRaf) {
+      cancelAnimationFrame(mobilePageScrollRepairRaf);
+      mobilePageScrollRepairRaf = 0;
+    }
+    disarmLockedPageScrollRepair();
     stopAndroidKeyboardViewportMotionSync();
     if (scrollDownComposerOffsetRaf) {
       cancelAnimationFrame(scrollDownComposerOffsetRaf);
@@ -9437,6 +9951,8 @@
     mobileKeyboardTrackedFeedBottomDistance = null;
     setScrollDownComposerExtraOffset(0);
     setMobileKeyboardInset(0);
+    clearIosKeyboardSheetLock();
+    clearIosOverlayViewportShift();
   }
 
   function ensureTopVisibleEntryNotClipped() {
@@ -9603,12 +10119,19 @@
       orderCards: orderCards,
       _sharedDirection: direction,
     };
+    if (role === "user") {
+      markLocalOutgoingEntryRemotePending(message, true);
+      protectLocalOutgoingEntry(message);
+    }
 
     liveEntries.push(message);
     markSharedThreadMutated();
 
     renderThread();
     scrollToBottom(false);
+    if (attachment) {
+      scheduleMessageAttachmentBottomPin(message.id, { bottomDistance: 0 });
+    }
     if (opts.persistRemote !== false) {
       enqueueSharedMutation(function () {
         return remoteCreateSharedMessage(message);
@@ -9632,15 +10155,23 @@
 
     entry.attachment = nextAttachment;
     markSharedThreadMutated();
+    protectLocalOutgoingEntry(entry);
 
     const opts = options || {};
     const prevTop = feed.scrollTop;
     const wasNearBottom = feed.scrollHeight - feed.clientHeight - feed.scrollTop < 40;
-    renderThread();
-    if (wasNearBottom || opts.keepBottom === true) {
+    const shouldKeepBottom = wasNearBottom || opts.keepBottom === true;
+    const patchedInPlace = patchRenderedMessageAttachment(entry);
+    if (!patchedInPlace) {
+      renderThread();
+    }
+    if (shouldKeepBottom) {
       scrollToBottom(false);
-    } else {
+      scheduleMessageAttachmentBottomPin(id, { bottomDistance: 0 });
+    } else if (!patchedInPlace) {
       feed.scrollTop = prevTop;
+      updateScrollDownButton();
+    } else {
       updateScrollDownButton();
     }
     return true;
@@ -10290,7 +10821,7 @@
     attachPreviewSendBtn.disabled = false;
     if (emojiPopover.classList.contains("is-attach-preview")) hideEmojiPopover();
     attachInput.value = "";
-    if (focusComposer && !input.disabled) input.focus();
+    if (focusComposer && !input.disabled) focusChatTextField(input);
     if (clearItems && clearPersistedDraft) {
       clearPersistedAttachPreviewDraft().catch(function () {});
     }
@@ -10457,7 +10988,7 @@
       || (opts.focusCaption !== false && !shouldUseNativeMobileEmojiKeyboard())
     );
     if (shouldFocusCaption) {
-      attachPreviewCaption.focus();
+      focusChatTextField(attachPreviewCaption);
     } else {
       attachPreviewCaption.blur();
     }
@@ -10592,7 +11123,7 @@
       if (!isImageAttachment(finalAttachment)) return;
 
       const nextSrc = String(getAttachmentImageSrc(finalAttachment) || "");
-      updateMessageAttachmentById(task.messageId, finalAttachment);
+      updateMessageAttachmentById(task.messageId, finalAttachment, { keepBottom: true });
       if (task.previewUrl && task.previewUrl !== nextSrc) {
         try { URL.revokeObjectURL(task.previewUrl); } catch {}
       }
@@ -10660,11 +11191,11 @@
       event.stopPropagation();
       if (shouldUseNativeMobileEmojiKeyboard()) {
         hideEmojiPopover();
-        attachPreviewCaption.focus();
+        focusChatTextField(attachPreviewCaption);
         return;
       }
       toggleEmojiPopover("attach-preview");
-      attachPreviewCaption.focus();
+      focusChatTextField(attachPreviewCaption);
     });
 
     attachPreviewSendBtn.addEventListener("click", async function () {
@@ -10699,15 +11230,20 @@
     attachPreviewCaption.addEventListener("input", function () {
       schedulePersistAttachPreviewDraft();
     });
+    attachPreviewCaption.addEventListener("touchend", guardIOSNativeTextFocus, { passive: false });
 
     attachPreviewCaption.addEventListener("focus", function () {
+      armLockedPageScrollRepair(900);
+      restoreLockedPageScrollForChat();
       captureMobileKeyboardViewportBaseBottom({ force: true });
       rememberMobileKeyboardTrackedFeedBottomDistance({ force: true });
       scheduleMobileKeyboardInsetSyncBurst();
+      scheduleLockedPageScrollRepair();
       scheduleAndroidFocusedComposerLift();
     });
 
     attachPreviewCaption.addEventListener("blur", function () {
+      disarmLockedPageScrollRepair();
       scheduleMobileKeyboardInsetSyncBurst();
     });
 
@@ -10989,6 +11525,15 @@
     return /Android/i.test(ua);
   }
 
+  function isIOSMobileBrowser() {
+    const ua = String((navigator && navigator.userAgent) || "");
+    const platform = String((navigator && navigator.platform) || "");
+    const maxTouchPoints = Number(navigator.maxTouchPoints || 0);
+    if (!ua && !platform) return false;
+    if (/iPhone|iPad|iPod/i.test(ua) || /iPhone|iPad|iPod/i.test(platform)) return true;
+    return /Macintosh/i.test(ua) && maxTouchPoints > 1;
+  }
+
   let touchAttachmentTap = null;
   const CHAT_ATTACHMENT_TAP_MAX_MS = 260;
   const CHAT_ATTACHMENT_TAP_MOVE_CANCEL_PX = 10;
@@ -11089,15 +11634,20 @@
   input.addEventListener("compositionend", function () {
     handleComposerTypingActivity();
   });
+  input.addEventListener("touchend", guardIOSNativeTextFocus, { passive: false });
 
   input.addEventListener("focus", function () {
+    armLockedPageScrollRepair(900);
+    restoreLockedPageScrollForChat();
     captureMobileKeyboardViewportBaseBottom({ force: true });
     rememberMobileKeyboardTrackedFeedBottomDistance({ force: true });
     scheduleMobileKeyboardInsetSyncBurst();
+    scheduleLockedPageScrollRepair();
     scheduleAndroidFocusedComposerLift();
   });
 
   input.addEventListener("blur", function () {
+    disarmLockedPageScrollRepair();
     scheduleLocalTypingStop(CHAT_TYPING_BLUR_STOP_MS);
     scheduleMobileKeyboardInsetSyncBurst();
   });
@@ -11120,7 +11670,7 @@
     hideReactionBar();
     if (shouldUseNativeMobileEmojiKeyboard()) {
       hideEmojiPopover();
-      input.focus();
+      focusChatTextField(input);
       return;
     }
     toggleEmojiPopover("composer");
@@ -11132,7 +11682,7 @@
     if (isMobileSheetOpen) {
       input.blur();
     } else {
-      input.focus();
+      focusChatTextField(input);
     }
   });
 
@@ -11642,6 +12192,51 @@
     feed.scrollTop = nextTop;
     event.preventDefault();
   }, { passive: false });
+
+  feed.addEventListener("touchstart", function (event) {
+    shortFeedTouchBlockGesture = null;
+    if (!isIOSMobileBrowser() || !overlay.classList.contains("is-open")) return;
+    if (event.touches.length !== 1) return;
+    if (isFeedVerticallyScrollable()) return;
+    const targetEl = event.target && event.target.closest ? event.target : null;
+    if (targetEl && targetEl.closest(".shop-company-chat-order-card-strip")) return;
+    const touch = event.touches[0];
+    shortFeedTouchBlockGesture = {
+      startX: Number(touch.clientX || 0),
+      startY: Number(touch.clientY || 0),
+    };
+  }, { passive: true });
+
+  feed.addEventListener("touchmove", function (event) {
+    if (!shortFeedTouchBlockGesture) return;
+    if (!isIOSMobileBrowser() || !overlay.classList.contains("is-open")) return;
+    if (event.touches.length !== 1) {
+      shortFeedTouchBlockGesture = null;
+      return;
+    }
+    if (isFeedVerticallyScrollable()) {
+      shortFeedTouchBlockGesture = null;
+      return;
+    }
+    const targetEl = event.target && event.target.closest ? event.target : null;
+    if (targetEl && targetEl.closest(".shop-company-chat-order-card-strip")) {
+      shortFeedTouchBlockGesture = null;
+      return;
+    }
+    const touch = event.touches[0];
+    const dx = Number(touch.clientX || 0) - shortFeedTouchBlockGesture.startX;
+    const dy = Number(touch.clientY || 0) - shortFeedTouchBlockGesture.startY;
+    if (Math.abs(dy) < 6 || Math.abs(dy) <= Math.abs(dx)) return;
+    event.preventDefault();
+  }, { passive: false });
+
+  feed.addEventListener("touchend", function () {
+    shortFeedTouchBlockGesture = null;
+  }, { passive: true });
+
+  feed.addEventListener("touchcancel", function () {
+    shortFeedTouchBlockGesture = null;
+  }, { passive: true });
 
   reactionBar.addEventListener("click", function (event) {
     if (Date.now() < suppressTapUntil) {

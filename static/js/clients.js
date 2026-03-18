@@ -359,11 +359,15 @@
     // Кэш данных для picker
     catalogCategories: [],
     catalogProducts: [],
+    filterRuleCatalogProducts: [],
     customerCategories: [],
     customersList: [],
     customersById: new Map(),
     clientDetailsCache: new Map(),
     discountPromoCodes: [],
+    filterCapabilities: {
+      gender: false,
+    },
   };
   const CLIENTS_PAGE_LIMIT = 80;
   const CLIENTS_SCROLL_THRESHOLD_PX = 220;
@@ -570,10 +574,12 @@
     if (!rule || typeof rule !== "object") return null;
     const field = String(rule.field || "").trim();
     const operator = String(rule.operator || "").trim();
-    const numericFields = new Set(["total_orders", "total_spent", "is_active"]);
+    const numericFields = new Set(["total_orders", "total_spent", "is_active", "age"]);
     const dateFields = new Set(["last_order_date", "registration_date", "created_at"]);
+    const entityFields = new Set(["favorite_product", "favorite_category"]);
+    const enumFields = new Set(["gender"]);
     const supported = new Set(["=", "!=", ">=", "<=", ">", "<"]);
-    if ((!numericFields.has(field) && !dateFields.has(field)) || !supported.has(operator)) {
+    if ((!numericFields.has(field) && !dateFields.has(field) && !entityFields.has(field) && !enumFields.has(field)) || !supported.has(operator)) {
       return null;
     }
 
@@ -582,16 +588,41 @@
 
     if (numericFields.has(field)) {
       if (right === "" || right == null) return null;
-      left = Number(left || 0);
+      if (field === "age") {
+        const birthday = client?.birthday ? new Date(client.birthday) : null;
+        if (!birthday || !Number.isFinite(birthday.getTime())) return false;
+        const now = new Date();
+        let age = now.getFullYear() - birthday.getFullYear();
+        const monthDiff = now.getMonth() - birthday.getMonth();
+        if (monthDiff < 0 || (monthDiff === 0 && now.getDate() < birthday.getDate())) {
+          age -= 1;
+        }
+        left = age;
+      } else {
+        left = Number(left || 0);
+      }
       right = Number(right);
-      if (!Number.isFinite(right)) return null;
+      if (!Number.isFinite(left) || !Number.isFinite(right)) return null;
     } else if (dateFields.has(field)) {
       const relativeTs = getRelativeDateFilterValue(right);
-      const leftTs = left ? new Date(left).getTime() : NaN;
-      const rightTs = relativeTs ?? (right ? new Date(right).getTime() : NaN);
-      if (!Number.isFinite(leftTs) || !Number.isFinite(rightTs)) return false;
+      const leftDate = left ? new Date(left) : null;
+      const rightDate = relativeTs != null ? new Date(relativeTs) : (right ? new Date(right) : null);
+      if (!leftDate || !rightDate || !Number.isFinite(leftDate.getTime()) || !Number.isFinite(rightDate.getTime())) return false;
+      if (operator === "=" || operator === "!=") {
+        leftDate.setHours(0, 0, 0, 0);
+        rightDate.setHours(0, 0, 0, 0);
+      }
+      const leftTs = leftDate.getTime();
+      const rightTs = rightDate.getTime();
       left = leftTs;
       right = rightTs;
+    } else if (entityFields.has(field)) {
+      left = Number(left || 0);
+      right = Number(right || 0);
+      if (!Number.isFinite(left) || left <= 0 || !Number.isFinite(right) || right <= 0) return false;
+    } else if (enumFields.has(field)) {
+      left = String(left || "unknown").trim().toLowerCase() || "unknown";
+      right = String(right || "unknown").trim().toLowerCase() || "unknown";
     }
 
     switch (operator) {
@@ -4806,6 +4837,18 @@
     return state.catalogProducts;
   }
 
+  async function loadFilterRuleCatalogProducts() {
+    if (state.filterRuleCatalogProducts.length > 0) return state.filterRuleCatalogProducts;
+    try {
+      const json = await apiJson('/api/prod_products');
+      state.filterRuleCatalogProducts = Array.isArray(json.data) ? json.data : [];
+    } catch (e) {
+      console.error('loadFilterRuleCatalogProducts error:', e);
+      state.filterRuleCatalogProducts = [];
+    }
+    return state.filterRuleCatalogProducts;
+  }
+
   // Загрузить категории клиентов
   async function loadCustomerCategories() {
     if (state.customerCategories.length > 0) return state.customerCategories;
@@ -5268,24 +5311,149 @@
   // -----------------------------
   // Custom Filters (Marketing)
   // -----------------------------
-  const filterFieldOptions = [
-    { value: 'total_orders', label: 'Количество заказов' },
-    { value: 'total_spent', label: 'Сумма покупок' },
-    { value: 'last_order_date', label: 'Последний заказ' },
-    { value: 'created_at', label: 'Дата регистрации' },
-  ];
+  const filterFieldDefinitions = {
+    total_orders: { value: 'total_orders', label: 'Количество заказов', kind: 'number' },
+    total_spent: { value: 'total_spent', label: 'Сумма покупок', kind: 'number' },
+    last_order_date: { value: 'last_order_date', label: 'Последний заказ', kind: 'date' },
+    created_at: { value: 'created_at', label: 'Дата регистрации', kind: 'date' },
+    age: { value: 'age', label: 'Возраст', kind: 'number' },
+    gender: { value: 'gender', label: 'Пол', kind: 'enum', capability: 'gender' },
+    favorite_product: { value: 'favorite_product', label: 'Любимое блюдо', kind: 'entity', entity: 'product' },
+    favorite_category: { value: 'favorite_category', label: 'Любимая категория', kind: 'entity', entity: 'category' },
+  };
 
-  const filterOperatorOptions = [
+  const filterOperatorOptionsNumeric = [
     { value: '>=', label: '>=' },
     { value: '<=', label: '<=' },
     { value: '>', label: '>' },
     { value: '<', label: '<' },
     { value: '=', label: '=' },
+    { value: '!=', label: '!=' },
   ];
+
+  const filterOperatorOptionsEquality = [
+    { value: '=', label: '=' },
+    { value: '!=', label: '!=' },
+  ];
+
+  const filterGenderOptions = [
+    { value: '', label: 'Выберите пол' },
+    { value: 'm', label: 'Мужской' },
+    { value: 'f', label: 'Женский' },
+    { value: 'unknown', label: 'Не указан' },
+  ];
+
+  function getFilterFieldDefinition(field) {
+    return filterFieldDefinitions[field] || filterFieldDefinitions.total_orders;
+  }
+
+  function getFilterFieldOptions(currentValue = '') {
+    const options = Object.values(filterFieldDefinitions)
+      .filter((definition) => !definition.capability || state.filterCapabilities?.[definition.capability]);
+    if (currentValue && !options.some((option) => option.value === currentValue) && filterFieldDefinitions[currentValue]) {
+      options.push(filterFieldDefinitions[currentValue]);
+    }
+    return options.map((option) => ({
+      value: option.value,
+      label: option.label,
+    }));
+  }
+
+  function getFilterOperatorOptions(field) {
+    const definition = getFilterFieldDefinition(field);
+    if (definition.kind === 'entity' || definition.kind === 'enum') {
+      return filterOperatorOptionsEquality;
+    }
+    return filterOperatorOptionsNumeric;
+  }
+
+  function getDefaultFilterOperator(field) {
+    return getFilterOperatorOptions(field)[0]?.value || '=';
+  }
+
+  function createEmptyFilterRule(field = 'total_orders') {
+    return {
+      field,
+      operator: getDefaultFilterOperator(field),
+      value: '',
+    };
+  }
+
+  function getFilterEntityOptions(field, currentValue = '') {
+    const definition = getFilterFieldDefinition(field);
+    const isProduct = definition.entity === 'product';
+    const emptyLabel = isProduct ? 'Выберите блюдо' : 'Выберите категорию';
+    const source = isProduct ? state.filterRuleCatalogProducts : state.catalogCategories;
+    const options = [{
+      value: '',
+      label: emptyLabel,
+    }];
+    source.forEach((item) => {
+      const id = Number(item?.id || 0);
+      if (!Number.isFinite(id) || id <= 0) return;
+      options.push({
+        value: String(id),
+        label: String(item?.name || item?.title || `${isProduct ? 'Блюдо' : 'Категория'} #${id}`),
+      });
+    });
+    if (currentValue && !options.some((option) => option.value === String(currentValue))) {
+      options.push({
+        value: String(currentValue),
+        label: `${isProduct ? 'Блюдо' : 'Категория'} #${currentValue}`,
+      });
+    }
+    return options;
+  }
+
+  function getFilterNumberInputStep(field) {
+    return field === 'total_spent' ? '0.01' : '1';
+  }
+
+  async function ensureFilterRuleCatalogs(fields = []) {
+    const list = Array.isArray(fields) && fields.length ? fields : [];
+    const needsCategoryCatalog = list.some((field) => getFilterFieldDefinition(field).entity === 'category');
+    const needsProductCatalog = list.some((field) => getFilterFieldDefinition(field).entity === 'product');
+    const tasks = [];
+    if (needsCategoryCatalog && state.catalogCategories.length === 0) {
+      tasks.push(loadCatalogCategories());
+    }
+    if (needsProductCatalog && state.filterRuleCatalogProducts.length === 0) {
+      tasks.push(loadFilterRuleCatalogProducts());
+    }
+    if (!tasks.length) return;
+    await Promise.all(tasks);
+  }
+
+  function renderFilterRuleValueControl(rule) {
+    const definition = getFilterFieldDefinition(rule.field);
+    if (definition.kind === 'date') {
+      const daysValue = typeof rule.value === 'string' && /^-(\d+)d$/.test(rule.value)
+        ? rule.value.slice(1, -1)
+        : '';
+      return `
+        <div class="rule-date-input">
+          <input type="number" class="control rule-value-days" value="${escapeHtml(daysValue)}" placeholder="Дней" min="0" step="1" />
+          <span class="rule-date-suffix">дней назад</span>
+        </div>
+      `;
+    }
+    if (definition.kind === 'enum') {
+      return createCustomSelect(filterGenderOptions, String(rule.value ?? ''), 'rule-value-select');
+    }
+    if (definition.kind === 'entity') {
+      return createCustomSelect(
+        getFilterEntityOptions(rule.field, String(rule.value ?? '')),
+        String(rule.value ?? ''),
+        'rule-value-select'
+      );
+    }
+    return `<input type="number" class="control rule-value" value="${escapeHtml(String(rule.value ?? ''))}" placeholder="Значение" step="${escapeHtml(getFilterNumberInputStep(rule.field))}" />`;
+  }
 
   async function loadCustomFilters() {
     try {
       const json = await apiJson('/api/admin/clients/filters/list');
+      state.filterCapabilities.gender = !!json?.meta?.filter_capabilities?.gender;
       state.customFilters = (Array.isArray(json.data) ? json.data : []).map((filter) => ({
         ...filter,
         server_count: Number(filter?.count || 0),
@@ -5293,6 +5461,7 @@
       }));
     } catch (e) {
       console.error('Failed to load custom filters:', e);
+      state.filterCapabilities.gender = false;
       state.customFilters = [];
     }
     // Обновляем список фильтров в левой панели
@@ -5420,7 +5589,7 @@
     });
   }
 
-  function activateFilterEditor(filter = null) {
+  async function activateFilterEditor(filter = null) {
     const isNew = filter === null;
     state.editingFilterId = isNew ? 'new' : filter.id;
     filterDraftCountPreview = isNew ? null : Math.max(0, Number(filter?.count || 0));
@@ -5448,8 +5617,15 @@
     if (idInput) idInput.value = filter?.id || '';
     if (isActiveInput) isActiveInput.checked = filter?.is_active !== false;
 
+    const filterRules = Array.isArray(filter?.conditions?.rules) ? filter.conditions.rules : [];
+    try {
+      await ensureFilterRuleCatalogs(filterRules.map((rule) => rule?.field));
+    } catch (err) {
+      console.error('Failed to load filter rule catalogs:', err);
+    }
+
     // Рендерим правила
-    renderFilterRules(filter?.conditions?.rules || []);
+    renderFilterRules(filterRules);
 
     // Обновляем кнопку сохранения
     if (elFilterSaveBtn) {
@@ -5477,7 +5653,7 @@
 
     if (!rules.length) {
       // Добавляем одно пустое правило
-      rules = [{ field: 'total_orders', operator: '>=', value: '' }];
+      rules = [createEmptyFilterRule()];
     }
 
     rules.forEach((rule, idx) => {
@@ -5509,6 +5685,8 @@
   function initCustomSelects(container) {
     if (!container) return;
     container.querySelectorAll('.custom-select').forEach(wrap => {
+      if (wrap.dataset.customSelectInit === '1') return;
+      wrap.dataset.customSelectInit = '1';
       const trigger = wrap.querySelector('.cs-trigger');
       const dropdown = wrap.querySelector('.cs-dropdown');
       const valueSpan = wrap.querySelector('.cs-value');
@@ -5592,66 +5770,101 @@
   document.addEventListener('click', () => closeAllCustomSelects());
 
   function renderRuleRow(idx, rule) {
-    const isDateField = ['last_order_date', 'created_at', 'registration_date'].includes(rule.field);
-    const daysValue = typeof rule.value === 'string' && rule.value.match(/^-(\d+)d$/) ? rule.value.slice(1, -1) : '';
+    const field = getFilterFieldDefinition(rule?.field).value;
+    const operatorOptions = getFilterOperatorOptions(field);
+    const operator = operatorOptions.some((item) => item.value === rule?.operator)
+      ? rule.operator
+      : getDefaultFilterOperator(field);
+    const normalizedRule = {
+      field,
+      operator,
+      value: rule?.value ?? '',
+    };
 
-    const fieldSelect = createCustomSelect(filterFieldOptions, rule.field, 'rule-field');
-    const operatorSelect = createCustomSelect(filterOperatorOptions, rule.operator, 'rule-operator');
+    const fieldSelect = createCustomSelect(getFilterFieldOptions(field), field, 'rule-field');
+    const operatorSelect = createCustomSelect(operatorOptions, operator, 'rule-operator');
 
     return `
-      <div class="filter-rule-row">
+      <div class="filter-rule-row" data-rule-index="${idx}">
         ${fieldSelect}
         ${operatorSelect}
-        <input type="text" class="control rule-value${isDateField ? ' hidden' : ''}" value="${escapeHtml(isDateField ? '' : String(rule.value || ''))}" placeholder="Значение" />
-        <div class="rule-date-input${isDateField ? '' : ' hidden'}">
-          <input type="number" class="control rule-value-days" value="${escapeHtml(daysValue)}" placeholder="Дней" />
-          <span class="rule-date-suffix">дней назад</span>
-        </div>
+        ${renderFilterRuleValueControl(normalizedRule)}
         <button type="button" class="icon-btn rule-remove" title="Удалить"><i class="fas fa-times"></i></button>
       </div>
     `;
   }
 
+  function replaceFilterRuleRow(row, rule) {
+    if (!row || !elFilterRulesContainer) return;
+    const rowIndex = Number(row.dataset.ruleIndex || Array.from(elFilterRulesContainer.querySelectorAll('.filter-rule-row')).indexOf(row));
+    const template = document.createElement('template');
+    template.innerHTML = renderRuleRow(rowIndex, rule).trim();
+    const nextRow = template.content.firstElementChild;
+    if (!nextRow) return;
+    row.replaceWith(nextRow);
+    bindRuleRowEvents();
+  }
+
   function bindRuleRowEvents() {
     if (!elFilterRulesContainer) return;
 
-    // Инициализация custom selects
     initCustomSelects(elFilterRulesContainer);
 
-    // Переключение типа ввода в зависимости от поля
     elFilterRulesContainer.querySelectorAll('.rule-field').forEach(wrap => {
-      wrap.addEventListener('cs-change', (e) => {
-        handleFieldChange(e);
+      if (wrap.dataset.filterFieldBound === '1') return;
+      wrap.dataset.filterFieldBound = '1';
+      wrap.addEventListener('cs-change', async (e) => {
+        await handleFieldChange(e);
         scheduleFilterDraftCountPreview();
       });
     });
 
     elFilterRulesContainer.querySelectorAll('.rule-operator').forEach(wrap => {
+      if (wrap.dataset.filterOperatorBound === '1') return;
+      wrap.dataset.filterOperatorBound = '1';
+      wrap.addEventListener('cs-change', () => scheduleFilterDraftCountPreview());
+    });
+
+    elFilterRulesContainer.querySelectorAll('.rule-value-select').forEach(wrap => {
+      if (wrap.dataset.filterValueSelectBound === '1') return;
+      wrap.dataset.filterValueSelectBound = '1';
       wrap.addEventListener('cs-change', () => scheduleFilterDraftCountPreview());
     });
 
     elFilterRulesContainer.querySelectorAll('.rule-value, .rule-value-days').forEach(input => {
+      if (input.dataset.filterValueBound === '1') return;
+      input.dataset.filterValueBound = '1';
       input.addEventListener('input', () => scheduleFilterDraftCountPreview());
     });
 
-    // Удаление правила
     elFilterRulesContainer.querySelectorAll('.rule-remove').forEach(btn => {
-      btn.onclick = () => {
+      if (btn.dataset.filterRemoveBound === '1') return;
+      btn.dataset.filterRemoveBound = '1';
+      btn.addEventListener('click', () => {
         btn.closest('.filter-rule-row')?.remove();
         scheduleFilterDraftCountPreview();
-      };
+      });
     });
   }
 
-  function handleFieldChange(e) {
+  async function handleFieldChange(e) {
     const row = e.target.closest('.filter-rule-row');
     if (!row) return;
-    const fieldValue = e.detail?.value || e.target.dataset?.value;
-    const isDate = ['last_order_date', 'created_at', 'registration_date'].includes(fieldValue);
-    const valueInput = row.querySelector('.rule-value');
-    const dateInput = row.querySelector('.rule-date-input');
-    if (valueInput) valueInput.classList.toggle('hidden', isDate);
-    if (dateInput) dateInput.classList.toggle('hidden', !isDate);
+    const fieldValue = String(e.detail?.value || e.target.dataset?.value || '');
+    const currentOperator = String(row.querySelector('.rule-operator')?.dataset?.value || '');
+    const nextOperator = getFilterOperatorOptions(fieldValue).some((item) => item.value === currentOperator)
+      ? currentOperator
+      : getDefaultFilterOperator(fieldValue);
+    try {
+      await ensureFilterRuleCatalogs([fieldValue]);
+    } catch (err) {
+      console.error('Failed to switch filter field:', err);
+    }
+    replaceFilterRuleRow(row, {
+      field: fieldValue,
+      operator: nextOperator,
+      value: '',
+    });
   }
 
   function collectFilterFormData(options = {}) {
@@ -5669,22 +5882,38 @@
     const rules = [];
     if (elFilterRulesContainer) {
       elFilterRulesContainer.querySelectorAll('.filter-rule-row').forEach((row) => {
-        // Получаем значения из custom select компонентов
         const fieldWrap = row.querySelector('.rule-field');
         const operatorWrap = row.querySelector('.rule-operator');
-        const field = fieldWrap?.dataset?.value;
-        const operator = operatorWrap?.dataset?.value;
-        let value = row.querySelector('.rule-value')?.value?.trim();
-        
-        // Преобразуем относительные даты
-        const valueDays = row.querySelector('.rule-value-days')?.value;
-        if (valueDays) {
-          value = '-' + valueDays + 'd';
+        const field = String(fieldWrap?.dataset?.value || '');
+        const operator = String(operatorWrap?.dataset?.value || '');
+        const definition = getFilterFieldDefinition(field);
+        let value = '';
+
+        if (definition.kind === 'date') {
+          const valueDays = row.querySelector('.rule-value-days')?.value;
+          const normalizedDays = String(valueDays ?? '').trim();
+          if (normalizedDays !== '') {
+            value = `-${normalizedDays}d`;
+          }
+        } else if (definition.kind === 'enum' || definition.kind === 'entity') {
+          value = String(row.querySelector('.rule-value-select')?.dataset?.value || '');
+        } else {
+          value = String(row.querySelector('.rule-value')?.value || '').trim();
         }
 
-        if (field && operator && value !== '') {
-          rules.push({ field, operator, value: isNaN(value) ? value : Number(value) });
+        if (!field || !operator || value === '') return;
+
+        if (definition.kind === 'number') {
+          const numericValue = Number(value);
+          if (!Number.isFinite(numericValue)) return;
+          value = numericValue;
+        } else if (definition.kind === 'entity') {
+          const entityId = Number(value);
+          if (!Number.isFinite(entityId) || entityId <= 0) return;
+          value = entityId;
         }
+
+        rules.push({ field, operator, value });
       });
     }
 
@@ -7389,7 +7618,10 @@
   if (elFilterAddRuleBtn) {
     elFilterAddRuleBtn.addEventListener('click', () => {
       if (!elFilterRulesContainer) return;
-      const html = renderRuleRow(elFilterRulesContainer.querySelectorAll('.filter-rule-row').length, { field: 'total_orders', operator: '>=', value: '' });
+      const html = renderRuleRow(
+        elFilterRulesContainer.querySelectorAll('.filter-rule-row').length,
+        createEmptyFilterRule()
+      );
       elFilterRulesContainer.insertAdjacentHTML('beforeend', html);
       bindRuleRowEvents();
       scheduleFilterDraftCountPreview();

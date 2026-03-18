@@ -10185,6 +10185,19 @@ function renderSheetAddressList() {
     }
   }
 
+  function getGuestChatClientIdForAuth() {
+    try {
+      const metaTenant = document.querySelector('meta[name="tenant_id"]');
+      const tenantId = metaTenant ? Number(metaTenant.content) : 0;
+      if (!Number.isFinite(tenantId) || tenantId <= 0) return 0;
+      const raw = localStorage.getItem(`shop_company_chat_guest_id_t${tenantId}`);
+      const clientId = Number(raw || 0);
+      return Number.isFinite(clientId) && clientId > 0 ? Math.trunc(clientId) : 0;
+    } catch {
+      return 0;
+    }
+  }
+
   function buildLoginContent({ onSuccess }) {
     const wrap = document.createElement("div");
     wrap.className = "shop-auth";
@@ -10591,10 +10604,15 @@ function renderSheetAddressList() {
 
       try {
         let json = null;
+        const guestChatClientId = getGuestChatClientIdForAuth();
         if (authStepMode === "birthday") {
           json = await apiJson("/api/public/auth/login", {
             method: "POST",
-            body: { phone: phone.value, birthday: str(bday.value).trim() },
+            body: {
+              phone: phone.value,
+              birthday: str(bday.value).trim(),
+              chat_guest_client_id: guestChatClientId,
+            },
             headers: { "x-customer-token": "" },
           });
         } else {
@@ -10603,6 +10621,7 @@ function renderSheetAddressList() {
             body: {
               phone: phone.value,
               code: getCodeValue().slice(0, 4),
+              chat_guest_client_id: guestChatClientId,
             },
             headers: { "x-customer-token": "" },
           });

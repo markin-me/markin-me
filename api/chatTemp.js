@@ -549,6 +549,37 @@ async function deletePushSubscriptionsForThread(tenantId, clientId) {
   );
 }
 
+async function reassignPushSubscriptionsForMergedThread(conn, tenantId, fromClientId, toClientId) {
+  await ensurePushSubscriptionsTable();
+  const fromId = normalizeClientId(fromClientId);
+  const toId = normalizeClientId(toClientId);
+  if (!fromId || !toId || fromId === toId) return;
+
+  await queryWithTransientRetry(
+    conn,
+    `DELETE src
+       FROM chat_push_subscriptions src
+       JOIN chat_push_subscriptions dst
+         ON dst.tenant_id = src.tenant_id
+        AND dst.actor = src.actor
+        AND dst.client_id = ?
+        AND dst.endpoint_hash = src.endpoint_hash
+      WHERE src.tenant_id = ?
+        AND src.client_id = ?`,
+    [Number(toId), Number(tenantId), Number(fromId)]
+  );
+
+  await queryWithTransientRetry(
+    conn,
+    `UPDATE chat_push_subscriptions
+        SET client_id = ?,
+            updated_at = CURRENT_TIMESTAMP(3)
+      WHERE tenant_id = ?
+        AND client_id = ?`,
+    [Number(toId), Number(tenantId), Number(fromId)]
+  );
+}
+
 async function deletePushSubscriptionsForThreads(tenantId, clientIds) {
   await ensurePushSubscriptionsTable();
   const ids = (Array.isArray(clientIds) ? clientIds : [])
@@ -1891,6 +1922,9 @@ function getTenantChangeEntry(tenantId, create = false) {
       loaded: false,
       updatedAt: "",
       revision: 0,
+      removedClientId: 0,
+      mergedFromClientId: 0,
+      mergedIntoClientId: 0,
     };
     tenantChangeState.set(key, entry);
   }
@@ -1922,6 +1956,9 @@ async function ensureTenantChangeEntryLoaded(tenantId) {
     loaded: true,
     updatedAt: "",
     revision: 0,
+    removedClientId: 0,
+    mergedFromClientId: 0,
+    mergedIntoClientId: 0,
   };
   if (entry.loaded) return entry;
 
@@ -1934,20 +1971,36 @@ async function ensureTenantChangeEntryLoaded(tenantId) {
   return entry;
 }
 
-function touchTenantChange(tenantId, updatedAt = "") {
+function touchTenantChange(tenantId, updatedAt = "", options = {}) {
   clearSummariesPageCacheForTenant(tenantId);
   const entry = getTenantChangeEntry(tenantId, true);
   if (!entry) return {
     updatedAt: String(updatedAt || ""),
     revision: 0,
+    removedClientId: 0,
+    mergedFromClientId: 0,
+    mergedIntoClientId: 0,
   };
   const nextUpdatedAt = String(updatedAt || "").trim() || new Date().toISOString();
+  const removedClientId = normalizeClientId(options?.removedClientId ?? options?.removed_client_id);
+  const mergedFromClientId = normalizeClientId(
+    options?.mergedFromClientId
+    ?? options?.merged_from_client_id
+    ?? removedClientId
+  );
+  const mergedIntoClientId = normalizeClientId(options?.mergedIntoClientId ?? options?.merged_into_client_id);
   entry.updatedAt = nextUpdatedAt;
   entry.revision = Number(entry.revision || 0) + 1;
   entry.loaded = true;
+  entry.removedClientId = removedClientId ? Number(removedClientId) : 0;
+  entry.mergedFromClientId = mergedFromClientId ? Number(mergedFromClientId) : 0;
+  entry.mergedIntoClientId = mergedIntoClientId ? Number(mergedIntoClientId) : 0;
   return {
     updatedAt: entry.updatedAt,
     revision: entry.revision,
+    removedClientId: entry.removedClientId,
+    mergedFromClientId: entry.mergedFromClientId,
+    mergedIntoClientId: entry.mergedIntoClientId,
   };
 }
 
@@ -2535,7 +2588,7 @@ function clearThreadTypingState(tenantId, clientId) {
 function notifyTenantChange(tenantId, updatedAt = "", options = {}) {
   const key = getTenantKey(tenantId);
   if (!key) return;
-  const changed = touchTenantChange(key, updatedAt);
+  const changed = touchTenantChange(key, updatedAt, options);
   const messageChanged = options?.messageChanged === true;
   const typingChanged = options?.typingChanged === true;
   const clientId = normalizeClientId(options?.clientId);
@@ -2546,6 +2599,9 @@ function notifyTenantChange(tenantId, updatedAt = "", options = {}) {
     messageChanged,
     typingChanged,
     clientId: clientId ? Number(clientId) : 0,
+    removedClientId: Number(changed.removedClientId || 0),
+    mergedFromClientId: Number(changed.mergedFromClientId || 0),
+    mergedIntoClientId: Number(changed.mergedIntoClientId || 0),
   };
   if (set && set.size) {
     Array.from(set).forEach((resolve) => {
@@ -2559,6 +2615,9 @@ function notifyTenantChange(tenantId, updatedAt = "", options = {}) {
     client_id: clientId ? Number(clientId) : 0,
     updated_at: payload.updatedAt,
     revision: payload.revision,
+    removed_client_id: Number(payload.removedClientId || 0),
+    merged_from_client_id: Number(payload.mergedFromClientId || 0),
+    merged_into_client_id: Number(payload.mergedIntoClientId || 0),
     timeout: false,
   });
 }
@@ -2605,6 +2664,7 @@ async function persistThreadTypingState(tenantId, clientId, actorKey, typingStat
 function notifyThreadChange(tenantId, clientId, updatedAt = "", options = {}) {
   const messageChanged = options?.messageChanged !== false;
   const typingChanged = options?.typingChanged === true;
+  const skipTenantChange = options?.skipTenantChange === true;
   const readDirection = options?.readDirection === "in" || options?.readDirection === "out"
     ? options.readDirection
     : "";
@@ -2639,11 +2699,14 @@ function notifyThreadChange(tenantId, clientId, updatedAt = "", options = {}) {
       read_at: readAt,
     });
   }
-  if (messageChanged || typingChanged) {
+  if (!skipTenantChange && (messageChanged || typingChanged)) {
     notifyTenantChange(tenantId, updatedAt, {
       messageChanged,
       typingChanged,
       clientId: Number(clientId || 0),
+      removedClientId: options?.removedClientId ?? options?.removed_client_id,
+      mergedFromClientId: options?.mergedFromClientId ?? options?.merged_from_client_id,
+      mergedIntoClientId: options?.mergedIntoClientId ?? options?.merged_into_client_id,
     });
   }
   if (messageChanged) {
@@ -3483,6 +3546,19 @@ async function mergeThreadIntoClient(conn, tenantId, fromClientId, toClientId) {
 
   await upsertThreadMeta(conn, tenantId, toId, mergedMeta, updatedAt);
   await replaceThreadMessages(conn, tenantId, toId, mergedMessages);
+  await queryWithTransientRetry(
+    conn,
+    `DELETE FROM chat_message_hidden
+      WHERE tenant_id = ? AND client_id = ?`,
+    [tenantId, fromId]
+  );
+  await queryWithTransientRetry(
+    conn,
+    `DELETE FROM chat_messages
+      WHERE tenant_id = ? AND client_id = ?`,
+    [tenantId, fromId]
+  );
+  await reassignPushSubscriptionsForMergedThread(conn, tenantId, fromId, toId);
   await conn.query(
     `DELETE FROM chat_threads
       WHERE tenant_id = ? AND client_id = ?`,
@@ -3497,6 +3573,58 @@ async function mergeThreadIntoClient(conn, tenantId, fromClientId, toClientId) {
     message_count: mergedMessages.length,
     meta: sanitizeMeta(mergedMeta),
   };
+}
+
+async function mergeThreadIntoClientAndNotify(tenantId, fromClientId, toClientId) {
+  const fromId = normalizeClientId(fromClientId);
+  const toId = normalizeClientId(toClientId);
+  if (!fromId || !toId || fromId === toId) {
+    return {
+      merged: false,
+      from_client_id: Number(fromId || 0),
+      to_client_id: Number(toId || 0),
+      updated_at: "",
+      message_count: 0,
+      meta: {},
+    };
+  }
+
+  let conn;
+  try {
+    conn = await db.getConnection();
+    await conn.beginTransaction();
+    const merged = await mergeThreadIntoClient(conn, tenantId, fromId, toId);
+    await conn.commit();
+    conn.release();
+    conn = null;
+
+    if (merged?.merged === true) {
+      clearThreadTypingState(tenantId, toId);
+      clearThreadTypingState(tenantId, fromId);
+      notifyThreadChange(tenantId, toId, merged?.updated_at || "", {
+        skipTenantChange: true,
+      });
+      notifyThreadChange(tenantId, fromId, merged?.updated_at || "", {
+        skipTenantChange: true,
+      });
+      notifyTenantChange(tenantId, merged?.updated_at || "", {
+        messageChanged: true,
+        clientId: Number(toId),
+        removedClientId: Number(fromId),
+        mergedFromClientId: Number(fromId),
+        mergedIntoClientId: Number(toId),
+      });
+      scheduleTenantUnreadRefresh(tenantId);
+    }
+
+    return merged;
+  } catch (err) {
+    if (conn) {
+      try { await conn.rollback(); } catch {}
+      conn.release();
+    }
+    throw err;
+  }
 }
 
 async function querySummaryRows(
@@ -3895,25 +4023,10 @@ function makeChatTempRouter() {
       });
     }
 
-    let conn;
     try {
-      conn = await db.getConnection();
-      await conn.beginTransaction();
-      const merged = await mergeThreadIntoClient(conn, tenantId, fromClientId, toClientId);
-      await conn.commit();
-      conn.release();
-      conn = null;
-      clearThreadTypingState(tenantId, toClientId);
-      clearThreadTypingState(tenantId, fromClientId);
-      notifyThreadChange(tenantId, toClientId, merged?.updated_at || "");
-      notifyThreadChange(tenantId, fromClientId, merged?.updated_at || "");
-      scheduleTenantUnreadRefresh(tenantId);
+      const merged = await mergeThreadIntoClientAndNotify(tenantId, fromClientId, toClientId);
       return res.json({ ok: true, data: merged });
     } catch (err) {
-      if (conn) {
-        try { await conn.rollback(); } catch {}
-        conn.release();
-      }
       console.error("chat-temp POST /thread/merge error:", err);
       return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
     }
@@ -4993,6 +5106,9 @@ function makeChatTempRouter() {
         client_id: Number(payload.client_id || 0),
         updated_at: String(payload.updated_at || ""),
         revision: Number(payload.revision || 0),
+        removed_client_id: Number(payload.removed_client_id || 0),
+        merged_from_client_id: Number(payload.merged_from_client_id || 0),
+        merged_into_client_id: Number(payload.merged_into_client_id || 0),
         typing: Number(payload.client_id || 0) > 0
           ? getPeerTypingForActor(tenantId, Number(payload.client_id || 0), actorKey)
           : null,
@@ -5009,6 +5125,9 @@ function makeChatTempRouter() {
         client_id: 0,
         updated_at: String(currentState?.updatedAt || ""),
         revision: Number(currentState?.revision || 0),
+        removed_client_id: 0,
+        merged_from_client_id: 0,
+        merged_into_client_id: 0,
         typing: null,
       });
 
@@ -5055,6 +5174,9 @@ function makeChatTempRouter() {
             client_id: 0,
             updated_at: currentUpdatedAt,
             revision: currentRevision,
+            removed_client_id: Number(currentState?.removedClientId || 0),
+            merged_from_client_id: Number(currentState?.mergedFromClientId || 0),
+            merged_into_client_id: Number(currentState?.mergedIntoClientId || 0),
             typing: null,
             timeout: false,
           },
@@ -5080,6 +5202,9 @@ function makeChatTempRouter() {
           client_id: Number(waitResult?.clientId || 0),
           updated_at: nextUpdatedAt,
           revision: nextRevision,
+          removed_client_id: Number(waitResult?.removedClientId || nextState?.removedClientId || 0),
+          merged_from_client_id: Number(waitResult?.mergedFromClientId || nextState?.mergedFromClientId || 0),
+          merged_into_client_id: Number(waitResult?.mergedIntoClientId || nextState?.mergedIntoClientId || 0),
           typing: Number(waitResult?.clientId || 0) > 0
             ? getPeerTypingForActor(tenantId, Number(waitResult?.clientId || 0), actorKey)
             : null,
@@ -5154,5 +5279,6 @@ function makeChatTempRouter() {
 makeChatTempRouter.handleTenantChatWidgetStateChange = handleTenantChatWidgetStateChange;
 makeChatTempRouter.disconnectTenantChatRuntime = disconnectTenantChatRuntime;
 makeChatTempRouter.setTenantChatWidgetEnabledCache = setTenantChatWidgetEnabledCache;
+makeChatTempRouter.mergeThreadIntoClientAndNotify = mergeThreadIntoClientAndNotify;
 
 module.exports = makeChatTempRouter;

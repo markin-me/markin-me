@@ -7102,6 +7102,8 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
   --shop-chat-mobile-keyboard-inset: 0px;
   --shop-chat-android-viewport-shift: 0px;
   --shop-chat-scroll-down-composer-extra: 0px;
+  --shop-chat-ios-sheet-height: calc(100dvh - var(--header-height) - var(--shop-sheet-top-gap));
+  --shop-chat-ios-overlay-shift: 0px;
   position: fixed;
   inset: 0;
   z-index: 1200;
@@ -7110,6 +7112,7 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
   align-items: center;
   padding: 20px;
   background: rgba(15, 23, 42, 0.66);
+  transform: translate3d(0, var(--shop-chat-ios-overlay-shift), 0);
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
@@ -9683,12 +9686,19 @@ body.page-shop.shop-company-chat-open{
     max-width: 100%;
     height: calc(100dvh - var(--header-height) - var(--shop-sheet-top-gap));
     max-height: calc(100dvh - var(--header-height) - var(--shop-sheet-top-gap));
+    height: calc(100svh - var(--header-height) - var(--shop-sheet-top-gap));
+    max-height: calc(100svh - var(--header-height) - var(--shop-sheet-top-gap));
     border: 1px solid var(--color-border);
     border-radius: var(--radius-lg) var(--radius-lg) 0 0;
     box-shadow: var(--shadow-sm);
     transform: translateY(110%);
     opacity: 1;
     transition: transform var(--dur-med) var(--ease-smooth);
+  }
+
+  .shop-company-chat-overlay.is-ios-sheet-locked .shop-company-chat-modal{
+    height: var(--shop-chat-ios-sheet-height);
+    max-height: var(--shop-chat-ios-sheet-height);
   }
 
   .shop-company-chat-overlay.is-open .shop-company-chat-modal{

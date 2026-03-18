@@ -61,6 +61,9 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
   let ensureOrderDeliveryTypeColumnsPromise = null;
   let tenantDomainsTableReady = false;
   let ensureTenantDomainsTablePromise = null;
+  const tenantDomainColumns = [
+    { name: 'is_enabled', sql: 'TINYINT(1) NOT NULL DEFAULT 1 AFTER domain_ascii' }
+  ];
 
   async function publishTenantChatWidgetChanged(tenantId, enabled) {
     try {
@@ -252,15 +255,34 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
             tenant_id BIGINT UNSIGNED NOT NULL,
             domain VARCHAR(255) NOT NULL,
             domain_ascii VARCHAR(255) NOT NULL,
-            is_primary TINYINT(1) NOT NULL DEFAULT 0,
+            is_enabled TINYINT(1) NOT NULL DEFAULT 1,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
             PRIMARY KEY (id),
             UNIQUE KEY uq_tenant_domains_ascii (domain_ascii),
             KEY idx_tenant_domains_tenant (tenant_id),
-            KEY idx_tenant_domains_primary (tenant_id, is_primary, id)
+            KEY idx_tenant_domains_enabled (tenant_id, is_enabled, id)
           ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         `);
+        const [columnRows] = await db.query('SHOW COLUMNS FROM ten_tenant_domains');
+        const existing = new Set(
+          (Array.isArray(columnRows) ? columnRows : [])
+            .map((row) => String(row?.Field || '').trim())
+            .filter(Boolean)
+        );
+        for (const column of tenantDomainColumns) {
+          if (existing.has(column.name)) continue;
+          try {
+            await db.query(`ALTER TABLE ten_tenant_domains ADD COLUMN \`${column.name}\` ${column.sql}`);
+            existing.add(column.name);
+          } catch (err) {
+            if (String(err?.code || '') === 'ER_DUP_FIELDNAME') {
+              existing.add(column.name);
+              continue;
+            }
+            throw err;
+          }
+        }
         tenantDomainsTableReady = true;
       } finally {
         if (!tenantDomainsTableReady) {
@@ -283,7 +305,7 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
       tenant_id: Number(row.tenant_id || 0) || 0,
       domain: displayDomain,
       domain_ascii: rawDomainAscii,
-      is_primary: Number(row.is_primary) === 1,
+      is_enabled: Number(row.is_enabled) !== 0,
       created_at: row.created_at || null,
       updated_at: row.updated_at || null
     };
@@ -292,10 +314,10 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
   async function getTenantDomainsRaw(tenantId) {
     await ensureTenantDomainsTable();
     const [rows] = await db.query(
-      `SELECT id, tenant_id, domain, domain_ascii, is_primary, created_at, updated_at
+      `SELECT id, tenant_id, domain, domain_ascii, is_enabled, created_at, updated_at
        FROM ten_tenant_domains
        WHERE tenant_id=?
-       ORDER BY is_primary DESC, id ASC`,
+       ORDER BY is_enabled DESC, id ASC`,
       [tenantId]
     );
     return Array.isArray(rows) ? rows.map(normalizeTenantDomainRow).filter(Boolean) : [];
@@ -330,12 +352,12 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
       const sameDomain = sameDomainRows[0] || null;
       if (!sameDomain) {
         await db.query(
-          'INSERT INTO ten_tenant_domains (tenant_id, domain, domain_ascii, is_primary) VALUES (?, ?, ?, 0)',
+          'INSERT INTO ten_tenant_domains (tenant_id, domain, domain_ascii, is_enabled) VALUES (?, ?, ?, 1)',
           [tenantId, legacyDomain || legacyAscii, legacyAscii]
         );
       } else if (Number(sameDomain.tenant_id) === Number(tenantId)) {
         await db.query(
-          'UPDATE ten_tenant_domains SET domain=? WHERE id=?',
+          'UPDATE ten_tenant_domains SET domain=?, is_enabled=1 WHERE id=?',
           [legacyDomain || legacyAscii, sameDomain.id]
         );
       }
@@ -350,28 +372,19 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
       return [];
     }
 
-    let primary = domains.find((item) => item.is_primary) || null;
-    if (!primary && legacyAscii) {
-      primary = domains.find((item) => item.domain_ascii === legacyAscii) || null;
-    }
-    if (!primary) primary = domains[0] || null;
-
-    await db.query(
-      'UPDATE ten_tenant_domains SET is_primary = CASE WHEN id=? THEN 1 ELSE 0 END WHERE tenant_id=?',
-      [primary.id, tenantId]
-    );
+    const primary = domains.find((item) => item.is_enabled) || null;
     await db.query(
       'UPDATE ten_tenants SET custom_domain=?, custom_domain_ascii=? WHERE id=?',
-      [primary.domain || primary.domain_ascii, primary.domain_ascii, tenantId]
+      [
+        primary ? (primary.domain || primary.domain_ascii) : null,
+        primary ? primary.domain_ascii : null,
+        tenantId
+      ]
     );
 
-    domains = domains.map((item) => ({
-      ...item,
-      is_primary: Number(item.id) === Number(primary.id)
-    }));
     domains.sort((a, b) => {
-      if (a.is_primary && !b.is_primary) return -1;
-      if (!a.is_primary && b.is_primary) return 1;
+      if (a.is_enabled && !b.is_enabled) return -1;
+      if (!a.is_enabled && b.is_enabled) return 1;
       return Number(a.id || 0) - Number(b.id || 0);
     });
     return domains;
@@ -398,9 +411,8 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
     return legacyRows.length === 0;
   }
 
-  async function addOrReuseTenantDomain(tenantId, normalizedDomain, options = {}) {
+  async function addOrReuseTenantDomain(tenantId, normalizedDomain) {
     await ensureTenantDomainsTable();
-    const makePrimary = Boolean(options.makePrimary);
     const includeDomain = normalizedDomain && normalizedDomain.provided && normalizedDomain.ascii;
     if (!includeDomain) {
       throw new Error('INVALID_CUSTOM_DOMAIN');
@@ -422,24 +434,15 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
     let domainId = existingRows[0] ? Number(existingRows[0].id) : 0;
     if (domainId > 0) {
       await db.query(
-        'UPDATE ten_tenant_domains SET domain=? WHERE id=?',
+        'UPDATE ten_tenant_domains SET domain=?, is_enabled=1 WHERE id=?',
         [domainUnicode, domainId]
       );
     } else {
       const [insertResult] = await db.query(
-        'INSERT INTO ten_tenant_domains (tenant_id, domain, domain_ascii, is_primary) VALUES (?, ?, ?, 0)',
+        'INSERT INTO ten_tenant_domains (tenant_id, domain, domain_ascii, is_enabled) VALUES (?, ?, ?, 1)',
         [tenantId, domainUnicode, domainAscii]
       );
       domainId = Number(insertResult.insertId || 0);
-    }
-
-    const existingTenantDomains = await getTenantDomainsRaw(tenantId);
-    const shouldMakePrimary = makePrimary || existingTenantDomains.length === 1;
-    if (shouldMakePrimary && domainId > 0) {
-      await db.query(
-        'UPDATE ten_tenant_domains SET is_primary = CASE WHEN id=? THEN 1 ELSE 0 END WHERE tenant_id=?',
-        [domainId, tenantId]
-      );
     }
 
     const domains = await syncTenantPrimaryDomain(tenantId);
@@ -455,11 +458,11 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
     return syncTenantPrimaryDomain(tenantId, { legacyDomain: null, legacyAscii: null });
   }
 
-  async function setPrimaryTenantDomain(tenantId, domainId) {
+  async function setTenantDomainEnabled(tenantId, domainId, isEnabled) {
     await ensureTenantDomainsTable();
     await db.query(
-      'UPDATE ten_tenant_domains SET is_primary = CASE WHEN id=? THEN 1 ELSE 0 END WHERE tenant_id=?',
-      [domainId, tenantId]
+      'UPDATE ten_tenant_domains SET is_enabled=? WHERE tenant_id=? AND id=? LIMIT 1',
+      [isEnabled ? 1 : 0, tenantId, domainId]
     );
     return syncTenantPrimaryDomain(tenantId);
   }
@@ -470,7 +473,7 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
       legacyDomain: tenant.custom_domain,
       legacyAscii: tenant.custom_domain_ascii
     });
-    const primaryDomain = domains.find((item) => item.is_primary) || null;
+    const primaryDomain = domains.find((item) => item.is_enabled) || null;
     const nextTenant = {
       ...tenant,
       custom_domain: primaryDomain ? (primaryDomain.domain || primaryDomain.domain_ascii) : null,
@@ -485,7 +488,6 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
     return {
       ...nextTenant,
       domains,
-      primary_domain_id: primaryDomain ? Number(primaryDomain.id) : null,
       subdomain_shop_url: subdomainShopUrl,
       telegram_mini_app_url: `${baseUrl}/tg-app?tenant_id=${tenant.id}`,
       max_mini_app_url: `${baseUrl}/max-app?tenant_id=${tenant.id}`,
@@ -1708,7 +1710,7 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
 
       if (customDomainNormalized.provided) {
         if (nextCustomDomainAscii) {
-          await addOrReuseTenantDomain(tenantId, customDomainNormalized, { makePrimary: true });
+          await addOrReuseTenantDomain(tenantId, customDomainNormalized);
         } else if (helpers.strOrNull(current.custom_domain_ascii)) {
           const [currentDomainRows] = await db.query(
             'SELECT id FROM ten_tenant_domains WHERE tenant_id=? AND domain_ascii=? LIMIT 1',
@@ -3133,9 +3135,8 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
         return res.status(400).json({ ok: false, error: 'INVALID_CUSTOM_DOMAIN' });
       }
 
-      const makePrimary = helpers.toBool(req.body.make_primary, false);
       try {
-        await addOrReuseTenantDomain(tenantId, normalized, { makePrimary });
+        await addOrReuseTenantDomain(tenantId, normalized);
       } catch (err) {
         if (err && err.code === 'CUSTOM_DOMAIN_TAKEN') {
           return res.status(409).json({ ok: false, error: 'CUSTOM_DOMAIN_TAKEN' });
@@ -3173,8 +3174,10 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
         return res.status(404).json({ ok: false, error: 'DOMAIN_NOT_FOUND' });
       }
 
-      if (helpers.toBool(req.body.is_primary, false)) {
-        await setPrimaryTenantDomain(tenantId, domainId);
+      if (Object.prototype.hasOwnProperty.call(req.body || {}, 'is_enabled')) {
+        await setTenantDomainEnabled(tenantId, domainId, helpers.toBool(req.body.is_enabled, true));
+      } else {
+        return res.status(400).json({ ok: false, error: 'DOMAIN_UPDATE_EMPTY' });
       }
 
       const [tenantRows] = await db.query(
@@ -3281,7 +3284,7 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       }
 
       if (normalized.provided) {
-        await addOrReuseTenantDomain(tenantId, normalized, { makePrimary: false });
+        await addOrReuseTenantDomain(tenantId, normalized);
       }
 
       const precheck = await performTenantDomainCheck({ tenantId, domainAscii: nextDomainAscii });

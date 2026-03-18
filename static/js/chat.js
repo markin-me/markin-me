@@ -269,6 +269,8 @@
     localThreadMutations: {},
     remoteSummaryFingerprints: {},
     remoteSummariesByClient: {},
+    clientSortBoostUpdatedAtByClient: {},
+    pendingMergedSelectionClientId: "",
     activeThreadWaitLoopStarted: false,
     activeThreadWaitLoopToken: 0,
     summariesWaitLoopStarted: false,
@@ -2789,6 +2791,7 @@
 
     if (!changedIds.length) return false;
     applyClientFilter();
+    flushPendingMergedClientSelection();
     normalizedRows.forEach((row) => {
       const key = normalizeClientIdKey(row?.client_id ?? row?.clientId ?? row?.id);
       if (!key) return;
@@ -2840,6 +2843,20 @@
       messageChanged: json?.data?.message_changed === true,
       typingChanged: json?.data?.typing_changed === true,
       clientId: normalizeClientIdKey(json?.data?.client_id),
+      removedClientId: normalizeClientIdKey(
+        json?.data?.removed_client_id
+        ?? json?.data?.removedClientId
+        ?? json?.data?.merged_from_client_id
+        ?? json?.data?.mergedFromClientId
+      ),
+      mergedFromClientId: normalizeClientIdKey(
+        json?.data?.merged_from_client_id
+        ?? json?.data?.mergedFromClientId
+      ),
+      mergedIntoClientId: normalizeClientIdKey(
+        json?.data?.merged_into_client_id
+        ?? json?.data?.mergedIntoClientId
+      ),
       updatedAt: String(json?.data?.updated_at || ""),
       revision: Number.isFinite(Number(json?.data?.revision))
         ? Math.max(0, Math.trunc(Number(json.data.revision)))
@@ -2849,6 +2866,88 @@
         : null,
       timeout: json?.data?.timeout === true,
     };
+  }
+
+  function normalizeSummaryMergeNotice(raw) {
+    const source = raw && typeof raw === "object" ? raw : {};
+    const removedClientId = normalizeClientIdKey(
+      source.removed_client_id
+      ?? source.removedClientId
+      ?? source.merged_from_client_id
+      ?? source.mergedFromClientId
+      ?? source.removedClient
+      ?? ""
+    );
+    const mergedIntoClientId = normalizeClientIdKey(
+      source.merged_into_client_id
+      ?? source.mergedIntoClientId
+      ?? source.to_client_id
+      ?? source.toClientId
+      ?? ""
+    );
+    const updatedAt = String(source.updated_at ?? source.updatedAt ?? "").trim();
+    if (!removedClientId && !mergedIntoClientId) return null;
+    return {
+      removedClientId,
+      mergedIntoClientId,
+      updatedAt,
+    };
+  }
+
+  function setClientSortBoostUpdatedAt(clientId, updatedAt) {
+    const key = normalizeClientIdKey(clientId);
+    const nextUpdatedAt = String(updatedAt || "").trim();
+    if (!key || !nextUpdatedAt) return false;
+    const prevUpdatedAt = String(state.clientSortBoostUpdatedAtByClient[key] || "");
+    if (prevUpdatedAt && compareIsoDates(prevUpdatedAt, nextUpdatedAt) >= 0) return false;
+    state.clientSortBoostUpdatedAtByClient[key] = nextUpdatedAt;
+    const client = findClientById(key);
+    if (client) {
+      const clientUpdatedAt = String(client.updated_at || "");
+      if (!clientUpdatedAt || compareIsoDates(nextUpdatedAt, clientUpdatedAt) > 0) {
+        client.updated_at = nextUpdatedAt;
+      }
+    }
+    return true;
+  }
+
+  function flushPendingMergedClientSelection() {
+    const key = normalizeClientIdKey(state.pendingMergedSelectionClientId);
+    if (!key) return false;
+    const client = findClientById(key);
+    if (!client) return false;
+    state.pendingMergedSelectionClientId = "";
+    if (Number(state.activeClientId) !== Number(key)) {
+      selectClient(key).catch(console.error);
+    }
+    return true;
+  }
+
+  function applyServerMergeNotice(raw) {
+    const notice = normalizeSummaryMergeNotice(raw);
+    if (!notice) return false;
+    let changed = false;
+    if (notice.mergedIntoClientId && notice.updatedAt) {
+      changed = setClientSortBoostUpdatedAt(notice.mergedIntoClientId, notice.updatedAt) || changed;
+    }
+    let removedResult = { removed: false, wasActive: false };
+    if (notice.removedClientId) {
+      removedResult = destroyClientThreadState(notice.removedClientId, { removeClientEntry: true });
+      changed = removedResult.removed === true || changed;
+    }
+    if (removedResult.wasActive && notice.mergedIntoClientId) {
+      if (findClientById(notice.mergedIntoClientId)) {
+        state.pendingMergedSelectionClientId = "";
+        if (Number(state.activeClientId) !== Number(notice.mergedIntoClientId)) {
+          selectClient(notice.mergedIntoClientId).catch(console.error);
+        }
+      } else {
+        state.pendingMergedSelectionClientId = notice.mergedIntoClientId;
+      }
+      changed = true;
+    }
+    if (changed) applyClientFilter();
+    return changed;
   }
 
   async function syncRemoteSummariesSnapshot(options = {}) {
@@ -2909,6 +3008,7 @@
             }
           }
           applyClientFilter();
+          flushPendingMergedClientSelection();
           if (activeIdentityChanged && Number(state.activeClientId) === Number(activeKey)) {
             renderMessages({ disableAutoPin: true, smoothScroll: false, skipSaveScrollPosition: true });
           }
@@ -3121,6 +3221,7 @@
     source.addEventListener("summaries", (event) => {
       const payload = parseChatSsePayload(event);
       if (!payload || state.summariesEventSource !== source) return;
+      applyServerMergeNotice(payload);
 
       const nextUpdatedAt = String(payload.updated_at || "");
       const nextRevision = Number.isFinite(Number(payload.revision))
@@ -3270,6 +3371,7 @@
               { signal: waitAbort.signal }
             );
             if (!state.summariesWaitLoopStarted || summariesLoopToken !== state.summariesWaitLoopToken) break;
+            applyServerMergeNotice(waited);
             const nextUpdatedAt = String(waited?.updatedAt || "");
             const nextRevision = Number.isFinite(Number(waited?.revision))
               ? Math.max(0, Math.trunc(Number(waited.revision)))
@@ -3441,6 +3543,22 @@
           changed = true;
         }
       });
+      Object.keys(nextStore.threads || {}).forEach((clientId) => {
+        const thread = Array.isArray(nextStore.threads[clientId]) ? nextStore.threads[clientId] : [];
+        const nextThread = thread.filter((message) => !isLegacyClientOrderSeedMessageId(message?.id));
+        if (nextThread.length !== thread.length) {
+          nextStore.threads[clientId] = nextThread;
+          changed = true;
+        }
+      });
+      Object.keys(nextStore.hiddenMessageIds || {}).forEach((clientId) => {
+        const hiddenList = Array.isArray(nextStore.hiddenMessageIds[clientId]) ? nextStore.hiddenMessageIds[clientId] : [];
+        const nextHiddenList = hiddenList.filter((messageId) => !isLegacyClientOrderSeedMessageId(messageId));
+        if (nextHiddenList.length !== hiddenList.length) {
+          nextStore.hiddenMessageIds[clientId] = nextHiddenList;
+          changed = true;
+        }
+      });
       if (changed) {
         localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(nextStore));
       }
@@ -3568,6 +3686,12 @@
   }
 
   function getThread(clientId) { return clientId ? ensureThread(clientId) : []; }
+
+  function isLegacyClientOrderSeedMessageId(messageId) {
+    const id = String(messageId || "").trim();
+    if (!id) return false;
+    return /^seed-\d+$/.test(id);
+  }
 
   function isAssistantOrSystemThreadMessageId(messageId) {
     const id = String(messageId || "").trim();
@@ -3798,7 +3922,9 @@
     const summary = getRemoteSummaryForClient(clientId);
     const hasLocalThread = !!(key && Array.isArray(state.store?.threads?.[key]));
     if (hasLocalThread && Number(state.activeClientId) === Number(key)) {
-      return getVisibleThread(key).filter((msg) => msg && msg.direction === "in" && !isMessageRead(msg)).length;
+      const localUnread = getVisibleThread(key).filter((msg) => msg && msg.direction === "in" && !isMessageRead(msg)).length;
+      const visibleUnread = collectVisibleIncomingUnreadMessageIds(key).length;
+      return Math.max(0, localUnread - visibleUnread);
     }
     const unread = Number(summary?.unread_count ?? summary?.unreadCount ?? 0);
     if (Number.isFinite(unread) && unread >= 0) return Math.trunc(unread);
@@ -6049,11 +6175,16 @@
   }
 
   function getClientSortTimestamp(client) {
+    const key = normalizeClientIdKey(client?.id);
+    const boostedUpdatedAt = key ? String(state.clientSortBoostUpdatedAtByClient[key] || "") : "";
     const fromThread = getLastMessage(client.id)?.createdAt;
     const src = fromThread || client.last_order_date || client.updated_at || client.created_at;
-    if (!src) return 0;
-    const date = new Date(String(src).replace(" ", "T"));
-    return Number.isNaN(date.getTime()) ? 0 : date.getTime();
+    const date = src ? new Date(String(src).replace(" ", "T")) : null;
+    const baseTimestamp = date && !Number.isNaN(date.getTime()) ? date.getTime() : 0;
+    if (!boostedUpdatedAt) return baseTimestamp;
+    const boostedDate = new Date(String(boostedUpdatedAt).replace(" ", "T"));
+    const boostedTimestamp = !Number.isNaN(boostedDate.getTime()) ? boostedDate.getTime() : 0;
+    return Math.max(baseTimestamp, boostedTimestamp);
   }
 
   function applyClientFilter() {
@@ -7898,6 +8029,7 @@
     delete state.fullThreadPullLastAtByClient[key];
     delete state.remoteSummaryFingerprints[key];
     delete state.remoteSummariesByClient[key];
+    delete state.clientSortBoostUpdatedAtByClient[key];
     delete state.remoteSaveInFlight[key];
     delete state.remoteMutationQueues[key];
     delete state.localThreadMutations[key];
@@ -7923,6 +8055,9 @@
 
     if (Number(state.store?.lastOpenClientId || 0) === idNum) {
       state.store.lastOpenClientId = null;
+    }
+    if (normalizeClientIdKey(state.pendingMergedSelectionClientId) === key) {
+      state.pendingMergedSelectionClientId = "";
     }
 
     if (opts.removeClientEntry === true) {
@@ -10416,7 +10551,6 @@
 
       const mergedRows = mergeRemoteClients(adminRows, remoteRows);
       const preparedRows = filterOpenChatClients(mergedRows);
-      preparedRows.forEach((client) => seedThread(client));
 
       const prevIds = new Set(
         (state.clients || [])
@@ -10532,9 +10666,6 @@
     if (!summary) return null;
 
     state.clients = filterOpenChatClients(mergeRemoteClients(state.clients || [], [summary]));
-    state.clients.forEach((row) => {
-      if (Number(row?.id) === Number(key)) seedThread(row);
-    });
     applyClientFilter();
     writeCachedClientsRows(state.clients);
 

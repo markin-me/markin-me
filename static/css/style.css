@@ -3828,20 +3828,21 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
 .domain-step-text{font-size:13px;color:var(--color-text);line-height:1.45}
 .domain-record-list{display:flex;flex-direction:column;gap:8px}
 .domain-record-item{display:grid;grid-template-columns:56px 52px minmax(0,1fr) 24px;align-items:center;gap:8px;background:var(--color-bg);border:1px solid var(--color-border);border-radius:8px;padding:8px 10px}
+.domain-record-item .control-inline-btn{position:static;transform:none;justify-self:end}
 .domain-record-host,.domain-record-type{font-size:13px;font-weight:700;color:var(--color-text)}
 .domain-record-value{font-size:13px;font-weight:600;color:var(--color-text);min-width:0;overflow-wrap:anywhere}
 .domain-managed-list{display:flex;flex-direction:column;gap:8px}
 .domain-managed-list:empty{display:none}
 .domain-managed-item{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;padding:10px 12px;border:1px solid var(--color-border);border-radius:10px;background:var(--color-surface-2);cursor:pointer}
 .domain-managed-item.is-selected{border-color:var(--color-primary);box-shadow:0 0 0 1px var(--color-primary)}
-.domain-managed-item.is-primary{border-color:var(--primary-25);background:var(--primary-12)}
-.domain-managed-item.is-primary.is-selected{border-color:var(--color-primary);box-shadow:0 0 0 1px var(--color-primary)}
+.domain-managed-item.is-disabled{border-style:dashed;background:color-mix(in srgb, var(--color-surface-2), #f5efe4 42%)}
 .domain-managed-meta{display:grid;gap:2px;min-width:0}
 .domain-managed-domain{font-size:13px;font-weight:700;color:var(--color-text);overflow-wrap:anywhere}
 .domain-managed-ascii{font-size:11px;color:var(--color-text-muted);overflow-wrap:anywhere}
-.domain-managed-badge{display:inline-flex;align-items:center;justify-content:center;padding:2px 8px;border-radius:999px;background:var(--color-surface);border:1px solid var(--color-border);font-size:11px;font-weight:700;color:var(--color-text-muted);width:max-content}
-.domain-managed-item.is-primary .domain-managed-badge{background:var(--color-primary);border-color:var(--color-primary);color:#fff}
+.domain-managed-status{font-size:11px;font-weight:600;color:var(--color-text-muted)}
+.domain-managed-status.is-disabled{color:var(--color-warning,#f39c12)}
 .domain-managed-actions{display:flex;align-items:center;gap:6px;flex:0 0 auto}
+.domain-managed-switch{gap:0}
 .domain-managed-btn{width:28px;height:28px;border-radius:8px;border:1px solid var(--color-border);background:var(--color-surface);color:var(--color-text-muted);display:flex;align-items:center;justify-content:center;cursor:pointer;transition:background var(--dur-fast) var(--ease-smooth),color var(--dur-fast) var(--ease-smooth),border-color var(--dur-fast) var(--ease-smooth)}
 .domain-managed-btn:hover{border-color:var(--primary-25);color:var(--color-primary);background:var(--primary-12)}
 .domain-managed-btn.is-danger:hover{border-color:rgba(231,76,60,.35);color:#e74c3c;background:rgba(231,76,60,.08)}
@@ -11707,6 +11708,7 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
 /* Filter rule row adjustments for custom select */
 .filter-rule-row .custom-select.rule-field{flex:2;min-width:0;}
 .filter-rule-row .custom-select.rule-operator{flex:1;min-width:60px;}
+.filter-rule-row .custom-select.rule-value-select{flex:2;min-width:0;}
 .filter-rule-row .custom-select .cs-trigger{
   height:36px;
   font-size:13px;
@@ -11788,6 +11790,11 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
 
 .client-info-panel .filter-rule-row .rule-operator{
   grid-column:1;
+}
+
+.client-info-panel .filter-rule-row .custom-select.rule-value-select{
+  grid-column:2;
+  min-width:0;
 }
 
 .client-info-panel .filter-rule-row .rule-value,

@@ -2,8 +2,461 @@ const express = require('express');
 
 module.exports = function makeAdminClientsRouter({ db, helpers }) {
   const router = express.Router();
+  let customerGenderColumnPromise = null;
 
-  function getClientsDatasetSql(baseWhereSql) {
+  const FILTER_FIELD_KIND_MAP = new Map([
+    ['total_orders', 'number'],
+    ['total_spent', 'number'],
+    ['last_order_date', 'date'],
+    ['registration_date', 'date'],
+    ['created_at', 'date'],
+    ['is_active', 'number'],
+    ['age', 'number'],
+    ['gender', 'enum'],
+    ['favorite_product', 'entity'],
+    ['favorite_category', 'entity'],
+  ]);
+
+  function toPositiveInt(value) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return null;
+    const normalized = Math.trunc(parsed);
+    return normalized > 0 ? normalized : null;
+  }
+
+  function chunkArray(list, size = 500) {
+    const out = [];
+    const source = Array.isArray(list) ? list : [];
+    for (let i = 0; i < source.length; i += size) {
+      out.push(source.slice(i, i + size));
+    }
+    return out;
+  }
+
+  function compareValues(left, operator, right) {
+    switch (operator) {
+      case '=':
+        return left === right;
+      case '!=':
+        return left !== right;
+      case '>=':
+        return left >= right;
+      case '<=':
+        return left <= right;
+      case '>':
+        return left > right;
+      case '<':
+        return left < right;
+      default:
+        return null;
+    }
+  }
+
+  function getRelativeDateFilterValue(rawValue) {
+    if (typeof rawValue !== 'string' || !/^-\d+d$/.test(rawValue)) return null;
+    const days = Number.parseInt(rawValue.slice(1, -1), 10);
+    if (!Number.isFinite(days) || days < 0) return null;
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+    now.setDate(now.getDate() - days);
+    return now.getTime();
+  }
+
+  function getCustomerAgeYears(rawBirthday) {
+    if (!rawBirthday) return null;
+    const birthday = new Date(rawBirthday);
+    if (!Number.isFinite(birthday.getTime())) return null;
+    const now = new Date();
+    let age = now.getFullYear() - birthday.getFullYear();
+    const monthDiff = now.getMonth() - birthday.getMonth();
+    if (monthDiff < 0 || (monthDiff === 0 && now.getDate() < birthday.getDate())) {
+      age -= 1;
+    }
+    return age >= 0 ? age : null;
+  }
+
+  function normalizeCustomerGender(rawValue) {
+    const raw = String(rawValue || '').trim().toLowerCase();
+    if (!raw) return 'unknown';
+    if (['m', 'male', 'man', 'м', 'муж', 'мужской'].includes(raw)) return 'm';
+    if (['f', 'female', 'woman', 'ж', 'жен', 'женский'].includes(raw)) return 'f';
+    return 'unknown';
+  }
+
+  async function hasCustomerGenderColumn() {
+    if (!customerGenderColumnPromise) {
+      customerGenderColumnPromise = db.query(
+        `SELECT 1
+           FROM information_schema.COLUMNS
+          WHERE TABLE_SCHEMA = DATABASE()
+            AND TABLE_NAME = 'cust_customers'
+            AND COLUMN_NAME = 'gender'
+          LIMIT 1`
+      )
+        .then(([rows]) => rows.length > 0)
+        .catch((err) => {
+          customerGenderColumnPromise = null;
+          throw err;
+        });
+    }
+    return customerGenderColumnPromise;
+  }
+
+  function getRuleFieldKind(field, options = {}) {
+    if (field === 'gender' && !options.allowGender) return null;
+    return FILTER_FIELD_KIND_MAP.get(field) || null;
+  }
+
+  function normalizeFilterRule(rawRule, options = {}) {
+    if (!rawRule || typeof rawRule !== 'object') return null;
+    const field = String(rawRule.field || '').trim();
+    const operator = String(rawRule.operator || '').trim();
+    const kind = getRuleFieldKind(field, options);
+    if (!kind) return null;
+
+    let value = rawRule.value;
+    if (kind === 'number') {
+      value = Number(value);
+      if (!Number.isFinite(value)) return null;
+      if (!['=', '!=', '>=', '<=', '>', '<'].includes(operator)) return null;
+    } else if (kind === 'date') {
+      const relativeValue = getRelativeDateFilterValue(value);
+      const absoluteValue = relativeValue == null && value ? new Date(value).getTime() : relativeValue;
+      if (!Number.isFinite(absoluteValue)) return null;
+      if (!['=', '!=', '>=', '<=', '>', '<'].includes(operator)) return null;
+      value = String(value);
+    } else if (kind === 'enum') {
+      if (!['=', '!='].includes(operator)) return null;
+      value = normalizeCustomerGender(value);
+    } else if (kind === 'entity') {
+      if (!['=', '!='].includes(operator)) return null;
+      value = toPositiveInt(value);
+      if (!value) return null;
+    }
+
+    return { field, operator, value };
+  }
+
+  function normalizeFilterConditions(rawConditions, options = {}) {
+    try {
+      const parsed = typeof rawConditions === 'string'
+        ? JSON.parse(rawConditions)
+        : rawConditions;
+      const logic = String(parsed?.logic || 'AND').toUpperCase() === 'OR' ? 'OR' : 'AND';
+      const rawRules = Array.isArray(parsed?.rules) ? parsed.rules : [];
+      const rules = rawRules
+        .map((rule) => normalizeFilterRule(rule, options))
+        .filter(Boolean);
+      return { logic, rules };
+    } catch {
+      return { logic: 'AND', rules: [] };
+    }
+  }
+
+  function isAdvancedFilterRule(rule) {
+    return rule?.field === 'favorite_product' || rule?.field === 'favorite_category';
+  }
+
+  function evaluateCustomFilterRule(client, rule, options = {}) {
+    if (!rule || typeof rule !== 'object') return null;
+    const kind = getRuleFieldKind(rule.field, options);
+    if (!kind) return null;
+
+    if (kind === 'number') {
+      let left = null;
+      if (rule.field === 'age') {
+        left = getCustomerAgeYears(client?.birthday);
+      } else {
+        left = Number(client?.[rule.field] || 0);
+      }
+      if (!Number.isFinite(left)) return false;
+      return compareValues(left, rule.operator, Number(rule.value));
+    }
+
+    if (kind === 'date') {
+      const leftDate = client?.[rule.field] ? new Date(client[rule.field]) : null;
+      const rightRelative = getRelativeDateFilterValue(rule.value);
+      const rightDate = rightRelative != null ? new Date(rightRelative) : new Date(rule.value);
+      if (!leftDate || !Number.isFinite(leftDate.getTime()) || !Number.isFinite(rightDate.getTime())) return false;
+      if (rule.operator === '=' || rule.operator === '!=') {
+        leftDate.setHours(0, 0, 0, 0);
+        rightDate.setHours(0, 0, 0, 0);
+      }
+      const left = leftDate.getTime();
+      const right = rightDate.getTime();
+      return compareValues(left, rule.operator, right);
+    }
+
+    if (kind === 'enum') {
+      const left = normalizeCustomerGender(client?.gender);
+      const right = normalizeCustomerGender(rule.value);
+      return compareValues(left, rule.operator, right);
+    }
+
+    if (kind === 'entity') {
+      const left = toPositiveInt(client?.[rule.field]);
+      const right = toPositiveInt(rule.value);
+      if (!left || !right) return false;
+      return compareValues(left, rule.operator, right);
+    }
+
+    return null;
+  }
+
+  function doesClientMatchCustomFilter(client, conditions, options = {}) {
+    const rules = Array.isArray(conditions?.rules) ? conditions.rules : [];
+    const validResults = rules
+      .map((rule) => evaluateCustomFilterRule(client, rule, options))
+      .filter((result) => result !== null);
+    if (!validResults.length) return true;
+    if (String(conditions?.logic || '').toUpperCase() === 'OR') {
+      return validResults.some(Boolean);
+    }
+    return validResults.every(Boolean);
+  }
+
+  function buildGenderSqlCondition(operator, value) {
+    const maleExpr = "LOWER(TRIM(COALESCE(gender, ''))) IN ('m','male','man','м','муж','мужской')";
+    const femaleExpr = "LOWER(TRIM(COALESCE(gender, ''))) IN ('f','female','woman','ж','жен','женский')";
+    const unknownExpr = "(gender IS NULL OR TRIM(COALESCE(gender, ''))='' OR LOWER(TRIM(COALESCE(gender, ''))) IN ('u','unknown','none','n/a','не указан','не указано'))";
+    const expr = value === 'm'
+      ? maleExpr
+      : value === 'f'
+        ? femaleExpr
+        : unknownExpr;
+    return operator === '!=' ? `NOT (${expr})` : expr;
+  }
+
+  function buildFilterWhereClause(conditions, tenantId, options = {}) {
+    if (!conditions || !Array.isArray(conditions.rules) || !conditions.rules.length) {
+      return { whereClause: '', params: [], advancedRules: [] };
+    }
+
+    const logic = conditions.logic === 'OR' ? ' OR ' : ' AND ';
+    const clauses = [];
+    const params = [];
+    const advancedRules = [];
+
+    for (const rule of conditions.rules) {
+      if (isAdvancedFilterRule(rule)) {
+        advancedRules.push(rule);
+        continue;
+      }
+
+      const kind = getRuleFieldKind(rule.field, options);
+      if (!kind) continue;
+
+      if (kind === 'number' && rule.field === 'age') {
+        clauses.push(`birthday IS NOT NULL AND TIMESTAMPDIFF(YEAR, birthday, CURDATE()) ${rule.operator} ?`);
+        params.push(Number(rule.value));
+        continue;
+      }
+
+      if (kind === 'enum' && rule.field === 'gender') {
+        clauses.push(buildGenderSqlCondition(rule.operator, normalizeCustomerGender(rule.value)));
+        continue;
+      }
+
+      if (kind === 'date' && typeof rule.value === 'string' && /^-\d+d$/.test(rule.value)) {
+        const days = parseInt(rule.value.slice(1, -1), 10);
+        const expr = `DATE_SUB(CURDATE(), INTERVAL ${days} DAY)`;
+        if (rule.operator === '=' || rule.operator === '!=') {
+          clauses.push(`DATE(${rule.field}) ${rule.operator} ${expr}`);
+        } else {
+          clauses.push(`${rule.field} ${rule.operator} ${expr}`);
+        }
+        continue;
+      }
+
+      if (kind === 'number' || kind === 'date') {
+        clauses.push(`${rule.field} ${rule.operator} ?`);
+        params.push(rule.value);
+      }
+    }
+
+    if (!clauses.length) {
+      return { whereClause: '', params: [], advancedRules };
+    }
+
+    return {
+      whereClause: ` AND (${clauses.join(logic)})`,
+      params,
+      advancedRules,
+    };
+  }
+
+  function sortClientsRows(rows, sortRaw) {
+    const list = Array.isArray(rows) ? rows.slice() : [];
+    const sort = String(sortRaw || 'last_desc');
+    if (sort === 'name_asc') {
+      return list.sort((a, b) => {
+        const nameA = String(a?.name || '').trim();
+        const nameB = String(b?.name || '').trim();
+        const emptyA = nameA ? 0 : 1;
+        const emptyB = nameB ? 0 : 1;
+        if (emptyA !== emptyB) return emptyA - emptyB;
+        const cmp = nameA.localeCompare(nameB, 'ru', { sensitivity: 'base' });
+        if (cmp !== 0) return cmp;
+        return Number(b?.id || 0) - Number(a?.id || 0);
+      });
+    }
+    if (sort === 'orders_desc') {
+      return list.sort((a, b) => (
+        Number(b?.total_orders || 0) - Number(a?.total_orders || 0) ||
+        Number(b?.id || 0) - Number(a?.id || 0)
+      ));
+    }
+    if (sort === 'created_desc') {
+      return list.sort((a, b) => (
+        new Date(b?.created_at || 0).getTime() - new Date(a?.created_at || 0).getTime() ||
+        Number(b?.id || 0) - Number(a?.id || 0)
+      ));
+    }
+    return list.sort((a, b) => {
+      const left = a?.last_order_date ? new Date(a.last_order_date).getTime() : new Date(a?.created_at || 0).getTime();
+      const right = b?.last_order_date ? new Date(b.last_order_date).getTime() : new Date(b?.created_at || 0).getTime();
+      return right - left || Number(b?.id || 0) - Number(a?.id || 0);
+    });
+  }
+
+  function extractPurchasedProductsFromItems(rawItems) {
+    const items = Array.isArray(rawItems) ? rawItems : [];
+    const out = [];
+    for (const item of items) {
+      if (!item || typeof item !== 'object') continue;
+      const qtyRaw = Number(item.qty ?? item.quantity ?? 1);
+      const qty = Number.isFinite(qtyRaw) ? Math.max(1, Math.trunc(qtyRaw)) : 1;
+      const comboSelections = Array.isArray(item.selections) ? item.selections : [];
+      if (comboSelections.length) {
+        comboSelections.forEach((selection) => {
+          const productId = toPositiveInt(selection?.product_id || selection?.id || selection?.product?.id);
+          if (!productId) return;
+          out.push({ productId, qty });
+        });
+        continue;
+      }
+      const productId = toPositiveInt(item.product_id || item.id || item.product?.id);
+      if (!productId) continue;
+      out.push({ productId, qty });
+    }
+    return out;
+  }
+
+  async function attachFavoritePurchaseStats(tenantId, clients) {
+    const customerIds = [...new Set((Array.isArray(clients) ? clients : [])
+      .map((client) => toPositiveInt(client?.id))
+      .filter(Boolean))];
+    if (!customerIds.length) return;
+
+    const orders = [];
+    for (const chunk of chunkArray(customerIds, 500)) {
+      const placeholders = chunk.map(() => '?').join(',');
+      const [rows] = await db.query(
+        `SELECT customer_id, items
+           FROM order_orders
+          WHERE tenant_id=?
+            AND is_active=1
+            AND customer_id IN (${placeholders})`,
+        [tenantId, ...chunk]
+      );
+      orders.push(...rows);
+    }
+
+    const productCountsByCustomer = new Map();
+    const allProductIds = new Set();
+
+    for (const row of orders) {
+      const customerId = toPositiveInt(row?.customer_id);
+      if (!customerId) continue;
+      let parsedItems = [];
+      try {
+        const items = row?.items ? JSON.parse(row.items) : [];
+        if (Array.isArray(items)) parsedItems = items;
+      } catch {}
+
+      const purchases = extractPurchasedProductsFromItems(parsedItems);
+      if (!purchases.length) continue;
+
+      let customerProductMap = productCountsByCustomer.get(customerId);
+      if (!customerProductMap) {
+        customerProductMap = new Map();
+        productCountsByCustomer.set(customerId, customerProductMap);
+      }
+
+      purchases.forEach(({ productId, qty }) => {
+        allProductIds.add(productId);
+        customerProductMap.set(productId, Number(customerProductMap.get(productId) || 0) + qty);
+      });
+    }
+
+    const categoryIdsByProduct = new Map();
+    const productIds = [...allProductIds];
+    for (const chunk of chunkArray(productIds, 500)) {
+      const placeholders = chunk.map(() => '?').join(',');
+      const [rows] = await db.query(
+        `SELECT product_id, category_id
+           FROM prod_product_categories
+          WHERE tenant_id=?
+            AND product_id IN (${placeholders})`,
+        [tenantId, ...chunk]
+      );
+      rows.forEach((row) => {
+        const productId = toPositiveInt(row?.product_id);
+        const categoryId = toPositiveInt(row?.category_id);
+        if (!productId || !categoryId) return;
+        if (!categoryIdsByProduct.has(productId)) {
+          categoryIdsByProduct.set(productId, []);
+        }
+        categoryIdsByProduct.get(productId).push(categoryId);
+      });
+    }
+
+    clients.forEach((client) => {
+      const customerId = toPositiveInt(client?.id);
+      const productMap = customerId ? productCountsByCustomer.get(customerId) : null;
+      if (!productMap || !productMap.size) {
+        client.favorite_product = null;
+        client.favorite_category = null;
+        return;
+      }
+
+      let favoriteProductId = null;
+      let favoriteProductScore = -1;
+      const categoryMap = new Map();
+
+      productMap.forEach((score, productId) => {
+        if (
+          score > favoriteProductScore ||
+          (score === favoriteProductScore && (favoriteProductId == null || productId < favoriteProductId))
+        ) {
+          favoriteProductId = productId;
+          favoriteProductScore = score;
+        }
+        const categoryIds = categoryIdsByProduct.get(productId) || [];
+        categoryIds.forEach((categoryId) => {
+          categoryMap.set(categoryId, Number(categoryMap.get(categoryId) || 0) + score);
+        });
+      });
+
+      let favoriteCategoryId = null;
+      let favoriteCategoryScore = -1;
+      categoryMap.forEach((score, categoryId) => {
+        if (
+          score > favoriteCategoryScore ||
+          (score === favoriteCategoryScore && (favoriteCategoryId == null || categoryId < favoriteCategoryId))
+        ) {
+          favoriteCategoryId = categoryId;
+          favoriteCategoryScore = score;
+        }
+      });
+
+      client.favorite_product = favoriteProductId;
+      client.favorite_category = favoriteCategoryId;
+    });
+  }
+
+  function getClientsDatasetSql(baseWhereSql, options = {}) {
+    const genderSelectSql = options.includeGender ? ', c.gender' : '';
     return `
       SELECT
         c.id, c.tenant_id,
@@ -15,6 +468,7 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
         c.registration_date,
         c.is_active,
         c.created_at, c.updated_at
+        ${genderSelectSql}
       FROM cust_customers c
       LEFT JOIN (
         SELECT
@@ -33,117 +487,76 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
     `;
   }
 
-  /**
-   * Вспомогательная функция для построения WHERE clause из условий фильтра
-   */
-  function buildFilterWhereClause(conditions, tenantId) {
-    if (!conditions || !conditions.rules || !conditions.rules.length) {
-      return { whereClause: '', params: [] };
-    }
-
-    const logic = conditions.logic === 'OR' ? ' OR ' : ' AND ';
-    const clauses = [];
-    const params = [];
-
-    for (const rule of conditions.rules) {
-      const { field, operator, value } = rule;
-      
-      // Поддерживаемые поля
-      const allowedFields = ['total_orders', 'total_spent', 'last_order_date', 'registration_date', 'is_active', 'created_at'];
-      if (!allowedFields.includes(field)) continue;
-
-      // Обработка относительных дат (например -30d, -7d)
-      let actualValue = value;
-      if (typeof value === 'string' && value.match(/^-\d+d$/)) {
-        const days = parseInt(value.slice(1, -1), 10);
-        actualValue = `DATE_SUB(CURDATE(), INTERVAL ${days} DAY)`;
-        
-        switch (operator) {
-          case '>=':
-            clauses.push(`${field} >= ${actualValue}`);
-            break;
-          case '<=':
-            clauses.push(`${field} <= ${actualValue}`);
-            break;
-          case '>':
-            clauses.push(`${field} > ${actualValue}`);
-            break;
-          case '<':
-            clauses.push(`${field} < ${actualValue}`);
-            break;
-          default:
-            break;
-        }
-      } else {
-        // Обычные значения
-        switch (operator) {
-          case '=':
-            clauses.push(`${field} = ?`);
-            params.push(actualValue);
-            break;
-          case '!=':
-            clauses.push(`${field} != ?`);
-            params.push(actualValue);
-            break;
-          case '>=':
-            clauses.push(`${field} >= ?`);
-            params.push(actualValue);
-            break;
-          case '<=':
-            clauses.push(`${field} <= ?`);
-            params.push(actualValue);
-            break;
-          case '>':
-            clauses.push(`${field} > ?`);
-            params.push(actualValue);
-            break;
-          case '<':
-            clauses.push(`${field} < ?`);
-            params.push(actualValue);
-            break;
-          default:
-            break;
-        }
-      }
-    }
-
-    if (!clauses.length) {
-      return { whereClause: '', params: [] };
-    }
-
-    return {
-      whereClause: ` AND (${clauses.join(logic)})`,
-      params
-    };
-  }
-
-  function normalizeFilterConditions(rawConditions) {
-    try {
-      const parsed = typeof rawConditions === 'string'
-        ? JSON.parse(rawConditions)
-        : rawConditions;
-      return parsed && typeof parsed === 'object'
-        ? parsed
-        : { logic: 'AND', rules: [] };
-    } catch {
-      return { logic: 'AND', rules: [] };
-    }
-  }
-
-  async function getCustomFilterCount(tenantId, conditions) {
-    const normalized = normalizeFilterConditions(conditions);
-    const { whereClause, params } = buildFilterWhereClause(normalized, tenantId);
-    const clientsDatasetSql = getClientsDatasetSql('c.tenant_id=?');
-    const [countRows] = await db.query(
-      `SELECT COUNT(*) AS c
+  async function loadClientsForFilterEvaluation(tenantId, baseWhereSql, baseParams, options = {}) {
+    const filterSupport = options.filterSupport || {};
+    const includeGender = !!filterSupport.gender;
+    const clientsDatasetSql = getClientsDatasetSql(baseWhereSql, { includeGender });
+    const outerWhereClause = options.postWhereClause || '';
+    const outerParams = Array.isArray(options.postWhereParams) ? options.postWhereParams : [];
+    const [rows] = await db.query(
+      `SELECT
+         id, tenant_id,
+         name, phone, birthday,
+         photo,
+         total_orders, total_spent, last_order_date,
+         registration_date, is_active,
+         created_at, updated_at
+         ${includeGender ? ', gender' : ''}
        FROM (${clientsDatasetSql}) clients
-       WHERE 1=1${whereClause}`,
-      [tenantId, tenantId, ...params]
+       WHERE 1=1${outerWhereClause}`,
+      [tenantId, ...baseParams, ...outerParams]
     );
 
+    const clients = rows.map((row) => ({
+      ...row,
+      favorite_product: null,
+      favorite_category: null,
+      gender: includeGender ? row.gender : null,
+    }));
+
+    if (options.needFavorites) {
+      await attachFavoritePurchaseStats(tenantId, clients);
+    }
+
+    return clients;
+  }
+
+  async function getCustomFilterCount(tenantId, conditions, options = {}) {
+    const filterSupport = options.filterSupport || {};
+    const normalized = normalizeFilterConditions(conditions, { allowGender: !!filterSupport.gender });
+    const { whereClause, params, advancedRules } = buildFilterWhereClause(normalized, tenantId, { allowGender: !!filterSupport.gender });
+
+    if (!advancedRules.length) {
+      const clientsDatasetSql = getClientsDatasetSql('c.tenant_id=?', { includeGender: !!filterSupport.gender });
+      const [countRows] = await db.query(
+        `SELECT COUNT(*) AS c
+         FROM (${clientsDatasetSql}) clients
+         WHERE 1=1${whereClause}`,
+        [tenantId, tenantId, ...params]
+      );
+      return {
+        conditions: normalized,
+        count: Number(countRows?.[0]?.c || 0),
+      };
+    }
+
+    const canNarrowBySimpleRules = normalized.logic !== 'OR' && whereClause;
+    const clients = await loadClientsForFilterEvaluation(
+      tenantId,
+      'c.tenant_id=?',
+      [tenantId],
+      {
+        filterSupport,
+        needFavorites: true,
+        postWhereClause: canNarrowBySimpleRules ? whereClause : '',
+        postWhereParams: canNarrowBySimpleRules ? params : [],
+      }
+    );
+
+    const count = clients.filter((client) => doesClientMatchCustomFilter(client, normalized, { allowGender: !!filterSupport.gender })).length;
     return {
       conditions: normalized,
-      count: Number(countRows?.[0]?.c || 0),
+      count,
     };
   }
 
@@ -160,6 +573,7 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
     try {
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
+      const filterSupport = { gender: await hasCustomerGenderColumn() };
 
       const qRaw = helpers.strOrNull(req.query.q);
       const qPhone = qRaw ? helpers.normalizePhone(qRaw) : '';
@@ -201,24 +615,51 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
       }
 
       // Применяем кастомный фильтр если указан
+      let normalizedFilterConditions = null;
       let customFilterClause = '';
       let customFilterParams = [];
+      let customFilterAdvancedRules = [];
       if (filterId && Number.isFinite(filterId) && filterId > 0) {
         const [filterRows] = await db.query(
           `SELECT conditions FROM cust_categories WHERE tenant_id=? AND store_id=? AND id=? AND is_active=1 LIMIT 1`,
           [tenantId, storeId, filterId]
         );
         if (filterRows.length) {
-          const conditions = typeof filterRows[0].conditions === 'string'
-            ? JSON.parse(filterRows[0].conditions)
-            : filterRows[0].conditions;
-          const result = buildFilterWhereClause(conditions, tenantId);
+          normalizedFilterConditions = normalizeFilterConditions(filterRows[0].conditions, { allowGender: !!filterSupport.gender });
+          const result = buildFilterWhereClause(normalizedFilterConditions, tenantId, { allowGender: !!filterSupport.gender });
           customFilterClause = result.whereClause;
           customFilterParams = result.params;
+          customFilterAdvancedRules = result.advancedRules;
         }
       }
 
-      const clientsDatasetSql = getClientsDatasetSql(where.join(' AND '));
+      if (normalizedFilterConditions && customFilterAdvancedRules.length) {
+        const canNarrowBySimpleRules = normalizedFilterConditions.logic !== 'OR' && customFilterClause;
+        const clients = await loadClientsForFilterEvaluation(
+          tenantId,
+          where.join(' AND '),
+          params,
+          {
+            filterSupport,
+            needFavorites: true,
+            postWhereClause: canNarrowBySimpleRules ? customFilterClause : '',
+            postWhereParams: canNarrowBySimpleRules ? customFilterParams : [],
+          }
+        );
+        const matchedRows = clients.filter((client) => (
+          doesClientMatchCustomFilter(client, normalizedFilterConditions, { allowGender: !!filterSupport.gender })
+        ));
+        const sortedRows = sortClientsRows(matchedRows, sortRaw);
+        return res.json({
+          ok: true,
+          data: sortedRows.slice(offset, offset + limit),
+          total: sortedRows.length,
+          limit,
+          offset,
+        });
+      }
+
+      const clientsDatasetSql = getClientsDatasetSql(where.join(' AND '), { includeGender: !!filterSupport.gender });
       const clientsDatasetParams = [tenantId, ...params];
 
       const [rows] = await db.query(
@@ -689,6 +1130,7 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
     try {
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
+      const filterSupport = { gender: await hasCustomerGenderColumn() };
 
       const [rows] = await db.query(
         `SELECT id, tenant_id, store_id, title, icon, color, conditions, sort_order, is_active, created_at, updated_at
@@ -698,18 +1140,50 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
         [tenantId, storeId]
       );
 
-      // Подсчитываем количество клиентов для каждого фильтра
-      const filtersWithCounts = await Promise.all(rows.map(async (filter) => {
-        const result = await getCustomFilterCount(tenantId, filter.conditions);
-        
-        return {
-          ...filter,
-          conditions: result.conditions,
-          count: result.count
-        };
+      const normalizedFilters = rows.map((filter) => ({
+        filter,
+        conditions: normalizeFilterConditions(filter.conditions, { allowGender: !!filterSupport.gender }),
       }));
+      const hasAdvancedFilters = normalizedFilters.some(({ conditions }) => (
+        conditions.rules.some((rule) => isAdvancedFilterRule(rule))
+      ));
 
-      res.json({ ok: true, data: filtersWithCounts });
+      let filtersWithCounts = [];
+      if (hasAdvancedFilters) {
+        const clients = await loadClientsForFilterEvaluation(
+          tenantId,
+          'c.tenant_id=?',
+          [tenantId],
+          {
+            filterSupport,
+            needFavorites: true,
+          }
+        );
+        filtersWithCounts = normalizedFilters.map(({ filter, conditions }) => ({
+          ...filter,
+          conditions,
+          count: clients.filter((client) => doesClientMatchCustomFilter(client, conditions, { allowGender: !!filterSupport.gender })).length,
+        }));
+      } else {
+        filtersWithCounts = await Promise.all(rows.map(async (filter) => {
+          const result = await getCustomFilterCount(tenantId, filter.conditions, { filterSupport });
+          return {
+            ...filter,
+            conditions: result.conditions,
+            count: result.count,
+          };
+        }));
+      }
+
+      res.json({
+        ok: true,
+        data: filtersWithCounts,
+        meta: {
+          filter_capabilities: {
+            gender: !!filterSupport.gender,
+          },
+        },
+      });
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
@@ -719,7 +1193,8 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
   router.post('/filters/preview-count', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
-      const result = await getCustomFilterCount(tenantId, req.body?.conditions);
+      const filterSupport = { gender: await hasCustomerGenderColumn() };
+      const result = await getCustomFilterCount(tenantId, req.body?.conditions, { filterSupport });
       res.json({
         ok: true,
         data: {
@@ -742,13 +1217,14 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
     try {
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
+      const filterSupport = { gender: await hasCustomerGenderColumn() };
 
       const title = helpers.strOrNull(req.body.title);
       if (!title) return res.status(400).json({ ok: false, error: 'TITLE_REQUIRED' });
 
       const icon = helpers.strOrNull(req.body.icon) || 'fa-filter';
       const color = helpers.strOrNull(req.body.color);
-      const conditions = req.body.conditions || { logic: 'AND', rules: [] };
+      const conditions = normalizeFilterConditions(req.body.conditions, { allowGender: !!filterSupport.gender });
 
       // Получаем следующий sort_order
       const [maxSort] = await db.query(
@@ -781,6 +1257,7 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
     try {
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
+      const filterSupport = { gender: await hasCustomerGenderColumn() };
       const id = Number(req.params.id);
 
       if (!Number.isFinite(id) || id <= 0) {
@@ -804,7 +1281,7 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
       }
       if (req.body.conditions !== undefined) {
         updates.push('conditions=?');
-        params.push(JSON.stringify(req.body.conditions));
+        params.push(JSON.stringify(normalizeFilterConditions(req.body.conditions, { allowGender: !!filterSupport.gender })));
       }
       if (req.body.sort_order !== undefined) {
         updates.push('sort_order=?');

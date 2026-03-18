@@ -5,6 +5,7 @@ const path = require('path');
 const multer = require('multer');
 const { sendNewOrderNotification } = require('../telegramNotifications');
 const { sendOrderToPrintBot } = require('../printPush');
+const makeChatTempRouter = require('../chatTemp');
 const discountHelpers = require('../helpers/discounts');
 const {
   makeLinkToken,
@@ -54,6 +55,37 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
        WHERE c.tenant_id=? AND c.id IN (${placeholders})`,
       [tenantId, ...ids, tenantId, ...ids]
     );
+  }
+
+  function readIncomingGuestChatClientId(req) {
+    const rawValue = req.body?.chat_guest_client_id
+      ?? req.body?.chatGuestClientId
+      ?? req.headers['x-chat-guest-client-id']
+      ?? req.query?.chat_guest_client_id
+      ?? req.query?.chatGuestClientId
+      ?? 0;
+    const guestClientId = Number(rawValue || 0);
+    return Number.isFinite(guestClientId) && guestClientId > 0
+      ? Math.trunc(guestClientId)
+      : 0;
+  }
+
+  async function mergeGuestChatIntoCustomerIfNeeded(tenantId, guestClientId, customerId) {
+    const fromId = Number(guestClientId || 0);
+    const toId = Number(customerId || 0);
+    if (!Number.isFinite(fromId) || fromId <= 0) return false;
+    if (!Number.isFinite(toId) || toId <= 0 || fromId === toId) return false;
+    const mergeFn = makeChatTempRouter && typeof makeChatTempRouter.mergeThreadIntoClientAndNotify === 'function'
+      ? makeChatTempRouter.mergeThreadIntoClientAndNotify
+      : null;
+    if (!mergeFn) return false;
+    try {
+      const result = await mergeFn(tenantId, fromId, toId);
+      return result?.merged === true;
+    } catch (err) {
+      console.error('AUTH_CHAT_GUEST_MERGE_FAILED:', err?.message || err);
+      return false;
+    }
   }
   const PUBLIC_CACHE_TTL_MS = Object.freeze({
     categories: 30000,
@@ -1950,6 +1982,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       const tenantId = helpers.getTenantId(req);
       const phone = helpers.normalizePhone(str(req.body.phone));
       const code = String(req.body?.code || '').replace(/\D/g, '').slice(0, 4);
+      const guestChatClientId = readIncomingGuestChatClientId(req);
       if (!phone || phone.length < 10) return res.status(400).json({ ok: false, error: 'PHONE_REQUIRED' });
       if (code.length !== 4) return res.status(400).json({ ok: false, error: 'CODE_INVALID' });
 
@@ -1994,6 +2027,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         [tenantId, customerId]
       );
 
+      await mergeGuestChatIntoCustomerIfNeeded(tenantId, guestChatClientId, customerId);
+
       return res.json({
         ok: true,
         token,
@@ -2019,6 +2054,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
 
       const phoneRaw = str(req.body.phone);
       const phone = helpers.normalizePhone(phoneRaw);
+      const guestChatClientId = readIncomingGuestChatClientId(req);
 
       if (!phone || phone.length < 10) {
         return res.status(400).json({ ok: false, error: 'PHONE_REQUIRED' });
@@ -2097,6 +2133,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
          LIMIT 1`,
         [tenantId, customerId]
       );
+
+      await mergeGuestChatIntoCustomerIfNeeded(tenantId, guestChatClientId, customerId);
 
       res.json({ ok: true, token, customer: me[0] || null });
 

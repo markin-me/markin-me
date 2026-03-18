@@ -292,7 +292,7 @@
     return [];
   }
 
-  function applyDomainSetup(tenant) {
+  function applyDomainSetupLegacy(tenant) {
     domainSetup = tenant && tenant.domain_setup ? tenant.domain_setup : null;
     const aRecords = normalizeDomainList(domainSetup && domainSetup.a_records);
     const primaryARecord = aRecords[0] || "141.8.198.215";
@@ -328,17 +328,17 @@
         id,
         domain,
         domain_ascii: domainAscii,
-        is_primary: Number(item.is_primary) === 1 || item.is_primary === true
+        is_enabled: Number(item.is_enabled) !== 0 && item.is_enabled !== false
       };
     }).filter(Boolean).sort((a, b) => {
-      if (a.is_primary && !b.is_primary) return -1;
-      if (!a.is_primary && b.is_primary) return 1;
+      if (a.is_enabled && !b.is_enabled) return -1;
+      if (!a.is_enabled && b.is_enabled) return 1;
       return a.id - b.id;
     });
   }
 
-  function getPrimaryTenantDomain() {
-    return tenantDomains.find((item) => item.is_primary) || tenantDomains[0] || null;
+  function getFirstEnabledTenantDomain() {
+    return tenantDomains.find((item) => item.is_enabled) || tenantDomains[0] || null;
   }
 
   function getSelectedTenantDomain() {
@@ -346,7 +346,7 @@
       const selected = tenantDomains.find((item) => item.id === selectedTenantDomainId);
       if (selected) return selected;
     }
-    return getPrimaryTenantDomain();
+    return getFirstEnabledTenantDomain();
   }
 
   function syncSelectedTenantDomain() {
@@ -355,7 +355,7 @@
     return selected;
   }
 
-  function renderTenantDomains() {
+  function renderTenantDomainsLegacy() {
     const listEl = document.getElementById("domainList");
     const connectedHintEl = document.getElementById("domainConnectedHint");
     const primaryHintEl = document.getElementById("domainPrimaryHint");
@@ -367,17 +367,20 @@
       } else {
         listEl.innerHTML = tenantDomains.map((item) => {
           const label = item.domain || item.domain_ascii;
-          const isPrimary = item.is_primary;
+          const isEnabled = item.is_enabled !== false;
           const isSelected = selected && selected.id === item.id;
           return `
-            <div class="domain-managed-item${isPrimary ? ' is-primary' : ''}${isSelected ? ' is-selected' : ''}" data-domain-id="${item.id}">
+            <div class="domain-managed-item${isEnabled ? '' : ' is-disabled'}${isSelected ? ' is-selected' : ''}" data-domain-id="${item.id}">
               <div class="domain-managed-meta">
                 <span class="domain-managed-domain">${label}</span>
-                ${isPrimary ? '<span class="domain-managed-badge">Основной</span>' : ''}
+                <span class="domain-managed-status${isEnabled ? '' : ' is-disabled'}">${isEnabled ? 'Сайт включен' : 'Показывается заглушка'}</span>
               </div>
               ${domainManageMode ? `
               <div class="domain-managed-actions">
-                ${isPrimary ? '' : '<button class="domain-managed-btn" type="button" data-domain-action="primary" title="Сделать основным" aria-label="Сделать основным"><i class="fas fa-star"></i></button>'}
+                <label class="switch domain-managed-switch" data-domain-action="toggle" title="${isEnabled ? 'Выключить домен' : 'Включить домен'}" aria-label="${isEnabled ? 'Выключить домен' : 'Включить домен'}">
+                  <input class="switch-input" type="checkbox" ${isEnabled ? 'checked' : ''} data-domain-action="toggle" />
+                  <span class="switch-ui" aria-hidden="true"></span>
+                </label>
                 <button class="domain-managed-btn is-danger" type="button" data-domain-action="delete" title="Удалить домен" aria-label="Удалить домен"><i class="fas fa-trash"></i></button>
               </div>
               ` : ''}
@@ -388,9 +391,9 @@
     }
 
     if (connectedHintEl) {
-      const primaryDomain = getPrimaryTenantDomain();
+      const primaryDomain = getFirstEnabledTenantDomain();
       if (primaryDomain) {
-        connectedHintEl.textContent = `Основной домен: ${primaryDomain.domain || primaryDomain.domain_ascii}`;
+        connectedHintEl.textContent = `Включен домен: ${primaryDomain.domain || primaryDomain.domain_ascii}`;
         connectedHintEl.classList.remove("hidden");
       } else {
         connectedHintEl.textContent = "";
@@ -401,8 +404,8 @@
     if (primaryHintEl) {
       const selectedLabel = selected ? (selected.domain || selected.domain_ascii) : "";
       primaryHintEl.textContent = selectedLabel
-        ? `Сейчас выбран домен: ${selectedLabel}. Основной домен используется в ссылках на витрину и мини-приложения.`
-        : "Основной домен используется в ссылках на витрину и мини-приложения.";
+        ? `Сейчас выбран домен: ${selectedLabel}. Переключатель справа включает сайт на домене или возвращает заглушку.`
+        : "Переключатель справа включает сайт на домене или возвращает заглушку.";
     }
   }
 
@@ -417,7 +420,7 @@
   function applyDomainSetup(tenant) {
     domainSetup = tenant && tenant.domain_setup ? tenant.domain_setup : null;
     tenantDomains = normalizeTenantDomains(tenant && tenant.domains);
-    const primaryDomain = getPrimaryTenantDomain();
+    const primaryDomain = getFirstEnabledTenantDomain();
     domainOriginalValue = primaryDomain ? String(primaryDomain.domain || "") : "";
     domainAsciiValue = primaryDomain ? String(primaryDomain.domain_ascii || "") : "";
     const aRecords = normalizeDomainList(domainSetup && domainSetup.a_records);
@@ -441,6 +444,62 @@
       } else {
         connectHint.textContent = "Сначала добавьте домен и пропишите две A-записи.";
       }
+    }
+  }
+
+  function renderTenantDomains() {
+    const listEl = document.getElementById("domainList");
+    const connectedHintEl = document.getElementById("domainConnectedHint");
+    const primaryHintEl = document.getElementById("domainPrimaryHint");
+    const selected = syncSelectedTenantDomain();
+
+    if (listEl) {
+      if (!tenantDomains.length) {
+        listEl.innerHTML = '<div class="domain-managed-empty">РџРѕРєР° РЅРµ РґРѕР±Р°РІР»РµРЅРѕ РЅРё РѕРґРЅРѕРіРѕ РєР°СЃС‚РѕРјРЅРѕРіРѕ РґРѕРјРµРЅР°.</div>';
+      } else {
+        listEl.innerHTML = tenantDomains.map((item) => {
+          const label = item.domain || item.domain_ascii;
+          const isEnabled = item.is_enabled !== false;
+          const isSelected = selected && selected.id === item.id;
+          return `
+            <div class="domain-managed-item${isEnabled ? '' : ' is-disabled'}${isSelected ? ' is-selected' : ''}" data-domain-id="${item.id}">
+              <div class="domain-managed-meta">
+                <span class="domain-managed-domain">${label}</span>
+                <span class="domain-managed-status${isEnabled ? '' : ' is-disabled'}">${isEnabled ? 'Сайт включен' : 'Показывается заглушка'}</span>
+              </div>
+              ${domainManageMode ? `
+              <div class="domain-managed-actions">
+                <label class="switch domain-managed-switch" data-domain-action="toggle" title="${isEnabled ? 'Выключить домен' : 'Включить домен'}" aria-label="${isEnabled ? 'Выключить домен' : 'Включить домен'}">
+                  <input class="switch-input" type="checkbox" ${isEnabled ? 'checked' : ''} data-domain-action="toggle" />
+                  <span class="switch-ui" aria-hidden="true"></span>
+                </label>
+                <button class="domain-managed-btn is-danger" type="button" data-domain-action="delete" title="Удалить домен" aria-label="Удалить домен"><i class="fas fa-trash"></i></button>
+              </div>
+              ` : ''}
+            </div>
+          `;
+        }).join("");
+      }
+    }
+
+    if (connectedHintEl) {
+      const enabledDomains = tenantDomains.filter((item) => item.is_enabled !== false);
+      if (tenantDomains.length) {
+        connectedHintEl.textContent = enabledDomains.length
+          ? `Включено доменов: ${enabledDomains.length}. Выключенные домены показывают заглушку.`
+          : "Все домены сейчас выключены. Для них показывается заглушка.";
+        connectedHintEl.classList.remove("hidden");
+      } else {
+        connectedHintEl.textContent = "";
+        connectedHintEl.classList.add("hidden");
+      }
+    }
+
+    if (primaryHintEl) {
+      const selectedLabel = selected ? (selected.domain || selected.domain_ascii) : "";
+      primaryHintEl.textContent = selectedLabel
+        ? `Сейчас выбран домен: ${selectedLabel}. Переключатель справа включает сайт на домене или возвращает заглушку.`
+        : "Переключатель справа включает сайт на домене или возвращает заглушку.";
     }
   }
 
@@ -936,6 +995,7 @@
             if (rightTabs) rightTabs.classList.remove("hidden");
             setActiveRightTab(hasStoreTab.getAttribute("data-right-tab"));
           } else {
+            setActiveRightTab("");
             if (rightHeader) rightHeader.classList.add("hidden");
             if (rightTabs) rightTabs.classList.add("hidden");
             if (settingsStoreEmpty) settingsStoreEmpty.classList.remove("hidden");
@@ -2495,7 +2555,7 @@
         try {
           const res = await authFetch("/api/admin/tenant/domains", {
             method: "POST",
-            body: JSON.stringify({ domain: value, make_primary: tenantDomains.length === 0 ? 1 : 0 })
+            body: JSON.stringify({ domain: value })
           });
           data = await res.json();
         } catch (err) {
@@ -2557,10 +2617,13 @@
         }
 
         const action = actionBtn.getAttribute("data-domain-action");
-        if (action === "primary") {
+        if (action === "toggle") {
+          const nextEnabled = actionBtn.matches(".switch-input")
+            ? !!actionBtn.checked
+            : itemEl.classList.contains("is-disabled");
           const res = await authFetch(`/api/admin/tenant/domains/${domainId}`, {
             method: "PATCH",
-            body: JSON.stringify({ is_primary: 1 })
+            body: JSON.stringify({ is_enabled: nextEnabled ? 1 : 0 })
           });
           const data = await res.json();
           if (data && data.ok && data.tenant) {
@@ -2570,7 +2633,8 @@
             applyDomainSetup(data.tenant);
             renderDomainViewState();
           } else {
-            alert("Не удалось сделать домен основным.");
+            renderDomainViewState();
+            alert("Не удалось изменить состояние домена.");
           }
           return;
         }
