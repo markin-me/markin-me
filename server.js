@@ -1,17 +1,44 @@
 const express = require('express');
-const compression = require('compression');
+let compression;
+try {
+  compression = require('compression');
+} catch (_) {
+  compression = null;
+}
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 const cookieParser = require('cookie-parser');
-const { domainToASCII } = require('url');
+const { URL, domainToASCII } = require('url');
 
 const db = require('./db');
 const helpers = require('./api/helpers');
 const { createOrdersEventsHub } = require('./api/ordersEvents');
-const { startPolling: startTelegramPolling, handleWebhookUpdate, setWebhook } = require('./api/telegramBot');
+const { startPolling: startTelegramPolling, handleWebhookUpdate, setWebhook, deleteWebhook } = require('./api/telegramBot');
 const { startMaxPolling } = require('./api/maxBotPolling');
 const { startTenantTelegramAuthPolling } = require('./api/tgAuthBotPolling');
+const {
+  readSystemSettings,
+  writeSystemSettings,
+  getBootstrappedPollingState,
+  getEffectiveTelegramBotConfig,
+  normalizeTelegramBotUsername,
+  normalizeTelegramBotToken,
+  normalizeTelegramWebhookUrl,
+} = require('./data/system-settings');
+const {
+  getTenantMapConfig,
+  normalizeTenantMapConfig,
+  saveTenantMapConfig,
+} = require('./data/tenant-map-config');
+const { searchSystemMapGeocoder, searchSystemAddressSuggest } = require('./data/map-geocoder');
+const { searchLocalAddressSuggest } = require('./data/local-address-index');
+const {
+  isAddressServiceConfigured,
+  suggestCities: suggestAddressServiceCities,
+  suggestAddresses: suggestAddressServiceAddresses,
+  resolveAddress: resolveAddressThroughService,
+} = require('./data/address-service-client');
 
 // routers
 const makeAuthRouter = require('./api/auth');
@@ -48,8 +75,6 @@ const PERF_CONSOLE_LOGS_ENABLED = String(process.env.ENABLE_PERF_LOGS || '').tri
 const TENANT_LOOKUP_CACHE_MS = Number(process.env.TENANT_LOOKUP_CACHE_MS || 60_000);
 const STATIC_FILE_VERSION_CACHE_MS = Number(process.env.STATIC_FILE_VERSION_CACHE_MS || 300_000);
 const SLOW_REQUEST_LOG_MS = Math.max(0, Number(process.env.SLOW_REQUEST_LOG_MS || 1200) || 1200);
-const SYSTEM_SETTINGS_DIR = path.join(__dirname, 'data');
-const SYSTEM_SETTINGS_FILE = path.join(SYSTEM_SETTINGS_DIR, 'system-settings.json');
 const runtimePollingState = {
   telegram_env_enabled: String(process.env.DISABLE_TELEGRAM_POLLING || '').trim() !== '1',
   telegram_tenant_enabled: String(process.env.DISABLE_TG_AUTH_POLLING || '').trim() !== '1',
@@ -106,6 +131,180 @@ function nowMs() {
   return Number(process.hrtime.bigint()) / 1e6;
 }
 
+function hasOwn(target, key) {
+  return Boolean(target) && Object.prototype.hasOwnProperty.call(target, key);
+}
+
+function buildMapGeocoderScopeLabel(scope, countryCode) {
+  if (scope === 'country') {
+    return String(countryCode || '').toLowerCase() === 'ru' ? 'Россия' : String(countryCode || '').toUpperCase();
+  }
+  return 'Весь мир';
+}
+
+function isCityLikeGeocoderResult(entry) {
+  const raw = entry && typeof entry === 'object' ? entry : {};
+  const category = String(raw.category || raw.class || '').trim().toLowerCase();
+  const type = String(raw.type || '').trim().toLowerCase();
+  const addressType = String(raw.addresstype || '').trim().toLowerCase();
+  const blockedTypes = new Set(['suburb', 'quarter', 'neighbourhood', 'district', 'borough', 'city_block']);
+  if (blockedTypes.has(type) || blockedTypes.has(addressType)) return false;
+  if (category === 'place') return true;
+  const allowedTypes = new Set(['city', 'town', 'village', 'hamlet', 'municipality', 'locality']);
+  return allowedTypes.has(type) || allowedTypes.has(addressType);
+}
+
+function isAddressLikeGeocoderResult(entry) {
+  const raw = entry && typeof entry === 'object' ? entry : {};
+  if (isCityLikeGeocoderResult(raw)) return false;
+  const label = String(raw.display_name || raw.name || '').trim();
+  if (!label) return false;
+  const lat = Number(raw.lat);
+  const lng = Number(raw.lon);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
+  const address = raw.address && typeof raw.address === 'object' ? raw.address : {};
+  const category = String(raw.category || raw.class || '').trim().toLowerCase();
+  const type = String(raw.type || raw.addresstype || '').trim().toLowerCase();
+  const blockedTypes = new Set(['administrative', 'state', 'province', 'county', 'region', 'country']);
+  if (blockedTypes.has(type)) return false;
+  if (category === 'boundary' || category === 'place') return false;
+  const addressHints = [
+    'road',
+    'pedestrian',
+    'footway',
+    'path',
+    'house_number',
+    'neighbourhood',
+    'suburb',
+    'quarter',
+    'borough',
+    'building',
+    'amenity',
+    'shop',
+    'office',
+    'tourism',
+    'highway',
+  ];
+  if (addressHints.some((key) => String(address[key] || '').trim())) return true;
+  const addressTypes = new Set([
+    'house',
+    'building',
+    'road',
+    'street',
+    'pedestrian',
+    'footway',
+    'path',
+    'amenity',
+    'shop',
+    'office',
+    'tourism',
+    'attraction',
+    'residential',
+  ]);
+  if (addressTypes.has(type)) return true;
+  return Boolean(extractMapGeocoderCityName(raw));
+}
+
+function normalizeGeocoderBoundingBox(value) {
+  if (!Array.isArray(value) || value.length < 4) return null;
+  const south = Number(value[0]);
+  const north = Number(value[1]);
+  const west = Number(value[2]);
+  const east = Number(value[3]);
+  if (![south, north, west, east].every(Number.isFinite)) return null;
+  return [south, north, west, east];
+}
+
+function extractMapGeocoderCityName(entry) {
+  const raw = entry && typeof entry === 'object' ? entry : {};
+  const address = raw.address && typeof raw.address === 'object' ? raw.address : {};
+  const candidates = [
+    address.city,
+    address.town,
+    address.village,
+    address.municipality,
+    address.locality,
+    address.hamlet,
+  ];
+  for (const candidate of candidates) {
+    const value = String(candidate || '').trim();
+    if (value) return value;
+  }
+  return '';
+}
+
+function normalizeMapGeocoderResult(entry, scope, resultType = 'city') {
+  const raw = entry && typeof entry === 'object' ? entry : {};
+  const lat = Number(raw.lat);
+  const lng = Number(raw.lon);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  const cityName = extractMapGeocoderCityName(raw);
+  return {
+    label: String(raw.display_name || raw.name || '').trim(),
+    city_name: cityName || (resultType === 'address'
+      ? ''
+      : String(raw.name || raw.display_name || '').trim().split(',')[0].trim()),
+    lat,
+    lng,
+    bounding_box: normalizeGeocoderBoundingBox(raw.boundingbox),
+    scope,
+    result_type: resultType === 'address' ? 'address' : 'city',
+  };
+}
+
+async function fetchMapGeocoderResults(baseUrl, options = {}) {
+  const {
+    query = '',
+    limit = 5,
+    language = 'ru',
+    countryCode = '',
+    mode = 'city',
+  } = options || {};
+  const url = new URL(String(baseUrl || '').trim());
+  url.searchParams.set('q', String(query || '').trim());
+  url.searchParams.set('format', 'jsonv2');
+  url.searchParams.set('addressdetails', '1');
+  url.searchParams.set('limit', String(limit));
+  if (mode === 'city') {
+    url.searchParams.set('featureType', 'settlement');
+  }
+  url.searchParams.set('accept-language', String(language || 'ru').trim() || 'ru');
+  if (countryCode) {
+    url.searchParams.set('countrycodes', String(countryCode || '').trim());
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10000);
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json',
+        'Accept-Language': String(language || 'ru').trim() || 'ru',
+        'User-Agent': 'markin-me-map-geocoder/1.0',
+      },
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      return { ok: false, error: `UPSTREAM_${response.status}` };
+    }
+    const payload = await response.json();
+    const list = Array.isArray(payload) ? payload : [];
+    const filterFn = mode === 'address' ? isAddressLikeGeocoderResult : isCityLikeGeocoderResult;
+    const resultType = mode === 'address' ? 'address' : 'city';
+    const items = list
+      .filter(filterFn)
+      .map((entry) => normalizeMapGeocoderResult(entry, countryCode ? 'country' : 'global', resultType))
+      .filter(Boolean);
+    return { ok: true, items };
+  } catch (e) {
+    const message = e && e.name === 'AbortError' ? 'UPSTREAM_TIMEOUT' : (e && e.message) || 'UPSTREAM_ERROR';
+    return { ok: false, error: message };
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 function formatTimingDuration(value) {
   const numeric = Math.max(0, Number(value) || 0);
   return numeric.toFixed(1);
@@ -157,46 +356,20 @@ process.on('uncaughtException', (err) => {
   process.exit(1);
 });
 
-function readSystemSettings() {
+Object.assign(runtimePollingState, getBootstrappedPollingState(runtimePollingState));
+
+function getSystemTelegramConfig(sourceState = readSystemSettings()) {
+  return getEffectiveTelegramBotConfig(sourceState);
+}
+
+async function removeTelegramWebhook(token) {
+  if (!token) return;
   try {
-    if (!fs.existsSync(SYSTEM_SETTINGS_FILE)) return null;
-    const raw = fs.readFileSync(SYSTEM_SETTINGS_FILE, 'utf8');
-    const parsed = JSON.parse(raw || '{}');
-    return parsed && typeof parsed === 'object' ? parsed : null;
+    await deleteWebhook(token);
   } catch (e) {
-    console.error('System settings read error:', e.message || e);
-    return null;
+    console.error('Telegram deleteWebhook error:', e.message || e);
   }
 }
-
-function writeSystemSettings(nextState) {
-  try {
-    if (!fs.existsSync(SYSTEM_SETTINGS_DIR)) {
-      fs.mkdirSync(SYSTEM_SETTINGS_DIR, { recursive: true });
-    }
-    const payload = {
-      telegram_env_enabled: Boolean(nextState.telegram_env_enabled),
-      telegram_tenant_enabled: Boolean(nextState.telegram_tenant_enabled),
-      updated_at: new Date().toISOString(),
-    };
-    fs.writeFileSync(SYSTEM_SETTINGS_FILE, JSON.stringify(payload, null, 2), 'utf8');
-  } catch (e) {
-    console.error('System settings write error:', e.message || e);
-  }
-}
-
-function bootstrapSystemSettings() {
-  const fromFile = readSystemSettings();
-  if (!fromFile) return;
-  if (Object.prototype.hasOwnProperty.call(fromFile, 'telegram_env_enabled')) {
-    runtimePollingState.telegram_env_enabled = Boolean(fromFile.telegram_env_enabled);
-  }
-  if (Object.prototype.hasOwnProperty.call(fromFile, 'telegram_tenant_enabled')) {
-    runtimePollingState.telegram_tenant_enabled = Boolean(fromFile.telegram_tenant_enabled);
-  }
-}
-
-bootstrapSystemSettings();
 
 // Инициализация с обработкой ошибок
 let ordersEvents;
@@ -243,13 +416,15 @@ app.use((req, res, next) => {
   }
   return next();
 });
-app.use(compression({
-  threshold: 1024,
-  filter(req, res) {
-    if (req.headers['x-no-compression']) return false;
-    return compression.filter(req, res);
-  }
-}));
+if (compression) {
+  app.use(compression({
+    threshold: 1024,
+    filter(req, res) {
+      if (req.headers['x-no-compression']) return false;
+      return compression.filter(req, res);
+    }
+  }));
+}
 
 // Статика: долгий кэш для изображений, короткий/по умолчанию — для остального
 app.use('/static', express.static(path.join(__dirname, 'static'), {
@@ -711,10 +886,14 @@ app.use(async (req, res, next) => {
 async function renderShop(req, res) {
   try {
     const tenant = req._resolvedTenant || await resolveTenant(req);
+    const mapConfig = normalizeTenantMapConfig(tenant);
+    const tenantView = tenant && typeof tenant === 'object'
+      ? { ...tenant, store_address_map_enabled: Boolean(mapConfig.store_address_map_enabled) }
+      : tenant;
 
     const pageTitle = (tenant && (tenant.site_name || tenant.name)) ? (tenant.site_name || tenant.name) : 'Магазин';
-    const tenantId = tenant && tenant.id ? tenant.id : 1;
-    res.render('pages/shop', { pageTitle, tenant, tenantId });
+    const tenantId = tenantView && tenantView.id ? tenantView.id : 1;
+    res.render('pages/shop', { pageTitle, tenant: tenantView, tenantId });
   } catch (err) {
     console.error('Ошибка загрузки страницы:', err);
     res.status(500).send('Ошибка загрузки страницы');
@@ -842,7 +1021,27 @@ app.get('/manifest.json', async (req, res) => {
     });
   } catch (err) {
     console.error('Ошибка генерации manifest:', err);
-    res.status(500).json({});
+    const appType = normalizeManifestApp(req?.query?.app);
+    const startPath = normalizeManifestStartPath(req?.query?.start, {
+      appType,
+      tenantHostShop: false,
+    });
+    const fallbackTitle = appType === 'admin' ? 'Админка' : 'Магазин';
+    res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Vary', 'Host');
+    res.json({
+      id: appType === 'admin' ? '/pwa/admin/fallback' : '/pwa/shop/fallback',
+      name: fallbackTitle,
+      short_name: fallbackTitle,
+      start_url: startPath,
+      scope: appType === 'admin' ? '/dashboard/' : '/shop',
+      display: 'standalone',
+      orientation: 'portrait',
+      background_color: '#ffffff',
+      theme_color: '#ffffff',
+      icons: [],
+    });
   }
 });
 
@@ -1323,7 +1522,7 @@ app.get('/dashboard/team', (req, res) => res.render('pages/home', { activePage: 
 app.get('/dashboard/settings', (req, res) =>
   res.render('pages/home', {
     activePage: 'settings',
-    telegramBotUsername: (process.env.TELEGRAM_BOT_USERNAME || '').trim()
+    telegramBotUsername: getSystemTelegramConfig().telegram_bot_username
   })
 );
 
@@ -1339,7 +1538,7 @@ app.get('/auth', (req, res) => res.redirect('/login'));
 // ------------------------------
 app.post('/api/telegram/webhook', (req, res) => {
   res.sendStatus(200);
-  const token = process.env.TELEGRAM_BOT_TOKEN;
+  const token = getSystemTelegramConfig().telegram_bot_token;
   const update = req.body;
   if (token && update) {
     handleWebhookUpdate(db, token, update).catch((err) => console.error('Telegram webhook:', err));
@@ -1391,8 +1590,9 @@ function startTelegramEnvPollingIfNeeded() {
   if (!runtimePollingState.telegram_env_enabled) return;
   if (telegramEnvPollingHandle) return;
 
-  const telegramToken = process.env.TELEGRAM_BOT_TOKEN;
-  const webhookUrl = (process.env.TELEGRAM_WEBHOOK_URL || '').trim();
+  const systemTelegramConfig = getSystemTelegramConfig();
+  const telegramToken = systemTelegramConfig.telegram_bot_token;
+  const webhookUrl = systemTelegramConfig.telegram_webhook_url;
   if (!telegramToken || webhookUrl) return;
 
   try {
@@ -1411,6 +1611,45 @@ function stopTelegramEnvPollingIfRunning() {
   } finally {
     telegramEnvPollingHandle = null;
   }
+}
+
+async function syncSystemTelegramRuntime(previousConfig = null) {
+  const nextConfig = getSystemTelegramConfig();
+  const previousToken = previousConfig && typeof previousConfig === 'object'
+    ? String(previousConfig.telegram_bot_token || '').trim()
+    : '';
+  const previousWebhookUrl = previousConfig && typeof previousConfig === 'object'
+    ? String(previousConfig.telegram_webhook_url || '').trim()
+    : '';
+  const nextToken = String(nextConfig.telegram_bot_token || '').trim();
+  const nextWebhookUrl = String(nextConfig.telegram_webhook_url || '').trim();
+
+  stopTelegramEnvPollingIfRunning();
+
+  if (previousToken && previousToken !== nextToken) {
+    await removeTelegramWebhook(previousToken);
+  }
+
+  if (!runtimePollingState.telegram_env_enabled || !nextToken) {
+    const tokenToDisable = nextToken || previousToken;
+    if (tokenToDisable && (nextWebhookUrl || previousWebhookUrl)) {
+      await removeTelegramWebhook(tokenToDisable);
+    }
+    return nextConfig;
+  }
+
+  if (nextWebhookUrl) {
+    try {
+      await setWebhook(nextToken, nextWebhookUrl);
+    } catch (e) {
+      console.error('Telegram setWebhook error:', e.message || e);
+    }
+    return nextConfig;
+  }
+
+  await removeTelegramWebhook(nextToken);
+  startTelegramEnvPollingIfNeeded();
+  return nextConfig;
 }
 
 function startTenantTelegramPollingIfNeeded() {
@@ -1444,7 +1683,7 @@ app.get('/api/admin/system/polling', authMiddleware, (req, res) => {
   });
 });
 
-app.put('/api/admin/system/polling', authMiddleware, (req, res) => {
+app.put('/api/admin/system/polling', authMiddleware, async (req, res) => {
   const hasEnv = Object.prototype.hasOwnProperty.call(req.body || {}, 'telegram_env_enabled');
   const hasTenant = Object.prototype.hasOwnProperty.call(req.body || {}, 'telegram_tenant_enabled');
 
@@ -1452,10 +1691,10 @@ app.put('/api/admin/system/polling', authMiddleware, (req, res) => {
     return res.status(400).json({ ok: false, error: 'NO_FIELDS' });
   }
 
+  const previousConfig = hasEnv ? getSystemTelegramConfig() : null;
+
   if (hasEnv) {
     runtimePollingState.telegram_env_enabled = Boolean(req.body.telegram_env_enabled);
-    if (runtimePollingState.telegram_env_enabled) startTelegramEnvPollingIfNeeded();
-    else stopTelegramEnvPollingIfRunning();
   }
 
   if (hasTenant) {
@@ -1464,7 +1703,11 @@ app.put('/api/admin/system/polling', authMiddleware, (req, res) => {
     else stopTenantTelegramPollingIfRunning();
   }
 
-  writeSystemSettings(runtimePollingState);
+  writeSystemSettings(runtimePollingState, { defaults: runtimePollingState });
+
+  if (hasEnv) {
+    await syncSystemTelegramRuntime(previousConfig);
+  }
 
   return res.json({
     ok: true,
@@ -1473,6 +1716,342 @@ app.put('/api/admin/system/polling', authMiddleware, (req, res) => {
       telegram_tenant_enabled: Boolean(runtimePollingState.telegram_tenant_enabled),
     },
   });
+});
+
+app.get('/api/admin/system/telegram-bot', authMiddleware, (req, res) => {
+  return res.json({
+    ok: true,
+    data: {
+      ...getSystemTelegramConfig(),
+      telegram_env_enabled: Boolean(runtimePollingState.telegram_env_enabled),
+      telegram_tenant_enabled: Boolean(runtimePollingState.telegram_tenant_enabled),
+    },
+  });
+});
+
+app.put('/api/admin/system/telegram-bot', authMiddleware, async (req, res) => {
+  const body = req.body || {};
+  const hasUsername = hasOwn(body, 'telegram_bot_username');
+  const hasToken = hasOwn(body, 'telegram_bot_token');
+  const hasWebhook = hasOwn(body, 'telegram_webhook_url');
+  const hasEnvEnabled = hasOwn(body, 'telegram_env_enabled');
+  const hasTenantEnabled = hasOwn(body, 'telegram_tenant_enabled');
+  const hasConfigFields = hasUsername || hasToken || hasWebhook;
+
+  if (!hasConfigFields && !hasEnvEnabled && !hasTenantEnabled) {
+    return res.status(400).json({ ok: false, error: 'NO_FIELDS' });
+  }
+
+  const previousConfig = getSystemTelegramConfig();
+  const telegramBotUsername = hasUsername
+    ? normalizeTelegramBotUsername(body.telegram_bot_username)
+    : previousConfig.telegram_bot_username;
+  const telegramBotToken = hasToken
+    ? normalizeTelegramBotToken(body.telegram_bot_token)
+    : previousConfig.telegram_bot_token;
+  const telegramWebhookUrl = hasWebhook
+    ? normalizeTelegramWebhookUrl(body.telegram_webhook_url)
+    : previousConfig.telegram_webhook_url;
+  const isClearingConfig = !telegramBotUsername && !telegramBotToken && !telegramWebhookUrl;
+
+  if (hasConfigFields && !telegramBotToken && !isClearingConfig) {
+    return res.status(400).json({ ok: false, error: 'TOKEN_REQUIRED' });
+  }
+
+  if (telegramWebhookUrl && !isAbsoluteHttpUrl(telegramWebhookUrl)) {
+    return res.status(400).json({ ok: false, error: 'INVALID_WEBHOOK_URL' });
+  }
+
+  if (hasEnvEnabled) {
+    runtimePollingState.telegram_env_enabled = Boolean(body.telegram_env_enabled);
+  }
+
+  if (hasTenantEnabled) {
+    runtimePollingState.telegram_tenant_enabled = Boolean(body.telegram_tenant_enabled);
+    if (runtimePollingState.telegram_tenant_enabled) startTenantTelegramPollingIfNeeded();
+    else stopTenantTelegramPollingIfRunning();
+  }
+
+  const savedState = writeSystemSettings(
+    {
+      telegram_bot_username: telegramBotUsername,
+      telegram_bot_token: telegramBotToken,
+      telegram_webhook_url: telegramWebhookUrl,
+      telegram_env_enabled: runtimePollingState.telegram_env_enabled,
+      telegram_tenant_enabled: runtimePollingState.telegram_tenant_enabled,
+    },
+    { defaults: runtimePollingState }
+  );
+
+  if (!savedState) {
+    return res.status(500).json({ ok: false, error: 'SYSTEM_SETTINGS_WRITE_FAILED' });
+  }
+
+  if (hasConfigFields || hasEnvEnabled) {
+    await syncSystemTelegramRuntime(previousConfig);
+  }
+
+  return res.json({
+    ok: true,
+    data: {
+      ...getSystemTelegramConfig(savedState),
+      telegram_env_enabled: Boolean(runtimePollingState.telegram_env_enabled),
+      telegram_tenant_enabled: Boolean(runtimePollingState.telegram_tenant_enabled),
+    },
+  });
+});
+
+app.get('/api/admin/system/map-provider', authMiddleware, async (req, res) => {
+  try {
+    const tenantId = helpers.getTenantId(req);
+    const config = await getTenantMapConfig(db, tenantId);
+    if (!config) {
+      return res.status(404).json({ ok: false, error: 'TENANT_NOT_FOUND' });
+    }
+    return res.json({
+      ok: true,
+      data: config,
+    });
+  } catch (err) {
+    console.error('Tenant system map config load error:', err);
+    return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+  }
+});
+
+app.get('/api/admin/system/delivery-zone-polygon', authMiddleware, async (req, res) => {
+  try {
+    const tenantId = helpers.getTenantId(req);
+    const config = await getTenantMapConfig(db, tenantId);
+    if (!config) {
+      return res.status(404).json({ ok: false, error: 'TENANT_NOT_FOUND' });
+    }
+    return res.json({
+      ok: true,
+      data: {
+        delivery_zone_polygon_provider: config.delivery_zone_polygon_provider,
+        delivery_zone_polygon_enabled: Boolean(config.store_address_map_enabled),
+      },
+    });
+  } catch (err) {
+    console.error('Tenant delivery zone polygon config load error:', err);
+    return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+  }
+});
+
+app.put('/api/admin/system/map-provider', authMiddleware, async (req, res) => {
+  try {
+    const tenantId = helpers.getTenantId(req);
+    const saveResult = await saveTenantMapConfig(db, tenantId, req.body || {});
+    if (!saveResult.ok) {
+      const status = saveResult.error === 'TENANT_NOT_FOUND' ? 404 : 400;
+      return res.status(status).json({ ok: false, error: saveResult.error || 'BAD_REQUEST' });
+    }
+
+    const [tenantRows] = await db.query('SELECT * FROM ten_tenants WHERE id=? LIMIT 1', [tenantId]);
+    if (tenantRows[0]) {
+      cacheTenantRecord(tenantRows[0]);
+    }
+
+    return res.json({
+      ok: true,
+      data: saveResult.data,
+    });
+  } catch (err) {
+    console.error('Tenant system map config save error:', err);
+    return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+  }
+});
+
+app.put('/api/admin/system/delivery-zone-polygon', authMiddleware, async (req, res) => {
+  try {
+    const body = req.body || {};
+    const hasProvider = hasOwn(body, 'delivery_zone_polygon_provider');
+    const hasEnabled = hasOwn(body, 'delivery_zone_polygon_enabled');
+
+    if (!hasProvider && !hasEnabled) {
+      return res.status(400).json({ ok: false, error: 'NO_FIELDS' });
+    }
+
+    const payload = {};
+    if (hasProvider) {
+      payload.delivery_zone_polygon_provider = body.delivery_zone_polygon_provider;
+    }
+    if (hasEnabled) {
+      payload.store_address_map_enabled = body.delivery_zone_polygon_enabled;
+    }
+
+    const tenantId = helpers.getTenantId(req);
+    const saveResult = await saveTenantMapConfig(db, tenantId, payload);
+    if (!saveResult.ok) {
+      const status = saveResult.error === 'TENANT_NOT_FOUND' ? 404 : 400;
+      return res.status(status).json({ ok: false, error: saveResult.error || 'BAD_REQUEST' });
+    }
+
+    const [tenantRows] = await db.query('SELECT * FROM ten_tenants WHERE id=? LIMIT 1', [tenantId]);
+    if (tenantRows[0]) {
+      cacheTenantRecord(tenantRows[0]);
+    }
+
+    return res.json({
+      ok: true,
+      data: {
+        delivery_zone_polygon_provider: saveResult.data.delivery_zone_polygon_provider,
+        delivery_zone_polygon_enabled: Boolean(saveResult.data.store_address_map_enabled),
+      },
+    });
+  } catch (err) {
+    console.error('Tenant delivery zone polygon config save error:', err);
+    return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+  }
+});
+
+app.get('/api/admin/system/map-geocode', authMiddleware, async (req, res) => {
+  const query = String((req.query && req.query.q) || '').trim();
+  const tenantId = helpers.getTenantId(req);
+  const tenantMapConfig = await getTenantMapConfig(db, tenantId);
+  const result = await searchSystemMapGeocoder(query, { sourceState: tenantMapConfig || {} });
+  if (!result || !result.ok) {
+    const error = result && result.error ? result.error : 'GEOCODER_UPSTREAM_ERROR';
+    const status = error === 'QUERY_REQUIRED' || error === 'GEOCODER_NOT_CONFIGURED' ? 400 : 502;
+    return res.status(status).json({ ok: false, error });
+  }
+  return res.json({ ok: true, data: result.data });
+});
+
+app.get('/api/admin/system/address-suggest', authMiddleware, async (req, res) => {
+  const stage = String((req.query && req.query.stage) || '').trim().toLowerCase();
+  const query = String((req.query && req.query.q) || '').trim();
+  const city = String((req.query && req.query.city) || '').trim();
+  const street = String((req.query && req.query.street) || '').trim();
+  const tenantId = helpers.getTenantId(req);
+  const tenantMapConfig = await getTenantMapConfig(db, tenantId);
+  const result = await searchSystemAddressSuggest(stage, query, {
+    city,
+    street,
+    sourceState: tenantMapConfig || {},
+  });
+  if (!result || !result.ok) {
+    const error = result && result.error ? result.error : 'GEOCODER_UPSTREAM_ERROR';
+    const status = (
+      error === 'STAGE_REQUIRED'
+      || error === 'QUERY_REQUIRED'
+      || error === 'CITY_REQUIRED'
+      || error === 'STREET_REQUIRED'
+      || error === 'GEOCODER_NOT_CONFIGURED'
+    ) ? 400 : error === 'GEOCODER_RATE_LIMITED' ? 429 : 502;
+    return res.status(status).json({ ok: false, error });
+  }
+  return res.json({ ok: true, data: result.data });
+});
+
+app.get('/internal/address/city-suggest', authMiddleware, async (req, res) => {
+  if (!isAddressServiceConfigured()) {
+    return res.status(503).json({ ok: false, error: 'ADDRESS_SERVICE_NOT_CONFIGURED' });
+  }
+  const query = String((req.query && req.query.q) || '').trim();
+  const result = await suggestAddressServiceCities(query, {
+    limit: req.query && req.query.limit,
+  });
+  if (!result || !result.ok) {
+    const error = result && result.error ? result.error : 'ADDRESS_SERVICE_UNAVAILABLE';
+    const status = error === 'QUERY_REQUIRED' ? 400 : 503;
+    return res.status(status).json({ ok: false, error });
+  }
+  return res.json({ ok: true, data: result.data });
+});
+
+app.get('/internal/address/suggest', authMiddleware, async (req, res) => {
+  if (!isAddressServiceConfigured()) {
+    return res.status(503).json({ ok: false, error: 'ADDRESS_SERVICE_NOT_CONFIGURED' });
+  }
+  const stage = String((req.query && req.query.stage) || '').trim().toLowerCase() || 'street';
+  const query = String((req.query && req.query.q) || '').trim();
+  const city = String((req.query && req.query.city) || '').trim();
+  const cityId = String((req.query && req.query.city_id) || '').trim();
+  const cityCode = String((req.query && req.query.city_code) || '').trim();
+  const selectedSourceKey = String((req.query && req.query.selected_source_key) || '').trim();
+  const result = await suggestAddressServiceAddresses(query, {
+    stage,
+    city,
+    cityId,
+    cityCode,
+    selectedSourceKey,
+    limit: req.query && req.query.limit,
+  });
+  if (!result || !result.ok) {
+    const error = result && result.error ? result.error : 'ADDRESS_SERVICE_UNAVAILABLE';
+    const status = (
+      error === 'QUERY_REQUIRED'
+      || error === 'CITY_REQUIRED'
+    ) ? 400 : 503;
+    return res.status(status).json({ ok: false, error });
+  }
+  return res.json({ ok: true, data: result.data });
+});
+
+app.post('/internal/address/resolve', authMiddleware, async (req, res) => {
+  if (!isAddressServiceConfigured()) {
+    return res.status(503).json({ ok: false, error: 'ADDRESS_SERVICE_NOT_CONFIGURED' });
+  }
+  const result = await resolveAddressThroughService(req.body || {});
+  if (!result || !result.ok) {
+    const error = result && result.error ? result.error : 'ADDRESS_SERVICE_UNAVAILABLE';
+    const status = (
+      error === 'ADDRESS_REQUIRED'
+      || error === 'CITY_REQUIRED'
+      || error === 'CITY_SELECTION_REQUIRED'
+      || error === 'HOUSE_REQUIRED'
+      || error === 'ADDRESS_NOT_FOUND'
+    ) ? 400 : 503;
+    return res.status(status).json({ ok: false, error, data: result && result.data ? result.data : undefined });
+  }
+  return res.json(result);
+});
+
+app.get('/api/admin/system/address-suggest-local', authMiddleware, async (req, res) => {
+  const stage = String((req.query && req.query.stage) || '').trim().toLowerCase();
+  const query = String((req.query && req.query.q) || '').trim();
+  const city = String((req.query && req.query.city) || '').trim();
+  const citySourceKey = String((req.query && req.query.city_source_key) || '').trim();
+  const selectedSourceKey = String((req.query && req.query.selected_source_key) || '').trim();
+  if (isAddressServiceConfigured()) {
+    const result = stage === 'city'
+      ? await suggestAddressServiceCities(query, { limit: req.query && req.query.limit })
+      : await suggestAddressServiceAddresses(query, {
+        stage: stage || 'street',
+        city,
+        cityId: String((req.query && req.query.city_id) || '').trim(),
+        cityCode: String((req.query && req.query.city_code) || '').trim(),
+        selectedSourceKey,
+        limit: req.query && req.query.limit,
+      });
+    if (!result || !result.ok) {
+      const error = result && result.error ? result.error : 'ADDRESS_SERVICE_UNAVAILABLE';
+      const status = (
+        error === 'STAGE_REQUIRED'
+        || error === 'QUERY_REQUIRED'
+        || error === 'CITY_REQUIRED'
+      ) ? 400 : 503;
+      return res.status(status).json({ ok: false, error });
+    }
+    return res.json({ ok: true, data: result.data });
+  }
+  const result = await searchLocalAddressSuggest(stage, query, {
+    city,
+    citySourceKey,
+    selectedSourceKey,
+    tenantId: req.user && req.user.tenantId,
+  });
+  if (!result || !result.ok) {
+    const error = result && result.error ? result.error : 'LOCAL_ADDRESS_INDEX_FAILED';
+    const status = (
+      error === 'STAGE_REQUIRED'
+      || error === 'QUERY_REQUIRED'
+      || error === 'CITY_REQUIRED'
+    ) ? 400 : error === 'LOCAL_ADDRESS_INDEX_NOT_READY' ? 503 : 502;
+    return res.status(status).json({ ok: false, error });
+  }
+  return res.json({ ok: true, data: result.data });
 });
 
 // ------------------------------
@@ -1514,21 +2093,7 @@ server.on('listening', () => {
   console.log(`Passenger mode: ${String(process.env.IN_PASSENGER || '').trim() === '1' ? 'yes' : 'no'}`);
   console.log(`🚀 Сервер запущен на ${PORT}`);
   console.log(`📝 Откройте http://localhost:${PORT}/login в браузере`);
-  const telegramToken = process.env.TELEGRAM_BOT_TOKEN;
-  const webhookUrl = (process.env.TELEGRAM_WEBHOOK_URL || '').trim();
-  if (telegramToken && runtimePollingState.telegram_env_enabled) {
-    if (webhookUrl) {
-      setWebhook(telegramToken, webhookUrl)
-        .then(() => console.log('📱 Telegram: webhook зарегистрирован', webhookUrl))
-        .catch((e) => console.error('Telegram setWebhook error:', e.message));
-    } else {
-      try {
-        telegramEnvPollingHandle = startTelegramPolling(db, telegramToken) || null;
-      } catch (e) {
-        console.error('Telegram bot start error:', e.message);
-      }
-    }
-  }
+  syncSystemTelegramRuntime().catch((e) => console.error('Telegram runtime sync error:', e.message || e));
 
   try {
     startMaxPolling(db, helpers);

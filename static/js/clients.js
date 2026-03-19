@@ -133,6 +133,7 @@
   const elSearchWrap = $("#clientsSearchWrap");
   const elToolbarTitle = $("#clientsToolbarTitle");
   const elToolbarText = $("#clientsToolbarText");
+  const elToolbarBackBtn = $("#clientsToolbarBackBtn");
   const elSortToggle = $("#clientsSortToggle");
   const elSortDropdown = $("#clientsSortDropdown");
   const elSortWrap = $("#clientsSortWrap");
@@ -156,7 +157,28 @@
   const elDiscountDeleteBtn = $("#discountDeleteBtn");
   const elDiscountEditBtn = $("#discountEditBtn");
   const elDeMechanicType = $("#de_mechanic_type");
+  const elDeMechanicChoiceScroller = $("#de_mechanic_choice_scroller");
+  const elDeMechanicChoiceGrid = $("#de_mechanic_choice_grid");
   const elDeDescription = $("#de_description");
+  const elDePriority = $("#de_priority");
+  const elDeHideInBenefits = $("#de_hide_in_benefits");
+  const elDeHideInBenefitsHint = $("#de_hide_in_benefits_hint");
+  const elDePeriodEnabled = $("#de_period_enabled");
+  const elDePeriodFields = $("#de_period_fields");
+  const elDePeriodTrigger = $("#de_period_trigger");
+  const elDePeriodSummary = $("#de_period_summary");
+  const elDePeriodPopover = $("#de_period_popover");
+  const elDePeriodGrid = $("#de_period_grid");
+  const elDePeriodTitle = $("#de_period_title");
+  const elDePeriodPrev = $("#de_period_prev");
+  const elDePeriodNext = $("#de_period_next");
+  const elDePeriodReset = $("#de_period_reset");
+  let activeDiscountHelpTrigger = null;
+  let activeDiscountHelpPopover = null;
+  const elDeWeekdaysEnabled = $("#de_weekdays_enabled");
+  const elDeWeekdaysFields = $("#de_weekdays_fields");
+  const elDeTimeEnabled = $("#de_time_enabled");
+  const elDeTimeFields = $("#de_time_fields");
   const elDeSimpleWrap = $("#de_simple_wrap");
   const elDeSimpleVariant = $("#de_simple_variant");
   const elDeSimpleRegularWrap = $("#de_simple_regular_wrap");
@@ -175,6 +197,7 @@
   const elDePromoGenerateBtn = $("#de_promo_generate_btn");
   const elDePromoGenerateHint = $("#de_promo_generate_hint");
   const elDePromoCodesWrap = $("#de_promo_codes_wrap");
+  const elDePromoCodesToggle = $("#de_promo_codes_toggle");
   const elDePromoCodesList = $("#de_promo_codes_list");
   const elDePromoRewardType = $("#de_promo_reward_type");
   const elDePromoRewardVariantDiscountWrap = $("#de_promo_reward_variant_discount_wrap");
@@ -196,26 +219,97 @@
   const elDeAddPromoProductsBtn = $("#de_add_promo_products_btn");
   const elDeBuyXGetYWrap = $("#de_buy_x_get_y_wrap");
   const elDeBuyQty = $("#de_buy_qty");
+  const elDeBuyQtyMinus = $("#de_buy_qty_minus");
+  const elDeBuyQtyPlus = $("#de_buy_qty_plus");
   const elDeRewardQty = $("#de_reward_qty");
+  const elDeRewardQtyMinus = $("#de_reward_qty_minus");
+  const elDeRewardQtyPlus = $("#de_reward_qty_plus");
+  const elDeBuyConditionUiMode = $("#de_buy_condition_ui_mode");
   const elDeBuyQualifyingMode = $("#de_buy_qualifying_mode");
   const elDeBuyRepeatMode = $("#de_buy_repeat_mode");
   const elDeBuyRewardSource = $("#de_buy_reward_source");
   const elDeBuyRewardKind = $("#de_buy_reward_kind");
+  const elDeBuyVisualCard = $("#de_buy_visual_card");
+  const elDeBuyVisualMeta = $("#de_buy_visual_meta");
+  const elDeBuyVisualRows = $("#de_buy_visual_rows");
   const elDeBuyConditionProductsWrap = $("#de_buy_condition_products_wrap");
+  const elDeBuyConditionProductsLabel = $("#de_buy_condition_products_label");
   const elDeBuyConditionProductsChips = $("#de_buy_condition_products_chips");
   const elDeAddBuyConditionProductsBtn = $("#de_add_buy_condition_products_btn");
+  const elDeAddBuyConditionProductsBtnText = $("#de_add_buy_condition_products_btn_text");
   const elDeBuyRewardProductsWrap = $("#de_buy_reward_products_wrap");
+  const elDeBuyRewardProductsLabel = $("#de_buy_reward_products_label");
   const elDeBuyRewardProductsChips = $("#de_buy_reward_products_chips");
   const elDeAddBuyRewardProductsBtn = $("#de_add_buy_reward_products_btn");
+  const elDeAddBuyRewardProductsBtnText = $("#de_add_buy_reward_products_btn_text");
   const elDeBuyRewardDiscountWrap = $("#de_buy_reward_discount_wrap");
   const elDeBuyRewardDiscountType = $("#de_buy_reward_discount_type");
   const elDeBuyRewardDiscountValue = $("#de_buy_reward_discount_value");
   const elDeThresholdWrap = $("#de_threshold_wrap");
   const elDeThresholdBasis = $("#de_threshold_basis");
   const elDeThresholdApplyMode = $("#de_threshold_apply_mode");
+  const elDeThresholdSlotCount = $("#de_threshold_slot_count");
+  const elDeThresholdSlotCountMinus = $("#de_threshold_slot_count_minus");
+  const elDeThresholdSlotCountPlus = $("#de_threshold_slot_count_plus");
   const elDeThresholdTiersList = $("#de_threshold_tiers_list");
+  const elDeThresholdRewardPicker = $("#de_threshold_reward_picker");
+  const elDeThresholdRewardPickerTypes = $("#de_threshold_reward_picker_types");
+  const elDeThresholdRewardPickerList = $("#de_threshold_reward_picker_list");
   const elDeAddThresholdTierBtn = $("#de_add_threshold_tier_btn");
+  const elDeLoyaltyProgressWrap = $("#de_loyalty_progress_wrap");
+  const elDeProgressBasis = $("#de_progress_basis");
+  const elDeProgressThresholdValue = $("#de_progress_threshold_value");
+  const elDeProgressBuyQty = $("#de_progress_buy_qty");
+  const elDeProgressBuyQtyMinus = $("#de_progress_buy_qty_minus");
+  const elDeProgressBuyQtyPlus = $("#de_progress_buy_qty_plus");
+  const elDeProgressRewardQty = $("#de_progress_reward_qty");
+  const elDeProgressRewardQtyMinus = $("#de_progress_reward_qty_minus");
+  const elDeProgressRewardQtyPlus = $("#de_progress_reward_qty_plus");
+  const elDeProgressCountsVisualRows = $("#de_progress_counts_visual_rows");
+  const elDeProgressStatusFilter = $("#de_progress_status_filter");
+  const elDeProgressScopeModeWrap = $("#de_progress_scope_mode_wrap");
+  const elDeProgressScopeMode = $("#de_progress_scope_mode");
+  const elDeProgressScopeItemsWrap = $("#de_progress_scope_items_wrap");
+  const elDeProgressScopeItemsLabel = $("#de_progress_scope_items_label");
+  const elDeProgressScopeVisualRows = $("#de_progress_scope_visual_rows");
+  const elDeProgressScopeItemsChips = $("#de_progress_scope_items_chips");
+  const elDeAddProgressScopeItemsBtn = $("#de_add_progress_scope_items_btn");
+  const elDeAddProgressScopeItemsBtnText = $("#de_add_progress_scope_items_btn_text");
+  const elDeProgressPendingRewardMode = $("#de_progress_pending_reward_mode");
+  const elDeProgressRewardKind = $("#de_progress_reward_kind");
+  const elDeProgressIssueMode = $("#de_progress_issue_mode");
+  const elDeProgressRedemptionMode = $("#de_progress_redemption_mode");
+  const elDeProgressRewardGiftWrap = $("#de_progress_reward_gift_wrap");
+  const elDeProgressRewardGiftVisualRows = $("#de_progress_reward_gift_visual_rows");
+  const elDeProgressRewardGiftChips = $("#de_progress_reward_gift_chips");
+  const elDeAddProgressRewardGiftBtn = $("#de_add_progress_reward_gift_btn");
+  const elDeAddProgressRewardGiftBtnText = $("#de_add_progress_reward_gift_btn_text");
+  const elDeProgressRewardDiscountWrap = $("#de_progress_reward_discount_wrap");
+  const elDeProgressDiscountApplyTo = $("#de_progress_discount_apply_to");
+  const elDeProgressDiscountType = $("#de_progress_discount_type");
+  const elDeProgressDiscountValue = $("#de_progress_discount_value");
+  const elDeProgressDiscountProductsWrap = $("#de_progress_discount_products_wrap");
+  const elDeProgressDiscountProductsLabel = $("#de_progress_discount_products_label");
+  const elDeProgressDiscountVisualRows = $("#de_progress_discount_visual_rows");
+  const elDeProgressDiscountProductsChips = $("#de_progress_discount_products_chips");
+  const elDeAddProgressDiscountProductsBtn = $("#de_add_progress_discount_products_btn");
+  const elDeAddProgressDiscountProductsBtnText = $("#de_add_progress_discount_products_btn_text");
+  const elDeProgressPromoWrap = $("#de_progress_promo_wrap");
+  const elDeProgressPromoSourceSummary = $("#de_progress_promo_source_summary");
+  const elDeProgressPromoSourceSummaryText = $("#de_progress_promo_source_summary_text");
+  const elDeProgressAttachPromoBtn = $("#de_progress_attach_promo_btn");
+  const elDeProgressClearPromoBtn = $("#de_progress_clear_promo_btn");
+  const elDeProgressPromoSourcePicker = $("#de_progress_promo_source_picker");
+  const elDeProgressPromoSourceList = $("#de_progress_promo_source_list");
+  const elDeProgressPromoSourceHint = $("#de_progress_promo_source_hint");
+  const elDeSlotPicker = $("#de_slot_picker");
+  const elDeSlotPickerTitle = $("#de_slot_picker_title");
+  const elDeSlotPickerTypes = $("#de_slot_picker_types");
   const elDeProductsWrap = $("#de_products_wrap");
+  const elDeProductsLabel = $("#de_products_label");
+  const elDePromoProductsLabel = $("#de_promo_products_label");
+  const elDeAddProductsBtnText = $("#de_add_products_btn_text");
+  const elDeAddPromoProductsBtnText = $("#de_add_promo_products_btn_text");
 
   if (elDePromoCodeMode && elDePromoCodeMode.options.length >= 2) {
     elDePromoCodeMode.options[0].text = 'Общий';
@@ -228,9 +322,11 @@
 
   // Discount picker elements
   const elDeProductsChips = $("#de_products_chips");
-  const elDeCustomersChips = $("#de_customers_chips");
   const elDeAddProductsBtn = $("#de_add_products_btn");
+  const elDeAudienceMode = $("#de_audience_mode");
+  const elDeCustomersChips = $("#de_customers_chips");
   const elDeAddCustomersBtn = $("#de_add_customers_btn");
+  const elDeCustomersHint = $("#de_customers_hint");
   const elDiscountProductPicker = $("#discountProductPicker");
   const elDiscountCustomerPicker = $("#discountCustomerPicker");
   const elDiscountPickerTabs = $("#discountPickerTabs");
@@ -242,6 +338,9 @@
   const elDiscountCustomerPickerSelectAll = $("#discountCustomerPickerSelectAll");
   const elDiscountCustomerPickerList = $("#discountCustomerPickerList");
   const elDiscountPickerFooter = $("#discountPickerFooter");
+  const elDiscountPickerConfigMode = $("#discountPickerConfigMode");
+  const elDiscountPickerModeAnyBtn = $("#discountPickerModeAnyBtn");
+  const elDiscountPickerModeExactBtn = $("#discountPickerModeExactBtn");
   const elDiscountPickerCancelBtn = $("#discountPickerCancelBtn");
   const elDiscountPickerApplyBtn = $("#discountPickerApplyBtn");
 
@@ -351,24 +450,72 @@
     discounts: [],
     discountsTotals: { all: 0 },
     activeDiscountFilter: "all",
+    activeDiscountTypeFilter: "all",
     activeDiscountId: null,
     editingDiscountId: null,    // ID редактируемой скидки
     activeDiscount: null,       // Данные активной скидки
     discountOrders: [],         // Заказы с применённой скидкой
+    discountCenterMode: 'list',
     // Picker для скидок
     discountPickerLevel: null,        // null | 'products' | 'customers'
     discountPickerTarget: 'discount_products',
+    discountPickerEntityType: 'product',
     discountPickerSelection: new Set(),
     discountPickerCategoryId: null,   // Активная категория в picker
     discountPickerProducts: [],       // Список товаров в текущей категории
     discountPickerQuery: '',          // Поисковый запрос
+    discountPickerExpandedProductId: null,
+    discountPickerProductMap: new Map(),
+    discountPickerVariantsByProduct: new Map(),
+    discountPickerVariantRequests: new Map(),
+    discountPickerLoadingVariantProductIds: new Set(),
+    discountPickerVariantSelections: new Map(),
+    discountPickerIngredientsByProduct: new Map(),
+    discountPickerIngredientRequests: new Map(),
+    discountPickerLoadingIngredientProductIds: new Set(),
+    discountPickerIngredientSelections: new Map(),
+    discountPickerUnitConversions: [],
+    discountPickerUnitConversionsPromise: null,
+    discountPickerTenantRounding: null,
+    discountPickerTenantRoundingLoaded: false,
+    discountPickerTenantRoundingPromise: null,
+    discountCustomerPickerMode: 'specific',
     // Выбранные элементы для скидки
     discountSelectedProducts: [],     // [{type:'product'|'category'|'combo', id, title}]
     discountSelectedCustomers: [],    // [{type:'category'|'customer', id, title}]
+    discountAudienceAccordionExpanded: false,
+    discountProductsAccordionExpanded: false,
+    discountProgressDiscountAccordionExpanded: false,
+    discountPromoCodesAccordionExpanded: false,
+    discountBuyConditionUiMode: 'product',
+    discountProductsConfigMode: 'any',
+    discountBuyConditionConfigMode: 'any',
+    discountBuyRewardConfigMode: 'any',
     discountBuyConditionProducts: [],
+    discountBuyRewardUiMode: '',
     discountBuyRewardProducts: [],
+    discountProgressQualifyingItemsConfigMode: 'any',
+    discountProgressQualifyingItems: [],
+    discountProgressRewardUiMode: '',
+    discountProgressGiftProductsConfigMode: 'any',
+    discountProgressGiftProducts: [],
+    discountProgressDiscountProductsConfigMode: 'any',
+    discountProgressDiscountProducts: [],
+    discountProgressPromoSource: null,
+    discountSharedPromoSources: [],
+    discountSharedPromoSourcesLoaded: false,
+    discountSimpleDiscountSources: [],
+    discountSimpleDiscountSourcesLoaded: false,
     discountThresholdTiers: [],
     discountThresholdTierSeq: 1,
+    discountThresholdRewardPickerTierId: null,
+    discountSlotPickerContext: null,
+    discountPeriod: {
+      start: null,
+      end: null,
+      viewYear: null,
+      viewMonth: null,
+    },
     // Кэш данных для picker
     catalogCategories: [],
     catalogProducts: [],
@@ -905,6 +1052,57 @@
 
   state.clientDetailsCache = loadClientDetailsCache();
 
+  function normalizeDiscountProductConfigMode(value) {
+    return String(value || '').trim().toLowerCase() === 'exact' ? 'exact' : 'any';
+  }
+
+  function normalizeDiscountProductConfigPayload(value, fallbackProductId = null) {
+    let source = value;
+    if (typeof source === 'string') {
+      try {
+        source = JSON.parse(source);
+      } catch {
+        source = null;
+      }
+    }
+    if (!source || typeof source !== 'object') return null;
+    const productId = Number(source.product_id || fallbackProductId || 0);
+    if (!(productId > 0)) return null;
+    const variantGroupId = Number(source.variant_group_id || 0);
+    const variantValueIndex = Number(source.variant_value_index);
+    const options = (Array.isArray(source.options) ? source.options : [])
+      .map((option) => ({
+        id: Number(option?.id || 0),
+        qty: Math.max(1, Number(option?.qty ?? option?.quantity ?? 1) || 1),
+        target_product_id: Number(option?.target_product_id || option?.product_id || 0) || null,
+        variant_group_id: Number(option?.variant_group_id || 0) || null,
+        variant_value_index: Number.isFinite(Number(option?.variant_value_index))
+          ? Number(option.variant_value_index)
+          : null,
+      }))
+      .filter((option) => option.id > 0)
+      .sort((a, b) => (
+        a.id - b.id
+        || Number(a.target_product_id || 0) - Number(b.target_product_id || 0)
+        || Number(a.variant_group_id || 0) - Number(b.variant_group_id || 0)
+        || Number(a.variant_value_index || 0) - Number(b.variant_value_index || 0)
+      ));
+    const ingredients = (Array.isArray(source.ingredients) ? source.ingredients : [])
+      .map((ingredient) => ({
+        ingredient_id: Number(ingredient?.ingredient_id || ingredient?.product_id || 0),
+        qty: Math.round((Number(ingredient?.qty ?? ingredient?.quantity ?? 0) || 0) * 1000) / 1000,
+      }))
+      .filter((ingredient) => ingredient.ingredient_id > 0)
+      .sort((a, b) => a.ingredient_id - b.ingredient_id);
+    return {
+      product_id: productId,
+      variant_group_id: variantGroupId > 0 ? variantGroupId : null,
+      variant_value_index: Number.isFinite(variantValueIndex) && variantValueIndex >= 0 ? variantValueIndex : null,
+      options,
+      ingredients,
+    };
+  }
+
   // -----------------------------
   // Tabs state (top-level: switching between clients)
   // -----------------------------
@@ -960,6 +1158,95 @@
     return `${type}:${id}`;
   }
 
+  const DISCOUNT_TYPE_FILTER_ITEMS = [
+    { key: 'simple_discount', title: 'Скидка' },
+    { key: 'promo_code', title: 'Промокод' },
+    { key: 'buy_x_get_y', title: '1+1' },
+    { key: 'loyalty_progress', title: 'Накопительная' },
+    { key: 'threshold', title: 'Пороговая' },
+  ];
+
+  function getDiscountTypeFilterKey(discount) {
+    const mechanic = getDiscountMechanic(discount);
+    if (mechanic.type === 'buy_x_get_y') return 'buy_x_get_y';
+    if (mechanic.type === 'loyalty_progress') return 'loyalty_progress';
+    if (mechanic.type === 'threshold') return 'threshold';
+    return mechanic.simple_variant === 'promo_code' ? 'promo_code' : 'simple_discount';
+  }
+
+  function getDiscountTypeFilterCounts() {
+    const counts = {
+      all: state.discounts.length,
+      simple_discount: 0,
+      promo_code: 0,
+      buy_x_get_y: 0,
+      loyalty_progress: 0,
+      threshold: 0,
+    };
+    state.discounts.forEach((discount) => {
+      const key = getDiscountTypeFilterKey(discount);
+      if (Object.prototype.hasOwnProperty.call(counts, key)) {
+        counts[key] += 1;
+      }
+    });
+    return counts;
+  }
+
+  function getFilteredDiscounts() {
+    const filterKey = String(state.activeDiscountTypeFilter || 'all');
+    if (filterKey === 'all') return state.discounts;
+    return state.discounts.filter((discount) => getDiscountTypeFilterKey(discount) === filterKey);
+  }
+
+  function syncDiscountToolbarState() {
+    if (!elToolbarBackBtn) return;
+    const shouldShow = state.currentView === 'discounts'
+      && state.discountCenterMode === 'history'
+      && state.editingDiscountId === null
+      && !!state.activeDiscount;
+    elToolbarBackBtn.classList.toggle('hidden', !shouldShow);
+    elToolbarBackBtn.disabled = !shouldShow;
+  }
+
+  function returnToDiscountsList() {
+    state.discountCenterMode = 'list';
+    syncDiscountToolbarState();
+    if (state.currentView === 'discounts') {
+      renderDiscountsList();
+    }
+  }
+
+  function renderDiscountCenterContent() {
+    if (state.discountCenterMode === 'history') {
+      renderDiscountOrders();
+      return;
+    }
+    renderDiscountsList();
+  }
+
+  function openDiscountHistory(discount, { reload = true } = {}) {
+    const targetDiscount = discount && typeof discount === 'object'
+      ? discount
+      : state.discounts.find((item) => Number(item?.id || 0) === Number(discount || 0));
+    const discountId = Number(targetDiscount?.id || 0);
+    if (!(discountId > 0)) {
+      returnToDiscountsList();
+      return;
+    }
+    state.activeDiscount = targetDiscount;
+    state.activeDiscountId = discountId;
+    state.discountCenterMode = 'history';
+    syncDiscountToolbarState();
+    if (state.currentView !== 'discounts') return;
+    if (reload) {
+      state.discountOrders = [];
+      renderDiscountOrders();
+      loadDiscountOrders(discountId);
+      return;
+    }
+    renderDiscountOrders();
+  }
+
   function renderTabs() {
     if (!clientTabsHeader || !clientTabs) return;
     const hasTabs = tabsState.tabs.length > 0;
@@ -1006,21 +1293,26 @@
 
     renderTabs();
     hideEmptyState();
-    
+
     // Обработка активации таба в зависимости от типа
     if (tab.type === 'discount') {
       const discount = state.discounts.find(d => d.id === tab.id);
       if (discount) {
         state.activeDiscount = discount;
         state.activeDiscountId = discount.id;
+        state.editingDiscountId = null;
         renderDiscountInfo(discount);
+        if (state.currentView === 'discounts' && state.discountCenterMode === 'history') {
+          openDiscountHistory(discount, { reload: true });
+        }
       }
     }
-    
+
     if (typeof tab.onActivate === "function") {
       await tab.onActivate();
     }
-    
+
+    syncDiscountToolbarState();
     updateRightPanel();
   }
 
@@ -1064,6 +1356,7 @@
         state.editingDiscountId = null;
         state.activeDiscount = null;
         state.discountOrders = [];
+        state.discountCenterMode = 'list';
       }
     } else if (closedTab.type === 'order') {
       if (state.activeOrderId === closedTab.id) {
@@ -1079,6 +1372,10 @@
       } else {
         tabsState.activeKey = null;
         renderTabs();
+        if (state.currentView === 'discounts') {
+          renderDiscountsList();
+        }
+        syncDiscountToolbarState();
         updateRightPanel();
         $$(".order-row.is-active", document).forEach((n) => n.classList.remove("is-active"));
       }
@@ -1089,7 +1386,7 @@
 
   // Tab click events (top-level)
   if (clientTabs) {
-    clientTabs.addEventListener("click", (e) => {
+    clientTabs.addEventListener("click", async (e) => {
       const closeBtn = e.target.closest("[data-tab-close]");
       if (closeBtn) {
         e.stopPropagation();
@@ -1100,7 +1397,15 @@
       const tabEl = e.target.closest("[data-tab-key]");
       if (tabEl) {
         const key = tabEl.dataset.tabKey;
-        if (key) setActiveTabKey(key);
+        const tab = tabsState.tabs.find((item) => item.key === key);
+        const shouldOpenHistory = tab?.type === 'discount'
+          && (state.currentView !== 'discounts' || state.discountCenterMode !== 'history');
+        if (key) {
+          await setActiveTabKey(key);
+        }
+        if (shouldOpenHistory && tab?.type === 'discount') {
+          openDiscountHistory(state.activeDiscount || tab.id, { reload: true });
+        }
       }
     });
     clientTabs.addEventListener("wheel", (e) => {
@@ -1109,6 +1414,12 @@
         clientTabs.scrollLeft += e.deltaY;
       }
     }, { passive: false });
+  }
+
+  if (elToolbarBackBtn) {
+    elToolbarBackBtn.addEventListener('click', () => {
+      returnToDiscountsList();
+    });
   }
 
   document.addEventListener('click', (e) => {
@@ -1413,7 +1724,7 @@
   function renderFilters() {
     if (!elFilters) return;
     elFilters.innerHTML = "";
-    
+
     // Базовый фильтр "Все клиенты"
     const btnAll = document.createElement("button");
     btnAll.type = "button";
@@ -1504,6 +1815,60 @@
     });
   }
 
+  function setDiscountChoiceOptionVisible(targetId, optionValue, isVisible) {
+    if (!targetId || !optionValue) return;
+    const control = document.getElementById(targetId);
+    if (control) {
+      const option = control.querySelector(`option[value="${optionValue}"]`);
+      if (option) {
+        option.hidden = !isVisible;
+      }
+    }
+    const group = elDiscountEditorForm?.querySelector(`[data-discount-choice-group="${targetId}"]`);
+    if (!group) return;
+    const button = group.querySelector(`[data-discount-choice-value="${optionValue}"]`);
+    if (button) {
+      button.hidden = !isVisible;
+      button.classList.toggle('hidden', !isVisible);
+      button.setAttribute('aria-hidden', !isVisible ? 'true' : 'false');
+    }
+  }
+
+  function getDiscountMechanicChoiceValue() {
+    const mechanicType = normalizeDiscountMechanicType(elDeMechanicType?.value || 'simple_discount');
+    const simpleVariant = normalizeSimpleVariant(elDeSimpleVariant?.value || 'percent');
+    if (mechanicType === 'simple_discount' && simpleVariant === 'promo_code') {
+      return 'promo_code';
+    }
+    return mechanicType;
+  }
+
+  function syncDiscountMechanicChoiceGrid() {
+    if (!elDeMechanicChoiceGrid) return;
+    const currentValue = getDiscountMechanicChoiceValue();
+    elDeMechanicChoiceGrid.querySelectorAll('[data-discount-mechanic-choice]').forEach((button) => {
+      const isActive = String(button.getAttribute('data-discount-mechanic-choice') || '') === currentValue;
+      button.classList.toggle('is-active', isActive);
+      button.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+    });
+  }
+
+  function bindHorizontalWheelScroll(el) {
+    if (!el || el.dataset.horizontalWheelBound === '1') return;
+    el.dataset.horizontalWheelBound = '1';
+    el.addEventListener('wheel', (e) => {
+      if (e.ctrlKey) return;
+      const maxScrollLeft = Math.max(0, el.scrollWidth - el.clientWidth);
+      if (!(maxScrollLeft > 0)) return;
+      const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+      if (!delta) return;
+      const nextScrollLeft = Math.max(0, Math.min(maxScrollLeft, el.scrollLeft + delta));
+      if (nextScrollLeft === el.scrollLeft) return;
+      e.preventDefault();
+      el.scrollLeft = nextScrollLeft;
+    }, { passive: false });
+  }
+
   function syncDiscountChoiceGroups() {
     syncDiscountChoiceGroup('de_discount_type');
     syncDiscountChoiceGroup('de_activation_mode');
@@ -1538,7 +1903,7 @@
   }
 
   function normalizeDiscountMechanicType(value) {
-    return ['simple_discount', 'buy_x_get_y', 'threshold'].includes(String(value || '').trim())
+    return ['simple_discount', 'buy_x_get_y', 'threshold', 'loyalty_progress'].includes(String(value || '').trim())
       ? String(value || '').trim()
       : 'simple_discount';
   }
@@ -1550,22 +1915,129 @@
         type: String(item?.type || item?.entity_type || 'product'),
         id: Number(item?.id || item?.entity_id || 0),
         title: String(item?.title || '').trim(),
+        photo: String(item?.photo || item?.image_url || '').trim(),
+        product_config: normalizeDiscountProductConfigPayload(item?.product_config, Number(item?.id || item?.entity_id || 0)),
       }))
       .filter((item) => item.id > 0);
   }
 
+  function cloneDiscountPromoSource(source = null) {
+    if (!source || typeof source !== 'object') return null;
+    const promoCodeId = Number(source.source_promo_code_id || source.promo_code_id || 0);
+    const discountId = Number(source.source_discount_id || source.discount_id || 0);
+    const code = String(source.source_code || source.code || '').trim();
+    if (!(promoCodeId > 0) || !code) return null;
+    return {
+      source_promo_code_id: promoCodeId,
+      source_discount_id: discountId > 0 ? discountId : null,
+      source_code: code,
+      source_discount_title: String(source.source_discount_title || source.discount_title || source.title || '').trim(),
+      usage_limit: source.usage_limit == null ? null : Number(source.usage_limit || 0),
+      usage_count: Number(source.usage_count || 0),
+      is_active: source.is_active !== false && source.is_active !== 0,
+      promo_code_is_active: source.promo_code_is_active !== false && source.promo_code_is_active !== 0,
+    };
+  }
+
+  function cloneDiscountSimpleSource(source = null) {
+    if (!source || typeof source !== 'object') return null;
+    const discountId = Number(source.discount_id || source.source_discount_id || source.id || 0);
+    if (!(discountId > 0)) return null;
+    return {
+      discount_id: discountId,
+      title: String(source.title || source.source_discount_title || source.discount_title || '').trim(),
+      discount_type: normalizeSimpleVariant(source.discount_type || source.type || 'percent'),
+      discount_value: source.discount_value == null ? null : Number(source.discount_value || 0),
+      apply_to: String(source.apply_to || 'order').trim() || 'order',
+      is_active: source.is_active !== false && source.is_active !== 0,
+    };
+  }
+
+  function normalizeThresholdTierRewardKindUi(partial = {}) {
+    const raw = String(partial.reward_kind || '').trim().toLowerCase();
+    if (['product', 'product_list', 'discount_ref', 'promo_code_ref'].includes(raw)) {
+      return raw;
+    }
+    if (raw === 'gift') {
+      const products = cloneDiscountEntities(partial.reward_products || [])
+        .filter((item) => String(item?.type || '').trim() === 'product');
+      return products.length > 1 ? 'product_list' : 'product';
+    }
+    if (raw === 'product_discount' || raw === 'order_discount') {
+      return 'discount_ref';
+    }
+    return 'product';
+  }
+
   function buildEmptyThresholdTier(partial = {}) {
     const nextId = partial.id || `tier_${state.discountThresholdTierSeq++}`;
+    const rewardKind = normalizeThresholdTierRewardKindUi(partial);
+    const rewardProducts = cloneDiscountEntities(partial.reward_products || [])
+      .filter((item) => String(item?.type || '').trim() === 'product');
     return {
       id: nextId,
       min_amount: partial.min_amount ?? '',
-      reward_kind: partial.reward_kind || 'gift',
-      reward_products: cloneDiscountEntities(partial.reward_products || []),
+      buy_qty: 1,
+      reward_qty: 1,
+      reward_kind: rewardKind,
+      reward_products_config_mode: normalizeDiscountProductConfigMode(partial.reward_products_config_mode || partial.products_config_mode || 'any'),
+      reward_products: rewardKind === 'product'
+        ? rewardProducts.slice(0, 1)
+        : (rewardKind === 'product_list' ? rewardProducts : []),
+      reward_discount_source: rewardKind === 'discount_ref'
+        ? cloneDiscountSimpleSource(partial.reward_discount_source)
+        : null,
+      reward_promo_source: rewardKind === 'promo_code_ref'
+        ? cloneDiscountPromoSource(partial.reward_promo_source)
+        : null,
       reward_discount: {
         discount_type: partial.reward_discount?.discount_type || 'percent',
         discount_value: partial.reward_discount?.discount_value ?? '',
       },
     };
+  }
+
+  function normalizeDiscountProgressBasis(value) {
+    const raw = String(value || '').trim();
+    return ['orders', 'items', 'amount'].includes(raw) ? raw : 'orders';
+  }
+
+  function normalizeDiscountProgressStatusFilter(value) {
+    const raw = String(value || '').trim();
+    return ['any', 'paid', 'completed'].includes(raw) ? raw : 'any';
+  }
+
+  function normalizeDiscountProgressScopeMode(value) {
+    const raw = String(value || '').trim();
+    return ['none', 'product', 'product_list', 'category'].includes(raw) ? raw : 'none';
+  }
+
+  function normalizeDiscountProgressRewardKind(value) {
+    const raw = String(value || '').trim();
+    return ['gift', 'discount', 'promo_code'].includes(raw) ? raw : 'gift';
+  }
+
+  function normalizeDiscountProgressIssueMode(value) {
+    const raw = String(value || '').trim();
+    return ['automatic', 'manual', 'code'].includes(raw) ? raw : 'automatic';
+  }
+
+  function normalizeDiscountProgressPendingRewardMode(value) {
+    const raw = String(value || '').trim();
+    return ['stack', 'single_pending'].includes(raw) ? raw : 'stack';
+  }
+
+  function normalizeDiscountProgressRedemptionMode(value) {
+    const raw = String(value || '').trim();
+    return ['reset', 'subtract_threshold', 'keep_progress'].includes(raw) ? raw : 'reset';
+  }
+
+  function normalizeDiscountVisualCount(value, fallback = 1) {
+    const parsed = parseInt(value, 10);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+    return fallback;
   }
 
   function getDiscountMechanic(discount) {
@@ -1593,8 +2065,8 @@
     if (mechanicType === 'threshold') {
       return {
         type: 'threshold',
-        threshold_basis: mechanic.threshold_basis === 'after_discounts' ? 'after_discounts' : 'before_discounts',
-        threshold_apply_mode: mechanic.threshold_apply_mode === 'cumulative' ? 'cumulative' : 'best_only',
+        threshold_basis: 'before_discounts',
+        threshold_apply_mode: 'best_only',
         tiers: Array.isArray(mechanic.tiers) && mechanic.tiers.length
           ? mechanic.tiers.map((tier) => buildEmptyThresholdTier(tier))
           : [buildEmptyThresholdTier()],
@@ -1620,7 +2092,8 @@
 
   function formatDiscountMechanicText(discount) {
     const mechanic = getDiscountMechanic(discount);
-    if (mechanic.type === 'buy_x_get_y') return '5+1';
+    if (mechanic.type === 'buy_x_get_y') return '1+1';
+    if (mechanic.type === 'loyalty_progress') return 'Накопительная';
     if (mechanic.type === 'threshold') return 'Пороговая';
     return 'Скидка';
   }
@@ -1674,16 +2147,14 @@
   function syncDiscountChoiceGroups() {
     syncDiscountChoiceGroup('de_mechanic_type');
     syncDiscountChoiceGroup('de_discount_type');
+    syncDiscountChoiceGroup('de_threshold_basis');
+    syncDiscountChoiceGroup('de_threshold_apply_mode');
   }
 
   function buildThresholdTierProductsHtml(items) {
     const rows = cloneDiscountEntities(items);
-    if (!rows.length) return '<span class="discount-chips-empty">Не выбрано</span>';
-    return rows.map((item) => `
-      <span class="discount-chip">
-        <span class="discount-chip-text">${escapeHtml(item.title || `#${item.id}`)}</span>
-      </span>
-    `).join('');
+    if (!rows.length) return '';
+    return rows.map((item) => buildDiscountEntityTileHtml(item)).join('');
   }
 
   function renderThresholdTiers() {
@@ -1691,58 +2162,18 @@
     if (!Array.isArray(state.discountThresholdTiers) || !state.discountThresholdTiers.length) {
       state.discountThresholdTiers = [buildEmptyThresholdTier()];
     }
-
-    elDeThresholdTiersList.innerHTML = state.discountThresholdTiers.map((tier, index) => {
-      const rewardKind = tier.reward_kind || 'gift';
-      const showProducts = rewardKind !== 'order_discount';
-      const showDiscount = rewardKind === 'product_discount' || rewardKind === 'order_discount';
-      return `
-        <div class="discount-threshold-tier" data-threshold-tier-id="${escapeHtml(tier.id)}">
-          <div class="discount-threshold-tier-head">
-            <div class="discount-threshold-tier-title">Ступень ${index + 1}</div>
-            <button type="button" class="btn btn-sm${state.discountThresholdTiers.length <= 1 ? ' hidden' : ''}" data-threshold-tier-remove="${escapeHtml(tier.id)}">Удалить</button>
-          </div>
-          <div class="form-row-2">
-            <div class="field-wrap">
-              <label class="field-label">Порог</label>
-              <input class="control" type="number" step="0.01" min="0" data-threshold-field="min_amount" data-threshold-tier-id="${escapeHtml(tier.id)}" value="${escapeHtml(tier.min_amount ?? '')}" placeholder="500" />
-            </div>
-            <div class="field-wrap">
-              <label class="field-label">Тип награды</label>
-              <select class="control hidden discount-editor-native-select" data-threshold-field="reward_kind" data-threshold-tier-id="${escapeHtml(tier.id)}">
-                <option value="gift"${rewardKind === 'gift' ? ' selected' : ''}>Подарок</option>
-                <option value="product_discount"${rewardKind === 'product_discount' ? ' selected' : ''}>Товар со скидкой</option>
-                <option value="order_discount"${rewardKind === 'order_discount' ? ' selected' : ''}>Скидка на чек</option>
-              </select>
-            </div>
-          </div>
-          <div class="field-wrap${showProducts ? '' : ' hidden'}">
-            <label class="field-label">Товары-награды</label>
-            <div class="discount-chips-wrap">
-              <div class="discount-chips">${buildThresholdTierProductsHtml(tier.reward_products)}</div>
-              <button type="button" class="btn btn-sm" data-threshold-tier-products="${escapeHtml(tier.id)}">
-                <i class="fas fa-plus"></i> Добавить товары
-              </button>
-            </div>
-          </div>
-          <div class="form-row-2${showDiscount ? '' : ' hidden'}">
-            <div class="field-wrap">
-              <label class="field-label">Тип скидки</label>
-              <select class="control hidden discount-editor-native-select" data-threshold-field="discount_type" data-threshold-tier-id="${escapeHtml(tier.id)}">
-                <option value="percent"${tier.reward_discount?.discount_type === 'percent' ? ' selected' : ''}>Процент (%)</option>
-                <option value="fixed"${tier.reward_discount?.discount_type === 'fixed' ? ' selected' : ''}>Фиксированная сумма (₽)</option>
-                <option value="special_price"${tier.reward_discount?.discount_type === 'special_price' ? ' selected' : ''}>Специальная цена</option>
-              </select>
-            </div>
-            <div class="field-wrap">
-              <label class="field-label">Значение</label>
-              <input class="control" type="number" step="0.01" min="0" data-threshold-field="discount_value" data-threshold-tier-id="${escapeHtml(tier.id)}" value="${escapeHtml(tier.reward_discount?.discount_value ?? '')}" placeholder="10" />
-            </div>
-          </div>
-        </div>
-      `;
-    }).join('');
-    syncDiscountEditorCustomSelects(elDeThresholdTiersList);
+    if (elDeThresholdBasis) elDeThresholdBasis.value = 'before_discounts';
+    if (elDeThresholdApplyMode) elDeThresholdApplyMode.value = 'best_only';
+    if (elDeThresholdSlotCount) {
+      elDeThresholdSlotCount.value = String(state.discountThresholdTiers.length);
+    }
+    const thresholdVisualWidth = Number(elDeThresholdTiersList?.clientWidth || elDeThresholdWrap?.clientWidth || 0);
+    elDeThresholdTiersList.innerHTML = buildThresholdTierSlotRowsHtml(state.discountThresholdTiers, thresholdVisualWidth);
+    if (state.discountThresholdRewardPickerTierId && !getThresholdTierById(state.discountThresholdRewardPickerTierId)) {
+      closeDiscountThresholdRewardPicker();
+    } else if (state.discountThresholdRewardPickerTierId) {
+      renderDiscountThresholdRewardPicker();
+    }
   }
 
   function renderDiscountMechanicUi() {
@@ -1750,6 +2181,7 @@
     const mechanicType = elDeMechanicType?.value || 'simple_discount';
     const isBuyXGetY = mechanicType === 'buy_x_get_y';
     const isThreshold = mechanicType === 'threshold';
+    const isLoyalty = mechanicType === 'loyalty_progress';
     const qualifyingMode = elDeBuyQualifyingMode?.value || 'same_sku';
     const rewardSource = elDeBuyRewardSource?.value || 'same_pool';
     const rewardKind = elDeBuyRewardKind?.value || 'gift';
@@ -1757,10 +2189,17 @@
     if (elDeSimpleWrap) elDeSimpleWrap.classList.toggle('hidden', mechanicType !== 'simple_discount');
     if (elDeBuyXGetYWrap) elDeBuyXGetYWrap.classList.toggle('hidden', !isBuyXGetY);
     if (elDeThresholdWrap) elDeThresholdWrap.classList.toggle('hidden', !isThreshold);
+    if (elDeLoyaltyProgressWrap) elDeLoyaltyProgressWrap.classList.toggle('hidden', !isLoyalty);
+    if (!isThreshold) closeDiscountThresholdRewardPicker();
     if (elDeBuyConditionProductsWrap) elDeBuyConditionProductsWrap.classList.toggle('hidden', !isBuyXGetY || qualifyingMode !== 'pool');
     if (elDeBuyRewardProductsWrap) elDeBuyRewardProductsWrap.classList.toggle('hidden', !isBuyXGetY || rewardSource !== 'reward_list');
     if (elDeBuyRewardDiscountWrap) elDeBuyRewardDiscountWrap.classList.toggle('hidden', !isBuyXGetY || rewardKind !== 'product_discount');
     if (isThreshold) renderThresholdTiers();
+    if (isLoyalty) {
+      renderDiscountProgressScopeChips();
+      renderDiscountProgressRewardGiftChips();
+      renderDiscountProgressDiscountChips();
+    }
   }
 
   function updateDiscountPromoUi() {
@@ -1807,13 +2246,38 @@
       ? state.discountPromoCodes.filter((row) => String(row?.code_mode || '') === 'unique')
       : [];
 
+    if (elDePromoCodesToggle) {
+      const isEmpty = uniqueCodes.length === 0;
+      const isExpanded = !isEmpty && Boolean(state.discountPromoCodesAccordionExpanded);
+      const metaText = isEmpty
+        ? 'Пока нет сгенерированных кодов'
+        : (isExpanded
+            ? `Кодов: ${uniqueCodes.length}. Нажмите, чтобы свернуть`
+            : `Кодов: ${uniqueCodes.length}. Нажмите, чтобы раскрыть`);
+      elDePromoCodesToggle.classList.toggle('is-empty', isEmpty);
+      elDePromoCodesToggle.classList.toggle('is-filled', !isEmpty);
+      elDePromoCodesToggle.classList.toggle('is-expanded', isExpanded);
+      elDePromoCodesToggle.setAttribute('aria-expanded', String(isExpanded));
+      elDePromoCodesToggle.innerHTML = `
+        <span class="discount-audience-add-btn-main">
+          <span class="discount-audience-add-btn-icon"><i class="fas fa-plus"></i></span>
+          <span class="discount-audience-add-btn-copy">
+            <span class="discount-audience-add-btn-title">Список уникальных кодов</span>
+            <span class="discount-audience-add-btn-meta">${escapeHtml(metaText)}</span>
+          </span>
+        </span>
+        <span class="discount-audience-add-btn-caret"><i class="fas fa-chevron-down"></i></span>
+      `;
+    }
+
+    elDePromoCodesWrap.classList.remove('hidden');
+    elDePromoCodesList.classList.toggle('is-collapsed', uniqueCodes.length > 0 && !state.discountPromoCodesAccordionExpanded);
     if (!uniqueCodes.length) {
-      elDePromoCodesWrap.classList.remove('hidden');
+      elDePromoCodesList.classList.remove('is-collapsed');
       elDePromoCodesList.innerHTML = '<div class="discount-promo-empty">Пока нет сгенерированных кодов.</div>';
       return;
     }
 
-    elDePromoCodesWrap.classList.remove('hidden');
     elDePromoCodesList.innerHTML = uniqueCodes.map((row) => {
       const isActive = Number(row?.is_active || 0) === 1;
       const usageLimit = row?.usage_limit == null ? 'без лимита' : `лимит ${row.usage_limit}`;
@@ -1876,38 +2340,55 @@
   async function loadDiscountPromoCodes(discountId) {
     if (!(Number(discountId) > 0)) {
       state.discountPromoCodes = [];
+      state.discountPromoCodesAccordionExpanded = false;
       renderDiscountPromoCodes();
       return [];
     }
 
     const json = await apiJson(`/api/admin/discounts/${discountId}/promo-codes`);
     state.discountPromoCodes = Array.isArray(json.promo_codes) ? json.promo_codes : [];
+    state.discountPromoCodesAccordionExpanded = false;
     renderDiscountPromoCodes();
     return state.discountPromoCodes;
   }
 
-  async function generateDiscountPromoCodes() {
-    const discountId = Number($('#de_id')?.value || 0);
+  function getDiscountPromoGenerateCount() {
+    const rawValue = String(elDePromoGenerateCount?.value ?? '').trim();
+    if (!rawValue) return null;
+    const parsed = parseInt(rawValue, 10);
+    if (!(parsed > 0)) return NaN;
+    return Math.max(1, Math.min(500, parsed));
+  }
+
+  async function generateDiscountPromoCodes(discountIdValue = null, countValue = null) {
+    const discountId = Number(discountIdValue ?? $('#de_id')?.value ?? 0);
     if (!(discountId > 0)) {
       alert('Сначала сохраните акцию');
-      return;
+      return [];
     }
 
-    const count = Math.max(1, Math.min(500, Number(elDePromoGenerateCount?.value || 0)));
+    const count = countValue == null ? getDiscountPromoGenerateCount() : Math.max(1, Math.min(500, Number(countValue || 0)));
     if (!(count > 0)) {
       alert('Введите корректное количество кодов');
-      return;
+      return [];
     }
 
     try {
-      await apiJson(`/api/admin/discounts/${discountId}/promo-codes/generate`, {
+      const json = await apiJson(`/api/admin/discounts/${discountId}/promo-codes/generate`, {
         method: 'POST',
         body: { count },
       });
       await loadDiscountPromoCodes(discountId);
+      state.discountPromoCodesAccordionExpanded = true;
+      renderDiscountPromoCodes();
+      if (elDePromoGenerateCount) {
+        elDePromoGenerateCount.value = '';
+      }
+      return Array.isArray(json?.promo_codes) ? json.promo_codes : [];
     } catch (err) {
       console.error('generateDiscountPromoCodes error:', err);
       alert('Ошибка генерации промокодов: ' + err.message);
+      throw err;
     }
   }
 
@@ -1916,10 +2397,13 @@
     if (!(discountId > 0) || !(Number(codeId) > 0)) return;
 
     try {
+      const wasExpanded = Boolean(state.discountPromoCodesAccordionExpanded);
       await apiJson(`/api/admin/discounts/${discountId}/promo-codes/${codeId}/toggle`, {
         method: 'POST',
       });
       await loadDiscountPromoCodes(discountId);
+      state.discountPromoCodesAccordionExpanded = wasExpanded;
+      renderDiscountPromoCodes();
     } catch (err) {
       console.error('toggleDiscountPromoCode error:', err);
       alert('Ошибка обновления промокода: ' + err.message);
@@ -1976,11 +2460,11 @@
       btn.className = "stage-item";
       btn.setAttribute("data-filter", `discount_${discount.id}`);
       btn.classList.toggle("is-active", state.activeDiscountId === discount.id);
-      
-      const statusIcon = discount.is_active 
-        ? '<i class="fas fa-check-circle" style="color:var(--color-success);margin-right:6px;"></i>' 
+
+      const statusIcon = discount.is_active
+        ? '<i class="fas fa-check-circle" style="color:var(--color-success);margin-right:6px;"></i>'
         : '<i class="fas fa-pause-circle" style="color:var(--color-muted);margin-right:6px;"></i>';
-      
+
       btn.innerHTML = `
         <span class="stage-meta stage-text">${statusIcon}<b>${escapeHtml(discount.title)}</b></span>
       `;
@@ -2085,7 +2569,7 @@
   async function openDiscountEditor(discountId) {
     const isNew = !discountId;
     const tabKey = isNew ? buildTabKey('discount', 'new') : buildTabKey('discount', discountId);
-    
+
     let existing = tabsState.tabs.find(t => t.key === tabKey);
     if (!existing) {
       tabsState.tabs.push({
@@ -2141,7 +2625,7 @@
   // Заполнить форму скидки данными
   function fillDiscountForm(discount) {
     if (!elDiscountEditorForm) return;
-    
+
     $('#de_id').value = discount.id || '';
     $('#de_title').value = discount.title || '';
     $('#de_discount_type').value = discount.discount_type || 'percent';
@@ -2149,7 +2633,7 @@
     $('#de_apply_to').value = discount.apply_to || 'order';
     $('#de_min_order_amount').value = discount.min_order_amount || '';
     $('#de_max_discount_amount').value = discount.max_discount_amount || '';
-    
+
     // Даты
     if (discount.starts_at) {
       $('#de_starts_at').value = formatDateTimeLocal(discount.starts_at);
@@ -2161,13 +2645,13 @@
     } else {
       $('#de_ends_at').value = '';
     }
-    
+
     // Расписание дней
     const scheduleDays = discount.schedule_days ? (typeof discount.schedule_days === 'string' ? JSON.parse(discount.schedule_days) : discount.schedule_days) : [];
     $$('#de_schedule_days input[type="checkbox"]').forEach(cb => {
       cb.checked = scheduleDays.includes(parseInt(cb.value, 10));
     });
-    
+
     $('#de_schedule_time_start').value = discount.schedule_time_start || '';
     $('#de_schedule_time_end').value = discount.schedule_time_end || '';
     $('#de_usage_limit').value = discount.usage_limit || '';
@@ -2215,6 +2699,7 @@
 
     const titleEl = $('#discountInfoTitle');
     const badgeEl = $('#discountInfoBadge');
+    const benefitsBadgeEl = $('#discountInfoBenefitsBadge');
     const valueEl = $('#discountInfoValue');
     const usageEl = $('#discountInfoUsageCount');
     const applyToEl = $('#discountInfoApplyTo');
@@ -2226,6 +2711,9 @@
     if (badgeEl) {
       badgeEl.textContent = discount.is_active ? 'Активна' : 'Неактивна';
       badgeEl.classList.toggle('inactive', !discount.is_active);
+    }
+    if (benefitsBadgeEl) {
+      benefitsBadgeEl.classList.toggle('hidden', !discount.hide_in_benefits);
     }
 
     if (valueEl) {
@@ -2603,8 +3091,8 @@
     if (elDePromoCodeMode) elDePromoCodeMode.value = promo.code_mode;
     if (elDePromoSharedCode) elDePromoSharedCode.value = promo.shared_code || '';
     if (elDePromoSharedUsageLimit) elDePromoSharedUsageLimit.value = promo.shared_code_usage_limit ?? '';
-    if (elDePromoUniqueUsageLimit) elDePromoUniqueUsageLimit.value = promo.unique_code_usage_limit ?? 1;
-    if (elDePromoGenerateCount && !elDePromoGenerateCount.value) elDePromoGenerateCount.value = '10';
+    if (elDePromoUniqueUsageLimit) elDePromoUniqueUsageLimit.value = promo.code_mode === 'unique' ? (promo.unique_code_usage_limit ?? '') : '';
+    if (elDePromoGenerateCount) elDePromoGenerateCount.value = '';
 
     if (Array.isArray(discount.products)) {
       state.discountSelectedProducts = discount.products.map((p) => ({
@@ -2660,6 +3148,21 @@
       valueEl.textContent = formatDiscountValue(discount);
     }
 
+    if (mechanic.type === 'loyalty_progress' && valueLabelEl) {
+      valueLabelEl.textContent = 'Порог';
+    }
+    if (mechanic.type === 'loyalty_progress' && valueLabelEl) {
+      valueLabelEl.textContent = 'Порог';
+    }
+    if (mechanic.type === 'loyalty_progress' && valueLabelEl) {
+      valueLabelEl.textContent = 'Порог';
+    }
+    if (mechanic.type === 'loyalty_progress' && valueLabelEl) {
+      valueLabelEl.textContent = 'Порог';
+    }
+    if (mechanic.type === 'loyalty_progress' && valueLabelEl) {
+      valueLabelEl.textContent = 'Порог';
+    }
     if (usageEl) usageEl.textContent = discount.usage_count || 0;
 
     if (applyToEl) {
@@ -2756,6 +3259,19 @@
     const sharedCode = normalizePromoCodeInputValue(elDePromoSharedCode?.value);
     const sharedCodeUsageLimit = parseInt(elDePromoSharedUsageLimit?.value, 10) || null;
     const uniqueCodeUsageLimit = Math.max(1, parseInt(elDePromoUniqueUsageLimit?.value, 10) || 1);
+    const audienceMode = getDiscountAudienceMode();
+    const audienceCustomers = audienceMode === 'all'
+      ? []
+      : state.discountSelectedCustomers
+          .filter((item) => (
+            audienceMode === 'category'
+              ? String(item?.type || '').trim() === 'category'
+              : String(item?.type || '').trim() !== 'category'
+          ))
+          .map((c) => ({
+            entity_type: c.type,
+            entity_id: c.id,
+          }));
 
     const data = {
       title: $('#de_title').value.trim(),
@@ -2836,6 +3352,7 @@
   function getDiscountListIcon(discount) {
     const mechanicType = normalizeDiscountMechanicType(discount?.mechanic_type);
     if (mechanicType === 'buy_x_get_y') return 'fa-gift';
+    if (mechanicType === 'loyalty_progress') return 'fa-chart-line';
     if (mechanicType === 'threshold') return 'fa-layer-group';
     return 'fa-percentage';
   }
@@ -2856,6 +3373,7 @@
       row.classList.toggle('is-active', state.activeDiscountId === discount.id);
 
       const promo = getDiscountPromoFromDiscount(discount);
+      const mechanic = getDiscountMechanic(discount);
       const mechanicText = formatDiscountMechanicText(discount);
       const promoText = promo.enabled ? (promo.code_mode === 'unique' ? 'Уникальные коды' : 'Промокод') : 'Авто';
 
@@ -3027,25 +3545,149 @@
     }
     renderDiscountProductChips();
 
+    state.discountBuyConditionUiMode = inferDiscountBuyConditionUiMode(mechanic);
+    if (elDeBuyConditionUiMode) {
+      elDeBuyConditionUiMode.value = state.discountBuyConditionUiMode;
+    }
+    state.discountBuyConditionUiMode = inferDiscountBuyConditionUiMode(mechanic);
+    if (elDeBuyConditionUiMode) {
+      elDeBuyConditionUiMode.value = state.discountBuyConditionUiMode;
+    }
+    state.discountBuyConditionUiMode = inferDiscountBuyConditionUiMode(mechanic);
+    if (elDeBuyConditionUiMode) {
+      elDeBuyConditionUiMode.value = state.discountBuyConditionUiMode;
+    }
+    state.discountBuyConditionUiMode = inferDiscountBuyConditionUiMode(mechanic);
+    if (elDeBuyConditionUiMode) {
+      elDeBuyConditionUiMode.value = state.discountBuyConditionUiMode;
+    }
     state.discountBuyConditionProducts = cloneDiscountEntities(mechanic.qualifying_items || []);
     state.discountBuyRewardProducts = cloneDiscountEntities(mechanic.reward_products || []);
+    state.discountBuyRewardUiMode = mechanic.type === 'buy_x_get_y'
+      ? (mechanic.reward_kind === 'product_discount'
+          ? 'discount'
+          : (mechanic.reward_source === 'reward_list'
+              ? (state.discountBuyRewardProducts.length > 1 ? 'product_list' : (state.discountBuyRewardProducts.length === 1 ? 'product' : ''))
+              : 'legacy_same_pool'))
+      : '';
     state.discountThresholdTiers = Array.isArray(mechanic.tiers) && mechanic.tiers.length
       ? mechanic.tiers.map((tier) => buildEmptyThresholdTier(tier))
       : [buildEmptyThresholdTier()];
     renderDiscountBuyConditionChips();
     renderDiscountBuyRewardChips();
     renderThresholdTiers();
+    if (mechanic.type === 'threshold' && state.discountThresholdTiers.some((tier) => tier.reward_kind === 'discount_ref')) {
+      loadDiscountSimpleSources().then(() => {
+        renderThresholdTiers();
+      }).catch(() => {});
+    }
+    if (mechanic.type === 'threshold' && state.discountThresholdTiers.some((tier) => tier.reward_kind === 'promo_code_ref')) {
+      loadDiscountSharedPromoSources().then(() => {
+        renderThresholdTiers();
+      }).catch(() => {});
+    }
 
-    if (elDeBuyQty) elDeBuyQty.value = mechanic.buy_qty ?? 5;
+    if (elDeBuyQty) elDeBuyQty.value = mechanic.buy_qty ?? 1;
     if (elDeRewardQty) elDeRewardQty.value = mechanic.reward_qty ?? 1;
-    if (elDeBuyQualifyingMode) elDeBuyQualifyingMode.value = mechanic.qualifying_mode || 'same_sku';
+    if (elDeBuyQualifyingMode) elDeBuyQualifyingMode.value = mechanic.qualifying_mode || 'pool';
     if (elDeBuyRepeatMode) elDeBuyRepeatMode.value = mechanic.repeat_mode || 'single';
     if (elDeBuyRewardSource) elDeBuyRewardSource.value = mechanic.reward_source || 'same_pool';
     if (elDeBuyRewardKind) elDeBuyRewardKind.value = mechanic.reward_kind || 'gift';
     if (elDeBuyRewardDiscountType) elDeBuyRewardDiscountType.value = mechanic.reward_discount?.discount_type || 'percent';
     if (elDeBuyRewardDiscountValue) elDeBuyRewardDiscountValue.value = mechanic.reward_discount?.discount_value ?? '';
-    if (elDeThresholdBasis) elDeThresholdBasis.value = mechanic.threshold_basis || 'before_discounts';
-    if (elDeThresholdApplyMode) elDeThresholdApplyMode.value = mechanic.threshold_apply_mode || 'best_only';
+    if (elDeThresholdBasis) elDeThresholdBasis.value = 'before_discounts';
+    if (elDeThresholdApplyMode) elDeThresholdApplyMode.value = 'best_only';
+    if (elDeThresholdSlotCount) elDeThresholdSlotCount.value = String(Math.max(1, state.discountThresholdTiers.length));
+    if (elDeProgressBasis) elDeProgressBasis.value = mechanic.type === 'loyalty_progress' ? (mechanic.progress_basis || 'orders') : 'orders';
+    if (elDeProgressThresholdValue) elDeProgressThresholdValue.value = mechanic.type === 'loyalty_progress' ? (mechanic.threshold_value ?? '') : '';
+    if (elDeProgressBuyQty) elDeProgressBuyQty.value = mechanic.type === 'loyalty_progress' ? (mechanic.buy_qty ?? 1) : 1;
+    if (elDeProgressRewardQty) elDeProgressRewardQty.value = mechanic.type === 'loyalty_progress' ? (mechanic.reward_qty ?? 1) : 1;
+    if (elDeProgressStatusFilter) elDeProgressStatusFilter.value = 'completed';
+    if (elDeProgressScopeMode) elDeProgressScopeMode.value = mechanic.type === 'loyalty_progress' ? (mechanic.qualifying_scope_mode || 'none') : 'none';
+    if (elDeProgressPendingRewardMode) elDeProgressPendingRewardMode.value = mechanic.type === 'loyalty_progress' ? (mechanic.pending_reward_mode || 'stack') : 'stack';
+    if (elDeProgressRewardKind) elDeProgressRewardKind.value = mechanic.type === 'loyalty_progress' ? (mechanic.reward_kind || 'gift') : 'gift';
+    if (elDeProgressIssueMode) elDeProgressIssueMode.value = 'automatic';
+    if (elDeProgressRedemptionMode) elDeProgressRedemptionMode.value = 'reset';
+    if (elDeProgressDiscountApplyTo) elDeProgressDiscountApplyTo.value = mechanic.type === 'loyalty_progress' ? (mechanic.reward?.discount?.apply_to || 'order') : 'order';
+    if (elDeProgressDiscountType) elDeProgressDiscountType.value = mechanic.type === 'loyalty_progress' ? (mechanic.reward?.discount?.discount_type || 'percent') : 'percent';
+    if (elDeProgressDiscountValue) elDeProgressDiscountValue.value = mechanic.type === 'loyalty_progress' ? (mechanic.reward?.discount?.discount_value ?? '') : '';
+    state.discountProgressQualifyingItems = mechanic.type === 'loyalty_progress'
+      ? cloneDiscountEntities(mechanic.qualifying_items || [])
+      : [];
+    state.discountProgressRewardUiMode = mechanic.type === 'loyalty_progress'
+      ? (mechanic.reward_kind === 'discount'
+          ? 'discount'
+          : (mechanic.reward_kind === 'promo_code'
+              ? 'promo_code'
+              : ((mechanic.reward?.gift_products || []).length > 1 ? 'product_list' : ((mechanic.reward?.gift_products || []).length === 1 ? 'product' : ''))))
+      : '';
+    state.discountProgressGiftProducts = mechanic.type === 'loyalty_progress'
+      ? cloneDiscountEntities(mechanic.reward?.gift_products || [])
+      : [];
+    state.discountProgressDiscountProducts = mechanic.type === 'loyalty_progress'
+      ? cloneDiscountEntities(mechanic.reward?.discount?.products || [])
+      : [];
+    state.discountProgressPromoSource = mechanic.type === 'loyalty_progress'
+      ? cloneDiscountPromoSource(mechanic.reward?.promo_code)
+      : null;
+    renderDiscountProgressScopeChips();
+    renderDiscountProgressRewardGiftChips();
+    renderDiscountProgressDiscountChips();
+    renderDiscountProgressPromoSource();
+    if (elDeProgressBasis) elDeProgressBasis.value = mechanic.type === 'loyalty_progress' ? (mechanic.progress_basis || 'orders') : 'orders';
+    if (elDeProgressThresholdValue) elDeProgressThresholdValue.value = mechanic.type === 'loyalty_progress' ? (mechanic.threshold_value ?? '') : '';
+    if (elDeProgressStatusFilter) elDeProgressStatusFilter.value = 'completed';
+    if (elDeProgressScopeMode) elDeProgressScopeMode.value = mechanic.type === 'loyalty_progress' ? (mechanic.qualifying_scope_mode || 'none') : 'none';
+    if (elDeProgressPendingRewardMode) elDeProgressPendingRewardMode.value = mechanic.type === 'loyalty_progress' ? (mechanic.pending_reward_mode || 'stack') : 'stack';
+    if (elDeProgressRewardKind) elDeProgressRewardKind.value = mechanic.type === 'loyalty_progress' ? (mechanic.reward_kind || 'gift') : 'gift';
+    if (elDeProgressIssueMode) elDeProgressIssueMode.value = mechanic.type === 'loyalty_progress' ? (mechanic.issue_mode || 'automatic') : 'automatic';
+    if (elDeProgressRedemptionMode) elDeProgressRedemptionMode.value = mechanic.type === 'loyalty_progress' ? (mechanic.redemption_mode || 'reset') : 'reset';
+    if (elDeProgressDiscountApplyTo) elDeProgressDiscountApplyTo.value = mechanic.type === 'loyalty_progress' ? (mechanic.reward?.discount?.apply_to || 'order') : 'order';
+    if (elDeProgressDiscountType) elDeProgressDiscountType.value = mechanic.type === 'loyalty_progress' ? (mechanic.reward?.discount?.discount_type || 'percent') : 'percent';
+    if (elDeProgressDiscountValue) elDeProgressDiscountValue.value = mechanic.type === 'loyalty_progress' ? (mechanic.reward?.discount?.discount_value ?? '') : '';
+    state.discountProgressQualifyingItems = mechanic.type === 'loyalty_progress'
+      ? cloneDiscountEntities(mechanic.qualifying_items || [])
+      : [];
+    state.discountProgressGiftProducts = mechanic.type === 'loyalty_progress'
+      ? cloneDiscountEntities(mechanic.reward?.gift_products || [])
+      : [];
+    state.discountProgressDiscountProducts = mechanic.type === 'loyalty_progress'
+      ? cloneDiscountEntities(mechanic.reward?.discount?.products || [])
+      : [];
+    state.discountProgressPromoSource = mechanic.type === 'loyalty_progress'
+      ? cloneDiscountPromoSource(mechanic.reward?.promo_code)
+      : null;
+    renderDiscountProgressScopeChips();
+    renderDiscountProgressRewardGiftChips();
+    renderDiscountProgressDiscountChips();
+    renderDiscountProgressPromoSource();
+    if (elDeProgressBasis) elDeProgressBasis.value = mechanic.type === 'loyalty_progress' ? (mechanic.progress_basis || 'orders') : 'orders';
+    if (elDeProgressThresholdValue) elDeProgressThresholdValue.value = mechanic.type === 'loyalty_progress' ? (mechanic.threshold_value ?? '') : '';
+    if (elDeProgressStatusFilter) elDeProgressStatusFilter.value = 'completed';
+    if (elDeProgressScopeMode) elDeProgressScopeMode.value = mechanic.type === 'loyalty_progress' ? (mechanic.qualifying_scope_mode || 'none') : 'none';
+    if (elDeProgressPendingRewardMode) elDeProgressPendingRewardMode.value = mechanic.type === 'loyalty_progress' ? (mechanic.pending_reward_mode || 'stack') : 'stack';
+    if (elDeProgressRewardKind) elDeProgressRewardKind.value = mechanic.type === 'loyalty_progress' ? (mechanic.reward_kind || 'gift') : 'gift';
+    if (elDeProgressIssueMode) elDeProgressIssueMode.value = mechanic.type === 'loyalty_progress' ? (mechanic.issue_mode || 'automatic') : 'automatic';
+    if (elDeProgressRedemptionMode) elDeProgressRedemptionMode.value = mechanic.type === 'loyalty_progress' ? (mechanic.redemption_mode || 'reset') : 'reset';
+    if (elDeProgressDiscountApplyTo) elDeProgressDiscountApplyTo.value = mechanic.type === 'loyalty_progress' ? (mechanic.reward?.discount?.apply_to || 'order') : 'order';
+    if (elDeProgressDiscountType) elDeProgressDiscountType.value = mechanic.type === 'loyalty_progress' ? (mechanic.reward?.discount?.discount_type || 'percent') : 'percent';
+    if (elDeProgressDiscountValue) elDeProgressDiscountValue.value = mechanic.type === 'loyalty_progress' ? (mechanic.reward?.discount?.discount_value ?? '') : '';
+    state.discountProgressQualifyingItems = mechanic.type === 'loyalty_progress'
+      ? cloneDiscountEntities(mechanic.qualifying_items || [])
+      : [];
+    state.discountProgressGiftProducts = mechanic.type === 'loyalty_progress'
+      ? cloneDiscountEntities(mechanic.reward?.gift_products || [])
+      : [];
+    state.discountProgressDiscountProducts = mechanic.type === 'loyalty_progress'
+      ? cloneDiscountEntities(mechanic.reward?.discount?.products || [])
+      : [];
+    state.discountProgressPromoSource = mechanic.type === 'loyalty_progress'
+      ? cloneDiscountPromoSource(mechanic.reward?.promo_code)
+      : null;
+    renderDiscountProgressScopeChips();
+    renderDiscountProgressRewardGiftChips();
+    renderDiscountProgressDiscountChips();
+    renderDiscountProgressPromoSource();
 
     if (Array.isArray(discount.customers)) {
       state.discountSelectedCustomers = discount.customers.map((c) => ({
@@ -3061,6 +3703,45 @@
     state.discountPromoCodes = [];
     renderDiscountPromoCodes();
     updateDiscountPromoUi();
+
+    const hasBuyCategoryItems = state.discountBuyConditionProducts.some((item) => String(item?.type || '').trim() === 'category');
+    const hasBuyProductItems = [...state.discountBuyConditionProducts, ...state.discountBuyRewardProducts]
+      .some((item) => String(item?.type || '').trim() === 'product' && !String(item?.photo || '').trim());
+    if (hasBuyCategoryItems && !(state.catalogCategories || []).length) {
+      loadCatalogCategories().then(() => {
+        renderDiscountBuyConditionChips();
+        renderDiscountBuyVisualization();
+      }).catch(() => {});
+    }
+    if (hasBuyProductItems && !(state.catalogProducts || []).length) {
+      loadCatalogProducts(null).then(() => {
+        renderDiscountBuyConditionChips();
+        renderDiscountBuyRewardChips();
+        renderDiscountBuyVisualization();
+      }).catch(() => {});
+    }
+    const hasProgressCategoryItems = [...state.discountProgressQualifyingItems, ...state.discountProgressDiscountProducts]
+      .some((item) => String(item?.type || '').trim() === 'category');
+    const hasProgressProductItems = [...state.discountProgressQualifyingItems, ...state.discountProgressGiftProducts, ...state.discountProgressDiscountProducts]
+      .some((item) => String(item?.type || '').trim() === 'product' && !String(item?.photo || '').trim());
+    if (hasProgressCategoryItems && !(state.catalogCategories || []).length) {
+      loadCatalogCategories().then(() => {
+        renderDiscountProgressScopeChips();
+        renderDiscountProgressDiscountChips();
+      }).catch(() => {});
+    }
+    if (hasProgressProductItems && !(state.catalogProducts || []).length) {
+      loadCatalogProducts(null).then(() => {
+        renderDiscountProgressScopeChips();
+        renderDiscountProgressRewardGiftChips();
+        renderDiscountProgressDiscountChips();
+      }).catch(() => {});
+    }
+    if (mechanic.type === 'loyalty_progress' && mechanic.reward_kind === 'promo_code') {
+      loadDiscountSharedPromoSources().then(() => {
+        renderDiscountProgressPromoSource();
+      }).catch(() => {});
+    }
   }
 
   function renderDiscountInfo(discount) {
@@ -3099,6 +3780,21 @@
     }
     if (usageEl) usageEl.textContent = discount.usage_count || 0;
     if (mechanicEl) mechanicEl.textContent = formatDiscountMechanicText(discount);
+    if (mechanic.type === 'loyalty_progress' && mechanicEl) {
+      mechanicEl.textContent = `${formatDiscountMechanicText(discount)} • ${formatDiscountProgressBasisText(mechanic.progress_basis)} • ${formatDiscountProgressRewardKindText(mechanic.reward_kind)} • ${formatDiscountProgressIssueModeText(mechanic.issue_mode)}`;
+    }
+    if (mechanic.type === 'loyalty_progress' && mechanicEl) {
+      mechanicEl.textContent = `${formatDiscountMechanicText(discount)} • ${formatDiscountProgressBasisText(mechanic.progress_basis)} • ${formatDiscountProgressRewardKindText(mechanic.reward_kind)} • ${formatDiscountProgressIssueModeText(mechanic.issue_mode)}`;
+    }
+    if (mechanic.type === 'loyalty_progress' && mechanicEl) {
+      mechanicEl.textContent = `${formatDiscountMechanicText(discount)} • ${formatDiscountProgressBasisText(mechanic.progress_basis)} • ${formatDiscountProgressRewardKindText(mechanic.reward_kind)} • ${formatDiscountProgressIssueModeText(mechanic.issue_mode)}`;
+    }
+    if (mechanic.type === 'loyalty_progress' && mechanicEl) {
+      mechanicEl.textContent = `${formatDiscountMechanicText(discount)} • ${formatDiscountProgressBasisText(mechanic.progress_basis)} • ${formatDiscountProgressRewardKindText(mechanic.reward_kind)} • ${formatDiscountProgressIssueModeText(mechanic.issue_mode)}`;
+    }
+    if (mechanic.type === 'loyalty_progress' && mechanicEl) {
+      mechanicEl.textContent = `${formatDiscountMechanicText(discount)} • ${formatDiscountProgressBasisText(mechanic.progress_basis)} • ${formatDiscountProgressRewardKindText(mechanic.reward_kind)} • ${formatDiscountProgressIssueModeText(mechanic.issue_mode)}`;
+    }
     if (applyToRowEl) applyToRowEl.classList.toggle('hidden', mechanic.type !== 'simple_discount');
     if (applyToEl) applyToEl.textContent = formatDiscountApplyToText(discount.apply_to);
     if (promoModeRowEl) promoModeRowEl.classList.toggle('hidden', !promo.enabled);
@@ -3232,16 +3928,32 @@
     } else if (mechanicType === 'buy_x_get_y') {
       const buyQty = Math.max(1, parseInt(elDeBuyQty?.value, 10) || 0);
       const rewardQty = Math.max(1, parseInt(elDeRewardQty?.value, 10) || 0);
-      const qualifyingMode = elDeBuyQualifyingMode?.value || 'same_sku';
+      const conditionUiMode = getDiscountBuyConditionUiMode();
       const rewardSource = elDeBuyRewardSource?.value || 'same_pool';
       const rewardKind = elDeBuyRewardKind?.value || 'gift';
       const rewardDiscountValue = parseFloat(elDeBuyRewardDiscountValue?.value) || 0;
+      const qualifyingItems = getDiscountBuyConditionSelection().map((item) => ({
+        entity_type: item.type,
+        entity_id: item.id,
+      }));
+      const rewardProducts = getDiscountBuyRewardSelection().map((item) => ({
+        entity_type: item.type,
+        entity_id: item.id,
+      }));
 
-      if (qualifyingMode === 'pool' && !state.discountBuyConditionProducts.length) {
+      if (conditionUiMode === 'product' && qualifyingItems.length !== 1) {
+        alert('Выберите один товар для условия акции');
+        return;
+      }
+      if (conditionUiMode === 'product_list' && !qualifyingItems.length) {
         alert('Добавьте товары для условия акции');
         return;
       }
-      if (rewardSource === 'reward_list' && !state.discountBuyRewardProducts.length) {
+      if (conditionUiMode === 'category' && !qualifyingItems.length) {
+        alert('Добавьте категории для условия акции');
+        return;
+      }
+      if (rewardSource === 'reward_list' && !rewardProducts.length) {
         alert('Добавьте товары-награды');
         return;
       }
@@ -3268,6 +3980,98 @@
         reward_discount: {
           discount_type: elDeBuyRewardDiscountType?.value || 'percent',
           discount_value: rewardDiscountValue || null,
+        },
+      };
+    } else if (mechanicType === 'loyalty_progress') {
+      const progressBasis = getDiscountProgressBasis();
+      const buyQty = progressBasis === 'amount'
+        ? 1
+        : normalizeDiscountVisualCount(elDeProgressBuyQty?.value, 1);
+      const rewardQty = progressBasis === 'amount'
+        ? 1
+        : normalizeDiscountVisualCount(elDeProgressRewardQty?.value, 1);
+      const thresholdValue = progressBasis === 'amount'
+        ? (parseFloat(elDeProgressThresholdValue?.value) || 0)
+        : buyQty;
+      const scopeMode = progressBasis === 'items' ? getDiscountProgressScopeMode() : 'none';
+      const rewardKind = normalizeDiscountProgressRewardKind(elDeProgressRewardKind?.value || 'gift');
+      const issueMode = normalizeDiscountProgressIssueMode(elDeProgressIssueMode?.value || (rewardKind === 'promo_code' ? 'code' : 'automatic'));
+      const qualifyingItems = progressBasis === 'items'
+        ? getDiscountProgressScopeSelection().map((item) => ({
+            entity_type: item.type,
+            entity_id: item.id,
+          }))
+        : [];
+      const giftProducts = cloneDiscountEntities(state.discountProgressGiftProducts || []).map((item) => ({
+        entity_type: item.type,
+        entity_id: item.id,
+      }));
+      const rewardDiscountApplyTo = getDiscountProgressDiscountApplyTo();
+      const rewardDiscountValue = parseFloat(elDeProgressDiscountValue?.value) || 0;
+      const rewardDiscountProducts = getDiscountProgressDiscountSelection().map((item) => ({
+        entity_type: item.type,
+        entity_id: item.id,
+      }));
+      const promoSource = cloneDiscountPromoSource(state.discountProgressPromoSource);
+
+      if (!(thresholdValue > 0)) {
+        alert('Укажите корректный порог накопительной акции');
+        return;
+      }
+      if (progressBasis === 'items' && !qualifyingItems.length) {
+        alert('Добавьте товары или категории для накопления');
+        return;
+      }
+      if (rewardKind === 'gift' && !giftProducts.length) {
+        alert('Добавьте товары для награды накопительной акции');
+        return;
+      }
+      if (rewardKind === 'discount') {
+        if (!(rewardDiscountValue > 0)) {
+          alert('Укажите корректное значение скидки для награды');
+          return;
+        }
+        if (rewardDiscountApplyTo !== 'order' && !rewardDiscountProducts.length) {
+          alert('Добавьте товары или категории для скидочной награды');
+          return;
+        }
+      }
+      if (rewardKind === 'promo_code' && !promoSource) {
+        alert('Прикрепите общий промокод для награды');
+        return;
+      }
+
+      data.mechanic = {
+        buy_qty: buyQty,
+        reward_qty: rewardQty,
+        progress_basis: progressBasis,
+        threshold_value: thresholdValue,
+        status_filter: 'completed',
+        qualifying_scope_mode: scopeMode,
+        qualifying_items: qualifyingItems,
+        reward_kind: rewardKind,
+        issue_mode: rewardKind === 'promo_code' ? 'code' : (issueMode === 'manual' ? 'manual' : 'automatic'),
+        pending_reward_mode: normalizeDiscountProgressPendingRewardMode(elDeProgressPendingRewardMode?.value || 'stack'),
+        redemption_mode: normalizeDiscountProgressRedemptionMode(elDeProgressRedemptionMode?.value || 'reset'),
+        reward: {
+          gift_products: rewardKind === 'gift' ? giftProducts : [],
+          discount: {
+            apply_to: rewardDiscountApplyTo,
+            discount_type: normalizePromoDiscountType(elDeProgressDiscountType?.value || 'percent'),
+            discount_value: rewardKind === 'discount' ? rewardDiscountValue : null,
+            products: rewardKind === 'discount' && rewardDiscountApplyTo !== 'order' ? rewardDiscountProducts : [],
+          },
+          promo_code: rewardKind === 'promo_code'
+            ? {
+                source_promo_code_id: promoSource?.source_promo_code_id || null,
+                source_discount_id: promoSource?.source_discount_id || null,
+                source_code: promoSource?.source_code || '',
+              }
+            : {
+                source_promo_code_id: null,
+                source_discount_id: null,
+                source_code: null,
+              },
         },
       };
     } else {
@@ -3352,6 +4156,26 @@
       : 'discount';
   }
 
+  function normalizePromoRewardUiType(value) {
+    return ['discount', 'gift'].includes(String(value || '').trim())
+      ? String(value || '').trim()
+      : 'discount';
+  }
+
+  function getPromoRewardUiTypeFromMechanic(reward = {}) {
+    const rewardType = normalizePromoRewardType(
+      reward?.reward_type || (
+        ['gift', 'product_discount'].includes(String(reward?.reward_kind || '').trim())
+          ? 'product'
+          : 'discount'
+      )
+    );
+    const productRewardType = normalizePromoProductRewardType(
+      reward?.product_reward_type || reward?.reward_kind
+    );
+    return rewardType === 'product' && productRewardType === 'gift' ? 'gift' : 'discount';
+  }
+
   function normalizePromoProductRewardType(value) {
     return ['gift', 'product_discount'].includes(String(value || '').trim())
       ? String(value || '').trim()
@@ -3359,9 +4183,11 @@
   }
 
   function normalizePromoDiscountType(value) {
-    return ['fixed', 'special_price'].includes(String(value || '').trim())
-      ? 'fixed'
-      : 'percent';
+    const raw = String(value || '').trim();
+    if (['percent', 'fixed', 'special_price'].includes(raw)) {
+      return raw;
+    }
+    return 'percent';
   }
 
   function normalizePromoApplyTo(value) {
@@ -3369,14 +4195,1346 @@
     return ['product', 'category'].includes(raw) ? raw : 'order';
   }
 
+  function normalizeDiscountAudienceMode(value) {
+    const raw = String(value || '').trim();
+    return ['all', 'specific', 'category'].includes(raw) ? raw : 'all';
+  }
+
+  function inferDiscountAudienceMode(items = []) {
+    const rows = Array.isArray(items) ? items : [];
+    if (!rows.length) return 'all';
+    if (rows.every((item) => String(item?.type || item?.entity_type || '').trim() === 'category')) {
+      return 'category';
+    }
+    return 'specific';
+  }
+
+  function getDiscountProgressBasis() {
+    const basis = normalizeDiscountProgressBasis(elDeProgressBasis?.value || 'orders');
+    if (elDeProgressBasis) {
+      elDeProgressBasis.value = basis;
+    }
+    return basis;
+  }
+
+  function getDiscountProgressScopeMode() {
+    const basis = getDiscountProgressBasis();
+    const items = cloneDiscountEntities(state.discountProgressQualifyingItems);
+    let nextMode = normalizeDiscountProgressScopeMode(elDeProgressScopeMode?.value || 'none');
+
+    if (basis === 'orders') {
+      nextMode = 'none';
+    } else if (items.length && items.every((item) => String(item?.type || '').trim() === 'category')) {
+      nextMode = 'category';
+    } else if (items.length) {
+      const productCount = items.filter((item) => String(item?.type || '').trim() === 'product').length;
+      nextMode = productCount > 1 ? 'product_list' : 'product';
+    } else if (nextMode === 'none') {
+      nextMode = 'product';
+    }
+
+    if (elDeProgressScopeMode) {
+      elDeProgressScopeMode.value = nextMode;
+    }
+    return nextMode;
+  }
+
+  function getDiscountProgressScopeEntityType() {
+    return getDiscountProgressScopeMode() === 'category' ? 'category' : 'product';
+  }
+
+  function getDiscountProgressScopeSelection() {
+    const basis = getDiscountProgressBasis();
+    if (basis === 'orders') return [];
+    const mode = getDiscountProgressScopeMode();
+    const expectedType = mode === 'category' ? 'category' : 'product';
+    let rows = cloneDiscountEntities(state.discountProgressQualifyingItems)
+      .filter((item) => String(item?.type || '').trim() === expectedType);
+    if (mode === 'product') {
+      rows = rows.slice(0, 1);
+    }
+    return rows;
+  }
+
+  function getDiscountProgressScopeLabelText() {
+    const mode = getDiscountProgressScopeMode();
+    if (mode === 'category') return 'Категории для накопления';
+    if (mode === 'product_list') return 'Товары для накопления';
+    return 'Товар для накопления';
+  }
+
+  function getDiscountProgressScopeAddButtonText() {
+    return getDiscountProgressScopeMode() === 'category' ? 'Добавить категорию' : 'Добавить товар';
+  }
+
+  function syncDiscountProgressScopeUiCopy() {
+    const label = getDiscountProgressScopeLabelText();
+    const buttonText = getDiscountProgressScopeAddButtonText();
+    if (elDeProgressScopeItemsLabel) {
+      elDeProgressScopeItemsLabel.textContent = label;
+    }
+    if (elDeAddProgressScopeItemsBtnText) {
+      elDeAddProgressScopeItemsBtnText.textContent = buttonText;
+    }
+    if (elDeAddProgressScopeItemsBtn) {
+      elDeAddProgressScopeItemsBtn.setAttribute('aria-label', buttonText);
+      elDeAddProgressScopeItemsBtn.setAttribute('title', buttonText);
+    }
+  }
+
+  function getDiscountProgressDiscountApplyTo() {
+    const applyTo = String(elDeProgressDiscountApplyTo?.value || 'order').trim();
+    return ['product', 'category'].includes(applyTo) ? applyTo : 'order';
+  }
+
+  function getDiscountProgressDiscountEntityType() {
+    return getDiscountProgressDiscountApplyTo() === 'category' ? 'category' : 'product';
+  }
+
+  function getDiscountProgressDiscountSelection() {
+    const applyTo = getDiscountProgressDiscountApplyTo();
+    if (applyTo === 'order') return [];
+    const expectedType = applyTo === 'category' ? 'category' : 'product';
+    return cloneDiscountEntities(state.discountProgressDiscountProducts)
+      .filter((item) => String(item?.type || '').trim() === expectedType);
+  }
+
+  function syncDiscountProgressDiscountUiCopy() {
+    const applyTo = getDiscountProgressDiscountApplyTo();
+    const label = applyTo === 'category' ? 'Категории' : 'Товары';
+    const buttonText = applyTo === 'category' ? 'Добавить категорию' : 'Добавить товар';
+    if (elDeProgressDiscountProductsLabel) {
+      elDeProgressDiscountProductsLabel.textContent = label;
+    }
+    if (elDeAddProgressDiscountProductsBtn) {
+      elDeAddProgressDiscountProductsBtn.setAttribute('aria-label', buttonText);
+      elDeAddProgressDiscountProductsBtn.setAttribute('title', buttonText);
+    }
+    if (elDeAddProgressRewardGiftBtnText) {
+      elDeAddProgressRewardGiftBtnText.textContent = 'Добавить товар';
+    }
+  }
+
+  function findDiscountSharedPromoSource(source) {
+    const promoCodeId = Number(source?.source_promo_code_id || 0);
+    const discountId = Number(source?.source_discount_id || 0);
+    return (state.discountSharedPromoSources || []).find((item) => (
+      Number(item?.source_promo_code_id || 0) === promoCodeId
+      || (discountId > 0 && Number(item?.source_discount_id || 0) === discountId)
+    )) || null;
+  }
+
+  function findDiscountSimpleSource(source) {
+    const discountId = Number(source?.discount_id || source?.source_discount_id || 0);
+    return (state.discountSimpleDiscountSources || []).find((item) => (
+      Number(item?.discount_id || item?.source_discount_id || 0) === discountId
+    )) || null;
+  }
+
+  function getDiscountProgressPromoSourceSummaryText(source = state.discountProgressPromoSource) {
+    const row = cloneDiscountPromoSource(source);
+    if (!row) return 'Промокод не прикреплен';
+    const matched = findDiscountSharedPromoSource(row);
+    const title = String(matched?.source_discount_title || row.source_discount_title || '').trim();
+    return title ? `${title} • ${row.source_code}` : row.source_code;
+  }
+
+  async function loadDiscountSharedPromoSources(forceReload = false) {
+    if (!forceReload && state.discountSharedPromoSourcesLoaded) {
+      return state.discountSharedPromoSources;
+    }
+    try {
+      const json = await apiJson('/api/admin/discounts/shared-promo-sources');
+      state.discountSharedPromoSources = Array.isArray(json.sources)
+        ? json.sources.map((item) => cloneDiscountPromoSource(item)).filter(Boolean)
+        : [];
+    } catch (err) {
+      console.error('loadDiscountSharedPromoSources error:', err);
+      state.discountSharedPromoSources = [];
+    }
+    state.discountSharedPromoSourcesLoaded = true;
+    return state.discountSharedPromoSources;
+  }
+
+  async function loadDiscountSimpleSources(forceReload = false) {
+    if (!forceReload && state.discountSimpleDiscountSourcesLoaded) {
+      return state.discountSimpleDiscountSources;
+    }
+    try {
+      const json = await apiJson('/api/admin/discounts/simple-discount-sources');
+      state.discountSimpleDiscountSources = Array.isArray(json.sources)
+        ? json.sources.map((item) => cloneDiscountSimpleSource(item)).filter(Boolean)
+        : [];
+    } catch (err) {
+      console.error('loadDiscountSimpleSources error:', err);
+      state.discountSimpleDiscountSources = [];
+    }
+    state.discountSimpleDiscountSourcesLoaded = true;
+    return state.discountSimpleDiscountSources;
+  }
+
+  function renderDiscountProgressPromoSourceList() {
+    if (!elDeProgressPromoSourceList) return;
+    const selectedId = Number(state.discountProgressPromoSource?.source_promo_code_id || 0);
+    const rows = Array.isArray(state.discountSharedPromoSources) ? state.discountSharedPromoSources : [];
+    if (!rows.length) {
+      elDeProgressPromoSourceList.innerHTML = '<div class="discount-audience-empty">Общие промокоды не найдены</div>';
+      return;
+    }
+    elDeProgressPromoSourceList.innerHTML = rows.map((item) => {
+      const promoCodeId = Number(item?.source_promo_code_id || 0);
+      const isActive = promoCodeId === selectedId;
+      const statusBits = [];
+      statusBits.push(item?.is_active ? 'акция активна' : 'акция выключена');
+      statusBits.push(item?.promo_code_is_active ? 'код активен' : 'код выключен');
+      if (Number(item?.usage_limit || 0) > 0) {
+        statusBits.push(`${Number(item?.usage_count || 0)}/${Number(item?.usage_limit || 0)}`);
+      }
+      return `
+        <button type="button" class="discount-progress-promo-option${isActive ? ' is-active' : ''}" data-progress-promo-source-id="${promoCodeId}">
+          <span class="discount-progress-promo-option-title">${escapeHtml(item.source_discount_title || `Акция #${item.source_discount_id || 0}`)}</span>
+          <span class="discount-progress-promo-option-code">${escapeHtml(item.source_code || '')}</span>
+          <span class="discount-progress-promo-option-meta">${escapeHtml(statusBits.join(' • '))}</span>
+        </button>
+      `;
+    }).join('');
+  }
+
+  function renderDiscountProgressPromoSource() {
+    const current = cloneDiscountPromoSource(state.discountProgressPromoSource);
+    const matched = current ? findDiscountSharedPromoSource(current) : null;
+    state.discountProgressPromoSource = current
+      ? {
+          ...current,
+          source_discount_title: matched?.source_discount_title || current.source_discount_title || '',
+          usage_limit: matched?.usage_limit ?? current.usage_limit ?? null,
+          usage_count: matched?.usage_count ?? current.usage_count ?? 0,
+          is_active: matched?.is_active ?? current.is_active ?? true,
+          promo_code_is_active: matched?.promo_code_is_active ?? current.promo_code_is_active ?? true,
+        }
+      : null;
+
+    if (elDeProgressPromoSourceSummaryText) {
+      elDeProgressPromoSourceSummaryText.textContent = getDiscountProgressPromoSourceSummaryText(state.discountProgressPromoSource);
+    }
+    if (elDeProgressClearPromoBtn) {
+      const isHidden = !state.discountProgressPromoSource;
+      elDeProgressClearPromoBtn.classList.toggle('hidden', isHidden);
+      elDeProgressClearPromoBtn.hidden = isHidden;
+    }
+    if (elDeProgressAttachPromoBtn) {
+      elDeProgressAttachPromoBtn.textContent = state.discountProgressPromoSource ? 'Заменить промокод' : 'Прикрепить промокод';
+    }
+    if (elDeProgressPromoSourceHint) {
+      elDeProgressPromoSourceHint.textContent = state.discountProgressPromoSource
+        ? 'Награда будет ссылаться на выбранный общий промокод.'
+        : 'Можно прикрепить только существующий общий промокод.';
+    }
+    renderDiscountProgressPromoSourceList();
+    renderDiscountProgressCountsVisualization();
+  }
+
+  function getThresholdTierById(tierId) {
+    return Array.isArray(state.discountThresholdTiers)
+      ? state.discountThresholdTiers.find((item) => String(item.id) === String(tierId))
+      : null;
+  }
+
+  function updateThresholdTier(tierId, updater) {
+    state.discountThresholdTiers = (state.discountThresholdTiers || []).map((tier) => (
+      String(tier.id) === String(tierId) ? updater(tier) : tier
+    ));
+  }
+
+  function getThresholdTierRewardPreview(tier) {
+    const row = tier && typeof tier === 'object' ? tier : null;
+    if (!row) return null;
+    if (row.reward_kind === 'discount_ref') {
+      const source = findDiscountSimpleSource(row.reward_discount_source) || cloneDiscountSimpleSource(row.reward_discount_source);
+      return {
+        type: 'meta',
+        id: Number(source?.discount_id || 0),
+        title: source?.title || 'Скидка',
+        photo: '',
+        icon: 'fa-percent',
+        count: 1,
+      };
+    }
+    if (row.reward_kind === 'promo_code_ref') {
+      const source = findDiscountSharedPromoSource(row.reward_promo_source) || cloneDiscountPromoSource(row.reward_promo_source);
+      return source
+        ? {
+            type: 'meta',
+            id: Number(source.source_promo_code_id || 0),
+            title: source.source_code || 'Промокод',
+            photo: '',
+            icon: 'fa-ticket-alt',
+            count: 1,
+          }
+        : null;
+    }
+    return buildDiscountSummaryVisualItem(row.reward_products || [], {
+      emptyTitle: row.reward_kind === 'product_list' ? 'Выберите товары' : 'Выберите товар',
+    });
+  }
+
+  function closeDiscountThresholdRewardPicker() {
+    state.discountThresholdRewardPickerTierId = null;
+    if (!elDeThresholdRewardPicker) return;
+    elDeThresholdRewardPicker.classList.add('hidden');
+    elDeThresholdRewardPicker.hidden = true;
+    elDeThresholdRewardPicker.style.removeProperty('top');
+    elDeThresholdRewardPicker.style.removeProperty('left');
+  }
+
+  function renderDiscountThresholdRewardPicker() {
+    if (!elDeThresholdRewardPicker || !elDeThresholdRewardPickerTypes || !elDeThresholdRewardPickerList) return;
+    const tier = getThresholdTierById(state.discountThresholdRewardPickerTierId);
+    if (!tier) {
+      closeDiscountThresholdRewardPicker();
+      return;
+    }
+
+    const activeKind = normalizeThresholdTierRewardKindUi(tier);
+    $$('[data-threshold-reward-kind-choice]', elDeThresholdRewardPickerTypes).forEach((button) => {
+      const value = String(button.getAttribute('data-threshold-reward-kind-choice') || '').trim();
+      const isActive = value === activeKind;
+      button.classList.toggle('is-active', isActive);
+      button.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+    });
+
+    if (activeKind === 'discount_ref') {
+      const currentId = Number(tier.reward_discount_source?.discount_id || 0);
+      const currentDiscountId = Number($('#de_id')?.value || 0);
+      const rows = (state.discountSimpleDiscountSources || []).filter((item) => Number(item?.discount_id || 0) !== currentDiscountId);
+      elDeThresholdRewardPickerList.classList.remove('hidden');
+      elDeThresholdRewardPickerList.hidden = false;
+      elDeThresholdRewardPickerList.innerHTML = rows.length
+        ? rows.map((item) => {
+            const discountId = Number(item?.discount_id || 0);
+            const isActive = discountId === currentId;
+            const metaBits = [];
+            metaBits.push(formatDiscountApplyToText(item?.apply_to || 'order'));
+            if (item?.discount_value != null && Number(item.discount_value || 0) > 0) {
+              metaBits.push(item.discount_type === 'fixed'
+                ? `-${Number(item.discount_value || 0)}₽`
+                : `${Number(item.discount_value || 0)}${item.discount_type === 'special_price' ? '₽' : '%'}`);
+            }
+            metaBits.push(item.is_active ? 'активна' : 'неактивна');
+            return `
+              <button type="button" class="discount-threshold-source-option${isActive ? ' is-active' : ''}" data-threshold-discount-source-id="${discountId}">
+                <span class="discount-threshold-source-option-title">${escapeHtml(item.title || `Скидка #${discountId}`)}</span>
+                <span class="discount-threshold-source-option-meta">${escapeHtml(metaBits.join(' • '))}</span>
+              </button>
+            `;
+          }).join('')
+        : '<div class="discount-audience-empty">Обычные скидки не найдены</div>';
+      return;
+    }
+
+    if (activeKind === 'promo_code_ref') {
+      const currentPromoId = Number(tier.reward_promo_source?.source_promo_code_id || 0);
+      const rows = Array.isArray(state.discountSharedPromoSources) ? state.discountSharedPromoSources : [];
+      elDeThresholdRewardPickerList.classList.remove('hidden');
+      elDeThresholdRewardPickerList.hidden = false;
+      elDeThresholdRewardPickerList.innerHTML = rows.length
+        ? rows.map((item) => {
+            const promoCodeId = Number(item?.source_promo_code_id || 0);
+            const isActive = promoCodeId === currentPromoId;
+            const statusBits = [];
+            statusBits.push(item?.is_active ? 'акция активна' : 'акция выключена');
+            statusBits.push(item?.promo_code_is_active ? 'код активен' : 'код выключен');
+            if (Number(item?.usage_limit || 0) > 0) {
+              statusBits.push(`${Number(item?.usage_count || 0)}/${Number(item?.usage_limit || 0)}`);
+            }
+            return `
+              <button type="button" class="discount-threshold-source-option${isActive ? ' is-active' : ''}" data-threshold-promo-source-id="${promoCodeId}">
+                <span class="discount-threshold-source-option-title">${escapeHtml(item.source_discount_title || `Акция #${item.source_discount_id || 0}`)}</span>
+                <span class="discount-threshold-source-option-code">${escapeHtml(item.source_code || '')}</span>
+                <span class="discount-threshold-source-option-meta">${escapeHtml(statusBits.join(' • '))}</span>
+              </button>
+            `;
+          }).join('')
+        : '<div class="discount-audience-empty">Общие промокоды не найдены</div>';
+      return;
+    }
+
+    elDeThresholdRewardPickerList.classList.add('hidden');
+    elDeThresholdRewardPickerList.hidden = true;
+    elDeThresholdRewardPickerList.innerHTML = '';
+  }
+
+  function openDiscountThresholdRewardPicker(tierId, triggerEl) {
+    if (!elDeThresholdRewardPicker || !triggerEl) return;
+    state.discountThresholdRewardPickerTierId = String(tierId || '').trim() || null;
+    renderDiscountThresholdRewardPicker();
+    elDeThresholdRewardPicker.classList.remove('hidden');
+    elDeThresholdRewardPicker.hidden = false;
+
+    const triggerRect = triggerEl.getBoundingClientRect();
+    const pickerRect = elDeThresholdRewardPicker.getBoundingClientRect();
+    const margin = 12;
+    const maxLeft = Math.max(margin, window.innerWidth - pickerRect.width - margin);
+    const left = Math.max(margin, Math.min(triggerRect.left, maxLeft));
+    let top = triggerRect.bottom + 10;
+    if (top + pickerRect.height > window.innerHeight - margin) {
+      top = Math.max(margin, triggerRect.top - pickerRect.height - 10);
+    }
+    elDeThresholdRewardPicker.style.left = `${Math.round(left)}px`;
+    elDeThresholdRewardPicker.style.top = `${Math.round(top)}px`;
+  }
+
+  async function toggleDiscountProgressPromoSourcePicker(forceOpen = null) {
+    if (!elDeProgressPromoSourcePicker) return;
+    const shouldOpen = forceOpen == null
+      ? elDeProgressPromoSourcePicker.classList.contains('hidden')
+      : !!forceOpen;
+    if (shouldOpen) {
+      await loadDiscountSharedPromoSources();
+      renderDiscountProgressPromoSource();
+      elDeProgressPromoSourcePicker.classList.remove('hidden');
+      elDeProgressPromoSourcePicker.hidden = false;
+      return;
+    }
+    elDeProgressPromoSourcePicker.classList.add('hidden');
+    elDeProgressPromoSourcePicker.hidden = true;
+  }
+
+  function bindDiscountStepper(inputEl, minusEl, plusEl, onChange) {
+    if (!inputEl) return;
+    const applyValue = (rawValue) => {
+      const nextValue = normalizeDiscountVisualCount(rawValue, 1);
+      inputEl.value = String(nextValue);
+      if (typeof onChange === 'function') onChange(nextValue);
+    };
+    const syncInput = () => applyValue(inputEl.value);
+    inputEl.addEventListener('input', syncInput);
+    inputEl.addEventListener('change', syncInput);
+    if (minusEl) {
+      minusEl.addEventListener('click', () => {
+        applyValue(normalizeDiscountVisualCount(inputEl.value, 1) - 1);
+      });
+    }
+    if (plusEl) {
+      plusEl.addEventListener('click', () => {
+        applyValue(normalizeDiscountVisualCount(inputEl.value, 1) + 1);
+      });
+    }
+  }
+
+  function formatDiscountTimeInputValue(rawValue) {
+    const digits = String(rawValue || '').replace(/\D/g, '').slice(0, 4);
+    if (digits.length <= 2) return digits;
+    return `${digits.slice(0, 2)}:${digits.slice(2)}`;
+  }
+
+  function bindDiscountTimeInput(inputEl) {
+    if (!inputEl || inputEl.dataset.discountTimeBound === '1') return;
+    inputEl.dataset.discountTimeBound = '1';
+
+    const syncValue = () => {
+      inputEl.value = formatDiscountTimeInputValue(inputEl.value);
+    };
+
+    inputEl.addEventListener('input', syncValue);
+    inputEl.addEventListener('change', syncValue);
+    inputEl.addEventListener('blur', syncValue);
+    inputEl.addEventListener('keydown', (e) => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if ([
+        'Backspace',
+        'Delete',
+        'Tab',
+        'Enter',
+        'ArrowLeft',
+        'ArrowRight',
+        'Home',
+        'End',
+      ].includes(e.key)) return;
+      if (/^\d$/.test(e.key)) return;
+      e.preventDefault();
+    });
+  }
+
+  function closeDiscountSlotPicker() {
+    state.discountSlotPickerContext = null;
+    if (!elDeSlotPicker) return;
+    elDeSlotPicker.classList.add('hidden');
+    elDeSlotPicker.hidden = true;
+    elDeSlotPicker.style.removeProperty('top');
+    elDeSlotPicker.style.removeProperty('left');
+  }
+
+  function getDiscountSlotPickerChoices() {
+    const context = state.discountSlotPickerContext;
+    const target = String(context?.target || '').trim();
+    if (!target) return null;
+
+    if (target === 'buy_condition') {
+      return {
+        title: 'Что участвует',
+        choices: [
+          { value: 'product', label: 'Товар' },
+          { value: 'product_list', label: 'Список товаров' },
+          { value: 'category', label: 'Категория' },
+        ],
+        activeValue: getDiscountBuyConditionUiMode(),
+      };
+    }
+
+    if (target === 'buy_reward') {
+      let activeValue = String(state.discountBuyRewardUiMode || '').trim();
+      const rewardKind = String(elDeBuyRewardKind?.value || 'gift').trim();
+      const rewardSource = String(elDeBuyRewardSource?.value || 'same_pool').trim();
+      if (!activeValue && rewardKind === 'product_discount') {
+        activeValue = 'discount';
+      } else if (!activeValue && rewardSource === 'reward_list') {
+        const rewardSelection = getDiscountBuyRewardSelection();
+        activeValue = rewardSelection.length > 1 ? 'product_list' : (rewardSelection.length === 1 ? 'product' : '');
+      }
+      return {
+        title: 'Что добавить в награду',
+        choices: [
+          { value: 'product', label: 'Товар' },
+          { value: 'product_list', label: 'Список товаров' },
+          { value: 'discount', label: 'Скидка' },
+        ],
+        activeValue,
+      };
+    }
+
+    if (target === 'progress_scope') {
+      return {
+        title: 'Что участвует',
+        choices: [
+          { value: 'product', label: 'Товар' },
+          { value: 'product_list', label: 'Список товаров' },
+          { value: 'category', label: 'Категория' },
+        ],
+        activeValue: getDiscountProgressScopeMode(),
+      };
+    }
+
+    if (target === 'progress_reward') {
+      const rewardKind = normalizeDiscountProgressRewardKind(elDeProgressRewardKind?.value || 'gift');
+      const giftProducts = cloneDiscountEntities(state.discountProgressGiftProducts || []);
+      const activeValue = String(state.discountProgressRewardUiMode || '').trim()
+        || (rewardKind === 'discount'
+          ? 'discount'
+          : rewardKind === 'promo_code'
+            ? 'promo_code'
+            : (giftProducts.length > 1 ? 'product_list' : (giftProducts.length === 1 ? 'product' : '')));
+      return {
+        title: 'Что добавить в награду',
+        choices: [
+          { value: 'product', label: 'Товар' },
+          { value: 'product_list', label: 'Список товаров' },
+          { value: 'discount', label: 'Скидка' },
+          { value: 'promo_code', label: 'Промокод' },
+        ],
+        activeValue,
+      };
+    }
+
+    return null;
+  }
+
+  function renderDiscountSlotPicker() {
+    if (!elDeSlotPicker || !elDeSlotPickerTitle || !elDeSlotPickerTypes) return;
+    const config = getDiscountSlotPickerChoices();
+    if (!config) {
+      closeDiscountSlotPicker();
+      return;
+    }
+    elDeSlotPickerTitle.textContent = config.title;
+    elDeSlotPickerTypes.innerHTML = (config.choices || []).map((choice) => {
+      const isActive = choice.value === config.activeValue;
+      return `
+        <button
+          type="button"
+          class="shop-chip-btn discount-promo-apply-chip${isActive ? ' is-active' : ''}"
+          data-slot-picker-choice="${escapeHtml(choice.value)}"
+          aria-pressed="${isActive ? 'true' : 'false'}"
+        >${escapeHtml(choice.label)}</button>
+      `;
+    }).join('');
+  }
+
+  function openDiscountSlotPicker(target, triggerEl) {
+    if (!elDeSlotPicker || !triggerEl) return;
+    closeDiscountThresholdRewardPicker();
+    if (elDeProgressPromoSourcePicker) {
+      elDeProgressPromoSourcePicker.classList.add('hidden');
+      elDeProgressPromoSourcePicker.hidden = true;
+    }
+    state.discountSlotPickerContext = {
+      target: String(target || '').trim(),
+    };
+    renderDiscountSlotPicker();
+    if (elDeSlotPicker.classList.contains('hidden')) {
+      elDeSlotPicker.classList.remove('hidden');
+      elDeSlotPicker.hidden = false;
+    }
+
+    const triggerRect = triggerEl.getBoundingClientRect();
+    const pickerRect = elDeSlotPicker.getBoundingClientRect();
+    const margin = 12;
+    const maxLeft = Math.max(margin, window.innerWidth - pickerRect.width - margin);
+    const left = Math.max(margin, Math.min(triggerRect.left, maxLeft));
+    let top = triggerRect.bottom + 10;
+    if (top + pickerRect.height > window.innerHeight - margin) {
+      top = Math.max(margin, triggerRect.top - pickerRect.height - 10);
+    }
+    elDeSlotPicker.style.left = `${Math.round(left)}px`;
+    elDeSlotPicker.style.top = `${Math.round(top)}px`;
+  }
+
+  function applyDiscountBuyConditionSlotChoice(choice) {
+    const nextMode = normalizeDiscountBuyConditionUiMode(choice);
+    if (elDeBuyConditionUiMode) {
+      elDeBuyConditionUiMode.value = nextMode;
+    }
+    handleDiscountBuyConditionUiModeChange();
+    closeDiscountSlotPicker();
+    openDiscountProductPicker('buy_condition', nextMode === 'category' ? 'category' : 'product').catch(console.error);
+  }
+
+  function applyDiscountBuyRewardSlotChoice(choice) {
+    const nextChoice = String(choice || '').trim();
+    if (!['product', 'product_list', 'discount'].includes(nextChoice)) return;
+
+    if (nextChoice === 'discount') {
+      state.discountBuyRewardUiMode = 'discount';
+      if (elDeBuyRewardSource) elDeBuyRewardSource.value = 'same_pool';
+      if (elDeBuyRewardKind) elDeBuyRewardKind.value = 'product_discount';
+      state.discountBuyRewardProducts = [];
+      handleDiscountBuyRewardKindChange();
+      renderDiscountBuyRewardChips();
+      closeDiscountSlotPicker();
+      return;
+    }
+
+    state.discountBuyRewardUiMode = nextChoice;
+    if (elDeBuyRewardSource) elDeBuyRewardSource.value = 'reward_list';
+    if (elDeBuyRewardKind) elDeBuyRewardKind.value = 'gift';
+    if (elDeBuyRewardDiscountType) elDeBuyRewardDiscountType.value = 'percent';
+    if (elDeBuyRewardDiscountValue) elDeBuyRewardDiscountValue.value = '';
+    state.discountBuyRewardProducts = cloneDiscountEntities(state.discountBuyRewardProducts || [])
+      .filter((item) => String(item?.type || '').trim() === 'product');
+    if (nextChoice === 'product') {
+      state.discountBuyRewardProducts = state.discountBuyRewardProducts.slice(0, 1);
+    }
+    handleDiscountBuyRewardSourceChange();
+    handleDiscountBuyRewardKindChange();
+    renderDiscountBuyRewardChips();
+    closeDiscountSlotPicker();
+    openDiscountProductPicker('buy_reward', 'product').catch(console.error);
+  }
+
+  function applyDiscountProgressScopeSlotChoice(choice) {
+    const nextMode = normalizeDiscountProgressScopeMode(choice);
+    if (!['product', 'product_list', 'category'].includes(nextMode)) return;
+    if (elDeProgressScopeMode) {
+      elDeProgressScopeMode.value = nextMode;
+    }
+    handleDiscountProgressScopeModeChange();
+    closeDiscountSlotPicker();
+    openDiscountProductPicker('progress_scope', nextMode === 'category' ? 'category' : 'product').catch(console.error);
+  }
+
+  function applyDiscountProgressRewardSlotChoice(choice) {
+    const nextChoice = String(choice || '').trim();
+    if (!['product', 'product_list', 'discount', 'promo_code'].includes(nextChoice)) return;
+
+    if (nextChoice === 'discount') {
+      state.discountProgressRewardUiMode = 'discount';
+      if (elDeProgressRewardKind) elDeProgressRewardKind.value = 'discount';
+      handleDiscountProgressRewardKindChange();
+      closeDiscountSlotPicker();
+      return;
+    }
+
+    if (nextChoice === 'promo_code') {
+      state.discountProgressRewardUiMode = 'promo_code';
+      if (elDeProgressRewardKind) elDeProgressRewardKind.value = 'promo_code';
+      handleDiscountProgressRewardKindChange();
+      closeDiscountSlotPicker();
+      toggleDiscountProgressPromoSourcePicker(true).catch(console.error);
+      return;
+    }
+
+    state.discountProgressRewardUiMode = nextChoice;
+    if (elDeProgressRewardKind) elDeProgressRewardKind.value = 'gift';
+    handleDiscountProgressRewardKindChange();
+    state.discountProgressGiftProducts = cloneDiscountEntities(state.discountProgressGiftProducts || [])
+      .filter((item) => String(item?.type || '').trim() === 'product');
+    if (nextChoice === 'product') {
+      state.discountProgressGiftProducts = state.discountProgressGiftProducts.slice(0, 1);
+    }
+    renderDiscountProgressRewardGiftChips();
+    closeDiscountSlotPicker();
+    openDiscountProductPicker('progress_reward_gift', 'product').catch(console.error);
+  }
+
+  function normalizeDiscountBuyConditionUiMode(value) {
+    const raw = String(value || '').trim();
+    return ['product', 'product_list', 'category'].includes(raw) ? raw : 'product';
+  }
+
+  function getDiscountBuyConditionUiMode() {
+    const items = cloneDiscountEntities(state.discountBuyConditionProducts);
+    let nextMode = normalizeDiscountBuyConditionUiMode(
+      elDeBuyConditionUiMode?.value || state.discountBuyConditionUiMode || 'product'
+    );
+    if (String(elDeBuyQualifyingMode?.value || '').trim() === 'same_sku') {
+      nextMode = 'product';
+    } else if (items.length && items.every((item) => String(item?.type || '').trim() === 'category')) {
+      nextMode = 'category';
+    } else {
+      const productCount = items.filter((item) => String(item?.type || '').trim() === 'product').length;
+      if (productCount > 1) {
+        nextMode = 'product_list';
+      } else if (productCount === 1 && nextMode === 'category') {
+        nextMode = 'product';
+      }
+    }
+    state.discountBuyConditionUiMode = nextMode;
+    if (elDeBuyConditionUiMode) {
+      elDeBuyConditionUiMode.value = nextMode;
+    }
+    return nextMode;
+  }
+
+  function getDiscountBuyConditionEntityType() {
+    return getDiscountBuyConditionUiMode() === 'category' ? 'category' : 'product';
+  }
+
+  function getDiscountBuyConditionLabelText() {
+    const mode = getDiscountBuyConditionUiMode();
+    if (mode === 'category') return 'Категории для условия';
+    if (mode === 'product_list') return 'Товары для условия';
+    return 'Товар для условия';
+  }
+
+  function getDiscountBuyConditionAddButtonText() {
+    return getDiscountBuyConditionUiMode() === 'category' ? 'Добавить категорию' : 'Добавить товар';
+  }
+
+  function syncDiscountBuyHiddenQualifyingMode() {
+    if (!elDeBuyQualifyingMode) return;
+    elDeBuyQualifyingMode.value = 'pool';
+  }
+
+  function syncDiscountBuyConditionUiCopy() {
+    const label = getDiscountBuyConditionLabelText();
+    const buttonText = getDiscountBuyConditionAddButtonText();
+    if (elDeBuyConditionProductsLabel) {
+      elDeBuyConditionProductsLabel.textContent = label;
+    }
+    if (elDeAddBuyConditionProductsBtnText) {
+      elDeAddBuyConditionProductsBtnText.textContent = buttonText;
+    }
+    if (elDeAddBuyConditionProductsBtn) {
+      elDeAddBuyConditionProductsBtn.setAttribute('aria-label', buttonText);
+      elDeAddBuyConditionProductsBtn.setAttribute('title', buttonText);
+    }
+    if (elDeBuyRewardProductsLabel) {
+      elDeBuyRewardProductsLabel.textContent = 'Товары-награды';
+    }
+    if (elDeAddBuyRewardProductsBtnText) {
+      elDeAddBuyRewardProductsBtnText.textContent = 'Добавить товар';
+    }
+  }
+
+  function inferDiscountBuyConditionUiMode(mechanic = {}) {
+    if (String(mechanic?.qualifying_mode || '').trim() === 'same_sku') {
+      return 'product';
+    }
+    const items = cloneDiscountEntities(mechanic?.qualifying_items || []);
+    if (!items.length) return 'product';
+    const normalizedTypes = [...new Set(items.map((item) => String(item?.type || '').trim()))];
+    if (normalizedTypes.length === 1 && normalizedTypes[0] === 'category') {
+      return 'category';
+    }
+    const productItems = items.filter((item) => String(item?.type || '').trim() === 'product');
+    return productItems.length <= 1 ? 'product' : 'product_list';
+  }
+
+  function getDiscountBuyConditionSelection() {
+    const mode = getDiscountBuyConditionUiMode();
+    const entityType = mode === 'category' ? 'category' : 'product';
+    let rows = cloneDiscountEntities(state.discountBuyConditionProducts).filter((item) => String(item?.type || '').trim() === entityType);
+    if (mode === 'product') {
+      rows = rows.slice(0, 1);
+    }
+    return rows;
+  }
+
+  function getDiscountBuyRewardSelection() {
+    let rows = cloneDiscountEntities(state.discountBuyRewardProducts).filter((item) => String(item?.type || '').trim() === 'product');
+    if (String(state.discountBuyRewardUiMode || '').trim() === 'product') {
+      rows = rows.slice(0, 1);
+    }
+    return rows;
+  }
+
+  function buildDiscountBuyPreview(items, emptyTitle, emptyIcon) {
+    const rows = cloneDiscountEntities(items);
+    if (!rows.length) {
+      return {
+        isEmpty: true,
+        title: emptyTitle,
+        count: 0,
+        photo: '',
+        icon: emptyIcon,
+      };
+    }
+    const first = rows[0];
+    return {
+      isEmpty: false,
+      title: String(first?.title || '').trim() || emptyTitle,
+      count: rows.length,
+      photo: getDiscountEntityPhoto(first),
+      icon: String(first?.type || '').trim() === 'category' ? 'fa-layer-group' : 'fa-image',
+    };
+  }
+
+  function buildDiscountSummaryVisualItem(items, options = {}) {
+    const rows = cloneDiscountEntities(items);
+    if (!rows.length) return null;
+    const first = rows[0];
+    return {
+      type: String(first?.type || '').trim(),
+      id: Number(first?.id || 0),
+      title: String(first?.title || options.emptyTitle || '').trim(),
+      photo: getDiscountEntityPhoto(first),
+      icon: String(first?.type || '').trim() === 'category'
+        ? 'fa-layer-group'
+        : (String(options.icon || '').trim() || 'fa-image'),
+      count: rows.length,
+    };
+  }
+
+  function getDiscountVisualRowGap(rowLength, containerWidth, itemWidth = 50, minGap = 4, maxGap = 28) {
+    if (!(rowLength > 1)) return 0;
+    const freeSpace = containerWidth > 0
+      ? (containerWidth - (rowLength * itemWidth)) / (rowLength - 1)
+      : 14;
+    return Math.max(minGap, Math.min(maxGap, Math.floor(freeSpace)));
+  }
+
+  function buildDiscountSelectionVisualSlotHtml(item, options = {}) {
+    const role = options.role === 'reward' ? 'reward' : 'buy';
+    const isGiftReward = role === 'reward' && options.isGiftReward === true;
+    const row = item && typeof item === 'object' ? item : null;
+    const isEmpty = !row;
+    const type = String(row?.type || '').trim();
+    const title = String(
+      row?.title
+      || options.emptyTitle
+      || (role === 'reward' ? 'Выберите награду' : 'Выберите товар')
+    ).trim();
+    const photo = row ? getDiscountEntityPhoto(row) : '';
+    const previewCount = Number(row?.count || 0);
+    const explicitIcon = String(row?.icon || '').trim();
+    const icon = isEmpty
+      ? String(options.emptyIcon || 'fa-plus')
+      : (explicitIcon || (type === 'category' ? 'fa-layer-group' : 'fa-image'));
+    const giftBadgeHtml = isGiftReward
+      ? '<span class="discount-buy-slot-gift-badge" aria-hidden="true"><i class="fas fa-gift"></i></span>'
+      : '';
+    const mediaHtml = photo
+      ? `<span class="discount-buy-slot-media"><img src="${escapeHtml(photo)}" alt="${escapeHtml(title)}" />${previewCount > 1 ? `<span class="discount-buy-slot-badge">${previewCount}</span>` : ''}</span>`
+      : `<span class="discount-buy-slot-media"><span class="discount-buy-slot-placeholder"><i class="fas ${escapeHtml(icon)}"></i></span>${previewCount > 1 ? `<span class="discount-buy-slot-badge">${previewCount}</span>` : ''}</span>`;
+    return `
+      <button
+        type="button"
+        class="discount-buy-slot ${role === 'buy' ? 'is-buy' : 'is-reward'}${isGiftReward ? ' is-gift-reward' : ''}${isEmpty ? ' is-empty' : ' is-filled'}"
+        data-discount-visual-target="${escapeHtml(String(options.target || '').trim())}"
+        aria-label="${escapeHtml(title)}"
+        title="${escapeHtml(title)}"
+      >
+        ${giftBadgeHtml}
+        ${mediaHtml}
+      </button>
+    `;
+  }
+
+  function buildDiscountAmountVisualSlotHtml(value, options = {}) {
+    const title = String(options.title || 'Введите сумму').trim();
+    const rawValue = value == null ? '' : String(value);
+    const role = String(options.role || 'buy').trim() === 'reward' ? 'reward' : 'buy';
+    const visualTarget = String(options.target || '').trim();
+    return `
+      <div
+        class="discount-buy-slot discount-buy-slot--amount ${role === 'buy' ? 'is-buy' : 'is-reward'}"
+        data-discount-amount-slot
+        ${visualTarget ? `data-discount-visual-target="${escapeHtml(visualTarget)}"` : ''}
+        aria-label="${escapeHtml(title)}"
+        title="${escapeHtml(title)}"
+      >
+        <input
+          class="discount-buy-slot-amount-input"
+          type="number"
+          min="1"
+          step="1"
+          value="${escapeHtml(rawValue)}"
+          placeholder="${escapeHtml(String(options.placeholder || '500').trim())}"
+          data-discount-amount-slot-input="progress_threshold"
+          aria-label="${escapeHtml(title)}"
+        />
+        <span class="discount-buy-slot-amount-currency">₽</span>
+      </div>
+    `;
+  }
+
+  function buildDiscountSelectionVisualRowsHtml(items, options = {}) {
+    const rows = cloneDiscountEntities(items);
+    const slots = rows.length ? rows : [null];
+    const slotsPerRow = 6;
+    const safeWidth = Math.max(
+      0,
+      Number(options.rowWidth || 0) - 4
+    );
+    const chunks = [];
+    for (let index = 0; index < slots.length; index += slotsPerRow) {
+      chunks.push(slots.slice(index, index + slotsPerRow));
+    }
+    return chunks.map((chunk) => `
+      <div
+        class="discount-buy-visual-row"
+        data-slot-count="${chunk.length}"
+        style="--discount-buy-slot-gap:${getDiscountVisualRowGap(chunk.length, safeWidth)}px"
+      >
+        ${chunk.map((item) => buildDiscountSelectionVisualSlotHtml(item, options)).join('')}
+      </div>
+    `).join('');
+  }
+
+  function renderDiscountSelectionVisual(targetEl, items, options = {}) {
+    if (!targetEl) return;
+    const rowWidth = Number(
+      options.rowWidth
+      || targetEl?.clientWidth
+      || targetEl?.closest?.('.discount-buy-visual-card')?.clientWidth
+      || targetEl?.parentElement?.clientWidth
+      || 0
+    );
+    targetEl.innerHTML = buildDiscountSelectionVisualRowsHtml(items, {
+      ...options,
+      rowWidth,
+    });
+  }
+
+  function buildDiscountCountVisualRowsHtml(buyQty, rewardQty, options = {}) {
+    const safeBuyQty = normalizeDiscountVisualCount(buyQty, 1);
+    const safeRewardQty = normalizeDiscountVisualCount(rewardQty, 1);
+    const safeWidth = Math.max(0, Number(options.rowWidth || 0) - 4);
+    const slots = [];
+    const slotsPerRow = Math.max(1, Number(options.slotsPerRow || 6));
+    const slotWidth = Math.max(40, Number(options.slotWidth || 50));
+    const slotMinGap = Math.max(0, Number(options.slotMinGap || 4));
+    const slotMaxGap = Math.max(slotMinGap, Number(options.slotMaxGap || 28));
+
+    for (let index = 0; index < safeBuyQty; index += 1) {
+      slots.push({
+        role: 'buy',
+        target: options.buyTarget || '',
+        emptyTitle: options.buyEmptyTitle || 'Выберите условие',
+      });
+    }
+
+    for (let index = 0; index < safeRewardQty; index += 1) {
+      slots.push({
+        role: 'reward',
+        target: options.rewardTarget || '',
+        emptyTitle: options.rewardEmptyTitle || 'Выберите награду',
+        isGiftReward: options.isGiftReward === true,
+      });
+    }
+
+    const rows = [];
+    for (let index = 0; index < slots.length; index += slotsPerRow) {
+      rows.push(slots.slice(index, index + slotsPerRow));
+    }
+
+    return rows.map((row, rowIndex) => `
+      <div
+        class="discount-buy-visual-row"
+        data-slot-count="${row.length}"
+        style="--discount-buy-slot-gap:${getDiscountVisualRowGap(row.length, safeWidth, slotWidth, slotMinGap, slotMaxGap)}px"
+      >
+        ${row.map((slot, slotIndex) => {
+          const globalIndex = rowIndex * slotsPerRow + slotIndex;
+          if (typeof options.customSlotBuilder === 'function') {
+            const customHtml = options.customSlotBuilder(slot, globalIndex);
+            if (customHtml) return customHtml;
+          }
+          return buildDiscountSelectionVisualSlotHtml(slot.role === 'buy' ? (options.buyPreview || null) : (options.rewardPreview || null), {
+            role: slot.role,
+            target: slot.target,
+            isGiftReward: slot.isGiftReward,
+            emptyTitle: slot.emptyTitle,
+            emptyIcon: 'fa-plus',
+          });
+        }).join('')}
+      </div>
+    `).join('');
+  }
+
+  function renderDiscountCountVisual(targetEl, buyQty, rewardQty, options = {}) {
+    if (!targetEl) return;
+    const rowWidth = Number(
+      options.rowWidth
+      || targetEl?.clientWidth
+      || targetEl?.closest?.('.discount-buy-visual-card')?.clientWidth
+      || targetEl?.parentElement?.clientWidth
+      || 0
+    );
+    targetEl.innerHTML = buildDiscountCountVisualRowsHtml(buyQty, rewardQty, {
+      ...options,
+      rowWidth,
+    });
+  }
+
+  function getDiscountProgressCountsBuyPreview() {
+    const basis = getDiscountProgressBasis();
+    if (basis === 'orders') {
+      return {
+        type: 'meta',
+        id: 0,
+        title: 'Покупки',
+        photo: '',
+        icon: 'fa-receipt',
+        count: 1,
+      };
+    }
+    return buildDiscountSummaryVisualItem(getDiscountProgressScopeSelection(), {
+      emptyTitle: 'Добавить условие',
+      icon: basis === 'amount' ? 'fa-ruble-sign' : 'fa-image',
+    });
+  }
+
+  function getDiscountProgressCountsRewardPreview() {
+    const rewardKind = normalizeDiscountProgressRewardKind(elDeProgressRewardKind?.value || 'gift');
+    if (rewardKind === 'gift') {
+      return buildDiscountSummaryVisualItem(state.discountProgressGiftProducts || [], {
+        emptyTitle: 'Добавить награду',
+      });
+    }
+    if (rewardKind === 'discount') {
+      if (getDiscountProgressDiscountApplyTo() === 'order') {
+        return {
+          type: 'meta',
+          id: 0,
+          title: 'Скидка',
+          photo: '',
+          icon: 'fa-percent',
+          count: 1,
+        };
+      }
+      return buildDiscountSummaryVisualItem(getDiscountProgressDiscountSelection(), {
+        emptyTitle: 'Добавить награду',
+      });
+    }
+    const promoSource = cloneDiscountPromoSource(state.discountProgressPromoSource);
+    if (!promoSource) return null;
+    return {
+      type: 'meta',
+      id: Number(promoSource.source_promo_code_id || 0),
+      title: promoSource.source_code || 'Промокод',
+      photo: '',
+      icon: 'fa-ticket-alt',
+      count: 1,
+    };
+  }
+
+  function getDiscountProgressRewardVisualTarget() {
+    return 'progress_reward';
+  }
+
+  function syncDiscountProgressPendingRewardHelp() {
+    const popover = document.getElementById('de_help_progress_pending_popover');
+    const textEl = popover?.querySelector?.('.discount-help-popover-text');
+    if (!textEl) return;
+    const mode = normalizeDiscountProgressPendingRewardMode(elDeProgressPendingRewardMode?.value || 'stack');
+    textEl.textContent = mode === 'single_pending'
+      ? 'Как только накопилась награда, прогресс останавливается и не растет дальше, пока клиент не получит все награды текущего цикла. После получения последней награды цикл начинается заново.'
+      : 'Прогресс после получения не сбрасывается. Клиент может выполнить условие несколько раз и потом забрать все накопившиеся награды.';
+  }
+
+  function renderDiscountProgressCountsVisualization() {
+    const progressBasis = getDiscountProgressBasis();
+    const buyQty = normalizeDiscountVisualCount(elDeProgressBuyQty?.value, 1);
+    const rewardQty = normalizeDiscountVisualCount(elDeProgressRewardQty?.value, 1);
+    const amountThresholdValue = parseFloat(elDeProgressThresholdValue?.value);
+    syncDiscountProgressPendingRewardHelp();
+    renderDiscountCountVisual(
+      elDeProgressCountsVisualRows,
+      buyQty,
+      rewardQty,
+      {
+        buyTarget: progressBasis === 'items' ? 'progress_scope' : '',
+        rewardTarget: getDiscountProgressRewardVisualTarget(),
+        buyPreview: getDiscountProgressCountsBuyPreview(),
+        rewardPreview: getDiscountProgressCountsRewardPreview(),
+        slotsPerRow: 5,
+        slotWidth: 75,
+        slotMinGap: 10,
+        slotMaxGap: 22,
+        customSlotBuilder: progressBasis === 'amount'
+          ? (slot, globalIndex) => {
+              if (slot.role !== 'buy' || globalIndex !== 0) return '';
+              return buildDiscountAmountVisualSlotHtml(
+                Number.isFinite(amountThresholdValue) && amountThresholdValue > 0 ? String(amountThresholdValue) : '',
+                {
+                  title: 'Каждые N ₽ = подарок',
+                  placeholder: '500',
+                  role: 'buy',
+                }
+              );
+            }
+          : null,
+        isGiftReward: normalizeDiscountProgressRewardKind(elDeProgressRewardKind?.value || 'gift') === 'gift',
+        buyEmptyTitle: 'Добавить условие',
+        rewardEmptyTitle: 'Добавить награду',
+      }
+    );
+  }
+
+  function resizeDiscountThresholdTiers(nextCount) {
+    const safeCount = normalizeDiscountVisualCount(nextCount, 1);
+    let tiers = Array.isArray(state.discountThresholdTiers)
+      ? [...state.discountThresholdTiers]
+      : [];
+
+    if (!tiers.length) {
+      tiers = [buildEmptyThresholdTier()];
+    }
+
+    if (tiers.length > safeCount) {
+      tiers = tiers.slice(0, safeCount);
+    }
+
+    while (tiers.length < safeCount) {
+      tiers.push(buildEmptyThresholdTier());
+    }
+
+    state.discountThresholdTiers = tiers;
+    if (elDeThresholdSlotCount) {
+      elDeThresholdSlotCount.value = String(safeCount);
+    }
+  }
+
+  function buildThresholdTierSlotRowsHtml(tiers, rowWidth = 0) {
+    const rows = Array.isArray(tiers) ? tiers : [];
+    const slotsPerRow = 5;
+    const safeWidth = Math.max(0, Number(rowWidth || 0) - 4);
+    const chunks = [];
+
+    for (let index = 0; index < rows.length; index += slotsPerRow) {
+      chunks.push(rows.slice(index, index + slotsPerRow));
+    }
+
+    return chunks.map((chunk) => `
+      <div
+        class="discount-threshold-slot-row"
+        data-slot-count="${chunk.length}"
+        style="--discount-threshold-slot-gap:${getDiscountVisualRowGap(chunk.length, safeWidth, 75, 10, 22)}px"
+      >
+        ${chunk.map((tier) => {
+          const preview = getThresholdTierRewardPreview(tier);
+          return `
+            <div class="discount-threshold-slot-item" data-threshold-tier-id="${escapeHtml(tier.id)}">
+              <input
+                class="control discount-threshold-slot-input"
+                type="number"
+                step="0.01"
+                min="0"
+                data-threshold-field="min_amount"
+                data-threshold-tier-id="${escapeHtml(tier.id)}"
+                value="${escapeHtml(tier.min_amount ?? '')}"
+                placeholder="Порог"
+              />
+              ${buildDiscountSelectionVisualSlotHtml(preview, {
+                role: 'reward',
+                target: `threshold:${tier.id}`,
+                isGiftReward: ['product', 'product_list'].includes(normalizeThresholdTierRewardKindUi(tier)),
+                emptyTitle: 'Выберите награду',
+                emptyIcon: 'fa-plus',
+              })}
+            </div>
+          `;
+        }).join('')}
+      </div>
+    `).join('');
+  }
+
+  function findThresholdTierVisualRow(tierId) {
+    return Array.from($$('[data-threshold-tier-count-visual]')).find(
+      (node) => String(node?.getAttribute?.('data-threshold-tier-count-visual') || '') === String(tierId)
+    ) || null;
+  }
+
+  function renderThresholdTierCountsVisualization(tierId) {
+    const tier = Array.isArray(state.discountThresholdTiers)
+      ? state.discountThresholdTiers.find((item) => String(item.id) === String(tierId))
+      : null;
+    const targetEl = findThresholdTierVisualRow(tierId);
+    if (!tier || !targetEl) return;
+    renderDiscountCountVisual(
+      targetEl,
+      normalizeDiscountVisualCount(tier.buy_qty, 1),
+      normalizeDiscountVisualCount(tier.reward_qty, 1),
+      {
+        rewardTarget: tier.reward_kind === 'order_discount' ? '' : `threshold:${tier.id}`,
+        isGiftReward: tier.reward_kind === 'gift',
+        buyEmptyTitle: 'Схема условия',
+        rewardEmptyTitle: 'Схема награды',
+      }
+    );
+  }
+
+  function getDiscountBuySlotPreview(role) {
+    const rewardUiMode = String(state.discountBuyRewardUiMode || '').trim();
+    const rewardSource = String(elDeBuyRewardSource?.value || 'same_pool').trim() || 'same_pool';
+    const rewardKind = String(elDeBuyRewardKind?.value || 'gift').trim() || 'gift';
+    if (role === 'buy') {
+      const mode = getDiscountBuyConditionUiMode();
+      const emptyTitle = mode === 'category' ? 'Выберите категории' : 'Выберите товары';
+      return buildDiscountBuyPreview(getDiscountBuyConditionSelection(), emptyTitle, 'fa-plus');
+    }
+    if (rewardKind === 'product_discount' || rewardUiMode === 'discount') {
+      return {
+        isEmpty: false,
+        title: 'Скидка',
+        count: 1,
+        photo: '',
+        icon: 'fa-percent',
+      };
+    }
+    if (rewardUiMode === 'product' || rewardUiMode === 'product_list' || rewardSource === 'reward_list') {
+      return buildDiscountBuyPreview(getDiscountBuyRewardSelection(), 'Выберите товары-награды', 'fa-plus');
+    }
+    if (rewardUiMode === 'legacy_same_pool') {
+      return getDiscountBuySlotPreview('buy');
+    }
+    return {
+      isEmpty: true,
+      title: 'Выберите награду',
+      count: 0,
+      photo: '',
+      icon: 'fa-plus',
+    };
+  }
+
+  function getDiscountBuyVisualColumnCount() {
+    const width = Number(elDeBuyVisualCard?.clientWidth || elDeBuyXGetYWrap?.clientWidth || 0);
+    if (width >= 520) return 4;
+    if (width >= 380) return 3;
+    return 2;
+  }
+
+  function buildDiscountBuySlotHtml(slot) {
+    const roleLabel = slot.role === 'buy'
+      ? 'Покупаем'
+      : (String(elDeBuyRewardKind?.value || 'gift').trim() === 'product_discount' ? 'Скидка' : 'Подарок');
+    const isGiftReward = slot.role === 'reward' && String(elDeBuyRewardKind?.value || 'gift').trim() === 'gift';
+    const preview = slot.preview || {};
+    const giftBadgeHtml = isGiftReward
+      ? '<span class="discount-buy-slot-gift-badge" aria-hidden="true"><i class="fas fa-gift"></i></span>'
+      : '';
+    const mediaHtml = preview.photo
+      ? `<span class="discount-buy-slot-media"><img src="${escapeHtml(preview.photo)}" alt="${escapeHtml(preview.title || roleLabel)}" />${preview.count > 1 ? `<span class="discount-buy-slot-badge">${preview.count}</span>` : ''}</span>`
+      : `<span class="discount-buy-slot-media"><span class="discount-buy-slot-placeholder"><i class="fas ${escapeHtml(preview.icon || 'fa-plus')}"></i></span>${preview.count > 1 ? `<span class="discount-buy-slot-badge">${preview.count}</span>` : ''}</span>`;
+    return `
+      <button
+        type="button"
+        class="discount-buy-slot ${slot.role === 'buy' ? 'is-buy' : 'is-reward'}${isGiftReward ? ' is-gift-reward' : ''}${preview.isEmpty ? ' is-empty' : ' is-filled'}"
+        data-buy-slot-target="${escapeHtml(slot.target)}"
+        data-buy-slot-role="${escapeHtml(slot.role)}"
+        aria-label="${escapeHtml(`${roleLabel}: ${preview.title || roleLabel}`)}"
+        title="${escapeHtml(preview.title || roleLabel)}"
+      >
+        ${giftBadgeHtml}
+        ${mediaHtml}
+      </button>
+    `;
+  }
+
+  function renderDiscountBuyVisualization() {
+    if (!elDeBuyVisualRows) return;
+    const buyQty = Math.max(1, parseInt(elDeBuyQty?.value, 10) || 1);
+    const rewardQty = Math.max(1, parseInt(elDeRewardQty?.value, 10) || 1);
+    const totalSlots = buyQty + rewardQty;
+    const slotsPerRow = 5;
+    const rowWidth = Math.max(
+      0,
+      Number(elDeBuyVisualRows?.clientWidth || elDeBuyVisualCard?.clientWidth || elDeBuyXGetYWrap?.clientWidth || 0) - 4
+    );
+    const rewardSource = String(elDeBuyRewardSource?.value || 'same_pool').trim() || 'same_pool';
+    const buyPreview = getDiscountBuySlotPreview('buy');
+    const rewardPreview = getDiscountBuySlotPreview('reward');
+    const slots = [];
+
+    for (let index = 0; index < totalSlots; index += 1) {
+      const isBuySlot = index < buyQty;
+      slots.push({
+        role: isBuySlot ? 'buy' : 'reward',
+        target: isBuySlot ? 'buy_condition' : 'buy_reward',
+        preview: isBuySlot ? buyPreview : rewardPreview,
+      });
+    }
+
+    const rows = [];
+    for (let index = 0; index < slots.length; index += slotsPerRow) {
+      rows.push(slots.slice(index, index + slotsPerRow));
+    }
+
+    elDeBuyVisualRows.innerHTML = rows.map((row) => `
+      <div
+        class="discount-buy-visual-row"
+        data-slot-count="${row.length}"
+        style="--discount-buy-slot-gap:${getDiscountVisualRowGap(row.length, rowWidth, 75, 10, 22)}px"
+      >
+        ${row.map((slot) => buildDiscountBuySlotHtml(slot)).join('')}
+      </div>
+    `).join('');
+
+    if (elDeBuyVisualMeta) {
+      const rewardLabel = String(elDeBuyRewardKind?.value || 'gift').trim() === 'product_discount' ? 'скидка' : 'подарок';
+      elDeBuyVisualMeta.textContent = `${buyQty} покупаем • ${rewardQty} даем • ${rewardLabel}`;
+    }
+  }
+
   function syncDiscountChoiceGroups() {
-    syncDiscountChoiceGroup('de_mechanic_type');
+    syncDiscountMechanicChoiceGrid();
     syncDiscountChoiceGroup('de_simple_variant');
+    syncDiscountChoiceGroup('de_apply_to');
+    syncDiscountChoiceGroup('de_discount_type');
+    syncDiscountChoiceGroup('de_threshold_basis');
+    syncDiscountChoiceGroup('de_threshold_apply_mode');
+    syncDiscountChoiceGroup('de_audience_mode');
     syncDiscountChoiceGroup('de_promo_code_mode');
     syncDiscountChoiceGroup('de_promo_reward_type');
     syncDiscountChoiceGroup('de_promo_product_reward_type');
     syncDiscountChoiceGroup('de_promo_discount_type');
+    syncDiscountChoiceGroup('de_promo_product_discount_type');
     syncDiscountChoiceGroup('de_promo_apply_to');
+    syncDiscountChoiceGroup('de_buy_condition_ui_mode');
+    syncDiscountChoiceGroup('de_buy_repeat_mode');
+    syncDiscountChoiceGroup('de_buy_reward_source');
+    syncDiscountChoiceGroup('de_buy_reward_kind');
+    syncDiscountChoiceGroup('de_buy_reward_discount_type');
+    syncDiscountChoiceGroup('de_progress_basis');
+    syncDiscountChoiceGroup('de_progress_status_filter');
+    syncDiscountChoiceGroup('de_progress_scope_mode');
+    syncDiscountChoiceGroup('de_progress_pending_reward_mode');
+    syncDiscountChoiceGroup('de_progress_reward_kind');
+    syncDiscountChoiceGroup('de_progress_issue_mode');
+    syncDiscountChoiceGroup('de_progress_redemption_mode');
+    syncDiscountChoiceGroup('de_progress_discount_apply_to');
+    syncDiscountChoiceGroup('de_progress_discount_type');
   }
 
   function getDiscountMechanic(discount) {
@@ -3409,6 +5567,38 @@
         tiers: Array.isArray(mechanic.tiers) && mechanic.tiers.length
           ? mechanic.tiers.map((tier) => buildEmptyThresholdTier(tier))
           : [buildEmptyThresholdTier()],
+      };
+    }
+
+    if (mechanicType === 'loyalty_progress') {
+      const reward = mechanic.reward && typeof mechanic.reward === 'object' ? mechanic.reward : {};
+      const rewardDiscount = reward.discount && typeof reward.discount === 'object' ? reward.discount : {};
+      const rewardPromoCode = reward.promo_code && typeof reward.promo_code === 'object' ? reward.promo_code : {};
+      return {
+        type: 'loyalty_progress',
+        buy_qty: normalizeDiscountVisualCount(mechanic.buy_qty, 1),
+        reward_qty: normalizeDiscountVisualCount(mechanic.reward_qty, 1),
+        progress_basis: normalizeDiscountProgressBasis(mechanic.progress_basis),
+        threshold_value: mechanic.threshold_value ?? '',
+        status_filter: 'completed',
+        qualifying_scope_mode: normalizeDiscountProgressScopeMode(mechanic.qualifying_scope_mode || 'none'),
+        qualifying_items: cloneDiscountEntities(mechanic.qualifying_items || []),
+        reward_kind: normalizeDiscountProgressRewardKind(mechanic.reward_kind),
+        issue_mode: normalizeDiscountProgressIssueMode(mechanic.issue_mode || 'automatic'),
+        pending_reward_mode: normalizeDiscountProgressPendingRewardMode(mechanic.pending_reward_mode || 'stack'),
+        redemption_mode: normalizeDiscountProgressRedemptionMode(mechanic.redemption_mode || 'reset'),
+        reward: {
+          gift_products: cloneDiscountEntities(reward.gift_products || []),
+          discount: {
+            apply_to: ['product', 'category'].includes(String(rewardDiscount.apply_to || '').trim())
+              ? String(rewardDiscount.apply_to || '').trim()
+              : 'order',
+            discount_type: normalizePromoDiscountType(rewardDiscount.discount_type || 'percent'),
+            discount_value: rewardDiscount.discount_value ?? '',
+            products: cloneDiscountEntities(rewardDiscount.products || []),
+          },
+          promo_code: cloneDiscountPromoSource(rewardPromoCode),
+        },
       };
     }
 
@@ -3470,6 +5660,38 @@
     return 'Процент';
   }
 
+  function formatDiscountProgressBasisText(value) {
+    return {
+      orders: 'Покупки',
+      items: 'Товары',
+      amount: 'Сумма',
+    }[normalizeDiscountProgressBasis(value)] || 'Покупки';
+  }
+
+  function formatDiscountProgressRewardKindText(value) {
+    return {
+      gift: 'Подарок',
+      discount: 'Скидка',
+      promo_code: 'Промокод',
+    }[normalizeDiscountProgressRewardKind(value)] || 'Подарок';
+  }
+
+  function formatDiscountProgressIssueModeText(value) {
+    return {
+      automatic: 'Автоматически',
+      manual: 'Вручную',
+      code: 'Кодом',
+    }[normalizeDiscountProgressIssueMode(value)] || 'Автоматически';
+  }
+
+  function formatDiscountProgressThresholdValue(mechanic) {
+    const threshold = Number(mechanic?.threshold_value || 0);
+    if (!(threshold > 0)) return '—';
+    if (mechanic?.progress_basis === 'amount') return `${threshold}₽`;
+    if (mechanic?.progress_basis === 'items') return `${threshold} тов.`;
+    return `${threshold} покупок`;
+  }
+
   function getDiscountPromoFromDiscount(discount) {
     const promo = discount?.promo && typeof discount.promo === 'object' ? discount.promo : {};
     const mechanic = getDiscountMechanic(discount);
@@ -3501,7 +5723,8 @@
 
   function formatDiscountMechanicText(discount) {
     const mechanic = getDiscountMechanic(discount);
-    if (mechanic.type === 'buy_x_get_y') return '5+1';
+    if (mechanic.type === 'buy_x_get_y') return '1+1';
+    if (mechanic.type === 'loyalty_progress') return 'Накопительная';
     if (mechanic.type === 'threshold') return 'Пороговая';
     return 'Скидка';
   }
@@ -3520,6 +5743,32 @@
       if (promoReward.reward_type === 'product') {
         if (promoReward.product_reward_type === 'gift') return 'Подарок';
         if (promoReward.discount_type === 'fixed') return `Товар -${promoReward.discount_value}₽`;
+        return `Товар -${promoReward.discount_value}%`;
+      }
+    }
+    if (mechanic.discount_type === 'percent') return `${mechanic.discount_value}%`;
+    if (mechanic.discount_type === 'fixed') return `-${mechanic.discount_value}₽`;
+    return `${mechanic.discount_value}₽`;
+  }
+
+  function formatDiscountValue(discount) {
+    if (!discount) return '—';
+    const mechanic = getDiscountMechanic(discount);
+    if (mechanic.type === 'buy_x_get_y') {
+      return `${mechanic.buy_qty}+${mechanic.reward_qty}`;
+    }
+    if (mechanic.type === 'loyalty_progress') {
+      return formatDiscountProgressThresholdValue(mechanic);
+    }
+    if (mechanic.type === 'threshold') {
+      return `${Array.isArray(mechanic.tiers) ? mechanic.tiers.length : 0} ступ.`;
+    }
+    if (mechanic.simple_variant === 'promo_code') {
+      const promoReward = mechanic.promo_reward || {};
+      if (promoReward.reward_type === 'product') {
+        if (promoReward.product_reward_type === 'gift') return 'Подарок';
+        if (promoReward.discount_type === 'fixed') return `Товар -${promoReward.discount_value}₽`;
+        if (promoReward.discount_type === 'special_price') return `Товар ${promoReward.discount_value}₽`;
         return `Товар -${promoReward.discount_value}%`;
       }
     }
@@ -3554,6 +5803,10 @@
     if (code === 'INVALID_CUSTOMERS') return 'Проверьте выбранных клиентов и клиентские категории.';
     if (code === 'INVALID_PRODUCTS') return 'Проверьте выбранные товары, категории или комбо.';
     if (code === 'INVALID_DATE_RANGE') return 'Дата окончания не может быть раньше даты начала.';
+    if (code === 'PERIOD_BOUNDS_REQUIRED') return 'Для ограничения по периоду укажите дату начала и дату окончания.';
+    if (code === 'WEEKDAYS_REQUIRED') return 'Для ограничения по дням недели выберите хотя бы один день.';
+    if (code === 'TIME_BOUNDS_REQUIRED') return 'Для ограничения по времени укажите и начало, и окончание.';
+    if (code === 'INVALID_TIME_RANGE') return 'Время окончания должно быть позже времени начала.';
     if (code === 'PRODUCTS_REQUIRED') return 'Добавьте товары, категории или комбо для выбранной механики.';
     if (code === 'PRODUCTS_NOT_ALLOWED') return 'Для этой механики список товаров заполнять не нужно.';
     if (code === 'PROMO_NOT_AVAILABLE') return 'Промокод доступен только для простой скидки с механикой "Промокод".';
@@ -3561,22 +5814,447 @@
     if (code === 'PROMO_CODE_TAKEN') return 'Такой промокод уже существует.';
     if (code === 'PROMO_REWARD_PRODUCTS_REQUIRED') return 'Добавьте товары для награды по промокоду.';
     if (code === 'INVALID_DISCOUNT_VALUE') return 'Укажите корректное значение скидки.';
+    if (code === 'SPECIAL_PRICE_PRODUCT_ONLY') return 'Спеццена доступна только для товара.';
     if (code === 'INVALID_MECHANIC_CONFIG') return 'Проверьте настройки механики акции.';
-    if (code === 'QUALIFYING_ITEMS_REQUIRED') return 'Добавьте товары для условия акции 5+1.';
+    if (code === 'QUALIFYING_ITEMS_REQUIRED') return 'Добавьте товары для условия акции 1+1.';
+    if (code === 'INVALID_QUALIFYING_ITEMS') return 'Для условия 1+1 выберите либо товары, либо категории.';
     if (code === 'REWARD_PRODUCTS_REQUIRED') return 'Добавьте товары-награды.';
     if (code === 'INVALID_REWARD_DISCOUNT') return 'Проверьте размер скидки для награды.';
     if (code === 'THRESHOLD_TIERS_REQUIRED') return 'Добавьте хотя бы одну ступень пороговой акции.';
     if (code === 'INVALID_THRESHOLD_TIER') return 'Заполните все обязательные поля в ступенях пороговой акции.';
+    if (code === 'INVALID_PROGRESS_THRESHOLD') return 'Укажите корректный порог накопительной акции.';
+    if (code === 'LOYALTY_QUALIFYING_ITEMS_REQUIRED') return 'Добавьте товары или категории для накопления.';
+    if (code === 'INVALID_PROGRESS_SCOPE_ITEMS') return 'Проверьте область накопления и выбранные товары или категории.';
+    if (code === 'LOYALTY_REWARD_PRODUCTS_REQUIRED') return 'Добавьте товары для награды накопительной акции.';
+    if (code === 'LOYALTY_PROMO_SOURCE_REQUIRED') return 'Прикрепите общий промокод для награды.';
+    if (code === 'INVALID_ISSUE_MODE') return 'Проверьте режим выдачи награды.';
     return code ? `Ошибка сохранения: ${code}` : 'Не удалось сохранить акцию.';
+  }
+
+  function parseDiscountScheduleDays(value) {
+    if (Array.isArray(value)) return value.map((item) => Number(item)).filter((item) => Number.isInteger(item));
+    if (typeof value === 'string' && value.trim()) {
+      try {
+        const parsed = JSON.parse(value);
+        if (Array.isArray(parsed)) {
+          return parsed.map((item) => Number(item)).filter((item) => Number.isInteger(item));
+        }
+      } catch {}
+    }
+    return [];
+  }
+
+  function toDateKey(date) {
+    if (!(date instanceof Date) || Number.isNaN(date.getTime())) return '';
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+
+  function parseDateKey(value) {
+    if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(String(value))) return null;
+    const [year, month, day] = String(value).split('-').map(Number);
+    const date = new Date(year, month - 1, day);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  function normalizeDiscountPeriodDate(value) {
+    if (!value) return null;
+    if (value instanceof Date) {
+      if (Number.isNaN(value.getTime())) return null;
+      return new Date(value.getFullYear(), value.getMonth(), value.getDate());
+    }
+    const raw = String(value).trim();
+    const dateKeyMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (dateKeyMatch) {
+      return parseDateKey(`${dateKeyMatch[1]}-${dateKeyMatch[2]}-${dateKeyMatch[3]}`);
+    }
+    const parsed = new Date(raw);
+    if (Number.isNaN(parsed.getTime())) return null;
+    return new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
+  }
+
+  function formatDiscountPeriodBoundary(date, boundary = 'start') {
+    const normalized = normalizeDiscountPeriodDate(date);
+    if (!normalized) return '';
+    const year = normalized.getFullYear();
+    const month = String(normalized.getMonth() + 1).padStart(2, '0');
+    const day = String(normalized.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}T${boundary === 'end' ? '23:59' : '00:00'}`;
+  }
+
+  function formatDiscountPeriodSummary(start, end) {
+    const startDate = normalizeDiscountPeriodDate(start);
+    const endDate = normalizeDiscountPeriodDate(end);
+    const formatOne = (date) => date.toLocaleDateString('ru-RU');
+    if (!startDate && !endDate) return 'Выбрать период';
+    if (startDate && !endDate) return `С ${formatOne(startDate)}`;
+    if (!startDate || !endDate) return 'Выбрать период';
+    return `${formatOne(startDate)} — ${formatOne(endDate)}`;
+  }
+
+  function syncDiscountRestrictionChips() {
+    if (!elDiscountEditorForm) return;
+    $$('[data-discount-restriction-chip]', elDiscountEditorForm).forEach((btn) => {
+      const mode = String(btn.getAttribute('data-discount-restriction-chip') || '').trim();
+      let enabled = false;
+      if (mode === 'period') enabled = !!elDePeriodEnabled?.checked;
+      if (mode === 'weekdays') enabled = !!elDeWeekdaysEnabled?.checked;
+      if (mode === 'time') enabled = !!elDeTimeEnabled?.checked;
+      btn.classList.toggle('is-active', enabled);
+      btn.setAttribute('aria-pressed', enabled ? 'true' : 'false');
+    });
+  }
+
+  function syncDiscountPeriodSummary() {
+    if (!elDePeriodSummary) return;
+    elDePeriodSummary.textContent = formatDiscountPeriodSummary(
+      state.discountPeriod?.start || null,
+      state.discountPeriod?.end || null
+    );
+  }
+
+  function closeDiscountPeriodPopover() {
+    if (elDePeriodPopover) {
+      elDePeriodPopover.style.left = '';
+      elDePeriodPopover.style.top = '';
+      elDePeriodPopover.classList.add('hidden');
+      elDePeriodPopover.hidden = true;
+    }
+    if (elDePeriodTrigger) {
+      elDePeriodTrigger.setAttribute('aria-expanded', 'false');
+    }
+  }
+
+  function getDiscountHelpPopover(triggerOrId) {
+    const id = typeof triggerOrId === 'string'
+      ? triggerOrId
+      : String(triggerOrId?.getAttribute?.('data-discount-help-trigger') || '').trim();
+    if (!id) return null;
+    return document.getElementById(`de_help_${id}_popover`);
+  }
+
+  function closeDiscountHelpPopover() {
+    if (activeDiscountHelpPopover) {
+      activeDiscountHelpPopover.style.left = '';
+      activeDiscountHelpPopover.style.top = '';
+      activeDiscountHelpPopover.classList.add('hidden');
+      activeDiscountHelpPopover.hidden = true;
+      activeDiscountHelpPopover.setAttribute('aria-hidden', 'true');
+    }
+    if (activeDiscountHelpTrigger) {
+      activeDiscountHelpTrigger.setAttribute('aria-expanded', 'false');
+    }
+    activeDiscountHelpTrigger = null;
+    activeDiscountHelpPopover = null;
+  }
+
+  function positionDiscountHelpPopover(triggerEl = activeDiscountHelpTrigger, popoverEl = activeDiscountHelpPopover) {
+    if (!triggerEl || !popoverEl || popoverEl.hidden) return;
+
+    const gap = 8;
+    const viewportPadding = 12;
+    const triggerRect = triggerEl.getBoundingClientRect();
+    const popoverRect = popoverEl.getBoundingClientRect();
+    const popoverWidth = popoverRect.width || Math.min(280, window.innerWidth - (viewportPadding * 2));
+    const popoverHeight = popoverRect.height || 120;
+
+    let left = triggerRect.right - popoverWidth;
+    if ((left + popoverWidth + viewportPadding) > window.innerWidth) {
+      left = window.innerWidth - popoverWidth - viewportPadding;
+    }
+    if (left < viewportPadding) {
+      left = viewportPadding;
+    }
+
+    const roomBelow = window.innerHeight - triggerRect.bottom - viewportPadding;
+    const roomAbove = triggerRect.top - viewportPadding;
+    let top = triggerRect.bottom + gap;
+
+    if (roomBelow < popoverHeight && roomAbove > roomBelow) {
+      top = triggerRect.top - popoverHeight - gap;
+    }
+    if (top < viewportPadding) {
+      top = viewportPadding;
+    }
+    if ((top + popoverHeight + viewportPadding) > window.innerHeight) {
+      top = Math.max(viewportPadding, window.innerHeight - popoverHeight - viewportPadding);
+    }
+
+    popoverEl.style.left = `${Math.round(left)}px`;
+    popoverEl.style.top = `${Math.round(top)}px`;
+  }
+
+  function openDiscountHelpPopover(triggerEl) {
+    const popover = getDiscountHelpPopover(triggerEl);
+    if (!triggerEl || !popover) return;
+
+    const isSamePopoverOpen = activeDiscountHelpTrigger === triggerEl && activeDiscountHelpPopover === popover && !popover.hidden;
+    if (isSamePopoverOpen) {
+      closeDiscountHelpPopover();
+      return;
+    }
+
+    closeDiscountHelpPopover();
+    activeDiscountHelpTrigger = triggerEl;
+    activeDiscountHelpPopover = popover;
+    popover.hidden = false;
+    popover.classList.remove('hidden');
+    popover.setAttribute('aria-hidden', 'false');
+    triggerEl.setAttribute('aria-expanded', 'true');
+    positionDiscountHelpPopover(triggerEl, popover);
+  }
+
+  function discardIncompleteDiscountPeriodSelection() {
+    if (state.discountPeriod?.start && !state.discountPeriod?.end) {
+      hydrateDiscountPeriodStateFromInputs();
+    }
+  }
+
+  function positionDiscountPeriodPopover() {
+    if (!elDePeriodPopover || !elDePeriodTrigger || elDePeriodPopover.hidden) return;
+
+    const gap = 8;
+    const viewportPadding = 12;
+    const triggerRect = elDePeriodTrigger.getBoundingClientRect();
+    const popoverRect = elDePeriodPopover.getBoundingClientRect();
+    const popoverWidth = popoverRect.width || Math.min(280, window.innerWidth - (viewportPadding * 2));
+    const popoverHeight = popoverRect.height || 320;
+
+    let left = triggerRect.left;
+    if ((left + popoverWidth + viewportPadding) > window.innerWidth) {
+      left = window.innerWidth - popoverWidth - viewportPadding;
+    }
+    if (left < viewportPadding) {
+      left = viewportPadding;
+    }
+
+    const roomBelow = window.innerHeight - triggerRect.bottom - viewportPadding;
+    const roomAbove = triggerRect.top - viewportPadding;
+    let top = triggerRect.bottom + gap;
+
+    if (roomBelow < popoverHeight && roomAbove > roomBelow) {
+      top = triggerRect.top - popoverHeight - gap;
+    }
+    if (top < viewportPadding) {
+      top = viewportPadding;
+    }
+    if ((top + popoverHeight + viewportPadding) > window.innerHeight) {
+      top = Math.max(viewportPadding, window.innerHeight - popoverHeight - viewportPadding);
+    }
+
+    elDePeriodPopover.style.left = `${Math.round(left)}px`;
+    elDePeriodPopover.style.top = `${Math.round(top)}px`;
+  }
+
+  function ensureDiscountPeriodView() {
+    const viewYear = Number(state.discountPeriod?.viewYear);
+    const viewMonth = Number(state.discountPeriod?.viewMonth);
+    if (
+      Number.isInteger(viewYear) &&
+      viewYear >= 1970 &&
+      viewYear <= 9999 &&
+      Number.isInteger(viewMonth) &&
+      viewMonth >= 0 &&
+      viewMonth <= 11
+    ) {
+      return;
+    }
+    const baseDate = state.discountPeriod?.start || new Date();
+    state.discountPeriod.viewYear = baseDate.getFullYear();
+    state.discountPeriod.viewMonth = baseDate.getMonth();
+  }
+
+  function syncDiscountPeriodInputsFromState() {
+    const startsAtEl = $('#de_starts_at');
+    const endsAtEl = $('#de_ends_at');
+    if (startsAtEl) startsAtEl.value = formatDiscountPeriodBoundary(state.discountPeriod?.start, 'start');
+    if (endsAtEl) endsAtEl.value = formatDiscountPeriodBoundary(state.discountPeriod?.end, 'end');
+    syncDiscountPeriodSummary();
+  }
+
+  function hydrateDiscountPeriodStateFromInputs() {
+    const startsAtEl = $('#de_starts_at');
+    const endsAtEl = $('#de_ends_at');
+    const startDate = normalizeDiscountPeriodDate(startsAtEl?.value || '');
+    const endDate = normalizeDiscountPeriodDate(endsAtEl?.value || '');
+    state.discountPeriod.start = startDate;
+    state.discountPeriod.end = endDate;
+    const baseDate = startDate || endDate || new Date();
+    state.discountPeriod.viewYear = baseDate.getFullYear();
+    state.discountPeriod.viewMonth = baseDate.getMonth();
+    syncDiscountPeriodSummary();
+  }
+
+  function renderDiscountPeriodCalendar() {
+    if (!elDePeriodGrid || !elDePeriodTitle) return;
+
+    ensureDiscountPeriodView();
+
+    const year = Number(state.discountPeriod.viewYear);
+    const month = Number(state.discountPeriod.viewMonth);
+    const first = new Date(year, month, 1);
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const offset = (first.getDay() + 6) % 7;
+    const todayKey = toDateKey(new Date());
+    const monthTitle = first.toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' });
+    elDePeriodTitle.textContent = monthTitle.charAt(0).toUpperCase() + monthTitle.slice(1);
+
+    const startKey = state.discountPeriod.start ? toDateKey(state.discountPeriod.start) : '';
+    const endKey = state.discountPeriod.end ? toDateKey(state.discountPeriod.end) : '';
+    const cells = [];
+
+    for (let idx = 0; idx < offset; idx += 1) {
+      cells.push('<span class="date-empty"></span>');
+    }
+
+    for (let day = 1; day <= daysInMonth; day += 1) {
+      const current = new Date(year, month, day);
+      const key = toDateKey(current);
+      const classes = ['date-cell'];
+      if (startKey && key === startKey) classes.push('is-start');
+      if (endKey && key === endKey) classes.push('is-end');
+      if (startKey && endKey && key > startKey && key < endKey) classes.push('is-in-range');
+      if (key === todayKey) classes.push('is-today');
+      cells.push(`<button class="${classes.join(' ')}" type="button" data-discount-period-date="${escapeHtml(key)}">${day}</button>`);
+    }
+
+    elDePeriodGrid.innerHTML = cells.join('');
+    requestAnimationFrame(() => {
+      positionDiscountPeriodPopover();
+    });
+  }
+
+  function openDiscountPeriodPopover() {
+    if (!elDePeriodPopover) return;
+    hydrateDiscountPeriodStateFromInputs();
+    elDePeriodPopover.hidden = false;
+    elDePeriodPopover.classList.remove('hidden');
+    renderDiscountPeriodCalendar();
+    requestAnimationFrame(() => {
+      positionDiscountPeriodPopover();
+    });
+    if (elDePeriodTrigger) {
+      elDePeriodTrigger.setAttribute('aria-expanded', 'true');
+    }
+  }
+
+  function resetDiscountPeriodState() {
+    state.discountPeriod.start = null;
+    state.discountPeriod.end = null;
+    state.discountPeriod.viewYear = null;
+    state.discountPeriod.viewMonth = null;
+    syncDiscountPeriodInputsFromState();
+    closeDiscountPeriodPopover();
+  }
+
+  function handleDiscountPeriodDateSelection(dateKey) {
+    const clickedDate = parseDateKey(dateKey);
+    if (!clickedDate) return;
+
+    const currentStart = state.discountPeriod?.start;
+    const currentEnd = state.discountPeriod?.end;
+    if (currentStart && currentEnd) {
+      state.discountPeriod.start = clickedDate;
+      state.discountPeriod.end = null;
+      renderDiscountPeriodCalendar();
+      return;
+    }
+
+    if (!currentStart) {
+      state.discountPeriod.start = clickedDate;
+      state.discountPeriod.end = null;
+      renderDiscountPeriodCalendar();
+      return;
+    }
+
+    state.discountPeriod.end = clickedDate;
+    if (state.discountPeriod.end < state.discountPeriod.start) {
+      const nextStart = state.discountPeriod.end;
+      state.discountPeriod.end = state.discountPeriod.start;
+      state.discountPeriod.start = nextStart;
+    }
+    syncDiscountPeriodInputsFromState();
+    renderDiscountPeriodCalendar();
+    closeDiscountPeriodPopover();
+  }
+
+  function toggleDiscountRestrictionFields(container, enabled) {
+    if (!container) return;
+    container.hidden = !enabled;
+    container.classList.toggle('hidden', !enabled);
+  }
+
+  function clearDiscountPeriodFields() {
+    resetDiscountPeriodState();
+  }
+
+  function clearDiscountWeekdaysFields() {
+    $$('#de_schedule_days input[type="checkbox"]').forEach((cb) => {
+      cb.checked = false;
+    });
+  }
+
+  function clearDiscountTimeFields() {
+    const timeStartEl = $('#de_schedule_time_start');
+    const timeEndEl = $('#de_schedule_time_end');
+    if (timeStartEl) timeStartEl.value = '';
+    if (timeEndEl) timeEndEl.value = '';
+  }
+
+  function updateDiscountRestrictionUi(options = {}) {
+    const clearDisabled = options.clearDisabled === true;
+    const periodEnabled = !!elDePeriodEnabled?.checked;
+    const weekdaysEnabled = !!elDeWeekdaysEnabled?.checked;
+    const timeEnabled = !!elDeTimeEnabled?.checked;
+
+    toggleDiscountRestrictionFields(elDePeriodFields, periodEnabled);
+    toggleDiscountRestrictionFields(elDeWeekdaysFields, weekdaysEnabled);
+    toggleDiscountRestrictionFields(elDeTimeFields, timeEnabled);
+
+    if (clearDisabled && !periodEnabled) clearDiscountPeriodFields();
+    if (clearDisabled && !weekdaysEnabled) clearDiscountWeekdaysFields();
+    if (clearDisabled && !timeEnabled) clearDiscountTimeFields();
+    if (!periodEnabled) closeDiscountPeriodPopover();
+    syncDiscountRestrictionChips();
+    syncDiscountPeriodSummary();
+  }
+
+  function resetDiscountRestrictionFields() {
+    if ($('#de_min_order_amount')) $('#de_min_order_amount').value = '';
+    if ($('#de_max_discount_amount')) $('#de_max_discount_amount').value = '';
+    if ($('#de_usage_limit')) $('#de_usage_limit').value = '';
+    if ($('#de_usage_per_customer')) $('#de_usage_per_customer').value = '';
+    if (elDePriority) elDePriority.value = '0';
+    if (elDePeriodEnabled) elDePeriodEnabled.checked = false;
+    if (elDeWeekdaysEnabled) elDeWeekdaysEnabled.checked = false;
+    if (elDeTimeEnabled) elDeTimeEnabled.checked = false;
+    clearDiscountPeriodFields();
+    clearDiscountWeekdaysFields();
+    clearDiscountTimeFields();
+    updateDiscountRestrictionUi();
   }
 
   function resetDiscountSelectedProducts() {
     state.discountSelectedProducts = [];
+    state.discountProductsConfigMode = 'any';
+    state.discountProductsAccordionExpanded = false;
     renderDiscountProductChips();
+  }
+
+  function resetDiscountAudienceFields() {
+    if (elDeAudienceMode) elDeAudienceMode.value = 'all';
+    state.discountSelectedCustomers = [];
+    state.discountAudienceAccordionExpanded = false;
+    state.discountProductsAccordionExpanded = false;
+    state.discountProgressDiscountAccordionExpanded = false;
+    renderDiscountCustomerChips();
   }
 
   function resetDiscountPromoCodesState() {
     state.discountPromoCodes = [];
+    state.discountPromoCodesAccordionExpanded = false;
     renderDiscountPromoCodes();
   }
 
@@ -3584,8 +6262,8 @@
     if (elDePromoCodeMode) elDePromoCodeMode.value = 'shared';
     if (elDePromoSharedCode) elDePromoSharedCode.value = '';
     if (elDePromoSharedUsageLimit) elDePromoSharedUsageLimit.value = '';
-    if (elDePromoUniqueUsageLimit) elDePromoUniqueUsageLimit.value = '1';
-    if (elDePromoGenerateCount) elDePromoGenerateCount.value = '10';
+    if (elDePromoUniqueUsageLimit) elDePromoUniqueUsageLimit.value = '';
+    if (elDePromoGenerateCount) elDePromoGenerateCount.value = '';
     if (elDePromoRewardType) elDePromoRewardType.value = 'discount';
     if (elDePromoProductRewardType) elDePromoProductRewardType.value = 'gift';
     if (elDePromoDiscountType) elDePromoDiscountType.value = 'percent';
@@ -3604,25 +6282,68 @@
   }
 
   function resetDiscountBuyMechanicFields() {
-    if (elDeBuyQty) elDeBuyQty.value = '5';
+    closeDiscountSlotPicker();
+    if (elDeBuyQty) elDeBuyQty.value = '1';
     if (elDeRewardQty) elDeRewardQty.value = '1';
-    if (elDeBuyQualifyingMode) elDeBuyQualifyingMode.value = 'same_sku';
+    if (elDeBuyConditionUiMode) elDeBuyConditionUiMode.value = 'product';
+    state.discountBuyConditionUiMode = 'product';
+    if (elDeBuyQualifyingMode) elDeBuyQualifyingMode.value = 'pool';
     if (elDeBuyRepeatMode) elDeBuyRepeatMode.value = 'single';
     if (elDeBuyRewardSource) elDeBuyRewardSource.value = 'same_pool';
     if (elDeBuyRewardKind) elDeBuyRewardKind.value = 'gift';
     if (elDeBuyRewardDiscountType) elDeBuyRewardDiscountType.value = 'percent';
     if (elDeBuyRewardDiscountValue) elDeBuyRewardDiscountValue.value = '';
+    state.discountBuyConditionConfigMode = 'any';
+    state.discountBuyRewardConfigMode = 'any';
     state.discountBuyConditionProducts = [];
+    state.discountBuyRewardUiMode = '';
     state.discountBuyRewardProducts = [];
     renderDiscountBuyConditionChips();
     renderDiscountBuyRewardChips();
+    renderDiscountBuyVisualization();
   }
 
   function resetDiscountThresholdFields() {
     if (elDeThresholdBasis) elDeThresholdBasis.value = 'before_discounts';
     if (elDeThresholdApplyMode) elDeThresholdApplyMode.value = 'best_only';
+    if (elDeThresholdSlotCount) elDeThresholdSlotCount.value = '1';
     state.discountThresholdTiers = [buildEmptyThresholdTier()];
+    closeDiscountThresholdRewardPicker();
     renderThresholdTiers();
+  }
+
+  function resetDiscountLoyaltyFields() {
+    closeDiscountSlotPicker();
+    if (elDeProgressBasis) elDeProgressBasis.value = 'orders';
+    if (elDeProgressThresholdValue) elDeProgressThresholdValue.value = '1';
+    if (elDeProgressBuyQty) elDeProgressBuyQty.value = '1';
+    if (elDeProgressRewardQty) elDeProgressRewardQty.value = '1';
+    if (elDeProgressStatusFilter) elDeProgressStatusFilter.value = 'completed';
+    if (elDeProgressScopeMode) elDeProgressScopeMode.value = 'none';
+    if (elDeProgressPendingRewardMode) elDeProgressPendingRewardMode.value = 'stack';
+    if (elDeProgressRewardKind) elDeProgressRewardKind.value = 'gift';
+    if (elDeProgressIssueMode) elDeProgressIssueMode.value = 'automatic';
+    if (elDeProgressRedemptionMode) elDeProgressRedemptionMode.value = 'reset';
+    if (elDeProgressDiscountApplyTo) elDeProgressDiscountApplyTo.value = 'order';
+    if (elDeProgressDiscountType) elDeProgressDiscountType.value = 'percent';
+    if (elDeProgressDiscountValue) elDeProgressDiscountValue.value = '';
+    state.discountProgressQualifyingItemsConfigMode = 'any';
+    state.discountProgressQualifyingItems = [];
+    state.discountProgressRewardUiMode = '';
+    state.discountProgressGiftProductsConfigMode = 'any';
+    state.discountProgressGiftProducts = [];
+    state.discountProgressDiscountProductsConfigMode = 'any';
+    state.discountProgressDiscountProducts = [];
+    state.discountProgressPromoSource = null;
+    if (elDeProgressPromoSourcePicker) {
+      elDeProgressPromoSourcePicker.classList.add('hidden');
+      elDeProgressPromoSourcePicker.hidden = true;
+    }
+    renderDiscountProgressCountsVisualization();
+    renderDiscountProgressScopeChips();
+    renderDiscountProgressRewardGiftChips();
+    renderDiscountProgressDiscountChips();
+    renderDiscountProgressPromoSource();
   }
 
   function handleDiscountMechanicTypeChange() {
@@ -3637,7 +6358,50 @@
     if (mechanicType !== 'threshold') {
       resetDiscountThresholdFields();
     }
+    if (mechanicType !== 'loyalty_progress') {
+      resetDiscountLoyaltyFields();
+    }
     updateDiscountPromoUi();
+  }
+
+  function applyDiscountMechanicChoice(nextChoiceRaw) {
+    const nextChoice = String(nextChoiceRaw || '').trim();
+    if (!nextChoice || !elDeMechanicType || !elDeSimpleVariant) return;
+
+    const currentChoice = getDiscountMechanicChoiceValue();
+    if (nextChoice === currentChoice) {
+      syncDiscountMechanicChoiceGrid();
+      return;
+    }
+
+    const previousMechanicType = normalizeDiscountMechanicType(elDeMechanicType.value || 'simple_discount');
+    if (nextChoice === 'promo_code') {
+      elDeMechanicType.value = 'simple_discount';
+      elDeSimpleVariant.value = 'promo_code';
+      if (previousMechanicType !== 'simple_discount') {
+        handleDiscountMechanicTypeChange();
+      }
+      handleDiscountSimpleVariantChange();
+      return;
+    }
+
+    if (nextChoice === 'simple_discount') {
+      elDeMechanicType.value = 'simple_discount';
+      if (normalizeSimpleVariant(elDeSimpleVariant.value || 'percent') === 'promo_code') {
+        elDeSimpleVariant.value = normalizeSimpleVariant(elDeDiscountType?.value || 'percent');
+        handleDiscountSimpleVariantChange();
+        return;
+      }
+      if (previousMechanicType !== 'simple_discount') {
+        handleDiscountMechanicTypeChange();
+        return;
+      }
+      updateDiscountPromoUi();
+      return;
+    }
+
+    elDeMechanicType.value = nextChoice;
+    handleDiscountMechanicTypeChange();
   }
 
   function handleDiscountSimpleVariantChange() {
@@ -3662,10 +6426,19 @@
     updateDiscountPromoUi();
   }
 
+  function handleDiscountValueTypeChange() {
+    const nextValue = normalizeSimpleVariant(elDeDiscountType?.value || 'percent');
+    if (elDeSimpleVariant && elDeSimpleVariant.value !== nextValue) {
+      elDeSimpleVariant.value = nextValue;
+    }
+    handleDiscountSimpleVariantChange();
+  }
+
   function handleDiscountPromoRewardTypeChange() {
-    const rewardType = normalizePromoRewardType(elDePromoRewardType?.value || 'discount');
+    const rewardType = normalizePromoRewardUiType(elDePromoRewardType?.value || 'discount');
     resetDiscountSelectedProducts();
-    if (rewardType === 'product') {
+    if (rewardType === 'gift') {
+      if (elDePromoProductRewardType) elDePromoProductRewardType.value = 'gift';
       if (elDePromoApplyTo) elDePromoApplyTo.value = 'product';
       if (elDePromoDiscountValue) elDePromoDiscountValue.value = '';
     } else {
@@ -3681,10 +6454,26 @@
     updateDiscountPromoUi();
   }
 
+  function handleDiscountAudienceModeChange() {
+    const mode = getDiscountAudienceMode();
+    if (mode === 'all') {
+      state.discountSelectedCustomers = [];
+    } else if (mode === 'category') {
+      state.discountSelectedCustomers = state.discountSelectedCustomers.filter((item) => String(item?.type || '').trim() === 'category');
+    } else {
+      state.discountSelectedCustomers = state.discountSelectedCustomers.filter((item) => String(item?.type || '').trim() !== 'category');
+    }
+    state.discountAudienceAccordionExpanded = false;
+    state.discountProductsAccordionExpanded = false;
+    state.discountProgressDiscountAccordionExpanded = false;
+    renderDiscountCustomerChips();
+  }
+
   async function handleDiscountPromoCodeModeChange() {
     const codeMode = elDePromoCodeMode?.value || 'shared';
     if (codeMode === 'shared') {
-      if (elDePromoUniqueUsageLimit) elDePromoUniqueUsageLimit.value = '1';
+      if (elDePromoUniqueUsageLimit) elDePromoUniqueUsageLimit.value = '';
+      if (elDePromoGenerateCount) elDePromoGenerateCount.value = '';
       resetDiscountPromoCodesState();
     } else {
       if (elDePromoSharedCode) elDePromoSharedCode.value = '';
@@ -3713,17 +6502,38 @@
     updateDiscountPromoUi();
   }
 
-  function handleDiscountBuyQualifyingModeChange() {
-    if ((elDeBuyQualifyingMode?.value || 'same_sku') === 'same_sku') {
-      state.discountBuyConditionProducts = [];
-      renderDiscountBuyConditionChips();
+  function handleDiscountBuyConditionUiModeChange() {
+    const previousMode = normalizeDiscountBuyConditionUiMode(state.discountBuyConditionUiMode || 'product');
+    const nextMode = getDiscountBuyConditionUiMode();
+    let nextSelection = cloneDiscountEntities(state.discountBuyConditionProducts);
+
+    if (previousMode !== nextMode) {
+      if (nextMode === 'product') {
+        nextSelection = previousMode === 'product_list'
+          ? nextSelection.filter((item) => String(item?.type || '').trim() === 'product').slice(0, 1)
+          : [];
+      } else if (nextMode === 'product_list') {
+        nextSelection = previousMode === 'product'
+          ? nextSelection.filter((item) => String(item?.type || '').trim() === 'product').slice(0, 1)
+          : [];
+      } else {
+        nextSelection = [];
+      }
     }
+
+    state.discountBuyConditionUiMode = nextMode;
+    state.discountBuyConditionProducts = nextSelection;
+    syncDiscountBuyHiddenQualifyingMode();
+    renderDiscountBuyConditionChips();
     updateDiscountPromoUi();
   }
 
   function handleDiscountBuyRewardSourceChange() {
     if ((elDeBuyRewardSource?.value || 'same_pool') === 'same_pool') {
       state.discountBuyRewardProducts = [];
+      if (String(elDeBuyRewardKind?.value || 'gift').trim() !== 'product_discount' && !String(state.discountBuyRewardUiMode || '').trim()) {
+        state.discountBuyRewardUiMode = '';
+      }
       renderDiscountBuyRewardChips();
     }
     updateDiscountPromoUi();
@@ -3731,10 +6541,410 @@
 
   function handleDiscountBuyRewardKindChange() {
     if ((elDeBuyRewardKind?.value || 'gift') === 'gift') {
+      if (String(state.discountBuyRewardUiMode || '').trim() === 'discount') {
+        state.discountBuyRewardUiMode = getDiscountBuyRewardSelection().length > 1 ? 'product_list' : '';
+      }
       if (elDeBuyRewardDiscountType) elDeBuyRewardDiscountType.value = 'percent';
       if (elDeBuyRewardDiscountValue) elDeBuyRewardDiscountValue.value = '';
+    } else {
+      state.discountBuyRewardUiMode = 'discount';
     }
     updateDiscountPromoUi();
+  }
+
+  function handleDiscountBuyQuantitiesChange() {
+    renderDiscountBuyVisualization();
+  }
+
+  function syncDiscountProgressAmountMode() {
+    const isAmountMode = getDiscountProgressBasis() === 'amount';
+    const countsRow = elDeProgressBuyQty?.closest('.form-row-2');
+
+    if (isAmountMode) {
+      if (elDeProgressBuyQty) {
+        elDeProgressBuyQty.value = '1';
+        elDeProgressBuyQty.disabled = true;
+      }
+      if (elDeProgressRewardQty) {
+        elDeProgressRewardQty.value = '1';
+        elDeProgressRewardQty.disabled = true;
+      }
+      if (elDeProgressBuyQtyMinus) elDeProgressBuyQtyMinus.disabled = true;
+      if (elDeProgressBuyQtyPlus) elDeProgressBuyQtyPlus.disabled = true;
+      if (elDeProgressRewardQtyMinus) elDeProgressRewardQtyMinus.disabled = true;
+      if (elDeProgressRewardQtyPlus) elDeProgressRewardQtyPlus.disabled = true;
+    } else {
+      if (elDeProgressBuyQty) elDeProgressBuyQty.disabled = false;
+      if (elDeProgressRewardQty) elDeProgressRewardQty.disabled = false;
+      if (elDeProgressBuyQtyMinus) elDeProgressBuyQtyMinus.disabled = false;
+      if (elDeProgressBuyQtyPlus) elDeProgressBuyQtyPlus.disabled = false;
+      if (elDeProgressRewardQtyMinus) elDeProgressRewardQtyMinus.disabled = false;
+      if (elDeProgressRewardQtyPlus) elDeProgressRewardQtyPlus.disabled = false;
+    }
+
+    if (countsRow) {
+      countsRow.hidden = isAmountMode;
+      countsRow.classList.toggle('hidden', isAmountMode);
+    }
+  }
+
+  function handleDiscountProgressBasisChange() {
+    const basis = getDiscountProgressBasis();
+    if (basis === 'orders') {
+      if (elDeProgressScopeMode) elDeProgressScopeMode.value = 'none';
+      state.discountProgressQualifyingItems = [];
+    } else if (normalizeDiscountProgressScopeMode(elDeProgressScopeMode?.value || 'none') === 'none' && elDeProgressScopeMode) {
+      elDeProgressScopeMode.value = 'product';
+    }
+    if (basis === 'amount') {
+      if (elDeProgressBuyQty) elDeProgressBuyQty.value = '1';
+      if (elDeProgressRewardQty) elDeProgressRewardQty.value = '1';
+    }
+    if (basis === 'amount' && elDeProgressThresholdValue && !(parseFloat(elDeProgressThresholdValue.value) > 0)) {
+      elDeProgressThresholdValue.value = '1';
+    }
+    syncDiscountProgressAmountMode();
+    renderDiscountProgressScopeChips();
+    updateDiscountPromoUi();
+  }
+
+  function handleDiscountProgressScopeModeChange() {
+    const nextMode = getDiscountProgressScopeMode();
+    let nextSelection = cloneDiscountEntities(state.discountProgressQualifyingItems);
+    if (nextMode === 'category') {
+      nextSelection = nextSelection.filter((item) => String(item?.type || '').trim() === 'category');
+    } else {
+      nextSelection = nextSelection.filter((item) => String(item?.type || '').trim() === 'product');
+      if (nextMode === 'product') {
+        nextSelection = nextSelection.slice(0, 1);
+      }
+    }
+    state.discountProgressQualifyingItems = nextSelection;
+    renderDiscountProgressScopeChips();
+    updateDiscountPromoUi();
+  }
+
+  function handleDiscountProgressRewardKindChange() {
+    const rewardKind = normalizeDiscountProgressRewardKind(elDeProgressRewardKind?.value || 'gift');
+    if (rewardKind === 'gift') {
+      if (['discount', 'promo_code'].includes(String(state.discountProgressRewardUiMode || '').trim())) {
+        state.discountProgressRewardUiMode = cloneDiscountEntities(state.discountProgressGiftProducts || []).length > 1 ? 'product_list' : '';
+      }
+      if (elDeProgressIssueMode && elDeProgressIssueMode.value === 'code') {
+        elDeProgressIssueMode.value = 'automatic';
+      }
+      if (elDeProgressDiscountApplyTo) elDeProgressDiscountApplyTo.value = 'order';
+      if (elDeProgressDiscountType) elDeProgressDiscountType.value = 'percent';
+      if (elDeProgressDiscountValue) elDeProgressDiscountValue.value = '';
+      state.discountProgressDiscountProducts = [];
+      state.discountProgressPromoSource = null;
+    } else if (rewardKind === 'discount') {
+      state.discountProgressRewardUiMode = 'discount';
+      if (elDeProgressIssueMode && elDeProgressIssueMode.value === 'code') {
+        elDeProgressIssueMode.value = 'automatic';
+      }
+      state.discountProgressGiftProducts = [];
+      state.discountProgressPromoSource = null;
+    } else {
+      state.discountProgressRewardUiMode = 'promo_code';
+      if (elDeProgressIssueMode) elDeProgressIssueMode.value = 'code';
+      state.discountProgressGiftProducts = [];
+      if (elDeProgressDiscountApplyTo) elDeProgressDiscountApplyTo.value = 'order';
+      if (elDeProgressDiscountType) elDeProgressDiscountType.value = 'percent';
+      if (elDeProgressDiscountValue) elDeProgressDiscountValue.value = '';
+      state.discountProgressDiscountProducts = [];
+    }
+    renderDiscountProgressRewardGiftChips();
+    renderDiscountProgressDiscountChips();
+    renderDiscountProgressPromoSource();
+    updateDiscountPromoUi();
+  }
+
+  function handleDiscountProgressDiscountApplyToChange() {
+    state.discountProgressDiscountProducts = [];
+    state.discountProgressDiscountAccordionExpanded = false;
+    renderDiscountProgressDiscountChips();
+    updateDiscountPromoUi();
+  }
+
+  function getDiscountSimpleSelectionEntityType() {
+    const applyTo = String($('#de_apply_to')?.value || '').trim();
+    if (applyTo === 'category') return 'category';
+    return 'product';
+  }
+
+  function getDiscountPromoSelectionEntityType() {
+    const rewardType = normalizePromoRewardUiType(elDePromoRewardType?.value || 'discount');
+    if (rewardType === 'gift') return 'product';
+    const applyTo = normalizePromoApplyTo(elDePromoApplyTo?.value || 'order');
+    return applyTo === 'category' ? 'category' : 'product';
+  }
+
+  function isDiscountEntityImageUrl(value) {
+    const text = String(value || '').trim();
+    return /^(?:https?:)?\/\//i.test(text) || text.startsWith('/') || text.startsWith('data:image/');
+  }
+
+  function getDiscountEntityCollectionLabel(entityType) {
+    return String(entityType || '').trim() === 'category' ? 'Категории' : 'Товары';
+  }
+
+  function getDiscountEntityAddButtonLabel(entityType) {
+    return String(entityType || '').trim() === 'category' ? 'Добавить категорию' : 'Добавить товар';
+  }
+
+  function getDiscountEntityChooseHint(entityType) {
+    return String(entityType || '').trim() === 'category'
+      ? 'Нажмите, чтобы выбрать категории'
+      : 'Нажмите, чтобы выбрать товары';
+  }
+
+  function getDiscountEntityEmptyText(entityType) {
+    return String(entityType || '').trim() === 'category'
+      ? 'Категории не выбраны'
+      : 'Товары не выбраны';
+  }
+
+  function getDiscountEntityAddMoreLabel(entityType) {
+    return String(entityType || '').trim() === 'category'
+      ? 'Добавить категории'
+      : 'Добавить товары';
+  }
+
+  function getDiscountEntitySummaryText(entityType, items) {
+    const rows = cloneDiscountEntities(items);
+    if (!rows.length) return getDiscountEntityEmptyText(entityType);
+    if (rows.length === 1) {
+      return String(rows[0]?.title || '').trim() || getDiscountEntityEmptyText(entityType);
+    }
+    return `${getDiscountEntityCollectionLabel(entityType)}: ${rows.length}`;
+  }
+
+  function getDiscountEntitySummaryMeta(entityType, items) {
+    const rows = cloneDiscountEntities(items);
+    if (!rows.length) return getDiscountEntityChooseHint(entityType);
+    return String(entityType || '').trim() === 'category'
+      ? `${rows.length} категорий`
+      : `${rows.length} товаров`;
+  }
+
+  function syncDiscountEntityAccordionButton(buttonEl, entityType, items, expanded) {
+    if (!buttonEl) return;
+    const rows = cloneDiscountEntities(items);
+    const isEmpty = rows.length === 0;
+    const titleEl = $('.discount-audience-add-btn-title', buttonEl);
+    const metaEl = $('.discount-audience-add-btn-meta', buttonEl);
+    if (titleEl) {
+      titleEl.textContent = getDiscountEntitySummaryText(entityType, rows);
+    }
+    if (metaEl) {
+      metaEl.textContent = getDiscountEntitySummaryMeta(entityType, rows);
+    }
+    buttonEl.classList.toggle('is-empty', isEmpty);
+    buttonEl.classList.toggle('is-filled', !isEmpty);
+    buttonEl.classList.toggle('is-expanded', !isEmpty && Boolean(expanded));
+    const buttonLabel = getDiscountEntityAddButtonLabel(entityType);
+    buttonEl.setAttribute('aria-label', buttonLabel);
+    buttonEl.setAttribute('title', buttonLabel);
+  }
+
+  function renderDiscountEntityAccordion(listEl, items, options = {}) {
+    if (!listEl) return;
+    const rows = cloneDiscountEntities(items);
+    const entityType = String(options.entityType || 'product').trim() === 'category' ? 'category' : 'product';
+    const isExpanded = rows.length > 0 && Boolean(options.expanded);
+    if (!rows.length) {
+      listEl.classList.add('is-collapsed');
+      listEl.innerHTML = '';
+      return;
+    }
+    listEl.classList.toggle('is-collapsed', !isExpanded);
+    listEl.innerHTML = `
+      <button type="button" class="discount-audience-inline-add" data-discount-entity-action="${escapeHtml(options.action || '')}">
+        <i class="fas fa-plus"></i>
+        <span>${escapeHtml(getDiscountEntityAddMoreLabel(entityType))}</span>
+      </button>
+      <div class="discount-entity-accordion-tiles">
+        ${rows.map((item) => buildDiscountEntityTileHtml(item)).join('')}
+      </div>
+    `;
+  }
+
+  function syncDiscountEntityPickerCopy(labelEl, buttonEl, buttonTextEl, entityType) {
+    const collectionLabel = getDiscountEntityCollectionLabel(entityType);
+    const buttonLabel = getDiscountEntityAddButtonLabel(entityType);
+    if (labelEl) labelEl.textContent = collectionLabel;
+    if (buttonEl) {
+      buttonEl.setAttribute('aria-label', buttonLabel);
+      buttonEl.setAttribute('title', buttonLabel);
+    }
+  }
+
+  function syncDiscountEntityPickerUi() {
+    syncDiscountEntityPickerCopy(
+      elDeProductsLabel,
+      elDeAddProductsBtn,
+      elDeAddProductsBtnText,
+      getDiscountSimpleSelectionEntityType()
+    );
+    syncDiscountEntityPickerCopy(
+      elDePromoProductsLabel,
+      elDeAddPromoProductsBtn,
+      elDeAddPromoProductsBtnText,
+      getDiscountPromoSelectionEntityType()
+    );
+  }
+
+  function getDiscountAudienceMode() {
+    return normalizeDiscountAudienceMode(elDeAudienceMode?.value || 'all');
+  }
+
+  function getDiscountAudienceHintText(mode) {
+    if (mode === 'category') {
+      return 'Скидка действует на актуальный состав выбранных категорий клиентов.';
+    }
+    if (mode === 'specific') {
+      return 'Выберите клиентов вручную. Новые клиенты автоматически не добавляются.';
+    }
+    return 'Скидка действует на всех текущих и будущих клиентов.';
+  }
+
+  function getDiscountAudienceItems(mode = getDiscountAudienceMode()) {
+    return mode === 'category'
+      ? state.discountSelectedCustomers.filter((item) => String(item?.type || '').trim() === 'category')
+      : state.discountSelectedCustomers.filter((item) => String(item?.type || '').trim() !== 'category');
+  }
+
+  function getDiscountAudienceEmptyText(mode) {
+    return mode === 'category' ? 'Категории не выбраны' : 'Клиенты не выбраны';
+  }
+
+  function getDiscountAudienceSummaryText(mode, items) {
+    if (!items.length) return getDiscountAudienceEmptyText(mode);
+    if (mode === 'category') {
+      return items.length === 1 ? 'Выбрана 1 категория' : `Выбрано категорий: ${items.length}`;
+    }
+    return `Выбрано клиентов: ${items.length}`;
+  }
+
+  function getDiscountAudienceMetaText(mode, items) {
+    if (!items.length) {
+      return mode === 'category' ? 'Нажмите, чтобы выбрать категории' : 'Нажмите, чтобы выбрать клиентов';
+    }
+    return state.discountAudienceAccordionExpanded
+      ? 'Нажмите, чтобы свернуть список'
+      : 'Нажмите, чтобы раскрыть список';
+  }
+
+  function syncDiscountAudienceUi() {
+    const mode = getDiscountAudienceMode();
+    const items = getDiscountAudienceItems(mode);
+    if (elDeAudienceMode) {
+      elDeAudienceMode.value = mode;
+      syncDiscountChoiceGroup('de_audience_mode');
+    }
+    if (elDeAddCustomersBtn) {
+      const isHidden = mode === 'all';
+      elDeAddCustomersBtn.classList.toggle('hidden', isHidden);
+      elDeAddCustomersBtn.hidden = isHidden;
+      if (!isHidden) {
+        const isEmpty = items.length === 0;
+        const isExpanded = !isEmpty && Boolean(state.discountAudienceAccordionExpanded);
+        const buttonLabel = isEmpty
+          ? (mode === 'category' ? 'Выбрать категории клиентов' : 'Выбрать клиентов')
+          : (isExpanded ? 'Свернуть список аудитории' : 'Раскрыть список аудитории');
+        elDeAddCustomersBtn.classList.toggle('is-empty', isEmpty);
+        elDeAddCustomersBtn.classList.toggle('is-filled', !isEmpty);
+        elDeAddCustomersBtn.classList.toggle('is-expanded', isExpanded);
+        elDeAddCustomersBtn.setAttribute('aria-label', buttonLabel);
+        elDeAddCustomersBtn.setAttribute('title', buttonLabel);
+        elDeAddCustomersBtn.setAttribute('aria-expanded', String(isExpanded));
+        elDeAddCustomersBtn.innerHTML = `
+          <span class="discount-audience-add-btn-main">
+            <span class="discount-audience-add-btn-icon"><i class="fas fa-plus"></i></span>
+            <span class="discount-audience-add-btn-copy">
+              <span class="discount-audience-add-btn-title">${escapeHtml(getDiscountAudienceSummaryText(mode, items))}</span>
+              <span class="discount-audience-add-btn-meta">${escapeHtml(getDiscountAudienceMetaText(mode, items))}</span>
+            </span>
+          </span>
+          <span class="discount-audience-add-btn-caret"><i class="fas fa-chevron-down"></i></span>
+        `;
+      }
+    }
+    if (elDeCustomersHint) {
+      elDeCustomersHint.textContent = '';
+      elDeCustomersHint.hidden = true;
+      elDeCustomersHint.classList.add('hidden');
+    }
+  }
+
+  function getDiscountAudienceItemTitle(item) {
+    const entityType = String(item?.type || '').trim();
+    const entityId = Number(item?.id || 0);
+    if (entityType === 'category') {
+      const category = (state.customerCategories || []).find((entry) => Number(entry?.id || 0) === entityId);
+      return String(category?.title || item?.title || `#${entityId}`).trim();
+    }
+    const customer = state.customersById.get(entityId) || state.customersList.find((entry) => Number(entry?.id || 0) === entityId);
+    return String(customer?.name || customer?.phone || item?.title || `#${entityId}`).trim();
+  }
+
+  function formatDiscountAudienceCount(value) {
+    const count = Number(value || 0);
+    if (!Number.isFinite(count) || count < 0) return '';
+    const mod10 = count % 10;
+    const mod100 = count % 100;
+    if (mod10 === 1 && mod100 !== 11) return `${count} клиент`;
+    if (mod10 >= 2 && mod10 <= 4 && !(mod100 >= 12 && mod100 <= 14)) return `${count} клиента`;
+    return `${count} клиентов`;
+  }
+
+  function getDiscountAudienceItemSecondaryText(item) {
+    const entityType = String(item?.type || '').trim();
+    const entityId = Number(item?.id || 0);
+    if (entityType === 'category') {
+      const category = (state.customerCategories || []).find((entry) => Number(entry?.id || 0) === entityId);
+      const count = category?.count ?? item?.count ?? item?.customer_count ?? null;
+      return count == null ? '' : formatDiscountAudienceCount(count);
+    }
+    const customer = state.customersById.get(entityId) || state.customersList.find((entry) => Number(entry?.id || 0) === entityId);
+    const phone = String(customer?.phone || item?.phone || '').trim();
+    return phone ? formatPhoneDigitsToRU(phone) : '';
+  }
+
+  function getDiscountEntityPhoto(item) {
+    const directPhoto = String(item?.photo || item?.image_url || '').trim();
+    if (directPhoto) return directPhoto;
+    const entityType = String(item?.type || '').trim();
+    if (entityType === 'category') {
+      const category = (state.catalogCategories || []).find((entry) => Number(entry?.id || 0) === Number(item?.id || 0));
+      const icon = String(category?.icon || '').trim();
+      return isDiscountEntityImageUrl(icon) ? icon : '';
+    }
+    if (entityType !== 'product') return '';
+    const catalogItem = (state.catalogProducts || []).find((product) => Number(product?.id || 0) === Number(item?.id || 0));
+    if (!catalogItem) return '';
+    const photos = Array.isArray(catalogItem.photos) ? catalogItem.photos.filter(Boolean) : [];
+    return photos[0] || '';
+  }
+
+  function buildDiscountEntityTileHtml(item) {
+    const type = String(item?.type || 'product').trim();
+    const id = Number(item?.id || 0);
+    const title = String(item?.title || `#${id}`).trim() || `#${id}`;
+    const photo = getDiscountEntityPhoto(item);
+    const cls = type === 'category' ? 'is-category' : (type === 'combo' ? 'is-combo' : '');
+    const icon = type === 'category' ? 'fa-layer-group' : (type === 'combo' ? 'fa-box-open' : 'fa-image');
+    const media = photo
+      ? `<div class="discount-entity-tile-media"><img src="${escapeHtml(photo)}" alt="${escapeHtml(title)}"></div>`
+      : `<div class="discount-entity-tile-media"><div class="discount-entity-tile-placeholder"><i class="fas ${icon}"></i></div></div>`;
+    return `
+      <span class="discount-chip discount-entity-tile ${cls}" data-type="${escapeHtml(type)}" data-id="${id}">
+        <span class="discount-chip-remove"><i class="fas fa-times"></i></span>
+        ${media}
+        <span class="discount-entity-tile-title">${escapeHtml(title)}</span>
+      </span>
+    `;
   }
 
   function renderDiscountsList() {
@@ -3753,12 +6963,16 @@
       row.classList.toggle('is-active', state.activeDiscountId === discount.id);
 
       const promo = getDiscountPromoFromDiscount(discount);
+      const mechanic = getDiscountMechanic(discount);
       const mechanicText = formatDiscountMechanicText(discount);
       const metaBits = [mechanicText];
       if (promo.enabled) {
         metaBits.push(promo.code_mode === 'unique' ? 'Промокод: уникальные коды' : 'Промокод: общий код');
-      } else if (getDiscountMechanic(discount).type === 'simple_discount') {
+      } else if (mechanic.type === 'simple_discount') {
         metaBits.push(formatDiscountSimpleVariantText(discount));
+      } else if (mechanic.type === 'loyalty_progress') {
+        metaBits.push(formatDiscountProgressBasisText(mechanic.progress_basis));
+        metaBits.push(formatDiscountProgressRewardKindText(mechanic.reward_kind));
       }
       metaBits.push(getDiscountAudienceSummary(discount));
       metaBits.push(getDiscountLimitSummary(discount));
@@ -3766,7 +6980,10 @@
       row.innerHTML = `
         <div class="discount-row-icon"><i class="fas ${getDiscountListIcon(discount)}"></i></div>
         <div class="discount-row-info">
-          <div class="discount-row-title">${escapeHtml(discount.title)}</div>
+          <div class="discount-row-title-wrap">
+            <div class="discount-row-title">${escapeHtml(discount.title)}</div>
+            ${discount.hide_in_benefits ? '<span class="discount-row-badge">Скрыта в выгодах</span>' : ''}
+          </div>
           <div class="discount-row-meta">${metaBits.join(' • ')}</div>
         </div>
         <div class="discount-row-value">${formatDiscountValue(discount)}</div>
@@ -3808,11 +7025,16 @@
     const isSimple = mechanicType === 'simple_discount';
     const isPromoSimple = isSimple && simpleVariant === 'promo_code';
     const isBuyXGetY = mechanicType === 'buy_x_get_y';
+    const isLoyalty = mechanicType === 'loyalty_progress';
     const isThreshold = mechanicType === 'threshold';
     const applyTo = $('#de_apply_to')?.value || 'order';
-    const qualifyingMode = elDeBuyQualifyingMode?.value || 'same_sku';
+    const buyConditionUiMode = getDiscountBuyConditionUiMode();
     const rewardSource = elDeBuyRewardSource?.value || 'same_pool';
     const rewardKind = elDeBuyRewardKind?.value || 'gift';
+    const progressBasis = getDiscountProgressBasis();
+    const progressScopeMode = getDiscountProgressScopeMode();
+    const progressRewardKind = normalizeDiscountProgressRewardKind(elDeProgressRewardKind?.value || 'gift');
+    const progressDiscountApplyTo = getDiscountProgressDiscountApplyTo();
     const showSimpleProducts = isSimple && !isPromoSimple && applyTo !== 'order';
 
     if (elDeSimpleWrap) elDeSimpleWrap.classList.toggle('hidden', !isSimple);
@@ -3820,34 +7042,92 @@
     if (elDeProductsWrap) elDeProductsWrap.classList.toggle('hidden', !showSimpleProducts);
     if (elDePromoWrap) elDePromoWrap.classList.toggle('hidden', !isPromoSimple);
     if (elDeBuyXGetYWrap) elDeBuyXGetYWrap.classList.toggle('hidden', !isBuyXGetY);
+    if (elDeLoyaltyProgressWrap) elDeLoyaltyProgressWrap.classList.toggle('hidden', !isLoyalty);
     if (elDeThresholdWrap) elDeThresholdWrap.classList.toggle('hidden', !isThreshold);
-    if (elDeBuyConditionProductsWrap) elDeBuyConditionProductsWrap.classList.toggle('hidden', !isBuyXGetY || qualifyingMode !== 'pool');
-    if (elDeBuyRewardProductsWrap) elDeBuyRewardProductsWrap.classList.toggle('hidden', !isBuyXGetY || rewardSource !== 'reward_list');
+    if (!isThreshold) closeDiscountThresholdRewardPicker();
+    if (!isBuyXGetY && !isLoyalty) closeDiscountSlotPicker();
+    if (elDeBuyConditionProductsWrap) elDeBuyConditionProductsWrap.classList.add('hidden');
+    if (elDeBuyRewardProductsWrap) elDeBuyRewardProductsWrap.classList.add('hidden');
     if (elDeBuyRewardDiscountWrap) elDeBuyRewardDiscountWrap.classList.toggle('hidden', !isBuyXGetY || rewardKind !== 'product_discount');
+    if (elDeProgressScopeModeWrap) elDeProgressScopeModeWrap.classList.add('hidden');
+    if (elDeProgressScopeItemsWrap) elDeProgressScopeItemsWrap.classList.add('hidden');
+    if (elDeProgressRewardGiftWrap) elDeProgressRewardGiftWrap.classList.toggle('hidden', !isLoyalty || progressRewardKind !== 'gift');
+    if (elDeProgressRewardDiscountWrap) elDeProgressRewardDiscountWrap.classList.toggle('hidden', !isLoyalty || progressRewardKind !== 'discount');
+    if (elDeProgressDiscountProductsWrap) elDeProgressDiscountProductsWrap.classList.toggle('hidden', !isLoyalty || progressRewardKind !== 'discount' || progressDiscountApplyTo === 'order');
+    if (elDeProgressPromoWrap) elDeProgressPromoWrap.classList.toggle('hidden', !isLoyalty || progressRewardKind !== 'promo_code');
 
     if (elDeDiscountType && isSimple && !isPromoSimple) {
       elDeDiscountType.value = simpleVariant;
+      syncDiscountChoiceGroup('de_discount_type');
+    }
+    if (isBuyXGetY) {
+      syncDiscountBuyHiddenQualifyingMode();
+      syncDiscountBuyConditionUiCopy();
+      renderDiscountBuyVisualization();
+    }
+    if (isLoyalty) {
+      syncDiscountProgressAmountMode();
+      renderDiscountProgressScopeChips();
+      renderDiscountProgressRewardGiftChips();
+      renderDiscountProgressDiscountChips();
+      renderDiscountProgressPromoSource();
+      renderDiscountProgressCountsVisualization();
     }
     if (isThreshold) renderThresholdTiers();
   }
 
+  function updateDiscountHideInBenefitsHint() {
+    if (!elDeHideInBenefitsHint) return;
+    const mechanicType = elDeMechanicType?.value || 'simple_discount';
+    const simpleVariant = normalizeSimpleVariant(elDeSimpleVariant?.value || 'percent');
+    const isPromoSimple = mechanicType === 'simple_discount' && simpleVariant === 'promo_code';
+    elDeHideInBenefitsHint.textContent = isPromoSimple
+      ? 'Промокод не показывается сразу и станет доступен клиенту только после ручного ввода на странице выгод.'
+      : 'Скидка не будет показана клиенту в выгодах. Автоматическая механика акции при этом сохраняется.';
+  }
+
   function updateDiscountPromoUi() {
     renderDiscountMechanicUi();
+    const mechanicType = elDeMechanicType?.value || 'simple_discount';
     const simpleVariant = normalizeSimpleVariant(elDeSimpleVariant?.value || 'percent');
-    const isPromo = (elDeMechanicType?.value || 'simple_discount') === 'simple_discount' && simpleVariant === 'promo_code';
+    const isPromo = mechanicType === 'simple_discount' && simpleVariant === 'promo_code';
+    const isLoyalty = mechanicType === 'loyalty_progress';
     const codeMode = elDePromoCodeMode?.value || 'shared';
     const isUnique = isPromo && codeMode === 'unique';
-    const promoRewardType = normalizePromoRewardType(elDePromoRewardType?.value || 'discount');
-    const promoProductRewardType = normalizePromoProductRewardType(elDePromoProductRewardType?.value || 'gift');
+    const promoRewardType = normalizePromoRewardUiType(elDePromoRewardType?.value || 'discount');
+    const progressRewardKind = normalizeDiscountProgressRewardKind(elDeProgressRewardKind?.value || 'gift');
+    const progressDiscountApplyTo = getDiscountProgressDiscountApplyTo();
     const showPromoDiscountVariant = isPromo && promoRewardType === 'discount';
-    const showPromoProductVariant = isPromo && promoRewardType === 'product';
     const showPromoDiscountRow = isPromo && promoRewardType === 'discount';
-    const showPromoProductDiscountRow = isPromo && promoRewardType === 'product' && promoProductRewardType === 'product_discount';
+    const applyTo = String($('#de_apply_to')?.value || 'order').trim() || 'order';
     const promoApplyTo = normalizePromoApplyTo(elDePromoApplyTo?.value || 'order');
     const showPromoProducts = isPromo && (
-      promoRewardType === 'product' || (promoRewardType === 'discount' && promoApplyTo !== 'order')
+      promoRewardType === 'gift' || (promoRewardType === 'discount' && promoApplyTo !== 'order')
     );
+    const allowSimpleSpecialPrice = !isPromo && mechanicType === 'simple_discount' && applyTo === 'product';
+    const allowPromoDiscountSpecialPrice = isPromo && promoRewardType === 'discount' && promoApplyTo === 'product';
+    const allowLoyaltyDiscountSpecialPrice = isLoyalty && progressRewardKind === 'discount' && progressDiscountApplyTo === 'product';
     const hasSavedDiscount = Number($('#de_id')?.value || 0) > 0;
+
+    setDiscountChoiceOptionVisible('de_discount_type', 'special_price', allowSimpleSpecialPrice);
+    setDiscountChoiceOptionVisible('de_promo_discount_type', 'special_price', allowPromoDiscountSpecialPrice);
+    setDiscountChoiceOptionVisible('de_progress_discount_type', 'special_price', allowLoyaltyDiscountSpecialPrice);
+    if (!allowSimpleSpecialPrice && elDeDiscountType?.value === 'special_price') {
+      elDeDiscountType.value = 'percent';
+      if (elDeSimpleVariant?.value === 'special_price') {
+        elDeSimpleVariant.value = 'percent';
+      }
+    }
+    if (!allowPromoDiscountSpecialPrice && elDePromoDiscountType?.value === 'special_price') {
+      elDePromoDiscountType.value = 'percent';
+    }
+    if (!allowLoyaltyDiscountSpecialPrice && elDeProgressDiscountType?.value === 'special_price') {
+      elDeProgressDiscountType.value = 'percent';
+    }
+    if (isLoyalty) {
+      if (elDeProgressIssueMode) elDeProgressIssueMode.value = 'automatic';
+      if (elDeProgressRedemptionMode) elDeProgressRedemptionMode.value = 'reset';
+    }
 
     if (elDePromoWrap) {
       elDePromoWrap.classList.toggle('is-promo-shared', isPromo && codeMode === 'shared');
@@ -3856,10 +7136,8 @@
     if (elDePromoSharedWrap) elDePromoSharedWrap.classList.toggle('hidden', !isPromo || codeMode !== 'shared');
     if (elDePromoUniqueWrap) elDePromoUniqueWrap.classList.toggle('hidden', !isUnique);
     if (elDePromoRewardVariantDiscountWrap) elDePromoRewardVariantDiscountWrap.classList.toggle('hidden', !showPromoDiscountVariant);
-    if (elDePromoRewardVariantProductWrap) elDePromoRewardVariantProductWrap.classList.toggle('hidden', !showPromoProductVariant);
     if (elDePromoDiscountRow) elDePromoDiscountRow.classList.toggle('hidden', !showPromoDiscountRow);
     if (elDePromoDiscountValueWrap) elDePromoDiscountValueWrap.classList.toggle('hidden', !showPromoDiscountRow);
-    if (elDePromoProductDiscountRow) elDePromoProductDiscountRow.classList.toggle('hidden', !showPromoProductDiscountRow);
     if (elDePromoProductsWrap) elDePromoProductsWrap.classList.toggle('hidden', !showPromoProducts);
 
     if (elDePromoCodesWrap) {
@@ -3867,25 +7145,31 @@
       elDePromoCodesWrap.classList.toggle('hidden', !shouldShowCodes);
     }
 
-    if (elDePromoGenerateBtn) {
-      elDePromoGenerateBtn.disabled = !isUnique || !hasSavedDiscount;
-    }
-
     if (elDePromoGenerateHint) {
       if (!isUnique) {
         elDePromoGenerateHint.textContent = '';
-      } else if (!hasSavedDiscount) {
-        elDePromoGenerateHint.textContent = 'Сначала сохраните акцию, затем можно будет сгенерировать коды.';
       } else {
-        elDePromoGenerateHint.textContent = 'Можно генерировать дополнительные уникальные коды для этой акции.';
+        elDePromoGenerateHint.textContent = hasSavedDiscount
+          ? 'Если указать количество, новые коды будут сгенерированы при сохранении.'
+          : 'Укажите количество, коды будут сгенерированы при сохранении.';
       }
     }
 
     if (isUnique) {
       renderDiscountPromoCodes();
     }
+    if ((!isLoyalty || progressRewardKind !== 'promo_code') && elDeProgressPromoSourcePicker) {
+      elDeProgressPromoSourcePicker.classList.add('hidden');
+      elDeProgressPromoSourcePicker.hidden = true;
+    }
 
+    syncDiscountEntityPickerUi();
+    syncDiscountAudienceUi();
+    syncDiscountChoiceGroup('de_discount_type');
+    syncDiscountChoiceGroup('de_promo_discount_type');
+    syncDiscountChoiceGroup('de_promo_product_discount_type');
     syncDiscountEditorCustomSelects(elDiscountEditorForm);
+    updateDiscountHideInBenefitsHint();
   }
 
   async function openDiscountEditor(discountId) {
@@ -3915,13 +7199,15 @@
         if (elDeSimpleVariant) elDeSimpleVariant.value = 'percent';
         $('#de_is_active').checked = true;
         $('#de_is_stackable').checked = false;
-        $('#de_priority').value = '0';
-        state.discountSelectedCustomers = [];
+        if (elDeHideInBenefits) elDeHideInBenefits.checked = false;
+        if (elDePriority) elDePriority.value = '0';
+        resetDiscountRestrictionFields();
         resetDiscountSimpleFields();
-        renderDiscountCustomerChips();
+        resetDiscountAudienceFields();
         resetDiscountPromoFields();
         resetDiscountBuyMechanicFields();
         resetDiscountThresholdFields();
+        resetDiscountLoyaltyFields();
         updateDiscountPromoUi();
       } else {
         try {
@@ -3971,28 +7257,19 @@
       : (mechanic.discount_type || discount.discount_type || 'percent');
     $('#de_discount_value').value = mechanic.simple_variant === 'promo_code' ? '' : (mechanic.discount_value ?? discount.discount_value ?? '');
     $('#de_apply_to').value = mechanic.simple_variant === 'promo_code' ? 'order' : (mechanic.apply_to || discount.apply_to || 'order');
-    if (elDePromoRewardType) elDePromoRewardType.value = mechanic.promo_reward?.reward_type || 'discount';
-    if (elDePromoProductRewardType) elDePromoProductRewardType.value = mechanic.promo_reward?.product_reward_type || 'gift';
+    if (elDePromoRewardType) elDePromoRewardType.value = getPromoRewardUiTypeFromMechanic(mechanic.promo_reward);
+    if (elDePromoProductRewardType) elDePromoProductRewardType.value = 'gift';
     if (elDePromoDiscountType) elDePromoDiscountType.value = normalizePromoDiscountType(mechanic.promo_reward?.discount_type || discount.discount_type || 'percent');
     if (elDePromoDiscountValue) elDePromoDiscountValue.value = mechanic.promo_reward?.discount_value ?? '';
-    if (elDePromoProductDiscountType) elDePromoProductDiscountType.value = normalizePromoDiscountType(mechanic.promo_reward?.discount_type || discount.discount_type || 'percent');
-    if (elDePromoProductDiscountValue) elDePromoProductDiscountValue.value = mechanic.promo_reward?.discount_value ?? '';
+    if (elDePromoProductDiscountType) elDePromoProductDiscountType.value = 'percent';
+    if (elDePromoProductDiscountValue) elDePromoProductDiscountValue.value = '';
     if (elDePromoApplyTo) elDePromoApplyTo.value = normalizePromoApplyTo(mechanic.promo_reward?.apply_to || 'order');
     $('#de_min_order_amount').value = discount.min_order_amount || '';
     $('#de_max_discount_amount').value = discount.max_discount_amount || '';
     $('#de_starts_at').value = discount.starts_at ? formatDateTimeLocal(discount.starts_at) : '';
     $('#de_ends_at').value = discount.ends_at ? formatDateTimeLocal(discount.ends_at) : '';
 
-    let scheduleDays = [];
-    if (Array.isArray(discount.schedule_days)) {
-      scheduleDays = discount.schedule_days;
-    } else if (typeof discount.schedule_days === 'string') {
-      try {
-        scheduleDays = JSON.parse(discount.schedule_days);
-      } catch {
-        scheduleDays = [];
-      }
-    }
+    const scheduleDays = parseDiscountScheduleDays(discount.schedule_days);
     $$('#de_schedule_days input[type="checkbox"]').forEach((cb) => {
       cb.checked = scheduleDays.includes(parseInt(cb.value, 10));
     });
@@ -4001,9 +7278,15 @@
     $('#de_schedule_time_end').value = discount.schedule_time_end || '';
     $('#de_usage_limit').value = discount.usage_limit || '';
     $('#de_usage_per_customer').value = discount.usage_per_customer || '';
-    $('#de_priority').value = discount.priority || '0';
+    if (elDePriority) elDePriority.value = discount.priority || '0';
+    hydrateDiscountPeriodStateFromInputs();
+    if (elDePeriodEnabled) elDePeriodEnabled.checked = Boolean(discount.starts_at || discount.ends_at);
+    if (elDeWeekdaysEnabled) elDeWeekdaysEnabled.checked = scheduleDays.length > 0;
+    if (elDeTimeEnabled) elDeTimeEnabled.checked = Boolean(discount.schedule_time_start || discount.schedule_time_end);
+    updateDiscountRestrictionUi();
     $('#de_is_stackable').checked = !!discount.is_stackable;
     $('#de_is_active').checked = discount.is_active !== false && discount.is_active !== 0;
+    if (elDeHideInBenefits) elDeHideInBenefits.checked = !!discount.hide_in_benefits;
 
     if (elDePromoCodeMode) elDePromoCodeMode.value = promo.code_mode;
     if (elDePromoSharedCode) elDePromoSharedCode.value = promo.shared_code || '';
@@ -4022,18 +7305,39 @@
     }
     renderDiscountProductChips();
 
+    state.discountBuyConditionUiMode = inferDiscountBuyConditionUiMode(mechanic);
+    if (elDeBuyConditionUiMode) {
+      elDeBuyConditionUiMode.value = state.discountBuyConditionUiMode;
+    }
     state.discountBuyConditionProducts = cloneDiscountEntities(mechanic.qualifying_items || []);
     state.discountBuyRewardProducts = cloneDiscountEntities(mechanic.reward_products || []);
+    state.discountBuyRewardUiMode = mechanic.type === 'buy_x_get_y'
+      ? (mechanic.reward_kind === 'product_discount'
+          ? 'discount'
+          : (mechanic.reward_source === 'reward_list'
+              ? (state.discountBuyRewardProducts.length > 1 ? 'product_list' : (state.discountBuyRewardProducts.length === 1 ? 'product' : ''))
+              : 'legacy_same_pool'))
+      : '';
     state.discountThresholdTiers = Array.isArray(mechanic.tiers) && mechanic.tiers.length
       ? mechanic.tiers.map((tier) => buildEmptyThresholdTier(tier))
       : [buildEmptyThresholdTier()];
     renderDiscountBuyConditionChips();
     renderDiscountBuyRewardChips();
     renderThresholdTiers();
+    if (mechanic.type === 'threshold' && state.discountThresholdTiers.some((tier) => normalizeThresholdTierRewardKindUi(tier) === 'discount_ref')) {
+      loadDiscountSimpleSources().then(() => {
+        renderThresholdTiers();
+      }).catch(() => {});
+    }
+    if (mechanic.type === 'threshold' && state.discountThresholdTiers.some((tier) => normalizeThresholdTierRewardKindUi(tier) === 'promo_code_ref')) {
+      loadDiscountSharedPromoSources().then(() => {
+        renderThresholdTiers();
+      }).catch(() => {});
+    }
 
-    if (elDeBuyQty) elDeBuyQty.value = mechanic.buy_qty ?? 5;
+    if (elDeBuyQty) elDeBuyQty.value = mechanic.buy_qty ?? 1;
     if (elDeRewardQty) elDeRewardQty.value = mechanic.reward_qty ?? 1;
-    if (elDeBuyQualifyingMode) elDeBuyQualifyingMode.value = mechanic.qualifying_mode || 'same_sku';
+    if (elDeBuyQualifyingMode) elDeBuyQualifyingMode.value = mechanic.qualifying_mode || 'pool';
     if (elDeBuyRepeatMode) elDeBuyRepeatMode.value = mechanic.repeat_mode || 'single';
     if (elDeBuyRewardSource) elDeBuyRewardSource.value = mechanic.reward_source || 'same_pool';
     if (elDeBuyRewardKind) elDeBuyRewardKind.value = mechanic.reward_kind || 'gift';
@@ -4056,6 +7360,45 @@
     state.discountPromoCodes = [];
     renderDiscountPromoCodes();
     updateDiscountPromoUi();
+
+    const hasBuyCategoryItems = state.discountBuyConditionProducts.some((item) => String(item?.type || '').trim() === 'category');
+    const hasBuyProductItems = [...state.discountBuyConditionProducts, ...state.discountBuyRewardProducts]
+      .some((item) => String(item?.type || '').trim() === 'product' && !String(item?.photo || '').trim());
+    if (hasBuyCategoryItems && !(state.catalogCategories || []).length) {
+      loadCatalogCategories().then(() => {
+        renderDiscountBuyConditionChips();
+        renderDiscountBuyVisualization();
+      }).catch(() => {});
+    }
+    if (hasBuyProductItems && !(state.catalogProducts || []).length) {
+      loadCatalogProducts(null).then(() => {
+        renderDiscountBuyConditionChips();
+        renderDiscountBuyRewardChips();
+        renderDiscountBuyVisualization();
+      }).catch(() => {});
+    }
+    const hasProgressCategoryItems = [...state.discountProgressQualifyingItems, ...state.discountProgressDiscountProducts]
+      .some((item) => String(item?.type || '').trim() === 'category');
+    const hasProgressProductItems = [...state.discountProgressQualifyingItems, ...state.discountProgressGiftProducts, ...state.discountProgressDiscountProducts]
+      .some((item) => String(item?.type || '').trim() === 'product' && !String(item?.photo || '').trim());
+    if (hasProgressCategoryItems && !(state.catalogCategories || []).length) {
+      loadCatalogCategories().then(() => {
+        renderDiscountProgressScopeChips();
+        renderDiscountProgressDiscountChips();
+      }).catch(() => {});
+    }
+    if (hasProgressProductItems && !(state.catalogProducts || []).length) {
+      loadCatalogProducts(null).then(() => {
+        renderDiscountProgressScopeChips();
+        renderDiscountProgressRewardGiftChips();
+        renderDiscountProgressDiscountChips();
+      }).catch(() => {});
+    }
+    if (mechanic.type === 'loyalty_progress' && mechanic.reward_kind === 'promo_code') {
+      loadDiscountSharedPromoSources().then(() => {
+        renderDiscountProgressPromoSource();
+      }).catch(() => {});
+    }
   }
 
   function renderDiscountInfo(discount) {
@@ -4166,9 +7509,11 @@
     const id = $('#de_id').value;
     const isNew = !id || id === 'new';
     const scheduleDays = [];
-    $$('#de_schedule_days input[type="checkbox"]:checked').forEach((cb) => {
-      scheduleDays.push(parseInt(cb.value, 10));
-    });
+    if (elDeWeekdaysEnabled?.checked) {
+      $$('#de_schedule_days input[type="checkbox"]:checked').forEach((cb) => {
+        scheduleDays.push(parseInt(cb.value, 10));
+      });
+    }
 
     const mechanicType = elDeMechanicType?.value || 'simple_discount';
     const simpleVariant = normalizeSimpleVariant(elDeSimpleVariant?.value || 'percent');
@@ -4202,10 +7547,7 @@
             unique_code_usage_limit: uniqueCodeUsageLimit,
           }
         : { enabled: false },
-      customers: state.discountSelectedCustomers.map((c) => ({
-        entity_type: c.type,
-        entity_id: c.id,
-      })),
+      customers: audienceCustomers,
       products: [],
       mechanic: {},
     };
@@ -4221,16 +7563,9 @@
         entity_id: p.id,
       }));
       if (promoEnabled) {
-        const promoRewardType = normalizePromoRewardType(elDePromoRewardType?.value || 'discount');
-        const promoProductRewardType = normalizePromoProductRewardType(elDePromoProductRewardType?.value || 'gift');
+        const promoRewardType = normalizePromoRewardUiType(elDePromoRewardType?.value || 'discount');
         const promoDiscountType = normalizePromoDiscountType(elDePromoDiscountType?.value || 'percent');
         const promoDiscountValue = parseFloat(elDePromoDiscountValue?.value) || 0;
-        const promoProductDiscountType = normalizePromoDiscountType(elDePromoProductDiscountType?.value || promoDiscountType || 'percent');
-        const promoProductDiscountValue = parseFloat(elDePromoProductDiscountValue?.value) || 0;
-        const activePromoDiscountType = promoRewardType === 'product' ? promoProductDiscountType : promoDiscountType;
-        const activePromoDiscountValue = promoRewardType === 'product' && promoProductRewardType === 'product_discount'
-          ? promoProductDiscountValue
-          : promoDiscountValue;
         const promoApplyTo = promoRewardType === 'discount'
           ? normalizePromoApplyTo(elDePromoApplyTo?.value || 'order')
           : 'product';
@@ -4247,17 +7582,17 @@
           alert('Добавьте товары, категории или комбо для награды по промокоду');
           return;
         }
-        if (promoRewardType === 'product' && !selectedProducts.length) {
+        if (promoRewardType === 'gift' && !selectedProducts.length) {
           alert('Добавьте товары для награды по промокоду');
           return;
         }
-        if (promoRewardType === 'product' && promoProductRewardType === 'product_discount' && !(promoProductDiscountValue > 0)) {
+        if (false) {
           alert('Введите корректное значение скидки для товара по промокоду');
           return;
         }
 
-        data.discount_type = activePromoDiscountType;
-        data.discount_value = promoRewardType === 'product' && promoProductRewardType === 'gift' ? 0 : activePromoDiscountValue;
+        data.discount_type = promoDiscountType;
+        data.discount_value = promoRewardType === 'gift' ? 0 : promoDiscountValue;
         data.apply_to = promoApplyTo;
         data.products = promoRewardType === 'discount' && promoApplyTo === 'order'
           ? []
@@ -4265,11 +7600,11 @@
         data.mechanic = {
           simple_variant: 'promo_code',
           promo_reward: {
-            reward_type: promoRewardType,
-            product_reward_type: promoProductRewardType,
-            reward_kind: promoRewardType === 'product' ? promoProductRewardType : 'discount',
-            discount_type: activePromoDiscountType,
-            discount_value: promoRewardType === 'product' && promoProductRewardType === 'gift' ? null : activePromoDiscountValue,
+            reward_type: promoRewardType === 'gift' ? 'product' : 'discount',
+            product_reward_type: 'gift',
+            reward_kind: promoRewardType === 'gift' ? 'gift' : 'discount',
+            discount_type: promoDiscountType,
+            discount_value: promoRewardType === 'gift' ? null : promoDiscountValue,
             apply_to: promoApplyTo,
           },
         };
@@ -4302,16 +7637,32 @@
     } else if (mechanicType === 'buy_x_get_y') {
       const buyQty = Math.max(1, parseInt(elDeBuyQty?.value, 10) || 0);
       const rewardQty = Math.max(1, parseInt(elDeRewardQty?.value, 10) || 0);
-      const qualifyingMode = elDeBuyQualifyingMode?.value || 'same_sku';
+      const conditionUiMode = getDiscountBuyConditionUiMode();
       const rewardSource = elDeBuyRewardSource?.value || 'same_pool';
       const rewardKind = elDeBuyRewardKind?.value || 'gift';
       const rewardDiscountValue = parseFloat(elDeBuyRewardDiscountValue?.value) || 0;
+      const qualifyingItems = getDiscountBuyConditionSelection().map((item) => ({
+        entity_type: item.type,
+        entity_id: item.id,
+      }));
+      const rewardProducts = getDiscountBuyRewardSelection().map((item) => ({
+        entity_type: item.type,
+        entity_id: item.id,
+      }));
 
-      if (qualifyingMode === 'pool' && !state.discountBuyConditionProducts.length) {
+      if (conditionUiMode === 'product' && qualifyingItems.length !== 1) {
+        alert('Выберите один товар для условия акции');
+        return;
+      }
+      if (conditionUiMode === 'product_list' && !qualifyingItems.length) {
         alert('Добавьте товары для условия акции');
         return;
       }
-      if (rewardSource === 'reward_list' && !state.discountBuyRewardProducts.length) {
+      if (conditionUiMode === 'category' && !qualifyingItems.length) {
+        alert('Добавьте категории для условия акции');
+        return;
+      }
+      if (rewardSource === 'reward_list' && !rewardProducts.length) {
         alert('Добавьте товары-награды');
         return;
       }
@@ -4323,21 +7674,15 @@
       data.mechanic = {
         buy_qty: buyQty,
         reward_qty: rewardQty,
-        qualifying_mode: qualifyingMode,
+        qualifying_mode: 'pool',
         repeat_mode: elDeBuyRepeatMode?.value || 'single',
         reward_source: rewardSource,
         reward_kind: rewardKind,
-        qualifying_items: state.discountBuyConditionProducts.map((p) => ({
-          entity_type: p.type,
-          entity_id: p.id,
-        })),
-        reward_products: state.discountBuyRewardProducts.map((p) => ({
-          entity_type: p.type,
-          entity_id: p.id,
-        })),
+        qualifying_items: qualifyingItems,
+        reward_products: rewardSource === 'reward_list' ? rewardProducts : [],
         reward_discount: {
           discount_type: elDeBuyRewardDiscountType?.value || 'percent',
-          discount_value: rewardDiscountValue || null,
+          discount_value: rewardKind === 'product_discount' ? rewardDiscountValue : null,
         },
       };
     } else {
@@ -4397,7 +7742,7 @@
       updateRightPanel();
     } catch (err) {
       console.error('saveDiscount error:', err);
-      alert('Ошибка сохранения: ' + err.message);
+      alert(formatDiscountSaveErrorMessage(err));
     }
   }
 
@@ -4417,28 +7762,19 @@
       : (mechanic.discount_type || discount.discount_type || 'percent');
     $('#de_discount_value').value = mechanic.simple_variant === 'promo_code' ? '' : (mechanic.discount_value ?? discount.discount_value ?? '');
     $('#de_apply_to').value = mechanic.simple_variant === 'promo_code' ? 'order' : (mechanic.apply_to || discount.apply_to || 'order');
-    if (elDePromoRewardType) elDePromoRewardType.value = mechanic.promo_reward?.reward_type || 'discount';
-    if (elDePromoProductRewardType) elDePromoProductRewardType.value = mechanic.promo_reward?.product_reward_type || 'gift';
+    if (elDePromoRewardType) elDePromoRewardType.value = getPromoRewardUiTypeFromMechanic(mechanic.promo_reward);
+    if (elDePromoProductRewardType) elDePromoProductRewardType.value = 'gift';
     if (elDePromoDiscountType) elDePromoDiscountType.value = normalizePromoDiscountType(mechanic.promo_reward?.discount_type || discount.discount_type || 'percent');
     if (elDePromoDiscountValue) elDePromoDiscountValue.value = mechanic.promo_reward?.discount_value ?? '';
-    if (elDePromoProductDiscountType) elDePromoProductDiscountType.value = normalizePromoDiscountType(mechanic.promo_reward?.discount_type || discount.discount_type || 'percent');
-    if (elDePromoProductDiscountValue) elDePromoProductDiscountValue.value = mechanic.promo_reward?.discount_value ?? '';
+    if (elDePromoProductDiscountType) elDePromoProductDiscountType.value = 'percent';
+    if (elDePromoProductDiscountValue) elDePromoProductDiscountValue.value = '';
     if (elDePromoApplyTo) elDePromoApplyTo.value = normalizePromoApplyTo(mechanic.promo_reward?.apply_to || 'order');
     $('#de_min_order_amount').value = discount.min_order_amount || '';
     $('#de_max_discount_amount').value = discount.max_discount_amount || '';
     $('#de_starts_at').value = discount.starts_at ? formatDateTimeLocal(discount.starts_at) : '';
     $('#de_ends_at').value = discount.ends_at ? formatDateTimeLocal(discount.ends_at) : '';
 
-    let scheduleDays = [];
-    if (Array.isArray(discount.schedule_days)) {
-      scheduleDays = discount.schedule_days;
-    } else if (typeof discount.schedule_days === 'string') {
-      try {
-        scheduleDays = JSON.parse(discount.schedule_days);
-      } catch {
-        scheduleDays = [];
-      }
-    }
+    const scheduleDays = parseDiscountScheduleDays(discount.schedule_days);
     $$('#de_schedule_days input[type="checkbox"]').forEach((cb) => {
       cb.checked = scheduleDays.includes(parseInt(cb.value, 10));
     });
@@ -4447,27 +7783,49 @@
     $('#de_schedule_time_end').value = discount.schedule_time_end || '';
     $('#de_usage_limit').value = discount.usage_limit || '';
     $('#de_usage_per_customer').value = discount.usage_per_customer || '';
-    $('#de_priority').value = discount.priority || '0';
+    if (elDePriority) elDePriority.value = discount.priority || '0';
+    hydrateDiscountPeriodStateFromInputs();
+    if (elDePeriodEnabled) elDePeriodEnabled.checked = Boolean(discount.starts_at || discount.ends_at);
+    if (elDeWeekdaysEnabled) elDeWeekdaysEnabled.checked = scheduleDays.length > 0;
+    if (elDeTimeEnabled) elDeTimeEnabled.checked = Boolean(discount.schedule_time_start || discount.schedule_time_end);
+    updateDiscountRestrictionUi();
     $('#de_is_stackable').checked = !!discount.is_stackable;
     $('#de_is_active').checked = discount.is_active !== false && discount.is_active !== 0;
+    if (elDeHideInBenefits) elDeHideInBenefits.checked = !!discount.hide_in_benefits;
 
     if (elDePromoCodeMode) elDePromoCodeMode.value = promo.code_mode;
     if (elDePromoSharedCode) elDePromoSharedCode.value = promo.shared_code || '';
     if (elDePromoSharedUsageLimit) elDePromoSharedUsageLimit.value = promo.shared_code_usage_limit ?? '';
-    if (elDePromoUniqueUsageLimit) elDePromoUniqueUsageLimit.value = promo.unique_code_usage_limit ?? 1;
-    if (elDePromoGenerateCount && !elDePromoGenerateCount.value) elDePromoGenerateCount.value = '10';
+    if (elDePromoUniqueUsageLimit) {
+      elDePromoUniqueUsageLimit.value = promo.code_mode === 'unique'
+        ? (promo.unique_code_usage_limit ?? '')
+        : '';
+    }
+    if (elDePromoGenerateCount) elDePromoGenerateCount.value = '';
 
-    state.discountSelectedProducts = Array.isArray(discount.products)
-      ? discount.products.map((p) => ({
-          type: p.entity_type || 'product',
-          id: p.entity_id,
-          title: p.title || `#${p.entity_id}`,
-        }))
-      : [];
+    state.discountSelectedProducts = cloneDiscountEntities(discount.products || []);
+    state.discountProductsConfigMode = normalizeDiscountProductConfigMode(mechanic.products_config_mode || 'any');
     renderDiscountProductChips();
+    if (
+      state.discountSelectedProducts.some((item) => String(item?.type || '').trim() === 'category') &&
+      !(state.catalogCategories || []).length
+    ) {
+      loadCatalogCategories().then(() => {
+        renderDiscountProductChips();
+      }).catch(() => {});
+    }
 
     state.discountBuyConditionProducts = cloneDiscountEntities(mechanic.qualifying_items || []);
+    state.discountBuyConditionConfigMode = normalizeDiscountProductConfigMode(mechanic.qualifying_items_config_mode || 'any');
     state.discountBuyRewardProducts = cloneDiscountEntities(mechanic.reward_products || []);
+    state.discountBuyRewardConfigMode = normalizeDiscountProductConfigMode(mechanic.reward_products_config_mode || 'any');
+    state.discountBuyRewardUiMode = mechanic.type === 'buy_x_get_y'
+      ? (mechanic.reward_kind === 'product_discount'
+          ? 'discount'
+          : (mechanic.reward_source === 'reward_list'
+              ? (state.discountBuyRewardProducts.length > 1 ? 'product_list' : (state.discountBuyRewardProducts.length === 1 ? 'product' : ''))
+              : 'legacy_same_pool'))
+      : '';
     state.discountThresholdTiers = Array.isArray(mechanic.tiers) && mechanic.tiers.length
       ? mechanic.tiers.map((tier) => buildEmptyThresholdTier(tier))
       : [buildEmptyThresholdTier()];
@@ -4475,9 +7833,9 @@
     renderDiscountBuyRewardChips();
     renderThresholdTiers();
 
-    if (elDeBuyQty) elDeBuyQty.value = mechanic.buy_qty ?? 5;
+    if (elDeBuyQty) elDeBuyQty.value = mechanic.buy_qty ?? 1;
     if (elDeRewardQty) elDeRewardQty.value = mechanic.reward_qty ?? 1;
-    if (elDeBuyQualifyingMode) elDeBuyQualifyingMode.value = mechanic.qualifying_mode || 'same_sku';
+    if (elDeBuyQualifyingMode) elDeBuyQualifyingMode.value = mechanic.qualifying_mode || 'pool';
     if (elDeBuyRepeatMode) elDeBuyRepeatMode.value = mechanic.repeat_mode || 'single';
     if (elDeBuyRewardSource) elDeBuyRewardSource.value = mechanic.reward_source || 'same_pool';
     if (elDeBuyRewardKind) elDeBuyRewardKind.value = mechanic.reward_kind || 'gift';
@@ -4485,19 +7843,128 @@
     if (elDeBuyRewardDiscountValue) elDeBuyRewardDiscountValue.value = mechanic.reward_discount?.discount_value ?? '';
     if (elDeThresholdBasis) elDeThresholdBasis.value = mechanic.threshold_basis || 'before_discounts';
     if (elDeThresholdApplyMode) elDeThresholdApplyMode.value = mechanic.threshold_apply_mode || 'best_only';
+    if (elDeProgressBasis) elDeProgressBasis.value = mechanic.type === 'loyalty_progress' ? (mechanic.progress_basis || 'orders') : 'orders';
+    if (elDeProgressThresholdValue) elDeProgressThresholdValue.value = mechanic.type === 'loyalty_progress'
+      ? String(mechanic.progress_basis === 'amount'
+          ? (mechanic.threshold_value ?? mechanic.buy_qty ?? 1)
+          : (mechanic.buy_qty ?? mechanic.threshold_value ?? 1))
+      : '1';
+    if (elDeProgressBuyQty) elDeProgressBuyQty.value = mechanic.type === 'loyalty_progress' ? (mechanic.buy_qty ?? 1) : 1;
+    if (elDeProgressRewardQty) elDeProgressRewardQty.value = mechanic.type === 'loyalty_progress' ? (mechanic.reward_qty ?? 1) : 1;
+    if (elDeProgressStatusFilter) elDeProgressStatusFilter.value = 'completed';
+    if (elDeProgressScopeMode) elDeProgressScopeMode.value = mechanic.type === 'loyalty_progress' ? (mechanic.qualifying_scope_mode || 'none') : 'none';
+    if (elDeProgressPendingRewardMode) elDeProgressPendingRewardMode.value = mechanic.type === 'loyalty_progress' ? (mechanic.pending_reward_mode || 'stack') : 'stack';
+    if (elDeProgressRewardKind) elDeProgressRewardKind.value = mechanic.type === 'loyalty_progress' ? (mechanic.reward_kind || 'gift') : 'gift';
+    if (elDeProgressIssueMode) elDeProgressIssueMode.value = 'automatic';
+    if (elDeProgressRedemptionMode) elDeProgressRedemptionMode.value = 'reset';
+    if (elDeProgressDiscountApplyTo) elDeProgressDiscountApplyTo.value = mechanic.type === 'loyalty_progress' ? (mechanic.reward?.discount?.apply_to || 'order') : 'order';
+    if (elDeProgressDiscountType) elDeProgressDiscountType.value = mechanic.type === 'loyalty_progress' ? (mechanic.reward?.discount?.discount_type || 'percent') : 'percent';
+    if (elDeProgressDiscountValue) elDeProgressDiscountValue.value = mechanic.type === 'loyalty_progress' ? (mechanic.reward?.discount?.discount_value ?? '') : '';
+    state.discountProgressQualifyingItems = mechanic.type === 'loyalty_progress'
+      ? cloneDiscountEntities(mechanic.qualifying_items || [])
+      : [];
+    state.discountProgressQualifyingItemsConfigMode = mechanic.type === 'loyalty_progress'
+      ? normalizeDiscountProductConfigMode(mechanic.qualifying_items_config_mode || 'any')
+      : 'any';
+    state.discountProgressRewardUiMode = mechanic.type === 'loyalty_progress'
+      ? (mechanic.reward_kind === 'discount'
+          ? 'discount'
+          : (mechanic.reward_kind === 'promo_code'
+              ? 'promo_code'
+              : ((mechanic.reward?.gift_products || []).length > 1 ? 'product_list' : ((mechanic.reward?.gift_products || []).length === 1 ? 'product' : ''))))
+      : '';
+    state.discountProgressGiftProducts = mechanic.type === 'loyalty_progress'
+      ? cloneDiscountEntities(mechanic.reward?.gift_products || [])
+      : [];
+    state.discountProgressGiftProductsConfigMode = mechanic.type === 'loyalty_progress'
+      ? normalizeDiscountProductConfigMode(mechanic.gift_products_config_mode || mechanic.reward?.gift_products_config_mode || 'any')
+      : 'any';
+    state.discountProgressDiscountProducts = mechanic.type === 'loyalty_progress'
+      ? cloneDiscountEntities(mechanic.reward?.discount?.products || [])
+      : [];
+    state.discountProgressDiscountProductsConfigMode = mechanic.type === 'loyalty_progress'
+      ? normalizeDiscountProductConfigMode(mechanic.reward_products_config_mode || mechanic.reward?.reward_products_config_mode || mechanic.reward?.discount?.products_config_mode || 'any')
+      : 'any';
+    state.discountProgressPromoSource = mechanic.type === 'loyalty_progress'
+      ? cloneDiscountPromoSource(mechanic.reward?.promo_code)
+      : null;
 
     state.discountSelectedCustomers = Array.isArray(discount.customers)
       ? discount.customers.map((c) => ({
           type: c.entity_type || 'customer',
           id: c.entity_id,
           title: c.title || `#${c.entity_id}`,
+          phone: c.phone || '',
+          count: c.count ?? c.customer_count ?? null,
         }))
       : [];
+    if (elDeAudienceMode) {
+      elDeAudienceMode.value = inferDiscountAudienceMode(state.discountSelectedCustomers);
+    }
+    const audienceMode = getDiscountAudienceMode();
+    state.discountSelectedCustomers = audienceMode === 'all'
+      ? []
+      : state.discountSelectedCustomers.filter((item) => (
+          audienceMode === 'category'
+            ? String(item?.type || '').trim() === 'category'
+            : String(item?.type || '').trim() !== 'category'
+        ));
+    state.discountAudienceAccordionExpanded = false;
+    state.discountProductsAccordionExpanded = false;
+    state.discountProgressDiscountAccordionExpanded = false;
+    state.discountPromoCodesAccordionExpanded = false;
     renderDiscountCustomerChips();
+    if (
+      state.discountSelectedCustomers.some((item) => String(item?.type || '').trim() === 'category') &&
+      !(state.customerCategories || []).length
+    ) {
+      loadCustomerCategories(true).then(() => {
+        renderDiscountCustomerChips();
+      }).catch(() => {});
+    }
 
     state.discountPromoCodes = [];
     renderDiscountPromoCodes();
     updateDiscountPromoUi();
+
+    const hasBuyCategoryItems = state.discountBuyConditionProducts.some((item) => String(item?.type || '').trim() === 'category');
+    const hasBuyProductItems = [...state.discountBuyConditionProducts, ...state.discountBuyRewardProducts]
+      .some((item) => String(item?.type || '').trim() === 'product' && !String(item?.photo || '').trim());
+    if (hasBuyCategoryItems && !(state.catalogCategories || []).length) {
+      loadCatalogCategories().then(() => {
+        renderDiscountBuyConditionChips();
+        renderDiscountBuyVisualization();
+      }).catch(() => {});
+    }
+    if (hasBuyProductItems && !(state.catalogProducts || []).length) {
+      loadCatalogProducts(null).then(() => {
+        renderDiscountBuyConditionChips();
+        renderDiscountBuyRewardChips();
+        renderDiscountBuyVisualization();
+      }).catch(() => {});
+    }
+    const hasProgressCategoryItems = [...state.discountProgressQualifyingItems, ...state.discountProgressDiscountProducts]
+      .some((item) => String(item?.type || '').trim() === 'category');
+    const hasProgressProductItems = [...state.discountProgressQualifyingItems, ...state.discountProgressGiftProducts, ...state.discountProgressDiscountProducts]
+      .some((item) => String(item?.type || '').trim() === 'product' && !String(item?.photo || '').trim());
+    if (hasProgressCategoryItems && !(state.catalogCategories || []).length) {
+      loadCatalogCategories().then(() => {
+        renderDiscountProgressScopeChips();
+        renderDiscountProgressDiscountChips();
+      }).catch(() => {});
+    }
+    if (hasProgressProductItems && !(state.catalogProducts || []).length) {
+      loadCatalogProducts(null).then(() => {
+        renderDiscountProgressScopeChips();
+        renderDiscountProgressRewardGiftChips();
+        renderDiscountProgressDiscountChips();
+      }).catch(() => {});
+    }
+    if (mechanic.type === 'loyalty_progress' && mechanic.reward_kind === 'promo_code') {
+      loadDiscountSharedPromoSources().then(() => {
+        renderDiscountProgressPromoSource();
+      }).catch(() => {});
+    }
   }
 
   function renderDiscountInfo(discount) {
@@ -4627,6 +8094,19 @@
     const uniqueCodeUsageLimit = promoEnabled && promoCodeMode === 'unique'
       ? Math.max(1, parseInt(elDePromoUniqueUsageLimit?.value, 10) || 1)
       : null;
+    const audienceMode = getDiscountAudienceMode();
+    const audienceCustomers = audienceMode === 'all'
+      ? []
+      : state.discountSelectedCustomers
+          .filter((item) => (
+            audienceMode === 'category'
+              ? String(item?.type || '').trim() === 'category'
+              : String(item?.type || '').trim() !== 'category'
+          ))
+          .map((c) => ({
+            entity_type: c.type,
+            entity_id: c.id,
+          }));
 
     const data = {
       title: $('#de_title').value.trim(),
@@ -4634,16 +8114,17 @@
       mechanic_type: mechanicType,
       min_order_amount: parseFloat($('#de_min_order_amount').value) || null,
       max_discount_amount: parseFloat($('#de_max_discount_amount').value) || null,
-      starts_at: $('#de_starts_at').value || null,
-      ends_at: $('#de_ends_at').value || null,
-      schedule_days: scheduleDays.length ? scheduleDays : null,
-      schedule_time_start: $('#de_schedule_time_start').value || null,
-      schedule_time_end: $('#de_schedule_time_end').value || null,
+      starts_at: elDePeriodEnabled?.checked ? ($('#de_starts_at').value || null) : null,
+      ends_at: elDePeriodEnabled?.checked ? ($('#de_ends_at').value || null) : null,
+      schedule_days: elDeWeekdaysEnabled?.checked ? (scheduleDays.length ? scheduleDays : []) : null,
+      schedule_time_start: elDeTimeEnabled?.checked ? ($('#de_schedule_time_start').value || null) : null,
+      schedule_time_end: elDeTimeEnabled?.checked ? ($('#de_schedule_time_end').value || null) : null,
       usage_limit: parseInt($('#de_usage_limit').value, 10) || null,
       usage_per_customer: parseInt($('#de_usage_per_customer').value, 10) || null,
-      priority: parseInt($('#de_priority').value, 10) || 0,
+      priority: parseInt(elDePriority?.value || '0', 10) || 0,
       is_stackable: $('#de_is_stackable').checked,
       is_active: $('#de_is_active').checked,
+      hide_in_benefits: !!elDeHideInBenefits?.checked,
       promo: promoEnabled
         ? {
             enabled: true,
@@ -4653,10 +8134,7 @@
             unique_code_usage_limit: uniqueCodeUsageLimit,
           }
         : { enabled: false },
-      customers: state.discountSelectedCustomers.map((c) => ({
-        entity_type: c.type,
-        entity_id: c.id,
-      })),
+      customers: audienceCustomers,
       products: [],
       mechanic: {},
     };
@@ -4673,16 +8151,9 @@
       }));
 
       if (promoEnabled) {
-        const promoRewardType = normalizePromoRewardType(elDePromoRewardType?.value || 'discount');
-        const promoProductRewardType = normalizePromoProductRewardType(elDePromoProductRewardType?.value || 'gift');
+        const promoRewardType = normalizePromoRewardUiType(elDePromoRewardType?.value || 'discount');
         const promoDiscountType = normalizePromoDiscountType(elDePromoDiscountType?.value || 'percent');
         const promoDiscountValue = parseFloat(elDePromoDiscountValue?.value) || 0;
-        const promoProductDiscountType = normalizePromoDiscountType(elDePromoProductDiscountType?.value || promoDiscountType || 'percent');
-        const promoProductDiscountValue = parseFloat(elDePromoProductDiscountValue?.value) || 0;
-        const activePromoDiscountType = promoRewardType === 'product' ? promoProductDiscountType : promoDiscountType;
-        const activePromoDiscountValue = promoRewardType === 'product' && promoProductRewardType === 'product_discount'
-          ? promoProductDiscountValue
-          : promoDiscountValue;
         const promoApplyTo = promoRewardType === 'discount'
           ? normalizePromoApplyTo(elDePromoApplyTo?.value || 'order')
           : 'product';
@@ -4699,27 +8170,23 @@
           alert('Добавьте товары, категории или комбо для награды по промокоду');
           return;
         }
-        if (promoRewardType === 'product' && !selectedProducts.length) {
+        if (promoRewardType === 'gift' && !selectedProducts.length) {
           alert('Добавьте товары для награды по промокоду');
           return;
         }
-        if (promoRewardType === 'product' && promoProductRewardType === 'product_discount' && !(promoProductDiscountValue > 0)) {
-          alert('Введите корректное значение скидки для товара по промокоду');
-          return;
-        }
 
-        data.discount_type = activePromoDiscountType;
-        data.discount_value = promoRewardType === 'product' && promoProductRewardType === 'gift' ? 0 : activePromoDiscountValue;
+        data.discount_type = promoDiscountType;
+        data.discount_value = promoRewardType === 'gift' ? 0 : promoDiscountValue;
         data.apply_to = promoApplyTo;
         data.products = promoRewardType === 'discount' && promoApplyTo === 'order' ? [] : selectedProducts;
         data.mechanic = {
           simple_variant: 'promo_code',
           promo_reward: {
-            reward_type: promoRewardType,
-            product_reward_type: promoProductRewardType,
-            reward_kind: promoRewardType === 'product' ? promoProductRewardType : 'discount',
-            discount_type: activePromoDiscountType,
-            discount_value: promoRewardType === 'product' && promoProductRewardType === 'gift' ? null : activePromoDiscountValue,
+            reward_type: promoRewardType === 'gift' ? 'product' : 'discount',
+            product_reward_type: 'gift',
+            reward_kind: promoRewardType === 'gift' ? 'gift' : 'discount',
+            discount_type: promoDiscountType,
+            discount_value: promoRewardType === 'gift' ? null : promoDiscountValue,
             apply_to: promoApplyTo,
           },
         };
@@ -4753,16 +8220,33 @@
     } else if (mechanicType === 'buy_x_get_y') {
       const buyQty = Math.max(1, parseInt(elDeBuyQty?.value, 10) || 0);
       const rewardQty = Math.max(1, parseInt(elDeRewardQty?.value, 10) || 0);
-      const qualifyingMode = elDeBuyQualifyingMode?.value || 'same_sku';
+      const conditionUiMode = getDiscountBuyConditionUiMode();
       const rewardSource = elDeBuyRewardSource?.value || 'same_pool';
       const rewardKind = elDeBuyRewardKind?.value || 'gift';
       const rewardDiscountValue = parseFloat(elDeBuyRewardDiscountValue?.value) || 0;
 
-      if (qualifyingMode === 'pool' && !state.discountBuyConditionProducts.length) {
+      const qualifyingItems = getDiscountBuyConditionSelection().map((item) => ({
+        entity_type: item.type,
+        entity_id: item.id,
+      }));
+      const rewardProducts = getDiscountBuyRewardSelection().map((item) => ({
+        entity_type: item.type,
+        entity_id: item.id,
+      }));
+
+      if (conditionUiMode === 'product' && qualifyingItems.length !== 1) {
+        alert('Выберите один товар для условия акции');
+        return;
+      }
+      if (conditionUiMode === 'product_list' && !qualifyingItems.length) {
         alert('Добавьте товары для условия акции');
         return;
       }
-      if (rewardSource === 'reward_list' && !state.discountBuyRewardProducts.length) {
+      if (conditionUiMode === 'category' && !qualifyingItems.length) {
+        alert('Добавьте категории для условия акции');
+        return;
+      }
+      if (rewardSource === 'reward_list' && !rewardProducts.length) {
         alert('Добавьте товары-награды');
         return;
       }
@@ -4774,65 +8258,175 @@
       data.mechanic = {
         buy_qty: buyQty,
         reward_qty: rewardQty,
-        qualifying_mode: qualifyingMode,
+        qualifying_mode: 'pool',
         repeat_mode: elDeBuyRepeatMode?.value || 'single',
         reward_source: rewardSource,
         reward_kind: rewardKind,
-        qualifying_items: qualifyingMode === 'pool'
-          ? state.discountBuyConditionProducts.map((p) => ({
-              entity_type: p.type,
-              entity_id: p.id,
-            }))
-          : [],
-        reward_products: rewardSource === 'reward_list'
-          ? state.discountBuyRewardProducts.map((p) => ({
-              entity_type: p.type,
-              entity_id: p.id,
-            }))
-          : [],
+        qualifying_items: qualifyingItems,
+        reward_products: rewardSource === 'reward_list' ? rewardProducts : [],
         reward_discount: {
           discount_type: elDeBuyRewardDiscountType?.value || 'percent',
           discount_value: rewardKind === 'product_discount' ? rewardDiscountValue : null,
         },
       };
+    } else if (mechanicType === 'loyalty_progress') {
+      const progressBasis = getDiscountProgressBasis();
+      const buyQty = progressBasis === 'amount'
+        ? 1
+        : normalizeDiscountVisualCount(elDeProgressBuyQty?.value, 1);
+      const rewardQty = progressBasis === 'amount'
+        ? 1
+        : normalizeDiscountVisualCount(elDeProgressRewardQty?.value, 1);
+      const thresholdValue = progressBasis === 'amount'
+        ? (parseFloat(elDeProgressThresholdValue?.value) || 0)
+        : buyQty;
+      const scopeMode = progressBasis === 'items' ? getDiscountProgressScopeMode() : 'none';
+      const rewardKind = normalizeDiscountProgressRewardKind(elDeProgressRewardKind?.value || 'gift');
+      const qualifyingItems = progressBasis === 'items'
+        ? getDiscountProgressScopeSelection().map((item) => ({
+            entity_type: item.type,
+            entity_id: item.id,
+          }))
+        : [];
+      const giftProducts = cloneDiscountEntities(state.discountProgressGiftProducts || []).map((item) => ({
+        entity_type: item.type,
+        entity_id: item.id,
+      }));
+      const rewardDiscountApplyTo = getDiscountProgressDiscountApplyTo();
+      const rewardDiscountValue = parseFloat(elDeProgressDiscountValue?.value) || 0;
+      const rewardDiscountProducts = getDiscountProgressDiscountSelection().map((item) => ({
+        entity_type: item.type,
+        entity_id: item.id,
+      }));
+      const promoSource = cloneDiscountPromoSource(state.discountProgressPromoSource);
+
+      if (!(thresholdValue > 0)) {
+        alert('Укажите корректный порог накопительной акции');
+        return;
+      }
+      if (progressBasis === 'items' && !qualifyingItems.length) {
+        alert('Добавьте товары или категории для накопления');
+        return;
+      }
+      if (rewardKind === 'gift' && !giftProducts.length) {
+        alert('Добавьте товары для награды накопительной акции');
+        return;
+      }
+      if (rewardKind === 'discount') {
+        if (!(rewardDiscountValue > 0)) {
+          alert('Укажите корректное значение скидки для награды');
+          return;
+        }
+        if (rewardDiscountApplyTo !== 'order' && !rewardDiscountProducts.length) {
+          alert('Добавьте товары или категории для скидочной награды');
+          return;
+        }
+      }
+      if (rewardKind === 'promo_code' && !promoSource) {
+        alert('Прикрепите общий промокод для награды');
+        return;
+      }
+
+      data.mechanic = {
+        buy_qty: buyQty,
+        reward_qty: rewardQty,
+        progress_basis: progressBasis,
+        threshold_value: thresholdValue,
+        status_filter: 'completed',
+        qualifying_scope_mode: scopeMode,
+        qualifying_items: qualifyingItems,
+        reward_kind: rewardKind,
+        issue_mode: 'automatic',
+        pending_reward_mode: normalizeDiscountProgressPendingRewardMode(elDeProgressPendingRewardMode?.value || 'stack'),
+        redemption_mode: 'reset',
+        reward: {
+          gift_products: rewardKind === 'gift' ? giftProducts : [],
+          discount: {
+            apply_to: rewardDiscountApplyTo,
+            discount_type: normalizePromoDiscountType(elDeProgressDiscountType?.value || 'percent'),
+            discount_value: rewardKind === 'discount' ? rewardDiscountValue : null,
+            products: rewardKind === 'discount' && rewardDiscountApplyTo !== 'order' ? rewardDiscountProducts : [],
+          },
+          promo_code: rewardKind === 'promo_code'
+            ? {
+                source_promo_code_id: promoSource?.source_promo_code_id || null,
+                source_discount_id: promoSource?.source_discount_id || null,
+                source_code: promoSource?.source_code || '',
+              }
+            : {
+                source_promo_code_id: null,
+                source_discount_id: null,
+                source_code: null,
+              },
+        },
+      };
     } else {
-      const tiers = (state.discountThresholdTiers || []).map((tier) => {
-        const rewardKind = tier.reward_kind || 'gift';
+      const tiers = await Promise.all((state.discountThresholdTiers || []).map(async (tier) => {
+        const rewardKind = normalizeThresholdTierRewardKindUi(tier);
+        const rewardProducts = cloneDiscountEntities(tier.reward_products || [])
+          .filter((item) => String(item?.type || '').trim() === 'product');
+        const rewardDiscountSource = cloneDiscountSimpleSource(tier.reward_discount_source);
+        const rewardPromoSource = cloneDiscountPromoSource(tier.reward_promo_source);
         return {
           id: tier.id,
           min_amount: parseFloat(tier.min_amount) || 0,
+          buy_qty: 1,
+          reward_qty: 1,
           reward_kind: rewardKind,
-          reward_products: rewardKind === 'order_discount'
-            ? []
-            : cloneDiscountEntities(tier.reward_products || []).map((item) => ({
-                entity_type: item.type,
-                entity_id: item.id,
-              })),
+          reward_products: (rewardKind === 'product' ? rewardProducts.slice(0, 1) : rewardProducts)
+            .map((item) => ({
+              entity_type: item.type,
+              entity_id: item.id,
+            })),
+          reward_discount_source: rewardKind === 'discount_ref'
+            ? {
+                discount_id: rewardDiscountSource?.discount_id || null,
+              }
+            : {
+                discount_id: null,
+              },
+          reward_promo_source: rewardKind === 'promo_code_ref'
+            ? {
+                source_promo_code_id: rewardPromoSource?.source_promo_code_id || null,
+                source_discount_id: rewardPromoSource?.source_discount_id || null,
+                source_code: rewardPromoSource?.source_code || '',
+              }
+            : {
+                source_promo_code_id: null,
+                source_discount_id: null,
+                source_code: null,
+              },
           reward_discount: {
-            discount_type: tier.reward_discount?.discount_type || 'percent',
-            discount_value: rewardKind === 'gift'
-              ? null
-              : (parseFloat(tier.reward_discount?.discount_value) || null),
+            discount_type: 'percent',
+            discount_value: null,
           },
         };
-      });
+      }));
 
       if (!tiers.length || tiers.some((tier) => !(tier.min_amount > 0))) {
         alert('Добавьте корректные ступени для пороговой акции');
         return;
       }
-      if (tiers.some((tier) => (tier.reward_kind === 'gift' || tier.reward_kind === 'product_discount') && !tier.reward_products.length)) {
-        alert('У каждой товарной ступени должны быть товары-награды');
+      if (tiers.some((tier) => tier.reward_kind === 'product' && tier.reward_products.length !== 1)) {
+        alert('У порога с наградой "Товар" должен быть выбран один товар.');
         return;
       }
-      if (tiers.some((tier) => (tier.reward_kind === 'product_discount' || tier.reward_kind === 'order_discount') && !(Number(tier.reward_discount.discount_value) > 0))) {
-        alert('Укажите значение скидки для скидочных ступеней');
+      if (tiers.some((tier) => tier.reward_kind === 'product_list' && !tier.reward_products.length)) {
+        alert('У порога со списком товаров должна быть выбрана хотя бы одна позиция.');
+        return;
+      }
+      if (tiers.some((tier) => tier.reward_kind === 'discount_ref' && !(Number(tier?.reward_discount_source?.discount_id || 0) > 0))) {
+        alert('У каждого порога со скидкой должна быть выбрана скидка из списка.');
+        return;
+      }
+      if (tiers.some((tier) => tier.reward_kind === 'promo_code_ref' && !(Number(tier?.reward_promo_source?.source_promo_code_id || 0) > 0))) {
+        alert('У каждого порога с промокодом должен быть выбран промокод.');
         return;
       }
 
       data.mechanic = {
-        threshold_basis: elDeThresholdBasis?.value || 'before_discounts',
-        threshold_apply_mode: elDeThresholdApplyMode?.value || 'best_only',
+        threshold_basis: 'before_discounts',
+        threshold_apply_mode: 'best_only',
         tiers,
       };
     }
@@ -4863,6 +8457,326 @@
     }
   }
 
+  function renderDiscountInfo(discount) {
+    if (!discount) return;
+
+    const titleEl = $('#discountInfoTitle');
+    const badgeEl = $('#discountInfoBadge');
+    const valueEl = $('#discountInfoValue');
+    const valueLabelEl = $('#discountInfoValueLabel');
+    const usageEl = $('#discountInfoUsageCount');
+    const mechanicEl = $('#discountInfoMechanic');
+    const applyToEl = $('#discountInfoApplyTo');
+    const applyToRowEl = $('#discountInfoApplyToRow');
+    const promoModeEl = $('#discountInfoPromoMode');
+    const promoModeRowEl = $('#discountInfoPromoModeRow');
+    const promoSummaryEl = $('#discountInfoPromoSummary');
+    const promoSummaryRowEl = $('#discountInfoPromoSummaryRow');
+    const periodEl = $('#discountInfoPeriod');
+    const limitEl = $('#discountInfoLimit');
+
+    const mechanic = getDiscountMechanic(discount);
+    const promo = getDiscountPromoFromDiscount(discount);
+
+    if (titleEl) titleEl.textContent = discount.title;
+    if (badgeEl) {
+      badgeEl.textContent = discount.is_active ? 'Активна' : 'Неактивна';
+      badgeEl.classList.toggle('inactive', !discount.is_active);
+    }
+    if (valueEl) valueEl.textContent = formatDiscountValue(discount);
+    if (valueLabelEl) {
+      valueLabelEl.textContent = mechanic.type === 'buy_x_get_y'
+        ? 'Формула акции'
+        : mechanic.type === 'threshold'
+          ? 'Ступени'
+          : mechanic.type === 'loyalty_progress'
+            ? 'Порог'
+            : promo.enabled
+              ? 'Награда по коду'
+              : 'Размер скидки';
+    }
+    if (usageEl) usageEl.textContent = discount.usage_count || 0;
+    if (mechanicEl) {
+      mechanicEl.textContent = mechanic.type === 'simple_discount'
+        ? `${formatDiscountMechanicText(discount)} • ${formatDiscountSimpleVariantText(discount)}`
+        : mechanic.type === 'loyalty_progress'
+          ? `${formatDiscountMechanicText(discount)} • ${formatDiscountProgressBasisText(mechanic.progress_basis)} • ${formatDiscountProgressRewardKindText(mechanic.reward_kind)}`
+          : formatDiscountMechanicText(discount);
+    }
+    if (applyToRowEl) applyToRowEl.classList.toggle('hidden', mechanic.type !== 'simple_discount');
+    if (applyToEl) applyToEl.textContent = formatDiscountApplyToText(mechanic.apply_to);
+    if (promoModeRowEl) promoModeRowEl.classList.toggle('hidden', !promo.enabled);
+    if (promoSummaryRowEl) promoSummaryRowEl.classList.toggle('hidden', !promo.enabled);
+    if (promoModeEl) promoModeEl.textContent = promo.enabled ? formatDiscountPromoModeText(promo.code_mode) : '—';
+    if (promoSummaryEl) promoSummaryEl.textContent = promo.enabled ? buildDiscountPromoSummary(discount) : '—';
+
+    if (periodEl) {
+      if (discount.starts_at || discount.ends_at) {
+        const start = discount.starts_at ? new Date(discount.starts_at).toLocaleDateString('ru') : '—';
+        const end = discount.ends_at ? new Date(discount.ends_at).toLocaleDateString('ru') : '—';
+        periodEl.textContent = `${start} — ${end}`;
+      } else {
+        periodEl.textContent = 'Без ограничений';
+      }
+    }
+
+    if (limitEl) {
+      const limitBits = [];
+      if (discount.usage_limit) {
+        limitBits.push(`${discount.usage_count || 0} / ${discount.usage_limit}`);
+      } else {
+        limitBits.push('без общего лимита');
+      }
+      if (discount.usage_per_customer) {
+        limitBits.push(`${discount.usage_per_customer} на клиента`);
+      }
+      limitEl.textContent = limitBits.join(' • ');
+    }
+
+    const productsEl = $('#discountInfoProducts');
+    const productsSectionEl = $('#discountInfoProductsSection');
+    if (productsEl) {
+      const products = mechanic.type === 'simple_discount' ? (discount.products || []) : [];
+      if (products.length > 0) {
+        if (productsSectionEl) productsSectionEl.classList.remove('hidden');
+        productsEl.innerHTML = products.map((p) => {
+          const cls = p.entity_type === 'category' ? 'is-category' : (p.entity_type === 'combo' ? 'is-combo' : '');
+          return `<span class="discount-chip ${cls}">${escapeHtml(p.title || `#${p.entity_id}`)}</span>`;
+        }).join('');
+      } else {
+        if (productsSectionEl) productsSectionEl.classList.add('hidden');
+        productsEl.innerHTML = '';
+      }
+    }
+
+    const customersEl = $('#discountInfoCustomers');
+    const customersSectionEl = $('#discountInfoCustomersSection');
+    if (customersEl) {
+      const customers = Array.isArray(discount.customers) ? discount.customers : [];
+      if (customersSectionEl) customersSectionEl.classList.remove('hidden');
+      if (customers.length > 0) {
+        customersEl.innerHTML = customers.map((c) => {
+          const cls = c.entity_type === 'category' ? 'is-category' : '';
+          return `<span class="discount-chip ${cls}">${escapeHtml(c.title || `#${c.entity_id}`)}</span>`;
+        }).join('');
+      } else {
+        customersEl.innerHTML = '<span class="discount-chip">Все клиенты</span>';
+      }
+    }
+  }
+
+  function renderDiscountFilters() {
+    if (!elDiscountsFilters) return;
+    elDiscountsFilters.innerHTML = '';
+
+    const counts = getDiscountTypeFilterCounts();
+    const filters = [{ key: 'all', title: 'Все скидки' }, ...DISCOUNT_TYPE_FILTER_ITEMS];
+
+    filters.forEach((filter) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'stage-item';
+      btn.setAttribute('data-filter', filter.key);
+      btn.classList.toggle('is-active', state.activeDiscountTypeFilter === filter.key);
+      btn.innerHTML = `
+        <span class="stage-meta stage-text"><b>${escapeHtml(filter.title)}</b></span>
+        <span class="stage-count">${escapeHtml(counts[filter.key] ?? 0)}</span>
+      `;
+      btn.addEventListener('click', () => {
+        state.activeDiscountFilter = filter.key;
+        state.activeDiscountTypeFilter = filter.key;
+        state.discountCenterMode = 'list';
+        syncDiscountToolbarState();
+        if (state.currentView !== 'discounts') {
+          switchView('discounts');
+        } else {
+          renderDiscountsList();
+          updateRightPanel();
+        }
+        renderDiscountFilters();
+      });
+      elDiscountsFilters.appendChild(btn);
+    });
+  }
+
+  async function loadDiscountOrders(discountId) {
+    const targetId = Number(discountId || 0);
+    if (!(targetId > 0)) {
+      state.discountOrders = [];
+      renderDiscountCenterContent();
+      return;
+    }
+
+    try {
+      const json = await apiJson(`/api/admin/discounts/${targetId}/orders`);
+      if (state.activeDiscountId !== targetId) return;
+      state.discountOrders = Array.isArray(json.orders) ? json.orders : [];
+      if (state.discountCenterMode === 'history') {
+        renderDiscountOrders();
+      }
+    } catch (err) {
+      console.error('loadDiscountOrders error:', err);
+      if (state.activeDiscountId !== targetId) return;
+      state.discountOrders = [];
+      if (state.discountCenterMode === 'history') {
+        renderDiscountOrders();
+      }
+    }
+  }
+
+  function renderDiscountOrders() {
+    if (!elDiscountsList) return;
+
+    if (state.discountCenterMode !== 'history' || !state.activeDiscount) {
+      renderDiscountsList();
+      return;
+    }
+
+    elDiscountsList.innerHTML = '';
+    if (elDiscountsEmptyHint) elDiscountsEmptyHint.classList.add('hidden');
+
+    if (!state.discountOrders.length) {
+      elDiscountsList.innerHTML = '<div class="empty-hint">Нет заказов с этой скидкой</div>';
+      return;
+    }
+
+    state.discountOrders.forEach((order) => {
+      const row = document.createElement('div');
+      row.className = 'order-row discount-order-row';
+
+      const date = order.used_at ? new Date(order.used_at).toLocaleString('ru') : '—';
+      const total = order.total_price ? `${order.total_price}₽` : '—';
+      const discountAmount = order.discount_amount ? `-${order.discount_amount}₽` : '';
+
+      row.innerHTML = `
+        <div class="order-row-info">
+          <div class="order-row-title">${escapeHtml(order.customer_name || order.customer_phone || 'Без имени')}</div>
+          <div class="order-row-meta">${date}</div>
+        </div>
+        <div class="order-row-right">
+          <div class="order-row-total">${total}</div>
+          <div class="order-row-discount">${discountAmount}</div>
+        </div>
+      `;
+
+      elDiscountsList.appendChild(row);
+    });
+  }
+
+  function renderDiscountsList() {
+    if (!elDiscountsList) return;
+    elDiscountsList.innerHTML = '';
+
+    const filteredDiscounts = getFilteredDiscounts();
+    if (!state.discounts.length) {
+      if (elDiscountsEmptyHint) {
+        elDiscountsEmptyHint.textContent = 'Пока нет скидок. Нажмите «+» для создания.';
+        elDiscountsEmptyHint.classList.remove('hidden');
+      }
+      return;
+    }
+
+    if (!filteredDiscounts.length) {
+      if (elDiscountsEmptyHint) {
+        elDiscountsEmptyHint.textContent = 'Нет скидок этого типа';
+        elDiscountsEmptyHint.classList.remove('hidden');
+      }
+      return;
+    }
+
+    if (elDiscountsEmptyHint) {
+      elDiscountsEmptyHint.textContent = 'Пока нет скидок. Нажмите «+» для создания.';
+      elDiscountsEmptyHint.classList.add('hidden');
+    }
+
+    filteredDiscounts.forEach((discount) => {
+      const row = document.createElement('div');
+      row.className = 'discount-row';
+      row.classList.toggle('is-active', state.activeDiscountId === discount.id);
+
+      const promo = getDiscountPromoFromDiscount(discount);
+      const mechanic = getDiscountMechanic(discount);
+      const mechanicText = formatDiscountMechanicText(discount);
+      const metaBits = [mechanicText];
+      if (promo.enabled) {
+        metaBits.push(promo.code_mode === 'unique' ? 'Промокод: уникальные коды' : 'Промокод: общий код');
+      } else if (mechanic.type === 'simple_discount') {
+        metaBits.push(formatDiscountSimpleVariantText(discount));
+      } else if (mechanic.type === 'loyalty_progress') {
+        metaBits.push(formatDiscountProgressBasisText(mechanic.progress_basis));
+        metaBits.push(formatDiscountProgressRewardKindText(mechanic.reward_kind));
+      }
+      metaBits.push(getDiscountAudienceSummary(discount));
+      metaBits.push(getDiscountLimitSummary(discount));
+
+      row.innerHTML = `
+        <div class="discount-row-icon"><i class="fas ${getDiscountListIcon(discount)}"></i></div>
+        <div class="discount-row-info">
+          <div class="discount-row-title-wrap">
+            <div class="discount-row-title">${escapeHtml(discount.title)}</div>
+            ${discount.hide_in_benefits ? '<span class="discount-row-badge">Скрыта в выгодах</span>' : ''}
+          </div>
+          <div class="discount-row-meta">${metaBits.join(' • ')}</div>
+        </div>
+        <div class="discount-row-value">${formatDiscountValue(discount)}</div>
+        <div class="discount-row-status ${discount.is_active ? '' : 'inactive'}"></div>
+      `;
+
+      row.addEventListener('click', () => {
+        openDiscountTab(discount);
+        renderDiscountFilters();
+      });
+
+      elDiscountsList.appendChild(row);
+    });
+  }
+
+  async function openDiscountTab(discount) {
+    const targetDiscount = discount && typeof discount === 'object'
+      ? discount
+      : state.discounts.find((item) => Number(item?.id || 0) === Number(discount || 0));
+    const discountId = Number(targetDiscount?.id || 0);
+    if (!(discountId > 0)) return;
+
+    if (state.currentView !== 'discounts') {
+      switchView('discounts');
+    }
+
+    const tabKey = buildTabKey('discount', discountId);
+    let existing = tabsState.tabs.find((t) => t.key === tabKey);
+    if (!existing) {
+      tabsState.tabs.push({
+        key: tabKey,
+        type: 'discount',
+        id: discountId,
+        title: targetDiscount.title,
+      });
+    } else {
+      existing.title = targetDiscount.title;
+    }
+
+    tabsState.activeKey = tabKey;
+    state.activeDiscount = targetDiscount;
+    state.activeDiscountId = discountId;
+    state.editingDiscountId = null;
+
+    renderTabs();
+    renderDiscountInfo(targetDiscount);
+    updateRightPanel();
+    openDiscountHistory(targetDiscount, { reload: true });
+
+    try {
+      const json = await apiJson(`/api/admin/discounts/${discountId}`);
+      if (!json.discount || tabsState.activeKey !== tabKey) return;
+      state.activeDiscount = json.discount;
+      state.activeDiscountId = discountId;
+      renderDiscountInfo(json.discount);
+      updateRightPanel();
+    } catch (e) {
+      console.error('openDiscountTab load error:', e);
+    }
+  }
+
   // Discount Picker (products/customers)
   // -----------------------------
 
@@ -4884,7 +8798,44 @@
     try {
       const url = categoryId ? `/api/prod_products?category_id=${categoryId}` : '/api/prod_products';
       const json = await apiJson(url);
-      state.catalogProducts = Array.isArray(json.data) ? json.data : [];
+      state.catalogProducts = Array.isArray(json.data)
+        ? json.data.map((item) => {
+          const photos = Array.isArray(item?.photos)
+            ? item.photos.filter(Boolean)
+            : (Array.isArray(item?.photos_json) ? item.photos_json.filter(Boolean) : []);
+          const normalized = {
+            ...item,
+            photos,
+            photos_json: photos,
+            has_variants: Number(item?.has_variants || 0) ? 1 : 0,
+            has_changeable_composition: Number(item?.has_changeable_composition || 0) ? 1 : 0,
+          };
+          const productId = Number(normalized?.id || 0);
+          if (Number.isFinite(productId) && productId > 0) {
+            state.discountPickerProductMap.set(productId, normalized);
+          }
+          return normalized;
+        })
+        : [];
+      const productIds = state.catalogProducts
+        .map((item) => Number(item?.id || 0))
+        .filter((id) => Number.isFinite(id) && id > 0);
+      if (productIds.length) {
+        try {
+          const flagsJson = await apiJson(`/api/admin/combo-blocks/product-flags?ids=${productIds.join(',')}`);
+          const flagsByProductId = new Map(
+            (Array.isArray(flagsJson?.data) ? flagsJson.data : []).map((row) => [Number(row?.product_id || 0), row])
+          );
+          state.catalogProducts.forEach((item) => {
+            const flags = flagsByProductId.get(Number(item?.id || 0));
+            if (!flags) return;
+            item.has_variants = Number(flags?.has_variants || 0) ? 1 : 0;
+            item.has_changeable_composition = Number(flags?.has_changeable_composition || 0) ? 1 : 0;
+          });
+        } catch (flagsError) {
+          console.error('loadDiscountPickerProductFlags error:', flagsError);
+        }
+      }
     } catch (e) {
       console.error('loadCatalogProducts error:', e);
       state.catalogProducts = [];
@@ -4904,9 +8855,747 @@
     return state.filterRuleCatalogProducts;
   }
 
+  // Helpers for discount product picker
+  function normalizeDiscountPickerVariantGroups(rows) {
+    return (Array.isArray(rows) ? rows : []).map((row) => {
+      const groupId = Number(row?.variant_group_id || row?.id || 0);
+      if (!Number.isFinite(groupId) || groupId <= 0) return null;
+      const values = (Array.isArray(row?.values) ? row.values : [])
+        .map((value) => String(value ?? '').trim())
+        .filter(Boolean);
+      if (!values.length) return null;
+      let defaultValueIndex = row?.default_value_index != null ? Number(row.default_value_index) : null;
+      if (!Number.isFinite(defaultValueIndex) || defaultValueIndex < 0 || defaultValueIndex >= values.length) {
+        defaultValueIndex = 0;
+      }
+      return {
+        id: groupId,
+        title: String(row?.title || '').trim(),
+        values,
+        unitLabel: String(row?.unit_short_title || row?.unit_title || row?.unit_code || '').trim(),
+        unitId: row?.unit_id != null ? Number(row.unit_id) : null,
+        discountTiers: Array.isArray(row?.discount_tiers) ? row.discount_tiers : [],
+        defaultValueIndex,
+      };
+    }).filter(Boolean);
+  }
+
+  function formatDiscountPickerVariantValue(group, variantIndex) {
+    const value = String(group?.values?.[variantIndex] ?? '').trim();
+    if (!value) return '';
+    const unitLabel = String(group?.unitLabel || '').trim();
+    return unitLabel && !/[a-zа-я]/i.test(value) ? `${value} ${unitLabel}` : value;
+  }
+
+  function normalizeDiscountPickerIngredientRows(rows) {
+    return (Array.isArray(rows) ? rows : [])
+      .filter((row) => Number(row?.is_variable || 0) === 1)
+      .map((row) => {
+        const photos = Array.isArray(row?.ingredient_photos) ? row.ingredient_photos.filter(Boolean) : [];
+        return {
+          ...row,
+          ingredient_id: Number(row?.ingredient_id || 0),
+          quantity: Number(row?.quantity ?? 0),
+          quantity_min: row?.quantity_min != null ? Number(row.quantity_min) : null,
+          quantity_max: row?.quantity_max != null ? Number(row.quantity_max) : null,
+          quantity_step: row?.quantity_step != null ? Number(row.quantity_step) : null,
+          price_override: row?.price_override != null ? Number(row.price_override) : null,
+          ingredient_price: Number(row?.ingredient_price || 0),
+          ingredient_base_qty: row?.ingredient_base_qty != null ? Number(row.ingredient_base_qty) : null,
+          ingredient_base_unit_id: row?.ingredient_base_unit_id != null ? Number(row.ingredient_base_unit_id) : null,
+          ingredient_unit_id: row?.ingredient_unit_id != null ? Number(row.ingredient_unit_id) : null,
+          ingredient_pcs_factor: row?.ingredient_pcs_factor != null ? Number(row.ingredient_pcs_factor) : null,
+          unit_id: row?.unit_id != null ? Number(row.unit_id) : null,
+          unit_code: String(row?.unit_code || '').trim(),
+          unitLabel: String(row?.unit_short_title || row?.unit_title || row?.unit_code || '').trim(),
+          ingredient_name: String(row?.ingredient_name || row?.name || '').trim(),
+          ingredient_photos: photos,
+        };
+      })
+      .filter((row) => row.ingredient_id > 0);
+  }
+
+  function getDiscountPickerProductVariants(productId) {
+    return state.discountPickerVariantsByProduct.get(Number(productId || 0)) || [];
+  }
+
+  function getDiscountPickerProductIngredients(productId) {
+    return state.discountPickerIngredientsByProduct.get(Number(productId || 0)) || [];
+  }
+
+  function getDiscountPickerProductVariantSelection(productId, variantGroups) {
+    const pid = Number(productId || 0);
+    if (!Number.isFinite(pid) || pid <= 0) return {};
+    const current = { ...(state.discountPickerVariantSelections.get(pid) || {}) };
+    let changed = !state.discountPickerVariantSelections.has(pid);
+    (Array.isArray(variantGroups) ? variantGroups : []).forEach((group) => {
+      const groupId = Number(group?.id || 0);
+      if (!Number.isFinite(groupId) || groupId <= 0) return;
+      const selectedIndex = Number(current[groupId]);
+      if (Number.isFinite(selectedIndex) && selectedIndex >= 0 && selectedIndex < (group.values || []).length) {
+        return;
+      }
+      current[groupId] = Number.isFinite(Number(group?.defaultValueIndex))
+        ? Number(group.defaultValueIndex)
+        : 0;
+      changed = true;
+    });
+    if (changed) {
+      state.discountPickerVariantSelections.set(pid, current);
+    }
+    return current;
+  }
+
+  function getDiscountPickerProductIngredientSelection(productId, ingredientRows) {
+    const pid = Number(productId || 0);
+    if (!Number.isFinite(pid) || pid <= 0) return {};
+    const current = { ...(state.discountPickerIngredientSelections.get(pid) || {}) };
+    let changed = !state.discountPickerIngredientSelections.has(pid);
+    (Array.isArray(ingredientRows) ? ingredientRows : []).forEach((row) => {
+      const ingredientId = Number(row?.ingredient_id || 0);
+      if (!Number.isFinite(ingredientId) || ingredientId <= 0) return;
+      const currentQty = Number(current[ingredientId]);
+      if (Number.isFinite(currentQty)) return;
+      current[ingredientId] = Number(row?.quantity ?? 0);
+      changed = true;
+    });
+    if (changed) {
+      state.discountPickerIngredientSelections.set(pid, current);
+    }
+    return current;
+  }
+
+  function getDiscountPickerTenantFromStorage() {
+    try {
+      const raw = localStorage.getItem('tenant');
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function normalizeDiscountPickerPriceRoundingSettings(source) {
+    const modeRaw = source && typeof source === 'object'
+      ? (typeof source.price_rounding_mode === 'string' ? source.price_rounding_mode : source.mode)
+      : 'none';
+    const mode = typeof modeRaw === 'string' ? modeRaw : 'none';
+    const allowed = new Set(['none', 'down', 'up', 'nearest']);
+    const safeMode = allowed.has(mode) ? mode : 'none';
+    const precisionValue = source && typeof source === 'object'
+      ? (Object.prototype.hasOwnProperty.call(source, 'price_rounding_precision') ? source.price_rounding_precision : source.precision)
+      : null;
+    const precisionRaw = Number(precisionValue);
+    return { mode: safeMode, precision: precisionRaw === 0 ? 0 : 2 };
+  }
+
+  function updateDiscountPickerTenantRoundingStorage(nextSettings) {
+    if (!nextSettings || typeof nextSettings !== 'object') return;
+    try {
+      const current = getDiscountPickerTenantFromStorage();
+      const tenant = current && typeof current === 'object' ? { ...current } : {};
+      tenant.price_rounding_mode = String(nextSettings.mode || 'none');
+      tenant.price_rounding_precision = Number(nextSettings.precision) === 0 ? 0 : 2;
+      localStorage.setItem('tenant', JSON.stringify(tenant));
+    } catch {}
+  }
+
+  async function ensureDiscountPickerTenantPriceRoundingSettings() {
+    if (state.discountPickerTenantRoundingLoaded && state.discountPickerTenantRounding) {
+      return state.discountPickerTenantRounding;
+    }
+    if (state.discountPickerTenantRoundingPromise) {
+      return state.discountPickerTenantRoundingPromise;
+    }
+    const storedTenant = getDiscountPickerTenantFromStorage();
+    const hasStoredRounding = !!(
+      storedTenant &&
+      typeof storedTenant === 'object' &&
+      typeof storedTenant.price_rounding_mode === 'string' &&
+      (Number(storedTenant.price_rounding_precision) === 0 || Number(storedTenant.price_rounding_precision) === 2)
+    );
+    if (hasStoredRounding) {
+      state.discountPickerTenantRounding = normalizeDiscountPickerPriceRoundingSettings(storedTenant);
+      state.discountPickerTenantRoundingLoaded = true;
+      return state.discountPickerTenantRounding;
+    }
+    state.discountPickerTenantRoundingPromise = (async () => {
+      const fallback = normalizeDiscountPickerPriceRoundingSettings(storedTenant);
+      try {
+        const json = await apiJson('/api/admin/tenant');
+        const tenant = json?.tenant && typeof json.tenant === 'object' ? json.tenant : null;
+        const next = tenant ? normalizeDiscountPickerPriceRoundingSettings(tenant) : fallback;
+        state.discountPickerTenantRounding = next;
+        updateDiscountPickerTenantRoundingStorage(next);
+      } catch {
+        state.discountPickerTenantRounding = fallback;
+      } finally {
+        state.discountPickerTenantRoundingLoaded = true;
+        state.discountPickerTenantRoundingPromise = null;
+      }
+      return state.discountPickerTenantRounding;
+    })();
+    return state.discountPickerTenantRoundingPromise;
+  }
+
+  function getDiscountPickerPriceRoundingSettings() {
+    if (state.discountPickerTenantRounding && typeof state.discountPickerTenantRounding === 'object') {
+      return normalizeDiscountPickerPriceRoundingSettings(state.discountPickerTenantRounding);
+    }
+    return normalizeDiscountPickerPriceRoundingSettings(getDiscountPickerTenantFromStorage());
+  }
+
+  function roundDiscountPickerPrice(value) {
+    const n = Number(value || 0);
+    if (!Number.isFinite(n)) return 0;
+    const { mode, precision } = getDiscountPickerPriceRoundingSettings();
+    if (!mode || mode === 'none') return n;
+    const factor = precision > 0 ? Math.pow(10, precision) : 1;
+    if (mode === 'up') return Math.ceil(n * factor) / factor;
+    if (mode === 'down') return Math.floor(n * factor) / factor;
+    return Math.round(n * factor) / factor;
+  }
+
+  async function loadDiscountPickerUnitConversions() {
+    if (Array.isArray(state.discountPickerUnitConversions) && state.discountPickerUnitConversions.length) {
+      return state.discountPickerUnitConversions;
+    }
+    if (state.discountPickerUnitConversionsPromise) {
+      return state.discountPickerUnitConversionsPromise;
+    }
+    state.discountPickerUnitConversionsPromise = apiJson('/api/public/unit-conversions')
+      .then((json) => {
+        state.discountPickerUnitConversions = Array.isArray(json?.data) ? json.data : [];
+        return state.discountPickerUnitConversions;
+      })
+      .catch((error) => {
+        console.error('loadDiscountPickerUnitConversions error:', error);
+        state.discountPickerUnitConversions = [];
+        return [];
+      })
+      .finally(() => {
+        state.discountPickerUnitConversionsPromise = null;
+      });
+    return state.discountPickerUnitConversionsPromise;
+  }
+
+  function getDiscountPickerConversionFactor(fromUnitId, toUnitId) {
+    if (!fromUnitId || !toUnitId) return null;
+    if (Number(fromUnitId) === Number(toUnitId)) return 1;
+    const conversions = Array.isArray(state.discountPickerUnitConversions) ? state.discountPickerUnitConversions : [];
+    const direct = conversions.find((row) => (
+      Number(row?.from_unit_id) === Number(fromUnitId) &&
+      Number(row?.to_unit_id) === Number(toUnitId) &&
+      Number(row?.is_active ?? 1) === 1
+    ));
+    if (direct) return Number(direct.factor);
+    const inverse = conversions.find((row) => (
+      Number(row?.from_unit_id) === Number(toUnitId) &&
+      Number(row?.to_unit_id) === Number(fromUnitId) &&
+      Number(row?.is_active ?? 1) === 1
+    ));
+    if (inverse && Number(inverse.factor)) {
+      return 1 / Number(inverse.factor);
+    }
+    return null;
+  }
+
+  function parseDiscountPickerVariantValueNumber(value) {
+    const normalized = String(value ?? '').replace(',', '.');
+    const match = normalized.match(/-?\d+(?:\.\d+)?/);
+    return match ? Number(match[0]) : NaN;
+  }
+
+  function getDiscountPickerVariantUnitPrice(product, variantGroups, selectedIndex, basePriceRaw) {
+    const basePrice = Number(basePriceRaw ?? product?.price ?? 0);
+    if (!Array.isArray(variantGroups) || !variantGroups.length) return basePrice;
+    const selected = Number(selectedIndex);
+    if (!Number.isFinite(selected)) return basePrice;
+    const group = variantGroups[0];
+    const baseUnitId = Number(product?.base_unit_id || product?.unit_id || group?.unitId || 0);
+    const baseQty = Number(product?.base_qty || 1) || 1;
+    const variantUnitId = Number(group?.unitId || 0);
+    if (!Number.isFinite(baseUnitId) || !Number.isFinite(variantUnitId)) return basePrice;
+    const value = Array.isArray(group?.values) ? group.values[selected] : null;
+    const numericValue = parseDiscountPickerVariantValueNumber(value);
+    if (!Number.isFinite(numericValue)) return basePrice;
+    const factor = getDiscountPickerConversionFactor(variantUnitId, baseUnitId);
+    if (factor == null) return basePrice;
+    const qtyInBase = numericValue * Number(factor || 0);
+    if (!Number.isFinite(qtyInBase) || qtyInBase <= 0) return basePrice;
+    let unitPrice = basePrice * (qtyInBase / baseQty);
+    const tiers = Array.isArray(group?.discountTiers) ? group.discountTiers : [];
+    const tier = tiers.find((row) => Number(row?.sort_order) === selected);
+    const discountPercent = Number(tier?.discount_percent || 0) || 0;
+    if (discountPercent !== 0) {
+      unitPrice = unitPrice * (1 - discountPercent / 100);
+    }
+    return unitPrice;
+  }
+
+  function getDiscountPickerQtyInBase(row, qty) {
+    const baseUnitId = Number(row?.ingredient_base_unit_id || row?.ingredient_unit_id || row?.unit_id || 0);
+    const fromUnitId = Number(row?.unit_id || 0);
+    if (!baseUnitId || !fromUnitId) return null;
+    if (baseUnitId === fromUnitId) return Number(qty || 0);
+    if (String(row?.unit_code || '').trim() === 'pcs') {
+      return row?.ingredient_pcs_factor != null ? Number(qty || 0) * Number(row.ingredient_pcs_factor) : null;
+    }
+    const factor = getDiscountPickerConversionFactor(fromUnitId, baseUnitId);
+    return factor != null ? Number(qty || 0) * factor : null;
+  }
+
+  function getDiscountPickerIngredientPriceDiff(ingredientRows, ingredientSelection) {
+    let totalDiff = 0;
+    (Array.isArray(ingredientRows) ? ingredientRows : []).forEach((row) => {
+      const ingredientId = Number(row?.ingredient_id || 0);
+      if (!(ingredientId > 0)) return;
+      const currentQty = Number(ingredientSelection?.[ingredientId] ?? row?.quantity ?? 0);
+      const baseQty = Number(row?.quantity ?? 0);
+      const ingredientBaseQty = row?.ingredient_base_qty != null && Number(row.ingredient_base_qty) > 0 ? Number(row.ingredient_base_qty) : 1;
+      const ingredientPrice = Number(row?.ingredient_price || 0);
+      const catalogBasePrice = ingredientBaseQty > 0 && ingredientPrice > 0
+        ? ingredientPrice / ingredientBaseQty
+        : (ingredientPrice > 0 ? ingredientPrice : 0);
+      const pricePerUnit = row?.price_override != null && Number(row.price_override) >= 0
+        ? Number(row.price_override)
+        : catalogBasePrice;
+      const currentQtyInBase = getDiscountPickerQtyInBase(row, currentQty);
+      const baseQtyInBase = getDiscountPickerQtyInBase(row, baseQty);
+      const diff = (
+        currentQtyInBase != null &&
+        baseQtyInBase != null &&
+        Number.isFinite(pricePerUnit)
+      )
+        ? pricePerUnit * (currentQtyInBase - baseQtyInBase)
+        : (Number.isFinite(pricePerUnit) ? (currentQty - baseQty) * pricePerUnit : 0);
+      totalDiff += diff;
+    });
+    return totalDiff;
+  }
+
+  function formatDiscountPickerQty(value) {
+    const num = Number(value || 0);
+    if (!Number.isFinite(num)) return '0';
+    if (Number.isInteger(num)) return String(num);
+    return String(Math.round(num * 1000) / 1000)
+      .replace(/\.0+$/, '')
+      .replace(/(\.\d*[1-9])0+$/, '$1');
+  }
+
+  function getDiscountPickerProductDisplayPrice(product, variantGroups, ingredientRows) {
+    const productId = Number(product?.id || 0);
+    const basePrice = Number(product?.price || 0);
+    const safeVariantGroups = Array.isArray(variantGroups) ? variantGroups : [];
+    const firstGroup = safeVariantGroups[0] || null;
+    const selectedVariants = getDiscountPickerProductVariantSelection(productId, safeVariantGroups);
+    const selectedVariantIndex = firstGroup
+      ? Number(selectedVariants[Number(firstGroup?.id || 0)])
+      : 0;
+    let unitPrice = firstGroup
+      ? Number(getDiscountPickerVariantUnitPrice(product, safeVariantGroups, selectedVariantIndex, basePrice) || 0)
+      : basePrice;
+    const ingredientSelection = getDiscountPickerProductIngredientSelection(productId, ingredientRows);
+    unitPrice += getDiscountPickerIngredientPriceDiff(ingredientRows, ingredientSelection);
+    return roundDiscountPickerPrice(Math.max(0, unitPrice));
+  }
+
+  async function loadDiscountPickerProductVariants(productId) {
+    const pid = Number(productId || 0);
+    if (!Number.isFinite(pid) || pid <= 0) return [];
+    if (state.discountPickerVariantsByProduct.has(pid)) {
+      return getDiscountPickerProductVariants(pid);
+    }
+    if (state.discountPickerVariantRequests.has(pid)) {
+      return state.discountPickerVariantRequests.get(pid);
+    }
+    state.discountPickerLoadingVariantProductIds.add(pid);
+    const request = apiJson(`/api/admin/products/${pid}/variants`)
+      .then((json) => {
+        const groups = normalizeDiscountPickerVariantGroups(json.data);
+        state.discountPickerVariantsByProduct.set(pid, groups);
+        getDiscountPickerProductVariantSelection(pid, groups);
+        const catalogItem = state.discountPickerProductMap.get(pid) || state.catalogProducts.find((item) => Number(item?.id || 0) === pid);
+        if (catalogItem) {
+          catalogItem.has_variants = groups.length ? 1 : 0;
+        }
+        return groups;
+      })
+      .catch((error) => {
+        console.error('loadDiscountPickerProductVariants error:', error);
+        state.discountPickerVariantsByProduct.set(pid, []);
+        const catalogItem = state.discountPickerProductMap.get(pid) || state.catalogProducts.find((item) => Number(item?.id || 0) === pid);
+        if (catalogItem) {
+          catalogItem.has_variants = 0;
+        }
+        return [];
+      })
+      .finally(() => {
+        state.discountPickerLoadingVariantProductIds.delete(pid);
+        state.discountPickerVariantRequests.delete(pid);
+      });
+    state.discountPickerVariantRequests.set(pid, request);
+    return request;
+  }
+
+  async function loadDiscountPickerProductIngredients(productId) {
+    const pid = Number(productId || 0);
+    if (!Number.isFinite(pid) || pid <= 0) return [];
+    if (state.discountPickerIngredientsByProduct.has(pid)) {
+      return getDiscountPickerProductIngredients(pid);
+    }
+    if (state.discountPickerIngredientRequests.has(pid)) {
+      return state.discountPickerIngredientRequests.get(pid);
+    }
+    state.discountPickerLoadingIngredientProductIds.add(pid);
+    const request = apiJson(`/api/admin/products/${pid}/ingredients`)
+      .then((json) => {
+        const rows = normalizeDiscountPickerIngredientRows(json?.data);
+        state.discountPickerIngredientsByProduct.set(pid, rows);
+        getDiscountPickerProductIngredientSelection(pid, rows);
+        const catalogItem = state.discountPickerProductMap.get(pid) || state.catalogProducts.find((item) => Number(item?.id || 0) === pid);
+        if (catalogItem) {
+          catalogItem.has_changeable_composition = rows.length ? 1 : 0;
+        }
+        return rows;
+      })
+      .catch((error) => {
+        console.error('loadDiscountPickerProductIngredients error:', error);
+        state.discountPickerIngredientsByProduct.set(pid, []);
+        const catalogItem = state.discountPickerProductMap.get(pid) || state.catalogProducts.find((item) => Number(item?.id || 0) === pid);
+        if (catalogItem) {
+          catalogItem.has_changeable_composition = 0;
+        }
+        return [];
+      })
+      .finally(() => {
+        state.discountPickerLoadingIngredientProductIds.delete(pid);
+        state.discountPickerIngredientRequests.delete(pid);
+      });
+    state.discountPickerIngredientRequests.set(pid, request);
+    return request;
+  }
+
+  function toggleDiscountPickerSelectionByKey(key, forceChecked = null) {
+    const shouldSelect = forceChecked == null
+      ? !state.discountPickerSelection.has(key)
+      : Boolean(forceChecked);
+    if (isDiscountPickerSingleSelectionMode()) {
+      state.discountPickerSelection = shouldSelect ? new Set([key]) : new Set();
+      return;
+    }
+    if (shouldSelect) {
+      state.discountPickerSelection.add(key);
+    } else {
+      state.discountPickerSelection.delete(key);
+    }
+  }
+
+  async function toggleDiscountPickerProductVariants(productId) {
+    const pid = Number(productId || 0);
+    if (!Number.isFinite(pid) || pid <= 0) return;
+    if (state.discountPickerExpandedProductId === pid) {
+      state.discountPickerExpandedProductId = null;
+      renderDiscountPickerList();
+      return;
+    }
+    const catalogItem = state.discountPickerProductMap.get(pid) || state.catalogProducts.find((item) => Number(item?.id || 0) === pid);
+    const needsVariants = Number(catalogItem?.has_variants || 0) === 1;
+    const needsIngredients = Number(catalogItem?.has_changeable_composition || 0) === 1;
+    state.discountPickerExpandedProductId = pid;
+    renderDiscountPickerList();
+    await Promise.all([
+      ensureDiscountPickerTenantPriceRoundingSettings(),
+      loadDiscountPickerUnitConversions(),
+      needsVariants ? loadDiscountPickerProductVariants(pid) : Promise.resolve([]),
+      needsIngredients ? loadDiscountPickerProductIngredients(pid) : Promise.resolve([]),
+    ]);
+    const groups = getDiscountPickerProductVariants(pid);
+    const ingredients = getDiscountPickerProductIngredients(pid);
+    if (!groups.length && !ingredients.length && state.discountPickerExpandedProductId === pid) {
+      state.discountPickerExpandedProductId = null;
+    }
+    renderDiscountPickerList();
+  }
+
+  function getDiscountProductConfigModeForTarget(target) {
+    if (target === 'buy_condition') return normalizeDiscountProductConfigMode(state.discountBuyConditionConfigMode);
+    if (target === 'buy_reward') return normalizeDiscountProductConfigMode(state.discountBuyRewardConfigMode);
+    if (target === 'progress_scope') return normalizeDiscountProductConfigMode(state.discountProgressQualifyingItemsConfigMode);
+    if (target === 'progress_reward_gift') return normalizeDiscountProductConfigMode(state.discountProgressGiftProductsConfigMode);
+    if (target === 'progress_reward_discount') return normalizeDiscountProductConfigMode(state.discountProgressDiscountProductsConfigMode);
+    if (String(target || '').startsWith('threshold:')) {
+      const tierId = String(target).split(':')[1] || '';
+      const tier = getThresholdTierById(tierId);
+      return normalizeDiscountProductConfigMode(tier?.reward_products_config_mode);
+    }
+    return normalizeDiscountProductConfigMode(state.discountProductsConfigMode);
+  }
+
+  function setDiscountProductConfigModeForTarget(target, mode) {
+    const normalizedMode = normalizeDiscountProductConfigMode(mode);
+    if (target === 'buy_condition') {
+      state.discountBuyConditionConfigMode = normalizedMode;
+      return;
+    }
+    if (target === 'buy_reward') {
+      state.discountBuyRewardConfigMode = normalizedMode;
+      return;
+    }
+    if (target === 'progress_scope') {
+      state.discountProgressQualifyingItemsConfigMode = normalizedMode;
+      return;
+    }
+    if (target === 'progress_reward_gift') {
+      state.discountProgressGiftProductsConfigMode = normalizedMode;
+      return;
+    }
+    if (target === 'progress_reward_discount') {
+      state.discountProgressDiscountProductsConfigMode = normalizedMode;
+      return;
+    }
+    if (String(target || '').startsWith('threshold:')) {
+      const tierId = String(target).split(':')[1] || '';
+      updateThresholdTier(tierId, (tier) => ({
+        ...tier,
+        reward_products_config_mode: normalizedMode,
+      }));
+      return;
+    }
+    state.discountProductsConfigMode = normalizedMode;
+  }
+
+  function syncDiscountPickerConfigModeUi() {
+    if (!elDiscountPickerConfigMode) return;
+    const isProductPicker = state.discountPickerLevel === 'products' && String(state.discountPickerEntityType || 'product') === 'product';
+    elDiscountPickerConfigMode.classList.toggle('hidden', !isProductPicker);
+    elDiscountPickerConfigMode.hidden = !isProductPicker;
+    if (!isProductPicker) return;
+    const mode = getDiscountProductConfigModeForTarget(state.discountPickerTarget);
+    elDiscountPickerModeAnyBtn?.classList.toggle('is-active', mode !== 'exact');
+    elDiscountPickerModeExactBtn?.classList.toggle('is-active', mode === 'exact');
+  }
+
+  function seedDiscountPickerConfigSelections(target) {
+    cloneDiscountEntities(getDiscountProductSelectionForTarget(target)).forEach((item) => {
+      if (String(item?.type || '').trim() !== 'product') return;
+      const pid = Number(item?.id || 0);
+      const config = normalizeDiscountProductConfigPayload(item?.product_config, pid);
+      if (!config) return;
+      if (config.variant_group_id && Number.isFinite(Number(config.variant_value_index))) {
+        state.discountPickerVariantSelections.set(pid, {
+          ...(state.discountPickerVariantSelections.get(pid) || {}),
+          [config.variant_group_id]: Number(config.variant_value_index),
+        });
+      }
+      if (Array.isArray(config.ingredients) && config.ingredients.length) {
+        const nextIngredients = { ...(state.discountPickerIngredientSelections.get(pid) || {}) };
+        config.ingredients.forEach((ingredient) => {
+          const ingredientId = Number(ingredient?.ingredient_id || 0);
+          if (ingredientId > 0) {
+            nextIngredients[ingredientId] = Math.round((Number(ingredient?.qty ?? 0) || 0) * 1000) / 1000;
+          }
+        });
+        state.discountPickerIngredientSelections.set(pid, nextIngredients);
+      }
+    });
+  }
+
+  function buildDiscountPickerProductConfigSnapshot(productId, fallbackProductId = null) {
+    const pid = Number(productId || fallbackProductId || 0);
+    if (!(pid > 0)) return null;
+    const variantGroups = getDiscountPickerProductVariants(pid);
+    const ingredientRows = getDiscountPickerProductIngredients(pid);
+    const selectedVariants = getDiscountPickerProductVariantSelection(pid, variantGroups);
+    const selectedIngredients = getDiscountPickerProductIngredientSelection(pid, ingredientRows);
+    const firstGroup = Array.isArray(variantGroups) && variantGroups.length ? variantGroups[0] : null;
+    const variantGroupId = Number(firstGroup?.id || 0) || null;
+    const variantValueIndex = variantGroupId
+      ? Number(selectedVariants?.[variantGroupId])
+      : null;
+    return normalizeDiscountProductConfigPayload({
+      product_id: pid,
+      variant_group_id: variantGroupId,
+      variant_value_index: Number.isFinite(variantValueIndex) && variantValueIndex >= 0 ? variantValueIndex : null,
+      options: [],
+      ingredients: ingredientRows.map((row) => ({
+        ingredient_id: Number(row?.ingredient_id || 0),
+        qty: Number(selectedIngredients?.[Number(row?.ingredient_id || 0)] ?? row?.quantity ?? 0),
+      })),
+    }, pid);
+  }
+
+  async function ensureDiscountPickerProductConfigSnapshot(productId) {
+    const pid = Number(productId || 0);
+    if (!(pid > 0)) return null;
+    await Promise.all([
+      loadDiscountPickerProductVariants(pid).catch(() => []),
+      loadDiscountPickerProductIngredients(pid).catch(() => []),
+    ]);
+    return buildDiscountPickerProductConfigSnapshot(pid, pid);
+  }
+
+  async function buildDiscountEntityTargetPayload(item, configMode = 'any') {
+    const entityType = String(item?.type || item?.entity_type || '').trim();
+    const entityId = Number(item?.id || item?.entity_id || 0);
+    if (!entityType || !(entityId > 0)) return null;
+    const payload = {
+      entity_type: entityType,
+      entity_id: entityId,
+    };
+    if (entityType !== 'product' || normalizeDiscountProductConfigMode(configMode) !== 'exact') {
+      return payload;
+    }
+    let productConfig = normalizeDiscountProductConfigPayload(item?.product_config, entityId);
+    if (!productConfig) {
+      productConfig = await ensureDiscountPickerProductConfigSnapshot(entityId);
+    }
+    if (productConfig) {
+      payload.product_config = productConfig;
+    }
+    return payload;
+  }
+
+  async function buildDiscountEntityTargetPayloadList(items, configMode = 'any') {
+    const list = await Promise.all(
+      cloneDiscountEntities(items).map((item) => buildDiscountEntityTargetPayload(item, configMode))
+    );
+    return list.filter(Boolean);
+  }
+
+  function renderDiscountPickerProductCard(product) {
+    const productId = Number(product?.id || 0);
+    const key = `product:${productId}`;
+    const isChecked = state.discountPickerSelection.has(key);
+    const name = String(product?.name || product?.title || `#${productId}`).trim() || `#${productId}`;
+    const photos = Array.isArray(product?.photos) ? product.photos.filter(Boolean) : [];
+    const photo = photos[0] || '';
+    const hasVariants = Number(product?.has_variants || 0) === 1;
+    const hasChangeableComposition = Number(product?.has_changeable_composition || 0) === 1;
+    const hasConfigurable = hasVariants || hasChangeableComposition;
+    const isExpanded = state.discountPickerExpandedProductId === productId && hasConfigurable;
+    const isLoadingVariants = state.discountPickerLoadingVariantProductIds.has(productId);
+    const isLoadingIngredients = state.discountPickerLoadingIngredientProductIds.has(productId);
+    const variantGroups = getDiscountPickerProductVariants(productId);
+    const ingredientRows = getDiscountPickerProductIngredients(productId);
+    const selectedVariants = getDiscountPickerProductVariantSelection(productId, variantGroups);
+    const selectedIngredients = getDiscountPickerProductIngredientSelection(productId, ingredientRows);
+    const displayPrice = getDiscountPickerProductDisplayPrice(product, variantGroups, ingredientRows);
+    const loadingHtml = isExpanded && (isLoadingVariants || isLoadingIngredients)
+      ? '<div class="option-picker-product-variants-loading">Загрузка настроек...</div>'
+      : '';
+    const variantsHtml = isExpanded && variantGroups.length
+      ? `
+        <div class="option-picker-product-variants">
+          ${isLoadingVariants
+            ? '<div class="option-picker-product-variants-loading">Загрузка вариантов...</div>'
+            : variantGroups.map((group) => {
+              const groupId = Number(group?.id || 0);
+              const selectedIndex = Number(selectedVariants[groupId]);
+              return `
+                <div class="option-picker-product-variant-group">
+                  ${group.title ? `<div class="option-picker-product-variant-title">${escapeHtml(group.title)}</div>` : ''}
+                  <div class="new-order-opt-variants-row">
+                    ${(group.values || []).map((value, variantIndex) => `
+                      <button
+                        type="button"
+                        class="new-order-opt-variant-btn ${variantIndex === selectedIndex ? 'is-selected' : ''}"
+                        data-action="discount-picker-variant-select"
+                        data-product-id="${productId}"
+                        data-group-id="${groupId}"
+                        data-variant-index="${variantIndex}"
+                      >${escapeHtml(formatDiscountPickerVariantValue(group, variantIndex) || String(value || ''))}</button>
+                    `).join('')}
+                  </div>
+                </div>
+              `;
+            }).join('')}
+        </div>
+      `
+      : '';
+    const ingredientsHtml = isExpanded && ingredientRows.length
+      ? `
+        <div class="option-picker-product-ingredients">
+          <div class="option-picker-product-ingredient-title">Состав</div>
+          ${ingredientRows.map((row) => {
+            const ingredientId = Number(row?.ingredient_id || 0);
+            const currentQty = Number(selectedIngredients[ingredientId] ?? row?.quantity ?? 0);
+            const rawMin = row?.quantity_min != null && Number.isFinite(Number(row.quantity_min)) ? Number(row.quantity_min) : null;
+            const minQty = rawMin !== null ? Math.max(0, rawMin) : 0;
+            const rawMax = row?.quantity_max != null && Number.isFinite(Number(row.quantity_max)) ? Number(row.quantity_max) : null;
+            const maxQty = rawMax != null ? rawMax : Infinity;
+            const step = Math.max(0.0001, Number(row?.quantity_step ?? 1) || 1);
+            const minusDisabled = currentQty <= minQty;
+            const plusDisabled = Number.isFinite(maxQty) ? currentQty >= maxQty : false;
+            const ingredientName = String(row?.ingredient_name || '').trim() || 'Ингредиент';
+            const ingredientPhotoRaw = Array.isArray(row?.ingredient_photos) && row.ingredient_photos.length ? row.ingredient_photos[0] : '';
+            const ingredientPhoto = typeof ingredientPhotoRaw === 'string'
+              ? ingredientPhotoRaw
+              : String(ingredientPhotoRaw?.url || ingredientPhotoRaw || '').trim();
+            const unitLabel = String(row?.unitLabel || '').trim();
+            const qtyLabel = `${formatDiscountPickerQty(currentQty)}${unitLabel ? ` ${unitLabel}` : ''}`;
+            return `
+              <div class="combo-block-detail-ingredient-row option-picker-product-ingredient-row">
+                ${ingredientPhoto
+                  ? `<img class="combo-block-ingredient-thumb" src="${escapeHtml(ingredientPhoto)}" alt="${escapeHtml(ingredientName)}" />`
+                  : `<span class="combo-block-ingredient-thumb combo-block-ingredient-thumb-placeholder"><i class="fas fa-image"></i></span>`}
+                <span class="combo-block-ingredient-name">${escapeHtml(ingredientName)}</span>
+                <div class="combo-block-ingredient-qty-wrap">
+                  <button
+                    type="button"
+                    class="combo-block-ingredient-btn"
+                    data-action="discount-picker-ingredient-minus"
+                    data-product-id="${productId}"
+                    data-ingredient-id="${ingredientId}"
+                    data-step="${escapeHtml(String(step))}"
+                    ${minusDisabled ? 'disabled' : ''}
+                  >−</button>
+                  <span class="combo-block-ingredient-qty">${escapeHtml(qtyLabel)}</span>
+                  <button
+                    type="button"
+                    class="combo-block-ingredient-btn"
+                    data-action="discount-picker-ingredient-plus"
+                    data-product-id="${productId}"
+                    data-ingredient-id="${ingredientId}"
+                    data-step="${escapeHtml(String(step))}"
+                    ${plusDisabled ? 'disabled' : ''}
+                  >+</button>
+                </div>
+              </div>
+            `;
+          }).join('')}
+        </div>
+      `
+      : '';
+    return `
+      <div class="option-picker-product-card new-order-option-sheet-card${isChecked ? ' is-selected' : ''}${isExpanded ? ' is-expanded' : ''}" data-key="${key}" data-product-id="${productId}">
+        <div class="option-picker-product-header new-order-option-sheet-item-row" data-action="discount-picker-toggle" data-key="${key}">
+          <input class="option-picker-product-checkbox" type="checkbox" data-key="${key}" ${isChecked ? 'checked' : ''} />
+          <span class="new-order-option-sheet-item-thumb">
+            ${photo ? `<img src="${escapeHtml(photo)}" alt="${escapeHtml(name)}" />` : '<i class="fas fa-image"></i>'}
+          </span>
+          <span class="new-order-option-sheet-item-main">
+            <span class="new-order-option-sheet-item-title">${escapeHtml(name)}</span>
+            <span class="new-order-option-sheet-item-meta">${escapeHtml(money(displayPrice))}</span>
+          </span>
+          <button
+            type="button"
+            class="new-order-opt-gear${hasConfigurable ? '' : ' is-disabled'}${isExpanded ? ' is-open' : ''}"
+            data-action="discount-picker-variants-toggle"
+            data-product-id="${productId}"
+            aria-label="Настроить варианты"
+            title="Настроить варианты"
+          ><i class="fas fa-cog"></i></button>
+        </div>
+        ${loadingHtml}
+        ${variantsHtml}
+        ${ingredientsHtml}
+      </div>
+    `;
+  }
+
   // Загрузить категории клиентов
-  async function loadCustomerCategories() {
-    if (state.customerCategories.length > 0) return state.customerCategories;
+  async function loadCustomerCategories(forceReload = false) {
+    if (!forceReload && state.customerCategories.length > 0) return state.customerCategories;
     try {
       const json = await apiJson('/api/admin/clients/filters/list');
       state.customerCategories = Array.isArray(json.data) ? json.data : [];
@@ -4986,46 +9675,144 @@
   function getDiscountProductSelectionForTarget(target) {
     if (target === 'buy_condition') return state.discountBuyConditionProducts;
     if (target === 'buy_reward') return state.discountBuyRewardProducts;
+    if (target === 'progress_scope') return state.discountProgressQualifyingItems;
+    if (target === 'progress_reward_gift') return state.discountProgressGiftProducts;
+    if (target === 'progress_reward_discount') return state.discountProgressDiscountProducts;
     if (String(target || '').startsWith('threshold:')) {
       const tierId = String(target).split(':')[1] || '';
-      const tier = Array.isArray(state.discountThresholdTiers)
-        ? state.discountThresholdTiers.find((item) => String(item.id) === tierId)
-        : null;
+      const tier = getThresholdTierById(tierId);
       return tier?.reward_products || [];
     }
     return state.discountSelectedProducts;
   }
 
+  function isDiscountPickerSingleSelectionMode() {
+    if (state.discountPickerLevel !== 'products') return false;
+    if (state.discountPickerTarget === 'buy_condition') {
+      return getDiscountBuyConditionUiMode() === 'product';
+    }
+    if (state.discountPickerTarget === 'buy_reward') {
+      return String(state.discountBuyRewardUiMode || '').trim() !== 'product_list';
+    }
+    if (state.discountPickerTarget === 'progress_scope') {
+      return getDiscountProgressScopeMode() === 'product';
+    }
+    if (state.discountPickerTarget === 'progress_reward_gift') {
+      return String(state.discountProgressRewardUiMode || '').trim() !== 'product_list';
+    }
+    if (String(state.discountPickerTarget || '').startsWith('threshold:')) {
+      const tierId = String(state.discountPickerTarget).split(':')[1] || '';
+      const tier = getThresholdTierById(tierId);
+      return normalizeThresholdTierRewardKindUi(tier) !== 'product_list';
+    }
+    return false;
+  }
+
+  function syncDiscountPickerSelectAllVisibility() {
+    const selectAllWrap = elDiscountPickerSelectAll?.closest('.option-picker-select-all');
+    if (!selectAllWrap) return;
+    const hideSelectAll = isDiscountPickerSingleSelectionMode();
+    selectAllWrap.classList.toggle('hidden', hideSelectAll);
+    selectAllWrap.hidden = hideSelectAll;
+    if (hideSelectAll && elDiscountPickerSelectAll) {
+      elDiscountPickerSelectAll.checked = false;
+    }
+  }
+
   function setDiscountProductSelectionForTarget(target, items) {
-    const normalized = cloneDiscountEntities(items);
+    let normalized = cloneDiscountEntities(items);
     if (target === 'buy_condition') {
+      const mode = getDiscountBuyConditionUiMode();
+      const expectedType = mode === 'category' ? 'category' : 'product';
+      normalized = normalized.filter((item) => String(item?.type || '').trim() === expectedType);
+      if (mode === 'product') {
+        normalized = normalized.slice(0, 1);
+      }
       state.discountBuyConditionProducts = normalized;
       renderDiscountBuyConditionChips();
       return;
     }
     if (target === 'buy_reward') {
+      normalized = normalized.filter((item) => String(item?.type || '').trim() === 'product');
+      if (String(state.discountBuyRewardUiMode || '').trim() !== 'product_list') {
+        normalized = normalized.slice(0, 1);
+      }
       state.discountBuyRewardProducts = normalized;
       renderDiscountBuyRewardChips();
       return;
     }
+    if (target === 'progress_scope') {
+      const mode = getDiscountProgressScopeMode();
+      const expectedType = mode === 'category' ? 'category' : 'product';
+      normalized = normalized.filter((item) => String(item?.type || '').trim() === expectedType);
+      if (mode === 'product') {
+        normalized = normalized.slice(0, 1);
+      }
+      state.discountProgressQualifyingItems = normalized;
+      renderDiscountProgressScopeChips();
+      return;
+    }
+    if (target === 'progress_reward_gift') {
+      normalized = normalized.filter((item) => String(item?.type || '').trim() === 'product');
+      if (String(state.discountProgressRewardUiMode || '').trim() !== 'product_list') {
+        normalized = normalized.slice(0, 1);
+      }
+      state.discountProgressGiftProducts = normalized;
+      renderDiscountProgressRewardGiftChips();
+      return;
+    }
+    if (target === 'progress_reward_discount') {
+      const applyTo = getDiscountProgressDiscountApplyTo();
+      const expectedType = applyTo === 'category' ? 'category' : 'product';
+      normalized = normalized.filter((item) => String(item?.type || '').trim() === expectedType);
+      state.discountProgressDiscountProducts = normalized;
+      state.discountProgressDiscountAccordionExpanded = normalized.length > 0;
+      renderDiscountProgressDiscountChips();
+      return;
+    }
     if (String(target || '').startsWith('threshold:')) {
       const tierId = String(target).split(':')[1] || '';
-      state.discountThresholdTiers = (state.discountThresholdTiers || []).map((tier) => (
-        String(tier.id) === tierId ? { ...tier, reward_products: normalized } : tier
-      ));
+      const tier = getThresholdTierById(tierId);
+      const rewardKind = normalizeThresholdTierRewardKindUi(tier);
+      normalized = normalized.filter((item) => String(item?.type || '').trim() === 'product');
+      if (rewardKind !== 'product_list') {
+        normalized = normalized.slice(0, 1);
+      }
+      updateThresholdTier(tierId, (currentTier) => ({
+        ...currentTier,
+        reward_kind: rewardKind === 'product_list' ? 'product_list' : 'product',
+        reward_products: normalized,
+        reward_discount_source: null,
+        reward_promo_source: null,
+      }));
       renderThresholdTiers();
       return;
     }
     state.discountSelectedProducts = normalized;
+    state.discountProductsAccordionExpanded = normalized.length > 0;
     renderDiscountProductChips();
   }
 
-  async function openDiscountProductPicker(target = 'discount_products') {
+  async function openDiscountProductPicker(target = 'discount_products', entityType = 'product') {
+    closeDiscountThresholdRewardPicker();
+    closeDiscountSlotPicker();
     state.discountPickerLevel = 'products';
     state.discountPickerTarget = target;
+    state.discountPickerEntityType = entityType || 'product';
     state.discountPickerQuery = '';
     state.discountPickerCategoryId = null;
-    
+    state.discountPickerExpandedProductId = null;
+    state.discountPickerProductMap = new Map();
+    state.discountPickerVariantsByProduct = new Map();
+    state.discountPickerVariantRequests = new Map();
+    state.discountPickerLoadingVariantProductIds = new Set();
+    state.discountPickerVariantSelections = new Map();
+    state.discountPickerIngredientsByProduct = new Map();
+    state.discountPickerIngredientRequests = new Map();
+    state.discountPickerLoadingIngredientProductIds = new Set();
+    state.discountPickerIngredientSelections = new Map();
+    seedDiscountPickerConfigSelections(target);
+
     // Копируем текущий выбор в Set
     state.discountPickerSelection = new Set(
       getDiscountProductSelectionForTarget(target).map((p) => `${p.type}:${p.id}`)
@@ -5033,13 +9820,15 @@
 
     // Загружаем категории
     await loadCatalogCategories();
-    
+
     // Показываем picker, скрываем форму
     if (elDiscountEditorWrap) elDiscountEditorWrap.classList.add('hidden');
     if (elDiscountEditorFooter) elDiscountEditorFooter.classList.add('hidden');
     if (elDiscountProductPicker) elDiscountProductPicker.classList.remove('hidden');
     if (elDiscountPickerFooter) elDiscountPickerFooter.classList.remove('hidden');
-    
+    syncDiscountPickerSelectAllVisibility();
+    syncDiscountPickerConfigModeUi();
+
     // Рендерим
     renderDiscountPickerTabs();
     await refreshDiscountPickerProducts();
@@ -5047,27 +9836,39 @@
 
   // Открыть picker для клиентов
   async function openDiscountCustomerPicker() {
+    const audienceMode = getDiscountAudienceMode();
+    if (audienceMode === 'all') return;
+
     state.discountPickerLevel = 'customers';
+    state.discountCustomerPickerMode = audienceMode === 'category' ? 'category' : 'specific';
     state.discountPickerQuery = '';
-    state.discountPickerCategoryId = null;
+    state.discountPickerCategoryId = state.discountCustomerPickerMode === 'category' ? 'categories' : null;
     if (elDiscountCustomerPickerSearch) {
       elDiscountCustomerPickerSearch.value = '';
+      elDiscountCustomerPickerSearch.placeholder = state.discountCustomerPickerMode === 'category' ? 'Поиск категории...' : 'Поиск клиента...';
     }
-    
+
     // Копируем текущий выбор в Set
     state.discountPickerSelection = new Set(
-      state.discountSelectedCustomers.map(c => `${c.type}:${c.id}`)
+      state.discountSelectedCustomers
+        .filter((item) => (
+          state.discountCustomerPickerMode === 'category'
+            ? String(item?.type || '').trim() === 'category'
+            : String(item?.type || '').trim() !== 'category'
+        ))
+        .map(c => `${c.type}:${c.id}`)
     );
 
     // Загружаем категории клиентов
-    await loadCustomerCategories();
-    
+    await loadCustomerCategories(true);
+
     // Показываем picker, скрываем форму
     if (elDiscountEditorWrap) elDiscountEditorWrap.classList.add('hidden');
     if (elDiscountEditorFooter) elDiscountEditorFooter.classList.add('hidden');
     if (elDiscountCustomerPicker) elDiscountCustomerPicker.classList.remove('hidden');
     if (elDiscountPickerFooter) elDiscountPickerFooter.classList.remove('hidden');
-    
+    syncDiscountPickerConfigModeUi();
+
     // Рендерим
     renderDiscountCustomerPickerTabs();
     await refreshDiscountCustomerPickerList();
@@ -5077,12 +9878,26 @@
   function closeDiscountPicker() {
     state.discountPickerLevel = null;
     state.discountPickerSelection.clear();
-    
+    state.discountPickerExpandedProductId = null;
+    state.discountPickerProductMap.clear();
+    state.discountPickerVariantsByProduct.clear();
+    state.discountPickerVariantRequests.clear();
+    state.discountPickerLoadingVariantProductIds.clear();
+    state.discountPickerVariantSelections.clear();
+    state.discountPickerIngredientsByProduct.clear();
+    state.discountPickerIngredientRequests.clear();
+    state.discountPickerLoadingIngredientProductIds.clear();
+    state.discountPickerIngredientSelections.clear();
+
     // Скрываем pickers
     if (elDiscountProductPicker) elDiscountProductPicker.classList.add('hidden');
     if (elDiscountCustomerPicker) elDiscountCustomerPicker.classList.add('hidden');
     if (elDiscountPickerFooter) elDiscountPickerFooter.classList.add('hidden');
-    
+    if (elDiscountPickerConfigMode) {
+      elDiscountPickerConfigMode.classList.add('hidden');
+      elDiscountPickerConfigMode.hidden = true;
+    }
+
     // Показываем форму
     if (elDiscountEditorWrap) elDiscountEditorWrap.classList.remove('hidden');
     if (elDiscountEditorFooter) elDiscountEditorFooter.classList.remove('hidden');
@@ -5093,73 +9908,98 @@
     if (state.discountPickerLevel === 'products') {
       // Конвертируем Set обратно в массив объектов
       const newSelection = [];
+      const currentMode = getDiscountProductConfigModeForTarget(state.discountPickerTarget);
       state.discountPickerSelection.forEach(key => {
         const [type, idStr] = key.split(':');
         const id = parseInt(idStr, 10);
         // Находим название
         let title = '';
+        let photo = '';
         if (type === 'category') {
-          const cat = state.catalogCategories.find(c => c.id === id);
+          const cat = state.catalogCategories.find(c => Number(c?.id || 0) === id);
           title = cat?.title || `Категория #${id}`;
+          const icon = String(cat?.icon || '').trim();
+          photo = isDiscountEntityImageUrl(icon) ? icon : '';
         } else {
-          const prod = state.catalogProducts.find(p => p.id === id);
+          const prod = state.discountPickerProductMap.get(id) || state.catalogProducts.find(p => Number(p?.id || 0) === id);
           title = prod?.name || prod?.title || `Товар #${id}`;
+          const photos = Array.isArray(prod?.photos) ? prod.photos.filter(Boolean) : [];
+          photo = photos[0] || '';
         }
-        newSelection.push({ type, id, title });
+        const nextItem = { type, id, title, photo };
+        if (type === 'product') {
+          nextItem.product_config = buildDiscountPickerProductConfigSnapshot(id, id);
+        }
+        newSelection.push(nextItem);
       });
       setDiscountProductSelectionForTarget(state.discountPickerTarget, newSelection);
+      setDiscountProductConfigModeForTarget(state.discountPickerTarget, currentMode);
     } else if (state.discountPickerLevel === 'customers') {
       const newSelection = [];
+      const audienceMode = getDiscountAudienceMode();
       state.discountPickerSelection.forEach(key => {
         const [type, idStr] = key.split(':');
         const id = parseInt(idStr, 10);
+        if (audienceMode === 'category' && type !== 'category') return;
+        if (audienceMode === 'specific' && type === 'category') return;
         let title = '';
+        let phone = '';
+        let count = null;
         if (type === 'category') {
-          const cat = state.customerCategories.find(c => c.id === id);
-          title = cat?.title || `Выборка #${id}`;
+          const cat = state.customerCategories.find(c => Number(c?.id || 0) === id);
+          title = cat?.title || `Категория #${id}`;
+          count = cat?.count ?? null;
         } else {
-          const cust = state.customersById.get(id) || state.customersList.find(c => c.id === id);
+          const cust = state.customersById.get(id) || state.customersList.find(c => Number(c?.id || 0) === id);
           title = cust?.name || cust?.phone || `Клиент #${id}`;
+          phone = String(cust?.phone || '').trim();
         }
-        newSelection.push({ type, id, title });
+        newSelection.push({ type, id, title, phone, count });
       });
       state.discountSelectedCustomers = newSelection;
+      state.discountAudienceAccordionExpanded = newSelection.length > 0;
       renderDiscountCustomerChips();
     }
-    
+
     closeDiscountPicker();
   }
 
   // Рендеринг табов категорий товаров
   function renderDiscountPickerTabs() {
     if (!elDiscountPickerTabs) return;
-    
+    if ((state.discountPickerEntityType || 'product') === 'category') {
+      elDiscountPickerTabs.innerHTML = '<button type="button" class="option-picker-tab is-active" data-cat-id="">Категории</button>';
+      return;
+    }
+
     const categories = state.catalogCategories;
     const activeId = state.discountPickerCategoryId;
-    
+
     let html = `<button type="button" class="option-picker-tab ${activeId === null ? 'is-active' : ''}" data-cat-id="">Все</button>`;
     categories.forEach(cat => {
       html += `<button type="button" class="option-picker-tab ${activeId === cat.id ? 'is-active' : ''}" data-cat-id="${cat.id}">${escapeHtml(cat.title)}</button>`;
     });
-    
+
     elDiscountPickerTabs.innerHTML = html;
   }
 
   // Рендеринг табов категорий клиентов
   function renderDiscountCustomerPickerTabs() {
     if (!elDiscountCustomerPickerTabs) return;
-    
-    const categories = state.customerCategories;
-    const activeId = state.discountPickerCategoryId;
-    
-    let html = `<button type="button" class="option-picker-tab ${activeId === null ? 'is-active' : ''}" data-cat-id="">Все клиенты</button>`;
-    html += `<button type="button" class="option-picker-tab ${activeId === 'categories' ? 'is-active' : ''}" data-cat-id="categories">Выборки</button>`;
-    
-    elDiscountCustomerPickerTabs.innerHTML = html;
+    if (state.discountCustomerPickerMode === 'category') {
+      elDiscountCustomerPickerTabs.innerHTML = '<button type="button" class="option-picker-tab is-active" data-cat-id="categories">Категории</button>';
+      return;
+    }
+
+    elDiscountCustomerPickerTabs.innerHTML = '<button type="button" class="option-picker-tab is-active" data-cat-id="">Клиенты</button>';
   }
 
   // Обновить список товаров в picker
   async function refreshDiscountPickerProducts() {
+    if ((state.discountPickerEntityType || 'product') === 'category') {
+      renderDiscountPickerList();
+      return;
+    }
     await loadCatalogProducts(state.discountPickerCategoryId);
     renderDiscountPickerList();
   }
@@ -5180,32 +10020,198 @@
   }
 
   // Рендеринг списка товаров
+  function renderDiscountPickerProductCardEnhanced(product) {
+    const productId = Number(product?.id || 0);
+    const key = `product:${productId}`;
+    const isChecked = state.discountPickerSelection.has(key);
+    const name = String(product?.name || product?.title || `#${productId}`).trim() || `#${productId}`;
+    const photos = Array.isArray(product?.photos) ? product.photos.filter(Boolean) : [];
+    const photo = photos[0] || '';
+    const hasVariants = Number(product?.has_variants || 0) === 1;
+    const hasChangeableComposition = Number(product?.has_changeable_composition || 0) === 1;
+    const hasConfigurable = hasVariants || hasChangeableComposition;
+    const isExpanded = state.discountPickerExpandedProductId === productId && hasConfigurable;
+    const isLoadingVariants = state.discountPickerLoadingVariantProductIds.has(productId);
+    const isLoadingIngredients = state.discountPickerLoadingIngredientProductIds.has(productId);
+    const variantGroups = getDiscountPickerProductVariants(productId);
+    const ingredientRows = getDiscountPickerProductIngredients(productId);
+    const selectedVariants = getDiscountPickerProductVariantSelection(productId, variantGroups);
+    const selectedIngredients = getDiscountPickerProductIngredientSelection(productId, ingredientRows);
+    const displayPrice = getDiscountPickerProductDisplayPrice(product, variantGroups, ingredientRows);
+    const loadingHtml = isExpanded && (isLoadingVariants || isLoadingIngredients)
+      ? '<div class="option-picker-product-variants-loading">Загрузка настроек...</div>'
+      : '';
+    const variantsHtml = isExpanded && variantGroups.length
+      ? `
+        <div class="option-picker-product-variants">
+          ${variantGroups.map((group) => {
+            const groupId = Number(group?.id || 0);
+            const selectedIndex = Number(selectedVariants[groupId]);
+            return `
+              <div class="option-picker-product-variant-group">
+                ${group.title ? `<div class="option-picker-product-variant-title">${escapeHtml(group.title)}</div>` : ''}
+                <div class="new-order-opt-variants-row">
+                  ${(group.values || []).map((value, variantIndex) => `
+                    <button
+                      type="button"
+                      class="new-order-opt-variant-btn ${variantIndex === selectedIndex ? 'is-selected' : ''}"
+                      data-action="discount-picker-variant-select"
+                      data-product-id="${productId}"
+                      data-group-id="${groupId}"
+                      data-variant-index="${variantIndex}"
+                    >${escapeHtml(formatDiscountPickerVariantValue(group, variantIndex) || String(value || ''))}</button>
+                  `).join('')}
+                </div>
+              </div>
+            `;
+          }).join('')}
+        </div>
+      `
+      : '';
+    const ingredientsHtml = isExpanded && ingredientRows.length
+      ? `
+        <div class="option-picker-product-ingredients">
+          <div class="option-picker-product-ingredient-title">Состав (можно настроить):</div>
+          ${ingredientRows.map((row) => {
+            const ingredientId = Number(row?.ingredient_id || 0);
+            const currentQty = Number(selectedIngredients[ingredientId] ?? row?.quantity ?? 0);
+            const rawMin = row?.quantity_min != null && Number.isFinite(Number(row.quantity_min)) ? Number(row.quantity_min) : null;
+            const minQty = rawMin !== null ? Math.max(0, rawMin) : 0;
+            const rawMax = row?.quantity_max != null && Number.isFinite(Number(row.quantity_max)) ? Number(row.quantity_max) : null;
+            const maxQty = rawMax != null ? rawMax : Infinity;
+            const step = Math.max(0.0001, Number(row?.quantity_step ?? 1) || 1);
+            const minusDisabled = currentQty <= minQty;
+            const plusDisabled = Number.isFinite(maxQty) ? currentQty >= maxQty : false;
+            const ingredientName = String(row?.ingredient_name || '').trim() || 'Ингредиент';
+            const ingredientPhotoRaw = Array.isArray(row?.ingredient_photos) && row.ingredient_photos.length ? row.ingredient_photos[0] : '';
+            const ingredientPhoto = typeof ingredientPhotoRaw === 'string'
+              ? ingredientPhotoRaw
+              : String(ingredientPhotoRaw?.url || ingredientPhotoRaw || '').trim();
+            const unitLabel = String(row?.unitLabel || '').trim();
+            const qtyLabel = `${formatDiscountPickerQty(currentQty)}${unitLabel ? ` ${unitLabel}` : ''}`;
+            const hasRange = rawMin !== null || rawMax !== null;
+            const rangeLabel = hasRange
+              ? `${rawMin !== null ? formatDiscountPickerQty(rawMin) : formatDiscountPickerQty(currentQty)} - ${rawMax != null ? formatDiscountPickerQty(rawMax) : '∞'}${step ? `, шаг ${formatDiscountPickerQty(step)}` : ''}`
+              : formatDiscountPickerQty(currentQty);
+            const ingredientBaseQty = row?.ingredient_base_qty != null && Number(row.ingredient_base_qty) > 0 ? Number(row.ingredient_base_qty) : 1;
+            const ingredientPrice = Number(row?.ingredient_price || 0);
+            const catalogBasePrice = ingredientBaseQty > 0 && ingredientPrice > 0
+              ? ingredientPrice / ingredientBaseQty
+              : (ingredientPrice > 0 ? ingredientPrice : 0);
+            const pricePerUnit = row?.price_override != null && Number(row.price_override) >= 0
+              ? Number(row.price_override)
+              : catalogBasePrice;
+            const currentQtyInBase = getDiscountPickerQtyInBase(row, currentQty);
+            const totalPrice = currentQtyInBase != null && Number.isFinite(pricePerUnit)
+              ? pricePerUnit * currentQtyInBase
+              : null;
+            const priceLabel = Number.isFinite(pricePerUnit) ? money(pricePerUnit) : '—';
+            const totalLabel = totalPrice != null ? money(totalPrice) : '—';
+            const ingredientMeta = `${rangeLabel}${unitLabel ? ` ${unitLabel}` : ''} × ${priceLabel} = ${totalLabel}`;
+            return `
+              <div class="combo-block-detail-ingredient-row option-picker-product-ingredient-row">
+                ${ingredientPhoto
+                  ? `<img class="combo-block-ingredient-thumb" src="${escapeHtml(ingredientPhoto)}" alt="${escapeHtml(ingredientName)}" />`
+                  : `<span class="combo-block-ingredient-thumb combo-block-ingredient-thumb-placeholder"><i class="fas fa-image"></i></span>`}
+                <span class="combo-block-ingredient-name">
+                  ${escapeHtml(ingredientName)}
+                  <small class="combo-block-ingredient-meta">${escapeHtml(ingredientMeta)}</small>
+                </span>
+                <div class="combo-block-ingredient-qty-wrap">
+                  <button
+                    type="button"
+                    class="combo-block-ingredient-btn"
+                    data-action="discount-picker-ingredient-minus"
+                    data-product-id="${productId}"
+                    data-ingredient-id="${ingredientId}"
+                    data-step="${escapeHtml(String(step))}"
+                    ${minusDisabled ? 'disabled' : ''}
+                  >−</button>
+                  <span class="combo-block-ingredient-qty">${escapeHtml(qtyLabel)}</span>
+                  <button
+                    type="button"
+                    class="combo-block-ingredient-btn"
+                    data-action="discount-picker-ingredient-plus"
+                    data-product-id="${productId}"
+                    data-ingredient-id="${ingredientId}"
+                    data-step="${escapeHtml(String(step))}"
+                    ${plusDisabled ? 'disabled' : ''}
+                  >+</button>
+                </div>
+              </div>
+            `;
+          }).join('')}
+        </div>
+      `
+      : '';
+    return `
+      <div class="option-picker-product-card new-order-option-sheet-card${isChecked ? ' is-selected' : ''}${isExpanded ? ' is-expanded' : ''}" data-key="${key}" data-product-id="${productId}">
+        <div class="option-picker-product-header new-order-option-sheet-item-row" data-action="discount-picker-toggle" data-key="${key}">
+          <input class="option-picker-product-checkbox" type="checkbox" data-key="${key}" ${isChecked ? 'checked' : ''} />
+          <span class="new-order-option-sheet-item-thumb">
+            ${photo ? `<img src="${escapeHtml(photo)}" alt="${escapeHtml(name)}" />` : '<i class="fas fa-image"></i>'}
+          </span>
+          <span class="new-order-option-sheet-item-main">
+            <span class="new-order-option-sheet-item-title">${escapeHtml(name)}</span>
+            <span class="new-order-option-sheet-item-meta">${escapeHtml(money(displayPrice))}</span>
+          </span>
+          <button
+            type="button"
+            class="new-order-opt-gear${hasConfigurable ? '' : ' is-disabled'}${isExpanded ? ' is-open' : ''}"
+            data-action="discount-picker-variants-toggle"
+            data-product-id="${productId}"
+            aria-label="Настроить товар"
+            title="Настроить товар"
+          ><i class="fas fa-cog"></i></button>
+        </div>
+        ${loadingHtml}
+        ${variantsHtml}
+        ${ingredientsHtml}
+      </div>
+    `;
+  }
+
   function renderDiscountPickerList() {
     if (!elDiscountPickerList) return;
-    
-    let items = state.catalogProducts;
+    const entityType = state.discountPickerEntityType || 'product';
     const query = state.discountPickerQuery.toLowerCase();
+
+    if (entityType === 'category') {
+      let items = state.catalogCategories;
+      if (query) {
+        items = items.filter((category) => (category.title || '').toLowerCase().includes(query));
+      }
+
+      if (items.length === 0) {
+        elDiscountPickerList.innerHTML = '<div class="option-picker-empty">Категории не найдены</div>';
+        return;
+      }
+
+      elDiscountPickerList.innerHTML = items.map((category) => {
+        const key = `category:${category.id}`;
+        const isChecked = state.discountPickerSelection.has(key);
+        return `
+          <label class="option-picker-row${isChecked ? ' is-selected' : ''}">
+            <input type="checkbox" data-key="${key}" ${isChecked ? 'checked' : ''} />
+            <span class="option-picker-title">${escapeHtml(category.title || `Категория #${category.id}`)}</span>
+          </label>
+        `;
+      }).join('');
+      updatePickerSelectAll();
+      return;
+    }
+
+    let items = state.catalogProducts;
     if (query) {
       items = items.filter(p => (p.name || p.title) && (p.name || p.title).toLowerCase().includes(query));
     }
-    
+
     if (items.length === 0) {
       elDiscountPickerList.innerHTML = '<div class="option-picker-empty">Товары не найдены</div>';
       return;
     }
-    
-    elDiscountPickerList.innerHTML = items.map(prod => {
-      const key = `product:${prod.id}`;
-      const isChecked = state.discountPickerSelection.has(key);
-      const prodName = prod.name || prod.title || '';
-      return `
-        <label class="option-picker-row${isChecked ? ' is-selected' : ''}">
-          <input type="checkbox" data-key="${key}" ${isChecked ? 'checked' : ''} />
-          <span class="option-picker-title">${escapeHtml(prodName)}</span>
-          <span class="option-picker-price">${prod.price ? 'Цена: ' + prod.price + ' ₽' : ''}</span>
-        </label>
-      `;
-    }).join('');
+
+    elDiscountPickerList.innerHTML = items.map(renderDiscountPickerProductCardEnhanced).join('');
 
     updatePickerSelectAll();
   }
@@ -5213,13 +10219,16 @@
   // Рендеринг списка категорий клиентов
   function renderDiscountCustomerCategoryList() {
     if (!elDiscountCustomerPickerList) return;
-    
-    const categories = state.customerCategories;
+
+    const query = String(state.discountPickerQuery || '').trim().toLowerCase();
+    const categories = query
+      ? state.customerCategories.filter((cat) => String(cat?.title || '').toLowerCase().includes(query))
+      : state.customerCategories;
     if (categories.length === 0) {
       elDiscountCustomerPickerList.innerHTML = '<div class="option-picker-empty">Выборки не найдены</div>';
       return;
     }
-    
+
     elDiscountCustomerPickerList.innerHTML = categories.map(cat => {
       const key = `category:${cat.id}`;
       const isChecked = state.discountPickerSelection.has(key);
@@ -5237,14 +10246,14 @@
   // Рендеринг списка клиентов
   function renderDiscountCustomerList() {
     if (!elDiscountCustomerPickerList) return;
-    
+
     const items = state.customersList;
-    
+
     if (items.length === 0) {
       elDiscountCustomerPickerList.innerHTML = '<div class="option-picker-empty">Клиенты не найдены</div>';
       return;
     }
-    
+
     elDiscountCustomerPickerList.innerHTML = items.map(cust => {
       const key = `customer:${cust.id}`;
       const isChecked = state.discountPickerSelection.has(key);
@@ -5277,19 +10286,32 @@
 
   // Рендеринг чипсов выбранных товаров
   function renderDiscountProductChips() {
-    const html = state.discountSelectedProducts.length === 0
-      ? '<span class="discount-chips-empty">Не выбрано</span>'
-      : state.discountSelectedProducts.map((item) => {
-          const cls = item.type === 'category' ? 'is-category' : (item.type === 'combo' ? 'is-combo' : '');
-          return `
-            <span class="discount-chip ${cls}" data-type="${item.type}" data-id="${item.id}">
-              <span class="discount-chip-text">${escapeHtml(item.title)}</span>
-              <span class="discount-chip-remove"><i class="fas fa-times"></i></span>
-            </span>
-          `;
-        }).join('');
-    [elDeProductsChips, elDePromoProductsChips].forEach((target) => {
-      if (target) target.innerHTML = html;
+    const items = cloneDiscountEntities(state.discountSelectedProducts);
+    const simpleEntityType = getDiscountSimpleSelectionEntityType();
+    const promoEntityType = getDiscountPromoSelectionEntityType();
+
+    syncDiscountEntityAccordionButton(
+      elDeAddProductsBtn,
+      simpleEntityType,
+      items,
+      state.discountProductsAccordionExpanded
+    );
+    syncDiscountEntityAccordionButton(
+      elDeAddPromoProductsBtn,
+      promoEntityType,
+      items,
+      state.discountProductsAccordionExpanded
+    );
+
+    renderDiscountEntityAccordion(elDeProductsChips, items, {
+      entityType: simpleEntityType,
+      expanded: state.discountProductsAccordionExpanded,
+      action: 'simple_products',
+    });
+    renderDiscountEntityAccordion(elDePromoProductsChips, items, {
+      entityType: promoEntityType,
+      expanded: state.discountProductsAccordionExpanded,
+      action: 'promo_products',
     });
   }
 
@@ -5297,43 +10319,119 @@
     if (!targetEl) return;
     const rows = cloneDiscountEntities(items);
     if (!rows.length) {
-      targetEl.innerHTML = '<span class="discount-chips-empty">Не выбрано</span>';
+      targetEl.innerHTML = '';
       return;
     }
-    targetEl.innerHTML = rows.map((item) => `
-      <span class="discount-chip" data-type="${escapeHtml(item.type)}" data-id="${Number(item.id)}">
-        <span class="discount-chip-text">${escapeHtml(item.title || `#${item.id}`)}</span>
-        <span class="discount-chip-remove"><i class="fas fa-times"></i></span>
-      </span>
-    `).join('');
+    targetEl.innerHTML = rows.map((item) => buildDiscountEntityTileHtml(item)).join('');
+  }
+
+  function renderDiscountProgressScopeChips() {
+    state.discountProgressQualifyingItems = getDiscountProgressScopeSelection();
+    syncDiscountProgressScopeUiCopy();
+    renderDiscountEntityChips(elDeProgressScopeItemsChips, state.discountProgressQualifyingItems);
+    renderDiscountSelectionVisual(elDeProgressScopeVisualRows, state.discountProgressQualifyingItems, {
+      target: 'progress_scope',
+      role: 'buy',
+      emptyTitle: getDiscountProgressScopeAddButtonText(),
+      emptyIcon: 'fa-plus',
+    });
+    renderDiscountProgressCountsVisualization();
+  }
+
+  function renderDiscountProgressRewardGiftChips() {
+    state.discountProgressGiftProducts = cloneDiscountEntities(state.discountProgressGiftProducts)
+      .filter((item) => String(item?.type || '').trim() === 'product');
+    renderDiscountEntityChips(elDeProgressRewardGiftChips, state.discountProgressGiftProducts);
+    renderDiscountSelectionVisual(elDeProgressRewardGiftVisualRows, state.discountProgressGiftProducts, {
+      target: 'progress_reward_gift',
+      role: 'reward',
+      isGiftReward: true,
+      emptyTitle: 'Добавить товар',
+      emptyIcon: 'fa-plus',
+    });
+    renderDiscountProgressCountsVisualization();
+  }
+
+  function renderDiscountProgressDiscountChips() {
+    state.discountProgressDiscountProducts = getDiscountProgressDiscountSelection();
+    syncDiscountProgressDiscountUiCopy();
+    syncDiscountEntityAccordionButton(
+      elDeAddProgressDiscountProductsBtn,
+      getDiscountProgressDiscountEntityType(),
+      state.discountProgressDiscountProducts,
+      state.discountProgressDiscountAccordionExpanded
+    );
+    renderDiscountEntityAccordion(elDeProgressDiscountProductsChips, state.discountProgressDiscountProducts, {
+      entityType: getDiscountProgressDiscountEntityType(),
+      expanded: state.discountProgressDiscountAccordionExpanded,
+      action: 'progress_discount_products',
+    });
+    renderDiscountSelectionVisual(elDeProgressDiscountVisualRows, state.discountProgressDiscountProducts, {
+      target: 'progress_reward_discount',
+      role: 'reward',
+      emptyTitle: getDiscountEntityAddButtonLabel(getDiscountProgressDiscountEntityType()),
+      emptyIcon: 'fa-plus',
+    });
+    renderDiscountProgressCountsVisualization();
   }
 
   function renderDiscountBuyConditionChips() {
+    state.discountBuyConditionProducts = getDiscountBuyConditionSelection();
+    syncDiscountBuyConditionUiCopy();
     renderDiscountEntityChips(elDeBuyConditionProductsChips, state.discountBuyConditionProducts);
+    renderDiscountBuyVisualization();
   }
 
   function renderDiscountBuyRewardChips() {
+    state.discountBuyRewardProducts = getDiscountBuyRewardSelection();
     renderDiscountEntityChips(elDeBuyRewardProductsChips, state.discountBuyRewardProducts);
+    renderDiscountBuyVisualization();
   }
 
   // Рендеринг чипсов выбранных клиентов
   function renderDiscountCustomerChips() {
     if (!elDeCustomersChips) return;
-    
-    if (state.discountSelectedCustomers.length === 0) {
-      elDeCustomersChips.innerHTML = '<span class="discount-chips-empty">Не выбрано</span>';
+    const mode = getDiscountAudienceMode();
+    const items = getDiscountAudienceItems(mode);
+
+    syncDiscountAudienceUi();
+
+    if (mode === 'all') {
+      elDeCustomersChips.classList.remove('is-collapsed');
+      elDeCustomersChips.innerHTML = '<div class="discount-audience-empty">Все текущие и будущие клиенты</div>';
       return;
     }
-    
-    elDeCustomersChips.innerHTML = state.discountSelectedCustomers.map(item => {
-      const cls = item.type === 'category' ? 'is-category' : '';
+
+    if (items.length === 0) {
+      elDeCustomersChips.classList.add('is-collapsed');
+      elDeCustomersChips.innerHTML = '';
+      return;
+    }
+
+    elDeCustomersChips.classList.toggle('is-collapsed', !state.discountAudienceAccordionExpanded);
+
+    const addMoreLabel = mode === 'category' ? 'Добавить категории' : 'Добавить клиентов';
+    const itemsHtml = items.map((item) => {
+      const title = getDiscountAudienceItemTitle(item);
+      const secondaryText = getDiscountAudienceItemSecondaryText(item);
       return `
-        <span class="discount-chip ${cls}" data-type="${item.type}" data-id="${item.id}">
-          <span class="discount-chip-text">${escapeHtml(item.title)}</span>
+        <div class="discount-chip discount-audience-item${item.type === 'category' ? ' is-category' : ''}" data-type="${escapeHtml(item.type)}" data-id="${Number(item.id || 0)}">
+          <div class="discount-audience-item-meta">
+            <span class="discount-audience-item-title">${escapeHtml(title)}</span>
+            ${secondaryText ? `<span class="discount-audience-item-secondary">${escapeHtml(secondaryText)}</span>` : ''}
+          </div>
           <span class="discount-chip-remove"><i class="fas fa-times"></i></span>
-        </span>
+        </div>
       `;
     }).join('');
+
+    elDeCustomersChips.innerHTML = `
+      <button type="button" class="discount-audience-inline-add" data-audience-action="open-picker">
+        <i class="fas fa-plus"></i>
+        <span>${escapeHtml(addMoreLabel)}</span>
+      </button>
+      ${itemsHtml}
+    `;
   }
 
   // Удалить чип товара
@@ -5341,6 +10439,9 @@
     state.discountSelectedProducts = state.discountSelectedProducts.filter(
       p => !(p.type === type && p.id === id)
     );
+    if (!state.discountSelectedProducts.length) {
+      state.discountProductsAccordionExpanded = false;
+    }
     renderDiscountProductChips();
   }
 
@@ -5349,6 +10450,9 @@
     state.discountSelectedCustomers = state.discountSelectedCustomers.filter(
       c => !(c.type === type && c.id === id)
     );
+    if (!state.discountSelectedCustomers.length) {
+      state.discountAudienceAccordionExpanded = false;
+    }
     renderDiscountCustomerChips();
   }
 
@@ -5573,7 +10677,51 @@
     }
   }
 
+  function switchView(viewName) {
+    state.currentView = viewName;
+
+    $$('[data-view-content]').forEach((el) => {
+      el.classList.toggle('hidden', el.dataset.viewContent !== viewName);
+    });
+
+    if (elToolbarText) {
+      const titles = {
+        clients: 'Клиенты',
+        'filter-categories': 'Категории',
+        discounts: 'Скидки',
+      };
+      elToolbarText.textContent = titles[viewName] || 'Клиенты';
+    }
+    if (elToolbarTitle) {
+      const icon = elToolbarTitle.querySelector('i');
+      if (icon) {
+        const icons = {
+          clients: 'fas fa-users',
+          'filter-categories': 'fas fa-filter',
+          discounts: 'fas fa-percentage',
+        };
+        icon.className = icons[viewName] || 'fas fa-users';
+      }
+    }
+
+    if (elSearchWrap) elSearchWrap.style.display = viewName === 'clients' ? '' : 'none';
+    if (elSortWrap) elSortWrap.style.display = viewName === 'clients' ? '' : 'none';
+
+    if (viewName === 'filter-categories') {
+      renderFilterCategoriesList();
+    } else if (viewName === 'discounts') {
+      renderDiscountCenterContent();
+    } else if (viewName === 'clients') {
+      maybeLoadMoreClientsOnScroll();
+      ensureClientsScrollable().catch(console.error);
+    }
+
+    syncDiscountToolbarState();
+    updateRightPanel();
+  }
+
   function updateRightPanel() {
+    syncDiscountToolbarState();
     const activeTab = tabsState.tabs.find((t) => t.key === tabsState.activeKey);
     const isClientTab = activeTab?.type === 'client';
     const isOrderTab = activeTab?.type === 'order';
@@ -5614,7 +10762,7 @@
       row.setAttribute('role', 'button');
       row.setAttribute('tabindex', '0');
       row.setAttribute('data-filter-id', String(filter.id));
-      
+
       // Подсветка если открыт таб этой категории
       const tabKey = buildTabKey('category', filter.id);
       const isTabOpen = tabsState.tabs.some(t => t.key === tabKey);
@@ -5635,7 +10783,7 @@
     const isNew = filter === null;
     const tabId = isNew ? 'new' : filter.id;
     const tabTitle = isNew ? 'Новая выборка' : (filter.title || 'Выборка');
-    
+
     ensureTab({
       type: 'category',
       id: tabId,
@@ -5656,7 +10804,7 @@
     const isActiveInput = $('#fe_is_active');
 
     if (titleInput) titleInput.value = filter?.title || '';
-    
+
     // Обновляем кастомный select для логики
     if (logicWrap) {
       const logicVal = filter?.conditions?.logic || 'AND';
@@ -5668,7 +10816,7 @@
         opt.classList.toggle('is-selected', opt.dataset.value === logicVal);
       });
     }
-    
+
     if (idInput) idInput.value = filter?.id || '';
     if (isActiveInput) isActiveInput.checked = filter?.is_active !== false;
 
@@ -5722,7 +10870,7 @@
   // ─── Custom Select Component ───
   function createCustomSelect(options, selectedValue, className = '', placeholder = 'Выберите...') {
     const selected = options.find(o => o.value === selectedValue) || options[0] || { value: '', label: placeholder };
-    const optionsHtml = options.map(opt => 
+    const optionsHtml = options.map(opt =>
       `<button type="button" class="cs-option${opt.value === selected.value ? ' is-selected' : ''}" data-value="${escapeHtml(opt.value)}">${escapeHtml(opt.label)}</button>`
     ).join('');
 
@@ -6007,7 +11155,7 @@
       clearFilterDraftCountPreview();
       await loadCustomFilters();
       renderFilterCategoriesList();
-      
+
       // Обновляем или закрываем таб
       if (isNew && savedId) {
         // Закрываем таб "new" и открываем таб с сохранённым фильтром
@@ -6039,12 +11187,12 @@
 
     try {
       await apiJson('/api/admin/clients/filters/' + state.editingFilterId, { method: 'DELETE' });
-      
+
       if (state.activeCustomFilterId === state.editingFilterId) {
         state.activeFilter = 'all';
         state.activeCustomFilterId = null;
       }
-      
+
       // Закрываем таб удалённой категории
       await closeTab(tabKey);
       clearFilterDraftCountPreview();
@@ -6610,7 +11758,7 @@
     if (clientDiscountsEmpty) clientDiscountsEmpty.classList.add('hidden');
 
     list.forEach((d) => {
-      const valueText = d.discount_type === 'percent' 
+      const valueText = d.discount_type === 'percent'
         ? `${d.discount_value}%`
         : d.discount_type === 'fixed'
           ? `-${d.discount_value}₽`
@@ -7582,6 +12730,11 @@
   window.addEventListener("resize", () => {
     if (!isMobile()) closeSheet({ persistState: false });
   });
+  window.addEventListener('resize', () => {
+    if ((elDeMechanicType?.value || '') === 'buy_x_get_y') {
+      renderDiscountBuyVisualization();
+    }
+  });
 
   // -----------------------------
   // Toolbar: expandable search
@@ -7733,12 +12886,28 @@
     elDeMechanicType.addEventListener('change', handleDiscountMechanicTypeChange);
   }
 
+  if (elDeMechanicChoiceGrid) {
+    elDeMechanicChoiceGrid.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-discount-mechanic-choice]');
+      if (!btn) return;
+      applyDiscountMechanicChoice(btn.getAttribute('data-discount-mechanic-choice'));
+    });
+  }
+
   if (elDeSimpleVariant) {
     elDeSimpleVariant.addEventListener('change', handleDiscountSimpleVariantChange);
   }
 
+  if (elDeDiscountType) {
+    elDeDiscountType.addEventListener('change', handleDiscountValueTypeChange);
+  }
+
   if ($('#de_apply_to')) {
     $('#de_apply_to').addEventListener('change', handleDiscountApplyToChange);
+  }
+
+  if (elDeAudienceMode) {
+    elDeAudienceMode.addEventListener('change', handleDiscountAudienceModeChange);
   }
 
   if (elDePromoRewardType) {
@@ -7753,8 +12922,16 @@
     elDePromoApplyTo.addEventListener('change', handleDiscountPromoApplyToChange);
   }
 
-  if (elDeBuyQualifyingMode) {
-    elDeBuyQualifyingMode.addEventListener('change', handleDiscountBuyQualifyingModeChange);
+  if (elDePromoDiscountType) {
+    elDePromoDiscountType.addEventListener('change', updateDiscountPromoUi);
+  }
+
+  if (elDePromoProductDiscountType) {
+    elDePromoProductDiscountType.addEventListener('change', updateDiscountPromoUi);
+  }
+
+  if (elDeBuyConditionUiMode) {
+    elDeBuyConditionUiMode.addEventListener('change', handleDiscountBuyConditionUiModeChange);
   }
 
   if (elDeBuyRewardSource) {
@@ -7765,9 +12942,65 @@
     elDeBuyRewardKind.addEventListener('change', handleDiscountBuyRewardKindChange);
   }
 
+  if (elDeProgressBasis) {
+    elDeProgressBasis.addEventListener('change', handleDiscountProgressBasisChange);
+  }
+
+  if (elDeProgressScopeMode) {
+    elDeProgressScopeMode.addEventListener('change', handleDiscountProgressScopeModeChange);
+  }
+
+  if (elDeProgressRewardKind) {
+    elDeProgressRewardKind.addEventListener('change', handleDiscountProgressRewardKindChange);
+  }
+
+  if (elDeProgressDiscountApplyTo) {
+    elDeProgressDiscountApplyTo.addEventListener('change', handleDiscountProgressDiscountApplyToChange);
+  }
+
+  [
+    elDeProgressStatusFilter,
+    elDeProgressPendingRewardMode,
+    elDeProgressIssueMode,
+    elDeProgressRedemptionMode,
+    elDeProgressDiscountType,
+  ].forEach((node) => {
+    if (!node) return;
+    node.addEventListener('change', updateDiscountPromoUi);
+  });
+
+  if (elDeProgressPendingRewardMode) {
+    elDeProgressPendingRewardMode.addEventListener('change', syncDiscountProgressPendingRewardHelp);
+  }
+
+  bindDiscountStepper(elDeBuyQty, elDeBuyQtyMinus, elDeBuyQtyPlus, handleDiscountBuyQuantitiesChange);
+  bindDiscountStepper(elDeRewardQty, elDeRewardQtyMinus, elDeRewardQtyPlus, handleDiscountBuyQuantitiesChange);
+  bindDiscountTimeInput($('#de_schedule_time_start'));
+  bindDiscountTimeInput($('#de_schedule_time_end'));
+  [elDeBuyRewardDiscountType, elDeBuyRewardDiscountValue].forEach((node) => {
+    if (!node) return;
+    node.addEventListener('input', handleDiscountBuyQuantitiesChange);
+    node.addEventListener('change', handleDiscountBuyQuantitiesChange);
+  });
+
+  bindDiscountStepper(elDeProgressBuyQty, elDeProgressBuyQtyMinus, elDeProgressBuyQtyPlus, (nextValue) => {
+    if (elDeProgressThresholdValue && getDiscountProgressBasis() !== 'amount') {
+      elDeProgressThresholdValue.value = String(nextValue);
+    }
+    renderDiscountProgressCountsVisualization();
+  });
+  bindDiscountStepper(elDeProgressRewardQty, elDeProgressRewardQtyMinus, elDeProgressRewardQtyPlus, () => {
+    renderDiscountProgressCountsVisualization();
+  });
+
   [elDeThresholdBasis, elDeThresholdApplyMode].forEach((node) => {
     if (!node) return;
     node.addEventListener('change', updateDiscountPromoUi);
+  });
+
+  bindDiscountStepper(elDeThresholdSlotCount, elDeThresholdSlotCountMinus, elDeThresholdSlotCountPlus, (nextValue) => {
+    resizeDiscountThresholdTiers(nextValue);
+    renderThresholdTiers();
   });
 
   if (elDePromoCodeMode) {
@@ -7780,8 +13013,15 @@
     });
   }
 
-  if (elDePromoGenerateBtn) {
-    elDePromoGenerateBtn.addEventListener('click', generateDiscountPromoCodes);
+  if (elDePromoCodesToggle) {
+    elDePromoCodesToggle.addEventListener('click', () => {
+      const uniqueCodes = Array.isArray(state.discountPromoCodes)
+        ? state.discountPromoCodes.filter((row) => String(row?.code_mode || '').trim() === 'unique')
+        : [];
+      if (!uniqueCodes.length) return;
+      state.discountPromoCodesAccordionExpanded = !state.discountPromoCodesAccordionExpanded;
+      renderDiscountPromoCodes();
+    });
   }
 
   if (elDePromoCodesList) {
@@ -7792,7 +13032,162 @@
     });
   }
 
+  [elDePeriodEnabled, elDeWeekdaysEnabled, elDeTimeEnabled].forEach((toggle) => {
+    if (!toggle) return;
+    toggle.addEventListener('change', () => {
+      updateDiscountRestrictionUi({ clearDisabled: true });
+    });
+  });
+
+  $$('[data-discount-restriction-chip]', elDiscountEditorForm || document).forEach((chip) => {
+    chip.addEventListener('click', () => {
+      const mode = String(chip.getAttribute('data-discount-restriction-chip') || '').trim();
+      const toggle = mode === 'period'
+        ? elDePeriodEnabled
+        : mode === 'weekdays'
+          ? elDeWeekdaysEnabled
+          : mode === 'time'
+            ? elDeTimeEnabled
+            : null;
+      if (!toggle) return;
+      toggle.checked = !toggle.checked;
+      toggle.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+  });
+
+  if (elDePeriodTrigger) {
+    elDePeriodTrigger.addEventListener('click', () => {
+      if (elDePeriodPopover?.classList.contains('hidden')) {
+        openDiscountPeriodPopover();
+      } else {
+        discardIncompleteDiscountPeriodSelection();
+        closeDiscountPeriodPopover();
+      }
+    });
+  }
+
+  if (elDePeriodGrid) {
+    elDePeriodGrid.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const btn = e.target.closest('[data-discount-period-date]');
+      if (!btn) return;
+      handleDiscountPeriodDateSelection(String(btn.getAttribute('data-discount-period-date') || ''));
+    });
+  }
+
+  if (elDePeriodPopover) {
+    elDePeriodPopover.addEventListener('click', (e) => {
+      e.stopPropagation();
+    });
+  }
+
+  if (elDePeriodPrev) {
+    elDePeriodPrev.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      ensureDiscountPeriodView();
+      state.discountPeriod.viewMonth -= 1;
+      if (state.discountPeriod.viewMonth < 0) {
+        state.discountPeriod.viewMonth = 11;
+        state.discountPeriod.viewYear -= 1;
+      }
+      renderDiscountPeriodCalendar();
+    });
+  }
+
+  if (elDePeriodNext) {
+    elDePeriodNext.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      ensureDiscountPeriodView();
+      state.discountPeriod.viewMonth += 1;
+      if (state.discountPeriod.viewMonth > 11) {
+        state.discountPeriod.viewMonth = 0;
+        state.discountPeriod.viewYear += 1;
+      }
+      renderDiscountPeriodCalendar();
+    });
+  }
+
+  if (elDePeriodReset) {
+    elDePeriodReset.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      resetDiscountPeriodState();
+    });
+  }
+
+  if (elDeSlotPickerTypes) {
+    elDeSlotPickerTypes.addEventListener('click', (e) => {
+      const button = e.target.closest('[data-slot-picker-choice]');
+      if (!button) return;
+      const choice = String(button.getAttribute('data-slot-picker-choice') || '').trim();
+      const target = String(state.discountSlotPickerContext?.target || '').trim();
+      if (target === 'buy_condition') {
+        applyDiscountBuyConditionSlotChoice(choice);
+        return;
+      }
+      if (target === 'buy_reward') {
+        applyDiscountBuyRewardSlotChoice(choice);
+        return;
+      }
+      if (target === 'progress_scope') {
+        applyDiscountProgressScopeSlotChoice(choice);
+        return;
+      }
+      if (target === 'progress_reward') {
+        applyDiscountProgressRewardSlotChoice(choice);
+      }
+    });
+  }
+
+  document.addEventListener('click', (e) => {
+    if (
+      activeDiscountHelpPopover &&
+      !activeDiscountHelpPopover.classList.contains('hidden') &&
+      !e.target.closest('.discount-help-popover') &&
+      !e.target.closest('[data-discount-help-trigger]')
+    ) {
+      closeDiscountHelpPopover();
+    }
+    if (!elDePeriodPopover || elDePeriodPopover.classList.contains('hidden')) return;
+    if (e.target.closest('#de_period_popover') || e.target.closest('#de_period_trigger')) return;
+    discardIncompleteDiscountPeriodSelection();
+    closeDiscountPeriodPopover();
+  });
+
+  window.addEventListener('resize', () => {
+    if (activeDiscountHelpPopover && !activeDiscountHelpPopover.classList.contains('hidden')) {
+      positionDiscountHelpPopover();
+    }
+    if (!elDePeriodPopover || elDePeriodPopover.classList.contains('hidden')) return;
+    positionDiscountPeriodPopover();
+  });
+
+  document.addEventListener('scroll', () => {
+    if (activeDiscountHelpPopover && !activeDiscountHelpPopover.classList.contains('hidden')) {
+      positionDiscountHelpPopover();
+    }
+    if (!elDePeriodPopover || elDePeriodPopover.classList.contains('hidden')) return;
+    positionDiscountPeriodPopover();
+  }, true);
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      closeDiscountHelpPopover();
+    }
+  });
+
   if (elDiscountEditorForm) {
+    elDiscountEditorForm.addEventListener('click', (e) => {
+      const helpTrigger = e.target.closest('[data-discount-help-trigger]');
+      if (!helpTrigger) return;
+      e.preventDefault();
+      e.stopPropagation();
+      openDiscountHelpPopover(helpTrigger);
+    });
+
     elDiscountEditorForm.addEventListener('click', (e) => {
       const btn = e.target.closest('[data-discount-choice-value]');
       if (!btn) return;
@@ -7823,7 +13218,34 @@
       const tierProductsBtn = e.target.closest('[data-threshold-tier-products]');
       if (tierProductsBtn) {
         const tierId = String(tierProductsBtn.getAttribute('data-threshold-tier-products') || '');
-        openDiscountProductPicker(`threshold:${tierId}`);
+        openDiscountProductPicker(`threshold:${tierId}`, 'product');
+      }
+    });
+
+    elDiscountEditorForm.addEventListener('input', (e) => {
+      const amountInput = e.target?.closest?.('[data-discount-amount-slot-input="progress_threshold"]');
+      if (!amountInput || !elDeProgressThresholdValue) return;
+      elDeProgressThresholdValue.value = amountInput.value;
+    });
+
+    elDiscountEditorForm.addEventListener('change', (e) => {
+      const amountInput = e.target?.closest?.('[data-discount-amount-slot-input="progress_threshold"]');
+      if (!amountInput || !elDeProgressThresholdValue) return;
+      const nextValue = parseFloat(amountInput.value);
+      const safeValue = Number.isFinite(nextValue) && nextValue > 0
+        ? String(Math.round(nextValue))
+        : '';
+      amountInput.value = safeValue;
+      elDeProgressThresholdValue.value = safeValue;
+    });
+
+    elDiscountEditorForm.addEventListener('click', (e) => {
+      const amountInput = e.target?.closest?.('[data-discount-amount-slot-input="progress_threshold"]');
+      if (!amountInput) return;
+      if (typeof e.stopImmediatePropagation === 'function') {
+        e.stopImmediatePropagation();
+      } else {
+        e.stopPropagation();
       }
     });
 
@@ -7834,6 +13256,8 @@
       state.discountThresholdTiers = (state.discountThresholdTiers || []).map((tier) => {
         if (String(tier.id) !== String(tierId)) return tier;
         if (field === 'min_amount') return { ...tier, min_amount: e.target.value };
+        if (field === 'buy_qty') return { ...tier, buy_qty: e.target.value };
+        if (field === 'reward_qty') return { ...tier, reward_qty: e.target.value };
         if (field === 'discount_value') {
           return {
             ...tier,
@@ -7842,6 +13266,9 @@
         }
         return tier;
       });
+      if (field === 'buy_qty' || field === 'reward_qty') {
+        renderThresholdTierCountsVisualization(tierId);
+      }
     });
 
     elDiscountEditorForm.addEventListener('change', (e) => {
@@ -7880,24 +13307,88 @@
   }
 
   if (elDeAddProductsBtn) {
-    elDeAddProductsBtn.addEventListener('click', openDiscountProductPicker);
+    elDeAddProductsBtn.addEventListener('click', (e) => {
+      const clickedAddIcon = e.target.closest('.discount-audience-add-btn-icon');
+      if (!state.discountSelectedProducts.length || clickedAddIcon) {
+        openDiscountProductPicker('discount_products', getDiscountSimpleSelectionEntityType());
+        return;
+      }
+      state.discountProductsAccordionExpanded = !state.discountProductsAccordionExpanded;
+      renderDiscountProductChips();
+    });
   }
 
   if (elDeAddPromoProductsBtn) {
-    elDeAddPromoProductsBtn.addEventListener('click', openDiscountProductPicker);
+    elDeAddPromoProductsBtn.addEventListener('click', (e) => {
+      const clickedAddIcon = e.target.closest('.discount-audience-add-btn-icon');
+      if (!state.discountSelectedProducts.length || clickedAddIcon) {
+        openDiscountProductPicker('discount_products', getDiscountPromoSelectionEntityType());
+        return;
+      }
+      state.discountProductsAccordionExpanded = !state.discountProductsAccordionExpanded;
+      renderDiscountProductChips();
+    });
   }
 
   if (elDeAddBuyConditionProductsBtn) {
-    elDeAddBuyConditionProductsBtn.addEventListener('click', () => openDiscountProductPicker('buy_condition'));
+    elDeAddBuyConditionProductsBtn.addEventListener('click', () => {
+      openDiscountProductPicker('buy_condition', getDiscountBuyConditionEntityType());
+    });
   }
 
   if (elDeAddBuyRewardProductsBtn) {
-    elDeAddBuyRewardProductsBtn.addEventListener('click', () => openDiscountProductPicker('buy_reward'));
+    elDeAddBuyRewardProductsBtn.addEventListener('click', () => openDiscountProductPicker('buy_reward', 'product'));
+  }
+
+  if (elDeAddProgressScopeItemsBtn) {
+    elDeAddProgressScopeItemsBtn.addEventListener('click', () => {
+      openDiscountProductPicker('progress_scope', getDiscountProgressScopeEntityType());
+    });
+  }
+
+  if (elDeAddProgressRewardGiftBtn) {
+    elDeAddProgressRewardGiftBtn.addEventListener('click', () => openDiscountProductPicker('progress_reward_gift', 'product'));
+  }
+
+  if (elDeAddProgressDiscountProductsBtn) {
+    elDeAddProgressDiscountProductsBtn.addEventListener('click', (e) => {
+      const clickedAddIcon = e.target.closest('.discount-audience-add-btn-icon');
+      if (!state.discountProgressDiscountProducts.length || clickedAddIcon) {
+        openDiscountProductPicker('progress_reward_discount', getDiscountProgressDiscountEntityType());
+        return;
+      }
+      state.discountProgressDiscountAccordionExpanded = !state.discountProgressDiscountAccordionExpanded;
+      renderDiscountProgressDiscountChips();
+    });
+  }
+
+  if (elDeProgressAttachPromoBtn) {
+    elDeProgressAttachPromoBtn.addEventListener('click', () => {
+      toggleDiscountProgressPromoSourcePicker().catch(console.error);
+    });
+  }
+
+  if (elDeProgressClearPromoBtn) {
+    elDeProgressClearPromoBtn.addEventListener('click', () => {
+      state.discountProgressPromoSource = null;
+      renderDiscountProgressPromoSource();
+    });
   }
 
   // Кнопка добавления клиентов в скидку
   if (elDeAddCustomersBtn) {
-    elDeAddCustomersBtn.addEventListener('click', openDiscountCustomerPicker);
+    elDeAddCustomersBtn.addEventListener('click', (e) => {
+      const mode = getDiscountAudienceMode();
+      if (mode === 'all') return;
+      const items = getDiscountAudienceItems(mode);
+      const clickedAddIcon = e.target.closest('.discount-audience-add-btn-icon');
+      if (!items.length || clickedAddIcon) {
+        openDiscountCustomerPicker();
+        return;
+      }
+      state.discountAudienceAccordionExpanded = !state.discountAudienceAccordionExpanded;
+      renderDiscountCustomerChips();
+    });
   }
 
   if (elDeAddThresholdTierBtn) {
@@ -7931,6 +13422,208 @@
     });
   }
 
+  if (elDeProgressScopeItemsChips) {
+    elDeProgressScopeItemsChips.addEventListener('click', (e) => {
+      if (!e.target.closest('.discount-chip-remove')) return;
+      const chip = e.target.closest('.discount-chip');
+      if (!chip) return;
+      const id = Number(chip.getAttribute('data-id') || 0);
+      const type = String(chip.getAttribute('data-type') || 'product');
+      state.discountProgressQualifyingItems = state.discountProgressQualifyingItems.filter((item) => !(item.id === id && item.type === type));
+      renderDiscountProgressScopeChips();
+    });
+  }
+
+  if (elDeProgressRewardGiftChips) {
+    elDeProgressRewardGiftChips.addEventListener('click', (e) => {
+      if (!e.target.closest('.discount-chip-remove')) return;
+      const chip = e.target.closest('.discount-chip');
+      if (!chip) return;
+      const id = Number(chip.getAttribute('data-id') || 0);
+      const type = String(chip.getAttribute('data-type') || 'product');
+      state.discountProgressGiftProducts = state.discountProgressGiftProducts.filter((item) => !(item.id === id && item.type === type));
+      renderDiscountProgressRewardGiftChips();
+    });
+  }
+
+  if (elDeProgressDiscountProductsChips) {
+    elDeProgressDiscountProductsChips.addEventListener('click', (e) => {
+      const openPickerBtn = e.target.closest('[data-discount-entity-action="progress_discount_products"]');
+      if (openPickerBtn) {
+        openDiscountProductPicker('progress_reward_discount', getDiscountProgressDiscountEntityType());
+        return;
+      }
+      if (!e.target.closest('.discount-chip-remove')) return;
+      const chip = e.target.closest('.discount-chip');
+      if (!chip) return;
+      const id = Number(chip.getAttribute('data-id') || 0);
+      const type = String(chip.getAttribute('data-type') || 'product');
+      state.discountProgressDiscountProducts = state.discountProgressDiscountProducts.filter((item) => !(item.id === id && item.type === type));
+      if (!state.discountProgressDiscountProducts.length) {
+        state.discountProgressDiscountAccordionExpanded = false;
+      }
+      renderDiscountProgressDiscountChips();
+    });
+  }
+
+  if (elDeProgressPromoSourceList) {
+    elDeProgressPromoSourceList.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-progress-promo-source-id]');
+      if (!btn) return;
+      const sourceId = Number(btn.getAttribute('data-progress-promo-source-id') || 0);
+      const source = (state.discountSharedPromoSources || []).find((item) => Number(item?.source_promo_code_id || 0) === sourceId) || null;
+      state.discountProgressPromoSource = cloneDiscountPromoSource(source);
+      renderDiscountProgressPromoSource();
+      if (elDeProgressPromoSourcePicker) {
+        elDeProgressPromoSourcePicker.classList.add('hidden');
+        elDeProgressPromoSourcePicker.hidden = true;
+      }
+    });
+  }
+
+  if (elDeThresholdRewardPickerTypes) {
+    elDeThresholdRewardPickerTypes.addEventListener('click', (e) => {
+      const button = e.target.closest('[data-threshold-reward-kind-choice]');
+      if (!button) return;
+      const tierId = state.discountThresholdRewardPickerTierId;
+      if (!tierId) return;
+      const nextKind = String(button.getAttribute('data-threshold-reward-kind-choice') || '').trim();
+      if (!['product', 'product_list', 'discount_ref', 'promo_code_ref'].includes(nextKind)) return;
+      if (nextKind === 'product' || nextKind === 'product_list') {
+        updateThresholdTier(tierId, (tier) => ({
+          ...tier,
+          reward_kind: nextKind,
+          reward_products: nextKind === 'product'
+            ? cloneDiscountEntities(tier.reward_products || []).slice(0, 1)
+            : cloneDiscountEntities(tier.reward_products || []),
+          reward_discount_source: null,
+          reward_promo_source: null,
+        }));
+        closeDiscountThresholdRewardPicker();
+        renderThresholdTiers();
+        openDiscountProductPicker(`threshold:${tierId}`, 'product').catch(console.error);
+        return;
+      }
+      if (nextKind === 'discount_ref') {
+        updateThresholdTier(tierId, (tier) => ({
+          ...tier,
+          reward_kind: 'discount_ref',
+          reward_products: [],
+          reward_promo_source: null,
+          reward_discount_source: cloneDiscountSimpleSource(tier.reward_discount_source),
+        }));
+        loadDiscountSimpleSources().then(() => {
+          renderThresholdTiers();
+          renderDiscountThresholdRewardPicker();
+        }).catch(console.error);
+        return;
+      }
+      updateThresholdTier(tierId, (tier) => ({
+        ...tier,
+        reward_kind: 'promo_code_ref',
+        reward_products: [],
+        reward_discount_source: null,
+        reward_promo_source: cloneDiscountPromoSource(tier.reward_promo_source),
+      }));
+      loadDiscountSharedPromoSources().then(() => {
+        renderThresholdTiers();
+        renderDiscountThresholdRewardPicker();
+      }).catch(console.error);
+    });
+  }
+
+  if (elDeThresholdRewardPickerList) {
+    elDeThresholdRewardPickerList.addEventListener('click', (e) => {
+      const tierId = state.discountThresholdRewardPickerTierId;
+      if (!tierId) return;
+      const discountBtn = e.target.closest('[data-threshold-discount-source-id]');
+      if (discountBtn) {
+        const discountId = Number(discountBtn.getAttribute('data-threshold-discount-source-id') || 0);
+        const source = (state.discountSimpleDiscountSources || []).find((item) => Number(item?.discount_id || 0) === discountId) || null;
+        updateThresholdTier(tierId, (tier) => ({
+          ...tier,
+          reward_kind: 'discount_ref',
+          reward_products: [],
+          reward_promo_source: null,
+          reward_discount_source: cloneDiscountSimpleSource(source),
+        }));
+        closeDiscountThresholdRewardPicker();
+        renderThresholdTiers();
+        return;
+      }
+      const promoBtn = e.target.closest('[data-threshold-promo-source-id]');
+      if (!promoBtn) return;
+      const promoCodeId = Number(promoBtn.getAttribute('data-threshold-promo-source-id') || 0);
+      const source = (state.discountSharedPromoSources || []).find((item) => Number(item?.source_promo_code_id || 0) === promoCodeId) || null;
+      updateThresholdTier(tierId, (tier) => ({
+        ...tier,
+        reward_kind: 'promo_code_ref',
+        reward_products: [],
+        reward_discount_source: null,
+        reward_promo_source: cloneDiscountPromoSource(source),
+      }));
+      closeDiscountThresholdRewardPicker();
+      renderThresholdTiers();
+    });
+  }
+
+  document.addEventListener('click', (e) => {
+    if (!state.discountThresholdRewardPickerTierId || !elDeThresholdRewardPicker) return;
+    const withinPicker = !!e.target.closest('#de_threshold_reward_picker');
+    const withinSlot = !!e.target.closest('[data-discount-visual-target^="threshold:"]');
+    if (!withinPicker && !withinSlot) {
+      closeDiscountThresholdRewardPicker();
+    }
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!state.discountSlotPickerContext || !elDeSlotPicker) return;
+    const withinPicker = !!e.target.closest('#de_slot_picker');
+    const withinBuySlot = !!e.target.closest('[data-buy-slot-target="buy_condition"], [data-buy-slot-target="buy_reward"]');
+    const withinProgressSlot = !!e.target.closest('[data-discount-visual-target="progress_scope"], [data-discount-visual-target="progress_reward"]');
+    if (!withinPicker && !withinBuySlot && !withinProgressSlot) {
+      closeDiscountSlotPicker();
+    }
+  });
+
+  if (elDeBuyVisualRows) {
+    elDeBuyVisualRows.addEventListener('click', (e) => {
+      const slot = e.target.closest('[data-buy-slot-target]');
+      if (!slot) return;
+      const target = String(slot.getAttribute('data-buy-slot-target') || '').trim();
+      if (target === 'buy_condition') {
+        openDiscountSlotPicker('buy_condition', slot);
+        return;
+      }
+      if (target === 'buy_reward') {
+        openDiscountSlotPicker('buy_reward', slot);
+      }
+    });
+  }
+
+  if (elDiscountEditorForm) {
+    elDiscountEditorForm.addEventListener('click', (e) => {
+      const slot = e.target.closest('[data-discount-visual-target]');
+      if (!slot) return;
+      const target = String(slot.getAttribute('data-discount-visual-target') || '').trim();
+      if (!target) return;
+      if (target.startsWith('threshold:')) {
+        const tierId = target.split(':')[1] || '';
+        openDiscountThresholdRewardPicker(tierId, slot);
+        return;
+      }
+      if (target === 'progress_scope') {
+        if (getDiscountProgressBasis() === 'orders') return;
+        openDiscountSlotPicker('progress_scope', slot);
+        return;
+      }
+      if (target === 'progress_reward') {
+        openDiscountSlotPicker('progress_reward', slot);
+        return;
+      }
+    });
+  }
+
   // Отмена picker
   if (elDiscountPickerCancelBtn) {
     elDiscountPickerCancelBtn.addEventListener('click', closeDiscountPicker);
@@ -7939,6 +13632,16 @@
   // Применить picker
   if (elDiscountPickerApplyBtn) {
     elDiscountPickerApplyBtn.addEventListener('click', applyDiscountPickerSelection);
+  }
+
+  if (elDiscountPickerConfigMode) {
+    elDiscountPickerConfigMode.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-mode]');
+      if (!btn) return;
+      const mode = normalizeDiscountProductConfigMode(btn.getAttribute('data-mode'));
+      setDiscountProductConfigModeForTarget(state.discountPickerTarget, mode);
+      syncDiscountPickerConfigModeUi();
+    });
   }
 
   // Поиск в picker товаров
@@ -7978,6 +13681,7 @@
           state.discountPickerSelection.delete(cb.dataset.key);
         }
       });
+      renderDiscountPickerList();
     });
   }
 
@@ -8022,15 +13726,84 @@
 
   // Делегирование событий для чекбоксов в picker товаров
   if (elDiscountPickerList) {
+    elDiscountPickerList.addEventListener('click', async (e) => {
+      const variantToggleBtn = e.target.closest('[data-action="discount-picker-variants-toggle"]');
+      if (variantToggleBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (variantToggleBtn.classList.contains('is-disabled')) return;
+        await toggleDiscountPickerProductVariants(variantToggleBtn.getAttribute('data-product-id'));
+        return;
+      }
+
+      const variantBtn = e.target.closest('[data-action="discount-picker-variant-select"]');
+      if (variantBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        const productId = Number(variantBtn.getAttribute('data-product-id') || 0);
+        const groupId = Number(variantBtn.getAttribute('data-group-id') || 0);
+        const variantIndex = Number(variantBtn.getAttribute('data-variant-index') || 0);
+        if (!Number.isFinite(productId) || !Number.isFinite(groupId) || !Number.isFinite(variantIndex)) return;
+        const current = { ...(state.discountPickerVariantSelections.get(productId) || {}) };
+        current[groupId] = variantIndex;
+        state.discountPickerVariantSelections.set(productId, current);
+        renderDiscountPickerList();
+        return;
+      }
+
+      const ingredientBtn = e.target.closest('[data-action="discount-picker-ingredient-minus"], [data-action="discount-picker-ingredient-plus"]');
+      if (ingredientBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        const productId = Number(ingredientBtn.getAttribute('data-product-id') || 0);
+        const ingredientId = Number(ingredientBtn.getAttribute('data-ingredient-id') || 0);
+        const stepRaw = Number(ingredientBtn.getAttribute('data-step') || 1);
+        if (!Number.isFinite(productId) || productId <= 0 || !Number.isFinite(ingredientId) || ingredientId <= 0) return;
+        const ingredientRows = getDiscountPickerProductIngredients(productId);
+        const row = ingredientRows.find((item) => Number(item?.ingredient_id || 0) === ingredientId);
+        if (!row) return;
+        const current = { ...(state.discountPickerIngredientSelections.get(productId) || {}) };
+        const defaultQty = Number(row?.quantity ?? 0);
+        const currentQty = Number(current[ingredientId] ?? defaultQty);
+        const rawMin = row?.quantity_min != null && Number.isFinite(Number(row.quantity_min)) ? Number(row.quantity_min) : null;
+        const minQty = rawMin !== null ? Math.max(0, rawMin) : 0;
+        const rawMax = row?.quantity_max != null && Number.isFinite(Number(row.quantity_max)) ? Number(row.quantity_max) : null;
+        const maxQty = rawMax != null ? rawMax : Infinity;
+        const step = Math.max(0.0001, Math.abs(stepRaw) || Number(row?.quantity_step ?? 1) || 1);
+        let nextQty = currentQty + (ingredientBtn.getAttribute('data-action') === 'discount-picker-ingredient-plus' ? step : -step);
+        if (step > 0) {
+          const stepsFromMin = Math.round((nextQty - minQty) / step);
+          nextQty = minQty + (stepsFromMin * step);
+        }
+        if (rawMax != null) {
+          nextQty = Math.min(maxQty, nextQty);
+        }
+        nextQty = Math.max(minQty, nextQty);
+        nextQty = Math.round(nextQty * 1000) / 1000;
+        if (!Number.isFinite(nextQty)) return;
+        current[ingredientId] = nextQty;
+        state.discountPickerIngredientSelections.set(productId, current);
+        renderDiscountPickerList();
+        return;
+      }
+
+      if (e.target.closest('.option-picker-product-checkbox')) return;
+      if (e.target.closest('.option-picker-product-variants')) return;
+      if (e.target.closest('.option-picker-product-ingredients')) return;
+
+      const productCard = e.target.closest('.option-picker-product-card[data-key]');
+      if (!productCard) return;
+      const key = String(productCard.getAttribute('data-key') || '').trim();
+      if (!key) return;
+      toggleDiscountPickerSelectionByKey(key);
+      renderDiscountPickerList();
+    });
+
     elDiscountPickerList.addEventListener('change', (e) => {
       if (e.target.type !== 'checkbox') return;
       const key = e.target.dataset.key;
-      if (e.target.checked) {
-        state.discountPickerSelection.add(key);
-      } else {
-        state.discountPickerSelection.delete(key);
-      }
-      updatePickerSelectAll();
+      toggleDiscountPickerSelectionByKey(key, e.target.checked);
+      renderDiscountPickerList();
     });
   }
 
@@ -8051,6 +13824,11 @@
   // Делегирование событий для удаления чипов товаров
   if (elDeProductsChips) {
     elDeProductsChips.addEventListener('click', (e) => {
+      const openPickerBtn = e.target.closest('[data-discount-entity-action="simple_products"]');
+      if (openPickerBtn) {
+        openDiscountProductPicker('discount_products', getDiscountSimpleSelectionEntityType());
+        return;
+      }
       const removeBtn = e.target.closest('.discount-chip-remove');
       if (!removeBtn) return;
       const chip = removeBtn.closest('.discount-chip');
@@ -8063,6 +13841,11 @@
 
   if (elDePromoProductsChips) {
     elDePromoProductsChips.addEventListener('click', (e) => {
+      const openPickerBtn = e.target.closest('[data-discount-entity-action="promo_products"]');
+      if (openPickerBtn) {
+        openDiscountProductPicker('discount_products', getDiscountPromoSelectionEntityType());
+        return;
+      }
       const removeBtn = e.target.closest('.discount-chip-remove');
       if (!removeBtn) return;
       const chip = removeBtn.closest('.discount-chip');
@@ -8076,6 +13859,11 @@
   // Делегирование событий для удаления чипов клиентов
   if (elDeCustomersChips) {
     elDeCustomersChips.addEventListener('click', (e) => {
+      const openPickerBtn = e.target.closest('[data-audience-action="open-picker"]');
+      if (openPickerBtn) {
+        openDiscountCustomerPicker();
+        return;
+      }
       const removeBtn = e.target.closest('.discount-chip-remove');
       if (!removeBtn) return;
       const chip = removeBtn.closest('.discount-chip');
@@ -8086,11 +13874,509 @@
     });
   }
 
+  if (elDeMechanicChoiceScroller) {
+    bindHorizontalWheelScroll(elDeMechanicChoiceScroller);
+  }
+
+  function formatDiscountSaveErrorMessage(err) {
+    const code = String(err?.message || '').trim();
+    if (code === 'TITLE_REQUIRED') return 'Введите название акции.';
+    if (code === 'INVALID_CUSTOMERS') return 'Проверьте выбранных клиентов и клиентские категории.';
+    if (code === 'INVALID_PRODUCTS') return 'Проверьте выбранные товары, категории или комбо.';
+    if (code === 'INVALID_DATE_RANGE') return 'Дата окончания не может быть раньше даты начала.';
+    if (code === 'PERIOD_BOUNDS_REQUIRED') return 'Для ограничения по периоду укажите дату начала и дату окончания.';
+    if (code === 'WEEKDAYS_REQUIRED') return 'Для ограничения по дням недели выберите хотя бы один день.';
+    if (code === 'TIME_BOUNDS_REQUIRED') return 'Для ограничения по времени укажите и начало, и окончание.';
+    if (code === 'INVALID_TIME_RANGE') return 'Время окончания должно быть позже времени начала.';
+    if (code === 'PRODUCTS_REQUIRED') return 'Добавьте товары, категории или комбо для выбранной механики.';
+    if (code === 'PRODUCTS_NOT_ALLOWED') return 'Для этой механики список товаров заполнять не нужно.';
+    if (code === 'PROMO_NOT_AVAILABLE') return 'Промокод доступен только для простой скидки с механикой "Промокод".';
+    if (code === 'PROMO_CODE_REQUIRED') return 'Введите общий промокод.';
+    if (code === 'PROMO_CODE_TAKEN') return 'Такой промокод уже существует.';
+    if (code === 'PROMO_REWARD_PRODUCTS_REQUIRED') return 'Добавьте товары для награды по промокоду.';
+    if (code === 'INVALID_DISCOUNT_VALUE') return 'Укажите корректное значение скидки.';
+    if (code === 'SPECIAL_PRICE_PRODUCT_ONLY') return 'Спеццена доступна только для товара.';
+    if (code === 'INVALID_MECHANIC_CONFIG') return 'Проверьте настройки механики акции.';
+    if (code === 'QUALIFYING_ITEMS_REQUIRED') return 'Добавьте товары для условия акции 1+1.';
+    if (code === 'INVALID_QUALIFYING_ITEMS') return 'Для условия 1+1 выберите либо товары, либо категории.';
+    if (code === 'REWARD_PRODUCTS_REQUIRED') return 'Добавьте товары-награды.';
+    if (code === 'INVALID_REWARD_DISCOUNT') return 'Проверьте размер скидки для награды.';
+    if (code === 'THRESHOLD_TIERS_REQUIRED') return 'Добавьте хотя бы один порог для пороговой акции.';
+    if (code === 'INVALID_THRESHOLD_TIER') return 'Заполните все обязательные поля в порогах акции.';
+    if (code === 'THRESHOLD_DISCOUNT_SOURCE_REQUIRED') return 'Для порога со скидкой выберите источник скидки.';
+    if (code === 'THRESHOLD_PROMO_SOURCE_REQUIRED') return 'Для порога с промокодом выберите общий промокод.';
+    if (code === 'INVALID_THRESHOLD_DISCOUNT_SOURCE') return 'В этом пороге выбрана недоступная скидка.';
+    if (code === 'INVALID_THRESHOLD_PROMO_SOURCE') return 'В этом пороге выбран недоступный промокод.';
+    if (code === 'INVALID_PROGRESS_THRESHOLD') return 'Укажите корректный порог накопительной акции.';
+    if (code === 'LOYALTY_QUALIFYING_ITEMS_REQUIRED') return 'Добавьте товары или категории для накопления.';
+    if (code === 'INVALID_PROGRESS_SCOPE_ITEMS') return 'Проверьте область накопления и выбранные товары или категории.';
+    if (code === 'LOYALTY_REWARD_PRODUCTS_REQUIRED') return 'Добавьте товары для награды накопительной акции.';
+    if (code === 'LOYALTY_PROMO_SOURCE_REQUIRED') return 'Прикрепите общий промокод для награды.';
+    if (code === 'INVALID_ISSUE_MODE') return 'Проверьте режим выдачи награды.';
+    return code ? `Ошибка сохранения: ${code}` : 'Не удалось сохранить акцию.';
+  }
+
+  function openDiscountThresholdRewardPicker(tierId, triggerEl) {
+    if (!elDeThresholdRewardPicker || !triggerEl) return;
+    const nextTierId = String(tierId || '').trim() || null;
+    state.discountThresholdRewardPickerTierId = nextTierId;
+    renderDiscountThresholdRewardPicker();
+    elDeThresholdRewardPicker.classList.remove('hidden');
+    elDeThresholdRewardPicker.hidden = false;
+
+    const triggerRect = triggerEl.getBoundingClientRect();
+    const pickerRect = elDeThresholdRewardPicker.getBoundingClientRect();
+    const margin = 12;
+    const maxLeft = Math.max(margin, window.innerWidth - pickerRect.width - margin);
+    const left = Math.max(margin, Math.min(triggerRect.left, maxLeft));
+    let top = triggerRect.bottom + 10;
+    if (top + pickerRect.height > window.innerHeight - margin) {
+      top = Math.max(margin, triggerRect.top - pickerRect.height - 10);
+    }
+    elDeThresholdRewardPicker.style.left = `${Math.round(left)}px`;
+    elDeThresholdRewardPicker.style.top = `${Math.round(top)}px`;
+
+    const tier = getThresholdTierById(nextTierId);
+    const activeKind = normalizeThresholdTierRewardKindUi(tier);
+    if (activeKind === 'discount_ref' && !state.discountSimpleDiscountSourcesLoaded) {
+      loadDiscountSimpleSources().then(() => {
+        if (state.discountThresholdRewardPickerTierId === nextTierId) {
+          renderDiscountThresholdRewardPicker();
+        }
+      }).catch(console.error);
+      return;
+    }
+    if (activeKind === 'promo_code_ref' && !state.discountSharedPromoSourcesLoaded) {
+      loadDiscountSharedPromoSources().then(() => {
+        if (state.discountThresholdRewardPickerTierId === nextTierId) {
+          renderDiscountThresholdRewardPicker();
+        }
+      }).catch(console.error);
+    }
+  }
+
+  async function saveDiscount() {
+    if (!elDiscountEditorForm) return;
+
+    const id = $('#de_id').value;
+    const isNew = !id || id === 'new';
+    const scheduleDays = [];
+    if (elDeWeekdaysEnabled?.checked) {
+      $$('#de_schedule_days input[type="checkbox"]:checked').forEach((cb) => {
+        scheduleDays.push(parseInt(cb.value, 10));
+      });
+    }
+
+    const mechanicType = elDeMechanicType?.value || 'simple_discount';
+    const simpleVariant = normalizeSimpleVariant(elDeSimpleVariant?.value || 'percent');
+    const promoEnabled = mechanicType === 'simple_discount' && simpleVariant === 'promo_code';
+    const promoCodeMode = promoEnabled ? (elDePromoCodeMode?.value || 'shared') : null;
+    const promoGenerateCount = promoEnabled && promoCodeMode === 'unique'
+      ? getDiscountPromoGenerateCount()
+      : null;
+    const sharedCode = promoEnabled ? normalizePromoCodeInputValue(elDePromoSharedCode?.value) : '';
+    const sharedCodeUsageLimit = promoEnabled && promoCodeMode === 'shared'
+      ? (parseInt(elDePromoSharedUsageLimit?.value, 10) || null)
+      : null;
+    const uniqueCodeUsageLimit = promoEnabled && promoCodeMode === 'unique'
+      ? Math.max(1, parseInt(elDePromoUniqueUsageLimit?.value, 10) || 1)
+      : null;
+    const audienceMode = getDiscountAudienceMode();
+    const audienceCustomers = audienceMode === 'all'
+      ? []
+      : (state.discountSelectedCustomers || [])
+          .filter((item) => (
+            audienceMode === 'category'
+              ? String(item?.type || '').trim() === 'category'
+              : String(item?.type || '').trim() !== 'category'
+          ))
+          .map((item) => ({
+            entity_type: item.type,
+            entity_id: item.id,
+          }));
+
+    const data = {
+      title: $('#de_title').value.trim(),
+      description: elDeDescription?.value.trim() || null,
+      mechanic_type: mechanicType,
+      min_order_amount: parseFloat($('#de_min_order_amount').value) || null,
+      max_discount_amount: parseFloat($('#de_max_discount_amount').value) || null,
+      starts_at: elDePeriodEnabled?.checked ? ($('#de_starts_at').value || null) : null,
+      ends_at: elDePeriodEnabled?.checked ? ($('#de_ends_at').value || null) : null,
+      schedule_days: elDeWeekdaysEnabled?.checked ? (scheduleDays.length ? scheduleDays : []) : null,
+      schedule_time_start: elDeTimeEnabled?.checked ? ($('#de_schedule_time_start').value || null) : null,
+      schedule_time_end: elDeTimeEnabled?.checked ? ($('#de_schedule_time_end').value || null) : null,
+      usage_limit: parseInt($('#de_usage_limit').value, 10) || null,
+      usage_per_customer: parseInt($('#de_usage_per_customer').value, 10) || null,
+      priority: parseInt(elDePriority?.value || '0', 10) || 0,
+      is_stackable: $('#de_is_stackable').checked,
+      is_active: $('#de_is_active').checked,
+      hide_in_benefits: !!elDeHideInBenefits?.checked,
+      promo: promoEnabled
+        ? {
+            enabled: true,
+            code_mode: promoCodeMode,
+            shared_code: sharedCode,
+            shared_code_usage_limit: sharedCodeUsageLimit,
+            unique_code_usage_limit: uniqueCodeUsageLimit,
+          }
+        : { enabled: false },
+      customers: audienceCustomers,
+      products: [],
+      mechanic: {},
+    };
+
+    if (!data.title) {
+      alert('Введите название скидки');
+      return;
+    }
+
+    if (promoEnabled && promoCodeMode === 'unique' && Number.isNaN(promoGenerateCount)) {
+      alert('Введите корректное количество кодов');
+      return;
+    }
+
+    if (mechanicType === 'simple_discount') {
+      const selectedProducts = await buildDiscountEntityTargetPayloadList(
+        state.discountSelectedProducts,
+        getDiscountProductConfigModeForTarget('discount_products')
+      );
+
+      if (promoEnabled) {
+        const promoRewardType = normalizePromoRewardUiType(elDePromoRewardType?.value || 'discount');
+        const promoDiscountType = normalizePromoDiscountType(elDePromoDiscountType?.value || 'percent');
+        const promoDiscountValue = parseFloat(elDePromoDiscountValue?.value) || 0;
+        const promoApplyTo = promoRewardType === 'discount'
+          ? normalizePromoApplyTo(elDePromoApplyTo?.value || 'order')
+          : 'product';
+
+        if (promoCodeMode === 'shared' && !sharedCode) {
+          alert('Введите промокод');
+          return;
+        }
+        if (promoRewardType === 'discount' && !(promoDiscountValue > 0)) {
+          alert('Введите корректное значение скидки по промокоду');
+          return;
+        }
+        if (promoRewardType === 'discount' && promoApplyTo !== 'order' && !selectedProducts.length) {
+          alert('Добавьте товары, категории или комбо для награды по промокоду');
+          return;
+        }
+        if (promoRewardType === 'gift' && !selectedProducts.length) {
+          alert('Добавьте товары для награды по промокоду');
+          return;
+        }
+        if (false) {
+          alert('Введите корректное значение скидки для товара по промокоду');
+          return;
+        }
+
+        data.discount_type = promoDiscountType;
+        data.discount_value = promoRewardType === 'gift' ? 0 : promoDiscountValue;
+        data.apply_to = promoApplyTo;
+        data.products = promoRewardType === 'discount' && promoApplyTo === 'order' ? [] : selectedProducts;
+        data.mechanic = {
+          simple_variant: 'promo_code',
+          products_config_mode: getDiscountProductConfigModeForTarget('discount_products'),
+          promo_reward: {
+            reward_type: promoRewardType === 'gift' ? 'product' : 'discount',
+            product_reward_type: 'gift',
+            reward_kind: promoRewardType === 'gift' ? 'gift' : 'discount',
+            discount_type: promoDiscountType,
+            discount_value: promoRewardType === 'gift' ? null : promoDiscountValue,
+            apply_to: promoApplyTo,
+          },
+        };
+      } else {
+        const discountType = simpleVariant === 'fixed'
+          ? 'fixed'
+          : (simpleVariant === 'special_price' ? 'special_price' : 'percent');
+        const discountValue = parseFloat($('#de_discount_value').value) || 0;
+        const applyTo = $('#de_apply_to').value;
+
+        if (!(discountValue > 0)) {
+          alert('Введите корректное значение скидки');
+          return;
+        }
+        if (applyTo !== 'order' && !selectedProducts.length) {
+          alert('Добавьте товары, категории или комбо для скидки');
+          return;
+        }
+
+        data.discount_type = discountType;
+        data.discount_value = discountValue;
+        data.apply_to = applyTo;
+        data.products = applyTo === 'order' ? [] : selectedProducts;
+        data.mechanic = {
+          simple_variant: discountType,
+          products_config_mode: getDiscountProductConfigModeForTarget('discount_products'),
+          discount_type: discountType,
+          discount_value: discountValue,
+          apply_to: applyTo,
+        };
+      }
+    } else if (mechanicType === 'buy_x_get_y') {
+      const buyQty = Math.max(1, parseInt(elDeBuyQty?.value, 10) || 0);
+      const rewardQty = Math.max(1, parseInt(elDeRewardQty?.value, 10) || 0);
+      const conditionUiMode = getDiscountBuyConditionUiMode();
+      const rewardSource = elDeBuyRewardSource?.value || 'same_pool';
+      const rewardKind = elDeBuyRewardKind?.value || 'gift';
+      const rewardDiscountValue = parseFloat(elDeBuyRewardDiscountValue?.value) || 0;
+      const qualifyingItems = await buildDiscountEntityTargetPayloadList(
+        getDiscountBuyConditionSelection(),
+        getDiscountProductConfigModeForTarget('buy_condition')
+      );
+      const rewardProducts = await buildDiscountEntityTargetPayloadList(
+        getDiscountBuyRewardSelection(),
+        getDiscountProductConfigModeForTarget('buy_reward')
+      );
+
+      if (conditionUiMode === 'product' && qualifyingItems.length !== 1) {
+        alert('Выберите один товар для условия акции');
+        return;
+      }
+      if (conditionUiMode === 'product_list' && !qualifyingItems.length) {
+        alert('Добавьте товары для условия акции');
+        return;
+      }
+      if (conditionUiMode === 'category' && !qualifyingItems.length) {
+        alert('Добавьте категории для условия акции');
+        return;
+      }
+      if (rewardSource === 'reward_list' && !rewardProducts.length) {
+        alert('Добавьте товары-награды');
+        return;
+      }
+      if (rewardKind === 'product_discount' && !(rewardDiscountValue > 0)) {
+        alert('Введите корректную скидку для товара-награды');
+        return;
+      }
+
+      data.mechanic = {
+        buy_qty: buyQty,
+        reward_qty: rewardQty,
+        qualifying_mode: 'pool',
+        repeat_mode: elDeBuyRepeatMode?.value || 'single',
+        reward_source: rewardSource,
+        reward_kind: rewardKind,
+        qualifying_items_config_mode: getDiscountProductConfigModeForTarget('buy_condition'),
+        reward_products_config_mode: getDiscountProductConfigModeForTarget('buy_reward'),
+        qualifying_items: qualifyingItems,
+        reward_products: rewardSource === 'reward_list' ? rewardProducts : [],
+        reward_discount: {
+          discount_type: elDeBuyRewardDiscountType?.value || 'percent',
+          discount_value: rewardKind === 'product_discount' ? rewardDiscountValue : null,
+        },
+      };
+    } else if (mechanicType === 'loyalty_progress') {
+      const progressBasis = getDiscountProgressBasis();
+      const buyQty = progressBasis === 'amount'
+        ? 1
+        : normalizeDiscountVisualCount(elDeProgressBuyQty?.value, 1);
+      const rewardQty = progressBasis === 'amount'
+        ? 1
+        : normalizeDiscountVisualCount(elDeProgressRewardQty?.value, 1);
+      const thresholdValue = progressBasis === 'amount'
+        ? (parseFloat(elDeProgressThresholdValue?.value) || 0)
+        : buyQty;
+      const scopeMode = progressBasis === 'items' ? getDiscountProgressScopeMode() : 'none';
+      const rewardKind = normalizeDiscountProgressRewardKind(elDeProgressRewardKind?.value || 'gift');
+      const qualifyingItems = progressBasis === 'items'
+        ? await buildDiscountEntityTargetPayloadList(
+            getDiscountProgressScopeSelection(),
+            getDiscountProductConfigModeForTarget('progress_scope')
+          )
+        : [];
+      const giftProducts = await buildDiscountEntityTargetPayloadList(
+        cloneDiscountEntities(state.discountProgressGiftProducts || []),
+        getDiscountProductConfigModeForTarget('progress_reward_gift')
+      );
+      const rewardDiscountApplyTo = getDiscountProgressDiscountApplyTo();
+      const rewardDiscountValue = parseFloat(elDeProgressDiscountValue?.value) || 0;
+      const rewardDiscountProducts = await buildDiscountEntityTargetPayloadList(
+        getDiscountProgressDiscountSelection(),
+        getDiscountProductConfigModeForTarget('progress_reward_discount')
+      );
+      const promoSource = cloneDiscountPromoSource(state.discountProgressPromoSource);
+
+      if (!(thresholdValue > 0)) {
+        alert('Укажите корректный порог накопительной акции');
+        return;
+      }
+      if (progressBasis === 'items' && !qualifyingItems.length) {
+        alert('Добавьте товары или категории для накопления');
+        return;
+      }
+      if (rewardKind === 'gift' && !giftProducts.length) {
+        alert('Добавьте товары для награды накопительной акции');
+        return;
+      }
+      if (rewardKind === 'discount') {
+        if (!(rewardDiscountValue > 0)) {
+          alert('Укажите корректное значение скидки для награды');
+          return;
+        }
+        if (rewardDiscountApplyTo !== 'order' && !rewardDiscountProducts.length) {
+          alert('Добавьте товары или категории для скидочной награды');
+          return;
+        }
+      }
+      if (rewardKind === 'promo_code' && !promoSource) {
+        alert('Прикрепите общий промокод для награды');
+        return;
+      }
+
+      data.mechanic = {
+        buy_qty: buyQty,
+        reward_qty: rewardQty,
+        progress_basis: progressBasis,
+        threshold_value: thresholdValue,
+        status_filter: 'completed',
+        qualifying_scope_mode: scopeMode,
+        qualifying_items_config_mode: getDiscountProductConfigModeForTarget('progress_scope'),
+        qualifying_items: qualifyingItems,
+        reward_kind: rewardKind,
+        issue_mode: 'automatic',
+        pending_reward_mode: normalizeDiscountProgressPendingRewardMode(elDeProgressPendingRewardMode?.value || 'stack'),
+        redemption_mode: 'reset',
+        gift_products_config_mode: getDiscountProductConfigModeForTarget('progress_reward_gift'),
+        reward_products_config_mode: getDiscountProductConfigModeForTarget('progress_reward_discount'),
+        reward: {
+          gift_products: rewardKind === 'gift' ? giftProducts : [],
+          discount: {
+            apply_to: rewardDiscountApplyTo,
+            discount_type: normalizePromoDiscountType(elDeProgressDiscountType?.value || 'percent'),
+            discount_value: rewardKind === 'discount' ? rewardDiscountValue : null,
+            products: rewardKind === 'discount' && rewardDiscountApplyTo !== 'order' ? rewardDiscountProducts : [],
+          },
+          promo_code: rewardKind === 'promo_code'
+            ? {
+                source_promo_code_id: promoSource?.source_promo_code_id || null,
+                source_discount_id: promoSource?.source_discount_id || null,
+                source_code: promoSource?.source_code || '',
+              }
+            : {
+                source_promo_code_id: null,
+                source_discount_id: null,
+                source_code: null,
+              },
+        },
+      };
+    } else {
+      const tiers = await Promise.all((state.discountThresholdTiers || []).map(async (tier) => {
+        const rewardKind = normalizeThresholdTierRewardKindUi(tier);
+        const rewardProducts = ['product', 'product_list'].includes(rewardKind)
+          ? await buildDiscountEntityTargetPayloadList(
+              cloneDiscountEntities(tier.reward_products || []),
+              normalizeDiscountProductConfigMode(tier?.reward_products_config_mode || 'any')
+            )
+          : [];
+        const rewardDiscountSource = cloneDiscountSimpleSource(tier.reward_discount_source);
+        const rewardPromoSource = cloneDiscountPromoSource(tier.reward_promo_source);
+        return {
+          id: tier.id,
+          min_amount: parseFloat(tier.min_amount) || 0,
+          buy_qty: 1,
+          reward_qty: 1,
+          reward_kind: rewardKind,
+          reward_products_config_mode: normalizeDiscountProductConfigMode(tier?.reward_products_config_mode || 'any'),
+          reward_products: rewardProducts,
+          reward_discount_source: rewardKind === 'discount_ref'
+            ? { discount_id: rewardDiscountSource?.discount_id || null }
+            : { discount_id: null },
+          reward_promo_source: rewardKind === 'promo_code_ref'
+            ? {
+                source_promo_code_id: rewardPromoSource?.source_promo_code_id || null,
+                source_discount_id: rewardPromoSource?.source_discount_id || null,
+                source_code: rewardPromoSource?.source_code || null,
+              }
+            : {
+                source_promo_code_id: null,
+                source_discount_id: null,
+                source_code: null,
+              },
+          reward_discount: {
+            discount_type: 'percent',
+            discount_value: null,
+          },
+        };
+      }));
+
+      if (!tiers.length || tiers.some((tier) => !(tier.min_amount > 0))) {
+        alert('Добавьте корректные пороги для пороговой акции');
+        return;
+      }
+      if (tiers.some((tier) => tier.reward_kind === 'product' && tier.reward_products.length !== 1)) {
+        alert('Для каждого порога с товаром выберите один товар.');
+        return;
+      }
+      if (tiers.some((tier) => tier.reward_kind === 'product_list' && !tier.reward_products.length)) {
+        alert('Для каждого порога со списком товаров добавьте товары.');
+        return;
+      }
+      if (tiers.some((tier) => tier.reward_kind === 'discount_ref' && !(Number(tier.reward_discount_source?.discount_id || 0) > 0))) {
+        alert('Для каждого порога со скидкой выберите существующую скидку.');
+        return;
+      }
+      if (tiers.some((tier) => tier.reward_kind === 'promo_code_ref' && !(Number(tier.reward_promo_source?.source_promo_code_id || 0) > 0))) {
+        alert('Для каждого порога с промокодом выберите общий промокод.');
+        return;
+      }
+
+      data.mechanic = {
+        threshold_basis: elDeThresholdBasis?.value || 'before_discounts',
+        threshold_apply_mode: elDeThresholdApplyMode?.value || 'best_only',
+        tiers,
+      };
+    }
+
+    if (promoEnabled && promoCodeMode === 'shared' && !sharedCode) {
+      alert('Введите промокод');
+      return;
+    }
+
+    try {
+      const response = isNew
+        ? await apiJson('/api/admin/discounts', { method: 'POST', body: data })
+        : await apiJson(`/api/admin/discounts/${id}`, { method: 'PUT', body: data });
+      const savedDiscountId = Number(response?.id || id || 0);
+
+      if (promoEnabled && promoCodeMode === 'unique' && savedDiscountId > 0 && promoGenerateCount > 0) {
+        await generateDiscountPromoCodes(savedDiscountId, promoGenerateCount);
+      }
+
+      await loadDiscounts();
+
+      if (promoEnabled && promoCodeMode === 'unique' && savedDiscountId > 0 && (isNew || promoGenerateCount > 0)) {
+        const createdId = savedDiscountId;
+        if (isNew) {
+          await closeTab(buildTabKey('discount', 'new'));
+        }
+        state.activeDiscountId = createdId;
+        renderDiscountFilters();
+        renderDiscountsList();
+        await openDiscountEditor(createdId);
+        if (promoGenerateCount > 0) {
+          state.discountPromoCodesAccordionExpanded = true;
+          renderDiscountPromoCodes();
+        }
+        return;
+      }
+
+      closeActiveTab();
+      state.editingDiscountId = null;
+      updateRightPanel();
+    } catch (err) {
+      console.error('saveDiscount error:', err);
+      alert(formatDiscountSaveErrorMessage(err));
+    }
+  }
+
   // -----------------------------
   // Init
   // -----------------------------
   initClientsAccordion();
-  
+
   // Инициализируем кастомный select для логики условий
   const logicSelectWrap = $('#fe_logic');
   if (logicSelectWrap) {
@@ -8102,6 +14388,8 @@
   if (filterTitleInput) {
     filterTitleInput.addEventListener('input', () => scheduleFilterDraftCountPreview());
   }
+  updateDiscountPromoUi();
+  updateDiscountRestrictionUi();
 
   const isChatBridgeMode = !!(document.body && document.body.classList.contains("page-chat"));
   if (!isChatBridgeMode) {

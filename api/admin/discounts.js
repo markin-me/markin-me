@@ -5,7 +5,7 @@ const DISCOUNT_COLUMNS = `
   apply_to, min_order_amount, max_discount_amount,
   starts_at, ends_at, schedule_days, schedule_time_start, schedule_time_end,
   usage_limit, usage_per_customer, usage_count,
-  priority, is_stackable, is_active,
+  priority, is_stackable, is_active, hide_in_benefits,
   activation_mode, reward_type, promo_code_mode, unique_code_usage_limit,
   mechanic_type, mechanic_config_json,
   created_at, updated_at
@@ -17,13 +17,25 @@ const SIMPLE_DISCOUNT_VARIANTS = new Set(['promo_code', 'percent', 'fixed', 'spe
 const PROMO_REWARD_TYPES = new Set(['discount', 'product']);
 const PROMO_PRODUCT_REWARD_TYPES = new Set(['gift', 'product_discount']);
 const APPLY_TO_TYPES = new Set(['order', 'product', 'category', 'combo']);
-const MECHANIC_TYPES = new Set(['simple_discount', 'buy_x_get_y', 'threshold']);
+const MECHANIC_TYPES = new Set(['simple_discount', 'buy_x_get_y', 'threshold', 'loyalty_progress']);
 const REWARD_TYPES = new Set(['discount', 'bonus', 'gift', 'product_discount', 'mixed']);
+const LOYALTY_PROGRESS_BASES = new Set(['orders', 'items', 'amount']);
+const LOYALTY_STATUS_FILTERS = new Set(['any', 'paid', 'completed']);
+const LOYALTY_SCOPE_MODES = new Set(['none', 'product', 'product_list', 'category']);
+const LOYALTY_REWARD_KINDS = new Set(['gift', 'discount', 'promo_code']);
+const LOYALTY_ISSUE_MODES = new Set(['automatic', 'manual', 'code']);
+const LOYALTY_PENDING_REWARD_MODES = new Set(['stack', 'single_pending']);
+const LOYALTY_REDEMPTION_MODES = new Set(['reset', 'subtract_threshold', 'keep_progress']);
+const PRODUCT_CONFIG_MODES = new Set(['any', 'exact']);
 const DISCOUNT_MUTATION_ERROR_CODES = new Set([
   'TITLE_REQUIRED',
   'INVALID_CUSTOMERS',
   'INVALID_PRODUCTS',
   'INVALID_DATE_RANGE',
+  'PERIOD_BOUNDS_REQUIRED',
+  'WEEKDAYS_REQUIRED',
+  'TIME_BOUNDS_REQUIRED',
+  'INVALID_TIME_RANGE',
   'PRODUCTS_REQUIRED',
   'PRODUCTS_NOT_ALLOWED',
   'PROMO_NOT_AVAILABLE',
@@ -31,12 +43,24 @@ const DISCOUNT_MUTATION_ERROR_CODES = new Set([
   'PROMO_CODE_REQUIRED',
   'PROMO_REWARD_PRODUCTS_REQUIRED',
   'INVALID_DISCOUNT_VALUE',
+  'SPECIAL_PRICE_PRODUCT_ONLY',
   'INVALID_MECHANIC_CONFIG',
   'QUALIFYING_ITEMS_REQUIRED',
+  'INVALID_QUALIFYING_ITEMS',
   'REWARD_PRODUCTS_REQUIRED',
   'INVALID_REWARD_DISCOUNT',
   'THRESHOLD_TIERS_REQUIRED',
   'INVALID_THRESHOLD_TIER',
+  'THRESHOLD_DISCOUNT_SOURCE_REQUIRED',
+  'THRESHOLD_PROMO_SOURCE_REQUIRED',
+  'INVALID_THRESHOLD_DISCOUNT_SOURCE',
+  'INVALID_THRESHOLD_PROMO_SOURCE',
+  'INVALID_PROGRESS_THRESHOLD',
+  'LOYALTY_QUALIFYING_ITEMS_REQUIRED',
+  'INVALID_PROGRESS_SCOPE_ITEMS',
+  'LOYALTY_REWARD_PRODUCTS_REQUIRED',
+  'LOYALTY_PROMO_SOURCE_REQUIRED',
+  'INVALID_ISSUE_MODE',
 ]);
 
 function toText(value) {
@@ -58,6 +82,16 @@ function toIntOrNull(value) {
   const num = toNumberOrNull(value);
   if (num === null) return null;
   return Math.max(0, Math.trunc(num));
+}
+
+function normalizeCountField(source, fallback, fieldName, defaultValue = 1) {
+  const hasOwn = source && Object.prototype.hasOwnProperty.call(source, fieldName);
+  if (hasOwn) {
+    const parsed = toIntOrNull(source[fieldName]);
+    return parsed && parsed > 0 ? parsed : 0;
+  }
+  const parsedFallback = toIntOrNull(fallback?.[fieldName]);
+  return parsedFallback && parsedFallback > 0 ? parsedFallback : defaultValue;
 }
 
 function toBoolFlag(value, defaultValue = false) {
@@ -97,6 +131,7 @@ function serializeScheduleDays(value) {
 function normalizeDiscountRow(row) {
   if (!row || typeof row !== 'object') return row;
   const normalized = { ...row };
+  normalized.hide_in_benefits = Number(normalized.hide_in_benefits || 0) === 1;
   if (typeof normalized.schedule_days === 'string') {
     try {
       normalized.schedule_days = JSON.parse(normalized.schedule_days);
@@ -124,6 +159,52 @@ function parseJsonObject(value, fallback = {}) {
   return fallback;
 }
 
+function normalizeProductConfigMode(value, fallback = 'any') {
+  const raw = toText(value).toLowerCase();
+  if (PRODUCT_CONFIG_MODES.has(raw)) return raw;
+  return PRODUCT_CONFIG_MODES.has(fallback) ? fallback : 'any';
+}
+
+function normalizeProductConfigPayload(value, fallbackProductId = null) {
+  const source = parseJsonObject(value, null);
+  if (!source || typeof source !== 'object' || Array.isArray(source)) return null;
+  const productId = Number(source.product_id || fallbackProductId || 0);
+  if (!(productId > 0)) return null;
+  const variantGroupId = Number(source.variant_group_id || 0);
+  const variantValueIndex = Number(source.variant_value_index);
+  const options = (Array.isArray(source.options) ? source.options : [])
+    .map((option) => ({
+      id: Number(option?.id || 0),
+      qty: Math.max(1, Number(option?.qty ?? option?.quantity ?? 1) || 1),
+      target_product_id: Number(option?.target_product_id || option?.product_id || 0) || null,
+      variant_group_id: Number(option?.variant_group_id || 0) || null,
+      variant_value_index: Number.isFinite(Number(option?.variant_value_index))
+        ? Number(option.variant_value_index)
+        : null,
+    }))
+    .filter((option) => option.id > 0)
+    .sort((a, b) => (
+      a.id - b.id
+      || Number(a.target_product_id || 0) - Number(b.target_product_id || 0)
+      || Number(a.variant_group_id || 0) - Number(b.variant_group_id || 0)
+      || Number(a.variant_value_index || 0) - Number(b.variant_value_index || 0)
+    ));
+  const ingredients = (Array.isArray(source.ingredients) ? source.ingredients : [])
+    .map((ingredient) => ({
+      ingredient_id: Number(ingredient?.ingredient_id || ingredient?.product_id || 0),
+      qty: Math.round((Number(ingredient?.qty ?? ingredient?.quantity ?? 0) || 0) * 1000) / 1000,
+    }))
+    .filter((ingredient) => ingredient.ingredient_id > 0)
+    .sort((a, b) => a.ingredient_id - b.ingredient_id);
+  return {
+    product_id: productId,
+    variant_group_id: variantGroupId > 0 ? variantGroupId : null,
+    variant_value_index: Number.isFinite(variantValueIndex) && variantValueIndex >= 0 ? variantValueIndex : null,
+    options,
+    ingredients,
+  };
+}
+
 function normalizeDiscountType(value, fallback = 'percent') {
   const raw = toText(value).toLowerCase();
   if (SIMPLE_DISCOUNT_TYPES.has(raw)) return raw;
@@ -144,15 +225,56 @@ function normalizePromoProductRewardType(value, fallback = 'gift') {
 
 function normalizePromoDiscountType(value, fallback = 'percent') {
   const raw = toText(value).toLowerCase();
-  if (raw === 'fixed' || raw === 'special_price') return 'fixed';
-  if (raw === 'percent') return 'percent';
-  return fallback === 'fixed' ? 'fixed' : 'percent';
+  if (raw === 'percent' || raw === 'fixed' || raw === 'special_price') return raw;
+  return ['fixed', 'special_price'].includes(fallback) ? fallback : 'percent';
 }
 
 function normalizeSimpleVariant(value, fallback = 'percent') {
   const raw = toText(value).toLowerCase();
   if (SIMPLE_DISCOUNT_VARIANTS.has(raw)) return raw;
   return SIMPLE_DISCOUNT_VARIANTS.has(fallback) ? fallback : 'percent';
+}
+
+function normalizeLoyaltyProgressBasis(value, fallback = 'orders') {
+  const raw = toText(value).toLowerCase();
+  if (LOYALTY_PROGRESS_BASES.has(raw)) return raw;
+  return LOYALTY_PROGRESS_BASES.has(fallback) ? fallback : 'orders';
+}
+
+function normalizeLoyaltyStatusFilter(value, fallback = 'any') {
+  const raw = toText(value).toLowerCase();
+  if (LOYALTY_STATUS_FILTERS.has(raw)) return raw;
+  return LOYALTY_STATUS_FILTERS.has(fallback) ? fallback : 'any';
+}
+
+function normalizeLoyaltyScopeMode(value, fallback = 'none') {
+  const raw = toText(value).toLowerCase();
+  if (LOYALTY_SCOPE_MODES.has(raw)) return raw;
+  return LOYALTY_SCOPE_MODES.has(fallback) ? fallback : 'none';
+}
+
+function normalizeLoyaltyRewardKind(value, fallback = 'gift') {
+  const raw = toText(value).toLowerCase();
+  if (LOYALTY_REWARD_KINDS.has(raw)) return raw;
+  return LOYALTY_REWARD_KINDS.has(fallback) ? fallback : 'gift';
+}
+
+function normalizeLoyaltyIssueMode(value, fallback = 'automatic') {
+  const raw = toText(value).toLowerCase();
+  if (LOYALTY_ISSUE_MODES.has(raw)) return raw;
+  return LOYALTY_ISSUE_MODES.has(fallback) ? fallback : 'automatic';
+}
+
+function normalizeLoyaltyPendingRewardMode(value, fallback = 'stack') {
+  const raw = toText(value).toLowerCase();
+  if (LOYALTY_PENDING_REWARD_MODES.has(raw)) return raw;
+  return LOYALTY_PENDING_REWARD_MODES.has(fallback) ? fallback : 'stack';
+}
+
+function normalizeLoyaltyRedemptionMode(value, fallback = 'reset') {
+  const raw = toText(value).toLowerCase();
+  if (LOYALTY_REDEMPTION_MODES.has(raw)) return raw;
+  return LOYALTY_REDEMPTION_MODES.has(fallback) ? fallback : 'reset';
 }
 
 function normalizeApplyTo(value, fallback = 'order') {
@@ -190,6 +312,9 @@ function normalizeEntityList(items, allowedTypes = null) {
       entity_type: entityType,
       entity_id: entityId,
       title: toText(item?.title) || null,
+      product_config: entityType === 'product'
+        ? normalizeProductConfigPayload(item?.product_config, entityId)
+        : null,
     });
   });
 
@@ -200,6 +325,13 @@ function createValidationError(code, statusCode = 400) {
   const err = new Error(code);
   err.statusCode = statusCode;
   return err;
+}
+
+function getBodyField(body, fieldName, fallbackValue = null) {
+  if (body && Object.prototype.hasOwnProperty.call(body, fieldName)) {
+    return body[fieldName];
+  }
+  return fallbackValue;
 }
 
 function validateEntityTargets(items, allowedTypes, errorCode) {
@@ -224,6 +356,9 @@ function validateEntityTargets(items, allowedTypes, errorCode) {
       entity_type: entityType,
       entity_id: entityId,
       title: toText(item?.title) || null,
+      product_config: entityType === 'product'
+        ? normalizeProductConfigPayload(item?.product_config, entityId)
+        : null,
     });
   });
 
@@ -231,8 +366,8 @@ function validateEntityTargets(items, allowedTypes, errorCode) {
 }
 
 function assertValidDateRange(body, existing = null) {
-  const startsAt = toNullableText(body?.starts_at ?? existing?.starts_at);
-  const endsAt = toNullableText(body?.ends_at ?? existing?.ends_at);
+  const startsAt = toNullableText(getBodyField(body, 'starts_at', existing?.starts_at));
+  const endsAt = toNullableText(getBodyField(body, 'ends_at', existing?.ends_at));
   if (!startsAt || !endsAt) return;
 
   const startDate = new Date(startsAt);
@@ -242,8 +377,44 @@ function assertValidDateRange(body, existing = null) {
   }
 }
 
+function assertValidRestrictionSchedule(body, existing = null) {
+  const startsAt = toNullableText(getBodyField(body, 'starts_at', existing?.starts_at));
+  const endsAt = toNullableText(getBodyField(body, 'ends_at', existing?.ends_at));
+  if ((startsAt && !endsAt) || (!startsAt && endsAt)) {
+    throw createValidationError('PERIOD_BOUNDS_REQUIRED');
+  }
+
+  const rawScheduleDays = getBodyField(body, 'schedule_days', existing?.schedule_days);
+  if (rawScheduleDays !== null && rawScheduleDays !== undefined) {
+    const days = parseScheduleDays(rawScheduleDays);
+    if (!days || !days.length) {
+      throw createValidationError('WEEKDAYS_REQUIRED');
+    }
+  }
+
+  const timeStart = toNullableText(getBodyField(body, 'schedule_time_start', existing?.schedule_time_start));
+  const timeEnd = toNullableText(getBodyField(body, 'schedule_time_end', existing?.schedule_time_end));
+  if ((timeStart && !timeEnd) || (!timeStart && timeEnd)) {
+    throw createValidationError('TIME_BOUNDS_REQUIRED');
+  }
+  if (!timeStart || !timeEnd) return;
+
+  const parseTimeToMinutes = (value) => {
+    const parts = String(value || '').split(':').map((part) => Number(part));
+    if (parts.length < 2 || parts.some((part) => Number.isNaN(part))) return null;
+    return (parts[0] * 60) + parts[1];
+  };
+
+  const startMinutes = parseTimeToMinutes(timeStart);
+  const endMinutes = parseTimeToMinutes(timeEnd);
+  if (startMinutes == null || endMinutes == null || endMinutes <= startMinutes) {
+    throw createValidationError('INVALID_TIME_RANGE');
+  }
+}
+
 function normalizeSimpleDiscountMechanic(source = {}, discountRow = {}) {
   const src = parseJsonObject(source, {});
+  const base = parseJsonObject(discountRow?.mechanic_config_json, {});
   const fallbackVariant = toText(discountRow.activation_mode).toLowerCase() === 'promo_code'
     ? 'promo_code'
     : normalizeDiscountType(src?.discount_type ?? discountRow?.discount_type, normalizeDiscountType(discountRow?.discount_type));
@@ -287,6 +458,7 @@ function normalizeSimpleDiscountMechanic(source = {}, discountRow = {}) {
   return {
     type: 'simple_discount',
     simple_variant: simpleVariant,
+    products_config_mode: normalizeProductConfigMode(src?.products_config_mode ?? base?.products_config_mode, 'any'),
     discount_type: simpleVariant === 'promo_code' ? promoReward.discount_type : baseDiscountType,
     discount_value: simpleVariant === 'promo_code' ? promoReward.discount_value : baseDiscountValue,
     apply_to: simpleVariant === 'promo_code' ? promoReward.apply_to : baseApplyTo,
@@ -315,6 +487,8 @@ function normalizeBuyXGetYMechanic(source = {}, fallback = {}) {
     reward_kind: ['gift', 'product_discount'].includes(toText(src.reward_kind || base.reward_kind).toLowerCase())
       ? toText(src.reward_kind || base.reward_kind).toLowerCase()
       : 'gift',
+    qualifying_items_config_mode: normalizeProductConfigMode(src.qualifying_items_config_mode ?? base.qualifying_items_config_mode, 'any'),
+    reward_products_config_mode: normalizeProductConfigMode(src.reward_products_config_mode ?? base.reward_products_config_mode, 'any'),
     reward_selection_mode: 'customer_choice',
     reward_item_addition: 'line_item',
     qualifying_items: normalizeEntityList(src.qualifying_items ?? base.qualifying_items, ['product', 'category', 'combo']),
@@ -329,20 +503,51 @@ function normalizeBuyXGetYMechanic(source = {}, fallback = {}) {
 function normalizeThresholdTier(source = {}, fallback = {}) {
   const src = parseJsonObject(source, {});
   const base = parseJsonObject(fallback, {});
-  const rewardKind = ['gift', 'product_discount', 'order_discount'].includes(toText(src.reward_kind || base.reward_kind).toLowerCase())
-    ? toText(src.reward_kind || base.reward_kind).toLowerCase()
-    : 'gift';
+  const normalizeThresholdDiscountSource = (value = {}, baseValue = {}) => {
+    const source = parseJsonObject(value, {});
+    const fallbackSource = parseJsonObject(baseValue, {});
+    return {
+      discount_id: toIntOrNull(source.discount_id ?? source.source_discount_id ?? fallbackSource.discount_id ?? fallbackSource.source_discount_id),
+    };
+  };
+  const normalizeThresholdRewardKind = (value, fallbackKind = 'product') => {
+    const raw = toText(value).toLowerCase();
+    if (['product', 'product_list', 'discount_ref', 'promo_code_ref'].includes(raw)) return raw;
+    if (raw === 'gift') return fallbackKind;
+    if (raw === 'product_discount' || raw === 'order_discount') return 'discount_ref';
+    return fallbackKind;
+  };
+  const rewardProducts = normalizeEntityList(src.reward_products ?? base.reward_products, ['product']);
+  const rewardKind = normalizeThresholdRewardKind(
+    src.reward_kind ?? base.reward_kind,
+    rewardProducts.length > 1 ? 'product_list' : 'product'
+  );
   const rewardDiscount = parseJsonObject(src.reward_discount, parseJsonObject(base.reward_discount, {}));
+  const rewardDiscountSource = normalizeThresholdDiscountSource(src.reward_discount_source, base.reward_discount_source);
+  const rewardPromoSource = normalizeLoyaltyPromoSource(src.reward_promo_source, base.reward_promo_source);
 
   return {
     id: toNullableText(src.id || base.id),
     min_amount: toNumberOrNull(src.min_amount ?? base.min_amount),
+    buy_qty: normalizeCountField(src, base, 'buy_qty', 1),
+    reward_qty: normalizeCountField(src, base, 'reward_qty', 1),
+    reward_products_config_mode: normalizeProductConfigMode(src.reward_products_config_mode ?? base.reward_products_config_mode, 'any'),
     reward_kind: rewardKind,
-    reward_selection_mode: rewardKind === 'order_discount' ? null : 'customer_choice',
-    reward_item_addition: rewardKind === 'order_discount' ? null : 'line_item',
-    reward_products: rewardKind === 'order_discount'
-      ? []
-      : normalizeEntityList(src.reward_products ?? base.reward_products, ['product']),
+    reward_selection_mode: ['discount_ref', 'promo_code_ref'].includes(rewardKind) ? 'reference' : 'customer_choice',
+    reward_item_addition: ['discount_ref', 'promo_code_ref'].includes(rewardKind) ? null : 'line_item',
+    reward_products: rewardKind === 'product'
+      ? rewardProducts.slice(0, 1)
+      : (rewardKind === 'product_list' ? rewardProducts : []),
+    reward_discount_source: rewardKind === 'discount_ref'
+      ? rewardDiscountSource
+      : { discount_id: null },
+    reward_promo_source: rewardKind === 'promo_code_ref'
+      ? rewardPromoSource
+      : {
+          source_promo_code_id: null,
+          source_discount_id: null,
+          source_code: '',
+        },
     reward_discount: {
       discount_type: normalizeDiscountType(rewardDiscount.discount_type, 'percent'),
       discount_value: toNumberOrNull(rewardDiscount.discount_value),
@@ -356,7 +561,13 @@ function normalizeThresholdMechanic(source = {}, fallback = {}) {
   const tiersRaw = Array.isArray(src.tiers) ? src.tiers : (Array.isArray(base.tiers) ? base.tiers : []);
   const tiers = tiersRaw
     .map((tier, index) => normalizeThresholdTier(tier, Array.isArray(base.tiers) ? base.tiers[index] : {}))
-    .filter((tier) => tier.min_amount != null || tier.reward_products.length || tier.reward_discount.discount_value != null);
+    .filter((tier) => (
+      tier.min_amount != null
+      || tier.reward_products.length
+      || Number(tier?.reward_discount_source?.discount_id || 0) > 0
+      || Number(tier?.reward_promo_source?.source_promo_code_id || 0) > 0
+      || tier.reward_discount.discount_value != null
+    ));
 
   return {
     type: 'threshold',
@@ -370,6 +581,95 @@ function normalizeThresholdMechanic(source = {}, fallback = {}) {
   };
 }
 
+function normalizeLoyaltyDiscountReward(source = {}, fallback = {}) {
+  const src = parseJsonObject(source, {});
+  const base = parseJsonObject(fallback, {});
+  const applyTo = normalizeApplyTo(src.apply_to ?? base.apply_to, normalizeApplyTo(base.apply_to, 'order'));
+  const products = applyTo === 'order'
+    ? []
+    : normalizeEntityList(src.products ?? base.products, ['product', 'category']);
+
+  return {
+    apply_to: ['order', 'product', 'category'].includes(applyTo) ? applyTo : 'order',
+    discount_type: normalizeDiscountType(src.discount_type ?? base.discount_type, normalizeDiscountType(base.discount_type, 'percent')),
+    discount_value: toNumberOrNull(src.discount_value ?? base.discount_value),
+    products,
+  };
+}
+
+function normalizeLoyaltyPromoSource(source = {}, fallback = {}) {
+  const src = parseJsonObject(source, {});
+  const base = parseJsonObject(fallback, {});
+  return {
+    source_promo_code_id: toIntOrNull(src.source_promo_code_id ?? base.source_promo_code_id),
+    source_discount_id: toIntOrNull(src.source_discount_id ?? base.source_discount_id),
+    source_code: normalizePromoCode(src.source_code ?? base.source_code),
+  };
+}
+
+function normalizeLoyaltyProgressMechanic(source = {}, fallback = {}) {
+  const src = parseJsonObject(source, {});
+  const base = parseJsonObject(fallback, {});
+  const progressBasis = normalizeLoyaltyProgressBasis(src.progress_basis ?? base.progress_basis, 'orders');
+  const rawScopeMode = normalizeLoyaltyScopeMode(
+    src.qualifying_scope_mode ?? base.qualifying_scope_mode,
+    progressBasis === 'items' ? 'product' : 'none'
+  );
+  const qualifyingScopeMode = progressBasis === 'items' ? rawScopeMode : 'none';
+  const rawQualifyingItems = normalizeEntityList(src.qualifying_items ?? base.qualifying_items, ['product', 'category']);
+  const qualifyingItems = qualifyingScopeMode === 'none'
+    ? []
+    : rawQualifyingItems.filter((item) => (
+        qualifyingScopeMode === 'category'
+          ? item.entity_type === 'category'
+          : item.entity_type === 'product'
+      ));
+  const reward = parseJsonObject(src.reward, parseJsonObject(base.reward, {}));
+  const rewardDiscount = parseJsonObject(reward.discount, parseJsonObject(base.reward?.discount, {}));
+  const rewardKind = normalizeLoyaltyRewardKind(src.reward_kind ?? reward.reward_kind ?? base.reward_kind, 'gift');
+  const giftProductsConfigMode = normalizeProductConfigMode(
+    src.gift_products_config_mode
+      ?? reward.gift_products_config_mode
+      ?? base.gift_products_config_mode
+      ?? base.reward?.gift_products_config_mode,
+    'any'
+  );
+  const rewardProductsConfigMode = normalizeProductConfigMode(
+    src.reward_products_config_mode
+      ?? reward.reward_products_config_mode
+      ?? rewardDiscount.products_config_mode
+      ?? base.reward_products_config_mode
+      ?? base.reward?.reward_products_config_mode
+      ?? base.reward?.discount?.products_config_mode,
+    'any'
+  );
+
+  return {
+    type: 'loyalty_progress',
+    buy_qty: normalizeCountField(src, base, 'buy_qty', 1),
+    reward_qty: normalizeCountField(src, base, 'reward_qty', 1),
+    progress_basis: progressBasis,
+    threshold_value: toNumberOrNull(src.threshold_value ?? base.threshold_value),
+    status_filter: 'completed',
+    qualifying_scope_mode: qualifyingScopeMode,
+    qualifying_items_config_mode: normalizeProductConfigMode(src.qualifying_items_config_mode ?? base.qualifying_items_config_mode, 'any'),
+    qualifying_items: qualifyingItems,
+    reward_kind: rewardKind,
+    issue_mode: 'automatic',
+    pending_reward_mode: normalizeLoyaltyPendingRewardMode(src.pending_reward_mode ?? base.pending_reward_mode, 'stack'),
+    redemption_mode: 'reset',
+    gift_products_config_mode: giftProductsConfigMode,
+    reward_products_config_mode: rewardProductsConfigMode,
+    reward: {
+      gift_products: rewardKind === 'gift'
+        ? normalizeEntityList(reward.gift_products, ['product'])
+        : [],
+      discount: normalizeLoyaltyDiscountReward(reward.discount, base.reward?.discount),
+      promo_code: normalizeLoyaltyPromoSource(reward.promo_code, base.reward?.promo_code),
+    },
+  };
+}
+
 function normalizeMechanicFromDiscount(discount) {
   const row = normalizeDiscountRow(discount || {});
   const mechanicType = normalizeMechanicType(row.mechanic_type, 'simple_discount');
@@ -379,6 +679,9 @@ function normalizeMechanicFromDiscount(discount) {
   }
   if (mechanicType === 'threshold') {
     return normalizeThresholdMechanic(config, {});
+  }
+  if (mechanicType === 'loyalty_progress') {
+    return normalizeLoyaltyProgressMechanic(config, {});
   }
   return normalizeSimpleDiscountMechanic(config, row);
 }
@@ -397,21 +700,116 @@ function deriveRewardType(mechanicType, mechanic, fallback = 'discount') {
   }
   if (mechanicType === 'threshold') {
     const kinds = Array.isArray(mechanic?.tiers)
-      ? [...new Set(mechanic.tiers.map((tier) => String(tier?.reward_kind || '').toLowerCase()).filter(Boolean))]
+      ? [...new Set(mechanic.tiers.map((tier) => {
+          const raw = String(tier?.reward_kind || '').toLowerCase();
+          if (raw === 'product' || raw === 'product_list' || raw === 'gift') return 'gift';
+          if (raw === 'promo_code_ref') return 'bonus';
+          if (raw === 'discount_ref' || raw === 'product_discount' || raw === 'order_discount') return 'discount';
+          return raw;
+        }).filter(Boolean))]
       : [];
     if (kinds.length <= 1) {
       if (kinds[0] === 'gift') return 'gift';
-      if (kinds[0] === 'product_discount') return 'product_discount';
-      if (kinds[0] === 'order_discount') return 'discount';
+      if (kinds[0] === 'bonus') return 'bonus';
+      if (kinds[0] === 'discount') return 'discount';
       return normalizeRewardTypeValue(fallback, 'discount');
     }
     return 'mixed';
+  }
+  if (mechanicType === 'loyalty_progress') {
+    if (mechanic?.reward_kind === 'gift') return 'gift';
+    if (mechanic?.reward_kind === 'promo_code') return 'bonus';
+    return 'discount';
   }
   return 'discount';
 }
 
 function isPromoSimpleDiscountMechanic(mechanicType, mechanic) {
   return mechanicType === 'simple_discount' && normalizeSimpleVariant(mechanic?.simple_variant, 'percent') === 'promo_code';
+}
+
+function isPlainSimpleDiscountMechanic(mechanicType, mechanic) {
+  return mechanicType === 'simple_discount' && !isPromoSimpleDiscountMechanic(mechanicType, mechanic);
+}
+
+async function assertThresholdRewardSourcesExist(conn, tenantId, storeId, mechanic, { currentDiscountId = null } = {}) {
+  const tiers = Array.isArray(mechanic?.tiers) ? mechanic.tiers : [];
+  if (!tiers.length) return;
+
+  const discountIds = [...new Set(
+    tiers
+      .map((tier) => toIntOrNull(tier?.reward_discount_source?.discount_id))
+      .filter((id) => Number.isInteger(id) && id > 0)
+  )];
+
+  if (discountIds.length) {
+    const [rows] = await conn.query(
+      `SELECT id, title, discount_type, discount_value, apply_to,
+              is_active, activation_mode, mechanic_type, mechanic_config_json
+         FROM mkt_discounts
+        WHERE tenant_id = ? AND store_id = ? AND id IN (?)`,
+      [tenantId, storeId, discountIds]
+    );
+
+    const validDiscountIds = new Set(
+      rows
+        .filter((row) => {
+          const discountId = Number(row?.id || 0);
+          if (!(discountId > 0)) return false;
+          if (currentDiscountId && discountId === Number(currentDiscountId)) return false;
+          const linkedMechanicType = normalizeMechanicType(row.mechanic_type, 'simple_discount');
+          const linkedMechanic = normalizeMechanicFromDiscount(row);
+          return isPlainSimpleDiscountMechanic(linkedMechanicType, linkedMechanic);
+        })
+        .map((row) => Number(row.id || 0))
+    );
+
+    if (discountIds.some((id) => !validDiscountIds.has(id))) {
+      throw createValidationError('INVALID_THRESHOLD_DISCOUNT_SOURCE');
+    }
+  }
+
+  const promoCodeIds = [...new Set(
+    tiers
+      .map((tier) => toIntOrNull(tier?.reward_promo_source?.source_promo_code_id))
+      .filter((id) => Number.isInteger(id) && id > 0)
+  )];
+
+  if (promoCodeIds.length) {
+    const [rows] = await conn.query(
+      `SELECT pc.id AS promo_code_id,
+              pc.discount_id,
+              pc.code_mode,
+              pc.code,
+              d.activation_mode,
+              d.mechanic_type,
+              d.mechanic_config_json
+         FROM mkt_discount_promo_codes pc
+         INNER JOIN mkt_discounts d
+           ON d.id = pc.discount_id
+          AND d.tenant_id = pc.tenant_id
+          AND d.store_id = pc.store_id
+        WHERE pc.tenant_id = ? AND pc.store_id = ? AND pc.id IN (?)`,
+      [tenantId, storeId, promoCodeIds]
+    );
+
+    const validPromoCodeIds = new Set(
+      rows
+        .filter((row) => {
+          const promoCodeId = Number(row?.promo_code_id || 0);
+          if (!(promoCodeId > 0)) return false;
+          if (toText(row?.code_mode).toLowerCase() !== 'shared') return false;
+          const linkedMechanicType = normalizeMechanicType(row.mechanic_type, 'simple_discount');
+          const linkedMechanic = normalizeMechanicFromDiscount(row);
+          return isPromoSimpleDiscountMechanic(linkedMechanicType, linkedMechanic);
+        })
+        .map((row) => Number(row.promo_code_id || 0))
+    );
+
+    if (promoCodeIds.some((id) => !validPromoCodeIds.has(id))) {
+      throw createValidationError('INVALID_THRESHOLD_PROMO_SOURCE');
+    }
+  }
 }
 
 function buildMechanicStoragePayload(body, existing = null) {
@@ -445,6 +843,20 @@ function buildMechanicStoragePayload(body, existing = null) {
     };
   }
 
+  if (mechanicType === 'loyalty_progress') {
+    const mechanic = normalizeLoyaltyProgressMechanic(mechanicSource, existingMechanic?.type === 'loyalty_progress' ? existingMechanic : {});
+    const rewardDiscount = mechanic.reward?.discount || {};
+    return {
+      mechanicType,
+      mechanic,
+      mechanicConfigJson: JSON.stringify(mechanic),
+      rewardType: deriveRewardType(mechanicType, mechanic, existing?.reward_type),
+      discountType: mechanic.reward_kind === 'discount' ? rewardDiscount.discount_type : 'percent',
+      discountValue: mechanic.reward_kind === 'discount' ? (rewardDiscount.discount_value ?? 0) : 0,
+      applyTo: mechanic.reward_kind === 'discount' ? (rewardDiscount.apply_to || 'order') : 'order',
+    };
+  }
+
   const existingSimpleMechanic = existingMechanic?.type === 'simple_discount' ? existingMechanic : normalizeSimpleDiscountMechanic({}, existing || {});
   const simpleVariant = normalizeSimpleVariant(
     mechanicSource?.simple_variant ?? (toBoolFlag(body?.promo?.enabled) ? 'promo_code' : body?.discount_type),
@@ -453,6 +865,7 @@ function buildMechanicStoragePayload(body, existing = null) {
   const simpleSource = simpleVariant === 'promo_code'
     ? {
         simple_variant: 'promo_code',
+        products_config_mode: mechanicSource?.products_config_mode ?? existingSimpleMechanic?.products_config_mode ?? 'any',
         promo_reward: {
           reward_type: mechanicSource?.promo_reward?.reward_type ?? existingSimpleMechanic?.promo_reward?.reward_type ?? 'discount',
           product_reward_type: mechanicSource?.promo_reward?.product_reward_type ?? existingSimpleMechanic?.promo_reward?.product_reward_type ?? existingSimpleMechanic?.promo_reward?.reward_kind ?? 'gift',
@@ -464,6 +877,7 @@ function buildMechanicStoragePayload(body, existing = null) {
       }
     : {
         simple_variant: simpleVariant,
+        products_config_mode: mechanicSource?.products_config_mode ?? existingSimpleMechanic?.products_config_mode ?? 'any',
         discount_type: body?.discount_type ?? mechanicSource?.discount_type ?? simpleVariant,
         discount_value: body?.discount_value ?? mechanicSource?.discount_value,
         apply_to: body?.apply_to ?? mechanicSource?.apply_to,
@@ -496,6 +910,9 @@ function assertMechanicIsValid(mechanicType, mechanic, { products = [] } = {}) {
       }
       return;
     }
+    if (toText(reward?.discount_type).toLowerCase() === 'special_price' && applyTo !== 'product') {
+      throw createValidationError('SPECIAL_PRICE_PRODUCT_ONLY');
+    }
     if (!(Number(reward?.discount_value) > 0)) {
       throw createValidationError('INVALID_DISCOUNT_VALUE');
     }
@@ -509,11 +926,101 @@ function assertMechanicIsValid(mechanicType, mechanic, { products = [] } = {}) {
     if (mechanic.qualifying_mode === 'pool' && !mechanic.qualifying_items.length) {
       throw createValidationError('QUALIFYING_ITEMS_REQUIRED');
     }
+    if (mechanic.qualifying_mode === 'pool') {
+      const typeSet = new Set(
+        (Array.isArray(mechanic.qualifying_items) ? mechanic.qualifying_items : [])
+          .map((item) => toText(item?.entity_type || item?.type).toLowerCase())
+          .filter(Boolean)
+      );
+      if (typeSet.has('product') && typeSet.has('category')) {
+        throw createValidationError('INVALID_QUALIFYING_ITEMS');
+      }
+    }
     if (mechanic.reward_source === 'reward_list' && !mechanic.reward_products.length) {
       throw createValidationError('REWARD_PRODUCTS_REQUIRED');
     }
     if (mechanic.reward_kind === 'product_discount' && !(Number(mechanic?.reward_discount?.discount_value) > 0)) {
       throw createValidationError('INVALID_REWARD_DISCOUNT');
+    }
+    return;
+  }
+
+  if (mechanicType === 'loyalty_progress') {
+    if (!(Number(mechanic?.buy_qty) > 0) || !(Number(mechanic?.reward_qty) > 0)) {
+      throw createValidationError('INVALID_MECHANIC_CONFIG');
+    }
+    if (!(Number(mechanic?.threshold_value) > 0)) {
+      throw createValidationError('INVALID_PROGRESS_THRESHOLD');
+    }
+
+    const progressBasis = normalizeLoyaltyProgressBasis(mechanic?.progress_basis, 'orders');
+    const scopeMode = progressBasis === 'items'
+      ? normalizeLoyaltyScopeMode(mechanic?.qualifying_scope_mode, 'product')
+      : 'none';
+    const qualifyingItems = Array.isArray(mechanic?.qualifying_items) ? mechanic.qualifying_items : [];
+    const rewardKind = normalizeLoyaltyRewardKind(mechanic?.reward_kind, 'gift');
+
+    if (progressBasis !== 'items') {
+      if (qualifyingItems.length) {
+        throw createValidationError('INVALID_PROGRESS_SCOPE_ITEMS');
+      }
+    } else {
+      if (!qualifyingItems.length) {
+        throw createValidationError('LOYALTY_QUALIFYING_ITEMS_REQUIRED');
+      }
+      const typeSet = new Set(
+        qualifyingItems
+          .map((item) => toText(item?.entity_type || item?.type).toLowerCase())
+          .filter(Boolean)
+      );
+      if (scopeMode === 'category') {
+        if (typeSet.size !== 1 || !typeSet.has('category')) {
+          throw createValidationError('INVALID_PROGRESS_SCOPE_ITEMS');
+        }
+      } else {
+        if (typeSet.size !== 1 || !typeSet.has('product')) {
+          throw createValidationError('INVALID_PROGRESS_SCOPE_ITEMS');
+        }
+        if (scopeMode === 'product' && qualifyingItems.length !== 1) {
+          throw createValidationError('INVALID_PROGRESS_SCOPE_ITEMS');
+        }
+      }
+    }
+
+    if (rewardKind === 'promo_code') {
+      if (!(Number(mechanic?.reward?.promo_code?.source_promo_code_id) > 0) || !toText(mechanic?.reward?.promo_code?.source_code)) {
+        throw createValidationError('LOYALTY_PROMO_SOURCE_REQUIRED');
+      }
+      return;
+    }
+
+    if (rewardKind === 'gift') {
+      if (!Array.isArray(mechanic?.reward?.gift_products) || !mechanic.reward.gift_products.length) {
+        throw createValidationError('LOYALTY_REWARD_PRODUCTS_REQUIRED');
+      }
+      return;
+    }
+
+    const discountReward = parseJsonObject(mechanic?.reward?.discount, {});
+    const applyTo = normalizeApplyTo(discountReward.apply_to, 'order');
+    const rewardProducts = normalizeEntityList(discountReward.products, ['product', 'category']);
+    if (!['order', 'product', 'category'].includes(applyTo)) {
+      throw createValidationError('INVALID_MECHANIC_CONFIG');
+    }
+    if (toText(discountReward.discount_type).toLowerCase() === 'special_price' && applyTo !== 'product') {
+      throw createValidationError('SPECIAL_PRICE_PRODUCT_ONLY');
+    }
+    if (!(Number(discountReward.discount_value) > 0)) {
+      throw createValidationError('INVALID_DISCOUNT_VALUE');
+    }
+    if (applyTo !== 'order' && !rewardProducts.length) {
+      throw createValidationError('LOYALTY_REWARD_PRODUCTS_REQUIRED');
+    }
+    if (applyTo === 'product' && rewardProducts.some((item) => item.entity_type !== 'product')) {
+      throw createValidationError('INVALID_PROGRESS_SCOPE_ITEMS');
+    }
+    if (applyTo === 'category' && rewardProducts.some((item) => item.entity_type !== 'category')) {
+      throw createValidationError('INVALID_PROGRESS_SCOPE_ITEMS');
     }
     return;
   }
@@ -526,13 +1033,24 @@ function assertMechanicIsValid(mechanicType, mechanic, { products = [] } = {}) {
     if (!(Number(tier?.min_amount) > 0)) {
       throw createValidationError('INVALID_THRESHOLD_TIER');
     }
-    if ((tier.reward_kind === 'gift' || tier.reward_kind === 'product_discount')
+    if (!(Number(tier?.buy_qty) > 0) || !(Number(tier?.reward_qty) > 0)) {
+      throw createValidationError('INVALID_THRESHOLD_TIER');
+    }
+    if (!['product', 'product_list', 'discount_ref', 'promo_code_ref'].includes(String(tier?.reward_kind || '').toLowerCase())) {
+      throw createValidationError('INVALID_THRESHOLD_TIER');
+    }
+    if ((tier.reward_kind === 'product' || tier.reward_kind === 'product_list')
       && (!Array.isArray(tier.reward_products) || !tier.reward_products.length)) {
       throw createValidationError('REWARD_PRODUCTS_REQUIRED');
     }
-    if ((tier.reward_kind === 'product_discount' || tier.reward_kind === 'order_discount')
-      && !(Number(tier?.reward_discount?.discount_value) > 0)) {
-      throw createValidationError('INVALID_REWARD_DISCOUNT');
+    if (tier.reward_kind === 'product' && tier.reward_products.length !== 1) {
+      throw createValidationError('INVALID_THRESHOLD_TIER');
+    }
+    if (tier.reward_kind === 'discount_ref' && !(Number(tier?.reward_discount_source?.discount_id || 0) > 0)) {
+      throw createValidationError('THRESHOLD_DISCOUNT_SOURCE_REQUIRED');
+    }
+    if (tier.reward_kind === 'promo_code_ref' && !(Number(tier?.reward_promo_source?.source_promo_code_id || 0) > 0)) {
+      throw createValidationError('THRESHOLD_PROMO_SOURCE_REQUIRED');
     }
   }
 }
@@ -579,6 +1097,7 @@ function mapDiscountCustomerRow(row) {
       entity_type: 'customer',
       entity_id: Number(row.customer_id || 0),
       title: row.customer_name || row.customer_phone || `Клиент #${row.customer_id}`,
+      phone: row.customer_phone || '',
     };
   }
   if (row.customer_category_id) {
@@ -592,6 +1111,16 @@ function mapDiscountCustomerRow(row) {
 }
 
 function mapDiscountProductRow(row) {
+  if (row.product_id) {
+    const productId = Number(row.product_id || 0);
+    return {
+      entity_type: 'product',
+      entity_id: productId,
+      title: row.product_title || `\u0422\u043e\u0432\u0430\u0440 #${productId}`,
+      image_url: row.product_image_url || null,
+      product_config: normalizeProductConfigPayload(row.product_config_json, productId),
+    };
+  }
   if (row.product_id) {
     return {
       entity_type: 'product',
@@ -630,19 +1159,392 @@ function groupDiscountRelationRows(rows, mapper) {
   return result;
 }
 
+function collectMechanicEntityRefs(mechanic, refs = null) {
+  const result = refs || {
+    productIds: new Set(),
+    categoryIds: new Set(),
+    comboIds: new Set(),
+  };
+
+  const collectItem = (item) => {
+    const entityType = toText(item?.entity_type || item?.target_type || item?.type).toLowerCase();
+    const entityId = Number(item?.entity_id || item?.id || 0);
+    if (!Number.isInteger(entityId) || entityId <= 0) return;
+    if (entityType === 'product') {
+      result.productIds.add(entityId);
+      return;
+    }
+    if (entityType === 'category') {
+      result.categoryIds.add(entityId);
+      return;
+    }
+    if (entityType === 'combo') {
+      result.comboIds.add(entityId);
+    }
+  };
+
+  if (!mechanic || typeof mechanic !== 'object') {
+    return result;
+  }
+
+  if (mechanic.type === 'buy_x_get_y') {
+    (Array.isArray(mechanic.qualifying_items) ? mechanic.qualifying_items : []).forEach(collectItem);
+    (Array.isArray(mechanic.reward_products) ? mechanic.reward_products : []).forEach(collectItem);
+    return result;
+  }
+
+  if (mechanic.type === 'loyalty_progress') {
+    (Array.isArray(mechanic.qualifying_items) ? mechanic.qualifying_items : []).forEach(collectItem);
+    (Array.isArray(mechanic?.reward?.gift_products) ? mechanic.reward.gift_products : []).forEach(collectItem);
+    (Array.isArray(mechanic?.reward?.discount?.products) ? mechanic.reward.discount.products : []).forEach(collectItem);
+    return result;
+  }
+
+  if (mechanic.type === 'threshold') {
+    (Array.isArray(mechanic.tiers) ? mechanic.tiers : []).forEach((tier) => {
+      (Array.isArray(tier?.reward_products) ? tier.reward_products : []).forEach(collectItem);
+    });
+  }
+
+  return result;
+}
+
+function createMechanicEntityLookup() {
+  return {
+    products: new Map(),
+    categories: new Map(),
+    combos: new Map(),
+  };
+}
+
+function mapMechanicProductLookupRow(row) {
+  let imageUrl = null;
+  try {
+    const photos = JSON.parse(row.product_photos_json || '[]');
+    imageUrl = Array.isArray(photos) && photos.length
+      ? String(photos[0] || '').trim() || null
+      : null;
+  } catch {}
+  return {
+    title: toText(row.product_title) || `Товар #${row.id}`,
+    image_url: imageUrl,
+  };
+}
+
+async function loadMechanicEntityLookup(dbConn, tenantId, refs) {
+  const lookup = createMechanicEntityLookup();
+  const productIds = [...(refs?.productIds || new Set())];
+  const categoryIds = [...(refs?.categoryIds || new Set())];
+  const comboIds = [...(refs?.comboIds || new Set())];
+
+  const queries = [];
+  if (productIds.length) {
+    queries.push(
+      dbConn.query(
+        `SELECT id, name AS product_title, photos_json AS product_photos_json
+         FROM prod_products
+         WHERE tenant_id = ? AND id IN (?)`,
+        [tenantId, productIds]
+      )
+    );
+  } else {
+    queries.push(Promise.resolve([[]]));
+  }
+
+  if (categoryIds.length) {
+    queries.push(
+      dbConn.query(
+        `SELECT id, title AS category_title
+         FROM prod_categories
+         WHERE tenant_id = ? AND id IN (?)`,
+        [tenantId, categoryIds]
+      )
+    );
+  } else {
+    queries.push(Promise.resolve([[]]));
+  }
+
+  if (comboIds.length) {
+    queries.push(
+      dbConn.query(
+        `SELECT id, title AS combo_title
+         FROM prod_combos
+         WHERE tenant_id = ? AND id IN (?)`,
+        [tenantId, comboIds]
+      )
+    );
+  } else {
+    queries.push(Promise.resolve([[]]));
+  }
+
+  const [[productRows], [categoryRows], [comboRows]] = await Promise.all(queries);
+
+  (Array.isArray(productRows) ? productRows : []).forEach((row) => {
+    lookup.products.set(Number(row.id || 0), mapMechanicProductLookupRow(row));
+  });
+  (Array.isArray(categoryRows) ? categoryRows : []).forEach((row) => {
+    lookup.categories.set(Number(row.id || 0), {
+      title: toText(row.category_title) || `Категория #${row.id}`,
+    });
+  });
+  (Array.isArray(comboRows) ? comboRows : []).forEach((row) => {
+    lookup.combos.set(Number(row.id || 0), {
+      title: toText(row.combo_title) || `Комбо #${row.id}`,
+    });
+  });
+
+  return lookup;
+}
+
+function enrichMechanicEntityList(items, lookup) {
+  if (!Array.isArray(items) || !items.length) return [];
+  return items
+    .map((item) => {
+      const entityType = toText(item?.entity_type || item?.target_type || item?.type).toLowerCase();
+      const entityId = Number(item?.entity_id || item?.id || 0);
+      if (!Number.isInteger(entityId) || entityId <= 0) return null;
+      const base = {
+        entity_type: entityType,
+        entity_id: entityId,
+      };
+
+      if (entityType === 'product') {
+        const match = lookup?.products?.get(entityId);
+        const productConfig = normalizeProductConfigPayload(item?.product_config, entityId);
+        if (productConfig) {
+          return {
+            ...base,
+            title: toText(item?.title) || match?.title || `\u0422\u043e\u0432\u0430\u0440 #${entityId}`,
+            image_url: toText(item?.image_url) || match?.image_url || null,
+            product_config: productConfig,
+          };
+        }
+        return {
+          ...base,
+          title: toText(item?.title) || match?.title || `Товар #${entityId}`,
+          image_url: toText(item?.image_url) || match?.image_url || null,
+        };
+      }
+      if (entityType === 'category') {
+        const match = lookup?.categories?.get(entityId);
+        return {
+          ...base,
+          title: toText(item?.title) || match?.title || `Категория #${entityId}`,
+        };
+      }
+      if (entityType === 'combo') {
+        const match = lookup?.combos?.get(entityId);
+        return {
+          ...base,
+          title: toText(item?.title) || match?.title || `Комбо #${entityId}`,
+        };
+      }
+      return {
+        ...base,
+        title: toText(item?.title) || null,
+      };
+    })
+    .filter(Boolean);
+}
+
+function enrichMechanicForResponse(mechanic, lookup) {
+  if (!mechanic || typeof mechanic !== 'object') return mechanic;
+
+  if (mechanic.type === 'buy_x_get_y') {
+    return {
+      ...mechanic,
+      qualifying_items: enrichMechanicEntityList(mechanic.qualifying_items, lookup),
+      reward_products: enrichMechanicEntityList(mechanic.reward_products, lookup),
+    };
+  }
+
+  if (mechanic.type === 'loyalty_progress') {
+    return {
+      ...mechanic,
+      qualifying_items: enrichMechanicEntityList(mechanic.qualifying_items, lookup),
+      reward: {
+        ...parseJsonObject(mechanic.reward, {}),
+        gift_products: enrichMechanicEntityList(mechanic?.reward?.gift_products, lookup),
+        discount: {
+          ...parseJsonObject(mechanic?.reward?.discount, {}),
+          products: enrichMechanicEntityList(mechanic?.reward?.discount?.products, lookup),
+        },
+      },
+    };
+  }
+
+  if (mechanic.type === 'threshold') {
+    return {
+      ...mechanic,
+      tiers: (Array.isArray(mechanic.tiers) ? mechanic.tiers : []).map((tier) => ({
+        ...tier,
+        reward_products: enrichMechanicEntityList(tier?.reward_products, lookup),
+      })),
+    };
+  }
+
+  return mechanic;
+}
+
+function mapMechanicProductLookupRow(row) {
+  let imageUrl = null;
+  try {
+    const photos = JSON.parse(row.product_photos_json || '[]');
+    imageUrl = Array.isArray(photos) && photos.length
+      ? String(photos[0] || '').trim() || null
+      : null;
+  } catch {}
+  return {
+    title: toText(row.product_title) || `Товар #${row.id}`,
+    image_url: imageUrl,
+  };
+}
+
+async function loadMechanicEntityLookup(dbConn, tenantId, refs) {
+  const lookup = createMechanicEntityLookup();
+  const productIds = [...(refs?.productIds || new Set())];
+  const categoryIds = [...(refs?.categoryIds || new Set())];
+  const comboIds = [...(refs?.comboIds || new Set())];
+
+  const queries = [];
+  if (productIds.length) {
+    queries.push(
+      dbConn.query(
+        `SELECT id, name AS product_title, photos_json AS product_photos_json
+         FROM prod_products
+         WHERE tenant_id = ? AND id IN (?)`,
+        [tenantId, productIds]
+      )
+    );
+  } else {
+    queries.push(Promise.resolve([[]]));
+  }
+
+  if (categoryIds.length) {
+    queries.push(
+      dbConn.query(
+        `SELECT id, title AS category_title
+         FROM prod_categories
+         WHERE tenant_id = ? AND id IN (?)`,
+        [tenantId, categoryIds]
+      )
+    );
+  } else {
+    queries.push(Promise.resolve([[]]));
+  }
+
+  if (comboIds.length) {
+    queries.push(
+      dbConn.query(
+        `SELECT id, title AS combo_title
+         FROM prod_combos
+         WHERE tenant_id = ? AND id IN (?)`,
+        [tenantId, comboIds]
+      )
+    );
+  } else {
+    queries.push(Promise.resolve([[]]));
+  }
+
+  const [[productRows], [categoryRows], [comboRows]] = await Promise.all(queries);
+
+  (Array.isArray(productRows) ? productRows : []).forEach((row) => {
+    lookup.products.set(Number(row.id || 0), mapMechanicProductLookupRow(row));
+  });
+  (Array.isArray(categoryRows) ? categoryRows : []).forEach((row) => {
+    lookup.categories.set(Number(row.id || 0), {
+      title: toText(row.category_title) || `Категория #${row.id}`,
+    });
+  });
+  (Array.isArray(comboRows) ? comboRows : []).forEach((row) => {
+    lookup.combos.set(Number(row.id || 0), {
+      title: toText(row.combo_title) || `Комбо #${row.id}`,
+    });
+  });
+
+  return lookup;
+}
+
+function enrichMechanicEntityList(items, lookup) {
+  if (!Array.isArray(items) || !items.length) return [];
+  return items
+    .map((item) => {
+      const entityType = toText(item?.entity_type || item?.target_type || item?.type).toLowerCase();
+      const entityId = Number(item?.entity_id || item?.id || 0);
+      if (!Number.isInteger(entityId) || entityId <= 0) return null;
+      const base = {
+        entity_type: entityType,
+        entity_id: entityId,
+      };
+
+      if (entityType === 'product') {
+        const match = lookup?.products?.get(entityId);
+        return {
+          ...base,
+          title: toText(item?.title) || match?.title || `Товар #${entityId}`,
+          image_url: toText(item?.image_url) || match?.image_url || null,
+        };
+      }
+      if (entityType === 'category') {
+        const match = lookup?.categories?.get(entityId);
+        return {
+          ...base,
+          title: toText(item?.title) || match?.title || `Категория #${entityId}`,
+        };
+      }
+      if (entityType === 'combo') {
+        const match = lookup?.combos?.get(entityId);
+        return {
+          ...base,
+          title: toText(item?.title) || match?.title || `Комбо #${entityId}`,
+        };
+      }
+      return {
+        ...base,
+        title: toText(item?.title) || null,
+      };
+    })
+    .filter(Boolean);
+}
+
 function formatDiscountResponse(discount, { customers = [], products = [], promoCodes = [] } = {}) {
   const normalized = normalizeDiscountRow(discount || {});
-  const mechanicType = normalizeMechanicType(normalized.mechanic_type, 'simple_discount');
-  const mechanic = normalizeMechanicFromDiscount(normalized);
-  return {
-    ...normalized,
-    mechanic_type: mechanicType,
-    mechanic,
-    reward_type: deriveRewardType(mechanicType, mechanic, normalized.reward_type),
-    customers,
-    products,
-    promo: buildPromoPayload(normalized, promoCodes),
-  };
+  try {
+    const mechanicType = normalizeMechanicType(normalized.mechanic_type, 'simple_discount');
+    const mechanic = normalizeMechanicFromDiscount(normalized);
+    return {
+      ...normalized,
+      mechanic_type: mechanicType,
+      mechanic,
+      reward_type: deriveRewardType(mechanicType, mechanic, normalized.reward_type),
+      customers,
+      products,
+      promo: buildPromoPayload(normalized, promoCodes),
+    };
+  } catch (err) {
+    console.error('formatDiscountResponse error:', Number(normalized?.id || 0), err);
+    const fallbackMechanic = normalizeSimpleDiscountMechanic({}, normalized);
+    return {
+      ...normalized,
+      mechanic_type: 'simple_discount',
+      mechanic: fallbackMechanic,
+      reward_type: normalizeRewardTypeValue(normalized.reward_type, 'discount'),
+      customers: Array.isArray(customers) ? customers : [],
+      products: Array.isArray(products) ? products : [],
+      promo: {
+        enabled: false,
+        code_mode: 'shared',
+        shared_code_id: null,
+        shared_code: '',
+        shared_code_usage_limit: null,
+        shared_code_usage_count: 0,
+        unique_code_usage_limit: 1,
+        unique_codes_count: 0,
+        unique_codes_active_count: 0,
+        unique_codes_used_count: 0,
+      },
+    };
+  }
 }
 
 function getActivationMode(body, existing = null, mechanicPayload = null) {
@@ -771,10 +1673,14 @@ async function saveDiscountProducts(conn, tenantId, discountId, products, replac
     const productId = targetType === 'product' ? Number(product?.entity_id || product?.product_id || 0) || null : null;
     const categoryId = targetType === 'category' ? Number(product?.entity_id || product?.category_id || 0) || null : null;
     const comboId = targetType === 'combo' ? Number(product?.entity_id || product?.combo_id || 0) || null : null;
+    const normalizedProductConfig = targetType === 'product'
+      ? normalizeProductConfigPayload(product?.product_config, productId)
+      : null;
+    const productConfigJson = normalizedProductConfig ? JSON.stringify(normalizedProductConfig) : null;
     await conn.query(
-      `INSERT INTO mkt_discount_products (tenant_id, discount_id, target_type, product_id, category_id, combo_id)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [tenantId, discountId, targetType, productId, categoryId, comboId]
+      `INSERT INTO mkt_discount_products (tenant_id, discount_id, target_type, product_id, category_id, combo_id, product_config_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [tenantId, discountId, targetType, productId, categoryId, comboId, productConfigJson]
     );
   }
 }
@@ -859,6 +1765,74 @@ async function generateUniquePromoCodes(conn, { tenantId, storeId, discountId, c
 
 module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
   const router = express.Router();
+  let discountProductConfigColumnReady = false;
+  let ensureDiscountProductConfigColumnPromise = null;
+  let discountHideInBenefitsColumnReady = false;
+  let ensureDiscountHideInBenefitsColumnPromise = null;
+
+  async function ensureDiscountHideInBenefitsColumn() {
+    if (discountHideInBenefitsColumnReady) return true;
+    if (ensureDiscountHideInBenefitsColumnPromise) return ensureDiscountHideInBenefitsColumnPromise;
+
+    ensureDiscountHideInBenefitsColumnPromise = (async () => {
+      const [columnRows] = await db.query('SHOW COLUMNS FROM mkt_discounts');
+      const existing = new Set((Array.isArray(columnRows) ? columnRows : []).map((row) => String(row?.Field || '').trim()).filter(Boolean));
+      if (!existing.has('hide_in_benefits')) {
+        try {
+          await db.query('ALTER TABLE mkt_discounts ADD COLUMN `hide_in_benefits` TINYINT(1) NOT NULL DEFAULT 0 AFTER `is_active`');
+          existing.add('hide_in_benefits');
+        } catch (err) {
+          if (String(err?.code || '') !== 'ER_DUP_FIELDNAME') throw err;
+          existing.add('hide_in_benefits');
+        }
+      }
+      discountHideInBenefitsColumnReady = existing.has('hide_in_benefits');
+      return discountHideInBenefitsColumnReady;
+    })()
+      .catch((err) => {
+        ensureDiscountHideInBenefitsColumnPromise = null;
+        throw err;
+      })
+      .finally(() => {
+        if (discountHideInBenefitsColumnReady) {
+          ensureDiscountHideInBenefitsColumnPromise = null;
+        }
+      });
+
+    return ensureDiscountHideInBenefitsColumnPromise;
+  }
+
+  async function ensureDiscountProductConfigColumn() {
+    if (discountProductConfigColumnReady) return true;
+    if (ensureDiscountProductConfigColumnPromise) return ensureDiscountProductConfigColumnPromise;
+
+    ensureDiscountProductConfigColumnPromise = (async () => {
+      const [columnRows] = await db.query('SHOW COLUMNS FROM mkt_discount_products');
+      const existing = new Set((Array.isArray(columnRows) ? columnRows : []).map((row) => String(row?.Field || '').trim()).filter(Boolean));
+      if (!existing.has('product_config_json')) {
+        try {
+          await db.query('ALTER TABLE mkt_discount_products ADD COLUMN `product_config_json` LONGTEXT NULL AFTER `combo_id`');
+          existing.add('product_config_json');
+        } catch (err) {
+          if (String(err?.code || '') !== 'ER_DUP_FIELDNAME') throw err;
+          existing.add('product_config_json');
+        }
+      }
+      discountProductConfigColumnReady = existing.has('product_config_json');
+      return discountProductConfigColumnReady;
+    })()
+      .catch((err) => {
+        ensureDiscountProductConfigColumnPromise = null;
+        throw err;
+      })
+      .finally(() => {
+        if (discountProductConfigColumnReady) {
+          ensureDiscountProductConfigColumnPromise = null;
+        }
+      });
+
+    return ensureDiscountProductConfigColumnPromise;
+  }
 
   /**
    * GET /api/admin/discounts
@@ -866,6 +1840,8 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
    */
   async function listDiscounts(req, res) {
     try {
+      await ensureDiscountHideInBenefitsColumn();
+      await ensureDiscountProductConfigColumn();
       const tenantId = req.tenantId || 1;
       const storeId = req.storeId || 1;
 
@@ -882,9 +1858,10 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
         .filter((discountId) => discountId > 0);
       let customersByDiscountId = new Map();
       let productsByDiscountId = new Map();
+      let promoCodesByDiscountId = new Map();
 
       if (discountIds.length) {
-        const [customerRows, productRows] = await Promise.all([
+        const [customerRows, productRows, promoRows] = await Promise.all([
           db.query(
             `SELECT dc.discount_id,
                     dc.customer_id,
@@ -903,7 +1880,9 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
                     dp.product_id,
                     dp.category_id,
                     dp.combo_id,
+                    dp.product_config_json,
                     p.name AS product_title,
+                    JSON_UNQUOTE(JSON_EXTRACT(p.photos_json, '$[0]')) AS product_image_url,
                     pc.title AS category_title,
                     cb.title AS combo_title
              FROM mkt_discount_products dp
@@ -913,10 +1892,19 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
              WHERE dp.tenant_id = ? AND dp.discount_id IN (?)`,
             [tenantId, discountIds]
           ),
+          db.query(
+            `SELECT id, tenant_id, store_id, discount_id, code, code_mode, is_active, usage_limit, usage_count,
+                    assigned_customer_id, created_at, updated_at
+             FROM mkt_discount_promo_codes
+             WHERE tenant_id = ? AND store_id = ? AND discount_id IN (?)
+             ORDER BY FIELD(code_mode, 'shared', 'unique'), created_at ASC, id ASC`,
+            [tenantId, storeId, discountIds]
+          ),
         ]);
 
         customersByDiscountId = groupDiscountRelationRows(customerRows[0], mapDiscountCustomerRow);
         productsByDiscountId = groupDiscountRelationRows(productRows[0], mapDiscountProductRow);
+        promoCodesByDiscountId = groupDiscountRelationRows(promoRows[0], normalizePromoCodeRow);
       }
 
       return res.json({
@@ -926,6 +1914,7 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
           return formatDiscountResponse(discount, {
             customers: customersByDiscountId.get(discountId) || [],
             products: productsByDiscountId.get(discountId) || [],
+            promoCodes: promoCodesByDiscountId.get(discountId) || [],
           });
         }),
       });
@@ -968,6 +1957,108 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
       return res.json({ ok: true, stats });
     } catch (err) {
       console.error('GET /api/admin/discounts/stats error:', err);
+      return res.status(500).json({ ok: false, error: 'SERVER_ERROR' });
+    }
+  });
+
+  router.get('/shared-promo-sources', async (req, res) => {
+    try {
+      const tenantId = req.tenantId || 1;
+      const storeId = req.storeId || 1;
+
+      const [rows] = await db.query(
+        `SELECT d.id AS discount_id,
+                d.title,
+                d.is_active,
+                d.mechanic_type,
+                d.mechanic_config_json,
+                d.activation_mode,
+                d.promo_code_mode,
+                pc.id AS promo_code_id,
+                pc.code,
+                pc.usage_limit,
+                pc.usage_count,
+                pc.is_active AS promo_code_is_active
+         FROM mkt_discounts d
+         INNER JOIN mkt_discount_promo_codes pc
+           ON pc.discount_id = d.id
+          AND pc.tenant_id = d.tenant_id
+          AND pc.store_id = d.store_id
+          AND pc.code_mode = 'shared'
+         WHERE d.tenant_id = ? AND d.store_id = ?
+         ORDER BY d.is_active DESC, d.title ASC, d.id DESC`,
+        [tenantId, storeId]
+      );
+
+      const sources = rows
+        .map((row) => {
+          const mechanicType = normalizeMechanicType(row.mechanic_type, 'simple_discount');
+          const mechanic = normalizeMechanicFromDiscount(row);
+          if (!isPromoSimpleDiscountMechanic(mechanicType, mechanic)) {
+            return null;
+          }
+          return {
+            source_discount_id: Number(row.discount_id || 0),
+            source_discount_title: toText(row.title) || `Акция #${row.discount_id}`,
+            source_promo_code_id: Number(row.promo_code_id || 0),
+            source_code: toText(row.code) || null,
+            usage_limit: row.usage_limit == null ? null : Number(row.usage_limit || 0),
+            usage_count: Number(row.usage_count || 0),
+            is_active: Number(row.is_active || 0) === 1,
+            promo_code_is_active: Number(row.promo_code_is_active || 0) === 1,
+          };
+        })
+        .filter((row) => row && row.source_discount_id > 0 && row.source_promo_code_id > 0 && row.source_code);
+
+      return res.json({ ok: true, sources });
+    } catch (err) {
+      console.error('GET /api/admin/discounts/shared-promo-sources error:', err);
+      return res.status(500).json({ ok: false, error: 'SERVER_ERROR' });
+    }
+  });
+
+  router.get('/simple-discount-sources', async (req, res) => {
+    try {
+      const tenantId = req.tenantId || 1;
+      const storeId = req.storeId || 1;
+
+      const [rows] = await db.query(
+        `SELECT id AS discount_id,
+                title,
+                discount_type,
+                discount_value,
+                apply_to,
+                is_active,
+                activation_mode,
+                mechanic_type,
+                mechanic_config_json
+           FROM mkt_discounts
+          WHERE tenant_id = ? AND store_id = ?
+          ORDER BY is_active DESC, title ASC, id DESC`,
+        [tenantId, storeId]
+      );
+
+      const sources = rows
+        .map((row) => {
+          const mechanicType = normalizeMechanicType(row.mechanic_type, 'simple_discount');
+          const mechanic = normalizeMechanicFromDiscount(row);
+          if (!isPlainSimpleDiscountMechanic(mechanicType, mechanic)) {
+            return null;
+          }
+          return {
+            discount_id: Number(row.discount_id || 0),
+            title: toText(row.title) || `Скидка #${row.discount_id}`,
+            discount_type: normalizeDiscountType(mechanic.discount_type ?? row.discount_type, 'percent'),
+            discount_value: toNumberOrNull(mechanic.discount_value ?? row.discount_value),
+            apply_to: normalizeApplyTo(mechanic.apply_to ?? row.apply_to, 'order'),
+            is_active: Number(row.is_active || 0) === 1,
+          };
+        })
+        .filter((row) => row && row.discount_id > 0);
+
+      return res.json({ ok: true, sources });
+    } catch (err) {
+      console.error('GET /api/admin/discounts/simple-discount-sources error:', err);
       return res.status(500).json({ ok: false, error: 'SERVER_ERROR' });
     }
   });
@@ -1112,6 +2203,8 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
    */
   router.get('/:id', async (req, res) => {
     try {
+      await ensureDiscountHideInBenefitsColumn();
+      await ensureDiscountProductConfigColumn();
       const tenantId = req.tenantId || 1;
       const storeId = req.storeId || 1;
       const discountId = Number(req.params.id || 0);
@@ -1145,6 +2238,8 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
       const [productRows] = await db.query(
         `SELECT dp.*, 
                 p.name AS product_title,
+                p.photos_json AS product_photos_json,
+                JSON_UNQUOTE(JSON_EXTRACT(p.photos_json, '$[0]')) AS product_image_url,
                 pc.title AS category_title,
                 cb.title AS combo_title
          FROM mkt_discount_products dp
@@ -1158,7 +2253,12 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
       // Преобразуем в формат {entity_type, entity_id, title}
       const customers = customerRows.map(row => {
         if (row.customer_id) {
-          return { entity_type: 'customer', entity_id: row.customer_id, title: row.customer_name || row.customer_phone || `Клиент #${row.customer_id}` };
+          return {
+            entity_type: 'customer',
+            entity_id: row.customer_id,
+            title: row.customer_name || row.customer_phone || `Клиент #${row.customer_id}`,
+            phone: row.customer_phone || '',
+          };
         }
         if (row.customer_category_id) {
           return { entity_type: 'category', entity_id: row.customer_category_id, title: row.category_title || `Категория #${row.customer_category_id}` };
@@ -1166,9 +2266,19 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
         return null;
       }).filter(Boolean);
 
-      const products = productRows.map(row => {
+      const productsLegacy = productRows.map(row => {
         if (row.product_id) {
-          return { entity_type: 'product', entity_id: row.product_id, title: row.product_title || `Товар #${row.product_id}` };
+          let imageUrl = null;
+          try {
+            const photos = JSON.parse(row.product_photos_json || '[]');
+            imageUrl = Array.isArray(photos) && photos.length ? String(photos[0] || '').trim() || null : null;
+          } catch {}
+          return {
+            entity_type: 'product',
+            entity_id: row.product_id,
+            title: row.product_title || `Товар #${row.product_id}`,
+            image_url: imageUrl,
+          };
         }
         if (row.category_id) {
           return { entity_type: 'category', entity_id: row.category_id, title: row.category_title || `Категория #${row.category_id}` };
@@ -1178,12 +2288,21 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
         }
         return null;
       }).filter(Boolean);
+      const products = productRows.map((row) => mapDiscountProductRow(row)).filter(Boolean);
 
+      const normalizedDiscount = normalizeDiscountRow(discount);
+      const normalizedMechanic = normalizeMechanicFromDiscount(normalizedDiscount);
+      const mechanicRefs = collectMechanicEntityRefs(normalizedMechanic);
+      const mechanicLookup = await loadMechanicEntityLookup(db, tenantId, mechanicRefs);
+      const enrichedMechanic = enrichMechanicForResponse(normalizedMechanic, mechanicLookup);
       const promoCodes = await getPromoCodeRows(db, tenantId, storeId, discountId);
 
       return res.json({
         ok: true,
-        discount: formatDiscountResponse(discount, {
+        discount: formatDiscountResponse({
+          ...discount,
+          mechanic_config_json: enrichedMechanic,
+        }, {
           customers,
           products,
           promoCodes,
@@ -1202,6 +2321,8 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
   router.post('/', async (req, res) => {
     const tenantId = req.tenantId || 1;
     const storeId = req.storeId || 1;
+    await ensureDiscountHideInBenefitsColumn();
+    await ensureDiscountProductConfigColumn();
     const conn = await db.getConnection();
     let inTransaction = false;
     try {
@@ -1223,6 +2344,7 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
         return res.status(400).json({ ok: false, error: 'TITLE_REQUIRED' });
       }
       assertValidDateRange(req.body);
+      assertValidRestrictionSchedule(req.body);
       if (mechanicPayload.mechanicType !== 'simple_discount' && hasExplicitProducts && products.length) {
         return res.status(400).json({ ok: false, error: 'PRODUCTS_NOT_ALLOWED' });
       }
@@ -1230,6 +2352,9 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
         return res.status(400).json({ ok: false, error: 'PROMO_NOT_AVAILABLE' });
       }
       assertMechanicIsValid(mechanicPayload.mechanicType, mechanicPayload.mechanic, { products });
+      if (mechanicPayload.mechanicType === 'threshold') {
+        await assertThresholdRewardSourcesExist(conn, tenantId, storeId, mechanicPayload.mechanic);
+      }
       if (promoEnabled && normalizePromoRewardType(mechanicPayload.mechanic?.promo_reward?.reward_type, 'discount') === 'product' && !promoRewardProducts.length) {
         return res.status(400).json({ ok: false, error: 'PROMO_REWARD_PRODUCTS_REQUIRED' });
       }
@@ -1245,10 +2370,10 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
           tenant_id, store_id, title, description, discount_type, discount_value,
           apply_to, min_order_amount, max_discount_amount,
           starts_at, ends_at, schedule_days, schedule_time_start, schedule_time_end,
-          usage_limit, usage_per_customer, priority, is_stackable, is_active,
+          usage_limit, usage_per_customer, priority, is_stackable, is_active, hide_in_benefits,
           activation_mode, reward_type, promo_code_mode, unique_code_usage_limit,
           mechanic_type, mechanic_config_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           tenantId,
           storeId,
@@ -1269,6 +2394,7 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
           toIntOrNull(req.body?.priority) || 0,
           toBoolFlag(req.body?.is_stackable) ? 1 : 0,
           toBoolFlag(req.body?.is_active, true) ? 1 : 0,
+          toBoolFlag(req.body?.hide_in_benefits) ? 1 : 0,
           activationMode,
           mechanicPayload.rewardType,
           promoCodeMode,
@@ -1348,6 +2474,8 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
     const tenantId = req.tenantId || 1;
     const storeId = req.storeId || 1;
     const discountId = Number(req.params.id || 0);
+    await ensureDiscountHideInBenefitsColumn();
+    await ensureDiscountProductConfigColumn();
 
     if (!(discountId > 0)) {
       return res.status(400).json({ ok: false, error: 'INVALID_ID' });
@@ -1387,6 +2515,7 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
         return res.status(400).json({ ok: false, error: 'TITLE_REQUIRED' });
       }
       assertValidDateRange(req.body, existing);
+      assertValidRestrictionSchedule(req.body, existing);
       if (mechanicPayload.mechanicType !== 'simple_discount' && hasExplicitProducts && products.length) {
         return res.status(400).json({ ok: false, error: 'PRODUCTS_NOT_ALLOWED' });
       }
@@ -1394,6 +2523,9 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
         return res.status(400).json({ ok: false, error: 'PROMO_NOT_AVAILABLE' });
       }
       assertMechanicIsValid(mechanicPayload.mechanicType, mechanicPayload.mechanic, { products });
+      if (mechanicPayload.mechanicType === 'threshold') {
+        await assertThresholdRewardSourcesExist(conn, tenantId, storeId, mechanicPayload.mechanic, { currentDiscountId: discountId });
+      }
       if (promoEnabled && normalizePromoRewardType(mechanicPayload.mechanic?.promo_reward?.reward_type, 'discount') === 'product' && !promoRewardProducts.length) {
         return res.status(400).json({ ok: false, error: 'PROMO_REWARD_PRODUCTS_REQUIRED' });
       }
@@ -1404,12 +2536,16 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
       await conn.beginTransaction();
       inTransaction = true;
 
+      const priorityValue = Object.prototype.hasOwnProperty.call(req.body || {}, 'priority')
+        ? (toIntOrNull(req.body?.priority) || 0)
+        : (toIntOrNull(existing?.priority) || 0);
+
       await conn.query(
         `UPDATE mkt_discounts SET
           title = ?, description = ?, discount_type = ?, discount_value = ?,
           apply_to = ?, min_order_amount = ?, max_discount_amount = ?,
           starts_at = ?, ends_at = ?, schedule_days = ?, schedule_time_start = ?, schedule_time_end = ?,
-          usage_limit = ?, usage_per_customer = ?, priority = ?, is_stackable = ?, is_active = ?,
+          usage_limit = ?, usage_per_customer = ?, priority = ?, is_stackable = ?, is_active = ?, hide_in_benefits = ?,
           activation_mode = ?, reward_type = ?, promo_code_mode = ?, unique_code_usage_limit = ?,
           mechanic_type = ?, mechanic_config_json = ?
         WHERE id = ? AND tenant_id = ? AND store_id = ?`,
@@ -1428,9 +2564,12 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
           toNullableText(req.body?.schedule_time_end),
           toIntOrNull(req.body?.usage_limit),
           toIntOrNull(req.body?.usage_per_customer),
-          toIntOrNull(req.body?.priority) || 0,
+          priorityValue,
           toBoolFlag(req.body?.is_stackable) ? 1 : 0,
           toBoolFlag(req.body?.is_active, true) ? 1 : 0,
+          Object.prototype.hasOwnProperty.call(req.body || {}, 'hide_in_benefits')
+            ? (toBoolFlag(req.body?.hide_in_benefits) ? 1 : 0)
+            : (toBoolFlag(existing?.hide_in_benefits) ? 1 : 0),
           activationModeResolved,
           mechanicPayload.rewardType,
           promoCodeMode,
@@ -1545,6 +2684,21 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
       const conn = await db.getConnection();
       try {
         await conn.beginTransaction();
+        await conn.query(
+          `DELETE FROM mkt_discount_usage
+           WHERE tenant_id = ? AND discount_id = ?`,
+          [tenantId, discountId]
+        );
+        await conn.query(
+          `DELETE FROM mkt_discount_customers
+           WHERE tenant_id = ? AND discount_id = ?`,
+          [tenantId, discountId]
+        );
+        await conn.query(
+          `DELETE FROM mkt_discount_products
+           WHERE tenant_id = ? AND discount_id = ?`,
+          [tenantId, discountId]
+        );
         await conn.query(
           `DELETE FROM mkt_discount_promo_codes
            WHERE tenant_id = ? AND store_id = ? AND discount_id = ?`,

@@ -8,6 +8,15 @@ const {
   buildOrderRefundState,
   buildRefundPlan,
 } = require("../helpers/orderRefunds");
+const {
+  buildDefaultQuote,
+  buildDeliveryQuote,
+  loadDefaultDeliverySettings,
+} = require("../../data/delivery-quote");
+const {
+  loadCustomerAddressById,
+  normalizeCustomerAddressPayload,
+} = require("../../data/customer-address");
 
 module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
   const router = express.Router();
@@ -414,6 +423,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         o.time_option_id,
         o.status_id,
         o.pickup_store_id,
+        o.delivery_address_id,
 
         s.code AS statusCode,
         s.title AS statusTitle,
@@ -435,7 +445,23 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         ps.name AS pickupStoreName,
         ps.address AS pickupStoreAddress,
 
-        ca.comment AS address_comment_from_cust
+        ca.comment AS address_comment_from_cust,
+        ca.city AS deliveryAddressCity,
+        ca.street AS deliveryAddressStreet,
+        ca.house AS deliveryAddressHouse,
+        ca.entrance AS deliveryAddressEntrance,
+        ca.floor AS deliveryAddressFloor,
+        ca.apartment AS deliveryAddressApartment,
+        ca.address_ref AS deliveryAddressRef,
+        ca.selected_object_type AS deliverySelectedObjectType,
+        ca.resolved_city_source_key AS deliveryResolvedCitySourceKey,
+        ca.address_context_locality AS deliveryAddressContextLocality,
+        ca.address_normalized_display AS deliveryAddressNormalizedDisplay,
+        ca.lat AS deliveryAddressLat,
+        ca.lng AS deliveryAddressLng,
+        ca.delivery_store_id AS deliveryStoreId,
+        ca.delivery_zone_id AS deliveryZoneId,
+        dz.name AS deliveryZoneName
       FROM order_orders o
       LEFT JOIN order_statuses s
         ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id
@@ -451,6 +477,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         ON ps.tenant_id=o.tenant_id AND ps.id=o.pickup_store_id
       LEFT JOIN cust_customer_addresses ca
         ON ca.tenant_id=o.tenant_id AND ca.id=o.delivery_address_id AND ca.is_active=1
+      LEFT JOIN ten_delivery_zones dz
+        ON dz.tenant_id=o.tenant_id AND dz.id=ca.delivery_zone_id
       WHERE o.tenant_id=? AND o.store_id=? AND o.id=? AND o.is_active=1
       LIMIT 1
       `,
@@ -505,6 +533,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       is_paid: Number(r.is_paid || 0) === 1 ? 1 : 0,
       time_option_id: r.time_option_id,
       status_id: r.status_id,
+      delivery_address_id: r.delivery_address_id ?? null,
 
       status_code: r.statusCode ?? null,
       status_title: r.statusTitle ?? null,
@@ -526,6 +555,22 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       pickup_store_id: r.pickup_store_id ?? null,
       pickup_store_name: r.pickupStoreName ?? null,
       pickup_store_address: r.pickupStoreAddress ?? null,
+      delivery_address_city: helpers.strOrNull(r.deliveryAddressCity),
+      delivery_address_street: helpers.strOrNull(r.deliveryAddressStreet),
+      delivery_address_house: helpers.strOrNull(r.deliveryAddressHouse),
+      delivery_address_entrance: helpers.strOrNull(r.deliveryAddressEntrance),
+      delivery_address_floor: helpers.strOrNull(r.deliveryAddressFloor),
+      delivery_address_apartment: helpers.strOrNull(r.deliveryAddressApartment),
+      delivery_address_ref: helpers.strOrNull(r.deliveryAddressRef),
+      delivery_selected_object_type: helpers.strOrNull(r.deliverySelectedObjectType),
+      delivery_resolved_city_source_key: helpers.strOrNull(r.deliveryResolvedCitySourceKey),
+      delivery_address_context_locality: helpers.strOrNull(r.deliveryAddressContextLocality),
+      delivery_address_normalized_display: helpers.strOrNull(r.deliveryAddressNormalizedDisplay),
+      delivery_address_lat: r.deliveryAddressLat != null ? Number(r.deliveryAddressLat) : null,
+      delivery_address_lng: r.deliveryAddressLng != null ? Number(r.deliveryAddressLng) : null,
+      delivery_store_id: Number.isFinite(Number(r.deliveryStoreId)) && Number(r.deliveryStoreId) > 0 ? Number(r.deliveryStoreId) : null,
+      delivery_zone_id: Number.isFinite(Number(r.deliveryZoneId)) && Number(r.deliveryZoneId) > 0 ? Number(r.deliveryZoneId) : null,
+      delivery_zone_name: helpers.strOrNull(r.deliveryZoneName),
     };
     const [payload] = await attachRefundDataToOrders(db, tenantId, storeId, [basePayload], { storeTimezone });
     return payload || basePayload;
@@ -670,6 +715,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           o.is_paid,
           o.time_option_id,
           o.status_id,
+          o.delivery_address_id,
 
           s.code AS statusCode,
           s.title AS statusTitle,
@@ -692,7 +738,23 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           ps.name AS pickupStoreName,
           ps.address AS pickupStoreAddress,
 
-          ca.comment AS address_comment_from_cust
+          ca.comment AS address_comment_from_cust,
+          ca.city AS deliveryAddressCity,
+          ca.street AS deliveryAddressStreet,
+          ca.house AS deliveryAddressHouse,
+          ca.entrance AS deliveryAddressEntrance,
+          ca.floor AS deliveryAddressFloor,
+          ca.apartment AS deliveryAddressApartment,
+          ca.address_ref AS deliveryAddressRef,
+          ca.selected_object_type AS deliverySelectedObjectType,
+          ca.resolved_city_source_key AS deliveryResolvedCitySourceKey,
+          ca.address_context_locality AS deliveryAddressContextLocality,
+          ca.address_normalized_display AS deliveryAddressNormalizedDisplay,
+          ca.lat AS deliveryAddressLat,
+          ca.lng AS deliveryAddressLng,
+          ca.delivery_store_id AS deliveryStoreId,
+          ca.delivery_zone_id AS deliveryZoneId,
+          dz.name AS deliveryZoneName
         FROM order_orders o
         LEFT JOIN order_statuses s
           ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id
@@ -708,6 +770,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           ON ps.tenant_id=o.tenant_id AND ps.id=o.pickup_store_id
         LEFT JOIN cust_customer_addresses ca
           ON ca.tenant_id=o.tenant_id AND ca.id=o.delivery_address_id AND ca.is_active=1
+        LEFT JOIN ten_delivery_zones dz
+          ON dz.tenant_id=o.tenant_id AND dz.id=ca.delivery_zone_id
         WHERE ${where}
         ORDER BY ${orderBy}
         LIMIT ? OFFSET ?
@@ -753,6 +817,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           discount_amount: Number(r.discount_amount || 0),
           discounts_json: discountsJson,
           is_paid: Number(r.is_paid || 0) === 1 ? 1 : 0,
+          delivery_address_id: r.delivery_address_id ?? null,
 
           status_code: r.statusCode ?? null,
           status_title: r.statusTitle ?? null,
@@ -774,6 +839,22 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           pickup_store_id: r.pickup_store_id ?? null,
           pickup_store_name: r.pickupStoreName ?? null,
           pickup_store_address: r.pickupStoreAddress ?? null,
+          delivery_address_city: helpers.strOrNull(r.deliveryAddressCity),
+          delivery_address_street: helpers.strOrNull(r.deliveryAddressStreet),
+          delivery_address_house: helpers.strOrNull(r.deliveryAddressHouse),
+          delivery_address_entrance: helpers.strOrNull(r.deliveryAddressEntrance),
+          delivery_address_floor: helpers.strOrNull(r.deliveryAddressFloor),
+          delivery_address_apartment: helpers.strOrNull(r.deliveryAddressApartment),
+          delivery_address_ref: helpers.strOrNull(r.deliveryAddressRef),
+          delivery_selected_object_type: helpers.strOrNull(r.deliverySelectedObjectType),
+          delivery_resolved_city_source_key: helpers.strOrNull(r.deliveryResolvedCitySourceKey),
+          delivery_address_context_locality: helpers.strOrNull(r.deliveryAddressContextLocality),
+          delivery_address_normalized_display: helpers.strOrNull(r.deliveryAddressNormalizedDisplay),
+          delivery_address_lat: r.deliveryAddressLat != null ? Number(r.deliveryAddressLat) : null,
+          delivery_address_lng: r.deliveryAddressLng != null ? Number(r.deliveryAddressLng) : null,
+          delivery_store_id: Number.isFinite(Number(r.deliveryStoreId)) && Number(r.deliveryStoreId) > 0 ? Number(r.deliveryStoreId) : null,
+          delivery_zone_id: Number.isFinite(Number(r.deliveryZoneId)) && Number(r.deliveryZoneId) > 0 ? Number(r.deliveryZoneId) : null,
+          delivery_zone_name: helpers.strOrNull(r.deliveryZoneName),
         };
       });
       const data = await attachRefundDataToOrders(db, tenantId, storeId, baseData, { storeTimezone });
@@ -1525,7 +1606,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       }
 
       const [existingRows] = await db.query(
-        `SELECT id, public_id, customer_id, promo_code, address_comment, cutlery_qty, discounts_json
+        `SELECT id, public_id, customer_id, promo_code, address_comment, cutlery_qty, discounts_json, items
          FROM order_orders
          WHERE tenant_id=? AND store_id=? AND id=? AND is_active=1
          LIMIT 1`,
@@ -1535,6 +1616,11 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         return res.status(404).json({ ok: false, error: "NOT_FOUND" });
       }
       const existing = existingRows[0] || {};
+      let previousItems = [];
+      try {
+        const parsedExistingItems = existing?.items ? JSON.parse(existing.items) : [];
+        if (Array.isArray(parsedExistingItems)) previousItems = parsedExistingItems;
+      } catch {}
 
       const methodCode = String(req.body?.method_code || "").trim();
       const paymentCode = String(req.body?.payment_code || "").trim();
@@ -1702,6 +1788,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           variant_group_id: Number(rawItem?.variant_group_id || 0) || null,
           variant_value_index: Number.isFinite(Number(rawItem?.variant_value_index)) ? Number(rawItem.variant_value_index) : null,
           variant_label: helpers.strOrNull(rawItem?.variant_label),
+          is_gift_reward: Number(rawItem?.is_gift_reward || 0) === 1 ? 1 : 0,
+          gift_reward_id: Number(rawItem?.gift_reward_id || 0) > 0 ? Number(rawItem.gift_reward_id) : null,
           line_total: lineTotal,
           old_line_total: originalLineTotal,
         });
@@ -2056,28 +2144,123 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
 
       let deliveryCost = 0;
       if (isDeliveryMethod) {
-        let minOrderAmount = 0;
-        let freeDeliveryFrom = null;
-        const [settingsRows] = await db.query(
-          `SELECT ds.delivery_cost, ds.min_order_amount, ds.free_delivery_from
-           FROM ten_delivery_settings ds
-           JOIN ten_delivery_settings_stores dss
-             ON dss.delivery_setting_id = ds.id AND dss.tenant_id = ds.tenant_id
-           WHERE ds.tenant_id=? AND dss.store_id=? AND ds.is_active=1
-           LIMIT 1`,
-          [tenantId, storeId]
-        );
-        if (settingsRows.length) {
-          const settings = settingsRows[0];
-          deliveryCost = roundMoney(Number(settings?.delivery_cost || 0));
-          minOrderAmount = Number(settings?.min_order_amount || 0);
-          freeDeliveryFrom = settings?.free_delivery_from != null ? Number(settings.free_delivery_from) : null;
+        let resolvedDeliveryAddress = null;
+        if (deliveryAddressId && customerId) {
+          resolvedDeliveryAddress = await loadCustomerAddressById({
+            db,
+            helpers,
+            tenantId,
+            customerId,
+            addressId: deliveryAddressId,
+          });
+          if (!resolvedDeliveryAddress) {
+            return res.status(404).json({ ok: false, error: "ADDRESS_NOT_FOUND" });
+          }
         }
-        if (minOrderAmount > 0 && itemsTotalAfterDiscounts < minOrderAmount) {
-          return res.status(409).json({ ok: false, error: "MIN_ORDER", min_order_amount: minOrderAmount });
+
+        const hasInlineDeliveryAddressInput = [
+          "delivery_address_city",
+          "delivery_address_street",
+          "delivery_address_house",
+          "delivery_address_entrance",
+          "delivery_address_floor",
+          "delivery_address_apartment",
+          "address_comment",
+          "delivery_address_ref",
+          "delivery_selected_object_type",
+          "delivery_resolved_city_source_key",
+          "delivery_address_context_locality",
+          "delivery_address_normalized_display",
+          "delivery_address_lat",
+          "delivery_address_lng",
+          "delivery_zone_id",
+          "delivery_store_id",
+        ].some((field) => Object.prototype.hasOwnProperty.call(req.body || {}, field));
+
+        let inlineDeliveryAddress = null;
+        if (!resolvedDeliveryAddress || hasInlineDeliveryAddressInput) {
+          const inlineAddressResult = normalizeCustomerAddressPayload(helpers, {
+            city: Object.prototype.hasOwnProperty.call(req.body || {}, "delivery_address_city")
+              ? req.body.delivery_address_city
+              : existing?.delivery_address_city,
+            street: Object.prototype.hasOwnProperty.call(req.body || {}, "delivery_address_street")
+              ? req.body.delivery_address_street
+              : existing?.delivery_address_street,
+            house: Object.prototype.hasOwnProperty.call(req.body || {}, "delivery_address_house")
+              ? req.body.delivery_address_house
+              : existing?.delivery_address_house,
+            entrance: Object.prototype.hasOwnProperty.call(req.body || {}, "delivery_address_entrance")
+              ? req.body.delivery_address_entrance
+              : existing?.delivery_address_entrance,
+            floor: Object.prototype.hasOwnProperty.call(req.body || {}, "delivery_address_floor")
+              ? req.body.delivery_address_floor
+              : existing?.delivery_address_floor,
+            apartment: Object.prototype.hasOwnProperty.call(req.body || {}, "delivery_address_apartment")
+              ? req.body.delivery_address_apartment
+              : existing?.delivery_address_apartment,
+            comment: Object.prototype.hasOwnProperty.call(req.body || {}, "address_comment")
+              ? req.body.address_comment
+              : existing?.address_comment,
+            address_ref: Object.prototype.hasOwnProperty.call(req.body || {}, "delivery_address_ref")
+              ? req.body.delivery_address_ref
+              : existing?.delivery_address_ref,
+            selected_object_type: Object.prototype.hasOwnProperty.call(req.body || {}, "delivery_selected_object_type")
+              ? req.body.delivery_selected_object_type
+              : existing?.delivery_selected_object_type,
+            resolved_city_source_key: Object.prototype.hasOwnProperty.call(req.body || {}, "delivery_resolved_city_source_key")
+              ? req.body.delivery_resolved_city_source_key
+              : existing?.delivery_resolved_city_source_key,
+            address_context_locality: Object.prototype.hasOwnProperty.call(req.body || {}, "delivery_address_context_locality")
+              ? req.body.delivery_address_context_locality
+              : existing?.delivery_address_context_locality,
+            address_normalized_display: Object.prototype.hasOwnProperty.call(req.body || {}, "delivery_address_normalized_display")
+              ? req.body.delivery_address_normalized_display
+              : (existing?.delivery_address_normalized_display || deliveryAddress),
+            lat: Object.prototype.hasOwnProperty.call(req.body || {}, "delivery_address_lat")
+              ? req.body.delivery_address_lat
+              : existing?.delivery_address_lat,
+            lng: Object.prototype.hasOwnProperty.call(req.body || {}, "delivery_address_lng")
+              ? req.body.delivery_address_lng
+              : existing?.delivery_address_lng,
+            delivery_zone_id: Object.prototype.hasOwnProperty.call(req.body || {}, "delivery_zone_id")
+              ? req.body.delivery_zone_id
+              : existing?.delivery_zone_id,
+            delivery_store_id: Object.prototype.hasOwnProperty.call(req.body || {}, "delivery_store_id")
+              ? req.body.delivery_store_id
+              : existing?.delivery_store_id,
+          });
+
+          if (inlineAddressResult.ok) {
+            inlineDeliveryAddress = inlineAddressResult.data;
+          } else if (
+            !resolvedDeliveryAddress
+            && (inlineAddressResult.error === "STREET_REQUIRED" || inlineAddressResult.error === "HOUSE_REQUIRED")
+          ) {
+            const defaultSettings = await loadDefaultDeliverySettings(db, tenantId, storeId);
+            const fallbackQuote = buildDefaultQuote(defaultSettings, itemsTotalAfterDiscounts);
+            const minOrderAmount = Number(fallbackQuote.min_order_amount || 0);
+            if (minOrderAmount > 0 && itemsTotalAfterDiscounts < minOrderAmount) {
+              return res.status(409).json({ ok: false, error: "MIN_ORDER", min_order_amount: minOrderAmount });
+            }
+            deliveryCost = roundMoney(Number(fallbackQuote.delivery_cost || 0));
+          } else {
+            return res.status(400).json({ ok: false, error: inlineAddressResult.error });
+          }
         }
-        if (freeDeliveryFrom != null && itemsTotalAfterDiscounts >= freeDeliveryFrom) {
-          deliveryCost = 0;
+
+        if (resolvedDeliveryAddress || inlineDeliveryAddress) {
+          const deliveryQuote = await buildDeliveryQuote({
+            db,
+            tenantId,
+            storeId,
+            subtotal: itemsTotalAfterDiscounts,
+            address: resolvedDeliveryAddress || inlineDeliveryAddress,
+          });
+          const minOrderAmount = Number(deliveryQuote.min_order_amount || 0);
+          if (minOrderAmount > 0 && itemsTotalAfterDiscounts < minOrderAmount) {
+            return res.status(409).json({ ok: false, error: "MIN_ORDER", min_order_amount: minOrderAmount });
+          }
+          deliveryCost = roundMoney(Number(deliveryQuote.delivery_cost || 0));
         }
       }
       const totalPrice = roundMoney(itemsTotalAfterDiscounts + deliveryCost);
@@ -2155,6 +2338,31 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           id,
         ]
       );
+
+      const previousGiftRewardIds = new Set(
+        previousItems
+          .map((item) => Number(item?.gift_reward_id || 0))
+          .filter((rewardId, index, source) => rewardId > 0 && source.indexOf(rewardId) === index)
+      );
+      const nextGiftRewardIds = new Set(
+        items
+          .map((item) => Number(item?.gift_reward_id || 0))
+          .filter((rewardId, index, source) => rewardId > 0 && source.indexOf(rewardId) === index)
+      );
+      const removedGiftRewardIds = [...previousGiftRewardIds].filter((rewardId) => !nextGiftRewardIds.has(rewardId));
+      const rewardCustomerId = Number(existing?.customer_id || customerId || 0);
+      if (removedGiftRewardIds.length && rewardCustomerId > 0) {
+        await db.query(
+          `UPDATE mkt_discount_rewards
+              SET status='available', used_at=NULL, updated_at=NOW()
+            WHERE tenant_id=?
+              AND customer_id=?
+              AND reward_type='gift'
+              AND status='used'
+              AND id IN (?)`,
+          [tenantId, rewardCustomerId, removedGiftRewardIds]
+        );
+      }
 
       await syncCustomerOrderMetrics(db, tenantId, [existingCustomerId, customerId]);
 

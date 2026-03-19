@@ -38,3 +38,32 @@ evvawewaar
 Домашняя папка: доступны все папки
 Пользователь: a1186497@a1186497
 Пароль: evvawewaar
+
+
+перезапуск сервиса адресов
+Если ты в корне проекта c:\Users\User\Desktop\markin-me, то команда такая:
+
+npm run address:service:start
+
+Если порт 3400 уже занят старым зависшим процессом, сначала убей его:
+
+netstat -ano | findstr :3400
+
+Потом:
+
+taskkill /PID НОМЕР_PID /F
+
+И снова запусти:
+
+npm run address:service:start
+
+После запуска проверь в браузере:
+http://127.0.0.1:3400/health
+
+Если сервис живой, увидишь либо {"ok":true}, либо UNAUTHORIZED. Оба варианта означают, что он запустился.
+
+
+
+npm run address:service:install
+npm run address:service:db:check
+npm run address:service:start

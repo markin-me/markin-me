@@ -12,10 +12,16 @@
 
     const stores = window._pickupStores || [];
     const cities = [...new Set(stores.map(s => s.city).filter(Boolean))].sort();
+    const placeholder = str(
+      wrapEl.dataset.placeholder
+      || trigger.getAttribute("aria-label")
+      || "Выберите"
+    ).trim() || "Выберите";
     const current = (selectedValue && cities.includes(selectedValue)) ? selectedValue : (cities[0] || "");
 
     wrapEl.dataset.value = current;
-    valueEl.textContent = current || "—";
+    valueEl.textContent = current || placeholder;
+    valueEl.classList.toggle("is-placeholder", !current);
     dropdown.innerHTML = "";
 
     cities.forEach(c => {
@@ -27,10 +33,12 @@
         e.stopPropagation();
         wrapEl.dataset.value = c;
         valueEl.textContent = c;
+        valueEl.classList.remove("is-placeholder");
         dropdown.querySelectorAll(".custom-select-option").forEach(o => o.classList.remove("is-selected"));
         opt.classList.add("is-selected");
         dropdown.classList.add("hidden");
         wrapEl.classList.remove("is-open");
+        wrapEl.dispatchEvent(new Event("change"));
       });
       dropdown.appendChild(opt);
     });
@@ -166,6 +174,7 @@
     $("#shopToolbarTitle") ||
     $("[data-shop-category-title]");
   const elCatChipsWrap = $("#shopCatChipsWrap");
+  const elCatSheetTriggerBtn = $("#shopCatSheetTriggerBtn");
   const elCatChips = $("#shopCatChips");
 
   const elCartList =
@@ -204,6 +213,11 @@
   const elPickupList = $("#shopPickupList");
 
   const elAddrCity = $("#shopAddrCity");
+  const elAddrLookupWrap = $("#shopAddrLookupWrap");
+  const elAddrLookup = $("#shopAddrLookup");
+  const elAddrLookupPopover = $("#shopAddrLookupPopover");
+  const elAddrLookupStatus = $("#shopAddrLookupStatus");
+  const elAddrLookupResults = $("#shopAddrLookupResults");
   const elAddrStreet = $("#shopAddrStreet");
   const elAddrHouse = $("#shopAddrHouse");
   const elAddrEntrance = $("#shopAddrEntrance");
@@ -252,8 +266,11 @@
   const elMobileCartActions = $("#shopMobileCartActions");
   const elMobileCartActionsCart = $("#shopMobileCartActionsCart");
   const elMobileCartActionsCheckout = $("#shopMobileCartActionsCheckout");
+  const elMobileCartActionsBenefits = $("#shopMobileCartActionsBenefits");
+  const elMobileCartActionsGiftClaim = $("#shopMobileCartActionsGiftClaim");
   const elMobileCartClearBtn = $("#shopMobileCartClearBtn");
   const elMobileCheckoutBtn = $("#shopMobileCheckoutBtn");
+  const elMobileGiftClaimBtn = $("#shopMobileGiftClaimBtn");
   const elMobileCartTotal = $("#shopMobileCartTotal");
   const elMobileDeliveryProgressWrap = $("#shopMobileDeliveryProgressWrap");
   const elMobileDeliveryProgressFill = $("#shopMobileDeliveryProgressFill");
@@ -261,6 +278,8 @@
   const elMobileDeliveryProgressBar = document.querySelector(".shop-mobile-delivery-progress-bar");
   const elMobileCheckoutBackBtn = $("#shopMobileCheckoutBackBtn");
   const elMobileCheckoutSubmitBtn = $("#shopMobileCheckoutSubmitBtn");
+  const elMobileBenefitsPromoWrap = $("#shopMobileBenefitsPromoWrap");
+  const elMobileBenefitsInlineApplyBtn = $("#shopMobileBenefitsInlineApplyBtn");
   const elMobileOrderDetailsActions = $("#shopMobileOrderDetailsActions");
   const elMobileOrderRepeatBtn = $("#shopMobileOrderRepeatBtn");
   const elMobileOrderTotalBtn = $("#shopMobileOrderTotalBtn");
@@ -284,6 +303,7 @@
   const elDesktopDeliveryProgressWrap = $("#shopCartDeliveryProgress");
   const elDesktopDeliveryProgressFill = $("#shopCartDeliveryProgressFill");
   const elDesktopDeliveryProgressLabel = $("#shopCartDeliveryProgressLabel");
+  const elDesktopCartBenefitsTriggerBtn = $("#shopCartBenefitsTriggerBtn");
   const elCheckoutFooterActions = $("#shopCheckoutFooterActions");
   const elOrderDetailsFooterActions = $("#shopOrderDetailsFooterActions");
   const elOrderDetailsRepeatBtn = $("#shopOrderDetailsRepeatBtn");
@@ -294,6 +314,8 @@
   const elCheckoutBackBtn = $("#shopCheckoutBackBtn");
   const elCheckoutSubmitBtn = $("#shopCheckoutSubmitBtn");
   const elCheckoutContent = $("#shopCheckoutContent");
+  const elCheckoutBenefitsContent = $("#shopCheckoutBenefitsContent");
+  const elCheckoutBenefitDetailContent = $("#shopCheckoutBenefitDetailContent");
   const elProfileContent = $("#shopProfileContent");
   const elProductContent = $("#shopProductContent");
   const elProfileHeaderActions = $("#shopProfileHeaderActions");
@@ -357,6 +379,14 @@
     } catch {
       return null;
     }
+  }
+
+  function isAddressMapModeEnabled() {
+    const tenant = getTenantFromStorage();
+    if (tenant && Object.prototype.hasOwnProperty.call(tenant, "store_address_map_enabled")) {
+      return Boolean(tenant.store_address_map_enabled);
+    }
+    return Boolean(window.__shopOrderConfig && window.__shopOrderConfig.storeAddressMapEnabled);
   }
 
   function getPriceRoundingSettings() {
@@ -778,12 +808,22 @@
     addresses: [],
     selectedAddress: null,
     addressEditingId: null,
+    _addressFormResolved: null,
     _addressFormBackMode: null,
     _addressListBackMode: null,
     _addressListMode: "delivery",
     _addressPendingAddress: null,
     _addressPendingPickupStoreId: null,
     _selectedPickupCity: null,
+  };
+  const addressLookupState = {
+    open: false,
+    items: [],
+    activeIndex: -1,
+    status: "",
+    mode: "idle",
+    requestSeq: 0,
+    debounceTimer: null,
   };
   let mobileUiState = {
     isMobile: false,
@@ -1384,15 +1424,21 @@
     const active = document.querySelector(".shop-nav-btn.is-active");
     if (!active) return null;
     const raw = String(active.getAttribute("data-tab") || "").trim().toLowerCase();
-    if (raw === "menu" || raw === "categories" || raw === "cart" || raw === "fav" || raw === "profile") {
+    if (raw === "categories") return "menu";
+    if (raw === "menu" || raw === "benefits" || raw === "cart" || raw === "fav" || raw === "profile") {
       return raw;
     }
     return null;
   }
 
-  function resolveMobilePanelSnapshot(sheetOpen, sheetType, sheetScreen) {
+  function resolveMobilePanelSnapshot(sheetOpen, sheetType, sheetScreen, sheetData = null) {
     if (sheetOpen) {
       if (sheetType === "cart") {
+        if (sheetScreen === "benefits") return "benefits";
+        if (sheetScreen === "benefitDetail") {
+          if (String(sheetData?.benefitDetailMode || "").trim() === "gift-claim") return "benefit-gift-claim";
+          return "sheet";
+        }
         if (sheetScreen === "checkout") return "checkout";
         if (sheetScreen === "addressList" || sheetScreen === "pickupList") return "address-list";
         if (sheetScreen === "addressForm") return "address-form";
@@ -1430,6 +1476,9 @@
     if (isVisibleNode(elMobileOrderDetailsActions)) return "order-details-actions";
     if (isVisibleNode(elActiveOrdersSheetCollapsed)) return "active-orders-collapsed";
     if (isVisibleNode(elMobileCartActions)) {
+      if (isVisibleNode(elMobileCartActionsGiftClaim)) return "gift-claim-actions";
+      if (isVisibleNode(elMobileBenefitsInlineApplyBtn)) return "benefits-nav-actions";
+      if (isVisibleNode(elMobileCartActionsBenefits)) return "benefits-actions";
       if (isVisibleNode(elMobileCartActionsCheckout)) return "checkout-actions";
       if (isVisibleNode(elMobileCartActionsCart)) return "cart-actions";
       return "cart-actions";
@@ -1441,12 +1490,18 @@
     const options = opts && typeof opts === "object" ? opts : {};
     const isCartSheetOpen = Boolean(options.sheetOpen) && String(options.sheetType || "") === "cart";
     const panelName = String(panel || "");
+    const benefitsSourceScreen = String(options.sheetData?.benefitsSourceScreen || "").trim().toLowerCase();
+    if (panelName === "benefit-gift-claim") return isCartSheetOpen ? "gift-claim-actions" : "nav";
+    if (panelName === "benefits") {
+      if (!isCartSheetOpen) return "nav";
+      return benefitsSourceScreen === "nav" ? "benefits-nav-actions" : "benefits-actions";
+    }
     if (panelName === "checkout") return isCartSheetOpen ? "checkout-actions" : "nav";
     if (panelName === "cart") {
       if (!isCartSheetOpen) return "nav";
       const resolvedItems = cartItemsResolved();
       const cartItemsCount = Array.isArray(resolvedItems) ? resolvedItems.length : 0;
-      return cartItemsCount > 0 ? "cart-actions" : "nav";
+      return cartItemsCount > 0 ? "cart-actions" : "cart-empty-actions";
     }
     if (panelName === "address-form") return "address-actions";
     if (panelName === "address-list") return "address-confirm";
@@ -1469,18 +1524,24 @@
   function renderMobileBottomByState(snapshot, reason = "renderMobileBottomByState") {
     const stateSnapshot = snapshot && typeof snapshot === "object" ? snapshot : window.getShopMobileUiState();
     const isMobile = Boolean(stateSnapshot && stateSnapshot.isMobile);
-    if (!isMobile) return;
+    const panelName = String(stateSnapshot?.panel || "").trim();
+    const isBenefitsPanel = panelName === "benefits" || panelName === "benefit-gift-claim";
+    if (!isMobile) {
+      document.body.classList.remove("shop-benefits-sheet-open");
+      return;
+    }
 
     const normalizeTab = (rawTab) => {
       const t = String(rawTab || "").toLowerCase();
-      if (t === "menu" || t === "categories" || t === "cart" || t === "fav" || t === "profile") return t;
+      if (t === "categories") return "menu";
+      if (t === "menu" || t === "benefits" || t === "cart" || t === "fav" || t === "profile") return t;
       return "menu";
     };
 
     const tab = normalizeTab(stateSnapshot.tab);
     const navMap = {
       menu: elNavMenu,
-      categories: elNavCategories,
+      benefits: elNavCategories,
       cart: elNavCart,
       fav: elNavFav,
       profile: elNavProfile,
@@ -1498,19 +1559,27 @@
     const modeRaw = String(stateSnapshot.footerMode || "nav");
     const sheetOpen = Boolean(stateSnapshot?.sheet?.open);
     const sheetType = String(stateSnapshot?.sheet?.type || "").trim();
+    const benefitsInnerOverlayOpen = document.body.classList.contains("shop-benefits-overlay-open");
     let mode = modeRaw || "nav";
-    if ((mode === "cart-actions" || mode === "checkout-actions") && !(sheetOpen && sheetType === "cart")) {
+    if ((mode === "cart-actions" || mode === "cart-empty-actions" || mode === "checkout-actions" || mode === "benefits-actions" || mode === "benefits-nav-actions" || mode === "gift-claim-actions") && !(sheetOpen && sheetType === "cart")) {
       mode = "nav";
     }
+    if (benefitsInnerOverlayOpen && panelName === "benefits") {
+      mode = "nav";
+    }
+    document.body.classList.toggle("shop-benefits-sheet-open", isBenefitsPanel);
     const setVisible = (el, visible) => {
       if (!el) return;
       el.classList.toggle("hidden", !visible);
     };
 
     const showProductActions = mode === "product-actions";
-    const showCartActions = mode === "cart-actions" || mode === "checkout-actions";
+    const showCartActions = mode === "cart-actions" || mode === "cart-empty-actions" || mode === "checkout-actions" || mode === "benefits-actions" || mode === "benefits-nav-actions" || mode === "gift-claim-actions";
     const showCartActionsCart = mode === "cart-actions";
     const showCartActionsCheckout = mode === "checkout-actions";
+    const showCartActionsBenefits = mode === "benefits-actions";
+    const showCartActionsBenefitsNav = mode === "benefits-nav-actions";
+    const showCartActionsGiftClaim = mode === "gift-claim-actions";
     const showAddressActions = mode === "address-actions";
     const showAddressConfirm = mode === "address-confirm";
     const showOrderDetailsActions = mode === "order-details-actions";
@@ -1520,9 +1589,17 @@
     setVisible(elMobileCartActions, showCartActions);
     setVisible(elMobileCartActionsCart, showCartActionsCart);
     setVisible(elMobileCartActionsCheckout, showCartActionsCheckout);
+    setVisible(elMobileCartActionsBenefits, showCartActionsBenefits);
+    setVisible(elMobileCartActionsGiftClaim, showCartActionsGiftClaim);
+    setVisible(elMobileBenefitsPromoWrap, showCartActionsBenefits || showCartActionsBenefitsNav);
+    setVisible(elMobileBenefitsInlineApplyBtn, showCartActionsBenefitsNav);
     setVisible(elMobileAddressActions, showAddressActions);
     setVisible(elMobileAddressConfirm, showAddressConfirm);
     setVisible(elMobileOrderDetailsActions, showOrderDetailsActions);
+
+    if ((showCartActionsBenefits || showCartActionsBenefitsNav) && elMobileDeliveryProgressWrap) {
+      elMobileDeliveryProgressWrap.classList.add("hidden");
+    }
 
     if (elActiveOrdersSheetCollapsed) {
       if (showActiveOrdersCollapsed) {
@@ -1589,11 +1666,12 @@
     const sheetOpen = !!(window.AppModal && typeof window.AppModal.isOpen === "function" && window.AppModal.isOpen());
     const sheetType = String(sheetNavigationState?.type || "").trim() || null;
     const sheetScreen = String(sheetNavigationState?.screen || "").trim() || null;
-    const panel = resolveMobilePanelSnapshot(sheetOpen, sheetType, sheetScreen);
+    const panel = resolveMobilePanelSnapshot(sheetOpen, sheetType, sheetScreen, sheetNavigationState?.data);
     const footerMode = resolveMobileFooterModeByPanel(panel, {
       sheetOpen,
       sheetType,
       sheetScreen,
+      sheetData: sheetNavigationState?.data,
     }) || resolveMobileFooterModeSnapshot();
     const currentTab = getCurrentMobileTabFromDom();
 
@@ -1604,7 +1682,8 @@
 
     let tab = currentTab || "menu";
     if (!currentTab) {
-      if (panel === "categories") tab = "categories";
+      if (panel === "categories") tab = "menu";
+      else if (panel === "benefits" || panel === "benefit-gift-claim") tab = "benefits";
       else if (panel === "cart" || panel === "checkout") tab = "cart";
       else if (panel === "profile") tab = "profile";
       else if (panel === "favorites") tab = "fav";
@@ -1753,7 +1832,7 @@
       return true;
     }
     
-    const { checkoutEl, productEl, listEl } = openCartSheetCtx;
+    const { checkoutEl, benefitsEl, benefitDetailEl, productEl, listEl } = openCartSheetCtx;
     const addressWrap = checkoutEl?.parentElement?.querySelector('.shop-address-content');
     const addressListView = addressWrap?.querySelector('.shop-address-list-view');
     const addressFormView = addressWrap?.querySelector('.shop-address-form-view');
@@ -1763,6 +1842,19 @@
     if (pickupWrapEl && !pickupWrapEl.classList.contains('hidden')) {
       // ?? ?????? ????? ?????????? - ???????????? ? ??????????
       showSheetCheckout();
+      return true;
+    } else if (benefitDetailEl && !benefitDetailEl.classList.contains('hidden')) {
+      if (typeof openCartSheetCtx?.showSheetBenefits === "function") {
+        openCartSheetCtx.showSheetBenefits();
+      }
+      return true;
+    } else if (benefitsEl && !benefitsEl.classList.contains('hidden')) {
+      const benefitsBackScreen = openCartSheetCtx?.benefitsSourceScreen === "cart" ? "cart" : "checkout";
+      if (benefitsBackScreen === "cart") {
+        showSheetCart();
+      } else {
+        showSheetCheckout();
+      }
       return true;
     } else if (productEl && !productEl.classList.contains('hidden')) {
       // ?????: ???? ?????? ????? "????????" ? ??? ????? ? ???????? ????????????? ?????
@@ -1979,6 +2071,8 @@
           const variantSelection = hasVariantSelection
             ? { group_id: normalizedVariantGroupId, value_index: normalizedVariantValueIndex }
             : null;
+          const isGiftReward = Number(item?.is_gift_reward || 0) === 1;
+          const giftRewardId = toFiniteNumberOrNull(item?.gift_reward_id);
           const normalizedOptionItems = optionItems.length
             ? optionItems.map((opt) => {
               const optionVariantGroupId = toFiniteNumberOrNull(opt.variant_group_id);
@@ -2017,7 +2111,9 @@
           const ingredients = Array.isArray(item?.ingredients) ? item.ingredients : [];
           
           return {
-            key: makeCartKey(productId, normalizedOptionItems, ingredients, variantSelection),
+            key: isGiftReward
+              ? (str(item?.key || "").trim() || `${makeCartKey(productId, normalizedOptionItems, ingredients, variantSelection)}:gift:${giftRewardId || Date.now()}`)
+              : makeCartKey(productId, normalizedOptionItems, ingredients, variantSelection),
             product_id: productId,
             qty,
             option_item_ids: normalizedOptionItems.map((opt) => opt.id),
@@ -2028,6 +2124,9 @@
             variant_value_index: normalizedVariantValueIndex,
             variant_label: hasVariantSelection ? str(item.variant_label || "") : "",
             variant_unit_price: hasVariantSelection ? Number(item.variant_unit_price || 0) : 0,
+            unit_price_override: item?.unit_price_override != null ? Number(item.unit_price_override) : null,
+            is_gift_reward: isGiftReward ? 1 : 0,
+            gift_reward_id: giftRewardId,
             auto_add: Number(item?.auto_add || 0) ? 1 : 0,
             auto_add_group_id: toFiniteNumberOrNull(item?.auto_add_group_id),
           };
@@ -2761,6 +2860,8 @@
         variant_label: hasVariantSelection ? str(item.variant_label || "") : "",
         variant_unit_price: hasVariantSelection ? Number(item.variant_unit_price || 0) : 0,
         unit_price_override: item.unit_price_override != null ? Number(item.unit_price_override) : null,
+        is_gift_reward: Number(item.is_gift_reward || 0) === 1,
+        gift_reward_id: toFiniteNumberOrNull(item.gift_reward_id),
         auto_add: Number(item.auto_add || 0),
         auto_add_group_id: toFiniteNumberOrNull(item.auto_add_group_id),
       });
@@ -4011,6 +4112,7 @@
 
     const primaryVariantLine = variantLines.length ? variantLines[0] : "";
     const titleBase = [primaryVariantLine, productName].filter(Boolean).join(" ").trim() || productName;
+    const titleText = item?.is_gift_reward === true ? `${titleBase} (Подарок)` : titleBase;
 
     const detailLines = [];
     if (variantLines.length > 1) detailLines.push(...variantLines.slice(1));
@@ -4031,7 +4133,7 @@
     let html = `<div class="cart-row">`;
     html += `<img class="cart-thumb" src="${escapeHtml(mainPhoto)}" alt="" />`;
     html += `<div class="cart-mid">`;
-    html += `<div class="cart-title">${itemQty} x ${escapeHtml(titleBase)}</div>`;
+    html += `<div class="cart-title">${itemQty} x ${escapeHtml(titleText)}</div>`;
 
     if (detailLines.length > 0) {
       html += `<div class="cart-sub-container">`;
@@ -4298,6 +4400,213 @@
     try { localStorage.removeItem(ADDRESS_DRAFT_KEY); } catch {}
   }
 
+  function normalizeAddressCoordinate(value, axis = "lat") {
+    const raw = str(value).trim();
+    if (!raw) return null;
+    const numeric = Number(raw);
+    if (!Number.isFinite(numeric)) return null;
+    const limit = axis === "lat" ? 90 : 180;
+    if (numeric < -limit || numeric > limit) return null;
+    return Number(numeric.toFixed(7));
+  }
+
+  function normalizeAddressId(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric <= 0) return null;
+    return Math.round(numeric);
+  }
+
+  function buildAddressLookupDisplay(address) {
+    const source = address && typeof address === "object" ? address : {};
+    const city = str(source.city).trim();
+    const locality = str(source.address_context_locality || source.context_locality).trim();
+    const street = str(source.street).trim();
+    const house = str(source.house).trim();
+    const normalized = str(source.address_normalized_display).trim();
+    const base = [street, house].filter(Boolean).join(", ").trim() || normalized;
+    if (!base) return "";
+    if (!locality || locality.toLowerCase() === city.toLowerCase()) return base;
+    if (base.toLowerCase().startsWith(locality.toLowerCase())) return base;
+    return `${locality}, ${base}`;
+  }
+
+  function getAddressLookupItemType(item) {
+    const rawType = str(item && (item.object_type || item.selected_object_type)).trim().toLowerCase();
+    if (rawType === "street") return "street";
+    if (rawType === "context-locality" || rawType === "place" || rawType === "context") return "context-locality";
+    return "address";
+  }
+
+  function buildAddressLookupSelectionDisplay(item, cityValue = "") {
+    const source = item && typeof item === "object" ? item : {};
+    const itemType = getAddressLookupItemType(source);
+    const city = str(cityValue || source.city_name).trim();
+    const context = str(source.context_locality || source.city_name || city).trim();
+    if (itemType === "context-locality") {
+      return context ? `${context}, ` : "";
+    }
+
+    const street = str(source.street_name || source.value || source.label).trim();
+    const house = str(source.house_number || source.house).trim();
+    const display = buildAddressLookupDisplay({
+      city,
+      street,
+      house: itemType === "address" ? house : "",
+      address_context_locality: context,
+      address_normalized_display: str(source.full_address || source.value || source.label).trim() || street,
+    });
+    if (itemType === "street" && display) {
+      return `${display}, `.replace(/\s*,\s*$/, ", ");
+    }
+    return display;
+  }
+
+  function buildAddressLookupSuggestionTitle(item, cityValue = "") {
+    const source = item && typeof item === "object" ? item : {};
+    const itemType = getAddressLookupItemType(source);
+    if (itemType === "context-locality") {
+      return str(source.context_locality || source.city_name || source.value || source.label).trim();
+    }
+    if (itemType === "street") {
+      return str(source.street_name || source.value || source.label).trim();
+    }
+    return buildAddressLookupDisplay({
+      city: str(cityValue || source.city_name).trim(),
+      street: str(source.street_name || source.value || source.label).trim(),
+      house: str(source.house_number || source.house).trim(),
+      address_context_locality: str(source.context_locality || source.city_name).trim(),
+      address_normalized_display: str(source.full_address || source.value || source.label).trim(),
+    }) || str(source.full_address || source.value || source.label).trim();
+  }
+
+  function buildAddressLookupIntermediateState(item, cityValue = "", currentResolved = null) {
+    const source = item && typeof item === "object" ? item : {};
+    const current = currentResolved && typeof currentResolved === "object" ? currentResolved : {};
+    const display = buildAddressLookupSelectionDisplay(source, cityValue);
+    return {
+      address_ref: str(source.source_key || source.selected_source_key).trim() || null,
+      selected_object_type: getAddressLookupItemType(source),
+      resolved_city_source_key: str(current.resolved_city_source_key || source.locality_source_key).trim() || null,
+      address_context_locality: str(source.context_locality || source.city_name).trim() || null,
+      address_normalized_display: display || null,
+      lat: null,
+      lng: null,
+      delivery_zone_id: null,
+      delivery_store_id: null,
+      _lookup_prefix: display || null,
+    };
+  }
+
+  function shouldPreserveAddressLookupResolution(resolvedState, nextValue) {
+    const resolved = resolvedState && typeof resolvedState === "object" ? resolvedState : {};
+    const selectedType = str(resolved.selected_object_type).trim().toLowerCase();
+    if (selectedType !== "street" && selectedType !== "context-locality") return false;
+    const lookupValue = str(nextValue).trim().toLowerCase();
+    const prefix = str(resolved._lookup_prefix || resolved.address_normalized_display).trim().toLowerCase();
+    if (!lookupValue || !prefix) return false;
+    return lookupValue === prefix || lookupValue.startsWith(prefix);
+  }
+
+  function extractResolvedAddressState(source) {
+    const address = source && typeof source === "object" ? source : {};
+    return {
+      address_ref: str(address.address_ref).trim() || null,
+      selected_object_type: str(address.selected_object_type).trim() || null,
+      resolved_city_source_key: str(address.resolved_city_source_key).trim() || null,
+      address_context_locality: str(address.address_context_locality || address.context_locality).trim() || null,
+      address_normalized_display: str(address.address_normalized_display).trim() || buildAddressLookupDisplay(address) || null,
+      lat: normalizeAddressCoordinate(address.lat, "lat"),
+      lng: normalizeAddressCoordinate(address.lng, "lng"),
+      delivery_zone_id: normalizeAddressId(address.delivery_zone_id),
+      delivery_store_id: normalizeAddressId(address.delivery_store_id),
+    };
+  }
+
+  function resetAddressFormResolvedState(source = null) {
+    state._addressFormResolved = extractResolvedAddressState(source);
+  }
+
+  function clearAddressFormResolution({ syncLookupFromFields = true, clearLookup = false } = {}) {
+    const current = state._addressFormResolved || {};
+    state._addressFormResolved = {
+      address_ref: null,
+      selected_object_type: null,
+      resolved_city_source_key: current.resolved_city_source_key || null,
+      address_context_locality: null,
+      address_normalized_display: null,
+      lat: null,
+      lng: null,
+      delivery_zone_id: null,
+      delivery_store_id: null,
+    };
+    if (elAddrLookup) {
+      if (clearLookup) {
+        elAddrLookup.value = "";
+      } else if (syncLookupFromFields) {
+        elAddrLookup.value = buildAddressLookupDisplay({
+          city: elAddrCity?.dataset?.value || "",
+          street: elAddrStreet?.value || "",
+          house: elAddrHouse?.value || "",
+          address_context_locality: "",
+        });
+      }
+    }
+  }
+
+  function syncAddressLookupResolutionFromInputValue(value) {
+    if (shouldPreserveAddressLookupResolution(state._addressFormResolved, value)) {
+      state._addressFormResolved = {
+        ...(state._addressFormResolved || {}),
+        address_normalized_display: str(value).trim() || null,
+        lat: null,
+        lng: null,
+        delivery_zone_id: null,
+        delivery_store_id: null,
+      };
+      return;
+    }
+    clearAddressFormResolution({ syncLookupFromFields: false });
+  }
+
+  function getAddressLookupContinuationInfo(value, resolvedState = null) {
+    const lookupValue = str(value).trim();
+    const currentResolved = resolvedState && typeof resolvedState === "object" ? resolvedState : {};
+    const selectedType = getAddressLookupItemType(currentResolved);
+    const selectedSourceKey = str(currentResolved.address_ref).trim();
+    const citySourceKey = str(currentResolved.resolved_city_source_key).trim();
+    if (!lookupValue) {
+      return {
+        preserve: false,
+        stage: "address",
+        query: "",
+        selectedSourceKey: "",
+        citySourceKey,
+      };
+    }
+
+    if (shouldPreserveAddressLookupResolution(currentResolved, lookupValue)) {
+      const prefix = str(currentResolved._lookup_prefix || currentResolved.address_normalized_display).trim();
+      const suffix = prefix && lookupValue.toLowerCase().startsWith(prefix.toLowerCase())
+        ? str(lookupValue.slice(prefix.length)).trim()
+        : lookupValue;
+      return {
+        preserve: true,
+        stage: selectedType === "street" && suffix ? "house" : "address",
+        query: suffix || lookupValue,
+        selectedSourceKey: selectedType === "street" || selectedType === "context-locality" ? selectedSourceKey : "",
+        citySourceKey,
+      };
+    }
+
+    return {
+      preserve: false,
+      stage: "address",
+      query: lookupValue,
+      selectedSourceKey: "",
+      citySourceKey,
+    };
+  }
+
   function normalizeAddressPayload(p) {
     const a = p && typeof p === "object" ? p : {};
     const out = {
@@ -4308,11 +4617,24 @@
       floor: str(a.floor).trim(),
       apartment: str(a.apartment).trim(),
       comment: str(a.comment).trim(),
+      address_ref: str(a.address_ref).trim() || null,
+      selected_object_type: str(a.selected_object_type).trim() || null,
+      resolved_city_source_key: str(a.resolved_city_source_key).trim() || null,
+      address_context_locality: str(a.address_context_locality || a.context_locality).trim() || null,
+      address_normalized_display: str(a.address_normalized_display).trim() || buildAddressLookupDisplay(a) || null,
+      lat: normalizeAddressCoordinate(a.lat, "lat"),
+      lng: normalizeAddressCoordinate(a.lng, "lng"),
+      delivery_zone_id: normalizeAddressId(a.delivery_zone_id),
+      delivery_store_id: normalizeAddressId(a.delivery_store_id),
     };
     if (!out.entrance) out.entrance = null;
     if (!out.floor) out.floor = null;
     if (!out.apartment) out.apartment = null;
     if (!out.comment) out.comment = null;
+    if (out.lat == null || out.lng == null) {
+      out.delivery_zone_id = null;
+      out.delivery_store_id = null;
+    }
     return out;
   }
 
@@ -4337,6 +4659,57 @@
     return state.selectedAddress ? formatAddressLine(state.selectedAddress) : "";
   }
 
+  const HEADER_STREET_TYPE_PREFIX_RE = /^\s*(?:(?:улица|ул\.?)|(?:проспект|просп\.?|пр-т|пр-кт)|(?:переулок|пер\.?)|(?:проезд|пр-д)|(?:бульвар|бул\.?|б-р)|(?:площадь|пл\.?)|(?:шоссе|ш\.?)|(?:аллея|ал\.?)|(?:набережная|наб\.?)|(?:тупик|туп\.?)|(?:тракт|тр\.?)|(?:линия|лин\.?)|(?:микрорайон|мкр\.?|мкрн\.?)|(?:квартал|кв-л)|(?:дорога|дор\.?))\s+/i;
+  const HEADER_STREET_TYPE_SUFFIX_RE = /\s+(?:(?:улица|ул\.?)|(?:проспект|просп\.?|пр-т|пр-кт)|(?:переулок|пер\.?)|(?:проезд|пр-д)|(?:бульвар|бул\.?|б-р)|(?:площадь|пл\.?)|(?:шоссе|ш\.?)|(?:аллея|ал\.?)|(?:набережная|наб\.?)|(?:тупик|туп\.?)|(?:тракт|тр\.?)|(?:линия|лин\.?)|(?:микрорайон|мкр\.?|мкрн\.?)|(?:квартал|кв-л)|(?:дорога|дор\.?))\.?\s*$/i;
+
+  function normalizeHeaderStreetName(streetRaw) {
+    const street = str(streetRaw).trim();
+    if (!street) return "";
+    const strippedPrefix = street.replace(HEADER_STREET_TYPE_PREFIX_RE, "").trim();
+    const strippedSuffix = strippedPrefix.replace(HEADER_STREET_TYPE_SUFFIX_RE, "").trim();
+    return strippedSuffix || strippedPrefix || street;
+  }
+
+  function formatHeaderAddressStreetHouseApartment(a) {
+    if (!a) return "";
+    const street = normalizeHeaderStreetName(a.street) || str(a.street).trim();
+    const house = str(a.house).trim();
+    const apartment = str(a.apartment).trim();
+
+    const base = [street, house].filter(Boolean).join(" ").trim();
+    if (!base) return "";
+    if (!apartment) return base;
+    return `${base}, кв ${apartment}`;
+  }
+
+  function formatHeaderPickupStoreAddress(store) {
+    if (!store) return "";
+    const rawAddress = str(store.address).trim();
+    const fallback = rawAddress || str(store.name).trim();
+    if (!rawAddress) return fallback;
+
+    const parts = rawAddress.split(",").map((part) => str(part).trim()).filter(Boolean);
+    if (!parts.length) return fallback;
+
+    let house = "";
+    let street = "";
+    for (let i = parts.length - 1; i >= 0; i -= 1) {
+      const part = parts[i];
+      if (!/\d/.test(part)) continue;
+      house = part;
+      street = i > 0 ? parts[i - 1] : "";
+      break;
+    }
+
+    if (!street) {
+      street = parts.length >= 2 ? parts[parts.length - 2] : parts[parts.length - 1];
+    }
+
+    const normalizedStreet = normalizeHeaderStreetName(street);
+    const compact = [normalizedStreet, house].filter(Boolean).join(" ").trim();
+    return compact || fallback;
+  }
+
   function formatAddressStreetHouseApartment(a) {
     if (!a) return "";
     const street = str(a.street).trim();
@@ -4347,6 +4720,250 @@
     if (!base) return "";
     if (!apartment) return base;
     return `${base}, кв ${apartment}`;
+  }
+
+  function getAddressLookupCityValue() {
+    return str(elAddrCity?.dataset?.value || "").trim();
+  }
+
+  function clearAddressLookupDebounce() {
+    if (!addressLookupState.debounceTimer) return;
+    clearTimeout(addressLookupState.debounceTimer);
+    addressLookupState.debounceTimer = null;
+  }
+
+  function renderAddressLookupPopover() {
+    if (!elAddrLookupPopover || !elAddrLookupStatus || !elAddrLookupResults) return;
+    const isVisible = addressLookupState.open && (
+      addressLookupState.mode !== "idle" ||
+      addressLookupState.items.length > 0
+    );
+    elAddrLookupPopover.classList.toggle("hidden", !isVisible);
+
+    const statusText = str(addressLookupState.status).trim();
+    elAddrLookupStatus.textContent = statusText;
+    elAddrLookupStatus.classList.toggle("hidden", !statusText);
+    elAddrLookupStatus.classList.toggle("is-error", addressLookupState.mode === "error");
+    elAddrLookupStatus.classList.toggle("is-loading", addressLookupState.mode === "loading");
+
+    elAddrLookupResults.innerHTML = "";
+    addressLookupState.items.forEach((item, index) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "shop-address-lookup-item";
+      if (index === addressLookupState.activeIndex) button.classList.add("is-active");
+      button.setAttribute("aria-selected", index === addressLookupState.activeIndex ? "true" : "false");
+
+      const title = document.createElement("div");
+      title.className = "shop-address-lookup-item-title";
+      title.textContent = buildAddressLookupSuggestionTitle(item, getAddressLookupCityValue());
+      button.appendChild(title);
+
+      const metaText = str(item.context_locality || item.city_name).trim();
+      if (metaText) {
+        const meta = document.createElement("div");
+        meta.className = "shop-address-lookup-item-meta";
+        meta.textContent = metaText;
+        button.appendChild(meta);
+      }
+
+      button.addEventListener("mouseenter", () => {
+        if (addressLookupState.activeIndex === index) return;
+        addressLookupState.activeIndex = index;
+        renderAddressLookupPopover();
+      });
+      button.addEventListener("click", async () => {
+        await applyAddressLookupSuggestion(item);
+      });
+
+      elAddrLookupResults.appendChild(button);
+    });
+  }
+
+  function closeAddressLookupPopover() {
+    clearAddressLookupDebounce();
+    addressLookupState.requestSeq += 1;
+    addressLookupState.open = false;
+    addressLookupState.items = [];
+    addressLookupState.activeIndex = -1;
+    addressLookupState.status = "";
+    addressLookupState.mode = "idle";
+    renderAddressLookupPopover();
+  }
+
+  function setAddressLookupStatus(message, mode = "idle") {
+    addressLookupState.status = str(message).trim();
+    addressLookupState.mode = str(mode).trim() || "idle";
+    if (addressLookupState.mode !== "idle" || addressLookupState.items.length) {
+      addressLookupState.open = true;
+    }
+    renderAddressLookupPopover();
+  }
+
+  function setAddressLookupItems(items) {
+    addressLookupState.items = Array.isArray(items) ? items.slice() : [];
+    addressLookupState.activeIndex = addressLookupState.items.length ? 0 : -1;
+    if (addressLookupState.items.length) {
+      addressLookupState.open = true;
+      if (addressLookupState.mode === "idle" || addressLookupState.mode === "loading" || addressLookupState.mode === "empty") {
+        addressLookupState.mode = "ready";
+      }
+    }
+    renderAddressLookupPopover();
+  }
+
+  async function applyAddressLookupSuggestion(item) {
+    const selectedItem = item && typeof item === "object" ? item : null;
+    if (!selectedItem) return;
+    const city = getAddressLookupCityValue();
+    const selectedType = getAddressLookupItemType(selectedItem);
+    if (selectedType !== "address") {
+      const nextCity = str(selectedItem.city_name || city).trim();
+      if (nextCity && elAddrCity) {
+        initCustomSelect(elAddrCity, nextCity);
+      }
+      const nextState = buildAddressLookupIntermediateState(selectedItem, nextCity || city, state._addressFormResolved);
+      if (elAddrLookup) {
+        elAddrLookup.value = str(nextState.address_normalized_display).trim();
+        elAddrLookup.focus();
+        const caretPos = elAddrLookup.value.length;
+        try {
+          elAddrLookup.setSelectionRange(caretPos, caretPos);
+        } catch (_) {}
+      }
+      if (elAddrStreet) {
+        elAddrStreet.value = selectedType === "street"
+          ? str(selectedItem.street_name || selectedItem.value || selectedItem.label).trim()
+          : "";
+      }
+      if (elAddrHouse) elAddrHouse.value = "";
+      state._addressFormResolved = nextState;
+      closeAddressLookupPopover();
+      return;
+    }
+
+    const subtotal = computeCartTotals(cartItemsResolved()).total;
+    try {
+      const json = await apiJson("/api/public/address-resolve", {
+        method: "POST",
+        body: {
+          subtotal,
+          city,
+          street: selectedItem.street_name || "",
+          house: selectedItem.house_number || "",
+          address_ref: selectedItem.source_key || "",
+          selected_object_type: selectedItem.object_type || "address",
+          address_context_locality: selectedItem.context_locality || selectedItem.city_name || "",
+          address_normalized_display: selectedItem.full_address || selectedItem.value || selectedItem.label || "",
+          lat: selectedItem.lat,
+          lng: selectedItem.lng,
+        },
+      });
+      const data = json?.data || {};
+      if (data.city && elAddrCity) {
+        initCustomSelect(elAddrCity, data.city);
+      }
+      if (elAddrLookup) {
+        elAddrLookup.value = str(data.address_normalized_display || buildAddressLookupDisplay(data)).trim();
+      }
+      if (elAddrStreet) elAddrStreet.value = str(data.street || selectedItem.street_name || "").trim();
+      if (elAddrHouse) elAddrHouse.value = str(data.house || selectedItem.house_number || "").trim();
+      state._addressFormResolved = {
+        ...extractResolvedAddressState({
+          address_ref: data.address_ref,
+          selected_object_type: data.selected_object_type,
+          resolved_city_source_key: data.resolved_city_source_key,
+          address_context_locality: data.context_locality,
+          address_normalized_display: data.address_normalized_display,
+          lat: data.lat,
+          lng: data.lng,
+          delivery_zone_id: data.delivery_zone_id,
+          delivery_store_id: data.delivery_store_id,
+        }),
+        _lookup_prefix: str(data.address_normalized_display || buildAddressLookupDisplay(data)).trim() || null,
+      };
+      closeAddressLookupPopover();
+      if (typeof updateMobileDeliveryProgress === "function") {
+        Promise.resolve(updateMobileDeliveryProgress()).catch(() => {});
+      }
+    } catch (error) {
+      console.error(error);
+      setAddressLookupItems([]);
+      setAddressLookupStatus("Не удалось получить адрес.", "error");
+    }
+  }
+
+  async function searchAddressLookupSuggestions(query, requestId) {
+    const normalizedQuery = str(query).trim();
+    const city = getAddressLookupCityValue();
+    const continuation = getAddressLookupContinuationInfo(normalizedQuery, state._addressFormResolved);
+    const apiQuery = str(continuation.query).trim();
+    const minLength = continuation.stage === "house" ? 1 : 2;
+    if (!apiQuery || apiQuery.length < minLength) {
+      closeAddressLookupPopover();
+      return;
+    }
+    if (!city) {
+      setAddressLookupItems([]);
+      setAddressLookupStatus("Сначала выберите город.", "error");
+      return;
+    }
+    addressLookupState.open = true;
+    setAddressLookupStatus("Ищем адрес...", "loading");
+    try {
+      const params = new URLSearchParams({
+        stage: continuation.stage,
+        q: apiQuery,
+        city,
+      });
+      if (continuation.citySourceKey) {
+        params.set("city_source_key", continuation.citySourceKey);
+      }
+      if (continuation.selectedSourceKey) {
+        params.set("selected_source_key", continuation.selectedSourceKey);
+      }
+      const response = await fetch(`/api/public/address-suggest?${params.toString()}`, {
+        headers: {
+          "x-tenant-id": String(tenantId),
+        },
+      });
+      const json = await response.json().catch(() => null);
+      if (!response.ok || !json?.ok) {
+        throw new Error(json?.error || "ADDRESS_SUGGEST_FAILED");
+      }
+      if (requestId !== addressLookupState.requestSeq) return;
+      const items = Array.isArray(json?.data?.items) ? json.data.items : [];
+      if (!items.length) {
+        setAddressLookupItems([]);
+        setAddressLookupStatus("Ничего не найдено.", "empty");
+        return;
+      }
+      setAddressLookupItems(items);
+      setAddressLookupStatus(`Поиск: ${str(json?.data?.scope_label || city).trim()}`, "ready");
+    } catch (error) {
+      if (requestId !== addressLookupState.requestSeq) return;
+      console.error(error);
+      setAddressLookupItems([]);
+      setAddressLookupStatus("Не удалось получить подсказки адреса.", "error");
+    }
+  }
+
+  function scheduleAddressLookupSuggestions() {
+    if (!isAddressMapModeEnabled() || !elAddrLookup) return;
+    const normalizedValue = str(elAddrLookup.value).trim();
+    const continuation = getAddressLookupContinuationInfo(normalizedValue, state._addressFormResolved);
+    const minLength = continuation.stage === "house" ? 1 : 2;
+    clearAddressLookupDebounce();
+    addressLookupState.requestSeq += 1;
+    if (!normalizedValue || str(continuation.query).trim().length < minLength) {
+      closeAddressLookupPopover();
+      return;
+    }
+    const requestId = addressLookupState.requestSeq;
+    addressLookupState.debounceTimer = setTimeout(() => {
+      addressLookupState.debounceTimer = null;
+      searchAddressLookupSuggestions(normalizedValue, requestId);
+    }, 180);
   }
 
   function isDesktopViewport() {
@@ -4366,7 +4983,7 @@
 
   function getCartHeaderAddressLine() {
     const pickupStore = getHeaderPickupStore();
-    if (pickupStore) return str(pickupStore.address || pickupStore.name || "").trim();
+    if (pickupStore) return formatHeaderPickupStoreAddress(pickupStore);
     if (isDesktopViewport()) {
       return formatAddressStreetHouseApartment(state.selectedAddress);
     }
@@ -4407,8 +5024,8 @@
 
     const address = state.selectedAddress || null;
     const candidateIds = [
-      Number(address?.store_id || 0),
       Number(address?.delivery_store_id || 0),
+      Number(address?.store_id || 0),
       Number(getActiveStoreId() || 0),
     ].filter((id) => Number.isFinite(id) && id > 0);
 
@@ -4569,7 +5186,7 @@ function updateHeaderAddressWidget() {
     const stores = window._pickupStores || [];
     const store = stores.find((s) => Number(s.id) === Number(window._selectedPickupStoreId));
     if (store) {
-      textEl.textContent = store.address || store.name || "Самовывоз";
+      textEl.textContent = formatHeaderPickupStoreAddress(store) || "Самовывоз";
       textEl.classList.remove("is-placeholder");
       hasAddressText = true;
       if (iconEl) {
@@ -4587,14 +5204,15 @@ function updateHeaderAddressWidget() {
     }
     const a = state.selectedAddress;
     if (a) {
-      const parts = [];
-      const street = str(a.street).trim();
-      const house = str(a.house).trim();
-      if (street || house) parts.push([street, house].filter(Boolean).join(" "));
-      if (a.apartment) parts.push("кв " + str(a.apartment).trim());
-      textEl.textContent = parts.join(", ");
-      textEl.classList.remove("is-placeholder");
-      hasAddressText = true;
+      const headerAddressText = formatHeaderAddressStreetHouseApartment(a);
+      if (headerAddressText) {
+        textEl.textContent = headerAddressText;
+        textEl.classList.remove("is-placeholder");
+        hasAddressText = true;
+      } else {
+        textEl.textContent = "Укажите адрес доставки";
+        textEl.classList.add("is-placeholder");
+      }
     } else {
       textEl.textContent = "Укажите адрес доставки";
       textEl.classList.add("is-placeholder");
@@ -4684,7 +5302,7 @@ function setCartHeader({
 
 function setSheetHeaderMode(
   mode,
-  { onBack, discountBadge, favoriteBuildSnapshot, favoriteAfterToggle } = {}
+  { onBack, discountBadge, favoriteBuildSnapshot, favoriteAfterToggle, showBackInHeader = true } = {}
 ) {
   const header = document.querySelector(".app-modal-header");
   if (!header) return;
@@ -4743,10 +5361,11 @@ function setSheetHeaderMode(
 
   const isProduct = mode === "product";
   const isOrder = mode === "order";
+  const isSubscreen = mode === "subscreen";
 
   // Product: ???????? ?/?, ?????? ?, ?????? title
   // Order: ???????? ?, ?????? ?, ???????? title
-  backBtn.classList.toggle("hidden", !isProduct && !isOrder);
+  backBtn.classList.toggle("hidden", (!isProduct && !isOrder && !isSubscreen) || showBackInHeader === false);
   favBtn.classList.toggle("hidden", !isProduct);
 
   if (isProduct) {
@@ -4792,6 +5411,35 @@ function setSheetHeaderMode(
     }
   }
 
+  function hideDesktopBenefitsPanels({ clearDetail = false } = {}) {
+    if (elCheckoutBenefitsContent) {
+      elCheckoutBenefitsContent.classList.add("hidden");
+    }
+    if (elCheckoutBenefitDetailContent) {
+      elCheckoutBenefitDetailContent.classList.add("hidden");
+      if (clearDetail) {
+        elCheckoutBenefitDetailContent.innerHTML = "";
+      }
+    }
+  }
+
+  function getDesktopCheckoutActions() {
+    return { submitBtn: elCheckoutSubmitBtn, backBtn: elCheckoutBackBtn };
+  }
+
+  async function openDesktopCheckoutView({ onBack = showCartView } = {}) {
+    if (!elCheckoutContent) return;
+    showCheckoutView();
+    await openCheckoutView({
+      container: elCheckoutContent,
+      onBack,
+      onShowBenefits: showDesktopBenefitsView,
+      hasAddressEditor: true,
+      isSheet: false,
+      actions: getDesktopCheckoutActions(),
+    });
+  }
+
   function applyTheme(nextTheme) {
     const root = document.documentElement;
     const next = nextTheme === "dark" ? "dark" : "light";
@@ -4833,6 +5481,9 @@ function setSheetHeaderMode(
     updateAddressChip();
     updateHeaderAddressWidget();
     syncSelectedAddressToCheckoutDraft();
+    if (typeof updateMobileDeliveryProgress === "function") {
+      Promise.resolve(updateMobileDeliveryProgress()).catch(() => {});
+    }
 
     // ???В корзине пусто?? checkout ? ??????? ????
     try {
@@ -4860,6 +5511,7 @@ function showCartView() {
   if (elProductContent) elProductContent.classList.add("hidden");
   if (elCartContent) elCartContent.classList.remove("hidden");
   if (elProfileContent) elProfileContent.classList.add("hidden");
+  hideDesktopBenefitsPanels({ clearDetail: true });
 
   const line = getCartHeaderAddressLine();
   const t = line || "Укажите адрес";
@@ -4897,6 +5549,7 @@ function showCheckoutView() {
   if (elProductContent) elProductContent.classList.add("hidden");
   if (elCheckoutContent) elCheckoutContent.classList.remove("hidden");
   if (elProfileContent) elProfileContent.classList.add("hidden");
+  hideDesktopBenefitsPanels({ clearDetail: true });
 
   const line = getCartHeaderAddressLine();
   const t = line || "Укажите адрес";
@@ -4935,6 +5588,7 @@ function showAddressListView(backMode = "cart", opts = {}) {
   if (elCheckoutContent) elCheckoutContent.classList.add("hidden");
   if (elProductContent) elProductContent.classList.add("hidden");
   if (elProfileContent) elProfileContent.classList.add("hidden");
+  hideDesktopBenefitsPanels({ clearDetail: true });
 
   elAddressContent.classList.remove("hidden");
   elAddressListView.classList.remove("hidden");
@@ -4968,6 +5622,7 @@ async function showAddressFormView(prefill, editingId, backMode) {
 
   cleanupDesktopFavoritesPanelIfNeeded();
   setHeaderFavoritesButtonActive(false);
+  const addressMapModeEnabled = isAddressMapModeEnabled();
   state.addressEditingId = editingId ? Number(editingId) : null;
   state._addressFormBackMode = backMode || (state.selectedAddress ? "list" : "cart");
   cartViewMode = "address";
@@ -4988,6 +5643,14 @@ async function showAddressFormView(prefill, editingId, backMode) {
   if (elAddrCity) {
     initCustomSelect(elAddrCity, prefill?.city);
   }
+  resetAddressFormResolvedState(addressMapModeEnabled ? (prefill || null) : null);
+  if (elAddrLookupWrap) {
+    elAddrLookupWrap.classList.toggle("hidden", !addressMapModeEnabled);
+  }
+  if (elAddrLookup) {
+    elAddrLookup.value = addressMapModeEnabled ? buildAddressLookupDisplay(prefill || {}) : "";
+  }
+  closeAddressLookupPopover();
   if (elAddrStreet) elAddrStreet.value = str(prefill?.street || "");
   if (elAddrHouse) elAddrHouse.value = str(prefill?.house || "");
   if (elAddrEntrance) elAddrEntrance.value = str(prefill?.entrance || "");
@@ -4999,6 +5662,7 @@ async function showAddressFormView(prefill, editingId, backMode) {
   if (elCheckoutContent) elCheckoutContent.classList.add("hidden");
   if (elProductContent) elProductContent.classList.add("hidden");
   if (elProfileContent) elProfileContent.classList.add("hidden");
+  hideDesktopBenefitsPanels({ clearDetail: true });
 
   elAddressContent.classList.remove("hidden");
   elAddressFormView.classList.remove("hidden");
@@ -5026,7 +5690,11 @@ async function showAddressFormView(prefill, editingId, backMode) {
 
   setCartFooterMode("hidden");
   queueMobileUiStateSync("showAddressFormView");
-  setTimeout(() => { try { elAddrStreet?.focus?.(); } catch {} }, 0);
+  setTimeout(() => {
+    try {
+      (addressMapModeEnabled ? elAddrLookup : elAddrStreet)?.focus?.();
+    } catch {}
+  }, 0);
 }
 
 function showPickupListView(backMode = "checkout") {
@@ -5044,6 +5712,7 @@ function showPickupListView(backMode = "checkout") {
     if (elCheckoutContent) elCheckoutContent.classList.add("hidden");
     if (elProductContent) elProductContent.classList.add("hidden");
     if (elProfileContent) elProfileContent.classList.remove("hidden");
+    hideDesktopBenefitsPanels({ clearDetail: true });
     setCartHeader({ title: "Профиль", showAddressChip: false, showProfileActions: true, showBack: false });
     setCartFooterMode("hidden");
     queueMobileUiStateSync("showProfileView");
@@ -5065,14 +5734,7 @@ function showPickupListView(backMode = "checkout") {
       return;
     }
     if (previousPanelMode === "checkout" && elCheckoutContent) {
-      showCheckoutView();
-      await openCheckoutView({
-        container: elCheckoutContent,
-        onBack: showCartView,
-        hasAddressEditor: true,
-        isSheet: false,
-        actions: { submitBtn: elCheckoutSubmitBtn, backBtn: elCheckoutBackBtn },
-      });
+      await openDesktopCheckoutView({ onBack: showCartView });
       return;
     }
     if (previousPanelMode === "address") {
@@ -5092,6 +5754,7 @@ function showProductView() {
   if (elCheckoutContent) elCheckoutContent.classList.add("hidden");
   if (elProfileContent) elProfileContent.classList.add("hidden");
   if (elProductContent) elProductContent.classList.remove("hidden");
+  hideDesktopBenefitsPanels({ clearDetail: true });
 
   // Product mode (desktop header): ? ?????, ? ??????, title+chip ??????
   setCartHeader({
@@ -5220,14 +5883,7 @@ function showProductView() {
       return;
     }
     if (back === "checkout" && elCheckoutContent) {
-      showCheckoutView();
-      openCheckoutView({
-        container: elCheckoutContent,
-        onBack: showCartView,
-        hasAddressEditor: true,
-        isSheet: false,
-        actions: { submitBtn: elCheckoutSubmitBtn, backBtn: elCheckoutBackBtn },
-      });
+      void openDesktopCheckoutView({ onBack: showCartView });
       return;
     }
     showCartView();
@@ -5833,14 +6489,7 @@ function showProductView() {
         // ???????????? ? ??????
         const back = state._pickupListBackMode || "checkout";
         if (back === "checkout" && elCheckoutContent) {
-          showCheckoutView();
-          await openCheckoutView({
-            container: elCheckoutContent,
-            onBack: showCartView,
-            hasAddressEditor: true,
-            isSheet: false,
-            actions: { submitBtn: elCheckoutSubmitBtn, backBtn: elCheckoutBackBtn },
-          });
+          await openDesktopCheckoutView({ onBack: showCartView });
         } else {
           showCartView();
         }
@@ -5954,6 +6603,75 @@ async function initAddresses() {
     });
   }
 
+  if (elAddrLookup) {
+    elAddrLookup.addEventListener("input", () => {
+      if (!isAddressMapModeEnabled()) return;
+      syncAddressLookupResolutionFromInputValue(elAddrLookup.value);
+      scheduleAddressLookupSuggestions();
+    });
+    elAddrLookup.addEventListener("focus", () => {
+      if (!isAddressMapModeEnabled()) return;
+      if (str(elAddrLookup.value).trim().length >= 2) {
+        scheduleAddressLookupSuggestions();
+      }
+    });
+    elAddrLookup.addEventListener("keydown", async (event) => {
+      if (!addressLookupState.open || !addressLookupState.items.length) return;
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        addressLookupState.activeIndex = Math.min(addressLookupState.items.length - 1, addressLookupState.activeIndex + 1);
+        renderAddressLookupPopover();
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        addressLookupState.activeIndex = Math.max(0, addressLookupState.activeIndex - 1);
+        renderAddressLookupPopover();
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeAddressLookupPopover();
+        return;
+      }
+      if (event.key === "Enter") {
+        const activeItem = addressLookupState.items[addressLookupState.activeIndex] || addressLookupState.items[0];
+        if (!activeItem) return;
+        event.preventDefault();
+        await applyAddressLookupSuggestion(activeItem);
+      }
+    });
+  }
+
+  if (elAddrCity) {
+    elAddrCity.addEventListener("change", () => {
+      if (!isAddressMapModeEnabled()) return;
+      closeAddressLookupPopover();
+      resetAddressFormResolvedState(null);
+      if (elAddrLookup) elAddrLookup.value = "";
+      if (elAddrStreet) elAddrStreet.value = "";
+      if (elAddrHouse) elAddrHouse.value = "";
+    });
+  }
+
+  [elAddrStreet, elAddrHouse].forEach((input) => {
+    if (!input) return;
+    input.addEventListener("input", () => {
+      if (!isAddressMapModeEnabled()) return;
+      const resolved = state._addressFormResolved || {};
+      if (!resolved.address_ref && resolved.lat == null && resolved.lng == null && !resolved.delivery_zone_id && !resolved.delivery_store_id) {
+        return;
+      }
+      clearAddressFormResolution({ syncLookupFromFields: true });
+    });
+  });
+
+  document.addEventListener("click", (event) => {
+    if (!elAddrLookupWrap || !elAddrLookupWrap.contains(event.target)) {
+      closeAddressLookupPopover();
+    }
+  });
+
   // ??????
   if (elAddressCancelBtn) {
     elAddressCancelBtn.addEventListener("click", () => {
@@ -5963,14 +6681,7 @@ async function initAddresses() {
       }
       else if (back === "checkout") {
         if (elCheckoutContent) {
-          showCheckoutView();
-          openCheckoutView({
-            container: elCheckoutContent,
-            onBack: showCartView,
-            hasAddressEditor: true,
-            isSheet: false,
-            actions: { submitBtn: elCheckoutSubmitBtn, backBtn: elCheckoutBackBtn },
-          });
+          void openDesktopCheckoutView({ onBack: showCartView });
         } else {
           showCartView();
         }
@@ -5985,13 +6696,66 @@ async function initAddresses() {
     elAddressSaveBtn.addEventListener("click", async () => {
       const payload = normalizeAddressPayload({
         city: elAddrCity?.dataset?.value || "",
+        address_normalized_display: isAddressMapModeEnabled() ? elAddrLookup?.value : "",
         street: elAddrStreet?.value,
         house: elAddrHouse?.value,
         entrance: elAddrEntrance?.value,
         floor: elAddrFloor?.value,
         apartment: elAddrApartment?.value,
         comment: elAddrComment?.value,
+        ...(isAddressMapModeEnabled() ? (state._addressFormResolved || {}) : {}),
       });
+      if (!payload.city) return alert("Укажите город");
+      if (!payload.street || !payload.house) {
+        elAddressSaveBtn.disabled = true;
+        elAddressSaveBtn.textContent = "РЎРѕС…СЂР°РЅРµРЅРёРµ...";
+
+        try {
+          const me = await fetchMeSafe();
+          const token = getCustomerToken();
+
+          if (me && token) {
+            if (state.addressEditingId) {
+              await apiJson(`/api/public/me/addresses/${state.addressEditingId}`, {
+                method: "PUT",
+                body: payload,
+              });
+            } else {
+              await apiJson("/api/public/me/addresses", {
+                method: "POST",
+                body: { ...payload, is_default: 1 },
+              });
+            }
+            await refreshAddressState({ force: true });
+
+            if (state._addressFormBackMode === "profile") {
+              await openProfilePanel(null, { forceOpen: true, initialTab: "addresses" });
+            } else if (state._addressFormBackMode === "checkout" && elCheckoutContent) {
+              await openDesktopCheckoutView({ onBack: showCartView });
+            } else {
+              showCartView();
+            }
+          } else {
+            saveAddressDraft(payload);
+            setSelectedAddress({ ...payload, _local: true });
+
+            if (state._addressFormBackMode === "profile") {
+              await openProfilePanel(null, { forceOpen: true, initialTab: "addresses" });
+            } else if (state._addressFormBackMode === "checkout" && elCheckoutContent) {
+              await openDesktopCheckoutView({ onBack: showCartView });
+            } else {
+              showCartView();
+            }
+          }
+        } catch (e) {
+          console.error(e);
+          alert("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕС…СЂР°РЅРёС‚СЊ Р°РґСЂРµСЃ");
+        } finally {
+          elAddressSaveBtn.disabled = false;
+          elAddressSaveBtn.textContent = "РЎРѕС…СЂР°РЅРёС‚СЊ";
+        }
+        return;
+      }
 
       if (!payload.street) return alert("Укажите улицу");
       if (!payload.house) return alert("Укажите дом");
@@ -6021,14 +6785,7 @@ async function initAddresses() {
           if (state._addressFormBackMode === "profile") {
             await openProfilePanel(null, { forceOpen: true, initialTab: "addresses" });
           } else if (state._addressFormBackMode === "checkout" && elCheckoutContent) {
-            showCheckoutView();
-            openCheckoutView({
-              container: elCheckoutContent,
-              onBack: showCartView,
-              hasAddressEditor: true,
-              isSheet: false,
-              actions: { submitBtn: elCheckoutSubmitBtn, backBtn: elCheckoutBackBtn },
-            });
+            await openDesktopCheckoutView({ onBack: showCartView });
           } else {
             showCartView();
           }
@@ -6040,14 +6797,7 @@ async function initAddresses() {
           if (state._addressFormBackMode === "profile") {
             await openProfilePanel(null, { forceOpen: true, initialTab: "addresses" });
           } else if (state._addressFormBackMode === "checkout" && elCheckoutContent) {
-            showCheckoutView();
-            openCheckoutView({
-              container: elCheckoutContent,
-              onBack: showCartView,
-              hasAddressEditor: true,
-              isSheet: false,
-              actions: { submitBtn: elCheckoutSubmitBtn, backBtn: elCheckoutBackBtn },
-            });
+            await openDesktopCheckoutView({ onBack: showCartView });
           } else {
             showCartView();
           }
@@ -6237,8 +6987,10 @@ async function initAddresses() {
     if (!scroller || !wrap) return;
 
     // Делаем так, чтобы активный чип оказывался у левого края (с небольшим отступом)
-    const paddingLeft = 12;
-    let target = Math.max(0, chip.offsetLeft - paddingLeft);
+    const stopBeforeTrigger = window.matchMedia("(max-width: 768px)").matches && elCatSheetTriggerBtn
+      ? (elCatSheetTriggerBtn.offsetWidth || 40) + 12
+      : 12;
+    let target = Math.max(0, chip.offsetLeft - stopBeforeTrigger);
 
     // Если уже почти на нужном месте — не дёргаем скролл
     const current = scroller.scrollLeft || 0;
@@ -6357,6 +7109,44 @@ async function initAddresses() {
     if (!elCatChips) return;
     elCatChips.innerHTML = "";
 
+    const openCategoriesChipSheet = () => {
+      const openSheet = () => {
+        const isCategoriesSheetOpen =
+          Boolean(window.AppModal && typeof window.AppModal.isOpen === "function" && window.AppModal.isOpen())
+          && sheetNavigationState.type === "categories";
+        if (isCategoriesSheetOpen) {
+          if (typeof closeShopSheetIfOpen === "function") closeShopSheetIfOpen();
+          return;
+        }
+        if (typeof closeShopSheetIfOpen === "function") closeShopSheetIfOpen();
+        if (typeof window.openCategoriesSheet === "function") {
+          window.openCategoriesSheet();
+        }
+      };
+
+      if (window.__shopLateLoaded && typeof window.openCategoriesSheet === "function") {
+        openSheet();
+        return;
+      }
+
+      ensureShopLateLoaded().then(() => {
+        openSheet();
+      });
+    };
+
+    if (elCatSheetTriggerBtn) {
+      elCatSheetTriggerBtn.onclick = openCategoriesChipSheet;
+    }
+
+    const triggerBtn = document.createElement("button");
+    triggerBtn.type = "button";
+    triggerBtn.className = "shop-cat-chip shop-cat-chip--sheet-trigger";
+    triggerBtn.setAttribute("aria-label", "Категории");
+    triggerBtn.setAttribute("title", "Категории");
+    triggerBtn.innerHTML = '<i class="fas fa-list" aria-hidden="true"></i>';
+    triggerBtn.addEventListener("click", openCategoriesChipSheet);
+    elCatChips.appendChild(triggerBtn);
+
     getVisibleCategories().forEach((c) => {
       const btn = document.createElement("button");
       btn.type = "button";
@@ -6446,6 +7236,74 @@ async function initAddresses() {
     pill.appendChild(btnPlus);
 
     return { pill, btnMinus, btnPlus, center };
+  }
+
+  function formatCatalogDiscountBadgeAmount(amount) {
+    const value = roundPrice(Number(amount || 0));
+    if (!(value > 0)) return "";
+    return `-${moneyNoSign(value)} ₽`;
+  }
+
+  function getCatalogProductDiscountBadge(product, calculatedPrice = null) {
+    if (!product || typeof product !== "object") return "";
+
+    const apiDiscount = product.discount;
+    const apiDiscountAmount = roundPrice(Number(apiDiscount?.discount_amount || 0));
+    if (apiDiscount && apiDiscountAmount > 0) {
+      const discountType = str(apiDiscount.discount_type || "").trim().toLowerCase();
+      const discountValue = Number(apiDiscount.discount_value || 0);
+      if (discountType === "percent" && discountValue > 0) {
+        return `-${Math.round(discountValue)}%`;
+      }
+      return formatCatalogDiscountBadgeAmount(apiDiscountAmount);
+    }
+
+    const currentPriceRaw = calculatedPrice != null
+      ? Number(calculatedPrice)
+      : (product.display_price != null ? Number(product.display_price) : Number(product.price || 0));
+    const currentPrice = roundPrice(Number.isFinite(currentPriceRaw) ? currentPriceRaw : 0);
+    const originalPriceRaw = product.original_price != null
+      ? Number(product.original_price)
+      : Number(product.old_price || 0);
+    const originalPrice = roundPrice(Number.isFinite(originalPriceRaw) ? originalPriceRaw : 0);
+    if (!(originalPrice > currentPrice && currentPrice >= 0)) return "";
+
+    const percent = Math.round(((originalPrice - currentPrice) / originalPrice) * 100);
+    if (percent > 0) return `-${percent}%`;
+    return formatCatalogDiscountBadgeAmount(originalPrice - currentPrice);
+  }
+
+  function getCatalogComboDiscountBadge(combo) {
+    const discountPercent = Number(combo?.discount_percent || 0) || 0;
+    if (!(discountPercent > 0)) return "";
+    return `-${Math.round(discountPercent)}%`;
+  }
+
+  function createCatalogDiscountBadge(badgeText) {
+    const text = str(badgeText || "").trim();
+    if (!text) return null;
+    const badge = document.createElement("div");
+    badge.className = "sp-card-discount-badge sp-combo-discount";
+    badge.textContent = text;
+    return badge;
+  }
+
+  function syncCatalogProductDiscountBadge(card, product, calculatedPrice = null) {
+    if (!card || !product) return;
+    const media = $(".sp-media", card);
+    if (!media) return;
+    const badgeText = getCatalogProductDiscountBadge(product, calculatedPrice);
+    const currentBadge = media.querySelector(".sp-card-discount-badge");
+    if (!badgeText) {
+      if (currentBadge) currentBadge.remove();
+      return;
+    }
+    if (currentBadge) {
+      currentBadge.textContent = badgeText;
+      return;
+    }
+    const badge = createCatalogDiscountBadge(badgeText);
+    if (badge) media.appendChild(badge);
   }
 
   function catalogCenterHtml(product, qty, calculatedPrice = null) {
@@ -6590,6 +7448,7 @@ async function initAddresses() {
     if (center) {
       center.innerHTML = catalogCenterHtml(product, qty, calculatedPrice);
     }
+    syncCatalogProductDiscountBadge(card, product, calculatedPrice);
   }
 
   let __shopChatPromise = null;
@@ -7109,17 +7968,8 @@ async function initAddresses() {
         overlay.appendChild(qBox);
         media.appendChild(overlay);
 
-        // Бейдж скидки поверх изображения (как на комбо)
-        if (p.discount && p.discount.discount_amount > 0) {
-          const discountBadge = document.createElement("div");
-          discountBadge.className = "sp-combo-discount";
-          if (p.discount.discount_type === 'percent') {
-            discountBadge.textContent = `-${Math.round(p.discount.discount_value)}%`;
-          } else {
-            discountBadge.textContent = `-${moneyNoSign(p.discount.discount_amount)} ₽`;
-          }
-          media.appendChild(discountBadge);
-        }
+        const productDiscountBadge = createCatalogDiscountBadge(getCatalogProductDiscountBadge(p));
+        if (productDiscountBadge) media.appendChild(productDiscountBadge);
 
         card.appendChild(media);
 
@@ -7300,13 +8150,8 @@ async function initAddresses() {
           if (fullImgEl && fullImgEl.complete) media.classList.add("is-loaded");
         }
 
-        const discountPercent = Number(combo.discount_percent) || 0;
-        if (discountPercent > 0) {
-          const badge = document.createElement("div");
-          badge.className = "sp-combo-discount";
-          badge.textContent = "-" + Math.round(discountPercent) + "%";
-          media.appendChild(badge);
-        }
+        const comboDiscountBadge = createCatalogDiscountBadge(getCatalogComboDiscountBadge(combo));
+        if (comboDiscountBadge) media.appendChild(comboDiscountBadge);
 
         card.appendChild(media);
 
@@ -7432,6 +8277,7 @@ async function initAddresses() {
       btnPlus.disabled = plusDisabled;
     }
     if (center) {
+      syncCatalogProductDiscountBadge(card, product, defaultPriceCache.get(product.id));
       if (!availableForAdd) {
         center.textContent = "Нет в наличии";
       } else {
@@ -7839,7 +8685,10 @@ async function initAddresses() {
       );
       const rule = pricing.isAuto ? getAutoRuleByProductId(product.id) : null;
       const group = rule?.group || null;
-      const allowQty = !pricing.isAuto || !group ? true : Number(group.allow_customer_qty ?? 1) === 1;
+      const isGiftReward = item?.is_gift_reward === true;
+      const allowQty = isGiftReward
+        ? false
+        : (!pricing.isAuto || !group ? true : Number(group.allow_customer_qty ?? 1) === 1);
       const allowRemove = true;
       const old = Number(product.old_price || 0);
       const parts = pricing.parts;
@@ -7893,6 +8742,10 @@ async function initAddresses() {
           resetSwipe(swipeContainer);
           return;
         }
+        if (isGiftReward) {
+          openProductDetails(product.id, { prefillItem: item, readOnly: true });
+          return;
+        }
         openProductDetails(product.id, { cartKey: key });
       });
 
@@ -7919,7 +8772,8 @@ async function initAddresses() {
         item?.variant_group_title || ""
       );
       const titleBase = [primaryVariantLine, productNameText].filter(Boolean).join(" ").trim() || productNameText;
-      t.textContent = `${qty} x ${titleBase}`;
+      const titleText = isGiftReward ? `${titleBase} (Подарок)` : titleBase;
+      t.textContent = `${qty} x ${titleText}`;
       mid.appendChild(t);
 
       // ????????? ???????? ? ?????????? ???????: ???????? ? ??????????? ? ?????
@@ -8006,6 +8860,16 @@ async function initAddresses() {
         minusEnabled: qty > 0 && allowQty,
         plusEnabled: allowQty && !plusBlockedByLimit,
       });
+      let qtyControlNode = pill;
+      if (isGiftReward) {
+        const fixedQty = document.createElement("div");
+        fixedQty.className = "qty-pill qty-pill--muted cart-gift-fixed-qty is-disabled";
+        const fixedCenter = document.createElement("span");
+        fixedCenter.className = "qty-pill__center";
+        fixedCenter.textContent = String(qty);
+        fixedQty.appendChild(fixedCenter);
+        qtyControlNode = fixedQty;
+      }
 
       const syncRegularRowQtyUi = () => {
         if (!row.isConnected) return 0;
@@ -8014,7 +8878,7 @@ async function initAddresses() {
         if (newQty <= 0) return 0;
 
         center.textContent = String(newQty);
-        t.textContent = `${newQty} x ${titleBase}`;
+        t.textContent = `${newQty} x ${titleText}`;
 
         const resolvedItems = cartItemsResolved();
         const currentItemResolved = resolvedItems.find((x) => String(x?.key || "") === String(key || ""));
@@ -8078,7 +8942,7 @@ async function initAddresses() {
         btnPlus.classList.toggle("is-disabled", plusBlockedByLimit);
       }
 
-      q.appendChild(pill);
+      q.appendChild(qtyControlNode);
       const right = document.createElement("div");
       right.className = "cart-right";
 
@@ -8343,8 +9207,51 @@ async function initAddresses() {
     document.querySelectorAll(".cart-swipe-container.is-swiped").forEach(c => resetSwipe(c));
   }
 
-  function deleteCartItemWithAnimation(container, productId, cartKey) {
+  async function restoreGiftRewardToBenefits(rewardId) {
+    const numericRewardId = Number(rewardId || 0);
+    if (!(numericRewardId > 0)) return false;
+    const token = typeof getCustomerToken === "function" ? str(getCustomerToken() || "").trim() : "";
+    if (!token) {
+      showToast("Не удалось вернуть подарок в выгоды");
+      return false;
+    }
+    try {
+      await apiJson("/api/public/checkout/benefits/restore-gift", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-customer-token": token,
+        },
+        body: JSON.stringify({ reward_id: numericRewardId }),
+      });
+      if (typeof window.invalidateCheckoutBenefitsClientCache === "function") {
+        try {
+          window.invalidateCheckoutBenefitsClientCache({ preview: true, progressProducts: false });
+        } catch {}
+      }
+      return true;
+    } catch (error) {
+      console.error("Failed to restore gift reward:", error);
+      showToast("Не удалось вернуть подарок в выгоды");
+      return false;
+    }
+  }
+
+  async function deleteCartItemWithAnimation(container, productId, cartKey) {
     if (!container) return;
+    if (container.dataset.removing === "1") return;
+    container.dataset.removing = "1";
+
+    const cartItem = cartKey ? getCartItemByKey(cartKey) : null;
+    const isGiftReward = Number(cartItem?.is_gift_reward || 0) === 1;
+    const giftRewardId = Number(cartItem?.gift_reward_id || 0);
+    if (isGiftReward) {
+      const restored = await restoreGiftRewardToBenefits(giftRewardId);
+      if (!restored) {
+        delete container.dataset.removing;
+        return;
+      }
+    }
 
     const content = container.querySelector(".cart-swipe-content");
     if (content) {
@@ -8377,13 +9284,11 @@ async function initAddresses() {
   }
 
 function removeFromCartByKey(cartKey, productId) {
-    console.log("[DEBUG] removeFromCartByKey called, cartKey:", cartKey, "productId:", productId, "cart:", JSON.stringify(state.cart.map(i => ({ key: i.key, type: i.type, product_id: i.product_id }))));
     const idx = state.cart.findIndex(item => {
       if (cartKey && item.key === cartKey) return true;
       if (!cartKey && item.id === productId && !item.key) return true;
       return false;
     });
-    console.log("[DEBUG] Found index:", idx);
     if (idx !== -1) {
       const removedItem = state.cart[idx];
       if (removedItem) {
@@ -10451,6 +11356,7 @@ if (__shopHasRequiredDom) initCore();
 
 // Late-loaded on shop-late.js. Core keeps a safe no-op to avoid ReferenceError during first paint.
 function updateMobileDeliveryProgress() {}
+async function showDesktopBenefitsView() {}
 
 let __iosBackSwipeGuardBound = false;
 function bindIosBackSwipeGuard() {

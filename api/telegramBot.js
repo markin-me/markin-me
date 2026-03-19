@@ -231,4 +231,17 @@ async function setWebhook(token, webhookUrl) {
   return data;
 }
 
-module.exports = { startPolling, sendMessage, processUpdate, handleWebhookUpdate, setWebhook };
+async function deleteWebhook(token) {
+  if (!token) return;
+  const apiBase = `${TELEGRAM_API}${token.trim()}`;
+  const res = await fetch(`${apiBase}/deleteWebhook`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ drop_pending_updates: false }),
+  });
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.description || 'deleteWebhook failed');
+  return data;
+}
+
+module.exports = { startPolling, sendMessage, processUpdate, handleWebhookUpdate, setWebhook, deleteWebhook };

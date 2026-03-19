@@ -1,8 +1,53 @@
 const express = require('express');
+const {
+  customerAddressSelectFields,
+  ensureCustomerAddressIdentityColumns,
+  normalizeCustomerAddressPayload,
+  resolveCustomerAddressPayload,
+  serializeCustomerAddress,
+} = require('../../data/customer-address');
 
 module.exports = function makeAdminClientsRouter({ db, helpers }) {
   const router = express.Router();
   let customerGenderColumnPromise = null;
+
+  function mergeCustomerAddressSource(existing, patch) {
+    const source = existing && typeof existing === 'object' ? { ...existing } : {};
+    const body = patch && typeof patch === 'object' ? patch : {};
+    const fields = [
+      'city',
+      'street',
+      'house',
+      'entrance',
+      'floor',
+      'apartment',
+      'comment',
+      'address_ref',
+      'selected_object_type',
+      'resolved_city_source_key',
+      'address_context_locality',
+      'address_normalized_display',
+      'lat',
+      'lng',
+      'delivery_zone_id',
+      'delivery_store_id',
+    ];
+    fields.forEach((field) => {
+      if (Object.prototype.hasOwnProperty.call(body, field)) {
+        source[field] = body[field];
+      }
+    });
+    if (Object.prototype.hasOwnProperty.call(body, 'context_locality')) {
+      source.address_context_locality = body.context_locality;
+    }
+    if (
+      Object.prototype.hasOwnProperty.call(body, 'selected_source_key')
+      && !Object.prototype.hasOwnProperty.call(body, 'address_ref')
+    ) {
+      source.address_ref = body.selected_source_key;
+    }
+    return source;
+  }
 
   const FILTER_FIELD_KIND_MAP = new Map([
     ['total_orders', 'number'],
@@ -782,19 +827,21 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
         return res.status(400).json({ ok: false, error: 'BAD_ID' });
       }
 
+      await ensureCustomerAddressIdentityColumns(db);
+
       const [rows] = await db.query(
         `SELECT
-           id, tenant_id, customer_id,
-           street, house, entrance, floor, apartment, comment,
-           is_default, is_active,
-           created_at, updated_at
+           ${customerAddressSelectFields}
          FROM cust_customer_addresses
          WHERE tenant_id=? AND customer_id=? AND is_active=1
          ORDER BY is_default DESC, updated_at DESC, id DESC`,
         [tenantId, customerId]
       );
 
-      res.json({ ok: true, data: rows });
+      res.json({
+        ok: true,
+        data: Array.isArray(rows) ? rows.map((row) => serializeCustomerAddress(helpers, row)) : [],
+      });
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
@@ -809,20 +856,44 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
     const conn = await db.getConnection();
     try {
       const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
       const customerId = Number(req.params.id);
       if (!Number.isFinite(customerId) || customerId <= 0) {
         return res.status(400).json({ ok: false, error: 'BAD_ID' });
       }
+      await ensureCustomerAddressIdentityColumns(db);
 
-      const street = helpers.strOrNull(req.body.street);
-      const house = helpers.strOrNull(req.body.house);
-      if (!street) return res.status(400).json({ ok: false, error: 'STREET_REQUIRED' });
-      if (!house) return res.status(400).json({ ok: false, error: 'HOUSE_REQUIRED' });
-
-      const entrance = helpers.strOrNull(req.body.entrance);
-      const floor = helpers.strOrNull(req.body.floor);
-      const apartment = helpers.strOrNull(req.body.apartment);
-      const comment = helpers.strOrNull(req.body.comment);
+      const payloadResult = normalizeCustomerAddressPayload(helpers, req.body);
+      if (!payloadResult.ok) {
+        return res.status(400).json({ ok: false, error: payloadResult.error });
+      }
+      let payload = payloadResult.data;
+      if (payload.city && (payload.address_ref || payload.address_normalized_display || payload.street || payload.house)) {
+        const resolved = await resolveCustomerAddressPayload({
+          db,
+          helpers,
+          tenantId,
+          storeId,
+          payload: req.body || {},
+        });
+        if (resolved.ok && resolved.data) {
+          payload = {
+            ...payload,
+            city: resolved.data.city || payload.city,
+            street: resolved.data.street || payload.street,
+            house: resolved.data.house || payload.house,
+            address_ref: resolved.data.address_ref || payload.address_ref,
+            selected_object_type: resolved.data.selected_object_type || payload.selected_object_type,
+            resolved_city_source_key: resolved.data.resolved_city_source_key || payload.resolved_city_source_key,
+            address_context_locality: resolved.data.context_locality || payload.address_context_locality,
+            address_normalized_display: resolved.data.address_normalized_display || payload.address_normalized_display,
+            lat: resolved.data.lat != null ? resolved.data.lat : payload.lat,
+            lng: resolved.data.lng != null ? resolved.data.lng : payload.lng,
+            delivery_zone_id: resolved.data.delivery_zone_id != null ? resolved.data.delivery_zone_id : payload.delivery_zone_id,
+            delivery_store_id: resolved.data.delivery_store_id != null ? resolved.data.delivery_store_id : payload.delivery_store_id,
+          };
+        }
+      }
 
       let isDefault = helpers.toBool(req.body.is_default, false) ? 1 : 0;
 
@@ -848,9 +919,31 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
 
       const [r] = await conn.query(
         `INSERT INTO cust_customer_addresses
-          (tenant_id, customer_id, street, house, entrance, floor, apartment, comment, is_default, is_active)
-         VALUES (?,?,?,?,?,?,?,?,?,1)`,
-        [tenantId, customerId, street, house, entrance, floor, apartment, comment, isDefault]
+          (tenant_id, customer_id, city, street, house, entrance, floor, apartment, comment, is_default, is_active,
+           address_ref, selected_object_type, resolved_city_source_key, address_context_locality, address_normalized_display,
+           lat, lng, delivery_zone_id, delivery_store_id)
+         VALUES (?,?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,?,?)`,
+        [
+          tenantId,
+          customerId,
+          payload.city,
+          payload.street,
+          payload.house,
+          payload.entrance,
+          payload.floor,
+          payload.apartment,
+          payload.comment,
+          isDefault,
+          payload.address_ref,
+          payload.selected_object_type,
+          payload.resolved_city_source_key,
+          payload.address_context_locality,
+          payload.address_normalized_display,
+          payload.lat,
+          payload.lng,
+          payload.delivery_zone_id,
+          payload.delivery_store_id,
+        ]
       );
 
       await conn.commit();
@@ -977,23 +1070,16 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
   router.put('/:id/addresses/:addressId', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
       const customerId = Number(req.params.id);
       const addressId = Number(req.params.addressId);
       if (!Number.isFinite(customerId) || customerId <= 0 || !Number.isFinite(addressId) || addressId <= 0) {
         return res.status(400).json({ ok: false, error: 'BAD_ID' });
       }
-
-      const street = helpers.strOrNull(req.body.street);
-      const house = helpers.strOrNull(req.body.house);
-      if (!street) return res.status(400).json({ ok: false, error: 'STREET_REQUIRED' });
-      if (!house) return res.status(400).json({ ok: false, error: 'HOUSE_REQUIRED' });
-      const entrance = helpers.strOrNull(req.body.entrance);
-      const floor = helpers.strOrNull(req.body.floor);
-      const apartment = helpers.strOrNull(req.body.apartment);
-      const comment = helpers.strOrNull(req.body.comment);
+      await ensureCustomerAddressIdentityColumns(db);
 
       const [cur] = await db.query(
-        `SELECT id
+        `SELECT ${customerAddressSelectFields}
          FROM cust_customer_addresses
          WHERE tenant_id=? AND customer_id=? AND id=? AND is_active=1
          LIMIT 1`,
@@ -1003,11 +1089,67 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
         return res.status(404).json({ ok: false, error: 'ADDRESS_NOT_FOUND' });
       }
 
+      const existing = serializeCustomerAddress(helpers, cur[0]);
+      const mergedSource = mergeCustomerAddressSource(existing, req.body);
+      const payloadResult = normalizeCustomerAddressPayload(helpers, mergedSource);
+      if (!payloadResult.ok) {
+        return res.status(400).json({ ok: false, error: payloadResult.error });
+      }
+      let payload = payloadResult.data;
+      if (payload.city && (payload.address_ref || payload.address_normalized_display || payload.street || payload.house)) {
+        const resolved = await resolveCustomerAddressPayload({
+          db,
+          helpers,
+          tenantId,
+          storeId,
+          payload: mergedSource,
+        });
+        if (resolved.ok && resolved.data) {
+          payload = {
+            ...payload,
+            city: resolved.data.city || payload.city,
+            street: resolved.data.street || payload.street,
+            house: resolved.data.house || payload.house,
+            address_ref: resolved.data.address_ref || payload.address_ref,
+            selected_object_type: resolved.data.selected_object_type || payload.selected_object_type,
+            resolved_city_source_key: resolved.data.resolved_city_source_key || payload.resolved_city_source_key,
+            address_context_locality: resolved.data.context_locality || payload.address_context_locality,
+            address_normalized_display: resolved.data.address_normalized_display || payload.address_normalized_display,
+            lat: resolved.data.lat != null ? resolved.data.lat : payload.lat,
+            lng: resolved.data.lng != null ? resolved.data.lng : payload.lng,
+            delivery_zone_id: resolved.data.delivery_zone_id != null ? resolved.data.delivery_zone_id : payload.delivery_zone_id,
+            delivery_store_id: resolved.data.delivery_store_id != null ? resolved.data.delivery_store_id : payload.delivery_store_id,
+          };
+        }
+      }
+
       await db.query(
         `UPDATE cust_customer_addresses
-         SET street=?, house=?, entrance=?, floor=?, apartment=?, comment=?
+         SET city=?, street=?, house=?, entrance=?, floor=?, apartment=?, comment=?,
+             address_ref=?, selected_object_type=?, resolved_city_source_key=?, address_context_locality=?, address_normalized_display=?,
+             lat=?, lng=?, delivery_zone_id=?, delivery_store_id=?
          WHERE tenant_id=? AND customer_id=? AND id=?`,
-        [street, house, entrance, floor, apartment, comment, tenantId, customerId, addressId]
+        [
+          payload.city,
+          payload.street,
+          payload.house,
+          payload.entrance,
+          payload.floor,
+          payload.apartment,
+          payload.comment,
+          payload.address_ref,
+          payload.selected_object_type,
+          payload.resolved_city_source_key,
+          payload.address_context_locality,
+          payload.address_normalized_display,
+          payload.lat,
+          payload.lng,
+          payload.delivery_zone_id,
+          payload.delivery_store_id,
+          tenantId,
+          customerId,
+          addressId,
+        ]
       );
       res.json({ ok: true });
     } catch (e) {

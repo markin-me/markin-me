@@ -84,42 +84,52 @@
         <div class="shop-address-form-view hidden" id="shopAddressFormView">
           <div class="shop-address-form-grid">
             <div class="shop-address-form-row shop-address-form-row--full">
-              <label class="field-label">Город</label>
-              <div class="custom-select" id="shopAddrCity">
-                <button type="button" class="custom-select-trigger control">
+              <label class="shop-address-form-sr-label" for="shopAddrCityTrigger">Город</label>
+              <div class="custom-select shop-address-city-select" id="shopAddrCity" data-placeholder="Город">
+                <button type="button" class="custom-select-trigger control" id="shopAddrCityTrigger" aria-label="Город">
                   <span class="custom-select-value"></span>
                   <i class="fas fa-chevron-down custom-select-arrow" aria-hidden="true"></i>
                 </button>
                 <div class="custom-select-dropdown hidden"></div>
               </div>
             </div>
+            <div class="shop-address-form-row shop-address-form-row--full hidden" id="shopAddrLookupWrap">
+              <label class="shop-address-form-sr-label" for="shopAddrLookup">Адрес</label>
+              <div class="shop-address-lookup">
+                <input class="control" id="shopAddrLookup" type="text" placeholder="Адрес" aria-label="Адрес" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" />
+                <div class="shop-address-lookup-popover hidden" id="shopAddrLookupPopover" role="dialog" aria-label="Подсказки адреса">
+                  <div class="shop-address-lookup-status" id="shopAddrLookupStatus"></div>
+                  <div class="shop-address-lookup-results" id="shopAddrLookupResults"></div>
+                </div>
+              </div>
+            </div>
             <div class="shop-address-form-row shop-address-form-row--full">
-              <label class="field-label" for="shopAddrStreet">Улица</label>
-              <input class="control" id="shopAddrStreet" type="text" />
+              <label class="shop-address-form-sr-label" for="shopAddrStreet">Улица</label>
+              <input class="control" id="shopAddrStreet" type="text" placeholder="Улица" aria-label="Улица" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" />
             </div>
 
             <div class="shop-address-form-row shop-address-form-row--grid">
               <div class="shop-address-form-field">
-                <label class="field-label" for="shopAddrHouse">Дом</label>
-                <input class="control" id="shopAddrHouse" type="text" />
+                <label class="shop-address-form-sr-label" for="shopAddrHouse">Дом</label>
+                <input class="control" id="shopAddrHouse" type="text" placeholder="Дом" aria-label="Дом" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" />
               </div>
               <div class="shop-address-form-field">
-                <label class="field-label" for="shopAddrEntrance">Подъезд</label>
-                <input class="control" id="shopAddrEntrance" type="text" />
+                <label class="shop-address-form-sr-label" for="shopAddrEntrance">Подъезд</label>
+                <input class="control" id="shopAddrEntrance" type="text" placeholder="Подъезд" aria-label="Подъезд" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" />
               </div>
               <div class="shop-address-form-field">
-                <label class="field-label" for="shopAddrFloor">Этаж</label>
-                <input class="control" id="shopAddrFloor" type="text" />
+                <label class="shop-address-form-sr-label" for="shopAddrFloor">Этаж</label>
+                <input class="control" id="shopAddrFloor" type="text" placeholder="Этаж" aria-label="Этаж" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" />
               </div>
               <div class="shop-address-form-field">
-                <label class="field-label" for="shopAddrApartment">Квартира</label>
-                <input class="control" id="shopAddrApartment" type="text" />
+                <label class="shop-address-form-sr-label" for="shopAddrApartment">Квартира</label>
+                <input class="control" id="shopAddrApartment" type="text" placeholder="Квартира" aria-label="Квартира" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" />
               </div>
             </div>
 
             <div class="shop-address-form-row shop-address-form-row--full">
-              <label class="field-label" for="shopAddrComment">Комментарий курьеру</label>
-              <input class="control" id="shopAddrComment" type="text" />
+              <label class="shop-address-form-sr-label" for="shopAddrComment">Комментарий курьеру</label>
+              <input class="control" id="shopAddrComment" type="text" placeholder="Комментарий курьеру" aria-label="Комментарий курьеру" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" />
             </div>
           </div>
 
@@ -139,16 +149,33 @@
 
       <div class="shop-checkout-content hidden" id="shopCheckoutContent"></div>
 
+      <div class="shop-checkout-benefits-content hidden" id="shopCheckoutBenefitsContent"></div>
+
+      <div class="shop-checkout-benefits-content shop-checkout-benefit-detail-content hidden" id="shopCheckoutBenefitDetailContent"></div>
+
       <div class="shop-profile-content hidden" id="shopProfileContent"></div>
 
       <div class="shop-product-content hidden" id="shopProductContent"></div>
 
       <!-- Шкала доставки (десктоп): над футером корзины, логика как на мобилке -->
       <div class="shop-cart-delivery-progress hidden" id="shopCartDeliveryProgress">
-        <div class="shop-cart-delivery-progress-bar" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
-          <div class="shop-cart-delivery-progress-fill" id="shopCartDeliveryProgressFill"></div>
+        <div class="shop-cart-delivery-progress-row">
+          <div class="shop-cart-delivery-progress-surface">
+            <div class="shop-cart-delivery-progress-bar" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
+              <div class="shop-cart-delivery-progress-fill" id="shopCartDeliveryProgressFill"></div>
+            </div>
+            <div class="shop-cart-delivery-progress-label" id="shopCartDeliveryProgressLabel"></div>
+          </div>
+          <button
+            class="shop-desktop-benefits-trigger-btn hidden"
+            id="shopCartBenefitsTriggerBtn"
+            type="button"
+            aria-label="Открыть выгоды"
+            title="Открыть выгоды"
+          >
+            <i class="fas fa-tag" aria-hidden="true"></i>
+          </button>
         </div>
-        <div class="shop-cart-delivery-progress-label" id="shopCartDeliveryProgressLabel"></div>
       </div>
 
       <div class="shop-cart-footer hidden" id="shopCartFooter">

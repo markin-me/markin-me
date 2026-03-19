@@ -7,7 +7,15 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "thumbs": "node scripts/generate-product-thumbs.js",
     "emoji:atlas": "node scripts/build-emoji-atlas.js",
-    "domain:connect": "node scripts/connect-tenant-domain.js"
+    "domain:connect": "node scripts/connect-tenant-domain.js",
+    "addr:index:v1": "node scripts/import-local-address-v1.js",
+    "address:service:install": "npm --prefix services/address-service install",
+    "address:service:db:check": "npm --prefix services/address-service run db:check",
+    "address:service:db:init": "npm --prefix services/address-service run db:init",
+    "address:service:export:mysql-local": "npm --prefix services/address-service run export:mysql-local --",
+    "address:service:import:gar": "npm --prefix services/address-service run import:gar --",
+    "address:service:import:osm": "npm --prefix services/address-service run import:osm --",
+    "address:service:start": "npm --prefix services/address-service run start"
   },
   "keywords": [],
   "author": "",

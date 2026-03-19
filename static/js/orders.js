@@ -256,6 +256,8 @@
     deliveryUrgent: $$('[data-info="delivery-urgent"]'),
     deliveryIntervalRow: $$('[data-info="delivery-interval-row"]'),
     deliveryInterval: $$('[data-info="delivery-interval"]'),
+    deliveryZoneRow: $$('[data-info="delivery-zone-row"]'),
+    deliveryZone: $$('[data-info="delivery-zone"]'),
     deliveryAddressTitle: $$('[data-info="delivery-address-title"]'),
     deliveryAddress: $$('[data-info="delivery-address"]'),
     deliveryAddressComment: $$('[data-info="delivery-address-comment"]'),
@@ -316,10 +318,13 @@
           totalQty,
           buildOrderDiscountSummary,
           renderOrderDiscountBreakdownHtml,
-          renderOrderPaymentIcon,
-          paymentIcon,
-          getDisplayOrder,
-          itemsToHtml,
+        renderOrderPaymentIcon,
+        paymentIcon,
+        getDisplayOrder,
+        itemsToHtml,
+        },
+        showDeliveryZone() {
+          return state.storeAddressMapEnabled;
         },
         renderInlineStatusMenus,
         afterRender() {
@@ -344,10 +349,13 @@
           totalQty,
           buildOrderDiscountSummary,
           renderOrderDiscountBreakdownHtml,
-          renderOrderPaymentIcon,
-          paymentIcon,
-          getDisplayOrder,
-          itemsToHtml,
+        renderOrderPaymentIcon,
+        paymentIcon,
+        getDisplayOrder,
+        itemsToHtml,
+        },
+        showDeliveryZone() {
+          return state.storeAddressMapEnabled;
         },
         renderInlineStatusMenus,
         afterRender() {
@@ -400,6 +408,7 @@
     lastEventId: null,
     storeTimezone: "+0",
     tenantSounds: {},
+    storeAddressMapEnabled: false,
     clientsCache: new Map(),
     date: {
       start: null,
@@ -1136,6 +1145,29 @@
     const streetLike = cleanedTokens.find((token) => looksLikeStreetToken(token) && !normalizeHouseToken(token));
     if (streetLike) return streetLike;
     return first;
+  }
+
+  function getOrderDeliveryZoneName(order) {
+    return String(order?.delivery_zone_name || "").trim();
+  }
+
+  function shouldShowOrderDeliveryZone(order) {
+    return state.storeAddressMapEnabled
+      && order
+      && String(order.method_code || "").trim() === "delivery"
+      && !!getOrderDeliveryZoneName(order);
+  }
+
+  function buildOrderDeliveryZoneLabel(order) {
+    const zoneName = getOrderDeliveryZoneName(order);
+    return zoneName ? `Зона доставки: ${zoneName}` : "";
+  }
+
+  function formatOrderListAddress(order, shortAddress) {
+    const base = String(shortAddress || "").trim() || "?";
+    const zoneName = getOrderDeliveryZoneName(order);
+    if (!shouldShowOrderDeliveryZone(order) || !zoneName) return base;
+    return `(${zoneName}) ${base}`;
   }
 
   function buildOrderTabKey(orderId) {
@@ -4164,10 +4196,12 @@
       setTextAll(infoEls.deliveryQty, "0 шт.");
       setTextAll(infoEls.deliveryInterval, "?");
       setTextAll(infoEls.deliveryAddressTitle, "Адрес доставки");
+      setTextAll(infoEls.deliveryZone, "");
       setTextAll(infoEls.deliveryAddress, "?");
       setHtmlAll(infoEls.itemsList, '<div class="muted">?</div>');
       setHiddenAll(infoEls.deliveryUrgent, true);
       setHiddenAll(infoEls.deliveryIntervalRow, true);
+      setHiddenAll(infoEls.deliveryZoneRow, true);
       setHiddenAll(infoEls.deliveryAddressComment, true);
       setHiddenAll(infoEls.orderCommentBlock, true);
       setHiddenAll(infoEls.clientExtra, true);
@@ -4266,6 +4300,10 @@
 
     const deliverySectionTitle = order.method_code === "pickup" ? "Адрес самовывоза" : "Адрес доставки";
     setTextAll(infoEls.deliveryAddressTitle, deliverySectionTitle);
+
+    const zoneVisible = shouldShowOrderDeliveryZone(order);
+    setTextAll(infoEls.deliveryZone, zoneVisible ? buildOrderDeliveryZoneLabel(order) : "");
+    setHiddenAll(infoEls.deliveryZoneRow, !zoneVisible);
 
     const intervalText = formatScheduleText(order, { includeTitle: false }) || String(order.time_option_title || "").trim();
     setTextAll(infoEls.deliveryInterval, intervalText || "—");
@@ -4786,6 +4824,7 @@
     const shortAddressDisplay = sharedOrderPanel && typeof sharedOrderPanel.shortAddressForList === "function"
       ? sharedOrderPanel.shortAddressForList(rawAddress)
       : shortAddressForList(rawAddress);
+    const listAddressDisplay = formatOrderListAddress(order, shortAddressDisplay);
 
     const customerId = Number(order.customer_id || 0);
     const customerPhoneRaw = String(order.customer_phone || "").trim();
@@ -4886,7 +4925,7 @@
         </div>
 
         <div class="order-col order-address">
-          <div class="order-address-line"><i class="fas fa-map-marker-alt"></i> ${escapeHtml(shortAddressDisplay)}</div>
+          <div class="order-address-line"><i class="fas fa-map-marker-alt"></i> ${escapeHtml(listAddressDisplay)}</div>
           <div class="order-address-comment muted"><i class="far fa-comment"></i> ${escapeHtml(addressCommentDisplay)}</div>
         </div>
 
@@ -4921,7 +4960,7 @@
         customerName: order.customer_name || "?",
         customerPhoneHtml: clientPhoneLineHtml,
         timeIconHtml,
-        addressText: shortAddressDisplay,
+        addressText: listAddressDisplay,
         addressCommentText: addressCommentDisplay,
         stageHtml: stageCycleBtnHtml,
         paymentHtml,
@@ -4961,7 +5000,7 @@
       </div>
 
       <div class="order-col order-address">
-        <div class="order-address-line"><i class="fas fa-map-marker-alt"></i> ${escapeHtml(shortAddressDisplay)}</div>
+        <div class="order-address-line"><i class="fas fa-map-marker-alt"></i> ${escapeHtml(listAddressDisplay)}</div>
         <div class="order-address-comment muted"><i class="far fa-comment"></i> ${escapeHtml(addressCommentDisplay)}</div>
       </div>
 
@@ -6837,6 +6876,22 @@
             sound_order_cancelled_url: tenantRes.tenant.sound_order_cancelled_url || null,
             sound_new_message_url: tenantRes.tenant.sound_new_message_url || null
           };
+        }
+      } catch (err) {
+        console.error(err);
+      }
+
+      try {
+        const mapConfigRes = await apiJson("/api/admin/tenant/map-provider-config");
+        const mapEnabled = Boolean(mapConfigRes?.data?.store_address_map_enabled);
+        const didChange = state.storeAddressMapEnabled !== mapEnabled;
+        state.storeAddressMapEnabled = mapEnabled;
+        if (didChange) {
+          renderOrders();
+          const activeOrder = state.orders.find((row) => Number(row?.id || 0) === Number(state.activeOrderId || 0)) || null;
+          if (activeOrder) {
+            setInfo(activeOrder);
+          }
         }
       } catch (err) {
         console.error(err);

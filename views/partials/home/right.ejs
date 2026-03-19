@@ -3,7 +3,15 @@
     <div class="panel-header settings-right-header hidden">
       <div class="product-tabs settings-right-tabs hidden" id="settingsRightTabs"></div>
     </div>
-    <div class="panel-body no-scrollbar">
+    <div class="panel-header product-tabs-header hidden" id="settingsDeliveryTabsHeader">
+      <div class="product-tabs-header-inner">
+        <button class="product-tabs-home" type="button" id="settingsDeliveryTabsHomeBtn" aria-label="Главная доставки">
+          <i class="fas fa-home"></i>
+        </button>
+        <div class="product-tabs" id="settingsDeliveryTabs"></div>
+      </div>
+    </div>
+    <div class="panel-body no-scrollbar settings-right-body">
       <div class="info-card" id="settingsRightDefault">
         <div class="info-title">Выберите пункт для редактирования</div>
         <div class="info-text">Откройте нужный раздел слева, чтобы увидеть настройки.</div>
@@ -14,35 +22,117 @@
         <div class="info-text">Выберите точку слева, чтобы посмотреть и изменить её данные.</div>
       </div>
 
-      <div class="info-card settings-right-panel hidden" id="settingsStorePanel">
-        <div class="settings-list-header">
-          <div class="settings-list-title">Филиал</div>
-          <div class="settings-list-subtitle" id="settingsStoreSubtitle">—</div>
-        </div>
-        <form class="settings-site-form" id="settingsStoreForm">
+      <div class="info-card settings-right-panel settings-right-panel-fixed-footer hidden" id="settingsStorePanel">
+        <form class="settings-site-form settings-panel-scroll" id="settingsStoreForm" autocomplete="off" data-lpignore="true" data-1p-ignore="true" data-form-type="other">
+          <input type="text" tabindex="-1" aria-hidden="true" autocomplete="name" name="store-fake-name" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0;pointer-events:none" />
+          <input type="text" tabindex="-1" aria-hidden="true" autocomplete="street-address" name="store-fake-address" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0;pointer-events:none" />
+          <input type="tel" tabindex="-1" aria-hidden="true" autocomplete="tel" name="store-fake-phone" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0;pointer-events:none" />
+          <input type="password" tabindex="-1" aria-hidden="true" autocomplete="new-password" name="store-fake-password" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0;pointer-events:none" />
+          <div class="settings-list-header settings-delivery-zone-header">
+            <div class="settings-delivery-zone-header-main">
+              <div class="settings-delivery-zone-title-row">
+                <div class="settings-list-title">Филиал</div>
+              </div>
+              <div class="settings-list-subtitle hidden" id="settingsStoreSubtitle" aria-hidden="true"></div>
+            </div>
+            <label class="switch settings-delivery-zone-header-switch">
+              <input class="switch-input" type="checkbox" id="settingsStoreActive" />
+              <span class="switch-ui" aria-hidden="true"></span>
+              <span class="switch-text">Активна</span>
+            </label>
+          </div>
           <div class="settings-site-field">
             <label class="field-label">НАЗВАНИЕ</label>
-            <input class="control" type="text" id="settingsStoreName" required />
+            <input class="control" type="text" id="settingsStoreName" required autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" />
           </div>
-          <div class="settings-site-field">
-            <label class="field-label">КОД</label>
-            <input class="control" type="text" id="settingsStoreCode" placeholder="store-2" />
+          <input type="hidden" id="settingsStoreCode" />
+          <div class="settings-store-top-grid">
+            <div class="settings-site-field">
+              <label class="field-label">ГОРОД</label>
+              <div class="settings-store-address-wrap has-trigger" id="settingsStoreCityWrap">
+                <input class="control" type="text" id="settingsStoreCity" placeholder="Выберите город из списка" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" />
+                <button class="settings-store-address-trigger" type="button" id="settingsStoreCityTrigger" aria-label="Открыть список городов филиала">
+                  <i class="fas fa-chevron-down"></i>
+                </button>
+                <div class="settings-store-address-popover hidden" id="settingsStoreCityPopover" role="dialog" aria-label="Подсказки города филиала">
+                  <div class="settings-store-address-status hidden" id="settingsStoreCityStatus"></div>
+                  <div class="settings-store-address-results hidden" id="settingsStoreCityResults"></div>
+                </div>
+              </div>
+            </div>
+            <div class="settings-site-field settings-store-timezone-field">
+              <label class="field-label">ЧАСОВОЙ ПОЯС</label>
+              <div class="settings-store-timezone-selector settings-delivery-city-selector new-order-right-select-wrap" id="settingsStoreTimezoneSelector">
+                <select id="settingsStoreTimezoneSelect" class="hidden" tabindex="-1" aria-hidden="true"></select>
+                <button class="new-order-right-select-trigger" type="button" id="settingsStoreTimezoneTrigger" aria-haspopup="listbox" aria-expanded="false" aria-label="Выбрать часовой пояс филиала">
+                  <span class="cash-toolbar-filter-main">
+                    <span id="settingsStoreTimezoneValue">+0</span>
+                  </span>
+                  <i class="fas fa-chevron-down" aria-hidden="true"></i>
+                </button>
+                <div class="new-order-right-select-menu" id="settingsStoreTimezoneMenu" role="listbox" aria-label="Часовой пояс филиала"></div>
+              </div>
+            </div>
           </div>
-          <div class="settings-site-field">
+          <div class="settings-site-field hidden" id="settingsStoreAddressLookupField">
             <label class="field-label">АДРЕС</label>
-            <input class="control" type="text" id="settingsStoreAddress" />
+            <div class="settings-store-address-wrap has-map-btn" id="settingsStoreAddressLookupWrap">
+              <input class="control" type="text" id="settingsStoreAddressLookup" placeholder="Начните вводить адрес и выберите вариант из базы" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" disabled />
+              <button class="settings-store-map-icon-btn" type="button" id="settingsStoreAddressMapBtn" aria-label="Уточнить точку филиала на карте" disabled>
+                <i class="fas fa-map-marker-alt"></i>
+              </button>
+              <div class="settings-store-address-popover hidden" id="settingsStoreAddressLookupPopover" role="dialog" aria-label="Подсказки адреса филиала">
+                <div class="settings-store-address-status hidden" id="settingsStoreAddressLookupStatus"></div>
+                <div class="settings-store-address-results hidden" id="settingsStoreAddressLookupResults"></div>
+              </div>
+            </div>
+            <div class="field-hint settings-store-map-hint" id="settingsStoreAddressMapHint">Карта уточняет только координату. Текст адреса остаётся как в полях выше.</div>
           </div>
           <div class="settings-site-field">
-            <label class="field-label">ГОРОД</label>
-            <input class="control" type="text" id="settingsStoreCity" />
+            <label class="field-label">РАЙОН / ЛОКАЛЬНОСТЬ</label>
+            <input class="control" type="text" id="settingsStoreLocality" placeholder="Например, Бажево" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" />
+          </div>
+          <div class="settings-site-field">
+            <label class="field-label">УЛИЦА</label>
+            <div class="settings-store-address-wrap" id="settingsStoreAddressWrap">
+              <input class="control" type="text" id="settingsStoreAddress" placeholder="Например, 22 партсъезда или 8 микрорайон" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" disabled />
+              <div class="settings-store-address-popover hidden" id="settingsStoreAddressPopover" role="dialog" aria-label="Подсказки улицы филиала">
+                <div class="settings-store-address-status hidden" id="settingsStoreAddressStatus"></div>
+                <div class="settings-store-address-results hidden" id="settingsStoreAddressResults"></div>
+              </div>
+            </div>
+          </div>
+          <div class="settings-store-compact-grid">
+            <div class="settings-site-field settings-store-compact-field">
+              <label class="field-label">ДОМ</label>
+              <div class="settings-store-address-wrap" id="settingsStoreHouseWrap">
+                <input class="control" type="text" id="settingsStoreHouse" placeholder="29" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" disabled />
+                <div class="settings-store-address-popover hidden" id="settingsStoreHousePopover" role="dialog" aria-label="Подсказки номера дома филиала">
+                  <div class="settings-store-address-status hidden" id="settingsStoreHouseStatus"></div>
+                  <div class="settings-store-address-results hidden" id="settingsStoreHouseResults"></div>
+                </div>
+              </div>
+            </div>
+            <div class="settings-site-field settings-store-compact-field">
+              <label class="field-label">ЭТ.</label>
+              <input class="control" type="text" id="settingsStoreFloor" placeholder="2" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" />
+            </div>
+            <div class="settings-site-field settings-store-compact-field">
+              <label class="field-label">КВ.</label>
+              <input class="control" type="text" id="settingsStoreApartment" placeholder="15" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" />
+            </div>
+            <div class="settings-site-field settings-store-compact-field">
+              <label class="field-label">КАБ.</label>
+              <input class="control" type="text" id="settingsStoreCabinet" placeholder="4" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" />
+            </div>
+          </div>
+          <div class="settings-site-field">
+            <label class="field-label">КОММЕНТАРИЙ</label>
+            <input class="control" type="text" id="settingsStoreAddressComment" placeholder="Например, вход со двора" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" />
           </div>
           <div class="settings-site-field">
             <label class="field-label">ТЕЛЕФОН</label>
-            <input class="control" type="text" id="settingsStorePhone" />
-          </div>
-          <div class="settings-site-field">
-            <label class="field-label">ЧАСОВОЙ ПОЯС</label>
-            <select id="settingsStoreTimezoneSelect" class="order-head-select tenant-timezone-select" aria-label="Часовой пояс точки"></select>
+            <input class="control" type="text" id="settingsStorePhone" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" />
           </div>
           <div class="settings-site-field">
             <label class="field-label">График работы</label>
@@ -65,14 +155,6 @@
               </label>
               <div class="store-hours-grid" id="settingsStoreDeliveryHoursContainer"></div>
             </div>
-          </div>
-          <div class="settings-site-field">
-            <label class="field-label">СТАТУС</label>
-            <label class="switch">
-              <input class="switch-input" type="checkbox" id="settingsStoreActive" />
-              <span class="switch-ui" aria-hidden="true"></span>
-              <span class="switch-text">Активна</span>
-            </label>
           </div>
           <div class="settings-site-field" id="settingsStoreTelegramBlock">
             <div class="settings-list-header">
@@ -105,13 +187,36 @@
             <div id="settingsStoreTelegramList"></div>
           </div>
         </form>
-        <div class="stores-form-actions settings-footer-actions">
-          <button class="settings-footer-btn settings-footer-btn--save" type="button" id="settingsStoreSaveBtn">
-            <span id="settingsStoreSaveText">Сохранить</span>
-          </button>
-          <button class="settings-footer-btn settings-footer-btn--cancel" type="button" id="settingsStoreResetBtn" title="Сбросить" aria-label="Сбросить">
-            <i class="fas fa-times"></i>
-          </button>
+        <div class="panel-footer">
+          <div class="stores-form-actions settings-footer-actions">
+            <button class="settings-footer-btn settings-footer-btn--save" type="button" id="settingsStoreSaveBtn">
+              <span id="settingsStoreSaveText">Сохранить</span>
+            </button>
+            <button class="settings-footer-btn settings-footer-btn--cancel" type="button" id="settingsStoreResetBtn" title="Сбросить" aria-label="Сбросить">
+              <i class="fas fa-times"></i>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-store-map-modal hidden" id="settingsStoreAddressMapModal" role="dialog" aria-modal="true" aria-labelledby="settingsStoreAddressMapTitle">
+        <div class="settings-store-map-modal__card">
+          <div class="settings-store-map-modal__head">
+            <div>
+              <div class="settings-store-map-modal__title" id="settingsStoreAddressMapTitle">Точка филиала на карте</div>
+              <div class="settings-store-map-modal__subtitle" id="settingsStoreAddressMapSubtitle">Кликните по карте или перетащите маркер, чтобы уточнить координату.</div>
+            </div>
+            <button class="icon-btn settings-store-map-modal__close" type="button" id="settingsStoreAddressMapCloseBtn" aria-label="Закрыть карту">
+              <i class="fas fa-times"></i>
+            </button>
+          </div>
+          <div class="settings-store-map-modal__status hidden" id="settingsStoreAddressMapStatus"></div>
+          <div class="settings-store-map-modal__canvas" id="settingsStoreAddressMapCanvas"></div>
+          <div class="settings-store-map-modal__coords" id="settingsStoreAddressMapCoords">Координата ещё не выбрана.</div>
+          <div class="settings-store-map-modal__actions">
+            <button class="btn btn-link btn-sm" type="button" id="settingsStoreAddressMapResetBtn">Сбросить уточнение</button>
+            <button class="btn btn-primary btn-sm" type="button" id="settingsStoreAddressMapApplyBtn">Применить точку</button>
+          </div>
         </div>
       </div>
 
@@ -924,91 +1029,503 @@
         <div class="settings-list" data-settings-list="order-time-options"></div>
       </div>
 
-      <div class="info-card settings-right-panel hidden" id="settingsSystemPollingPanel">
-        <div class="settings-list-header">
-          <div class="settings-list-title">Поллинг</div>
-          <div class="settings-list-subtitle">Управление Telegram polling на этом сервере</div>
-        </div>
-        <div class="settings-site-form">
-          <div class="settings-site-field">
-            <label class="field-label">TELEGRAM ENV POLLING</label>
-            <span class="field-hint">Polling для TELEGRAM_BOT_TOKEN (.env)</span>
-            <label class="switch">
-              <input class="switch-input" type="checkbox" id="settingsPollingEnvEnabled" />
-              <span class="switch-ui" aria-hidden="true"></span>
-              <span class="switch-text">Включено</span>
-            </label>
+      <div class="info-card settings-right-panel settings-right-panel-fixed-footer hidden" id="settingsSystemMapPanel">
+        <div class="settings-panel-scroll">
+          <div class="settings-system-map-layout">
+            <div class="settings-site-field settings-site-inline-switch settings-system-telegram-switch-field">
+              <div class="settings-system-telegram-switch-copy">
+                <label class="field-label">КАРТА ДЛЯ АДРЕСА ФИЛИАЛА</label>
+                <span class="field-hint">Включает единый адресный поиск с подсказками и картой в карточке филиала</span>
+              </div>
+              <label class="switch">
+                <input class="switch-input" type="checkbox" id="settingsSystemMapStoreAddressEnabled" />
+                <span class="switch-ui" aria-hidden="true"></span>
+                <span class="switch-text">Включено</span>
+              </label>
+            </div>
+            <div class="settings-system-map-group">
+              <div class="settings-site-field">
+                <label class="field-label">PROVIDER NAME</label>
+                <span class="field-hint">Например: Thunderforest</span>
+                <input class="control" type="text" id="settingsSystemMapProviderName" placeholder="Thunderforest" autocomplete="off" readonly onfocus="this.removeAttribute('readonly')" />
+              </div>
+              <div class="settings-site-field">
+                <label class="field-label">TILE URL</label>
+                <span class="field-hint">Должен содержать шаблоны {z}, {x}, {y}. Можно использовать {s} для subdomains.</span>
+                <input class="control" type="text" id="settingsSystemMapTileUrl" placeholder="https://{s}.tile.thunderforest.com/atlas/{z}/{x}/{y}.png?apikey=..." autocomplete="off" readonly onfocus="this.removeAttribute('readonly')" />
+              </div>
+              <div class="settings-site-field">
+                <label class="field-label">ATTRIBUTION</label>
+                <span class="field-hint">HTML-строка для подписи источника карты.</span>
+                <textarea class="control" id="settingsSystemMapAttribution" rows="4" placeholder="&lt;a href=&quot;https://www.thunderforest.com/&quot; target=&quot;_blank&quot;&gt;&amp;copy; Thunderforest&lt;/a&gt; ..." readonly onfocus="this.removeAttribute('readonly')"></textarea>
+              </div>
+            </div>
+
+            <div class="settings-system-map-grid">
+              <div class="settings-site-field">
+                <label class="field-label">MAX ZOOM</label>
+                <span class="field-hint">Число от 0 до 22.</span>
+                <input class="control" type="number" id="settingsSystemMapMaxZoom" min="0" max="22" step="1" placeholder="22" readonly onfocus="this.removeAttribute('readonly')" />
+              </div>
+              <div class="settings-site-field">
+                <label class="field-label">SUBDOMAINS</label>
+                <span class="field-hint">Необязательно. Введите через запятую: a,b,c</span>
+                <input class="control" type="text" id="settingsSystemMapSubdomains" placeholder="a,b,c" autocomplete="off" readonly onfocus="this.removeAttribute('readonly')" />
+              </div>
+            </div>
+
+            <div class="settings-system-map-group">
+              <div class="settings-system-map-group-title">ПОИСК ГОРОДОВ</div>
+              <div class="settings-site-field">
+                <label class="field-label">GEOCODER PROVIDER</label>
+                <span class="field-hint">Например: Nominatim</span>
+                <input class="control" type="text" id="settingsSystemMapGeocoderProviderName" placeholder="Nominatim" autocomplete="off" readonly onfocus="this.removeAttribute('readonly')" />
+              </div>
+              <div class="settings-site-field">
+                <label class="field-label">GEOCODER SEARCH URL</label>
+                <span class="field-hint">Nominatim-compatible endpoint поиска, например https://nominatim.openstreetmap.org/search</span>
+                <input class="control" type="text" id="settingsSystemMapGeocoderSearchUrl" placeholder="https://nominatim.openstreetmap.org/search" autocomplete="off" readonly onfocus="this.removeAttribute('readonly')" />
+              </div>
+            </div>
+
+            <div class="settings-system-map-grid settings-system-map-grid--triple">
+              <div class="settings-site-field">
+                <label class="field-label">COUNTRY CODE</label>
+                <span class="field-hint">По умолчанию ru.</span>
+                <input class="control" type="text" id="settingsSystemMapGeocoderCountryCode" placeholder="ru" autocomplete="off" readonly onfocus="this.removeAttribute('readonly')" />
+              </div>
+              <div class="settings-site-field">
+                <label class="field-label">LANGUAGE</label>
+                <span class="field-hint">Язык поиска и выдачи.</span>
+                <input class="control" type="text" id="settingsSystemMapGeocoderLanguage" placeholder="ru" autocomplete="off" readonly onfocus="this.removeAttribute('readonly')" />
+              </div>
+              <div class="settings-site-field">
+                <label class="field-label">RESULT LIMIT</label>
+                <span class="field-hint">Число от 1 до 10.</span>
+                <input class="control" type="number" id="settingsSystemMapGeocoderResultLimit" min="1" max="10" step="1" placeholder="5" readonly onfocus="this.removeAttribute('readonly')" />
+              </div>
+            </div>
           </div>
-          <div class="settings-site-field">
-            <label class="field-label">TENANT TELEGRAM POLLING</label>
-            <span class="field-hint">Polling tenant-ботов из ten_tenants</span>
-            <label class="switch">
-              <input class="switch-input" type="checkbox" id="settingsPollingTenantEnabled" />
-              <span class="switch-ui" aria-hidden="true"></span>
-              <span class="switch-text">Включено</span>
-            </label>
+        </div>
+        <div class="panel-footer">
+          <div class="product-footer-actions">
+            <div class="product-footer-view" id="settingsSystemMapFooterView">
+              <button class="product-footer-btn product-footer-edit" id="settingsSystemMapEditBtn" type="button">Редактировать</button>
+            </div>
+            <div class="product-footer-edit-mode hidden" id="settingsSystemMapFooterEdit">
+              <button class="product-footer-btn product-footer-cancel" id="settingsSystemMapCancelBtn" type="button" title="Отменить" aria-label="Отменить">
+                <i class="fas fa-times"></i>
+              </button>
+              <button class="product-footer-btn product-footer-save" id="settingsSystemMapSaveBtn" type="button">Сохранить</button>
+            </div>
           </div>
         </div>
       </div>
 
-      <div class="info-card hidden" id="settingsDeliveryEmpty">
-        <div class="info-title">Настройки доставки</div>
-        <div class="info-text">Выберите настройку слева или создайте новую.</div>
+      <div class="info-card settings-right-panel settings-right-panel-fixed-footer hidden" id="settingsSystemDeliveryZonePolygonPanel">
+        <div class="settings-panel-scroll">
+          <div class="settings-system-map-layout">
+            <div class="settings-site-field settings-site-inline-switch settings-system-telegram-switch-field">
+              <div class="settings-system-telegram-switch-copy">
+                <label class="field-label">ПОЛИГОНЫ ДОСТАВКИ</label>
+                <span class="field-hint">Включает создание и редактирование зон доставки на карте tenant-а</span>
+              </div>
+              <label class="switch">
+                <input class="switch-input" type="checkbox" id="settingsSystemDeliveryZonePolygonEnabled" />
+                <span class="switch-ui" aria-hidden="true"></span>
+                <span class="switch-text">Включено</span>
+              </label>
+            </div>
+            <div class="settings-system-map-group">
+              <div class="settings-site-field">
+                <label class="field-label">PROVIDER</label>
+                <span class="field-hint">Сервис рисования и редактирования полигонов на карте</span>
+                <input class="control" type="text" id="settingsSystemDeliveryZonePolygonProvider" placeholder="Leaflet-Geoman" autocomplete="off" readonly onfocus="this.removeAttribute('readonly')" />
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="panel-footer">
+          <div class="product-footer-actions">
+            <div class="product-footer-view" id="settingsSystemDeliveryZonePolygonFooterView">
+              <button class="product-footer-btn product-footer-edit" id="settingsSystemDeliveryZonePolygonEditBtn" type="button">Редактировать</button>
+            </div>
+            <div class="product-footer-edit-mode hidden" id="settingsSystemDeliveryZonePolygonFooterEdit">
+              <button class="product-footer-btn product-footer-cancel" id="settingsSystemDeliveryZonePolygonCancelBtn" type="button" title="Отменить" aria-label="Отменить">
+                <i class="fas fa-times"></i>
+              </button>
+              <button class="product-footer-btn product-footer-save" id="settingsSystemDeliveryZonePolygonSaveBtn" type="button">Сохранить</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="info-card settings-right-panel settings-right-panel-fixed-footer hidden" id="settingsSystemTelegramBotPanel">
+        <div class="settings-panel-scroll">
+          <div class="settings-system-telegram-layout">
+            <div class="settings-system-telegram-group">
+              <div class="settings-site-field">
+                <label class="field-label">USERNAME</label>
+                <span class="field-hint">Например: noti_m_bot или ссылка https://t.me/noti_m_bot</span>
+                <input class="control" type="text" id="settingsSystemTelegramBotUsername" placeholder="noti_m_bot" autocomplete="off" readonly onfocus="this.removeAttribute('readonly')" />
+              </div>
+              <div class="settings-site-field">
+                <label class="field-label">TOKEN</label>
+                <span class="field-hint">Системный token Telegram-бота для webhook и уведомлений</span>
+                <input class="control" type="text" id="settingsSystemTelegramBotToken" placeholder="123456:ABC-DEF..." autocomplete="off" readonly onfocus="this.removeAttribute('readonly')" />
+              </div>
+              <div class="settings-site-field">
+                <label class="field-label">WEBHOOK URL</label>
+                <span class="field-hint">Необязательно. Если URL заполнен, polling системного бота не запускается.</span>
+                <input class="control" type="text" id="settingsSystemTelegramWebhookUrl" placeholder="https://example.com/api/telegram/webhook" autocomplete="off" readonly onfocus="this.removeAttribute('readonly')" />
+              </div>
+            </div>
+
+            <div class="settings-system-telegram-group settings-system-telegram-group--polling">
+              <div class="settings-site-field settings-site-inline-switch settings-system-telegram-switch-field">
+                <div class="settings-system-telegram-switch-copy">
+                  <label class="field-label">SYSTEM TELEGRAM POLLING</label>
+                  <span class="field-hint">Polling для системного бота, если webhook URL пустой</span>
+                </div>
+                <label class="switch">
+                  <input class="switch-input" type="checkbox" id="settingsPollingEnvEnabled" />
+                  <span class="switch-ui" aria-hidden="true"></span>
+                  <span class="switch-text">Включено</span>
+                </label>
+              </div>
+              <div class="settings-site-field settings-site-inline-switch settings-system-telegram-switch-field">
+                <div class="settings-system-telegram-switch-copy">
+                  <label class="field-label">TENANT TELEGRAM POLLING</label>
+                  <span class="field-hint">Polling tenant-ботов из ten_tenants</span>
+                </div>
+                <label class="switch">
+                  <input class="switch-input" type="checkbox" id="settingsPollingTenantEnabled" />
+                  <span class="switch-ui" aria-hidden="true"></span>
+                  <span class="switch-text">Включено</span>
+                </label>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="panel-footer">
+          <div class="product-footer-actions">
+            <div class="product-footer-view" id="settingsSystemTelegramFooterView">
+              <button class="product-footer-btn product-footer-edit" id="settingsSystemTelegramEditBtn" type="button">Редактировать</button>
+            </div>
+            <div class="product-footer-edit-mode hidden" id="settingsSystemTelegramFooterEdit">
+              <button class="product-footer-btn product-footer-cancel" id="settingsSystemTelegramCancelBtn" type="button" title="Отменить" aria-label="Отменить">
+                <i class="fas fa-times"></i>
+              </button>
+              <button class="product-footer-btn product-footer-save" id="settingsSystemTelegramSaveBtn" type="button">Сохранить</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="info-card settings-right-panel hidden" id="settingsDeliveryHome">
+        <div class="settings-panel-scroll">
+          <div class="settings-list-header">
+            <div class="settings-list-title">Главная</div>
+            <div class="settings-list-subtitle">Условия и зоны доставки tenant-а</div>
+          </div>
+          <div class="settings-delivery-home-section">
+            <div class="settings-delivery-home-section-head">
+              <div class="settings-delivery-home-section-title">Условия доставки</div>
+              <div class="settings-delivery-home-section-text">Обычные тарифы без зон</div>
+            </div>
+            <div class="settings-list" id="settingsDeliveryHomeList"></div>
+            <div class="settings-delivery-home-empty hidden" id="settingsDeliveryHomeEmpty">
+              <div class="info-title">Нет условий доставки</div>
+              <div class="info-text">Создайте первую настройку через кнопку «+».</div>
+            </div>
+          </div>
+          <div class="settings-delivery-home-section">
+            <div class="settings-delivery-home-section-head">
+              <div class="settings-delivery-home-section-title">Зоны доставки</div>
+              <div class="settings-delivery-home-section-text">Полигоны на карте с собственными тарифами</div>
+            </div>
+            <div class="settings-list" id="settingsDeliveryZonesHomeList"></div>
+            <div class="settings-delivery-home-empty hidden" id="settingsDeliveryZonesHomeEmpty">
+              <div class="info-title">Зон пока нет</div>
+              <div class="info-text">Нажмите «+» и выберите «Зона доставки», чтобы начать рисовать на карте.</div>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div class="info-card settings-right-panel hidden" id="settingsDeliveryPanel">
-        <div class="settings-list-header">
-          <div class="settings-list-title">Настройка доставки</div>
-          <div class="settings-list-subtitle" id="settingsDeliverySubtitle">—</div>
-        </div>
-        <form class="settings-site-form" id="settingsDeliveryForm">
-          <div class="settings-site-field">
-            <label class="field-label">НАЗВАНИЕ</label>
-            <input class="control" type="text" id="settingsDeliveryName" placeholder="Например: Доставка по городу" required />
-          </div>
-          <div class="settings-site-field">
-            <label class="field-label">СТОИМОСТЬ ДОСТАВКИ</label>
-            <input class="control" type="number" id="settingsDeliveryCost" placeholder="0" min="0" step="1" />
-          </div>
-          <div class="settings-site-field">
-            <label class="field-label">МИНИМАЛЬНАЯ СУММА ЗАКАЗА</label>
-            <input class="control" type="number" id="settingsDeliveryMinOrder" placeholder="0" min="0" step="1" />
-          </div>
-          <div class="settings-site-field">
-            <label class="field-label">БЕСПЛАТНАЯ ДОСТАВКА ОТ</label>
-            <input class="control" type="number" id="settingsDeliveryFreeFrom" placeholder="Оставьте пустым, если нет" min="0" step="1" />
-          </div>
-          <div class="settings-site-field">
-            <label class="field-label">ФИЛИАЛЫ</label>
-            <div class="delivery-stores-list" id="deliveryStoresList"></div>
-          </div>
-          <div class="settings-site-field">
-            <label class="field-label">ФИЛИАЛ ПО УМОЛЧАНИЮ ДЛЯ ДОСТАВКИ</label>
-            <select class="control" id="settingsDeliveryDefaultStore">
-              <option value="">— не выбран —</option>
-            </select>
-            <div class="muted field-hint">Заказы на доставку по этой настройке будут привязаны к выбранному филиалу</div>
-          </div>
-          <div class="settings-site-field">
-            <label class="field-label">СТАТУС</label>
-            <label class="switch">
+        <div class="settings-panel-scroll">
+          <div class="settings-list-header settings-delivery-zone-header settings-delivery-setting-header">
+            <div class="settings-delivery-zone-header-main">
+              <div class="settings-delivery-zone-title-row">
+                <div class="settings-list-title">Настройка доставки</div>
+              </div>
+              <div class="settings-list-subtitle hidden" id="settingsDeliverySubtitle"></div>
+            </div>
+            <label class="switch settings-delivery-zone-header-switch">
               <input class="switch-input" type="checkbox" id="settingsDeliveryActive" checked />
               <span class="switch-ui" aria-hidden="true"></span>
               <span class="switch-text">Активна</span>
             </label>
           </div>
-        </form>
-        <div class="stores-form-actions settings-footer-actions">
-          <button class="settings-footer-btn settings-footer-btn--save" type="button" id="settingsDeliverySaveBtn">
-            <span id="settingsDeliverySaveText">Сохранить</span>
-          </button>
-          <button class="settings-footer-btn settings-footer-btn--cancel" type="button" id="settingsDeliveryResetBtn" title="Сбросить" aria-label="Сбросить">
-            <i class="fas fa-times"></i>
-          </button>
-          <button class="settings-footer-btn settings-footer-btn--delete" type="button" id="settingsDeliveryDeleteBtn" title="Удалить" aria-label="Удалить">
-            <i class="fas fa-trash"></i>
-          </button>
+          <form class="settings-site-form" id="settingsDeliveryForm">
+            <div class="settings-site-field">
+              <label class="field-label">НАЗВАНИЕ</label>
+              <input class="control settings-delivery-zone-pill-control" type="text" id="settingsDeliveryName" placeholder="Например: Доставка по городу" required />
+            </div>
+            <div class="settings-delivery-setting-grid">
+              <div class="settings-site-field">
+                <label class="field-label">ВРЕМЯ ДОСТАВКИ, МИН</label>
+                <input class="control settings-delivery-zone-pill-control" type="number" id="settingsDeliveryEtaMinutes" placeholder="40" min="0" step="1" />
+              </div>
+            </div>
+            <div class="hidden" aria-hidden="true">
+              <input class="control" type="number" id="settingsDeliveryCost" placeholder="0" min="0" step="1" tabindex="-1" />
+              <input class="control" type="number" id="settingsDeliveryMinOrder" placeholder="0" min="0" step="1" tabindex="-1" />
+              <input class="control" type="number" id="settingsDeliveryFreeFrom" placeholder="Оставьте пустым, если нет" min="0" step="1" tabindex="-1" />
+            </div>
+            <div class="settings-site-field">
+              <label class="field-label">ФИЛИАЛЫ</label>
+              <div class="settings-delivery-zone-stores-wrap">
+                <button class="settings-delivery-zone-stores-trigger" type="button" id="settingsDeliveryStoresTriggerBtn" aria-haspopup="dialog" aria-label="Выбрать филиалы для настройки доставки">
+                  <i class="fas fa-plus"></i>
+                </button>
+                <div class="settings-delivery-zone-stores-list" id="deliveryStoresList"></div>
+              </div>
+            </div>
+            <div class="settings-site-field">
+              <label class="field-label">ФИЛИАЛ ПО УМОЛЧАНИЮ ДЛЯ ДОСТАВКИ</label>
+              <div class="settings-delivery-default-store-selector settings-delivery-city-selector new-order-right-select-wrap" id="settingsDeliveryDefaultStoreSelector">
+                <select class="hidden" id="settingsDeliveryDefaultStore" tabindex="-1" aria-hidden="true">
+                  <option value="">— не выбран —</option>
+                </select>
+                <button class="new-order-right-select-trigger" type="button" id="settingsDeliveryDefaultStoreTrigger" aria-haspopup="listbox" aria-expanded="false" aria-label="Выбрать филиал по умолчанию для доставки">
+                  <span class="cash-toolbar-filter-main">
+                    <span id="settingsDeliveryDefaultStoreValue">— не выбран —</span>
+                  </span>
+                  <i class="fas fa-chevron-down" aria-hidden="true"></i>
+                </button>
+                <div class="new-order-right-select-menu" id="settingsDeliveryDefaultStoreMenu" role="listbox" aria-label="Филиал по умолчанию для доставки"></div>
+              </div>
+              <div class="muted field-hint settings-delivery-setting-note">Заказы на доставку по этой настройке будут привязаны к выбранному филиалу</div>
+            </div>
+            <div class="settings-site-field">
+              <div class="settings-delivery-zone-tier-head">
+                <label class="field-label">ТАРИФЫ ПО СУММЕ ЗАКАЗА</label>
+                <button class="btn btn-secondary btn-sm" type="button" id="settingsDeliveryAddTierBtn">
+                  <i class="fas fa-plus"></i>
+                  <span>Добавить порог</span>
+                </button>
+              </div>
+              <div class="settings-delivery-zone-tier-list" id="settingsDeliveryPriceTiers"></div>
+            </div>
+          </form>
         </div>
+      </div>
+
+      <div class="info-card settings-right-panel hidden" id="settingsDeliveryMapConfigPanel">
+        <div class="settings-panel-scroll">
+          <div class="settings-list-header">
+            <div class="settings-list-title">Настройка карты</div>
+            <div class="settings-list-subtitle" id="settingsDeliveryMapConfigSubtitle">—</div>
+          </div>
+          <div class="settings-site-form">
+            <div class="settings-site-field">
+              <div class="settings-delivery-map-accounts-note" id="settingsDeliveryMapConfigGuide">
+                Зарегистрируйтесь на thunderforest.com, откройте Dashboard -> API Keys, скопируйте ключ и добавьте его ниже. Логин и пароль можно сохранить рядом как памятку.
+              </div>
+            </div>
+            <div class="settings-site-field">
+              <button class="btn btn-secondary settings-delivery-map-account-add-btn" type="button" id="settingsDeliveryMapAccountAddBtn">
+                <i class="fas fa-plus"></i>
+                <span>Добавить API</span>
+              </button>
+            </div>
+            <div class="settings-site-field hidden" id="settingsDeliveryMapAccountAddWrap">
+              <div class="settings-delivery-map-account-editor">
+                <div class="settings-delivery-map-account-editor-grid">
+                  <div class="settings-site-field">
+                    <label class="field-label" for="settingsDeliveryMapAccountAddApiKey">API KEY</label>
+                    <input class="control" type="text" id="settingsDeliveryMapAccountAddApiKey" placeholder="Введите API key" autocomplete="off" readonly onfocus="this.removeAttribute('readonly')" />
+                  </div>
+                  <div class="settings-site-field">
+                    <label class="field-label" for="settingsDeliveryMapAccountAddLogin">ЛОГИН</label>
+                    <input class="control" type="text" id="settingsDeliveryMapAccountAddLogin" placeholder="Необязательно" autocomplete="off" readonly onfocus="this.removeAttribute('readonly')" />
+                  </div>
+                  <div class="settings-site-field">
+                    <label class="field-label" for="settingsDeliveryMapAccountAddPassword">ПАРОЛЬ</label>
+                    <input class="control" type="password" id="settingsDeliveryMapAccountAddPassword" placeholder="Необязательно" autocomplete="new-password" />
+                  </div>
+                </div>
+                <div class="settings-delivery-map-account-editor-actions">
+                  <button class="btn btn-primary settings-delivery-map-account-action-btn" type="button" id="settingsDeliveryMapAccountAddConfirmBtn">
+                    Сохранить
+                  </button>
+                  <button class="btn btn-secondary settings-delivery-map-account-action-btn" type="button" id="settingsDeliveryMapAccountAddCancelBtn">
+                    Отмена
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div class="settings-site-field">
+              <div class="settings-delivery-map-account-list" id="settingsDeliveryMapAccountsList"></div>
+              <div class="settings-delivery-home-empty hidden" id="settingsDeliveryMapAccountsEmpty">
+                <div class="info-title">API ещё не добавлены</div>
+                <div class="info-text">Добавьте первый ключ и выберите его активным для карты этого tenant.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="info-card settings-right-panel hidden" id="settingsDeliveryZonePanel">
+        <div class="settings-panel-scroll">
+          <div class="settings-list-header settings-delivery-zone-header">
+            <div class="settings-delivery-zone-header-main">
+              <div class="settings-delivery-zone-title-row">
+                <div class="settings-list-title">Зона доставки</div>
+                <div class="settings-delivery-zone-info-wrap">
+                  <button class="settings-delivery-zone-info-btn" type="button" id="settingsDeliveryZoneInfoBtn" aria-label="Информация о зоне доставки" aria-expanded="false">
+                    <span aria-hidden="true">i</span>
+                  </button>
+                  <div class="settings-delivery-zone-info-popover hidden" id="settingsDeliveryZoneInfoPopover" role="dialog" aria-label="Информация о зоне доставки">
+                    <div class="settings-delivery-zone-info-text" id="settingsDeliveryZoneGeometryHint">
+                      1. Зона открыта в режиме просмотра
+                      2. Основные точки показывают вершины выбранного полигона
+                      3. Нажмите «Редактировать», чтобы включить перетаскивание точек
+                      4. После включения редактирования появятся и точки на линиях
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="settings-list-subtitle" id="settingsDeliveryZoneSubtitle">Новая зона</div>
+            </div>
+            <label class="switch settings-delivery-zone-header-switch">
+              <input class="switch-input" type="checkbox" id="settingsDeliveryZoneActive" checked />
+              <span class="switch-ui" aria-hidden="true"></span>
+              <span class="switch-text">Активна</span>
+            </label>
+          </div>
+          <form class="settings-site-form" id="settingsDeliveryZoneForm">
+            <div class="settings-site-field">
+              <label class="field-label">НАЗВАНИЕ</label>
+              <input class="control settings-delivery-zone-pill-control" type="text" id="settingsDeliveryZoneName" placeholder="Например: Центральный район" />
+            </div>
+            <div class="settings-delivery-zone-grid">
+              <div class="settings-site-field">
+                <label class="field-label">ЦВЕТ</label>
+                <div class="settings-delivery-zone-color-wrap" id="settingsDeliveryZoneColorWrap">
+                  <input class="settings-delivery-zone-color-native" type="color" id="settingsDeliveryZoneColor" value="#ff7a00" tabindex="-1" aria-hidden="true" />
+                  <button class="settings-delivery-zone-color-trigger" type="button" id="settingsDeliveryZoneColorTrigger" aria-haspopup="dialog" aria-expanded="false" aria-label="Выбрать цвет зоны доставки">
+                    <span class="settings-delivery-zone-color-preview" id="settingsDeliveryZoneColorPreview" aria-hidden="true"></span>
+                    <span class="settings-delivery-zone-color-value" id="settingsDeliveryZoneColorValue">#FF7A00</span>
+                    <i class="fas fa-chevron-down" aria-hidden="true"></i>
+                  </button>
+                  <div class="settings-delivery-zone-color-popover hidden" id="settingsDeliveryZoneColorPopover" role="dialog" aria-label="Выбор цвета зоны доставки">
+                    <div class="settings-delivery-zone-color-presets" id="settingsDeliveryZoneColorPresets"></div>
+                    <button class="settings-delivery-zone-color-custom-btn" type="button" id="settingsDeliveryZoneColorCustomBtn">
+                      Настроить цвет
+                    </button>
+                    <div class="settings-delivery-zone-color-editor hidden" id="settingsDeliveryZoneColorEditor">
+                      <div class="settings-delivery-zone-color-editor-head">
+                        <button class="settings-delivery-zone-color-editor-back" type="button" id="settingsDeliveryZoneColorEditorBackBtn">
+                          <i class="fas fa-chevron-left" aria-hidden="true"></i>
+                          <span>Назад</span>
+                        </button>
+                        <button class="settings-delivery-zone-color-editor-done" type="button" id="settingsDeliveryZoneColorEditorDoneBtn">
+                          Готово
+                        </button>
+                      </div>
+                      <div class="settings-delivery-zone-color-editor-preview-row">
+                        <span class="settings-delivery-zone-color-editor-preview" id="settingsDeliveryZoneColorEditorPreview" aria-hidden="true"></span>
+                        <span class="settings-delivery-zone-color-editor-value" id="settingsDeliveryZoneColorEditorValue">#FF7A00</span>
+                      </div>
+                      <div class="settings-delivery-zone-color-editor-fields">
+                        <label class="settings-delivery-zone-color-editor-field">
+                          <span class="settings-delivery-zone-color-editor-field-name">R</span>
+                          <input class="settings-delivery-zone-color-editor-range" type="range" min="0" max="255" step="1" value="255" data-zone-color-channel="r" data-zone-color-input="range" />
+                          <input class="control settings-delivery-zone-color-editor-number" type="number" min="0" max="255" step="1" value="255" inputmode="numeric" data-zone-color-channel="r" data-zone-color-input="number" />
+                        </label>
+                        <label class="settings-delivery-zone-color-editor-field">
+                          <span class="settings-delivery-zone-color-editor-field-name">G</span>
+                          <input class="settings-delivery-zone-color-editor-range" type="range" min="0" max="255" step="1" value="122" data-zone-color-channel="g" data-zone-color-input="range" />
+                          <input class="control settings-delivery-zone-color-editor-number" type="number" min="0" max="255" step="1" value="122" inputmode="numeric" data-zone-color-channel="g" data-zone-color-input="number" />
+                        </label>
+                        <label class="settings-delivery-zone-color-editor-field">
+                          <span class="settings-delivery-zone-color-editor-field-name">B</span>
+                          <input class="settings-delivery-zone-color-editor-range" type="range" min="0" max="255" step="1" value="0" data-zone-color-channel="b" data-zone-color-input="range" />
+                          <input class="control settings-delivery-zone-color-editor-number" type="number" min="0" max="255" step="1" value="0" inputmode="numeric" data-zone-color-channel="b" data-zone-color-input="number" />
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="settings-site-field">
+                <label class="field-label">ВРЕМЯ ДОСТАВКИ, МИН</label>
+                <input class="control settings-delivery-zone-pill-control" type="number" id="settingsDeliveryZoneEtaMinutes" min="0" step="1" placeholder="40" />
+              </div>
+            </div>
+            <div class="settings-site-field">
+              <label class="field-label">ФИЛИАЛЫ</label>
+              <div class="settings-delivery-zone-stores-wrap">
+                <button class="settings-delivery-zone-stores-trigger" type="button" id="settingsDeliveryZoneStoresTriggerBtn" aria-haspopup="dialog" aria-label="Выбрать филиалы для зоны доставки">
+                  <i class="fas fa-plus" aria-hidden="true"></i>
+                </button>
+                <div class="settings-delivery-zone-stores-list" id="deliveryZoneStoresList"></div>
+              </div>
+            </div>
+            <div class="settings-site-field">
+              <div class="settings-delivery-zone-tier-head">
+                <label class="field-label">ТАРИФЫ ПО СУММЕ ЗАКАЗА</label>
+                <button class="btn btn-secondary btn-sm" type="button" id="settingsDeliveryZoneAddTierBtn">
+                  <i class="fas fa-plus"></i>
+                  <span>Добавить порог</span>
+                </button>
+              </div>
+              <div class="settings-delivery-zone-tier-list" id="settingsDeliveryZonePriceTiers"></div>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+    <div class="panel-footer hidden" id="settingsDeliveryFooter">
+      <div class="stores-form-actions settings-footer-actions">
+        <button class="settings-footer-btn settings-footer-btn--save" type="button" id="settingsDeliverySaveBtn">
+          <span id="settingsDeliverySaveText">Сохранить</span>
+        </button>
+        <button class="settings-footer-btn settings-footer-btn--cancel" type="button" id="settingsDeliveryResetBtn" title="Сбросить" aria-label="Сбросить">
+          <i class="fas fa-times"></i>
+        </button>
+        <button class="settings-footer-btn settings-footer-btn--delete" type="button" id="settingsDeliveryDeleteBtn" title="Удалить" aria-label="Удалить">
+          <i class="fas fa-trash"></i>
+        </button>
+      </div>
+    </div>
+    <div class="panel-footer hidden" id="settingsDeliveryZoneFooter">
+      <div class="stores-form-actions settings-footer-actions">
+        <button class="settings-footer-btn settings-footer-btn--edit hidden" type="button" id="settingsDeliveryZoneEditBtn">
+          <span>Редактировать</span>
+        </button>
+        <button class="settings-footer-btn settings-footer-btn--save" type="button" id="settingsDeliveryZoneSaveBtn">
+          <span id="settingsDeliveryZoneSaveText">Сохранить</span>
+        </button>
+        <button class="settings-footer-btn settings-footer-btn--cancel" type="button" id="settingsDeliveryZoneResetBtn" title="Сбросить" aria-label="Сбросить">
+          <i class="fas fa-times"></i>
+        </button>
+        <button class="settings-footer-btn settings-footer-btn--delete" type="button" id="settingsDeliveryZoneDeleteBtn" title="Удалить" aria-label="Удалить">
+          <i class="fas fa-trash"></i>
+        </button>
+      </div>
+    </div>
+    <div class="panel-footer hidden" id="settingsDeliveryMapConfigFooter">
+      <div class="stores-form-actions settings-footer-actions">
+        <button class="settings-footer-btn settings-footer-btn--save" type="button" id="settingsDeliveryMapConfigSaveBtn">
+          <span>Сохранить</span>
+        </button>
+        <button class="settings-footer-btn settings-footer-btn--cancel" type="button" id="settingsDeliveryMapConfigResetBtn" title="Сбросить" aria-label="Сбросить">
+          <i class="fas fa-times"></i>
+        </button>
       </div>
     </div>
   </div>

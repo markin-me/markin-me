@@ -15,10 +15,14 @@
   <div class="shop-mobile-cart-actions hidden" id="shopMobileCartActions">
     <!-- Полоска прогресса до бесплатной доставки (в корзине) -->
     <div class="shop-mobile-delivery-progress-wrap hidden" id="shopMobileDeliveryProgressWrap">
-      <div class="shop-mobile-delivery-progress-bar" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
-        <div class="shop-mobile-delivery-progress-fill" id="shopMobileDeliveryProgressFill"></div>
+      <div class="shop-mobile-delivery-progress-row">
+        <div class="shop-mobile-delivery-progress-surface">
+          <div class="shop-mobile-delivery-progress-bar" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
+            <div class="shop-mobile-delivery-progress-fill" id="shopMobileDeliveryProgressFill"></div>
+          </div>
+          <div class="shop-mobile-delivery-progress-label" id="shopMobileDeliveryProgressLabel"></div>
+        </div>
       </div>
-      <div class="shop-mobile-delivery-progress-label" id="shopMobileDeliveryProgressLabel"></div>
     </div>
     <div class="shop-mobile-checkout-name-wrap hidden" id="shopMobileCheckoutNameWrap">
       <input
@@ -29,12 +33,44 @@
       />
     </div>
     <div class="shop-mobile-checkout-comment-wrap hidden" id="shopMobileCheckoutCommentWrap">
-      <textarea
-        class="control shop-checkout-comment shop-mobile-checkout-comment-input"
-        id="shopMobileCheckoutCommentInput"
-        placeholder="Введите комментарий к заказу"
-        rows="1"
-      ></textarea>
+      <div class="shop-mobile-checkout-comment-row">
+        <textarea
+          class="control shop-checkout-comment shop-mobile-checkout-comment-input"
+          id="shopMobileCheckoutCommentInput"
+          placeholder="Введите комментарий к заказу"
+          rows="1"
+        ></textarea>
+      </div>
+    </div>
+    <div class="shop-mobile-benefits-promo-wrap hidden" id="shopMobileBenefitsPromoWrap">
+      <div class="shop-mobile-benefits-promo-row">
+        <input
+          class="control shop-checkout-comment shop-mobile-benefits-promo-input"
+          id="shopMobileBenefitsPromoInput"
+          type="text"
+          name="shopBenefitsPromoCode"
+          placeholder="Введите промокод"
+          autocomplete="new-password"
+          autocorrect="off"
+          autocapitalize="none"
+          spellcheck="false"
+          inputmode="text"
+          enterkeyhint="done"
+          aria-autocomplete="none"
+          data-lpignore="true"
+          data-form-type="other"
+          data-1p-ignore="true"
+          data-bwignore="true"
+          readonly
+        />
+        <button
+          class="shop-mobile-benefits-inline-apply-btn hidden"
+          id="shopMobileBenefitsInlineApplyBtn"
+          type="button"
+        >
+          Применить
+        </button>
+      </div>
     </div>
     <div class="shop-mobile-cart-actions-cart hidden" id="shopMobileCartActionsCart">
       <button class="shop-cart-clear" id="shopMobileCartClearBtn" type="button" title="Очистить корзину" aria-label="Очистить корзину">×</button>
@@ -47,6 +83,18 @@
         <i class="fas fa-arrow-left"></i>
       </button>
       <button class="shop-checkout-submit-btn" id="shopMobileCheckoutSubmitBtn" type="button">Заказать</button>
+    </div>
+    <div class="shop-mobile-cart-actions-benefits hidden" id="shopMobileCartActionsBenefits">
+      <button class="shop-checkout-back" id="shopMobileBenefitsBackBtn" type="button" aria-label="Назад к оформлению" title="Назад к оформлению">
+        <i class="fas fa-arrow-left"></i>
+      </button>
+      <button class="shop-checkout-submit-btn" id="shopMobileBenefitsApplyBtn" type="button">Сохранить</button>
+    </div>
+    <div class="shop-mobile-cart-actions-gift-claim hidden" id="shopMobileCartActionsGiftClaim">
+      <button class="shop-checkout-back" id="shopMobileGiftClaimBackBtn" type="button" aria-label="Назад к выгодам" title="Назад к выгодам">
+        <i class="fas fa-arrow-left"></i>
+      </button>
+      <button class="shop-checkout-submit-btn" id="shopMobileGiftClaimBtn" type="button" disabled>Забрать</button>
     </div>
   </div>
 
@@ -84,8 +132,8 @@
       <i class="fas fa-house"></i>
     </button>
 
-    <button class="shop-nav-btn" id="shopNavCategories" type="button" data-tab="categories" aria-label="Категории">
-      <i class="fas fa-list"></i>
+    <button class="shop-nav-btn" id="shopNavCategories" type="button" data-tab="benefits" aria-label="Выгоды">
+      <i class="fas fa-tag"></i>
     </button>
 
     <button class="shop-nav-btn" id="shopNavCart" type="button" data-tab="cart" aria-label="Корзина">
