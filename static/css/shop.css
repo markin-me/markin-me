@@ -8047,6 +8047,15 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
   padding-right: 72px;
 }
 
+.shop-company-chat-auto-link{
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
 .shop-company-chat-bubble--order-card{
   width: min(92%, 380px);
 }

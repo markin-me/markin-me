@@ -63,8 +63,13 @@
   const CHAT_TOUCH_CONTEXT_MOVE_CANCEL_PX = 9;
   const CHAT_TOUCH_SWIPE_REPLY_TRIGGER_PX = 72;
   const CHAT_TOUCH_SWIPE_MAX_SHIFT_PX = 96;
+  const CHAT_TOUCH_HEART_DOUBLE_TAP_MS = 280;
+  const CHAT_TOUCH_HEART_DOUBLE_TAP_MOVE_PX = 24;
+  const CHAT_COMPOSER_DRAFT_MAX_LENGTH = 8000;
   const CHAT_REACTION_PENDING_TTL_MS = 10000;
   const CHAT_DROP_IMAGE_EXT_RE = /\.(png|jpe?g|webp|gif|bmp|svg|avif|heic|heif)$/i;
+  const CHAT_AUTO_LINK_PATTERN = /(?:https?:\/\/[^\s<]+|www\.[^\s<]+|(?:[\p{L}\p{N}](?:[\p{L}\p{N}-]{0,61}[\p{L}\p{N}])?\.)+(?:xn--[a-z0-9-]{2,59}|[\p{L}](?:[\p{L}\p{N}-]{0,61}[\p{L}\p{N}])?)(?::\d{2,5})?(?:[/?#][^\s<]*)?|(?:\+?\d[\d\s().-]{8,}\d))/giu;
+  const CHAT_BARE_DOMAIN_AUTO_LINK_PATTERN = /^(?=.{1,253}$)(?:(?:[\p{L}\p{N}](?:[\p{L}\p{N}-]{0,61}[\p{L}\p{N}])?)\.)+(?:xn--[a-z0-9-]{2,59}|[\p{L}](?:[\p{L}\p{N}-]{0,61}[\p{L}\p{N}])?)(?::\d{2,5})?(?:[/?#][^\s<]*)?$/iu;
   const MAX_IMAGE_DATA_URL_LENGTH = 50 * 1024 * 1024;
   const IMAGE_OPTIMIZE_SKIP_BELOW_BYTES = 700 * 1024;
   const IMAGE_OPTIMIZE_TARGET_BYTES = 900 * 1024;
@@ -221,6 +226,8 @@
       emojiPopover: $("#chatEmojiPopover"),
       input: $("#chatMessageInput"),
       sendBtn: $("#chatSendBtn"),
+      footerPanel: $(".chat-footer-island"),
+      composer: $(".chat-main-composer"),
       replyBox: $("#chatComposerReply"),
       replyName: $("#chatComposerReplyName"),
       replyText: $("#chatComposerReplyText"),
@@ -358,6 +365,16 @@
   const remoteClientsPageRequests = new Map();
   let activeClientSwipeRow = null;
   let suppressClientRowClickUntil = 0;
+  let adminChatBodyScrollLockState = null;
+  let adminChatBodyScrollLockY = 0;
+  let adminChatKeyboardSyncBound = false;
+  let adminChatKeyboardSyncRaf = 0;
+  let adminChatKeyboardMotionRaf = 0;
+  let adminChatKeyboardMotionUntil = 0;
+  let adminChatKeyboardViewportBaseBottom = 0;
+  let adminChatKeyboardLastViewportBottom = 0;
+  let adminChatPageScrollRepairRaf = 0;
+  let adminChatPageScrollRepairUntil = 0;
 
   function getClientSwipeRowMain(row) {
     return row ? $(".chat-client-row-main", row) : null;
@@ -577,11 +594,435 @@
     return /Macintosh/i.test(ua) && maxTouchPoints > 1;
   }
 
+  function parseCssLengthPx(value) {
+    const parsed = parseFloat(String(value || ""));
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  function isAdminMobileChatLayout() {
+    return !!(document.body && document.body.classList.contains("page-chat") && isChatMobileViewport());
+  }
+
+  function hasFocusedAdminChatTextInput() {
+    const active = document.activeElement;
+    return active === dom.center.input || active === dom.center.attachPreviewCaption;
+  }
+
+  function getAdminChatHeaderOffsetPx() {
+    const rootStyles = window.getComputedStyle(document.documentElement);
+    const bodyStyles = document.body ? window.getComputedStyle(document.body) : null;
+    return Math.max(
+      parseCssLengthPx(rootStyles.getPropertyValue("--header-height")),
+      parseCssLengthPx(bodyStyles && bodyStyles.getPropertyValue("--header-height"))
+    );
+  }
+
+  function getAdminChatViewportHeight() {
+    const viewport = window.visualViewport;
+    const visualViewportHeight = viewport ? Number(viewport.height || 0) : 0;
+    if (Number.isFinite(visualViewportHeight) && visualViewportHeight > 0) {
+      return Math.max(0, Math.round(visualViewportHeight));
+    }
+    return Math.max(
+      0,
+      Math.round(
+        Math.max(
+          Number(window.innerHeight || 0),
+          Number(document.documentElement && document.documentElement.clientHeight || 0)
+        )
+      )
+    );
+  }
+
+  function getAdminChatViewportBottom() {
+    const viewport = window.visualViewport;
+    const viewportOffsetTop = viewport ? Number(viewport.offsetTop || 0) : 0;
+    const viewportHeight = viewport ? Number(viewport.height || 0) : 0;
+    const viewportBottom = (
+      Number.isFinite(viewportHeight)
+      && viewportHeight > 0
+      && Number.isFinite(viewportOffsetTop)
+      && viewportOffsetTop >= 0
+    )
+      ? viewportOffsetTop + viewportHeight
+      : 0;
+    const fallbackBottom = Math.max(
+      Number(window.innerHeight || 0),
+      Number(document.documentElement && document.documentElement.clientHeight || 0)
+    );
+    if (isIOSMobileBrowser() && viewportBottom > 0) {
+      return Math.max(0, Math.round(viewportBottom));
+    }
+    return Math.max(0, Math.round(Math.max(viewportBottom, fallbackBottom)));
+  }
+
+  function captureAdminChatKeyboardViewportBaseBottom(options = {}) {
+    const nextBottom = getAdminChatViewportBottom();
+    if (!nextBottom) return adminChatKeyboardViewportBaseBottom;
+    if (
+      options.force === true
+      || !adminChatKeyboardViewportBaseBottom
+      || nextBottom > adminChatKeyboardViewportBaseBottom
+    ) {
+      adminChatKeyboardViewportBaseBottom = nextBottom;
+    }
+    return adminChatKeyboardViewportBaseBottom;
+  }
+
+  function isAdminChatViewportCompressed(viewportBottomValue) {
+    const currentBottom = Number(viewportBottomValue || 0);
+    const baseBottom = Number(adminChatKeyboardViewportBaseBottom || 0);
+    if (!Number.isFinite(currentBottom) || currentBottom <= 0) return false;
+    if (!Number.isFinite(baseBottom) || baseBottom <= 0) return false;
+    return currentBottom < (baseBottom - 6);
+  }
+
+  function restoreLockedAdminChatPageScroll() {
+    if (!adminChatBodyScrollLockState || !isIOSMobileBrowser() || !isAdminMobileChatLayout()) return false;
+    const lockedY = Math.max(0, Number(adminChatBodyScrollLockY || 0));
+    const bodyStyle = document.body.style;
+    const docEl = document.documentElement;
+    const htmlStyle = docEl ? docEl.style : null;
+    const expectedTop = `-${lockedY}px`;
+
+    if (bodyStyle.position !== "fixed") bodyStyle.position = "fixed";
+    if (bodyStyle.top !== expectedTop) bodyStyle.top = expectedTop;
+    if (bodyStyle.left !== "0px" && bodyStyle.left !== "0") bodyStyle.left = "0";
+    if (bodyStyle.right !== "0px" && bodyStyle.right !== "0") bodyStyle.right = "0";
+    if (bodyStyle.width !== "100%") bodyStyle.width = "100%";
+    if (bodyStyle.height !== "100%") bodyStyle.height = "100%";
+    if (bodyStyle.overflow !== "hidden") bodyStyle.overflow = "hidden";
+    if (bodyStyle.overscrollBehavior !== "none") bodyStyle.overscrollBehavior = "none";
+
+    if (htmlStyle) {
+      if (htmlStyle.overflow !== "hidden") htmlStyle.overflow = "hidden";
+      if (htmlStyle.overscrollBehavior !== "none") htmlStyle.overscrollBehavior = "none";
+      if (htmlStyle.height !== "100%") htmlStyle.height = "100%";
+    }
+    return true;
+  }
+
+  function lockAdminChatPageScroll() {
+    if (adminChatBodyScrollLockState || !document.body || !isIOSMobileBrowser() || !isAdminMobileChatLayout()) return;
+    const bodyStyle = document.body.style;
+    const docEl = document.documentElement;
+    const htmlStyle = docEl ? docEl.style : null;
+    adminChatBodyScrollLockY = Math.max(
+      0,
+      Number(window.pageYOffset || window.scrollY || document.documentElement.scrollTop || 0)
+    );
+    adminChatBodyScrollLockState = {
+      position: String(bodyStyle.position || ""),
+      top: String(bodyStyle.top || ""),
+      left: String(bodyStyle.left || ""),
+      right: String(bodyStyle.right || ""),
+      width: String(bodyStyle.width || ""),
+      height: String(bodyStyle.height || ""),
+      overflow: String(bodyStyle.overflow || ""),
+      overscrollBehavior: String(bodyStyle.overscrollBehavior || ""),
+      htmlOverflow: String(htmlStyle && htmlStyle.overflow || ""),
+      htmlOverscrollBehavior: String(htmlStyle && htmlStyle.overscrollBehavior || ""),
+      htmlHeight: String(htmlStyle && htmlStyle.height || ""),
+    };
+    restoreLockedAdminChatPageScroll();
+  }
+
+  function unlockAdminChatPageScroll() {
+    if (!adminChatBodyScrollLockState || !document.body) return;
+    const bodyStyle = document.body.style;
+    const docEl = document.documentElement;
+    const htmlStyle = docEl ? docEl.style : null;
+    const savedY = Math.max(0, Number(adminChatBodyScrollLockY || 0));
+    bodyStyle.position = adminChatBodyScrollLockState.position;
+    bodyStyle.top = adminChatBodyScrollLockState.top;
+    bodyStyle.left = adminChatBodyScrollLockState.left;
+    bodyStyle.right = adminChatBodyScrollLockState.right;
+    bodyStyle.width = adminChatBodyScrollLockState.width;
+    bodyStyle.height = adminChatBodyScrollLockState.height;
+    bodyStyle.overflow = adminChatBodyScrollLockState.overflow;
+    bodyStyle.overscrollBehavior = adminChatBodyScrollLockState.overscrollBehavior;
+    if (htmlStyle) {
+      htmlStyle.overflow = adminChatBodyScrollLockState.htmlOverflow;
+      htmlStyle.overscrollBehavior = adminChatBodyScrollLockState.htmlOverscrollBehavior;
+      htmlStyle.height = adminChatBodyScrollLockState.htmlHeight;
+    }
+    adminChatBodyScrollLockState = null;
+    adminChatBodyScrollLockY = 0;
+    if (!hasFocusedAdminChatTextInput()) {
+      window.scrollTo(0, savedY);
+    }
+  }
+
+  function armAdminChatPageScrollRepair(durationMs) {
+    if (!isIOSMobileBrowser()) return;
+    const duration = Math.max(160, Number(durationMs || 0) || 0);
+    adminChatPageScrollRepairUntil = Math.max(adminChatPageScrollRepairUntil, Date.now() + duration);
+  }
+
+  function disarmAdminChatPageScrollRepair() {
+    adminChatPageScrollRepairUntil = 0;
+  }
+
+  function shouldRunAdminChatPageScrollRepair() {
+    if (!adminChatBodyScrollLockState || !isIOSMobileBrowser() || !isAdminMobileChatLayout()) return false;
+    if (hasFocusedAdminChatTextInput()) return true;
+    return Date.now() < Number(adminChatPageScrollRepairUntil || 0);
+  }
+
+  function scheduleAdminChatPageScrollRepair() {
+    if (!shouldRunAdminChatPageScrollRepair()) return;
+    if (adminChatPageScrollRepairRaf) return;
+    adminChatPageScrollRepairRaf = requestAnimationFrame(() => {
+      adminChatPageScrollRepairRaf = 0;
+      if (!shouldRunAdminChatPageScrollRepair()) return;
+      restoreLockedAdminChatPageScroll();
+    });
+  }
+
+  function handleAdminChatPageScrollRepairEvent() {
+    scheduleAdminChatPageScrollRepair();
+  }
+
+  function clearAdminChatKeyboardMotionSync() {
+    if (adminChatKeyboardMotionRaf) {
+      cancelAnimationFrame(adminChatKeyboardMotionRaf);
+      adminChatKeyboardMotionRaf = 0;
+    }
+    adminChatKeyboardMotionUntil = 0;
+  }
+
+  function setAdminChatKeyboardInset(valuePx, options = {}) {
+    const raw = Number(valuePx || 0);
+    const next = Number.isFinite(raw) && raw > 2 ? Math.round(raw) : 0;
+    const keyboardActive = options.active === true || next > 0;
+    if (dom.center.stack) {
+      dom.center.stack.style.setProperty("--chat-mobile-keyboard-inset", `${next}px`);
+      dom.center.stack.style.setProperty("--chat-android-viewport-shift", "0px");
+      dom.center.stack.classList.toggle("is-mobile-keyboard-open", keyboardActive);
+    }
+    if (document.body) {
+      document.body.classList.toggle("chat-mobile-keyboard-open", keyboardActive);
+    }
+    return next;
+  }
+
+  function setAdminChatIosViewportLock(active, viewportHeightPx) {
+    if (!document.body) return;
+    const shouldLock = active === true && isIOSMobileBrowser() && isAdminMobileChatLayout();
+    document.body.classList.toggle("is-ios-chat-viewport-locked", shouldLock);
+    if (shouldLock) {
+      const rawViewportHeight = Number(viewportHeightPx || 0);
+      const nextHeight = Number.isFinite(rawViewportHeight) && rawViewportHeight > 0
+        ? Math.max(0, Math.round(rawViewportHeight - getAdminChatHeaderOffsetPx()))
+        : 0;
+      if (nextHeight > 0) {
+        document.body.style.setProperty("--chat-ios-page-height", `${nextHeight}px`);
+      }
+    } else {
+      document.body.style.removeProperty("--chat-ios-page-height");
+    }
+    document.body.style.setProperty("--chat-ios-overlay-shift", "0px");
+  }
+
+  function resetAdminChatKeyboardViewportSync(options = {}) {
+    if (adminChatKeyboardSyncRaf) {
+      cancelAnimationFrame(adminChatKeyboardSyncRaf);
+      adminChatKeyboardSyncRaf = 0;
+    }
+    if (adminChatPageScrollRepairRaf) {
+      cancelAnimationFrame(adminChatPageScrollRepairRaf);
+      adminChatPageScrollRepairRaf = 0;
+    }
+    clearAdminChatKeyboardMotionSync();
+    disarmAdminChatPageScrollRepair();
+    setAdminChatKeyboardInset(0, { active: false });
+    setAdminChatIosViewportLock(false, 0);
+    adminChatKeyboardLastViewportBottom = 0;
+    adminChatKeyboardViewportBaseBottom = 0;
+    if (options.unlockScroll !== false) {
+      unlockAdminChatPageScroll();
+    }
+  }
+
+  function computeAdminChatKeyboardInset(viewportBottomValue) {
+    if (!isAdminMobileChatLayout()) return 0;
+    if (!shouldUseNativeMobileEmojiKeyboard()) return 0;
+    const viewportBottom = Number.isFinite(Number(viewportBottomValue))
+      ? Number(viewportBottomValue)
+      : getAdminChatViewportBottom();
+    if (!Number.isFinite(viewportBottom) || viewportBottom <= 0) return 0;
+    const focused = hasFocusedAdminChatTextInput();
+    if (!focused && !isAdminChatViewportCompressed(viewportBottom)) return 0;
+
+    const keyboardAnchor = (
+      (dom.center.stack && typeof dom.center.stack.closest === "function"
+        ? dom.center.stack.closest(".page-col-center")
+        : null)
+      || document.querySelector(".main-container.app-grid")
+      || document.querySelector(".main-container")
+      || dom.center.stack
+      || dom.center.footerPanel
+      || dom.center.composer
+    );
+    const anchorRect = keyboardAnchor ? keyboardAnchor.getBoundingClientRect() : null;
+    const anchorBottom = Number(anchorRect && anchorRect.bottom || 0);
+    const overlapInset = Number.isFinite(anchorBottom)
+      ? Math.max(0, anchorBottom - viewportBottom)
+      : 0;
+    const needsFallbackInset = !Number.isFinite(anchorBottom) || anchorBottom <= 0;
+    const fallbackInset = !isIOSMobileBrowser() && needsFallbackInset && adminChatKeyboardViewportBaseBottom > 0
+      ? Math.max(0, adminChatKeyboardViewportBaseBottom - viewportBottom)
+      : 0;
+    return Math.max(overlapInset, fallbackInset);
+  }
+
+  function syncAdminChatKeyboardViewportNow() {
+    if (!document.body || !document.body.classList.contains("page-chat")) return;
+    if (!isAdminMobileChatLayout()) {
+      resetAdminChatKeyboardViewportSync();
+      return;
+    }
+
+    const viewportHeight = getAdminChatViewportHeight();
+    const viewportBottom = getAdminChatViewportBottom();
+    const prevViewportBottom = adminChatKeyboardLastViewportBottom || viewportBottom;
+    adminChatKeyboardLastViewportBottom = viewportBottom;
+    const focused = hasFocusedAdminChatTextInput();
+
+    if (
+      focused
+      || !adminChatKeyboardViewportBaseBottom
+      || viewportBottom >= (Number(adminChatKeyboardViewportBaseBottom || 0) - 6)
+    ) {
+      captureAdminChatKeyboardViewportBaseBottom({ force: focused === true });
+    }
+
+    setAdminChatIosViewportLock(true, viewportHeight);
+    if (isIOSMobileBrowser() && focused) {
+      lockAdminChatPageScroll();
+      scheduleAdminChatPageScrollRepair();
+    }
+
+    const nextInset = setAdminChatKeyboardInset(
+      computeAdminChatKeyboardInset(viewportBottom),
+      { active: focused || isAdminChatViewportCompressed(viewportBottom) },
+    );
+    if (!focused && nextInset <= 0 && !isAdminChatViewportCompressed(viewportBottom)) {
+      unlockAdminChatPageScroll();
+      captureAdminChatKeyboardViewportBaseBottom({ force: true });
+    }
+
+    if (Math.abs(viewportBottom - prevViewportBottom) >= 1 || nextInset > 0 || focused) {
+      schedulePinnedBottomLayoutSync();
+      updateMessagesScrollDownButton();
+    }
+  }
+
+  function scheduleAdminChatKeyboardViewportSync() {
+    if (adminChatKeyboardSyncRaf) return;
+    adminChatKeyboardSyncRaf = requestAnimationFrame(() => {
+      adminChatKeyboardSyncRaf = 0;
+      syncAdminChatKeyboardViewportNow();
+    });
+  }
+
+  function scheduleAdminChatKeyboardViewportMotionSync(durationMs) {
+    if (!isAdminMobileChatLayout()) return;
+    const now = typeof performance !== "undefined" && typeof performance.now === "function"
+      ? performance.now()
+      : Date.now();
+    const duration = Math.max(180, Number(durationMs || 0) || 0);
+    adminChatKeyboardMotionUntil = Math.max(adminChatKeyboardMotionUntil, now + duration);
+    if (adminChatKeyboardMotionRaf) return;
+
+    const step = () => {
+      adminChatKeyboardMotionRaf = 0;
+      if (!isAdminMobileChatLayout()) {
+        clearAdminChatKeyboardMotionSync();
+        return;
+      }
+
+      syncAdminChatKeyboardViewportNow();
+
+      const currentBottom = getAdminChatViewportBottom();
+      const currentNow = typeof performance !== "undefined" && typeof performance.now === "function"
+        ? performance.now()
+        : Date.now();
+
+      if (
+        hasFocusedAdminChatTextInput()
+        || isAdminChatViewportCompressed(currentBottom)
+        || currentNow < adminChatKeyboardMotionUntil
+      ) {
+        adminChatKeyboardMotionRaf = requestAnimationFrame(step);
+        return;
+      }
+
+      adminChatKeyboardMotionUntil = 0;
+    };
+
+    adminChatKeyboardMotionRaf = requestAnimationFrame(step);
+  }
+
+  function scheduleAdminChatKeyboardViewportSyncBurst() {
+    scheduleAdminChatKeyboardViewportSync();
+    scheduleAdminChatPageScrollRepair();
+    scheduleAdminChatKeyboardViewportMotionSync(520);
+    [40, 120, 260, 420].forEach((delay) => {
+      window.setTimeout(() => {
+        scheduleAdminChatKeyboardViewportSync();
+        scheduleAdminChatPageScrollRepair();
+      }, delay);
+    });
+  }
+
+  function handleAdminChatKeyboardViewportSyncEvent() {
+    scheduleAdminChatKeyboardViewportSync();
+    scheduleAdminChatPageScrollRepair();
+    scheduleAdminChatKeyboardViewportMotionSync(260);
+  }
+
+  function bindAdminChatKeyboardViewportSync() {
+    if (adminChatKeyboardSyncBound) return;
+    adminChatKeyboardSyncBound = true;
+    const viewport = window.visualViewport;
+    if (viewport) {
+      viewport.addEventListener("resize", handleAdminChatKeyboardViewportSyncEvent);
+      viewport.addEventListener("scroll", handleAdminChatKeyboardViewportSyncEvent);
+    }
+    window.addEventListener("resize", handleAdminChatKeyboardViewportSyncEvent, { passive: true });
+    window.addEventListener("orientationchange", handleAdminChatKeyboardViewportSyncEvent);
+    window.addEventListener("scroll", handleAdminChatPageScrollRepairEvent, { passive: true });
+  }
+
+  function handleAdminChatTextInputFocus() {
+    if (!isAdminMobileChatLayout()) return;
+    captureAdminChatKeyboardViewportBaseBottom({ force: true });
+    if (isIOSMobileBrowser()) {
+      lockAdminChatPageScroll();
+      armAdminChatPageScrollRepair(900);
+      restoreLockedAdminChatPageScroll();
+    }
+    scheduleAdminChatKeyboardViewportSyncBurst();
+  }
+
+  function handleAdminChatTextInputBlur() {
+    if (!document.body || !document.body.classList.contains("page-chat")) return;
+    disarmAdminChatPageScrollRepair();
+    scheduleAdminChatKeyboardViewportSyncBurst();
+    window.setTimeout(() => {
+      if (!hasFocusedAdminChatTextInput()) {
+        scheduleAdminChatKeyboardViewportSync();
+      }
+    }, 40);
+  }
+
   function focusChatTextField(field, options = {}) {
     const node = field || null;
     if (!node || typeof node.focus !== "function") return false;
     if ("disabled" in node && node.disabled) return false;
     const preventScroll = options.preventScroll !== false;
+    restoreLockedAdminChatPageScroll();
     try {
       if (preventScroll) {
         node.focus({ preventScroll: true });
@@ -595,6 +1036,7 @@
         return false;
       }
     }
+    restoreLockedAdminChatPageScroll();
     if (options.moveCaretToEnd !== false && typeof node.setSelectionRange === "function") {
       const pos = String(node.value || "").length;
       try {
@@ -629,6 +1071,7 @@
     const node = event && event.currentTarget ? event.currentTarget : null;
     if (!shouldGuardIOSNativeTextFocus(node)) return;
     event.preventDefault();
+    handleAdminChatTextInputFocus();
     focusChatTextField(node, { moveCaretToEnd: true });
     const schedule = typeof window.requestAnimationFrame === "function"
       ? window.requestAnimationFrame.bind(window)
@@ -801,6 +1244,9 @@
   const unansweredAlertSeqByClient = Object.create(null);
   const unansweredAlertLastNotifiedIncomingByClient = Object.create(null);
   let suppressTouchClickUntil = 0;
+  let lastMessageHeartTap = null;
+  let suppressFloatingMenuDocumentClickUntil = 0;
+  let suppressFloatingMenuAutoHideUntil = 0;
   const CHAT_TOUCH_MENU_INTERACTION_GUARD_MS = 380;
   let reactionBarAnchorRect = null;
   let contextMenuAnchorPoint = null;
@@ -3877,6 +4323,7 @@
           clientsListScrollTop: 0,
           threadScrollTopByClient: {},
           threadPinnedBottomByClient: {},
+          composerDraftByClient: {},
         },
       };
       const raw = localStorage.getItem(CHAT_STORAGE_KEY);
@@ -3891,6 +4338,9 @@
         : {};
       const uiThreadPinnedBottomMap = parsedUi && typeof parsedUi.threadPinnedBottomByClient === "object"
         ? parsedUi.threadPinnedBottomByClient
+        : {};
+      const uiComposerDraftMap = parsedUi && typeof parsedUi.composerDraftByClient === "object"
+        ? parsedUi.composerDraftByClient
         : {};
       const resolvedThreadScrollMap = Object.keys(uiThreadScrollMap).length
         ? uiThreadScrollMap
@@ -3907,6 +4357,7 @@
           clientsListScrollTop: toStoredScrollTop(parsedUi?.clientsListScrollTop),
           threadScrollTopByClient: sanitizeStoredThreadScrollTopByClient(resolvedThreadScrollMap),
           threadPinnedBottomByClient: sanitizeStoredThreadPinnedBottomByClient(uiThreadPinnedBottomMap),
+          composerDraftByClient: sanitizeStoredComposerDraftByClient(uiComposerDraftMap),
         },
       };
       let changed = false;
@@ -3921,6 +4372,10 @@
         }
         if (Object.prototype.hasOwnProperty.call(nextStore.ui.threadScrollTopByClient, id)) {
           delete nextStore.ui.threadScrollTopByClient[id];
+          changed = true;
+        }
+        if (Object.prototype.hasOwnProperty.call(nextStore.ui.composerDraftByClient, id)) {
+          delete nextStore.ui.composerDraftByClient[id];
           changed = true;
         }
       });
@@ -3955,6 +4410,7 @@
           clientsListScrollTop: 0,
           threadScrollTopByClient: {},
           threadPinnedBottomByClient: {},
+          composerDraftByClient: {},
         },
       };
     }
@@ -3989,6 +4445,25 @@
     return out;
   }
 
+  function normalizeComposerDraftValue(value) {
+    const raw = String(value ?? "").replace(/\r/g, "");
+    if (!raw) return "";
+    return raw.slice(0, CHAT_COMPOSER_DRAFT_MAX_LENGTH);
+  }
+
+  function sanitizeStoredComposerDraftByClient(rawMap) {
+    const source = rawMap && typeof rawMap === "object" ? rawMap : {};
+    const out = {};
+    Object.keys(source).forEach((key) => {
+      const id = normalizeClientIdKey(key);
+      if (!id) return;
+      const value = normalizeComposerDraftValue(source[key]);
+      if (!value) return;
+      out[id] = value;
+    });
+    return out;
+  }
+
   function ensureUiStoreState() {
     if (!state.store || typeof state.store !== "object") {
       state.store = {
@@ -4006,10 +4481,52 @@
     if (!state.store.ui.threadPinnedBottomByClient || typeof state.store.ui.threadPinnedBottomByClient !== "object") {
       state.store.ui.threadPinnedBottomByClient = {};
     }
+    if (!state.store.ui.composerDraftByClient || typeof state.store.ui.composerDraftByClient !== "object") {
+      state.store.ui.composerDraftByClient = {};
+    }
     if (!Number.isFinite(Number(state.store.ui.clientsListScrollTop))) {
       state.store.ui.clientsListScrollTop = 0;
     }
     return state.store.ui;
+  }
+
+  function persistComposerDraftForClient(clientId = state.activeClientId, rawValue) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return "";
+    const ui = ensureUiStoreState();
+    const nextValue = normalizeComposerDraftValue(
+      rawValue !== undefined
+        ? rawValue
+        : (dom.center.input && typeof dom.center.input.value === "string" ? dom.center.input.value : "")
+    );
+    const prevValue = normalizeComposerDraftValue(ui.composerDraftByClient[key]);
+    if (nextValue === prevValue) return nextValue;
+    if (nextValue) ui.composerDraftByClient[key] = nextValue;
+    else delete ui.composerDraftByClient[key];
+    scheduleUiStatePersist();
+    return nextValue;
+  }
+
+  function restoreComposerDraftForClient(clientId = state.activeClientId) {
+    if (!dom.center.input) return "";
+    const key = normalizeClientIdKey(clientId);
+    const draft = key
+      ? normalizeComposerDraftValue(state.store?.ui?.composerDraftByClient?.[key])
+      : "";
+    if (dom.center.input.value !== draft) {
+      dom.center.input.value = draft;
+    }
+    syncComposerRichPreview({});
+    return draft;
+  }
+
+  function clearComposerDraftForClient(clientId = state.activeClientId) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return;
+    const ui = ensureUiStoreState();
+    if (!Object.prototype.hasOwnProperty.call(ui.composerDraftByClient, key)) return;
+    delete ui.composerDraftByClient[key];
+    scheduleUiStatePersist();
   }
 
   function saveClientsListScrollPosition() {
@@ -5695,6 +6212,163 @@
     });
   }
 
+  function trimAutoLinkTrailingPunctuation(value) {
+    let core = String(value || "");
+    let trailing = "";
+    const closingToOpening = {
+      ")": "(",
+      "]": "[",
+      "}": "{",
+    };
+
+    while (core) {
+      const lastChar = core.slice(-1);
+      if (/[.,!?;:]/.test(lastChar)) {
+        trailing = lastChar + trailing;
+        core = core.slice(0, -1);
+        continue;
+      }
+      if (Object.prototype.hasOwnProperty.call(closingToOpening, lastChar)) {
+        const openChar = closingToOpening[lastChar];
+        const openCount = core.split(openChar).length - 1;
+        const closeCount = core.split(lastChar).length - 1;
+        if (closeCount > openCount) {
+          trailing = lastChar + trailing;
+          core = core.slice(0, -1);
+          continue;
+        }
+      }
+      break;
+    }
+
+    return core
+      ? { core, trailing }
+      : { core: String(value || ""), trailing: "" };
+  }
+
+  function isPhoneAutoLinkValue(value) {
+    const raw = String(value || "");
+    if (!raw || /[a-z]/i.test(raw)) return false;
+    const digits = raw.replace(/\D+/g, "");
+    return digits.length >= 10 && digits.length <= 15;
+  }
+
+  function isBareDomainAutoLinkValue(value) {
+    const raw = String(value || "").trim();
+    if (!raw) return false;
+    return CHAT_BARE_DOMAIN_AUTO_LINK_PATTERN.test(raw);
+  }
+
+  function isBareDomainAutoLinkBoundarySafe(source, startIndex) {
+    const text = String(source || "");
+    const index = Math.max(0, Number(startIndex) || 0);
+    const prevChar = index > 0 ? text.slice(index - 1, index) : "";
+    if (!prevChar) return true;
+    return !/[@/\p{L}\p{N}_-]/u.test(prevChar);
+  }
+
+  function buildAutoLinkHref(value, options = {}) {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    if (isPhoneAutoLinkValue(raw)) {
+      const normalized = raw
+        .replace(/[^\d+]/g, "")
+        .replace(/(?!^)\+/g, "");
+      return normalized ? `tel:${normalized}` : "";
+    }
+    if (/^https?:\/\//i.test(raw)) return raw;
+    if (/^www\./i.test(raw)) return `https://${raw}`;
+    if (isBareDomainAutoLinkValue(raw)) {
+      const source = String(options.source || "");
+      const startIndex = Number(options.startIndex || 0);
+      if (source && !isBareDomainAutoLinkBoundarySafe(source, startIndex)) return "";
+      return `https://${raw}`;
+    }
+    return "";
+  }
+
+  function appendAutoLinkedPlainText(target, text, linkClassName) {
+    if (!target) return;
+    const source = String(text || "");
+    if (!source) return;
+
+    CHAT_AUTO_LINK_PATTERN.lastIndex = 0;
+    let cursor = 0;
+    let match;
+
+    while ((match = CHAT_AUTO_LINK_PATTERN.exec(source))) {
+      const matchText = String(match[0] || "");
+      const startIndex = Number(match.index || 0);
+      if (startIndex > cursor) {
+        target.appendChild(document.createTextNode(source.slice(cursor, startIndex)));
+      }
+
+      const trimmed = trimAutoLinkTrailingPunctuation(matchText);
+      const href = buildAutoLinkHref(trimmed.core, {
+        source,
+        startIndex,
+      });
+      if (href) {
+        const link = document.createElement("a");
+        link.className = linkClassName;
+        link.href = href;
+        link.textContent = trimmed.core;
+        link.setAttribute("data-chat-autolink", "1");
+        if (!isPhoneAutoLinkValue(trimmed.core)) {
+          link.target = "_blank";
+          link.rel = "noopener noreferrer";
+        }
+        target.appendChild(link);
+      } else {
+        target.appendChild(document.createTextNode(matchText));
+      }
+
+      if (trimmed.trailing) {
+        target.appendChild(document.createTextNode(trimmed.trailing));
+      }
+
+      cursor = startIndex + matchText.length;
+      if (CHAT_AUTO_LINK_PATTERN.lastIndex <= startIndex) {
+        CHAT_AUTO_LINK_PATTERN.lastIndex = startIndex + matchText.length;
+      }
+    }
+
+    if (cursor < source.length) {
+      target.appendChild(document.createTextNode(source.slice(cursor)));
+    }
+  }
+
+  function renderRichMessageText(target, text, glyphClassName, linkClassName) {
+    if (!target) return;
+    target.textContent = "";
+    const lines = String(text || "").split("\n");
+
+    lines.forEach((line, lineIndex) => {
+      const segments = segmentGraphemes(line);
+      let plainBuffer = "";
+
+      const flushPlainBuffer = () => {
+        if (!plainBuffer) return;
+        appendAutoLinkedPlainText(target, plainBuffer, linkClassName);
+        plainBuffer = "";
+      };
+
+      segments.forEach((segment) => {
+        if (isEmojiGrapheme(segment)) {
+          flushPlainBuffer();
+          appendNativeEmojiGlyph(target, segment, glyphClassName);
+          return;
+        }
+        plainBuffer += segment;
+      });
+
+      flushPlainBuffer();
+      if (lineIndex < lines.length - 1) {
+        target.appendChild(document.createElement("br"));
+      }
+    });
+  }
+
   function getEmojiOnlyInfo(text) {
     const lines = String(text || "").split("\n");
     let emojiCount = 0;
@@ -6940,6 +7614,358 @@
     handleComposerTypingActivity();
   }
 
+  function bindEmojiPickerDragScroll(body, isMobileSheet) {
+    if (!body || body.dataset.emojiDragScrollBound === "1") return;
+    body.dataset.emojiDragScrollBound = "1";
+
+    let activePointerId = null;
+    let startX = 0;
+    let startY = 0;
+    let startScrollLeft = 0;
+    let dragAxis = "";
+    let didDrag = false;
+    let suppressClickUntil = 0;
+    let prevScrollSnapType = "";
+
+    const isEnabled = () => (
+      typeof isMobileSheet === "function"
+        ? isMobileSheet()
+        : !!isMobileSheet
+    );
+
+    const setScrollLeft = (nextLeft) => {
+      const safeLeft = Math.max(0, Number(nextLeft) || 0);
+      if (typeof body.scrollTo === "function") {
+        body.scrollTo({ left: safeLeft, behavior: "auto" });
+        return;
+      }
+      body.scrollLeft = safeLeft;
+    };
+
+    const finish = () => {
+      if (activePointerId != null && typeof body.releasePointerCapture === "function") {
+        try {
+          body.releasePointerCapture(activePointerId);
+        } catch {}
+      }
+      body.style.scrollSnapType = prevScrollSnapType;
+      prevScrollSnapType = "";
+      activePointerId = null;
+      startX = 0;
+      startY = 0;
+      startScrollLeft = 0;
+      dragAxis = "";
+      if (didDrag) suppressClickUntil = Date.now() + 180;
+      didDrag = false;
+    };
+
+    body.addEventListener("pointerdown", (event) => {
+      if (!isEnabled()) return;
+      if (event.pointerType === "mouse" && event.button !== 0) return;
+      activePointerId = event.pointerId;
+      startX = Number(event.clientX || 0);
+      startY = Number(event.clientY || 0);
+      startScrollLeft = Number(body.scrollLeft || 0);
+      dragAxis = "";
+      didDrag = false;
+      prevScrollSnapType = body.style.scrollSnapType || "";
+      body.style.scrollSnapType = "none";
+      if (typeof body.setPointerCapture === "function") {
+        try {
+          body.setPointerCapture(activePointerId);
+        } catch {}
+      }
+    });
+
+    body.addEventListener("pointermove", (event) => {
+      if (activePointerId == null || event.pointerId !== activePointerId || !isEnabled()) return;
+      const deltaX = Number(event.clientX || 0) - startX;
+      const deltaY = Number(event.clientY || 0) - startY;
+
+      if (!dragAxis) {
+        if (Math.abs(deltaX) < 4 && Math.abs(deltaY) < 4) return;
+        dragAxis = Math.abs(deltaX) >= Math.abs(deltaY) ? "x" : "y";
+      }
+      if (dragAxis !== "x") return;
+      if (!didDrag && Math.abs(deltaX) < 6) return;
+
+      didDrag = true;
+      event.preventDefault();
+      setScrollLeft(startScrollLeft - deltaX);
+    }, { passive: false });
+
+    body.addEventListener("wheel", (event) => {
+      if (!isEnabled()) return;
+      const maxLeft = Math.max(0, body.scrollWidth - body.clientWidth);
+      if (maxLeft <= 0) return;
+      if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+
+      const prevLeft = Math.max(0, Number(body.scrollLeft || 0));
+      const nextLeft = Math.max(0, Math.min(maxLeft, prevLeft + event.deltaY));
+      if (Math.abs(nextLeft - prevLeft) < 0.5) return;
+
+      setScrollLeft(nextLeft);
+      event.preventDefault();
+    }, { passive: false });
+
+    body.addEventListener("click", (event) => {
+      if (Date.now() >= suppressClickUntil) return;
+      event.preventDefault();
+      event.stopPropagation();
+    }, true);
+
+    ["pointerup", "pointercancel", "lostpointercapture"].forEach((eventName) => {
+      body.addEventListener(eventName, finish);
+    });
+  }
+
+  function bindVerticalOverflowDragScroll(container, isEnabled) {
+    if (!container || container.dataset.verticalDragScrollBound === "1") return;
+    container.dataset.verticalDragScrollBound = "1";
+
+    let activePointerId = null;
+    let activeTouchId = null;
+    let startY = 0;
+    let startScrollTop = 0;
+    let didDrag = false;
+    let suppressClickUntil = 0;
+
+    const isActive = () => (
+      typeof isEnabled === "function"
+        ? isEnabled()
+        : !!isEnabled
+    );
+
+    const hasOverflow = () => (
+      isActive()
+      && (Math.max(0, Number(container.scrollHeight || 0) - Number(container.clientHeight || 0)) > 2)
+    );
+
+    const armAutoHideShield = (ms = 520) => {
+      suppressFloatingMenuAutoHideUntil = Math.max(
+        suppressFloatingMenuAutoHideUntil,
+        Date.now() + Math.max(120, Number(ms) || 0),
+      );
+    };
+
+    const finish = () => {
+      if (activePointerId != null && typeof container.releasePointerCapture === "function") {
+        try {
+          container.releasePointerCapture(activePointerId);
+        } catch {}
+      }
+      activePointerId = null;
+      activeTouchId = null;
+      startY = 0;
+      startScrollTop = 0;
+      if (didDrag) {
+        suppressClickUntil = Date.now() + 180;
+        suppressFloatingMenuDocumentClickUntil = Math.max(suppressFloatingMenuDocumentClickUntil, Date.now() + 320);
+        armAutoHideShield(720);
+      }
+      didDrag = false;
+    };
+
+    const applyNextScrollTop = (clientY) => {
+      const maxTop = Math.max(0, Number(container.scrollHeight || 0) - Number(container.clientHeight || 0));
+      if (maxTop <= 0) return false;
+      const deltaY = Number(clientY || 0) - startY;
+      if (!didDrag && Math.abs(deltaY) < 6) return false;
+
+      const nextTop = Math.max(0, Math.min(maxTop, startScrollTop - deltaY));
+      const currentTop = Number(container.scrollTop || 0);
+      if (!didDrag && Math.abs(nextTop - currentTop) < 0.5) return false;
+      didDrag = true;
+      container.scrollTop = nextTop;
+      armAutoHideShield(720);
+      return true;
+    };
+
+    const resolveTrackedTouch = (touchList) => {
+      if (activeTouchId == null || !touchList) return null;
+      for (let index = 0; index < touchList.length; index += 1) {
+        const touch = touchList[index];
+        if (touch && touch.identifier === activeTouchId) return touch;
+      }
+      return null;
+    };
+
+    container.addEventListener("pointerdown", (event) => {
+      if (!hasOverflow()) return;
+      if (event.pointerType === "mouse") return;
+      if (event.button !== 0) return;
+      activePointerId = event.pointerId;
+      startY = Number(event.clientY || 0);
+      startScrollTop = Number(container.scrollTop || 0);
+      didDrag = false;
+      armAutoHideShield(900);
+      if (typeof container.setPointerCapture === "function") {
+        try {
+          container.setPointerCapture(activePointerId);
+        } catch {}
+      }
+      event.stopPropagation();
+    });
+
+    container.addEventListener("pointermove", (event) => {
+      if (!hasOverflow() || activePointerId == null || event.pointerId !== activePointerId) return;
+      if (!applyNextScrollTop(event.clientY)) return;
+      event.preventDefault();
+      event.stopPropagation();
+    }, { passive: false });
+
+    container.addEventListener("touchstart", (event) => {
+      if (!hasOverflow() || event.touches.length !== 1) return;
+      const touch = event.touches[0];
+      activeTouchId = touch.identifier;
+      startY = Number(touch.clientY || 0);
+      startScrollTop = Number(container.scrollTop || 0);
+      didDrag = false;
+      armAutoHideShield(900);
+      event.stopPropagation();
+    }, { passive: true });
+
+    container.addEventListener("touchmove", (event) => {
+      if (!hasOverflow()) return;
+      const touch = resolveTrackedTouch(event.touches) || resolveTrackedTouch(event.changedTouches);
+      if (!touch) return;
+      if (!applyNextScrollTop(touch.clientY)) return;
+      event.preventDefault();
+      event.stopPropagation();
+    }, { passive: false });
+
+    ["touchend", "touchcancel"].forEach((eventName) => {
+      container.addEventListener(eventName, (event) => {
+        if (activeTouchId == null) return;
+        const touch = resolveTrackedTouch(event.changedTouches);
+        if (!touch && eventName !== "touchcancel") return;
+        finish();
+      }, { passive: true });
+    });
+
+    ["pointerup", "pointercancel", "lostpointercapture"].forEach((eventName) => {
+      container.addEventListener(eventName, finish);
+    });
+
+    container.addEventListener("wheel", (event) => {
+      if (!hasOverflow()) return;
+      if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+
+      const maxTop = Math.max(0, Number(container.scrollHeight || 0) - Number(container.clientHeight || 0));
+      const prevTop = Math.max(0, Number(container.scrollTop || 0));
+      const nextTop = Math.max(0, Math.min(maxTop, prevTop + event.deltaY));
+      if (Math.abs(nextTop - prevTop) < 0.5) return;
+
+      container.scrollTop = nextTop;
+      armAutoHideShield(720);
+      event.preventDefault();
+      event.stopPropagation();
+    }, { passive: false });
+
+    container.addEventListener("click", (event) => {
+      if (Date.now() >= suppressClickUntil) return;
+      event.preventDefault();
+      event.stopPropagation();
+    }, true);
+  }
+
+  function bindReactionOverflowScrollers() {
+    if (dom.center.contextMenu) {
+      const contextReactions = $(".chat-message-menu-reactions", dom.center.contextMenu);
+      bindVerticalOverflowDragScroll(contextReactions, () => (
+        !!dom.center.contextMenu
+        && !dom.center.contextMenu.classList.contains("hidden")
+        && dom.center.contextMenu.classList.contains("is-reactions-expanded")
+      ));
+    }
+    if (dom.center.reactionBar) {
+      bindVerticalOverflowDragScroll(dom.center.reactionBar, () => (
+        !!dom.center.reactionBar
+        && !dom.center.reactionBar.classList.contains("hidden")
+        && dom.center.reactionBar.classList.contains("is-expanded")
+      ));
+    }
+  }
+
+  function bindFloatingMenuInteractionGuards() {
+    const roots = [dom.center.contextMenu, dom.center.reactionBar];
+    roots.forEach((root) => {
+      if (!root || root.dataset.floatingMenuGuardBound === "1") return;
+      root.dataset.floatingMenuGuardBound = "1";
+
+      const armShield = (ms = 900) => {
+        suppressFloatingMenuAutoHideUntil = Math.max(
+          suppressFloatingMenuAutoHideUntil,
+          Date.now() + Math.max(120, Number(ms) || 0),
+        );
+      };
+
+      ["pointerdown", "touchstart", "mousedown"].forEach((eventName) => {
+        root.addEventListener(eventName, (event) => {
+          armShield(900);
+          event.stopPropagation();
+        }, { passive: eventName === "touchstart" });
+      });
+
+      ["pointermove", "touchmove"].forEach((eventName) => {
+        root.addEventListener(eventName, (event) => {
+          armShield(720);
+          event.stopPropagation();
+        }, { passive: true });
+      });
+
+      root.addEventListener("wheel", (event) => {
+        const verticalDelta = Number(event.deltaY || 0);
+        if (Math.abs(verticalDelta) < 0.01) return;
+
+        // The reaction bar already has its own overflow wheel handler.
+        // Running a second wheel-driven scroll step here makes desktop
+        // scrolling feel jumpy compared with the client chat.
+        if (root === dom.center.reactionBar) {
+          armShield(720);
+          suppressFloatingMenuDocumentClickUntil = Math.max(
+            suppressFloatingMenuDocumentClickUntil,
+            Date.now() + 220,
+          );
+          return;
+        }
+
+        let scrollContainer = null;
+        if (root === dom.center.contextMenu && root.classList.contains("is-reactions-expanded")) {
+          scrollContainer = $(".chat-message-menu-reactions", root);
+        }
+        if (!scrollContainer) return;
+
+        const maxTop = Math.max(
+          0,
+          Number(scrollContainer.scrollHeight || 0) - Number(scrollContainer.clientHeight || 0),
+        );
+        if (maxTop <= 0) return;
+
+        const prevTop = Math.max(0, Number(scrollContainer.scrollTop || 0));
+        const nextTop = Math.max(0, Math.min(maxTop, prevTop + verticalDelta));
+        if (Math.abs(nextTop - prevTop) > 0.5) {
+          scrollContainer.scrollTop = nextTop;
+        }
+        armShield(720);
+        suppressFloatingMenuDocumentClickUntil = Math.max(
+          suppressFloatingMenuDocumentClickUntil,
+          Date.now() + 220,
+        );
+        event.preventDefault();
+        event.stopPropagation();
+      }, { passive: false });
+    });
+  }
+
+  function mountFloatingChatMenus() {
+    const targets = [dom.center.contextMenu, dom.center.reactionBar];
+    targets.forEach((node) => {
+      if (!node || !document.body || node.parentElement === document.body) return;
+      document.body.appendChild(node);
+    });
+  }
+
   function renderEmojiPicker() {
     if (!dom.center.emojiPopover) return;
     const popover = dom.center.emojiPopover;
@@ -6996,6 +8022,13 @@
         if (!section) return;
         emojiActiveCategory = category.key;
         updateActiveTabUi(emojiActiveCategory);
+        if (popover.classList.contains("is-mobile-sheet")) {
+          body.scrollTo({
+            left: Math.max(0, section.offsetLeft || 0),
+            behavior: "smooth",
+          });
+          return;
+        }
         body.scrollTo({
           top: Math.max(0, section.offsetTop - 2),
           behavior: "smooth",
@@ -7007,14 +8040,50 @@
       const section = document.createElement("section");
       section.className = "chat-emoji-section";
       section.setAttribute("data-emoji-category", category.key);
+      if (popover.classList.contains("is-mobile-sheet")) {
+        const mobileRows = 4;
+        const mobileColWidth = 40;
+        const mobileGap = 6;
+        const columns = Math.max(1, Math.ceil(list.length / mobileRows));
+        const computedWidth = (columns * mobileColWidth) + ((columns - 1) * mobileGap);
+        section.style.width = `${computedWidth}px`;
+        section.style.minWidth = `${computedWidth}px`;
+        section.style.maxWidth = `${computedWidth}px`;
+        section.style.flex = "0 0 auto";
+      } else {
+        section.style.width = "";
+        section.style.minWidth = "";
+        section.style.maxWidth = "";
+        section.style.flex = "";
+      }
 
       const title = document.createElement("div");
       title.className = "chat-emoji-title";
       title.textContent = category.label;
+      if (popover.classList.contains("is-mobile-sheet")) {
+        title.style.whiteSpace = "nowrap";
+        title.style.width = "max-content";
+        title.style.maxWidth = "none";
+      } else {
+        title.style.whiteSpace = "";
+        title.style.width = "";
+        title.style.maxWidth = "";
+      }
       section.appendChild(title);
 
       const grid = document.createElement("div");
       grid.className = "chat-emoji-grid";
+      if (popover.classList.contains("is-mobile-sheet")) {
+        grid.style.width = "max-content";
+        grid.style.gridAutoFlow = "column";
+        grid.style.gridTemplateRows = "repeat(4, 40px)";
+        grid.style.gridAutoColumns = "40px";
+      } else {
+        grid.style.width = "";
+        grid.style.gridAutoFlow = "";
+        grid.style.gridTemplateRows = "";
+        grid.style.gridAutoColumns = "";
+      }
       list.forEach((emoji) => {
         const btn = document.createElement("button");
         btn.type = "button";
@@ -7046,6 +8115,22 @@
     });
 
     const syncActiveCategoryByScroll = () => {
+      if (popover.classList.contains("is-mobile-sheet")) {
+        const left = Math.max(0, Number(body.scrollLeft || 0));
+        let nextKey = emojiActiveCategory;
+        visibleCategories.forEach(({ key }) => {
+          const section = sectionByKey.get(key);
+          if (!section) return;
+          const sectionLeft = Math.max(0, Number(section.offsetLeft || 0));
+          if (sectionLeft <= (left + 8)) nextKey = key;
+        });
+        if (nextKey !== emojiActiveCategory) {
+          emojiActiveCategory = nextKey;
+          updateActiveTabUi(emojiActiveCategory);
+        }
+        return;
+      }
+
       const threshold = body.scrollTop + 12;
       let currentKey = emojiActiveCategory;
       visibleCategories.forEach(({ key }) => {
@@ -7059,15 +8144,81 @@
       }
     };
 
+    bindEmojiPickerDragScroll(body, () => popover.classList.contains("is-mobile-sheet"));
     body.addEventListener("scroll", syncActiveCategoryByScroll, { passive: true });
     updateActiveTabUi(emojiActiveCategory);
 
     requestAnimationFrame(() => {
       const activeSection = sectionByKey.get(emojiActiveCategory);
-      if (!activeSection) return;
-      body.scrollTop = Math.max(0, activeSection.offsetTop - 2);
+      if (popover.classList.contains("is-mobile-sheet")) {
+        body.scrollTo({
+          left: Math.max(0, activeSection ? (activeSection.offsetLeft || 0) : 0),
+          behavior: "auto",
+        });
+      } else if (activeSection) {
+        body.scrollTop = Math.max(0, activeSection.offsetTop - 2);
+      }
       requestAnimationFrame(syncActiveCategoryByScroll);
     });
+  }
+
+  function updateEmojiPopoverViewportMode() {
+    if (!dom.center.emojiPopover) return;
+    dom.center.emojiPopover.classList.toggle("is-mobile-sheet", isChatMobileViewport());
+  }
+
+  function setEmojiDefaultOpenCategory() {
+    const categories = getEmojiCategoriesForRender();
+    const recent = Array.isArray(categories.recent) ? categories.recent : [];
+    if (recent.length > 0) {
+      emojiActiveCategory = "recent";
+      return;
+    }
+    const firstAvailable = EMOJI_CATEGORY_META
+      .map(({ key }) => key)
+      .find((key) => {
+        const list = Array.isArray(categories[key]) ? categories[key] : [];
+        return list.length > 0;
+      });
+    emojiActiveCategory = firstAvailable || "people";
+  }
+
+  function syncEmojiPickerViewportPosition() {
+    if (!dom.center.emojiPopover || dom.center.emojiPopover.classList.contains("hidden")) return;
+    const body = $(".chat-emoji-body", dom.center.emojiPopover);
+    if (!body) return;
+    const sections = $$(".chat-emoji-section", body);
+    if (!sections.length) return;
+
+    const activeSection = sections.find((section) => (
+      String(section.getAttribute("data-emoji-category") || "") === String(emojiActiveCategory || "")
+    ));
+    const targetSection = activeSection || sections[0];
+    if (!targetSection) return;
+
+    if (dom.center.emojiPopover.classList.contains("is-mobile-sheet")) {
+      body.scrollTo({
+        left: Math.max(0, Number(targetSection.offsetLeft || 0)),
+        behavior: "auto",
+      });
+      return;
+    }
+    body.scrollTop = Math.max(0, Number(targetSection.offsetTop || 0) - 2);
+  }
+
+  function syncEmojiSheetOpenState() {
+    if (!dom.center.stack || !dom.center.emojiPopover) return;
+    const wasOpen = dom.center.stack.classList.contains("is-emoji-sheet-open");
+    const isOpen = (
+      !dom.center.emojiPopover.classList.contains("hidden")
+      && dom.center.emojiPopover.classList.contains("is-mobile-sheet")
+      && !dom.center.emojiPopover.classList.contains("is-attach-preview")
+    );
+    dom.center.stack.classList.toggle("is-emoji-sheet-open", isOpen);
+    if (wasOpen !== isOpen) {
+      schedulePinnedBottomLayoutSync();
+      updateMessagesScrollDownButton();
+    }
   }
       
   function bindEmojiPopoverGuard() {
@@ -7215,6 +8366,10 @@
 
   function refreshContextMenuReactionBoxPosition() {
     if (!dom.center.contextMenu || dom.center.contextMenu.classList.contains("hidden")) return;
+    if (window.innerWidth <= 768 && state.contextMessageId) {
+      repositionMessageContextMenu(state.contextMessageId, { forceMobile: true });
+      return;
+    }
     const anchor = contextMenuAnchorPoint;
     if (anchor && Number.isFinite(anchor.x) && Number.isFinite(anchor.y)) {
       positionFloatingBox(dom.center.contextMenu, anchor.x, anchor.y, 8);
@@ -7230,6 +8385,7 @@
     if (!dom.center.contextMenu) return;
     const isExpanded = !!expanded;
     if (isExpanded) {
+      clearContextMenuTouchGuard();
       ensureContextMenuAllEmojiButtons(dom.center.contextMenu);
       ensureEmojiDatasetLoaded().then(() => {
         if (!dom.center.contextMenu || dom.center.contextMenu.classList.contains("hidden")) return;
@@ -7239,6 +8395,13 @@
       }).catch(() => {});
     }
     dom.center.contextMenu.classList.toggle("is-reactions-expanded", isExpanded);
+    if (isExpanded) {
+      requestAnimationFrame(() => {
+        if (!dom.center.contextMenu || dom.center.contextMenu.classList.contains("hidden")) return;
+        if (!dom.center.contextMenu.classList.contains("is-reactions-expanded")) return;
+        refreshContextMenuReactionBoxPosition();
+      });
+    }
     const toggleBtn = $('[data-chat-msg-reaction="__toggle_more__"]', dom.center.contextMenu);
     if (!toggleBtn) return;
     toggleBtn.setAttribute("aria-expanded", isExpanded ? "true" : "false");
@@ -8446,11 +9609,7 @@
   function hideMessageMenu() {
     setContextMenuReactionsExpanded(false);
     if (dom.center.contextMenu) {
-      if (dom.center.contextMenu.__touchGuardTimer) {
-        window.clearTimeout(dom.center.contextMenu.__touchGuardTimer);
-        dom.center.contextMenu.__touchGuardTimer = 0;
-      }
-      dom.center.contextMenu.style.pointerEvents = "";
+      clearContextMenuTouchGuard();
       dom.center.contextMenu.classList.add("hidden");
     }
     contextMenuAnchorPoint = null;
@@ -8464,13 +9623,20 @@
     hideReactionBar();
   }
 
-  function armContextMenuTouchGuard() {
+  function clearContextMenuTouchGuard() {
     const menu = dom.center.contextMenu;
     if (!menu) return;
     if (menu.__touchGuardTimer) {
       window.clearTimeout(menu.__touchGuardTimer);
       menu.__touchGuardTimer = 0;
     }
+    menu.style.pointerEvents = "";
+  }
+
+  function armContextMenuTouchGuard() {
+    const menu = dom.center.contextMenu;
+    if (!menu) return;
+    clearContextMenuTouchGuard();
     menu.style.pointerEvents = "none";
     menu.__touchGuardTimer = window.setTimeout(() => {
       menu.__touchGuardTimer = 0;
@@ -8744,13 +9910,41 @@
     positionFloatingBox(menu, x, y, 8);
   }
 
+  function getFloatingViewportBottom() {
+    const viewport = window.visualViewport;
+    const viewportHeight = viewport ? Number(viewport.height || 0) : 0;
+    const viewportOffsetTop = viewport ? Number(viewport.offsetTop || 0) : 0;
+    if (
+      Number.isFinite(viewportHeight)
+      && viewportHeight > 0
+      && Number.isFinite(viewportOffsetTop)
+      && viewportOffsetTop >= 0
+    ) {
+      return Math.round(viewportOffsetTop + viewportHeight);
+    }
+    return Math.max(
+      Number(window.innerHeight || 0),
+      Number(document.documentElement && document.documentElement.clientHeight || 0),
+    );
+  }
+
+  function clampFloatingBoxLeft(boxWidth, desiredLeft, padding = 8) {
+    const maxLeft = Math.max(padding, window.innerWidth - boxWidth - padding);
+    return Math.min(Math.max(padding, Number(desiredLeft) || 0), maxLeft);
+  }
+
+  function clampFloatingBoxTop(boxHeight, desiredTop, padding = 8) {
+    const viewportBottom = getFloatingViewportBottom();
+    const bottomPadding = getMobileChatFloatingBottomInset(padding, viewportBottom);
+    const maxTop = Math.max(padding, viewportBottom - boxHeight - bottomPadding);
+    return Math.min(Math.max(padding, Number(desiredTop) || 0), maxTop);
+  }
+
   function positionFloatingBox(box, x, y, padding = 8) {
     box.classList.remove("hidden");
     const rect = box.getBoundingClientRect();
-    const maxLeft = Math.max(padding, window.innerWidth - rect.width - padding);
-    const maxTop = Math.max(padding, window.innerHeight - rect.height - padding);
-    const left = Math.min(Math.max(padding, x), maxLeft);
-    const top = Math.min(Math.max(padding, y), maxTop);
+    const left = clampFloatingBoxLeft(rect.width, x, padding);
+    const top = clampFloatingBoxTop(rect.height, y, padding);
     box.style.left = `${left}px`;
     box.style.top = `${top}px`;
   }
@@ -8759,6 +9953,8 @@
     if (!dom.center.reactionBar || !menuRect) return;
     const barRect = dom.center.reactionBar.getBoundingClientRect();
     const padding = 8;
+    const viewportBottom = getFloatingViewportBottom();
+    const bottomPadding = getMobileChatFloatingBottomInset(padding, viewportBottom);
     const left = Math.min(
       Math.max(padding, Number(menuRect.right || 0) - barRect.width),
       Math.max(padding, window.innerWidth - barRect.width - padding),
@@ -8766,10 +9962,88 @@
     const preferTop = menuRect.top - barRect.height - 8;
     const top = preferTop >= padding
       ? preferTop
-      : Math.min(Math.max(padding, menuRect.bottom + 8), Math.max(padding, window.innerHeight - barRect.height - padding));
+      : Math.min(Math.max(padding, menuRect.bottom + 8), Math.max(padding, viewportBottom - barRect.height - bottomPadding));
 
     dom.center.reactionBar.style.left = `${left}px`;
     dom.center.reactionBar.style.top = `${top}px`;
+  }
+
+  function getMobileChatFloatingBottomInset(padding = 8, viewportBottomValue = null) {
+    let inset = Math.max(8, Number(padding) || 0);
+    if (!document.body || !document.body.classList.contains("page-chat")) return inset;
+    if (window.innerWidth > 768) return inset;
+    const viewportBottom = Number.isFinite(Number(viewportBottomValue))
+      ? Number(viewportBottomValue)
+      : getFloatingViewportBottom();
+
+    const measureBottomInset = (element) => {
+      if (!element || !element.isConnected) return 0;
+      const style = window.getComputedStyle(element);
+      if (!style || style.display === "none" || style.visibility === "hidden") return 0;
+      const rect = element.getBoundingClientRect();
+      if (!rect || rect.height <= 0 || rect.width <= 0) return 0;
+      if (rect.top >= viewportBottom) return 0;
+      return Math.max(0, viewportBottom - rect.top);
+    };
+
+    const shell = document.getElementById("adminMobileShell");
+    const navShell = document.getElementById("adminMobileNavShell");
+    inset = Math.max(inset, measureBottomInset(shell) + 8);
+    inset = Math.max(inset, measureBottomInset(navShell) + 8);
+
+    const activeBottomBar = state.selectionMode
+      ? dom.center.selectionBar
+      : dom.center.footerPanel;
+    const activeBottomInner = state.selectionMode
+      ? dom.center.selectionBar
+      : dom.center.composer;
+    inset = Math.max(inset, measureBottomInset(activeBottomBar) + 8);
+    inset = Math.max(inset, measureBottomInset(activeBottomInner) + 12);
+    inset = Math.max(inset, state.selectionMode ? 120 : 132);
+
+    return inset;
+  }
+
+  function repositionMessageContextMenu(messageId, options = {}) {
+    if (!dom.center.contextMenu || dom.center.contextMenu.classList.contains("hidden")) return;
+    if (window.innerWidth > 768 && options.forceMobile !== true) return;
+    const key = String(messageId || state.contextMessageId || "").trim();
+    if (!key || !dom.center.messages) return;
+    const messageNode = dom.center.messages.querySelector(`[data-message-id="${cssEscape(key)}"]`);
+    if (!messageNode) return;
+    const bubble = $(".chat-message-bubble", messageNode);
+    if (!bubble) return;
+
+    const menuRect = dom.center.contextMenu.getBoundingClientRect();
+    const bubbleRect = bubble.getBoundingClientRect();
+    const padding = 8;
+    const bubbleGap = 10;
+    const preferAbove = options.preferAbove === true;
+    const isOutgoing = messageNode.classList.contains("chat-message--out");
+    const desiredLeft = isOutgoing
+      ? bubbleRect.right - menuRect.width
+      : bubbleRect.left;
+    const desiredTop = preferAbove
+      ? bubbleRect.top - menuRect.height - bubbleGap
+      : bubbleRect.bottom + bubbleGap;
+    const nextLeft = clampFloatingBoxLeft(menuRect.width, desiredLeft, padding);
+    let nextTop = clampFloatingBoxTop(menuRect.height, desiredTop, padding);
+
+    if (!preferAbove) {
+      const viewportBottom = getFloatingViewportBottom();
+      const bottomInset = getMobileChatFloatingBottomInset(padding, viewportBottom);
+      const visibleBottom = viewportBottom - bottomInset;
+      if ((nextTop + menuRect.height) > visibleBottom) {
+        nextTop = clampFloatingBoxTop(menuRect.height, bubbleRect.top - menuRect.height - bubbleGap, padding);
+      }
+    }
+
+    dom.center.contextMenu.style.left = `${Math.round(nextLeft)}px`;
+    dom.center.contextMenu.style.top = `${Math.round(nextTop)}px`;
+    contextMenuAnchorPoint = {
+      x: Math.round(nextLeft),
+      y: Math.round(nextTop),
+    };
   }
 
   function showReactionBarForMessage(message, menuRect) {
@@ -8827,10 +10101,13 @@
     if (dom.center.menuDeleteAction) dom.center.menuDeleteAction.classList.remove("hidden");
 
     positionFloatingBox(dom.center.contextMenu, x, y, 8);
+    repositionMessageContextMenu(messageId, {
+      forceMobile: options.touchGuard === true || window.innerWidth <= 768,
+    });
     if (options.touchGuard === true) {
       armContextMenuTouchGuard();
     } else {
-      dom.center.contextMenu.style.pointerEvents = "";
+      clearContextMenuTouchGuard();
     }
   }
 
@@ -8900,6 +10177,58 @@
     if (!state.activeClientId) return;
     if (!setThreadMessageReaction(state.activeClientId, messageId, reaction)) return;
     renderMessages();
+  }
+
+  function canUseMessageHeartShortcutTarget(target) {
+    const targetEl = target && target.closest ? target : null;
+    if (!targetEl) return true;
+    return !(
+      targetEl.closest("[data-chat-autolink]")
+      || targetEl.closest("[data-chat-msg-reaction-toggle]")
+      || targetEl.closest("[data-chat-order-card-id]")
+      || targetEl.closest("[data-chat-scroll-to-message]")
+      || targetEl.closest(".chat-message-attachment")
+    );
+  }
+
+  function clearMessageHeartTap() {
+    lastMessageHeartTap = null;
+  }
+
+  function consumeMessageHeartDoubleTap(messageId, point = {}) {
+    const nextMessageId = String(messageId || "").trim();
+    if (!nextMessageId) {
+      clearMessageHeartTap();
+      return false;
+    }
+    const now = Date.now();
+    const x = Number(point.x || 0);
+    const y = Number(point.y || 0);
+    const prev = lastMessageHeartTap;
+    lastMessageHeartTap = {
+      messageId: nextMessageId,
+      x,
+      y,
+      at: now,
+    };
+    if (!prev) return false;
+    if (prev.messageId !== nextMessageId) return false;
+    if ((now - prev.at) > CHAT_TOUCH_HEART_DOUBLE_TAP_MS) return false;
+    if (Math.abs(prev.x - x) > CHAT_TOUCH_HEART_DOUBLE_TAP_MOVE_PX) return false;
+    if (Math.abs(prev.y - y) > CHAT_TOUCH_HEART_DOUBLE_TAP_MOVE_PX) return false;
+    clearMessageHeartTap();
+    return true;
+  }
+
+  function toggleHeartReactionForMessage(messageId) {
+    if (!state.activeClientId) return false;
+    const heartReaction = "\u{2764}\u{FE0F}";
+    if (!setThreadMessageReaction(state.activeClientId, messageId, heartReaction)) return false;
+    hideMessageContextMenu();
+    hideReactionBar();
+    hideEmojiPopover();
+    renderMessages();
+    return true;
   }
 
   function closeSelectionMode() {
@@ -9251,9 +10580,7 @@
         </div>
       `
       : "";
-    const textMarkup = hasText
-      ? `<div class="chat-message-text">${escapeHtml(msg.text || "").replace(/\n/g, "<br>")}</div>`
-      : "";
+    const textMarkup = hasText ? '<div class="chat-message-text"></div>' : "";
     const orderCardMarkup = buildMessageOrderCardsMarkup(orderCardModels);
 
     item.innerHTML = `
@@ -9276,7 +10603,12 @@
     const bubble = $(".chat-message-bubble", item);
     const messageTextNode = $(".chat-message-text", item);
     if (messageTextNode) {
-      renderEmojiMessageText(messageTextNode, msg.text || "", "chat-emoji-glyph chat-emoji-glyph--inline");
+      renderRichMessageText(
+        messageTextNode,
+        msg.text || "",
+        "chat-emoji-glyph chat-emoji-glyph--inline",
+        "chat-auto-link"
+      );
     }
     if (bubble && hasImageAttachment) {
       bubble.classList.add("has-attachment");
@@ -9516,6 +10848,7 @@
       const ok = updateThreadMessage(state.activeClientId, state.editingMessageId, clean);
       cancelEditingMessage();
       if (!ok) return false;
+      clearComposerDraftForClient(state.activeClientId);
       renderMessages();
       applyClientFilter();
       return true;
@@ -9548,6 +10881,7 @@
 
     scheduleOutgoingDeliveryProgress(state.activeClientId, newMessageId);
     clearComposerReply();
+    clearComposerDraftForClient(state.activeClientId);
     hideMessageContextMenu();
     renderMessages({ forceScrollBottom: true, smoothScroll: true });
     applyClientFilter();
@@ -9802,8 +11136,10 @@
     remountEmojiPopover("composer");
     dom.center.emojiPopover.classList.add("hidden");
     dom.center.emojiPopover.classList.remove("is-attach-preview");
+    dom.center.emojiPopover.classList.remove("is-mobile-sheet");
     emojiPopoverMode = "composer";
     emojiPopoverReactionMessageId = "";
+    syncEmojiSheetOpenState();
   }
 
   function remountEmojiPopover(target = "composer") {
@@ -9835,18 +11171,24 @@
 
     remountEmojiPopover(normalizedTarget);
     popover.classList.toggle("is-attach-preview", isPreviewTarget);
+    updateEmojiPopoverViewportMode();
     popover.classList.toggle("hidden", !willOpen);
     if (!willOpen) {
       remountEmojiPopover("composer");
       emojiPopoverMode = "composer";
       emojiPopoverReactionMessageId = "";
+      popover.classList.remove("is-mobile-sheet");
     }
+    syncEmojiSheetOpenState();
     if (willOpen) {
       if (normalizedTarget !== "attach-preview") {
         emojiPopoverMode = "composer";
         emojiPopoverReactionMessageId = "";
+        setEmojiDefaultOpenCategory();
       }
+      renderEmojiPicker();
       ensureEmojiDatasetLoaded().catch(() => {});
+      requestAnimationFrame(syncEmojiPickerViewportPosition);
     }
   }
 
@@ -9860,10 +11202,17 @@
 
     remountEmojiPopover(normalizedTarget);
     popover.classList.toggle("is-attach-preview", isPreviewTarget);
+    updateEmojiPopoverViewportMode();
     popover.classList.remove("hidden");
     emojiPopoverMode = mode;
     emojiPopoverReactionMessageId = messageId;
+    if (mode !== "reaction" && normalizedTarget !== "attach-preview") {
+      setEmojiDefaultOpenCategory();
+    }
+    syncEmojiSheetOpenState();
+    renderEmojiPicker();
     ensureEmojiDatasetLoaded().catch(() => {});
+    requestAnimationFrame(syncEmojiPickerViewportPosition);
   }
 
   function sendPreparedImageAttachments(attachments, options = {}) {
@@ -10039,6 +11388,9 @@
         event.preventDefault();
         if (dom.center.attachPreviewSendBtn) dom.center.attachPreviewSendBtn.click();
       });
+      dom.center.attachPreviewCaption.addEventListener("focus", handleAdminChatTextInputFocus);
+      dom.center.attachPreviewCaption.addEventListener("blur", handleAdminChatTextInputBlur);
+      dom.center.attachPreviewCaption.addEventListener("touchend", guardIOSNativeTextFocus, { passive: false });
     }
 
     overlay.addEventListener("click", (event) => {
@@ -10217,23 +11569,19 @@
         }
       }
 
+      const autoLink = event.target.closest("[data-chat-autolink]");
+      if (autoLink && !state.selectionMode) {
+        return;
+      }
+
       const messageBubble = event.target.closest(".chat-message-bubble");
       const messageEl = event.target.closest(".chat-message");
       const messageId = messageEl ? String(messageEl.getAttribute("data-message-id") || "") : "";
       if (!state.selectionMode) {
         if (!messageBubble || !messageId) return;
-        if (
-          String(state.contextMessageId || "") === messageId
-          && dom.center.reactionBar
-          && !dom.center.reactionBar.classList.contains("hidden")
-          && (!dom.center.contextMenu || dom.center.contextMenu.classList.contains("hidden"))
-        ) {
-          hideReactionBar();
-          return;
-        }
         hideMessageContextMenu();
+        hideReactionBar();
         hideEmojiPopover();
-        showReactionBar(messageId, messageBubble);
         return;
       }
       if (!messageEl) return;
@@ -10243,6 +11591,7 @@
     });
 
     dom.center.messages.addEventListener("contextmenu", (event) => {
+      if (event.target.closest && event.target.closest("[data-chat-autolink]") && !state.selectionMode) return;
       const messageEl = event.target.closest(".chat-message");
       if (!messageEl || !state.activeClientId) return;
       const messageId = messageEl.getAttribute("data-message-id");
@@ -10260,29 +11609,22 @@
     });
 
     dom.center.messages.addEventListener("contextmenu", (event) => {
+      if (event.target.closest && event.target.closest("[data-chat-autolink]")) return;
       if (event.target && event.target.closest && event.target.closest(".chat-message")) {
         event.preventDefault();
       }
     }, true);
 
     dom.center.messages.addEventListener("dblclick", (event) => {
-      const messageEl = event.target.closest(".chat-message");
+      if (state.selectionMode) return;
+      if (!canUseMessageHeartShortcutTarget(event.target)) return;
+      const messageEl = event.target.closest(".chat-message[data-message-id]");
       if (!messageEl || !state.activeClientId) return;
-      const messageId = messageEl.getAttribute("data-message-id");
+      const messageId = String(messageEl.getAttribute("data-message-id") || "");
       if (!messageId) return;
-
-      const message = findThreadMessage(state.activeClientId, messageId);
-      if (!message) return;
-
-      const heartReaction = "\u{2764}\u{FE0F}";
-      if (normalizeReactionValue(getMessageActorReaction(message, CHAT_REACTION_ACTOR)) === normalizeReactionValue(heartReaction)) {
-        hideMessageContextMenu();
-        return;
-      }
-
-      if (!setThreadMessageReaction(state.activeClientId, messageId, heartReaction)) return;
-      hideMessageContextMenu();
-      renderMessages();
+      event.preventDefault();
+      event.stopPropagation();
+      toggleHeartReactionForMessage(messageId);
     });
 
     dom.center.messages.addEventListener("selectstart", (event) => {
@@ -10299,6 +11641,10 @@
 
       const messageEl = event.target.closest(".chat-message[data-message-id]");
       if (!messageEl) {
+        clearTouchContextGesture();
+        return;
+      }
+      if (event.target.closest && event.target.closest("[data-chat-autolink]") && !state.selectionMode) {
         clearTouchContextGesture();
         return;
       }
@@ -10345,6 +11691,7 @@
         replyTriggered: false,
         longPressFired: false,
         longPressTimer: 0,
+        doubleTapEligible: canUseMessageHeartShortcutTarget(event.target),
       };
 
       touchContextGesture.longPressTimer = window.setTimeout(() => {
@@ -10480,6 +11827,7 @@
         touchAttachmentTap = null;
       }
       if (!touchContextGesture) return;
+      const finishedGesture = touchContextGesture;
       if (touchContextGesture.longPressTimer) {
         window.clearTimeout(touchContextGesture.longPressTimer);
         touchContextGesture.longPressTimer = 0;
@@ -10494,6 +11842,25 @@
       }
       if (touchContextGesture.replyTriggered && dom.center.input) {
         focusComposerInput({ moveCaretToEnd: true });
+      }
+      const canUseHeartDoubleTap = (
+        !state.selectionMode
+        && finishedGesture.doubleTapEligible === true
+        && !finishedGesture.longPressFired
+        && !finishedGesture.replyTriggered
+        && Math.abs(finishedGesture.lastX - finishedGesture.startX) <= CHAT_TOUCH_HEART_DOUBLE_TAP_MOVE_PX
+        && Math.abs(finishedGesture.lastY - finishedGesture.startY) <= CHAT_TOUCH_HEART_DOUBLE_TAP_MOVE_PX
+      );
+      if (canUseHeartDoubleTap) {
+        if (consumeMessageHeartDoubleTap(finishedGesture.messageId, {
+          x: finishedGesture.lastX,
+          y: finishedGesture.lastY,
+        })) {
+          suppressTouchClickUntil = Math.max(suppressTouchClickUntil, Date.now() + 420);
+          toggleHeartReactionForMessage(finishedGesture.messageId);
+        }
+      } else {
+        clearMessageHeartTap();
       }
       if (touchContextGesture.longPressFired || touchContextGesture.replyTriggered) {
         suppressTouchClickUntil = Math.max(suppressTouchClickUntil, Date.now() + 420);
@@ -10653,6 +12020,16 @@
     }
 
     document.addEventListener("click", (event) => {
+      if (Date.now() < Number(suppressFloatingMenuAutoHideUntil || 0)) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      if (Date.now() < Number(suppressFloatingMenuDocumentClickUntil || 0)) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
       if (!dom.center.contextMenu) return;
       const insideMenu = dom.center.contextMenu.contains(event.target);
       const insideReactions = dom.center.reactionBar && dom.center.reactionBar.contains(event.target);
@@ -10672,6 +12049,11 @@
     });
 
     document.addEventListener("contextmenu", (event) => {
+      if (Date.now() < Number(suppressFloatingMenuAutoHideUntil || 0)) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
       if (event.target && event.target.closest && event.target.closest(".chat-message-attachment-image")) {
         event.preventDefault();
         event.stopPropagation();
@@ -10708,12 +12090,17 @@
     }
 
     window.addEventListener("resize", () => {
+      if (Date.now() < Number(suppressFloatingMenuAutoHideUntil || 0)) {
+        if (isMessageImageViewerOpen()) updateMessageImageViewerLayout();
+        return;
+      }
       clearTouchContextGesture();
       hideMessageContextMenu();
       hideClientContextMenu();
       if (isMessageImageViewerOpen()) updateMessageImageViewerLayout();
     });
     window.addEventListener("scroll", () => {
+      if (Date.now() < Number(suppressFloatingMenuAutoHideUntil || 0)) return;
       clearTouchContextGesture();
       hideMessageContextMenu();
       hideClientContextMenu();
@@ -10979,6 +12366,7 @@
     setSelectionMode(false);
     hideClientContextMenu();
     hideMessageContextMenu();
+    persistComposerDraftForClient(previousActiveClientId);
     if (dom.center.input) {
       dom.center.input.value = "";
       dom.center.input.style.height = "45px";
@@ -10989,6 +12377,7 @@
 
     state.activeClientId = id;
     state.store.lastOpenClientId = id;
+    restoreComposerDraftForClient(id);
     state.rightPanelOrderId = 0;
     state.headerOrderSnapshot = null;
     setHeaderLoading(true);
@@ -11380,7 +12769,10 @@
 
     renderEmojiPicker();
     ensureEmojiDatasetLoaded().catch(() => {});
+    mountFloatingChatMenus();
     bindEmojiPopoverGuard();
+    bindFloatingMenuInteractionGuards();
+    bindReactionOverflowScrollers();
     normalizeQuickReactionButtons();
     decorateComposerEmojiControls();
     initAttachPreviewModal();
@@ -11429,6 +12821,7 @@
         if (event.key === "Escape" && state.editingMessageId) {
           cancelEditingMessage();
           dom.center.input.value = "";
+          clearComposerDraftForClient(state.activeClientId);
           stopLocalTypingSession(state.activeClientId, { flush: true });
           syncComposerRichPreview({});
           return;
@@ -11443,6 +12836,7 @@
 
       dom.center.input.addEventListener("input", () => {
         handleComposerTypingActivity();
+        persistComposerDraftForClient(state.activeClientId);
       });
       dom.center.input.addEventListener("beforeinput", () => {
         handleComposerTypingActivity({ allowEmpty: true });
@@ -11455,10 +12849,14 @@
       });
       dom.center.input.addEventListener("compositionend", () => {
         handleComposerTypingActivity();
+        persistComposerDraftForClient(state.activeClientId);
       });
       dom.center.input.addEventListener("touchend", guardIOSNativeTextFocus, { passive: false });
+      dom.center.input.addEventListener("focus", handleAdminChatTextInputFocus);
       dom.center.input.addEventListener("blur", () => {
+        persistComposerDraftForClient(state.activeClientId);
         scheduleLocalTypingStop(CHAT_TYPING_BLUR_STOP_MS);
+        handleAdminChatTextInputBlur();
       });
     }
 
@@ -11582,6 +12980,7 @@
     if (dom.center.messagesWrap && dom.center.messagesWrap.dataset.scrollDownBound !== "1") {
       dom.center.messagesWrap.dataset.scrollDownBound = "1";
       dom.center.messagesWrap.addEventListener("scroll", () => {
+        const keepFloatingMenuOpen = Date.now() < Number(suppressFloatingMenuAutoHideUntil || 0);
         saveThreadScrollPosition(state.activeClientId);
         if (dom.center.messagesWrap && dom.center.messagesWrap.scrollTop <= CHAT_THREAD_LOAD_MORE_THRESHOLD_PX) {
           loadOlderMessages(state.activeClientId).catch(console.error);
@@ -11592,7 +12991,7 @@
           clearPendingScrollNewCount();
         }
         updateMessagesScrollDownButton();
-        hideMessageContextMenu();
+        if (!keepFloatingMenuOpen) hideMessageContextMenu();
       });
     }
     if (dom.center.messages && dom.center.messages.dataset.pinnedBottomSyncBound !== "1") {
@@ -11636,6 +13035,8 @@
     }
     bindSearch();
     initMobileChatControls();
+    bindAdminChatKeyboardViewportSync();
+    scheduleAdminChatKeyboardViewportSync();
     renderChatHeader();
     syncSelectionUi();
     renderMessages();
