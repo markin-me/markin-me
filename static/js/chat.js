@@ -188,17 +188,25 @@
     },
     center: {
       stack: $(".chat-center-stack"),
+      headerPanel: $(".chat-header-island"),
       mobileClientsBackBtn: $("#chatMobileClientsBackBtn"),
       headerOrder: $("#chatHeaderOrder"),
+      mobileHeaderOrderBtn: $("#chatMobileHeaderOrderBtn"),
       headerClientBtn: $("#chatHeaderClientBtn"),
+      mobileHeaderClientBtn: $("#chatMobileHeaderClientBtn"),
       headerName: $("#chatHeaderName"),
+      mobileHeaderName: $("#chatMobileHeaderName"),
       headerPhone: $("#chatHeaderPhone"),
+      mobileHeaderPhone: $("#chatMobileHeaderPhone"),
       headerLoading: $("#chatHeaderLoading"),
+      mobileHeaderLoading: $("#chatMobileHeaderLoading"),
       orderTitle: $("#chatOrderTitle"),
       orderStatus: $("#chatOrderStatus"),
       orderKind: $("#chatOrderKind"),
       orderId: $("#chatOrderId"),
+      mobileOrderId: $("#chatMobileOrderId"),
       orderTime: $("#chatOrderTime"),
+      mobileOrderTime: $("#chatMobileOrderTime"),
       orderTimeIcon: $("#chatOrderTimeIcon"),
       orderAddress: $("#chatOrderAddress"),
       orderComment: $("#chatOrderComment"),
@@ -375,6 +383,7 @@
   let adminChatKeyboardLastViewportBottom = 0;
   let adminChatPageScrollRepairRaf = 0;
   let adminChatPageScrollRepairUntil = 0;
+  let adminChatOverlayLayoutBound = false;
 
   function getClientSwipeRowMain(row) {
     return row ? $(".chat-client-row-main", row) : null;
@@ -777,6 +786,63 @@
       if (!shouldRunAdminChatPageScrollRepair()) return;
       restoreLockedAdminChatPageScroll();
     });
+  }
+
+  function getAdminMobileChatBottomOverlayNode() {
+    const selectionBar = dom.center.selectionBar;
+    if (selectionBar && !selectionBar.classList.contains("hidden")) return selectionBar;
+    return dom.center.footerPanel || null;
+  }
+
+  function syncAdminMobileChatOverlayLayout() {
+    const stack = dom.center.stack;
+    if (!stack) return;
+
+    if (!isAdminMobileChatLayout()) {
+      stack.classList.remove("is-mobile-overlay-layout");
+      stack.style.removeProperty("--chat-mobile-header-overlay-height");
+      stack.style.removeProperty("--chat-mobile-footer-overlay-height");
+      stack.style.removeProperty("--chat-scroll-down-composer-extra");
+      return;
+    }
+
+    const headerHeight = Math.max(0, Math.ceil(dom.center.headerPanel?.getBoundingClientRect().height || 0));
+    const bottomOverlayHeight = Math.max(0, Math.ceil(getAdminMobileChatBottomOverlayNode()?.getBoundingClientRect().height || 0));
+    stack.classList.add("is-mobile-overlay-layout");
+    stack.style.setProperty("--chat-mobile-header-overlay-height", `${headerHeight}px`);
+    stack.style.setProperty("--chat-mobile-footer-overlay-height", `${bottomOverlayHeight}px`);
+    stack.style.setProperty(
+      "--chat-scroll-down-composer-extra",
+      `${Math.max(0, bottomOverlayHeight - 26)}px`
+    );
+  }
+
+  function bindAdminMobileChatOverlayLayout() {
+    if (adminChatOverlayLayoutBound) return;
+    adminChatOverlayLayoutBound = true;
+
+    const sync = () => {
+      syncAdminMobileChatOverlayLayout();
+      schedulePinnedBottomLayoutSync();
+    };
+
+    const overlayNodes = [
+      dom.center.headerPanel,
+      dom.center.footerPanel,
+      dom.center.selectionBar,
+      dom.center.composer,
+    ].filter(Boolean);
+
+    if (typeof ResizeObserver === "function" && overlayNodes.length) {
+      const observer = new ResizeObserver(() => {
+        sync();
+      });
+      if (dom.center.stack) dom.center.stack.__mobileOverlayLayoutObserver = observer;
+      overlayNodes.forEach((node) => observer.observe(node));
+    }
+
+    window.addEventListener("resize", sync, { passive: true });
+    requestAnimationFrame(sync);
   }
 
   function handleAdminChatPageScrollRepairEvent() {
@@ -1328,6 +1394,13 @@
     if (dom.center.headerLoading) {
       dom.center.headerLoading.classList.toggle("hidden", !show);
       dom.center.headerLoading.setAttribute("aria-hidden", show ? "false" : "true");
+    }
+    if (dom.center.mobileHeaderLoading) {
+      dom.center.mobileHeaderLoading.classList.toggle("hidden", !show);
+      dom.center.mobileHeaderLoading.setAttribute("aria-hidden", show ? "false" : "true");
+    }
+    if (dom.center.mobileHeaderClientBtn) {
+      dom.center.mobileHeaderClientBtn.classList.toggle("is-loading", show);
     }
   }
 
@@ -7015,23 +7088,28 @@
   }
 
   function setHeaderOrderLinkState(orderId) {
-    if (!dom.center.headerOrder) return;
     const id = Number(orderId || 0);
     const canOpen = Number.isFinite(id) && id > 0;
-    if (canOpen) dom.center.headerOrder.setAttribute("data-order-id", String(id));
-    else dom.center.headerOrder.removeAttribute("data-order-id");
-    dom.center.headerOrder.classList.toggle("is-order-openable", canOpen);
-    dom.center.headerOrder.setAttribute("aria-disabled", canOpen ? "false" : "true");
-    dom.center.headerOrder.tabIndex = canOpen ? 0 : -1;
+    [dom.center.headerOrder, dom.center.mobileHeaderOrderBtn].forEach((node) => {
+      if (!node) return;
+      if (canOpen) node.setAttribute("data-order-id", String(id));
+      else node.removeAttribute("data-order-id");
+      node.classList.toggle("is-order-openable", canOpen);
+      node.setAttribute("aria-disabled", canOpen ? "false" : "true");
+      if ("disabled" in node) node.disabled = !canOpen;
+      else node.tabIndex = canOpen ? 0 : -1;
+    });
   }
 
   function setHeaderClientLinkState(canOpen) {
-    if (!dom.center.headerClientBtn) return;
     const enabled = canOpen === true;
-    dom.center.headerClientBtn.classList.toggle("is-openable", enabled);
-    dom.center.headerClientBtn.disabled = !enabled;
-    dom.center.headerClientBtn.setAttribute("aria-disabled", enabled ? "false" : "true");
-    dom.center.headerClientBtn.tabIndex = enabled ? 0 : -1;
+    [dom.center.headerClientBtn, dom.center.mobileHeaderClientBtn].forEach((node) => {
+      if (!node) return;
+      node.classList.toggle("is-openable", enabled);
+      if ("disabled" in node) node.disabled = !enabled;
+      node.setAttribute("aria-disabled", enabled ? "false" : "true");
+      node.tabIndex = enabled ? 0 : -1;
+    });
   }
 
   function normalizeTooltipText(value) {
@@ -7083,6 +7161,8 @@
     const timeIconTitle = normalizeTooltipText(dom.center.orderTimeIcon?.getAttribute("title"));
     setNativeTooltip($(".order-col.order-indicators", dom.center.headerOrder), timeIconTitle || timeText);
     setNativeTooltip(dom.center.headerOrder, titleText);
+    setNativeTooltip(dom.center.mobileHeaderClientBtn, joinTooltipParts([clientNameText, clientPhoneText]));
+    setNativeTooltip(dom.center.mobileHeaderOrderBtn, joinTooltipParts([idText, timeText, titleText]));
   }
 
   async function hydrateHeaderOrderDetails(requestId, clientId) {
@@ -8927,6 +9007,8 @@
     if (dom.center.stack) dom.center.stack.classList.toggle("is-selection-mode", active);
     if (dom.center.messagesWrap) dom.center.messagesWrap.classList.toggle("is-selection-mode", active);
     if (dom.center.selectionBar) dom.center.selectionBar.classList.toggle("hidden", !active);
+    syncAdminMobileChatOverlayLayout();
+    schedulePinnedBottomLayoutSync();
 
     if (dom.center.selectionCount) {
       dom.center.selectionCount.textContent = `Выбрано ${count} ${getMessagesWord(count)}`;
@@ -10361,13 +10443,22 @@
       order = null,
       orderId = 0,
     } = {}) => {
+      const safeId = String(id || "вЂ”").trim() || "вЂ”";
+      const safeTime = String(time || "вЂ”").trim() || "вЂ”";
+      const safeClientName = String(clientName || "вЂ”").trim() || "вЂ”";
+      const safeClientPhone = String(clientPhone || "вЂ”").trim() || "вЂ”";
+      const mobileOrderLabel = Number(orderId || 0) > 0 ? `#${safeId}` : "—";
       if (dom.center.orderKind) dom.center.orderKind.textContent = kind;
-      if (dom.center.orderId) dom.center.orderId.textContent = id;
-      if (dom.center.orderTime) dom.center.orderTime.textContent = time;
+      if (dom.center.orderId) dom.center.orderId.textContent = safeId;
+      if (dom.center.mobileOrderId) dom.center.mobileOrderId.textContent = mobileOrderLabel;
+      if (dom.center.orderTime) dom.center.orderTime.textContent = safeTime;
+      if (dom.center.mobileOrderTime) dom.center.mobileOrderTime.textContent = safeTime;
       if (dom.center.orderAddress) dom.center.orderAddress.textContent = address;
       if (dom.center.orderComment) dom.center.orderComment.textContent = comment;
-      if (dom.center.headerName) dom.center.headerName.textContent = clientName;
-      if (dom.center.headerPhone) dom.center.headerPhone.textContent = clientPhone;
+      if (dom.center.headerName) dom.center.headerName.textContent = safeClientName;
+      if (dom.center.mobileHeaderName) dom.center.mobileHeaderName.textContent = safeClientName;
+      if (dom.center.headerPhone) dom.center.headerPhone.textContent = safeClientPhone;
+      if (dom.center.mobileHeaderPhone) dom.center.mobileHeaderPhone.textContent = safeClientPhone;
       setHeaderTimeIcon(order);
       setOrderTotalView(total, paymentCode);
       if (dom.center.orderTitle) dom.center.orderTitle.textContent = title;
@@ -12143,7 +12234,11 @@
   }
 
   function openOrderFromHeader() {
-    const headerOrderId = Number(dom.center.headerOrder && dom.center.headerOrder.getAttribute("data-order-id") || 0);
+    const headerOrderId = Number(
+      (dom.center.mobileHeaderOrderBtn && dom.center.mobileHeaderOrderBtn.getAttribute("data-order-id"))
+      || (dom.center.headerOrder && dom.center.headerOrder.getAttribute("data-order-id"))
+      || 0
+    );
     if (!Number.isFinite(headerOrderId) || headerOrderId <= 0) return;
     const clientsRightApi = getClientsRightApi();
     if (!clientsRightApi || typeof clientsRightApi.openOrderById !== "function") return;
@@ -12171,17 +12266,21 @@
   }
 
   function initHeaderOrderOpenAction() {
-    if (!dom.center.headerOrder || dom.center.headerOrder.dataset.boundOpenOrder === "1") return;
-    dom.center.headerOrder.dataset.boundOpenOrder = "1";
+    [dom.center.headerOrder, dom.center.mobileHeaderOrderBtn].forEach((node) => {
+      if (!node || node.dataset.boundOpenOrder === "1") return;
+      node.dataset.boundOpenOrder = "1";
 
-    dom.center.headerOrder.addEventListener("click", () => {
-      openOrderFromHeader();
-    });
+      node.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        openOrderFromHeader();
+      });
 
-    dom.center.headerOrder.addEventListener("keydown", (event) => {
-      if (event.key !== "Enter" && event.key !== " ") return;
-      event.preventDefault();
-      openOrderFromHeader();
+      node.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        openOrderFromHeader();
+      });
     });
   }
 
@@ -12925,19 +13024,22 @@
       });
     }
 
-    if (dom.center.headerClientBtn && dom.center.headerClientBtn.dataset.bound !== "1") {
-      dom.center.headerClientBtn.dataset.bound = "1";
-      ["pointerdown", "touchstart", "mousedown"].forEach((eventName) => {
-        dom.center.headerClientBtn.addEventListener(eventName, (event) => {
+    [dom.center.headerClientBtn, dom.center.mobileHeaderClientBtn].forEach((node) => {
+      if (!node || node.dataset.bound !== "1") {
+        if (!node) return;
+        node.dataset.bound = "1";
+        ["pointerdown", "touchstart", "mousedown"].forEach((eventName) => {
+          node.addEventListener(eventName, (event) => {
+            event.stopPropagation();
+          }, { passive: eventName === "touchstart" });
+        });
+        node.addEventListener("click", (event) => {
+          event.preventDefault();
           event.stopPropagation();
-        }, { passive: eventName === "touchstart" });
-      });
-      dom.center.headerClientBtn.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        openClientDetailsPanel();
-      });
-    }
+          openClientDetailsPanel();
+        });
+      }
+    });
 
     window.__adminChatMobileApi = {
       openClientsPanel(options = {}) {
@@ -13035,6 +13137,7 @@
     }
     bindSearch();
     initMobileChatControls();
+    bindAdminMobileChatOverlayLayout();
     bindAdminChatKeyboardViewportSync();
     scheduleAdminChatKeyboardViewportSync();
     renderChatHeader();

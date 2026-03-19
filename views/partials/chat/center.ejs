@@ -1,12 +1,53 @@
 <div class="center-stack chat-center-stack">
   <div class="panel toolbar-island chat-header-island">
-    <div class="toolbar chat-header-toolbar">
+    <div class="chat-mobile-subheader">
+      <button
+        type="button"
+        class="chat-mobile-subheader-btn chat-mobile-subheader-btn--back"
+        id="chatMobileClientsBackBtn"
+        aria-label="К списку чатов"
+        title="К списку чатов"
+      >
+        <i class="fas fa-arrow-left"></i>
+      </button>
+
+      <button
+        type="button"
+        class="chat-mobile-subheader-btn chat-mobile-subheader-btn--client"
+        id="chatMobileHeaderClientBtn"
+        aria-label="Открыть профиль клиента"
+        title="Открыть профиль клиента"
+      >
+        <span class="chat-mobile-subheader-client-text">
+          <span class="chat-mobile-subheader-client-name" id="chatMobileHeaderName">—</span>
+          <span class="chat-mobile-subheader-client-phone" id="chatMobileHeaderPhone">—</span>
+        </span>
+        <span class="chat-mobile-subheader-loading hidden" id="chatMobileHeaderLoading" aria-hidden="true" title="Загрузка данных чата">
+          <span class="chat-header-loading-dot"></span>
+          <span class="chat-header-loading-dot"></span>
+          <span class="chat-header-loading-dot"></span>
+        </span>
+      </button>
+
+      <button
+        type="button"
+        class="chat-mobile-subheader-btn chat-mobile-subheader-btn--order"
+        id="chatMobileHeaderOrderBtn"
+        aria-label="Открыть заказ"
+        title="Открыть заказ"
+      >
+        <span class="chat-mobile-subheader-order-id" id="chatMobileOrderId">—</span>
+        <span class="chat-mobile-subheader-order-time" id="chatMobileOrderTime">—</span>
+      </button>
+    </div>
+
+    <div class="toolbar chat-header-toolbar chat-header-toolbar--desktop">
       <div class="chat-main-order order-row js-order" id="chatHeaderOrder" role="button" tabindex="0" aria-label="Открыть заказ">
         <div class="chat-main-order-top">
           <button
             type="button"
             class="chat-mobile-clients-back"
-            id="chatMobileClientsBackBtn"
+            id="chatHeaderLegacyBackBtn"
             aria-label="К списку чатов"
             title="К списку чатов"
           >
