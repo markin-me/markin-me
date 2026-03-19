@@ -342,6 +342,19 @@
 
     shell.innerHTML = "";
     shell.appendChild(bottomNav);
+
+    const chatLink = bottomNav.querySelector('.admin-mobile-nav-link[data-nav-key="chat"]');
+    if (chatLink && chatLink.dataset.mobileChatToggleBound !== "1") {
+      chatLink.dataset.mobileChatToggleBound = "1";
+      chatLink.addEventListener("click", function (event) {
+        if (activePage !== "chat" || !isMobile()) return;
+        const chatMobileApi = window.__adminChatMobileApi;
+        if (!chatMobileApi || typeof chatMobileApi.toggleClientsPanel !== "function") return;
+        event.preventDefault();
+        chatMobileApi.toggleClientsPanel();
+      });
+    }
+
     return bottomNav;
   }
 

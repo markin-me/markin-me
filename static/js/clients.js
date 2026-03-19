@@ -23,6 +23,17 @@
   const SHARED_ORDER_DETAILS_CACHE_KEY = `dashboard:orders:details:v1:${tenantId}`;
   const SHARED_ORDER_DETAILS_CACHE_TTL_MS = 15 * 60 * 1000;
   const SHARED_ORDER_DETAILS_CACHE_MAX = 400;
+  const CHAT_MOBILE_VIEW_STORAGE_KEY = `dashboard:chat:mobile:view:v1:${tenantId}`;
+
+  function writePersistedMobileChatView(view) {
+    if (!document.body || !document.body.classList.contains("page-chat")) return String(view || "");
+    const nextView = String(view || "").trim().toLowerCase();
+    const safeView = nextView === "clients" || nextView === "right" ? nextView : "center";
+    try {
+      sessionStorage.setItem(CHAT_MOBILE_VIEW_STORAGE_KEY, safeView);
+    } catch {}
+    return safeView;
+  }
 
   async function apiJson(url, opts = {}) {
     const token = localStorage.getItem('authToken');
@@ -251,6 +262,7 @@
   // client tabs (top-level, switching between clients)
   const clientTabsHeader = $("#clientTabsHeader");
   const clientTabs = $("#clientTabs");
+  const clientMobileSheetClose = $("#clientMobileSheetClose");
   const clientEmpty = $("#clientEmpty");
   const clientInfoWrap = $("#clientInfoWrap");
   const clientOrderInfoWrap = $("#clientOrderInfoWrap");
@@ -293,6 +305,7 @@
   const sheet = $("#clientSheet");
   const sheetBackdrop = $("#clientSheetBackdrop");
   const sheetClose = $("#clientSheetClose");
+  const chatRightSheetHost = document.querySelector("body.page-chat .page-col-right");
   const sheetInfo = {
     title: $("#sheetClientInfoTitle"),
     meta: $("#sheetClientInfoMeta"),
@@ -1308,7 +1321,29 @@
     return dt.toLocaleString("ru-RU", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
   }
 
-  function openSheet() {
+  function openSheet(options = {}) {
+    const persistState = options.persistState !== false;
+    if (isChatRightSheetMode()) {
+      try {
+        if (window.__adminChatMobileApi && typeof window.__adminChatMobileApi.closeClientsPanel === "function") {
+          window.__adminChatMobileApi.closeClientsPanel({ persistState: false });
+        } else {
+          document.body.classList.remove("chat-mobile-left-open");
+        }
+      } catch {
+        document.body.classList.remove("chat-mobile-left-open");
+      }
+      if (sheetBackdrop) {
+        sheetBackdrop.classList.remove("is-active");
+        sheetBackdrop.setAttribute("aria-hidden", "true");
+      }
+      if (chatRightSheetHost) {
+        chatRightSheetHost.setAttribute("aria-hidden", "false");
+      }
+      document.body.classList.add("sheet-open", "chat-mobile-right-open");
+      if (persistState) writePersistedMobileChatView("right");
+      return;
+    }
     if (!sheet || !sheetBackdrop) return;
     sheet.classList.add("is-open");
     sheetBackdrop.classList.add("is-active");
@@ -1317,13 +1352,33 @@
     document.body.classList.add("sheet-open");
   }
 
-  function closeSheet() {
+  function closeSheet(options = {}) {
+    const persistState = options.persistState !== false;
+    if (document.body.classList.contains("chat-mobile-right-open")) {
+      document.body.classList.remove("chat-mobile-right-open");
+      if (sheetBackdrop) {
+        sheetBackdrop.classList.remove("is-active");
+        sheetBackdrop.setAttribute("aria-hidden", "true");
+      }
+      if (chatRightSheetHost) {
+        chatRightSheetHost.setAttribute("aria-hidden", "true");
+      }
+      document.body.classList.remove("sheet-open");
+      if (persistState) {
+        writePersistedMobileChatView(document.body.classList.contains("chat-mobile-left-open") ? "clients" : "center");
+      }
+      return;
+    }
     if (!sheet || !sheetBackdrop) return;
     sheet.classList.remove("is-open");
     sheetBackdrop.classList.remove("is-active");
     sheet.setAttribute("aria-hidden", "true");
     sheetBackdrop.setAttribute("aria-hidden", "true");
     document.body.classList.remove("sheet-open");
+  }
+
+  function isChatRightSheetMode() {
+    return !!(chatRightSheetHost && isMobile() && document.body && document.body.classList.contains("page-chat"));
   }
 
   function setTextAll(nodes, text) {
@@ -6885,6 +6940,21 @@
       .sort((a, b) => (Number(a?.sort || 0) - Number(b?.sort || 0)) || (Number(a.id) - Number(b.id)));
   }
 
+  function getOrderStatusMeta(order) {
+    const statusId = Number(order?.status_id || order?.statusId || 0);
+    if (Number.isFinite(statusId) && statusId > 0) {
+      const matched = (Array.isArray(state.orderStatuses) ? state.orderStatuses : [])
+        .find((status) => Number(status?.id) === statusId);
+      if (matched) return matched;
+    }
+    return {
+      id: statusId,
+      title: String(order?.status_title || order?.statusTitle || ""),
+      color: String(order?.status_color || order?.statusColor || ""),
+      icon: String(order?.status_icon || order?.statusIcon || ""),
+    };
+  }
+
   async function ensureOrderStatusesLoaded(force = false) {
     if (state.orderStatusesLoading) return;
     if (!force && state.orderStatusesLoaded) return;
@@ -7345,7 +7415,7 @@
     if (opts.forceRefresh === true) {
       activateOrderById(id).catch(console.error);
     }
-    if (isMobile()) openSheet();
+    if (isMobile() && opts.skipMobileSheet !== true) openSheet();
   }
 
   async function findClientIdByPhone(phoneValue) {
@@ -7504,12 +7574,13 @@
   // Sheet events
   // -----------------------------
   if (sheetClose) sheetClose.addEventListener("click", closeSheet);
+  if (clientMobileSheetClose) clientMobileSheetClose.addEventListener("click", closeSheet);
   if (sheetBackdrop) sheetBackdrop.addEventListener("click", closeSheet);
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") closeSheet();
   });
   window.addEventListener("resize", () => {
-    if (!isMobile()) closeSheet();
+    if (!isMobile()) closeSheet({ persistState: false });
   });
 
   // -----------------------------
@@ -8058,8 +8129,8 @@
     selectClientById(id, preferredTitle = "", options = {}) {
       return selectClient(id, preferredTitle, options);
     },
-    selectGuestChatClient(id, preferredTitle = "") {
-      return selectClient(id, preferredTitle, { chatGuest: true });
+    selectGuestChatClient(id, preferredTitle = "", options = {}) {
+      return selectClient(id, preferredTitle, { ...(options || {}), chatGuest: true });
     },
     refreshClients() {
       return loadClients();
@@ -8069,6 +8140,18 @@
     },
     openOrderById(orderId, options = {}) {
       return openOrderTab(orderId, options);
+    },
+    openMobileSheet(options = {}) {
+      return openSheet(options);
+    },
+    ensureOrderStatusesLoaded(force = false) {
+      return ensureOrderStatusesLoaded(force);
+    },
+    getOrderStatusMeta(order) {
+      return getOrderStatusMeta(order);
+    },
+    closeMobileSheet(options = {}) {
+      return closeSheet(options);
     },
   };
 })();

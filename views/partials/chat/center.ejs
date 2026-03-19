@@ -2,50 +2,71 @@
   <div class="panel toolbar-island chat-header-island">
     <div class="toolbar chat-header-toolbar">
       <div class="chat-main-order order-row js-order" id="chatHeaderOrder" role="button" tabindex="0" aria-label="Открыть заказ">
-        <div class="order-col order-id chat-main-order-idcol">
-          <div class="order-id-num" id="chatOrderId">—</div>
-          <div class="order-id-time" id="chatOrderTime">—</div>
-        </div>
+        <div class="chat-main-order-top">
+          <button
+            type="button"
+            class="chat-mobile-clients-back"
+            id="chatMobileClientsBackBtn"
+            aria-label="К списку чатов"
+            title="К списку чатов"
+          >
+            <i class="fas fa-arrow-left"></i>
+          </button>
+          <div class="order-col order-id chat-main-order-idcol">
+            <div class="order-id-num" id="chatOrderId">—</div>
+            <div class="order-id-time" id="chatOrderTime">—</div>
+          </div>
 
-        <div class="order-col order-indicators">
-          <span class="order-time-icon" id="chatOrderTimeIcon" aria-hidden="true">
-            <i class="fas fa-calendar-day"></i>
-          </span>
-        </div>
-
-        <div class="order-col order-client">
-          <div class="order-client-name">
-            <i class="fas fa-user"></i>
-            <span class="order-client-name-text" id="chatHeaderName">—</span>
-            <span class="chat-header-loading hidden" id="chatHeaderLoading" aria-hidden="true" title="Загрузка данных чата">
-              <span class="chat-header-loading-dot"></span>
-              <span class="chat-header-loading-dot"></span>
-              <span class="chat-header-loading-dot"></span>
+          <div class="order-col order-indicators">
+            <span class="order-time-icon" id="chatOrderTimeIcon" aria-hidden="true">
+              <i class="fas fa-calendar-day"></i>
             </span>
           </div>
-          <div class="order-client-phone muted">
-            <i class="fas fa-phone"></i>
-            <span class="order-client-phone-text" id="chatHeaderPhone">—</span>
+
+          <div class="order-col order-stage">
+            <span class="chat-main-order-status" id="chatOrderStatus">—</span>
+          </div>
+
+          <div class="order-col order-total">
+            <span class="order-payment-btn order-payment-cash chat-main-order-total is-empty" id="chatOrderTotal">—</span>
           </div>
         </div>
 
-        <div class="order-col order-address">
-          <div class="order-address-line">
-            <i class="fas fa-map-marker-alt"></i>
-            <span id="chatOrderAddress">—</span>
+        <div class="chat-main-order-bottom">
+          <div class="order-col order-client">
+            <div class="order-client-name">
+              <i class="fas fa-user"></i>
+              <button
+                type="button"
+                class="chat-header-client-link"
+                id="chatHeaderClientBtn"
+                aria-label="Открыть профиль клиента"
+                title="Открыть профиль клиента"
+              >
+                <span class="order-client-name-text" id="chatHeaderName">—</span>
+              </button>
+              <span class="chat-header-loading hidden" id="chatHeaderLoading" aria-hidden="true" title="Загрузка данных чата">
+                <span class="chat-header-loading-dot"></span>
+                <span class="chat-header-loading-dot"></span>
+                <span class="chat-header-loading-dot"></span>
+              </span>
+            </div>
+            <div class="order-client-phone muted">
+              <i class="fas fa-phone"></i>
+              <span class="order-client-phone-text" id="chatHeaderPhone">—</span>
+            </div>
           </div>
-          <div class="order-address-comment muted">
-            <i class="far fa-comment"></i>
-            <span id="chatOrderComment">—</span>
+
+          <div class="order-col order-address">
+            <div class="order-address-line">
+              <i class="fas fa-map-marker-alt"></i>
+              <span id="chatOrderAddress">—</span>
+            </div>
+            <div class="order-address-comment muted">
+              <i class="far fa-comment"></i>
+              <span id="chatOrderComment">—</span>
+            </div>
           </div>
-        </div>
-
-        <div class="order-col order-stage">
-          <span class="chat-main-order-status" id="chatOrderStatus">—</span>
-        </div>
-
-        <div class="order-col order-total">
-          <span class="order-payment-btn order-payment-cash chat-main-order-total is-empty" id="chatOrderTotal">—</span>
         </div>
 
         <div class="hidden" id="chatOrderTitle" aria-hidden="true"></div>
@@ -190,6 +211,24 @@
 </div>
 
 <div class="chat-message-menu hidden" id="chatMessageContextMenu" role="menu" aria-label="Действия с сообщением">
+  <div class="chat-message-menu-reactions" role="group" aria-label="Реакции">
+    <button type="button" class="chat-message-menu-reaction" data-chat-msg-reaction-slot="quick"></button>
+    <button type="button" class="chat-message-menu-reaction" data-chat-msg-reaction-slot="quick"></button>
+    <button type="button" class="chat-message-menu-reaction" data-chat-msg-reaction-slot="quick"></button>
+    <button type="button" class="chat-message-menu-reaction" data-chat-msg-reaction-slot="quick"></button>
+    <button type="button" class="chat-message-menu-reaction" data-chat-msg-reaction-slot="quick"></button>
+    <button type="button" class="chat-message-menu-reaction" data-chat-msg-reaction-slot="quick"></button>
+    <button type="button" class="chat-message-menu-reaction" data-chat-msg-reaction-slot="quick"></button>
+    <button type="button" class="chat-message-menu-reaction chat-message-menu-reaction--extra" data-chat-msg-reaction-slot="extra"></button>
+    <button type="button" class="chat-message-menu-reaction chat-message-menu-reaction--extra" data-chat-msg-reaction-slot="extra"></button>
+    <button type="button" class="chat-message-menu-reaction chat-message-menu-reaction--extra" data-chat-msg-reaction-slot="extra"></button>
+    <button type="button" class="chat-message-menu-reaction chat-message-menu-reaction--extra" data-chat-msg-reaction-slot="extra"></button>
+    <button type="button" class="chat-message-menu-reaction chat-message-menu-reaction--extra" data-chat-msg-reaction-slot="extra"></button>
+    <button type="button" class="chat-message-menu-reaction chat-message-menu-reaction--extra" data-chat-msg-reaction-slot="extra"></button>
+    <button type="button" class="chat-message-menu-reaction chat-message-menu-reaction--toggle" data-chat-msg-reaction="__toggle_more__" aria-label="Показать ещё реакции" aria-expanded="false">
+      <i class="fas fa-chevron-down" aria-hidden="true"></i>
+    </button>
+  </div>
   <button type="button" class="chat-message-menu-btn" data-chat-msg-action="reply">
     <i class="fas fa-reply"></i>
     <span>Ответить</span>

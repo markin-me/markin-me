@@ -4496,7 +4496,13 @@ function makeChatTempRouter() {
       conn = await db.getConnection();
       await conn.beginTransaction();
 
-      const updatedAt = new Date();
+      const shouldPreserveUpdatedAt = mergedMessages.length === 0 && !!existingMetaRow?.updated_at;
+      const preservedUpdatedAt = shouldPreserveUpdatedAt
+        ? new Date(existingMetaRow.updated_at)
+        : null;
+      const updatedAt = preservedUpdatedAt && !Number.isNaN(preservedUpdatedAt.getTime())
+        ? preservedUpdatedAt
+        : new Date();
       const readAt = new Date();
       let changedIds = hasFilterIds ? ids.slice() : [];
 

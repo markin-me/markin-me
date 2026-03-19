@@ -4,6 +4,7 @@
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
   const CHAT_STORAGE_KEY = "dashboard:client-chat:v1";
+  const CHAT_MOBILE_VIEW_STORAGE_KEY = `dashboard:chat:mobile:view:v1:${getTenantId()}`;
   const CHAT_ATTACHMENT_DRAFT_DB_NAME = "markin-me-chat-attachment-drafts";
   const CHAT_ATTACHMENT_DRAFT_DB_VERSION = 1;
   const CHAT_ATTACHMENT_DRAFT_STORE = "attachmentDrafts";
@@ -60,6 +61,8 @@
   const CHAT_THREAD_LOAD_MORE_THRESHOLD_PX = 20;
   const CHAT_TOUCH_CONTEXT_LONG_PRESS_MS = 430;
   const CHAT_TOUCH_CONTEXT_MOVE_CANCEL_PX = 9;
+  const CHAT_TOUCH_SWIPE_REPLY_TRIGGER_PX = 72;
+  const CHAT_TOUCH_SWIPE_MAX_SHIFT_PX = 96;
   const CHAT_REACTION_PENDING_TTL_MS = 10000;
   const CHAT_DROP_IMAGE_EXT_RE = /\.(png|jpe?g|webp|gif|bmp|svg|avif|heic|heif)$/i;
   const MAX_IMAGE_DATA_URL_LENGTH = 50 * 1024 * 1024;
@@ -172,13 +175,17 @@
 
   const dom = {
     left: {
+      panel: document.querySelector(".page-col-left"),
       search: $("#chatClientsSearch"),
       list: $("#chatClientsList"),
       empty: $("#chatClientsEmpty"),
+      mobileCloseBtn: $("#chatMobileClientsCloseBtn"),
     },
     center: {
       stack: $(".chat-center-stack"),
+      mobileClientsBackBtn: $("#chatMobileClientsBackBtn"),
       headerOrder: $("#chatHeaderOrder"),
+      headerClientBtn: $("#chatHeaderClientBtn"),
       headerName: $("#chatHeaderName"),
       headerPhone: $("#chatHeaderPhone"),
       headerLoading: $("#chatHeaderLoading"),
@@ -349,6 +356,184 @@
   const pendingThreadReactionPopKeys = new Set();
   const pendingThreadReactionOverrides = new Map();
   const remoteClientsPageRequests = new Map();
+  let activeClientSwipeRow = null;
+  let suppressClientRowClickUntil = 0;
+
+  function getClientSwipeRowMain(row) {
+    return row ? $(".chat-client-row-main", row) : null;
+  }
+
+  function getClientSwipeWidth(row) {
+    const actions = row ? $(".chat-client-row-actions", row) : null;
+    if (!actions) return 0;
+    const visibleButtons = $$(".chat-client-row-action", actions)
+      .filter((btn) => btn && !btn.classList.contains("hidden"));
+    if (!visibleButtons.length) return 0;
+    return visibleButtons.reduce((sum, btn) => {
+      const width = Math.max(
+        92,
+        Math.round(btn.getBoundingClientRect().width || btn.offsetWidth || 92)
+      );
+      return sum + width;
+    }, 0);
+  }
+
+  function closeClientSwipeRow(row, options = {}) {
+    const targetRow = row && row.isConnected ? row : null;
+    if (!targetRow) {
+      if (activeClientSwipeRow === row) activeClientSwipeRow = null;
+      return false;
+    }
+    const main = getClientSwipeRowMain(targetRow);
+    if (!main) return false;
+    const wasOpen = targetRow.classList.contains("is-swipe-open") || targetRow.classList.contains("is-swipe-dragging");
+    targetRow.classList.remove("is-swipe-open", "is-swipe-dragging");
+    if (options.immediate === true) {
+      targetRow.classList.remove("is-swipe-returning");
+      main.style.transform = "";
+    } else {
+      targetRow.classList.add("is-swipe-returning");
+      main.style.transform = "";
+      window.setTimeout(() => {
+        if (targetRow.isConnected) targetRow.classList.remove("is-swipe-returning");
+      }, 180);
+    }
+    delete targetRow.dataset.swipeOffset;
+    if (activeClientSwipeRow === targetRow) activeClientSwipeRow = null;
+    return wasOpen;
+  }
+
+  function closeAllClientSwipeRows(exceptRow = null, options = {}) {
+    if (!dom.left.list) {
+      activeClientSwipeRow = null;
+      return;
+    }
+    $$(".chat-client-row.is-swipe-open, .chat-client-row.is-swipe-dragging", dom.left.list)
+      .forEach((row) => {
+        if (exceptRow && row === exceptRow) return;
+        closeClientSwipeRow(row, options);
+      });
+  }
+
+  function openClientSwipeRow(row) {
+    const targetRow = row && row.isConnected ? row : null;
+    if (!targetRow) return false;
+    const main = getClientSwipeRowMain(targetRow);
+    const swipeWidth = getClientSwipeWidth(targetRow);
+    if (!main || swipeWidth <= 0) return false;
+    closeAllClientSwipeRows(targetRow, { immediate: true });
+    targetRow.classList.remove("is-swipe-dragging", "is-swipe-returning");
+    targetRow.classList.add("is-swipe-open");
+    targetRow.dataset.swipeOffset = String(-swipeWidth);
+    main.style.transform = `translateX(${-swipeWidth}px)`;
+    activeClientSwipeRow = targetRow;
+    return true;
+  }
+
+  function bindClientRowSwipe(row, client) {
+    if (!row || row.dataset.swipeBound === "1") return;
+    row.dataset.swipeBound = "1";
+    const main = getClientSwipeRowMain(row);
+    const actions = $(".chat-client-row-actions", row);
+    if (!main || !actions) return;
+
+    let touchId = null;
+    let startX = 0;
+    let startY = 0;
+    let startOffset = 0;
+    let currentOffset = 0;
+    let gestureActive = false;
+    let gestureSwiping = false;
+
+    const finishSwipeGesture = (cancelled = false) => {
+      if (!gestureActive && !gestureSwiping) return;
+      const swipeWidth = getClientSwipeWidth(row);
+      const shouldOpen = !cancelled && swipeWidth > 0 && currentOffset <= (-swipeWidth * 0.45);
+      row.classList.remove("is-swipe-dragging");
+      if (gestureSwiping) suppressClientRowClickUntil = Date.now() + 220;
+      if (shouldOpen) {
+        openClientSwipeRow(row);
+      } else {
+        closeClientSwipeRow(row);
+      }
+      touchId = null;
+      startX = 0;
+      startY = 0;
+      startOffset = 0;
+      currentOffset = 0;
+      gestureActive = false;
+      gestureSwiping = false;
+    };
+
+    main.addEventListener("touchstart", (event) => {
+      if (!isChatMobileViewport()) return;
+      if (event.touches.length !== 1) return;
+      const touch = event.touches[0];
+      const swipeWidth = getClientSwipeWidth(row);
+      if (swipeWidth <= 0) return;
+      touchId = touch.identifier;
+      startX = touch.clientX;
+      startY = touch.clientY;
+      startOffset = row.classList.contains("is-swipe-open") ? -swipeWidth : 0;
+      currentOffset = startOffset;
+      gestureActive = true;
+      gestureSwiping = false;
+    }, { passive: true });
+
+    main.addEventListener("touchmove", (event) => {
+      if (!gestureActive) return;
+      const touch = Array.from(event.touches || []).find((item) => item.identifier === touchId) || event.touches[0];
+      if (!touch) return;
+      const dx = touch.clientX - startX;
+      const dy = touch.clientY - startY;
+      const swipeWidth = getClientSwipeWidth(row);
+      if (swipeWidth <= 0) {
+        finishSwipeGesture(true);
+        return;
+      }
+
+      if (!gestureSwiping) {
+        if (Math.abs(dx) < 10) return;
+        if (Math.abs(dy) > Math.abs(dx)) {
+          finishSwipeGesture(true);
+          return;
+        }
+        closeAllClientSwipeRows(row, { immediate: true });
+        gestureSwiping = true;
+        row.classList.add("is-swipe-dragging");
+        row.classList.remove("is-swipe-returning");
+      }
+
+      event.preventDefault();
+      currentOffset = Math.max(-swipeWidth, Math.min(0, startOffset + dx));
+      row.dataset.swipeOffset = String(currentOffset);
+      main.style.transform = `translateX(${currentOffset}px)`;
+    }, { passive: false });
+
+    main.addEventListener("touchend", () => {
+      finishSwipeGesture(false);
+    }, { passive: true });
+
+    main.addEventListener("touchcancel", () => {
+      finishSwipeGesture(true);
+    }, { passive: true });
+
+    actions.addEventListener("click", (event) => {
+      const actionBtn = event.target.closest("[data-chat-client-action-inline]");
+      if (!actionBtn) return;
+      event.preventDefault();
+      event.stopPropagation();
+      closeClientSwipeRow(row, { immediate: true });
+      const action = String(actionBtn.getAttribute("data-chat-client-action-inline") || "");
+      if (action === "clear") {
+        clearClientChat(client.id);
+        return;
+      }
+      if (action === "delete-guest") {
+        deleteGuestClientChat(client.id);
+      }
+    });
+  }
 
   function schedulePinnedBottomLayoutSync() {
     if (pinnedBottomLayoutSyncRaf) return;
@@ -381,6 +566,201 @@
     const hasCoarsePointer = typeof window.matchMedia === "function"
       && window.matchMedia("(pointer: coarse)").matches;
     return hasTouchPoints || hasCoarsePointer;
+  }
+
+  function isIOSMobileBrowser() {
+    const ua = String((navigator && navigator.userAgent) || "");
+    const platform = String((navigator && navigator.platform) || "");
+    const maxTouchPoints = Number(navigator.maxTouchPoints || 0);
+    if (!ua && !platform) return false;
+    if (/iPhone|iPad|iPod/i.test(ua) || /iPhone|iPad|iPod/i.test(platform)) return true;
+    return /Macintosh/i.test(ua) && maxTouchPoints > 1;
+  }
+
+  function focusChatTextField(field, options = {}) {
+    const node = field || null;
+    if (!node || typeof node.focus !== "function") return false;
+    if ("disabled" in node && node.disabled) return false;
+    const preventScroll = options.preventScroll !== false;
+    try {
+      if (preventScroll) {
+        node.focus({ preventScroll: true });
+      } else {
+        node.focus();
+      }
+    } catch {
+      try {
+        node.focus();
+      } catch {
+        return false;
+      }
+    }
+    if (options.moveCaretToEnd !== false && typeof node.setSelectionRange === "function") {
+      const pos = String(node.value || "").length;
+      try {
+        node.setSelectionRange(pos, pos);
+      } catch {}
+    }
+    return document.activeElement === node;
+  }
+
+  function focusComposerInput(options = {}) {
+    if (!dom.center.input) return false;
+    const focused = focusChatTextField(dom.center.input, options);
+    if (!isIOSMobileBrowser() || !shouldUseNativeMobileEmojiKeyboard()) return focused;
+    const schedule = typeof window.requestAnimationFrame === "function"
+      ? window.requestAnimationFrame.bind(window)
+      : (cb) => window.setTimeout(cb, 16);
+    schedule(() => {
+      focusChatTextField(dom.center.input, options);
+    });
+    return focused;
+  }
+
+  function shouldGuardIOSNativeTextFocus(node) {
+    if (!node || typeof node.focus !== "function") return false;
+    if (!isIOSMobileBrowser() || !shouldUseNativeMobileEmojiKeyboard()) return false;
+    if (document.activeElement === node) return false;
+    if ("disabled" in node && node.disabled) return false;
+    return true;
+  }
+
+  function guardIOSNativeTextFocus(event) {
+    const node = event && event.currentTarget ? event.currentTarget : null;
+    if (!shouldGuardIOSNativeTextFocus(node)) return;
+    event.preventDefault();
+    focusChatTextField(node, { moveCaretToEnd: true });
+    const schedule = typeof window.requestAnimationFrame === "function"
+      ? window.requestAnimationFrame.bind(window)
+      : (cb) => window.setTimeout(cb, 16);
+    schedule(() => {
+      focusChatTextField(node, { moveCaretToEnd: true });
+    });
+  }
+
+  function isChatMobileViewport() {
+    return typeof window.matchMedia === "function"
+      ? window.matchMedia("(max-width: 768px)").matches
+      : window.innerWidth <= 768;
+  }
+
+  function readPersistedMobileChatView() {
+    if (!document.body || !document.body.classList.contains("page-chat")) return "";
+    try {
+      const raw = String(sessionStorage.getItem(CHAT_MOBILE_VIEW_STORAGE_KEY) || "").trim().toLowerCase();
+      if (raw === "clients" || raw === "right" || raw === "center") return raw;
+    } catch {}
+    return "";
+  }
+
+  function writePersistedMobileChatView(view) {
+    if (!document.body || !document.body.classList.contains("page-chat")) return String(view || "");
+    const nextView = String(view || "").trim().toLowerCase();
+    const safeView = nextView === "clients" || nextView === "right" ? nextView : "center";
+    try {
+      sessionStorage.setItem(CHAT_MOBILE_VIEW_STORAGE_KEY, safeView);
+    } catch {}
+    return safeView;
+  }
+
+  function syncMobileChatView(view, options = {}) {
+    if (!document.body || !document.body.classList.contains("page-chat")) return "center";
+    if (!isChatMobileViewport()) {
+      document.body.classList.remove("chat-mobile-left-open", "chat-mobile-right-open");
+      return "center";
+    }
+    const requestedView = String(view || "").trim().toLowerCase();
+    let nextView = requestedView === "clients" || requestedView === "right" ? requestedView : "center";
+    if (nextView === "center" && Number(state.activeClientId || 0) <= 0) {
+      nextView = "clients";
+    }
+    if (nextView === "right" && Number(state.activeClientId || 0) <= 0) {
+      nextView = "clients";
+    }
+    document.body.classList.toggle("chat-mobile-left-open", nextView === "clients");
+    document.body.classList.toggle("chat-mobile-right-open", nextView === "right");
+    if (nextView !== "right") {
+      document.body.classList.remove("sheet-open");
+    }
+    if (options.persistState !== false) {
+      writePersistedMobileChatView(nextView);
+    }
+    if (nextView === "clients") {
+      restoreClientsListScrollPosition({ defer: true });
+    }
+    return nextView;
+  }
+
+  function syncMobileChatViewFromState(options = {}) {
+    if (!document.body || !document.body.classList.contains("page-chat")) return "center";
+    if (!isChatMobileViewport()) {
+      document.body.classList.remove("chat-mobile-left-open", "chat-mobile-right-open");
+      return "center";
+    }
+    const persistedView = readPersistedMobileChatView();
+    const hasActiveClient = Number(state.activeClientId || 0) > 0;
+    const fallbackView = hasActiveClient ? "center" : "clients";
+    const preferredView = options.view ? String(options.view) : persistedView || fallbackView;
+    return syncMobileChatView(preferredView, options);
+  }
+
+  function openClientsPanel(options = {}) {
+    return syncMobileChatView("clients", options);
+  }
+
+  function closeClientsPanel(options = {}) {
+    const fallbackView = Number(state.activeClientId || 0) > 0 ? "center" : "clients";
+    return syncMobileChatView(fallbackView, options);
+  }
+
+  function toggleClientsPanel(options = {}) {
+    if (!document.body || !document.body.classList.contains("page-chat")) return "center";
+    const isOpen = document.body.classList.contains("chat-mobile-left-open");
+    return isOpen ? closeClientsPanel(options) : openClientsPanel(options);
+  }
+
+  function openClientDetailsPanel(options = {}) {
+    const activeClientId = Number(state.activeClientId || 0);
+    if (activeClientId <= 0) return "clients";
+    const clientsRightApi = getClientsRightApi();
+    if (clientsRightApi) {
+      const selectedFromList = state.clients.find((client) => Number(client?.id || 0) === activeClientId) || null;
+      const isGuestClient = isGuestChatClient(selectedFromList);
+      if (
+        isGuestClient
+        && typeof clientsRightApi.selectGuestChatClient === "function"
+      ) {
+        clientsRightApi.selectGuestChatClient(
+          activeClientId,
+          selectedFromList?.name || "",
+          { skipMobileSheet: true }
+        ).catch(console.error);
+      } else if (typeof clientsRightApi.selectClientById === "function") {
+        clientsRightApi.selectClientById(
+          activeClientId,
+          selectedFromList?.name || "",
+          {
+            chatGuest: isGuestClient,
+            skipMobileSheet: true,
+          }
+        ).catch(console.error);
+      }
+
+      if (typeof clientsRightApi.openMobileSheet === "function") {
+        clientsRightApi.openMobileSheet(options);
+        return "right";
+      }
+    }
+    return syncMobileChatView("right", options);
+  }
+
+  function closeClientDetailsPanel(options = {}) {
+    const clientsRightApi = getClientsRightApi();
+    if (clientsRightApi && typeof clientsRightApi.closeMobileSheet === "function") {
+      clientsRightApi.closeMobileSheet(options);
+      return "center";
+    }
+    return syncMobileChatView(Number(state.activeClientId || 0) > 0 ? "center" : "clients", options);
   }
 
   function triggerReactionFeedback() {
@@ -423,6 +803,7 @@
   let suppressTouchClickUntil = 0;
   const CHAT_TOUCH_MENU_INTERACTION_GUARD_MS = 380;
   let reactionBarAnchorRect = null;
+  let contextMenuAnchorPoint = null;
   let activeThreadSsePullTimer = 0;
   let activeThreadSsePullInFlight = false;
   let activeThreadSsePullPending = false;
@@ -3638,6 +4019,29 @@
     scheduleUiStatePersist();
   }
 
+  function restoreClientsListScrollPosition(options = {}) {
+    if (!dom.left.list) return false;
+    const apply = () => {
+      if (!dom.left.list) return false;
+      const targetTop = toStoredScrollTop(state.store?.ui?.clientsListScrollTop);
+      const maxTop = Math.max(0, dom.left.list.scrollHeight - dom.left.list.clientHeight);
+      dom.left.list.scrollTop = Math.max(0, Math.min(targetTop, maxTop));
+      return true;
+    };
+    if (options.defer === true) {
+      const schedule = typeof window.requestAnimationFrame === "function"
+        ? window.requestAnimationFrame.bind(window)
+        : (cb) => window.setTimeout(cb, 16);
+      schedule(() => {
+        schedule(() => {
+          apply();
+        });
+      });
+      return true;
+    }
+    return apply();
+  }
+
   function syncUiStateIntoStore() {
     const ui = ensureUiStoreState();
     ui.threadScrollTopByClient = sanitizeStoredThreadScrollTopByClient(state.threadScrollTopByClient);
@@ -4892,12 +5296,7 @@
       text: getMessagePreviewText(msg),
     };
     renderComposerReply();
-
-    if (dom.center.input) {
-      dom.center.input.focus();
-      const pos = dom.center.input.value.length;
-      dom.center.input.setSelectionRange(pos, pos);
-    }
+    focusComposerInput({ moveCaretToEnd: true });
     syncComposerRichPreview({});
   }
 
@@ -5952,6 +6351,15 @@
     dom.center.headerOrder.tabIndex = canOpen ? 0 : -1;
   }
 
+  function setHeaderClientLinkState(canOpen) {
+    if (!dom.center.headerClientBtn) return;
+    const enabled = canOpen === true;
+    dom.center.headerClientBtn.classList.toggle("is-openable", enabled);
+    dom.center.headerClientBtn.disabled = !enabled;
+    dom.center.headerClientBtn.setAttribute("aria-disabled", enabled ? "false" : "true");
+    dom.center.headerClientBtn.tabIndex = enabled ? 0 : -1;
+  }
+
   function normalizeTooltipText(value) {
     return String(value || "").replace(/\s+/g, " ").trim();
   }
@@ -6216,13 +6624,14 @@
           ? "Отправлено"
           : "";
     const unreadText = unread > 99 ? "99+" : String(unread);
+    const canDeleteGuest = isGuestChatClient(client);
 
-    const row = document.createElement("button");
-    row.type = "button";
+    const row = document.createElement("div");
     row.className = `chat-client-row${active ? " is-active" : ""}`;
     row.setAttribute("data-client-id", String(client.id));
     row.innerHTML = `
-      <span class="chat-client-main">
+      <button type="button" class="chat-client-row-main" aria-label="${escapeHtml(client.name || `РљР»РёРµРЅС‚ #${client.id}`)}">
+        <span class="chat-client-main">
         <span class="chat-client-top">
           <span class="chat-client-name">${escapeHtml(client.name || `Клиент #${client.id}`)}</span>
           ${status || timeText
@@ -6238,7 +6647,12 @@
           <span class="chat-client-preview${getClientTypingPreviewText(client.id) ? " is-typing" : ""}">${escapeHtml(preview)}</span>
           ${unread > 0 ? `<span class="chat-client-unread">${escapeHtml(unreadText)}</span>` : ""}
         </span>
-      </span>
+        </span>
+      </button>
+      <div class="chat-client-row-actions" aria-hidden="true">
+        <button type="button" class="chat-client-row-action is-clear" data-chat-client-action-inline="clear">Очистить</button>
+        <button type="button" class="chat-client-row-action is-delete${canDeleteGuest ? "" : " hidden"}" data-chat-client-action-inline="delete-guest">Удалить</button>
+      </div>
     `;
 
     const previewEl = $(".chat-client-preview", row);
@@ -6246,19 +6660,42 @@
       renderEmojiMessageText(previewEl, preview, "chat-emoji-glyph chat-emoji-glyph--preview");
     }
 
-    row.addEventListener("click", () => {
+    const mainBtn = $(".chat-client-row-main", row);
+    if (mainBtn) {
+      mainBtn.addEventListener("click", (event) => {
+        if (Date.now() < suppressClientRowClickUntil) {
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
+        if (row.classList.contains("is-swipe-open")) {
+          event.preventDefault();
+          event.stopPropagation();
+          closeClientSwipeRow(row);
+          return;
+        }
+        closeAllClientSwipeRows(null, { immediate: true });
+        hideClientContextMenu();
+        selectClient(client.id);
+      });
+      mainBtn.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+        showClientContextMenu(event.clientX, event.clientY, client.id);
+      });
+    }
+
+    row.addEventListener("click", (event) => {
+      if (event.target.closest(".chat-client-row-main")) return;
+      if (event.target.closest("[data-chat-client-action-inline]")) return;
       hideClientContextMenu();
-      selectClient(client.id);
     });
-    row.addEventListener("contextmenu", (event) => {
-      event.preventDefault();
-      showClientContextMenu(event.clientX, event.clientY, client.id);
-    });
+    bindClientRowSwipe(row, client);
     return row;
   }
 
   function renderClientsList() {
     if (!dom.left.list) return;
+    closeAllClientSwipeRows(null, { immediate: true });
     const hadClientRows = !!dom.left.list.querySelector(".chat-client-row");
     const previousScrollTop = toStoredScrollTop(dom.left.list.scrollTop);
     dom.left.list.innerHTML = "";
@@ -6719,6 +7156,93 @@
     });
 
     toggleBtn.before(fragment);
+  }
+
+  function ensureContextMenuAllEmojiButtons(menuRoot = dom.center.contextMenu) {
+    if (!menuRoot) return;
+    $$('[data-chat-msg-reaction-slot="extra-all"]', menuRoot).forEach((node) => node.remove());
+    const toggleBtn = $('[data-chat-msg-reaction="__toggle_more__"]', menuRoot);
+    if (!toggleBtn) return;
+
+    const skip = new Set();
+    QUICK_REACTIONS.forEach((emoji) => {
+      const key = normalizeReactionValue(emoji);
+      if (key) skip.add(key);
+    });
+    EXTRA_REACTIONS.forEach((emoji) => {
+      const key = normalizeReactionValue(emoji);
+      if (key) skip.add(key);
+    });
+
+    const fragment = document.createDocumentFragment();
+    collectAllReactionEmojis().forEach((emoji) => {
+      const key = normalizeReactionValue(emoji);
+      if (!key || skip.has(key)) return;
+
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "chat-message-menu-reaction chat-message-menu-reaction--extra chat-message-menu-reaction--dynamic";
+      btn.setAttribute("data-chat-msg-reaction-slot", "extra-all");
+      btn.setAttribute("data-chat-msg-reaction", emoji);
+      btn.setAttribute("aria-label", emoji);
+      btn.title = emoji;
+      setEmojiGlyph(btn, emoji, "chat-emoji-glyph chat-emoji-glyph--reaction");
+      fragment.appendChild(btn);
+    });
+
+    toggleBtn.before(fragment);
+  }
+
+  function normalizeContextMenuReactionButtons(menuRoot = dom.center.contextMenu) {
+    if (!menuRoot) return;
+
+    $$('[data-chat-msg-reaction-slot="quick"]', menuRoot).forEach((btn, index) => {
+      const emoji = QUICK_REACTIONS[index] || QUICK_REACTIONS[QUICK_REACTIONS.length - 1];
+      btn.setAttribute("data-chat-msg-reaction", emoji);
+      btn.setAttribute("aria-label", emoji);
+      btn.title = emoji;
+      setEmojiGlyph(btn, emoji, "chat-emoji-glyph chat-emoji-glyph--reaction");
+    });
+
+    $$('[data-chat-msg-reaction-slot="extra"]', menuRoot).forEach((btn, index) => {
+      const emoji = EXTRA_REACTIONS[index] || EXTRA_REACTIONS[EXTRA_REACTIONS.length - 1];
+      btn.setAttribute("data-chat-msg-reaction", emoji);
+      btn.setAttribute("aria-label", emoji);
+      btn.title = emoji;
+      setEmojiGlyph(btn, emoji, "chat-emoji-glyph chat-emoji-glyph--reaction");
+    });
+  }
+
+  function refreshContextMenuReactionBoxPosition() {
+    if (!dom.center.contextMenu || dom.center.contextMenu.classList.contains("hidden")) return;
+    const anchor = contextMenuAnchorPoint;
+    if (anchor && Number.isFinite(anchor.x) && Number.isFinite(anchor.y)) {
+      positionFloatingBox(dom.center.contextMenu, anchor.x, anchor.y, 8);
+      return;
+    }
+    const left = Number.parseFloat(dom.center.contextMenu.style.left || "");
+    const top = Number.parseFloat(dom.center.contextMenu.style.top || "");
+    if (!Number.isFinite(left) || !Number.isFinite(top)) return;
+    positionFloatingBox(dom.center.contextMenu, left, top, 8);
+  }
+
+  function setContextMenuReactionsExpanded(expanded) {
+    if (!dom.center.contextMenu) return;
+    const isExpanded = !!expanded;
+    if (isExpanded) {
+      ensureContextMenuAllEmojiButtons(dom.center.contextMenu);
+      ensureEmojiDatasetLoaded().then(() => {
+        if (!dom.center.contextMenu || dom.center.contextMenu.classList.contains("hidden")) return;
+        if (!dom.center.contextMenu.classList.contains("is-reactions-expanded")) return;
+        ensureContextMenuAllEmojiButtons(dom.center.contextMenu);
+        refreshContextMenuReactionBoxPosition();
+      }).catch(() => {});
+    }
+    dom.center.contextMenu.classList.toggle("is-reactions-expanded", isExpanded);
+    const toggleBtn = $('[data-chat-msg-reaction="__toggle_more__"]', dom.center.contextMenu);
+    if (!toggleBtn) return;
+    toggleBtn.setAttribute("aria-expanded", isExpanded ? "true" : "false");
+    toggleBtn.setAttribute("aria-label", isExpanded ? "Скрыть дополнительные реакции" : "Показать ещё реакции");
   }
 
   function setReactionBarExpanded(expanded) {
@@ -7904,13 +8428,23 @@
   function focusComposer(text) {
     if (!dom.center.input) return;
     dom.center.input.value = String(text || "");
-    dom.center.input.focus();
-    const pos = dom.center.input.value.length;
-    dom.center.input.setSelectionRange(pos, pos);
+    focusComposerInput({ moveCaretToEnd: true });
     syncComposerRichPreview({});
   }
 
-  function hideMessageContextMenu() {
+  function hideReactionBar() {
+    if (dom.center.reactionBar) {
+      dom.center.reactionBar.classList.add("hidden");
+      setReactionBarExpanded(false);
+    }
+    reactionBarAnchorRect = null;
+    if (!dom.center.contextMenu || dom.center.contextMenu.classList.contains("hidden")) {
+      state.contextMessageId = null;
+    }
+  }
+
+  function hideMessageMenu() {
+    setContextMenuReactionsExpanded(false);
     if (dom.center.contextMenu) {
       if (dom.center.contextMenu.__touchGuardTimer) {
         window.clearTimeout(dom.center.contextMenu.__touchGuardTimer);
@@ -7919,12 +8453,15 @@
       dom.center.contextMenu.style.pointerEvents = "";
       dom.center.contextMenu.classList.add("hidden");
     }
-    if (dom.center.reactionBar) {
-      dom.center.reactionBar.classList.add("hidden");
-      setReactionBarExpanded(false);
+    contextMenuAnchorPoint = null;
+    if (!dom.center.reactionBar || dom.center.reactionBar.classList.contains("hidden")) {
+      state.contextMessageId = null;
     }
-    reactionBarAnchorRect = null;
-    state.contextMessageId = null;
+  }
+
+  function hideMessageContextMenu() {
+    hideMessageMenu();
+    hideReactionBar();
   }
 
   function armContextMenuTouchGuard() {
@@ -8222,7 +8759,10 @@
     if (!dom.center.reactionBar || !menuRect) return;
     const barRect = dom.center.reactionBar.getBoundingClientRect();
     const padding = 8;
-    const left = Math.min(Math.max(padding, menuRect.left), Math.max(padding, window.innerWidth - barRect.width - padding));
+    const left = Math.min(
+      Math.max(padding, Number(menuRect.right || 0) - barRect.width),
+      Math.max(padding, window.innerWidth - barRect.width - padding),
+    );
     const preferTop = menuRect.top - barRect.height - 8;
     const top = preferTop >= padding
       ? preferTop
@@ -8234,6 +8774,7 @@
 
   function showReactionBarForMessage(message, menuRect) {
     if (!dom.center.reactionBar) return;
+    state.contextMessageId = String(message.id || "");
     const ownReaction = getMessageActorReaction(message, CHAT_REACTION_ACTOR);
     setReactionBarExpanded(false);
     $$('[data-chat-reaction]', dom.center.reactionBar).forEach((btn) => {
@@ -8255,13 +8796,31 @@
     positionReactionBar(menuRect);
   }
 
+  function showReactionBar(messageId, anchorEl) {
+    if (!state.activeClientId || !anchorEl) return;
+    const message = findThreadMessage(state.activeClientId, messageId);
+    if (!message) return;
+    const anchorRect = typeof anchorEl.getBoundingClientRect === "function"
+      ? anchorEl.getBoundingClientRect()
+      : anchorEl;
+    showReactionBarForMessage(message, anchorRect);
+  }
+
   function showMessageContextMenu(x, y, messageId, options = {}) {
     if (!state.activeClientId || !dom.center.contextMenu) return;
     const message = findThreadMessage(state.activeClientId, messageId);
     if (!message) return;
 
     hideClientContextMenu();
+    hideEmojiPopover();
+    hideReactionBar();
     state.contextMessageId = String(messageId || "");
+    contextMenuAnchorPoint = {
+      x: Number(x) || 0,
+      y: Number(y) || 0,
+    };
+    normalizeContextMenuReactionButtons(dom.center.contextMenu);
+    setContextMenuReactionsExpanded(false);
     if (dom.center.menuPinLabel) dom.center.menuPinLabel.textContent = message.pinned ? "Открепить" : "Закрепить";
     const canManageOwnMessage = message.direction === "out";
     if (dom.center.menuEditAction) dom.center.menuEditAction.classList.toggle("hidden", !canManageOwnMessage);
@@ -8273,7 +8832,6 @@
     } else {
       dom.center.contextMenu.style.pointerEvents = "";
     }
-    showReactionBarForMessage(message, dom.center.contextMenu.getBoundingClientRect());
   }
 
   function startEditingMessage(messageId) {
@@ -8492,6 +9050,7 @@
     if (!state.activeClient) {
       setHeaderLoading(false);
       state.headerOrderSnapshot = null;
+      setHeaderClientLinkState(false);
       setOrderHeaderFields({
         kind: "Последний заказ",
         id: "—",
@@ -8512,6 +9071,8 @@
       setComposerEnabled(false);
       return;
     }
+
+    setHeaderClientLinkState(true);
 
     const candidate = getHeaderOrderCandidate(state.activeOrders);
     const currentOrder = candidate.currentOrder;
@@ -9507,6 +10068,10 @@
       if (touchContextGesture.longPressTimer) {
         window.clearTimeout(touchContextGesture.longPressTimer);
       }
+      if (touchContextGesture.bubble) {
+        touchContextGesture.bubble.classList.remove("is-swipe-active", "is-swipe-returning");
+        touchContextGesture.bubble.style.transform = "";
+      }
       touchContextGesture = null;
     }
 
@@ -9618,10 +10183,12 @@
         const messageId = reactionPill.getAttribute("data-chat-msg-reaction-toggle");
         const reactionActor = reactionPill.getAttribute("data-chat-reaction-actor") || "";
         if (reactionActor && reactionActor !== CHAT_REACTION_ACTOR) {
+          hideMessageContextMenu();
           return;
         }
         const reactionValue = reactionPill.getAttribute("data-chat-reaction-value") || reactionPill.textContent || "";
         if (messageId) reactMessageFromContext(messageId, reactionValue);
+        hideMessageContextMenu();
         return;
       }
 
@@ -9650,10 +10217,26 @@
         }
       }
 
-      if (!state.selectionMode) return;
+      const messageBubble = event.target.closest(".chat-message-bubble");
       const messageEl = event.target.closest(".chat-message");
+      const messageId = messageEl ? String(messageEl.getAttribute("data-message-id") || "") : "";
+      if (!state.selectionMode) {
+        if (!messageBubble || !messageId) return;
+        if (
+          String(state.contextMessageId || "") === messageId
+          && dom.center.reactionBar
+          && !dom.center.reactionBar.classList.contains("hidden")
+          && (!dom.center.contextMenu || dom.center.contextMenu.classList.contains("hidden"))
+        ) {
+          hideReactionBar();
+          return;
+        }
+        hideMessageContextMenu();
+        hideEmojiPopover();
+        showReactionBar(messageId, messageBubble);
+        return;
+      }
       if (!messageEl) return;
-      const messageId = messageEl.getAttribute("data-message-id");
       if (!messageId) return;
       toggleMessageSelection(messageId);
       renderMessages();
@@ -9737,7 +10320,12 @@
       }
 
       const messageId = String(messageEl.getAttribute("data-message-id") || "");
+      const messageBubble = event.target.closest(".chat-message-bubble") || $(".chat-message-bubble", messageEl);
       if (!messageId || !state.activeClientId) {
+        clearTouchContextGesture();
+        return;
+      }
+      if (!messageBubble) {
         clearTouchContextGesture();
         return;
       }
@@ -9746,10 +10334,15 @@
       clearTouchContextGesture();
       touchContextGesture = {
         messageId,
+        bubble: messageBubble,
         startX: Number(touch.clientX || 0),
         startY: Number(touch.clientY || 0),
         lastX: Number(touch.clientX || 0),
         lastY: Number(touch.clientY || 0),
+        swipeLocked: false,
+        swipeRejected: false,
+        swipeShift: 0,
+        replyTriggered: false,
         longPressFired: false,
         longPressTimer: 0,
       };
@@ -9767,7 +10360,7 @@
           touchGuard: true,
         });
       }, CHAT_TOUCH_CONTEXT_LONG_PRESS_MS);
-    }, { passive: false });
+    }, { passive: true });
 
     dom.center.messages.addEventListener("touchmove", (event) => {
       if (orderCardTouchPan) {
@@ -9821,13 +10414,47 @@
       const y = Number(touch.clientY || 0);
       touchContextGesture.lastX = x;
       touchContextGesture.lastY = y;
-      const dx = Math.abs(x - touchContextGesture.startX);
-      const dy = Math.abs(y - touchContextGesture.startY);
-      if (
-        !touchContextGesture.longPressFired
-        && (dx > CHAT_TOUCH_CONTEXT_MOVE_CANCEL_PX || dy > CHAT_TOUCH_CONTEXT_MOVE_CANCEL_PX)
-      ) {
-        clearTouchContextGesture();
+      const dx = x - touchContextGesture.startX;
+      const dy = y - touchContextGesture.startY;
+      const absX = Math.abs(dx);
+      const absY = Math.abs(dy);
+
+      if ((absX > 8 || absY > 8) && touchContextGesture.longPressTimer) {
+        window.clearTimeout(touchContextGesture.longPressTimer);
+        touchContextGesture.longPressTimer = 0;
+      }
+
+      if (touchContextGesture.longPressFired) return;
+      if (touchContextGesture.swipeRejected) return;
+
+      if (!touchContextGesture.swipeLocked) {
+        if (absX < 10 && absY < 10) return;
+        if (absY > absX) {
+          clearTouchContextGesture();
+          return;
+        }
+        if (dx <= 0) {
+          clearTouchContextGesture();
+          return;
+        }
+        touchContextGesture.swipeLocked = true;
+      }
+
+      event.preventDefault();
+      const shift = Math.max(0, Math.min(CHAT_TOUCH_SWIPE_MAX_SHIFT_PX, dx));
+      touchContextGesture.swipeShift = shift;
+      touchContextGesture.bubble.classList.add("is-swipe-active");
+      touchContextGesture.bubble.style.transform = `translateX(${shift}px)`;
+
+      if (shift >= CHAT_TOUCH_SWIPE_REPLY_TRIGGER_PX && !touchContextGesture.replyTriggered) {
+        touchContextGesture.replyTriggered = true;
+        suppressTouchClickUntil = Math.max(suppressTouchClickUntil, Date.now() + 560);
+        setComposerReplyByMessage(touchContextGesture.messageId);
+        hideMessageContextMenu();
+        hideEmojiPopover();
+        if (navigator.vibrate && typeof navigator.vibrate === "function") {
+          navigator.vibrate(14);
+        }
       }
     }, { passive: false });
 
@@ -9853,11 +10480,25 @@
         touchAttachmentTap = null;
       }
       if (!touchContextGesture) return;
-      const longPressFired = touchContextGesture.longPressFired === true;
-      clearTouchContextGesture();
-      if (longPressFired) {
+      if (touchContextGesture.longPressTimer) {
+        window.clearTimeout(touchContextGesture.longPressTimer);
+        touchContextGesture.longPressTimer = 0;
+      }
+      if (touchContextGesture.swipeShift > 0 && touchContextGesture.bubble) {
+        const bubble = touchContextGesture.bubble;
+        bubble.classList.add("is-swipe-returning");
+        bubble.style.transform = "";
+        window.setTimeout(() => {
+          bubble.classList.remove("is-swipe-active", "is-swipe-returning");
+        }, 170);
+      }
+      if (touchContextGesture.replyTriggered && dom.center.input) {
+        focusComposerInput({ moveCaretToEnd: true });
+      }
+      if (touchContextGesture.longPressFired || touchContextGesture.replyTriggered) {
         suppressTouchClickUntil = Math.max(suppressTouchClickUntil, Date.now() + 420);
       }
+      touchContextGesture = null;
     }, { passive: true });
 
     dom.center.messages.addEventListener("touchcancel", () => {
@@ -9955,6 +10596,22 @@
         event.stopPropagation();
         return;
       }
+      const reactionBtn = event.target.closest("[data-chat-msg-reaction]");
+      if (reactionBtn) {
+        const reaction = String(reactionBtn.getAttribute("data-chat-msg-reaction") || "").trim();
+        const messageId = String(state.contextMessageId || "");
+        if (!reaction || !messageId) return;
+        if (reaction === "__toggle_more__") {
+          event.preventDefault();
+          event.stopPropagation();
+          const nextExpanded = !dom.center.contextMenu.classList.contains("is-reactions-expanded");
+          setContextMenuReactionsExpanded(nextExpanded);
+          return;
+        }
+        reactMessageFromContext(messageId, reaction);
+        hideMessageContextMenu();
+        return;
+      }
       const actionBtn = event.target.closest("[data-chat-msg-action]");
       if (!actionBtn) return;
       const action = actionBtn.getAttribute("data-chat-msg-action");
@@ -9984,19 +10641,9 @@
         if (reaction === "__toggle_more__") {
           event.preventDefault();
           event.stopPropagation();
-          if (shouldUseNativeMobileEmojiKeyboard()) {
-            hideMessageContextMenu();
-            const nextExpanded = !dom.center.reactionBar.classList.contains("is-expanded");
-            setReactionBarExpanded(nextExpanded);
-            return;
-          }
-          const targetMessageId = String(state.contextMessageId || "");
-          hideMessageContextMenu();
-          showEmojiPopover("composer", {
-            mode: targetMessageId ? "reaction" : "composer",
-            messageId: targetMessageId,
-          });
-          if (dom.center.input) dom.center.input.focus();
+          hideMessageMenu();
+          const nextExpanded = !dom.center.reactionBar.classList.contains("is-expanded");
+          setReactionBarExpanded(nextExpanded);
           return;
         }
         if (!messageId) return hideMessageContextMenu();
@@ -10009,9 +10656,19 @@
       if (!dom.center.contextMenu) return;
       const insideMenu = dom.center.contextMenu.contains(event.target);
       const insideReactions = dom.center.reactionBar && dom.center.reactionBar.contains(event.target);
+      const insideMessage = event.target.closest && (
+        event.target.closest(".chat-message-bubble")
+        || event.target.closest(".chat-message-reaction-pill")
+      );
       const insideClientMenu = state.clientContextMenu && state.clientContextMenu.contains(event.target);
-      if (!insideMenu && !insideReactions) hideMessageContextMenu();
+      const insideClientRow = event.target.closest && event.target.closest(".chat-client-row");
+      if (dom.center.contextMenu && !dom.center.contextMenu.classList.contains("hidden")) {
+        if (!insideMenu && !insideReactions) hideMessageContextMenu();
+      } else if (dom.center.reactionBar && !dom.center.reactionBar.classList.contains("hidden")) {
+        if (!insideReactions && !insideMessage) hideReactionBar();
+      }
       if (!insideClientMenu) hideClientContextMenu();
+      if (!insideClientRow) closeAllClientSwipeRows(null, { immediate: true });
     });
 
     document.addEventListener("contextmenu", (event) => {
@@ -10305,9 +10962,10 @@
     }
   }
 
-  async function selectClient(clientId) {
+  async function selectClient(clientId, options = {}) {
     const id = Number(clientId || 0);
     if (!Number.isFinite(id) || id <= 0) return;
+    const opts = options && typeof options === "object" ? options : {};
     suppressMessageAlertUntil = Date.now() + 3000;
     const previousActiveClientId = state.activeClientId;
     stopLocalTypingSession(previousActiveClientId, { flush: true });
@@ -10335,6 +10993,11 @@
     state.headerOrderSnapshot = null;
     setHeaderLoading(true);
     saveStore();
+    if (opts.restoreMobileView === true) {
+      syncMobileChatViewFromState({ persistState: false });
+    } else if (opts.syncMobileView !== false) {
+      syncMobileChatView("center");
+    }
 
     ensureActiveThreadSseConnection();
     applyClientFilter();
@@ -10354,21 +11017,6 @@
 
     const selectedFromList = state.clients.find((c) => Number(c.id) === id) || null;
     const isGuestClient = isGuestChatClient(selectedFromList);
-    const clientsRightApi = getClientsRightApi();
-    if (clientsRightApi) {
-      if (
-        isGuestClient
-        && typeof clientsRightApi.selectGuestChatClient === "function"
-      ) {
-        clientsRightApi.selectGuestChatClient(id, selectedFromList?.name || "").catch(console.error);
-      } else if (typeof clientsRightApi.selectClientById === "function") {
-        clientsRightApi.selectClientById(
-          id,
-          selectedFromList?.name || "",
-          { chatGuest: isGuestClient }
-        ).catch(console.error);
-      }
-    }
 
     state.activeClient = isGuestClient
       ? buildGuestActiveClientProfile(id, selectedFromList)
@@ -10596,7 +11244,7 @@
         const target = state.filteredClients.find((c) => Number(c.id) === persisted) || state.filteredClients[0];
         if (target) {
           if (Number(state.activeClientId) !== Number(target.id)) {
-            await selectClient(target.id);
+            await selectClient(target.id, { restoreMobileView: true });
           }
         } else {
           stopLocalTypingSession(state.activeClientId, { flush: true });
@@ -10605,6 +11253,7 @@
           setHeaderLoading(false);
           setActiveOrders([], { forceRender: true });
           renderMessages();
+          syncMobileChatView("clients");
         }
       }
 
@@ -10634,7 +11283,7 @@
       && Number(state.activeClientId || 0) !== persistedClientId
       && Array.isArray(state.store?.threads?.[String(persistedClientId)])
     ) {
-      selectClient(persistedClientId).catch(console.error);
+      selectClient(persistedClientId, { restoreMobileView: true }).catch(console.error);
     }
     // Do not block the first paint on slow DB/API responses.
     state.clientsLoadInFlight = loadClientsPage({ reset: true, ensureSelection: true })
@@ -10807,6 +11456,7 @@
       dom.center.input.addEventListener("compositionend", () => {
         handleComposerTypingActivity();
       });
+      dom.center.input.addEventListener("touchend", guardIOSNativeTextFocus, { passive: false });
       dom.center.input.addEventListener("blur", () => {
         scheduleLocalTypingStop(CHAT_TYPING_BLUR_STOP_MS);
       });
@@ -10855,6 +11505,70 @@
     });
   }
 
+  function initMobileChatControls() {
+    if (dom.center.mobileClientsBackBtn && dom.center.mobileClientsBackBtn.dataset.bound !== "1") {
+      dom.center.mobileClientsBackBtn.dataset.bound = "1";
+      ["pointerdown", "touchstart", "mousedown"].forEach((eventName) => {
+        dom.center.mobileClientsBackBtn.addEventListener(eventName, (event) => {
+          event.stopPropagation();
+        }, { passive: eventName === "touchstart" });
+      });
+      dom.center.mobileClientsBackBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        openClientsPanel();
+      });
+    }
+
+    if (dom.left.mobileCloseBtn && dom.left.mobileCloseBtn.dataset.bound !== "1") {
+      dom.left.mobileCloseBtn.dataset.bound = "1";
+      dom.left.mobileCloseBtn.addEventListener("click", () => {
+        closeClientsPanel();
+      });
+    }
+
+    if (dom.center.headerClientBtn && dom.center.headerClientBtn.dataset.bound !== "1") {
+      dom.center.headerClientBtn.dataset.bound = "1";
+      ["pointerdown", "touchstart", "mousedown"].forEach((eventName) => {
+        dom.center.headerClientBtn.addEventListener(eventName, (event) => {
+          event.stopPropagation();
+        }, { passive: eventName === "touchstart" });
+      });
+      dom.center.headerClientBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        openClientDetailsPanel();
+      });
+    }
+
+    window.__adminChatMobileApi = {
+      openClientsPanel(options = {}) {
+        return openClientsPanel(options);
+      },
+      closeClientsPanel(options = {}) {
+        return closeClientsPanel(options);
+      },
+      toggleClientsPanel(options = {}) {
+        return toggleClientsPanel(options);
+      },
+      openClientDetailsPanel(options = {}) {
+        return openClientDetailsPanel(options);
+      },
+      closeClientDetailsPanel(options = {}) {
+        return closeClientDetailsPanel(options);
+      },
+      syncView(options = {}) {
+        return syncMobileChatViewFromState(options);
+      },
+    };
+
+    if (!document.body || !document.body.classList.contains("page-chat")) return;
+    window.addEventListener("resize", () => {
+      syncMobileChatViewFromState({ persistState: false });
+    }, { passive: true });
+    syncMobileChatViewFromState({ persistState: false });
+  }
+
   function init() {
     pendingNotificationChatOpenRequest = pendingNotificationChatOpenRequest || readChatNotificationOpenRequestFromLocation();
     state.chatWidgetEnabled = getTenantChatWidgetEnabledFromStorage();
@@ -10878,6 +11592,7 @@
           clearPendingScrollNewCount();
         }
         updateMessagesScrollDownButton();
+        hideMessageContextMenu();
       });
     }
     if (dom.center.messages && dom.center.messages.dataset.pinnedBottomSyncBound !== "1") {
@@ -10914,11 +11629,13 @@
     if (dom.left.list && dom.left.list.dataset.scrollPersistBound !== "1") {
       dom.left.list.dataset.scrollPersistBound = "1";
       dom.left.list.addEventListener("scroll", () => {
+        closeAllClientSwipeRows(null, { immediate: true });
         saveClientsListScrollPosition();
         maybeLoadMoreClientsByScroll();
       }, { passive: true });
     }
     bindSearch();
+    initMobileChatControls();
     renderChatHeader();
     syncSelectionUi();
     renderMessages();
