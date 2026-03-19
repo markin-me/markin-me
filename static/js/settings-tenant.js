@@ -220,6 +220,28 @@
   const DELIVERY_MAP_DEFAULT_CENTER = [61.524, 105.3188];
   const DELIVERY_MAP_DEFAULT_ZOOM = 3;
   const DELIVERY_ZONE_MIDPOINT_MIN_ZOOM = 15;
+  const DELIVERY_ZONE_PRESET_COLORS = Object.freeze([
+    "#ff7a00",
+    "#f59e0b",
+    "#facc15",
+    "#ef4444",
+    "#f43f5e",
+    "#ec4899",
+    "#d946ef",
+    "#8b5cf6",
+    "#6366f1",
+    "#3b82f6",
+    "#06b6d4",
+    "#14b8a6",
+    "#10b981",
+    "#22c55e",
+    "#84cc16",
+  ]);
+  const deliveryZonePanelUiState = {
+    infoPopoverOpen: false,
+    colorPopoverOpen: false,
+    colorEditorOpen: false,
+  };
 
   function applyBrandFromTenant(tenant) {
     if (!tenant) return;
@@ -991,7 +1013,11 @@
     const settingsStoreAddressMapResetBtn = document.getElementById("settingsStoreAddressMapResetBtn");
     const settingsStoreAddressMapSubtitle = document.getElementById("settingsStoreAddressMapSubtitle");
     const settingsStorePhone = document.getElementById("settingsStorePhone");
+    const settingsStoreTimezoneSelector = document.getElementById("settingsStoreTimezoneSelector");
     const settingsStoreTimezoneSelect = document.getElementById("settingsStoreTimezoneSelect");
+    const settingsStoreTimezoneTrigger = document.getElementById("settingsStoreTimezoneTrigger");
+    const settingsStoreTimezoneValue = document.getElementById("settingsStoreTimezoneValue");
+    const settingsStoreTimezoneMenu = document.getElementById("settingsStoreTimezoneMenu");
     const settingsStoreActive = document.getElementById("settingsStoreActive");
     const settingsStoreSaveBtn = document.getElementById("settingsStoreSaveBtn");
     const settingsStoreSaveText = document.getElementById("settingsStoreSaveText");
@@ -3395,12 +3421,7 @@
         renderStoreAddressMapHint();
         return;
       }
-      const displayPoint = getStoreAddressMapDisplayPoint();
-      const hasAddressQuery = Boolean(
-        normalizeStoreAddressSuggestValue(settingsStoreAddressLookup && settingsStoreAddressLookup.value)
-        || buildStoreAddressMapQuery()
-      );
-      settingsStoreAddressMapBtn.disabled = !displayPoint && !hasAddressQuery;
+      settingsStoreAddressMapBtn.disabled = false;
       renderStoreAddressMapHint();
     }
 
@@ -3617,6 +3638,7 @@
     function closeStoreAddressMapDialog() {
       storeAddressMapState.open = false;
       setStoreAddressMapModalStatus("", "idle");
+      document.body.classList.remove("store-map-modal-open");
       if (settingsStoreAddressMapModal) settingsStoreAddressMapModal.classList.add("hidden");
     }
 
@@ -3626,14 +3648,17 @@
         const config = await ensureStoreAddressMapConfig();
         if (!hasConfiguredMap(config)) {
           setStoreAddressMapModalStatus(buildMapNotConfiguredMessage(config, "store"), "error");
+          document.body.classList.add("store-map-modal-open");
           if (settingsStoreAddressMapModal) settingsStoreAddressMapModal.classList.remove("hidden");
           return;
         }
         if (!window.L) {
           setStoreAddressMapModalStatus("Leaflet не подключён. Проверьте локальные assets карты.", "error");
+          document.body.classList.add("store-map-modal-open");
           if (settingsStoreAddressMapModal) settingsStoreAddressMapModal.classList.remove("hidden");
           return;
         }
+        document.body.classList.add("store-map-modal-open");
         if (settingsStoreAddressMapModal) settingsStoreAddressMapModal.classList.remove("hidden");
         storeAddressMapState.open = true;
         setStoreAddressMapModalStatus("", "idle");
@@ -3671,6 +3696,7 @@
       } catch (error) {
         console.error("Failed to open store map:", error);
         setStoreAddressMapModalStatus("Не удалось открыть карту филиала.", "error");
+        document.body.classList.add("store-map-modal-open");
         if (settingsStoreAddressMapModal) settingsStoreAddressMapModal.classList.remove("hidden");
       }
     }
@@ -8272,9 +8298,38 @@
       });
     }
 
+    if (settingsStoreTimezoneSelect) {
+      settingsStoreTimezoneSelect.addEventListener("change", () => {
+        renderStoreTimezoneSelector();
+      });
+    }
+
+    if (settingsStoreTimezoneTrigger) {
+      settingsStoreTimezoneTrigger.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        toggleStoreTimezoneDropdown();
+      });
+    }
+
+    if (settingsStoreTimezoneMenu) {
+      settingsStoreTimezoneMenu.addEventListener("click", (event) => {
+        const option = event.target && event.target.closest
+          ? event.target.closest("[data-store-timezone-option]")
+          : null;
+        if (!option || !settingsStoreTimezoneSelect) return;
+        event.preventDefault();
+        event.stopPropagation();
+        settingsStoreTimezoneSelect.value = String(option.getAttribute("data-store-timezone-option") || "");
+        settingsStoreTimezoneSelect.dispatchEvent(new Event("change", { bubbles: true }));
+        closeStoreTimezoneDropdown();
+      });
+    }
+
     if (settingsStoreAddressMapBtn) {
       settingsStoreAddressMapBtn.addEventListener("click", () => {
         closeAllStoreAddressSuggestPopovers();
+        closeStoreTimezoneDropdown();
         openStoreAddressMapDialog();
       });
     }
@@ -8458,8 +8513,9 @@
       items.forEach((store) => {
         const row = document.createElement("button");
         row.type = "button";
-        row.className = "order-row product-row settings-card";
+        row.className = "order-row settings-card settings-store-list-row";
         row.dataset.id = String(store.id);
+        row.classList.toggle("is-selected", Number(storesState.selectedId) === Number(store.id));
 
         const avatar = document.createElement("div");
         avatar.className = "product-avatar";
@@ -8479,17 +8535,8 @@
         statusEl.textContent = status;
         info.appendChild(statusEl);
 
-        const action = document.createElement("div");
-        action.className = "order-col";
-
-        const badge = document.createElement("span");
-        badge.className = "badge";
-        badge.textContent = "Открыть";
-        action.appendChild(badge);
-
         row.appendChild(avatar);
         row.appendChild(info);
-        row.appendChild(action);
 
         row.addEventListener("click", () => selectStore(store));
         storesList.appendChild(row);
@@ -8500,8 +8547,7 @@
       if (!store) return;
       resetStoreAddressSuggestState();
       if (settingsStoreSubtitle) {
-        const codePart = store.code ? ` • ${store.code}` : "";
-        settingsStoreSubtitle.textContent = `ID ${store.id}${codePart}`;
+        settingsStoreSubtitle.textContent = "";
       }
       if (settingsStoreName) settingsStoreName.value = normalizeValue(store.name);
       if (settingsStoreCode) settingsStoreCode.value = normalizeValue(store.code);
@@ -8513,6 +8559,7 @@
       const storeTz = store.timezone || fallbackTz;
       if (settingsStoreTimezoneSelect) {
         fillTimezoneSelect(storeTz, settingsStoreTimezoneSelect);
+        renderStoreTimezoneSelector();
       }
       if (settingsStoreActive) settingsStoreActive.checked = Number(store.is_active) === 1;
       applyStoreHours(store);
@@ -8523,6 +8570,7 @@
     function showStorePanel(show) {
       if (settingsStorePanel) settingsStorePanel.classList.toggle("hidden", !show);
       if (!show) {
+        closeStoreTimezoneDropdown();
         closeStoreAddressMapDialog();
         resetStoreAddressSuggestState({ clearInputs: true });
       }
@@ -8535,7 +8583,7 @@
       }
       if (mode === "create") {
         resetStoreAddressSuggestState({ clearInputs: true });
-        if (settingsStoreSubtitle) settingsStoreSubtitle.textContent = "Новая точка";
+        if (settingsStoreSubtitle) settingsStoreSubtitle.textContent = "";
         if (settingsStoreTelegramList) settingsStoreTelegramList.innerHTML = "<div class=\"global-telegram-binding\"><div class=\"global-telegram-header\"><span class=\"muted\">Сначала сохраните филиал</span></div></div>";
         if (settingsStoreTelegramConnectBlock) settingsStoreTelegramConnectBlock.classList.add("hidden");
         if (settingsStoreName) settingsStoreName.value = "";
@@ -8549,6 +8597,7 @@
         const fallbackTz = tenant?.timezone || "+0";
         if (settingsStoreTimezoneSelect) {
           fillTimezoneSelect(fallbackTz, settingsStoreTimezoneSelect);
+          renderStoreTimezoneSelector();
         }
         if (settingsStoreActive) settingsStoreActive.checked = true;
         resetStoreHoursState();
@@ -8556,6 +8605,92 @@
       } else if (store) {
         fillStoreForm(store);
       }
+    }
+
+    function renderStoreTimezoneSelector() {
+      if (!settingsStoreTimezoneSelect) return;
+      const options = Array.from(settingsStoreTimezoneSelect.options || []);
+      const selectedValue = String(settingsStoreTimezoneSelect.value || "");
+      const selectedOption = options.find((option) => String(option.value) === selectedValue) || null;
+
+      if (settingsStoreTimezoneValue) {
+        settingsStoreTimezoneValue.textContent = selectedOption ? selectedOption.textContent : "—";
+      }
+      if (settingsStoreTimezoneTrigger) {
+        settingsStoreTimezoneTrigger.disabled = options.length === 0;
+      }
+      if (settingsStoreTimezoneSelector) {
+        settingsStoreTimezoneSelector.classList.toggle("is-disabled", options.length === 0);
+      }
+      if (!settingsStoreTimezoneMenu) {
+        if (!options.length) closeStoreTimezoneDropdown();
+        return;
+      }
+
+      settingsStoreTimezoneMenu.innerHTML = "";
+      options.forEach((option) => {
+        const value = String(option.value || "");
+        const item = document.createElement("button");
+        item.type = "button";
+        item.className = `new-order-right-select-option${value === selectedValue ? " is-selected" : ""}`;
+        item.setAttribute("role", "option");
+        item.setAttribute("aria-selected", value === selectedValue ? "true" : "false");
+        item.setAttribute("data-store-timezone-option", value);
+        item.textContent = option.textContent || value;
+        settingsStoreTimezoneMenu.appendChild(item);
+      });
+
+      if (!options.length) {
+        closeStoreTimezoneDropdown();
+      }
+    }
+
+    function closeStoreTimezoneDropdown() {
+      const timezoneField = settingsStoreTimezoneSelector && settingsStoreTimezoneSelector.closest
+        ? settingsStoreTimezoneSelector.closest(".settings-store-timezone-field")
+        : null;
+      if (timezoneField) {
+        timezoneField.classList.remove("is-open");
+      }
+      if (settingsStoreTimezoneSelector) {
+        settingsStoreTimezoneSelector.classList.remove("is-open", "is-drop-up");
+      }
+      if (settingsStoreTimezoneTrigger) {
+        settingsStoreTimezoneTrigger.setAttribute("aria-expanded", "false");
+      }
+    }
+
+    function openStoreTimezoneDropdown() {
+      if (!settingsStoreTimezoneSelector || !settingsStoreTimezoneTrigger || settingsStoreTimezoneTrigger.disabled) return;
+      const timezoneField = settingsStoreTimezoneSelector.closest
+        ? settingsStoreTimezoneSelector.closest(".settings-store-timezone-field")
+        : null;
+      const menuHeight = settingsStoreTimezoneMenu
+        ? Math.min(settingsStoreTimezoneMenu.scrollHeight || 0, 230)
+        : 0;
+      const triggerRect = settingsStoreTimezoneTrigger.getBoundingClientRect();
+      const shouldDropUp = menuHeight > 0
+        && triggerRect.bottom + 8 + menuHeight > window.innerHeight - 12
+        && triggerRect.top > menuHeight + 20;
+      if (timezoneField) {
+        timezoneField.classList.add("is-open");
+      }
+      settingsStoreTimezoneSelector.classList.toggle("is-drop-up", shouldDropUp);
+      settingsStoreTimezoneSelector.classList.add("is-open");
+      settingsStoreTimezoneTrigger.setAttribute("aria-expanded", "true");
+    }
+
+    function toggleStoreTimezoneDropdown(forceOpen) {
+      if (!settingsStoreTimezoneSelector || !settingsStoreTimezoneTrigger || settingsStoreTimezoneTrigger.disabled) return;
+      const shouldOpen = typeof forceOpen === "boolean"
+        ? forceOpen
+        : !settingsStoreTimezoneSelector.classList.contains("is-open");
+      if (!shouldOpen) {
+        closeStoreTimezoneDropdown();
+        return;
+      }
+      closeAllStoreAddressSuggestPopovers();
+      openStoreTimezoneDropdown();
     }
 
     function applyStoreTabState(tabId) {
@@ -8619,6 +8754,10 @@
         }
       }
       renderStoresList(items);
+      const activeDeliveryTab = getActiveDeliveryTab();
+      if (isDeliveryZoneTab(activeDeliveryTab)) {
+        renderDeliveryZoneStoresCheckboxes(activeDeliveryTab.draft && activeDeliveryTab.draft.store_ids);
+      }
       if (activeRightTabId && activeRightTabId.startsWith("store-")) {
         applyStoreTabState(activeRightTabId);
       } else if (!storesState.selectedId) {
@@ -9835,6 +9974,8 @@
     const settingsDeliveryZoneFooter = document.getElementById("settingsDeliveryZoneFooter");
     const settingsDeliveryMapConfigPanel = document.getElementById("settingsDeliveryMapConfigPanel");
     const settingsDeliveryMapConfigFooter = document.getElementById("settingsDeliveryMapConfigFooter");
+    const appModalEl = document.getElementById("appModal");
+    const appModalBodyEl = document.getElementById("appModalBody");
     const settingsDeliverySubtitle = document.getElementById("settingsDeliverySubtitle");
     const settingsDeliveryZoneSubtitle = document.getElementById("settingsDeliveryZoneSubtitle");
     const settingsDeliveryMapConfigSubtitle = document.getElementById("settingsDeliveryMapConfigSubtitle");
@@ -9850,8 +9991,13 @@
     const settingsDeliverySaveText = document.getElementById("settingsDeliverySaveText");
     const settingsDeliveryResetBtn = document.getElementById("settingsDeliveryResetBtn");
     const settingsDeliveryDeleteBtn = document.getElementById("settingsDeliveryDeleteBtn");
+    const settingsDeliveryStoresTriggerBtn = document.getElementById("settingsDeliveryStoresTriggerBtn");
     const deliveryStoresList = document.getElementById("deliveryStoresList");
+    const settingsDeliveryDefaultStoreSelector = document.getElementById("settingsDeliveryDefaultStoreSelector");
     const settingsDeliveryDefaultStore = document.getElementById("settingsDeliveryDefaultStore");
+    const settingsDeliveryDefaultStoreTrigger = document.getElementById("settingsDeliveryDefaultStoreTrigger");
+    const settingsDeliveryDefaultStoreValue = document.getElementById("settingsDeliveryDefaultStoreValue");
+    const settingsDeliveryDefaultStoreMenu = document.getElementById("settingsDeliveryDefaultStoreMenu");
     const settingsDeliveryMapConfigGuide = document.getElementById("settingsDeliveryMapConfigGuide");
     const settingsDeliveryMapAccountAddBtn = document.getElementById("settingsDeliveryMapAccountAddBtn");
     const settingsDeliveryMapAccountAddWrap = document.getElementById("settingsDeliveryMapAccountAddWrap");
@@ -9864,11 +10010,26 @@
     const settingsDeliveryMapAccountsEmpty = document.getElementById("settingsDeliveryMapAccountsEmpty");
     const settingsDeliveryMapConfigSaveBtn = document.getElementById("settingsDeliveryMapConfigSaveBtn");
     const settingsDeliveryMapConfigResetBtn = document.getElementById("settingsDeliveryMapConfigResetBtn");
+    const settingsDeliveryZoneInfoBtn = document.getElementById("settingsDeliveryZoneInfoBtn");
+    const settingsDeliveryZoneInfoPopover = document.getElementById("settingsDeliveryZoneInfoPopover");
     const settingsDeliveryZoneGeometryHint = document.getElementById("settingsDeliveryZoneGeometryHint");
     const settingsDeliveryZoneName = document.getElementById("settingsDeliveryZoneName");
+    const settingsDeliveryZoneColorWrap = document.getElementById("settingsDeliveryZoneColorWrap");
     const settingsDeliveryZoneColor = document.getElementById("settingsDeliveryZoneColor");
+    const settingsDeliveryZoneColorTrigger = document.getElementById("settingsDeliveryZoneColorTrigger");
+    const settingsDeliveryZoneColorPreview = document.getElementById("settingsDeliveryZoneColorPreview");
+    const settingsDeliveryZoneColorValue = document.getElementById("settingsDeliveryZoneColorValue");
+    const settingsDeliveryZoneColorPopover = document.getElementById("settingsDeliveryZoneColorPopover");
+    const settingsDeliveryZoneColorPresets = document.getElementById("settingsDeliveryZoneColorPresets");
+    const settingsDeliveryZoneColorCustomBtn = document.getElementById("settingsDeliveryZoneColorCustomBtn");
+    const settingsDeliveryZoneColorEditor = document.getElementById("settingsDeliveryZoneColorEditor");
+    const settingsDeliveryZoneColorEditorBackBtn = document.getElementById("settingsDeliveryZoneColorEditorBackBtn");
+    const settingsDeliveryZoneColorEditorDoneBtn = document.getElementById("settingsDeliveryZoneColorEditorDoneBtn");
+    const settingsDeliveryZoneColorEditorPreview = document.getElementById("settingsDeliveryZoneColorEditorPreview");
+    const settingsDeliveryZoneColorEditorValue = document.getElementById("settingsDeliveryZoneColorEditorValue");
     const settingsDeliveryZoneEtaMinutes = document.getElementById("settingsDeliveryZoneEtaMinutes");
     const settingsDeliveryZoneActive = document.getElementById("settingsDeliveryZoneActive");
+    const settingsDeliveryZoneStoresTriggerBtn = document.getElementById("settingsDeliveryZoneStoresTriggerBtn");
     const deliveryZoneStoresList = document.getElementById("deliveryZoneStoresList");
     const settingsDeliveryZonePriceTiers = document.getElementById("settingsDeliveryZonePriceTiers");
     const settingsDeliveryZoneAddTierBtn = document.getElementById("settingsDeliveryZoneAddTierBtn");
@@ -10310,6 +10471,23 @@
         closeDeliveryMapSearchPopover();
       }
       if (
+        settingsDeliveryZoneInfoPopover
+        && !settingsDeliveryZoneInfoPopover.classList.contains("hidden")
+        && settingsDeliveryZoneInfoBtn
+        && !settingsDeliveryZoneInfoPopover.contains(target)
+        && !settingsDeliveryZoneInfoBtn.contains(target)
+      ) {
+        closeDeliveryZoneInfoPopover();
+      }
+      if (
+        settingsDeliveryZoneColorWrap
+        && settingsDeliveryZoneColorPopover
+        && !settingsDeliveryZoneColorPopover.classList.contains("hidden")
+        && !settingsDeliveryZoneColorWrap.contains(target)
+      ) {
+        closeDeliveryZoneColorPopover();
+      }
+      if (
         settingsDeliveryZonePointMenu
         && !settingsDeliveryZonePointMenu.classList.contains("hidden")
         && !settingsDeliveryZonePointMenu.contains(target)
@@ -10327,19 +10505,33 @@
       if (storeAddressWraps.length && !storeAddressWraps.some((wrap) => wrap.contains(target))) {
         closeStoreAddressSuggestPopover();
       }
+      if (
+        settingsStoreTimezoneSelector
+        && settingsStoreTimezoneSelector.classList.contains("is-open")
+        && !settingsStoreTimezoneSelector.contains(target)
+      ) {
+        closeStoreTimezoneDropdown();
+      }
     });
     document.addEventListener("keydown", (event) => {
       if (event.key !== "Escape") return;
       closeDeliveryCityDropdown();
       closeDeliveryMapSearchPopover();
+      closeDeliveryZoneInfoPopover();
+      closeDeliveryZoneColorPopover();
       closeDeliveryZonePointMenu();
       closeDeliveryZoneContextMenu();
       closeStoreAddressSuggestPopover();
+      closeStoreTimezoneDropdown();
     });
     setDeliveryMapSearchEnabled(false);
     closeDeliveryMapSearchPopover();
     syncDeliveryMapSearchClearButton();
     renderDeliveryCitySelector();
+    syncDeliveryZoneColorTrigger(settingsDeliveryZoneColor && settingsDeliveryZoneColor.value);
+    renderDeliveryZoneStoresCheckboxes([]);
+    closeDeliveryZoneInfoPopover();
+    closeDeliveryZoneColorPopover();
     closeStoreAddressSuggestPopover();
     syncStoreAddressInputAvailability();
 
@@ -10535,6 +10727,124 @@
         : `${deliveryCost} ₽ доставка`;
     }
 
+    function buildDeliverySettingPayloadFromItem(setting, overrides = {}) {
+      const normalized = normalizeDeliverySetting(setting);
+      return {
+        name: String(normalized.name || "").trim() || null,
+        eta_minutes: normalized.eta_minutes == null || normalized.eta_minutes === "" ? null : Number(normalized.eta_minutes) || 0,
+        delivery_cost: Number(normalized.delivery_cost) || 0,
+        min_order_amount: Number(normalized.min_order_amount) || 0,
+        free_delivery_from: normalized.free_delivery_from == null || normalized.free_delivery_from === "" ? null : Number(normalized.free_delivery_from) || 0,
+        is_active: Object.prototype.hasOwnProperty.call(overrides, "is_active")
+          ? (overrides.is_active ? 1 : 0)
+          : (Number(normalized.is_active) === 1 ? 1 : 0),
+        store_ids: Array.isArray(normalized.store_ids) ? normalized.store_ids.slice() : [],
+        default_store_id: normalized.default_store_id,
+        price_tiers: Array.isArray(normalized.price_tiers)
+          ? normalized.price_tiers.map((tier) => ({
+            min_order_amount: Number(tier && tier.min_order_amount) || 0,
+            delivery_cost: Number(tier && tier.delivery_cost) || 0,
+            sort_order: Number(tier && tier.sort_order) || 0,
+          }))
+          : [],
+      };
+    }
+
+    function buildDeliveryZonePayloadFromItem(zone, overrides = {}) {
+      const normalized = normalizeDeliveryZone(zone);
+      return {
+        name: String(normalized.name || "").trim() || null,
+        color: String(normalized.color || "#ff7a00").trim() || "#ff7a00",
+        eta_minutes: normalized.eta_minutes == null || normalized.eta_minutes === "" ? null : Number(normalized.eta_minutes) || 0,
+        is_active: Object.prototype.hasOwnProperty.call(overrides, "is_active")
+          ? (overrides.is_active ? 1 : 0)
+          : (Number(normalized.is_active) === 1 ? 1 : 0),
+        store_ids: Array.isArray(normalized.store_ids) ? normalized.store_ids.slice() : [],
+        price_tiers: Array.isArray(normalized.price_tiers)
+          ? normalized.price_tiers.map((tier) => ({
+            min_order_amount: Number(tier && tier.min_order_amount) || 0,
+            delivery_cost: Number(tier && tier.delivery_cost) || 0,
+            sort_order: Number(tier && tier.sort_order) || 0,
+          }))
+          : [],
+        geometry: normalizeDeliveryZoneGeometryValue(normalized.geometry),
+      };
+    }
+
+    function stopDeliveryHomeActionEvent(event) {
+      event.stopPropagation();
+    }
+
+    function handleDeliveryHomeRowKeydown(event, onOpen) {
+      if (!event || typeof onOpen !== "function") return;
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      onOpen();
+    }
+
+    function createDeliveryHomeStatusSwitch(ariaLabel, checked, onChange) {
+      const control = createSwitch("", checked, onChange);
+      control.classList.add("settings-delivery-home-status-switch");
+      const input = control.querySelector(".switch-input");
+      if (input) {
+        input.setAttribute("aria-label", ariaLabel);
+      }
+      control.addEventListener("click", stopDeliveryHomeActionEvent);
+      control.addEventListener("keydown", stopDeliveryHomeActionEvent);
+      control.addEventListener("pointerdown", stopDeliveryHomeActionEvent);
+      return { control, input };
+    }
+
+    function upsertDeliverySettingInState(setting) {
+      const normalized = normalizeDeliverySetting(setting);
+      const nextItems = Array.isArray(deliverySettingsState.items) ? deliverySettingsState.items.slice() : [];
+      const index = nextItems.findIndex((item) => Number(item && item.id) === normalized.id);
+      if (index >= 0) {
+        nextItems[index] = normalized;
+      } else {
+        nextItems.push(normalized);
+      }
+      deliverySettingsState.items = nextItems;
+      return normalized;
+    }
+
+    async function toggleDeliverySettingActiveFromHome(settingId, checked) {
+      const normalizedId = Number(settingId);
+      if (!Number.isFinite(normalizedId) || normalizedId <= 0) return null;
+      const current = (Array.isArray(deliverySettingsState.items) ? deliverySettingsState.items : [])
+        .find((item) => Number(item && item.id) === normalizedId);
+      if (!current) return null;
+      const saveResult = await updateDeliverySetting(normalizedId, buildDeliverySettingPayloadFromItem(current, { is_active: checked }));
+      if (!saveResult || !saveResult.ok || !saveResult.item) {
+        return null;
+      }
+      upsertDeliverySettingInState(saveResult.item);
+      syncDeliveryTabsWithItems(deliverySettingsState.items, deliveryZonesState.items);
+      renderDeliveryHomeList(deliverySettingsState.items);
+      renderDeliveryZonesHomeList(deliveryZonesState.items);
+      renderDeliveryWorkspace();
+      return normalizeDeliverySetting(saveResult.item);
+    }
+
+    async function toggleDeliveryZoneActiveFromHome(zoneId, checked) {
+      const normalizedId = Number(zoneId);
+      if (!Number.isFinite(normalizedId) || normalizedId <= 0) return null;
+      const current = (Array.isArray(deliveryZonesState.items) ? deliveryZonesState.items : [])
+        .find((item) => Number(item && item.id) === normalizedId);
+      if (!current) return null;
+      const saveResult = await updateDeliveryZone(normalizedId, buildDeliveryZonePayloadFromItem(current, { is_active: checked }));
+      if (!saveResult || !saveResult.ok || !saveResult.item) {
+        return null;
+      }
+      upsertDeliveryZoneInState(saveResult.item);
+      syncDeliveryTabsWithItems(deliverySettingsState.items, deliveryZonesState.items);
+      renderDeliveryHomeList(deliverySettingsState.items);
+      renderDeliveryZonesHomeList(deliveryZonesState.items);
+      renderDeliveryWorkspace();
+      refreshDeliveryZoneLayers();
+      return normalizeDeliveryZone(saveResult.item);
+    }
+
     function getDeliveryTabByKey(key) {
       return deliveryTabsState.tabs.find((tab) => String(tab && tab.key || "") === String(key || "")) || null;
     }
@@ -10598,9 +10908,9 @@
     function applyDeliveryFormDraft(tab) {
       const draft = cloneDeliveryDraft(tab && tab.draft ? tab.draft : createEmptyDeliveryDraft());
       if (settingsDeliverySubtitle) {
-        settingsDeliverySubtitle.textContent = tab && tab.mode === "create"
-          ? "Новая настройка"
-          : `ID ${tab && tab.id ? tab.id : "—"}`;
+        const showCreateSubtitle = Boolean(tab && tab.mode === "create");
+        settingsDeliverySubtitle.textContent = showCreateSubtitle ? "Новая настройка" : "";
+        settingsDeliverySubtitle.classList.toggle("hidden", !showCreateSubtitle);
       }
       if (settingsDeliverySaveText) {
         settingsDeliverySaveText.textContent = tab && tab.mode === "create" ? "Создать" : "Сохранить";
@@ -10684,14 +10994,16 @@
       list.forEach((setting) => {
         const normalized = normalizeDeliverySetting(setting);
         const activeTab = getActiveDeliveryTab();
-        const row = document.createElement("button");
-        row.type = "button";
+        const row = document.createElement("div");
         row.className = "delivery-home-card settings-card";
+        row.setAttribute("role", "button");
+        row.tabIndex = 0;
         row.dataset.id = String(normalized.id);
         row.classList.toggle("is-active", Boolean(activeTab && Number(activeTab.id || 0) === normalized.id));
+        row.classList.toggle("is-disabled", Number(normalized.is_active) !== 1);
 
         const avatar = document.createElement("div");
-        avatar.className = "product-avatar";
+        avatar.className = "product-avatar settings-delivery-home-card-avatar settings-delivery-home-card-avatar--setting";
         avatar.innerHTML = '<i class="fas fa-truck"></i>';
 
         const info = document.createElement("div");
@@ -10710,19 +11022,39 @@
 
         const action = document.createElement("div");
         action.className = "delivery-home-card-action";
+        action.addEventListener("click", stopDeliveryHomeActionEvent);
+        action.addEventListener("keydown", stopDeliveryHomeActionEvent);
+        action.addEventListener("pointerdown", stopDeliveryHomeActionEvent);
 
-        const badge = document.createElement("span");
-        badge.className = "badge";
-        badge.textContent = "Открыть";
+        const switchState = createDeliveryHomeStatusSwitch(
+          `Переключить активность условия доставки ${normalized.name || normalized.id}`,
+          Number(normalized.is_active) === 1,
+          async (nextChecked) => {
+            if (switchState.input) {
+              switchState.input.disabled = true;
+            }
+            const savedItem = await toggleDeliverySettingActiveFromHome(normalized.id, nextChecked);
+            if (!savedItem) {
+              if (switchState.input) {
+                switchState.input.checked = !nextChecked;
+                switchState.input.disabled = false;
+              }
+              alert("Не удалось изменить активность условия доставки.");
+            }
+          }
+        );
 
         info.appendChild(title);
         info.appendChild(subtitle);
-        action.appendChild(badge);
+        action.appendChild(switchState.control);
         row.appendChild(avatar);
         row.appendChild(info);
         row.appendChild(action);
         row.addEventListener("click", () => {
           openDeliverySettingTab(normalized);
+        });
+        row.addEventListener("keydown", (event) => {
+          handleDeliveryHomeRowKeydown(event, () => openDeliverySettingTab(normalized));
         });
         settingsDeliveryHomeList.appendChild(row);
       });
@@ -10880,14 +11212,17 @@
       list.forEach((zone) => {
         const normalized = normalizeDeliveryZone(zone);
         const activeTab = getActiveDeliveryTab();
-        const row = document.createElement("button");
-        row.type = "button";
+        const row = document.createElement("div");
         row.className = "delivery-home-card settings-card settings-delivery-zone-card";
+        row.setAttribute("role", "button");
+        row.tabIndex = 0;
         row.dataset.id = String(normalized.id);
         row.classList.toggle("is-active", Boolean(isDeliveryZoneTab(activeTab) && Number(activeTab.id || 0) === normalized.id));
+        row.classList.toggle("is-disabled", Number(normalized.is_active) !== 1);
+        row.style.setProperty("--delivery-home-zone-color", normalized.color || "#ff7a00");
 
         const avatar = document.createElement("div");
-        avatar.className = "product-avatar";
+        avatar.className = "product-avatar settings-delivery-home-card-avatar settings-delivery-home-card-avatar--zone";
         avatar.innerHTML = `<span class="delivery-home-card-swatch" style="background:${normalized.color || "#ff7a00"}"></span>`;
 
         const info = document.createElement("div");
@@ -10907,19 +11242,39 @@
 
         const action = document.createElement("div");
         action.className = "delivery-home-card-action";
+        action.addEventListener("click", stopDeliveryHomeActionEvent);
+        action.addEventListener("keydown", stopDeliveryHomeActionEvent);
+        action.addEventListener("pointerdown", stopDeliveryHomeActionEvent);
 
-        const badge = document.createElement("span");
-        badge.className = "badge";
-        badge.textContent = "Открыть";
+        const switchState = createDeliveryHomeStatusSwitch(
+          `Переключить активность зоны доставки ${normalized.name || normalized.id}`,
+          Number(normalized.is_active) === 1,
+          async (nextChecked) => {
+            if (switchState.input) {
+              switchState.input.disabled = true;
+            }
+            const savedZone = await toggleDeliveryZoneActiveFromHome(normalized.id, nextChecked);
+            if (!savedZone) {
+              if (switchState.input) {
+                switchState.input.checked = !nextChecked;
+                switchState.input.disabled = false;
+              }
+              alert("Не удалось изменить активность зоны доставки.");
+            }
+          }
+        );
 
         info.appendChild(title);
         info.appendChild(subtitle);
-        action.appendChild(badge);
+        action.appendChild(switchState.control);
         row.appendChild(avatar);
         row.appendChild(info);
         row.appendChild(action);
         row.addEventListener("click", () => {
           openDeliveryZoneTab(normalized);
+        });
+        row.addEventListener("keydown", (event) => {
+          handleDeliveryHomeRowKeydown(event, () => openDeliveryZoneTab(normalized));
         });
         settingsDeliveryZonesHomeList.appendChild(row);
       });
@@ -10927,41 +11282,188 @@
 
     function renderDeliveryZoneStoresCheckboxes(storeIds = []) {
       if (!deliveryZoneStoresList) return;
+      const normalizedIds = Array.from(new Set(
+        (Array.isArray(storeIds) ? storeIds : [])
+          .map((value) => Number(value))
+          .filter((value) => Number.isFinite(value) && value > 0)
+      ));
+      deliveryZoneStoresList.dataset.selectedStoreIds = JSON.stringify(normalizedIds);
       deliveryZoneStoresList.innerHTML = "";
       const stores = storesState.items || [];
       if (!stores.length) {
-        deliveryZoneStoresList.innerHTML = '<div class="muted">Нет филиалов</div>';
+        const empty = document.createElement("div");
+        empty.className = "settings-delivery-zone-store-empty muted";
+        empty.textContent = "Нет доступных филиалов";
+        deliveryZoneStoresList.appendChild(empty);
         return;
       }
-      stores.forEach((store) => {
-        const label = document.createElement("label");
-        label.className = "switch delivery-store-switch";
+      if (!normalizedIds.length) {
+        const empty = document.createElement("div");
+        empty.className = "settings-delivery-zone-store-empty";
+        empty.textContent = "Нажмите «+», чтобы выбрать филиалы";
+        deliveryZoneStoresList.appendChild(empty);
+        return;
+      }
+      normalizedIds.forEach((storeId) => {
+        const store = stores.find((item) => Number(item && item.id) === storeId) || null;
+        const row = document.createElement("div");
+        row.className = "settings-delivery-zone-store-pill";
+        row.setAttribute("data-zone-store-row", String(storeId));
 
-        const input = document.createElement("input");
-        input.className = "switch-input";
-        input.type = "checkbox";
-        input.value = store.id;
-        input.checked = storeIds.includes(store.id);
+        const icon = document.createElement("span");
+        icon.className = "settings-delivery-zone-store-pill-icon";
+        icon.innerHTML = '<i class="fas fa-store"></i>';
 
-        const ui = document.createElement("span");
-        ui.className = "switch-ui";
+        const content = document.createElement("div");
+        content.className = "settings-delivery-zone-store-pill-content";
 
-        const text = document.createElement("span");
-        text.className = "switch-text";
-        text.textContent = store.name || `Филиал #${store.id}`;
+        const title = document.createElement("span");
+        title.className = "settings-delivery-zone-store-pill-title";
+        title.textContent = store && store.name ? store.name : `Филиал #${storeId}`;
+        content.appendChild(title);
 
-        label.appendChild(input);
-        label.appendChild(ui);
-        label.appendChild(text);
-        deliveryZoneStoresList.appendChild(label);
+        if (store && store.city) {
+          const meta = document.createElement("span");
+          meta.className = "settings-delivery-zone-store-pill-meta";
+          meta.textContent = store.city;
+          content.appendChild(meta);
+        }
+
+        const removeBtn = document.createElement("button");
+        removeBtn.type = "button";
+        removeBtn.className = "settings-delivery-zone-store-pill-remove";
+        removeBtn.setAttribute("data-zone-store-remove", String(storeId));
+        removeBtn.setAttribute("aria-label", `Remove store ${storeId}`);
+        removeBtn.innerHTML = '<i class="fas fa-times"></i>';
+
+        row.appendChild(icon);
+        row.appendChild(content);
+        row.appendChild(removeBtn);
+        deliveryZoneStoresList.appendChild(row);
       });
     }
 
     function getSelectedDeliveryZoneStoreIds() {
       if (!deliveryZoneStoresList) return [];
-      return Array.from(deliveryZoneStoresList.querySelectorAll("input[type=\"checkbox\"]:checked"))
-        .map((checkbox) => Number(checkbox.value))
-        .filter((value) => Number.isFinite(value) && value > 0);
+      try {
+        return JSON.parse(String(deliveryZoneStoresList.dataset.selectedStoreIds || "[]"))
+          .map((value) => Number(value))
+          .filter((value) => Number.isFinite(value) && value > 0);
+      } catch (_) {
+        return [];
+      }
+    }
+
+    function removeDeliveryZoneStore(storeId) {
+      const activeTab = getActiveDeliveryTab();
+      const normalizedStoreId = Number(storeId);
+      if (!isDeliveryZoneTab(activeTab) || !Number.isFinite(normalizedStoreId) || normalizedStoreId <= 0) return;
+      const nextStoreIds = getSelectedDeliveryZoneStoreIds()
+        .filter((selectedStoreId) => selectedStoreId !== normalizedStoreId);
+      updateActiveDeliveryZoneDraft({ store_ids: nextStoreIds }, { syncMap: true });
+      renderDeliveryZoneStoresCheckboxes(nextStoreIds);
+    }
+
+    function toggleDeliveryZoneStoresModalSkin(enabled) {
+      if (appModalEl) {
+        appModalEl.classList.toggle("cash-payment-app-modal", !!enabled);
+      }
+      if (appModalBodyEl) {
+        appModalBodyEl.classList.toggle("settings-delivery-zone-stores-modal-body", !!enabled);
+      }
+    }
+
+    function openDeliveryZoneStoresModal() {
+      const activeTab = getActiveDeliveryTab();
+      if (!isDeliveryZoneTab(activeTab) || !window.AppModal || typeof window.AppModal.open !== "function") return;
+
+      const stores = Array.isArray(storesState.items) ? storesState.items.slice() : [];
+      const selectedIds = new Set(getSelectedDeliveryZoneStoreIds());
+      const host = document.createElement("div");
+      host.className = "settings-delivery-zone-stores-modal";
+
+      const note = document.createElement("div");
+      note.className = "settings-delivery-zone-stores-modal-note";
+      note.textContent = stores.length
+        ? "Выберите один или несколько филиалов для этой зоны доставки."
+        : "Нет доступных филиалов для выбора.";
+
+      const list = document.createElement("div");
+      list.className = "settings-delivery-zone-stores-modal-list";
+
+      host.appendChild(note);
+      host.appendChild(list);
+
+      function renderModalList() {
+        list.innerHTML = "";
+        if (!stores.length) {
+          const empty = document.createElement("div");
+          empty.className = "settings-delivery-zone-stores-modal-empty";
+          empty.textContent = "Сначала создайте филиал в разделе филиалов.";
+          list.appendChild(empty);
+          return;
+        }
+
+        stores.forEach((store) => {
+          const storeId = Number(store && store.id);
+          if (!Number.isFinite(storeId) || storeId <= 0) return;
+
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "settings-delivery-zone-stores-modal-item";
+          btn.classList.toggle("is-selected", selectedIds.has(storeId));
+
+          const marker = document.createElement("span");
+          marker.className = "settings-delivery-zone-stores-modal-item-marker";
+
+          const content = document.createElement("span");
+          content.className = "settings-delivery-zone-stores-modal-item-content";
+
+          const title = document.createElement("span");
+          title.className = "settings-delivery-zone-stores-modal-item-title";
+          title.textContent = store.name || `Филиал #${storeId}`;
+          content.appendChild(title);
+
+          if (store.city) {
+            const meta = document.createElement("span");
+            meta.className = "settings-delivery-zone-stores-modal-item-meta";
+            meta.textContent = store.city;
+            content.appendChild(meta);
+          }
+
+          btn.appendChild(marker);
+          btn.appendChild(content);
+          btn.addEventListener("click", () => {
+            if (selectedIds.has(storeId)) {
+              selectedIds.delete(storeId);
+            } else {
+              selectedIds.add(storeId);
+            }
+            renderModalList();
+          });
+          list.appendChild(btn);
+        });
+      }
+
+      renderModalList();
+      toggleDeliveryZoneStoresModalSkin(true);
+      window.AppModal.open({
+        title: "Выбор филиалов",
+        saveText: "Применить",
+        cancelText: "Отмена",
+        content: host,
+        onSave: () => {
+          const orderedIds = stores
+            .map((store) => Number(store && store.id))
+            .filter((storeId) => Number.isFinite(storeId) && selectedIds.has(storeId));
+          updateActiveDeliveryZoneDraft({ store_ids: orderedIds }, { syncMap: true });
+          renderDeliveryZoneStoresCheckboxes(orderedIds);
+          return true;
+        },
+        onClose: () => {
+          toggleDeliveryZoneStoresModalSkin(false);
+        },
+      });
     }
 
     function renderDeliveryZonePriceTiers(items) {
@@ -10971,20 +11473,20 @@
 
       list.forEach((tier, index) => {
         const row = document.createElement("div");
-        row.className = "settings-delivery-zone-tier-row";
+        row.className = "settings-delivery-zone-tier-row settings-delivery-zone-tier-row--zone";
         row.setAttribute("data-zone-tier-row", String(index));
 
         const minField = document.createElement("div");
-        minField.className = "settings-site-field";
-        minField.innerHTML = `<label class="field-label">ОТ СУММЫ</label><input class="control" type="number" min="0" step="1" data-zone-tier-field="min_order_amount" value="${String(tier && tier.min_order_amount != null ? tier.min_order_amount : "")}">`;
+        minField.className = "settings-site-field settings-delivery-zone-tier-field";
+        minField.innerHTML = `<label class="field-label">ОТ СУММЫ</label><input class="control settings-delivery-zone-pill-control" type="number" min="0" step="1" data-zone-tier-field="min_order_amount" value="${String(tier && tier.min_order_amount != null ? tier.min_order_amount : "")}">`;
 
         const costField = document.createElement("div");
-        costField.className = "settings-site-field";
-        costField.innerHTML = `<label class="field-label">СТОИМОСТЬ ДОСТАВКИ</label><input class="control" type="number" min="0" step="1" data-zone-tier-field="delivery_cost" value="${String(tier && tier.delivery_cost != null ? tier.delivery_cost : "")}">`;
+        costField.className = "settings-site-field settings-delivery-zone-tier-field";
+        costField.innerHTML = `<label class="field-label">СТОИМОСТЬ ДОСТАВКИ</label><input class="control settings-delivery-zone-pill-control" type="number" min="0" step="1" data-zone-tier-field="delivery_cost" value="${String(tier && tier.delivery_cost != null ? tier.delivery_cost : "")}">`;
 
         const removeBtn = document.createElement("button");
         removeBtn.type = "button";
-        removeBtn.className = "btn btn-secondary settings-delivery-zone-tier-remove";
+        removeBtn.className = "settings-delivery-zone-tier-remove";
         removeBtn.setAttribute("data-zone-tier-remove", String(index));
         removeBtn.setAttribute("aria-label", "Удалить порог");
         removeBtn.innerHTML = '<i class="fas fa-times"></i>';
@@ -11012,20 +11514,20 @@
 
       list.forEach((tier, index) => {
         const row = document.createElement("div");
-        row.className = "settings-delivery-zone-tier-row";
+        row.className = "settings-delivery-zone-tier-row settings-delivery-zone-tier-row--zone";
         row.setAttribute("data-delivery-tier-row", String(index));
 
         const minField = document.createElement("div");
-        minField.className = "settings-site-field";
-        minField.innerHTML = `<label class="field-label">ОТ СУММЫ</label><input class="control" type="number" min="0" step="1" data-delivery-tier-field="min_order_amount" value="${String(tier && tier.min_order_amount != null ? tier.min_order_amount : "")}">`;
+        minField.className = "settings-site-field settings-delivery-zone-tier-field";
+        minField.innerHTML = `<label class="field-label">ОТ СУММЫ</label><input class="control settings-delivery-zone-pill-control" type="number" min="0" step="1" data-delivery-tier-field="min_order_amount" value="${String(tier && tier.min_order_amount != null ? tier.min_order_amount : "")}">`;
 
         const costField = document.createElement("div");
-        costField.className = "settings-site-field";
-        costField.innerHTML = `<label class="field-label">СТОИМОСТЬ ДОСТАВКИ</label><input class="control" type="number" min="0" step="1" data-delivery-tier-field="delivery_cost" value="${String(tier && tier.delivery_cost != null ? tier.delivery_cost : "")}">`;
+        costField.className = "settings-site-field settings-delivery-zone-tier-field";
+        costField.innerHTML = `<label class="field-label">СТОИМОСТЬ ДОСТАВКИ</label><input class="control settings-delivery-zone-pill-control" type="number" min="0" step="1" data-delivery-tier-field="delivery_cost" value="${String(tier && tier.delivery_cost != null ? tier.delivery_cost : "")}">`;
 
         const removeBtn = document.createElement("button");
         removeBtn.type = "button";
-        removeBtn.className = "btn btn-secondary settings-delivery-zone-tier-remove";
+        removeBtn.className = "settings-delivery-zone-tier-remove";
         removeBtn.setAttribute("data-delivery-tier-remove", String(index));
         removeBtn.setAttribute("aria-label", "Удалить порог");
         removeBtn.innerHTML = '<i class="fas fa-times"></i>';
@@ -11047,17 +11549,6 @@
     }
 
     function buildDeliveryZoneGeometryHint(tab) {
-      const draft = cloneDeliveryZoneDraft(tab && tab.draft ? tab.draft : createEmptyDeliveryZoneDraft());
-      const polygonsCount = countDeliveryZonePolygons(draft.geometry);
-      if (polygonsCount > 0) {
-        return `Полигонов в зоне: ${polygonsCount}. Для добавления или правки используйте инструменты на карте.`;
-      }
-      return tab && tab.mode === "create"
-        ? "Нарисуйте первый полигон на карте. При необходимости можно добавить ещё один полигон этой же зоне."
-        : "У зоны пока нет полигонов. Нарисуйте их на карте, чтобы сохранить настройку.";
-    }
-
-    function buildDeliveryZoneGeometryHint(tab) {
       if (!isDeliveryZoneTab(tab)) {
         return "1. Кликайте по карте, чтобы поставить точки\n2. Следите за линией и заливкой будущей зоны\n3. Нажмите на последнюю точку и выберите «Завершить»\n4. После создания можно двигать точки мышкой";
       }
@@ -11068,6 +11559,219 @@
         return "1. Основные точки показывают вершины выбранного полигона\n2. Точки на линиях вставляют новые вершины между существующими\n3. Потяните любую активную точку, чтобы изменить форму зоны\n4. После правки сохраните изменения";
       }
       return "1. Зона открыта в режиме просмотра\n2. Основные точки показывают вершины выбранного полигона\n3. Нажмите «Редактировать», чтобы включить перетаскивание точек\n4. После включения редактирования появятся и точки на линиях";
+    }
+
+    function normalizeDeliveryZoneColorValue(value) {
+      const normalized = String(value || "").trim();
+      return /^#[0-9a-fA-F]{6}$/.test(normalized) ? normalized.toLowerCase() : "#ff7a00";
+    }
+
+    function clampDeliveryZoneColorChannel(value) {
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric)) return 0;
+      return Math.min(255, Math.max(0, Math.round(numeric)));
+    }
+
+    function hexToDeliveryZoneRgb(value) {
+      const normalized = normalizeDeliveryZoneColorValue(value);
+      return {
+        r: parseInt(normalized.slice(1, 3), 16),
+        g: parseInt(normalized.slice(3, 5), 16),
+        b: parseInt(normalized.slice(5, 7), 16),
+      };
+    }
+
+    function rgbToDeliveryZoneHex(rgb) {
+      return `#${["r", "g", "b"]
+        .map((channel) => clampDeliveryZoneColorChannel(rgb && rgb[channel]).toString(16).padStart(2, "0"))
+        .join("")}`;
+    }
+
+    function getDeliveryZoneColorEditorInputs() {
+      if (!settingsDeliveryZoneColorEditor) return [];
+      return Array.from(settingsDeliveryZoneColorEditor.querySelectorAll("[data-zone-color-channel]"));
+    }
+
+    function readDeliveryZoneColorEditorChannelValue(input) {
+      if (!input) return null;
+      const rawValue = String(input.value || "").trim();
+      if (!rawValue.length) return null;
+      return clampDeliveryZoneColorChannel(rawValue);
+    }
+
+    function closeDeliveryZoneColorEditor() {
+      deliveryZonePanelUiState.colorEditorOpen = false;
+      if (settingsDeliveryZoneColorEditor) {
+        settingsDeliveryZoneColorEditor.classList.add("hidden");
+      }
+      if (settingsDeliveryZoneColorPopover) {
+        settingsDeliveryZoneColorPopover.classList.remove("is-editor-open");
+      }
+      if (settingsDeliveryZoneColorPresets) {
+        settingsDeliveryZoneColorPresets.classList.remove("hidden");
+      }
+      if (settingsDeliveryZoneColorCustomBtn) {
+        settingsDeliveryZoneColorCustomBtn.classList.remove("hidden");
+      }
+    }
+
+    function syncDeliveryZoneColorEditor(color = settingsDeliveryZoneColor && settingsDeliveryZoneColor.value) {
+      const normalized = normalizeDeliveryZoneColorValue(color);
+      const rgb = hexToDeliveryZoneRgb(normalized);
+      if (settingsDeliveryZoneColorEditorPreview) {
+        settingsDeliveryZoneColorEditorPreview.style.background = normalized;
+      }
+      if (settingsDeliveryZoneColorEditorValue) {
+        settingsDeliveryZoneColorEditorValue.textContent = normalized.toUpperCase();
+      }
+      getDeliveryZoneColorEditorInputs().forEach((input) => {
+        const channel = String(input.getAttribute("data-zone-color-channel") || "").toLowerCase();
+        if (!Object.prototype.hasOwnProperty.call(rgb, channel)) return;
+        const nextValue = String(rgb[channel]);
+        if (String(input.value) !== nextValue) {
+          input.value = nextValue;
+        }
+        if (input.getAttribute("data-zone-color-input") === "range") {
+          input.style.setProperty("--zone-range-color", normalized);
+        }
+      });
+    }
+
+    function openDeliveryZoneColorEditor() {
+      if (!settingsDeliveryZoneColorEditor || !settingsDeliveryZoneColorPopover) return;
+      deliveryZonePanelUiState.colorEditorOpen = true;
+      syncDeliveryZoneColorEditor(settingsDeliveryZoneColor && settingsDeliveryZoneColor.value);
+      settingsDeliveryZoneColorEditor.classList.remove("hidden");
+      settingsDeliveryZoneColorPopover.classList.add("is-editor-open");
+      if (settingsDeliveryZoneColorPresets) {
+        settingsDeliveryZoneColorPresets.classList.add("hidden");
+      }
+      if (settingsDeliveryZoneColorCustomBtn) {
+        settingsDeliveryZoneColorCustomBtn.classList.add("hidden");
+      }
+    }
+
+    function setDeliveryZoneColorEditorChannel(channel, value) {
+      const normalizedChannel = String(channel || "").toLowerCase();
+      if (!["r", "g", "b"].includes(normalizedChannel)) return;
+      const rgb = hexToDeliveryZoneRgb(settingsDeliveryZoneColor && settingsDeliveryZoneColor.value);
+      rgb[normalizedChannel] = clampDeliveryZoneColorChannel(value);
+      setDeliveryZoneColorValue(rgbToDeliveryZoneHex(rgb), {
+        syncDraft: true,
+        syncMap: true,
+      });
+    }
+
+    function closeDeliveryZoneInfoPopover() {
+      deliveryZonePanelUiState.infoPopoverOpen = false;
+      if (settingsDeliveryZoneInfoBtn) {
+        settingsDeliveryZoneInfoBtn.setAttribute("aria-expanded", "false");
+      }
+      if (settingsDeliveryZoneInfoPopover) {
+        settingsDeliveryZoneInfoPopover.classList.add("hidden");
+      }
+    }
+
+    function closeDeliveryZoneColorPopover() {
+      deliveryZonePanelUiState.colorPopoverOpen = false;
+      closeDeliveryZoneColorEditor();
+      if (settingsDeliveryZoneColorTrigger) {
+        settingsDeliveryZoneColorTrigger.setAttribute("aria-expanded", "false");
+      }
+      if (settingsDeliveryZoneColorPopover) {
+        settingsDeliveryZoneColorPopover.classList.add("hidden");
+      }
+    }
+
+    function renderDeliveryZoneColorPresets(selectedColor = settingsDeliveryZoneColor && settingsDeliveryZoneColor.value) {
+      if (!settingsDeliveryZoneColorPresets) return;
+      const selected = normalizeDeliveryZoneColorValue(selectedColor);
+      settingsDeliveryZoneColorPresets.innerHTML = "";
+      DELIVERY_ZONE_PRESET_COLORS.forEach((color) => {
+        const swatchBtn = document.createElement("button");
+        swatchBtn.type = "button";
+        swatchBtn.className = "settings-delivery-zone-color-swatch";
+        swatchBtn.dataset.zoneColorPreset = color;
+        swatchBtn.setAttribute("aria-label", `Выбрать цвет ${color.toUpperCase()}`);
+        swatchBtn.classList.toggle("is-selected", color === selected);
+        swatchBtn.style.setProperty("--zone-swatch-color", color);
+        settingsDeliveryZoneColorPresets.appendChild(swatchBtn);
+      });
+    }
+
+    function syncDeliveryZoneColorTrigger(color = settingsDeliveryZoneColor && settingsDeliveryZoneColor.value) {
+      const normalized = normalizeDeliveryZoneColorValue(color);
+      if (settingsDeliveryZoneColor) {
+        settingsDeliveryZoneColor.value = normalized;
+      }
+      if (settingsDeliveryZoneColorPreview) {
+        settingsDeliveryZoneColorPreview.style.background = normalized;
+      }
+      if (settingsDeliveryZoneColorValue) {
+        settingsDeliveryZoneColorValue.textContent = normalized.toUpperCase();
+      }
+      renderDeliveryZoneColorPresets(normalized);
+      syncDeliveryZoneColorEditor(normalized);
+    }
+
+    function setDeliveryZoneColorValue(color, options = {}) {
+      const normalized = normalizeDeliveryZoneColorValue(color);
+      syncDeliveryZoneColorTrigger(normalized);
+      const activeTab = getActiveDeliveryTab();
+      if (options.syncDraft !== false && isDeliveryZoneTab(activeTab)) {
+        updateActiveDeliveryZoneDraft(readDeliveryZoneFormDraft(), {
+          syncMap: options.syncMap !== false,
+          refreshTabs: false,
+        });
+      }
+      if (options.closePopover) {
+        closeDeliveryZoneColorPopover();
+      }
+      return normalized;
+    }
+
+    function openDeliveryZoneInfoPopover() {
+      if (!settingsDeliveryZoneInfoPopover) return;
+      closeDeliveryZoneColorPopover();
+      deliveryZonePanelUiState.infoPopoverOpen = true;
+      settingsDeliveryZoneInfoPopover.classList.remove("hidden");
+      if (settingsDeliveryZoneInfoBtn) {
+        settingsDeliveryZoneInfoBtn.setAttribute("aria-expanded", "true");
+      }
+    }
+
+    function toggleDeliveryZoneInfoPopover(forceOpen) {
+      const shouldOpen = typeof forceOpen === "boolean"
+        ? forceOpen
+        : !deliveryZonePanelUiState.infoPopoverOpen;
+      if (!shouldOpen) {
+        closeDeliveryZoneInfoPopover();
+        return;
+      }
+      openDeliveryZoneInfoPopover();
+    }
+
+    function openDeliveryZoneColorPopover() {
+      if (!settingsDeliveryZoneColorPopover) return;
+      closeDeliveryZoneInfoPopover();
+      closeDeliveryZoneColorEditor();
+      deliveryZonePanelUiState.colorPopoverOpen = true;
+      renderDeliveryZoneColorPresets(settingsDeliveryZoneColor && settingsDeliveryZoneColor.value);
+      settingsDeliveryZoneColorPopover.classList.remove("hidden");
+      if (settingsDeliveryZoneColorTrigger) {
+        settingsDeliveryZoneColorTrigger.setAttribute("aria-expanded", "true");
+      }
+    }
+
+    function toggleDeliveryZoneColorPopover(forceOpen) {
+      const shouldOpen = typeof forceOpen === "boolean"
+        ? forceOpen
+        : !deliveryZonePanelUiState.colorPopoverOpen;
+      if (!shouldOpen) {
+        closeDeliveryZoneColorPopover();
+        return;
+      }
+      openDeliveryZoneColorPopover();
     }
 
     function updateDeliveryZoneGeometryHint(tab) {
@@ -11090,7 +11794,7 @@
       const currentGeometry = syncActiveDeliveryZoneDraftGeometryFromMap();
       return {
         name: String(settingsDeliveryZoneName && settingsDeliveryZoneName.value || ""),
-        color: String(settingsDeliveryZoneColor && settingsDeliveryZoneColor.value || "#ff7a00"),
+        color: normalizeDeliveryZoneColorValue(settingsDeliveryZoneColor && settingsDeliveryZoneColor.value),
         eta_minutes: String(settingsDeliveryZoneEtaMinutes && settingsDeliveryZoneEtaMinutes.value || ""),
         is_active: Boolean(settingsDeliveryZoneActive && settingsDeliveryZoneActive.checked),
         store_ids: getSelectedDeliveryZoneStoreIds(),
@@ -11102,9 +11806,9 @@
     function applyDeliveryZoneFormDraft(tab) {
       const draft = cloneDeliveryZoneDraft(tab && tab.draft ? tab.draft : createEmptyDeliveryZoneDraft());
       if (settingsDeliveryZoneSubtitle) {
-        settingsDeliveryZoneSubtitle.textContent = tab && tab.mode === "create"
-          ? "Новая зона"
-          : `ID ${tab && tab.id ? tab.id : "—"}`;
+        const showCreateSubtitle = Boolean(tab && tab.mode === "create");
+        settingsDeliveryZoneSubtitle.textContent = showCreateSubtitle ? "Новая зона" : "";
+        settingsDeliveryZoneSubtitle.classList.toggle("hidden", !showCreateSubtitle);
       }
       if (settingsDeliveryZoneSaveText) {
         settingsDeliveryZoneSaveText.textContent = tab && tab.mode === "create" ? "Создать" : "Сохранить";
@@ -11114,7 +11818,7 @@
       }
       syncDeliveryZoneEditButton(tab);
       if (settingsDeliveryZoneName) settingsDeliveryZoneName.value = draft.name;
-      if (settingsDeliveryZoneColor) settingsDeliveryZoneColor.value = draft.color || "#ff7a00";
+      syncDeliveryZoneColorTrigger(draft.color || "#ff7a00");
       if (settingsDeliveryZoneEtaMinutes) settingsDeliveryZoneEtaMinutes.value = draft.eta_minutes;
       if (settingsDeliveryZoneActive) settingsDeliveryZoneActive.checked = Boolean(draft.is_active);
       renderDeliveryZoneStoresCheckboxes(draft.store_ids);
@@ -11145,6 +11849,9 @@
       const isDeliverySection = document.body.getAttribute("data-settings-section") === "delivery";
       if (settingsDeliveryTabsHeader) settingsDeliveryTabsHeader.classList.toggle("hidden", !isDeliverySection);
       if (!isDeliverySection) {
+        closeDeliveryDefaultStoreDropdown();
+        closeDeliveryZoneInfoPopover();
+        closeDeliveryZoneColorPopover();
         if (settingsDeliveryHome) settingsDeliveryHome.classList.add("hidden");
         if (settingsDeliveryPanel) settingsDeliveryPanel.classList.add("hidden");
         if (settingsDeliveryFooter) settingsDeliveryFooter.classList.add("hidden");
@@ -11161,6 +11868,13 @@
       const showHome = !activeTab;
       const showMapConfig = isDeliveryMapConfigTab(activeTab);
       const showZone = isDeliveryZoneTab(activeTab);
+      if (showHome || showMapConfig || showZone) {
+        closeDeliveryDefaultStoreDropdown();
+      }
+      if (!showZone) {
+        closeDeliveryZoneInfoPopover();
+        closeDeliveryZoneColorPopover();
+      }
       if (settingsDeliveryHome) settingsDeliveryHome.classList.toggle("hidden", !showHome);
       if (settingsDeliveryPanel) settingsDeliveryPanel.classList.toggle("hidden", showHome || showMapConfig || showZone);
       if (settingsDeliveryFooter) settingsDeliveryFooter.classList.toggle("hidden", showHome || showMapConfig || showZone);
@@ -11209,6 +11923,11 @@
       if (deliveryTabsState.activeKey && deliveryTabsState.activeKey !== nextTab.key) {
         persistActiveDeliveryDraft();
       }
+      if (deliveryTabsState.activeKey !== nextTab.key) {
+        closeDeliveryDefaultStoreDropdown();
+        closeDeliveryZoneInfoPopover();
+        closeDeliveryZoneColorPopover();
+      }
       deliveryTabsState.activeKey = nextTab.key;
       if (isDeliveryZoneTab(nextTab)) {
         deliverySettingsState.selectedId = null;
@@ -11243,6 +11962,8 @@
     function closeDeliveryTab(key, options = {}) {
       const index = deliveryTabsState.tabs.findIndex((tab) => String(tab && tab.key || "") === String(key || ""));
       if (index < 0) return;
+      closeDeliveryZoneInfoPopover();
+      closeDeliveryZoneColorPopover();
       const closingTab = deliveryTabsState.tabs[index] || null;
       const wasActive = deliveryTabsState.activeKey === key;
       if (wasActive) {
@@ -11974,39 +12695,77 @@
 
     function renderDeliveryStoresCheckboxes(storeIds = [], defaultStoreId = null) {
       if (!deliveryStoresList) return;
+      const normalizedIds = Array.from(new Set(
+        (Array.isArray(storeIds) ? storeIds : [])
+          .map((value) => Number(value))
+          .filter((value) => Number.isFinite(value) && value > 0)
+      ));
+      const normalizedDefaultStoreId = Number(defaultStoreId);
+      const nextDefaultStoreId = Number.isFinite(normalizedDefaultStoreId) && normalizedIds.includes(normalizedDefaultStoreId)
+        ? normalizedDefaultStoreId
+        : null;
+
+      deliveryStoresList.dataset.selectedStoreIds = JSON.stringify(normalizedIds);
       deliveryStoresList.innerHTML = "";
 
       const stores = storesState.items || [];
       if (!stores.length) {
-        deliveryStoresList.innerHTML = '<div class="muted">Нет филиалов</div>';
+        const empty = document.createElement("div");
+        empty.className = "settings-delivery-zone-store-empty muted";
+        empty.textContent = "Нет доступных филиалов";
+        deliveryStoresList.appendChild(empty);
         updateDeliveryDefaultStoreSelect([], null);
         return;
       }
 
-      stores.forEach((store) => {
-        const label = document.createElement("label");
-        label.className = "switch delivery-store-switch";
+      if (!normalizedIds.length) {
+        const empty = document.createElement("div");
+        empty.className = "settings-delivery-zone-store-empty";
+        empty.textContent = "Нажмите «+», чтобы выбрать филиалы";
+        deliveryStoresList.appendChild(empty);
+        updateDeliveryDefaultStoreSelect([], null);
+        return;
+      }
 
-        const input = document.createElement("input");
-        input.className = "switch-input";
-        input.type = "checkbox";
-        input.value = store.id;
-        input.checked = storeIds.includes(store.id);
+      normalizedIds.forEach((storeId) => {
+        const store = stores.find((item) => Number(item && item.id) === storeId) || null;
+        const row = document.createElement("div");
+        row.className = "settings-delivery-zone-store-pill";
+        row.setAttribute("data-delivery-store-row", String(storeId));
 
-        const ui = document.createElement("span");
-        ui.className = "switch-ui";
+        const icon = document.createElement("span");
+        icon.className = "settings-delivery-zone-store-pill-icon";
+        icon.innerHTML = '<i class="fas fa-store"></i>';
 
-        const text = document.createElement("span");
-        text.className = "switch-text";
-        text.textContent = store.name || `Филиал #${store.id}`;
+        const content = document.createElement("div");
+        content.className = "settings-delivery-zone-store-pill-content";
 
-        label.appendChild(input);
-        label.appendChild(ui);
-        label.appendChild(text);
-        deliveryStoresList.appendChild(label);
+        const title = document.createElement("span");
+        title.className = "settings-delivery-zone-store-pill-title";
+        title.textContent = store && store.name ? store.name : `Филиал #${storeId}`;
+        content.appendChild(title);
+
+        if (store && store.city) {
+          const meta = document.createElement("span");
+          meta.className = "settings-delivery-zone-store-pill-meta";
+          meta.textContent = store.city;
+          content.appendChild(meta);
+        }
+
+        const removeBtn = document.createElement("button");
+        removeBtn.type = "button";
+        removeBtn.className = "settings-delivery-zone-store-pill-remove";
+        removeBtn.setAttribute("data-delivery-store-remove", String(storeId));
+        removeBtn.setAttribute("aria-label", `Удалить филиал ${storeId}`);
+        removeBtn.innerHTML = '<i class="fas fa-times"></i>';
+
+        row.appendChild(icon);
+        row.appendChild(content);
+        row.appendChild(removeBtn);
+        deliveryStoresList.appendChild(row);
       });
 
-      updateDeliveryDefaultStoreSelect(storeIds, defaultStoreId);
+      updateDeliveryDefaultStoreSelect(normalizedIds, nextDefaultStoreId);
     }
 
     function updateDeliveryDefaultStoreSelect(storeIds, defaultStoreId) {
@@ -12014,6 +12773,7 @@
       const stores = storesState.items || [];
       const selectedStores = stores.filter((s) => storeIds.includes(s.id));
       settingsDeliveryDefaultStore.innerHTML = '<option value="">— не выбран —</option>';
+      settingsDeliveryDefaultStore.disabled = selectedStores.length === 0;
       selectedStores.forEach((store) => {
         const opt = document.createElement("option");
         opt.value = store.id;
@@ -12024,23 +12784,87 @@
       if (defaultStoreId == null || !storeIds.includes(defaultStoreId)) {
         settingsDeliveryDefaultStore.value = "";
       }
+      if (settingsDeliveryDefaultStoreTrigger) {
+        settingsDeliveryDefaultStoreTrigger.disabled = selectedStores.length === 0;
+      }
+      if (settingsDeliveryDefaultStoreSelector) {
+        settingsDeliveryDefaultStoreSelector.classList.toggle("is-disabled", selectedStores.length === 0);
+      }
+      if (settingsDeliveryDefaultStoreValue) {
+        const selectedId = settingsDeliveryDefaultStore.value ? Number(settingsDeliveryDefaultStore.value) : null;
+        const selectedStore = selectedStores.find((store) => Number(store && store.id) === selectedId) || null;
+        settingsDeliveryDefaultStoreValue.textContent = selectedStore && selectedStore.name
+          ? selectedStore.name
+          : "— не выбран —";
+      }
+      if (settingsDeliveryDefaultStoreMenu) {
+        settingsDeliveryDefaultStoreMenu.innerHTML = "";
+
+        const emptyOption = document.createElement("button");
+        emptyOption.type = "button";
+        emptyOption.className = `new-order-right-select-option${settingsDeliveryDefaultStore.value ? "" : " is-selected"}`;
+        emptyOption.setAttribute("role", "option");
+        emptyOption.setAttribute("aria-selected", settingsDeliveryDefaultStore.value ? "false" : "true");
+        emptyOption.setAttribute("data-delivery-default-store-option", "");
+        emptyOption.textContent = "— не выбран —";
+        settingsDeliveryDefaultStoreMenu.appendChild(emptyOption);
+
+        selectedStores.forEach((store) => {
+          const storeId = Number(store && store.id);
+          if (!Number.isFinite(storeId) || storeId <= 0) return;
+          const option = document.createElement("button");
+          option.type = "button";
+          option.className = `new-order-right-select-option${String(settingsDeliveryDefaultStore.value) === String(storeId) ? " is-selected" : ""}`;
+          option.setAttribute("role", "option");
+          option.setAttribute("aria-selected", String(settingsDeliveryDefaultStore.value) === String(storeId) ? "true" : "false");
+          option.setAttribute("data-delivery-default-store-option", String(storeId));
+          option.textContent = store.name || `Филиал #${storeId}`;
+          settingsDeliveryDefaultStoreMenu.appendChild(option);
+        });
+      }
+      if (!selectedStores.length) {
+        closeDeliveryDefaultStoreDropdown();
+      }
     }
 
-    if (deliveryStoresList) {
-      deliveryStoresList.addEventListener("change", () => {
-        const selected = getSelectedDeliveryStoreIds();
-        const currentDefault = settingsDeliveryDefaultStore && settingsDeliveryDefaultStore.value ? Number(settingsDeliveryDefaultStore.value) : null;
-        const keepDefault = currentDefault != null && selected.includes(currentDefault) ? currentDefault : null;
-        updateDeliveryDefaultStoreSelect(selected, keepDefault);
-        updateActiveDeliveryDraft({
-          store_ids: selected,
-          default_store_id: keepDefault,
-        });
-      });
+    function closeDeliveryDefaultStoreDropdown() {
+      if (settingsDeliveryDefaultStoreSelector) {
+        settingsDeliveryDefaultStoreSelector.classList.remove("is-open", "is-drop-up");
+      }
+      if (settingsDeliveryDefaultStoreTrigger) {
+        settingsDeliveryDefaultStoreTrigger.setAttribute("aria-expanded", "false");
+      }
+    }
+
+    function openDeliveryDefaultStoreDropdown() {
+      if (!settingsDeliveryDefaultStoreSelector || !settingsDeliveryDefaultStoreTrigger || settingsDeliveryDefaultStoreTrigger.disabled) return;
+      const menuHeight = settingsDeliveryDefaultStoreMenu
+        ? Math.min(settingsDeliveryDefaultStoreMenu.scrollHeight || 0, 230)
+        : 0;
+      const triggerRect = settingsDeliveryDefaultStoreTrigger.getBoundingClientRect();
+      const shouldDropUp = menuHeight > 0
+        && triggerRect.bottom + 8 + menuHeight > window.innerHeight - 12
+        && triggerRect.top > menuHeight + 20;
+      settingsDeliveryDefaultStoreSelector.classList.toggle("is-drop-up", shouldDropUp);
+      settingsDeliveryDefaultStoreSelector.classList.add("is-open");
+      settingsDeliveryDefaultStoreTrigger.setAttribute("aria-expanded", "true");
+    }
+
+    function toggleDeliveryDefaultStoreDropdown(forceOpen) {
+      if (!settingsDeliveryDefaultStoreSelector || !settingsDeliveryDefaultStoreTrigger || settingsDeliveryDefaultStoreTrigger.disabled) return;
+      const shouldOpen = typeof forceOpen === "boolean"
+        ? forceOpen
+        : !settingsDeliveryDefaultStoreSelector.classList.contains("is-open");
+      if (!shouldOpen) {
+        closeDeliveryDefaultStoreDropdown();
+        return;
+      }
+      openDeliveryDefaultStoreDropdown();
     }
 
     if (settingsDeliveryDefaultStore) {
       settingsDeliveryDefaultStore.addEventListener("change", () => {
+        updateDeliveryDefaultStoreSelect(getSelectedDeliveryStoreIds(), getSelectedDefaultDeliveryStoreId());
         updateActiveDeliveryDraft({
           store_ids: getSelectedDeliveryStoreIds(),
           default_store_id: getSelectedDefaultDeliveryStoreId(),
@@ -12048,10 +12872,68 @@
       });
     }
 
+    if (settingsDeliveryDefaultStoreTrigger) {
+      settingsDeliveryDefaultStoreTrigger.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        toggleDeliveryDefaultStoreDropdown();
+      });
+    }
+
+    if (settingsDeliveryDefaultStoreMenu) {
+      settingsDeliveryDefaultStoreMenu.addEventListener("click", (event) => {
+        const option = event.target && event.target.closest
+          ? event.target.closest("[data-delivery-default-store-option]")
+          : null;
+        if (!option || !settingsDeliveryDefaultStore) return;
+        event.preventDefault();
+        event.stopPropagation();
+        settingsDeliveryDefaultStore.value = String(option.getAttribute("data-delivery-default-store-option") || "");
+        settingsDeliveryDefaultStore.dispatchEvent(new Event("change", { bubbles: true }));
+        closeDeliveryDefaultStoreDropdown();
+      });
+    }
+
+    document.addEventListener("click", (event) => {
+      if (!settingsDeliveryDefaultStoreSelector || !settingsDeliveryDefaultStoreSelector.classList.contains("is-open")) return;
+      if (settingsDeliveryDefaultStoreSelector.contains(event.target)) return;
+      closeDeliveryDefaultStoreDropdown();
+    });
+
+    document.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") return;
+      closeDeliveryDefaultStoreDropdown();
+    });
+
+    if (settingsDeliveryStoresTriggerBtn) {
+      settingsDeliveryStoresTriggerBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        openDeliveryStoresModal();
+      });
+    }
+
+    if (deliveryStoresList) {
+      deliveryStoresList.addEventListener("click", (event) => {
+        const removeBtn = event.target && event.target.closest
+          ? event.target.closest("[data-delivery-store-remove]")
+          : null;
+        if (!removeBtn) return;
+        event.preventDefault();
+        event.stopPropagation();
+        removeDeliveryStore(removeBtn.getAttribute("data-delivery-store-remove"));
+      });
+    }
+
     function getSelectedDeliveryStoreIds() {
       if (!deliveryStoresList) return [];
-      const checkboxes = deliveryStoresList.querySelectorAll("input[type=\"checkbox\"]:checked");
-      return Array.from(checkboxes).map((cb) => Number(cb.value)).filter((v) => Number.isFinite(v));
+      try {
+        return JSON.parse(String(deliveryStoresList.dataset.selectedStoreIds || "[]"))
+          .map((value) => Number(value))
+          .filter((value) => Number.isFinite(value) && value > 0);
+      } catch (_) {
+        return [];
+      }
     }
 
     function getSelectedDefaultDeliveryStoreId() {
@@ -12060,11 +12942,132 @@
       return Number.isFinite(n) && n > 0 ? n : null;
     }
 
+    function removeDeliveryStore(storeId) {
+      const activeTab = getActiveDeliveryTab();
+      const normalizedStoreId = Number(storeId);
+      if (!activeTab || isDeliveryZoneTab(activeTab) || isDeliveryMapConfigTab(activeTab)) return;
+      if (!Number.isFinite(normalizedStoreId) || normalizedStoreId <= 0) return;
+      const nextStoreIds = getSelectedDeliveryStoreIds()
+        .filter((selectedStoreId) => selectedStoreId !== normalizedStoreId);
+      const currentDefaultStoreId = getSelectedDefaultDeliveryStoreId();
+      const nextDefaultStoreId = currentDefaultStoreId != null && nextStoreIds.includes(currentDefaultStoreId)
+        ? currentDefaultStoreId
+        : null;
+      updateActiveDeliveryDraft({
+        store_ids: nextStoreIds,
+        default_store_id: nextDefaultStoreId,
+      });
+      renderDeliveryStoresCheckboxes(nextStoreIds, nextDefaultStoreId);
+    }
+
+    function openDeliveryStoresModal() {
+      const activeTab = getActiveDeliveryTab();
+      if (!activeTab || isDeliveryZoneTab(activeTab) || isDeliveryMapConfigTab(activeTab)) return;
+      if (!window.AppModal || typeof window.AppModal.open !== "function") return;
+      closeDeliveryDefaultStoreDropdown();
+
+      const stores = Array.isArray(storesState.items) ? storesState.items.slice() : [];
+      const selectedIds = new Set(getSelectedDeliveryStoreIds());
+      const host = document.createElement("div");
+      host.className = "settings-delivery-zone-stores-modal";
+
+      const note = document.createElement("div");
+      note.className = "settings-delivery-zone-stores-modal-note";
+      note.textContent = stores.length
+        ? "Выберите один или несколько филиалов для этой настройки доставки."
+        : "Нет доступных филиалов для выбора.";
+
+      const list = document.createElement("div");
+      list.className = "settings-delivery-zone-stores-modal-list";
+
+      host.appendChild(note);
+      host.appendChild(list);
+
+      function renderModalList() {
+        list.innerHTML = "";
+        if (!stores.length) {
+          const empty = document.createElement("div");
+          empty.className = "settings-delivery-zone-stores-modal-empty";
+          empty.textContent = "Сначала создайте филиал в разделе филиалов.";
+          list.appendChild(empty);
+          return;
+        }
+
+        stores.forEach((store) => {
+          const storeId = Number(store && store.id);
+          if (!Number.isFinite(storeId) || storeId <= 0) return;
+
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "settings-delivery-zone-stores-modal-item";
+          btn.classList.toggle("is-selected", selectedIds.has(storeId));
+
+          const marker = document.createElement("span");
+          marker.className = "settings-delivery-zone-stores-modal-item-marker";
+
+          const content = document.createElement("span");
+          content.className = "settings-delivery-zone-stores-modal-item-content";
+
+          const title = document.createElement("span");
+          title.className = "settings-delivery-zone-stores-modal-item-title";
+          title.textContent = store.name || `Филиал #${storeId}`;
+          content.appendChild(title);
+
+          if (store.city) {
+            const meta = document.createElement("span");
+            meta.className = "settings-delivery-zone-stores-modal-item-meta";
+            meta.textContent = store.city;
+            content.appendChild(meta);
+          }
+
+          btn.appendChild(marker);
+          btn.appendChild(content);
+          btn.addEventListener("click", () => {
+            if (selectedIds.has(storeId)) {
+              selectedIds.delete(storeId);
+            } else {
+              selectedIds.add(storeId);
+            }
+            renderModalList();
+          });
+          list.appendChild(btn);
+        });
+      }
+
+      renderModalList();
+      toggleDeliveryZoneStoresModalSkin(true);
+      window.AppModal.open({
+        title: "Выбор филиалов",
+        saveText: "Применить",
+        cancelText: "Отмена",
+        content: host,
+        onSave: () => {
+          const orderedIds = stores
+            .map((store) => Number(store && store.id))
+            .filter((storeId) => Number.isFinite(storeId) && selectedIds.has(storeId));
+          const currentDefaultStoreId = getSelectedDefaultDeliveryStoreId();
+          const nextDefaultStoreId = currentDefaultStoreId != null && orderedIds.includes(currentDefaultStoreId)
+            ? currentDefaultStoreId
+            : null;
+          updateActiveDeliveryDraft({
+            store_ids: orderedIds,
+            default_store_id: nextDefaultStoreId,
+          });
+          renderDeliveryStoresCheckboxes(orderedIds, nextDefaultStoreId);
+          return true;
+        },
+        onClose: () => {
+          toggleDeliveryZoneStoresModalSkin(false);
+        },
+      });
+    }
+
     function fillDeliverySettingForm(setting) {
       if (!setting) return;
       const normalized = normalizeDeliverySetting(setting);
       if (settingsDeliverySubtitle) {
-        settingsDeliverySubtitle.textContent = `ID ${setting.id}`;
+        settingsDeliverySubtitle.textContent = "";
+        settingsDeliverySubtitle.classList.add("hidden");
       }
       if (settingsDeliveryName) settingsDeliveryName.value = normalized.name || "";
       if (settingsDeliveryEtaMinutes) settingsDeliveryEtaMinutes.value = normalized.eta_minutes == null ? "" : String(normalized.eta_minutes);
@@ -12085,7 +13088,10 @@
         settingsDeliveryDeleteBtn.classList.toggle("hidden", mode === "create");
       }
       if (mode === "create") {
-        if (settingsDeliverySubtitle) settingsDeliverySubtitle.textContent = "Новая настройка";
+        if (settingsDeliverySubtitle) {
+          settingsDeliverySubtitle.textContent = "Новая настройка";
+          settingsDeliverySubtitle.classList.remove("hidden");
+        }
         if (settingsDeliveryName) settingsDeliveryName.value = "";
         if (settingsDeliveryEtaMinutes) settingsDeliveryEtaMinutes.value = "";
         if (settingsDeliveryCost) settingsDeliveryCost.value = "";
@@ -14011,6 +15017,10 @@
     }
 
     function focusDeliveryZoneField(target) {
+      if (target === deliveryZoneStoresList && settingsDeliveryZoneStoresTriggerBtn) {
+        settingsDeliveryZoneStoresTriggerBtn.focus();
+        return;
+      }
       if (!target || typeof target.focus !== "function") return;
       target.focus();
       if (typeof target.scrollIntoView === "function") {
@@ -14155,11 +15165,97 @@
       });
     });
 
+    if (settingsDeliveryZoneInfoBtn) {
+      settingsDeliveryZoneInfoBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        toggleDeliveryZoneInfoPopover();
+      });
+    }
+
+    if (settingsDeliveryZoneColorTrigger) {
+      settingsDeliveryZoneColorTrigger.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        toggleDeliveryZoneColorPopover();
+      });
+    }
+
+    if (settingsDeliveryZoneColorPresets) {
+      settingsDeliveryZoneColorPresets.addEventListener("click", (event) => {
+        const presetBtn = event.target && event.target.closest
+          ? event.target.closest("[data-zone-color-preset]")
+          : null;
+        if (!presetBtn) return;
+        event.preventDefault();
+        event.stopPropagation();
+        setDeliveryZoneColorValue(presetBtn.getAttribute("data-zone-color-preset"), {
+          syncDraft: true,
+          syncMap: true,
+          closePopover: true,
+        });
+      });
+    }
+
+    if (settingsDeliveryZoneColorCustomBtn) {
+      settingsDeliveryZoneColorCustomBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        openDeliveryZoneColorEditor();
+      });
+    }
+
     if (settingsDeliveryZoneColor) {
       settingsDeliveryZoneColor.addEventListener("input", () => {
         const activeTab = getActiveDeliveryTab();
         if (!isDeliveryZoneTab(activeTab)) return;
-        updateActiveDeliveryZoneDraft(readDeliveryZoneFormDraft(), { syncMap: true });
+        setDeliveryZoneColorValue(settingsDeliveryZoneColor.value, {
+          syncDraft: true,
+          syncMap: true,
+        });
+      });
+      settingsDeliveryZoneColor.addEventListener("change", () => {
+        syncDeliveryZoneColorTrigger(settingsDeliveryZoneColor.value);
+      });
+    }
+
+    if (settingsDeliveryZoneColorEditor) {
+      settingsDeliveryZoneColorEditor.addEventListener("input", (event) => {
+        const input = event.target && event.target.closest
+          ? event.target.closest("[data-zone-color-channel]")
+          : null;
+        const value = readDeliveryZoneColorEditorChannelValue(input);
+        if (!input || value == null) return;
+        setDeliveryZoneColorEditorChannel(input.getAttribute("data-zone-color-channel"), value);
+      });
+
+      settingsDeliveryZoneColorEditor.addEventListener("change", (event) => {
+        const input = event.target && event.target.closest
+          ? event.target.closest("[data-zone-color-channel]")
+          : null;
+        if (!input) return;
+        const value = readDeliveryZoneColorEditorChannelValue(input);
+        if (value == null) {
+          syncDeliveryZoneColorEditor(settingsDeliveryZoneColor && settingsDeliveryZoneColor.value);
+          return;
+        }
+        setDeliveryZoneColorEditorChannel(input.getAttribute("data-zone-color-channel"), value);
+      });
+    }
+
+    if (settingsDeliveryZoneColorEditorBackBtn) {
+      settingsDeliveryZoneColorEditorBackBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        closeDeliveryZoneColorEditor();
+      });
+    }
+
+    if (settingsDeliveryZoneColorEditorDoneBtn) {
+      settingsDeliveryZoneColorEditorDoneBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        closeDeliveryZoneColorPopover();
       });
     }
 
@@ -14171,11 +15267,23 @@
       });
     }
 
+    if (settingsDeliveryZoneStoresTriggerBtn) {
+      settingsDeliveryZoneStoresTriggerBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        openDeliveryZoneStoresModal();
+      });
+    }
+
     if (deliveryZoneStoresList) {
-      deliveryZoneStoresList.addEventListener("change", () => {
-        const activeTab = getActiveDeliveryTab();
-        if (!isDeliveryZoneTab(activeTab)) return;
-        updateActiveDeliveryZoneDraft(readDeliveryZoneFormDraft(), { syncMap: true });
+      deliveryZoneStoresList.addEventListener("click", (event) => {
+        const removeBtn = event.target && event.target.closest
+          ? event.target.closest("[data-zone-store-remove]")
+          : null;
+        if (!removeBtn) return;
+        event.preventDefault();
+        event.stopPropagation();
+        removeDeliveryZoneStore(removeBtn.getAttribute("data-zone-store-remove"));
       });
     }
 
@@ -14318,6 +15426,8 @@
           deliveryZonesState.snapshot = { ...savedZone };
           deliveryZonesState.mode = "edit";
           deliveryZonesState.hoverLatLng = null;
+          closeDeliveryZoneInfoPopover();
+          closeDeliveryZoneColorPopover();
           closeDeliveryZonePointMenu();
           syncDeliveryTabsWithItems(deliverySettingsState.items, deliveryZonesState.items);
           renderDeliveryHomeList(deliverySettingsState.items);
@@ -14346,6 +15456,8 @@
           selected_polygon_index: countDeliveryZonePolygons(activeTab.draft.geometry) > 0 ? 0 : -1,
         });
         deliveryZonesState.hoverLatLng = null;
+        closeDeliveryZoneInfoPopover();
+        closeDeliveryZoneColorPopover();
         closeDeliveryZonePointMenu();
         applyDeliveryZoneFormDraft(activeTab);
         syncDeliveryZoneMapEditing();
