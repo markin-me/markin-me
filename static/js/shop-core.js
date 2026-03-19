@@ -174,6 +174,7 @@
     $("#shopToolbarTitle") ||
     $("[data-shop-category-title]");
   const elCatChipsWrap = $("#shopCatChipsWrap");
+  const elCatSheetTriggerBtn = $("#shopCatSheetTriggerBtn");
   const elCatChips = $("#shopCatChips");
 
   const elCartList =
@@ -278,6 +279,7 @@
   const elMobileCheckoutBackBtn = $("#shopMobileCheckoutBackBtn");
   const elMobileCheckoutSubmitBtn = $("#shopMobileCheckoutSubmitBtn");
   const elMobileBenefitsPromoWrap = $("#shopMobileBenefitsPromoWrap");
+  const elMobileBenefitsInlineApplyBtn = $("#shopMobileBenefitsInlineApplyBtn");
   const elMobileOrderDetailsActions = $("#shopMobileOrderDetailsActions");
   const elMobileOrderRepeatBtn = $("#shopMobileOrderRepeatBtn");
   const elMobileOrderTotalBtn = $("#shopMobileOrderTotalBtn");
@@ -301,6 +303,7 @@
   const elDesktopDeliveryProgressWrap = $("#shopCartDeliveryProgress");
   const elDesktopDeliveryProgressFill = $("#shopCartDeliveryProgressFill");
   const elDesktopDeliveryProgressLabel = $("#shopCartDeliveryProgressLabel");
+  const elDesktopCartBenefitsTriggerBtn = $("#shopCartBenefitsTriggerBtn");
   const elCheckoutFooterActions = $("#shopCheckoutFooterActions");
   const elOrderDetailsFooterActions = $("#shopOrderDetailsFooterActions");
   const elOrderDetailsRepeatBtn = $("#shopOrderDetailsRepeatBtn");
@@ -311,6 +314,8 @@
   const elCheckoutBackBtn = $("#shopCheckoutBackBtn");
   const elCheckoutSubmitBtn = $("#shopCheckoutSubmitBtn");
   const elCheckoutContent = $("#shopCheckoutContent");
+  const elCheckoutBenefitsContent = $("#shopCheckoutBenefitsContent");
+  const elCheckoutBenefitDetailContent = $("#shopCheckoutBenefitDetailContent");
   const elProfileContent = $("#shopProfileContent");
   const elProductContent = $("#shopProductContent");
   const elProfileHeaderActions = $("#shopProfileHeaderActions");
@@ -1262,7 +1267,8 @@
     const active = document.querySelector(".shop-nav-btn.is-active");
     if (!active) return null;
     const raw = String(active.getAttribute("data-tab") || "").trim().toLowerCase();
-    if (raw === "menu" || raw === "categories" || raw === "cart" || raw === "fav" || raw === "profile") {
+    if (raw === "categories") return "menu";
+    if (raw === "menu" || raw === "benefits" || raw === "cart" || raw === "fav" || raw === "profile") {
       return raw;
     }
     return null;
@@ -1314,6 +1320,7 @@
     if (isVisibleNode(elActiveOrdersSheetCollapsed)) return "active-orders-collapsed";
     if (isVisibleNode(elMobileCartActions)) {
       if (isVisibleNode(elMobileCartActionsGiftClaim)) return "gift-claim-actions";
+      if (isVisibleNode(elMobileBenefitsInlineApplyBtn)) return "benefits-nav-actions";
       if (isVisibleNode(elMobileCartActionsBenefits)) return "benefits-actions";
       if (isVisibleNode(elMobileCartActionsCheckout)) return "checkout-actions";
       if (isVisibleNode(elMobileCartActionsCart)) return "cart-actions";
@@ -1326,8 +1333,12 @@
     const options = opts && typeof opts === "object" ? opts : {};
     const isCartSheetOpen = Boolean(options.sheetOpen) && String(options.sheetType || "") === "cart";
     const panelName = String(panel || "");
+    const benefitsSourceScreen = String(options.sheetData?.benefitsSourceScreen || "").trim().toLowerCase();
     if (panelName === "benefit-gift-claim") return isCartSheetOpen ? "gift-claim-actions" : "nav";
-    if (panelName === "benefits") return isCartSheetOpen ? "benefits-actions" : "nav";
+    if (panelName === "benefits") {
+      if (!isCartSheetOpen) return "nav";
+      return benefitsSourceScreen === "nav" ? "benefits-nav-actions" : "benefits-actions";
+    }
     if (panelName === "checkout") return isCartSheetOpen ? "checkout-actions" : "nav";
     if (panelName === "cart") {
       if (!isCartSheetOpen) return "nav";
@@ -1356,18 +1367,24 @@
   function renderMobileBottomByState(snapshot, reason = "renderMobileBottomByState") {
     const stateSnapshot = snapshot && typeof snapshot === "object" ? snapshot : window.getShopMobileUiState();
     const isMobile = Boolean(stateSnapshot && stateSnapshot.isMobile);
-    if (!isMobile) return;
+    const panelName = String(stateSnapshot?.panel || "").trim();
+    const isBenefitsPanel = panelName === "benefits" || panelName === "benefit-gift-claim";
+    if (!isMobile) {
+      document.body.classList.remove("shop-benefits-sheet-open");
+      return;
+    }
 
     const normalizeTab = (rawTab) => {
       const t = String(rawTab || "").toLowerCase();
-      if (t === "menu" || t === "categories" || t === "cart" || t === "fav" || t === "profile") return t;
+      if (t === "categories") return "menu";
+      if (t === "menu" || t === "benefits" || t === "cart" || t === "fav" || t === "profile") return t;
       return "menu";
     };
 
     const tab = normalizeTab(stateSnapshot.tab);
     const navMap = {
       menu: elNavMenu,
-      categories: elNavCategories,
+      benefits: elNavCategories,
       cart: elNavCart,
       fav: elNavFav,
       profile: elNavProfile,
@@ -1387,22 +1404,24 @@
     const sheetType = String(stateSnapshot?.sheet?.type || "").trim();
     const benefitsInnerOverlayOpen = document.body.classList.contains("shop-benefits-overlay-open");
     let mode = modeRaw || "nav";
-    if ((mode === "cart-actions" || mode === "cart-empty-actions" || mode === "checkout-actions" || mode === "benefits-actions" || mode === "gift-claim-actions") && !(sheetOpen && sheetType === "cart")) {
+    if ((mode === "cart-actions" || mode === "cart-empty-actions" || mode === "checkout-actions" || mode === "benefits-actions" || mode === "benefits-nav-actions" || mode === "gift-claim-actions") && !(sheetOpen && sheetType === "cart")) {
       mode = "nav";
     }
-    if (benefitsInnerOverlayOpen && String(stateSnapshot?.panel || "") === "benefits") {
+    if (benefitsInnerOverlayOpen && panelName === "benefits") {
       mode = "nav";
     }
+    document.body.classList.toggle("shop-benefits-sheet-open", isBenefitsPanel);
     const setVisible = (el, visible) => {
       if (!el) return;
       el.classList.toggle("hidden", !visible);
     };
 
     const showProductActions = mode === "product-actions";
-    const showCartActions = mode === "cart-actions" || mode === "cart-empty-actions" || mode === "checkout-actions" || mode === "benefits-actions" || mode === "gift-claim-actions";
+    const showCartActions = mode === "cart-actions" || mode === "cart-empty-actions" || mode === "checkout-actions" || mode === "benefits-actions" || mode === "benefits-nav-actions" || mode === "gift-claim-actions";
     const showCartActionsCart = mode === "cart-actions";
     const showCartActionsCheckout = mode === "checkout-actions";
     const showCartActionsBenefits = mode === "benefits-actions";
+    const showCartActionsBenefitsNav = mode === "benefits-nav-actions";
     const showCartActionsGiftClaim = mode === "gift-claim-actions";
     const showAddressActions = mode === "address-actions";
     const showAddressConfirm = mode === "address-confirm";
@@ -1415,10 +1434,15 @@
     setVisible(elMobileCartActionsCheckout, showCartActionsCheckout);
     setVisible(elMobileCartActionsBenefits, showCartActionsBenefits);
     setVisible(elMobileCartActionsGiftClaim, showCartActionsGiftClaim);
-    setVisible(elMobileBenefitsPromoWrap, showCartActionsBenefits);
+    setVisible(elMobileBenefitsPromoWrap, showCartActionsBenefits || showCartActionsBenefitsNav);
+    setVisible(elMobileBenefitsInlineApplyBtn, showCartActionsBenefitsNav);
     setVisible(elMobileAddressActions, showAddressActions);
     setVisible(elMobileAddressConfirm, showAddressConfirm);
     setVisible(elMobileOrderDetailsActions, showOrderDetailsActions);
+
+    if ((showCartActionsBenefits || showCartActionsBenefitsNav) && elMobileDeliveryProgressWrap) {
+      elMobileDeliveryProgressWrap.classList.add("hidden");
+    }
 
     if (elActiveOrdersSheetCollapsed) {
       if (showActiveOrdersCollapsed) {
@@ -1490,6 +1514,7 @@
       sheetOpen,
       sheetType,
       sheetScreen,
+      sheetData: sheetNavigationState?.data,
     }) || resolveMobileFooterModeSnapshot();
     const currentTab = getCurrentMobileTabFromDom();
 
@@ -1500,8 +1525,9 @@
 
     let tab = currentTab || "menu";
     if (!currentTab) {
-      if (panel === "categories") tab = "categories";
-      else if (panel === "cart" || panel === "checkout" || panel === "benefits" || panel === "benefit-gift-claim") tab = "cart";
+      if (panel === "categories") tab = "menu";
+      else if (panel === "benefits" || panel === "benefit-gift-claim") tab = "benefits";
+      else if (panel === "cart" || panel === "checkout") tab = "cart";
       else if (panel === "profile") tab = "profile";
       else if (panel === "favorites") tab = "fav";
       else tab = "menu";
@@ -5228,6 +5254,35 @@ function setSheetHeaderMode(
     }
   }
 
+  function hideDesktopBenefitsPanels({ clearDetail = false } = {}) {
+    if (elCheckoutBenefitsContent) {
+      elCheckoutBenefitsContent.classList.add("hidden");
+    }
+    if (elCheckoutBenefitDetailContent) {
+      elCheckoutBenefitDetailContent.classList.add("hidden");
+      if (clearDetail) {
+        elCheckoutBenefitDetailContent.innerHTML = "";
+      }
+    }
+  }
+
+  function getDesktopCheckoutActions() {
+    return { submitBtn: elCheckoutSubmitBtn, backBtn: elCheckoutBackBtn };
+  }
+
+  async function openDesktopCheckoutView({ onBack = showCartView } = {}) {
+    if (!elCheckoutContent) return;
+    showCheckoutView();
+    await openCheckoutView({
+      container: elCheckoutContent,
+      onBack,
+      onShowBenefits: showDesktopBenefitsView,
+      hasAddressEditor: true,
+      isSheet: false,
+      actions: getDesktopCheckoutActions(),
+    });
+  }
+
   function applyTheme(nextTheme) {
     const root = document.documentElement;
     const next = nextTheme === "dark" ? "dark" : "light";
@@ -5299,6 +5354,7 @@ function showCartView() {
   if (elProductContent) elProductContent.classList.add("hidden");
   if (elCartContent) elCartContent.classList.remove("hidden");
   if (elProfileContent) elProfileContent.classList.add("hidden");
+  hideDesktopBenefitsPanels({ clearDetail: true });
 
   const line = getCartHeaderAddressLine();
   const t = line || "Укажите адрес";
@@ -5336,6 +5392,7 @@ function showCheckoutView() {
   if (elProductContent) elProductContent.classList.add("hidden");
   if (elCheckoutContent) elCheckoutContent.classList.remove("hidden");
   if (elProfileContent) elProfileContent.classList.add("hidden");
+  hideDesktopBenefitsPanels({ clearDetail: true });
 
   const line = getCartHeaderAddressLine();
   const t = line || "Укажите адрес";
@@ -5374,6 +5431,7 @@ function showAddressListView(backMode = "cart", opts = {}) {
   if (elCheckoutContent) elCheckoutContent.classList.add("hidden");
   if (elProductContent) elProductContent.classList.add("hidden");
   if (elProfileContent) elProfileContent.classList.add("hidden");
+  hideDesktopBenefitsPanels({ clearDetail: true });
 
   elAddressContent.classList.remove("hidden");
   elAddressListView.classList.remove("hidden");
@@ -5447,6 +5505,7 @@ async function showAddressFormView(prefill, editingId, backMode) {
   if (elCheckoutContent) elCheckoutContent.classList.add("hidden");
   if (elProductContent) elProductContent.classList.add("hidden");
   if (elProfileContent) elProfileContent.classList.add("hidden");
+  hideDesktopBenefitsPanels({ clearDetail: true });
 
   elAddressContent.classList.remove("hidden");
   elAddressFormView.classList.remove("hidden");
@@ -5496,6 +5555,7 @@ function showPickupListView(backMode = "checkout") {
     if (elCheckoutContent) elCheckoutContent.classList.add("hidden");
     if (elProductContent) elProductContent.classList.add("hidden");
     if (elProfileContent) elProfileContent.classList.remove("hidden");
+    hideDesktopBenefitsPanels({ clearDetail: true });
     setCartHeader({ title: "Профиль", showAddressChip: false, showProfileActions: true, showBack: false });
     setCartFooterMode("hidden");
     queueMobileUiStateSync("showProfileView");
@@ -5517,14 +5577,7 @@ function showPickupListView(backMode = "checkout") {
       return;
     }
     if (previousPanelMode === "checkout" && elCheckoutContent) {
-      showCheckoutView();
-      await openCheckoutView({
-        container: elCheckoutContent,
-        onBack: showCartView,
-        hasAddressEditor: true,
-        isSheet: false,
-        actions: { submitBtn: elCheckoutSubmitBtn, backBtn: elCheckoutBackBtn },
-      });
+      await openDesktopCheckoutView({ onBack: showCartView });
       return;
     }
     if (previousPanelMode === "address") {
@@ -5544,6 +5597,7 @@ function showProductView() {
   if (elCheckoutContent) elCheckoutContent.classList.add("hidden");
   if (elProfileContent) elProfileContent.classList.add("hidden");
   if (elProductContent) elProductContent.classList.remove("hidden");
+  hideDesktopBenefitsPanels({ clearDetail: true });
 
   // Product mode (desktop header): ? ?????, ? ??????, title+chip ??????
   setCartHeader({
@@ -5672,14 +5726,7 @@ function showProductView() {
       return;
     }
     if (back === "checkout" && elCheckoutContent) {
-      showCheckoutView();
-      openCheckoutView({
-        container: elCheckoutContent,
-        onBack: showCartView,
-        hasAddressEditor: true,
-        isSheet: false,
-        actions: { submitBtn: elCheckoutSubmitBtn, backBtn: elCheckoutBackBtn },
-      });
+      void openDesktopCheckoutView({ onBack: showCartView });
       return;
     }
     showCartView();
@@ -6285,14 +6332,7 @@ function showProductView() {
         // ???????????? ? ??????
         const back = state._pickupListBackMode || "checkout";
         if (back === "checkout" && elCheckoutContent) {
-          showCheckoutView();
-          await openCheckoutView({
-            container: elCheckoutContent,
-            onBack: showCartView,
-            hasAddressEditor: true,
-            isSheet: false,
-            actions: { submitBtn: elCheckoutSubmitBtn, backBtn: elCheckoutBackBtn },
-          });
+          await openDesktopCheckoutView({ onBack: showCartView });
         } else {
           showCartView();
         }
@@ -6484,14 +6524,7 @@ async function initAddresses() {
       }
       else if (back === "checkout") {
         if (elCheckoutContent) {
-          showCheckoutView();
-          openCheckoutView({
-            container: elCheckoutContent,
-            onBack: showCartView,
-            hasAddressEditor: true,
-            isSheet: false,
-            actions: { submitBtn: elCheckoutSubmitBtn, backBtn: elCheckoutBackBtn },
-          });
+          void openDesktopCheckoutView({ onBack: showCartView });
         } else {
           showCartView();
         }
@@ -6541,14 +6574,7 @@ async function initAddresses() {
             if (state._addressFormBackMode === "profile") {
               await openProfilePanel(null, { forceOpen: true, initialTab: "addresses" });
             } else if (state._addressFormBackMode === "checkout" && elCheckoutContent) {
-              showCheckoutView();
-              openCheckoutView({
-                container: elCheckoutContent,
-                onBack: showCartView,
-                hasAddressEditor: true,
-                isSheet: false,
-                actions: { submitBtn: elCheckoutSubmitBtn, backBtn: elCheckoutBackBtn },
-              });
+              await openDesktopCheckoutView({ onBack: showCartView });
             } else {
               showCartView();
             }
@@ -6559,14 +6585,7 @@ async function initAddresses() {
             if (state._addressFormBackMode === "profile") {
               await openProfilePanel(null, { forceOpen: true, initialTab: "addresses" });
             } else if (state._addressFormBackMode === "checkout" && elCheckoutContent) {
-              showCheckoutView();
-              openCheckoutView({
-                container: elCheckoutContent,
-                onBack: showCartView,
-                hasAddressEditor: true,
-                isSheet: false,
-                actions: { submitBtn: elCheckoutSubmitBtn, backBtn: elCheckoutBackBtn },
-              });
+              await openDesktopCheckoutView({ onBack: showCartView });
             } else {
               showCartView();
             }
@@ -6609,14 +6628,7 @@ async function initAddresses() {
           if (state._addressFormBackMode === "profile") {
             await openProfilePanel(null, { forceOpen: true, initialTab: "addresses" });
           } else if (state._addressFormBackMode === "checkout" && elCheckoutContent) {
-            showCheckoutView();
-            openCheckoutView({
-              container: elCheckoutContent,
-              onBack: showCartView,
-              hasAddressEditor: true,
-              isSheet: false,
-              actions: { submitBtn: elCheckoutSubmitBtn, backBtn: elCheckoutBackBtn },
-            });
+            await openDesktopCheckoutView({ onBack: showCartView });
           } else {
             showCartView();
           }
@@ -6628,14 +6640,7 @@ async function initAddresses() {
           if (state._addressFormBackMode === "profile") {
             await openProfilePanel(null, { forceOpen: true, initialTab: "addresses" });
           } else if (state._addressFormBackMode === "checkout" && elCheckoutContent) {
-            showCheckoutView();
-            openCheckoutView({
-              container: elCheckoutContent,
-              onBack: showCartView,
-              hasAddressEditor: true,
-              isSheet: false,
-              actions: { submitBtn: elCheckoutSubmitBtn, backBtn: elCheckoutBackBtn },
-            });
+            await openDesktopCheckoutView({ onBack: showCartView });
           } else {
             showCartView();
           }
@@ -6825,8 +6830,10 @@ async function initAddresses() {
     if (!scroller || !wrap) return;
 
     // Делаем так, чтобы активный чип оказывался у левого края (с небольшим отступом)
-    const paddingLeft = 12;
-    let target = Math.max(0, chip.offsetLeft - paddingLeft);
+    const stopBeforeTrigger = window.matchMedia("(max-width: 768px)").matches && elCatSheetTriggerBtn
+      ? (elCatSheetTriggerBtn.offsetWidth || 40) + 12
+      : 12;
+    let target = Math.max(0, chip.offsetLeft - stopBeforeTrigger);
 
     // Если уже почти на нужном месте — не дёргаем скролл
     const current = scroller.scrollLeft || 0;
@@ -6945,6 +6952,44 @@ async function initAddresses() {
     if (!elCatChips) return;
     elCatChips.innerHTML = "";
 
+    const openCategoriesChipSheet = () => {
+      const openSheet = () => {
+        const isCategoriesSheetOpen =
+          Boolean(window.AppModal && typeof window.AppModal.isOpen === "function" && window.AppModal.isOpen())
+          && sheetNavigationState.type === "categories";
+        if (isCategoriesSheetOpen) {
+          if (typeof closeShopSheetIfOpen === "function") closeShopSheetIfOpen();
+          return;
+        }
+        if (typeof closeShopSheetIfOpen === "function") closeShopSheetIfOpen();
+        if (typeof window.openCategoriesSheet === "function") {
+          window.openCategoriesSheet();
+        }
+      };
+
+      if (window.__shopLateLoaded && typeof window.openCategoriesSheet === "function") {
+        openSheet();
+        return;
+      }
+
+      ensureShopLateLoaded().then(() => {
+        openSheet();
+      });
+    };
+
+    if (elCatSheetTriggerBtn) {
+      elCatSheetTriggerBtn.onclick = openCategoriesChipSheet;
+    }
+
+    const triggerBtn = document.createElement("button");
+    triggerBtn.type = "button";
+    triggerBtn.className = "shop-cat-chip shop-cat-chip--sheet-trigger";
+    triggerBtn.setAttribute("aria-label", "Категории");
+    triggerBtn.setAttribute("title", "Категории");
+    triggerBtn.innerHTML = '<i class="fas fa-list" aria-hidden="true"></i>';
+    triggerBtn.addEventListener("click", openCategoriesChipSheet);
+    elCatChips.appendChild(triggerBtn);
+
     getVisibleCategories().forEach((c) => {
       const btn = document.createElement("button");
       btn.type = "button";
@@ -7034,6 +7079,74 @@ async function initAddresses() {
     pill.appendChild(btnPlus);
 
     return { pill, btnMinus, btnPlus, center };
+  }
+
+  function formatCatalogDiscountBadgeAmount(amount) {
+    const value = roundPrice(Number(amount || 0));
+    if (!(value > 0)) return "";
+    return `-${moneyNoSign(value)} ₽`;
+  }
+
+  function getCatalogProductDiscountBadge(product, calculatedPrice = null) {
+    if (!product || typeof product !== "object") return "";
+
+    const apiDiscount = product.discount;
+    const apiDiscountAmount = roundPrice(Number(apiDiscount?.discount_amount || 0));
+    if (apiDiscount && apiDiscountAmount > 0) {
+      const discountType = str(apiDiscount.discount_type || "").trim().toLowerCase();
+      const discountValue = Number(apiDiscount.discount_value || 0);
+      if (discountType === "percent" && discountValue > 0) {
+        return `-${Math.round(discountValue)}%`;
+      }
+      return formatCatalogDiscountBadgeAmount(apiDiscountAmount);
+    }
+
+    const currentPriceRaw = calculatedPrice != null
+      ? Number(calculatedPrice)
+      : (product.display_price != null ? Number(product.display_price) : Number(product.price || 0));
+    const currentPrice = roundPrice(Number.isFinite(currentPriceRaw) ? currentPriceRaw : 0);
+    const originalPriceRaw = product.original_price != null
+      ? Number(product.original_price)
+      : Number(product.old_price || 0);
+    const originalPrice = roundPrice(Number.isFinite(originalPriceRaw) ? originalPriceRaw : 0);
+    if (!(originalPrice > currentPrice && currentPrice >= 0)) return "";
+
+    const percent = Math.round(((originalPrice - currentPrice) / originalPrice) * 100);
+    if (percent > 0) return `-${percent}%`;
+    return formatCatalogDiscountBadgeAmount(originalPrice - currentPrice);
+  }
+
+  function getCatalogComboDiscountBadge(combo) {
+    const discountPercent = Number(combo?.discount_percent || 0) || 0;
+    if (!(discountPercent > 0)) return "";
+    return `-${Math.round(discountPercent)}%`;
+  }
+
+  function createCatalogDiscountBadge(badgeText) {
+    const text = str(badgeText || "").trim();
+    if (!text) return null;
+    const badge = document.createElement("div");
+    badge.className = "sp-card-discount-badge sp-combo-discount";
+    badge.textContent = text;
+    return badge;
+  }
+
+  function syncCatalogProductDiscountBadge(card, product, calculatedPrice = null) {
+    if (!card || !product) return;
+    const media = $(".sp-media", card);
+    if (!media) return;
+    const badgeText = getCatalogProductDiscountBadge(product, calculatedPrice);
+    const currentBadge = media.querySelector(".sp-card-discount-badge");
+    if (!badgeText) {
+      if (currentBadge) currentBadge.remove();
+      return;
+    }
+    if (currentBadge) {
+      currentBadge.textContent = badgeText;
+      return;
+    }
+    const badge = createCatalogDiscountBadge(badgeText);
+    if (badge) media.appendChild(badge);
   }
 
   function catalogCenterHtml(product, qty, calculatedPrice = null) {
@@ -7178,6 +7291,7 @@ async function initAddresses() {
     if (center) {
       center.innerHTML = catalogCenterHtml(product, qty, calculatedPrice);
     }
+    syncCatalogProductDiscountBadge(card, product, calculatedPrice);
   }
 
   let __shopChatPromise = null;
@@ -7697,17 +7811,8 @@ async function initAddresses() {
         overlay.appendChild(qBox);
         media.appendChild(overlay);
 
-        // Бейдж скидки поверх изображения (как на комбо)
-        if (p.discount && p.discount.discount_amount > 0) {
-          const discountBadge = document.createElement("div");
-          discountBadge.className = "sp-combo-discount";
-          if (p.discount.discount_type === 'percent') {
-            discountBadge.textContent = `-${Math.round(p.discount.discount_value)}%`;
-          } else {
-            discountBadge.textContent = `-${moneyNoSign(p.discount.discount_amount)} ₽`;
-          }
-          media.appendChild(discountBadge);
-        }
+        const productDiscountBadge = createCatalogDiscountBadge(getCatalogProductDiscountBadge(p));
+        if (productDiscountBadge) media.appendChild(productDiscountBadge);
 
         card.appendChild(media);
 
@@ -7888,13 +7993,8 @@ async function initAddresses() {
           if (fullImgEl && fullImgEl.complete) media.classList.add("is-loaded");
         }
 
-        const discountPercent = Number(combo.discount_percent) || 0;
-        if (discountPercent > 0) {
-          const badge = document.createElement("div");
-          badge.className = "sp-combo-discount";
-          badge.textContent = "-" + Math.round(discountPercent) + "%";
-          media.appendChild(badge);
-        }
+        const comboDiscountBadge = createCatalogDiscountBadge(getCatalogComboDiscountBadge(combo));
+        if (comboDiscountBadge) media.appendChild(comboDiscountBadge);
 
         card.appendChild(media);
 
@@ -8020,6 +8120,7 @@ async function initAddresses() {
       btnPlus.disabled = plusDisabled;
     }
     if (center) {
+      syncCatalogProductDiscountBadge(card, product, defaultPriceCache.get(product.id));
       if (!availableForAdd) {
         center.textContent = "Нет в наличии";
       } else {
@@ -11097,6 +11198,7 @@ if (__shopHasRequiredDom) initCore();
 
 // Late-loaded on shop-late.js. Core keeps a safe no-op to avoid ReferenceError during first paint.
 function updateMobileDeliveryProgress() {}
+async function showDesktopBenefitsView() {}
 
 let __iosBackSwipeGuardBound = false;
 function bindIosBackSwipeGuard() {

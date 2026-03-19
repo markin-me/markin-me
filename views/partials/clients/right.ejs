@@ -51,7 +51,7 @@
           </button>
         </div>
 
-        <div class="form-row-2" style="margin-top:12px;">
+        <div class="form-row-3" style="margin-top:12px;">
           <label class="switch">
             <input class="switch-input" type="checkbox" name="is_active" id="fe_is_active" checked />
             <span class="switch-ui" aria-hidden="true"></span>
@@ -837,10 +837,18 @@
             <span class="switch-text">Можно совмещать</span>
           </label>
           <label class="switch">
+            <input class="switch-input" type="checkbox" name="hide_in_benefits" id="de_hide_in_benefits" />
+            <span class="switch-ui" aria-hidden="true"></span>
+            <span class="switch-text">Скрывать в выгодах</span>
+          </label>
+          <label class="switch">
             <input class="switch-input" type="checkbox" name="is_active" id="de_is_active" checked />
             <span class="switch-ui" aria-hidden="true"></span>
             <span class="switch-text">Активна</span>
           </label>
+        </div>
+        <div class="discount-switch-hint" id="de_hide_in_benefits_hint">
+          Скрытая выгода не показывается клиенту в списке выгод. Для промокода это сценарий ручного ввода, для скидки - просто скрытие из выгод.
         </div>
 
         <input type="hidden" id="de_id" name="id" value="" />
@@ -883,7 +891,10 @@
       <div class="discount-info-header">
         <div class="discount-info-icon"><i class="fas fa-percentage"></i></div>
         <div class="discount-info-title" id="discountInfoTitle">—</div>
-        <div class="discount-info-badge" id="discountInfoBadge">Активна</div>
+        <div class="discount-info-badges">
+          <div class="discount-info-badge" id="discountInfoBadge">Активна</div>
+          <div class="discount-info-badge discount-info-badge--benefits hidden" id="discountInfoBenefitsBadge">Скрыта в выгодах</div>
+        </div>
       </div>
       <div class="discount-info-stats">
         <div class="discount-info-stat">

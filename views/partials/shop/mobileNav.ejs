@@ -22,15 +22,6 @@
           </div>
           <div class="shop-mobile-delivery-progress-label" id="shopMobileDeliveryProgressLabel"></div>
         </div>
-        <button
-          class="shop-mobile-benefits-trigger-btn hidden"
-          id="shopMobileCartBenefitsTriggerBtn"
-          type="button"
-          aria-label="Открыть выгоды"
-          title="Открыть выгоды"
-        >
-          <i class="fas fa-tag" aria-hidden="true"></i>
-        </button>
       </div>
     </div>
     <div class="shop-mobile-checkout-name-wrap hidden" id="shopMobileCheckoutNameWrap">
@@ -49,37 +40,37 @@
           placeholder="Введите комментарий к заказу"
           rows="1"
         ></textarea>
-        <button
-          class="shop-mobile-benefits-trigger-btn hidden"
-          id="shopMobileBenefitsTriggerBtn"
-          type="button"
-          aria-label="Открыть выгоды"
-          title="Открыть выгоды"
-        >
-          <i class="fas fa-tag" aria-hidden="true"></i>
-        </button>
       </div>
     </div>
     <div class="shop-mobile-benefits-promo-wrap hidden" id="shopMobileBenefitsPromoWrap">
-      <input
-        class="control shop-checkout-comment shop-mobile-benefits-promo-input"
-        id="shopMobileBenefitsPromoInput"
-        type="text"
-        name="shopBenefitsPromoCode"
-        placeholder="Введите промокод"
-        autocomplete="new-password"
-        autocorrect="off"
-        autocapitalize="none"
-        spellcheck="false"
-        inputmode="text"
-        enterkeyhint="done"
-        aria-autocomplete="none"
-        data-lpignore="true"
-        data-form-type="other"
-        data-1p-ignore="true"
-        data-bwignore="true"
-        readonly
-      />
+      <div class="shop-mobile-benefits-promo-row">
+        <input
+          class="control shop-checkout-comment shop-mobile-benefits-promo-input"
+          id="shopMobileBenefitsPromoInput"
+          type="text"
+          name="shopBenefitsPromoCode"
+          placeholder="Введите промокод"
+          autocomplete="new-password"
+          autocorrect="off"
+          autocapitalize="none"
+          spellcheck="false"
+          inputmode="text"
+          enterkeyhint="done"
+          aria-autocomplete="none"
+          data-lpignore="true"
+          data-form-type="other"
+          data-1p-ignore="true"
+          data-bwignore="true"
+          readonly
+        />
+        <button
+          class="shop-mobile-benefits-inline-apply-btn hidden"
+          id="shopMobileBenefitsInlineApplyBtn"
+          type="button"
+        >
+          Применить
+        </button>
+      </div>
     </div>
     <div class="shop-mobile-cart-actions-cart hidden" id="shopMobileCartActionsCart">
       <button class="shop-cart-clear" id="shopMobileCartClearBtn" type="button" title="Очистить корзину" aria-label="Очистить корзину">×</button>
@@ -141,8 +132,8 @@
       <i class="fas fa-house"></i>
     </button>
 
-    <button class="shop-nav-btn" id="shopNavCategories" type="button" data-tab="categories" aria-label="Категории">
-      <i class="fas fa-list"></i>
+    <button class="shop-nav-btn" id="shopNavCategories" type="button" data-tab="benefits" aria-label="Выгоды">
+      <i class="fas fa-tag"></i>
     </button>
 
     <button class="shop-nav-btn" id="shopNavCart" type="button" data-tab="cart" aria-label="Корзина">

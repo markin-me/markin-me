@@ -5,7 +5,7 @@ const DISCOUNT_COLUMNS = `
   apply_to, min_order_amount, max_discount_amount,
   starts_at, ends_at, schedule_days, schedule_time_start, schedule_time_end,
   usage_limit, usage_per_customer, usage_count,
-  priority, is_stackable, is_active,
+  priority, is_stackable, is_active, hide_in_benefits,
   activation_mode, reward_type, promo_code_mode, unique_code_usage_limit,
   mechanic_type, mechanic_config_json,
   created_at, updated_at
@@ -131,6 +131,7 @@ function serializeScheduleDays(value) {
 function normalizeDiscountRow(row) {
   if (!row || typeof row !== 'object') return row;
   const normalized = { ...row };
+  normalized.hide_in_benefits = Number(normalized.hide_in_benefits || 0) === 1;
   if (typeof normalized.schedule_days === 'string') {
     try {
       normalized.schedule_days = JSON.parse(normalized.schedule_days);
@@ -1766,6 +1767,40 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
   const router = express.Router();
   let discountProductConfigColumnReady = false;
   let ensureDiscountProductConfigColumnPromise = null;
+  let discountHideInBenefitsColumnReady = false;
+  let ensureDiscountHideInBenefitsColumnPromise = null;
+
+  async function ensureDiscountHideInBenefitsColumn() {
+    if (discountHideInBenefitsColumnReady) return true;
+    if (ensureDiscountHideInBenefitsColumnPromise) return ensureDiscountHideInBenefitsColumnPromise;
+
+    ensureDiscountHideInBenefitsColumnPromise = (async () => {
+      const [columnRows] = await db.query('SHOW COLUMNS FROM mkt_discounts');
+      const existing = new Set((Array.isArray(columnRows) ? columnRows : []).map((row) => String(row?.Field || '').trim()).filter(Boolean));
+      if (!existing.has('hide_in_benefits')) {
+        try {
+          await db.query('ALTER TABLE mkt_discounts ADD COLUMN `hide_in_benefits` TINYINT(1) NOT NULL DEFAULT 0 AFTER `is_active`');
+          existing.add('hide_in_benefits');
+        } catch (err) {
+          if (String(err?.code || '') !== 'ER_DUP_FIELDNAME') throw err;
+          existing.add('hide_in_benefits');
+        }
+      }
+      discountHideInBenefitsColumnReady = existing.has('hide_in_benefits');
+      return discountHideInBenefitsColumnReady;
+    })()
+      .catch((err) => {
+        ensureDiscountHideInBenefitsColumnPromise = null;
+        throw err;
+      })
+      .finally(() => {
+        if (discountHideInBenefitsColumnReady) {
+          ensureDiscountHideInBenefitsColumnPromise = null;
+        }
+      });
+
+    return ensureDiscountHideInBenefitsColumnPromise;
+  }
 
   async function ensureDiscountProductConfigColumn() {
     if (discountProductConfigColumnReady) return true;
@@ -1805,6 +1840,7 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
    */
   async function listDiscounts(req, res) {
     try {
+      await ensureDiscountHideInBenefitsColumn();
       await ensureDiscountProductConfigColumn();
       const tenantId = req.tenantId || 1;
       const storeId = req.storeId || 1;
@@ -2167,6 +2203,7 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
    */
   router.get('/:id', async (req, res) => {
     try {
+      await ensureDiscountHideInBenefitsColumn();
       await ensureDiscountProductConfigColumn();
       const tenantId = req.tenantId || 1;
       const storeId = req.storeId || 1;
@@ -2284,6 +2321,7 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
   router.post('/', async (req, res) => {
     const tenantId = req.tenantId || 1;
     const storeId = req.storeId || 1;
+    await ensureDiscountHideInBenefitsColumn();
     await ensureDiscountProductConfigColumn();
     const conn = await db.getConnection();
     let inTransaction = false;
@@ -2332,10 +2370,10 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
           tenant_id, store_id, title, description, discount_type, discount_value,
           apply_to, min_order_amount, max_discount_amount,
           starts_at, ends_at, schedule_days, schedule_time_start, schedule_time_end,
-          usage_limit, usage_per_customer, priority, is_stackable, is_active,
+          usage_limit, usage_per_customer, priority, is_stackable, is_active, hide_in_benefits,
           activation_mode, reward_type, promo_code_mode, unique_code_usage_limit,
           mechanic_type, mechanic_config_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           tenantId,
           storeId,
@@ -2356,6 +2394,7 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
           toIntOrNull(req.body?.priority) || 0,
           toBoolFlag(req.body?.is_stackable) ? 1 : 0,
           toBoolFlag(req.body?.is_active, true) ? 1 : 0,
+          toBoolFlag(req.body?.hide_in_benefits) ? 1 : 0,
           activationMode,
           mechanicPayload.rewardType,
           promoCodeMode,
@@ -2435,6 +2474,7 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
     const tenantId = req.tenantId || 1;
     const storeId = req.storeId || 1;
     const discountId = Number(req.params.id || 0);
+    await ensureDiscountHideInBenefitsColumn();
     await ensureDiscountProductConfigColumn();
 
     if (!(discountId > 0)) {
@@ -2505,7 +2545,7 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
           title = ?, description = ?, discount_type = ?, discount_value = ?,
           apply_to = ?, min_order_amount = ?, max_discount_amount = ?,
           starts_at = ?, ends_at = ?, schedule_days = ?, schedule_time_start = ?, schedule_time_end = ?,
-          usage_limit = ?, usage_per_customer = ?, priority = ?, is_stackable = ?, is_active = ?,
+          usage_limit = ?, usage_per_customer = ?, priority = ?, is_stackable = ?, is_active = ?, hide_in_benefits = ?,
           activation_mode = ?, reward_type = ?, promo_code_mode = ?, unique_code_usage_limit = ?,
           mechanic_type = ?, mechanic_config_json = ?
         WHERE id = ? AND tenant_id = ? AND store_id = ?`,
@@ -2527,6 +2567,9 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
           priorityValue,
           toBoolFlag(req.body?.is_stackable) ? 1 : 0,
           toBoolFlag(req.body?.is_active, true) ? 1 : 0,
+          Object.prototype.hasOwnProperty.call(req.body || {}, 'hide_in_benefits')
+            ? (toBoolFlag(req.body?.hide_in_benefits) ? 1 : 0)
+            : (toBoolFlag(existing?.hide_in_benefits) ? 1 : 0),
           activationModeResolved,
           mechanicPayload.rewardType,
           promoCodeMode,

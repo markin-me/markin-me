@@ -1095,6 +1095,7 @@ body.page-home .page-col-right .panel{
 }
 .toolbar-island .toolbar{border-bottom:0}
 .toolbar-title{display:flex;align-items:center;gap:10px;font-weight:800}
+.clients-toolbar-back{flex-shrink:0}
 .toolbar-title-text{display:grid;gap:2px}
 .toolbar-title-text .muted{font-size:12px}
 .toolbar-left,.toolbar-right{display:flex;align-items:center;gap:8px}
@@ -13517,6 +13518,14 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   gap:12px;
   margin-bottom:16px;
 }
+.discount-info-badges{
+  margin-left:auto;
+  display:flex;
+  align-items:center;
+  gap:8px;
+  flex-wrap:wrap;
+  justify-content:flex-end;
+}
 .discount-info-icon{
   width:48px;
   height:48px;
@@ -13545,6 +13554,10 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
 .discount-info-badge.inactive{
   background:var(--color-surface-2);
   color:var(--color-text-muted);
+}
+.discount-info-badge--benefits{
+  background:var(--primary-10);
+  color:var(--color-primary);
 }
 .discount-info-stats{
   display:flex;
@@ -13627,12 +13640,30 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   flex:1;
   min-width:0;
 }
+.discount-row .discount-row-title-wrap{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  min-width:0;
+}
 .discount-row .discount-row-title{
+  flex:1 1 auto;
+  min-width:0;
   font-weight:500;
   font-size:14px;
   white-space:nowrap;
   overflow:hidden;
   text-overflow:ellipsis;
+}
+.discount-row .discount-row-badge{
+  flex:0 0 auto;
+  padding:2px 8px;
+  border-radius:999px;
+  background:var(--primary-10);
+  color:var(--color-primary);
+  font-size:11px;
+  font-weight:600;
+  white-space:nowrap;
 }
 .discount-row .discount-row-meta{
   font-size:12px;
@@ -13654,6 +13685,12 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
 }
 .discount-row .discount-row-status.inactive{
   background:var(--color-text-muted);
+}
+.discount-switch-hint{
+  margin-top:8px;
+  font-size:12px;
+  line-height:1.4;
+  color:var(--color-text-muted);
 }
 
 /* История применения скидки: одна строка на запись */
