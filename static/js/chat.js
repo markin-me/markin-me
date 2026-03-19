@@ -794,6 +794,48 @@
     return dom.center.footerPanel || null;
   }
 
+  function syncAdminMobileChatScrollDownPosition() {
+    const btn = dom.center.scrollDownBtn;
+    if (!btn) return;
+
+    if (!isAdminMobileChatLayout()) {
+      btn.style.removeProperty("right");
+      btn.style.removeProperty("bottom");
+      return;
+    }
+
+    const root = btn.offsetParent instanceof HTMLElement ? btn.offsetParent : btn.parentElement;
+    const footer = dom.center.footerPanel;
+    const sendBtn = dom.center.sendBtn;
+    if (!(root instanceof HTMLElement) || !(footer instanceof HTMLElement) || !(sendBtn instanceof HTMLElement)) {
+      btn.style.removeProperty("right");
+      btn.style.removeProperty("bottom");
+      return;
+    }
+
+    const rootRect = root.getBoundingClientRect();
+    const sendRect = sendBtn.getBoundingClientRect();
+    const btnRect = btn.getBoundingClientRect();
+    if (
+      rootRect.width <= 0
+      || rootRect.height <= 0
+      || sendRect.width <= 0
+      || sendRect.height <= 0
+      || btnRect.width <= 0
+      || btnRect.height <= 0
+    ) {
+      btn.style.removeProperty("right");
+      btn.style.removeProperty("bottom");
+      return;
+    }
+
+    const sendCenterX = sendRect.left + (sendRect.width / 2);
+    const nextRight = Math.max(0, Math.round(rootRect.right - sendCenterX - (btnRect.width / 2)));
+    const nextBottom = Math.max(18, Math.round(rootRect.bottom - sendRect.top + 16));
+    btn.style.right = `${nextRight}px`;
+    btn.style.bottom = `${nextBottom}px`;
+  }
+
   function syncAdminMobileChatOverlayLayout() {
     const stack = dom.center.stack;
     if (!stack) return;
@@ -803,6 +845,7 @@
       stack.style.removeProperty("--chat-mobile-header-overlay-height");
       stack.style.removeProperty("--chat-mobile-footer-overlay-height");
       stack.style.removeProperty("--chat-scroll-down-composer-extra");
+      syncAdminMobileChatScrollDownPosition();
       return;
     }
 
@@ -815,6 +858,7 @@
       "--chat-scroll-down-composer-extra",
       `${Math.max(0, bottomOverlayHeight - 26)}px`
     );
+    syncAdminMobileChatScrollDownPosition();
   }
 
   function bindAdminMobileChatOverlayLayout() {
@@ -9712,6 +9756,20 @@
       window.clearTimeout(menu.__touchGuardTimer);
       menu.__touchGuardTimer = 0;
     }
+    menu.__touchGuardAwaitRelease = false;
+    menu.__awaitFreshTouchStart = false;
+    menu.style.pointerEvents = "";
+  }
+
+  function releaseContextMenuTouchGuard() {
+    const menu = dom.center.contextMenu;
+    if (!menu) return;
+    if (menu.__touchGuardTimer) {
+      window.clearTimeout(menu.__touchGuardTimer);
+      menu.__touchGuardTimer = 0;
+    }
+    menu.__touchGuardAwaitRelease = false;
+    if (menu.classList.contains("hidden")) return;
     menu.style.pointerEvents = "";
   }
 
@@ -9719,12 +9777,38 @@
     const menu = dom.center.contextMenu;
     if (!menu) return;
     clearContextMenuTouchGuard();
+    menu.__awaitFreshTouchStart = true;
+    menu.__touchGuardAwaitRelease = true;
     menu.style.pointerEvents = "none";
     menu.__touchGuardTimer = window.setTimeout(() => {
-      menu.__touchGuardTimer = 0;
-      if (menu.classList.contains("hidden")) return;
-      menu.style.pointerEvents = "";
-    }, CHAT_TOUCH_MENU_INTERACTION_GUARD_MS);
+      releaseContextMenuTouchGuard();
+    }, CHAT_TOUCH_MENU_INTERACTION_GUARD_MS + 420);
+  }
+
+  function markFreshContextMenuTouchInteraction() {
+    const menu = dom.center.contextMenu;
+    if (!menu || menu.classList.contains("hidden")) return;
+    if (menu.__awaitFreshTouchStart !== true) return;
+    menu.__awaitFreshTouchStart = false;
+  }
+
+  function shouldSuppressGuardedContextMenuClick(event) {
+    const menu = dom.center.contextMenu;
+    if (!menu || menu.classList.contains("hidden")) return false;
+    if (menu.__awaitFreshTouchStart !== true) return false;
+    if (!isTouchGeneratedClick(event)) return false;
+    event.preventDefault();
+    event.stopPropagation();
+    return true;
+  }
+
+  function releaseContextMenuTouchGuardAfterTouch(event = null) {
+    const menu = dom.center.contextMenu;
+    if (!menu || menu.classList.contains("hidden")) return;
+    if (menu.__touchGuardAwaitRelease !== true) return;
+    const pointerType = String(event?.pointerType || "").toLowerCase();
+    if (pointerType && pointerType !== "touch") return;
+    releaseContextMenuTouchGuard();
   }
 
   function ensureClientContextMenu() {
@@ -10980,6 +11064,211 @@
     return true;
   }
 
+  function bindAdminMobileFooterPanGuard() {
+    const footer = dom.center.footerPanel;
+    if (!footer || footer.dataset.mobilePanGuardBound === "1") return;
+    footer.dataset.mobilePanGuardBound = "1";
+
+    let activePointerId = null;
+    let activeTouchId = null;
+    let startX = 0;
+    let startY = 0;
+    let dragAxis = "";
+    let trackedInput = null;
+
+    const reset = () => {
+      activePointerId = null;
+      activeTouchId = null;
+      startX = 0;
+      startY = 0;
+      dragAxis = "";
+      trackedInput = null;
+    };
+
+    const isEnabled = () => isAdminMobileChatLayout();
+
+    const begin = (clientX, clientY, target) => {
+      startX = Number(clientX || 0);
+      startY = Number(clientY || 0);
+      dragAxis = "";
+      trackedInput = target && target.closest ? target.closest(".chat-message-input") : null;
+    };
+
+    const canScrollTrackedInput = (deltaY) => {
+      if (!trackedInput) return false;
+      const maxTop = Math.max(0, Number(trackedInput.scrollHeight || 0) - Number(trackedInput.clientHeight || 0));
+      if (maxTop <= 1) return false;
+      const currentTop = Math.max(0, Number(trackedInput.scrollTop || 0));
+      if (deltaY < 0 && currentTop < maxTop - 1) return true;
+      if (deltaY > 0 && currentTop > 1) return true;
+      return false;
+    };
+
+    const shouldBlockMove = (clientX, clientY) => {
+      if (!isEnabled()) return false;
+      const deltaX = Number(clientX || 0) - startX;
+      const deltaY = Number(clientY || 0) - startY;
+      if (!dragAxis) {
+        if (Math.abs(deltaX) < 4 && Math.abs(deltaY) < 4) return false;
+        dragAxis = Math.abs(deltaX) >= Math.abs(deltaY) ? "x" : "y";
+      }
+      if (dragAxis !== "y") return false;
+      if (canScrollTrackedInput(deltaY)) return false;
+      return true;
+    };
+
+    const resolveTrackedTouch = (touchList) => {
+      if (activeTouchId == null || !touchList) return null;
+      for (let index = 0; index < touchList.length; index += 1) {
+        const touch = touchList[index];
+        if (touch && touch.identifier === activeTouchId) return touch;
+      }
+      return null;
+    };
+
+    footer.addEventListener("pointerdown", (event) => {
+      if (!isEnabled()) return;
+      if (event.pointerType === "mouse" || event.button !== 0) return;
+      activePointerId = event.pointerId;
+      begin(event.clientX, event.clientY, event.target);
+    });
+
+    footer.addEventListener("pointermove", (event) => {
+      if (activePointerId == null || event.pointerId !== activePointerId) return;
+      if (!shouldBlockMove(event.clientX, event.clientY)) return;
+      event.preventDefault();
+      event.stopPropagation();
+    }, { passive: false });
+
+    footer.addEventListener("touchstart", (event) => {
+      if (!isEnabled() || event.touches.length !== 1) return;
+      const touch = event.touches[0];
+      activeTouchId = touch.identifier;
+      begin(touch.clientX, touch.clientY, event.target);
+    }, { passive: true });
+
+    footer.addEventListener("touchmove", (event) => {
+      const touch = resolveTrackedTouch(event.touches) || resolveTrackedTouch(event.changedTouches);
+      if (!touch) return;
+      if (!shouldBlockMove(touch.clientX, touch.clientY)) return;
+      event.preventDefault();
+      event.stopPropagation();
+    }, { passive: false });
+
+    ["pointerup", "pointercancel", "lostpointercapture", "touchend", "touchcancel"].forEach((eventName) => {
+      footer.addEventListener(eventName, reset, { passive: true });
+    });
+  }
+
+  function bindAdminMobileVerticalPanGuard(element, datasetKey) {
+    if (!element) return;
+    const guardKey = String(datasetKey || "mobilePanGuardBound");
+    if (element.dataset && element.dataset[guardKey] === "1") return;
+    if (element.dataset) element.dataset[guardKey] = "1";
+
+    let activePointerId = null;
+    let activeTouchId = null;
+    let startX = 0;
+    let startY = 0;
+    let dragAxis = "";
+
+    const isEnabled = () => isAdminMobileChatLayout();
+
+    const reset = () => {
+      activePointerId = null;
+      activeTouchId = null;
+      startX = 0;
+      startY = 0;
+      dragAxis = "";
+    };
+
+    const begin = (clientX, clientY) => {
+      startX = Number(clientX || 0);
+      startY = Number(clientY || 0);
+      dragAxis = "";
+    };
+
+    const shouldBlockMove = (clientX, clientY) => {
+      if (!isEnabled()) return false;
+      const deltaX = Number(clientX || 0) - startX;
+      const deltaY = Number(clientY || 0) - startY;
+      if (!dragAxis) {
+        if (Math.abs(deltaX) < 4 && Math.abs(deltaY) < 4) return false;
+        dragAxis = Math.abs(deltaX) >= Math.abs(deltaY) ? "x" : "y";
+      }
+      return dragAxis === "y";
+    };
+
+    const resolveTrackedTouch = (touchList) => {
+      if (activeTouchId == null || !touchList) return null;
+      for (let index = 0; index < touchList.length; index += 1) {
+        const touch = touchList[index];
+        if (touch && touch.identifier === activeTouchId) return touch;
+      }
+      return null;
+    };
+
+    element.addEventListener("pointerdown", (event) => {
+      if (!isEnabled()) return;
+      if (event.pointerType === "mouse" || event.button !== 0) return;
+      activePointerId = event.pointerId;
+      begin(event.clientX, event.clientY);
+    });
+
+    element.addEventListener("pointermove", (event) => {
+      if (activePointerId == null || event.pointerId !== activePointerId) return;
+      if (!shouldBlockMove(event.clientX, event.clientY)) return;
+      event.preventDefault();
+      event.stopPropagation();
+    }, { passive: false });
+
+    element.addEventListener("touchstart", (event) => {
+      if (!isEnabled() || event.touches.length !== 1) return;
+      const touch = event.touches[0];
+      activeTouchId = touch.identifier;
+      begin(touch.clientX, touch.clientY);
+    }, { passive: true });
+
+    element.addEventListener("touchmove", (event) => {
+      const touch = resolveTrackedTouch(event.touches) || resolveTrackedTouch(event.changedTouches);
+      if (!touch) return;
+      if (!shouldBlockMove(touch.clientX, touch.clientY)) return;
+      event.preventDefault();
+      event.stopPropagation();
+    }, { passive: false });
+
+    ["pointerup", "pointercancel", "lostpointercapture", "touchend", "touchcancel"].forEach((eventName) => {
+      element.addEventListener(eventName, reset, { passive: true });
+    });
+  }
+
+  function bindAdminMobileStaticPanGuards() {
+    bindAdminMobileVerticalPanGuard(dom.center.scrollDownBtn, "mobilePanGuardBound");
+    bindAdminMobileVerticalPanGuard(document.getElementById("adminMobileShell"), "mobilePanGuardBound");
+  }
+
+  function finalizeComposerSendUi(options = {}) {
+    const refocusInput = options.refocusInput !== false;
+    stopLocalTypingSession(state.activeClientId, { flush: true, force: true });
+
+    if (dom.center.input) {
+      dom.center.input.value = "";
+      syncComposerRichPreview({ stickToBottom: true });
+      if (refocusInput && !dom.center.input.disabled) {
+        dom.center.input.focus();
+      }
+    } else {
+      syncComposerRichPreview({ stickToBottom: true });
+    }
+
+    if (!dom.center.messagesWrap || state.selectionMode) return;
+    requestAnimationFrame(() => {
+      if (!dom.center.messagesWrap) return;
+      scrollMessagesToBottom({ behavior: "auto", keepPending: true });
+      saveThreadScrollPosition(state.activeClientId);
+    });
+  }
+
   function getAttachPreviewTitle(count) {
     const total = Number(count) || 0;
     if (total <= 1) return "1 фотография";
@@ -11707,6 +11996,8 @@
     }, true);
 
     dom.center.messages.addEventListener("dblclick", (event) => {
+      if (Date.now() < Number(suppressTouchClickUntil || 0)) return;
+      if (isTouchGeneratedClick(event)) return;
       if (state.selectionMode) return;
       if (!canUseMessageHeartShortcutTarget(event.target)) return;
       const messageEl = event.target.closest(".chat-message[data-message-id]");
@@ -11965,6 +12256,11 @@
       clearTouchContextGesture();
     }, { passive: true });
 
+    document.addEventListener("touchend", releaseContextMenuTouchGuardAfterTouch, true);
+    document.addEventListener("touchcancel", releaseContextMenuTouchGuardAfterTouch, true);
+    document.addEventListener("pointerup", releaseContextMenuTouchGuardAfterTouch, true);
+    document.addEventListener("pointercancel", releaseContextMenuTouchGuardAfterTouch, true);
+
     dom.center.messages.addEventListener("mousedown", (event) => {
       if (event.button !== 0) return;
       const orderStrip = resolveOrderCardScrollStrip(event.target);
@@ -12048,7 +12344,17 @@
       event.preventDefault();
     }, { passive: false });
 
+    dom.center.contextMenu.addEventListener("touchstart", () => {
+      markFreshContextMenuTouchInteraction();
+    }, { passive: true });
+
+    dom.center.contextMenu.addEventListener("pointerdown", (event) => {
+      if (String(event.pointerType || "").toLowerCase() !== "touch") return;
+      markFreshContextMenuTouchInteraction();
+    }, { passive: true });
+
     dom.center.contextMenu.addEventListener("click", (event) => {
+      if (shouldSuppressGuardedContextMenuClick(event)) return;
       if (Date.now() < Number(suppressTouchClickUntil || 0)) {
         event.preventDefault();
         event.stopPropagation();
@@ -12481,15 +12787,30 @@
     state.headerOrderSnapshot = null;
     setHeaderLoading(true);
     saveStore();
-    if (opts.restoreMobileView === true) {
-      syncMobileChatViewFromState({ persistState: false });
-    } else if (opts.syncMobileView !== false) {
-      syncMobileChatView("center");
-    }
+    const syncMobileViewAfterRender = (() => {
+      if (opts.restoreMobileView === true) {
+        return () => {
+          window.requestAnimationFrame(() => {
+            syncMobileChatViewFromState({ persistState: false });
+          });
+        };
+      }
+      if (opts.syncMobileView !== false) {
+        return () => {
+          window.requestAnimationFrame(() => {
+            syncMobileChatView("center");
+          });
+        };
+      }
+      return null;
+    })();
 
     ensureActiveThreadSseConnection();
     applyClientFilter();
     renderMessages({ disableAutoPin: true, smoothScroll: false, skipSaveScrollPosition: true });
+    if (typeof syncMobileViewAfterRender === "function") {
+      syncMobileViewAfterRender();
+    }
     if (!restoreThreadScrollPosition(id)) {
       const hasPendingForClient = getPendingScrollNewCount(id) > 0;
       scrollMessagesToBottom({ behavior: "auto", keepPending: hasPendingForClient });
@@ -12897,10 +13218,7 @@
         if (!dom.center.input) return;
         const done = sendMessage(dom.center.input.value);
         if (!done) return;
-        stopLocalTypingSession(state.activeClientId, { flush: true, force: true });
-        dom.center.input.value = "";
-        dom.center.input.focus();
-        syncComposerRichPreview({});
+        finalizeComposerSendUi({ refocusInput: true });
       });
     }
 
@@ -12910,9 +13228,7 @@
           event.preventDefault();
           const done = sendMessage(dom.center.input.value);
           if (done) {
-            stopLocalTypingSession(state.activeClientId, { flush: true, force: true });
-            dom.center.input.value = "";
-            syncComposerRichPreview({});
+            finalizeComposerSendUi({ refocusInput: false });
           }
           return;
         }
@@ -13076,6 +13392,8 @@
     setChatBootstrapLoading(state.chatWidgetEnabled !== false);
     initMessageAlerts();
     initComposer();
+    bindAdminMobileFooterPanGuard();
+    bindAdminMobileStaticPanGuards();
     initSelectionToolbar();
     initHeaderOrderOpenAction();
     initOrderHeaderLiveSync();

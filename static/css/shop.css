@@ -7277,6 +7277,9 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
 }
 
 .shop-company-chat-modal__body{
+  --shop-chat-wallpaper-base:#f0f3eb;
+  --shop-chat-wallpaper-pattern:url("/static/assets/chat-wallpaper-desktop.webp?v=20260320b");
+  --shop-chat-wallpaper-size:cover;
   flex: 1;
   min-height: 0;
   display: flex;
@@ -7284,7 +7287,24 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
   position: relative;
   padding: 0;
   overscroll-behavior: contain;
+  background-color: var(--shop-chat-wallpaper-base);
+  background-image:
+    linear-gradient(180deg, rgba(255,255,255,.40), rgba(255,255,255,.58)),
+    var(--shop-chat-wallpaper-pattern),
+    radial-gradient(circle at 16% 10%, rgba(255,255,255,.16), transparent 36%),
+    radial-gradient(circle at 84% 14%, rgba(245,225,138,.08), transparent 32%),
+    linear-gradient(180deg, #f7f8f4 0%, #f0f3eb 42%, #ebefe5 100%);
+  background-position: 0 0, center center, 0 0, 0 0, 0 0;
+  background-repeat: no-repeat, no-repeat, no-repeat, no-repeat, no-repeat;
+  background-size: 100% 100%, var(--shop-chat-wallpaper-size), 100% 100%, 100% 100%, 100% 100%;
   transition: padding-bottom 280ms cubic-bezier(.22,.76,.24,1);
+}
+
+@media (max-width: 768px){
+  .shop-company-chat-modal__body{
+    --shop-chat-wallpaper-pattern:url("/static/assets/chat-wallpaper-mobile.webp?v=20260320d");
+    --shop-chat-wallpaper-size:cover;
+  }
 }
 
 .shop-company-chat-overlay.is-mobile-keyboard-open .shop-company-chat-modal__body{
@@ -7664,6 +7684,36 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
   padding: 10px 16px 14px;
   scroll-padding-top: 12px;
   scrollbar-gutter: stable;
+  background: transparent;
+}
+
+@media (min-width: 769px){
+  .shop-company-chat-feed{
+    scrollbar-width: thin;
+    scrollbar-color: rgba(122, 160, 102, 0.34) transparent;
+  }
+
+  .shop-company-chat-feed::-webkit-scrollbar{
+    width: 12px;
+  }
+
+  .shop-company-chat-feed::-webkit-scrollbar-track{
+    background: transparent;
+    border-radius: 999px;
+    margin: 10px 0 14px;
+  }
+
+  .shop-company-chat-feed::-webkit-scrollbar-thumb{
+    min-height: 68px;
+    border: 3px solid transparent;
+    border-radius: 999px;
+    background-color: rgba(122, 160, 102, 0.34);
+    background-clip: padding-box;
+  }
+
+  .shop-company-chat-feed::-webkit-scrollbar-thumb:hover{
+    background-color: rgba(122, 160, 102, 0.48);
+  }
 }
 
 .shop-company-chat-modal__body.is-bootstrap-loading .shop-company-chat-thread{
@@ -7903,6 +7953,7 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
 }
 
 .shop-company-chat-row.is-agent .shop-company-chat-bubble{
+  background:#ffffff;
   border-bottom-left-radius: 0;
 }
 

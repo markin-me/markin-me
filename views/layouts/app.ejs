@@ -1,8 +1,15 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
+  <%
+    const appPageClassName = typeof pageClass === 'string' ? pageClass : '';
+    const isChatViewportLocked = appPageClassName.split(/\s+/).includes('page-chat');
+    const appViewportContent = isChatViewportLocked
+      ? 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no'
+      : 'width=device-width, initial-scale=1.0';
+  %>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="<%= appViewportContent %>" />
   <%
     const appManifestStartPath = typeof currentPath === 'string' && currentPath ? currentPath : '/dashboard/cash';
     const appManifestTitle = typeof pageTitle === 'string' && pageTitle.trim() ? pageTitle.trim() : 'Админка';
@@ -52,7 +59,7 @@
     })();
   </script>
 
-  <link rel="stylesheet" href="<%= assetUrl('/static/css/style.css?v=20260319av') %>" />
+  <link rel="stylesheet" href="<%= assetUrl('/static/css/style.css?v=20260320am') %>" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" />
   <% if (appPageStyles.length) { %>
     <% appPageStyles.forEach(function (src) { %>
@@ -106,7 +113,7 @@
 %>
 
 <body
-  class="<%= pageClass || '' %>"
+  class="<%= appPageClassName %>"
   data-admin-active-page="<%= appActivePage %>"
   data-admin-chat-enabled="<%= isAppChatNavEnabled ? '1' : '0' %>"
   data-app-version="<%= appVersion || '' %>"
