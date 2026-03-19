@@ -19609,9 +19609,10 @@ body.page-chat .panel{
   }
 
   body.page-chat .chat-header-island{
-    position:absolute;
-    inset:0 0 auto;
+    position:relative;
+    inset:auto;
     z-index:5;
+    align-self:start;
     background:transparent;
     border:0;
     border-radius:0;
@@ -19774,6 +19775,9 @@ body.page-chat .panel{
     --chat-mobile-footer-overlay-height:86px;
     --chat-mobile-thread-top-inset:0px;
     --chat-mobile-thread-bottom-inset:0px;
+    display:grid;
+    grid-template-columns:minmax(0, 1fr);
+    grid-template-rows:minmax(0, 1fr);
     position:relative;
     box-sizing:border-box;
     height:100%;
@@ -19803,6 +19807,8 @@ body.page-chat .panel{
   }
 
   body.page-chat .chat-center-stack > .panel{
+    grid-column:1;
+    grid-row:1;
     position:relative;
     z-index:1;
     background:transparent;
@@ -19812,12 +19818,13 @@ body.page-chat .panel{
   }
 
   body.page-chat .chat-main-panel{
-    position:absolute;
-    inset:0;
+    position:relative;
+    inset:auto;
     z-index:1;
+    align-self:stretch;
     flex:1 1 auto;
     min-height:0;
-    height:auto;
+    height:100%;
     background:transparent;
   }
 
@@ -19882,11 +19889,12 @@ body.page-chat .panel{
   }
 
   body.page-chat .chat-footer-island{
-    position:absolute;
+    position:relative;
     left:auto;
     right:auto;
-    inset:auto 0 0;
+    inset:auto;
     z-index:6;
+    align-self:end;
     margin:0;
     padding:0 10px calc(max(8px, env(safe-area-inset-bottom)));
     background:transparent;
