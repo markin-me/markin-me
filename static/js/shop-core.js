@@ -2123,6 +2123,8 @@
             variant_group_id: normalizedVariantGroupId,
             variant_value_index: normalizedVariantValueIndex,
             variant_label: hasVariantSelection ? str(item.variant_label || "") : "",
+            variant_group_title: hasVariantSelection ? str(item?.variant_group_title || "") : "",
+            variant_unit: hasVariantSelection ? str(item?.variant_unit || item?.variantUnit || "") : "",
             variant_unit_price: hasVariantSelection ? Number(item.variant_unit_price || 0) : 0,
             unit_price_override: item?.unit_price_override != null ? Number(item.unit_price_override) : null,
             is_gift_reward: isGiftReward ? 1 : 0,
@@ -2149,6 +2151,8 @@
             variant_group_id: null,
             variant_value_index: null,
             variant_label: "",
+            variant_group_title: "",
+            variant_unit: "",
             variant_unit_price: 0,
             auto_add: 0,
             auto_add_group_id: null,
@@ -2858,6 +2862,8 @@
         variant_group_id: variantGroupId,
         variant_value_index: variantValueIndex,
         variant_label: hasVariantSelection ? str(item.variant_label || "") : "",
+        variant_group_title: hasVariantSelection ? str(item?.variant_group_title || "") : "",
+        variant_unit: hasVariantSelection ? str(item?.variant_unit || item?.variantUnit || "") : "",
         variant_unit_price: hasVariantSelection ? Number(item.variant_unit_price || 0) : 0,
         unit_price_override: item.unit_price_override != null ? Number(item.unit_price_override) : null,
         is_gift_reward: Number(item.is_gift_reward || 0) === 1,
@@ -8743,7 +8749,7 @@ async function initAddresses() {
           return;
         }
         if (isGiftReward) {
-          openProductDetails(product.id, { prefillItem: item, readOnly: true });
+          openProductDetails(product.id, { cartKey: key, prefillItem: item, readOnly: true });
           return;
         }
         openProductDetails(product.id, { cartKey: key });
@@ -8866,7 +8872,9 @@ async function initAddresses() {
         fixedQty.className = "qty-pill qty-pill--muted cart-gift-fixed-qty is-disabled";
         const fixedCenter = document.createElement("span");
         fixedCenter.className = "qty-pill__center";
-        fixedCenter.textContent = String(qty);
+        fixedCenter.innerHTML = '<i class="fas fa-gift" aria-hidden="true"></i>';
+        fixedCenter.setAttribute("aria-label", "Подарок");
+        fixedCenter.setAttribute("title", "Подарок");
         fixedQty.appendChild(fixedCenter);
         qtyControlNode = fixedQty;
       }

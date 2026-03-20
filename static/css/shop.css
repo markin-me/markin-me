@@ -12050,6 +12050,16 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   padding: 0;
   font-size: 13px;
 }
+.cart-gift-fixed-qty .qty-pill__center{
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-width: 24px;
+}
+.cart-gift-fixed-qty .qty-pill__center i{
+  font-size: 13px;
+}
 
 .cart-old{
   font-size: 11px;
@@ -18714,6 +18724,23 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
   
   .shop-mobile-product-actions .qty-pill-wrap {
     flex-shrink: 0;
+  }
+
+  .shop-mobile-product-actions.is-read-only-back {
+    gap: 0;
+  }
+
+  .shop-mobile-product-actions.is-read-only-back .qty-pill-wrap {
+    display: none;
+  }
+
+  .shop-mobile-product-actions.is-read-only-back .shop-pd-action-prices {
+    display: none;
+  }
+
+  .shop-mobile-product-actions.is-read-only-back .shop-pd-action {
+    width: 100%;
+    flex: 1 1 auto;
   }
   
   .shop-mobile-product-actions .shop-pd-action {
