@@ -6,6 +6,7 @@ try {
   compression = null;
 }
 const cors = require('cors');
+const os = require('os');
 const path = require('path');
 const fs = require('fs');
 const cookieParser = require('cookie-parser');
@@ -96,6 +97,20 @@ function normalizeConfiguredHost(value) {
   }
 }
 
+function getLocalTrustedAdminHosts() {
+  const hosts = new Set();
+  const interfaces = os.networkInterfaces();
+  Object.values(interfaces || {}).forEach((items) => {
+    (Array.isArray(items) ? items : []).forEach((item) => {
+      if (!item || item.internal) return;
+      if (String(item.family || '').toUpperCase() !== 'IPV4') return;
+      const normalized = normalizeHostForMatch(item.address);
+      if (normalized) hosts.add(normalized);
+    });
+  });
+  return Array.from(hosts);
+}
+
 function buildTrustedAdminHosts() {
   const hosts = new Set(['localhost', '127.0.0.1', '::1']);
   const add = (value) => {
@@ -120,6 +135,7 @@ function buildTrustedAdminHosts() {
   add(process.env.PUBLIC_BASE_DOMAIN);
   add(process.env.SITE_BASE_DOMAIN);
   addList(process.env.TENANT_DOMAIN_A_RECORDS);
+  getLocalTrustedAdminHosts().forEach(add);
   add('posham-admin.ru');
   add('www.posham-admin.ru');
   return hosts;

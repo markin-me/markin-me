@@ -2,6 +2,7 @@
 (function () {
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+  const sharedOrderPanel = window.SharedOrderPanel || null;
 
   const CHAT_STORAGE_KEY = "dashboard:client-chat:v1";
   const CHAT_MOBILE_VIEW_STORAGE_KEY = `dashboard:chat:mobile:view:v1:${getTenantId()}`;
@@ -63,6 +64,8 @@
   const CHAT_TOUCH_CONTEXT_MOVE_CANCEL_PX = 9;
   const CHAT_TOUCH_SWIPE_REPLY_TRIGGER_PX = 72;
   const CHAT_TOUCH_SWIPE_MAX_SHIFT_PX = 96;
+  const CHAT_TOUCH_THREAD_NAV_LOCK_PX = 10;
+  const CHAT_TOUCH_THREAD_NAV_TRIGGER_PX = 72;
   const CHAT_TOUCH_HEART_DOUBLE_TAP_MS = 280;
   const CHAT_TOUCH_HEART_DOUBLE_TAP_MOVE_PX = 24;
   const CHAT_COMPOSER_DRAFT_MAX_LENGTH = 8000;
@@ -262,8 +265,12 @@
     activeClientDataLoading: false,
     activeOrders: [],
     activeOrdersSignature: "[]",
+    orderStatuses: [],
+    orderStatusesLoaded: false,
+    orderStatusesLoading: false,
     headerOrderId: 0,
     headerOrderSnapshot: null,
+    headerOrderStatusMutationInFlight: false,
     q: "",
     requestToken: 0,
     editingMessageId: null,
@@ -353,6 +360,291 @@
   state.threadScrollTopByClient = sanitizeStoredThreadScrollTopByClient(state.store?.ui?.threadScrollTopByClient);
   state.threadPinnedBottomByClient = sanitizeStoredThreadPinnedBottomByClient(state.store?.ui?.threadPinnedBottomByClient);
   state.clientsPager = createDefaultClientsPager();
+
+  function refreshDesktopHeaderDomRefs() {
+    dom.center.headerOrder = $("#chatHeaderOrder");
+    const headerRoot = dom.center.headerOrder || document;
+    dom.center.headerClientBtn = $(".order-col.order-client", headerRoot) || $("#chatHeaderClientBtn", headerRoot) || $("#chatHeaderClientBtn");
+    dom.center.headerName = $("#chatHeaderName", headerRoot) || $("#chatHeaderName");
+    dom.center.headerPhone = $("#chatHeaderPhone", headerRoot) || $("#chatHeaderPhone");
+    dom.center.headerLoading = $("#chatHeaderLoading");
+    dom.center.orderTitle = $("#chatOrderTitle");
+    dom.center.orderStatus = $("#chatOrderStatus", headerRoot) || $("#chatOrderStatus");
+    dom.center.orderKind = $("#chatOrderKind");
+    dom.center.orderId = $("#chatOrderId", headerRoot) || $("#chatOrderId");
+    dom.center.orderTime = $("#chatOrderTime", headerRoot) || $("#chatOrderTime");
+    dom.center.orderTimeIcon = $("#chatOrderTimeIcon", headerRoot) || $("#chatOrderTimeIcon");
+    dom.center.orderAddress = $("#chatOrderAddress", headerRoot) || $("#chatOrderAddress");
+    dom.center.orderComment = $("#chatOrderComment", headerRoot) || $("#chatOrderComment");
+    dom.center.orderTotal = $("#chatOrderTotal", headerRoot) || $("#chatOrderTotal");
+  }
+
+  function buildHeaderOrderStatusIconHtml(source) {
+    const iconValue = String(source?.icon || source?.status_icon || "").trim();
+    if (!iconValue) return '<i class="fas fa-circle"></i>';
+    if (isIconUrl(iconValue)) {
+      return `<img src="${escapeHtml(iconValue)}" alt="" loading="lazy">`;
+    }
+    return `<i class="${escapeHtml(normalizeIconClass(iconValue) || "fas fa-circle")}"></i>`;
+  }
+
+  function getSortedHeaderOrderStatuses() {
+    return [...(Array.isArray(state.orderStatuses) ? state.orderStatuses : [])]
+      .filter((status) => Number.isFinite(Number(status?.id)) && Number(status.id) > 0)
+      .sort((a, b) => (Number(a?.sort || 0) - Number(b?.sort || 0)) || (Number(a?.id || 0) - Number(b?.id || 0)));
+  }
+
+  function getHeaderOrderStatusMetaById(statusId) {
+    const id = Number(statusId || 0);
+    if (!Number.isFinite(id) || id <= 0) return null;
+    return getSortedHeaderOrderStatuses().find((status) => Number(status?.id) === id) || null;
+  }
+
+  function getHeaderOrderStatusMeta(order, fallbackText = "") {
+    const matched = getHeaderOrderStatusMetaById(order?.status_id);
+    if (matched) return matched;
+    return {
+      id: Number(order?.status_id || 0) || null,
+      code: String(order?.status_code || "").trim(),
+      title: String(order?.status_title || fallbackText || "").trim(),
+      icon: String(order?.status_icon || "").trim(),
+      is_final: Number(order?.status_is_final || 0) || 0,
+    };
+  }
+
+  function normalizeHeaderStatusCode(statusMeta) {
+    return String(statusMeta?.code || "").trim().toLowerCase();
+  }
+
+  function isHeaderDeliveredStatusMeta(statusMeta) {
+    return normalizeHeaderStatusCode(statusMeta) === "delivered";
+  }
+
+  function isHeaderCanceledStatusMeta(statusMeta) {
+    const code = normalizeHeaderStatusCode(statusMeta);
+    return code === "canceled" || code === "cancelled";
+  }
+
+  function isHeaderFinalStatusMeta(statusMeta) {
+    return Number(statusMeta?.is_final || 0) === 1 || isHeaderCanceledStatusMeta(statusMeta);
+  }
+
+  function isHeaderForbiddenStatusTransition(fromStatus, toStatus) {
+    return isHeaderDeliveredStatusMeta(fromStatus) && isHeaderCanceledStatusMeta(toStatus);
+  }
+
+  function getHeaderNextStatusMetaForOrder(order) {
+    const sortedStatuses = getSortedHeaderOrderStatuses();
+    if (!sortedStatuses.length) return null;
+    const currentStatusId = Number(order?.status_id || 0);
+    const currentIndex = sortedStatuses.findIndex((status) => Number(status?.id) === currentStatusId);
+    const currentStatus = currentIndex >= 0 ? sortedStatuses[currentIndex] : null;
+    if (currentIndex < 0) return sortedStatuses[0] || null;
+    if (isHeaderFinalStatusMeta(currentStatus)) return null;
+    const maxOffset = isHeaderDeliveredStatusMeta(currentStatus)
+      ? Math.max(0, sortedStatuses.length - currentIndex - 1)
+      : sortedStatuses.length;
+    for (let offset = 1; offset <= maxOffset; offset += 1) {
+      const candidate = sortedStatuses[(currentIndex + offset) % sortedStatuses.length];
+      if (!candidate) continue;
+      if (Number(candidate?.id || 0) === Number(currentStatus?.id || 0)) break;
+      if (isHeaderForbiddenStatusTransition(currentStatus, candidate)) continue;
+      return candidate;
+    }
+    return null;
+  }
+
+  function ensureHeaderOrderStatusesLoaded(force = false) {
+    if (state.orderStatusesLoading) return Promise.resolve();
+    if (!force && state.orderStatusesLoaded) return Promise.resolve();
+    state.orderStatusesLoading = true;
+    return apiJson("/api/admin/orders/statuses")
+      .then((json) => {
+        state.orderStatuses = Array.isArray(json?.data) ? json.data : [];
+        state.orderStatusesLoaded = true;
+      })
+      .catch((err) => {
+        console.error(err);
+        state.orderStatuses = [];
+        state.orderStatusesLoaded = true;
+      })
+      .finally(() => {
+        state.orderStatusesLoading = false;
+        if (dom.center.headerOrder) renderChatHeader();
+      });
+  }
+
+  function buildHeaderOrderStageButtonHtml(order, text) {
+    const currentTitle = String(text || "—").trim() || "—";
+    const currentStatus = order ? getHeaderOrderStatusMeta(order, currentTitle) : null;
+    const nextStatus = order ? getHeaderNextStatusMetaForOrder(order) : null;
+    const nextStatusId = Number(nextStatus?.id || 0);
+    const canCycle = Boolean(
+      order
+      && Number(order?.id || 0) > 0
+      && currentStatus
+      && !isHeaderFinalStatusMeta(currentStatus)
+      && Number.isFinite(nextStatusId)
+      && nextStatusId > 0
+      && !state.headerOrderStatusMutationInFlight
+    );
+    const nextTitle = canCycle
+      ? (String(nextStatus?.title || "").trim() || currentTitle)
+      : currentTitle;
+    const titleText = canCycle ? `${currentTitle} -> ${nextTitle}` : currentTitle;
+    const currentIconHtml = buildHeaderOrderStatusIconHtml(currentStatus || order);
+    const nextIconHtml = canCycle ? buildHeaderOrderStatusIconHtml(nextStatus) : "";
+    if (sharedOrderPanel && typeof sharedOrderPanel.buildOrderStageCycleButtonHtml === "function") {
+      const temp = document.createElement("div");
+      temp.innerHTML = sharedOrderPanel.buildOrderStageCycleButtonHtml({
+        orderId: Number(order?.id || 0),
+        canCycle,
+        currentTitle,
+        nextTitle,
+        titleText,
+        nextNote: "Сменить",
+        currentIconHtml,
+        nextIconHtml,
+        nextStatusId,
+      }).trim();
+      const button = temp.firstElementChild;
+      if (button) {
+        button.id = "chatOrderStatus";
+        if (!canCycle) {
+          button.disabled = true;
+          button.setAttribute("aria-disabled", "true");
+        } else {
+          button.removeAttribute("disabled");
+          button.setAttribute("aria-disabled", "false");
+        }
+        return button.outerHTML;
+      }
+    }
+    return '' +
+      `<button class="order-stage-btn${canCycle ? "" : " is-static"}" id="chatOrderStatus" type="button"${canCycle ? ` data-action="order-row-status-next" data-order-id="${escapeHtml(order?.id || "")}" data-next-status-id="${escapeHtml(nextStatusId)}" aria-disabled="false"` : ' disabled aria-disabled="true"'}>` +
+        '<span class="order-stage-btn-icon-shell" aria-hidden="true">' +
+          '<span class="order-stage-btn-icon-wrap order-stage-btn-icon-current">' +
+            currentIconHtml +
+          '</span>' +
+          (canCycle ? (
+            '<span class="order-stage-btn-icon-wrap order-stage-btn-icon-next">' +
+              nextIconHtml +
+            '</span>'
+          ) : '') +
+        '</span>' +
+        '<span class="order-stage-btn-content">' +
+          '<span class="order-stage-btn-panel order-stage-btn-panel-current">' +
+            `<span class="order-stage-btn-current">${escapeHtml(currentTitle)}</span>` +
+          '</span>' +
+          (canCycle ? (
+            '<span class="order-stage-btn-panel order-stage-btn-panel-next" aria-hidden="true">' +
+              `<span class="order-stage-btn-next">${escapeHtml(nextTitle)}</span>` +
+              '<span class="order-stage-btn-meta">Сменить</span>' +
+            '</span>'
+          ) : '') +
+        '</span>' +
+      '</button>';
+  }
+
+  function buildDesktopChatHeaderFallbackMarkup() {
+    return '' +
+      '<div class="order-col order-id">' +
+        '<div class="order-id-select-hit order-id-select-hit--readonly">' +
+          '<div class="order-id-num" id="chatOrderId">—</div>' +
+          '<div class="order-id-time" id="chatOrderTime">—</div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="order-col order-indicators">' +
+        '<span class="order-time-icon" id="chatOrderTimeIcon" aria-hidden="true"><i class="fas fa-calendar-day"></i></span>' +
+      '</div>' +
+      '<div class="order-col order-client">' +
+        '<div class="order-client-name"><i class="fas fa-user"></i><span class="order-client-name-text" id="chatHeaderName">—</span></div>' +
+        '<div class="order-client-phone muted">' +
+          '<i class="fas fa-phone"></i>' +
+          '<span class="order-client-phone-text" id="chatHeaderPhone">—</span>' +
+        '</div>' +
+      '</div>' +
+      '<div class="order-col order-address">' +
+        '<div class="order-address-line"><i class="fas fa-map-marker-alt"></i><span id="chatOrderAddress">—</span></div>' +
+        '<div class="order-address-comment muted"><i class="far fa-comment"></i><span id="chatOrderComment">—</span></div>' +
+      '</div>' +
+      '<div class="order-col order-stage">' + buildHeaderOrderStageButtonHtml(null, "—") + '</div>' +
+      '<div class="order-col order-total">' +
+        '<button type="button" class="order-payment-btn order-payment-cash is-empty" id="chatOrderTotal" tabindex="-1">—</button>' +
+      '</div>';
+  }
+
+  function ensureDesktopChatHeaderMarkup() {
+    refreshDesktopHeaderDomRefs();
+    if (!dom.center.headerOrder) return;
+
+    const headerOrder = dom.center.headerOrder;
+    if (headerOrder.dataset.sharedMarkupReady === "1") return;
+
+    const headerLoading = dom.center.headerLoading;
+    const orderTitle = dom.center.orderTitle;
+    const orderKind = dom.center.orderKind;
+    const timeIconHtml = '<span class="order-time-icon" id="chatOrderTimeIcon" aria-hidden="true"><i class="fas fa-calendar-day"></i></span>';
+    const customerNameHtml = '<span class="order-client-name-text" id="chatHeaderName">—</span>';
+    const customerPhoneHtml = '' +
+      '<div class="order-client-phone muted">' +
+        '<i class="fas fa-phone"></i>' +
+        '<span class="order-client-phone-text" id="chatHeaderPhone">—</span>' +
+      '</div>';
+    const addressLineHtml = '<div class="order-address-line"><i class="fas fa-map-marker-alt"></i><span id="chatOrderAddress">—</span></div>';
+    const addressCommentHtml = '<div class="order-address-comment muted"><i class="far fa-comment"></i><span id="chatOrderComment">—</span></div>';
+    const stageHtml = buildHeaderOrderStageButtonHtml(null, "—");
+    const paymentHtml = '<button type="button" class="order-payment-btn order-payment-cash is-empty" id="chatOrderTotal" tabindex="-1">—</button>';
+
+    if (headerLoading?.parentElement) headerLoading.parentElement.removeChild(headerLoading);
+    if (orderTitle?.parentElement) orderTitle.parentElement.removeChild(orderTitle);
+    if (orderKind?.parentElement) orderKind.parentElement.removeChild(orderKind);
+
+    headerOrder.classList.remove("chat-main-order", "chat-desktop-order-header");
+    headerOrder.classList.add("order-list-card", "shared-order-summary-row");
+    headerOrder.innerHTML = sharedOrderPanel && typeof sharedOrderPanel.buildOrderListRowInnerHtml === "function"
+      ? sharedOrderPanel.buildOrderListRowInnerHtml({
+        showMultiSelect: false,
+        orderIdNumHtml: '<div class="order-id-num" id="chatOrderId">—</div>',
+        createdAtHtml: '<div class="order-id-time" id="chatOrderTime">—</div>',
+        customerNameHtml,
+        customerPhoneHtml,
+        timeIconHtml,
+        addressLineHtml,
+        addressCommentHtml,
+        stageHtml,
+        paymentHtml,
+      })
+      : buildDesktopChatHeaderFallbackMarkup();
+
+    if (headerLoading) headerOrder.appendChild(headerLoading);
+    if (orderTitle) headerOrder.appendChild(orderTitle);
+    if (orderKind) headerOrder.appendChild(orderKind);
+
+    headerOrder.dataset.sharedMarkupReady = "1";
+    refreshDesktopHeaderDomRefs();
+    initHeaderClientOpenAction();
+  }
+
+  function isHeaderOrderPaid(order) {
+    const raw = order?.is_paid;
+    return Number(raw || 0) === 1 || raw === true;
+  }
+
+  function isHeaderOrderFullyRefunded(order) {
+    if (!order || !isHeaderOrderPaid(order)) return false;
+    const refundState = String(order?.refund_state || "").trim().toLowerCase();
+    const refundedTotal = Number(order?.refunded_total || 0) || 0;
+    const refundableTotal = Number(order?.refundable_total);
+    if (refundState === "full") return true;
+    if (refundedTotal <= 0) return false;
+    if (Number.isFinite(refundableTotal)) return refundableTotal <= 0.001;
+    return refundedTotal >= ((Number(order?.total_price || order?.total || 0) || 0) - 0.001);
+  }
+
+  function renderHeaderOrderPaymentIconHtml(paymentCode) {
+    return `<i class="fas ${escapeHtml(paymentIcon(paymentCode))}"></i>`;
+  }
 
   let emojiCategories = {};
   let emojiRecentList = [];
@@ -615,6 +907,40 @@
   function hasFocusedAdminChatTextInput() {
     const active = document.activeElement;
     return active === dom.center.input || active === dom.center.attachPreviewCaption;
+  }
+
+  function getFocusedAdminChatTextInput() {
+    const active = document.activeElement;
+    if (active === dom.center.input || active === dom.center.attachPreviewCaption) {
+      return active;
+    }
+    return null;
+  }
+
+  function isAdminChatEmptyThreadTouchTarget(target) {
+    const targetEl = target && target.closest ? target : null;
+    if (!targetEl) return false;
+    if (targetEl.closest(".chat-day-separator")) return false;
+    if (targetEl.closest(".chat-message-bubble")) return false;
+    if (targetEl.closest(".chat-message-attachment")) return false;
+    if (targetEl.closest(".chat-message-order-cards")) return false;
+    if (targetEl.closest(".chat-message-reaction-pill")) return false;
+    if (targetEl.closest("[data-chat-autolink]")) return false;
+    if (targetEl.closest("[data-chat-scroll-to-message]")) return false;
+    if (targetEl.closest("button,a,input,textarea,[contenteditable='true']")) return false;
+    return true;
+  }
+
+  function dismissAdminChatTextInputFocus() {
+    const activeField = getFocusedAdminChatTextInput();
+    if (!activeField || typeof activeField.blur !== "function") return false;
+    try {
+      activeField.blur();
+    } catch {
+      return false;
+    }
+    scheduleAdminChatKeyboardViewportSyncBurst();
+    return true;
   }
 
   function getAdminChatHeaderOffsetPx() {
@@ -1426,6 +1752,7 @@
   }
 
   function setHeaderLoading(active) {
+    ensureDesktopChatHeaderMarkup();
     state.activeClientDataLoading = active === true;
     const hasActiveClient = Number(state.activeClientId || 0) > 0;
     const show = state.activeClientDataLoading && hasActiveClient;
@@ -4621,6 +4948,7 @@
     if (nextValue) ui.composerDraftByClient[key] = nextValue;
     else delete ui.composerDraftByClient[key];
     scheduleUiStatePersist();
+    updateClientRowPreview(key);
     return nextValue;
   }
 
@@ -4634,6 +4962,7 @@
       dom.center.input.value = draft;
     }
     syncComposerRichPreview({});
+    if (key) updateClientRowPreview(key);
     return draft;
   }
 
@@ -4644,6 +4973,7 @@
     if (!Object.prototype.hasOwnProperty.call(ui.composerDraftByClient, key)) return;
     delete ui.composerDraftByClient[key];
     scheduleUiStatePersist();
+    updateClientRowPreview(key);
   }
 
   function saveClientsListScrollPosition() {
@@ -4898,6 +5228,63 @@
     return String(summaryInfo.text || "").trim();
   }
 
+  function getClientDraftPreviewText(clientId) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return "";
+    return normalizeComposerDraftValue(state.store?.ui?.composerDraftByClient?.[key]);
+  }
+
+  function getClientPreviewState(clientId) {
+    const draftPreview = getClientDraftPreviewText(clientId);
+    if (draftPreview) {
+      return { text: draftPreview, isDraft: true, isTyping: false };
+    }
+    const typingPreview = getClientTypingPreviewText(clientId);
+    if (typingPreview) {
+      return { text: typingPreview, isDraft: false, isTyping: true };
+    }
+    const lastMsg = getLastMessage(clientId);
+    return {
+      text: getMessagePreviewText(lastMsg) || "Нет сообщений",
+      isDraft: false,
+      isTyping: false,
+    };
+  }
+
+  function renderClientPreview(previewEl, previewState) {
+    if (!previewEl) return;
+    const stateValue = previewState && typeof previewState === "object"
+      ? previewState
+      : { text: "", isDraft: false, isTyping: false };
+    const previewText = String(stateValue.text || "");
+    previewEl.textContent = "";
+    previewEl.classList.toggle("is-typing", stateValue.isTyping === true);
+    previewEl.classList.toggle("is-draft", stateValue.isDraft === true);
+
+    if (stateValue.isDraft === true) {
+      const labelEl = document.createElement("span");
+      labelEl.className = "chat-client-preview-draft-label";
+      labelEl.textContent = "Черновик:";
+      const textEl = document.createElement("span");
+      textEl.className = "chat-client-preview-draft-text";
+      if (hasEmojiInText(previewText)) {
+        renderEmojiMessageText(textEl, previewText, "chat-emoji-glyph chat-emoji-glyph--preview");
+      } else {
+        textEl.textContent = previewText;
+      }
+      previewEl.appendChild(labelEl);
+      previewEl.appendChild(document.createTextNode(" "));
+      previewEl.appendChild(textEl);
+      return;
+    }
+
+    if (hasEmojiInText(previewText)) {
+      renderEmojiMessageText(previewEl, previewText, "chat-emoji-glyph chat-emoji-glyph--preview");
+      return;
+    }
+    previewEl.textContent = previewText;
+  }
+
 
 
   function getClientPreviewText(clientId) {
@@ -4915,17 +5302,16 @@
       : String(key).replace(/["\\]/g, "\\$&");
     const row = dom.left.list.querySelector(`.chat-client-row[data-client-id="${selectorId}"]`);
     if (!row) return;
-    const previewEl = $(".chat-client-preview", row);
-    if (!previewEl) return;
-    const typingPreview = getClientTypingPreviewText(key);
-    const preview = getClientPreviewText(key);
-    previewEl.textContent = "";
-    previewEl.classList.toggle("is-typing", !!typingPreview);
-    if (hasEmojiInText(preview)) {
-      renderEmojiMessageText(previewEl, preview, "chat-emoji-glyph chat-emoji-glyph--preview");
+    const client = (state.filteredClients || []).find((item) => Number(item?.id) === Number(key))
+      || (state.clients || []).find((item) => Number(item?.id) === Number(key))
+      || null;
+    if (client) {
+      row.replaceWith(buildChatClientRow(client));
       return;
     }
-    previewEl.textContent = preview;
+    const previewEl = $(".chat-client-preview", row);
+    if (!previewEl) return;
+    renderClientPreview(previewEl, getClientPreviewState(key));
   }
 
   function collectUnansweredIncomingIds(thread) {
@@ -7411,7 +7797,8 @@
     const active = Number(state.activeClientId) === Number(client.id);
     const unread = getUnreadCount(client.id);
     const lastMsg = getLastMessage(client.id);
-    const preview = getClientPreviewText(client.id);
+    const previewState = getClientPreviewState(client.id);
+    const preview = String(previewState.text || "");
     const timeText = lastMsg?.createdAt ? fmtClientRowTime(lastMsg.createdAt) : "";
     const status = lastMsg?.direction === "out" ? getOutgoingDeliveryStatus(lastMsg) : "";
     const statusTitle = status === "read"
@@ -7431,7 +7818,7 @@
       <button type="button" class="chat-client-row-main" aria-label="${escapeHtml(client.name || `РљР»РёРµРЅС‚ #${client.id}`)}">
         <span class="chat-client-main">
         <span class="chat-client-top">
-          <span class="chat-client-name">${escapeHtml(client.name || `Клиент #${client.id}`)}</span>
+          <span class="chat-client-name" data-chat-client-open-details="1">${escapeHtml(client.name || `Клиент #${client.id}`)}</span>
           ${status || timeText
             ? `<span class="chat-client-time-wrap">
                 ${status
@@ -7442,7 +7829,7 @@
             : ""}
         </span>
         <span class="chat-client-bottom">
-          <span class="chat-client-preview${getClientTypingPreviewText(client.id) ? " is-typing" : ""}">${escapeHtml(preview)}</span>
+          <span class="chat-client-preview${getClientTypingPreviewText(client.id) ? " is-typing" : ""}" data-chat-client-open-details="1">${escapeHtml(preview)}</span>
           ${unread > 0 ? `<span class="chat-client-unread">${escapeHtml(unreadText)}</span>` : ""}
         </span>
         </span>
@@ -7454,13 +7841,31 @@
     `;
 
     const previewEl = $(".chat-client-preview", row);
-    if (previewEl && hasEmojiInText(preview)) {
-      renderEmojiMessageText(previewEl, preview, "chat-emoji-glyph chat-emoji-glyph--preview");
+    if (previewEl) {
+      renderClientPreview(previewEl, previewState);
     }
+
+    const openClientThreadAndDetails = async (event) => {
+      if (isAdminMobileChatLayout()) {
+        selectClient(client.id);
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      closeAllClientSwipeRows(null, { immediate: true });
+      hideClientContextMenu();
+      if (Number(state.activeClientId) !== Number(client.id)) {
+        await selectClient(client.id);
+      }
+      openClientDetailsPanel();
+    };
 
     const mainBtn = $(".chat-client-row-main", row);
     if (mainBtn) {
       mainBtn.addEventListener("click", (event) => {
+        if (event.target.closest('[data-chat-client-open-details="1"]') && !isAdminMobileChatLayout()) {
+          return;
+        }
         if (Date.now() < suppressClientRowClickUntil) {
           event.preventDefault();
           event.stopPropagation();
@@ -7472,13 +7877,20 @@
           closeClientSwipeRow(row);
           return;
         }
-        closeAllClientSwipeRows(null, { immediate: true });
-        hideClientContextMenu();
-        selectClient(client.id);
+        openClientThreadAndDetails(event).catch(console.error);
       });
       mainBtn.addEventListener("contextmenu", (event) => {
         event.preventDefault();
         showClientContextMenu(event.clientX, event.clientY, client.id);
+      });
+    }
+
+    const detailTriggers = $$('[data-chat-client-open-details="1"]', row);
+    if (detailTriggers.length) {
+      detailTriggers.forEach((trigger) => {
+        trigger.addEventListener("click", (event) => {
+          openClientThreadAndDetails(event).catch(console.error);
+        });
       });
     }
 
@@ -8809,6 +9221,7 @@
     const wrap = dom.center.messagesWrap;
     const btn = dom.center.scrollDownBtn;
     if (!wrap || !btn) return;
+    syncAdminMobileChatScrollDownPosition();
 
     const hiddenDistance = wrap.scrollHeight - wrap.clientHeight - wrap.scrollTop;
     const badgeCount = getScrollDownBadgeCount();
@@ -10475,11 +10888,12 @@
   }
 
   function renderChatHeader() {
+    ensureDesktopChatHeaderMarkup();
     setHeaderLoading(state.activeClientDataLoading === true);
-    const setOrderStatusView = (text, color) => {
-      if (!dom.center.orderStatus) return;
+    const legacySetOrderStatusView = (text, _color, order = null) => {
+      if (!dom.center.headerOrder) return;
       const safeText = String(text || "—").trim() || "—";
-      const safeColor = String(color || "").trim();
+      const safeColor = String(_color || "").trim();
       dom.center.orderStatus.textContent = safeText;
       dom.center.orderStatus.classList.toggle("is-empty", safeText === "—" || safeText === "Без заказа");
       if (!safeColor) {
@@ -10493,21 +10907,58 @@
       dom.center.orderStatus.style.color = safeColor;
     };
 
-    const setOrderTotalView = (totalText, paymentCode) => {
+    const setOrderStatusView = (text, _color, order = null) => {
+      if (!dom.center.headerOrder) return;
+      const safeText = String(text || "вЂ”").trim() || "вЂ”";
+      const stageCol = $(".order-col.order-stage", dom.center.headerOrder);
+      if (!stageCol) return;
+      stageCol.innerHTML = buildHeaderOrderStageButtonHtml(order, safeText);
+      refreshDesktopHeaderDomRefs();
+    };
+
+    const setOrderTotalView = (totalText, paymentCode, order = null) => {
       if (!dom.center.orderTotal) return;
       const safeTotal = String(totalText || "—").trim() || "—";
       const isEmpty = safeTotal === "—";
 
-      dom.center.orderTotal.classList.remove("order-payment-cash", "order-payment-card");
+      const paymentTitle = String(order?.payment_title || "").trim();
+      const isFullyRefunded = isHeaderOrderFullyRefunded(order);
+      const isPaid = isHeaderOrderPaid(order);
+      const paymentStateClass = isFullyRefunded
+        ? "order-payment-refund"
+        : (isPaid ? "order-payment-paid" : "order-payment-unpaid");
+      const paymentStatusText = isFullyRefunded ? "Возвращено" : (isPaid ? "Оплачено" : "Не оплачено");
+
+      dom.center.orderTotal.className = "order-payment-btn";
       dom.center.orderTotal.classList.toggle("is-empty", isEmpty);
       if (isEmpty) {
+        dom.center.orderTotal.removeAttribute("title");
         dom.center.orderTotal.textContent = "—";
         return;
       }
 
       const code = String(paymentCode || "").toLowerCase();
       const isCash = code.includes("cash");
-      dom.center.orderTotal.classList.add(isCash ? "order-payment-cash" : "order-payment-card");
+      dom.center.orderTotal.classList.add(isCash ? "order-payment-cash" : "order-payment-card", paymentStateClass);
+      if (paymentTitle) dom.center.orderTotal.setAttribute("title", paymentTitle);
+      else dom.center.orderTotal.removeAttribute("title");
+      if (sharedOrderPanel && typeof sharedOrderPanel.buildOrderPaymentButtonHtml === "function") {
+        const temp = document.createElement("div");
+        temp.innerHTML = sharedOrderPanel.buildOrderPaymentButtonHtml({
+          paymentTypeClass: isCash ? "order-payment-cash" : "order-payment-card",
+          paymentStateClass,
+          paymentTitle,
+          paymentIconHtml: renderHeaderOrderPaymentIconHtml(code),
+          totalText: safeTotal,
+          statusText: paymentStatusText,
+        }).trim();
+        const builtButton = temp.firstElementChild;
+        if (builtButton) {
+          dom.center.orderTotal.className = builtButton.className;
+          dom.center.orderTotal.innerHTML = builtButton.innerHTML;
+          return;
+        }
+      }
       dom.center.orderTotal.innerHTML = `<i class="fas ${escapeHtml(paymentIcon(code))}"></i> ${escapeHtml(safeTotal)}`;
     };
 
@@ -10544,9 +10995,9 @@
       if (dom.center.headerPhone) dom.center.headerPhone.textContent = safeClientPhone;
       if (dom.center.mobileHeaderPhone) dom.center.mobileHeaderPhone.textContent = safeClientPhone;
       setHeaderTimeIcon(order);
-      setOrderTotalView(total, paymentCode);
+      setOrderTotalView(total, paymentCode, order);
       if (dom.center.orderTitle) dom.center.orderTitle.textContent = title;
-      setOrderStatusView(statusText, statusColor);
+      setOrderStatusView(statusText, statusColor, order);
       setHeaderOrderLinkState(orderId);
       syncHeaderTooltips();
     };
@@ -10590,6 +11041,9 @@
       ? { ...state.headerOrderSnapshot, ...snapshotFromList }
       : (snapshotOrderId > 0 ? state.headerOrderSnapshot : null);
     const headerOrder = snapshotOrder || candidate.headerOrder;
+    if (headerOrder && !state.orderStatusesLoaded && !state.orderStatusesLoading) {
+      ensureHeaderOrderStatusesLoaded().catch(console.error);
+    }
 
     if (!headerOrder) {
       state.headerOrderId = 0;
@@ -11245,6 +11699,229 @@
   function bindAdminMobileStaticPanGuards() {
     bindAdminMobileVerticalPanGuard(dom.center.scrollDownBtn, "mobilePanGuardBound");
     bindAdminMobileVerticalPanGuard(document.getElementById("adminMobileShell"), "mobilePanGuardBound");
+  }
+
+  function bindAdminMobileThreadSwipeToClients() {
+    const wrap = dom.center.messagesWrap;
+    if (!wrap || wrap.dataset.mobileThreadSwipeToClientsBound === "1") return;
+    wrap.dataset.mobileThreadSwipeToClientsBound = "1";
+
+    let activeTouchId = null;
+    let startX = 0;
+    let startY = 0;
+    let lastX = 0;
+    let lastY = 0;
+    let swipeLocked = false;
+    let dragStarted = false;
+
+    const reset = () => {
+      if (document.body) {
+        document.body.classList.remove("chat-mobile-left-dragging");
+      }
+      if (dom.left.panel) {
+        dom.left.panel.style.removeProperty("transform");
+      }
+      activeTouchId = null;
+      startX = 0;
+      startY = 0;
+      lastX = 0;
+      lastY = 0;
+      swipeLocked = false;
+      dragStarted = false;
+    };
+
+    const isEnabled = () => {
+      if (!isAdminMobileChatLayout()) return false;
+      if (!document.body) return false;
+      if (document.body.classList.contains("chat-mobile-left-open")) return false;
+      if (document.body.classList.contains("chat-mobile-right-open")) return false;
+      if (state.selectionMode) return false;
+      if (hasFocusedAdminChatTextInput()) return false;
+      return true;
+    };
+
+    const getLeftPanelClosedDistance = () => {
+      const panelWidth = Math.max(
+        0,
+        Math.round(
+          Number(dom.left.panel?.getBoundingClientRect?.().width || 0)
+          || Number(dom.left.panel?.offsetWidth || 0)
+          || Number(window.innerWidth || 0)
+        )
+      );
+      return Math.max(0, panelWidth + 18);
+    };
+
+    const applyDragOffset = (clientX) => {
+      if (!document.body || !dom.left.panel) return;
+      const panelWidth = Math.max(
+        0,
+        Math.round(
+          Number(dom.left.panel?.offsetWidth || 0)
+          || Number(window.innerWidth || 0)
+        )
+      );
+      const closedDistance = getLeftPanelClosedDistance();
+      const pointerX = Math.max(0, Number(clientX || 0));
+      const offset = Math.max(-closedDistance, Math.min(0, pointerX - panelWidth));
+      document.body.classList.add("chat-mobile-left-dragging");
+      dom.left.panel.style.transform = `translateX(${offset}px)`;
+    };
+
+    const resolveTrackedTouch = (touchList) => {
+      if (activeTouchId == null || !touchList) return null;
+      for (let index = 0; index < touchList.length; index += 1) {
+        const touch = touchList[index];
+        if (touch && touch.identifier === activeTouchId) return touch;
+      }
+      return null;
+    };
+
+    wrap.addEventListener("touchstart", (event) => {
+      reset();
+      if (!isEnabled() || event.touches.length !== 1) return;
+      if (!isAdminChatEmptyThreadTouchTarget(event.target)) return;
+      const touch = event.touches[0];
+      activeTouchId = touch.identifier;
+      startX = Number(touch.clientX || 0);
+      startY = Number(touch.clientY || 0);
+      lastX = startX;
+      lastY = startY;
+    }, { passive: true });
+
+    wrap.addEventListener("touchmove", (event) => {
+      const touch = resolveTrackedTouch(event.touches) || resolveTrackedTouch(event.changedTouches);
+      if (!touch) return;
+      lastX = Number(touch.clientX || 0);
+      lastY = Number(touch.clientY || 0);
+
+      const dx = lastX - startX;
+      const dy = lastY - startY;
+      const absX = Math.abs(dx);
+      const absY = Math.abs(dy);
+
+      if (!swipeLocked) {
+        if (absX < CHAT_TOUCH_THREAD_NAV_LOCK_PX && absY < CHAT_TOUCH_THREAD_NAV_LOCK_PX) return;
+        if (absY > absX || dx <= 0) {
+          reset();
+          return;
+        }
+        swipeLocked = true;
+        dragStarted = true;
+        hideMessageContextMenu();
+        hideReactionBar();
+        hideEmojiPopover();
+      }
+
+      applyDragOffset(lastX);
+      event.preventDefault();
+      event.stopPropagation();
+    }, { passive: false });
+
+    const finish = () => {
+      if (activeTouchId == null) return;
+      const dx = lastX - startX;
+      const dy = lastY - startY;
+      const shouldOpenClients = (
+        swipeLocked
+        && dx >= CHAT_TOUCH_THREAD_NAV_TRIGGER_PX
+        && Math.abs(dy) <= Math.max(44, Math.abs(dx))
+      );
+      const hadDrag = dragStarted === true;
+      if (!hadDrag) {
+        reset();
+        return;
+      }
+      if (document.body) {
+        document.body.classList.remove("chat-mobile-left-dragging");
+      }
+      if (shouldOpenClients) {
+        openClientsPanel();
+      } else {
+        syncMobileChatView("center", { persistState: false });
+      }
+      if (dom.left.panel) {
+        dom.left.panel.style.removeProperty("transform");
+      }
+      activeTouchId = null;
+      startX = 0;
+      startY = 0;
+      lastX = 0;
+      lastY = 0;
+      swipeLocked = false;
+      dragStarted = false;
+    };
+
+    wrap.addEventListener("touchend", finish, { passive: true });
+    wrap.addEventListener("touchcancel", reset, { passive: true });
+  }
+
+  function bindAdminMobileThreadKeyboardDismiss() {
+    const wrap = dom.center.messagesWrap;
+    if (!wrap || wrap.dataset.mobileKeyboardDismissBound === "1") return;
+    wrap.dataset.mobileKeyboardDismissBound = "1";
+
+    let activeTouchId = null;
+    let startX = 0;
+    let startY = 0;
+    let moved = false;
+    let eligible = false;
+
+    const reset = () => {
+      activeTouchId = null;
+      startX = 0;
+      startY = 0;
+      moved = false;
+      eligible = false;
+    };
+
+    const resolveTrackedTouch = (touchList) => {
+      if (activeTouchId == null || !touchList) return null;
+      for (let index = 0; index < touchList.length; index += 1) {
+        const touch = touchList[index];
+        if (touch && touch.identifier === activeTouchId) return touch;
+      }
+      return null;
+    };
+
+    wrap.addEventListener("touchstart", (event) => {
+      reset();
+      if (!isAdminMobileChatLayout()) return;
+      if (!hasFocusedAdminChatTextInput()) return;
+      if (event.touches.length !== 1) return;
+      if (!isAdminChatEmptyThreadTouchTarget(event.target)) return;
+      const touch = event.touches[0];
+      activeTouchId = touch.identifier;
+      startX = Number(touch.clientX || 0);
+      startY = Number(touch.clientY || 0);
+      eligible = true;
+    }, { passive: true });
+
+    wrap.addEventListener("touchmove", (event) => {
+      const touch = resolveTrackedTouch(event.touches) || resolveTrackedTouch(event.changedTouches);
+      if (!touch || !eligible) return;
+      const dx = Number(touch.clientX || 0) - startX;
+      const dy = Number(touch.clientY || 0) - startY;
+      if (Math.abs(dx) >= 8 || Math.abs(dy) >= 8) {
+        moved = true;
+      }
+    }, { passive: true });
+
+    const finish = (event) => {
+      if (activeTouchId == null) return;
+      const shouldDismiss = eligible
+        && !moved
+        && isAdminMobileChatLayout()
+        && hasFocusedAdminChatTextInput()
+        && isAdminChatEmptyThreadTouchTarget(event.target);
+      reset();
+      if (shouldDismiss) {
+        dismissAdminChatTextInputFocus();
+      }
+    };
+
+    wrap.addEventListener("touchend", finish, { passive: true });
+    wrap.addEventListener("touchcancel", reset, { passive: true });
   }
 
   function finalizeComposerSendUi(options = {}) {
@@ -12571,18 +13248,97 @@
     return true;
   }
 
+  async function updateHeaderOrderStatus(orderId, statusId) {
+    const id = Number(orderId || 0);
+    const nextStatusId = Number(statusId || 0);
+    if (!Number.isFinite(id) || id <= 0) return;
+    if (!Number.isFinite(nextStatusId) || nextStatusId <= 0) return;
+    if (state.headerOrderStatusMutationInFlight) return;
+
+    const sourceOrder = state.headerOrderSnapshot && Number(state.headerOrderSnapshot?.id || 0) === id
+      ? state.headerOrderSnapshot
+      : ((Array.isArray(state.activeOrders) ? state.activeOrders : []).find((order) => Number(order?.id || 0) === id) || null);
+    const currentStatus = getHeaderOrderStatusMeta(sourceOrder);
+    const targetStatus = getHeaderOrderStatusMetaById(nextStatusId);
+    if (targetStatus && isHeaderForbiddenStatusTransition(currentStatus, targetStatus)) return;
+
+    state.headerOrderStatusMutationInFlight = true;
+    renderChatHeader();
+    try {
+      await apiJson(`/api/admin/orders/${id}/status`, {
+        method: "PUT",
+        body: { status_id: nextStatusId },
+      });
+
+      const json = await fetchOrderDetailsFresh(id);
+      const freshOrder = json?.data || null;
+      if (!freshOrder || typeof freshOrder !== "object") return;
+
+      state.orderDetailsCache.set(id, freshOrder);
+      state.headerOrderSnapshot = { ...freshOrder };
+      setSharedOrderDetails(freshOrder);
+      upsertActiveOrder(freshOrder);
+      if (Number(state.rightPanelOrderId || 0) === id) {
+        syncRightOrderPanelById(id, { force: true, forceRefresh: true });
+      }
+      renderChatHeader();
+    } catch (err) {
+      console.error(err);
+    } finally {
+      state.headerOrderStatusMutationInFlight = false;
+      renderChatHeader();
+    }
+  }
+
+  function initHeaderOrderStatusAction() {
+    if (!dom.center.headerOrder || dom.center.headerOrder.dataset.boundStatusCycle === "1") return;
+    dom.center.headerOrder.dataset.boundStatusCycle = "1";
+    dom.center.headerOrder.addEventListener("click", async (event) => {
+      const btn = event.target.closest('[data-action="order-row-status-next"]');
+      if (!btn || !dom.center.headerOrder.contains(btn)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      if (btn.disabled) return;
+      const orderId = Number(btn.getAttribute("data-order-id") || 0);
+      const nextStatusId = Number(btn.getAttribute("data-next-status-id") || 0);
+      if (!Number.isFinite(orderId) || orderId <= 0) return;
+      if (!Number.isFinite(nextStatusId) || nextStatusId <= 0) return;
+      await updateHeaderOrderStatus(orderId, nextStatusId);
+    });
+  }
+
+  function initHeaderClientOpenAction() {
+    [dom.center.headerClientBtn, dom.center.mobileHeaderClientBtn].forEach((node) => {
+      if (!node || node.dataset.boundClientOpen === "1") return;
+      node.dataset.boundClientOpen = "1";
+      ["pointerdown", "touchstart", "mousedown"].forEach((eventName) => {
+        node.addEventListener(eventName, (event) => {
+          event.stopPropagation();
+        }, { passive: eventName === "touchstart" });
+      });
+      node.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        openClientDetailsPanel();
+      });
+    });
+  }
+
   function initHeaderOrderOpenAction() {
     [dom.center.headerOrder, dom.center.mobileHeaderOrderBtn].forEach((node) => {
       if (!node || node.dataset.boundOpenOrder === "1") return;
       node.dataset.boundOpenOrder = "1";
 
       node.addEventListener("click", (event) => {
+        if (event.target && event.target.closest && event.target.closest('[data-action="order-row-status-next"]')) return;
         event.preventDefault();
         event.stopPropagation();
         openOrderFromHeader();
       });
 
       node.addEventListener("keydown", (event) => {
+        if (event.target && event.target.closest && event.target.closest('[data-action="order-row-status-next"]')) return;
         if (event.key !== "Enter" && event.key !== " ") return;
         event.preventDefault();
         openOrderFromHeader();
@@ -13340,22 +14096,7 @@
       });
     }
 
-    [dom.center.headerClientBtn, dom.center.mobileHeaderClientBtn].forEach((node) => {
-      if (!node || node.dataset.bound !== "1") {
-        if (!node) return;
-        node.dataset.bound = "1";
-        ["pointerdown", "touchstart", "mousedown"].forEach((eventName) => {
-          node.addEventListener(eventName, (event) => {
-            event.stopPropagation();
-          }, { passive: eventName === "touchstart" });
-        });
-        node.addEventListener("click", (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          openClientDetailsPanel();
-        });
-      }
-    });
+    initHeaderClientOpenAction();
 
     window.__adminChatMobileApi = {
       openClientsPanel(options = {}) {
@@ -13390,11 +14131,15 @@
     state.chatWidgetEnabled = getTenantChatWidgetEnabledFromStorage();
     setSidebarChatNavVisibility(state.chatWidgetEnabled !== false);
     setChatBootstrapLoading(state.chatWidgetEnabled !== false);
+    ensureDesktopChatHeaderMarkup();
     initMessageAlerts();
     initComposer();
     bindAdminMobileFooterPanGuard();
     bindAdminMobileStaticPanGuards();
+    bindAdminMobileThreadKeyboardDismiss();
+    bindAdminMobileThreadSwipeToClients();
     initSelectionToolbar();
+    initHeaderOrderStatusAction();
     initHeaderOrderOpenAction();
     initOrderHeaderLiveSync();
     if (dom.center.messagesWrap && dom.center.messagesWrap.dataset.scrollDownBound !== "1") {

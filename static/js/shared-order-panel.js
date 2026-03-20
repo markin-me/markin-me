@@ -350,13 +350,18 @@
     var orderId = Number(config.orderId || 0);
     var orderNumberText = String(config.orderNumberText || orderId || "—").trim() || "—";
     var createdAtText = String(config.createdAtText || "").trim();
+    var orderIdNumHtml = String(config.orderIdNumHtml || "").trim();
+    var createdAtHtml = String(config.createdAtHtml || "").trim();
     var showMultiSelect = !!config.showMultiSelect;
     var multiSelected = !!config.multiSelected;
     var customerName = String(config.customerName || "?").trim() || "?";
+    var customerNameHtml = String(config.customerNameHtml || "").trim();
     var customerPhoneHtml = String(config.customerPhoneHtml || "").trim();
     var timeIconHtml = String(config.timeIconHtml || "").trim();
     var addressText = String(config.addressText || "?").trim() || "?";
     var addressCommentText = String(config.addressCommentText || "Нет комментария").trim() || "Нет комментария";
+    var addressLineHtml = String(config.addressLineHtml || "").trim();
+    var addressCommentHtml = String(config.addressCommentHtml || "").trim();
     var stageHtml = String(config.stageHtml || "").trim();
     var paymentHtml = String(config.paymentHtml || "").trim();
     var orderIdHitTag = showMultiSelect ? "label" : "div";
@@ -371,18 +376,20 @@
       '<div class="order-col order-id">' +
         '<' + orderIdHitTag + (showMultiSelect ? orderIdHitClass + orderIdHitAttrs : orderIdHitAttrs) + '>' +
           checkboxHtml +
-          '<div class="order-id-num">' + escapeHtml(orderNumberText) + '</div>' +
-          '<div class="order-id-time">' + escapeHtml(createdAtText) + '</div>' +
+          (orderIdNumHtml || ('<div class="order-id-num">' + escapeHtml(orderNumberText) + '</div>')) +
+          (createdAtHtml || ('<div class="order-id-time">' + escapeHtml(createdAtText) + '</div>')) +
         '</' + orderIdHitTag + '>' +
       '</div>' +
       '<div class="order-col order-indicators">' + timeIconHtml + '</div>' +
       '<div class="order-col order-client">' +
-        '<div class="order-client-name"><i class="fas fa-user"></i><span class="order-client-name-text">' + escapeHtml(customerName) + '</span></div>' +
+        '<div class="order-client-name"><i class="fas fa-user"></i>' +
+          (customerNameHtml || ('<span class="order-client-name-text">' + escapeHtml(customerName) + '</span>')) +
+        '</div>' +
         customerPhoneHtml +
       '</div>' +
       '<div class="order-col order-address">' +
-        '<div class="order-address-line"><i class="fas fa-map-marker-alt"></i> ' + escapeHtml(addressText) + '</div>' +
-        '<div class="order-address-comment muted"><i class="far fa-comment"></i> ' + escapeHtml(addressCommentText) + '</div>' +
+        (addressLineHtml || ('<div class="order-address-line"><i class="fas fa-map-marker-alt"></i> ' + escapeHtml(addressText) + '</div>')) +
+        (addressCommentHtml || ('<div class="order-address-comment muted"><i class="far fa-comment"></i> ' + escapeHtml(addressCommentText) + '</div>')) +
       '</div>' +
       '<div class="order-col order-stage">' + stageHtml + '</div>' +
       '<div class="order-col order-total">' + paymentHtml + '</div>';

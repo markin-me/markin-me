@@ -2569,11 +2569,23 @@ html[data-sidebar-collapsed="1"] .sidebar-edge-toggle .sidebar-edge-expanded{dis
              box-shadow var(--dur-fast) var(--ease-smooth),
              transform var(--dur-fast) var(--ease-smooth);
 }
-body.page-orders .orders-list .order-row.js-order,
-body.page-courier-screen .orders-list .order-row.js-order,
-body.page-cash #cashJournalList.orders-list .order-row.js-order{
+.order-row.shared-order-summary-row{
   grid-template-columns:70px 58px 170px minmax(0,1fr) max-content max-content;
   gap:8px;
+}
+
+.order-row.shared-order-summary-row.is-chat-header-loading .order-col{
+  visibility:hidden;
+}
+
+.order-row.shared-order-summary-row .order-col.order-client.is-openable{
+  cursor:pointer;
+}
+
+.order-row.shared-order-summary-row .order-col.order-client.is-openable:focus-visible{
+  outline:2px solid var(--primary-45);
+  outline-offset:2px;
+  border-radius:8px;
 }
 
 .cash-order-row{
@@ -3474,9 +3486,7 @@ body.page-courier-screen .orders-list .order-courier-action-btn--pickup[aria-dis
   display:flex;
   align-items:flex-end;
 }
-body.page-orders .orders-list .order-col.order-total .order-payment-btn,
-body.page-courier-screen .orders-list .order-col.order-total .order-payment-btn,
-body.page-cash #cashJournalList.orders-list .order-col.order-total .order-payment-btn{
+.order-row.shared-order-summary-row .order-col.order-total .order-payment-btn{
   align-items:stretch;
   min-width:0;
   height:50px;
@@ -3484,9 +3494,7 @@ body.page-cash #cashJournalList.orders-list .order-col.order-total .order-paymen
   padding:0;
   overflow:hidden;
 }
-body.page-orders .orders-list .order-col.order-total .order-payment-btn-icon,
-body.page-courier-screen .orders-list .order-col.order-total .order-payment-btn-icon,
-body.page-cash #cashJournalList.orders-list .order-col.order-total .order-payment-btn-icon{
+.order-row.shared-order-summary-row .order-col.order-total .order-payment-btn-icon{
   display:grid;
   place-items:center;
   width:50px;
@@ -3494,12 +3502,179 @@ body.page-cash #cashJournalList.orders-list .order-col.order-total .order-paymen
   height:50px;
   flex:0 0 50px;
 }
-body.page-orders .orders-list .order-col.order-total .order-payment-btn-content,
-body.page-courier-screen .orders-list .order-col.order-total .order-payment-btn-content,
-body.page-cash #cashJournalList.orders-list .order-col.order-total .order-payment-btn-content{
+.order-row.shared-order-summary-row .order-col.order-total .order-payment-btn-content{
   justify-content:center;
   gap:2px;
   padding:0 10px;
+}
+.order-row.shared-order-summary-row .order-col.order-stage .order-stage-btn{
+  background:var(--color-surface);
+  transition:box-shadow .24s var(--ease-smooth), transform .24s cubic-bezier(.22,1,.36,1), border-color .24s var(--ease-smooth);
+}
+.order-row.shared-order-summary-row .order-col.order-stage .order-stage-btn:hover{
+  background:var(--color-surface);
+  border-color:rgba(15,23,42,.08);
+  box-shadow:0 8px 18px rgba(15,23,42,.10);
+  transform:translateY(-1px);
+}
+.order-row.shared-order-summary-row .order-col.order-stage .order-stage-btn.is-static:disabled{
+  opacity:1;
+}
+.order-row.shared-order-summary-row .order-col.order-stage .order-stage-btn-icon-shell{
+  position:relative;
+  width:50px;
+  min-width:50px;
+  height:50px;
+  overflow:hidden;
+}
+.order-row.shared-order-summary-row .order-col.order-stage .order-stage-btn-icon-wrap{
+  position:absolute;
+  inset:0;
+  width:50px;
+  min-width:50px;
+  height:50px;
+  display:grid;
+  place-items:center;
+  border-radius:0;
+  border-right:none;
+  background:transparent;
+  overflow:hidden;
+  transition:opacity .28s var(--ease-smooth), transform .28s cubic-bezier(.22,1,.36,1);
+}
+.order-row.shared-order-summary-row .order-col.order-stage .order-stage-btn-content{
+  box-sizing:border-box;
+  width:100px;
+  min-width:100px;
+  flex:0 0 100px;
+  position:relative;
+  height:100%;
+  overflow:hidden;
+  padding:0;
+  border-left:none;
+}
+.order-row.shared-order-summary-row .order-col.order-stage .order-stage-btn-panel{
+  position:absolute;
+  inset:0;
+  display:flex;
+  flex-direction:column;
+  justify-content:center;
+  gap:2px;
+  padding:0 12px 0 4px;
+  transition:opacity .28s var(--ease-smooth), transform .28s cubic-bezier(.22,1,.36,1);
+}
+.order-row.shared-order-summary-row .order-col.order-stage .order-stage-btn-current,
+.order-row.shared-order-summary-row .order-col.order-stage .order-stage-btn-next,
+.order-row.shared-order-summary-row .order-col.order-stage .order-stage-btn-meta{
+  display:block;
+  min-width:0;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.order-row.shared-order-summary-row .order-col.order-stage .order-stage-btn-current{
+  font-size:13px;
+  font-weight:800;
+  color:var(--color-text);
+}
+.order-row.shared-order-summary-row .order-col.order-stage .order-stage-btn-next{
+  font-size:13px;
+  font-weight:800;
+  color:var(--color-text);
+}
+.order-row.shared-order-summary-row .order-col.order-stage .order-stage-btn-meta{
+  font-size:10px;
+  font-weight:700;
+  color:var(--color-text-muted);
+}
+.order-row.shared-order-summary-row .order-col.order-stage .order-stage-btn-icon-next,
+.order-row.shared-order-summary-row .order-col.order-stage .order-stage-btn-panel-next{
+  opacity:0;
+  transform:translateY(6px);
+  pointer-events:none;
+}
+.order-row.shared-order-summary-row .order-col.order-stage .order-stage-btn.is-static .order-stage-btn-icon-next,
+.order-row.shared-order-summary-row .order-col.order-stage .order-stage-btn.is-static .order-stage-btn-panel-next{
+  display:none;
+}
+@media (hover:hover) and (pointer:fine){
+  .order-row.shared-order-summary-row .order-col.order-stage .order-stage-btn:not(.is-static):hover .order-stage-btn-icon-current,
+  .order-row.shared-order-summary-row .order-col.order-stage .order-stage-btn:not(.is-static):hover .order-stage-btn-panel-current{
+    opacity:0;
+    transform:translateY(-6px);
+  }
+  .order-row.shared-order-summary-row .order-col.order-stage .order-stage-btn:not(.is-static):hover .order-stage-btn-icon-next,
+  .order-row.shared-order-summary-row .order-col.order-stage .order-stage-btn:not(.is-static):hover .order-stage-btn-panel-next{
+    opacity:1;
+    transform:translateY(0);
+  }
+}
+.order-row.shared-order-summary-row .order-col.order-total .order-payment-btn{
+  border:1px solid var(--color-border);
+  background:var(--color-surface);
+  color:var(--color-text);
+  cursor:pointer;
+  transition:box-shadow .24s var(--ease-smooth), transform .24s cubic-bezier(.22,1,.36,1), border-color .24s var(--ease-smooth), background .24s var(--ease-smooth);
+  text-align:left;
+}
+.order-row.shared-order-summary-row .order-col.order-total .order-payment-btn.order-payment-paid{
+  background:rgba(16,185,129,.11);
+  border-color:rgba(34,197,94,.20);
+}
+.order-row.shared-order-summary-row .order-col.order-total .order-payment-btn.order-payment-unpaid{
+  background:rgba(239,68,68,.10);
+  border-color:rgba(239,68,68,.18);
+}
+.order-row.shared-order-summary-row .order-col.order-total .order-payment-btn.order-payment-refund{
+  background:var(--color-surface);
+  border-color:var(--color-border);
+}
+.order-row.shared-order-summary-row .order-col.order-total .order-payment-btn-icon{
+  background:transparent;
+}
+.order-row.shared-order-summary-row .order-col.order-total .order-payment-btn-icon img{
+  width:24px;
+  height:24px;
+  object-fit:contain;
+  display:block;
+  background:transparent;
+}
+.order-row.shared-order-summary-row .order-col.order-total .order-payment-btn-total{
+  display:block;
+  min-width:0;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  font-size:18px;
+  font-weight:800;
+  color:var(--color-text);
+}
+.order-row.shared-order-summary-row .order-col.order-total .order-payment-btn-status{
+  display:block;
+  min-width:0;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  font-size:10px;
+  font-weight:700;
+  color:var(--color-text-muted);
+}
+.order-row.shared-order-summary-row .order-col.order-total .order-payment-btn:hover{
+  border-color:rgba(15,23,42,.08);
+  box-shadow:0 8px 18px rgba(15,23,42,.10);
+  transform:translateY(-1px);
+  opacity:1;
+}
+.order-row.shared-order-summary-row .order-col.order-total .order-payment-btn.order-payment-paid:hover{
+  background:rgba(16,185,129,.14);
+  border-color:rgba(34,197,94,.24);
+}
+.order-row.shared-order-summary-row .order-col.order-total .order-payment-btn.order-payment-unpaid:hover{
+  background:rgba(239,68,68,.13);
+  border-color:rgba(239,68,68,.22);
+}
+.order-row.shared-order-summary-row .order-col.order-total .order-payment-btn.order-payment-refund:hover{
+  background:var(--color-surface);
+  border-color:rgba(15,23,42,.08);
 }
 body.page-cash #cashJournalList.orders-list .order-stage-btn{
   background:var(--color-surface);
@@ -16721,6 +16896,19 @@ body.page-chat .panel{
   white-space:nowrap;
 }
 
+.chat-client-preview.is-draft{
+  color:var(--color-text-muted);
+}
+
+.chat-client-preview-draft-label{
+  color:var(--color-danger, #d35454);
+  font-weight:700;
+}
+
+.chat-client-preview-draft-text{
+  color:inherit;
+}
+
 
 .chat-client-preview.is-typing{
   color:var(--accent-primary);
@@ -16990,6 +17178,84 @@ body.page-chat .panel{
   min-width:0;
 }
 
+.chat-desktop-order-header.order-row{
+  position:relative;
+  flex:1 1 auto;
+  min-width:0;
+  width:100%;
+  cursor:default;
+  user-select:text;
+  transform:none !important;
+  box-shadow:none !important;
+  border:0;
+  border-radius:0;
+  background:transparent;
+  padding:0;
+  grid-template-columns:70px 58px 170px minmax(0,1fr) max-content max-content;
+  gap:8px;
+}
+
+.chat-desktop-order-header.order-row.is-order-openable{
+  cursor:pointer;
+  user-select:none;
+}
+
+.chat-desktop-order-header.order-row.is-order-openable:focus-visible{
+  outline:2px solid var(--primary-45);
+  outline-offset:2px;
+}
+
+.chat-desktop-order-header.order-row:hover{
+  transform:none;
+  box-shadow:none;
+  background:transparent;
+}
+
+.chat-desktop-order-header .order-col{
+  min-width:0;
+}
+
+.chat-desktop-order-header .order-col.order-client{
+  min-width:170px;
+}
+
+.chat-desktop-order-header .order-client-name,
+.chat-desktop-order-header .order-client-name-text,
+.chat-desktop-order-header .order-client-phone,
+.chat-desktop-order-header .order-client-phone-text,
+.chat-desktop-order-header .order-address-line,
+.chat-desktop-order-header .order-address-line span,
+.chat-desktop-order-header .order-address-comment,
+.chat-desktop-order-header .order-address-comment span{
+  min-width:0;
+}
+
+.chat-desktop-order-header .order-client-name-text,
+.chat-desktop-order-header .order-client-phone-text,
+.chat-desktop-order-header .order-address-line span,
+.chat-desktop-order-header .order-address-comment span{
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+.chat-desktop-order-header .order-col.order-address{
+  padding-left:4px;
+}
+
+.chat-desktop-order-header .order-client-phone{
+  display:grid;
+  grid-template-columns:16px minmax(0,1fr);
+  align-items:center;
+  column-gap:6px;
+}
+
+.chat-desktop-order-header .order-client-phone i{
+  width:16px;
+  margin-right:0;
+  text-align:center;
+}
+
 .chat-main-order-top,
 .chat-main-order-bottom{
   display:contents;
@@ -17177,6 +17443,74 @@ body.page-chat .panel{
   background:var(--color-surface-2);
   border:1px solid var(--color-border);
   color:var(--color-text-muted);
+}
+
+.chat-desktop-order-header.order-row.is-chat-header-loading .order-col{
+  visibility:hidden;
+}
+
+.chat-desktop-order-header .order-stage{
+  justify-content:center;
+}
+
+.chat-desktop-order-header .chat-main-order-status{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  min-height:30px;
+  padding:0 15px;
+  border-radius:999px;
+  border:1px solid var(--color-border);
+  font-size:14px;
+  font-weight:700;
+  line-height:1;
+  color:var(--color-text);
+  white-space:nowrap;
+  max-width:100%;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+
+.chat-desktop-order-header .chat-main-order-status.is-empty{
+  color:var(--color-text-muted);
+  background:var(--color-surface-2);
+}
+
+.chat-desktop-order-header .chat-order-header-total{
+  cursor:default;
+  pointer-events:none;
+  min-width:0;
+  min-height:32px;
+  padding:0 12px;
+  border-radius:8px;
+  font-size:14px;
+  font-weight:700;
+  line-height:1;
+}
+
+.chat-desktop-order-header .chat-order-header-total.is-empty{
+  background:var(--color-surface-2);
+  border:1px solid var(--color-border);
+  color:var(--color-text-muted);
+}
+
+.chat-desktop-order-header .chat-order-header-total .order-payment-btn-icon{
+  width:34px;
+  height:34px;
+  flex:0 0 34px;
+}
+
+.chat-desktop-order-header .chat-order-header-total .order-payment-btn-content{
+  gap:1px;
+}
+
+.chat-desktop-order-header .chat-order-header-total .order-payment-btn-total{
+  font-size:14px;
+}
+
+.chat-desktop-order-header .chat-order-header-total .order-payment-btn-status{
+  margin-top:1px;
+  font-size:10px;
 }
 
 .chat-main-body{
@@ -19890,7 +20224,7 @@ body.page-chat .panel{
       radial-gradient(circle at 16% 10%, rgba(255,255,255,.16), transparent 36%),
       radial-gradient(circle at 84% 14%, rgba(245,225,138,.08), transparent 32%),
       linear-gradient(180deg, #f7f8f4 0%, #f0f3eb 42%, #ebefe5 100%);
-    background-position:0 0, center center, 0 0, 0 0, 0 0;
+    background-position:0 0, center top, 0 0, 0 0, 0 0;
     background-repeat:no-repeat, no-repeat, no-repeat, no-repeat, no-repeat;
     background-size:100% 100%, var(--chat-wallpaper-size), 100% 100%, 100% 100%, 100% 100%;
   }
@@ -19907,7 +20241,6 @@ body.page-chat .panel{
   body.page-chat .chat-center-stack > .panel.chat-main-panel{
     position:absolute;
     inset:0;
-    bottom:var(--chat-mobile-overlay-lift);
     z-index:1;
     align-self:auto;
     flex:1 1 auto;
@@ -19960,10 +20293,19 @@ body.page-chat .panel{
       calc(var(--chat-mobile-footer-overlay-height) + 8px);
   }
 
-  body.page-chat .chat-header-island,
-  body.page-chat .chat-main-panel{
+  body.page-chat .chat-header-island{
     transform:translate3d(0, var(--chat-android-viewport-shift), 0);
     will-change:transform;
+  }
+
+  body.page-chat .chat-main-panel{
+    transform:translate3d(
+      0,
+      calc(var(--chat-android-viewport-shift) - var(--chat-mobile-overlay-lift)),
+      0
+    );
+    will-change:transform;
+    transition:transform 72ms linear;
   }
 
   body.page-chat .chat-footer-island,
@@ -19974,6 +20316,7 @@ body.page-chat .panel{
       0
     );
     will-change:transform;
+    transition:transform 72ms linear, opacity var(--dur-fast) var(--ease-smooth);
   }
 
   body.page-chat .chat-center-stack,
@@ -20042,9 +20385,9 @@ body.page-chat .panel{
   }
 
   body.page-chat.chat-mobile-keyboard-open .admin-mobile-shell{
-    opacity:0;
-    pointer-events:none;
-    transform:translateY(12px);
+    opacity:1;
+    pointer-events:auto;
+    transform:none;
   }
 
   body.page-chat .page-col-left{
@@ -20077,8 +20420,21 @@ body.page-chat .panel{
       visibility 0s linear 0s;
   }
 
+  body.page-chat.chat-mobile-left-dragging .page-col-left{
+    opacity:1;
+    visibility:visible;
+    pointer-events:none;
+    transition:none;
+  }
+
   body.page-chat.chat-mobile-left-open .chat-footer-island,
+  body.page-chat.chat-mobile-left-dragging .chat-footer-island,
   body.page-chat.chat-mobile-left-open .chat-selection-toolbar{
+    opacity:0;
+    pointer-events:none;
+  }
+
+  body.page-chat.chat-mobile-left-dragging .chat-selection-toolbar{
     opacity:0;
     pointer-events:none;
   }
