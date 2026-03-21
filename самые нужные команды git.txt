@@ -127,6 +127,35 @@ UTF-8 не ломать (если где-то сломано то сразу ч�
 Разбивка по кассирам за период.
 Быстрые отчеты: X-отчет/экспорт за период.
 
+Настройка Git для этого репозитория:
+Репозиторий: https://github.com/markin-me/markin-me
+
+Лучше использовать почту GitHub, которая у тебя подтверждена:
+git config --global user.name "markin-me"
+git config --global user.email "maxsimka96@gmail.com"
+
+Проверка:
+git config --global user.name
+git config --global user.email
+
+Если хочешь настроить только этот репозиторий, без --global:
+git config user.name "markin-me"
+git config user.email "maxsimka96@gmail.com"
+
+Если захочешь использовать вторую почту:
+git config --global user.email "markin.me@mail.ru"
+
+Проверка удаленного репозитория:
+git remote -v
+
+Если нужно заново привязать origin:
+git remote set-url origin https://github.com/markin-me/markin-me.git
+
+После настройки можно коммитить:
+git add .
+git commit -m "описание изменений"
+git push origin main
+
 
 
 
