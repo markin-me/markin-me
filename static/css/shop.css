@@ -10245,7 +10245,8 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   }
 
   body.page-shop #shopProfileBtn,
-  body.page-shop #shopHeaderFavBtn{
+  body.page-shop #shopHeaderFavBtn,
+  body.page-shop #shopCartBenefitsTriggerBtn{
     display: none;
   }
 }

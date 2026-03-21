@@ -24090,41 +24090,6 @@ function setBottomNavActive(tab) {
     totalRow.appendChild(totalValue);
     wrap.appendChild(totalRow);
 
-    const openBenefitsFromCheckout = () => {
-      if (!me || typeof onShowBenefits !== "function") return;
-      const methodCode = methodSelect.getValue() || methodDefault || "takeaway";
-      const currentPromoCode = str(promo.value).trim() || null;
-      const currentDraft = loadCheckoutDraft();
-      currentDraft.method_code = methodCode;
-      currentDraft.method_user_selected = true;
-      currentDraft.promo_code = currentPromoCode;
-      currentDraft.selected_discount_id = selectedDiscount.value;
-      saveCheckoutDraft(currentDraft);
-
-      onShowBenefits(buildCheckoutBenefitsPreviewRequest({
-        items,
-        methodCode,
-        promoCode: currentPromoCode,
-        selectedDiscountId: selectedDiscount.value,
-        selectedDiscountSource: currentDraft?.selected_discount_source,
-        selectedPromoSource: currentDraft?.selected_promo_source,
-        selectedPromoRewardId: currentDraft?.selected_promo_reward_id,
-      }));
-    };
-
-    if (me && typeof onShowBenefits === "function") {
-      const benefitsBtn = document.createElement("button");
-      benefitsBtn.type = "button";
-      benefitsBtn.className = "shop-checkout-benefits-trigger";
-      benefitsBtn.innerHTML = '<i class="fas fa-tag" aria-hidden="true"></i><span>Выгоды</span>';
-
-      benefitsBtn.addEventListener("click", openBenefitsFromCheckout);
-
-      if (isDesktopCheckout) {
-        wrap.appendChild(benefitsBtn);
-      }
-    }
-
     function updatePaymentSummaryRows() {
       const paymentTitle = getSelectedPaymentTitle();
       paymentSummaryValue.textContent = paymentTitle;
