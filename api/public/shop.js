@@ -3785,6 +3785,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           delivery_zone_id: quote.delivery_zone_id != null ? Number(quote.delivery_zone_id) : null,
           delivery_zone_name: quote.delivery_zone_name || null,
           delivery_store_id: quote.delivery_store_id != null ? Number(quote.delivery_store_id) : null,
+          price_tiers: Array.isArray(quote.price_tiers) ? quote.price_tiers : [],
         },
       });
     } catch (error) {

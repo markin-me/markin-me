@@ -4987,13 +4987,17 @@
     return stores.find((s) => Number(s.id) === Number(window._selectedPickupStoreId)) || null;
   }
 
+  const DEFAULT_CART_MODE_ETA_LABEL = "\u0417\u0430 40-80 \u043c\u0438\u043d\u0443\u0442";
+  let cartModeHeaderMetaState = {
+    etaText: DEFAULT_CART_MODE_ETA_LABEL,
+    deliveryText: "",
+    hoursText: "",
+  };
+
   function getCartHeaderAddressLine() {
     const pickupStore = getHeaderPickupStore();
     if (pickupStore) return formatHeaderPickupStoreAddress(pickupStore);
-    if (isDesktopViewport()) {
-      return formatAddressStreetHouseApartment(state.selectedAddress);
-    }
-    return getSelectedAddressLine();
+    return formatHeaderAddressStreetHouseApartment(state.selectedAddress);
   }
 
   let cartHeaderStoresLoadPromise = null;
@@ -5059,6 +5063,90 @@
     }
     return getHeaderDeliveryStore();
   }
+
+  function findNextStoreOpeningForList(storeHours, timezone) {
+    if (!Array.isArray(storeHours) || !storeHours.length) return null;
+
+    const offsetHours = Number.isNaN(Number(timezone)) ? 0 : Number(timezone);
+    const now = new Date();
+    const utcMs = now.getTime() + now.getTimezoneOffset() * 60 * 1000;
+    const localMs = utcMs + offsetHours * 60 * 60 * 1000;
+    const localDate = new Date(localMs);
+    const currentDay = localDate.getDay();
+    const currentMinutes = localDate.getHours() * 60 + localDate.getMinutes();
+
+    const parseTimeToMinutes = (timeStr) => {
+      const match = str(timeStr).trim().match(/^(\d{1,2}):(\d{2})/);
+      if (!match) return null;
+      return Number(match[1]) * 60 + Number(match[2]);
+    };
+
+    for (let offset = 0; offset < 7; offset += 1) {
+      const dayToCheck = (currentDay + offset) % 7;
+      const entry = storeHours.find((row) => Number(row?.day_of_week) === dayToCheck);
+      if (!entry || Number(entry.is_closed) === 1) continue;
+
+      const opensAt = parseTimeToMinutes(entry.opens_at);
+      if (opensAt === null) continue;
+      if (offset === 0 && currentMinutes >= opensAt) continue;
+
+      return {
+        time: String(entry.opens_at || "").slice(0, 5),
+        isToday: offset === 0,
+      };
+    }
+
+    return null;
+  }
+
+  function getCartHeaderOperatingText(store) {
+    if (!store) return "";
+
+    const statusInfo = getStoreStatusInfoForList(store);
+    const statusText = str(statusInfo?.text || "").trim();
+    const timeMatch = statusText.match(/(\d{2}:\d{2})/);
+    if (statusInfo?.open && timeMatch?.[1]) {
+      return `Принимаем заказы до ${timeMatch[1]}`;
+    }
+
+    const nextOpening = findNextStoreOpeningForList(store.storeHours, store.timezone);
+    if (nextOpening?.time) {
+      return `Принимаем заказы с ${nextOpening.time}`;
+    }
+
+    const hoursRange = getStoreTodayHoursRangeForList(store.storeHours, store.timezone);
+    return hoursRange ? `Принимаем заказы ${hoursRange}` : "";
+  }
+
+  function getCartModeHeaderMetaSnapshot() {
+    const store = getCartHeaderStatusStore();
+    return {
+      mode: window._deliveryMode === "pickup" ? "pickup" : "delivery",
+      addressLine: str(getCartHeaderAddressLine() || "").trim(),
+      hoursText: getCartHeaderOperatingText(store),
+      storeId: store?.id != null ? Number(store.id) : null,
+    };
+  }
+
+  async function getCartModeHeaderMetaSnapshotAsync({ ensureStores = false } = {}) {
+    if (ensureStores) {
+      await ensureStoresForHeaderStatus().catch(() => []);
+    }
+    return getCartModeHeaderMetaSnapshot();
+  }
+
+  function setCartModeHeaderMetaState(next = {}) {
+    const source = next && typeof next === "object" ? next : {};
+    cartModeHeaderMetaState = {
+      ...cartModeHeaderMetaState,
+      ...source,
+    };
+    updateCartModeHeaderUi();
+    return cartModeHeaderMetaState;
+  }
+
+  window.getShopCartModeHeaderMetaSnapshot = getCartModeHeaderMetaSnapshotAsync;
+  window.setShopCartModeHeaderMetaState = setCartModeHeaderMetaState;
 
   function getHeaderStoreStatusText() {
     if (!getCartHeaderAddressLine()) return "";
@@ -5154,6 +5242,381 @@
     } catch {}
   }
 
+  function getCartModeHeaderPlaceholder(mode) {
+    return mode === "pickup" ? "Выберите точку самовывоза" : "Укажите адрес доставки";
+  }
+
+  function updateCartModeHeaderUi(root = document) {
+    const scope = root && typeof root.querySelectorAll === "function" ? root : document;
+    const mode = window._deliveryMode === "pickup" ? "pickup" : "delivery";
+    const line = str(getCartHeaderAddressLine() || "").trim();
+    const text = line || getCartModeHeaderPlaceholder(mode);
+    const iconClass = mode === "pickup" ? "fa-store" : "fa-location-dot";
+    const etaText = str(cartModeHeaderMetaState?.etaText || "").trim() || DEFAULT_CART_MODE_ETA_LABEL;
+    const deliveryText = mode === "delivery" ? str(cartModeHeaderMetaState?.deliveryText || "").trim() : "";
+    const hoursText = str(cartModeHeaderMetaState?.hoursText || "").trim();
+    const headers = [];
+    if (scope && typeof scope.matches === "function" && scope.matches(".shop-cart-mode-header")) {
+      headers.push(scope);
+    }
+    headers.push(...scope.querySelectorAll(".shop-cart-mode-header"));
+
+    headers.forEach((headerEl) => {
+      const addressBtn = headerEl.querySelector(".shop-cart-mode-header__address");
+      const iconEl = headerEl.querySelector(".shop-cart-mode-header__address-icon");
+      const textEl = headerEl.querySelector(".shop-cart-mode-header__address-text");
+      const deliveryBtn = headerEl.querySelector('.shop-delivery-toggle-btn[data-mode="delivery"]');
+      const pickupBtn = headerEl.querySelector('.shop-delivery-toggle-btn[data-mode="pickup"]');
+      const etaValueEl = headerEl.querySelector('[data-cart-meta="eta"] .shop-cart-mode-header__meta-value');
+      const deliveryItemEl = headerEl.querySelector('[data-cart-meta="delivery"]');
+      const deliveryValueEl = deliveryItemEl?.querySelector(".shop-cart-mode-header__meta-value");
+      const hoursItemEl = headerEl.querySelector('[data-cart-meta="hours"]');
+      const hoursValueEl = hoursItemEl?.querySelector(".shop-cart-mode-header__meta-value");
+
+      if (deliveryBtn) deliveryBtn.classList.toggle("is-active", mode === "delivery");
+      if (pickupBtn) pickupBtn.classList.toggle("is-active", mode === "pickup");
+      if (addressBtn) {
+        addressBtn.classList.toggle("is-placeholder", !line);
+        addressBtn.setAttribute("aria-label", text);
+        addressBtn.title = text;
+      }
+      if (iconEl) iconEl.className = `fas ${iconClass} shop-cart-mode-header__address-icon`;
+      if (textEl) textEl.textContent = text;
+      if (etaValueEl) etaValueEl.textContent = etaText;
+      if (deliveryItemEl) deliveryItemEl.classList.toggle("hidden", !deliveryText);
+      if (deliveryValueEl) deliveryValueEl.textContent = deliveryText;
+      if (hoursItemEl) hoursItemEl.classList.toggle("hidden", !hoursText);
+      if (hoursValueEl) hoursValueEl.textContent = hoursText;
+    });
+  }
+
+  async function openCartModeAddressSelector(triggerEl) {
+    const isSheetTrigger = !!(triggerEl && triggerEl.closest && triggerEl.closest(".shop-cart-sheet"));
+    await refreshAddressState();
+    const token = getCustomerToken();
+    const hasList = token ? (state.addresses || []).length > 0 : !!loadAddressDraft();
+    const isPickupMode = window._deliveryMode === "pickup";
+    const prefill = loadAddressDraft() || state.selectedAddress || null;
+
+    if (isSheetTrigger) {
+      if (!openCartSheetCtx) return;
+      if (isPickupMode || hasList || getSelectedAddressLine()) {
+        if (typeof openCartSheetCtx.showSheetAddressList === "function") {
+          openCartSheetCtx.showSheetAddressList("cart");
+        }
+        return;
+      }
+      if (typeof openCartSheetCtx.showSheetAddressForm === "function") {
+        await openCartSheetCtx.showSheetAddressForm(prefill, null, "cart");
+      }
+      return;
+    }
+
+    if (isPickupMode || hasList || getSelectedAddressLine()) {
+      showAddressListView("cart", { preferredMode: isPickupMode ? "pickup" : "delivery" });
+      return;
+    }
+    showAddressFormView(prefill, null, "cart");
+  }
+
+  async function setCartModeHeaderMode(mode) {
+    const nextMode = mode === "pickup" ? "pickup" : "delivery";
+
+    if (nextMode === "pickup") {
+      const stores = await ensurePickupStoresLoadedForAddressList();
+      const pickupStoreId = ensureValidPickupStoreIdForAddressList(stores);
+      window._selectedPickupStoreId = pickupStoreId ? Number(pickupStoreId) : null;
+      window._deliveryMode = "pickup";
+
+      const pickupDraft = loadCheckoutDraft();
+      pickupDraft.method_code = "takeaway";
+      pickupDraft.method_user_selected = true;
+      pickupDraft.pickup_store_id = window._selectedPickupStoreId || null;
+      saveCheckoutDraft(pickupDraft);
+
+      if (window._updatePickupAddressCallback) {
+        try { window._updatePickupAddressCallback(); } catch {}
+      }
+    } else {
+      window._deliveryMode = "delivery";
+
+      const deliveryDraft = loadCheckoutDraft();
+      deliveryDraft.method_code = "delivery";
+      deliveryDraft.method_user_selected = true;
+      deliveryDraft.pickup_store_id = null;
+      saveCheckoutDraft(deliveryDraft);
+      syncSelectedAddressToCheckoutDraft();
+    }
+
+    window._checkoutMethodCode = nextMode === "pickup" ? "takeaway" : "delivery";
+    updateHeaderAddressWidget();
+    updateAddressChip();
+    updateCartModeHeaderUi();
+    if (typeof updateMobileDeliveryProgress === "function") {
+      Promise.resolve(updateMobileDeliveryProgress()).catch(() => {});
+    }
+  }
+
+  function buildCartModeHeader() {
+    const section = document.createElement("section");
+    section.className = "shop-cart-mode-header";
+
+    const toggleWrap = document.createElement("div");
+    toggleWrap.className = "shop-cart-mode-header__toggle-wrap";
+
+    const toggle = document.createElement("div");
+    toggle.className = "shop-delivery-toggle";
+
+    const deliveryBtn = document.createElement("button");
+    deliveryBtn.type = "button";
+    deliveryBtn.className = "shop-delivery-toggle-btn";
+    deliveryBtn.dataset.mode = "delivery";
+    deliveryBtn.textContent = "Доставка";
+
+    const pickupBtn = document.createElement("button");
+    pickupBtn.type = "button";
+    pickupBtn.className = "shop-delivery-toggle-btn";
+    pickupBtn.dataset.mode = "pickup";
+    pickupBtn.textContent = "Самовывоз";
+
+    toggle.appendChild(deliveryBtn);
+    toggle.appendChild(pickupBtn);
+    toggleWrap.appendChild(toggle);
+
+    const addressBtn = document.createElement("button");
+    addressBtn.type = "button";
+    addressBtn.className = "shop-cart-mode-header__address";
+    addressBtn.innerHTML = `
+      <i class="fas fa-location-dot shop-cart-mode-header__address-icon" aria-hidden="true"></i>
+      <span class="shop-cart-mode-header__address-text"></span>
+      <i class="fas fa-chevron-right shop-cart-mode-header__address-arrow" aria-hidden="true"></i>
+    `;
+
+    const meta = document.createElement("div");
+    meta.className = "shop-cart-mode-header__meta";
+    meta.innerHTML = `
+      <div class="shop-cart-mode-header__meta-row">
+        <div class="shop-cart-mode-header__meta-item" data-cart-meta="eta">
+          <i class="fas fa-truck shop-cart-mode-header__meta-icon" aria-hidden="true"></i>
+          <span class="shop-cart-mode-header__meta-value">${DEFAULT_CART_MODE_ETA_LABEL}</span>
+        </div>
+        <div class="shop-cart-mode-header__meta-item shop-cart-mode-header__meta-item--plain hidden" data-cart-meta="delivery">
+          <span class="shop-cart-mode-header__meta-value"></span>
+        </div>
+      </div>
+      <div class="shop-cart-mode-header__meta-row">
+        <div class="shop-cart-mode-header__meta-item hidden" data-cart-meta="hours">
+          <i class="fas fa-clock shop-cart-mode-header__meta-icon" aria-hidden="true"></i>
+          <span class="shop-cart-mode-header__meta-value"></span>
+        </div>
+      </div>
+    `;
+
+    section.appendChild(toggleWrap);
+    section.appendChild(addressBtn);
+    section.appendChild(meta);
+    updateCartModeHeaderUi(section);
+    return section;
+  }
+
+  const cartModeHeaderStickyRegistry = new WeakMap();
+  const CART_MODE_HEADER_COLLAPSE_FALLBACK = 52;
+  const CART_MODE_HEADER_EXPAND_FALLBACK = 12;
+
+  function ensureCartModeHeaderStickyProxy(rootEl, headerEl, stateEntry = null) {
+    if (!rootEl || !headerEl || !headerEl.parentNode) {
+      return {
+        proxyHost: null,
+        proxyEl: null,
+      };
+    }
+
+    const existingHost = stateEntry?.proxyHost || null;
+    const existingProxy = stateEntry?.proxyEl || null;
+    if (
+      existingHost &&
+      existingProxy &&
+      existingHost.isConnected &&
+      existingProxy.isConnected &&
+      existingHost.parentNode === headerEl.parentNode &&
+      existingHost.nextElementSibling === headerEl
+    ) {
+      existingProxy.classList.add("shop-cart-mode-header--sticky-proxy", "is-condensed");
+      existingHost.classList.remove("is-visible");
+      updateCartModeHeaderUi(existingHost);
+      return {
+        proxyHost: existingHost,
+        proxyEl: existingProxy,
+      };
+    }
+
+    if (existingHost && existingHost.isConnected) {
+      existingHost.remove();
+    }
+
+    const proxyHost = document.createElement("div");
+    proxyHost.className = "shop-cart-mode-header-sticky-host";
+
+    const proxyEl = headerEl.cloneNode(true);
+    proxyEl.classList.add("shop-cart-mode-header--sticky-proxy", "is-condensed");
+    proxyEl
+      .querySelectorAll("[data-cart-mode-address-bound], [data-cart-mode-toggle-bound]")
+      .forEach((node) => {
+        node.removeAttribute("data-cart-mode-address-bound");
+        node.removeAttribute("data-cart-mode-toggle-bound");
+      });
+
+    proxyHost.appendChild(proxyEl);
+    headerEl.parentNode.insertBefore(proxyHost, headerEl);
+    updateCartModeHeaderUi(proxyHost);
+    if (typeof bindCartItemsSectionControls === "function") {
+      bindCartItemsSectionControls(proxyHost);
+    }
+
+    return {
+      proxyHost,
+      proxyEl,
+    };
+  }
+
+  function measureCartModeHeaderStickyThresholds(headerEl, proxyEl = null) {
+    if (!headerEl) {
+      return {
+        collapseAt: CART_MODE_HEADER_COLLAPSE_FALLBACK,
+        expandAt: CART_MODE_HEADER_EXPAND_FALLBACK,
+      };
+    }
+
+    const expandedHeight = Math.max(
+      0,
+      Number(headerEl.offsetHeight || headerEl.getBoundingClientRect?.().height || headerEl.scrollHeight || 0)
+    );
+    const condensedHeight = Math.max(
+      0,
+      Number(proxyEl?.offsetHeight || proxyEl?.getBoundingClientRect?.().height || proxyEl?.scrollHeight || 0)
+    );
+    const collapseDistance = Math.max(0, expandedHeight - condensedHeight);
+    const collapseAt = Math.max(
+      CART_MODE_HEADER_COLLAPSE_FALLBACK,
+      Math.round(collapseDistance)
+    );
+    const expandAt = Math.max(
+      8,
+      Math.min(collapseAt - 16, CART_MODE_HEADER_EXPAND_FALLBACK)
+    );
+
+    return {
+      collapseAt,
+      expandAt,
+    };
+  }
+
+  function resolveCartModeHeaderScrollContainer(rootEl, headerEl = null) {
+    const root = rootEl || headerEl?.closest?.(".shop-cart-list") || headerEl;
+    if (!root) return null;
+    const sheetRoot = root.closest?.(".shop-cart-sheet");
+    if (sheetRoot) {
+      return root.matches?.(".shop-cart-list") ? root : root.querySelector?.(".shop-cart-list");
+    }
+    return root.closest?.(".shop-cart-content") || root;
+  }
+
+  function syncCartModeHeaderSticky(container, { forceExpand = null } = {}) {
+    if (!container) return;
+    const stateEntry = cartModeHeaderStickyRegistry.get(container);
+    if (
+      !stateEntry ||
+      !stateEntry.headerEl ||
+      !stateEntry.headerEl.isConnected ||
+      !stateEntry.proxyHost ||
+      !stateEntry.proxyEl ||
+      !stateEntry.proxyHost.isConnected ||
+      !stateEntry.proxyEl.isConnected
+    ) {
+      return;
+    }
+
+    const currentTop = Math.max(0, Number(container.scrollTop || 0));
+    let condensed = !!stateEntry.condensed;
+    const thresholds = measureCartModeHeaderStickyThresholds(stateEntry.headerEl, stateEntry.proxyEl);
+    stateEntry.collapseAt = thresholds.collapseAt;
+    stateEntry.expandAt = thresholds.expandAt;
+
+    if (forceExpand === true || currentTop <= 6) {
+      condensed = false;
+    } else if (forceExpand === false) {
+      condensed = true;
+    } else if (!condensed && currentTop >= stateEntry.collapseAt) {
+      condensed = true;
+    } else if (condensed && currentTop <= stateEntry.expandAt) {
+      condensed = false;
+    }
+
+    stateEntry.proxyHost.classList.toggle("is-visible", condensed);
+    stateEntry.condensed = condensed;
+    stateEntry.lastTop = currentTop;
+  }
+
+  function unbindCartModeHeaderSticky(container) {
+    if (!container) return;
+    const stateEntry = cartModeHeaderStickyRegistry.get(container);
+    if (!stateEntry) return;
+    if (stateEntry.onScroll) {
+      container.removeEventListener("scroll", stateEntry.onScroll);
+    }
+    if (stateEntry.proxyHost && stateEntry.proxyHost.isConnected) {
+      stateEntry.proxyHost.remove();
+    }
+    cartModeHeaderStickyRegistry.delete(container);
+  }
+
+  function bindCartModeHeaderSticky(rootEl) {
+    if (!rootEl || !rootEl.querySelector) return;
+    const headerEl = rootEl.querySelector(".shop-cart-mode-header:not(.shop-cart-mode-header--sticky-proxy)");
+    if (!headerEl) return;
+
+    const container = resolveCartModeHeaderScrollContainer(rootEl, headerEl);
+    if (!container) return;
+
+    let stateEntry = cartModeHeaderStickyRegistry.get(container);
+    if (!stateEntry) {
+      stateEntry = {
+        headerEl,
+        lastTop: Math.max(0, Number(container.scrollTop || 0)),
+        condensed: false,
+        collapseAt: CART_MODE_HEADER_COLLAPSE_FALLBACK,
+        expandAt: CART_MODE_HEADER_EXPAND_FALLBACK,
+        proxyHost: null,
+        proxyEl: null,
+        framePending: false,
+        onScroll: null,
+      };
+      stateEntry.onScroll = () => {
+        if (stateEntry.framePending) return;
+        stateEntry.framePending = true;
+        requestAnimationFrame(() => {
+          stateEntry.framePending = false;
+          syncCartModeHeaderSticky(container);
+        });
+      };
+      container.addEventListener("scroll", stateEntry.onScroll, { passive: true });
+      cartModeHeaderStickyRegistry.set(container, stateEntry);
+    }
+
+    stateEntry.headerEl = headerEl;
+    const proxyParts = ensureCartModeHeaderStickyProxy(rootEl, headerEl, stateEntry);
+    stateEntry.proxyHost = proxyParts.proxyHost;
+    stateEntry.proxyEl = proxyParts.proxyEl;
+    stateEntry.lastTop = Math.max(0, Number(container.scrollTop || 0));
+    const thresholds = measureCartModeHeaderStickyThresholds(headerEl, stateEntry.proxyEl);
+    stateEntry.collapseAt = thresholds.collapseAt;
+    stateEntry.expandAt = thresholds.expandAt;
+    syncCartModeHeaderSticky(container, { forceExpand: stateEntry.lastTop <= 6 });
+  }
+
+  window.bindShopCartModeHeaderSticky = bindCartModeHeaderSticky;
+  window.syncShopCartModeHeaderSticky = syncCartModeHeaderSticky;
+
 function updateAddressChip() {
   const line = getCartHeaderAddressLine();
 
@@ -5178,6 +5641,8 @@ function updateAddressChip() {
     elCartHeaderTitle.classList.add("is-clickable-address-title");
     updateCartHeaderStoreStatus({ ensureStores: true });
   }
+
+  updateCartModeHeaderUi();
 }
 
 function updateHeaderAddressWidget() {
@@ -5226,6 +5691,7 @@ function updateHeaderAddressWidget() {
   }
 
   updateMobileHeaderStoreStatus({ ensureStores: hasAddressText });
+  updateCartModeHeaderUi();
 }
 
 function setCartHeader({
@@ -5233,6 +5699,7 @@ function setCartHeader({
   showAddressChip = true,
   showProfileActions = false,
   showBack = false,
+  onBack = null,
   showFav = false,
   hideTitle = false,
 
@@ -5243,6 +5710,7 @@ function setCartHeader({
   showClose = false,
   onClose = null,
   showAddressModeToggle = false,
+  hideHeaderShell = false,
 } = {}) {
   const headerEl = document.querySelector(".shop-cart-header");
 
@@ -5286,7 +5754,10 @@ function setCartHeader({
   // address chip / profile actions / back
   if (elAddressChip) elAddressChip.classList.toggle("hidden", !showAddressChip);
   if (elProfileHeaderActions) elProfileHeaderActions.classList.toggle("hidden", !showProfileActions);
-  if (elCartBackBtn) elCartBackBtn.classList.toggle("hidden", !showBack);
+  if (elCartBackBtn) {
+    elCartBackBtn.classList.toggle("hidden", !showBack);
+    elCartBackBtn.onclick = typeof onBack === "function" ? onBack : null;
+  }
 
   // fav (desktop panel header)
   const elCartFavBtn = $("#shopCartFavBtn");
@@ -5299,6 +5770,7 @@ function setCartHeader({
   }
   if (headerEl) {
     headerEl.classList.toggle("is-address-mode", !!showAddressModeToggle);
+    headerEl.classList.toggle("is-shell-hidden", !!hideHeaderShell && isDesktopViewport());
   }
 
   // ????? ?????? ??? ??????????
@@ -5510,7 +5982,7 @@ function showCartView() {
   cartViewMode = "cart";
   openProductCtx = null;
   if (typeof window._comboStepBackCallback !== "undefined") window._comboStepBackCallback = null;
-  window._checkoutMethodCode = null;
+  window._checkoutMethodCode = window._deliveryMode === "pickup" ? "takeaway" : "delivery";
 
   if (elAddressContent) elAddressContent.classList.add("hidden");
   if (elCheckoutContent) elCheckoutContent.classList.add("hidden");
@@ -5527,10 +5999,12 @@ function showCartView() {
     hideTitle: false,
     showAddressChip: false,
     showProfileActions: false,
-    showBack: false,
+    showBack: true,
+    onBack: () => backAfterAddressSelection(),
     showFav: false,
     addressAsTitle: true,
     showClose: false,
+    hideHeaderShell: true,
   });
 
   if (elCartHeaderTitle) {
@@ -5540,6 +6014,10 @@ function showCartView() {
   setCartFooterMode("cart");
   syncCartFooterVisibilityForCartMode(cartItemsResolved().length);
   renderCartIfDirty();
+  updateCartModeHeaderUi();
+  if (typeof updateMobileDeliveryProgress === "function") {
+    Promise.resolve(updateMobileDeliveryProgress()).catch(() => {});
+  }
   queueMobileUiStateSync("showCartView");
 }
 
@@ -5569,6 +6047,7 @@ function showCheckoutView() {
     showFav: false,
     addressAsTitle: true,
     showClose: false,
+    hideHeaderShell: true,
   });
 
   if (elCartHeaderTitle) {
@@ -5576,6 +6055,9 @@ function showCheckoutView() {
   }
 
   setCartFooterMode("checkout");
+  if (typeof updateMobileDeliveryProgress === "function") {
+    Promise.resolve(updateMobileDeliveryProgress()).catch(() => {});
+  }
   queueMobileUiStateSync("showCheckoutView");
 }
 
@@ -5605,7 +6087,8 @@ function showAddressListView(backMode = "cart", opts = {}) {
     title: "",
     showAddressChip: false,     // IMPORTANT: ??? ???????
     showProfileActions: false,
-    showBack: false,
+    showBack: true,
+    onBack: () => backAfterAddressSelection(),
     showFav: false,
     hideTitle: true,
     addressAsTitle: false,      // IMPORTANT: ??? ??????? ???
@@ -5769,6 +6252,9 @@ function showProductView() {
     showAddressChip: false,
     showProfileActions: false,
     showBack: true,
+    onBack: () => {
+      void restorePreviousPanel();
+    },
     showFav: true,
   });
 
@@ -8408,7 +8894,104 @@ async function initAddresses() {
     });
   }
 
-  function renderCartInto(listEl, totalEl, emptyPlaceholderEl) {
+  const CART_SECTION_CLEAR_ICON_HTML = '<i class="fas fa-trash-can"></i>';
+
+  function computeCartDiscountMeta(lineTotal, originalLineTotal) {
+    const currentTotal = roundPrice(Number(lineTotal || 0));
+    const originalTotal = roundPrice(Number(originalLineTotal || 0));
+    const showOld = originalTotal > currentTotal;
+    let discountPercent = 0;
+    if (showOld && originalTotal > 0) {
+      discountPercent = Math.round(((originalTotal - currentTotal) / originalTotal) * 100);
+      if (!Number.isFinite(discountPercent) || discountPercent <= 0) discountPercent = 0;
+    }
+    return {
+      currentTotal,
+      originalTotal: showOld ? originalTotal : 0,
+      showOld,
+      discountPercent,
+    };
+  }
+
+  function applyCartPriceGroupState(currentEl, oldEl, badgeEl, lineTotal, originalLineTotal) {
+    const meta = computeCartDiscountMeta(lineTotal, originalLineTotal);
+    if (currentEl) currentEl.textContent = money(meta.currentTotal);
+    if (oldEl) {
+      oldEl.textContent = meta.showOld ? `${moneyNoSign(meta.originalTotal)} ₽` : "";
+      oldEl.classList.toggle("hidden", !meta.showOld);
+    }
+    if (badgeEl) {
+      const showBadge = meta.discountPercent > 0;
+      badgeEl.textContent = showBadge ? `-${meta.discountPercent}%` : "";
+      badgeEl.classList.toggle("hidden", !showBadge);
+    }
+    return meta;
+  }
+
+  function createCartPriceGroup(lineTotal, originalLineTotal) {
+    const wrap = document.createElement("div");
+    wrap.className = "cart-price-group";
+
+    const stack = document.createElement("div");
+    stack.className = "cart-price-stack";
+
+    const currentEl = document.createElement("div");
+    currentEl.className = "cart-price";
+
+    const oldEl = document.createElement("div");
+    oldEl.className = "cart-old hidden";
+
+    stack.appendChild(currentEl);
+    stack.appendChild(oldEl);
+    wrap.appendChild(stack);
+
+    const badgeEl = document.createElement("span");
+    badgeEl.className = "sp-discount-badge sp-discount-badge--cart cart-discount-badge hidden";
+    wrap.appendChild(badgeEl);
+
+    const sync = (nextLineTotal, nextOriginalLineTotal) =>
+      applyCartPriceGroupState(currentEl, oldEl, badgeEl, nextLineTotal, nextOriginalLineTotal);
+
+    sync(lineTotal, originalLineTotal);
+
+    return {
+      wrap,
+      currentEl,
+      oldEl,
+      badgeEl,
+      sync,
+    };
+  }
+
+  function bindCartItemsSectionControls(rootEl) {
+    if (!rootEl || !rootEl.querySelectorAll) return;
+    rootEl.querySelectorAll(".shop-cart-items-section__clear").forEach((btn) => {
+      if (!btn || btn.dataset.twostepClearBound === "1") return;
+      attachTwoStepClear(btn, () => clearCartAll(), {
+        defaultHtml: CART_SECTION_CLEAR_ICON_HTML,
+        confirmText: "Очистить корзину?",
+        compactCheckout: false,
+      });
+      btn.dataset.twostepClearBound = "1";
+    });
+    rootEl.querySelectorAll(".shop-cart-mode-header__address").forEach((btn) => {
+      if (!btn || btn.dataset.cartModeAddressBound === "1") return;
+      btn.addEventListener("click", () => {
+        void openCartModeAddressSelector(btn);
+      });
+      btn.dataset.cartModeAddressBound = "1";
+    });
+    rootEl.querySelectorAll(".shop-cart-mode-header .shop-delivery-toggle-btn").forEach((btn) => {
+      if (!btn || btn.dataset.cartModeToggleBound === "1") return;
+      btn.addEventListener("click", () => {
+        void setCartModeHeaderMode(btn.dataset.mode);
+      });
+      btn.dataset.cartModeToggleBound = "1";
+    });
+  }
+
+  function renderCartInto(listEl, totalEl, emptyPlaceholderEl, opts = {}) {
+    const bindInteractive = opts?.bindInteractive !== false;
     const items = sortCartItemsForDisplay(cartItemsResolved());
     const comboIdsForPrefetch = items
       .filter((item) => item && item.type === "combo")
@@ -8418,11 +9001,28 @@ async function initAddresses() {
       scheduleComboDetailsPrefetch(comboIdsForPrefetch, { limit: 6, delayMs: 120 });
     }
     if (listEl) listEl.innerHTML = "";
+    const cartModeHeader = listEl ? buildCartModeHeader() : null;
+    if (cartModeHeader && listEl) {
+      listEl.appendChild(cartModeHeader);
+    }
 
     if (!items.length) {
-      if (emptyPlaceholderEl) emptyPlaceholderEl.classList.remove("hidden");
-      else if (listEl) listEl.innerHTML = '<div class="shop-cart-empty-sheet"><div class="empty-state"><div class="empty-icon"><i class="fas fa-shopping-cart"></i></div><div class="empty-title">Корзина пуста</div><div class="empty-text">Добавьте товары из каталога</div></div></div>';
+      if (emptyPlaceholderEl) emptyPlaceholderEl.classList.add("hidden");
+      if (listEl) {
+        listEl.innerHTML = "";
+        if (cartModeHeader && !listEl.contains(cartModeHeader)) {
+          listEl.appendChild(cartModeHeader);
+        }
+        const emptySheet = document.createElement("div");
+        emptySheet.className = "shop-cart-empty-sheet";
+        emptySheet.innerHTML = '<div class="empty-state"><div class="empty-icon"><i class="fas fa-shopping-cart"></i></div><div class="empty-title">Корзина пуста</div><div class="empty-text">Добавьте товары из каталога</div></div>';
+        listEl.appendChild(emptySheet);
+      }
       if (totalEl) totalEl.textContent = money(0);
+      if (listEl && bindInteractive) {
+        bindCartItemsSectionControls(listEl);
+        bindCartModeHeaderSticky(listEl);
+      }
       return { items, total: 0 };
     }
 
@@ -8433,6 +9033,48 @@ async function initAddresses() {
       nonAutoTotal: computeNonAutoTotal(items),
       autoEligibleTotal: computeAutoEligibleTotal(items),
     };
+    const itemsSection = listEl ? document.createElement("section") : null;
+    let itemsSectionBody = null;
+    if (itemsSection && listEl) {
+      itemsSection.className = "shop-cart-items-section";
+
+      const sectionHeader = document.createElement("div");
+      sectionHeader.className = "shop-cart-items-section__header";
+
+      const titleWrap = document.createElement("div");
+      titleWrap.className = "shop-cart-items-section__title-wrap";
+
+      const titleEl = document.createElement("div");
+      titleEl.className = "shop-cart-items-section__title";
+      titleEl.textContent = "Товары";
+      titleWrap.appendChild(titleEl);
+
+      const clearBtn = document.createElement("button");
+      clearBtn.type = "button";
+      clearBtn.className = "shop-cart-items-section__clear";
+      clearBtn.innerHTML = CART_SECTION_CLEAR_ICON_HTML;
+      clearBtn.title = "Очистить корзину";
+      clearBtn.setAttribute("aria-label", "Очистить корзину");
+
+      sectionHeader.appendChild(titleWrap);
+      sectionHeader.appendChild(clearBtn);
+
+      itemsSectionBody = document.createElement("div");
+      itemsSectionBody.className = "shop-cart-items-section__body";
+
+      itemsSection.appendChild(sectionHeader);
+      itemsSection.appendChild(itemsSectionBody);
+      listEl.appendChild(itemsSection);
+    }
+
+    const appendCartNode = (node) => {
+      if (!node) return;
+      if (itemsSectionBody) {
+        itemsSectionBody.appendChild(node);
+        return;
+      }
+      if (listEl) listEl.appendChild(node);
+    };
 
     items.forEach((item) => {
       if (item.type === "combo") {
@@ -8442,10 +9084,9 @@ async function initAddresses() {
         total += lineTotal;
         const unitPriceOld = Number(item.unit_price_before_discount || 0) || unitPrice;
         const lineTotalOld = roundPrice(unitPriceOld * qty);
-        const showComboOld = lineTotalOld > lineTotal;
 
         const swipeContainer = document.createElement("div");
-        swipeContainer.className = "cart-swipe-container cart-combo-container";
+        swipeContainer.className = "cart-swipe-container cart-combo-container shop-cart-item-container";
         swipeContainer.setAttribute("data-cart-key", String(key || ""));
 
         const swipeActions = document.createElement("div");
@@ -8468,7 +9109,7 @@ async function initAddresses() {
         swipeContainer.appendChild(swipeActions);
 
         const row = document.createElement("div");
-        row.className = "cart-row cart-swipe-content cart-row--combo";
+        row.className = "cart-row cart-swipe-content cart-row--combo shop-cart-item-row";
         row.setAttribute("data-cart-key", String(key || ""));
         row.addEventListener("click", (e) => {
           if (swipeContainer.classList.contains("is-swiped")) {
@@ -8549,18 +9190,7 @@ async function initAddresses() {
           minusEnabled: qty > 0,
           plusEnabled: !comboPlusBlockedByLimit,
         });
-        const right = document.createElement("div");
-        right.className = "cart-right";
-        if (showComboOld) {
-          const oldPr = document.createElement("div");
-          oldPr.className = "cart-old cart-combo-old";
-          oldPr.textContent = moneyNoSign(lineTotalOld) + " ₽";
-          right.appendChild(oldPr);
-        }
-        const pr = document.createElement("div");
-        pr.className = "cart-price";
-        pr.textContent = money(lineTotal);
-        right.appendChild(pr);
+        const comboPriceState = createCartPriceGroup(lineTotal, lineTotalOld);
         const desktopActions = document.createElement("div");
         desktopActions.className = "cart-desktop-actions";
         const desktopFavBtn = document.createElement("button");
@@ -8579,7 +9209,6 @@ async function initAddresses() {
         });
         desktopActions.appendChild(desktopFavBtn);
         desktopActions.appendChild(desktopDeleteBtn);
-        right.appendChild(desktopActions);
         bindFavoriteButtonsForCartRow(
           [favBtn, desktopFavBtn],
           () => buildFavoriteSnapshotFromResolvedItem(item, { oldLineTotal: lineTotalOld }),
@@ -8598,12 +9227,10 @@ async function initAddresses() {
           t.textContent = `${newQty} x ${comboTitleText}`;
           // Минус не блокируем на qty = 1 — он должен работать как удаление
           btnMinus.classList.toggle("is-disabled", newQty <= 0);
-          pr.textContent = money(roundPrice(unitPrice * newQty));
-          const oldEl = row.querySelector(".cart-combo-old");
-          if (oldEl) {
-            const uOld = Number(cartItem?.unit_price_before_discount || 0) || unitPrice;
-            oldEl.textContent = moneyNoSign(roundPrice(uOld * newQty)) + " ₽";
-          }
+          const nextLineTotal = roundPrice(unitPrice * newQty);
+          const originalUnit = Number(cartItem?.unit_price_before_discount || 0) || unitPrice;
+          const nextOriginalLineTotal = roundPrice(originalUnit * newQty);
+          comboPriceState.sync(nextLineTotal, nextOriginalLineTotal);
           const plusGate = canIncreaseComboCartItemBeforeApply(key, +1, {
             showToastOnOut: false,
           });
@@ -8629,7 +9256,7 @@ async function initAddresses() {
           updateComboQty();
           const { total: newTotal } = computeCartTotals(cartItemsResolved());
           if (totalEl) totalEl.textContent = money(newTotal);
-          if (window.matchMedia("(max-width: 768px)").matches) updateMobileDeliveryProgress();
+          updateMobileDeliveryProgress();
           queueCartStockRecheck(previousCartSnapshot, {
             toastMessage: "Больше нет в наличии",
           });
@@ -8648,19 +9275,26 @@ async function initAddresses() {
           }
           const { total: newTotal } = computeCartTotals(cartItemsResolved());
           if (totalEl) totalEl.textContent = money(newTotal);
-          if (window.matchMedia("(max-width: 768px)").matches) updateMobileDeliveryProgress();
+          updateMobileDeliveryProgress();
         });
         q.appendChild(pill);
         const bottomRow = document.createElement("div");
         bottomRow.className = "cart-bottom-row";
-        bottomRow.appendChild(q);
-        bottomRow.appendChild(right);
+        const bottomMain = document.createElement("div");
+        bottomMain.className = "cart-bottom-row__main";
+        bottomMain.appendChild(comboPriceState.wrap);
+        bottomRow.appendChild(bottomMain);
+        const bottomControls = document.createElement("div");
+        bottomControls.className = "cart-bottom-row__controls";
+        bottomControls.appendChild(q);
+        bottomControls.appendChild(desktopActions);
+        bottomRow.appendChild(bottomControls);
         mid.appendChild(bottomRow);
         row.appendChild(mid);
 
         initSwipeGesture(swipeContainer, row, null, key);
         swipeContainer.appendChild(row);
-        if (listEl) listEl.appendChild(swipeContainer);
+        appendCartNode(swipeContainer);
         return;
       }
 
@@ -8703,7 +9337,7 @@ async function initAddresses() {
 
       // ?????-?????????
       const swipeContainer = document.createElement("div");
-      swipeContainer.className = "cart-swipe-container";
+      swipeContainer.className = "cart-swipe-container shop-cart-item-container";
       swipeContainer.setAttribute("data-cart-key", String(key || ""));
 
       // ?????? ???????? (?? ?????????)
@@ -8738,7 +9372,7 @@ async function initAddresses() {
 
       // ???????? ?????????? ????????
       const row = document.createElement("div");
-      row.className = "cart-row cart-swipe-content";
+      row.className = "cart-row cart-swipe-content shop-cart-item-row";
       row.setAttribute("data-product-id", String(product.id));
       row.setAttribute("data-cart-key", String(key || ""));
       row.addEventListener("click", (e) => {
@@ -8834,17 +9468,11 @@ async function initAddresses() {
         // ????????? ?????? ??????? (??? В корзине пусто?)
         const subDetails = document.createElement("div");
         subDetails.className = "cart-sub-details";
-        subDetails.style.display = "block";
-        subDetails.style.marginTop = "4px";
-        subDetails.style.paddingLeft = "8px";
         
         allParts.forEach(part => {
           const detailItem = document.createElement("div");
           detailItem.className = "cart-sub-detail-item";
           detailItem.textContent = `\u2022 ${part}`;
-          detailItem.style.fontSize = "0.9em";
-          detailItem.style.color = "var(--color-text-muted, #666)";
-          detailItem.style.marginTop = "2px";
           subDetails.appendChild(detailItem);
         });
         
@@ -8909,9 +9537,10 @@ async function initAddresses() {
             ? (currentPricing.lineTotal + Number(currentPricing.discountAmount || 0))
             : (currentOldUnit * newQty);
 
-          pr.textContent = money(currentPricing.lineTotal);
-          oldEl.textContent = currentShowOld ? moneyNoSign(currentOriginalLineTotal) : "";
-          oldEl.classList.toggle("hidden", !currentShowOld);
+          priceState.sync(
+            currentPricing.lineTotal,
+            currentShowOld ? currentOriginalLineTotal : 0
+          );
         }
 
         const plusBlockedNow = !allowQty || isCartQtyPlusBlocked(key, newQty);
@@ -8951,25 +9580,10 @@ async function initAddresses() {
       }
 
       q.appendChild(qtyControlNode);
-      const right = document.createElement("div");
-      right.className = "cart-right";
-
-      // Показываем старую цену если есть скидка или old_price
       const hasDiscount = pricing.discountAmount > 0;
       const showOld = !pricing.isAuto && (hasDiscount || (oldUnit > 0 && oldUnit > pricing.unitPrice));
       const originalLineTotal = hasDiscount ? (pricing.lineTotal + pricing.discountAmount) : (oldUnit * qty);
-
-      const oldEl = document.createElement("div");
-      oldEl.className = "cart-old";
-      oldEl.textContent = showOld ? moneyNoSign(originalLineTotal) : "";
-      if (!showOld) oldEl.classList.add("hidden");
-
-      const pr = document.createElement("div");
-      pr.className = "cart-price";
-      pr.textContent = money(pricing.lineTotal);
-
-      right.appendChild(oldEl);
-      right.appendChild(pr);
+      const priceState = createCartPriceGroup(pricing.lineTotal, showOld ? originalLineTotal : 0);
 
       // ?????????? ?????? ????????
       const desktopActions = document.createElement("div");
@@ -8998,7 +9612,6 @@ async function initAddresses() {
 
       desktopActions.appendChild(desktopFavBtn);
       desktopActions.appendChild(desktopDeleteBtn);
-      right.appendChild(desktopActions);
       bindFavoriteButtonsForCartRow(
         [favBtn, desktopFavBtn],
         () =>
@@ -9016,8 +9629,15 @@ async function initAddresses() {
       );
       const bottomRow = document.createElement("div");
       bottomRow.className = "cart-bottom-row";
-      bottomRow.appendChild(q);
-      bottomRow.appendChild(right);
+      const bottomMain = document.createElement("div");
+      bottomMain.className = "cart-bottom-row__main";
+      bottomMain.appendChild(priceState.wrap);
+      bottomRow.appendChild(bottomMain);
+      const bottomControls = document.createElement("div");
+      bottomControls.className = "cart-bottom-row__controls";
+      bottomControls.appendChild(q);
+      bottomControls.appendChild(desktopActions);
+      bottomRow.appendChild(bottomControls);
       mid.appendChild(bottomRow);
       row.appendChild(mid);
 
@@ -9026,7 +9646,7 @@ async function initAddresses() {
       // ????????????? ?????-??????
       initSwipeGesture(swipeContainer, row, product.id, key);
 
-      listEl.appendChild(swipeContainer);
+      appendCartNode(swipeContainer);
     });
 
     const hasBaseItems = items.some((item) => {
@@ -9085,7 +9705,7 @@ async function initAddresses() {
           if (!isProductAvailable(product)) return;
 
           const row = document.createElement("div");
-          row.className = "cart-row is-auto-ghost";
+          row.className = "cart-row is-auto-ghost shop-cart-item-row";
           row.setAttribute("data-product-id", String(product.id));
           row.addEventListener("click", () => {
             openProductDetails(product.id);
@@ -9138,26 +9758,31 @@ async function initAddresses() {
           });
 
           q.appendChild(pill);
-          const right = document.createElement("div");
-          right.className = "cart-right";
-          const pr = document.createElement("div");
-          pr.className = "cart-price";
-          pr.textContent = money(0);
-          right.appendChild(pr);
+          const ghostPriceState = createCartPriceGroup(0, 0);
 
           const bottomRow = document.createElement("div");
           bottomRow.className = "cart-bottom-row";
-          bottomRow.appendChild(q);
-          bottomRow.appendChild(right);
+          const bottomMain = document.createElement("div");
+          bottomMain.className = "cart-bottom-row__main";
+          bottomMain.appendChild(ghostPriceState.wrap);
+          bottomRow.appendChild(bottomMain);
+          const bottomControls = document.createElement("div");
+          bottomControls.className = "cart-bottom-row__controls";
+          bottomControls.appendChild(q);
+          bottomRow.appendChild(bottomControls);
           mid.appendChild(bottomRow);
           row.appendChild(mid);
 
-          listEl.appendChild(row);
+          appendCartNode(row);
         });
       });
     }
 
     if (totalEl) totalEl.textContent = money(total);
+    if (listEl && bindInteractive) {
+      bindCartItemsSectionControls(listEl);
+      bindCartModeHeaderSticky(listEl);
+    }
     return { items, total };
   }
 
@@ -9617,13 +10242,47 @@ function updateCartBadge() {
     queueMobileUiStateSync("clearCartAll");
   }
 
-  function attachTwoStepClear(btn, onConfirm) {
+  const twoStepClearRegistry = new Set();
+  let twoStepClearDocumentBound = false;
+
+  function ensureTwoStepClearDocumentBinding() {
+    if (twoStepClearDocumentBound) return;
+    twoStepClearDocumentBound = true;
+    document.addEventListener("click", (event) => {
+      twoStepClearRegistry.forEach((entry) => {
+        if (!entry?.btn || !entry.btn.isConnected) {
+          twoStepClearRegistry.delete(entry);
+          return;
+        }
+        if (!entry.isArmed()) return;
+        if (entry.btn.contains(event.target)) return;
+        entry.reset();
+      });
+    });
+  }
+
+  function attachTwoStepClear(btn, onConfirm, options = {}) {
     if (!btn) return;
     let armed = false;
     let timer = null;
     const mobileCheckoutLabel = "\u041E\u0444\u043E\u0440\u043C\u0438\u0442\u044C";
+    const compactCheckout = options.compactCheckout !== false;
+    const defaultText = Object.prototype.hasOwnProperty.call(options, "defaultText")
+      ? String(options.defaultText ?? "")
+      : "×";
+    const defaultHtml = options.defaultHtml != null ? String(options.defaultHtml) : null;
+    const confirmText = String(options.confirmText || "Очистить корзину");
+
+    const renderDefaultState = () => {
+      if (defaultHtml != null) {
+        btn.innerHTML = defaultHtml;
+      } else {
+        btn.textContent = defaultText;
+      }
+    };
 
     const setMobileCheckoutCompact = (compact) => {
+      if (!compactCheckout) return;
       if (!elMobileCheckoutBtn || !elMobileCartTotal) return;
       if (compact) {
         elMobileCheckoutBtn.dataset.compactSumOnly = "1";
@@ -9640,7 +10299,7 @@ function updateCartBadge() {
     const reset = () => {
       armed = false;
       btn.classList.remove("is-confirm");
-      btn.textContent = "×";
+      renderDefaultState();
       btn.title = "Очистить корзину";
       btn.setAttribute("aria-label", "Очистить корзину");
       if (timer) clearTimeout(timer);
@@ -9651,9 +10310,9 @@ function updateCartBadge() {
     const arm = () => {
       armed = true;
       btn.classList.add("is-confirm");
-      btn.textContent = "Очистить корзину";
-      btn.title = "Очистить корзину";
-      btn.setAttribute("aria-label", "Очистить корзину");
+      btn.textContent = confirmText;
+      btn.title = confirmText;
+      btn.setAttribute("aria-label", confirmText);
       if (timer) clearTimeout(timer);
       timer = setTimeout(reset, 6500);
       setMobileCheckoutCompact(true);
@@ -9670,11 +10329,18 @@ function updateCartBadge() {
       onConfirm();
     });
 
-    document.addEventListener("click", (e) => {
-      if (!armed) return;
-      if (btn.contains(e.target)) return;
-      reset();
-    });
+    if (btn.__twoStepClearEntry) {
+      twoStepClearRegistry.delete(btn.__twoStepClearEntry);
+    }
+    const entry = {
+      btn,
+      isArmed: () => armed,
+      reset,
+    };
+    btn.__twoStepClearEntry = entry;
+    twoStepClearRegistry.add(entry);
+    ensureTwoStepClearDocumentBinding();
+    reset();
   }
 
   let __syncAllCardsTimer = null;
@@ -9746,16 +10412,14 @@ function updateCartBadge() {
       }
     }
 
-    if (window.matchMedia("(max-width: 768px)").matches) updateMobileDeliveryProgress();
+    updateMobileDeliveryProgress();
     return { items, total };
   }
 
   function extractRenderedCartNodeKey(node) {
     if (!node || node.nodeType !== 1) return "";
     const direct = String(node.getAttribute("data-cart-key") || "");
-    if (direct) return direct;
-    const nested = node.querySelector("[data-cart-key]");
-    return nested ? String(nested.getAttribute("data-cart-key") || "") : "";
+    return direct;
   }
 
   function captureRenderedCartRowsByKey(listEl) {
@@ -9774,7 +10438,7 @@ function updateCartBadge() {
     if (!listEl) return renderCartInto(listEl, totalEl, emptyPlaceholderEl);
     const tempList = document.createElement("div");
     const tempTotal = document.createElement("span");
-    const rendered = renderCartInto(tempList, tempTotal, null);
+    const rendered = renderCartInto(tempList, tempTotal, null, { bindInteractive: false });
     const reusable = reuseRowsByKey instanceof Map ? reuseRowsByKey : new Map();
 
     const nextNodes = Array.from(tempList.children);
@@ -9814,6 +10478,7 @@ function updateCartBadge() {
 
     if (totalEl) totalEl.textContent = money(rendered.total);
     if (emptyPlaceholderEl) emptyPlaceholderEl.classList.toggle("hidden", rendered.items.length > 0);
+    bindCartItemsSectionControls(listEl);
     return rendered;
   }
 
@@ -10860,7 +11525,7 @@ function updateCartBadge() {
     clearAutoAddDismissedIfCartEmpty();
     saveCart();
 
-    const canReuseRows = !existing && !autoChanged;
+    const canReuseRows = !wasEmpty && !existing && !autoChanged;
     if (canReuseRows) {
       const { items, total } = renderCartIntoWithRowReuse(
         elCartList,
@@ -11478,5 +12143,3 @@ function bindMobilePortraitGuard() {
 
   __mobilePortraitGuardBound = true;
 }
-
-

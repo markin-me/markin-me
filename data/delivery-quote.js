@@ -380,6 +380,7 @@ function buildDefaultQuote(setting, subtotal) {
     delivery_zone_name: null,
     delivery_store_id: source.default_store_id != null ? Number(source.default_store_id) : null,
     default_store_id: source.default_store_id != null ? Number(source.default_store_id) : null,
+    price_tiers: tiers,
   };
 }
 
@@ -419,6 +420,7 @@ async function buildDeliveryQuote({ db, tenantId, storeId, subtotal, address }) 
     delivery_zone_name: matchedZone.name || null,
     delivery_store_id: storeIds.length ? storeIds[0] : (fallbackQuote.delivery_store_id || null),
     default_store_id: fallbackQuote.default_store_id,
+    price_tiers: Array.isArray(matchedZone.price_tiers) ? matchedZone.price_tiers : [],
   };
 }
 

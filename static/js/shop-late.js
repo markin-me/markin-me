@@ -13060,6 +13060,12 @@ function openCartSheet() {
     } catch {}
   }
 
+  function setCartSheetScreenMode(mode) {
+    const body = window.AppModal?.body;
+    if (!body) return;
+    body.classList.toggle("shop-cart-sheet-screen-cart", mode === "cart");
+  }
+
   function invalidateAddressSheetUiState() {
     addressSheetAsyncToken += 1;
     setAddressSheetBodyState(false);
@@ -13106,7 +13112,10 @@ function openCartSheet() {
         if (elMobileAddressActions) elMobileAddressActions.classList.add("hidden");
         if (elMobileAddressConfirm) elMobileAddressConfirm.classList.add("hidden");
         if (elMobileProductActions) elMobileProductActions.classList.add("hidden");
-        if (window.AppModal?.body) window.AppModal.body.classList.remove("shop-cart-sheet-body");
+        if (window.AppModal?.body) {
+          window.AppModal.body.classList.remove("shop-cart-sheet-body");
+        }
+        setCartSheetScreenMode("");
         openProductCtx = null;
         sheetNavigationState.type = null;
         sheetNavigationState.screen = null;
@@ -13116,6 +13125,7 @@ function openCartSheet() {
       },
     });
     if (window.AppModal?.body) window.AppModal.body.classList.add("shop-cart-sheet-body");
+    setCartSheetScreenMode("cart");
     if (openCartSheetCtx.listEl && openCartSheetCtx.totalEl) {
       const renderSignature = buildCartSheetRenderSignature();
       if (openCartSheetCtx.lastRenderSignature !== renderSignature) {
@@ -13856,6 +13866,7 @@ function applySheetAddressTitle(backMode = "cart") {
     resetMobileBenefitGiftClaimUi();
     __forceHideCheckoutDeliveryProgress = true;
     hideHeaderToggle();
+    setCartSheetScreenMode("");
     checkoutWrap.classList.remove("hidden");
     benefitsWrap.classList.add("hidden");
     hideCheckoutBenefitDetailView({ clearContent: true });
@@ -13921,6 +13932,7 @@ function applySheetAddressTitle(backMode = "cart") {
     }
     __forceHideCheckoutDeliveryProgress = true;
     hideHeaderToggle();
+    setCartSheetScreenMode("");
     checkoutWrap.classList.add("hidden");
     benefitsWrap.classList.remove("hidden");
     hideCheckoutBenefitDetailView({ clearContent: true });
@@ -14352,6 +14364,7 @@ function applySheetAddressTitle(backMode = "cart") {
     __forceHideCheckoutDeliveryProgress = false;
     resetMobileBenefitGiftClaimUi();
     hideHeaderToggle();
+    setCartSheetScreenMode("cart");
     checkoutWrap.classList.add("hidden");
     benefitsWrap.classList.add("hidden");
     hideCheckoutBenefitDetailView({ clearContent: true });
@@ -14364,13 +14377,16 @@ function applySheetAddressTitle(backMode = "cart") {
     if (openCartSheetCtx && openCartSheetCtx.listEl && openCartSheetCtx.totalEl) {
       const { items, total } = renderCartInto(openCartSheetCtx.listEl, openCartSheetCtx.totalEl, null);
       appendUpsellToList(openCartSheetCtx.listEl);
+      if (typeof updateCartModeHeaderUi === "function") {
+        updateCartModeHeaderUi(openCartSheetCtx.listEl);
+      }
       if (openCartSheetCtx.checkoutBtn) {
         const tspan = $(".shop-sheet-checkout-total", openCartSheetCtx.checkoutBtn);
         if (tspan) tspan.textContent = money(total);
       }
     }
 
-    window._checkoutMethodCode = null;
+    window._checkoutMethodCode = window._deliveryMode === "pickup" ? "takeaway" : "delivery";
     const hasItems = cartItemsResolved().length > 0;
     setCartSheetFooterMode(openCartSheetCtx, hasItems ? "cart" : "hidden");
     if (openCartSheetCtx?.checkoutBtn) {
@@ -14382,6 +14398,14 @@ function applySheetAddressTitle(backMode = "cart") {
 
     clearSheetAddressTitleMode();
     if (window.AppModal?.setTitle) window.AppModal.setTitle("Корзина");
+    showHeaderToggle();
+    bindMobileCartModeHeaderSticky();
+    setToggleMode(window._deliveryMode === "pickup" ? "pickup" : "delivery", { uiOnly: true });
+    if (list) {
+      list.scrollTop = 0;
+    }
+    requestAnimationFrame(() => syncMobileCartModeHeaderStickyState());
+    if (window.AppModal?.setTitle) window.AppModal.setTitle("");
 
     // На мобильных: скрываем мобильные кнопки товара, показываем кнопки корзины
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
@@ -14434,22 +14458,24 @@ function applySheetAddressTitle(backMode = "cart") {
     pickupSheetWrap.classList.add("hidden");
 
     setCartSheetFooterMode(openCartSheetCtx, "hidden");
+    const resolvedBackMode =
+      backMode !== undefined
+        ? backMode || "cart"
+        : openCartSheetCtx?.addressBackMode || "cart";
     if (openCartSheetCtx) {
-      const resolvedBackMode =
-        backMode !== undefined
-          ? backMode || "cart"
-          : openCartSheetCtx.addressBackMode || "cart";
       openCartSheetCtx.addressBackMode = resolvedBackMode;
     }
 
     clearSheetAddressTitleMode();
     if (window.AppModal?.setTitle) window.AppModal.setTitle("");
-    setSheetHeaderMode("cart");
+    setSheetHeaderMode("subscreen", {
+      onBack: resolveSheetBackHandler(resolvedBackMode),
+    });
+    setCartSheetScreenMode("");
+    syncMobileCartModeHeaderStickyState();
 
-    // Insert toggle into sheet header
     showHeaderToggle();
 
-    // Обновляем состояние навигации
     sheetNavigationState.type = 'cart';
     sheetNavigationState.screen = 'addressList';
     sheetNavigationState.data = null;
@@ -14460,15 +14486,15 @@ function applySheetAddressTitle(backMode = "cart") {
     }
     setAddressSheetBodyState(true);
 
-    // Set toggle based on current delivery mode
     const initMode = window._deliveryMode === "pickup" ? "pickup" : "delivery";
-    setToggleMode(initMode);
+    void setToggleMode(initMode);
   }
 
   function showSheetPickupList() {
     invalidateAddressSheetUiState();
     cleanupCheckoutViewSubscriptions();
     hideHeaderToggle();
+    setCartSheetScreenMode("");
     checkoutWrap.classList.add("hidden");
     benefitsWrap.classList.add("hidden");
     hideCheckoutBenefitDetailView({ clearContent: true });
@@ -14744,6 +14770,7 @@ function applySheetAddressTitle(backMode = "cart") {
     cleanupCheckoutViewSubscriptions();
     const formAsyncToken = addressSheetAsyncToken;
     hideHeaderToggle();
+    setCartSheetScreenMode("");
     sheetEditingId = editingId ? Number(editingId) : null;
     if (openCartSheetCtx) {
       openCartSheetCtx.addressBackMode = backMode || "cart";
@@ -14828,6 +14855,7 @@ function applySheetAddressTitle(backMode = "cart") {
     invalidateAddressSheetUiState();
     cleanupCheckoutViewSubscriptions();
     hideHeaderToggle();
+    setCartSheetScreenMode("");
     checkoutWrap.classList.add("hidden");
     benefitsWrap.classList.add("hidden");
     hideCheckoutBenefitDetailView({ clearContent: true });
@@ -14881,6 +14909,7 @@ function applySheetAddressTitle(backMode = "cart") {
     invalidateAddressSheetUiState();
     cleanupCheckoutViewSubscriptions();
     hideHeaderToggle();
+    setCartSheetScreenMode("");
     checkoutWrap.classList.add("hidden");
     benefitsWrap.classList.add("hidden");
     hideCheckoutBenefitDetailView({ clearContent: true });
@@ -15119,35 +15148,95 @@ function renderSheetAddressList() {
     }
   }
 
+  function syncHeaderToggleUi(mode) {
+    activeToggleMode = mode === "pickup" ? "pickup" : "delivery";
+    toggleDeliveryBtn.classList.toggle("is-active", activeToggleMode === "delivery");
+    togglePickupBtn.classList.toggle("is-active", activeToggleMode === "pickup");
+  }
+
+  function isSheetCartScreenActive() {
+    return (
+      window.matchMedia("(max-width: 768px)").matches &&
+      sheetNavigationState.type === "cart" &&
+      sheetNavigationState.screen === "cart" &&
+      !!list &&
+      !list.classList.contains("hidden")
+    );
+  }
+
+  function syncMobileCartModeHeaderStickyState() {
+    if (!isSheetCartScreenActive()) {
+      if (typeof window.syncShopCartModeHeaderSticky === "function" && list) {
+        window.syncShopCartModeHeaderSticky(list, { forceExpand: true });
+      }
+      return;
+    }
+    if (typeof window.syncShopCartModeHeaderSticky === "function" && list) {
+      window.syncShopCartModeHeaderSticky(list);
+    }
+  }
+
+  function bindMobileCartModeHeaderSticky() {
+    if (typeof window.bindShopCartModeHeaderSticky === "function" && list) {
+      window.bindShopCartModeHeaderSticky(list);
+    }
+  }
+
+  function resolveSheetBackHandler(backMode) {
+    const resolvedMode = str(backMode || "").trim() || "cart";
+    if (resolvedMode === "checkout") return showSheetCheckout;
+    if (resolvedMode === "profile") return returnToProfileFromSheet;
+    if (resolvedMode === "header") return closeShopSheetIfOpen;
+    return showSheetCart;
+  }
+
   // --- Delivery / Pickup toggle logic ---
   let activeToggleMode = "delivery";
 
-  function setToggleMode(mode) {
-    invalidateAddressSheetUiState();
-    activeToggleMode = mode;
-    toggleDeliveryBtn.classList.toggle("is-active", mode === "delivery");
-    togglePickupBtn.classList.toggle("is-active", mode === "pickup");
+  async function setToggleMode(mode, { uiOnly = false } = {}) {
+    const nextMode = mode === "pickup" ? "pickup" : "delivery";
+    syncHeaderToggleUi(nextMode);
 
+    if (uiOnly) return;
+
+    if (isSheetCartScreenActive()) {
+      try {
+        if ((window._deliveryMode === "pickup" ? "pickup" : "delivery") !== nextMode && typeof setCartModeHeaderMode === "function") {
+          await setCartModeHeaderMode(nextMode);
+        }
+      } catch (e) {
+        console.warn("Failed to switch cart header mode:", e);
+      }
+      syncHeaderToggleUi(window._deliveryMode === "pickup" ? "pickup" : "delivery");
+      syncMobileCartModeHeaderStickyState();
+      return;
+    }
+
+    invalidateAddressSheetUiState();
     const elConfirmBtn = document.getElementById("shopMobileAddressConfirmBtn");
-    if (mode === "delivery") {
+    if (nextMode === "delivery") {
       addressListTop.classList.remove("hidden");
       addressList.classList.remove("hidden");
       pickupListTop.classList.add("hidden");
       pickupInlineList.classList.add("hidden");
-      if (elConfirmBtn) elConfirmBtn.textContent = "Доставить сюда";
+      if (elConfirmBtn) elConfirmBtn.textContent = "????????? ????";
       renderSheetAddressList();
     } else {
       addressListTop.classList.add("hidden");
       addressList.classList.add("hidden");
       pickupListTop.classList.remove("hidden");
       pickupInlineList.classList.remove("hidden");
-      if (elConfirmBtn) elConfirmBtn.textContent = "Заказать здесь";
+      if (elConfirmBtn) elConfirmBtn.textContent = "???????? ?????";
       renderInlinePickupList();
     }
   }
 
-  toggleDeliveryBtn.addEventListener("click", () => setToggleMode("delivery"));
-  togglePickupBtn.addEventListener("click", () => setToggleMode("pickup"));
+  toggleDeliveryBtn.addEventListener("click", () => {
+    void setToggleMode("delivery");
+  });
+  togglePickupBtn.addEventListener("click", () => {
+    void setToggleMode("pickup");
+  });
 
   // --- Pickup card helpers ---
   function cleanPhone(raw) {
@@ -21285,50 +21374,217 @@ function setBottomNavActive(tab) {
     return deliveryQuoteCache.data;
   }
 
+  function resolveCartItemsEtaLabel(deliveryQuote, defaultDeliverySettings = null) {
+    if (deliveryQuote?.eta_minutes != null) {
+      const quoteEta = Number(deliveryQuote.eta_minutes);
+      if (Number.isFinite(quoteEta) && quoteEta >= 0) {
+        return `\u0417\u0430 ${quoteEta} \u043c\u0438\u043d\u0443\u0442`;
+      }
+    }
+    const defaultEtaRaw = defaultDeliverySettings?.eta_minutes;
+    if (defaultEtaRaw != null) {
+      const defaultEta = Number(defaultEtaRaw);
+      if (Number.isFinite(defaultEta) && defaultEta >= 0) {
+        return `\u0417\u0430 ${defaultEta} \u043c\u0438\u043d\u0443\u0442`;
+      }
+    }
+    return "\u0417\u0430 40-80 \u043c\u0438\u043d\u0443\u0442";
+  }
+
+  function setCartItemsSectionEtaLabel(label) {
+    const safeLabel = str(label || "").trim() || "\u0417\u0430 40-80 \u043c\u0438\u043d\u0443\u0442";
+    document.querySelectorAll(".shop-cart-items-section__meta").forEach((node) => {
+      node.textContent = safeLabel;
+    });
+    if (typeof window.setShopCartModeHeaderMetaState === "function") {
+      window.setShopCartModeHeaderMetaState({ etaText: safeLabel });
+    }
+  }
+
+  function getQuoteDeliveryPriceTiers(deliveryQuote, defaultDeliverySettings = null) {
+    if (Array.isArray(deliveryQuote?.price_tiers) && deliveryQuote.price_tiers.length) {
+      return deliveryQuote.price_tiers;
+    }
+    if (Array.isArray(defaultDeliverySettings?.price_tiers) && defaultDeliverySettings.price_tiers.length) {
+      return defaultDeliverySettings.price_tiers;
+    }
+    return [];
+  }
+
+  function formatCartHeaderDeliveryText(deliveryQuote, defaultDeliverySettings = null) {
+    const freeFromRaw = deliveryQuote?.free_delivery_from != null
+      ? Number(deliveryQuote.free_delivery_from)
+      : (defaultDeliverySettings?.free_delivery_from != null ? Number(defaultDeliverySettings.free_delivery_from) : null);
+    if (Number.isFinite(freeFromRaw) && freeFromRaw > 0) {
+      return `\u0411\u0435\u0441\u043f\u043b\u0430\u0442\u043d\u043e \u043e\u0442 ${money(freeFromRaw)}`;
+    }
+    if (Number.isFinite(freeFromRaw) && freeFromRaw === 0) {
+      return "\u0411\u0435\u0441\u043f\u043b\u0430\u0442\u043d\u043e";
+    }
+
+    const positiveCosts = Array.from(new Set(
+      getQuoteDeliveryPriceTiers(deliveryQuote, defaultDeliverySettings)
+        .map((tier) => Number(tier?.delivery_cost))
+        .filter((value) => Number.isFinite(value) && value > 0)
+        .map((value) => Number(value.toFixed(2)))
+    )).sort((left, right) => left - right);
+
+    if (positiveCosts.length > 1) {
+      return `${money(positiveCosts[0])} - ${money(positiveCosts[positiveCosts.length - 1])}`;
+    }
+    if (positiveCosts.length === 1) {
+      return `\u0414\u043e\u0441\u0442\u0430\u0432\u043a\u0430 ${money(positiveCosts[0])}`;
+    }
+
+    const fallbackCost = deliveryQuote?.delivery_cost != null
+      ? Number(deliveryQuote.delivery_cost)
+      : Number(defaultDeliverySettings?.delivery_cost || 0);
+    if (Number.isFinite(fallbackCost) && fallbackCost > 0) {
+      return `\u0414\u043e\u0441\u0442\u0430\u0432\u043a\u0430 ${money(fallbackCost)}`;
+    }
+    return "";
+  }
+
+  async function syncCartModeHeaderMetaUi({
+    deliveryQuote = null,
+    defaultDeliverySettings = null,
+    isDeliveryMode = true,
+  } = {}) {
+    const etaText = resolveCartItemsEtaLabel(
+      isDeliveryMode ? deliveryQuote : null,
+      defaultDeliverySettings
+    );
+    let hoursText = "";
+    if (typeof window.getShopCartModeHeaderMetaSnapshot === "function") {
+      try {
+        const snapshot = await window.getShopCartModeHeaderMetaSnapshot({ ensureStores: true });
+        hoursText = str(snapshot?.hoursText || "").trim();
+      } catch (_) {}
+    }
+    if (typeof window.setShopCartModeHeaderMetaState === "function") {
+      window.setShopCartModeHeaderMetaState({
+        etaText,
+        deliveryText: isDeliveryMode ? formatCartHeaderDeliveryText(deliveryQuote, defaultDeliverySettings) : "",
+        hoursText,
+      });
+    }
+    return { etaText, hoursText };
+  }
+
+  async function refreshShopCartItemsEtaLabel(subtotal = null) {
+    const safeSubtotal = subtotal != null
+      ? roundPrice(Number(subtotal || 0))
+      : roundPrice(Number(computeCartTotals(cartItemsResolved()).total || 0));
+    let deliveryQuote = null;
+    try {
+      deliveryQuote = await getDeliveryQuote(safeSubtotal);
+    } catch (_) {}
+
+    let defaultDeliverySettings = null;
+    if (deliveryQuote?.eta_minutes == null) {
+      try {
+        defaultDeliverySettings = await getDeliverySettings();
+      } catch (_) {}
+    }
+
+    const label = resolveCartItemsEtaLabel(deliveryQuote, defaultDeliverySettings);
+    setCartItemsSectionEtaLabel(label);
+    return label;
+  }
+  window.refreshShopCartItemsEtaLabel = refreshShopCartItemsEtaLabel;
+
   /**
-   * Обновляет полоску прогресса до бесплатной доставки и сумму в кнопке «Оформить» (мобилка и десктоп).
-   * В кнопке: сумма корзины + стоимость доставки, если доставка платная; при достижении порога — только сумма корзины.
+   * ????????? ??????? ????????? ?? ?????????? ???????? ? ????? ? ?????? ?????????? (??????? ? ???????).
+   * ? ??????: ????? ??????? + ????????? ????????, ???? ???????? ???????; ??? ?????????? ?????? ? ?????? ????? ???????.
    */
   let __forceHideCheckoutDeliveryProgress = false;
 
   async function updateMobileDeliveryProgress() {
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
     const isDesktop = !isMobile;
+    const items = cartItemsResolved();
+    const cartTotal = computeCartTotals(items).total;
+    const isDeliveryMode = window._checkoutMethodCode == null
+      ? window._deliveryMode !== "pickup"
+      : window._checkoutMethodCode === "delivery";
     const syncDesktopBenefitsTrigger = (visible) => {
       if (!elDesktopCartBenefitsTriggerBtn) return;
-      const shouldShow = Boolean(visible) && cartViewMode === "cart";
+      const shouldShow = Boolean(visible) && (cartViewMode === "cart" || cartViewMode === "checkout");
+      const sourceScreen = cartViewMode === "checkout" ? "checkout" : "cart";
       elDesktopCartBenefitsTriggerBtn.classList.toggle("hidden", !shouldShow);
       elDesktopCartBenefitsTriggerBtn.onclick = shouldShow
         ? () => {
-            void showDesktopBenefitsView(null, { sourceScreen: "cart" });
+            void showDesktopBenefitsView(null, { sourceScreen });
           }
         : null;
     };
     if (__forceHideCheckoutDeliveryProgress) {
+      let hiddenModeSettings = null;
+      try {
+        hiddenModeSettings = await getDeliverySettings();
+      } catch (_) {}
+      await syncCartModeHeaderMetaUi({
+        deliveryQuote: null,
+        defaultDeliverySettings: hiddenModeSettings,
+        isDeliveryMode,
+      });
       if (elMobileDeliveryProgressWrap) elMobileDeliveryProgressWrap.classList.add("hidden");
       if (elDesktopDeliveryProgressWrap) elDesktopDeliveryProgressWrap.classList.add("hidden");
-      syncDesktopBenefitsTrigger(false);
+      syncDesktopBenefitsTrigger(true);
       return;
     }
-    if (window._checkoutMethodCode != null && window._checkoutMethodCode !== "delivery") {
+    if (!isDeliveryMode) {
+      let pickupFallbackSettings = null;
+      try {
+        pickupFallbackSettings = await getDeliverySettings();
+      } catch (_) {}
+      await syncCartModeHeaderMetaUi({
+        deliveryQuote: null,
+        defaultDeliverySettings: pickupFallbackSettings,
+        isDeliveryMode: false,
+      });
+      if (elMobileCartTotal) elMobileCartTotal.innerHTML = "<strong>" + money(cartTotal) + "</strong>";
+      if (elCartTotal) elCartTotal.innerHTML = "<strong>" + money(cartTotal) + "</strong>";
       if (elMobileDeliveryProgressWrap) elMobileDeliveryProgressWrap.classList.add("hidden");
       if (elDesktopDeliveryProgressWrap) elDesktopDeliveryProgressWrap.classList.add("hidden");
-      syncDesktopBenefitsTrigger(false);
+      syncDesktopBenefitsTrigger(true);
       return;
     }
-    let data;
-    const items = cartItemsResolved();
-    const cartTotal = computeCartTotals(items).total;
+    let data = null;
+    let defaultSettings = null;
     try {
       data = await getDeliveryQuote(cartTotal);
     } catch (e) {
       if (elMobileCartTotal) elMobileCartTotal.innerHTML = "<strong>" + money(cartTotal) + "</strong>";
       if (elCartTotal) elCartTotal.innerHTML = "<strong>" + money(cartTotal) + "</strong>";
+      try {
+        defaultSettings = await getDeliverySettings();
+      } catch (_) {}
+      await syncCartModeHeaderMetaUi({
+        deliveryQuote: null,
+        defaultDeliverySettings: defaultSettings,
+        isDeliveryMode: true,
+      });
       if (elMobileDeliveryProgressWrap) elMobileDeliveryProgressWrap.classList.add("hidden");
       if (elDesktopDeliveryProgressWrap) elDesktopDeliveryProgressWrap.classList.add("hidden");
-      syncDesktopBenefitsTrigger(false);
+      syncDesktopBenefitsTrigger(true);
       return;
     }
+    if (
+      data?.eta_minutes == null ||
+      data?.free_delivery_from == null ||
+      !Array.isArray(data?.price_tiers) ||
+      !data.price_tiers.length
+    ) {
+      try {
+        defaultSettings = await getDeliverySettings();
+      } catch (_) {}
+    }
+    await syncCartModeHeaderMetaUi({
+      deliveryQuote: data,
+      defaultDeliverySettings: defaultSettings,
+      isDeliveryMode: true,
+    });
     const deliveryCost = Number(data?.delivery_cost || 0) || 0;
     const freeFrom = data?.free_delivery_from != null ? Number(data.free_delivery_from) : null;
     const deliveryApplied = freeFrom != null && cartTotal >= freeFrom ? 0 : deliveryCost;
@@ -21347,10 +21603,7 @@ function setBottomNavActive(tab) {
       setTotalHtml(elCartTotal, cartTotal, deliveryApplied);
     }
     const progress = freeFrom != null && freeFrom > 0 ? Math.min(100, (cartTotal / freeFrom) * 100) : 0;
-    const labelFreeHtml = "Бесплатная доставка <i class=\"fas fa-check shop-delivery-check\" aria-hidden=\"true\"></i>";
-    const labelProgressHtml = (left, withDelivery) =>
-      (withDelivery ? "Доставка <strong>" + money(deliveryCost) + "</strong>. " : "") + "Ещё <strong>" + money(left) + "</strong> до бесплатной доставки";
-
+    const labelFreeHtml = '\u0411\u0435\u0441\u043f\u043b\u0430\u0442\u043d\u0430\u044f \u0434\u043e\u0441\u0442\u0430\u0432\u043a\u0430 <i class="fas fa-check shop-delivery-check" aria-hidden="true"></i>';
     const compactLabelProgressHtml = (left, withDelivery) =>
       (withDelivery ? "\u0414\u043e\u0441\u0442\u0430\u0432\u043a\u0430 <strong>" + money(deliveryCost) + "</strong>. " : "") + "\u0415\u0449\u0451 <strong>" + money(left) + "</strong>";
 
@@ -21373,7 +21626,6 @@ function setBottomNavActive(tab) {
     if (isDesktop && elDesktopDeliveryProgressWrap && elDesktopDeliveryProgressFill && elDesktopDeliveryProgressLabel) {
       if (freeFrom == null || freeFrom <= 0) {
         elDesktopDeliveryProgressWrap.classList.add("hidden");
-        syncDesktopBenefitsTrigger(false);
       } else {
         elDesktopDeliveryProgressFill.style.width = progress + "%";
         elDesktopDeliveryProgressWrap.querySelector(".shop-cart-delivery-progress-bar")?.setAttribute("aria-valuenow", Math.round(progress));
@@ -21385,14 +21637,12 @@ function setBottomNavActive(tab) {
           elDesktopDeliveryProgressLabel.innerHTML = compactLabelProgressHtml(Math.ceil(freeFrom - cartTotal), deliveryCost > 0);
         }
         elDesktopDeliveryProgressWrap.classList.remove("hidden");
-        syncDesktopBenefitsTrigger(true);
       }
-    } else {
-      syncDesktopBenefitsTrigger(false);
     }
+    syncDesktopBenefitsTrigger(true);
   }
 
-  /**
+/**
    * Calculate the next opening time for the store
    * @param {Array} hours - Store hours array from API
    * @param {string} timezone - Store timezone offset (e.g., "+3")
