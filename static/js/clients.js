@@ -1579,6 +1579,29 @@
     return String(value || "").replace(/[^\d]/g, "");
   }
 
+  function normalizePhoneForTel(value) {
+    return String(value || "")
+      .replace(/[^\d+]/g, "")
+      .replace(/^8/, "+7")
+      .replace(/^7/, "+7");
+  }
+
+  function setPhoneLink(node, phone) {
+    if (!node) return;
+    const formattedPhone = formatPhoneDigitsToRU(phone) || "—";
+    const telPhone = normalizePhoneForTel(phone);
+    node.textContent = formattedPhone;
+    if (!telPhone) {
+      node.removeAttribute("href");
+      node.removeAttribute("aria-label");
+      node.removeAttribute("title");
+      return;
+    }
+    node.setAttribute("href", `tel:${telPhone}`);
+    node.setAttribute("aria-label", `Позвонить: ${formattedPhone}`);
+    node.setAttribute("title", formattedPhone);
+  }
+
   function getClientOpenRequestFromUrl() {
     try {
       const url = new URL(window.location.href);
@@ -11414,7 +11437,7 @@
 
     if (!client) {
       if (infoName) infoName.textContent = "—";
-      if (infoPhone) infoPhone.textContent = "—";
+      setPhoneLink(infoPhone, "");
       if (infoBirthday) infoBirthday.textContent = "—";
       if (clientPhoto) clientPhoto.classList.add("hidden");
       if (clientPhotoPlaceholder) clientPhotoPlaceholder.classList.remove("hidden");
@@ -11422,7 +11445,7 @@
       setTextAll([sheetInfo.title], "Клиент не выбран");
       setTextAll([sheetInfo.meta], "—");
       setTextAll([sheetInfo.name], "—");
-      setTextAll([sheetInfo.phone], "—");
+      setPhoneLink(sheetInfo.phone, "");
       setTextAll([sheetInfo.birthday], "—");
       setTextAll([sheetInfo.orders], "—");
       setTextAll([sheetInfo.spent], "—");
@@ -11433,7 +11456,7 @@
 
     // Desktop profile header
     if (infoName) infoName.textContent = client.name || "—";
-    if (infoPhone) infoPhone.textContent = formatPhoneDigitsToRU(client.phone) || "—";
+    setPhoneLink(infoPhone, client.phone);
     if (infoBirthday) infoBirthday.textContent = client.birthday ? fmtDate(client.birthday) : "—";
 
     // Photo
@@ -11452,7 +11475,7 @@
     setTextAll([sheetInfo.title], `Клиент #${client.id}`);
     setTextAll([sheetInfo.meta], `Создан: ${fmtDateTime(client.created_at)}`);
     setTextAll([sheetInfo.name], client.name || "—");
-    setTextAll([sheetInfo.phone], formatPhoneDigitsToRU(client.phone) || "—");
+    setPhoneLink(sheetInfo.phone, client.phone);
     setTextAll([sheetInfo.birthday], client.birthday ? fmtDate(client.birthday) : "—");
     setTextAll([sheetInfo.orders], String(Number(client.total_orders || 0)));
     setTextAll([sheetInfo.spent], money(client.total_spent || 0));
