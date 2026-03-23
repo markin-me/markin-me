@@ -7111,12 +7111,16 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
 }
 
 .shop-company-chat-overlay{
+  --shop-chat-mobile-glass-control-border: rgba(255, 255, 255, 0.86);
+  --shop-chat-mobile-glass-control-bg: rgba(255, 255, 255, 0.68);
   --shop-chat-mobile-keyboard-inset: 0px;
   --shop-chat-android-viewport-shift: 0px;
   --shop-chat-scroll-down-composer-extra: 0px;
   --shop-chat-mobile-footer-overlay-height: 0px;
+  --shop-chat-mobile-header-overlay-height: 0px;
   --shop-chat-mobile-thread-bottom-inset: 0px;
   --shop-chat-mobile-footer-gap: 16px;
+  --shop-chat-mobile-footer-lift: 8px;
   --shop-company-chat-sheet-top-gap: 0px;
   --shop-chat-wallpaper-base:#f0f3eb;
   --shop-chat-wallpaper-pattern:url("/static/assets/chat-wallpaper-desktop.webp?v=20260320b");
@@ -7308,6 +7312,7 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
 @media (max-width: 768px){
   .shop-company-chat-overlay{
     background: transparent;
+    --shop-chat-mobile-header-overlay-height: calc(45px + env(safe-area-inset-top));
     --shop-chat-wallpaper-pattern:url("/static/assets/chat-wallpaper-mobile.webp?v=20260320d");
     --shop-chat-wallpaper-size:cover;
   }
@@ -7326,8 +7331,16 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
   }
 
   .shop-company-chat-modal__body{
-    background: transparent;
-    background-image: none;
+    background-color: var(--shop-chat-wallpaper-base);
+    background-image:
+      linear-gradient(180deg, rgba(255,255,255,.40), rgba(255,255,255,.58)),
+      var(--shop-chat-wallpaper-pattern),
+      radial-gradient(circle at 16% 10%, rgba(255,255,255,.16), transparent 36%),
+      radial-gradient(circle at 84% 14%, rgba(245,225,138,.08), transparent 32%),
+      linear-gradient(180deg, #f7f8f4 0%, #f0f3eb 42%, #ebefe5 100%);
+    background-position: 0 0, center bottom, 0 0, 0 0, 0 0;
+    background-repeat: no-repeat, no-repeat, no-repeat, no-repeat, no-repeat;
+    background-size: 100% 100%, var(--shop-chat-wallpaper-size), 100% 100%, 100% 100%, 100% 100%;
   }
 }
 
@@ -7697,7 +7710,6 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
 }
 
 .shop-company-chat-feed{
-  --shop-company-chat-edge-spring-shift: 0px;
   flex: 1;
   min-height: 0;
   position: relative;
@@ -7750,6 +7762,8 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
 
 .shop-company-chat-modal__body.is-bootstrap-loading .shop-company-chat-feed{
   overflow: hidden;
+  -webkit-mask-image: none;
+  mask-image: none;
 }
 
 .shop-company-chat-modal__body.is-bootstrap-loading .shop-company-chat-scroll-down{
@@ -7914,13 +7928,13 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
 }
 
 .shop-company-chat-thread{
-  min-height: 100%;
+  min-height: calc(100% + 1px);
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
   gap: 10px;
-  transform: translate3d(0, var(--shop-company-chat-edge-spring-shift), 0);
-  will-change: transform;
+  transform: none;
+  will-change: auto;
 }
 
 .shop-company-chat-day{
@@ -8313,6 +8327,24 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
   color: #a5a5ab;
 }
 
+.shop-company-chat-sender{
+  max-width: 140px;
+  font-size: 11px;
+  line-height: 1;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #a5a5ab;
+}
+
+.shop-company-chat-meta-main{
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
 .shop-company-chat-meta{
   display: inline-flex;
   align-items: center;
@@ -8403,8 +8435,9 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
 }
 
 .shop-company-chat-reaction-pill{
-  margin: 0;
+  margin-top: 0;
   position: relative;
+  transform: none;
   appearance: none;
   -webkit-appearance: none;
   display: inline-flex;
@@ -8424,6 +8457,9 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
   outline: none;
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
+  transition:
+    opacity var(--dur-fast) var(--ease-smooth),
+    transform var(--dur-fast) var(--ease-smooth);
   will-change: transform, filter, opacity;
   z-index: 1;
 }
@@ -8432,13 +8468,6 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
 .shop-company-chat-reaction-pill:focus-visible{
   outline: none;
   box-shadow: none;
-}
-
-.shop-company-chat-reaction-pill:active{
-  background: transparent !important;
-  box-shadow: none !important;
-  outline: none !important;
-  -webkit-tap-highlight-color: transparent;
 }
 
 .shop-company-chat-reaction-pill.is-reaction-pop{
@@ -8487,6 +8516,19 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
 
 .shop-company-chat-row.is-user .shop-company-chat-reaction-pill + .shop-company-chat-reaction-pill{
   margin-right: -9px;
+}
+
+.shop-company-chat-reaction-pill:hover{
+  opacity: .92;
+  transform: scale(1.08);
+}
+
+.shop-company-chat-reaction-pill:active{
+  transform: scale(.96);
+  background: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
+  -webkit-tap-highlight-color: transparent;
 }
 
 @keyframes shop-company-chat-reaction-pill-pop{
@@ -8560,6 +8602,24 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
   line-height: 1;
 }
 
+.shop-company-chat-bubble.is-emoji-only-single .shop-company-chat-author{
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  width: max-content;
+  max-width: 100%;
+  margin-left: auto;
+  margin-bottom: 4px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(112, 150, 95, 0.78);
+  box-shadow: 0 8px 18px rgba(73, 104, 61, 0.14);
+  backdrop-filter: blur(6px) saturate(135%);
+  -webkit-backdrop-filter: blur(6px) saturate(135%);
+  color: #fff;
+}
+
 .shop-company-chat-bubble.is-emoji-only-few .shop-company-chat-text{
   font-size: 62px;
   line-height: 1;
@@ -8582,6 +8642,40 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
 
 .shop-company-chat-bubble.is-emoji-only .shop-company-chat-time{
   color: #a5a5ab;
+}
+
+.shop-company-chat-bubble.is-emoji-only-single .shop-company-chat-meta{
+  gap: 4px;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.shop-company-chat-bubble.is-emoji-only-single .shop-company-chat-time{
+  color: #fff;
+}
+
+.shop-company-chat-bubble.is-emoji-only-single .shop-company-chat-meta-main{
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(112, 150, 95, 0.78);
+  box-shadow: 0 8px 18px rgba(73, 104, 61, 0.14);
+  backdrop-filter: blur(6px) saturate(135%);
+  -webkit-backdrop-filter: blur(6px) saturate(135%);
+}
+
+
+.shop-company-chat-bubble.is-emoji-only-single .shop-company-chat-status--sent,
+.shop-company-chat-bubble.is-emoji-only-single .shop-company-chat-status--delivered{
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.shop-company-chat-bubble.is-emoji-only-single .shop-company-chat-status--read{
+  color: #d7f0ff;
 }
 
 .shop-company-chat-row.is-user .shop-company-chat-bubble.is-emoji-only .shop-company-chat-status--sent,
@@ -8707,8 +8801,8 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
 }
 
 .shop-company-chat-context-reaction{
-  width: 24px;
-  height: 24px;
+  width: 26px;
+  height: 26px;
   border: 0;
   background: transparent;
   border-radius: 6px;
@@ -8735,11 +8829,11 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
 
 .shop-company-chat-context-menu.is-reactions-expanded .shop-company-chat-context-reactions{
   display: grid;
-  grid-template-columns: repeat(8, 24px);
+  grid-template-columns: repeat(8, 26px);
   justify-content: start;
   align-content: start;
   gap: 3px;
-  width: min(228px, calc(100vw - 36px));
+  width: min(244px, calc(100vw - 36px));
   max-height: min(40vh, 216px);
   overflow-y: auto;
   overflow-x: hidden;
@@ -9025,11 +9119,11 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
 
 .shop-company-chat-reaction-bar.is-expanded{
   display: grid;
-  grid-template-columns: repeat(8, 24px);
+  grid-template-columns: repeat(8, 26px);
   justify-content: start;
   align-content: start;
   gap: 3px;
-  width: min(228px, calc(100vw - 16px));
+  width: min(244px, calc(100vw - 16px));
   max-height: min(44vh, 236px);
   overflow-y: auto;
   overflow-x: hidden;
@@ -9040,8 +9134,8 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
 }
 
 .shop-company-chat-reaction-btn{
-  width: 24px;
-  height: 24px;
+  width: 26px;
+  height: 26px;
   appearance: none;
   -webkit-appearance: none;
   border: 0;
@@ -9083,8 +9177,8 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
 }
 
 .shop-company-chat-reaction-close{
-  width: 24px;
-  height: 24px;
+  width: 26px;
+  height: 26px;
   border: 0;
   background: transparent;
   border-radius: 999px;
@@ -9568,6 +9662,7 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
   border: 0;
   box-shadow: none;
   background: transparent;
+  opacity: 1;
 }
 
 .shop-company-chat-composer{
@@ -9581,6 +9676,7 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
   border: 0;
   background: var(--color-surface-2);
   padding: 8px 10px;
+  opacity: 1;
 }
 
 .shop-company-chat-selection-toolbar{
@@ -9796,6 +9892,7 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
 
 body.page-shop.shop-company-chat-open{
   overflow: hidden;
+  overscroll-behavior-y: none;
 }
 
 @media (max-width: 768px){
@@ -9807,7 +9904,10 @@ body.page-shop.shop-company-chat-open{
 
   .shop-company-chat-modal{
     position: absolute;
-    inset: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    top: auto;
     width: 100%;
     max-width: 100%;
     min-height: calc(100dvh - var(--shop-company-chat-sheet-top-gap));
@@ -9910,6 +10010,24 @@ body.page-shop.shop-company-chat-open{
       0
     );
     will-change: transform;
+    -webkit-mask-image: linear-gradient(
+      to bottom,
+      transparent 0,
+      #000 var(--shop-chat-mobile-header-overlay-height),
+      #000 calc(100% - var(--shop-chat-mobile-footer-overlay-height)),
+      transparent 100%
+    );
+    mask-image: linear-gradient(
+      to bottom,
+      transparent 0,
+      #000 var(--shop-chat-mobile-header-overlay-height),
+      #000 calc(100% - var(--shop-chat-mobile-footer-overlay-height)),
+      transparent 100%
+    );
+    -webkit-mask-repeat: no-repeat;
+    mask-repeat: no-repeat;
+    -webkit-mask-size: 100% 100%;
+    mask-size: 100% 100%;
   }
 
   .shop-company-chat-text{
@@ -9945,7 +10063,7 @@ body.page-shop.shop-company-chat-open{
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr);
     overflow: hidden;
-    padding-bottom: var(--shop-chat-mobile-footer-gap);
+    padding-bottom: 0;
   }
 
   .shop-company-chat-footer-island{
@@ -9953,7 +10071,7 @@ body.page-shop.shop-company-chat-open{
     grid-row: 1;
     align-self: end;
     margin: 0;
-    padding: 0 10px calc(max(6px, env(safe-area-inset-bottom)));
+    padding: 0 10px calc(max(6px, env(safe-area-inset-bottom)) + var(--shop-chat-mobile-footer-lift));
     transform: translate3d(
       0,
       calc(var(--shop-chat-android-viewport-shift) - var(--shop-chat-mobile-overlay-lift)),
@@ -10063,10 +10181,11 @@ body.page-shop.shop-company-chat-open{
     max-height: 166px;
     padding: 12px 14px 12px 10px;
     font-size: 16px;
+    line-height: 22px;
   }
 
   .shop-company-chat-composer__input::placeholder{
-    line-height: 1.25;
+    line-height: 22px;
     transform: none;
   }
 
@@ -10076,9 +10195,9 @@ body.page-shop.shop-company-chat-open{
   }
 
   .shop-company-chat-footer-island #shopCompanyChatAttachBtn{
-    border: 1px solid rgba(255, 255, 255, 0.86);
+    border: 1px solid var(--shop-chat-mobile-glass-control-border);
     border-radius: 999px;
-    background: rgba(255, 255, 255, 0.82);
+    background: var(--shop-chat-mobile-glass-control-bg);
     color: var(--color-text-muted);
     box-shadow: none;
     backdrop-filter: blur(14px) saturate(150%);
@@ -10105,9 +10224,9 @@ body.page-shop.shop-company-chat-open{
     min-height: 48px;
     max-height: 168px;
     overflow: hidden;
-    border: 1px solid rgba(255, 255, 255, 0.86);
+    border: 1px solid var(--shop-chat-mobile-glass-control-border);
     border-radius: 24px;
-    background: rgba(255, 255, 255, 0.82);
+    background: var(--shop-chat-mobile-glass-control-bg);
     box-shadow: none;
     backdrop-filter: blur(14px) saturate(150%);
     -webkit-backdrop-filter: blur(14px) saturate(150%);
@@ -10181,7 +10300,7 @@ body.page-shop.shop-company-chat-open{
     min-height: 26px;
     min-width: 26px;
     font-size: 20px;
-    bottom: -10px;
+    bottom: auto;
   }
 
   .shop-company-chat-context-menu{
