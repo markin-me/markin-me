@@ -160,7 +160,7 @@
   const CHECKOUT_DRAFT_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
   const CHECKOUT_PRODUCTS_CACHE_VERSION = 3;
   const CHECKOUT_PRODUCTS_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
-  const NEW_ORDER_CLIENT_CACHE_VERSION = 1;
+  const NEW_ORDER_CLIENT_CACHE_VERSION = 2;
   const NEW_ORDER_CLIENT_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
   const state = {
@@ -498,10 +498,14 @@
     ` : "";
     const rightFooterHtml = `
       <div class="shop-cart-delivery-progress ${cartSummary.showDeliveryProgress ? "" : "hidden"}">
-        <div class="shop-cart-delivery-progress-bar" role="progressbar" aria-valuenow="${deliveryProgressAriaValue}" aria-valuemin="0" aria-valuemax="100">
-          <div class="shop-cart-delivery-progress-fill" style="width:${cartSummary.progress}%"></div>
+        <div class="shop-cart-delivery-progress-row">
+          <div class="shop-cart-delivery-progress-surface">
+            <div class="shop-cart-delivery-progress-bar" role="progressbar" aria-valuenow="${deliveryProgressAriaValue}" aria-valuemin="0" aria-valuemax="100">
+              <div class="shop-cart-delivery-progress-fill" style="width:${cartSummary.progress}%"></div>
+            </div>
+            <div class="shop-cart-delivery-progress-label ${cartSummary.deliveryProgressState === "reached" ? "is-free" : ""}">${deliveryProgressLabelHtml}</div>
+          </div>
         </div>
-        <div class="shop-cart-delivery-progress-label ${cartSummary.deliveryProgressState === "reached" ? "is-free" : ""}">${deliveryProgressLabelHtml}</div>
       </div>
       <div class="shop-cart-footer">
         <div class="shop-cart-footer-actions">
@@ -612,7 +616,7 @@
       return `
         <div class="new-order-right-select-wrap ${isOpen ? "is-open" : ""}">
           <button type="button" class="new-order-right-select-trigger" data-action="right-select-toggle" data-order-id="${orderId}" data-field="${field}">
-            <span>${escapeHtml(labels[field]?.[value] || value || "Р’С‹Р±СЂР°С‚СЊ")}</span>
+            <span>${escapeHtml(labels[field]?.[value] || value || "\u0412\u044b\u0431\u0440\u0430\u0442\u044c")}</span>
             <i class="fas fa-chevron-down"></i>
           </button>
           ${isOpen ? `
@@ -1231,6 +1235,31 @@
     };
   }
 
+  function normalizeRightPaymentTypeRef(item) {
+    return {
+      id: Number(item?.id || 0),
+      code: String(item?.code || "").trim(),
+      title: String(item?.title || "").trim(),
+      is_active: Number(item?.is_active ?? 1),
+      sort: Number(item?.sort || 0),
+    };
+  }
+
+  function normalizeRightTimeOptionRef(item) {
+    return {
+      id: Number(item?.id || 0),
+      code: String(item?.code || "").trim(),
+      title: String(item?.title || "").trim(),
+      is_active: Number(item?.is_active ?? 1),
+      sort: Number(item?.sort || 0),
+      has_time_window: Number(item?.has_time_window || 0),
+      starts_at: String(item?.starts_at || "").trim(),
+      ends_at: String(item?.ends_at || "").trim(),
+      step_minutes: Number(item?.step_minutes || 30),
+      lead_minutes: Number(item?.lead_minutes || 0),
+    };
+  }
+
   async function loadRightDeliveryTypes() {
     try {
       const json = await apiJson("/api/admin/tenant/order-delivery-types");
@@ -1250,13 +1279,7 @@
       const json = await apiJson("/api/admin/tenant/order-payments");
       const items = Array.isArray(json?.items) ? json.items : [];
       state.rightPaymentTypes = items
-        .map((item) => ({
-          id: Number(item?.id || 0),
-          code: String(item?.code || "").trim(),
-          title: String(item?.title || "").trim(),
-          is_active: Number(item?.is_active || 0),
-          sort: Number(item?.sort || 0),
-        }))
+        .map(normalizeRightPaymentTypeRef)
         .filter((item) => item.code)
         .sort((a, b) => (a.sort - b.sort) || (a.id - b.id));
     } catch {
@@ -1270,17 +1293,7 @@
       const json = await apiJson("/api/admin/tenant/order-time-options");
       const items = Array.isArray(json?.items) ? json.items : [];
       state.rightTimeOptions = items
-        .map((item) => ({
-          id: Number(item?.id || 0),
-          code: String(item?.code || "").trim(),
-          title: String(item?.title || "").trim(),
-          is_active: Number(item?.is_active || 0),
-          sort: Number(item?.sort || 0),
-          has_time_window: Number(item?.has_time_window || 0),
-          starts_at: String(item?.starts_at || "").trim(),
-          ends_at: String(item?.ends_at || "").trim(),
-          step_minutes: Number(item?.step_minutes || 30),
-        }))
+        .map(normalizeRightTimeOptionRef)
         .filter((item) => item.code)
         .sort((a, b) => (a.sort - b.sort) || (a.id - b.id));
     } catch {
@@ -3820,8 +3833,14 @@
       .map(normalizeRightDeliveryTypeRef)
       .filter((item) => item.code)
       .sort((a, b) => (a.sort - b.sort) || (a.id - b.id));
-    state.rightPaymentTypes = Array.isArray(snapshot.rightPaymentTypes) ? snapshot.rightPaymentTypes : [];
-    state.rightTimeOptions = Array.isArray(snapshot.rightTimeOptions) ? snapshot.rightTimeOptions : [];
+    state.rightPaymentTypes = (Array.isArray(snapshot.rightPaymentTypes) ? snapshot.rightPaymentTypes : [])
+      .map(normalizeRightPaymentTypeRef)
+      .filter((item) => item.code)
+      .sort((a, b) => (a.sort - b.sort) || (a.id - b.id));
+    state.rightTimeOptions = (Array.isArray(snapshot.rightTimeOptions) ? snapshot.rightTimeOptions : [])
+      .map(normalizeRightTimeOptionRef)
+      .filter((item) => item.code)
+      .sort((a, b) => (a.sort - b.sort) || (a.id - b.id));
     state.rightOrderStatuses = Array.isArray(snapshot.rightOrderStatuses) ? snapshot.rightOrderStatuses : [];
     state.rightDeliverySettings = snapshot.rightDeliverySettings && typeof snapshot.rightDeliverySettings === "object"
       ? snapshot.rightDeliverySettings
@@ -12666,11 +12685,25 @@
             state.checkoutSavedDraft = { blocks: [] };
           }
           await preloadAllCategoryProducts(getPreloadCategoryIds());
+        } else {
+          try {
+            await loadRefsFromApi();
+          } catch {}
+          try {
+            await loadCheckoutDraftFromApi(true);
+          } catch {}
         }
       } else {
         const manifestChanged = !areManifestTokensEqual(prevManifest, nextManifest);
         if (!hydrated || manifestChanged) {
           await syncDataByManifest(nextManifest, prevManifest, !hydrated);
+        } else {
+          try {
+            await loadRefsFromApi();
+          } catch {}
+          try {
+            await loadCheckoutDraftFromApi(true);
+          } catch {}
         }
       }
 

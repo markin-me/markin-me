@@ -4181,11 +4181,14 @@ optionGroups.forEach((group) => {
 
   // На мобильных: синхронизируем кнопки с единым блоком
   const isMobile = window.matchMedia("(max-width: 768px)").matches;
+  if (isMobile && elMobileProductActions) {
+    elMobileProductActions.classList.remove("is-read-only-back");
+  }
   if (isMobile && !isReadOnlyView && elMobileProductActions && elMobileQtyWrap && elMobileAddToCartBtn) {
     // Скрываем footer на мобильных
     const footer = wrap.querySelector(".shop-pd-footer");
     if (footer) footer.style.display = "none";
-    
+
     // Показываем мобильные кнопки
     elMobileProductActions.classList.remove("hidden");
     if (elMobileAddressActions) {
@@ -4196,7 +4199,9 @@ optionGroups.forEach((group) => {
       if (elMobileCartActionsCart) elMobileCartActionsCart.classList.add("hidden");
       if (elMobileCartActionsCheckout) elMobileCartActionsCheckout.classList.add("hidden");
     }
-    
+    const mobilePricesWrap = elMobileAddToCartBtn.querySelector(".shop-pd-action-prices");
+    if (mobilePricesWrap) mobilePricesWrap.classList.remove("hidden");
+
     // Клонируем qtyPill в мобильный блок
     if (elMobileQtyWrap && qtyPill?.pill) {
       elMobileQtyWrap.innerHTML = "";
@@ -4570,13 +4575,83 @@ optionGroups.forEach((group) => {
   });
 
   if (isReadOnlyView) {
+    wrap.classList.add("shop-pd-read-only-gift");
+    if (Array.isArray(variants) && variants.length) {
+      const topVariantSection = wrap.querySelector(".shop-pd-scroll > .shop-pd-options");
+      if (topVariantSection) {
+        const variantNodes = Array.from(topVariantSection.querySelectorAll("[data-variant-index]"));
+        const selectedNode = variantNodes.find((node) => node.classList.contains("is-selected")) || variantNodes[0] || null;
+        variantNodes.forEach((node) => {
+          if (node !== selectedNode) {
+            node.remove();
+            return;
+          }
+          node.classList.remove("is-clickable");
+          node.style.pointerEvents = "none";
+          if ("disabled" in node) node.disabled = true;
+        });
+      }
+    }
+    wrap.querySelectorAll(".shop-pd-option-edit, .shop-pd-option-gear-btn").forEach((node) => node.remove());
+    wrap.querySelectorAll(".shop-pd-option-card.is-clickable, .shop-pd-option-summary, .shop-pd-option-variant-btn").forEach((node) => {
+      node.classList.remove("is-clickable");
+      node.style.pointerEvents = "none";
+      if ("disabled" in node) node.disabled = true;
+    });
+    wrap.querySelectorAll(".shop-pd-ingredient-controls .qty-btn").forEach((node) => {
+      node.style.display = "none";
+      if ("disabled" in node) node.disabled = true;
+    });
+    wrap.querySelectorAll(".shop-pd-option-qty-btn").forEach((node) => {
+      node.style.display = "none";
+      if ("disabled" in node) node.disabled = true;
+    });
     const footer = wrap.querySelector(".shop-pd-footer");
     if (footer) footer.style.display = "none";
     if (mobileProductActionsState.onAddToCart && elMobileAddToCartBtn) {
       elMobileAddToCartBtn.removeEventListener("click", mobileProductActionsState.onAddToCart);
       mobileProductActionsState.onAddToCart = null;
     }
-    if (elMobileProductActions) {
+    if (isMobile && elMobileProductActions && elMobileAddToCartBtn) {
+      elMobileProductActions.classList.remove("hidden");
+      elMobileProductActions.classList.add("is-read-only-back");
+      if (elMobileAddressActions) {
+        elMobileAddressActions.classList.add("hidden");
+      }
+      if (elMobileCartActions) {
+        elMobileCartActions.classList.add("hidden");
+        if (elMobileCartActionsCart) elMobileCartActionsCart.classList.add("hidden");
+        if (elMobileCartActionsCheckout) elMobileCartActionsCheckout.classList.add("hidden");
+      }
+      if (elMobileQtyWrap) {
+        elMobileQtyWrap.innerHTML = "";
+      }
+      const mobilePricesWrap = elMobileAddToCartBtn.querySelector(".shop-pd-action-prices");
+      if (mobilePricesWrap) mobilePricesWrap.classList.add("hidden");
+      const mobileOldPrice = elMobileAddToCartBtn.querySelector(".shop-pd-action-old");
+      if (mobileOldPrice) {
+        mobileOldPrice.textContent = "";
+        mobileOldPrice.classList.add("hidden");
+      }
+      if (elMobileProductPrice) {
+        elMobileProductPrice.textContent = "";
+      }
+      if (elMobileProductLabel) {
+        elMobileProductLabel.textContent = "Вернуться в корзину";
+      }
+      elMobileAddToCartBtn.disabled = false;
+      mobileProductActionsState.onAddToCart = () => {
+        if (typeof onBack === "function") {
+          onBack();
+          return;
+        }
+        showCartView();
+      };
+      elMobileAddToCartBtn.addEventListener("click", mobileProductActionsState.onAddToCart);
+      if (elActiveOrdersSheetCollapsed) {
+        elActiveOrdersSheetCollapsed.classList.add("hidden");
+      }
+    } else if (elMobileProductActions) {
       elMobileProductActions.classList.add("hidden");
     }
   }
