@@ -1,16 +1,18 @@
 (function () {
   const body = document.body;
   const mobileShell = document.getElementById("adminMobileShell");
+  const mobileShellHandle = document.getElementById("adminMobileShellHandle");
   const shell = document.getElementById("adminMobileNavShell");
   const railShell = document.getElementById("adminMobileRailShell");
   const railNav = document.getElementById("adminMobileRail");
   const mainContainer = document.querySelector(".main-container");
   const sidebar = document.getElementById("app-sidebar");
 
-  if (!body || !mobileShell || !shell || !railShell || !railNav) return;
+  if (!body || !mobileShell || !mobileShellHandle || !shell || !railShell || !railNav) return;
 
   const MOBILE_MEDIA = "(max-width: 768px)";
   const activePage = String(body.dataset.adminActivePage || "").trim();
+  const chatHref = String(body.dataset.adminChatUrl || "/dashboard/chat").trim() || "/dashboard/chat";
   const mediaQuery = window.matchMedia(MOBILE_MEDIA);
 
   const NAV_ITEMS = [
@@ -23,7 +25,7 @@
     { key: "team", href: "/dashboard/team", label: "Команда", icon: "fa-user-tie" },
     {
       key: "chat",
-      href: "/dashboard/chat",
+      href: chatHref,
       label: "Чаты",
       icon: "fa-comments",
       id: "mobileChatNavLink",
@@ -37,6 +39,32 @@
   let railSyncRaf = 0;
   let bodyObserver = null;
   let sourceObserver = null;
+  let shellCollapsed = false;
+  let shellDragPointerId = null;
+  let shellDragTouchId = null;
+  let shellDragStartX = 0;
+  let shellDragStartY = 0;
+  let shellDragMaxOffset = 0;
+  let shellDragCurrentOffset = 0;
+  let shellDragBaseOffset = 0;
+  let shellDragAxis = "";
+  let shellDragMoved = false;
+  let shellDragStartedCollapsed = false;
+  let shellSuppressClickUntil = 0;
+
+  const MOBILE_SHELL_STATE_KEY = "admin-mobile-shell-collapsed";
+  const MOBILE_SHELL_DRAG_LOCK_PX = 3;
+  const MOBILE_SHELL_DRAG_TRIGGER_PX = 18;
+  const MOBILE_SHELL_METRICS_EVENT = "admin-mobile-shell-metrics-change";
+  const MOBILE_SHELL_CLICK_SUPPRESS_MS = 360;
+  const MOBILE_SHELL_SNAP_MIN_MS = 320;
+  const MOBILE_SHELL_SNAP_MAX_MS = 620;
+  const MOBILE_SHELL_SNAP_EXPAND_BASE_MS = 420;
+  const MOBILE_SHELL_SNAP_COLLAPSE_BASE_MS = 360;
+  const MOBILE_SHELL_FADE_MIN_MS = 220;
+  const MOBILE_SHELL_FADE_RATIO = 0.72;
+  const MOBILE_SHELL_SNAP_EXPAND_EASE = "cubic-bezier(.22,1,.36,1)";
+  const MOBILE_SHELL_SNAP_COLLAPSE_EASE = "cubic-bezier(.3,.78,.22,1)";
 
   const ADAPTERS = {
     orders: resolveOrdersModel,
@@ -69,6 +97,256 @@
 
   function isMobile() {
     return !!(mediaQuery && mediaQuery.matches);
+  }
+
+  function canUseShellSwipe() {
+    if (!isMobile()) return false;
+    if (body.classList.contains("sidebar-open")) return false;
+    if (body.classList.contains("sheet-open")) return false;
+    if (body.classList.contains("modal-open")) return false;
+    return true;
+  }
+
+  function readStoredShellCollapsed() {
+    try {
+      return localStorage.getItem(MOBILE_SHELL_STATE_KEY) === "1";
+    } catch (_err) {
+      return false;
+    }
+  }
+
+  function persistShellCollapsed(value) {
+    try {
+      localStorage.setItem(MOBILE_SHELL_STATE_KEY, value ? "1" : "0");
+    } catch (_err) {}
+  }
+
+  function getShellHandleZoneHeight() {
+    const styles = window.getComputedStyle(mobileShell);
+    const raw = parseFloat(styles.getPropertyValue("--admin-mobile-shell-handle-zone-h"));
+    return Number.isFinite(raw) && raw > 0 ? raw : 22;
+  }
+
+  function getShellCollapsedOffset() {
+    const rect = mobileShell.getBoundingClientRect();
+    const handleZone = getShellHandleZoneHeight();
+    return Math.max(0, Math.round(Math.max(0, rect.height - handleZone)));
+  }
+
+  function syncShellHandleState() {
+    mobileShellHandle.setAttribute("aria-expanded", shellCollapsed ? "false" : "true");
+    mobileShell.setAttribute("data-collapsed", shellCollapsed ? "1" : "0");
+  }
+
+  function clearShellSnapMotion() {
+    mobileShell.style.removeProperty("--admin-mobile-shell-snap-duration");
+    mobileShell.style.removeProperty("--admin-mobile-shell-snap-ease");
+    mobileShell.style.removeProperty("--admin-mobile-shell-fade-duration");
+  }
+
+  function setShellSnapMotion(nextCollapsed, fromOffsetOverride) {
+    if (!isMobile()) {
+      clearShellSnapMotion();
+      return;
+    }
+
+    const maxOffset = getShellCollapsedOffset();
+    const nextOffset = nextCollapsed ? maxOffset : 0;
+    const rawFrom = Number(fromOffsetOverride);
+    const fallbackFrom = shellCollapsed ? maxOffset : 0;
+    const fromOffset = Number.isFinite(rawFrom)
+      ? Math.max(0, Math.min(maxOffset, Math.round(rawFrom)))
+      : fallbackFrom;
+    const distance = Math.max(0, Math.abs(nextOffset - fromOffset));
+    const progress = maxOffset > 0 ? Math.min(1, distance / maxOffset) : 1;
+    const baseDuration = nextCollapsed
+      ? MOBILE_SHELL_SNAP_COLLAPSE_BASE_MS
+      : MOBILE_SHELL_SNAP_EXPAND_BASE_MS;
+    const duration = Math.max(
+      MOBILE_SHELL_SNAP_MIN_MS,
+      Math.min(MOBILE_SHELL_SNAP_MAX_MS, Math.round(baseDuration + (progress * 180)))
+    );
+    const fadeDuration = Math.max(
+      MOBILE_SHELL_FADE_MIN_MS,
+      Math.round(duration * MOBILE_SHELL_FADE_RATIO)
+    );
+
+    mobileShell.style.setProperty("--admin-mobile-shell-snap-duration", `${duration}ms`);
+    mobileShell.style.setProperty(
+      "--admin-mobile-shell-snap-ease",
+      nextCollapsed ? MOBILE_SHELL_SNAP_COLLAPSE_EASE : MOBILE_SHELL_SNAP_EXPAND_EASE
+    );
+    mobileShell.style.setProperty("--admin-mobile-shell-fade-duration", `${fadeDuration}ms`);
+  }
+
+  function syncShellLiveMetrics(offsetOverride) {
+    const dragging = shellDragPointerId != null
+      || shellDragTouchId != null
+      || mobileShell.classList.contains("is-shell-dragging");
+    const freezeChatLayoutDuringDrag = dragging && activePage === "chat";
+    if (!isMobile()) {
+      body.style.removeProperty("--admin-mobile-shell-live-offset");
+      body.style.removeProperty("--admin-mobile-shell-visible-height");
+      document.dispatchEvent(new CustomEvent(MOBILE_SHELL_METRICS_EVENT, {
+        detail: {
+          collapsed: false,
+          dragging: false,
+          liveOffset: 0,
+          maxOffset: 0,
+          visibleHeight: 0,
+        },
+      }));
+      return;
+    }
+
+    const handleZone = getShellHandleZoneHeight();
+    const measuredHeight = Math.max(0, Number(mobileShell.getBoundingClientRect().height || 0));
+    const shellHeight = Math.max(
+      handleZone,
+      dragging && shellDragMaxOffset > 0
+        ? shellDragMaxOffset + handleZone
+        : measuredHeight,
+    );
+    const maxOffset = Math.max(
+      0,
+      dragging && shellDragMaxOffset > 0
+        ? shellDragMaxOffset
+        : (shellHeight - handleZone),
+    );
+    const rawOffset = Number.isFinite(Number(offsetOverride))
+      ? Number(offsetOverride)
+      : (shellCollapsed ? maxOffset : 0);
+    const liveOffset = Math.max(0, Math.min(maxOffset, rawOffset));
+    const visibleHeight = Math.max(handleZone, Math.max(0, shellHeight - liveOffset));
+
+    if (!freezeChatLayoutDuringDrag) {
+      body.style.setProperty("--admin-mobile-shell-live-offset", `${Number(liveOffset.toFixed(3))}px`);
+      body.style.setProperty("--admin-mobile-shell-visible-height", `${Number(visibleHeight.toFixed(3))}px`);
+    }
+    document.dispatchEvent(new CustomEvent(MOBILE_SHELL_METRICS_EVENT, {
+      detail: {
+        collapsed: shellCollapsed,
+        dragging,
+        liveOffset,
+        maxOffset,
+        visibleHeight,
+      },
+    }));
+  }
+
+  function applyShellCollapsedState(nextCollapsed, options) {
+    const config = options && typeof options === "object" ? options : {};
+    if (config.skipAnimation === true) {
+      clearShellSnapMotion();
+    } else {
+      setShellSnapMotion(nextCollapsed === true, config.fromOffset);
+    }
+    shellCollapsed = nextCollapsed === true;
+    body.classList.toggle("admin-mobile-shell-collapsed", shellCollapsed);
+    syncShellHandleState();
+    if (config.skipPersist !== true) {
+      persistShellCollapsed(shellCollapsed);
+    }
+    if (config.keepDragOffset !== true) {
+      mobileShell.classList.remove("is-shell-dragging");
+      mobileShell.style.removeProperty("--admin-mobile-shell-base-offset");
+    }
+    syncShellLiveMetrics(shellCollapsed ? getShellCollapsedOffset() : 0);
+  }
+
+  function resetShellDrag() {
+    shellDragPointerId = null;
+    shellDragTouchId = null;
+    shellDragStartX = 0;
+    shellDragStartY = 0;
+    shellDragMaxOffset = 0;
+    shellDragCurrentOffset = 0;
+    shellDragBaseOffset = 0;
+    shellDragAxis = "";
+    shellDragMoved = false;
+    shellDragStartedCollapsed = false;
+    mobileShell.classList.remove("is-shell-dragging");
+    mobileShell.style.removeProperty("--admin-mobile-shell-base-offset");
+  }
+
+  function beginShellDrag(clientX, clientY) {
+    shellDragStartX = Number(clientX || 0);
+    shellDragStartY = Number(clientY || 0);
+    shellDragMaxOffset = getShellCollapsedOffset();
+    shellDragBaseOffset = shellCollapsed ? shellDragMaxOffset : 0;
+    shellDragCurrentOffset = shellDragBaseOffset;
+    shellDragAxis = "";
+    shellDragMoved = false;
+    shellDragStartedCollapsed = shellCollapsed;
+    mobileShell.classList.add("is-shell-dragging");
+    mobileShell.style.setProperty(
+      "--admin-mobile-shell-base-offset",
+      `${Number(shellDragBaseOffset.toFixed(3))}px`,
+    );
+    syncShellLiveMetrics(shellDragBaseOffset);
+  }
+
+  function updateShellDrag(clientX, clientY) {
+    if (!canUseShellSwipe()) return false;
+    const deltaX = Number(clientX || 0) - shellDragStartX;
+    const deltaY = Number(clientY || 0) - shellDragStartY;
+    const absX = Math.abs(deltaX);
+    const absY = Math.abs(deltaY);
+    if (!shellDragAxis) {
+      if (absX < MOBILE_SHELL_DRAG_LOCK_PX && absY < MOBILE_SHELL_DRAG_LOCK_PX) return false;
+      shellDragAxis = absY >= absX ? "y" : "x";
+    }
+    if (shellDragAxis !== "y") return false;
+    if (!shellDragMoved && absY < MOBILE_SHELL_DRAG_LOCK_PX) return false;
+    shellDragMoved = true;
+    const maxOffset = shellDragMaxOffset > 0 ? shellDragMaxOffset : getShellCollapsedOffset();
+    shellDragCurrentOffset = Math.max(0, Math.min(maxOffset, shellDragBaseOffset + deltaY));
+    mobileShell.style.setProperty(
+      "--admin-mobile-shell-base-offset",
+      `${Number(shellDragCurrentOffset.toFixed(3))}px`,
+    );
+    syncShellLiveMetrics(shellDragCurrentOffset);
+    return true;
+  }
+
+  function finishShellDrag(cancelled) {
+    const hadActiveDrag = shellDragPointerId != null || shellDragTouchId != null;
+    if (!hadActiveDrag) return;
+    if (!shellDragMoved) {
+      resetShellDrag();
+      return;
+    }
+    const maxOffset = shellDragMaxOffset > 0 ? shellDragMaxOffset : getShellCollapsedOffset();
+    const threshold = Math.max(MOBILE_SHELL_DRAG_TRIGGER_PX, Math.round(maxOffset * 0.32));
+    const releasedOffset = shellDragCurrentOffset;
+    let nextCollapsed = shellDragStartedCollapsed;
+    const shouldSuppressClick = shellDragMoved;
+
+    if (!cancelled && shellDragMoved) {
+      if (shellDragStartedCollapsed) {
+        nextCollapsed = shellDragCurrentOffset > Math.max(0, maxOffset - threshold);
+      } else {
+        nextCollapsed = shellDragCurrentOffset >= threshold;
+      }
+    }
+
+    resetShellDrag();
+    if (shouldSuppressClick) {
+      shellSuppressClickUntil = Date.now() + MOBILE_SHELL_CLICK_SUPPRESS_MS;
+    }
+    applyShellCollapsedState(nextCollapsed, {
+      skipPersist: false,
+      fromOffset: releasedOffset,
+    });
+  }
+
+  function resolveTrackedTouch(touchList, trackedId) {
+    if (trackedId == null || !touchList) return null;
+    for (let index = 0; index < touchList.length; index += 1) {
+      const touch = touchList[index];
+      if (touch && touch.identifier === trackedId) return touch;
+    }
+    return null;
   }
 
   function isChatEnabled() {
@@ -384,7 +662,17 @@
       }
     });
 
-    if (!mobile) return;
+    if (!mobile) {
+      mobileShell.classList.remove("is-shell-dragging");
+      mobileShell.style.removeProperty("--admin-mobile-shell-base-offset");
+      clearShellSnapMotion();
+      syncShellLiveMetrics(0);
+      return;
+    }
+    applyShellCollapsedState(shellCollapsed, {
+      skipPersist: true,
+      skipAnimation: true,
+    });
     centerActiveItem(nav, nav.querySelector(".admin-mobile-nav-link.is-active"), "auto");
   }
 
@@ -393,6 +681,7 @@
       railNav.innerHTML = "";
       railShell.classList.add("hidden");
       railShell.setAttribute("aria-hidden", "true");
+      syncShellLiveMetrics(shellDragPointerId != null || shellDragTouchId != null ? shellDragCurrentOffset : undefined);
       return;
     }
 
@@ -430,6 +719,7 @@
     });
 
     centerActiveItem(railNav, railNav.querySelector(".admin-mobile-rail-link.is-active"), "smooth");
+    syncShellLiveMetrics(shellDragPointerId != null || shellDragTouchId != null ? shellDragCurrentOffset : undefined);
   }
 
   function syncRailNow() {
@@ -494,6 +784,104 @@
     });
   }
 
+  function bindShellGestures() {
+    if (mobileShell.dataset.dragBound === "1") return;
+    mobileShell.dataset.dragBound = "1";
+
+    mobileShell.addEventListener("pointerdown", function (event) {
+      if (!canUseShellSwipe()) return;
+      if (event.button !== 0) return;
+      if (shellDragTouchId != null) return;
+      if (activePage === "chat" && !(event.target && event.target.closest && event.target.closest("#adminMobileShellHandle"))) {
+        return;
+      }
+      shellDragPointerId = event.pointerId;
+      beginShellDrag(event.clientX, event.clientY);
+    });
+
+    mobileShell.addEventListener("pointermove", function (event) {
+      if (shellDragPointerId == null || event.pointerId !== shellDragPointerId) return;
+      if (!updateShellDrag(event.clientX, event.clientY)) return;
+      event.preventDefault();
+      event.stopPropagation();
+    }, { passive: false });
+
+    mobileShell.addEventListener("touchstart", function (event) {
+      if (!canUseShellSwipe()) return;
+      if (event.touches.length !== 1) return;
+      if (shellDragPointerId != null) return;
+      if (activePage === "chat" && !(event.target && event.target.closest && event.target.closest("#adminMobileShellHandle"))) {
+        return;
+      }
+      const touch = event.touches[0];
+      shellDragTouchId = touch.identifier;
+      beginShellDrag(touch.clientX, touch.clientY);
+    }, { passive: true });
+
+    mobileShell.addEventListener("touchmove", function (event) {
+      const touch = resolveTrackedTouch(event.touches, shellDragTouchId)
+        || resolveTrackedTouch(event.changedTouches, shellDragTouchId);
+      if (!touch) return;
+      if (!updateShellDrag(touch.clientX, touch.clientY)) return;
+      event.preventDefault();
+      event.stopPropagation();
+    }, { passive: false });
+
+    ["pointerup", "pointercancel", "lostpointercapture"].forEach(function (eventName) {
+      mobileShell.addEventListener(eventName, function () {
+        finishShellDrag(eventName !== "pointerup");
+      }, { passive: true });
+    });
+
+    mobileShell.addEventListener("touchend", function () {
+      finishShellDrag(false);
+    }, { passive: true });
+
+    mobileShell.addEventListener("touchcancel", function () {
+      finishShellDrag(true);
+    }, { passive: true });
+
+    mobileShell.addEventListener("click", function (event) {
+      if (Date.now() >= shellSuppressClickUntil) return;
+      event.preventDefault();
+      event.stopPropagation();
+    }, true);
+
+    mobileShellHandle.addEventListener("click", function (event) {
+      if (!canUseShellSwipe()) return;
+      if (Date.now() < shellSuppressClickUntil) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      if (mobileShell.classList.contains("is-shell-dragging")) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      event.preventDefault();
+      applyShellCollapsedState(!shellCollapsed, {
+        skipPersist: false,
+        fromOffset: shellCollapsed ? getShellCollapsedOffset() : 0,
+      });
+    });
+  }
+
+  function bindShellMotionCleanup() {
+    if (mobileShell.dataset.motionCleanupBound === "1") return;
+    mobileShell.dataset.motionCleanupBound = "1";
+
+    mobileShell.addEventListener("transitionend", function (event) {
+      if (event.target !== mobileShell) return;
+      if (event.propertyName !== "transform") return;
+      if (mobileShell.classList.contains("is-shell-dragging")) return;
+      clearShellSnapMotion();
+    });
+  }
+
+  shellCollapsed = readStoredShellCollapsed();
+  bindShellGestures();
+  bindShellMotionCleanup();
   ensureBottomNavBuilt();
   syncBottomNav();
   bindObservers();

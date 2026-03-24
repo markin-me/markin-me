@@ -4718,7 +4718,7 @@
 
   function buildOrderRow(order) {
     const row = document.createElement("div");
-    row.className = "order-row order-list-card js-order";
+    row.className = "order-row order-list-card js-order shared-order-summary-row";
     row.setAttribute("role", "button");
     row.setAttribute("tabindex", "0");
     row.setAttribute("draggable", isCourierWorkspace ? "false" : "true");

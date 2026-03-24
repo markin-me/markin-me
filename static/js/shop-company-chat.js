@@ -9,7 +9,9 @@
   const closeBtn = document.getElementById("shopCompanyChatCloseBtn");
   const feed = document.getElementById("shopCompanyChatFeed");
   const thread = document.getElementById("shopCompanyChatThread");
+  const footerIsland = document.getElementById("shopCompanyChatFooterIsland");
   const composer = document.getElementById("shopCompanyChatComposer");
+  const sendBtn = composer ? composer.querySelector(".shop-company-chat-composer__btn--send") : null;
   const selectionToolbar = document.getElementById("shopCompanyChatSelectionToolbar");
   const selectionCloseBtn = document.getElementById("shopCompanyChatSelectionCloseBtn");
   const selectionCountEl = document.getElementById("shopCompanyChatSelectionCount");
@@ -143,6 +145,18 @@
   const CHAT_EMOJI_SHEET_SETTLE_MS = 280;
   const CHAT_ATTACHMENT_BOTTOM_PIN_MS = 900;
   const CHAT_SCROLL_DOWN_SHOW_DISTANCE_PX = 6;
+  const IOS_CHAT_KEYBOARD_SYNC_BURST_DELAYS_MS = [16, 48, 96, 160, 240, 320];
+  const IOS_CHAT_KEYBOARD_SCROLL_REPAIR_DELAYS_MS = [16, 64, 140, 240];
+  const IOS_CHAT_KEYBOARD_MOTION_SYNC_BURST_MS = 320;
+  const IOS_CHAT_KEYBOARD_FOCUSED_LIFT_SYNC_MS = 420;
+  const CHAT_FEED_EDGE_SPRING_TOUCH_LOCK_PX = 4;
+  const CHAT_FEED_EDGE_SPRING_TOUCH_HOLD_DEADBAND_PX = 1.5;
+  const CHAT_FEED_EDGE_SPRING_EDGE_EPSILON_PX = 1;
+  const CHAT_FEED_EDGE_SPRING_MOBILE_MAX_SHIFT_PX = 112;
+  const CHAT_FEED_EDGE_SPRING_DISTANCE_GAIN = 1.36;
+  const CHAT_FEED_EDGE_SPRING_RELEASE_STIFFNESS = 170;
+  const CHAT_FEED_EDGE_SPRING_RELEASE_DAMPING = 26;
+  const CHAT_FEED_EDGE_SPRING_ENABLED = false;
   const CHAT_REACTION_PENDING_TTL_MS = 10000;
   const CHAT_TYPING_HEARTBEAT_MS = 500;
   const CHAT_TYPING_IDLE_STOP_MS = 2800;
@@ -215,6 +229,7 @@
   let emojiDatasetPromise = null;
   let emojiPopoverMode = "composer";
   let emojiPopoverReactionMessageId = "";
+  let suppressComposerSubmitUntil = 0;
 
   const CHAT_QUICK_ORDER_ID = "order";
   const CHAT_QUICK_ORDER_QUESTION = "\u0413\u0434\u0435 \u043c\u043e\u0439 \u0437\u0430\u043a\u0430\u0437?";
@@ -371,7 +386,11 @@
   let mobileKeyboardViewportVisualShift = 0;
   let mobilePageScrollRepairRaf = 0;
   let mobilePageScrollRepairUntil = 0;
-  let shortFeedTouchBlockGesture = null;
+  let feedEdgeSpringShift = 0;
+  let feedEdgeSpringVelocity = 0;
+  let feedEdgeSpringRaf = 0;
+  let feedEdgeSpringPinRaf = 0;
+  let feedEdgeSpringTouchState = null;
   let mobileKeyboardTrackedFeedBottomDistance = null;
   let sharedPullInFlight = false;
   let sharedHistoryHasMore = false;
@@ -470,7 +489,7 @@
   let chatOrderFooterOutsideHandler = null;
 
   const LONG_PRESS_MS = 430;
-  const SWIPE_REPLY_TRIGGER = 72;
+  const SWIPE_REPLY_TRIGGER = 56;
   const HEART_DOUBLE_TAP_MS = 280;
   const HEART_DOUBLE_TAP_MOVE_PX = 24;
   const ORDER_CARD_MOUSE_DRAG_START_PX = 5;
@@ -519,6 +538,344 @@
 
   function isFeedVerticallyScrollable() {
     return getFeedMaxScrollTop() > 1;
+  }
+
+  function hasFeedMessagesForEdgeSpring() {
+    return !!(
+      thread
+      && thread.querySelector
+      && thread.querySelector(".shop-company-chat-row[data-message-id]")
+    );
+  }
+
+  function shouldUseFeedEdgeSpring() {
+    if (CHAT_FEED_EDGE_SPRING_ENABLED !== true) return false;
+    return !!(
+      feed
+      && thread
+      && overlay
+      && overlay.classList.contains("is-open")
+      && isMobileChatViewport()
+      && hasFeedMessagesForEdgeSpring()
+    );
+  }
+
+  function setFeedEdgeSpringTouchState(active, edge) {
+    const nextActive = active === true;
+    const nextEdge = nextActive ? String(edge || "") : "";
+    if (!feedEdgeSpringTouchState) {
+      if (!nextActive) return;
+      feedEdgeSpringTouchState = {
+        id: null,
+        startX: 0,
+        startY: 0,
+      startedAtTop: false,
+      startedAtBottom: false,
+      lastAppliedX: 0,
+      lastAppliedY: 0,
+      locked: false,
+      active: nextActive,
+      edge: nextEdge,
+      };
+      return;
+    }
+    feedEdgeSpringTouchState.active = nextActive;
+    feedEdgeSpringTouchState.edge = nextEdge;
+  }
+
+  function isFeedEdgeSpringTouchActive(edge) {
+    if (!feedEdgeSpringTouchState || feedEdgeSpringTouchState.active !== true) return false;
+    if (!edge) return true;
+    return feedEdgeSpringTouchState.edge === String(edge || "");
+  }
+
+  function isFeedEdgeSpringPositionControlled() {
+    return isFeedEdgeSpringTouchActive()
+      || Math.abs(Number(feedEdgeSpringShift || 0)) >= 0.1
+      || !!feedEdgeSpringRaf;
+  }
+
+  function stopFeedEdgeSpringAnimation() {
+    if (!feedEdgeSpringRaf) return;
+    cancelAnimationFrame(feedEdgeSpringRaf);
+    feedEdgeSpringRaf = 0;
+  }
+
+  function getFeedEdgeSpringMaxShift() {
+    return CHAT_FEED_EDGE_SPRING_MOBILE_MAX_SHIFT_PX;
+  }
+
+  function setFeedEdgeSpringShift(valuePx) {
+    const maxShift = getFeedEdgeSpringMaxShift();
+    const raw = Number(valuePx || 0);
+    const next = Number.isFinite(raw)
+      ? Math.max(-maxShift, Math.min(maxShift, raw))
+      : 0;
+    if (Math.abs(next - feedEdgeSpringShift) < 0.01) return feedEdgeSpringShift;
+    feedEdgeSpringShift = next;
+    if (feed) {
+      if (Math.abs(next) < 0.1) {
+        feed.style.setProperty("--shop-company-chat-edge-spring-shift", "0px");
+      } else {
+        feed.style.setProperty(
+          "--shop-company-chat-edge-spring-shift",
+          String(Number(next.toFixed(3))) + "px"
+        );
+      }
+    }
+    return feedEdgeSpringShift;
+  }
+
+  function computeFeedEdgeSpringShift(distancePx, direction) {
+    const rawDistance = Math.max(0, Number(distancePx || 0));
+    if (rawDistance <= 0) return 0;
+    const maxShift = getFeedEdgeSpringMaxShift();
+    const resisted = maxShift * (
+      1 - (1 / (((rawDistance * CHAT_FEED_EDGE_SPRING_DISTANCE_GAIN) / maxShift) + 1))
+    );
+    return direction === "bottom" ? -resisted : resisted;
+  }
+
+  function releaseFeedEdgeSpring(options) {
+    const opts = options || {};
+    const immediate = opts.immediate === true;
+    stopFeedEdgeSpringAnimation();
+    stopFeedEdgeSpringPinWatcher();
+    setFeedEdgeSpringTouchState(false);
+    if (immediate || Math.abs(feedEdgeSpringShift) < 0.1) {
+      feedEdgeSpringVelocity = 0;
+      setFeedEdgeSpringShift(0);
+      return;
+    }
+
+    feedEdgeSpringRaf = requestAnimationFrame(function step(now) {
+      if (!shouldUseFeedEdgeSpring()) {
+        feedEdgeSpringRaf = 0;
+        feedEdgeSpringVelocity = 0;
+        setFeedEdgeSpringShift(0);
+        return;
+      }
+
+      const prevNow = Number(step._prevNow || now);
+      const dt = Math.max(0.001, Math.min(0.034, (now - prevNow) / 1000));
+      step._prevNow = now;
+
+      const displacement = Number(feedEdgeSpringShift || 0);
+      const acceleration = (
+        (-CHAT_FEED_EDGE_SPRING_RELEASE_STIFFNESS * displacement)
+        - (CHAT_FEED_EDGE_SPRING_RELEASE_DAMPING * feedEdgeSpringVelocity)
+      );
+      feedEdgeSpringVelocity += acceleration * dt;
+      const nextDisplacement = displacement + (feedEdgeSpringVelocity * dt);
+      if (
+        (displacement > 0 && nextDisplacement <= 0)
+        || (displacement < 0 && nextDisplacement >= 0)
+      ) {
+        feedEdgeSpringRaf = 0;
+        feedEdgeSpringVelocity = 0;
+        setFeedEdgeSpringShift(0);
+        return;
+      }
+      setFeedEdgeSpringShift(nextDisplacement);
+
+      if (Math.abs(feedEdgeSpringShift) < 0.24 && Math.abs(feedEdgeSpringVelocity) < 2.4) {
+        feedEdgeSpringRaf = 0;
+        feedEdgeSpringVelocity = 0;
+        setFeedEdgeSpringShift(0);
+        return;
+      }
+
+      feedEdgeSpringRaf = requestAnimationFrame(step);
+    });
+  }
+
+  function pinFeedToEdge(edge) {
+    if (!feed) return;
+    if (edge === "top") {
+      if (Number(feed.scrollTop || 0) > 0) feed.scrollTop = 0;
+      return;
+    }
+    if (edge === "bottom") {
+      const maxTop = getFeedMaxScrollTop();
+      if (Math.abs(Number(feed.scrollTop || 0) - maxTop) > 0.5) {
+        feed.scrollTop = maxTop;
+      }
+    }
+  }
+
+  function stopFeedEdgeSpringPinWatcher() {
+    if (!feedEdgeSpringPinRaf) return;
+    cancelAnimationFrame(feedEdgeSpringPinRaf);
+    feedEdgeSpringPinRaf = 0;
+  }
+
+  function startFeedEdgeSpringPinWatcher(edge) {
+    const targetEdge = String(edge || "");
+    if (targetEdge !== "top" && targetEdge !== "bottom") return;
+    stopFeedEdgeSpringPinWatcher();
+    const tick = function () {
+      feedEdgeSpringPinRaf = 0;
+      if (!shouldUseFeedEdgeSpring()) return;
+      if (!isFeedEdgeSpringTouchActive(targetEdge)) return;
+      pinFeedToEdge(targetEdge);
+      feedEdgeSpringPinRaf = requestAnimationFrame(tick);
+    };
+    feedEdgeSpringPinRaf = requestAnimationFrame(tick);
+  }
+
+  function isFeedAtTop() {
+    if (!feed) return false;
+    return Number(feed.scrollTop || 0) <= CHAT_FEED_EDGE_SPRING_EDGE_EPSILON_PX;
+  }
+
+  function isFeedAtBottom() {
+    if (!feed) return false;
+    const maxTop = getFeedMaxScrollTop();
+    if (maxTop <= CHAT_FEED_EDGE_SPRING_EDGE_EPSILON_PX) return true;
+    return (maxTop - Number(feed.scrollTop || 0)) <= CHAT_FEED_EDGE_SPRING_EDGE_EPSILON_PX;
+  }
+
+  function resolveFeedEdgeSpringTouch(touchList) {
+    if (!feedEdgeSpringTouchState || feedEdgeSpringTouchState.id == null || !touchList) return null;
+    for (let index = 0; index < touchList.length; index += 1) {
+      const touch = touchList[index];
+      if (touch && touch.identifier === feedEdgeSpringTouchState.id) return touch;
+    }
+    return null;
+  }
+
+  function beginFeedEdgeSpringTouch(event) {
+    if (!shouldUseFeedEdgeSpring()) {
+      feedEdgeSpringTouchState = null;
+      releaseFeedEdgeSpring({ immediate: true });
+      return;
+    }
+    if (!event || event.touches.length !== 1) {
+      feedEdgeSpringTouchState = null;
+      return;
+    }
+    const targetEl = event.target && event.target.closest ? event.target : null;
+    if (targetEl && targetEl.closest(".shop-company-chat-order-card-strip")) {
+      feedEdgeSpringTouchState = null;
+      return;
+    }
+    stopEmojiSheetBottomDistanceStabilization();
+    stopFeedSmoothScroll();
+    stopFeedEdgeSpringAnimation();
+    stopFeedEdgeSpringPinWatcher();
+    feedEdgeSpringVelocity = 0;
+    setFeedEdgeSpringShift(0);
+    setFeedEdgeSpringTouchState(false);
+    const touch = event.touches[0];
+    feedEdgeSpringTouchState = {
+      id: touch.identifier,
+      startX: Number(touch.clientX || 0),
+      startY: Number(touch.clientY || 0),
+      startedAtTop: isFeedAtTop(),
+      startedAtBottom: isFeedAtBottom(),
+      lastAppliedX: Number(touch.clientX || 0),
+      lastAppliedY: Number(touch.clientY || 0),
+      locked: false,
+      active: false,
+      edge: "",
+    };
+  }
+
+  function updateFeedEdgeSpringTouch(event) {
+    const state = feedEdgeSpringTouchState;
+    if (!state) return false;
+    if (!shouldUseFeedEdgeSpring()) {
+      releaseFeedEdgeSpring({ immediate: true });
+      return false;
+    }
+    if (!event || event.touches.length !== 1) {
+      releaseFeedEdgeSpring();
+      return false;
+    }
+    const targetEl = event.target && event.target.closest ? event.target : null;
+    if (targetEl && targetEl.closest(".shop-company-chat-order-card-strip")) {
+      releaseFeedEdgeSpring({ immediate: true });
+      return false;
+    }
+
+    const touch = resolveFeedEdgeSpringTouch(event.touches) || resolveFeedEdgeSpringTouch(event.changedTouches);
+    if (!touch) return false;
+    const touchX = Number(touch.clientX || 0);
+    const touchY = Number(touch.clientY || 0);
+    const dx = touchX - state.startX;
+    const dy = touchY - state.startY;
+    const absX = Math.abs(dx);
+    const absY = Math.abs(dy);
+
+    let desiredEdge = "";
+    const maxTop = getFeedMaxScrollTop();
+    if (maxTop <= CHAT_FEED_EDGE_SPRING_EDGE_EPSILON_PX) {
+      if (Math.abs(dy) > 0.1) desiredEdge = dy >= 0 ? "top" : "bottom";
+    } else if (dy > 0 && (state.startedAtTop === true || isFeedAtTop())) {
+      desiredEdge = "top";
+    } else if (dy < 0 && (state.startedAtBottom === true || isFeedAtBottom())) {
+      desiredEdge = "bottom";
+    }
+
+    if (!state.locked) {
+      if (absY < CHAT_FEED_EDGE_SPRING_TOUCH_LOCK_PX || absY <= absX) return false;
+      if (!desiredEdge) return false;
+      state.locked = true;
+      state.edge = desiredEdge;
+      state.active = true;
+      state.lastAppliedX = touchX;
+      state.lastAppliedY = touchY;
+      setFeedEdgeSpringTouchState(true, desiredEdge);
+      startFeedEdgeSpringPinWatcher(desiredEdge);
+    }
+
+    if (!state.edge) return false;
+    const holdDx = Math.abs(touchX - Number(state.lastAppliedX || state.startX));
+    const holdDy = Math.abs(touchY - Number(state.lastAppliedY || state.startY));
+    if (
+      holdDx < CHAT_FEED_EDGE_SPRING_TOUCH_HOLD_DEADBAND_PX
+      && holdDy < CHAT_FEED_EDGE_SPRING_TOUCH_HOLD_DEADBAND_PX
+    ) {
+      event.preventDefault();
+      return true;
+    }
+    state.lastAppliedX = touchX;
+    state.lastAppliedY = touchY;
+    pinFeedToEdge(state.edge);
+
+    const outwardDistance = state.edge === "bottom"
+      ? Math.max(0, -dy)
+      : Math.max(0, dy);
+    if (outwardDistance <= 0.1) {
+      event.preventDefault();
+      setFeedEdgeSpringShift(0);
+      return true;
+    }
+
+    event.preventDefault();
+    stopFeedEdgeSpringAnimation();
+    feedEdgeSpringVelocity = 0;
+    setFeedEdgeSpringShift(
+      computeFeedEdgeSpringShift(outwardDistance, state.edge)
+    );
+    return true;
+  }
+
+  function endFeedEdgeSpringTouch(options) {
+    const state = feedEdgeSpringTouchState;
+    stopFeedEdgeSpringPinWatcher();
+    setFeedEdgeSpringTouchState(false);
+    feedEdgeSpringTouchState = null;
+    if (!state) return;
+    if (options && options.immediate === true) {
+      releaseFeedEdgeSpring({ immediate: true });
+      return;
+    }
+    if (state.locked || Math.abs(feedEdgeSpringShift) >= 0.1) {
+      releaseFeedEdgeSpring();
+      return;
+    }
+    releaseFeedEdgeSpring({ immediate: true });
   }
 
   function animateCountBadgeTick(badge) {
@@ -971,6 +1328,7 @@
 
   function applyFeedBottomDistanceSnapshot(distance) {
     if (!feed) return false;
+    if (isFeedEdgeSpringPositionControlled()) return false;
     const raw = Number(distance);
     if (!Number.isFinite(raw)) return false;
     const nextTop = Number(feed.scrollHeight || 0) - Number(feed.clientHeight || 0) - Math.max(0, raw);
@@ -1039,6 +1397,7 @@
   function stabilizeFeedBottomDistance(distance, durationMs) {
     const target = Number(distance);
     if (!Number.isFinite(target) || target < 0) return;
+    if (isFeedEdgeSpringPositionControlled()) return;
     const duration = Math.max(120, Number(durationMs || CHAT_EMOJI_SHEET_SETTLE_MS));
     stopEmojiSheetBottomDistanceStabilization();
 
@@ -5077,8 +5436,12 @@
 
   function shouldPreferEmojiAssetGlyph(glyphClassName, emojiValue) {
     const cls = String(glyphClassName || "");
-    if (cls.indexOf("shop-company-chat-emoji-glyph--pill") === -1) return false;
-    return normalizeReactionValue(emojiValue) === normalizeReactionValue("\u2764\uFE0F");
+    const isCompactReactionGlyph = (
+      cls.indexOf("shop-company-chat-emoji-glyph--pill") !== -1
+      || cls.indexOf("shop-company-chat-emoji-glyph--reaction") !== -1
+    );
+    if (!isCompactReactionGlyph) return false;
+    return true;
   }
 
   function createEmojiAtlasGlyph(glyphClassName, emojiValue) {
@@ -6259,10 +6622,47 @@
     return document.activeElement === node;
   }
 
-  function repairLockedPageScrollForChat() {
-    if (!chatBodyScrollLockState || !overlay.classList.contains("is-open") || !isIOSMobileBrowser()) {
-      return false;
+  function shouldRetainComposerFocusOnMobileSend() {
+    return isMobileChatViewport()
+      && shouldUseNativeMobileEmojiKeyboard()
+      && overlay.classList.contains("is-open");
+  }
+
+  function syncComposerSendButtonFocusLock() {
+    if (!sendBtn) return;
+    if (
+      shouldRetainComposerFocusOnMobileSend()
+      && input
+      && !input.disabled
+      && document.activeElement === input
+    ) {
+      sendBtn.setAttribute("tabindex", "-1");
+      return;
     }
+    sendBtn.removeAttribute("tabindex");
+  }
+
+  function finalizeComposerSendUi(options) {
+    const opts = options || {};
+    const refocusInput = opts.refocusInput === true;
+    input.value = "";
+    syncComposerRichPreview({});
+    if (refocusInput && !input.disabled) {
+      focusChatTextField(input);
+    }
+    syncComposerSendButtonFocusLock();
+  }
+
+  function submitComposerMessage() {
+    const done = sendUserMessage(input.value);
+    if (!done) return false;
+    stopLocalTypingSession({ flush: true });
+    finalizeComposerSendUi({ refocusInput: shouldRetainComposerFocusOnMobileSend() });
+    return true;
+  }
+
+  function repairLockedPageScrollForChat() {
+    if (!chatBodyScrollLockState || !overlay.classList.contains("is-open") || !isIOSMobileBrowser()) return false;
     const expectedY = Math.max(0, Number(chatBodyScrollLockY || 0));
     const currentY = Math.max(
       0,
@@ -6280,6 +6680,24 @@
     return true;
   }
 
+  function hasLockedPageScrollDriftForChat() {
+    if (!chatBodyScrollLockState || !overlay.classList.contains("is-open") || !isIOSMobileBrowser()) {
+      return false;
+    }
+    const expectedY = Math.max(0, Number(chatBodyScrollLockY || 0));
+    const currentY = Math.max(
+      0,
+      Number(window.pageYOffset || window.scrollY || document.documentElement.scrollTop || 0)
+    );
+    const expectedTop = "-" + String(expectedY) + "px";
+    const bodyStyle = document.body.style;
+    return (
+      Math.abs(currentY - expectedY) >= 1
+      || bodyStyle.position !== "fixed"
+      || bodyStyle.top !== expectedTop
+    );
+  }
+
   function armLockedPageScrollRepair(durationMs) {
     if (!isIOSMobileBrowser()) return;
     const duration = Math.max(160, Number(durationMs || 0) || 0);
@@ -6294,7 +6712,8 @@
     if (!chatBodyScrollLockState || !overlay.classList.contains("is-open") || !isIOSMobileBrowser()) {
       return false;
     }
-    if (hasFocusedChatTextInput()) return true;
+    if (isFeedEdgeSpringPositionControlled()) return false;
+    if (hasLockedPageScrollDriftForChat()) return true;
     return Date.now() < Number(mobilePageScrollRepairUntil || 0);
   }
 
@@ -6489,6 +6908,7 @@
     hideEmojiPopover();
     bindMobileKeyboardViewportSync();
     setMobileKeyboardInset(0);
+    releaseFeedEdgeSpring({ immediate: true });
     const shouldLockPageBeforeOpen = isIOSMobileBrowser();
     if (shouldLockPageBeforeOpen) {
       lockBackgroundPageScrollForChat();
@@ -6597,6 +7017,7 @@
     if (pendingDeleteConfirm) closeDeleteConfirm();
     cancelEditingMessage();
     resetFeedImageDrop();
+    releaseFeedEdgeSpring({ immediate: true });
     overlay.classList.remove("is-open");
     overlay.setAttribute("aria-hidden", "true");
     syncOpenButtonActiveState();
@@ -8206,11 +8627,12 @@
     if (entry.time) {
       const meta = document.createElement("div");
       meta.className = "shop-company-chat-meta";
-
+      const metaMain = document.createElement("div");
+      metaMain.className = "shop-company-chat-meta-main";
       const time = document.createElement("span");
       time.className = "shop-company-chat-time";
       time.textContent = entry.time;
-      meta.appendChild(time);
+      metaMain.appendChild(time);
 
       if (entry.role === "user") {
         const status = getOutgoingDeliveryStatus(entry);
@@ -8218,9 +8640,10 @@
         statusEl.className = "shop-company-chat-status shop-company-chat-status--" + status;
         statusEl.setAttribute("aria-label", status === "read" ? "\u041f\u0440\u043e\u0447\u0438\u0442\u0430\u043d\u043e" : status === "delivered" ? "\u0414\u043e\u0441\u0442\u0430\u0432\u043b\u0435\u043d\u043e" : "\u041e\u0442\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u043e");
         statusEl.innerHTML = getOutgoingStatusIconMarkup(status);
-        meta.appendChild(statusEl);
+        metaMain.appendChild(statusEl);
       }
 
+      meta.appendChild(metaMain);
       bubble.appendChild(meta);
     }
 
@@ -8426,6 +8849,23 @@
   }
 
   function reconcileThreadChildren(descriptors) {
+    const canAnimateLayoutShift = (
+      descriptors.length > 0
+      && thread.childElementCount > 0
+      && thread.childElementCount <= 180
+      && document.visibilityState !== "hidden"
+      && !(typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches)
+    );
+    const firstRectsByKey = new Map();
+    if (canAnimateLayoutShift) {
+      Array.from(thread.children).forEach(function (node) {
+        if (!(node instanceof HTMLElement) || !node.dataset) return;
+        const key = String(node.dataset.renderKey || "");
+        if (!key || firstRectsByKey.has(key)) return;
+        firstRectsByKey.set(key, node.getBoundingClientRect());
+      });
+    }
+
     const existingByKey = new Map();
     Array.from(thread.children).forEach(function (node) {
       const key = node && node.dataset ? String(node.dataset.renderKey || "") : "";
@@ -8470,6 +8910,40 @@
       thread.removeChild(anchor);
       anchor = next;
     }
+
+    if (!canAnimateLayoutShift || firstRectsByKey.size === 0) return;
+    const movedDurationMs = 460;
+    const movedEasing = "cubic-bezier(.2,.8,.2,1)";
+    Array.from(thread.children).forEach(function (node) {
+      if (!(node instanceof HTMLElement) || !node.dataset) return;
+      const key = String(node.dataset.renderKey || "");
+      if (!key) return;
+      const lastRect = node.getBoundingClientRect();
+      const firstRect = firstRectsByKey.get(key) || null;
+      if (!firstRect) {
+        if (typeof node.animate === "function") {
+          node.animate(
+            [
+              { transform: "translateY(10px)", opacity: 0.01 },
+              { transform: "translateY(0px)", opacity: 1 },
+            ],
+            { duration: 340, easing: movedEasing, fill: "both" }
+          );
+        }
+        return;
+      }
+      const deltaY = firstRect.top - lastRect.top;
+      if (Math.abs(deltaY) < 0.5) return;
+      if (typeof node.animate === "function") {
+        node.animate(
+          [
+            { transform: "translateY(" + String(deltaY) + "px)" },
+            { transform: "translateY(0px)" },
+          ],
+          { duration: movedDurationMs, easing: movedEasing, fill: "both" }
+        );
+      }
+    });
   }
 
   function renderThread() {
@@ -8498,6 +8972,9 @@
       });
     });
     reconcileThreadChildren(descriptors);
+    if (!hasFeedMessagesForEdgeSpring()) {
+      releaseFeedEdgeSpring({ immediate: true });
+    }
 
     if (reactionMessageId) {
       const exists = Array.from(thread.querySelectorAll("[data-message-id]")).some(function (el) {
@@ -9478,6 +9955,7 @@
 
   function shouldKeepFeedPinnedToBottom() {
     if (!feed) return false;
+    if (isFeedEdgeSpringPositionControlled()) return false;
     return (feed.scrollHeight - feed.scrollTop - feed.clientHeight) <= 28;
   }
 
@@ -9825,18 +10303,32 @@
     return Number.isFinite(parsed) ? parsed : 0;
   }
 
+  function readDefinedCssLengthPx(styles, propertyName) {
+    if (!styles || !propertyName) return null;
+    const raw = styles.getPropertyValue(propertyName);
+    if (typeof raw !== "string" || !raw.trim()) return null;
+    const parsed = parseCssLengthPx(raw);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
   function getMobileChatSheetTopOffsetPx() {
     const rootStyles = window.getComputedStyle(document.documentElement);
     const bodyStyles = document.body ? window.getComputedStyle(document.body) : null;
-    const headerHeight = Math.max(
-      parseCssLengthPx(rootStyles.getPropertyValue("--header-height")),
-      parseCssLengthPx(bodyStyles && bodyStyles.getPropertyValue("--header-height"))
-    );
+    const overlayStyles = overlay ? window.getComputedStyle(overlay) : null;
+    const explicitChatTopGap = [
+      readDefinedCssLengthPx(overlayStyles, "--shop-company-chat-sheet-top-gap"),
+      readDefinedCssLengthPx(rootStyles, "--shop-company-chat-sheet-top-gap"),
+      readDefinedCssLengthPx(bodyStyles, "--shop-company-chat-sheet-top-gap"),
+    ].find((value) => value !== null);
+    if (explicitChatTopGap !== undefined) {
+      return Math.max(0, Math.round(explicitChatTopGap));
+    }
+
     const topGap = Math.max(
-      parseCssLengthPx(rootStyles.getPropertyValue("--shop-sheet-top-gap")),
-      parseCssLengthPx(bodyStyles && bodyStyles.getPropertyValue("--shop-sheet-top-gap"))
+      readDefinedCssLengthPx(rootStyles, "--shop-sheet-top-gap") || 0,
+      readDefinedCssLengthPx(bodyStyles, "--shop-sheet-top-gap") || 0
     );
-    return Math.max(0, Math.round(headerHeight + topGap));
+    return Math.max(0, Math.round(topGap));
   }
 
   function clearIosKeyboardSheetLock() {
@@ -9939,14 +10431,95 @@
     overlay.style.setProperty("--shop-chat-scroll-down-composer-extra", String(next) + "px");
   }
 
-  function computeScrollDownComposerExtraOffset() {
-    if (!overlay.classList.contains("is-open")) return 0;
+  function setMobileFooterOverlayHeight(valuePx) {
+    const raw = Number(valuePx || 0);
+    const next = Number.isFinite(raw) && raw > 0 ? Math.round(raw) : 0;
+    const prev = Number(overlay.dataset.mobileFooterOverlayHeight || 0);
+    if (prev === next) return;
+    overlay.dataset.mobileFooterOverlayHeight = String(next);
+    overlay.style.setProperty("--shop-chat-mobile-footer-overlay-height", String(next) + "px");
+  }
+
+  function setMobileThreadBottomInset(valuePx) {
+    const raw = Number(valuePx || 0);
+    const next = Number.isFinite(raw) && raw > 0 ? Math.round(raw) : 0;
+    const prev = Number(overlay.dataset.mobileThreadBottomInset || 0);
+    if (prev === next) return;
+    overlay.dataset.mobileThreadBottomInset = String(next);
+    overlay.style.setProperty("--shop-chat-mobile-thread-bottom-inset", String(next) + "px");
+  }
+
+  function syncMobileScrollDownPosition() {
+    if (!scrollDownBtn) return;
+    if (!overlay.classList.contains("is-open") || !isMobileChatViewport()) {
+      scrollDownBtn.style.removeProperty("right");
+      scrollDownBtn.style.removeProperty("bottom");
+      return;
+    }
+
+    const root = scrollDownBtn.offsetParent instanceof HTMLElement ? scrollDownBtn.offsetParent : scrollDownBtn.parentElement;
+    if (!(root instanceof HTMLElement) || !(sendBtn instanceof HTMLElement)) {
+      scrollDownBtn.style.removeProperty("right");
+      scrollDownBtn.style.removeProperty("bottom");
+      return;
+    }
+
+    const rootRect = root.getBoundingClientRect();
+    const sendRect = sendBtn.getBoundingClientRect();
+    const btnRect = scrollDownBtn.getBoundingClientRect();
+    const btnWidth = Math.max(
+      0,
+      Number(scrollDownBtn.offsetWidth || 0),
+      Number(btnRect.width || 0)
+    );
+    if (
+      rootRect.width <= 0
+      || rootRect.height <= 0
+      || sendRect.width <= 0
+      || sendRect.height <= 0
+      || btnWidth <= 0
+      || btnRect.height <= 0
+    ) {
+      scrollDownBtn.style.removeProperty("right");
+      scrollDownBtn.style.removeProperty("bottom");
+      return;
+    }
+
+    const sendCenterX = sendRect.left + (sendRect.width / 2);
+    const nextRight = Math.max(0, rootRect.right - sendCenterX - (btnWidth / 2));
+    const nextBottom = Math.max(18, rootRect.bottom - sendRect.top + 16);
+    scrollDownBtn.style.right = String(nextRight) + "px";
+    scrollDownBtn.style.bottom = String(nextBottom) + "px";
+  }
+
+  function getMobileFooterOverlayAnchor() {
     const selectionModeActive = (
       modalBody
       && modalBody.classList.contains("is-selection-mode")
       && !selectionToolbar.classList.contains("hidden")
     );
-    const anchor = selectionModeActive ? selectionToolbar : composer;
+    if (selectionModeActive) return selectionToolbar;
+    if (footerIsland && !footerIsland.classList.contains("hidden")) return footerIsland;
+    return composer;
+  }
+
+  function computeMobileFooterOverlayHeight() {
+    if (!overlay.classList.contains("is-open") || !isMobileChatViewport()) return 0;
+    const anchor = getMobileFooterOverlayAnchor();
+    if (!anchor || anchor.classList.contains("hidden")) return 0;
+    const outerHeight = getElementOuterHeightPx(anchor);
+    if (!Number.isFinite(outerHeight) || outerHeight <= 0) return 0;
+    return Math.max(0, Math.ceil(outerHeight));
+  }
+
+  function computeMobileThreadBottomInset() {
+    if (!overlay.classList.contains("is-open") || !isMobileChatViewport()) return 0;
+    return computeMobileFooterOverlayHeight();
+  }
+
+  function computeScrollDownComposerExtraOffset() {
+    if (!overlay.classList.contains("is-open")) return 0;
+    const anchor = getMobileFooterOverlayAnchor();
     if (!anchor || anchor.classList.contains("hidden")) return 0;
     const outerHeight = getElementOuterHeightPx(anchor);
     if (!Number.isFinite(outerHeight) || outerHeight <= 0) return 0;
@@ -9955,7 +10528,10 @@
   }
 
   function syncScrollDownComposerExtraOffsetNow() {
+    setMobileFooterOverlayHeight(computeMobileFooterOverlayHeight());
+    setMobileThreadBottomInset(computeMobileThreadBottomInset());
     setScrollDownComposerExtraOffset(computeScrollDownComposerExtraOffset());
+    syncMobileScrollDownPosition();
   }
 
   function scheduleScrollDownComposerExtraOffsetSync() {
@@ -10088,6 +10664,7 @@
       || hasFocusedChatTextInput()
       || isMobileKeyboardViewportCompressed(viewportBottom)
     );
+    const canSyncFeedBottomDistance = !isFeedEdgeSpringPositionControlled();
     const targetFeedBottomDistance = shouldUseTrackedFeedBottomDistance && Number.isFinite(trackedFeedBottomDistance)
       ? trackedFeedBottomDistance
       : currentFeedBottomDistance;
@@ -10112,21 +10689,21 @@
       overlay.classList.toggle("is-mobile-keyboard-open", next > 0);
     }
     scheduleScrollDownComposerExtraOffsetSync();
-    if (targetFeedBottomDistance != null) {
+    if (canSyncFeedBottomDistance && targetFeedBottomDistance != null) {
       applyFeedBottomDistanceSnapshot(targetFeedBottomDistance);
       requestAnimationFrame(function () {
         applyFeedBottomDistanceSnapshot(targetFeedBottomDistance);
       });
     }
     if (isAndroidMobileBrowser()) {
-      if (targetFeedBottomDistance != null && (
+      if (canSyncFeedBottomDistance && targetFeedBottomDistance != null && (
         next > 0
         || forceFeedBottomSync
         || hasFocusedChatTextInput()
         || isMobileKeyboardViewportCompressed(viewportBottom)
       )) {
         setMobileKeyboardTrackedFeedBottomDistance(targetFeedBottomDistance);
-      } else if (!hasFocusedChatTextInput()) {
+      } else if (canSyncFeedBottomDistance && !hasFocusedChatTextInput()) {
         setMobileKeyboardTrackedFeedBottomDistance(currentFeedBottomDistance);
       }
     }
@@ -10188,9 +10765,6 @@
     // Keep the relock only for Android where viewport motion compensation needs it.
     if (chatBodyScrollLockState && isAndroidMobileBrowser()) {
       restoreLockedPageScrollForChat();
-    }
-    if (chatBodyScrollLockState && isIOSMobileBrowser()) {
-      scheduleLockedPageScrollRepair();
     }
     if (isIOSMobileBrowser()) {
       requestAnimationFrame(syncIosOverlayViewportShift);
@@ -10256,9 +10830,18 @@
   }
 
   function handleMobileKeyboardViewportSyncEvent() {
+    if (isIOSMobileBrowser()) {
+      syncMobileKeyboardInsetNow();
+    }
     scheduleMobileKeyboardInsetSync();
-    scheduleLockedPageScrollRepair();
-    scheduleAndroidKeyboardViewportMotionSync(260);
+    if (!isIOSMobileBrowser() || shouldRunLockedPageScrollRepair()) {
+      scheduleLockedPageScrollRepair();
+    }
+    scheduleAndroidKeyboardViewportMotionSync(
+      isIOSMobileBrowser()
+        ? IOS_CHAT_KEYBOARD_MOTION_SYNC_BURST_MS
+        : 260
+    );
   }
 
   function scheduleMobileKeyboardInsetSync() {
@@ -10281,15 +10864,14 @@
       return;
     }
     if (isIOSMobileBrowser()) {
-      scheduleAndroidKeyboardViewportMotionSync(520);
-      window.setTimeout(scheduleLockedPageScrollRepair, 40);
-      window.setTimeout(scheduleLockedPageScrollRepair, 120);
-      window.setTimeout(scheduleLockedPageScrollRepair, 260);
-      window.setTimeout(scheduleLockedPageScrollRepair, 420);
-      window.setTimeout(scheduleMobileKeyboardInsetSync, 40);
-      window.setTimeout(scheduleMobileKeyboardInsetSync, 120);
-      window.setTimeout(scheduleMobileKeyboardInsetSync, 260);
-      window.setTimeout(scheduleMobileKeyboardInsetSync, 420);
+      syncMobileKeyboardInsetNow();
+      scheduleAndroidKeyboardViewportMotionSync(IOS_CHAT_KEYBOARD_MOTION_SYNC_BURST_MS);
+      IOS_CHAT_KEYBOARD_SCROLL_REPAIR_DELAYS_MS.forEach(function (delayMs) {
+        window.setTimeout(scheduleLockedPageScrollRepair, delayMs);
+      });
+      IOS_CHAT_KEYBOARD_SYNC_BURST_DELAYS_MS.forEach(function (delayMs) {
+        window.setTimeout(scheduleMobileKeyboardInsetSync, delayMs);
+      });
       return;
     }
     window.setTimeout(scheduleLockedPageScrollRepair, 40);
@@ -10309,7 +10891,8 @@
       return;
     }
     if (isIOSMobileBrowser()) {
-      scheduleAndroidKeyboardViewportMotionSync(720);
+      scheduleAndroidKeyboardViewportMotionSync(IOS_CHAT_KEYBOARD_FOCUSED_LIFT_SYNC_MS);
+      scheduleMobileKeyboardInsetSync();
     }
   }
 
@@ -10353,6 +10936,8 @@
     mobileKeyboardLastViewportBottom = 0;
     mobileKeyboardViewportVisualShift = 0;
     mobileKeyboardTrackedFeedBottomDistance = null;
+    setMobileFooterOverlayHeight(0);
+    setMobileThreadBottomInset(0);
     setScrollDownComposerExtraOffset(0);
     setMobileKeyboardInset(0);
     clearIosKeyboardSheetLock();
@@ -10398,6 +10983,7 @@
   }
 
   function scrollToBottom(smooth, fixTopClip, bottomGapPx) {
+    releaseFeedEdgeSpring({ immediate: true });
     const gapValue = Number(bottomGapPx);
     const gap = Number.isFinite(gapValue) && gapValue > 0 ? gapValue : 0;
     const target = Math.max(0, feed.scrollHeight - feed.clientHeight - gap);
@@ -10462,7 +11048,11 @@
     const badgeCount = getFeedScrollDownBadgeCount(liveEntries);
     const hasPending = badgeCount > 0;
     const shouldShow = hasPending || hiddenDistance >= CHAT_SCROLL_DOWN_SHOW_DISTANCE_PX;
+    const wasHidden = scrollDownBtn.classList.contains("hidden");
     scrollDownBtn.classList.toggle("hidden", !shouldShow);
+    if (shouldShow && wasHidden) {
+      requestAnimationFrame(syncMobileScrollDownPosition);
+    }
 
     const badge = ensureScrollDownBadge();
     if (!badge) return;
@@ -11995,21 +12585,80 @@
 
   composer.addEventListener("submit", function (event) {
     event.preventDefault();
-    const done = sendUserMessage(input.value);
-    if (!done) return;
-    stopLocalTypingSession({ flush: true });
-    input.value = "";
-    syncComposerRichPreview({});
+    if (Date.now() < suppressComposerSubmitUntil) return;
+    submitComposerMessage();
   });
+
+  if (sendBtn) {
+    let activeTouchId = null;
+    let touchMoved = false;
+    let startX = 0;
+    let startY = 0;
+
+    const resetSendTouch = function () {
+      activeTouchId = null;
+      touchMoved = false;
+      startX = 0;
+      startY = 0;
+    };
+
+    const resolveTrackedTouch = function (touchList) {
+      if (activeTouchId == null || !touchList) return null;
+      for (let index = 0; index < touchList.length; index += 1) {
+        const touch = touchList[index];
+        if (touch && touch.identifier === activeTouchId) return touch;
+      }
+      return null;
+    };
+
+    sendBtn.addEventListener("touchstart", function (event) {
+      resetSendTouch();
+      if (!shouldRetainComposerFocusOnMobileSend()) return;
+      if (event.touches.length !== 1) return;
+      const touch = event.touches[0];
+      activeTouchId = touch.identifier;
+      startX = Number(touch.clientX || 0);
+      startY = Number(touch.clientY || 0);
+    }, { passive: true });
+
+    sendBtn.addEventListener("touchmove", function (event) {
+      const touch = resolveTrackedTouch(event.touches) || resolveTrackedTouch(event.changedTouches);
+      if (!touch) return;
+      const dx = Math.abs(Number(touch.clientX || 0) - startX);
+      const dy = Math.abs(Number(touch.clientY || 0) - startY);
+      if (dx > 10 || dy > 10) {
+        touchMoved = true;
+      }
+    }, { passive: true });
+
+    sendBtn.addEventListener("touchend", function (event) {
+      const touch = resolveTrackedTouch(event.changedTouches) || resolveTrackedTouch(event.touches);
+      const shouldHandle = (
+        !!touch
+        && !touchMoved
+        && shouldRetainComposerFocusOnMobileSend()
+      );
+      resetSendTouch();
+      if (!shouldHandle) return;
+      event.preventDefault();
+      event.stopPropagation();
+      suppressComposerSubmitUntil = Date.now() + 420;
+      submitComposerMessage();
+    }, { passive: false });
+
+    sendBtn.addEventListener("touchcancel", resetSendTouch, { passive: true });
+
+    sendBtn.addEventListener("click", function (event) {
+      if (Date.now() >= suppressComposerSubmitUntil) return;
+      event.preventDefault();
+      event.stopPropagation();
+    });
+  }
 
   input.addEventListener("keydown", function (event) {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
-      const done = sendUserMessage(input.value);
-      if (!done) return;
-      stopLocalTypingSession({ flush: true });
-      input.value = "";
-      syncComposerRichPreview({});
+      submitComposerMessage();
       return;
     }
 
@@ -12058,6 +12707,7 @@
     scheduleMobileKeyboardInsetSyncBurst();
     scheduleLockedPageScrollRepair();
     scheduleAndroidFocusedComposerLift();
+    syncComposerSendButtonFocusLock();
   });
 
   input.addEventListener("blur", function () {
@@ -12065,12 +12715,15 @@
     disarmLockedPageScrollRepair();
     scheduleLocalTypingStop(CHAT_TYPING_BLUR_STOP_MS);
     scheduleMobileKeyboardInsetSyncBurst();
+    syncComposerSendButtonFocusLock();
   });
 
   attachBtn.addEventListener("click", function (event) {
     event.preventDefault();
     attachInput.click();
   });
+
+  syncComposerSendButtonFocusLock();
 
   attachInput.addEventListener("change", async function () {
     const files = Array.from(attachInput.files || []);
@@ -12241,6 +12894,8 @@
   }, true);
 
   thread.addEventListener("dblclick", function (event) {
+    if (Date.now() < suppressTapUntil) return;
+    if (isTouchGeneratedClick(event)) return;
     if (selectedMessageIds.size > 0) return;
     if (!canUseMessageHeartShortcutTarget(event.target)) return;
     const bubble = event.target.closest(".shop-company-chat-bubble[data-message-id]");
@@ -12304,12 +12959,10 @@
       bubble: bubble,
       startX: touch.clientX,
       startY: touch.clientY,
-      startTop: Math.max(0, Number(feed.scrollTop || 0)),
       lastX: touch.clientX,
       lastY: touch.clientY,
       swipeLocked: false,
       swipeRejected: false,
-      scrollLocked: false,
       swipeShift: 0,
       replyTriggered: false,
       longPressFired: false,
@@ -12328,6 +12981,10 @@
   }, { passive: true });
 
   thread.addEventListener("touchmove", function (event) {
+    if (event.defaultPrevented) {
+      clearTouchGesture();
+      return;
+    }
     if (orderCardTouchPan) {
       if (event.touches.length !== 1) {
         clearOrderCardTouchPan();
@@ -12373,6 +13030,10 @@
         touchAttachmentTap.moved = true;
       }
     }
+    if (isFeedEdgeSpringTouchActive()) {
+      clearTouchGesture();
+      return;
+    }
     if (!touchGesture || event.touches.length !== 1) return;
 
     const touch = event.touches[0];
@@ -12391,26 +13052,10 @@
     if (touchGesture.longPressFired) return;
     if (touchGesture.swipeRejected) return;
 
-    if (touchGesture.scrollLocked) {
-      event.preventDefault();
-      const prevTop = Math.max(0, Number(feed.scrollTop || 0));
-      const nextTop = clampFeedScrollTop(touchGesture.startTop - dy);
-      if (Math.abs(nextTop - prevTop) > 0.1) {
-        feed.scrollTop = nextTop;
-      }
-      return;
-    }
-
     if (!touchGesture.swipeLocked) {
       if (absX < 10 && absY < 10) return;
       if (absY > absX) {
-        touchGesture.scrollLocked = true;
-        event.preventDefault();
-        const prevTop = Math.max(0, Number(feed.scrollTop || 0));
-        const nextTop = clampFeedScrollTop(touchGesture.startTop - dy);
-        if (Math.abs(nextTop - prevTop) > 0.1) {
-          feed.scrollTop = nextTop;
-        }
+        clearTouchGesture();
         return;
       }
       if (dx <= 0) {
@@ -12630,48 +13275,55 @@
   }, { passive: false });
 
   feed.addEventListener("touchstart", function (event) {
-    shortFeedTouchBlockGesture = null;
-    if (!isIOSMobileBrowser() || !overlay.classList.contains("is-open")) return;
-    if (event.touches.length !== 1) return;
-    if (isFeedVerticallyScrollable()) return;
-    const targetEl = event.target && event.target.closest ? event.target : null;
-    if (targetEl && targetEl.closest(".shop-company-chat-order-card-strip")) return;
-    const touch = event.touches[0];
-    shortFeedTouchBlockGesture = {
-      startX: Number(touch.clientX || 0),
-      startY: Number(touch.clientY || 0),
-    };
+    const touch = event && event.touches && event.touches.length === 1 ? event.touches[0] : null;
+    if (touch) {
+      feed.dataset.shortDownPullTouchId = String(touch.identifier);
+      feed.dataset.shortDownPullStartX = String(Number(touch.clientX || 0));
+      feed.dataset.shortDownPullStartY = String(Number(touch.clientY || 0));
+    } else {
+      feed.dataset.shortDownPullTouchId = "";
+    }
+    beginFeedEdgeSpringTouch(event);
   }, { passive: true });
 
   feed.addEventListener("touchmove", function (event) {
-    if (!shortFeedTouchBlockGesture) return;
-    if (!isIOSMobileBrowser() || !overlay.classList.contains("is-open")) return;
-    if (event.touches.length !== 1) {
-      shortFeedTouchBlockGesture = null;
-      return;
+    if (event.defaultPrevented) return;
+    if (isMobileChatViewport() && !isFeedVerticallyScrollable()) {
+      const trackedId = String(feed.dataset.shortDownPullTouchId || "");
+      const startX = Number(feed.dataset.shortDownPullStartX || 0);
+      const startY = Number(feed.dataset.shortDownPullStartY || 0);
+      let trackedTouch = null;
+      const touchList = event.touches && event.touches.length ? event.touches : event.changedTouches;
+      if (touchList && trackedId) {
+        for (let i = 0; i < touchList.length; i += 1) {
+          const t = touchList[i];
+          if (String(t && t.identifier) === trackedId) {
+            trackedTouch = t;
+            break;
+          }
+        }
+      }
+      if (trackedTouch) {
+        const dx = Number(trackedTouch.clientX || 0) - startX;
+        const dy = Number(trackedTouch.clientY || 0) - startY;
+        if (dy > 6 && Math.abs(dy) > Math.abs(dx)) {
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
+      }
     }
-    if (isFeedVerticallyScrollable()) {
-      shortFeedTouchBlockGesture = null;
-      return;
-    }
-    const targetEl = event.target && event.target.closest ? event.target : null;
-    if (targetEl && targetEl.closest(".shop-company-chat-order-card-strip")) {
-      shortFeedTouchBlockGesture = null;
-      return;
-    }
-    const touch = event.touches[0];
-    const dx = Number(touch.clientX || 0) - shortFeedTouchBlockGesture.startX;
-    const dy = Number(touch.clientY || 0) - shortFeedTouchBlockGesture.startY;
-    if (Math.abs(dy) < 6 || Math.abs(dy) <= Math.abs(dx)) return;
-    event.preventDefault();
-  }, { passive: false });
+    if (updateFeedEdgeSpringTouch(event)) return;
+  }, { passive: false, capture: true });
 
   feed.addEventListener("touchend", function () {
-    shortFeedTouchBlockGesture = null;
+    feed.dataset.shortDownPullTouchId = "";
+    endFeedEdgeSpringTouch();
   }, { passive: true });
 
   feed.addEventListener("touchcancel", function () {
-    shortFeedTouchBlockGesture = null;
+    feed.dataset.shortDownPullTouchId = "";
+    endFeedEdgeSpringTouch({ immediate: true });
   }, { passive: true });
 
   reactionBar.addEventListener("click", function (event) {
@@ -12703,6 +13355,9 @@
   });
 
   feed.addEventListener("scroll", function () {
+    if (isFeedEdgeSpringTouchActive()) {
+      return;
+    }
     if (
       isAndroidMobileBrowser()
       && (

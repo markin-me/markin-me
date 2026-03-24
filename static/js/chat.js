@@ -1,7 +1,8 @@
-
+﻿
 (function () {
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+  const sharedOrderPanel = window.SharedOrderPanel || null;
 
   const CHAT_STORAGE_KEY = "dashboard:client-chat:v1";
   const CHAT_MOBILE_VIEW_STORAGE_KEY = `dashboard:chat:mobile:view:v1:${getTenantId()}`;
@@ -26,8 +27,36 @@
   const ACTIVE_ORDERS_VISIBILITY_REFRESH_DEBOUNCE_MS = 45000;
   const ACTIVE_CLIENT_CACHE_TTL_MS = 10 * 60 * 1000;
   const CHAT_AUTOSCROLL_MS = 170;
+  const CHAT_THREAD_LAYOUT_BURST_GAP_MS = 110;
+  const CHAT_THREAD_LAYOUT_BURST_COOLDOWN_MS = 260;
   const CHAT_SCROLL_DOWN_SHOW_DISTANCE_PX = 6;
   const CHAT_STICKY_BOTTOM_THRESHOLD_PX = 18;
+  const CHAT_PINNED_BOTTOM_PERSIST_THRESHOLD_PX = 2;
+  const CHAT_THREAD_EDGE_SPRING_TOUCH_LOCK_PX = 4;
+  const CHAT_THREAD_EDGE_SPRING_TOUCH_HOLD_DEADBAND_PX = 1.5;
+  const CHAT_THREAD_EDGE_SPRING_EDGE_EPSILON_PX = 1;
+  const CHAT_THREAD_EDGE_SPRING_ENABLED = false;
+  const CHAT_THREAD_EDGE_SPRING_KEYBOARD_BOTTOM_EPSILON_PX = 28;
+  const CHAT_THREAD_EDGE_SPRING_MAX_SHIFT_PX = 144;
+  const CHAT_THREAD_EDGE_SPRING_MOBILE_MAX_SHIFT_PX = 112;
+  const CHAT_THREAD_EDGE_SPRING_DISTANCE_GAIN = 1.36;
+  const CHAT_THREAD_EDGE_SPRING_WHEEL_FACTOR = 0.24;
+  const CHAT_THREAD_EDGE_SPRING_RELEASE_STIFFNESS = 170;
+  const CHAT_THREAD_EDGE_SPRING_RELEASE_DAMPING = 26;
+  const CHAT_THREAD_EDGE_SPRING_WHEEL_RELEASE_MS = 90;
+  const CHAT_THREAD_EDGE_SPRING_WHEEL_NUDGE_ENABLED = false;
+  const CHAT_THREAD_EDGE_SPRING_MOMENTUM_ENABLED = false;
+  const CHAT_THREAD_EDGE_SPRING_MOMENTUM_WINDOW_MS = 1400;
+  const CHAT_THREAD_EDGE_SPRING_MOMENTUM_ACTIVE_VELOCITY_WINDOW_MS = 240;
+  const CHAT_THREAD_EDGE_SPRING_MOMENTUM_EDGE_TRIGGER_VELOCITY_WINDOW_MS = 120;
+  const CHAT_THREAD_EDGE_SPRING_MOMENTUM_MIN_VELOCITY = 0.18;
+  const CHAT_THREAD_EDGE_SPRING_MOMENTUM_ARM_MIN_EDGE_DISTANCE_PX = 96;
+  const CHAT_THREAD_EDGE_SPRING_MOMENTUM_ARM_MAX_EDGE_DISTANCE_PX = 220;
+  const CHAT_THREAD_EDGE_SPRING_MOMENTUM_DISTANCE_FACTOR = 34;
+  const CHAT_THREAD_EDGE_SPRING_MOMENTUM_MAX_SHIFT_RATIO = 0.88;
+  const CHAT_THREAD_EDGE_SPRING_MOMENTUM_EDGE_REACH_EPSILON_PX = 4;
+  const CHAT_THREAD_EDGE_SPRING_MOBILE_BOTTOM_MAX_SHIFT_EXTRA_RATIO = 0.72;
+  const CHAT_THREAD_EDGE_SPRING_MOBILE_BOTTOM_DISTANCE_BOOST_MAX = 2.2;
   const CHAT_TYPING_HEARTBEAT_MS = 500;
   const CHAT_TYPING_IDLE_STOP_MS = 2800;
   const CHAT_TYPING_BLUR_STOP_MS = 180;
@@ -61,8 +90,11 @@
   const CHAT_THREAD_LOAD_MORE_THRESHOLD_PX = 20;
   const CHAT_TOUCH_CONTEXT_LONG_PRESS_MS = 430;
   const CHAT_TOUCH_CONTEXT_MOVE_CANCEL_PX = 9;
-  const CHAT_TOUCH_SWIPE_REPLY_TRIGGER_PX = 72;
+  const CHAT_TOUCH_SWIPE_REPLY_TRIGGER_PX = 56;
   const CHAT_TOUCH_SWIPE_MAX_SHIFT_PX = 96;
+  const CHAT_TOUCH_THREAD_NAV_LOCK_PX = 10;
+  const CHAT_TOUCH_THREAD_NAV_TRIGGER_PX = 72;
+  const CHAT_NATIVE_BOTTOM_BOUNCE_SETTLE_MS = 980;
   const CHAT_TOUCH_HEART_DOUBLE_TAP_MS = 280;
   const CHAT_TOUCH_HEART_DOUBLE_TAP_MOVE_PX = 24;
   const CHAT_COMPOSER_DRAFT_MAX_LENGTH = 8000;
@@ -262,8 +294,12 @@
     activeClientDataLoading: false,
     activeOrders: [],
     activeOrdersSignature: "[]",
+    orderStatuses: [],
+    orderStatusesLoaded: false,
+    orderStatusesLoading: false,
     headerOrderId: 0,
     headerOrderSnapshot: null,
+    headerOrderStatusMutationInFlight: false,
     q: "",
     requestToken: 0,
     editingMessageId: null,
@@ -354,6 +390,291 @@
   state.threadPinnedBottomByClient = sanitizeStoredThreadPinnedBottomByClient(state.store?.ui?.threadPinnedBottomByClient);
   state.clientsPager = createDefaultClientsPager();
 
+  function refreshDesktopHeaderDomRefs() {
+    dom.center.headerOrder = $("#chatHeaderOrder");
+    const headerRoot = dom.center.headerOrder || document;
+    dom.center.headerClientBtn = $(".order-col.order-client", headerRoot) || $("#chatHeaderClientBtn", headerRoot) || $("#chatHeaderClientBtn");
+    dom.center.headerName = $("#chatHeaderName", headerRoot) || $("#chatHeaderName");
+    dom.center.headerPhone = $("#chatHeaderPhone", headerRoot) || $("#chatHeaderPhone");
+    dom.center.headerLoading = $("#chatHeaderLoading");
+    dom.center.orderTitle = $("#chatOrderTitle");
+    dom.center.orderStatus = $("#chatOrderStatus", headerRoot) || $("#chatOrderStatus");
+    dom.center.orderKind = $("#chatOrderKind");
+    dom.center.orderId = $("#chatOrderId", headerRoot) || $("#chatOrderId");
+    dom.center.orderTime = $("#chatOrderTime", headerRoot) || $("#chatOrderTime");
+    dom.center.orderTimeIcon = $("#chatOrderTimeIcon", headerRoot) || $("#chatOrderTimeIcon");
+    dom.center.orderAddress = $("#chatOrderAddress", headerRoot) || $("#chatOrderAddress");
+    dom.center.orderComment = $("#chatOrderComment", headerRoot) || $("#chatOrderComment");
+    dom.center.orderTotal = $("#chatOrderTotal", headerRoot) || $("#chatOrderTotal");
+  }
+
+  function buildHeaderOrderStatusIconHtml(source) {
+    const iconValue = String(source?.icon || source?.status_icon || "").trim();
+    if (!iconValue) return '<i class="fas fa-circle"></i>';
+    if (isIconUrl(iconValue)) {
+      return `<img src="${escapeHtml(iconValue)}" alt="" loading="lazy">`;
+    }
+    return `<i class="${escapeHtml(normalizeIconClass(iconValue) || "fas fa-circle")}"></i>`;
+  }
+
+  function getSortedHeaderOrderStatuses() {
+    return [...(Array.isArray(state.orderStatuses) ? state.orderStatuses : [])]
+      .filter((status) => Number.isFinite(Number(status?.id)) && Number(status.id) > 0)
+      .sort((a, b) => (Number(a?.sort || 0) - Number(b?.sort || 0)) || (Number(a?.id || 0) - Number(b?.id || 0)));
+  }
+
+  function getHeaderOrderStatusMetaById(statusId) {
+    const id = Number(statusId || 0);
+    if (!Number.isFinite(id) || id <= 0) return null;
+    return getSortedHeaderOrderStatuses().find((status) => Number(status?.id) === id) || null;
+  }
+
+  function getHeaderOrderStatusMeta(order, fallbackText = "") {
+    const matched = getHeaderOrderStatusMetaById(order?.status_id);
+    if (matched) return matched;
+    return {
+      id: Number(order?.status_id || 0) || null,
+      code: String(order?.status_code || "").trim(),
+      title: String(order?.status_title || fallbackText || "").trim(),
+      icon: String(order?.status_icon || "").trim(),
+      is_final: Number(order?.status_is_final || 0) || 0,
+    };
+  }
+
+  function normalizeHeaderStatusCode(statusMeta) {
+    return String(statusMeta?.code || "").trim().toLowerCase();
+  }
+
+  function isHeaderDeliveredStatusMeta(statusMeta) {
+    return normalizeHeaderStatusCode(statusMeta) === "delivered";
+  }
+
+  function isHeaderCanceledStatusMeta(statusMeta) {
+    const code = normalizeHeaderStatusCode(statusMeta);
+    return code === "canceled" || code === "cancelled";
+  }
+
+  function isHeaderFinalStatusMeta(statusMeta) {
+    return Number(statusMeta?.is_final || 0) === 1 || isHeaderCanceledStatusMeta(statusMeta);
+  }
+
+  function isHeaderForbiddenStatusTransition(fromStatus, toStatus) {
+    return isHeaderDeliveredStatusMeta(fromStatus) && isHeaderCanceledStatusMeta(toStatus);
+  }
+
+  function getHeaderNextStatusMetaForOrder(order) {
+    const sortedStatuses = getSortedHeaderOrderStatuses();
+    if (!sortedStatuses.length) return null;
+    const currentStatusId = Number(order?.status_id || 0);
+    const currentIndex = sortedStatuses.findIndex((status) => Number(status?.id) === currentStatusId);
+    const currentStatus = currentIndex >= 0 ? sortedStatuses[currentIndex] : null;
+    if (currentIndex < 0) return sortedStatuses[0] || null;
+    if (isHeaderFinalStatusMeta(currentStatus)) return null;
+    const maxOffset = isHeaderDeliveredStatusMeta(currentStatus)
+      ? Math.max(0, sortedStatuses.length - currentIndex - 1)
+      : sortedStatuses.length;
+    for (let offset = 1; offset <= maxOffset; offset += 1) {
+      const candidate = sortedStatuses[(currentIndex + offset) % sortedStatuses.length];
+      if (!candidate) continue;
+      if (Number(candidate?.id || 0) === Number(currentStatus?.id || 0)) break;
+      if (isHeaderForbiddenStatusTransition(currentStatus, candidate)) continue;
+      return candidate;
+    }
+    return null;
+  }
+
+  function ensureHeaderOrderStatusesLoaded(force = false) {
+    if (state.orderStatusesLoading) return Promise.resolve();
+    if (!force && state.orderStatusesLoaded) return Promise.resolve();
+    state.orderStatusesLoading = true;
+    return apiJson("/api/admin/orders/statuses")
+      .then((json) => {
+        state.orderStatuses = Array.isArray(json?.data) ? json.data : [];
+        state.orderStatusesLoaded = true;
+      })
+      .catch((err) => {
+        console.error(err);
+        state.orderStatuses = [];
+        state.orderStatusesLoaded = true;
+      })
+      .finally(() => {
+        state.orderStatusesLoading = false;
+        if (dom.center.headerOrder) renderChatHeader();
+      });
+  }
+
+  function buildHeaderOrderStageButtonHtml(order, text) {
+    const currentTitle = String(text || "—").trim() || "—";
+    const currentStatus = order ? getHeaderOrderStatusMeta(order, currentTitle) : null;
+    const nextStatus = order ? getHeaderNextStatusMetaForOrder(order) : null;
+    const nextStatusId = Number(nextStatus?.id || 0);
+    const canCycle = Boolean(
+      order
+      && Number(order?.id || 0) > 0
+      && currentStatus
+      && !isHeaderFinalStatusMeta(currentStatus)
+      && Number.isFinite(nextStatusId)
+      && nextStatusId > 0
+      && !state.headerOrderStatusMutationInFlight
+    );
+    const nextTitle = canCycle
+      ? (String(nextStatus?.title || "").trim() || currentTitle)
+      : currentTitle;
+    const titleText = canCycle ? `${currentTitle} -> ${nextTitle}` : currentTitle;
+    const currentIconHtml = buildHeaderOrderStatusIconHtml(currentStatus || order);
+    const nextIconHtml = canCycle ? buildHeaderOrderStatusIconHtml(nextStatus) : "";
+    if (sharedOrderPanel && typeof sharedOrderPanel.buildOrderStageCycleButtonHtml === "function") {
+      const temp = document.createElement("div");
+      temp.innerHTML = sharedOrderPanel.buildOrderStageCycleButtonHtml({
+        orderId: Number(order?.id || 0),
+        canCycle,
+        currentTitle,
+        nextTitle,
+        titleText,
+        nextNote: "Сменить",
+        currentIconHtml,
+        nextIconHtml,
+        nextStatusId,
+      }).trim();
+      const button = temp.firstElementChild;
+      if (button) {
+        button.id = "chatOrderStatus";
+        if (!canCycle) {
+          button.disabled = true;
+          button.setAttribute("aria-disabled", "true");
+        } else {
+          button.removeAttribute("disabled");
+          button.setAttribute("aria-disabled", "false");
+        }
+        return button.outerHTML;
+      }
+    }
+    return '' +
+      `<button class="order-stage-btn${canCycle ? "" : " is-static"}" id="chatOrderStatus" type="button"${canCycle ? ` data-action="order-row-status-next" data-order-id="${escapeHtml(order?.id || "")}" data-next-status-id="${escapeHtml(nextStatusId)}" aria-disabled="false"` : ' disabled aria-disabled="true"'}>` +
+        '<span class="order-stage-btn-icon-shell" aria-hidden="true">' +
+          '<span class="order-stage-btn-icon-wrap order-stage-btn-icon-current">' +
+            currentIconHtml +
+          '</span>' +
+          (canCycle ? (
+            '<span class="order-stage-btn-icon-wrap order-stage-btn-icon-next">' +
+              nextIconHtml +
+            '</span>'
+          ) : '') +
+        '</span>' +
+        '<span class="order-stage-btn-content">' +
+          '<span class="order-stage-btn-panel order-stage-btn-panel-current">' +
+            `<span class="order-stage-btn-current">${escapeHtml(currentTitle)}</span>` +
+          '</span>' +
+          (canCycle ? (
+            '<span class="order-stage-btn-panel order-stage-btn-panel-next" aria-hidden="true">' +
+              `<span class="order-stage-btn-next">${escapeHtml(nextTitle)}</span>` +
+              '<span class="order-stage-btn-meta">Сменить</span>' +
+            '</span>'
+          ) : '') +
+        '</span>' +
+      '</button>';
+  }
+
+  function buildDesktopChatHeaderFallbackMarkup() {
+    return '' +
+      '<div class="order-col order-id">' +
+        '<div class="order-id-select-hit order-id-select-hit--readonly">' +
+          '<div class="order-id-num" id="chatOrderId">—</div>' +
+          '<div class="order-id-time" id="chatOrderTime">—</div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="order-col order-indicators">' +
+        '<span class="order-time-icon" id="chatOrderTimeIcon" aria-hidden="true"><i class="fas fa-calendar-day"></i></span>' +
+      '</div>' +
+      '<div class="order-col order-client">' +
+        '<div class="order-client-name"><i class="fas fa-user"></i><span class="order-client-name-text" id="chatHeaderName">—</span></div>' +
+        '<div class="order-client-phone muted">' +
+          '<i class="fas fa-phone"></i>' +
+          '<span class="order-client-phone-text" id="chatHeaderPhone">—</span>' +
+        '</div>' +
+      '</div>' +
+      '<div class="order-col order-address">' +
+        '<div class="order-address-line"><i class="fas fa-map-marker-alt"></i><span id="chatOrderAddress">—</span></div>' +
+        '<div class="order-address-comment muted"><i class="far fa-comment"></i><span id="chatOrderComment">—</span></div>' +
+      '</div>' +
+      '<div class="order-col order-stage">' + buildHeaderOrderStageButtonHtml(null, "—") + '</div>' +
+      '<div class="order-col order-total">' +
+        '<button type="button" class="order-payment-btn order-payment-cash is-empty" id="chatOrderTotal" tabindex="-1">—</button>' +
+      '</div>';
+  }
+
+  function ensureDesktopChatHeaderMarkup() {
+    refreshDesktopHeaderDomRefs();
+    if (!dom.center.headerOrder) return;
+
+    const headerOrder = dom.center.headerOrder;
+    if (headerOrder.dataset.sharedMarkupReady === "1") return;
+
+    const headerLoading = dom.center.headerLoading;
+    const orderTitle = dom.center.orderTitle;
+    const orderKind = dom.center.orderKind;
+    const timeIconHtml = '<span class="order-time-icon" id="chatOrderTimeIcon" aria-hidden="true"><i class="fas fa-calendar-day"></i></span>';
+    const customerNameHtml = '<span class="order-client-name-text" id="chatHeaderName">—</span>';
+    const customerPhoneHtml = '' +
+      '<div class="order-client-phone muted">' +
+        '<i class="fas fa-phone"></i>' +
+        '<span class="order-client-phone-text" id="chatHeaderPhone">—</span>' +
+      '</div>';
+    const addressLineHtml = '<div class="order-address-line"><i class="fas fa-map-marker-alt"></i><span id="chatOrderAddress">—</span></div>';
+    const addressCommentHtml = '<div class="order-address-comment muted"><i class="far fa-comment"></i><span id="chatOrderComment">—</span></div>';
+    const stageHtml = buildHeaderOrderStageButtonHtml(null, "—");
+    const paymentHtml = '<button type="button" class="order-payment-btn order-payment-cash is-empty" id="chatOrderTotal" tabindex="-1">—</button>';
+
+    if (headerLoading?.parentElement) headerLoading.parentElement.removeChild(headerLoading);
+    if (orderTitle?.parentElement) orderTitle.parentElement.removeChild(orderTitle);
+    if (orderKind?.parentElement) orderKind.parentElement.removeChild(orderKind);
+
+    headerOrder.classList.remove("chat-main-order", "chat-desktop-order-header");
+    headerOrder.classList.add("order-list-card", "shared-order-summary-row");
+    headerOrder.innerHTML = sharedOrderPanel && typeof sharedOrderPanel.buildOrderListRowInnerHtml === "function"
+      ? sharedOrderPanel.buildOrderListRowInnerHtml({
+        showMultiSelect: false,
+        orderIdNumHtml: '<div class="order-id-num" id="chatOrderId">—</div>',
+        createdAtHtml: '<div class="order-id-time" id="chatOrderTime">—</div>',
+        customerNameHtml,
+        customerPhoneHtml,
+        timeIconHtml,
+        addressLineHtml,
+        addressCommentHtml,
+        stageHtml,
+        paymentHtml,
+      })
+      : buildDesktopChatHeaderFallbackMarkup();
+
+    if (headerLoading) headerOrder.appendChild(headerLoading);
+    if (orderTitle) headerOrder.appendChild(orderTitle);
+    if (orderKind) headerOrder.appendChild(orderKind);
+
+    headerOrder.dataset.sharedMarkupReady = "1";
+    refreshDesktopHeaderDomRefs();
+    initHeaderClientOpenAction();
+  }
+
+  function isHeaderOrderPaid(order) {
+    const raw = order?.is_paid;
+    return Number(raw || 0) === 1 || raw === true;
+  }
+
+  function isHeaderOrderFullyRefunded(order) {
+    if (!order || !isHeaderOrderPaid(order)) return false;
+    const refundState = String(order?.refund_state || "").trim().toLowerCase();
+    const refundedTotal = Number(order?.refunded_total || 0) || 0;
+    const refundableTotal = Number(order?.refundable_total);
+    if (refundState === "full") return true;
+    if (refundedTotal <= 0) return false;
+    if (Number.isFinite(refundableTotal)) return refundableTotal <= 0.001;
+    return refundedTotal >= ((Number(order?.total_price || order?.total || 0) || 0) - 0.001);
+  }
+
+  function renderHeaderOrderPaymentIconHtml(paymentCode) {
+    return `<i class="fas ${escapeHtml(paymentIcon(paymentCode))}"></i>`;
+  }
+
   let emojiCategories = {};
   let emojiRecentList = [];
   let emojiActiveCategory = "people";
@@ -380,10 +701,49 @@
   let adminChatKeyboardMotionRaf = 0;
   let adminChatKeyboardMotionUntil = 0;
   let adminChatKeyboardViewportBaseBottom = 0;
+  let adminChatKeyboardViewportBaseHeight = 0;
   let adminChatKeyboardLastViewportBottom = 0;
+  let adminChatKeyboardLastInset = 0;
+  let adminChatKeyboardTrackedMessagesBottomDistance = null;
+  let adminChatKeyboardFocusSessionActive = false;
   let adminChatPageScrollRepairRaf = 0;
   let adminChatPageScrollRepairUntil = 0;
   let adminChatOverlayLayoutBound = false;
+  let adminChatThreadEdgeSpringShift = 0;
+  let adminChatThreadEdgeSpringVelocity = 0;
+  let adminChatThreadEdgeSpringRaf = 0;
+  let adminChatThreadEdgeSpringPinRaf = 0;
+  let adminChatThreadEdgeSpringWheelReleaseTimer = 0;
+  let adminChatThreadEdgeSpringTouchActive = false;
+  let adminChatThreadEdgeSpringTouchEdge = "";
+  let adminChatThreadEdgeSpringMomentumTouchActive = false;
+  let adminChatThreadEdgeSpringMomentumLastTouchEndAt = 0;
+  let adminChatThreadEdgeSpringMomentumBounceConsumed = false;
+  let adminChatThreadEdgeSpringMomentumLastScrollTop = 0;
+  let adminChatThreadEdgeSpringMomentumLastScrollAt = 0;
+  let adminChatThreadEdgeSpringMomentumLastVelocity = 0;
+  let adminChatThreadEdgeSpringMomentumLastActiveVelocity = 0;
+  let adminChatThreadEdgeSpringMomentumLastActiveVelocityAt = 0;
+  let adminChatThreadEdgeSpringMomentumArmedVelocity = 0;
+  let adminChatThreadEdgeSpringMomentumArmedEdge = "";
+  let adminChatThreadEdgeSpringMomentumWatchRaf = 0;
+  let adminChatThreadTouchGestureActive = false;
+  let adminChatThreadTouchGestureReleaseTimer = 0;
+  let adminChatRenderAutoScrollTimer = 0;
+  let adminChatDeferredAutoScrollTimer = 0;
+  let adminChatSuppressPinnedBottomUntil = 0;
+  let adminChatKeyboardCollapseBottomDistance = null;
+  let adminChatKeyboardCollapseInputAnchorSnapshot = null;
+  let adminChatKeyboardOpenInputAnchorSnapshot = null;
+  let adminChatKeyboardOpenBottomDistance = null;
+  let adminChatKeyboardInsetApplyToken = 0;
+  let threadLayoutAnimationLastRunAt = 0;
+  let threadLayoutAnimationQuietUntil = 0;
+  let threadLayoutAnimationToken = 0;
+
+  function shouldSuppressPinnedBottomAutoScroll() {
+    return Date.now() < Number(adminChatSuppressPinnedBottomUntil || 0);
+  }
 
   function getClientSwipeRowMain(row) {
     return row ? $(".chat-client-row-main", row) : null;
@@ -565,6 +925,8 @@
     if (pinnedBottomLayoutSyncRaf) return;
     pinnedBottomLayoutSyncRaf = window.requestAnimationFrame(() => {
       pinnedBottomLayoutSyncRaf = 0;
+      if (adminChatThreadTouchGestureActive) return;
+      if (shouldSuppressPinnedBottomAutoScroll()) return;
       const activeId = normalizeClientIdKey(state.activeClientId);
       if (!activeId) return;
       if (!isThreadPinnedBottomPreferred(activeId)) return;
@@ -574,10 +936,19 @@
   }
 
   function enforcePinnedBottomForActiveThread(reason = "") {
+    if (adminChatThreadTouchGestureActive) return false;
+    if (shouldSuppressPinnedBottomAutoScroll()) return false;
     const activeId = normalizeClientIdKey(state.activeClientId);
     if (!activeId) return false;
     if (!isThreadPinnedBottomPreferred(activeId)) return false;
-    scrollMessagesToBottom({ behavior: "auto", keepPending: true });
+    const keyboardOpen = !!(
+      document.body
+      && document.body.classList.contains("chat-mobile-keyboard-open")
+    );
+    scrollMessagesToBottom({
+      behavior: keyboardOpen ? "smooth-fast" : "auto",
+      keepPending: true,
+    });
     saveThreadScrollPosition(activeId);
     return true;
   }
@@ -612,18 +983,47 @@
     return !!(document.body && document.body.classList.contains("page-chat") && isChatMobileViewport());
   }
 
+  function shouldPreferNativeAdminMobileChatTouchHandling() {
+    return isAdminMobileChatLayout();
+  }
+
   function hasFocusedAdminChatTextInput() {
     const active = document.activeElement;
     return active === dom.center.input || active === dom.center.attachPreviewCaption;
   }
 
-  function getAdminChatHeaderOffsetPx() {
-    const rootStyles = window.getComputedStyle(document.documentElement);
-    const bodyStyles = document.body ? window.getComputedStyle(document.body) : null;
-    return Math.max(
-      parseCssLengthPx(rootStyles.getPropertyValue("--header-height")),
-      parseCssLengthPx(bodyStyles && bodyStyles.getPropertyValue("--header-height"))
-    );
+  function getFocusedAdminChatTextInput() {
+    const active = document.activeElement;
+    if (active === dom.center.input || active === dom.center.attachPreviewCaption) {
+      return active;
+    }
+    return null;
+  }
+
+  function isAdminChatEmptyThreadTouchTarget(target) {
+    const targetEl = target && target.closest ? target : null;
+    if (!targetEl) return false;
+    if (targetEl.closest(".chat-day-separator")) return false;
+    if (targetEl.closest(".chat-message-bubble")) return false;
+    if (targetEl.closest(".chat-message-attachment")) return false;
+    if (targetEl.closest(".chat-message-order-cards")) return false;
+    if (targetEl.closest(".chat-message-reaction-pill")) return false;
+    if (targetEl.closest("[data-chat-autolink]")) return false;
+    if (targetEl.closest("[data-chat-scroll-to-message]")) return false;
+    if (targetEl.closest("button,a,input,textarea,[contenteditable='true']")) return false;
+    return true;
+  }
+
+  function dismissAdminChatTextInputFocus() {
+    const activeField = getFocusedAdminChatTextInput();
+    if (!activeField || typeof activeField.blur !== "function") return false;
+    try {
+      activeField.blur();
+    } catch {
+      return false;
+    }
+    scheduleAdminChatKeyboardViewportSyncBurst();
+    return true;
   }
 
   function getAdminChatViewportHeight() {
@@ -643,9 +1043,36 @@
     );
   }
 
-  function getAdminChatViewportBottom() {
+  function getAdminChatViewportEffectiveOffsetTop() {
     const viewport = window.visualViewport;
     const viewportOffsetTop = viewport ? Number(viewport.offsetTop || 0) : 0;
+    if (!Number.isFinite(viewportOffsetTop) || viewportOffsetTop <= 0) {
+      return 0;
+    }
+    if (
+      isIOSMobileBrowser()
+      && isAdminMobileChatLayout()
+      && adminChatBodyScrollLockState
+      && (
+        hasFocusedAdminChatTextInput()
+        || (
+          adminChatKeyboardFocusSessionActive === true
+          && Math.max(0, Number(adminChatKeyboardLastInset || 0)) > 0
+        )
+      )
+    ) {
+      return 0;
+    }
+    return Math.round(viewportOffsetTop);
+  }
+
+  function getAdminChatViewportOffsetTop() {
+    return getAdminChatViewportEffectiveOffsetTop();
+  }
+
+  function getAdminChatViewportBottom() {
+    const viewport = window.visualViewport;
+    const viewportOffsetTop = getAdminChatViewportEffectiveOffsetTop();
     const viewportHeight = viewport ? Number(viewport.height || 0) : 0;
     const viewportBottom = (
       Number.isFinite(viewportHeight)
@@ -667,6 +1094,7 @@
 
   function captureAdminChatKeyboardViewportBaseBottom(options = {}) {
     const nextBottom = getAdminChatViewportBottom();
+    const nextHeight = getAdminChatViewportHeight();
     if (!nextBottom) return adminChatKeyboardViewportBaseBottom;
     if (
       options.force === true
@@ -675,15 +1103,72 @@
     ) {
       adminChatKeyboardViewportBaseBottom = nextBottom;
     }
+    if (
+      nextHeight > 0
+      && (
+        options.force === true
+        || !adminChatKeyboardViewportBaseHeight
+        || nextHeight > adminChatKeyboardViewportBaseHeight
+      )
+    ) {
+      adminChatKeyboardViewportBaseHeight = nextHeight;
+    }
     return adminChatKeyboardViewportBaseBottom;
   }
 
-  function isAdminChatViewportCompressed(viewportBottomValue) {
+  function setAdminChatKeyboardTrackedMessagesBottomDistance(value) {
+    const next = Number(value);
+    if (!Number.isFinite(next) || next < 0) {
+      adminChatKeyboardTrackedMessagesBottomDistance = null;
+      return null;
+    }
+    adminChatKeyboardTrackedMessagesBottomDistance = Math.max(0, next);
+    return adminChatKeyboardTrackedMessagesBottomDistance;
+  }
+
+  function shouldTrackAdminChatKeyboardMessagesBottomDistance(options = {}) {
+    if (!isAdminMobileChatLayout()) return false;
+    const prevInset = Math.max(0, Number(
+      options.prevInset !== undefined ? options.prevInset : adminChatKeyboardLastInset
+    ) || 0);
+    const nextInset = Math.max(0, Number(
+      options.nextInset !== undefined ? options.nextInset : 0
+    ) || 0);
+    const viewportBottom = Number(options.viewportBottom || 0);
+    const viewportHeight = Number(options.viewportHeight || 0);
+    const keyboardTrackingActive = options.keyboardTrackingActive === true
+      || isAdminChatKeyboardTrackingActive({ prevInset, nextInset });
+    if (!keyboardTrackingActive) return false;
+    return options.forceThreadBottomSync === true
+      || prevInset > 0
+      || nextInset > 0
+      || hasFocusedAdminChatTextInput()
+      || isAdminChatViewportCompressed(viewportBottom, viewportHeight);
+  }
+
+  function rememberAdminChatKeyboardTrackedMessagesBottomDistance(options = {}) {
+    if (!isAdminMobileChatLayout()) return null;
+    const snapshot = getMessagesBottomDistanceSnapshot();
+    if (snapshot == null) return adminChatKeyboardTrackedMessagesBottomDistance;
+    if (options.force === true || adminChatKeyboardTrackedMessagesBottomDistance == null) {
+      return setAdminChatKeyboardTrackedMessagesBottomDistance(snapshot);
+    }
+    return adminChatKeyboardTrackedMessagesBottomDistance;
+  }
+
+  function isAdminChatViewportCompressed(viewportBottomValue, viewportHeightValue = null) {
     const currentBottom = Number(viewportBottomValue || 0);
+    const currentHeight = Number(viewportHeightValue || 0);
     const baseBottom = Number(adminChatKeyboardViewportBaseBottom || 0);
+    const baseHeight = Number(adminChatKeyboardViewportBaseHeight || 0);
     if (!Number.isFinite(currentBottom) || currentBottom <= 0) return false;
-    if (!Number.isFinite(baseBottom) || baseBottom <= 0) return false;
-    return currentBottom < (baseBottom - 6);
+    const bottomCompressed = Number.isFinite(baseBottom) && baseBottom > 0
+      ? currentBottom < (baseBottom - 6)
+      : false;
+    const heightCompressed = Number.isFinite(currentHeight) && currentHeight > 0 && Number.isFinite(baseHeight) && baseHeight > 0
+      ? currentHeight < (baseHeight - 72)
+      : false;
+    return bottomCompressed || heightCompressed;
   }
 
   function restoreLockedAdminChatPageScroll() {
@@ -709,6 +1194,22 @@
       if (htmlStyle.height !== "100%") htmlStyle.height = "100%";
     }
     return true;
+  }
+
+  function hasLockedAdminChatPageScrollDrift() {
+    if (!adminChatBodyScrollLockState || !isIOSMobileBrowser() || !isAdminMobileChatLayout()) return false;
+    const expectedY = Math.max(0, Number(adminChatBodyScrollLockY || 0));
+    const currentY = Math.max(
+      0,
+      Number(window.pageYOffset || window.scrollY || document.documentElement.scrollTop || 0)
+    );
+    const expectedTop = `-${expectedY}px`;
+    const bodyStyle = document.body.style;
+    return (
+      Math.abs(currentY - expectedY) >= 1
+      || bodyStyle.position !== "fixed"
+      || bodyStyle.top !== expectedTop
+    );
   }
 
   function lockAdminChatPageScroll() {
@@ -774,7 +1275,8 @@
 
   function shouldRunAdminChatPageScrollRepair() {
     if (!adminChatBodyScrollLockState || !isIOSMobileBrowser() || !isAdminMobileChatLayout()) return false;
-    if (hasFocusedAdminChatTextInput()) return true;
+    if (isAdminChatThreadEdgeSpringPositionControlled()) return false;
+    if (hasLockedAdminChatPageScrollDrift()) return true;
     return Date.now() < Number(adminChatPageScrollRepairUntil || 0);
   }
 
@@ -794,6 +1296,899 @@
     return dom.center.footerPanel || null;
   }
 
+  function syncAdminMobileChatScrollDownPosition() {
+    const btn = dom.center.scrollDownBtn;
+    if (!btn) return;
+
+    if (!isAdminMobileChatLayout()) {
+      btn.style.removeProperty("right");
+      btn.style.removeProperty("bottom");
+      return;
+    }
+
+    const root = btn.offsetParent instanceof HTMLElement ? btn.offsetParent : btn.parentElement;
+    const footer = dom.center.footerPanel;
+    const sendBtn = dom.center.sendBtn;
+    if (!(root instanceof HTMLElement) || !(footer instanceof HTMLElement) || !(sendBtn instanceof HTMLElement)) {
+      btn.style.removeProperty("right");
+      btn.style.removeProperty("bottom");
+      return;
+    }
+
+    const rootRect = root.getBoundingClientRect();
+    const sendRect = sendBtn.getBoundingClientRect();
+    const btnRect = btn.getBoundingClientRect();
+    if (
+      rootRect.width <= 0
+      || rootRect.height <= 0
+      || sendRect.width <= 0
+      || sendRect.height <= 0
+      || btnRect.width <= 0
+      || btnRect.height <= 0
+    ) {
+      btn.style.removeProperty("right");
+      btn.style.removeProperty("bottom");
+      return;
+    }
+
+    const sendCenterX = sendRect.left + (sendRect.width / 2);
+    const nextRight = Math.max(0, Math.round(rootRect.right - sendCenterX - (btnRect.width / 2)));
+    const nextBottom = Math.max(18, Math.round(rootRect.bottom - sendRect.top + 16));
+    btn.style.right = `${nextRight}px`;
+    btn.style.bottom = `${nextBottom}px`;
+  }
+
+  function shouldUseAdminChatThreadEdgeSpring() {
+    if (CHAT_THREAD_EDGE_SPRING_ENABLED !== true) return false;
+    if (!dom.center.messagesWrap) return false;
+    if (!dom.center.messages) return false;
+    if (!isAdminMobileChatLayout()) return false;
+    if (!dom.center.messages.querySelector(".chat-message[data-message-id]")) return false;
+    if (typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      return false;
+    }
+    return true;
+  }
+
+  function hasAdminChatThreadMessages() {
+    return !!(
+      dom.center.messages
+      && dom.center.messages.querySelector
+      && dom.center.messages.querySelector(".chat-message[data-message-id]")
+    );
+  }
+
+  function isAdminChatThreadVerticallyScrollable(wrap = dom.center.messagesWrap) {
+    return getAdminChatThreadMaxScrollTop(wrap) > 1;
+  }
+
+  function setAdminChatThreadEdgeSpringTouchState(active, edge = "") {
+    adminChatThreadEdgeSpringTouchActive = active === true;
+    adminChatThreadEdgeSpringTouchEdge = adminChatThreadEdgeSpringTouchActive
+      ? String(edge || "")
+      : "";
+  }
+
+  function isAdminChatThreadEdgeSpringTouchActive(edge = "") {
+    if (adminChatThreadEdgeSpringTouchActive !== true) return false;
+    if (!edge) return true;
+    return adminChatThreadEdgeSpringTouchEdge === String(edge || "");
+  }
+
+  function isAdminChatThreadEdgeSpringPositionControlled() {
+    return isAdminChatThreadEdgeSpringTouchActive()
+      || Math.abs(Number(adminChatThreadEdgeSpringShift || 0)) >= 0.1
+      || !!adminChatThreadEdgeSpringRaf;
+  }
+
+  function getAdminChatThreadEdgeSpringNow() {
+    return typeof performance !== "undefined" && typeof performance.now === "function"
+      ? performance.now()
+      : Date.now();
+  }
+
+  function shouldUseAdminChatThreadEdgeSpringMomentumBounce() {
+    return CHAT_THREAD_EDGE_SPRING_MOMENTUM_ENABLED === true && shouldUseAdminChatThreadEdgeSpring();
+  }
+
+  function shouldUseAdminChatThreadEdgeSpringWheelNudge() {
+    return CHAT_THREAD_EDGE_SPRING_WHEEL_NUDGE_ENABLED === true && shouldUseAdminChatThreadEdgeSpring();
+  }
+
+  function resetAdminChatThreadEdgeSpringMomentumState() {
+    adminChatThreadEdgeSpringMomentumTouchActive = false;
+    adminChatThreadEdgeSpringMomentumLastTouchEndAt = 0;
+    adminChatThreadEdgeSpringMomentumBounceConsumed = false;
+    adminChatThreadEdgeSpringMomentumLastScrollTop = 0;
+    adminChatThreadEdgeSpringMomentumLastScrollAt = 0;
+    adminChatThreadEdgeSpringMomentumLastVelocity = 0;
+    adminChatThreadEdgeSpringMomentumLastActiveVelocity = 0;
+    adminChatThreadEdgeSpringMomentumLastActiveVelocityAt = 0;
+    adminChatThreadEdgeSpringMomentumArmedVelocity = 0;
+    adminChatThreadEdgeSpringMomentumArmedEdge = "";
+    stopAdminChatThreadEdgeSpringMomentumWatcher();
+  }
+
+  function beginAdminChatThreadEdgeSpringMomentumTracking(wrap = dom.center.messagesWrap) {
+    if (!shouldUseAdminChatThreadEdgeSpringMomentumBounce()) {
+      resetAdminChatThreadEdgeSpringMomentumState();
+      return;
+    }
+    adminChatThreadEdgeSpringMomentumTouchActive = true;
+    adminChatThreadEdgeSpringMomentumLastTouchEndAt = 0;
+    adminChatThreadEdgeSpringMomentumBounceConsumed = false;
+    adminChatThreadEdgeSpringMomentumLastVelocity = 0;
+    adminChatThreadEdgeSpringMomentumLastActiveVelocity = 0;
+    adminChatThreadEdgeSpringMomentumLastActiveVelocityAt = 0;
+    adminChatThreadEdgeSpringMomentumArmedVelocity = 0;
+    adminChatThreadEdgeSpringMomentumArmedEdge = "";
+    if (adminChatThreadEdgeSpringMomentumWatchRaf) {
+      cancelAnimationFrame(adminChatThreadEdgeSpringMomentumWatchRaf);
+      adminChatThreadEdgeSpringMomentumWatchRaf = 0;
+    }
+    adminChatThreadEdgeSpringMomentumLastScrollAt = getAdminChatThreadEdgeSpringNow();
+    adminChatThreadEdgeSpringMomentumLastScrollTop = wrap
+      ? Number(wrap.scrollTop || 0)
+      : 0;
+  }
+
+  function getAdminChatThreadEdgeSpringMomentumDistanceToEdge(edge = "", wrap = dom.center.messagesWrap) {
+    if (!wrap) return Number.POSITIVE_INFINITY;
+    if (edge === "top") {
+      return Math.max(0, Number(wrap.scrollTop || 0));
+    }
+    if (edge === "bottom") {
+      return Math.max(0, getAdminChatThreadMaxScrollTop(wrap) - Number(wrap.scrollTop || 0));
+    }
+    return Number.POSITIVE_INFINITY;
+  }
+
+  function getAdminChatThreadEdgeSpringMomentumArmDistanceThreshold(wrap = dom.center.messagesWrap) {
+    const clientHeight = Math.max(0, Number(wrap && wrap.clientHeight || 0));
+    return Math.max(
+      CHAT_THREAD_EDGE_SPRING_MOMENTUM_ARM_MIN_EDGE_DISTANCE_PX,
+      Math.min(
+        CHAT_THREAD_EDGE_SPRING_MOMENTUM_ARM_MAX_EDGE_DISTANCE_PX,
+        clientHeight * 0.28,
+      ),
+    );
+  }
+
+  function resolveAdminChatThreadEdgeSpringMomentumVelocity(now = getAdminChatThreadEdgeSpringNow(), options = {}) {
+    const includeArmed = options.includeArmed !== false;
+    let velocity = Number(adminChatThreadEdgeSpringMomentumLastVelocity || 0);
+    if (Math.abs(velocity) >= CHAT_THREAD_EDGE_SPRING_MOMENTUM_MIN_VELOCITY) return velocity;
+
+    const activeVelocityAge = now - Number(adminChatThreadEdgeSpringMomentumLastActiveVelocityAt || 0);
+    if (activeVelocityAge <= CHAT_THREAD_EDGE_SPRING_MOMENTUM_ACTIVE_VELOCITY_WINDOW_MS) {
+      velocity = Number(adminChatThreadEdgeSpringMomentumLastActiveVelocity || 0);
+    }
+    if (Math.abs(velocity) >= CHAT_THREAD_EDGE_SPRING_MOMENTUM_MIN_VELOCITY) return velocity;
+
+    if (
+      includeArmed === true
+      && adminChatThreadEdgeSpringMomentumLastTouchEndAt > 0
+      && (now - adminChatThreadEdgeSpringMomentumLastTouchEndAt) <= CHAT_THREAD_EDGE_SPRING_MOMENTUM_WINDOW_MS
+    ) {
+      velocity = Number(adminChatThreadEdgeSpringMomentumArmedVelocity || 0);
+    }
+    return velocity;
+  }
+
+  function getAdminChatThreadEdgeSpringMomentumArrivalVelocity(edge = "", now = getAdminChatThreadEdgeSpringNow()) {
+    const direction = edge === "top"
+      ? -1
+      : edge === "bottom"
+        ? 1
+        : 0;
+    if (!direction) return 0;
+
+    const lastScrollAt = Number(adminChatThreadEdgeSpringMomentumLastScrollAt || 0);
+    if (
+      lastScrollAt > 0
+      && (now - lastScrollAt) <= CHAT_THREAD_EDGE_SPRING_MOMENTUM_EDGE_TRIGGER_VELOCITY_WINDOW_MS
+    ) {
+      const velocity = Number(adminChatThreadEdgeSpringMomentumLastVelocity || 0);
+      if (velocity === 0) return 0;
+      return Math.sign(velocity) === direction
+        ? velocity
+        : 0;
+    }
+
+    const activeVelocityAt = Number(adminChatThreadEdgeSpringMomentumLastActiveVelocityAt || 0);
+    if (
+      activeVelocityAt > 0
+      && (now - activeVelocityAt) <= CHAT_THREAD_EDGE_SPRING_MOMENTUM_EDGE_TRIGGER_VELOCITY_WINDOW_MS
+    ) {
+      const velocity = Number(adminChatThreadEdgeSpringMomentumLastActiveVelocity || 0);
+      if (velocity === 0) return 0;
+      return Math.sign(velocity) === direction
+        ? velocity
+        : 0;
+    }
+
+    return 0;
+  }
+
+  function stopAdminChatThreadEdgeSpringMomentumWatcher() {
+    if (!adminChatThreadEdgeSpringMomentumWatchRaf) return;
+    cancelAnimationFrame(adminChatThreadEdgeSpringMomentumWatchRaf);
+    adminChatThreadEdgeSpringMomentumWatchRaf = 0;
+  }
+
+  function scheduleAdminChatThreadEdgeSpringMomentumWatcher() {
+    if (!shouldUseAdminChatThreadEdgeSpringMomentumBounce()) {
+      resetAdminChatThreadEdgeSpringMomentumState();
+      return;
+    }
+    if (adminChatThreadEdgeSpringMomentumWatchRaf) return;
+    const tick = () => {
+      adminChatThreadEdgeSpringMomentumWatchRaf = 0;
+      const wrap = dom.center.messagesWrap;
+      if (!wrap || !shouldUseAdminChatThreadEdgeSpring()) return;
+      if (adminChatThreadEdgeSpringMomentumTouchActive) return;
+      if (adminChatThreadEdgeSpringMomentumBounceConsumed) return;
+
+      const now = getAdminChatThreadEdgeSpringNow();
+      if (
+        adminChatThreadEdgeSpringMomentumLastTouchEndAt <= 0
+        || (now - adminChatThreadEdgeSpringMomentumLastTouchEndAt) > CHAT_THREAD_EDGE_SPRING_MOMENTUM_WINDOW_MS
+      ) {
+        return;
+      }
+
+      maybeTriggerAdminChatThreadEdgeSpringMomentumBounce(wrap);
+      if (adminChatThreadEdgeSpringMomentumBounceConsumed) return;
+      if (!adminChatThreadEdgeSpringMomentumArmedEdge) return;
+      adminChatThreadEdgeSpringMomentumWatchRaf = requestAnimationFrame(tick);
+    };
+    adminChatThreadEdgeSpringMomentumWatchRaf = requestAnimationFrame(tick);
+  }
+
+  function armAdminChatThreadEdgeSpringMomentumBounce(wrap = dom.center.messagesWrap) {
+    if (!shouldUseAdminChatThreadEdgeSpringMomentumBounce()) {
+      resetAdminChatThreadEdgeSpringMomentumState();
+      return;
+    }
+    const now = getAdminChatThreadEdgeSpringNow();
+    const velocity = resolveAdminChatThreadEdgeSpringMomentumVelocity(now, { includeArmed: false });
+    if (Math.abs(velocity) < CHAT_THREAD_EDGE_SPRING_MOMENTUM_MIN_VELOCITY) {
+      adminChatThreadEdgeSpringMomentumArmedVelocity = 0;
+      adminChatThreadEdgeSpringMomentumArmedEdge = "";
+      stopAdminChatThreadEdgeSpringMomentumWatcher();
+      return;
+    }
+
+    const edge = velocity < 0 ? "top" : "bottom";
+    const distanceToEdge = getAdminChatThreadEdgeSpringMomentumDistanceToEdge(edge, wrap);
+    if (distanceToEdge > getAdminChatThreadEdgeSpringMomentumArmDistanceThreshold(wrap)) {
+      adminChatThreadEdgeSpringMomentumArmedVelocity = 0;
+      adminChatThreadEdgeSpringMomentumArmedEdge = "";
+      stopAdminChatThreadEdgeSpringMomentumWatcher();
+      return;
+    }
+
+    adminChatThreadEdgeSpringMomentumArmedVelocity = velocity;
+    adminChatThreadEdgeSpringMomentumArmedEdge = edge;
+    scheduleAdminChatThreadEdgeSpringMomentumWatcher();
+  }
+
+  function refreshAdminChatThreadEdgeSpringMomentumBounce(wrap = dom.center.messagesWrap) {
+    if (!shouldUseAdminChatThreadEdgeSpringMomentumBounce()) {
+      resetAdminChatThreadEdgeSpringMomentumState();
+      return false;
+    }
+    if (!wrap) return false;
+    if (adminChatThreadEdgeSpringMomentumTouchActive) return false;
+    if (adminChatThreadEdgeSpringMomentumBounceConsumed) return false;
+
+    const now = getAdminChatThreadEdgeSpringNow();
+    if (
+      adminChatThreadEdgeSpringMomentumLastTouchEndAt <= 0
+      || (now - adminChatThreadEdgeSpringMomentumLastTouchEndAt) > CHAT_THREAD_EDGE_SPRING_MOMENTUM_WINDOW_MS
+    ) {
+      return false;
+    }
+
+    const velocity = resolveAdminChatThreadEdgeSpringMomentumVelocity(now, { includeArmed: false });
+    if (Math.abs(velocity) < CHAT_THREAD_EDGE_SPRING_MOMENTUM_MIN_VELOCITY) {
+      return false;
+    }
+
+    const edge = velocity < 0 ? "top" : "bottom";
+    const distanceToEdge = getAdminChatThreadEdgeSpringMomentumDistanceToEdge(edge, wrap);
+    if (distanceToEdge > getAdminChatThreadEdgeSpringMomentumArmDistanceThreshold(wrap)) {
+      return false;
+    }
+
+    if (
+      adminChatThreadEdgeSpringMomentumArmedEdge === edge
+      && Math.abs(Number(adminChatThreadEdgeSpringMomentumArmedVelocity || 0)) >= Math.abs(velocity)
+    ) {
+      scheduleAdminChatThreadEdgeSpringMomentumWatcher();
+      return true;
+    }
+
+    adminChatThreadEdgeSpringMomentumArmedVelocity = velocity;
+    adminChatThreadEdgeSpringMomentumArmedEdge = edge;
+    scheduleAdminChatThreadEdgeSpringMomentumWatcher();
+    return true;
+  }
+
+  function finishAdminChatThreadEdgeSpringMomentumTracking(wrap = dom.center.messagesWrap) {
+    if (!shouldUseAdminChatThreadEdgeSpringMomentumBounce()) {
+      resetAdminChatThreadEdgeSpringMomentumState();
+      return;
+    }
+    adminChatThreadEdgeSpringMomentumTouchActive = false;
+    adminChatThreadEdgeSpringMomentumLastTouchEndAt = getAdminChatThreadEdgeSpringNow();
+    armAdminChatThreadEdgeSpringMomentumBounce(wrap);
+  }
+
+  function sampleAdminChatThreadEdgeSpringMomentumScroll(wrap = dom.center.messagesWrap) {
+    if (!shouldUseAdminChatThreadEdgeSpringMomentumBounce()) {
+      resetAdminChatThreadEdgeSpringMomentumState();
+      return;
+    }
+    if (!wrap) return;
+    const now = getAdminChatThreadEdgeSpringNow();
+    const nextTop = Number(wrap.scrollTop || 0);
+    if (adminChatThreadEdgeSpringMomentumLastScrollAt > 0) {
+      const dt = Math.max(1, now - adminChatThreadEdgeSpringMomentumLastScrollAt);
+      const delta = nextTop - adminChatThreadEdgeSpringMomentumLastScrollTop;
+      if (Math.abs(delta) >= 0.1) {
+        adminChatThreadEdgeSpringMomentumLastVelocity = delta / dt;
+        if (Math.abs(adminChatThreadEdgeSpringMomentumLastVelocity) >= CHAT_THREAD_EDGE_SPRING_MOMENTUM_MIN_VELOCITY) {
+          adminChatThreadEdgeSpringMomentumLastActiveVelocity = adminChatThreadEdgeSpringMomentumLastVelocity;
+          adminChatThreadEdgeSpringMomentumLastActiveVelocityAt = now;
+        }
+      }
+    }
+    adminChatThreadEdgeSpringMomentumLastScrollAt = now;
+    adminChatThreadEdgeSpringMomentumLastScrollTop = nextTop;
+    if (
+      !adminChatThreadEdgeSpringMomentumTouchActive
+      && !adminChatThreadEdgeSpringMomentumBounceConsumed
+      && !isAdminChatThreadEdgeSpringTouchActive()
+    ) {
+      refreshAdminChatThreadEdgeSpringMomentumBounce(wrap);
+    }
+  }
+
+  function maybeTriggerAdminChatThreadEdgeSpringMomentumBounce(wrap = dom.center.messagesWrap) {
+    if (!shouldUseAdminChatThreadEdgeSpringMomentumBounce()) {
+      resetAdminChatThreadEdgeSpringMomentumState();
+      return false;
+    }
+    if (!wrap || !shouldUseAdminChatThreadEdgeSpring()) return false;
+    if (adminChatThreadEdgeSpringMomentumTouchActive) return false;
+    if (adminChatThreadEdgeSpringMomentumBounceConsumed) return false;
+    if (isAdminChatThreadEdgeSpringTouchActive()) return false;
+    if (Math.abs(adminChatThreadEdgeSpringShift) >= 0.1 || adminChatThreadEdgeSpringRaf) return false;
+
+    const now = getAdminChatThreadEdgeSpringNow();
+    if (
+      adminChatThreadEdgeSpringMomentumLastTouchEndAt <= 0
+      || (now - adminChatThreadEdgeSpringMomentumLastTouchEndAt) > CHAT_THREAD_EDGE_SPRING_MOMENTUM_WINDOW_MS
+    ) {
+      return false;
+    }
+
+    let edge = "";
+    const armedEdge = String(adminChatThreadEdgeSpringMomentumArmedEdge || "");
+    const nearTop = getAdminChatThreadEdgeSpringMomentumDistanceToEdge("top", wrap)
+      <= getAdminChatThreadMomentumEdgeReachEpsilon("top", wrap);
+    const nearBottom = getAdminChatThreadEdgeSpringMomentumDistanceToEdge("bottom", wrap)
+      <= getAdminChatThreadMomentumEdgeReachEpsilon("bottom", wrap);
+    if (armedEdge === "top" && nearTop) {
+      edge = "top";
+    } else if (armedEdge === "bottom" && nearBottom) {
+      edge = "bottom";
+    } else {
+      const velocity = Number(adminChatThreadEdgeSpringMomentumLastVelocity || 0);
+      if (velocity < 0 && isAdminChatThreadAtTop(wrap)) {
+        edge = "top";
+      } else if (velocity > 0 && isAdminChatThreadAtBottom(wrap)) {
+        edge = "bottom";
+      }
+    }
+    if (!edge && armedEdge === "top" && nearTop) edge = "top";
+    if (!edge && armedEdge === "bottom" && nearBottom) edge = "bottom";
+    if (!edge) return false;
+
+    const velocity = getAdminChatThreadEdgeSpringMomentumArrivalVelocity(edge, now);
+    if (Math.abs(velocity) < CHAT_THREAD_EDGE_SPRING_MOMENTUM_MIN_VELOCITY) return false;
+
+    const maxShift = getAdminChatThreadEdgeSpringMaxShift(edge);
+    const rawDistance = Math.abs(velocity) * CHAT_THREAD_EDGE_SPRING_MOMENTUM_DISTANCE_FACTOR;
+    const shift = computeAdminChatThreadEdgeSpringShift(rawDistance, edge);
+    const limitedShift = Math.sign(shift) * Math.min(
+      maxShift * CHAT_THREAD_EDGE_SPRING_MOMENTUM_MAX_SHIFT_RATIO,
+      Math.abs(shift),
+    );
+    if (Math.abs(limitedShift) < 0.1) return false;
+
+    adminChatThreadEdgeSpringMomentumBounceConsumed = true;
+    adminChatThreadEdgeSpringMomentumArmedVelocity = 0;
+    adminChatThreadEdgeSpringMomentumArmedEdge = "";
+    stopAdminChatThreadEdgeSpringMomentumWatcher();
+    stopAdminChatThreadEdgeSpringAnimation();
+    adminChatThreadEdgeSpringVelocity = 0;
+    setAdminChatThreadEdgeSpringShift(limitedShift);
+    releaseAdminChatThreadEdgeSpring();
+    return true;
+  }
+
+  function getAdminChatThreadEdgeSpringOverlayMetrics() {
+    if (!isAdminMobileChatLayout()) {
+      return {
+        headerHeight: 0,
+        footerHeight: 0,
+        overlayDelta: 0,
+        footerToHeaderRatio: 1,
+      };
+    }
+    const stack = dom.center.stack;
+    if (!stack || typeof window.getComputedStyle !== "function") {
+      return {
+        headerHeight: 0,
+        footerHeight: 0,
+        overlayDelta: 0,
+        footerToHeaderRatio: 1,
+      };
+    }
+    const styles = window.getComputedStyle(stack);
+    const headerHeight = Math.max(
+      0,
+      parseFloat(styles.getPropertyValue("--chat-mobile-header-overlay-height")) || 0,
+    );
+    const footerHeight = Math.max(
+      headerHeight,
+      parseFloat(styles.getPropertyValue("--chat-mobile-footer-overlay-height")) || 0,
+    );
+    const overlayDelta = Math.max(0, footerHeight - headerHeight);
+    return {
+      headerHeight,
+      footerHeight,
+      overlayDelta,
+      footerToHeaderRatio: headerHeight > 0
+        ? (footerHeight / Math.max(1, headerHeight))
+        : 1,
+    };
+  }
+
+  function getAdminChatThreadEdgeSpringMaxShift() {
+    return isAdminMobileChatLayout()
+      ? CHAT_THREAD_EDGE_SPRING_MOBILE_MAX_SHIFT_PX
+      : CHAT_THREAD_EDGE_SPRING_MAX_SHIFT_PX;
+  }
+
+  function getAdminChatThreadEdgeSpringEffectiveDistance(distancePx) {
+    const rawDistance = Math.max(0, Number(distancePx || 0));
+    return rawDistance > 0 ? rawDistance : 0;
+  }
+
+  function getAdminChatThreadMaxScrollTop(wrap = dom.center.messagesWrap) {
+    if (!wrap) return 0;
+    return Math.max(0, Number(wrap.scrollHeight || 0) - Number(wrap.clientHeight || 0));
+  }
+
+  function shouldUseAdminChatKeyboardBottomSpringAllowance(wrap = dom.center.messagesWrap) {
+    if (!isAdminMobileChatLayout() || !wrap) return false;
+    return !!(
+      (document.body && document.body.classList.contains("chat-mobile-keyboard-open"))
+      || hasFocusedAdminChatTextInput()
+    );
+  }
+
+  function isAdminChatThreadNearBottomForKeyboardSpring(wrap = dom.center.messagesWrap) {
+    if (!wrap) return false;
+    const maxTop = getAdminChatThreadMaxScrollTop(wrap);
+    const epsilon = shouldUseAdminChatKeyboardBottomSpringAllowance(wrap)
+      ? CHAT_THREAD_EDGE_SPRING_KEYBOARD_BOTTOM_EPSILON_PX
+      : CHAT_THREAD_EDGE_SPRING_EDGE_EPSILON_PX;
+    if (maxTop <= epsilon) return true;
+    return (maxTop - Number(wrap.scrollTop || 0)) <= epsilon;
+  }
+
+  function getAdminChatThreadMomentumEdgeReachEpsilon(edge = "", wrap = dom.center.messagesWrap) {
+    if (edge === "bottom" && shouldUseAdminChatKeyboardBottomSpringAllowance(wrap)) {
+      return Math.max(
+        CHAT_THREAD_EDGE_SPRING_MOMENTUM_EDGE_REACH_EPSILON_PX,
+        CHAT_THREAD_EDGE_SPRING_KEYBOARD_BOTTOM_EPSILON_PX,
+      );
+    }
+    return CHAT_THREAD_EDGE_SPRING_MOMENTUM_EDGE_REACH_EPSILON_PX;
+  }
+
+  function isAdminChatThreadAtTop(wrap = dom.center.messagesWrap) {
+    if (!wrap) return false;
+    return Number(wrap.scrollTop || 0) <= CHAT_THREAD_EDGE_SPRING_EDGE_EPSILON_PX;
+  }
+
+  function isAdminChatThreadAtBottom(wrap = dom.center.messagesWrap) {
+    if (!wrap) return false;
+    const maxTop = getAdminChatThreadMaxScrollTop(wrap);
+    if (maxTop <= CHAT_THREAD_EDGE_SPRING_EDGE_EPSILON_PX) return true;
+    return (maxTop - Number(wrap.scrollTop || 0)) <= CHAT_THREAD_EDGE_SPRING_EDGE_EPSILON_PX;
+  }
+
+  function pinAdminChatThreadToEdge(edge, wrap = dom.center.messagesWrap) {
+    if (!wrap) return;
+    if (edge === "top") {
+      if (Number(wrap.scrollTop || 0) > 0) wrap.scrollTop = 0;
+      return;
+    }
+    if (edge === "bottom") {
+      const maxTop = getAdminChatThreadMaxScrollTop(wrap);
+      if (Math.abs(Number(wrap.scrollTop || 0) - maxTop) > 0.5) {
+        wrap.scrollTop = maxTop;
+      }
+    }
+  }
+
+  function stopAdminChatThreadEdgeSpringPinWatcher() {
+    if (!adminChatThreadEdgeSpringPinRaf) return;
+    cancelAnimationFrame(adminChatThreadEdgeSpringPinRaf);
+    adminChatThreadEdgeSpringPinRaf = 0;
+  }
+
+  function startAdminChatThreadEdgeSpringPinWatcher(edge, wrap = dom.center.messagesWrap) {
+    const targetEdge = String(edge || "");
+    if (targetEdge !== "top" && targetEdge !== "bottom") return;
+    stopAdminChatThreadEdgeSpringPinWatcher();
+    const tick = () => {
+      adminChatThreadEdgeSpringPinRaf = 0;
+      if (!shouldUseAdminChatThreadEdgeSpring()) return;
+      if (!isAdminChatThreadEdgeSpringTouchActive(targetEdge)) return;
+      pinAdminChatThreadToEdge(targetEdge, wrap);
+      adminChatThreadEdgeSpringPinRaf = requestAnimationFrame(tick);
+    };
+    adminChatThreadEdgeSpringPinRaf = requestAnimationFrame(tick);
+  }
+
+  function stopAdminChatThreadEdgeSpringAnimation() {
+    if (adminChatThreadEdgeSpringRaf) {
+      cancelAnimationFrame(adminChatThreadEdgeSpringRaf);
+      adminChatThreadEdgeSpringRaf = 0;
+    }
+    if (adminChatThreadEdgeSpringWheelReleaseTimer) {
+      window.clearTimeout(adminChatThreadEdgeSpringWheelReleaseTimer);
+      adminChatThreadEdgeSpringWheelReleaseTimer = 0;
+    }
+  }
+
+  function disableAdminChatThreadEdgeSpring() {
+    resetAdminChatThreadEdgeSpringMomentumState();
+    stopAdminChatThreadEdgeSpringPinWatcher();
+    setAdminChatThreadEdgeSpringTouchState(false);
+    stopAdminChatThreadEdgeSpringAnimation();
+    adminChatThreadEdgeSpringVelocity = 0;
+    setAdminChatThreadEdgeSpringShift(0);
+  }
+
+  function setAdminChatThreadEdgeSpringShift(valuePx) {
+    const wrap = dom.center.messagesWrap;
+    const raw = Number(valuePx || 0);
+    const maxShift = getAdminChatThreadEdgeSpringMaxShift();
+    const next = Number.isFinite(raw)
+      ? Math.max(-maxShift, Math.min(maxShift, raw))
+      : 0;
+    if (Math.abs(next - adminChatThreadEdgeSpringShift) < 0.01) return adminChatThreadEdgeSpringShift;
+    adminChatThreadEdgeSpringShift = next;
+    if (wrap) {
+      if (Math.abs(next) < 0.1) {
+        wrap.style.setProperty("--chat-thread-edge-spring-shift", "0px");
+      } else {
+        wrap.style.setProperty("--chat-thread-edge-spring-shift", `${Number(next.toFixed(3))}px`);
+      }
+    }
+    return adminChatThreadEdgeSpringShift;
+  }
+
+  function computeAdminChatThreadEdgeSpringShift(distancePx, direction) {
+    const rawDistance = getAdminChatThreadEdgeSpringEffectiveDistance(distancePx);
+    if (rawDistance <= 0) return 0;
+    const maxShift = getAdminChatThreadEdgeSpringMaxShift();
+    const resisted = maxShift * (
+      1 - (1 / (((rawDistance * CHAT_THREAD_EDGE_SPRING_DISTANCE_GAIN) / maxShift) + 1))
+    );
+    return direction === "bottom" ? -resisted : resisted;
+  }
+
+  function releaseAdminChatThreadEdgeSpring(options = {}) {
+    const immediate = options.immediate === true;
+    stopAdminChatThreadEdgeSpringAnimation();
+    stopAdminChatThreadEdgeSpringPinWatcher();
+    setAdminChatThreadEdgeSpringTouchState(false);
+    if (immediate || Math.abs(adminChatThreadEdgeSpringShift) < 0.1) {
+      adminChatThreadEdgeSpringVelocity = 0;
+      setAdminChatThreadEdgeSpringShift(0);
+      return;
+    }
+
+    adminChatThreadEdgeSpringRaf = requestAnimationFrame(function step(now) {
+      if (!shouldUseAdminChatThreadEdgeSpring()) {
+        adminChatThreadEdgeSpringRaf = 0;
+        adminChatThreadEdgeSpringVelocity = 0;
+        setAdminChatThreadEdgeSpringShift(0);
+        return;
+      }
+
+      const prevNow = Number(step._prevNow || now);
+      const dt = Math.max(0.001, Math.min(0.034, (now - prevNow) / 1000));
+      step._prevNow = now;
+
+      const displacement = Number(adminChatThreadEdgeSpringShift || 0);
+      const acceleration = (
+        (-CHAT_THREAD_EDGE_SPRING_RELEASE_STIFFNESS * displacement)
+        - (CHAT_THREAD_EDGE_SPRING_RELEASE_DAMPING * adminChatThreadEdgeSpringVelocity)
+      );
+      adminChatThreadEdgeSpringVelocity += acceleration * dt;
+      const nextDisplacement = displacement + (adminChatThreadEdgeSpringVelocity * dt);
+      if (
+        (displacement > 0 && nextDisplacement <= 0)
+        || (displacement < 0 && nextDisplacement >= 0)
+      ) {
+        adminChatThreadEdgeSpringRaf = 0;
+        adminChatThreadEdgeSpringVelocity = 0;
+        setAdminChatThreadEdgeSpringShift(0);
+        return;
+      }
+      setAdminChatThreadEdgeSpringShift(nextDisplacement);
+
+      if (Math.abs(adminChatThreadEdgeSpringShift) < 0.24 && Math.abs(adminChatThreadEdgeSpringVelocity) < 2.4) {
+        adminChatThreadEdgeSpringRaf = 0;
+        adminChatThreadEdgeSpringVelocity = 0;
+        setAdminChatThreadEdgeSpringShift(0);
+        return;
+      }
+
+      adminChatThreadEdgeSpringRaf = requestAnimationFrame(step);
+    });
+  }
+
+  function nudgeAdminChatThreadEdgeSpringFromWheel(direction, deltaY) {
+    const sign = direction === "bottom" ? -1 : 1;
+    const currentShift = Number(adminChatThreadEdgeSpringShift || 0);
+    const nextBase = Math.sign(currentShift) === sign ? Math.abs(currentShift) : 0;
+    const nextShift = sign * Math.min(
+      getAdminChatThreadEdgeSpringMaxShift(direction),
+      nextBase + (Math.abs(Number(deltaY || 0)) * CHAT_THREAD_EDGE_SPRING_WHEEL_FACTOR),
+    );
+    stopAdminChatThreadEdgeSpringAnimation();
+    adminChatThreadEdgeSpringVelocity = 0;
+    setAdminChatThreadEdgeSpringShift(nextShift);
+    adminChatThreadEdgeSpringWheelReleaseTimer = window.setTimeout(() => {
+      adminChatThreadEdgeSpringWheelReleaseTimer = 0;
+      releaseAdminChatThreadEdgeSpring();
+    }, CHAT_THREAD_EDGE_SPRING_WHEEL_RELEASE_MS);
+  }
+
+  function bindAdminChatThreadEdgeSpring() {
+    const wrap = dom.center.messagesWrap;
+    if (!wrap || wrap.dataset.edgeSpringBound === "1") return;
+    wrap.dataset.edgeSpringBound = "1";
+
+    let touchState = null;
+
+    const clearTouchState = () => {
+      touchState = null;
+    };
+
+    const resolveTrackedTouch = (touchList) => {
+      if (!touchState || touchState.id == null || !touchList) return null;
+      for (let index = 0; index < touchList.length; index += 1) {
+        const touch = touchList[index];
+        if (touch && touch.identifier === touchState.id) return touch;
+      }
+      return null;
+    };
+
+    wrap.addEventListener("touchstart", (event) => {
+      if (!shouldUseAdminChatThreadEdgeSpring()) {
+        clearTouchState();
+        releaseAdminChatThreadEdgeSpring({ immediate: true });
+        return;
+      }
+      if (!event || event.touches.length !== 1) {
+        clearTouchState();
+        setAdminChatThreadEdgeSpringTouchState(false);
+        return;
+      }
+      if (event.target && event.target.closest && event.target.closest(".chat-message-order-cards")) {
+        clearTouchState();
+        setAdminChatThreadEdgeSpringTouchState(false);
+        return;
+      }
+      const touch = event.touches[0];
+      clearTouchState();
+      setAdminChatThreadEdgeSpringTouchState(false);
+      stopMessagesSmoothScroll();
+      stopAdminChatThreadEdgeSpringAnimation();
+      stopAdminChatThreadEdgeSpringPinWatcher();
+      adminChatThreadEdgeSpringVelocity = 0;
+      setAdminChatThreadEdgeSpringShift(0);
+      touchState = {
+        id: touch.identifier,
+        startX: Number(touch.clientX || 0),
+        startY: Number(touch.clientY || 0),
+        startedAtTop: isAdminChatThreadAtTop(wrap),
+        startedAtBottom: isAdminChatThreadAtBottom(wrap),
+        lastAppliedX: Number(touch.clientX || 0),
+        lastAppliedY: Number(touch.clientY || 0),
+        edge: "",
+        locked: false,
+        active: false,
+      };
+    }, { passive: true });
+
+    wrap.addEventListener("touchmove", (event) => {
+      if (event.defaultPrevented) return;
+      if (!touchState) return;
+      if (!shouldUseAdminChatThreadEdgeSpring()) {
+        clearTouchState();
+        releaseAdminChatThreadEdgeSpring({ immediate: true });
+        return;
+      }
+      if (!event || event.touches.length !== 1) {
+        clearTouchState();
+        releaseAdminChatThreadEdgeSpring();
+        return;
+      }
+      if (event.target && event.target.closest && event.target.closest(".chat-message-order-cards")) {
+        clearTouchState();
+        releaseAdminChatThreadEdgeSpring({ immediate: true });
+        return;
+      }
+
+      const touch = resolveTrackedTouch(event.touches) || resolveTrackedTouch(event.changedTouches);
+      if (!touch) return;
+
+      const touchX = Number(touch.clientX || 0);
+      const touchY = Number(touch.clientY || 0);
+      const dx = touchX - touchState.startX;
+      const dy = touchY - touchState.startY;
+      const absX = Math.abs(dx);
+      const absY = Math.abs(dy);
+      const maxTop = getAdminChatThreadMaxScrollTop(wrap);
+
+      let desiredEdge = "";
+      if (maxTop <= CHAT_THREAD_EDGE_SPRING_EDGE_EPSILON_PX) {
+        if (Math.abs(dy) > 0.1) desiredEdge = dy >= 0 ? "top" : "bottom";
+      } else if (dy > 0 && (touchState.startedAtTop === true || isAdminChatThreadAtTop(wrap))) {
+        desiredEdge = "top";
+      } else if (dy < 0 && (touchState.startedAtBottom === true || isAdminChatThreadAtBottom(wrap))) {
+        desiredEdge = "bottom";
+      }
+
+      if (!touchState.locked) {
+        if (absY < CHAT_THREAD_EDGE_SPRING_TOUCH_LOCK_PX || absY <= absX) return;
+        if (!desiredEdge) return;
+        touchState.locked = true;
+        touchState.edge = desiredEdge;
+        touchState.active = true;
+        touchState.lastAppliedX = touchX;
+        touchState.lastAppliedY = touchY;
+        setAdminChatThreadEdgeSpringTouchState(true, desiredEdge);
+        startAdminChatThreadEdgeSpringPinWatcher(desiredEdge, wrap);
+      }
+
+      if (!touchState.edge) return;
+      const holdDx = Math.abs(touchX - Number(touchState.lastAppliedX || touchState.startX));
+      const holdDy = Math.abs(touchY - Number(touchState.lastAppliedY || touchState.startY));
+      if (
+        holdDx < CHAT_THREAD_EDGE_SPRING_TOUCH_HOLD_DEADBAND_PX
+        && holdDy < CHAT_THREAD_EDGE_SPRING_TOUCH_HOLD_DEADBAND_PX
+      ) {
+        event.preventDefault();
+        return;
+      }
+      touchState.lastAppliedX = touchX;
+      touchState.lastAppliedY = touchY;
+      pinAdminChatThreadToEdge(touchState.edge, wrap);
+      const rawDistance = touchState.edge === "bottom"
+        ? Math.max(0, -dy)
+        : Math.max(0, dy);
+      if (rawDistance <= 0.1) {
+        event.preventDefault();
+        setAdminChatThreadEdgeSpringShift(0);
+        return;
+      }
+
+      stopAdminChatThreadEdgeSpringAnimation();
+      adminChatThreadEdgeSpringVelocity = 0;
+      setAdminChatThreadEdgeSpringShift(
+        computeAdminChatThreadEdgeSpringShift(rawDistance, touchState.edge),
+      );
+      event.preventDefault();
+    }, { passive: false });
+
+    const finishTouch = (options = {}) => {
+      const state = touchState;
+      clearTouchState();
+      stopAdminChatThreadEdgeSpringPinWatcher();
+      setAdminChatThreadEdgeSpringTouchState(false);
+      if (!state) return;
+      if (options.immediate === true) {
+        releaseAdminChatThreadEdgeSpring({ immediate: true });
+        return;
+      }
+      if (state.locked || Math.abs(adminChatThreadEdgeSpringShift) >= 0.1) {
+        releaseAdminChatThreadEdgeSpring();
+        return;
+      }
+      releaseAdminChatThreadEdgeSpring({ immediate: true });
+    };
+
+    wrap.addEventListener("touchend", () => {
+      finishTouch();
+    }, { passive: true });
+    wrap.addEventListener("touchcancel", () => {
+      finishTouch({ immediate: true });
+    }, { passive: true });
+
+    wrap.addEventListener("wheel", (event) => {
+      if (event.defaultPrevented) return;
+      if (!shouldUseAdminChatThreadEdgeSpringWheelNudge()) return;
+      if (event.target && event.target.closest && event.target.closest(".chat-message-order-cards")) return;
+
+      const deltaX = Number(event.deltaX || 0);
+      const deltaY = Number(event.deltaY || 0);
+      if (Math.abs(deltaY) < 0.01 || Math.abs(deltaY) <= Math.abs(deltaX)) return;
+
+      const maxTop = getAdminChatThreadMaxScrollTop(wrap);
+      let edge = "";
+      if (maxTop <= CHAT_THREAD_EDGE_SPRING_EDGE_EPSILON_PX) {
+        edge = deltaY < 0 ? "top" : "bottom";
+      } else if (deltaY < 0 && isAdminChatThreadAtTop(wrap)) {
+        edge = "top";
+      } else if (deltaY > 0 && isAdminChatThreadAtBottom(wrap)) {
+        edge = "bottom";
+      }
+      if (!edge) return;
+
+      event.preventDefault();
+      nudgeAdminChatThreadEdgeSpringFromWheel(edge, deltaY);
+    }, { passive: false });
+  }
+
+  function syncAdminMobileThreadBottomInset() {
+    const stack = dom.center.stack;
+    if (!stack) return;
+
+    if (!isAdminMobileChatLayout()) {
+      stack.style.removeProperty("--chat-mobile-thread-bottom-inset");
+      return;
+    }
+
+    const overlayHeightFromCssVar = Math.max(
+      0,
+      Math.round(
+        parseFloat(window.getComputedStyle(stack).getPropertyValue("--chat-mobile-footer-overlay-height")) || 0,
+      ),
+    );
+    const bottomOverlayNode = getAdminMobileChatBottomOverlayNode();
+    const overlayHeightFromDom = Math.max(0, getAdminMobileBottomOverlayHeight(bottomOverlayNode));
+    const overlayHeight = overlayHeightFromDom > 0
+      ? overlayHeightFromDom
+      : overlayHeightFromCssVar;
+    stack.style.setProperty(
+      "--chat-mobile-thread-bottom-inset",
+      `${overlayHeight}px`,
+    );
+  }
+
+  function getAdminMobileBottomOverlayHeight(node) {
+    if (!(node instanceof HTMLElement)) return 0;
+    const rect = node.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return 0;
+    const styles = window.getComputedStyle(node);
+    const marginTop = parseCssLengthPx(styles.marginTop);
+    const marginBottom = parseCssLengthPx(styles.marginBottom);
+    return Math.max(0, Math.ceil(rect.height + marginTop + marginBottom));
+  }
+
   function syncAdminMobileChatOverlayLayout() {
     const stack = dom.center.stack;
     if (!stack) return;
@@ -802,19 +2197,28 @@
       stack.classList.remove("is-mobile-overlay-layout");
       stack.style.removeProperty("--chat-mobile-header-overlay-height");
       stack.style.removeProperty("--chat-mobile-footer-overlay-height");
+      stack.style.removeProperty("--chat-mobile-thread-top-inset");
+      stack.style.removeProperty("--chat-mobile-thread-bottom-inset");
       stack.style.removeProperty("--chat-scroll-down-composer-extra");
+      syncAdminMobileChatScrollDownPosition();
+      syncComposerSendButtonFocusLock();
       return;
     }
 
     const headerHeight = Math.max(0, Math.ceil(dom.center.headerPanel?.getBoundingClientRect().height || 0));
-    const bottomOverlayHeight = Math.max(0, Math.ceil(getAdminMobileChatBottomOverlayNode()?.getBoundingClientRect().height || 0));
+    const bottomOverlayNode = getAdminMobileChatBottomOverlayNode();
+    const bottomOverlayHeight = getAdminMobileBottomOverlayHeight(bottomOverlayNode);
     stack.classList.add("is-mobile-overlay-layout");
     stack.style.setProperty("--chat-mobile-header-overlay-height", `${headerHeight}px`);
     stack.style.setProperty("--chat-mobile-footer-overlay-height", `${bottomOverlayHeight}px`);
+    stack.style.setProperty("--chat-mobile-thread-top-inset", `${headerHeight}px`);
     stack.style.setProperty(
       "--chat-scroll-down-composer-extra",
       `${Math.max(0, bottomOverlayHeight - 26)}px`
     );
+    syncAdminMobileThreadBottomInset();
+    syncAdminMobileChatScrollDownPosition();
+    syncComposerSendButtonFocusLock();
   }
 
   function bindAdminMobileChatOverlayLayout() {
@@ -824,6 +2228,12 @@
     const sync = () => {
       syncAdminMobileChatOverlayLayout();
       schedulePinnedBottomLayoutSync();
+    };
+
+    const handleShellMetricsChange = (event) => {
+      const dragging = event && event.detail && event.detail.dragging === true;
+      if (dragging) return;
+      sync();
     };
 
     const overlayNodes = [
@@ -841,6 +2251,7 @@
       overlayNodes.forEach((node) => observer.observe(node));
     }
 
+    document.addEventListener("admin-mobile-shell-metrics-change", handleShellMetricsChange, { passive: true });
     window.addEventListener("resize", sync, { passive: true });
     requestAnimationFrame(sync);
   }
@@ -849,48 +2260,231 @@
     scheduleAdminChatPageScrollRepair();
   }
 
+  function setAdminChatKeyboardViewportSyncing(active) {
+    if (!document.body || !document.body.classList.contains("page-chat")) return;
+    document.body.classList.toggle(
+      "chat-mobile-keyboard-viewport-syncing",
+      active === true && isAdminMobileChatLayout(),
+    );
+  }
+
   function clearAdminChatKeyboardMotionSync() {
     if (adminChatKeyboardMotionRaf) {
       cancelAnimationFrame(adminChatKeyboardMotionRaf);
       adminChatKeyboardMotionRaf = 0;
     }
     adminChatKeyboardMotionUntil = 0;
+    setAdminChatKeyboardViewportSyncing(false);
+  }
+
+  function setAdminChatViewportShift(valuePx) {
+    const raw = Number(valuePx || 0);
+    const next = Number.isFinite(raw) && raw > 0 ? Math.round(raw) : 0;
+    if (dom.center.stack) {
+      dom.center.stack.style.setProperty("--chat-android-viewport-shift", `${next}px`);
+    }
+    if (document.body) {
+      document.body.style.setProperty("--chat-ios-overlay-shift", `${next}px`);
+    }
+    return next;
+  }
+
+  function isAdminChatKeyboardTrackingActive(options = {}) {
+    const prevInset = Math.max(0, Number(
+      options.prevInset !== undefined ? options.prevInset : adminChatKeyboardLastInset
+    ) || 0);
+    const nextInset = Math.max(0, Number(
+      options.nextInset !== undefined ? options.nextInset : 0
+    ) || 0);
+    return hasFocusedAdminChatTextInput()
+      || adminChatKeyboardFocusSessionActive === true
+      || prevInset > 0
+      || nextInset > 0;
   }
 
   function setAdminChatKeyboardInset(valuePx, options = {}) {
+    const prev = Math.max(0, Number(adminChatKeyboardLastInset || 0));
     const raw = Number(valuePx || 0);
     const next = Number.isFinite(raw) && raw > 2 ? Math.round(raw) : 0;
+    const forceThreadBottomSync = options.forceThreadBottomSync === true;
+    const viewportBottom = Number(options.viewportBottom || 0);
+    const viewportHeight = Number(options.viewportHeight || 0);
+    const keyboardTrackingActive = isAdminChatKeyboardTrackingActive({
+      prevInset: prev,
+      nextInset: next,
+    });
+    const currentMessagesBottomDistance = getMessagesBottomDistanceSnapshot();
+    const trackedMessagesBottomDistance = Number(adminChatKeyboardTrackedMessagesBottomDistance);
+    const shouldUseTrackedMessagesBottomDistance = shouldTrackAdminChatKeyboardMessagesBottomDistance({
+      prevInset: prev,
+      nextInset: next,
+      forceThreadBottomSync,
+      viewportBottom,
+      viewportHeight,
+      keyboardTrackingActive,
+    });
+    const openingKeyboardNow = prev <= 0 && next > 0;
+    const shouldPreserveOnKeyboardCollapse = prev > 0 && next <= 0;
+    const canSyncThreadBottomDistance = (
+      !isAdminChatThreadEdgeSpringPositionControlled()
+      && (
+        !adminChatThreadTouchGestureActive
+        || openingKeyboardNow
+        || shouldPreserveOnKeyboardCollapse
+      )
+    );
+    const threadInputAnchorSnapshot = canSyncThreadBottomDistance && keyboardTrackingActive
+      ? getAdminChatThreadInputAnchorSnapshot()
+      : null;
+    if (openingKeyboardNow) {
+      adminChatKeyboardOpenBottomDistance = getMessagesBottomDistanceSnapshot();
+      adminChatKeyboardOpenInputAnchorSnapshot = threadInputAnchorSnapshot || getAdminChatThreadInputAnchorSnapshot();
+      adminChatKeyboardCollapseInputAnchorSnapshot = null;
+    }
+    if (!adminChatKeyboardOpenInputAnchorSnapshot && (prev > 0 || next > 0) && keyboardTrackingActive) {
+      adminChatKeyboardOpenInputAnchorSnapshot = threadInputAnchorSnapshot || getAdminChatThreadInputAnchorSnapshot();
+    }
+    if (shouldPreserveOnKeyboardCollapse && threadInputAnchorSnapshot) {
+      adminChatKeyboardCollapseInputAnchorSnapshot = threadInputAnchorSnapshot;
+    }
+    const stableInputAnchorSnapshot = shouldPreserveOnKeyboardCollapse
+      ? (
+          adminChatKeyboardCollapseInputAnchorSnapshot
+          || adminChatKeyboardOpenInputAnchorSnapshot
+          || threadInputAnchorSnapshot
+        )
+      : (
+          adminChatKeyboardOpenInputAnchorSnapshot
+          || threadInputAnchorSnapshot
+        );
+    if (openingKeyboardNow || shouldPreserveOnKeyboardCollapse) {
+      adminChatKeyboardInsetApplyToken += 1;
+    }
+    const applyToken = adminChatKeyboardInsetApplyToken;
+    const isApplyTokenValid = () => applyToken === adminChatKeyboardInsetApplyToken;
+    const applyThreadViewportSnapshot = (messagesBottomDistance = null, persistOptions = {}) => {
+      let applied = false;
+      if (stableInputAnchorSnapshot) {
+        applied = applyAdminChatThreadInputAnchorSnapshot(stableInputAnchorSnapshot);
+      }
+      if (!applied && messagesBottomDistance != null) {
+        applied = applyMessagesBottomDistanceSnapshot(messagesBottomDistance);
+      }
+      if (applied || messagesBottomDistance != null) {
+        saveThreadScrollPosition(state.activeClientId, persistOptions);
+      }
+      return applied;
+    };
+    const collapseBottomDistanceSnapshot = shouldPreserveOnKeyboardCollapse
+      ? (
+          Number.isFinite(trackedMessagesBottomDistance)
+            ? trackedMessagesBottomDistance
+            : (
+                Number.isFinite(Number(adminChatKeyboardOpenBottomDistance))
+                  ? Number(adminChatKeyboardOpenBottomDistance)
+                  : getMessagesBottomDistanceSnapshot()
+              )
+        )
+      : null;
+    const targetMessagesBottomDistance = shouldUseTrackedMessagesBottomDistance && Number.isFinite(trackedMessagesBottomDistance)
+      ? trackedMessagesBottomDistance
+      : (shouldUseTrackedMessagesBottomDistance ? currentMessagesBottomDistance : null);
     const keyboardActive = options.active === true || next > 0;
     if (dom.center.stack) {
       dom.center.stack.style.setProperty("--chat-mobile-keyboard-inset", `${next}px`);
-      dom.center.stack.style.setProperty("--chat-android-viewport-shift", "0px");
       dom.center.stack.classList.toggle("is-mobile-keyboard-open", keyboardActive);
     }
     if (document.body) {
       document.body.classList.toggle("chat-mobile-keyboard-open", keyboardActive);
+    }
+    if (keyboardActive) {
+      adminChatSuppressPinnedBottomUntil = 0;
+      adminChatKeyboardCollapseBottomDistance = null;
+      adminChatKeyboardCollapseInputAnchorSnapshot = null;
+    }
+    if (!keyboardActive && adminChatRenderAutoScrollTimer) {
+      window.clearTimeout(adminChatRenderAutoScrollTimer);
+      adminChatRenderAutoScrollTimer = 0;
+    }
+    if (!keyboardActive && adminChatDeferredAutoScrollTimer) {
+      window.clearTimeout(adminChatDeferredAutoScrollTimer);
+      adminChatDeferredAutoScrollTimer = 0;
+    }
+    if (canSyncThreadBottomDistance && targetMessagesBottomDistance != null && (prev !== next || forceThreadBottomSync)) {
+      applyThreadViewportSnapshot(targetMessagesBottomDistance);
+      requestAnimationFrame(() => {
+        if (!isApplyTokenValid()) return;
+        applyThreadViewportSnapshot(targetMessagesBottomDistance);
+      });
+      if (openingKeyboardNow) {
+        [120, 280, 520].forEach((delay) => {
+          window.setTimeout(() => {
+            if (!isApplyTokenValid()) return;
+            const keyboardStillOpen = !!(
+              document.body
+              && document.body.classList.contains("chat-mobile-keyboard-open")
+            );
+            if (!keyboardStillOpen) return;
+            applyThreadViewportSnapshot(targetMessagesBottomDistance);
+          }, delay);
+        });
+      }
+    }
+    if (canSyncThreadBottomDistance && collapseBottomDistanceSnapshot != null) {
+      adminChatKeyboardCollapseBottomDistance = Math.max(0, collapseBottomDistanceSnapshot);
+      adminChatSuppressPinnedBottomUntil = Date.now() + 760;
+      requestAnimationFrame(() => {
+        if (!isApplyTokenValid()) return;
+        applyThreadViewportSnapshot(adminChatKeyboardCollapseBottomDistance);
+        requestAnimationFrame(() => {
+          if (!isApplyTokenValid()) return;
+          applyThreadViewportSnapshot(adminChatKeyboardCollapseBottomDistance);
+        });
+      });
+      window.setTimeout(() => {
+        if (!isApplyTokenValid()) return;
+        if (adminChatKeyboardCollapseBottomDistance == null) return;
+        applyThreadViewportSnapshot(adminChatKeyboardCollapseBottomDistance);
+      }, 120);
+      window.setTimeout(() => {
+        if (!isApplyTokenValid()) return;
+        if (adminChatKeyboardCollapseBottomDistance == null) return;
+        applyThreadViewportSnapshot(adminChatKeyboardCollapseBottomDistance);
+      }, 280);
+      window.setTimeout(() => {
+        if (!isApplyTokenValid()) return;
+        if (adminChatKeyboardCollapseBottomDistance == null) return;
+        applyThreadViewportSnapshot(adminChatKeyboardCollapseBottomDistance, { forcePersist: true });
+      }, 520);
+      window.setTimeout(() => {
+        if (!isApplyTokenValid()) return;
+        if (adminChatKeyboardCollapseBottomDistance == null) return;
+        applyThreadViewportSnapshot(adminChatKeyboardCollapseBottomDistance, { forcePersist: true });
+        adminChatKeyboardCollapseBottomDistance = null;
+        adminChatKeyboardCollapseInputAnchorSnapshot = null;
+        adminChatKeyboardOpenInputAnchorSnapshot = null;
+        adminChatKeyboardOpenBottomDistance = null;
+      }, 760);
+    }
+    if (canSyncThreadBottomDistance && keyboardTrackingActive && targetMessagesBottomDistance != null && shouldUseTrackedMessagesBottomDistance) {
+      setAdminChatKeyboardTrackedMessagesBottomDistance(targetMessagesBottomDistance);
+    } else if (canSyncThreadBottomDistance && keyboardTrackingActive && !hasFocusedAdminChatTextInput()) {
+      setAdminChatKeyboardTrackedMessagesBottomDistance(currentMessagesBottomDistance);
     }
     return next;
   }
 
   function setAdminChatIosViewportLock(active, viewportHeightPx) {
     if (!document.body) return;
-    const shouldLock = active === true && isIOSMobileBrowser() && isAdminMobileChatLayout();
-    document.body.classList.toggle("is-ios-chat-viewport-locked", shouldLock);
-    if (shouldLock) {
-      const rawViewportHeight = Number(viewportHeightPx || 0);
-      const nextHeight = Number.isFinite(rawViewportHeight) && rawViewportHeight > 0
-        ? Math.max(0, Math.round(rawViewportHeight - getAdminChatHeaderOffsetPx()))
-        : 0;
-      if (nextHeight > 0) {
-        document.body.style.setProperty("--chat-ios-page-height", `${nextHeight}px`);
-      }
-    } else {
-      document.body.style.removeProperty("--chat-ios-page-height");
+    document.body.classList.remove("is-ios-chat-viewport-locked");
+    document.body.style.removeProperty("--chat-ios-page-height");
+    if (active !== true) {
+      document.body.style.setProperty("--chat-ios-overlay-shift", "0px");
     }
-    document.body.style.setProperty("--chat-ios-overlay-shift", "0px");
   }
 
   function resetAdminChatKeyboardViewportSync(options = {}) {
+    adminChatKeyboardInsetApplyToken += 1;
     if (adminChatKeyboardSyncRaf) {
       cancelAnimationFrame(adminChatKeyboardSyncRaf);
       adminChatKeyboardSyncRaf = 0;
@@ -902,23 +2496,35 @@
     clearAdminChatKeyboardMotionSync();
     disarmAdminChatPageScrollRepair();
     setAdminChatKeyboardInset(0, { active: false });
+    setAdminChatViewportShift(0);
     setAdminChatIosViewportLock(false, 0);
     adminChatKeyboardLastViewportBottom = 0;
     adminChatKeyboardViewportBaseBottom = 0;
+    adminChatKeyboardViewportBaseHeight = 0;
+    adminChatKeyboardLastInset = 0;
+    adminChatKeyboardTrackedMessagesBottomDistance = null;
+    adminChatKeyboardCollapseInputAnchorSnapshot = null;
+    adminChatKeyboardOpenInputAnchorSnapshot = null;
+    adminChatKeyboardFocusSessionActive = false;
     if (options.unlockScroll !== false) {
       unlockAdminChatPageScroll();
     }
   }
 
-  function computeAdminChatKeyboardInset(viewportBottomValue) {
+  function computeAdminChatKeyboardInset(viewportBottomValue, viewportHeightValue = null) {
     if (!isAdminMobileChatLayout()) return 0;
     if (!shouldUseNativeMobileEmojiKeyboard()) return 0;
     const viewportBottom = Number.isFinite(Number(viewportBottomValue))
       ? Number(viewportBottomValue)
       : getAdminChatViewportBottom();
+    const viewportHeight = Number.isFinite(Number(viewportHeightValue))
+      ? Number(viewportHeightValue)
+      : getAdminChatViewportHeight();
     if (!Number.isFinite(viewportBottom) || viewportBottom <= 0) return 0;
     const focused = hasFocusedAdminChatTextInput();
-    if (!focused && !isAdminChatViewportCompressed(viewportBottom)) return 0;
+    const keyboardTrackingActive = isAdminChatKeyboardTrackingActive();
+    if (!keyboardTrackingActive) return 0;
+    if (!focused && !isAdminChatViewportCompressed(viewportBottom, viewportHeight)) return 0;
 
     const keyboardAnchor = (
       (dom.center.stack && typeof dom.center.stack.closest === "function"
@@ -950,35 +2556,70 @@
     }
 
     const viewportHeight = getAdminChatViewportHeight();
+    const viewportOffsetTop = getAdminChatViewportOffsetTop();
     const viewportBottom = getAdminChatViewportBottom();
     const prevViewportBottom = adminChatKeyboardLastViewportBottom || viewportBottom;
+    const prevInset = adminChatKeyboardLastInset;
     adminChatKeyboardLastViewportBottom = viewportBottom;
     const focused = hasFocusedAdminChatTextInput();
+    const keyboardTrackingActive = isAdminChatKeyboardTrackingActive({ prevInset });
 
     if (
-      focused
+      !focused
       || !adminChatKeyboardViewportBaseBottom
+      || !adminChatKeyboardViewportBaseHeight
       || viewportBottom >= (Number(adminChatKeyboardViewportBaseBottom || 0) - 6)
+      || viewportHeight >= (Number(adminChatKeyboardViewportBaseHeight || 0) - 6)
     ) {
-      captureAdminChatKeyboardViewportBaseBottom({ force: focused === true });
+      captureAdminChatKeyboardViewportBaseBottom();
     }
 
-    setAdminChatIosViewportLock(true, viewportHeight);
-    if (isIOSMobileBrowser() && focused) {
-      lockAdminChatPageScroll();
-      scheduleAdminChatPageScrollRepair();
+    const viewportCompressed = isAdminChatViewportCompressed(viewportBottom, viewportHeight);
+    const viewportChanged = Math.abs(viewportBottom - prevViewportBottom) >= 1;
+    const forceThreadBottomSync = keyboardTrackingActive && viewportChanged && (
+      focused
+      || prevInset > 0
+      || isAdminChatViewportCompressed(prevViewportBottom, viewportHeight)
+      || viewportCompressed
+    );
+    setAdminChatViewportShift(isIOSMobileBrowser() && keyboardTrackingActive ? viewportOffsetTop : 0);
+    setAdminChatIosViewportLock(keyboardTrackingActive, viewportHeight);
+    const computedInset = computeAdminChatKeyboardInset(viewportBottom, viewportHeight);
+    const detectedKeyboardVisible = computedInset > 0 || (keyboardTrackingActive && viewportCompressed);
+    if (isIOSMobileBrowser()) {
+      if (focused && (detectedKeyboardVisible || adminChatKeyboardFocusSessionActive)) {
+        adminChatKeyboardFocusSessionActive = true;
+      } else if (!focused) {
+        adminChatKeyboardFocusSessionActive = false;
+      }
+    } else {
+      adminChatKeyboardFocusSessionActive = false;
+    }
+    const keyboardVisible = keyboardTrackingActive && detectedKeyboardVisible;
+    if (!keyboardVisible && !focused) {
+      unlockAdminChatPageScroll();
     }
 
     const nextInset = setAdminChatKeyboardInset(
-      computeAdminChatKeyboardInset(viewportBottom),
-      { active: focused || isAdminChatViewportCompressed(viewportBottom) },
+      computedInset,
+      {
+        active: keyboardVisible,
+        forceThreadBottomSync,
+        viewportBottom,
+        viewportHeight,
+      },
     );
-    if (!focused && nextInset <= 0 && !isAdminChatViewportCompressed(viewportBottom)) {
+    syncAdminMobileChatOverlayLayout();
+    adminChatKeyboardLastInset = nextInset;
+    if (adminChatBodyScrollLockState && !isIOSMobileBrowser()) {
+      restoreLockedAdminChatPageScroll();
+    }
+    if (nextInset <= 0 && !viewportCompressed && !focused) {
       unlockAdminChatPageScroll();
       captureAdminChatKeyboardViewportBaseBottom({ force: true });
     }
 
-    if (Math.abs(viewportBottom - prevViewportBottom) >= 1 || nextInset > 0 || focused) {
+    if ((keyboardTrackingActive && Math.abs(viewportBottom - prevViewportBottom) >= 1) || nextInset > 0 || focused) {
       schedulePinnedBottomLayoutSync();
       updateMessagesScrollDownButton();
     }
@@ -999,6 +2640,7 @@
       : Date.now();
     const duration = Math.max(180, Number(durationMs || 0) || 0);
     adminChatKeyboardMotionUntil = Math.max(adminChatKeyboardMotionUntil, now + duration);
+    setAdminChatKeyboardViewportSyncing(true);
     if (adminChatKeyboardMotionRaf) return;
 
     const step = () => {
@@ -1017,14 +2659,16 @@
 
       if (
         hasFocusedAdminChatTextInput()
-        || isAdminChatViewportCompressed(currentBottom)
+        || isAdminChatViewportCompressed(currentBottom, getAdminChatViewportHeight())
         || currentNow < adminChatKeyboardMotionUntil
       ) {
+        setAdminChatKeyboardViewportSyncing(true);
         adminChatKeyboardMotionRaf = requestAnimationFrame(step);
         return;
       }
 
       adminChatKeyboardMotionUntil = 0;
+      setAdminChatKeyboardViewportSyncing(false);
     };
 
     adminChatKeyboardMotionRaf = requestAnimationFrame(step);
@@ -1063,13 +2707,14 @@
 
   function handleAdminChatTextInputFocus() {
     if (!isAdminMobileChatLayout()) return;
+    adminChatKeyboardFocusSessionActive = isIOSMobileBrowser();
+    armAdminChatPageScrollRepair(900);
+    lockAdminChatPageScroll();
+    restoreLockedAdminChatPageScroll();
     captureAdminChatKeyboardViewportBaseBottom({ force: true });
-    if (isIOSMobileBrowser()) {
-      lockAdminChatPageScroll();
-      armAdminChatPageScrollRepair(900);
-      restoreLockedAdminChatPageScroll();
-    }
+    rememberAdminChatKeyboardTrackedMessagesBottomDistance({ force: true });
     scheduleAdminChatKeyboardViewportSyncBurst();
+    scheduleAdminChatPageScrollRepair();
   }
 
   function handleAdminChatTextInputBlur() {
@@ -1078,6 +2723,7 @@
     scheduleAdminChatKeyboardViewportSyncBurst();
     window.setTimeout(() => {
       if (!hasFocusedAdminChatTextInput()) {
+        adminChatKeyboardFocusSessionActive = false;
         scheduleAdminChatKeyboardViewportSync();
       }
     }, 40);
@@ -1125,6 +2771,154 @@
     return focused;
   }
 
+  function primeAdminMobileTextFieldFocus(eventOrNode) {
+    if (!shouldPreferNativeAdminMobileChatTouchHandling()) return;
+    const node = eventOrNode && eventOrNode.currentTarget
+      ? eventOrNode.currentTarget
+      : eventOrNode;
+    if (!node || typeof node.focus !== "function") return;
+    if ("disabled" in node && node.disabled) return;
+    if (document.activeElement === node) return;
+    if (eventOrNode && eventOrNode.type === "pointerdown") {
+      const pointerType = String(eventOrNode.pointerType || "").toLowerCase();
+      if (pointerType && pointerType !== "touch") return;
+    }
+    handleAdminChatTextInputFocus();
+    focusChatTextField(node, { moveCaretToEnd: false });
+    syncComposerSendButtonFocusLock();
+  }
+
+  function bindAdminMobileTextFieldTapFocus(node, datasetKey = "mobileTapFocusBound") {
+    if (!node || typeof node.addEventListener !== "function") return;
+    const guardKey = String(datasetKey || "mobileTapFocusBound");
+    if (node.dataset && node.dataset[guardKey] === "1") return;
+    if (node.dataset) node.dataset[guardKey] = "1";
+
+    let activeTouchId = null;
+    let startX = 0;
+    let startY = 0;
+    let dragAxis = "";
+    let moved = false;
+
+    const reset = () => {
+      activeTouchId = null;
+      startX = 0;
+      startY = 0;
+      dragAxis = "";
+      moved = false;
+    };
+
+    const resolveTrackedTouch = (touchList) => {
+      if (activeTouchId == null || !touchList) return null;
+      for (let index = 0; index < touchList.length; index += 1) {
+        const touch = touchList[index];
+        if (touch && touch.identifier === activeTouchId) return touch;
+      }
+      return null;
+    };
+
+    const canScrollNode = (deltaY) => {
+      const maxTop = Math.max(0, Number(node.scrollHeight || 0) - Number(node.clientHeight || 0));
+      if (maxTop <= 1) return false;
+      const currentTop = Math.max(0, Number(node.scrollTop || 0));
+      if (deltaY < 0 && currentTop < maxTop - 1) return true;
+      if (deltaY > 0 && currentTop > 1) return true;
+      return false;
+    };
+
+    node.addEventListener("touchstart", (event) => {
+      reset();
+      if (!shouldPreferNativeAdminMobileChatTouchHandling()) return;
+      if (event.touches.length !== 1) return;
+      const touch = event.touches[0];
+      activeTouchId = touch.identifier;
+      startX = Number(touch.clientX || 0);
+      startY = Number(touch.clientY || 0);
+    }, { passive: true, capture: true });
+
+    node.addEventListener("touchmove", (event) => {
+      const touch = resolveTrackedTouch(event.touches) || resolveTrackedTouch(event.changedTouches);
+      if (!touch) return;
+
+      const deltaX = Number(touch.clientX || 0) - startX;
+      const deltaY = Number(touch.clientY || 0) - startY;
+      const absX = Math.abs(deltaX);
+      const absY = Math.abs(deltaY);
+
+      if (!dragAxis) {
+        if (absX < 4 && absY < 4) return;
+        dragAxis = absX >= absY ? "x" : "y";
+      }
+      if (absX >= 6 || absY >= 6) {
+        moved = true;
+      }
+      if (dragAxis !== "y") return;
+      if (canScrollNode(deltaY)) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      if (hasFocusedAdminChatTextInput()) {
+        restoreLockedAdminChatPageScroll();
+        scheduleAdminChatPageScrollRepair();
+      }
+    }, { passive: false, capture: true });
+
+    node.addEventListener("touchend", () => {
+      const shouldFocus = activeTouchId != null
+        && !moved
+        && shouldPreferNativeAdminMobileChatTouchHandling();
+      reset();
+      if (!shouldFocus) return;
+      primeAdminMobileTextFieldFocus(node);
+    }, { passive: true, capture: true });
+
+    node.addEventListener("touchcancel", reset, { passive: true, capture: true });
+  }
+
+  function repairAdminIosTextFocusOnClick(event) {
+    const node = event && event.currentTarget ? event.currentTarget : null;
+    if (!node || typeof node.focus !== "function") return;
+    if (!isAdminChatIosKeyboardHiddenWithFocusedInput(node)) return;
+    captureAdminChatKeyboardViewportBaseBottom({ force: true });
+    rememberAdminChatKeyboardTrackedMessagesBottomDistance({ force: true });
+    armAdminChatPageScrollRepair(900);
+    lockAdminChatPageScroll();
+    restoreLockedAdminChatPageScroll();
+    try {
+      node.blur();
+    } catch {}
+    focusChatTextField(node, { moveCaretToEnd: true });
+    const schedule = typeof window.requestAnimationFrame === "function"
+      ? window.requestAnimationFrame.bind(window)
+      : (cb) => window.setTimeout(cb, 16);
+    schedule(() => {
+      focusChatTextField(node, { moveCaretToEnd: true });
+    });
+    scheduleAdminChatKeyboardViewportSyncBurst();
+    scheduleAdminChatPageScrollRepair();
+    syncComposerSendButtonFocusLock();
+  }
+
+  function shouldRetainComposerFocusOnMobileSend() {
+    return isAdminMobileChatLayout() && shouldUseNativeMobileEmojiKeyboard();
+  }
+
+  function syncComposerSendButtonFocusLock() {
+    const sendBtn = dom.center.sendBtn;
+    const input = dom.center.input;
+    if (!sendBtn) return;
+    if (
+      shouldRetainComposerFocusOnMobileSend()
+      && input
+      && !input.disabled
+      && document.activeElement === input
+    ) {
+      sendBtn.setAttribute("tabindex", "-1");
+      return;
+    }
+    sendBtn.removeAttribute("tabindex");
+  }
+
   function shouldGuardIOSNativeTextFocus(node) {
     if (!node || typeof node.focus !== "function") return false;
     if (!isIOSMobileBrowser() || !shouldUseNativeMobileEmojiKeyboard()) return false;
@@ -1133,11 +2927,48 @@
     return true;
   }
 
+  function isAdminChatIosKeyboardHiddenWithFocusedInput(node) {
+    if (!node || typeof node.focus !== "function") return false;
+    if (!isIOSMobileBrowser() || !shouldUseNativeMobileEmojiKeyboard()) return false;
+    if (document.activeElement !== node) return false;
+    if (adminChatKeyboardFocusSessionActive !== true) return false;
+    if (Math.max(0, Number(adminChatKeyboardLastInset || 0)) > 0) return false;
+    return !isAdminChatViewportCompressed(
+      getAdminChatViewportBottom(),
+      getAdminChatViewportHeight(),
+    );
+  }
+
   function guardIOSNativeTextFocus(event) {
     const node = event && event.currentTarget ? event.currentTarget : null;
+    if (isAdminChatIosKeyboardHiddenWithFocusedInput(node)) {
+      event.preventDefault();
+      captureAdminChatKeyboardViewportBaseBottom({ force: true });
+      rememberAdminChatKeyboardTrackedMessagesBottomDistance({ force: true });
+      armAdminChatPageScrollRepair(900);
+      lockAdminChatPageScroll();
+      restoreLockedAdminChatPageScroll();
+      try {
+        node.blur();
+      } catch {}
+      focusChatTextField(node, { moveCaretToEnd: true });
+      const schedule = typeof window.requestAnimationFrame === "function"
+        ? window.requestAnimationFrame.bind(window)
+        : (cb) => window.setTimeout(cb, 16);
+      schedule(() => {
+        focusChatTextField(node, { moveCaretToEnd: true });
+      });
+      scheduleAdminChatKeyboardViewportSyncBurst();
+      scheduleAdminChatPageScrollRepair();
+      return;
+    }
     if (!shouldGuardIOSNativeTextFocus(node)) return;
     event.preventDefault();
-    handleAdminChatTextInputFocus();
+    captureAdminChatKeyboardViewportBaseBottom({ force: true });
+    rememberAdminChatKeyboardTrackedMessagesBottomDistance({ force: true });
+    armAdminChatPageScrollRepair(900);
+    lockAdminChatPageScroll();
+    restoreLockedAdminChatPageScroll();
     focusChatTextField(node, { moveCaretToEnd: true });
     const schedule = typeof window.requestAnimationFrame === "function"
       ? window.requestAnimationFrame.bind(window)
@@ -1145,6 +2976,8 @@
     schedule(() => {
       focusChatTextField(node, { moveCaretToEnd: true });
     });
+    scheduleAdminChatKeyboardViewportSyncBurst();
+    scheduleAdminChatPageScrollRepair();
   }
 
   function isChatMobileViewport() {
@@ -1291,6 +3124,12 @@
     return /Android/i.test(ua) && /YaBrowser/i.test(ua);
   }
 
+  function isAndroidMobileBrowser() {
+    const ua = String((navigator && navigator.userAgent) || "");
+    if (!ua) return false;
+    return /Android/i.test(ua);
+  }
+
   function isTouchGeneratedClick(event) {
     if (!event) return false;
     if (typeof event.pointerType === "string" && event.pointerType.toLowerCase() === "touch") return true;
@@ -1382,6 +3221,7 @@
   }
 
   function setHeaderLoading(active) {
+    ensureDesktopChatHeaderMarkup();
     state.activeClientDataLoading = active === true;
     const hasActiveClient = Number(state.activeClientId || 0) > 0;
     const show = state.activeClientDataLoading && hasActiveClient;
@@ -4577,10 +6417,11 @@
     if (nextValue) ui.composerDraftByClient[key] = nextValue;
     else delete ui.composerDraftByClient[key];
     scheduleUiStatePersist();
+    updateClientRowPreview(key);
     return nextValue;
   }
 
-  function restoreComposerDraftForClient(clientId = state.activeClientId) {
+  function restoreComposerDraftForClient(clientId = state.activeClientId, options = {}) {
     if (!dom.center.input) return "";
     const key = normalizeClientIdKey(clientId);
     const draft = key
@@ -4589,7 +6430,9 @@
     if (dom.center.input.value !== draft) {
       dom.center.input.value = draft;
     }
-    syncComposerRichPreview({});
+    const syncOptions = options && typeof options === "object" ? options : {};
+    syncComposerRichPreview(syncOptions);
+    if (key) updateClientRowPreview(key);
     return draft;
   }
 
@@ -4600,6 +6443,7 @@
     if (!Object.prototype.hasOwnProperty.call(ui.composerDraftByClient, key)) return;
     delete ui.composerDraftByClient[key];
     scheduleUiStatePersist();
+    updateClientRowPreview(key);
   }
 
   function saveClientsListScrollPosition() {
@@ -4854,6 +6698,64 @@
     return String(summaryInfo.text || "").trim();
   }
 
+  function getClientDraftPreviewText(clientId) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return "";
+    if (key === normalizeClientIdKey(state.activeClientId)) return "";
+    return normalizeComposerDraftValue(state.store?.ui?.composerDraftByClient?.[key]);
+  }
+
+  function getClientPreviewState(clientId) {
+    const draftPreview = getClientDraftPreviewText(clientId);
+    if (draftPreview) {
+      return { text: draftPreview, isDraft: true, isTyping: false };
+    }
+    const typingPreview = getClientTypingPreviewText(clientId);
+    if (typingPreview) {
+      return { text: typingPreview, isDraft: false, isTyping: true };
+    }
+    const lastMsg = getLastMessage(clientId);
+    return {
+      text: getMessagePreviewText(lastMsg) || "Нет сообщений",
+      isDraft: false,
+      isTyping: false,
+    };
+  }
+
+  function renderClientPreview(previewEl, previewState) {
+    if (!previewEl) return;
+    const stateValue = previewState && typeof previewState === "object"
+      ? previewState
+      : { text: "", isDraft: false, isTyping: false };
+    const previewText = String(stateValue.text || "");
+    previewEl.textContent = "";
+    previewEl.classList.toggle("is-typing", stateValue.isTyping === true);
+    previewEl.classList.toggle("is-draft", stateValue.isDraft === true);
+
+    if (stateValue.isDraft === true) {
+      const labelEl = document.createElement("span");
+      labelEl.className = "chat-client-preview-draft-label";
+      labelEl.textContent = "Черновик:";
+      const textEl = document.createElement("span");
+      textEl.className = "chat-client-preview-draft-text";
+      if (hasEmojiInText(previewText)) {
+        renderEmojiMessageText(textEl, previewText, "chat-emoji-glyph chat-emoji-glyph--preview");
+      } else {
+        textEl.textContent = previewText;
+      }
+      previewEl.appendChild(labelEl);
+      previewEl.appendChild(document.createTextNode(" "));
+      previewEl.appendChild(textEl);
+      return;
+    }
+
+    if (hasEmojiInText(previewText)) {
+      renderEmojiMessageText(previewEl, previewText, "chat-emoji-glyph chat-emoji-glyph--preview");
+      return;
+    }
+    previewEl.textContent = previewText;
+  }
+
 
 
   function getClientPreviewText(clientId) {
@@ -4871,17 +6773,16 @@
       : String(key).replace(/["\\]/g, "\\$&");
     const row = dom.left.list.querySelector(`.chat-client-row[data-client-id="${selectorId}"]`);
     if (!row) return;
-    const previewEl = $(".chat-client-preview", row);
-    if (!previewEl) return;
-    const typingPreview = getClientTypingPreviewText(key);
-    const preview = getClientPreviewText(key);
-    previewEl.textContent = "";
-    previewEl.classList.toggle("is-typing", !!typingPreview);
-    if (hasEmojiInText(preview)) {
-      renderEmojiMessageText(previewEl, preview, "chat-emoji-glyph chat-emoji-glyph--preview");
+    const client = (state.filteredClients || []).find((item) => Number(item?.id) === Number(key))
+      || (state.clients || []).find((item) => Number(item?.id) === Number(key))
+      || null;
+    if (client) {
+      row.replaceWith(buildChatClientRow(client));
       return;
     }
-    previewEl.textContent = preview;
+    const previewEl = $(".chat-client-preview", row);
+    if (!previewEl) return;
+    renderClientPreview(previewEl, getClientPreviewState(key));
   }
 
   function collectUnansweredIncomingIds(thread) {
@@ -5377,6 +7278,32 @@
     return false;
   }
 
+  function getAdminServiceWorkerUrl() {
+    const configured = String((window && window.__APP_SERVICE_WORKER_URL__) || "").trim();
+    if (configured) return configured;
+    return "/sw.js";
+  }
+
+  function getAdminServiceWorkerVersionToken() {
+    return String((window && window.__APP_SERVICE_WORKER_VERSION__) || "").trim();
+  }
+
+  function registrationMatchesExpectedServiceWorker(registration) {
+    const expectedUrl = getAdminServiceWorkerUrl();
+    const expectedToken = getAdminServiceWorkerVersionToken();
+    if (!registration) return false;
+    const scriptUrl = String(
+      registration.active?.scriptURL
+      || registration.waiting?.scriptURL
+      || registration.installing?.scriptURL
+      || ""
+    ).trim();
+    if (!scriptUrl) return false;
+    if (expectedToken && scriptUrl.includes(expectedToken)) return true;
+    if (!expectedToken && expectedUrl && scriptUrl.includes(expectedUrl)) return true;
+    return false;
+  }
+
   function webPushArrayBufferToBase64(raw) {
     if (!raw) return "";
     try {
@@ -5446,35 +7373,59 @@
 
   async function getWebPushServiceWorkerRegistration() {
     if (!isWebPushSupported()) return null;
+    const expectedUrl = getAdminServiceWorkerUrl();
     try {
       const byScope = await navigator.serviceWorker.getRegistration("/");
-      if (byScope && byScope.active) return byScope;
+      if (byScope && registrationMatchesExpectedServiceWorker(byScope)) {
+        try {
+          if (typeof byScope.update === "function") await byScope.update();
+        } catch {}
+        if (byScope.active) return byScope;
+      } else if (byScope) {
+        try {
+          await byScope.unregister();
+        } catch {}
+      }
       if (byScope) {
         try {
           const ready = await Promise.race([
             navigator.serviceWorker.ready,
             new Promise((resolve) => window.setTimeout(() => resolve(null), 2400)),
           ]);
-          return ready || byScope;
+          if (registrationMatchesExpectedServiceWorker(ready)) return ready;
         } catch {
-          return byScope;
+          if (registrationMatchesExpectedServiceWorker(byScope)) return byScope;
         }
       }
     } catch {}
     try {
       const fallback = await navigator.serviceWorker.getRegistration();
-      if (fallback && fallback.active) return fallback;
-      if (fallback) return fallback;
+      if (fallback && registrationMatchesExpectedServiceWorker(fallback)) {
+        try {
+          if (typeof fallback.update === "function") await fallback.update();
+        } catch {}
+        if (fallback.active) return fallback;
+        return fallback;
+      }
+      if (fallback) {
+        try {
+          await fallback.unregister();
+        } catch {}
+      }
     } catch {}
     try {
-      const registered = await navigator.serviceWorker.register("/sw.js", { scope: "/" });
+      const registered = await navigator.serviceWorker.register(expectedUrl, { scope: "/" });
+      try {
+        if (registered && typeof registered.update === "function") await registered.update();
+      } catch {}
       if (registered && registered.active) return registered;
       try {
         const ready = await Promise.race([
           navigator.serviceWorker.ready,
           new Promise((resolve) => window.setTimeout(() => resolve(null), 2600)),
         ]);
-        return ready || registered || null;
+        if (registrationMatchesExpectedServiceWorker(ready)) return ready;
+        return registered || null;
       } catch {
         return registered || null;
       }
@@ -6167,8 +8118,21 @@
     return 24;
   }
 
+  function shouldPreferEmojiAssetGlyph(glyphClassName, emojiValue) {
+    const cls = String(glyphClassName || "");
+    const isCompactReactionGlyph = (
+      cls.indexOf("shop-company-chat-emoji-glyph--pill") !== -1
+      || cls.indexOf("shop-company-chat-emoji-glyph--reaction") !== -1
+      || cls.indexOf("chat-emoji-glyph--pill") !== -1
+      || cls.indexOf("chat-emoji-glyph--reaction") !== -1
+    );
+    if (!isCompactReactionGlyph) return false;
+    return true;
+  }
+
   function createEmojiAtlasGlyph(glyphClassName, emojiValue) {
     if (EMOJI_NATIVE_RENDER_ONLY) return null;
+    if (shouldPreferEmojiAssetGlyph(glyphClassName, emojiValue)) return null;
     const pos = getEmojiAtlasPosition(emojiValue);
     if (!pos) return null;
     const xPercent = EMOJI_ATLAS_COLUMNS > 1 ? (pos.col / (EMOJI_ATLAS_COLUMNS - 1)) * 100 : 0;
@@ -7367,7 +9331,8 @@
     const active = Number(state.activeClientId) === Number(client.id);
     const unread = getUnreadCount(client.id);
     const lastMsg = getLastMessage(client.id);
-    const preview = getClientPreviewText(client.id);
+    const previewState = getClientPreviewState(client.id);
+    const preview = String(previewState.text || "");
     const timeText = lastMsg?.createdAt ? fmtClientRowTime(lastMsg.createdAt) : "";
     const status = lastMsg?.direction === "out" ? getOutgoingDeliveryStatus(lastMsg) : "";
     const statusTitle = status === "read"
@@ -7387,7 +9352,7 @@
       <button type="button" class="chat-client-row-main" aria-label="${escapeHtml(client.name || `РљР»РёРµРЅС‚ #${client.id}`)}">
         <span class="chat-client-main">
         <span class="chat-client-top">
-          <span class="chat-client-name">${escapeHtml(client.name || `Клиент #${client.id}`)}</span>
+          <span class="chat-client-name" data-chat-client-open-details="1">${escapeHtml(client.name || `Клиент #${client.id}`)}</span>
           ${status || timeText
             ? `<span class="chat-client-time-wrap">
                 ${status
@@ -7398,7 +9363,7 @@
             : ""}
         </span>
         <span class="chat-client-bottom">
-          <span class="chat-client-preview${getClientTypingPreviewText(client.id) ? " is-typing" : ""}">${escapeHtml(preview)}</span>
+          <span class="chat-client-preview${getClientTypingPreviewText(client.id) ? " is-typing" : ""}" data-chat-client-open-details="1">${escapeHtml(preview)}</span>
           ${unread > 0 ? `<span class="chat-client-unread">${escapeHtml(unreadText)}</span>` : ""}
         </span>
         </span>
@@ -7410,13 +9375,31 @@
     `;
 
     const previewEl = $(".chat-client-preview", row);
-    if (previewEl && hasEmojiInText(preview)) {
-      renderEmojiMessageText(previewEl, preview, "chat-emoji-glyph chat-emoji-glyph--preview");
+    if (previewEl) {
+      renderClientPreview(previewEl, previewState);
     }
+
+    const openClientThreadAndDetails = async (event) => {
+      if (isAdminMobileChatLayout()) {
+        selectClient(client.id);
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      closeAllClientSwipeRows(null, { immediate: true });
+      hideClientContextMenu();
+      if (Number(state.activeClientId) !== Number(client.id)) {
+        await selectClient(client.id);
+      }
+      openClientDetailsPanel();
+    };
 
     const mainBtn = $(".chat-client-row-main", row);
     if (mainBtn) {
       mainBtn.addEventListener("click", (event) => {
+        if (event.target.closest('[data-chat-client-open-details="1"]') && !isAdminMobileChatLayout()) {
+          return;
+        }
         if (Date.now() < suppressClientRowClickUntil) {
           event.preventDefault();
           event.stopPropagation();
@@ -7428,13 +9411,20 @@
           closeClientSwipeRow(row);
           return;
         }
-        closeAllClientSwipeRows(null, { immediate: true });
-        hideClientContextMenu();
-        selectClient(client.id);
+        openClientThreadAndDetails(event).catch(console.error);
       });
       mainBtn.addEventListener("contextmenu", (event) => {
         event.preventDefault();
         showClientContextMenu(event.clientX, event.clientY, client.id);
+      });
+    }
+
+    const detailTriggers = $$('[data-chat-client-open-details="1"]', row);
+    if (detailTriggers.length) {
+      detailTriggers.forEach((trigger) => {
+        trigger.addEventListener("click", (event) => {
+          openClientThreadAndDetails(event).catch(console.error);
+        });
       });
     }
 
@@ -7950,21 +9940,8 @@
   }
 
   function bindReactionOverflowScrollers() {
-    if (dom.center.contextMenu) {
-      const contextReactions = $(".chat-message-menu-reactions", dom.center.contextMenu);
-      bindVerticalOverflowDragScroll(contextReactions, () => (
-        !!dom.center.contextMenu
-        && !dom.center.contextMenu.classList.contains("hidden")
-        && dom.center.contextMenu.classList.contains("is-reactions-expanded")
-      ));
-    }
-    if (dom.center.reactionBar) {
-      bindVerticalOverflowDragScroll(dom.center.reactionBar, () => (
-        !!dom.center.reactionBar
-        && !dom.center.reactionBar.classList.contains("hidden")
-        && dom.center.reactionBar.classList.contains("is-expanded")
-      ));
-    }
+    // Drag-to-scroll for additional reactions is disabled for both
+    // floating reaction bar and context-menu expanded reactions.
   }
 
   function bindFloatingMenuInteractionGuards() {
@@ -8551,8 +10528,47 @@
 
   function shouldKeepMessagesPinnedToBottom() {
     if (!dom.center.messagesWrap) return false;
+    if (adminChatThreadTouchGestureActive) return false;
+    if (isAdminChatThreadEdgeSpringPositionControlled()) return false;
     const wrap = dom.center.messagesWrap;
+    if (!isAdminChatThreadVerticallyScrollable(wrap)) return false;
     return (wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight) <= CHAT_STICKY_BOTTOM_THRESHOLD_PX;
+  }
+
+  function shouldPersistThreadPinnedBottom(wrap = dom.center.messagesWrap) {
+    if (!wrap) return false;
+    if (adminChatThreadTouchGestureActive) return false;
+    if (!isAdminChatThreadVerticallyScrollable(wrap)) return false;
+    return (wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight) <= CHAT_PINNED_BOTTOM_PERSIST_THRESHOLD_PX;
+  }
+
+  function getAdminChatThreadInputAnchorNode() {
+    const focused = getFocusedAdminChatTextInput();
+    if (focused instanceof HTMLElement) return focused;
+    if (dom.center.input instanceof HTMLElement) return dom.center.input;
+    if (dom.center.composer instanceof HTMLElement) return dom.center.composer;
+    if (dom.center.footerPanel instanceof HTMLElement) return dom.center.footerPanel;
+    return null;
+  }
+
+  function getAdminChatThreadInputAnchorSnapshot() {
+    const wrap = dom.center.messagesWrap;
+    const anchor = getAdminChatThreadInputAnchorNode();
+    if (!(wrap instanceof HTMLElement) || !(anchor instanceof HTMLElement)) return null;
+
+    const wrapRect = wrap.getBoundingClientRect();
+    const anchorRect = anchor.getBoundingClientRect();
+    if (!Number.isFinite(wrapRect.top) || wrapRect.height <= 0) return null;
+
+    const anchorTopInWrap = Number(anchorRect.top || 0) - Number(wrapRect.top || 0);
+    if (!Number.isFinite(anchorTopInWrap)) return null;
+    // Keep raw offset even when anchor is temporarily outside wrap bounds during keyboard motion.
+    const contentTopAtAnchor = Number(wrap.scrollTop || 0) + anchorTopInWrap;
+    if (!Number.isFinite(contentTopAtAnchor)) return null;
+
+    return {
+      contentTopAtAnchor: Math.max(0, contentTopAtAnchor),
+    };
   }
 
   function getMessagesBottomDistanceSnapshot() {
@@ -8566,10 +10582,33 @@
   function applyMessagesBottomDistanceSnapshot(distance) {
     const wrap = dom.center.messagesWrap;
     if (!wrap) return false;
+    if (isAdminChatThreadEdgeSpringPositionControlled()) return false;
     const raw = Number(distance);
     if (!Number.isFinite(raw)) return false;
     const maxTop = Math.max(0, Number(wrap.scrollHeight || 0) - Number(wrap.clientHeight || 0));
     const nextTop = Math.max(0, Math.min(maxTop, maxTop - Math.max(0, raw)));
+    wrap.scrollTop = nextTop;
+    updateMessagesScrollDownButton();
+    return true;
+  }
+
+  function applyAdminChatThreadInputAnchorSnapshot(snapshot) {
+    const wrap = dom.center.messagesWrap;
+    const anchor = getAdminChatThreadInputAnchorNode();
+    if (!(wrap instanceof HTMLElement) || !(anchor instanceof HTMLElement)) return false;
+    if (isAdminChatThreadEdgeSpringPositionControlled()) return false;
+
+    const contentTopAtAnchor = Number(snapshot && snapshot.contentTopAtAnchor);
+    if (!Number.isFinite(contentTopAtAnchor)) return false;
+
+    const wrapRect = wrap.getBoundingClientRect();
+    const anchorRect = anchor.getBoundingClientRect();
+    if (!Number.isFinite(wrapRect.top) || wrapRect.height <= 0) return false;
+
+    const anchorTopInWrap = Number(anchorRect.top || 0) - Number(wrapRect.top || 0);
+    if (!Number.isFinite(anchorTopInWrap)) return false;
+    const maxTop = Math.max(0, Number(wrap.scrollHeight || 0) - Number(wrap.clientHeight || 0));
+    const nextTop = Math.max(0, Math.min(maxTop, contentTopAtAnchor - anchorTopInWrap));
     wrap.scrollTop = nextTop;
     updateMessagesScrollDownButton();
     return true;
@@ -8580,6 +10619,21 @@
     if (!key) return false;
     return state.threadPinnedBottomByClient[key] === true
       || state.store?.ui?.threadPinnedBottomByClient?.[key] === true;
+  }
+
+  function setRenderedThreadClientKey(clientId) {
+    const key = normalizeClientIdKey(clientId);
+    [dom.center.messagesWrap, dom.center.messages].forEach((node) => {
+      if (!node || !node.dataset) return;
+      if (key) node.dataset.renderedClientId = key;
+      else delete node.dataset.renderedClientId;
+    });
+  }
+
+  function getRenderedThreadClientKey() {
+    const wrapKey = normalizeClientIdKey(dom.center.messagesWrap?.dataset?.renderedClientId);
+    const messagesKey = normalizeClientIdKey(dom.center.messages?.dataset?.renderedClientId);
+    return wrapKey || messagesKey || "";
   }
 
   function getPendingScrollMessageIdSet(clientId = state.activeClientId) {
@@ -8717,18 +10771,21 @@
     updateMessagesScrollDownButton();
   }
 
-  function saveThreadScrollPosition(clientId = state.activeClientId) {
+  function saveThreadScrollPosition(clientId = state.activeClientId, options = {}) {
     const key = normalizeClientIdKey(clientId);
     const wrap = dom.center.messagesWrap;
     if (!key || !wrap) return;
     const nextTop = toStoredScrollTop(wrap.scrollTop);
-    const pinnedBottom = shouldKeepMessagesPinnedToBottom();
+    const pinnedBottom = shouldPersistThreadPinnedBottom(wrap);
     state.threadScrollTopByClient[key] = nextTop;
     state.threadPinnedBottomByClient[key] = pinnedBottom;
     const ui = ensureUiStoreState();
     ui.threadScrollTopByClient[key] = nextTop;
     ui.threadPinnedBottomByClient[key] = pinnedBottom;
     scheduleUiStatePersist();
+    if (options && options.forcePersist === true) {
+      flushUiStatePersist();
+    }
   }
 
   function restoreThreadScrollPosition(clientId = state.activeClientId) {
@@ -8764,7 +10821,10 @@
   function updateMessagesScrollDownButton() {
     const wrap = dom.center.messagesWrap;
     const btn = dom.center.scrollDownBtn;
-    if (!wrap || !btn) return;
+    if (!wrap) return;
+    syncAdminMobileThreadBottomInset();
+    if (!btn) return;
+    syncAdminMobileChatScrollDownPosition();
 
     const hiddenDistance = wrap.scrollHeight - wrap.clientHeight - wrap.scrollTop;
     const badgeCount = getScrollDownBadgeCount();
@@ -8796,11 +10856,42 @@
     const wrap = dom.center.messagesWrap;
     if (!wrap) return;
 
+    const clientIdAtSchedule = options.clientIdAtSchedule !== undefined
+      ? String(options.clientIdAtSchedule || "")
+      : "";
+    if (clientIdAtSchedule && String(state.activeClientId || "") !== clientIdAtSchedule) {
+      return;
+    }
+
+    const deferIfTouchGesture = options.deferIfTouchGesture !== false;
+    const deferredAttempt = Math.max(0, Number(options.deferredAttempt || 0));
+    if (
+      deferIfTouchGesture
+      && isAdminMobileChatLayout()
+      && adminChatThreadTouchGestureActive
+      && deferredAttempt < 16
+    ) {
+      if (!adminChatDeferredAutoScrollTimer) {
+        const retryDelay = 120;
+        adminChatDeferredAutoScrollTimer = window.setTimeout(() => {
+          adminChatDeferredAutoScrollTimer = 0;
+          scrollMessagesToBottom({
+            ...options,
+            deferredAttempt: deferredAttempt + 1,
+            clientIdAtSchedule: clientIdAtSchedule || String(state.activeClientId || ""),
+          });
+        }, retryDelay);
+      }
+      return;
+    }
+
     const behavior = String(options.behavior || "auto");
     const keepPending = options.keepPending === true;
     const durationRaw = Number(options.duration);
     const duration = Number.isFinite(durationRaw) && durationRaw > 0 ? durationRaw : CHAT_AUTOSCROLL_MS;
     const target = Math.max(0, wrap.scrollHeight - wrap.clientHeight);
+    const startTop = Number(wrap.scrollTop || 0);
+    const delta = target - startTop;
 
     if (behavior !== "smooth-fast") {
       stopMessagesSmoothScroll();
@@ -8809,10 +10900,14 @@
       updateMessagesScrollDownButton();
       return;
     }
-
-    const startTop = wrap.scrollTop;
-    const delta = target - startTop;
     if (Math.abs(delta) < 1) return;
+    if (Math.abs(delta) < 20) {
+      stopMessagesSmoothScroll();
+      wrap.scrollTop = target;
+      if (!keepPending) clearPendingScrollNewCount();
+      updateMessagesScrollDownButton();
+      return;
+    }
 
     stopMessagesSmoothScroll();
     const startedAt = typeof performance !== "undefined" && typeof performance.now === "function"
@@ -8833,7 +10928,9 @@
         return;
       }
       state.messagesScrollRaf = 0;
-      wrap.scrollTop = target;
+      if (Math.abs(target - Number(wrap.scrollTop || 0)) > 0.5) {
+        wrap.scrollTop = target;
+      }
       if (!keepPending) clearPendingScrollNewCount();
       updateMessagesScrollDownButton();
     };
@@ -8866,10 +10963,11 @@
 
     const sync = (options = {}) => {
       const stickToBottom = options && options.stickToBottom === true;
+      const skipThreadViewportSync = options && options.skipThreadViewportSync === true;
       const wrap = dom.center.messagesWrap;
       const composer = input.closest(".chat-main-composer");
-      const wasNearBottom = shouldKeepMessagesPinnedToBottom();
-      const prevBottomDistance = getMessagesBottomDistanceSnapshot();
+      const wasNearBottom = skipThreadViewportSync ? false : shouldKeepMessagesPinnedToBottom();
+      const prevBottomDistance = skipThreadViewportSync ? null : getMessagesBottomDistanceSnapshot();
       const prevComposerHeight = composer ? Number(composer.getBoundingClientRect().height || 0) : 0;
 
       const inputStyles = window.getComputedStyle(input);
@@ -9679,6 +11777,7 @@
 
   function hideReactionBar() {
     if (dom.center.reactionBar) {
+      clearReactionBarTouchGuard();
       dom.center.reactionBar.classList.add("hidden");
       setReactionBarExpanded(false);
     }
@@ -9712,19 +11811,116 @@
       window.clearTimeout(menu.__touchGuardTimer);
       menu.__touchGuardTimer = 0;
     }
+    menu.__touchGuardAwaitRelease = false;
+    menu.__awaitFreshTouchStart = false;
     menu.style.pointerEvents = "";
+  }
+
+  function clearReactionBarTouchGuard() {
+    const bar = dom.center.reactionBar;
+    if (!bar) return;
+    if (bar.__touchGuardTimer) {
+      window.clearTimeout(bar.__touchGuardTimer);
+      bar.__touchGuardTimer = 0;
+    }
+    bar.__touchGuardAwaitRelease = false;
+    bar.__awaitFreshTouchStart = false;
+    bar.style.pointerEvents = "";
+  }
+
+  function releaseContextMenuTouchGuard() {
+    const menu = dom.center.contextMenu;
+    if (!menu) return;
+    if (menu.__touchGuardTimer) {
+      window.clearTimeout(menu.__touchGuardTimer);
+      menu.__touchGuardTimer = 0;
+    }
+    menu.__touchGuardAwaitRelease = false;
+    if (menu.classList.contains("hidden")) return;
+    menu.style.pointerEvents = "";
+  }
+
+  function releaseReactionBarTouchGuard() {
+    const bar = dom.center.reactionBar;
+    if (!bar) return;
+    if (bar.__touchGuardTimer) {
+      window.clearTimeout(bar.__touchGuardTimer);
+      bar.__touchGuardTimer = 0;
+    }
+    bar.__touchGuardAwaitRelease = false;
+    if (bar.classList.contains("hidden")) return;
+    bar.style.pointerEvents = "";
   }
 
   function armContextMenuTouchGuard() {
     const menu = dom.center.contextMenu;
     if (!menu) return;
     clearContextMenuTouchGuard();
+    menu.__awaitFreshTouchStart = true;
+    menu.__touchGuardAwaitRelease = true;
     menu.style.pointerEvents = "none";
     menu.__touchGuardTimer = window.setTimeout(() => {
-      menu.__touchGuardTimer = 0;
-      if (menu.classList.contains("hidden")) return;
-      menu.style.pointerEvents = "";
-    }, CHAT_TOUCH_MENU_INTERACTION_GUARD_MS);
+      releaseContextMenuTouchGuard();
+    }, CHAT_TOUCH_MENU_INTERACTION_GUARD_MS + 420);
+  }
+
+  function armReactionBarTouchGuard() {
+    const bar = dom.center.reactionBar;
+    if (!bar) return;
+    clearReactionBarTouchGuard();
+    bar.__awaitFreshTouchStart = true;
+    bar.__touchGuardAwaitRelease = true;
+    bar.style.pointerEvents = "none";
+    bar.__touchGuardTimer = window.setTimeout(() => {
+      releaseReactionBarTouchGuard();
+    }, CHAT_TOUCH_MENU_INTERACTION_GUARD_MS + 420);
+  }
+
+  function markFreshContextMenuTouchInteraction() {
+    const menu = dom.center.contextMenu;
+    if (!menu || menu.classList.contains("hidden")) return;
+    if (menu.__awaitFreshTouchStart !== true) return;
+    menu.__awaitFreshTouchStart = false;
+  }
+
+  function markFreshReactionBarTouchInteraction() {
+    const bar = dom.center.reactionBar;
+    if (!bar || bar.classList.contains("hidden")) return;
+    if (bar.__awaitFreshTouchStart !== true) return;
+    bar.__awaitFreshTouchStart = false;
+  }
+
+  function shouldSuppressGuardedContextMenuClick(event) {
+    const menu = dom.center.contextMenu;
+    if (!menu || menu.classList.contains("hidden")) return false;
+    if (menu.__awaitFreshTouchStart !== true) return false;
+    if (!isTouchGeneratedClick(event)) return false;
+    event.preventDefault();
+    event.stopPropagation();
+    return true;
+  }
+
+  function shouldSuppressGuardedReactionBarClick(event) {
+    const bar = dom.center.reactionBar;
+    if (!bar || bar.classList.contains("hidden")) return false;
+    if (bar.__awaitFreshTouchStart !== true) return false;
+    if (!isTouchGeneratedClick(event)) return false;
+    event.preventDefault();
+    event.stopPropagation();
+    return true;
+  }
+
+  function releaseContextMenuTouchGuardAfterTouch(event = null) {
+    const menu = dom.center.contextMenu;
+    const pointerType = String(event?.pointerType || "").toLowerCase();
+    if (pointerType && pointerType !== "touch") return;
+    if (menu && !menu.classList.contains("hidden") && menu.__touchGuardAwaitRelease === true) {
+      releaseContextMenuTouchGuard();
+    }
+    const bar = dom.center.reactionBar;
+    if (bar && !bar.classList.contains("hidden") && bar.__touchGuardAwaitRelease === true) {
+      releaseReactionBarTouchGuard();
+    }
   }
 
   function ensureClientContextMenu() {
@@ -10149,6 +12345,7 @@
         }
       : null;
     dom.center.reactionBar.classList.remove("hidden");
+    armReactionBarTouchGuard();
     positionReactionBar(menuRect);
   }
 
@@ -10391,11 +12588,12 @@
   }
 
   function renderChatHeader() {
+    ensureDesktopChatHeaderMarkup();
     setHeaderLoading(state.activeClientDataLoading === true);
-    const setOrderStatusView = (text, color) => {
-      if (!dom.center.orderStatus) return;
+    const legacySetOrderStatusView = (text, _color, order = null) => {
+      if (!dom.center.headerOrder) return;
       const safeText = String(text || "—").trim() || "—";
-      const safeColor = String(color || "").trim();
+      const safeColor = String(_color || "").trim();
       dom.center.orderStatus.textContent = safeText;
       dom.center.orderStatus.classList.toggle("is-empty", safeText === "—" || safeText === "Без заказа");
       if (!safeColor) {
@@ -10409,21 +12607,58 @@
       dom.center.orderStatus.style.color = safeColor;
     };
 
-    const setOrderTotalView = (totalText, paymentCode) => {
+    const setOrderStatusView = (text, _color, order = null) => {
+      if (!dom.center.headerOrder) return;
+      const safeText = String(text || "вЂ”").trim() || "вЂ”";
+      const stageCol = $(".order-col.order-stage", dom.center.headerOrder);
+      if (!stageCol) return;
+      stageCol.innerHTML = buildHeaderOrderStageButtonHtml(order, safeText);
+      refreshDesktopHeaderDomRefs();
+    };
+
+    const setOrderTotalView = (totalText, paymentCode, order = null) => {
       if (!dom.center.orderTotal) return;
       const safeTotal = String(totalText || "—").trim() || "—";
       const isEmpty = safeTotal === "—";
 
-      dom.center.orderTotal.classList.remove("order-payment-cash", "order-payment-card");
+      const paymentTitle = String(order?.payment_title || "").trim();
+      const isFullyRefunded = isHeaderOrderFullyRefunded(order);
+      const isPaid = isHeaderOrderPaid(order);
+      const paymentStateClass = isFullyRefunded
+        ? "order-payment-refund"
+        : (isPaid ? "order-payment-paid" : "order-payment-unpaid");
+      const paymentStatusText = isFullyRefunded ? "Возвращено" : (isPaid ? "Оплачено" : "Не оплачено");
+
+      dom.center.orderTotal.className = "order-payment-btn";
       dom.center.orderTotal.classList.toggle("is-empty", isEmpty);
       if (isEmpty) {
+        dom.center.orderTotal.removeAttribute("title");
         dom.center.orderTotal.textContent = "—";
         return;
       }
 
       const code = String(paymentCode || "").toLowerCase();
       const isCash = code.includes("cash");
-      dom.center.orderTotal.classList.add(isCash ? "order-payment-cash" : "order-payment-card");
+      dom.center.orderTotal.classList.add(isCash ? "order-payment-cash" : "order-payment-card", paymentStateClass);
+      if (paymentTitle) dom.center.orderTotal.setAttribute("title", paymentTitle);
+      else dom.center.orderTotal.removeAttribute("title");
+      if (sharedOrderPanel && typeof sharedOrderPanel.buildOrderPaymentButtonHtml === "function") {
+        const temp = document.createElement("div");
+        temp.innerHTML = sharedOrderPanel.buildOrderPaymentButtonHtml({
+          paymentTypeClass: isCash ? "order-payment-cash" : "order-payment-card",
+          paymentStateClass,
+          paymentTitle,
+          paymentIconHtml: renderHeaderOrderPaymentIconHtml(code),
+          totalText: safeTotal,
+          statusText: paymentStatusText,
+        }).trim();
+        const builtButton = temp.firstElementChild;
+        if (builtButton) {
+          dom.center.orderTotal.className = builtButton.className;
+          dom.center.orderTotal.innerHTML = builtButton.innerHTML;
+          return;
+        }
+      }
       dom.center.orderTotal.innerHTML = `<i class="fas ${escapeHtml(paymentIcon(code))}"></i> ${escapeHtml(safeTotal)}`;
     };
 
@@ -10460,9 +12695,9 @@
       if (dom.center.headerPhone) dom.center.headerPhone.textContent = safeClientPhone;
       if (dom.center.mobileHeaderPhone) dom.center.mobileHeaderPhone.textContent = safeClientPhone;
       setHeaderTimeIcon(order);
-      setOrderTotalView(total, paymentCode);
+      setOrderTotalView(total, paymentCode, order);
       if (dom.center.orderTitle) dom.center.orderTitle.textContent = title;
-      setOrderStatusView(statusText, statusColor);
+      setOrderStatusView(statusText, statusColor, order);
       setHeaderOrderLinkState(orderId);
       syncHeaderTooltips();
     };
@@ -10506,6 +12741,9 @@
       ? { ...state.headerOrderSnapshot, ...snapshotFromList }
       : (snapshotOrderId > 0 ? state.headerOrderSnapshot : null);
     const headerOrder = snapshotOrder || candidate.headerOrder;
+    if (headerOrder && !state.orderStatusesLoaded && !state.orderStatusesLoading) {
+      ensureHeaderOrderStatusesLoaded().catch(console.error);
+    }
 
     if (!headerOrder) {
       state.headerOrderId = 0;
@@ -10673,19 +12911,20 @@
       : "";
     const textMarkup = hasText ? '<div class="chat-message-text"></div>' : "";
     const orderCardMarkup = buildMessageOrderCardsMarkup(orderCardModels);
-
     item.innerHTML = `
       <span class="chat-message-select-badge" aria-hidden="true"><i class="fas fa-check"></i></span>
-      <div class="chat-message-bubble">
+      <div class="chat-message-bubble"${msg.id ? ` data-message-id="${escapeHtml(String(msg.id || ""))}"` : ""}>
         ${replyMarkup}
         ${attachmentMarkup}
         ${textMarkup}
         ${orderCardMarkup}
         <div class="chat-message-meta">
-          <span class="chat-message-time">${escapeHtml(time)}</span>
-          ${outgoingStatus
-            ? `<span class="chat-message-status chat-message-status--${escapeHtml(outgoingStatus)}" title="${escapeHtml(outgoingStatusTitle)}" aria-label="${escapeHtml(outgoingStatusTitle)}">${getOutgoingStatusIconMarkup(outgoingStatus)}</span>`
-            : ""}
+          <span class="chat-message-meta-main">
+            <span class="chat-message-time">${escapeHtml(time)}</span>
+            ${outgoingStatus
+              ? `<span class="chat-message-status chat-message-status--${escapeHtml(outgoingStatus)}" title="${escapeHtml(outgoingStatusTitle)}" aria-label="${escapeHtml(outgoingStatusTitle)}">${getOutgoingStatusIconMarkup(outgoingStatus)}</span>`
+              : ""}
+          </span>
           ${msg.pinned ? '<span class="chat-message-pin" title="Закреплено"><i class="fas fa-thumbtack"></i></span>' : ""}
         </div>
       </div>
@@ -10786,7 +13025,41 @@
   function reconcileThreadMessageNodes(descriptors) {
     if (!dom.center.messages) return;
     const container = dom.center.messages;
+    const now = typeof performance !== "undefined" && typeof performance.now === "function"
+      ? performance.now()
+      : Date.now();
+    const isLayoutBurst = (
+      Number.isFinite(threadLayoutAnimationLastRunAt)
+      && threadLayoutAnimationLastRunAt > 0
+      && (now - threadLayoutAnimationLastRunAt) <= CHAT_THREAD_LAYOUT_BURST_GAP_MS
+    );
+    if (isLayoutBurst) {
+      threadLayoutAnimationQuietUntil = Math.max(
+        Number(threadLayoutAnimationQuietUntil || 0),
+        now + CHAT_THREAD_LAYOUT_BURST_COOLDOWN_MS
+      );
+    }
+    threadLayoutAnimationLastRunAt = now;
+    const layoutBurstCooldownActive = now < Number(threadLayoutAnimationQuietUntil || 0);
+    const canAnimateLayoutShift = (
+      descriptors.length > 0
+      && container.childElementCount > 0
+      && container.childElementCount <= 180
+      && document.visibilityState !== "hidden"
+      && !layoutBurstCooldownActive
+      && !(typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches)
+    );
+    const firstRectsByKey = new Map();
+    if (canAnimateLayoutShift) {
+      Array.from(container.children).forEach((node) => {
+        if (!(node instanceof HTMLElement) || !node.dataset) return;
+        const key = String(node.dataset.renderKey || "");
+        if (!key || firstRectsByKey.has(key)) return;
+        firstRectsByKey.set(key, node.getBoundingClientRect());
+      });
+    }
     const existingByKey = new Map();
+    const insertedNodes = [];
     Array.from(container.children).forEach((node) => {
       const key = node && node.dataset ? String(node.dataset.renderKey || "") : "";
       if (key && !existingByKey.has(key)) existingByKey.set(key, node);
@@ -10813,6 +13086,7 @@
         }
       } else {
         nextNode = setThreadRenderDescriptor(descriptor.create(), key, signature);
+        insertedNodes.push(nextNode);
       }
 
       if (nextNode !== anchor) {
@@ -10830,10 +13104,61 @@
       container.removeChild(anchor);
       anchor = next;
     }
+
+    if (!canAnimateLayoutShift) return;
+    const currentAnimationToken = ++threadLayoutAnimationToken;
+    const movedDurationMs = 460;
+    const movedEasing = "cubic-bezier(.2,.8,.2,1)";
+    requestAnimationFrame(() => {
+      if (currentAnimationToken !== threadLayoutAnimationToken) return;
+      insertedNodes.forEach((node) => {
+        if (!(node instanceof HTMLElement)) return;
+        if (typeof node.animate !== "function") return;
+        if (typeof node.getAnimations === "function") {
+          node.getAnimations({ subtree: false }).forEach((animation) => {
+            try { animation.cancel(); } catch {}
+          });
+        }
+        node.animate(
+          [
+            { transform: "translateY(10px)", opacity: 0.01 },
+            { transform: "translateY(0px)", opacity: 1 },
+          ],
+          { duration: 340, easing: movedEasing, fill: "both" },
+        );
+      });
+      if (firstRectsByKey.size === 0) return;
+      Array.from(container.children).forEach((node) => {
+        if (!(node instanceof HTMLElement) || !node.dataset) return;
+        if (insertedNodes.includes(node)) return;
+        const key = String(node.dataset.renderKey || "");
+        if (!key) return;
+        const lastRect = node.getBoundingClientRect();
+        const firstRect = firstRectsByKey.get(key) || null;
+        if (!firstRect) return;
+        const deltaY = firstRect.top - lastRect.top;
+        if (Math.abs(deltaY) < 0.5) return;
+        if (typeof node.animate === "function") {
+          if (typeof node.getAnimations === "function") {
+            node.getAnimations({ subtree: false }).forEach((animation) => {
+              try { animation.cancel(); } catch {}
+            });
+          }
+          node.animate(
+            [
+              { transform: `translateY(${deltaY}px)` },
+              { transform: "translateY(0px)" },
+            ],
+            { duration: movedDurationMs, easing: movedEasing, fill: "both" },
+          );
+        }
+      });
+    });
   }
 
   function renderMessages(options = {}) {
     if (!dom.center.messages || !dom.center.empty) return;
+    releaseAdminChatThreadEdgeSpring({ immediate: true });
     const forceScrollBottom = options.forceScrollBottom === true;
     const disableAutoPin = options.disableAutoPin === true;
     const smoothScroll = options.smoothScroll !== false;
@@ -10842,6 +13167,7 @@
     const keepPinnedBeforeRender = shouldKeepMessagesPinnedToBottom();
 
     if (!state.activeClientId) {
+      setRenderedThreadClientKey("");
       resetThreadImageDrop();
       setSelectionMode(false);
       dom.center.empty.classList.remove("hidden");
@@ -10852,6 +13178,7 @@
       return;
     }
 
+    setRenderedThreadClientKey(state.activeClientId);
     const thread = getVisibleThread(state.activeClientId);
     const validIds = new Set(thread.map((msg) => String(msg.id)));
     Array.from(state.selectedMessageIds).forEach((id) => {
@@ -10913,7 +13240,29 @@
 
     if (dom.center.messagesWrap && !state.selectionMode) {
       if (forceScrollBottom || (!disableAutoPin && keepPinnedBeforeRender)) {
-        scrollMessagesToBottom({ behavior: smoothScroll ? "smooth-fast" : "auto" });
+        const keyboardOpen = !!(
+          document.body
+          && document.body.classList.contains("chat-mobile-keyboard-open")
+        );
+        if (adminChatRenderAutoScrollTimer) {
+          window.clearTimeout(adminChatRenderAutoScrollTimer);
+          adminChatRenderAutoScrollTimer = 0;
+        }
+        if (keyboardOpen) {
+          const renderClientIdAtSchedule = String(state.activeClientId || "");
+          adminChatRenderAutoScrollTimer = window.setTimeout(() => {
+            adminChatRenderAutoScrollTimer = 0;
+            const keyboardStillOpen = !!(
+              document.body
+              && document.body.classList.contains("chat-mobile-keyboard-open")
+            );
+            if (!keyboardStillOpen) return;
+            if (String(state.activeClientId || "") !== renderClientIdAtSchedule) return;
+            scrollMessagesToBottom({ behavior: smoothScroll ? "smooth-fast" : "auto" });
+          }, 130);
+        } else {
+          scrollMessagesToBottom({ behavior: smoothScroll ? "smooth-fast" : "auto" });
+        }
       }
     }
     syncPendingScrollCountByViewport(state.activeClientId);
@@ -10980,6 +13329,527 @@
     return true;
   }
 
+  function bindAdminMobileFooterPanGuard() {
+    const footer = dom.center.footerPanel;
+    if (!footer || footer.dataset.mobilePanGuardBound === "1") return;
+    footer.dataset.mobilePanGuardBound = "1";
+
+    let activePointerId = null;
+    let activeTouchId = null;
+    let startX = 0;
+    let startY = 0;
+    let dragAxis = "";
+    let trackedInput = null;
+
+    const reset = () => {
+      activePointerId = null;
+      activeTouchId = null;
+      startX = 0;
+      startY = 0;
+      dragAxis = "";
+      trackedInput = null;
+    };
+
+    const isEnabled = () => isAdminMobileChatLayout();
+
+    const begin = (clientX, clientY, target) => {
+      startX = Number(clientX || 0);
+      startY = Number(clientY || 0);
+      dragAxis = "";
+      trackedInput = target && target.closest ? target.closest(".chat-message-input") : null;
+    };
+
+    const canScrollTrackedInput = (deltaY) => {
+      if (!trackedInput) return false;
+      const maxTop = Math.max(0, Number(trackedInput.scrollHeight || 0) - Number(trackedInput.clientHeight || 0));
+      if (maxTop <= 1) return false;
+      const currentTop = Math.max(0, Number(trackedInput.scrollTop || 0));
+      if (deltaY < 0 && currentTop < maxTop - 1) return true;
+      if (deltaY > 0 && currentTop > 1) return true;
+      return false;
+    };
+
+    const shouldBlockMove = (clientX, clientY) => {
+      if (!isEnabled()) return false;
+      const deltaX = Number(clientX || 0) - startX;
+      const deltaY = Number(clientY || 0) - startY;
+      if (!dragAxis) {
+        if (Math.abs(deltaX) < 4 && Math.abs(deltaY) < 4) return false;
+        dragAxis = Math.abs(deltaX) >= Math.abs(deltaY) ? "x" : "y";
+      }
+      if (dragAxis !== "y") return false;
+      if (canScrollTrackedInput(deltaY)) return false;
+      return true;
+    };
+
+    const resolveTrackedTouch = (touchList) => {
+      if (activeTouchId == null || !touchList) return null;
+      for (let index = 0; index < touchList.length; index += 1) {
+        const touch = touchList[index];
+        if (touch && touch.identifier === activeTouchId) return touch;
+      }
+      return null;
+    };
+
+    footer.addEventListener("pointerdown", (event) => {
+      if (!isEnabled()) return;
+      if (event.pointerType === "mouse" || event.button !== 0) return;
+      activePointerId = event.pointerId;
+      begin(event.clientX, event.clientY, event.target);
+    }, { capture: true });
+
+    footer.addEventListener("pointermove", (event) => {
+      if (activePointerId == null || event.pointerId !== activePointerId) return;
+      if (!shouldBlockMove(event.clientX, event.clientY)) return;
+      event.preventDefault();
+      event.stopPropagation();
+    }, { passive: false, capture: true });
+
+    footer.addEventListener("touchstart", (event) => {
+      if (!isEnabled() || event.touches.length !== 1) return;
+      const touch = event.touches[0];
+      activeTouchId = touch.identifier;
+      begin(touch.clientX, touch.clientY, event.target);
+    }, { passive: true, capture: true });
+
+    footer.addEventListener("touchmove", (event) => {
+      const touch = resolveTrackedTouch(event.touches) || resolveTrackedTouch(event.changedTouches);
+      if (!touch) return;
+      if (!shouldBlockMove(touch.clientX, touch.clientY)) return;
+      event.preventDefault();
+      event.stopPropagation();
+    }, { passive: false, capture: true });
+
+    ["pointerup", "pointercancel", "lostpointercapture", "touchend", "touchcancel"].forEach((eventName) => {
+      footer.addEventListener(eventName, reset, { passive: true, capture: true });
+    });
+  }
+
+  function bindAdminChatZoomGuards() {
+    const pageBody = document.body;
+    if (!pageBody || !pageBody.classList.contains("page-chat")) return;
+    if (pageBody.dataset.chatZoomGuardBound === "1") return;
+    pageBody.dataset.chatZoomGuardBound = "1";
+
+    const shouldBlock = () => !!document.body && document.body.classList.contains("page-chat");
+    const preventGesture = (event) => {
+      if (!shouldBlock()) return;
+      event.preventDefault();
+    };
+    const preventMultiTouch = (event) => {
+      if (!shouldBlock()) return;
+      const touches = Number(event.touches && event.touches.length || 0);
+      if (touches > 1) {
+        event.preventDefault();
+      }
+    };
+    const preventCtrlWheelZoom = (event) => {
+      if (!shouldBlock() || event.ctrlKey !== true) return;
+      event.preventDefault();
+    };
+
+    ["gesturestart", "gesturechange", "gestureend"].forEach((eventName) => {
+      document.addEventListener(eventName, preventGesture, { passive: false, capture: true });
+    });
+    document.addEventListener("touchstart", preventMultiTouch, { passive: false, capture: true });
+    document.addEventListener("touchmove", preventMultiTouch, { passive: false, capture: true });
+    document.addEventListener("wheel", preventCtrlWheelZoom, { passive: false, capture: true });
+  }
+
+  function bindAdminMobileVerticalPanGuard(element, datasetKey) {
+    if (!element) return;
+    const guardKey = String(datasetKey || "mobilePanGuardBound");
+    if (element.dataset && element.dataset[guardKey] === "1") return;
+    if (element.dataset) element.dataset[guardKey] = "1";
+
+    let activePointerId = null;
+    let activeTouchId = null;
+    let startX = 0;
+    let startY = 0;
+    let dragAxis = "";
+
+    const isEnabled = () => isAdminMobileChatLayout();
+
+    const reset = () => {
+      activePointerId = null;
+      activeTouchId = null;
+      startX = 0;
+      startY = 0;
+      dragAxis = "";
+    };
+
+    const begin = (clientX, clientY) => {
+      startX = Number(clientX || 0);
+      startY = Number(clientY || 0);
+      dragAxis = "";
+    };
+
+    const shouldBlockMove = (clientX, clientY) => {
+      if (!isEnabled()) return false;
+      const deltaX = Number(clientX || 0) - startX;
+      const deltaY = Number(clientY || 0) - startY;
+      if (!dragAxis) {
+        if (Math.abs(deltaX) < 4 && Math.abs(deltaY) < 4) return false;
+        dragAxis = Math.abs(deltaX) >= Math.abs(deltaY) ? "x" : "y";
+      }
+      return dragAxis === "y";
+    };
+
+    const resolveTrackedTouch = (touchList) => {
+      if (activeTouchId == null || !touchList) return null;
+      for (let index = 0; index < touchList.length; index += 1) {
+        const touch = touchList[index];
+        if (touch && touch.identifier === activeTouchId) return touch;
+      }
+      return null;
+    };
+
+    element.addEventListener("pointerdown", (event) => {
+      if (!isEnabled()) return;
+      if (event.pointerType === "mouse" || event.button !== 0) return;
+      activePointerId = event.pointerId;
+      begin(event.clientX, event.clientY);
+    }, { capture: true });
+
+    element.addEventListener("pointermove", (event) => {
+      if (activePointerId == null || event.pointerId !== activePointerId) return;
+      if (!shouldBlockMove(event.clientX, event.clientY)) return;
+      event.preventDefault();
+      event.stopPropagation();
+    }, { passive: false, capture: true });
+
+    element.addEventListener("touchstart", (event) => {
+      if (!isEnabled() || event.touches.length !== 1) return;
+      const touch = event.touches[0];
+      activeTouchId = touch.identifier;
+      begin(touch.clientX, touch.clientY);
+    }, { passive: true, capture: true });
+
+    element.addEventListener("touchmove", (event) => {
+      const touch = resolveTrackedTouch(event.touches) || resolveTrackedTouch(event.changedTouches);
+      if (!touch) return;
+      if (!shouldBlockMove(touch.clientX, touch.clientY)) return;
+      event.preventDefault();
+      event.stopPropagation();
+    }, { passive: false, capture: true });
+
+    ["pointerup", "pointercancel", "lostpointercapture", "touchend", "touchcancel"].forEach((eventName) => {
+      element.addEventListener(eventName, reset, { passive: true, capture: true });
+    });
+  }
+
+  function bindAdminMobileStaticPanGuards() {
+    bindAdminMobileVerticalPanGuard(dom.center.headerPanel, "mobilePanGuardBound");
+    bindAdminMobileVerticalPanGuard(dom.center.scrollDownBtn, "mobilePanGuardBound");
+  }
+
+  function bindAdminMobileEmptyThreadTouchBlock() {
+    const wrap = dom.center.messagesWrap;
+    if (!wrap || wrap.dataset.mobileEmptyThreadTouchBlockBound === "1") return;
+    wrap.dataset.mobileEmptyThreadTouchBlockBound = "1";
+
+    let touchState = null;
+
+    const reset = () => {
+      touchState = null;
+    };
+
+    const resolveTrackedTouch = (touchList) => {
+      if (!touchState || touchState.id == null || !touchList) return null;
+      for (let index = 0; index < touchList.length; index += 1) {
+        const touch = touchList[index];
+        if (touch && touch.identifier === touchState.id) return touch;
+      }
+      return null;
+    };
+
+    const shouldBlock = () => {
+      if (!isAdminMobileChatLayout()) return false;
+      if (hasFocusedAdminChatTextInput()) return false;
+      if (isAdminChatThreadVerticallyScrollable(wrap)) return false;
+      return true;
+    };
+
+    wrap.addEventListener("touchstart", (event) => {
+      reset();
+      if (event.touches.length !== 1) return;
+      if (!shouldBlock()) return;
+      const touch = event.touches[0];
+      touchState = {
+        id: touch.identifier,
+        startX: Number(touch.clientX || 0),
+        startY: Number(touch.clientY || 0),
+      };
+    }, { passive: true, capture: true });
+
+    wrap.addEventListener("touchmove", (event) => {
+      if (!touchState) return;
+      const touch = resolveTrackedTouch(event.touches) || resolveTrackedTouch(event.changedTouches);
+      if (!touch) return;
+      if (!shouldBlock()) {
+        reset();
+        return;
+      }
+      const dx = Number(touch.clientX || 0) - touchState.startX;
+      const dy = Number(touch.clientY || 0) - touchState.startY;
+      if (dy <= 6 || Math.abs(dy) <= Math.abs(dx)) return;
+      event.preventDefault();
+      event.stopPropagation();
+    }, { passive: false, capture: true });
+
+    ["touchend", "touchcancel"].forEach((eventName) => {
+      wrap.addEventListener(eventName, reset, { passive: true, capture: true });
+    });
+  }
+
+  function bindAdminMobileThreadSwipeToClients() {
+    const wrap = dom.center.messagesWrap;
+    if (!wrap || wrap.dataset.mobileThreadSwipeToClientsBound === "1") return;
+    wrap.dataset.mobileThreadSwipeToClientsBound = "1";
+
+    let activeTouchId = null;
+    let startX = 0;
+    let startY = 0;
+    let lastX = 0;
+    let lastY = 0;
+    let swipeLocked = false;
+    let dragStarted = false;
+
+    const reset = () => {
+      if (document.body) {
+        document.body.classList.remove("chat-mobile-left-dragging");
+      }
+      if (dom.left.panel) {
+        dom.left.panel.style.removeProperty("transform");
+      }
+      activeTouchId = null;
+      startX = 0;
+      startY = 0;
+      lastX = 0;
+      lastY = 0;
+      swipeLocked = false;
+      dragStarted = false;
+    };
+
+    const isEnabled = () => {
+      if (shouldPreferNativeAdminMobileChatTouchHandling()) return false;
+      if (!isAdminMobileChatLayout()) return false;
+      if (!document.body) return false;
+      if (document.body.classList.contains("chat-mobile-left-open")) return false;
+      if (document.body.classList.contains("chat-mobile-right-open")) return false;
+      if (state.selectionMode) return false;
+      if (hasFocusedAdminChatTextInput()) return false;
+      return true;
+    };
+
+    const getLeftPanelClosedDistance = () => {
+      const panelWidth = Math.max(
+        0,
+        Math.round(
+          Number(dom.left.panel?.getBoundingClientRect?.().width || 0)
+          || Number(dom.left.panel?.offsetWidth || 0)
+          || Number(window.innerWidth || 0)
+        )
+      );
+      return Math.max(0, panelWidth + 18);
+    };
+
+    const applyDragOffset = (clientX) => {
+      if (!document.body || !dom.left.panel) return;
+      const panelWidth = Math.max(
+        0,
+        Math.round(
+          Number(dom.left.panel?.offsetWidth || 0)
+          || Number(window.innerWidth || 0)
+        )
+      );
+      const closedDistance = getLeftPanelClosedDistance();
+      const pointerX = Math.max(0, Number(clientX || 0));
+      const offset = Math.max(-closedDistance, Math.min(0, pointerX - panelWidth));
+      document.body.classList.add("chat-mobile-left-dragging");
+      dom.left.panel.style.transform = `translateX(${offset}px)`;
+    };
+
+    const resolveTrackedTouch = (touchList) => {
+      if (activeTouchId == null || !touchList) return null;
+      for (let index = 0; index < touchList.length; index += 1) {
+        const touch = touchList[index];
+        if (touch && touch.identifier === activeTouchId) return touch;
+      }
+      return null;
+    };
+
+    wrap.addEventListener("touchstart", (event) => {
+      reset();
+      if (!isEnabled() || event.touches.length !== 1) return;
+      if (!isAdminChatEmptyThreadTouchTarget(event.target)) return;
+      const touch = event.touches[0];
+      activeTouchId = touch.identifier;
+      startX = Number(touch.clientX || 0);
+      startY = Number(touch.clientY || 0);
+      lastX = startX;
+      lastY = startY;
+    }, { passive: true });
+
+    wrap.addEventListener("touchmove", (event) => {
+      const touch = resolveTrackedTouch(event.touches) || resolveTrackedTouch(event.changedTouches);
+      if (!touch) return;
+      lastX = Number(touch.clientX || 0);
+      lastY = Number(touch.clientY || 0);
+
+      const dx = lastX - startX;
+      const dy = lastY - startY;
+      const absX = Math.abs(dx);
+      const absY = Math.abs(dy);
+
+      if (!swipeLocked) {
+        if (absX < CHAT_TOUCH_THREAD_NAV_LOCK_PX && absY < CHAT_TOUCH_THREAD_NAV_LOCK_PX) return;
+        if (absY > absX || dx >= 0) {
+          reset();
+          return;
+        }
+        swipeLocked = true;
+        dragStarted = true;
+        hideMessageContextMenu();
+        hideReactionBar();
+        hideEmojiPopover();
+      }
+
+      applyDragOffset(lastX);
+      event.preventDefault();
+      event.stopPropagation();
+    }, { passive: false });
+
+    const finish = () => {
+      if (activeTouchId == null) return;
+      const dx = lastX - startX;
+      const dy = lastY - startY;
+      const shouldOpenClients = (
+        swipeLocked
+        && dx <= -CHAT_TOUCH_THREAD_NAV_TRIGGER_PX
+        && Math.abs(dy) <= Math.max(44, Math.abs(dx))
+      );
+      const hadDrag = dragStarted === true;
+      if (!hadDrag) {
+        reset();
+        return;
+      }
+      if (document.body) {
+        document.body.classList.remove("chat-mobile-left-dragging");
+      }
+      if (shouldOpenClients) {
+        openClientsPanel();
+      } else {
+        syncMobileChatView("center", { persistState: false });
+      }
+      if (dom.left.panel) {
+        dom.left.panel.style.removeProperty("transform");
+      }
+      activeTouchId = null;
+      startX = 0;
+      startY = 0;
+      lastX = 0;
+      lastY = 0;
+      swipeLocked = false;
+      dragStarted = false;
+    };
+
+    wrap.addEventListener("touchend", finish, { passive: true });
+    wrap.addEventListener("touchcancel", reset, { passive: true });
+  }
+
+  function bindAdminMobileThreadKeyboardDismiss() {
+    const wrap = dom.center.messagesWrap;
+    if (!wrap || wrap.dataset.mobileKeyboardDismissBound === "1") return;
+    wrap.dataset.mobileKeyboardDismissBound = "1";
+
+    let activeTouchId = null;
+    let startX = 0;
+    let startY = 0;
+    let moved = false;
+    let eligible = false;
+
+    const reset = () => {
+      activeTouchId = null;
+      startX = 0;
+      startY = 0;
+      moved = false;
+      eligible = false;
+    };
+
+    const resolveTrackedTouch = (touchList) => {
+      if (activeTouchId == null || !touchList) return null;
+      for (let index = 0; index < touchList.length; index += 1) {
+        const touch = touchList[index];
+        if (touch && touch.identifier === activeTouchId) return touch;
+      }
+      return null;
+    };
+
+    wrap.addEventListener("touchstart", (event) => {
+      reset();
+      if (shouldPreferNativeAdminMobileChatTouchHandling()) return;
+      if (!isAdminMobileChatLayout()) return;
+      if (!hasFocusedAdminChatTextInput()) return;
+      if (event.touches.length !== 1) return;
+      if (!isAdminChatEmptyThreadTouchTarget(event.target)) return;
+      const touch = event.touches[0];
+      activeTouchId = touch.identifier;
+      startX = Number(touch.clientX || 0);
+      startY = Number(touch.clientY || 0);
+      eligible = true;
+    }, { passive: true });
+
+    wrap.addEventListener("touchmove", (event) => {
+      const touch = resolveTrackedTouch(event.touches) || resolveTrackedTouch(event.changedTouches);
+      if (!touch || !eligible) return;
+      const dx = Number(touch.clientX || 0) - startX;
+      const dy = Number(touch.clientY || 0) - startY;
+      if (Math.abs(dx) >= 8 || Math.abs(dy) >= 8) {
+        moved = true;
+      }
+    }, { passive: true });
+
+    const finish = (event) => {
+      if (activeTouchId == null) return;
+      const shouldDismiss = eligible
+        && !moved
+        && isAdminMobileChatLayout()
+        && hasFocusedAdminChatTextInput()
+        && isAdminChatEmptyThreadTouchTarget(event.target);
+      reset();
+      if (shouldDismiss) {
+        dismissAdminChatTextInputFocus();
+      }
+    };
+
+    wrap.addEventListener("touchend", finish, { passive: true });
+    wrap.addEventListener("touchcancel", reset, { passive: true });
+  }
+
+  function finalizeComposerSendUi(options = {}) {
+    const refocusInput = options.refocusInput !== false;
+    stopLocalTypingSession(state.activeClientId, { flush: true, force: true });
+
+    if (dom.center.input) {
+      dom.center.input.value = "";
+      syncComposerRichPreview({ stickToBottom: true });
+      if (refocusInput && !dom.center.input.disabled) {
+        focusComposerInput({ moveCaretToEnd: false });
+      }
+    } else {
+      syncComposerRichPreview({ stickToBottom: true });
+    }
+    syncComposerSendButtonFocusLock();
+
+    if (!dom.center.messagesWrap || state.selectionMode) return;
+    requestAnimationFrame(() => {
+      if (!dom.center.messagesWrap) return;
+      scrollMessagesToBottom({ behavior: "auto", keepPending: true });
+      saveThreadScrollPosition(state.activeClientId);
+    });
+  }
+
   function getAttachPreviewTitle(count) {
     const total = Number(count) || 0;
     if (total <= 1) return "1 фотография";
@@ -11030,7 +13900,9 @@
       hideEmojiPopover();
     }
     if (dom.center.attachInput) dom.center.attachInput.value = "";
-    if (focusComposer && dom.center.input && !dom.center.input.disabled) dom.center.input.focus();
+    if (focusComposer && dom.center.input && !dom.center.input.disabled) {
+      focusComposerInput({ moveCaretToEnd: false });
+    }
     if (clearItems && clearPersistedDraft) {
       clearPersistedAttachPreviewDraft().catch(() => {});
     }
@@ -11218,7 +14090,9 @@
     renderAttachPreview();
     dom.center.attachPreviewOverlay.classList.remove("hidden");
     dom.center.attachPreviewOverlay.setAttribute("aria-hidden", "false");
-    if (dom.center.attachPreviewCaption) dom.center.attachPreviewCaption.focus();
+    if (dom.center.attachPreviewCaption) {
+      focusChatTextField(dom.center.attachPreviewCaption, { moveCaretToEnd: false });
+    }
     return true;
   }
 
@@ -11431,11 +14305,15 @@
         event.stopPropagation();
         if (shouldUseNativeMobileEmojiKeyboard()) {
           hideEmojiPopover();
-          if (dom.center.attachPreviewCaption) dom.center.attachPreviewCaption.focus();
+          if (dom.center.attachPreviewCaption) {
+            focusChatTextField(dom.center.attachPreviewCaption, { moveCaretToEnd: false });
+          }
           return;
         }
         toggleEmojiPopover("attach-preview");
-        if (dom.center.attachPreviewCaption) dom.center.attachPreviewCaption.focus();
+        if (dom.center.attachPreviewCaption) {
+          focusChatTextField(dom.center.attachPreviewCaption, { moveCaretToEnd: false });
+        }
       });
     }
 
@@ -11471,6 +14349,8 @@
     }
 
     if (dom.center.attachPreviewCaption) {
+      bindAdminMobileTextFieldTapFocus(dom.center.attachPreviewCaption, "mobileCaptionTapFocusBound");
+      dom.center.attachPreviewCaption.addEventListener("click", repairAdminIosTextFocusOnClick);
       dom.center.attachPreviewCaption.addEventListener("input", () => {
         schedulePersistAttachPreviewDraft();
       });
@@ -11481,7 +14361,6 @@
       });
       dom.center.attachPreviewCaption.addEventListener("focus", handleAdminChatTextInputFocus);
       dom.center.attachPreviewCaption.addEventListener("blur", handleAdminChatTextInputBlur);
-      dom.center.attachPreviewCaption.addEventListener("touchend", guardIOSNativeTextFocus, { passive: false });
     }
 
     overlay.addEventListener("click", (event) => {
@@ -11707,6 +14586,8 @@
     }, true);
 
     dom.center.messages.addEventListener("dblclick", (event) => {
+      if (Date.now() < Number(suppressTouchClickUntil || 0)) return;
+      if (isTouchGeneratedClick(event)) return;
       if (state.selectionMode) return;
       if (!canUseMessageHeartShortcutTarget(event.target)) return;
       const messageEl = event.target.closest(".chat-message[data-message-id]");
@@ -11730,16 +14611,6 @@
         return;
       }
 
-      const messageEl = event.target.closest(".chat-message[data-message-id]");
-      if (!messageEl) {
-        clearTouchContextGesture();
-        return;
-      }
-      if (event.target.closest && event.target.closest("[data-chat-autolink]") && !state.selectionMode) {
-        clearTouchContextGesture();
-        return;
-      }
-
       const orderStrip = resolveOrderCardScrollStrip(event.target);
       if (orderStrip) {
         clearTouchContextGesture();
@@ -11756,13 +14627,19 @@
         return;
       }
 
-      const messageId = String(messageEl.getAttribute("data-message-id") || "");
-      const messageBubble = event.target.closest(".chat-message-bubble") || $(".chat-message-bubble", messageEl);
-      if (!messageId || !state.activeClientId) {
+      if (event.target.closest && event.target.closest("[data-chat-autolink]") && !state.selectionMode) {
         clearTouchContextGesture();
         return;
       }
+
+      const messageBubble = event.target.closest(".chat-message-bubble[data-message-id]");
       if (!messageBubble) {
+        clearTouchContextGesture();
+        return;
+      }
+
+      const messageId = String(messageBubble.getAttribute("data-message-id") || "");
+      if (!messageId || !state.activeClientId) {
         clearTouchContextGesture();
         return;
       }
@@ -11777,6 +14654,7 @@
         lastX: Number(touch.clientX || 0),
         lastY: Number(touch.clientY || 0),
         swipeLocked: false,
+        // Keep swipe-to-reply available on admin mobile thread.
         swipeRejected: false,
         swipeShift: 0,
         replyTriggered: false,
@@ -11801,6 +14679,10 @@
     }, { passive: true });
 
     dom.center.messages.addEventListener("touchmove", (event) => {
+      if (event.defaultPrevented) {
+        clearTouchContextGesture();
+        return;
+      }
       if (orderCardTouchPan) {
         if (event.touches.length !== 1) {
           clearOrderCardTouchPan();
@@ -11845,6 +14727,10 @@
         if (dx > CHAT_ATTACHMENT_TAP_MOVE_CANCEL_PX || dy > CHAT_ATTACHMENT_TAP_MOVE_CANCEL_PX) {
           touchAttachmentTap.moved = true;
         }
+      }
+      if (isAdminChatThreadEdgeSpringTouchActive()) {
+        clearTouchContextGesture();
+        return;
       }
       if (!touchContextGesture || event.touches.length !== 1) return;
       const touch = event.touches[0];
@@ -11965,6 +14851,11 @@
       clearTouchContextGesture();
     }, { passive: true });
 
+    document.addEventListener("touchend", releaseContextMenuTouchGuardAfterTouch, true);
+    document.addEventListener("touchcancel", releaseContextMenuTouchGuardAfterTouch, true);
+    document.addEventListener("pointerup", releaseContextMenuTouchGuardAfterTouch, true);
+    document.addEventListener("pointercancel", releaseContextMenuTouchGuardAfterTouch, true);
+
     dom.center.messages.addEventListener("mousedown", (event) => {
       if (event.button !== 0) return;
       const orderStrip = resolveOrderCardScrollStrip(event.target);
@@ -12048,7 +14939,17 @@
       event.preventDefault();
     }, { passive: false });
 
+    dom.center.contextMenu.addEventListener("touchstart", () => {
+      markFreshContextMenuTouchInteraction();
+    }, { passive: true });
+
+    dom.center.contextMenu.addEventListener("pointerdown", (event) => {
+      if (String(event.pointerType || "").toLowerCase() !== "touch") return;
+      markFreshContextMenuTouchInteraction();
+    }, { passive: true });
+
     dom.center.contextMenu.addEventListener("click", (event) => {
+      if (shouldSuppressGuardedContextMenuClick(event)) return;
       if (Date.now() < Number(suppressTouchClickUntil || 0)) {
         event.preventDefault();
         event.stopPropagation();
@@ -12085,7 +14986,17 @@
     });
 
     if (dom.center.reactionBar) {
+      dom.center.reactionBar.addEventListener("touchstart", () => {
+        markFreshReactionBarTouchInteraction();
+      }, { passive: true });
+
+      dom.center.reactionBar.addEventListener("pointerdown", (event) => {
+        if (String(event.pointerType || "").toLowerCase() !== "touch") return;
+        markFreshReactionBarTouchInteraction();
+      }, { passive: true });
+
       dom.center.reactionBar.addEventListener("click", (event) => {
+        if (shouldSuppressGuardedReactionBarClick(event)) return;
         if (Date.now() < Number(suppressTouchClickUntil || 0)) {
           event.preventDefault();
           event.stopPropagation();
@@ -12265,18 +15176,97 @@
     return true;
   }
 
+  async function updateHeaderOrderStatus(orderId, statusId) {
+    const id = Number(orderId || 0);
+    const nextStatusId = Number(statusId || 0);
+    if (!Number.isFinite(id) || id <= 0) return;
+    if (!Number.isFinite(nextStatusId) || nextStatusId <= 0) return;
+    if (state.headerOrderStatusMutationInFlight) return;
+
+    const sourceOrder = state.headerOrderSnapshot && Number(state.headerOrderSnapshot?.id || 0) === id
+      ? state.headerOrderSnapshot
+      : ((Array.isArray(state.activeOrders) ? state.activeOrders : []).find((order) => Number(order?.id || 0) === id) || null);
+    const currentStatus = getHeaderOrderStatusMeta(sourceOrder);
+    const targetStatus = getHeaderOrderStatusMetaById(nextStatusId);
+    if (targetStatus && isHeaderForbiddenStatusTransition(currentStatus, targetStatus)) return;
+
+    state.headerOrderStatusMutationInFlight = true;
+    renderChatHeader();
+    try {
+      await apiJson(`/api/admin/orders/${id}/status`, {
+        method: "PUT",
+        body: { status_id: nextStatusId },
+      });
+
+      const json = await fetchOrderDetailsFresh(id);
+      const freshOrder = json?.data || null;
+      if (!freshOrder || typeof freshOrder !== "object") return;
+
+      state.orderDetailsCache.set(id, freshOrder);
+      state.headerOrderSnapshot = { ...freshOrder };
+      setSharedOrderDetails(freshOrder);
+      upsertActiveOrder(freshOrder);
+      if (Number(state.rightPanelOrderId || 0) === id) {
+        syncRightOrderPanelById(id, { force: true, forceRefresh: true });
+      }
+      renderChatHeader();
+    } catch (err) {
+      console.error(err);
+    } finally {
+      state.headerOrderStatusMutationInFlight = false;
+      renderChatHeader();
+    }
+  }
+
+  function initHeaderOrderStatusAction() {
+    if (!dom.center.headerOrder || dom.center.headerOrder.dataset.boundStatusCycle === "1") return;
+    dom.center.headerOrder.dataset.boundStatusCycle = "1";
+    dom.center.headerOrder.addEventListener("click", async (event) => {
+      const btn = event.target.closest('[data-action="order-row-status-next"]');
+      if (!btn || !dom.center.headerOrder.contains(btn)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      if (btn.disabled) return;
+      const orderId = Number(btn.getAttribute("data-order-id") || 0);
+      const nextStatusId = Number(btn.getAttribute("data-next-status-id") || 0);
+      if (!Number.isFinite(orderId) || orderId <= 0) return;
+      if (!Number.isFinite(nextStatusId) || nextStatusId <= 0) return;
+      await updateHeaderOrderStatus(orderId, nextStatusId);
+    });
+  }
+
+  function initHeaderClientOpenAction() {
+    [dom.center.headerClientBtn, dom.center.mobileHeaderClientBtn].forEach((node) => {
+      if (!node || node.dataset.boundClientOpen === "1") return;
+      node.dataset.boundClientOpen = "1";
+      ["pointerdown", "touchstart", "mousedown"].forEach((eventName) => {
+        node.addEventListener(eventName, (event) => {
+          event.stopPropagation();
+        }, { passive: eventName === "touchstart" });
+      });
+      node.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        openClientDetailsPanel();
+      });
+    });
+  }
+
   function initHeaderOrderOpenAction() {
     [dom.center.headerOrder, dom.center.mobileHeaderOrderBtn].forEach((node) => {
       if (!node || node.dataset.boundOpenOrder === "1") return;
       node.dataset.boundOpenOrder = "1";
 
       node.addEventListener("click", (event) => {
+        if (event.target && event.target.closest && event.target.closest('[data-action="order-row-status-next"]')) return;
         event.preventDefault();
         event.stopPropagation();
         openOrderFromHeader();
       });
 
       node.addEventListener("keydown", (event) => {
+        if (event.target && event.target.closest && event.target.closest('[data-action="order-row-status-next"]')) return;
         if (event.key !== "Enter" && event.key !== " ") return;
         event.preventDefault();
         openOrderFromHeader();
@@ -12476,20 +15466,35 @@
 
     state.activeClientId = id;
     state.store.lastOpenClientId = id;
-    restoreComposerDraftForClient(id);
+    restoreComposerDraftForClient(id, { skipThreadViewportSync: true });
     state.rightPanelOrderId = 0;
     state.headerOrderSnapshot = null;
     setHeaderLoading(true);
     saveStore();
-    if (opts.restoreMobileView === true) {
-      syncMobileChatViewFromState({ persistState: false });
-    } else if (opts.syncMobileView !== false) {
-      syncMobileChatView("center");
-    }
+    const syncMobileViewAfterRender = (() => {
+      if (opts.restoreMobileView === true) {
+        return () => {
+          window.requestAnimationFrame(() => {
+            syncMobileChatViewFromState({ persistState: false });
+          });
+        };
+      }
+      if (opts.syncMobileView !== false) {
+        return () => {
+          window.requestAnimationFrame(() => {
+            syncMobileChatView("center");
+          });
+        };
+      }
+      return null;
+    })();
 
     ensureActiveThreadSseConnection();
     applyClientFilter();
     renderMessages({ disableAutoPin: true, smoothScroll: false, skipSaveScrollPosition: true });
+    if (typeof syncMobileViewAfterRender === "function") {
+      syncMobileViewAfterRender();
+    }
     if (!restoreThreadScrollPosition(id)) {
       const hasPendingForClient = getPendingScrollNewCount(id) > 0;
       scrollMessagesToBottom({ behavior: "auto", keepPending: hasPendingForClient });
@@ -12888,7 +15893,6 @@
       dom.center.replyCloseBtn.dataset.bound = "1";
       dom.center.replyCloseBtn.addEventListener("click", () => {
         clearComposerReply();
-        if (dom.center.input) dom.center.input.focus();
       });
     }
 
@@ -12897,10 +15901,7 @@
         if (!dom.center.input) return;
         const done = sendMessage(dom.center.input.value);
         if (!done) return;
-        stopLocalTypingSession(state.activeClientId, { flush: true, force: true });
-        dom.center.input.value = "";
-        dom.center.input.focus();
-        syncComposerRichPreview({});
+        finalizeComposerSendUi({ refocusInput: true });
       });
     }
 
@@ -12910,9 +15911,7 @@
           event.preventDefault();
           const done = sendMessage(dom.center.input.value);
           if (done) {
-            stopLocalTypingSession(state.activeClientId, { flush: true, force: true });
-            dom.center.input.value = "";
-            syncComposerRichPreview({});
+            finalizeComposerSendUi({ refocusInput: shouldRetainComposerFocusOnMobileSend() });
           }
           return;
         }
@@ -12950,12 +15949,17 @@
         handleComposerTypingActivity();
         persistComposerDraftForClient(state.activeClientId);
       });
-      dom.center.input.addEventListener("touchend", guardIOSNativeTextFocus, { passive: false });
-      dom.center.input.addEventListener("focus", handleAdminChatTextInputFocus);
+      bindAdminMobileTextFieldTapFocus(dom.center.input, "mobileComposerTapFocusBound");
+      dom.center.input.addEventListener("click", repairAdminIosTextFocusOnClick);
+      dom.center.input.addEventListener("focus", () => {
+        handleAdminChatTextInputFocus();
+        syncComposerSendButtonFocusLock();
+      });
       dom.center.input.addEventListener("blur", () => {
         persistComposerDraftForClient(state.activeClientId);
         scheduleLocalTypingStop(CHAT_TYPING_BLUR_STOP_MS);
         handleAdminChatTextInputBlur();
+        syncComposerSendButtonFocusLock();
       });
     }
 
@@ -12968,6 +15972,8 @@
       });
     }
 
+    syncComposerSendButtonFocusLock();
+
     if (dom.center.emojiBtn && dom.center.emojiPopover) {
       dom.center.emojiBtn.addEventListener("click", (event) => {
         event.preventDefault();
@@ -12975,11 +15981,15 @@
         preloadEmojiAtlas();
         if (shouldUseNativeMobileEmojiKeyboard()) {
           hideEmojiPopover();
-          if (dom.center.input) dom.center.input.focus();
+          if (dom.center.input) {
+            focusComposerInput({ moveCaretToEnd: false });
+          }
           return;
         }
         toggleEmojiPopover("composer");
-        if (dom.center.input) dom.center.input.focus();
+        if (dom.center.input) {
+          focusComposerInput({ moveCaretToEnd: false });
+        }
       });
 
       document.addEventListener("click", (event) => {
@@ -13024,22 +16034,7 @@
       });
     }
 
-    [dom.center.headerClientBtn, dom.center.mobileHeaderClientBtn].forEach((node) => {
-      if (!node || node.dataset.bound !== "1") {
-        if (!node) return;
-        node.dataset.bound = "1";
-        ["pointerdown", "touchstart", "mousedown"].forEach((eventName) => {
-          node.addEventListener(eventName, (event) => {
-            event.stopPropagation();
-          }, { passive: eventName === "touchstart" });
-        });
-        node.addEventListener("click", (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          openClientDetailsPanel();
-        });
-      }
-    });
+    initHeaderClientOpenAction();
 
     window.__adminChatMobileApi = {
       openClientsPanel(options = {}) {
@@ -13074,15 +16069,62 @@
     state.chatWidgetEnabled = getTenantChatWidgetEnabledFromStorage();
     setSidebarChatNavVisibility(state.chatWidgetEnabled !== false);
     setChatBootstrapLoading(state.chatWidgetEnabled !== false);
+    ensureDesktopChatHeaderMarkup();
     initMessageAlerts();
     initComposer();
+    bindAdminChatZoomGuards();
+    bindAdminChatThreadEdgeSpring();
+    bindAdminMobileEmptyThreadTouchBlock();
+    if (!shouldPreferNativeAdminMobileChatTouchHandling()) {
+      bindAdminMobileFooterPanGuard();
+      bindAdminMobileStaticPanGuards();
+      bindAdminMobileThreadKeyboardDismiss();
+      bindAdminMobileThreadSwipeToClients();
+    }
     initSelectionToolbar();
+    initHeaderOrderStatusAction();
     initHeaderOrderOpenAction();
     initOrderHeaderLiveSync();
     if (dom.center.messagesWrap && dom.center.messagesWrap.dataset.scrollDownBound !== "1") {
       dom.center.messagesWrap.dataset.scrollDownBound = "1";
+      if (dom.center.messagesWrap.dataset.touchGestureTrackBound !== "1") {
+        dom.center.messagesWrap.dataset.touchGestureTrackBound = "1";
+        const scheduleTouchGestureActiveRelease = () => {
+          if (adminChatThreadTouchGestureReleaseTimer) {
+            window.clearTimeout(adminChatThreadTouchGestureReleaseTimer);
+          }
+          adminChatThreadTouchGestureReleaseTimer = window.setTimeout(() => {
+            adminChatThreadTouchGestureReleaseTimer = 0;
+            adminChatThreadTouchGestureActive = false;
+          }, CHAT_NATIVE_BOTTOM_BOUNCE_SETTLE_MS);
+        };
+        dom.center.messagesWrap.addEventListener("touchstart", (event) => {
+          if (adminChatThreadTouchGestureReleaseTimer) {
+            window.clearTimeout(adminChatThreadTouchGestureReleaseTimer);
+            adminChatThreadTouchGestureReleaseTimer = 0;
+          }
+          adminChatThreadTouchGestureActive = !!(event && event.touches && event.touches.length > 0);
+        }, { passive: true });
+        dom.center.messagesWrap.addEventListener("touchend", scheduleTouchGestureActiveRelease, { passive: true });
+        dom.center.messagesWrap.addEventListener("touchcancel", scheduleTouchGestureActiveRelease, { passive: true });
+      }
       dom.center.messagesWrap.addEventListener("scroll", () => {
+        sampleAdminChatThreadEdgeSpringMomentumScroll(dom.center.messagesWrap);
+        if (adminChatThreadTouchGestureActive) {
+          scheduleTouchGestureActiveRelease();
+        }
         const keepFloatingMenuOpen = Date.now() < Number(suppressFloatingMenuAutoHideUntil || 0);
+        if (isAdminChatThreadEdgeSpringTouchActive()) {
+          if (!keepFloatingMenuOpen) hideMessageContextMenu();
+          return;
+        }
+        maybeTriggerAdminChatThreadEdgeSpringMomentumBounce(dom.center.messagesWrap);
+        if (shouldTrackAdminChatKeyboardMessagesBottomDistance({
+          viewportBottom: adminChatKeyboardLastViewportBottom,
+          viewportHeight: getAdminChatViewportHeight(),
+        })) {
+          setAdminChatKeyboardTrackedMessagesBottomDistance(getMessagesBottomDistanceSnapshot());
+        }
         saveThreadScrollPosition(state.activeClientId);
         if (dom.center.messagesWrap && dom.center.messagesWrap.scrollTop <= CHAT_THREAD_LOAD_MORE_THRESHOLD_PX) {
           loadOlderMessages(state.activeClientId).catch(console.error);
@@ -13124,7 +16166,7 @@
     if (dom.center.scrollDownBtn && dom.center.scrollDownBtn.dataset.bound !== "1") {
       dom.center.scrollDownBtn.dataset.bound = "1";
       dom.center.scrollDownBtn.addEventListener("click", () => {
-        scrollMessagesToBottom({ behavior: "smooth-fast" });
+        scrollMessagesToBottom({ behavior: "smooth-fast", deferIfTouchGesture: false });
       });
     }
     if (dom.left.list && dom.left.list.dataset.scrollPersistBound !== "1") {

@@ -6,6 +6,7 @@ try {
   compression = null;
 }
 const cors = require('cors');
+const os = require('os');
 const path = require('path');
 const fs = require('fs');
 const cookieParser = require('cookie-parser');
@@ -61,14 +62,34 @@ const APP_CACHE_VERSION = String(TELEGRAM_APP_VERSION || '1.9.23').trim() || '1.
 const STATIC_ASSET_VERSION = String(
   process.env.STATIC_ASSET_VERSION || APP_CACHE_VERSION || ''
 ).trim();
-const SERVICE_WORKER_VERSION = (() => {
+function getLatestMtimeMs(targetPath) {
   try {
-    const stat = fs.statSync(__filename);
-    const mtimeVersion = Math.round(stat.mtimeMs || stat.mtime.getTime());
-    return `${APP_CACHE_VERSION}-${mtimeVersion}`;
+    const stat = fs.statSync(targetPath);
+    const ownMtime = Math.round(stat.mtimeMs || stat.mtime.getTime() || 0);
+    if (!stat.isDirectory()) return ownMtime;
+    return fs.readdirSync(targetPath).reduce((latest, entry) => {
+      if (!entry || entry === '.' || entry === '..') return latest;
+      return Math.max(latest, getLatestMtimeMs(path.join(targetPath, entry)));
+    }, ownMtime);
   } catch (e) {
-    return APP_CACHE_VERSION;
+    return 0;
   }
+}
+const SERVICE_WORKER_VERSION = (() => {
+  const versionRoots = [
+    __filename,
+    path.join(__dirname, 'views', 'layouts'),
+    path.join(__dirname, 'views', 'pages'),
+    path.join(__dirname, 'views', 'partials'),
+    path.join(__dirname, 'static', 'js'),
+    path.join(__dirname, 'static', 'css'),
+  ];
+  const latestMtime = versionRoots.reduce((maxVersion, rootPath) => {
+    return Math.max(maxVersion, getLatestMtimeMs(rootPath));
+  }, 0);
+  return latestMtime > 0
+    ? `${APP_CACHE_VERSION}-${latestMtime}`
+    : APP_CACHE_VERSION;
 })();
 const PORT = process.env.PORT || 3000;
 const PERF_CONSOLE_LOGS_ENABLED = String(process.env.ENABLE_PERF_LOGS || '').trim() === '1';
@@ -96,6 +117,20 @@ function normalizeConfiguredHost(value) {
   }
 }
 
+function getLocalTrustedAdminHosts() {
+  const hosts = new Set();
+  const interfaces = os.networkInterfaces();
+  Object.values(interfaces || {}).forEach((items) => {
+    (Array.isArray(items) ? items : []).forEach((item) => {
+      if (!item || item.internal) return;
+      if (String(item.family || '').toUpperCase() !== 'IPV4') return;
+      const normalized = normalizeHostForMatch(item.address);
+      if (normalized) hosts.add(normalized);
+    });
+  });
+  return Array.from(hosts);
+}
+
 function buildTrustedAdminHosts() {
   const hosts = new Set(['localhost', '127.0.0.1', '::1']);
   const add = (value) => {
@@ -120,6 +155,7 @@ function buildTrustedAdminHosts() {
   add(process.env.PUBLIC_BASE_DOMAIN);
   add(process.env.SITE_BASE_DOMAIN);
   addList(process.env.TENANT_DOMAIN_A_RECORDS);
+  getLocalTrustedAdminHosts().forEach(add);
   add('posham-admin.ru');
   add('www.posham-admin.ru');
   return hosts;
@@ -1068,12 +1104,11 @@ const serviceWorkerWarmPages = [
   '/dashboard/courier-screen',
   '/dashboard/new-order',
   '/dashboard/clients',
-  '/dashboard/chat',
   '/dashboard/team',
   '/dashboard/settings'
 ];
 const serviceWorkerScript = `
-var SW_VERSION = ${JSON.stringify(APP_CACHE_VERSION)};
+var SW_VERSION = ${JSON.stringify(SERVICE_WORKER_VERSION)};
 var STATIC_CACHE = 'admin-static-' + SW_VERSION;
 var PAGE_CACHE = 'admin-pages-' + SW_VERSION;
 var CHAT_IMAGE_CACHE_NAME = 'chat-images-v1';
@@ -1170,6 +1205,17 @@ async function fetchAndCachePage(request) {
   return response;
 }
 
+async function networkFirstPage(request) {
+  try {
+    return await fetchAndCachePage(request);
+  } catch (err) {
+    var cache = await caches.open(PAGE_CACHE);
+    var cached = await cache.match(request) || await cache.match(request.url);
+    if (cached) return cached;
+    throw err;
+  }
+}
+
 async function staleWhileRevalidate(request, event) {
   var cache = await caches.open(PAGE_CACHE);
   var cached = await cache.match(request) || await cache.match(request.url);
@@ -1242,7 +1288,12 @@ self.addEventListener('fetch', function (event) {
   }
 
   if (request.mode === 'navigate' && url.pathname.indexOf('/dashboard') === 0) {
+    if (url.pathname === '/dashboard/chat') {
+      event.respondWith(networkFirstPage(request));
+      return;
+    }
     event.respondWith(staleWhileRevalidate(request, event));
+    return;
   }
 });
 
@@ -1517,7 +1568,12 @@ app.get('/dashboard/orders', (req, res) => res.render('pages/orders'));
 app.get('/dashboard/courier-screen', (req, res) => res.render('pages/courier-screen'));
 app.get('/dashboard/new-order', (req, res) => res.render('pages/new-order'));
 app.get('/dashboard/clients', (req, res) => res.render('pages/clients', { activePage: 'clients' }));
-app.get('/dashboard/chat', (req, res) => res.render('pages/chat', { activePage: 'chat' }));
+app.get('/dashboard/chat', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  res.render('pages/chat', { activePage: 'chat' });
+});
 app.get('/dashboard/team', (req, res) => res.render('pages/home', { activePage: 'team' }));
 app.get('/dashboard/settings', (req, res) =>
   res.render('pages/home', {

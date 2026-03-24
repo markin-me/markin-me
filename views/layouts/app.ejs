@@ -1,8 +1,15 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
+  <%
+    const appPageClassName = typeof pageClass === 'string' ? pageClass : '';
+    const isChatViewportLocked = appPageClassName.split(/\s+/).includes('page-chat');
+    const appViewportContent = isChatViewportLocked
+      ? 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no'
+      : 'width=device-width, initial-scale=1.0';
+  %>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="<%= appViewportContent %>" />
   <%
     const appManifestStartPath = typeof currentPath === 'string' && currentPath ? currentPath : '/dashboard/cash';
     const appManifestTitle = typeof pageTitle === 'string' && pageTitle.trim() ? pageTitle.trim() : 'Админка';
@@ -28,7 +35,6 @@
       try {
         var c = localStorage.getItem('sidebar:collapsed');
         document.documentElement.setAttribute('data-sidebar-collapsed', c === '1' ? '1' : '0');
-
         var t = 'light'; // временно принудительно светлая тема
         document.documentElement.setAttribute('data-theme', t);
       } catch (e) {}
@@ -36,6 +42,8 @@
   </script>
   <script>
     window.__APP_VERSION__ = <%- JSON.stringify(appVersion || '') %>;
+    window.__APP_SERVICE_WORKER_VERSION__ = <%- JSON.stringify(serviceWorkerVersion || appVersion || '') %>;
+    window.__APP_SERVICE_WORKER_URL__ = <%- JSON.stringify('/sw.js?v=' + encodeURIComponent(serviceWorkerVersion || appVersion || "")) %>;
     window.__APP_MANIFEST_CONTEXT__ = {
       app: 'admin',
       startPath: <%- JSON.stringify(appManifestStartPath) %>,
@@ -51,8 +59,92 @@
       }
     })();
   </script>
+  <script>
+    (function () {
+      if (!('serviceWorker' in navigator)) return;
+      var expectedToken = String(window.__APP_SERVICE_WORKER_VERSION__ || '').trim();
+      var expectedUrl = String(window.__APP_SERVICE_WORKER_URL__ || '/sw.js').trim() || '/sw.js';
+      var currentUrl;
+      try {
+        currentUrl = new URL(window.location.href);
+      } catch (err) {
+        return;
+      }
 
-  <link rel="stylesheet" href="<%= assetUrl('/static/css/style.css?v=20260319av') %>" />
+      var isChatPage = currentUrl.pathname === '/dashboard/chat';
+      var resetParam = String(currentUrl.searchParams.get('sw_reset') || '').trim();
+      var versionParam = String(currentUrl.searchParams.get('v') || '').trim();
+      var resetKey = 'admin-sw-reset:' + expectedToken;
+
+      async function clearAdminServiceWorkersAndCaches() {
+        try {
+          var registrations = await navigator.serviceWorker.getRegistrations();
+          await Promise.allSettled((registrations || []).map(function (registration) {
+            return registration.unregister();
+          }));
+        } catch (err) {}
+        if ('caches' in window) {
+          try {
+            var cacheKeys = await caches.keys();
+            await Promise.allSettled((cacheKeys || []).map(function (key) {
+              return caches.delete(key);
+            }));
+          } catch (err) {}
+        }
+      }
+
+      async function ensureFreshAdminChatPage() {
+        if (!isChatPage || !expectedToken) return;
+        if (resetParam === '1') {
+          try {
+            sessionStorage.setItem(resetKey, '1');
+          } catch (err) {}
+          await clearAdminServiceWorkersAndCaches();
+          currentUrl.searchParams.delete('sw_reset');
+          currentUrl.searchParams.set('v', expectedToken);
+          window.location.replace(currentUrl.pathname + currentUrl.search + currentUrl.hash);
+          return;
+        }
+
+        if (versionParam !== expectedToken) {
+          currentUrl.searchParams.set('v', expectedToken);
+          window.location.replace(currentUrl.pathname + currentUrl.search + currentUrl.hash);
+          return;
+        }
+
+        try {
+          var registration = await navigator.serviceWorker.getRegistration('/');
+          var scriptUrl = String(
+            (registration && registration.active && registration.active.scriptURL)
+            || (registration && registration.waiting && registration.waiting.scriptURL)
+            || (registration && registration.installing && registration.installing.scriptURL)
+            || ''
+          ).trim();
+          var resetAlreadyAttempted = false;
+          try {
+            resetAlreadyAttempted = sessionStorage.getItem(resetKey) === '1';
+          } catch (err) {}
+          if (scriptUrl && scriptUrl.indexOf(expectedToken) === -1 && !resetAlreadyAttempted) {
+            try {
+              sessionStorage.setItem(resetKey, '1');
+            } catch (err) {}
+            await clearAdminServiceWorkersAndCaches();
+            window.location.replace(currentUrl.pathname + currentUrl.search + currentUrl.hash);
+            return;
+          }
+          if (scriptUrl && scriptUrl.indexOf(expectedToken) !== -1) {
+            try {
+              sessionStorage.removeItem(resetKey);
+            } catch (err) {}
+          }
+        } catch (err) {}
+      }
+
+      ensureFreshAdminChatPage().catch(function () {});
+    })();
+  </script>
+
+  <link rel="stylesheet" href="<%= assetUrl('/static/css/style.css?v=20260323d') %>" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" />
   <% if (appPageStyles.length) { %>
     <% appPageStyles.forEach(function (src) { %>
@@ -71,6 +163,7 @@
     || appTenantChatWidgetNorm === '0'
     || appTenantChatWidgetNorm === 'false'
   );
+  const adminChatHref = '/dashboard/chat?v=' + encodeURIComponent(serviceWorkerVersion || appVersion || '');
   const adminNavItems = [
     { key: 'cash', href: '/dashboard/cash', icon: 'fa-cash-register', label: 'Касса', ariaLabel: 'Касса' },
     { key: 'products', href: '/dashboard/products', icon: 'fa-box', label: 'Товары', ariaLabel: 'Товары' },
@@ -90,7 +183,7 @@
     { key: 'team', href: '/dashboard/team', icon: 'fa-user-tie', label: 'Команда', ariaLabel: 'Команда' },
     {
       key: 'chat',
-      href: '/dashboard/chat',
+      href: adminChatHref,
       icon: 'fa-comments',
       label: 'Чаты',
       ariaLabel: 'Чаты',
@@ -106,9 +199,10 @@
 %>
 
 <body
-  class="<%= pageClass || '' %>"
+  class="<%= appPageClassName %>"
   data-admin-active-page="<%= appActivePage %>"
   data-admin-chat-enabled="<%= isAppChatNavEnabled ? '1' : '0' %>"
+  data-admin-chat-url="<%= adminChatHref %>"
   data-app-version="<%= appVersion || '' %>"
 >
   <%- include('../partials/header') %>
@@ -158,7 +252,7 @@
   <script src="<%= assetUrl('/static/js/current-time.js') %>"></script>
   <script src="<%= assetUrl('/static/js/theme.js') %>"></script>
   <script src="<%= assetUrl('/static/js/sidebar.js') %>"></script>
-  <script src="<%= assetUrl('/static/js/admin-mobile-nav.js') %>"></script>
+  <script src="<%= assetUrl('/static/js/admin-mobile-nav.js?v=20260321f') %>"></script>
   <% if (appActivePage !== 'chat' && appActivePage !== 'settings') { %>
     <script src="<%= assetUrl('/static/js/chat-sidebar-badge.js') %>"></script>
   <% } else if (appActivePage === 'settings') { %>
@@ -173,7 +267,15 @@
     (function () {
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', function () {
-          navigator.serviceWorker.register('/sw.js?v=<%= encodeURIComponent(serviceWorkerVersion || appVersion || "") %>', { scope: '/' }).catch(function () {});
+          var serviceWorkerUrl = window.__APP_SERVICE_WORKER_URL__ || '/sw.js';
+          navigator.serviceWorker
+            .register(serviceWorkerUrl, { scope: '/' })
+            .then(function (registration) {
+              if (registration && typeof registration.update === 'function') {
+                registration.update().catch(function () {});
+              }
+            })
+            .catch(function () {});
         });
       }
     })();
