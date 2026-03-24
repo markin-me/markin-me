@@ -11243,6 +11243,15 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       customerId,
       discounts: loyaltyDiscounts,
     });
+    const details = await buildCheckoutBenefitsPreviewDetails({
+      tenantId,
+      storeId,
+      customer,
+      customerId,
+      draft: normalizedDraft,
+      progress,
+      loyaltyDiscounts,
+    });
 
     let deliveryRules = null;
     if (methodCode === 'delivery') {
@@ -11291,6 +11300,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       completed: completedCards,
       summary,
       client_calculation: clientCalculation,
+      details,
     };
   }
 
@@ -11345,31 +11355,41 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     customer,
     draft,
     discountId,
+    progressCard = null,
+    loyaltyDiscount = null,
     queryRunner = null,
   }) {
-    const {
-      progressCard,
-      loyaltyDiscount,
-    } = await resolveCheckoutProgressClaimContext({
-      tenantId,
-      storeId,
-      customer,
-      draft,
-      discountId,
-    });
+    let effectiveProgressCard = progressCard && typeof progressCard === 'object'
+      ? progressCard
+      : null;
+    let effectiveLoyaltyDiscount = loyaltyDiscount && typeof loyaltyDiscount === 'object'
+      ? loyaltyDiscount
+      : null;
 
-    if (publicDiscountText(progressCard?.reward_kind).toLowerCase() !== 'gift') {
+    if (!effectiveProgressCard || !effectiveLoyaltyDiscount) {
+      const resolvedContext = await resolveCheckoutProgressClaimContext({
+        tenantId,
+        storeId,
+        customer,
+        draft,
+        discountId,
+      });
+      effectiveProgressCard = resolvedContext?.progressCard || null;
+      effectiveLoyaltyDiscount = resolvedContext?.loyaltyDiscount || null;
+    }
+
+    if (publicDiscountText(effectiveProgressCard?.reward_kind).toLowerCase() !== 'gift') {
       throw Object.assign(new Error('DISCOUNT_NOT_APPLICABLE'), { code: 'DISCOUNT_NOT_APPLICABLE' });
     }
 
-    const mechanic = parsePublicDiscountObject(loyaltyDiscount?.mechanic_config_json, {});
+    const mechanic = parsePublicDiscountObject(effectiveLoyaltyDiscount?.mechanic_config_json, {});
     const rewardTargetRows = collectLoyaltyProgressGiftRewardTargetRows(mechanic);
     const productIds = [...new Set(
       rewardTargetRows
         .map((row) => Number(row?.product_id || 0))
         .filter((id) => id > 0)
     )];
-    const selectionLimit = Math.max(0, Number(progressCard?.pending_reward_count || 0));
+    const selectionLimit = Math.max(0, Number(effectiveProgressCard?.pending_reward_count || 0));
     const productSnapshots = await loadCheckoutBenefitRewardClaimProducts(
       queryRunner,
       tenantId,
@@ -11402,13 +11422,13 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     });
 
     const data = {
-      discount_id: Number(progressCard?.discount_id || progressCard?.id || 0) || null,
+      discount_id: Number(effectiveProgressCard?.discount_id || effectiveProgressCard?.id || 0) || null,
       title: publicDiscountText(loyaltyDiscount?.title) || 'Накопительная акция',
-      description: publicDiscountText(loyaltyDiscount?.description),
+      description: publicDiscountText(effectiveLoyaltyDiscount?.description),
       pending_reward_count: selectionLimit,
       selection_limit: selectionLimit,
-      reward_qty: Number(progressCard?.reward_qty || 1) || 1,
-      pending_reward_mode: normalizePublicProgressPendingRewardMode(progressCard?.pending_reward_mode),
+      reward_qty: Number(effectiveProgressCard?.reward_qty || 1) || 1,
+      pending_reward_mode: normalizePublicProgressPendingRewardMode(effectiveProgressCard?.pending_reward_mode),
       items,
     };
     if (!publicDiscountText(loyaltyDiscount?.title).trim()) data.title = 'Накопительная акция';
@@ -11423,29 +11443,35 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     storeId,
     customerId,
     discountId,
+    loyaltyDiscount = null,
   }) {
     const normalizedDiscountId = Number(discountId || 0);
     if (!(normalizedDiscountId > 0) || !(Number(customerId || 0) > 0)) {
       throw Object.assign(new Error('DISCOUNT_INVALID'), { code: 'DISCOUNT_INVALID' });
     }
 
-    const customerBenefitDiscountRows = await loadCustomerBenefitDiscountRows(tenantId, storeId, customerId);
-    const loyaltyDiscount = customerBenefitDiscountRows.find((discount) => (
-      Number(discount?.id || 0) === normalizedDiscountId
-      && normalizePublicMechanicType(discount?.mechanic_type) === 'loyalty_progress'
-    )) || null;
-    if (!loyaltyDiscount) {
+    let resolvedLoyaltyDiscount = loyaltyDiscount && typeof loyaltyDiscount === 'object'
+      ? loyaltyDiscount
+      : null;
+    if (!resolvedLoyaltyDiscount) {
+      const customerBenefitDiscountRows = await loadCustomerBenefitDiscountRows(tenantId, storeId, customerId);
+      resolvedLoyaltyDiscount = customerBenefitDiscountRows.find((discount) => (
+        Number(discount?.id || 0) === normalizedDiscountId
+        && normalizePublicMechanicType(discount?.mechanic_type) === 'loyalty_progress'
+      )) || null;
+    }
+    if (!resolvedLoyaltyDiscount) {
       throw Object.assign(new Error('DISCOUNT_NOT_AVAILABLE'), { code: 'DISCOUNT_NOT_AVAILABLE' });
     }
 
-    if (getPublicProgressInteractionMode(loyaltyDiscount) !== 'products_sheet') {
+    if (getPublicProgressInteractionMode(resolvedLoyaltyDiscount) !== 'products_sheet') {
       throw Object.assign(new Error('DISCOUNT_NOT_APPLICABLE'), { code: 'DISCOUNT_NOT_APPLICABLE' });
     }
 
-    const qualifyingScopeMode = getPublicProgressQualifyingScopeMode(loyaltyDiscount);
+    const qualifyingScopeMode = getPublicProgressQualifyingScopeMode(resolvedLoyaltyDiscount);
     let items = [];
     if (qualifyingScopeMode === 'product') {
-      const mechanic = parsePublicDiscountObject(loyaltyDiscount?.mechanic_config_json, {});
+      const mechanic = parsePublicDiscountObject(resolvedLoyaltyDiscount?.mechanic_config_json, {});
       const rows = Array.isArray(mechanic?.qualifying_items) ? mechanic.qualifying_items : [];
       const productRows = rows
         .map((row) => {
@@ -11487,7 +11513,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     } else if (qualifyingScopeMode === 'category') {
       items = await loadCheckoutBenefitProductSnapshotsByCategoryIds(
         tenantId,
-        collectPublicProgressQualifyingCategoryIds(loyaltyDiscount)
+        collectPublicProgressQualifyingCategoryIds(resolvedLoyaltyDiscount)
       );
     }
 
@@ -11495,7 +11521,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       discount_id: normalizedDiscountId,
       qualifying_scope_mode: qualifyingScopeMode,
       title: publicDiscountText(loyaltyDiscount?.title) || 'Подходящие товары',
-      description: publicDiscountText(loyaltyDiscount?.description),
+      description: publicDiscountText(resolvedLoyaltyDiscount?.description),
       items,
     };
     if (!publicDiscountText(loyaltyDiscount?.title).trim()) data.title = 'Подходящие товары';
@@ -11503,6 +11529,82 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       data.title = "\u041f\u043e\u0434\u0445\u043e\u0434\u044f\u0449\u0438\u0435 \u0442\u043e\u0432\u0430\u0440\u044b";
     }
     return data;
+  }
+
+  function isCheckoutBenefitsPreviewDetailSkippableError(error) {
+    const code = String(error?.code || error?.message || '');
+    return ['DISCOUNT_INVALID', 'DISCOUNT_NOT_AVAILABLE', 'DISCOUNT_NOT_APPLICABLE'].includes(code);
+  }
+
+  async function buildCheckoutBenefitsPreviewDetails({
+    tenantId,
+    storeId,
+    customer,
+    customerId,
+    draft,
+    progress,
+    loyaltyDiscounts,
+  }) {
+    const progressProductsByDiscountId = {};
+    const claimOptionsByDiscountId = {};
+    const loyaltyDiscountMap = new Map(
+      (Array.isArray(loyaltyDiscounts) ? loyaltyDiscounts : [])
+        .map((discount) => [Number(discount?.id || 0), discount])
+        .filter(([discountId]) => discountId > 0)
+    );
+
+    await Promise.all(
+      (Array.isArray(progress) ? progress : []).map(async (progressCard) => {
+        const discountId = Number(progressCard?.discount_id || progressCard?.id || 0) || 0;
+        if (!(discountId > 0)) return;
+        const loyaltyDiscount = loyaltyDiscountMap.get(discountId) || null;
+        if (!loyaltyDiscount) return;
+
+        if (publicDiscountText(progressCard?.interaction_mode).toLowerCase() === 'products_sheet') {
+          try {
+            const data = await buildCheckoutProgressProductsSheetData({
+              tenantId,
+              storeId,
+              customerId,
+              discountId,
+              loyaltyDiscount,
+            });
+            if (data && typeof data === 'object') {
+              progressProductsByDiscountId[String(discountId)] = data;
+            }
+          } catch (error) {
+            if (!isCheckoutBenefitsPreviewDetailSkippableError(error)) throw error;
+          }
+        }
+
+        if (
+          publicDiscountText(progressCard?.claim_mode).toLowerCase() === 'gift_sheet'
+          && progressCard?.is_claimable === true
+        ) {
+          try {
+            const data = await buildCheckoutProgressGiftClaimOptionsData({
+              tenantId,
+              storeId,
+              customer,
+              draft,
+              discountId,
+              progressCard,
+              loyaltyDiscount,
+            });
+            if (data && typeof data === 'object') {
+              claimOptionsByDiscountId[String(discountId)] = data;
+            }
+          } catch (error) {
+            if (!isCheckoutBenefitsPreviewDetailSkippableError(error)) throw error;
+          }
+        }
+      })
+    );
+
+    return {
+      progress_products_by_discount_id: progressProductsByDiscountId,
+      claim_options_by_discount_id: claimOptionsByDiscountId,
+    };
   }
 
   router.post('/checkout/benefits/preview', async (req, res) => {
@@ -11755,6 +11857,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     let conn = null;
     try {
       const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
       const token = str(req.headers['x-customer-token']);
       const customer = await getCustomerByToken(tenantId, token);
       if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
@@ -11770,7 +11873,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       await conn.beginTransaction();
 
       const [rows] = await conn.query(
-        `SELECT id
+        `SELECT *
            FROM mkt_discount_rewards
           WHERE tenant_id = ?
             AND customer_id = ?
@@ -11797,6 +11900,16 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         [tenantId, customerId, rewardId]
       );
 
+      rewardRow.status = 'available';
+      rewardRow.used_at = null;
+      const availableProductIds = await loadPublicGiftRewardAvailableProductIds(
+        tenantId,
+        storeId,
+        [rewardRow],
+        conn
+      );
+      const giftCard = buildPublicGiftRewardCard(rewardRow, availableProductIds);
+
       await conn.commit();
       conn.release();
       conn = null;
@@ -11805,6 +11918,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         ok: true,
         data: {
           reward_id: rewardId,
+          gift_card: giftCard,
         },
       });
     } catch (e) {

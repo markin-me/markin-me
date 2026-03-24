@@ -12185,6 +12185,13 @@ body.page-shop .shop-cart-content,
   background: color-mix(in srgb, var(--color-surface-2), #d9dfe7 24%);
 }
 
+.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-benefits,
+.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-address,
+.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-benefits .shop-cart-sheet,
+.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-address .shop-cart-sheet{
+  background: var(--color-surface);
+}
+
 body.page-shop .shop-cart-content{
   padding: 0 0 12px;
 }
@@ -12297,7 +12304,7 @@ body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-cart) .app-
   gap: 8px;
   margin-top: 12px;
   overflow: hidden;
-  max-height: 120px;
+  max-height: 168px;
   opacity: 1;
   transform: translateY(0);
   overflow-anchor: none;
@@ -12326,6 +12333,67 @@ body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-cart) .app-
   gap: 0;
   margin-left: auto;
   justify-content: flex-end;
+}
+
+.shop-cart-mode-header__progress{
+  display: block;
+  margin-top: 8px;
+}
+
+.shop-cart-mode-header__progress-surface{
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  min-height: 26px;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--color-border), transparent 10%);
+  border-radius: 999px;
+  background: var(--color-surface-2);
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.shop-cart-mode-header__progress-bar{
+  position: absolute;
+  inset: 0;
+  width: auto;
+  height: auto;
+  background: var(--color-surface-2);
+  border-radius: inherit;
+  overflow: hidden;
+}
+
+.shop-cart-mode-header__progress-fill{
+  height: 100%;
+  width: 0%;
+  max-width: 100%;
+  background: linear-gradient(90deg, var(--shop-buy), #ffb15a);
+  border-radius: inherit;
+  transition: width .25s ease;
+}
+
+.shop-cart-mode-header__progress-label{
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.1;
+  color: var(--color-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.shop-cart-mode-header__progress-label strong{
+  font-weight: 800;
+  color: var(--color-text);
+}
+
+.shop-cart-mode-header__progress-label.is-free{
+  color: var(--color-text);
+  font-weight: 700;
 }
 
 .shop-cart-mode-header-sticky-host{
@@ -12460,6 +12528,170 @@ body.page-shop .shop-cart-content .shop-cart-mode-header.is-condensed .shop-cart
   gap: 14px;
 }
 
+.shop-cart-pricing-summary-section{
+  width: 100%;
+}
+
+.shop-cart-pricing-summary-card{
+  position: relative;
+  display: grid;
+  gap: 12px;
+  width: 100%;
+  padding: 18px;
+  border-radius: 28px;
+  background: var(--color-surface);
+  box-shadow: 0 14px 30px rgba(20, 29, 48, 0.08);
+}
+
+.shop-cart-pricing-summary-content{
+  min-height: 20px;
+}
+
+.shop-cart-pricing-summary-loading{
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--color-text-muted);
+}
+
+.shop-cart-pricing-summary-note{
+  font-size: 13px;
+  line-height: 1.35;
+  color: var(--color-text-muted);
+}
+
+.shop-cart-pricing-summary-card .shop-order-summary{
+  gap: 10px;
+}
+
+.shop-cart-pricing-summary-card .shop-order-summary-total-value{
+  color: var(--color-text);
+}
+
+.shop-cart-benefits-service-section{
+  width: 100%;
+}
+
+.shop-cart-benefits-service-card{
+  position: relative;
+  display: grid;
+  gap: 12px;
+  width: 100%;
+  padding: 18px;
+  border-radius: 28px;
+  background: var(--color-surface);
+  box-shadow: 0 14px 30px rgba(20, 29, 48, 0.08);
+}
+
+.shop-cart-benefits-service-row{
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.shop-cart-benefits-service-row-main{
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.shop-cart-benefits-service-title{
+  font-size: 28px;
+  line-height: 1.1;
+  font-weight: 900;
+  color: var(--color-text);
+}
+
+.shop-cart-benefits-service-badge{
+  flex: 0 0 auto;
+  min-width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--color-primary);
+  color: #fff;
+  font-size: 13px;
+  line-height: 1;
+  font-weight: 800;
+}
+
+.shop-cart-benefits-service-arrow{
+  flex: 0 0 auto;
+  color: var(--color-text-muted);
+  font-size: 18px;
+}
+
+.shop-cart-benefits-service-divider{
+  width: 100%;
+  height: 1px;
+  background: color-mix(in srgb, var(--color-border), transparent 10%);
+}
+
+.shop-cart-benefits-service-promo-block{
+  display: grid;
+  gap: 14px;
+}
+
+.shop-cart-benefits-service-promo-entry{
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+}
+
+.shop-cart-benefits-service-promo-input{
+  min-width: 0;
+  flex: 1 1 auto;
+  height: 52px;
+  padding: 0 16px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--color-border), transparent 10%);
+  background: color-mix(in srgb, var(--color-surface-2), white 30%);
+  box-shadow: none;
+  text-transform: uppercase;
+}
+
+.shop-cart-benefits-service-promo-apply{
+  flex: 0 0 auto;
+  min-width: 124px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-border), transparent 60%);
+  color: var(--color-text-muted);
+  font-size: 14px;
+  line-height: 1;
+  font-weight: 800;
+  cursor: pointer;
+  transition: background-color .18s ease, color .18s ease, opacity .18s ease;
+}
+
+.shop-cart-benefits-service-promo-apply.is-active{
+  background: var(--color-primary);
+  color: #fff;
+}
+
+.shop-cart-benefits-service-promo-apply.is-current{
+  background: color-mix(in srgb, var(--shop-buy), white 82%);
+  color: var(--shop-buy);
+  border: 1px solid color-mix(in srgb, var(--shop-buy), white 45%);
+}
+
+.shop-cart-benefits-service-promo-apply:disabled{
+  cursor: default;
+  opacity: .7;
+}
+
 .shop-cart-items-section .cart-swipe-container{
   margin-bottom: 0;
   border-radius: 22px;
@@ -12550,7 +12782,8 @@ body.page-shop .shop-cart-content .shop-cart-mode-header.is-condensed .shop-cart
 .shop-cart-items-section .shop-cart-item-row .cart-price-group{
   min-width: 0;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
@@ -12579,6 +12812,7 @@ body.page-shop .shop-cart-content .shop-cart-mode-header.is-condensed .shop-cart
   font-size: 11px;
   line-height: 1;
   font-weight: 700;
+  white-space: nowrap;
 }
 
 .shop-cart-items-section .shop-cart-item-row .cart-desktop-actions{
@@ -12587,15 +12821,21 @@ body.page-shop .shop-cart-content .shop-cart-mode-header.is-condensed .shop-cart
 }
 
 @media (max-width: 768px){
-  body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-cart) .modal-backdrop{
+  body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-cart) .modal-backdrop,
+  body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-benefits) .modal-backdrop,
+  body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-address) .modal-backdrop{
     z-index: 10018;
   }
 
-  body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-cart) .shop-mobile-bottom-container{
+  body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-cart) .shop-mobile-bottom-container,
+  body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-benefits) .shop-mobile-bottom-container,
+  body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-address) .shop-mobile-bottom-container{
     z-index: 10020;
   }
 
-  body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-cart) .app-modal{
+  body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-cart) .app-modal,
+  body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-benefits) .app-modal,
+  body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-address) .app-modal{
     z-index: 10019;
     top: 12px;
     bottom: 0;
@@ -12628,6 +12868,44 @@ body.page-shop .shop-cart-content .shop-cart-mode-header.is-condensed .shop-cart
     border-radius: 24px;
   }
 
+  .shop-cart-pricing-summary-card{
+    padding: 16px;
+    border-radius: 24px;
+  }
+
+  .shop-cart-benefits-service-card{
+    padding: 16px;
+    border-radius: 24px;
+    gap: 10px;
+  }
+
+  .shop-cart-benefits-service-title{
+    font-size: 22px;
+  }
+
+  .shop-cart-benefits-service-badge{
+    min-width: 22px;
+    height: 22px;
+    font-size: 12px;
+  }
+
+  .shop-cart-benefits-service-promo-entry{
+    gap: 8px;
+  }
+
+  .shop-cart-benefits-service-promo-input{
+    height: 48px;
+    padding: 0 14px;
+    border-radius: 999px;
+  }
+
+  .shop-cart-benefits-service-promo-apply{
+    min-width: 108px;
+    padding: 0 14px;
+    border-radius: 999px;
+    font-size: 13px;
+  }
+
   .shop-cart-items-section__title{
     font-size: 20px;
   }
@@ -12654,6 +12932,16 @@ body.page-shop .shop-cart-content .shop-cart-mode-header.is-condensed .shop-cart
 .shop-cart-empty-sheet .empty-state{
   min-height: auto;
   gap: 6px;
+}
+.shop-cart-items-section--empty .shop-cart-items-section__body{
+  display: block;
+}
+.shop-cart-items-section--empty .shop-cart-empty-sheet{
+  width: 100%;
+  padding: 44px 20px;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .shop-cart-sheet{
@@ -12749,6 +13037,10 @@ body.page-shop .shop-cart-content .shop-cart-mode-header.is-condensed .shop-cart
 }
 .shop-cart-delivery-progress.hidden{
   display: none;
+}
+.shop-cart-delivery-progress,
+.shop-mobile-delivery-progress-wrap{
+  display: none !important;
 }
 .shop-cart-delivery-progress-row{
   display: grid;
@@ -12860,6 +13152,7 @@ body.page-shop .shop-cart-content .shop-cart-mode-header.is-condensed .shop-cart
 @media (min-width: 769px){
   .shop-cart-body:has(.shop-product-content:not(.hidden)) .shop-cart-delivery-progress,
   .shop-cart-body:has(.shop-profile-content:not(.hidden)) .shop-cart-delivery-progress,
+  .shop-cart-body:has(.shop-address-content:not(.hidden)) .shop-cart-delivery-progress,
   .shop-cart-body:has(.shop-checkout-benefits-content:not(.hidden)) .shop-cart-delivery-progress{
     display: none !important;
   }
@@ -12914,6 +13207,11 @@ body.page-shop .shop-cart-content .shop-cart-mode-header.is-condensed .shop-cart
   gap: 10px;
   width: 100%;
 }
+
+body.page-shop #shopCartFooterActions > #shopCartClearBtn{
+  display: none !important;
+}
+
 .shop-checkout-footer-actions{
   display: grid;
   grid-template-columns: 52px minmax(0, 1fr);
@@ -13280,6 +13578,38 @@ body.page-shop .shop-cart-content .shop-cart-mode-header.is-condensed .shop-cart
 }
 
 .shop-nav-badge.hidden{ display: none; }
+
+.shop-header-benefits-btn{
+  position: relative;
+}
+
+.shop-benefits-badge{
+  position: absolute;
+  top: -7px;
+  right: -8px;
+  min-width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: var(--shop-buy);
+  color: var(--shop-buy-text) !important;
+  font-weight: 900;
+  font-size: 11px;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+  padding: 0 6px;
+  border: 2px solid var(--shop-buy);
+  pointer-events: none;
+}
+
+#shopCartBenefitsTriggerBtn .shop-benefits-badge{
+  top: -4px;
+  right: -4px;
+}
+
+.shop-benefits-badge.hidden{
+  display: none;
+}
 
 /* РєРѕСЂР·РёРЅР°: РїРѕРґРїСЂС‹РіРёРІР°РЅРёРµ + flash РїСЂРё РґРѕР±Р°РІР»РµРЅРёРё */
 @keyframes shopNavBounce{
@@ -14810,6 +15140,7 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
   width: 100%;
   border-radius: 999px;
   padding-inline: 16px;
+  text-transform: uppercase;
 }
 
 .shop-checkout-benefits-promo-entry-btn{
@@ -17676,6 +18007,15 @@ body.page-shop .app-modal-body::after{
   gap: 12px;
 }
 
+.app-modal-header.is-shop-sheet-shell{
+  position: relative;
+  z-index: 2;
+  background: var(--color-surface);
+  border-bottom-left-radius: 24px;
+  border-bottom-right-radius: 24px;
+  box-shadow: 0 14px 30px rgba(20, 29, 48, 0.12);
+}
+
 .app-modal-body.shop-cart-sheet-body{
   padding: 0;
   overflow: hidden;
@@ -17837,6 +18177,14 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
 
 .shop-cart-header.is-shell-hidden{
   display: none !important;
+}
+
+.shop-cart-header.is-sheet-shell{
+  z-index: 2;
+  background: var(--color-surface);
+  border-bottom-left-radius: 24px;
+  border-bottom-right-radius: 24px;
+  box-shadow: 0 14px 30px rgba(20, 29, 48, 0.12);
 }
 
 @media (max-width: 768px){
@@ -19000,6 +19348,7 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
     width: 100%;
     border-radius: 999px;
     padding-inline: 16px;
+    text-transform: uppercase;
   }
   .shop-mobile-benefits-inline-apply-btn {
     display: inline-flex;
@@ -19090,6 +19439,11 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
     align-items: center;
     gap: 10px;
     width: 100%;
+  }
+
+  .shop-mobile-cart-actions-cart > .shop-checkout-btn {
+    width: 100%;
+    flex: 1 1 auto;
   }
   
   .shop-mobile-cart-actions-cart.hidden,

@@ -52,7 +52,7 @@
           placeholder="Введите промокод"
           autocomplete="new-password"
           autocorrect="off"
-          autocapitalize="none"
+          autocapitalize="characters"
           spellcheck="false"
           inputmode="text"
           enterkeyhint="done"
@@ -73,7 +73,6 @@
       </div>
     </div>
     <div class="shop-mobile-cart-actions-cart hidden" id="shopMobileCartActionsCart">
-      <button class="shop-cart-clear" id="shopMobileCartClearBtn" type="button" title="Очистить корзину" aria-label="Очистить корзину">×</button>
       <button class="shop-checkout-btn" id="shopMobileCheckoutBtn" type="button">
         Оформить · <span class="shop-checkout-total" id="shopMobileCartTotal">0 ₽</span>
       </button>
@@ -134,6 +133,7 @@
 
     <button class="shop-nav-btn" id="shopNavCategories" type="button" data-tab="benefits" aria-label="Выгоды">
       <i class="fas fa-tags"></i>
+      <span class="shop-benefits-badge hidden" id="shopNavBenefitsBadge">0</span>
     </button>
 
     <button class="shop-nav-btn" id="shopNavCart" type="button" data-tab="cart" aria-label="Корзина">

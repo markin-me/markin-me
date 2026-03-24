@@ -748,6 +748,12 @@
     meBootstrapToken = "";
     meBootstrapLoaded = false;
     dispatchCustomerProfileChanged("clear");
+    if (typeof window.invalidateBenefitsStore === "function") {
+      window.invalidateBenefitsStore({ orderChanged: true, detailsChanged: true });
+    }
+    if (typeof window.syncBenefitsBadgesUi === "function") {
+      window.syncBenefitsBadgesUi(0);
+    }
   }
 
   // -----------------------------
@@ -1494,7 +1500,9 @@
     if (panelName === "benefit-gift-claim") return isCartSheetOpen ? "gift-claim-actions" : "nav";
     if (panelName === "benefits") {
       if (!isCartSheetOpen) return "nav";
-      return benefitsSourceScreen === "nav" ? "benefits-nav-actions" : "benefits-actions";
+      if (benefitsSourceScreen === "nav") return "benefits-nav-actions";
+      if (benefitsSourceScreen === "cart-service") return "nav";
+      return "benefits-actions";
     }
     if (panelName === "checkout") return isCartSheetOpen ? "checkout-actions" : "nav";
     if (panelName === "cart") {
@@ -1831,6 +1839,42 @@
       closeShopSheetIfOpen();
       return true;
     }
+
+    const showCartSheetScreen = () => {
+      if (typeof openCartSheetCtx?.showSheetCart === "function") {
+        openCartSheetCtx.showSheetCart();
+        return true;
+      }
+      closeShopSheetIfOpen();
+      return false;
+    };
+
+    const showCheckoutSheetScreen = () => {
+      if (typeof openCartSheetCtx?.showSheetCheckout === "function") {
+        openCartSheetCtx.showSheetCheckout();
+        return true;
+      }
+      closeShopSheetIfOpen();
+      return false;
+    };
+
+    const showAddressListSheetScreen = (backMode) => {
+      if (typeof openCartSheetCtx?.showSheetAddressList === "function") {
+        openCartSheetCtx.showSheetAddressList(backMode);
+        return true;
+      }
+      closeShopSheetIfOpen();
+      return false;
+    };
+
+    const showPickupListSheetScreen = () => {
+      if (typeof openCartSheetCtx?.showSheetPickupList === "function") {
+        openCartSheetCtx.showSheetPickupList();
+        return true;
+      }
+      closeShopSheetIfOpen();
+      return false;
+    };
     
     const { checkoutEl, benefitsEl, benefitDetailEl, productEl, listEl } = openCartSheetCtx;
     const addressWrap = checkoutEl?.parentElement?.querySelector('.shop-address-content');
@@ -1840,8 +1884,16 @@
 
     // ????????В корзине пусто
     if (pickupWrapEl && !pickupWrapEl.classList.contains('hidden')) {
-      // ?? ?????? ????? ?????????? - ???????????? ? ??????????
-      showSheetCheckout();
+      const pickupBackMode = openCartSheetCtx?.addressBackMode || "checkout";
+      if (pickupBackMode === "header") {
+        closeShopSheetIfOpen();
+      } else if (pickupBackMode === "profile") {
+        returnToProfileFromSheet();
+      } else if (pickupBackMode === "cart") {
+        showCartSheetScreen();
+      } else {
+        showCheckoutSheetScreen();
+      }
       return true;
     } else if (benefitDetailEl && !benefitDetailEl.classList.contains('hidden')) {
       if (typeof openCartSheetCtx?.showSheetBenefits === "function") {
@@ -1849,11 +1901,13 @@
       }
       return true;
     } else if (benefitsEl && !benefitsEl.classList.contains('hidden')) {
-      const benefitsBackScreen = openCartSheetCtx?.benefitsSourceScreen === "cart" ? "cart" : "checkout";
-      if (benefitsBackScreen === "cart") {
-        showSheetCart();
+      const benefitsBackScreen = String(openCartSheetCtx?.benefitsSourceScreen || "").trim().toLowerCase();
+      if (benefitsBackScreen === "nav") {
+        closeShopSheetIfOpen();
+      } else if (benefitsBackScreen === "cart" || benefitsBackScreen === "cart-service") {
+        showCartSheetScreen();
       } else {
-        showSheetCheckout();
+        showCheckoutSheetScreen();
       }
       return true;
     } else if (productEl && !productEl.classList.contains('hidden')) {
@@ -1881,19 +1935,35 @@
       // ?? ?????? ?????? - ???????????? ? ??????? ??? ????????? sheet
       const cartKey = sheetNavigationState.data?.cartKey;
       if (cartKey) {
-        showSheetCart();
+        showCartSheetScreen();
         return true;
       } else {
         closeShopSheetIfOpen();
         return true;
       }
     } else if (addressFormView && !addressFormView.classList.contains('hidden')) {
-      // ?? ????? ?????? - ???????????? ? ?????? ???????
-      if (openCartSheetCtx?.addressBackMode === "profile") {
+      const addressFormReturnScreen = String(openCartSheetCtx?.addressFormReturnScreen || "").trim().toLowerCase();
+      if (addressFormReturnScreen === "profile") {
         returnToProfileFromSheet();
         return true;
       }
-      showSheetAddressList();
+      if (addressFormReturnScreen === "header") {
+        closeShopSheetIfOpen();
+        return true;
+      }
+      if (addressFormReturnScreen === "checkout") {
+        showCheckoutSheetScreen();
+        return true;
+      }
+      if (addressFormReturnScreen === "pickuplist") {
+        showPickupListSheetScreen();
+        return true;
+      }
+      if (addressFormReturnScreen === "cart") {
+        showCartSheetScreen();
+        return true;
+      }
+      showAddressListSheetScreen(openCartSheetCtx?.addressBackMode || "cart");
       return true;
     } else if (addressListView && !addressListView.classList.contains('hidden')) {
       const backMode = openCartSheetCtx?.addressBackMode || "cart";
@@ -1902,14 +1972,14 @@
       } else if (backMode === "profile") {
         returnToProfileFromSheet();
       } else if (backMode === "checkout") {
-        showSheetCheckout();
+        showCheckoutSheetScreen();
       } else {
-        showSheetCart();
+        showCartSheetScreen();
       }
       return true;
     } else if (checkoutEl && !checkoutEl.classList.contains('hidden')) {
       // ?? ?????????? ?????? - ???????????? ? ???????
-      showSheetCart();
+      showCartSheetScreen();
       return true;
     } else if (listEl && !listEl.classList.contains('hidden')) {
       // ?? ??????? - ????????? sheet
@@ -1920,6 +1990,38 @@
     // Fallback - ????????? sheet
     closeShopSheetIfOpen();
     return true;
+  }
+
+  function shouldUseCartSheetCloseAsBack() {
+    if (!window.AppModal || typeof window.AppModal.isOpen !== "function" || !window.AppModal.isOpen()) {
+      return false;
+    }
+    if (sheetNavigationState.type !== "cart") {
+      return false;
+    }
+    const screen = String(sheetNavigationState.screen || "").trim();
+    return (
+      screen === "benefits"
+      || screen === "addressList"
+      || screen === "addressForm"
+      || screen === "pickupList"
+      || screen === "benefitDetail"
+    );
+  }
+
+  const appModalCloseBtn = document.getElementById("appModalCloseBtn");
+  if (appModalCloseBtn && !appModalCloseBtn._shopCartNativeBackBound) {
+    const nativeCartSheetCloseHandler = (event) => {
+      if (!shouldUseCartSheetCloseAsBack()) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (typeof event.stopImmediatePropagation === "function") {
+        event.stopImmediatePropagation();
+      }
+      handleCartSheetBack();
+    };
+    appModalCloseBtn.addEventListener("click", nativeCartSheetCloseHandler, true);
+    appModalCloseBtn._shopCartNativeBackBound = true;
   }
 
   // ????????? ?????? "?????" ??? ???????? ???????
@@ -4373,9 +4475,80 @@
   }
 
   function saveCheckoutDraft(draft) {
+    const hasOwn = (obj, key) => Object.prototype.hasOwnProperty.call(obj || {}, key);
+    const nextDraftRaw = draft && typeof draft === "object" ? { ...draft } : {};
+    let nextDraft = nextDraftRaw;
+
+    if (Object.keys(nextDraftRaw).length > 0) {
+      const prevDraft = loadCheckoutDraft();
+      nextDraft = { ...nextDraftRaw };
+
+      const carryForward = (key) => {
+        if (!hasOwn(nextDraft, key) && hasOwn(prevDraft, key)) {
+          nextDraft[key] = prevDraft[key];
+        }
+      };
+
+      const discountExplicitlyCleared = hasOwn(nextDraft, "selected_discount_id")
+        && (nextDraft.selected_discount_id == null || String(nextDraft.selected_discount_id).trim() === "" || Number(nextDraft.selected_discount_id) === 0);
+
+      if (discountExplicitlyCleared) {
+        if (!hasOwn(nextDraft, "selected_discount_source")) {
+          nextDraft.selected_discount_source = null;
+        }
+      } else {
+        carryForward("selected_discount_id");
+        carryForward("selected_discount_source");
+      }
+
+      const hasPromoCode = hasOwn(nextDraft, "promo_code");
+      const promoCodeValue = hasPromoCode ? String(nextDraft.promo_code ?? "").trim() : "";
+      const hasPromoRewardId = hasOwn(nextDraft, "selected_promo_reward_id");
+      const hasPromoSource = hasOwn(nextDraft, "selected_promo_source");
+      const promoSelectionExplicit = hasPromoSource || hasPromoRewardId;
+      const promoRewardIdValue = hasPromoRewardId
+        ? Number(nextDraft.selected_promo_reward_id || 0)
+        : 0;
+      const promoExplicitlyCleared = hasPromoCode
+        && !promoCodeValue
+        && promoSelectionExplicit
+        && (!hasPromoRewardId || !(Number.isFinite(promoRewardIdValue) && promoRewardIdValue > 0));
+
+      if (!promoSelectionExplicit) {
+        carryForward("promo_code");
+        carryForward("selected_promo_source");
+        carryForward("selected_promo_reward_id");
+        carryForward("benefits_selected_promo_mode");
+      } else if (promoExplicitlyCleared) {
+        if (!hasOwn(nextDraft, "selected_promo_source")) {
+          nextDraft.selected_promo_source = null;
+        }
+        if (!hasOwn(nextDraft, "selected_promo_reward_id")) {
+          nextDraft.selected_promo_reward_id = null;
+        }
+        if (!hasOwn(nextDraft, "benefits_selected_promo_mode")) {
+          nextDraft.benefits_selected_promo_mode = null;
+        }
+      } else {
+        carryForward("promo_code");
+        carryForward("selected_promo_source");
+        carryForward("selected_promo_reward_id");
+        carryForward("benefits_selected_promo_mode");
+      }
+
+      carryForward("benefits_promo_input_value");
+      carryForward("benefits_applied_snapshot");
+    }
+
     try {
-      localStorage.setItem(CHECKOUT_DRAFT_KEY, JSON.stringify(draft || {}));
+      localStorage.setItem(CHECKOUT_DRAFT_KEY, JSON.stringify(nextDraft));
     } catch {}
+    if (typeof window.syncShopCartPricingSummaryUi === "function") {
+      Promise.resolve(window.syncShopCartPricingSummaryUi()).catch(() => {});
+    }
+    if (typeof window.handleShopBenefitsOrderStateChange === "function") {
+      window.handleShopBenefitsOrderStateChange("saveCheckoutDraft");
+    }
   }
 
 
@@ -4992,6 +5165,10 @@
     etaText: DEFAULT_CART_MODE_ETA_LABEL,
     deliveryText: "",
     hoursText: "",
+    deliveryProgressVisible: false,
+    deliveryProgressValue: 0,
+    deliveryProgressLabelHtml: "",
+    deliveryProgressFree: false,
   };
 
   function getCartHeaderAddressLine() {
@@ -5255,6 +5432,17 @@
     const etaText = str(cartModeHeaderMetaState?.etaText || "").trim() || DEFAULT_CART_MODE_ETA_LABEL;
     const deliveryText = mode === "delivery" ? str(cartModeHeaderMetaState?.deliveryText || "").trim() : "";
     const hoursText = str(cartModeHeaderMetaState?.hoursText || "").trim();
+    const deliveryProgressVisible =
+      mode === "delivery" &&
+      !!cartModeHeaderMetaState?.deliveryProgressVisible &&
+      Boolean(str(cartModeHeaderMetaState?.deliveryProgressLabelHtml || "").trim());
+    const deliveryProgressValue = Math.max(
+      0,
+      Math.min(100, Number(cartModeHeaderMetaState?.deliveryProgressValue || 0))
+    );
+    const deliveryProgressLabelHtml =
+      mode === "delivery" ? str(cartModeHeaderMetaState?.deliveryProgressLabelHtml || "").trim() : "";
+    const deliveryProgressFree = mode === "delivery" && !!cartModeHeaderMetaState?.deliveryProgressFree;
     const headers = [];
     if (scope && typeof scope.matches === "function" && scope.matches(".shop-cart-mode-header")) {
       headers.push(scope);
@@ -5272,6 +5460,10 @@
       const deliveryValueEl = deliveryItemEl?.querySelector(".shop-cart-mode-header__meta-value");
       const hoursItemEl = headerEl.querySelector('[data-cart-meta="hours"]');
       const hoursValueEl = hoursItemEl?.querySelector(".shop-cart-mode-header__meta-value");
+      const deliveryProgressEl = headerEl.querySelector('[data-cart-meta="delivery-progress"]');
+      const deliveryProgressBarEl = deliveryProgressEl?.querySelector(".shop-cart-mode-header__progress-bar");
+      const deliveryProgressFillEl = deliveryProgressEl?.querySelector(".shop-cart-mode-header__progress-fill");
+      const deliveryProgressLabelEl = deliveryProgressEl?.querySelector(".shop-cart-mode-header__progress-label");
 
       if (deliveryBtn) deliveryBtn.classList.toggle("is-active", mode === "delivery");
       if (pickupBtn) pickupBtn.classList.toggle("is-active", mode === "pickup");
@@ -5287,6 +5479,15 @@
       if (deliveryValueEl) deliveryValueEl.textContent = deliveryText;
       if (hoursItemEl) hoursItemEl.classList.toggle("hidden", !hoursText);
       if (hoursValueEl) hoursValueEl.textContent = hoursText;
+      if (deliveryProgressEl) deliveryProgressEl.classList.toggle("hidden", !deliveryProgressVisible);
+      if (deliveryProgressBarEl) {
+        deliveryProgressBarEl.setAttribute("aria-valuenow", String(Math.round(deliveryProgressValue)));
+      }
+      if (deliveryProgressFillEl) deliveryProgressFillEl.style.width = `${deliveryProgressVisible ? deliveryProgressValue : 0}%`;
+      if (deliveryProgressLabelEl) {
+        deliveryProgressLabelEl.classList.toggle("is-free", deliveryProgressVisible && deliveryProgressFree);
+        deliveryProgressLabelEl.innerHTML = deliveryProgressVisible ? deliveryProgressLabelHtml : "";
+      }
     });
   }
 
@@ -5412,9 +5613,22 @@
       </div>
     `;
 
+    const progress = document.createElement("div");
+    progress.className = "shop-cart-mode-header__progress hidden";
+    progress.dataset.cartMeta = "delivery-progress";
+    progress.innerHTML = `
+        <div class="shop-cart-mode-header__progress-surface">
+          <div class="shop-cart-mode-header__progress-bar" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
+            <div class="shop-cart-mode-header__progress-fill"></div>
+          </div>
+          <div class="shop-cart-mode-header__progress-label"></div>
+        </div>
+    `;
+
     section.appendChild(toggleWrap);
     section.appendChild(addressBtn);
     section.appendChild(meta);
+    section.appendChild(progress);
     updateCartModeHeaderUi(section);
     return section;
   }
@@ -5711,6 +5925,7 @@ function setCartHeader({
   onClose = null,
   showAddressModeToggle = false,
   hideHeaderShell = false,
+  useSheetHeaderShell = false,
 } = {}) {
   const headerEl = document.querySelector(".shop-cart-header");
 
@@ -5771,6 +5986,7 @@ function setCartHeader({
   if (headerEl) {
     headerEl.classList.toggle("is-address-mode", !!showAddressModeToggle);
     headerEl.classList.toggle("is-shell-hidden", !!hideHeaderShell && isDesktopViewport());
+    headerEl.classList.toggle("is-sheet-shell", !!useSheetHeaderShell && isDesktopViewport());
   }
 
   // ????? ?????? ??? ??????????
@@ -6014,6 +6230,12 @@ function showCartView() {
   setCartFooterMode("cart");
   syncCartFooterVisibilityForCartMode(cartItemsResolved().length);
   renderCartIfDirty();
+  if (typeof window.syncShopCartPricingSummaryUi === "function") {
+    Promise.resolve(window.syncShopCartPricingSummaryUi()).catch(() => {});
+  }
+  if (typeof window.syncShopCartBenefitsServiceUi === "function") {
+    Promise.resolve(window.syncShopCartBenefitsServiceUi(elCartList || elCartContent || document)).catch(() => {});
+  }
   updateCartModeHeaderUi();
   if (typeof updateMobileDeliveryProgress === "function") {
     Promise.resolve(updateMobileDeliveryProgress()).catch(() => {});
@@ -6103,6 +6325,9 @@ function showAddressListView(backMode = "cart", opts = {}) {
     : (window._deliveryMode === "pickup" ? "pickup" : "delivery");
   setAddressListMode(preferredMode, { rerender: false });
   renderAddressList();
+  if (typeof updateMobileDeliveryProgress === "function") {
+    Promise.resolve(updateMobileDeliveryProgress()).catch(() => {});
+  }
   queueMobileUiStateSync("showAddressListView");
 }
 
@@ -6178,6 +6403,9 @@ async function showAddressFormView(prefill, editingId, backMode) {
   }
 
   setCartFooterMode("hidden");
+  if (typeof updateMobileDeliveryProgress === "function") {
+    Promise.resolve(updateMobileDeliveryProgress()).catch(() => {});
+  }
   queueMobileUiStateSync("showAddressFormView");
   setTimeout(() => {
     try {
@@ -8896,15 +9124,19 @@ async function initAddresses() {
 
   const CART_SECTION_CLEAR_ICON_HTML = '<i class="fas fa-trash-can"></i>';
 
-  function computeCartDiscountMeta(lineTotal, originalLineTotal) {
-    const currentTotal = roundPrice(Number(lineTotal || 0));
-    const originalTotal = roundPrice(Number(originalLineTotal || 0));
+  function computeCartDiscountMeta(lineStateOrTotal, originalLineTotal) {
+    const lineState = lineStateOrTotal && typeof lineStateOrTotal === "object"
+      ? lineStateOrTotal
+      : null;
+    const currentTotal = roundPrice(Number(lineState ? lineState.currentTotal : lineStateOrTotal) || 0);
+    const originalTotal = roundPrice(Number(lineState ? lineState.originalTotal : originalLineTotal) || 0);
     const showOld = originalTotal > currentTotal;
-    let discountPercent = 0;
-    if (showOld && originalTotal > 0) {
+    let discountPercent = lineState ? Math.round(Number(lineState.discountPercent || 0)) : 0;
+    if ((!Number.isFinite(discountPercent) || discountPercent <= 0) && showOld && originalTotal > 0) {
       discountPercent = Math.round(((originalTotal - currentTotal) / originalTotal) * 100);
-      if (!Number.isFinite(discountPercent) || discountPercent <= 0) discountPercent = 0;
     }
+    if (!Number.isFinite(discountPercent) || discountPercent <= 0) discountPercent = 0;
+    if (discountPercent > 100) discountPercent = 100;
     return {
       currentTotal,
       originalTotal: showOld ? originalTotal : 0,
@@ -8913,11 +9145,11 @@ async function initAddresses() {
     };
   }
 
-  function applyCartPriceGroupState(currentEl, oldEl, badgeEl, lineTotal, originalLineTotal) {
-    const meta = computeCartDiscountMeta(lineTotal, originalLineTotal);
+  function applyCartPriceGroupState(currentEl, oldEl, badgeEl, lineStateOrTotal, originalLineTotal) {
+    const meta = computeCartDiscountMeta(lineStateOrTotal, originalLineTotal);
     if (currentEl) currentEl.textContent = money(meta.currentTotal);
     if (oldEl) {
-      oldEl.textContent = meta.showOld ? `${moneyNoSign(meta.originalTotal)} ₽` : "";
+      oldEl.textContent = meta.showOld ? money(meta.originalTotal) : "";
       oldEl.classList.toggle("hidden", !meta.showOld);
     }
     if (badgeEl) {
@@ -8927,6 +9159,19 @@ async function initAddresses() {
     }
     return meta;
   }
+
+  function setCartPriceGroupDomState(priceGroupEl, lineStateOrTotal, originalLineTotal) {
+    if (!priceGroupEl || !priceGroupEl.querySelector) return null;
+    return applyCartPriceGroupState(
+      priceGroupEl.querySelector(".cart-price"),
+      priceGroupEl.querySelector(".cart-old"),
+      priceGroupEl.querySelector(".cart-discount-badge"),
+      lineStateOrTotal,
+      originalLineTotal
+    );
+  }
+
+  window.setShopCartPriceGroupDomState = setCartPriceGroupDomState;
 
   function createCartPriceGroup(lineTotal, originalLineTotal) {
     const wrap = document.createElement("div");
@@ -8990,6 +9235,103 @@ async function initAddresses() {
     });
   }
 
+  function buildCartBenefitsServiceSection() {
+    const section = document.createElement("section");
+    section.className = "shop-cart-benefits-service-section hidden";
+    section.dataset.cartBenefitsService = "1";
+    section.innerHTML = `
+      <div class="shop-cart-benefits-service-card">
+        <button
+          type="button"
+          class="shop-cart-benefits-service-row hidden"
+          data-cart-benefits-trigger="gifts"
+          aria-label="Открыть подарки"
+        >
+          <span class="shop-cart-benefits-service-row-main">
+            <span class="shop-cart-benefits-service-title">Подарки</span>
+            <span class="shop-cart-benefits-service-badge hidden" data-cart-benefits-badge="gifts">0</span>
+          </span>
+          <i class="fas fa-chevron-right shop-cart-benefits-service-arrow" aria-hidden="true"></i>
+        </button>
+        <div class="shop-cart-benefits-service-divider hidden" data-cart-benefits-divider></div>
+        <div class="shop-cart-benefits-service-promo-block">
+          <button
+            type="button"
+            class="shop-cart-benefits-service-row"
+            data-cart-benefits-trigger="promos"
+            aria-label="Открыть промокоды"
+          >
+            <span class="shop-cart-benefits-service-row-main">
+              <span class="shop-cart-benefits-service-title">Промокоды</span>
+              <span class="shop-cart-benefits-service-badge hidden" data-cart-benefits-badge="promos">0</span>
+            </span>
+            <i class="fas fa-chevron-right shop-cart-benefits-service-arrow" aria-hidden="true"></i>
+          </button>
+          <div class="shop-cart-benefits-service-promo-entry">
+            <input
+              class="control shop-cart-benefits-service-promo-input"
+              data-cart-benefits-promo-input
+              type="text"
+              name="shopCartBenefitsPromoCode"
+              placeholder="Введите промокод"
+              autocomplete="new-password"
+              autocorrect="off"
+              autocapitalize="characters"
+              spellcheck="false"
+              inputmode="text"
+              enterkeyhint="done"
+              aria-autocomplete="none"
+              data-lpignore="true"
+              data-form-type="other"
+              data-1p-ignore="true"
+              data-bwignore="true"
+            />
+            <button
+              type="button"
+              class="shop-cart-benefits-service-promo-apply"
+              data-cart-benefits-promo-apply
+              disabled
+            >
+              Применить
+            </button>
+          </div>
+        </div>
+      </div>
+    `;
+    return section;
+  }
+
+  function buildCartEmptyStateSection() {
+    const section = document.createElement("section");
+    section.className = "shop-cart-items-section shop-cart-items-section--empty";
+
+    const body = document.createElement("div");
+    body.className = "shop-cart-items-section__body";
+
+    const emptySheet = document.createElement("div");
+    emptySheet.className = "shop-cart-empty-sheet";
+    emptySheet.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-icon"><i class="fas fa-shopping-cart"></i></div>
+        <div class="empty-title">Корзина пуста</div>
+        <div class="empty-text">Добавьте товары из каталога</div>
+      </div>
+    `;
+
+    body.appendChild(emptySheet);
+    section.appendChild(body);
+    return section;
+  }
+
+  function renderCartEmptyStateIntoList(listEl, cartModeHeader = null) {
+    if (!listEl) return;
+    listEl.innerHTML = "";
+    if (cartModeHeader && !listEl.contains(cartModeHeader)) {
+      listEl.appendChild(cartModeHeader);
+    }
+    listEl.appendChild(buildCartEmptyStateSection());
+  }
+
   function renderCartInto(listEl, totalEl, emptyPlaceholderEl, opts = {}) {
     const bindInteractive = opts?.bindInteractive !== false;
     const items = sortCartItemsForDisplay(cartItemsResolved());
@@ -9009,14 +9351,7 @@ async function initAddresses() {
     if (!items.length) {
       if (emptyPlaceholderEl) emptyPlaceholderEl.classList.add("hidden");
       if (listEl) {
-        listEl.innerHTML = "";
-        if (cartModeHeader && !listEl.contains(cartModeHeader)) {
-          listEl.appendChild(cartModeHeader);
-        }
-        const emptySheet = document.createElement("div");
-        emptySheet.className = "shop-cart-empty-sheet";
-        emptySheet.innerHTML = '<div class="empty-state"><div class="empty-icon"><i class="fas fa-shopping-cart"></i></div><div class="empty-title">Корзина пуста</div><div class="empty-text">Добавьте товары из каталога</div></div>';
-        listEl.appendChild(emptySheet);
+        renderCartEmptyStateIntoList(listEl, cartModeHeader);
       }
       if (totalEl) totalEl.textContent = money(0);
       if (listEl && bindInteractive) {
@@ -9778,10 +10113,28 @@ async function initAddresses() {
       });
     }
 
+    if (listEl) {
+      listEl.appendChild(buildCartBenefitsServiceSection());
+
+      const pricingSummarySection = document.createElement("section");
+      pricingSummarySection.className = "shop-cart-pricing-summary-section hidden";
+      pricingSummarySection.innerHTML = `
+        <div class="shop-cart-pricing-summary-card">
+          <div class="shop-cart-pricing-summary-content">
+            <div class="shop-cart-pricing-summary-loading">Пересчитываем суммы...</div>
+          </div>
+        </div>
+      `;
+      listEl.appendChild(pricingSummarySection);
+    }
+
     if (totalEl) totalEl.textContent = money(total);
     if (listEl && bindInteractive) {
       bindCartItemsSectionControls(listEl);
       bindCartModeHeaderSticky(listEl);
+      if (typeof window.syncShopCartBenefitsServiceUi === "function") {
+        Promise.resolve(window.syncShopCartBenefitsServiceUi(listEl)).catch(() => {});
+      }
     }
     return { items, total };
   }
@@ -9842,32 +10195,129 @@ async function initAddresses() {
 
   async function restoreGiftRewardToBenefits(rewardId) {
     const numericRewardId = Number(rewardId || 0);
-    if (!(numericRewardId > 0)) return false;
+    if (!(numericRewardId > 0)) return null;
     const token = typeof getCustomerToken === "function" ? str(getCustomerToken() || "").trim() : "";
     if (!token) {
       showToast("Не удалось вернуть подарок в выгоды");
-      return false;
+      return null;
     }
     try {
-      await apiJson("/api/public/checkout/benefits/restore-gift", {
+      const response = await apiJson("/api/public/checkout/benefits/restore-gift", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "x-customer-token": token,
         },
-        body: JSON.stringify({ reward_id: numericRewardId }),
+        body: { reward_id: numericRewardId },
       });
-      if (typeof window.invalidateCheckoutBenefitsClientCache === "function") {
-        try {
-          window.invalidateCheckoutBenefitsClientCache({ preview: true, progressProducts: false });
-        } catch {}
-      }
-      return true;
+      return response?.data && typeof response.data === "object"
+        ? response.data
+        : { reward_id: numericRewardId };
     } catch (error) {
       console.error("Failed to restore gift reward:", error);
       showToast("Не удалось вернуть подарок в выгоды");
-      return false;
+      return null;
     }
+  }
+
+  function removeCartNodesByKeys(cartKeys) {
+    const keys = Array.isArray(cartKeys) ? cartKeys : [];
+    keys.forEach((rawKey) => {
+      const normalizedKey = String(rawKey || "");
+      if (!normalizedKey) return;
+      const escapedKey = (typeof CSS !== "undefined" && typeof CSS.escape === "function")
+        ? CSS.escape(normalizedKey)
+        : normalizedKey.replace(/([\"\\])/g, "\\$1");
+      document
+        .querySelectorAll(`.cart-swipe-container[data-cart-key="${escapedKey}"], .cart-row[data-cart-key="${escapedKey}"]`)
+        .forEach((node) => {
+          if (node && node.parentNode) node.remove();
+        });
+    });
+  }
+
+  function finalizeCartAfterRemoval(removedItems) {
+    const safeRemovedItems = Array.isArray(removedItems) ? removedItems : [];
+    safeRemovedItems.forEach((removedItem) => {
+      if (!removedItem) return;
+      const pid = Number(removedItem.product_id || removedItem.id);
+      if (Number.isFinite(pid) && Number(removedItem.auto_add || 0) === 1) {
+        markAutoAddDismissedByProduct(pid);
+      }
+    });
+
+    applyAutoAddRules();
+    clearAutoAddDismissedIfCartEmpty();
+    saveCart();
+    scheduleSyncAllProductCardsFromCart();
+    updateCartBadge();
+
+    const items = cartItemsResolved();
+    const isMobile = window.matchMedia("(max-width: 768px)").matches;
+    if (openCartSheetCtx) {
+      if (openCartSheetCtx.footerEl) {
+        openCartSheetCtx.footerEl.classList.toggle("hidden", items.length === 0);
+      }
+      if (openCartSheetCtx.checkoutBtn) {
+        openCartSheetCtx.checkoutBtn.disabled = items.length === 0;
+        const tspan = $(".shop-sheet-checkout-total", openCartSheetCtx.checkoutBtn);
+        const total = computeCartTotals(items).total;
+        if (tspan) tspan.textContent = money(total);
+        if (isMobile && elMobileCheckoutBtn) {
+          elMobileCheckoutBtn.disabled = items.length === 0;
+        }
+      }
+      if (openCartSheetCtx.totalEl) {
+        openCartSheetCtx.totalEl.textContent = money(computeCartTotals(items).total);
+      }
+      if (items.length === 0 && openCartSheetCtx.listEl) {
+        renderCartEmptyStateIntoList(openCartSheetCtx.listEl, buildCartModeHeader());
+      }
+    }
+
+    if (isMobile) updateMobileDeliveryProgress();
+    if (isMobile && elMobileCartActions) {
+      if (items.length === 0) {
+        elMobileCartActionsCart?.classList.add("hidden");
+        elMobileCartActionsCheckout?.classList.add("hidden");
+        updateMobileDeliveryProgress();
+      } else {
+        elMobileCartActionsCart?.classList.remove("hidden");
+        updateMobileDeliveryProgress();
+      }
+    }
+
+    markCartUiDirty();
+    if (items.length === 0) {
+      renderCart(true);
+      return;
+    }
+
+    if (elCartEmpty) elCartEmpty.classList.add("hidden");
+    if (elCartList) appendUpsellToList(elCartList);
+    if (openCartSheetCtx?.listEl && openCartSheetCtx.listEl !== elCartList) {
+      appendUpsellToList(openCartSheetCtx.listEl);
+    }
+    updateCartTotalsUiOnly();
+    cartUiRenderedRevision = cartUiRevision;
+  }
+
+  function removeGiftRewardBundleFromCart(rewardId) {
+    const numericRewardId = Number(rewardId || 0);
+    if (!(numericRewardId > 0)) return false;
+    const removedItems = [];
+    const removedKeys = [];
+    state.cart = state.cart.filter((item) => {
+      if (Number(item?.gift_reward_id || 0) !== numericRewardId) return true;
+      removedItems.push(item);
+      const itemKey = String(item?.key || "");
+      if (itemKey) removedKeys.push(itemKey);
+      return false;
+    });
+    if (!removedItems.length) return false;
+    removeCartNodesByKeys(removedKeys);
+    finalizeCartAfterRemoval(removedItems);
+    return true;
   }
 
   async function deleteCartItemWithAnimation(container, productId, cartKey) {
@@ -9878,9 +10328,13 @@ async function initAddresses() {
     const cartItem = cartKey ? getCartItemByKey(cartKey) : null;
     const isGiftReward = Number(cartItem?.is_gift_reward || 0) === 1;
     const giftRewardId = Number(cartItem?.gift_reward_id || 0);
+    const benefitsSourcePreviewRequest = typeof window.getBenefitsStoreSnapshot === "function"
+      ? (window.getBenefitsStoreSnapshot()?.lastPreviewRequest || null)
+      : null;
+    let restoredGiftData = null;
     if (isGiftReward) {
-      const restored = await restoreGiftRewardToBenefits(giftRewardId);
-      if (!restored) {
+      restoredGiftData = await restoreGiftRewardToBenefits(giftRewardId);
+      if (!restoredGiftData) {
         delete container.dataset.removing;
         return;
       }
@@ -9910,8 +10364,26 @@ async function initAddresses() {
     }, 50);
 
     setTimeout(() => {
-      // ??????? ?? ???????
-      removeFromCartByKey(cartKey, productId);
+      if (isGiftReward && giftRewardId > 0) {
+        removeGiftRewardBundleFromCart(giftRewardId);
+        if (typeof window.applyCheckoutBenefitGiftRestoredLocally === "function") {
+          try {
+            const appliedLocally = window.applyCheckoutBenefitGiftRestoredLocally({
+              rewardId: giftRewardId,
+              giftCard: restoredGiftData?.gift_card || null,
+              sourcePreviewRequest: benefitsSourcePreviewRequest,
+              reopenHost: false,
+            });
+            if (!appliedLocally && typeof window.handleShopBenefitsOrderStateChange === "function") {
+              window.handleShopBenefitsOrderStateChange("gift.restore.fallback");
+            }
+          } catch {}
+        } else if (typeof window.handleShopBenefitsOrderStateChange === "function") {
+          window.handleShopBenefitsOrderStateChange("gift.restore.fallback");
+        }
+      } else {
+        removeFromCartByKey(cartKey, productId);
+      }
       container.remove();
     }, 350);
   }
@@ -9924,24 +10396,11 @@ function removeFromCartByKey(cartKey, productId) {
     });
     if (idx !== -1) {
       const removedItem = state.cart[idx];
-      if (removedItem) {
-        const pid = Number(removedItem.product_id || removedItem.id);
-        if (Number.isFinite(pid) && Number(removedItem.auto_add || 0) === 1) {
-          markAutoAddDismissedByProduct(pid);
-        }
-      }
       state.cart.splice(idx, 1);
       const removedKey = String(removedItem?.key || cartKey || "");
-      if (removedKey) {
-        const escapedKey = (typeof CSS !== "undefined" && typeof CSS.escape === "function")
-          ? CSS.escape(removedKey)
-          : removedKey.replace(/([\"\\])/g, "\\$1");
-        document
-          .querySelectorAll(`.cart-swipe-container[data-cart-key="${escapedKey}"], .cart-row[data-cart-key="${escapedKey}"]`)
-          .forEach((node) => {
-            if (node && node.parentNode) node.remove();
-          });
-      }
+      removeCartNodesByKeys(removedKey ? [removedKey] : []);
+      finalizeCartAfterRemoval(removedItem ? [removedItem] : []);
+      return;
       applyAutoAddRules();
       clearAutoAddDismissedIfCartEmpty();
       saveCart();
@@ -9969,7 +10428,7 @@ function removeFromCartByKey(cartKey, productId) {
         }
         // ???В корзине пусто - ???????? ?????????
         if (items.length === 0 && openCartSheetCtx.listEl) {
-          openCartSheetCtx.listEl.innerHTML = '<div class="shop-cart-empty-sheet"><div class="empty-state"><div class="empty-icon"><i class="fas fa-shopping-cart"></i></div><div class="empty-title">Корзина пуста</div><div class="empty-text">Добавьте товары из каталога</div></div></div>';
+          renderCartEmptyStateIntoList(openCartSheetCtx.listEl, buildCartModeHeader());
         }
         // Перестраиваем апселл: удалённый товар должен снова появиться в списке
       }
@@ -10150,16 +10609,9 @@ function removeFromCartByKey(cartKey, productId) {
     if (!elCartFooter || cartViewMode !== "cart") return;
     const hasItems = Number(itemsCount || 0) > 0;
 
-    if (isDesktopViewport()) {
-      // Desktop empty cart: keep delivery progress visible, hide only action buttons.
-      elCartFooter.classList.remove("hidden");
-      if (elDesktopDeliveryProgressWrap) elDesktopDeliveryProgressWrap.classList.remove("hidden");
-      if (elCartFooterActions) elCartFooterActions.classList.toggle("hidden", !hasItems);
-      return;
-    }
-
-    // Mobile behavior remains unchanged.
     elCartFooter.classList.toggle("hidden", !hasItems);
+    if (elDesktopDeliveryProgressWrap) elDesktopDeliveryProgressWrap.classList.add("hidden");
+    if (elCartFooterActions) elCartFooterActions.classList.toggle("hidden", !hasItems);
   }
 
   function renderCart(force = false) {
@@ -10181,6 +10633,20 @@ function removeFromCartByKey(cartKey, productId) {
     }
     updateMobileDeliveryProgress();
     appendUpsellToList(elCartList);
+    if (items.length > 0 && typeof ensureShopLateLoaded === "function") {
+      Promise.resolve(ensureShopLateLoaded()).then(() => {
+        if (typeof window.syncShopCartPricingSummaryUi === "function") {
+          return window.syncShopCartPricingSummaryUi();
+        }
+        return null;
+      }).then(() => {
+        if (typeof window.handleShopBenefitsOrderStateChange === "function") {
+          window.handleShopBenefitsOrderStateChange("renderCart");
+        }
+      }).catch(() => {});
+    } else if (typeof window.handleShopBenefitsOrderStateChange === "function") {
+      window.handleShopBenefitsOrderStateChange("renderCart.empty");
+    }
     cartUiRenderedRevision = cartUiRevision;
     queueMobileUiStateSync("renderCart.rendered");
   }
@@ -10213,33 +10679,95 @@ function updateCartBadge() {
   const prev = window.__lastCartCountForNav || 0;
   if (n > prev && typeof bounceCartNav === "function") bounceCartNav();
   window.__lastCartCountForNav = n;
+  if (typeof window.syncBenefitsBadgesUi === "function") {
+    const benefitsCount = typeof window.getAvailableBenefitsCount === "function"
+      ? window.getAvailableBenefitsCount()
+      : null;
+    window.syncBenefitsBadgesUi(benefitsCount);
+  }
+  if (typeof window.handleShopBenefitsOrderStateChange === "function") {
+    window.handleShopBenefitsOrderStateChange("updateCartBadge");
+  }
 }
 
-  function clearCartAll() {
-    state.cart = [];
-    clearAllAutoAddDismissed();
-    applyAutoAddRules();
-    saveCart();
-    scheduleSyncAllProductCardsFromCart();
-    prioritizeAboveFoldCardImages();
-    renderCart();
-    updateCartBadge();
+  let clearCartAllBusy = false;
 
-    if (openCartSheetCtx && openCartSheetCtx.listEl && openCartSheetCtx.totalEl) {
-      const { items } = renderCartInto(openCartSheetCtx.listEl, openCartSheetCtx.totalEl, null);
-      if (openCartSheetCtx.footerEl) openCartSheetCtx.footerEl.classList.toggle("hidden", items.length === 0);
-      if (openCartSheetCtx.checkoutBtn) openCartSheetCtx.checkoutBtn.disabled = items.length === 0;
-      appendUpsellToList(openCartSheetCtx.listEl);
-    }
+  async function clearCartAll() {
+    if (clearCartAllBusy) return false;
+    clearCartAllBusy = true;
+    try {
+      const previousCartSnapshot = cloneCartState(state.cart);
+      const giftRewardIds = Array.from(
+        new Set(
+          previousCartSnapshot
+            .map((item) => Number(item?.gift_reward_id || 0))
+            .filter((rewardId) => Number.isFinite(rewardId) && rewardId > 0)
+        )
+      );
+      const benefitsSourcePreviewRequest = typeof window.getBenefitsStoreSnapshot === "function"
+        ? (window.getBenefitsStoreSnapshot()?.lastPreviewRequest || null)
+        : null;
+      const restoredGiftRewards = [];
 
-    const isMobile = window.matchMedia("(max-width: 768px)").matches;
-    if (isMobile && elMobileCartActions) {
-      // ????????? ???? ??????? ? ????? ???????? ?????? ???????????? ? ??? ?????? ???????
-      if (elMobileCartActionsCart) elMobileCartActionsCart.classList.add("hidden");
-      if (elMobileCartActionsCheckout) elMobileCartActionsCheckout.classList.add("hidden");
-      updateMobileDeliveryProgress();
+      for (const rewardId of giftRewardIds) {
+        const restoredGiftData = await restoreGiftRewardToBenefits(rewardId);
+        if (!restoredGiftData) {
+          return false;
+        }
+        restoredGiftRewards.push({
+          rewardId,
+          giftCard: restoredGiftData?.gift_card || null,
+        });
+      }
+
+      state.cart = [];
+      clearAllAutoAddDismissed();
+      applyAutoAddRules();
+      saveCart();
+
+      if (restoredGiftRewards.length && typeof window.applyCheckoutBenefitGiftRestoredLocally === "function") {
+        let appliedAtLeastOnce = false;
+        restoredGiftRewards.forEach(({ rewardId, giftCard }) => {
+          try {
+            const applied = window.applyCheckoutBenefitGiftRestoredLocally({
+              rewardId,
+              giftCard,
+              sourcePreviewRequest: benefitsSourcePreviewRequest,
+              reopenHost: false,
+            });
+            appliedAtLeastOnce = appliedAtLeastOnce || applied === true;
+          } catch {}
+        });
+        if (!appliedAtLeastOnce && typeof window.handleShopBenefitsOrderStateChange === "function") {
+          window.handleShopBenefitsOrderStateChange("clearCartAll.giftRestoreFallback");
+        }
+      } else if (restoredGiftRewards.length && typeof window.handleShopBenefitsOrderStateChange === "function") {
+        window.handleShopBenefitsOrderStateChange("clearCartAll.giftRestoreFallback");
+      }
+
+      scheduleSyncAllProductCardsFromCart();
+      prioritizeAboveFoldCardImages();
+      renderCart();
+      updateCartBadge();
+
+      if (openCartSheetCtx && openCartSheetCtx.listEl && openCartSheetCtx.totalEl) {
+        const { items } = renderCartInto(openCartSheetCtx.listEl, openCartSheetCtx.totalEl, null);
+        if (openCartSheetCtx.footerEl) openCartSheetCtx.footerEl.classList.toggle("hidden", items.length === 0);
+        if (openCartSheetCtx.checkoutBtn) openCartSheetCtx.checkoutBtn.disabled = items.length === 0;
+        appendUpsellToList(openCartSheetCtx.listEl);
+      }
+
+      const isMobile = window.matchMedia("(max-width: 768px)").matches;
+      if (isMobile && elMobileCartActions) {
+        if (elMobileCartActionsCart) elMobileCartActionsCart.classList.add("hidden");
+        if (elMobileCartActionsCheckout) elMobileCartActionsCheckout.classList.add("hidden");
+        updateMobileDeliveryProgress();
+      }
+      queueMobileUiStateSync("clearCartAll");
+      return true;
+    } finally {
+      clearCartAllBusy = false;
     }
-    queueMobileUiStateSync("clearCartAll");
   }
 
   const twoStepClearRegistry = new Set();
@@ -10479,6 +11007,7 @@ function updateCartBadge() {
     if (totalEl) totalEl.textContent = money(rendered.total);
     if (emptyPlaceholderEl) emptyPlaceholderEl.classList.toggle("hidden", rendered.items.length > 0);
     bindCartItemsSectionControls(listEl);
+    bindCartModeHeaderSticky(listEl);
     return rendered;
   }
 
