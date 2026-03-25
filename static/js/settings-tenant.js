@@ -1348,6 +1348,21 @@
     const settingsPrintApiCheckBtn = document.getElementById("settingsPrintApiCheckBtn");
     const settingsPrintApiPrinterStatus = document.getElementById("settingsPrintApiPrinterStatus");
     const settingsPrintApiPrinterName = document.getElementById("settingsPrintApiPrinterName");
+    const settingsPrintApiNotifyNewOrder = document.getElementById("settingsPrintApiNotifyNewOrder");
+    const settingsPrintApiNotifyNewMessage = document.getElementById("settingsPrintApiNotifyNewMessage");
+    const settingsPrintApiOrderSoundUploadBtn = document.getElementById("settingsPrintApiOrderSoundUploadBtn");
+    const settingsPrintApiOrderSoundPlayBtn = document.getElementById("settingsPrintApiOrderSoundPlayBtn");
+    const settingsPrintApiOrderSoundClearBtn = document.getElementById("settingsPrintApiOrderSoundClearBtn");
+    const settingsPrintApiOrderSoundFile = document.getElementById("settingsPrintApiOrderSoundFile");
+    const settingsPrintApiOrderSoundUrl = document.getElementById("settingsPrintApiOrderSoundUrl");
+    const settingsPrintApiOrderSoundLabel = document.getElementById("settingsPrintApiOrderSoundLabel");
+    const settingsPrintApiMessageSoundUploadBtn = document.getElementById("settingsPrintApiMessageSoundUploadBtn");
+    const settingsPrintApiMessageSoundPlayBtn = document.getElementById("settingsPrintApiMessageSoundPlayBtn");
+    const settingsPrintApiMessageSoundClearBtn = document.getElementById("settingsPrintApiMessageSoundClearBtn");
+    const settingsPrintApiMessageSoundFile = document.getElementById("settingsPrintApiMessageSoundFile");
+    const settingsPrintApiMessageSoundUrl = document.getElementById("settingsPrintApiMessageSoundUrl");
+    const settingsPrintApiMessageSoundLabel = document.getElementById("settingsPrintApiMessageSoundLabel");
+    const settingsPrintApiSaveSettingsBtn = document.getElementById("settingsPrintApiSaveSettingsBtn");
     const settingsPollingEnvEnabled = document.getElementById("settingsPollingEnvEnabled");
     const settingsPollingTenantEnabled = document.getElementById("settingsPollingTenantEnabled");
     const settingsSystemMapProviderName = document.getElementById("settingsSystemMapProviderName");
@@ -1482,6 +1497,12 @@
     let activeRightTabId = "";
   const DELIVERY_TAB_ID = "delivery-settings";
   let printApiRefreshTimer = null;
+  let printApiConnectionCheckInFlight = false;
+  let printApiAutoRefreshDelayMs = 5000;
+  const PRINT_API_AUTO_REFRESH_MIN_MS = 5000;
+  const PRINT_API_AUTO_REFRESH_MAX_MS = 30000;
+  let printApiSettingsDirty = false;
+  let printApiDirtyStoreId = 0;
   const DELIVERY_CREATE_TAB_KEY = "delivery:new";
     const STORE_HOUR_DAY_ORDER = [1, 2, 3, 4, 5, 6, 0];
     const STORE_DAY_LABELS = {
@@ -4090,6 +4111,8 @@
       }
       if (tabId === "print-api") {
         ensurePrintApiReady();
+      } else {
+        stopPrintApiAutoRefresh();
       }
       if (tabId === "system-map") {
         loadSystemMapSettings();
@@ -5680,8 +5703,13 @@
 
     if (settingsPrintApiStore) {
       settingsPrintApiStore.addEventListener("change", () => {
+        clearPrintApiSettingsDirty();
         const storeId = Number(settingsPrintApiStore.value);
-        if (storeId) loadPrintApiToken(storeId);
+        if (storeId) {
+          loadPrintApiToken(storeId);
+          printApiAutoRefreshDelayMs = PRINT_API_AUTO_REFRESH_MIN_MS;
+          schedulePrintApiAutoRefresh();
+        }
       });
     }
 
@@ -5696,6 +5724,100 @@
       settingsPrintApiGenerateBtn.addEventListener("click", () => {
         const storeId = Number(settingsPrintApiStore && settingsPrintApiStore.value);
         if (storeId) generatePrintApiToken(storeId);
+      });
+    }
+
+    if (settingsPrintApiSaveSettingsBtn) {
+      settingsPrintApiSaveSettingsBtn.addEventListener("click", async () => {
+        const storeId = Number(settingsPrintApiStore && settingsPrintApiStore.value);
+        if (!storeId) return;
+        const initialText = settingsPrintApiSaveSettingsBtn.textContent || "";
+        settingsPrintApiSaveSettingsBtn.disabled = true;
+        settingsPrintApiSaveSettingsBtn.textContent = "Сохранение...";
+        try {
+          const info = await savePrintApiNotificationSettings(storeId);
+          clearPrintApiSettingsDirty();
+          applyPrintApiNotificationSettings(info);
+        } catch (err) {
+          console.error("Не удалось сохранить настройки print API:", err);
+          alert("Не удалось сохранить настройки уведомлений CRM_Print_Push_Bot.");
+        } finally {
+          settingsPrintApiSaveSettingsBtn.disabled = false;
+          settingsPrintApiSaveSettingsBtn.textContent = initialText || "Сохранить настройки уведомлений";
+        }
+      });
+    }
+
+    if (settingsPrintApiOrderSoundUploadBtn && settingsPrintApiOrderSoundFile) {
+      settingsPrintApiOrderSoundUploadBtn.addEventListener("click", () => settingsPrintApiOrderSoundFile.click());
+      settingsPrintApiOrderSoundFile.addEventListener("change", async () => {
+        const file = settingsPrintApiOrderSoundFile.files && settingsPrintApiOrderSoundFile.files[0];
+        if (!file) return;
+        try {
+          const url = await uploadPrintApiSound(file, "print_sound_new_order_url");
+          if (settingsPrintApiOrderSoundUrl) settingsPrintApiOrderSoundUrl.value = String(url || "");
+          markPrintApiSettingsDirty();
+          refreshPrintApiSoundUiFromInputs();
+        } catch (err) {
+          console.error("Не удалось загрузить звук нового заказа:", err);
+          alert("Не удалось загрузить звук нового заказа.");
+        } finally {
+          settingsPrintApiOrderSoundFile.value = "";
+        }
+      });
+    }
+
+    if (settingsPrintApiMessageSoundUploadBtn && settingsPrintApiMessageSoundFile) {
+      settingsPrintApiMessageSoundUploadBtn.addEventListener("click", () => settingsPrintApiMessageSoundFile.click());
+      settingsPrintApiMessageSoundFile.addEventListener("change", async () => {
+        const file = settingsPrintApiMessageSoundFile.files && settingsPrintApiMessageSoundFile.files[0];
+        if (!file) return;
+        try {
+          const url = await uploadPrintApiSound(file, "print_sound_new_message_url");
+          if (settingsPrintApiMessageSoundUrl) settingsPrintApiMessageSoundUrl.value = String(url || "");
+          markPrintApiSettingsDirty();
+          refreshPrintApiSoundUiFromInputs();
+        } catch (err) {
+          console.error("Не удалось загрузить звук нового сообщения:", err);
+          alert("Не удалось загрузить звук нового сообщения.");
+        } finally {
+          settingsPrintApiMessageSoundFile.value = "";
+        }
+      });
+    }
+
+    if (settingsPrintApiOrderSoundPlayBtn) {
+      settingsPrintApiOrderSoundPlayBtn.addEventListener("click", () => {
+        playSoundPreview(settingsPrintApiOrderSoundUrl ? settingsPrintApiOrderSoundUrl.value : "");
+      });
+    }
+    if (settingsPrintApiMessageSoundPlayBtn) {
+      settingsPrintApiMessageSoundPlayBtn.addEventListener("click", () => {
+        playSoundPreview(settingsPrintApiMessageSoundUrl ? settingsPrintApiMessageSoundUrl.value : "");
+      });
+    }
+    if (settingsPrintApiOrderSoundClearBtn) {
+      settingsPrintApiOrderSoundClearBtn.addEventListener("click", () => {
+        if (settingsPrintApiOrderSoundUrl) settingsPrintApiOrderSoundUrl.value = "";
+        markPrintApiSettingsDirty();
+        refreshPrintApiSoundUiFromInputs();
+      });
+    }
+    if (settingsPrintApiMessageSoundClearBtn) {
+      settingsPrintApiMessageSoundClearBtn.addEventListener("click", () => {
+        if (settingsPrintApiMessageSoundUrl) settingsPrintApiMessageSoundUrl.value = "";
+        markPrintApiSettingsDirty();
+        refreshPrintApiSoundUiFromInputs();
+      });
+    }
+    if (settingsPrintApiNotifyNewOrder) {
+      settingsPrintApiNotifyNewOrder.addEventListener("change", () => {
+        markPrintApiSettingsDirty();
+      });
+    }
+    if (settingsPrintApiNotifyNewMessage) {
+      settingsPrintApiNotifyNewMessage.addEventListener("change", () => {
+        markPrintApiSettingsDirty();
       });
     }
 
@@ -9339,6 +9461,125 @@
       setPrintApiDeviceState(statusText, printerText);
     }
 
+    function stopPrintApiAutoRefresh() {
+      if (printApiRefreshTimer) {
+        clearTimeout(printApiRefreshTimer);
+        printApiRefreshTimer = null;
+      }
+    }
+
+    function schedulePrintApiAutoRefresh() {
+      stopPrintApiAutoRefresh();
+      if (activeRightTabId !== "print-api") return;
+      const storeId = Number(settingsPrintApiStore && settingsPrintApiStore.value);
+      if (!storeId) return;
+      printApiRefreshTimer = setTimeout(async () => {
+        if (printApiConnectionCheckInFlight) {
+          schedulePrintApiAutoRefresh();
+          return;
+        }
+        try {
+          printApiConnectionCheckInFlight = true;
+          await checkPrintApiConnection(storeId, { silent: true });
+        } finally {
+          printApiConnectionCheckInFlight = false;
+          schedulePrintApiAutoRefresh();
+        }
+      }, printApiAutoRefreshDelayMs);
+    }
+
+    function applyPrintApiNotificationSettings(info) {
+      const safe = info && typeof info === "object" ? info : {};
+      const applySoundFieldUi = (urlValue, labelEl, playBtn) => {
+        const url = String(urlValue || "").trim();
+        if (labelEl) {
+          labelEl.textContent = url ? "Файл загружен" : "Файл не выбран";
+        }
+        if (playBtn) {
+          playBtn.classList.toggle("hidden", !url);
+        }
+      };
+      if (settingsPrintApiNotifyNewOrder) {
+        settingsPrintApiNotifyNewOrder.checked = Number(safe.notify_new_order_enabled ?? 1) === 1;
+      }
+      if (settingsPrintApiNotifyNewMessage) {
+        settingsPrintApiNotifyNewMessage.checked = Number(safe.notify_new_message_enabled ?? 1) === 1;
+      }
+      if (settingsPrintApiOrderSoundUrl) {
+        settingsPrintApiOrderSoundUrl.value = String(safe.sound_new_order_url || "");
+      }
+      if (settingsPrintApiMessageSoundUrl) {
+        settingsPrintApiMessageSoundUrl.value = String(safe.sound_new_message_url || "");
+      }
+      applySoundFieldUi(
+        settingsPrintApiOrderSoundUrl ? settingsPrintApiOrderSoundUrl.value : "",
+        settingsPrintApiOrderSoundLabel,
+        settingsPrintApiOrderSoundPlayBtn
+      );
+      applySoundFieldUi(
+        settingsPrintApiMessageSoundUrl ? settingsPrintApiMessageSoundUrl.value : "",
+        settingsPrintApiMessageSoundLabel,
+        settingsPrintApiMessageSoundPlayBtn
+      );
+    }
+
+    function refreshPrintApiSoundUiFromInputs() {
+      applyPrintApiNotificationSettings({
+        notify_new_order_enabled: settingsPrintApiNotifyNewOrder && settingsPrintApiNotifyNewOrder.checked ? 1 : 0,
+        notify_new_message_enabled: settingsPrintApiNotifyNewMessage && settingsPrintApiNotifyNewMessage.checked ? 1 : 0,
+        sound_new_order_url: settingsPrintApiOrderSoundUrl ? settingsPrintApiOrderSoundUrl.value : "",
+        sound_new_message_url: settingsPrintApiMessageSoundUrl ? settingsPrintApiMessageSoundUrl.value : ""
+      });
+    }
+
+    function markPrintApiSettingsDirty() {
+      const storeId = Number(settingsPrintApiStore && settingsPrintApiStore.value);
+      printApiSettingsDirty = true;
+      printApiDirtyStoreId = Number.isFinite(storeId) && storeId > 0 ? storeId : 0;
+    }
+
+    function clearPrintApiSettingsDirty() {
+      printApiSettingsDirty = false;
+      printApiDirtyStoreId = 0;
+    }
+
+    async function uploadPrintApiSound(file, field) {
+      if (!file) return null;
+      const json = await uploadTenantSound(field, file);
+      if (!json || json.ok !== true || !json.url) {
+        throw new Error(json?.error || "SOUND_UPLOAD_FAILED");
+      }
+      return String(json.url);
+    }
+
+    async function savePrintApiNotificationSettings(storeId) {
+      if (!storeId) return null;
+      const payload = {
+        store_id: storeId,
+        notify_new_order_enabled: settingsPrintApiNotifyNewOrder && settingsPrintApiNotifyNewOrder.checked ? 1 : 0,
+        notify_new_message_enabled: settingsPrintApiNotifyNewMessage && settingsPrintApiNotifyNewMessage.checked ? 1 : 0,
+        sound_new_order_url: settingsPrintApiOrderSoundUrl ? String(settingsPrintApiOrderSoundUrl.value || "").trim() || null : null,
+        sound_new_message_url: settingsPrintApiMessageSoundUrl ? String(settingsPrintApiMessageSoundUrl.value || "").trim() || null : null
+      };
+      const res = await authFetch("/api/admin/tenant/print-api", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json().catch(() => null);
+      if (!data || data.ok !== true) throw new Error(data?.error || "PRINT_API_SETTINGS_SAVE_FAILED");
+      return data.data || null;
+    }
+
+    function playSoundPreview(url) {
+      const soundUrl = String(url || "").trim();
+      if (!soundUrl) return;
+      try {
+        const audio = new Audio(soundUrl);
+        audio.play().catch(() => {});
+      } catch {}
+    }
+
     async function fetchPrintApiInfo(storeId) {
       const res = await authFetch(`/api/admin/tenant/print-api?store_id=${encodeURIComponent(storeId)}&_ts=${Date.now()}`);
       const data = await res.json();
@@ -9364,6 +9605,8 @@
         }
         const token = info.token ? info.token : "";
         settingsPrintApiToken.value = token;
+        clearPrintApiSettingsDirty();
+        applyPrintApiNotificationSettings(info);
         resetPrintApiDeviceState({
           statusText: token ? "Нажмите \"Проверить подключение\"" : "Сначала сгенерируйте токен",
           printerText: token ? "Статус не проверен" : "Нет токена подключения"
@@ -9399,6 +9642,8 @@
         }
         const token = data.data && data.data.token ? data.data.token : "";
         if (settingsPrintApiToken) settingsPrintApiToken.value = token;
+        clearPrintApiSettingsDirty();
+        applyPrintApiNotificationSettings(data.data || {});
         resetPrintApiDeviceState({
           statusText: token ? "Нажмите \"Проверить подключение\"" : "Сначала сгенерируйте токен",
           printerText: token ? "Статус не проверен" : "Нет токена подключения"
@@ -9409,7 +9654,8 @@
       }
     }
 
-    async function checkPrintApiConnection(storeId) {
+    async function checkPrintApiConnection(storeId, options = {}) {
+      const silent = options && options.silent === true;
       if (!storeId) return;
       if (!settingsPrintApiToken || !String(settingsPrintApiToken.value || "").trim()) {
         resetPrintApiDeviceState({
@@ -9420,7 +9666,7 @@
       }
 
       const initialText = settingsPrintApiCheckBtn ? settingsPrintApiCheckBtn.textContent : "";
-      if (settingsPrintApiCheckBtn) {
+      if (!silent && settingsPrintApiCheckBtn) {
         settingsPrintApiCheckBtn.disabled = true;
         settingsPrintApiCheckBtn.textContent = "Проверка...";
       }
@@ -9436,14 +9682,24 @@
         }
         if (settingsPrintApiToken) settingsPrintApiToken.value = String(info.token || "");
         applyPrintApiDeviceState(info);
+        const currentStoreId = Number(settingsPrintApiStore && settingsPrintApiStore.value);
+        const shouldPreserveDraft = printApiSettingsDirty
+          && Number.isFinite(currentStoreId)
+          && currentStoreId > 0
+          && currentStoreId === printApiDirtyStoreId;
+        if (!shouldPreserveDraft) {
+          applyPrintApiNotificationSettings(info);
+        }
+        printApiAutoRefreshDelayMs = PRINT_API_AUTO_REFRESH_MIN_MS;
       } catch (err) {
         console.error("Не удалось проверить подключение print API:", err);
+        printApiAutoRefreshDelayMs = Math.min(PRINT_API_AUTO_REFRESH_MAX_MS, Math.max(PRINT_API_AUTO_REFRESH_MIN_MS, printApiAutoRefreshDelayMs * 2));
         resetPrintApiDeviceState({
           statusText: "Не удалось проверить",
           printerText: "Ошибка запроса"
         });
       } finally {
-        if (settingsPrintApiCheckBtn) {
+        if (!silent && settingsPrintApiCheckBtn) {
           settingsPrintApiCheckBtn.disabled = false;
           settingsPrintApiCheckBtn.textContent = initialText || "Проверить подключение";
         }
@@ -9462,6 +9718,8 @@
         const storeId = Number(settingsPrintApiStore && settingsPrintApiStore.value);
         if (storeId) {
           await loadPrintApiToken(storeId);
+          printApiAutoRefreshDelayMs = PRINT_API_AUTO_REFRESH_MIN_MS;
+          schedulePrintApiAutoRefresh();
         } else {
           if (settingsPrintApiToken) settingsPrintApiToken.value = "";
           resetPrintApiDeviceState({

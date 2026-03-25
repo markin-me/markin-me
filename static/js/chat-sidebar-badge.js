@@ -708,7 +708,7 @@
             unreadRevision = waitResult.revision;
             unreadUpdatedAt = waitResult.updatedAt;
             unreadPrimed = true;
-            showBadge(unreadTotal);
+            showBadge(waitResult.unreadChatsTotal);
           }
         } catch (err) {
           if (isAbortError(err)) break;

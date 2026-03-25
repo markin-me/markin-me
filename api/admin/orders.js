@@ -1509,7 +1509,23 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         if (ordersEvents && typeof ordersEvents.publish === "function") {
           ordersEvents.publish(tenantId, storeId, "order.updated", payload);
         }
-        sendOrderToPrintBot({ db, order: payload, tenantId, storeId }).catch(() => {});
+        try {
+          const pushed = await sendOrderToPrintBot({ db, order: payload, tenantId, storeId });
+          if (!pushed) {
+            console.warn("Print enqueue returned false (admin/orders status update)", {
+              orderId: Number(payload?.id || id),
+              tenantId: Number(tenantId),
+              storeId: Number(storeId),
+            });
+          }
+        } catch (err) {
+          console.error("Print enqueue failed (admin/orders status update):", {
+            orderId: Number(payload?.id || id),
+            tenantId: Number(tenantId),
+            storeId: Number(storeId),
+            error: String(err?.message || err || "unknown_error"),
+          });
+        }
       }
       if (stockChangedProductIds.length) {
         publishStockChanged(tenantId, storeId, {

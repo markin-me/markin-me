@@ -380,8 +380,23 @@ process.on('unhandledRejection', (reason) => {
   console.error('Unhandled promise rejection:', reason);
 });
 
+function isTransientConnectionError(err) {
+  const code = String(err && err.code ? err.code : '');
+  return (
+    code === 'PROTOCOL_CONNECTION_LOST'
+    || code === 'ECONNRESET'
+    || code === 'ECONNREFUSED'
+    || code === 'ETIMEDOUT'
+    || code === 'EPIPE'
+  );
+}
+
 process.on('uncaughtException', (err) => {
   console.error('Uncaught exception:', err);
+  if (isTransientConnectionError(err)) {
+    console.error('Transient connection error detected, process stays alive.');
+    return;
+  }
   if (String(process.env.IN_PASSENGER || '').trim() === '1') {
     if (!fatalErrorLogged) {
       fatalErrorLogged = true;

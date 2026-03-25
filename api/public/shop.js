@@ -1920,6 +1920,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       time_option_code: r.timeOptionCode ?? null,
       time_option_title: r.timeOptionTitle ?? null,
     };
+    return snapshot;
   }
 
   function toPositiveIntOrNull(v) {
@@ -13941,6 +13942,34 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       conn.release();
 
       // Р вЂ”Р В°Р С—Р С‘РЎРѓРЎвЂ№Р Р†Р В°Р ВµР С Р С‘РЎРѓР С—Р С•Р В»РЎРЉР В·Р С•Р Р†Р В°Р Р…Р С‘Р Вµ РЎРѓР С”Р С‘Р Т‘Р С•Р С”
+      let payloadForPostActions = null;
+      try {
+        payloadForPostActions = await fetchOrderPayload(tenantId, orderStoreId, orderId, { storeTimezone });
+        if (payloadForPostActions) {
+          const pushed = await sendOrderToPrintBot({ db, order: payloadForPostActions, tenantId, storeId: orderStoreId });
+          if (!pushed) {
+            console.warn("Print enqueue returned false (public/shop order create)", {
+              orderId: Number(orderId),
+              tenantId: Number(tenantId),
+              storeId: Number(orderStoreId),
+            });
+          }
+        } else {
+          console.warn("Print enqueue skipped: fetchOrderPayload returned null (public/shop order create)", {
+            orderId: Number(orderId),
+            tenantId: Number(tenantId),
+            storeId: Number(orderStoreId),
+          });
+        }
+      } catch (err) {
+        console.error("Print enqueue failed (public/shop order create):", {
+          orderId: Number(orderId),
+          tenantId: Number(tenantId),
+          storeId: Number(orderStoreId),
+          error: String(err?.message || err || "unknown_error"),
+        });
+      }
+
       res.json({ ok: true, data: { id: orderId, public_id: publicId } });
 
       // Heavy post-actions run in background, response is already sent.
@@ -13977,7 +14006,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             }
           }
 
-          const payload = await fetchOrderPayload(tenantId, orderStoreId, orderId, { storeTimezone });
+          const payload = payloadForPostActions || await fetchOrderPayload(tenantId, orderStoreId, orderId, { storeTimezone });
 
           if (payload) {
             if (ordersEvents && typeof ordersEvents.publish === 'function') {
@@ -13989,7 +14018,6 @@ window.location.replace(${JSON.stringify(redirectUrl)});
                 console.error('Telegram new order notify:', err)
               );
             }
-            sendOrderToPrintBot({ db, order: payload, tenantId, storeId: orderStoreId }).catch(() => {});
           }
 
           if (stockChangedProductIds.length) {

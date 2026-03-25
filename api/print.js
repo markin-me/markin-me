@@ -1,4 +1,4 @@
-const express = require("express");
+﻿const express = require("express");
 const { buildOrderRefundState } = require("./helpers/orderRefunds");
 
 module.exports = function makePrintApiRouter({ db, helpers }) {
@@ -54,10 +54,31 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
   }
 
   async function resolveToken(token) {
-    const [rows] = await db.query(
-      "SELECT id, tenant_id, store_id, is_active FROM print_api_tokens WHERE token=? LIMIT 1",
-      [token]
-    );
+    let rows;
+    try {
+      [rows] = await db.query(
+        `SELECT
+           id, tenant_id, store_id, is_active,
+           notify_new_order_enabled, notify_new_message_enabled,
+           sound_new_order_url, sound_new_message_url
+         FROM print_api_tokens
+         WHERE token=? LIMIT 1`,
+        [token]
+      );
+    } catch (err) {
+      if (String(err?.code || "") !== "ER_BAD_FIELD_ERROR") throw err;
+      const [legacyRows] = await db.query(
+        "SELECT id, tenant_id, store_id, is_active FROM print_api_tokens WHERE token=? LIMIT 1",
+        [token]
+      );
+      rows = (legacyRows || []).map((row) => ({
+        ...row,
+        notify_new_order_enabled: 1,
+        notify_new_message_enabled: 1,
+        sound_new_order_url: null,
+        sound_new_message_url: null
+      }));
+    }
     if (!rows.length) return null;
     const row = rows[0];
     if (!Number(row.is_active)) return null;
@@ -561,7 +582,7 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
     };
   }
 
-  // GET /api/print/token-info - проверка токена и информация о точке
+  // GET /api/print/token-info - РїСЂРѕРІРµСЂРєР° С‚РѕРєРµРЅР° Рё РёРЅС„РѕСЂРјР°С†РёСЏ Рѕ С‚РѕС‡РєРµ
   router.get("/token-info", async (req, res) => {
     try {
       const apiKey = req.get("X-Api-Key") || req.headers["x-api-key"];
@@ -581,6 +602,16 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
         [tenantId, storeId]
       );
       const storeName = stores[0]?.name || `Филиал #${storeId}`;
+      let tenantSoundNewOrder = null;
+      let tenantSoundNewMessage = null;
+      try {
+        const [tenantRows] = await db.query(
+          "SELECT sound_new_order_url, sound_new_message_url FROM ten_tenants WHERE id=? LIMIT 1",
+          [tenantId]
+        );
+        tenantSoundNewOrder = tenantRows?.[0]?.sound_new_order_url || null;
+        tenantSoundNewMessage = tenantRows?.[0]?.sound_new_message_url || null;
+      } catch {}
 
       res.json({
         ok: true,
@@ -588,6 +619,12 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
           tenant_id: tenantId,
           store_id: storeId,
           store_name: storeName,
+          notifications: {
+            new_order_enabled: Number(tokenRow.notify_new_order_enabled || 0) === 1,
+            new_message_enabled: Number(tokenRow.notify_new_message_enabled || 0) === 1,
+            sound_new_order_url: tokenRow.sound_new_order_url || tenantSoundNewOrder || null,
+            sound_new_message_url: tokenRow.sound_new_message_url || tenantSoundNewMessage || null
+          }
         },
       });
     } catch (e) {
@@ -596,7 +633,7 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
     }
   });
 
-  // POST /api/print/agent/heartbeat - состояние локального агента печати
+  // POST /api/print/agent/heartbeat - СЃРѕСЃС‚РѕСЏРЅРёРµ Р»РѕРєР°Р»СЊРЅРѕРіРѕ Р°РіРµРЅС‚Р° РїРµС‡Р°С‚Рё
   router.post("/agent/heartbeat", async (req, res) => {
     try {
       const apiKey = req.get("X-Api-Key") || req.headers["x-api-key"];
@@ -654,7 +691,7 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
     }
   });
 
-  // GET /api/print/jobs/next - получить следующую задачу печати
+  // GET /api/print/jobs/next - РїРѕР»СѓС‡РёС‚СЊ СЃР»РµРґСѓСЋС‰СѓСЋ Р·Р°РґР°С‡Сѓ РїРµС‡Р°С‚Рё
   router.get("/jobs/next", async (req, res) => {
     try {
       const apiKey = req.get("X-Api-Key") || req.headers["x-api-key"];
@@ -726,7 +763,238 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
     }
   });
 
-  // POST /api/print/jobs/:id/ack - подтверждение успешной печати
+  // POST /api/print/jobs/:id/ack - РїРѕРґС‚РІРµСЂР¶РґРµРЅРёРµ СѓСЃРїРµС€РЅРѕР№ РїРµС‡Р°С‚Рё
+  // GET /api/print/messages/next?after_id=123 - СЃРѕР±С‹С‚РёРµ РЅРѕРІРѕРіРѕ РІС…РѕРґСЏС‰РµРіРѕ СЃРѕРѕР±С‰РµРЅРёСЏ С‡Р°С‚Р°
+  router.get("/messages/next", async (req, res) => {
+    try {
+      const apiKey = req.get("X-Api-Key") || req.headers["x-api-key"];
+      if (!apiKey) {
+        return res.status(401).json({ ok: false, error: "API_KEY_REQUIRED" });
+      }
+
+      const tokenRow = await resolveToken(String(apiKey).trim());
+      if (!tokenRow) {
+        return res.status(403).json({ ok: false, error: "API_KEY_INVALID" });
+      }
+
+      const afterId = Number(req.query.after_id || 0);
+      const safeAfterId = Number.isFinite(afterId) && afterId > 0 ? afterId : 0;
+      let rows = [];
+      try {
+        [rows] = await db.query(
+          `
+          SELECT id, client_id, text, created_at
+          FROM chat_messages
+          WHERE tenant_id=? AND direction='in' AND id > ?
+          ORDER BY id ASC
+          LIMIT 1
+          `,
+          [Number(tokenRow.tenant_id), safeAfterId]
+        );
+      } catch (err) {
+        if (String(err?.code || "") === "ER_NO_SUCH_TABLE") {
+          await touchTokenUsage(tokenRow.id);
+          return res.json({ ok: true, data: null });
+        }
+        throw err;
+      }
+
+      await touchTokenUsage(tokenRow.id);
+
+      if (!rows.length) {
+        return res.json({ ok: true, data: null });
+      }
+
+      const row = rows[0] || {};
+      return res.json({
+        ok: true,
+        data: {
+          id: Number(row.id || 0) || null,
+          client_id: Number(row.client_id || 0) || null,
+          text: String(row.text || "").slice(0, 500),
+          created_at: row.created_at || null
+        }
+      });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ ok: false, error: "DB_ERROR" });
+    }
+  });
+
+  // GET /api/print/poll?after_message_id=123
+  // Единый polling канал: одновременно возвращает задачу печати и событие нового сообщения.
+  router.get("/poll", async (req, res) => {
+    try {
+      const apiKey = req.get("X-Api-Key") || req.headers["x-api-key"];
+      if (!apiKey) {
+        return res.status(401).json({ ok: false, error: "API_KEY_REQUIRED" });
+      }
+
+      const tokenRow = await resolveToken(String(apiKey).trim());
+      if (!tokenRow) {
+        return res.status(403).json({ ok: false, error: "API_KEY_INVALID" });
+      }
+
+      const tenantId = Number(tokenRow.tenant_id);
+      const storeId = Number(tokenRow.store_id);
+
+      const job = await claimNextPrintJob(tokenRow);
+      let jobData = null;
+      if (job) {
+        let jobPayload = job.pdf_base64 || "";
+        const jobOrderId = Number(job.order_id || 0);
+        if (jobOrderId > 0 && String(jobPayload).startsWith(HTML_JOB_PREFIX)) {
+          const freshHtml = await buildOrderTemplateHtml(tenantId, storeId, jobOrderId);
+          const freshPayload = encodeHtmlJobPayload(freshHtml);
+          if (freshPayload) {
+            jobPayload = freshPayload;
+            if (freshPayload !== String(job.pdf_base64 || "")) {
+              const storeClock = await getStoreClock(tenantId, storeId);
+              const nowSql = storeClock.nowSql || helpers.formatUtcDateTime(Date.now());
+              await db.query(
+                `
+                UPDATE print_jobs
+                SET pdf_base64=?, updated_at=?
+                WHERE id=? AND tenant_id=? AND store_id=? AND token_id=?
+                `,
+                [freshPayload, nowSql, Number(job.id), tenantId, storeId, Number(tokenRow.id)]
+              );
+            }
+          }
+        }
+        jobData = {
+          job_id: Number(job.id),
+          job_name: job.job_name || "CRM Receipt",
+          attempts: Number(job.attempts || 0),
+          order: {
+            id: Number(job.order_id || 0) || null,
+            public_id: job.public_id || null
+          },
+          pdf_base64: jobPayload
+        };
+      }
+
+      const rawAfterMessageId = Number(req.query.after_message_id ?? req.query.after_id ?? 0);
+      const initCursorMode = Number.isFinite(rawAfterMessageId) && rawAfterMessageId < 0;
+      const afterMessageId = Number.isFinite(rawAfterMessageId) && rawAfterMessageId > 0 ? rawAfterMessageId : 0;
+
+      let messageEvent = null;
+      let messageCursor = afterMessageId;
+      try {
+        if (initCursorMode) {
+          const [cursorRows] = await db.query(
+            "SELECT MAX(id) AS last_id FROM chat_messages WHERE tenant_id=? AND direction='in'",
+            [tenantId]
+          );
+          messageCursor = Number(cursorRows?.[0]?.last_id || 0) || 0;
+        } else {
+          const [rows] = await db.query(
+            `
+            SELECT id, client_id, text, created_at
+            FROM chat_messages
+            WHERE tenant_id=? AND direction='in' AND id > ?
+            ORDER BY id ASC
+            LIMIT 1
+            `,
+            [tenantId, afterMessageId]
+          );
+          if (rows.length) {
+            const row = rows[0] || {};
+            const eventId = Number(row.id || 0) || 0;
+            messageCursor = eventId > 0 ? eventId : afterMessageId;
+            messageEvent = {
+              id: eventId || null,
+              client_id: Number(row.client_id || 0) || null,
+              text: String(row.text || "").slice(0, 500),
+              created_at: row.created_at || null
+            };
+          }
+        }
+      } catch (err) {
+        if (String(err?.code || "") !== "ER_NO_SUCH_TABLE") throw err;
+      }
+
+      await touchTokenUsage(tokenRow.id);
+      return res.json({
+        ok: true,
+        data: {
+          job: jobData,
+          message_event: messageEvent,
+          message_cursor: messageCursor
+        }
+      });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ ok: false, error: "DB_ERROR" });
+    }
+  });
+
+  // GET /api/print/jobs/cursor - С‚РµРєСѓС‰РёР№ РєСѓСЂСЃРѕСЂ Р·Р°РґР°С‡ РїРµС‡Р°С‚Рё (Р±РµР· РІС‹РґР°С‡Рё Р·Р°РґР°РЅРёСЏ)
+  router.get("/jobs/cursor", async (req, res) => {
+    try {
+      const apiKey = req.get("X-Api-Key") || req.headers["x-api-key"];
+      if (!apiKey) {
+        return res.status(401).json({ ok: false, error: "API_KEY_REQUIRED" });
+      }
+
+      const tokenRow = await resolveToken(String(apiKey).trim());
+      if (!tokenRow) {
+        return res.status(403).json({ ok: false, error: "API_KEY_INVALID" });
+      }
+
+      const [rows] = await db.query(
+        `
+        SELECT MAX(id) AS last_id
+        FROM print_jobs
+        WHERE tenant_id=? AND store_id=? AND token_id=?
+        `,
+        [Number(tokenRow.tenant_id), Number(tokenRow.store_id), Number(tokenRow.id)]
+      );
+      const lastId = Number(rows?.[0]?.last_id || 0) || 0;
+      await touchTokenUsage(tokenRow.id);
+      return res.json({ ok: true, data: { last_id: lastId } });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ ok: false, error: "DB_ERROR" });
+    }
+  });
+
+  // GET /api/print/messages/cursor - С‚РµРєСѓС‰РёР№ РєСѓСЂСЃРѕСЂ РІС…РѕРґСЏС‰РёС… СЃРѕРѕР±С‰РµРЅРёР№ С‡Р°С‚Р° (Р±РµР· РІС‹РґР°С‡Рё СЃРѕР±С‹С‚РёСЏ)
+  router.get("/messages/cursor", async (req, res) => {
+    try {
+      const apiKey = req.get("X-Api-Key") || req.headers["x-api-key"];
+      if (!apiKey) {
+        return res.status(401).json({ ok: false, error: "API_KEY_REQUIRED" });
+      }
+
+      const tokenRow = await resolveToken(String(apiKey).trim());
+      if (!tokenRow) {
+        return res.status(403).json({ ok: false, error: "API_KEY_INVALID" });
+      }
+
+      let lastId = 0;
+      try {
+        const [rows] = await db.query(
+          `
+          SELECT MAX(id) AS last_id
+          FROM chat_messages
+          WHERE tenant_id=? AND direction='in'
+          `,
+          [Number(tokenRow.tenant_id)]
+        );
+        lastId = Number(rows?.[0]?.last_id || 0) || 0;
+      } catch (err) {
+        if (String(err?.code || "") !== "ER_NO_SUCH_TABLE") throw err;
+      }
+
+      await touchTokenUsage(tokenRow.id);
+      return res.json({ ok: true, data: { last_id: lastId } });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ ok: false, error: "DB_ERROR" });
+    }
+  });
+
   router.post("/jobs/:id/ack", async (req, res) => {
     try {
       const apiKey = req.get("X-Api-Key") || req.headers["x-api-key"];
@@ -781,7 +1049,7 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
     }
   });
 
-  // POST /api/print/jobs/:id/fail - ошибка печати
+  // POST /api/print/jobs/:id/fail - РѕС€РёР±РєР° РїРµС‡Р°С‚Рё
   router.post("/jobs/:id/fail", async (req, res) => {
     try {
       const apiKey = req.get("X-Api-Key") || req.headers["x-api-key"];
@@ -859,7 +1127,7 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
     }
   });
 
-  // GET /api/print/template/:orderId - получить шаблон печати для заказа
+  // GET /api/print/template/:orderId - РїРѕР»СѓС‡РёС‚СЊ С€Р°Р±Р»РѕРЅ РїРµС‡Р°С‚Рё РґР»СЏ Р·Р°РєР°Р·Р°
   router.get("/template/:orderId", async (req, res) => {
     try {
       const apiKey = req.get("X-Api-Key") || req.headers["x-api-key"];
@@ -928,159 +1196,155 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
         return Math.round(n) === n ? String(Math.round(n)) : n.toFixed(2);
       }
 
-      const receiptItems = Array.isArray(receiptOrder.items)
-        ? receiptOrder.items.slice().sort((a, b) => {
-            const aAuto = isAutoAddItem(a);
-            const bAuto = isAutoAddItem(b);
-            if (aAuto && !bAuto) return 1;
-            if (!aAuto && bAuto) return -1;
-            return 0;
-          })
-        : [];
+      const receiptItems = Array.isArray(receiptOrder.items) ? receiptOrder.items.slice().sort((a, b) => {
+        const aAuto = isAutoAddItem(a);
+        const bAuto = isAutoAddItem(b);
+        if (aAuto && !bAuto) return 1;
+        if (!aAuto && bAuto) return -1;
+        return 0;
+      }) : [];
+      const comboItems = receiptItems.filter((item) => String(item?.type || "") === "combo");
+      const productItems = receiptItems.filter((item) => String(item?.type || "") !== "combo");
+      const itemGroups = [];
+      if (comboItems.length) itemGroups.push({ key: "combo", title: "КОМБО", items: comboItems });
+      if (productItems.length) itemGroups.push({ key: "product", title: "ТОВАРЫ", items: productItems });
 
-      let itemsHtml = "";
-      if (receiptItems.length) {
-        receiptItems.forEach((item) => {
-          if (item.type === "combo") {
-            const name = escapeHtml(item.name || item.combo_title || "Комбо");
-            const qty = Math.max(1, Number(item.quantity || item.qty || 1));
-            const lineTotal = Number(item.line_total ?? item.total ?? item.total_price ?? 0);
-            const oldLineTotal = Number(item.old_line_total) || 0;
-            const showOldPrice = oldLineTotal > lineTotal;
-            const priceStr = showOldPrice
-              ? `<span class="receipt-old-price">${receiptTotalStr(oldLineTotal)}</span>${receiptTotalStr(lineTotal)}`
-              : receiptTotalStr(lineTotal);
-            const qtyStr = `${qty} Х`;
-            const bulletPrefix = "• ";
-            let compositionHtml = "";
-            const selections = Array.isArray(item.selections) ? item.selections : [];
-            selections.forEach((sel) => {
-              const productName = escapeHtml(sel.product_name || "—");
-              compositionHtml += `<div class="receipt-composition-item" style="font-weight: bold;">1 × ${productName}</div>`;
-              const vParts = [sel.variant_label, sel.variant_unit, sel.variant_group_title].filter(Boolean);
-              if (vParts.length) {
-                compositionHtml += `<div class="receipt-composition-item">${bulletPrefix}${escapeHtml(vParts.join(" "))}</div>`;
-              }
-              const ingredientsDisplay = Array.isArray(sel.ingredients_display) ? sel.ingredients_display : [];
-              ingredientsDisplay.forEach((ing) => {
-                const rawQty = ing.qty ?? ing.quantity;
-                const numQty = typeof rawQty === "number" ? rawQty : parseFloat(rawQty);
-                if (!Number.isFinite(numQty) || numQty <= 0) return;
-                const ingName = escapeHtml(ing.name || "");
-                const unit = escapeHtml(String(ing.unit || "").trim());
-                const parts = [];
-                if (rawQty != null && rawQty !== "") parts.push(String(rawQty));
-                if (unit) parts.push(unit);
-                if (ingName) parts.push(ingName);
-                compositionHtml += `<div class="receipt-composition-item">${bulletPrefix}${escapeHtml(parts.join(" "))}</div>`;
-              });
-            });
-            itemsHtml += `
-          <div class="receipt-item">
-            <div class="receipt-item-row">
-              <span class="receipt-item-qty">${escapeHtml(qtyStr)}</span>
-              <span class="receipt-item-name">${name}</span>
-              ${priceStr ? `<span class="receipt-item-price">${priceStr}</span>` : ""}
-            </div>
-            ${compositionHtml ? "<div class=\"receipt-composition\">" + compositionHtml + "</div>" : ""}
-          </div>
-        `;
-            return;
-          }
-
-          const name = escapeHtml(item.product_name || item.name || "Товар");
-          const qty = Math.max(1, Number(item.quantity || item.qty || 1));
-          const basePrice = parseFloat(item.price || 0);
-          const lineTotal = Number(item.line_total ?? item.total ?? item.total_price ?? (basePrice * qty) ?? 0);
-          const discountOriginal = item.discount?.original_line_total;
-          const oldLineTotal = discountOriginal || 0;
-          const showOldPrice = oldLineTotal > lineTotal;
-          const priceStr = showOldPrice
-            ? `<span class="receipt-old-price">${receiptTotalStr(oldLineTotal)}</span>${receiptTotalStr(lineTotal)}`
-            : receiptTotalStr(lineTotal);
-          const qtyStr = `${qty} Х`;
-          const bulletPrefix = "• ";
-
-          const variants = Array.isArray(item.variants) ? item.variants : [];
-          let variantsHtml = "";
-          if (variants.length) {
-            variantsHtml = "<div class=\"receipt-composition\">";
-            variants.forEach((v) => {
-              const groupTitle = escapeHtml(v.group_title || "Вариант");
-              const variantValue = escapeHtml(v.label || v.value || "");
-              const variantValueTrimmed = variantValue.trim();
-              const groupTitleTrimmed = groupTitle.trim();
-              let formatted;
-              if (variantValueTrimmed && groupTitleTrimmed) {
-                const variantLower = variantValueTrimmed.toLowerCase();
-                const groupLower = groupTitleTrimmed.toLowerCase();
-                if (variantLower.endsWith(" " + groupLower) || variantLower.endsWith(groupLower)) {
-                  formatted = variantValue;
-                } else {
-                  formatted = `${variantValue} ${groupTitle}`.trim();
-                }
-              } else {
-                formatted = `${variantValue} ${groupTitle}`.trim();
-              }
-              variantsHtml += `<div class="receipt-composition-item">${bulletPrefix}${formatted}</div>`;
-            });
-            variantsHtml += "</div>";
-          }
-
-          const ingredients = Array.isArray(item.ingredients) ? item.ingredients : [];
-          const ingredientsFilteredReceipt = ingredients.filter((ing) => Number(ing.quantity ?? ing.qty ?? 0) > 0);
-          let ingredientsHtml = "";
-          if (ingredientsFilteredReceipt.length) {
-            ingredientsHtml = "<div class=\"receipt-composition\">";
-            ingredientsFilteredReceipt.forEach((ing) => {
-              const ingName = escapeHtml(ing.name || "Ингредиент");
-              const ingQty = Number(ing.quantity ?? ing.qty ?? 0);
-              let ingUnit = escapeHtml(ing.unit_label || ing.unit || ing.unitLabel || ing.unit_short_title || ing.unit_title || "");
-              if (!ingUnit) {
-                ingUnit = ingQty > 10 ? "г" : "шт";
-              }
-              const formatted = `${ingQty}${ingUnit} ${ingName}`;
-              ingredientsHtml += `<div class="receipt-composition-item">${bulletPrefix}${formatted}</div>`;
-            });
-            ingredientsHtml += "</div>";
-          }
-
-          const options = Array.isArray(item.options) ? item.options : [];
-          const optionsFilteredReceipt = options.filter((opt) => Number(opt.qty ?? opt.quantity ?? 0) > 0);
-          let optionsHtml = "";
-          if (optionsFilteredReceipt.length) {
-            optionsHtml = "<div class=\"receipt-composition\">";
-            optionsFilteredReceipt.forEach((opt) => {
-              const optName = escapeHtml(opt.title || "Опция");
-              const variantLabel = escapeHtml((opt.variant_label || opt.variantLabel || "").trim());
-              let formatted;
-              if (variantLabel) {
-                formatted = `${variantLabel} ${optName}`;
-              } else {
-                const optQty = Math.max(1, Number(opt.qty || 1));
-                formatted = `${optQty}шт ${optName}`;
-              }
-              optionsHtml += `<div class="receipt-composition-item">${bulletPrefix}${formatted}</div>`;
-            });
-            optionsHtml += "</div>";
-          }
-
-          itemsHtml += `
-          <div class="receipt-item">
-            <div class="receipt-item-row">
-              <span class="receipt-item-qty">${escapeHtml(qtyStr)}</span>
-              <span class="receipt-item-name">${name}</span>
-              ${priceStr ? `<span class="receipt-item-price">${priceStr}</span>` : ""}
-            </div>
-            ${variantsHtml}
-            ${ingredientsHtml}
-            ${optionsHtml}
-          </div>
-        `;
-        });
+      function mergeVariantUnit(label, unit) {
+        const cleanLabel = String(label || "").trim();
+        const cleanUnit = String(unit || "").trim();
+        if (!cleanLabel) return cleanUnit;
+        if (!cleanUnit) return cleanLabel;
+        const labelLower = cleanLabel.toLowerCase();
+        const unitLower = cleanUnit.toLowerCase();
+        if (labelLower.endsWith(` ${unitLower}`) || labelLower === unitLower) return cleanLabel;
+        return `${cleanLabel} ${cleanUnit}`.trim();
       }
 
-      if (!receiptItems.length) {
+      function formatQtyUnitName(qtyRaw, unitRaw, nameRaw) {
+        const qtyNum = Number(qtyRaw);
+        const qtyText = Number.isFinite(qtyNum)
+          ? String(Number.isInteger(qtyNum) ? qtyNum : Number(qtyNum.toFixed(3)))
+          : String(qtyRaw ?? "").trim();
+        const unitText = String(unitRaw || "").trim();
+        const nameText = String(nameRaw || "").trim();
+        return [qtyText, unitText, nameText].filter(Boolean).join(" ").trim();
+      }
+
+      function renderLinePrice(item, fallbackTotal = 0) {
+        const lineTotal = Number(item?.line_total ?? item?.total ?? item?.total_price ?? fallbackTotal);
+        const oldLineTotal = Number(item?.old_line_total || item?.discount?.original_line_total || 0);
+        const showOldPrice = oldLineTotal > lineTotal;
+        return showOldPrice
+          ? `<span class="receipt-old-price">${receiptTotalStr(oldLineTotal)}</span>${receiptTotalStr(lineTotal)}`
+          : receiptTotalStr(lineTotal);
+      }
+
+      function renderComboItem(item) {
+        const name = escapeHtml(item?.name || item?.combo_title || "Комбо");
+        const qty = Math.max(1, Number(item?.quantity || item?.qty || 1));
+        const qtyStr = `${qty} x`;
+        const priceStr = renderLinePrice(item, 0);
+        const selections = Array.isArray(item?.selections) ? item.selections : [];
+        const compositionLines = [];
+
+        selections.forEach((sel) => {
+          const productName = String(sel?.product_name || "").trim() || "Товар";
+          const variantHead = mergeVariantUnit(sel?.variant_label, sel?.variant_unit);
+          const primaryLine = [variantHead, productName].filter(Boolean).join(" ").trim();
+          if (primaryLine) {
+            compositionLines.push(`<div class="receipt-composition-item receipt-composition-item--group">1 x ${escapeHtml(primaryLine)}</div>`);
+          }
+          const ingredientsDisplay = Array.isArray(sel?.ingredients_display) ? sel.ingredients_display : [];
+          ingredientsDisplay.forEach((ing) => {
+            const ingQty = ing?.qty ?? ing?.quantity;
+            const ingNumQty = Number(ingQty);
+            if (!Number.isFinite(ingNumQty) || ingNumQty <= 0) return;
+            const line = formatQtyUnitName(ingQty, ing?.unit, ing?.name);
+            if (!line) return;
+            compositionLines.push(`<div class="receipt-composition-item receipt-composition-item--sub">&bull; ${escapeHtml(line)}</div>`);
+          });
+        });
+
+        const compositionHtml = compositionLines.length
+          ? `<div class="receipt-composition">${compositionLines.join("")}</div>`
+          : "";
+
+        return `
+          <div class="receipt-item">
+            <div class="receipt-item-row">
+              <span class="receipt-item-qty">${escapeHtml(qtyStr)}</span>
+              <span class="receipt-item-name">${name}</span>
+              ${priceStr ? `<span class="receipt-item-price">${priceStr}</span>` : ""}
+            </div>
+            ${compositionHtml}
+          </div>
+        `;
+      }
+
+      function renderProductItem(item) {
+        const rawName = String(item?.product_name || item?.name || "Товар").trim() || "Товар";
+        const qty = Math.max(1, Number(item?.quantity || item?.qty || 1));
+        const basePrice = parseFloat(item?.price || 0);
+        const qtyStr = `${qty} x`;
+        const priceStr = renderLinePrice(item, basePrice * qty);
+        const compositionLines = [];
+        const variants = Array.isArray(item?.variants) ? item.variants : [];
+        variants.forEach((v) => {
+          const value = String(v?.label || v?.value || "").trim();
+          const unit = String(v?.unit || v?.unit_short_title || v?.unitLabel || v?.unit_title || "").trim();
+          const line = mergeVariantUnit(value, unit);
+          if (line) compositionLines.push(`<div class="receipt-composition-item receipt-composition-item--sub">&bull; ${escapeHtml(line)}</div>`);
+        });
+        const ingredients = (Array.isArray(item?.ingredients) ? item.ingredients : [])
+          .filter((ing) => Number(ing?.quantity ?? ing?.qty ?? 0) > 0);
+        ingredients.forEach((ing) => {
+          const line = formatQtyUnitName(
+            ing?.quantity ?? ing?.qty,
+            ing?.unit_label || ing?.unit || ing?.unitLabel || ing?.unit_short_title || ing?.unit_title || "",
+            ing?.name || "Ингредиент"
+          );
+          if (line) compositionLines.push(`<div class="receipt-composition-item receipt-composition-item--sub">&bull; ${escapeHtml(line)}</div>`);
+        });
+        const options = (Array.isArray(item?.options) ? item.options : [])
+          .filter((opt) => Number(opt?.qty ?? opt?.quantity ?? 0) > 0);
+        options.forEach((opt) => {
+          const variant = mergeVariantUnit(opt?.variant_label || opt?.variantLabel, opt?.variant_unit || opt?.variantUnit);
+          const title = String(opt?.title || "Опция").trim();
+          const line = variant
+            ? `${variant} ${title}`.trim()
+            : `${Math.max(1, Number(opt?.qty || opt?.quantity || 1))} ${title}`.trim();
+          if (line) compositionLines.push(`<div class="receipt-composition-item receipt-composition-item--sub">&bull; ${escapeHtml(line)}</div>`);
+        });
+        const compositionHtml = compositionLines.length
+          ? `<div class="receipt-composition">${compositionLines.join("")}</div>`
+          : "";
+        return `
+          <div class="receipt-item">
+            <div class="receipt-item-row">
+              <span class="receipt-item-qty">${escapeHtml(qtyStr)}</span>
+              <span class="receipt-item-name">${escapeHtml(rawName)}</span>
+              ${priceStr ? `<span class="receipt-item-price">${priceStr}</span>` : ""}
+            </div>
+            ${compositionHtml}
+          </div>
+        `;
+      }
+
+      let itemsHtml = "";
+      if (itemGroups.length) {
+        itemsHtml = itemGroups.map((group, idx) => {
+          const bodyHtml = group.items
+            .map((item) => group.key === "combo" ? renderComboItem(item) : renderProductItem(item))
+            .join("");
+          return `
+            <div class="receipt-items-group receipt-items-group--${group.key}">
+              <div class="receipt-items-group-title">${group.title}</div>
+              <div class="receipt-items-group-list">${bodyHtml}</div>
+            </div>
+            ${idx < itemGroups.length - 1 ? '<div class="receipt-items-type-divider"></div>' : ''}
+          `;
+        }).join("");
+      } else {
         itemsHtml = '<div class="receipt-empty">\u0412\u0441\u0435 \u043f\u043e\u0437\u0438\u0446\u0438\u0438 \u0432\u043e\u0437\u0432\u0440\u0430\u0449\u0435\u043d\u044b.</div>';
       }
 
@@ -1156,8 +1420,32 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
       font-weight: bold;
       margin-bottom: 5px;
     }
+    .receipt-items-group {
+      margin: 0;
+      padding: 0;
+    }
+    .receipt-items-group-title {
+      font-weight: bold;
+      text-transform: uppercase;
+      letter-spacing: .2px;
+      margin: 2px 0 5px;
+    }
+    .receipt-items-group-list {
+      margin: 0;
+      padding: 0 0 0 2px;
+    }
+    .receipt-items-type-divider {
+      border-top: 1px dashed #000;
+      margin: 8px 0;
+    }
     .receipt-item {
-      margin: 5px 0;
+      margin: 0;
+      padding: 3px 0 2px;
+    }
+    .receipt-item + .receipt-item {
+      border-top: 1px dotted #000;
+      margin-top: 3px;
+      padding-top: 4px;
     }
     .receipt-item-row {
       display: flex;
@@ -1177,11 +1465,18 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
       text-align: right;
     }
     .receipt-composition {
-      margin: 3px 0 3px 15px;
+      margin: 2px 0 1px;
       font-size: 9pt;
     }
     .receipt-composition-item {
-      margin: 2px 0;
+      margin: 1px 0;
+      word-wrap: break-word;
+    }
+    .receipt-composition-item--group {
+      margin-left: 8px;
+    }
+    .receipt-composition-item--sub {
+      margin-left: 16px;
     }
     .receipt-total {
       text-align: center;
@@ -1249,8 +1544,8 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
   </div>
   
   <div class="receipt-section">
-    <div>${escapeHtml(methodTitle || "—")}</div>
-    <div>${escapeHtml(address || "—")}</div>
+    <div>${escapeHtml(methodTitle || "-")}</div>
+    <div>${escapeHtml(address || "-")}</div>
   </div>
   
   ${(receiptOrder.address_comment && receiptOrder.address_comment.trim()) ? `
@@ -1310,10 +1605,10 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
       const tenantId = Number(tokenRow.tenant_id);
       const storeId = Number(tokenRow.store_id);
       
-      // Проверяем параметр status_id в запросе
+      // РџСЂРѕРІРµСЂСЏРµРј РїР°СЂР°РјРµС‚СЂ status_id РІ Р·Р°РїСЂРѕСЃРµ
       let statusId = req.query.status_id ? Number(req.query.status_id) : null;
       
-      // Если status_id не указан, ищем статус по коду "new"
+      // Р•СЃР»Рё status_id РЅРµ СѓРєР°Р·Р°РЅ, РёС‰РµРј СЃС‚Р°С‚СѓСЃ РїРѕ РєРѕРґСѓ "new"
       if (!statusId) {
         statusId = await findNewStatusId(tenantId, storeId);
       }
@@ -1327,33 +1622,33 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
 
       const storeTimezone = await getStoreTimezone(tenantId, storeId);
       
-      // Подготовим WHERE условие для фильтрации по дате
+      // РџРѕРґРіРѕС‚РѕРІРёРј WHERE СѓСЃР»РѕРІРёРµ РґР»СЏ С„РёР»СЊС‚СЂР°С†РёРё РїРѕ РґР°С‚Рµ
       let dateCondition = "";
       let queryParams = [tenantId, storeId, statusId];
       
-      // Если указан параметр "today", фильтруем на заказы за сегодня в часовом поясе хранилища
+      // Р•СЃР»Рё СѓРєР°Р·Р°РЅ РїР°СЂР°РјРµС‚СЂ "today", С„РёР»СЊС‚СЂСѓРµРј РЅР° Р·Р°РєР°Р·С‹ Р·Р° СЃРµРіРѕРґРЅСЏ РІ С‡Р°СЃРѕРІРѕРј РїРѕСЏСЃРµ С…СЂР°РЅРёР»РёС‰Р°
       if (req.query.today === "true" || req.query.today === "1") {
-        // Парсим часовой пояс (например, "+0", "+3", "-5")
+        // РџР°СЂСЃРёРј С‡Р°СЃРѕРІРѕР№ РїРѕСЏСЃ (РЅР°РїСЂРёРјРµСЂ, "+0", "+3", "-5")
         const tzMatch = String(storeTimezone).match(/^([+-]?\d+)$/);
         let tzOffset = 0;
         if (tzMatch) {
           tzOffset = parseInt(tzMatch[1]);
         }
         
-        // UTC дата сейчас
+        // UTC РґР°С‚Р° СЃРµР№С‡Р°СЃ
         const now = new Date();
-        // Дата в часовом поясе хранилища (добавляем смещение)
+        // Р”Р°С‚Р° РІ С‡Р°СЃРѕРІРѕРј РїРѕСЏСЃРµ С…СЂР°РЅРёР»РёС‰Р° (РґРѕР±Р°РІР»СЏРµРј СЃРјРµС‰РµРЅРёРµ)
         const offset = tzOffset * 60 * 60 * 1000;
         const storeNow = new Date(now.getTime() + offset);
         
-        // Начало дня в UTC которое соответствует началу дня в часовом поясе хранилища
-        // День по UTC = День в store timezone минус сдвиг
+        // РќР°С‡Р°Р»Рѕ РґРЅСЏ РІ UTC РєРѕС‚РѕСЂРѕРµ СЃРѕРѕС‚РІРµС‚СЃС‚РІСѓРµС‚ РЅР°С‡Р°Р»Сѓ РґРЅСЏ РІ С‡Р°СЃРѕРІРѕРј РїРѕСЏСЃРµ С…СЂР°РЅРёР»РёС‰Р°
+        // Р”РµРЅСЊ РїРѕ UTC = Р”РµРЅСЊ РІ store timezone РјРёРЅСѓСЃ СЃРґРІРёРі
         const storeDateStr = storeNow.toISOString().split('T')[0];
         
         dateCondition = " AND DATE(o.created_at) = ?";
         queryParams.push(storeDateStr);
       } else if (req.query.start_date && req.query.end_date) {
-        // Если указаны start_date и end_date
+        // Р•СЃР»Рё СѓРєР°Р·Р°РЅС‹ start_date Рё end_date
         dateCondition = " AND DATE(o.created_at) >= ? AND DATE(o.created_at) <= ?";
         queryParams.push(String(req.query.start_date));
         queryParams.push(String(req.query.end_date));
@@ -1482,4 +1777,5 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
 
   return router;
 };
+
 

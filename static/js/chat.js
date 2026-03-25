@@ -6829,21 +6829,29 @@
     return 0;
   }
 
-  function clearRemoteSummaryUnreadCount(clientId) {
+  function setRemoteSummaryUnreadCount(clientId, nextUnreadCount) {
     const key = normalizeClientIdKey(clientId);
     if (!key) return false;
     if (!state.remoteSummariesByClient || typeof state.remoteSummariesByClient !== "object") return false;
     const summary = state.remoteSummariesByClient[key];
     if (!summary || typeof summary !== "object") return false;
-    const unreadRaw = Number(summary.unread_count ?? summary.unreadCount ?? 0);
+    const unreadRaw = Number(nextUnreadCount);
     const unread = Number.isFinite(unreadRaw) && unreadRaw > 0 ? Math.trunc(unreadRaw) : 0;
-    if (unread <= 0) return false;
-    state.remoteSummariesByClient[key] = {
+    const currentRaw = Number(summary.unread_count ?? summary.unreadCount ?? 0);
+    const currentUnread = Number.isFinite(currentRaw) && currentRaw > 0 ? Math.trunc(currentRaw) : 0;
+    if (currentUnread === unread) return false;
+    const nextSummary = {
       ...summary,
-      unread_count: 0,
-      unreadCount: 0,
+      unread_count: unread,
+      unreadCount: unread,
     };
+    state.remoteSummariesByClient[key] = nextSummary;
+    state.remoteSummaryFingerprints[key] = buildSummaryFingerprint(nextSummary);
     return true;
+  }
+
+  function clearRemoteSummaryUnreadCount(clientId) {
+    return setRemoteSummaryUnreadCount(clientId, 0);
   }
 
   function syncRemoteSummaryPreviewFromLocalThread(clientId) {
@@ -7623,6 +7631,10 @@
       changed = true;
     });
     if (changed) {
+      const remainingUnread = getVisibleThread(key)
+        .filter((msg) => msg && msg.direction === "in" && !isMessageRead(msg))
+        .length;
+      setRemoteSummaryUnreadCount(key, remainingUnread);
       markThreadMutated(key);
       saveStore();
       enqueueRemoteMutation(key, () => remoteMarkMessagesRead(key, changedIds));
