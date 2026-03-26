@@ -634,6 +634,8 @@
       discountAmount: queryAll(root, '[data-info="discount-amount"]'),
       discountInfoBtn: queryAll(root, '[data-info="discount-info-btn"]'),
       discountBreakdown: queryAll(root, '[data-info="discount-breakdown"]'),
+      promoCodeRow: queryAll(root, '[data-info="promo-code-row"]'),
+      promoCode: queryAll(root, '[data-info="promo-code"]'),
       deliveryRow: queryAll(root, '[data-info="delivery-row"]'),
       deliveryCost: queryAll(root, '[data-info="delivery-cost"]'),
       total: queryAll(root, '[data-info="order-total"]'),
@@ -738,6 +740,7 @@
         setTextAll(infoEls.changeAmount, "—");
         setTextAll(infoEls.subtotal, "—");
         setTextAll(infoEls.discountAmount, "—");
+        setTextAll(infoEls.promoCode, "—");
         setTextAll(infoEls.deliveryCost, "—");
         setTextAll(infoEls.total, "—");
         setTextAll(infoEls.deliveryType, "—");
@@ -759,6 +762,7 @@
         setHiddenAll(infoEls.changeAmountRow, true);
         setHiddenAll(infoEls.subtotalRow, true);
         setHiddenAll(infoEls.discountRow, true);
+        setHiddenAll(infoEls.promoCodeRow, true);
         setHiddenAll(infoEls.deliveryRow, true);
         setHiddenAll(infoEls.refundBadge, true);
         setHiddenAll(infoEls.refundStateRow, true);
@@ -854,10 +858,14 @@
       var discountSummary = buildOrderDiscountSummary(displayOrder);
       var discountAmount = Number(discountSummary.totalDiscount || 0);
       var hasDiscount = discountAmount > 0;
+      var promoCode = String(displayOrder && displayOrder.promo_code || "").trim();
+      var hasPromoCode = !!promoCode;
       setTextAll(infoEls.subtotal, money(discountSummary.subtotalBeforeDiscount || 0));
       setTextAll(infoEls.discountAmount, "-" + money(discountAmount));
+      setTextAll(infoEls.promoCode, promoCode || "—");
       setHiddenAll(infoEls.subtotalRow, !hasDiscount);
       setHiddenAll(infoEls.discountRow, !hasDiscount);
+      setHiddenAll(infoEls.promoCodeRow, !hasPromoCode);
 
       var hasBreakdown = hasDiscount && (
         (Array.isArray(discountSummary.breakdown) && discountSummary.breakdown.length > 0) ||

@@ -49,12 +49,20 @@ const {
   applyStockDeductionForOrderItems,
   checkStockAvailabilityForOrderItems,
 } = require('../helpers/orderStock');
+const {
+  registerCheckoutBenefitsPreviewProvider,
+} = require('../../services/checkout-benefits-preview-provider');
+const {
+  registerOrderBenefitsAccrualProvider,
+} = require('../../services/order-benefits-accrual-provider');
 const TELEGRAM_API = 'https://api.telegram.org/bot';
 
 module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
   const router = express.Router();
   let orderDeliveryTypeColumnsReady = false;
   let ensureOrderDeliveryTypeColumnsPromise = null;
+  let orderBenefitsMetaColumnReady = false;
+  let ensureOrderBenefitsMetaColumnPromise = null;
   async function syncCustomerOrderMetrics(queryable, tenantId, customerIds) {
     const ids = [...new Set((Array.isArray(customerIds) ? customerIds : [customerIds])
       .map((value) => Number(value || 0))
@@ -1804,6 +1812,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
 
   async function fetchOrderPayload(tenantId, storeId, id, opts = {}) {
     const storeTimezone = opts.storeTimezone ?? await getStoreTimezone(tenantId, storeId);
+    const hasBenefitsMetaColumn = await ensureOrderBenefitsMetaColumn();
     const [rows] = await db.query(
       `
       SELECT
@@ -1813,6 +1822,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         o.customer_id,
         o.customer_name,
         o.customer_phone,
+        o.promo_code,
         o.address,
         o.comment,
         o.address_comment,
@@ -1822,6 +1832,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         o.delivery_cost,
         o.discount_amount,
         o.discounts_json,
+        ${hasBenefitsMetaColumn ? 'o.benefits_meta_json' : 'NULL AS benefits_meta_json'},
         o.items,
         DATE_FORMAT(o.scheduled_at, '%Y-%m-%d %H:%i:%s') AS scheduled_at,
         o.delivery_type_id,
@@ -1873,6 +1884,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       const parsedDiscounts = r.discounts_json ? JSON.parse(r.discounts_json) : [];
       if (Array.isArray(parsedDiscounts)) discountsJson = parsedDiscounts;
     } catch {}
+    const benefitsMeta = parseOrderBenefitsMetaJson(r.benefits_meta_json);
     const itemsTotal = items.reduce((sum, item) => sum + Number(item.line_total || 0), 0);
     const totalPrice = Number(r.total_price || 0);
     let deliveryCost = 0;
@@ -1890,6 +1902,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       customer_id: r.customer_id,
       customer_name: r.customer_name,
       customer_phone: r.customer_phone,
+      promo_code: publicDiscountText(r.promo_code) || null,
       address: r.address,
       comment: r.comment,
       address_comment: (r.address_comment && String(r.address_comment).trim()) ? r.address_comment : (r.address_comment_from_cust && String(r.address_comment_from_cust).trim()) ? r.address_comment_from_cust : null,
@@ -1900,6 +1913,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       delivery_cost: deliveryCost,
       discount_amount: Number(r.discount_amount || 0),
       discounts_json: discountsJson,
+      benefits_meta: benefitsMeta,
       items,
       scheduled_at: r.scheduled_at,
       delivery_type_id: r.delivery_type_id,
@@ -4746,6 +4760,37 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     return 'simple_discount';
   }
 
+  async function ensureOrderBenefitsMetaColumn() {
+    if (orderBenefitsMetaColumnReady) return true;
+    if (ensureOrderBenefitsMetaColumnPromise) return ensureOrderBenefitsMetaColumnPromise;
+
+    ensureOrderBenefitsMetaColumnPromise = (async () => {
+      const [columnRows] = await db.query('SHOW COLUMNS FROM order_orders');
+      const existing = new Set((Array.isArray(columnRows) ? columnRows : []).map((row) => String(row?.Field || '').trim()).filter(Boolean));
+      orderBenefitsMetaColumnReady = existing.has('benefits_meta_json');
+      return orderBenefitsMetaColumnReady;
+    })()
+      .catch((err) => {
+        ensureOrderBenefitsMetaColumnPromise = null;
+        throw err;
+      })
+      .finally(() => {
+        ensureOrderBenefitsMetaColumnPromise = null;
+      });
+
+    return ensureOrderBenefitsMetaColumnPromise;
+  }
+
+  function normalizeCheckoutBenefitsPreviewMode(value) {
+    return publicDiscountText(value).toLowerCase() === 'all' ? 'all' : 'customer';
+  }
+
+  function isPublicProgressMechanic(discount) {
+    return ['loyalty_progress', 'buy_x_get_y', 'threshold'].includes(
+      normalizePublicMechanicType(discount?.mechanic_type)
+    );
+  }
+
   function getPublicSimpleDiscountVariant(discount) {
     const config = parsePublicDiscountObject(discount?.mechanic_config_json, {});
     const fallback = publicDiscountText(discount?.activation_mode).toLowerCase() === 'promo_code'
@@ -5745,6 +5790,82 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     return rowsByDiscountId;
   }
 
+  async function loadAllBenefitPromoRowsMap({
+    tenantId,
+    storeId,
+    discounts,
+    includeInactive = false,
+  }) {
+    const promoDiscounts = (Array.isArray(discounts) ? discounts : [])
+      .filter((discount) => isPublicPromoSimpleDiscount(discount));
+    const discountById = new Map(
+      promoDiscounts
+        .map((discount) => [Number(discount?.id || 0), discount])
+        .filter(([discountId]) => discountId > 0)
+    );
+    const promoDiscountIds = [...discountById.keys()];
+    if (!promoDiscountIds.length) return new Map();
+
+    const promoRows = await loadBenefitPromoSourceRowsByDiscountIds(
+      tenantId,
+      storeId,
+      promoDiscountIds,
+      { includeInactive }
+    );
+    const rowsByDiscountId = new Map();
+
+    for (const rawRow of promoRows) {
+      const discountId = Number(rawRow?.discount_id || 0);
+      if (!discountById.has(discountId)) continue;
+      const row = normalizeBenefitPromoSourceRow(rawRow);
+      if (!row) continue;
+      if (!rowsByDiscountId.has(discountId)) rowsByDiscountId.set(discountId, []);
+      rowsByDiscountId.get(discountId).push(row);
+    }
+
+    rowsByDiscountId.forEach((rows, discountId) => {
+      rowsByDiscountId.set(
+        discountId,
+        rows.slice().sort((a, b) => {
+          const activeDiff = Number(b?.is_active || 0) - Number(a?.is_active || 0);
+          if (activeDiff !== 0) return activeDiff;
+          const sharedDiff = Number(publicDiscountText(b?.code_mode).toLowerCase() === 'shared')
+            - Number(publicDiscountText(a?.code_mode).toLowerCase() === 'shared');
+          if (sharedDiff !== 0) return sharedDiff;
+          return Number(a?.promo_code_id || a?.id || 0) - Number(b?.promo_code_id || b?.id || 0);
+        })
+      );
+    });
+
+    return rowsByDiscountId;
+  }
+
+  function pickBenefitPromoCatalogRow(rows, customerId) {
+    const normalizedCustomerId = Number(customerId || 0);
+    const candidates = Array.isArray(rows) ? rows.filter(Boolean) : [];
+    if (!candidates.length) return null;
+
+    return candidates.slice().sort((a, b) => {
+      const score = (row) => {
+        const assignedCustomerId = Number(row?.assigned_customer_id || 0);
+        const codeMode = publicDiscountText(row?.code_mode).toLowerCase();
+        const isActive = Number(row?.is_active || 0) === 1;
+        const usageLimit = Number(row?.usage_limit || 0);
+        const usageCount = Number(row?.usage_count || 0);
+        let rank = 0;
+        if (assignedCustomerId > 0 && assignedCustomerId === normalizedCustomerId) rank += 500;
+        else if (codeMode === 'shared') rank += 400;
+        else if (!(assignedCustomerId > 0)) rank += 200;
+        if (isActive) rank += 50;
+        if (!(usageLimit > 0) || usageCount < usageLimit) rank += 10;
+        return rank;
+      };
+      const rankDiff = score(b) - score(a);
+      if (rankDiff !== 0) return rankDiff;
+      return Number(a?.promo_code_id || a?.id || 0) - Number(b?.promo_code_id || b?.id || 0);
+    })[0] || null;
+  }
+
   let ensureDiscountRuntimeTablesPromise = null;
   let discountRuntimeTablesReady = false;
 
@@ -5753,7 +5874,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     const message = String(error?.sqlMessage || error?.message || '').toLowerCase();
     return message.includes('mkt_discount_rewards')
       || message.includes('mkt_discount_progress')
-      || message.includes('mkt_customer_benefit_promos');
+      || message.includes('mkt_customer_benefit_promos')
+      || message.includes('mkt_discount_order_accruals');
   }
 
   async function ensureDiscountRuntimeTables() {
@@ -5812,6 +5934,24 @@ window.location.replace(${JSON.stringify(redirectUrl)});
                FOREIGN KEY (\`promo_code_id\`) REFERENCES \`mkt_discount_promo_codes\` (\`id\`) ON DELETE CASCADE,
              CONSTRAINT \`fk_mkt_customer_benefit_promos_discount\`
                FOREIGN KEY (\`discount_id\`) REFERENCES \`mkt_discounts\` (\`id\`) ON DELETE CASCADE
+           ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+        );
+        await db.query(
+          `CREATE TABLE IF NOT EXISTS \`mkt_discount_order_accruals\` (
+             \`id\` bigint UNSIGNED NOT NULL AUTO_INCREMENT,
+             \`tenant_id\` int UNSIGNED NOT NULL,
+             \`store_id\` int UNSIGNED NOT NULL DEFAULT '0',
+             \`order_id\` int UNSIGNED NOT NULL,
+             \`customer_id\` int UNSIGNED NOT NULL DEFAULT '0',
+             \`discount_id\` int UNSIGNED NOT NULL,
+             \`status_id\` int UNSIGNED NOT NULL DEFAULT '0',
+             \`increment_value\` decimal(12,2) NOT NULL DEFAULT '0.00',
+             \`details_json\` longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+             \`created_at\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+             PRIMARY KEY (\`id\`),
+             UNIQUE KEY \`uq_mkt_discount_order_accruals_order_discount\` (\`tenant_id\`,\`order_id\`,\`discount_id\`),
+             KEY \`idx_mkt_discount_order_accruals_customer\` (\`tenant_id\`,\`customer_id\`),
+             KEY \`idx_mkt_discount_order_accruals_discount\` (\`tenant_id\`,\`discount_id\`)
            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
         );
         customerBenefitPromoStorageReady = true;
@@ -6592,6 +6732,257 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     return 1;
   }
 
+  async function resolveDefaultBenefitAccrualStatusId(queryable, tenantId, storeId) {
+    const [deliveredRows] = await queryable.query(
+      `SELECT id
+         FROM order_statuses
+        WHERE tenant_id = ? AND store_id = ? AND is_active = 1 AND code = 'delivered'
+        ORDER BY sort ASC, id ASC
+        LIMIT 1`,
+      [tenantId, storeId]
+    );
+    if (Array.isArray(deliveredRows) && deliveredRows.length) {
+      return Number(deliveredRows[0]?.id || 0) || null;
+    }
+
+  const [finalRows] = await queryable.query(
+    `SELECT id
+       FROM order_statuses
+      WHERE tenant_id = ? AND store_id = ? AND is_active = 1 AND is_final = 1
+        AND LOWER(COALESCE(code, '')) NOT IN ('canceled', 'cancelled')
+      ORDER BY sort ASC, id ASC
+      LIMIT 1`,
+      [tenantId, storeId]
+    );
+    if (Array.isArray(finalRows) && finalRows.length) {
+      return Number(finalRows[0]?.id || 0) || null;
+    }
+
+    const [activeRows] = await queryable.query(
+      `SELECT id
+         FROM order_statuses
+        WHERE tenant_id = ? AND store_id = ? AND is_active = 1
+        ORDER BY sort ASC, id ASC
+        LIMIT 1`,
+      [tenantId, storeId]
+    );
+    if (Array.isArray(activeRows) && activeRows.length) {
+      return Number(activeRows[0]?.id || 0) || null;
+    }
+    return null;
+  }
+
+  async function resolveDiscountBenefitAccrualStatusId(queryable, tenantId, storeId, discount) {
+    if (!isPublicProgressMechanic(discount)) return null;
+    const mechanic = parsePublicDiscountObject(discount?.mechanic_config_json, {});
+    const configuredStatusId = Number(mechanic?.accrual_status_id || 0);
+    if (configuredStatusId > 0) return configuredStatusId;
+    return resolveDefaultBenefitAccrualStatusId(queryable, tenantId, storeId);
+  }
+
+  async function accrueOrderBenefitProgressInternal(queryable, {
+    tenantId,
+    storeId,
+    orderId,
+  }) {
+    const normalizedTenantId = Number(tenantId || 0);
+    const normalizedStoreId = Number(storeId || 0);
+    const normalizedOrderId = Number(orderId || 0);
+    if (!(normalizedTenantId > 0) || !(normalizedStoreId > 0) || !(normalizedOrderId > 0)) {
+      return { applied: [] };
+    }
+
+    await ensureDiscountRuntimeTables();
+
+    const [orderRows] = await queryable.query(
+      `SELECT id, store_id, customer_id, status_id, items
+         FROM order_orders
+        WHERE tenant_id = ? AND store_id = ? AND id = ? AND is_active = 1
+        LIMIT 1
+        FOR UPDATE`,
+      [normalizedTenantId, normalizedStoreId, normalizedOrderId]
+    );
+    const orderRow = Array.isArray(orderRows) && orderRows.length ? orderRows[0] : null;
+    if (!orderRow) return { applied: [] };
+
+    const customerId = Number(orderRow?.customer_id || 0);
+    const statusId = Number(orderRow?.status_id || 0);
+    const effectiveStoreId = Number(orderRow?.store_id || normalizedStoreId || 0) || normalizedStoreId;
+    if (!(customerId > 0) || !(statusId > 0)) return { applied: [] };
+
+    let orderItems = [];
+    try {
+      const parsedItems = orderRow.items ? JSON.parse(orderRow.items) : [];
+      if (Array.isArray(parsedItems)) orderItems = parsedItems;
+    } catch {}
+    const benefitOrderItems = orderItems.filter((item) => Number(item?.is_gift_reward || 0) !== 1);
+    if (!benefitOrderItems.length) return { applied: [] };
+
+    const productIds = [...new Set(
+      benefitOrderItems
+        .map((item) => Number(item?.product_id || 0))
+        .filter((id) => id > 0)
+    )];
+    const productCategoriesMap = await loadCheckoutProductCategoriesMap(normalizedTenantId, productIds);
+    const customerBenefitDiscountRows = await loadCustomerBenefitDiscountRows(normalizedTenantId, effectiveStoreId, customerId);
+    const progressDiscountRows = Array.isArray(customerBenefitDiscountRows)
+      ? customerBenefitDiscountRows.filter((discount) => isPublicProgressMechanic(discount))
+      : [];
+    if (!progressDiscountRows.length) return { applied: [] };
+
+    const eligibleUpdates = [];
+    for (const discount of progressDiscountRows) {
+      const discountId = Number(discount?.id || 0);
+      if (!(discountId > 0)) continue;
+      const accrualStatusId = await resolveDiscountBenefitAccrualStatusId(
+        queryable,
+        normalizedTenantId,
+        effectiveStoreId,
+        discount
+      );
+      if (!(accrualStatusId > 0) || accrualStatusId !== statusId) continue;
+
+      const mechanic = parsePublicDiscountObject(discount?.mechanic_config_json, {});
+      const increment = Number(computeCheckoutLoyaltyProgressIncrement(discount, benefitOrderItems, productCategoriesMap) || 0);
+      if (!(increment > 0)) continue;
+
+      eligibleUpdates.push({
+        discountId,
+        increment,
+        thresholdValue: Number(mechanic?.threshold_value || mechanic?.buy_qty || 0),
+        rewardQty: getPublicProgressRewardQty(mechanic),
+        pendingRewardMode: normalizePublicProgressPendingRewardMode(mechanic?.pending_reward_mode),
+      });
+    }
+
+    if (!eligibleUpdates.length) return { applied: [] };
+
+    const [existingProgressRows] = await queryable.query(
+      `SELECT discount_id, progress_value, pending_reward_count
+         FROM mkt_discount_progress
+        WHERE tenant_id = ? AND customer_id = ? AND discount_id IN (?)`,
+      [normalizedTenantId, customerId, eligibleUpdates.map((entry) => entry.discountId)]
+    );
+    const existingProgressMap = new Map(
+      (Array.isArray(existingProgressRows) ? existingProgressRows : []).map((row) => [
+        Number(row?.discount_id || 0),
+        row,
+      ])
+    );
+
+    const applied = [];
+    for (const progressUpdate of eligibleUpdates) {
+      const detailsJson = JSON.stringify({
+        order_id: normalizedOrderId,
+        status_id: statusId,
+        increment: roundPromoMoney(progressUpdate.increment),
+      });
+      const [accrualInsert] = await queryable.query(
+        `INSERT IGNORE INTO mkt_discount_order_accruals
+         (tenant_id, store_id, order_id, customer_id, discount_id, status_id, increment_value, details_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          normalizedTenantId,
+          effectiveStoreId,
+          normalizedOrderId,
+          customerId,
+          progressUpdate.discountId,
+          statusId,
+          roundPromoMoney(progressUpdate.increment),
+          detailsJson,
+        ]
+      );
+      if (!(Number(accrualInsert?.affectedRows || 0) > 0)) continue;
+
+      const currentRow = existingProgressMap.get(progressUpdate.discountId) || null;
+      const currentProgressValue = Number(currentRow?.progress_value || 0);
+      const currentPendingRewardCount = Number(currentRow?.pending_reward_count || 0);
+      let nextProgressValue = currentProgressValue;
+      let nextPendingRewardCount = currentPendingRewardCount;
+
+      if (!(progressUpdate.pendingRewardMode === 'single_pending' && currentPendingRewardCount > 0)) {
+        const rawNextProgressValue = roundPromoMoney(currentProgressValue + progressUpdate.increment);
+        const thresholdValue = Number(progressUpdate.thresholdValue || 0);
+        const completedBefore = thresholdValue > 0 ? Math.floor(currentProgressValue / thresholdValue) : 0;
+        const completedAfter = thresholdValue > 0 ? Math.floor(rawNextProgressValue / thresholdValue) : 0;
+        const gainedThresholds = Math.max(0, completedAfter - completedBefore);
+        const gainedRewards = gainedThresholds * Math.max(1, Number(progressUpdate.rewardQty || 1));
+
+        nextProgressValue = rawNextProgressValue;
+        nextPendingRewardCount = Math.max(0, currentPendingRewardCount + gainedRewards);
+
+        if (progressUpdate.pendingRewardMode === 'single_pending' && gainedThresholds > 0 && thresholdValue > 0) {
+          nextProgressValue = Math.min(rawNextProgressValue, thresholdValue);
+        }
+      }
+
+      await queryable.query(
+        `INSERT INTO mkt_discount_progress
+         (tenant_id, customer_id, discount_id, progress_value, pending_reward_count)
+         VALUES (?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           progress_value = VALUES(progress_value),
+           pending_reward_count = VALUES(pending_reward_count),
+           updated_at = NOW()`,
+        [
+          normalizedTenantId,
+          customerId,
+          progressUpdate.discountId,
+          nextProgressValue,
+          nextPendingRewardCount,
+        ]
+      );
+      existingProgressMap.set(progressUpdate.discountId, {
+        discount_id: progressUpdate.discountId,
+        progress_value: nextProgressValue,
+        pending_reward_count: nextPendingRewardCount,
+      });
+      applied.push({
+        discount_id: progressUpdate.discountId,
+        increment: roundPromoMoney(progressUpdate.increment),
+      });
+    }
+
+    return { applied };
+  }
+
+  async function accrueOrderBenefitProgress(params = {}) {
+    const normalizedTenantId = Number(params?.tenantId || 0);
+    const normalizedStoreId = Number(params?.storeId || 0);
+    const normalizedOrderId = Number(params?.orderId || 0);
+    if (!(normalizedTenantId > 0) || !(normalizedStoreId > 0) || !(normalizedOrderId > 0)) {
+      return { applied: [] };
+    }
+
+    const existingConn = params?.conn && typeof params.conn.query === 'function'
+      ? params.conn
+      : null;
+    if (existingConn) {
+      return accrueOrderBenefitProgressInternal(existingConn, {
+        tenantId: normalizedTenantId,
+        storeId: normalizedStoreId,
+        orderId: normalizedOrderId,
+      });
+    }
+
+    const conn = await db.getConnection();
+    try {
+      await conn.beginTransaction();
+      const result = await accrueOrderBenefitProgressInternal(conn, {
+        tenantId: normalizedTenantId,
+        storeId: normalizedStoreId,
+        orderId: normalizedOrderId,
+      });
+      await conn.commit();
+      return result;
+    } catch (error) {
+      try { await conn.rollback(); } catch {}
+      throw error;
+    } finally {
+      conn.release();
+    }
+  }
+
   function collectPublicProgressQualifyingProductIds(discount) {
     const mechanic = parsePublicDiscountObject(discount?.mechanic_config_json, {});
     return [...new Set(
@@ -7168,7 +7559,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         };
       });
 
-    const loyaltyDiscounts = customerDiscounts.filter((discount) => normalizePublicMechanicType(discount?.mechanic_type) === 'loyalty_progress');
+    const loyaltyDiscounts = customerDiscounts.filter((discount) => isPublicProgressMechanic(discount));
     const progress = await buildPublicProgressBenefitCards({
       tenantId,
       storeId,
@@ -7266,6 +7657,68 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         if (priorityDiff !== 0) return priorityDiff;
         return Number(a?.id || 0) - Number(b?.id || 0);
       });
+  }
+
+  async function loadAllBenefitDiscountRows(tenantId, storeId) {
+    const hasHideInBenefitsColumn = await ensureDiscountHideInBenefitsColumn();
+    const [rows] = await db.query(
+      `SELECT d.id, d.store_id, d.title, d.description, d.discount_type, d.discount_value,
+              d.apply_to, d.min_order_amount, d.max_discount_amount, d.is_stackable,
+              d.usage_limit, d.usage_per_customer, d.usage_count,
+              d.starts_at, d.ends_at, d.schedule_days, d.schedule_time_start, d.schedule_time_end,
+              d.priority, d.is_active, ${hasHideInBenefitsColumn ? 'd.hide_in_benefits' : '0 AS hide_in_benefits'}, d.activation_mode, d.reward_type, d.promo_code_mode,
+              d.unique_code_usage_limit, d.mechanic_type, d.mechanic_config_json
+         FROM mkt_discounts d
+        WHERE d.tenant_id = ?
+          AND (d.store_id = ? OR d.store_id = 0 OR d.store_id IS NULL)`,
+      [tenantId, storeId]
+    );
+
+    return (Array.isArray(rows) ? rows : [])
+      .map((row) => ({ ...row }))
+      .sort((a, b) => {
+        const activeDiff = Number(b?.is_active || 0) - Number(a?.is_active || 0);
+        if (activeDiff !== 0) return activeDiff;
+        const priorityDiff = Number(b?.priority || 0) - Number(a?.priority || 0);
+        if (priorityDiff !== 0) return priorityDiff;
+        return Number(a?.id || 0) - Number(b?.id || 0);
+      });
+  }
+
+  async function loadBenefitDiscountAudienceMatchMap(tenantId, customerId, discounts) {
+    const ids = [...new Set(
+      (Array.isArray(discounts) ? discounts : [])
+        .map((discount) => Number(discount?.id || 0))
+        .filter((discountId) => discountId > 0)
+    )];
+    const matches = new Map();
+    ids.forEach((discountId) => matches.set(discountId, false));
+    if (!ids.length) return matches;
+
+    const categoryIds = await discountHelpers.getCustomerCategoryIds(db, tenantId, customerId);
+    const [rows] = await db.query(
+      `SELECT discount_id, target_type, customer_id, customer_category_id
+         FROM mkt_discount_customers
+        WHERE tenant_id = ?
+          AND discount_id IN (?)`,
+      [tenantId, ids]
+    );
+    const rowsByDiscountId = new Map();
+    for (const row of Array.isArray(rows) ? rows : []) {
+      const discountId = Number(row?.discount_id || 0);
+      if (!(discountId > 0)) continue;
+      if (!rowsByDiscountId.has(discountId)) rowsByDiscountId.set(discountId, []);
+      rowsByDiscountId.get(discountId).push(row);
+    }
+
+    ids.forEach((discountId) => {
+      matches.set(
+        discountId,
+        discountHelpers.matchDiscountAudience(rowsByDiscountId.get(discountId) || [], customerId, categoryIds)
+      );
+    });
+
+    return matches;
   }
 
   router.get('/me/benefits', async (req, res) => {
@@ -9810,6 +10263,116 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     return str(value).replace(/\s+/g, '').toUpperCase();
   }
 
+  function normalizeStoredCheckoutDiscountEntries(rawEntries, opts = {}) {
+    let entries = rawEntries;
+    if (typeof entries === 'string') {
+      try {
+        entries = JSON.parse(entries);
+      } catch {
+        entries = [];
+      }
+    }
+
+    const fallbackPromoCode = normalizeOrderPromoCode(opts?.promoCode);
+
+    return (Array.isArray(entries) ? entries : [])
+      .map((entry) => {
+        if (!entry || typeof entry !== 'object') return null;
+
+        const amount = roundPromoMoney(Number(entry?.discount_amount ?? entry?.amount ?? 0));
+        if (!(amount > 0)) return null;
+
+        const sourceKindRaw = publicDiscountText(
+          entry?.source_kind ?? entry?.sourceKind ?? entry?.source ?? entry?.kind
+        ).toLowerCase();
+        const sourceKind = ['promo_code', 'reward_promo', 'discount', 'reward_discount'].includes(sourceKindRaw)
+          ? sourceKindRaw
+          : null;
+        const promoCode = sourceKind === 'promo_code' || sourceKind === 'reward_promo'
+          ? (normalizeOrderPromoCode(entry?.promo_code ?? entry?.promoCode ?? entry?.code) || fallbackPromoCode || null)
+          : null;
+
+        return {
+          key: publicDiscountText(entry?.key) || null,
+          title: publicDiscountText(entry?.title || entry?.name) || '\u0421\u043a\u0438\u0434\u043a\u0430',
+          discount_amount: amount,
+          amount,
+          apply_to: publicDiscountText(entry?.apply_to).toLowerCase() || 'order',
+          source_kind: sourceKind,
+          promo_code: promoCode,
+          promo_code_id: Number(entry?.promo_code_id || 0) || null,
+        };
+      })
+      .filter(Boolean);
+  }
+
+  function normalizeCheckoutPreviewComboSelections(rawList, maxItems = 24) {
+    const list = Array.isArray(rawList) ? rawList : [];
+    const out = [];
+
+    for (const raw of list) {
+      if (!raw || typeof raw !== 'object') continue;
+
+      const variantSource =
+        raw.variant && typeof raw.variant === 'object'
+          ? raw.variant
+          : (Array.isArray(raw.variants) ? raw.variants[0] : null);
+      const pricing = raw.pricing && typeof raw.pricing === 'object' ? raw.pricing : null;
+      const variantGroup =
+        pricing?.variant_group && typeof pricing.variant_group === 'object'
+          ? pricing.variant_group
+          : null;
+      const productId = toPositiveIntOrNull(raw.product_id || raw.id || raw.product?.id);
+      if (!productId) continue;
+
+      const rawIngredients = Array.isArray(raw.ingredients_display)
+        ? raw.ingredients_display
+        : (Array.isArray(raw.ingredients) ? raw.ingredients : []);
+
+      out.push({
+        product_id: productId,
+        product_name: publicDiscountText(raw.product_name || raw.name || raw.title || raw.product?.name) || '',
+        product_photo: publicDiscountText(
+          raw.product_photo || raw.photo || raw.photo_url || raw.product?.photo_url
+        ) || '',
+        variant_label: publicDiscountText(raw.variant_label || variantSource?.label || variantSource?.value) || '',
+        variant_group_id: toPositiveIntOrNull(
+          raw.variant_group_id
+          ?? variantSource?.variant_group_id
+          ?? pricing?.variant_group_id
+          ?? variantGroup?.id
+          ?? variantGroup?.variant_group_id
+        ),
+        variant_value_index: toNonNegativeIntOrNull(
+          raw.variant_value_index
+          ?? variantSource?.variant_value_index
+          ?? variantSource?.selected_index
+        ),
+        variant_group_title: publicDiscountText(
+          raw.variant_group_title || variantSource?.group_title || variantGroup?.title
+        ) || '',
+        variant_unit: publicDiscountText(
+          raw.variant_unit || variantSource?.unit || variantGroup?.unit_label || variantGroup?.unit
+        ) || '',
+        unit_id: toPositiveIntOrNull(raw.unit_id ?? pricing?.unit_id),
+        unit_price_override: toFiniteNumberOrNull(raw.unit_price_override ?? raw.price ?? raw.unit_price),
+        unit_price_before_discount: toFiniteNumberOrNull(raw.unit_price_before_discount ?? raw.old_price),
+        ingredients_display: normalizeFavoriteIngredients(rawIngredients, 64).map((ing) => ({
+          ingredient_id: ing.ingredient_id,
+          name: str(ing.name || ing.ingredient_name || '').trim(),
+          quantity: ing.quantity,
+          qty: ing.qty,
+          unit_id: ing.unit_id,
+          unit: str(ing.unit || ing.unit_label || '').trim(),
+        })),
+      });
+
+      if (out.length >= maxItems) break;
+    }
+
+    return out;
+  }
+
   function normalizeCheckoutPreviewItems(rawItems) {
     let items = rawItems;
     if (typeof items === 'string') {
@@ -9828,8 +10391,11 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     for (const rawItem of Array.isArray(items) ? items : []) {
       if (!rawItem || typeof rawItem !== 'object') continue;
 
+      const hasComboSelections =
+        (Array.isArray(rawItem?.selections) && rawItem.selections.length > 0)
+        || (Array.isArray(rawItem?.sections) && rawItem.sections.length > 0);
       const type = publicDiscountText(
-        rawItem?.type || (Number(rawItem?.combo_id || rawItem?.combo?.id || 0) > 0 ? 'combo' : 'product')
+        rawItem?.type || ((Number(rawItem?.combo_id || rawItem?.combo?.id || 0) > 0 || hasComboSelections) ? 'combo' : 'product')
       ).toLowerCase() || 'product';
       const qtyRaw = Number(rawItem?.qty ?? rawItem?.quantity ?? 1);
       const qty = Number.isFinite(qtyRaw) && qtyRaw > 0 ? Math.max(1, Math.trunc(qtyRaw)) : 1;
@@ -9852,7 +10418,15 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
       if (type === 'combo') {
         const comboId = Number(rawItem?.combo_id || rawItem?.combo?.id || 0) || null;
-        if (!comboId) continue;
+        const selectionsSource = Array.isArray(rawItem?.selections) && rawItem.selections.length
+          ? rawItem.selections
+          : (Array.isArray(rawItem?.sections) ? rawItem.sections : []);
+        const selections = normalizeCheckoutPreviewComboSelections(selectionsSource, 24);
+        if (!comboId && !selections.length) continue;
+        selections.forEach((selection) => {
+          const productId = Number(selection?.product_id || 0);
+          if (productId > 0) productIds.add(productId);
+        });
         const item = {
           type: 'combo',
           combo_id: comboId,
@@ -9860,6 +10434,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           line_total: lineTotal,
           combo_title: publicDiscountText(rawItem?.combo_title || rawItem?.name) || null,
           auto_add: Number(rawItem?.auto_add || 0) === 1 ? 1 : 0,
+          selections,
         };
         if (originalLineTotal > lineTotal) {
           item.discount = { original_line_total: originalLineTotal };
@@ -9923,6 +10498,55 @@ window.location.replace(${JSON.stringify(redirectUrl)});
   function normalizeCheckoutPromoSource(value) {
     const raw = publicDiscountText(value).toLowerCase();
     return ['promo_code', 'reward_promo'].includes(raw) ? raw : null;
+  }
+
+  function normalizeStoredCheckoutBenefitsPreviewMode(value) {
+    const raw = publicDiscountText(value).toLowerCase();
+    if (raw === 'all') return 'all';
+    if (raw === 'customer') return 'customer';
+    return null;
+  }
+
+  function parseOrderBenefitsMetaJson(rawValue) {
+    if (!rawValue) return null;
+    let parsed = rawValue;
+    try {
+      if (typeof rawValue === 'string') {
+        parsed = JSON.parse(rawValue);
+      }
+    } catch {
+      return null;
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    const meta = {
+      selected_discount_id: normalizeSelectedDiscountId(parsed?.selected_discount_id),
+      selected_discount_source: normalizeCheckoutDiscountSource(parsed?.selected_discount_source),
+      selected_promo_source: normalizeCheckoutPromoSource(parsed?.selected_promo_source),
+      selected_promo_reward_id: normalizeSelectedDiscountId(parsed?.selected_promo_reward_id),
+      benefits_preview_mode: normalizeStoredCheckoutBenefitsPreviewMode(parsed?.benefits_preview_mode),
+    };
+    if (!meta.selected_discount_id) meta.selected_discount_source = null;
+    if (meta.selected_promo_source === 'reward_promo' && !meta.selected_promo_reward_id) {
+      meta.selected_promo_source = null;
+    }
+    const hasValues = Object.values(meta).some((value) => value !== null);
+    return hasValues ? meta : null;
+  }
+
+  function buildOrderBenefitsMetaJsonFromDraft(draft) {
+    const meta = {
+      selected_discount_id: normalizeSelectedDiscountId(draft?.selected_discount_id),
+      selected_discount_source: normalizeCheckoutDiscountSource(draft?.selected_discount_source),
+      selected_promo_source: normalizeCheckoutPromoSource(draft?.selected_promo_source),
+      selected_promo_reward_id: normalizeSelectedDiscountId(draft?.selected_promo_reward_id),
+      benefits_preview_mode: normalizeStoredCheckoutBenefitsPreviewMode(draft?.benefits_preview_mode),
+    };
+    if (!meta.selected_discount_id) meta.selected_discount_source = null;
+    if (meta.selected_promo_source === 'reward_promo' && !meta.selected_promo_reward_id) {
+      meta.selected_promo_source = null;
+    }
+    const hasValues = Object.values(meta).some((value) => value !== null);
+    return hasValues ? JSON.stringify(meta) : null;
   }
 
   function isPromoRewardRedeemAction(discount) {
@@ -10080,6 +10704,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       discount_amount: roundPromoMoney(Number(discountAmount || 0)),
       apply_to: extra.apply_to || 'promo_code',
       product_id: extra.product_id || null,
+      source_kind: publicDiscountText(extra?.source_kind).toLowerCase() || 'promo_code',
+      promo_code: normalizeOrderPromoCode(extra?.promo_code || promoRow?.code) || null,
     };
   }
 
@@ -10093,6 +10719,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       discount_amount: roundPromoMoney(Number(discountAmount || 0)),
       apply_to: extra.apply_to || publicDiscountText(discount?.apply_to).toLowerCase() || 'discount',
       product_id: extra.product_id || null,
+      source_kind: publicDiscountText(extra?.source_kind).toLowerCase() || 'discount',
     };
   }
 
@@ -10464,15 +11091,24 @@ window.location.replace(${JSON.stringify(redirectUrl)});
   }
 
 
-  function addCheckoutPreviewBreakdownAmount(targetMap, key, title, amount) {
+  function addCheckoutPreviewBreakdownAmount(targetMap, key, title, amount, extra = {}) {
     const normalizedKey = publicDiscountText(key) || ('row_' + (targetMap.size + 1));
     const normalizedTitle = publicDiscountText(title) || '\u0421\u043a\u0438\u0434\u043a\u0430';
     const normalizedAmount = roundPromoMoney(Number(amount || 0));
+    const sourceKindRaw = publicDiscountText(extra?.source_kind ?? extra?.sourceKind).toLowerCase();
+    const normalizedSourceKind = ['promo_code', 'reward_promo', 'discount', 'reward_discount'].includes(sourceKindRaw)
+      ? sourceKindRaw
+      : null;
+    const normalizedPromoCode = normalizedSourceKind === 'promo_code' || normalizedSourceKind === 'reward_promo'
+      ? (normalizeOrderPromoCode(extra?.promo_code ?? extra?.promoCode) || null)
+      : null;
     if (!(normalizedAmount > 0)) return;
 
     const current = targetMap.get(normalizedKey);
     if (current) {
       current.amount = roundPromoMoney(Number(current.amount || 0) + normalizedAmount);
+      if (!current.source_kind && normalizedSourceKind) current.source_kind = normalizedSourceKind;
+      if (!current.promo_code && normalizedPromoCode) current.promo_code = normalizedPromoCode;
       return;
     }
 
@@ -10480,6 +11116,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       key: normalizedKey,
       title: normalizedTitle,
       amount: normalizedAmount,
+      source_kind: normalizedSourceKind,
+      promo_code: normalizedPromoCode,
     });
   }
 
@@ -10539,6 +11177,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         key: publicDiscountText(entry?.key),
         title: publicDiscountText(entry?.title) || '\u0421\u043a\u0438\u0434\u043a\u0430',
         amount: roundPromoMoney(Number(entry?.amount || 0)),
+        source_kind: publicDiscountText(entry?.source_kind).toLowerCase() || null,
+        promo_code: normalizeOrderPromoCode(entry?.promo_code) || null,
       }));
     const discountTotal = roundPromoMoney(
       Math.max(0, normalizedSubtotal - normalizedItemsTotal)
@@ -10590,7 +11230,11 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           promoBreakdownMap,
           `promo_${Number(promoEntry?.rewardId || promoEntry?.card?.id || 0)}`,
           publicDiscountText(promoEntry?.card?.title) || '\u041f\u0440\u043e\u043c\u043e\u043a\u043e\u0434',
-          Number(promoEntry?.baseOutcome?.discountAmount || 0)
+          Number(promoEntry?.baseOutcome?.discountAmount || 0),
+          {
+            source_kind: promoEntry?.source || 'promo_code',
+            promo_code: promoEntry?.selectionCode || promoEntry?.card?.code || null,
+          }
         );
       }
       summaryStates[buildCheckoutBenefitSelectionStateKey('', promoKey)] =
@@ -10619,7 +11263,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           discountBreakdownMap,
           `discount_${Number(discountEntry?.sourceDiscountId || discountEntry?.selectionId || 0)}`,
           publicDiscountText(discountEntry?.card?.title) || '\u0421\u043a\u0438\u0434\u043a\u0430',
-          Number(discountOutcome.discountAmount || 0)
+          Number(discountOutcome.discountAmount || 0),
+          {
+            source_kind: discountEntry?.source || 'discount',
+          }
         );
       }
 
@@ -10663,7 +11310,11 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             pairBreakdownMap,
             `promo_${Number(promoEntry?.rewardId || promoEntry?.card?.id || 0)}`,
             publicDiscountText(promoEntry?.card?.title) || '\u041f\u0440\u043e\u043c\u043e\u043a\u043e\u0434',
-            Number(pairPromoOutcome.discountAmount || 0)
+            Number(pairPromoOutcome.discountAmount || 0),
+            {
+              source_kind: promoEntry?.source || 'promo_code',
+              promo_code: promoEntry?.selectionCode || promoEntry?.card?.code || null,
+            }
           );
         }
 
@@ -10732,9 +11383,13 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     storeId,
     customer,
     draft,
+    mode = 'customer',
   }) {
     const customerId = Number(customer?.id || 0) || null;
     const normalizedDraft = draft && typeof draft === 'object' ? draft : {};
+    const previewMode = normalizeCheckoutBenefitsPreviewMode(
+      mode ?? normalizedDraft?.benefits_mode ?? normalizedDraft?.mode
+    );
     const promoCode = normalizeOrderPromoCode(normalizedDraft?.promo_code);
     const selectedDiscountId = normalizeSelectedDiscountId(normalizedDraft?.selected_discount_id);
     const selectedDiscountSource = normalizeCheckoutDiscountSource(normalizedDraft?.selected_discount_source)
@@ -10753,8 +11408,19 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     const customerBenefitDiscountRows = customerId > 0
       ? await loadCustomerBenefitDiscountRows(tenantId, storeId, customerId)
       : [];
-    const automaticDiscountRows = customerBenefitDiscountRows.filter((discount) => (
-      isPublicAutomaticSimpleDiscount(discount) && !isHiddenBenefitsDiscount(discount)
+    const benefitDiscountRows = previewMode === 'all'
+      ? await loadAllBenefitDiscountRows(tenantId, storeId)
+      : customerBenefitDiscountRows.slice();
+    const discountAudienceMatchMap = previewMode === 'all'
+      ? await loadBenefitDiscountAudienceMatchMap(tenantId, customerId, benefitDiscountRows)
+      : new Map(
+          benefitDiscountRows
+            .map((discount) => [Number(discount?.id || 0), true])
+            .filter(([discountId]) => discountId > 0)
+        );
+    const automaticDiscountRows = benefitDiscountRows.filter((discount) => (
+      isPublicAutomaticSimpleDiscount(discount)
+      && (previewMode === 'all' || !isHiddenBenefitsDiscount(discount))
     ));
     const automaticDiscountIds = automaticDiscountRows
       .map((discount) => Number(discount?.id || 0))
@@ -10816,21 +11482,36 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const targetRows = discountTargetsById.get(discountId) || [];
       const customerUsageCount = Number(automaticDiscountCustomerUsageMap.get(discountId) || 0);
       const perCustomerLimit = Number(discount?.usage_per_customer || 0);
-      const outcome = perCustomerLimit > 0 && customerUsageCount >= perCustomerLimit
-        ? {
-            isApplicable: false,
-            errorCode: 'DISCOUNT_CUSTOMER_LIMIT_REACHED',
-            discountAmount: 0,
-            items: cloneCheckoutBenefitItems(baseItems),
-            itemsTotalAfterDiscount: roundPromoMoney(itemsBaseTotal),
-            usageRecords: [],
-          }
-        : applySelectedDiscountToItems({
-            discount,
-            items: baseItems,
-            targetRows,
-            productCategoriesMap,
-          });
+      const audienceMatched = previewMode !== 'all'
+        || discountAudienceMatchMap.get(discountId) !== false;
+      const isDiscountAvailable = discountHelpers.isDiscountActive(discount) && audienceMatched;
+      let outcome;
+      if (!isDiscountAvailable) {
+        outcome = {
+          isApplicable: false,
+          errorCode: 'DISCOUNT_NOT_AVAILABLE',
+          discountAmount: 0,
+          items: cloneCheckoutBenefitItems(baseItems),
+          itemsTotalAfterDiscount: roundPromoMoney(itemsBaseTotal),
+          usageRecords: [],
+        };
+      } else if (perCustomerLimit > 0 && customerUsageCount >= perCustomerLimit) {
+        outcome = {
+          isApplicable: false,
+          errorCode: 'DISCOUNT_CUSTOMER_LIMIT_REACHED',
+          discountAmount: 0,
+          items: cloneCheckoutBenefitItems(baseItems),
+          itemsTotalAfterDiscount: roundPromoMoney(itemsBaseTotal),
+          usageRecords: [],
+        };
+      } else {
+        outcome = applySelectedDiscountToItems({
+          discount,
+          items: baseItems,
+          targetRows,
+          productCategoriesMap,
+        });
+      }
       const isSelected = selectedDiscountSource === 'discount'
         && selectedDiscountId !== null
         && discountId === selectedDiscountId;
@@ -10897,7 +11578,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         rewardRow,
         card,
       });
-      discountCards.push(card);
+      if (previewMode !== 'all') {
+        discountCards.push(card);
+      }
     }
 
     const {
@@ -10926,11 +11609,14 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         breakdownMap,
         `discount_${Number(selectedDiscount?.id || 0)}`,
         publicDiscountText(selectedDiscount?.title) || '\u0421\u043a\u0438\u0434\u043a\u0430',
-        Number(selectedDiscountOutcome.discountAmount || 0)
+        Number(selectedDiscountOutcome.discountAmount || 0),
+        {
+          source_kind: selectedDiscountSource || selectedDiscountEntry?.source || 'discount',
+        }
       );
     }
 
-    const promoDiscounts = customerBenefitDiscountRows.filter((discount) => isPublicPromoSimpleDiscount(discount));
+    const promoDiscounts = benefitDiscountRows.filter((discount) => isPublicPromoSimpleDiscount(discount));
     const promoDiscountIds = promoDiscounts
       .map((discount) => Number(discount?.id || 0))
       .filter((id) => id > 0);
@@ -10941,13 +11627,20 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     let promoTargetPreviewProductsMap = new Map();
 
     if (promoDiscountIds.length) {
-      promoRowsByDiscountId = await loadBenefitPromoRowsMap({
-        tenantId,
-        storeId,
-        customerId,
-        discounts: promoDiscounts,
-        includeInactive: true,
-      });
+      promoRowsByDiscountId = previewMode === 'all'
+        ? await loadAllBenefitPromoRowsMap({
+            tenantId,
+            storeId,
+            discounts: promoDiscounts,
+            includeInactive: true,
+          })
+        : await loadBenefitPromoRowsMap({
+            tenantId,
+            storeId,
+            customerId,
+            discounts: promoDiscounts,
+            includeInactive: true,
+          });
       promoTargetsByDiscountId = await loadDiscountTargetRowsMap(tenantId, promoDiscountIds);
       promoTargetPreviewProductsMap = await loadCheckoutRewardProductsByIds(
         tenantId,
@@ -10977,13 +11670,22 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       }
     }
 
-    function computeRegularPromoPreviewOutcome(discount, promoRow, targetSets) {
+    function buildPromoRuntimeConfig(discount) {
+      return {
+        ...getPromoRuntimeConfig(discount),
+        maxDiscountAmount: discount?.max_discount_amount != null ? Number(discount.max_discount_amount || 0) : null,
+        minOrderAmount: discount?.min_order_amount != null ? Number(discount.min_order_amount || 0) : null,
+      };
+    }
+
+    function computeRegularPromoPreviewOutcome(discount, promoRow, targetSets, opts = {}) {
       const previewItems = cloneCheckoutBenefitItems(baseItems);
       const itemsTotalBeforePromo = roundPromoMoney(
         previewItems.reduce((sum, item) => sum + Number(item?.line_total || 0), 0)
       );
+      const discountAudienceMatched = opts?.discountAudienceMatched !== false;
 
-      if (!promoRow || !discount) {
+      if (!promoRow || !discount || !publicDiscountText(promoRow?.code)) {
         return {
           isApplicable: false,
           disabledReasonCode: 'PROMO_INVALID',
@@ -10994,7 +11696,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         };
       }
 
-      if (Number(promoRow?.is_active || 0) !== 1 || !discountHelpers.isDiscountActive(discount)) {
+      if (!discountAudienceMatched || Number(promoRow?.is_active || 0) !== 1 || !discountHelpers.isDiscountActive(discount)) {
         return {
           isApplicable: false,
           disabledReasonCode: 'PROMO_NOT_AVAILABLE',
@@ -11042,11 +11744,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       }
 
       return computeCheckoutPromoPreviewEffect({
-        runtimeConfig: {
-          ...getPromoRuntimeConfig(discount),
-          maxDiscountAmount: discount?.max_discount_amount != null ? Number(discount.max_discount_amount || 0) : null,
-          minOrderAmount: discount?.min_order_amount != null ? Number(discount.min_order_amount || 0) : null,
-        },
+        runtimeConfig: buildPromoRuntimeConfig(discount),
         targetSets,
         sourceItems: baseItems,
         sourceItemsTotal: itemsTotalBeforePromo,
@@ -11057,11 +11755,86 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     const promoEntries = [];
     const promoCards = [];
     for (const discount of promoDiscounts) {
+      const discountId = Number(discount?.id || 0);
       const rewardMeta = getPublicPromoRewardMeta(discount);
-      const rows = promoRowsByDiscountId.get(Number(discount?.id || 0)) || [];
-      const targetRows = promoTargetsByDiscountId.get(Number(discount?.id || 0)) || [];
+      const rows = promoRowsByDiscountId.get(discountId) || [];
+      const targetRows = promoTargetsByDiscountId.get(discountId) || [];
       const targetSets = buildDiscountProductTargetSets(targetRows);
       const actionMode = isPromoRewardRedeemAction(discount) ? 'redeem_reward' : 'select';
+      const runtimeConfig = buildPromoRuntimeConfig(discount);
+      const audienceMatched = previewMode !== 'all'
+        || discountAudienceMatchMap.get(discountId) !== false;
+
+      if (previewMode === 'all') {
+        const representativeRow = pickBenefitPromoCatalogRow(rows, customerId);
+        const representativeCode = publicDiscountText(representativeRow?.code);
+        const codeMode = publicDiscountText(representativeRow?.code_mode).toLowerCase();
+        const baseOutcome = computeRegularPromoPreviewOutcome(
+          discount,
+          representativeRow,
+          targetSets,
+          { discountAudienceMatched: audienceMatched }
+        );
+        const currentOutcome = selectedDiscountOutcome?.isApplicable && baseOutcome?.isApplicable
+          ? computeCheckoutPromoPreviewEffect({
+              runtimeConfig,
+              targetSets,
+              sourceItems: itemsAfterSelectedDiscount,
+              sourceItemsTotal: selectedDiscountOutcome.itemsTotalAfterDiscount,
+              productCategoriesMap,
+            })
+          : baseOutcome;
+        const isRequestedSelected = actionMode === 'select'
+          && selectedPromoSource === 'promo_code'
+          && representativeCode
+          && promoCode
+          && normalizeOrderPromoCode(representativeCode) === promoCode;
+        const canKeepSelected = !selectedDiscountOutcome?.isApplicable
+          || canCombineCheckoutBenefits(selectedDiscountCard, { is_stackable: isCheckoutBenefitStackable(discount) });
+        const card = {
+          id: Number(representativeRow?.promo_code_id || representativeRow?.id || 0) || discountId,
+          kind: 'promo_code',
+          title: publicDiscountText(discount?.title) || '\u041f\u0440\u043e\u043c\u043e\u043a\u043e\u0434',
+          description: rewardMeta.description,
+          badge_text: rewardMeta.badge_text,
+          apply_scope_text: rewardMeta.apply_scope_text,
+          expires_at: discount?.ends_at || null,
+          code: representativeCode || 'ПРОМОКОД',
+          is_copyable: Boolean(representativeCode),
+          is_stackable: isCheckoutBenefitStackable(discount),
+          usage_limit: representativeRow?.usage_limit == null ? null : Number(representativeRow?.usage_limit || 0),
+          usage_count: Number(representativeRow?.usage_count || 0),
+          status_text: codeMode === 'shared' ? '\u041e\u0431\u0449\u0438\u0439' : '\u041f\u0435\u0440\u0441\u043e\u043d\u0430\u043b\u044c\u043d\u044b\u0439',
+          is_applicable: currentOutcome.isApplicable === true,
+          disabled_reason_code: currentOutcome.isApplicable ? '' : publicDiscountText(currentOutcome?.disabledReasonCode),
+          disabled_reason: currentOutcome.isApplicable ? '' : currentOutcome.disabledReason,
+          is_selected: Boolean(isRequestedSelected && currentOutcome.isApplicable === true && canKeepSelected),
+          source: 'promo_code',
+          action_mode: actionMode,
+          reward_id: null,
+          products: buildRewardProductsPayload(
+            targetRows,
+            promoTargetPreviewProductsMap,
+            getPublicDiscountProductsConfigMode(discount, 'any')
+          ),
+        };
+        promoCards.push(card);
+        if (representativeCode) {
+          promoEntries.push({
+            source: 'promo_code',
+            rewardId: null,
+            selectionCode: representativeCode,
+            discount,
+            promoRow: representativeRow,
+            runtimeConfig,
+            targetSets,
+            baseOutcome,
+            card,
+          });
+        }
+        continue;
+      }
+
       for (const row of rows) {
         if (redeemedSourcePromoIds.has(Number(row?.promo_code_id || 0))) continue;
 
@@ -11070,13 +11843,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         if (!code) continue;
 
         const baseOutcome = computeRegularPromoPreviewOutcome(discount, row, targetSets);
-        const currentOutcome = selectedDiscountOutcome?.isApplicable
+        const currentOutcome = selectedDiscountOutcome?.isApplicable && baseOutcome?.isApplicable
           ? computeCheckoutPromoPreviewEffect({
-              runtimeConfig: {
-                ...getPromoRuntimeConfig(discount),
-                maxDiscountAmount: discount?.max_discount_amount != null ? Number(discount.max_discount_amount || 0) : null,
-                minOrderAmount: discount?.min_order_amount != null ? Number(discount.min_order_amount || 0) : null,
-              },
+              runtimeConfig,
               targetSets,
               sourceItems: itemsAfterSelectedDiscount,
               sourceItemsTotal: selectedDiscountOutcome.itemsTotalAfterDiscount,
@@ -11123,11 +11892,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           selectionCode: code,
           discount,
           promoRow: row,
-          runtimeConfig: {
-            ...getPromoRuntimeConfig(discount),
-            maxDiscountAmount: discount?.max_discount_amount != null ? Number(discount.max_discount_amount || 0) : null,
-            minOrderAmount: discount?.min_order_amount != null ? Number(discount.min_order_amount || 0) : null,
-          },
+          runtimeConfig,
           targetSets,
           baseOutcome,
           card,
@@ -11148,7 +11913,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         sourceItemsTotal: itemsBaseTotal,
         productCategoriesMap,
       });
-      const currentOutcome = selectedDiscountOutcome?.isApplicable
+      const currentOutcome = selectedDiscountOutcome?.isApplicable && baseOutcome?.isApplicable
         ? computeCheckoutPromoPreviewEffect({
             runtimeConfig,
             targetSets,
@@ -11172,7 +11937,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         disabled_reason: currentOutcome.isApplicable ? '' : currentOutcome.disabledReason,
         is_selected: Boolean(isRequestedSelected && currentOutcome.isApplicable === true && canKeepSelected),
       };
-      promoCards.push(card);
+      if (previewMode !== 'all') {
+        promoCards.push(card);
+      }
       promoEntries.push({
         source: 'reward_promo',
         rewardId: Number(rewardRow?.id || 0) || null,
@@ -11224,7 +11991,11 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           breakdownMap,
           `promo_${Number(selectedPromoCard?.reward_id || selectedPromoCard?.id || 0)}`,
           publicDiscountText(selectedPromoCard?.title) || '\u041f\u0440\u043e\u043c\u043e\u043a\u043e\u0434',
-          Number(promoOutcomeForSummary.discountAmount || 0)
+          Number(promoOutcomeForSummary.discountAmount || 0),
+          {
+            source_kind: selectedPromoSource || selectedPromoEntry?.source || 'promo_code',
+            promo_code: selectedPromoEntry?.selectionCode || selectedPromoCard?.code || promoCode || null,
+          }
         );
       }
     }
@@ -11234,15 +12005,37 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       .filter((row) => publicDiscountText(row?.reward_type).toLowerCase() === 'gift')
       .map((row) => buildPublicGiftRewardCard(row, availableGiftRewardProductIds));
 
-    const loyaltyDiscounts = customerBenefitDiscountRows.filter(
-      (discount) => normalizePublicMechanicType(discount?.mechanic_type) === 'loyalty_progress'
+    const loyaltyDiscounts = benefitDiscountRows.filter(
+      (discount) => isPublicProgressMechanic(discount)
     );
-    const progress = await buildPublicProgressBenefitCards({
+    let progress = await buildPublicProgressBenefitCards({
       tenantId,
       storeId,
       customerId,
       discounts: loyaltyDiscounts,
     });
+    if (previewMode === 'all') {
+      const progressDiscountMap = new Map(
+        loyaltyDiscounts
+          .map((discount) => [Number(discount?.id || 0), discount])
+          .filter(([discountId]) => discountId > 0)
+      );
+      progress = progress.map((card) => {
+        const discountId = Number(card?.discount_id || card?.id || 0);
+        const discount = progressDiscountMap.get(discountId) || null;
+        const isAvailable = !!discount
+          && discountHelpers.isDiscountActive(discount)
+          && discountAudienceMatchMap.get(discountId) !== false;
+        const disabledReasonCode = isAvailable ? '' : 'DISCOUNT_NOT_AVAILABLE';
+        return {
+          ...card,
+          is_applicable: isAvailable,
+          disabled_reason_code: disabledReasonCode,
+          disabled_reason: disabledReasonCode ? buildDiscountPreviewDisabledReason(disabledReasonCode) : '',
+          is_claimable: isAvailable && card?.is_claimable === true,
+        };
+      });
+    }
     const details = await buildCheckoutBenefitsPreviewDetails({
       tenantId,
       storeId,
@@ -11293,6 +12086,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     });
 
     return {
+      mode: previewMode,
       discounts: discountCards,
       promo_codes: promoCards,
       gifts: giftCards,
@@ -11335,7 +12129,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     const customerBenefitDiscountRows = await loadCustomerBenefitDiscountRows(tenantId, storeId, customerId);
     const loyaltyDiscount = customerBenefitDiscountRows.find((discount) => (
       Number(discount?.id || 0) === normalizedDiscountId
-      && normalizePublicMechanicType(discount?.mechanic_type) === 'loyalty_progress'
+      && isPublicProgressMechanic(discount)
     )) || null;
     if (!loyaltyDiscount) {
       throw Object.assign(new Error('DISCOUNT_NOT_AVAILABLE'), { code: 'DISCOUNT_NOT_AVAILABLE' });
@@ -11457,7 +12251,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const customerBenefitDiscountRows = await loadCustomerBenefitDiscountRows(tenantId, storeId, customerId);
       resolvedLoyaltyDiscount = customerBenefitDiscountRows.find((discount) => (
         Number(discount?.id || 0) === normalizedDiscountId
-        && normalizePublicMechanicType(discount?.mechanic_type) === 'loyalty_progress'
+        && isPublicProgressMechanic(discount)
       )) || null;
     }
     if (!resolvedLoyaltyDiscount) {
@@ -12294,6 +13088,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const storeId = helpers.getStoreId(req);
       let orderStoreId = storeId;
       await ensureOrderDeliveryTypeColumns();
+      const hasBenefitsMetaColumn = await ensureOrderBenefitsMetaColumn();
 
       const [tenantRows] = await db.query(
         'SELECT price_rounding_mode, price_rounding_precision, order_stock_deduct_mode, order_stock_deduct_status_id FROM ten_tenants WHERE id=? LIMIT 1',
@@ -12535,6 +13330,63 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       // Р СџР С•Р В»РЎС“РЎвЂЎР В°Р ВµР С РЎРѓР С”Р С‘Р Т‘Р С”Р С‘ Р С”Р В»Р С‘Р ВµР Р…РЎвЂљР В° (Р С—РЎР‚Р С‘Р Р†РЎРЏР В·Р В°Р Р…Р Р…РЎвЂ№Р Вµ Р Р…Р В°Р С—РЎР‚РЎРЏР СРЎС“РЎР‹ Р С‘Р В»Р С‘ РЎвЂЎР ВµРЎР‚Р ВµР В· Р С”Р В°РЎвЂљР ВµР С–Р С•РЎР‚Р С‘Р С‘)
       let orderDiscountAmount = 0;
       const appliedDiscounts = [];
+      const roundOrderDiscountAmount = (value) => roundPrice(Number(value || 0));
+      const addOrderDiscountAmount = (value) => {
+        const rounded = roundOrderDiscountAmount(value);
+        if (!(rounded > 0)) return 0;
+        orderDiscountAmount = roundPrice(orderDiscountAmount + rounded);
+        return rounded;
+      };
+      const normalizeOrderDiscountRecord = (entry) => {
+        if (!entry || typeof entry !== 'object') return null;
+        const roundedAmount = roundOrderDiscountAmount(entry.discount_amount ?? entry.amount ?? 0);
+        if (!(roundedAmount > 0)) return null;
+        const normalizedEntry = { ...entry, discount_amount: roundedAmount };
+        if ('amount' in normalizedEntry || entry.amount != null) {
+          normalizedEntry.amount = roundedAmount;
+        }
+        return normalizedEntry;
+      };
+      const pushOrderDiscountRecord = (entry) => {
+        const normalizedEntry = normalizeOrderDiscountRecord(entry);
+        if (!normalizedEntry) return null;
+        appliedDiscounts.push(normalizedEntry);
+        return normalizedEntry;
+      };
+      const normalizeOrderDiscountRecords = (entries) => (
+        (Array.isArray(entries) ? entries : [])
+          .map((entry) => normalizeOrderDiscountRecord(entry))
+          .filter(Boolean)
+      );
+      const sumOrderDiscountRecords = (entries) => (
+        (Array.isArray(entries) ? entries : []).reduce(
+          (sum, entry) => roundPrice(sum + Number(entry?.discount_amount ?? entry?.amount ?? 0)),
+          0
+        )
+      );
+      const normalizeStoredOrderItems = (itemsList) => (
+        (Array.isArray(itemsList) ? itemsList : []).map((item) => {
+          if (!item || typeof item !== 'object') return item;
+          const normalizedItem = { ...item };
+          if (normalizedItem.line_total != null) {
+            normalizedItem.line_total = roundPrice(Number(normalizedItem.line_total || 0));
+          }
+          if (normalizedItem.price != null) {
+            normalizedItem.price = roundPrice(Number(normalizedItem.price || 0));
+          }
+          if (normalizedItem.old_price != null) {
+            normalizedItem.old_price = roundPrice(Number(normalizedItem.old_price || 0));
+          }
+          if (normalizedItem.discount && typeof normalizedItem.discount === 'object') {
+            normalizedItem.discount = {
+              ...normalizedItem.discount,
+              amount: roundPrice(Number(normalizedItem.discount.amount || 0)),
+              original_line_total: roundPrice(Number(normalizedItem.discount.original_line_total || 0)),
+            };
+          }
+          return normalizedItem;
+        })
+      );
 
       // Р СџР С•Р В»РЎС“РЎвЂЎР В°Р ВµР С Р С”Р В°РЎвЂљР ВµР С–Р С•РЎР‚Р С‘Р С‘ РЎвЂљР С•Р Р†Р В°РЎР‚Р С•Р Р† Р Т‘Р В»РЎРЏ Р С—РЎР‚Р С•Р Р†Р ВµРЎР‚Р С”Р С‘ РЎРѓР С”Р С‘Р Т‘Р С•Р С”
       const productCategoriesMap = new Map();
@@ -12567,6 +13419,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const selectedDiscountSource = normalizeCheckoutDiscountSource(req.body.selected_discount_source)
         || (selectedDiscountId !== null ? 'discount' : null);
       const promoCode = normalizeOrderPromoCode(req.body.promo_code);
+      const benefitsPreviewMode = normalizeStoredCheckoutBenefitsPreviewMode(req.body.benefits_preview_mode);
       const selectedPromoSource = normalizeCheckoutPromoSource(req.body.selected_promo_source)
         || (promoCode ? 'promo_code' : null);
       const selectedPromoRewardId = normalizeSelectedDiscountId(req.body.selected_promo_reward_id);
@@ -12751,7 +13604,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           const lineTotal = Number.isFinite(lineTotalFromRequest) && lineTotalFromRequest >= 0
             ? roundPrice(lineTotalFromRequest)
             : roundPrice(0);
-          total += lineTotal;
+          total = roundPrice(total + lineTotal);
           const oldLineTotalFromRequest = Number(it.old_line_total) || 0;
           const selections = Array.isArray(it.selections) ? it.selections : [];
           const photos = [];
@@ -13128,12 +13981,12 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           )
         )) || null;
         if (productDiscount && !autoRule && !useLineTotalFromRequest) {
-          itemDiscountAmount = discountHelpers.calculateDiscount(
+          itemDiscountAmount = roundPrice(discountHelpers.calculateDiscount(
             lineTotal,
             productDiscount.discount_type,
             Number(productDiscount.discount_value),
             productDiscount.max_discount_amount ? Number(productDiscount.max_discount_amount) : null
-          );
+          ));
           if (itemDiscountAmount > 0) {
             itemAppliedDiscount = {
               discount_id: productDiscount.id,
@@ -13144,21 +13997,21 @@ window.location.replace(${JSON.stringify(redirectUrl)});
               apply_to: 'product',
               product_id: pid,
             };
-            orderDiscountAmount += itemDiscountAmount;
-            appliedDiscounts.push(itemAppliedDiscount);
+            addOrderDiscountAmount(itemDiscountAmount);
+            pushOrderDiscountRecord(itemAppliedDiscount);
           }
         } else if (productDiscount && !autoRule && useLineTotalFromRequest) {
           // Р вЂўРЎРѓР В»Р С‘ line_total Р С—Р ВµРЎР‚Р ВµР Т‘Р В°Р Р… РЎРѓ РЎвЂћРЎР‚Р С•Р Р…РЎвЂљР В°, Р Р…Р С• Р ВµРЎРѓРЎвЂљРЎРЉ РЎРѓР С”Р С‘Р Т‘Р С”Р В° РІР‚вЂќ РЎРѓР С•РЎвЂ¦РЎР‚Р В°Р Р…РЎРЏР ВµР С Р С‘Р Р…РЎвЂћР С•РЎР‚Р СР В°РЎвЂ Р С‘РЎР‹ Р С• РЎРѓР С”Р С‘Р Т‘Р С”Р Вµ
           // Р В±Р ВµР В· Р С—Р С•Р Р†РЎвЂљР С•РЎР‚Р Р…Р С•Р С–Р С• РЎР‚Р В°РЎРѓРЎвЂЎРЎвЂРЎвЂљР В° (РЎРѓР С”Р С‘Р Т‘Р С”Р В° РЎС“Р В¶Р Вµ РЎС“РЎвЂЎРЎвЂљР ВµР Р…Р В° Р Р† line_total)
-          const estimatedDiscount = discountHelpers.calculateDiscount(
+          const estimatedDiscount = roundPrice(discountHelpers.calculateDiscount(
             unitPrice * paidQty, // Р В¦Р ВµР Р…Р В° Р В±Р ВµР В· РЎРѓР С”Р С‘Р Т‘Р С”Р С‘
             productDiscount.discount_type,
             Number(productDiscount.discount_value),
             productDiscount.max_discount_amount ? Number(productDiscount.max_discount_amount) : null
-          );
+          ));
           if (estimatedDiscount > 0) {
             itemDiscountAmount = estimatedDiscount;
-            orderDiscountAmount += estimatedDiscount;
+            addOrderDiscountAmount(estimatedDiscount);
             itemAppliedDiscount = {
               discount_id: productDiscount.id,
               title: productDiscount.title,
@@ -13168,14 +14021,14 @@ window.location.replace(${JSON.stringify(redirectUrl)});
               apply_to: 'product',
               product_id: pid,
             };
-            appliedDiscounts.push(itemAppliedDiscount);
+            pushOrderDiscountRecord(itemAppliedDiscount);
           }
         }
 
         // Р вЂўРЎРѓР В»Р С‘ line_total Р С—Р ВµРЎР‚Р ВµР Т‘Р В°Р Р… РЎРѓ РЎвЂћРЎР‚Р С•Р Р…РЎвЂљР В° - Р С‘РЎРѓР С—Р С•Р В»РЎРЉР В·РЎС“Р ВµР С Р ВµР С–Р С• Р С”Р В°Р С” Р ВµРЎРѓРЎвЂљРЎРЉ (РЎРѓР С”Р С‘Р Т‘Р С”Р В° РЎС“Р В¶Р Вµ Р С—РЎР‚Р С‘Р СР ВµР Р…Р ВµР Р…Р В°)
         // Р ВР Р…Р В°РЎвЂЎР Вµ - Р Р†РЎвЂ№РЎвЂЎР С‘РЎвЂљР В°Р ВµР С РЎРѓР С”Р С‘Р Т‘Р С”РЎС“
         const lineTotalAfterDiscount = useLineTotalFromRequest ? lineTotal : roundPrice(lineTotal - itemDiscountAmount);
-        total += lineTotalAfterDiscount;
+        total = roundPrice(total + lineTotalAfterDiscount);
 
         // Р СџР С•Р В»РЎС“РЎвЂЎР В°Р ВµР С РЎвЂћР С•РЎвЂљР С• РЎвЂљР С•Р Р†Р В°РЎР‚Р В° Р Т‘Р В»РЎРЏ РЎРѓР С•РЎвЂ¦РЎР‚Р В°Р Р…Р ВµР Р…Р С‘РЎРЏ Р Р† Р В·Р В°Р С”Р В°Р В·Р Вµ
         let photos = [];
@@ -13241,11 +14094,23 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         if (!selectedDiscountOutcome?.isApplicable) {
           return res.status(409).json({ ok: false, error: selectedDiscountOutcome?.errorCode || 'DISCOUNT_NOT_APPLICABLE' });
         }
-        orderDiscountAmount += roundPrice(Number(selectedDiscountOutcome.discountAmount || 0));
-        total = roundPrice(Number(selectedDiscountOutcome.itemsTotalAfterDiscount || total));
+        const normalizedSelectedItems = normalizeStoredOrderItems(selectedDiscountOutcome.items);
+        const normalizedSelectedUsageRecords = normalizeOrderDiscountRecords(selectedDiscountOutcome.usageRecords);
+        const selectedDiscountAmount = normalizedSelectedUsageRecords.length > 0
+          ? sumOrderDiscountRecords(normalizedSelectedUsageRecords)
+          : roundOrderDiscountAmount(selectedDiscountOutcome.discountAmount);
+        const selectedDiscountApplyTo = publicDiscountText(selectedDiscount?.apply_to).toLowerCase() || 'order';
+        addOrderDiscountAmount(selectedDiscountAmount);
+        total = selectedDiscountApplyTo === 'order'
+          ? roundPrice(total - selectedDiscountAmount)
+          : normalizedSelectedItems.length > 0
+            ? roundPrice(normalizedSelectedItems.reduce((sum, item) => sum + Number(item?.line_total || 0), 0))
+            : roundPrice(Number(selectedDiscountOutcome.itemsTotalAfterDiscount || total));
         normItems.length = 0;
-        normItems.push(...selectedDiscountOutcome.items);
-        appliedDiscounts.push(...(Array.isArray(selectedDiscountOutcome.usageRecords) ? selectedDiscountOutcome.usageRecords : []));
+        normItems.push(...normalizedSelectedItems);
+        normalizedSelectedUsageRecords.forEach((record) => {
+          appliedDiscounts.push(record);
+        });
       }
 
       // Р СџРЎР‚Р С‘Р СР ВµР Р…РЎРЏР ВµР С РЎРѓР С”Р С‘Р Т‘Р С”Р С‘ Р С”Р В»Р С‘Р ВµР Р…РЎвЂљР В° Р Р…Р В° Р Р†Р ВµРЎРѓРЎРЉ Р В·Р В°Р С”Р В°Р В· (Р ВµРЎРѓР В»Р С‘ Р ВµРЎРѓРЎвЂљРЎРЉ)
@@ -13261,16 +14126,28 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         // Р СџРЎР‚Р С‘Р СР ВµР Р…РЎРЏР ВµР С РЎРѓР С”Р С‘Р Т‘Р С”Р С‘ РЎРѓ РЎС“РЎвЂЎР ВµРЎвЂљР С•Р С is_stackable
         const { totalDiscount, appliedDiscounts: orderApplied } = discountHelpers.applyBestDiscounts(orderDiscountsForCustomer, total);
         if (totalDiscount > 0) {
-          orderDiscountAmount += totalDiscount;
-          total = roundPrice(total - totalDiscount);
+          const roundedOrderApplied = [];
           for (const od of orderApplied) {
-            appliedDiscounts.push({
+            const normalizedRecord = normalizeOrderDiscountRecord({
               discount_id: od.id,
               title: od.title,
               discount_type: od.discount_type,
               discount_value: Number(od.discount_value),
               discount_amount: od.discountAmount,
               apply_to: 'order',
+            });
+            if (normalizedRecord) {
+              roundedOrderApplied.push(normalizedRecord);
+            }
+          }
+          const roundedTotalDiscount = roundedOrderApplied.length > 0
+            ? sumOrderDiscountRecords(roundedOrderApplied)
+            : roundOrderDiscountAmount(totalDiscount);
+          if (roundedTotalDiscount > 0) {
+            addOrderDiscountAmount(roundedTotalDiscount);
+            total = roundPrice(total - roundedTotalDiscount);
+            roundedOrderApplied.forEach((record) => {
+              appliedDiscounts.push(record);
             });
           }
         }
@@ -13326,18 +14203,18 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
           if (rewardPromoRuntime.rewardType === 'discount') {
             if (rewardPromoRuntime.applyTo === 'order') {
-              const promoOrderDiscount = discountHelpers.calculateDiscount(
+              const promoOrderDiscount = roundPrice(discountHelpers.calculateDiscount(
                 total,
                 rewardPromoRuntime.discountType,
                 rewardPromoRuntime.discountValue,
                 rewardPromoMaxDiscountAmount
-              );
+              ));
               if (!(promoOrderDiscount > 0)) {
                 return res.status(409).json({ ok: false, error: 'PROMO_NOT_APPLICABLE' });
               }
               total = roundPrice(total - promoOrderDiscount);
-              orderDiscountAmount += promoOrderDiscount;
-              appliedDiscounts.push(buildPromoUsageRecord(rewardPromoUsageSource, rewardPromoUsageRow, promoOrderDiscount, {
+              addOrderDiscountAmount(promoOrderDiscount);
+              pushOrderDiscountRecord(buildPromoUsageRecord(rewardPromoUsageSource, rewardPromoUsageRow, promoOrderDiscount, {
                 apply_to: 'order',
                 discount_type: rewardPromoRuntime.discountType,
                 discount_value: rewardPromoRuntime.discountValue,
@@ -13356,12 +14233,12 @@ window.location.replace(${JSON.stringify(redirectUrl)});
                 if (!matchesScope) continue;
 
                 const baseLineTotal = roundPrice(Number(item.line_total || 0));
-                const promoItemDiscount = discountHelpers.calculateDiscount(
+                const promoItemDiscount = roundPrice(discountHelpers.calculateDiscount(
                   baseLineTotal,
                   rewardPromoRuntime.discountType,
                   rewardPromoRuntime.discountValue,
                   rewardPromoMaxDiscountAmount
-                );
+                ));
                 if (!(promoItemDiscount > 0)) continue;
 
                 item.line_total = roundPrice(baseLineTotal - promoItemDiscount);
@@ -13371,8 +14248,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
                   promoItemDiscount,
                   item.discount?.original_line_total || baseLineTotal
                 );
-                rewardPromoItemsDiscount += promoItemDiscount;
-                appliedDiscounts.push(buildPromoUsageRecord(rewardPromoUsageSource, rewardPromoUsageRow, promoItemDiscount, {
+                rewardPromoItemsDiscount = roundPrice(rewardPromoItemsDiscount + promoItemDiscount);
+                pushOrderDiscountRecord(buildPromoUsageRecord(rewardPromoUsageSource, rewardPromoUsageRow, promoItemDiscount, {
                   apply_to: rewardPromoRuntime.applyTo,
                   discount_type: rewardPromoRuntime.discountType,
                   discount_value: rewardPromoRuntime.discountValue,
@@ -13384,7 +14261,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
                 return res.status(409).json({ ok: false, error: 'PROMO_NOT_APPLICABLE' });
               }
 
-              orderDiscountAmount += rewardPromoItemsDiscount;
+              addOrderDiscountAmount(rewardPromoItemsDiscount);
               total = roundPrice(total - rewardPromoItemsDiscount);
             }
           } else if (rewardPromoRuntime.productRewardType === 'gift') {
@@ -13409,7 +14286,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
               const rewardProduct = rewardProductsById.get(Number(rewardProductId || 0));
               if (!rewardProduct) continue;
               giftCount += 1;
-              giftDiscountAmount += Number(rewardProduct.price || 0);
+              giftDiscountAmount = roundPrice(giftDiscountAmount + Number(rewardProduct.price || 0));
               let photos = [];
               try {
                 const parsedPhotos = JSON.parse(rewardProduct.photos_json || '[]');
@@ -13432,8 +14309,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
               return res.status(409).json({ ok: false, error: 'PROMO_NOT_APPLICABLE' });
             }
 
-            orderDiscountAmount += roundPrice(giftDiscountAmount);
-            appliedDiscounts.push(buildPromoUsageRecord(rewardPromoUsageSource, rewardPromoUsageRow, giftDiscountAmount, {
+            addOrderDiscountAmount(giftDiscountAmount);
+            pushOrderDiscountRecord(buildPromoUsageRecord(rewardPromoUsageSource, rewardPromoUsageRow, giftDiscountAmount, {
               apply_to: 'gift',
             }));
           } else {
@@ -13449,12 +14326,12 @@ window.location.replace(${JSON.stringify(redirectUrl)});
               if (!matchesReward) continue;
 
               const baseLineTotal = roundPrice(Number(item.line_total || 0));
-              const rewardDiscount = discountHelpers.calculateDiscount(
+              const rewardDiscount = roundPrice(discountHelpers.calculateDiscount(
                 baseLineTotal,
                 rewardPromoRuntime.discountType,
                 rewardPromoRuntime.discountValue,
                 rewardPromoMaxDiscountAmount
-              );
+              ));
               if (!(rewardDiscount > 0)) continue;
 
               item.line_total = roundPrice(baseLineTotal - rewardDiscount);
@@ -13464,8 +14341,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
                 rewardDiscount,
                 item.discount?.original_line_total || baseLineTotal
               );
-              rewardItemsDiscount += rewardDiscount;
-              appliedDiscounts.push(buildPromoUsageRecord(rewardPromoUsageSource, rewardPromoUsageRow, rewardDiscount, {
+              rewardItemsDiscount = roundPrice(rewardItemsDiscount + rewardDiscount);
+              pushOrderDiscountRecord(buildPromoUsageRecord(rewardPromoUsageSource, rewardPromoUsageRow, rewardDiscount, {
                 apply_to: 'product',
                 discount_type: rewardPromoRuntime.discountType,
                 discount_value: rewardPromoRuntime.discountValue,
@@ -13477,7 +14354,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
               return res.status(409).json({ ok: false, error: 'PROMO_NOT_APPLICABLE' });
             }
 
-            orderDiscountAmount += rewardItemsDiscount;
+            addOrderDiscountAmount(rewardItemsDiscount);
             total = roundPrice(total - rewardItemsDiscount);
           }
         } else {
@@ -13554,18 +14431,18 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
         if (promoRuntime.rewardType === 'discount') {
           if (promoRuntime.applyTo === 'order') {
-            const promoOrderDiscount = discountHelpers.calculateDiscount(
+            const promoOrderDiscount = roundPrice(discountHelpers.calculateDiscount(
               total,
               promoRuntime.discountType,
               promoRuntime.discountValue,
               promoRow.max_discount_amount ? Number(promoRow.max_discount_amount) : null
-            );
+            ));
             if (!(promoOrderDiscount > 0)) {
               return res.status(409).json({ ok: false, error: 'PROMO_NOT_APPLICABLE' });
             }
             total = roundPrice(total - promoOrderDiscount);
-            orderDiscountAmount += promoOrderDiscount;
-            appliedDiscounts.push(buildPromoUsageRecord(promoRow, promoRow, promoOrderDiscount, {
+            addOrderDiscountAmount(promoOrderDiscount);
+            pushOrderDiscountRecord(buildPromoUsageRecord(promoRow, promoRow, promoOrderDiscount, {
               apply_to: 'order',
               discount_type: promoRuntime.discountType,
               discount_value: promoRuntime.discountValue,
@@ -13584,12 +14461,12 @@ window.location.replace(${JSON.stringify(redirectUrl)});
               if (!matchesScope) continue;
 
               const baseLineTotal = roundPrice(Number(item.line_total || 0));
-              const promoItemDiscount = discountHelpers.calculateDiscount(
+              const promoItemDiscount = roundPrice(discountHelpers.calculateDiscount(
                 baseLineTotal,
                 promoRuntime.discountType,
                 promoRuntime.discountValue,
                 promoRow.max_discount_amount ? Number(promoRow.max_discount_amount) : null
-              );
+              ));
               if (!(promoItemDiscount > 0)) continue;
 
               item.line_total = roundPrice(baseLineTotal - promoItemDiscount);
@@ -13599,8 +14476,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
                 promoItemDiscount,
                 item.discount?.original_line_total || baseLineTotal
               );
-              promoItemsDiscount += promoItemDiscount;
-              appliedDiscounts.push(buildPromoUsageRecord(promoRow, promoRow, promoItemDiscount, {
+              promoItemsDiscount = roundPrice(promoItemsDiscount + promoItemDiscount);
+              pushOrderDiscountRecord(buildPromoUsageRecord(promoRow, promoRow, promoItemDiscount, {
                 apply_to: promoRuntime.applyTo,
                 discount_type: promoRuntime.discountType,
                 discount_value: promoRuntime.discountValue,
@@ -13612,7 +14489,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
               return res.status(409).json({ ok: false, error: 'PROMO_NOT_APPLICABLE' });
             }
 
-            orderDiscountAmount += promoItemsDiscount;
+            addOrderDiscountAmount(promoItemsDiscount);
             total = roundPrice(total - promoItemsDiscount);
           }
         } else if (promoRuntime.productRewardType === 'gift') {
@@ -13638,7 +14515,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             const rewardProduct = rewardProductsById.get(Number(rewardProductId || 0));
             if (!rewardProduct) continue;
             giftCount += 1;
-            giftDiscountAmount += Number(rewardProduct.price || 0);
+            giftDiscountAmount = roundPrice(giftDiscountAmount + Number(rewardProduct.price || 0));
             let photos = [];
             try {
               const parsedPhotos = JSON.parse(rewardProduct.photos_json || '[]');
@@ -13661,8 +14538,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             return res.status(409).json({ ok: false, error: 'PROMO_NOT_APPLICABLE' });
           }
 
-          orderDiscountAmount += roundPrice(giftDiscountAmount);
-          appliedDiscounts.push(buildPromoUsageRecord(promoRow, promoRow, giftDiscountAmount, {
+          addOrderDiscountAmount(giftDiscountAmount);
+          pushOrderDiscountRecord(buildPromoUsageRecord(promoRow, promoRow, giftDiscountAmount, {
             apply_to: 'gift',
           }));
         } else {
@@ -13678,12 +14555,12 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             if (!matchesReward) continue;
 
             const baseLineTotal = roundPrice(Number(item.line_total || 0));
-            const rewardDiscount = discountHelpers.calculateDiscount(
+            const rewardDiscount = roundPrice(discountHelpers.calculateDiscount(
               baseLineTotal,
               promoRuntime.discountType,
               promoRuntime.discountValue,
               promoRow.max_discount_amount ? Number(promoRow.max_discount_amount) : null
-            );
+            ));
             if (!(rewardDiscount > 0)) continue;
 
             item.line_total = roundPrice(baseLineTotal - rewardDiscount);
@@ -13693,8 +14570,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
               rewardDiscount,
               item.discount?.original_line_total || baseLineTotal
             );
-            rewardItemsDiscount += rewardDiscount;
-            appliedDiscounts.push(buildPromoUsageRecord(promoRow, promoRow, rewardDiscount, {
+            rewardItemsDiscount = roundPrice(rewardItemsDiscount + rewardDiscount);
+            pushOrderDiscountRecord(buildPromoUsageRecord(promoRow, promoRow, rewardDiscount, {
               apply_to: 'product',
               discount_type: promoRuntime.discountType,
               discount_value: promoRuntime.discountValue,
@@ -13706,7 +14583,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             return res.status(409).json({ ok: false, error: 'PROMO_NOT_APPLICABLE' });
           }
 
-          orderDiscountAmount += rewardItemsDiscount;
+          addOrderDiscountAmount(rewardItemsDiscount);
           total = roundPrice(total - rewardItemsDiscount);
         }
         }
@@ -13716,24 +14593,28 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         Number(selectedRewardDiscountRow?.id || 0),
         selectedPromoSource === 'reward_promo' ? Number(selectedRewardPromoRow?.id || 0) : 0,
       ].filter((id) => Number.isInteger(id) && id > 0);
-      const benefitNormItems = normItems.filter((item) => Number(item?.is_gift_reward || 0) !== 1);
-      const loyaltyProgressUpdates = customerId
-        ? customerBenefitDiscountRows
-            .filter((discount) => normalizePublicMechanicType(discount?.mechanic_type) === 'loyalty_progress')
-          .map((discount) => {
-              const mechanic = parsePublicDiscountObject(discount?.mechanic_config_json, {});
-              return {
-                discountId: Number(discount?.id || 0),
-                increment: computeCheckoutLoyaltyProgressIncrement(discount, benefitNormItems, productCategoriesMap),
-                thresholdValue: Number(mechanic?.threshold_value || 0),
-                rewardQty: getPublicProgressRewardQty(mechanic),
-                pendingRewardMode: normalizePublicProgressPendingRewardMode(mechanic?.pending_reward_mode),
-              };
-            })
-            .filter((entry) => entry.discountId > 0 && Number(entry.increment || 0) > 0)
-        : [];
 
-      const discountsJson = appliedDiscounts.length > 0 ? JSON.stringify(appliedDiscounts) : null;
+      const generatedDiscountEntries = normalizeStoredCheckoutDiscountEntries(appliedDiscounts, {
+        promoCode,
+      });
+      const submittedDiscountEntries = normalizeStoredCheckoutDiscountEntries(req.body?.discounts_json, {
+        promoCode,
+      });
+      const submittedDiscountTotal = roundPrice(
+        submittedDiscountEntries.reduce((sum, entry) => sum + Number(entry?.discount_amount || 0), 0)
+      );
+      const storedDiscountEntries = submittedDiscountEntries.length > 0
+        && Math.abs(submittedDiscountTotal - roundPrice(Number(orderDiscountAmount || 0))) <= 0.02
+        ? submittedDiscountEntries
+        : generatedDiscountEntries;
+      const discountsJson = storedDiscountEntries.length > 0 ? JSON.stringify(storedDiscountEntries) : null;
+      const benefitsMetaJson = buildOrderBenefitsMetaJsonFromDraft({
+        selected_discount_id: selectedDiscountId,
+        selected_discount_source: selectedDiscountSource,
+        selected_promo_source: selectedPromoSource,
+        selected_promo_reward_id: selectedPromoRewardId,
+        benefits_preview_mode: benefitsPreviewMode,
+      });
 
       const itemsJson = JSON.stringify(normItems);
       let deliveryCost = 0;
@@ -13797,7 +14678,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           orderStoreId = Number(deliveryQuote.delivery_store_id);
         }
 
-        total += deliveryCost;
+        total = roundPrice(total + deliveryCost);
       }
 
       // Timezone РЎвЂћР С‘Р В»Р С‘Р В°Р В»Р В°, Р С” Р С”Р С•РЎвЂљР С•РЎР‚Р С•Р СРЎС“ Р С—РЎР‚Р С‘Р Р†РЎРЏР В·Р В°Р Р… Р В·Р В°Р С”Р В°Р В· (orderStoreId)
@@ -13866,7 +14747,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       let stockChangedProductIds = [];
 
       let orderId = null;
-      if (customerId && (rewardUsageIds.length || loyaltyProgressUpdates.length)) {
+      if (customerId && rewardUsageIds.length) {
         await ensureDiscountRuntimeTables();
       }
       const conn = await db.getConnection();
@@ -13907,45 +14788,83 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         }
 
         // Р вЂ™Р С’Р вЂ“Р СњР С›: Р Р…Р С‘Р С”Р В°Р С”Р С‘РЎвЂ¦ updated_at РЎвЂљРЎС“РЎвЂљ Р Р…Р ВµРЎвЂљ (Р Р† РЎвЂљР Р†Р С•Р ВµР в„– РЎвЂљР В°Р В±Р В»Р С‘РЎвЂ Р Вµ order_orders Р ВµР С–Р С• Р Р…Р ВµРЎвЂљ)
+        const orderInsertColumns = [
+          'tenant_id',
+          'store_id',
+          'customer_id',
+          'customer_name',
+          'customer_phone',
+          'promo_code',
+          'address',
+          'delivery_address_id',
+          'pickup_store_id',
+          'comment',
+          'address_comment',
+          'cutlery_qty',
+          'change_from',
+          'items',
+          'total_price',
+          'delivery_cost',
+          'discount_amount',
+          'discounts_json',
+        ];
+        const orderInsertParams = [
+          tenantId,
+          orderStoreId,
+          customerId,
+          customerName,
+          customerPhone,
+          promoCodeForOrder,
+          addrLine,
+          deliveryAddressId,
+          pickupStoreId,
+          comment,
+          addressComment,
+          cutleryQty,
+          changeFrom,
+          itemsJson,
+          total,
+          deliveryCost,
+          orderDiscountAmount,
+          discountsJson,
+        ];
+        if (hasBenefitsMetaColumn) {
+          orderInsertColumns.push('benefits_meta_json');
+          orderInsertParams.push(benefitsMetaJson);
+        }
+        orderInsertColumns.push(
+          'delivery_type_id',
+          'payment_id',
+          'time_option_id',
+          'status_id',
+          'status_sort',
+          'scheduled_at',
+          'created_at',
+          'stock_deducted_at',
+          'stock_document_id',
+          'created_via',
+          'is_active',
+          'public_id'
+        );
+        orderInsertParams.push(
+          deliveryTypeId,
+          paymentId,
+          timeOptionId,
+          statusId,
+          0,
+          scheduledAt,
+          createdAt,
+          stockDeductedAt,
+          stockDocumentId,
+          'web',
+          1,
+          publicId
+        );
         const [r] = await conn.query(
           `INSERT INTO order_orders
-           (tenant_id, store_id, customer_id, customer_name, customer_phone, promo_code,
-            address, delivery_address_id, pickup_store_id, comment, address_comment, cutlery_qty, change_from,
-            items, total_price, delivery_cost, discount_amount, discounts_json,
-            delivery_type_id, payment_id, time_option_id,
-            status_id, status_sort, scheduled_at, created_at, stock_deducted_at, stock_document_id,
-            created_via, is_active, public_id)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'web', 1, ?)`,
-          [
-            tenantId,
-            orderStoreId,
-            customerId,
-            customerName,
-            customerPhone,
-            promoCodeForOrder,
-            addrLine,
-            deliveryAddressId,
-            pickupStoreId,
-            comment,
-            addressComment,
-            cutleryQty,
-            changeFrom,
-            itemsJson,
-            total,
-            deliveryCost,
-            orderDiscountAmount,
-            discountsJson,
-            deliveryTypeId,
-            paymentId,
-            timeOptionId,
-            statusId,
-            0, // status_sort
-            scheduledAt,
-            createdAt,
-            stockDeductedAt,
-            stockDocumentId,
-            publicId,
-          ]
+           (${orderInsertColumns.join(', ')})
+           VALUES (${orderInsertColumns.map(() => '?').join(', ')})`,
+          orderInsertParams
         );
 
         orderId = Number(r.insertId || 0);
@@ -13977,66 +14896,12 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           );
         }
 
-        if (loyaltyProgressUpdates.length && customerId) {
-          const [existingProgressRows] = await conn.query(
-            `SELECT discount_id, progress_value, pending_reward_count
-               FROM mkt_discount_progress
-              WHERE tenant_id = ? AND customer_id = ? AND discount_id IN (?)`,
-            [tenantId, customerId, loyaltyProgressUpdates.map((entry) => entry.discountId)]
-          );
-          const existingProgressMap = new Map(
-            (Array.isArray(existingProgressRows) ? existingProgressRows : []).map((row) => [
-              Number(row?.discount_id || 0),
-              row,
-            ])
-          );
-
-          for (const progressUpdate of loyaltyProgressUpdates) {
-            const discountId = Number(progressUpdate?.discountId || 0);
-            if (!(discountId > 0)) continue;
-            const currentRow = existingProgressMap.get(discountId) || null;
-            const currentProgressValue = Number(currentRow?.progress_value || 0);
-            const currentPendingRewardCount = Number(currentRow?.pending_reward_count || 0);
-            const increment = Number(progressUpdate?.increment || 0);
-            const thresholdValue = Number(progressUpdate?.thresholdValue || 0);
-            const rewardQty = getPublicProgressRewardQty({ reward_qty: progressUpdate?.rewardQty });
-            const pendingRewardMode = normalizePublicProgressPendingRewardMode(progressUpdate?.pendingRewardMode);
-            let nextProgressValue = currentProgressValue;
-            let nextPendingRewardCount = currentPendingRewardCount;
-
-            if (!(pendingRewardMode === 'single_pending' && currentPendingRewardCount > 0)) {
-              const rawNextProgressValue = roundPromoMoney(currentProgressValue + increment);
-              const completedBefore = thresholdValue > 0 ? Math.floor(currentProgressValue / thresholdValue) : 0;
-              const completedAfter = thresholdValue > 0 ? Math.floor(rawNextProgressValue / thresholdValue) : 0;
-              const gainedThresholds = Math.max(0, completedAfter - completedBefore);
-              const gainedRewards = gainedThresholds * rewardQty;
-
-              nextProgressValue = rawNextProgressValue;
-              nextPendingRewardCount = Math.max(0, currentPendingRewardCount + gainedRewards);
-
-              if (pendingRewardMode === 'single_pending' && gainedThresholds > 0 && thresholdValue > 0) {
-                nextProgressValue = Math.min(rawNextProgressValue, thresholdValue);
-              }
-            }
-
-            await conn.query(
-              `INSERT INTO mkt_discount_progress
-               (tenant_id, customer_id, discount_id, progress_value, pending_reward_count)
-               VALUES (?, ?, ?, ?, ?)
-               ON DUPLICATE KEY UPDATE
-                 progress_value = VALUES(progress_value),
-                 pending_reward_count = VALUES(pending_reward_count),
-                 updated_at = NOW()`,
-              [
-                tenantId,
-                customerId,
-                discountId,
-                nextProgressValue,
-                nextPendingRewardCount,
-              ]
-            );
-          }
-        }
+        await accrueOrderBenefitProgress({
+          conn,
+          tenantId,
+          storeId: orderStoreId,
+          orderId,
+        });
 
         await syncCustomerOrderMetrics(conn, tenantId, customerId);
 
@@ -14270,6 +15135,13 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       console.error(e);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
+  });
+
+  registerCheckoutBenefitsPreviewProvider({
+    buildPreview: (params = {}) => buildCheckoutBenefitsPreviewData(params || {}),
+  });
+  registerOrderBenefitsAccrualProvider({
+    accrueOrderBenefits: (params = {}) => accrueOrderBenefitProgress(params || {}),
   });
 
   return router;

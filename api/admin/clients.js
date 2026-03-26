@@ -1,4 +1,5 @@
 const express = require('express');
+const crypto = require('crypto');
 const {
   customerAddressSelectFields,
   ensureCustomerAddressIdentityColumns,
@@ -10,6 +11,13 @@ const {
 module.exports = function makeAdminClientsRouter({ db, helpers }) {
   const router = express.Router();
   let customerGenderColumnPromise = null;
+
+  function makeToken32() {
+    if (typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID().replace(/-/g, '');
+    }
+    return crypto.randomBytes(16).toString('hex');
+  }
 
   function mergeCustomerAddressSource(existing, patch) {
     const source = existing && typeof existing === 'object' ? { ...existing } : {};
@@ -1482,6 +1490,83 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
    * GET /api/admin/clients/:id/discounts
    * Получить скидки, привязанные к клиенту (напрямую или через категории)
    */
+  router.post('/:id/shop-session', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const clientId = Number(req.params.id);
+
+      if (!Number.isFinite(clientId) || clientId <= 0) {
+        return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      }
+
+      const [customerRows] = await db.query(
+        `SELECT id, is_active
+           FROM cust_customers
+          WHERE tenant_id = ? AND id = ?
+          LIMIT 1`,
+        [tenantId, clientId]
+      );
+      const customer = Array.isArray(customerRows) && customerRows.length ? customerRows[0] : null;
+      if (!customer || Number(customer?.is_active || 0) !== 1) {
+        return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+      }
+
+      const [sessionRows] = await db.query(
+        `SELECT token, expires_at
+           FROM cust_customer_sessions
+          WHERE tenant_id = ?
+            AND store_id = ?
+            AND customer_id = ?
+            AND is_active = 1
+            AND (expires_at IS NULL OR expires_at > NOW())
+          ORDER BY id DESC
+          LIMIT 1`,
+        [tenantId, storeId, clientId]
+      );
+      const activeSession = Array.isArray(sessionRows) && sessionRows.length ? sessionRows[0] : null;
+      if (activeSession?.token) {
+        return res.json({
+          ok: true,
+          data: {
+            token: String(activeSession.token),
+            customer_id: clientId,
+            store_id: storeId,
+            expires_at: activeSession.expires_at || null,
+          },
+        });
+      }
+
+      const token = makeToken32();
+      await db.query(
+        `INSERT INTO cust_customer_sessions
+         (tenant_id, store_id, customer_id, token, expires_at, is_active, user_agent, ip_address)
+         VALUES (?, ?, ?, ?, DATE_ADD(NOW(), INTERVAL 30 DAY), 1, ?, ?)`,
+        [
+          tenantId,
+          storeId,
+          clientId,
+          token,
+          helpers.strOrNull(req.headers['user-agent']),
+          helpers.strOrNull(req.ip || req.connection?.remoteAddress || ''),
+        ]
+      );
+
+      return res.json({
+        ok: true,
+        data: {
+          token,
+          customer_id: clientId,
+          store_id: storeId,
+          expires_at: null,
+        },
+      });
+    } catch (e) {
+      console.error('POST /api/admin/clients/:id/shop-session error:', e);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
   router.get('/:id/discounts', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);

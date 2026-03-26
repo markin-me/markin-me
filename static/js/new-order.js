@@ -220,6 +220,13 @@
     rightCartClearTimerByOrder: new Map(),
     rightDiscountBreakdownOpenByOrder: new Map(),
     rightCheckoutSubmittingByOrder: new Map(),
+    rightBenefitsPreviewByOrder: new Map(),
+    rightBenefitsPreviewKeyByOrder: new Map(),
+    rightBenefitsLoadingByOrder: new Set(),
+    rightBenefitsReqSeqByOrder: new Map(),
+    rightBenefitsRefreshTimerByOrder: new Map(),
+    rightBenefitsTokenByClientId: new Map(),
+    rightBenefitsClaimOptionsByOrder: new Map(),
     rightAutoAddDismissedByOrder: new Map(),
     autoAdd: {
       groups: [],
@@ -255,6 +262,14 @@
       pickerBlockIndex: -1,
       expandedPickerProductIndex: null,
       pickerRenderToken: 0,
+    },
+    benefitsModal: {
+      orderId: 0,
+      mode: "customer",
+      screen: "main",
+      title: "Выгоды",
+      payload: null,
+      busy: false,
     },
     cacheManifest: null,
   };
@@ -517,6 +532,16 @@
             title="${clearBtnTitle}"
             aria-label="${clearBtnLabel}"
           >${clearBtnText}</button>
+          <button
+            class="new-order-right-footer-benefits-btn"
+            type="button"
+            data-action="right-order-benefits-open"
+            data-order-id="${Number(active?.id || 0)}"
+            aria-label="Выгоды"
+            title="Выгоды"
+          >
+            <i class="fas fa-tags" aria-hidden="true"></i>
+          </button>
           <button
             class="shop-checkout-btn shop-checkout-btn--secondary"
             data-action="right-cart-checkout"
@@ -1173,6 +1198,12 @@
         paymentMethod: defaultPaymentCode,
         changeType: "no_change",
         changeAmount: "",
+        promo_code: null,
+        selected_discount_id: null,
+        selected_discount_source: null,
+        selected_promo_source: null,
+        selected_promo_reward_id: null,
+        benefits_preview_mode: null,
         comment: "",
         cartItems: [],
       },
@@ -1197,6 +1228,18 @@
     form.orderStatusInitialId = Number(form.orderStatusInitialId || 0) > 0 ? Number(form.orderStatusInitialId) : form.orderStatusId;
     form.orderStatusTitle = String(form.orderStatusTitle || "").trim();
     form.orderStatusInitialTitle = String(form.orderStatusInitialTitle || "").trim() || form.orderStatusTitle;
+    form.promo_code = String(form.promo_code || "").trim() || null;
+    form.selected_discount_id = Number(form.selected_discount_id || 0) > 0 ? Number(form.selected_discount_id) : null;
+    form.selected_discount_source = ["discount", "reward_discount"].includes(String(form.selected_discount_source || "").trim())
+      ? String(form.selected_discount_source || "").trim()
+      : null;
+    form.selected_promo_source = ["promo_code", "reward_promo"].includes(String(form.selected_promo_source || "").trim())
+      ? String(form.selected_promo_source || "").trim()
+      : null;
+    form.selected_promo_reward_id = Number(form.selected_promo_reward_id || 0) > 0 ? Number(form.selected_promo_reward_id) : null;
+    form.benefits_preview_mode = String(form.benefits_preview_mode || "").trim()
+      ? normalizeRightOrderBenefitsMode(form.benefits_preview_mode)
+      : null;
     return {
       ...base,
       ...src,
@@ -2578,6 +2621,462 @@
     form.cartItems = normalizeRightOrderCartItemsWithAutoAdd(id, cartItems);
     state.rightOrders[index] = { ...order, form };
     invalidateRightDeliveryQuote(id);
+    invalidateRightOrderBenefitsPreview(id);
+    scheduleRightOrderBenefitsRefresh(id);
+    if (opts?.render) renderRightOrderTabs();
+    return true;
+  }
+
+  function cloneRightOrderBenefitsPreviewData(source) {
+    return source && typeof source === "object"
+      ? deepCloneJson(source, null)
+      : null;
+  }
+
+  function normalizeRightOrderBenefitsDiscountSource(value) {
+    const raw = String(value || "").trim().toLowerCase();
+    return raw === "discount" || raw === "reward_discount" ? raw : null;
+  }
+
+  function normalizeRightOrderBenefitsPromoSource(value) {
+    const raw = String(value || "").trim().toLowerCase();
+    return raw === "promo_code" || raw === "reward_promo" ? raw : null;
+  }
+
+  function normalizeRightOrderBenefitsPromoCode(value) {
+    const raw = String(value || "").toUpperCase().trim();
+    return raw || null;
+  }
+
+  function normalizeRightOrderBenefitsSelectedId(value) {
+    const id = Number(value || 0);
+    return Number.isInteger(id) && id > 0 ? id : null;
+  }
+
+  function normalizeRightOrderBenefitsMode(value) {
+    return String(value || "").trim().toLowerCase() === "all" ? "all" : "customer";
+  }
+
+  function getActiveRightOrderBenefitsMode() {
+    return normalizeRightOrderBenefitsMode(state.benefitsModal.mode);
+  }
+
+  function getRightOrderBenefitsCacheSlot(orderId, mode = null) {
+    const id = Number(orderId || 0);
+    if (!(id > 0)) return "";
+    return `${id}:${normalizeRightOrderBenefitsMode(mode)}`;
+  }
+
+  function getRightOrderBenefitsPreferredMode(form, fallbackMode = null) {
+    const sourceForm = form && typeof form === "object" ? form : {};
+    const storedMode = String(sourceForm.benefits_preview_mode || "").trim();
+    if (storedMode) return normalizeRightOrderBenefitsMode(storedMode);
+    if (fallbackMode != null) return normalizeRightOrderBenefitsMode(fallbackMode);
+    return getActiveRightOrderBenefitsMode();
+  }
+
+  function setRightBenefitsModeToggleState(mode = null) {
+    const { modeToggle } = getRightBenefitsOverlayElements();
+    if (!modeToggle) return;
+    const activeMode = normalizeRightOrderBenefitsMode(mode || getActiveRightOrderBenefitsMode());
+    const buttons = Array.from(modeToggle.querySelectorAll(".shop-delivery-toggle-btn"));
+    buttons.forEach((button, index) => {
+      const buttonMode = index === 1 ? "all" : "customer";
+      const isActive = buttonMode === activeMode;
+      button.classList.toggle("is-active", isActive);
+      button.setAttribute("aria-pressed", isActive ? "true" : "false");
+      button.dataset.mode = buttonMode;
+    });
+  }
+
+  function isRightOrderBenefitStackable(entry) {
+    return entry?.is_stackable === true || Number(entry?.is_stackable || 0) === 1;
+  }
+
+  function isRightOrderBenefitSelectable(entry) {
+    const disabledReasonCode = String(entry?.disabled_reason_code || "").trim().toUpperCase();
+    if (!disabledReasonCode) return true;
+    const source = String(entry?.source || "").trim().toLowerCase();
+    if ((source === "promo_code" || source === "reward_promo") && disabledReasonCode === "PROMO_NOT_APPLICABLE") {
+      return false;
+    }
+    return ![
+      "DISCOUNT_INVALID",
+      "DISCOUNT_NOT_AVAILABLE",
+      "DISCOUNT_CUSTOMER_LIMIT_REACHED",
+      "PROMO_INVALID",
+      "PROMO_NOT_AVAILABLE",
+      "PROMO_LIMIT_REACHED",
+      "PROMO_CUSTOMER_LIMIT_REACHED",
+    ].includes(disabledReasonCode);
+  }
+
+  function getRightOrderBenefitsActionErrorMessage(err) {
+    switch (String(err?.message || "").trim()) {
+      case "PROMO_CODE_REQUIRED":
+        return "Введите промокод.";
+      case "PROMO_INVALID":
+        return "Промокод уже недоступен.";
+      case "PROMO_NOT_AVAILABLE":
+        return "Этот промокод сейчас недоступен.";
+      case "PROMO_NOT_APPLICABLE":
+        return "Промокод не подходит к текущему заказу.";
+      case "PROMO_LIMIT_REACHED":
+        return "Лимит использования промокода исчерпан.";
+      case "PROMO_CUSTOMER_LIMIT_REACHED":
+        return "Этот промокод уже использован.";
+      case "DISCOUNT_NOT_APPLICABLE":
+        return "Награду пока нельзя забрать.";
+      case "DISCOUNT_NOT_AVAILABLE":
+        return "Акция сейчас недоступна.";
+      case "DISCOUNT_CUSTOMER_LIMIT_REACHED":
+        return "Эта скидка уже использована.";
+      case "DISCOUNT_INVALID":
+        return "Акция больше не найдена.";
+      case "REWARD_INVALID":
+        return "Подарок уже недоступен.";
+      case "REWARD_NOT_APPLICABLE":
+        return "Этот подарок пока нельзя получить.";
+      default:
+        return "Не удалось обновить выгоды.";
+    }
+  }
+
+  function getRightOrderBenefitsSelectionState(form) {
+    const sourceForm = form && typeof form === "object" ? form : {};
+    return {
+      promoCode: normalizeRightOrderBenefitsPromoCode(sourceForm.promo_code),
+      selectedDiscountId: normalizeRightOrderBenefitsSelectedId(sourceForm.selected_discount_id),
+      selectedDiscountSource: normalizeRightOrderBenefitsDiscountSource(sourceForm.selected_discount_source),
+      selectedPromoSource: normalizeRightOrderBenefitsPromoSource(sourceForm.selected_promo_source),
+      selectedPromoRewardId: normalizeRightOrderBenefitsSelectedId(sourceForm.selected_promo_reward_id),
+    };
+  }
+
+  function hasRightOrderBenefitsSelection(form) {
+    const selection = getRightOrderBenefitsSelectionState(form);
+    return Boolean(
+      selection.promoCode
+      || selection.selectedDiscountId
+      || selection.selectedPromoRewardId
+    );
+  }
+
+  function invalidateRightOrderBenefitsPreview(orderId) {
+    const id = Number(orderId || 0);
+    if (!(id > 0)) return;
+    ["customer", "all"].forEach((mode) => {
+      const slot = getRightOrderBenefitsCacheSlot(id, mode);
+      if (!slot) return;
+      state.rightBenefitsPreviewByOrder.delete(slot);
+      state.rightBenefitsPreviewKeyByOrder.delete(slot);
+      state.rightBenefitsLoadingByOrder.delete(slot);
+      state.rightBenefitsReqSeqByOrder.delete(slot);
+    });
+    state.rightBenefitsClaimOptionsByOrder.delete(id);
+  }
+
+  function clearRightOrderBenefitsRefreshTimer(orderId) {
+    const id = Number(orderId || 0);
+    const timer = state.rightBenefitsRefreshTimerByOrder.get(id);
+    if (timer) clearTimeout(timer);
+    state.rightBenefitsRefreshTimerByOrder.delete(id);
+  }
+
+  async function restoreRightOrderGiftReward(orderId, rewardId, opts = {}) {
+    const numericRewardId = Number(rewardId || 0);
+    if (!(numericRewardId > 0)) return true;
+    const id = Number(orderId || 0);
+    const explicitClientId = Number(opts?.clientId || 0);
+    let token = explicitClientId > 0
+      ? String(state.rightBenefitsTokenByClientId.get(explicitClientId) || "").trim()
+      : "";
+    if (!token && id > 0) {
+      const orderIndex = getRightOrderIndexById(id);
+      const currentOrder = orderIndex >= 0 ? (state.rightOrders[orderIndex] || {}) : {};
+      const currentClientId = Number(currentOrder?.form?.clientId || 0);
+      if (!(explicitClientId > 0) || currentClientId === explicitClientId) {
+        token = String(await ensureRightOrderBenefitsCustomerToken(id) || "").trim();
+      }
+    }
+    if (!token) {
+      if (!opts?.silent) showNewOrderAlert("Не удалось вернуть подарок в выгоды");
+      return false;
+    }
+    try {
+      await apiJson("/api/public/checkout/benefits/restore-gift", {
+        method: "POST",
+        headers: { "x-customer-token": token },
+        body: JSON.stringify({ reward_id: numericRewardId }),
+      });
+      return true;
+    } catch (error) {
+      if (String(error?.message || "").trim().toUpperCase() === "REWARD_INVALID") {
+        return true;
+      }
+      if (!opts?.silent) showNewOrderAlert("Не удалось вернуть подарок в выгоды");
+      return false;
+    }
+  }
+
+  async function restoreRightOrderGiftRewardsFromItems(orderId, items, opts = {}) {
+    const rewardIds = [...new Set(
+      (Array.isArray(items) ? items : [])
+        .map((item) => Number(item?.gift_reward_id || 0))
+        .filter((rewardId) => rewardId > 0)
+    )];
+    for (const rewardId of rewardIds) {
+      const restored = await restoreRightOrderGiftReward(orderId, rewardId, opts);
+      if (!restored) return false;
+    }
+    return true;
+  }
+
+  function buildRightOrderBenefitsPreviewRequest(order, opts = {}) {
+    const safeOrder = order && typeof order === "object" ? order : {};
+    const form = safeOrder.form && typeof safeOrder.form === "object" ? safeOrder.form : {};
+    const selection = getRightOrderBenefitsSelectionState(form);
+    const request = {
+      customer_id: Number(form.clientId || 0) > 0 ? Number(form.clientId) : null,
+      method_code: String(form.pickupMethod || "").trim() || "delivery",
+      promo_code: selection.promoCode,
+      selected_discount_id: selection.selectedDiscountId,
+      selected_discount_source: selection.selectedDiscountId ? (selection.selectedDiscountSource || "discount") : null,
+      selected_promo_source: (selection.promoCode || selection.selectedPromoRewardId)
+        ? (selection.selectedPromoSource || "promo_code")
+        : null,
+      selected_promo_reward_id: selection.selectedPromoRewardId,
+      items: buildRightOrderPayloadItems(Array.isArray(form.cartItems) ? form.cartItems : []),
+    };
+    if (opts?.includeMode) {
+      request.mode = normalizeRightOrderBenefitsMode(opts.mode || getActiveRightOrderBenefitsMode());
+    }
+    return request;
+  }
+
+  function buildRightOrderBenefitsPreviewKey(order, mode = null) {
+    const safeOrder = order && typeof order === "object" ? order : {};
+    const activeMode = normalizeRightOrderBenefitsMode(mode || getActiveRightOrderBenefitsMode());
+    const request = buildRightOrderBenefitsPreviewRequest(safeOrder, {
+      includeMode: activeMode === "all",
+      mode: activeMode,
+    });
+    const form = safeOrder.form && typeof safeOrder.form === "object" ? safeOrder.form : {};
+    return JSON.stringify({
+      mode: activeMode,
+      customerId: Number(form.clientId || 0) || null,
+      phone: normalizePhoneRu(form.phone),
+      request,
+    });
+  }
+
+  function getRightOrderBenefitsPreviewSnapshot(order, opts = {}) {
+    const orderId = Number(order?.id || 0);
+    if (!(orderId > 0)) return null;
+    const requestedMode = opts?.mode != null
+      ? normalizeRightOrderBenefitsMode(opts.mode)
+      : null;
+    const modeQueue = requestedMode
+      ? (opts?.preferApplied
+          ? [requestedMode, ...(requestedMode === "all" ? ["customer"] : ["all"])]
+          : [requestedMode])
+      : (opts?.preferApplied ? ["all", "customer"] : [getActiveRightOrderBenefitsMode()]);
+    for (const mode of modeQueue) {
+      const slot = getRightOrderBenefitsCacheSlot(orderId, mode);
+      const expectedKey = buildRightOrderBenefitsPreviewKey(order, mode);
+      const storedKey = String(state.rightBenefitsPreviewKeyByOrder.get(slot) || "");
+      if (!expectedKey || storedKey !== expectedKey) continue;
+      const snapshot = state.rightBenefitsPreviewByOrder.get(slot) || null;
+      if (snapshot) return snapshot;
+    }
+    return null;
+  }
+
+  function queueRenderRightBenefitsModal(orderId) {
+    if (Number(state.benefitsModal.orderId || 0) !== Number(orderId || 0)) return;
+    renderRightBenefitsOverlay(Number(orderId || 0));
+  }
+
+  async function ensureRightOrderBenefitsCustomerToken(orderId) {
+    const id = Number(orderId || 0);
+    if (!(id > 0)) return null;
+    let index = getRightOrderIndexById(id);
+    if (index < 0) return null;
+    let order = state.rightOrders[index] || {};
+    let form = order.form && typeof order.form === "object" ? order.form : {};
+    if (!(Number(form.clientId || 0) > 0)) {
+      const normalizedDigits = normalizePhoneRu(form.phone);
+      if (normalizedDigits.length === 11) {
+        await lookupClientByPhoneForRightOrder(id, form.phone);
+        index = getRightOrderIndexById(id);
+        if (index < 0) return null;
+        order = state.rightOrders[index] || {};
+        form = order.form && typeof order.form === "object" ? order.form : {};
+      }
+    }
+    const clientId = Number(form.clientId || 0);
+    if (!(clientId > 0)) return null;
+    const cachedToken = String(state.rightBenefitsTokenByClientId.get(clientId) || "").trim();
+    if (cachedToken) return cachedToken;
+    const json = await apiJson(`/api/admin/clients/${clientId}/shop-session`, {
+      method: "POST",
+    });
+    const token = String(json?.data?.token || "").trim();
+    if (token) {
+      state.rightBenefitsTokenByClientId.set(clientId, token);
+      return token;
+    }
+    return null;
+  }
+
+  async function loadRightOrderBenefitsPreview(orderId, opts = {}) {
+    const id = Number(orderId || 0);
+    if (!(id > 0)) return null;
+    const index = getRightOrderIndexById(id);
+    if (index < 0) return null;
+    const mode = normalizeRightOrderBenefitsMode(opts?.mode || getActiveRightOrderBenefitsMode());
+    const order = state.rightOrders[index] || {};
+    const form = order.form && typeof order.form === "object" ? order.form : {};
+    const phoneDigits = normalizePhoneRu(form.phone);
+    if (phoneDigits.length !== 11) {
+      invalidateRightOrderBenefitsPreview(id);
+      if (opts?.render) {
+        renderRightOrderTabs();
+        queueRenderRightBenefitsModal(id);
+      }
+      return null;
+    }
+    const token = await ensureRightOrderBenefitsCustomerToken(id);
+    if (!token) {
+      invalidateRightOrderBenefitsPreview(id);
+      if (opts?.render) {
+        renderRightOrderTabs();
+        queueRenderRightBenefitsModal(id);
+      }
+      return null;
+    }
+
+    const cacheSlot = getRightOrderBenefitsCacheSlot(id, mode);
+    const requestKey = buildRightOrderBenefitsPreviewKey(order, mode);
+    if (!opts?.force && requestKey === String(state.rightBenefitsPreviewKeyByOrder.get(cacheSlot) || "")) {
+      const cached = state.rightBenefitsPreviewByOrder.get(cacheSlot) || null;
+      if (cached) return cached;
+    }
+
+    const requestSeq = Number(state.rightBenefitsReqSeqByOrder.get(cacheSlot) || 0) + 1;
+    state.rightBenefitsReqSeqByOrder.set(cacheSlot, requestSeq);
+    state.rightBenefitsLoadingByOrder.add(cacheSlot);
+    if (opts?.render) queueRenderRightBenefitsModal(id);
+
+    try {
+      let nextData = opts?.prefetchedData && typeof opts.prefetchedData === "object"
+        ? cloneRightOrderBenefitsPreviewData(opts.prefetchedData)
+        : null;
+      if (!nextData) {
+        const requestBody = buildRightOrderBenefitsPreviewRequest(order, {
+          includeMode: mode === "all",
+          mode,
+        });
+        const json = mode === "all"
+          ? await apiJson("/api/admin/orders/benefits/preview", {
+              method: "POST",
+              body: JSON.stringify(requestBody),
+            })
+          : await apiJson("/api/public/checkout/benefits/preview", {
+              method: "POST",
+              headers: {
+                "x-customer-token": token,
+              },
+              body: JSON.stringify(requestBody),
+            });
+        nextData = cloneRightOrderBenefitsPreviewData(json?.data || null);
+      }
+      if (Number(state.rightBenefitsReqSeqByOrder.get(cacheSlot) || 0) !== requestSeq) return null;
+      state.rightBenefitsPreviewByOrder.set(cacheSlot, nextData || {});
+      state.rightBenefitsPreviewKeyByOrder.set(cacheSlot, requestKey);
+      state.rightBenefitsLoadingByOrder.delete(cacheSlot);
+      if (opts?.render) {
+        renderRightOrderTabs();
+        queueRenderRightBenefitsModal(id);
+      }
+      return nextData;
+    } catch (error) {
+      if (Number(state.rightBenefitsReqSeqByOrder.get(cacheSlot) || 0) !== requestSeq) return null;
+      state.rightBenefitsLoadingByOrder.delete(cacheSlot);
+      state.rightBenefitsPreviewByOrder.delete(cacheSlot);
+      state.rightBenefitsPreviewKeyByOrder.delete(cacheSlot);
+      if (opts?.render) {
+        renderRightOrderTabs();
+        queueRenderRightBenefitsModal(id);
+      }
+      throw error;
+    }
+  }
+
+  function scheduleRightOrderBenefitsRefresh(orderId, opts = {}) {
+    const id = Number(orderId || 0);
+    if (!(id > 0)) return;
+    clearRightOrderBenefitsRefreshTimer(id);
+    const delay = Math.max(0, Number(opts?.delay ?? 180));
+    const timer = setTimeout(() => {
+      state.rightBenefitsRefreshTimerByOrder.delete(id);
+      const index = getRightOrderIndexById(id);
+      if (index < 0) return;
+      const order = state.rightOrders[index] || {};
+      const form = order.form && typeof order.form === "object" ? order.form : {};
+      const shouldRefresh = normalizePhoneRu(form.phone).length === 11 && (
+        Number(form.clientId || 0) > 0
+        || hasRightOrderBenefitsSelection(form)
+        || (Array.isArray(form.cartItems) ? form.cartItems : []).some((item) => Number(item?.is_gift_reward || 0) === 1)
+      );
+      if (!shouldRefresh) return;
+      const refreshMode = getRightOrderBenefitsPreferredMode(form, getActiveRightOrderBenefitsMode());
+      void loadRightOrderBenefitsPreview(id, {
+        force: true,
+        render: opts?.render !== false,
+        mode: refreshMode,
+      }).catch(() => {});
+    }, delay);
+    state.rightBenefitsRefreshTimerByOrder.set(id, timer);
+  }
+
+  function clearRightOrderGiftRewardItems(orderId, opts = {}) {
+    const id = Number(orderId || 0);
+    if (!(id > 0)) return false;
+    const index = getRightOrderIndexById(id);
+    if (index < 0) return false;
+    const order = state.rightOrders[index] || {};
+    const form = order.form && typeof order.form === "object" ? { ...order.form } : {};
+    const currentItems = Array.isArray(form.cartItems) ? form.cartItems : [];
+    const nextItems = currentItems.filter((item) => Number(item?.is_gift_reward || 0) !== 1);
+    if (nextItems.length === currentItems.length) return false;
+    form.cartItems = nextItems;
+    state.rightOrders[index] = { ...order, form };
+    invalidateRightDeliveryQuote(id);
+    invalidateRightOrderBenefitsPreview(id);
+    if (opts?.render) renderRightOrderTabs();
+    return true;
+  }
+
+  function resetRightOrderBenefitsState(orderId, opts = {}) {
+    const id = Number(orderId || 0);
+    if (!(id > 0)) return false;
+    const index = getRightOrderIndexById(id);
+    if (index < 0) return false;
+    const order = state.rightOrders[index] || {};
+    const form = order.form && typeof order.form === "object" ? { ...order.form } : {};
+    form.promo_code = null;
+    form.selected_discount_id = null;
+    form.selected_discount_source = null;
+    form.selected_promo_source = null;
+    form.selected_promo_reward_id = null;
+    form.benefits_preview_mode = null;
+    state.rightOrders[index] = { ...order, form };
+    invalidateRightOrderBenefitsPreview(id);
+    clearRightOrderBenefitsRefreshTimer(id);
+    if (opts?.clearGiftItems) {
+      clearRightOrderGiftRewardItems(id, { render: false });
+    }
     if (opts?.render) renderRightOrderTabs();
     return true;
   }
@@ -2588,9 +3087,21 @@
     const cartItems = Array.isArray(form?.cartItems) ? form.cartItems : [];
     const subtotal = roundPrice(cartItems.reduce((sum, item) => sum + getRightOrderCartLineTotal(item), 0));
     const cartItemsCount = cartItems.reduce((sum, item) => sum + Math.max(1, Number(item?.qty || 1)), 0);
-    const customerDiscountSummary = getRightOrderCustomerDiscountSummary(order, subtotal);
-    const customerOrderDiscount = roundPrice(Number(customerDiscountSummary?.amount || 0));
-    const subtotalAfterCustomerDiscount = roundPrice(Math.max(0, subtotal - customerOrderDiscount));
+    const preferredBenefitsMode = getRightOrderBenefitsPreferredMode(form, null);
+    const benefitsPreview = getRightOrderBenefitsPreviewSnapshot(order, preferredBenefitsMode
+      ? { mode: preferredBenefitsMode, preferApplied: true }
+      : { preferApplied: true });
+    const benefitsPreviewSummary = benefitsPreview?.summary && typeof benefitsPreview.summary === "object"
+      ? benefitsPreview.summary
+      : null;
+    const hasBenefitsPreview = benefitsPreviewSummary && Number.isFinite(Number(benefitsPreviewSummary?.items_total));
+    const customerDiscountSummary = hasBenefitsPreview ? null : getRightOrderCustomerDiscountSummary(order, subtotal);
+    const customerOrderDiscount = hasBenefitsPreview
+      ? roundPrice(Number(benefitsPreviewSummary?.discount_total || 0))
+      : roundPrice(Number(customerDiscountSummary?.amount || 0));
+    const subtotalAfterCustomerDiscount = hasBenefitsPreview
+      ? roundPrice(Number(benefitsPreviewSummary?.items_total || 0))
+      : roundPrice(Math.max(0, subtotal - customerOrderDiscount));
     const methodCode = String(form?.pickupMethod || "").trim();
     const isDeliveryMethod = isDeliveryMethodCode(methodCode);
     const settings = state.rightDeliverySettings && typeof state.rightDeliverySettings === "object"
@@ -2637,8 +3148,14 @@
       subtotal,
       subtotalAfterCustomerDiscount,
       customerOrderDiscount,
-      customerOrderDiscountTitles: Array.isArray(customerDiscountSummary?.titles) ? customerDiscountSummary.titles : [],
-      customerOrderAppliedDiscounts: Array.isArray(customerDiscountSummary?.appliedDiscounts) ? customerDiscountSummary.appliedDiscounts : [],
+      customerOrderDiscountTitles: hasBenefitsPreview
+        ? []
+        : (Array.isArray(customerDiscountSummary?.titles) ? customerDiscountSummary.titles : []),
+      customerOrderAppliedDiscounts: hasBenefitsPreview
+        ? []
+        : (Array.isArray(customerDiscountSummary?.appliedDiscounts) ? customerDiscountSummary.appliedDiscounts : []),
+      benefitsPreview,
+      benefitsPreviewSummary,
       deliveryQuote: quote,
       deliveryQuoteSource: quote?.source || null,
       deliveryCost,
@@ -2711,7 +3228,56 @@
     return roundPrice(unitPrice * qty);
   }
 
+  function normalizeRightOrderDiscountBreakdownSourceKind(entry) {
+    const raw = String(entry?.source_kind || entry?.source || entry?.kind || "").trim().toLowerCase();
+    if (raw === "promo_code" || raw === "reward_promo") return "promo_code";
+    if (raw === "reward_discount" || raw === "discount") return "discount";
+    const key = String(entry?.key || "").trim().toLowerCase();
+    if (key.startsWith("promo_")) return "promo_code";
+    if (key.startsWith("discount_")) return "discount";
+    return null;
+  }
+
+  function buildRightOrderDiscountBreakdownEntries(sourceEntries, opts = {}) {
+    const promoCode = normalizeRightOrderBenefitsPromoCode(opts?.promoCode);
+    return (Array.isArray(sourceEntries) ? sourceEntries : [])
+      .map((entry) => {
+        const sourceKind = normalizeRightOrderDiscountBreakdownSourceKind(entry);
+        const entryPromoCode = sourceKind === "promo_code"
+          ? (normalizeRightOrderBenefitsPromoCode(entry?.promo_code || entry?.code) || promoCode)
+          : null;
+        return {
+          key: String(entry?.key || "").trim() || null,
+          title: String(entry?.title || "Скидка").trim() || "Скидка",
+          amount: roundPrice(Number(entry?.amount ?? entry?.discount_amount ?? 0)),
+          sourceKind,
+          promoCode: entryPromoCode,
+        };
+      })
+      .filter((entry) => Number(entry.amount || 0) > 0);
+  }
+
+  function formatRightOrderDiscountBreakdownTitle(entry) {
+    const title = String(entry?.title || "Скидка").trim() || "Скидка";
+    const promoCode = normalizeRightOrderBenefitsPromoCode(entry?.promoCode);
+    if (!promoCode) return title;
+    return `${title} (${promoCode})`;
+  }
+
   function buildRightOrderDiscountSummaryFromCart(cartItems, subtotal, opts = {}) {
+    const benefitsSummary = opts?.benefitsSummary && typeof opts.benefitsSummary === "object"
+      ? opts.benefitsSummary
+      : null;
+    if (benefitsSummary && Number.isFinite(Number(benefitsSummary?.discount_total))) {
+      return {
+        subtotalBeforeDiscount: roundPrice(Number(benefitsSummary?.subtotal || 0)),
+        totalDiscount: roundPrice(Number(benefitsSummary?.discount_total || 0)),
+        breakdown: buildRightOrderDiscountBreakdownEntries(benefitsSummary?.discount_breakdown, {
+          promoCode: opts?.promoCode,
+        }),
+        orderDiscountTitles: [],
+      };
+    }
     const source = Array.isArray(cartItems) ? cartItems : [];
     const subtotalAfterDiscount = roundPrice(Number(subtotal || 0));
     const customerOrderDiscount = roundPrice(Math.max(0, Number(opts?.customerOrderDiscount || 0)));
@@ -2770,7 +3336,7 @@
     let html = "";
     rows.forEach((entry) => {
       html += `<div class="order-summary-discount-breakdown-row">`;
-      html += `<span class="order-summary-discount-breakdown-label">${escapeHtml(String(entry?.title || "\u0421\u043a\u0438\u0434\u043a\u0430"))}</span>`;
+      html += `<span class="order-summary-discount-breakdown-label">${escapeHtml(formatRightOrderDiscountBreakdownTitle(entry))}</span>`;
       html += `<span class="order-summary-discount-breakdown-value">-${escapeHtml(toMoney(Number(entry?.amount || 0)))}</span>`;
       html += `</div>`;
     });
@@ -2801,6 +3367,8 @@
     const discountSummary = buildRightOrderDiscountSummaryFromCart(cartItems, cartSummary?.subtotalAfterCustomerDiscount, {
       customerOrderDiscount: cartSummary?.customerOrderDiscount,
       orderDiscountTitles: cartSummary?.customerOrderDiscountTitles,
+      benefitsSummary: cartSummary?.benefitsPreviewSummary,
+      promoCode: order?.form?.promo_code,
     });
     const discountAmount = roundPrice(Number(discountSummary?.totalDiscount || 0));
     const hasDiscount = discountAmount > 0;
@@ -2811,6 +3379,8 @@
     if (!hasBreakdown && orderId > 0) state.rightDiscountBreakdownOpenByOrder.delete(orderId);
 
     const form = order?.form && typeof order.form === "object" ? order.form : {};
+    const promoCode = normalizeRightOrderBenefitsPromoCode(form.promo_code);
+    const hasPromoCode = Boolean(promoCode);
     const changeFrom = resolveRightOrderChangeFrom(form, paymentCode);
     const showChange = changeFrom > 0;
     const total = roundPrice(Number(cartSummary?.payableTotal || 0));
@@ -2863,6 +3433,10 @@
           data-right-discount-breakdown="1"
           aria-hidden="${hasBreakdown && isBreakdownOpen ? "false" : "true"}"
         >${hasBreakdown ? renderRightOrderDiscountBreakdownHtml(discountSummary) : ""}</div>
+        <div class="order-summary-row ${hasPromoCode ? "" : "hidden"}">
+          <span class="order-summary-label">Промокод</span>
+          <span class="order-summary-value">${hasPromoCode ? escapeHtml(promoCode) : ""}</span>
+        </div>
         <div class="order-summary-row ${showDeliveryRow ? "" : "hidden"}">
           <span class="order-summary-label">\u0414\u043e\u0441\u0442\u0430\u0432\u043a\u0430</span>
           <span class="order-summary-value">${escapeHtml(toMoney(deliveryCost))}</span>
@@ -2888,6 +3462,8 @@
         customerOrderDiscount: 0,
         customerOrderDiscountTitles: [],
         customerOrderAppliedDiscounts: [],
+        benefitsPreview: null,
+        benefitsPreviewSummary: null,
         deliveryQuote: null,
         deliveryQuoteSource: null,
         deliveryCost: 0,
@@ -3519,6 +4095,9 @@
     const selectedOrderStatusId = isEditSubmit ? Number(form.orderStatusId || 0) : 0;
     const initialOrderStatusId = isEditSubmit ? Number(form.orderStatusInitialId || 0) : 0;
     const deliveryAddressDraft = isDeliveryMethod ? getRightOrderStoredAddressDraft(id, order) : null;
+    const benefitsPreviewSummary = summary?.benefitsPreviewSummary && typeof summary.benefitsPreviewSummary === "object"
+      ? summary.benefitsPreviewSummary
+      : null;
 
     const payload = {
       customer_name: customerName,
@@ -3535,8 +4114,33 @@
       scheduled_at: scheduledAt,
       payment_code: paymentCode,
       change_from: changeFrom,
+      promo_code: normalizeRightOrderBenefitsPromoCode(form.promo_code),
+      selected_discount_id: normalizeRightOrderBenefitsSelectedId(form.selected_discount_id),
+      selected_discount_source: normalizeRightOrderBenefitsDiscountSource(form.selected_discount_source),
+      selected_promo_source: normalizeRightOrderBenefitsPromoSource(form.selected_promo_source),
+      selected_promo_reward_id: normalizeRightOrderBenefitsSelectedId(form.selected_promo_reward_id),
+      benefits_preview_mode: String(form.benefits_preview_mode || "").trim()
+        ? normalizeRightOrderBenefitsMode(form.benefits_preview_mode)
+        : null,
       items,
     };
+    if (benefitsPreviewSummary) {
+      payload.benefits_items_total_override = roundPrice(Number(benefitsPreviewSummary?.items_total || 0));
+      payload.discount_amount_override = roundPrice(Number(benefitsPreviewSummary?.discount_total || 0));
+      payload.discounts_json = buildRightOrderDiscountBreakdownEntries(benefitsPreviewSummary?.discount_breakdown, {
+        promoCode: form.promo_code,
+      })
+        .map((entry) => ({
+          key: entry.key || null,
+          title: entry.title,
+          discount_amount: roundPrice(Number(entry?.amount || 0)),
+          amount: roundPrice(Number(entry?.amount || 0)),
+          apply_to: "order",
+          source_kind: entry.sourceKind,
+          promo_code: entry.promoCode || null,
+        }))
+        .filter((entry) => Number(entry.discount_amount || 0) > 0);
+    }
     if (isDeliveryMethod && deliveryAddressDraft) {
       payload.delivery_address_city = deliveryAddressDraft.city || null;
       payload.delivery_address_street = deliveryAddressDraft.street || null;
@@ -3620,7 +4224,14 @@
         latestForm.comment = "";
         latestForm.changeType = "no_change";
         latestForm.changeAmount = "";
+        latestForm.promo_code = null;
+        latestForm.selected_discount_id = null;
+        latestForm.selected_discount_source = null;
+        latestForm.selected_promo_source = null;
+        latestForm.selected_promo_reward_id = null;
+        latestForm.benefits_preview_mode = null;
         state.rightOrders[latestIndex] = { ...latestOrder, form: latestForm };
+        invalidateRightOrderBenefitsPreview(id);
       }
       resetRightCartClearState(id, { render: false });
       if (typeof window.updateActiveOrdersBadge === "function") {
@@ -4009,6 +4620,10 @@
     if (index < 0) return;
     const order = state.rightOrders[index] || {};
     const form = order.form && typeof order.form === "object" ? { ...order.form } : {};
+    const previousClientId = Number(form.clientId || 0) || null;
+    const previousGiftItems = Array.isArray(form.cartItems)
+      ? form.cartItems.filter((item) => Number(item?.is_gift_reward || 0) === 1)
+      : [];
     if (payload?.found) {
       form.clientId = Number(payload.clientId || 0) || null;
       form.name = payload.name || form.name || "";
@@ -4031,8 +4646,34 @@
       }
       const discounts = Array.isArray(payload.discounts) ? payload.discounts : [];
       state.rightClientDiscountsByClientId.set(Number(payload.clientId || 0), discounts);
+      if (previousClientId && previousClientId !== Number(payload.clientId || 0)) {
+        await restoreRightOrderGiftRewardsFromItems(Number(orderId || 0), previousGiftItems, {
+          clientId: previousClientId,
+          silent: true,
+        });
+        clearRightOrderGiftRewardItems(Number(orderId || 0), { render: false });
+        form.promo_code = null;
+        form.selected_discount_id = null;
+        form.selected_discount_source = null;
+        form.selected_promo_source = null;
+        form.selected_promo_reward_id = null;
+        form.benefits_preview_mode = null;
+      }
     } else {
+      if (previousClientId) {
+        await restoreRightOrderGiftRewardsFromItems(Number(orderId || 0), previousGiftItems, {
+          clientId: previousClientId,
+          silent: true,
+        });
+        clearRightOrderGiftRewardItems(Number(orderId || 0), { render: false });
+      }
       form.clientId = null;
+      form.promo_code = null;
+      form.selected_discount_id = null;
+      form.selected_discount_source = null;
+      form.selected_promo_source = null;
+      form.selected_promo_reward_id = null;
+      form.benefits_preview_mode = null;
       state.rightClientAddressesByOrder.set(Number(orderId || 0), []);
       state.rightAddressSelectedIdByOrder.delete(Number(orderId || 0));
       state.rightAddressEditingIdByOrder.delete(Number(orderId || 0));
@@ -4040,6 +4681,8 @@
     }
     invalidateRightDeliveryQuote(Number(orderId || 0));
     state.rightOrders[index] = { ...order, form };
+    invalidateRightOrderBenefitsPreview(Number(orderId || 0));
+    scheduleRightOrderBenefitsRefresh(Number(orderId || 0));
     renderRightOrderTabs();
   }
 
@@ -4059,6 +4702,2797 @@
     state.rightOrders[index] = { ...order, form };
     if (key === "pickupMethod" || key === "address" || key === "clientId") {
       invalidateRightDeliveryQuote(id);
+    }
+    if (key === "pickupMethod" || key === "clientId" || key === "phone") {
+      invalidateRightOrderBenefitsPreview(id);
+      scheduleRightOrderBenefitsRefresh(id);
+    }
+  }
+
+  function createRightOrderBenefitIcon(iconClass) {
+    const icon = document.createElement("i");
+    icon.className = `fas ${iconClass}`;
+    icon.setAttribute("aria-hidden", "true");
+    return icon;
+  }
+
+  function getRightOrderBenefitRewardIconName(kind) {
+    const normalizedKind = String(kind || "").trim().toLowerCase();
+    if (normalizedKind === "promo_code") return "fa-ticket-alt";
+    if (normalizedKind === "discount") return "fa-percent";
+    return "fa-gift";
+  }
+
+  function getRightOrderBenefitRewardKindLabel(kind) {
+    const normalizedKind = String(kind || "").trim().toLowerCase();
+    if (normalizedKind === "promo_code") return "Промокод";
+    if (normalizedKind === "discount") return "Скидка";
+    return "Подарок";
+  }
+
+  function getRightOrderBenefitGiftProducts(item) {
+    return (Array.isArray(item?.products) ? item.products : [])
+      .filter((product) => Number(product?.id || product?.product_id || 0) > 0);
+  }
+
+  function getRightOrderBenefitSafePhotos(product) {
+    const photos = getProductPhotos(product);
+    return photos.length ? photos : [""];
+  }
+
+  function normalizeRightOrderBenefitProductConfigMode(value, fallback = "any") {
+    const raw = String(value || "").trim().toLowerCase();
+    if (raw === "exact") return "exact";
+    if (raw === "any") return "any";
+    return String(fallback || "").trim().toLowerCase() === "exact" ? "exact" : "any";
+  }
+
+  function normalizeRightOrderBenefitProductConfig(value, fallbackProductId = null) {
+    const source = value && typeof value === "object" ? value : null;
+    const productId = Number(source?.product_id || fallbackProductId || 0);
+    if (!(productId > 0)) return null;
+    const options = (Array.isArray(source?.options) ? source.options : [])
+      .map((option) => {
+        const optionId = Number(option?.id || option?.option_item_id || 0);
+        if (!(optionId > 0)) return null;
+        const qty = Math.max(1, Number(option?.qty ?? option?.quantity ?? 1) || 1);
+        const targetProductId = Number(option?.target_product_id || option?.product_id || 0);
+        const groupId = Number(option?.group_id || option?.option_group_id || 0);
+        const variantGroupId = Number(option?.variant_group_id || 0);
+        const variantValueIndex = Number(option?.variant_value_index);
+        return {
+          id: optionId,
+          qty,
+          group_id: groupId > 0 ? groupId : null,
+          target_product_id: targetProductId > 0 ? targetProductId : null,
+          product_id: targetProductId > 0 ? targetProductId : null,
+          variant_group_id: variantGroupId > 0 ? variantGroupId : null,
+          variant_value_index: Number.isFinite(variantValueIndex) && variantValueIndex >= 0
+            ? variantValueIndex
+            : null,
+        };
+      })
+      .filter(Boolean);
+    const ingredients = (Array.isArray(source?.ingredients) ? source.ingredients : [])
+      .map((ingredient) => {
+        const ingredientId = Number(ingredient?.ingredient_id || ingredient?.product_id || 0);
+        if (!(ingredientId > 0)) return null;
+        return {
+          ingredient_id: ingredientId,
+          qty: Number(ingredient?.qty ?? ingredient?.quantity ?? 0) || 0,
+        };
+      })
+      .filter(Boolean);
+    const variantGroupId = Number(source?.variant_group_id || 0);
+    const variantValueIndex = Number(source?.variant_value_index);
+    return {
+      type: "product",
+      product_id: productId,
+      variant_group_id: variantGroupId > 0 ? variantGroupId : null,
+      variant_value_index: Number.isFinite(variantValueIndex) && variantValueIndex >= 0
+        ? variantValueIndex
+        : null,
+      options,
+      ingredients,
+    };
+  }
+
+  function buildRightOrderBenefitAnyConfigText() {
+    return "Любой вариант / любой состав";
+  }
+
+  function formatRightOrderBenefitIngredientLine(ingredient) {
+    const name = String(ingredient?.name || ingredient?.ingredient_name || "").trim();
+    if (!name) return "";
+    const qty = Number(ingredient?.qty ?? ingredient?.quantity ?? 0);
+    const unit = String(ingredient?.unit || ingredient?.unit_label || "").trim();
+    if (Number.isFinite(qty) && qty > 0) {
+      return unit ? `${name}: ${qty} ${unit}` : `${name}: ${qty}`;
+    }
+    return name;
+  }
+
+  async function resolveRightOrderBenefitConfiguredProduct(item, {
+    forceDefaultConfig = false,
+  } = {}) {
+    const source = item && typeof item === "object" ? { ...item } : {};
+    const productId = Number(source?.product_id || source?.id || 0);
+    const configMode = normalizeRightOrderBenefitProductConfigMode(source?.config_mode, "any");
+    const requestedConfig = normalizeRightOrderBenefitProductConfig(source?.product_config, productId);
+    const next = {
+      ...source,
+      id: Number(source?.id || productId || 0) || null,
+      product_id: productId > 0 ? productId : null,
+      config_mode: configMode,
+      product_config: requestedConfig,
+      config_display_lines: Array.isArray(source?.config_display_lines)
+        ? source.config_display_lines.slice()
+        : [],
+    };
+    if (!(productId > 0)) {
+      if (configMode === "any" && !requestedConfig) {
+        next.config_note = buildRightOrderBenefitAnyConfigText();
+        next.config_display_lines = [next.config_note];
+      }
+      return next;
+    }
+    if (configMode === "any" && !requestedConfig && !forceDefaultConfig) {
+      next.config_note = buildRightOrderBenefitAnyConfigText();
+      next.config_display_lines = [next.config_note];
+      return next;
+    }
+
+    try {
+      const product = await ensureProductById(productId);
+      if (!product) return next;
+      await loadVariantsForProducts([product]);
+      await loadIngredientsForProducts([product]);
+      await loadOptionsForProducts([product]);
+      await loadOptionDetailsForProducts([product]);
+
+      const variants = Array.isArray(state.productVariants.get(productId))
+        ? state.productVariants.get(productId)
+        : [];
+      const optionGroups = Array.isArray(state.productOptionGroups.get(productId))
+        ? state.productOptionGroups.get(productId)
+        : [];
+      const ingredientsCatalog = Array.isArray(state.productIngredients.get(productId))
+        ? state.productIngredients.get(productId)
+        : [];
+
+      const variantGroup = (() => {
+        const requestedGroupId = Number(requestedConfig?.variant_group_id || 0);
+        if (requestedGroupId > 0) {
+          const matched = variants.find((group) => (
+            Number(group?.id || group?.variant_group_id || 0) === requestedGroupId
+          ));
+          if (matched) return matched;
+        }
+        return variants[0] || null;
+      })();
+      const variantValues = Array.isArray(variantGroup?.values) ? variantGroup.values : [];
+      let variantValueIndex = requestedConfig?.variant_value_index;
+      if (!Number.isFinite(Number(variantValueIndex))) {
+        variantValueIndex = variantGroup?.default_value_index;
+      }
+      if (!Number.isFinite(Number(variantValueIndex))) {
+        variantValueIndex = variantValues.length ? 0 : null;
+      }
+      if (variantValues.length && Number.isFinite(Number(variantValueIndex))) {
+        variantValueIndex = Math.max(0, Math.min(Number(variantValueIndex), variantValues.length - 1));
+      } else if (!Number.isFinite(Number(variantValueIndex))) {
+        variantValueIndex = null;
+      }
+      const variantLabel = Number.isFinite(Number(variantValueIndex)) && variantValues[Number(variantValueIndex)] != null
+        ? String(variantValues[Number(variantValueIndex)] || "").trim()
+        : "";
+      const variantGroupId = Number(variantGroup?.id || variantGroup?.variant_group_id || 0);
+      const variantGroupTitle = String(variantGroup?.title || variantGroup?.title_label || "").trim();
+      const variantUnit = String(
+        variantGroup?.unit_short_title || variantGroup?.unit_title || variantGroup?.unit_code || ""
+      ).trim();
+
+      const ingredientQty = new Map();
+      ingredientsCatalog.forEach((ingredient) => {
+        const ingredientId = Number(ingredient?.ingredient_id || 0);
+        if (!(ingredientId > 0)) return;
+        ingredientQty.set(ingredientId, Number(ingredient?.quantity ?? 0) || 0);
+      });
+      (Array.isArray(requestedConfig?.ingredients) ? requestedConfig.ingredients : []).forEach((ingredient) => {
+        const ingredientId = Number(ingredient?.ingredient_id || 0);
+        if (!(ingredientId > 0)) return;
+        ingredientQty.set(ingredientId, Number(ingredient?.qty ?? ingredient?.quantity ?? 0) || 0);
+      });
+
+      const changedIngredients = ingredientsCatalog
+        .map((ingredient) => {
+          const ingredientId = Number(ingredient?.ingredient_id || 0);
+          if (!(ingredientId > 0)) return null;
+          const baseQty = Number(ingredient?.quantity ?? 0) || 0;
+          const currentQty = Number(ingredientQty.get(ingredientId) ?? baseQty);
+          if (Math.abs(currentQty - baseQty) < 0.0001) return null;
+          return {
+            ingredient_id: ingredientId,
+            ingredient_name: String(ingredient?.ingredient_name || ingredient?.name || "").trim(),
+            name: String(ingredient?.ingredient_name || ingredient?.name || "").trim(),
+            qty: currentQty,
+            quantity: currentQty,
+            unit_id: ingredient?.unit_id != null ? Number(ingredient.unit_id) : null,
+            unit: String(ingredient?.unit_short_title || ingredient?.unit_title || ingredient?.unit_code || "").trim(),
+            unit_label: String(ingredient?.unit_short_title || ingredient?.unit_title || ingredient?.unit_code || "").trim(),
+          };
+        })
+        .filter(Boolean);
+
+      const optionItems = (Array.isArray(requestedConfig?.options) ? requestedConfig.options : [])
+        .map((option) => {
+          const optionId = Number(option?.id || 0);
+          if (!(optionId > 0)) return null;
+          let optionMeta = null;
+          let optionGroupId = Number(option?.group_id || option?.option_group_id || 0) || null;
+          optionGroups.some((group) => {
+            const groupId = Number(group?.group_id || group?.id || 0) || null;
+            const details = groupId ? state.optionGroupDetails.get(groupId) : null;
+            const items = Array.isArray(details?.items) ? details.items : [];
+            const found = items.find((entry) => Number(entry?.id || entry?.option_item_id || 0) === optionId) || null;
+            if (found) {
+              optionMeta = found;
+              if (!optionGroupId && groupId) optionGroupId = groupId;
+              return true;
+            }
+            return false;
+          });
+          const selectedVariantIndex = Number.isFinite(Number(option?.variant_value_index))
+            ? Number(option.variant_value_index)
+            : getOptionItemDefaultVariantIndex(optionMeta);
+          const optionPrice = roundPrice(
+            Number(getOptionItemBasePrice(optionMeta) || 0)
+            + (
+              Number.isFinite(Number(selectedVariantIndex))
+                ? Number(getOptionItemVariantDiff(optionMeta, Number(selectedVariantIndex)) || 0)
+                : 0
+            )
+          );
+          return {
+            id: optionId,
+            qty: Math.max(1, Number(option?.qty ?? option?.quantity ?? 1) || 1),
+            title: String(optionMeta?.name || optionMeta?.product_name || "").trim(),
+            price: optionPrice,
+            group_id: optionGroupId,
+            target_product_id: Number(option?.target_product_id || option?.product_id || 0) || null,
+            product_id: Number(option?.target_product_id || option?.product_id || 0) || null,
+            variant_group_id: Number(option?.variant_group_id || 0) || null,
+            variant_value_index: Number.isFinite(Number(option?.variant_value_index))
+              ? Number(option.variant_value_index)
+              : null,
+            variant_label: Number.isFinite(Number(selectedVariantIndex))
+              ? String(formatOptionVariantLabel(optionMeta, Number(selectedVariantIndex)) || "").trim()
+              : "",
+          };
+        })
+        .filter(Boolean);
+
+      const optionTotal = optionItems.reduce((sum, option) => (
+        sum + (Number(option?.price || 0) * Math.max(1, Number(option?.qty ?? option?.quantity ?? 1) || 1))
+      ), 0);
+
+      let resolvedUnitPrice = Array.isArray(variants) && variants.length
+        ? Number(getVariantUnitPriceByBase(product, variants, Number.isFinite(Number(variantValueIndex)) ? Number(variantValueIndex) : 0, Number(product?.price || source?.price || 0)) || 0)
+        : Number(product?.price || source?.price || 0);
+      resolvedUnitPrice += optionTotal;
+      ingredientsCatalog.forEach((ingredient) => {
+        const ingredientId = Number(ingredient?.ingredient_id || 0);
+        if (!(ingredientId > 0)) return;
+        const currentQty = Number(ingredientQty.get(ingredientId) ?? Number(ingredient?.quantity ?? 0) ?? 0);
+        const baseQty = Number(ingredient?.quantity ?? 0) || 0;
+        const ingredientBaseQty = ingredient?.ingredient_base_qty != null && Number(ingredient.ingredient_base_qty) > 0
+          ? Number(ingredient.ingredient_base_qty)
+          : 1;
+        const ingredientPrice = Number(ingredient?.ingredient_price || 0);
+        const catalogBasePrice = ingredientBaseQty > 0 && ingredientPrice > 0
+          ? ingredientPrice / ingredientBaseQty
+          : (ingredientPrice > 0 ? ingredientPrice : 0);
+        const pricePerUnit = ingredient?.price_override != null && Number(ingredient.price_override) >= 0
+          ? Number(ingredient.price_override)
+          : catalogBasePrice;
+        const currentQtyInBase = getQtyInBase(ingredient, currentQty);
+        const baseQtyInBase = getQtyInBase(ingredient, baseQty);
+        const diff = (currentQtyInBase != null && baseQtyInBase != null && Number.isFinite(pricePerUnit))
+          ? pricePerUnit * (currentQtyInBase - baseQtyInBase)
+          : (Number.isFinite(pricePerUnit) ? (currentQty - baseQty) * pricePerUnit : 0);
+        resolvedUnitPrice += diff;
+      });
+      resolvedUnitPrice = Math.max(0, roundPrice(resolvedUnitPrice));
+
+      const normalizedConfig = {
+        type: "product",
+        product_id: productId,
+        variant_group_id: variantGroupId > 0 ? variantGroupId : null,
+        variant_value_index: Number.isFinite(Number(variantValueIndex)) ? Number(variantValueIndex) : null,
+        options: optionItems.map((option) => ({
+          id: Number(option?.id || 0),
+          qty: Math.max(1, Number(option?.qty ?? option?.quantity ?? 1) || 1),
+          group_id: Number(option?.group_id || 0) || null,
+          target_product_id: Number(option?.target_product_id || option?.product_id || 0) || null,
+          variant_group_id: Number(option?.variant_group_id || 0) || null,
+          variant_value_index: Number.isFinite(Number(option?.variant_value_index))
+            ? Number(option.variant_value_index)
+            : null,
+        })),
+        ingredients: ingredientsCatalog
+          .map((ingredient) => {
+            const ingredientId = Number(ingredient?.ingredient_id || 0);
+            if (!(ingredientId > 0)) return null;
+            return {
+              ingredient_id: ingredientId,
+              qty: Number(ingredientQty.get(ingredientId) ?? Number(ingredient?.quantity ?? 0) ?? 0),
+            };
+          })
+          .filter(Boolean),
+      };
+
+      next.name = String(source?.name || source?.title || product?.name || "").trim() || "Товар";
+      next.title = String(source?.title || next.name).trim() || next.name;
+      next.description_short = String(source?.description_short || product?.description_short || "").trim();
+      next.photos = Array.isArray(source?.photos) && source.photos.length ? source.photos : getRightOrderBenefitSafePhotos(product);
+      next.photo_url = String(source?.photo_url || next.photos?.[0] || "").trim() || null;
+      next.price = resolvedUnitPrice;
+      next.line_total = resolvedUnitPrice;
+      next.option_items = optionItems;
+      next.option_item_ids = optionItems.map((option) => Number(option?.id || 0)).filter((id) => id > 0);
+      next.options = optionItems;
+      next.ingredients = changedIngredients;
+      next.ingredients_display = changedIngredients;
+      next.variant_group_id = normalizedConfig.variant_group_id;
+      next.variant_value_index = normalizedConfig.variant_value_index;
+      next.variant_label = variantLabel;
+      next.variant_group_title = variantGroupTitle;
+      next.variant_unit = variantUnit;
+      next.variants = variantLabel
+        ? [{
+            variant_group_id: normalizedConfig.variant_group_id,
+            variant_value_index: normalizedConfig.variant_value_index,
+            group_title: variantGroupTitle,
+            value: variantLabel,
+            label: variantLabel,
+            unit: variantUnit,
+          }]
+        : [];
+      next.product_config = normalizedConfig;
+      const displayLines = [];
+      if (variantLabel) {
+        displayLines.push([variantGroupTitle, variantLabel, variantUnit].filter(Boolean).join(" ").trim());
+      }
+      changedIngredients.forEach((ingredient) => {
+        const line = formatRightOrderBenefitIngredientLine(ingredient);
+        if (line) displayLines.push(line);
+      });
+      if (!displayLines.length && configMode === "exact") {
+        displayLines.push("Только выбранный состав");
+      }
+      next.config_display_lines = displayLines;
+      if (!displayLines.length && configMode === "any" && !requestedConfig && !forceDefaultConfig) {
+        next.config_note = buildRightOrderBenefitAnyConfigText();
+        next.config_display_lines = [next.config_note];
+      }
+      return next;
+    } catch (error) {
+      console.warn("Failed to resolve right-order benefit product config:", productId, error);
+      if (configMode === "any" && !requestedConfig) {
+        next.config_note = buildRightOrderBenefitAnyConfigText();
+        next.config_display_lines = [next.config_note];
+      }
+      return next;
+    }
+  }
+
+  function bindRightOrderHorizontalTrack(track) {
+    if (!track || track.dataset.progressTrackBound === "1") return;
+
+    const dragThresholdPx = 8;
+    let pointerId = null;
+    let startX = 0;
+    let startY = 0;
+    let startLeft = 0;
+    let isMouseDrag = false;
+    let isDragging = false;
+    let suppressClickUntil = 0;
+
+    const hasOverflow = () => track.scrollWidth > track.clientWidth + 1;
+    const markSuppressClick = () => {
+      suppressClickUntil = Date.now() + 280;
+    };
+    const finishPointer = (event) => {
+      if (pointerId == null) return;
+      if (event && event.pointerId !== pointerId) return;
+      if (isMouseDrag) {
+        track.classList.remove("is-dragging");
+        try {
+          track.releasePointerCapture(pointerId);
+        } catch {}
+      }
+      pointerId = null;
+      isMouseDrag = false;
+      isDragging = false;
+    };
+
+    track.addEventListener("pointerdown", (event) => {
+      if (!event) return;
+      if (event.pointerType === "mouse" && event.button !== 0) return;
+      if (!hasOverflow()) return;
+      pointerId = event.pointerId;
+      startX = Number(event.clientX || 0);
+      startY = Number(event.clientY || 0);
+      startLeft = Number(track.scrollLeft || 0);
+      isMouseDrag = event.pointerType === "mouse";
+      isDragging = false;
+      if (isMouseDrag) {
+        track.classList.add("is-dragging");
+        try {
+          track.setPointerCapture(pointerId);
+        } catch {}
+      }
+    });
+
+    track.addEventListener("pointermove", (event) => {
+      if (pointerId == null || event.pointerId !== pointerId) return;
+      const deltaX = Number(event.clientX || 0) - startX;
+      const deltaY = Number(event.clientY || 0) - startY;
+      const absDeltaX = Math.abs(deltaX);
+      if (!isDragging) {
+        if (absDeltaX < dragThresholdPx) return;
+        if (!isMouseDrag && absDeltaX <= Math.abs(deltaY)) return;
+        isDragging = true;
+      }
+      markSuppressClick();
+      if (!isMouseDrag) return;
+      event.preventDefault();
+      track.scrollLeft = startLeft - deltaX;
+    });
+
+    track.addEventListener("pointerup", finishPointer);
+    track.addEventListener("pointercancel", finishPointer);
+    track.addEventListener("lostpointercapture", finishPointer);
+
+    track.addEventListener("wheel", (event) => {
+      if (!hasOverflow()) return;
+      const deltaX = Number(event.deltaX || 0);
+      const deltaY = Number(event.deltaY || 0);
+      const primaryDelta = Math.abs(deltaX) > Math.abs(deltaY) ? deltaX : deltaY;
+      if (!Number.isFinite(primaryDelta) || Math.abs(primaryDelta) < 0.5) return;
+      const maxScrollLeft = Math.max(0, track.scrollWidth - track.clientWidth);
+      const currentLeft = Number(track.scrollLeft || 0);
+      const nextLeft = Math.max(0, Math.min(maxScrollLeft, currentLeft + primaryDelta));
+      if (Math.abs(nextLeft - currentLeft) < 0.5) return;
+      event.preventDefault();
+      markSuppressClick();
+      track.scrollLeft = nextLeft;
+    }, { passive: false });
+
+    track.addEventListener("click", (event) => {
+      if (suppressClickUntil <= Date.now()) return;
+      event.preventDefault();
+      event.stopPropagation();
+      suppressClickUntil = 0;
+    }, true);
+
+    track.dataset.progressTrackBound = "1";
+  }
+
+  function isRightOrderCompletedCustomerLimitPromoBenefit(item) {
+    const source = String(item?.source || "").trim().toLowerCase();
+    if (source !== "promo_code" && source !== "reward_promo") return false;
+    const disabledReasonCode = String(item?.disabled_reason_code || "").trim().toUpperCase();
+    return disabledReasonCode === "PROMO_CUSTOMER_LIMIT_REACHED"
+      || disabledReasonCode === "PROMO_LIMIT_REACHED";
+  }
+
+  function isRightOrderCompletedCustomerLimitDiscountBenefit(item) {
+    const source = String(item?.source || "").trim().toLowerCase();
+    return (source === "discount" || source === "reward_discount")
+      && String(item?.disabled_reason_code || "").trim().toUpperCase() === "DISCOUNT_CUSTOMER_LIMIT_REACHED";
+  }
+
+  function formatRightOrderBenefitsDate(value) {
+    if (!value) return "";
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return "";
+    return parsed.toLocaleDateString("ru-RU");
+  }
+
+  function buildRightOrderBenefitCompletedDiscountCard(item) {
+    return {
+      id: Number(item?.id || 0) || null,
+      kind: "completed",
+      source_kind: "discount",
+      title: String(item?.title || "").trim() || "Скидка",
+      description: String(item?.description || "").trim(),
+      badge_text: String(item?.badge_text || "").trim(),
+      status_text: "Завершён",
+      apply_scope_text: String(item?.disabled_reason || "").trim() || String(item?.apply_scope_text || "").trim(),
+      expires_at: item?.expires_at || null,
+      completed_at: item?.completed_at || null,
+    };
+  }
+
+  function buildRightOrderBenefitCompletedPromoCard(item) {
+    const code = String(item?.code || "").trim();
+    const promoTitle = String(item?.title || "").trim();
+    const description = promoTitle && code && promoTitle !== code
+      ? promoTitle
+      : String(item?.description || "").trim();
+    return {
+      id: Number(item?.id || 0) || null,
+      kind: "completed",
+      source_kind: "promo_code",
+      title: code || promoTitle || "Промокод",
+      description,
+      badge_text: String(item?.badge_text || "").trim(),
+      status_text: "Завершён",
+      apply_scope_text: String(item?.disabled_reason || "").trim() || String(item?.apply_scope_text || "").trim(),
+      expires_at: item?.expires_at || null,
+      completed_at: item?.completed_at || null,
+    };
+  }
+
+  function isRightOrderGiftBenefitVisible(item) {
+    const products = getRightOrderBenefitGiftProducts(item);
+    return Number(item?.reward_id || item?.id || 0) > 0
+      && products.length > 0
+      && item?.is_receivable !== false;
+  }
+
+  function getRightOrderBenefitsRenderData(previewData) {
+    const data = previewData && typeof previewData === "object" ? previewData : {};
+    const previewMode = normalizeRightOrderBenefitsMode(data?.mode);
+    const discountCardsRaw = Array.isArray(data?.discounts) ? data.discounts.slice() : [];
+    const discountCards = [];
+    const promoCardsRaw = Array.isArray(data?.promo_codes) ? data.promo_codes.slice() : [];
+    const promoCards = [];
+    const completedCards = [];
+
+    discountCardsRaw.forEach((entry) => {
+      if (previewMode !== "all" && isRightOrderCompletedCustomerLimitDiscountBenefit(entry)) {
+        completedCards.push(buildRightOrderBenefitCompletedDiscountCard(entry));
+        return;
+      }
+      discountCards.push(entry);
+    });
+
+    promoCardsRaw.forEach((entry) => {
+      if (previewMode !== "all" && isRightOrderCompletedCustomerLimitPromoBenefit(entry)) {
+        completedCards.push(buildRightOrderBenefitCompletedPromoCard(entry));
+        return;
+      }
+      promoCards.push(entry);
+    });
+
+    if (Array.isArray(data?.completed)) {
+      completedCards.push(...data.completed);
+    }
+
+    return {
+      discounts: discountCards,
+      promo_codes: promoCards,
+      gifts: (Array.isArray(data?.gifts) ? data.gifts : []).filter((item) => isRightOrderGiftBenefitVisible(item)),
+      progress: Array.isArray(data?.progress) ? data.progress : [],
+      completed: completedCards,
+    };
+  }
+
+  function createRightOrderBenefitsSection(title, emptyText, opts = {}) {
+    const section = document.createElement("section");
+    section.className = "shop-checkout-benefits-section";
+
+    const head = document.createElement("div");
+    head.className = "shop-checkout-benefits-section-head";
+
+    const titleEl = document.createElement("div");
+    titleEl.className = "shop-checkout-benefits-section-title";
+    titleEl.textContent = title;
+    head.appendChild(titleEl);
+
+    const countEl = document.createElement("div");
+    countEl.className = "shop-checkout-benefits-section-count";
+    countEl.textContent = "0";
+    head.appendChild(countEl);
+    section.appendChild(head);
+
+    const list = document.createElement("div");
+    list.className = "shop-checkout-benefits-list";
+    if (opts?.horizontal === true) {
+      list.classList.add("shop-checkout-benefits-list--horizontal", "is-gifts");
+    }
+    section.appendChild(list);
+
+    const empty = document.createElement("div");
+    empty.className = "shop-profile-card shop-checkout-benefits-empty hidden";
+    empty.textContent = emptyText;
+    section.appendChild(empty);
+
+    return { section, list, countEl, empty };
+  }
+
+  function setRightOrderBenefitsSectionItems(sectionRef, items, renderItem) {
+    if (!sectionRef?.list || !sectionRef?.empty || !sectionRef?.countEl) return;
+    const rows = Array.isArray(items) ? items : [];
+    sectionRef.list.innerHTML = "";
+    sectionRef.countEl.textContent = String(rows.length);
+    sectionRef.empty.classList.toggle("hidden", rows.length > 0);
+    rows.forEach((item) => {
+      const node = typeof renderItem === "function" ? renderItem(item) : null;
+      if (node) sectionRef.list.appendChild(node);
+    });
+  }
+
+  function renderRightOrderBenefitDiscountCard(item, { onToggle, onOpenDetails } = {}) {
+    const isSelected = item?.is_selected === true;
+    const canToggle = isSelected || isRightOrderBenefitSelectable(item);
+    const card = document.createElement("div");
+    card.className = "shop-profile-card shop-profile-discount-card shop-checkout-benefit-discount-card";
+    if (isSelected) card.classList.add("is-selected");
+    if (!canToggle && !isSelected) card.classList.add("is-disabled");
+    if (typeof onOpenDetails === "function" || typeof onToggle === "function") {
+      card.tabIndex = 0;
+      card.setAttribute("role", "button");
+      const openDetails = () => {
+        if (typeof onOpenDetails === "function") {
+          onOpenDetails(item);
+          return;
+        }
+        if (typeof onToggle === "function" && canToggle) {
+          void onToggle(item);
+        }
+      };
+      card.addEventListener("click", () => {
+        openDetails();
+      });
+      card.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          openDetails();
+        }
+      });
+    }
+
+    const head = document.createElement("div");
+    head.className = "shop-checkout-benefit-card-head";
+    const title = document.createElement("div");
+    title.className = "shop-profile-discount-title";
+    title.textContent = String(item?.title || "Скидка");
+    head.appendChild(title);
+    if (isRightOrderBenefitStackable(item)) {
+      const meta = document.createElement("div");
+      meta.className = "shop-checkout-benefit-discount-meta";
+      const badge = document.createElement("span");
+      badge.className = "shop-checkout-benefit-stackable-badge";
+      badge.appendChild(createRightOrderBenefitIcon("fa-link"));
+      meta.appendChild(badge);
+      head.appendChild(meta);
+    }
+    card.appendChild(head);
+
+    const primaryRow = document.createElement("div");
+    primaryRow.className = "shop-checkout-benefit-primary-row";
+    const valueEl = document.createElement("div");
+    valueEl.className = "shop-checkout-benefit-main-value";
+    valueEl.textContent = String(item?.badge_text || "Скидка");
+    primaryRow.appendChild(valueEl);
+
+    const actionBtn = document.createElement("button");
+    actionBtn.type = "button";
+    actionBtn.className = "shop-checkout-benefit-apply-btn";
+    actionBtn.textContent = isSelected ? "Выбрано" : "Применить";
+    actionBtn.classList.add(isSelected ? "is-selected" : (canToggle ? "is-ready" : "is-conflict"));
+    actionBtn.disabled = !canToggle || typeof onToggle !== "function";
+    actionBtn.addEventListener("click", async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (typeof onToggle !== "function") return;
+      await onToggle(item);
+    });
+    primaryRow.appendChild(actionBtn);
+
+    card.appendChild(primaryRow);
+    if (item?.is_applicable !== true && item?.disabled_reason) {
+      const note = document.createElement("div");
+      note.className = "shop-checkout-benefit-disabled-reason";
+      note.textContent = String(item.disabled_reason);
+      card.appendChild(note);
+    }
+    return card;
+  }
+
+  function renderRightOrderBenefitPromoCard(item, { onToggle, onOpenDetails } = {}) {
+    const normalizedCode = String(item?.code || "").trim();
+    const isSelected = item?.is_selected === true;
+    const actionMode = String(item?.action_mode || "select").trim().toLowerCase() || "select";
+    const canToggle = actionMode === "redeem_reward"
+      ? item?.is_applicable === true
+      : (isSelected || isRightOrderBenefitSelectable(item));
+    const card = document.createElement("div");
+    card.className = "shop-profile-card shop-checkout-benefit-promo-card";
+    if (isSelected) card.classList.add("is-selected");
+    if (!canToggle && !isSelected) card.classList.add("is-disabled");
+    if (typeof onOpenDetails === "function" || typeof onToggle === "function") {
+      card.tabIndex = 0;
+      card.setAttribute("role", "button");
+      const openDetails = () => {
+        if (typeof onOpenDetails === "function") {
+          onOpenDetails(item);
+          return;
+        }
+        if (typeof onToggle === "function" && canToggle) {
+          void onToggle(item);
+        }
+      };
+      card.addEventListener("click", () => {
+        openDetails();
+      });
+      card.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          openDetails();
+        }
+      });
+    }
+
+    const head = document.createElement("div");
+    head.className = "shop-checkout-benefit-card-head";
+    const title = document.createElement("div");
+    title.className = "shop-profile-discount-title";
+    title.textContent = String(item?.title || "Промокод");
+    head.appendChild(title);
+    if (isRightOrderBenefitStackable(item)) {
+      const meta = document.createElement("div");
+      meta.className = "shop-checkout-benefit-discount-meta";
+      const badge = document.createElement("span");
+      badge.className = "shop-checkout-benefit-stackable-badge";
+      badge.appendChild(createRightOrderBenefitIcon("fa-link"));
+      meta.appendChild(badge);
+      head.appendChild(meta);
+    }
+    card.appendChild(head);
+
+    const primaryRow = document.createElement("div");
+    primaryRow.className = "shop-checkout-benefit-primary-row";
+    const codeEl = document.createElement("div");
+    codeEl.className = "shop-checkout-benefit-main-value is-code";
+    codeEl.textContent = normalizedCode || "-";
+    primaryRow.appendChild(codeEl);
+
+    const actionBtn = document.createElement("button");
+    actionBtn.type = "button";
+    actionBtn.className = "shop-checkout-benefit-apply-btn";
+    actionBtn.textContent = actionMode === "redeem_reward"
+      ? "Получить"
+      : (isSelected ? "Выбрано" : "Применить");
+    actionBtn.classList.add(isSelected ? "is-selected" : (canToggle ? "is-ready" : "is-conflict"));
+    actionBtn.disabled = !canToggle || typeof onToggle !== "function";
+    actionBtn.addEventListener("click", async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (typeof onToggle !== "function") return;
+      await onToggle(item);
+    });
+    primaryRow.appendChild(actionBtn);
+    card.appendChild(primaryRow);
+
+    if (item?.is_applicable !== true && item?.disabled_reason) {
+      const note = document.createElement("div");
+      note.className = "shop-checkout-benefit-disabled-reason";
+      note.textContent = String(item.disabled_reason);
+      card.appendChild(note);
+    }
+
+    return card;
+  }
+
+  function renderRightOrderBenefitGiftCard(item, { onReceive, onOpen } = {}) {
+    const products = getRightOrderBenefitGiftProducts(item);
+    const primaryProduct = products[0] || null;
+    const productCount = Math.max(0, Number(item?.product_count || products.length || 0));
+    const titleText = productCount === 1
+      ? (String(primaryProduct?.title || item?.title || "").trim() || "Подарок")
+      : (String(item?.title || "").trim() || "Подарок");
+    const photoUrl = String(item?.photo_url || primaryProduct?.photo_url || "").trim();
+    const canReceive = typeof onReceive === "function"
+      && Number(item?.reward_id || item?.id || 0) > 0
+      && products.length > 0
+      && item?.is_receivable !== false;
+
+    const card = document.createElement("div");
+    card.className = "shop-profile-card shop-checkout-benefit-gift-card";
+    if (typeof onOpen === "function") {
+      card.tabIndex = 0;
+      card.setAttribute("role", "button");
+      card.addEventListener("click", () => {
+        onOpen(item);
+      });
+      card.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onOpen(item);
+        }
+      });
+    }
+
+    const media = document.createElement("div");
+    media.className = "shop-checkout-benefit-gift-media";
+    if (photoUrl) {
+      const image = document.createElement("img");
+      image.src = photoUrl;
+      image.alt = titleText;
+      media.appendChild(image);
+    } else {
+      media.appendChild(createRightOrderBenefitIcon(getRightOrderBenefitRewardIconName("gift")));
+    }
+    if (productCount > 1) {
+      const countBadge = document.createElement("span");
+      countBadge.className = "shop-checkout-benefit-gift-count";
+      countBadge.textContent = String(productCount);
+      media.appendChild(countBadge);
+    }
+    card.appendChild(media);
+
+    const title = document.createElement("div");
+    title.className = "shop-checkout-benefit-gift-title";
+    title.textContent = titleText;
+    card.appendChild(title);
+
+    const actionBtn = document.createElement("button");
+    actionBtn.type = "button";
+    actionBtn.className = "shop-checkout-benefit-gift-action";
+    actionBtn.textContent = "Получить";
+    if (canReceive) actionBtn.classList.add("is-ready");
+    actionBtn.disabled = !canReceive;
+    actionBtn.addEventListener("click", async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!canReceive) return;
+      await onReceive(item);
+    });
+    card.appendChild(actionBtn);
+
+    return card;
+  }
+
+  function renderRightOrderBenefitProgressCard(item, { onClaim, onOpenDetails } = {}) {
+    function renderRightOrderBenefitRewardSlot(cardItem) {
+      const rewardSlot = cardItem?.progress_visual?.reward_slot && typeof cardItem.progress_visual.reward_slot === "object"
+        ? cardItem.progress_visual.reward_slot
+        : {};
+      const rewardPreview = cardItem?.reward_preview && typeof cardItem.reward_preview === "object"
+        ? cardItem.reward_preview
+        : {};
+      const rewardKind = String(
+        rewardSlot?.icon_kind
+        || rewardSlot?.kind
+        || rewardPreview?.icon_kind
+        || rewardPreview?.kind
+        || cardItem?.reward_kind
+        || ""
+      ).trim().toLowerCase() || "gift";
+      const rewardTitle = String(rewardSlot?.title || rewardPreview?.title || cardItem?.apply_scope_text || "").trim()
+        || getRightOrderBenefitRewardKindLabel(rewardKind);
+      const slotEl = document.createElement("div");
+      slotEl.className = "shop-checkout-benefit-progress-reward is-static";
+      slotEl.title = rewardTitle;
+      slotEl.setAttribute("aria-label", rewardTitle);
+      if (rewardSlot?.is_claimable === true || cardItem?.is_claimable === true) {
+        slotEl.classList.add("is-claimable");
+      }
+
+      const media = document.createElement("span");
+      media.className = "shop-checkout-benefit-progress-reward-media";
+      const rewardPhotoUrl = String(
+        rewardSlot?.photo_url
+        || rewardPreview?.photo_url
+        || (Array.isArray(rewardPreview?.products) && rewardPreview.products.length === 1
+            ? rewardPreview.products[0]?.photo_url
+            : "")
+      ).trim();
+      if (rewardPhotoUrl) {
+        const image = document.createElement("img");
+        image.src = rewardPhotoUrl;
+        image.alt = rewardTitle;
+        media.appendChild(image);
+      } else {
+        media.appendChild(createRightOrderBenefitIcon(getRightOrderBenefitRewardIconName(rewardKind)));
+      }
+      slotEl.appendChild(media);
+      return slotEl;
+    }
+
+    function renderRightOrderBenefitProgressVisual(cardItem) {
+      const progressVisual = cardItem?.progress_visual;
+      if (!progressVisual || typeof progressVisual !== "object") return null;
+
+      if (String(progressVisual?.mode || "").trim() === "amount") {
+        const amountLayout = document.createElement("div");
+        amountLayout.className = "shop-checkout-benefit-progress-amount-layout";
+
+        const amountWrap = document.createElement("div");
+        amountWrap.className = "shop-checkout-benefit-progress-amount";
+
+        const progressBar = document.createElement("div");
+        progressBar.className = "shop-checkout-benefit-progress-bar";
+
+        const progressFill = document.createElement("div");
+        progressFill.className = "shop-checkout-benefit-progress-fill";
+        progressFill.style.width = `${Math.max(0, Math.min(100, Number(progressVisual?.progress_ratio || cardItem?.progress_ratio || 0) * 100))}%`;
+
+        progressBar.appendChild(progressFill);
+        amountWrap.appendChild(progressBar);
+        amountLayout.appendChild(amountWrap);
+        return amountLayout;
+      }
+
+      const slots = Array.isArray(progressVisual?.slots) ? progressVisual.slots : [];
+      if (!slots.length) return null;
+
+      const visualWrap = document.createElement("div");
+      visualWrap.className = "shop-checkout-benefit-progress-visual";
+
+      const slotsWrap = document.createElement("div");
+      slotsWrap.className = "shop-checkout-benefit-progress-slots";
+      if (String(progressVisual?.mode || "").trim() === "orders") {
+        slotsWrap.classList.add("is-orders");
+      } else {
+        slotsWrap.classList.add("is-items");
+      }
+
+      slots.forEach((slot) => {
+        const slotEl = document.createElement("div");
+        slotEl.className = "shop-checkout-benefit-progress-slot";
+        const normalizedMode = String(progressVisual?.mode || slot?.kind || "").trim();
+        const isOrderSlot = normalizedMode === "orders" || String(slot?.kind || "").trim() === "order";
+        slotEl.classList.add(isOrderSlot ? "is-order" : "is-item");
+        slotEl.classList.add(slot?.is_filled === true ? "is-filled" : "is-empty");
+
+        const slotTitle = String(slot?.title || "").trim();
+        if (slotTitle) {
+          slotEl.title = slotTitle;
+          slotEl.setAttribute("aria-label", slotTitle);
+        }
+
+        const media = document.createElement("span");
+        media.className = "shop-checkout-benefit-progress-slot-media";
+        if (slot?.is_filled === true && String(slot?.photo_url || "").trim()) {
+          const image = document.createElement("img");
+          image.src = String(slot.photo_url || "").trim();
+          image.alt = slotTitle || "Покупка";
+          media.appendChild(image);
+        } else {
+          const placeholder = document.createElement("span");
+          placeholder.className = "shop-checkout-benefit-progress-slot-placeholder";
+          if (isOrderSlot) {
+            placeholder.appendChild(createRightOrderBenefitIcon("fa-receipt"));
+          } else if (slot?.is_filled === true) {
+            placeholder.appendChild(createRightOrderBenefitIcon("fa-check"));
+          } else {
+            placeholder.textContent = "+";
+          }
+          media.appendChild(placeholder);
+        }
+
+        slotEl.appendChild(media);
+        slotsWrap.appendChild(slotEl);
+      });
+
+      bindRightOrderHorizontalTrack(slotsWrap);
+      visualWrap.appendChild(slotsWrap);
+      return visualWrap;
+    }
+
+    const card = document.createElement("div");
+    card.className = "shop-profile-card shop-profile-discount-card shop-checkout-benefit-progress-card";
+    if (item?.is_claimable === true) card.classList.add("is-claimable");
+    if (item?.is_applicable === false) card.classList.add("is-disabled");
+    if (typeof onOpenDetails === "function") {
+      card.tabIndex = 0;
+      card.setAttribute("role", "button");
+      card.addEventListener("click", () => {
+        onOpenDetails(item);
+      });
+      card.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onOpenDetails(item);
+        }
+      });
+    }
+
+    const layout = document.createElement("div");
+    layout.className = "shop-checkout-benefit-progress-layout";
+
+    const rewardPane = document.createElement("div");
+    rewardPane.className = "shop-checkout-benefit-progress-reward-pane";
+    const rewardSlot = renderRightOrderBenefitRewardSlot(item);
+    if (rewardSlot) rewardPane.appendChild(rewardSlot);
+
+    const canClaim = item?.is_claimable === true && typeof onClaim === "function";
+    const claimBtn = document.createElement("button");
+    claimBtn.type = "button";
+    claimBtn.className = "shop-checkout-benefit-progress-claim";
+    claimBtn.textContent = "Забрать";
+    if (canClaim) claimBtn.classList.add("is-ready");
+    claimBtn.disabled = !canClaim;
+    claimBtn.addEventListener("click", async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!canClaim) return;
+      await onClaim(item);
+    });
+    rewardPane.appendChild(claimBtn);
+    layout.appendChild(rewardPane);
+
+    const main = document.createElement("div");
+    main.className = "shop-checkout-benefit-progress-main";
+    const header = document.createElement("div");
+    header.className = "shop-profile-discount-header";
+    const title = document.createElement("div");
+    title.className = "shop-profile-discount-title";
+    title.textContent = String(item?.title || "Накопление");
+    header.appendChild(title);
+    main.appendChild(header);
+
+    const progressWrap = document.createElement("div");
+    progressWrap.className = "shop-checkout-benefit-progress-wrap";
+    const progressVisual = renderRightOrderBenefitProgressVisual(item);
+    if (progressVisual) {
+      progressWrap.appendChild(progressVisual);
+    } else {
+      const fallbackVisual = document.createElement("div");
+      fallbackVisual.className = "shop-checkout-benefit-progress-amount-layout";
+      const progressBarWrap = document.createElement("div");
+      progressBarWrap.className = "shop-checkout-benefit-progress-amount";
+      const progressBar = document.createElement("div");
+      progressBar.className = "shop-checkout-benefit-progress-bar";
+      const progressFill = document.createElement("div");
+      progressFill.className = "shop-checkout-benefit-progress-fill";
+      progressFill.style.width = `${Math.max(0, Math.min(100, Number(item?.progress_ratio || 0) * 100))}%`;
+      progressBar.appendChild(progressFill);
+      progressBarWrap.appendChild(progressBar);
+      fallbackVisual.appendChild(progressBarWrap);
+      progressWrap.appendChild(fallbackVisual);
+    }
+    main.appendChild(progressWrap);
+    layout.appendChild(main);
+
+    card.appendChild(layout);
+    if (item?.is_applicable === false && item?.disabled_reason) {
+      const note = document.createElement("div");
+      note.className = "shop-checkout-benefit-disabled-reason";
+      note.textContent = String(item.disabled_reason);
+      card.appendChild(note);
+    }
+    return card;
+  }
+
+  function renderRightOrderBenefitDisplayCard(item) {
+    const card = document.createElement("div");
+    card.className = "shop-profile-card shop-profile-discount-card shop-checkout-benefit-display-card";
+
+    const header = document.createElement("div");
+    header.className = "shop-profile-discount-header";
+    const title = document.createElement("div");
+    title.className = "shop-profile-discount-title";
+    title.textContent = String(item?.title || "Выгода");
+    header.appendChild(title);
+    const meta = document.createElement("div");
+    meta.className = "shop-checkout-benefit-discount-meta";
+    if (item?.badge_text) {
+      const badge = document.createElement("span");
+      badge.className = "sp-discount-badge";
+      badge.textContent = String(item.badge_text);
+      meta.appendChild(badge);
+    }
+    if (item?.status_text) {
+      const status = document.createElement("span");
+      status.className = "shop-checkout-benefit-status";
+      status.textContent = String(item.status_text);
+      meta.appendChild(status);
+    }
+    if (meta.children.length) header.appendChild(meta);
+    card.appendChild(header);
+
+    if (item?.description) {
+      const desc = document.createElement("div");
+      desc.className = "shop-profile-discount-desc";
+      desc.textContent = String(item.description);
+      card.appendChild(desc);
+    }
+    const details = document.createElement("div");
+    details.className = "shop-profile-discount-details";
+    if (item?.apply_scope_text) {
+      const scopeLine = document.createElement("div");
+      scopeLine.textContent = String(item.apply_scope_text);
+      details.appendChild(scopeLine);
+    }
+    const completedText = formatRightOrderBenefitsDate(item?.completed_at);
+    if (completedText) {
+      const dateLine = document.createElement("div");
+      dateLine.textContent = `Завершено ${completedText}`;
+      details.appendChild(dateLine);
+    }
+    const expiresText = formatRightOrderBenefitsDate(item?.expires_at);
+    if (expiresText) {
+      const expiresLine = document.createElement("div");
+      expiresLine.textContent = `До ${expiresText}`;
+      details.appendChild(expiresLine);
+    }
+    if (details.children.length) {
+      card.appendChild(details);
+    }
+    return card;
+  }
+
+  function appendRightOrderBenefitProductConfigLines(container, productItem) {
+    if (!container) return;
+    const lines = Array.isArray(productItem?.config_display_lines)
+      ? productItem.config_display_lines.filter((line) => String(line || "").trim())
+      : [];
+    lines.forEach((line) => {
+      const note = document.createElement("div");
+      note.className = "shop-checkout-benefit-product-config-note";
+      note.textContent = String(line);
+      container.appendChild(note);
+    });
+  }
+
+  function buildRightOrderBenefitGiftPreview(item) {
+    if (item?.reward_preview && typeof item.reward_preview === "object") {
+      return item.reward_preview;
+    }
+    const products = getRightOrderBenefitGiftProducts(item);
+    const firstProduct = products[0] || null;
+    return {
+      kind: "gift",
+      title: String(item?.title || "").trim() || "Подарок",
+      description: String(item?.description || "").trim() || String(firstProduct?.title || "").trim(),
+      badge_text: String(item?.badge_text || "").trim() || "Подарок",
+      apply_scope_text: String(item?.apply_scope_text || "").trim(),
+      photo_url: String(item?.photo_url || firstProduct?.photo_url || "").trim() || null,
+      products,
+    };
+  }
+
+  function buildRightOrderBenefitRewardPreviewContent(rewardPreview) {
+    const preview = rewardPreview && typeof rewardPreview === "object" ? rewardPreview : {};
+    const products = Array.isArray(preview?.products) ? preview.products : [];
+    const previewKind = String(preview?.kind || preview?.icon_kind || "").trim().toLowerCase() || "gift";
+
+    const wrap = document.createElement("div");
+    wrap.className = "shop-checkout-benefit-reward-preview-block";
+
+    const hero = document.createElement("div");
+    hero.className = "shop-checkout-benefit-reward-preview";
+
+    const media = document.createElement("div");
+    media.className = "shop-checkout-benefit-reward-preview-media";
+    const previewPhotoUrl = String(preview?.photo_url || "").trim();
+    if (previewPhotoUrl) {
+      const image = document.createElement("img");
+      image.src = previewPhotoUrl;
+      image.alt = String(preview?.title || "").trim() || getRightOrderBenefitRewardKindLabel(previewKind);
+      media.appendChild(image);
+    } else {
+      media.appendChild(createRightOrderBenefitIcon(getRightOrderBenefitRewardIconName(previewKind)));
+    }
+    hero.appendChild(media);
+
+    const meta = document.createElement("div");
+    meta.className = "shop-checkout-benefit-reward-preview-meta";
+
+    const title = document.createElement("div");
+    title.className = "shop-checkout-benefit-reward-preview-title";
+    title.textContent = String(preview?.title || "").trim() || getRightOrderBenefitRewardKindLabel(previewKind);
+    meta.appendChild(title);
+
+    const badge = document.createElement("div");
+    badge.className = "shop-checkout-benefit-reward-preview-badge";
+    badge.textContent = String(preview?.badge_text || "").trim() || getRightOrderBenefitRewardKindLabel(previewKind);
+    meta.appendChild(badge);
+
+    if (preview?.description) {
+      const desc = document.createElement("div");
+      desc.className = "shop-checkout-benefit-reward-preview-desc";
+      desc.textContent = String(preview.description);
+      meta.appendChild(desc);
+    }
+
+    if (preview?.apply_scope_text) {
+      const scope = document.createElement("div");
+      scope.className = "shop-checkout-benefit-reward-preview-note";
+      scope.textContent = String(preview.apply_scope_text);
+      meta.appendChild(scope);
+    }
+
+    if (String(preview?.code_preview || "").trim()) {
+      const code = document.createElement("div");
+      code.className = "shop-checkout-benefit-reward-preview-code";
+      code.textContent = String(preview.code_preview).trim();
+      meta.appendChild(code);
+    }
+
+    hero.appendChild(meta);
+    wrap.appendChild(hero);
+
+    if (products.length) {
+      const productsTitle = document.createElement("div");
+      productsTitle.className = "shop-checkout-benefit-modal-subtitle";
+      productsTitle.textContent = products.length > 1 ? "Что можно получить" : "Что будет в подарок";
+      wrap.appendChild(productsTitle);
+
+      const productsList = document.createElement("div");
+      productsList.className = "shop-checkout-benefit-reward-products";
+      products.forEach((product) => {
+        const productCard = document.createElement("div");
+        productCard.className = "shop-checkout-benefit-reward-product";
+
+        const productMedia = document.createElement("div");
+        productMedia.className = "shop-checkout-benefit-reward-product-media";
+        const productPhotoUrl = String(product?.photo_url || "").trim();
+        if (productPhotoUrl) {
+          const productImage = document.createElement("img");
+          productImage.src = productPhotoUrl;
+          productImage.alt = String(product?.title || "").trim() || "Товар";
+          productMedia.appendChild(productImage);
+        } else {
+          productMedia.appendChild(createRightOrderBenefitIcon("fa-box-open"));
+        }
+        productCard.appendChild(productMedia);
+
+        const productMeta = document.createElement("div");
+        productMeta.className = "shop-checkout-benefit-reward-product-meta";
+
+        const productTitle = document.createElement("div");
+        productTitle.className = "shop-checkout-benefit-reward-product-title";
+        productTitle.textContent = String(product?.title || "").trim() || "Товар";
+        productMeta.appendChild(productTitle);
+
+        if (Number(product?.price || 0) > 0 && typeof money === "function") {
+          const productPrice = document.createElement("div");
+          productPrice.className = "shop-checkout-benefit-reward-product-price";
+          productPrice.textContent = money(Number(product.price || 0));
+          productMeta.appendChild(productPrice);
+        }
+
+        appendRightOrderBenefitProductConfigLines(productMeta, product);
+        if (
+          Number(product?.id || product?.product_id || 0) > 0
+          && (
+            normalizeRightOrderBenefitProductConfigMode(product?.config_mode, "any") !== "any"
+            || !!product?.product_config
+            || normalizeRightOrderBenefitProductConfigMode(product?.config_mode, "any") === "any"
+          )
+        ) {
+          void resolveRightOrderBenefitConfiguredProduct(product).then((resolvedProduct) => {
+            if (!productMeta.isConnected) return;
+            const existing = productMeta.querySelectorAll(".shop-checkout-benefit-product-config-note");
+            existing.forEach((node) => node.remove());
+            const priceEl = productMeta.querySelector(".shop-checkout-benefit-reward-product-price");
+            if (priceEl && typeof money === "function" && Number(resolvedProduct?.price || 0) > 0) {
+              priceEl.textContent = money(Number(resolvedProduct.price || 0));
+            }
+            appendRightOrderBenefitProductConfigLines(productMeta, resolvedProduct);
+          }).catch(() => {});
+        }
+        productCard.appendChild(productMeta);
+        productsList.appendChild(productCard);
+      });
+      wrap.appendChild(productsList);
+    }
+
+    return wrap;
+  }
+
+  function buildRightOrderBenefitTargetProductsContent(products, titleText = "Что участвует") {
+    const items = Array.isArray(products)
+      ? products.filter((product) => Number(product?.id || product?.product_id || 0) > 0)
+      : [];
+    const wrap = document.createElement("div");
+    if (!items.length) return wrap;
+
+    const productsTitle = document.createElement("div");
+    productsTitle.className = "shop-checkout-benefit-modal-subtitle";
+    productsTitle.textContent = String(titleText || "").trim() || "Что участвует";
+    wrap.appendChild(productsTitle);
+
+    const productsList = document.createElement("div");
+    productsList.className = "shop-checkout-benefit-reward-products";
+    items.forEach((product) => {
+      const productCard = document.createElement("div");
+      productCard.className = "shop-checkout-benefit-reward-product";
+
+      const productMedia = document.createElement("div");
+      productMedia.className = "shop-checkout-benefit-reward-product-media";
+      const productPhotoUrl = String(product?.photo_url || "").trim();
+      if (productPhotoUrl) {
+        const productImage = document.createElement("img");
+        productImage.src = productPhotoUrl;
+        productImage.alt = String(product?.title || "").trim() || "Товар";
+        productMedia.appendChild(productImage);
+      } else {
+        productMedia.appendChild(createRightOrderBenefitIcon("fa-box-open"));
+      }
+      productCard.appendChild(productMedia);
+
+      const productMeta = document.createElement("div");
+      productMeta.className = "shop-checkout-benefit-reward-product-meta";
+
+      const productTitle = document.createElement("div");
+      productTitle.className = "shop-checkout-benefit-reward-product-title";
+      productTitle.textContent = String(product?.title || "").trim() || "Товар";
+      productMeta.appendChild(productTitle);
+
+      if (Number(product?.price || 0) > 0 && typeof money === "function") {
+        const productPrice = document.createElement("div");
+        productPrice.className = "shop-checkout-benefit-reward-product-price";
+        productPrice.textContent = money(Number(product.price || 0));
+        productMeta.appendChild(productPrice);
+      }
+
+      appendRightOrderBenefitProductConfigLines(productMeta, product);
+      if (
+        Number(product?.id || product?.product_id || 0) > 0
+        && (
+          normalizeRightOrderBenefitProductConfigMode(product?.config_mode, "any") !== "any"
+          || !!product?.product_config
+          || normalizeRightOrderBenefitProductConfigMode(product?.config_mode, "any") === "any"
+        )
+      ) {
+        void resolveRightOrderBenefitConfiguredProduct(product).then((resolvedProduct) => {
+          if (!productMeta.isConnected) return;
+          const existing = productMeta.querySelectorAll(".shop-checkout-benefit-product-config-note");
+          existing.forEach((node) => node.remove());
+          const priceEl = productMeta.querySelector(".shop-checkout-benefit-reward-product-price");
+          if (priceEl && typeof money === "function" && Number(resolvedProduct?.price || 0) > 0) {
+            priceEl.textContent = money(Number(resolvedProduct.price || 0));
+          }
+          appendRightOrderBenefitProductConfigLines(productMeta, resolvedProduct);
+        }).catch(() => {});
+      }
+      productCard.appendChild(productMeta);
+      productsList.appendChild(productCard);
+    });
+    wrap.appendChild(productsList);
+    return wrap;
+  }
+
+  function buildRightOrderBenefitCardDetailContent(item, {
+    primaryText = "",
+    primaryClassName = "",
+    isSelected = false,
+  } = {}) {
+    const wrap = document.createElement("div");
+    wrap.className = "shop-checkout-benefit-detail-card";
+
+    const badges = document.createElement("div");
+    badges.className = "shop-checkout-benefit-detail-badges";
+
+    if (item?.badge_text) {
+      const badge = document.createElement("span");
+      badge.className = "sp-discount-badge";
+      badge.textContent = String(item.badge_text);
+      badges.appendChild(badge);
+    }
+
+    if (item?.status_text) {
+      const status = document.createElement("span");
+      status.className = "shop-checkout-benefit-status";
+      status.textContent = String(item.status_text);
+      badges.appendChild(status);
+    }
+
+    if (isSelected) {
+      const selected = document.createElement("span");
+      selected.className = "shop-checkout-benefit-status is-selected";
+      selected.textContent = "Выбрано";
+      badges.appendChild(selected);
+    }
+
+    if (badges.children.length) wrap.appendChild(badges);
+
+    if (primaryText) {
+      const valueEl = document.createElement("div");
+      valueEl.className = "shop-checkout-benefit-detail-value";
+      if (primaryClassName) valueEl.classList.add(primaryClassName);
+      valueEl.textContent = String(primaryText);
+      wrap.appendChild(valueEl);
+    }
+
+    const info = document.createElement("div");
+    info.className = "shop-checkout-benefit-modal-info";
+
+    const appendInfoLine = (label, value) => {
+      if (!String(value || "").trim()) return;
+      const line = document.createElement("div");
+      line.className = "shop-checkout-benefit-modal-line";
+      const labelEl = document.createElement("strong");
+      labelEl.textContent = label;
+      line.appendChild(labelEl);
+      line.appendChild(document.createTextNode(" "));
+      const valueEl = document.createElement("span");
+      valueEl.textContent = String(value);
+      line.appendChild(valueEl);
+      info.appendChild(line);
+    };
+
+    appendInfoLine("Описание:", item?.description || "");
+    appendInfoLine("Условие:", item?.apply_scope_text || "");
+
+    if (Number(item?.discount_amount || 0) > 0 && typeof money === "function") {
+      appendInfoLine("Выгода:", money(Number(item.discount_amount || 0)));
+    }
+
+    const expiresText = formatRightOrderBenefitsDate(item?.expires_at);
+    if (expiresText) {
+      appendInfoLine("До:", expiresText);
+    }
+
+    if (item?.is_applicable !== true && item?.disabled_reason) {
+      appendInfoLine("Ограничение:", item.disabled_reason);
+    }
+
+    if (info.children.length) wrap.appendChild(info);
+    return wrap;
+  }
+
+  function buildRightOrderBenefitDiscountDetailContent(item) {
+    const wrap = document.createElement("div");
+    wrap.appendChild(buildRightOrderBenefitCardDetailContent(item, {
+      primaryText: String(item?.badge_text || "").trim() || "Скидка",
+      isSelected: item?.is_selected === true,
+    }));
+    const productsSection = buildRightOrderBenefitTargetProductsContent(item?.products, "Что участвует");
+    if (productsSection.childNodes.length) wrap.appendChild(productsSection);
+    return wrap;
+  }
+
+  function buildRightOrderBenefitPromoDetailContent(item) {
+    const wrap = document.createElement("div");
+    wrap.appendChild(buildRightOrderBenefitCardDetailContent(item, {
+      primaryText: String(item?.code || "").trim() || "Промокод",
+      primaryClassName: "is-code",
+      isSelected: item?.is_selected === true,
+    }));
+    const productsSection = buildRightOrderBenefitTargetProductsContent(item?.products, "Что участвует");
+    if (productsSection.childNodes.length) wrap.appendChild(productsSection);
+    return wrap;
+  }
+
+  function formatRightOrderBenefitProgressSummary(item) {
+    const rawProgressDisplayValue = item?.progress_display_value ?? item?.progress_value ?? 0;
+    const progressDisplayValue = Number(rawProgressDisplayValue || 0);
+    const thresholdValue = Number(item?.threshold_value || 0);
+    if (String(item?.progress_basis || "").trim() === "amount" && typeof money === "function") {
+      return `${money(progressDisplayValue)} / ${money(thresholdValue)}`;
+    }
+    return `${progressDisplayValue} / ${thresholdValue}`;
+  }
+
+  function getRightOrderBenefitProgressProductsData(order, progressItem) {
+    const previewData = getRightOrderBenefitsPreviewSnapshot(order, {
+      mode: getActiveRightOrderBenefitsMode(),
+      preferApplied: true,
+    });
+    const details = previewData?.details && typeof previewData.details === "object"
+      ? previewData.details
+      : null;
+    const map = details?.progress_products_by_discount_id && typeof details.progress_products_by_discount_id === "object"
+      ? details.progress_products_by_discount_id
+      : null;
+    const discountId = Number(progressItem?.discount_id || progressItem?.id || 0);
+    if (!map || !(discountId > 0)) return null;
+    return map[String(discountId)] || map[discountId] || null;
+  }
+
+  function buildRightOrderBenefitProgressDetailContent(order, item) {
+    const wrap = document.createElement("div");
+
+    const info = document.createElement("div");
+    info.className = "shop-checkout-benefit-modal-info";
+    const appendInfoLine = (label, value) => {
+      if (!String(value || "").trim()) return;
+      const line = document.createElement("div");
+      line.className = "shop-checkout-benefit-modal-line";
+      const labelEl = document.createElement("strong");
+      labelEl.textContent = label;
+      line.appendChild(labelEl);
+      line.appendChild(document.createTextNode(" "));
+      const valueEl = document.createElement("span");
+      valueEl.textContent = String(value);
+      line.appendChild(valueEl);
+      info.appendChild(line);
+    };
+    appendInfoLine("Прогресс:", formatRightOrderBenefitProgressSummary(item));
+
+    const progressBasis = String(item?.progress_basis || "").trim().toLowerCase();
+    const currentValue = Number(item?.progress_display_value ?? item?.progress_value ?? 0);
+    const thresholdValue = Number(item?.threshold_value || 0);
+    const remainingValue = Math.max(0, thresholdValue - currentValue);
+    if (remainingValue > 0) {
+      if (progressBasis === "amount" && typeof money === "function") {
+        appendInfoLine("Осталось:", money(remainingValue));
+      } else if (progressBasis === "orders") {
+        appendInfoLine("Осталось заказов:", String(remainingValue));
+      } else {
+        appendInfoLine("Осталось купить:", String(remainingValue));
+      }
+    }
+    appendInfoLine("Условие:", item?.apply_scope_text || "");
+    if (info.children.length) wrap.appendChild(info);
+
+    const rewardTitle = document.createElement("div");
+    rewardTitle.className = "shop-checkout-benefit-modal-subtitle";
+    rewardTitle.textContent = "Что получим";
+    wrap.appendChild(rewardTitle);
+    wrap.appendChild(buildRightOrderBenefitRewardPreviewContent(item?.reward_preview));
+
+    const progressProductsData = getRightOrderBenefitProgressProductsData(order, item);
+    const productsSection = buildRightOrderBenefitTargetProductsContent(
+      progressProductsData?.items,
+      progressProductsData?.title || "Что участвует"
+    );
+    if (progressProductsData?.description) {
+      const descriptionEl = document.createElement("div");
+      descriptionEl.className = "shop-checkout-benefits-hint";
+      descriptionEl.textContent = String(progressProductsData.description);
+      wrap.appendChild(descriptionEl);
+    }
+    if (productsSection.childNodes.length) wrap.appendChild(productsSection);
+
+    return wrap;
+  }
+
+  function openRightOrderBenefitDetailScreen(orderId, payload = {}) {
+    const id = Number(orderId || 0);
+    if (!(id > 0)) return;
+    state.benefitsModal.orderId = id;
+    state.benefitsModal.screen = "detail";
+    state.benefitsModal.title = "Детали акции";
+    state.benefitsModal.payload = payload && typeof payload === "object" ? { ...payload } : null;
+    renderRightBenefitsOverlay(id);
+  }
+
+  function renderRightOrderBenefitDetailScreen(orderId) {
+    const id = Number(orderId || 0);
+    const { body, title, backBtn, modeToggle } = getRightBenefitsOverlayElements();
+    if (!body || !title || !backBtn) return;
+    const payload = state.benefitsModal.payload && typeof state.benefitsModal.payload === "object"
+      ? state.benefitsModal.payload
+      : null;
+    const orderIndex = getRightOrderIndexById(id);
+    const order = orderIndex >= 0 ? (state.rightOrders[orderIndex] || {}) : null;
+    title.textContent = state.benefitsModal.title || "Детали акции";
+    backBtn.classList.remove("hidden");
+    if (modeToggle) modeToggle.classList.add("hidden");
+    body.innerHTML = "";
+
+    const shell = document.createElement("div");
+    shell.className = "shop-checkout-benefit-detail-screen";
+    body.appendChild(shell);
+
+    const contentTitle = document.createElement("div");
+    contentTitle.className = "shop-checkout-benefit-detail-title";
+    contentTitle.textContent = String(payload?.item?.title || payload?.title || "Детали акции");
+    shell.appendChild(contentTitle);
+
+    const description = String(payload?.item?.description || payload?.description || "").trim();
+    if (description) {
+      const descriptionEl = document.createElement("div");
+      descriptionEl.className = "shop-checkout-benefits-hint";
+      descriptionEl.textContent = description;
+      shell.appendChild(descriptionEl);
+    }
+
+    let content = null;
+    const detailKind = String(payload?.kind || "").trim();
+    if (detailKind === "discount") {
+      content = buildRightOrderBenefitDiscountDetailContent(payload?.item);
+    } else if (detailKind === "promo") {
+      content = buildRightOrderBenefitPromoDetailContent(payload?.item);
+    } else if (detailKind === "gift") {
+      content = buildRightOrderBenefitRewardPreviewContent(buildRightOrderBenefitGiftPreview(payload?.item));
+    } else if (detailKind === "progress") {
+      content = buildRightOrderBenefitProgressDetailContent(order, payload?.item || {});
+    }
+
+    if (content) {
+      shell.appendChild(content);
+    }
+  }
+
+  function getRightBenefitsOverlayElements() {
+    const backdrop = document.getElementById("newOrderBenefitsOverlay");
+    const title = document.getElementById("newOrderBenefitsTitle");
+    const body = document.getElementById("newOrderBenefitsBody");
+    const backBtn = document.getElementById("newOrderBenefitsBackBtn");
+    const closeBtn = document.getElementById("newOrderBenefitsCloseBtn");
+    const modeToggle = document.getElementById("newOrderBenefitsModeToggle");
+    return { backdrop, title, body, backBtn, closeBtn, modeToggle };
+  }
+
+  function ensureRightBenefitsOverlay() {
+    if (document.getElementById("newOrderBenefitsOverlay")) return;
+    const wrap = document.createElement("div");
+    wrap.id = "newOrderBenefitsOverlay";
+    wrap.className = "new-order-option-overlay hidden";
+    wrap.innerHTML = `
+      <div class="new-order-option-sheet new-order-benefits-sheet">
+        <div class="new-order-option-sheet-head new-order-benefits-head">
+          <div class="new-order-benefits-head-top">
+            <button class="new-order-option-sheet-back hidden" type="button" id="newOrderBenefitsBackBtn" aria-label="Назад">
+              <i class="fas fa-arrow-left"></i>
+            </button>
+            <div class="new-order-option-sheet-title" id="newOrderBenefitsTitle">Выгоды</div>
+            <button class="new-order-option-sheet-back" type="button" id="newOrderBenefitsCloseBtn" aria-label="Закрыть">
+              <i class="fas fa-times"></i>
+            </button>
+          </div>
+          <div class="shop-delivery-toggle new-order-benefits-mode-toggle" id="newOrderBenefitsModeToggle" aria-label="Режим выгод">
+            <button class="shop-delivery-toggle-btn is-active" type="button" aria-pressed="true">Скидки клиента</button>
+            <button class="shop-delivery-toggle-btn" type="button" aria-pressed="false">Все акции</button>
+          </div>
+        </div>
+        <div class="new-order-option-sheet-list no-scrollbar new-order-benefits-body" id="newOrderBenefitsBody"></div>
+      </div>
+    `;
+    document.body.appendChild(wrap);
+    wrap.addEventListener("click", (event) => {
+      if (event.target === wrap) closeRightBenefitsOverlay();
+    });
+    const { backBtn, closeBtn } = getRightBenefitsOverlayElements();
+    if (closeBtn) closeBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      closeRightBenefitsOverlay();
+    });
+    if (backBtn) backBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      state.benefitsModal.screen = "main";
+      state.benefitsModal.title = "Выгоды";
+      state.benefitsModal.payload = null;
+      renderRightBenefitsOverlay(Number(state.benefitsModal.orderId || 0));
+    });
+    setRightBenefitsModeToggleState("customer");
+    const { modeToggle } = getRightBenefitsOverlayElements();
+    if (modeToggle) {
+      modeToggle.addEventListener("click", (event) => {
+        const target = event.target instanceof Element
+          ? event.target.closest(".shop-delivery-toggle-btn[data-mode]")
+          : null;
+        if (!target) return;
+        event.preventDefault();
+        const nextMode = normalizeRightOrderBenefitsMode(target.getAttribute("data-mode") || "customer");
+        void switchRightBenefitsOverlayMode(nextMode);
+      });
+    }
+  }
+
+  async function switchRightBenefitsOverlayMode(mode, opts = {}) {
+    const nextMode = normalizeRightOrderBenefitsMode(mode);
+    const orderId = Number(opts?.orderId || state.benefitsModal.orderId || 0);
+    if (state.benefitsModal.mode === nextMode && !opts?.force) {
+      setRightBenefitsModeToggleState(nextMode);
+      return;
+    }
+    state.benefitsModal.mode = nextMode;
+    state.benefitsModal.screen = "main";
+    state.benefitsModal.title = "Выгоды";
+    state.benefitsModal.payload = null;
+    setRightBenefitsModeToggleState(nextMode);
+    if (!(orderId > 0)) return;
+    renderRightBenefitsOverlay(orderId);
+    try {
+      await loadRightOrderBenefitsPreview(orderId, {
+        force: opts?.forceReload === true,
+        render: true,
+        mode: nextMode,
+      });
+    } catch (error) {
+      showNewOrderAlert(getRightOrderBenefitsActionErrorMessage(error));
+    }
+  }
+
+  function closeRightBenefitsOverlay() {
+    const { backdrop, body } = getRightBenefitsOverlayElements();
+    if (backdrop) backdrop.classList.add("hidden");
+    if (body) body.innerHTML = "";
+    state.benefitsModal.orderId = 0;
+    state.benefitsModal.mode = "customer";
+    state.benefitsModal.screen = "main";
+    state.benefitsModal.title = "Выгоды";
+    state.benefitsModal.payload = null;
+    state.benefitsModal.busy = false;
+    setRightBenefitsModeToggleState("customer");
+  }
+
+  function buildRightOrderGiftClaimOrderItem(optionItem, rewardId) {
+    const productId = Number(optionItem?.product_id || optionItem?.id || 0);
+    const productConfig = optionItem?.product_config && typeof optionItem.product_config === "object"
+      ? optionItem.product_config
+      : null;
+    const optionRows = (Array.isArray(productConfig?.options) ? productConfig.options : [])
+      .map((option) => ({
+        id: Number(option?.id || 0),
+        qty: Math.max(1, Number(option?.qty ?? option?.quantity ?? 1) || 1),
+        group_id: Number(option?.group_id || 0) || null,
+        variant_group_id: Number(option?.variant_group_id || 0) || null,
+        variant_value_index: Number.isFinite(Number(option?.variant_value_index))
+          ? Number(option.variant_value_index)
+          : null,
+      }))
+      .filter((option) => Number(option?.id || 0) > 0);
+    const ingredientRows = (Array.isArray(productConfig?.ingredients) ? productConfig.ingredients : [])
+      .map((ingredient) => ({
+        ingredient_id: Number(ingredient?.ingredient_id || ingredient?.product_id || 0),
+        qty: Number(ingredient?.qty ?? ingredient?.quantity ?? 0) || 0,
+      }))
+      .filter((ingredient) => Number(ingredient?.ingredient_id || 0) > 0);
+    const oldLineTotal = Math.max(0, Number(optionItem?.price || optionItem?.line_total || optionItem?.old_line_total || 0) || 0);
+    return {
+      product_id: productId,
+      product_name: String(optionItem?.name || optionItem?.title || "").trim(),
+      name: String(optionItem?.name || optionItem?.title || "").trim(),
+      qty: 1,
+      line_total: 0,
+      old_line_total: oldLineTotal,
+      photos: Array.isArray(optionItem?.photos) ? optionItem.photos.slice() : [],
+      variant_group_id: Number(productConfig?.variant_group_id || 0) || null,
+      variant_value_index: Number.isFinite(Number(productConfig?.variant_value_index))
+        ? Number(productConfig.variant_value_index)
+        : null,
+      variant_label: String(optionItem?.variant_label || "").trim(),
+      variant_group_title: String(optionItem?.variant_group_title || "").trim(),
+      variant_unit: String(optionItem?.variant_unit || "").trim(),
+      variants: Array.isArray(optionItem?.variants) ? optionItem.variants.map((variant) => ({ ...variant })) : [],
+      option_items: optionRows.map((option) => ({ ...option })),
+      options: optionRows.map((option) => ({ ...option })),
+      ingredients: ingredientRows,
+      is_gift_reward: 1,
+      gift_reward_id: Number(rewardId || 0) > 0 ? Number(rewardId) : null,
+    };
+  }
+
+  async function stageRightOrderBenefitGiftRewardInCart(orderId, giftItem, overrideProducts = null) {
+    const id = Number(orderId || 0);
+    const rewardId = Number(giftItem?.reward_id || giftItem?.id || 0) || null;
+    const products = Array.isArray(overrideProducts)
+      ? overrideProducts.filter((product) => Number(product?.id || product?.product_id || 0) > 0)
+      : getRightOrderBenefitGiftProducts(giftItem);
+    if (!(id > 0) || !rewardId || !products.length) {
+      return { ok: false, reason: "invalid" };
+    }
+    const index = getRightOrderIndexById(id);
+    if (index < 0) return { ok: false, reason: "invalid" };
+    const order = state.rightOrders[index] || {};
+    const form = order.form && typeof order.form === "object" ? { ...order.form } : {};
+    const nextCartItems = Array.isArray(form.cartItems) ? form.cartItems.map((item) => ({ ...item })) : [];
+    const startLength = nextCartItems.length;
+
+    for (const productInfo of products) {
+      const productId = Number(productInfo?.id || productInfo?.product_id || 0);
+      if (!(productId > 0)) continue;
+      const product = await ensureProductById(productId);
+      if (!product) return { ok: false, reason: "unavailable" };
+      const resolvedProductInfo = await resolveRightOrderBenefitConfiguredProduct(productInfo, {
+        forceDefaultConfig: true,
+      });
+      const rewardOrderItem = buildRightOrderGiftClaimOrderItem(resolvedProductInfo, rewardId);
+      const cartItem = await buildCartItemFromOrderProduct(rewardOrderItem);
+      if (!cartItem) return { ok: false, reason: "unavailable" };
+      nextCartItems.push(cartItem);
+    }
+
+    if (nextCartItems.length <= startLength) {
+      return { ok: false, reason: "invalid" };
+    }
+    updateRightOrderCartItems(id, nextCartItems, { render: false });
+    return { ok: true, reason: "added" };
+  }
+
+  async function setRightOrderBenefitsSelection(orderId, selection, opts = {}) {
+    const id = Number(orderId || 0);
+    const index = getRightOrderIndexById(id);
+    if (index < 0) return null;
+    const order = state.rightOrders[index] || {};
+    const form = order.form && typeof order.form === "object" ? { ...order.form } : {};
+    const activeMode = normalizeRightOrderBenefitsMode(opts?.mode || getActiveRightOrderBenefitsMode());
+    form.promo_code = normalizeRightOrderBenefitsPromoCode(selection?.promoCode);
+    form.selected_discount_id = normalizeRightOrderBenefitsSelectedId(selection?.selectedDiscountId);
+    form.selected_discount_source = form.selected_discount_id
+      ? (normalizeRightOrderBenefitsDiscountSource(selection?.selectedDiscountSource) || "discount")
+      : null;
+    form.selected_promo_source = (form.promo_code || normalizeRightOrderBenefitsSelectedId(selection?.selectedPromoRewardId))
+      ? (normalizeRightOrderBenefitsPromoSource(selection?.selectedPromoSource) || "promo_code")
+      : null;
+    form.selected_promo_reward_id = normalizeRightOrderBenefitsSelectedId(selection?.selectedPromoRewardId);
+    form.benefits_preview_mode = hasRightOrderBenefitsSelection(form) ? activeMode : null;
+    state.rightOrders[index] = { ...order, form };
+    invalidateRightOrderBenefitsPreview(id);
+    await loadRightOrderBenefitsPreview(id, {
+      force: true,
+      render: opts?.render !== false,
+      prefetchedData: opts?.prefetchedData || null,
+      mode: getRightOrderBenefitsPreferredMode(form, activeMode),
+    });
+    return state.rightOrders[index] || null;
+  }
+
+  async function toggleRightOrderBenefitDiscount(orderId, discountCard) {
+    const id = Number(orderId || 0);
+    const index = getRightOrderIndexById(id);
+    if (index < 0) return;
+    const order = state.rightOrders[index] || {};
+    const form = order.form && typeof order.form === "object" ? order.form : {};
+    const previewData = getRightOrderBenefitsPreviewSnapshot(order, {
+      mode: getActiveRightOrderBenefitsMode(),
+      preferApplied: true,
+    });
+    const promoCards = Array.isArray(previewData?.promo_codes) ? previewData.promo_codes : [];
+    const selection = getRightOrderBenefitsSelectionState(form);
+    const source = normalizeRightOrderBenefitsDiscountSource(discountCard?.source) || "discount";
+    const nextSelectedDiscountId = discountCard?.is_selected
+      ? null
+      : normalizeRightOrderBenefitsSelectedId(
+          source === "reward_discount" ? (discountCard?.reward_id || discountCard?.id) : discountCard?.id
+        );
+    let nextPromoCode = selection.promoCode;
+    let nextSelectedPromoSource = selection.selectedPromoSource;
+    let nextSelectedPromoRewardId = selection.selectedPromoRewardId;
+    if (nextSelectedDiscountId && nextPromoCode) {
+      const currentPromoCard = promoCards.find((entry) => entry?.is_selected) || null;
+      if (currentPromoCard && !(isRightOrderBenefitStackable(discountCard) && isRightOrderBenefitStackable(currentPromoCard))) {
+        nextPromoCode = null;
+        nextSelectedPromoSource = null;
+        nextSelectedPromoRewardId = null;
+      }
+    }
+    await setRightOrderBenefitsSelection(id, {
+      selectedDiscountId: nextSelectedDiscountId,
+      selectedDiscountSource: nextSelectedDiscountId ? source : null,
+      promoCode: nextPromoCode,
+      selectedPromoSource: nextSelectedPromoSource,
+      selectedPromoRewardId: nextSelectedPromoRewardId,
+    });
+  }
+
+  async function toggleRightOrderBenefitPromo(orderId, promoCard) {
+    const id = Number(orderId || 0);
+    const index = getRightOrderIndexById(id);
+    if (index < 0) return;
+    const order = state.rightOrders[index] || {};
+    const form = order.form && typeof order.form === "object" ? order.form : {};
+    const previewData = getRightOrderBenefitsPreviewSnapshot(order, {
+      mode: getActiveRightOrderBenefitsMode(),
+      preferApplied: true,
+    });
+    const discountCards = Array.isArray(previewData?.discounts) ? previewData.discounts : [];
+    const selection = getRightOrderBenefitsSelectionState(form);
+    const actionMode = String(promoCard?.action_mode || "select").trim().toLowerCase() || "select";
+    if (actionMode === "redeem_reward") {
+      const token = await ensureRightOrderBenefitsCustomerToken(id);
+      if (!token) throw new Error("UNAUTHORIZED");
+      const json = await apiJson("/api/public/checkout/benefits/redeem-promo", {
+        method: "POST",
+        headers: { "x-customer-token": token },
+        body: JSON.stringify({
+          ...buildRightOrderBenefitsPreviewRequest(order),
+          promo_code_id: Number(promoCard?.id || 0) || null,
+        }),
+      });
+      await loadRightOrderBenefitsPreview(id, {
+        force: true,
+        render: true,
+        prefetchedData: json?.data || null,
+      });
+      return;
+    }
+
+    const source = normalizeRightOrderBenefitsPromoSource(promoCard?.source) || "promo_code";
+    const nextPromoCode = promoCard?.is_selected ? null : normalizeRightOrderBenefitsPromoCode(promoCard?.code);
+    const nextSelectedPromoSource = nextPromoCode ? source : null;
+    const nextSelectedPromoRewardId = nextPromoCode && source === "reward_promo"
+      ? normalizeRightOrderBenefitsSelectedId(promoCard?.reward_id || promoCard?.id)
+      : null;
+    let nextSelectedDiscountId = selection.selectedDiscountId;
+    let nextSelectedDiscountSource = selection.selectedDiscountSource;
+    if (nextPromoCode && nextSelectedDiscountId) {
+      const currentDiscountCard = discountCards.find((entry) => {
+        const entrySource = normalizeRightOrderBenefitsDiscountSource(entry?.source) || "discount";
+        const entryId = entrySource === "reward_discount"
+          ? normalizeRightOrderBenefitsSelectedId(entry?.reward_id || entry?.id)
+          : normalizeRightOrderBenefitsSelectedId(entry?.id);
+        return entryId === nextSelectedDiscountId && entrySource === nextSelectedDiscountSource;
+      }) || null;
+      if (currentDiscountCard && !(isRightOrderBenefitStackable(currentDiscountCard) && isRightOrderBenefitStackable(promoCard))) {
+        nextSelectedDiscountId = null;
+        nextSelectedDiscountSource = null;
+      }
+    }
+    await setRightOrderBenefitsSelection(id, {
+      selectedDiscountId: nextSelectedDiscountId,
+      selectedDiscountSource: nextSelectedDiscountSource,
+      promoCode: nextPromoCode,
+      selectedPromoSource: nextSelectedPromoSource,
+      selectedPromoRewardId: nextSelectedPromoRewardId,
+    });
+  }
+
+  async function receiveRightOrderBenefitGift(orderId, giftItem) {
+    const id = Number(orderId || 0);
+    const index = getRightOrderIndexById(id);
+    if (index < 0) return;
+    const order = state.rightOrders[index] || {};
+    const token = await ensureRightOrderBenefitsCustomerToken(id);
+    if (!token) throw new Error("UNAUTHORIZED");
+    const json = await apiJson("/api/public/checkout/benefits/receive-gift", {
+      method: "POST",
+      headers: { "x-customer-token": token },
+      body: JSON.stringify({
+        ...buildRightOrderBenefitsPreviewRequest(order),
+        reward_id: Number(giftItem?.reward_id || giftItem?.id || 0) || null,
+      }),
+    });
+    const products = Array.isArray(json?.data?.products) ? json.data.products : [];
+    const stageResult = await stageRightOrderBenefitGiftRewardInCart(id, giftItem, products);
+    if (!stageResult?.ok) {
+      try {
+        await restoreRightOrderGiftReward(id, Number(giftItem?.reward_id || giftItem?.id || 0), { silent: true });
+      } catch {}
+      if (stageResult?.reason === "unavailable") {
+        throw new Error("REWARD_NOT_APPLICABLE");
+      }
+      throw new Error("REWARD_INVALID");
+    }
+    await loadRightOrderBenefitsPreview(id, { force: true, render: true });
+  }
+
+  async function claimRightOrderBenefitProgress(orderId, progressItem, selectedRewardItems = null) {
+    const id = Number(orderId || 0);
+    const index = getRightOrderIndexById(id);
+    if (index < 0) return;
+    const order = state.rightOrders[index] || {};
+    const token = await ensureRightOrderBenefitsCustomerToken(id);
+    if (!token) throw new Error("UNAUTHORIZED");
+    const body = {
+      ...buildRightOrderBenefitsPreviewRequest(order),
+      discount_id: Number(progressItem?.discount_id || progressItem?.id || 0) || null,
+    };
+    if (Array.isArray(selectedRewardItems) && selectedRewardItems.length) {
+      body.selected_reward_items = selectedRewardItems;
+    }
+    const json = await apiJson("/api/public/checkout/benefits/claim-progress", {
+      method: "POST",
+      headers: { "x-customer-token": token },
+      body: JSON.stringify(body),
+    });
+    state.benefitsModal.screen = "main";
+    state.benefitsModal.title = "Выгоды";
+    state.benefitsModal.payload = null;
+    await loadRightOrderBenefitsPreview(id, {
+      force: true,
+      render: true,
+      prefetchedData: json?.data || null,
+    });
+  }
+
+  function buildRightOrderBenefitRewardClaimProductCard(snapshot, {
+    getSelectionState,
+    onChange,
+    mountConfig,
+    getExpandedSelectionKey,
+    onToggleExpand,
+    useCollapsedConfig = false,
+  } = {}) {
+    const item = snapshot && typeof snapshot === "object" ? snapshot : {};
+    const configMode = normalizeRightOrderBenefitProductConfigMode(item?.config_mode, "any");
+    const isReadOnlyConfig = configMode !== "any";
+    const selectionKey = String(item?.selection_key || "").trim();
+    const hasConfigurable = item?.has_configurable === true;
+    const isExpanded = useCollapsedConfig && hasConfigurable
+      && selectionKey
+      && String(typeof getExpandedSelectionKey === "function" ? getExpandedSelectionKey() : "").trim() === selectionKey;
+    const hasVisibleExpand = hasConfigurable && (!useCollapsedConfig || isExpanded);
+    const card = document.createElement("div");
+    card.className = "cart-row shop-combo-picker-row shop-checkout-benefit-claim-card shop-checkout-benefit-claim-combo-card";
+    if (isReadOnlyConfig) card.classList.add("is-readonly");
+    if (hasVisibleExpand) card.classList.add("is-expanded");
+
+    const photos = Array.isArray(item?.photos) ? item.photos : [];
+    const photoUrl = String(item?.photo_url || photos[0] || "").trim();
+    if (photoUrl) {
+      const image = document.createElement("img");
+      image.className = "cart-thumb";
+      image.src = photoUrl;
+      image.alt = String(item?.name || "").trim() || "Подарок";
+      card.appendChild(image);
+    } else {
+      const media = document.createElement("div");
+      media.className = "cart-thumb shop-checkout-benefit-claim-media";
+      media.appendChild(createRightOrderBenefitIcon(getRightOrderBenefitRewardIconName("gift")));
+      card.appendChild(media);
+    }
+
+    const mid = document.createElement("div");
+    mid.className = "cart-mid shop-combo-picker-mid";
+
+    const title = document.createElement("div");
+    title.className = "cart-title";
+    title.textContent = String(item?.name || item?.title || "").trim() || "Подарок";
+    mid.appendChild(title);
+
+    const metaRow = document.createElement("div");
+    metaRow.className = "shop-checkout-benefit-claim-gift-meta";
+    const giftBadge = document.createElement("span");
+    giftBadge.className = "shop-checkout-benefit-claim-gift-badge";
+    giftBadge.textContent = "Подарок";
+    metaRow.appendChild(giftBadge);
+    if (isReadOnlyConfig) {
+      const modeNote = document.createElement("span");
+      modeNote.className = "shop-checkout-benefit-claim-mode-note";
+      modeNote.textContent = "Фиксированный состав";
+      metaRow.appendChild(modeNote);
+    }
+    mid.appendChild(metaRow);
+
+    const summaryWrap = document.createElement("div");
+    summaryWrap.className = "shop-checkout-benefit-claim-config-summary";
+    const syncSummaryLines = (productItem) => {
+      summaryWrap.innerHTML = "";
+      appendRightOrderBenefitProductConfigLines(summaryWrap, productItem);
+      summaryWrap.hidden = !summaryWrap.childElementCount;
+    };
+    syncSummaryLines(item);
+    if (!useCollapsedConfig) summaryWrap.hidden = true;
+    mid.appendChild(summaryWrap);
+
+    const bottomRow = document.createElement("div");
+    bottomRow.className = "shop-combo-picker-bottom";
+
+    const priceWrap = document.createElement("div");
+    priceWrap.className = "shop-combo-picker-price shop-checkout-benefit-claim-price-wrap";
+    const priceEl = document.createElement("span");
+    priceEl.className = "shop-combo-price";
+    priceEl.textContent = typeof money === "function"
+      ? money(Number(item?.price || 0))
+      : String(Number(item?.price || 0) || 0);
+    priceWrap.appendChild(priceEl);
+    const priceNote = document.createElement("span");
+    priceNote.className = "shop-checkout-benefit-claim-price-note";
+    priceNote.textContent = "будет в подарок";
+    priceWrap.appendChild(priceNote);
+    bottomRow.appendChild(priceWrap);
+
+    const actionsWrap = document.createElement("div");
+    actionsWrap.className = "shop-combo-picker-actions shop-checkout-benefit-claim-inline-actions";
+    const counter = document.createElement("div");
+    counter.className = "shop-checkout-benefit-claim-counter";
+
+    const minusBtn = document.createElement("button");
+    minusBtn.type = "button";
+    minusBtn.className = "shop-combo-picker-ingredient-btn shop-checkout-benefit-claim-stepper-btn";
+    minusBtn.setAttribute("aria-label", "Уменьшить");
+    minusBtn.innerHTML = '<span aria-hidden="true">−</span>';
+    minusBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (typeof onChange === "function") onChange(item, -1);
+    });
+    counter.appendChild(minusBtn);
+
+    const countEl = document.createElement("div");
+    countEl.className = "shop-checkout-benefit-claim-counter-value";
+    counter.appendChild(countEl);
+
+    const plusBtn = document.createElement("button");
+    plusBtn.type = "button";
+    plusBtn.className = "shop-combo-picker-ingredient-btn shop-checkout-benefit-claim-stepper-btn";
+    plusBtn.setAttribute("aria-label", "Увеличить");
+    plusBtn.innerHTML = '<span aria-hidden="true">+</span>';
+    plusBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (typeof onChange === "function") onChange(item, 1);
+    });
+    counter.appendChild(plusBtn);
+    actionsWrap.appendChild(counter);
+
+    let gearBtn = null;
+    if (hasConfigurable && useCollapsedConfig) {
+      gearBtn = document.createElement("button");
+      gearBtn.type = "button";
+      gearBtn.className = "shop-combo-picker-gear" + (isExpanded ? " is-open" : "");
+      gearBtn.title = "Настроить варианты и состав";
+      gearBtn.setAttribute("aria-label", "Настроить варианты и состав");
+      gearBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>`;
+      gearBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (typeof onToggleExpand === "function") onToggleExpand(item);
+      });
+      actionsWrap.appendChild(gearBtn);
+    }
+
+    bottomRow.appendChild(actionsWrap);
+    card.appendChild(mid);
+    card.appendChild(bottomRow);
+
+    if (hasVisibleExpand) {
+      const expandWrap = document.createElement("div");
+      expandWrap.className = "shop-combo-picker-expand shop-checkout-benefit-claim-expand";
+      const expandInner = document.createElement("div");
+      expandInner.className = "shop-combo-picker-expand-inner";
+      if (typeof mountConfig === "function") {
+        const configHost = document.createElement("div");
+        configHost.className = "shop-checkout-benefit-claim-config";
+        expandInner.appendChild(configHost);
+        mountConfig(item, configHost, {
+          priceEl,
+          isReadOnlyConfig,
+          updateSummary: (resolvedItem) => {
+            syncSummaryLines(resolvedItem);
+          },
+        });
+      }
+      expandWrap.appendChild(expandInner);
+      card.appendChild(expandWrap);
+    }
+
+    const sync = () => {
+      const selectionState = typeof getSelectionState === "function"
+        ? (getSelectionState(item) || {})
+        : {};
+      const count = Math.max(0, Number(selectionState?.count || 0));
+      countEl.textContent = String(count);
+      minusBtn.disabled = selectionState?.canDecrement === false;
+      plusBtn.disabled = selectionState?.canIncrement === false;
+      card.classList.toggle("is-selected", count > 0);
+      if (gearBtn) gearBtn.classList.toggle("is-open", isExpanded);
+    };
+
+    sync();
+    return { card, sync };
+  }
+
+  async function openRightOrderBenefitGiftClaimScreen(orderId, progressItem) {
+    const id = Number(orderId || 0);
+    const index = getRightOrderIndexById(id);
+    if (index < 0) return;
+    const order = state.rightOrders[index] || {};
+    const token = await ensureRightOrderBenefitsCustomerToken(id);
+    if (!token) throw new Error("UNAUTHORIZED");
+    const json = await apiJson("/api/public/checkout/benefits/claim-progress-options", {
+      method: "POST",
+      headers: { "x-customer-token": token },
+      body: JSON.stringify({
+        ...buildRightOrderBenefitsPreviewRequest(order),
+        discount_id: Number(progressItem?.discount_id || progressItem?.id || 0) || null,
+      }),
+    });
+    const data = json?.data && typeof json.data === "object" ? json.data : {};
+    const items = await Promise.all(
+      (Array.isArray(data?.items) ? data.items : []).map(async (item, idx) => {
+        const productId = Number(item?.product_id || item?.id || 0);
+        const normalizedItem = {
+          ...(item && typeof item === "object" ? item : {}),
+          selection_key: String(item?.selection_key || `${productId}:${idx}`).trim(),
+          config_mode: normalizeRightOrderBenefitProductConfigMode(item?.config_mode, "any"),
+          product_config: normalizeRightOrderBenefitProductConfig(item?.product_config, productId),
+          selected_qty: 0,
+        };
+        const resolvedItem = await resolveRightOrderBenefitConfiguredProduct(normalizedItem, {
+          forceDefaultConfig: true,
+        });
+        const variantGroups = Array.isArray(state.productVariants.get(productId))
+          ? state.productVariants.get(productId)
+          : [];
+        const ingredients = Array.isArray(state.productIngredients.get(productId))
+          ? state.productIngredients.get(productId)
+          : [];
+        const hasVariants = variantGroups.some((group) => Array.isArray(group?.values) && group.values.length > 0);
+        const hasVariableIngredients = ingredients.some((ingredient) => Number(ingredient?.is_variable ?? 1) === 1);
+        return {
+          ...resolvedItem,
+          selection_key: normalizedItem.selection_key,
+          selected_qty: 0,
+          has_configurable: hasVariants || hasVariableIngredients,
+        };
+      })
+    );
+    state.rightBenefitsClaimOptionsByOrder.set(id, {
+      progressItem,
+      selection_limit: Math.max(0, Number(data?.selection_limit || 0)),
+      items,
+      expanded_selection_key: "",
+    });
+    state.benefitsModal.orderId = id;
+    state.benefitsModal.screen = "gift-claim";
+    state.benefitsModal.title = "Выбрать подарки";
+    state.benefitsModal.payload = null;
+    renderRightBenefitsOverlay(id);
+  }
+
+  function renderRightOrderBenefitGiftClaimScreen(orderId) {
+    const id = Number(orderId || 0);
+    const { body, title, backBtn, modeToggle } = getRightBenefitsOverlayElements();
+    if (!body || !title || !backBtn) return;
+    const claimState = state.rightBenefitsClaimOptionsByOrder.get(id) || null;
+    const progressItem = claimState?.progressItem || null;
+    const selectionLimit = Math.max(0, Number(claimState?.selection_limit || 0));
+    const items = Array.isArray(claimState?.items) ? claimState.items : [];
+    const isMobileGiftClaim = window.matchMedia("(max-width: 768px)").matches;
+    title.textContent = state.benefitsModal.title || "Выбрать подарки";
+    backBtn.classList.remove("hidden");
+    if (modeToggle) modeToggle.classList.add("hidden");
+    body.innerHTML = "";
+
+    const shell = document.createElement("div");
+    shell.className = "shop-checkout-benefit-detail-screen";
+    body.appendChild(shell);
+
+    const formatGiftClaimCount = (count) => {
+      const normalized = Math.max(0, Number(count || 0));
+      const mod10 = normalized % 10;
+      const mod100 = normalized % 100;
+      if (mod10 === 1 && mod100 !== 11) return "подарок";
+      if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return "подарка";
+      return "подарков";
+    };
+    const getTotalSelected = () => items.reduce((sum, item) => sum + Math.max(0, Number(item?.selected_qty || 0)), 0);
+    const getSelectionState = (item) => {
+      const count = Math.max(0, Number(item?.selected_qty || 0));
+      const maxSelectableQty = Math.max(0, Number(item?.max_selectable_qty || 0));
+      const totalSelected = getTotalSelected();
+      return {
+        count,
+        canDecrement: count > 0,
+        canIncrement: count < maxSelectableQty && totalSelected < selectionLimit,
+      };
+    };
+
+    const info = document.createElement("div");
+    info.className = "shop-checkout-benefit-claim-summary";
+    shell.appendChild(info);
+
+    if (!items.length || !(selectionLimit > 0)) {
+      const empty = document.createElement("div");
+      empty.className = "shop-profile-card shop-checkout-benefits-empty";
+      empty.textContent = "Сейчас нет доступных подарков для этой акции.";
+      shell.appendChild(empty);
+      info.textContent = "Можно забрать 0 подарков";
+      return;
+    }
+
+    let syncFns = [];
+    const getExpandedSelectionKey = () => String(claimState?.expanded_selection_key || "").trim();
+    const setExpandedSelectionKey = (value) => {
+      if (!claimState) return;
+      claimState.expanded_selection_key = String(value || "").trim();
+    };
+    const getStoredProductConfig = (item) => normalizeRightOrderBenefitProductConfig(
+      item?.product_config,
+      Number(item?.product_id || item?.id || 0)
+    );
+    const setStoredProductConfig = (item, config) => {
+      item.product_config = normalizeRightOrderBenefitProductConfig(
+        config,
+        Number(item?.product_id || item?.id || 0)
+      );
+    };
+
+    const mountGiftClaimConfig = (item, host, ui = {}) => {
+      if (!host) return;
+      const productId = Number(item?.product_id || item?.id || 0);
+      if (!(productId > 0)) return;
+      const configMode = normalizeRightOrderBenefitProductConfigMode(item?.config_mode, "any");
+      const isReadOnlyConfig = configMode !== "any";
+      host.innerHTML = '<div class="shop-checkout-benefit-claim-config-loading">Загрузка вариантов...</div>';
+      void (async () => {
+        try {
+          const product = await ensureProductById(productId);
+          if (!product) {
+            if (host.isConnected) host.innerHTML = "";
+            return;
+          }
+          await loadVariantsForProducts([product]);
+          await loadIngredientsForProducts([product]);
+          const variants = Array.isArray(state.productVariants.get(productId))
+            ? state.productVariants.get(productId)
+            : [];
+          const ingredients = (Array.isArray(state.productIngredients.get(productId))
+            ? state.productIngredients.get(productId)
+            : []).filter((ingredient) => Number(ingredient?.is_variable ?? 1) === 1);
+          const resolvedItem = await resolveRightOrderBenefitConfiguredProduct({
+            ...item,
+            product_config: getStoredProductConfig(item),
+          }, { forceDefaultConfig: true });
+          if (!host.isConnected) return;
+          const currentConfig = normalizeRightOrderBenefitProductConfig(resolvedItem?.product_config, productId);
+          if (!currentConfig) {
+            host.innerHTML = "";
+            return;
+          }
+          setStoredProductConfig(item, currentConfig);
+          host.innerHTML = "";
+
+          const applyResolvedPreview = (resolvedPreviewItem) => {
+            if (!resolvedPreviewItem || typeof resolvedPreviewItem !== "object") return;
+            item.price = Number(resolvedPreviewItem?.price || item?.price || 0);
+            item.line_total = Number(resolvedPreviewItem?.line_total || item?.line_total || item?.price || 0);
+            item.product_config = normalizeRightOrderBenefitProductConfig(
+              resolvedPreviewItem?.product_config,
+              productId
+            );
+            item.config_display_lines = Array.isArray(resolvedPreviewItem?.config_display_lines)
+              ? resolvedPreviewItem.config_display_lines.slice()
+              : [];
+            item.ingredients_display = Array.isArray(resolvedPreviewItem?.ingredients_display)
+              ? resolvedPreviewItem.ingredients_display.slice()
+              : [];
+            item.ingredients = Array.isArray(resolvedPreviewItem?.ingredients)
+              ? resolvedPreviewItem.ingredients.slice()
+              : [];
+            item.variant_label = String(resolvedPreviewItem?.variant_label || item?.variant_label || "").trim();
+            item.variant_group_title = String(resolvedPreviewItem?.variant_group_title || item?.variant_group_title || "").trim();
+            item.variant_unit = String(resolvedPreviewItem?.variant_unit || item?.variant_unit || "").trim();
+            if (ui?.priceEl?.isConnected && typeof money === "function") {
+              ui.priceEl.textContent = money(Number(resolvedPreviewItem?.price || item?.price || 0));
+            }
+            if (typeof ui?.updateSummary === "function") {
+              ui.updateSummary(resolvedPreviewItem);
+            }
+          };
+
+          const refreshResolvedPreview = () => {
+            const nextConfig = getStoredProductConfig(item);
+            void resolveRightOrderBenefitConfiguredProduct({
+              ...item,
+              product_config: nextConfig,
+            }, { forceDefaultConfig: true }).then((resolvedPreviewItem) => {
+              applyResolvedPreview(resolvedPreviewItem);
+            }).catch(() => {});
+          };
+          refreshResolvedPreview();
+
+          const formatQtyLabel = (value) => {
+            const numeric = Number(value);
+            if (!Number.isFinite(numeric)) return "0";
+            if (Math.abs(numeric - Math.round(numeric)) < 0.0001) return String(Math.round(numeric));
+            return String(numeric).replace(".", ",");
+          };
+          const currentIngredientQty = new Map(
+            (Array.isArray(currentConfig?.ingredients) ? currentConfig.ingredients : []).map((ingredient) => [
+              Number(ingredient?.ingredient_id || 0),
+              Number(ingredient?.qty ?? ingredient?.quantity ?? 0) || 0,
+            ])
+          );
+
+          const persistConfig = () => {
+            setStoredProductConfig(item, {
+              type: "product",
+              product_id: productId,
+              variant_group_id: currentConfig?.variant_group_id ?? null,
+              variant_value_index: currentConfig?.variant_value_index ?? null,
+              options: Array.isArray(currentConfig?.options) ? currentConfig.options : [],
+              ingredients: ingredients.map((ingredient) => ({
+                ingredient_id: Number(ingredient?.ingredient_id || 0),
+                qty: Number(
+                  currentIngredientQty.get(Number(ingredient?.ingredient_id || 0))
+                  ?? Number(ingredient?.quantity ?? 0)
+                  ?? 0
+                ),
+              })),
+            });
+            refreshResolvedPreview();
+          };
+
+          const variantGroup = Array.isArray(variants) && variants.length ? variants[0] : null;
+          const variantValues = Array.isArray(variantGroup?.values) ? variantGroup.values : [];
+          if (variantGroup && variantValues.length) {
+            const variantsBlock = document.createElement("div");
+            variantsBlock.className = "shop-combo-picker-variants";
+            const variantsTitle = document.createElement("div");
+            variantsTitle.className = "shop-combo-picker-expand-title";
+            variantsTitle.textContent = String(variantGroup?.title || variantGroup?.title_label || "").trim() || "Вариант";
+            variantsBlock.appendChild(variantsTitle);
+            const variantsRow = document.createElement("div");
+            variantsRow.className = "shop-combo-picker-variants-row";
+            const unitShort = String(
+              variantGroup?.unit_short_title || variantGroup?.unit_title || variantGroup?.unit_code || ""
+            ).trim();
+            variantValues.forEach((value, valueIndex) => {
+              const btn = document.createElement("button");
+              btn.type = "button";
+              btn.className = "shop-combo-picker-variant-btn";
+              const label = String(value || "").trim();
+              btn.textContent = unitShort ? `${label} ${unitShort}` : label;
+              if (isReadOnlyConfig) btn.disabled = true;
+              const syncBtn = () => {
+                btn.classList.toggle("is-active", Number(currentConfig?.variant_value_index ?? 0) === Number(valueIndex));
+              };
+              syncBtn();
+              btn.addEventListener("click", (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                if (isReadOnlyConfig) return;
+                currentConfig.variant_group_id = Number(variantGroup?.id || variantGroup?.variant_group_id || 0) || null;
+                currentConfig.variant_value_index = valueIndex;
+                persistConfig();
+                variantsRow.querySelectorAll(".shop-combo-picker-variant-btn").forEach((node, nodeIndex) => {
+                  node.classList.toggle("is-active", Number(nodeIndex) === Number(valueIndex));
+                });
+              });
+              variantsRow.appendChild(btn);
+            });
+            variantsBlock.appendChild(variantsRow);
+            host.appendChild(variantsBlock);
+          }
+
+          if (ingredients.length) {
+            const ingredientsBlock = document.createElement("div");
+            ingredientsBlock.className = "shop-combo-picker-ingredients";
+            const ingredientsTitle = document.createElement("div");
+            ingredientsTitle.className = "shop-combo-picker-expand-title";
+            ingredientsTitle.textContent = isReadOnlyConfig ? "Состав:" : "Состав (можно настроить):";
+            ingredientsBlock.appendChild(ingredientsTitle);
+            ingredients.forEach((ingredient) => {
+              const ingredientId = Number(ingredient?.ingredient_id || 0);
+              if (!(ingredientId > 0)) return;
+              const row = document.createElement("div");
+              row.className = "shop-combo-picker-ingredient-row";
+              const imgWrap = document.createElement("div");
+              imgWrap.className = "shop-combo-picker-ingredient-img";
+              const ingredientPhoto = Array.isArray(ingredient?.ingredient_photos) && ingredient.ingredient_photos[0]
+                ? ingredient.ingredient_photos[0]
+                : "";
+              if (ingredientPhoto) {
+                const image = document.createElement("img");
+                image.src = ingredientPhoto;
+                image.alt = "";
+                imgWrap.appendChild(image);
+              }
+              row.appendChild(imgWrap);
+              const name = document.createElement("span");
+              name.className = "shop-combo-picker-ingredient-name";
+              name.textContent = String(ingredient?.ingredient_name || ingredient?.name || "").trim();
+              row.appendChild(name);
+              const qtyWrap = document.createElement("div");
+              qtyWrap.className = "shop-combo-picker-ingredient-qty";
+              const minusBtn = document.createElement("button");
+              minusBtn.type = "button";
+              minusBtn.className = "shop-combo-picker-ingredient-btn";
+              minusBtn.innerHTML = '<span aria-hidden="true">−</span>';
+              const qtyVal = document.createElement("span");
+              qtyVal.className = "shop-combo-picker-ingredient-qty-val";
+              const plusBtn = document.createElement("button");
+              plusBtn.type = "button";
+              plusBtn.className = "shop-combo-picker-ingredient-btn";
+              plusBtn.textContent = "+";
+              const step = Number(ingredient?.quantity_step ?? 1) || 1;
+              const minQty = Number(ingredient?.quantity_min ?? ingredient?.quantity ?? 0) || 0;
+              const maxQtyRaw = Number(ingredient?.quantity_max);
+              const maxQty = Number.isFinite(maxQtyRaw) && maxQtyRaw > 0 ? maxQtyRaw : Infinity;
+              const unitShort = String(
+                ingredient?.unit_short_title || ingredient?.unit_title || ingredient?.unit_code || ""
+              ).trim();
+              const syncQty = () => {
+                const currentQty = Number(
+                  currentIngredientQty.get(ingredientId)
+                  ?? Number(ingredient?.quantity ?? 0)
+                  ?? 0
+                );
+                qtyVal.textContent = unitShort ? `${formatQtyLabel(currentQty)} ${unitShort}` : formatQtyLabel(currentQty);
+                minusBtn.disabled = isReadOnlyConfig || currentQty <= minQty;
+                plusBtn.disabled = isReadOnlyConfig || currentQty >= maxQty;
+              };
+              minusBtn.addEventListener("click", (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                if (isReadOnlyConfig) return;
+                const currentQty = Number(currentIngredientQty.get(ingredientId) ?? Number(ingredient?.quantity ?? 0) ?? 0);
+                const nextQty = Math.max(minQty, currentQty - step);
+                currentIngredientQty.set(ingredientId, nextQty);
+                persistConfig();
+                syncQty();
+              });
+              plusBtn.addEventListener("click", (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                if (isReadOnlyConfig) return;
+                const currentQty = Number(currentIngredientQty.get(ingredientId) ?? Number(ingredient?.quantity ?? 0) ?? 0);
+                const nextQty = Math.min(maxQty, currentQty + step);
+                currentIngredientQty.set(ingredientId, nextQty);
+                persistConfig();
+                syncQty();
+              });
+              qtyWrap.appendChild(minusBtn);
+              qtyWrap.appendChild(qtyVal);
+              qtyWrap.appendChild(plusBtn);
+              row.appendChild(qtyWrap);
+              ingredientsBlock.appendChild(row);
+              syncQty();
+            });
+            host.appendChild(ingredientsBlock);
+          }
+        } catch (error) {
+          console.warn("Failed to mount right-order benefit gift config:", productId, error);
+          if (host.isConnected) host.innerHTML = "";
+        }
+      })();
+    };
+
+    const listEl = document.createElement("div");
+    listEl.className = "shop-favorites-list shop-checkout-benefit-products-list shop-checkout-benefit-claim-list";
+    shell.appendChild(listEl);
+
+    const actions = document.createElement("div");
+    actions.className = "shop-checkout-benefit-claim-actions";
+    const confirmBtn = document.createElement("button");
+    confirmBtn.type = "button";
+    confirmBtn.className = "btn btn-primary shop-checkout-benefit-claim-confirm";
+    confirmBtn.textContent = "Забрать";
+    actions.appendChild(confirmBtn);
+    shell.appendChild(actions);
+
+    const submitGiftClaimSelection = async () => {
+      const selectedRewardItems = [];
+      items.forEach((item) => {
+        const qty = Math.max(0, Number(item?.selected_qty || 0));
+        for (let itemIndex = 0; itemIndex < qty; itemIndex += 1) {
+          selectedRewardItems.push({
+            selection_key: String(item?.selection_key || "").trim(),
+            product_id: Number(item?.product_id || item?.id || 0) || null,
+            product_config: item?.product_config && typeof item.product_config === "object"
+              ? deepCloneJson(item.product_config, null)
+              : null,
+          });
+        }
+      });
+      if (!selectedRewardItems.length) return;
+      try {
+        confirmBtn.disabled = true;
+        await claimRightOrderBenefitProgress(id, progressItem, selectedRewardItems);
+      } catch (error) {
+        showNewOrderAlert(getRightOrderBenefitsActionErrorMessage(error));
+      } finally {
+        confirmBtn.disabled = false;
+      }
+    };
+
+    const syncSummary = () => {
+      const totalSelected = getTotalSelected();
+      info.textContent = totalSelected > 0
+        ? `Выбрано ${totalSelected} из ${selectionLimit}`
+        : `Можно забрать ${selectionLimit} ${formatGiftClaimCount(selectionLimit)}`;
+      confirmBtn.disabled = !(totalSelected > 0);
+      syncFns.forEach((sync) => sync());
+    };
+
+    const renderGiftClaimCards = () => {
+      syncFns = [];
+      listEl.innerHTML = "";
+      items.forEach((item) => {
+        const control = buildRightOrderBenefitRewardClaimProductCard(item, {
+          getSelectionState,
+          mountConfig: mountGiftClaimConfig,
+          useCollapsedConfig: isMobileGiftClaim,
+          getExpandedSelectionKey,
+          onToggleExpand: (targetItem) => {
+            const nextSelectionKey = String(targetItem?.selection_key || "").trim();
+            if (!nextSelectionKey) return;
+            setExpandedSelectionKey(getExpandedSelectionKey() === nextSelectionKey ? "" : nextSelectionKey);
+            renderGiftClaimCards();
+            syncSummary();
+          },
+          onChange: (targetItem, delta) => {
+            const targetSelectionKey = String(targetItem?.selection_key || "").trim();
+            if (!targetSelectionKey || !Number(delta)) return;
+            const targetItemRef = items.find((entry) => String(entry?.selection_key || "").trim() === targetSelectionKey);
+            if (!targetItemRef) return;
+            const currentCount = Math.max(0, Number(targetItemRef?.selected_qty || 0));
+            const nextState = getSelectionState(targetItemRef);
+            if (delta < 0) {
+              if (!nextState.canDecrement) return;
+              targetItemRef.selected_qty = Math.max(0, currentCount - 1);
+            } else {
+              if (!nextState.canIncrement) return;
+              targetItemRef.selected_qty = currentCount + 1;
+            }
+            syncSummary();
+          },
+        });
+        syncFns.push(control.sync);
+        listEl.appendChild(control.card);
+      });
+      syncFns.forEach((sync) => sync());
+    };
+
+    renderGiftClaimCards();
+    syncSummary();
+    confirmBtn.addEventListener("click", () => {
+      void submitGiftClaimSelection();
+    });
+  }
+
+  function renderRightBenefitsMainScreen(order) {
+    const orderId = Number(order?.id || 0);
+    const { body, title, backBtn, modeToggle } = getRightBenefitsOverlayElements();
+    if (!body || !title || !backBtn) return;
+    title.textContent = "Выгоды";
+    backBtn.classList.add("hidden");
+    if (modeToggle) modeToggle.classList.remove("hidden");
+    setRightBenefitsModeToggleState(getActiveRightOrderBenefitsMode());
+    body.innerHTML = "";
+
+    const shell = document.createElement("div");
+    shell.className = "shop-checkout-benefits-sheet";
+    body.appendChild(shell);
+
+    const hint = document.createElement("div");
+    hint.className = "shop-checkout-benefits-hint";
+    hint.textContent = "Здесь можно выбрать одну скидку и один промокод. Если у обоих включено совмещение, они применяются вместе.";
+    shell.appendChild(hint);
+
+    const currentMode = getActiveRightOrderBenefitsMode();
+    const previewData = getRightOrderBenefitsPreviewSnapshot(order, { mode: currentMode });
+    const isLoading = state.rightBenefitsLoadingByOrder.has(getRightOrderBenefitsCacheSlot(orderId, currentMode));
+    if (!previewData) {
+      const loading = document.createElement("div");
+      loading.className = "shop-checkout-benefits-loading";
+      loading.textContent = isLoading ? "Загрузка выгод..." : "Загружаем выгоды...";
+      shell.appendChild(loading);
+      if (!isLoading) {
+        void loadRightOrderBenefitsPreview(orderId, {
+          force: true,
+          render: true,
+          mode: currentMode,
+        }).catch((error) => {
+          showNewOrderAlert(getRightOrderBenefitsActionErrorMessage(error));
+        });
+      }
+      return;
+    }
+
+    const data = getRightOrderBenefitsRenderData(previewData);
+
+    const discountSection = createRightOrderBenefitsSection("Скидки", "Для этого заказа доступных скидок нет.");
+    const promoSection = createRightOrderBenefitsSection("Промокоды", "Для этого заказа доступных промокодов нет.");
+    const giftSection = createRightOrderBenefitsSection("Подарки", "Здесь появятся доступные подарки.", { horizontal: true });
+    const progressSection = createRightOrderBenefitsSection("Накопления", "Здесь появится прогресс накопительных акций.");
+    const completedSection = createRightOrderBenefitsSection("Завершенные", "Здесь появятся завершённые выгоды.");
+
+    shell.appendChild(discountSection.section);
+    shell.appendChild(promoSection.section);
+    shell.appendChild(giftSection.section);
+    shell.appendChild(progressSection.section);
+    shell.appendChild(completedSection.section);
+
+    setRightOrderBenefitsSectionItems(discountSection, data.discounts, (item) => renderRightOrderBenefitDiscountCard(item, {
+      onOpenDetails: (discountItem) => {
+        openRightOrderBenefitDetailScreen(orderId, {
+          kind: "discount",
+          item: discountItem,
+        });
+      },
+      onToggle: async (discountItem) => {
+        try {
+          await toggleRightOrderBenefitDiscount(orderId, discountItem);
+        } catch (error) {
+          showNewOrderAlert(getRightOrderBenefitsActionErrorMessage(error));
+        }
+      },
+    }));
+    setRightOrderBenefitsSectionItems(promoSection, data.promo_codes, (item) => renderRightOrderBenefitPromoCard(item, {
+      onOpenDetails: (promoItem) => {
+        openRightOrderBenefitDetailScreen(orderId, {
+          kind: "promo",
+          item: promoItem,
+        });
+      },
+      onToggle: async (promoItem) => {
+        try {
+          await toggleRightOrderBenefitPromo(orderId, promoItem);
+        } catch (error) {
+          showNewOrderAlert(getRightOrderBenefitsActionErrorMessage(error));
+        }
+      },
+    }));
+    setRightOrderBenefitsSectionItems(giftSection, data.gifts, (item) => renderRightOrderBenefitGiftCard(item, {
+      onOpen: (giftReward) => {
+        openRightOrderBenefitDetailScreen(orderId, {
+          kind: "gift",
+          item: giftReward,
+        });
+      },
+      onReceive: async (giftReward) => {
+        try {
+          await receiveRightOrderBenefitGift(orderId, giftReward);
+        } catch (error) {
+          showNewOrderAlert(getRightOrderBenefitsActionErrorMessage(error));
+        }
+      },
+    }));
+    bindRightOrderHorizontalTrack(giftSection.list);
+    setRightOrderBenefitsSectionItems(progressSection, data.progress, (item) => renderRightOrderBenefitProgressCard(item, {
+      onOpenDetails: (progressReward) => {
+        openRightOrderBenefitDetailScreen(orderId, {
+          kind: "progress",
+          item: progressReward,
+        });
+      },
+      onClaim: async (progressReward) => {
+        try {
+          if (String(progressReward?.claim_mode || "").trim().toLowerCase() === "gift_sheet") {
+            await openRightOrderBenefitGiftClaimScreen(orderId, progressReward);
+            return;
+          }
+          await claimRightOrderBenefitProgress(orderId, progressReward);
+        } catch (error) {
+          showNewOrderAlert(getRightOrderBenefitsActionErrorMessage(error));
+        }
+      },
+    }));
+    setRightOrderBenefitsSectionItems(completedSection, data.completed, renderRightOrderBenefitDisplayCard);
+  }
+
+  function renderRightBenefitsOverlay(orderId) {
+    const id = Number(orderId || state.benefitsModal.orderId || 0);
+    if (!(id > 0)) return;
+    ensureRightBenefitsOverlay();
+    const { backdrop } = getRightBenefitsOverlayElements();
+    if (!backdrop) return;
+    backdrop.classList.remove("hidden");
+    state.benefitsModal.orderId = id;
+    if (String(state.benefitsModal.screen || "main") === "gift-claim") {
+      renderRightOrderBenefitGiftClaimScreen(id);
+      return;
+    }
+    if (String(state.benefitsModal.screen || "main") === "detail") {
+      renderRightOrderBenefitDetailScreen(id);
+      return;
+    }
+    const orderIndex = getRightOrderIndexById(id);
+    if (orderIndex < 0) {
+      closeRightBenefitsOverlay();
+      return;
+    }
+    renderRightBenefitsMainScreen(state.rightOrders[orderIndex] || {});
+  }
+
+  async function openRightBenefitsOverlay(orderId) {
+    const id = Number(orderId || 0);
+    if (!(id > 0)) return;
+    const index = getRightOrderIndexById(id);
+    if (index < 0) return;
+    const order = state.rightOrders[index] || {};
+    const form = order.form && typeof order.form === "object" ? order.form : {};
+    const phoneDigits = normalizePhoneRu(form.phone);
+    if (phoneDigits.length !== 11) {
+      showNewOrderAlert("Введите номер телефона");
+      return;
+    }
+    const token = await ensureRightOrderBenefitsCustomerToken(id);
+    if (!token) {
+      showNewOrderAlert("Клиент с таким номером не найден");
+      return;
+    }
+    state.benefitsModal.orderId = id;
+    state.benefitsModal.mode = "customer";
+    state.benefitsModal.screen = "main";
+    state.benefitsModal.title = "Выгоды";
+    state.benefitsModal.payload = null;
+    renderRightBenefitsOverlay(id);
+    try {
+      await loadRightOrderBenefitsPreview(id, {
+        force: true,
+        render: true,
+        mode: "customer",
+      });
+    } catch (error) {
+      showNewOrderAlert(getRightOrderBenefitsActionErrorMessage(error));
     }
   }
 
@@ -9938,7 +13372,7 @@
         });
       };
 
-      rightInteractionEl.addEventListener("click", (e) => {
+      rightInteractionEl.addEventListener("click", async (e) => {
         if (state.rightCartClearConfirmUntilByOrder.size) {
           const anyActionTarget = e.target.closest("[data-action]");
           const clearActionTarget = e.target.closest("[data-action='right-cart-clear'][data-order-id]");
@@ -10210,7 +13644,16 @@
           const form = order.form && typeof order.form === "object" ? { ...order.form } : {};
           const cartItems = Array.isArray(form.cartItems) ? form.cartItems.map((item) => ({ ...item })) : [];
           const removedItem = cartItems.find((item) => Number(item?.id || 0) === cartItemId) || null;
-          const nextItems = cartItems.filter((item) => Number(item?.id || 0) !== cartItemId);
+          const giftRewardId = Number(removedItem?.gift_reward_id || 0);
+          const isGiftReward = Number(removedItem?.is_gift_reward || 0) === 1 && giftRewardId > 0;
+          if (isGiftReward) {
+            const giftBundleItems = cartItems.filter((item) => Number(item?.gift_reward_id || 0) === giftRewardId);
+            const restored = await restoreRightOrderGiftRewardsFromItems(orderId, giftBundleItems);
+            if (!restored) return;
+          }
+          const nextItems = isGiftReward
+            ? cartItems.filter((item) => Number(item?.gift_reward_id || 0) !== giftRewardId)
+            : cartItems.filter((item) => Number(item?.id || 0) !== cartItemId);
           if (nextItems.length === cartItems.length) return;
           markRightOrderAutoAddDismissedByCartItem(orderId, removedItem);
           updateRightOrderCartItems(orderId, nextItems, { render: true });
@@ -10405,6 +13848,11 @@
               renderRightOrderTabs();
               return;
             }
+            const giftItems = cartItems.filter((item) => Number(item?.is_gift_reward || 0) === 1);
+            if (giftItems.length) {
+              const restored = await restoreRightOrderGiftRewardsFromItems(orderId, giftItems);
+              if (!restored) return;
+            }
             resetRightCartClearState(orderId, { render: false });
             document.dispatchEvent(
               new CustomEvent("neworder:edit-cancel", {
@@ -10419,8 +13867,21 @@
             renderRightOrderTabs();
             return;
           }
+          const giftItems = cartItems.filter((item) => Number(item?.is_gift_reward || 0) === 1);
+          if (giftItems.length) {
+            const restored = await restoreRightOrderGiftRewardsFromItems(orderId, giftItems);
+            if (!restored) return;
+          }
           clearRightOrderCart(orderId);
           renderRightOrderTabs();
+          return;
+        }
+
+        const benefitsBtn = e.target.closest("[data-action='right-order-benefits-open'][data-order-id]");
+        if (benefitsBtn) {
+          const orderId = Number(benefitsBtn.getAttribute("data-order-id") || 0);
+          if (!(orderId > 0)) return;
+          void openRightBenefitsOverlay(orderId);
           return;
         }
 
@@ -10634,7 +14095,7 @@
       );
     }
 
-    document.addEventListener("click", (e) => {
+    document.addEventListener("click", async (e) => {
       if (state.checkoutIngredientsPopoverKey) {
         const path = typeof e.composedPath === "function" ? e.composedPath() : [];
         const keepOpen = path.some((node) => {
@@ -12500,6 +15961,17 @@
     const changeType = changeFrom > 0
       ? (knownChangeValues.has(changeFrom) ? String(changeFrom) : "other")
       : "no_change";
+    const benefitsMeta = src?.benefits_meta && typeof src.benefits_meta === "object"
+      ? src.benefits_meta
+      : null;
+    const restoredDiscountId = normalizeRightOrderBenefitsSelectedId(benefitsMeta?.selected_discount_id);
+    const restoredDiscountSource = normalizeRightOrderBenefitsDiscountSource(benefitsMeta?.selected_discount_source);
+    const restoredPromoSource = normalizeRightOrderBenefitsPromoSource(benefitsMeta?.selected_promo_source);
+    const restoredPromoRewardId = normalizeRightOrderBenefitsSelectedId(benefitsMeta?.selected_promo_reward_id);
+    const restoredPreviewMode = String(benefitsMeta?.benefits_preview_mode || "").trim()
+      ? normalizeRightOrderBenefitsMode(benefitsMeta?.benefits_preview_mode)
+      : null;
+    const restoredPromoCode = normalizeRightOrderBenefitsPromoCode(src?.promo_code);
 
     draft.form = {
       ...draft.form,
@@ -12518,6 +15990,16 @@
       paymentMethod: String(src?.payment_code || draft.form.paymentMethod || "cash").trim() || "cash",
       changeType,
       changeAmount: changeType === "other" ? String(Math.max(0, changeFrom)) : "",
+      promo_code: restoredPromoCode,
+      selected_discount_id: restoredDiscountId,
+      selected_discount_source: restoredDiscountId
+        ? (restoredDiscountSource || "discount")
+        : null,
+      selected_promo_source: (restoredPromoCode || restoredPromoRewardId)
+        ? (restoredPromoSource || (restoredPromoCode ? "promo_code" : null))
+        : null,
+      selected_promo_reward_id: restoredPromoRewardId,
+      benefits_preview_mode: restoredPreviewMode,
       comment: String(src?.comment || "").trim(),
       cartItems,
     };
@@ -12619,6 +16101,10 @@
     renderCategories();
     await renderActiveCategoryContent();
     renderRightOrderTabs();
+    state.rightOrders.forEach((row) => {
+      const orderId = Number(row?.id || 0);
+      if (orderId > 0) scheduleRightOrderBenefitsRefresh(orderId, { delay: 0 });
+    });
   }
 
   function buildBlankDraftSession(opts = {}) {

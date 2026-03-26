@@ -17,11 +17,19 @@ const {
   loadCustomerAddressById,
   normalizeCustomerAddressPayload,
 } = require("../../data/customer-address");
+const {
+  getCheckoutBenefitsPreviewProvider,
+} = require("../../services/checkout-benefits-preview-provider");
+const {
+  getOrderBenefitsAccrualProvider,
+} = require("../../services/order-benefits-accrual-provider");
 
 module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
   const router = express.Router();
   let orderDeliveryTypeColumnsReady = false;
   let ensureOrderDeliveryTypeColumnsPromise = null;
+  let orderBenefitsMetaColumnReady = false;
+  let ensureOrderBenefitsMetaColumnPromise = null;
   let refundTablesReady = false;
   let ensureRefundTablesPromise = null;
 
@@ -166,6 +174,167 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
 
     return ensureRefundTablesPromise;
   }
+
+  async function ensureOrderBenefitsMetaColumn() {
+    if (orderBenefitsMetaColumnReady) return true;
+    if (ensureOrderBenefitsMetaColumnPromise) return ensureOrderBenefitsMetaColumnPromise;
+
+    ensureOrderBenefitsMetaColumnPromise = (async () => {
+      const [columnRows] = await db.query("SHOW COLUMNS FROM order_orders");
+      const existing = new Set((Array.isArray(columnRows) ? columnRows : []).map((row) => String(row?.Field || "").trim()).filter(Boolean));
+      orderBenefitsMetaColumnReady = existing.has("benefits_meta_json");
+      return orderBenefitsMetaColumnReady;
+    })()
+      .catch((err) => {
+        ensureOrderBenefitsMetaColumnPromise = null;
+        throw err;
+      })
+      .finally(() => {
+        ensureOrderBenefitsMetaColumnPromise = null;
+      });
+
+    return ensureOrderBenefitsMetaColumnPromise;
+  }
+
+  function normalizeOrderBenefitsPreviewMode(value) {
+    const raw = String(value || "").trim().toLowerCase();
+    if (raw === "all") return "all";
+    if (raw === "customer") return "customer";
+    return null;
+  }
+
+  function normalizeOrderBenefitsSelectedId(value) {
+    const id = Number(value);
+    return Number.isInteger(id) && id > 0 ? id : null;
+  }
+
+  function normalizeOrderBenefitsDiscountSource(value) {
+    const raw = String(value || "").trim().toLowerCase();
+    return ["discount", "reward_discount"].includes(raw) ? raw : null;
+  }
+
+  function normalizeOrderBenefitsPromoSource(value) {
+    const raw = String(value || "").trim().toLowerCase();
+    return ["promo_code", "reward_promo"].includes(raw) ? raw : null;
+  }
+
+  function parseOrderBenefitsMetaJson(rawValue) {
+    if (!rawValue) return null;
+    let parsed = rawValue;
+    try {
+      if (typeof rawValue === "string") {
+        parsed = JSON.parse(rawValue);
+      }
+    } catch {
+      return null;
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    const meta = {
+      selected_discount_id: normalizeOrderBenefitsSelectedId(parsed?.selected_discount_id),
+      selected_discount_source: normalizeOrderBenefitsDiscountSource(parsed?.selected_discount_source),
+      selected_promo_source: normalizeOrderBenefitsPromoSource(parsed?.selected_promo_source),
+      selected_promo_reward_id: normalizeOrderBenefitsSelectedId(parsed?.selected_promo_reward_id),
+      benefits_preview_mode: normalizeOrderBenefitsPreviewMode(parsed?.benefits_preview_mode),
+    };
+    if (!meta.selected_discount_id) meta.selected_discount_source = null;
+    if (meta.selected_promo_source === "reward_promo" && !meta.selected_promo_reward_id) {
+      meta.selected_promo_source = null;
+    }
+    const hasValues = Object.values(meta).some((value) => value !== null);
+    return hasValues ? meta : null;
+  }
+
+  function parseOrderDiscountsJson(rawValue) {
+    if (!rawValue) return [];
+    if (Array.isArray(rawValue)) return rawValue;
+    let parsed = rawValue;
+    try {
+      if (typeof rawValue === "string") {
+        parsed = JSON.parse(rawValue);
+      }
+    } catch {
+      return [];
+    }
+    return Array.isArray(parsed) ? parsed : [];
+  }
+
+  function buildOrderBenefitsMetaJson(source, fallbackRaw = null) {
+    const input = source && typeof source === "object" ? source : {};
+    const fallback = parseOrderBenefitsMetaJson(fallbackRaw);
+    const readValue = (field, normalize) => {
+      if (Object.prototype.hasOwnProperty.call(input, field)) {
+        return normalize(input[field]);
+      }
+      return fallback ? fallback[field] ?? null : null;
+    };
+    const meta = {
+      selected_discount_id: readValue("selected_discount_id", normalizeOrderBenefitsSelectedId),
+      selected_discount_source: readValue("selected_discount_source", normalizeOrderBenefitsDiscountSource),
+      selected_promo_source: readValue("selected_promo_source", normalizeOrderBenefitsPromoSource),
+      selected_promo_reward_id: readValue("selected_promo_reward_id", normalizeOrderBenefitsSelectedId),
+      benefits_preview_mode: readValue("benefits_preview_mode", normalizeOrderBenefitsPreviewMode),
+    };
+    if (!meta.selected_discount_id) meta.selected_discount_source = null;
+    if (meta.selected_promo_source === "reward_promo" && !meta.selected_promo_reward_id) {
+      meta.selected_promo_source = null;
+    }
+    const hasValues = Object.values(meta).some((value) => value !== null);
+    return hasValues ? JSON.stringify(meta) : null;
+  }
+
+  async function accrueOrderBenefitsIfAvailable(params = {}) {
+    const provider = getOrderBenefitsAccrualProvider();
+    if (!provider || typeof provider.accrueOrderBenefits !== "function") return null;
+    return provider.accrueOrderBenefits(params);
+  }
+
+  router.post("/benefits/preview", async (req, res) => {
+    try {
+      const previewProvider = getCheckoutBenefitsPreviewProvider();
+      if (!previewProvider || typeof previewProvider.buildPreview !== "function") {
+        return res.status(503).json({ ok: false, error: "BENEFITS_PREVIEW_UNAVAILABLE" });
+      }
+
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const customerId = Number(req.body?.customer_id || 0);
+      const mode = String(req.body?.mode || "").trim().toLowerCase() === "all"
+        ? "all"
+        : "customer";
+
+      if (!(customerId > 0)) {
+        return res.status(400).json({ ok: false, error: "BAD_CUSTOMER_ID" });
+      }
+
+      const [rows] = await db.query(
+        `SELECT *
+           FROM cust_customers
+          WHERE tenant_id = ?
+            AND store_id = ?
+            AND id = ?
+            AND is_active = 1
+          LIMIT 1`,
+        [tenantId, storeId, customerId]
+      );
+      const customer = Array.isArray(rows) && rows.length ? rows[0] : null;
+      if (!customer) {
+        return res.status(404).json({ ok: false, error: "CUSTOMER_NOT_FOUND" });
+      }
+
+      const data = await previewProvider.buildPreview({
+        tenantId,
+        storeId,
+        customer,
+        draft: req.body,
+        mode,
+      });
+
+      return res.json({ ok: true, data });
+    } catch (e) {
+      console.error("POST /api/admin/orders/benefits/preview error:", e);
+      return res.status(500).json({ ok: false, error: "DB_ERROR" });
+    }
+  });
 
   async function fetchRefundRecordsMap(executor, tenantId, storeId, orderIds, opts = {}) {
     await ensureRefundTables();
@@ -396,6 +565,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
 
   async function fetchOrderPayload(tenantId, storeId, id, opts = {}) {
     const storeTimezone = opts.storeTimezone ?? await getStoreTimezone(tenantId, storeId);
+    const hasBenefitsMetaColumn = await ensureOrderBenefitsMetaColumn();
     const [rows] = await db.query(
       `
       SELECT
@@ -406,6 +576,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         o.customer_id,
         o.customer_name,
         o.customer_phone,
+        o.promo_code,
         o.address,
         o.comment,
         o.address_comment,
@@ -415,6 +586,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         o.delivery_cost,
         o.discount_amount,
         o.discounts_json,
+        ${hasBenefitsMetaColumn ? "o.benefits_meta_json" : "NULL AS benefits_meta_json"},
         o.items,
         DATE_FORMAT(o.scheduled_at, '%Y-%m-%d %H:%i:%s') AS scheduled_at,
         o.delivery_type_id,
@@ -493,11 +665,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       const parsed = r.items ? JSON.parse(r.items) : [];
       if (Array.isArray(parsed)) items = parsed;
     } catch {}
-    let discountsJson = [];
-    try {
-      const parsedDiscounts = r.discounts_json ? JSON.parse(r.discounts_json) : [];
-      if (Array.isArray(parsedDiscounts)) discountsJson = parsedDiscounts;
-    } catch {}
+    const discountsJson = parseOrderDiscountsJson(r.discounts_json);
+    const benefitsMeta = parseOrderBenefitsMetaJson(r.benefits_meta_json);
     const itemsTotal = items.reduce((sum, item) => sum + Number(item.line_total || 0), 0);
     const totalPrice = Number(r.total_price || 0);
     let deliveryCost = 0;
@@ -516,6 +685,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       customer_id: r.customer_id,
       customer_name: r.customer_name,
       customer_phone: r.customer_phone,
+      promo_code: r.promo_code ?? null,
       address: r.address,
       comment: r.comment,
       address_comment: (r.address_comment && String(r.address_comment).trim()) ? r.address_comment : (r.address_comment_from_cust && String(r.address_comment_from_cust).trim()) ? r.address_comment_from_cust : null,
@@ -526,6 +696,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       delivery_cost: deliveryCost,
       discount_amount: Number(r.discount_amount || 0),
       discounts_json: discountsJson,
+      benefits_meta: benefitsMeta,
       items,
       scheduled_at: r.scheduled_at,
       delivery_type_id: r.delivery_type_id,
@@ -688,6 +859,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       const orderBy = (Number.isFinite(statusId) && statusId > 0)
         ? `o.status_sort DESC, o.created_at DESC, o.id DESC`
         : `o.created_at DESC, o.id DESC`;
+      const hasBenefitsMetaColumn = await ensureOrderBenefitsMetaColumn();
 
       const [rows] = await db.query(
         `
@@ -708,6 +880,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           o.delivery_cost,
           o.discount_amount,
           o.discounts_json,
+          ${hasBenefitsMetaColumn ? "o.benefits_meta_json" : "NULL AS benefits_meta_json"},
           o.items,
           DATE_FORMAT(o.scheduled_at, '%Y-%m-%d %H:%i:%s') AS scheduled_at,
           o.delivery_type_id,
@@ -785,11 +958,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           const parsed = r.items ? JSON.parse(r.items) : [];
           if (Array.isArray(parsed)) items = parsed;
         } catch {}
-        let discountsJson = [];
-        try {
-          const parsedDiscounts = r.discounts_json ? JSON.parse(r.discounts_json) : [];
-          if (Array.isArray(parsedDiscounts)) discountsJson = parsedDiscounts;
-        } catch {}
+        const discountsJson = parseOrderDiscountsJson(r.discounts_json);
+        const benefitsMeta = parseOrderBenefitsMetaJson(r.benefits_meta_json);
         const itemsTotal = items.reduce((sum, item) => sum + Number(item.line_total || 0), 0);
         const totalPrice = Number(r.total_price || 0);
         let deliveryCost = 0;
@@ -816,6 +986,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           delivery_cost: deliveryCost,
           discount_amount: Number(r.discount_amount || 0),
           discounts_json: discountsJson,
+          benefits_meta: benefitsMeta,
           is_paid: Number(r.is_paid || 0) === 1 ? 1 : 0,
           delivery_address_id: r.delivery_address_id ?? null,
 
@@ -1500,6 +1671,13 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         [statusId, stockDeductedAt, stockDocumentId, tenantId, storeId, id]
       );
 
+      await accrueOrderBenefitsIfAvailable({
+        conn,
+        tenantId,
+        storeId,
+        orderId: id,
+      });
+
       await conn.commit();
       transactionStarted = false;
       safeRelease();
@@ -1604,9 +1782,12 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       if (!Number.isFinite(id) || id <= 0) {
         return res.status(400).json({ ok: false, error: "BAD_ID" });
       }
+      const hasBenefitsMetaColumn = await ensureOrderBenefitsMetaColumn();
 
       const [existingRows] = await db.query(
-        `SELECT id, public_id, customer_id, promo_code, address_comment, cutlery_qty, discounts_json, items
+        `SELECT id, public_id, customer_id, promo_code, address_comment, cutlery_qty, discounts_json,
+                ${hasBenefitsMetaColumn ? "benefits_meta_json," : ""}
+                items
          FROM order_orders
          WHERE tenant_id=? AND store_id=? AND id=? AND is_active=1
          LIMIT 1`,
@@ -1696,6 +1877,9 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       const promoCode = Object.prototype.hasOwnProperty.call(req.body || {}, "promo_code")
         ? helpers.strOrNull(req.body?.promo_code)
         : helpers.strOrNull(existing?.promo_code);
+      const benefitsMetaJson = hasBenefitsMetaColumn
+        ? buildOrderBenefitsMetaJson(req.body, existing?.benefits_meta_json)
+        : null;
       const cutleryQty = Object.prototype.hasOwnProperty.call(req.body || {}, "cutlery_qty")
         ? Math.max(0, Number(req.body?.cutlery_qty || 0))
         : Math.max(0, Number(existing?.cutlery_qty || 0));
@@ -2122,10 +2306,14 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         return sum + (old > line ? old : line);
       }, 0));
       const itemLevelDiscountAmount = roundMoney(Math.max(0, oldItemsTotal - itemsTotal));
+      const itemsTotalOverrideRaw = Number(req.body?.benefits_items_total_override);
+      const hasItemsTotalOverride = Number.isFinite(itemsTotalOverrideRaw) && itemsTotalOverrideRaw >= 0;
+      const discountAmountOverrideRaw = Number(req.body?.discount_amount_override);
+      const hasDiscountAmountOverride = Number.isFinite(discountAmountOverrideRaw) && discountAmountOverrideRaw >= 0;
 
       let customerOrderDiscountAmount = 0;
       let appliedOrderDiscounts = [];
-      if (Number(customerId || 0) > 0 && itemsTotal > 0) {
+      if (!hasItemsTotalOverride && Number(customerId || 0) > 0 && itemsTotal > 0) {
         const orderDiscountsForCustomer = await discountHelpers.getOrderDiscounts(
           db,
           tenantId,
@@ -2139,8 +2327,12 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           appliedOrderDiscounts = Array.isArray(applied?.appliedDiscounts) ? applied.appliedDiscounts : [];
         }
       }
-      const itemsTotalAfterDiscounts = roundMoney(Math.max(0, itemsTotal - customerOrderDiscountAmount));
-      const discountAmount = roundMoney(itemLevelDiscountAmount + customerOrderDiscountAmount);
+      const itemsTotalAfterDiscounts = hasItemsTotalOverride
+        ? roundMoney(Math.max(0, itemsTotalOverrideRaw))
+        : roundMoney(Math.max(0, itemsTotal - customerOrderDiscountAmount));
+      const discountAmount = hasDiscountAmountOverride
+        ? roundMoney(Math.max(0, discountAmountOverrideRaw))
+        : roundMoney(itemLevelDiscountAmount + customerOrderDiscountAmount);
 
       let deliveryCost = 0;
       if (isDeliveryMethod) {
@@ -2269,14 +2461,14 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       if (Array.isArray(req.body?.discounts_json)) {
         discountsJson = req.body.discounts_json;
       } else {
-        try {
-          const parsed = existing?.discounts_json ? JSON.parse(existing.discounts_json) : [];
-          if (Array.isArray(parsed)) discountsJson = parsed;
-        } catch {}
+        discountsJson = parseOrderDiscountsJson(existing?.discounts_json);
       }
-      discountsJson = (Array.isArray(discountsJson) ? discountsJson : [])
-        .filter((row) => String(row?.apply_to || "").trim().toLowerCase() !== "order");
-      if (customerOrderDiscountAmount > 0 && appliedOrderDiscounts.length) {
+      discountsJson = Array.isArray(discountsJson) ? discountsJson : [];
+      if (!hasItemsTotalOverride) {
+        discountsJson = discountsJson
+          .filter((row) => String(row?.apply_to || "").trim().toLowerCase() !== "order");
+      }
+      if (!hasItemsTotalOverride && customerOrderDiscountAmount > 0 && appliedOrderDiscounts.length) {
         discountsJson.push(
           ...appliedOrderDiscounts.map((row) => ({
             discount_id: Number(row?.id || 0),
@@ -2289,54 +2481,66 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         );
       }
 
+      const updateFields = [
+        "customer_id=?",
+        "customer_name=?",
+        "customer_phone=?",
+        "promo_code=?",
+        "address=?",
+        "delivery_address_id=?",
+        "pickup_store_id=?",
+        "comment=?",
+        "address_comment=?",
+        "cutlery_qty=?",
+        "change_from=?",
+        "items=?",
+        "total_price=?",
+        "delivery_cost=?",
+        "discount_amount=?",
+        "discounts_json=?",
+      ];
+      const updateParams = [
+        customerId,
+        customerName,
+        customerPhone,
+        promoCode,
+        isDeliveryMethod ? deliveryAddress : null,
+        deliveryAddressId,
+        pickupStoreId,
+        comment,
+        addressComment,
+        cutleryQty,
+        changeFrom,
+        JSON.stringify(items),
+        totalPrice,
+        deliveryCost,
+        discountAmount,
+        JSON.stringify(discountsJson),
+      ];
+      if (hasBenefitsMetaColumn) {
+        updateFields.push("benefits_meta_json=?");
+        updateParams.push(benefitsMetaJson);
+      }
+      updateFields.push(
+        "delivery_type_id=?",
+        "payment_id=?",
+        "time_option_id=?",
+        "scheduled_at=?"
+      );
+      updateParams.push(
+        deliveryTypeId,
+        paymentId,
+        timeOptionId,
+        scheduledAt,
+        tenantId,
+        storeId,
+        id
+      );
       await db.query(
         `UPDATE order_orders
-         SET customer_id=?,
-             customer_name=?,
-             customer_phone=?,
-             promo_code=?,
-             address=?,
-             delivery_address_id=?,
-             pickup_store_id=?,
-             comment=?,
-             address_comment=?,
-             cutlery_qty=?,
-             change_from=?,
-             items=?,
-             total_price=?,
-             delivery_cost=?,
-             discount_amount=?,
-             discounts_json=?,
-             delivery_type_id=?,
-             payment_id=?,
-             time_option_id=?,
-             scheduled_at=?
+         SET ${updateFields.join(",\n             ")}
          WHERE tenant_id=? AND store_id=? AND id=? AND is_active=1`,
-        [
-          customerId,
-          customerName,
-          customerPhone,
-          promoCode,
-          isDeliveryMethod ? deliveryAddress : null,
-          deliveryAddressId,
-          pickupStoreId,
-          comment,
-          addressComment,
-          cutleryQty,
-          changeFrom,
-          JSON.stringify(items),
-          totalPrice,
-          deliveryCost,
-          discountAmount,
-          JSON.stringify(discountsJson),
-          deliveryTypeId,
-          paymentId,
-          timeOptionId,
-          scheduledAt,
-          tenantId,
-          storeId,
-          id,
-        ]
+        updateParams
       );
 
       const previousGiftRewardIds = new Set(
@@ -2365,6 +2569,15 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       }
 
       await syncCustomerOrderMetrics(db, tenantId, [existingCustomerId, customerId]);
+      try {
+        await accrueOrderBenefitsIfAvailable({
+          tenantId,
+          storeId,
+          orderId: id,
+        });
+      } catch (accrualErr) {
+        console.error("Failed to accrue order benefits after admin order save:", accrualErr);
+      }
 
       const payload = await fetchOrderPayload(tenantId, storeId, id);
       if (payload && ordersEvents && typeof ordersEvents.publish === "function") {

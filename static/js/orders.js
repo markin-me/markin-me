@@ -246,6 +246,8 @@
     discountAmount: $$('[data-info="discount-amount"]'),
     discountInfoBtn: $$('[data-info="discount-info-btn"]'),
     discountBreakdown: $$('[data-info="discount-breakdown"]'),
+    promoCodeRow: $$('[data-info="promo-code-row"]'),
+    promoCode: $$('[data-info="promo-code"]'),
     deliveryRow: $$('[data-info="delivery-row"]'),
     deliveryCost: $$('[data-info="delivery-cost"]'),
     total: $$('[data-info="order-total"]'),
@@ -2645,11 +2647,46 @@
     }
   }
 
+  function normalizeOrderDiscountBreakdownSourceKind(entry) {
+    const raw = String(entry?.source_kind || entry?.source || entry?.kind || "").trim().toLowerCase();
+    if (raw === "promo_code" || raw === "reward_promo") return "promo_code";
+    if (raw === "reward_discount" || raw === "discount") return "discount";
+    const key = String(entry?.key || "").trim().toLowerCase();
+    if (key.startsWith("promo_")) return "promo_code";
+    if (key.startsWith("discount_")) return "discount";
+    return null;
+  }
+
+  function buildOrderStoredDiscountBreakdown(order) {
+    const fallbackPromoCode = String(order?.promo_code || "").trim() || null;
+    return parseOrderDiscountsJson(order)
+      .map((entry) => {
+        const sourceKind = normalizeOrderDiscountBreakdownSourceKind(entry);
+        const promoCode = sourceKind === "promo_code"
+          ? (String(entry?.promo_code || entry?.code || "").trim() || fallbackPromoCode)
+          : null;
+        return {
+          key: String(entry?.key || "").trim() || null,
+          title: String(entry?.title || entry?.name || "Скидка").trim() || "Скидка",
+          amount: roundMoney(Number(entry?.discount_amount ?? entry?.amount ?? 0)),
+          sourceKind,
+          promoCode,
+        };
+      })
+      .filter((entry) => Number(entry.amount || 0) > 0);
+  }
+
+  function formatOrderDiscountBreakdownTitle(entry) {
+    const title = String(entry?.title || "Скидка").trim() || "Скидка";
+    const promoCode = String(entry?.promoCode || "").trim();
+    if (!promoCode) return title;
+    return `${title} (${promoCode})`;
+  }
+
   function buildOrderDiscountSummary(order) {
     const orderTotal = roundMoney(Number(order?.total_price || 0));
     const deliveryCost = roundMoney(Number(order?.delivery_cost || 0));
     const items = Array.isArray(order?.items) ? order.items : [];
-    const discountsList = parseOrderDiscountsJson(order);
 
     let itemsTotalAfterItemDiscounts = 0;
     let comboDiscount = 0;
@@ -2692,12 +2729,26 @@
     autoAddDiscount = roundMoney(autoAddDiscount);
 
     const itemsPayableAfterAllDiscounts = roundMoney(Math.max(0, orderTotal - deliveryCost));
+    const storedDiscount = roundMoney(Math.max(0, Number(order?.discount_amount || 0)));
+    const storedBreakdown = buildOrderStoredDiscountBreakdown(order);
+    if (storedBreakdown.length > 0) {
+      const storedBreakdownTotal = roundMoney(
+        storedBreakdown.reduce((sum, entry) => sum + Number(entry.amount || 0), 0)
+      );
+      const totalDiscount = storedDiscount > storedBreakdownTotal ? storedDiscount : storedBreakdownTotal;
+      return {
+        subtotalBeforeDiscount: roundMoney(itemsPayableAfterAllDiscounts + totalDiscount),
+        totalDiscount,
+        breakdown: storedBreakdown,
+        orderDiscountTitles: [],
+      };
+    }
+
     const customerOrderDiscount = roundMoney(
       Math.max(0, itemsTotalAfterItemDiscounts - itemsPayableAfterAllDiscounts)
     );
     const itemLevelDiscount = roundMoney(comboDiscount + productDiscount + autoAddDiscount);
     const calculatedDiscount = roundMoney(itemLevelDiscount + customerOrderDiscount);
-    const storedDiscount = roundMoney(Math.max(0, Number(order?.discount_amount || 0)));
     const totalDiscount = storedDiscount > calculatedDiscount ? storedDiscount : calculatedDiscount;
     const subtotalBeforeDiscount = roundMoney(itemsPayableAfterAllDiscounts + totalDiscount);
 
@@ -2715,7 +2766,7 @@
     if (otherDiscount > 0) breakdown.push({ title: "Прочие скидки", amount: otherDiscount });
 
     const orderDiscountTitles = [];
-    discountsList.forEach((entry) => {
+    parseOrderDiscountsJson(order).forEach((entry) => {
       if (String(entry?.apply_to || "").toLowerCase() !== "order") return;
       const title = String(entry?.title || "").trim();
       if (title && !orderDiscountTitles.includes(title)) orderDiscountTitles.push(title);
@@ -2743,6 +2794,25 @@
     const titles = Array.isArray(summary.orderDiscountTitles) ? summary.orderDiscountTitles : [];
     if (titles.length > 0) {
       html += `<div class="order-summary-discount-breakdown-note">Скидка клиента: ${escapeHtml(titles.join(", "))}</div>`;
+    }
+
+    return html;
+  }
+
+  function renderOrderDiscountBreakdownHtml(summary) {
+    if (!summary) return "";
+    let html = "";
+    const rows = Array.isArray(summary.breakdown) ? summary.breakdown : [];
+    rows.forEach((entry) => {
+      html += `<div class="order-summary-discount-breakdown-row">`;
+      html += `<span class="order-summary-discount-breakdown-label">${escapeHtml(formatOrderDiscountBreakdownTitle(entry))}</span>`;
+      html += `<span class="order-summary-discount-breakdown-value">-${money(entry.amount || 0)}</span>`;
+      html += `</div>`;
+    });
+
+    const titles = Array.isArray(summary.orderDiscountTitles) ? summary.orderDiscountTitles : [];
+    if (titles.length > 0) {
+      html += `<div class="order-summary-discount-breakdown-note">РЎРєРёРґРєР° РєР»РёРµРЅС‚Р°: ${escapeHtml(titles.join(", "))}</div>`;
     }
 
     return html;
@@ -4204,6 +4274,8 @@
       setHiddenAll(infoEls.deliveryZoneRow, true);
       setHiddenAll(infoEls.deliveryAddressComment, true);
       setHiddenAll(infoEls.orderCommentBlock, true);
+      setTextAll(infoEls.promoCode, "?");
+      setHiddenAll(infoEls.promoCodeRow, true);
       setHiddenAll(infoEls.clientExtra, true);
       setHiddenAll(infoEls.discountInfoBtn, true);
       setHtmlAll(infoEls.discountBreakdown, "");
@@ -4266,10 +4338,14 @@
     const discountSummary = buildOrderDiscountSummary(order);
     const discountAmount = Number(discountSummary.totalDiscount || 0);
     const hasDiscount = discountAmount > 0;
+    const promoCode = String(order?.promo_code || "").trim();
+    const hasPromoCode = promoCode.length > 0;
     setTextAll(infoEls.subtotal, money(discountSummary.subtotalBeforeDiscount || 0));
     setTextAll(infoEls.discountAmount, `-${money(discountAmount)}`);
+    setTextAll(infoEls.promoCode, promoCode || "?");
     setHiddenAll(infoEls.subtotalRow, !hasDiscount);
     setHiddenAll(infoEls.discountRow, !hasDiscount);
+    setHiddenAll(infoEls.promoCodeRow, !hasPromoCode);
 
     const hasBreakdown = hasDiscount && (
       (Array.isArray(discountSummary.breakdown) && discountSummary.breakdown.length > 0) ||
@@ -6554,6 +6630,7 @@
     const receiptDiscountSummary = buildOrderDiscountSummary(receiptOrder);
     const discountAmount = Number(receiptDiscountSummary.totalDiscount || 0);
     const subtotal = Number(receiptDiscountSummary.subtotalBeforeDiscount || 0);
+    const receiptPromoCode = String(receiptOrder?.promo_code || "").trim();
 
     return `
 <!DOCTYPE html>
@@ -6776,6 +6853,7 @@
     ${showChange ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Сдача</div><div class="receipt-summary-value">${money(changeAmount)}</div></div>` : ''}
     ${discountAmount > 0 ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Сумма товаров</div><div class="receipt-summary-value">${money(subtotal)}</div></div>` : ''}
     ${discountAmount > 0 ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Скидка</div><div class="receipt-summary-value">-${money(discountAmount)}</div></div>` : ''}
+    ${receiptPromoCode ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Промокод</div><div class="receipt-summary-value">${escapeHtml(receiptPromoCode)}</div></div>` : ''}
     <div class="receipt-summary-row"><div class="receipt-summary-label">Доставка</div><div class="receipt-summary-value">${money(deliveryCost)}</div></div>
     <div class="receipt-total">ИТОГО: ${money(total)}</div>
   </div>

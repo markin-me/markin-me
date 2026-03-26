@@ -27,6 +27,7 @@ const LOYALTY_ISSUE_MODES = new Set(['automatic', 'manual', 'code']);
 const LOYALTY_PENDING_REWARD_MODES = new Set(['stack', 'single_pending']);
 const LOYALTY_REDEMPTION_MODES = new Set(['reset', 'subtract_threshold', 'keep_progress']);
 const PRODUCT_CONFIG_MODES = new Set(['any', 'exact']);
+const ACCRUAL_TRACKED_MECHANICS = new Set(['buy_x_get_y', 'threshold', 'loyalty_progress']);
 const DISCOUNT_MUTATION_ERROR_CODES = new Set([
   'TITLE_REQUIRED',
   'INVALID_CUSTOMERS',
@@ -473,6 +474,7 @@ function normalizeBuyXGetYMechanic(source = {}, fallback = {}) {
 
   return {
     type: 'buy_x_get_y',
+    accrual_status_id: toIntOrNull(src.accrual_status_id ?? base.accrual_status_id),
     buy_qty: Math.max(1, toIntOrNull(src.buy_qty ?? base.buy_qty) || 5),
     reward_qty: Math.max(1, toIntOrNull(src.reward_qty ?? base.reward_qty) || 1),
     qualifying_mode: ['same_sku', 'pool'].includes(toText(src.qualifying_mode || base.qualifying_mode).toLowerCase())
@@ -571,6 +573,7 @@ function normalizeThresholdMechanic(source = {}, fallback = {}) {
 
   return {
     type: 'threshold',
+    accrual_status_id: toIntOrNull(src.accrual_status_id ?? base.accrual_status_id),
     threshold_basis: ['before_discounts', 'after_discounts'].includes(toText(src.threshold_basis || base.threshold_basis).toLowerCase())
       ? toText(src.threshold_basis || base.threshold_basis).toLowerCase()
       : 'before_discounts',
@@ -646,6 +649,7 @@ function normalizeLoyaltyProgressMechanic(source = {}, fallback = {}) {
 
   return {
     type: 'loyalty_progress',
+    accrual_status_id: toIntOrNull(src.accrual_status_id ?? base.accrual_status_id),
     buy_qty: normalizeCountField(src, base, 'buy_qty', 1),
     reward_qty: normalizeCountField(src, base, 'reward_qty', 1),
     progress_basis: progressBasis,
@@ -892,6 +896,72 @@ function buildMechanicStoragePayload(body, existing = null) {
     discountValue: mechanic.discount_value ?? 0,
     applyTo: mechanic.apply_to,
   };
+}
+
+async function resolveDefaultAccrualStatusId(queryable, tenantId, storeId) {
+  const [deliveredRows] = await queryable.query(
+    `SELECT id
+       FROM order_statuses
+      WHERE tenant_id = ? AND store_id = ? AND is_active = 1 AND code = 'delivered'
+      ORDER BY sort ASC, id ASC
+      LIMIT 1`,
+    [tenantId, storeId]
+  );
+  if (Array.isArray(deliveredRows) && deliveredRows.length) {
+    return Number(deliveredRows[0]?.id || 0) || null;
+  }
+
+  const [finalRows] = await queryable.query(
+    `SELECT id
+       FROM order_statuses
+      WHERE tenant_id = ? AND store_id = ? AND is_active = 1 AND is_final = 1
+        AND LOWER(COALESCE(code, '')) NOT IN ('canceled', 'cancelled')
+      ORDER BY sort ASC, id ASC
+      LIMIT 1`,
+    [tenantId, storeId]
+  );
+  if (Array.isArray(finalRows) && finalRows.length) {
+    return Number(finalRows[0]?.id || 0) || null;
+  }
+
+  const [activeRows] = await queryable.query(
+    `SELECT id
+       FROM order_statuses
+      WHERE tenant_id = ? AND store_id = ? AND is_active = 1
+      ORDER BY sort ASC, id ASC
+      LIMIT 1`,
+    [tenantId, storeId]
+  );
+  if (Array.isArray(activeRows) && activeRows.length) {
+    return Number(activeRows[0]?.id || 0) || null;
+  }
+
+  return null;
+}
+
+async function applyDefaultAccrualStatusIdToMechanicPayload(queryable, tenantId, storeId, mechanicPayload) {
+  if (!mechanicPayload || !ACCRUAL_TRACKED_MECHANICS.has(String(mechanicPayload.mechanicType || '').trim())) {
+    return mechanicPayload;
+  }
+  const mechanic = mechanicPayload.mechanic && typeof mechanicPayload.mechanic === 'object'
+    ? { ...mechanicPayload.mechanic }
+    : {};
+  const currentStatusId = toIntOrNull(mechanic?.accrual_status_id);
+  if (currentStatusId > 0) {
+    mechanicPayload.mechanic = mechanic;
+    mechanicPayload.mechanicConfigJson = JSON.stringify(mechanic);
+    return mechanicPayload;
+  }
+  const fallbackStatusId = await resolveDefaultAccrualStatusId(queryable, tenantId, storeId);
+  if (!(fallbackStatusId > 0)) {
+    mechanicPayload.mechanic = mechanic;
+    mechanicPayload.mechanicConfigJson = JSON.stringify(mechanic);
+    return mechanicPayload;
+  }
+  mechanic.accrual_status_id = fallbackStatusId;
+  mechanicPayload.mechanic = mechanic;
+  mechanicPayload.mechanicConfigJson = JSON.stringify(mechanic);
+  return mechanicPayload;
 }
 
 function assertMechanicIsValid(mechanicType, mechanic, { products = [] } = {}) {
@@ -2328,6 +2398,7 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
     try {
       const title = toText(req.body?.title);
       const mechanicPayload = buildMechanicStoragePayload(req.body);
+      await applyDefaultAccrualStatusIdToMechanicPayload(conn, tenantId, storeId, mechanicPayload);
       const activationMode = getActivationMode(req.body, null, mechanicPayload);
       const promoCodeMode = getPromoCodeMode(req.body, null, mechanicPayload);
       const uniqueCodeUsageLimit = getUniqueCodeUsageLimit(req.body, null, promoCodeMode, mechanicPayload);
@@ -2499,6 +2570,7 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
       }
 
       const mechanicPayload = buildMechanicStoragePayload(req.body, existing);
+      await applyDefaultAccrualStatusIdToMechanicPayload(conn, tenantId, storeId, mechanicPayload);
       const activationModeResolved = getActivationMode(req.body, existing, mechanicPayload);
       const promoCodeMode = getPromoCodeMode(req.body, existing, mechanicPayload);
       const uniqueCodeUsageLimit = getUniqueCodeUsageLimit(req.body, existing, promoCodeMode, mechanicPayload);

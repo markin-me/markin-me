@@ -361,6 +361,54 @@
       return rows.join('');
     }
 
+    function buildOrderDiscountSummary(order) {
+      var items = Array.isArray(order && order.items) ? order.items : [];
+      var itemsTotal = items.reduce(function (sum, item) {
+        return sum + Number(item && (item.line_total || item.total || item.total_price) || 0);
+      }, 0);
+      var fallbackPromoCode = String(order && order.promo_code || '').trim();
+      var breakdown = (Array.isArray(order && order.discounts_json) ? order.discounts_json : []).map(function (row) {
+        var key = String(row && row.key || '').trim().toLowerCase();
+        var sourceKind = String(row && (row.source_kind || row.source || row.kind) || '').trim().toLowerCase();
+        var isPromo = sourceKind === 'promo_code' || sourceKind === 'reward_promo' || key.indexOf('promo_') === 0;
+        return {
+          title: String(row && (row.title || row.name) || 'Скидка').trim() || 'Скидка',
+          amount: Number(row && (row.discount_amount != null ? row.discount_amount : row.amount) || 0),
+          promoCode: isPromo ? (String(row && (row.promo_code || row.code) || '').trim() || fallbackPromoCode) : ''
+        };
+      }).filter(function (row) {
+        return Number(row && row.amount || 0) > 0;
+      });
+      var totalDiscount = Number(order && order.discount_amount || 0);
+      if (breakdown.length) {
+        var breakdownTotal = breakdown.reduce(function (sum, row) {
+          return sum + Number(row && row.amount || 0);
+        }, 0);
+        if (breakdownTotal > totalDiscount) totalDiscount = breakdownTotal;
+      }
+      return {
+        subtotalBeforeDiscount: Number(order && order.items_total || itemsTotal || 0) + Number(totalDiscount || 0),
+        totalDiscount: Number(totalDiscount || 0),
+        breakdown: breakdown,
+        orderDiscountTitles: []
+      };
+    }
+
+    function renderOrderDiscountBreakdownHtml(summary) {
+      var rows = [];
+      (Array.isArray(summary && summary.breakdown) ? summary.breakdown : []).forEach(function (item) {
+        if (!item) return;
+        var title = String(item.title || item.label || 'Скидка');
+        var promoCode = String(item.promoCode || '').trim();
+        if (promoCode) title += ' (' + promoCode + ')';
+        rows.push('<div class="order-summary-discount-breakdown-row"><span class="order-summary-discount-breakdown-label">' + escapeHtml(title) + '</span><span class="order-summary-discount-breakdown-value">' + escapeHtml('-' + money(item.amount || 0)) + '</span></div>');
+      });
+      (Array.isArray(summary && summary.orderDiscountTitles) ? summary.orderDiscountTitles : []).forEach(function (title) {
+        rows.push('<div class="order-summary-discount-breakdown-note">' + escapeHtml(String(title || '')) + '</div>');
+      });
+      return rows.join('');
+    }
+
     function isAutoAddItem(item) {
       if (Number(item && item.auto_add || 0) === 1) return true;
       return String(item && (item.product_name || item.name) || '').trim().toLowerCase() === 'приборы';
