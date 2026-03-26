@@ -1,9 +1,13 @@
-const http = require("http");
+﻿const http = require("http");
 const https = require("https");
 const { URL } = require("url");
 
 const CRM_BASE_URL = (process.env.CRM_BASE_URL || "https://markin-me.ru").replace(/\/+$/, "");
+const LOCAL_CRM_BASE_URL = `http://127.0.0.1:${Number(process.env.PORT || 3000)}`;
 const HTML_JOB_PREFIX = "__HTML_BASE64__:";
+const newStatusIdCache = new Map();
+const RUS_NEW_LOWER = "\u043d\u043e\u0432";
+const RUS_NEW_TITLE_LIKE = "%\u041d\u043e\u0432%";
 
 function parseTimezoneOffsetToMinutes(value) {
   if (value === undefined || value === null || value === "") return 0;
@@ -81,9 +85,10 @@ function getStoreNowDateTime(timezone) {
   return formatUtcDateTime(shiftedMs);
 }
 
-function fetchReceiptHtml(token, orderId) {
+function fetchReceiptHtmlFromBase(baseUrl, token, orderId) {
   return new Promise((resolve) => {
-    const url = new URL(`${CRM_BASE_URL}/api/print/template/${orderId}`);
+    const root = String(baseUrl || "").replace(/\/+$/, "");
+    const url = new URL(`${root}/api/print/template/${orderId}`);
     const client = url.protocol === "https:" ? https : http;
     const req = client.request(
       {
@@ -123,6 +128,17 @@ function fetchReceiptHtml(token, orderId) {
   });
 }
 
+async function fetchReceiptHtml(token, orderId) {
+  const first = await fetchReceiptHtmlFromBase(CRM_BASE_URL, token, orderId);
+  if (first) return first;
+  // Fallback for local run: if external base URL is wrong/unreachable,
+  // call the same CRM instance directly on localhost.
+  const baseA = String(CRM_BASE_URL || "").toLowerCase();
+  const baseB = String(LOCAL_CRM_BASE_URL || "").toLowerCase();
+  if (baseA === baseB) return "";
+  return fetchReceiptHtmlFromBase(LOCAL_CRM_BASE_URL, token, orderId);
+}
+
 function encodeHtmlJobPayload(html) {
   const rawHtml = String(html || "");
   if (!rawHtml.trim()) return "";
@@ -135,6 +151,31 @@ async function getPrintTokenRow(db, tenantId, storeId) {
     [tenantId, storeId]
   );
   return rows[0] || null;
+}
+
+async function findNewStatusId(db, tenantId, storeId) {
+  const cacheKey = `${Number(tenantId)}:${Number(storeId)}`;
+  if (newStatusIdCache.has(cacheKey)) {
+    return newStatusIdCache.get(cacheKey);
+  }
+
+  const [rowsByCode] = await db.query(
+    "SELECT id FROM order_statuses WHERE tenant_id=? AND store_id=? AND is_active=1 AND code='new' LIMIT 1",
+    [tenantId, storeId]
+  );
+  if (rowsByCode.length) {
+    const id = Number(rowsByCode[0].id || 0) || null;
+    if (id) newStatusIdCache.set(cacheKey, id);
+    return id;
+  }
+
+  const [rowsByTitle] = await db.query(
+    "SELECT id FROM order_statuses WHERE tenant_id=? AND store_id=? AND is_active=1 AND title LIKE ? ORDER BY sort ASC, id ASC LIMIT 1",
+    [tenantId, storeId, RUS_NEW_TITLE_LIKE]
+  );
+  const fallbackId = rowsByTitle.length ? (Number(rowsByTitle[0].id || 0) || null) : null;
+  if (fallbackId) newStatusIdCache.set(cacheKey, fallbackId);
+  return fallbackId;
 }
 
 async function enqueuePrintJob(db, { tenantId, storeId, tokenId, order, html, createdAt }) {
@@ -179,27 +220,59 @@ async function enqueuePrintJob(db, { tenantId, storeId, tokenId, order, html, cr
 }
 
 async function sendOrderToPrintBot({ db, order, tenantId, storeId }) {
+  const orderIdDebug = Number(order?.id || order?.order_id || order?.orderId || 0);
+  const fail = (reason, extra = {}) => {
+    try {
+      console.warn("Print enqueue skipped:", {
+        reason,
+        orderId: orderIdDebug || null,
+        tenantId: Number(tenantId || order?.tenant_id || order?.tenantId || 0) || null,
+        storeId: Number(storeId || order?.store_id || order?.storeId || 0) || null,
+        ...extra,
+      });
+    } catch {}
+    return false;
+  };
+
   if (!order) return false;
   const statusId = Number(order.status_id ?? order.statusId ?? order.statusID ?? 0);
+  const statusCode = String(
+    order.status_code ?? order.statusCode ?? order.code ?? ""
+  ).trim().toLowerCase();
+  const statusTitle = String(
+    order.status_title ?? order.statusTitle ?? order.title ?? ""
+  ).trim().toLowerCase();
+  const isNewByCode = statusCode === "new";
+  const isNewByTitle = statusTitle.startsWith(RUS_NEW_LOWER);
+
 
   const resolvedTenantId = Number(tenantId || order.tenant_id || order.tenantId || order.tenantID || order.tenant);
   const resolvedStoreId = Number(storeId || order.store_id || order.storeId || order.storeID || order.store);
-  if (!resolvedTenantId || !resolvedStoreId) return false;
+  if (!resolvedTenantId || !resolvedStoreId) return fail("TENANT_OR_STORE_MISSING");
+
+  const newStatusId = await findNewStatusId(db, resolvedTenantId, resolvedStoreId);
+  const isNewStatus = (newStatusId && statusId === Number(newStatusId)) || isNewByCode || isNewByTitle;
+  if (!isNewStatus) return fail("ORDER_STATUS_NOT_NEW", { statusId, statusCode, statusTitle, newStatusId: Number(newStatusId || 0) || null });
 
   const tokenRow = await getPrintTokenRow(db, resolvedTenantId, resolvedStoreId);
-  console.log("sendOrderToPrintBot", { orderId: order.id, statusId, tokenRow: !!tokenRow });
-  if (statusId !== 1) return false;
-  if (!tokenRow?.token) return false;
+  if (!tokenRow?.token) return fail("PRINT_TOKEN_NOT_FOUND");
 
   const orderId = order.id || order.order_id || order.orderId;
-  if (!orderId) return false;
+  if (!orderId) return fail("ORDER_ID_MISSING");
 
-  const html = await fetchReceiptHtml(tokenRow.token, orderId);
-  if (!html) return false;
+  let html = "";
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    html = await fetchReceiptHtml(tokenRow.token, orderId);
+    if (html) break;
+    if (attempt < 3) {
+      await new Promise((resolve) => setTimeout(resolve, 250 * attempt));
+    }
+  }
+  if (!html) return fail("RECEIPT_HTML_EMPTY");
   const storeTimezone = await getStoreTimezone(db, resolvedTenantId, resolvedStoreId);
   const createdAt = getStoreNowDateTime(storeTimezone);
 
-  return enqueuePrintJob(db, {
+  const enqueued = await enqueuePrintJob(db, {
     tenantId: resolvedTenantId,
     storeId: resolvedStoreId,
     tokenId: Number(tokenRow.id),
@@ -207,6 +280,9 @@ async function sendOrderToPrintBot({ db, order, tenantId, storeId }) {
     html,
     createdAt,
   });
+  if (!enqueued) return fail("ENQUEUE_RETURNED_FALSE");
+  return true;
 }
 
 module.exports = { sendOrderToPrintBot };
+

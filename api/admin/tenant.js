@@ -2505,15 +2505,26 @@ async function fetchStoreWithHours(tenantId, storeId) {
       if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
       if (!file) return res.status(400).json({ ok: false, error: 'FILE_REQUIRED' });
 
-      const allowed = new Set(['sound_new_order_url', 'sound_order_cancelled_url', 'sound_new_message_url']);
+      const allowed = new Set([
+        'sound_new_order_url',
+        'sound_order_cancelled_url',
+        'sound_new_message_url',
+        'print_sound_new_order_url',
+        'print_sound_new_message_url'
+      ]);
       if (!field || !allowed.has(field)) {
         return res.status(400).json({ ok: false, error: 'FIELD_INVALID' });
       }
+      const tenantField = field === 'print_sound_new_order_url'
+        ? 'sound_new_order_url'
+        : field === 'print_sound_new_message_url'
+          ? 'sound_new_message_url'
+          : field;
 
       const url = `/static/uploads/tenants/${tenantId}/sounds/${file.filename}`;
 
       await db.query(
-        `UPDATE ten_tenants SET ${field}=? WHERE id=?`,
+        `UPDATE ten_tenants SET ${tenantField}=? WHERE id=?`,
         [url, tenantId]
       );
 
@@ -4606,17 +4617,33 @@ async function fetchStoreWithHours(tenantId, storeId) {
    * GET /api/admin/tenant/print-api?store_id=1
    * Возвращает токен для печати по филиалу
    */
-  router.get('/print-api', async (req, res) => {
+  async function selectPrintApiRow(tenantId, storeId) {
     try {
-      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
-      const storeId = Number(req.query.store_id);
-      if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
-      if (!Number.isFinite(storeId) || storeId <= 0) {
-        return res.status(400).json({ ok: false, error: 'BAD_STORE_ID' });
-      }
-      const storeExists = await ensureStoreExists(tenantId, storeId);
-      if (!storeExists) return res.status(404).json({ ok: false, error: 'STORE_NOT_FOUND' });
-
+      const [rows] = await db.query(
+        `SELECT id, tenant_id, store_id, token, is_active, created_at, updated_at, last_used_at,
+                notify_new_order_enabled, notify_new_message_enabled,
+                sound_new_order_url, sound_new_message_url,
+                printer_name, agent_name, agent_version, last_heartbeat_at, agent_running,
+                IF(
+                  last_heartbeat_at IS NOT NULL
+                  AND last_heartbeat_at >= DATE_SUB(NOW(), INTERVAL 15 SECOND),
+                  1,
+                  0
+                ) AS agent_online,
+                IF(
+                  agent_running=1
+                  AND last_heartbeat_at IS NOT NULL
+                  AND last_heartbeat_at >= DATE_SUB(NOW(), INTERVAL 15 SECOND),
+                  1,
+                  0
+                ) AS printer_online
+         FROM print_api_tokens
+         WHERE tenant_id=? AND store_id=? LIMIT 1`,
+        [tenantId, storeId]
+      );
+      return rows[0] || null;
+    } catch (err) {
+      if (String(err?.code || "") !== "ER_BAD_FIELD_ERROR") throw err;
       const [rows] = await db.query(
         `SELECT id, tenant_id, store_id, token, is_active, created_at, updated_at, last_used_at,
                 printer_name, agent_name, agent_version, last_heartbeat_at, agent_running,
@@ -4637,7 +4664,31 @@ async function fetchStoreWithHours(tenantId, storeId) {
          WHERE tenant_id=? AND store_id=? LIMIT 1`,
         [tenantId, storeId]
       );
-      res.json({ ok: true, data: rows[0] || null });
+      const row = rows[0] || null;
+      if (!row) return null;
+      return {
+        ...row,
+        notify_new_order_enabled: 1,
+        notify_new_message_enabled: 1,
+        sound_new_order_url: null,
+        sound_new_message_url: null
+      };
+    }
+  }
+
+  router.get('/print-api', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      const storeId = Number(req.query.store_id);
+      if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+      if (!Number.isFinite(storeId) || storeId <= 0) {
+        return res.status(400).json({ ok: false, error: 'BAD_STORE_ID' });
+      }
+      const storeExists = await ensureStoreExists(tenantId, storeId);
+      if (!storeExists) return res.status(404).json({ ok: false, error: 'STORE_NOT_FOUND' });
+
+      const row = await selectPrintApiRow(tenantId, storeId);
+      res.json({ ok: true, data: row || null });
     } catch (err) {
       console.error('Ошибка получения print API:', err);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
@@ -4676,29 +4727,93 @@ async function fetchStoreWithHours(tenantId, storeId) {
         [tenantId, storeId, token]
       );
 
-      const [rows] = await db.query(
-        `SELECT id, tenant_id, store_id, token, is_active, created_at, updated_at, last_used_at,
-                printer_name, agent_name, agent_version, last_heartbeat_at, agent_running,
-                IF(
-                  last_heartbeat_at IS NOT NULL
-                  AND last_heartbeat_at >= DATE_SUB(NOW(), INTERVAL 15 SECOND),
-                  1,
-                  0
-                ) AS agent_online,
-                IF(
-                  agent_running=1
-                  AND last_heartbeat_at IS NOT NULL
-                  AND last_heartbeat_at >= DATE_SUB(NOW(), INTERVAL 15 SECOND),
-                  1,
-                  0
-                ) AS printer_online
-         FROM print_api_tokens
-         WHERE tenant_id=? AND store_id=? LIMIT 1`,
-        [tenantId, storeId]
-      );
-      res.json({ ok: true, data: rows[0] || null });
+      const row = await selectPrintApiRow(tenantId, storeId);
+      res.json({ ok: true, data: row || null });
     } catch (err) {
       console.error('Ошибка генерации print API:', err);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  /**
+   * PUT /api/admin/tenant/print-api
+   * body: { store_id, notify_new_order_enabled, notify_new_message_enabled, sound_new_order_url, sound_new_message_url }
+   */
+  router.put('/print-api', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      const storeId = Number(req.body?.store_id || req.query?.store_id);
+      if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+      if (!Number.isFinite(storeId) || storeId <= 0) {
+        return res.status(400).json({ ok: false, error: 'BAD_STORE_ID' });
+      }
+      const storeExists = await ensureStoreExists(tenantId, storeId);
+      if (!storeExists) return res.status(404).json({ ok: false, error: 'STORE_NOT_FOUND' });
+
+      const [rows] = await db.query(
+        `SELECT id, token, is_active FROM print_api_tokens WHERE tenant_id=? AND store_id=? LIMIT 1`,
+        [tenantId, storeId]
+      );
+      if (!rows.length) {
+        return res.status(404).json({ ok: false, error: 'PRINT_TOKEN_NOT_FOUND' });
+      }
+
+      const hasOwn = (key) => Object.prototype.hasOwnProperty.call(req.body || {}, key);
+      const parseToggle = (value, fallback) => {
+        if (value === undefined) return fallback;
+        if (value === true || value === "true" || value === 1 || value === "1") return 1;
+        if (value === false || value === "false" || value === 0 || value === "0") return 0;
+        return fallback;
+      };
+      const normalizeUrl = (value, fallback) => {
+        if (value === undefined) return fallback;
+        const next = helpers.strOrNull(value);
+        return next ? String(next).slice(0, 1024) : null;
+      };
+
+      const [currentRows] = await db.query(
+        `SELECT
+            notify_new_order_enabled,
+            notify_new_message_enabled,
+            sound_new_order_url,
+            sound_new_message_url
+         FROM print_api_tokens
+         WHERE tenant_id=? AND store_id=?
+         LIMIT 1`,
+        [tenantId, storeId]
+      );
+      const current = currentRows[0] || {};
+      const notifyNewOrder = hasOwn("notify_new_order_enabled")
+        ? parseToggle(req.body.notify_new_order_enabled, Number(current.notify_new_order_enabled || 0) === 1 ? 1 : 0)
+        : (Number(current.notify_new_order_enabled || 0) === 1 ? 1 : 0);
+      const notifyNewMessage = hasOwn("notify_new_message_enabled")
+        ? parseToggle(req.body.notify_new_message_enabled, Number(current.notify_new_message_enabled || 0) === 1 ? 1 : 0)
+        : (Number(current.notify_new_message_enabled || 0) === 1 ? 1 : 0);
+      const soundNewOrder = hasOwn("sound_new_order_url")
+        ? normalizeUrl(req.body.sound_new_order_url, current.sound_new_order_url ?? null)
+        : (current.sound_new_order_url ?? null);
+      const soundNewMessage = hasOwn("sound_new_message_url")
+        ? normalizeUrl(req.body.sound_new_message_url, current.sound_new_message_url ?? null)
+        : (current.sound_new_message_url ?? null);
+
+      try {
+        await db.query(
+          `UPDATE print_api_tokens
+           SET notify_new_order_enabled=?, notify_new_message_enabled=?, sound_new_order_url=?, sound_new_message_url=?, updated_at=NOW()
+           WHERE tenant_id=? AND store_id=?`,
+          [notifyNewOrder, notifyNewMessage, soundNewOrder, soundNewMessage, tenantId, storeId]
+        );
+      } catch (updateErr) {
+        if (String(updateErr?.code || "") === "ER_BAD_FIELD_ERROR") {
+          return res.status(409).json({ ok: false, error: 'PRINT_API_MIGRATION_REQUIRED' });
+        }
+        throw updateErr;
+      }
+
+      const row = await selectPrintApiRow(tenantId, storeId);
+      res.json({ ok: true, data: row || null });
+    } catch (err) {
+      console.error('Ошибка обновления print API настроек:', err);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });

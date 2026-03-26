@@ -880,12 +880,12 @@
         </div>
       </div>
 
-      <div class="info-card settings-right-panel hidden" id="settingsPrintApiPanel">
+      <div class="info-card settings-right-panel settings-right-panel-fixed-footer hidden" id="settingsPrintApiPanel">
         <div class="settings-list-header">
           <div class="settings-list-title">API для печати на удалённом принтере</div>
           <div class="settings-list-subtitle">Выберите филиал, сгенерируйте токен и скопируйте его для приложения.</div>
         </div>
-        <div class="settings-site-form">
+        <div class="settings-site-form settings-panel-scroll no-scrollbar">
           <div class="settings-site-field">
             <label class="field-label">ФИЛИАЛ</label>
             <select class="control" id="settingsPrintApiStore"></select>
@@ -908,6 +908,67 @@
           <div class="settings-site-field">
             <label class="field-label">ПОДКЛЮЧЕННЫЙ ПРИНТЕР</label>
             <input class="control" type="text" id="settingsPrintApiPrinterName" readonly />
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:6px;">
+            <div class="settings-site-field" style="margin:0;">
+              <div class="settings-site-field settings-site-inline-switch settings-system-telegram-switch-field" style="margin:0 0 4px 0;">
+                <div class="settings-system-telegram-switch-copy">
+                  <span class="field-label" style="margin:0;">Звук нового заказа</span>
+                </div>
+                <label class="switch">
+                  <input class="switch-input" type="checkbox" id="settingsPrintApiNotifyNewOrder" checked />
+                  <span class="switch-ui" aria-hidden="true"></span>
+                </label>
+              </div>
+              <div class="settings-sound-box" style="margin-top:6px;">
+                <span class="settings-sound-label" id="settingsPrintApiOrderSoundLabel">Файл не выбран</span>
+                <button class="btn btn-icon btn-sm settings-sound-play hidden" type="button" title="Прослушать" id="settingsPrintApiOrderSoundPlayBtn" aria-label="Прослушать">
+                  <i class="fas fa-play"></i>
+                </button>
+              </div>
+              <div class="settings-sound-actions" style="margin-top:6px;">
+                <button class="btn btn-icon btn-sm settings-sound-upload" type="button" title="Загрузить" id="settingsPrintApiOrderSoundUploadBtn">
+                  <i class="fas fa-upload"></i>
+                </button>
+                <button class="btn btn-icon btn-sm settings-sound-delete" type="button" title="Удалить" id="settingsPrintApiOrderSoundClearBtn">
+                  <i class="fas fa-trash"></i>
+                </button>
+              </div>
+              <input class="control hidden" type="file" id="settingsPrintApiOrderSoundFile" accept="audio/*,.mp3,.wav,.ogg,.webm,.m4a,.aac" />
+              <input class="hidden" type="text" id="settingsPrintApiOrderSoundUrl" readonly />
+            </div>
+            <div class="settings-site-field" style="margin:0;">
+              <div class="settings-site-field settings-site-inline-switch settings-system-telegram-switch-field" style="margin:0 0 4px 0;">
+                <div class="settings-system-telegram-switch-copy">
+                  <span class="field-label" style="margin:0;">Звук нового сообщения</span>
+                </div>
+                <label class="switch">
+                  <input class="switch-input" type="checkbox" id="settingsPrintApiNotifyNewMessage" checked />
+                  <span class="switch-ui" aria-hidden="true"></span>
+                </label>
+              </div>
+              <div class="settings-sound-box" style="margin-top:6px;">
+                <span class="settings-sound-label" id="settingsPrintApiMessageSoundLabel">Файл не выбран</span>
+                <button class="btn btn-icon btn-sm settings-sound-play hidden" type="button" title="Прослушать" id="settingsPrintApiMessageSoundPlayBtn" aria-label="Прослушать">
+                  <i class="fas fa-play"></i>
+                </button>
+              </div>
+              <div class="settings-sound-actions" style="margin-top:6px;">
+                <button class="btn btn-icon btn-sm settings-sound-upload" type="button" title="Загрузить" id="settingsPrintApiMessageSoundUploadBtn">
+                  <i class="fas fa-upload"></i>
+                </button>
+                <button class="btn btn-icon btn-sm settings-sound-delete" type="button" title="Удалить" id="settingsPrintApiMessageSoundClearBtn">
+                  <i class="fas fa-trash"></i>
+                </button>
+              </div>
+              <input class="control hidden" type="file" id="settingsPrintApiMessageSoundFile" accept="audio/*,.mp3,.wav,.ogg,.webm,.m4a,.aac" />
+              <input class="hidden" type="text" id="settingsPrintApiMessageSoundUrl" readonly />
+            </div>
+          </div>
+        </div>
+        <div class="panel-footer">
+          <div class="product-footer-actions">
+            <button class="product-footer-btn product-footer-save" type="button" id="settingsPrintApiSaveSettingsBtn">Сохранить</button>
           </div>
         </div>
       </div>
