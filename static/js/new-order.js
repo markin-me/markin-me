@@ -1182,6 +1182,8 @@
       mode,
       editOrderId,
       storeId: Number(opts?.storeId || 0) > 0 ? Number(opts.storeId) : null,
+      editPricingSnapshot: null,
+      editPricingBaselineSignature: "",
       form: {
         phone: "+7",
         clientId: null,
@@ -1248,6 +1250,10 @@
       mode: base.mode,
       editOrderId: base.editOrderId,
       storeId: Number(src?.storeId || base.storeId || 0) > 0 ? Number(src?.storeId || base.storeId) : null,
+      editPricingSnapshot: src?.editPricingSnapshot && typeof src.editPricingSnapshot === "object"
+        ? src.editPricingSnapshot
+        : null,
+      editPricingBaselineSignature: String(src?.editPricingBaselineSignature || "").trim(),
       form,
     };
   }
@@ -1762,6 +1768,80 @@
       delivery_zone_id: next.delivery_zone_id,
       delivery_store_id: next.delivery_store_id,
     };
+  }
+
+  function buildRightOrderEditPricingSignature(order, opts = {}) {
+    const targetOrder = order && typeof order === "object" ? order : {};
+    const form = targetOrder.form && typeof targetOrder.form === "object"
+      ? targetOrder.form
+      : (opts?.form && typeof opts.form === "object" ? opts.form : {});
+    const orderId = Number(targetOrder?.id || opts?.orderId || 0);
+    const explicitSelectedAddressId = Object.prototype.hasOwnProperty.call(opts || {}, "selectedAddressId")
+      ? Number(opts?.selectedAddressId || 0)
+      : Number(state.rightAddressSelectedIdByOrder.get(orderId) || form.deliveryAddressId || 0);
+    const addressDraft = Object.prototype.hasOwnProperty.call(opts || {}, "addressDraft")
+      ? opts?.addressDraft
+      : getRightOrderStoredAddressDraft(orderId, targetOrder);
+    const quoteAddress = buildRightOrderQuoteAddress(addressDraft);
+    return JSON.stringify({
+      clientId: Number(form.clientId || 0) || 0,
+      phone: normalizePhoneRu(form.phone),
+      pickupMethod: String(form.pickupMethod || "").trim() || "delivery",
+      selectedAddressId: explicitSelectedAddressId > 0 ? explicitSelectedAddressId : 0,
+      address: quoteAddress,
+      cookWhen: String(form.cookWhen || "").trim() || "asap",
+      scheduledDate: String(form.scheduledDate || "").trim() || "",
+      dateTime: String(form.dateTime || "").trim() || "",
+      promoCode: normalizeRightOrderBenefitsPromoCode(form.promo_code),
+      selectedDiscountId: normalizeRightOrderBenefitsSelectedId(form.selected_discount_id),
+      selectedDiscountSource: normalizeRightOrderBenefitsDiscountSource(form.selected_discount_source),
+      selectedPromoSource: normalizeRightOrderBenefitsPromoSource(form.selected_promo_source),
+      selectedPromoRewardId: normalizeRightOrderBenefitsSelectedId(form.selected_promo_reward_id),
+      benefitsPreviewMode: String(form.benefits_preview_mode || "").trim()
+        ? normalizeRightOrderBenefitsMode(form.benefits_preview_mode)
+        : null,
+      items: buildRightOrderPayloadItems(Array.isArray(form.cartItems) ? form.cartItems : []),
+    });
+  }
+
+  function buildRightOrderStoredPricingSnapshot(order) {
+    const src = order && typeof order === "object" ? order : {};
+    const subtotalBeforeDiscount = roundPrice(Math.max(0, Number(src?.items_total || 0)));
+    const totalDiscount = roundPrice(Math.max(0, Number(src?.discount_amount || 0)));
+    const subtotalAfterDiscount = roundPrice(Math.max(0, subtotalBeforeDiscount - totalDiscount));
+    const deliveryCost = roundPrice(Math.max(0, Number(src?.delivery_cost || 0)));
+    const totalPriceRaw = Number(src?.total_price || 0);
+    const payableTotal = Number.isFinite(totalPriceRaw)
+      ? roundPrice(Math.max(0, totalPriceRaw))
+      : roundPrice(subtotalAfterDiscount + deliveryCost);
+    const breakdown = buildRightOrderDiscountBreakdownEntries(src?.discounts_json, {
+      promoCode: src?.promo_code,
+    });
+    const hasSnapshot = breakdown.length > 0
+      || subtotalBeforeDiscount > 0
+      || totalDiscount > 0
+      || deliveryCost > 0
+      || payableTotal > 0;
+    if (!hasSnapshot) return null;
+    return {
+      subtotalBeforeDiscount,
+      totalDiscount,
+      subtotalAfterDiscount,
+      deliveryCost,
+      payableTotal,
+      breakdown,
+    };
+  }
+
+  function getRightOrderActiveEditPricingSnapshot(order) {
+    if (String(order?.mode || "").trim().toLowerCase() !== "edit") return null;
+    const snapshot = order?.editPricingSnapshot && typeof order.editPricingSnapshot === "object"
+      ? order.editPricingSnapshot
+      : null;
+    const baselineSignature = String(order?.editPricingBaselineSignature || "").trim();
+    if (!snapshot || !baselineSignature) return null;
+    const currentSignature = buildRightOrderEditPricingSignature(order);
+    return currentSignature === baselineSignature ? snapshot : null;
   }
 
   function buildRightOrderDeliveryQuoteRequest(order, summary) {
@@ -2313,6 +2393,7 @@
     return (Array.isArray(items) ? items : []).reduce((sum, item) => {
       const qty = Math.max(0, Number(item?.qty || 0));
       if (!qty) return sum;
+      if (isGiftRewardCartItem(item)) return sum;
       if (String(item?.type || "") === "combo") {
         const unitBefore = Number(item?.unit_price_before_discount || item?.unit_price || 0);
         return sum + roundPrice(unitBefore * qty);
@@ -2327,6 +2408,7 @@
     return (Array.isArray(items) ? items : []).reduce((sum, item) => {
       const qty = Math.max(0, Number(item?.qty || 0));
       if (!qty) return sum;
+      if (isGiftRewardCartItem(item)) return sum;
       if (String(item?.type || "") === "combo") {
         const unitBefore = Number(item?.unit_price_before_discount || item?.unit_price || 0);
         return sum + roundPrice(unitBefore * qty);
@@ -2428,6 +2510,7 @@
     const hasBaseItems = cartItems.some((item) => {
       const qty = Math.max(0, Number(item?.qty || 0));
       if (!qty) return false;
+      if (isGiftRewardCartItem(item)) return false;
       if (String(item?.type || "") === "combo") return true;
       return Number(item?.auto_add || 0) !== 1;
     });
@@ -2836,6 +2919,8 @@
     const safeOrder = order && typeof order === "object" ? order : {};
     const form = safeOrder.form && typeof safeOrder.form === "object" ? safeOrder.form : {};
     const selection = getRightOrderBenefitsSelectionState(form);
+    const previewCartItems = (Array.isArray(form.cartItems) ? form.cartItems : [])
+      .filter((item) => Number(item?.is_gift_reward || 0) !== 1);
     const request = {
       customer_id: Number(form.clientId || 0) > 0 ? Number(form.clientId) : null,
       method_code: String(form.pickupMethod || "").trim() || "delivery",
@@ -2846,7 +2931,7 @@
         ? (selection.selectedPromoSource || "promo_code")
         : null,
       selected_promo_reward_id: selection.selectedPromoRewardId,
-      items: buildRightOrderPayloadItems(Array.isArray(form.cartItems) ? form.cartItems : []),
+      items: buildRightOrderPayloadItems(previewCartItems),
     };
     if (opts?.includeMode) {
       request.mode = normalizeRightOrderBenefitsMode(opts.mode || getActiveRightOrderBenefitsMode());
@@ -2900,21 +2985,7 @@
   async function ensureRightOrderBenefitsCustomerToken(orderId) {
     const id = Number(orderId || 0);
     if (!(id > 0)) return null;
-    let index = getRightOrderIndexById(id);
-    if (index < 0) return null;
-    let order = state.rightOrders[index] || {};
-    let form = order.form && typeof order.form === "object" ? order.form : {};
-    if (!(Number(form.clientId || 0) > 0)) {
-      const normalizedDigits = normalizePhoneRu(form.phone);
-      if (normalizedDigits.length === 11) {
-        await lookupClientByPhoneForRightOrder(id, form.phone);
-        index = getRightOrderIndexById(id);
-        if (index < 0) return null;
-        order = state.rightOrders[index] || {};
-        form = order.form && typeof order.form === "object" ? order.form : {};
-      }
-    }
-    const clientId = Number(form.clientId || 0);
+    const clientId = Number(await ensureRightOrderBenefitsCustomerId(id) || 0);
     if (!(clientId > 0)) return null;
     const cachedToken = String(state.rightBenefitsTokenByClientId.get(clientId) || "").trim();
     if (cachedToken) return cachedToken;
@@ -2929,32 +3000,45 @@
     return null;
   }
 
+  async function ensureRightOrderBenefitsCustomerId(orderId) {
+    const id = Number(orderId || 0);
+    if (!(id > 0)) return null;
+    let index = getRightOrderIndexById(id);
+    if (index < 0) return null;
+    let order = state.rightOrders[index] || {};
+    let form = order.form && typeof order.form === "object" ? order.form : {};
+    let clientId = Number(form.clientId || 0);
+    if (!(clientId > 0)) {
+      const normalizedDigits = normalizePhoneRu(form.phone);
+      if (normalizedDigits.length === 11) {
+        await lookupClientByPhoneForRightOrder(id, form.phone);
+        index = getRightOrderIndexById(id);
+        if (index < 0) return null;
+        order = state.rightOrders[index] || {};
+        form = order.form && typeof order.form === "object" ? order.form : {};
+        clientId = Number(form.clientId || 0);
+      }
+    }
+    return clientId > 0 ? clientId : null;
+  }
+
   async function loadRightOrderBenefitsPreview(orderId, opts = {}) {
     const id = Number(orderId || 0);
     if (!(id > 0)) return null;
-    const index = getRightOrderIndexById(id);
+    let index = getRightOrderIndexById(id);
     if (index < 0) return null;
-    const mode = normalizeRightOrderBenefitsMode(opts?.mode || getActiveRightOrderBenefitsMode());
+    const requestedMode = normalizeRightOrderBenefitsMode(opts?.mode || getActiveRightOrderBenefitsMode());
+    const customerId = Number(await ensureRightOrderBenefitsCustomerId(id) || 0);
+    const mode = requestedMode === "customer" && !(customerId > 0)
+      ? "all"
+      : requestedMode;
+    if (Number(state.benefitsModal.orderId || 0) === id && state.benefitsModal.mode !== mode) {
+      state.benefitsModal.mode = mode;
+      setRightBenefitsModeToggleState(mode);
+    }
+    index = getRightOrderIndexById(id);
+    if (index < 0) return null;
     const order = state.rightOrders[index] || {};
-    const form = order.form && typeof order.form === "object" ? order.form : {};
-    const phoneDigits = normalizePhoneRu(form.phone);
-    if (phoneDigits.length !== 11) {
-      invalidateRightOrderBenefitsPreview(id);
-      if (opts?.render) {
-        renderRightOrderTabs();
-        queueRenderRightBenefitsModal(id);
-      }
-      return null;
-    }
-    const token = await ensureRightOrderBenefitsCustomerToken(id);
-    if (!token) {
-      invalidateRightOrderBenefitsPreview(id);
-      if (opts?.render) {
-        renderRightOrderTabs();
-        queueRenderRightBenefitsModal(id);
-      }
-      return null;
-    }
 
     const cacheSlot = getRightOrderBenefitsCacheSlot(id, mode);
     const requestKey = buildRightOrderBenefitsPreviewKey(order, mode);
@@ -2974,24 +3058,31 @@
         : null;
       if (!nextData) {
         const requestBody = buildRightOrderBenefitsPreviewRequest(order, {
-          includeMode: mode === "all",
+          includeMode: true,
           mode,
         });
-        const json = mode === "all"
-          ? await apiJson("/api/admin/orders/benefits/preview", {
-              method: "POST",
-              body: JSON.stringify(requestBody),
-            })
-          : await apiJson("/api/public/checkout/benefits/preview", {
-              method: "POST",
-              headers: {
-                "x-customer-token": token,
-              },
-              body: JSON.stringify(requestBody),
-            });
+        requestBody.customer_id = customerId > 0 ? customerId : null;
+        const json = await apiJson("/api/admin/orders/benefits/preview", {
+          method: "POST",
+          body: JSON.stringify(requestBody),
+        });
         nextData = cloneRightOrderBenefitsPreviewData(json?.data || null);
       }
       if (Number(state.rightBenefitsReqSeqByOrder.get(cacheSlot) || 0) !== requestSeq) return null;
+      const responseMode = normalizeRightOrderBenefitsMode(nextData?.mode || mode);
+      if (responseMode !== mode) {
+        state.rightBenefitsLoadingByOrder.delete(cacheSlot);
+        state.rightBenefitsReqSeqByOrder.delete(cacheSlot);
+        if (Number(state.benefitsModal.orderId || 0) === id && state.benefitsModal.mode !== responseMode) {
+          state.benefitsModal.mode = responseMode;
+          setRightBenefitsModeToggleState(responseMode);
+        }
+        return loadRightOrderBenefitsPreview(id, {
+          ...opts,
+          mode: responseMode,
+          prefetchedData: nextData,
+        });
+      }
       state.rightBenefitsPreviewByOrder.set(cacheSlot, nextData || {});
       state.rightBenefitsPreviewKeyByOrder.set(cacheSlot, requestKey);
       state.rightBenefitsLoadingByOrder.delete(cacheSlot);
@@ -3024,7 +3115,11 @@
       if (index < 0) return;
       const order = state.rightOrders[index] || {};
       const form = order.form && typeof order.form === "object" ? order.form : {};
-      const shouldRefresh = normalizePhoneRu(form.phone).length === 11 && (
+      const hasPreviewState = ["customer", "all"].some((mode) => {
+        const slot = getRightOrderBenefitsCacheSlot(id, mode);
+        return state.rightBenefitsPreviewByOrder.has(slot) || state.rightBenefitsPreviewKeyByOrder.has(slot);
+      });
+      const shouldRefresh = hasPreviewState || (
         Number(form.clientId || 0) > 0
         || hasRightOrderBenefitsSelection(form)
         || (Array.isArray(form.cartItems) ? form.cartItems : []).some((item) => Number(item?.is_gift_reward || 0) === 1)
@@ -3085,6 +3180,7 @@
     const form = order?.form && typeof order.form === "object" ? order.form : {};
     const orderId = Number(order?.id || 0);
     const cartItems = Array.isArray(form?.cartItems) ? form.cartItems : [];
+    const activeEditPricingSnapshot = getRightOrderActiveEditPricingSnapshot(order);
     const subtotal = roundPrice(cartItems.reduce((sum, item) => sum + getRightOrderCartLineTotal(item), 0));
     const cartItemsCount = cartItems.reduce((sum, item) => sum + Math.max(1, Number(item?.qty || 1)), 0);
     const preferredBenefitsMode = getRightOrderBenefitsPreferredMode(form, null);
@@ -3142,6 +3238,60 @@
         ? (freeReached ? "reached" : "progress")
         : "neutral-no-threshold";
     const showDeliveryProgress = isDeliveryMethod;
+    if (activeEditPricingSnapshot) {
+      const snapshotSubtotalBeforeDiscount = roundPrice(Number(activeEditPricingSnapshot?.subtotalBeforeDiscount || 0));
+      const snapshotTotalDiscount = roundPrice(Number(activeEditPricingSnapshot?.totalDiscount || 0));
+      const snapshotSubtotalAfterDiscount = roundPrice(Number(activeEditPricingSnapshot?.subtotalAfterDiscount || 0));
+      const snapshotDeliveryApplied = roundPrice(Number(activeEditPricingSnapshot?.deliveryCost || 0));
+      const snapshotPayableTotal = roundPrice(Number(activeEditPricingSnapshot?.payableTotal || 0));
+      const snapshotFreeReached = freeDeliveryFrom != null && snapshotSubtotalAfterDiscount >= freeDeliveryFrom;
+      const snapshotLeftForFree = freeDeliveryFrom != null
+        ? Math.max(0, Math.ceil(freeDeliveryFrom - snapshotSubtotalAfterDiscount))
+        : 0;
+      const snapshotProgress = freeDeliveryFrom != null && freeDeliveryFrom > 0
+        ? Math.max(0, Math.min(100, (snapshotSubtotalAfterDiscount / freeDeliveryFrom) * 100))
+        : 0;
+      return {
+        cartItems,
+        cartItemsCount,
+        subtotal: snapshotSubtotalBeforeDiscount,
+        subtotalAfterCustomerDiscount: snapshotSubtotalAfterDiscount,
+        customerOrderDiscount: snapshotTotalDiscount,
+        customerOrderDiscountTitles: [],
+        customerOrderAppliedDiscounts: [],
+        benefitsPreview: null,
+        benefitsPreviewSummary: null,
+        savedDiscountSummary: {
+          subtotalBeforeDiscount: snapshotSubtotalBeforeDiscount,
+          totalDiscount: snapshotTotalDiscount,
+          breakdown: Array.isArray(activeEditPricingSnapshot?.breakdown)
+            ? activeEditPricingSnapshot.breakdown
+            : [],
+          orderDiscountTitles: [],
+        },
+        deliveryQuote: quote,
+        deliveryQuoteSource: quote?.source || null,
+        deliveryCost: snapshotDeliveryApplied,
+        deliveryApplied: snapshotDeliveryApplied,
+        minOrderAmount,
+        freeDeliveryFrom,
+        freeReached: snapshotFreeReached,
+        leftForFree: snapshotLeftForFree,
+        progress: snapshotProgress,
+        deliveryProgressState,
+        showDeliveryProgress,
+        etaMinutes: quote && Number.isFinite(Number(quote?.eta_minutes)) && Number(quote.eta_minutes) > 0
+          ? Number(quote.eta_minutes)
+          : null,
+        deliveryZoneId: quote?.delivery_zone_id != null ? Number(quote.delivery_zone_id) : null,
+        deliveryZoneName: String(quote?.delivery_zone_name || "").trim() || null,
+        deliveryStoreId: quote?.delivery_store_id != null ? Number(quote.delivery_store_id) : null,
+        payableTotal: snapshotPayableTotal,
+        isDeliveryMethod,
+        methodCode,
+        settings,
+      };
+    }
     return {
       cartItems,
       cartItemsCount,
@@ -3156,6 +3306,7 @@
         : (Array.isArray(customerDiscountSummary?.appliedDiscounts) ? customerDiscountSummary.appliedDiscounts : []),
       benefitsPreview,
       benefitsPreviewSummary,
+      savedDiscountSummary: null,
       deliveryQuote: quote,
       deliveryQuoteSource: quote?.source || null,
       deliveryCost,
@@ -3210,6 +3361,7 @@
 
   function getRightOrderCartLineTotal(item) {
     const qty = Math.max(0, Number(item?.qty || item?.quantity || 0));
+    if (isGiftRewardCartItem(item)) return 0;
     const unitPrice = Number(item?.unit_price || item?.price || 0);
     if (isRightOrderAutoAddItem(item)) {
       const paidQtyRaw = Number(item?.auto_add_paid_qty);
@@ -3257,37 +3409,64 @@
       .filter((entry) => Number(entry.amount || 0) > 0);
   }
 
-  function formatRightOrderDiscountBreakdownTitle(entry) {
-    const title = String(entry?.title || "Скидка").trim() || "Скидка";
-    const promoCode = normalizeRightOrderBenefitsPromoCode(entry?.promoCode);
-    if (!promoCode) return title;
-    return `${title} (${promoCode})`;
+  function buildRightOrderDiscountBreakdownFingerprint(entry) {
+    const key = String(entry?.key || "").trim().toLowerCase();
+    if (key) return `key:${key}`;
+    const sourceKind = String(entry?.sourceKind || entry?.source_kind || "").trim().toLowerCase();
+    const title = String(entry?.title || "").trim().toLowerCase();
+    const promoCode = normalizeRightOrderBenefitsPromoCode(entry?.promoCode || entry?.promo_code) || "";
+    return `row:${sourceKind}:${title}:${promoCode}`;
   }
 
-  function buildRightOrderDiscountSummaryFromCart(cartItems, subtotal, opts = {}) {
-    const benefitsSummary = opts?.benefitsSummary && typeof opts.benefitsSummary === "object"
-      ? opts.benefitsSummary
-      : null;
-    if (benefitsSummary && Number.isFinite(Number(benefitsSummary?.discount_total))) {
-      return {
-        subtotalBeforeDiscount: roundPrice(Number(benefitsSummary?.subtotal || 0)),
-        totalDiscount: roundPrice(Number(benefitsSummary?.discount_total || 0)),
-        breakdown: buildRightOrderDiscountBreakdownEntries(benefitsSummary?.discount_breakdown, {
-          promoCode: opts?.promoCode,
-        }),
-        orderDiscountTitles: [],
-      };
-    }
-    const source = Array.isArray(cartItems) ? cartItems : [];
-    const subtotalAfterDiscount = roundPrice(Number(subtotal || 0));
-    const customerOrderDiscount = roundPrice(Math.max(0, Number(opts?.customerOrderDiscount || 0)));
-    const orderDiscountTitles = Array.isArray(opts?.orderDiscountTitles)
-      ? opts.orderDiscountTitles.map((x) => String(x || "").trim()).filter(Boolean)
-      : [];
+  function mergeRightOrderDiscountBreakdownEntries(...lists) {
+    const merged = [];
+    const seen = new Set();
+    lists.forEach((list) => {
+      (Array.isArray(list) ? list : []).forEach((entry) => {
+        const amount = roundPrice(Number(entry?.amount || 0));
+        if (!(amount > 0)) return;
+        const normalized = {
+          key: String(entry?.key || "").trim() || null,
+          title: String(entry?.title || "Скидка").trim() || "Скидка",
+          amount,
+          sourceKind: normalizeRightOrderDiscountBreakdownSourceKind(entry),
+          promoCode: normalizeRightOrderBenefitsPromoCode(entry?.promoCode || entry?.promo_code),
+        };
+        const fingerprint = buildRightOrderDiscountBreakdownFingerprint(normalized);
+        if (seen.has(fingerprint)) return;
+        seen.add(fingerprint);
+        merged.push(normalized);
+      });
+    });
+    return merged;
+  }
 
+  function appendRightOrderOtherDiscountEntryIfNeeded(entries, totalDiscount) {
+    const targetTotal = roundPrice(Math.max(0, Number(totalDiscount || 0)));
+    const normalizedEntries = Array.isArray(entries) ? entries.slice() : [];
+    const breakdownTotal = roundPrice(
+      normalizedEntries.reduce((sum, entry) => sum + Number(entry?.amount || 0), 0)
+    );
+    const otherDiscount = roundPrice(Math.max(0, targetTotal - breakdownTotal));
+    if (otherDiscount > 0) {
+      normalizedEntries.push({
+        key: "other_discount",
+        title: "Прочие скидки",
+        amount: otherDiscount,
+        sourceKind: null,
+        promoCode: null,
+      });
+    }
+    return normalizedEntries;
+  }
+
+  function buildRightOrderItemLevelDiscountSummary(cartItems) {
+    const source = Array.isArray(cartItems) ? cartItems : [];
     let comboDiscount = 0;
     let productDiscount = 0;
+    let autoAddDiscount = 0;
     source.forEach((item) => {
+      if (!item || isGiftRewardCartItem(item)) return;
       const lineTotal = getRightOrderCartLineTotal(item);
       const qty = Math.max(0, Number(item?.qty || item?.quantity || 0));
       const oldLineTotalRaw = Number(item?.old_line_total || item?.discount?.original_line_total || 0);
@@ -3304,7 +3483,7 @@
       if (String(item?.type || "") === "combo") {
         comboDiscount += lineDiscount;
       } else if (isRightOrderAutoAddItem(item)) {
-        return;
+        autoAddDiscount += lineDiscount;
       } else {
         productDiscount += lineDiscount;
       }
@@ -3312,15 +3491,66 @@
 
     comboDiscount = roundPrice(comboDiscount);
     productDiscount = roundPrice(productDiscount);
+    autoAddDiscount = roundPrice(autoAddDiscount);
 
-    const totalDiscount = roundPrice(comboDiscount + productDiscount + customerOrderDiscount);
+    return {
+      comboDiscount,
+      productDiscount,
+      autoAddDiscount,
+      totalDiscount: roundPrice(comboDiscount + productDiscount + autoAddDiscount),
+      breakdown: [
+        { key: "combo_discount", title: "Комбо", amount: comboDiscount },
+        { key: "product_discount", title: "Товарные скидки", amount: productDiscount },
+        { key: "auto_add_discount", title: "Автодобавление", amount: autoAddDiscount },
+      ].filter((entry) => Number(entry.amount || 0) > 0),
+    };
+  }
+
+  function formatRightOrderDiscountBreakdownTitle(entry) {
+    const title = String(entry?.title || "Скидка").trim() || "Скидка";
+    const promoCode = normalizeRightOrderBenefitsPromoCode(entry?.promoCode);
+    if (!promoCode) return title;
+    return `${title} (${promoCode})`;
+  }
+
+  function buildRightOrderDiscountSummaryFromCart(cartItems, subtotal, opts = {}) {
+    const itemLevelSummary = buildRightOrderItemLevelDiscountSummary(cartItems);
+    const benefitsSummary = opts?.benefitsSummary && typeof opts.benefitsSummary === "object"
+      ? opts.benefitsSummary
+      : null;
+    if (benefitsSummary && Number.isFinite(Number(benefitsSummary?.discount_total))) {
+      const totalDiscount = roundPrice(Number(benefitsSummary?.discount_total || 0));
+      const subtotalBeforeDiscountRaw = Number(benefitsSummary?.subtotal);
+      let breakdown = mergeRightOrderDiscountBreakdownEntries(
+        buildRightOrderDiscountBreakdownEntries(benefitsSummary?.discount_breakdown, {
+          promoCode: opts?.promoCode,
+        }),
+        itemLevelSummary.breakdown
+      );
+      breakdown = appendRightOrderOtherDiscountEntryIfNeeded(breakdown, totalDiscount);
+      return {
+        subtotalBeforeDiscount: Number.isFinite(subtotalBeforeDiscountRaw)
+          ? roundPrice(subtotalBeforeDiscountRaw)
+          : roundPrice(Math.max(0, Number(subtotal || 0)) + totalDiscount),
+        totalDiscount,
+        breakdown,
+        orderDiscountTitles: [],
+      };
+    }
+    const subtotalAfterDiscount = roundPrice(Number(subtotal || 0));
+    const customerOrderDiscount = roundPrice(Math.max(0, Number(opts?.customerOrderDiscount || 0)));
+    const orderDiscountTitles = Array.isArray(opts?.orderDiscountTitles)
+      ? opts.orderDiscountTitles.map((x) => String(x || "").trim()).filter(Boolean)
+      : [];
+    const totalDiscount = roundPrice(itemLevelSummary.totalDiscount + customerOrderDiscount);
     const subtotalBeforeDiscount = roundPrice(Math.max(0, subtotalAfterDiscount + totalDiscount));
-
-    const breakdown = [
-      { title: "\u041a\u043e\u043c\u0431\u043e", amount: comboDiscount },
-      { title: "\u0422\u043e\u0432\u0430\u0440\u043d\u044b\u0435 \u0441\u043a\u0438\u0434\u043a\u0438", amount: productDiscount },
-      { title: "\u041a\u043b\u0438\u0435\u043d\u0442\u0441\u043a\u0430\u044f \u0441\u043a\u0438\u0434\u043a\u0430", amount: customerOrderDiscount },
-    ].filter((entry) => Number(entry.amount || 0) > 0);
+    let breakdown = mergeRightOrderDiscountBreakdownEntries(
+      itemLevelSummary.breakdown,
+      customerOrderDiscount > 0
+        ? [{ key: "customer_discount", title: "\u041a\u043b\u0438\u0435\u043d\u0442\u0441\u043a\u0430\u044f \u0441\u043a\u0438\u0434\u043a\u0430", amount: customerOrderDiscount }]
+        : []
+    );
+    breakdown = appendRightOrderOtherDiscountEntryIfNeeded(breakdown, totalDiscount);
 
     return {
       subtotalBeforeDiscount,
@@ -3364,12 +3594,19 @@
     const cartItems = Array.isArray(cartSummary?.cartItems) ? cartSummary.cartItems : [];
     if (!cartItems.length) return "";
 
-    const discountSummary = buildRightOrderDiscountSummaryFromCart(cartItems, cartSummary?.subtotalAfterCustomerDiscount, {
-      customerOrderDiscount: cartSummary?.customerOrderDiscount,
-      orderDiscountTitles: cartSummary?.customerOrderDiscountTitles,
-      benefitsSummary: cartSummary?.benefitsPreviewSummary,
-      promoCode: order?.form?.promo_code,
-    });
+    const savedDiscountSummary = cartSummary?.savedDiscountSummary && typeof cartSummary.savedDiscountSummary === "object"
+      ? cartSummary.savedDiscountSummary
+      : null;
+    const discountSummary = savedDiscountSummary || buildRightOrderDiscountSummaryFromCart(
+      cartItems,
+      cartSummary?.subtotalAfterCustomerDiscount,
+      {
+        customerOrderDiscount: cartSummary?.customerOrderDiscount,
+        orderDiscountTitles: cartSummary?.customerOrderDiscountTitles,
+        benefitsSummary: cartSummary?.benefitsPreviewSummary,
+        promoCode: order?.form?.promo_code,
+      }
+    );
     const discountAmount = roundPrice(Number(discountSummary?.totalDiscount || 0));
     const hasDiscount = discountAmount > 0;
     const breakdownRows = Array.isArray(discountSummary?.breakdown) ? discountSummary.breakdown : [];
@@ -3480,6 +3717,7 @@
         deliveryZoneName: null,
         deliveryStoreId: null,
         payableTotal: 0,
+        savedDiscountSummary: null,
         isDeliveryMethod: true,
         methodCode: "delivery",
         settings: state.rightDeliverySettings || null,
@@ -4095,9 +4333,24 @@
     const selectedOrderStatusId = isEditSubmit ? Number(form.orderStatusId || 0) : 0;
     const initialOrderStatusId = isEditSubmit ? Number(form.orderStatusInitialId || 0) : 0;
     const deliveryAddressDraft = isDeliveryMethod ? getRightOrderStoredAddressDraft(id, order) : null;
-    const benefitsPreviewSummary = summary?.benefitsPreviewSummary && typeof summary.benefitsPreviewSummary === "object"
-      ? summary.benefitsPreviewSummary
+    const savedDiscountSummary = summary?.savedDiscountSummary && typeof summary.savedDiscountSummary === "object"
+      ? summary.savedDiscountSummary
       : null;
+    const benefitsPreviewSummary = savedDiscountSummary
+      ? null
+      : (summary?.benefitsPreviewSummary && typeof summary.benefitsPreviewSummary === "object"
+        ? summary.benefitsPreviewSummary
+        : null);
+    const discountSummary = savedDiscountSummary || buildRightOrderDiscountSummaryFromCart(
+      cartItems,
+      summary?.subtotalAfterCustomerDiscount,
+      {
+        benefitsSummary: benefitsPreviewSummary,
+        customerOrderDiscount: benefitsPreviewSummary ? 0 : summary?.customerOrderDiscount,
+        orderDiscountTitles: benefitsPreviewSummary ? [] : summary?.customerOrderDiscountTitles,
+        promoCode: form.promo_code,
+      }
+    );
 
     const payload = {
       customer_name: customerName,
@@ -4124,19 +4377,23 @@
         : null,
       items,
     };
-    if (benefitsPreviewSummary) {
+    if (savedDiscountSummary) {
+      payload.benefits_items_total_override = roundPrice(Number(summary?.subtotalAfterCustomerDiscount || 0));
+    } else if (benefitsPreviewSummary) {
       payload.benefits_items_total_override = roundPrice(Number(benefitsPreviewSummary?.items_total || 0));
-      payload.discount_amount_override = roundPrice(Number(benefitsPreviewSummary?.discount_total || 0));
-      payload.discounts_json = buildRightOrderDiscountBreakdownEntries(benefitsPreviewSummary?.discount_breakdown, {
-        promoCode: form.promo_code,
-      })
+    }
+    if (Number(discountSummary?.totalDiscount || 0) > 0) {
+      payload.discount_amount_override = roundPrice(Number(discountSummary?.totalDiscount || 0));
+      payload.discounts_json = (Array.isArray(discountSummary?.breakdown) ? discountSummary.breakdown : [])
         .map((entry) => ({
           key: entry.key || null,
           title: entry.title,
           discount_amount: roundPrice(Number(entry?.amount || 0)),
           amount: roundPrice(Number(entry?.amount || 0)),
-          apply_to: "order",
-          source_kind: entry.sourceKind,
+          apply_to: entry?.key === "combo_discount"
+            ? "combo"
+            : (entry?.key === "product_discount" || entry?.key === "auto_add_discount" ? "product" : "order"),
+          source_kind: entry.sourceKind || null,
           promo_code: entry.promoCode || null,
         }))
         .filter((entry) => Number(entry.discount_amount || 0) > 0);
@@ -7469,18 +7726,10 @@
     if (index < 0) return;
     const order = state.rightOrders[index] || {};
     const form = order.form && typeof order.form === "object" ? order.form : {};
-    const phoneDigits = normalizePhoneRu(form.phone);
-    if (phoneDigits.length !== 11) {
-      showNewOrderAlert("Введите номер телефона");
-      return;
-    }
-    const token = await ensureRightOrderBenefitsCustomerToken(id);
-    if (!token) {
-      showNewOrderAlert("Клиент с таким номером не найден");
-      return;
-    }
+    const customerId = Number(await ensureRightOrderBenefitsCustomerId(id) || 0);
+    const initialMode = customerId > 0 ? "customer" : "all";
     state.benefitsModal.orderId = id;
-    state.benefitsModal.mode = "customer";
+    state.benefitsModal.mode = initialMode;
     state.benefitsModal.screen = "main";
     state.benefitsModal.title = "Выгоды";
     state.benefitsModal.payload = null;
@@ -7489,7 +7738,7 @@
       await loadRightOrderBenefitsPreview(id, {
         force: true,
         render: true,
-        mode: "customer",
+        mode: initialMode,
       });
     } catch (error) {
       showNewOrderAlert(getRightOrderBenefitsActionErrorMessage(error));
@@ -9199,6 +9448,24 @@
     const hasApiDiscount = discountAmount > 0;
     const oldUnitPrice = hasApiDiscount ? unitBeforeDiscount : oldFromDb;
     const hasOldUnitPrice = Number.isFinite(oldUnitPrice) && oldUnitPrice > unitPrice;
+    if (isGiftRewardCartItem(item)) {
+      const giftUnitBeforeDiscount = roundPrice(Math.max(
+        Number(item?.unit_price_before_discount || 0),
+        oldUnitPrice,
+        unitBeforeDiscount
+      ));
+      item.unit_price_before_discount = giftUnitBeforeDiscount > 0 ? giftUnitBeforeDiscount : 0;
+      item.unit_price = 0;
+      if (item.pricing && typeof item.pricing === "object") {
+        item.pricing = {
+          ...item.pricing,
+          unit_before_discount: giftUnitBeforeDiscount,
+          discount_amount: giftUnitBeforeDiscount,
+        };
+      }
+      item.sum = 0;
+      return item;
+    }
     item.unit_price_before_discount = hasOldUnitPrice ? roundPrice(oldUnitPrice) : 0;
     item.unit_price = unitPrice;
     if (item.pricing && typeof item.pricing === "object") {
@@ -15946,6 +16213,7 @@
       }
       cartItems.push(await buildCartItemFromOrderProduct(orderItem));
     }
+    const normalizedCartItems = normalizeRightOrderCartItemsWithAutoAdd(Number(draft.id || 0), cartItems);
 
     const phoneRaw = String(src?.customer_phone || "").trim();
     const normalizedPhone = normalizePhoneRu(phoneRaw);
@@ -16001,7 +16269,7 @@
       selected_promo_reward_id: restoredPromoRewardId,
       benefits_preview_mode: restoredPreviewMode,
       comment: String(src?.comment || "").trim(),
-      cartItems,
+      cartItems: normalizedCartItems,
     };
 
     const sessionAddressDraft = String(src?.method_code || "").trim().toLowerCase() === "delivery"
@@ -16026,6 +16294,11 @@
       : null;
     const hasSessionAddressDraft = sessionAddressDraft && hasRightOrderQuoteAddressData(sessionAddressDraft);
     const deliveryAddressId = Number(src?.delivery_address_id || 0);
+    draft.editPricingSnapshot = buildRightOrderStoredPricingSnapshot(src);
+    draft.editPricingBaselineSignature = buildRightOrderEditPricingSignature(draft, {
+      addressDraft: hasSessionAddressDraft ? sessionAddressDraft : null,
+      selectedAddressId: deliveryAddressId > 0 ? deliveryAddressId : 0,
+    });
 
     return {
       activeCategoryId: CHECKOUT_SCREEN_ID,

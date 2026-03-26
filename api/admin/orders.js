@@ -298,28 +298,24 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
       const customerId = Number(req.body?.customer_id || 0);
-      const mode = String(req.body?.mode || "").trim().toLowerCase() === "all"
+      const requestedMode = String(req.body?.mode || "").trim().toLowerCase() === "all"
         ? "all"
         : "customer";
-
-      if (!(customerId > 0)) {
-        return res.status(400).json({ ok: false, error: "BAD_CUSTOMER_ID" });
+      let customer = null;
+      if (customerId > 0) {
+        const [rows] = await db.query(
+          `SELECT *
+             FROM cust_customers
+            WHERE tenant_id = ?
+              AND store_id = ?
+              AND id = ?
+              AND is_active = 1
+            LIMIT 1`,
+          [tenantId, storeId, customerId]
+        );
+        customer = Array.isArray(rows) && rows.length ? rows[0] : null;
       }
-
-      const [rows] = await db.query(
-        `SELECT *
-           FROM cust_customers
-          WHERE tenant_id = ?
-            AND store_id = ?
-            AND id = ?
-            AND is_active = 1
-          LIMIT 1`,
-        [tenantId, storeId, customerId]
-      );
-      const customer = Array.isArray(rows) && rows.length ? rows[0] : null;
-      if (!customer) {
-        return res.status(404).json({ ok: false, error: "CUSTOMER_NOT_FOUND" });
-      }
+      const mode = customer ? requestedMode : "all";
 
       const data = await previewProvider.buildPreview({
         tenantId,
@@ -329,7 +325,12 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         mode,
       });
 
-      return res.json({ ok: true, data });
+      return res.json({
+        ok: true,
+        data: data && typeof data === "object"
+          ? { ...data, mode }
+          : data,
+      });
     } catch (e) {
       console.error("POST /api/admin/orders/benefits/preview error:", e);
       return res.status(500).json({ ok: false, error: "DB_ERROR" });

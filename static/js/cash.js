@@ -409,6 +409,225 @@
       return rows.join('');
     }
 
+    function parseCashOrderDiscountsJson(order) {
+      var raw = order && order.discounts_json;
+      if (Array.isArray(raw)) return raw;
+      if (!raw) return [];
+      try {
+        var parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        return Array.isArray(parsed) ? parsed : [];
+      } catch (error) {
+        return [];
+      }
+    }
+
+    function normalizeCashOrderDiscountSourceKind(entry) {
+      var raw = String(entry && (entry.source_kind || entry.source || entry.kind) || '').trim().toLowerCase();
+      if (raw === 'promo_code' || raw === 'reward_promo') return 'promo_code';
+      if (raw === 'reward_discount' || raw === 'discount') return 'discount';
+      var key = String(entry && entry.key || '').trim().toLowerCase();
+      if (key.indexOf('promo_') === 0) return 'promo_code';
+      if (key.indexOf('discount_') === 0) return 'discount';
+      return null;
+    }
+
+    function buildCashStoredDiscountBreakdown(order) {
+      var fallbackPromoCode = String(order && order.promo_code || '').trim() || null;
+      return parseCashOrderDiscountsJson(order).map(function (entry) {
+        var sourceKind = normalizeCashOrderDiscountSourceKind(entry);
+        var promoCode = sourceKind === 'promo_code'
+          ? (String(entry && (entry.promo_code || entry.code) || '').trim() || fallbackPromoCode)
+          : null;
+        return {
+          key: String(entry && entry.key || '').trim() || null,
+          title: String(entry && (entry.title || entry.name) || 'Скидка').trim() || 'Скидка',
+          amount: Number(entry && (entry.discount_amount != null ? entry.discount_amount : entry.amount) || 0),
+          sourceKind: sourceKind,
+          promoCode: promoCode
+        };
+      }).filter(function (entry) {
+        return Number(entry && entry.amount || 0) > 0;
+      });
+    }
+
+    function isGiftRewardCashItem(item) {
+      return Number(item && item.is_gift_reward || 0) === 1;
+    }
+
+    function getCashOrderItemLineTotal(item) {
+      var lineTotal = Number(item && (item.line_total != null ? item.line_total : (item.total != null ? item.total : item.total_price)));
+      if (Number.isFinite(lineTotal)) return roundMoney(lineTotal);
+      var unitPrice = Number(item && (item.price || item.unit_price) || 0);
+      var qty = Math.max(0, Number(item && (item.qty || item.quantity) || 0));
+      return roundMoney(unitPrice * qty);
+    }
+
+    function buildCashDiscountFingerprint(entry) {
+      var key = String(entry && entry.key || '').trim().toLowerCase();
+      if (key) return 'key:' + key;
+      var sourceKind = String(entry && (entry.sourceKind || entry.source_kind) || '').trim().toLowerCase();
+      var title = String(entry && entry.title || '').trim().toLowerCase();
+      var promoCode = String(entry && (entry.promoCode || entry.promo_code) || '').trim().toUpperCase();
+      return 'row:' + sourceKind + ':' + title + ':' + promoCode;
+    }
+
+    function mergeCashDiscountBreakdownEntries() {
+      var lists = Array.prototype.slice.call(arguments);
+      var merged = [];
+      var seen = new Set();
+      lists.forEach(function (list) {
+        (Array.isArray(list) ? list : []).forEach(function (entry) {
+          var amount = roundMoney(Number(entry && entry.amount || 0));
+          if (!(amount > 0)) return;
+          var normalized = {
+            key: String(entry && entry.key || '').trim() || null,
+            title: String(entry && entry.title || 'Скидка').trim() || 'Скидка',
+            amount: amount,
+            sourceKind: normalizeCashOrderDiscountSourceKind(entry),
+            promoCode: String(entry && (entry.promoCode || entry.promo_code) || '').trim().toUpperCase() || null
+          };
+          var fingerprint = buildCashDiscountFingerprint(normalized);
+          if (seen.has(fingerprint)) return;
+          seen.add(fingerprint);
+          merged.push(normalized);
+        });
+      });
+      return merged;
+    }
+
+    function appendCashOtherDiscountEntryIfNeeded(entries, totalDiscount) {
+      var targetTotal = roundMoney(Math.max(0, Number(totalDiscount || 0)));
+      var normalizedEntries = Array.isArray(entries) ? entries.slice() : [];
+      var breakdownTotal = roundMoney(normalizedEntries.reduce(function (sum, entry) {
+        return sum + Number(entry && entry.amount || 0);
+      }, 0));
+      var otherDiscount = roundMoney(Math.max(0, targetTotal - breakdownTotal));
+      if (otherDiscount > 0) {
+        normalizedEntries.push({
+          key: 'other_discount',
+          title: 'Прочие скидки',
+          amount: otherDiscount,
+          sourceKind: null,
+          promoCode: null
+        });
+      }
+      return normalizedEntries;
+    }
+
+    function buildCashItemLevelDiscountSummary(items) {
+      var comboDiscount = 0;
+      var productDiscount = 0;
+      var autoAddDiscount = 0;
+      (Array.isArray(items) ? items : []).forEach(function (item) {
+        if (!item || isGiftRewardCashItem(item)) return;
+        var lineTotal = getCashOrderItemLineTotal(item);
+        var originalLineTotal = lineTotal;
+        var comboOldLineTotal = Number(item && item.old_line_total || 0);
+        var discountOriginalLineTotal = Number(item && item.discount && item.discount.original_line_total || 0);
+        var oldPrice = Number(item && item.old_price || 0);
+        var qty = Math.max(0, Number(item && (item.qty || item.quantity) || 0));
+        var oldPriceLineTotal = oldPrice > 0 ? roundMoney(oldPrice * qty) : 0;
+        if (String(item && item.type || '') === 'combo' && comboOldLineTotal > lineTotal) {
+          originalLineTotal = comboOldLineTotal;
+        } else if (discountOriginalLineTotal > lineTotal) {
+          originalLineTotal = discountOriginalLineTotal;
+        } else if (oldPriceLineTotal > lineTotal) {
+          originalLineTotal = oldPriceLineTotal;
+        }
+        var lineDiscount = roundMoney(Math.max(0, originalLineTotal - lineTotal));
+        if (!(lineDiscount > 0)) return;
+        if (String(item && item.type || '') === 'combo') {
+          comboDiscount += lineDiscount;
+        } else if (isAutoAddItem(item)) {
+          autoAddDiscount += lineDiscount;
+        } else {
+          productDiscount += lineDiscount;
+        }
+      });
+      comboDiscount = roundMoney(comboDiscount);
+      productDiscount = roundMoney(productDiscount);
+      autoAddDiscount = roundMoney(autoAddDiscount);
+      return {
+        totalDiscount: roundMoney(comboDiscount + productDiscount + autoAddDiscount),
+        breakdown: [
+          { key: 'combo_discount', title: 'Комбо', amount: comboDiscount },
+          { key: 'product_discount', title: 'Товарные скидки', amount: productDiscount },
+          { key: 'auto_add_discount', title: 'Автодобавление', amount: autoAddDiscount }
+        ].filter(function (entry) {
+          return Number(entry && entry.amount || 0) > 0;
+        })
+      };
+    }
+
+    function hasStructuredStoredCashDiscountBreakdown(rows) {
+      return (Array.isArray(rows) ? rows : []).some(function (entry) {
+        var key = String(entry && entry.key || '').trim();
+        var sourceKind = String(entry && (entry.sourceKind || entry.source_kind) || '').trim();
+        var promoCode = String(entry && (entry.promoCode || entry.promo_code) || '').trim();
+        return Boolean(key || sourceKind || promoCode);
+      });
+    }
+
+    function buildOrderDiscountSummary(order) {
+      var items = Array.isArray(order && order.items) ? order.items : [];
+      var orderTotal = roundMoney(Number(order && order.total_price || 0));
+      var deliveryCost = roundMoney(Number(order && order.delivery_cost || 0));
+      var itemsPayableAfterAllDiscounts = roundMoney(Math.max(0, orderTotal - deliveryCost));
+      var itemLevelSummary = buildCashItemLevelDiscountSummary(items);
+      var itemsTotalAfterItemDiscounts = items.reduce(function (sum, item) {
+        return sum + getCashOrderItemLineTotal(item);
+      }, 0);
+      var storedDiscount = roundMoney(Math.max(0, Number(order && order.discount_amount || 0)));
+      var storedBreakdown = buildCashStoredDiscountBreakdown(order);
+
+      if (storedBreakdown.length) {
+        var storedStructured = hasStructuredStoredCashDiscountBreakdown(storedBreakdown);
+        var storedBreakdownTotal = roundMoney(storedBreakdown.reduce(function (sum, row) {
+          return sum + Number(row && row.amount || 0);
+        }, 0));
+        var storedTotalDiscount = roundMoney(Math.max(storedDiscount, storedBreakdownTotal));
+        var breakdown;
+        if (storedStructured) {
+          breakdown = mergeCashDiscountBreakdownEntries(storedBreakdown, itemLevelSummary.breakdown);
+        } else if (storedBreakdown.length === 1) {
+          var orderLevelTotal = roundMoney(Math.max(0, storedTotalDiscount - itemLevelSummary.totalDiscount));
+          var adjustedStoredBreakdown = orderLevelTotal > 0
+            ? [{ key: storedBreakdown[0].key || null, title: storedBreakdown[0].title, amount: orderLevelTotal, sourceKind: storedBreakdown[0].sourceKind || null, promoCode: storedBreakdown[0].promoCode || null }]
+            : [];
+          breakdown = mergeCashDiscountBreakdownEntries(adjustedStoredBreakdown, itemLevelSummary.breakdown);
+        } else {
+          breakdown = storedBreakdown.slice();
+        }
+        storedBreakdownTotal = roundMoney(breakdown.reduce(function (sum, row) {
+          return sum + Number(row && row.amount || 0);
+        }, 0));
+        storedTotalDiscount = roundMoney(Math.max(storedTotalDiscount, storedBreakdownTotal));
+        breakdown = appendCashOtherDiscountEntryIfNeeded(breakdown, storedTotalDiscount);
+        return {
+          subtotalBeforeDiscount: roundMoney(itemsPayableAfterAllDiscounts + storedTotalDiscount),
+          totalDiscount: storedTotalDiscount,
+          breakdown: breakdown,
+          orderDiscountTitles: []
+        };
+      }
+
+      var customerOrderDiscount = roundMoney(Math.max(0, itemsTotalAfterItemDiscounts - itemsPayableAfterAllDiscounts));
+      var totalDiscount = roundMoney(Math.max(storedDiscount, itemLevelSummary.totalDiscount + customerOrderDiscount));
+      var breakdown = mergeCashDiscountBreakdownEntries(
+        itemLevelSummary.breakdown,
+        customerOrderDiscount > 0
+          ? [{ key: 'customer_discount', title: 'Клиентская скидка', amount: customerOrderDiscount }]
+          : []
+      );
+      breakdown = appendCashOtherDiscountEntryIfNeeded(breakdown, totalDiscount);
+      return {
+        subtotalBeforeDiscount: roundMoney(itemsPayableAfterAllDiscounts + totalDiscount),
+        totalDiscount: totalDiscount,
+        breakdown: breakdown,
+        orderDiscountTitles: []
+      };
+    }
+
     function isAutoAddItem(item) {
       if (Number(item && item.auto_add || 0) === 1) return true;
       return String(item && (item.product_name || item.name) || '').trim().toLowerCase() === 'приборы';
