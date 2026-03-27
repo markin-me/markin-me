@@ -2899,7 +2899,7 @@
 
     const titles = Array.isArray(summary.orderDiscountTitles) ? summary.orderDiscountTitles : [];
     if (titles.length > 0) {
-      html += `<div class="order-summary-discount-breakdown-note">РЎРєРёРґРєР° РєР»РёРµРЅС‚Р°: ${escapeHtml(titles.join(", "))}</div>`;
+      html += `<div class="order-summary-discount-breakdown-note">Скидка клиента: ${escapeHtml(titles.join(", "))}</div>`;
     }
 
     return html;
@@ -2927,7 +2927,7 @@
       const baseTotalDiscount = roundMoney(Math.max(storedDiscount, storedBreakdownTotal));
       let breakdown;
       if (storedStructured) {
-        breakdown = mergeOrderDiscountBreakdownEntries(storedBreakdown, itemLevelSummary.breakdown);
+        breakdown = storedBreakdown.slice();
       } else if (storedBreakdown.length === 1) {
         const orderLevelTotal = roundMoney(Math.max(0, baseTotalDiscount - itemLevelSummary.totalDiscount));
         const adjustedStoredBreakdown = orderLevelTotal > 0
@@ -3230,7 +3230,8 @@
         }
       }
       const primaryVariantLine = variantLines.length ? variantLines[0] : "";
-      const titleText = [primaryVariantLine, nameRaw].filter(Boolean).join(" ").trim() || nameRaw;
+      const giftSuffix = isGiftRewardOrderItem(it) ? " (Подарок)" : "";
+      const titleText = ([primaryVariantLine, nameRaw].filter(Boolean).join(" ").trim() || nameRaw) + giftSuffix;
       const titleHtml = `${qty} x ${escapeHtml(titleText)}`;
       const photoHtml = renderThumbHtml(it?.photos, nameRaw);
 
@@ -6475,10 +6476,23 @@
   });
 
   // Функция печати чека через системную печать браузера
-  function printOrderReceipt(order) {
+  async function printOrderReceipt(order) {
     if (!isOrderPrintable(order)) return;
-    // Создаем HTML для чека
-    const receiptHtml = generateReceiptHTML(order);
+    const orderId = Number(order?.id || 0);
+    let receiptHtml = "";
+
+    if (orderId > 0) {
+      try {
+        const json = await apiJson(`/api/admin/orders/${orderId}/print-template`);
+        receiptHtml = String(json?.data?.html || "").trim();
+      } catch (err) {
+        console.error("Failed to load admin receipt print template:", err);
+      }
+    }
+
+    if (!receiptHtml) {
+      receiptHtml = generateReceiptHTML(order);
+    }
     
     // Вычисляем размеры и позицию для центрирования окна
     const width = 400;
@@ -6651,6 +6665,9 @@
     }
 
     function renderLinePrice(item, fallbackTotal = 0) {
+      if (isGiftRewardOrderItem(item)) {
+        return "0";
+      }
       const lineTotal = Number(item?.line_total ?? item?.total ?? item?.total_price ?? fallbackTotal);
       const oldLineTotal = Number(item?.old_line_total || item?.discount?.original_line_total || 0);
       const showOldPrice = oldLineTotal > lineTotal;
@@ -6726,7 +6743,8 @@
       });
 
       const primaryVariantLine = variantLines.length ? variantLines[0] : "";
-      const titleLine = [primaryVariantLine, rawName].filter(Boolean).join(" ").trim() || rawName;
+      const giftSuffix = isGiftRewardOrderItem(item) ? " (Подарок)" : "";
+      const titleLine = ([primaryVariantLine, rawName].filter(Boolean).join(" ").trim() || rawName) + giftSuffix;
       const name = escapeHtml(titleLine);
       if (variantLines.length > 1) {
         variantLines.slice(1).forEach((line) => {
@@ -6793,7 +6811,6 @@
     const discountAmount = Number(receiptDiscountSummary.totalDiscount || 0);
     const subtotal = Number(receiptDiscountSummary.subtotalBeforeDiscount || 0);
     const receiptPromoCode = String(receiptOrder?.promo_code || "").trim();
-
     return `
 <!DOCTYPE html>
 <html>
@@ -6941,6 +6958,12 @@
     .receipt-summary-value {
       flex-shrink: 0;
       text-align: right;
+    }
+    .receipt-summary-row--breakdown {
+      font-size: 10pt;
+    }
+    .receipt-summary-row--breakdown .receipt-summary-label {
+      padding-left: 8px;
     }
     .receipt-urgent {
       text-align: center;

@@ -4220,7 +4220,7 @@
 
     const primaryVariantLine = variantLines.length ? variantLines[0] : "";
     const titleBase = [primaryVariantLine, productName].filter(Boolean).join(" ").trim() || productName;
-    const titleText = item?.is_gift_reward === true ? `${titleBase} (Подарок)` : titleBase;
+    const titleText = Number(item?.is_gift_reward || 0) === 1 ? `${titleBase} (Подарок)` : titleBase;
 
     const detailLines = [];
     if (variantLines.length > 1) detailLines.push(...variantLines.slice(1));
@@ -9244,6 +9244,18 @@ async function initAddresses() {
         <button
           type="button"
           class="shop-cart-benefits-service-row hidden"
+          data-cart-benefits-trigger="discounts"
+          aria-label="\u041e\u0442\u043a\u0440\u044b\u0442\u044c \u0441\u043a\u0438\u0434\u043a\u0438"
+        >
+          <span class="shop-cart-benefits-service-row-main">
+            <span class="shop-cart-benefits-service-title">\u0421\u043a\u0438\u0434\u043a\u0438</span>
+            <span class="shop-cart-benefits-service-badge hidden" data-cart-benefits-badge="discounts">0</span>
+          </span>
+          <i class="fas fa-chevron-right shop-cart-benefits-service-arrow" aria-hidden="true"></i>
+        </button>
+        <button
+          type="button"
+          class="shop-cart-benefits-service-row hidden"
           data-cart-benefits-trigger="gifts"
           aria-label="Открыть подарки"
         >
@@ -10692,10 +10704,11 @@ function updateCartBadge() {
 
   let clearCartAllBusy = false;
 
-  async function clearCartAll() {
+  async function clearCartAll(options = {}) {
     if (clearCartAllBusy) return false;
     clearCartAllBusy = true;
     try {
+      const shouldRestoreGiftRewards = options?.restoreGiftRewards !== false;
       const previousCartSnapshot = cloneCartState(state.cart);
       const giftRewardIds = Array.from(
         new Set(
@@ -10709,15 +10722,17 @@ function updateCartBadge() {
         : null;
       const restoredGiftRewards = [];
 
-      for (const rewardId of giftRewardIds) {
-        const restoredGiftData = await restoreGiftRewardToBenefits(rewardId);
-        if (!restoredGiftData) {
-          return false;
+      if (shouldRestoreGiftRewards) {
+        for (const rewardId of giftRewardIds) {
+          const restoredGiftData = await restoreGiftRewardToBenefits(rewardId);
+          if (!restoredGiftData) {
+            return false;
+          }
+          restoredGiftRewards.push({
+            rewardId,
+            giftCard: restoredGiftData?.gift_card || null,
+          });
         }
-        restoredGiftRewards.push({
-          rewardId,
-          giftCard: restoredGiftData?.gift_card || null,
-        });
       }
 
       state.cart = [];

@@ -23,9 +23,13 @@ const {
 const {
   getOrderBenefitsAccrualProvider,
 } = require("../../services/order-benefits-accrual-provider");
+const makePrintApiRouter = require("../print");
 
 module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
   const router = express.Router();
+  const orderPrintTemplateBuilder = typeof makePrintApiRouter.createOrderPrintTemplateBuilder === "function"
+    ? makePrintApiRouter.createOrderPrintTemplateBuilder({ db, helpers })
+    : null;
   let orderDeliveryTypeColumnsReady = false;
   let ensureOrderDeliveryTypeColumnsPromise = null;
   let orderBenefitsMetaColumnReady = false;
@@ -280,6 +284,70 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
     }
     const hasValues = Object.values(meta).some((value) => value !== null);
     return hasValues ? JSON.stringify(meta) : null;
+  }
+
+  async function findActiveGiftRewardOrderConflicts(queryable, {
+    tenantId,
+    customerId,
+    giftRewardIds,
+    excludeOrderId = null,
+  } = {}) {
+    const normalizedTenantId = Number(tenantId || 0);
+    const normalizedCustomerId = Number(customerId || 0);
+    const normalizedExcludeOrderId = Number(excludeOrderId || 0);
+    const normalizedRewardIds = Array.from(
+      new Set(
+        (Array.isArray(giftRewardIds) ? giftRewardIds : [])
+          .map((rewardId) => Number(rewardId || 0))
+          .filter((rewardId) => Number.isInteger(rewardId) && rewardId > 0)
+      )
+    );
+    if (!(normalizedTenantId > 0) || !(normalizedCustomerId > 0) || !normalizedRewardIds.length) {
+      return [];
+    }
+
+    const whereClauses = [
+      "oo.tenant_id = ?",
+      "oo.customer_id = ?",
+      "oo.is_active = 1",
+      "LOWER(COALESCE(os.code, '')) NOT IN ('canceled', 'cancelled')",
+    ];
+    const queryParams = [normalizedTenantId, normalizedCustomerId];
+    if (normalizedExcludeOrderId > 0) {
+      whereClauses.push("oo.id <> ?");
+      queryParams.push(normalizedExcludeOrderId);
+    }
+
+    const [orderRows] = await queryable.query(
+      `SELECT oo.id, oo.items
+         FROM order_orders oo
+         LEFT JOIN order_statuses os
+           ON os.tenant_id = oo.tenant_id
+          AND os.store_id = oo.store_id
+          AND os.id = oo.status_id
+        WHERE ${whereClauses.join(" AND ")}`,
+      queryParams
+    );
+
+    const requestedRewardIds = new Set(normalizedRewardIds);
+    const conflictingRewardIds = new Set();
+    (Array.isArray(orderRows) ? orderRows : []).forEach((orderRow) => {
+      let orderItems = [];
+      try {
+        const rawItems = Array.isArray(orderRow?.items)
+          ? orderRow.items
+          : (orderRow?.items ? JSON.parse(orderRow.items) : []);
+        if (Array.isArray(rawItems)) orderItems = rawItems;
+      } catch {}
+      orderItems.forEach((item) => {
+        const rewardId = Number(item?.gift_reward_id || 0);
+        if (requestedRewardIds.has(rewardId)) {
+          conflictingRewardIds.add(rewardId);
+        }
+      });
+    });
+
+    return normalizedRewardIds.filter((rewardId) => conflictingRewardIds.has(rewardId));
   }
 
   async function accrueOrderBenefitsIfAvailable(params = {}) {
@@ -1165,6 +1233,34 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
     }
   });
   // ---------------------------
+  // print template
+  // ---------------------------
+  // GET /api/admin/orders/:id/print-template
+  router.get("/:id/print-template", async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) {
+        return res.status(400).json({ ok: false, error: "BAD_ID" });
+      }
+
+      if (!orderPrintTemplateBuilder || typeof orderPrintTemplateBuilder.buildOrderTemplateHtml !== "function") {
+        return res.status(503).json({ ok: false, error: "PRINT_TEMPLATE_UNAVAILABLE" });
+      }
+      const html = await orderPrintTemplateBuilder.buildOrderTemplateHtml(tenantId, storeId, id);
+      if (!html) {
+        return res.status(404).json({ ok: false, error: "NOT_FOUND" });
+      }
+
+      res.json({ ok: true, data: { html } });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: "DB_ERROR" });
+    }
+  });
+
+  // ---------------------------
   // order details
   // ---------------------------
   // GET /api/admin/orders/:id
@@ -1554,7 +1650,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       }
 
       const [orderRows] = await conn.query(
-        `SELECT id, public_id, items, status_id, stock_deducted_at, stock_document_id
+        `SELECT id, public_id, customer_id, items, status_id, stock_deducted_at, stock_document_id
          FROM order_orders
          WHERE tenant_id=? AND store_id=? AND id=? AND is_active=1
          LIMIT 1
@@ -1671,6 +1767,36 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
          WHERE tenant_id=? AND store_id=? AND id=?`,
         [statusId, stockDeductedAt, stockDocumentId, tenantId, storeId, id]
       );
+
+      if (isCanceledTarget) {
+        let orderItems = [];
+        try {
+          const parsed = orderRow.items ? JSON.parse(orderRow.items) : [];
+          if (Array.isArray(parsed)) orderItems = parsed;
+        } catch {
+          orderItems = [];
+        }
+        const rewardCustomerId = Number(orderRow?.customer_id || 0);
+        const giftRewardIds = Array.from(
+          new Set(
+            orderItems
+              .map((item) => Number(item?.gift_reward_id || 0))
+              .filter((rewardId) => Number.isInteger(rewardId) && rewardId > 0)
+          )
+        );
+        if (rewardCustomerId > 0 && giftRewardIds.length) {
+          await conn.query(
+            `UPDATE mkt_discount_rewards
+                SET status='available', used_at=NULL, updated_at=NOW()
+              WHERE tenant_id=?
+                AND customer_id=?
+                AND reward_type='gift'
+                AND status='used'
+                AND id IN (?)`,
+            [tenantId, rewardCustomerId, giftRewardIds]
+          );
+        }
+      }
 
       await accrueOrderBenefitsIfAvailable({
         conn,
@@ -2498,6 +2624,48 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         );
       }
 
+      const previousGiftRewardIds = new Set(
+        previousItems
+          .map((item) => Number(item?.gift_reward_id || 0))
+          .filter((rewardId, index, source) => rewardId > 0 && source.indexOf(rewardId) === index)
+      );
+      const nextGiftRewardIds = new Set(
+        items
+          .map((item) => Number(item?.gift_reward_id || 0))
+          .filter((rewardId, index, source) => rewardId > 0 && source.indexOf(rewardId) === index)
+      );
+      const removedGiftRewardIds = [...previousGiftRewardIds].filter((rewardId) => !nextGiftRewardIds.has(rewardId));
+      const previousRewardCustomerId = Number(existing?.customer_id || 0);
+      const nextRewardCustomerId = Number(customerId || 0);
+
+      if (nextGiftRewardIds.size && !(nextRewardCustomerId > 0)) {
+        return res.status(409).json({ ok: false, error: "REWARD_INVALID" });
+      }
+      if (nextGiftRewardIds.size && nextRewardCustomerId > 0) {
+        const nextGiftRewardIdList = [...nextGiftRewardIds];
+        const [rewardRows] = await db.query(
+          `SELECT id
+             FROM mkt_discount_rewards
+            WHERE tenant_id=?
+              AND customer_id=?
+              AND reward_type='gift'
+              AND id IN (?)`,
+          [tenantId, nextRewardCustomerId, nextGiftRewardIdList]
+        );
+        if (!Array.isArray(rewardRows) || rewardRows.length !== nextGiftRewardIdList.length) {
+          return res.status(409).json({ ok: false, error: "REWARD_INVALID" });
+        }
+        const conflictingGiftRewardIds = await findActiveGiftRewardOrderConflicts(db, {
+          tenantId,
+          customerId: nextRewardCustomerId,
+          giftRewardIds: nextGiftRewardIdList,
+          excludeOrderId: id,
+        });
+        if (conflictingGiftRewardIds.length) {
+          return res.status(409).json({ ok: false, error: "REWARD_INVALID" });
+        }
+      }
+
       const updateFields = [
         "customer_id=?",
         "customer_name=?",
@@ -2560,19 +2728,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         updateParams
       );
 
-      const previousGiftRewardIds = new Set(
-        previousItems
-          .map((item) => Number(item?.gift_reward_id || 0))
-          .filter((rewardId, index, source) => rewardId > 0 && source.indexOf(rewardId) === index)
-      );
-      const nextGiftRewardIds = new Set(
-        items
-          .map((item) => Number(item?.gift_reward_id || 0))
-          .filter((rewardId, index, source) => rewardId > 0 && source.indexOf(rewardId) === index)
-      );
-      const removedGiftRewardIds = [...previousGiftRewardIds].filter((rewardId) => !nextGiftRewardIds.has(rewardId));
-      const rewardCustomerId = Number(existing?.customer_id || customerId || 0);
-      if (removedGiftRewardIds.length && rewardCustomerId > 0) {
+      if (removedGiftRewardIds.length && previousRewardCustomerId > 0) {
         await db.query(
           `UPDATE mkt_discount_rewards
               SET status='available', used_at=NULL, updated_at=NOW()
@@ -2581,7 +2737,21 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
               AND reward_type='gift'
               AND status='used'
               AND id IN (?)`,
-          [tenantId, rewardCustomerId, removedGiftRewardIds]
+          [tenantId, previousRewardCustomerId, removedGiftRewardIds]
+        );
+      }
+      if (nextGiftRewardIds.size && nextRewardCustomerId > 0) {
+        await db.query(
+          `UPDATE mkt_discount_rewards
+              SET status='used',
+                  used_at=COALESCE(used_at, NOW()),
+                  updated_at=NOW()
+            WHERE tenant_id=?
+              AND customer_id=?
+              AND reward_type='gift'
+              AND status IN ('available', 'used')
+              AND id IN (?)`,
+          [tenantId, nextRewardCustomerId, [...nextGiftRewardIds]]
         );
       }
 

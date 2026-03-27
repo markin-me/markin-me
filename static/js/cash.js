@@ -588,7 +588,7 @@
         var storedTotalDiscount = roundMoney(Math.max(storedDiscount, storedBreakdownTotal));
         var breakdown;
         if (storedStructured) {
-          breakdown = mergeCashDiscountBreakdownEntries(storedBreakdown, itemLevelSummary.breakdown);
+          breakdown = storedBreakdown.slice();
         } else if (storedBreakdown.length === 1) {
           var orderLevelTotal = roundMoney(Math.max(0, storedTotalDiscount - itemLevelSummary.totalDiscount));
           var adjustedStoredBreakdown = orderLevelTotal > 0
@@ -858,7 +858,8 @@
         }
 
         var primaryVariantLine = variantLines.length ? variantLines[0] : '';
-        var titleText = [primaryVariantLine, nameRaw].filter(Boolean).join(' ').trim() || nameRaw;
+        var giftSuffix = isGiftRewardCashItem(item) ? ' (Подарок)' : '';
+        var titleText = ([primaryVariantLine, nameRaw].filter(Boolean).join(' ').trim() || nameRaw) + giftSuffix;
         var lines = [];
         if (variantLines.length > 1) lines = lines.concat(variantLines.slice(1));
 
@@ -2608,9 +2609,32 @@
       return state.loadPromise;
     }
 
-    function printOrderReceipt(order) {
+    function buildFallbackReceiptHtml(order) {
+      var displayOrder = getDisplayOrder(order) || order;
+      var lines = (Array.isArray(displayOrder && displayOrder.items) ? displayOrder.items : []).map(function (item) {
+        var qty = Math.max(1, Number(item && (item.qty || item.quantity) || 1));
+        var title = String(item && (item.product_name || item.name || item.combo_title) || 'РџРѕР·РёС†РёСЏ');
+        return '<div style="display:flex;justify-content:space-between;gap:8px;"><span>' + escapeHtml(String(qty) + ' x ' + title) + '</span><span>' + escapeHtml(money(item && (item.line_total || item.total || item.total_price) || 0)) + '</span></div>';
+      }).join('');
+      return '<!doctype html><html><head><meta charset="utf-8"><title>Р§РµРє</title></head><body style="font-family:Courier New,monospace;padding:16px;"><h3 style="margin:0 0 8px;">Р—Р°РєР°Р· #' + escapeHtml(getOrderNumber(displayOrder)) + '</h3><div style="margin-bottom:4px;">' + escapeHtml(formatDateTime(displayOrder.created_at)) + '</div><div style="margin-bottom:4px;">' + escapeHtml(String(displayOrder.customer_name || 'РљР»РёРµРЅС‚')) + '</div><div style="margin-bottom:12px;">' + escapeHtml(String(displayOrder.customer_phone || '')) + '</div><div style="display:grid;gap:6px;margin-bottom:12px;">' + lines + '</div><div style="display:flex;justify-content:space-between;font-weight:700;"><span>РС‚РѕРіРѕ</span><span>' + escapeHtml(money(displayOrder.total_price || 0)) + '</span></div></body></html>';
+    }
+
+    async function printOrderReceipt(order) {
       if (!(getOrderId(order) > 0)) return;
       if (!isOrderPrintable(order)) return;
+      var orderId = getOrderId(order);
+      var receiptHtml = '';
+      if (orderId > 0) {
+        try {
+          var json = await apiJson('/api/admin/orders/' + String(orderId) + '/print-template');
+          receiptHtml = String(json && json.data && json.data.html || '').trim();
+        } catch (err) {
+          console.error('cash receipt print template load error:', err);
+        }
+      }
+      if (!receiptHtml) {
+        receiptHtml = buildFallbackReceiptHtml(order);
+      }
       var displayOrder = getDisplayOrder(order) || order;
       var lines = (Array.isArray(displayOrder && displayOrder.items) ? displayOrder.items : []).map(function (item) {
         var qty = Math.max(1, Number(item && (item.qty || item.quantity) || 1));
@@ -2624,6 +2648,7 @@
       var top = (screen.height / 2) - (height / 2);
       var printWindow = window.open('', '_blank', 'width=' + width + ',height=' + height + ',left=' + left + ',top=' + top);
       if (!printWindow) return;
+      if (receiptHtml) html = receiptHtml;
       printWindow.document.write(html);
       printWindow.document.close();
       printWindow.onload = function () {

@@ -1,9 +1,1073 @@
 ﻿const express = require("express");
 const { buildOrderRefundState } = require("./helpers/orderRefunds");
 
-module.exports = function makePrintApiRouter({ db, helpers }) {
+function createOrderPrintTemplateBuilder({ db, helpers }) {
+  async function getStoreTimezone(tenantId, storeId) {
+    let storeTimezone = "+0";
+    if (storeId) {
+      const [rows] = await db.query(
+        "SELECT timezone FROM ten_stores WHERE tenant_id=? AND id=? LIMIT 1",
+        [tenantId, storeId]
+      );
+      if (rows[0]?.timezone) {
+        storeTimezone = rows[0].timezone;
+      }
+    }
+    if (!storeTimezone || storeTimezone === "+0") {
+      const [tenantRows] = await db.query(
+        "SELECT timezone FROM ten_tenants WHERE id=? LIMIT 1",
+        [tenantId]
+      );
+      if (tenantRows[0]?.timezone) {
+        storeTimezone = tenantRows[0].timezone;
+      }
+    }
+    return storeTimezone || "+0";
+  }
+
+  async function fetchRefundRecordsForOrder(tenantId, storeId, orderId, storeTimezone) {
+    if (!(Number(tenantId) > 0) || !(Number(storeId) > 0) || !(Number(orderId) > 0)) return [];
+    try {
+      const [rows] = await db.query(
+        `
+        SELECT
+          r.id AS refund_id,
+          r.order_id,
+          r.payment_id,
+          r.payment_code,
+          r.payment_title,
+          r.payment_icon,
+          r.items_total,
+          r.delivery_amount,
+          r.total_amount,
+          r.comment,
+          r.is_full,
+          r.created_by_user_id,
+          r.created_by_name,
+          r.created_by_email,
+          DATE_FORMAT(r.created_at, '%Y-%m-%d %H:%i:%s') AS created_at,
+          ri.id AS refund_item_id,
+          ri.source_item_index,
+          ri.refunded_qty,
+          ri.unit_price,
+          ri.line_amount,
+          ri.item_snapshot
+        FROM order_refunds r
+        LEFT JOIN order_refund_items ri
+          ON ri.tenant_id=r.tenant_id
+         AND ri.store_id=r.store_id
+         AND ri.refund_id=r.id
+        WHERE r.tenant_id=? AND r.store_id=? AND r.order_id=?
+        ORDER BY r.created_at DESC, r.id DESC, ri.id ASC
+        `,
+        [tenantId, storeId, orderId]
+      );
+
+      const refunds = [];
+      for (const row of rows) {
+        const refundId = Number(row?.refund_id || 0);
+        if (!(refundId > 0)) continue;
+        let refund = refunds.find((item) => Number(item?.id || 0) === refundId) || null;
+        if (!refund) {
+          refund = {
+            id: refundId,
+            order_id: Number(row?.order_id || 0) || null,
+            payment_id: Number(row?.payment_id || 0) || null,
+            payment_code: row?.payment_code || null,
+            payment_title: row?.payment_title || null,
+            payment_icon: row?.payment_icon || null,
+            items_total: Number(row?.items_total || 0) || 0,
+            delivery_amount: Number(row?.delivery_amount || 0) || 0,
+            total_amount: Number(row?.total_amount || 0) || 0,
+            comment: row?.comment || null,
+            is_full: Number(row?.is_full || 0) === 1 ? 1 : 0,
+            created_by_user_id: Number(row?.created_by_user_id || 0) || null,
+            created_by_name: row?.created_by_name || null,
+            created_by_email: row?.created_by_email || null,
+            created_at: storeTimezone
+              ? helpers.utcToStoreDateTime(row?.created_at, storeTimezone)
+              : row?.created_at,
+            items: [],
+          };
+          refunds.push(refund);
+        }
+
+        const refundItemId = Number(row?.refund_item_id || 0);
+        if (!(refundItemId > 0)) continue;
+        let itemSnapshot = {};
+        try {
+          const parsed = row?.item_snapshot ? JSON.parse(row.item_snapshot) : {};
+          if (parsed && typeof parsed === "object") itemSnapshot = parsed;
+        } catch {}
+        refund.items.push({
+          id: refundItemId,
+          source_item_index: Number(row?.source_item_index || 0),
+          refunded_qty: Number(row?.refunded_qty || 0) || 0,
+          unit_price: Number(row?.unit_price || 0) || 0,
+          line_amount: Number(row?.line_amount || 0) || 0,
+          item_snapshot: itemSnapshot,
+        });
+      }
+
+      return refunds;
+    } catch (err) {
+      if (String(err?.code || "") === "ER_NO_SUCH_TABLE") return [];
+      throw err;
+    }
+  }
+
+  function hasOrderRefunds(order) {
+    const refundedTotal = Number(order?.refunded_total || 0) || 0;
+    const refundsCount = Number(order?.refunds_count || 0) || 0;
+    return refundedTotal > 0 || refundsCount > 0;
+  }
+
+  function getDisplayOrder(order) {
+    if (!order || !hasOrderRefunds(order)) return order;
+    if (!order.remaining_order || typeof order.remaining_order !== "object") return order;
+    return {
+      ...order,
+      ...order.remaining_order,
+    };
+  }
+
+  async function buildOrderTemplateHtml(tenantId, storeId, orderId) {
+    if (!(Number(tenantId) > 0) || !(Number(storeId) > 0) || !(Number(orderId) > 0)) {
+      return null;
+    }
+
+    const [orderRows] = await db.query(
+      `
+      SELECT
+        o.id, o.public_id,
+        DATE_FORMAT(o.created_at, '%Y-%m-%d %H:%i:%s') AS created_at,
+        o.customer_id, o.customer_name, o.customer_phone,
+        o.address, o.comment, o.address_comment, o.cutlery_qty,
+        o.change_from, o.total_price, o.delivery_cost,
+        o.discount_amount, o.discounts_json, o.items, o.promo_code,
+        DATE_FORMAT(o.scheduled_at, '%Y-%m-%d %H:%i:%s') AS scheduled_at,
+        o.delivery_type_id, o.payment_id, o.time_option_id, o.status_id,
+        o.pickup_store_id,
+
+        s.code AS statusCode, s.title AS statusTitle,
+        p.code AS paymentCode, p.title AS paymentTitle,
+        m.code AS methodCode, m.title AS methodTitle,
+        t.code AS timeOptionCode, t.title AS timeOptionTitle,
+        c.telegram_user_id AS customerTelegramId,
+        ps.name AS pickupStoreName, ps.address AS pickupStoreAddress,
+        ca.comment AS address_comment_from_cust
+      FROM order_orders o
+      LEFT JOIN order_statuses s ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id
+      LEFT JOIN order_payments p ON p.tenant_id=o.tenant_id AND p.store_id=o.store_id AND p.id=o.payment_id
+      LEFT JOIN order_delivery_types m ON m.tenant_id=o.tenant_id AND m.store_id=o.store_id AND m.id=o.delivery_type_id
+      LEFT JOIN order_time_options t ON t.tenant_id=o.tenant_id AND t.store_id=o.store_id AND t.id=o.time_option_id
+      LEFT JOIN cust_customers c ON c.tenant_id=o.tenant_id AND c.store_id=o.store_id AND c.id=o.customer_id
+      LEFT JOIN ten_stores ps ON ps.tenant_id=o.tenant_id AND ps.id=o.pickup_store_id
+      LEFT JOIN cust_customer_addresses ca ON ca.tenant_id=o.tenant_id AND ca.id=o.delivery_address_id AND ca.is_active=1
+      WHERE o.tenant_id=? AND o.store_id=? AND o.id=? LIMIT 1
+      `,
+      [tenantId, storeId, orderId]
+    );
+
+    if (!orderRows.length) {
+      return null;
+    }
+
+    const order = orderRows[0];
+
+    let items = [];
+    try {
+      const parsed = order.items ? JSON.parse(order.items) : [];
+      if (Array.isArray(parsed)) items = parsed;
+    } catch {}
+
+    let discountsJson = [];
+    try {
+      const parsed = order.discounts_json ? JSON.parse(order.discounts_json) : [];
+      if (Array.isArray(parsed)) discountsJson = parsed;
+    } catch {}
+
+    order.items = items;
+    order.discounts_json = discountsJson;
+    const storeTimezone = await getStoreTimezone(tenantId, storeId);
+    order.created_at = helpers.utcToStoreDateTime(order.created_at, storeTimezone) || order.created_at;
+    order.scheduled_at = normalizeScheduledAtForPrint(order, storeTimezone) || order.scheduled_at;
+    order.address_comment = (order.address_comment && String(order.address_comment).trim())
+      ? order.address_comment
+      : (order.address_comment_from_cust && String(order.address_comment_from_cust).trim())
+        ? order.address_comment_from_cust
+        : null;
+    order.payment_title = order.paymentTitle ?? null;
+    order.payment_code = order.paymentCode ?? null;
+    order.method_title = order.methodTitle ?? null;
+    order.method_code = order.methodCode ?? null;
+    order.time_option_title = order.timeOptionTitle ?? null;
+    order.time_option_code = order.timeOptionCode ?? null;
+    order.pickup_store_name = order.pickupStoreName ?? null;
+    order.pickup_store_address = order.pickupStoreAddress ?? null;
+    Object.assign(
+      order,
+      buildOrderRefundState(
+        order,
+        await fetchRefundRecordsForOrder(tenantId, storeId, orderId, storeTimezone)
+      )
+    );
+
+    return generateReceiptHtmlForOrder(order, storeTimezone);
+  }
+
+  function parseLocalDate(value) {
+    if (!value) return null;
+    const raw = String(value).trim();
+    const match = raw.match(
+      /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/
+    );
+    if (match) {
+      const year = Number(match[1]);
+      const month = Number(match[2]);
+      const day = Number(match[3]);
+      const hour = Number(match[4]);
+      const minute = Number(match[5]);
+      const second = Number(match[6] || 0);
+      const date = new Date(year, month - 1, day, hour, minute, second, 0);
+      return Number.isNaN(date.getTime()) ? null : date;
+    }
+
+    const fallback = new Date(raw.replace(" ", "T"));
+    return Number.isNaN(fallback.getTime()) ? null : fallback;
+  }
+
+  function formatTime(value) {
+    const date = parseLocalDate(value);
+    if (!date) return "";
+    const hours = String(date.getHours()).padStart(2, "0");
+    const minutes = String(date.getMinutes()).padStart(2, "0");
+    return `${hours}:${minutes}`;
+  }
+
+  function formatDateTime(value) {
+    const date = parseLocalDate(value);
+    if (!date) return "";
+    const day = String(date.getDate()).padStart(2, "0");
+    const month = date.getMonth();
+    const year = date.getFullYear();
+    const hours = String(date.getHours()).padStart(2, "0");
+    const minutes = String(date.getMinutes()).padStart(2, "0");
+    const monthNames = ["янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"];
+    return `${day} ${monthNames[month]} ${year}, ${hours}:${minutes}`;
+  }
+
+  function escapeHtml(value) {
+    return String(value ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;");
+  }
+
+  const moneyFmt = new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 });
+  function money(value) {
+    const numeric = Number(value || 0);
+    return moneyFmt.format(Number.isFinite(numeric) ? numeric : 0) + " ₽";
+  }
+
+  function getStoreDateNow(timezone) {
+    const now = new Date();
+    const localOffsetMinutes = -now.getTimezoneOffset();
+    const storeOffsetMinutes = helpers.parseTimezoneOffsetToMinutes(timezone ?? "+0");
+    const shiftMinutes = storeOffsetMinutes - localOffsetMinutes;
+    return new Date(now.getTime() + shiftMinutes * 60 * 1000);
+  }
+
+  function toDateKey(date) {
+    const yyyy = date.getFullYear();
+    const mm = String(date.getMonth() + 1).padStart(2, "0");
+    const dd = String(date.getDate()).padStart(2, "0");
+    return `${yyyy}-${mm}-${dd}`;
+  }
+
+  function formatScheduleText(order, timezone, { includeTitle = true } = {}) {
+    if (!order) return "";
+    const title = String(order.time_option_title || "").trim();
+    const scheduledAt = order.scheduled_at;
+    if (!scheduledAt) return includeTitle ? title : "";
+
+    const date = parseLocalDate(scheduledAt);
+    if (!date) return includeTitle ? title : "";
+
+    const code = String(order.time_option_code || "").trim();
+    const storeNow = getStoreDateNow(timezone ?? "+0");
+    const isToday = toDateKey(date) === toDateKey(storeNow);
+    const showDate = code === "on_date" ? true : code === "at_time" ? false : !isToday;
+    const valueText = showDate ? formatDateTime(scheduledAt) : formatTime(scheduledAt);
+    if (!valueText) return includeTitle ? title : "";
+    if (includeTitle && title) return `${title}: ${valueText}`;
+    return valueText;
+  }
+
+  function normalizeScheduledAtForPrint(order, timezone) {
+    if (!order) return "";
+    const rawValue = String(order.scheduled_at || "").trim();
+    if (!rawValue) return "";
+
+    const optionCode = String(order.time_option_code || "").trim().toLowerCase();
+    if (optionCode !== "at_time") return rawValue;
+
+    const created = parseLocalDate(order.created_at);
+    const scheduledRaw = parseLocalDate(rawValue);
+    if (!created || !scheduledRaw) return rawValue;
+
+    const diffRawMinutes = Math.round((scheduledRaw.getTime() - created.getTime()) / 60000);
+    if (diffRawMinutes >= -30) return rawValue;
+
+    const shiftedValue = helpers.utcToStoreDateTime(rawValue, timezone ?? "+0");
+    if (!shiftedValue || shiftedValue === rawValue) return rawValue;
+    const scheduledShifted = parseLocalDate(shiftedValue);
+    if (!scheduledShifted) return rawValue;
+
+    const diffShiftedMinutes = Math.round((scheduledShifted.getTime() - created.getTime()) / 60000);
+    if (diffShiftedMinutes >= -30) {
+      return shiftedValue;
+    }
+    return rawValue;
+  }
+
+  function roundMoney(value) {
+    const numeric = Number(value || 0);
+    if (!Number.isFinite(numeric)) return 0;
+    return Math.round(numeric * 100) / 100;
+  }
+
+  function getOrderItemLineTotal(item) {
+    const lineTotal = Number(item?.line_total ?? item?.total ?? item?.total_price);
+    if (Number.isFinite(lineTotal)) return roundMoney(lineTotal);
+    const unitPrice = Number(item?.price || 0);
+    const qty = Math.max(0, Number(item?.qty || item?.quantity || 0));
+    return roundMoney(unitPrice * qty);
+  }
+
+  function parseOrderDiscountsJson(order) {
+    const raw = order?.discounts_json;
+    if (Array.isArray(raw)) return raw;
+    if (!raw) return [];
+    try {
+      const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function normalizeOrderDiscountBreakdownSourceKind(entry) {
+    const raw = String(entry?.source_kind ?? entry?.sourceKind ?? entry?.source ?? entry?.kind ?? "").trim().toLowerCase();
+    if (raw === "promo_code" || raw === "reward_promo") return "promo_code";
+    if (raw === "reward_discount" || raw === "discount") return "discount";
+    const key = String(entry?.key || "").trim().toLowerCase();
+    if (key.startsWith("promo_")) return "promo_code";
+    if (key.startsWith("discount_")) return "discount";
+    return null;
+  }
+
+  function buildOrderStoredDiscountBreakdown(order) {
+    const fallbackPromoCode = String(order?.promo_code || "").trim() || null;
+    return parseOrderDiscountsJson(order)
+      .map((entry) => {
+        const sourceKind = normalizeOrderDiscountBreakdownSourceKind(entry);
+        const promoCode = sourceKind === "promo_code"
+          ? (String(entry?.promo_code || entry?.code || "").trim() || fallbackPromoCode)
+          : null;
+        return {
+          key: String(entry?.key || "").trim() || null,
+          title: String(entry?.title || entry?.name || "Скидка").trim() || "Скидка",
+          amount: roundMoney(Number(entry?.discount_amount ?? entry?.amount ?? 0)),
+          sourceKind,
+          promoCode,
+        };
+      })
+      .filter((entry) => Number(entry.amount || 0) > 0);
+  }
+
+  function buildOrderDiscountBreakdownFingerprint(entry) {
+    const key = String(entry?.key || "").trim().toLowerCase();
+    if (key) return `key:${key}`;
+    const sourceKind = String(entry?.sourceKind || entry?.source_kind || "").trim().toLowerCase();
+    const title = String(entry?.title || "").trim().toLowerCase();
+    const promoCode = String(entry?.promoCode || entry?.promo_code || "").trim().toUpperCase();
+    return `row:${sourceKind}:${title}:${promoCode}`;
+  }
+
+  function mergeOrderDiscountBreakdownEntries(...lists) {
+    const merged = [];
+    const seen = new Set();
+    lists.forEach((list) => {
+      (Array.isArray(list) ? list : []).forEach((entry) => {
+        const amount = roundMoney(Number(entry?.amount || 0));
+        if (!(amount > 0)) return;
+        const normalized = {
+          key: String(entry?.key || "").trim() || null,
+          title: String(entry?.title || "Скидка").trim() || "Скидка",
+          amount,
+          sourceKind: normalizeOrderDiscountBreakdownSourceKind(entry),
+          promoCode: String(entry?.promoCode || entry?.promo_code || "").trim().toUpperCase() || null,
+        };
+        const fingerprint = buildOrderDiscountBreakdownFingerprint(normalized);
+        if (seen.has(fingerprint)) return;
+        seen.add(fingerprint);
+        merged.push(normalized);
+      });
+    });
+    return merged;
+  }
+
+  function appendOrderOtherDiscountEntryIfNeeded(entries, totalDiscount) {
+    const targetTotal = roundMoney(Math.max(0, Number(totalDiscount || 0)));
+    const normalizedEntries = Array.isArray(entries) ? entries.slice() : [];
+    const breakdownTotal = roundMoney(
+      normalizedEntries.reduce((sum, entry) => sum + Number(entry?.amount || 0), 0)
+    );
+    const otherDiscount = roundMoney(Math.max(0, targetTotal - breakdownTotal));
+    if (otherDiscount > 0) {
+      normalizedEntries.push({
+        key: "other_discount",
+        title: "Прочие скидки",
+        amount: otherDiscount,
+        sourceKind: null,
+        promoCode: null,
+      });
+    }
+    return normalizedEntries;
+  }
+
+  function hasStructuredStoredOrderDiscountBreakdown(rows) {
+    return (Array.isArray(rows) ? rows : []).some((entry) => {
+      const key = String(entry?.key || "").trim();
+      const sourceKind = String(entry?.sourceKind || entry?.source_kind || "").trim();
+      const promoCode = String(entry?.promoCode || entry?.promo_code || "").trim();
+      return Boolean(key || sourceKind || promoCode);
+    });
+  }
+
+  function formatOrderDiscountBreakdownTitle(entry) {
+    const title = String(entry?.title || "Скидка").trim() || "Скидка";
+    const promoCode = String(entry?.promoCode || "").trim();
+    if (!promoCode) return title;
+    return `${title} (${promoCode})`;
+  }
+
+  function isGiftRewardOrderItem(item) {
+    return Number(item?.is_gift_reward || 0) === 1;
+  }
+
+  function isAutoAddItem(item) {
+    if (Number(item?.auto_add || 0) === 1) return true;
+    const name = String(item?.product_name || item?.name || "").trim().toLowerCase();
+    return name === "приборы";
+  }
+
+  function buildOrderDiscountSummary(order) {
+    const orderTotal = roundMoney(Number(order?.total_price || 0));
+    const deliveryCost = roundMoney(Number(order?.delivery_cost || 0));
+    const items = Array.isArray(order?.items) ? order.items : [];
+    const storedBreakdown = buildOrderStoredDiscountBreakdown(order);
+
+    let itemsTotalAfterItemDiscounts = 0;
+    let comboDiscount = 0;
+    let productDiscount = 0;
+    let autoAddDiscount = 0;
+
+    items.forEach((item) => {
+      if (isGiftRewardOrderItem(item)) {
+        itemsTotalAfterItemDiscounts += getOrderItemLineTotal(item);
+        return;
+      }
+      const lineTotal = getOrderItemLineTotal(item);
+      itemsTotalAfterItemDiscounts += lineTotal;
+
+      let originalLineTotal = lineTotal;
+      const comboOldLineTotal = Number(item?.old_line_total || 0);
+      const discountOriginalLineTotal = Number(item?.discount?.original_line_total || 0);
+      const oldPrice = Number(item?.old_price || 0);
+      const qty = Math.max(0, Number(item?.qty || item?.quantity || 0));
+      const oldPriceLineTotal = oldPrice > 0 ? roundMoney(oldPrice * qty) : 0;
+
+      if (String(item?.type || "") === "combo" && comboOldLineTotal > lineTotal) {
+        originalLineTotal = comboOldLineTotal;
+      } else if (discountOriginalLineTotal > lineTotal) {
+        originalLineTotal = discountOriginalLineTotal;
+      } else if (oldPriceLineTotal > lineTotal) {
+        originalLineTotal = oldPriceLineTotal;
+      }
+
+      const lineDiscount = roundMoney(Math.max(0, originalLineTotal - lineTotal));
+      if (!(lineDiscount > 0)) return;
+
+      if (String(item?.type || "") === "combo") {
+        comboDiscount += lineDiscount;
+      } else if (isAutoAddItem(item)) {
+        autoAddDiscount += lineDiscount;
+      } else {
+        productDiscount += lineDiscount;
+      }
+    });
+
+    comboDiscount = roundMoney(comboDiscount);
+    productDiscount = roundMoney(productDiscount);
+    autoAddDiscount = roundMoney(autoAddDiscount);
+
+    const itemsPayableAfterAllDiscounts = roundMoney(Math.max(0, orderTotal - deliveryCost));
+    const storedDiscount = roundMoney(Math.max(0, Number(order?.discount_amount || 0)));
+    const itemLevelSummary = {
+      totalDiscount: roundMoney(comboDiscount + productDiscount + autoAddDiscount),
+      breakdown: [
+        { key: "combo_discount", title: "Комбо", amount: comboDiscount },
+        { key: "product_discount", title: "Товарные скидки", amount: productDiscount },
+        { key: "auto_add_discount", title: "Автодобавление", amount: autoAddDiscount },
+      ].filter((entry) => Number(entry.amount || 0) > 0),
+    };
+
+    if (storedBreakdown.length > 0) {
+      const storedStructured = hasStructuredStoredOrderDiscountBreakdown(storedBreakdown);
+      const storedBreakdownTotal = roundMoney(
+        storedBreakdown.reduce((sum, entry) => sum + Number(entry?.amount || 0), 0)
+      );
+      const baseTotalDiscount = roundMoney(Math.max(storedDiscount, storedBreakdownTotal));
+      let breakdown;
+      if (storedStructured) {
+        breakdown = storedBreakdown.slice();
+      } else if (storedBreakdown.length === 1) {
+        const orderLevelTotal = roundMoney(Math.max(0, baseTotalDiscount - itemLevelSummary.totalDiscount));
+        const adjustedStoredBreakdown = orderLevelTotal > 0
+          ? [{ ...storedBreakdown[0], amount: orderLevelTotal }]
+          : [];
+        breakdown = mergeOrderDiscountBreakdownEntries(adjustedStoredBreakdown, itemLevelSummary.breakdown);
+      } else {
+        breakdown = storedBreakdown.slice();
+      }
+      const breakdownTotal = roundMoney(
+        breakdown.reduce((sum, entry) => sum + Number(entry?.amount || 0), 0)
+      );
+      const totalDiscount = roundMoney(Math.max(baseTotalDiscount, breakdownTotal));
+      breakdown = appendOrderOtherDiscountEntryIfNeeded(breakdown, totalDiscount);
+      return {
+        subtotalBeforeDiscount: roundMoney(itemsPayableAfterAllDiscounts + totalDiscount),
+        totalDiscount,
+        breakdown,
+        orderDiscountTitles: [],
+      };
+    }
+
+    const customerOrderDiscount = roundMoney(Math.max(0, itemsTotalAfterItemDiscounts - itemsPayableAfterAllDiscounts));
+    const calculatedDiscount = roundMoney(itemLevelSummary.totalDiscount + customerOrderDiscount);
+    const totalDiscount = storedDiscount > calculatedDiscount ? storedDiscount : calculatedDiscount;
+    const subtotalBeforeDiscount = roundMoney(itemsPayableAfterAllDiscounts + totalDiscount);
+
+    let breakdown = mergeOrderDiscountBreakdownEntries(
+      itemLevelSummary.breakdown,
+      customerOrderDiscount > 0
+        ? [{ key: "customer_discount", title: "Клиентская скидка", amount: customerOrderDiscount }]
+        : []
+    );
+    breakdown = appendOrderOtherDiscountEntryIfNeeded(breakdown, totalDiscount);
+    const orderDiscountTitles = [];
+
+    return {
+      subtotalBeforeDiscount,
+      totalDiscount,
+      breakdown,
+      orderDiscountTitles,
+    };
+  }
+
+  function generateReceiptHtmlForOrder(order, storeTimezone) {
+    const receiptOrder = getDisplayOrder(order) || order;
+    const hasRefunds = hasOrderRefunds(order);
+    const createdAtStr = String(receiptOrder.created_at || "").replace(" ", "T");
+    const date = new Date(createdAtStr);
+
+    const day = String(date.getDate()).padStart(2, "0");
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const year = date.getFullYear();
+    const hours = String(date.getHours()).padStart(2, "0");
+    const minutes = String(date.getMinutes()).padStart(2, "0");
+    const dateStr = `${day}.${month}.${year}, ${hours}:${minutes}`;
+
+    const methodTitle = receiptOrder.method_title || (receiptOrder.method_code === "pickup" ? "Самовывоз" : "Доставка");
+    let address = receiptOrder.address;
+    if (!address && receiptOrder.pickup_store_address) {
+      address = receiptOrder.pickup_store_name
+        ? `${receiptOrder.pickup_store_name}, ${receiptOrder.pickup_store_address}`
+        : receiptOrder.pickup_store_address;
+    }
+    const isUrgent = receiptOrder.is_urgent || receiptOrder.urgent || receiptOrder.time_option_code === "urgent";
+    const total = parseFloat(receiptOrder.total_price || receiptOrder.total || 0);
+    const deliveryCost = Number(receiptOrder.delivery_cost || 0);
+    const changeFromRaw = receiptOrder.change_from;
+    const changeFrom = Number.isFinite(Number(changeFromRaw)) ? Number(changeFromRaw) : 0;
+    const paymentTitle = receiptOrder.payment_method_title || receiptOrder.payment_title || "";
+    const changeAmount = Math.max(0, changeFrom - total);
+    const showChange = !hasRefunds && changeAmount > 0;
+    const scheduleText = formatScheduleText(receiptOrder, storeTimezone, { includeTitle: true });
+
+    function receiptTotalStr(value) {
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric)) return "";
+      if (numeric === 0) return "";
+      return Math.round(numeric) === numeric ? String(Math.round(numeric)) : numeric.toFixed(2);
+    }
+
+    const receiptItems = Array.isArray(receiptOrder.items)
+      ? receiptOrder.items.slice().sort((a, b) => {
+          const aAuto = isAutoAddItem(a);
+          const bAuto = isAutoAddItem(b);
+          if (aAuto && !bAuto) return 1;
+          if (!aAuto && bAuto) return -1;
+          return 0;
+        })
+      : [];
+
+    const comboItems = receiptItems.filter((item) => String(item?.type || "") === "combo");
+    const productItems = receiptItems.filter((item) => String(item?.type || "") !== "combo");
+    const itemGroups = [];
+    if (comboItems.length) itemGroups.push({ key: "combo", title: "КОМБО", items: comboItems });
+    if (productItems.length) itemGroups.push({ key: "product", title: "ТОВАРЫ", items: productItems });
+
+    function mergeVariantUnit(label, unit) {
+      const cleanLabel = String(label || "").trim();
+      const cleanUnit = String(unit || "").trim();
+      if (!cleanLabel) return cleanUnit;
+      if (!cleanUnit) return cleanLabel;
+      const escapedUnit = cleanUnit.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const measureMatch = cleanLabel.match(new RegExp(`^\\s*([\\d.,]+\\s*${escapedUnit})(?:\\b|\\s|$)`, "i"));
+      if (measureMatch && String(measureMatch[1] || "").trim()) {
+        return String(measureMatch[1] || "").trim();
+      }
+      const labelLower = cleanLabel.toLowerCase();
+      const unitLower = cleanUnit.toLowerCase();
+      if (labelLower.endsWith(` ${unitLower}`) || labelLower === unitLower) return cleanLabel;
+      return `${cleanLabel} ${cleanUnit}`.trim();
+    }
+
+    function normalizeVariantUnitLabel(unitRaw) {
+      const raw = String(unitRaw || "").trim();
+      if (!raw) return "";
+      const key = raw.toLowerCase();
+      const dict = {
+        "штук": "шт",
+        "штука": "шт",
+        "шт": "шт",
+        "грамм": "г",
+        "грамма": "г",
+        "гр": "г",
+        "г": "г",
+        "килограмм": "кг",
+        "килограмма": "кг",
+        "кг": "кг",
+        "миллилитр": "мл",
+        "миллилитра": "мл",
+        "мл": "мл",
+        "литр": "л",
+        "литра": "л",
+        "л": "л",
+      };
+      return dict[key] || raw;
+    }
+
+    function extractVariantUnitFromGroupTitle(groupTitleRaw) {
+      const groupTitle = String(groupTitleRaw || "").trim();
+      if (!groupTitle) return "";
+      const match = groupTitle.match(/\(([^)]+)\)\s*$/);
+      if (!match) return "";
+      return normalizeVariantUnitLabel(String(match[1] || "").trim());
+    }
+
+    function formatQtyUnitName(qtyRaw, unitRaw, nameRaw) {
+      const qtyNum = Number(qtyRaw);
+      const qtyText = Number.isFinite(qtyNum)
+        ? String(Number.isInteger(qtyNum) ? qtyNum : Number(qtyNum.toFixed(3)))
+        : String(qtyRaw ?? "").trim();
+      const unitText = String(unitRaw || "").trim();
+      const nameText = String(nameRaw || "").trim();
+      return [qtyText, unitText, nameText].filter(Boolean).join(" ").trim();
+    }
+
+    function renderLinePrice(item, fallbackTotal = 0) {
+      if (Number(item?.is_gift_reward || 0) === 1) {
+        return "0";
+      }
+      const lineTotal = Number(item?.line_total ?? item?.total ?? item?.total_price ?? fallbackTotal);
+      const oldLineTotal = Number(item?.old_line_total || item?.discount?.original_line_total || 0);
+      const showOldPrice = oldLineTotal > lineTotal;
+      return showOldPrice
+        ? `<span class="receipt-old-price">${receiptTotalStr(oldLineTotal)}</span>${receiptTotalStr(lineTotal)}`
+        : receiptTotalStr(lineTotal);
+    }
+
+    function renderComboItem(item) {
+      const name = escapeHtml(item?.name || item?.combo_title || "Комбо");
+      const qty = Math.max(1, Number(item?.quantity || item?.qty || 1));
+      const qtyStr = `${qty} x`;
+      const priceStr = renderLinePrice(item, 0);
+      const selections = Array.isArray(item?.selections) ? item.selections : [];
+      const compositionLines = [];
+
+      selections.forEach((sel) => {
+        const productName = String(sel?.product_name || "").trim() || "Товар";
+        const variantHead = mergeVariantUnit(sel?.variant_label, sel?.variant_unit);
+        const primaryLine = [variantHead, productName].filter(Boolean).join(" ").trim();
+        if (primaryLine) {
+          compositionLines.push(`<div class="receipt-composition-item receipt-composition-item--group">1 x ${escapeHtml(primaryLine)}</div>`);
+        }
+
+        const ingredientsDisplay = Array.isArray(sel?.ingredients_display) ? sel.ingredients_display : [];
+        ingredientsDisplay.forEach((ing) => {
+          const ingQty = ing?.qty ?? ing?.quantity;
+          const ingNumQty = Number(ingQty);
+          if (!Number.isFinite(ingNumQty) || ingNumQty <= 0) return;
+          const line = formatQtyUnitName(ingQty, ing?.unit, ing?.name);
+          if (!line) return;
+          compositionLines.push(`<div class="receipt-composition-item receipt-composition-item--sub">&bull; ${escapeHtml(line)}</div>`);
+        });
+      });
+
+      const compositionHtml = compositionLines.length
+        ? `<div class="receipt-composition">${compositionLines.join("")}</div>`
+        : "";
+
+      return `
+        <div class="receipt-item">
+          <div class="receipt-item-row">
+            <span class="receipt-item-qty">${escapeHtml(qtyStr)}</span>
+            <span class="receipt-item-name">${name}</span>
+            ${priceStr ? `<span class="receipt-item-price">${priceStr}</span>` : ""}
+          </div>
+          ${compositionHtml}
+        </div>
+      `;
+    }
+
+    function renderProductItem(item) {
+      const rawName = String(item?.product_name || item?.name || "Товар").trim() || "Товар";
+      const qty = Math.max(1, Number(item?.quantity || item?.qty || 1));
+      const basePrice = parseFloat(item?.price || 0);
+      const qtyStr = `${qty} x`;
+      const priceStr = renderLinePrice(item, basePrice * qty);
+      const compositionLines = [];
+
+      const variants = Array.isArray(item?.variants) ? item.variants : [];
+      const variantLines = [];
+      variants.forEach((variant) => {
+        const value = String(variant?.label || variant?.value || "").trim();
+        const unit = String(
+          variant?.unit ||
+          variant?.unit_short_title ||
+          variant?.unitLabel ||
+          variant?.unit_title ||
+          extractVariantUnitFromGroupTitle(variant?.group_title || variant?.groupTitle || "")
+        ).trim();
+        const formatted = mergeVariantUnit(value, unit);
+        if (formatted) variantLines.push(formatted);
+      });
+
+      const primaryVariantLine = variantLines.length ? variantLines[0] : "";
+      const giftSuffix = isGiftRewardOrderItem(item) ? " (Подарок)" : "";
+      const titleLine = ([primaryVariantLine, rawName].filter(Boolean).join(" ").trim() || rawName) + giftSuffix;
+      const name = escapeHtml(titleLine);
+      if (variantLines.length > 1) {
+        variantLines.slice(1).forEach((line) => {
+          compositionLines.push(`<div class="receipt-composition-item receipt-composition-item--sub">&bull; ${escapeHtml(line)}</div>`);
+        });
+      }
+
+      const ingredients = (Array.isArray(item?.ingredients) ? item.ingredients : [])
+        .filter((ing) => Number(ing?.quantity ?? ing?.qty ?? 0) > 0);
+      ingredients.forEach((ing) => {
+        const line = formatQtyUnitName(
+          ing?.quantity ?? ing?.qty,
+          ing?.unit_label || ing?.unit || ing?.unitLabel || ing?.unit_short_title || ing?.unit_title || "",
+          ing?.name || "Ингредиент"
+        );
+        if (line) compositionLines.push(`<div class="receipt-composition-item receipt-composition-item--sub">&bull; ${escapeHtml(line)}</div>`);
+      });
+
+      const options = (Array.isArray(item?.options) ? item.options : [])
+        .filter((opt) => Number(opt?.qty ?? opt?.quantity ?? 0) > 0);
+      options.forEach((opt) => {
+        const variant = mergeVariantUnit(opt?.variant_label || opt?.variantLabel, opt?.variant_unit || opt?.variantUnit);
+        const title = String(opt?.title || "Опция").trim();
+        const line = variant
+          ? `${variant} ${title}`.trim()
+          : `${Math.max(1, Number(opt?.qty || opt?.quantity || 1))} ${title}`.trim();
+        if (line) compositionLines.push(`<div class="receipt-composition-item receipt-composition-item--sub">&bull; ${escapeHtml(line)}</div>`);
+      });
+
+      const compositionHtml = compositionLines.length
+        ? `<div class="receipt-composition">${compositionLines.join("")}</div>`
+        : "";
+
+      return `
+        <div class="receipt-item">
+          <div class="receipt-item-row">
+            <span class="receipt-item-qty">${escapeHtml(qtyStr)}</span>
+            <span class="receipt-item-name">${name}</span>
+            ${priceStr ? `<span class="receipt-item-price">${priceStr}</span>` : ""}
+          </div>
+          ${compositionHtml}
+        </div>
+      `;
+    }
+
+    let itemsHtml = "";
+    if (itemGroups.length) {
+      itemsHtml = itemGroups.map((group, idx) => {
+        const bodyHtml = group.items
+          .map((item) => group.key === "combo" ? renderComboItem(item) : renderProductItem(item))
+          .join("");
+        return `
+          <div class="receipt-items-group receipt-items-group--${group.key}">
+            <div class="receipt-items-group-title">${group.title}</div>
+            <div class="receipt-items-group-list">${bodyHtml}</div>
+          </div>
+          ${idx < itemGroups.length - 1 ? '<div class="receipt-items-type-divider"></div>' : ""}
+        `;
+      }).join("");
+    } else {
+      itemsHtml = '<div class="receipt-empty">Все позиции возвращены.</div>';
+    }
+
+    const receiptDiscountSummary = buildOrderDiscountSummary(receiptOrder);
+    const discountAmount = Number(receiptDiscountSummary.totalDiscount || 0);
+    const subtotal = Number(receiptDiscountSummary.subtotalBeforeDiscount || 0);
+    const receiptPromoCode = String(receiptOrder?.promo_code || "").trim();
+    return `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Чек заказа #${receiptOrder.id}</title>
+  <style>
+    @media print {
+      @page {
+        size: 80mm auto;
+        margin: 0;
+      }
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        padding: 5mm 3mm;
+        font-family: 'Courier New', monospace;
+        font-size: 11pt;
+        font-weight: bold;
+        line-height: 1.3;
+        width: 80mm;
+        max-width: 80mm;
+        box-sizing: border-box;
+      }
+      .no-print {
+        display: none !important;
+      }
+    }
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      padding: 5mm 3mm;
+      font-family: 'Courier New', monospace;
+      font-size: 11pt;
+      font-weight: bold;
+      line-height: 1.3;
+      width: 80mm;
+      max-width: 80mm;
+      box-sizing: border-box;
+      background: white;
+    }
+    .receipt-header {
+      text-align: center;
+      font-weight: bold;
+      font-size: 16pt;
+      margin-bottom: 10px;
+    }
+    .receipt-date {
+      text-align: center;
+      margin-bottom: 10px;
+      border-bottom: 1px dashed #000;
+      padding-bottom: 10px;
+    }
+    .receipt-section {
+      margin: 10px 0;
+    }
+    .receipt-items-group {
+      margin: 0;
+      padding: 0;
+    }
+    .receipt-items-group-title {
+      font-weight: bold;
+      text-transform: uppercase;
+      letter-spacing: .2px;
+      margin: 2px 0 5px;
+    }
+    .receipt-items-group-list {
+      margin: 0;
+      padding: 0 0 0 2px;
+    }
+    .receipt-items-type-divider {
+      border-top: 1px dashed #000;
+      margin: 8px 0;
+    }
+    .receipt-item {
+      margin: 0;
+      padding: 3px 0 2px;
+    }
+    .receipt-item + .receipt-item {
+      border-top: 1px dotted #000;
+      margin-top: 3px;
+      padding-top: 4px;
+    }
+    .receipt-item-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 6px;
+    }
+    .receipt-item-qty {
+      flex-shrink: 0;
+    }
+    .receipt-item-name {
+      flex: 1;
+      min-width: 0;
+      word-wrap: break-word;
+    }
+    .receipt-item-price {
+      flex-shrink: 0;
+      text-align: right;
+    }
+    .receipt-composition {
+      margin: 2px 0 1px;
+      font-size: 9pt;
+    }
+    .receipt-composition-item {
+      margin: 1px 0;
+      word-wrap: break-word;
+    }
+    .receipt-composition-item--group {
+      margin-left: 8px;
+    }
+    .receipt-composition-item--sub {
+      margin-left: 16px;
+    }
+    .receipt-total {
+      text-align: center;
+      font-weight: bold;
+      font-size: 14pt;
+      margin: 15px 0;
+      border-top: 1px dashed #000;
+      border-bottom: 1px dashed #000;
+      padding: 10px 0;
+    }
+    .receipt-summary-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      margin-top: 4px;
+    }
+    .receipt-summary-label {
+      flex: 1;
+    }
+    .receipt-summary-value {
+      flex-shrink: 0;
+      text-align: right;
+    }
+    .receipt-summary-row--breakdown {
+      font-size: 10pt;
+    }
+    .receipt-summary-row--breakdown .receipt-summary-label {
+      padding-left: 8px;
+    }
+    .receipt-divider {
+      border-top: 1px dashed #000;
+      margin: 10px 0;
+    }
+    .receipt-when-block {
+      font-weight: bold;
+    }
+    .receipt-when-text {
+      font-weight: bold;
+    }
+    .receipt-old-price {
+      text-decoration: line-through;
+      margin-right: 4px;
+    }
+    .receipt-empty {
+      text-align: center;
+      padding: 8px 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="receipt-header">ЗАКАЗ #${receiptOrder.id}</div>
+  <div class="receipt-date">${dateStr}</div>
+  <div class="receipt-divider"></div>
+  ${(scheduleText || isUrgent) ? `
+  <div class="receipt-section receipt-when-block">
+    <div class="receipt-when-text">${escapeHtml(scheduleText || (isUrgent ? "Быстрее" : ""))}</div>
+  </div>
+  <div class="receipt-divider"></div>
+  ` : ""}
+  <div class="receipt-section">
+    ${receiptOrder.customer_name ? `<div>${escapeHtml(receiptOrder.customer_name)}</div>` : ""}
+    ${receiptOrder.customer_phone ? `<div>${escapeHtml(receiptOrder.customer_phone)}</div>` : ""}
+  </div>
+  <div class="receipt-section">
+    <div>${escapeHtml(methodTitle || "—")}</div>
+    <div>${escapeHtml(address || "—")}</div>
+  </div>
+  ${(receiptOrder.address_comment && receiptOrder.address_comment.trim()) ? `
+  <div class="receipt-section">
+    <div>${escapeHtml(receiptOrder.address_comment)}</div>
+  </div>
+  ` : ""}
+  ${(receiptOrder.comment && receiptOrder.comment.trim()) ? `
+  <div class="receipt-section">
+    <div>${escapeHtml(receiptOrder.comment)}</div>
+  </div>
+  ` : ""}
+  <div class="receipt-divider"></div>
+  <div class="receipt-section">
+    ${itemsHtml}
+  </div>
+  <div class="receipt-divider"></div>
+  <div class="receipt-section">
+    ${paymentTitle ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Оплата</div><div class="receipt-summary-value">${escapeHtml(paymentTitle)}</div></div>` : ""}
+    ${showChange ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Сдача с</div><div class="receipt-summary-value">${money(changeFrom)}</div></div>` : ""}
+    ${showChange ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Сдача</div><div class="receipt-summary-value">${money(changeAmount)}</div></div>` : ""}
+    ${discountAmount > 0 ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Сумма товаров</div><div class="receipt-summary-value">${money(subtotal)}</div></div>` : ""}
+    ${discountAmount > 0 ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Скидка</div><div class="receipt-summary-value">-${money(discountAmount)}</div></div>` : ""}
+    ${receiptPromoCode ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Промокод</div><div class="receipt-summary-value">${escapeHtml(receiptPromoCode)}</div></div>` : ""}
+    <div class="receipt-summary-row"><div class="receipt-summary-label">Доставка</div><div class="receipt-summary-value">${money(deliveryCost)}</div></div>
+    <div class="receipt-total">ИТОГО: ${money(total)}</div>
+  </div>
+  <div style="margin-top: 20px; text-align: center; font-size: 10pt;">
+    <div>Спасибо за заказ!</div>
+  </div>
+</body>
+</html>
+    `;
+  }
+
+  return {
+    buildOrderTemplateHtml,
+  };
+}
+
+function makePrintApiRouter({ db, helpers }) {
   const router = express.Router();
   const HTML_JOB_PREFIX = "__HTML_BASE64__:";
+  const orderPrintTemplateBuilder = createOrderPrintTemplateBuilder({ db, helpers });
 
   function encodeHtmlJobPayload(html) {
     const rawHtml = String(html || "");
@@ -273,88 +1337,7 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
   }
 
   async function buildOrderTemplateHtml(tenantId, storeId, orderId) {
-    if (!Number.isFinite(Number(tenantId)) || !Number.isFinite(Number(storeId)) || !Number.isFinite(Number(orderId))) {
-      return null;
-    }
-
-    const [orderRows] = await db.query(
-      `
-      SELECT
-        o.id, o.public_id,
-        DATE_FORMAT(o.created_at, '%Y-%m-%d %H:%i:%s') AS created_at,
-        o.customer_id, o.customer_name, o.customer_phone,
-        o.address, o.comment, o.address_comment, o.cutlery_qty,
-        o.change_from, o.total_price, o.delivery_cost,
-        o.discount_amount, o.discounts_json, o.items,
-        DATE_FORMAT(o.scheduled_at, '%Y-%m-%d %H:%i:%s') AS scheduled_at,
-        o.delivery_type_id, o.payment_id, o.time_option_id, o.status_id,
-        o.pickup_store_id,
-
-        s.code AS statusCode, s.title AS statusTitle,
-        p.code AS paymentCode, p.title AS paymentTitle,
-        m.code AS methodCode, m.title AS methodTitle,
-        t.code AS timeOptionCode, t.title AS timeOptionTitle,
-        c.telegram_user_id AS customerTelegramId,
-        ps.name AS pickupStoreName, ps.address AS pickupStoreAddress,
-        ca.comment AS address_comment_from_cust
-      FROM order_orders o
-      LEFT JOIN order_statuses s ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id
-      LEFT JOIN order_payments p ON p.tenant_id=o.tenant_id AND p.store_id=o.store_id AND p.id=o.payment_id
-      LEFT JOIN order_delivery_types m ON m.tenant_id=o.tenant_id AND m.store_id=o.store_id AND m.id=o.delivery_type_id
-      LEFT JOIN order_time_options t ON t.tenant_id=o.tenant_id AND t.store_id=o.store_id AND t.id=o.time_option_id
-      LEFT JOIN cust_customers c ON c.tenant_id=o.tenant_id AND c.store_id=o.store_id AND c.id=o.customer_id
-      LEFT JOIN ten_stores ps ON ps.tenant_id=o.tenant_id AND ps.id=o.pickup_store_id
-      LEFT JOIN cust_customer_addresses ca ON ca.tenant_id=o.tenant_id AND ca.id=o.delivery_address_id AND ca.is_active=1
-      WHERE o.tenant_id=? AND o.store_id=? AND o.id=? LIMIT 1
-      `,
-      [tenantId, storeId, orderId]
-    );
-
-    if (!orderRows.length) {
-      return null;
-    }
-
-    const order = orderRows[0];
-
-    let items = [];
-    try {
-      const parsed = order.items ? JSON.parse(order.items) : [];
-      if (Array.isArray(parsed)) items = parsed;
-    } catch {}
-
-    let discountsJson = [];
-    try {
-      const parsed = order.discounts_json ? JSON.parse(order.discounts_json) : [];
-      if (Array.isArray(parsed)) discountsJson = parsed;
-    } catch {}
-
-    order.items = items;
-    order.discounts_json = discountsJson;
-    const storeTimezone = await getStoreTimezone(tenantId, storeId);
-    order.created_at = helpers.utcToStoreDateTime(order.created_at, storeTimezone) || order.created_at;
-    order.scheduled_at = normalizeScheduledAtForPrint(order, storeTimezone) || order.scheduled_at;
-    order.address_comment = (order.address_comment && String(order.address_comment).trim())
-      ? order.address_comment
-      : (order.address_comment_from_cust && String(order.address_comment_from_cust).trim())
-        ? order.address_comment_from_cust
-        : null;
-    order.payment_title = order.paymentTitle ?? null;
-    order.payment_code = order.paymentCode ?? null;
-    order.method_title = order.methodTitle ?? null;
-    order.method_code = order.methodCode ?? null;
-    order.time_option_title = order.timeOptionTitle ?? null;
-    order.time_option_code = order.timeOptionCode ?? null;
-    order.pickup_store_name = order.pickupStoreName ?? null;
-    order.pickup_store_address = order.pickupStoreAddress ?? null;
-    Object.assign(
-      order,
-      buildOrderRefundState(
-        order,
-        await fetchRefundRecordsForOrder(tenantId, storeId, orderId, storeTimezone)
-      )
-    );
-
-    return generateReceiptHtmlForOrder(order, storeTimezone);
+    return orderPrintTemplateBuilder.buildOrderTemplateHtml(tenantId, storeId, orderId);
   }
 
   function parseLocalDate(value) {
@@ -1231,6 +2214,9 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
       }
 
       function renderLinePrice(item, fallbackTotal = 0) {
+        if (Number(item?.is_gift_reward || 0) === 1) {
+          return "0";
+        }
         const lineTotal = Number(item?.line_total ?? item?.total ?? item?.total_price ?? fallbackTotal);
         const oldLineTotal = Number(item?.old_line_total || item?.discount?.original_line_total || 0);
         const showOldPrice = oldLineTotal > lineTotal;
@@ -1288,6 +2274,7 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
         const qtyStr = `${qty} x`;
         const priceStr = renderLinePrice(item, basePrice * qty);
         const compositionLines = [];
+        const giftSuffix = Number(item?.is_gift_reward || 0) === 1 ? " (Подарок)" : "";
         const variants = Array.isArray(item?.variants) ? item.variants : [];
         variants.forEach((v) => {
           const value = String(v?.label || v?.value || "").trim();
@@ -1322,7 +2309,7 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
           <div class="receipt-item">
             <div class="receipt-item-row">
               <span class="receipt-item-qty">${escapeHtml(qtyStr)}</span>
-              <span class="receipt-item-name">${escapeHtml(rawName)}</span>
+              <span class="receipt-item-name">${escapeHtml(rawName + giftSuffix)}</span>
               ${priceStr ? `<span class="receipt-item-price">${priceStr}</span>` : ""}
             </div>
             ${compositionHtml}
@@ -1351,6 +2338,7 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
       const receiptDiscountSummary = buildOrderDiscountSummary(receiptOrder);
       const discountAmount = Number(receiptDiscountSummary.totalDiscount || 0);
       const subtotal = Number(receiptDiscountSummary.subtotalBeforeDiscount || 0);
+      const receiptPromoCode = String(receiptOrder?.promo_code || "").trim();
 
       return `
 <!DOCTYPE html>
@@ -1573,6 +2561,7 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
     ${showChange ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Сдача</div><div class="receipt-summary-value">${money(changeAmount)}</div></div>` : ""}
     ${discountAmount > 0 ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Сумма товаров</div><div class="receipt-summary-value">${money(subtotal)}</div></div>` : ""}
     ${discountAmount > 0 ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Скидка</div><div class="receipt-summary-value">-${money(discountAmount)}</div></div>` : ""}
+    ${receiptPromoCode ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Промокод</div><div class="receipt-summary-value">${escapeHtml(receiptPromoCode)}</div></div>` : ""}
     <div class="receipt-summary-row"><div class="receipt-summary-label">Доставка</div><div class="receipt-summary-value">${money(deliveryCost)}</div></div>
     <div class="receipt-total">ИТОГО: ${money(total)}</div>
   </div>
@@ -1776,6 +2765,9 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
   });
 
   return router;
-};
+}
+
+makePrintApiRouter.createOrderPrintTemplateBuilder = createOrderPrintTemplateBuilder;
+module.exports = makePrintApiRouter;
 
 
