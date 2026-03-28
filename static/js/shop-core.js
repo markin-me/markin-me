@@ -5295,12 +5295,108 @@
     return hoursRange ? `Принимаем заказы ${hoursRange}` : "";
   }
 
+  let cartHeaderOrderConfigPromise = null;
+
+  async function ensureOrderConfigForHeader() {
+    if (window.__shopOrderConfig) {
+      return window.__shopOrderConfig;
+    }
+    if (cartHeaderOrderConfigPromise) {
+      return cartHeaderOrderConfigPromise;
+    }
+    cartHeaderOrderConfigPromise = (async () => {
+      try {
+        const resp = await fetch("/api/public/order-config");
+        const data = await resp.json().catch(() => null);
+        if (resp.ok && data?.ok && data.data) {
+          window.__shopOrderConfig = data.data;
+          return data.data;
+        }
+      } catch (e) {
+        console.warn("Failed to preload order config for cart header:", e);
+      }
+      return window.__shopOrderConfig || null;
+    })().finally(() => {
+      cartHeaderOrderConfigPromise = null;
+    });
+    return cartHeaderOrderConfigPromise;
+  }
+
+  function getCartHeaderLocalDayIndex(timezone) {
+    const offsetHours = Number.isNaN(Number(timezone)) ? 0 : Number(timezone);
+    const now = new Date();
+    const utcMs = now.getTime() + now.getTimezoneOffset() * 60 * 1000;
+    const localMs = utcMs + offsetHours * 60 * 60 * 1000;
+    return new Date(localMs).getDay();
+  }
+
+  function getCartHeaderHoursEntryForToday(hours, timezone) {
+    if (!Array.isArray(hours) || !hours.length) return null;
+    const currentDay = getCartHeaderLocalDayIndex(timezone);
+    return hours.find((entry) => Number(entry?.day_of_week) === currentDay) || null;
+  }
+
+  function getCartHeaderHoursRangeParts(entry) {
+    if (!entry || Number(entry?.is_closed) === 1) return null;
+    const opens = entry?.opens_at ? String(entry.opens_at).slice(0, 5) : "";
+    const closes = entry?.closes_at ? String(entry.closes_at).slice(0, 5) : "";
+    if (!opens && !closes) return null;
+    return { opens, closes };
+  }
+
+  function getImmediateCartHeaderPickupHoursText() {
+    const store = getHeaderPickupStore();
+    if (!store) return "";
+    const hoursRange = getStoreTodayHoursRangeForList(store.storeHours, store.timezone);
+    if (hoursRange) {
+      return `Время работы ${hoursRange}`;
+    }
+    const nextOpening = findNextStoreOpeningForList(store.storeHours, store.timezone);
+    return nextOpening?.time ? `Время работы с ${nextOpening.time}` : "";
+  }
+
+  function getImmediateCartHeaderDeliveryHoursText() {
+    const config = window.__shopOrderConfig || null;
+    if (!config) return "";
+    const deliveryHours = Array.isArray(config.storeDeliveryHours) && config.storeDeliveryHours.length
+      ? config.storeDeliveryHours
+      : (Array.isArray(config.storeHours) ? config.storeHours : []);
+    const timezone = str(config.storeTimezone || "").trim() || "+0";
+    const todayEntry = getCartHeaderHoursEntryForToday(deliveryHours, timezone);
+    const hoursRange = getCartHeaderHoursRangeParts(todayEntry);
+    if (hoursRange?.opens && hoursRange?.closes) {
+      return `Доставка с ${hoursRange.opens} до ${hoursRange.closes}`;
+    }
+    if (hoursRange?.opens) {
+      return `Доставка с ${hoursRange.opens}`;
+    }
+    const nextOpening = findNextStoreOpeningForList(deliveryHours, timezone);
+    return nextOpening?.time ? `Доставка с ${nextOpening.time}` : "";
+  }
+
+  function getResolvedCartHeaderHoursText(mode = null, store = null) {
+    const resolvedMode = mode === "pickup" ? "pickup" : "delivery";
+    const resolvedStore = store || getCartHeaderStatusStore();
+    const preferredText = resolvedMode === "pickup"
+      ? getImmediateCartHeaderPickupHoursText()
+      : getImmediateCartHeaderDeliveryHoursText();
+    return str(preferredText || getCartHeaderOperatingText(resolvedStore) || "").trim();
+  }
+
+  function syncImmediateCartHeaderHoursText(mode = null) {
+    const resolvedMode = mode === "pickup" ? "pickup" : "delivery";
+    const hoursText = getResolvedCartHeaderHoursText(resolvedMode);
+    cartModeHeaderMetaState.hoursText = hoursText || "";
+    return hoursText;
+  }
+
   function getCartModeHeaderMetaSnapshot() {
     const store = getCartHeaderStatusStore();
+    const mode = window._deliveryMode === "pickup" ? "pickup" : "delivery";
     return {
-      mode: window._deliveryMode === "pickup" ? "pickup" : "delivery",
+      mode,
       addressLine: str(getCartHeaderAddressLine() || "").trim(),
-      hoursText: getCartHeaderOperatingText(store),
+      hoursText: getResolvedCartHeaderHoursText(mode, store),
       storeId: store?.id != null ? Number(store.id) : null,
     };
   }
@@ -5550,6 +5646,7 @@
     }
 
     window._checkoutMethodCode = nextMode === "pickup" ? "takeaway" : "delivery";
+    syncImmediateCartHeaderHoursText(nextMode);
     updateHeaderAddressWidget();
     updateAddressChip();
     updateCartModeHeaderUi();
@@ -6121,6 +6218,83 @@ function setSheetHeaderMode(
     return { submitBtn: elCheckoutSubmitBtn, backBtn: elCheckoutBackBtn };
   }
 
+  function getDesktopCheckoutOverlayHost(create = false) {
+    if (!elCheckoutContent) return null;
+    const existingHost = elCheckoutContent.closest(".shop-checkout-overlay-host--desktop");
+    if (existingHost) return existingHost;
+    if (!create) return null;
+    const parent = elCheckoutContent.parentElement;
+    if (!parent) return null;
+    const host = document.createElement("div");
+    host.className = "shop-checkout-overlay-host shop-checkout-overlay-host--desktop hidden";
+    const backdrop = document.createElement("button");
+    backdrop.type = "button";
+    backdrop.className = "shop-checkout-overlay-backdrop";
+    backdrop.setAttribute("aria-label", "Закрыть оформление");
+    const panel = document.createElement("section");
+    panel.className = "shop-checkout-overlay-panel shop-checkout-overlay-panel--desktop";
+    panel.setAttribute("role", "dialog");
+    panel.setAttribute("aria-modal", "true");
+    panel.setAttribute("aria-label", "Оформление заказа");
+    const header = document.createElement("div");
+    header.className = "shop-checkout-overlay-header";
+    const title = document.createElement("div");
+    title.className = "shop-checkout-overlay-title";
+    title.textContent = "Оформление заказа";
+    const closeBtn = document.createElement("button");
+    closeBtn.type = "button";
+    closeBtn.className = "shop-checkout-overlay-close";
+    closeBtn.setAttribute("aria-label", "Закрыть оформление");
+    closeBtn.innerHTML = '<i class="fas fa-times"></i>';
+    const footerHost = document.createElement("div");
+    footerHost.className = "shop-checkout-overlay-footer";
+    header.appendChild(title);
+    header.appendChild(closeBtn);
+    panel.appendChild(header);
+    host.appendChild(backdrop);
+    host.appendChild(panel);
+    parent.insertBefore(host, elCheckoutContent);
+    panel.appendChild(elCheckoutContent);
+    panel.appendChild(footerHost);
+    host.__footerHost = footerHost;
+    host.__actionsOriginParent = elCheckoutFooterActions ? elCheckoutFooterActions.parentElement : null;
+    const handleClose = () => {
+      showCartView();
+    };
+    backdrop.addEventListener("click", handleClose);
+    closeBtn.addEventListener("click", handleClose);
+    return host;
+  }
+
+  function setDesktopCheckoutOverlayActive(active) {
+    const nextActive = !!active;
+    const overlayHost = getDesktopCheckoutOverlayHost(nextActive);
+    if (overlayHost) {
+      overlayHost.classList.toggle("hidden", !nextActive);
+      overlayHost.classList.toggle("is-active", nextActive);
+      overlayHost.closest(".shop-cart")?.classList.toggle("shop-cart--checkout-overlay-active", nextActive);
+      const footerHost = overlayHost.__footerHost;
+      const actionsOriginParent = overlayHost.__actionsOriginParent;
+      if (elCheckoutFooterActions && footerHost) {
+        if (nextActive) {
+          footerHost.appendChild(elCheckoutFooterActions);
+          elCheckoutFooterActions.classList.remove("hidden");
+        } else {
+          (actionsOriginParent || overlayHost.parentElement)?.appendChild(elCheckoutFooterActions);
+          elCheckoutFooterActions.classList.add("hidden");
+          elCheckoutFooterActions.classList.remove("is-order-success");
+        }
+      }
+    }
+    document.body.classList.toggle("shop-checkout-overlay-open", nextActive);
+    if (elCheckoutContent) {
+      elCheckoutContent.classList.toggle("shop-checkout-content--overlay", nextActive);
+      if (!nextActive) {
+        elCheckoutContent.scrollTop = 0;
+      }
+    }
+  }
+
   async function openDesktopCheckoutView({ onBack = showCartView } = {}) {
     if (!elCheckoutContent) return;
     showCheckoutView();
@@ -6199,6 +6373,7 @@ function showCartView() {
   openProductCtx = null;
   if (typeof window._comboStepBackCallback !== "undefined") window._comboStepBackCallback = null;
   window._checkoutMethodCode = window._deliveryMode === "pickup" ? "takeaway" : "delivery";
+  setDesktopCheckoutOverlayActive(false);
 
   if (elAddressContent) elAddressContent.classList.add("hidden");
   if (elCheckoutContent) elCheckoutContent.classList.add("hidden");
@@ -6248,8 +6423,7 @@ function showCheckoutView() {
   setHeaderFavoritesButtonActive(false);
   cartViewMode = "checkout";
   openProductCtx = null;
-
-  if (elCartContent) elCartContent.classList.add("hidden");
+  if (elCartContent) elCartContent.classList.remove("hidden");
   if (elAddressContent) elAddressContent.classList.add("hidden");
   if (elPickupContent) elPickupContent.classList.add("hidden");
   if (elProductContent) elProductContent.classList.add("hidden");
@@ -6265,7 +6439,8 @@ function showCheckoutView() {
     hideTitle: false,
     showAddressChip: false,
     showProfileActions: false,
-    showBack: false,
+    showBack: true,
+    onBack: () => backAfterAddressSelection(),
     showFav: false,
     addressAsTitle: true,
     showClose: false,
@@ -6276,10 +6451,20 @@ function showCheckoutView() {
     elCartHeaderTitle.classList.toggle("is-empty-address", !line);
   }
 
-  setCartFooterMode("checkout");
+  setCartFooterMode("cart");
+  syncCartFooterVisibilityForCartMode(cartItemsResolved().length);
+  renderCartIfDirty();
+  if (typeof window.syncShopCartPricingSummaryUi === "function") {
+    Promise.resolve(window.syncShopCartPricingSummaryUi()).catch(() => {});
+  }
+  if (typeof window.syncShopCartBenefitsServiceUi === "function") {
+    Promise.resolve(window.syncShopCartBenefitsServiceUi(elCartList || elCartContent || document)).catch(() => {});
+  }
+  updateCartModeHeaderUi();
   if (typeof updateMobileDeliveryProgress === "function") {
     Promise.resolve(updateMobileDeliveryProgress()).catch(() => {});
   }
+  setDesktopCheckoutOverlayActive(true);
   queueMobileUiStateSync("showCheckoutView");
 }
 
@@ -6290,6 +6475,7 @@ function showAddressListView(backMode = "cart", opts = {}) {
   setHeaderFavoritesButtonActive(false);
   cartViewMode = "address";
   openProductCtx = null;
+  setDesktopCheckoutOverlayActive(false);
   state._addressListBackMode = backMode;
   state._addressPendingAddress = state.selectedAddress ? { ...state.selectedAddress } : null;
   state._addressPendingPickupStoreId = window._selectedPickupStoreId ? Number(window._selectedPickupStoreId) : null;
@@ -6336,6 +6522,7 @@ async function showAddressFormView(prefill, editingId, backMode) {
 
   cleanupDesktopFavoritesPanelIfNeeded();
   setHeaderFavoritesButtonActive(false);
+  setDesktopCheckoutOverlayActive(false);
   const addressMapModeEnabled = isAddressMapModeEnabled();
   state.addressEditingId = editingId ? Number(editingId) : null;
   state._addressFormBackMode = backMode || (state.selectedAddress ? "list" : "cart");
@@ -6424,6 +6611,7 @@ function showPickupListView(backMode = "checkout") {
     setHeaderFavoritesButtonActive(false);
     cartViewMode = "profile";
     openProductCtx = null;
+    setDesktopCheckoutOverlayActive(false);
     if (elCartContent) elCartContent.classList.add("hidden");
     if (elAddressContent) elAddressContent.classList.add("hidden");
     if (elCheckoutContent) elCheckoutContent.classList.add("hidden");
@@ -6465,6 +6653,7 @@ function showProductView() {
   cleanupDesktopFavoritesPanelIfNeeded();
   setHeaderFavoritesButtonActive(false);
   cartViewMode = "product";
+  setDesktopCheckoutOverlayActive(false);
 
   if (elCartContent) elCartContent.classList.add("hidden");
   if (elAddressContent) elAddressContent.classList.add("hidden");
@@ -7540,28 +7729,27 @@ async function initAddresses() {
     if (draft.method_code === "takeaway" || draft.method_code === "pickup") {
       window._deliveryMode = "pickup";
       if (draft.pickup_store_id) window._selectedPickupStoreId = Number(draft.pickup_store_id);
-      // Load stores for header widget display
-      if (!window._pickupStores || !window._pickupStores.length) {
-        const metaTenant = document.querySelector('meta[name="tenant_id"]');
-        const tid = metaTenant ? Number(metaTenant.content) : null;
-        if (tid) {
-          fetch(`/api/public/tenant/stores?tenant_id=${tid}`)
-            .then(r => r.json())
-            .then(d => {
-              if (d?.ok && Array.isArray(d.stores)) {
-                window._pickupStores = d.stores;
-                updateHeaderAddressWidget();
-                updateAddressChip();
-              }
-            }).catch(() => {});
-        }
-      }
     } else {
       window._deliveryMode = "delivery";
     }
   } catch {}
+  try {
+    await Promise.all([
+      ensureStoresForHeaderStatus().catch(() => []),
+      ensureOrderConfigForHeader().catch(() => null),
+    ]);
+  } catch {}
+  if (window._deliveryMode === "pickup" && (!window._selectedPickupStoreId || !getHeaderPickupStore())) {
+    const stores = Array.isArray(window._pickupStores) ? window._pickupStores : [];
+    const pickupStoreId = ensureValidPickupStoreIdForAddressList(stores);
+    if (pickupStoreId) {
+      window._selectedPickupStoreId = Number(pickupStoreId);
+    }
+  }
+  syncImmediateCartHeaderHoursText(window._deliveryMode === "pickup" ? "pickup" : "delivery");
   updateHeaderAddressWidget();
   updateAddressChip();
+  updateCartModeHeaderUi();
 }
 
   // -----------------------------

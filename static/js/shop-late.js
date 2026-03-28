@@ -16756,6 +16756,7 @@ function openCartSheet() {
         invalidateAddressSheetUiState();
         cleanupCheckoutViewSubscriptions();
         clearBenefitsInnerOverlayHost();
+        document.body.classList.remove("shop-checkout-overlay-open");
         resetShopModalHeaderUi();
         if (elMobileCartActions) elMobileCartActions.classList.add("hidden");
         if (elMobileAddressActions) elMobileAddressActions.classList.add("hidden");
@@ -16799,9 +16800,44 @@ function openCartSheet() {
   list.className = "shop-cart-list";
   wrap.appendChild(list);
 
+  const checkoutOverlayHost = document.createElement("div");
+  checkoutOverlayHost.className = "shop-checkout-overlay-host hidden";
+  wrap.appendChild(checkoutOverlayHost);
+
+  const checkoutOverlayBackdrop = document.createElement("button");
+  checkoutOverlayBackdrop.type = "button";
+  checkoutOverlayBackdrop.className = "shop-checkout-overlay-backdrop";
+  checkoutOverlayBackdrop.setAttribute("aria-label", "Закрыть оформление");
+  checkoutOverlayHost.appendChild(checkoutOverlayBackdrop);
+
+  const checkoutOverlayPanel = document.createElement("section");
+  checkoutOverlayPanel.className = "shop-checkout-overlay-panel";
+  checkoutOverlayPanel.setAttribute("role", "dialog");
+  checkoutOverlayPanel.setAttribute("aria-modal", "true");
+  checkoutOverlayPanel.setAttribute("aria-label", "Оформление заказа");
+  checkoutOverlayHost.appendChild(checkoutOverlayPanel);
+
+  const checkoutOverlayHeader = document.createElement("div");
+  checkoutOverlayHeader.className = "shop-checkout-overlay-header";
+  const checkoutOverlayTitle = document.createElement("div");
+  checkoutOverlayTitle.className = "shop-checkout-overlay-title";
+  checkoutOverlayTitle.textContent = "Оформление заказа";
+  const checkoutOverlayCloseBtn = document.createElement("button");
+  checkoutOverlayCloseBtn.type = "button";
+  checkoutOverlayCloseBtn.className = "shop-checkout-overlay-close";
+  checkoutOverlayCloseBtn.setAttribute("aria-label", "Закрыть оформление");
+  checkoutOverlayCloseBtn.innerHTML = '<i class="fas fa-times"></i>';
+  checkoutOverlayHeader.appendChild(checkoutOverlayTitle);
+  checkoutOverlayHeader.appendChild(checkoutOverlayCloseBtn);
+  checkoutOverlayPanel.appendChild(checkoutOverlayHeader);
+
   const checkoutWrap = document.createElement("div");
   checkoutWrap.className = "shop-checkout-content hidden";
-  wrap.appendChild(checkoutWrap);
+  checkoutOverlayPanel.appendChild(checkoutWrap);
+
+  const checkoutOverlayFooterHost = document.createElement("div");
+  checkoutOverlayFooterHost.className = "shop-checkout-overlay-footer";
+  checkoutOverlayPanel.appendChild(checkoutOverlayFooterHost);
 
   const benefitsWrap = document.createElement("div");
   benefitsWrap.className = "shop-checkout-benefits-content hidden";
@@ -16822,6 +16858,35 @@ function openCartSheet() {
   const pickupSheetWrap = document.createElement("div");
   pickupSheetWrap.className = "shop-pickup-content hidden";
   wrap.appendChild(pickupSheetWrap);
+
+  function setSheetCheckoutOverlayActive(active) {
+    const nextActive = !!active;
+    wrap.classList.toggle("shop-cart-sheet--checkout-overlay-active", nextActive);
+    document.body.classList.toggle("shop-checkout-overlay-open", nextActive);
+    checkoutOverlayHost.classList.toggle("hidden", !nextActive);
+    checkoutOverlayHost.classList.toggle("is-active", nextActive);
+    checkoutWrap.classList.toggle("shop-checkout-content--overlay", nextActive);
+    if (typeof checkoutActions !== "undefined" && checkoutActions) {
+      if (nextActive) {
+        checkoutOverlayFooterHost.appendChild(checkoutActions);
+        checkoutActions.classList.remove("hidden");
+      } else {
+        footer.appendChild(checkoutActions);
+        checkoutActions.classList.add("hidden");
+        checkoutActions.classList.remove("is-order-success");
+      }
+    }
+    if (nextActive) {
+      checkoutWrap.scrollTop = 0;
+    }
+  }
+
+  checkoutOverlayBackdrop.addEventListener("click", () => {
+    showSheetCart();
+  });
+  checkoutOverlayCloseBtn.addEventListener("click", () => {
+    showSheetCart();
+  });
 
   const pickupSheetListView = document.createElement("div");
   pickupSheetListView.className = "shop-pickup-list-view";
@@ -17515,18 +17580,19 @@ function applySheetAddressTitle(backMode = "cart") {
     clearBenefitsInnerOverlayHost();
     resetMobileBenefitsPromoUi();
     resetMobileBenefitGiftClaimUi();
-    __forceHideCheckoutDeliveryProgress = true;
-    hideHeaderToggle();
-    setCartSheetScreenMode("");
+    __forceHideCheckoutDeliveryProgress = false;
+    showHeaderToggle();
+    setCartSheetScreenMode("cart");
+    setSheetCheckoutOverlayActive(true);
     checkoutWrap.classList.remove("hidden");
     benefitsWrap.classList.add("hidden");
     hideCheckoutBenefitDetailView({ clearContent: true });
-    list.classList.add("hidden");
+    list.classList.remove("hidden");
     addressWrap.classList.add("hidden");
     productWrap.classList.add("hidden");
     pickupSheetWrap.classList.add("hidden");
 
-    setCartSheetFooterMode(openCartSheetCtx, "checkout");
+    setCartSheetFooterMode(openCartSheetCtx, cartItemsResolved().length ? "cart" : "hidden");
     const mobileBenefitsPromoWrap = document.getElementById("shopMobileBenefitsPromoWrap");
     if (mobileBenefitsPromoWrap) mobileBenefitsPromoWrap.classList.add("hidden");
     
@@ -17605,6 +17671,7 @@ function applySheetAddressTitle(backMode = "cart") {
     __forceHideCheckoutDeliveryProgress = true;
     hideHeaderToggle();
     setCartSheetScreenMode("benefits");
+    setSheetCheckoutOverlayActive(false);
     checkoutWrap.classList.add("hidden");
     benefitsWrap.classList.remove("hidden");
     hideCheckoutBenefitDetailView({ clearContent: true });
@@ -17996,6 +18063,7 @@ function applySheetAddressTitle(backMode = "cart") {
     invalidateAddressSheetUiState();
     clearBenefitsInnerOverlayHost();
     hideHeaderToggle();
+    setSheetCheckoutOverlayActive(false);
     checkoutWrap.classList.add("hidden");
     benefitsWrap.classList.add("hidden");
     benefitDetailWrap.classList.remove("hidden");
@@ -18064,6 +18132,7 @@ function applySheetAddressTitle(backMode = "cart") {
     resetMobileBenefitGiftClaimUi();
     hideHeaderToggle();
     setCartSheetScreenMode("cart");
+    setSheetCheckoutOverlayActive(false);
     checkoutWrap.classList.add("hidden");
     benefitsWrap.classList.add("hidden");
     hideCheckoutBenefitDetailView({ clearContent: true });
@@ -18159,6 +18228,7 @@ function applySheetAddressTitle(backMode = "cart") {
   function showSheetAddressList(backMode) {
     invalidateAddressSheetUiState();
     cleanupCheckoutViewSubscriptions();
+    setSheetCheckoutOverlayActive(false);
     checkoutWrap.classList.add("hidden");
     benefitsWrap.classList.add("hidden");
     hideCheckoutBenefitDetailView({ clearContent: true });
@@ -18210,6 +18280,7 @@ function applySheetAddressTitle(backMode = "cart") {
     cleanupCheckoutViewSubscriptions();
     hideHeaderToggle();
     setCartSheetScreenMode("address");
+    setSheetCheckoutOverlayActive(false);
     checkoutWrap.classList.add("hidden");
     benefitsWrap.classList.add("hidden");
     hideCheckoutBenefitDetailView({ clearContent: true });
@@ -18542,6 +18613,7 @@ function applySheetAddressTitle(backMode = "cart") {
     setVal("apartment", prefill?.apartment);
     setVal("comment", prefill?.comment);
 
+    setSheetCheckoutOverlayActive(false);
     checkoutWrap.classList.add("hidden");
     benefitsWrap.classList.add("hidden");
     hideCheckoutBenefitDetailView({ clearContent: true });
@@ -18595,6 +18667,7 @@ function applySheetAddressTitle(backMode = "cart") {
     cleanupCheckoutViewSubscriptions();
     hideHeaderToggle();
     setCartSheetScreenMode("");
+    setSheetCheckoutOverlayActive(false);
     checkoutWrap.classList.add("hidden");
     benefitsWrap.classList.add("hidden");
     hideCheckoutBenefitDetailView({ clearContent: true });
@@ -18649,6 +18722,7 @@ function applySheetAddressTitle(backMode = "cart") {
     cleanupCheckoutViewSubscriptions();
     hideHeaderToggle();
     setCartSheetScreenMode("");
+    setSheetCheckoutOverlayActive(false);
     checkoutWrap.classList.add("hidden");
     benefitsWrap.classList.add("hidden");
     hideCheckoutBenefitDetailView({ clearContent: true });
@@ -20787,6 +20861,11 @@ function renderSheetAddressList() {
     setHeaderFavoritesButtonActive(false);
     cartViewMode = "benefits";
     openProductCtx = null;
+    try {
+      if (typeof setDesktopCheckoutOverlayActive === "function") {
+        setDesktopCheckoutOverlayActive(false);
+      }
+    } catch {}
 
     if (elCartContent) elCartContent.classList.add("hidden");
     if (elAddressContent) elAddressContent.classList.add("hidden");
@@ -25324,6 +25403,7 @@ function setBottomNavActive(tab) {
   }
 
   let deliveryQuoteCache = { key: "", data: null };
+  const deliveryQuoteInflightRequests = new Map();
 
   async function getDeliveryQuote(subtotal) {
     const amount = roundPrice(Number(subtotal || 0));
@@ -25341,6 +25421,9 @@ function setBottomNavActive(tab) {
     if (deliveryQuoteCache.key === cacheKey && deliveryQuoteCache.data) {
       return deliveryQuoteCache.data;
     }
+    if (deliveryQuoteInflightRequests.has(cacheKey)) {
+      return deliveryQuoteInflightRequests.get(cacheKey);
+    }
 
     const body = { subtotal: amount };
     if (state.selectedAddress?.id) {
@@ -25350,15 +25433,25 @@ function setBottomNavActive(tab) {
       body.address = address;
     }
 
-    const json = await apiJson("/api/public/delivery-quote", {
+    const request = apiJson("/api/public/delivery-quote", {
       method: "POST",
       body,
+    }).then((json) => {
+      deliveryQuoteCache = {
+        key: cacheKey,
+        data: json.data || null,
+      };
+      return deliveryQuoteCache.data;
     });
-    deliveryQuoteCache = {
-      key: cacheKey,
-      data: json.data || null,
-    };
-    return deliveryQuoteCache.data;
+
+    deliveryQuoteInflightRequests.set(cacheKey, request);
+    try {
+      return await request;
+    } finally {
+      if (deliveryQuoteInflightRequests.get(cacheKey) === request) {
+        deliveryQuoteInflightRequests.delete(cacheKey);
+      }
+    }
   }
 
   function resolveCartItemsEtaLabel(deliveryQuote, defaultDeliverySettings = null) {
@@ -25432,6 +25525,74 @@ function setBottomNavActive(tab) {
     return "";
   }
 
+  function getStoreLocalDayIndex(timezone) {
+    const offsetHours = Number.isNaN(Number(timezone)) ? 0 : Number(timezone);
+    const now = new Date();
+    const utcMs = now.getTime() + now.getTimezoneOffset() * 60 * 1000;
+    const localMs = utcMs + offsetHours * 60 * 60 * 1000;
+    return new Date(localMs).getDay();
+  }
+
+  function getStoreHoursEntryForToday(hours, timezone) {
+    if (!Array.isArray(hours) || !hours.length) return null;
+    const currentDay = getStoreLocalDayIndex(timezone);
+    return hours.find((entry) => Number(entry?.day_of_week) === currentDay) || null;
+  }
+
+  function getTimeRangeFromHoursEntry(entry) {
+    if (!entry || Number(entry?.is_closed) === 1) return null;
+    const opens = entry?.opens_at ? String(entry.opens_at).slice(0, 5) : "";
+    const closes = entry?.closes_at ? String(entry.closes_at).slice(0, 5) : "";
+    if (!opens && !closes) return null;
+    return { opens, closes };
+  }
+
+  function formatCartHeaderPickupHoursText(store) {
+    if (!store) return "";
+    const range = getStoreTodayHoursRange(store.storeHours, store.timezone);
+    if (range) {
+      return `Время работы ${range}`;
+    }
+    const nextOpening = getNextOpeningTime(store.storeHours, store.timezone);
+    return nextOpening?.time ? `Время работы с ${nextOpening.time}` : "";
+  }
+
+  function formatCartHeaderDeliveryHoursText(config) {
+    const deliveryHours = Array.isArray(config?.storeDeliveryHours) && config.storeDeliveryHours.length
+      ? config.storeDeliveryHours
+      : (Array.isArray(config?.storeHours) ? config.storeHours : []);
+    const timezone = str(config?.storeTimezone || "").trim() || "+0";
+    const todayEntry = getStoreHoursEntryForToday(deliveryHours, timezone);
+    const todayRange = getTimeRangeFromHoursEntry(todayEntry);
+    if (todayRange?.opens && todayRange?.closes) {
+      return `Доставка с ${todayRange.opens} до ${todayRange.closes}`;
+    }
+    if (todayRange?.opens) {
+      return `Доставка с ${todayRange.opens}`;
+    }
+    const nextOpening = getNextOpeningTime(deliveryHours, timezone);
+    return nextOpening?.time ? `Доставка с ${nextOpening.time}` : "";
+  }
+
+  async function resolveCartHeaderHoursText(isDeliveryMode, snapshot = null) {
+    if (isDeliveryMode) {
+      try {
+        const config = await getOrderConfig();
+        const deliveryHoursText = formatCartHeaderDeliveryHoursText(config);
+        if (deliveryHoursText) return deliveryHoursText;
+      } catch (_) {}
+      return str(snapshot?.hoursText || "").trim();
+    }
+
+    const storeId = Number(snapshot?.storeId || 0);
+    const pickupStores = Array.isArray(window._pickupStores) ? window._pickupStores : [];
+    const pickupStore = storeId > 0
+      ? (pickupStores.find((store) => Number(store?.id) === storeId) || null)
+      : null;
+    const pickupHoursText = formatCartHeaderPickupHoursText(pickupStore);
+    return pickupHoursText || str(snapshot?.hoursText || "").trim();
+  }
+
   function getHiddenCartHeaderDeliveryProgressState() {
     return {
       deliveryProgressVisible: false,
@@ -25483,25 +25644,27 @@ function setBottomNavActive(tab) {
     isDeliveryMode = true,
     progressState = null,
   } = {}) {
-    const etaText = resolveCartItemsEtaLabel(
-      isDeliveryMode ? deliveryQuote : null,
-      defaultDeliverySettings
-    );
+    let effectiveIsDeliveryMode = !!isDeliveryMode;
     let hoursText = "";
     if (typeof window.getShopCartModeHeaderMetaSnapshot === "function") {
       try {
         const snapshot = await window.getShopCartModeHeaderMetaSnapshot({ ensureStores: true });
+        effectiveIsDeliveryMode = str(snapshot?.mode || "").trim().toLowerCase() !== "pickup";
         hoursText = str(snapshot?.hoursText || "").trim();
       } catch (_) {}
     }
+    const etaText = resolveCartItemsEtaLabel(
+      effectiveIsDeliveryMode ? deliveryQuote : null,
+      defaultDeliverySettings
+    );
     const resolvedProgressState =
-      progressState && typeof progressState === "object"
+      effectiveIsDeliveryMode && progressState && typeof progressState === "object"
         ? progressState
         : getHiddenCartHeaderDeliveryProgressState();
     if (typeof window.setShopCartModeHeaderMetaState === "function") {
       window.setShopCartModeHeaderMetaState({
         etaText,
-        deliveryText: isDeliveryMode ? formatCartHeaderDeliveryText(deliveryQuote, defaultDeliverySettings) : "",
+        deliveryText: effectiveIsDeliveryMode ? formatCartHeaderDeliveryText(deliveryQuote, defaultDeliverySettings) : "",
         hoursText,
         ...resolvedProgressState,
       });
@@ -26342,7 +26505,7 @@ function setBottomNavActive(tab) {
   }
 
   async function openCheckoutView({ container, onBack, onShowBenefits, hasAddressEditor, isSheet, actions, onEditAddress, onEditPickup }) {
-    __forceHideCheckoutDeliveryProgress = true;
+    __forceHideCheckoutDeliveryProgress = false;
     if (!container) return;
     cleanupCheckoutViewSubscriptions();
     const checkoutViewToken = checkoutViewRenderToken;
@@ -26579,21 +26742,46 @@ function setBottomNavActive(tab) {
       actions.submitBtn.disabled = false;
       setCheckoutSubmitLabel();
     }
+    const isMobileCheckout = window.matchMedia("(max-width: 768px)").matches;
+    const isDesktopCheckout = !isMobileCheckout;
+    const isOverlayCheckoutContainer = container?.classList?.contains("shop-checkout-content--overlay");
+    const syncMobileCheckoutActionBar = ({ hidden = false, hideBack = false } = {}) => {
+      if (!isMobileCheckout || !elMobileCartActions || !elMobileCartActionsCheckout) return;
+      elMobileCartActions.classList.toggle("hidden", !!hidden);
+      if (elMobileCartActionsCart) elMobileCartActionsCart.classList.add("hidden");
+      elMobileCartActionsCheckout.classList.toggle("hidden", !!hidden);
+      if (elMobileCheckoutBackBtn) {
+        elMobileCheckoutBackBtn.classList.toggle("hidden", !!hidden || !!hideBack);
+      }
+    };
+    const syncMobileNestedCheckoutSheetState = (isOpen) => {
+      document.body.classList.toggle("shop-checkout-selection-sheet-open", !!isOpen);
+      if (!isMobileCheckout) return;
+      if (isOpen) {
+        syncMobileCheckoutActionBar({ hidden: true, hideBack: true });
+        return;
+      }
+      if (!document.body.classList.contains("shop-checkout-overlay-open")) return;
+      syncMobileCheckoutActionBar({
+        hidden: false,
+        hideBack: isOverlayCheckoutContainer,
+      });
+    };
     if (actions?.backBtn) actions.backBtn.classList.remove("hidden");
     const footerEl = actions?.backBtn?.parentElement;
     if (footerEl) footerEl.classList.remove("is-order-success");
     if (elCheckoutFooterActions) elCheckoutFooterActions.classList.remove("is-order-success");
     if (elMobileCheckoutBackBtn) {
-      elMobileCheckoutBackBtn.classList.remove("hidden");
       elMobileCheckoutBackBtn.parentElement?.classList.remove("is-order-success");
     }
     if (elMobileCheckoutSubmitBtn) {
       setCheckoutSubmitLabel();
       if (actions?.submitBtn) elMobileCheckoutSubmitBtn.onclick = () => actions.submitBtn.click();
     }
-    if (elMobileDeliveryProgressWrap) elMobileDeliveryProgressWrap.classList.add("hidden");
-    if (elDesktopDeliveryProgressWrap) elDesktopDeliveryProgressWrap.classList.add("hidden");
-
+    syncMobileCheckoutActionBar({
+      hidden: false,
+      hideBack: isOverlayCheckoutContainer,
+    });
     const wrap = document.createElement("div");
     wrap.className = "shop-checkout";
 
@@ -26606,8 +26794,6 @@ function setBottomNavActive(tab) {
     const needsNameCompletion = !!me && (
       !str(me?.name || "").trim() || isPlaceholderCustomerName(me?.name)
     );
-    const isMobileCheckout = window.matchMedia("(max-width: 768px)").matches;
-    const isDesktopCheckout = !isMobileCheckout;
     const showMobileNameInput = isMobileCheckout && needsNameCompletion;
     const showDesktopFooterNameInput = isDesktopCheckout && needsNameCompletion;
     const showInlineNameInCheckoutForm = !needsNameCompletion;
@@ -27323,8 +27509,6 @@ function setBottomNavActive(tab) {
     comment.type = "text";
     comment.placeholder = "Введите комментарий к заказу";
     comment.value = draft.comment || "";
-    wrap.appendChild(cLabel);
-    wrap.appendChild(comment);
     const mobileNameWrap = document.getElementById("shopMobileCheckoutNameWrap");
     const mobileNameInput = document.getElementById("shopMobileCheckoutNameInput");
     const desktopFooterNameInput = document.getElementById("shopCheckoutFooterNameInput");
@@ -27422,30 +27606,257 @@ function setBottomNavActive(tab) {
     }
     if (elCheckoutFooterActions) {
       elCheckoutFooterActions.classList.toggle("has-name-input", !!showDesktopFooterNameInput);
+      elCheckoutFooterActions.classList.add("is-commentless");
     }
+    if (desktopFooterCommentInput) {
+      desktopFooterCommentInput.classList.add("hidden");
+    }
+    cLabel.style.display = "none";
+    comment.style.display = "";
     if (isMobileCheckout) {
-      cLabel.style.display = "none";
-      comment.style.display = "none";
       if (mobileNameWrap) mobileNameWrap.classList.toggle("hidden", !showMobileNameInput);
-      if (mobileCommentWrap) mobileCommentWrap.classList.remove("hidden");
+      if (mobileCommentWrap) mobileCommentWrap.classList.add("hidden");
     } else {
       if (mobileNameWrap) mobileNameWrap.classList.add("hidden");
       if (mobileCommentWrap) mobileCommentWrap.classList.add("hidden");
     }
-    if (isDesktopCheckout) {
-      cLabel.style.display = "none";
-      comment.style.display = "none";
-    }
     const getCommentValue = () => {
-      if (isMobileCheckout && mobileCommentInput) return str(mobileCommentInput.value).trim();
-      if (isDesktopCheckout && desktopFooterCommentInput) return str(desktopFooterCommentInput.value).trim();
       return str(comment.value).trim();
     };
 
-    const methodRow = document.createElement("div");
-    methodRow.className = "shop-checkout-method-block";
-    methodRow.appendChild(methodWrap);
-    wrap.appendChild(methodRow);
+    function createCheckoutCardSection(title) {
+      const section = document.createElement("section");
+      section.className = "shop-checkout-card-section";
+      const titleEl = document.createElement("div");
+      titleEl.className = "shop-checkout-card-section__title";
+      titleEl.textContent = title;
+      section.appendChild(titleEl);
+      return { root: section, titleEl };
+    }
+
+    function createCheckoutCardOption({ title, value = "", meta = "", icon = null, onClick = null, extraClass = "" }) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = `shop-checkout-card-option${extraClass ? ` ${extraClass}` : ""}`;
+      const textWrap = document.createElement("span");
+      textWrap.className = "shop-checkout-card-option__text";
+      const titleEl = document.createElement("span");
+      titleEl.className = "shop-checkout-card-option__title";
+      titleEl.textContent = title || "";
+      textWrap.appendChild(titleEl);
+      if (value) {
+        const valueEl = document.createElement("span");
+        valueEl.className = "shop-checkout-card-option__value";
+        valueEl.textContent = value;
+        textWrap.appendChild(valueEl);
+      }
+      if (meta) {
+        const metaEl = document.createElement("span");
+        metaEl.className = "shop-checkout-card-option__meta";
+        metaEl.textContent = meta;
+        textWrap.appendChild(metaEl);
+      }
+      if (icon) {
+        const iconWrap = document.createElement("span");
+        iconWrap.className = "shop-checkout-card-option__icon";
+        iconWrap.appendChild(icon);
+        btn.appendChild(iconWrap);
+      }
+      btn.appendChild(textWrap);
+      if (typeof onClick === "function") btn.addEventListener("click", onClick);
+      return btn;
+    }
+
+    function setCheckoutCardOptionContent(card, { title = "", value = "", meta = "" } = {}) {
+      if (!card) return;
+      const titleEl = card.querySelector(".shop-checkout-card-option__title");
+      if (titleEl) titleEl.textContent = title || "";
+
+      let valueEl = card.querySelector(".shop-checkout-card-option__value");
+      if (value) {
+        if (!valueEl) {
+          valueEl = document.createElement("span");
+          valueEl.className = "shop-checkout-card-option__value";
+          const textWrap = card.querySelector(".shop-checkout-card-option__text");
+          if (textWrap) {
+            const metaEl = textWrap.querySelector(".shop-checkout-card-option__meta");
+            if (metaEl) textWrap.insertBefore(valueEl, metaEl);
+            else textWrap.appendChild(valueEl);
+          }
+        }
+        if (valueEl) valueEl.textContent = value;
+      } else if (valueEl && valueEl.parentNode) {
+        valueEl.parentNode.removeChild(valueEl);
+      }
+
+      let metaEl = card.querySelector(".shop-checkout-card-option__meta");
+      if (meta) {
+        if (!metaEl) {
+          metaEl = document.createElement("span");
+          metaEl.className = "shop-checkout-card-option__meta";
+          const textWrap = card.querySelector(".shop-checkout-card-option__text");
+          if (textWrap) textWrap.appendChild(metaEl);
+        }
+        if (metaEl) metaEl.textContent = meta;
+      } else if (metaEl && metaEl.parentNode) {
+        metaEl.parentNode.removeChild(metaEl);
+      }
+    }
+
+    function createCheckoutDetailCard({ label = "", value = "", meta = "", control = null, extraClass = "", onClick = null }) {
+      const card = document.createElement(typeof onClick === "function" ? "button" : "div");
+      if (typeof onClick === "function") {
+        card.type = "button";
+      }
+      card.className = `shop-checkout-detail-card${extraClass ? ` ${extraClass}` : ""}${typeof onClick === "function" ? " is-action" : ""}`;
+      if (label) {
+        const labelEl = document.createElement("div");
+        labelEl.className = "shop-checkout-detail-card__label";
+        labelEl.textContent = label;
+        card.appendChild(labelEl);
+      }
+      if (control) {
+        const controlWrap = document.createElement("div");
+        controlWrap.className = "shop-checkout-detail-card__control";
+        controlWrap.appendChild(control);
+        card.appendChild(controlWrap);
+      } else {
+        const valueEl = document.createElement("div");
+        valueEl.className = "shop-checkout-detail-card__value";
+        valueEl.textContent = value || "";
+        card.appendChild(valueEl);
+      }
+      if (meta) {
+        const metaEl = document.createElement("div");
+        metaEl.className = "shop-checkout-detail-card__meta";
+        metaEl.textContent = meta;
+        card.appendChild(metaEl);
+      }
+      if (typeof onClick === "function") card.addEventListener("click", onClick);
+      return card;
+    }
+
+    function bindCheckoutHorizontalWheelScroll(node) {
+      if (!node || node.dataset.shopWheelBound === "1") return;
+      node.dataset.shopWheelBound = "1";
+      node.addEventListener("wheel", (event) => {
+        if (!event) return;
+        if (node.scrollWidth <= node.clientWidth + 1) return;
+        const deltaX = Number(event.deltaX || 0);
+        const deltaY = Number(event.deltaY || 0);
+        const rawDelta = Math.abs(deltaX) > Math.abs(deltaY) ? deltaX : deltaY;
+        if (!Number.isFinite(rawDelta) || Math.abs(rawDelta) < 0.5) return;
+        event.preventDefault();
+        node.scrollLeft += rawDelta;
+      }, { passive: false });
+    }
+
+    registerCheckoutCleanup(() => {
+      document.body.classList.remove("shop-checkout-selection-sheet-open");
+    });
+
+    container.style.position = "relative";
+    const checkoutSelectionOverlayContainer = container.closest(".shop-checkout-overlay-panel") || container;
+    const checkoutSelectionOverlayHost = document.createElement("div");
+    checkoutSelectionOverlayHost.className = "shop-checkout-benefits-overlay-host";
+    if (checkoutSelectionOverlayContainer !== container) {
+      checkoutSelectionOverlayHost.classList.add("shop-checkout-benefits-overlay-host--checkout-panel");
+    }
+    checkoutSelectionOverlayContainer.appendChild(checkoutSelectionOverlayHost);
+    registerCheckoutCleanup(() => {
+      if (checkoutSelectionOverlayHost.parentNode) {
+        checkoutSelectionOverlayHost.parentNode.removeChild(checkoutSelectionOverlayHost);
+      }
+    });
+
+    function closeCheckoutSelectionSheet() {
+      checkoutSelectionOverlayHost.classList.remove("is-active");
+      checkoutSelectionOverlayHost.innerHTML = "";
+      if (checkoutSelectionOverlayContainer && checkoutSelectionOverlayContainer.classList) {
+        checkoutSelectionOverlayContainer.classList.remove("shop-checkout-overlay-panel--nested-sheet-open");
+        checkoutSelectionOverlayContainer.style.removeProperty("--shop-checkout-nested-panel-height");
+      }
+      syncMobileNestedCheckoutSheetState(false);
+    }
+
+    function openCheckoutSelectionSheet({
+      title = "",
+      description = "",
+      bodyBuilder = null,
+      onApply = null,
+      applyLabel = "Выбрать",
+      showApply = true,
+      bodyClass = "",
+    } = {}) {
+      closeCheckoutSelectionSheet();
+      const overlay = document.createElement("div");
+      overlay.className = "shop-checkout-benefits-overlay is-sheet";
+      const panel = document.createElement("div");
+      panel.className = "shop-checkout-benefits-overlay-panel is-sheet";
+      const header = document.createElement("div");
+      header.className = "shop-checkout-benefits-overlay-header";
+      const titleWrap = document.createElement("div");
+      titleWrap.className = "shop-checkout-benefits-overlay-title-wrap";
+      const titleEl = document.createElement("div");
+      titleEl.className = "shop-checkout-benefits-overlay-title";
+      titleEl.textContent = title || "";
+      titleWrap.appendChild(titleEl);
+      const closeBtn = document.createElement("button");
+      closeBtn.type = "button";
+      closeBtn.className = "shop-checkout-benefits-overlay-close";
+      closeBtn.innerHTML = '<i class="fas fa-times"></i>';
+      closeBtn.addEventListener("click", () => closeCheckoutSelectionSheet());
+      header.appendChild(titleWrap);
+      header.appendChild(closeBtn);
+      const body = document.createElement("div");
+      body.className = "shop-checkout-benefits-overlay-body shop-checkout-selection-sheet";
+      if (bodyClass) {
+        String(bodyClass).split(/\s+/).filter(Boolean).forEach((className) => body.classList.add(className));
+      }
+      if (description) {
+        const descriptionEl = document.createElement("div");
+        descriptionEl.className = "shop-checkout-selection-sheet__description";
+        descriptionEl.textContent = description;
+        body.appendChild(descriptionEl);
+      }
+      const actions = document.createElement("div");
+      actions.className = "shop-checkout-selection-sheet__actions";
+      const applyBtn = document.createElement("button");
+      applyBtn.type = "button";
+      applyBtn.className = "shop-checkout-selection-sheet__apply";
+      applyBtn.textContent = applyLabel;
+      applyBtn.addEventListener("click", () => {
+        if (typeof onApply === "function") onApply();
+        closeCheckoutSelectionSheet();
+      });
+      actions.appendChild(applyBtn);
+      if (typeof bodyBuilder === "function") {
+        bodyBuilder(body, {
+          setApplyDisabled: (disabled) => {
+            applyBtn.disabled = !!disabled;
+          },
+          close: () => closeCheckoutSelectionSheet(),
+        });
+      }
+      if (showApply) body.appendChild(actions);
+      panel.appendChild(header);
+      panel.appendChild(body);
+      overlay.appendChild(panel);
+      overlay.addEventListener("click", (event) => {
+        if (event.target === overlay) closeCheckoutSelectionSheet();
+      });
+      panel.addEventListener("click", (event) => event.stopPropagation());
+      checkoutSelectionOverlayHost.appendChild(overlay);
+      checkoutSelectionOverlayHost.classList.add("is-active");
+      if (checkoutSelectionOverlayContainer && checkoutSelectionOverlayContainer.classList) {
+        const containerRect = checkoutSelectionOverlayContainer.getBoundingClientRect();
+        if (containerRect && containerRect.height > 0) {
+          checkoutSelectionOverlayContainer.style.setProperty("--shop-checkout-nested-panel-height", `${Math.ceil(containerRect.height)}px`);
+        }
+        checkoutSelectionOverlayContainer.classList.add("shop-checkout-overlay-panel--nested-sheet-open");
+      }
+      syncMobileNestedCheckoutSheetState(true);
+    }
 
     function refreshAddressVisibility() {
       const v = methodSelect.getValue();
@@ -27520,6 +27931,17 @@ function setBottomNavActive(tab) {
       ? defaultFallback
       : (availableTimeOptions[0]?.code || defaultFallback);
     const timeDefault = fallbackCode;
+
+    function getTimeOptionIconElement(code, iconRaw) {
+      const fallbackIcons = {
+        asap: "fas fa-bolt",
+        at_time: "fas fa-clock",
+        on_date: "fas fa-calendar-day",
+      };
+      const iconEl = createOptionIconElement(iconRaw, fallbackIcons[code] || "fas fa-clock");
+      if (iconEl) iconEl.setAttribute("aria-hidden", "true");
+      return iconEl;
+    }
 
     function createTimeIconPicker(options, defaultCode) {
       const fallbackIcons = {
@@ -27673,11 +28095,39 @@ function setBottomNavActive(tab) {
     }
     timeSlotsWrapAtTime.appendChild(timeSlotsDropdownAtTime.root);
     timeRow.appendChild(timeSlotsWrapAtTime);
+    const checkoutMainSection = document.createElement("section");
+    checkoutMainSection.className = "shop-checkout-card-section shop-checkout-card-section--combined";
 
-    wrap.appendChild(timePickerRow);
-    wrap.appendChild(timeRow);
-    wrap.appendChild(dateSection);
-    wrap.appendChild(timeInput);
+    const timeSection = createCheckoutCardSection("Дата и время получения");
+    timeSection.root.classList.add("shop-checkout-card-subsection");
+    const timeModesGrid = document.createElement("div");
+    timeModesGrid.className = "shop-checkout-card-grid shop-checkout-card-grid--modes";
+    bindCheckoutHorizontalWheelScroll(timeModesGrid);
+    const timeModeButtons = new Map();
+    availableTimeOptions.forEach((option) => {
+      const card = createCheckoutCardOption({
+        title: option.title || option.code || "",
+        value: option.code === "asap" ? getCheckoutEtaLabel() : "",
+        onClick: () => {
+          if (option.code === "at_time") {
+            openAtTimeSelectionSheet();
+            return;
+          }
+          if (option.code === "on_date") {
+            openOnDateSelectionSheet();
+            return;
+          }
+          timeInput.value = "";
+          timeSelect.setValue(option.code, false);
+        },
+        extraClass: "shop-checkout-card-option--mode",
+      });
+      card.dataset.code = option.code;
+      timeModeButtons.set(option.code, card);
+      timeModesGrid.appendChild(card);
+    });
+    timeSection.root.appendChild(timeModesGrid);
+    checkoutMainSection.appendChild(timeSection.root);
 
     // --- Рендер календаря ---
     function renderShopCalendar() {
@@ -27796,6 +28246,271 @@ function setBottomNavActive(tab) {
     }, {});
     const storedDraftTime = extractTimeValue(draft.scheduled_at);
 
+    function formatCheckoutEtaCardTitle() {
+      const etaLabel = str(getCheckoutEtaLabel()).trim();
+      if (!etaLabel) return "";
+      return /^за\s/i.test(etaLabel) ? etaLabel : `За ${etaLabel}`;
+    }
+
+    function getTimeOptionTitle(code) {
+      if (timeOptionByCode[code]?.title) return str(timeOptionByCode[code].title).trim();
+      const fallback = availableTimeOptions.find((option) => option.code === code);
+      return str(fallback?.title || code || "").trim();
+    }
+
+    function getCheckoutStoreTodayDate() {
+      const now = getStoreDateNow(storeTimezone || "+0");
+      return new Date(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+    }
+
+    function getCheckoutSelectableDates(limit = 30) {
+      const dates = [];
+      const startDate = getCheckoutStoreTodayDate();
+      for (let index = 1; index <= limit; index += 1) {
+        const nextDate = new Date(startDate);
+        nextDate.setDate(startDate.getDate() + index);
+        dates.push(nextDate);
+      }
+      return dates;
+    }
+
+    function formatCheckoutSelectionDateTitle(date) {
+      if (!(date instanceof Date) || Number.isNaN(date.getTime())) return "";
+      return date.toLocaleDateString("ru-RU", { day: "numeric", month: "short" });
+    }
+
+    function formatCheckoutSelectionDateMeta(date) {
+      if (!(date instanceof Date) || Number.isNaN(date.getTime())) return "";
+      const today = getCheckoutStoreTodayDate();
+      const tomorrowDate = new Date(today);
+      tomorrowDate.setDate(today.getDate() + 1);
+      const dateKey = toShopDateKey(date);
+      if (dateKey === toShopDateKey(tomorrowDate)) return "Завтра";
+      return date.toLocaleDateString("ru-RU", { weekday: "long" });
+    }
+
+    function buildCheckoutSelectionSlotButton(title, isActive, onClick) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = `shop-checkout-selection-sheet__slot${isActive ? " is-active" : ""}`;
+      button.textContent = title || "";
+      if (typeof onClick === "function") button.addEventListener("click", onClick);
+      return button;
+    }
+
+    function openAtTimeSelectionSheet() {
+      const config = timeOptionByCode.at_time;
+      timeSelect.setValue("at_time", false);
+      const initialSlots = buildTimeSlots(config, null, storeTimezone);
+      let selectedSlot = initialSlots.includes(timeInput.value)
+        ? timeInput.value
+        : (initialSlots[0] || "");
+
+      openCheckoutSelectionSheet({
+        title: getTimeOptionTitle("at_time"),
+        description: "Выберите удобный интервал получения",
+        applyLabel: "Выбрать время",
+        showApply: false,
+        bodyClass: "shop-checkout-selection-sheet--time",
+        bodyBuilder: (body, controls) => {
+          const section = document.createElement("div");
+          section.className = "shop-checkout-selection-sheet__section shop-checkout-selection-sheet__section--fixed";
+          const sectionTitle = document.createElement("div");
+          sectionTitle.className = "shop-checkout-selection-sheet__section-title";
+          sectionTitle.textContent = "Сегодня";
+          section.appendChild(sectionTitle);
+          body.appendChild(section);
+          const scroll = document.createElement("div");
+          scroll.className = "shop-checkout-selection-sheet__scroll";
+          const slotsGrid = document.createElement("div");
+          slotsGrid.className = "shop-checkout-selection-sheet__grid shop-checkout-selection-sheet__grid--single";
+          scroll.appendChild(slotsGrid);
+          body.appendChild(scroll);
+
+          const renderSlots = () => {
+            const slots = buildTimeSlots(config, null, storeTimezone);
+            slotsGrid.innerHTML = "";
+            if (!slots.length) {
+              const empty = document.createElement("div");
+              empty.className = "shop-checkout-selection-sheet__empty";
+              empty.textContent = "Сейчас доступных интервалов нет";
+              slotsGrid.appendChild(empty);
+              selectedSlot = "";
+              return;
+            }
+            if (!slots.includes(selectedSlot)) {
+              selectedSlot = slots.includes(timeInput.value) ? timeInput.value : (slots[0] || "");
+            }
+            slots.forEach((slot) => {
+              slotsGrid.appendChild(buildCheckoutSelectionSlotButton(slot, slot === selectedSlot, () => {
+                selectedSlot = slot;
+                timeInput.value = selectedSlot || "";
+                updateTimeSlotsOptions();
+                renderTimeSelectionCards();
+                controls.close();
+              }));
+            });
+          };
+
+          renderSlots();
+        },
+      });
+    }
+
+    function openOnDateSelectionSheet() {
+      const config = timeOptionByCode.on_date;
+      timeSelect.setValue("on_date", false);
+      const selectableDates = getCheckoutSelectableDates();
+      const selectedDateKey = toShopDateKey(selectedDate);
+      if (selectedDateKey && !selectableDates.some((date) => toShopDateKey(date) === selectedDateKey)) {
+        selectableDates.unshift(new Date(selectedDate));
+      }
+      let sheetDate = selectableDates.find((date) => toShopDateKey(date) === selectedDateKey) || selectableDates[0] || new Date(selectedDate);
+      let selectedSlot = "";
+
+      openCheckoutSelectionSheet({
+        title: getTimeOptionTitle("on_date"),
+        description: "Сначала выберите дату, затем время получения",
+        applyLabel: "Выбрать дату и время",
+        showApply: false,
+        bodyClass: "shop-checkout-selection-sheet--date",
+        bodyBuilder: (body, controls) => {
+          const dateSection = document.createElement("div");
+          dateSection.className = "shop-checkout-selection-sheet__section shop-checkout-selection-sheet__section--fixed";
+          const dateTitle = document.createElement("div");
+          dateTitle.className = "shop-checkout-selection-sheet__section-title";
+          dateTitle.textContent = "Дата";
+          const dateChips = document.createElement("div");
+          dateChips.className = "shop-checkout-selection-sheet__chips";
+          bindCheckoutHorizontalWheelScroll(dateChips);
+          dateSection.appendChild(dateTitle);
+          dateSection.appendChild(dateChips);
+          body.appendChild(dateSection);
+
+          const timeSection = document.createElement("div");
+          timeSection.className = "shop-checkout-selection-sheet__section shop-checkout-selection-sheet__section--fixed";
+          const timeTitle = document.createElement("div");
+          timeTitle.className = "shop-checkout-selection-sheet__section-title";
+          timeTitle.textContent = "Время";
+          timeSection.appendChild(timeTitle);
+          body.appendChild(timeSection);
+          const scroll = document.createElement("div");
+          scroll.className = "shop-checkout-selection-sheet__scroll";
+          const slotsGrid = document.createElement("div");
+          slotsGrid.className = "shop-checkout-selection-sheet__grid shop-checkout-selection-sheet__grid--single";
+          scroll.appendChild(slotsGrid);
+          body.appendChild(scroll);
+
+          const renderDates = () => {
+            dateChips.innerHTML = "";
+            const calendarBtn = document.createElement("button");
+            calendarBtn.type = "button";
+            calendarBtn.className = "shop-checkout-selection-sheet__chip shop-checkout-selection-sheet__chip--calendar";
+            calendarBtn.style.display = "none";
+            calendarBtn.innerHTML = '<span class="shop-checkout-selection-sheet__chip-icon"><i class="fas fa-calendar-alt"></i></span><span class="shop-checkout-selection-sheet__chip-title">Календарь</span>';
+            dateChips.appendChild(calendarBtn);
+            selectableDates.forEach((date) => {
+              const dateKey = toShopDateKey(date);
+              const button = document.createElement("button");
+              button.type = "button";
+              button.className = `shop-checkout-selection-sheet__chip shop-checkout-selection-sheet__chip--date${dateKey === toShopDateKey(sheetDate) ? " is-active" : ""}`;
+              const titleEl = document.createElement("span");
+              titleEl.className = "shop-checkout-selection-sheet__chip-title";
+              titleEl.textContent = formatCheckoutSelectionDateTitle(date);
+              const metaEl = document.createElement("span");
+              metaEl.className = "shop-checkout-selection-sheet__chip-meta";
+              metaEl.textContent = formatCheckoutSelectionDateMeta(date);
+              button.appendChild(titleEl);
+              button.appendChild(metaEl);
+              button.addEventListener("click", () => {
+                sheetDate = new Date(date);
+                renderDates();
+                renderSlots();
+              });
+              dateChips.appendChild(button);
+            });
+          };
+
+          const renderSlots = () => {
+            const slots = buildTimeSlots(config, sheetDate, storeTimezone);
+            slotsGrid.innerHTML = "";
+            if (!slots.length) {
+              const empty = document.createElement("div");
+              empty.className = "shop-checkout-selection-sheet__empty";
+              empty.textContent = "Для этой даты интервалов пока нет";
+              slotsGrid.appendChild(empty);
+              selectedSlot = "";
+              return;
+            }
+            const isCurrentDate = toShopDateKey(sheetDate) === toShopDateKey(selectedDate);
+            const preferredSlot = isCurrentDate ? timeInput.value : "";
+            if (!slots.includes(selectedSlot)) {
+              selectedSlot = slots.includes(preferredSlot) ? preferredSlot : (slots[0] || "");
+            }
+            slots.forEach((slot) => {
+              slotsGrid.appendChild(buildCheckoutSelectionSlotButton(slot, slot === selectedSlot, () => {
+                selectedSlot = slot;
+                selectedDate = new Date(sheetDate);
+                dateDisplay.textContent = formatDateDisplay(selectedDate);
+                calendarViewYear = selectedDate.getFullYear();
+                calendarViewMonth = selectedDate.getMonth();
+                timeInput.value = selectedSlot || "";
+                updateTimeSlotsOptions();
+                renderTimeSelectionCards();
+                controls.close();
+              }));
+            });
+          };
+
+          renderDates();
+          renderSlots();
+        },
+      });
+    }
+
+    function syncTimeModeCards() {
+      const selectedCode = timeSelect.getValue();
+      timeModeButtons.forEach((card, code) => {
+        card.classList.toggle("is-active", code === selectedCode);
+        card.setAttribute("aria-pressed", code === selectedCode ? "true" : "false");
+        if (code === "asap") {
+          setCheckoutCardOptionContent(card, {
+            title: getTimeOptionTitle(code),
+            value: getCheckoutEtaLabel(),
+            meta: "",
+          });
+          return;
+        }
+        if (code === "at_time") {
+          const hasSelectedAtTime = selectedCode === "at_time" && !!str(timeInput.value || "").trim();
+          setCheckoutCardOptionContent(card, {
+            title: getTimeOptionTitle(code),
+            value: hasSelectedAtTime ? timeInput.value : "Выбрать время",
+            meta: hasSelectedAtTime ? "Сегодня" : "",
+          });
+          return;
+        }
+        if (code === "on_date") {
+          const hasSelectedOnDate = selectedCode === "on_date" && !!str(timeInput.value || "").trim();
+          setCheckoutCardOptionContent(card, {
+            title: getTimeOptionTitle(code),
+            value: hasSelectedOnDate ? formatDateDisplay(selectedDate) : "Выбрать дату",
+            meta: hasSelectedOnDate ? (timeInput.value || "") : "",
+          });
+          return;
+        }
+        setCheckoutCardOptionContent(card, {
+          title: getTimeOptionTitle(code),
+          value: "",
+          meta: "",
+        });
+      });
+    }
+
+    function renderTimeSelectionCards() {
+      syncTimeModeCards();
+    }
+
     function refreshTimeInputVisibility() {
       const selectedCode = timeSelect.getValue();
       const config = timeOptionByCode[selectedCode];
@@ -27820,6 +28535,7 @@ function setBottomNavActive(tab) {
       timeRow.style.display = hasNeighbor ? "" : "none";
       timeRow.classList.toggle("is-combined", hasNeighbor);
       timeSlotsWrapAtTime.style.gridColumn = "";
+      renderTimeSelectionCards();
     }
 
     function updateTimeSlotsOptions() {
@@ -27830,6 +28546,8 @@ function setBottomNavActive(tab) {
         if (!config || Number(config.has_time_window) !== 1) {
           dateSlotsWrap.style.display = "none";
           dateRow2.classList.remove("is-combined");
+          timeInput.value = "";
+          renderTimeSelectionCards();
           return;
         }
         dateSlotsWrap.style.display = "";
@@ -27842,12 +28560,15 @@ function setBottomNavActive(tab) {
           : (slotOptions[0]?.code || "");
         timeSlotsDropdown.setOptions(slotOptions, defaultSlot);
         timeInput.value = defaultSlot;
+        renderTimeSelectionCards();
         return;
       }
 
       if (!config || Number(config.has_time_window) !== 1) {
         timeSlotsDropdownAtTime.setOptions([]);
         dateRow2.classList.remove("is-combined");
+        if (selectedCode === "asap") timeInput.value = "";
+        renderTimeSelectionCards();
         return;
       }
       dateRow2.classList.remove("is-combined");
@@ -27859,14 +28580,17 @@ function setBottomNavActive(tab) {
         : (slotOptions[0]?.code || "");
       timeSlotsDropdownAtTime.setOptions(slotOptions, defaultSlot);
       timeInput.value = defaultSlot;
+      renderTimeSelectionCards();
     }
 
     timeSlotsDropdown.root.addEventListener("change", () => {
       timeInput.value = timeSlotsDropdown.getValue() || "";
+      renderTimeSelectionCards();
     });
 
     timeSlotsDropdownAtTime.root.addEventListener("change", () => {
       timeInput.value = timeSlotsDropdownAtTime.getValue() || "";
+      renderTimeSelectionCards();
     });
 
     timeSelect.root.addEventListener("change", () => {
@@ -27889,7 +28613,18 @@ function setBottomNavActive(tab) {
     let currentPayableTotal = getPayableTotalForMethod(methodSelect.getValue());
 
     const payments = (cfg.payments || []).map(x => ({ code: x.code, title: x.title, icon: x.icon }));
-    const payDefault = "";
+    const payDefault = str(draft?.payment_code || "").trim();
+    function getPaymentOptionIconElement(code, iconRaw) {
+      const fallbackIcons = {
+        cash: "fas fa-money-bill-wave",
+        card: "fas fa-credit-card",
+        online: "fas fa-wallet",
+        sbp: "fas fa-qrcode",
+      };
+      const iconEl = createOptionIconElement(iconRaw, fallbackIcons[code] || "fas fa-credit-card");
+      if (iconEl) iconEl.setAttribute("aria-hidden", "true");
+      return iconEl;
+    }
     function createPaymentIconPicker(options, defaultCode) {
       const fallbackIcons = {
         cash: "fas fa-money-bill-wave",
@@ -27899,13 +28634,87 @@ function setBottomNavActive(tab) {
       };
       return createUnifiedIconCarousel(options, {
         defaultCode,
-        allowEmpty: false,
+        allowEmpty: true,
         resolveIcon: (code, iconRaw) => createOptionIconElement(iconRaw, fallbackIcons[code] || "fas fa-credit-card"),
       });
     }
     const paySelect = createPaymentIconPicker(payments, payDefault);
     if (paySelect && typeof paySelect.destroy === "function") {
       registerCheckoutCleanup(() => paySelect.destroy());
+    }
+
+    const paymentSection = createCheckoutCardSection("Способ оплаты");
+    paymentSection.root.classList.add("shop-checkout-card-subsection");
+    const paymentCardsGrid = document.createElement("div");
+    paymentCardsGrid.className = "shop-checkout-card-grid shop-checkout-card-grid--payments";
+    const paymentCards = new Map();
+    payments.forEach((payment) => {
+      const card = createCheckoutCardOption({
+        title: payment.title || payment.code || "",
+        onClick: () => {
+          if (payment.code === "cash") {
+            openCashChangeSelectionSheet();
+            return;
+          }
+          paySelect.setValue(payment.code, false);
+        },
+        extraClass: "shop-checkout-card-option--payment",
+      });
+      card.dataset.code = payment.code;
+      card.dataset.baseTitle = payment.title || payment.code || "";
+      paymentCards.set(payment.code, card);
+      paymentCardsGrid.appendChild(card);
+    });
+    bindCheckoutHorizontalWheelScroll(paymentCardsGrid);
+    paymentSection.root.appendChild(paymentCardsGrid);
+    checkoutMainSection.appendChild(paymentSection.root);
+
+    const commentSection = document.createElement("section");
+    commentSection.className = "shop-checkout-card-subsection shop-checkout-card-subsection--comment";
+    commentSection.appendChild(comment);
+    checkoutMainSection.appendChild(commentSection);
+    wrap.appendChild(checkoutMainSection);
+    wrap.appendChild(timeInput);
+
+    function formatCashChangeCardValue() {
+      if (changeMode === "preset" && Number(selectedChangePreset) > 0) {
+        return money(Number(selectedChangePreset));
+      }
+      if (changeMode === "custom") {
+        const customVal = parseInt(changeCustomInput.value, 10);
+        if (customVal > currentPayableTotal) return money(customVal);
+      }
+      return "Без сдачи";
+    }
+
+    function formatCashChangeCardMeta() {
+      const changeFromValue = Number(getChangeFromValue() || 0);
+      if (!(changeFromValue > currentPayableTotal)) {
+        return "Сдача";
+      }
+      const changeAmount = roundPrice(changeFromValue - currentPayableTotal);
+      return changeAmount > 0 ? `Сдача ${money(changeAmount)}` : "Сдача";
+    }
+
+    function syncPaymentCards() {
+      const selectedCode = paySelect.getValue();
+      paymentCards.forEach((card, code) => {
+        card.classList.toggle("is-active", code === selectedCode);
+        card.setAttribute("aria-pressed", code === selectedCode ? "true" : "false");
+        if (code === "cash") {
+          setCheckoutCardOptionContent(card, {
+            title: card.dataset.baseTitle || "",
+            value: selectedCode === "cash" ? formatCashChangeCardValue() : "",
+            meta: selectedCode === "cash" ? formatCashChangeCardMeta() : "",
+          });
+          return;
+        }
+        setCheckoutCardOptionContent(card, {
+          title: card.dataset.baseTitle || "",
+          value: "",
+          meta: code === "card" ? "при получении" : "",
+        });
+      });
     }
 
     const changePresetBaseAmounts = [500, 1000, 2000, 5000];
@@ -27931,11 +28740,40 @@ function setBottomNavActive(tab) {
     payWrap.appendChild(paySelect.root);
     const clearPaymentInvalidState = () => {
       paySelect.root.classList.remove("is-invalid");
+      paymentSection.root.classList.remove("is-invalid");
+      paymentCardsGrid.classList.remove("is-invalid");
+    };
+    const showCheckoutToast = (message) => {
+      const text = str(message || "").trim();
+      if (!text) return;
+      if (typeof showToast === "function") {
+        try {
+          showToast(text);
+          return;
+        } catch {}
+      }
+      const existing = document.querySelector(".shop-toast");
+      if (existing) existing.remove();
+      const toast = document.createElement("div");
+      toast.className = "shop-toast";
+      toast.textContent = text;
+      document.body.appendChild(toast);
+      requestAnimationFrame(() => {
+        toast.classList.add("is-visible");
+      });
+      setTimeout(() => {
+        toast.classList.remove("is-visible");
+        setTimeout(() => {
+          if (toast.parentNode) toast.remove();
+        }, 300);
+      }, 2200);
     };
     const markPaymentInvalidState = () => {
       paySelect.root.classList.add("is-invalid");
-      if (typeof payWrap.scrollIntoView === "function") {
-        payWrap.scrollIntoView({ block: "center", behavior: "smooth" });
+      paymentSection.root.classList.add("is-invalid");
+      paymentCardsGrid.classList.add("is-invalid");
+      if (typeof paymentSection.root.scrollIntoView === "function") {
+        paymentSection.root.scrollIntoView({ block: "center", behavior: "smooth" });
       }
       setTimeout(() => {
         clearPaymentInvalidState();
@@ -28079,6 +28917,165 @@ function setBottomNavActive(tab) {
       }
     }
 
+    function openCashChangeSelectionSheet() {
+      paySelect.setValue("cash", false);
+      let sheetMode = changeMode;
+      let sheetSelectedChangePreset = selectedChangePreset;
+      let sheetCustomValue = sheetMode === "custom" ? str(changeCustomInput.value).trim() : "";
+
+      const applyCashChangeSelection = ({ mode = "none", preset = null, customValue = "" } = {}) => {
+        if (mode === "custom") {
+          const customVal = parseInt(customValue, 10);
+          if (!(customVal > currentPayableTotal)) return false;
+          changeMode = "custom";
+          selectedChangePreset = null;
+          changeCustomInput.value = String(customVal);
+          sheetCustomValue = String(customVal);
+        } else if (mode === "preset") {
+          const presetVal = Number(preset || 0);
+          changeMode = "preset";
+          selectedChangePreset = presetVal > 0 ? presetVal : null;
+          changeCustomInput.value = "";
+          sheetCustomValue = "";
+        } else {
+          changeMode = "none";
+          selectedChangePreset = null;
+          changeCustomInput.value = "";
+          sheetCustomValue = "";
+        }
+        renderChangeCashChips();
+        refreshChangeVisibility();
+        closeCheckoutSelectionSheet();
+        return true;
+      };
+
+      openCheckoutSelectionSheet({
+        title: "Сдача",
+        description: `Сумма заказа ${money(currentPayableTotal)}`,
+        showApply: false,
+        bodyClass: "shop-checkout-selection-sheet--cash",
+        bodyBuilder: (body) => {
+          const section = document.createElement("div");
+          section.className = "shop-checkout-selection-sheet__section shop-checkout-selection-sheet__section--fixed";
+          const sectionTitle = document.createElement("div");
+          sectionTitle.className = "shop-checkout-selection-sheet__section-title";
+          sectionTitle.textContent = "Как подготовить наличные";
+          sectionTitle.textContent = "С какой суммы подготовить сдачу";
+          sectionTitle.textContent = "С какой суммы подготовить сдачу?";
+          const grid = document.createElement("div");
+          grid.className = "shop-checkout-selection-sheet__grid shop-checkout-selection-sheet__grid--single";
+          section.appendChild(sectionTitle);
+          section.appendChild(grid);
+          body.appendChild(section);
+          const customSection = document.createElement("div");
+          customSection.className = "shop-checkout-selection-sheet__section";
+          const customTitle = document.createElement("div");
+          customTitle.className = "shop-checkout-selection-sheet__section-title";
+          customTitle.textContent = "Другая сумма";
+          const customInput = document.createElement("input");
+          const minAmount = Math.ceil(currentPayableTotal) + 1;
+          const placeholder = `Больше ${Math.ceil(currentPayableTotal)}`;
+          customInput.className = "control shop-checkout-change-custom shop-checkout-selection-sheet__slot-input";
+          customInput.type = "number";
+          customInput.min = String(minAmount);
+          customInput.placeholder = placeholder;
+          customInput.size = Math.max(10, placeholder.length + 1);
+          customInput.style.width = "100%";
+          customInput.value = sheetCustomValue;
+          const customApplyBtn = document.createElement("button");
+          customApplyBtn.type = "button";
+          customApplyBtn.className = "shop-checkout-selection-sheet__slot-confirm";
+          customApplyBtn.setAttribute("aria-label", "Применить сумму сдачи");
+          customApplyBtn.innerHTML = '<i class="fas fa-check"></i>';
+          customSection.appendChild(customTitle);
+          customSection.appendChild(customInput);
+          customSection.style.display = "none";
+          body.appendChild(customSection);
+
+          const syncCustomApplyButtonState = () => {
+            const customVal = parseInt(str(customInput.value).trim(), 10);
+            customApplyBtn.disabled = !(customVal > currentPayableTotal);
+          };
+
+          const applyCurrentCustomValue = () => {
+            sheetCustomValue = str(customInput.value).trim();
+            return applyCashChangeSelection({ mode: "custom", customValue: sheetCustomValue });
+          };
+
+          customApplyBtn.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            applyCurrentCustomValue();
+          });
+
+          const renderSheetChips = () => {
+            grid.innerHTML = "";
+            customSection.style.display = "none";
+
+            const noneBtn = buildCheckoutSelectionSlotButton("Без сдачи", sheetMode === "none", () => {
+              sheetMode = "none";
+              sheetSelectedChangePreset = null;
+              sheetCustomValue = "";
+              applyCashChangeSelection({ mode: "none" });
+            });
+            grid.appendChild(noneBtn);
+
+            changePresetAmounts.forEach((amount) => {
+              const presetBtn = buildCheckoutSelectionSlotButton(money(amount), sheetMode === "preset" && Number(sheetSelectedChangePreset) === Number(amount), () => {
+                sheetMode = "preset";
+                sheetSelectedChangePreset = amount;
+                sheetCustomValue = "";
+                applyCashChangeSelection({ mode: "preset", preset: amount });
+              });
+              grid.appendChild(presetBtn);
+            });
+
+            if (sheetMode === "custom") {
+              const customWrap = document.createElement("div");
+              customWrap.className = "shop-checkout-selection-sheet__slot shop-checkout-selection-sheet__slot--input is-active";
+              if (customInput.parentNode) customInput.parentNode.removeChild(customInput);
+              if (customApplyBtn.parentNode) customApplyBtn.parentNode.removeChild(customApplyBtn);
+              customWrap.appendChild(customInput);
+              customWrap.appendChild(customApplyBtn);
+              grid.appendChild(customWrap);
+              syncCustomApplyButtonState();
+              requestAnimationFrame(() => {
+                try {
+                  customInput.focus();
+                  customInput.select();
+                } catch {}
+              });
+              return;
+            }
+
+            const customBtn = buildCheckoutSelectionSlotButton("Другая сумма", sheetMode === "custom", () => {
+              sheetMode = "custom";
+              renderSheetChips();
+              requestAnimationFrame(() => {
+                try {
+                  customInput.focus();
+                  customInput.select();
+                } catch {}
+              });
+            });
+            grid.appendChild(customBtn);
+          };
+
+          customInput.addEventListener("input", () => {
+            sheetCustomValue = str(customInput.value).trim();
+            syncCustomApplyButtonState();
+          });
+          customInput.addEventListener("keydown", (event) => {
+            if (event.key !== "Enter") return;
+            event.preventDefault();
+            applyCurrentCustomValue();
+          });
+
+          renderSheetChips();
+        },
+      });
+    }
+
     changeCashScroll.addEventListener("wheel", (event) => {
       if (!event) return;
       if (changeCashScroll.scrollWidth <= changeCashScroll.clientWidth + 1) return;
@@ -28093,12 +29090,7 @@ function setBottomNavActive(tab) {
     syncChangeCustomInputMeta();
     renderChangeCashChips();
 
-    const payMethodRow = document.createElement("div");
-    payMethodRow.className = "shop-checkout-method-block";
-    payMethodRow.appendChild(payWrap);
-    wrap.appendChild(payMethodRow);
-
-    wrap.appendChild(changeWrap);
+    paymentSection.root.appendChild(changeWrap);
 
     const deliveryInfoWrap = document.createElement("div");
     deliveryInfoWrap.className = "shop-checkout-delivery-info";
@@ -28121,7 +29113,6 @@ function setBottomNavActive(tab) {
     deliveryMinNote.className = "shop-checkout-note muted";
     deliveryInfoWrap.appendChild(deliveryMinNote);
 
-    wrap.appendChild(deliveryInfoWrap);
 
     function getSelectedPaymentTitle() {
       const code = str(paySelect.getValue()).trim();
@@ -28138,7 +29129,6 @@ function setBottomNavActive(tab) {
     const paymentSummaryValue = document.createElement("div");
     paymentSummaryRow.appendChild(paymentSummaryLabel);
     paymentSummaryRow.appendChild(paymentSummaryValue);
-    wrap.appendChild(paymentSummaryRow);
 
     const changeFromSummaryRow = document.createElement("div");
     changeFromSummaryRow.className = "shop-checkout-grid-row";
@@ -28148,7 +29138,6 @@ function setBottomNavActive(tab) {
     const changeFromSummaryValue = document.createElement("div");
     changeFromSummaryRow.appendChild(changeFromSummaryLabel);
     changeFromSummaryRow.appendChild(changeFromSummaryValue);
-    wrap.appendChild(changeFromSummaryRow);
 
     const changeAmountSummaryRow = document.createElement("div");
     changeAmountSummaryRow.className = "shop-checkout-grid-row";
@@ -28158,7 +29147,6 @@ function setBottomNavActive(tab) {
     const changeAmountSummaryValue = document.createElement("div");
     changeAmountSummaryRow.appendChild(changeAmountSummaryLabel);
     changeAmountSummaryRow.appendChild(changeAmountSummaryValue);
-    wrap.appendChild(changeAmountSummaryRow);
 
     const totalBeforeCustomerDiscount = roundPrice(Number(cartTotals.total || 0));
     const itemLevelDiscount = roundPrice(Number(cartTotals.totalDiscount || 0));
@@ -28278,9 +29266,6 @@ function setBottomNavActive(tab) {
     subtotalValue.textContent = money(hasDiscount ? totalBeforeDiscount : total);
     subtotalRow.appendChild(subtotalLabel);
     subtotalRow.appendChild(subtotalValue);
-    if (hasDiscount) {
-      wrap.appendChild(subtotalRow);
-    }
 
     // Строка скидки (если есть)
     const discountRow = document.createElement("div");
@@ -28372,10 +29357,6 @@ function setBottomNavActive(tab) {
     discountValue.textContent = `-${money(actualDiscount)}`;
     discountRow.appendChild(discountLabelWrap);
     discountRow.appendChild(discountValue);
-    if (hasDiscount) {
-      wrap.appendChild(discountRow);
-      if (canShowDiscountDetails) wrap.appendChild(discountDetails);
-    }
 
     const totalRow = document.createElement("div");
     totalRow.className = "shop-checkout-grid-row shop-checkout-total-row";
@@ -28385,7 +29366,6 @@ function setBottomNavActive(tab) {
     totalValue.textContent = money(currentPayableTotal);
     totalRow.appendChild(totalLabel);
     totalRow.appendChild(totalValue);
-    wrap.appendChild(totalRow);
 
     function updatePaymentSummaryRows() {
       const paymentTitle = getSelectedPaymentTitle();
@@ -28468,6 +29448,7 @@ function setBottomNavActive(tab) {
 
       if (totalValue) totalValue.textContent = money(payableTotal);
       setCheckoutSubmitLabel(payableTotal);
+      renderTimeSelectionCards();
       updatePaymentSummaryRows();
 
       if (actions?.submitBtn) {
@@ -28477,14 +29458,13 @@ function setBottomNavActive(tab) {
     }
 
     function refreshChangeVisibility() {
+      changeWrap.style.display = "none";
+      changeCashScroll.style.display = "none";
+      changeNonCashHint.style.display = "none";
       const isCash = paySelect.getValue() === "cash";
-      changeWrap.style.display = "";
-      changeCashScroll.style.display = isCash ? "" : "none";
-      changeNonCashHint.style.display = isCash ? "none" : "";
       changeWrap.classList.toggle("is-cash", isCash);
-      if (isCash) {
-        renderChangeCashChips();
-      }
+      paymentSection.root.classList.toggle("is-cash", isCash);
+      syncPaymentCards();
       updatePaymentSummaryRows();
     }
     paySelect.root.addEventListener("change", clearPaymentInvalidState);
@@ -28493,6 +29473,7 @@ function setBottomNavActive(tab) {
     updateDeliveryPricing();
 
     function getChangeFromValue() {
+      if (paySelect.getValue() !== "cash") return null;
       if (changeMode === "none") return null;
       if (changeMode === "custom") {
         const customVal = parseInt(changeCustomInput.value, 10);
@@ -28590,9 +29571,6 @@ function setBottomNavActive(tab) {
       checkoutSendingOverlay = overlay;
       return overlay;
     }
-    if (elMobileDeliveryProgressWrap) elMobileDeliveryProgressWrap.classList.add("hidden");
-    if (elDesktopDeliveryProgressWrap) elDesktopDeliveryProgressWrap.classList.add("hidden");
-
     function setCheckoutSubmitting(isSubmitting) {
       if (actions?.submitBtn) actions.submitBtn.disabled = !!isSubmitting;
       if (elMobileCheckoutSubmitBtn) elMobileCheckoutSubmitBtn.disabled = !!isSubmitting;
@@ -28873,6 +29851,11 @@ function setBottomNavActive(tab) {
         return;
       }
       if (!payload.payment_code) {
+        markPaymentInvalidState();
+        showCheckoutToast("Выберите способ оплаты");
+        return;
+      }
+      if (false && !payload.payment_code) {
         alert("Выберите способ оплаты");
         markPaymentInvalidState();
         return;
