@@ -947,11 +947,14 @@
         el.classList.toggle("is-full", refundState === "full");
       });
 
-      if (typeof helpers.itemsToHtml === "function") {
+      var orderItemsToHtml = typeof helpers.orderItemsToHtml === "function"
+        ? helpers.orderItemsToHtml
+        : helpers.itemsToHtml;
+      if (typeof orderItemsToHtml === "function") {
         setHtmlAll(
           infoEls.itemsList,
           displayItems.length
-            ? helpers.itemsToHtml(displayItems)
+            ? orderItemsToHtml(displayItems, displayOrder)
             : (hasRefunds
               ? '<div class="muted">\u0412\u0441\u0435 \u043f\u043e\u0437\u0438\u0446\u0438\u0438 \u0432\u043e\u0437\u0432\u0440\u0430\u0449\u0435\u043d\u044b.</div>'
               : '<div class="muted">-</div>')

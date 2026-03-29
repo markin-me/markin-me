@@ -7489,12 +7489,62 @@ function openCategoriesSheet() {
   }
 }
 
+function renderSharedReadonlyOrderItemsHtml(items, order = null) {
+  const shared = window.SharedOrderItems;
+  if (shared && typeof shared.renderReadonlyOrderItems === "function") {
+    try {
+      return String(shared.renderReadonlyOrderItems(items, {
+        money,
+        order,
+        sortAutoAdd: true,
+        placeholderImage: "/static/img/placeholder.png",
+        surface: "shop",
+      }) || "");
+    } catch (e) {
+      console.warn("Failed to render shared readonly order items:", e);
+    }
+  }
+
+  let html = "";
+  (Array.isArray(items) ? items : []).forEach((item) => {
+    if (typeof window.formatOrderItem === "function") {
+      try {
+        html += String(window.formatOrderItem(item) || "");
+        return;
+      } catch (e) {
+        console.warn("Failed to format order item fallback:", e);
+      }
+    }
+
+    const photos = Array.isArray(item?.photos) ? item.photos.filter(Boolean) : [];
+    const mainPhoto = photos[0] || "/static/img/placeholder.png";
+    const lineTotalRaw = Number(item?.line_total);
+    const lineTotal = Number.isFinite(lineTotalRaw) ? lineTotalRaw : Number(item?.price || 0);
+    html += `<div class="cart-row">`;
+    html += `<img class="cart-thumb" src="${escapeHtml(mainPhoto)}" alt="" />`;
+    html += `<div class="cart-mid">`;
+    html += `<div class="cart-title">${escapeHtml(item?.name || item?.combo_title || "—")}</div>`;
+    html += `</div>`;
+    html += `<div class="cart-right">`;
+    html += `<div class="cart-price">${money(lineTotal)}</div>`;
+    html += `</div>`;
+    html += `</div>`;
+  });
+  return html;
+}
+
 function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
   const isMobileSheet = window.matchMedia("(max-width: 1100px)").matches;
   if (isMobileSheet && !window.AppModal) return;
   const isAnySheetOpen =
     Boolean(window.AppModal && typeof window.AppModal.isOpen === "function" && window.AppModal.isOpen());
   const currentSheetType = str(sheetNavigationState?.type || "");
+
+  function setFavoritesSheetBodyState(active) {
+    const body = window.AppModal?.body;
+    if (!body) return;
+    body.classList.toggle("shop-favorites-sheet-body", !!active);
+  }
 
   const wrap = document.createElement("div");
   wrap.className = "shop-sheet-content shop-favorites-sheet";
@@ -8578,6 +8628,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       } else if (typeof window.queueShopMobileUiStateSync === "function") {
         window.queueShopMobileUiStateSync("openFavoritesSheet.mobile.onClose");
       }
+      setFavoritesSheetBodyState(false);
       openCartSheetCtx = null;
       openProductCtx = null;
       setSheetHeaderMode("");
@@ -8590,6 +8641,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
   // Если до этого был product/combo режим, возвращаем стандартный хедер списка.
   setSheetHeaderMode("");
 
+  setFavoritesSheetBodyState(true);
   void renderFavorites({ forceReload: force });
 
   if (typeof window.updateActiveOrdersBadge === "function") {
@@ -21544,6 +21596,122 @@ function renderSheetAddressList() {
       .filter((entry) => Number(entry.amount || 0) > 0);
   }
 
+  const storefrontOrderDiscountBreakdownPreviewCache = new Map();
+
+  function normalizeStorefrontOrderDiscountBreakdownRows(rows) {
+    return (Array.isArray(rows) ? rows : [])
+      .map((entry, index) => {
+        const amount = roundPrice(Number(entry?.discount_amount ?? entry?.amount ?? 0));
+        if (!(amount > 0)) return null;
+        const promoCode = str(entry?.promoCode || entry?.promo_code || entry?.code || "").trim().toUpperCase() || null;
+        return {
+          key: str(entry?.key || entry?.title || `discount_${index}`).trim() || null,
+          title: str(entry?.title || entry?.name || "Скидка").trim() || "Скидка",
+          amount,
+          sourceKind: normalizeOrderDiscountBreakdownSourceKind(entry),
+          promoCode,
+        };
+      })
+      .filter(Boolean);
+  }
+
+  function getEffectiveOrderStoredDiscountBreakdown(order) {
+    const overrideRows = normalizeStorefrontOrderDiscountBreakdownRows(
+      order?.summary_discount_breakdown || order?.summaryDiscountBreakdown
+    );
+    return overrideRows.length ? overrideRows : buildOrderStoredDiscountBreakdown(order);
+  }
+
+  function hasDetailedStorefrontOrderDiscountBreakdown(rows) {
+    const normalizedRows = Array.isArray(rows) ? rows : [];
+    if (normalizedRows.length > 1) return true;
+    if (!normalizedRows.length) return false;
+    const row = normalizedRows[0] || {};
+    const title = str(row?.title || "").trim().toLowerCase();
+    const sourceKind = str(row?.sourceKind || row?.source_kind || "").trim().toLowerCase();
+    return Boolean(
+      row?.promoCode
+      || sourceKind
+      || (title && title !== "клиентская скидка" && title !== "скидка")
+    );
+  }
+
+  function shouldHydrateStorefrontOrderDiscountBreakdown(order) {
+    if (!(Number(order?.discount_amount || 0) > 0)) return false;
+    if (hasDetailedStorefrontOrderDiscountBreakdown(getEffectiveOrderStoredDiscountBreakdown(order))) {
+      return false;
+    }
+    const benefitsMeta = order?.benefits_meta && typeof order.benefits_meta === "object"
+      ? order.benefits_meta
+      : null;
+    return Boolean(
+      normalizeCheckoutSelectedDiscountId(benefitsMeta?.selected_discount_id) !== null
+      || normalizeCheckoutPromoSource(benefitsMeta?.selected_promo_source)
+      || str(order?.promo_code || "").trim()
+    );
+  }
+
+  function buildStorefrontOrderBenefitsPreviewRequest(order) {
+    if (!order || !Array.isArray(order.items) || !order.items.length) return null;
+    const benefitsMeta = order?.benefits_meta && typeof order.benefits_meta === "object"
+      ? order.benefits_meta
+      : null;
+    const selectedDiscountId = normalizeCheckoutSelectedDiscountId(benefitsMeta?.selected_discount_id);
+    const selectedPromoRewardId = normalizeCheckoutSelectedDiscountId(benefitsMeta?.selected_promo_reward_id);
+    const promoCode = str(order?.promo_code || "").trim() || null;
+    return {
+      method_code: str(order?.method_code || "").trim() || "takeaway",
+      promo_code: promoCode,
+      selected_discount_id: selectedDiscountId,
+      selected_discount_source: selectedDiscountId
+        ? (normalizeCheckoutDiscountSource(benefitsMeta?.selected_discount_source) || "discount")
+        : null,
+      selected_promo_source: (promoCode || selectedPromoRewardId)
+        ? (normalizeCheckoutPromoSource(benefitsMeta?.selected_promo_source) || "promo_code")
+        : null,
+      selected_promo_reward_id: selectedPromoRewardId,
+      items: order.items,
+    };
+  }
+
+  async function hydrateStorefrontOrderDiscountBreakdown(order) {
+    if (!order || !shouldHydrateStorefrontOrderDiscountBreakdown(order)) return order;
+
+    const cacheKey = String(Number(order?.id || 0) || order?.public_id || "").trim();
+    if (cacheKey && storefrontOrderDiscountBreakdownPreviewCache.has(cacheKey)) {
+      order.summary_discount_breakdown = storefrontOrderDiscountBreakdownPreviewCache
+        .get(cacheKey)
+        .map((entry) => ({ ...entry }));
+      return order;
+    }
+
+    const previewRequest = buildStorefrontOrderBenefitsPreviewRequest(order);
+    if (!previewRequest) return order;
+
+    try {
+      const res = await apiJson("/api/public/checkout/benefits/preview", {
+        method: "POST",
+        body: previewRequest,
+      });
+      const previewRows = normalizeStorefrontOrderDiscountBreakdownRows(
+        res?.data?.summary?.discount_breakdown
+      );
+      if (previewRows.length) {
+        order.summary_discount_breakdown = previewRows.map((entry) => ({ ...entry }));
+        if (cacheKey) {
+          storefrontOrderDiscountBreakdownPreviewCache.set(
+            cacheKey,
+            previewRows.map((entry) => ({ ...entry }))
+          );
+        }
+      }
+    } catch (error) {
+      console.warn("Failed to hydrate storefront order discount breakdown:", error);
+    }
+
+    return order;
+  }
+
   function buildOrderDiscountBreakdownFingerprint(entry) {
     const key = str(entry?.key || "").trim().toLowerCase();
     if (key) return `key:${key}`;
@@ -21758,7 +21926,7 @@ function renderSheetAddressList() {
     );
     const itemLevelSummary = buildOrderItemLevelDiscountSummary(items);
     const storedDiscount = roundPrice(Math.max(0, Number(order?.discount_amount || 0)));
-    const storedBreakdown = buildOrderStoredDiscountBreakdown(order);
+    const storedBreakdown = getEffectiveOrderStoredDiscountBreakdown(order);
 
     let discountAmount = storedDiscount;
     let subtotalBeforeDiscounts = roundPrice(itemsPayableAfterAllDiscounts + storedDiscount);
@@ -25500,7 +25668,11 @@ function renderSheetAddressList() {
     async function loadOrderDetails(orderId) {
       try {
         const json = await apiJson(`/api/public/me/orders/${orderId}`);
-        return json.data || null;
+        const order = json.data || null;
+        if (order) {
+          await hydrateStorefrontOrderDiscountBreakdown(order);
+        }
+        return order;
       } catch (e) {
         console.error("Failed to load order details:", e);
         return null;
@@ -25609,9 +25781,7 @@ function renderSheetAddressList() {
         html += `<div class="shop-order-details-section">`;
         html += `<div class="shop-order-section-title">Товары</div>`;
         html += `<div class="shop-cart-items">`;
-        order.items.forEach(item => {
-          html += formatOrderItem(item);
-        });
+        html += renderSharedReadonlyOrderItemsHtml(order.items, order);
         html += `</div>`;
         html += `</div>`;
       }
@@ -32201,6 +32371,9 @@ function initShopLate() {
         try {
           const json = await apiJson(`/api/public/me/orders/${orderId}`);
           const order = json.data || null;
+          if (order) {
+            await hydrateStorefrontOrderDiscountBreakdown(order);
+          }
           let detailView = shell.detailsHost.querySelector(`.shop-active-order-details[data-order-id="${Number(orderId)}"]`);
           if (!detailView) {
             detailView = document.createElement("div");
@@ -32268,42 +32441,7 @@ function initShopLate() {
             html += `<div class="shop-order-details-section">`;
             html += `<div class="shop-order-section-title">Товары</div>`;
             html += `<div class="shop-cart-items">`;
-            order.items.forEach(item => {
-              // Используем window.formatOrderItem, которая уже правильно обрабатывает варианты, опции и ингредиенты
-              if (window.formatOrderItem && typeof window.formatOrderItem === "function") {
-                try {
-                  html += window.formatOrderItem(item);
-                } catch (e) {
-                  console.error("Error formatting order item:", e, item);
-                  // Fallback при ошибке
-                  const photos = Array.isArray(item.photos) ? item.photos.filter(Boolean) : [];
-                  const mainPhoto = photos[0] || "/static/img/placeholder.png";
-                  html += `<div class="cart-row">`;
-                  html += `<img class="cart-thumb" src="${escapeHtml(mainPhoto)}" alt="" />`;
-                  html += `<div class="cart-mid">`;
-                  html += `<div class="cart-title">${escapeHtml(item.name || "—")}</div>`;
-                  html += `</div>`;
-                  html += `<div class="cart-right">`;
-                  html += `<div class="cart-price">${money(getOrderItemLineTotal(item))}</div>`;
-                  html += `</div>`;
-                  html += `</div>`;
-                }
-              } else {
-                console.error("window.formatOrderItem is not available");
-                // Fallback: простая версия если formatOrderItem недоступна
-                const photos = Array.isArray(item.photos) ? item.photos.filter(Boolean) : [];
-                const mainPhoto = photos[0] || "/static/img/placeholder.png";
-                html += `<div class="cart-row">`;
-                html += `<img class="cart-thumb" src="${escapeHtml(mainPhoto)}" alt="" />`;
-                html += `<div class="cart-mid">`;
-                html += `<div class="cart-title">${escapeHtml(item.name || "—")}</div>`;
-                html += `</div>`;
-                html += `<div class="cart-right">`;
-                html += `<div class="cart-price">${money(getOrderItemLineTotal(item))}</div>`;
-                html += `</div>`;
-                html += `</div>`;
-              }
-            });
+            html += renderSharedReadonlyOrderItemsHtml(order.items, order);
             html += `</div>`;
             html += `</div>`;
           }

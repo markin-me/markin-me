@@ -323,6 +323,7 @@
         renderOrderPaymentIcon,
         paymentIcon,
         getDisplayOrder,
+        orderItemsToHtml,
         itemsToHtml,
         },
         showDeliveryZone() {
@@ -354,6 +355,7 @@
         renderOrderPaymentIcon,
         paymentIcon,
         getDisplayOrder,
+        orderItemsToHtml,
         itemsToHtml,
         },
         showDeliveryZone() {
@@ -447,6 +449,42 @@
   function money(v) {
     const n = Number(v || 0);
     return moneyFmt.format(Number.isFinite(n) ? n : 0) + " ₽";
+  }
+
+  const PRICE_ROUNDING_MODES = new Set(["none", "down", "up", "nearest"]);
+
+  function getTenantFromStorage() {
+    try {
+      const raw = localStorage.getItem("tenant");
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function getPriceRoundingSettings() {
+    const tenant = getTenantFromStorage();
+    const modeRaw = tenant?.price_rounding_mode;
+    const mode = typeof modeRaw === "string" ? modeRaw : "none";
+    const safeMode = PRICE_ROUNDING_MODES.has(mode) ? mode : "none";
+    const precisionRaw = Number(tenant?.price_rounding_precision);
+    const precision = precisionRaw === 0 ? 0 : 2;
+    return { mode: safeMode, precision };
+  }
+
+  function roundDisplayPrice(value) {
+    const n = Number(value || 0);
+    if (!Number.isFinite(n)) return 0;
+    const { mode, precision } = getPriceRoundingSettings();
+    if (!mode || mode === "none") return n;
+    const factor = precision > 0 ? Math.pow(10, precision) : 1;
+    if (mode === "up") return Math.ceil(n * factor) / factor;
+    if (mode === "down") return Math.floor(n * factor) / factor;
+    return Math.round(n * factor) / factor;
+  }
+
+  function orderItemsMoney(v) {
+    return money(roundDisplayPrice(Number(v || 0)));
   }
 
   function parseLocalDateParts(ts) {
@@ -3278,6 +3316,25 @@
       `;
     }).join("");
   }
+
+  function orderItemsToHtml(items, order = null) {
+    const shared = window.SharedOrderItems;
+    if (shared && typeof shared.renderReadonlyOrderItems === "function") {
+      try {
+        return String(shared.renderReadonlyOrderItems(items, {
+          money: orderItemsMoney,
+          order,
+          sortAutoAdd: true,
+          placeholderImage: "/static/img/placeholder.png",
+          surface: "admin",
+        }) || "");
+      } catch (e) {
+        console.warn("Failed to render readonly order items in admin:", e);
+      }
+    }
+    return itemsToHtml(items);
+  }
+
   function initOrderItemPhotos() {
     if (!infoEls.itemsList || !infoEls.itemsList.length) return;
     
@@ -4574,7 +4631,7 @@
     setTextAll(infoEls.orderCommentText, isCourierWorkspace ? "" : orderComment);
     setHiddenAll(infoEls.orderCommentBlock, isCourierWorkspace ? true : !orderComment);
 
-    setHtmlAll(infoEls.itemsList, itemsToHtml(order.items || []));
+    setHtmlAll(infoEls.itemsList, orderItemsToHtml(order.items || [], order));
     
     // Инициализируем листание фото после рендеринга
     setTimeout(() => {

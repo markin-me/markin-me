@@ -12488,6 +12488,23 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   align-self: end;
 }
 
+.cart-price-group{
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.cart-price-stack{
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+
 /* РќРёР¶РЅСЏСЏ СЃС‚СЂРѕРєР° РєРѕСЂР·РёРЅС‹: qty, С†РµРЅР° Рё РёРєРѕРЅРєРё РІ РѕРґРЅСѓ Р»РёРЅРёСЋ (РјРѕР±РёР»РєР° + РґРµСЃРєС‚РѕРї) */
 .shop-cart-sheet .cart-row,
 #shopCartContent .cart-row,
@@ -12542,6 +12559,23 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   color: var(--color-text);
   white-space: nowrap;
 }
+
+.cart-discount-badge{
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 20px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: var(--shop-buy, #ff7a00);
+  color: #fff;
+  font-size: 11px;
+  line-height: 1;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.cart-discount-badge.hidden{ display: none; }
 
 .shop-cart-content .shop-cart-list,
 .shop-cart-sheet .shop-cart-list{
@@ -13199,19 +13233,22 @@ body.page-shop .shop-cart-content .shop-cart-mode-header.is-condensed .shop-cart
 @media (max-width: 768px){
   body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-cart) .modal-backdrop,
   body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-benefits) .modal-backdrop,
-  body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-address) .modal-backdrop{
+  body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-address) .modal-backdrop,
+  body:has(.app-modal-body.shop-favorites-sheet-body) .modal-backdrop{
     z-index: 10018;
   }
 
   body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-cart) .shop-mobile-bottom-container,
   body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-benefits) .shop-mobile-bottom-container,
-  body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-address) .shop-mobile-bottom-container{
+  body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-address) .shop-mobile-bottom-container,
+  body:has(.app-modal-body.shop-favorites-sheet-body) .shop-mobile-bottom-container{
     z-index: 10020;
   }
 
   body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-cart) .app-modal,
   body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-benefits) .app-modal,
-  body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-address) .app-modal{
+  body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-address) .app-modal,
+  body:has(.app-modal-body.shop-favorites-sheet-body) .app-modal{
     z-index: 10019;
     top: 12px;
     bottom: 0;
@@ -19106,6 +19143,10 @@ body.page-shop .app-modal-body::after{
   background: var(--color-surface);
 }
 
+.shop-favorites-chips-wrap::before{
+  display: none;
+}
+
 .shop-favorites-chips{
   padding-left: 0;
   padding-right: 0;
@@ -19373,6 +19414,18 @@ body.page-shop .app-modal-body::after{
 }
 
 .app-modal-body.shop-cart-sheet-body .shop-cart-sheet{
+  flex: 1;
+  min-height: 0;
+}
+
+.app-modal-body.shop-favorites-sheet-body{
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-modal-body.shop-favorites-sheet-body .shop-favorites-sheet{
   flex: 1;
   min-height: 0;
 }
@@ -20237,6 +20290,23 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
   justify-self: end;
   align-self: start;
   margin-top: 6px;
+}
+
+.shop-order-details .shop-cart-items .cart-price-group,
+.shop-favorites-list .shop-cart-items .cart-price-group {
+  justify-content: flex-end;
+}
+
+.shop-order-details .shop-cart-items .cart-price,
+.shop-favorites-list .shop-cart-items .cart-price {
+  font-size: 20px;
+  line-height: 1.05;
+}
+
+.shop-order-details .shop-cart-items .cart-old,
+.shop-favorites-list .shop-cart-items .cart-old {
+  font-size: 13px;
+  line-height: 1.1;
 }
 
 .shop-order-details .shop-cart-items .cart-title,
