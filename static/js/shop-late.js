@@ -20731,6 +20731,157 @@ function renderSheetAddressList() {
     }
   }
 
+  function isPlaceholderCustomerName(rawName) {
+    const value = str(rawName || "").trim().toLowerCase();
+    return value === "клиент";
+  }
+
+  function hasCompletedCustomerName(source) {
+    const value = typeof source === "object" && source
+      ? str(source?.name || "").trim()
+      : str(source || "").trim();
+    return !!value && !isPlaceholderCustomerName(value);
+  }
+
+  function normalizeCompletedCustomerName(rawName) {
+    const value = str(rawName || "").trim();
+    return hasCompletedCustomerName(value) ? value : "";
+  }
+
+  function openRequiredCustomerNamePrompt({
+    me = null,
+    title = "Имя",
+    note = "Укажите имя, чтобы продолжить.",
+    onSuccess = null,
+  } = {}) {
+    if (!window.AppModal) return;
+
+    const wrap = document.createElement("div");
+    wrap.className = "shop-auth";
+
+    const noteEl = document.createElement("div");
+    noteEl.className = "shop-auth-text muted";
+    noteEl.textContent = note;
+    wrap.appendChild(noteEl);
+
+    const form = document.createElement("div");
+    form.className = "shop-auth-form";
+
+    const label = document.createElement("label");
+    label.className = "field-label";
+    label.textContent = "Имя";
+    form.appendChild(label);
+
+    const input = document.createElement("input");
+    input.className = "control";
+    input.type = "text";
+    input.autocomplete = "name";
+    input.placeholder = "Введите имя";
+    input.value = normalizeCompletedCustomerName(me?.name || "");
+    form.appendChild(input);
+
+    const errorEl = document.createElement("div");
+    errorEl.className = "shop-auth-error hidden";
+    form.appendChild(errorEl);
+
+    const saveBtn = document.createElement("button");
+    saveBtn.type = "button";
+    saveBtn.className = "btn btn-primary";
+    saveBtn.style.width = "100%";
+    saveBtn.textContent = "Сохранить";
+    form.appendChild(saveBtn);
+
+    wrap.appendChild(form);
+
+    const setError = (msg) => {
+      const text = str(msg || "").trim();
+      errorEl.textContent = text;
+      errorEl.classList.toggle("hidden", !text);
+      input.classList.toggle("is-invalid", !!text);
+    };
+
+    const saveName = async () => {
+      const nextName = normalizeCompletedCustomerName(input.value);
+      if (!nextName) {
+        setError("Введите имя");
+        input.focus();
+        if (typeof input.select === "function") input.select();
+        return;
+      }
+      setError("");
+      saveBtn.disabled = true;
+      saveBtn.textContent = "Сохраняем...";
+      try {
+        await apiJson("/api/public/me", { method: "PUT", body: { name: nextName } });
+        const me2 = await fetchMeSafe({ force: true });
+        if (window.AppModal?.isOpen?.()) {
+          window.AppModal.close("save");
+        }
+        if (typeof onSuccess === "function") {
+          onSuccess(me2 || { ...(me || {}), name: nextName });
+        }
+      } catch (e) {
+        console.error(e);
+        setError("Не удалось сохранить имя");
+      } finally {
+        saveBtn.disabled = false;
+        saveBtn.textContent = "Сохранить";
+      }
+    };
+
+    input.addEventListener("input", () => {
+      if (normalizeCompletedCustomerName(input.value)) {
+        setError("");
+      }
+    });
+    input.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      void saveName();
+    });
+    saveBtn.addEventListener("click", () => {
+      void saveName();
+    });
+
+    setAppModalMode("shop");
+    window.AppModal.open({
+      title,
+      content: wrap,
+      showCancel: false,
+      showSave: false,
+      closeOnBackdrop: false,
+      closeOnEsc: false,
+    });
+    const closeBtn = typeof getShopModalCloseButton === "function"
+      ? getShopModalCloseButton()
+      : document.getElementById("appModalCloseBtn");
+    if (closeBtn) closeBtn.classList.add("hidden");
+    setTimeout(() => {
+      input.focus();
+      if (typeof input.select === "function" && input.value) input.select();
+    }, 0);
+  }
+
+  async function maybePromptCustomerNameCompletionAfterSocialLogin() {
+    const url = new URL(window.location.href);
+    const hasSocialLoginFlag = url.searchParams.get("tg_login") === "1" || url.searchParams.get("max_login") === "1";
+    if (!hasSocialLoginFlag) return;
+
+    url.searchParams.delete("tg_login");
+    url.searchParams.delete("max_login");
+    const nextUrl = `${url.pathname}${url.search}${url.hash}`;
+    try {
+      window.history.replaceState(window.history.state, "", nextUrl);
+    } catch {}
+
+    const me = await fetchMeSafe({ force: true });
+    if (!me || hasCompletedCustomerName(me)) return;
+    openRequiredCustomerNamePrompt({
+      me,
+      note: "Укажите имя, чтобы завершить вход.",
+    });
+  }
+
   function getGuestChatClientIdForAuth() {
     try {
       const metaTenant = document.querySelector('meta[name="tenant_id"]');
@@ -20823,6 +20974,23 @@ function renderSheetAddressList() {
       }
     })();
 
+    const nameWrap = document.createElement("div");
+    nameWrap.style.display = "none";
+    nameWrap.style.gap = "8px";
+    const nameLabel = document.createElement("label");
+    nameLabel.className = "field-label";
+    nameLabel.textContent = "Имя";
+    const nameInput = document.createElement("input");
+    nameInput.className = "control";
+    nameInput.type = "text";
+    nameInput.autocomplete = "name";
+    nameInput.placeholder = "Введите имя";
+    nameWrap.appendChild(nameLabel);
+    nameWrap.appendChild(nameInput);
+    const nameError = document.createElement("div");
+    nameError.className = "shop-auth-error hidden";
+    nameWrap.appendChild(nameError);
+
     const bWrap = document.createElement("div");
     bWrap.style.display = "none";
     bWrap.style.gap = "16px";
@@ -20877,21 +21045,31 @@ function renderSheetAddressList() {
     loginBtn.textContent = "Войти";
     bWrap.appendChild(loginBtn);
 
+    form.appendChild(nameWrap);
     form.appendChild(bWrap);
     form.appendChild(socialRow);
     wrap.appendChild(form);
 
     let authStepMode = "birthday";
+    let authNeedsNameInput = false;
     const clearCodeInputs = () => codeInputs.forEach((cell) => { cell.value = ""; });
     const getCodeValue = () => codeInputs.map((cell) => String(cell.value || "").replace(/\D/g, "")).join("");
     const focusCodeIndex = (index) => {
       const safe = Math.max(0, Math.min(codeInputs.length - 1, Number(index) || 0));
       if (codeInputs[safe]) codeInputs[safe].focus();
     };
+    const setNameError = (msg) => {
+      nameError.textContent = msg || "";
+      nameError.classList.toggle("hidden", !msg);
+      nameInput.classList.toggle("is-invalid", !!msg);
+    };
+    const getAuthNameValue = () => normalizeCompletedCustomerName(nameInput.value);
 
     const setBirthdayStepUi = () => {
       authStepMode = "birthday";
-      note.textContent = "\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0434\u0430\u0442\u0443 \u0440\u043e\u0436\u0434\u0435\u043d\u0438\u044f (\u0434\u0434.\u043c\u043c.\u0433\u0433\u0433\u0433).";
+      note.textContent = authNeedsNameInput
+        ? "\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0438\u043c\u044f \u0438 \u0434\u0430\u0442\u0443 \u0440\u043e\u0436\u0434\u0435\u043d\u0438\u044f (\u0434\u0434.\u043c\u043c.\u0433\u0433\u0433\u0433)."
+        : "\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0434\u0430\u0442\u0443 \u0440\u043e\u0436\u0434\u0435\u043d\u0438\u044f (\u0434\u0434.\u043c\u043c.\u0433\u0433\u0433\u0433).";
       bLabel.textContent = "\u0414\u0430\u0442\u0430 \u0440\u043e\u0436\u0434\u0435\u043d\u0438\u044f";
       bday.placeholder = "\u0434\u0434.\u043c\u043c.\u0433\u0433\u0433\u0433";
       bday.inputMode = "numeric";
@@ -20903,11 +21081,15 @@ function renderSheetAddressList() {
       bdayInfoHint.classList.add("hidden");
       clearCodeInputs();
       setBirthdayError("");
+      setNameError("");
+      nameWrap.style.display = authNeedsNameInput ? "grid" : "none";
     };
 
     const setCodeStepUi = () => {
       authStepMode = "code";
-      note.textContent = "\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u043a\u043e\u0434 \u0438\u0437 \u0431\u043e\u0442\u0430.";
+      note.textContent = authNeedsNameInput
+        ? "\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0438\u043c\u044f \u0438 \u043a\u043e\u0434 \u0438\u0437 \u0431\u043e\u0442\u0430."
+        : "\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u043a\u043e\u0434 \u0438\u0437 \u0431\u043e\u0442\u0430.";
       bLabel.textContent = "\u041a\u043e\u0434 \u0438\u0437 \u0431\u043e\u0442\u0430";
       bday.placeholder = "1234";
       bday.inputMode = "numeric";
@@ -20919,12 +21101,22 @@ function renderSheetAddressList() {
       bdayInfoHint.classList.add("hidden");
       clearCodeInputs();
       setBirthdayError("");
+      setNameError("");
+      nameWrap.style.display = authNeedsNameInput ? "grid" : "none";
     };
 
-    const revealSecondStep = () => {
+    const revealSecondStep = ({ needsNameInput = false } = {}) => {
+      authNeedsNameInput = !!needsNameInput;
+      if (authStepMode === "code") setCodeStepUi();
+      else setBirthdayStepUi();
       if (nextBtn.style.display === "none") return;
       nextBtn.style.display = "none";
       bWrap.style.display = "grid";
+      if (authNeedsNameInput) {
+        nameInput.focus();
+        if (typeof nameInput.select === "function" && nameInput.value) nameInput.select();
+        return;
+      }
       if (authStepMode === "code") focusCodeIndex(0);
       else bday.focus();
     };
@@ -20936,6 +21128,8 @@ function renderSheetAddressList() {
       });
       return {
         exists: Boolean(json && json.exists),
+        hasName: Boolean(json && json.has_name),
+        needsNameInput: Boolean(json && json.needs_name_input),
         requiresMessengerLogin: Boolean(json && json.requires_messenger_login),
       };
     };
@@ -20953,6 +21147,20 @@ function renderSheetAddressList() {
       }
     });
     phone.addEventListener("focus", () => enforcePhonePrefix(phone));
+    nameInput.addEventListener("input", () => {
+      if (getAuthNameValue()) {
+        setNameError("");
+      }
+    });
+    nameInput.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      if (authStepMode === "code") {
+        focusCodeIndex(0);
+      } else {
+        bday.focus();
+      }
+    });
 
     const setBirthdayError = (msg) => {
       bdayError.textContent = msg || "";
@@ -21045,9 +21253,10 @@ function renderSheetAddressList() {
       nextBtn.disabled = true;
       try {
         const status = await checkPhoneStatus();
+        const needsNameInput = Boolean(status.needsNameInput || !status.hasName);
         if (status.requiresMessengerLogin) {
           setCodeStepUi();
-          revealSecondStep();
+          revealSecondStep({ needsNameInput });
           await apiJson("/api/public/auth/messenger-code/send", {
             method: "POST",
             body: { phone: phone.value },
@@ -21056,7 +21265,7 @@ function renderSheetAddressList() {
           return;
         }
         setBirthdayStepUi();
-        revealSecondStep();
+        revealSecondStep({ needsNameInput });
       } catch (e) {
         const err = String(e && e.message ? e.message : "");
         if (err === "MESSENGER_NOT_LINKED") alert("\u041d\u043e\u043c\u0435\u0440 \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d, \u043d\u043e \u0431\u043e\u0442 \u043d\u0435 \u043f\u0440\u0438\u0432\u044f\u0437\u0430\u043d");
@@ -21132,6 +21341,13 @@ function renderSheetAddressList() {
         alert("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0442\u0435\u043b\u0435\u0444\u043e\u043d (\u0420\u0424): +7XXXXXXXXXX");
         return;
       }
+      const authName = authNeedsNameInput ? getAuthNameValue() : "";
+      if (authNeedsNameInput && !authName) {
+        setNameError("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0438\u043c\u044f");
+        nameInput.focus();
+        if (typeof nameInput.select === "function") nameInput.select();
+        return;
+      }
       if (authStepMode === "birthday") {
         if (!isValidBirthday(bday.value)) {
           setBirthdayError("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0434\u0430\u0442\u0443 \u0440\u043e\u0436\u0434\u0435\u043d\u0438\u044f \u0432 \u0444\u043e\u0440\u043c\u0430\u0442\u0435 \u0434\u0434.\u043c\u043c.\u0433\u0433\u0433\u0433");
@@ -21155,6 +21371,7 @@ function renderSheetAddressList() {
           json = await apiJson("/api/public/auth/login", {
             method: "POST",
             body: {
+              name: authName || null,
               phone: phone.value,
               birthday: str(bday.value).trim(),
               chat_guest_client_id: guestChatClientId,
@@ -21165,6 +21382,7 @@ function renderSheetAddressList() {
           json = await apiJson("/api/public/auth/messenger-code/verify", {
             method: "POST",
             body: {
+              name: authName || null,
               phone: phone.value,
               code: getCodeValue().slice(0, 4),
               chat_guest_client_id: guestChatClientId,
@@ -21182,7 +21400,17 @@ function renderSheetAddressList() {
         const me = json.customer || await fetchMeSafe();
         await refreshAddressState({ force: true });
         if (me) {
-          if (typeof onSuccess === "function") onSuccess(me);
+          if (hasCompletedCustomerName(me)) {
+            if (typeof onSuccess === "function") onSuccess(me);
+          } else {
+            openRequiredCustomerNamePrompt({
+              me,
+              note: "\u0423\u043a\u0430\u0436\u0438\u0442\u0435 \u0438\u043c\u044f, \u0447\u0442\u043e\u0431\u044b \u0437\u0430\u0432\u0435\u0440\u0448\u0438\u0442\u044c \u0432\u0445\u043e\u0434.",
+              onSuccess: (me2) => {
+                if (typeof onSuccess === "function") onSuccess(me2 || me);
+              },
+            });
+          }
         } else {
           alert("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0432\u043e\u0439\u0442\u0438");
         }
@@ -21194,6 +21422,11 @@ function renderSheetAddressList() {
           setBirthdayError("");
           if (typeof showToast === "function") showToast("\u041d\u0435\u0432\u0435\u0440\u043d\u0430\u044f \u0434\u0430\u0442\u0430 \u0440\u043e\u0436\u0434\u0435\u043d\u0438\u044f");
           else alert("\u041d\u0435\u0432\u0435\u0440\u043d\u0430\u044f \u0434\u0430\u0442\u0430 \u0440\u043e\u0436\u0434\u0435\u043d\u0438\u044f");
+        }
+        else if (err === "NAME_REQUIRED") {
+          setNameError("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0438\u043c\u044f");
+          nameInput.focus();
+          if (typeof nameInput.select === "function") nameInput.select();
         }
         else if (err === "MESSENGER_LOGIN_REQUIRED") alert("\u0414\u043b\u044f \u044d\u0442\u043e\u0433\u043e \u043d\u043e\u043c\u0435\u0440\u0430 \u0434\u043e\u0441\u0442\u0443\u043f\u0435\u043d \u0442\u043e\u043b\u044c\u043a\u043e \u0432\u0445\u043e\u0434 \u0447\u0435\u0440\u0435\u0437 Telegram \u0438\u043b\u0438 MAX");
         else if (err === "CODE_INVALID") alert("\u041d\u0435\u0432\u0435\u0440\u043d\u044b\u0439 \u043a\u043e\u0434");
@@ -26350,7 +26583,17 @@ function renderSheetAddressList() {
 
   async function requireAuthForCheckout({ isSheet }) {
     const me = await fetchMeSafe();
-    if (me) return true;
+    if (me) {
+      if (hasCompletedCustomerName(me)) return true;
+      openRequiredCustomerNamePrompt({
+        me,
+        note: "Укажите имя, чтобы оформить заказ.",
+        onSuccess: () => {
+          void startCheckoutFlow({ isSheet: !!isSheet, forceAddressRefresh: true });
+        },
+      });
+      return false;
+    }
 
     if (isSheet) {
       openLoginSheet({
@@ -27865,20 +28108,12 @@ function setBottomNavActive(tab) {
     wrap.className = "shop-checkout";
 
 
-    const isPlaceholderCustomerName = (rawName) => {
-      const value = str(rawName || "").trim().toLowerCase();
-      return value === "клиент";
-    };
-    // Имя обязательно для новых клиентов после входа, даже если пользователь уже авторизован.
-    const needsNameCompletion = !!me && (
-      !str(me?.name || "").trim() || isPlaceholderCustomerName(me?.name)
-    );
-    const showMobileNameInput = isMobileCheckout && needsNameCompletion;
-    const showDesktopFooterNameInput = isDesktopCheckout && needsNameCompletion;
-    const showInlineNameInCheckoutForm = !needsNameCompletion;
-    // Поля имя и телефон для неавторизованных; для авторизованных без имени — только имя.
+    const showMobileNameInput = false;
+    const showDesktopFooterNameInput = false;
+    const showInlineNameInCheckoutForm = false;
+    const needsNameCompletion = false;
     let name = { value: me ? str(me.name || "") : "" };
-    let phone = { value: me ? (me.phone || "") : "" };
+    let phone = { value: me ? str(me.phone || "") : str(draft.customer_phone || "") };
 
     if (!me || needsNameCompletion) {
       const emptyNote = document.createElement("div");
@@ -30567,7 +30802,7 @@ function setBottomNavActive(tab) {
           saveCheckoutDraft({
             promo_code: str(promo.value).trim() || null,
             selected_discount_id: selectedDiscount.value,
-            customer_name: str(name.value).trim(),
+            customer_name: null,
             customer_phone: str(phone.value).trim(),
             method_code: methodCode,
             method_user_selected: Boolean(draft.method_user_selected),
@@ -30600,7 +30835,7 @@ function setBottomNavActive(tab) {
         saveCheckoutDraft({
           promo_code: str(promo.value).trim() || null,
           selected_discount_id: selectedDiscount.value,
-          customer_name: str(name.value).trim(),
+          customer_name: null,
           customer_phone: str(phone.value).trim(),
           method_code: methodCode,
           method_user_selected: Boolean(draft.method_user_selected),
@@ -30774,7 +31009,7 @@ function setBottomNavActive(tab) {
         const resolvedItems = cartItemsResolved();
         const totals = computeCartTotals(resolvedItems);
       const payload = {
-        customer_name: str(name.value).trim(),
+        customer_name: null,
         customer_phone: str(phone.value).trim(),
         promo_code: str(promo.value).trim() || null,
         selected_discount_id: selectedDiscount.value,
@@ -30867,52 +31102,26 @@ function setBottomNavActive(tab) {
       const isAuthed = !!(getCustomerToken() && me);
       const requireClientData = isMethodClientDataRequired(payload.method_code);
 
-      if (!requireClientData) {
-        if (!str(payload.customer_name).trim() || isPlaceholderCustomerName(payload.customer_name)) {
-          payload.customer_name = null;
-        }
-        if (!str(payload.customer_phone).trim()) {
-          payload.customer_phone = null;
-        }
-      }
-
-      if (requireClientData && (!payload.customer_name || isPlaceholderCustomerName(payload.customer_name))) {
-        if (typeof showToast === "function") showToast("Введите имя");
-        if (mobileNameInput && typeof mobileNameInput.classList?.add === "function") {
-          mobileNameInput.classList.add("is-invalid");
-        }
-        if (desktopFooterNameInput && typeof desktopFooterNameInput.classList?.add === "function") {
-          desktopFooterNameInput.classList.add("is-invalid");
-        }
-        if (name && typeof name.classList?.add === "function") {
-          name.classList.add("is-invalid");
-        }
-        const nameFocusTarget = showMobileNameInput
-          ? mobileNameInput
-          : (showDesktopFooterNameInput ? desktopFooterNameInput : name);
-        if (nameFocusTarget && typeof nameFocusTarget.focus === "function") {
-          nameFocusTarget.focus();
-          if (typeof nameFocusTarget.select === "function") nameFocusTarget.select();
-          if (typeof nameFocusTarget.scrollIntoView === "function") {
-            nameFocusTarget.scrollIntoView({ block: "center", behavior: "smooth" });
-          }
-        }
+      if (!isAuthed) {
+        const authorized = await requireAuthForCheckout({ isSheet: !!isSheet });
+        if (!authorized) return;
         return;
       }
 
-      if (!isAuthed) {
-        const rawPhone = str(payload.customer_phone).trim();
-        const hasPhone = !!rawPhone;
-        const normPhone = hasPhone ? normalizePhone(rawPhone) : null;
-        if ((requireClientData || hasPhone) && (!normPhone || normPhone.length !== 11 || !normPhone.startsWith("7"))) {
-          alert("Введите телефон (РФ): +7XXXXXXXXXX");
-          return;
-        }
-        if (normPhone) {
-          payload.customer_phone = `+${normPhone}`;
-        } else if (!requireClientData) {
-          payload.customer_phone = null;
-        }
+      if (!hasCompletedCustomerName(me)) {
+        openRequiredCustomerNamePrompt({
+          me,
+          note: "Укажите имя, чтобы оформить заказ.",
+          onSuccess: () => {
+            void startCheckoutFlow({ isSheet: !!isSheet, forceAddressRefresh: false });
+          },
+        });
+        return;
+      }
+
+      payload.customer_name = null;
+      if (!requireClientData && !str(payload.customer_phone).trim()) {
+        payload.customer_phone = null;
       }
 
       if (payload.method_code === "delivery" && deliveryRules.minOrder > 0 && orderTotal < deliveryRules.minOrder) {
@@ -30956,20 +31165,10 @@ function setBottomNavActive(tab) {
 
       setCheckoutSubmitting(true);
 
-      if (isAuthed && needsNameCompletion && requireClientData && payload.customer_name) {
-        try {
-          await apiJson("/api/public/me", { method: "PUT", body: { name: payload.customer_name } });
-        } catch (e) {
-          console.warn("Failed to persist customer name before checkout submit:", e);
-        }
-      }
-
-      
-
       saveCheckoutDraft({
         promo_code: payload.promo_code,
         selected_discount_id: payload.selected_discount_id,
-        customer_name: payload.customer_name,
+        customer_name: null,
         customer_phone: payload.customer_phone,
         method_code: payload.method_code,
         delivery_address: payload.delivery_address,
@@ -31149,6 +31348,9 @@ function setBottomNavActive(tab) {
 
 function initShopLate() {
   try {
+    Promise.resolve(maybePromptCustomerNameCompletionAfterSocialLogin()).catch((e) => {
+      console.warn("maybePromptCustomerNameCompletionAfterSocialLogin failed:", e);
+    });
     prewarmCartPricingContext("init");
     runWhenIdle(async () => {
       try {

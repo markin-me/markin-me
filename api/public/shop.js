@@ -1635,6 +1635,22 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     return `${yyyy}-${MM}-${DD}`;
   }
 
+  function isPlaceholderCustomerNameValue(rawName) {
+    const value = str(rawName).trim().toLowerCase();
+    return value === 'клиент';
+  }
+
+  function normalizeRequiredCustomerName(rawName) {
+    const value = helpers.strOrNull(rawName);
+    if (!value) return null;
+    if (isPlaceholderCustomerNameValue(value)) return null;
+    return value;
+  }
+
+  function customerNeedsNameCompletion(source) {
+    return !normalizeRequiredCustomerName(source?.name ?? source);
+  }
+
   function makeToken32() {
     // session/public id РІР‚вЂњ 32 hex or uuid without dashes
     if (crypto.randomUUID) return crypto.randomUUID().replaceAll('-', '');
@@ -2405,14 +2421,20 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       }
 
       const [rows] = await db.query(
-        `SELECT id, phone_verified_at
+        `SELECT id, phone_verified_at, name
          FROM cust_customers
          WHERE tenant_id=? AND phone=?
          LIMIT 1`,
         [tenantId, phone]
       );
       if (!rows.length) {
-        return res.json({ ok: true, exists: false, requires_messenger_login: false });
+        return res.json({
+          ok: true,
+          exists: false,
+          has_name: false,
+          needs_name_input: true,
+          requires_messenger_login: false,
+        });
       }
 
       const row = rows[0];
@@ -2429,6 +2451,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       return res.json({
         ok: true,
         exists: true,
+        has_name: !customerNeedsNameCompletion(row),
+        needs_name_input: customerNeedsNameCompletion(row),
         requires_messenger_login: Boolean(row.phone_verified_at) && hasMessengerLogin,
       });
     } catch (e) {
@@ -2529,12 +2553,13 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
   });
 
   // POST /api/public/auth/messenger-code/verify
-  // body: { phone, code }
+  // body: { phone, code, name? }
   router.post('/auth/messenger-code/verify', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
       const phone = helpers.normalizePhone(str(req.body.phone));
       const code = String(req.body?.code || '').replace(/\D/g, '').slice(0, 4);
+      const name = normalizeRequiredCustomerName(req.body?.name);
       const guestChatClientId = readIncomingGuestChatClientId(req);
       if (!phone || phone.length < 10) return res.status(400).json({ ok: false, error: 'PHONE_REQUIRED' });
       if (code.length !== 4) return res.status(400).json({ ok: false, error: 'CODE_INVALID' });
@@ -2560,8 +2585,21 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       if (String(row.phone_verify_code) !== code) {
         return res.status(400).json({ ok: false, error: 'CODE_INVALID' });
       }
+      if (customerNeedsNameCompletion(row) && !name) {
+        return res.status(400).json({ ok: false, error: 'NAME_REQUIRED' });
+      }
 
       const customerId = Number(row.id);
+      if (customerNeedsNameCompletion(row) && name) {
+        await db.query(
+          `UPDATE cust_customers
+           SET name=?, updated_at=NOW()
+           WHERE tenant_id=? AND id=?
+           LIMIT 1`,
+          [name, tenantId, customerId]
+        );
+        row.name = name;
+      }
       const token = makeToken32();
       await dualWriteSession(db, {
         tenantId,
@@ -2600,13 +2638,14 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
   });
 
   // POST /api/public/auth/login
-  // body: { phone, birthday } ; birthday = dd.mm.yyyy
+  // body: { phone, birthday, name? } ; birthday = dd.mm.yyyy
   router.post('/auth/login', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
 
       const phoneRaw = str(req.body.phone);
       const phone = helpers.normalizePhone(phoneRaw);
+      const name = normalizeRequiredCustomerName(req.body?.name);
       const guestChatClientId = readIncomingGuestChatClientId(req);
 
       if (!phone || phone.length < 10) {
@@ -2632,12 +2671,15 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       let customerId = null;
 
       if (!ex.length) {
+        if (!name) {
+          return res.status(400).json({ ok: false, error: 'NAME_REQUIRED' });
+        }
         // РЎРѓР С•Р В·Р Т‘Р В°РЎвЂР С Р Р…Р С•Р Р†Р С•Р С–Р С• Р С”Р В»Р С‘Р ВµР Р…РЎвЂљР В°
         const [ins] = await db.query(
           `INSERT INTO cust_customers
            (tenant_id, name, phone, birthday, is_active, registration_date)
            VALUES (?,?,?,?,1, CURDATE())`,
-          [tenantId, '\u041a\u043b\u0438\u0435\u043d\u0442', phone, birthday]
+          [tenantId, name, phone, birthday]
         );
         customerId = Number(ins.insertId);
       } else {
@@ -2651,6 +2693,10 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         }
 
         customerId = Number(c.id);
+        const shouldPersistName = customerNeedsNameCompletion(c);
+        if (shouldPersistName && !name) {
+          return res.status(400).json({ ok: false, error: 'NAME_REQUIRED' });
+        }
 
         // Р ВµРЎРѓР В»Р С‘ birthday РЎС“Р В¶Р Вµ Р ВµРЎРѓРЎвЂљРЎРЉ РІР‚вЂќ Р С—РЎР‚Р С•Р Р†Р ВµРЎР‚РЎРЏР ВµР С
         if (c.birthday && String(c.birthday) !== String(birthday)) {
@@ -2662,6 +2708,15 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
           await db.query(
             `UPDATE cust_customers SET birthday=? WHERE tenant_id=? AND id=?`,
             [birthday, tenantId, customerId]
+          );
+        }
+        if (shouldPersistName && name) {
+          await db.query(
+            `UPDATE cust_customers
+             SET name=?, updated_at=NOW()
+             WHERE tenant_id=? AND id=?
+             LIMIT 1`,
+            [name, tenantId, customerId]
           );
         }
       }
@@ -3883,7 +3938,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const customer = await getCustomerByToken(tenantId, token);
       if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
 
-      const name = helpers.strOrNull(req.body.name);
+      const name = normalizeRequiredCustomerName(req.body.name);
       if (!name) return res.status(400).json({ ok: false, error: 'NAME_REQUIRED' });
 
       await db.query(
