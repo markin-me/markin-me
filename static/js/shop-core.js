@@ -870,6 +870,7 @@
   let autoAddLoaded = false;
   let upsellLoadPromise = null;
   let upsellLoaded = false;
+  let cartEnhancersDataLoadPromise = null;
   let cartEnhancersPreloadPromise = null;
   let cartEnhancersRefreshPromise = null;
   let cartEnhancersLastRefreshSignature = "";
@@ -2163,7 +2164,8 @@
           }
           const productId = Number(item?.product_id);
           const qty = Math.max(0, Number(item?.qty || 0));
-          if (!Number.isFinite(productId) || qty <= 0) return null;
+          const isDormantAutoAdd = Number(item?.auto_add || 0) === 1 && qty <= 0;
+          if (!Number.isFinite(productId) || (qty <= 0 && !isDormantAutoAdd)) return null;
           const optionItems = Array.isArray(item?.option_items) ? item.option_items : [];
           const optionIds = Array.isArray(item?.option_item_ids) ? item.option_item_ids : optionItems.map((opt) => opt.id);
           const normalizedOptionIds = optionIds.map(Number).filter(Number.isFinite);
@@ -2420,6 +2422,7 @@
         const defaultQty = Math.max(0, Number(rule.default_qty || 0));
         const maxQty = rule.max_qty != null ? Math.max(0, Number(rule.max_qty)) : null;
         const desired = Math.max(minQty, defaultQty);
+        const keepDormantZeroQty = Number(item?.auto_add || 0) === 1 && Math.max(0, Number(item?.qty || 0)) <= 0;
 
         if (!item && desired > 0) {
           item = {
@@ -2444,7 +2447,9 @@
         if (!item) return;
 
         let nextQty = Math.max(0, Number(item.qty || 0));
-        if (!allowQty) {
+        if (keepDormantZeroQty) {
+          nextQty = 0;
+        } else if (!allowQty) {
           nextQty = desired;
         } else {
           if (minQty > 0 && nextQty < minQty) nextQty = minQty;
@@ -2456,7 +2461,7 @@
           item.qty = nextQty;
           changed = true;
         }
-        if (nextQty <= 0) {
+        if (nextQty <= 0 && Number(item.auto_add || 0) !== 1) {
           state.cart = state.cart.filter((x) => x !== item && x.key !== key);
           changed = true;
         }
@@ -2492,7 +2497,12 @@
             entry.item.qty = nextQty;
             overflow -= reduceBy;
             changed = true;
-            if (nextQty <= 0 && minQty <= 0 && Number(entry.rule.default_qty || 0) <= 0) {
+            if (
+              nextQty <= 0 &&
+              minQty <= 0 &&
+              Number(entry.rule.default_qty || 0) <= 0 &&
+              Number(entry.item?.auto_add || 0) !== 1
+            ) {
               state.cart = state.cart.filter((x) => x.key !== entry.key);
             }
           });
@@ -2919,11 +2929,20 @@
     return state.cart.reduce((sum, item) => sum + Number(item.qty || 0), 0);
   }
 
+  function isDormantAutoAddCartItem(item) {
+    if (!item || item.type === "combo") return false;
+    if (Number(item?.auto_add || 0) !== 1) return false;
+    const pid = Number(item?.product_id || item?.id || 0);
+    if (!Number.isFinite(pid) || pid <= 0) return false;
+    return Math.max(0, Number(item?.qty || 0)) <= 0;
+  }
+
   function getCartItemByKey(key) {
     return state.cart.find((item) => item.key === key) || null;
   }
 
-  function cartItemsResolved(sourceCart = state.cart) {
+  function cartItemsResolved(sourceCart = state.cart, opts = {}) {
+    const includeDormantAutoAdd = opts?.includeDormantAutoAdd === true;
     const items = [];
     const safeCart = Array.isArray(sourceCart) ? sourceCart : [];
     for (const item of safeCart) {
@@ -2946,8 +2965,9 @@
         continue;
       }
       const pid = Number(item.product_id);
-      const qty = Number(item.qty || 0);
-      if (!qty || !Number.isFinite(pid)) continue;
+      const qty = Math.max(0, Number(item.qty || 0));
+      const isDormantAutoAdd = includeDormantAutoAdd && isDormantAutoAddCartItem(item);
+      if ((!qty && !isDormantAutoAdd) || !Number.isFinite(pid)) continue;
       const p = state.productCache.get(pid);
       if (!p) continue;
       const variantGroupId = toFiniteNumberOrNull(item.variant_group_id);
@@ -4327,6 +4347,21 @@
         }
       })
     );
+  }
+
+  function mergeProductIntoCache(product, stockSource = "product_cache_merge") {
+    if (!product || typeof product !== "object") return null;
+    const pid = Number(product.id || 0);
+    if (!Number.isFinite(pid) || pid <= 0) return null;
+    const current = state.productCache.get(pid);
+    const merged = current && typeof current === "object"
+      ? { ...current, ...product }
+      : { ...product };
+    if (!Array.isArray(merged.photos)) merged.photos = safePhotos(merged);
+    cacheStockFromProductPayload(merged, stockSource);
+    merged.is_available = isProductAvailable(merged);
+    state.productCache.set(pid, merged);
+    return merged;
   }
 
   function loadFavs() {
@@ -6132,6 +6167,9 @@ function setSheetHeaderMode(
     backBtn.innerHTML = `<i class="fas fa-arrow-left"></i>`;
     header.prepend(backBtn);
   }
+  if (backBtn.parentElement !== header) {
+    header.prepend(backBtn);
+  }
 
   // ensure fav btn (right)
   let favBtn = header.querySelector("#shopSheetFavBtn");
@@ -6149,6 +6187,8 @@ function setSheetHeaderMode(
   backBtn.onclick = () => {
     if (typeof onBack === "function") onBack();
   };
+  backBtn.setAttribute("aria-label", "Назад");
+  backBtn.innerHTML = `<i class="fas fa-arrow-left"></i>`;
 
   const isProduct = mode === "product";
   const isOrder = mode === "order";
@@ -9534,8 +9574,9 @@ async function initAddresses() {
 
   function renderCartInto(listEl, totalEl, emptyPlaceholderEl, opts = {}) {
     const bindInteractive = opts?.bindInteractive !== false;
-    const items = sortCartItemsForDisplay(cartItemsResolved());
-    const comboIdsForPrefetch = items
+    const activeItems = cartItemsResolved();
+    const items = sortCartItemsForDisplay(cartItemsResolved(state.cart, { includeDormantAutoAdd: true }));
+    const comboIdsForPrefetch = activeItems
       .filter((item) => item && item.type === "combo")
       .map((item) => Number(item.combo_id || 0))
       .filter((id) => Number.isFinite(id) && id > 0);
@@ -9558,15 +9599,15 @@ async function initAddresses() {
         bindCartItemsSectionControls(listEl);
         bindCartModeHeaderSticky(listEl);
       }
-      return { items, total: 0 };
+      return { items: activeItems, total: 0, displayItems: items };
     }
 
     if (emptyPlaceholderEl) emptyPlaceholderEl.classList.add("hidden");
 
     let total = 0;
     const totals = {
-      nonAutoTotal: computeNonAutoTotal(items),
-      autoEligibleTotal: computeAutoEligibleTotal(items),
+      nonAutoTotal: computeNonAutoTotal(activeItems),
+      autoEligibleTotal: computeAutoEligibleTotal(activeItems),
     };
     const itemsSection = listEl ? document.createElement("section") : null;
     let itemsSectionBody = null;
@@ -9725,7 +9766,13 @@ async function initAddresses() {
           minusEnabled: qty > 0,
           plusEnabled: !comboPlusBlockedByLimit,
         });
-        const comboPriceState = createCartPriceGroup(lineTotal, lineTotalOld);
+        const comboInitialLineState = getImmediateShopCartLineState(key, getImmediateShopCartPricingSnapshot());
+        const comboPriceState = comboInitialLineState
+          ? createCartPriceGroup(
+              Number(comboInitialLineState.currentTotal || 0),
+              Number(comboInitialLineState.originalTotal || 0)
+            )
+          : createCartPriceGroup(lineTotal, lineTotalOld);
         const desktopActions = document.createElement("div");
         desktopActions.className = "cart-desktop-actions";
         const desktopFavBtn = document.createElement("button");
@@ -9762,10 +9809,16 @@ async function initAddresses() {
           t.textContent = `${newQty} x ${comboTitleText}`;
           // Минус не блокируем на qty = 1 — он должен работать как удаление
           btnMinus.classList.toggle("is-disabled", newQty <= 0);
-          const nextLineTotal = roundPrice(unitPrice * newQty);
-          const originalUnit = Number(cartItem?.unit_price_before_discount || 0) || unitPrice;
-          const nextOriginalLineTotal = roundPrice(originalUnit * newQty);
-          comboPriceState.sync(nextLineTotal, nextOriginalLineTotal);
+          const pricingSnapshot = getImmediateShopCartPricingSnapshot();
+          const currentLineState = getImmediateShopCartLineState(key, pricingSnapshot);
+          if (currentLineState && typeof window.setShopCartPriceGroupDomState === "function") {
+            window.setShopCartPriceGroupDomState(comboPriceState.wrap, currentLineState);
+          } else {
+            const nextLineTotal = roundPrice(unitPrice * newQty);
+            const originalUnit = Number(cartItem?.unit_price_before_discount || 0) || unitPrice;
+            const nextOriginalLineTotal = roundPrice(originalUnit * newQty);
+            comboPriceState.sync(nextLineTotal, nextOriginalLineTotal);
+          }
           const plusGate = canIncreaseComboCartItemBeforeApply(key, +1, {
             showToastOnOut: false,
           });
@@ -9789,9 +9842,7 @@ async function initAddresses() {
           cartItem.qty = Math.max(1, Number(cartItem.qty || 0) + 1);
           saveCart();
           updateComboQty();
-          const { total: newTotal } = computeCartTotals(cartItemsResolved());
-          if (totalEl) totalEl.textContent = money(newTotal);
-          updateMobileDeliveryProgress();
+          updateCartTotalsUiOnly();
           queueCartStockRecheck(previousCartSnapshot, {
             toastMessage: "Больше нет в наличии",
           });
@@ -9808,9 +9859,7 @@ async function initAddresses() {
             saveCart();
             updateComboQty();
           }
-          const { total: newTotal } = computeCartTotals(cartItemsResolved());
-          if (totalEl) totalEl.textContent = money(newTotal);
-          updateMobileDeliveryProgress();
+          updateCartTotalsUiOnly();
         });
         q.appendChild(pill);
         const bottomRow = document.createElement("div");
@@ -9941,13 +9990,7 @@ async function initAddresses() {
       const t = document.createElement("div");
       t.className = "cart-title";
       const productNameText = str(product?.name || item?.name || "Товар");
-      const primaryVariantLine = buildVariantDisplayLineForOrder(
-        variantLabel,
-        item?.variant_unit || item?.variantUnit || "",
-        item?.variant_group_title || ""
-      );
-      const titleBase = [primaryVariantLine, productNameText].filter(Boolean).join(" ").trim() || productNameText;
-      const titleText = isGiftReward ? `${titleBase} (Подарок)` : titleBase;
+      const titleText = isGiftReward ? `${productNameText} (Подарок)` : productNameText;
       t.textContent = `${qty} x ${titleText}`;
       mid.appendChild(t);
 
@@ -9988,8 +10031,15 @@ async function initAddresses() {
         });
       }
 
-      if (pricing.isAuto && pricing.freeQty > 0) {
-        optionParts.push(`Бесплатно: ${pricing.freeQty} шт.`);
+      const autoFreeQtyHint = pricing.isAuto
+        ? Math.max(
+            0,
+            Number(pricing.freeQty || 0),
+            Number(pricing.lineTotal || 0) <= 0 && qty > 0 ? qty : 0
+          )
+        : 0;
+      if (autoFreeQtyHint > 0) {
+        optionParts.push(`Бесплатно: ${autoFreeQtyHint} шт.`);
       }
       
       // ?????????? ??? ????????
@@ -10029,6 +10079,7 @@ async function initAddresses() {
         minusEnabled: qty > 0 && allowQty,
         plusEnabled: allowQty && !plusBlockedByLimit,
       });
+      pill.classList.toggle("is-empty", qty <= 0);
       let qtyControlNode = pill;
       if (isGiftReward) {
         const fixedQty = document.createElement("div");
@@ -10046,14 +10097,19 @@ async function initAddresses() {
         if (!row.isConnected) return 0;
         const cartItem = getCartItemByKey(key);
         const newQty = Math.max(0, Number(cartItem?.qty || 0));
-        if (newQty <= 0) return 0;
 
         center.textContent = String(newQty);
         t.textContent = `${newQty} x ${titleText}`;
 
         const resolvedItems = cartItemsResolved();
-        const currentItemResolved = resolvedItems.find((x) => String(x?.key || "") === String(key || ""));
-        if (currentItemResolved) {
+        const displayItems = cartItemsResolved(state.cart, { includeDormantAutoAdd: true });
+        const pricingSnapshot = getImmediateShopCartPricingSnapshot();
+        const currentLineState = getImmediateShopCartLineState(key, pricingSnapshot);
+        if (currentLineState && typeof window.setShopCartPriceGroupDomState === "function") {
+          window.setShopCartPriceGroupDomState(priceState.wrap, currentLineState);
+        }
+        const currentItemResolved = displayItems.find((x) => String(x?.key || "") === String(key || ""));
+        if (!currentLineState && currentItemResolved) {
           const currentTotals = {
             nonAutoTotal: computeNonAutoTotal(resolvedItems),
             autoEligibleTotal: computeAutoEligibleTotal(resolvedItems),
@@ -10084,6 +10140,7 @@ async function initAddresses() {
         const minusDisabledNow = !allowQty || newQty <= 0;
         btnMinus.disabled = minusDisabledNow;
         btnMinus.classList.toggle("is-disabled", minusDisabledNow);
+        pill.classList.toggle("is-empty", newQty <= 0);
         return newQty;
       };
 
@@ -10098,6 +10155,12 @@ async function initAddresses() {
         if (!allowQty || btnMinus.disabled || btnMinus.classList.contains("is-disabled")) return;
         const currentQty = Number(getCartItemByKey(key)?.qty || 0);
         if (currentQty <= 1) {
+          const currentItem = getCartItemByKey(key);
+          if (Number(currentItem?.auto_add || 0) === 1) {
+            await changeQty(product.id, -1, null, key, { skipCartRerender: true });
+            syncRegularRowQtyUi();
+            return;
+          }
           deleteCartItemWithAnimation(swipeContainer, product.id, key);
           return;
         }
@@ -10118,7 +10181,13 @@ async function initAddresses() {
       const hasDiscount = pricing.discountAmount > 0;
       const showOld = !pricing.isAuto && (hasDiscount || (oldUnit > 0 && oldUnit > pricing.unitPrice));
       const originalLineTotal = hasDiscount ? (pricing.lineTotal + pricing.discountAmount) : (oldUnit * qty);
-      const priceState = createCartPriceGroup(pricing.lineTotal, showOld ? originalLineTotal : 0);
+      const initialLineState = getImmediateShopCartLineState(key, getImmediateShopCartPricingSnapshot());
+      const priceState = initialLineState
+        ? createCartPriceGroup(
+            Number(initialLineState.currentTotal || 0),
+            Number(initialLineState.originalTotal || 0)
+          )
+        : createCartPriceGroup(pricing.lineTotal, showOld ? originalLineTotal : 0);
 
       // ?????????? ?????? ????????
       const desktopActions = document.createElement("div");
@@ -10336,7 +10405,7 @@ async function initAddresses() {
         Promise.resolve(window.syncShopCartBenefitsServiceUi(listEl)).catch(() => {});
       }
     }
-    return { items, total };
+    return { items: activeItems, total, displayItems: items };
   }
 
   // ========== ?????-?????????? ??? ??????? ==========
@@ -11116,10 +11185,47 @@ function updateCartBadge() {
     return Array.from(ids).sort((a, b) => a - b).join(",");
   }
 
+  function getImmediateShopCartPricingSnapshot() {
+    if (typeof window.getShopCartPricingSnapshot !== "function") return null;
+    try {
+      const snapshot = window.getShopCartPricingSnapshot();
+      return snapshot && typeof snapshot === "object" ? snapshot : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function getImmediateShopCartLineState(cartKey, snapshot = null) {
+    const normalizedKey = String(cartKey || "").trim();
+    if (!normalizedKey) return null;
+    const effectiveSnapshot = snapshot && typeof snapshot === "object"
+      ? snapshot
+      : getImmediateShopCartPricingSnapshot();
+    const lineStates = Array.isArray(effectiveSnapshot?.lineStates)
+      ? effectiveSnapshot.lineStates
+      : [];
+    return lineStates.find((entry) => String(entry?.key || "").trim() === normalizedKey) || null;
+  }
+
+  function syncImmediateCartPricingUi(reason = "") {
+    const normalizedReason = String(reason || "").trim() || "cart.fastUpdate";
+    if (typeof window.syncShopCartPricingSummaryUi === "function") {
+      Promise.resolve(window.syncShopCartPricingSummaryUi()).catch(() => {});
+    } else if (typeof updateMobileDeliveryProgress === "function") {
+      updateMobileDeliveryProgress();
+    }
+    if (typeof window.handleShopBenefitsOrderStateChange === "function") {
+      window.handleShopBenefitsOrderStateChange(normalizedReason);
+    }
+  }
+
   function updateCartTotalsUiOnly() {
     const items = cartItemsResolved();
     const totals = computeCartTotals(items);
-    const total = Number(totals.total || 0);
+    const pricingSnapshot = getImmediateShopCartPricingSnapshot();
+    const total = pricingSnapshot && pricingSnapshot.visible !== false
+      ? roundPrice(Number(pricingSnapshot.total || 0))
+      : Number(totals.total || 0);
     if (elCartTotal) elCartTotal.textContent = money(total);
 
     syncCartFooterVisibilityForCartMode(items.length);
@@ -11143,7 +11249,7 @@ function updateCartBadge() {
       }
     }
 
-    updateMobileDeliveryProgress();
+    syncImmediateCartPricingUi("updateCartTotalsUiOnly");
     return { items, total };
   }
 
@@ -11294,11 +11400,10 @@ function updateCartBadge() {
       nextQty = Math.max(0, prevQty + qtyDelta);
       item.qty = nextQty;
       if (nextQty <= 0) {
-        if (prevQty > 0 && Number(item.auto_add || 0) === 1) {
-          markAutoAddDismissedByProduct(pid);
-        }
         clearCartQtyHardLimit(targetKey);
-        state.cart = state.cart.filter((x) => x.key !== targetKey);
+        if (Number(item.auto_add || 0) !== 1) {
+          state.cart = state.cart.filter((x) => x.key !== targetKey);
+        }
       }
     }
 
@@ -11552,13 +11657,9 @@ function updateCartBadge() {
         }
         const p = it.product;
         if (!p) return;
-        if (!Array.isArray(p.photos)) p.photos = safePhotos(p);
-        cacheStockFromProductPayload(p, "auto_add_product");
-        p.is_available = isProductAvailable(p);
-        // Не перезаписываем продукт, если он уже есть в кэше с более полными данными
-        const pid = Number(p.id);
-        if (!state.productCache.has(pid)) {
-          state.productCache.set(pid, p);
+        const mergedProduct = mergeProductIntoCache(p, "auto_add_product");
+        if (mergedProduct) {
+          it.product = mergedProduct;
         }
       });
       autoAddLoaded = true;
@@ -11583,6 +11684,17 @@ function updateCartBadge() {
     try {
       const json = await apiJson(`/api/public/cart-upsell`);
       state.upsellProducts = Array.isArray(json.data) ? json.data : [];
+      const productsById = new Map();
+      state.upsellProducts.forEach((product) => {
+        if (!product || typeof product !== "object") return;
+        const pid = Number(product.id || 0);
+        if (!Number.isFinite(pid) || pid <= 0) return;
+        const mergedProduct = mergeProductIntoCache(product, "cart_upsell_product") || product;
+        productsById.set(pid, mergedProduct);
+      });
+      if (productsById.size) {
+        void warmUpsellDefaultConfigBatch(Array.from(productsById.keys()), productsById).catch(() => {});
+      }
       upsellLoaded = true;
     } catch (e) {
       console.warn("Failed to load upsell products", e);
@@ -11593,6 +11705,46 @@ function updateCartBadge() {
       }
     })();
     return upsellLoadPromise;
+  }
+
+  function buildImmediateUpsellDefaults(product, cacheEntry = null) {
+    const cachedData = cacheEntry && cacheEntry.data && typeof cacheEntry.data === "object"
+      ? cacheEntry.data
+      : null;
+    const defaultVariant = product?.default_variant && typeof product.default_variant === "object"
+      ? product.default_variant
+      : null;
+    const baseUnitPrice = Number(
+      cachedData?.variant_unit_price
+      ?? defaultVariant?.variant_unit_price
+      ?? product?.display_price
+      ?? product?.price
+      ?? 0
+    );
+    return {
+      option_item_ids: Array.isArray(cachedData?.option_item_ids) ? cachedData.option_item_ids : [],
+      option_items: Array.isArray(cachedData?.option_items) ? cachedData.option_items : [],
+      ingredients: Array.isArray(cachedData?.ingredients) ? cachedData.ingredients : [],
+      ingredient_price_diff: Number(cachedData?.ingredient_price_diff || 0),
+      variant_group_id: cachedData?.variant_group_id != null
+        ? Number(cachedData.variant_group_id)
+        : toFiniteNumberOrNull(defaultVariant?.variant_group_id),
+      variant_value_index: cachedData?.variant_value_index != null
+        ? Number(cachedData.variant_value_index)
+        : toFiniteNumberOrNull(defaultVariant?.variant_value_index),
+      variant_label: str(cachedData?.variant_label || defaultVariant?.variant_label || ""),
+      variant_unit_price: Number.isFinite(baseUnitPrice) ? baseUnitPrice : 0,
+    };
+  }
+
+  async function loadCartEnhancersData() {
+    if (cartEnhancersDataLoadPromise) return cartEnhancersDataLoadPromise;
+    cartEnhancersDataLoadPromise = (async () => {
+      await Promise.allSettled([loadAutoAdd(), loadUpsellProducts()]);
+    })().finally(() => {
+      cartEnhancersDataLoadPromise = null;
+    });
+    return cartEnhancersDataLoadPromise;
   }
 
   function getCartEnhancersRefreshSignature() {
@@ -11802,7 +11954,7 @@ function updateCartBadge() {
   async function preloadCartEnhancers() {
     if (cartEnhancersPreloadPromise) return cartEnhancersPreloadPromise;
     cartEnhancersPreloadPromise = (async () => {
-      await Promise.allSettled([loadAutoAdd(), loadUpsellProducts()]);
+      await loadCartEnhancersData();
       await refreshCartAfterEnhancersLoaded();
     })().finally(() => {
       cartEnhancersPreloadPromise = null;
@@ -11831,9 +11983,14 @@ function updateCartBadge() {
       (descText ? '<div class="cart-upsell-desc">' + descText + '</div>' : '') +
       '<button class="cart-upsell-btn" type="button">' + money(price) + '</button>';
     card.addEventListener("click", function() {
-      card.remove();
-      _syncUpsellVisibility(scrollEl, upsellEl);
-      void addUpsellToCart(p, listEl);
+      if (card.dataset.busy === "1") return;
+      card.dataset.busy = "1";
+      const btn = card.querySelector(".cart-upsell-btn");
+      if (btn) btn.disabled = true;
+      Promise.resolve(addUpsellToCart(p, listEl)).catch(() => {
+        delete card.dataset.busy;
+        if (btn) btn.disabled = false;
+      });
     });
     return card;
   }
@@ -12148,7 +12305,8 @@ function updateCartBadge() {
   }
 
   async function addUpsellToCart(p, listEl) {
-    const pid = Number(p.id);
+    const effectiveProduct = mergeProductIntoCache(p, "cart_upsell_add") || p;
+    const pid = Number(effectiveProduct.id);
     if (!Number.isFinite(pid)) return;
     const wasEmpty = cartCountTotal() === 0;
     const mainUpsellBlockBefore = elCartList?.querySelector(".shop-cart-upsell") || null;
@@ -12165,51 +12323,17 @@ function updateCartBadge() {
       : new Map();
 
     const cachedDefaults = getUpsellDefaultConfigCacheEntry(pid);
-    const defaults = cachedDefaults && cachedDefaults.promise
-      ? await cachedDefaults.promise
-      : await warmUpsellDefaultConfig(pid, p);
-    let normalizedVariantUnitPrice = Number(defaults?.variant_unit_price || 0);
-    let normalizedVariantGroupId = defaults?.variant_group_id != null ? Number(defaults.variant_group_id) : null;
-    let normalizedVariantValueIndex = defaults?.variant_value_index != null ? Number(defaults.variant_value_index) : null;
-    let normalizedVariantLabel = str(defaults?.variant_label || "");
-
-    try {
-      const [productForVariant, variantsForVariant] = await Promise.all([
-        ensureProduct(pid),
-        resolveProductVariants(pid),
-      ]);
-      const vGroups = Array.isArray(variantsForVariant) ? variantsForVariant : [];
-      const firstVariantGroup = vGroups.length ? vGroups[0] : null;
-      const values = Array.isArray(firstVariantGroup?.values) ? firstVariantGroup.values : [];
-      if (firstVariantGroup && values.length) {
-        const rawIdx = normalizedVariantValueIndex != null
-          ? Number(normalizedVariantValueIndex)
-          : (firstVariantGroup.default_value_index != null ? Number(firstVariantGroup.default_value_index) : 0);
-        const safeIdx = Number.isFinite(rawIdx) && rawIdx >= 0 && rawIdx < values.length ? rawIdx : 0;
-        const valueLabel = formatUpsellVariantValueLabel(
-          values[safeIdx],
-          firstVariantGroup.unit_short_title || firstVariantGroup.unit_code || firstVariantGroup.unit_title || ""
-        );
-        const recalculated = Number(getVariantUnitPrice(productForVariant, vGroups, {
-          selectedIndex: safeIdx,
-          value: values[safeIdx],
-          label: valueLabel,
-        }) || 0);
-        if (Number.isFinite(recalculated) && recalculated > 0) {
-          normalizedVariantUnitPrice = recalculated;
-        }
-        normalizedVariantGroupId = Number(firstVariantGroup.id || firstVariantGroup.variant_group_id || 0) || null;
-        normalizedVariantValueIndex = safeIdx;
-        normalizedVariantLabel = valueLabel;
-      } else {
-        normalizedVariantGroupId = null;
-        normalizedVariantValueIndex = null;
-        normalizedVariantLabel = "";
-      }
-    } catch {}
+    const defaults = buildImmediateUpsellDefaults(effectiveProduct, cachedDefaults);
+    if (!cachedDefaults?.data) {
+      void warmUpsellDefaultConfig(pid, effectiveProduct).catch(() => {});
+    }
+    const normalizedVariantUnitPrice = Number(defaults?.variant_unit_price || 0);
+    const normalizedVariantGroupId = defaults?.variant_group_id != null ? Number(defaults.variant_group_id) : null;
+    const normalizedVariantValueIndex = defaults?.variant_value_index != null ? Number(defaults.variant_value_index) : null;
+    const normalizedVariantLabel = str(defaults?.variant_label || "");
 
     // Upsell flow: ignore option groups entirely (keep only product + variant + ingredients).
-    const optionItems = [];
+    const optionItems = Array.isArray(defaults.option_items) ? defaults.option_items : [];
     const ingredients = Array.isArray(defaults.ingredients) ? defaults.ingredients : [];
     const hasVariant =
       Number.isFinite(Number(normalizedVariantGroupId)) &&
@@ -12225,7 +12349,7 @@ function updateCartBadge() {
     const existing = getCartItemByKey(key);
     if (existing) {
       existing.qty += 1;
-      existing.option_item_ids = [];
+      existing.option_item_ids = Array.isArray(defaults.option_item_ids) ? defaults.option_item_ids : [];
       existing.option_items = optionItems;
       existing.ingredients = ingredients;
       existing.ingredient_price_diff = Number(defaults.ingredient_price_diff || 0);
@@ -12238,7 +12362,7 @@ function updateCartBadge() {
         key: key,
         product_id: pid,
         qty: 1,
-        option_item_ids: [],
+        option_item_ids: Array.isArray(defaults.option_item_ids) ? defaults.option_item_ids : [],
         option_items: optionItems,
         ingredients: ingredients,
         ingredient_price_diff: Number(defaults.ingredient_price_diff || 0),
@@ -12315,6 +12439,7 @@ function updateCartBadge() {
       }
     }
 
+    updateCartTotalsUiOnly();
     const hasItemsNow = cartItemsResolved().length > 0;
     updateCartBadge();
     if (elMobileCheckoutBtn) {
@@ -12694,6 +12819,7 @@ async function initCore() {
     const addressPromise = refreshAddressState().then(() => {
       updateAddressChip();
     }).catch(() => {});
+    const cartEnhancersStartupPromise = loadCartEnhancersData();
 
     // ????? ?????? ??В корзине пусто???? (?????? + ?????),
     // ????? ??????? ??? ????????? ????? ??? ?????????.
@@ -12710,6 +12836,14 @@ async function initCore() {
 
     renderProducts();
     prioritizeAboveFoldCardImages();
+    await cartEnhancersStartupPromise;
+    const startupAutoChanged = applyAutoAddRules();
+    clearAutoAddDismissedIfCartEmpty();
+    if (startupAutoChanged) {
+      saveCart();
+      scheduleSyncAllProductCardsFromCart();
+    }
+    cartEnhancersLastRefreshSignature = getCartEnhancersRefreshSignature();
 
     // Убираем loader — контент готов
     scheduleHideShopSplash();

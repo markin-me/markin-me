@@ -7321,6 +7321,30 @@ optionGroups.forEach((group) => {
     }
   }
 
+  function setShopModalBackButtonIconMode(mode = "arrow") {
+    const header = document.querySelector(".app-modal-header");
+    if (!header) return;
+    const backBtn = document.getElementById("shopSheetBackBtn");
+    const closeBtn = getShopModalCloseButton();
+    const actions = header.querySelector(".app-modal-actions") || header;
+    const useCloseIcon = mode === "close";
+
+    if (backBtn) {
+      if (useCloseIcon) {
+        actions.appendChild(backBtn);
+      } else if (backBtn.parentElement !== header) {
+        header.prepend(backBtn);
+      }
+      backBtn.setAttribute("aria-label", "Назад");
+      backBtn.innerHTML = useCloseIcon
+        ? '<i class="fas fa-times"></i>'
+        : '<i class="fas fa-arrow-left"></i>';
+    }
+    if (closeBtn) {
+      closeBtn.classList.toggle("hidden", useCloseIcon);
+    }
+  }
+
   function closeShopSheetIfOpen() {
     if (!window.AppModal) return;
     resetShopModalHeaderUi();
@@ -8870,6 +8894,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     resolvedItems.forEach((item) => {
       const qty = Math.max(1, Number(item?.qty || 0));
       if (!qty) return;
+      const cartKey = str(item?.key || "").trim() || null;
 
       if (String(item?.type || "").trim() === "combo") {
         const unitPrice = roundPrice(Number(item?.unit_price_override || 0));
@@ -8877,10 +8902,12 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
         const oldUnitPrice = oldUnitPriceRaw > unitPrice ? roundPrice(oldUnitPriceRaw) : unitPrice;
         previewItems.push({
           type: "combo",
+          cart_key: cartKey,
           combo_id: Number(item?.combo_id || 0) || null,
           qty,
           line_total: roundPrice(unitPrice * qty),
           old_line_total: roundPrice(oldUnitPrice * qty),
+          auto_add: Number(item?.auto_add || 0) === 1 ? 1 : 0,
           combo_title: str(item?.combo_title || item?.product?.name || "") || "Комбо",
         });
         return;
@@ -8889,9 +8916,50 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       const pricing = computeItemPricing(item, pricingTotals);
       const product = item?.product || {};
       const parts = pricing.parts || {};
+      const productId = Number(product?.id || item?.product_id || 0) || null;
       const qtyForBase = Number.isFinite(Number(pricing?.paidQty))
         ? Math.max(0, Number(pricing.paidQty))
         : qty;
+      const variantGroupId = Number(item?.variant_group_id || 0);
+      const variantValueIndex = Number(item?.variant_value_index);
+      const normalizedOptionItems = (Array.isArray(item?.option_items) ? item.option_items : [])
+        .map((option) => {
+          const optionId = Number(option?.id || option?.option_item_id || 0);
+          if (!(optionId > 0)) return null;
+          const optionQty = Math.max(1, Number(option?.qty ?? option?.quantity ?? 1) || 1);
+          const targetProductId = Number(option?.target_product_id || option?.product_id || 0);
+          const optionVariantGroupId = Number(option?.variant_group_id || 0);
+          const optionVariantValueIndex = Number(option?.variant_value_index);
+          return {
+            id: optionId,
+            qty: optionQty,
+            target_product_id: targetProductId > 0 ? targetProductId : null,
+            variant_group_id: optionVariantGroupId > 0 ? optionVariantGroupId : null,
+            variant_value_index: Number.isFinite(optionVariantValueIndex) && optionVariantValueIndex >= 0
+              ? optionVariantValueIndex
+              : null,
+          };
+        })
+        .filter(Boolean);
+      const normalizedIngredients = (Array.isArray(item?.ingredients) ? item.ingredients : [])
+        .map((ingredient) => {
+          const ingredientId = Number(ingredient?.ingredient_id || ingredient?.product_id || 0);
+          if (!(ingredientId > 0)) return null;
+          return {
+            ingredient_id: ingredientId,
+            qty: Number(ingredient?.qty ?? ingredient?.quantity ?? 0) || 0,
+          };
+        })
+        .filter(Boolean);
+      const productConfig = normalizeCheckoutBenefitProductConfig({
+        product_id: productId,
+        variant_group_id: variantGroupId > 0 ? variantGroupId : null,
+        variant_value_index: Number.isFinite(variantValueIndex) && variantValueIndex >= 0
+          ? variantValueIndex
+          : null,
+        options: normalizedOptionItems,
+        ingredients: normalizedIngredients,
+      }, productId);
 
       let originalUnit = roundPrice(Number(pricing?.unitPrice || 0));
       if (Number(product?.original_price || 0) > 0) {
@@ -8910,10 +8978,19 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
 
       previewItems.push({
         type: "product",
-        product_id: Number(product?.id || item?.product_id || 0) || null,
+        cart_key: cartKey,
+        product_id: productId,
         qty,
         line_total: roundPrice(Number(pricing?.lineTotal || 0)),
         original_line_total: roundPrice(originalUnit * qtyForBase),
+        auto_add: Number(item?.auto_add || 0) === 1 ? 1 : 0,
+        variant_group_id: variantGroupId > 0 ? variantGroupId : null,
+        variant_value_index: Number.isFinite(variantValueIndex) && variantValueIndex >= 0
+          ? variantValueIndex
+          : null,
+        option_items: normalizedOptionItems,
+        ingredients: normalizedIngredients,
+        product_config: productConfig,
       });
     });
 
@@ -8938,6 +9015,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     const nextCache = {
       previewData: new Map(),
       previewPromises: new Map(),
+      scopePreviewData: new Map(),
       progressProductsData: new Map(),
       progressProductsPromises: new Map(),
       claimOptionsData: new Map(),
@@ -8955,6 +9033,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       baseKey: "",
       status: "idle",
       basePreview: null,
+      basePreviewSource: "",
       derivedPreview: null,
       availableBenefitsCount: 0,
       progressProductsByDiscountId: new Map(),
@@ -9022,6 +9101,14 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
 
   function buildCheckoutBenefitsStoreKeyFromRequest(previewRequest = null) {
     const safePreviewRequest = cloneCheckoutBenefitsStorePreviewRequest(previewRequest);
+    const normalizedItems = Array.isArray(safePreviewRequest?.items)
+      ? safePreviewRequest.items.map((item) => {
+          if (!item || typeof item !== "object") return item;
+          const nextItem = { ...item };
+          delete nextItem.cart_key;
+          return nextItem;
+        })
+      : [];
     const token = typeof getCustomerToken === "function"
       ? str(getCustomerToken() || "").trim()
       : "";
@@ -9032,7 +9119,10 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       return JSON.stringify({
         customer_id: customerId > 0 ? customerId : null,
         customer_token: customerId > 0 ? null : token,
-        preview: safePreviewRequest,
+        preview: {
+          ...safePreviewRequest,
+          items: normalizedItems,
+        },
       });
     } catch {
       return "";
@@ -9048,6 +9138,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     const selectedPromoRewardId = normalizeCheckoutSelectedDiscountId(safePreviewRequest?.selected_promo_reward_id);
     const selectedPromoCode = str(safePreviewRequest?.promo_code || "").trim();
     const derived = buildLocalCheckoutBenefitsPreviewData(previewData, {
+      previewRequest: safePreviewRequest,
       selectedDiscountId,
       selectedDiscountSource,
       promoCode: selectedPromoCode,
@@ -9209,10 +9300,23 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     const orderKey = buildCheckoutBenefitsStoreKeyFromRequest(fullPreviewRequest);
     const basePreviewRequest = buildCheckoutBenefitsStoreBasePreviewRequest(fullPreviewRequest);
     const baseKey = buildCheckoutBenefitsStoreKeyFromRequest(basePreviewRequest);
-    const cachedBasePreview = baseKey ? peekCheckoutBenefitsPreviewCache(basePreviewRequest) : null;
-    const basePreview = checkoutBenefitsStore.baseKey === baseKey
+    const cachedExactBasePreview = baseKey ? peekWarmCheckoutBenefitsPreviewCache(basePreviewRequest) : null;
+    const cachedScopeBasePreview = peekWarmCheckoutBenefitsScopePreviewCache(basePreviewRequest);
+    const storeBasePreview = checkoutBenefitsStore.baseKey === baseKey
       ? checkoutBenefitsStore.basePreview
-      : cachedBasePreview;
+      : null;
+    const storeBasePreviewSource = checkoutBenefitsStore.baseKey === baseKey
+      ? str(checkoutBenefitsStore.basePreviewSource || "").trim().toLowerCase()
+      : "";
+    const exactBasePreview = storeBasePreviewSource === "exact"
+      ? storeBasePreview
+      : (cachedExactBasePreview || null);
+    const scopeBasePreview = storeBasePreviewSource === "scope"
+      ? storeBasePreview
+      : (cachedScopeBasePreview || null);
+    const basePreview = exactBasePreview || scopeBasePreview || null;
+    const hasExactBasePreview = !!exactBasePreview;
+    const usesScopePreview = !hasExactBasePreview && !!scopeBasePreview;
     const derivedPreview = orderKey && checkoutBenefitsStore.orderKey === orderKey && checkoutBenefitsStore.derivedPreview
       ? checkoutBenefitsStore.derivedPreview
       : deriveCheckoutBenefitsPreviewLocally(basePreview, fullPreviewRequest);
@@ -9223,6 +9327,9 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       status: derivedPreview || basePreview ? "ready" : checkoutBenefitsStore.status,
       basePreview,
       derivedPreview,
+      hasExactBasePreview,
+      usesScopePreview,
+      needsExactHydration: !hasExactBasePreview && !!basePreview,
       availableBenefitsCount,
       progressProductsByDiscountId: checkoutBenefitsStore.progressProductsByDiscountId,
       claimOptionsByDiscountId: checkoutBenefitsStore.claimOptionsByDiscountId,
@@ -9234,6 +9341,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
 
   function applyCheckoutBenefitsStoreSnapshot(previewRequest, previewData, {
     warmDetails = false,
+    basePreviewSource = "exact",
   } = {}) {
     const fullPreviewRequest = cloneCheckoutBenefitsStorePreviewRequest(
       previewRequest && typeof previewRequest === "object"
@@ -9247,6 +9355,9 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     checkoutBenefitsStore.baseKey = buildCheckoutBenefitsStoreKeyFromRequest(basePreviewRequest);
     checkoutBenefitsStore.status = derivedPreview ? "ready" : "empty";
     checkoutBenefitsStore.basePreview = previewData && typeof previewData === "object" ? previewData : null;
+    checkoutBenefitsStore.basePreviewSource = str(basePreviewSource || "").trim().toLowerCase() === "scope"
+      ? "scope"
+      : "exact";
     checkoutBenefitsStore.derivedPreview = derivedPreview;
     checkoutBenefitsStore.availableBenefitsCount = calculateAvailableBenefitsCount(derivedPreview || previewData);
     checkoutBenefitsStore.hydratedAt = Date.now();
@@ -9269,6 +9380,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       checkoutBenefitsStore.baseKey = "";
       checkoutBenefitsStore.status = "idle";
       checkoutBenefitsStore.basePreview = null;
+      checkoutBenefitsStore.basePreviewSource = "";
       checkoutBenefitsStore.derivedPreview = null;
       checkoutBenefitsStore.availableBenefitsCount = 0;
       checkoutBenefitsStore.hydratedAt = 0;
@@ -9393,11 +9505,16 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
           applyCheckoutBenefitsStoreSnapshot(
             effectivePreviewRequest,
             existingSnapshot.basePreview || existingSnapshot.derivedPreview,
-            { warmDetails: false }
+            {
+              warmDetails: false,
+              basePreviewSource: existingSnapshot.hasExactBasePreview ? "exact" : "scope",
+            }
           );
         }
         syncBenefitsBadgesUi(existingSnapshot.availableBenefitsCount);
-        return existingSnapshot;
+        if (!existingSnapshot.needsExactHydration) {
+          return existingSnapshot;
+        }
       }
       if (
         checkoutBenefitsStore.inflightHydratePromise
@@ -9414,9 +9531,12 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     checkoutBenefitsStore.inflightHydrateBaseKey = baseKey;
     checkoutBenefitsStore.inflightHydrateOrderKey = orderKey;
     const requestPromise = (async () => {
-      const nextPreviewData = await fetchCheckoutBenefitsPreview(basePreviewRequest);
+      const nextPreviewData = await fetchCheckoutBenefitsPreview(basePreviewRequest, {
+        force,
+      });
       return applyCheckoutBenefitsStoreSnapshot(effectivePreviewRequest, nextPreviewData, {
         warmDetails: false,
+        basePreviewSource: "exact",
       });
     })();
     checkoutBenefitsStore.inflightHydratePromise = requestPromise;
@@ -9603,14 +9723,18 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     const hasSelectedDiscount = hasSelectedDiscountBenefit(previewData, draft);
     const hasGiftItems = hasGiftRewardItemsInCart(cartItems);
     const activePromoCode = resolveCheckoutBenefitsActivePromoCode(previewData, draft);
+    const hasBenefitsContext = !!(
+      typeof getCustomerToken === "function"
+      && str(getCustomerToken() || "").trim()
+    );
 
     return {
       visible: true,
       discountAvailableCount,
       promoAvailableCount,
       giftAvailableCount,
-      showDiscountSection: discountAvailableCount > 0 || hasSelectedDiscount,
-      showGiftSection: giftAvailableCount > 0 || hasGiftItems,
+      showDiscountSection: hasBenefitsContext || discountAvailableCount > 0 || hasSelectedDiscount,
+      showGiftSection: hasBenefitsContext || giftAvailableCount > 0 || hasGiftItems,
       promoInputValue: activePromoCode || getCheckoutBenefitsSavedPromoInputValue(draft),
       activePromoCode,
     };
@@ -9693,20 +9817,34 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     const methodCode = resolveCartPricingMethodCode(currentDraft);
     const previewBundle = getCartPricingCachedPreviewBundle(cartItemsResolved(), methodCode, currentDraft);
     const storeSnapshot = getBenefitsStoreSnapshot(currentPreviewRequest);
+    const exactBasePreview = peekWarmCheckoutBenefitsPreviewCache(basePreviewRequest);
     const basePreview = cloneCheckoutBenefitsPreviewData(
       basePreviewOverride
       || storeSnapshot?.basePreview
-      || peekCheckoutBenefitsPreviewCache(basePreviewRequest)
+      || exactBasePreview
       || previewBundle?.previewData
       || previewBundle?.localPreviewData
       || null
     );
+    const basePreviewSource = basePreviewOverride
+      ? "exact"
+      : (storeSnapshot?.hasExactBasePreview || !!exactBasePreview ? "exact" : "scope");
 
     if (!basePreview) {
       return { ok: false, reason: "missing_base_preview" };
     }
 
-    const promoCard = findCheckoutBenefitsManualPromoCard(basePreview, normalizedCode, attachResult);
+    const currentLocalPreview = deriveCheckoutBenefitsPreviewLocally(basePreview, currentPreviewRequest)
+      || buildLocalCheckoutBenefitsPreviewData(basePreview, {
+        previewRequest: currentPreviewRequest,
+        selectedDiscountId: currentDraft?.selected_discount_id,
+        selectedDiscountSource: currentDraft?.selected_discount_source,
+        promoCode: currentDraft?.promo_code || "",
+        selectedPromoSource: currentDraft?.selected_promo_source,
+        selectedPromoRewardId: currentDraft?.selected_promo_reward_id,
+      })
+      || basePreview;
+    const promoCard = findCheckoutBenefitsManualPromoCard(currentLocalPreview, normalizedCode, attachResult);
     if (!promoCard) {
       return { ok: false, reason: "not_found" };
     }
@@ -9724,6 +9862,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     const nextPreviewRequest = buildCheckoutBenefitsCurrentPreviewRequest(nextDraft);
     const nextDerivedPreview = deriveCheckoutBenefitsPreviewLocally(basePreview, nextPreviewRequest)
       || buildLocalCheckoutBenefitsPreviewData(basePreview, {
+        previewRequest: nextPreviewRequest,
         selectedDiscountId: nextDraft?.selected_discount_id,
         selectedDiscountSource: nextDraft?.selected_discount_source,
         promoCode: normalizedCode,
@@ -9742,11 +9881,16 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       delete nextDraft.benefits_applied_snapshot;
     }
 
-    storeCheckoutBenefitsPreviewCache(basePreviewRequest, basePreview);
+    if (basePreviewSource === "exact") {
+      storeCheckoutBenefitsPreviewCache(basePreviewRequest, basePreview);
+    } else {
+      storeCheckoutBenefitsScopePreviewCache(basePreviewRequest, basePreview);
+    }
     storeCheckoutBenefitsPreviewCache(nextPreviewRequest, nextDerivedPreview);
     saveCheckoutDraft(nextDraft);
     applyCheckoutBenefitsStoreSnapshot(nextPreviewRequest, basePreview, {
       warmDetails: false,
+      basePreviewSource,
     });
 
     return {
@@ -9879,9 +10023,10 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       }
       if (promoEntryEl && promoEntryEl.dataset.bound !== "1") {
         ["click", "mousedown", "pointerdown", "touchstart"].forEach((eventName) => {
+          const listenerOptions = eventName === "touchstart" ? { passive: true } : undefined;
           promoEntryEl.addEventListener(eventName, (event) => {
             event.stopPropagation();
-          });
+          }, listenerOptions);
         });
         promoEntryEl.dataset.bound = "1";
       }
@@ -9959,14 +10104,19 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
         applyCheckoutBenefitsStoreSnapshot(
           previewRequest,
           snapshot.basePreview || snapshot.derivedPreview,
-          { warmDetails: false }
+          {
+            warmDetails: false,
+            basePreviewSource: snapshot?.hasExactBasePreview ? "exact" : "scope",
+          }
         );
       }
-      if (checkoutBenefitsStoreSyncTimer) {
-        window.clearTimeout(checkoutBenefitsStoreSyncTimer);
-        checkoutBenefitsStoreSyncTimer = 0;
+      if (!snapshot?.needsExactHydration) {
+        if (checkoutBenefitsStoreSyncTimer) {
+          window.clearTimeout(checkoutBenefitsStoreSyncTimer);
+          checkoutBenefitsStoreSyncTimer = 0;
+        }
+        return;
       }
-      return;
     }
     if (checkoutBenefitsStoreSyncTimer) {
       window.clearTimeout(checkoutBenefitsStoreSyncTimer);
@@ -10010,6 +10160,30 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       customer_id: customerId > 0 ? customerId : null,
       customer_token: customerId > 0 ? null : (token || null),
     };
+  }
+
+  function buildCheckoutBenefitsCalculationScopeKey(methodCode = "takeaway") {
+    const scope = buildCheckoutBenefitsCacheScope();
+    try {
+      return JSON.stringify({
+        tenant_id: scope?.tenant_id ?? null,
+        store_id: scope?.store_id ?? null,
+        customer_id: scope?.customer_id ?? null,
+        customer_token: scope?.customer_id ? null : (scope?.customer_token ?? null),
+        method_code: str(methodCode || "").trim().toLowerCase() || "takeaway",
+      });
+    } catch {
+      return "";
+    }
+  }
+
+  function buildCheckoutBenefitsScopeCacheKey(scopeKey) {
+    const normalizedScopeKey = str(scopeKey || "").trim();
+    return normalizedScopeKey ? `scope:${normalizedScopeKey}` : "";
+  }
+
+  function isCheckoutBenefitsScopePreviewCacheKey(cacheKey) {
+    return str(cacheKey || "").trim().startsWith("scope:");
   }
 
   function ensureCheckoutBenefitsPersistentPreviewCacheLoaded() {
@@ -10079,9 +10253,8 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     } catch {}
   }
 
-  function peekPersistentCheckoutBenefitsPreviewCache(previewRequest) {
+  function peekPersistentCheckoutBenefitsCacheEntry(cacheKey) {
     ensureCheckoutBenefitsPersistentPreviewCacheLoaded();
-    const cacheKey = buildCheckoutBenefitsPreviewCacheKey(previewRequest);
     if (!cacheKey) return null;
     const entry = checkoutBenefitsPersistentPreviewCache.get(cacheKey) || null;
     if (!entry || !entry.data || typeof entry.data !== "object") return null;
@@ -10094,9 +10267,8 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     return entry.data;
   }
 
-  function storePersistentCheckoutBenefitsPreviewCache(previewRequest, previewData) {
+  function storePersistentCheckoutBenefitsCacheEntry(cacheKey, previewData) {
     ensureCheckoutBenefitsPersistentPreviewCacheLoaded();
-    const cacheKey = buildCheckoutBenefitsPreviewCacheKey(previewRequest);
     if (!cacheKey || !previewData || typeof previewData !== "object") return previewData || null;
     checkoutBenefitsPersistentPreviewCache.delete(cacheKey);
     checkoutBenefitsPersistentPreviewCache.set(cacheKey, {
@@ -10105,6 +10277,19 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     });
     persistCheckoutBenefitsPersistentPreviewCache();
     return previewData;
+  }
+
+  function peekPersistentCheckoutBenefitsPreviewCache(previewRequest) {
+    return peekPersistentCheckoutBenefitsCacheEntry(
+      buildCheckoutBenefitsPreviewCacheKey(previewRequest)
+    );
+  }
+
+  function storePersistentCheckoutBenefitsPreviewCache(previewRequest, previewData) {
+    return storePersistentCheckoutBenefitsCacheEntry(
+      buildCheckoutBenefitsPreviewCacheKey(previewRequest),
+      previewData
+    );
   }
 
   function clearCheckoutBenefitsPersistentPreviewCache() {
@@ -10126,14 +10311,31 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
 
   function buildCheckoutBenefitsPreviewCacheKey(previewRequest) {
     const payload = previewRequest && typeof previewRequest === "object" ? previewRequest : {};
+    const normalizedItems = Array.isArray(payload?.items)
+      ? payload.items.map((item) => {
+          if (!item || typeof item !== "object") return item;
+          const nextItem = { ...item };
+          delete nextItem.cart_key;
+          return nextItem;
+        })
+      : [];
     try {
       return JSON.stringify({
         scope: buildCheckoutBenefitsCacheScope(),
-        preview: payload,
+        preview: {
+          ...payload,
+          items: normalizedItems,
+        },
       });
     } catch {
       return "";
     }
+  }
+
+  function getCheckoutBenefitsPreviewScopeKey(previewRequest = null, previewData = null) {
+    const explicitScopeKey = str(previewData?.client_calculation?.scope_key || "").trim();
+    if (explicitScopeKey) return explicitScopeKey;
+    return buildCheckoutBenefitsCalculationScopeKey(previewRequest?.method_code || "takeaway");
   }
 
   function peekCheckoutBenefitsPreviewCache(previewRequest) {
@@ -10147,6 +10349,47 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     return cached;
   }
 
+  function peekWarmCheckoutBenefitsPreviewCache(previewRequest) {
+    const memoryCached = peekCheckoutBenefitsPreviewCache(previewRequest);
+    if (memoryCached) return memoryCached;
+    return peekPersistentCheckoutBenefitsPreviewCache(previewRequest);
+  }
+
+  function peekCheckoutBenefitsScopePreviewCache(previewRequest = null, previewData = null) {
+    const cacheKey = buildCheckoutBenefitsScopeCacheKey(
+      getCheckoutBenefitsPreviewScopeKey(previewRequest, previewData)
+    );
+    if (!cacheKey) return null;
+    const cached = checkoutBenefitsClientCache.scopePreviewData.get(cacheKey) || null;
+    if (cached) {
+      checkoutBenefitsClientCache.scopePreviewData.delete(cacheKey);
+      checkoutBenefitsClientCache.scopePreviewData.set(cacheKey, cached);
+    }
+    return cached;
+  }
+
+  function peekWarmCheckoutBenefitsScopePreviewCache(previewRequest = null, previewData = null) {
+    const cacheKey = buildCheckoutBenefitsScopeCacheKey(
+      getCheckoutBenefitsPreviewScopeKey(previewRequest, previewData)
+    );
+    if (!cacheKey) return null;
+    const memoryCached = peekCheckoutBenefitsScopePreviewCache(previewRequest, previewData);
+    if (memoryCached) return memoryCached;
+    return peekPersistentCheckoutBenefitsCacheEntry(cacheKey);
+  }
+
+  function storeCheckoutBenefitsScopePreviewCache(previewRequest = null, previewData = null) {
+    const cacheKey = buildCheckoutBenefitsScopeCacheKey(
+      getCheckoutBenefitsPreviewScopeKey(previewRequest, previewData)
+    );
+    if (!cacheKey || !previewData || typeof previewData !== "object") return previewData || null;
+    checkoutBenefitsClientCache.scopePreviewData.delete(cacheKey);
+    checkoutBenefitsClientCache.scopePreviewData.set(cacheKey, previewData);
+    trimCheckoutBenefitsClientCache(checkoutBenefitsClientCache.scopePreviewData, 12);
+    storePersistentCheckoutBenefitsCacheEntry(cacheKey, previewData);
+    return previewData;
+  }
+
   function storeCheckoutBenefitsPreviewCache(previewRequest, previewData) {
     const cacheKey = buildCheckoutBenefitsPreviewCacheKey(previewRequest);
     if (!cacheKey || !previewData || typeof previewData !== "object") return previewData || null;
@@ -10154,6 +10397,8 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     checkoutBenefitsClientCache.previewData.delete(cacheKey);
     checkoutBenefitsClientCache.previewData.set(cacheKey, previewData);
     trimCheckoutBenefitsClientCache(checkoutBenefitsClientCache.previewData, 18);
+    storePersistentCheckoutBenefitsPreviewCache(previewRequest, previewData);
+    storeCheckoutBenefitsScopePreviewCache(previewRequest, previewData);
     return previewData;
   }
 
@@ -10256,6 +10501,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       clearCheckoutBenefitsPersistentPreviewCache();
       checkoutBenefitsClientCache.previewData.clear();
       checkoutBenefitsClientCache.previewPromises.clear();
+      checkoutBenefitsClientCache.scopePreviewData.clear();
       checkoutBenefitsClientCache.progressProductsData.clear();
       checkoutBenefitsClientCache.progressProductsPromises.clear();
       checkoutBenefitsClientCache.claimOptionsData.clear();
@@ -10280,6 +10526,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       completed: [],
       summary: null,
       client_calculation: null,
+      local_line_totals_by_cart_key: {},
       details: {
         progress_products_by_discount_id: {},
         claim_options_by_discount_id: {},
@@ -10304,6 +10551,18 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     const safeClientCalculation = safePreviewData?.client_calculation && typeof safePreviewData.client_calculation === "object"
       ? {
           ...safePreviewData.client_calculation,
+          scope_key: str(safePreviewData.client_calculation.scope_key || "").trim(),
+          discount_rules: Array.isArray(safePreviewData.client_calculation.discount_rules)
+            ? safePreviewData.client_calculation.discount_rules.map((entry) => (entry && typeof entry === "object" ? { ...entry } : entry))
+            : [],
+          promo_rules: Array.isArray(safePreviewData.client_calculation.promo_rules)
+            ? safePreviewData.client_calculation.promo_rules.map((entry) => (entry && typeof entry === "object" ? { ...entry } : entry))
+            : [],
+          promo_code_index: safePreviewData.client_calculation.promo_code_index && typeof safePreviewData.client_calculation.promo_code_index === "object"
+            ? {
+                ...safePreviewData.client_calculation.promo_code_index,
+              }
+            : {},
           summary_states: safePreviewData.client_calculation.summary_states && typeof safePreviewData.client_calculation.summary_states === "object"
             ? {
                 ...safePreviewData.client_calculation.summary_states,
@@ -10348,6 +10607,11 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
         : [],
       summary: safeSummary,
       client_calculation: safeClientCalculation,
+      local_line_totals_by_cart_key: safePreviewData?.local_line_totals_by_cart_key && typeof safePreviewData.local_line_totals_by_cart_key === "object"
+        ? {
+            ...safePreviewData.local_line_totals_by_cart_key,
+          }
+        : {},
       details: safeDetails,
     };
   }
@@ -10390,17 +10654,30 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     const targetBaseKey = buildCheckoutBenefitsStoreKeyFromRequest(targetBasePreviewRequest);
 
     let basePreview = null;
+    let basePreviewSource = "";
     if (checkoutBenefitsStore.baseKey === sourceBaseKey && checkoutBenefitsStore.basePreview) {
       basePreview = checkoutBenefitsStore.basePreview;
+      basePreviewSource = str(checkoutBenefitsStore.basePreviewSource || "exact").trim().toLowerCase() || "exact";
     }
     if (!basePreview && checkoutBenefitsStore.baseKey === targetBaseKey && checkoutBenefitsStore.basePreview) {
       basePreview = checkoutBenefitsStore.basePreview;
+      basePreviewSource = str(checkoutBenefitsStore.basePreviewSource || "exact").trim().toLowerCase() || "exact";
     }
     if (!basePreview) {
-      basePreview = peekCheckoutBenefitsPreviewCache(sourceBasePreviewRequest);
+      basePreview = peekWarmCheckoutBenefitsPreviewCache(sourceBasePreviewRequest);
+      if (basePreview) basePreviewSource = "exact";
     }
     if (!basePreview) {
-      basePreview = peekCheckoutBenefitsPreviewCache(targetBasePreviewRequest);
+      basePreview = peekWarmCheckoutBenefitsPreviewCache(targetBasePreviewRequest);
+      if (basePreview) basePreviewSource = "exact";
+    }
+    if (!basePreview) {
+      basePreview = peekWarmCheckoutBenefitsScopePreviewCache(sourceBasePreviewRequest);
+      if (basePreview) basePreviewSource = "scope";
+    }
+    if (!basePreview) {
+      basePreview = peekWarmCheckoutBenefitsScopePreviewCache(targetBasePreviewRequest);
+      if (basePreview) basePreviewSource = "scope";
     }
 
     return {
@@ -10408,6 +10685,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       targetFullPreviewRequest,
       sourceBasePreviewRequest,
       targetBasePreviewRequest,
+      basePreviewSource: basePreviewSource === "scope" ? "scope" : "exact",
       basePreview: basePreview && typeof basePreview === "object" ? basePreview : null,
     };
   }
@@ -10419,18 +10697,18 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
         .filter(Boolean)
     );
     Array.from(checkoutBenefitsClientCache.previewData.keys()).forEach((cacheKey) => {
-      if (!keepKeys.has(cacheKey)) {
+      if (!keepKeys.has(cacheKey) && !isCheckoutBenefitsScopePreviewCacheKey(cacheKey)) {
         checkoutBenefitsClientCache.previewData.delete(cacheKey);
       }
     });
     Array.from(checkoutBenefitsClientCache.previewPromises.keys()).forEach((cacheKey) => {
-      if (!keepKeys.has(cacheKey)) {
+      if (!keepKeys.has(cacheKey) && !isCheckoutBenefitsScopePreviewCacheKey(cacheKey)) {
         checkoutBenefitsClientCache.previewPromises.delete(cacheKey);
       }
     });
     ensureCheckoutBenefitsPersistentPreviewCacheLoaded();
     Array.from(checkoutBenefitsPersistentPreviewCache.keys()).forEach((cacheKey) => {
-      if (!keepKeys.has(cacheKey)) {
+      if (!keepKeys.has(cacheKey) && !isCheckoutBenefitsScopePreviewCacheKey(cacheKey)) {
         checkoutBenefitsPersistentPreviewCache.delete(cacheKey);
       }
     });
@@ -10469,6 +10747,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
   function commitCheckoutBenefitsGiftPatch(nextBasePreview, {
     targetFullPreviewRequest = null,
     targetBasePreviewRequest = null,
+    basePreviewSource = "exact",
     reopenHost = false,
   } = {}) {
     const safeTargetFullPreviewRequest = cloneCheckoutBenefitsStorePreviewRequest(
@@ -10485,7 +10764,11 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     const nextDerivedPreview = deriveCheckoutBenefitsPreviewLocally(safeBasePreview, safeTargetFullPreviewRequest)
       || safeBasePreview;
 
-    storeCheckoutBenefitsPreviewCache(safeTargetBasePreviewRequest, safeBasePreview);
+    if (str(basePreviewSource || "").trim().toLowerCase() === "scope") {
+      storeCheckoutBenefitsScopePreviewCache(safeTargetBasePreviewRequest, safeBasePreview);
+    } else {
+      storeCheckoutBenefitsPreviewCache(safeTargetBasePreviewRequest, safeBasePreview);
+    }
     storeCheckoutBenefitsPreviewCache(safeTargetFullPreviewRequest, nextDerivedPreview);
     pruneCheckoutBenefitsPreviewCachesToRequests([
       safeTargetBasePreviewRequest,
@@ -10493,6 +10776,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     ]);
     applyCheckoutBenefitsStoreSnapshot(safeTargetFullPreviewRequest, safeBasePreview, {
       warmDetails: false,
+      basePreviewSource,
     });
 
     if (reopenHost && (hasLiveCartSheetContext() || isDesktopBenefitsHostActive())) {
@@ -10524,6 +10808,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     return commitCheckoutBenefitsGiftPatch(nextBasePreview, {
       targetFullPreviewRequest: patchContext.targetFullPreviewRequest,
       targetBasePreviewRequest: patchContext.targetBasePreviewRequest,
+      basePreviewSource: patchContext.basePreviewSource,
       reopenHost,
     });
   }
@@ -10555,6 +10840,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     return commitCheckoutBenefitsGiftPatch(nextBasePreview, {
       targetFullPreviewRequest: patchContext.targetFullPreviewRequest,
       targetBasePreviewRequest: patchContext.targetBasePreviewRequest,
+      basePreviewSource: patchContext.basePreviewSource,
       reopenHost,
     });
   }
@@ -10793,6 +11079,573 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     return nextPreviewRequest;
   }
 
+  function buildLocalCheckoutBenefitsDiscountKey(selectedDiscountSource, selectedDiscountId) {
+    const source = normalizeCheckoutDiscountSource(selectedDiscountSource);
+    const id = normalizeCheckoutSelectedDiscountId(selectedDiscountId);
+    return source && id ? `${source}:${id}` : "";
+  }
+
+  function buildLocalCheckoutBenefitsPromoKey(previewData, {
+    promoCode,
+    selectedPromoSource,
+    selectedPromoRewardId,
+  } = {}) {
+    const source = normalizeCheckoutPromoSource(selectedPromoSource);
+    if (!source) return "";
+    if (source === "reward_promo") {
+      const rewardId = normalizeCheckoutSelectedDiscountId(selectedPromoRewardId);
+      return rewardId ? `${source}:${rewardId}` : "";
+    }
+    const normalizedCode = normalizeCheckoutBenefitsPromoInputValue(promoCode || "", { trim: true });
+    if (!normalizedCode) return "";
+    const promoCodeIndex = previewData?.client_calculation?.promo_code_index && typeof previewData.client_calculation.promo_code_index === "object"
+      ? previewData.client_calculation.promo_code_index
+      : null;
+    const indexedSelectionKey = str(promoCodeIndex?.[normalizedCode] || "").trim();
+    if (indexedSelectionKey) return indexedSelectionKey;
+    const promoCard = Array.isArray(previewData?.promo_codes)
+      ? previewData.promo_codes.find((entry) => (
+          (normalizeCheckoutPromoSource(entry?.source) || "promo_code") === source
+          && normalizeCheckoutBenefitsPromoInputValue(entry?.code || "", { trim: true }) === normalizedCode
+        ))
+      : null;
+    const promoId = normalizeCheckoutSelectedDiscountId(promoCard?.id);
+    return promoId ? `${source}:${promoId}` : "";
+  }
+
+  function buildLocalCheckoutBenefitsPreviewItems(previewRequest = null) {
+    const safePreviewRequest = previewRequest && typeof previewRequest === "object"
+      ? previewRequest
+      : buildCheckoutBenefitsCurrentPreviewRequest();
+    return (Array.isArray(safePreviewRequest?.items) ? safePreviewRequest.items : [])
+      .map((rawItem) => {
+        if (!rawItem || typeof rawItem !== "object") return null;
+        const type = str(rawItem?.type || "").trim().toLowerCase() || "product";
+        const qty = Math.max(1, Number(rawItem?.qty || 1) || 1);
+        const lineTotal = roundPrice(Math.max(0, Number(rawItem?.line_total || 0) || 0));
+        const originalLineTotal = roundPrice(Math.max(
+          lineTotal,
+          Number(rawItem?.original_line_total ?? rawItem?.old_line_total ?? rawItem?.discount?.original_line_total ?? lineTotal) || lineTotal
+        ));
+        if (type === "combo") {
+          const comboId = Number(rawItem?.combo_id || 0) || null;
+          if (!comboId) return null;
+          const comboItem = {
+            type: "combo",
+            cart_key: str(rawItem?.cart_key || "").trim() || "",
+            combo_id: comboId,
+            qty,
+            line_total: lineTotal,
+            auto_add: Number(rawItem?.auto_add || 0) === 1 ? 1 : 0,
+          };
+          if (originalLineTotal > lineTotal) {
+            comboItem.discount = { original_line_total: originalLineTotal };
+          }
+          return comboItem;
+        }
+        const productId = Number(rawItem?.product_id || 0) || null;
+        if (!productId) return null;
+        const variantGroupId = Number(rawItem?.variant_group_id || 0);
+        const variantValueIndex = Number(rawItem?.variant_value_index);
+        const optionItems = (Array.isArray(rawItem?.option_items) ? rawItem.option_items : [])
+          .map((option) => {
+            const optionId = Number(option?.id || option?.option_item_id || 0);
+            if (!(optionId > 0)) return null;
+            const optionQty = Math.max(1, Number(option?.qty ?? option?.quantity ?? 1) || 1);
+            const targetProductId = Number(option?.target_product_id || option?.product_id || 0);
+            const optionVariantGroupId = Number(option?.variant_group_id || 0);
+            const optionVariantValueIndex = Number(option?.variant_value_index);
+            return {
+              id: optionId,
+              qty: optionQty,
+              target_product_id: targetProductId > 0 ? targetProductId : null,
+              variant_group_id: optionVariantGroupId > 0 ? optionVariantGroupId : null,
+              variant_value_index: Number.isFinite(optionVariantValueIndex) && optionVariantValueIndex >= 0
+                ? optionVariantValueIndex
+                : null,
+            };
+          })
+          .filter(Boolean);
+        const ingredients = (Array.isArray(rawItem?.ingredients) ? rawItem.ingredients : [])
+          .map((ingredient) => {
+            const ingredientId = Number(ingredient?.ingredient_id || ingredient?.product_id || 0);
+            if (!(ingredientId > 0)) return null;
+            return {
+              ingredient_id: ingredientId,
+              qty: Number(ingredient?.qty ?? ingredient?.quantity ?? 0) || 0,
+            };
+          })
+          .filter(Boolean);
+        const productItem = {
+          type: "product",
+          cart_key: str(rawItem?.cart_key || "").trim() || "",
+          product_id: productId,
+          qty,
+          line_total: lineTotal,
+          auto_add: Number(rawItem?.auto_add || 0) === 1 ? 1 : 0,
+          variant_group_id: variantGroupId > 0 ? variantGroupId : null,
+          variant_value_index: Number.isFinite(variantValueIndex) && variantValueIndex >= 0
+            ? variantValueIndex
+            : null,
+          option_items: optionItems,
+          ingredients,
+        };
+        productItem.product_config = normalizeCheckoutBenefitProductConfig(
+          rawItem?.product_config || {
+            product_id: productId,
+            variant_group_id: productItem.variant_group_id,
+            variant_value_index: productItem.variant_value_index,
+            options: optionItems,
+            ingredients,
+          },
+          productId
+        );
+        if (originalLineTotal > lineTotal) {
+          productItem.discount = { original_line_total: originalLineTotal };
+        }
+        return productItem;
+      })
+      .filter(Boolean);
+  }
+
+  function buildLocalCheckoutBenefitsProductCategoriesMap(previewItems = []) {
+    const result = new Map();
+    const addCategory = (productId, categoryId) => {
+      const normalizedProductId = Number(productId || 0) || 0;
+      const normalizedCategoryId = Number(categoryId || 0) || 0;
+      if (!(normalizedProductId > 0) || !(normalizedCategoryId > 0)) return;
+      if (!result.has(normalizedProductId)) {
+        result.set(normalizedProductId, new Set());
+      }
+      result.get(normalizedProductId).add(normalizedCategoryId);
+    };
+
+    const resolvedCartItems = Array.isArray(cartItemsResolved()) ? cartItemsResolved() : [];
+    resolvedCartItems.forEach((item) => {
+      const productId = Number(item?.product?.id || item?.product_id || 0) || 0;
+      if (!(productId > 0)) return;
+      const product = item?.product || {};
+      addCategory(productId, product?.category_id);
+      addCategory(productId, product?.categoryId);
+      (Array.isArray(product?.category_ids) ? product.category_ids : []).forEach((categoryId) => {
+        addCategory(productId, categoryId);
+      });
+      (Array.isArray(product?.categories) ? product.categories : []).forEach((category) => {
+        addCategory(productId, category?.id || category?.category_id || category);
+      });
+    });
+
+    const globalState = typeof state !== "undefined" && state && typeof state === "object"
+      ? state
+      : null;
+    const productsByCategory = globalState?.productsByCategory && typeof globalState.productsByCategory === "object"
+      ? globalState.productsByCategory
+      : null;
+    if (productsByCategory) {
+      Object.entries(productsByCategory).forEach(([rawCategoryId, products]) => {
+        const categoryId = Number(rawCategoryId || 0) || 0;
+        if (!(categoryId > 0)) return;
+        (Array.isArray(products) ? products : []).forEach((product) => {
+          addCategory(product?.id || product?.product_id, categoryId);
+        });
+      });
+    }
+
+    return new Map(
+      Array.from(result.entries()).map(([productId, categoryIds]) => [
+        productId,
+        Array.from(categoryIds.values()),
+      ])
+    );
+  }
+
+  function buildLocalCheckoutBenefitsProductConfigKey(value, fallbackProductId = null) {
+    const normalized = normalizeCheckoutBenefitProductConfig(value, fallbackProductId);
+    if (!normalized) return "";
+    try {
+      return JSON.stringify(normalized);
+    } catch {
+      return "";
+    }
+  }
+
+  function buildLocalCheckoutBenefitsTargetSets(targetSets = null) {
+    const safeTargetSets = targetSets && typeof targetSets === "object" ? targetSets : {};
+    const exactProductConfigKeysByProductId = new Map();
+    const exactProductConfigs = safeTargetSets.exact_product_configs_by_product_id && typeof safeTargetSets.exact_product_configs_by_product_id === "object"
+      ? safeTargetSets.exact_product_configs_by_product_id
+      : {};
+    Object.entries(exactProductConfigs).forEach(([rawProductId, configs]) => {
+      const productId = Number(rawProductId || 0) || 0;
+      if (!(productId > 0)) return;
+      const keys = new Set(
+        (Array.isArray(configs) ? configs : [])
+          .map((config) => buildLocalCheckoutBenefitsProductConfigKey(config, productId))
+          .filter(Boolean)
+      );
+      if (keys.size) {
+        exactProductConfigKeysByProductId.set(productId, keys);
+      }
+    });
+    return {
+      anyProductIds: new Set((Array.isArray(safeTargetSets.any_product_ids) ? safeTargetSets.any_product_ids : []).map((id) => Number(id || 0)).filter((id) => id > 0)),
+      categoryIds: new Set((Array.isArray(safeTargetSets.category_ids) ? safeTargetSets.category_ids : []).map((id) => Number(id || 0)).filter((id) => id > 0)),
+      comboIds: new Set((Array.isArray(safeTargetSets.combo_ids) ? safeTargetSets.combo_ids : []).map((id) => Number(id || 0)).filter((id) => id > 0)),
+      exactProductConfigKeysByProductId,
+    };
+  }
+
+  function matchLocalCheckoutBenefitsTargetScope(targetSets, item, productCategoriesMap, scope = "product") {
+    const normalizedScope = str(scope || "").trim().toLowerCase() || "product";
+    const matchesProduct = (() => {
+      if (!item || item?.type === "combo") return false;
+      const productId = Number(item?.product_id || 0) || 0;
+      if (!(productId > 0)) return false;
+      if (targetSets?.anyProductIds?.has(productId)) return true;
+      const exactConfigs = targetSets?.exactProductConfigKeysByProductId instanceof Map
+        ? targetSets.exactProductConfigKeysByProductId.get(productId)
+        : null;
+      if (!exactConfigs || !exactConfigs.size) return false;
+      const itemConfigKey = buildLocalCheckoutBenefitsProductConfigKey(
+        item?.product_config || item,
+        productId
+      );
+      return !!(itemConfigKey && exactConfigs.has(itemConfigKey));
+    })();
+    const matchesCategory = (() => {
+      if (!item || item?.type === "combo") return false;
+      const productId = Number(item?.product_id || 0) || 0;
+      if (!(productId > 0)) return false;
+      const categoryIds = productCategoriesMap.get(productId) || [];
+      return categoryIds.some((categoryId) => targetSets?.categoryIds?.has(Number(categoryId || 0)));
+    })();
+    const matchesCombo = !!(item?.type === "combo" && targetSets?.comboIds?.has(Number(item?.combo_id || 0)));
+    if (normalizedScope === "product") return matchesProduct;
+    if (normalizedScope === "category") return matchesCategory;
+    if (normalizedScope === "combo") return matchesCombo;
+    return matchesProduct || matchesCategory || matchesCombo;
+  }
+
+  function calculateLocalCheckoutBenefitsDiscountAmount(price, discountType, discountValue, maxDiscountAmount = null) {
+    const sourcePrice = Number(price || 0);
+    if (!(sourcePrice > 0)) return 0;
+
+    const normalizedType = str(discountType || "").trim().toLowerCase();
+    const normalizedValue = Number(discountValue || 0);
+    let amount = 0;
+
+    if (normalizedType === "percent") {
+      if (!(normalizedValue > 0)) return 0;
+      amount = sourcePrice * (normalizedValue / 100);
+    } else if (normalizedType === "fixed") {
+      if (!(normalizedValue > 0)) return 0;
+      amount = normalizedValue;
+    } else if (normalizedType === "special_price") {
+      amount = Math.max(0, sourcePrice - normalizedValue);
+    } else {
+      return 0;
+    }
+
+    const normalizedMaxDiscount = maxDiscountAmount != null
+      ? Number(maxDiscountAmount || 0)
+      : null;
+    if (Number.isFinite(normalizedMaxDiscount) && normalizedMaxDiscount > 0) {
+      amount = Math.min(amount, normalizedMaxDiscount);
+    }
+    amount = Math.min(amount, sourcePrice);
+    return roundPrice(amount);
+  }
+
+  function buildLocalCheckoutBenefitsDisabledReason(errorCode) {
+    return typeof getCheckoutBenefitsActionErrorMessage === "function"
+      ? getCheckoutBenefitsActionErrorMessage({ message: str(errorCode || "").trim().toUpperCase() })
+      : "";
+  }
+
+  function buildLocalCheckoutBenefitsPromoMinAmountReason(minOrderAmount, itemsTotalBeforePromo) {
+    const remainingAmount = roundPrice(Math.max(0, Number(minOrderAmount || 0) - Number(itemsTotalBeforePromo || 0)));
+    if (!(remainingAmount > 0)) {
+      return buildLocalCheckoutBenefitsDisabledReason("PROMO_NOT_APPLICABLE");
+    }
+    return `Нужно еще ${money(remainingAmount)} до применения.`;
+  }
+
+  function buildLocalCheckoutBenefitsPromoNotApplicableOutcome(previewItems, itemsTotalBeforePromo, {
+    disabledReasonCode = "PROMO_NOT_APPLICABLE",
+    disabledReason = "",
+  } = {}) {
+    return {
+      isApplicable: false,
+      disabledReasonCode,
+      disabledReason: disabledReason || buildLocalCheckoutBenefitsDisabledReason(disabledReasonCode),
+      discountAmount: 0,
+      itemsTotalAfterPromo: roundPrice(Number(itemsTotalBeforePromo || 0)),
+      items: previewItems.map((item) => ({ ...item, discount: item?.discount ? { ...item.discount } : item?.discount })),
+    };
+  }
+
+  function computeLocalCheckoutBenefitsDiscountOutcome(rule, previewItems, productCategoriesMap) {
+    const items = previewItems.map((item) => ({ ...item, discount: item?.discount ? { ...item.discount } : item?.discount }));
+    const baseItemsTotal = roundPrice(items.reduce((sum, item) => sum + Number(item?.line_total || 0), 0));
+    if (!rule) {
+      return {
+        isApplicable: false,
+        errorCode: "DISCOUNT_INVALID",
+        disabledReason: buildLocalCheckoutBenefitsDisabledReason("DISCOUNT_INVALID"),
+        discountAmount: 0,
+        items,
+        itemsTotalAfterDiscount: baseItemsTotal,
+      };
+    }
+    if (rule?.server_locked) {
+      const errorCode = str(rule?.server_disabled_reason_code || "DISCOUNT_NOT_AVAILABLE").trim().toUpperCase() || "DISCOUNT_NOT_AVAILABLE";
+      return {
+        isApplicable: false,
+        errorCode,
+        disabledReason: str(rule?.server_disabled_reason || "").trim() || buildLocalCheckoutBenefitsDisabledReason(errorCode),
+        discountAmount: 0,
+        items,
+        itemsTotalAfterDiscount: baseItemsTotal,
+      };
+    }
+
+    const applyTo = str(rule?.apply_to || "").trim().toLowerCase() || "order";
+    const minOrderAmount = rule?.min_order_amount != null ? Number(rule.min_order_amount || 0) : 0;
+    if (applyTo === "order") {
+      if (minOrderAmount > 0 && baseItemsTotal < minOrderAmount) {
+        return {
+          isApplicable: false,
+          errorCode: "DISCOUNT_NOT_APPLICABLE",
+          disabledReason: buildLocalCheckoutBenefitsDisabledReason("DISCOUNT_NOT_APPLICABLE"),
+          discountAmount: 0,
+          items,
+          itemsTotalAfterDiscount: baseItemsTotal,
+        };
+      }
+      const orderDiscountAmount = calculateLocalCheckoutBenefitsDiscountAmount(
+        baseItemsTotal,
+        rule?.discount_type,
+        rule?.discount_value,
+        rule?.max_discount_amount
+      );
+      if (!(orderDiscountAmount > 0)) {
+        return {
+          isApplicable: false,
+          errorCode: "DISCOUNT_NOT_APPLICABLE",
+          disabledReason: buildLocalCheckoutBenefitsDisabledReason("DISCOUNT_NOT_APPLICABLE"),
+          discountAmount: 0,
+          items,
+          itemsTotalAfterDiscount: baseItemsTotal,
+        };
+      }
+      return {
+        isApplicable: true,
+        errorCode: "",
+        disabledReason: "",
+        discountAmount: orderDiscountAmount,
+        items,
+        itemsTotalAfterDiscount: roundPrice(Math.max(0, baseItemsTotal - orderDiscountAmount)),
+      };
+    }
+
+    const resolvedTargets = buildLocalCheckoutBenefitsTargetSets(rule?.target_sets);
+    let itemsDiscount = 0;
+    items.forEach((item) => {
+      if (!matchLocalCheckoutBenefitsTargetScope(resolvedTargets, item, productCategoriesMap, applyTo === "combo" ? "combo" : applyTo || "any")) {
+        return;
+      }
+      const itemDiscount = calculateLocalCheckoutBenefitsDiscountAmount(
+        Number(item?.line_total || 0),
+        rule?.discount_type,
+        rule?.discount_value,
+        rule?.max_discount_amount
+      );
+      if (!(itemDiscount > 0)) return;
+      item.line_total = roundPrice(Math.max(0, Number(item?.line_total || 0) - itemDiscount));
+      itemsDiscount += itemDiscount;
+    });
+    if (!(itemsDiscount > 0)) {
+      return {
+        isApplicable: false,
+        errorCode: "DISCOUNT_NOT_APPLICABLE",
+        disabledReason: buildLocalCheckoutBenefitsDisabledReason("DISCOUNT_NOT_APPLICABLE"),
+        discountAmount: 0,
+        items,
+        itemsTotalAfterDiscount: baseItemsTotal,
+      };
+    }
+    return {
+      isApplicable: true,
+      errorCode: "",
+      disabledReason: "",
+      discountAmount: roundPrice(itemsDiscount),
+      items,
+      itemsTotalAfterDiscount: roundPrice(items.reduce((sum, item) => sum + Number(item?.line_total || 0), 0)),
+    };
+  }
+
+  function computeLocalCheckoutBenefitsPromoOutcome(rule, previewItems, itemsTotalBeforePromo, productCategoriesMap) {
+    const items = previewItems.map((item) => ({ ...item, discount: item?.discount ? { ...item.discount } : item?.discount }));
+    const baseItemsTotal = roundPrice(Number(itemsTotalBeforePromo != null
+      ? itemsTotalBeforePromo
+      : items.reduce((sum, item) => sum + Number(item?.line_total || 0), 0)
+    ));
+    if (!rule) {
+      return buildLocalCheckoutBenefitsPromoNotApplicableOutcome(items, baseItemsTotal, {
+        disabledReasonCode: "PROMO_INVALID",
+      });
+    }
+    if (rule?.server_locked) {
+      const disabledReasonCode = str(rule?.server_disabled_reason_code || "PROMO_NOT_AVAILABLE").trim().toUpperCase() || "PROMO_NOT_AVAILABLE";
+      return buildLocalCheckoutBenefitsPromoNotApplicableOutcome(items, baseItemsTotal, {
+        disabledReasonCode,
+        disabledReason: str(rule?.server_disabled_reason || "").trim(),
+      });
+    }
+
+    const runtimeConfig = rule?.runtime_config && typeof rule.runtime_config === "object"
+      ? rule.runtime_config
+      : {};
+    const rewardType = str(runtimeConfig?.reward_type || "discount").trim().toLowerCase() || "discount";
+    const productRewardType = str(runtimeConfig?.product_reward_type || "gift").trim().toLowerCase() || "gift";
+    const applyTo = str(runtimeConfig?.apply_to || "order").trim().toLowerCase() || "order";
+    const minOrderAmount = runtimeConfig?.min_order_amount != null
+      ? Number(runtimeConfig.min_order_amount || 0)
+      : (rule?.min_order_amount != null ? Number(rule.min_order_amount || 0) : 0);
+    if (minOrderAmount > 0 && baseItemsTotal < minOrderAmount) {
+      return buildLocalCheckoutBenefitsPromoNotApplicableOutcome(items, baseItemsTotal, {
+        disabledReasonCode: "PROMO_NOT_APPLICABLE",
+        disabledReason: buildLocalCheckoutBenefitsPromoMinAmountReason(minOrderAmount, baseItemsTotal),
+      });
+    }
+
+    const resolvedTargets = buildLocalCheckoutBenefitsTargetSets(rule?.target_sets);
+    if (rewardType === "discount") {
+      if (applyTo === "order") {
+        const promoDiscountAmount = calculateLocalCheckoutBenefitsDiscountAmount(
+          baseItemsTotal,
+          runtimeConfig?.discount_type,
+          runtimeConfig?.discount_value,
+          runtimeConfig?.max_discount_amount
+        );
+        if (!(promoDiscountAmount > 0)) {
+          return buildLocalCheckoutBenefitsPromoNotApplicableOutcome(items, baseItemsTotal);
+        }
+        return {
+          isApplicable: true,
+          disabledReasonCode: "",
+          disabledReason: "",
+          discountAmount: promoDiscountAmount,
+          items,
+          itemsTotalAfterPromo: roundPrice(Math.max(0, baseItemsTotal - promoDiscountAmount)),
+        };
+      }
+      let promoItemsDiscount = 0;
+      items.forEach((item) => {
+        if (!matchLocalCheckoutBenefitsTargetScope(resolvedTargets, item, productCategoriesMap, applyTo || "any")) {
+          return;
+        }
+        const itemDiscount = calculateLocalCheckoutBenefitsDiscountAmount(
+          Number(item?.line_total || 0),
+          runtimeConfig?.discount_type,
+          runtimeConfig?.discount_value,
+          runtimeConfig?.max_discount_amount
+        );
+        if (!(itemDiscount > 0)) return;
+        item.line_total = roundPrice(Math.max(0, Number(item?.line_total || 0) - itemDiscount));
+        promoItemsDiscount += itemDiscount;
+      });
+      if (!(promoItemsDiscount > 0)) {
+        return buildLocalCheckoutBenefitsPromoNotApplicableOutcome(items, baseItemsTotal);
+      }
+      return {
+        isApplicable: true,
+        disabledReasonCode: "",
+        disabledReason: "",
+        discountAmount: roundPrice(promoItemsDiscount),
+        items,
+        itemsTotalAfterPromo: roundPrice(items.reduce((sum, item) => sum + Number(item?.line_total || 0), 0)),
+      };
+    }
+
+    if (productRewardType === "gift") {
+      const hasTargets = resolvedTargets.anyProductIds.size > 0
+        || resolvedTargets.categoryIds.size > 0
+        || resolvedTargets.comboIds.size > 0
+        || resolvedTargets.exactProductConfigKeysByProductId.size > 0;
+      return hasTargets
+        ? {
+            isApplicable: true,
+            disabledReasonCode: "",
+            disabledReason: "",
+            discountAmount: 0,
+            items,
+            itemsTotalAfterPromo: baseItemsTotal,
+          }
+        : buildLocalCheckoutBenefitsPromoNotApplicableOutcome(items, baseItemsTotal);
+    }
+
+    let rewardItemsDiscount = 0;
+    items.forEach((item) => {
+      if (!matchLocalCheckoutBenefitsTargetScope(resolvedTargets, item, productCategoriesMap, "any")) {
+        return;
+      }
+      const itemDiscount = calculateLocalCheckoutBenefitsDiscountAmount(
+        Number(item?.line_total || 0),
+        runtimeConfig?.discount_type,
+        runtimeConfig?.discount_value,
+        runtimeConfig?.max_discount_amount
+      );
+      if (!(itemDiscount > 0)) return;
+      item.line_total = roundPrice(Math.max(0, Number(item?.line_total || 0) - itemDiscount));
+      rewardItemsDiscount += itemDiscount;
+    });
+    if (!(rewardItemsDiscount > 0)) {
+      return buildLocalCheckoutBenefitsPromoNotApplicableOutcome(items, baseItemsTotal);
+    }
+    return {
+      isApplicable: true,
+      disabledReasonCode: "",
+      disabledReason: "",
+      discountAmount: roundPrice(rewardItemsDiscount),
+      items,
+      itemsTotalAfterPromo: roundPrice(items.reduce((sum, item) => sum + Number(item?.line_total || 0), 0)),
+    };
+  }
+
+  function buildLocalCheckoutBenefitsLineTotalsByCartKey(items = []) {
+    return (Array.isArray(items) ? items : []).reduce((acc, item) => {
+      const cartKey = str(item?.cart_key || "").trim();
+      if (!cartKey) return acc;
+      acc[cartKey] = roundPrice(Number(item?.line_total || 0));
+      return acc;
+    }, {});
+  }
+
+  function buildLocalCheckoutBenefitsSummarySnapshot(previewData, subtotalBeforeDiscount, itemsTotalAfterBenefits, discountBreakdown = []) {
+    const subtotal = roundPrice(Number(subtotalBeforeDiscount || 0));
+    const itemsTotal = roundPrice(Number(itemsTotalAfterBenefits || 0));
+    const delivery = roundPrice(Number(previewData?.summary?.delivery || 0));
+    return {
+      subtotal,
+      items_total: itemsTotal,
+      delivery,
+      discount_total: roundPrice(Math.max(0, subtotal - itemsTotal)),
+      total: roundPrice(itemsTotal + delivery),
+      discount_breakdown: (Array.isArray(discountBreakdown) ? discountBreakdown : [])
+        .filter((entry) => Number(entry?.amount || 0) > 0)
+        .map((entry) => ({
+          key: str(entry?.key || "").trim(),
+          title: str(entry?.title || "").trim() || "Скидка",
+          amount: roundPrice(Number(entry?.amount || 0)),
+          source_kind: str(entry?.source_kind || "").trim().toLowerCase() || null,
+          promo_code: entry?.promo_code
+            ? normalizeCheckoutBenefitsPromoInputValue(entry.promo_code, { trim: true })
+            : null,
+        })),
+    };
+  }
+
   function resolveCheckoutBenefitsLocalSummary(previewData, {
     selectedDiscountId,
     selectedDiscountSource,
@@ -10801,17 +11654,10 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
   } = {}) {
     const summaryStates = previewData?.client_calculation?.summary_states;
     if (!summaryStates || typeof summaryStates !== "object") return null;
-
-    const discountKey = (() => {
-      const source = normalizeCheckoutDiscountSource(selectedDiscountSource);
-      const id = normalizeCheckoutSelectedDiscountId(selectedDiscountId);
-      return source && id ? `${source}:${id}` : "";
-    })();
-    const promoKey = (() => {
-      const source = normalizeCheckoutPromoSource(selectedPromoSource);
-      const id = normalizeCheckoutSelectedDiscountId(selectedPromoId);
-      return source && id ? `${source}:${id}` : "";
-    })();
+    const discountKey = buildLocalCheckoutBenefitsDiscountKey(selectedDiscountSource, selectedDiscountId);
+    const promoKey = normalizeCheckoutPromoSource(selectedPromoSource) && normalizeCheckoutSelectedDiscountId(selectedPromoId)
+      ? `${normalizeCheckoutPromoSource(selectedPromoSource)}:${normalizeCheckoutSelectedDiscountId(selectedPromoId)}`
+      : "";
     const stateKey = buildCheckoutBenefitsSelectionStateKey({ discountKey, promoKey });
     const summary = summaryStates[stateKey]
       || (discountKey ? summaryStates[buildCheckoutBenefitsSelectionStateKey({ discountKey })] : null)
@@ -10823,6 +11669,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
   }
 
   function buildLocalCheckoutBenefitsPreviewData(previewData, {
+    previewRequest = null,
     selectedDiscountId,
     selectedDiscountSource,
     promoCode,
@@ -10830,30 +11677,160 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     selectedPromoRewardId,
   } = {}) {
     if (!previewData || typeof previewData !== "object") return null;
-    const selectedDiscountKey = (() => {
-      const source = normalizeCheckoutDiscountSource(selectedDiscountSource);
-      const id = normalizeCheckoutSelectedDiscountId(selectedDiscountId);
-      return source && id ? `${source}:${id}` : "";
-    })();
-    const selectedPromoKey = (() => {
-      const source = normalizeCheckoutPromoSource(selectedPromoSource);
-      const id = source === "reward_promo"
-        ? normalizeCheckoutSelectedDiscountId(selectedPromoRewardId)
-        : normalizeCheckoutSelectedDiscountId(
-            Array.isArray(previewData?.promo_codes)
-              ? (previewData.promo_codes.find((entry) => str(entry?.code || "").trim() === str(promoCode || "").trim())?.id)
-              : null
-          );
-      return source && id ? `${source}:${id}` : "";
-    })();
+    const selectedDiscountKey = buildLocalCheckoutBenefitsDiscountKey(
+      selectedDiscountSource,
+      selectedDiscountId
+    );
+    const selectedPromoKey = buildLocalCheckoutBenefitsPromoKey(previewData, {
+      promoCode,
+      selectedPromoSource,
+      selectedPromoRewardId,
+    });
+    const clientCalculation = previewData?.client_calculation && typeof previewData.client_calculation === "object"
+      ? previewData.client_calculation
+      : null;
+    const discountRules = Array.isArray(clientCalculation?.discount_rules) ? clientCalculation.discount_rules : [];
+    const promoRules = Array.isArray(clientCalculation?.promo_rules) ? clientCalculation.promo_rules : [];
+
+    if (Number(clientCalculation?.version || 0) >= 2 && (discountRules.length || promoRules.length)) {
+      const safePreviewRequest = cloneCheckoutBenefitsStorePreviewRequest(
+        previewRequest && typeof previewRequest === "object"
+          ? previewRequest
+          : buildCheckoutBenefitsCurrentPreviewRequest()
+      );
+      const baseItems = buildLocalCheckoutBenefitsPreviewItems(safePreviewRequest);
+      const baseItemsTotal = roundPrice(baseItems.reduce((sum, item) => sum + Number(item?.line_total || 0), 0));
+      const subtotalBeforeDiscount = roundPrice(baseItems.reduce((sum, item) => {
+        const originalLineTotal = Number(item?.discount?.original_line_total || item?.line_total || 0);
+        return sum + Math.max(Number(item?.line_total || 0), originalLineTotal);
+      }, 0));
+      const productCategoriesMap = buildLocalCheckoutBenefitsProductCategoriesMap(baseItems);
+      const discountRuleOutcomes = new Map(
+        discountRules
+          .map((rule) => [str(rule?.selection_key || "").trim(), computeLocalCheckoutBenefitsDiscountOutcome(rule, baseItems, productCategoriesMap)])
+          .filter(([selectionKey]) => !!selectionKey)
+      );
+      const selectedDiscountRule = discountRules.find((rule) => str(rule?.selection_key || "").trim() === selectedDiscountKey) || null;
+      const selectedDiscountOutcome = selectedDiscountKey ? (discountRuleOutcomes.get(selectedDiscountKey) || null) : null;
+      const hasSelectedDiscount = selectedDiscountOutcome?.isApplicable === true;
+      const promoSourceItems = hasSelectedDiscount
+        ? (Array.isArray(selectedDiscountOutcome?.items) ? selectedDiscountOutcome.items : baseItems)
+        : baseItems;
+      const promoSourceItemsTotal = hasSelectedDiscount
+        ? Number(selectedDiscountOutcome?.itemsTotalAfterDiscount || baseItemsTotal)
+        : baseItemsTotal;
+      const promoRuleOutcomes = new Map(
+        promoRules
+          .map((rule) => [str(rule?.selection_key || "").trim(), computeLocalCheckoutBenefitsPromoOutcome(rule, promoSourceItems, promoSourceItemsTotal, productCategoriesMap)])
+          .filter(([selectionKey]) => !!selectionKey)
+      );
+      const selectedPromoRule = promoRules.find((rule) => str(rule?.selection_key || "").trim() === selectedPromoKey) || null;
+      const selectedPromoOutcome = selectedPromoKey ? (promoRuleOutcomes.get(selectedPromoKey) || null) : null;
+      const canCombineSelectedBenefits = !hasSelectedDiscount || !selectedPromoRule || !selectedDiscountRule
+        ? true
+        : (isCheckoutBenefitStackable(selectedDiscountRule) && isCheckoutBenefitStackable(selectedPromoRule));
+      const hasSelectedPromo = selectedPromoOutcome?.isApplicable === true && canCombineSelectedBenefits;
+      const finalItems = hasSelectedPromo
+        ? (Array.isArray(selectedPromoOutcome?.items) ? selectedPromoOutcome.items : promoSourceItems)
+        : (hasSelectedDiscount ? promoSourceItems : baseItems);
+      const finalItemsTotal = hasSelectedPromo
+        ? Number(selectedPromoOutcome?.itemsTotalAfterPromo || promoSourceItemsTotal)
+        : (hasSelectedDiscount ? promoSourceItemsTotal : baseItemsTotal);
+
+      const discountCards = Array.isArray(previewData?.discounts)
+        ? previewData.discounts.map((entry) => {
+            const selectionKey = buildCheckoutBenefitDiscountSelectionKey(entry);
+            const outcome = selectionKey ? (discountRuleOutcomes.get(selectionKey) || null) : null;
+            const isApplicable = outcome ? outcome.isApplicable === true : entry?.is_applicable === true;
+            const disabledReasonCode = outcome?.errorCode
+              ? str(outcome.errorCode).trim().toUpperCase()
+              : str(entry?.disabled_reason_code || "").trim().toUpperCase();
+            const disabledReason = isApplicable
+              ? ""
+              : (str(outcome?.disabledReason || "").trim() || str(entry?.disabled_reason || "").trim());
+            return {
+              ...entry,
+              is_applicable: isApplicable,
+              disabled_reason_code: isApplicable ? "" : disabledReasonCode,
+              disabled_reason: isApplicable ? "" : disabledReason,
+              is_selected: isApplicable && selectionKey === selectedDiscountKey,
+            };
+          })
+        : [];
+      const promoCards = Array.isArray(previewData?.promo_codes)
+        ? previewData.promo_codes.map((entry) => {
+            const selectionKey = buildCheckoutBenefitPromoSelectionKey(entry);
+            const outcome = selectionKey ? (promoRuleOutcomes.get(selectionKey) || null) : null;
+            const isApplicable = outcome ? outcome.isApplicable === true : entry?.is_applicable === true;
+            const disabledReasonCode = outcome?.disabledReasonCode
+              ? str(outcome.disabledReasonCode).trim().toUpperCase()
+              : str(entry?.disabled_reason_code || "").trim().toUpperCase();
+            const disabledReason = isApplicable
+              ? ""
+              : (str(outcome?.disabledReason || "").trim() || str(entry?.disabled_reason || "").trim());
+            return {
+              ...entry,
+              is_applicable: isApplicable,
+              disabled_reason_code: isApplicable ? "" : disabledReasonCode,
+              disabled_reason: isApplicable ? "" : disabledReason,
+              is_selected: isApplicable && canCombineSelectedBenefits && selectionKey === selectedPromoKey,
+            };
+          })
+        : [];
+
+      const discountBreakdown = [];
+      if (hasSelectedDiscount && Number(selectedDiscountOutcome?.discountAmount || 0) > 0) {
+        const selectedDiscountCard = discountCards.find((entry) => entry?.is_selected) || null;
+        discountBreakdown.push({
+          key: `discount_${Number(selectedDiscountRule?.source_discount_id || selectedDiscountRule?.selection_id || 0) || "selected"}`,
+          title: str(selectedDiscountCard?.title || "").trim() || "Скидка",
+          amount: roundPrice(Number(selectedDiscountOutcome.discountAmount || 0)),
+          source_kind: str(selectedDiscountRule?.source || "discount").trim().toLowerCase() || "discount",
+          promo_code: null,
+        });
+      }
+      if (hasSelectedPromo && Number(selectedPromoOutcome?.discountAmount || 0) > 0) {
+        const selectedPromoCard = promoCards.find((entry) => entry?.is_selected) || null;
+        discountBreakdown.push({
+          key: `promo_${Number(selectedPromoRule?.selection_id || 0) || "selected"}`,
+          title: str(selectedPromoCard?.title || selectedPromoCard?.code || "").trim() || "Промокод",
+          amount: roundPrice(Number(selectedPromoOutcome.discountAmount || 0)),
+          source_kind: str(selectedPromoRule?.source || "promo_code").trim().toLowerCase() || "promo_code",
+          promo_code: normalizeCheckoutBenefitsPromoInputValue(
+            selectedPromoCard?.code || promoCode || "",
+            { trim: true }
+          ) || null,
+        });
+      }
+
+      return {
+        ...cloneCheckoutBenefitsPreviewData(previewData),
+        discounts: discountCards,
+        promo_codes: promoCards,
+        summary: buildLocalCheckoutBenefitsSummarySnapshot(
+          previewData,
+          subtotalBeforeDiscount,
+          finalItemsTotal,
+          discountBreakdown
+        ),
+        local_line_totals_by_cart_key: buildLocalCheckoutBenefitsLineTotalsByCartKey(finalItems),
+      };
+    }
+
+    const selectedPromoId = normalizeCheckoutPromoSource(selectedPromoSource) === "reward_promo"
+      ? selectedPromoRewardId
+      : normalizeCheckoutSelectedDiscountId(
+          Array.isArray(previewData?.promo_codes)
+            ? previewData.promo_codes.find((entry) => (
+                normalizeCheckoutBenefitsPromoInputValue(entry?.code || "", { trim: true })
+                === normalizeCheckoutBenefitsPromoInputValue(promoCode || "", { trim: true })
+              ))?.id
+            : null
+        );
     const summary = resolveCheckoutBenefitsLocalSummary(previewData, {
       selectedDiscountId,
       selectedDiscountSource,
-      selectedPromoId: normalizeCheckoutPromoSource(selectedPromoSource) === "reward_promo"
-        ? selectedPromoRewardId
-        : (Array.isArray(previewData?.promo_codes)
-            ? previewData.promo_codes.find((entry) => str(entry?.code || "").trim() === str(promoCode || "").trim())?.id
-            : null),
+      selectedPromoId,
       selectedPromoSource,
     });
     if (!summary) return null;
@@ -11219,13 +12196,16 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     return discountsByIndex;
   }
 
-  function buildCartPricingLineStates(cartItems, finalItemsTotal) {
+  function buildCartPricingLineStates(cartItems, finalItemsTotal, previewData = null) {
     const safeItems = Array.isArray(cartItems) ? cartItems : [];
     const cartTotals = computeCartTotals(safeItems);
     const pricingTotals = {
       nonAutoTotal: Number(cartTotals?.nonAutoTotal || 0),
       autoEligibleTotal: Number(cartTotals?.autoEligibleTotal || 0),
     };
+    const localLineTotalsByCartKey = previewData?.local_line_totals_by_cart_key && typeof previewData.local_line_totals_by_cart_key === "object"
+      ? previewData.local_line_totals_by_cart_key
+      : null;
     const lineStates = [];
 
     safeItems.forEach((item) => {
@@ -11278,9 +12258,12 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       });
     });
 
+    const baseLinesTotal = roundPrice(
+      lineStates.reduce((sum, entry) => sum + Number(entry?.baseTotal || 0), 0)
+    );
     const extraOrderDiscount = roundPrice(Math.max(
       0,
-      Number(cartTotals?.total || 0) - roundPrice(Number(finalItemsTotal || 0))
+      baseLinesTotal - roundPrice(Number(finalItemsTotal || 0))
     ));
     const distributedByIndex = distributeCartPricingDiscountAcrossLines(lineStates, extraOrderDiscount);
 
@@ -11540,6 +12523,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     } catch (_) {}
 
     const localPreviewData = buildLocalCheckoutBenefitsPreviewData(previewData, {
+      previewRequest,
       selectedDiscountId: draft?.selected_discount_id,
       selectedDiscountSource: draft?.selected_discount_source,
       promoCode: draft?.promo_code || "",
@@ -11680,12 +12664,14 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       selectedPromoRewardId: draft?.selected_promo_reward_id,
     });
     const storeSnapshot = getBenefitsStoreSnapshot(previewRequest);
-    const exactPreviewData = peekCheckoutBenefitsPreviewCache(previewRequest);
-    const previewData = exactPreviewData || storeSnapshot?.basePreview || null;
+    const exactPreviewData = peekWarmCheckoutBenefitsPreviewCache(previewRequest);
+    const scopePreviewData = peekWarmCheckoutBenefitsScopePreviewCache(previewRequest);
+    const previewData = exactPreviewData || storeSnapshot?.basePreview || scopePreviewData || null;
     const localPreviewData = exactPreviewData
       || storeSnapshot?.derivedPreview
       || (previewData
         ? buildLocalCheckoutBenefitsPreviewData(previewData, {
+            previewRequest,
             selectedDiscountId: draft?.selected_discount_id,
             selectedDiscountSource: draft?.selected_discount_source,
             promoCode: draft?.promo_code || "",
@@ -11746,7 +12732,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
   }
 
   function getCartPricingCachedDeliverySettings() {
-    return deliverySettingsCache || null;
+    return deliverySettingsCache || window.__shopDeliverySettings || null;
   }
 
   function buildCartPricingDiscountBreakdown(cartItems, totalsForPricing, summaryDiscount, orderLevelDiscount) {
@@ -11966,13 +12952,16 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     };
   }
 
-  function buildCartPricingLineStates(cartItems, finalItemsTotal) {
+  function buildCartPricingLineStates(cartItems, finalItemsTotal, previewData = null) {
     const safeItems = Array.isArray(cartItems) ? cartItems : [];
     const cartTotals = computeCartTotals(safeItems);
     const pricingTotals = {
       nonAutoTotal: Number(cartTotals?.nonAutoTotal || 0),
       autoEligibleTotal: Number(cartTotals?.autoEligibleTotal || 0),
     };
+    const localLineTotalsByCartKey = previewData?.local_line_totals_by_cart_key && typeof previewData.local_line_totals_by_cart_key === "object"
+      ? previewData.local_line_totals_by_cart_key
+      : null;
     const lineStates = [];
 
     safeItems.forEach((item) => {
@@ -11984,9 +12973,14 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
         const currentUnit = roundPrice(Number(item?.unit_price_override || 0));
         const oldRaw = Number(item?.unit_price_before_discount || 0);
         const oldUnit = oldRaw > currentUnit ? roundPrice(oldRaw) : currentUnit;
+        const localLineTotal = localLineTotalsByCartKey
+          ? Number(localLineTotalsByCartKey[key])
+          : NaN;
         lineStates.push({
           key,
-          baseTotal: roundPrice(currentUnit * qty),
+          baseTotal: Number.isFinite(localLineTotal)
+            ? roundPrice(Math.max(0, localLineTotal))
+            : roundPrice(currentUnit * qty),
           originalTotal: roundPrice(Math.max(oldUnit * qty, currentUnit * qty)),
         });
         return;
@@ -12014,7 +13008,12 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
         );
       }
 
-      const baseTotal = roundPrice(Number(pricing?.lineTotal || 0));
+      const localLineTotal = localLineTotalsByCartKey
+        ? Number(localLineTotalsByCartKey[key])
+        : NaN;
+      const baseTotal = Number.isFinite(localLineTotal)
+        ? roundPrice(Math.max(0, localLineTotal))
+        : roundPrice(Number(pricing?.lineTotal || 0));
       const originalTotal = roundPrice(Math.max(originalUnit * paidQty, baseTotal));
       lineStates.push({
         key,
@@ -12023,9 +13022,12 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       });
     });
 
+    const baseLinesTotal = roundPrice(
+      lineStates.reduce((sum, entry) => sum + Number(entry?.baseTotal || 0), 0)
+    );
     const extraOrderDiscount = roundPrice(Math.max(
       0,
-      Number(cartTotals?.total || 0) - roundPrice(Number(finalItemsTotal || 0))
+      baseLinesTotal - roundPrice(Number(finalItemsTotal || 0))
     ));
     const distributedByIndex = distributeCartPricingDiscountAcrossLines(lineStates, extraOrderDiscount);
 
@@ -12295,6 +13297,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
 
     return {
       visible: true,
+      methodCode,
       isDelivery: deliveryState.isDelivery,
       subtotalBeforeDiscount,
       itemsTotal,
@@ -12306,9 +13309,15 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       changeFrom: changeState.changeFrom,
       changeAmount: changeState.changeAmount,
       total,
+      deliveryQuote,
+      defaultDeliverySettings,
       discountDetailItems: discountDetails.items,
       discountDetailNote: discountDetails.note,
-      lineStates: buildCartPricingLineStates(cartItems, itemsTotal),
+      lineStates: buildCartPricingLineStates(
+        cartItems,
+        itemsTotal,
+        previewBundle.localPreviewData || previewBundle.previewData || null
+      ),
     };
   }
 
@@ -12354,7 +13363,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     return displayTotal;
   }
 
-  async function buildCartPricingSummaryState() {
+  async function buildCartPricingSummaryState(opts = {}) {
     const cartItems = cartItemsResolved();
     if (!Array.isArray(cartItems) || !cartItems.length) {
       return {
@@ -12377,11 +13386,12 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     const token = typeof getCustomerToken === "function"
       ? str(getCustomerToken() || "").trim()
       : "";
+    const forceBenefits = opts?.forceBenefits === true;
     if (token) {
       try {
         await ensureBenefitsStoreHydrated({
           previewRequest,
-          force: false,
+          force: forceBenefits,
           warmDetails: false,
         });
       } catch (_) {}
@@ -12395,8 +13405,8 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       return summaryState;
     }
 
-    let deliveryQuote = null;
-    let defaultDeliverySettings = getCartPricingCachedDeliverySettings();
+    let deliveryQuote = summaryState?.deliveryQuote || null;
+    let defaultDeliverySettings = summaryState?.defaultDeliverySettings || getCartPricingCachedDeliverySettings();
     try {
       deliveryQuote = await getDeliveryQuote(summaryState.itemsTotal);
     } catch (_) {}
@@ -12440,38 +13450,100 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     };
   }
 
-  let cartPricingSnapshotSyncSeq = 0;
-
-  async function syncCartPricingSummaryUi() {
-    const sections = Array.from(document.querySelectorAll(".shop-cart-pricing-summary-section"))
+  function getConnectedCartPricingSummarySections() {
+    return Array.from(document.querySelectorAll(".shop-cart-pricing-summary-section"))
       .filter((node) => node && node.isConnected);
+  }
 
-    const seq = ++cartPricingSnapshotSyncSeq;
-    sections.forEach((section) => setCartPricingSummaryLoading(section));
-
-    let summaryState = null;
-    try {
-      summaryState = await buildCartPricingSummaryState();
-    } catch (error) {
-      console.warn("Failed to sync cart pricing summary:", error);
-      summaryState = {
-        visible: false,
-        lineStates: [],
-      };
-    }
-    if (seq !== cartPricingSnapshotSyncSeq) return;
-
-    applyCartPricingCheckoutTotals(summaryState);
-    syncCartBenefitsServiceBlocksUi();
-    if (!sections.length) return;
-
-    sections.forEach((section) => {
-      renderCartPricingSummarySection(section, summaryState);
+  function applyCartPricingStateToSummarySections(summaryState = null, sections = null) {
+    const effectiveSummaryState = summaryState && typeof summaryState === "object"
+      ? summaryState
+      : buildCartPricingSnapshot();
+    const targetSections = Array.isArray(sections) ? sections : getConnectedCartPricingSummarySections();
+    if (!targetSections.length) return effectiveSummaryState;
+    targetSections.forEach((section) => {
+      renderCartPricingSummarySection(section, effectiveSummaryState);
       const listEl = section.parentElement;
-      if (listEl && summaryState && Array.isArray(summaryState.lineStates)) {
-        applyCartPricingLineStatesToList(listEl, summaryState.lineStates);
+      if (listEl && Array.isArray(effectiveSummaryState?.lineStates)) {
+        applyCartPricingLineStatesToList(listEl, effectiveSummaryState.lineStates);
       }
     });
+    return effectiveSummaryState;
+  }
+
+  function applyCartPricingStateImmediately(summaryState = null) {
+    const effectiveSummaryState = summaryState && typeof summaryState === "object"
+      ? summaryState
+      : buildCartPricingSnapshot();
+    applyCartPricingCheckoutTotals(effectiveSummaryState);
+    syncCartBenefitsServiceBlocksUi();
+    applyCartPricingStateToSummarySections(effectiveSummaryState);
+    return effectiveSummaryState;
+  }
+
+  let cartPricingAsyncRefreshTimer = 0;
+  let cartPricingAsyncRefreshRunning = false;
+  let cartPricingAsyncRefreshPending = false;
+  let cartPricingAsyncRefreshSeq = 0;
+
+  async function runQueuedCartPricingAsyncRefresh() {
+    if (cartPricingAsyncRefreshRunning) return null;
+    cartPricingAsyncRefreshRunning = true;
+    try {
+      let appliedState = null;
+      while (cartPricingAsyncRefreshPending) {
+        cartPricingAsyncRefreshPending = false;
+        const runSeq = cartPricingAsyncRefreshSeq;
+        let summaryState = null;
+        try {
+          summaryState = await buildCartPricingSummaryState({ forceBenefits: true });
+        } catch (error) {
+          console.warn("Failed to refresh cart pricing summary:", error);
+          summaryState = buildCartPricingSnapshot();
+        }
+        if (runSeq !== cartPricingAsyncRefreshSeq) {
+          continue;
+        }
+        appliedState = applyCartPricingStateImmediately(summaryState);
+        if (typeof applyDeliveryProgressSnapshot === "function") {
+          applyDeliveryProgressSnapshot(appliedState);
+        }
+      }
+      return appliedState;
+    } finally {
+      cartPricingAsyncRefreshRunning = false;
+      if (cartPricingAsyncRefreshPending && !cartPricingAsyncRefreshTimer) {
+        cartPricingAsyncRefreshTimer = window.setTimeout(() => {
+          cartPricingAsyncRefreshTimer = 0;
+          void runQueuedCartPricingAsyncRefresh();
+        }, 0);
+      }
+    }
+  }
+
+  function queueCartPricingAsyncRefresh(reason = "", delayMs = 80) {
+    if (!reason) {
+      // keep interface flexible for silent callers
+    }
+    cartPricingAsyncRefreshPending = true;
+    cartPricingAsyncRefreshSeq += 1;
+    if (cartPricingAsyncRefreshTimer) {
+      window.clearTimeout(cartPricingAsyncRefreshTimer);
+    }
+    cartPricingAsyncRefreshTimer = window.setTimeout(() => {
+      cartPricingAsyncRefreshTimer = 0;
+      void runQueuedCartPricingAsyncRefresh();
+    }, Math.max(0, Number(delayMs || 0)));
+    return Promise.resolve(null);
+  }
+
+  async function syncCartPricingSummaryUi() {
+    const summaryState = applyCartPricingStateImmediately(buildCartPricingSnapshot());
+    if (typeof applyDeliveryProgressSnapshot === "function") {
+      applyDeliveryProgressSnapshot(summaryState);
+    }
+    queueCartPricingAsyncRefresh("syncCartPricingSummaryUi", 70);
+    return summaryState;
   }
 
   window.syncShopCartPricingSummaryUi = syncCartPricingSummaryUi;
@@ -12522,7 +13594,9 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     return "Условие промокода больше не выполняется.";
   }
 
-  async function fetchCheckoutBenefitsPreview(previewRequest) {
+  async function fetchCheckoutBenefitsPreview(previewRequest, {
+    force = false,
+  } = {}) {
     const token = typeof getCustomerToken === "function"
       ? str(getCustomerToken() || "").trim()
       : "";
@@ -12530,7 +13604,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
 
     const cacheKey = buildCheckoutBenefitsPreviewCacheKey(previewRequest);
     if (cacheKey) {
-      const cached = peekCheckoutBenefitsPreviewCache(previewRequest);
+      const cached = !force ? peekCheckoutBenefitsPreviewCache(previewRequest) : null;
       if (cached) return cached;
       const inflight = checkoutBenefitsClientCache.previewPromises.get(cacheKey);
       if (inflight) return inflight;
@@ -16529,7 +17603,8 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       return;
     }
 
-    let previewData = peekCheckoutBenefitsPreviewCache(previewRequest);
+    let previewData = peekWarmCheckoutBenefitsPreviewCache(previewRequest)
+      || peekWarmCheckoutBenefitsScopePreviewCache(previewRequest);
     if (!previewData) {
       const loading = document.createElement("div");
     loading.className = "shop-checkout-benefits-loading";
@@ -16541,7 +17616,14 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     }
 
     const data = previewData && typeof previewData === "object"
-      ? previewData
+      ? (buildLocalCheckoutBenefitsPreviewData(previewData, {
+          previewRequest,
+          selectedDiscountId: previewRequest?.selected_discount_id,
+          selectedDiscountSource: previewRequest?.selected_discount_source,
+          promoCode: previewRequest?.promo_code || "",
+          selectedPromoSource: previewRequest?.selected_promo_source,
+          selectedPromoRewardId: previewRequest?.selected_promo_reward_id,
+        }) || previewData)
       : { discounts: [], promo_codes: [], gifts: [], progress: [] };
 
     const discountSection = createCheckoutBenefitsSection("Скидки", "Для этого заказа автоматические скидки не найдены.");
@@ -18253,9 +19335,10 @@ function applySheetAddressTitle(backMode = "cart") {
     if (window.AppModal?.setTitle) window.AppModal.setTitle("");
     setSheetHeaderMode("subscreen", {
       onBack: resolveSheetBackHandler(resolvedBackMode),
-      showBackInHeader: false,
+      showBackInHeader: true,
     });
     setShopModalCloseBehavior("default");
+    setShopModalBackButtonIconMode("close");
     setShopModalHeaderShellMode(true);
     setCartSheetScreenMode("address");
     syncMobileCartModeHeaderStickyState();
@@ -25384,22 +26467,75 @@ function setBottomNavActive(tab) {
   // Checkout (оформление заказа)
   // -----------------------------
   let orderConfigCache = null;
+  let orderConfigPromise = null;
 
   async function getOrderConfig() {
+    if (!orderConfigCache && window.__shopOrderConfig && typeof window.__shopOrderConfig === "object") {
+      orderConfigCache = window.__shopOrderConfig;
+    }
     if (orderConfigCache) return orderConfigCache;
-    const json = await apiJson("/api/public/order-config");
-    orderConfigCache = json.data;
-    window.__shopOrderConfig = json.data || null;
-    return orderConfigCache;
+    if (orderConfigPromise) return orderConfigPromise;
+    orderConfigPromise = apiJson("/api/public/order-config")
+      .then((json) => {
+        orderConfigCache = json.data || null;
+        window.__shopOrderConfig = orderConfigCache;
+        return orderConfigCache;
+      })
+      .finally(() => {
+        orderConfigPromise = null;
+      });
+    return orderConfigPromise;
   }
 
   let deliverySettingsCache = null;
+  let deliverySettingsPromise = null;
 
   async function getDeliverySettings() {
+    if (!deliverySettingsCache && window.__shopDeliverySettings && typeof window.__shopDeliverySettings === "object") {
+      deliverySettingsCache = window.__shopDeliverySettings;
+    }
     if (deliverySettingsCache) return deliverySettingsCache;
-    const json = await apiJson("/api/public/delivery-settings");
-    deliverySettingsCache = json.data || null;
-    return deliverySettingsCache;
+    if (deliverySettingsPromise) return deliverySettingsPromise;
+    deliverySettingsPromise = apiJson("/api/public/delivery-settings")
+      .then((json) => {
+        deliverySettingsCache = json.data || null;
+        window.__shopDeliverySettings = deliverySettingsCache;
+        return deliverySettingsCache;
+      })
+      .finally(() => {
+        deliverySettingsPromise = null;
+      });
+    return deliverySettingsPromise;
+  }
+
+  function prewarmCartPricingContext(reason = "boot") {
+    if (!reason) {
+      // keep signature flexible for callers that do not need a reason label
+    }
+    Promise.resolve(getOrderConfig()).catch(() => {});
+    Promise.resolve(getDeliverySettings()).catch(() => {});
+
+    const token = typeof getCustomerToken === "function"
+      ? str(getCustomerToken() || "").trim()
+      : "";
+    const cartItems = cartItemsResolved();
+    if (!token || !Array.isArray(cartItems) || !cartItems.length) return;
+
+    const draft = loadCheckoutDraft();
+    const previewRequest = buildCheckoutBenefitsPreviewRequest({
+      items: cartItems,
+      methodCode: resolveCartPricingMethodCode(draft),
+      promoCode: draft?.promo_code || "",
+      selectedDiscountId: draft?.selected_discount_id,
+      selectedDiscountSource: draft?.selected_discount_source,
+      selectedPromoSource: draft?.selected_promo_source,
+      selectedPromoRewardId: draft?.selected_promo_reward_id,
+    });
+    Promise.resolve(ensureBenefitsStoreHydrated({
+      previewRequest,
+      force: false,
+      warmDetails: false,
+    })).catch(() => {});
   }
 
   let deliveryQuoteCache = { key: "", data: null };
@@ -25700,155 +26836,98 @@ function setBottomNavActive(tab) {
    */
   let __forceHideCheckoutDeliveryProgress = false;
 
-  async function updateMobileDeliveryProgress() {
-    const isMobile = window.matchMedia("(max-width: 768px)").matches;
-    const isDesktop = !isMobile;
-    const items = cartItemsResolved();
-    let summaryState = null;
-    let cartTotal = roundPrice(Number(computeCartTotals(items).total || 0));
-    const syncCheckoutTotals = () => {
-      if (typeof applyCartPricingCheckoutTotals !== "function") return;
-      applyCartPricingCheckoutTotals(summaryState);
-    };
-    const isDeliveryMode = window._checkoutMethodCode == null
-      ? window._deliveryMode !== "pickup"
-      : window._checkoutMethodCode === "delivery";
-    const syncDesktopBenefitsTrigger = (visible) => {
-      if (!elDesktopCartBenefitsTriggerBtn) return;
-      const addressBackMode = str(state?._addressListBackMode || "").trim().toLowerCase();
-      const sourceScreen = cartViewMode === "checkout" || (cartViewMode === "address" && addressBackMode === "checkout")
-        ? "checkout"
-        : "cart";
-      const shouldShow = Boolean(visible) && (cartViewMode === "cart" || cartViewMode === "checkout" || cartViewMode === "address");
-      elDesktopCartBenefitsTriggerBtn.classList.toggle("hidden", !shouldShow);
-      elDesktopCartBenefitsTriggerBtn.onclick = shouldShow
-        ? () => {
-            void showDesktopBenefitsView(null, { sourceScreen });
-          }
-        : null;
-    };
-    try {
-    try {
-      summaryState = await buildCartPricingSummaryState();
-    } catch (_) {
-      summaryState = buildCartPricingSnapshot();
-    }
-    if (summaryState && summaryState.visible !== false) {
-      cartTotal = roundPrice(Number(summaryState.itemsTotal || 0));
-    }
-    if (__forceHideCheckoutDeliveryProgress) {
-      let hiddenModeSettings = null;
-      try {
-        hiddenModeSettings = await getDeliverySettings();
-      } catch (_) {}
-      await syncCartModeHeaderMetaUi({
-        deliveryQuote: null,
-        defaultDeliverySettings: hiddenModeSettings,
-        isDeliveryMode,
-      });
-      if (elMobileDeliveryProgressWrap) elMobileDeliveryProgressWrap.classList.add("hidden");
-      if (elDesktopDeliveryProgressWrap) elDesktopDeliveryProgressWrap.classList.add("hidden");
-      syncDesktopBenefitsTrigger(true);
-      return;
-    }
-    if (!isDeliveryMode) {
-      let pickupFallbackSettings = null;
-      try {
-        pickupFallbackSettings = await getDeliverySettings();
-      } catch (_) {}
-      await syncCartModeHeaderMetaUi({
-        deliveryQuote: null,
-        defaultDeliverySettings: pickupFallbackSettings,
-        isDeliveryMode: false,
-      });
-      syncCheckoutTotals();
-      if (elMobileDeliveryProgressWrap) elMobileDeliveryProgressWrap.classList.add("hidden");
-      if (elDesktopDeliveryProgressWrap) elDesktopDeliveryProgressWrap.classList.add("hidden");
-      syncDesktopBenefitsTrigger(true);
-      return;
-    }
-    let data = summaryState?.deliveryQuote || null;
-    let defaultSettings = summaryState?.defaultDeliverySettings || null;
-    try {
-      if (!data) {
-        data = await getDeliveryQuote(cartTotal);
-      }
-    } catch (e) {
-      syncCheckoutTotals();
-      try {
-        defaultSettings = defaultSettings || await getDeliverySettings();
-      } catch (_) {}
-      await syncCartModeHeaderMetaUi({
-        deliveryQuote: null,
-        defaultDeliverySettings: defaultSettings,
-        isDeliveryMode: true,
-        progressState: buildCartHeaderDeliveryProgressState(cartTotal, null, defaultSettings),
-      });
-      if (elMobileDeliveryProgressWrap) elMobileDeliveryProgressWrap.classList.add("hidden");
-      if (elDesktopDeliveryProgressWrap) elDesktopDeliveryProgressWrap.classList.add("hidden");
-      syncDesktopBenefitsTrigger(true);
-      return;
-    }
-    if (
-      data?.eta_minutes == null ||
-      data?.free_delivery_from == null ||
-      !Array.isArray(data?.price_tiers) ||
-      !data.price_tiers.length
-    ) {
-      try {
-        defaultSettings = defaultSettings || await getDeliverySettings();
-      } catch (_) {}
-    }
-    await syncCartModeHeaderMetaUi({
-      deliveryQuote: data,
-      defaultDeliverySettings: defaultSettings,
-      isDeliveryMode: true,
-      progressState: buildCartHeaderDeliveryProgressState(cartTotal, data, defaultSettings),
-    });
-    const deliveryCost = Number(data?.delivery_cost || 0) || 0;
-    const freeFrom = data?.free_delivery_from != null ? Number(data.free_delivery_from) : null;
-    syncCheckoutTotals();
-    const progress = freeFrom != null && freeFrom > 0 ? Math.min(100, (cartTotal / freeFrom) * 100) : 0;
-    const labelFreeHtml = '\u0411\u0435\u0441\u043f\u043b\u0430\u0442\u043d\u0430\u044f \u0434\u043e\u0441\u0442\u0430\u0432\u043a\u0430 <i class="fas fa-check shop-delivery-check" aria-hidden="true"></i>';
-    const compactLabelProgressHtml = (left, withDelivery) =>
-      (withDelivery ? "\u0414\u043e\u0441\u0442\u0430\u0432\u043a\u0430 <strong>" + money(deliveryCost) + "</strong>. " : "") + "\u0415\u0449\u0451 <strong>" + money(left) + "</strong>";
+  function syncDesktopCartBenefitsTriggerState(visible) {
+    if (!elDesktopCartBenefitsTriggerBtn) return;
+    const addressBackMode = str(state?._addressListBackMode || "").trim().toLowerCase();
+    const sourceScreen = cartViewMode === "checkout" || (cartViewMode === "address" && addressBackMode === "checkout")
+      ? "checkout"
+      : "cart";
+    const shouldShow = Boolean(visible) && (cartViewMode === "cart" || cartViewMode === "checkout" || cartViewMode === "address");
+    elDesktopCartBenefitsTriggerBtn.classList.toggle("hidden", !shouldShow);
+    elDesktopCartBenefitsTriggerBtn.onclick = shouldShow
+      ? () => {
+          void showDesktopBenefitsView(null, { sourceScreen });
+        }
+      : null;
+  }
 
-    if (isMobile && elMobileDeliveryProgressWrap && elMobileDeliveryProgressFill && elMobileDeliveryProgressLabel) {
-      if (freeFrom == null || freeFrom <= 0) {
-        elMobileDeliveryProgressWrap.classList.add("hidden");
-      } else {
-        elMobileDeliveryProgressFill.style.width = progress + "%";
-        if (elMobileDeliveryProgressBar) elMobileDeliveryProgressBar.setAttribute("aria-valuenow", Math.round(progress));
-        if (progress >= 100) {
-          elMobileDeliveryProgressLabel.classList.add("is-free");
-          elMobileDeliveryProgressLabel.innerHTML = labelFreeHtml;
-        } else {
-          elMobileDeliveryProgressLabel.classList.remove("is-free");
-          elMobileDeliveryProgressLabel.innerHTML = compactLabelProgressHtml(Math.ceil(freeFrom - cartTotal), deliveryCost > 0);
-        }
-        elMobileDeliveryProgressWrap.classList.remove("hidden");
-      }
+  function applyCartDeliveryProgressStateToWrap(wrapEl, fillEl, labelEl, progressState, barEl = null) {
+    if (!wrapEl || !fillEl || !labelEl) return;
+    if (!progressState?.deliveryProgressVisible) {
+      wrapEl.classList.add("hidden");
+      return;
     }
-    if (isDesktop && elDesktopDeliveryProgressWrap && elDesktopDeliveryProgressFill && elDesktopDeliveryProgressLabel) {
-      if (freeFrom == null || freeFrom <= 0) {
-        elDesktopDeliveryProgressWrap.classList.add("hidden");
-      } else {
-        elDesktopDeliveryProgressFill.style.width = progress + "%";
-        elDesktopDeliveryProgressWrap.querySelector(".shop-cart-delivery-progress-bar")?.setAttribute("aria-valuenow", Math.round(progress));
-        if (progress >= 100) {
-          elDesktopDeliveryProgressLabel.classList.add("is-free");
-          elDesktopDeliveryProgressLabel.innerHTML = labelFreeHtml;
-        } else {
-          elDesktopDeliveryProgressLabel.classList.remove("is-free");
-          elDesktopDeliveryProgressLabel.innerHTML = compactLabelProgressHtml(Math.ceil(freeFrom - cartTotal), deliveryCost > 0);
-        }
-        elDesktopDeliveryProgressWrap.classList.remove("hidden");
-      }
+    const progressValue = Math.max(0, Math.min(100, Number(progressState?.deliveryProgressValue || 0)));
+    fillEl.style.width = `${progressValue}%`;
+    if (barEl && typeof barEl.setAttribute === "function") {
+      barEl.setAttribute("aria-valuenow", String(Math.round(progressValue)));
     }
-    syncDesktopBenefitsTrigger(true);
-    } finally {
-      Promise.resolve(syncCartPricingSummaryUi()).catch(() => {});
+    labelEl.classList.toggle("is-free", progressState?.deliveryProgressFree === true);
+    labelEl.innerHTML = str(progressState?.deliveryProgressLabelHtml || "");
+    wrapEl.classList.remove("hidden");
+  }
+
+  function applyDeliveryProgressSnapshot(summaryState = null) {
+    const effectiveSummaryState = summaryState && typeof summaryState === "object"
+      ? summaryState
+      : buildCartPricingSnapshot();
+    const cartTotal = effectiveSummaryState && effectiveSummaryState.visible !== false
+      ? roundPrice(Number(effectiveSummaryState.itemsTotal || 0))
+      : roundPrice(Number(computeCartTotals(cartItemsResolved()).total || 0));
+    const isDeliveryMode = typeof effectiveSummaryState?.isDelivery === "boolean"
+      ? effectiveSummaryState.isDelivery
+      : (window._checkoutMethodCode == null
+        ? window._deliveryMode !== "pickup"
+        : window._checkoutMethodCode === "delivery");
+    const defaultSettings = effectiveSummaryState?.defaultDeliverySettings || getCartPricingCachedDeliverySettings();
+    const deliveryQuote = isDeliveryMode
+      ? (effectiveSummaryState?.deliveryQuote || getCartPricingCachedDeliveryQuote(cartTotal))
+      : null;
+    const progressState = !__forceHideCheckoutDeliveryProgress && isDeliveryMode
+      ? buildCartHeaderDeliveryProgressState(cartTotal, deliveryQuote, defaultSettings)
+      : getHiddenCartHeaderDeliveryProgressState();
+
+    if (typeof applyCartPricingCheckoutTotals === "function") {
+      applyCartPricingCheckoutTotals(effectiveSummaryState);
     }
+
+    Promise.resolve(syncCartModeHeaderMetaUi({
+      deliveryQuote: isDeliveryMode ? deliveryQuote : null,
+      defaultDeliverySettings: defaultSettings,
+      isDeliveryMode,
+      progressState,
+    })).catch(() => {});
+
+    if (__forceHideCheckoutDeliveryProgress || !isDeliveryMode) {
+      if (elMobileDeliveryProgressWrap) elMobileDeliveryProgressWrap.classList.add("hidden");
+      if (elDesktopDeliveryProgressWrap) elDesktopDeliveryProgressWrap.classList.add("hidden");
+      syncDesktopCartBenefitsTriggerState(true);
+      return progressState;
+    }
+
+    applyCartDeliveryProgressStateToWrap(
+      elMobileDeliveryProgressWrap,
+      elMobileDeliveryProgressFill,
+      elMobileDeliveryProgressLabel,
+      progressState,
+      elMobileDeliveryProgressBar
+    );
+    applyCartDeliveryProgressStateToWrap(
+      elDesktopDeliveryProgressWrap,
+      elDesktopDeliveryProgressFill,
+      elDesktopDeliveryProgressLabel,
+      progressState,
+      elDesktopDeliveryProgressWrap?.querySelector(".shop-cart-delivery-progress-bar") || null
+    );
+    syncDesktopCartBenefitsTriggerState(true);
+    return progressState;
+  }
+
+  async function updateMobileDeliveryProgress() {
+    const summaryState = buildCartPricingSnapshot();
+    applyDeliveryProgressSnapshot(summaryState);
+    queueCartPricingAsyncRefresh("updateMobileDeliveryProgress", 90);
+    return summaryState;
   }
 
 /**
@@ -30070,6 +31149,7 @@ function setBottomNavActive(tab) {
 
 function initShopLate() {
   try {
+    prewarmCartPricingContext("init");
     runWhenIdle(async () => {
       try {
         await loadUnitConversions();

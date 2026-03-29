@@ -11,6 +11,8 @@ const DB_CONNECTION_LIMIT = Math.max(
 const DB_SLOW_QUERY_MS = Math.max(0, Number(process.env.DB_SLOW_QUERY_MS || 400) || 400);
 const DB_SLOW_ACQUIRE_MS = Math.max(0, Number(process.env.DB_SLOW_ACQUIRE_MS || 150) || 150);
 const SQL_PREVIEW_MAX_LEN = Math.max(40, Number(process.env.DB_SQL_PREVIEW_MAX_LEN || 180) || 180);
+const DB_TRANSIENT_RETRY_COUNT = Math.max(0, Number(process.env.DB_TRANSIENT_RETRY_COUNT || 1) || 1);
+const DB_TRANSIENT_RETRY_DELAY_MS = Math.max(0, Number(process.env.DB_TRANSIENT_RETRY_DELAY_MS || 80) || 80);
 
 const pool = mysql.createPool({
   host: process.env.DB_HOST || "localhost",
@@ -29,6 +31,12 @@ const pool = mysql.createPool({
 
 pool.on("connection", (conn) => {
   conn.query("SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci");
+  conn.on("error", (err) => {
+    if (!isTransientDbPoolError(err)) return;
+    try {
+      conn.destroy();
+    } catch {}
+  });
 });
 
 function nowMs() {
@@ -83,6 +91,57 @@ function logSlowOperation(kind, durationMs, sql) {
   console.warn(`[db] slow ${kind} ${safeDuration}ms :: ${preview}`);
 }
 
+function isTransientDbPoolError(err) {
+  const code = String(err?.code || "").trim().toUpperCase();
+  const sqlState = String(err?.sqlState || "").trim().toUpperCase();
+  if (
+    code === "PROTOCOL_CONNECTION_LOST"
+    || code === "ECONNRESET"
+    || code === "ECONNREFUSED"
+    || code === "ETIMEDOUT"
+    || code === "EPIPE"
+    || code === "PROTOCOL_ENQUEUE_AFTER_FATAL_ERROR"
+    || code === "PROTOCOL_ENQUEUE_AFTER_QUIT"
+    || code === "ER_NET_READ_INTERRUPTED"
+  ) {
+    return true;
+  }
+  if (sqlState === "08S01") {
+    return true;
+  }
+  const message = String(err?.message || err?.sqlMessage || "").toLowerCase();
+  return (
+    message.includes("packets out of order")
+    || message.includes("timeout reading communication packets")
+    || message.includes("reading communication packets")
+    || message.includes("server closed the connection")
+    || message.includes("connection lost")
+  );
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function runWithPoolTransientRetry(operation, sql, label) {
+  const maxRetries = DB_TRANSIENT_RETRY_COUNT;
+  let attempt = 0;
+  while (true) {
+    try {
+      return await operation();
+    } catch (err) {
+      if (label !== "pool" || attempt >= maxRetries || !isTransientDbPoolError(err)) {
+        throw err;
+      }
+      attempt += 1;
+      if (PERF_CONSOLE_LOGS_ENABLED) {
+        console.warn(`[db] transient ${label} retry ${attempt}/${maxRetries} :: ${normalizeSqlPreview(sql)}`);
+      }
+      await sleep(DB_TRANSIENT_RETRY_DELAY_MS * attempt);
+    }
+  }
+}
+
 function wrapQueryable(target, label) {
   if (!target || target.__perfWrapped === true) return target;
 
@@ -91,7 +150,11 @@ function wrapQueryable(target, label) {
     target.query = async function instrumentedQuery(sql, ...args) {
       const startedAt = nowMs();
       try {
-        return await originalQuery(sql, ...args);
+        return await runWithPoolTransientRetry(
+          () => originalQuery(sql, ...args),
+          sql,
+          label
+        );
       } finally {
         const durationMs = nowMs() - startedAt;
         incrementMetric("dbQueryCount");
@@ -108,7 +171,11 @@ function wrapQueryable(target, label) {
     target.execute = async function instrumentedExecute(sql, ...args) {
       const startedAt = nowMs();
       try {
-        return await originalExecute(sql, ...args);
+        return await runWithPoolTransientRetry(
+          () => originalExecute(sql, ...args),
+          sql,
+          label
+        );
       } finally {
         const durationMs = nowMs() - startedAt;
         incrementMetric("dbQueryCount");
@@ -135,7 +202,11 @@ const originalGetConnection = promisePool.getConnection.bind(promisePool);
 
 promisePool.getConnection = async function instrumentedGetConnection(...args) {
   const startedAt = nowMs();
-  const connection = await originalGetConnection(...args);
+  const connection = await runWithPoolTransientRetry(
+    () => originalGetConnection(...args),
+    "[pool.acquire]",
+    "pool"
+  );
   const waitMs = nowMs() - startedAt;
 
   incrementMetric("dbWaitCount");

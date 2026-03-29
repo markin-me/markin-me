@@ -11358,7 +11358,176 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     };
   }
 
+  function buildCheckoutBenefitsClientCalculationScopeKey({
+    tenantId,
+    storeId,
+    customerId = null,
+    token = '',
+    methodCode = 'takeaway',
+  } = {}) {
+    const normalizedTenantId = Number(tenantId || 0) || null;
+    const normalizedStoreId = Number(storeId || 0) || null;
+    const normalizedCustomerId = Number(customerId || 0) || 0;
+    const normalizedToken = normalizedCustomerId > 0
+      ? null
+      : ((typeof token === 'string' ? token : '').trim() || null);
+    try {
+      return JSON.stringify({
+        tenant_id: normalizedTenantId,
+        store_id: normalizedStoreId,
+        customer_id: normalizedCustomerId > 0 ? normalizedCustomerId : null,
+        customer_token: normalizedCustomerId > 0 ? null : normalizedToken,
+        method_code: publicDiscountText(methodCode).toLowerCase() || 'takeaway',
+      });
+    } catch {
+      return '';
+    }
+  }
+
+  function buildCheckoutBenefitsClientTargetSetsPayload(targetRows = []) {
+    const anyProductIds = new Set();
+    const categoryIds = new Set();
+    const comboIds = new Set();
+    const exactProductConfigsByProductId = {};
+
+    (Array.isArray(targetRows) ? targetRows : [])
+      .map((row) => normalizePublicDiscountTargetRow(row, 'any'))
+      .filter(Boolean)
+      .forEach((row) => {
+        const entityType = publicDiscountText(row?.entity_type).toLowerCase();
+        const productId = Number(row?.product_id || 0) || 0;
+        const categoryId = Number(row?.category_id || 0) || 0;
+        const comboId = Number(row?.combo_id || 0) || 0;
+
+        if (entityType === 'product' && productId > 0) {
+          if (publicDiscountText(row?.config_mode).toLowerCase() === 'exact' && row?.product_config) {
+            if (!Array.isArray(exactProductConfigsByProductId[String(productId)])) {
+              exactProductConfigsByProductId[String(productId)] = [];
+            }
+            const serialized = JSON.stringify(row.product_config);
+            const exists = exactProductConfigsByProductId[String(productId)]
+              .some((entry) => JSON.stringify(entry) === serialized);
+            if (!exists) {
+              exactProductConfigsByProductId[String(productId)].push(row.product_config);
+            }
+          } else {
+            anyProductIds.add(productId);
+          }
+          return;
+        }
+
+        if (entityType === 'category' && categoryId > 0) {
+          categoryIds.add(categoryId);
+          return;
+        }
+
+        if (entityType === 'combo' && comboId > 0) {
+          comboIds.add(comboId);
+        }
+      });
+
+    return {
+      any_product_ids: [...anyProductIds].sort((left, right) => left - right),
+      category_ids: [...categoryIds].sort((left, right) => left - right),
+      combo_ids: [...comboIds].sort((left, right) => left - right),
+      exact_product_configs_by_product_id: exactProductConfigsByProductId,
+    };
+  }
+
+  function buildCheckoutBenefitsClientDiscountRules(discountEntries = []) {
+    return (Array.isArray(discountEntries) ? discountEntries : [])
+      .map((entry) => {
+        const selectionId = Number(entry?.selectionId || entry?.rewardId || entry?.card?.id || 0) || 0;
+        const selectionKey = buildCheckoutBenefitSelectionEntryKey(entry?.source, selectionId);
+        if (!selectionKey) return null;
+
+        const lockedCode = publicDiscountText(entry?.outcome?.errorCode).toUpperCase();
+        const serverLocked = entry?.outcome?.isApplicable !== true
+          && !!lockedCode
+          && lockedCode !== 'DISCOUNT_NOT_APPLICABLE';
+
+        return {
+          selection_key: selectionKey,
+          source: publicDiscountText(entry?.source).toLowerCase() || 'discount',
+          selection_id: selectionId > 0 ? selectionId : null,
+          source_discount_id: Number(entry?.sourceDiscountId || entry?.discount?.id || 0) || null,
+          apply_to: publicDiscountText(entry?.discount?.apply_to).toLowerCase() || 'order',
+          discount_type: publicDiscountText(entry?.discount?.discount_type).toLowerCase() || 'percent',
+          discount_value: Number(entry?.discount?.discount_value || 0),
+          min_order_amount: entry?.discount?.min_order_amount != null
+            ? Number(entry.discount.min_order_amount || 0)
+            : null,
+          max_discount_amount: entry?.discount?.max_discount_amount != null
+            ? Number(entry.discount.max_discount_amount || 0)
+            : null,
+          is_stackable: isCheckoutBenefitStackable(entry?.card || entry?.discount),
+          target_sets: buildCheckoutBenefitsClientTargetSetsPayload(entry?.targetRows || []),
+          server_locked: serverLocked,
+          server_disabled_reason_code: serverLocked ? lockedCode : '',
+          server_disabled_reason: serverLocked ? buildDiscountPreviewDisabledReason(lockedCode) : '',
+        };
+      })
+      .filter(Boolean);
+  }
+
+  function buildCheckoutBenefitsClientPromoRules(promoEntries = []) {
+    const serverLockedCodes = new Set([
+      'PROMO_INVALID',
+      'PROMO_NOT_AVAILABLE',
+      'PROMO_LIMIT_REACHED',
+      'PROMO_CUSTOMER_LIMIT_REACHED',
+    ]);
+
+    return (Array.isArray(promoEntries) ? promoEntries : [])
+      .map((entry) => {
+        const selectionId = publicDiscountText(entry?.source).toLowerCase() === 'reward_promo'
+          ? (Number(entry?.rewardId || 0) || 0)
+          : (Number(entry?.card?.id || entry?.promoRow?.promo_code_id || 0) || 0);
+        const selectionKey = buildCheckoutBenefitSelectionEntryKey(entry?.source, selectionId);
+        if (!selectionKey) return null;
+
+        const lockedCode = publicDiscountText(entry?.baseOutcome?.disabledReasonCode).toUpperCase();
+        const serverLocked = entry?.baseOutcome?.isApplicable !== true
+          && serverLockedCodes.has(lockedCode);
+        const runtimeConfig = entry?.runtimeConfig && typeof entry.runtimeConfig === 'object'
+          ? {
+              reward_type: publicDiscountText(entry.runtimeConfig.rewardType).toLowerCase() || 'discount',
+              product_reward_type: publicDiscountText(entry.runtimeConfig.productRewardType).toLowerCase() || 'gift',
+              apply_to: publicDiscountText(entry.runtimeConfig.applyTo).toLowerCase() || 'order',
+              discount_type: publicDiscountText(entry.runtimeConfig.discountType).toLowerCase() || 'percent',
+              discount_value: Number(entry.runtimeConfig.discountValue || 0),
+              max_discount_amount: entry.runtimeConfig.maxDiscountAmount != null
+                ? Number(entry.runtimeConfig.maxDiscountAmount || 0)
+                : null,
+              min_order_amount: entry.runtimeConfig.minOrderAmount != null
+                ? Number(entry.runtimeConfig.minOrderAmount || 0)
+                : null,
+            }
+          : null;
+
+        return {
+          selection_key: selectionKey,
+          source: publicDiscountText(entry?.source).toLowerCase() || 'promo_code',
+          selection_id: selectionId > 0 ? selectionId : null,
+          source_discount_id: Number(entry?.discount?.id || 0) || null,
+          code: normalizeOrderPromoCode(entry?.selectionCode || entry?.card?.code || entry?.promoRow?.code) || null,
+          action_mode: publicDiscountText(entry?.card?.action_mode).toLowerCase() || 'select',
+          is_stackable: isCheckoutBenefitStackable(entry?.card || entry?.discount),
+          runtime_config: runtimeConfig,
+          target_sets: buildCheckoutBenefitsClientTargetSetsPayload(entry?.targetRows || []),
+          min_order_amount: runtimeConfig?.min_order_amount != null
+            ? Number(runtimeConfig.min_order_amount || 0)
+            : null,
+          server_locked: serverLocked,
+          server_disabled_reason_code: serverLocked ? lockedCode : '',
+          server_disabled_reason: serverLocked ? buildPromoPreviewDisabledReason(lockedCode) : '',
+        };
+      })
+      .filter(Boolean);
+  }
+
   function buildCheckoutBenefitsClientCalculationMatrix({
+    scopeKey = '',
     subtotalBeforeDiscount,
     itemsBaseTotal,
     methodCode,
@@ -11370,6 +11539,15 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     const summaryStates = {};
     const normalizedDiscountEntries = Array.isArray(discountEntries) ? discountEntries : [];
     const normalizedPromoEntries = Array.isArray(promoEntries) ? promoEntries : [];
+    const discountRules = buildCheckoutBenefitsClientDiscountRules(normalizedDiscountEntries);
+    const promoRules = buildCheckoutBenefitsClientPromoRules(normalizedPromoEntries);
+    const promoCodeIndex = {};
+
+    promoRules.forEach((rule) => {
+      const code = normalizeOrderPromoCode(rule?.code);
+      if (!code || !rule?.selection_key) return;
+      promoCodeIndex[code] = rule.selection_key;
+    });
 
     summaryStates.__base__ = buildCheckoutPreviewSummarySnapshot({
       subtotalBeforeDiscount,
@@ -11495,7 +11673,11 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     });
 
     return {
-      version: 1,
+      version: 2,
+      scope_key: publicDiscountText(scopeKey),
+      discount_rules: discountRules,
+      promo_rules: promoRules,
+      promo_code_index: promoCodeIndex,
       summary_states: summaryStates,
     };
   }
@@ -12233,7 +12415,14 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         };
       }
     }
+    const clientCalculationScopeKey = buildCheckoutBenefitsClientCalculationScopeKey({
+      tenantId,
+      storeId,
+      customerId,
+      methodCode,
+    });
     const clientCalculation = buildCheckoutBenefitsClientCalculationMatrix({
+      scopeKey: clientCalculationScopeKey,
       subtotalBeforeDiscount,
       itemsBaseTotal,
       methodCode,
