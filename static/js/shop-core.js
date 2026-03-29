@@ -1510,7 +1510,7 @@
       if (!isCartSheetOpen) return "nav";
       const resolvedItems = cartItemsResolved();
       const cartItemsCount = Array.isArray(resolvedItems) ? resolvedItems.length : 0;
-      return cartItemsCount > 0 ? "cart-actions" : "cart-empty-actions";
+      return cartItemsCount > 0 ? "cart-actions" : "nav";
     }
     if (panelName === "address-form") return "address-actions";
     if (panelName === "address-list") return "address-confirm";

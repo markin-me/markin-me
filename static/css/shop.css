@@ -20695,8 +20695,10 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
   }
   .shop-mobile-benefits-promo-input {
     width: 100%;
+    min-height: 40px;
+    height: 40px;
     border-radius: 999px;
-    padding-inline: 16px;
+    padding-inline: 14px;
     text-transform: uppercase;
   }
   .shop-mobile-benefits-inline-apply-btn {
@@ -20725,6 +20727,12 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
   }
   .shop-mobile-benefits-inline-apply-btn.hidden {
     display: none;
+  }
+
+  .shop-checkout-card-subsection--comment .shop-checkout-comment {
+    min-height: 48px;
+    height: 48px;
+    padding-inline: 18px;
   }
   .shop-mobile-delivery-progress-bar {
     position: absolute;

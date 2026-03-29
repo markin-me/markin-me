@@ -24120,7 +24120,6 @@ function renderSheetAddressList() {
 
     tabs.appendChild(tabAddresses);
     tabs.appendChild(tabOrders);
-    tabs.appendChild(tabDiscounts);
     tabs.appendChild(tabSettings);
     bindProfileTabsWheelScroll();
     wrap.appendChild(tabs);
@@ -24983,7 +24982,6 @@ function renderSheetAddressList() {
 
     wrap.appendChild(addressesPanel);
     wrap.appendChild(ordersPanel);
-    wrap.appendChild(discountsPanel);
     wrap.appendChild(settingsPanel);
 
     host.appendChild(wrap);
@@ -25355,23 +25353,16 @@ function renderSheetAddressList() {
       renderCustomerBenefits(benefits);
     }
 
-    let discountsLoaded = false;
-
     function setActiveTab(tab) {
-      [tabAddresses, tabOrders, tabDiscounts, tabSettings].forEach((btn) => btn.classList.toggle("is-active", btn.dataset.tab === tab));
-      [addressesPanel, ordersPanel, discountsPanel, settingsPanel].forEach((panel) => panel.classList.toggle("is-active", panel.dataset.tab === tab));
+      const normalizedTab = tab === "discounts" ? "addresses" : tab;
+      [tabAddresses, tabOrders, tabSettings].forEach((btn) => btn.classList.toggle("is-active", btn.dataset.tab === normalizedTab));
+      [addressesPanel, ordersPanel, settingsPanel].forEach((panel) => panel.classList.toggle("is-active", panel.dataset.tab === normalizedTab));
       const activeBtn = tabs.querySelector('.shop-profile-tab.is-active');
       if (activeBtn && typeof activeBtn.scrollIntoView === "function") {
         activeBtn.scrollIntoView({ block: "nearest", inline: "nearest" });
       }
-      
-      // Загружаем скидки при первом открытии таба
-      if (tab === 'discounts' && !discountsLoaded) {
-        discountsLoaded = true;
-        discountsList.innerHTML = '<div class="muted">Загрузка…</div>';
-        loadCustomerDiscounts().then(renderCustomerDiscounts);
-      }
-      if (tab === "settings") {
+
+      if (normalizedTab === "settings") {
         loadSettingsBootstrap().then((ok) => {
           if (ok) return;
           if (!authOptionsLoaded) {
@@ -25392,7 +25383,6 @@ function renderSheetAddressList() {
 
     tabAddresses.addEventListener("click", () => setActiveTab("addresses"));
     tabOrders.addEventListener("click", () => setActiveTab("orders"));
-    tabDiscounts.addEventListener("click", () => setActiveTab("discounts"));
     tabSettings.addEventListener("click", () => setActiveTab("settings"));
 
     async function reloadAddresses() {
