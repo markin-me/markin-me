@@ -220,12 +220,12 @@
         </div>
       </div>
 
-      <div class="info-card settings-right-panel hidden" id="settingsChatAssistantNamePanel">
+      <div class="info-card settings-right-panel settings-right-panel-fixed-footer hidden" id="settingsChatAssistantNamePanel">
         <div class="settings-list-header">
           <div class="settings-list-title">Виртуальный помощник</div>
           <div class="settings-list-subtitle">Имя, пол, приветствие и сетка горячих вопросов.</div>
         </div>
-        <div class="settings-site-form">
+        <div class="settings-site-form settings-panel-scroll no-scrollbar">
           <div class="settings-site-field">
             <label class="field-label">ИМЯ ПОМОЩНИКА</label>
             <input class="control" type="text" id="settingsChatAssistantNameInput" data-tenant-input="chat_assistant_name" placeholder="Ням-Ням" />
@@ -289,34 +289,54 @@
             <input class="hidden" type="text" id="settingsChatQuickQuestionsJson" data-tenant-input="chat_quick_questions_json" />
           </div>
         </div>
-        <div class="stores-form-actions settings-chat-panel-actions settings-footer-actions">
-          <button class="settings-footer-btn settings-footer-btn--save" type="button" id="settingsChatAssistantNameSaveBtn">Сохранить</button>
+        <div class="panel-footer">
+          <div class="product-footer-actions">
+            <div class="product-footer-view" id="settingsChatAssistantFooterView">
+              <button class="product-footer-btn product-footer-edit" type="button" id="settingsChatAssistantEditBtn">Редактировать</button>
+            </div>
+            <div class="product-footer-edit-mode hidden" id="settingsChatAssistantFooterEdit">
+              <button class="product-footer-btn product-footer-cancel" type="button" id="settingsChatAssistantCancelBtn" title="Отменить" aria-label="Отменить">
+                <i class="fas fa-times"></i>
+              </button>
+              <button class="product-footer-btn product-footer-save" type="button" id="settingsChatAssistantNameSaveBtn">Сохранить</button>
+            </div>
+          </div>
         </div>
       </div>
 
-      <div class="info-card settings-right-panel hidden" id="settingsChatOperatorNamePanel">
+      <div class="info-card settings-right-panel settings-right-panel-fixed-footer hidden" id="settingsChatOperatorNamePanel">
         <div class="settings-list-header">
           <div class="settings-list-title">Имя оператора</div>
           <div class="settings-list-subtitle">По умолчанию используется название компании, но можно задать вручную.</div>
         </div>
-        <div class="settings-site-form">
+        <div class="settings-site-form settings-panel-scroll no-scrollbar">
           <div class="settings-site-field">
             <label class="field-label">ИМЯ ОПЕРАТОРА</label>
             <input class="control" type="text" id="settingsChatOperatorNameInput" data-tenant-input="chat_operator_name" placeholder="Оператор" />
             <div class="field-hint">Если поле пустое, будет использоваться значение по умолчанию.</div>
           </div>
         </div>
-        <div class="stores-form-actions settings-chat-panel-actions settings-footer-actions">
-          <button class="settings-footer-btn settings-footer-btn--save" type="button" id="settingsChatOperatorNameSaveBtn">Сохранить</button>
+        <div class="panel-footer">
+          <div class="product-footer-actions">
+            <div class="product-footer-view" id="settingsChatOperatorFooterView">
+              <button class="product-footer-btn product-footer-edit" type="button" id="settingsChatOperatorEditBtn">Редактировать</button>
+            </div>
+            <div class="product-footer-edit-mode hidden" id="settingsChatOperatorFooterEdit">
+              <button class="product-footer-btn product-footer-cancel" type="button" id="settingsChatOperatorCancelBtn" title="Отменить" aria-label="Отменить">
+                <i class="fas fa-times"></i>
+              </button>
+              <button class="product-footer-btn product-footer-save" type="button" id="settingsChatOperatorNameSaveBtn">Сохранить</button>
+            </div>
+          </div>
         </div>
       </div>
 
-      <div class="info-card settings-right-panel hidden" id="settingsChatMessageSettingsPanel">
+      <div class="info-card settings-right-panel settings-right-panel-fixed-footer hidden" id="settingsChatMessageSettingsPanel">
         <div class="settings-list-header">
           <div class="settings-list-title">Настройка сообщений</div>
           <div class="settings-list-subtitle">Параметры автоочистки истории чатов.</div>
         </div>
-        <div class="settings-site-form">
+        <div class="settings-site-form settings-panel-scroll no-scrollbar">
           <div class="settings-site-field">
             <label class="field-label">ВРЕМЯ ЖИЗНИ ВСЕХ ЧАТОВ (ДНЕЙ)</label>
             <input class="control" type="number" min="0" max="365" step="1" id="settingsChatThreadTtlDaysInput" data-tenant-input="chat_thread_ttl_days" placeholder="0" />
@@ -328,8 +348,18 @@
             <div class="field-hint">Чаты гостей будут удаляться автоматически после указанного количества дней без активности.</div>
           </div>
         </div>
-        <div class="stores-form-actions settings-chat-panel-actions settings-footer-actions">
-          <button class="settings-footer-btn settings-footer-btn--save" type="button" id="settingsChatMessageSettingsSaveBtn">Сохранить</button>
+        <div class="panel-footer">
+          <div class="product-footer-actions">
+            <div class="product-footer-view" id="settingsChatMessageFooterView">
+              <button class="product-footer-btn product-footer-edit" type="button" id="settingsChatMessageEditBtn">Редактировать</button>
+            </div>
+            <div class="product-footer-edit-mode hidden" id="settingsChatMessageFooterEdit">
+              <button class="product-footer-btn product-footer-cancel" type="button" id="settingsChatMessageCancelBtn" title="Отменить" aria-label="Отменить">
+                <i class="fas fa-times"></i>
+              </button>
+              <button class="product-footer-btn product-footer-save" type="button" id="settingsChatMessageSettingsSaveBtn">Сохранить</button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -466,20 +496,6 @@
           <div class="settings-site-field">
             <label class="field-label">ОПИСАНИЕ САЙТА</label>
             <textarea class="textarea" rows="3" placeholder="Короткое описание" data-tenant-input="site_description" data-site-input="site_description"></textarea>
-          </div>
-          <div class="settings-site-field">
-            <label class="field-label">СУБДОМЕН</label>
-            <div class="control-subdomain-wrap">
-              <span class="control-subdomain-prefix" id="subdomainPrefix"></span>
-              <input class="control-subdomain-input" type="text" placeholder="myshop" data-tenant-input="subdomain" data-site-input="subdomain" id="subdomainInput" />
-              <span class="control-subdomain-suffix" id="subdomainSuffix"></span>
-            </div>
-            <div class="settings-subdomain-actions" id="subdomainActions">
-              <button class="btn btn-sm btn-secondary" type="button" id="subdomainGoBtn">Перейти на сайт</button>
-              <button class="btn btn-sm btn-icon btn-secondary" type="button" id="subdomainCopyLinkBtn" title="Скопировать ссылку">
-                <i class="fas fa-copy"></i>
-              </button>
-            </div>
           </div>
         </div>
         <div class="panel-footer" id="settingsSiteFooter">
@@ -646,14 +662,37 @@
       <div class="info-card settings-right-panel settings-right-panel-fixed-footer hidden" id="settingsDomainPanel">
         <div class="settings-site-form settings-panel-scroll">
           <div class="settings-site-field">
+            <label class="field-label">СУБДОМЕН</label>
+            <div class="control-subdomain-wrap">
+              <span class="control-subdomain-prefix" id="subdomainPrefix"></span>
+              <input class="control-subdomain-input" type="text" placeholder="myshop" data-tenant-input="subdomain" data-site-input="subdomain" id="subdomainInput" />
+              <span class="control-subdomain-suffix" id="subdomainSuffix"></span>
+            </div>
+            <div class="settings-subdomain-actions" id="subdomainActions">
+              <button class="btn btn-sm btn-secondary" type="button" id="subdomainGoBtn">Перейти на сайт</button>
+              <button class="btn btn-sm btn-icon btn-secondary" type="button" id="subdomainCopyLinkBtn" title="Скопировать ссылку">
+                <i class="fas fa-copy"></i>
+              </button>
+            </div>
+          </div>
+          <div class="settings-site-field">
             <label class="field-label">ПОДКЛЮЧЕННЫЕ ДОМЕНЫ</label>
             <div class="domain-managed-list" id="domainList"></div>
             <div class="field-hint hidden" id="domainConnectedHint"></div>
+            <div class="settings-chat-question-add-wrap hidden" id="settingsDomainAddWrap">
+              <button class="settings-chat-question-add-btn" id="settingsDomainAddBtn" type="button" title="Добавить домен" aria-label="Добавить домен">
+                <i class="fas fa-plus"></i>
+              </button>
+            </div>
           </div>
 
           <div class="settings-site-field hidden" id="domainNewField">
             <label class="field-label">НОВЫЙ ДОМЕН</label>
             <input class="control" type="text" placeholder="site.ru" data-tenant-input="custom_domain" data-site-input="custom_domain" id="domainInput" />
+            <div class="domain-action-row domain-new-actions" style="margin-top:8px;">
+              <button class="btn btn-secondary btn-sm" type="button" id="domainCancelInlineBtn">Отменить</button>
+              <button class="btn btn-primary btn-sm" type="button" id="domainAddInlineBtn">Добавить</button>
+            </div>
             <div class="field-hint" id="domainPrimaryHint">Переключатель справа включает сайт на домене или возвращает заглушку.</div>
           </div>
 
@@ -739,9 +778,6 @@
               <button class="product-footer-btn product-footer-cancel" id="settingsDomainCancelBtn" type="button" title="Отменить" aria-label="Отменить">
                 <i class="fas fa-times"></i>
               </button>
-              <button class="product-footer-btn product-footer-more hidden" id="settingsDomainAddBtn" type="button" title="Добавить домен" aria-label="Добавить домен">
-                <i class="fas fa-plus"></i>
-              </button>
               <button class="product-footer-btn product-footer-save" id="settingsDomainSaveBtn" type="button">Добавить</button>
             </div>
           </div>
@@ -779,13 +815,14 @@
 
       
 
-      <div class="info-card settings-right-panel hidden" id="settingsSoundsPanel">
+      <div class="info-card settings-right-panel settings-right-panel-fixed-footer hidden" id="settingsSoundsPanel">
         <div class="settings-list-header">
           <div class="settings-list-title">Звуки уведомлений</div>
           <div class="settings-list-subtitle">Загрузите звуковые файлы для новых заказов, отмен и сообщений.</div>
         </div>
-        <div class="settings-sounds-grid">
-          <div class="settings-sound-tile" data-sound-key="sound_new_order_url">
+        <div class="settings-panel-scroll no-scrollbar">
+          <div class="settings-sounds-grid">
+            <div class="settings-sound-tile" data-sound-key="sound_new_order_url">
             <div class="settings-sound-title">Новый заказ</div>
             <div class="settings-sound-hint">Воспроизводится при появлении нового заказа</div>
             <div class="settings-sound-box" data-sound-box="sound_new_order_url">
@@ -804,8 +841,8 @@
                 <i class="fas fa-trash"></i>
               </button>
             </div>
-          </div>
-          <div class="settings-sound-tile" data-sound-key="sound_order_cancelled_url">
+            </div>
+            <div class="settings-sound-tile" data-sound-key="sound_order_cancelled_url">
             <div class="settings-sound-title">Отмена заказа</div>
             <div class="settings-sound-hint">Воспроизводится при отмене заказа</div>
             <div class="settings-sound-box" data-sound-box="sound_order_cancelled_url">
@@ -824,8 +861,8 @@
                 <i class="fas fa-trash"></i>
               </button>
             </div>
-          </div>
-          <div class="settings-sound-tile" data-sound-key="sound_new_message_url">
+            </div>
+            <div class="settings-sound-tile" data-sound-key="sound_new_message_url">
             <div class="settings-sound-title">Новое сообщение</div>
             <div class="settings-sound-hint">Воспроизводится при появлении нового сообщения</div>
             <div class="settings-sound-box" data-sound-box="sound_new_message_url">
@@ -845,7 +882,21 @@
               </button>
             </div>
           </div>
+          </div>
         </div>
+        <div class="panel-footer">
+          <div class="product-footer-actions">
+            <div class="product-footer-view" id="settingsSoundsFooterView">
+              <button class="product-footer-btn product-footer-edit" type="button" id="settingsSoundsEditBtn">Редактировать</button>
+            </div>
+            <div class="product-footer-edit-mode hidden" id="settingsSoundsFooterEdit">
+              <button class="product-footer-btn product-footer-cancel" type="button" id="settingsSoundsCancelBtn" title="Отменить" aria-label="Отменить">
+                <i class="fas fa-times"></i>
+              </button>
+              <button class="product-footer-btn product-footer-save" type="button" id="settingsSoundsSaveBtn">Сохранить</button>
+            </div>
+            </div>
+          </div>
       </div>
 
       <div class="info-card settings-right-panel hidden" id="settingsNotificationsPanel">
@@ -968,7 +1019,15 @@
         </div>
         <div class="panel-footer">
           <div class="product-footer-actions">
-            <button class="product-footer-btn product-footer-save" type="button" id="settingsPrintApiSaveSettingsBtn">Сохранить</button>
+            <div class="product-footer-view" id="settingsPrintApiFooterView">
+              <button class="product-footer-btn product-footer-edit" type="button" id="settingsPrintApiEditBtn">Редактировать</button>
+            </div>
+            <div class="product-footer-edit-mode hidden" id="settingsPrintApiFooterEdit">
+              <button class="product-footer-btn product-footer-cancel" type="button" id="settingsPrintApiCancelBtn" title="Отменить" aria-label="Отменить">
+                <i class="fas fa-times"></i>
+              </button>
+              <button class="product-footer-btn product-footer-save" type="button" id="settingsPrintApiSaveSettingsBtn">Сохранить</button>
+            </div>
           </div>
         </div>
       </div>
