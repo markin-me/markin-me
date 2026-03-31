@@ -415,7 +415,7 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
         );
       } else if (Number(sameDomain.tenant_id) === Number(tenantId)) {
         await db.query(
-          'UPDATE ten_tenant_domains SET domain=?, is_enabled=1 WHERE id=?',
+          'UPDATE ten_tenant_domains SET domain=? WHERE id=?',
           [legacyDomain || legacyAscii, sameDomain.id]
         );
       }

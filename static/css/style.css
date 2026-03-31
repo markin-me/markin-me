@@ -4305,6 +4305,7 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
   flex-direction:column;
   flex:1 1 auto;
   min-height:0;
+  gap:0;
 }
 .settings-right-panel-fixed-footer .settings-panel-scroll{
   flex:1 1 auto;
@@ -4318,6 +4319,25 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
   position:static;
   z-index:2;
   background:var(--color-surface);
+  border-top:none;
+}
+#sitePanel{
+  flex:1 1 auto;
+  min-height:0;
+}
+#sitePanel > .panel-body{
+  flex:1 1 auto;
+  min-height:0;
+  overflow:auto;
+}
+#settingsPrintApiPanel{
+  overflow:hidden;
+}
+#settingsPrintApiPanel > .panel-footer{
+  border-top:1px solid var(--color-border);
+  border-bottom-left-radius:16px;
+  border-bottom-right-radius:16px;
+  margin-top:auto;
 }
 .settings-delivery-home-empty{
   border:1px dashed var(--color-border);
@@ -4551,6 +4571,9 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
   padding:0;
   border-top:none;
 }
+#settingsDomainPanel .domain-new-actions{
+  justify-content:flex-end;
+}
 #settingsTelegramAppPanel{
   border:none;
   border-radius:0;
@@ -4623,8 +4646,14 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
   padding:0;
   background:transparent;
   gap:0;
+  overflow:hidden;
+  flex:1 1 auto;
+  min-height:0;
 }
 #settingsSitePanel .settings-panel-scroll{
+  flex:1 1 auto;
+  min-height:0;
+  overflow:auto;
   padding:0;
   align-content:start;
   scrollbar-width:none;
@@ -4637,6 +4666,17 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
 #settingsSitePanel > .panel-footer{
   padding:0;
   border-top:none;
+}
+#settingsPrintApiPanel > .panel-footer,
+#settingsSoundsPanel > .panel-footer,
+#settingsChatAssistantNamePanel > .panel-footer,
+#settingsChatOperatorNamePanel > .panel-footer,
+#settingsChatMessageSettingsPanel > .panel-footer{
+  padding:0;
+  border-top:none;
+}
+#settingsChatMessageSettingsPanel .settings-panel-scroll{
+  align-content:start;
 }
 #settingsSystemTelegramBotPanel{
   border:none;
@@ -6268,9 +6308,8 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
   border-radius:50%;
   background:#ff8a00;
   color:#fff;
-  display:inline-flex;
-  align-items:center;
-  justify-content:center;
+  display:inline-grid;
+  place-items:center;
   font-size:0;
   font-weight:400;
   line-height:1;
@@ -6286,6 +6325,8 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
   font-size:13px;
   line-height:1;
   color:inherit;
+  display:block;
+  margin:0;
 }
 .settings-chat-question-add-btn[disabled]{
   opacity:.5;
@@ -6404,6 +6445,7 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
 .domain-managed-btn{width:28px;height:28px;border-radius:8px;border:1px solid var(--color-border);background:var(--color-surface);color:var(--color-text-muted);display:flex;align-items:center;justify-content:center;cursor:pointer;transition:background var(--dur-fast) var(--ease-smooth),color var(--dur-fast) var(--ease-smooth),border-color var(--dur-fast) var(--ease-smooth)}
 .domain-managed-btn:hover{border-color:var(--primary-25);color:var(--color-primary);background:var(--primary-12)}
 .domain-managed-btn.is-danger:hover{border-color:rgba(231,76,60,.35);color:#e74c3c;background:rgba(231,76,60,.08)}
+.domain-managed-btn.is-hidden-ghost{visibility:hidden;pointer-events:none}
 .domain-managed-empty{padding:12px;border:1px dashed var(--color-border);border-radius:10px;background:var(--color-surface-2);font-size:13px;color:var(--color-text-muted)}
 .domain-action-row{display:flex;flex-wrap:wrap;gap:8px}
 .domain-action-row .btn{flex:0 0 auto}

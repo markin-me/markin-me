@@ -3,7 +3,7 @@
     <div class="panel toolbar-island">
       <div class="toolbar">
         <div class="toolbar-title">
-          <i class="fas fa-store"></i>
+          <i class="fas fa-store" id="settingsCenterIcon"></i>
           <div class="toolbar-title-text">
             <span id="settingsCenterTitle">Компания</span>
             <span class="muted" id="settingsCenterSubtitle"></span>
@@ -144,8 +144,8 @@
           <button class="order-row product-row settings-card" id="settingsSoundsCard" type="button" data-settings-chat-card="1">
             <div class="product-avatar"><i class="fas fa-bell"></i></div>
             <div class="order-col">
-              <div class="product-title">Звуки уведомлений</div>
-              <div class="muted">Звук нового сообщения в чате</div>
+              <div class="product-title">Звуки</div>
+              <div class="muted">Сигналы и уведомления</div>
             </div>
             <div class="order-col">
               <span class="badge">Открыть</span>
@@ -155,8 +155,8 @@
           <button class="order-row product-row settings-card" id="settingsChatAssistantNameCard" type="button" data-settings-chat-card="1">
             <div class="product-avatar"><i class="fas fa-robot"></i></div>
             <div class="order-col">
-              <div class="product-title">Виртуальный помощник</div>
-              <div class="muted">Имя, пол, приветствие и сетка горячих вопросов</div>
+              <div class="product-title">Помощник</div>
+              <div class="muted">Имя, приветствие и вопросы</div>
             </div>
             <div class="order-col">
               <span class="badge">Открыть</span>
@@ -166,8 +166,8 @@
           <button class="order-row product-row settings-card" id="settingsChatOperatorNameCard" type="button" data-settings-chat-card="1">
             <div class="product-avatar"><i class="fas fa-user-tie"></i></div>
             <div class="order-col">
-              <div class="product-title">Имя оператора</div>
-              <div class="muted">По умолчанию имя компании, можно изменить</div>
+              <div class="product-title">Оператор</div>
+              <div class="muted">Имя в диалогах</div>
             </div>
             <div class="order-col">
               <span class="badge">Открыть</span>
@@ -177,8 +177,8 @@
           <button class="order-row product-row settings-card" id="settingsChatMessageSettingsCard" type="button" data-settings-chat-card="1">
             <div class="product-avatar"><i class="fas fa-clock"></i></div>
             <div class="order-col">
-              <div class="product-title">Настройка сообщений</div>
-              <div class="muted">Время жизни гостевых чатов</div>
+              <div class="product-title">Сообщения</div>
+              <div class="muted">Срок жизни чатов</div>
             </div>
             <div class="order-col">
               <span class="badge">Открыть</span>
@@ -196,7 +196,7 @@
             </div>
           </button>
 
-          <button class="order-row product-row settings-card" id="settingsPrintApiCard" type="button">
+          <button class="order-row product-row settings-card hidden" id="settingsPrintApiCardLegacy" type="button" style="display:none" aria-hidden="true" tabindex="-1">
             <div class="product-avatar"><i class="fas fa-plug"></i></div>
             <div class="order-col">
               <div class="product-title">API</div>
@@ -212,6 +212,23 @@
           <div class="empty-icon"><i class="fas fa-store"></i></div>
           <div class="empty-title">Филиалы</div>
           <div class="empty-text">Пока нет данных для этого раздела.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel orders-center-panel hidden" id="apiPanel">
+      <div class="panel-body no-scrollbar">
+        <div class="orders-list settings-cards" id="apiPanelCards">
+          <button class="order-row product-row settings-card" id="settingsPrintApiCard" type="button">
+            <div class="product-avatar"><i class="fas fa-plug"></i></div>
+            <div class="order-col">
+              <div class="product-title">Настройка принтера</div>
+              <div class="muted">Печать заказов и уведомления</div>
+            </div>
+            <div class="order-col">
+              <span class="badge">Открыть</span>
+            </div>
+          </button>
         </div>
       </div>
     </div>
