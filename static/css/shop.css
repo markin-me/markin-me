@@ -19152,6 +19152,37 @@ body.page-shop .app-modal-body::after{
   padding-right: 0;
 }
 
+.app-modal-header .shop-favorites-header-chips-wrap{
+  display: none;
+}
+
+.app-modal-header.has-favorites-category-chips{
+  flex-wrap: wrap;
+  align-items: flex-start;
+  row-gap: 10px;
+  padding-bottom: 12px;
+}
+
+.app-modal-header.has-favorites-category-chips .shop-favorites-header-chips-wrap{
+  display: block;
+  flex: 0 0 100%;
+  order: 3;
+  width: 100%;
+  margin: 0;
+}
+
+.app-modal-header .shop-favorites-header-chips-wrap::before{
+  display: none;
+}
+
+.app-modal-header .shop-favorites-header-chips-wrap::after{
+  right: 0;
+}
+
+.app-modal-header .shop-favorites-header-chips-wrap .shop-favorites-chips{
+  padding: 0;
+}
+
 .shop-favorites-sheet .shop-favorites-category-header{
   margin-top: 6px;
 }
@@ -19280,6 +19311,10 @@ body.page-shop .app-modal-body::after{
   display: none !important;
 }
 
+.shop-favorite-swipe-container.is-unavailable .cart-discount-badge{
+  display: none !important;
+}
+
 .shop-favorite-swipe-container .cart-price.is-unavailable-label{
   color: var(--color-text-muted);
   text-decoration: none;
@@ -19288,6 +19323,51 @@ body.page-shop .app-modal-body::after{
 
 .shop-favorites-card .shop-cart-items{
   gap: 0;
+}
+
+.shop-favorites-card .cart-right{
+  align-self: end;
+  justify-content: flex-end;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+
+.shop-favorites-card .cart-price-group{
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.shop-favorites-card .cart-price-stack{
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.shop-favorites-card .cart-price{
+  font-size: 20px;
+  line-height: 1.05;
+  font-weight: 900;
+}
+
+.shop-favorites-card .cart-old{
+  font-size: 13px;
+  line-height: 1.1;
+}
+
+.shop-favorites-card .cart-discount-badge{
+  margin: 0;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1;
+  font-weight: 700;
+  white-space: nowrap;
 }
 
 @media (max-width: 768px){

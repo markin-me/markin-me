@@ -3884,6 +3884,25 @@
     return `${cleanLabel} ${cleanUnit}`.trim();
   }
 
+  function extractVariantValueForOrder(labelRaw, groupTitleRaw) {
+    const rawLabel = str(labelRaw || "").trim();
+    if (!rawLabel) return "";
+
+    const groupTitle = str(groupTitleRaw || "").trim();
+    let value = rawLabel;
+    if (groupTitle) {
+      const escapedGroupTitle = groupTitle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      value = value.replace(new RegExp(`^${escapedGroupTitle}(?:\\s*\\([^)]*\\))?\\s*:\\s*`, "i"), "").trim();
+    }
+    if (!value) value = rawLabel;
+
+    if (value.includes(":")) {
+      const right = str(value.split(":").slice(1).join(":")).trim();
+      if (right) value = right;
+    }
+    return value.trim();
+  }
+
   function isDefaultVariantLabelForOrder(valueRaw) {
     const value = str(valueRaw || "").trim().toLowerCase();
     return value === "не указано" || value === "не указано:";
@@ -3908,23 +3927,16 @@
   }
 
   function buildVariantDisplayLineForOrder(labelRaw, unitRaw, groupTitleRaw) {
-    const rawLabel = str(labelRaw || "").trim();
-    const rawUnit = str(unitRaw || "").trim();
-
-    let line = mergeVariantUnitForOrder(rawLabel, rawUnit);
-    if (!line && rawLabel) {
-      if (rawLabel.includes(":")) {
-        const valueOnly = str(rawLabel.split(":").slice(1).join(":")).trim();
-        line = valueOnly || rawLabel;
-      } else {
-        line = rawLabel;
-      }
-    }
+    const variantValue = extractVariantValueForOrder(labelRaw, groupTitleRaw);
+    let line = mergeVariantUnitForOrder(variantValue, unitRaw);
     line = normalizeVariantDisplayLineForOrder(line, groupTitleRaw);
     if (!line) return "";
     if (isDefaultVariantLabelForOrder(line)) return "";
     return line;
   }
+
+  window.extractVariantValueForOrder = extractVariantValueForOrder;
+  window.buildVariantDisplayLineForOrder = buildVariantDisplayLineForOrder;
 
   function formatQtyUnitNameForOrder(qtyRaw, unitRaw, nameRaw) {
     const qtyNum = Number(qtyRaw);
@@ -3985,6 +3997,9 @@
           variant_group_id: toFiniteNumberOrNull(opt?.variant_group_id),
           variant_value_index: toFiniteNumberOrNull(opt?.variant_value_index),
           variant_label: str(opt?.variant_label || ""),
+          variant_group_title: str(opt?.variant_group_title || opt?.group_title || ""),
+          variant_unit: str(opt?.variant_unit || opt?.unit || ""),
+          unit_id: toFiniteNumberOrNull(opt?.unit_id),
           variant_price_diff: Number(opt?.variant_price_diff || 0),
         };
       })
@@ -4075,7 +4090,22 @@
     );
     const variantGroupId = toFiniteNumberOrNull(resolvedItem.variant_group_id);
     const variantValueIndex = toFiniteNumberOrNull(resolvedItem.variant_value_index);
-    const variantLabel = str(resolvedItem.variant_label || "").trim();
+    const variantGroupTitle = str(
+      resolvedItem.variant_group_title ||
+      resolvedItem?.variant?.group_title ||
+      resolvedItem?.variant?.variant_group_title ||
+      ""
+    ).trim();
+    const variantUnit = str(
+      resolvedItem.variant_unit ||
+      resolvedItem?.variant?.unit ||
+      resolvedItem?.variant?.unit_label ||
+      ""
+    ).trim();
+    const variantLabel = extractVariantValueForOrder(
+      resolvedItem.variant_label || resolvedItem?.variant?.label || resolvedItem?.variant?.value || "",
+      variantGroupTitle
+    );
     const hasVariant = variantLabel || (variantGroupId != null && variantValueIndex != null);
     const variantDiff = Number(resolvedItem.variant_unit_price || 0) - Number(product?.price || 0);
 
@@ -4118,9 +4148,11 @@
       ? [{
         variant_group_id: variantGroupId,
         variant_value_index: variantValueIndex,
-        group_title: "",
+        group_title: variantGroupTitle,
+        variant_group_title: variantGroupTitle,
         value: variantLabel,
         label: variantLabel,
+        unit: variantUnit,
         price_diff: Number.isFinite(variantDiff) ? variantDiff : 0,
       }]
       : [];
@@ -4141,6 +4173,9 @@
       variant_group_id: variantGroupId,
       variant_value_index: variantValueIndex,
       variant_label: variantLabel,
+      variant_group_title: variantGroupTitle,
+      variant_unit: variantUnit,
+      variant_unit_price: Number(resolvedItem.variant_unit_price || 0),
       variants: variantEntries,
       discount: showOldLine ? { original_line_total: Number(originalLineTotal) } : null,
     };
@@ -9990,28 +10025,19 @@ async function initAddresses() {
       const t = document.createElement("div");
       t.className = "cart-title";
       const productNameText = str(product?.name || item?.name || "Товар");
-      const titleText = isGiftReward ? `${productNameText} (Подарок)` : productNameText;
+      const primaryVariantLine = buildVariantDisplayLineForOrder(
+        variantLabel,
+        item?.variant_unit || item?.variantUnit || "",
+        item?.variant_group_title || item?.variantGroupTitle || ""
+      );
+      const titleBase = [primaryVariantLine, productNameText].filter(Boolean).join(" ").trim() || productNameText;
+      const titleText = isGiftReward ? `${titleBase} (Подарок)` : titleBase;
       t.textContent = `${qty} x ${titleText}`;
       mid.appendChild(t);
 
       // ????????? ???????? ? ?????????? ???????: ???????? ? ??????????? ? ?????
-      const variantParts = [];
       const ingredientParts = [];
       const optionParts = [];
-      
-      // 1. ??????? (??????/????????? ? ?.?.)
-      if (variantLabel && variantLabel.trim()) {
-        const raw = variantLabel.trim();
-        const lower = raw.toLowerCase();
-        // Фильтруем дефолтные варианты типа "Не указано" / "Не указано:"
-        const isDefaultLabel =
-          lower === "не указано" ||
-          lower === "не указано:";
-        if (!isDefaultLabel) {
-          const formatted = formatVariant(raw);
-          if (formatted) variantParts.push(formatted);
-        }
-      }
       
       // 2. ??????????? (???????) ? ?? ?????????? ? ??????????? 0
       if (Array.isArray(cartIngredients) && cartIngredients.length > 0) {

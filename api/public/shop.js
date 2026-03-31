@@ -2024,6 +2024,9 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         variant_group_id: variantGroupId,
         variant_value_index: variantValueIndex,
         variant_label: str(raw.variant_label || variantSource?.label || variantSource?.value || '').trim(),
+        variant_group_title: str(raw.variant_group_title || variantSource?.group_title || variantSource?.variant_group_title || '').trim(),
+        variant_unit: str(raw.variant_unit || variantSource?.unit || variantSource?.unit_label || '').trim(),
+        unit_id: toPositiveIntOrNull(raw.unit_id || variantSource?.unit_id),
         variant_price_diff: Number(raw.variant_price_diff || 0),
       });
       if (out.length >= maxItems) break;
@@ -2131,7 +2134,19 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       variantFromArray?.value ||
       ''
     ).trim();
-    const variantGroupTitle = str(variantFromArray?.group_title || '').trim();
+    const variantGroupTitle = str(
+      rawItem.variant_group_title ||
+      variantFromArray?.group_title ||
+      variantFromArray?.variant_group_title ||
+      ''
+    ).trim();
+    const variantUnit = str(
+      rawItem.variant_unit ||
+      variantFromArray?.unit ||
+      variantFromArray?.unit_label ||
+      variantFromArray?.unit_short_title ||
+      ''
+    ).trim();
     const variantValue = str(variantFromArray?.value || variantLabel || '').trim();
 
     const hasVariantSelection =
@@ -2144,8 +2159,10 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         variant_group_id: variantGroupId,
         variant_value_index: variantValueIndex,
         group_title: variantGroupTitle,
+        variant_group_title: variantGroupTitle,
         value: variantValue || variantLabel,
         label: variantLabel || variantValue,
+        unit: variantUnit,
         price_diff: Number(variantFromArray?.price_diff || 0),
       }]
       : [];
@@ -2175,6 +2192,9 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       variant_group_id: hasVariantSelection ? variantGroupId : null,
       variant_value_index: hasVariantSelection ? variantValueIndex : null,
       variant_label: hasVariantSelection ? variantLabel : '',
+      variant_group_title: hasVariantSelection ? variantGroupTitle : '',
+      variant_unit: hasVariantSelection ? variantUnit : '',
+      variant_unit_price: Number(rawItem.variant_unit_price || 0),
       variants,
       discount: rawItem.discount && typeof rawItem.discount === 'object'
         ? {

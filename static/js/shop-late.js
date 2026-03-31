@@ -134,6 +134,43 @@
     return hasQtyControls ? "multiple_item" : "multiple_group";
   }
 
+  function buildOptionItemVariantState(item, variantGroup, valueIndex, valueRaw = null) {
+    const values = Array.isArray(variantGroup?.values) ? variantGroup.values : [];
+    const safeIndex = Number(valueIndex);
+    const unitPrice = getOptionItemVariantUnitPrice(item, variantGroup, safeIndex);
+    const priceDiff = unitPrice - Number(item?.price || 0);
+    const unitLabel = str(
+      variantGroup?.unit_short_title ||
+      variantGroup?.unit_code ||
+      variantGroup?.unit_title ||
+      ""
+    ).trim();
+    const groupTitle = str(variantGroup?.title || variantGroup?.title_label || "").trim();
+    const rawValue = valueRaw != null
+      ? str(valueRaw)
+      : (
+        Number.isFinite(safeIndex) &&
+        safeIndex >= 0 &&
+        safeIndex < values.length
+          ? str(values[safeIndex])
+          : ""
+      );
+    const hasLetters = (value) => /[a-zа-я]/i.test(String(value || ""));
+    const variantLabel = unitLabel && !hasLetters(rawValue) ? `${rawValue} ${unitLabel}` : rawValue;
+    return {
+      variant_group_id: Number(variantGroup?.variant_group_id || variantGroup?.id || 0),
+      variant_value_index: Number.isFinite(safeIndex) ? safeIndex : null,
+      variant_label: str(variantLabel || "").trim(),
+      variant_group_title: groupTitle,
+      variant_unit: unitLabel,
+      unit_id:
+        variantGroup?.unit_id != null && Number.isFinite(Number(variantGroup.unit_id))
+          ? Number(variantGroup.unit_id)
+          : null,
+      variant_price_diff: Number.isFinite(priceDiff) ? priceDiff : 0,
+    };
+  }
+
   function collectSelectedOptionItems(optionGroups, selectionState) {
     const selectedItems = [];
     optionGroups.forEach((group) => {
@@ -159,6 +196,12 @@
             variant_group_id: variantData.variant_group_id,
             variant_value_index: variantData.variant_value_index,
             variant_label: variantData.variant_label || "",
+            variant_group_title: variantData.variant_group_title || "",
+            variant_unit: variantData.variant_unit || "",
+            unit_id:
+              variantData.unit_id != null && Number.isFinite(Number(variantData.unit_id))
+                ? Number(variantData.unit_id)
+                : null,
             variant_price_diff: variantData.variant_price_diff || 0,
           };
         }
@@ -1668,12 +1711,10 @@ function buildProductDetailsContent(
                 const priceDiff = unitPrice - Number(item.price || 0);
                 
                 // Сохраняем дефолтный вариант в state
-                groupState.variantByItemId.set(itemId, {
-                  variant_group_id: Number(variantGroup.variant_group_id || variantGroup.id || 0),
-                  variant_value_index: defaultIdx,
-                  variant_label: formatValueLabel(values[defaultIdx]),
-                  variant_price_diff: Number.isFinite(priceDiff) ? priceDiff : 0,
-                });
+                groupState.variantByItemId.set(
+                  itemId,
+                  buildOptionItemVariantState(item, variantGroup, defaultIdx, values[defaultIdx])
+                );
                 
                 // Обновляем отображение цены и лейбла варианта
                 if (priceEl) {
@@ -1785,12 +1826,10 @@ function buildProductDetailsContent(
             if (selectedIdx != null && !currentVariant && defaultIdx != null && values[defaultIdx] != null) {
               const unitPrice = getOptionItemVariantUnitPrice(item, variantGroup, defaultIdx);
               const priceDiff = unitPrice - Number(item.price || 0);
-              groupState.variantByItemId.set(itemId, {
-                variant_group_id: Number(variantGroup.variant_group_id || variantGroup.id || 0),
-                variant_value_index: defaultIdx,
-                variant_label: formatValueLabel(values[defaultIdx]),
-                variant_price_diff: Number.isFinite(priceDiff) ? priceDiff : 0,
-              });
+              groupState.variantByItemId.set(
+                itemId,
+                buildOptionItemVariantState(item, variantGroup, defaultIdx, values[defaultIdx])
+              );
             }
 
             const optionVariantAvailabilityCtrl = createOptionVariantAvailabilityController({
@@ -1799,12 +1838,10 @@ function buildProductDetailsContent(
               setDraftForIndex: (idx) => {
                 const unitPrice = getOptionItemVariantUnitPrice(item, variantGroup, idx);
                 const priceDiff = unitPrice - Number(item.price || 0);
-                groupState.variantByItemId.set(itemId, {
-                  variant_group_id: Number(variantGroup.variant_group_id || variantGroup.id || 0),
-                  variant_value_index: idx,
-                  variant_label: formatValueLabel(values[idx]),
-                  variant_price_diff: Number.isFinite(priceDiff) ? priceDiff : 0,
-                });
+                groupState.variantByItemId.set(
+                  itemId,
+                  buildOptionItemVariantState(item, variantGroup, idx, values[idx])
+                );
               },
               isOptionItemSelected: () => Number(groupState.selectedId || 0) === itemId,
             });
@@ -1832,12 +1869,10 @@ function buildProductDetailsContent(
                 const applied = await runGuardedMutation(() => {
 
                 // 1) Фиксируем выбранный вариант для этой опции
-                groupState.variantByItemId.set(itemId, {
-                  variant_group_id: Number(variantGroup.variant_group_id || variantGroup.id || 0),
-                  variant_value_index: idx,
-                  variant_label: formatValueLabel(value),
-                  variant_price_diff: Number.isFinite(priceDiff) ? priceDiff : 0,
-                });
+                groupState.variantByItemId.set(
+                  itemId,
+                  buildOptionItemVariantState(item, variantGroup, idx, value)
+                );
 
                 // 2) Сразу считаем, что выбран именно этот товар-опция
                 //    (последний кликнутый вариант = актуальный выбор группы)
@@ -2147,12 +2182,10 @@ function buildProductDetailsContent(
             if (selectedIdx != null && !currentVariant && defaultIdx != null && values[defaultIdx] != null) {
               const unitPrice = getOptionItemVariantUnitPrice(item, variantGroup, defaultIdx);
               const priceDiff = unitPrice - Number(item.price || 0);
-              groupState.variantByItemId.set(itemId, {
-                variant_group_id: Number(variantGroup.variant_group_id || variantGroup.id || 0),
-                variant_value_index: defaultIdx,
-                variant_label: formatValueLabel(values[defaultIdx]),
-                variant_price_diff: Number.isFinite(priceDiff) ? priceDiff : 0,
-              });
+              groupState.variantByItemId.set(
+                itemId,
+                buildOptionItemVariantState(item, variantGroup, defaultIdx, values[defaultIdx])
+              );
             }
 
             const optionVariantAvailabilityCtrl = createOptionVariantAvailabilityController({
@@ -2161,12 +2194,10 @@ function buildProductDetailsContent(
               setDraftForIndex: (idx) => {
                 const unitPrice = getOptionItemVariantUnitPrice(item, variantGroup, idx);
                 const priceDiff = unitPrice - Number(item.price || 0);
-                groupState.variantByItemId.set(itemId, {
-                  variant_group_id: Number(variantGroup.variant_group_id || variantGroup.id || 0),
-                  variant_value_index: idx,
-                  variant_label: formatValueLabel(values[idx]),
-                  variant_price_diff: Number.isFinite(priceDiff) ? priceDiff : 0,
-                });
+                groupState.variantByItemId.set(
+                  itemId,
+                  buildOptionItemVariantState(item, variantGroup, idx, values[idx])
+                );
               },
               isOptionItemSelected: () => groupState.selectedIds.has(itemId),
             });
@@ -2187,12 +2218,10 @@ function buildProductDetailsContent(
                 const unitPrice = getOptionItemVariantUnitPrice(item, variantGroup, idx);
                 const priceDiff = unitPrice - Number(item.price || 0);
                 const applyVariantChange = () => {
-                  groupState.variantByItemId.set(itemId, {
-                    variant_group_id: Number(variantGroup.variant_group_id || variantGroup.id || 0),
-                    variant_value_index: idx,
-                    variant_label: formatValueLabel(value),
-                    variant_price_diff: Number.isFinite(priceDiff) ? priceDiff : 0,
-                  });
+                  groupState.variantByItemId.set(
+                    itemId,
+                    buildOptionItemVariantState(item, variantGroup, idx, value)
+                  );
                 };
                 if (groupState.selectedIds.has(itemId)) {
                   const applied = await runGuardedMutation(applyVariantChange, {
@@ -2621,12 +2650,10 @@ function buildProductDetailsContent(
             if (selectedIdx != null && !currentVariant && defaultIdx != null && values[defaultIdx] != null) {
               const unitPrice = getOptionItemVariantUnitPrice(item, variantGroup, defaultIdx);
               const priceDiff = unitPrice - Number(item.price || 0);
-              groupState.variantByItemId.set(itemId, {
-                variant_group_id: Number(variantGroup.variant_group_id || variantGroup.id || 0),
-                variant_value_index: defaultIdx,
-                variant_label: formatValueLabel(values[defaultIdx]),
-                variant_price_diff: Number.isFinite(priceDiff) ? priceDiff : 0,
-              });
+              groupState.variantByItemId.set(
+                itemId,
+                buildOptionItemVariantState(item, variantGroup, defaultIdx, values[defaultIdx])
+              );
             }
 
             const optionVariantAvailabilityCtrl = createOptionVariantAvailabilityController({
@@ -2635,12 +2662,10 @@ function buildProductDetailsContent(
               setDraftForIndex: (idx) => {
                 const unitPrice = getOptionItemVariantUnitPrice(item, variantGroup, idx);
                 const priceDiff = unitPrice - Number(item.price || 0);
-                groupState.variantByItemId.set(itemId, {
-                  variant_group_id: Number(variantGroup.variant_group_id || variantGroup.id || 0),
-                  variant_value_index: idx,
-                  variant_label: formatValueLabel(values[idx]),
-                  variant_price_diff: Number.isFinite(priceDiff) ? priceDiff : 0,
-                });
+                groupState.variantByItemId.set(
+                  itemId,
+                  buildOptionItemVariantState(item, variantGroup, idx, values[idx])
+                );
               },
               isOptionItemSelected: () => (Number(groupState.qtyById.get(itemId)) || 0) > 0,
             });
@@ -2664,12 +2689,10 @@ function buildProductDetailsContent(
                 const priceDiff = unitPrice - Number(item.price || 0);
 
                 const applyVariantChange = () => {
-                  groupState.variantByItemId.set(itemId, {
-                    variant_group_id: Number(variantGroup.variant_group_id || variantGroup.id || 0),
-                    variant_value_index: idx,
-                    variant_label: formatValueLabel(value),
-                    variant_price_diff: Number.isFinite(priceDiff) ? priceDiff : 0,
-                  });
+                  groupState.variantByItemId.set(
+                    itemId,
+                    buildOptionItemVariantState(item, variantGroup, idx, value)
+                  );
                 };
                 if ((Number(groupState.qtyById.get(itemId)) || 0) > 0) {
                   const applied = await runGuardedMutation(applyVariantChange, {
@@ -3330,6 +3353,12 @@ async function renderProductDetailsInto(container, product, { onBack, cartKey, p
         variant_group_id: Number(opt.variant_group_id),
         variant_value_index: Number(opt.variant_value_index),
         variant_label: str(opt.variant_label || ""),
+        variant_group_title: str(opt.variant_group_title || ""),
+        variant_unit: str(opt.variant_unit || ""),
+        unit_id:
+          opt.unit_id != null && Number.isFinite(Number(opt.unit_id))
+            ? Number(opt.unit_id)
+            : null,
         variant_price_diff: Number(opt.variant_price_diff || 0),
       });
     }
@@ -3345,18 +3374,7 @@ async function renderProductDetailsInto(container, product, { onBack, cartKey, p
     const values = Array.isArray(vg.values) ? vg.values : [];
     const defaultIdx = vg.default_value_index != null ? Number(vg.default_value_index) : (values.length ? 0 : null);
     if (defaultIdx == null || defaultIdx < 0 || defaultIdx >= values.length) return;
-    const unitPrice = getOptionItemVariantUnitPrice(item, vg, defaultIdx);
-    const priceDiff = unitPrice - Number(item.price || 0);
-    const unitLabel = str(vg.unit_short_title || vg.unit_code || vg.unit_title || "").trim();
-    const valueText = str(values[defaultIdx] ?? "");
-    const hasLetters = (v) => /[a-zа-я]/i.test(String(v || ""));
-    const variantLabel = unitLabel && !hasLetters(valueText) ? `${valueText} ${unitLabel}` : valueText;
-    variantByItemIdMap.set(itemId, {
-      variant_group_id: Number(vg.id || vg.variant_group_id || 0),
-      variant_value_index: defaultIdx,
-      variant_label: variantLabel,
-      variant_price_diff: Number.isFinite(priceDiff) ? priceDiff : 0,
-    });
+    variantByItemIdMap.set(itemId, buildOptionItemVariantState(item, vg, defaultIdx, values[defaultIdx]));
   }
 
 optionGroups.forEach((group) => {
@@ -4299,9 +4317,11 @@ optionGroups.forEach((group) => {
   }
 
   function composeVariantLabelValueFirst(rawLabel, rawGroupTitle) {
+    if (typeof window.extractVariantValueForOrder === "function") {
+      return str(window.extractVariantValueForOrder(rawLabel, rawGroupTitle)).trim();
+    }
     const raw = str(rawLabel || "").trim();
     if (!raw) return "";
-
     const colonPos = raw.indexOf(":");
     if (colonPos >= 0) {
       const right = raw.slice(colonPos + 1).trim();
@@ -4334,7 +4354,13 @@ optionGroups.forEach((group) => {
       selectedVariantGroupId > 0 &&
       Number.isFinite(selectedVariantIndex) &&
       selectedVariantIndex >= 0;
-    const variantGroupTitle = str(variants?.[0]?.title || "").trim();
+    const variantGroupTitle = str(variants?.[0]?.title || variants?.[0]?.title_label || "").trim();
+    const variantUnit = str(
+      variants?.[0]?.unit_short_title ||
+      variants?.[0]?.unit_title ||
+      variants?.[0]?.unit_code ||
+      ""
+    ).trim();
     const variantValueLabel = str(variantState.label || "").trim();
     const variantLabel = hasVariantSelection
       ? composeVariantLabelValueFirst(variantValueLabel, variantGroupTitle)
@@ -4356,6 +4382,8 @@ optionGroups.forEach((group) => {
       variant_group_id: hasVariantSelection ? selectedVariantGroupId : null,
       variant_value_index: hasVariantSelection ? selectedVariantIndex : null,
       variant_label: variantLabel,
+      variant_group_title: hasVariantSelection ? variantGroupTitle : "",
+      variant_unit: hasVariantSelection ? variantUnit : "",
       variant_unit_price: Number(variantUnitPrice || 0),
       unit_price_override: null,
       auto_add: 0,
@@ -4435,7 +4463,13 @@ optionGroups.forEach((group) => {
     const variantSelection = hasVariantSelection
       ? { group_id: selectedVariantGroupId, value_index: selectedVariantIndex }
       : null;
-    const variantGroupTitle = str(variants?.[0]?.title || "").trim();
+    const variantGroupTitle = str(variants?.[0]?.title || variants?.[0]?.title_label || "").trim();
+    const variantUnit = str(
+      variants?.[0]?.unit_short_title ||
+      variants?.[0]?.unit_title ||
+      variants?.[0]?.unit_code ||
+      ""
+    ).trim();
     const variantValueLabel = str(variantState.label || "").trim();
     const variantLabel = hasVariantSelection
       ? composeVariantLabelValueFirst(variantValueLabel, variantGroupTitle)
@@ -4472,6 +4506,8 @@ optionGroups.forEach((group) => {
         sameItem.variant_group_id = hasVariantSelection ? selectedVariantGroupId : null;
         sameItem.variant_value_index = hasVariantSelection ? selectedVariantIndex : null;
         sameItem.variant_label = variantLabel;
+        sameItem.variant_group_title = hasVariantSelection ? variantGroupTitle : "";
+        sameItem.variant_unit = hasVariantSelection ? variantUnit : "";
         sameItem.variant_unit_price = Number(variantUnitPrice || 0);
 
         // удаляем старую строку
@@ -4486,6 +4522,8 @@ optionGroups.forEach((group) => {
         editingItem.variant_group_id = hasVariantSelection ? selectedVariantGroupId : null;
         editingItem.variant_value_index = hasVariantSelection ? selectedVariantIndex : null;
         editingItem.variant_label = variantLabel;
+        editingItem.variant_group_title = hasVariantSelection ? variantGroupTitle : "";
+        editingItem.variant_unit = hasVariantSelection ? variantUnit : "";
         editingItem.variant_unit_price = Number(variantUnitPrice || 0);
         editingItem.qty = safeQty;
         if (editingItem.auto_add == null) editingItem.auto_add = 0;
@@ -4501,6 +4539,8 @@ optionGroups.forEach((group) => {
         existing.variant_group_id = hasVariantSelection ? selectedVariantGroupId : null;
         existing.variant_value_index = hasVariantSelection ? selectedVariantIndex : null;
         existing.variant_label = variantLabel;
+        existing.variant_group_title = hasVariantSelection ? variantGroupTitle : "";
+        existing.variant_unit = hasVariantSelection ? variantUnit : "";
         existing.variant_unit_price = Number(variantUnitPrice || 0);
         if (existing.auto_add == null) existing.auto_add = 0;
         if (existing.auto_add_group_id == null) existing.auto_add_group_id = null;
@@ -4516,6 +4556,8 @@ optionGroups.forEach((group) => {
           variant_group_id: hasVariantSelection ? selectedVariantGroupId : null,
           variant_value_index: hasVariantSelection ? selectedVariantIndex : null,
           variant_label: variantLabel,
+          variant_group_title: hasVariantSelection ? variantGroupTitle : "",
+          variant_unit: hasVariantSelection ? variantUnit : "",
           variant_unit_price: Number(variantUnitPrice || 0),
           auto_add: 0,
           auto_add_group_id: null,
@@ -7243,8 +7285,9 @@ optionGroups.forEach((group) => {
     const header = document.querySelector(".app-modal-header");
     if (!header) return;
 
-    header.classList.remove("is-shop-sheet-shell");
+    header.classList.remove("is-shop-sheet-shell", "has-favorites-category-chips");
     header.querySelectorAll(".shop-delivery-toggle-wrap").forEach((el) => el.remove());
+    header.querySelectorAll(".shop-favorites-header-chips-wrap").forEach((el) => el.remove());
     const orderBackBtn = header.querySelector(".app-modal-back-btn");
     if (orderBackBtn) orderBackBtn.remove();
     const discountBadge = header.querySelector(".shop-sheet-discount-badge");
@@ -7305,6 +7348,10 @@ optionGroups.forEach((group) => {
     const header = document.querySelector(".app-modal-header");
     if (!header) return;
     header.classList.toggle("is-shop-sheet-shell", !!active);
+    if (!active) {
+      header.classList.remove("has-favorites-category-chips");
+      header.querySelectorAll(".shop-favorites-header-chips-wrap").forEach((el) => el.remove());
+    }
   }
 
   function setShopModalCloseBehavior(mode = "default") {
@@ -7556,6 +7603,12 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
   chipsWrap.appendChild(chips);
   wrap.appendChild(chipsWrap);
 
+  const headerChipsWrap = document.createElement("div");
+  headerChipsWrap.className = "shop-cat-chips-wrap shop-favorites-header-chips-wrap hidden";
+  const headerChips = document.createElement("div");
+  headerChips.className = "shop-cat-chips shop-favorites-chips";
+  headerChipsWrap.appendChild(headerChips);
+
   const list = document.createElement("div");
   list.className = "shop-favorites-list";
   wrap.appendChild(list);
@@ -7584,26 +7637,48 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     document.addEventListener("pointerdown", handleOutsidePointerDown, true);
   }
 
+  function ensureFavoritesHeaderChipsMounted() {
+    if (!isMobileSheet) return null;
+    const header = document.querySelector(".app-modal-header");
+    if (!header) return null;
+    if (headerChipsWrap.parentElement !== header) {
+      header.appendChild(headerChipsWrap);
+    }
+    return header;
+  }
+
+  function setFavoritesHeaderExpanded(active) {
+    const header = ensureFavoritesHeaderChipsMounted() || document.querySelector(".app-modal-header");
+    if (!header) return;
+    header.classList.toggle("has-favorites-category-chips", !!active);
+    headerChipsWrap.classList.toggle("hidden", !active);
+  }
+
   function hideCategoryChips() {
     chips.innerHTML = "";
+    headerChips.innerHTML = "";
     chipsWrap.classList.add("hidden");
+    setFavoritesHeaderExpanded(false);
   }
 
   function setActiveCategoryChip(categoryId) {
     const id = Number(categoryId || 0);
     if (!Number.isFinite(id) || id <= 0) return;
-    const all = chips.querySelectorAll(".shop-cat-chip");
+    const all = [chips, headerChips].flatMap((root) => Array.from(root.querySelectorAll(".shop-cat-chip")));
     all.forEach((btn) => {
       const btnId = Number(btn.getAttribute("data-cat-id"));
       btn.classList.toggle("is-active", btnId === id);
     });
-    const active = chips.querySelector(`.shop-cat-chip[data-cat-id="${id}"]`);
+    const active = (isMobileSheet ? headerChips : chips).querySelector(`.shop-cat-chip[data-cat-id="${id}"]`)
+      || chips.querySelector(`.shop-cat-chip[data-cat-id="${id}"]`)
+      || headerChips.querySelector(`.shop-cat-chip[data-cat-id="${id}"]`);
     if (!active) return;
     const target = Math.max(0, active.offsetLeft - 12);
-    if (typeof chips.scrollTo === "function") {
-      chips.scrollTo({ left: target, behavior: "smooth" });
+    const scroller = active.parentElement;
+    if (scroller && typeof scroller.scrollTo === "function") {
+      scroller.scrollTo({ left: target, behavior: "smooth" });
     } else {
-      chips.scrollLeft = target;
+      if (scroller) scroller.scrollLeft = target;
     }
   }
 
@@ -7615,18 +7690,17 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     const wrapRect = wrap.getBoundingClientRect();
     const headerRect = header.getBoundingClientRect();
     const delta = headerRect.top - wrapRect.top;
-    const offset = (chipsWrap.offsetHeight || 0) + 8;
+    const offset = isMobileSheet ? 8 : (chipsWrap.offsetHeight || 0) + 8;
     const nextTop = wrap.scrollTop + delta - offset;
     wrap.scrollTo({ top: Math.max(0, nextTop), behavior: "smooth" });
   }
 
-  function renderFavoriteCategoryChips(sections) {
-    chips.innerHTML = "";
+  function renderFavoriteCategoryChipButtons(targetEl, sections) {
+    targetEl.innerHTML = "";
     const safeSections = Array.isArray(sections) ? sections : [];
     const navSections = safeSections.filter((section) => Number.isFinite(Number(section?.id)));
     if (!navSections.length) {
-      chipsWrap.classList.add("hidden");
-      return;
+      return false;
     }
 
     navSections.forEach((section, idx) => {
@@ -7641,9 +7715,25 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
         setActiveCategoryChip(sectionId);
         scrollToCategorySection(sectionId);
       });
-      chips.appendChild(btn);
+      targetEl.appendChild(btn);
     });
 
+    return true;
+  }
+
+  function renderFavoriteCategoryChips(sections) {
+    const hasDesktopChips = renderFavoriteCategoryChipButtons(chips, sections);
+    if (isMobileSheet) {
+      ensureFavoritesHeaderChipsMounted();
+      const hasHeaderChips = renderFavoriteCategoryChipButtons(headerChips, sections);
+      chipsWrap.classList.add("hidden");
+      setFavoritesHeaderExpanded(hasHeaderChips);
+      return;
+    }
+    if (!hasDesktopChips) {
+      chipsWrap.classList.add("hidden");
+      return;
+    }
     chipsWrap.classList.remove("hidden");
   }
 
@@ -7864,6 +7954,12 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       el.textContent = "";
     });
 
+    const discountBadgeEls = cardEl.querySelectorAll(".cart-discount-badge");
+    discountBadgeEls.forEach((el) => {
+      el.classList.add("hidden");
+      el.textContent = "";
+    });
+
     const priceEl = cardEl.querySelector(".cart-price");
     if (priceEl) {
       priceEl.textContent = "Нет в наличии";
@@ -7925,7 +8021,12 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
   }
 
   async function addFavoriteSnapshotToCart(snapshot) {
-    return addRepeatSnapshotToCartLocal(snapshot);
+    const hydrated = await hydrateFavoriteSnapshotVariantMeta(snapshot, { strictVariant: true });
+    if (hydrated?.unresolvedVariant) {
+      showToast("Не удалось восстановить вариант");
+      return false;
+    }
+    return addRepeatSnapshotToCartLocal(hydrated?.snapshot || snapshot);
   }
 
   function initFavoriteSwipeRow(container, content, { onRemove, onAddToCart, allowAdd = true } = {}) {
@@ -8233,7 +8334,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       const favorites = await window.shopFavoritesApi.list({ force: forceReload });
       if (currentSeq !== renderSeq) return;
 
-      const rows = Array.isArray(favorites) ? favorites : [];
+      let rows = Array.isArray(favorites) ? favorites : [];
       const nextFavoritesSignature = rows
         .map((fav) => {
           const id = Number(fav?.id || 0);
@@ -8251,7 +8352,20 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
         return;
       }
 
-      const availabilityByIndex = await buildFavoritesAvailabilityMap(rows);
+      const [availabilityByIndex, hydratedRows] = await Promise.all([
+        buildFavoritesAvailabilityMap(rows),
+        Promise.all(rows.map(async (fav) => {
+          const snapshot = fav?.item && typeof fav.item === "object" ? fav.item : null;
+          if (!snapshot) return fav;
+          const hydrated = await hydrateFavoriteSnapshotVariantMeta(snapshot, { strictVariant: false });
+          return {
+            ...fav,
+            item: hydrated?.snapshot || snapshot,
+          };
+        })),
+      ]);
+      if (currentSeq !== renderSeq) return;
+      rows = hydratedRows;
 
       list.innerHTML = "";
       const repeatItems = [];
@@ -8363,6 +8477,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
           itemsWrap.appendChild(buildFallbackItemRow(snapshot));
         }
         applyFavoriteComboThumbGrid(itemsWrap, snapshot);
+        enhanceFavoritePriceDisplay(itemsWrap, snapshot);
         card.appendChild(itemsWrap);
         if (isUnavailable) {
           applyFavoriteUnavailableView(card);
@@ -8631,6 +8746,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       setFavoritesSheetBodyState(false);
       openCartSheetCtx = null;
       openProductCtx = null;
+      setShopModalHeaderShellMode(false);
       setSheetHeaderMode("");
       if (typeof window.updateActiveOrdersBadge === "function") {
         window.updateActiveOrdersBadge();
@@ -8640,6 +8756,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
 
   // Если до этого был product/combo режим, возвращаем стандартный хедер списка.
   setSheetHeaderMode("");
+  setShopModalHeaderShellMode(true);
 
   setFavoritesSheetBodyState(true);
   void renderFavorites({ forceReload: force });
@@ -10226,6 +10343,85 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       });
     } catch {
       return "";
+    }
+  }
+
+  function getFavoriteSnapshotPriceMeta(snapshot) {
+    const safeSnapshot = snapshot && typeof snapshot === "object" ? snapshot : {};
+    const qty = Math.max(1, Number(safeSnapshot.qty || safeSnapshot.quantity || 1));
+    const currentTotalRaw = Number(safeSnapshot.line_total);
+    const currentTotal = Number.isFinite(currentTotalRaw)
+      ? currentTotalRaw
+      : Number(safeSnapshot.price || 0);
+
+    const discountOriginal = Number(safeSnapshot?.discount?.original_line_total || 0);
+    const oldLineTotal = Number(safeSnapshot.old_line_total || 0);
+    const oldPrice = Number(safeSnapshot.old_price || 0);
+    const unitPriceBeforeDiscount = Number(safeSnapshot.unit_price_before_discount || 0);
+
+    let originalTotal = 0;
+    if (discountOriginal > 0) {
+      originalTotal = discountOriginal;
+    } else if (oldLineTotal > 0) {
+      originalTotal = oldLineTotal;
+    } else if (oldPrice > 0) {
+      originalTotal = oldPrice * qty;
+    } else if (unitPriceBeforeDiscount > 0) {
+      originalTotal = unitPriceBeforeDiscount * qty;
+    }
+
+    return {
+      currentTotal: Number(currentTotal || 0),
+      originalTotal: originalTotal > currentTotal ? Number(originalTotal || 0) : 0,
+    };
+  }
+
+  function enhanceFavoritePriceDisplay(itemsWrap, snapshot) {
+    if (!itemsWrap || !snapshot || typeof snapshot !== "object") return;
+    const row = itemsWrap.querySelector(".cart-row");
+    const right = row?.querySelector(".cart-right");
+    if (!right) return;
+
+    const meta = getFavoriteSnapshotPriceMeta(snapshot);
+    const priceGroup = document.createElement("div");
+    priceGroup.className = "cart-price-group";
+
+    const stack = document.createElement("div");
+    stack.className = "cart-price-stack";
+
+    const currentEl = document.createElement("div");
+    currentEl.className = "cart-price";
+
+    const oldEl = document.createElement("div");
+    oldEl.className = "cart-old hidden";
+
+    const badgeEl = document.createElement("span");
+    badgeEl.className = "sp-discount-badge sp-discount-badge--cart cart-discount-badge hidden";
+
+    stack.appendChild(currentEl);
+    stack.appendChild(oldEl);
+    priceGroup.appendChild(stack);
+    priceGroup.appendChild(badgeEl);
+
+    right.innerHTML = "";
+    right.appendChild(priceGroup);
+
+    if (typeof window.setShopCartPriceGroupDomState === "function") {
+      window.setShopCartPriceGroupDomState(priceGroup, meta.currentTotal, meta.originalTotal);
+      return;
+    }
+
+    currentEl.textContent = typeof money === "function" ? money(meta.currentTotal) : String(meta.currentTotal || 0);
+    if (meta.originalTotal > meta.currentTotal) {
+      oldEl.textContent = typeof money === "function" ? money(meta.originalTotal) : String(meta.originalTotal || 0);
+      oldEl.classList.remove("hidden");
+      const percent = meta.originalTotal > 0
+        ? Math.round(((meta.originalTotal - meta.currentTotal) / meta.originalTotal) * 100)
+        : 0;
+      if (percent > 0) {
+        badgeEl.textContent = `-${percent}%`;
+        badgeEl.classList.remove("hidden");
+      }
     }
   }
 
@@ -19836,6 +20032,7 @@ function applySheetAddressTitle(backMode = "cart") {
     };
     
     setSheetHeaderMode("product", { onBack: resolvedOnBack });
+    setShopModalHeaderShellMode(false);
     const canReuseProductView =
       openProductCtx &&
       Number(openProductCtx.productId || 0) > 0 &&
@@ -19893,6 +20090,7 @@ function applySheetAddressTitle(backMode = "cart") {
     const comboDiscount = Number(comboData.discount_percent) || 0;
     const comboBadge = comboDiscount ? `-${comboDiscount}%` : "";
     setSheetHeaderMode("product", { onBack: resolvedOnBack, discountBadge: comboBadge });
+    setShopModalHeaderShellMode(false);
     const canReuseComboView =
       openProductCtx &&
       openProductCtx.type === "combo" &&
@@ -22560,6 +22758,9 @@ function renderSheetAddressList() {
   }
 
   function buildRepeatVariantLabel(rawLabel, rawGroupTitle) {
+    if (typeof window.extractVariantValueForOrder === "function") {
+      return str(window.extractVariantValueForOrder(rawLabel, rawGroupTitle)).trim();
+    }
     const value = str(rawLabel || "").trim();
     if (!value) return "";
     if (value.includes(":")) {
@@ -22567,6 +22768,324 @@ function renderSheetAddressList() {
       return right || value;
     }
     return value;
+  }
+
+  function buildFavoriteVariantDisplay(rawLabel, rawUnit, rawGroupTitle) {
+    if (typeof window.buildVariantDisplayLineForOrder === "function") {
+      return str(window.buildVariantDisplayLineForOrder(rawLabel, rawUnit, rawGroupTitle)).trim();
+    }
+    const label = buildRepeatVariantLabel(rawLabel, rawGroupTitle);
+    const unit = str(rawUnit || "").trim();
+    if (!label) return unit;
+    if (!unit) return label;
+    const labelLower = label.toLowerCase();
+    const unitLower = unit.toLowerCase();
+    if (labelLower === unitLower || labelLower.endsWith(` ${unitLower}`)) return label;
+    return `${label} ${unit}`.trim();
+  }
+
+  function normalizeFavoriteVariantMatchToken(value) {
+    return str(value || "").trim().toLowerCase().replace(/\s+/g, " ");
+  }
+
+  function buildFavoriteVariantMatchTokens({ label = "", unit = "", groupTitle = "", rawValue = "" } = {}) {
+    const tokens = new Set();
+    [
+      str(label || "").trim(),
+      buildRepeatVariantLabel(label, groupTitle),
+      buildFavoriteVariantDisplay(label, unit, groupTitle),
+      str(rawValue || "").trim(),
+      buildFavoriteVariantDisplay(rawValue, unit, groupTitle),
+      groupTitle ? `${groupTitle}: ${rawValue}` : "",
+      groupTitle && unit ? `${groupTitle} (${unit}): ${rawValue}` : "",
+    ].forEach((entry) => {
+      const normalized = normalizeFavoriteVariantMatchToken(entry);
+      if (normalized) tokens.add(normalized);
+    });
+    return tokens;
+  }
+
+  async function resolveFavoriteVariantMetaForProduct({
+    productId,
+    variantGroupId,
+    variantValueIndex,
+    variantLabel,
+    variantGroupTitle,
+    variantUnit,
+    unitId,
+    strict = false,
+  } = {}) {
+    const safeProductId = Number(productId || 0);
+    const safeGroupId = Number(variantGroupId);
+    const safeValueIndex = Number(variantValueIndex);
+    const safeGroupTitle = str(variantGroupTitle || "").trim();
+    const safeUnit = str(variantUnit || "").trim();
+    const safeLabel = str(variantLabel || "").trim();
+    const requestedVariant =
+      (Number.isFinite(safeGroupId) && safeGroupId > 0) ||
+      (Number.isFinite(safeValueIndex) && safeValueIndex >= 0) ||
+      !!safeLabel;
+
+    const baseMeta = {
+      variant_group_id: Number.isFinite(safeGroupId) && safeGroupId > 0 ? safeGroupId : null,
+      variant_value_index: Number.isFinite(safeValueIndex) && safeValueIndex >= 0 ? safeValueIndex : null,
+      variant_label: buildRepeatVariantLabel(safeLabel, safeGroupTitle),
+      variant_group_title: safeGroupTitle,
+      variant_unit: safeUnit,
+      unit_id:
+        unitId != null && Number.isFinite(Number(unitId))
+          ? Number(unitId)
+          : null,
+      variant_unit_price: 0,
+      variants: [],
+      unresolved: false,
+    };
+
+    if (!(safeProductId > 0) || !requestedVariant) {
+      return baseMeta;
+    }
+
+    try {
+      const [product, variants] = await Promise.all([
+        ensureProduct(safeProductId).catch(() => null),
+        resolveProductVariants(safeProductId).catch(() => []),
+      ]);
+      const groups = Array.isArray(variants) ? variants.filter((group) => (
+        Array.isArray(group?.values) && group.values.length > 0
+      )) : [];
+      if (!groups.length) {
+        return {
+          ...baseMeta,
+          unresolved: !!strict,
+        };
+      }
+
+      const matchedById = groups.find((group) => (
+        Number(group?.id || group?.variant_group_id || 0) === safeGroupId
+      )) || null;
+      const fallbackGroup = !matchedById && groups.length === 1 ? groups[0] : null;
+      let resolvedGroup = matchedById || fallbackGroup || null;
+      let resolvedIndex =
+        Number.isFinite(safeValueIndex) && safeValueIndex >= 0
+          ? safeValueIndex
+          : null;
+
+      if (resolvedGroup) {
+        const values = Array.isArray(resolvedGroup?.values) ? resolvedGroup.values : [];
+        if (!(resolvedIndex >= 0 && resolvedIndex < values.length)) {
+          resolvedIndex = null;
+        }
+      }
+
+      if (!resolvedGroup || resolvedIndex == null) {
+        const wantedTokens = buildFavoriteVariantMatchTokens({
+          label: safeLabel,
+          unit: safeUnit,
+          groupTitle: safeGroupTitle,
+        });
+        if (wantedTokens.size) {
+          const candidateGroups = resolvedGroup ? [resolvedGroup] : groups;
+          const matches = [];
+          for (const group of candidateGroups) {
+            const groupTitle = str(group?.title || group?.title_label || "").trim();
+            const unit = str(group?.unit_short_title || group?.unit_title || group?.unit_code || "").trim();
+            const values = Array.isArray(group?.values) ? group.values : [];
+            const foundIndices = values
+              .map((value, index) => ({ value, index }))
+              .filter(({ value }) => {
+              const candidateTokens = buildFavoriteVariantMatchTokens({
+                label: value,
+                unit,
+                groupTitle,
+                rawValue: value,
+              });
+              for (const token of wantedTokens) {
+                if (candidateTokens.has(token)) return true;
+              }
+              return false;
+            });
+            foundIndices.forEach(({ index }) => {
+              matches.push({ group, index });
+            });
+          }
+          if (matches.length === 1) {
+            resolvedGroup = matches[0].group;
+            resolvedIndex = matches[0].index;
+          }
+        }
+      }
+
+      if (!resolvedGroup || resolvedIndex == null) {
+        return {
+          ...baseMeta,
+          unresolved: !!strict,
+        };
+      }
+
+      const values = Array.isArray(resolvedGroup?.values) ? resolvedGroup.values : [];
+      if (!(resolvedIndex >= 0 && resolvedIndex < values.length)) {
+        return {
+          ...baseMeta,
+          unresolved: !!strict,
+        };
+      }
+
+      const groupTitle = str(resolvedGroup?.title || resolvedGroup?.title_label || "").trim();
+      const unit = str(
+        resolvedGroup?.unit_short_title ||
+        resolvedGroup?.unit_title ||
+        resolvedGroup?.unit_code ||
+        ""
+      ).trim();
+      const rawValue = str(values[resolvedIndex] || "").trim();
+      const resolvedLabel = buildFavoriteVariantDisplay(rawValue || safeLabel, unit || safeUnit, groupTitle || safeGroupTitle);
+      const resolvedGroupId = Number(resolvedGroup?.id || resolvedGroup?.variant_group_id || 0);
+      const resolvedUnitId =
+        resolvedGroup?.unit_id != null && Number.isFinite(Number(resolvedGroup.unit_id))
+          ? Number(resolvedGroup.unit_id)
+          : (
+            unitId != null && Number.isFinite(Number(unitId))
+              ? Number(unitId)
+              : null
+          );
+      const variantUnitPrice = product
+        ? Number(getVariantUnitPrice(product, [resolvedGroup], {
+            groupId: resolvedGroupId,
+            selectedIndex: resolvedIndex,
+            value: rawValue || null,
+            label: resolvedLabel,
+          }) || 0)
+        : 0;
+      const variantPriceDiff = product ? roundPrice(variantUnitPrice - Number(product?.price || 0)) : 0;
+
+      return {
+        variant_group_id: resolvedGroupId > 0 ? resolvedGroupId : null,
+        variant_value_index: resolvedIndex,
+        variant_label: resolvedLabel || buildRepeatVariantLabel(safeLabel, safeGroupTitle),
+        variant_group_title: groupTitle || safeGroupTitle,
+        variant_unit: unit || safeUnit,
+        unit_id: resolvedUnitId,
+        variant_unit_price: Number.isFinite(variantUnitPrice) ? variantUnitPrice : 0,
+        variants: resolvedLabel
+          ? [{
+              variant_group_id: resolvedGroupId > 0 ? resolvedGroupId : null,
+              variant_value_index: resolvedIndex,
+              group_title: groupTitle || safeGroupTitle,
+              variant_group_title: groupTitle || safeGroupTitle,
+              value: resolvedLabel,
+              label: resolvedLabel,
+              unit: unit || safeUnit,
+              price_diff: Number.isFinite(variantPriceDiff) ? variantPriceDiff : 0,
+            }]
+          : [],
+        unresolved: false,
+      };
+    } catch (e) {
+      console.warn("Failed to resolve favorite variant meta:", safeProductId, e);
+      return {
+        ...baseMeta,
+        unresolved: !!strict,
+      };
+    }
+  }
+
+  async function hydrateFavoriteSnapshotVariantMeta(snapshot, { strictVariant = false } = {}) {
+    const source = snapshot && typeof snapshot === "object" ? snapshot : null;
+    if (!source) {
+      return { snapshot, unresolvedVariant: false };
+    }
+
+    if (String(source.type || "").trim().toLowerCase() === "combo") {
+      return { snapshot: source, unresolvedVariant: false };
+    }
+
+    const next = {
+      ...source,
+      option_items: Array.isArray(source.option_items)
+        ? source.option_items.map((opt) => ({ ...opt }))
+        : (
+          Array.isArray(source.options)
+            ? source.options.map((opt) => ({ ...opt }))
+            : []
+        ),
+    };
+    next.options = next.option_items;
+
+    const rootVariantMeta = await resolveFavoriteVariantMetaForProduct({
+      productId: next.product_id || next.id,
+      variantGroupId: next.variant_group_id,
+      variantValueIndex: next.variant_value_index,
+      variantLabel: next.variant_label || next?.variants?.[0]?.label || next?.variants?.[0]?.value || "",
+      variantGroupTitle: next.variant_group_title || next?.variants?.[0]?.group_title || "",
+      variantUnit: next.variant_unit || next?.variants?.[0]?.unit || "",
+      unitId: next.unit_id,
+      strict: strictVariant,
+    });
+
+    next.variant_group_id = rootVariantMeta.variant_group_id;
+    next.variant_value_index = rootVariantMeta.variant_value_index;
+    next.variant_label = rootVariantMeta.variant_label || "";
+    next.variant_group_title = rootVariantMeta.variant_group_title || "";
+    next.variant_unit = rootVariantMeta.variant_unit || "";
+    if (rootVariantMeta.variant_unit_price > 0) {
+      next.variant_unit_price = Number(rootVariantMeta.variant_unit_price || 0);
+    }
+    next.variants = rootVariantMeta.variants.length
+      ? rootVariantMeta.variants
+      : (
+        next.variant_label
+          ? [{
+              variant_group_id: next.variant_group_id,
+              variant_value_index: next.variant_value_index,
+              group_title: next.variant_group_title || "",
+              variant_group_title: next.variant_group_title || "",
+              value: next.variant_label,
+              label: next.variant_label,
+              unit: next.variant_unit || "",
+            }]
+          : []
+      );
+
+    const hydratedOptions = await Promise.all(
+      next.option_items.map(async (opt) => {
+        const targetProductId = Number(opt?.target_product_id || opt?.product_id || 0);
+        if (!(targetProductId > 0)) return opt;
+        const optionVariantMeta = await resolveFavoriteVariantMetaForProduct({
+          productId: targetProductId,
+          variantGroupId: opt?.variant_group_id,
+          variantValueIndex: opt?.variant_value_index,
+          variantLabel: opt?.variant_label || "",
+          variantGroupTitle: opt?.variant_group_title || "",
+          variantUnit: opt?.variant_unit || "",
+          unitId: opt?.unit_id,
+          strict: false,
+        });
+        return {
+          ...opt,
+          variant_group_id: optionVariantMeta.variant_group_id,
+          variant_value_index: optionVariantMeta.variant_value_index,
+          variant_label: optionVariantMeta.variant_label || str(opt?.variant_label || ""),
+          variant_group_title: optionVariantMeta.variant_group_title || str(opt?.variant_group_title || ""),
+          variant_unit: optionVariantMeta.variant_unit || str(opt?.variant_unit || ""),
+          unit_id:
+            optionVariantMeta.unit_id != null && Number.isFinite(Number(optionVariantMeta.unit_id))
+              ? Number(optionVariantMeta.unit_id)
+              : (
+                opt?.unit_id != null && Number.isFinite(Number(opt.unit_id))
+                  ? Number(opt.unit_id)
+                  : null
+              ),
+        };
+      })
+    );
+
+    next.option_items = hydratedOptions;
+    next.options = hydratedOptions;
+
+    return {
+      snapshot: next,
+      unresolvedVariant: rootVariantMeta.unresolved === true,
+    };
   }
 
   function normalizeRepeatOptionItems(optionItems) {
@@ -22604,6 +23123,16 @@ function renderSheetAddressList() {
           variant_group_id: Number.isFinite(variantGroupId) && variantGroupId > 0 ? variantGroupId : null,
           variant_value_index: Number.isFinite(variantValueIndex) && variantValueIndex >= 0 ? variantValueIndex : null,
           variant_label: variantLabel,
+          variant_group_title: variantGroupTitle,
+          variant_unit: str(opt?.variant_unit || variantSource?.unit || variantSource?.unit_label || ""),
+          unit_id:
+            opt?.unit_id != null && Number.isFinite(Number(opt.unit_id))
+              ? Number(opt.unit_id)
+              : (
+                variantSource?.unit_id != null && Number.isFinite(Number(variantSource.unit_id))
+                  ? Number(variantSource.unit_id)
+                  : null
+              ),
           variant_price_diff: Number(opt?.variant_price_diff || 0),
         };
       })
@@ -22754,6 +23283,9 @@ function renderSheetAddressList() {
       variant_group_id: Number.isFinite(variantGroupId) && variantGroupId > 0 ? variantGroupId : null,
       variant_value_index: Number.isFinite(variantValueIndex) && variantValueIndex >= 0 ? variantValueIndex : null,
       variant_label: variantLabel,
+      variant_group_title: variantGroupTitle,
+      variant_unit: str(orderItem.variant_unit || variantSource?.unit || variantSource?.unit_label || ""),
+      variant_unit_price: Number(orderItem.variant_unit_price || 0),
     };
   }
 
@@ -23433,6 +23965,12 @@ function renderSheetAddressList() {
             variant_group_id: opt?.variant_group_id != null ? Number(opt.variant_group_id) : null,
             variant_value_index: opt?.variant_value_index != null ? Number(opt.variant_value_index) : null,
             variant_label: str(opt?.variant_label || ""),
+            variant_group_title: str(opt?.variant_group_title || ""),
+            variant_unit: str(opt?.variant_unit || ""),
+            unit_id:
+              opt?.unit_id != null && Number.isFinite(Number(opt.unit_id))
+                ? Number(opt.unit_id)
+                : null,
             variant_price_diff: Number(opt?.variant_price_diff || 0),
           };
         })
@@ -23451,6 +23989,8 @@ function renderSheetAddressList() {
         ? { group_id: variantGroupId, value_index: variantValueIndex }
         : null;
       const resolvedVariantLabel = hasVariantSelection ? str(prefillItem.variant_label || "") : "";
+      const resolvedVariantGroupTitle = hasVariantSelection ? str(prefillItem.variant_group_title || "") : "";
+      const resolvedVariantUnit = hasVariantSelection ? str(prefillItem.variant_unit || "") : "";
 
       const baseProductPrice = Number(product?.price || 0);
       let variantUnitPrice = baseProductPrice;
@@ -23499,6 +24039,8 @@ function renderSheetAddressList() {
         existing.variant_group_id = hasVariantSelection ? variantGroupId : null;
         existing.variant_value_index = hasVariantSelection ? variantValueIndex : null;
         existing.variant_label = hasVariantSelection ? str(resolvedVariantLabel || "") : "";
+        existing.variant_group_title = hasVariantSelection ? resolvedVariantGroupTitle : "";
+        existing.variant_unit = hasVariantSelection ? resolvedVariantUnit : "";
         existing.variant_unit_price = hasVariantSelection ? Number(variantUnitPrice || 0) : 0;
         if (existing.auto_add == null) existing.auto_add = 0;
         if (existing.auto_add_group_id == null) existing.auto_add_group_id = null;
@@ -23514,6 +24056,8 @@ function renderSheetAddressList() {
           variant_group_id: hasVariantSelection ? variantGroupId : null,
           variant_value_index: hasVariantSelection ? variantValueIndex : null,
           variant_label: hasVariantSelection ? str(resolvedVariantLabel || "") : "",
+          variant_group_title: hasVariantSelection ? resolvedVariantGroupTitle : "",
+          variant_unit: hasVariantSelection ? resolvedVariantUnit : "",
           variant_unit_price: hasVariantSelection ? Number(variantUnitPrice || 0) : 0,
           auto_add: 0,
           auto_add_group_id: null,
