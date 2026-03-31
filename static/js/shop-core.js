@@ -747,6 +747,7 @@
     meBootstrapPromise = null;
     meBootstrapToken = "";
     meBootstrapLoaded = false;
+    state._addressesInitialized = false;
     dispatchCustomerProfileChanged("clear");
     if (typeof window.invalidateBenefitsStore === "function") {
       window.invalidateBenefitsStore({ orderChanged: true, detailsChanged: true });
@@ -813,6 +814,7 @@
     // addresses (cart header chip)
     addresses: [],
     selectedAddress: null,
+    _addressesInitialized: false,
     addressEditingId: null,
     _addressFormResolved: null,
     _addressFormBackMode: null,
@@ -6424,6 +6426,9 @@ function setSheetHeaderMode(
     updateAddressChip();
     updateHeaderAddressWidget();
     syncSelectedAddressToCheckoutDraft();
+    if (typeof window.warmCheckoutDeliveryConditions === "function") {
+      Promise.resolve(window.warmCheckoutDeliveryConditions("selected-address")).catch(() => {});
+    }
     if (typeof updateMobileDeliveryProgress === "function") {
       Promise.resolve(updateMobileDeliveryProgress()).catch(() => {});
     }
@@ -6849,6 +6854,7 @@ function showProductView() {
           await loadMeBootstrap({ force: true });
         }
         const sel = pickDefaultAddress(state.addresses);
+        state._addressesInitialized = true;
         setSelectedAddress(sel ? sel : null);
         return;
       }
@@ -6857,6 +6863,7 @@ function showProductView() {
     // guest / token invalid
     state.addresses = [];
     const draft = loadAddressDraft();
+    state._addressesInitialized = true;
     setSelectedAddress(draft ? { ...draft, _local: true } : null);
   }
 

@@ -1,3 +1,5 @@
+const crypto = require('crypto');
+
 const {
   buildLegacyDeliveryPriceTiers,
   normalizeDeliveryEtaMinutes,
@@ -270,6 +272,53 @@ function getZoneTierSummary(zone, subtotal) {
   return summarizeDeliveryPriceTiers(zone && zone.price_tiers, subtotal);
 }
 
+function buildDeliverySettingsRevision({ tenantId, storeId, defaultSetting, zones }) {
+  const payload = {
+    tenant_id: Number(tenantId || 0) || 0,
+    store_id: Number(storeId || 0) || 0,
+    default_setting: {
+      has_settings: Boolean(defaultSetting && defaultSetting.has_settings),
+      id: Number(defaultSetting && defaultSetting.id || 0) || 0,
+      name: String(defaultSetting && defaultSetting.name || '').trim(),
+      delivery_cost: Number(defaultSetting && defaultSetting.delivery_cost || 0),
+      min_order_amount: Number(defaultSetting && defaultSetting.min_order_amount || 0),
+      free_delivery_from: defaultSetting && defaultSetting.free_delivery_from != null
+        ? Number(defaultSetting.free_delivery_from)
+        : null,
+      eta_minutes: defaultSetting && defaultSetting.eta_minutes != null
+        ? Number(defaultSetting.eta_minutes)
+        : null,
+      default_store_id: defaultSetting && defaultSetting.default_store_id != null
+        ? Number(defaultSetting.default_store_id)
+        : null,
+      price_tiers: normalizeDeliveryPriceTiersForOutput(defaultSetting && defaultSetting.price_tiers),
+    },
+    zones: (Array.isArray(zones) ? zones : [])
+      .map((zone) => ({
+        id: Number(zone && zone.id || 0) || 0,
+        name: String(zone && zone.name || '').trim(),
+        color: normalizeDeliveryZoneColor(zone && zone.color),
+        eta_minutes: zone && zone.eta_minutes != null ? Number(zone.eta_minutes) : null,
+        is_active: Number(zone && zone.is_active) === 1 ? 1 : 0,
+        geometry: normalizeDeliveryZoneGeometry(zone && zone.geometry),
+        store_ids: Array.isArray(zone && zone.store_ids)
+          ? zone.store_ids
+            .map((value) => Number(value))
+            .filter((value) => Number.isFinite(value) && value > 0)
+            .sort((left, right) => left - right)
+          : [],
+        price_tiers: normalizeDeliveryPriceTiersForOutput(zone && zone.price_tiers),
+      }))
+      .filter((zone) => zone.id > 0)
+      .sort((left, right) => left.id - right.id),
+  };
+
+  return crypto
+    .createHash('sha1')
+    .update(JSON.stringify(payload))
+    .digest('hex');
+}
+
 async function loadDefaultDeliverySettings(db, tenantId, storeId) {
   const resolvedTenantId = Number(tenantId || 0);
   const resolvedStoreId = Number(storeId || 0);
@@ -387,15 +436,24 @@ function buildDefaultQuote(setting, subtotal) {
 async function buildDeliveryQuote({ db, tenantId, storeId, subtotal, address }) {
   const resolvedStoreId = Number(storeId || 0);
   const defaultSetting = await loadDefaultDeliverySettings(db, tenantId, resolvedStoreId);
-  const fallbackQuote = buildDefaultQuote(defaultSetting, subtotal);
-
   const lat = Number(address && address.lat);
   const lng = Number(address && address.lng);
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
-    return fallbackQuote;
+    return buildDefaultQuote(defaultSetting, subtotal);
   }
 
   const zones = await loadDeliveryZonesForTenant(db, tenantId);
+  const deliveryRevision = buildDeliverySettingsRevision({
+    tenantId,
+    storeId: resolvedStoreId,
+    defaultSetting,
+    zones,
+  });
+  const fallbackQuote = {
+    ...buildDefaultQuote(defaultSetting, subtotal),
+    delivery_revision: deliveryRevision,
+  };
+
   const matchedZone = findMatchingDeliveryZone(zones, { lat, lng });
   if (!matchedZone) {
     return fallbackQuote;
@@ -421,11 +479,13 @@ async function buildDeliveryQuote({ db, tenantId, storeId, subtotal, address }) 
     delivery_store_id: storeIds.length ? storeIds[0] : (fallbackQuote.delivery_store_id || null),
     default_store_id: fallbackQuote.default_store_id,
     price_tiers: Array.isArray(matchedZone.price_tiers) ? matchedZone.price_tiers : [],
+    delivery_revision: deliveryRevision,
   };
 }
 
 module.exports = {
   buildDeliveryQuote,
+  buildDeliverySettingsRevision,
   buildDefaultQuote,
   loadDefaultDeliverySettings,
   loadDeliveryZonesForTenant,

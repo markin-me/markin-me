@@ -12337,6 +12337,12 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     };
   }
 
+  function resolveDeliveryTierSummaryForTotal(orderTotal, deliveryQuote, defaultDeliverySettings = null) {
+    const priceTiers = getQuoteDeliveryPriceTiers(deliveryQuote, defaultDeliverySettings);
+    if (!Array.isArray(priceTiers) || !priceTiers.length) return null;
+    return summarizeDeliveryCachePriceTiers(priceTiers, orderTotal);
+  }
+
   function resolveCartPricingDeliveryState(orderTotal, methodCode, deliveryQuote, defaultDeliverySettings = null) {
     const isDelivery = str(methodCode || "").trim() === "delivery";
     if (!isDelivery) {
@@ -12350,15 +12356,22 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       };
     }
 
-    const freeFromRaw = deliveryQuote?.free_delivery_from != null
-      ? Number(deliveryQuote.free_delivery_from)
-      : (defaultDeliverySettings?.free_delivery_from != null ? Number(defaultDeliverySettings.free_delivery_from) : null);
-    const minOrderRaw = deliveryQuote?.min_order_amount != null
-      ? Number(deliveryQuote.min_order_amount)
-      : Number(defaultDeliverySettings?.min_order_amount || 0);
-    const baseCostRaw = deliveryQuote?.delivery_cost != null
-      ? Number(deliveryQuote.delivery_cost)
-      : Number(defaultDeliverySettings?.delivery_cost || 0);
+    const tierSummary = resolveDeliveryTierSummaryForTotal(orderTotal, deliveryQuote, defaultDeliverySettings);
+    const freeFromRaw = tierSummary?.free_delivery_from != null
+      ? Number(tierSummary.free_delivery_from)
+      : (deliveryQuote?.free_delivery_from != null
+        ? Number(deliveryQuote.free_delivery_from)
+        : (defaultDeliverySettings?.free_delivery_from != null ? Number(defaultDeliverySettings.free_delivery_from) : null));
+    const minOrderRaw = tierSummary?.min_order_amount != null
+      ? Number(tierSummary.min_order_amount)
+      : (deliveryQuote?.min_order_amount != null
+        ? Number(deliveryQuote.min_order_amount)
+        : Number(defaultDeliverySettings?.min_order_amount || 0));
+    const baseCostRaw = tierSummary?.delivery_cost != null
+      ? Number(tierSummary.delivery_cost)
+      : (deliveryQuote?.delivery_cost != null
+        ? Number(deliveryQuote.delivery_cost)
+        : Number(defaultDeliverySettings?.delivery_cost || 0));
 
     let cost = Number.isFinite(baseCostRaw) && baseCostRaw > 0 ? baseCostRaw : 0;
     if (Number.isFinite(freeFromRaw) && orderTotal >= freeFromRaw) {
@@ -12947,40 +12960,18 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
   }
 
   function getCartPricingCachedDeliveryQuote(subtotal = null) {
-    if (!deliveryQuoteCache?.data) return null;
-    if (!deliveryQuoteCache?.key) return deliveryQuoteCache.data || null;
-    try {
-      const cachedMeta = JSON.parse(deliveryQuoteCache.key);
-      const requestedSubtotal = subtotal != null
-        ? roundPrice(Number(subtotal || 0))
-        : null;
-      const cachedSubtotal = roundPrice(Number(cachedMeta?.subtotal || 0));
-      if (requestedSubtotal != null && cachedSubtotal !== requestedSubtotal) {
-        return null;
-      }
-      const selectedAddress = state.selectedAddress ? normalizeAddressPayload(state.selectedAddress) : null;
-      if (!selectedAddress && !state.selectedAddress?.id) {
-        return deliveryQuoteCache.data || null;
-      }
+    const cacheMeta = buildCurrentDeliveryQuoteCacheMeta(subtotal);
+    const exactQuote = readCachedDeliveryQuoteFromMemory(cacheMeta);
+    if (exactQuote) return exactQuote;
 
-      const sameAddressId = Number(cachedMeta?.address_id || 0) > 0 || Number(state.selectedAddress?.id || 0) > 0
-        ? Number(cachedMeta?.address_id || 0) === Number(state.selectedAddress?.id || 0)
-        : false;
-      const sameStreet = str(cachedMeta?.street || "").trim() === str(selectedAddress?.street || "").trim();
-      const sameHouse = str(cachedMeta?.house || "").trim() === str(selectedAddress?.house || "").trim();
-      const sameZone = String(cachedMeta?.delivery_zone_id ?? "") === String(selectedAddress?.delivery_zone_id ?? "");
-      const sameStore = String(cachedMeta?.delivery_store_id ?? "") === String(selectedAddress?.delivery_store_id ?? "");
+    const persistentQuote = buildPersistentCachedDeliveryQuote(cacheMeta);
+    if (!persistentQuote) return null;
 
-      return (sameAddressId || (sameStreet && sameHouse && sameZone && sameStore))
-        ? (deliveryQuoteCache.data || null)
-        : null;
-    } catch {
-      return null;
-    }
+    return storeDeliveryQuoteInMemory(cacheMeta, persistentQuote);
   }
 
   function getCartPricingCachedDeliverySettings() {
-    return deliverySettingsCache || window.__shopDeliverySettings || null;
+    return getCachedDeliverySettingsForCurrentScope();
   }
 
   function buildCartPricingDiscountBreakdown(cartItems, totalsForPricing, summaryDiscount, orderLevelDiscount) {
@@ -13159,15 +13150,22 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       };
     }
 
-    const freeFromRaw = deliveryQuote?.free_delivery_from != null
-      ? Number(deliveryQuote.free_delivery_from)
-      : (defaultDeliverySettings?.free_delivery_from != null ? Number(defaultDeliverySettings.free_delivery_from) : null);
-    const minOrderRaw = deliveryQuote?.min_order_amount != null
-      ? Number(deliveryQuote.min_order_amount)
-      : Number(defaultDeliverySettings?.min_order_amount || 0);
-    const baseCostRaw = deliveryQuote?.delivery_cost != null
-      ? Number(deliveryQuote.delivery_cost)
-      : Number(defaultDeliverySettings?.delivery_cost || 0);
+    const tierSummary = resolveDeliveryTierSummaryForTotal(orderTotal, deliveryQuote, defaultDeliverySettings);
+    const freeFromRaw = tierSummary?.free_delivery_from != null
+      ? Number(tierSummary.free_delivery_from)
+      : (deliveryQuote?.free_delivery_from != null
+        ? Number(deliveryQuote.free_delivery_from)
+        : (defaultDeliverySettings?.free_delivery_from != null ? Number(defaultDeliverySettings.free_delivery_from) : null));
+    const minOrderRaw = tierSummary?.min_order_amount != null
+      ? Number(tierSummary.min_order_amount)
+      : (deliveryQuote?.min_order_amount != null
+        ? Number(deliveryQuote.min_order_amount)
+        : Number(defaultDeliverySettings?.min_order_amount || 0));
+    const baseCostRaw = tierSummary?.delivery_cost != null
+      ? Number(tierSummary.delivery_cost)
+      : (deliveryQuote?.delivery_cost != null
+        ? Number(deliveryQuote.delivery_cost)
+        : Number(defaultDeliverySettings?.delivery_cost || 0));
 
     let cost = Number.isFinite(baseCostRaw) && baseCostRaw > 0 ? baseCostRaw : 0;
     if (Number.isFinite(freeFromRaw) && orderTotal >= freeFromRaw) {
@@ -18880,6 +18878,7 @@ function applySheetAddressTitle(backMode = "cart") {
     benefitsPromoDirty: false,
   };
 
+  void syncCartSheetUpsellWhenReady(openCartSheetCtx);
   setCartSheetFooterMode(openCartSheetCtx, items.length ? "cart" : "hidden");
   attachTwoStepClear(clearBtn, () => clearCartAll());
 
@@ -18952,6 +18951,7 @@ function applySheetAddressTitle(backMode = "cart") {
     }
 
     // Создаем контент оформления заказа
+    void syncCartSheetUpsellWhenReady(openCartSheetCtx);
     await openCheckoutView({
       container: checkoutWrap,
       onBack: showSheetCart,
@@ -20660,7 +20660,7 @@ function renderSheetAddressList() {
   btn.addEventListener("click", async () => {
     const authorized = await requireAuthForCheckout({ isSheet: true });
     if (!authorized) return;
-    await startCheckoutFlow({ isSheet: true });
+    await startCheckoutFlow({ isSheet: true, forceAddressRefresh: false });
   });
 
   backBtn.addEventListener("click", () => showSheetCart());
@@ -22489,6 +22489,25 @@ function renderSheetAddressList() {
     return hasLiveCartSheetContext() ? openCartSheetCtx : null;
   }
 
+  function syncCartSheetUpsellWhenReady(targetCtx = openCartSheetCtx) {
+    const ctx = targetCtx && typeof targetCtx === "object" ? targetCtx : null;
+    if (!ctx?.listEl) return Promise.resolve(false);
+
+    const warmPromise = typeof preloadCartEnhancers === "function"
+      ? Promise.resolve(preloadCartEnhancers())
+      : (typeof loadCartEnhancersData === "function"
+        ? Promise.resolve(loadCartEnhancersData())
+        : Promise.resolve(null));
+
+    return warmPromise
+      .catch(() => null)
+      .then(() => {
+        if (openCartSheetCtx !== ctx || !ctx.listEl?.isConnected) return false;
+        appendUpsellToList(ctx.listEl);
+        return true;
+      });
+  }
+
   async function openSheetCheckoutFlow() {
     const ctx = await ensureCheckoutSheetContextReady();
     if (!ctx || typeof ctx.showSheetCheckout !== "function") return false;
@@ -22732,7 +22751,10 @@ function renderSheetAddressList() {
   }
 
   async function startCheckoutFlow({ isSheet, forceAddressRefresh = true } = {}) {
-    await refreshAddressState({ force: !!forceAddressRefresh });
+    try { void preloadCartEnhancers(); } catch {}
+    if (forceAddressRefresh || state._addressesInitialized !== true) {
+      await refreshAddressState({ force: !!forceAddressRefresh });
+    }
 
     const isPickupMode = window._deliveryMode === "pickup";
     const hasPickupStore = Number(window._selectedPickupStoreId || 0) > 0;
@@ -27434,20 +27456,41 @@ function setBottomNavActive(tab) {
     return orderConfigPromise;
   }
 
+  const DELIVERY_SETTINGS_PERSISTENT_CACHE_KEY = "shop_delivery_settings_cache_v1";
+  const DELIVERY_SETTINGS_PERSISTENT_CACHE_MAX_ENTRIES = 8;
+  const DELIVERY_SETTINGS_PERSISTENT_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+  const DELIVERY_SETTINGS_VALIDATE_TTL_MS = 60 * 1000;
+  const DELIVERY_QUOTE_CONDITIONS_PERSISTENT_CACHE_KEY = "shop_delivery_quote_conditions_cache_v1";
+  const DELIVERY_QUOTE_CONDITIONS_PERSISTENT_CACHE_MAX_ENTRIES = 32;
+  const DELIVERY_QUOTE_CONDITIONS_PERSISTENT_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
   let deliverySettingsCache = null;
+  let deliverySettingsCacheScopeKey = "";
+  let deliverySettingsCacheValidatedAt = 0;
   let deliverySettingsPromise = null;
+  let deliverySettingsValidationPromise = null;
+  let deliverySettingsPersistentCacheLoaded = false;
+  let deliverySettingsPersistentCache = new Map();
+  let deliveryQuoteCache = { key: "", data: null };
+  const deliveryQuoteInflightRequests = new Map();
+  let deliveryQuoteConditionsPersistentCacheLoaded = false;
+  let deliveryQuoteConditionsPersistentCache = new Map();
 
   async function getDeliverySettings() {
-    if (!deliverySettingsCache && window.__shopDeliverySettings && typeof window.__shopDeliverySettings === "object") {
-      deliverySettingsCache = window.__shopDeliverySettings;
+    const scopeKey = buildDeliveryCacheScopeKey();
+    const cachedSettings = getCachedDeliverySettingsForCurrentScope();
+    if (cachedSettings) {
+      void ensureFreshDeliverySettingsInBackground("delivery-settings-cache");
+      return cachedSettings;
     }
-    if (deliverySettingsCache) return deliverySettingsCache;
     if (deliverySettingsPromise) return deliverySettingsPromise;
+    if (deliverySettingsValidationPromise) return deliverySettingsValidationPromise;
     deliverySettingsPromise = apiJson("/api/public/delivery-settings")
       .then((json) => {
-        deliverySettingsCache = json.data || null;
-        window.__shopDeliverySettings = deliverySettingsCache;
-        return deliverySettingsCache;
+        return commitDeliverySettingsCache(json.data || null, {
+          scopeKey,
+          validatedAt: Date.now(),
+        });
       })
       .finally(() => {
         deliverySettingsPromise = null;
@@ -27455,12 +27498,792 @@ function setBottomNavActive(tab) {
     return deliverySettingsPromise;
   }
 
+  function normalizeDeliveryCacheString(value) {
+    return str(value || "").trim();
+  }
+
+  function normalizeDeliveryRevisionValue(value) {
+    const normalized = normalizeDeliveryCacheString(value);
+    return normalized || null;
+  }
+
+  function normalizeDeliveryCacheId(value) {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) && numeric > 0 ? Number(numeric) : null;
+  }
+
+  function normalizeDeliveryCacheMoney(value) {
+    if (value == null || value === "") return null;
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return null;
+    return Math.max(0, roundPrice(numeric));
+  }
+
+  function normalizeDeliveryCacheEtaMinutes(value) {
+    if (value == null || value === "") return null;
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return null;
+    return Math.max(0, Math.round(numeric));
+  }
+
+  function normalizeDeliveryCacheCoordinate(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return null;
+    return Number(numeric.toFixed(7));
+  }
+
+  function normalizeDeliveryCachePriceTiers(rawTiers) {
+    const list = Array.isArray(rawTiers) ? rawTiers : [];
+    const normalized = list
+      .map((tier, index) => {
+        const minOrderAmount = normalizeDeliveryCacheMoney(tier?.min_order_amount);
+        const deliveryCost = normalizeDeliveryCacheMoney(tier?.delivery_cost);
+        if (minOrderAmount == null || deliveryCost == null) return null;
+        return {
+          min_order_amount: minOrderAmount,
+          delivery_cost: deliveryCost,
+          sort_order: tier?.sort_order != null ? Number(tier.sort_order) : index,
+        };
+      })
+      .filter(Boolean);
+
+    return normalized.sort((left, right) => {
+      if (left.min_order_amount !== right.min_order_amount) {
+        return left.min_order_amount - right.min_order_amount;
+      }
+      if (Number(left.sort_order || 0) !== Number(right.sort_order || 0)) {
+        return Number(left.sort_order || 0) - Number(right.sort_order || 0);
+      }
+      return left.delivery_cost - right.delivery_cost;
+    });
+  }
+
+  function summarizeDeliveryCachePriceTiers(rawTiers, subtotal) {
+    const amount = Math.max(0, Number(subtotal || 0) || 0);
+    const tiers = normalizeDeliveryCachePriceTiers(rawTiers);
+    if (!tiers.length) {
+      return {
+        min_order_amount: 0,
+        delivery_cost: 0,
+        free_delivery_from: null,
+        matched_tier: null,
+      };
+    }
+
+    const firstTier = tiers[0] || {};
+    let matchedTier = firstTier;
+    tiers.forEach((tier) => {
+      const minOrderAmount = Number(tier?.min_order_amount || 0);
+      if (amount >= minOrderAmount) {
+        matchedTier = tier;
+      }
+    });
+
+    const freeTier = tiers.find((tier) => Number(tier?.delivery_cost || 0) <= 0);
+    return {
+      min_order_amount: Number(firstTier.min_order_amount || 0),
+      delivery_cost: Number(matchedTier?.delivery_cost || 0),
+      free_delivery_from: freeTier ? Number(freeTier.min_order_amount || 0) : null,
+      matched_tier: matchedTier || null,
+    };
+  }
+
+  function buildLegacyDeliveryCachePriceTiers(source) {
+    const deliveryCost = normalizeDeliveryCacheMoney(source?.delivery_cost);
+    const minOrderAmount = normalizeDeliveryCacheMoney(source?.min_order_amount);
+    const freeDeliveryFrom = normalizeDeliveryCacheMoney(source?.free_delivery_from);
+    const tiers = [{
+      min_order_amount: minOrderAmount ?? 0,
+      delivery_cost: deliveryCost ?? 0,
+      sort_order: 0,
+    }];
+    if (freeDeliveryFrom != null) {
+      tiers.push({
+        min_order_amount: freeDeliveryFrom,
+        delivery_cost: 0,
+        sort_order: 1,
+      });
+    }
+    return normalizeDeliveryCachePriceTiers(tiers);
+  }
+
+  function resolveDeliveryCachePriceTiers(source) {
+    const explicitTiers = normalizeDeliveryCachePriceTiers(source?.price_tiers);
+    if (explicitTiers.length) return explicitTiers;
+
+    const deliveryCost = normalizeDeliveryCacheMoney(source?.delivery_cost);
+    const minOrderAmount = normalizeDeliveryCacheMoney(source?.min_order_amount);
+    const freeDeliveryFrom = normalizeDeliveryCacheMoney(source?.free_delivery_from);
+    const hasLegacyFields = Boolean(source?.has_settings)
+      || (deliveryCost != null && deliveryCost > 0)
+      || (minOrderAmount != null && minOrderAmount > 0)
+      || freeDeliveryFrom != null;
+
+    if (!hasLegacyFields) return [];
+
+    return buildLegacyDeliveryCachePriceTiers({
+      delivery_cost: deliveryCost,
+      min_order_amount: minOrderAmount,
+      free_delivery_from: freeDeliveryFrom,
+    });
+  }
+
+  function normalizeDeliverySettingsPayload(rawSettings) {
+    const source = rawSettings && typeof rawSettings === "object" ? rawSettings : {};
+    const priceTiers = resolveDeliveryCachePriceTiers(source);
+    const tierSummary = priceTiers.length ? summarizeDeliveryCachePriceTiers(priceTiers, 0) : null;
+    return {
+      id: normalizeDeliveryCacheId(source.id),
+      name: normalizeDeliveryCacheString(source.name) || null,
+      has_settings: Boolean(source.has_settings) || priceTiers.length > 0,
+      delivery_cost: tierSummary
+        ? Number(tierSummary.delivery_cost || 0)
+        : Number(normalizeDeliveryCacheMoney(source.delivery_cost) || 0),
+      min_order_amount: tierSummary
+        ? Number(tierSummary.min_order_amount || 0)
+        : Number(normalizeDeliveryCacheMoney(source.min_order_amount) || 0),
+      free_delivery_from: tierSummary
+        ? (tierSummary.free_delivery_from != null ? Number(tierSummary.free_delivery_from) : null)
+        : normalizeDeliveryCacheMoney(source.free_delivery_from),
+      eta_minutes: normalizeDeliveryCacheEtaMinutes(source.eta_minutes),
+      price_tiers: priceTiers,
+      default_store_id: normalizeDeliveryCacheId(source.default_store_id),
+      delivery_revision: normalizeDeliveryRevisionValue(source.delivery_revision),
+    };
+  }
+
+  function normalizeDeliveryQuotePayload(rawQuote, options = {}) {
+    const source = rawQuote && typeof rawQuote === "object" ? rawQuote : {};
+    const priceTiers = resolveDeliveryCachePriceTiers(source);
+    const tierSummary = priceTiers.length ? summarizeDeliveryCachePriceTiers(priceTiers, 0) : null;
+    return {
+      source: normalizeDeliveryCacheString(source.source) || "default",
+      has_settings: Boolean(source.has_settings) || priceTiers.length > 0,
+      delivery_cost: tierSummary
+        ? Number(tierSummary.delivery_cost || 0)
+        : Number(normalizeDeliveryCacheMoney(source.delivery_cost) || 0),
+      min_order_amount: tierSummary
+        ? Number(tierSummary.min_order_amount || 0)
+        : Number(normalizeDeliveryCacheMoney(source.min_order_amount) || 0),
+      free_delivery_from: tierSummary
+        ? (tierSummary.free_delivery_from != null ? Number(tierSummary.free_delivery_from) : null)
+        : normalizeDeliveryCacheMoney(source.free_delivery_from),
+      eta_minutes: normalizeDeliveryCacheEtaMinutes(source.eta_minutes),
+      delivery_zone_id: normalizeDeliveryCacheId(source.delivery_zone_id),
+      delivery_zone_name: normalizeDeliveryCacheString(source.delivery_zone_name) || null,
+      delivery_store_id: normalizeDeliveryCacheId(source.delivery_store_id),
+      default_store_id: normalizeDeliveryCacheId(source.default_store_id),
+      price_tiers: priceTiers,
+      delivery_revision: normalizeDeliveryRevisionValue(source.delivery_revision)
+        || normalizeDeliveryRevisionValue(options?.fallbackRevision),
+    };
+  }
+
+  function normalizePersistentDeliveryQuoteConditionPayload(rawQuoteCondition) {
+    const source = rawQuoteCondition && typeof rawQuoteCondition === "object" ? rawQuoteCondition : {};
+    const scopeKey = normalizeDeliveryCacheString(source.scope_key);
+    const addressKey = normalizeDeliveryCacheString(source.address_key);
+    if (!scopeKey || !addressKey) return null;
+    return {
+      ...normalizeDeliveryQuotePayload(source),
+      scope_key: scopeKey,
+      address_key: addressKey,
+    };
+  }
+
+  function buildLocalDeliveryQuoteFromCachedCondition(rawCondition, subtotal) {
+    const normalized = normalizeDeliveryQuotePayload(rawCondition);
+    const priceTiers = resolveDeliveryCachePriceTiers(normalized);
+    const tierSummary = priceTiers.length
+      ? summarizeDeliveryCachePriceTiers(priceTiers, subtotal)
+      : null;
+    return {
+      ...normalized,
+      delivery_cost: tierSummary
+        ? Number(tierSummary.delivery_cost || 0)
+        : Number(normalized.delivery_cost || 0),
+      min_order_amount: tierSummary
+        ? Number(tierSummary.min_order_amount || 0)
+        : Number(normalized.min_order_amount || 0),
+      free_delivery_from: tierSummary
+        ? (tierSummary.free_delivery_from != null ? Number(tierSummary.free_delivery_from) : null)
+        : (normalized.free_delivery_from != null ? Number(normalized.free_delivery_from) : null),
+      price_tiers: priceTiers,
+    };
+  }
+
+  function buildLocalDeliveryQuoteFromSettings(rawSettings, subtotal) {
+    const settings = normalizeDeliverySettingsPayload(rawSettings);
+    return buildLocalDeliveryQuoteFromCachedCondition({
+      source: "default",
+      has_settings: settings.has_settings,
+      delivery_cost: settings.delivery_cost,
+      min_order_amount: settings.min_order_amount,
+      free_delivery_from: settings.free_delivery_from,
+      eta_minutes: settings.eta_minutes,
+      delivery_store_id: settings.default_store_id,
+      default_store_id: settings.default_store_id,
+      price_tiers: settings.price_tiers,
+      delivery_revision: settings.delivery_revision,
+    }, subtotal);
+  }
+
+  function buildDeliveryCacheScope() {
+    let tenantId = 0;
+    try {
+      const metaTenant = document.querySelector('meta[name="tenant_id"]');
+      tenantId = Number(metaTenant?.content || 0) || 0;
+      if (!(tenantId > 0)) {
+        const rawTenant = localStorage.getItem("tenant");
+        const parsedTenant = rawTenant ? JSON.parse(rawTenant) : null;
+        tenantId = Number(parsedTenant?.id || parsedTenant?.tenant_id || 0) || 0;
+      }
+    } catch {}
+
+    let storeId = 0;
+    try {
+      storeId = Number(localStorage.getItem("activeStoreId") || 0) || 0;
+    } catch {}
+
+    return {
+      tenant_id: tenantId > 0 ? tenantId : null,
+      store_id: storeId > 0 ? storeId : null,
+    };
+  }
+
+  function buildDeliveryCacheScopeKey() {
+    const scope = buildDeliveryCacheScope();
+    try {
+      return JSON.stringify({
+        tenant_id: scope?.tenant_id ?? null,
+        store_id: scope?.store_id ?? null,
+      });
+    } catch {
+      return "";
+    }
+  }
+
+  function getCurrentDeliveryAddressCacheMeta() {
+    const selectedAddress = state.selectedAddress && typeof state.selectedAddress === "object"
+      ? state.selectedAddress
+      : null;
+    if (!selectedAddress) return null;
+
+    const normalizedAddress = normalizeAddressPayload(selectedAddress);
+    return {
+      address_id: normalizeDeliveryCacheId(selectedAddress.id),
+      city: normalizeDeliveryCacheString(normalizedAddress?.city).toLowerCase(),
+      street: normalizeDeliveryCacheString(normalizedAddress?.street).toLowerCase(),
+      house: normalizeDeliveryCacheString(normalizedAddress?.house).toLowerCase(),
+      address_ref: normalizeDeliveryCacheString(normalizedAddress?.address_ref).toLowerCase(),
+      selected_object_type: normalizeDeliveryCacheString(normalizedAddress?.selected_object_type).toLowerCase(),
+      resolved_city_source_key: normalizeDeliveryCacheString(normalizedAddress?.resolved_city_source_key).toLowerCase(),
+      address_context_locality: normalizeDeliveryCacheString(normalizedAddress?.address_context_locality).toLowerCase(),
+      address_normalized_display: normalizeDeliveryCacheString(normalizedAddress?.address_normalized_display).toLowerCase(),
+      lat: normalizeDeliveryCacheCoordinate(normalizedAddress?.lat),
+      lng: normalizeDeliveryCacheCoordinate(normalizedAddress?.lng),
+    };
+  }
+
+  function hasDeliveryAddressCacheMeta(addressMeta) {
+    if (!addressMeta || typeof addressMeta !== "object") return false;
+    return Boolean(
+      addressMeta.address_id
+      || addressMeta.street
+      || addressMeta.house
+      || addressMeta.address_ref
+      || addressMeta.address_normalized_display
+      || (addressMeta.lat != null && addressMeta.lng != null)
+    );
+  }
+
+  function hasUsableDeliveryAddressCoordinates(addressMeta) {
+    return Boolean(
+      addressMeta
+      && addressMeta.lat != null
+      && addressMeta.lng != null
+    );
+  }
+
+  function buildDeliveryAddressCacheKey(addressMeta) {
+    if (!hasDeliveryAddressCacheMeta(addressMeta)) return "";
+    try {
+      return JSON.stringify({
+        address_id: addressMeta?.address_id ?? null,
+        city: addressMeta?.city || "",
+        street: addressMeta?.street || "",
+        house: addressMeta?.house || "",
+        address_ref: addressMeta?.address_ref || "",
+        selected_object_type: addressMeta?.selected_object_type || "",
+        resolved_city_source_key: addressMeta?.resolved_city_source_key || "",
+        address_context_locality: addressMeta?.address_context_locality || "",
+        address_normalized_display: addressMeta?.address_normalized_display || "",
+        lat: addressMeta?.lat ?? null,
+        lng: addressMeta?.lng ?? null,
+      });
+    } catch {
+      return "";
+    }
+  }
+
+  function buildPersistentDeliveryQuoteConditionCacheKey(scopeKey, addressKey, deliveryRevision = null) {
+    const normalizedScopeKey = normalizeDeliveryCacheString(scopeKey);
+    const normalizedAddressKey = normalizeDeliveryCacheString(addressKey);
+    if (!normalizedScopeKey || !normalizedAddressKey) return "";
+    try {
+      return JSON.stringify({
+        scope_key: normalizedScopeKey,
+        address_key: normalizedAddressKey,
+        delivery_revision: normalizeDeliveryRevisionValue(deliveryRevision) || "",
+      });
+    } catch {
+      return "";
+    }
+  }
+
+  function normalizePersistentDeliverySettingsCache(nowTs = Date.now()) {
+    const nextEntries = [];
+    deliverySettingsPersistentCache.forEach((entry, scopeKey) => {
+      if (!scopeKey || !entry || typeof entry !== "object") return;
+      const data = entry?.data;
+      if (!data || typeof data !== "object") return;
+      const storedAt = Number(entry?.storedAt || 0) || nowTs;
+      const validatedAt = Number(entry?.validatedAt || 0) || 0;
+      if ((nowTs - storedAt) > DELIVERY_SETTINGS_PERSISTENT_CACHE_TTL_MS) return;
+      nextEntries.push([scopeKey, { storedAt, validatedAt, data }]);
+    });
+    deliverySettingsPersistentCache = new Map(nextEntries);
+    while (deliverySettingsPersistentCache.size > DELIVERY_SETTINGS_PERSISTENT_CACHE_MAX_ENTRIES) {
+      const firstKey = deliverySettingsPersistentCache.keys().next().value;
+      if (typeof firstKey === "undefined") break;
+      deliverySettingsPersistentCache.delete(firstKey);
+    }
+  }
+
+  function ensureDeliverySettingsPersistentCacheLoaded() {
+    if (deliverySettingsPersistentCacheLoaded) return;
+    deliverySettingsPersistentCacheLoaded = true;
+    try {
+      const raw = localStorage.getItem(DELIVERY_SETTINGS_PERSISTENT_CACHE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      const entries = Array.isArray(parsed?.entries) ? parsed.entries : [];
+      entries.forEach((entry) => {
+        const scopeKey = normalizeDeliveryCacheString(entry?.key);
+        const storedAt = Number(entry?.stored_at || entry?.storedAt || 0) || 0;
+        const validatedAt = Number(entry?.validated_at || entry?.validatedAt || 0) || 0;
+        const data = normalizeDeliverySettingsPayload(entry?.data);
+        if (!scopeKey) return;
+        deliverySettingsPersistentCache.set(scopeKey, {
+          storedAt,
+          validatedAt,
+          data,
+        });
+      });
+      normalizePersistentDeliverySettingsCache();
+    } catch {
+      deliverySettingsPersistentCache = new Map();
+      try {
+        localStorage.removeItem(DELIVERY_SETTINGS_PERSISTENT_CACHE_KEY);
+      } catch {}
+    }
+  }
+
+  function persistDeliverySettingsPersistentCache() {
+    ensureDeliverySettingsPersistentCacheLoaded();
+    normalizePersistentDeliverySettingsCache();
+    try {
+      if (!deliverySettingsPersistentCache.size) {
+        localStorage.removeItem(DELIVERY_SETTINGS_PERSISTENT_CACHE_KEY);
+        return;
+      }
+      const payload = {
+        entries: Array.from(deliverySettingsPersistentCache.entries()).map(([scopeKey, entry]) => ({
+          key: scopeKey,
+          stored_at: Number(entry?.storedAt || Date.now()) || Date.now(),
+          validated_at: Number(entry?.validatedAt || 0) || 0,
+          data: entry?.data && typeof entry.data === "object" ? entry.data : null,
+        })),
+      };
+      localStorage.setItem(
+        DELIVERY_SETTINGS_PERSISTENT_CACHE_KEY,
+        JSON.stringify(payload)
+      );
+    } catch {}
+  }
+
+  function peekPersistentDeliverySettingsEntry(scopeKey) {
+    ensureDeliverySettingsPersistentCacheLoaded();
+    const normalizedScopeKey = normalizeDeliveryCacheString(scopeKey);
+    if (!normalizedScopeKey) return null;
+    const entry = deliverySettingsPersistentCache.get(normalizedScopeKey) || null;
+    if (!entry?.data || typeof entry.data !== "object") return null;
+    const storedAt = Number(entry?.storedAt || 0) || 0;
+    if (storedAt > 0 && (Date.now() - storedAt) > DELIVERY_SETTINGS_PERSISTENT_CACHE_TTL_MS) {
+      deliverySettingsPersistentCache.delete(normalizedScopeKey);
+      persistDeliverySettingsPersistentCache();
+      return null;
+    }
+    return {
+      storedAt,
+      validatedAt: Number(entry?.validatedAt || 0) || 0,
+      data: entry.data,
+    };
+  }
+
+  function storePersistentDeliverySettingsEntry(scopeKey, settings, options = {}) {
+    ensureDeliverySettingsPersistentCacheLoaded();
+    const normalizedScopeKey = normalizeDeliveryCacheString(scopeKey);
+    if (!normalizedScopeKey) return normalizeDeliverySettingsPayload(settings);
+    const normalizedSettings = normalizeDeliverySettingsPayload(settings);
+    deliverySettingsPersistentCache.delete(normalizedScopeKey);
+    deliverySettingsPersistentCache.set(normalizedScopeKey, {
+      storedAt: Date.now(),
+      validatedAt: Number(options?.validatedAt || Date.now()) || Date.now(),
+      data: normalizedSettings,
+    });
+    persistDeliverySettingsPersistentCache();
+    return normalizedSettings;
+  }
+
+  function normalizePersistentDeliveryQuoteConditionsCache(nowTs = Date.now()) {
+    const nextEntries = [];
+    deliveryQuoteConditionsPersistentCache.forEach((entry, cacheKey) => {
+      if (!cacheKey || !entry || typeof entry !== "object") return;
+      const data = entry?.data;
+      if (!data || typeof data !== "object") return;
+      const storedAt = Number(entry?.storedAt || 0) || nowTs;
+      if ((nowTs - storedAt) > DELIVERY_QUOTE_CONDITIONS_PERSISTENT_CACHE_TTL_MS) return;
+      nextEntries.push([cacheKey, { storedAt, data }]);
+    });
+    deliveryQuoteConditionsPersistentCache = new Map(nextEntries);
+    while (deliveryQuoteConditionsPersistentCache.size > DELIVERY_QUOTE_CONDITIONS_PERSISTENT_CACHE_MAX_ENTRIES) {
+      const firstKey = deliveryQuoteConditionsPersistentCache.keys().next().value;
+      if (typeof firstKey === "undefined") break;
+      deliveryQuoteConditionsPersistentCache.delete(firstKey);
+    }
+  }
+
+  function ensureDeliveryQuoteConditionsPersistentCacheLoaded() {
+    if (deliveryQuoteConditionsPersistentCacheLoaded) return;
+    deliveryQuoteConditionsPersistentCacheLoaded = true;
+    try {
+      const raw = localStorage.getItem(DELIVERY_QUOTE_CONDITIONS_PERSISTENT_CACHE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      const entries = Array.isArray(parsed?.entries) ? parsed.entries : [];
+      entries.forEach((entry) => {
+        const cacheKey = normalizeDeliveryCacheString(entry?.key);
+        const storedAt = Number(entry?.stored_at || entry?.storedAt || 0) || 0;
+        const data = normalizePersistentDeliveryQuoteConditionPayload(entry?.data);
+        if (!cacheKey || !data) return;
+        deliveryQuoteConditionsPersistentCache.set(cacheKey, {
+          storedAt,
+          data,
+        });
+      });
+      normalizePersistentDeliveryQuoteConditionsCache();
+    } catch {
+      deliveryQuoteConditionsPersistentCache = new Map();
+      try {
+        localStorage.removeItem(DELIVERY_QUOTE_CONDITIONS_PERSISTENT_CACHE_KEY);
+      } catch {}
+    }
+  }
+
+  function persistDeliveryQuoteConditionsPersistentCache() {
+    ensureDeliveryQuoteConditionsPersistentCacheLoaded();
+    normalizePersistentDeliveryQuoteConditionsCache();
+    try {
+      if (!deliveryQuoteConditionsPersistentCache.size) {
+        localStorage.removeItem(DELIVERY_QUOTE_CONDITIONS_PERSISTENT_CACHE_KEY);
+        return;
+      }
+      const payload = {
+        entries: Array.from(deliveryQuoteConditionsPersistentCache.entries()).map(([cacheKey, entry]) => ({
+          key: cacheKey,
+          stored_at: Number(entry?.storedAt || Date.now()) || Date.now(),
+          data: entry?.data && typeof entry.data === "object" ? entry.data : null,
+        })),
+      };
+      localStorage.setItem(
+        DELIVERY_QUOTE_CONDITIONS_PERSISTENT_CACHE_KEY,
+        JSON.stringify(payload)
+      );
+    } catch {}
+  }
+
+  function getPersistentDeliveryQuoteConditionEntry(cacheKey) {
+    ensureDeliveryQuoteConditionsPersistentCacheLoaded();
+    const normalizedCacheKey = normalizeDeliveryCacheString(cacheKey);
+    if (!normalizedCacheKey) return null;
+    const entry = deliveryQuoteConditionsPersistentCache.get(normalizedCacheKey) || null;
+    if (!entry?.data || typeof entry.data !== "object") return null;
+    const storedAt = Number(entry?.storedAt || 0) || 0;
+    if (storedAt > 0 && (Date.now() - storedAt) > DELIVERY_QUOTE_CONDITIONS_PERSISTENT_CACHE_TTL_MS) {
+      deliveryQuoteConditionsPersistentCache.delete(normalizedCacheKey);
+      persistDeliveryQuoteConditionsPersistentCache();
+      return null;
+    }
+    return entry.data;
+  }
+
+  function peekPersistentDeliveryQuoteCondition(scopeKey, addressKey, deliveryRevision = null) {
+    const normalizedScopeKey = normalizeDeliveryCacheString(scopeKey);
+    const normalizedAddressKey = normalizeDeliveryCacheString(addressKey);
+    if (!normalizedScopeKey || !normalizedAddressKey) return null;
+
+    const normalizedRevision = normalizeDeliveryRevisionValue(deliveryRevision);
+    if (normalizedRevision) {
+      return getPersistentDeliveryQuoteConditionEntry(
+        buildPersistentDeliveryQuoteConditionCacheKey(
+          normalizedScopeKey,
+          normalizedAddressKey,
+          normalizedRevision
+        )
+      );
+    }
+
+    ensureDeliveryQuoteConditionsPersistentCacheLoaded();
+    const entries = Array.from(deliveryQuoteConditionsPersistentCache.entries()).reverse();
+    for (const [cacheKey, entry] of entries) {
+      const data = entry?.data;
+      if (!data || typeof data !== "object") continue;
+      if (data.scope_key !== normalizedScopeKey || data.address_key !== normalizedAddressKey) continue;
+      const validEntry = getPersistentDeliveryQuoteConditionEntry(cacheKey);
+      if (validEntry) return validEntry;
+    }
+    return null;
+  }
+
+  function storePersistentDeliveryQuoteCondition(scopeKey, addressKey, quote) {
+    ensureDeliveryQuoteConditionsPersistentCacheLoaded();
+    const normalizedScopeKey = normalizeDeliveryCacheString(scopeKey);
+    const normalizedAddressKey = normalizeDeliveryCacheString(addressKey);
+    if (!normalizedScopeKey || !normalizedAddressKey) return normalizeDeliveryQuotePayload(quote);
+
+    const normalizedCondition = normalizePersistentDeliveryQuoteConditionPayload({
+      ...quote,
+      scope_key: normalizedScopeKey,
+      address_key: normalizedAddressKey,
+    });
+    if (!normalizedCondition) return normalizeDeliveryQuotePayload(quote);
+
+    const cacheKey = buildPersistentDeliveryQuoteConditionCacheKey(
+      normalizedScopeKey,
+      normalizedAddressKey,
+      normalizedCondition.delivery_revision
+    );
+    if (!cacheKey) return normalizedCondition;
+
+    deliveryQuoteConditionsPersistentCache.delete(cacheKey);
+    deliveryQuoteConditionsPersistentCache.set(cacheKey, {
+      storedAt: Date.now(),
+      data: normalizedCondition,
+    });
+    persistDeliveryQuoteConditionsPersistentCache();
+    return normalizedCondition;
+  }
+
+  function prunePersistentDeliveryQuoteConditionsForScope(scopeKey, currentDeliveryRevision = null) {
+    const normalizedScopeKey = normalizeDeliveryCacheString(scopeKey);
+    const normalizedRevision = normalizeDeliveryRevisionValue(currentDeliveryRevision);
+    if (!normalizedScopeKey || !normalizedRevision) return;
+
+    ensureDeliveryQuoteConditionsPersistentCacheLoaded();
+    let changed = false;
+    Array.from(deliveryQuoteConditionsPersistentCache.entries()).forEach(([cacheKey, entry]) => {
+      const data = entry?.data;
+      if (!data || typeof data !== "object") return;
+      if (data.scope_key !== normalizedScopeKey) return;
+      if (normalizeDeliveryRevisionValue(data.delivery_revision) === normalizedRevision) return;
+      deliveryQuoteConditionsPersistentCache.delete(cacheKey);
+      changed = true;
+    });
+    if (changed) {
+      persistDeliveryQuoteConditionsPersistentCache();
+    }
+  }
+
+  function clearDeliveryQuoteMemoryCache() {
+    deliveryQuoteCache = { key: "", data: null };
+  }
+
+  function getCachedDeliverySettingsForCurrentScope() {
+    const scopeKey = buildDeliveryCacheScopeKey();
+    if (deliverySettingsCacheScopeKey && deliverySettingsCacheScopeKey !== scopeKey) {
+      deliverySettingsCache = null;
+      deliverySettingsCacheScopeKey = "";
+      deliverySettingsCacheValidatedAt = 0;
+      window.__shopDeliverySettings = null;
+    }
+    if (deliverySettingsCache && deliverySettingsCacheScopeKey === scopeKey) {
+      return deliverySettingsCache;
+    }
+
+    const persistentEntry = peekPersistentDeliverySettingsEntry(scopeKey);
+    if (!persistentEntry?.data) return null;
+
+    deliverySettingsCache = persistentEntry.data;
+    deliverySettingsCacheScopeKey = scopeKey;
+    deliverySettingsCacheValidatedAt = Number(persistentEntry.validatedAt || 0) || 0;
+    window.__shopDeliverySettings = deliverySettingsCache;
+    return deliverySettingsCache;
+  }
+
+  function resolveDeliveryRevisionHint(settings = null) {
+    return normalizeDeliveryRevisionValue(settings?.delivery_revision)
+      || normalizeDeliveryRevisionValue(deliveryQuoteCache?.data?.delivery_revision)
+      || null;
+  }
+
+  function buildCurrentDeliveryQuoteCacheMeta(subtotal = null) {
+    const effectiveSubtotal = subtotal != null
+      ? roundPrice(Number(subtotal || 0))
+      : null;
+    const settings = getCachedDeliverySettingsForCurrentScope();
+    const addressMeta = getCurrentDeliveryAddressCacheMeta();
+    return {
+      subtotal: effectiveSubtotal,
+      scopeKey: buildDeliveryCacheScopeKey(),
+      addressMeta,
+      addressKey: buildDeliveryAddressCacheKey(addressMeta),
+      deliveryRevision: resolveDeliveryRevisionHint(settings),
+    };
+  }
+
+  function buildDeliveryExactQuoteCacheKey(cacheMeta = {}) {
+    try {
+      return JSON.stringify({
+        scope_key: normalizeDeliveryCacheString(cacheMeta?.scopeKey),
+        subtotal: cacheMeta?.subtotal != null ? roundPrice(Number(cacheMeta.subtotal || 0)) : null,
+        address_key: normalizeDeliveryCacheString(cacheMeta?.addressKey),
+        delivery_revision: normalizeDeliveryRevisionValue(cacheMeta?.deliveryRevision) || "",
+      });
+    } catch {
+      return "";
+    }
+  }
+
+  function readCachedDeliveryQuoteFromMemory(cacheMeta = null) {
+    if (!deliveryQuoteCache?.data) return null;
+    const cacheKey = buildDeliveryExactQuoteCacheKey(cacheMeta);
+    if (!cacheKey || deliveryQuoteCache.key !== cacheKey) return null;
+    return deliveryQuoteCache.data || null;
+  }
+
+  function storeDeliveryQuoteInMemory(cacheMeta, quote) {
+    const normalizedQuote = normalizeDeliveryQuotePayload(quote, {
+      fallbackRevision: cacheMeta?.deliveryRevision,
+    });
+    const nextCacheMeta = {
+      ...(cacheMeta && typeof cacheMeta === "object" ? cacheMeta : {}),
+      deliveryRevision: normalizeDeliveryRevisionValue(normalizedQuote.delivery_revision)
+        || normalizeDeliveryRevisionValue(cacheMeta?.deliveryRevision),
+    };
+    deliveryQuoteCache = {
+      key: buildDeliveryExactQuoteCacheKey(nextCacheMeta),
+      data: normalizedQuote,
+    };
+    return deliveryQuoteCache.data;
+  }
+
+  function buildPersistentCachedDeliveryQuote(cacheMeta = null) {
+    const normalizedScopeKey = normalizeDeliveryCacheString(cacheMeta?.scopeKey);
+    const normalizedAddressKey = normalizeDeliveryCacheString(cacheMeta?.addressKey);
+    if (!normalizedScopeKey || !normalizedAddressKey) return null;
+
+    const cachedCondition = peekPersistentDeliveryQuoteCondition(
+      normalizedScopeKey,
+      normalizedAddressKey,
+      cacheMeta?.deliveryRevision
+    );
+    if (!cachedCondition) return null;
+
+    return buildLocalDeliveryQuoteFromCachedCondition(
+      cachedCondition,
+      cacheMeta?.subtotal
+    );
+  }
+
+  function commitDeliverySettingsCache(settings, options = {}) {
+    const scopeKey = normalizeDeliveryCacheString(options?.scopeKey || buildDeliveryCacheScopeKey());
+    const validatedAt = Number(options?.validatedAt || Date.now()) || Date.now();
+    const previousSettings = getCachedDeliverySettingsForCurrentScope();
+    const previousRevision = normalizeDeliveryRevisionValue(previousSettings?.delivery_revision);
+    const previousQuoteRevision = normalizeDeliveryRevisionValue(deliveryQuoteCache?.data?.delivery_revision);
+    const normalizedSettings = storePersistentDeliverySettingsEntry(scopeKey, settings, { validatedAt });
+    const nextRevision = normalizeDeliveryRevisionValue(normalizedSettings?.delivery_revision);
+
+    deliverySettingsCache = normalizedSettings;
+    deliverySettingsCacheScopeKey = scopeKey;
+    deliverySettingsCacheValidatedAt = validatedAt;
+    window.__shopDeliverySettings = normalizedSettings;
+
+    if (nextRevision) {
+      prunePersistentDeliveryQuoteConditionsForScope(scopeKey, nextRevision);
+    }
+
+    const revisionChanged = Boolean(
+      nextRevision
+      && (
+        (previousRevision && previousRevision !== nextRevision)
+        || (previousQuoteRevision && previousQuoteRevision !== nextRevision)
+      )
+    );
+    if (revisionChanged) {
+      clearDeliveryQuoteMemoryCache();
+      Promise.resolve(warmCheckoutDeliveryConditions("delivery-settings-revision")).catch(() => {});
+    }
+
+    return normalizedSettings;
+  }
+
+  function shouldValidateDeliverySettings(scopeKey = buildDeliveryCacheScopeKey()) {
+    const normalizedScopeKey = normalizeDeliveryCacheString(scopeKey);
+    if (!normalizedScopeKey) return false;
+    const persistentEntry = peekPersistentDeliverySettingsEntry(normalizedScopeKey);
+    const lastValidatedAt = deliverySettingsCacheScopeKey === normalizedScopeKey
+      ? Math.max(
+        Number(deliverySettingsCacheValidatedAt || 0) || 0,
+        Number(persistentEntry?.validatedAt || 0) || 0
+      )
+      : (Number(persistentEntry?.validatedAt || 0) || 0);
+    return (Date.now() - lastValidatedAt) > DELIVERY_SETTINGS_VALIDATE_TTL_MS;
+  }
+
+  function ensureFreshDeliverySettingsInBackground(reason = "background") {
+    if (!reason) {
+      // keep signature flexible for warm callers
+    }
+
+    const scopeKey = buildDeliveryCacheScopeKey();
+    if (!getCachedDeliverySettingsForCurrentScope()) return Promise.resolve(null);
+    if (!shouldValidateDeliverySettings(scopeKey)) {
+      return Promise.resolve(getCachedDeliverySettingsForCurrentScope());
+    }
+    if (deliverySettingsPromise) return deliverySettingsPromise;
+    if (deliverySettingsValidationPromise) return deliverySettingsValidationPromise;
+
+    deliverySettingsValidationPromise = apiJson("/api/public/delivery-settings")
+      .then((json) => commitDeliverySettingsCache(json.data || null, {
+        scopeKey,
+        validatedAt: Date.now(),
+      }))
+      .catch(() => getCachedDeliverySettingsForCurrentScope())
+      .finally(() => {
+        deliverySettingsValidationPromise = null;
+      });
+
+    return deliverySettingsValidationPromise;
+  }
+
   function prewarmCartPricingContext(reason = "boot") {
     if (!reason) {
       // keep signature flexible for callers that do not need a reason label
     }
     Promise.resolve(getOrderConfig()).catch(() => {});
-    Promise.resolve(getDeliverySettings()).catch(() => {});
+    Promise.resolve(warmCheckoutDeliveryConditions(reason)).catch(() => {});
 
     const token = typeof getCustomerToken === "function"
       ? str(getCustomerToken() || "").trim()
@@ -27482,30 +28305,81 @@ function setBottomNavActive(tab) {
       previewRequest,
       force: false,
       warmDetails: false,
-    })).catch(() => {});
+    }))
+      .then(() => warmCheckoutDeliveryConditions(`${reason}:benefits`))
+      .catch(() => {});
   }
 
-  let deliveryQuoteCache = { key: "", data: null };
-  const deliveryQuoteInflightRequests = new Map();
+  function warmCheckoutDeliveryConditions(reason = "cart") {
+    if (!reason) {
+      // keep interface flexible for silent callers
+    }
+
+    const pricingSnapshot = buildCartPricingSnapshot();
+    const subtotal = pricingSnapshot && pricingSnapshot.visible !== false
+      ? roundPrice(Number(pricingSnapshot.itemsTotal || 0))
+      : roundPrice(Number(computeCartTotals(cartItemsResolved()).total || 0));
+    const draft = loadCheckoutDraft();
+    const methodCode = resolveCartPricingMethodCode(draft);
+    const shouldWarmQuote = subtotal > 0
+      || !!state.selectedAddress
+      || methodCode === "delivery"
+      || window._deliveryMode !== "pickup";
+
+    const tasks = [
+      Promise.resolve(getDeliverySettings()).catch(() => null),
+    ];
+    if (shouldWarmQuote) {
+      tasks.push(Promise.resolve(getDeliveryQuote(subtotal)).catch(() => null));
+    }
+
+    return Promise.all(tasks).then(() => {
+      const nextSnapshot = applyCartPricingStateImmediately(buildCartPricingSnapshot());
+      if (typeof applyDeliveryProgressSnapshot === "function") {
+        applyDeliveryProgressSnapshot(nextSnapshot);
+      }
+      return nextSnapshot;
+    });
+  }
+
+  window.warmCheckoutDeliveryConditions = warmCheckoutDeliveryConditions;
 
   async function getDeliveryQuote(subtotal) {
     const amount = roundPrice(Number(subtotal || 0));
     const address = state.selectedAddress ? normalizeAddressPayload(state.selectedAddress) : null;
-    const cacheKey = JSON.stringify({
-      subtotal: amount,
-      address_id: state.selectedAddress?.id || null,
-      street: address?.street || "",
-      house: address?.house || "",
-      lat: address?.lat ?? null,
-      lng: address?.lng ?? null,
-      delivery_zone_id: address?.delivery_zone_id ?? null,
-      delivery_store_id: address?.delivery_store_id ?? null,
-    });
-    if (deliveryQuoteCache.key === cacheKey && deliveryQuoteCache.data) {
-      return deliveryQuoteCache.data;
+    let cacheMeta = buildCurrentDeliveryQuoteCacheMeta(amount);
+    const cachedExactQuote = readCachedDeliveryQuoteFromMemory(cacheMeta);
+    if (cachedExactQuote) return cachedExactQuote;
+
+    const cachedPersistentQuote = buildPersistentCachedDeliveryQuote(cacheMeta);
+    if (cachedPersistentQuote) {
+      void ensureFreshDeliverySettingsInBackground("delivery-quote-persistent");
+      return storeDeliveryQuoteInMemory(cacheMeta, cachedPersistentQuote);
     }
-    if (deliveryQuoteInflightRequests.has(cacheKey)) {
-      return deliveryQuoteInflightRequests.get(cacheKey);
+
+    let defaultSettings = getCachedDeliverySettingsForCurrentScope();
+    if (!hasUsableDeliveryAddressCoordinates(cacheMeta.addressMeta)) {
+      if (!defaultSettings) {
+        defaultSettings = await getDeliverySettings();
+        cacheMeta = buildCurrentDeliveryQuoteCacheMeta(amount);
+        const refreshedExactQuote = readCachedDeliveryQuoteFromMemory(cacheMeta);
+        if (refreshedExactQuote) return refreshedExactQuote;
+      } else {
+        void ensureFreshDeliverySettingsInBackground("delivery-quote-default");
+      }
+      return storeDeliveryQuoteInMemory(
+        cacheMeta,
+        buildLocalDeliveryQuoteFromSettings(defaultSettings, amount)
+      );
+    }
+
+    const requestCacheKey = JSON.stringify({
+      scope_key: cacheMeta.scopeKey || "",
+      subtotal: amount,
+      address_key: cacheMeta.addressKey || "",
+    });
+    if (deliveryQuoteInflightRequests.has(requestCacheKey)) {
+      return deliveryQuoteInflightRequests.get(requestCacheKey);
     }
 
     const body = { subtotal: amount };
@@ -27520,19 +28394,26 @@ function setBottomNavActive(tab) {
       method: "POST",
       body,
     }).then((json) => {
-      deliveryQuoteCache = {
-        key: cacheKey,
-        data: json.data || null,
-      };
-      return deliveryQuoteCache.data;
+      const normalizedQuote = normalizeDeliveryQuotePayload(json.data || null, {
+        fallbackRevision: defaultSettings?.delivery_revision || cacheMeta.deliveryRevision,
+      });
+      const rememberedQuote = storeDeliveryQuoteInMemory({
+        ...cacheMeta,
+        deliveryRevision: normalizeDeliveryRevisionValue(normalizedQuote.delivery_revision)
+          || normalizeDeliveryRevisionValue(cacheMeta.deliveryRevision),
+      }, normalizedQuote);
+      if (cacheMeta.scopeKey && cacheMeta.addressKey) {
+        storePersistentDeliveryQuoteCondition(cacheMeta.scopeKey, cacheMeta.addressKey, rememberedQuote);
+      }
+      return rememberedQuote;
     });
 
-    deliveryQuoteInflightRequests.set(cacheKey, request);
+    deliveryQuoteInflightRequests.set(requestCacheKey, request);
     try {
       return await request;
     } finally {
-      if (deliveryQuoteInflightRequests.get(cacheKey) === request) {
-        deliveryQuoteInflightRequests.delete(cacheKey);
+      if (deliveryQuoteInflightRequests.get(requestCacheKey) === request) {
+        deliveryQuoteInflightRequests.delete(requestCacheKey);
       }
     }
   }
@@ -27687,17 +28568,26 @@ function setBottomNavActive(tab) {
 
   function buildCartHeaderDeliveryProgressState(cartTotal, deliveryQuote, defaultDeliverySettings = null) {
     const safeCartTotal = roundPrice(Number(cartTotal || 0));
-    const freeFromRaw = deliveryQuote?.free_delivery_from != null
-      ? Number(deliveryQuote.free_delivery_from)
-      : (defaultDeliverySettings?.free_delivery_from != null ? Number(defaultDeliverySettings.free_delivery_from) : null);
+    const tierSummary = resolveDeliveryTierSummaryForTotal(
+      safeCartTotal,
+      deliveryQuote,
+      defaultDeliverySettings
+    );
+    const freeFromRaw = tierSummary?.free_delivery_from != null
+      ? Number(tierSummary.free_delivery_from)
+      : (deliveryQuote?.free_delivery_from != null
+        ? Number(deliveryQuote.free_delivery_from)
+        : (defaultDeliverySettings?.free_delivery_from != null ? Number(defaultDeliverySettings.free_delivery_from) : null));
 
     if (!Number.isFinite(freeFromRaw) || freeFromRaw <= 0) {
       return getHiddenCartHeaderDeliveryProgressState();
     }
 
-    const deliveryCostRaw = deliveryQuote?.delivery_cost != null
-      ? Number(deliveryQuote.delivery_cost)
-      : Number(defaultDeliverySettings?.delivery_cost || 0);
+    const deliveryCostRaw = tierSummary?.delivery_cost != null
+      ? Number(tierSummary.delivery_cost)
+      : (deliveryQuote?.delivery_cost != null
+        ? Number(deliveryQuote.delivery_cost)
+        : Number(defaultDeliverySettings?.delivery_cost || 0));
     const deliveryCost = Number.isFinite(deliveryCostRaw) && deliveryCostRaw > 0 ? deliveryCostRaw : 0;
     const progressValue = Math.max(0, Math.min(100, (safeCartTotal / freeFromRaw) * 100));
 
@@ -28551,29 +29441,39 @@ function setBottomNavActive(tab) {
     const baseOrderTotal = roundPrice(Number(cartTotals.total || 0));
 
     const cfg = await getOrderConfig();
-    let defaultDeliverySettings = null;
-    try {
-      defaultDeliverySettings = await getDeliverySettings();
-    } catch (err) {
-      console.error("Failed to load delivery settings:", err);
+    let defaultDeliverySettings = getCartPricingCachedDeliverySettings();
+    const initialPricingSnapshot = buildCartPricingSnapshot();
+    const initialDeliverySubtotal = initialPricingSnapshot && initialPricingSnapshot.visible !== false
+      ? roundPrice(Number(initialPricingSnapshot.itemsTotal || 0))
+      : baseOrderTotal;
+    let deliveryQuote = getCartPricingCachedDeliveryQuote(initialDeliverySubtotal);
+
+    function buildCheckoutDeliveryRules(quote = null) {
+      return {
+        cost: quote?.delivery_cost != null
+          ? Number(quote.delivery_cost || 0)
+          : Number(defaultDeliverySettings?.delivery_cost || 0),
+        minOrder: quote?.min_order_amount != null
+          ? Number(quote.min_order_amount || 0)
+          : Number(defaultDeliverySettings?.min_order_amount || 0),
+        freeFrom: quote?.free_delivery_from != null
+          ? Number(quote.free_delivery_from)
+          : (defaultDeliverySettings?.free_delivery_from != null ? Number(defaultDeliverySettings.free_delivery_from) : null),
+        hasSettings: quote?.has_settings != null
+          ? Boolean(quote.has_settings)
+          : Boolean(defaultDeliverySettings),
+        source: str(quote?.source || (defaultDeliverySettings ? "default" : "")).trim() || "default",
+        zoneId: quote?.delivery_zone_id != null ? Number(quote.delivery_zone_id) : null,
+        zoneName: str(quote?.delivery_zone_name || "").trim() || null,
+        storeId: quote?.delivery_store_id != null ? Number(quote.delivery_store_id) : null,
+        etaMinutes: quote?.eta_minutes != null
+          ? Number(quote.eta_minutes)
+          : (defaultDeliverySettings?.eta_minutes != null ? Number(defaultDeliverySettings.eta_minutes) : null),
+        priceTiers: getQuoteDeliveryPriceTiers(quote, defaultDeliverySettings),
+      };
     }
-    let deliveryQuote = null;
-    try {
-      deliveryQuote = await getDeliveryQuote(baseOrderTotal);
-    } catch (err) {
-      console.error("Failed to load delivery quote:", err);
-    }
-    let deliveryRules = {
-      cost: Number(deliveryQuote?.delivery_cost || 0),
-      minOrder: Number(deliveryQuote?.min_order_amount || 0),
-      freeFrom: deliveryQuote?.free_delivery_from != null ? Number(deliveryQuote.free_delivery_from) : null,
-      hasSettings: Boolean(deliveryQuote?.has_settings),
-      source: str(deliveryQuote?.source || "default"),
-      zoneId: deliveryQuote?.delivery_zone_id != null ? Number(deliveryQuote.delivery_zone_id) : null,
-      zoneName: str(deliveryQuote?.delivery_zone_name || "").trim() || null,
-      storeId: deliveryQuote?.delivery_store_id != null ? Number(deliveryQuote.delivery_store_id) : null,
-      etaMinutes: deliveryQuote?.eta_minutes != null ? Number(deliveryQuote.eta_minutes) : null,
-    };
+
+    let deliveryRules = buildCheckoutDeliveryRules(deliveryQuote);
     const draft = loadCheckoutDraft();
 
     function resolveCheckoutEtaMinutes() {
@@ -28739,22 +29639,14 @@ function setBottomNavActive(tab) {
     const orderTotal = previewSummary
       ? roundPrice(Number(previewSummary.items_total || 0))
       : roundPrice(Math.max(0, baseOrderTotal - customerOrderDiscountAmount));
-    try {
-      deliveryQuote = await getDeliveryQuote(orderTotal);
-      deliveryRules = {
-        cost: Number(deliveryQuote?.delivery_cost || 0),
-        minOrder: Number(deliveryQuote?.min_order_amount || 0),
-        freeFrom: deliveryQuote?.free_delivery_from != null ? Number(deliveryQuote.free_delivery_from) : null,
-        hasSettings: Boolean(deliveryQuote?.has_settings),
-        source: str(deliveryQuote?.source || "default"),
-        zoneId: deliveryQuote?.delivery_zone_id != null ? Number(deliveryQuote.delivery_zone_id) : null,
-        zoneName: str(deliveryQuote?.delivery_zone_name || "").trim() || null,
-        storeId: deliveryQuote?.delivery_store_id != null ? Number(deliveryQuote.delivery_store_id) : null,
-        etaMinutes: deliveryQuote?.eta_minutes != null ? Number(deliveryQuote.eta_minutes) : null,
-      };
-    } catch (err) {
-      console.error("Failed to refresh delivery quote:", err);
+    const cachedDeliveryQuoteForOrderTotal = getCartPricingCachedDeliveryQuote(orderTotal);
+    if (cachedDeliveryQuoteForOrderTotal) {
+      deliveryQuote = cachedDeliveryQuoteForOrderTotal;
     }
+    if (!defaultDeliverySettings) {
+      defaultDeliverySettings = getCartPricingCachedDeliverySettings();
+    }
+    deliveryRules = buildCheckoutDeliveryRules(deliveryQuote);
     const checkoutTotalWithDelivery = orderTotal + getDeliveryCostForTotal(orderTotal);
     function setCheckoutSubmitLabel(payableTotal = checkoutTotalWithDelivery) {
       const label = `Заказать · ${money(payableTotal)}`;
@@ -29350,6 +30242,7 @@ function setBottomNavActive(tab) {
       syncCheckoutMode(code);
       updateDeliveryPricing();
       updateMobileDeliveryProgress();
+      void refreshCheckoutDeliveryRulesInBackground({ reason: "method-change" });
     });
 
     const methodWrap = document.createElement("div");
@@ -30619,6 +31512,10 @@ function setBottomNavActive(tab) {
     updateTimeSlotsOptions();
 
     function getDeliveryCostForTotal(baseTotal) {
+      if (Array.isArray(deliveryRules.priceTiers) && deliveryRules.priceTiers.length) {
+        const tierSummary = summarizeDeliveryCachePriceTiers(deliveryRules.priceTiers, baseTotal);
+        return roundPrice(Number(tierSummary?.delivery_cost || 0));
+      }
       if (deliveryRules.freeFrom != null && baseTotal >= deliveryRules.freeFrom) return 0;
       return deliveryRules.cost;
     }
@@ -31475,6 +32372,44 @@ function setBottomNavActive(tab) {
       }
     }
 
+    let checkoutDeliveryRefreshSeq = 0;
+    async function refreshCheckoutDeliveryRulesInBackground({ reason = "checkout" } = {}) {
+      if (!reason) {
+        // keep interface flexible for silent callers
+      }
+      const refreshSeq = ++checkoutDeliveryRefreshSeq;
+      const methodCode = methodSelect.getValue() || methodDefault || "takeaway";
+      const needsDeliveryQuote = methodCode === "delivery";
+      const targetOrderTotal = roundPrice(Number(orderTotal || 0));
+
+      let nextDefaultDeliverySettings = defaultDeliverySettings || getCartPricingCachedDeliverySettings();
+      if (!nextDefaultDeliverySettings) {
+        try {
+          nextDefaultDeliverySettings = await getDeliverySettings();
+        } catch (err) {
+          console.error("Failed to load delivery settings:", err);
+        }
+      }
+
+      let nextDeliveryQuote = needsDeliveryQuote ? getCartPricingCachedDeliveryQuote(targetOrderTotal) : null;
+      if (needsDeliveryQuote && !nextDeliveryQuote) {
+        try {
+          nextDeliveryQuote = await getDeliveryQuote(targetOrderTotal);
+        } catch (err) {
+          console.error("Failed to refresh delivery quote:", err);
+        }
+      }
+
+      if (!isCheckoutViewCurrent() || refreshSeq !== checkoutDeliveryRefreshSeq) return;
+
+      if (nextDefaultDeliverySettings) {
+        defaultDeliverySettings = nextDefaultDeliverySettings;
+      }
+      deliveryQuote = needsDeliveryQuote ? (nextDeliveryQuote || deliveryQuote) : null;
+      deliveryRules = buildCheckoutDeliveryRules(deliveryQuote);
+      updateDeliveryPricing();
+    }
+
     function refreshChangeVisibility() {
       changeWrap.style.display = "none";
       changeCashScroll.style.display = "none";
@@ -31489,6 +32424,7 @@ function setBottomNavActive(tab) {
     paySelect.root.addEventListener("change", refreshChangeVisibility);
     refreshChangeVisibility();
     updateDeliveryPricing();
+    void refreshCheckoutDeliveryRulesInBackground({ reason: "checkout-open" });
 
     function getChangeFromValue() {
       if (paySelect.getValue() !== "cash") return null;
@@ -32056,6 +32992,10 @@ function initShopLate() {
       console.warn("maybePromptCustomerNameCompletionAfterSocialLogin failed:", e);
     });
     prewarmCartPricingContext("init");
+    try { void preloadCartEnhancers(); } catch {}
+    Promise.resolve(initAddresses()).catch((e) => {
+      console.warn("initShopLate: initAddresses failed", e);
+    });
     runWhenIdle(async () => {
       try {
         await loadUnitConversions();
@@ -32068,7 +33008,6 @@ function initShopLate() {
         await warmupCartProducts();
         renderCart();
         updateCartBadge();
-        await initAddresses();
       } catch (e) {
         console.warn("initShopLate: background tasks failed", e);
       }
@@ -32087,7 +33026,7 @@ function initShopLate() {
         elCheckoutBtn.addEventListener("click", async () => {
           const authorized = await requireAuthForCheckout({ isSheet: false });
           if (!authorized) return;
-          await startCheckoutFlow({ isSheet: false });
+          await startCheckoutFlow({ isSheet: false, forceAddressRefresh: false });
         });
       }
 

@@ -25,7 +25,9 @@ const {
 } = require('../../data/address-service-client');
 const {
   buildDeliveryQuote,
+  buildDeliverySettingsRevision,
   loadDefaultDeliverySettings,
+  loadDeliveryZonesForTenant,
 } = require('../../data/delivery-quote');
 const {
   customerAddressSelectFields: sharedCustomerAddressSelectFields,
@@ -3876,6 +3878,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           delivery_zone_name: quote.delivery_zone_name || null,
           delivery_store_id: quote.delivery_store_id != null ? Number(quote.delivery_store_id) : null,
           price_tiers: Array.isArray(quote.price_tiers) ? quote.price_tiers : [],
+          delivery_revision: quote.delivery_revision || null,
         },
       });
     } catch (error) {
@@ -15693,6 +15696,13 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       // Р ВРЎвЂ°Р ВµР С Р Р…Р В°РЎРѓРЎвЂљРЎР‚Р С•Р в„–Р С”РЎС“ Р Т‘Р С•РЎРѓРЎвЂљР В°Р Р†Р С”Р С‘, Р С—РЎР‚Р С‘Р Р†РЎРЏР В·Р В°Р Р…Р Р…РЎС“РЎР‹ Р С” РЎвЂљР ВµР С”РЎС“РЎвЂ°Р ВµР СРЎС“ РЎвЂћР С‘Р В»Р С‘Р В°Р В»РЎС“
       // РС‰РµРј РЅР°СЃС‚СЂРѕР№РєСѓ РґРѕСЃС‚Р°РІРєРё, РїСЂРёРІСЏР·Р°РЅРЅСѓСЋ Рє С‚РµРєСѓС‰РµРјСѓ С„РёР»РёР°Р»Сѓ
       const defaultSettings = await loadDefaultDeliverySettings(db, tenantId, storeId);
+      const deliveryZones = await loadDeliveryZonesForTenant(db, tenantId);
+      const deliveryRevision = buildDeliverySettingsRevision({
+        tenantId,
+        storeId,
+        defaultSetting: defaultSettings,
+        zones: deliveryZones,
+      });
       return res.json({
         ok: true,
         data: {
@@ -15701,7 +15711,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           free_delivery_from: defaultSettings.free_delivery_from != null ? Number(defaultSettings.free_delivery_from) : null,
           eta_minutes: defaultSettings.eta_minutes != null ? Number(defaultSettings.eta_minutes) : null,
           price_tiers: Array.isArray(defaultSettings.price_tiers) ? defaultSettings.price_tiers : [],
-          has_settings: Boolean(defaultSettings.has_settings)
+          has_settings: Boolean(defaultSettings.has_settings),
+          delivery_revision: deliveryRevision,
         }
       });
 
