@@ -2004,8 +2004,7 @@
     }
     const screen = String(sheetNavigationState.screen || "").trim();
     return (
-      screen === "benefits"
-      || screen === "addressList"
+      screen === "addressList"
       || screen === "addressForm"
       || screen === "pickupList"
       || screen === "benefitDetail"
@@ -9398,7 +9397,18 @@ async function initAddresses() {
     const lineState = lineStateOrTotal && typeof lineStateOrTotal === "object"
       ? lineStateOrTotal
       : null;
+    const isGiftReward = lineState
+      ? (lineState.isGiftReward === true || Number(lineState.is_gift_reward || 0) === 1)
+      : false;
     const currentTotal = roundPrice(Number(lineState ? lineState.currentTotal : lineStateOrTotal) || 0);
+    if (isGiftReward) {
+      return {
+        currentTotal,
+        originalTotal: 0,
+        showOld: false,
+        discountPercent: 0,
+      };
+    }
     const originalTotal = roundPrice(Number(lineState ? lineState.originalTotal : originalLineTotal) || 0);
     const showOld = originalTotal > currentTotal;
     let discountPercent = lineState ? Math.round(Number(lineState.discountPercent || 0)) : 0;
@@ -9432,12 +9442,33 @@ async function initAddresses() {
 
   function setCartPriceGroupDomState(priceGroupEl, lineStateOrTotal, originalLineTotal) {
     if (!priceGroupEl || !priceGroupEl.querySelector) return null;
+    let effectiveLineStateOrTotal = lineStateOrTotal;
+    let effectiveOriginalLineTotal = originalLineTotal;
+    const rowHost = priceGroupEl.closest(".shop-cart-item-row[data-cart-key], .cart-row[data-cart-key], .cart-swipe-container[data-cart-key]");
+    const cartKey = String(rowHost?.getAttribute?.("data-cart-key") || "").trim();
+    const cartItem = cartKey && typeof getCartItemByKey === "function"
+      ? getCartItemByKey(cartKey)
+      : null;
+    const isGiftReward = Number(cartItem?.is_gift_reward || 0) === 1;
+    if (isGiftReward) {
+      if (effectiveLineStateOrTotal && typeof effectiveLineStateOrTotal === "object") {
+        effectiveLineStateOrTotal = {
+          ...effectiveLineStateOrTotal,
+          isGiftReward: true,
+          is_gift_reward: 1,
+          originalTotal: Number(effectiveLineStateOrTotal.currentTotal || 0),
+          discountPercent: 0,
+        };
+      } else {
+        effectiveOriginalLineTotal = Number(effectiveLineStateOrTotal || 0);
+      }
+    }
     return applyCartPriceGroupState(
       priceGroupEl.querySelector(".cart-price"),
       priceGroupEl.querySelector(".cart-old"),
       priceGroupEl.querySelector(".cart-discount-badge"),
-      lineStateOrTotal,
-      originalLineTotal
+      effectiveLineStateOrTotal,
+      effectiveOriginalLineTotal
     );
   }
 
@@ -10155,9 +10186,12 @@ async function initAddresses() {
             : 0;
           const currentHasDiscount = Number(currentPricing.discountAmount || 0) > 0;
           const currentShowOld =
+            !isGiftReward &&
             !currentPricing.isAuto &&
             (currentHasDiscount || (currentOldUnit > 0 && currentOldUnit > currentPricing.unitPrice));
-          const currentOriginalLineTotal = currentHasDiscount
+          const currentOriginalLineTotal = isGiftReward
+            ? 0
+            : currentHasDiscount
             ? (currentPricing.lineTotal + Number(currentPricing.discountAmount || 0))
             : (currentOldUnit * newQty);
 
@@ -10212,13 +10246,21 @@ async function initAddresses() {
 
       q.appendChild(qtyControlNode);
       const hasDiscount = pricing.discountAmount > 0;
-      const showOld = !pricing.isAuto && (hasDiscount || (oldUnit > 0 && oldUnit > pricing.unitPrice));
-      const originalLineTotal = hasDiscount ? (pricing.lineTotal + pricing.discountAmount) : (oldUnit * qty);
+      const showOld = !isGiftReward && !pricing.isAuto && (hasDiscount || (oldUnit > 0 && oldUnit > pricing.unitPrice));
+      const originalLineTotal = isGiftReward
+        ? 0
+        : hasDiscount
+          ? (pricing.lineTotal + pricing.discountAmount)
+          : (oldUnit * qty);
       const initialLineState = getImmediateShopCartLineState(key, getImmediateShopCartPricingSnapshot());
+      const initialLineCurrentTotal = Number(initialLineState?.currentTotal || pricing.lineTotal || 0);
+      const initialLineOriginalTotal = isGiftReward
+        ? 0
+        : Number(initialLineState?.originalTotal || 0);
       const priceState = initialLineState
         ? createCartPriceGroup(
-            Number(initialLineState.currentTotal || 0),
-            Number(initialLineState.originalTotal || 0)
+            initialLineCurrentTotal,
+            initialLineOriginalTotal
           )
         : createCartPriceGroup(pricing.lineTotal, showOld ? originalLineTotal : 0);
 

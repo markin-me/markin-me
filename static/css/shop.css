@@ -15562,9 +15562,50 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
   box-shadow: none;
 }
 
+.shop-cart-sheet .shop-checkout-benefits-content.shop-checkout-benefits-content--modal-layout{
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0 !important;
+}
+
+.shop-checkout-benefits-modal-shell{
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.shop-checkout-benefits-modal-scroll{
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 12px;
+}
+
+.shop-checkout-benefits-modal-footer{
+  flex: 0 0 auto;
+  padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+.shop-checkout-benefits-modal-footer .shop-checkout-benefits-promo-entry{
+  margin: 0;
+}
+
 @media (max-width: 768px){
   .shop-cart-sheet .shop-checkout-benefits-content{
     border-radius: 0;
+  }
+
+  .shop-checkout-benefits-modal-scroll{
+    padding: 12px;
+  }
+
+  .shop-checkout-benefits-modal-footer{
+    padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
   }
 }
 
@@ -19508,6 +19549,78 @@ body.page-shop .app-modal-body::after{
 .app-modal-body.shop-favorites-sheet-body .shop-favorites-sheet{
   flex: 1;
   min-height: 0;
+}
+
+@media (min-width: 769px){
+  body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-benefits) .modal-backdrop{
+    background: rgba(15, 23, 42, 0.66);
+  }
+
+  body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-benefits) .app-modal{
+    top: 20px;
+    right: 20px;
+    left: auto;
+    width: min(486px, calc(100vw - 40px));
+    max-width: calc(100vw - 40px);
+    min-height: calc(100dvh - 40px);
+    height: calc(100dvh - 40px);
+    max-height: calc(100dvh - 40px);
+    min-height: calc(100svh - 40px);
+    height: calc(100svh - 40px);
+    max-height: calc(100svh - 40px);
+    border: 0;
+    border-radius: 34px;
+    box-shadow: 0 20px 60px rgba(15, 23, 42, 0.35);
+    transform: translateX(44px);
+    opacity: 0.98;
+    transition: transform 280ms cubic-bezier(.2,.9,.25,1), opacity 220ms ease;
+  }
+
+  body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-benefits) .app-modal.shop-benefits-shell-entering{
+    transition: none !important;
+    transform: translateX(calc(100% + 24px));
+    opacity: 0.98;
+  }
+
+  body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-benefits) .app-modal.is-open{
+    transform: translateX(0);
+    opacity: 1;
+  }
+
+  body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-benefits) .app-modal-header.is-shop-sheet-shell{
+    min-height: 74px;
+    padding: 12px 16px;
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+    box-shadow: none;
+  }
+
+  body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-benefits) .app-modal-header .app-modal-title,
+  body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-benefits) .app-modal-header .modal-title,
+  body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-benefits) .app-modal-header [data-modal-title]{
+    padding-left: 0;
+    text-align: center;
+    font-size: 22px;
+    line-height: 1.2;
+    font-weight: 700;
+  }
+
+  body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-benefits) #shopSheetBackBtn{
+    display: none !important;
+  }
+
+  body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-benefits) .app-modal-header .app-modal-close,
+  body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-benefits) .app-modal-header [data-modal-close],
+  body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-benefits) #appModalCloseBtn,
+  body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-benefits) .app-modal-header .modal-close,
+  body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-benefits) .app-modal-header .btn-close{
+    width: 42px;
+    height: 42px;
+    border-radius: 50%;
+    background: var(--color-surface-2);
+    color: var(--color-text-muted);
+    padding: 0;
+  }
 }
 
 .shop-profile-modal-actions{
