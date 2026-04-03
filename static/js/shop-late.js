@@ -8907,6 +8907,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     if (pickupEl) pickupEl.classList.add("hidden");
 
     detailEl.classList.remove("hidden");
+    detailEl.classList.remove("shop-checkout-benefit-detail-content--with-footer");
     detailEl.innerHTML = "";
     detailEl.scrollTop = 0;
 
@@ -8929,7 +8930,21 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       shell.appendChild(descriptionEl);
     }
 
-    detailEl.appendChild(shell);
+    const useDesktopFooterLayout = detailMode === "gift-claim"
+      && !window.matchMedia("(max-width: 768px)").matches;
+    if (useDesktopFooterLayout) {
+      detailEl.classList.add("shop-checkout-benefit-detail-content--with-footer");
+      const scrollHost = document.createElement("div");
+      scrollHost.className = "shop-checkout-benefit-detail-scroll";
+      scrollHost.appendChild(shell);
+      detailEl.appendChild(scrollHost);
+      const footerHost = document.createElement("div");
+      footerHost.className = "shop-checkout-benefit-detail-footer";
+      detailEl.appendChild(footerHost);
+      shell._externalFooterHost = footerHost;
+    } else {
+      detailEl.appendChild(shell);
+    }
 
     if (window.AppModal?.setTitle) window.AppModal.setTitle(sheetTitle || "Детали акции");
     setSheetHeaderMode("subscreen", {
@@ -16390,12 +16405,19 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
 
     let actions = null;
     let confirmBtn = null;
+    const externalFooterHost = detailScreen && detailScreen._externalFooterHost
+      ? detailScreen._externalFooterHost
+      : null;
     if (!isMobileGiftClaim) {
       actions = document.createElement("div");
-      actions.className = "shop-checkout-benefit-claim-actions";
+      actions.className = externalFooterHost
+        ? "shop-checkout-benefit-detail-footer-actions"
+        : "shop-checkout-benefit-claim-actions";
       confirmBtn = document.createElement("button");
       confirmBtn.type = "button";
-      confirmBtn.className = "btn btn-primary shop-checkout-benefit-claim-confirm";
+      confirmBtn.className = externalFooterHost
+        ? "shop-checkout-benefits-promo-entry-btn shop-checkout-benefit-claim-confirm shop-checkout-benefit-claim-confirm--footer"
+        : "btn btn-primary shop-checkout-benefit-claim-confirm";
       confirmBtn.textContent = "\u0417\u0430\u0431\u0440\u0430\u0442\u044c";
       actions.appendChild(confirmBtn);
     }
@@ -16450,7 +16472,13 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       info.textContent = totalSelected > 0
         ? `\u0412\u044b\u0431\u0440\u0430\u043d\u043e ${totalSelected} \u0438\u0437 ${selectionLimit}`
         : `\u041c\u043e\u0436\u043d\u043e \u0437\u0430\u0431\u0440\u0430\u0442\u044c ${selectionLimit} ${formatGiftClaimCount(selectionLimit)}`;
-      if (confirmBtn) confirmBtn.disabled = !(totalSelected > 0);
+      if (confirmBtn) {
+        const canSubmit = totalSelected > 0;
+        confirmBtn.disabled = !canSubmit;
+        if (externalFooterHost) {
+          confirmBtn.classList.toggle("is-active", canSubmit);
+        }
+      }
       syncMobileBenefitGiftClaimUi({
         visible: isMobileGiftClaim,
         enabled: totalSelected > 0,
@@ -16463,7 +16491,13 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     const listEl = document.createElement("div");
     listEl.className = "shop-favorites-list shop-checkout-benefit-products-list shop-checkout-benefit-claim-list";
     detailScreen.appendChild(listEl);
-    if (actions) detailScreen.appendChild(actions);
+    if (actions) {
+      if (externalFooterHost) {
+        externalFooterHost.appendChild(actions);
+      } else {
+        detailScreen.appendChild(actions);
+      }
+    }
 
     const renderGiftClaimCards = () => {
       syncFns = [];
@@ -17223,6 +17257,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       : (previewData && typeof previewData === "object"
         ? previewData
         : { discounts: [], promo_codes: [], gifts: [], progress: [], completed: [] });
+    const activePromoCode = resolveCheckoutBenefitsActivePromoCode(data);
 
     const discountSection = createCheckoutBenefitsSection("РЎРєРёРґРєРё", "Р”Р»СЏ СЌС‚РѕРіРѕ Р·Р°РєР°Р·Р° РЅРµС‚ РґРѕСЃС‚СѓРїРЅС‹С… Р°РєС†РёР№.");
     const promoSection = createCheckoutBenefitsSection("РџСЂРѕРјРѕРєРѕРґС‹", "Р”Р»СЏ СЌС‚РѕРіРѕ Р·Р°РєР°Р·Р° РЅРµС‚ РґРѕСЃС‚СѓРїРЅС‹С… РїСЂРѕРјРѕРєРѕРґРѕРІ.");
@@ -17274,9 +17309,14 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       promoEntryApplyBtn.textContent = "Применить";
 
       syncManualPromoApplyState = () => {
-        const hasValue = !!str(promoEntryInput.value || "").trim();
-        promoEntryApplyBtn.disabled = !hasValue;
-        promoEntryApplyBtn.classList.toggle("is-active", hasValue);
+        const currentValue = normalizeCheckoutBenefitsPromoInputValue(promoEntryInput.value || "", { trim: true });
+        const hasValue = !!currentValue;
+        const isCurrentPromo = !!currentValue && currentValue === activePromoCode;
+        promoEntryApplyBtn.disabled = !hasValue || isCurrentPromo;
+        promoEntryApplyBtn.classList.toggle("is-active", hasValue && !isCurrentPromo);
+        promoEntryApplyBtn.classList.toggle("is-current", isCurrentPromo);
+        promoEntryApplyBtn.setAttribute("aria-pressed", isCurrentPromo ? "true" : "false");
+        promoEntryApplyBtn.textContent = isCurrentPromo ? "Активен" : "Применить";
       };
 
       promoEntryInput.addEventListener("input", () => {

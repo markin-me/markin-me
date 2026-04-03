@@ -15596,6 +15596,41 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
   margin: 0;
 }
 
+.shop-checkout-benefit-detail-content--with-footer{
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding-top: 0;
+}
+
+.shop-cart-sheet .shop-checkout-benefits-content.shop-checkout-benefit-detail-content--with-footer{
+  padding: 0 !important;
+}
+
+.shop-checkout-benefit-detail-scroll{
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 12px;
+}
+
+.shop-checkout-benefit-detail-footer{
+  flex: 0 0 auto;
+  padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+.shop-checkout-benefit-detail-footer-actions{
+  display: block;
+}
+
+.shop-checkout-benefit-claim-confirm--footer{
+  width: 100%;
+  min-width: 0;
+}
+
 @media (max-width: 768px){
   .shop-cart-sheet .shop-checkout-benefits-content{
     border-radius: 0;
@@ -15746,6 +15781,12 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
   border-color: var(--shop-buy);
   background: var(--shop-buy);
   color: var(--shop-buy-text);
+}
+
+.shop-checkout-benefits-promo-entry-btn.is-current{
+  border-color: color-mix(in srgb, var(--shop-buy), white 45%);
+  background: color-mix(in srgb, var(--shop-buy), white 82%);
+  color: var(--shop-buy);
 }
 
 .shop-checkout-benefits-promo-entry-btn:disabled{
