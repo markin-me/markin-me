@@ -12564,14 +12564,15 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 20px;
-  padding: 4px 8px;
+  min-height: 24px;
+  padding: 4px 10px;
   border-radius: 999px;
-  background: var(--shop-buy, #ff7a00);
-  color: #fff;
-  font-size: 11px;
-  line-height: 1;
-  font-weight: 700;
+  background: linear-gradient(135deg, var(--shop-buy), #ffb15a);
+  color: var(--shop-buy-text);
+  font-size: 13px;
+  line-height: 1.15;
+  font-weight: 800;
+  box-shadow: 0 8px 18px rgba(20, 29, 48, 0.16);
   white-space: nowrap;
 }
 
@@ -15865,25 +15866,61 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
 .shop-checkout-benefit-card-meta,
 .shop-checkout-benefit-discount-meta{
   display: inline-flex;
+  align-items: center;
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 6px;
 }
 
-.shop-checkout-benefit-stackable-badge{
-  width: 28px;
-  height: 28px;
+.shop-checkout-benefit-badge{
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+  max-width: 100%;
+  padding: 4px 10px;
   border-radius: 999px;
-  display: inline-grid;
-  place-items: center;
-  border: 1px solid rgba(255, 122, 0, 0.18);
-  background: rgba(255, 122, 0, 0.10);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.15;
+  white-space: nowrap;
+}
+
+.shop-checkout-benefit-badge--accent{
+  background: linear-gradient(135deg, var(--shop-buy), #ffb15a);
+  color: var(--shop-buy-text);
+  box-shadow: 0 8px 18px rgba(20, 29, 48, 0.16);
+}
+
+.shop-checkout-benefit-badge--neutral{
+  background: var(--color-surface-2);
+  color: var(--color-text-muted);
+  border: 1px solid var(--color-border);
+}
+
+.shop-checkout-benefit-badge--selected{
+  background: rgba(255, 122, 0, 0.12);
   color: var(--shop-buy);
+  border: 1px solid rgba(255, 122, 0, 0.2);
+}
+
+.shop-checkout-benefit-badge--icon{
+  min-width: 24px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+}
+
+.shop-checkout-benefit-discount-badge{
+  max-width: 100%;
+}
+
+.shop-checkout-benefit-stackable-badge{
   flex: 0 0 auto;
 }
 
 .shop-checkout-benefit-stackable-badge i{
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .shop-checkout-benefit-promo-card{
@@ -15980,19 +16017,14 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
 }
 
 .shop-checkout-benefit-status{
-  display: inline-flex;
-  align-items: center;
-  min-height: 22px;
-  padding: 0 8px;
-  border-radius: 999px;
   background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
   color: var(--color-text-muted);
-  font-size: 11px;
-  font-weight: 700;
 }
 
 .shop-checkout-benefit-status.is-selected{
   background: rgba(255, 122, 0, 0.12);
+  border-color: rgba(255, 122, 0, 0.2);
   color: var(--shop-buy);
 }
 
@@ -16605,16 +16637,7 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
 }
 
 .shop-checkout-benefit-reward-preview-badge{
-  display: inline-flex;
-  align-items: center;
   justify-self: start;
-  min-height: 24px;
-  padding: 0 10px;
-  border-radius: 999px;
-  background: rgba(255, 122, 0, 0.12);
-  color: var(--shop-buy);
-  font-size: 12px;
-  font-weight: 700;
 }
 
 .shop-checkout-benefit-reward-preview-desc,
@@ -16856,18 +16879,17 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
 .shop-checkout-benefit-claim-mode-note{
   display: inline-flex;
   align-items: center;
-  min-height: 28px;
-  padding: 0 10px;
+  min-height: 24px;
+  padding: 4px 10px;
   border-radius: 999px;
-  background: rgba(255, 122, 0, 0.1);
-  color: var(--accent-color, #ff7a00);
   font-size: 12px;
   font-weight: 800;
-  line-height: 1;
+  line-height: 1.15;
 }
 
 .shop-checkout-benefit-claim-mode-note{
   background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
   color: var(--color-text-muted);
 }
 

@@ -14352,6 +14352,19 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     });
   }
 
+  function createCheckoutBenefitBadge(text, variant = "accent") {
+    const label = str(text || "").trim();
+    if (!label) return null;
+    const badge = document.createElement("span");
+    badge.className = "shop-checkout-benefit-badge";
+    const normalizedVariant = str(variant || "").trim().toLowerCase();
+    if (normalizedVariant) {
+      badge.classList.add(`shop-checkout-benefit-badge--${normalizedVariant}`);
+    }
+    badge.textContent = label;
+    return badge;
+  }
+
   function renderCheckoutBenefitDiscountCardLegacy(item) {
     const card = document.createElement("div");
     card.className = "shop-profile-card shop-profile-discount-card";
@@ -14365,10 +14378,11 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     header.appendChild(title);
 
     if (item?.badge_text) {
-      const badge = document.createElement("span");
-      badge.className = "sp-discount-badge";
-      badge.textContent = item.badge_text;
-      header.appendChild(badge);
+      const badge = createCheckoutBenefitBadge(item.badge_text, "accent");
+      if (badge) {
+        badge.classList.add("shop-checkout-benefit-discount-badge");
+        header.appendChild(badge);
+      }
     }
 
     card.appendChild(header);
@@ -14447,8 +14461,16 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     if (isStackable) {
       const meta = document.createElement("div");
       meta.className = "shop-checkout-benefit-discount-meta";
+      const stackBadgeText = str(item?.badge_text || "").trim();
+      if (stackBadgeText) {
+        const discountBadge = createCheckoutBenefitBadge(stackBadgeText, "accent");
+        if (discountBadge) {
+          discountBadge.classList.add("shop-checkout-benefit-discount-badge");
+          meta.appendChild(discountBadge);
+        }
+      }
       const badge = document.createElement("span");
-      badge.className = "shop-checkout-benefit-stackable-badge";
+      badge.className = "shop-checkout-benefit-badge shop-checkout-benefit-badge--accent shop-checkout-benefit-badge--icon shop-checkout-benefit-stackable-badge";
       badge.title = "\u041c\u043e\u0436\u043d\u043e \u0441\u043e\u0432\u043c\u0435\u0449\u0430\u0442\u044c";
       badge.setAttribute("aria-label", "\u041c\u043e\u0436\u043d\u043e \u0441\u043e\u0432\u043c\u0435\u0449\u0430\u0442\u044c");
       badge.innerHTML = '<i class="fas fa-link" aria-hidden="true"></i>';
@@ -14522,24 +14544,27 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     topMeta.className = "shop-checkout-benefit-promo-meta";
 
     if (item?.badge_text) {
-      const badge = document.createElement("span");
-      badge.className = "sp-discount-badge";
-      badge.textContent = item.badge_text;
-      topMeta.appendChild(badge);
+      const badge = createCheckoutBenefitBadge(item.badge_text, "accent");
+      if (badge) {
+        badge.classList.add("shop-checkout-benefit-discount-badge");
+        topMeta.appendChild(badge);
+      }
     }
 
     if (item?.status_text) {
-      const status = document.createElement("span");
-      status.className = "shop-checkout-benefit-status";
-      status.textContent = item.status_text;
-      topMeta.appendChild(status);
+      const status = createCheckoutBenefitBadge(item.status_text, "neutral");
+      if (status) {
+        status.classList.add("shop-checkout-benefit-status");
+        topMeta.appendChild(status);
+      }
     }
 
     if (isSelected) {
-      const selected = document.createElement("span");
-      selected.className = "shop-checkout-benefit-status is-selected";
-      selected.textContent = "Выбран";
-      topMeta.appendChild(selected);
+      const selected = createCheckoutBenefitBadge("Выбрано", "selected");
+      if (selected) {
+        selected.classList.add("shop-checkout-benefit-status", "is-selected");
+        topMeta.appendChild(selected);
+      }
     }
 
     if (topMeta.children.length) top.appendChild(topMeta);
@@ -14660,8 +14685,16 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     if (isStackable) {
       const meta = document.createElement("div");
       meta.className = "shop-checkout-benefit-discount-meta";
+      const stackBadgeText = str(item?.badge_text || "").trim();
+      if (stackBadgeText) {
+        const discountBadge = createCheckoutBenefitBadge(stackBadgeText, "accent");
+        if (discountBadge) {
+          discountBadge.classList.add("shop-checkout-benefit-discount-badge");
+          meta.appendChild(discountBadge);
+        }
+      }
       const badge = document.createElement("span");
-      badge.className = "shop-checkout-benefit-stackable-badge";
+      badge.className = "shop-checkout-benefit-badge shop-checkout-benefit-badge--accent shop-checkout-benefit-badge--icon shop-checkout-benefit-stackable-badge";
       badge.title = "\u041c\u043e\u0436\u043d\u043e \u0441\u043e\u0432\u043c\u0435\u0449\u0430\u0442\u044c";
       badge.setAttribute("aria-label", "\u041c\u043e\u0436\u043d\u043e \u0441\u043e\u0432\u043c\u0435\u0449\u0430\u0442\u044c");
       badge.innerHTML = '<i class="fas fa-link" aria-hidden="true"></i>';
@@ -14727,16 +14760,18 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     const meta = document.createElement("div");
     meta.className = "shop-checkout-benefit-discount-meta";
     if (item?.badge_text) {
-      const badge = document.createElement("span");
-      badge.className = "sp-discount-badge";
-      badge.textContent = item.badge_text;
-      meta.appendChild(badge);
+      const badge = createCheckoutBenefitBadge(item.badge_text, "accent");
+      if (badge) {
+        badge.classList.add("shop-checkout-benefit-discount-badge");
+        meta.appendChild(badge);
+      }
     }
     if (item?.status_text) {
-      const status = document.createElement("span");
-      status.className = "shop-checkout-benefit-status";
-      status.textContent = item.status_text;
-      meta.appendChild(status);
+      const status = createCheckoutBenefitBadge(item.status_text, "neutral");
+      if (status) {
+        status.classList.add("shop-checkout-benefit-status");
+        meta.appendChild(status);
+      }
     }
     if (meta.children.length) header.appendChild(meta);
     card.appendChild(header);
@@ -15453,10 +15488,14 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     title.textContent = str(preview?.title || "").trim() || getCheckoutBenefitRewardKindLabel(previewKind);
     meta.appendChild(title);
 
-    const badge = document.createElement("div");
-    badge.className = "shop-checkout-benefit-reward-preview-badge";
-    badge.textContent = str(preview?.badge_text || "").trim() || getCheckoutBenefitRewardKindLabel(previewKind);
-    meta.appendChild(badge);
+    const badge = createCheckoutBenefitBadge(
+      str(preview?.badge_text || "").trim() || getCheckoutBenefitRewardKindLabel(previewKind),
+      "accent"
+    );
+    if (badge) {
+      badge.classList.add("shop-checkout-benefit-reward-preview-badge");
+      meta.appendChild(badge);
+    }
 
     if (preview?.description) {
       const desc = document.createElement("div");
@@ -15636,24 +15675,27 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     badges.className = "shop-checkout-benefit-detail-badges";
 
     if (item?.badge_text) {
-      const badge = document.createElement("span");
-      badge.className = "sp-discount-badge";
-      badge.textContent = item.badge_text;
-      badges.appendChild(badge);
+      const badge = createCheckoutBenefitBadge(item.badge_text, "accent");
+      if (badge) {
+        badge.classList.add("shop-checkout-benefit-discount-badge");
+        badges.appendChild(badge);
+      }
     }
 
     if (item?.status_text) {
-      const status = document.createElement("span");
-      status.className = "shop-checkout-benefit-status";
-      status.textContent = item.status_text;
-      badges.appendChild(status);
+      const status = createCheckoutBenefitBadge(item.status_text, "neutral");
+      if (status) {
+        status.classList.add("shop-checkout-benefit-status");
+        badges.appendChild(status);
+      }
     }
 
     if (isSelected) {
-      const selected = document.createElement("span");
-      selected.className = "shop-checkout-benefit-status is-selected";
-      selected.textContent = "\u0412\u044b\u0431\u0440\u0430\u043d\u043e";
-      badges.appendChild(selected);
+      const selected = createCheckoutBenefitBadge("Выбрано", "selected");
+      if (selected) {
+        selected.classList.add("shop-checkout-benefit-status", "is-selected");
+        badges.appendChild(selected);
+      }
     }
 
     if (badges.children.length) wrap.appendChild(badges);
@@ -15849,10 +15891,11 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
 
     const metaRow = document.createElement("div");
     metaRow.className = "shop-checkout-benefit-claim-gift-meta";
-    const giftBadge = document.createElement("span");
-    giftBadge.className = "shop-checkout-benefit-claim-gift-badge";
-    giftBadge.textContent = "\u041f\u043e\u0434\u0430\u0440\u043e\u043a";
-    metaRow.appendChild(giftBadge);
+    const giftBadge = createCheckoutBenefitBadge("Подарок", "accent");
+    if (giftBadge) {
+      giftBadge.classList.add("shop-checkout-benefit-claim-gift-badge");
+      metaRow.appendChild(giftBadge);
+    }
     mid.appendChild(metaRow);
 
     const summaryWrap = document.createElement("div");
@@ -25791,17 +25834,20 @@ function renderSheetAddressList() {
         title.className = 'shop-profile-discount-title';
         title.textContent = d.title || 'Скидка';
 
-        const badge = document.createElement('span');
-        badge.className = 'sp-discount-badge';
+        let badgeText = "";
         if (d.discount_type === 'percent') {
-          badge.textContent = `-${Math.round(d.discount_value)}%`;
+          badgeText = `-${Math.round(d.discount_value)}%`;
         } else if (d.discount_type === 'fixed') {
-          badge.textContent = `-${d.discount_value} ₽`;
+          badgeText = `-${d.discount_value} ₽`;
         } else if (d.discount_type === 'special_price') {
-          badge.textContent = `${d.discount_value} ₽`;
+          badgeText = `${d.discount_value} ₽`;
+        }
+        const badge = createCheckoutBenefitBadge(badgeText, "accent");
+        if (badge) {
+          badge.classList.add("shop-checkout-benefit-discount-badge");
         }
         header.appendChild(title);
-        header.appendChild(badge);
+        if (badge) header.appendChild(badge);
         card.appendChild(header);
 
         if (d.description) {
@@ -25922,10 +25968,11 @@ function renderSheetAddressList() {
       header.appendChild(title);
 
       if (item?.badge_text) {
-        const badge = document.createElement('span');
-        badge.className = 'sp-discount-badge';
-        badge.textContent = item.badge_text;
-        header.appendChild(badge);
+        const badge = createCheckoutBenefitBadge(item.badge_text, "accent");
+        if (badge) {
+          badge.classList.add("shop-checkout-benefit-discount-badge");
+          header.appendChild(badge);
+        }
       }
 
       card.appendChild(header);
@@ -25982,10 +26029,11 @@ function renderSheetAddressList() {
       header.appendChild(titleWrap);
 
       if (item?.badge_text) {
-        const badge = document.createElement('span');
-        badge.className = 'sp-discount-badge';
-        badge.textContent = item.badge_text;
-        header.appendChild(badge);
+        const badge = createCheckoutBenefitBadge(item.badge_text, "accent");
+        if (badge) {
+          badge.classList.add("shop-checkout-benefit-discount-badge");
+          header.appendChild(badge);
+        }
       }
 
       card.appendChild(header);
@@ -28604,6 +28652,7 @@ function setBottomNavActive(tab) {
       deliveryProgressFree: false,
     };
   }
+  let lastKnownCartHeaderDeliveryProgressState = null;
 
   function buildCartHeaderDeliveryProgressState(cartTotal, deliveryQuote, defaultDeliverySettings = null) {
     const safeCartTotal = roundPrice(Number(cartTotal || 0));
@@ -28612,6 +28661,12 @@ function setBottomNavActive(tab) {
       deliveryQuote,
       defaultDeliverySettings
     );
+    const deliveryCostRaw = tierSummary?.delivery_cost != null
+      ? Number(tierSummary.delivery_cost)
+      : (deliveryQuote?.delivery_cost != null
+        ? Number(deliveryQuote.delivery_cost)
+        : Number(defaultDeliverySettings?.delivery_cost || 0));
+    const deliveryCost = Number.isFinite(deliveryCostRaw) && deliveryCostRaw > 0 ? deliveryCostRaw : 0;
     const freeFromRaw = tierSummary?.free_delivery_from != null
       ? Number(tierSummary.free_delivery_from)
       : (deliveryQuote?.free_delivery_from != null
@@ -28619,28 +28674,38 @@ function setBottomNavActive(tab) {
         : (defaultDeliverySettings?.free_delivery_from != null ? Number(defaultDeliverySettings.free_delivery_from) : null));
 
     if (!Number.isFinite(freeFromRaw) || freeFromRaw <= 0) {
-      return getHiddenCartHeaderDeliveryProgressState();
+      if (lastKnownCartHeaderDeliveryProgressState?.deliveryProgressVisible) {
+        return {
+          ...lastKnownCartHeaderDeliveryProgressState,
+          deliveryProgressVisible: true,
+        };
+      }
+      const fallbackState = {
+        deliveryProgressVisible: true,
+        deliveryProgressValue: deliveryCost > 0 ? 0 : 100,
+        deliveryProgressLabelHtml: deliveryCost > 0
+          ? `Доставка <strong>${money(deliveryCost)}</strong>`
+          : "Бесплатная доставка",
+        deliveryProgressFree: deliveryCost <= 0,
+      };
+      lastKnownCartHeaderDeliveryProgressState = { ...fallbackState };
+      return fallbackState;
     }
-
-    const deliveryCostRaw = tierSummary?.delivery_cost != null
-      ? Number(tierSummary.delivery_cost)
-      : (deliveryQuote?.delivery_cost != null
-        ? Number(deliveryQuote.delivery_cost)
-        : Number(defaultDeliverySettings?.delivery_cost || 0));
-    const deliveryCost = Number.isFinite(deliveryCostRaw) && deliveryCostRaw > 0 ? deliveryCostRaw : 0;
     const progressValue = Math.max(0, Math.min(100, (safeCartTotal / freeFromRaw) * 100));
 
     if (progressValue >= 100) {
-      return {
+      const readyState = {
         deliveryProgressVisible: true,
         deliveryProgressValue: 100,
         deliveryProgressLabelHtml: "\u0411\u0435\u0441\u043f\u043b\u0430\u0442\u043d\u0430\u044f \u0434\u043e\u0441\u0442\u0430\u0432\u043a\u0430",
         deliveryProgressFree: true,
       };
+      lastKnownCartHeaderDeliveryProgressState = { ...readyState };
+      return readyState;
     }
 
     const leftAmount = Math.max(0, Math.ceil(freeFromRaw - safeCartTotal));
-    return {
+    const progressState = {
       deliveryProgressVisible: true,
       deliveryProgressValue: progressValue,
       deliveryProgressLabelHtml:
@@ -28648,6 +28713,8 @@ function setBottomNavActive(tab) {
         `\u0415\u0449\u0451 <strong>${money(leftAmount)}</strong>`,
       deliveryProgressFree: false,
     };
+    lastKnownCartHeaderDeliveryProgressState = { ...progressState };
+    return progressState;
   }
 
   async function syncCartModeHeaderMetaUi({
