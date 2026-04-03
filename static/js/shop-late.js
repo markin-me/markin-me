@@ -18260,6 +18260,15 @@ function openCartSheet() {
     } catch {}
   }
 
+  function restoreCheckoutDeliveryProgressAfterBenefits() {
+    __forceHideCheckoutDeliveryProgress = false;
+    try {
+      if (typeof applyDeliveryProgressSnapshot === "function") {
+        applyDeliveryProgressSnapshot(buildCartPricingSnapshot());
+      }
+    } catch (_) {}
+  }
+
   function setCartSheetScreenMode(mode) {
     const body = window.AppModal?.body;
     if (!body) return;
@@ -18309,6 +18318,7 @@ function openCartSheet() {
         invalidateAddressSheetUiState();
         cleanupCheckoutViewSubscriptions();
         clearBenefitsInnerOverlayHost();
+        restoreCheckoutDeliveryProgressAfterBenefits();
         document.body.classList.remove("shop-checkout-overlay-open");
         resetShopModalHeaderUi();
         if (elMobileCartActions) elMobileCartActions.classList.add("hidden");
@@ -19031,6 +19041,7 @@ function applySheetAddressTitle(backMode = "cart") {
       invalidateAddressSheetUiState();
       cleanupCheckoutViewSubscriptions();
       clearBenefitsInnerOverlayHost();
+      restoreCheckoutDeliveryProgressAfterBenefits();
       resetShopModalHeaderUi();
 
       // Скрываем мобильные кнопки при закрытии sheet
@@ -19308,6 +19319,7 @@ function applySheetAddressTitle(backMode = "cart") {
     };
     const closeBenefitsWithSave = async () => {
       persistBenefitsState();
+      restoreCheckoutDeliveryProgressAfterBenefits();
       const nextScreen = str(openCartSheetCtx?.benefitsSourceScreen || benefitsSourceScreen).trim().toLowerCase();
       if (nextScreen === "nav") {
         closeShopSheetIfOpen();
@@ -19325,6 +19337,7 @@ function applySheetAddressTitle(backMode = "cart") {
         return;
       }
       persistBenefitsState();
+      restoreCheckoutDeliveryProgressAfterBenefits();
       closeShopSheetIfOpen();
     };
     const animateBenefitsModalEnter = () => {
