@@ -29166,6 +29166,10 @@ function setBottomNavActive(tab) {
    * ? ??????: ????? ??????? + ????????? ????????, ???? ???????? ???????; ??? ?????????? ?????? ? ?????? ????? ???????.
    */
   let __forceHideCheckoutDeliveryProgress = false;
+  let lastDeliveryProgressRenderKey = "";
+  let lastDeliveryProgressQueueKey = "";
+  let lastDeliveryProgressQueueAt = 0;
+  const DELIVERY_PROGRESS_QUEUE_THROTTLE_MS = 250;
 
   function syncDesktopCartBenefitsTriggerState(visible) {
     if (!elDesktopCartBenefitsTriggerBtn) return;
@@ -29198,10 +29202,97 @@ function setBottomNavActive(tab) {
     wrapEl.classList.remove("hidden");
   }
 
-  function applyDeliveryProgressSnapshot(summaryState = null) {
+  function buildDeliveryProgressRenderKey({
+    cartTotal = 0,
+    isDeliveryMode = false,
+    deliveryQuote = null,
+    defaultSettings = null,
+    progressState = null,
+    forceHidden = false,
+  } = {}) {
+    const safeProgressValue = Math.max(0, Math.min(100, Number(progressState?.deliveryProgressValue || 0)));
+    const safeDeliveryCost = Number(deliveryQuote?.delivery_cost ?? defaultSettings?.delivery_cost ?? 0);
+    const safeFreeFrom = Number(deliveryQuote?.free_delivery_from ?? defaultSettings?.free_delivery_from ?? 0);
+    const safeMinOrder = Number(deliveryQuote?.min_order_amount ?? defaultSettings?.min_order_amount ?? 0);
+    const safeEta = Number(deliveryQuote?.eta_minutes ?? defaultSettings?.eta_minutes ?? -1);
+    return [
+      forceHidden ? "hidden" : "visible",
+      isDeliveryMode ? "delivery" : "pickup",
+      roundPrice(Number(cartTotal || 0)),
+      roundPrice(Number(safeDeliveryCost || 0)),
+      roundPrice(Number(safeFreeFrom || 0)),
+      roundPrice(Number(safeMinOrder || 0)),
+      Number.isFinite(safeEta) ? safeEta : -1,
+      progressState?.deliveryProgressVisible ? "1" : "0",
+      Math.round(safeProgressValue * 100) / 100,
+      progressState?.deliveryProgressFree ? "1" : "0",
+      str(progressState?.deliveryProgressLabelHtml || ""),
+    ].join("|");
+  }
+
+  function buildDeliveryProgressQueueKey({
+    cartTotal = 0,
+    isDeliveryMode = false,
+  } = {}) {
+    if (!isDeliveryMode) return "pickup";
+    const cacheMeta = buildCurrentDeliveryQuoteCacheMeta(cartTotal);
+    return [
+      "delivery",
+      normalizeDeliveryCacheString(cacheMeta?.scopeKey),
+      normalizeDeliveryCacheString(cacheMeta?.addressKey),
+      roundPrice(Number(cartTotal || 0)),
+      normalizeDeliveryRevisionValue(cacheMeta?.deliveryRevision) || "",
+    ].join("|");
+  }
+
+  function shouldQueueDeliveryProgressAsyncRefresh({
+    cartTotal = 0,
+    isDeliveryMode = false,
+    deliveryQuote = null,
+    defaultSettings = null,
+  } = {}) {
+    if (!isDeliveryMode || __forceHideCheckoutDeliveryProgress) return false;
+    const queueKey = buildDeliveryProgressQueueKey({ cartTotal, isDeliveryMode });
+    const nowTs = Date.now();
+    const cacheMeta = buildCurrentDeliveryQuoteCacheMeta(cartTotal);
+    const hasExactQuote = !!readCachedDeliveryQuoteFromMemory(cacheMeta);
+    const hasPersistentQuote = hasExactQuote ? true : !!buildPersistentCachedDeliveryQuote(cacheMeta);
+    const hasQuote = !!(deliveryQuote || hasExactQuote || hasPersistentQuote);
+    const hasSettings = !!defaultSettings;
+    const keyChanged = queueKey !== lastDeliveryProgressQueueKey;
+    const throttleExpired = (nowTs - lastDeliveryProgressQueueAt) >= DELIVERY_PROGRESS_QUEUE_THROTTLE_MS;
+    const shouldQueue = keyChanged || ((!hasQuote || !hasSettings) && throttleExpired);
+    if (shouldQueue) {
+      lastDeliveryProgressQueueKey = queueKey;
+      lastDeliveryProgressQueueAt = nowTs;
+    }
+    return shouldQueue;
+  }
+
+  function needsDeliveryProgressDomSync(wrapEl, fillEl, labelEl, progressState) {
+    if (!wrapEl || !fillEl || !labelEl) return false;
+    const shouldBeVisible = !!progressState?.deliveryProgressVisible;
+    const isHidden = wrapEl.classList.contains("hidden");
+    if (shouldBeVisible !== !isHidden) return true;
+    if (!shouldBeVisible) return false;
+
+    const expectedWidth = `${Math.max(0, Math.min(100, Number(progressState?.deliveryProgressValue || 0)))}%`;
+    const currentWidth = str(fillEl.style?.width || "").trim();
+    if (currentWidth !== expectedWidth) return true;
+
+    const expectedLabel = str(progressState?.deliveryProgressLabelHtml || "");
+    if (str(labelEl.innerHTML || "") !== expectedLabel) return true;
+
+    const shouldBeFree = progressState?.deliveryProgressFree === true;
+    if (labelEl.classList.contains("is-free") !== shouldBeFree) return true;
+    return false;
+  }
+
+  function applyDeliveryProgressSnapshot(summaryState = null, options = {}) {
     const effectiveSummaryState = summaryState && typeof summaryState === "object"
       ? summaryState
       : buildCartPricingSnapshot();
+    const syncTotals = options?.syncTotals !== false;
     const cartTotal = effectiveSummaryState && effectiveSummaryState.visible !== false
       ? roundPrice(Number(effectiveSummaryState.itemsTotal || 0))
       : roundPrice(Number(computeCartTotals(cartItemsResolved()).total || 0));
@@ -29217,10 +29308,44 @@ function setBottomNavActive(tab) {
     const progressState = !__forceHideCheckoutDeliveryProgress && isDeliveryMode
       ? buildCartHeaderDeliveryProgressState(cartTotal, deliveryQuote, defaultSettings)
       : getHiddenCartHeaderDeliveryProgressState();
+    const renderKey = buildDeliveryProgressRenderKey({
+      cartTotal,
+      isDeliveryMode,
+      deliveryQuote,
+      defaultSettings,
+      progressState,
+      forceHidden: __forceHideCheckoutDeliveryProgress,
+    });
 
-    if (typeof applyCartPricingCheckoutTotals === "function") {
+    if (syncTotals && typeof applyCartPricingCheckoutTotals === "function") {
       applyCartPricingCheckoutTotals(effectiveSummaryState);
     }
+
+    const hasProgressStateChanged = renderKey !== lastDeliveryProgressRenderKey;
+    const needsDomSync = (__forceHideCheckoutDeliveryProgress || !isDeliveryMode)
+      ? (
+        (elMobileDeliveryProgressWrap && !elMobileDeliveryProgressWrap.classList.contains("hidden"))
+        || (elDesktopDeliveryProgressWrap && !elDesktopDeliveryProgressWrap.classList.contains("hidden"))
+      )
+      : (
+        needsDeliveryProgressDomSync(
+          elMobileDeliveryProgressWrap,
+          elMobileDeliveryProgressFill,
+          elMobileDeliveryProgressLabel,
+          progressState
+        )
+        || needsDeliveryProgressDomSync(
+          elDesktopDeliveryProgressWrap,
+          elDesktopDeliveryProgressFill,
+          elDesktopDeliveryProgressLabel,
+          progressState
+        )
+      );
+    if (!hasProgressStateChanged && !needsDomSync) {
+      syncDesktopCartBenefitsTriggerState(true);
+      return progressState;
+    }
+    lastDeliveryProgressRenderKey = renderKey;
 
     Promise.resolve(syncCartModeHeaderMetaUi({
       deliveryQuote: isDeliveryMode ? deliveryQuote : null,
@@ -29256,8 +29381,27 @@ function setBottomNavActive(tab) {
 
   async function updateMobileDeliveryProgress() {
     const summaryState = buildCartPricingSnapshot();
-    applyDeliveryProgressSnapshot(summaryState);
-    queueCartPricingAsyncRefresh("updateMobileDeliveryProgress", 90);
+    applyDeliveryProgressSnapshot(summaryState, { syncTotals: false });
+    const cartTotal = summaryState && summaryState.visible !== false
+      ? roundPrice(Number(summaryState.itemsTotal || 0))
+      : roundPrice(Number(computeCartTotals(cartItemsResolved()).total || 0));
+    const isDeliveryMode = typeof summaryState?.isDelivery === "boolean"
+      ? summaryState.isDelivery
+      : (window._checkoutMethodCode == null
+        ? window._deliveryMode !== "pickup"
+        : window._checkoutMethodCode === "delivery");
+    const defaultSettings = summaryState?.defaultDeliverySettings || getCartPricingCachedDeliverySettings();
+    const deliveryQuote = isDeliveryMode
+      ? (summaryState?.deliveryQuote || getCartPricingCachedDeliveryQuote(cartTotal))
+      : null;
+    if (shouldQueueDeliveryProgressAsyncRefresh({
+      cartTotal,
+      isDeliveryMode,
+      deliveryQuote,
+      defaultSettings,
+    })) {
+      queueCartPricingAsyncRefresh("updateMobileDeliveryProgress", 90);
+    }
     return summaryState;
   }
 
