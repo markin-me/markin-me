@@ -7774,14 +7774,18 @@
     const listWrap = document.getElementById("newOrderRightAddressListWrap");
     const list = document.getElementById("newOrderRightAddressList");
     const newBtn = document.getElementById("newOrderRightAddressNewBtn");
+    const formBody = document.getElementById("newOrderRightAddressBody");
     const city = document.getElementById("newOrderRightAddressCity");
     const lookupWrap = document.getElementById("newOrderRightAddressLookupWrap");
     const lookup = document.getElementById("newOrderRightAddressLookup");
     const lookupPopover = document.getElementById("newOrderRightAddressLookupPopover");
     const lookupStatus = document.getElementById("newOrderRightAddressLookupStatus");
     const lookupResults = document.getElementById("newOrderRightAddressLookupResults");
+    const streetWrap = document.getElementById("newOrderRightAddressStreetWrap");
     const street = document.getElementById("newOrderRightAddressStreet");
+    const houseWrap = document.getElementById("newOrderRightAddressHouseWrap");
     const house = document.getElementById("newOrderRightAddressHouse");
+    const detailsRow = document.getElementById("newOrderRightAddressDetailsRow");
     const entrance = document.getElementById("newOrderRightAddressEntrance");
     const floor = document.getElementById("newOrderRightAddressFloor");
     const apartment = document.getElementById("newOrderRightAddressApartment");
@@ -7793,14 +7797,18 @@
       listWrap,
       list,
       newBtn,
+      formBody,
       city,
       lookupWrap,
       lookup,
       lookupPopover,
       lookupStatus,
       lookupResults,
+      streetWrap,
       street,
+      houseWrap,
       house,
+      detailsRow,
       entrance,
       floor,
       apartment,
@@ -7808,6 +7816,14 @@
       saveBtn,
       cancelBtn,
     };
+  }
+
+  function syncRightAddressMapLayout(enabled) {
+    const { formBody, streetWrap, houseWrap } = getRightAddressOverlayElements();
+    const isMapMode = Boolean(enabled);
+    if (formBody) formBody.classList.toggle("is-map-mode", isMapMode);
+    if (streetWrap) streetWrap.classList.toggle("hidden", isMapMode);
+    if (houseWrap) houseWrap.classList.toggle("hidden", isMapMode);
   }
 
   function ensureRightAddressOverlay() {
@@ -7821,7 +7837,7 @@
           <div class="new-order-option-sheet-title">Введите адрес</div>
           <button class="new-order-option-sheet-back" type="button" data-action="right-address-overlay-close"><i class="fas fa-times"></i></button>
         </div>
-        <div class="new-order-option-sheet-list no-scrollbar new-order-right-address-body">
+        <div class="new-order-option-sheet-list no-scrollbar new-order-right-address-body" id="newOrderRightAddressBody">
           <div class="new-order-right-address-list-wrap hidden" id="newOrderRightAddressListWrap">
             <div class="new-order-right-address-list-head">
               <div class="new-order-right-address-list-title">Адреса клиента</div>
@@ -7849,12 +7865,12 @@
               </div>
             </div>
           </label>
-          <label class="new-order-right-form-field">
+          <label class="new-order-right-form-field" id="newOrderRightAddressStreetWrap">
             <span class="new-order-right-form-label">Улица</span>
             <input id="newOrderRightAddressStreet" class="control" type="text" autocomplete="off" />
           </label>
-          <div class="new-order-right-form-row">
-            <label class="new-order-right-form-field">
+          <div class="new-order-right-form-row is-address-map-details" id="newOrderRightAddressDetailsRow">
+            <label class="new-order-right-form-field" id="newOrderRightAddressHouseWrap">
               <span class="new-order-right-form-label">Дом</span>
               <input id="newOrderRightAddressHouse" class="control" type="text" autocomplete="off" />
             </label>
@@ -7862,8 +7878,6 @@
               <span class="new-order-right-form-label">Подъезд</span>
               <input id="newOrderRightAddressEntrance" class="control" type="text" autocomplete="off" />
             </label>
-          </div>
-          <div class="new-order-right-form-row">
             <label class="new-order-right-form-field">
               <span class="new-order-right-form-label">Этаж</span>
               <input id="newOrderRightAddressFloor" class="control" type="text" autocomplete="off" />
@@ -7902,6 +7916,49 @@
 
   function normalizeRightAddressKey(value) {
     return normalizeRightAddressText(value).toLowerCase();
+  }
+
+  const RIGHT_ADDRESS_HOUSE_TOKEN_PATTERN = "\\d+[\\dA-Za-zА-Яа-яЁё]*(?:[/-]\\d+[\\dA-Za-zА-Яа-яЁё]*)*";
+
+  function normalizeRightAddressLookupText(value) {
+    return normalizeRightAddressText(value)
+      .replace(/\s*,\s*/g, ", ")
+      .replace(/,+\s*$/g, "")
+      .trim();
+  }
+
+  function extractRightAddressHouseFromLookupSegment(segment) {
+    const normalized = normalizeRightAddressLookupText(segment);
+    if (!normalized) return "";
+    const directMatch = normalized.match(new RegExp(`^(?:д(?:ом)?\\.?\\s*)?(${RIGHT_ADDRESS_HOUSE_TOKEN_PATTERN})$`, "i"));
+    if (directMatch && directMatch[1]) return normalizeRightAddressText(directMatch[1]);
+    const tailMatch = normalized.match(new RegExp(`(?:^|\\s)(?:д(?:ом)?\\.?\\s*)?(${RIGHT_ADDRESS_HOUSE_TOKEN_PATTERN})$`, "i"));
+    if (tailMatch && tailMatch[1]) return normalizeRightAddressText(tailMatch[1]);
+    return "";
+  }
+
+  function parseRightAddressStreetHouseFromLookup(value) {
+    const normalized = normalizeRightAddressLookupText(value);
+    if (!normalized) return { street: "", house: "" };
+
+    const commaPos = normalized.lastIndexOf(",");
+    if (commaPos >= 0) {
+      const head = normalizeRightAddressLookupText(normalized.slice(0, commaPos)).replace(/[,\s]+$/g, "");
+      const tail = normalizeRightAddressLookupText(normalized.slice(commaPos + 1));
+      const houseFromTail = extractRightAddressHouseFromLookupSegment(tail);
+      if (houseFromTail) {
+        return { street: head, house: houseFromTail };
+      }
+    }
+
+    const fallbackMatch = normalized.match(
+      new RegExp(`^(.*?)(?:,|\\s)+(?:д(?:ом)?\\.?\\s*)?(${RIGHT_ADDRESS_HOUSE_TOKEN_PATTERN})$`, "i")
+    );
+    if (!fallbackMatch) return { street: "", house: "" };
+    return {
+      street: normalizeRightAddressLookupText(fallbackMatch[1]).replace(/[,\s]+$/g, ""),
+      house: normalizeRightAddressText(fallbackMatch[2]),
+    };
   }
 
   function buildRightAddressLookupText(cityValue, contextLocalityValue, streetValue, houseValue, fallbackValue = "") {
@@ -8189,7 +8246,7 @@
     rightAddressMapModePromise = (async () => {
       try {
         const json = await apiJson("/api/admin/tenant/map-provider-config");
-        rightAddressMapModeEnabled = Boolean(json?.data?.store_address_map_enabled);
+        rightAddressMapModeEnabled = parseRightAddressBooleanFlag(json?.data?.store_address_map_enabled);
       } catch {
         rightAddressMapModeEnabled = false;
       } finally {
@@ -8198,6 +8255,18 @@
       return rightAddressMapModeEnabled;
     })();
     return rightAddressMapModePromise;
+  }
+
+  function parseRightAddressBooleanFlag(value) {
+    if (typeof value === "boolean") return value;
+    if (typeof value === "number") return Number.isFinite(value) && value !== 0;
+    const text = normalizeRightAddressText(value).toLowerCase();
+    if (!text) return false;
+    if (text === "1" || text === "true" || text === "yes" || text === "on") return true;
+    if (text === "0" || text === "false" || text === "no" || text === "off" || text === "null" || text === "undefined") {
+      return false;
+    }
+    return Boolean(value);
   }
 
   function resetRightAddressLookupState() {
@@ -8287,6 +8356,9 @@
     const { city, lookupPopover, lookupStatus, lookupResults } = getRightAddressOverlayElements();
     if (!lookupPopover || !lookupStatus || !lookupResults) return;
     lookupStatus.textContent = rightAddressLookupState.status || "";
+    lookupStatus.classList.toggle("hidden", !rightAddressLookupState.status);
+    lookupStatus.classList.toggle("is-error", rightAddressLookupState.statusMode === "error");
+    lookupStatus.classList.toggle("is-loading", rightAddressLookupState.statusMode === "loading");
     lookupResults.innerHTML = "";
     const cityValue = normalizeRightAddressText(city?.dataset?.value || "");
     const items = Array.isArray(rightAddressLookupState.items) ? rightAddressLookupState.items : [];
@@ -8623,6 +8695,7 @@
       }
     });
     if (lookupWrap) lookupWrap.classList.toggle("hidden", !rightAddressMapModeEnabled);
+    syncRightAddressMapLayout(rightAddressMapModeEnabled);
     hydrateRightAddressLookupStateFromDraft(next);
     if (lookup) lookup.value = rightAddressMapModeEnabled ? buildRightAddressLookupDisplay(next) : "";
     street.value = next.street;
@@ -8635,10 +8708,24 @@
 
   function readRightAddressInputs() {
     const { city, lookup, street, house, entrance, floor, apartment, comment } = getRightAddressOverlayElements();
+    const lookupDisplayValue = normalizeRightAddressLookupText(lookup?.value || "");
+    const parsedLookup = rightAddressMapModeEnabled
+      ? parseRightAddressStreetHouseFromLookup(lookupDisplayValue)
+      : { street: "", house: "" };
+    const selectedStreetValue = normalizeRightAddressText(
+      getRightAddressStreetValue(rightAddressLookupState.selectedAddress || rightAddressLookupState.selectedStreet)
+    );
+    const selectedHouseValue = normalizeRightAddressText(getRightAddressHouseValue(rightAddressLookupState.selectedAddress));
+    const streetValue = rightAddressMapModeEnabled
+      ? (parsedLookup.street || selectedStreetValue)
+      : normalizeRightAddressText(street?.value || "");
+    const houseValue = rightAddressMapModeEnabled
+      ? (parsedLookup.house || selectedHouseValue)
+      : normalizeRightAddressText(house?.value || "");
     return normalizeRightAddressDraft({
       city: String(city?.dataset?.value || "").trim(),
-      street: String(street?.value || "").trim(),
-      house: String(house?.value || "").trim(),
+      street: streetValue,
+      house: houseValue,
       entrance: String(entrance?.value || "").trim(),
       floor: String(floor?.value || "").trim(),
       apartment: String(apartment?.value || "").trim(),
@@ -8647,12 +8734,22 @@
       selected_object_type: rightAddressMapModeEnabled ? (rightAddressLookupState.selectedObjectType || null) : null,
       resolved_city_source_key: rightAddressMapModeEnabled ? (rightAddressLookupState.resolvedCitySourceKey || null) : null,
       address_context_locality: rightAddressMapModeEnabled ? (rightAddressLookupState.contextLocality || null) : null,
-      address_normalized_display: rightAddressMapModeEnabled ? (normalizeRightAddressText(lookup?.value || "") || null) : null,
+      address_normalized_display: rightAddressMapModeEnabled ? (lookupDisplayValue || null) : null,
       lat: rightAddressMapModeEnabled ? rightAddressLookupState.lat : null,
       lng: rightAddressMapModeEnabled ? rightAddressLookupState.lng : null,
       delivery_zone_id: rightAddressMapModeEnabled ? rightAddressLookupState.deliveryZoneId : null,
       delivery_store_id: rightAddressMapModeEnabled ? rightAddressLookupState.deliveryStoreId : null,
     });
+  }
+
+  function showRightAddressLookupValidationError(message) {
+    const { lookup } = getRightAddressOverlayElements();
+    rightAddressLookupState.items = [];
+    rightAddressLookupState.activeIndex = -1;
+    rightAddressLookupState.status = normalizeRightAddressText(message);
+    rightAddressLookupState.statusMode = "error";
+    renderRightAddressLookupPopover();
+    if (lookup) lookup.focus();
   }
 
   async function openRightAddressOverlay(orderId) {
@@ -8679,6 +8776,7 @@
     fillRightAddressInputs(draft, id);
     renderRightAddressList(id);
     if (lookupWrap) lookupWrap.classList.toggle("hidden", !rightAddressMapModeEnabled);
+    syncRightAddressMapLayout(rightAddressMapModeEnabled);
 
     if (lookup) {
       lookup.oninput = () => {
@@ -8822,6 +8920,18 @@
     };
     saveBtn.onclick = async () => {
       const next = readRightAddressInputs();
+      if (!next.street || !next.house) {
+        if (rightAddressMapModeEnabled) {
+          showRightAddressLookupValidationError("\u0423\u043a\u0430\u0436\u0438\u0442\u0435 \u0443\u043b\u0438\u0446\u0443 \u0438 \u043d\u043e\u043c\u0435\u0440 \u0434\u043e\u043c\u0430");
+          return;
+        }
+        if (!next.street) {
+          alert("Укажите улицу");
+          return;
+        }
+        alert("Укажите дом");
+        return;
+      }
       const editingAddressId = Number(state.rightAddressEditingIdByOrder.get(id) || 0);
       const selectedAddressId = Number(state.rightAddressSelectedIdByOrder.get(id) || 0);
       const clientId = await getClientIdByOrder(id);

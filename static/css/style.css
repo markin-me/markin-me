@@ -7635,6 +7635,10 @@ body.page-cash #clientAddresses .shop-address-actions{
   grid-template-columns:repeat(3,minmax(0,1fr));
 }
 
+.new-order-right-address-body.is-map-mode .new-order-right-form-row.is-address-map-details{
+  grid-template-columns:repeat(3,minmax(0,1fr));
+}
+
 .new-order-right-form-field{
   min-width:0;
   display:grid;
@@ -8647,6 +8651,9 @@ body.page-courier-screen.orders-checkout-mode #ordersCheckoutRightPane .panel-bo
   }
   .new-order-right-form-row.is-payment-three-cols{
     grid-template-columns:1fr;
+  }
+  .new-order-right-address-body.is-map-mode .new-order-right-form-row.is-address-map-details{
+    grid-template-columns:repeat(3,minmax(0,1fr));
   }
 }
 

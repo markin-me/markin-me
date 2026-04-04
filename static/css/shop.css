@@ -15258,9 +15258,16 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
   gap:10px;
 }
 
+.shop-address-form-row--map-details{
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 @media (max-width: 640px){
   .shop-address-form-row--grid{
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .shop-address-form-row--map-details{
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 

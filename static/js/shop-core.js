@@ -224,6 +224,11 @@
   const elAddrFloor = $("#shopAddrFloor");
   const elAddrApartment = $("#shopAddrApartment");
   const elAddrComment = $("#shopAddrComment");
+  const elAddrStreetWrap = elAddrStreet ? elAddrStreet.closest(".shop-address-form-row") : null;
+  const elAddrHouseWrap = elAddrHouse ? elAddrHouse.closest(".shop-address-form-field") : null;
+  const elAddrDetailsRow = elAddrHouseWrap
+    ? elAddrHouseWrap.closest(".shop-address-form-row--grid")
+    : (elAddrEntrance ? elAddrEntrance.closest(".shop-address-form-row--grid") : null);
 
   const elCartTotal =
     $("#shopCartTotal") ||
@@ -381,12 +386,24 @@
     }
   }
 
+  function parseBooleanFlag(value) {
+    if (typeof value === "boolean") return value;
+    if (typeof value === "number") return Number.isFinite(value) && value !== 0;
+    const text = str(value).trim().toLowerCase();
+    if (!text) return false;
+    if (text === "1" || text === "true" || text === "yes" || text === "on") return true;
+    if (text === "0" || text === "false" || text === "no" || text === "off" || text === "null" || text === "undefined") {
+      return false;
+    }
+    return Boolean(value);
+  }
+
   function isAddressMapModeEnabled() {
     const tenant = getTenantFromStorage();
     if (tenant && Object.prototype.hasOwnProperty.call(tenant, "store_address_map_enabled")) {
-      return Boolean(tenant.store_address_map_enabled);
+      return parseBooleanFlag(tenant.store_address_map_enabled);
     }
-    return Boolean(window.__shopOrderConfig && window.__shopOrderConfig.storeAddressMapEnabled);
+    return parseBooleanFlag(window.__shopOrderConfig && window.__shopOrderConfig.storeAddressMapEnabled);
   }
 
   function getPriceRoundingSettings() {
@@ -4803,6 +4820,19 @@
     }
   }
 
+  function syncAddressFormMapLayout(enabled) {
+    const isMapMode = Boolean(enabled);
+    if (elAddrStreetWrap) {
+      elAddrStreetWrap.classList.toggle("hidden", isMapMode);
+    }
+    if (elAddrHouseWrap) {
+      elAddrHouseWrap.classList.toggle("hidden", isMapMode);
+    }
+    if (elAddrDetailsRow) {
+      elAddrDetailsRow.classList.toggle("shop-address-form-row--map-details", isMapMode);
+    }
+  }
+
   function syncAddressLookupResolutionFromInputValue(value) {
     if (shouldPreserveAddressLookupResolution(state._addressFormResolved, value)) {
       state._addressFormResolved = {
@@ -4857,12 +4887,60 @@
     };
   }
 
+  const ADDRESS_LOOKUP_HOUSE_TOKEN_PATTERN = "\\d+[\\dA-Za-zА-Яа-яЁё]*(?:[/-]\\d+[\\dA-Za-zА-Яа-яЁё]*)*";
+
+  function normalizeAddressLookupText(value) {
+    return str(value)
+      .replace(/\s+/g, " ")
+      .replace(/\s*,\s*/g, ", ")
+      .replace(/,+\s*$/g, "")
+      .trim();
+  }
+
+  function extractAddressHouseFromLookupSegment(segment) {
+    const value = normalizeAddressLookupText(segment);
+    if (!value) return "";
+    const directMatch = value.match(new RegExp(`^(?:д(?:ом)?\\.?\\s*)?(${ADDRESS_LOOKUP_HOUSE_TOKEN_PATTERN})$`, "i"));
+    if (directMatch && directMatch[1]) return str(directMatch[1]).trim();
+    const tailMatch = value.match(new RegExp(`(?:^|\\s)(?:д(?:ом)?\\.?\\s*)?(${ADDRESS_LOOKUP_HOUSE_TOKEN_PATTERN})$`, "i"));
+    if (tailMatch && tailMatch[1]) return str(tailMatch[1]).trim();
+    return "";
+  }
+
+  function parseAddressStreetHouseFromLookup(value) {
+    const normalized = normalizeAddressLookupText(value);
+    if (!normalized) return { street: "", house: "" };
+
+    const commaPos = normalized.lastIndexOf(",");
+    if (commaPos >= 0) {
+      const head = normalizeAddressLookupText(normalized.slice(0, commaPos)).replace(/[,\s]+$/g, "");
+      const tail = normalizeAddressLookupText(normalized.slice(commaPos + 1));
+      const houseFromTail = extractAddressHouseFromLookupSegment(tail);
+      if (houseFromTail) {
+        return { street: head, house: houseFromTail };
+      }
+    }
+
+    const fallbackMatch = normalized.match(
+      new RegExp(`^(.*?)(?:,|\\s)+(?:д(?:ом)?\\.?\\s*)?(${ADDRESS_LOOKUP_HOUSE_TOKEN_PATTERN})$`, "i")
+    );
+    if (!fallbackMatch) return { street: "", house: "" };
+    return {
+      street: normalizeAddressLookupText(fallbackMatch[1]).replace(/[,\s]+$/g, ""),
+      house: str(fallbackMatch[2]).trim(),
+    };
+  }
+
   function normalizeAddressPayload(p) {
     const a = p && typeof p === "object" ? p : {};
+    const normalizedDisplay = str(a.address_normalized_display).trim() || buildAddressLookupDisplay(a) || "";
+    const parsedLookupStreetHouse = parseAddressStreetHouseFromLookup(normalizedDisplay);
+    const streetFromInput = str(a.street).trim();
+    const houseFromInput = str(a.house).trim();
     const out = {
       city: str(a.city).trim() || null,
-      street: str(a.street).trim(),
-      house: str(a.house).trim(),
+      street: streetFromInput || parsedLookupStreetHouse.street,
+      house: houseFromInput || parsedLookupStreetHouse.house,
       entrance: str(a.entrance).trim(),
       floor: str(a.floor).trim(),
       apartment: str(a.apartment).trim(),
@@ -4871,7 +4949,7 @@
       selected_object_type: str(a.selected_object_type).trim() || null,
       resolved_city_source_key: str(a.resolved_city_source_key).trim() || null,
       address_context_locality: str(a.address_context_locality || a.context_locality).trim() || null,
-      address_normalized_display: str(a.address_normalized_display).trim() || buildAddressLookupDisplay(a) || null,
+      address_normalized_display: normalizeAddressLookupText(normalizedDisplay) || null,
       lat: normalizeAddressCoordinate(a.lat, "lat"),
       lng: normalizeAddressCoordinate(a.lng, "lng"),
       delivery_zone_id: normalizeAddressId(a.delivery_zone_id),
@@ -6630,6 +6708,7 @@ async function showAddressFormView(prefill, editingId, backMode) {
   if (elAddrLookupWrap) {
     elAddrLookupWrap.classList.toggle("hidden", !addressMapModeEnabled);
   }
+  syncAddressFormMapLayout(addressMapModeEnabled);
   if (elAddrLookup) {
     elAddrLookup.value = addressMapModeEnabled ? buildAddressLookupDisplay(prefill || {}) : "";
   }
@@ -7712,72 +7791,28 @@ async function initAddresses() {
   // ?????????
   if (elAddressSaveBtn) {
     elAddressSaveBtn.addEventListener("click", async () => {
+      const addressMapModeEnabled = isAddressMapModeEnabled();
       const payload = normalizeAddressPayload({
         city: elAddrCity?.dataset?.value || "",
-        address_normalized_display: isAddressMapModeEnabled() ? elAddrLookup?.value : "",
+        address_normalized_display: addressMapModeEnabled ? elAddrLookup?.value : "",
         street: elAddrStreet?.value,
         house: elAddrHouse?.value,
         entrance: elAddrEntrance?.value,
         floor: elAddrFloor?.value,
         apartment: elAddrApartment?.value,
         comment: elAddrComment?.value,
-        ...(isAddressMapModeEnabled() ? (state._addressFormResolved || {}) : {}),
+        ...(addressMapModeEnabled ? (state._addressFormResolved || {}) : {}),
       });
       if (!payload.city) return alert("Укажите город");
       if (!payload.street || !payload.house) {
-        elAddressSaveBtn.disabled = true;
-        elAddressSaveBtn.textContent = "РЎРѕС…СЂР°РЅРµРЅРёРµ...";
-
-        try {
-          const me = await fetchMeSafe();
-          const token = getCustomerToken();
-
-          if (me && token) {
-            if (state.addressEditingId) {
-              await apiJson(`/api/public/me/addresses/${state.addressEditingId}`, {
-                method: "PUT",
-                body: payload,
-              });
-            } else {
-              await apiJson("/api/public/me/addresses", {
-                method: "POST",
-                body: { ...payload, is_default: 1 },
-              });
-            }
-            await refreshAddressState({ force: true });
-
-            if (state._addressFormBackMode === "profile") {
-              await openProfilePanel(null, { forceOpen: true, initialTab: "addresses" });
-            } else if (state._addressFormBackMode === "checkout" && elCheckoutContent) {
-              await openDesktopCheckoutView({ onBack: showCartView });
-            } else {
-              showCartView();
-            }
-          } else {
-            saveAddressDraft(payload);
-            setSelectedAddress({ ...payload, _local: true });
-
-            if (state._addressFormBackMode === "profile") {
-              await openProfilePanel(null, { forceOpen: true, initialTab: "addresses" });
-            } else if (state._addressFormBackMode === "checkout" && elCheckoutContent) {
-              await openDesktopCheckoutView({ onBack: showCartView });
-            } else {
-              showCartView();
-            }
-          }
-        } catch (e) {
-          console.error(e);
-          alert("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕС…СЂР°РЅРёС‚СЊ Р°РґСЂРµСЃ");
-        } finally {
-          elAddressSaveBtn.disabled = false;
-          elAddressSaveBtn.textContent = "РЎРѕС…СЂР°РЅРёС‚СЊ";
+        if (addressMapModeEnabled) {
+          setAddressLookupStatus("\u0423\u043a\u0430\u0436\u0438\u0442\u0435 \u0443\u043b\u0438\u0446\u0443 \u0438 \u043d\u043e\u043c\u0435\u0440 \u0434\u043e\u043c\u0430", "error");
+          elAddrLookup?.focus?.();
+          return;
         }
-        return;
+        if (!payload.street) return alert("Укажите улицу");
+        return alert("Укажите дом");
       }
-
-      if (!payload.street) return alert("Укажите улицу");
-      if (!payload.house) return alert("Укажите дом");
-
       elAddressSaveBtn.disabled = true;
       elAddressSaveBtn.textContent = "Сохранение...";
 

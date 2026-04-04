@@ -18628,12 +18628,12 @@ function openCartSheet() {
           </div>
         </div>
       </div>
-      <div class="shop-address-form-row shop-address-form-row--full">
+      <div class="shop-address-form-row shop-address-form-row--full" data-a="street-wrap">
         <label class="shop-address-form-sr-label" for="shopSheetAddrStreet">Улица</label>
         <input class="control" data-a="street" id="shopSheetAddrStreet" type="text" placeholder="Улица" aria-label="Улица" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" />
       </div>
-      <div class="shop-address-form-row shop-address-form-row--grid">
-        <div class="shop-address-form-field">
+      <div class="shop-address-form-row shop-address-form-row--grid" data-a="details-row">
+        <div class="shop-address-form-field" data-a="house-wrap">
           <label class="shop-address-form-sr-label" for="shopSheetAddrHouse">Дом</label>
           <input class="control" data-a="house" id="shopSheetAddrHouse" type="text" placeholder="Дом" aria-label="Дом" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" />
         </div>
@@ -18814,6 +18814,19 @@ function openCartSheet() {
       return;
     }
     clearSheetAddressFormResolution({ syncLookupFromFields: false });
+  }
+
+  function syncSheetAddressFormMapLayout(enabled) {
+    const isMapMode = Boolean(enabled);
+    if (formGet("street-wrap")) {
+      formGet("street-wrap").classList.toggle("hidden", isMapMode);
+    }
+    if (formGet("house-wrap")) {
+      formGet("house-wrap").classList.toggle("hidden", isMapMode);
+    }
+    if (formGet("details-row")) {
+      formGet("details-row").classList.toggle("shop-address-form-row--map-details", isMapMode);
+    }
   }
 
   async function applySheetAddressLookupSuggestion(item) {
@@ -20258,6 +20271,7 @@ function applySheetAddressTitle(backMode = "cart") {
     if (get("lookup-wrap")) {
       get("lookup-wrap").classList.toggle("hidden", !addressMapModeEnabled);
     }
+    syncSheetAddressFormMapLayout(addressMapModeEnabled);
     if (get("lookup")) {
       get("lookup").value = addressMapModeEnabled ? buildAddressLookupDisplay(prefill || {}) : "";
     }
@@ -21209,65 +21223,28 @@ function renderSheetAddressList() {
   });
 
   saveBtn?.addEventListener("click", async () => {
+    const addressMapModeEnabled = isAddressMapModeEnabled();
     const payload = normalizeAddressPayload({
       city: formGet("city")?.dataset?.value || "",
-      address_normalized_display: isAddressMapModeEnabled() ? formGet("lookup")?.value : "",
+      address_normalized_display: addressMapModeEnabled ? formGet("lookup")?.value : "",
       street: formGet("street")?.value,
       house: formGet("house")?.value,
       entrance: formGet("entrance")?.value,
       floor: formGet("floor")?.value,
       apartment: formGet("apartment")?.value,
       comment: formGet("comment")?.value,
-      ...(isAddressMapModeEnabled() ? (sheetAddressFormResolved || {}) : {}),
+      ...(addressMapModeEnabled ? (sheetAddressFormResolved || {}) : {}),
     });
     if (!payload.city) return alert("Укажите город");
     if (!payload.street || !payload.house) {
-      saveBtn.disabled = true;
-      saveBtn.textContent = "РЎРѕС…СЂР°РЅСЏРµРјвЂ¦";
-
-      try {
-        const me = await fetchMeSafe();
-        const token = getCustomerToken();
-
-        if (me && token) {
-          if (sheetEditingId) {
-            await apiJson(`/api/public/me/addresses/${sheetEditingId}`, { method: "PUT", body: payload });
-          } else {
-            await apiJson("/api/public/me/addresses", { method: "POST", body: { ...payload, is_default: 1 } });
-          }
-          await refreshAddressState({ force: true });
-        } else {
-          saveAddressDraft(payload);
-          setSelectedAddress({ ...payload, _local: true });
-        }
-
-        syncSelectedAddressToCheckoutDraft();
-        updateAddressChip();
-        const backMode = openCartSheetCtx?.addressBackMode || "cart";
-        if (backMode === "profile") {
-          returnToProfileFromSheet();
-        } else if (backMode === "desktop-panel") {
-          closeAddressDesktopPanelModal();
-        } else if (backMode === "checkout") {
-          showSheetCheckout();
-        } else if (backMode === "header") {
-          showSheetAddressList("header");
-        } else {
-          showSheetCart();
-        }
-      } catch (e) {
-        console.error(e);
-        alert("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕС…СЂР°РЅРёС‚СЊ Р°РґСЂРµСЃ");
-      } finally {
-        saveBtn.disabled = false;
-        saveBtn.textContent = "РЎРѕС…СЂР°РЅРёС‚СЊ";
+      if (addressMapModeEnabled) {
+        setSheetAddressLookupStatus("\u0423\u043a\u0430\u0436\u0438\u0442\u0435 \u0443\u043b\u0438\u0446\u0443 \u0438 \u043d\u043e\u043c\u0435\u0440 \u0434\u043e\u043c\u0430", "error");
+        formGet("lookup")?.focus?.();
+        return;
       }
-      return;
+      if (!payload.street) return alert("Укажите улицу");
+      return alert("Укажите дом");
     }
-
-    if (!payload.street) return alert("Укажите улицу");
-    if (!payload.house) return alert("Укажите дом");
-
     saveBtn.disabled = true;
     saveBtn.textContent = "Сохраняем…";
 
