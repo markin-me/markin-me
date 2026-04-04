@@ -9682,8 +9682,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
         ? previewRequest
         : buildCheckoutBenefitsCurrentPreviewRequest()
     );
-    const hasItems = Array.isArray(effectivePreviewRequest?.items) && effectivePreviewRequest.items.length > 0;
-    if (!token || !hasItems) {
+    if (!token) {
       invalidateBenefitsStore({ orderChanged: true, detailsChanged: false });
       return getBenefitsStoreSnapshot(effectivePreviewRequest);
     }
