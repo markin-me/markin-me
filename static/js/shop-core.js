@@ -5665,26 +5665,21 @@
     const hasList = token ? (state.addresses || []).length > 0 : !!loadAddressDraft();
     const isPickupMode = window._deliveryMode === "pickup";
     const prefill = loadAddressDraft() || state.selectedAddress || null;
-
-    if (isSheetTrigger) {
-      if (!openCartSheetCtx) return;
-      if (isPickupMode || hasList || getSelectedAddressLine()) {
-        if (typeof openCartSheetCtx.showSheetAddressList === "function") {
-          openCartSheetCtx.showSheetAddressList("cart");
-        }
-        return;
-      }
-      if (typeof openCartSheetCtx.showSheetAddressForm === "function") {
-        await openCartSheetCtx.showSheetAddressForm(prefill, null, "cart");
-      }
-      return;
+    if (!isSheetTrigger) {
+      openCartSheet();
     }
+    if (!openCartSheetCtx) return;
 
+    const backMode = isSheetTrigger ? "cart" : "desktop-panel";
     if (isPickupMode || hasList || getSelectedAddressLine()) {
-      showAddressListView("cart", { preferredMode: isPickupMode ? "pickup" : "delivery" });
+      if (typeof openCartSheetCtx.showSheetAddressList === "function") {
+        openCartSheetCtx.showSheetAddressList(backMode);
+      }
       return;
     }
-    showAddressFormView(prefill, null, "cart");
+    if (typeof openCartSheetCtx.showSheetAddressForm === "function") {
+      await openCartSheetCtx.showSheetAddressForm(prefill, null, backMode);
+    }
   }
 
   async function setCartModeHeaderMode(mode) {
@@ -6381,6 +6376,14 @@ function setSheetHeaderMode(
       hasAddressEditor: true,
       isSheet: false,
       actions: getDesktopCheckoutActions(),
+      onEditAddress: async () => {
+        window._deliveryMode = "delivery";
+        await openAddressEditorFromCheckout({ preferredMode: "delivery", backMode: "desktop-panel" });
+      },
+      onEditPickup: async () => {
+        window._deliveryMode = "pickup";
+        await openAddressEditorFromCheckout({ preferredMode: "pickup", backMode: "desktop-panel" });
+      },
     });
   }
 
@@ -7489,35 +7492,60 @@ function showProductView() {
     });
   }
 
-  async function openAddressEditorFromCheckout() {
+  async function openAddressEditorFromCheckout({ preferredMode, backMode = "desktop-panel" } = {}) {
     await refreshAddressState();
     const token = getCustomerToken();
     const hasList = token ? (state.addresses || []).length : !!loadAddressDraft();
     const prefill = state.selectedAddress && !state.selectedAddress._local
       ? state.selectedAddress
       : (loadAddressDraft() || state.selectedAddress);
-    const isPickupMode = window._deliveryMode === "pickup";
+    const currentPickupMode = window._deliveryMode === "pickup";
+    const resolvedMode =
+      preferredMode === "pickup"
+        ? "pickup"
+        : preferredMode === "delivery"
+          ? "delivery"
+          : (currentPickupMode ? "pickup" : "delivery");
 
-    if (isPickupMode || hasList) {
-      showAddressListView("checkout", { preferredMode: isPickupMode ? "pickup" : "delivery" });
+    window._deliveryMode = resolvedMode;
+    openCartSheet();
+    if (!openCartSheetCtx) return;
+
+    if (resolvedMode === "pickup" || hasList || getSelectedAddressLine()) {
+      if (typeof openCartSheetCtx.showSheetAddressList === "function") {
+        openCartSheetCtx.showSheetAddressList(backMode || "desktop-panel");
+      }
+      return;
     }
-    else showAddressFormView(prefill || null, null, "checkout");
-
-    try { document.querySelector("#shopCartPanel")?.scrollIntoView({ behavior: "smooth", block: "start" }); } catch {}
+    if (typeof openCartSheetCtx.showSheetAddressForm === "function") {
+      await openCartSheetCtx.showSheetAddressForm(prefill || null, null, backMode || "desktop-panel");
+    }
   }
 
 async function initAddresses() {
-  if (!elAddressContent) return;
-
   async function openAddressFlow(fromMode = "cart") {
     await refreshAddressState();
     const token = getCustomerToken();
     const hasList = token ? (state.addresses || []).length > 0 : !!loadAddressDraft();
     const isPickupMode = window._deliveryMode === "pickup";
+    const resolvedBackMode =
+      fromMode === "checkout"
+        ? "checkout"
+        : fromMode === "header"
+          ? "header"
+          : fromMode === "desktop-panel"
+            ? "desktop-panel"
+            : "cart";
+    openCartSheet();
+    if (!openCartSheetCtx) return;
     if (isPickupMode || hasList || getSelectedAddressLine()) {
-      showAddressListView(fromMode, { preferredMode: isPickupMode ? "pickup" : "delivery" });
+      if (typeof openCartSheetCtx.showSheetAddressList === "function") {
+        openCartSheetCtx.showSheetAddressList(resolvedBackMode);
+      }
     }
-    else showAddressFormView(loadAddressDraft(), null, fromMode);
+    else if (typeof openCartSheetCtx.showSheetAddressForm === "function") {
+      await openCartSheetCtx.showSheetAddressForm(loadAddressDraft(), null, resolvedBackMode);
+    }
   }
 
   // chip (???? ?? ????) ? ????? ???????? ??? fallback
