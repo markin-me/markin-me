@@ -299,6 +299,7 @@
 
   function buildReadonlyOrderDisplayPricingList(items, opts) {
     var normalizedItems = Array.isArray(items) ? items : [];
+    var preserveStoredLineTotals = Boolean(opts && (opts.preserveStoredLineTotals || opts.useStoredLineTotalsOnly));
     var prepared = normalizedItems.map(function (item) {
       var pricing = getOrderItemDisplayPricing(item);
       return {
@@ -317,7 +318,8 @@
         ? opts.discountAmount
         : (opts && opts.order ? opts.order.discount_amount : 0))
     ));
-    var extraOrderDiscount = roundMoney(Math.max(0, totalDiscount - itemLevelDiscountTotal));
+    var calculatedExtraOrderDiscount = roundMoney(Math.max(0, totalDiscount - itemLevelDiscountTotal));
+    var extraOrderDiscount = preserveStoredLineTotals ? 0 : calculatedExtraOrderDiscount;
     var allocatedByIndex = distributeDisplayDiscountAcrossLines(prepared, extraOrderDiscount);
 
     return prepared.map(function (entry, index) {

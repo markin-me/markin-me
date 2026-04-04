@@ -7583,6 +7583,7 @@ function renderSharedReadonlyOrderItemsHtml(items, order = null) {
         order,
         sortAutoAdd: true,
         placeholderImage: "/static/img/placeholder.png",
+        preserveStoredLineTotals: true,
         surface: "shop",
       }) || "");
     } catch (e) {
@@ -11734,6 +11735,69 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     return roundPrice(amount);
   }
 
+  function applyLocalOrderDiscountAcrossItemsNoRemainder(items, discountAmount) {
+    const workingItems = (Array.isArray(items) ? items : [])
+      .map((item) => ({ ...item, discount: item?.discount ? { ...item.discount } : item?.discount }));
+    const eligible = [];
+    let baseItemsTotal = 0;
+
+    workingItems.forEach((item, index) => {
+      const lineTotal = roundPrice(Math.max(0, Number(item?.line_total || 0)));
+      item.line_total = lineTotal;
+      if (!(lineTotal > 0)) return;
+      eligible.push({ index, lineTotal });
+      baseItemsTotal = roundPrice(baseItemsTotal + lineTotal);
+    });
+
+    if (!(baseItemsTotal > 0) || !eligible.length) {
+      return {
+        items: workingItems,
+        discountAmount: 0,
+        itemsTotalAfterDiscount: roundPrice(baseItemsTotal),
+      };
+    }
+
+    const requestedDiscount = roundPrice(Math.max(0, Number(discountAmount || 0)));
+    const targetDiscount = Math.min(requestedDiscount, baseItemsTotal);
+    if (!(targetDiscount > 0)) {
+      return {
+        items: workingItems,
+        discountAmount: 0,
+        itemsTotalAfterDiscount: roundPrice(baseItemsTotal),
+      };
+    }
+
+    let appliedDiscount = 0;
+    let remainingDiscount = targetDiscount;
+
+    eligible.forEach((entry) => {
+      const lineTotal = Number(entry.lineTotal || 0);
+      if (!(lineTotal > 0) || !(remainingDiscount > 0)) return;
+      const proportionalRaw = targetDiscount * (lineTotal / baseItemsTotal);
+      const roundedShare = roundPrice(proportionalRaw);
+      const safeShare = Math.min(
+        lineTotal,
+        Math.max(0, roundedShare),
+        remainingDiscount
+      );
+      if (!(safeShare > 0)) return;
+      const nextLineTotal = roundPrice(Math.max(0, lineTotal - safeShare));
+      workingItems[entry.index].line_total = nextLineTotal;
+      appliedDiscount = roundPrice(appliedDiscount + safeShare);
+      remainingDiscount = roundPrice(Math.max(0, remainingDiscount - safeShare));
+    });
+
+    const itemsTotalAfterDiscount = roundPrice(
+      workingItems.reduce((sum, item) => sum + Number(item?.line_total || 0), 0)
+    );
+
+    return {
+      items: workingItems,
+      discountAmount: roundPrice(appliedDiscount),
+      itemsTotalAfterDiscount,
+    };
+  }
+
   function buildLocalCheckoutBenefitsDisabledReason(errorCode) {
     return typeof getCheckoutBenefitsActionErrorMessage === "function"
       ? getCheckoutBenefitsActionErrorMessage({ message: str(errorCode || "").trim().toUpperCase() })
@@ -11816,13 +11880,24 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
           itemsTotalAfterDiscount: baseItemsTotal,
         };
       }
+      const appliedOrderDiscount = applyLocalOrderDiscountAcrossItemsNoRemainder(items, orderDiscountAmount);
+      if (!(Number(appliedOrderDiscount?.discountAmount || 0) > 0)) {
+        return {
+          isApplicable: false,
+          errorCode: "DISCOUNT_NOT_APPLICABLE",
+          disabledReason: buildLocalCheckoutBenefitsDisabledReason("DISCOUNT_NOT_APPLICABLE"),
+          discountAmount: 0,
+          items,
+          itemsTotalAfterDiscount: baseItemsTotal,
+        };
+      }
       return {
         isApplicable: true,
         errorCode: "",
         disabledReason: "",
-        discountAmount: orderDiscountAmount,
-        items,
-        itemsTotalAfterDiscount: roundPrice(Math.max(0, baseItemsTotal - orderDiscountAmount)),
+        discountAmount: roundPrice(Number(appliedOrderDiscount.discountAmount || 0)),
+        items: Array.isArray(appliedOrderDiscount.items) ? appliedOrderDiscount.items : items,
+        itemsTotalAfterDiscount: roundPrice(Number(appliedOrderDiscount.itemsTotalAfterDiscount || baseItemsTotal)),
       };
     }
 
@@ -11909,13 +11984,17 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
         if (!(promoDiscountAmount > 0)) {
           return buildLocalCheckoutBenefitsPromoNotApplicableOutcome(items, baseItemsTotal);
         }
+        const appliedPromoDiscount = applyLocalOrderDiscountAcrossItemsNoRemainder(items, promoDiscountAmount);
+        if (!(Number(appliedPromoDiscount?.discountAmount || 0) > 0)) {
+          return buildLocalCheckoutBenefitsPromoNotApplicableOutcome(items, baseItemsTotal);
+        }
         return {
           isApplicable: true,
           disabledReasonCode: "",
           disabledReason: "",
-          discountAmount: promoDiscountAmount,
-          items,
-          itemsTotalAfterPromo: roundPrice(Math.max(0, baseItemsTotal - promoDiscountAmount)),
+          discountAmount: roundPrice(Number(appliedPromoDiscount.discountAmount || 0)),
+          items: Array.isArray(appliedPromoDiscount.items) ? appliedPromoDiscount.items : items,
+          itemsTotalAfterPromo: roundPrice(Number(appliedPromoDiscount.itemsTotalAfterDiscount || baseItemsTotal)),
         };
       }
       let promoItemsDiscount = 0;
@@ -12579,50 +12658,31 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     const eligible = states
       .map((entry, index) => ({
         index,
-        amountCents: Math.max(0, Math.round(Number(entry?.baseTotal || 0) * 100)),
+        baseTotal: roundPrice(Math.max(0, Number(entry?.baseTotal || 0))),
       }))
-      .filter((entry) => entry.amountCents > 0);
+      .filter((entry) => entry.baseTotal > 0);
 
     const discountsByIndex = new Map();
     if (!eligible.length) return discountsByIndex;
 
-    const totalDiscountCents = Math.max(0, Math.round(roundPrice(Number(extraOrderDiscount || 0)) * 100));
-    if (!(totalDiscountCents > 0)) return discountsByIndex;
+    const totalDiscount = roundPrice(Math.max(0, Number(extraOrderDiscount || 0)));
+    if (!(totalDiscount > 0)) return discountsByIndex;
 
-    const baseTotalCents = eligible.reduce((sum, entry) => sum + entry.amountCents, 0);
-    if (!(baseTotalCents > 0)) return discountsByIndex;
+    const baseTotal = roundPrice(
+      eligible.reduce((sum, entry) => sum + Number(entry.baseTotal || 0), 0)
+    );
+    if (!(baseTotal > 0)) return discountsByIndex;
 
-    const cappedDiscountCents = Math.min(totalDiscountCents, baseTotalCents);
-    const prepared = eligible.map((entry) => {
-      const exact = cappedDiscountCents * (entry.amountCents / baseTotalCents);
-      const floorValue = Math.min(entry.amountCents, Math.floor(exact));
-      return {
-        ...entry,
-        exact,
-        floorValue,
-        fraction: exact - floorValue,
-      };
-    });
-
-    let distributedCents = prepared.reduce((sum, entry) => sum + entry.floorValue, 0);
-    let remainderCents = Math.max(0, cappedDiscountCents - distributedCents);
-
-    prepared
-      .slice()
-      .sort((left, right) => (
-        right.fraction - left.fraction
-        || right.amountCents - left.amountCents
-        || left.index - right.index
-      ))
-      .forEach((entry) => {
-        if (!(remainderCents > 0)) return;
-        if (entry.floorValue >= entry.amountCents) return;
-        entry.floorValue += 1;
-        remainderCents -= 1;
-      });
-
-    prepared.forEach((entry) => {
-      discountsByIndex.set(entry.index, roundPrice(entry.floorValue / 100));
+    const cappedDiscount = Math.min(totalDiscount, baseTotal);
+    eligible.forEach((entry) => {
+      const proportionalRaw = cappedDiscount * (Number(entry.baseTotal || 0) / baseTotal);
+      const roundedShare = roundPrice(proportionalRaw);
+      const safeShare = Math.min(
+        Number(entry.baseTotal || 0),
+        Math.max(0, roundedShare)
+      );
+      if (!(safeShare > 0)) return;
+      discountsByIndex.set(entry.index, roundPrice(safeShare));
     });
     return discountsByIndex;
   }
@@ -27930,6 +27990,9 @@ function setBottomNavActive(tab) {
   let orderConfigPromise = null;
 
   async function getOrderConfig() {
+    if (!orderConfigCache && typeof window.getShopOrderConfigSnapshot === "function") {
+      orderConfigCache = window.getShopOrderConfigSnapshot();
+    }
     if (!orderConfigCache && window.__shopOrderConfig && typeof window.__shopOrderConfig === "object") {
       orderConfigCache = window.__shopOrderConfig;
     }
@@ -27937,8 +28000,13 @@ function setBottomNavActive(tab) {
     if (orderConfigPromise) return orderConfigPromise;
     orderConfigPromise = apiJson("/api/public/order-config")
       .then((json) => {
-        orderConfigCache = json.data || null;
-        window.__shopOrderConfig = orderConfigCache;
+        const nextConfig = json.data || null;
+        if (typeof window.setShopOrderConfigSnapshot === "function") {
+          orderConfigCache = window.setShopOrderConfigSnapshot(nextConfig, { persistRounding: true });
+        } else {
+          orderConfigCache = nextConfig;
+          window.__shopOrderConfig = orderConfigCache;
+        }
         return orderConfigCache;
       })
       .finally(() => {
@@ -33485,49 +33553,138 @@ function setBottomNavActive(tab) {
       actions.submitBtn.onclick = async () => {
         const resolvedItems = cartItemsResolved();
         const totals = computeCartTotals(resolvedItems);
+        const currentDraft = loadCheckoutDraft();
+        const methodCode = methodSelect.getValue() || methodDefault || "takeaway";
+        const normalizedPromoCode = normalizeCheckoutBenefitsPromoInputValue(promo.value, { trim: true });
+        const normalizedSelectedDiscountId = normalizeCheckoutSelectedDiscountId(selectedDiscount.value);
+        const normalizedSelectedPromoRewardId = normalizeCheckoutSelectedDiscountId(currentDraft?.selected_promo_reward_id);
+        const normalizedSelectedDiscountSource = normalizedSelectedDiscountId
+          ? (normalizeCheckoutDiscountSource(currentDraft?.selected_discount_source) || "discount")
+          : null;
+        const normalizedSelectedPromoSource = (normalizedPromoCode || normalizedSelectedPromoRewardId)
+          ? (normalizeCheckoutPromoSource(currentDraft?.selected_promo_source) || "promo_code")
+          : null;
+        const pricingSnapshotState = buildCartPricingSnapshot();
+        const lineStatesByKey = new Map(
+          (Array.isArray(pricingSnapshotState?.lineStates) ? pricingSnapshotState.lineStates : [])
+            .map((entry) => [str(entry?.key || "").trim(), entry])
+            .filter(([key]) => key)
+        );
+        const previewBundle = getCartPricingCachedPreviewBundle(resolvedItems, methodCode, currentDraft);
+        const previewSummary = previewBundle?.previewSummary && typeof previewBundle.previewSummary === "object"
+          ? previewBundle.previewSummary
+          : null;
+        const snapshotSubtotal = roundPrice(Number(pricingSnapshotState?.subtotalBeforeDiscount || 0));
+        const snapshotItemsTotal = roundPrice(Number(
+          pricingSnapshotState?.itemsTotal
+          ?? computeCartTotals(resolvedItems).total
+          ?? 0
+        ));
+        const snapshotDeliveryCost = methodCode === "delivery"
+          ? roundPrice(Number(pricingSnapshotState?.deliveryCost || 0))
+          : 0;
+        const snapshotDiscountTotal = roundPrice(
+          Number(pricingSnapshotState?.discountAmount || Math.max(0, snapshotSubtotal - snapshotItemsTotal))
+        );
+        const snapshotTotal = roundPrice(
+          Number(pricingSnapshotState?.total || (snapshotItemsTotal + snapshotDeliveryCost))
+        );
+        const snapshotDiscountBreakdown = Array.isArray(previewSummary?.discount_breakdown)
+          ? previewSummary.discount_breakdown
+              .map((entry, index) => {
+                const amount = roundPrice(Number(entry?.amount || 0));
+                if (!(amount > 0)) return null;
+                const sourceKind = normalizeOrderDiscountBreakdownSourceKind(entry);
+                return {
+                  key: str(entry?.key || entry?.title || `discount_${index}`).trim() || null,
+                  title: str(entry?.title || "Скидка").trim() || "Скидка",
+                  amount,
+                  source_kind: sourceKind,
+                  promo_code: sourceKind === "promo_code"
+                    ? (str(entry?.promoCode || entry?.promo_code || "").trim().toUpperCase() || normalizedPromoCode || null)
+                    : null,
+                };
+              })
+              .filter(Boolean)
+          : [];
       const payload = {
         customer_name: null,
         customer_phone: str(phone.value).trim(),
-        promo_code: str(promo.value).trim() || null,
-        selected_discount_id: selectedDiscount.value,
-        method_code: methodSelect.getValue() || methodDefault || "takeaway",
+        promo_code: normalizedPromoCode || null,
+        selected_discount_id: normalizedSelectedDiscountId,
+        selected_discount_source: normalizedSelectedDiscountSource,
+        selected_promo_source: normalizedSelectedPromoSource,
+        selected_promo_reward_id: normalizedSelectedPromoRewardId,
+        benefits_preview_mode: null,
+        use_client_pricing_snapshot: true,
+        pricing_snapshot: {
+          version: 1,
+          source: "shop_checkout",
+          context: {
+            method_code: methodCode,
+            generated_at: Date.now(),
+          },
+          selections: {
+            selected_discount_id: normalizedSelectedDiscountId,
+            selected_discount_source: normalizedSelectedDiscountSource,
+            selected_promo_source: normalizedSelectedPromoSource,
+            selected_promo_reward_id: normalizedSelectedPromoRewardId,
+            promo_code: normalizedPromoCode || null,
+          },
+          summary: {
+            subtotal: snapshotSubtotal,
+            items_total: snapshotItemsTotal,
+            delivery: snapshotDeliveryCost,
+            discount_total: snapshotDiscountTotal,
+            total: snapshotTotal,
+            discount_breakdown: snapshotDiscountBreakdown,
+          },
+        },
+        method_code: methodCode,
         delivery_address: str(address.value).trim() || null,
-        delivery_address_id: (methodSelect.getValue() || methodDefault || "takeaway") === "delivery" && state.selectedAddress?.id ? Number(state.selectedAddress.id) : null,
-        delivery_address_city: (methodSelect.getValue() || methodDefault || "takeaway") === "delivery" ? str(state.selectedAddress?.city || "").trim() || null : null,
-        delivery_address_street: (methodSelect.getValue() || methodDefault || "takeaway") === "delivery" ? str(state.selectedAddress?.street || "").trim() || null : null,
-        delivery_address_house: (methodSelect.getValue() || methodDefault || "takeaway") === "delivery" ? str(state.selectedAddress?.house || "").trim() || null : null,
-        delivery_address_entrance: (methodSelect.getValue() || methodDefault || "takeaway") === "delivery" ? str(state.selectedAddress?.entrance || "").trim() || null : null,
-        delivery_address_floor: (methodSelect.getValue() || methodDefault || "takeaway") === "delivery" ? str(state.selectedAddress?.floor || "").trim() || null : null,
-        delivery_address_apartment: (methodSelect.getValue() || methodDefault || "takeaway") === "delivery" ? str(state.selectedAddress?.apartment || "").trim() || null : null,
-        delivery_address_ref: (methodSelect.getValue() || methodDefault || "takeaway") === "delivery" ? str(state.selectedAddress?.address_ref || "").trim() || null : null,
-        delivery_selected_object_type: (methodSelect.getValue() || methodDefault || "takeaway") === "delivery" ? str(state.selectedAddress?.selected_object_type || "").trim() || null : null,
-        delivery_resolved_city_source_key: (methodSelect.getValue() || methodDefault || "takeaway") === "delivery" ? str(state.selectedAddress?.resolved_city_source_key || "").trim() || null : null,
-        delivery_address_context_locality: (methodSelect.getValue() || methodDefault || "takeaway") === "delivery" ? str(state.selectedAddress?.address_context_locality || "").trim() || null : null,
-        delivery_address_normalized_display: (methodSelect.getValue() || methodDefault || "takeaway") === "delivery" ? str(state.selectedAddress?.address_normalized_display || "").trim() || null : null,
-        delivery_address_lat: (methodSelect.getValue() || methodDefault || "takeaway") === "delivery" ? state.selectedAddress?.lat ?? null : null,
-        delivery_address_lng: (methodSelect.getValue() || methodDefault || "takeaway") === "delivery" ? state.selectedAddress?.lng ?? null : null,
-        delivery_zone_id: (methodSelect.getValue() || methodDefault || "takeaway") === "delivery" ? state.selectedAddress?.delivery_zone_id ?? null : null,
-        delivery_store_id: (methodSelect.getValue() || methodDefault || "takeaway") === "delivery" ? state.selectedAddress?.delivery_store_id ?? null : null,
+        delivery_address_id: methodCode === "delivery" && state.selectedAddress?.id ? Number(state.selectedAddress.id) : null,
+        delivery_address_city: methodCode === "delivery" ? str(state.selectedAddress?.city || "").trim() || null : null,
+        delivery_address_street: methodCode === "delivery" ? str(state.selectedAddress?.street || "").trim() || null : null,
+        delivery_address_house: methodCode === "delivery" ? str(state.selectedAddress?.house || "").trim() || null : null,
+        delivery_address_entrance: methodCode === "delivery" ? str(state.selectedAddress?.entrance || "").trim() || null : null,
+        delivery_address_floor: methodCode === "delivery" ? str(state.selectedAddress?.floor || "").trim() || null : null,
+        delivery_address_apartment: methodCode === "delivery" ? str(state.selectedAddress?.apartment || "").trim() || null : null,
+        delivery_address_ref: methodCode === "delivery" ? str(state.selectedAddress?.address_ref || "").trim() || null : null,
+        delivery_selected_object_type: methodCode === "delivery" ? str(state.selectedAddress?.selected_object_type || "").trim() || null : null,
+        delivery_resolved_city_source_key: methodCode === "delivery" ? str(state.selectedAddress?.resolved_city_source_key || "").trim() || null : null,
+        delivery_address_context_locality: methodCode === "delivery" ? str(state.selectedAddress?.address_context_locality || "").trim() || null : null,
+        delivery_address_normalized_display: methodCode === "delivery" ? str(state.selectedAddress?.address_normalized_display || "").trim() || null : null,
+        delivery_address_lat: methodCode === "delivery" ? state.selectedAddress?.lat ?? null : null,
+        delivery_address_lng: methodCode === "delivery" ? state.selectedAddress?.lng ?? null : null,
+        delivery_zone_id: methodCode === "delivery" ? state.selectedAddress?.delivery_zone_id ?? null : null,
+        delivery_store_id: methodCode === "delivery" ? state.selectedAddress?.delivery_store_id ?? null : null,
         pickup_store_id: selectedPickupStoreId || null,
         comment: getCommentValue() || null,
-        address_comment: (draft && draft.address_comment) ? str(draft.address_comment).trim() || null : null,
+        address_comment: (currentDraft && currentDraft.address_comment) ? str(currentDraft.address_comment).trim() || null : null,
         time_option_code: timeSelect.getValue() || timeDefault || "asap",
         scheduled_at: null,
         payment_code: paySelect.getValue() || null,
         cutlery_qty: 0,
         change_from: getChangeFromValue(),
-        items: resolvedItems.map(x => {
+        items: resolvedItems.map((x) => {
+          const lineState = lineStatesByKey.get(str(x?.key || "").trim()) || null;
           if (x.type === "combo") {
             const pricing = computeItemPricing(x, totals);
             // Старая цена до скидки комбо
-            const comboOldLineTotal = (Number(x.unit_price_before_discount) || 0) * (x.qty || 1);
+            const comboLineTotal = lineState
+              ? roundPrice(Number(lineState.currentTotal || 0))
+              : roundPrice(Number(pricing.lineTotal || 0));
+            const comboOldLineTotalRaw = lineState
+              ? roundPrice(Number(lineState.originalTotal || 0))
+              : roundPrice((Number(x.unit_price_before_discount) || 0) * (x.qty || 1));
+            const comboOldLineTotal = comboOldLineTotalRaw > comboLineTotal ? comboOldLineTotalRaw : 0;
             return {
               type: "combo",
               combo_id: x.combo_id,
               combo_title: x.combo_title || "Комбо",
               qty: x.qty,
-              line_total: pricing.lineTotal,
-              old_line_total: comboOldLineTotal > pricing.lineTotal ? comboOldLineTotal : 0,
+              line_total: comboLineTotal,
+              old_line_total: comboOldLineTotal,
               selections: Array.isArray(x.selections)
                 ? x.selections.map((s) => ({
                     product_id: s.product_id,
@@ -33546,7 +33703,13 @@ function setBottomNavActive(tab) {
           }
           // Рассчитываем итоговую цену товара (базовая + опции + разница ингредиентов + варианты)
           const pricing = computeItemPricing(x, totals);
-          const lineTotal = pricing.lineTotal;
+          const lineTotal = lineState
+            ? roundPrice(Number(lineState.currentTotal || 0))
+            : roundPrice(Number(pricing.lineTotal || 0));
+          const originalLineTotal = lineState
+            ? roundPrice(Number(lineState.originalTotal || 0))
+            : roundPrice(Number(pricing.unitPrice || 0) * Number(pricing.paidQty || 0));
+          const safeOriginalLineTotal = originalLineTotal > lineTotal ? originalLineTotal : lineTotal;
 
           // Формируем информацию о варианте для сохранения
           const variant = (x.variant_group_id && x.variant_label) ? {
@@ -33571,7 +33734,7 @@ function setBottomNavActive(tab) {
             is_gift_reward: Number(x.is_gift_reward || 0) === 1 ? 1 : 0,
             gift_reward_id: Number(x.gift_reward_id || 0) > 0 ? Number(x.gift_reward_id) : null,
             line_total: lineTotal, // Отправляем уже посчитанную итоговую цену
-            original_line_total: roundPrice(pricing.unitPrice * pricing.paidQty), // Цена до скидки
+            original_line_total: safeOriginalLineTotal, // Цена до скидки
           };
         }),
       };
@@ -33600,9 +33763,10 @@ function setBottomNavActive(tab) {
       if (!requireClientData && !str(payload.customer_phone).trim()) {
         payload.customer_phone = null;
       }
+      const effectiveItemsTotalForValidation = roundPrice(Number(snapshotItemsTotal || 0));
 
-      if (payload.method_code === "delivery" && deliveryRules.minOrder > 0 && orderTotal < deliveryRules.minOrder) {
-        const diff = deliveryRules.minOrder - orderTotal;
+      if (payload.method_code === "delivery" && deliveryRules.minOrder > 0 && effectiveItemsTotalForValidation < deliveryRules.minOrder) {
+        const diff = deliveryRules.minOrder - effectiveItemsTotalForValidation;
         alert(`Минимальная сумма заказа ${money(deliveryRules.minOrder)}. Добавьте ещё ${money(diff)}.`);
         return;
       }
@@ -33645,13 +33809,16 @@ function setBottomNavActive(tab) {
       saveCheckoutDraft({
         promo_code: payload.promo_code,
         selected_discount_id: payload.selected_discount_id,
+        selected_discount_source: payload.selected_discount_source,
+        selected_promo_source: payload.selected_promo_source,
+        selected_promo_reward_id: payload.selected_promo_reward_id,
         customer_name: null,
         customer_phone: payload.customer_phone,
         method_code: payload.method_code,
         delivery_address: payload.delivery_address,
         pickup_store_id: payload.pickup_store_id,
         comment: payload.comment,
-        address_comment: payload.address_comment ?? draft?.address_comment ?? null,
+        address_comment: payload.address_comment ?? currentDraft?.address_comment ?? null,
         time_option_code: payload.time_option_code,
         scheduled_at: timeInput.value || "",
         scheduled_date: getDateString(selectedDate),
@@ -33661,7 +33828,7 @@ function setBottomNavActive(tab) {
 
       setCheckoutSubmitting(true);
 
-      const orderTotalWithDelivery = orderTotal + getDeliveryCostForTotal(orderTotal);
+      const orderTotalWithDelivery = roundPrice(Number(snapshotTotal || 0));
       const getCheckoutOrderErrorMessage = (err) => {
         switch (err?.message) {
           case "DISCOUNT_INVALID":

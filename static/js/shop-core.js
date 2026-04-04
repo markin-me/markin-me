@@ -365,6 +365,8 @@
   const CATALOG_SNAPSHOT_VERSION = 1;
   const CATALOG_SNAPSHOT_MAX_AGE_MS = 6 * 60 * 60 * 1000;
   const CATALOG_SNAPSHOT_KEY = `shop_catalog_snapshot_v${CATALOG_SNAPSHOT_VERSION}_t${tenantId}_s${getActiveStoreId()}`;
+  const ORDER_ROUNDING_CACHE_VERSION = 1;
+  const ORDER_ROUNDING_CACHE_KEY = `shop_order_rounding_cache_v${ORDER_ROUNDING_CACHE_VERSION}_t${tenantId}`;
 
   const CUSTOMER_TOKEN_KEY = `shop_customer_token_t${tenantId}`;
   const CUSTOMER_CACHE_KEY = `shop_customer_cache_t${tenantId}`;
@@ -385,6 +387,101 @@
       return null;
     }
   }
+
+  const PRICE_ROUNDING_DEFAULT = { mode: "none", precision: 2 };
+  let priceRoundingRuntime = { ...PRICE_ROUNDING_DEFAULT };
+
+  function normalizePriceRoundingSettings(source) {
+    const modeRaw = source && typeof source === "object"
+      ? (typeof source.price_rounding_mode === "string"
+        ? source.price_rounding_mode
+        : (typeof source.priceRoundingMode === "string" ? source.priceRoundingMode : source.mode))
+      : "none";
+    const mode = typeof modeRaw === "string" ? modeRaw : "none";
+    const allowed = new Set(["none", "down", "up", "nearest"]);
+    const safeMode = allowed.has(mode) ? mode : "none";
+    const precisionValue = source && typeof source === "object"
+      ? (Object.prototype.hasOwnProperty.call(source, "price_rounding_precision")
+        ? source.price_rounding_precision
+        : (Object.prototype.hasOwnProperty.call(source, "priceRoundingPrecision")
+          ? source.priceRoundingPrecision
+          : source.precision))
+      : null;
+    const precisionRaw = Number(precisionValue);
+    const precision = precisionRaw === 0 ? 0 : 2;
+    return { mode: safeMode, precision };
+  }
+
+  function loadCachedPriceRoundingSettings() {
+    try {
+      const raw = localStorage.getItem(ORDER_ROUNDING_CACHE_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object") return null;
+      return normalizePriceRoundingSettings(parsed);
+    } catch {
+      return null;
+    }
+  }
+
+  function saveCachedPriceRoundingSettings(settings) {
+    try {
+      localStorage.setItem(ORDER_ROUNDING_CACHE_KEY, JSON.stringify(settings || PRICE_ROUNDING_DEFAULT));
+    } catch {}
+  }
+
+  function applyPriceRoundingSettings(settings, { persist = true } = {}) {
+    const normalized = normalizePriceRoundingSettings(settings);
+    priceRoundingRuntime = normalized;
+    if (persist) saveCachedPriceRoundingSettings(normalized);
+    return normalized;
+  }
+
+  function hasExplicitPriceRoundingSettings(source) {
+    if (!source || typeof source !== "object") return false;
+    return (
+      Object.prototype.hasOwnProperty.call(source, "price_rounding_mode")
+      || Object.prototype.hasOwnProperty.call(source, "price_rounding_precision")
+      || Object.prototype.hasOwnProperty.call(source, "priceRoundingMode")
+      || Object.prototype.hasOwnProperty.call(source, "priceRoundingPrecision")
+      || Object.prototype.hasOwnProperty.call(source, "mode")
+      || Object.prototype.hasOwnProperty.call(source, "precision")
+    );
+  }
+
+  function applyPriceRoundingSettingsFromOrderConfig(config, { persist = true } = {}) {
+    if (!config || typeof config !== "object") return priceRoundingRuntime;
+    if (!hasExplicitPriceRoundingSettings(config)) return priceRoundingRuntime;
+    return applyPriceRoundingSettings(config, { persist });
+  }
+
+  function setShopOrderConfigSnapshot(config, { persistRounding = true } = {}) {
+    const normalizedConfig = config && typeof config === "object" ? config : null;
+    window.__shopOrderConfig = normalizedConfig;
+    if (normalizedConfig) {
+      applyPriceRoundingSettingsFromOrderConfig(normalizedConfig, { persist: persistRounding });
+    }
+    return window.__shopOrderConfig || null;
+  }
+
+  function getShopOrderConfigSnapshot() {
+    return window.__shopOrderConfig && typeof window.__shopOrderConfig === "object"
+      ? window.__shopOrderConfig
+      : null;
+  }
+
+  const bootOrderConfig = getShopOrderConfigSnapshot();
+  if (bootOrderConfig && hasExplicitPriceRoundingSettings(bootOrderConfig)) {
+    applyPriceRoundingSettingsFromOrderConfig(bootOrderConfig, { persist: true });
+  } else {
+    const cachedRounding = loadCachedPriceRoundingSettings();
+    if (cachedRounding) {
+      applyPriceRoundingSettings(cachedRounding, { persist: false });
+    }
+  }
+
+  window.setShopOrderConfigSnapshot = setShopOrderConfigSnapshot;
+  window.getShopOrderConfigSnapshot = getShopOrderConfigSnapshot;
 
   function parseBooleanFlag(value) {
     if (typeof value === "boolean") return value;
@@ -413,14 +510,7 @@
   }
 
   function getPriceRoundingSettings() {
-    const tenant = getTenantFromStorage();
-    const modeRaw = tenant?.price_rounding_mode;
-    const mode = typeof modeRaw === "string" ? modeRaw : "none";
-    const allowed = new Set(["none", "down", "up", "nearest"]);
-    const safeMode = allowed.has(mode) ? mode : "none";
-    const precisionRaw = Number(tenant?.price_rounding_precision);
-    const precision = precisionRaw === 0 ? 0 : 2;
-    return { mode: safeMode, precision };
+    return { ...priceRoundingRuntime };
   }
 
   function roundPrice(value) {
@@ -5453,8 +5543,11 @@
   let cartHeaderOrderConfigPromise = null;
 
   async function ensureOrderConfigForHeader() {
-    if (window.__shopOrderConfig) {
-      return window.__shopOrderConfig;
+    const existingConfig = getShopOrderConfigSnapshot();
+    const hasExistingRounding = hasExplicitPriceRoundingSettings(existingConfig);
+    if (existingConfig && hasExistingRounding) {
+      applyPriceRoundingSettingsFromOrderConfig(existingConfig, { persist: true });
+      return existingConfig;
     }
     if (cartHeaderOrderConfigPromise) {
       return cartHeaderOrderConfigPromise;
@@ -5464,13 +5557,15 @@
         const resp = await fetch("/api/public/order-config");
         const data = await resp.json().catch(() => null);
         if (resp.ok && data?.ok && data.data) {
-          window.__shopOrderConfig = data.data;
-          return data.data;
+          const mergedConfig = existingConfig && typeof existingConfig === "object"
+            ? { ...existingConfig, ...data.data }
+            : data.data;
+          return setShopOrderConfigSnapshot(mergedConfig, { persistRounding: true });
         }
       } catch (e) {
         console.warn("Failed to preload order config for cart header:", e);
       }
-      return window.__shopOrderConfig || null;
+      return getShopOrderConfigSnapshot();
     })().finally(() => {
       cartHeaderOrderConfigPromise = null;
     });
@@ -13051,6 +13146,8 @@ async function initCore() {
       scheduleHideShopSplash();
     }
 
+    const orderConfigBootstrapPromise = ensureOrderConfigForHeader().catch(() => null);
+
     await loadCategories();
     renderCategories();
     renderCategoryChips();
@@ -13084,6 +13181,8 @@ async function initCore() {
     if (!hasSnapshotPaint) {
       await warmInitialCatalogInteractionData();
     }
+
+    await orderConfigBootstrapPromise;
 
     renderProducts();
     prioritizeAboveFoldCardImages();

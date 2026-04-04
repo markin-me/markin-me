@@ -10293,6 +10293,18 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const store = storeRows[0] || null;
       const storeTimezone = store?.timezone || "+0";
 
+      const [tenantRows] = await db.query(
+        'SELECT price_rounding_mode, price_rounding_precision FROM ten_tenants WHERE id=? LIMIT 1',
+        [tenantId]
+      );
+      const tenantRounding = tenantRows[0] || null;
+      const roundingModeRaw = tenantRounding?.price_rounding_mode;
+      const roundingMode = typeof roundingModeRaw === 'string' && roundingModeRaw.trim()
+        ? roundingModeRaw.trim()
+        : 'none';
+      const roundingPrecisionRaw = Number(tenantRounding?.price_rounding_precision);
+      const roundingPrecision = Number.isFinite(roundingPrecisionRaw) && roundingPrecisionRaw === 0 ? 0 : 2;
+
       const [storeHours] = await db.query(
         `SELECT day_of_week, opens_at, closes_at, is_closed
          FROM ten_store_hours
@@ -10326,6 +10338,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           storeIsOpen,
           deliveryIsOpen,
           storeAddressMapEnabled: isStoreAddressMapModeEnabled(tenantMapConfig),
+          price_rounding_mode: roundingMode,
+          price_rounding_precision: roundingPrecision,
+          priceRoundingMode: roundingMode,
+          priceRoundingPrecision: roundingPrecision,
         }
       });
     } catch (e) {
@@ -13962,6 +13978,79 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const selectedPromoSource = normalizeCheckoutPromoSource(req.body.selected_promo_source)
         || (promoCode ? 'promo_code' : null);
       const selectedPromoRewardId = normalizeSelectedDiscountId(req.body.selected_promo_reward_id);
+      const useClientPricingSnapshotRequested = (
+        req.body.use_client_pricing_snapshot === true
+        || req.body.use_client_pricing_snapshot === 'true'
+        || Number(req.body.use_client_pricing_snapshot || 0) === 1
+      );
+      const pricingSnapshotRaw = req.body.pricing_snapshot && typeof req.body.pricing_snapshot === 'object'
+        ? req.body.pricing_snapshot
+        : null;
+      const pricingSnapshotSummaryRaw = pricingSnapshotRaw?.summary && typeof pricingSnapshotRaw.summary === 'object'
+        ? pricingSnapshotRaw.summary
+        : null;
+      const pricingSnapshotSummary = (() => {
+        if (!useClientPricingSnapshotRequested || !pricingSnapshotSummaryRaw) return null;
+        const toMoney = (value) => roundPrice(Math.max(0, Number(value || 0)));
+        const normalizeSnapshotSubtotal = () => {
+          const raw = Number(
+            pricingSnapshotSummaryRaw.subtotal
+            ?? pricingSnapshotSummaryRaw.subtotal_before_discount
+            ?? pricingSnapshotSummaryRaw.subtotalBeforeDiscount
+          );
+          if (Number.isFinite(raw) && raw >= 0) return toMoney(raw);
+          return null;
+        };
+        const normalizeSnapshotItemsTotal = () => {
+          const raw = Number(
+            pricingSnapshotSummaryRaw.items_total
+            ?? pricingSnapshotSummaryRaw.itemsTotal
+          );
+          if (!Number.isFinite(raw) || raw < 0) return null;
+          return toMoney(raw);
+        };
+        const normalizeSnapshotDelivery = () => {
+          const raw = Number(
+            pricingSnapshotSummaryRaw.delivery
+            ?? pricingSnapshotSummaryRaw.delivery_cost
+            ?? pricingSnapshotSummaryRaw.deliveryCost
+          );
+          if (!Number.isFinite(raw)) return 0;
+          return toMoney(raw);
+        };
+        const normalizeSnapshotBreakdown = () => normalizeStoredCheckoutDiscountEntries(
+          pricingSnapshotSummaryRaw.discount_breakdown,
+          { promoCode }
+        );
+        const itemsTotal = normalizeSnapshotItemsTotal();
+        if (itemsTotal == null) return null;
+        const discountBreakdown = normalizeSnapshotBreakdown();
+        const breakdownTotal = roundPrice(
+          discountBreakdown.reduce((sum, entry) => sum + Number(entry?.discount_amount ?? entry?.amount ?? 0), 0)
+        );
+        const discountRaw = Number(
+          pricingSnapshotSummaryRaw.discount_total
+          ?? pricingSnapshotSummaryRaw.discountAmount
+        );
+        const discountTotal = Number.isFinite(discountRaw) && discountRaw >= 0
+          ? toMoney(discountRaw)
+          : toMoney(breakdownTotal);
+        const deliveryCost = normalizeSnapshotDelivery();
+        const subtotal = normalizeSnapshotSubtotal();
+        const totalRaw = Number(pricingSnapshotSummaryRaw.total);
+        const total = Number.isFinite(totalRaw) && totalRaw >= 0
+          ? toMoney(totalRaw)
+          : toMoney(itemsTotal + deliveryCost);
+        return {
+          subtotal: subtotal != null ? subtotal : toMoney(itemsTotal + discountTotal),
+          items_total: itemsTotal,
+          delivery: deliveryCost,
+          discount_total: discountTotal,
+          total,
+          discount_breakdown: discountBreakdown,
+        };
+      })();
+      const useClientPricingSnapshotMode = Boolean(useClientPricingSnapshotRequested && pricingSnapshotSummary);
       const availableRewardRows = customerId
         ? await loadCustomerAvailableRewardRows(tenantId, customerId)
         : [];
@@ -14005,7 +14094,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const selectedRewardDiscountRow = publicDiscountText(selectedDiscountEntry?.source).toLowerCase() === 'reward_discount'
         ? selectedDiscountEntry?.rewardRow || null
         : null;
-      if (selectedDiscountId !== null && !selectedDiscount) {
+      if (!useClientPricingSnapshotMode && selectedDiscountId !== null && !selectedDiscount) {
         return res.status(409).json({ ok: false, error: selectedDiscountResolveError || 'DISCOUNT_INVALID' });
       }
       const customerDiscounts = [];
@@ -14015,7 +14104,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const productDiscountMap = new Map();
 
       // Р вЂќР В»РЎРЏ Р С”Р В°Р В¶Р Т‘Р С•Р С–Р С• РЎвЂљР С•Р Р†Р В°РЎР‚Р В° Р С—РЎР‚Р С•Р Р†Р ВµРЎР‚РЎРЏР ВµР С Р С—РЎР‚Р С‘Р СР ВµР Р…Р С‘Р СРЎвЂ№Р Вµ РЎРѓР С”Р С‘Р Т‘Р С”Р С‘
-      for (const pid of ids) {
+      if (!useClientPricingSnapshotMode) for (const pid of ids) {
         const categoryIds = productCategoriesMap.get(pid) || [];
         const productDiscounts = await discountHelpers.getActiveDiscountsForProduct(
           db,
@@ -14477,7 +14566,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
         // Р ВРЎРѓР С—Р С•Р В»РЎРЉР В·РЎС“Р ВµР С line_total Р С‘Р В· Р В·Р В°Р С—РЎР‚Р С•РЎРѓР В° (РЎС“Р В¶Р Вµ Р С—Р С•РЎРѓРЎвЂЎР С‘РЎвЂљР В°Р Р… Р Р…Р В° РЎвЂћРЎР‚Р С•Р Р…РЎвЂљР Вµ)
         // Р вЂўРЎРѓР В»Р С‘ line_total Р Р…Р Вµ Р С—Р ВµРЎР‚Р ВµР Т‘Р В°Р Р…, Р С‘РЎРѓР С—Р С•Р В»РЎРЉР В·РЎС“Р ВµР С Р В±Р В°Р В·Р С•Р Р†РЎС“РЎР‹ РЎвЂ Р ВµР Р…РЎС“ РЎвЂљР С•Р Р†Р В°РЎР‚Р В° (Р Т‘Р В»РЎРЏ РЎвЂљР С•Р Р†Р В°РЎР‚Р С•Р Р† Р В±Р ВµР В· Р С•Р С—РЎвЂ Р С‘Р в„–/Р Р†Р В°РЎР‚Р С‘Р В°Р Р…РЎвЂљР С•Р Р†/РЎРѓР С•РЎРѓРЎвЂљР В°Р Р†Р В°)
-        const autoRule = autoRulesByProduct.get(pid);
+        const autoRule = useClientPricingSnapshotMode
+          ? null
+          : autoRulesByProduct.get(pid);
         let unitPrice = basePrice;
         let paidQty = qty;
         let lineTotal = useLineTotalFromRequest ? lineTotalFromRequest : basePrice * qty;
@@ -14501,10 +14592,11 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         // - РЎРЊРЎвЂљР С• auto-add РЎвЂљР С•Р Р†Р В°РЎР‚
         let itemDiscountAmount = 0;
         let itemAppliedDiscount = null;
-        const productDiscountCandidates = Array.isArray(productDiscountMap.get(pid))
+        const productDiscountCandidates = !useClientPricingSnapshotMode && Array.isArray(productDiscountMap.get(pid))
           ? productDiscountMap.get(pid)
           : [];
-        const productDiscount = productDiscountCandidates.find((candidate) => (
+        const productDiscount = !useClientPricingSnapshotMode
+          ? productDiscountCandidates.find((candidate) => (
           matchDiscountTargetScope(
             buildDiscountProductTargetSets(candidate?.targetRows || []),
             {
@@ -14518,8 +14610,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             productCategoriesMap,
             publicDiscountText(candidate?.apply_to).toLowerCase() || 'product'
           )
-        )) || null;
-        if (productDiscount && !autoRule && !useLineTotalFromRequest) {
+        )) || null
+          : null;
+        if (!useClientPricingSnapshotMode && productDiscount && !autoRule && !useLineTotalFromRequest) {
           itemDiscountAmount = roundPrice(discountHelpers.calculateDiscount(
             lineTotal,
             productDiscount.discount_type,
@@ -14539,7 +14632,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             addOrderDiscountAmount(itemDiscountAmount);
             pushOrderDiscountRecord(itemAppliedDiscount);
           }
-        } else if (productDiscount && !autoRule && useLineTotalFromRequest) {
+        } else if (!useClientPricingSnapshotMode && productDiscount && !autoRule && useLineTotalFromRequest) {
           // Р вЂўРЎРѓР В»Р С‘ line_total Р С—Р ВµРЎР‚Р ВµР Т‘Р В°Р Р… РЎРѓ РЎвЂћРЎР‚Р С•Р Р…РЎвЂљР В°, Р Р…Р С• Р ВµРЎРѓРЎвЂљРЎРЉ РЎРѓР С”Р С‘Р Т‘Р С”Р В° РІР‚вЂќ РЎРѓР С•РЎвЂ¦РЎР‚Р В°Р Р…РЎРЏР ВµР С Р С‘Р Р…РЎвЂћР С•РЎР‚Р СР В°РЎвЂ Р С‘РЎР‹ Р С• РЎРѓР С”Р С‘Р Т‘Р С”Р Вµ
           // Р В±Р ВµР В· Р С—Р С•Р Р†РЎвЂљР С•РЎР‚Р Р…Р С•Р С–Р С• РЎР‚Р В°РЎРѓРЎвЂЎРЎвЂРЎвЂљР В° (РЎРѓР С”Р С‘Р Т‘Р С”Р В° РЎС“Р В¶Р Вµ РЎС“РЎвЂЎРЎвЂљР ВµР Р…Р В° Р Р† line_total)
           const estimatedDiscount = roundPrice(discountHelpers.calculateDiscount(
@@ -14580,13 +14673,41 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
         const isGiftReward = Number(it?.is_gift_reward || 0) === 1;
         const giftRewardId = Number(it?.gift_reward_id || 0) > 0 ? Number(it.gift_reward_id) : null;
+        const originalLineTotalFromRequest = Number(it.original_line_total) || 0;
+        const normalizedOriginalLineTotalFromRequest = originalLineTotalFromRequest > 0
+          ? roundPrice(originalLineTotalFromRequest)
+          : 0;
+        const oldLineTotalFromRequestRaw = Number(it.old_line_total);
+        const normalizedOldLineTotalFromRequest = Number.isFinite(oldLineTotalFromRequestRaw) && oldLineTotalFromRequestRaw >= 0
+          ? roundPrice(oldLineTotalFromRequestRaw)
+          : 0;
+        const snapshotOldLineTotal = normalizedOldLineTotalFromRequest > 0
+          ? normalizedOldLineTotalFromRequest
+          : normalizedOriginalLineTotalFromRequest;
+        const originalUnitPriceFromRequest = normalizedOriginalLineTotalFromRequest > 0 && qty > 0
+          ? roundPrice(normalizedOriginalLineTotalFromRequest / qty)
+          : 0;
+        const oldPriceFromRequestRaw = Number(it.old_price);
+        const normalizedOldPriceFromRequest = Number.isFinite(oldPriceFromRequestRaw) && oldPriceFromRequestRaw >= 0
+          ? roundPrice(oldPriceFromRequestRaw)
+          : 0;
+        const snapshotOldPrice = normalizedOldPriceFromRequest > 0
+          ? normalizedOldPriceFromRequest
+          : (snapshotOldLineTotal > 0 && qty > 0 ? roundPrice(snapshotOldLineTotal / qty) : 0);
         const itemEntry = {
           product_id: pid,
           name: p.name,
           qty,
           price: isGiftReward ? 0 : unitPrice,
-          old_price: oldPrice,
+          old_price: useClientPricingSnapshotMode
+            ? snapshotOldPrice
+            : (originalUnitPriceFromRequest > unitPrice ? originalUnitPriceFromRequest : oldPrice),
           line_total: lineTotalAfterDiscount,
+          old_line_total: useClientPricingSnapshotMode
+            ? snapshotOldLineTotal
+            : (normalizedOriginalLineTotalFromRequest > lineTotalAfterDiscount
+              ? normalizedOriginalLineTotalFromRequest
+              : 0),
           photos, // Р РЋР С•РЎвЂ¦РЎР‚Р В°Р Р…РЎРЏР ВµР С РЎвЂћР С•РЎвЂљР С• Р Т‘Р В»РЎРЏ Р С•РЎвЂљРЎвЂЎР ВµРЎвЂљР С•Р Р†
           options: options.length > 0 ? options : undefined, // Р РЋР С•РЎвЂ¦РЎР‚Р В°Р Р…РЎРЏР ВµР С Р С•Р С—РЎвЂ Р С‘Р С‘ РЎвЂљР С•Р В»РЎРЉР С”Р С• Р ВµРЎРѓР В»Р С‘ Р С•Р Р…Р С‘ Р ВµРЎРѓРЎвЂљРЎРЉ
           ingredients: ingredients.length > 0 ? ingredients : undefined, // Р РЋР С•РЎвЂ¦РЎР‚Р В°Р Р…РЎРЏР ВµР С Р С‘Р Р…Р С–РЎР‚Р ВµР Т‘Р С‘Р ВµР Р…РЎвЂљРЎвЂ№ РЎвЂљР С•Р В»РЎРЉР С”Р С• Р ВµРЎРѓР В»Р С‘ Р С•Р Р…Р С‘ Р ВµРЎРѓРЎвЂљРЎРЉ
@@ -14602,9 +14723,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         if (itemAppliedDiscount) {
           // original_line_total - РЎвЂ Р ВµР Р…Р В° Р Т‘Р С• РЎРѓР С”Р С‘Р Т‘Р С”Р С‘
           // Р ВРЎРѓР С—Р С•Р В»РЎРЉР В·РЎС“Р ВµР С Р С—Р ВµРЎР‚Р ВµР Т‘Р В°Р Р…Р Р…РЎвЂ№Р в„– original_line_total, Р ВµРЎРѓР В»Р С‘ Р ВµРЎРѓРЎвЂљРЎРЉ (РЎРѓ РЎС“РЎвЂЎРЎвЂРЎвЂљР С•Р С Р Р†Р В°РЎР‚Р С‘Р В°Р Р…РЎвЂљР В°)
-          const originalLineTotalFromRequest = Number(it.original_line_total) || 0;
-          const originalLineTotal = originalLineTotalFromRequest > 0
-            ? roundPrice(originalLineTotalFromRequest)
+          const originalLineTotal = normalizedOriginalLineTotalFromRequest > 0
+            ? normalizedOriginalLineTotalFromRequest
             : (useLineTotalFromRequest
                 ? roundPrice(lineTotal + itemDiscountAmount)
                 : lineTotal);
@@ -14614,6 +14734,18 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             amount: itemAppliedDiscount.discount_amount,
             original_line_total: originalLineTotal,
           };
+        } else if (useClientPricingSnapshotMode) {
+          const originalLineTotal = normalizedOriginalLineTotalFromRequest > 0
+            ? normalizedOriginalLineTotalFromRequest
+            : roundPrice(lineTotalAfterDiscount);
+          if (originalLineTotal > lineTotalAfterDiscount) {
+            itemEntry.discount = {
+              id: null,
+              title: 'Скидка',
+              amount: roundPrice(originalLineTotal - lineTotalAfterDiscount),
+              original_line_total: originalLineTotal,
+            };
+          }
         }
 
         normItems.push(itemEntry);
@@ -14621,7 +14753,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
       if (!normItems.length) return res.status(400).json({ ok: false, error: 'NO_PRODUCTS' });
 
-      if (selectedDiscount) {
+      if (!useClientPricingSnapshotMode && selectedDiscount) {
         const selectedDiscountOutcome = applySelectedDiscountToItems({
           discount: selectedDiscount,
           items: normItems,
@@ -14653,7 +14785,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       }
 
       // Р СџРЎР‚Р С‘Р СР ВµР Р…РЎРЏР ВµР С РЎРѓР С”Р С‘Р Т‘Р С”Р С‘ Р С”Р В»Р С‘Р ВµР Р…РЎвЂљР В° Р Р…Р В° Р Р†Р ВµРЎРѓРЎРЉ Р В·Р В°Р С”Р В°Р В· (Р ВµРЎРѓР В»Р С‘ Р ВµРЎРѓРЎвЂљРЎРЉ)
-      const orderDiscountsForCustomer = await discountHelpers.getOrderDiscounts(
+      if (!useClientPricingSnapshotMode) {
+        const orderDiscountsForCustomer = await discountHelpers.getOrderDiscounts(
         db,
         tenantId,
         storeId,
@@ -14692,11 +14825,13 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         }
       }
 
+      }
+
       const selectedRewardPromoRow = selectedPromoSource === 'reward_promo'
         ? (availableRewardPromoRows.find((row) => Number(row?.id || 0) === Number(selectedPromoRewardId || 0)) || null)
         : null;
 
-      if (promoCode) {
+      if (!useClientPricingSnapshotMode && promoCode) {
         if (selectedPromoSource === 'reward_promo') {
           if (!selectedRewardPromoRow) {
             return res.status(409).json({ ok: false, error: 'PROMO_INVALID' });
@@ -15145,15 +15280,24 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         )
       );
 
-      const generatedDiscountEntries = normalizeStoredCheckoutDiscountEntries(appliedDiscounts, {
-        promoCode,
-      });
-      const storedDiscountEntries = buildCanonicalStoredCheckoutDiscountEntries(
-        generatedDiscountEntries,
-        normItems,
-        orderDiscountAmount,
-        { promoCode }
-      );
+      if (useClientPricingSnapshotMode) {
+        orderDiscountAmount = roundPrice(Number(pricingSnapshotSummary?.discount_total || 0));
+      }
+      const generatedDiscountEntries = useClientPricingSnapshotMode
+        ? normalizeStoredCheckoutDiscountEntries(pricingSnapshotSummary?.discount_breakdown, {
+            promoCode,
+          })
+        : normalizeStoredCheckoutDiscountEntries(appliedDiscounts, {
+            promoCode,
+          });
+      const storedDiscountEntries = useClientPricingSnapshotMode
+        ? appendStoredCheckoutOtherDiscountEntryIfNeeded(generatedDiscountEntries, orderDiscountAmount)
+        : buildCanonicalStoredCheckoutDiscountEntries(
+            generatedDiscountEntries,
+            normItems,
+            orderDiscountAmount,
+            { promoCode }
+          );
       const discountsJson = storedDiscountEntries.length > 0 ? JSON.stringify(storedDiscountEntries) : null;
       const benefitsMetaJson = buildOrderBenefitsMetaJsonFromDraft({
         selected_discount_id: selectedDiscountId,
@@ -15164,6 +15308,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       });
 
       const itemsJson = JSON.stringify(normItems);
+      if (useClientPricingSnapshotMode) {
+        total = roundPrice(Number(pricingSnapshotSummary?.items_total || total));
+      }
       let deliveryCost = 0;
       const isDeliveryMethod = str(methodCode).trim() === 'delivery';
       const deliveryAddressId = (isDeliveryMethod && Number.isFinite(Number(req.body.delivery_address_id)) && Number(req.body.delivery_address_id) > 0)
@@ -15223,12 +15370,19 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           return res.status(409).json({ ok: false, error: 'MIN_ORDER', min_order_amount: minOrderAmount });
         }
 
-        deliveryCost = Number(deliveryQuote.delivery_cost || 0);
         if (deliveryQuote.delivery_store_id != null && Number.isFinite(Number(deliveryQuote.delivery_store_id))) {
           orderStoreId = Number(deliveryQuote.delivery_store_id);
         }
-
-        total = roundPrice(total + deliveryCost);
+        if (useClientPricingSnapshotMode) {
+          deliveryCost = roundPrice(Number(pricingSnapshotSummary?.delivery || 0));
+          total = roundPrice(Number(pricingSnapshotSummary?.total || (total + deliveryCost)));
+        } else {
+          deliveryCost = Number(deliveryQuote.delivery_cost || 0);
+          total = roundPrice(total + deliveryCost);
+        }
+      } else if (useClientPricingSnapshotMode) {
+        deliveryCost = 0;
+        total = roundPrice(Number(pricingSnapshotSummary?.total || total));
       }
 
       // Timezone РЎвЂћР С‘Р В»Р С‘Р В°Р В»Р В°, Р С” Р С”Р С•РЎвЂљР С•РЎР‚Р С•Р СРЎС“ Р С—РЎР‚Р С‘Р Р†РЎРЏР В·Р В°Р Р… Р В·Р В°Р С”Р В°Р В· (orderStoreId)

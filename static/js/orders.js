@@ -484,7 +484,7 @@
   }
 
   function orderItemsMoney(v) {
-    return money(roundDisplayPrice(Number(v || 0)));
+    return money(Number(v || 0));
   }
 
   function parseLocalDateParts(ts) {
@@ -3326,6 +3326,7 @@
           order,
           sortAutoAdd: true,
           placeholderImage: "/static/img/placeholder.png",
+          preserveStoredLineTotals: true,
           surface: "admin",
         }) || "");
       } catch (e) {
