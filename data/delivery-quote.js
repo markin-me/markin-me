@@ -272,10 +272,33 @@ function getZoneTierSummary(zone, subtotal) {
   return summarizeDeliveryPriceTiers(zone && zone.price_tiers, subtotal);
 }
 
-function buildDeliverySettingsRevision({ tenantId, storeId, defaultSetting, zones }) {
+function normalizeDeliveryMapModeFlag(value, fallback = true) {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return Number.isFinite(value) && value !== 0;
+  if (typeof value === 'string') {
+    const normalized = String(value).trim().toLowerCase();
+    if (!normalized) return Boolean(fallback);
+    if (normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on') return true;
+    if (
+      normalized === '0'
+      || normalized === 'false'
+      || normalized === 'no'
+      || normalized === 'off'
+      || normalized === 'null'
+      || normalized === 'undefined'
+    ) {
+      return false;
+    }
+  }
+  return Boolean(value != null ? value : fallback);
+}
+
+function buildDeliverySettingsRevision({ tenantId, storeId, defaultSetting, zones, storeAddressMapEnabled = true }) {
+  const useZones = normalizeDeliveryMapModeFlag(storeAddressMapEnabled, true);
   const payload = {
     tenant_id: Number(tenantId || 0) || 0,
     store_id: Number(storeId || 0) || 0,
+    store_address_map_enabled: useZones ? 1 : 0,
     default_setting: {
       has_settings: Boolean(defaultSetting && defaultSetting.has_settings),
       id: Number(defaultSetting && defaultSetting.id || 0) || 0,
@@ -433,7 +456,7 @@ function buildDefaultQuote(setting, subtotal) {
   };
 }
 
-async function buildDeliveryQuote({ db, tenantId, storeId, subtotal, address }) {
+async function buildDeliveryQuote({ db, tenantId, storeId, subtotal, address, storeAddressMapEnabled = true }) {
   const resolvedStoreId = Number(storeId || 0);
   const defaultSetting = await loadDefaultDeliverySettings(db, tenantId, resolvedStoreId);
   const lat = Number(address && address.lat);
@@ -442,17 +465,23 @@ async function buildDeliveryQuote({ db, tenantId, storeId, subtotal, address }) 
     return buildDefaultQuote(defaultSetting, subtotal);
   }
 
+  const useZones = normalizeDeliveryMapModeFlag(storeAddressMapEnabled, true);
   const zones = await loadDeliveryZonesForTenant(db, tenantId);
   const deliveryRevision = buildDeliverySettingsRevision({
     tenantId,
     storeId: resolvedStoreId,
     defaultSetting,
     zones,
+    storeAddressMapEnabled: useZones,
   });
   const fallbackQuote = {
     ...buildDefaultQuote(defaultSetting, subtotal),
     delivery_revision: deliveryRevision,
   };
+
+  if (!useZones) {
+    return fallbackQuote;
+  }
 
   const matchedZone = findMatchingDeliveryZone(zones, { lat, lng });
   if (!matchedZone) {

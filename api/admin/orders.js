@@ -13,6 +13,7 @@ const {
   buildDeliveryQuote,
   loadDefaultDeliverySettings,
 } = require("../../data/delivery-quote");
+const { getTenantMapConfig } = require("../../data/tenant-map-config");
 const {
   loadCustomerAddressById,
   normalizeCustomerAddressPayload,
@@ -2584,12 +2585,15 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         }
 
         if (resolvedDeliveryAddress || inlineDeliveryAddress) {
+          const tenantMapConfig = await getTenantMapConfig(db, tenantId);
+          const storeAddressMapEnabled = Boolean(tenantMapConfig?.store_address_map_enabled);
           const deliveryQuote = await buildDeliveryQuote({
             db,
             tenantId,
             storeId,
             subtotal: itemsTotalAfterDiscounts,
             address: resolvedDeliveryAddress || inlineDeliveryAddress,
+            storeAddressMapEnabled,
           });
           const minOrderAmount = Number(deliveryQuote.min_order_amount || 0);
           if (minOrderAmount > 0 && itemsTotalAfterDiscounts < minOrderAmount) {

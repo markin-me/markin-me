@@ -8756,7 +8756,7 @@
     const id = Number(orderId || 0);
     if (!(id > 0)) return;
     ensureRightAddressOverlay();
-    rightAddressMapModeEnabled = await ensureRightAddressMapMode();
+    rightAddressMapModeEnabled = await ensureRightAddressMapMode(true);
     const { backdrop, newBtn, saveBtn, cancelBtn, lookup, street, house, lookupWrap } = getRightAddressOverlayElements();
     if (!backdrop || !saveBtn || !cancelBtn) return;
     rightAddressLookupState.orderId = id;

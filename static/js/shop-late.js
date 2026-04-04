@@ -28086,9 +28086,19 @@ function setBottomNavActive(tab) {
       storeId = Number(localStorage.getItem("activeStoreId") || 0) || 0;
     } catch {}
 
+    let mapMode = 0;
+    try {
+      if (typeof isAddressMapModeEnabled === "function") {
+        mapMode = isAddressMapModeEnabled() ? 1 : 0;
+      } else {
+        mapMode = Boolean(window.__shopOrderConfig && window.__shopOrderConfig.storeAddressMapEnabled) ? 1 : 0;
+      }
+    } catch {}
+
     return {
       tenant_id: tenantId > 0 ? tenantId : null,
       store_id: storeId > 0 ? storeId : null,
+      map_mode: mapMode,
     };
   }
 
@@ -28098,6 +28108,7 @@ function setBottomNavActive(tab) {
       return JSON.stringify({
         tenant_id: scope?.tenant_id ?? null,
         store_id: scope?.store_id ?? null,
+        map_mode: scope?.map_mode ?? 0,
       });
     } catch {
       return "";

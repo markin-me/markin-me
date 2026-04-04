@@ -205,7 +205,14 @@ async function loadCustomerAddressById({ db, helpers, tenantId, customerId, addr
   return rows && rows[0] ? serializeCustomerAddress(helpers, rows[0]) : null;
 }
 
-async function resolveCustomerAddressPayload({ db, helpers, tenantId, storeId, payload = {} }) {
+async function resolveCustomerAddressPayload({
+  db,
+  helpers,
+  tenantId,
+  storeId,
+  payload = {},
+  storeAddressMapEnabled,
+}) {
   const normalizedResult = normalizeCustomerAddressPayload(helpers, payload);
   if (!normalizedResult.ok) return normalizedResult;
 
@@ -315,6 +322,7 @@ async function resolveCustomerAddressPayload({ db, helpers, tenantId, storeId, p
     storeId: Number(storeId || 0) > 0 ? Number(storeId) : 1,
     subtotal: payload && payload.subtotal != null ? Number(payload.subtotal || 0) : 0,
     address: { lat, lng },
+    storeAddressMapEnabled,
   });
 
   return {

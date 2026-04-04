@@ -274,10 +274,24 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
   `;
 
   function isStoreAddressMapModeEnabled(config = null) {
-    if (config && typeof config === 'object') {
-      return Boolean(config.store_address_map_enabled);
+    if (!config || typeof config !== 'object') return false;
+    const value = config.store_address_map_enabled;
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'number') return Number.isFinite(value) && value !== 0;
+    const normalized = String(value ?? '').trim().toLowerCase();
+    if (!normalized) return false;
+    if (normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on') return true;
+    if (
+      normalized === '0'
+      || normalized === 'false'
+      || normalized === 'no'
+      || normalized === 'off'
+      || normalized === 'null'
+      || normalized === 'undefined'
+    ) {
+      return false;
     }
-    return false;
+    return Boolean(value);
   }
 
   function normalizePublicCoordinateValue(value, axis = 'lat') {
@@ -550,12 +564,15 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       return { ok: false, error: 'HOUSE_REQUIRED' };
     }
 
+    const tenantMapConfig = await getTenantMapConfig(db, tenantId);
+    const storeAddressMapEnabled = isStoreAddressMapModeEnabled(tenantMapConfig);
     const quote = await buildDeliveryQuote({
       db,
       tenantId,
       storeId,
       subtotal: payload && payload.subtotal != null ? Number(payload.subtotal || 0) : 0,
       address: { lat, lng },
+      storeAddressMapEnabled,
     });
 
     return {
@@ -3808,12 +3825,15 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     try {
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
+      const tenantMapConfig = await getTenantMapConfig(db, tenantId);
+      const storeAddressMapEnabled = isStoreAddressMapModeEnabled(tenantMapConfig);
       const result = await resolveSharedCustomerAddressPayload({
         db,
         helpers,
         tenantId,
         storeId,
         payload: req.body || {},
+        storeAddressMapEnabled,
       });
       if (!result || !result.ok) {
         const error = result && result.error ? result.error : 'ADDRESS_RESOLVE_FAILED';
@@ -3830,6 +3850,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     try {
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
+      const tenantMapConfig = await getTenantMapConfig(db, tenantId);
+      const storeAddressMapEnabled = isStoreAddressMapModeEnabled(tenantMapConfig);
       const subtotal = Math.max(0, Number(req.body?.subtotal || req.body?.total || 0) || 0);
       const token = str(req.headers['x-customer-token']);
       const customer = token ? await getCustomerByToken(tenantId, token) : null;
@@ -3863,6 +3885,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         storeId,
         subtotal,
         address,
+        storeAddressMapEnabled,
       });
 
       return res.json({
@@ -15182,6 +15205,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         if (!inlineAddressResult.ok) {
           return res.status(400).json({ ok: false, error: inlineAddressResult.error });
         }
+        const tenantMapConfig = await getTenantMapConfig(db, tenantId);
+        const storeAddressMapEnabled = isStoreAddressMapModeEnabled(tenantMapConfig);
 
         const deliveryQuote = await buildDeliveryQuote({
           db,
@@ -15189,6 +15214,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           storeId,
           subtotal: total,
           address: resolvedDeliveryAddress || inlineAddressResult.data,
+          storeAddressMapEnabled,
         });
 
         const minOrderAmount = Number(deliveryQuote.min_order_amount || 0);
@@ -15692,6 +15718,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     try {
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
+      const tenantMapConfig = await getTenantMapConfig(db, tenantId);
+      const storeAddressMapEnabled = isStoreAddressMapModeEnabled(tenantMapConfig);
 
       // Р ВРЎвЂ°Р ВµР С Р Р…Р В°РЎРѓРЎвЂљРЎР‚Р С•Р в„–Р С”РЎС“ Р Т‘Р С•РЎРѓРЎвЂљР В°Р Р†Р С”Р С‘, Р С—РЎР‚Р С‘Р Р†РЎРЏР В·Р В°Р Р…Р Р…РЎС“РЎР‹ Р С” РЎвЂљР ВµР С”РЎС“РЎвЂ°Р ВµР СРЎС“ РЎвЂћР С‘Р В»Р С‘Р В°Р В»РЎС“
       // РС‰РµРј РЅР°СЃС‚СЂРѕР№РєСѓ РґРѕСЃС‚Р°РІРєРё, РїСЂРёРІСЏР·Р°РЅРЅСѓСЋ Рє С‚РµРєСѓС‰РµРјСѓ С„РёР»РёР°Р»Сѓ
@@ -15702,6 +15730,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         storeId,
         defaultSetting: defaultSettings,
         zones: deliveryZones,
+        storeAddressMapEnabled,
       });
       return res.json({
         ok: true,
@@ -15713,6 +15742,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           price_tiers: Array.isArray(defaultSettings.price_tiers) ? defaultSettings.price_tiers : [],
           has_settings: Boolean(defaultSettings.has_settings),
           delivery_revision: deliveryRevision,
+          store_address_map_enabled: storeAddressMapEnabled,
         }
       });
 

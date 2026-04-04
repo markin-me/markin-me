@@ -399,11 +399,17 @@
   }
 
   function isAddressMapModeEnabled() {
+    const orderConfig = window.__shopOrderConfig && typeof window.__shopOrderConfig === "object"
+      ? window.__shopOrderConfig
+      : null;
+    if (orderConfig && Object.prototype.hasOwnProperty.call(orderConfig, "storeAddressMapEnabled")) {
+      return parseBooleanFlag(orderConfig.storeAddressMapEnabled);
+    }
     const tenant = getTenantFromStorage();
     if (tenant && Object.prototype.hasOwnProperty.call(tenant, "store_address_map_enabled")) {
       return parseBooleanFlag(tenant.store_address_map_enabled);
     }
-    return parseBooleanFlag(window.__shopOrderConfig && window.__shopOrderConfig.storeAddressMapEnabled);
+    return false;
   }
 
   function getPriceRoundingSettings() {
