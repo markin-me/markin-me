@@ -4572,11 +4572,18 @@ optionGroups.forEach((group) => {
     clearAutoAddDismissedIfCartEmpty();
     saveCart();
     if (typeof scheduleSyncAllProductCardsFromCart === "function") scheduleSyncAllProductCardsFromCart();
-    renderCart();
-    updateCartBadge();
+    if (typeof refreshCartUiAfterMutation === "function") {
+      refreshCartUiAfterMutation({
+        reason: "productDetails.add",
+        changedCartKeys: [nextKey],
+      });
+    } else {
+      renderCart();
+      updateCartBadge();
+    }
 
     // обновление моб. шита корзины, если открыт
-    if (openCartSheetCtx && openCartSheetCtx.listEl && openCartSheetCtx.totalEl) {
+    if (typeof refreshCartUiAfterMutation !== "function" && openCartSheetCtx && openCartSheetCtx.listEl && openCartSheetCtx.totalEl) {
       const { items, total } = renderCartInto(openCartSheetCtx.listEl, openCartSheetCtx.totalEl, null);
       if (openCartSheetCtx.footerEl) openCartSheetCtx.footerEl.classList.toggle("hidden", items.length === 0);
       if (openCartSheetCtx.checkoutBtn) {
@@ -6192,8 +6199,15 @@ optionGroups.forEach((group) => {
               applyAutoAddRules();
               saveCart();
               if (typeof scheduleSyncAllProductCardsFromCart === "function") scheduleSyncAllProductCardsFromCart();
-              renderCart();
-              updateCartBadge();
+              if (typeof refreshCartUiAfterMutation === "function") {
+                refreshCartUiAfterMutation({
+                  reason: "combo.edit",
+                  changedCartKeys: [cartKey],
+                });
+              } else {
+                renderCart();
+                updateCartBadge();
+              }
               cartMutated = true;
               if (typeof onBack === "function") onBack();
             }
@@ -6212,8 +6226,15 @@ optionGroups.forEach((group) => {
             applyAutoAddRules();
             saveCart();
             if (typeof scheduleSyncAllProductCardsFromCart === "function") scheduleSyncAllProductCardsFromCart();
-            renderCart();
-            updateCartBadge();
+            if (typeof refreshCartUiAfterMutation === "function") {
+              refreshCartUiAfterMutation({
+                reason: "combo.add",
+                changedCartKeys: [key],
+              });
+            } else {
+              renderCart();
+              updateCartBadge();
+            }
             cartMutated = true;
             if (typeof onBack === "function") onBack();
           }
@@ -7171,8 +7192,15 @@ optionGroups.forEach((group) => {
           applyAutoAddRules();
           saveCart();
           if (typeof scheduleSyncAllProductCardsFromCart === "function") scheduleSyncAllProductCardsFromCart();
-          renderCart();
-          updateCartBadge();
+          if (typeof refreshCartUiAfterMutation === "function") {
+            refreshCartUiAfterMutation({
+              reason: "combo.picker.add",
+              changedCartKeys: [key],
+            });
+          } else {
+            renderCart();
+            updateCartBadge();
+          }
           queueCartStockRecheck(previousCartSnapshot, {
             toastMessage: "Больше нет в наличии",
           });
@@ -9228,6 +9256,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       status: "idle",
       basePreview: null,
       basePreviewSource: "",
+      calculationPreview: null,
       derivedPreview: null,
       availableBenefitsCount: 0,
       progressProductsByDiscountId: new Map(),
@@ -9321,6 +9350,24 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     } catch {
       return "";
     }
+  }
+
+  function hasCheckoutBenefitsLocalCalculationPayload(previewData) {
+    if (!previewData || typeof previewData !== "object") return false;
+    const clientCalculation = previewData?.client_calculation;
+    if (!clientCalculation || typeof clientCalculation !== "object") return false;
+
+    const version = Number(clientCalculation?.version || 0);
+    const hasSummaryStates = clientCalculation?.summary_states
+      && typeof clientCalculation.summary_states === "object"
+      && Object.keys(clientCalculation.summary_states).length > 0;
+    const hasRules = (
+      Array.isArray(clientCalculation?.discount_rules) && clientCalculation.discount_rules.length > 0
+    ) || (
+      Array.isArray(clientCalculation?.promo_rules) && clientCalculation.promo_rules.length > 0
+    );
+
+    return (version >= 2 && hasRules) || hasSummaryStates;
   }
 
   function deriveCheckoutBenefitsPreviewLocally(previewData, previewRequest = null) {
@@ -9508,7 +9555,10 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     const scopeBasePreview = storeBasePreviewSource === "scope"
       ? storeBasePreview
       : (cachedScopeBasePreview || null);
-    const basePreview = exactBasePreview || scopeBasePreview || null;
+    const calculationBasePreview = hasCheckoutBenefitsLocalCalculationPayload(checkoutBenefitsStore?.calculationPreview)
+      ? checkoutBenefitsStore.calculationPreview
+      : null;
+    const basePreview = exactBasePreview || scopeBasePreview || calculationBasePreview || null;
     const hasExactBasePreview = !!exactBasePreview;
     const usesScopePreview = !hasExactBasePreview && !!scopeBasePreview;
     const derivedPreview = orderKey && checkoutBenefitsStore.orderKey === orderKey && checkoutBenefitsStore.derivedPreview
@@ -9552,6 +9602,11 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     checkoutBenefitsStore.basePreviewSource = str(basePreviewSource || "").trim().toLowerCase() === "scope"
       ? "scope"
       : "exact";
+    if (hasCheckoutBenefitsLocalCalculationPayload(previewData)) {
+      checkoutBenefitsStore.calculationPreview = previewData;
+    } else if (hasCheckoutBenefitsLocalCalculationPayload(derivedPreview)) {
+      checkoutBenefitsStore.calculationPreview = derivedPreview;
+    }
     checkoutBenefitsStore.derivedPreview = derivedPreview;
     checkoutBenefitsStore.availableBenefitsCount = calculateAvailableBenefitsCount(derivedPreview || previewData);
     checkoutBenefitsStore.hydratedAt = Date.now();
@@ -9575,6 +9630,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       checkoutBenefitsStore.status = "idle";
       checkoutBenefitsStore.basePreview = null;
       checkoutBenefitsStore.basePreviewSource = "";
+      checkoutBenefitsStore.calculationPreview = null;
       checkoutBenefitsStore.derivedPreview = null;
       checkoutBenefitsStore.availableBenefitsCount = 0;
       checkoutBenefitsStore.hydratedAt = 0;
@@ -10287,7 +10343,27 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     });
   }
 
+  function shouldUseCachedBenefitsOnlyForOrderChange(reason = "") {
+    const normalizedReason = str(reason || "").trim().toLowerCase();
+    if (!normalizedReason) return false;
+    return (
+      normalizedReason === "updatecartbadge"
+      || normalizedReason === "rendercart"
+      || normalizedReason === "rendercart.empty"
+      || normalizedReason === "updatecarttotalsuionly"
+      || normalizedReason === "savecheckoutdraft"
+      || normalizedReason.startsWith("changeqty")
+      || normalizedReason.startsWith("productdetails.")
+      || normalizedReason.startsWith("combo.")
+      || normalizedReason.startsWith("cart.")
+      || normalizedReason.startsWith("updatecart")
+      || normalizedReason.startsWith("rendercart")
+      || normalizedReason.startsWith("clearcart")
+    );
+  }
+
   function handleShopBenefitsOrderStateChange(reason = "") {
+    const normalizedReason = str(reason || "").trim().toLowerCase();
     const previewRequest = buildCheckoutBenefitsCurrentPreviewRequest();
     const snapshot = getBenefitsStoreSnapshot(previewRequest);
     syncBenefitsBadgesUi(snapshot?.availableBenefitsCount || 0);
@@ -10303,13 +10379,20 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
           }
         );
       }
-      if (!snapshot?.needsExactHydration) {
-        if (checkoutBenefitsStoreSyncTimer) {
-          window.clearTimeout(checkoutBenefitsStoreSyncTimer);
-          checkoutBenefitsStoreSyncTimer = 0;
-        }
-        return;
+    }
+    if (shouldUseCachedBenefitsOnlyForOrderChange(normalizedReason)) {
+      if (checkoutBenefitsStoreSyncTimer) {
+        window.clearTimeout(checkoutBenefitsStoreSyncTimer);
+        checkoutBenefitsStoreSyncTimer = 0;
       }
+      return;
+    }
+    if (snapshot?.derivedPreview && !snapshot?.needsExactHydration) {
+      if (checkoutBenefitsStoreSyncTimer) {
+        window.clearTimeout(checkoutBenefitsStoreSyncTimer);
+        checkoutBenefitsStoreSyncTimer = 0;
+      }
+      return;
     }
     if (checkoutBenefitsStoreSyncTimer) {
       window.clearTimeout(checkoutBenefitsStoreSyncTimer);
@@ -13000,11 +13083,25 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     const storeSnapshot = getBenefitsStoreSnapshot(previewRequest);
     const exactPreviewData = peekWarmCheckoutBenefitsPreviewCache(previewRequest);
     const scopePreviewData = peekWarmCheckoutBenefitsScopePreviewCache(previewRequest);
-    const previewData = exactPreviewData || storeSnapshot?.basePreview || scopePreviewData || null;
+    const fallbackStoreBasePreview = checkoutBenefitsStore?.basePreview && typeof checkoutBenefitsStore.basePreview === "object"
+      ? checkoutBenefitsStore.basePreview
+      : null;
+    const calculationFallbackPreview = hasCheckoutBenefitsLocalCalculationPayload(checkoutBenefitsStore?.calculationPreview)
+      ? checkoutBenefitsStore.calculationPreview
+      : null;
+    const previewData = exactPreviewData
+      || storeSnapshot?.basePreview
+      || scopePreviewData
+      || fallbackStoreBasePreview
+      || calculationFallbackPreview
+      || null;
+    const localDeriveSourcePreview = hasCheckoutBenefitsLocalCalculationPayload(previewData)
+      ? previewData
+      : (calculationFallbackPreview || previewData);
     const localPreviewData = exactPreviewData
       || storeSnapshot?.derivedPreview
-      || (previewData
-        ? buildLocalCheckoutBenefitsPreviewData(previewData, {
+      || (localDeriveSourcePreview
+        ? buildLocalCheckoutBenefitsPreviewData(localDeriveSourcePreview, {
             previewRequest,
             selectedDiscountId: draft?.selected_discount_id,
             selectedDiscountSource: draft?.selected_discount_source,
@@ -13771,7 +13868,8 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       ? str(getCustomerToken() || "").trim()
       : "";
     const forceBenefits = opts?.forceBenefits === true;
-    if (token) {
+    const hydrateBenefits = opts?.hydrateBenefits !== false;
+    if (token && hydrateBenefits) {
       try {
         await ensureBenefitsStoreHydrated({
           previewRequest,
@@ -13880,7 +13978,10 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
         const runSeq = cartPricingAsyncRefreshSeq;
         let summaryState = null;
         try {
-          summaryState = await buildCartPricingSummaryState({ forceBenefits: true });
+          summaryState = await buildCartPricingSummaryState({
+            forceBenefits: false,
+            hydrateBenefits: false,
+          });
         } catch (error) {
           console.warn("Failed to refresh cart pricing summary:", error);
           summaryState = buildCartPricingSnapshot();
@@ -17208,6 +17309,26 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
         previewData = benefitsSnapshot?.derivedPreview || benefitsSnapshot?.basePreview || previewData;
       }
     }
+    if (!previewData) {
+      const fallbackScopePreview = peekWarmCheckoutBenefitsScopePreviewCache(previewRequest)
+        || (checkoutBenefitsStore?.basePreview && typeof checkoutBenefitsStore.basePreview === "object"
+          ? checkoutBenefitsStore.basePreview
+          : null)
+        || (hasCheckoutBenefitsLocalCalculationPayload(checkoutBenefitsStore?.calculationPreview)
+          ? checkoutBenefitsStore.calculationPreview
+          : null);
+      if (fallbackScopePreview) {
+        benefitsSnapshot = applyCheckoutBenefitsStoreSnapshot(
+          previewRequest,
+          fallbackScopePreview,
+          {
+            warmDetails: false,
+            basePreviewSource: "scope",
+          }
+        );
+        previewData = benefitsSnapshot?.derivedPreview || benefitsSnapshot?.basePreview || fallbackScopePreview;
+      }
+    }
 
     const shell = document.createElement("div");
     shell.className = "shop-checkout-benefits-sheet";
@@ -18079,7 +18200,10 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     }
 
     let previewData = peekWarmCheckoutBenefitsPreviewCache(previewRequest)
-      || peekWarmCheckoutBenefitsScopePreviewCache(previewRequest);
+      || peekWarmCheckoutBenefitsScopePreviewCache(previewRequest)
+      || (hasCheckoutBenefitsLocalCalculationPayload(checkoutBenefitsStore?.calculationPreview)
+        ? checkoutBenefitsStore.calculationPreview
+        : null);
     if (!previewData) {
       const loading = document.createElement("div");
     loading.className = "shop-checkout-benefits-loading";
@@ -28640,7 +28764,7 @@ function setBottomNavActive(tab) {
       ? str(getCustomerToken() || "").trim()
       : "";
     const cartItems = cartItemsResolved();
-    if (!token || !Array.isArray(cartItems) || !cartItems.length) return;
+    if (!token || !Array.isArray(cartItems)) return;
 
     const draft = loadCheckoutDraft();
     const previewRequest = buildCheckoutBenefitsPreviewRequest({

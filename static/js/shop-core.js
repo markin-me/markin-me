@@ -11415,18 +11415,22 @@ function updateCartBadge() {
     return rowsByKey;
   }
 
-  function renderCartIntoWithRowReuse(listEl, totalEl, emptyPlaceholderEl, reuseRowsByKey, reuseUpsellNode = null) {
+  function renderCartIntoWithRowReuse(listEl, totalEl, emptyPlaceholderEl, reuseRowsByKey, reuseUpsellNode = null, skipReuseKeys = null) {
     if (!listEl) return renderCartInto(listEl, totalEl, emptyPlaceholderEl);
     const tempList = document.createElement("div");
     const tempTotal = document.createElement("span");
     const rendered = renderCartInto(tempList, tempTotal, null, { bindInteractive: false });
     const reusable = reuseRowsByKey instanceof Map ? reuseRowsByKey : new Map();
+    const skipReuseSet = skipReuseKeys instanceof Set
+      ? skipReuseKeys
+      : new Set(Array.isArray(skipReuseKeys) ? skipReuseKeys.map((entry) => String(entry || "").trim()).filter(Boolean) : []);
 
     const nextNodes = Array.from(tempList.children);
     const fragment = document.createDocumentFragment();
     nextNodes.forEach((nextNode) => {
       const key = extractRenderedCartNodeKey(nextNode);
-      const reusedNode = key ? reusable.get(key) : null;
+      const canReuse = key && !skipReuseSet.has(key);
+      const reusedNode = canReuse ? reusable.get(key) : null;
       if (reusedNode) {
         reusable.delete(key);
         fragment.appendChild(reusedNode);
@@ -11483,6 +11487,100 @@ function updateCartBadge() {
     scrollEl.scrollLeft = safeLeft;
   }
 
+  function refreshCartUiAfterMutation({
+    reason = "cart.fastMutation",
+    forceFull = false,
+    changedCartKeys = null,
+  } = {}) {
+    if (!elCartList || forceFull) {
+      renderCart(true);
+      updateCartBadge();
+      if (openCartSheetCtx && openCartSheetCtx.listEl && openCartSheetCtx.totalEl) {
+        const { items, total } = renderCartInto(openCartSheetCtx.listEl, openCartSheetCtx.totalEl, null);
+        if (openCartSheetCtx.footerEl) openCartSheetCtx.footerEl.classList.toggle("hidden", items.length === 0);
+        if (openCartSheetCtx.checkoutBtn) {
+          openCartSheetCtx.checkoutBtn.disabled = items.length === 0;
+          const tspan = $(".shop-sheet-checkout-total", openCartSheetCtx.checkoutBtn);
+          if (tspan) tspan.textContent = money(total);
+        }
+        appendUpsellToList(openCartSheetCtx.listEl);
+      }
+      return;
+    }
+
+    const skipReuseSet = changedCartKeys instanceof Set
+      ? changedCartKeys
+      : new Set(Array.isArray(changedCartKeys) ? changedCartKeys.map((entry) => String(entry || "").trim()).filter(Boolean) : []);
+
+    const mainUpsellBlockBefore = elCartList.querySelector(".shop-cart-upsell") || null;
+    const mainUpsellScrollBefore = captureUpsellScrollState(elCartList);
+    const mainRowsBefore = captureRenderedCartRowsByKey(elCartList);
+
+    const sheetListEl = openCartSheetCtx?.listEl || null;
+    const isSameListAsMain = !!sheetListEl && sheetListEl === elCartList;
+    const sheetUpsellBlockBefore = !isSameListAsMain && sheetListEl
+      ? sheetListEl.querySelector(".shop-cart-upsell")
+      : null;
+    const sheetUpsellScrollBefore = !isSameListAsMain && sheetListEl
+      ? captureUpsellScrollState(sheetListEl)
+      : null;
+    const sheetRowsBefore = !isSameListAsMain && sheetListEl
+      ? captureRenderedCartRowsByKey(sheetListEl)
+      : new Map();
+
+    const mainRendered = renderCartIntoWithRowReuse(
+      elCartList,
+      elCartTotal,
+      elCartEmpty,
+      mainRowsBefore,
+      mainUpsellBlockBefore,
+      skipReuseSet
+    );
+    syncCartFooterVisibilityForCartMode(mainRendered.items.length);
+    if (elCheckoutBtn) {
+      elCheckoutBtn.disabled = mainRendered.items.length === 0;
+      const totalSpan = $("#shopCartTotal", elCheckoutBtn) || $(".shop-checkout-total", elCheckoutBtn);
+      if (totalSpan) totalSpan.textContent = money(mainRendered.total);
+    }
+    appendUpsellToList(elCartList);
+    restoreUpsellScrollState(elCartList, mainUpsellScrollBefore);
+    cartUiRenderedRevision = cartUiRevision;
+
+    if (sheetListEl && openCartSheetCtx?.totalEl) {
+      const sheetRendered = isSameListAsMain
+        ? mainRendered
+        : renderCartIntoWithRowReuse(
+          sheetListEl,
+          openCartSheetCtx.totalEl,
+          null,
+          sheetRowsBefore,
+          sheetUpsellBlockBefore,
+          skipReuseSet
+        );
+      if (openCartSheetCtx.footerEl) {
+        openCartSheetCtx.footerEl.classList.toggle("hidden", sheetRendered.items.length === 0);
+      }
+      if (openCartSheetCtx.checkoutBtn) {
+        openCartSheetCtx.checkoutBtn.disabled = sheetRendered.items.length === 0;
+        const tspan = $(".shop-sheet-checkout-total", openCartSheetCtx.checkoutBtn);
+        if (tspan) tspan.textContent = money(sheetRendered.total);
+      }
+      appendUpsellToList(sheetListEl);
+      if (isSameListAsMain) {
+        restoreUpsellScrollState(sheetListEl, mainUpsellScrollBefore);
+      } else {
+        restoreUpsellScrollState(sheetListEl, sheetUpsellScrollBefore);
+      }
+    }
+
+    updateCartTotalsUiOnly();
+    updateCartBadge();
+    queueMobileUiStateSync(reason || "cart.fastMutation");
+  }
+  if (typeof window !== "undefined") {
+    window.refreshCartUiAfterMutation = refreshCartUiAfterMutation;
+  }
+
   // -----------------------------
   // Qty change
   // -----------------------------
@@ -11491,8 +11589,7 @@ function updateCartBadge() {
     const qtyDelta = Number(delta);
     if (!Number.isFinite(pid) || !Number.isFinite(qtyDelta) || qtyDelta === 0) return Number(cartQty(pid) || 0);
 
-    const skipCartRerender = opts?.skipCartRerender === true;
-    const cartKeysBefore = buildCartKeySignature(state.cart);
+    const skipCartRerender = opts?.skipCartRerender !== false;
     const cartProductsBefore = buildCartProductIdsSignature(state.cart);
 
     const wasEmpty = cartCountTotal() === 0;
@@ -11556,9 +11653,7 @@ function updateCartBadge() {
       nextQty = Number(getCartItemByKey(targetKey)?.qty || 0);
       scheduleSyncAllProductCardsFromCart();
     }
-    const cartKeysAfter = buildCartKeySignature(state.cart);
     const cartProductsAfter = buildCartProductIdsSignature(state.cart);
-    const cartStructureChanged = cartKeysBefore !== cartKeysAfter;
     const cartProductsChanged = cartProductsBefore !== cartProductsAfter;
     const limitsCleaned = cleanupCartQtyHardLimits();
     clearAutoAddDismissedIfCartEmpty();
@@ -11576,19 +11671,29 @@ function updateCartBadge() {
 
     if (optionalCartNumEl) animateNumber(optionalCartNumEl, nextQty || 0, qtyDelta > 0 ? "inc" : "dec");
 
-    const shouldFullRerender = !skipCartRerender || autoChanged || cartStructureChanged;
+    const shouldFullRerender = !skipCartRerender || autoChanged;
     if (shouldFullRerender) {
       renderCart();
     } else {
-      updateCartTotalsUiOnly();
-      if (cartProductsChanged) {
-        appendUpsellToList(elCartList);
-        if (openCartSheetCtx?.listEl && openCartSheetCtx.listEl !== elCartList) {
-          appendUpsellToList(openCartSheetCtx.listEl);
+      if (typeof refreshCartUiAfterMutation === "function") {
+        refreshCartUiAfterMutation({
+          reason: "changeQty.light",
+          changedCartKeys: [targetKey],
+        });
+      } else {
+        updateCartTotalsUiOnly();
+        if (cartProductsChanged) {
+          appendUpsellToList(elCartList);
+          if (openCartSheetCtx?.listEl && openCartSheetCtx.listEl !== elCartList) {
+            appendUpsellToList(openCartSheetCtx.listEl);
+          }
         }
+        updateCartBadge();
       }
     }
-    updateCartBadge();
+    if (shouldFullRerender) {
+      updateCartBadge();
+    }
 
     if (shouldFullRerender && openCartSheetCtx && openCartSheetCtx.listEl && openCartSheetCtx.totalEl) {
       const { items, total } = renderCartInto(openCartSheetCtx.listEl, openCartSheetCtx.totalEl, null);
@@ -12525,14 +12630,15 @@ function updateCartBadge() {
     clearAutoAddDismissedIfCartEmpty();
     saveCart();
 
-    const canReuseRows = !wasEmpty && !existing && !autoChanged;
+    const canReuseRows = !autoChanged;
     if (canReuseRows) {
       const { items, total } = renderCartIntoWithRowReuse(
         elCartList,
         elCartTotal,
         elCartEmpty,
         mainRowsBefore,
-        mainUpsellBlockBefore
+        mainUpsellBlockBefore,
+        [key]
       );
       syncCartFooterVisibilityForCartMode(items.length);
       if (elCheckoutBtn) {
@@ -12559,7 +12665,8 @@ function updateCartBadge() {
             openCartSheetCtx.totalEl,
             null,
             sheetRowsBefore,
-            sheetUpsellBlockBefore
+            sheetUpsellBlockBefore,
+            [key]
           )
           : renderCartInto(openCartSheetCtx.listEl, openCartSheetCtx.totalEl, null));
       const items = rendered.items;
