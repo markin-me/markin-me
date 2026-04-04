@@ -10362,8 +10362,31 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     );
   }
 
+  function shouldQueueCheckoutPrewarmForOrderChange(reason = "") {
+    const normalizedReason = str(reason || "").trim().toLowerCase();
+    if (!normalizedReason) return false;
+    return (
+      normalizedReason === "savecheckoutdraft"
+      || normalizedReason === "updatecartbadge"
+      || normalizedReason === "updatecarttotalsuionly"
+      || normalizedReason === "rendercart"
+      || normalizedReason === "rendercart.empty"
+      || normalizedReason.startsWith("changeqty")
+      || normalizedReason.startsWith("productdetails.")
+      || normalizedReason.startsWith("combo.")
+      || normalizedReason.startsWith("cart.")
+      || normalizedReason.startsWith("updatecart")
+      || normalizedReason.startsWith("rendercart")
+      || normalizedReason.startsWith("clearcart")
+      || normalizedReason.startsWith("fetchmesafe.")
+    );
+  }
+
   function handleShopBenefitsOrderStateChange(reason = "") {
     const normalizedReason = str(reason || "").trim().toLowerCase();
+    if (shouldQueueCheckoutPrewarmForOrderChange(normalizedReason)) {
+      Promise.resolve(queueCheckoutOpenPrewarm(`order:${normalizedReason}`, { delayMs: 80 })).catch(() => {});
+    }
     const previewRequest = buildCheckoutBenefitsCurrentPreviewRequest();
     const snapshot = getBenefitsStoreSnapshot(previewRequest);
     syncBenefitsBadgesUi(snapshot?.availableBenefitsCount || 0);
@@ -23216,6 +23239,10 @@ function renderSheetAddressList() {
 
   async function startCheckoutFlow({ isSheet, forceAddressRefresh = true } = {}) {
     try { void preloadCartEnhancers(); } catch {}
+    Promise.resolve(queueCheckoutOpenPrewarm("start-checkout", {
+      immediate: true,
+      delayMs: 0,
+    })).catch(() => {});
     if (forceAddressRefresh || state._addressesInitialized !== true) {
       await refreshAddressState({ force: !!forceAddressRefresh });
     }
@@ -28753,36 +28780,137 @@ function setBottomNavActive(tab) {
     return deliverySettingsValidationPromise;
   }
 
+  let checkoutOpenPrewarmTimer = 0;
+  let checkoutOpenPrewarmKey = "";
+  let checkoutOpenPrewarmPromise = null;
+  let checkoutOpenPrewarmWarmedAt = 0;
+
+  function buildCheckoutOpenPrewarmKey(items = null, draft = null) {
+    const safeItems = Array.isArray(items) ? items : cartItemsResolved();
+    const safeDraft = draft && typeof draft === "object" ? draft : loadCheckoutDraft();
+    const normalizedItems = safeItems
+      .map((item) => ({
+        key: str(item?.key || "").trim(),
+        qty: Math.max(0, Number(item?.qty || 0)),
+      }))
+      .filter((entry) => entry.key && entry.qty > 0)
+      .sort((a, b) => a.key.localeCompare(b.key));
+    if (!normalizedItems.length) return "";
+    try {
+      return JSON.stringify({
+        items: normalizedItems,
+        method_code: resolveCartPricingMethodCode(safeDraft),
+        promo_code: normalizeCheckoutBenefitsPromoInputValue(safeDraft?.promo_code || "", { trim: true }),
+        selected_discount_id: normalizeCheckoutSelectedDiscountId(safeDraft?.selected_discount_id),
+        selected_discount_source: normalizeCheckoutDiscountSource(safeDraft?.selected_discount_source),
+        selected_promo_source: normalizeCheckoutPromoSource(safeDraft?.selected_promo_source),
+        selected_promo_reward_id: normalizeCheckoutSelectedDiscountId(safeDraft?.selected_promo_reward_id),
+        selected_address_id: Number(state?.selectedAddress?.id || 0) || null,
+        token_present: !!str(typeof getCustomerToken === "function" ? getCustomerToken() : "").trim(),
+      });
+    } catch {
+      return "";
+    }
+  }
+
+  async function runCheckoutOpenPrewarm(reason = "checkout", explicitKey = "", explicitItems = null, explicitDraft = null) {
+    const safeItems = Array.isArray(explicitItems) ? explicitItems : cartItemsResolved();
+    if (!Array.isArray(safeItems) || !safeItems.length) return null;
+    const safeDraft = explicitDraft && typeof explicitDraft === "object" ? explicitDraft : loadCheckoutDraft();
+    const prewarmKey = str(explicitKey || buildCheckoutOpenPrewarmKey(safeItems, safeDraft)).trim();
+    if (!prewarmKey) return null;
+    if (checkoutOpenPrewarmPromise && checkoutOpenPrewarmKey === prewarmKey) {
+      return checkoutOpenPrewarmPromise;
+    }
+
+    checkoutOpenPrewarmKey = prewarmKey;
+    const token = typeof getCustomerToken === "function"
+      ? str(getCustomerToken() || "").trim()
+      : "";
+    const methodCode = resolveCartPricingMethodCode(safeDraft);
+    const previewRequest = buildCheckoutBenefitsPreviewRequest({
+      items: safeItems,
+      methodCode,
+      promoCode: safeDraft?.promo_code || "",
+      selectedDiscountId: safeDraft?.selected_discount_id,
+      selectedDiscountSource: safeDraft?.selected_discount_source,
+      selectedPromoSource: safeDraft?.selected_promo_source,
+      selectedPromoRewardId: safeDraft?.selected_promo_reward_id,
+    });
+
+    const prewarmPromise = Promise.all([
+      Promise.resolve(getOrderConfig()).catch(() => null),
+      Promise.resolve(warmCheckoutDeliveryConditions(`${reason}:delivery`)).catch(() => null),
+      token
+        ? Promise.resolve(fetchMeSafe()).catch(() => (typeof getCustomerCache === "function" ? getCustomerCache() : null))
+        : Promise.resolve(null),
+      token && state._addressesInitialized !== true
+        ? Promise.resolve(refreshAddressState({ force: false })).catch(() => null)
+        : Promise.resolve(null),
+      token
+        ? Promise.resolve(ensureBenefitsStoreHydrated({
+          previewRequest,
+          force: false,
+          warmDetails: false,
+        })).catch(() => null)
+        : Promise.resolve(null),
+    ])
+      .then(() => {
+        checkoutOpenPrewarmWarmedAt = Date.now();
+        return { key: prewarmKey, warmedAt: checkoutOpenPrewarmWarmedAt };
+      })
+      .finally(() => {
+        if (checkoutOpenPrewarmPromise === prewarmPromise) {
+          checkoutOpenPrewarmPromise = null;
+        }
+      });
+    checkoutOpenPrewarmPromise = prewarmPromise;
+    return prewarmPromise;
+  }
+
+  function queueCheckoutOpenPrewarm(reason = "checkout", { delayMs = 90, immediate = false } = {}) {
+    const safeItems = cartItemsResolved();
+    if (!Array.isArray(safeItems) || !safeItems.length) return Promise.resolve(null);
+    const safeDraft = loadCheckoutDraft();
+    const prewarmKey = buildCheckoutOpenPrewarmKey(safeItems, safeDraft);
+    if (!prewarmKey) return Promise.resolve(null);
+    if (
+      prewarmKey === checkoutOpenPrewarmKey
+      && !checkoutOpenPrewarmPromise
+      && (Date.now() - checkoutOpenPrewarmWarmedAt) < 1200
+    ) {
+      return Promise.resolve({ key: prewarmKey, warmedAt: checkoutOpenPrewarmWarmedAt });
+    }
+
+    if (immediate) {
+      if (checkoutOpenPrewarmTimer) {
+        window.clearTimeout(checkoutOpenPrewarmTimer);
+        checkoutOpenPrewarmTimer = 0;
+      }
+      return runCheckoutOpenPrewarm(reason, prewarmKey, safeItems, safeDraft);
+    }
+
+    if (checkoutOpenPrewarmTimer) {
+      window.clearTimeout(checkoutOpenPrewarmTimer);
+    }
+    return new Promise((resolve) => {
+      checkoutOpenPrewarmTimer = window.setTimeout(() => {
+        checkoutOpenPrewarmTimer = 0;
+        Promise.resolve(runCheckoutOpenPrewarm(reason, prewarmKey, safeItems, safeDraft))
+          .then(resolve)
+          .catch(() => resolve(null));
+      }, Math.max(0, Number(delayMs || 0)));
+    });
+  }
+
   function prewarmCartPricingContext(reason = "boot") {
     if (!reason) {
       // keep signature flexible for callers that do not need a reason label
     }
-    Promise.resolve(getOrderConfig()).catch(() => {});
-    Promise.resolve(warmCheckoutDeliveryConditions(reason)).catch(() => {});
-
-    const token = typeof getCustomerToken === "function"
-      ? str(getCustomerToken() || "").trim()
-      : "";
-    const cartItems = cartItemsResolved();
-    if (!token || !Array.isArray(cartItems)) return;
-
-    const draft = loadCheckoutDraft();
-    const previewRequest = buildCheckoutBenefitsPreviewRequest({
-      items: cartItems,
-      methodCode: resolveCartPricingMethodCode(draft),
-      promoCode: draft?.promo_code || "",
-      selectedDiscountId: draft?.selected_discount_id,
-      selectedDiscountSource: draft?.selected_discount_source,
-      selectedPromoSource: draft?.selected_promo_source,
-      selectedPromoRewardId: draft?.selected_promo_reward_id,
-    });
-    Promise.resolve(ensureBenefitsStoreHydrated({
-      previewRequest,
-      force: false,
-      warmDetails: false,
-    }))
-      .then(() => warmCheckoutDeliveryConditions(`${reason}:benefits`))
-      .catch(() => {});
+    Promise.resolve(queueCheckoutOpenPrewarm(reason, {
+      delayMs: reason === "init" ? 0 : 80,
+      immediate: reason === "init",
+    })).catch(() => {});
   }
 
   function warmCheckoutDeliveryConditions(reason = "cart") {
@@ -30077,8 +30205,13 @@ function setBottomNavActive(tab) {
     // Базовые итоги корзины (до клиентской скидки на заказ)
     const cartTotals = computeCartTotals(items);
     const baseOrderTotal = roundPrice(Number(cartTotals.total || 0));
+    const draft = loadCheckoutDraft();
+    Promise.resolve(queueCheckoutOpenPrewarm("open-checkout", {
+      immediate: true,
+      delayMs: 0,
+    })).catch(() => {});
 
-    const cfg = await getOrderConfig();
+    const cfg = orderConfigCache || await getOrderConfig();
     let defaultDeliverySettings = getCartPricingCachedDeliverySettings();
     const initialPricingSnapshot = buildCartPricingSnapshot();
     const initialDeliverySubtotal = initialPricingSnapshot && initialPricingSnapshot.visible !== false
@@ -30112,7 +30245,9 @@ function setBottomNavActive(tab) {
     }
 
     let deliveryRules = buildCheckoutDeliveryRules(deliveryQuote);
-    const draft = loadCheckoutDraft();
+    const hasCustomerToken = typeof getCustomerToken === "function"
+      ? !!str(getCustomerToken() || "").trim()
+      : false;
 
     function resolveCheckoutEtaMinutes() {
       if (deliveryRules?.etaMinutes != null) {
@@ -30132,7 +30267,14 @@ function setBottomNavActive(tab) {
       return etaMinutes == null ? "40-80 мин" : `${etaMinutes} мин`;
     }
 
-    const me = await fetchMeSafe(); // если залогинен — подставим
+    let me = hasCustomerToken && typeof getCustomerCache === "function"
+      ? getCustomerCache()
+      : null;
+    if (hasCustomerToken && !me) {
+      me = await fetchMeSafe(); // если залогинен — подставим
+    } else if (hasCustomerToken && me) {
+      Promise.resolve(fetchMeSafe()).catch(() => {});
+    }
     const promo = { value: draft.promo_code || "" };
     const selectedDiscount = { value: normalizeCheckoutSelectedDiscountId(draft.selected_discount_id) };
     let checkoutBenefitsPreview = null;
@@ -30145,13 +30287,23 @@ function setBottomNavActive(tab) {
       selectedPromoSource: draft?.selected_promo_source,
       selectedPromoRewardId: draft?.selected_promo_reward_id,
     });
-    if (me) {
-      const benefitsSnapshot = await ensureBenefitsStoreHydrated({
-        previewRequest: initialBenefitsPreviewRequest,
-        force: false,
-        warmDetails: false,
-      });
+    if (hasCustomerToken && me) {
+      let benefitsSnapshot = getBenefitsStoreSnapshot(initialBenefitsPreviewRequest);
       checkoutBenefitsPreview = benefitsSnapshot?.derivedPreview || benefitsSnapshot?.basePreview || null;
+      if (!checkoutBenefitsPreview) {
+        benefitsSnapshot = await ensureBenefitsStoreHydrated({
+          previewRequest: initialBenefitsPreviewRequest,
+          force: false,
+          warmDetails: false,
+        });
+        checkoutBenefitsPreview = benefitsSnapshot?.derivedPreview || benefitsSnapshot?.basePreview || null;
+      } else if (benefitsSnapshot?.needsExactHydration) {
+        Promise.resolve(ensureBenefitsStoreHydrated({
+          previewRequest: initialBenefitsPreviewRequest,
+          force: false,
+          warmDetails: false,
+        })).catch(() => {});
+      }
       if (checkoutBenefitsPreview && typeof checkoutBenefitsPreview === "object") {
         const previewPromoSelection = resolveCheckoutBenefitsSelectedPromoFromPreview(checkoutBenefitsPreview);
         const requestedPromoCard = findCheckoutBenefitsPromoCardBySelection(checkoutBenefitsPreview, {
