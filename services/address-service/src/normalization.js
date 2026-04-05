@@ -1,17 +1,24 @@
 const STREET_TYPE_WORDS = [
   '\u0443\u043b\u0438\u0446\u0430',
   '\u0443\u043b',
+  '\u0443\u043b-\u0446\u0430',
+  '\u0443\u043b\u0438\u0446',
   '\u043f\u0440\u043e\u0441\u043f\u0435\u043a\u0442',
+  '\u043f\u0440\u043e\u0441\u043f',
   '\u043f\u0440-\u043a\u0442',
+  '\u043f\u0440-\u0442',
+  '\u043f\u0440\u043a\u0442',
   '\u043f\u0440',
   '\u043f\u0435\u0440\u0435\u0443\u043b\u043e\u043a',
   '\u043f\u0435\u0440',
   '\u043f\u0440\u043e\u0435\u0437\u0434',
   '\u043f\u0440-\u0434',
+  '\u043f\u0440\u0434',
   '\u0448\u043e\u0441\u0441\u0435',
   '\u043f\u043b\u043e\u0449\u0430\u0434\u044c',
   '\u043f\u043b',
   '\u0431\u0443\u043b\u044c\u0432\u0430\u0440',
+  '\u0431-\u0440',
   '\u0431\u0443\u043b',
   '\u043d\u0430\u0431\u0435\u0440\u0435\u0436\u043d\u0430\u044f',
   '\u043d\u0430\u0431',
@@ -21,8 +28,11 @@ const STREET_TYPE_WORDS = [
   '\u043b\u0438\u043d\u0438\u044f',
   '\u043c\u0438\u043a\u0440\u043e\u0440\u0430\u0439\u043e\u043d',
   '\u043c\u043a\u0440',
+  '\u043c\u043a\u0440-\u043d',
+  '\u043c\u043a\u0440\u043d',
   '\u043a\u0432\u0430\u0440\u0442\u0430\u043b',
   '\u043a\u0432-\u043b',
+  '\u043a\u0432\u043b',
 ];
 
 const BLOCKED_HOUSE_FIRST_WORDS = new Set([
@@ -246,8 +256,9 @@ function buildSearchText(parts) {
 
 function normalizeStreetSearchValue(value) {
   return normalizeText(stripStreetNoise(value))
-    .replace(/(\d+)\s*-\s*(?:\u0433\u043e|\u0439|\u044f|\u044b\u0439|\u0430\u044f)\b/giu, '$1')
-    .replace(/(\d+)(?:-\u0433\u043e|-\u0439|-\u044f|-\u044b\u0439|-\u0430\u044f)\b/giu, '$1')
+    .replace(/(\d+)\s*-\s*(?:\u0433\u043e|\u0439|\u044f|\u044b\u0439|\u0430\u044f)(?=$|\s)/giu, '$1')
+    .replace(/(\d+)(?:-\u0433\u043e|-\u0439|-\u044f|-\u044b\u0439|-\u0430\u044f)(?=$|\s)/giu, '$1')
+    .replace(/(\d+)(?:\u0433\u043e|\u0439|\u044f|\u044b\u0439|\u0430\u044f)(?=$|\s)/giu, '$1')
     .replace(/\s+/g, ' ')
     .trim();
 }

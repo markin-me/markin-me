@@ -136,7 +136,7 @@ function buildStreetSearchQuery(value) {
   if (/^(?:\u043b\u0435\u0442)(?:\s+.+)?$/iu.test(restPart)) {
     return `${numberPart} ${restPart}`;
   }
-  return `${numberPart}-\u0433\u043e ${restPart}`;
+  return `${numberPart} ${restPart}`;
 }
 
 function splitQuery(value) {
@@ -163,10 +163,10 @@ function splitQuery(value) {
 }
 
 function splitStreetOnlyQuery(value) {
-  const normalizedQuery = normalizeText(value);
+  const normalizedQuery = normalizeStreetSearchValue(value) || normalizeText(value);
   return {
     normalizedQuery,
-    normalizedCompact: compactText(value),
+    normalizedCompact: compactText(normalizedQuery),
     houseToken: '',
     streetQuery: buildStreetSearchQuery(value) || normalizedQuery,
   };
@@ -852,7 +852,13 @@ async function fetchAddressCandidates(db, rootScope, queryState, options = {}) {
   const compactPrefix = `${compactText(searchQueryValue)}%`;
   const streetContains = queryState.streetQuery ? `%${queryState.streetQuery}%` : queryContains;
   const queryTokens = String(searchQueryValue || '').split(' ').map((token) => token.trim()).filter(Boolean).slice(0, 8);
-  const activeQueryTokens = queryTokens.length > 1 ? queryTokens : [];
+  const rawQueryTokens = normalizeText(queryState.streetQuery || queryState.normalizedQuery || '')
+    .split(' ')
+    .map((token) => token.trim())
+    .filter(Boolean)
+    .slice(0, 8);
+  const mergedQueryTokens = Array.from(new Set([...rawQueryTokens, ...queryTokens]));
+  const activeQueryTokens = mergedQueryTokens.length > 1 ? mergedQueryTokens : [];
   const tokenConditions = [];
   const searchParamBase = nextParam;
   let tokenParamStart = searchParamBase + 5;
@@ -977,7 +983,13 @@ async function fetchGlobalSearchCandidates(db, queryState, options = {}) {
   const compactPrefix = `${compactText(searchQueryValue)}%`;
   const streetContains = queryState.streetQuery ? `%${queryState.streetQuery}%` : queryContains;
   const queryTokens = String(searchQueryValue || '').split(' ').map((token) => token.trim()).filter(Boolean).slice(0, 8);
-  const activeQueryTokens = queryTokens.length > 1 ? queryTokens : [];
+  const rawQueryTokens = normalizeText(queryState.streetQuery || queryState.normalizedQuery || '')
+    .split(' ')
+    .map((token) => token.trim())
+    .filter(Boolean)
+    .slice(0, 8);
+  const mergedQueryTokens = Array.from(new Set([...rawQueryTokens, ...queryTokens]));
+  const activeQueryTokens = mergedQueryTokens.length > 1 ? mergedQueryTokens : [];
   const tokenConditions = [];
   const searchParamBase = nextParam;
   let tokenParamStart = searchParamBase + 5;

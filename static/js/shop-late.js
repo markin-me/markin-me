@@ -19022,6 +19022,68 @@ function openCartSheet() {
     clearSheetAddressFormResolution({ syncLookupFromFields: false });
   }
 
+  function isSheetCurrentAddressLookupValue(value, resolvedState = null) {
+    const normalizedValue = normalizeAddressLookupText(value).toLowerCase();
+    if (!normalizedValue) return false;
+
+    const resolved = resolvedState && typeof resolvedState === "object" ? resolvedState : {};
+    const normalizedResolved = normalizeAddressLookupText(str(resolved.address_normalized_display).trim()).toLowerCase();
+    if (!normalizedResolved || normalizedValue !== normalizedResolved) return false;
+
+    const selectedType = str(resolved.selected_object_type).trim().toLowerCase();
+    return (
+      selectedType === "address"
+      || !!str(resolved.address_ref).trim()
+      || resolved.lat != null
+      || resolved.lng != null
+      || !!resolved.delivery_zone_id
+      || !!resolved.delivery_store_id
+    );
+  }
+
+  function buildSheetCurrentAddressLookupSuggestion(value, resolvedState = null, cityValue = "") {
+    const resolved = resolvedState && typeof resolvedState === "object" ? resolvedState : {};
+    if (!isSheetCurrentAddressLookupValue(value, resolved)) return null;
+
+    const display = normalizeAddressLookupText(value);
+    if (!display) return null;
+
+    const parsed = parseAddressStreetHouseFromLookup(display);
+    return {
+      __current_address_hint: true,
+      object_type: "address",
+      selected_object_type: "address",
+      source_key: str(resolved.address_ref).trim(),
+      city_name: str(cityValue).trim(),
+      context_locality: str(resolved.address_context_locality).trim(),
+      street_name: str(parsed.street).trim(),
+      house_number: str(parsed.house).trim(),
+      value: display,
+      label: display,
+      full_address: display,
+      address_normalized_display: display,
+      lat: resolved.lat == null ? null : Number(resolved.lat),
+      lng: resolved.lng == null ? null : Number(resolved.lng),
+    };
+  }
+
+  function showSheetCurrentAddressLookupSuggestion() {
+    if (!isAddressMapModeEnabled() || !formGet("lookup")) return false;
+
+    const hintItem = buildSheetCurrentAddressLookupSuggestion(
+      formGet("lookup").value,
+      sheetAddressFormResolved,
+      str(formGet("city")?.dataset?.value || "").trim()
+    );
+    if (!hintItem) return false;
+
+    clearSheetAddressLookupDebounce();
+    sheetAddressLookupState.requestSeq += 1;
+    setSheetAddressLookupItems([hintItem]);
+    setSheetAddressLookupStatus("", "ready");
+    return true;
+  }
+
   function syncSheetAddressFormMapLayout(enabled) {
     const isMapMode = Boolean(enabled);
     if (formGet("street-wrap")) {
@@ -19038,6 +19100,10 @@ function openCartSheet() {
   async function applySheetAddressLookupSuggestion(item) {
     const selectedItem = item && typeof item === "object" ? item : null;
     if (!selectedItem) return;
+    if (selectedItem.__current_address_hint === true) {
+      closeSheetAddressLookupPopover();
+      return;
+    }
     const city = str(formGet("city")?.dataset?.value || "").trim();
     const selectedType = getAddressLookupItemType(selectedItem);
     if (selectedType !== "address") {
@@ -19120,7 +19186,7 @@ function openCartSheet() {
     const normalizedQuery = str(query).trim();
     const city = str(formGet("city")?.dataset?.value || "").trim();
     const continuation = getAddressLookupContinuationInfo(normalizedQuery, sheetAddressFormResolved);
-    const apiQuery = str(continuation.query).trim();
+    const apiQuery = normalizeAddressLookupText(str(continuation.query).trim());
     const minLength = continuation.stage === "house" ? 1 : 2;
     if (!apiQuery || apiQuery.length < minLength) {
       closeSheetAddressLookupPopover();
@@ -21341,6 +21407,7 @@ function renderSheetAddressList() {
     sheetLookupInput.addEventListener("focus", () => {
       if (!isAddressMapModeEnabled()) return;
       if (str(sheetLookupInput.value).trim().length >= 2) {
+        if (showSheetCurrentAddressLookupSuggestion()) return;
         scheduleSheetAddressLookupSuggestions();
       }
     });
