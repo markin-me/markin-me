@@ -5006,6 +5006,62 @@
     return true;
   }
 
+  function buildManualAddressLookupSuggestion(value, cityValue = "", resolvedState = null) {
+    const display = normalizeAddressLookupText(value);
+    if (!display) return null;
+
+    const parsed = parseAddressStreetHouseFromLookup(display);
+    const street = str(parsed.street).trim();
+    const house = str(parsed.house).trim();
+    if (!street || !house) return null;
+
+    const resolved = resolvedState && typeof resolvedState === "object" ? resolvedState : {};
+    const city = str(cityValue).trim();
+    const contextLocality = str(resolved.address_context_locality || city).trim() || city;
+    return {
+      __manual_address_hint: true,
+      object_type: "manual",
+      selected_object_type: "manual",
+      source_key: "",
+      city_name: city,
+      context_locality: contextLocality,
+      street_name: street,
+      house_number: house,
+      value: display,
+      label: display,
+      full_address: display,
+      address_normalized_display: display,
+      lat: null,
+      lng: null,
+    };
+  }
+
+  function appendManualAddressLookupSuggestion(items, value, cityValue = "", resolvedState = null) {
+    const baseItems = Array.isArray(items) ? items.slice() : [];
+    const manualItem = buildManualAddressLookupSuggestion(value, cityValue, resolvedState);
+    if (!manualItem) return baseItems;
+
+    const manualDisplay = normalizeAddressLookupText(
+      str(manualItem.full_address || manualItem.value || "").trim()
+    ).toLowerCase();
+    if (!manualDisplay) return baseItems;
+
+    const hasSameAddress = baseItems.some((item) => {
+      if (item && item.__manual_address_hint === true) return true;
+      if (getAddressLookupItemType(item) !== "address") return false;
+      const itemDisplay = normalizeAddressLookupText(buildAddressLookupDisplay({
+        city: str(cityValue || item.city_name).trim(),
+        street: str(item.street_name || item.value || item.label).trim(),
+        house: str(item.house_number || item.house).trim(),
+        address_context_locality: str(item.context_locality || item.city_name).trim(),
+        address_normalized_display: str(item.full_address || item.value || item.label).trim(),
+      })).toLowerCase();
+      return !!itemDisplay && itemDisplay === manualDisplay;
+    });
+    if (hasSameAddress) return baseItems;
+    return baseItems.concat([manualItem]);
+  }
+
   function getAddressLookupContinuationInfo(value, resolvedState = null) {
     const lookupValue = str(value).trim();
     const currentResolved = resolvedState && typeof resolvedState === "object" ? resolvedState : {};
@@ -5239,6 +5295,7 @@
 
     elAddrLookupResults.innerHTML = "";
     addressLookupState.items.forEach((item, index) => {
+      const isManualHint = item && item.__manual_address_hint === true;
       const button = document.createElement("button");
       button.type = "button";
       button.className = "shop-address-lookup-item";
@@ -5247,10 +5304,14 @@
 
       const title = document.createElement("div");
       title.className = "shop-address-lookup-item-title";
-      title.textContent = buildAddressLookupSuggestionTitle(item, getAddressLookupCityValue());
+      title.textContent = isManualHint
+        ? "\u0421\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c \u043a\u0430\u043a \u0440\u0443\u0447\u043d\u043e\u0439 \u0430\u0434\u0440\u0435\u0441"
+        : buildAddressLookupSuggestionTitle(item, getAddressLookupCityValue());
       button.appendChild(title);
 
-      const metaText = str(item.context_locality || item.city_name).trim();
+      const metaText = isManualHint
+        ? str(item.full_address || item.value || item.label).trim()
+        : str(item.context_locality || item.city_name).trim();
       if (metaText) {
         const meta = document.createElement("div");
         meta.className = "shop-address-lookup-item-meta";
@@ -5306,11 +5367,41 @@
   async function applyAddressLookupSuggestion(item) {
     const selectedItem = item && typeof item === "object" ? item : null;
     if (!selectedItem) return;
+    const city = getAddressLookupCityValue();
     if (selectedItem.__current_address_hint === true) {
       closeAddressLookupPopover();
       return;
     }
-    const city = getAddressLookupCityValue();
+    if (selectedItem.__manual_address_hint === true) {
+      const manualDisplay = normalizeAddressLookupText(
+        str(selectedItem.full_address || selectedItem.value || selectedItem.label || elAddrLookup?.value || "").trim()
+      );
+      const parsed = parseAddressStreetHouseFromLookup(manualDisplay);
+      if (elAddrLookup) {
+        elAddrLookup.value = manualDisplay;
+        elAddrLookup.focus();
+        const caretPos = elAddrLookup.value.length;
+        try {
+          elAddrLookup.setSelectionRange(caretPos, caretPos);
+        } catch (_) {}
+      }
+      if (elAddrStreet) elAddrStreet.value = str(parsed.street).trim();
+      if (elAddrHouse) elAddrHouse.value = str(parsed.house).trim();
+      const currentResolved = state._addressFormResolved && typeof state._addressFormResolved === "object"
+        ? state._addressFormResolved
+        : {};
+      state._addressFormResolved = {
+        ...extractResolvedAddressState({
+          resolved_city_source_key: currentResolved.resolved_city_source_key,
+          address_context_locality: str(selectedItem.context_locality || selectedItem.city_name || city).trim() || null,
+          address_normalized_display: manualDisplay || null,
+          selected_object_type: "manual",
+        }),
+        _lookup_prefix: null,
+      };
+      closeAddressLookupPopover();
+      return;
+    }
     const selectedType = getAddressLookupItemType(selectedItem);
     if (selectedType !== "address") {
       const nextCity = str(selectedItem.city_name || city).trim();
@@ -5400,11 +5491,11 @@
     }
     if (!city) {
       setAddressLookupItems([]);
-      setAddressLookupStatus("Сначала выберите город.", "error");
+      setAddressLookupStatus("\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u0432\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u0433\u043e\u0440\u043e\u0434.", "error");
       return;
     }
     addressLookupState.open = true;
-    setAddressLookupStatus("Ищем адрес...", "loading");
+    setAddressLookupStatus("\u0418\u0449\u0435\u043c \u0430\u0434\u0440\u0435\u0441...", "loading");
     try {
       const params = new URLSearchParams({
         stage: continuation.stage,
@@ -5417,7 +5508,7 @@
       if (continuation.selectedSourceKey) {
         params.set("selected_source_key", continuation.selectedSourceKey);
       }
-      const response = await fetch(`/api/public/address-suggest?${params.toString()}`, {
+      const response = await fetch("/api/public/address-suggest?" + params.toString(), {
         headers: {
           "x-tenant-id": String(tenantId),
         },
@@ -5427,19 +5518,30 @@
         throw new Error(json?.error || "ADDRESS_SUGGEST_FAILED");
       }
       if (requestId !== addressLookupState.requestSeq) return;
-      const items = Array.isArray(json?.data?.items) ? json.data.items : [];
+      const rawItems = Array.isArray(json?.data?.items) ? json.data.items : [];
+      const items = appendManualAddressLookupSuggestion(rawItems, normalizedQuery, city, state._addressFormResolved);
       if (!items.length) {
         setAddressLookupItems([]);
-        setAddressLookupStatus("Ничего не найдено.", "empty");
+        setAddressLookupStatus("\u041d\u0438\u0447\u0435\u0433\u043e \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u043e.", "empty");
         return;
       }
       setAddressLookupItems(items);
-      setAddressLookupStatus(`Поиск: ${str(json?.data?.scope_label || city).trim()}`, "ready");
+      if (!rawItems.length && items.length === 1 && items[0].__manual_address_hint === true) {
+        setAddressLookupStatus("\u0422\u043e\u0447\u043d\u043e\u0433\u043e \u0441\u043e\u0432\u043f\u0430\u0434\u0435\u043d\u0438\u044f \u043d\u0435\u0442. \u041c\u043e\u0436\u043d\u043e \u0441\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c \u043a\u0430\u043a \u0440\u0443\u0447\u043d\u043e\u0439 \u0430\u0434\u0440\u0435\u0441.", "ready");
+      } else {
+        setAddressLookupStatus("\u041f\u043e\u0438\u0441\u043a: " + str(json?.data?.scope_label || city).trim(), "ready");
+      }
     } catch (error) {
       if (requestId !== addressLookupState.requestSeq) return;
       console.error(error);
+      const fallbackItems = appendManualAddressLookupSuggestion([], normalizedQuery, city, state._addressFormResolved);
+      if (fallbackItems.length) {
+        setAddressLookupItems(fallbackItems);
+        setAddressLookupStatus("\u041c\u043e\u0436\u043d\u043e \u0441\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c \u043a\u0430\u043a \u0440\u0443\u0447\u043d\u043e\u0439 \u0430\u0434\u0440\u0435\u0441.", "ready");
+        return;
+      }
       setAddressLookupItems([]);
-      setAddressLookupStatus("Не удалось получить подсказки адреса.", "error");
+      setAddressLookupStatus("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043f\u043e\u043b\u0443\u0447\u0438\u0442\u044c \u043f\u043e\u0434\u0441\u043a\u0430\u0437\u043a\u0438 \u0430\u0434\u0440\u0435\u0441\u0430.", "error");
     }
   }
 
