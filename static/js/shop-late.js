@@ -15585,7 +15585,10 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     if (canOpen) {
       card.tabIndex = 0;
       card.setAttribute("role", "button");
-      const open = () => onOpen(cardItem);
+      const open = () => {
+        if (card.classList.contains("is-claim-loading")) return;
+        onOpen(cardItem);
+      };
       card.addEventListener("click", () => {
         open();
       });
@@ -15630,7 +15633,19 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       event.preventDefault();
       event.stopPropagation();
       if (!canReceiveResolved || typeof onReceive !== "function") return;
-      await onReceive(cardItem);
+      if (isPromoClaimAction && card.classList.contains("is-claim-loading")) return;
+      if (isPromoClaimAction) {
+        card.classList.add("is-claim-loading");
+        actionBtn.disabled = true;
+      }
+      try {
+        await onReceive(cardItem);
+      } finally {
+        if (isPromoClaimAction) {
+          card.classList.remove("is-claim-loading");
+          actionBtn.disabled = !canReceiveResolved;
+        }
+      }
     });
     card.appendChild(actionBtn);
 
@@ -15644,6 +15659,13 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       subtitle.className = "shop-checkout-benefit-gift-subtitle";
       subtitle.textContent = resolvedSubtitleText;
       card.appendChild(subtitle);
+    }
+
+    if (isPromoClaimAction) {
+      const loadingOverlay = document.createElement("div");
+      loadingOverlay.className = "shop-checkout-benefit-gift-loading";
+      loadingOverlay.innerHTML = '<div class="shop-checkout-sending-spinner" aria-hidden="true"></div>';
+      card.appendChild(loadingOverlay);
     }
 
     return card;
@@ -15683,7 +15705,10 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     if (canOpen) {
       card.tabIndex = 0;
       card.setAttribute("role", "button");
-      const open = () => onOpen(cardItem);
+      const open = () => {
+        if (card.classList.contains("is-claim-loading")) return;
+        onOpen(cardItem);
+      };
       card.addEventListener("click", () => {
         open();
       });
@@ -15733,9 +15758,28 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       event.preventDefault();
       event.stopPropagation();
       if (!canReceiveResolved || typeof onReceive !== "function") return;
-      await onReceive(cardItem);
+      if (isPromoClaimAction && card.classList.contains("is-claim-loading")) return;
+      if (isPromoClaimAction) {
+        card.classList.add("is-claim-loading");
+        actionBtn.disabled = true;
+      }
+      try {
+        await onReceive(cardItem);
+      } finally {
+        if (isPromoClaimAction) {
+          card.classList.remove("is-claim-loading");
+          actionBtn.disabled = !canReceiveResolved;
+        }
+      }
     });
     card.appendChild(actionBtn);
+
+    if (isPromoClaimAction) {
+      const loadingOverlay = document.createElement("div");
+      loadingOverlay.className = "shop-checkout-benefit-gift-loading";
+      loadingOverlay.innerHTML = '<div class="shop-checkout-sending-spinner" aria-hidden="true"></div>';
+      card.appendChild(loadingOverlay);
+    }
 
     return card;
   };

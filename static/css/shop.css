@@ -16265,6 +16265,7 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
 .shop-checkout-benefit-gift-card{
   flex: 0 0 148px;
   width: 148px;
+  position: relative;
   display: grid;
   gap: 10px;
   align-content: start;
@@ -16354,6 +16355,30 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
 
 .shop-checkout-benefit-gift-action:disabled{
   opacity: 1;
+}
+
+.shop-checkout-benefit-gift-loading{
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 23, 42, 0.28);
+  backdrop-filter: blur(1px);
+  z-index: 4;
+}
+
+.shop-checkout-benefit-gift-card.is-claim-loading .shop-checkout-benefit-gift-loading{
+  display: flex;
+}
+
+.shop-checkout-benefit-gift-card.is-claim-loading .shop-checkout-benefit-gift-action{
+  cursor: default;
+}
+
+.shop-checkout-benefit-gift-card.is-claim-loading .shop-checkout-sending-spinner{
+  width: 24px;
+  height: 24px;
 }
 
 .shop-checkout-benefit-gift-title{
