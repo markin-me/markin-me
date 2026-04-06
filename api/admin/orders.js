@@ -2454,10 +2454,23 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       const hasItemsTotalOverride = Number.isFinite(itemsTotalOverrideRaw) && itemsTotalOverrideRaw >= 0;
       const discountAmountOverrideRaw = Number(req.body?.discount_amount_override);
       const hasDiscountAmountOverride = Number.isFinite(discountAmountOverrideRaw) && discountAmountOverrideRaw >= 0;
+      const hasProvidedDiscountsJson = Array.isArray(req.body?.discounts_json);
+      const hasProvidedDiscountSnapshot = (
+        hasItemsTotalOverride
+        || hasDiscountAmountOverride
+        || hasProvidedDiscountsJson
+      );
+      const providedDiscountsJsonTotal = hasProvidedDiscountsJson
+        ? roundMoney(
+            req.body.discounts_json.reduce((sum, row) => (
+              sum + Number(row?.discount_amount ?? row?.amount ?? 0)
+            ), 0)
+          )
+        : 0;
 
       let customerOrderDiscountAmount = 0;
       let appliedOrderDiscounts = [];
-      if (!hasItemsTotalOverride && Number(customerId || 0) > 0 && itemsTotal > 0) {
+      if (!hasProvidedDiscountSnapshot && Number(customerId || 0) > 0 && itemsTotal > 0) {
         const orderDiscountsForCustomer = await discountHelpers.getOrderDiscounts(
           db,
           tenantId,
@@ -2476,7 +2489,9 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         : roundMoney(Math.max(0, itemsTotal - customerOrderDiscountAmount));
       const discountAmount = hasDiscountAmountOverride
         ? roundMoney(Math.max(0, discountAmountOverrideRaw))
-        : roundMoney(itemLevelDiscountAmount + customerOrderDiscountAmount);
+        : hasProvidedDiscountsJson
+          ? roundMoney(Math.max(0, providedDiscountsJsonTotal))
+          : roundMoney(itemLevelDiscountAmount + customerOrderDiscountAmount);
 
       let deliveryCost = 0;
       if (isDeliveryMethod) {
@@ -2611,11 +2626,11 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         discountsJson = parseOrderDiscountsJson(existing?.discounts_json);
       }
       discountsJson = Array.isArray(discountsJson) ? discountsJson : [];
-      if (!hasItemsTotalOverride) {
+      if (!hasProvidedDiscountSnapshot && !hasItemsTotalOverride) {
         discountsJson = discountsJson
           .filter((row) => String(row?.apply_to || "").trim().toLowerCase() !== "order");
       }
-      if (!hasItemsTotalOverride && customerOrderDiscountAmount > 0 && appliedOrderDiscounts.length) {
+      if (!hasProvidedDiscountSnapshot && !hasItemsTotalOverride && customerOrderDiscountAmount > 0 && appliedOrderDiscounts.length) {
         discountsJson.push(
           ...appliedOrderDiscounts.map((row) => ({
             discount_id: Number(row?.id || 0),

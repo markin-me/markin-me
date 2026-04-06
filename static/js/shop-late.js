@@ -5755,7 +5755,7 @@ optionGroups.forEach((group) => {
       lines.forEach((textLine) => {
         const line = document.createElement("div");
         line.className = "cart-sub-detail-item";
-        line.textContent = "вЂў " + textLine;
+        line.textContent = "• " + textLine;
         subDetails.appendChild(line);
       });
       detailsWrap.appendChild(subDetails);
@@ -11735,21 +11735,50 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     return roundPrice(amount);
   }
 
+  function getLocalCheckoutPricePrecisionFactor() {
+    const settings = typeof getPriceRoundingSettings === "function"
+      ? getPriceRoundingSettings()
+      : null;
+    const precisionRaw = Number(settings?.precision);
+    const precision = Number.isFinite(precisionRaw) && precisionRaw > 0
+      ? Math.trunc(precisionRaw)
+      : 0;
+    return precision > 0 ? Math.pow(10, precision) : 1;
+  }
+
+  function toLocalCheckoutPriceUnits(value, factor) {
+    const normalizedFactor = Number(factor || 1) > 0 ? Number(factor || 1) : 1;
+    const amount = roundPrice(Math.max(0, Number(value || 0)));
+    return Math.max(0, Math.round(amount * normalizedFactor));
+  }
+
+  function fromLocalCheckoutPriceUnits(units, factor) {
+    const normalizedFactor = Number(factor || 1) > 0 ? Number(factor || 1) : 1;
+    return roundPrice(Math.max(0, Number(units || 0)) / normalizedFactor);
+  }
+
   function applyLocalOrderDiscountAcrossItemsNoRemainder(items, discountAmount) {
     const workingItems = (Array.isArray(items) ? items : [])
       .map((item) => ({ ...item, discount: item?.discount ? { ...item.discount } : item?.discount }));
     const eligible = [];
-    let baseItemsTotal = 0;
+    const precisionFactor = getLocalCheckoutPricePrecisionFactor();
+    let baseItemsTotalUnits = 0;
 
     workingItems.forEach((item, index) => {
       const lineTotal = roundPrice(Math.max(0, Number(item?.line_total || 0)));
-      item.line_total = lineTotal;
-      if (!(lineTotal > 0)) return;
-      eligible.push({ index, lineTotal });
-      baseItemsTotal = roundPrice(baseItemsTotal + lineTotal);
+      const lineTotalUnits = toLocalCheckoutPriceUnits(lineTotal, precisionFactor);
+      item.line_total = fromLocalCheckoutPriceUnits(lineTotalUnits, precisionFactor);
+      if (!(lineTotalUnits > 0)) return;
+      eligible.push({
+        index,
+        lineTotalUnits,
+        position: eligible.length,
+      });
+      baseItemsTotalUnits += lineTotalUnits;
     });
+    const baseItemsTotal = fromLocalCheckoutPriceUnits(baseItemsTotalUnits, precisionFactor);
 
-    if (!(baseItemsTotal > 0) || !eligible.length) {
+    if (!(baseItemsTotalUnits > 0) || !eligible.length) {
       return {
         items: workingItems,
         discountAmount: 0,
@@ -11757,9 +11786,9 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       };
     }
 
-    const requestedDiscount = roundPrice(Math.max(0, Number(discountAmount || 0)));
-    const targetDiscount = Math.min(requestedDiscount, baseItemsTotal);
-    if (!(targetDiscount > 0)) {
+    const requestedDiscountUnits = toLocalCheckoutPriceUnits(discountAmount, precisionFactor);
+    const targetDiscountUnits = Math.min(requestedDiscountUnits, baseItemsTotalUnits);
+    if (!(targetDiscountUnits > 0)) {
       return {
         items: workingItems,
         discountAmount: 0,
@@ -11767,24 +11796,45 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       };
     }
 
-    let appliedDiscount = 0;
-    let remainingDiscount = targetDiscount;
-
-    eligible.forEach((entry) => {
-      const lineTotal = Number(entry.lineTotal || 0);
-      if (!(lineTotal > 0) || !(remainingDiscount > 0)) return;
-      const proportionalRaw = targetDiscount * (lineTotal / baseItemsTotal);
-      const roundedShare = roundPrice(proportionalRaw);
-      const safeShare = Math.min(
-        lineTotal,
-        Math.max(0, roundedShare),
-        remainingDiscount
-      );
-      if (!(safeShare > 0)) return;
-      const nextLineTotal = roundPrice(Math.max(0, lineTotal - safeShare));
-      workingItems[entry.index].line_total = nextLineTotal;
-      appliedDiscount = roundPrice(appliedDiscount + safeShare);
-      remainingDiscount = roundPrice(Math.max(0, remainingDiscount - safeShare));
+    const allocations = eligible.map((entry) => {
+      const lineUnits = Number(entry?.lineTotalUnits || 0);
+      const proportionalUnits = (targetDiscountUnits * lineUnits) / baseItemsTotalUnits;
+      const roundedDownUnits = Math.floor(proportionalUnits);
+      const safeUnits = Math.min(lineUnits, Math.max(0, roundedDownUnits));
+      return {
+        ...entry,
+        lineUnits,
+        shareUnits: safeUnits,
+        fractionalRemainder: proportionalUnits - roundedDownUnits,
+      };
+    });
+    let appliedDiscountUnits = allocations.reduce((sum, entry) => sum + Number(entry?.shareUnits || 0), 0);
+    let remainingDiscountUnits = Math.max(0, targetDiscountUnits - appliedDiscountUnits);
+    if (remainingDiscountUnits > 0) {
+      const sortedByRemainder = allocations.slice().sort((a, b) => (
+        Number(b?.fractionalRemainder || 0) - Number(a?.fractionalRemainder || 0)
+        || Number(b?.lineUnits || 0) - Number(a?.lineUnits || 0)
+        || Number(a?.position || 0) - Number(b?.position || 0)
+      ));
+      while (remainingDiscountUnits > 0) {
+        let progressed = false;
+        for (const entry of sortedByRemainder) {
+          const capUnits = Math.max(0, Number(entry?.lineUnits || 0) - Number(entry?.shareUnits || 0));
+          if (!(capUnits > 0)) continue;
+          entry.shareUnits += 1;
+          remainingDiscountUnits -= 1;
+          appliedDiscountUnits += 1;
+          progressed = true;
+          if (!(remainingDiscountUnits > 0)) break;
+        }
+        if (!progressed) break;
+      }
+    }
+    allocations.forEach((entry) => {
+      const lineUnits = Number(entry?.lineUnits || 0);
+      const discountUnits = Math.min(lineUnits, Math.max(0, Number(entry?.shareUnits || 0)));
+      const nextLineUnits = Math.max(0, lineUnits - discountUnits);
+      workingItems[entry.index].line_total = fromLocalCheckoutPriceUnits(nextLineUnits, precisionFactor);
     });
 
     const itemsTotalAfterDiscount = roundPrice(
@@ -11793,7 +11843,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
 
     return {
       items: workingItems,
-      discountAmount: roundPrice(appliedDiscount),
+      discountAmount: fromLocalCheckoutPriceUnits(appliedDiscountUnits, precisionFactor),
       itemsTotalAfterDiscount,
     };
   }
@@ -12821,13 +12871,13 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       if (currentEl) currentEl.textContent = money(stateEntry.currentTotal);
       if (oldEl) {
         oldEl.textContent = stateEntry.originalTotal > stateEntry.currentTotal
-          ? `${moneyNoSign(stateEntry.originalTotal)} в‚Ѕ`
+          ? `${moneyNoSign(stateEntry.originalTotal)} \u20BD`
           : "";
         oldEl.classList.toggle("hidden", !(stateEntry.originalTotal > stateEntry.currentTotal));
       }
       if (badgeEl) {
         const showBadge = Number(stateEntry.discountAmount || 0) > 0;
-        badgeEl.textContent = showBadge ? `-${moneyNoSign(stateEntry.discountAmount)} в‚Ѕ` : "";
+        badgeEl.textContent = showBadge ? `-${moneyNoSign(stateEntry.discountAmount)} \u20BD` : "";
         badgeEl.classList.toggle("hidden", !showBadge);
       }
     });
@@ -17467,10 +17517,10 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
         : { discounts: [], promo_codes: [], gifts: [], progress: [], completed: [] });
     const activePromoCode = resolveCheckoutBenefitsActivePromoCode(data);
 
-    const discountSection = createCheckoutBenefitsSection("РЎРєРёРґРєРё", "Р”Р»СЏ СЌС‚РѕРіРѕ Р·Р°РєР°Р·Р° РЅРµС‚ РґРѕСЃС‚СѓРїРЅС‹С… Р°РєС†РёР№.");
-    const promoSection = createCheckoutBenefitsSection("РџСЂРѕРјРѕРєРѕРґС‹", "Р”Р»СЏ СЌС‚РѕРіРѕ Р·Р°РєР°Р·Р° РЅРµС‚ РґРѕСЃС‚СѓРїРЅС‹С… РїСЂРѕРјРѕРєРѕРґРѕРІ.");
-    const giftSection = createCheckoutBenefitsSection("РџРѕРґР°СЂРєРё", "Р—РґРµСЃСЊ РїРѕСЏРІСЏС‚СЃСЏ РґРѕСЃС‚СѓРїРЅС‹Рµ РїРѕРґР°СЂРєРё.");
-    const progressSection = createCheckoutBenefitsSection("РќР°РєРѕРїР»РµРЅРёСЏ", "Р—РґРµСЃСЊ РїРѕСЏРІРёС‚СЃСЏ РїСЂРѕРіСЂРµСЃСЃ РЅР°РєРѕРїРёС‚РµР»СЊРЅС‹С… Р°РєС†РёР№.");
+    const discountSection = createCheckoutBenefitsSection("\u0421\u043a\u0438\u0434\u043a\u0438", "\u0414\u043b\u044f \u044d\u0442\u043e\u0433\u043e \u0437\u0430\u043a\u0430\u0437\u0430 \u043d\u0435\u0442 \u0434\u043e\u0441\u0442\u0443\u043f\u043d\u044b\u0445 \u0430\u043a\u0446\u0438\u0439.");
+    const promoSection = createCheckoutBenefitsSection("\u041f\u0440\u043e\u043c\u043e\u043a\u043e\u0434\u044b", "\u0414\u043b\u044f \u044d\u0442\u043e\u0433\u043e \u0437\u0430\u043a\u0430\u0437\u0430 \u043d\u0435\u0442 \u0434\u043e\u0441\u0442\u0443\u043f\u043d\u044b\u0445 \u043f\u0440\u043e\u043c\u043e\u043a\u043e\u0434\u043e\u0432.");
+    const giftSection = createCheckoutBenefitsSection("\u041f\u043e\u0434\u0430\u0440\u043a\u0438", "\u0417\u0434\u0435\u0441\u044c \u043f\u043e\u044f\u0432\u044f\u0442\u0441\u044f \u0434\u043e\u0441\u0442\u0443\u043f\u043d\u044b\u0435 \u043f\u043e\u0434\u0430\u0440\u043a\u0438.");
+    const progressSection = createCheckoutBenefitsSection("\u041d\u0430\u043a\u043e\u043f\u043b\u0435\u043d\u0438\u044f", "\u0417\u0434\u0435\u0441\u044c \u043f\u043e\u044f\u0432\u0438\u0442\u0441\u044f \u043f\u0440\u043e\u0433\u0440\u0435\u0441\u0441 \u043d\u0430\u043a\u043e\u043f\u0438\u0442\u0435\u043b\u044c\u043d\u044b\u0445 \u0430\u043a\u0446\u0438\u0439.");
     discountSection.section.dataset.benefitsSection = "discounts";
     promoSection.section.dataset.benefitsSection = "promos";
     giftSection.section.dataset.benefitsSection = "gifts";
@@ -22595,153 +22645,10 @@ function renderSheetAddressList() {
       .filter((entry) => Number(entry.amount || 0) > 0);
   }
 
-  const storefrontOrderDiscountBreakdownPreviewCache = new Map();
-
-  function normalizeStorefrontOrderDiscountBreakdownRows(rows) {
-    return (Array.isArray(rows) ? rows : [])
-      .map((entry, index) => {
-        const amount = roundPrice(Number(entry?.discount_amount ?? entry?.amount ?? 0));
-        if (!(amount > 0)) return null;
-        const promoCode = str(entry?.promoCode || entry?.promo_code || entry?.code || "").trim().toUpperCase() || null;
-        return {
-          key: str(entry?.key || entry?.title || `discount_${index}`).trim() || null,
-          title: str(entry?.title || entry?.name || "Скидка").trim() || "Скидка",
-          amount,
-          sourceKind: normalizeOrderDiscountBreakdownSourceKind(entry),
-          promoCode,
-        };
-      })
-      .filter(Boolean);
-  }
-
   function getEffectiveOrderStoredDiscountBreakdown(order) {
-    const overrideRows = normalizeStorefrontOrderDiscountBreakdownRows(
-      order?.summary_discount_breakdown || order?.summaryDiscountBreakdown
-    );
-    return overrideRows.length ? overrideRows : buildOrderStoredDiscountBreakdown(order);
+    return buildOrderStoredDiscountBreakdown(order);
   }
 
-  function hasDetailedStorefrontOrderDiscountBreakdown(rows) {
-    const normalizedRows = Array.isArray(rows) ? rows : [];
-    if (normalizedRows.length > 1) return true;
-    if (!normalizedRows.length) return false;
-    const row = normalizedRows[0] || {};
-    const title = str(row?.title || "").trim().toLowerCase();
-    const sourceKind = str(row?.sourceKind || row?.source_kind || "").trim().toLowerCase();
-    return Boolean(
-      row?.promoCode
-      || sourceKind
-      || (title && title !== "клиентская скидка" && title !== "скидка")
-    );
-  }
-
-  function shouldHydrateStorefrontOrderDiscountBreakdown(order) {
-    if (!(Number(order?.discount_amount || 0) > 0)) return false;
-    if (hasDetailedStorefrontOrderDiscountBreakdown(getEffectiveOrderStoredDiscountBreakdown(order))) {
-      return false;
-    }
-    const benefitsMeta = order?.benefits_meta && typeof order.benefits_meta === "object"
-      ? order.benefits_meta
-      : null;
-    return Boolean(
-      normalizeCheckoutSelectedDiscountId(benefitsMeta?.selected_discount_id) !== null
-      || normalizeCheckoutPromoSource(benefitsMeta?.selected_promo_source)
-      || str(order?.promo_code || "").trim()
-    );
-  }
-
-  function buildStorefrontOrderBenefitsPreviewRequest(order) {
-    if (!order || !Array.isArray(order.items) || !order.items.length) return null;
-    const benefitsMeta = order?.benefits_meta && typeof order.benefits_meta === "object"
-      ? order.benefits_meta
-      : null;
-    const selectedDiscountId = normalizeCheckoutSelectedDiscountId(benefitsMeta?.selected_discount_id);
-    const selectedPromoRewardId = normalizeCheckoutSelectedDiscountId(benefitsMeta?.selected_promo_reward_id);
-    const promoCode = str(order?.promo_code || "").trim() || null;
-    return {
-      method_code: str(order?.method_code || "").trim() || "takeaway",
-      promo_code: promoCode,
-      selected_discount_id: selectedDiscountId,
-      selected_discount_source: selectedDiscountId
-        ? (normalizeCheckoutDiscountSource(benefitsMeta?.selected_discount_source) || "discount")
-        : null,
-      selected_promo_source: (promoCode || selectedPromoRewardId)
-        ? (normalizeCheckoutPromoSource(benefitsMeta?.selected_promo_source) || "promo_code")
-        : null,
-      selected_promo_reward_id: selectedPromoRewardId,
-      items: order.items,
-    };
-  }
-
-  async function hydrateStorefrontOrderDiscountBreakdown(order) {
-    if (!order || !shouldHydrateStorefrontOrderDiscountBreakdown(order)) return order;
-
-    const cacheKey = String(Number(order?.id || 0) || order?.public_id || "").trim();
-    if (cacheKey && storefrontOrderDiscountBreakdownPreviewCache.has(cacheKey)) {
-      order.summary_discount_breakdown = storefrontOrderDiscountBreakdownPreviewCache
-        .get(cacheKey)
-        .map((entry) => ({ ...entry }));
-      return order;
-    }
-
-    const previewRequest = buildStorefrontOrderBenefitsPreviewRequest(order);
-    if (!previewRequest) return order;
-
-    try {
-      const res = await apiJson("/api/public/checkout/benefits/preview", {
-        method: "POST",
-        body: previewRequest,
-      });
-      const previewRows = normalizeStorefrontOrderDiscountBreakdownRows(
-        res?.data?.summary?.discount_breakdown
-      );
-      if (previewRows.length) {
-        order.summary_discount_breakdown = previewRows.map((entry) => ({ ...entry }));
-        if (cacheKey) {
-          storefrontOrderDiscountBreakdownPreviewCache.set(
-            cacheKey,
-            previewRows.map((entry) => ({ ...entry }))
-          );
-        }
-      }
-    } catch (error) {
-      console.warn("Failed to hydrate storefront order discount breakdown:", error);
-    }
-
-    return order;
-  }
-
-  function buildOrderDiscountBreakdownFingerprint(entry) {
-    const key = str(entry?.key || "").trim().toLowerCase();
-    if (key) return `key:${key}`;
-    const sourceKind = str(entry?.sourceKind || entry?.source_kind || "").trim().toLowerCase();
-    const title = str(entry?.title || "").trim().toLowerCase();
-    const promoCode = str(entry?.promoCode || entry?.promo_code || "").trim().toUpperCase();
-    return `row:${sourceKind}:${title}:${promoCode}`;
-  }
-
-  function mergeOrderDiscountBreakdownEntries(...lists) {
-    const merged = [];
-    const seen = new Set();
-    lists.forEach((list) => {
-      (Array.isArray(list) ? list : []).forEach((entry) => {
-        const amount = roundPrice(Number(entry?.amount || 0));
-        if (!(amount > 0)) return;
-        const normalized = {
-          key: str(entry?.key || "").trim() || null,
-          title: str(entry?.title || "Скидка").trim() || "Скидка",
-          amount,
-          sourceKind: normalizeOrderDiscountBreakdownSourceKind(entry),
-          promoCode: str(entry?.promoCode || entry?.promo_code || "").trim().toUpperCase() || null,
-        };
-        const fingerprint = buildOrderDiscountBreakdownFingerprint(normalized);
-        if (seen.has(fingerprint)) return;
-        seen.add(fingerprint);
-        merged.push(normalized);
-      });
-    });
-    return merged;
-  }
 
   function appendOrderOtherDiscountEntryIfNeeded(entries, totalDiscount) {
     const targetTotal = roundPrice(Math.max(0, Number(totalDiscount || 0)));
@@ -22762,15 +22669,6 @@ function renderSheetAddressList() {
     return normalizedEntries;
   }
 
-  function hasStructuredStoredOrderDiscountBreakdown(rows) {
-    return (Array.isArray(rows) ? rows : []).some((entry) => {
-      const key = str(entry?.key || "").trim();
-      const sourceKind = str(entry?.sourceKind || entry?.source_kind || "").trim();
-      const promoCode = str(entry?.promoCode || entry?.promo_code || "").trim();
-      return Boolean(key || sourceKind || promoCode);
-    });
-  }
-
   function formatOrderDiscountBreakdownTitle(entry) {
     const title = str(entry?.title || "Скидка").trim() || "Скидка";
     const promoCode = str(entry?.promoCode || "").trim();
@@ -22778,197 +22676,33 @@ function renderSheetAddressList() {
     return `${title} (${promoCode})`;
   }
 
-  function isOrderSummaryAutoAddItem(item) {
-    if (Number(item?.auto_add || 0) === 1) return true;
-    return str(item?.product_name || item?.name || "").trim().toLowerCase() === "приборы";
-  }
-
-  function buildOrderItemLevelDiscountSummary(items) {
-    let comboDiscount = 0;
-    let productDiscount = 0;
-    let autoAddDiscount = 0;
-
-    (Array.isArray(items) ? items : []).forEach((item) => {
-      if (!item || Number(item?.is_gift_reward || 0) === 1) return;
-      const lineTotal = getOrderItemLineTotal(item);
-      let originalLineTotal = lineTotal;
-      const comboOldLineTotal = Number(item?.old_line_total || 0);
-      const discountOriginalLineTotal = Number(item?.discount?.original_line_total || 0);
-      const oldPrice = Number(item?.old_price || 0);
-      const qty = Math.max(0, Number(item?.qty || item?.quantity || 0));
-      const oldPriceLineTotal = oldPrice > 0 ? roundPrice(oldPrice * qty) : 0;
-
-      if (String(item?.type || "") === "combo" && comboOldLineTotal > lineTotal) {
-        originalLineTotal = comboOldLineTotal;
-      } else if (discountOriginalLineTotal > lineTotal) {
-        originalLineTotal = discountOriginalLineTotal;
-      } else if (oldPriceLineTotal > lineTotal) {
-        originalLineTotal = oldPriceLineTotal;
-      }
-
-      const lineDiscount = roundPrice(Math.max(0, originalLineTotal - lineTotal));
-      if (!(lineDiscount > 0)) return;
-
-      if (String(item?.type || "") === "combo") {
-        comboDiscount += lineDiscount;
-      } else if (isOrderSummaryAutoAddItem(item)) {
-        autoAddDiscount += lineDiscount;
-      } else {
-        productDiscount += lineDiscount;
-      }
-    });
-
-    comboDiscount = roundPrice(comboDiscount);
-    productDiscount = roundPrice(productDiscount);
-    autoAddDiscount = roundPrice(autoAddDiscount);
-
-    return {
-      totalDiscount: roundPrice(comboDiscount + productDiscount + autoAddDiscount),
-      breakdown: [
-        { key: "combo_discount", title: "Комбо", amount: comboDiscount },
-        { key: "product_discount", title: "Товарные скидки", amount: productDiscount },
-        { key: "auto_add_discount", title: "Автодобавление", amount: autoAddDiscount },
-      ].filter((entry) => Number(entry.amount || 0) > 0),
-    };
-  }
-
-  function buildOrderSummaryData(order) {
-    const orderTotal = roundPrice(Number(order?.total_price || 0));
-    const deliveryCost = roundPrice(Number(order?.delivery_cost || 0));
-    const items = Array.isArray(order?.items) ? order.items : [];
-    const discountsList = parseOrderDiscountsJson(order);
-
-    let itemsTotalAfterItemDiscounts = 0;
-    let comboDiscount = 0;
-    let productDiscount = 0;
-    let autoAddDiscount = 0;
-
-    items.forEach((item) => {
-      const lineTotal = getOrderItemLineTotal(item);
-      itemsTotalAfterItemDiscounts += lineTotal;
-
-      let originalLineTotal = lineTotal;
-      const comboOldLineTotal = Number(item?.old_line_total || 0);
-      const discountOriginalLineTotal = Number(item?.discount?.original_line_total || 0);
-      const oldPrice = Number(item?.old_price || 0);
-      const qty = Math.max(0, Number(item?.qty || item?.quantity || 0));
-      const oldPriceLineTotal = oldPrice > 0 ? roundPrice(oldPrice * qty) : 0;
-
-      if (String(item?.type || "") === "combo" && comboOldLineTotal > lineTotal) {
-        originalLineTotal = comboOldLineTotal;
-      } else if (discountOriginalLineTotal > lineTotal) {
-        originalLineTotal = discountOriginalLineTotal;
-      } else if (oldPriceLineTotal > lineTotal) {
-        originalLineTotal = oldPriceLineTotal;
-      }
-
-      const lineDiscount = roundPrice(Math.max(0, originalLineTotal - lineTotal));
-      if (!(lineDiscount > 0)) return;
-
-      if (String(item?.type || "") === "combo") {
-        comboDiscount += lineDiscount;
-      } else if (Number(item?.auto_add || 0) === 1) {
-        autoAddDiscount += lineDiscount;
-      } else {
-        productDiscount += lineDiscount;
-      }
-    });
-
-    comboDiscount = roundPrice(comboDiscount);
-    productDiscount = roundPrice(productDiscount);
-    autoAddDiscount = roundPrice(autoAddDiscount);
-
-    const itemsPayableAfterAllDiscounts = roundPrice(Math.max(0, orderTotal - deliveryCost));
-    const customerOrderDiscount = roundPrice(Math.max(0, itemsTotalAfterItemDiscounts - itemsPayableAfterAllDiscounts));
-    const itemLevelDiscount = roundPrice(comboDiscount + productDiscount + autoAddDiscount);
-    const calculatedDiscount = roundPrice(itemLevelDiscount + customerOrderDiscount);
-    const storedDiscount = roundPrice(Math.max(0, Number(order?.discount_amount || 0)));
-    const totalDiscount = storedDiscount > calculatedDiscount ? storedDiscount : calculatedDiscount;
-    const subtotalBeforeDiscounts = roundPrice(itemsPayableAfterAllDiscounts + totalDiscount);
-
-    const orderDiscountTitles = [];
-    discountsList.forEach((d) => {
-      if (String(d?.apply_to || "").toLowerCase() !== "order") return;
-      const title = str(d?.title || "").trim();
-      if (title && !orderDiscountTitles.includes(title)) orderDiscountTitles.push(title);
-    });
-
-    const breakdown = [
-      { title: "Комбо", amount: comboDiscount },
-      { title: "Товарные скидки", amount: productDiscount },
-      { title: "Автодобавление", amount: autoAddDiscount },
-      { title: "Клиентская скидка", amount: customerOrderDiscount },
-    ].filter((x) => Number(x.amount || 0) > 0);
-    const breakdownTotal = roundPrice(breakdown.reduce((sum, entry) => sum + Number(entry.amount || 0), 0));
-    const otherDiscount = roundPrice(Math.max(0, totalDiscount - breakdownTotal));
-    if (otherDiscount > 0) breakdown.push({ title: "Прочие скидки", amount: otherDiscount });
-
-    return {
-      orderTotal,
-      deliveryCost,
-      subtotalBeforeDiscounts,
-      discountAmount: totalDiscount,
-      changeFrom: Number(order?.change_from || 0),
-      paymentTitle: str(order?.payment_title || "").trim(),
-      breakdown,
-      orderDiscountTitles,
-    };
-  }
-
   function buildCanonicalOrderSummaryData(order) {
     const orderTotal = roundPrice(Number(order?.total_price || 0));
     const deliveryCost = roundPrice(Number(order?.delivery_cost || 0));
-    const items = Array.isArray(order?.items) ? order.items : [];
     const itemsPayableAfterAllDiscounts = roundPrice(Math.max(0, orderTotal - deliveryCost));
-    const itemsTotalAfterItemDiscounts = roundPrice(
-      items.reduce((sum, item) => sum + getOrderItemLineTotal(item), 0)
-    );
-    const itemLevelSummary = buildOrderItemLevelDiscountSummary(items);
     const storedDiscount = roundPrice(Math.max(0, Number(order?.discount_amount || 0)));
     const storedBreakdown = getEffectiveOrderStoredDiscountBreakdown(order);
+    const storedBreakdownTotal = roundPrice(
+      storedBreakdown.reduce((sum, entry) => sum + Number(entry?.amount || 0), 0)
+    );
+    const discountAmount = roundPrice(
+      storedBreakdown.length > 0 ? storedBreakdownTotal : storedDiscount
+    );
+    const subtotalBeforeDiscounts = roundPrice(itemsPayableAfterAllDiscounts + discountAmount);
 
-    let discountAmount = storedDiscount;
-    let subtotalBeforeDiscounts = roundPrice(itemsPayableAfterAllDiscounts + storedDiscount);
     let breakdown = [];
-
     if (storedBreakdown.length > 0) {
-      const storedStructured = hasStructuredStoredOrderDiscountBreakdown(storedBreakdown);
-      const storedBreakdownTotal = roundPrice(
-        storedBreakdown.reduce((sum, entry) => sum + Number(entry?.amount || 0), 0)
-      );
-      const baseTotalDiscount = roundPrice(Math.max(storedDiscount, storedBreakdownTotal));
-      if (storedStructured) {
-        breakdown = storedBreakdown.slice();
-      } else if (storedBreakdown.length === 1) {
-        const orderLevelTotal = roundPrice(Math.max(0, baseTotalDiscount - itemLevelSummary.totalDiscount));
-        const adjustedStoredBreakdown = orderLevelTotal > 0
-          ? [{ ...storedBreakdown[0], amount: orderLevelTotal }]
-          : [];
-        breakdown = mergeOrderDiscountBreakdownEntries(adjustedStoredBreakdown, itemLevelSummary.breakdown);
-      } else {
-        breakdown = storedBreakdown.slice();
-      }
-      const breakdownTotal = roundPrice(
-        breakdown.reduce((sum, entry) => sum + Number(entry?.amount || 0), 0)
-      );
-      discountAmount = roundPrice(Math.max(baseTotalDiscount, breakdownTotal));
-      breakdown = appendOrderOtherDiscountEntryIfNeeded(breakdown, discountAmount);
-      subtotalBeforeDiscounts = roundPrice(itemsPayableAfterAllDiscounts + discountAmount);
-    } else {
-      const customerOrderDiscount = roundPrice(
-        Math.max(0, itemsTotalAfterItemDiscounts - itemsPayableAfterAllDiscounts)
-      );
-      const calculatedDiscount = roundPrice(itemLevelSummary.totalDiscount + customerOrderDiscount);
-      discountAmount = roundPrice(Math.max(storedDiscount, calculatedDiscount));
-      subtotalBeforeDiscounts = roundPrice(itemsPayableAfterAllDiscounts + discountAmount);
-      breakdown = mergeOrderDiscountBreakdownEntries(
-        itemLevelSummary.breakdown,
-        customerOrderDiscount > 0
-          ? [{ key: "customer_discount", title: "Клиентская скидка", amount: customerOrderDiscount }]
-          : []
-      );
-      breakdown = appendOrderOtherDiscountEntryIfNeeded(breakdown, discountAmount);
+      breakdown = storedBreakdown.slice();
+    } else if (discountAmount > 0) {
+      breakdown = [{
+        key: "discount_total",
+        title: "Скидка",
+        amount: discountAmount,
+        sourceKind: null,
+        promoCode: null,
+      }];
     }
+    if (!storedBreakdown.length) breakdown = [];
 
     return {
       orderTotal,
@@ -26955,9 +26689,6 @@ function renderSheetAddressList() {
       try {
         const json = await apiJson(`/api/public/me/orders/${orderId}`);
         const order = json.data || null;
-        if (order) {
-          await hydrateStorefrontOrderDiscountBreakdown(order);
-        }
         return order;
       } catch (e) {
         console.error("Failed to load order details:", e);
@@ -33776,6 +33507,26 @@ function setBottomNavActive(tab) {
               })
               .filter(Boolean)
           : [];
+        const snapshotDiscountBreakdownToStore = Array.isArray(pricingSnapshotState?.discountDetailItems)
+          ? pricingSnapshotState.discountDetailItems
+              .map((entry, index) => {
+                const amount = roundPrice(Number(entry?.amount || entry?.discount_amount || 0));
+                if (!(amount > 0)) return null;
+                const promoCode = str(entry?.promoCode || entry?.promo_code || "").trim().toUpperCase() || null;
+                const sourceKind = normalizeOrderDiscountBreakdownSourceKind(entry)
+                  || (promoCode ? "promo_code" : null);
+                return {
+                  key: str(entry?.key || entry?.title || `discount_${index}`).trim() || null,
+                  title: str(entry?.title || "Скидка").trim() || "Скидка",
+                  amount,
+                  source_kind: sourceKind,
+                  promo_code: sourceKind === "promo_code"
+                    ? (promoCode || normalizedPromoCode || null)
+                    : null,
+                };
+              })
+              .filter(Boolean)
+          : snapshotDiscountBreakdown;
       const payload = {
         customer_name: null,
         customer_phone: str(phone.value).trim(),
@@ -33806,7 +33557,7 @@ function setBottomNavActive(tab) {
             delivery: snapshotDeliveryCost,
             discount_total: snapshotDiscountTotal,
             total: snapshotTotal,
-            discount_breakdown: snapshotDiscountBreakdown,
+            discount_breakdown: snapshotDiscountBreakdownToStore,
           },
         },
         method_code: methodCode,
@@ -35027,9 +34778,6 @@ function initShopLate() {
         try {
           const json = await apiJson(`/api/public/me/orders/${orderId}`);
           const order = json.data || null;
-          if (order) {
-            await hydrateStorefrontOrderDiscountBreakdown(order);
-          }
           let detailView = shell.detailsHost.querySelector(`.shop-active-order-details[data-order-id="${Number(orderId)}"]`);
           if (!detailView) {
             detailView = document.createElement("div");

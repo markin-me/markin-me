@@ -12621,7 +12621,7 @@
 
     const setOrderStatusView = (text, _color, order = null) => {
       if (!dom.center.headerOrder) return;
-      const safeText = String(text || "вЂ”").trim() || "вЂ”";
+      const safeText = String(text || "\u2014").trim() || "\u2014";
       const stageCol = $(".order-col.order-stage", dom.center.headerOrder);
       if (!stageCol) return;
       stageCol.innerHTML = buildHeaderOrderStageButtonHtml(order, safeText);
@@ -12690,10 +12690,10 @@
       order = null,
       orderId = 0,
     } = {}) => {
-      const safeId = String(id || "вЂ”").trim() || "вЂ”";
-      const safeTime = String(time || "вЂ”").trim() || "вЂ”";
-      const safeClientName = String(clientName || "вЂ”").trim() || "вЂ”";
-      const safeClientPhone = String(clientPhone || "вЂ”").trim() || "вЂ”";
+      const safeId = String(id || "\u2014").trim() || "\u2014";
+      const safeTime = String(time || "\u2014").trim() || "\u2014";
+      const safeClientName = String(clientName || "\u2014").trim() || "\u2014";
+      const safeClientPhone = String(clientPhone || "\u2014").trim() || "\u2014";
       const mobileOrderLabel = Number(orderId || 0) > 0 ? `#${safeId}` : "—";
       if (dom.center.orderKind) dom.center.orderKind.textContent = kind;
       if (dom.center.orderId) dom.center.orderId.textContent = safeId;

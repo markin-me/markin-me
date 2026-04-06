@@ -753,9 +753,9 @@
         setTextAll(infoEls.deliveryAddressCommentText, "");
         setTextAll(infoEls.orderCommentText, "");
         setTextAll(infoEls.refundBadge, "");
-        setTextAll(infoEls.refundState, "вЂ”");
-        setTextAll(infoEls.refundedTotal, "вЂ”");
-        setTextAll(infoEls.refundableTotal, "вЂ”");
+        setTextAll(infoEls.refundState, "\u2014");
+        setTextAll(infoEls.refundedTotal, "\u2014");
+        setTextAll(infoEls.refundableTotal, "\u2014");
         setHtmlAll(infoEls.refundHistory, "");
         setHtmlAll(infoEls.itemsList, '<div class="muted">—</div>');
         setHiddenAll(infoEls.changeFromRow, true);

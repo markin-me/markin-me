@@ -1916,8 +1916,14 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     } catch {}
     let discountsJson = [];
     try {
-      const parsedDiscounts = r.discounts_json ? JSON.parse(r.discounts_json) : [];
-      if (Array.isArray(parsedDiscounts)) discountsJson = parsedDiscounts;
+      if (Array.isArray(r.discounts_json)) {
+        discountsJson = r.discounts_json;
+      } else if (typeof r.discounts_json === 'string' && r.discounts_json.trim()) {
+        const parsedDiscounts = JSON.parse(r.discounts_json);
+        if (Array.isArray(parsedDiscounts)) discountsJson = parsedDiscounts;
+      } else if (r.discounts_json && typeof r.discounts_json === 'object') {
+        discountsJson = Array.isArray(r.discounts_json) ? r.discounts_json : [];
+      }
     } catch {}
     const benefitsMeta = parseOrderBenefitsMetaJson(r.benefits_meta_json);
     const itemsTotal = items.reduce((sum, item) => sum + Number(item.line_total || 0), 0);
@@ -15290,8 +15296,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         : normalizeStoredCheckoutDiscountEntries(appliedDiscounts, {
             promoCode,
           });
+      // For storefront checkout snapshot mode, preserve client-computed breakdown as-is.
+      // Do not synthesize/append additional rows on the server.
       const storedDiscountEntries = useClientPricingSnapshotMode
-        ? appendStoredCheckoutOtherDiscountEntryIfNeeded(generatedDiscountEntries, orderDiscountAmount)
+        ? generatedDiscountEntries
         : buildCanonicalStoredCheckoutDiscountEntries(
             generatedDiscountEntries,
             normItems,
