@@ -9446,6 +9446,11 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
 
   function isCheckoutBenefitGiftAvailableForBadge(item) {
     if (!item) return false;
+    const actionMode = str(item?.action_mode || "receive").trim().toLowerCase() || "receive";
+    if (actionMode === "claim_unique_promo") {
+      return Number(item?.discount_id || 0) > 0
+        && item?.is_receivable !== false;
+    }
     const products = getCheckoutBenefitGiftProducts(item);
     return Number(item?.reward_id || item?.id || 0) > 0
       && products.length > 0
@@ -14408,6 +14413,21 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     }
   }
 
+  async function claimCheckoutBenefitPromo(payload) {
+    try {
+      const res = await apiJson("/api/public/checkout/benefits/claim-promo", {
+        method: "POST",
+        body: payload && typeof payload === "object" ? payload : {},
+      });
+      if (!res || res.ok === false) {
+        throw new Error(res?.error || "PROMO_CLAIM_UNAVAILABLE");
+      }
+      return res.data && typeof res.data === "object" ? res.data : null;
+    } catch (err) {
+      throw err;
+    }
+  }
+
   async function claimCheckoutBenefitProgress(payload) {
     try {
       const res = await apiJson("/api/public/checkout/benefits/claim-progress", {
@@ -15527,9 +15547,10 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
 
   function renderCheckoutBenefitGiftCard(item, { onReceive, onOpen } = {}) {
     const cardItem = item && typeof item === "object" ? item : {};
+    const actionMode = str(cardItem?.action_mode || "receive").trim().toLowerCase() || "receive";
+    const isPromoClaimAction = actionMode === "claim_unique_promo";
     const products = getCheckoutBenefitGiftProducts(cardItem);
     const primaryProduct = products[0] || null;
-    const photoUrl = str(cardItem?.photo_url || primaryProduct?.photo_url || "").trim();
     const productCount = Math.max(0, Number(cardItem?.product_count || products.length || 0));
     const titleText = productCount === 1
       ? (str(primaryProduct?.title || "").trim() || str(cardItem?.title || "").trim() || "Подарок")
@@ -15537,9 +15558,25 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     const subtitleText = productCount > 1
       ? `${productCount} товара`
       : (str(cardItem?.apply_scope_text || "").trim() || "");
-    const canReceive = typeof onReceive === "function"
-      && Number(cardItem?.reward_id || cardItem?.id || 0) > 0
-      && products.length > 0
+    const rewardPreview = cardItem?.reward_preview && typeof cardItem.reward_preview === "object"
+      ? cardItem.reward_preview
+      : null;
+    const resolvedPhotoUrl = str(cardItem?.photo_url || primaryProduct?.photo_url || rewardPreview?.photo_url || "").trim();
+    const resolvedProductCount = isPromoClaimAction
+      ? 0
+      : Math.max(0, Number(cardItem?.product_count || products.length || 0));
+    const resolvedTitleText = isPromoClaimAction
+      ? (str(cardItem?.title || "").trim() || str(rewardPreview?.title || "").trim() || "\u041f\u0440\u043e\u043c\u043e\u043a\u043e\u0434")
+      : titleText;
+    const resolvedSubtitleText = isPromoClaimAction
+      ? (str(cardItem?.apply_scope_text || rewardPreview?.apply_scope_text || "").trim() || "")
+      : subtitleText;
+    const canReceiveResolved = typeof onReceive === "function"
+      && (
+        isPromoClaimAction
+          ? Number(cardItem?.discount_id || 0) > 0
+          : (Number(cardItem?.reward_id || cardItem?.id || 0) > 0 && products.length > 0)
+      )
       && cardItem?.is_receivable !== false;
     const canOpen = typeof onOpen === "function";
 
@@ -15562,18 +15599,23 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
 
     const media = document.createElement("div");
     media.className = "shop-checkout-benefit-gift-media";
-    if (photoUrl) {
+    if (resolvedPhotoUrl) {
       const image = document.createElement("img");
-      image.src = photoUrl;
-      image.alt = titleText;
+      image.src = resolvedPhotoUrl;
+      image.alt = resolvedTitleText;
       media.appendChild(image);
     } else {
-      media.appendChild(createCheckoutBenefitProgressIcon(getCheckoutBenefitRewardIconName("gift")));
+      const fallbackKind = str(
+        cardItem?.reward_preview?.icon_kind
+        || cardItem?.reward_preview?.kind
+        || (isPromoClaimAction ? "promo_code" : "gift")
+      ).trim().toLowerCase() || "gift";
+      media.appendChild(createCheckoutBenefitProgressIcon(getCheckoutBenefitRewardIconName(fallbackKind)));
     }
-    if (productCount > 1) {
+    if (resolvedProductCount > 1) {
       const countBadge = document.createElement("span");
       countBadge.className = "shop-checkout-benefit-gift-count";
-      countBadge.textContent = String(productCount);
+      countBadge.textContent = String(resolvedProductCount);
       media.appendChild(countBadge);
     }
     card.appendChild(media);
@@ -15581,26 +15623,26 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     const actionBtn = document.createElement("button");
     actionBtn.type = "button";
     actionBtn.className = "shop-checkout-benefit-gift-action";
-    if (canReceive) actionBtn.classList.add("is-ready");
-    actionBtn.textContent = "Получить";
-    actionBtn.disabled = !canReceive;
+    if (canReceiveResolved) actionBtn.classList.add("is-ready");
+    actionBtn.textContent = isPromoClaimAction ? "Забрать" : "Получить";
+    actionBtn.disabled = !canReceiveResolved;
     actionBtn.addEventListener("click", async (event) => {
       event.preventDefault();
       event.stopPropagation();
-      if (!canReceive || typeof onReceive !== "function") return;
+      if (!canReceiveResolved || typeof onReceive !== "function") return;
       await onReceive(cardItem);
     });
     card.appendChild(actionBtn);
 
     const title = document.createElement("div");
     title.className = "shop-checkout-benefit-gift-title";
-    title.textContent = titleText;
+    title.textContent = resolvedTitleText;
     card.appendChild(title);
 
-    if (subtitleText && subtitleText !== titleText) {
+    if (resolvedSubtitleText && resolvedSubtitleText !== resolvedTitleText) {
       const subtitle = document.createElement("div");
       subtitle.className = "shop-checkout-benefit-gift-subtitle";
-      subtitle.textContent = subtitleText;
+      subtitle.textContent = resolvedSubtitleText;
       card.appendChild(subtitle);
     }
 
@@ -15609,16 +15651,30 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
 
   renderCheckoutBenefitGiftCard = function renderCheckoutBenefitGiftCard(item, { onReceive, onOpen } = {}) {
     const cardItem = item && typeof item === "object" ? item : {};
+    const actionMode = str(cardItem?.action_mode || "receive").trim().toLowerCase() || "receive";
+    const isPromoClaimAction = actionMode === "claim_unique_promo";
     const products = getCheckoutBenefitGiftProducts(cardItem);
     const primaryProduct = products[0] || null;
-    const photoUrl = str(cardItem?.photo_url || primaryProduct?.photo_url || "").trim();
     const productCount = Math.max(0, Number(cardItem?.product_count || products.length || 0));
     const titleText = productCount === 1
       ? (str(primaryProduct?.title || "").trim() || str(cardItem?.title || "").trim() || "Подарок")
       : (str(cardItem?.title || "").trim() || "Подарок");
-    const canReceive = typeof onReceive === "function"
-      && Number(cardItem?.reward_id || cardItem?.id || 0) > 0
-      && products.length > 0
+    const rewardPreview = cardItem?.reward_preview && typeof cardItem.reward_preview === "object"
+      ? cardItem.reward_preview
+      : null;
+    const resolvedPhotoUrl = str(cardItem?.photo_url || primaryProduct?.photo_url || rewardPreview?.photo_url || "").trim();
+    const resolvedProductCount = isPromoClaimAction
+      ? 0
+      : Math.max(0, Number(cardItem?.product_count || products.length || 0));
+    const resolvedTitleText = isPromoClaimAction
+      ? (str(cardItem?.title || "").trim() || str(rewardPreview?.title || "").trim() || "\u041f\u0440\u043e\u043c\u043e\u043a\u043e\u0434")
+      : titleText;
+    const canReceiveResolved = typeof onReceive === "function"
+      && (
+        isPromoClaimAction
+          ? Number(cardItem?.discount_id || 0) > 0
+          : (Number(cardItem?.reward_id || cardItem?.id || 0) > 0 && products.length > 0)
+      )
       && cardItem?.is_receivable !== false;
     const canOpen = typeof onOpen === "function";
 
@@ -15641,37 +15697,42 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
 
     const media = document.createElement("div");
     media.className = "shop-checkout-benefit-gift-media";
-    if (photoUrl) {
+    if (resolvedPhotoUrl) {
       const image = document.createElement("img");
-      image.src = photoUrl;
-      image.alt = titleText;
+      image.src = resolvedPhotoUrl;
+      image.alt = resolvedTitleText;
       media.appendChild(image);
     } else {
-      media.appendChild(createCheckoutBenefitProgressIcon(getCheckoutBenefitRewardIconName("gift")));
+      const fallbackKind = str(
+        cardItem?.reward_preview?.icon_kind
+        || cardItem?.reward_preview?.kind
+        || (isPromoClaimAction ? "promo_code" : "gift")
+      ).trim().toLowerCase() || "gift";
+      media.appendChild(createCheckoutBenefitProgressIcon(getCheckoutBenefitRewardIconName(fallbackKind)));
     }
-    if (productCount > 1) {
+    if (resolvedProductCount > 1) {
       const countBadge = document.createElement("span");
       countBadge.className = "shop-checkout-benefit-gift-count";
-      countBadge.textContent = String(productCount);
+      countBadge.textContent = String(resolvedProductCount);
       media.appendChild(countBadge);
     }
     card.appendChild(media);
 
     const title = document.createElement("div");
     title.className = "shop-checkout-benefit-gift-title";
-    title.textContent = titleText;
+    title.textContent = resolvedTitleText;
     card.appendChild(title);
 
     const actionBtn = document.createElement("button");
     actionBtn.type = "button";
     actionBtn.className = "shop-checkout-benefit-gift-action";
-    if (canReceive) actionBtn.classList.add("is-ready");
-    actionBtn.textContent = "Получить";
-    actionBtn.disabled = !canReceive;
+    if (canReceiveResolved) actionBtn.classList.add("is-ready");
+    actionBtn.textContent = isPromoClaimAction ? "Забрать" : "Получить";
+    actionBtn.disabled = !canReceiveResolved;
     actionBtn.addEventListener("click", async (event) => {
       event.preventDefault();
       event.stopPropagation();
-      if (!canReceive || typeof onReceive !== "function") return;
+      if (!canReceiveResolved || typeof onReceive !== "function") return;
       await onReceive(cardItem);
     });
     card.appendChild(actionBtn);
@@ -17137,6 +17198,10 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
         return "\u041b\u0438\u043c\u0438\u0442 \u0438\u0441\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u043d\u0438\u044f \u043f\u0440\u043e\u043c\u043e\u043a\u043e\u0434\u0430 \u0438\u0441\u0447\u0435\u0440\u043f\u0430\u043d.";
       case "PROMO_CUSTOMER_LIMIT_REACHED":
         return "\u042d\u0442\u043e\u0442 \u043f\u0440\u043e\u043c\u043e\u043a\u043e\u0434 \u0443\u0436\u0435 \u0438\u0441\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u043d.";
+      case "PROMO_CLAIM_LIMIT_REACHED":
+        return "\u041b\u0438\u043c\u0438\u0442 \u0432\u044b\u0434\u0430\u0447\u0438 \u043f\u0440\u043e\u043c\u043e\u043a\u043e\u0434\u043e\u0432 \u0434\u043b\u044f \u0432\u0430\u0441 \u0438\u0441\u0447\u0435\u0440\u043f\u0430\u043d.";
+      case "PROMO_CLAIM_UNAVAILABLE":
+        return "\u0421\u0432\u043e\u0431\u043e\u0434\u043d\u044b\u0445 \u043f\u0440\u043e\u043c\u043e\u043a\u043e\u0434\u043e\u0432 \u0431\u043e\u043b\u044c\u0448\u0435 \u043d\u0435\u0442.";
       case "DISCOUNT_NOT_APPLICABLE":
         return "\u041d\u0430\u0433\u0440\u0430\u0434\u0443 \u043f\u043e\u043a\u0430 \u043d\u0435\u043b\u044c\u0437\u044f \u0437\u0430\u0431\u0440\u0430\u0442\u044c.";
       case "DISCOUNT_NOT_AVAILABLE":
@@ -17390,6 +17455,35 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       }).catch(() => {});
     }
     return true;
+  }
+
+  async function executeCheckoutBenefitGiftAction(giftItem, {
+    previewRequest = null,
+  } = {}) {
+    const actionMode = str(giftItem?.action_mode || "receive").trim().toLowerCase() || "receive";
+    if (actionMode === "claim_unique_promo") {
+      const discountId = Number(giftItem?.discount_id || 0) || null;
+      if (!(discountId > 0)) {
+        throw new Error("PROMO_INVALID");
+      }
+      const nextData = await claimCheckoutBenefitPromo({
+        ...(previewRequest && typeof previewRequest === "object" ? previewRequest : {}),
+        discount_id: discountId,
+      });
+      return {
+        mode: actionMode,
+        changed: true,
+        previewData: nextData,
+      };
+    }
+    const changed = await receiveCheckoutBenefitGiftToCart(giftItem, {
+      sourcePreviewRequest: previewRequest,
+    });
+    return {
+      mode: actionMode,
+      changed: Boolean(changed),
+      previewData: null,
+    };
   }
 
   async function renderCheckoutBenefitsSheet({
@@ -18193,10 +18287,13 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       },
       onReceive: async (giftItem) => {
         try {
-          const added = await receiveCheckoutBenefitGiftToCart(giftItem, {
-            sourcePreviewRequest: previewRequest,
+          const actionResult = await executeCheckoutBenefitGiftAction(giftItem, {
+            previewRequest,
           });
-          if (!added) return;
+          if (!actionResult?.changed) return;
+          if (actionResult?.mode === "claim_unique_promo") {
+            invalidateCheckoutBenefitsClientCache({ preview: true, progressProducts: false });
+          }
           await renderCheckoutBenefitsSheet({
             container,
             getPreviewRequest,
@@ -18207,6 +18304,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
             onApplyManualPromo,
             manualPromoHost,
             manualPromoPlacement,
+            prefetchedData: actionResult?.previewData || null,
           });
         } catch (err) {
           if (typeof showToast === "function") showToast(getCheckoutBenefitsActionErrorMessage(err));
@@ -18376,11 +18474,17 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     setCheckoutBenefitsSectionItems(giftSection, data.gifts, (item) => renderCheckoutBenefitGiftCard(item, {
       onReceive: async (giftItem) => {
         try {
-          const added = await receiveCheckoutBenefitGiftToCart(giftItem, {
-            sourcePreviewRequest: previewRequest,
+          const actionResult = await executeCheckoutBenefitGiftAction(giftItem, {
+            previewRequest,
           });
-          if (!added) return;
+          if (!actionResult?.changed) return;
+          if (actionResult?.mode === "claim_unique_promo") {
+            invalidateCheckoutBenefitsClientCache({ preview: true, progressProducts: false });
+          }
           const nextPreviewRequest = buildCheckoutBenefitsCurrentPreviewRequest();
+          if (actionResult?.previewData && nextPreviewRequest && typeof nextPreviewRequest === "object") {
+            storeCheckoutBenefitsPreviewCache(nextPreviewRequest, actionResult.previewData);
+          }
           await renderCheckoutBenefitsSheetLegacy({
             container,
             previewRequest: nextPreviewRequest,
