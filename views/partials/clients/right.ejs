@@ -1,15 +1,6 @@
 <div class="panel client-info-panel">
   <div class="panel-header product-tabs-header hidden" id="clientTabsHeader">
     <div class="product-tabs" id="clientTabs"></div>
-    <button
-      type="button"
-      class="icon-btn client-mobile-sheet-close"
-      id="clientMobileSheetClose"
-      aria-label="Закрыть"
-      title="Закрыть"
-    >
-      <i class="fas fa-times"></i>
-    </button>
   </div>
 
   <div class="panel-body no-scrollbar" id="clientInfoBody">
@@ -904,49 +895,123 @@
 
     <!-- Инфо-панель скидки (когда выбрана скидка, но редактирование не активно) -->
     <div id="discountInfoWrap" class="hidden">
-      <div class="discount-info-header">
-        <div class="discount-info-icon"><i class="fas fa-percentage"></i></div>
-        <div class="discount-info-title" id="discountInfoTitle">—</div>
-        <div class="discount-info-badges">
-          <div class="discount-info-badge" id="discountInfoBadge">Активна</div>
-          <div class="discount-info-badge discount-info-badge--benefits hidden" id="discountInfoBenefitsBadge">Скрыта в выгодах</div>
+      <div class="discount-info-hero">
+        <div class="discount-info-hero-main">
+          <div class="discount-info-hero-content">
+            <div class="discount-info-badges discount-info-badges--right shop-checkout-benefit-discount-meta">
+              <div class="discount-info-hero-badge shop-checkout-benefit-badge shop-checkout-benefit-badge--accent shop-checkout-benefit-discount-badge" id="discountInfoHeroBadge">—</div>
+              <div
+                class="discount-info-badge shop-checkout-benefit-badge shop-checkout-benefit-badge--icon shop-checkout-benefit-badge--accent"
+                id="discountInfoBadge"
+                title="Активна"
+                aria-label="Активна"
+              >
+                <i class="fas fa-power-off" id="discountInfoStatusIcon" aria-hidden="true"></i>
+              </div>
+              <div
+                class="shop-checkout-benefit-badge shop-checkout-benefit-badge--icon shop-checkout-benefit-badge--accent"
+                id="discountInfoBenefitsBadge"
+                title="Показывается в выгодах"
+                aria-label="Показывается в выгодах"
+              >
+                <i class="fas fa-eye" id="discountInfoBenefitsIcon" aria-hidden="true"></i>
+              </div>
+              <div
+                class="shop-checkout-benefit-badge shop-checkout-benefit-badge--icon shop-checkout-benefit-badge--accent hidden"
+                id="discountInfoStackableBadge"
+                title="Можно совмещать"
+                aria-label="Можно совмещать"
+              >
+                <i class="fas fa-link" aria-hidden="true"></i>
+              </div>
+            </div>
+            <div class="discount-info-title shop-profile-discount-title" id="discountInfoTitle">—</div>
+            <div class="discount-info-hero-promo hidden" id="discountInfoPromoCode">
+              <div class="discount-info-hero-promo-label">Промокод</div>
+              <div class="discount-info-hero-promo-value shop-checkout-benefit-main-value is-code" id="discountInfoPromoCodeValue">—</div>
+            </div>
+            <div class="discount-info-hero-subtitle" id="discountInfoSubtitle">—</div>
+          </div>
+        </div>
+        <div class="discount-info-hero-economy" id="discountInfoEconomy">Экономия: без ограничения</div>
+      </div>
+
+      <div class="discount-info-block">
+        <div class="discount-info-block-header"><i class="fas fa-map-marker-alt"></i> Условия</div>
+        <div class="discount-info-block-body">
+          <div class="discount-info-row">
+            <span class="discount-info-row-label">Применяется:</span>
+            <span class="discount-info-row-value" id="discountInfoApplyTo">—</span>
+          </div>
+          <div class="discount-info-row">
+            <span class="discount-info-row-label">Минимальная сумма:</span>
+            <span class="discount-info-row-value" id="discountInfoMinOrder">—</span>
+          </div>
+          <div class="discount-info-row">
+            <span class="discount-info-row-label">Максимальная скидка:</span>
+            <span class="discount-info-row-value" id="discountInfoMaxDiscount">—</span>
+          </div>
         </div>
       </div>
-      <div class="discount-info-stats">
-        <div class="discount-info-stat">
-          <div class="discount-info-stat-value" id="discountInfoValue">—</div>
-          <div class="discount-info-stat-label">Размер скидки</div>
-        </div>
-        <div class="discount-info-stat">
-          <div class="discount-info-stat-value" id="discountInfoUsageCount">0</div>
-          <div class="discount-info-stat-label">Использований</div>
-        </div>
-      </div>
-      <div class="discount-info-details">
-        <div class="discount-info-row">
-          <span class="discount-info-row-label">Применяется к:</span>
-          <span class="discount-info-row-value" id="discountInfoApplyTo">—</span>
-        </div>
-        <div class="discount-info-row">
-          <span class="discount-info-row-label">Период:</span>
-          <span class="discount-info-row-value" id="discountInfoPeriod">—</span>
-        </div>
-        <div class="discount-info-row">
-          <span class="discount-info-row-label">Лимит:</span>
-          <span class="discount-info-row-value" id="discountInfoLimit">—</span>
+
+      <div class="discount-info-block">
+        <div class="discount-info-block-header"><i class="fas fa-exclamation-triangle"></i> Ограничения</div>
+        <div class="discount-info-block-body">
+          <div class="discount-info-row">
+            <span class="discount-info-row-label">На клиента:</span>
+            <span class="discount-info-row-value" id="discountInfoUsagePerCustomer">—</span>
+          </div>
+          <div class="discount-info-row">
+            <span class="discount-info-row-label">Общий лимит:</span>
+            <span class="discount-info-row-value" id="discountInfoUsageLimit">—</span>
+          </div>
+          <div class="discount-info-row">
+            <span class="discount-info-row-label">Использовано:</span>
+            <span class="discount-info-row-value" id="discountInfoUsageCount">0</span>
+          </div>
+          <div class="discount-info-row discount-info-row--full" id="discountInfoRulesRow">
+            <span class="discount-info-row-label">Доп. правила:</span>
+            <div class="discount-info-rules" id="discountInfoRules"></div>
+          </div>
         </div>
       </div>
-      <div class="discount-info-section" id="discountInfoProductsSection">
-        <div class="discount-info-section-title">Привязанные товары</div>
+
+      <div class="discount-info-block">
+        <div class="discount-info-block-header"><i class="fas fa-calendar-alt"></i> Срок действия</div>
+        <div class="discount-info-block-body">
+          <div class="discount-info-row">
+            <span class="discount-info-row-value" id="discountInfoPeriod">Без ограничений</span>
+          </div>
+          <div class="discount-info-row hidden" id="discountInfoWeekdaysRow">
+            <span class="discount-info-row-label">Дни недели:</span>
+            <span class="discount-info-row-value" id="discountInfoWeekdays">—</span>
+          </div>
+          <div class="discount-info-row hidden" id="discountInfoTimeRow">
+            <span class="discount-info-row-label">Время:</span>
+            <span class="discount-info-row-value" id="discountInfoTime">—</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="discount-info-bottom-grid">
+        <div class="discount-info-mini-card">
+          <div class="discount-info-mini-header"><i class="fas fa-check-circle"></i> Доступно</div>
+          <div class="discount-info-mini-body" id="discountInfoStackable">—</div>
+        </div>
+        <div class="discount-info-mini-card">
+          <div class="discount-info-mini-header"><i class="fas fa-users"></i> Аудитория</div>
+          <div class="discount-info-mini-body" id="discountInfoAudience">—</div>
+        </div>
+      </div>
+
+      <div class="discount-info-section hidden" id="discountInfoProductsSection">
+        <div class="discount-info-section-title">Привязанные позиции</div>
         <div class="discount-chips" id="discountInfoProducts"></div>
       </div>
-      <div class="discount-info-section" id="discountInfoCustomersSection">
-        <div class="discount-info-section-title">Привязанные клиенты</div>
+      <div class="discount-info-section hidden" id="discountInfoCustomersSection">
+        <div class="discount-info-section-title">Выбранные клиенты</div>
         <div class="discount-chips" id="discountInfoCustomers"></div>
       </div>
-      <button type="button" class="btn btn-primary" style="width:100%; margin-top:16px;" id="discountEditBtn">
-        <i class="fas fa-pencil"></i> Редактировать
-      </button>
     </div>
 
     <%- include('./profile_content') %>
@@ -969,6 +1034,15 @@
       <i class="fas fa-trash"></i>
     </button>
     <button type="button" class="btn btn-primary" id="discountSaveBtn">Сохранить</button>
+  </div>
+
+  <!-- Footer для просмотра скидки -->
+  <div class="panel-footer hidden" id="discountInfoFooter">
+    <div class="product-footer-actions">
+      <div class="product-footer-view">
+        <button class="product-footer-btn product-footer-edit" type="button" id="discountInfoEditBtn">Редактировать</button>
+      </div>
+    </div>
   </div>
 
   <!-- Footer для picker'а товаров/клиентов -->

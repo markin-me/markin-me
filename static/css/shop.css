@@ -6773,6 +6773,12 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   flex:1;
   min-width:0;
 }
+.discount-row .discount-row-title-wrap{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  min-width:0;
+}
 .discount-row .discount-row-title{
   font-weight:500;
   font-size:14px;
@@ -6785,21 +6791,23 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   color:var(--color-text-muted);
   margin-top:2px;
 }
-.discount-row .discount-row-value{
-  flex-shrink:0;
-  font-size:14px;
-  font-weight:600;
-  color:var(--color-primary);
+.discount-row .discount-row-right{
+  margin-left:auto;
+  flex:0 0 auto;
+  display:flex;
+  align-items:center;
+  justify-content:flex-end;
 }
-.discount-row .discount-row-status{
-  flex-shrink:0;
-  width:8px;
-  height:8px;
-  border-radius:50%;
-  background:var(--color-primary);
+.discount-row .discount-row-badges{
+  display:inline-flex;
+  align-items:center;
+  justify-content:flex-end;
+  gap:6px;
+  flex-wrap:nowrap;
 }
-.discount-row .discount-row-status.inactive{
-  background:var(--color-text-muted);
+.discount-row .discount-row-badges .shop-checkout-benefit-badge{
+  flex-shrink:0;
+  box-shadow:none;
 }
 
 /* РСЃС‚РѕСЂРёСЏ РїСЂРёРјРµРЅРµРЅРёСЏ СЃРєРёРґРєРё: РѕРґРЅР° СЃС‚СЂРѕРєР° РЅР° Р·Р°РїРёСЃСЊ */
@@ -6915,6 +6923,195 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   font-weight:600;
   margin-bottom:8px;
   color:var(--color-text);
+}
+
+#discountInfoWrap{
+  display:flex;
+  flex-direction:column;
+  gap:12px;
+}
+.discount-info-view-title{
+  font-size:44px;
+  font-weight:800;
+  line-height:1.1;
+  text-align:center;
+  color:var(--color-text);
+}
+.discount-info-hero{
+  border:1px solid var(--color-border);
+  border-radius:24px;
+  padding:14px 16px;
+  background:linear-gradient(140deg, #f8f4ec 0%, var(--color-surface) 75%);
+}
+.discount-info-hero-main{
+  display:block;
+}
+.discount-info-hero-badge{
+  flex:0 0 auto;
+  background:var(--color-primary);
+  color:#fff;
+  border-radius:999px;
+  padding:6px 12px;
+  font-size:18px;
+  font-weight:800;
+  line-height:1;
+  white-space:nowrap;
+}
+.discount-info-hero-content{
+  flex:1;
+  min-width:0;
+}
+.discount-info-hero-title-row{
+  display:flex;
+  justify-content:space-between;
+  align-items:flex-start;
+  gap:8px;
+  flex-wrap:wrap;
+}
+.discount-info-hero .discount-info-title{
+  flex:1;
+  min-width:0;
+  margin:0;
+  font-size:16px;
+  font-weight:800;
+  line-height:1.2;
+}
+.discount-info-hero-promo{
+  margin-top:4px;
+  display:grid;
+  gap:2px;
+}
+.discount-info-hero-promo-label{
+  font-size:13px;
+  font-weight:700;
+  color:var(--color-primary);
+}
+.discount-info-hero-promo-value{
+  font-size:24px;
+  line-height:1.05;
+}
+.discount-info-badges{
+  display:flex;
+  align-items:center;
+  gap:6px;
+  flex-wrap:wrap;
+}
+.discount-info-badges--right{
+  width:100%;
+  min-width:0;
+  justify-content:flex-end;
+  align-items:center;
+  flex-wrap:wrap;
+  margin-bottom:8px;
+}
+.discount-info-badge{
+  border-radius:999px;
+  padding:4px 10px;
+  font-size:12px;
+  font-weight:700;
+  background:var(--color-success-bg);
+  color:var(--color-primary);
+}
+.discount-info-badge.inactive{
+  background:var(--color-surface-2);
+  color:var(--color-text-muted);
+}
+.discount-info-badge--benefits{
+  background:var(--primary-14);
+  color:var(--color-text);
+}
+.discount-info-hero-subtitle{
+  margin-top:4px;
+  font-size:13px;
+  color:var(--color-text-muted);
+}
+.discount-info-hero-economy{
+  margin-top:12px;
+  padding-top:10px;
+  border-top:1px solid var(--color-border);
+  font-size:15px;
+  font-weight:700;
+  color:var(--color-text);
+}
+.discount-info-block{
+  border:1px solid var(--color-border);
+  border-radius:18px;
+  overflow:hidden;
+  background:var(--color-surface);
+}
+.discount-info-block-header{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  padding:10px 14px;
+  background:var(--color-surface-2);
+  font-size:17px;
+  font-weight:800;
+  color:var(--color-text);
+}
+.discount-info-block-body{
+  padding:4px 14px 8px;
+}
+.discount-info-block-body .discount-info-row{
+  padding:10px 0;
+}
+.discount-info-row--full{
+  display:block;
+}
+.discount-info-rules{
+  margin-top:6px;
+  display:flex;
+  flex-direction:column;
+  gap:4px;
+}
+.discount-info-rule-item{
+  font-size:13px;
+  color:var(--color-text);
+}
+.discount-info-rules:empty::before{
+  content:"—";
+  color:var(--color-text-muted);
+  font-size:13px;
+}
+.discount-info-bottom-grid{
+  display:grid;
+  grid-template-columns:repeat(2, minmax(0, 1fr));
+  gap:12px;
+}
+.discount-info-mini-card{
+  border:1px solid var(--color-border);
+  border-radius:16px;
+  overflow:hidden;
+  background:var(--color-surface);
+}
+.discount-info-mini-header{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  padding:10px 12px;
+  background:var(--color-surface-2);
+  font-size:15px;
+  font-weight:800;
+}
+.discount-info-mini-body{
+  padding:12px;
+  font-size:14px;
+  color:var(--color-text);
+}
+@media (max-width: 1320px){
+  .discount-info-hero-badge{
+    font-size:16px;
+    padding:5px 10px;
+  }
+}
+@media (max-width: 900px){
+  .discount-info-badges--right{
+    justify-content:flex-end;
+    gap:6px;
+  }
+  .discount-info-bottom-grid{
+    grid-template-columns:1fr;
+  }
 }
 
 /* в”Ђв”Ђ Order item old price (strikethrough) в”Ђв”Ђ */
