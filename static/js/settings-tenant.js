@@ -424,6 +424,12 @@
 
   let selectedTenantDomainId = null;
 
+  let tenantPwaInstallTargets = [];
+  let tenantPwaInstallDevTargets = [];
+
+  let selectedTenantPwaTargetId = null;
+  let selectedTenantPwaDevTargetId = null;
+
   let runDomainStatusCheck = null;
 
   let domainEnabledDraft = null;
@@ -1816,6 +1822,36 @@
 
 
 
+  function normalizeTenantPwaInstallTargets(value) {
+
+    if (!Array.isArray(value)) return [];
+
+    return value.map((item) => {
+
+      if (!item || typeof item !== "object") return null;
+
+      const id = String(item.id || "").trim();
+      const url = String(item.url || "").trim();
+      const host = String(item.host || "").trim().toLowerCase();
+      const label = String(item.label || item.host || "").trim();
+      const kind = String(item.kind || "").trim().toLowerCase() || "domain";
+      const domainId = Number(item.domain_id || 0) || null;
+
+      if (!id || !url || !host || !label) return null;
+
+      return {
+        id,
+        url,
+        host,
+        label,
+        kind,
+        domain_id: domainId
+      };
+
+    }).filter(Boolean);
+
+  }
+
   function getFirstEnabledTenantDomain() {
 
 
@@ -1907,6 +1943,113 @@
 
 
 
+
+  function getDefaultTenantPwaInstallTarget() {
+
+    const selectedDomain = getSelectedTenantDomain();
+    const selectedDomainId = Number(selectedDomain && selectedDomain.id || 0) || 0;
+
+    if (selectedDomainId > 0) {
+      const preferred = tenantPwaInstallTargets.find((item) => item.id === `domain:${selectedDomainId}`);
+      if (preferred) return preferred;
+    }
+
+    return tenantPwaInstallTargets[0] || null;
+
+  }
+
+  function getSelectedTenantPwaInstallTarget() {
+
+    if (selectedTenantPwaTargetId) {
+      const selected = tenantPwaInstallTargets.find((item) => item.id === selectedTenantPwaTargetId);
+      if (selected) return selected;
+    }
+
+    return getDefaultTenantPwaInstallTarget();
+
+  }
+
+  function getDefaultTenantPwaDevInstallTarget() {
+
+    const tunnelTarget = tenantPwaInstallDevTargets.find((item) => item && item.kind === "dev-tunnel");
+    if (tunnelTarget) return tunnelTarget;
+
+    return tenantPwaInstallDevTargets[0] || null;
+
+  }
+
+  function getSelectedTenantPwaDevInstallTarget() {
+
+    if (selectedTenantPwaDevTargetId) {
+      const selected = tenantPwaInstallDevTargets.find((item) => item.id === selectedTenantPwaDevTargetId);
+      if (selected) return selected;
+    }
+
+    return getDefaultTenantPwaDevInstallTarget();
+
+  }
+
+  function syncSelectedTenantPwaInstallTarget() {
+
+    const selected = getSelectedTenantPwaInstallTarget();
+    selectedTenantPwaTargetId = selected ? selected.id : null;
+    return selected;
+
+  }
+
+  function syncSelectedTenantPwaDevInstallTarget() {
+
+    const selected = getSelectedTenantPwaDevInstallTarget();
+    selectedTenantPwaDevTargetId = selected ? selected.id : null;
+    return selected;
+
+  }
+
+  function syncTenantPwaTargetFromSelectedDomain() {
+
+    const selectedDomain = getSelectedTenantDomain();
+    const selectedDomainId = Number(selectedDomain && selectedDomain.id || 0) || 0;
+
+    if (selectedDomainId > 0) {
+      const matched = tenantPwaInstallTargets.find((item) => item.id === `domain:${selectedDomainId}`);
+      if (matched) {
+        selectedTenantPwaTargetId = matched.id;
+        return matched;
+      }
+    }
+
+    return syncSelectedTenantPwaInstallTarget();
+
+  }
+
+  function renderTenantPwaQrImage(containerEl, url) {
+
+    if (!containerEl) return false;
+
+    containerEl.innerHTML = "";
+
+    const QrCodeCtor = window.QRCode;
+    if (typeof QrCodeCtor !== "function" || !url) return false;
+
+    try {
+      new QrCodeCtor(containerEl, {
+        text: String(url),
+        width: 136,
+        height: 136,
+        colorDark: "#111827",
+        colorLight: "#ffffff",
+        correctLevel: QrCodeCtor.CorrectLevel && QrCodeCtor.CorrectLevel.M !== undefined
+          ? QrCodeCtor.CorrectLevel.M
+          : undefined
+      });
+      return true;
+    } catch (err) {
+      console.error("tenant qr render error:", err);
+      containerEl.innerHTML = "";
+      return false;
+    }
+
+  }
 
   function syncSelectedTenantDomain() {
 
@@ -2024,8 +2167,126 @@
     }
   }
 
+  function renderTenantPwaInstallQr() {
+
+    const selectEl = document.getElementById("tenantPwaQrTargetSelect");
+    const openBtn = document.getElementById("tenantPwaQrOpenBtn");
+    const copyBtn = document.getElementById("tenantPwaQrCopyBtn");
+    const previewEl = document.getElementById("tenantPwaQrPreview");
+    const emptyEl = document.getElementById("tenantPwaQrEmpty");
+    const qrEl = document.getElementById("tenantPwaQrImage");
+    const urlEl = document.getElementById("tenantPwaQrUrl");
+    const hintEl = document.getElementById("tenantPwaQrHint");
+    const selected = syncSelectedTenantPwaInstallTarget();
+    const hasTargets = !!selected;
+
+    if (selectEl) {
+      selectEl.innerHTML = tenantPwaInstallTargets.map((item) => {
+        const tag = item.kind === "subdomain" ? "Субдомен" : "Домен";
+        const selectedAttr = selected && selected.id === item.id ? " selected" : "";
+        return `<option value="${item.id}"${selectedAttr}>${tag}: ${item.label}</option>`;
+      }).join("");
+      selectEl.disabled = !hasTargets;
+      if (selected) selectEl.value = selected.id;
+    }
+
+    if (previewEl) previewEl.classList.toggle("hidden", !hasTargets);
+    if (emptyEl) emptyEl.classList.toggle("hidden", hasTargets);
+    if (openBtn) openBtn.disabled = !hasTargets;
+    if (copyBtn) copyBtn.disabled = !hasTargets;
+
+    if (!hasTargets) {
+      if (qrEl) qrEl.innerHTML = "";
+      if (urlEl) urlEl.textContent = "";
+      return;
+    }
+
+    if (urlEl) urlEl.textContent = String(selected.url || "");
+    if (hintEl) {
+      hintEl.textContent = selected.kind === "subdomain"
+        ? "Этот QR открывает install-страницу витрины на субдомене tenant-а."
+        : "Этот QR открывает install-страницу витрины на выбранном подключенном домене.";
+    }
+
+    if (qrEl) {
+      const rendered = renderTenantPwaQrImage(qrEl, selected.url);
+      if (!rendered && hintEl) {
+        hintEl.textContent = "Не удалось собрать QR в браузере. Ссылка ниже всё равно готова, её можно открыть или скопировать.";
+      }
+    }
+
+  }
 
 
+
+
+  function renderTenantPwaDevInstallQr() {
+
+    const selectEl = document.getElementById("tenantPwaDevQrTargetSelect");
+    const openBtn = document.getElementById("tenantPwaDevQrOpenBtn");
+    const copyBtn = document.getElementById("tenantPwaDevQrCopyBtn");
+    const previewEl = document.getElementById("tenantPwaDevQrPreview");
+    const emptyEl = document.getElementById("tenantPwaDevQrEmpty");
+    const qrEl = document.getElementById("tenantPwaDevQrImage");
+    const urlEl = document.getElementById("tenantPwaDevQrUrl");
+    const hintEl = document.getElementById("tenantPwaDevQrHint");
+    const selected = syncSelectedTenantPwaDevInstallTarget();
+    const hasTargets = !!selected;
+
+    if (selectEl) {
+      selectEl.innerHTML = tenantPwaInstallDevTargets.map((item) => {
+        const kindLabel = item.kind === "dev-tunnel"
+          ? "[HTTPS] "
+          : item.kind === "dev-localhost"
+            ? "[LOCAL] "
+            : "";
+        const selectedAttr = selected && selected.id === item.id ? " selected" : "";
+        return `<option value="${item.id}"${selectedAttr}>${kindLabel}${item.label}</option>`;
+      }).join("");
+      selectEl.disabled = !hasTargets;
+      if (selected) selectEl.value = selected.id;
+    }
+
+    if (previewEl) previewEl.classList.toggle("hidden", !hasTargets);
+    if (emptyEl) emptyEl.classList.toggle("hidden", hasTargets);
+    if (openBtn) openBtn.disabled = !hasTargets;
+    if (copyBtn) copyBtn.disabled = !hasTargets;
+
+    if (!hasTargets) {
+      if (qrEl) qrEl.innerHTML = "";
+      if (urlEl) urlEl.textContent = "";
+      return;
+    }
+
+    if (urlEl) urlEl.textContent = String(selected.url || "");
+    let isInsecureLanUrl = false;
+    try {
+      const parsed = new URL(String(selected.url || ""), window.location.origin);
+      const host = String(parsed.hostname || "").trim().toLowerCase();
+      isInsecureLanUrl = parsed.protocol === "http:" && host !== "localhost" && host !== "127.0.0.1" && host !== "::1";
+    } catch (_) {}
+    if (hintEl) {
+      hintEl.textContent = selected.kind === "dev-tunnel"
+        ? "Этот DEV QR использует HTTPS tunnel. Телефон откроет локальную витрину через защищенный адрес, и браузер сможет показать установку PWA."
+        : selected.kind === "dev-current"
+        ? "Этот DEV QR использует текущий адрес, по которому открыта админка."
+        : selected.kind === "dev-localhost"
+          ? "Этот DEV QR откроется только на этом же компьютере."
+          : "Этот DEV QR использует LAN IP. Телефон и компьютер должны быть в одной сети.";
+    }
+
+    if (hintEl && isInsecureLanUrl) {
+      hintEl.textContent = "Этот DEV QR откроет локальную витрину, но браузер не покажет нативную установку PWA на LAN IP по HTTP. Для install prompt нужен HTTPS-домен.";
+    }
+
+    if (qrEl) {
+      const rendered = renderTenantPwaQrImage(qrEl, selected.url);
+      if (!rendered && hintEl) {
+        hintEl.textContent = "Не удалось собрать DEV QR в браузере. Ссылку ниже все равно можно открыть или скопировать.";
+      }
+    }
+
+  }
 
   function getCurrentDomainValue() {
 
@@ -2068,6 +2329,19 @@
 
 
     tenantDomains = normalizeTenantDomains(tenant && tenant.domains);
+
+    tenantPwaInstallTargets = normalizeTenantPwaInstallTargets(tenant && tenant.pwa_install_targets);
+    if (selectedTenantPwaTargetId && !tenantPwaInstallTargets.some((item) => item.id === selectedTenantPwaTargetId)) {
+      selectedTenantPwaTargetId = null;
+    }
+    tenantPwaInstallDevTargets = normalizeTenantPwaInstallTargets(tenant && tenant.pwa_install_dev_targets);
+    if (selectedTenantPwaDevTargetId && !tenantPwaInstallDevTargets.some((item) => item.id === selectedTenantPwaDevTargetId)) {
+      selectedTenantPwaDevTargetId = null;
+    }
+    const preferredDevTunnelTarget = tenantPwaInstallDevTargets.find((item) => item && item.kind === "dev-tunnel");
+    if (preferredDevTunnelTarget && selectedTenantPwaDevTargetId !== preferredDevTunnelTarget.id) {
+      selectedTenantPwaDevTargetId = preferredDevTunnelTarget.id;
+    }
 
 
 
@@ -2148,6 +2422,8 @@
 
 
     renderTenantDomains();
+    renderTenantPwaInstallQr();
+    renderTenantPwaDevInstallQr();
 
 
 
@@ -4940,6 +5216,7 @@
 
 
     const siteCard = document.getElementById("settingsSiteCard");
+    const pwaQrCard = document.getElementById("settingsPwaQrCard");
 
 
 
@@ -5028,6 +5305,7 @@
 
 
     const domainPanel = document.getElementById("settingsDomainPanel");
+    const pwaQrPanel = document.getElementById("settingsPwaQrPanel");
 
 
 
@@ -17283,6 +17561,7 @@
 
 
       if (domainPanel) domainPanel.classList.toggle("hidden", tabId !== "domain");
+      if (pwaQrPanel) pwaQrPanel.classList.toggle("hidden", tabId !== "pwa-qr");
 
 
 
@@ -17671,6 +17950,7 @@
 
 
           if (tabId === "domain" && domainCard) domainCard.classList.remove("is-active");
+          if (tabId === "pwa-qr" && pwaQrCard) pwaQrCard.classList.remove("is-active");
 
 
 
@@ -17863,6 +18143,7 @@
 
 
       if (tabId === "domain" && domainCard) domainCard.classList.add("is-active");
+      if (tabId === "pwa-qr" && pwaQrCard) pwaQrCard.classList.add("is-active");
 
 
 
@@ -18065,6 +18346,13 @@
 
     const domainSubdomainInputEl = document.getElementById("subdomainInput");
 
+    const tenantPwaQrTargetSelect = document.getElementById("tenantPwaQrTargetSelect");
+    const tenantPwaQrOpenBtn = document.getElementById("tenantPwaQrOpenBtn");
+    const tenantPwaQrCopyBtn = document.getElementById("tenantPwaQrCopyBtn");
+    const tenantPwaDevQrTargetSelect = document.getElementById("tenantPwaDevQrTargetSelect");
+    const tenantPwaDevQrOpenBtn = document.getElementById("tenantPwaDevQrOpenBtn");
+    const tenantPwaDevQrCopyBtn = document.getElementById("tenantPwaDevQrCopyBtn");
+
 
 
     if (domainCard) {
@@ -18086,6 +18374,16 @@
     }
 
 
+
+    if (pwaQrCard) {
+
+      pwaQrCard.addEventListener("click", () => {
+
+        ensureTab("pwa-qr", "QR для установки PWA");
+
+      });
+
+    }
 
     function resetDomainCancelButton() {
 
@@ -18287,6 +18585,8 @@
       }
 
       renderTenantDomains();
+      renderTenantPwaInstallQr();
+      renderTenantPwaDevInstallQr();
 
       const connectBtnEl = document.getElementById("domainConnectBtn");
       if (connectBtnEl) {
@@ -18570,6 +18870,68 @@
 
 
 
+    if (tenantPwaQrTargetSelect) {
+      tenantPwaQrTargetSelect.addEventListener("change", () => {
+        selectedTenantPwaTargetId = String(tenantPwaQrTargetSelect.value || "").trim() || null;
+        renderTenantPwaInstallQr();
+      });
+    }
+
+    if (tenantPwaQrOpenBtn) {
+      tenantPwaQrOpenBtn.addEventListener("click", () => {
+        const selectedTarget = getSelectedTenantPwaInstallTarget();
+        if (!selectedTarget || !selectedTarget.url) return;
+        window.open(selectedTarget.url, "_blank");
+      });
+    }
+
+    if (tenantPwaQrCopyBtn) {
+      const copyBtnOriginalHtml = tenantPwaQrCopyBtn.innerHTML;
+      tenantPwaQrCopyBtn.addEventListener("click", () => {
+        const selectedTarget = getSelectedTenantPwaInstallTarget();
+        if (!selectedTarget || !selectedTarget.url || !navigator.clipboard) return;
+        navigator.clipboard.writeText(selectedTarget.url).then(() => {
+          tenantPwaQrCopyBtn.innerHTML = '<i class="fas fa-check"></i> Скопировано';
+          setTimeout(() => {
+            tenantPwaQrCopyBtn.innerHTML = copyBtnOriginalHtml;
+          }, 1500);
+        }).catch(() => {
+          alert("Не удалось скопировать ссылку.");
+        });
+      });
+    }
+
+    if (tenantPwaDevQrTargetSelect) {
+      tenantPwaDevQrTargetSelect.addEventListener("change", () => {
+        selectedTenantPwaDevTargetId = String(tenantPwaDevQrTargetSelect.value || "").trim() || null;
+        renderTenantPwaDevInstallQr();
+      });
+    }
+
+    if (tenantPwaDevQrOpenBtn) {
+      tenantPwaDevQrOpenBtn.addEventListener("click", () => {
+        const selectedTarget = getSelectedTenantPwaDevInstallTarget();
+        if (!selectedTarget || !selectedTarget.url) return;
+        window.open(selectedTarget.url, "_blank");
+      });
+    }
+
+    if (tenantPwaDevQrCopyBtn) {
+      const copyBtnOriginalHtml = tenantPwaDevQrCopyBtn.innerHTML;
+      tenantPwaDevQrCopyBtn.addEventListener("click", () => {
+        const selectedTarget = getSelectedTenantPwaDevInstallTarget();
+        if (!selectedTarget || !selectedTarget.url || !navigator.clipboard) return;
+        navigator.clipboard.writeText(selectedTarget.url).then(() => {
+          tenantPwaDevQrCopyBtn.innerHTML = '<i class="fas fa-check"></i> Скопировано';
+          setTimeout(() => {
+            tenantPwaDevQrCopyBtn.innerHTML = copyBtnOriginalHtml;
+          }, 1500);
+        }).catch(() => {
+          alert("Не удалось скопировать ссылку.");
+        });
+      });
+    }
+
     setDomainDraftMode(false);
 
 
@@ -18611,6 +18973,7 @@
 
 
         selectedTenantDomainId = domainId;
+        syncTenantPwaTargetFromSelectedDomain();
 
 
 

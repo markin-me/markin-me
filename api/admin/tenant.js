@@ -1,4 +1,5 @@
 const express = require('express');
+const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const multer = require('multer');
@@ -6,6 +7,7 @@ const bcrypt = require('bcryptjs');
 const dns = require('dns').promises;
 const http = require('http');
 const https = require('https');
+const os = require('os');
 const { execFile } = require('child_process');
 const { domainToASCII, domainToUnicode } = require('url');
 const chatTempRuntime = require('../chatTemp');
@@ -44,6 +46,7 @@ const {
 
 module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
   const router = express.Router();
+  const devPwaTunnelStatePath = path.resolve(__dirname, '../../tmp/dev-pwa-tunnel.json');
   const subdomainRe = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
   const tenantChatColumns = [
     {
@@ -217,6 +220,163 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
     }
   }
 
+  function parseHostParts(value) {
+    const normalized = normalizePublicHost(value);
+    if (!normalized) {
+      return {
+        host: '',
+        hostname: '',
+        port: ''
+      };
+    }
+    try {
+      const parsed = new URL(`http://${normalized}`);
+      return {
+        host: String(parsed.host || normalized).trim().toLowerCase(),
+        hostname: String(parsed.hostname || '').trim().toLowerCase(),
+        port: String(parsed.port || '').trim()
+      };
+    } catch (_) {
+      const ipv6Match = normalized.match(/^\[([^\]]+)\](?::(\d+))?$/);
+      if (ipv6Match) {
+        return {
+          host: normalized,
+          hostname: String(ipv6Match[1] || '').trim().toLowerCase(),
+          port: String(ipv6Match[2] || '').trim()
+        };
+      }
+
+      const lastColonIndex = normalized.lastIndexOf(':');
+      if (lastColonIndex > -1 && normalized.indexOf(':') === lastColonIndex) {
+        return {
+          host: normalized,
+          hostname: normalized.slice(0, lastColonIndex).trim().toLowerCase(),
+          port: normalized.slice(lastColonIndex + 1).trim()
+        };
+      }
+
+      return {
+        host: normalized,
+        hostname: normalized,
+        port: ''
+      };
+    }
+  }
+
+  function isPrivateIpv4Host(hostname) {
+    if (!/^\d{1,3}(?:\.\d{1,3}){3}$/.test(String(hostname || ''))) return false;
+    const parts = String(hostname || '')
+      .split('.')
+      .map((item) => Number(item));
+    if (parts.length !== 4 || parts.some((item) => !Number.isFinite(item) || item < 0 || item > 255)) {
+      return false;
+    }
+    if (parts[0] === 10) return true;
+    if (parts[0] === 127) return true;
+    if (parts[0] === 192 && parts[1] === 168) return true;
+    if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true;
+    return false;
+  }
+
+  function isLocalDevHostname(hostname) {
+    const normalized = String(hostname || '').trim().toLowerCase();
+    if (!normalized) return false;
+    if (normalized === 'localhost' || normalized === '::1' || normalized === '0.0.0.0') return true;
+    return isPrivateIpv4Host(normalized);
+  }
+
+  function isLikelyVirtualInterface(name) {
+    const normalized = String(name || '').trim().toLowerCase();
+    if (!normalized) return false;
+    return [
+      'outline',
+      'tap',
+      'tun',
+      'vpn',
+      'wireguard',
+      'tailscale',
+      'zerotier',
+      'hamachi',
+      'vbox',
+      'virtualbox',
+      'vmware',
+      'hyper-v',
+      'vethernet',
+      'docker',
+      'podman',
+      'wsl'
+    ].some((token) => normalized.includes(token));
+  }
+
+  function scoreLocalIpv4Interface(name, host) {
+    const normalizedName = String(name || '').trim().toLowerCase();
+    const normalizedHost = String(host || '').trim().toLowerCase();
+    let score = 0;
+
+    if (normalizedHost.startsWith('192.168.')) score += 300;
+    else if (/^172\.(1[6-9]|2\d|3[0-1])\./.test(normalizedHost)) score += 200;
+    else if (normalizedHost.startsWith('10.')) score += 100;
+
+    if (
+      normalizedName.includes('wi-fi')
+      || normalizedName.includes('wifi')
+      || normalizedName.includes('wlan')
+      || normalizedName.includes('wireless')
+      || normalizedName.includes('беспровод')
+    ) {
+      score += 1000;
+    }
+
+    if (
+      normalizedName.includes('ethernet')
+      || normalizedName.includes('lan')
+      || normalizedName.includes('локальн')
+    ) {
+      score += 800;
+    }
+
+    if (isLikelyVirtualInterface(normalizedName)) {
+      score -= 5000;
+    }
+
+    return score;
+  }
+
+  function getLocalIpv4Hosts() {
+    const seenHosts = new Set();
+    const physical = [];
+    const virtual = [];
+    const interfaces = os.networkInterfaces();
+
+    Object.entries(interfaces || {}).forEach(([name, items]) => {
+      (Array.isArray(items) ? items : []).forEach((item) => {
+        if (!item || item.internal) return;
+        if (String(item.family || '').toUpperCase() !== 'IPV4') return;
+
+        const host = normalizePublicHost(item.address);
+        if (!host || host === '0.0.0.0' || seenHosts.has(host)) return;
+
+        seenHosts.add(host);
+
+        const entry = {
+          host,
+          interface_name: String(name || '').trim(),
+          score: scoreLocalIpv4Interface(name, host)
+        };
+
+        if (isLikelyVirtualInterface(name)) {
+          virtual.push(entry);
+        } else {
+          physical.push(entry);
+        }
+      });
+    });
+
+    const preferred = physical.length ? physical : virtual;
+    preferred.sort((a, b) => b.score - a.score || a.host.localeCompare(b.host));
+    return preferred;
+  }
+
   function resolveTenantSubdomainBaseHost(req) {
     const candidates = [
       process.env.TENANT_SUBDOMAIN_BASE_DOMAIN,
@@ -242,12 +402,14 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
     if (explicit === 'http' || explicit === 'https') return explicit;
     if (String(process.env.TENANT_SUBDOMAIN_HTTPS_ENABLED || '').trim() === '1') return 'https';
     const host = String(baseHost || '').trim().toLowerCase();
-    if (!host) return 'http';
+    const forwardedProto = firstHeaderValue(req && req.headers ? req.headers['x-forwarded-proto'] : '', '');
+    const currentProtocol = String(forwardedProto || (req && req.protocol) || '').trim().toLowerCase().replace(/:$/, '');
+    if (!host) return currentProtocol === 'https' ? 'https' : 'http';
     if (host.includes('localhost') || /^\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?$/.test(host)) {
-      const currentProtocol = String((req && req.protocol) || 'http').trim().toLowerCase();
       return currentProtocol === 'https' ? 'https' : 'http';
     }
-    return 'http';
+    if (currentProtocol === 'http' || currentProtocol === 'https') return currentProtocol;
+    return 'https';
   }
 
   function buildTenantSubdomainUrl(tenant, req) {
@@ -257,6 +419,249 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
     if (!baseHost) return null;
     const protocol = resolveTenantSubdomainProtocol(req, baseHost);
     return `${protocol}://${subdomain}.${baseHost}`;
+  }
+
+  function buildTenantPwaInstallUrlForHost(host, req, options = {}) {
+    const normalizedHost = normalizePublicHost(host);
+    if (!normalizedHost) return null;
+    const explicitProtocol = String(options.protocol || '').trim().toLowerCase().replace(/:$/, '');
+    const protocol = explicitProtocol === 'http' || explicitProtocol === 'https'
+      ? explicitProtocol
+      : resolveTenantSubdomainProtocol(req, normalizedHost);
+    try {
+      const targetUrl = new URL(`${protocol}://${normalizedHost}/shop/install-app`);
+      targetUrl.searchParams.set('source', String(options.source || 'qr').trim() || 'qr');
+      const tenantId = Number(options.tenantId || 0) || 0;
+      if (tenantId > 0) {
+        targetUrl.searchParams.set('tenant_id', String(tenantId));
+      }
+      if (options.dev) {
+        targetUrl.searchParams.set('dev', '1');
+      }
+      return targetUrl.toString();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function normalizeAbsoluteBaseUrl(rawValue, options = {}) {
+    const input = String(rawValue || '').trim();
+    if (!input) return null;
+    try {
+      const parsed = new URL(input);
+      const protocol = String(parsed.protocol || '').trim().toLowerCase();
+      if (protocol !== 'http:' && protocol !== 'https:') return null;
+      if (options.httpsOnly && protocol !== 'https:') return null;
+      const host = normalizePublicHost(parsed.host);
+      if (!host) return null;
+      return `${protocol}//${host}`;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function buildTenantPwaInstallUrlForBaseUrl(baseUrl, options = {}) {
+    const normalizedBaseUrl = normalizeAbsoluteBaseUrl(baseUrl);
+    if (!normalizedBaseUrl) return null;
+    try {
+      const targetUrl = new URL('/shop/install-app', `${normalizedBaseUrl}/`);
+      targetUrl.searchParams.set('source', String(options.source || 'qr').trim() || 'qr');
+      const tenantId = Number(options.tenantId || 0) || 0;
+      if (tenantId > 0) {
+        targetUrl.searchParams.set('tenant_id', String(tenantId));
+      }
+      if (options.dev) {
+        targetUrl.searchParams.set('dev', '1');
+      }
+      return targetUrl.toString();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function readDevPwaTunnelState() {
+    const envBaseUrl = normalizeAbsoluteBaseUrl(process.env.DEV_PWA_PUBLIC_BASE_URL, { httpsOnly: true });
+    if (envBaseUrl) {
+      try {
+        const parsed = new URL(`${envBaseUrl}/`);
+        return {
+          base_url: envBaseUrl,
+          host: parsed.host,
+          label: `HTTPS tunnel: ${parsed.host}`
+        };
+      } catch (_) {
+        return null;
+      }
+    }
+
+    try {
+      const payload = JSON.parse(fs.readFileSync(devPwaTunnelStatePath, 'utf8'));
+      const baseUrl = normalizeAbsoluteBaseUrl(payload && (payload.public_url || payload.url || payload.base_url), {
+        httpsOnly: true
+      });
+      if (!baseUrl) return null;
+      const parsed = new URL(`${baseUrl}/`);
+      return {
+        base_url: baseUrl,
+        host: parsed.host,
+        label: `HTTPS tunnel: ${parsed.host}`
+      };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function buildTenantPwaInstallTargets(tenant, req, domains = []) {
+    const targets = [];
+    const seenHosts = new Set();
+
+    function pushTarget(rawTarget) {
+      if (!rawTarget || typeof rawTarget !== 'object') return;
+      const id = String(rawTarget.id || '').trim();
+      const host = normalizePublicHost(rawTarget.host);
+      const label = String(rawTarget.label || rawTarget.host || '').trim();
+      const url = String(rawTarget.url || '').trim();
+      if (!id || !host || !label || !url || seenHosts.has(host)) return;
+      seenHosts.add(host);
+      targets.push({
+        id,
+        kind: String(rawTarget.kind || '').trim() || 'domain',
+        label,
+        host,
+        url,
+        domain_id: Number(rawTarget.domain_id || 0) || null
+      });
+    }
+
+    const enabledDomains = Array.isArray(domains)
+      ? domains.filter((item) => item && item.is_enabled !== false && helpers.strOrNull(item.domain_ascii))
+      : [];
+
+    for (const item of enabledDomains) {
+      const host = helpers.strOrNull(item.domain_ascii);
+      const url = buildTenantPwaInstallUrlForHost(host, req);
+      if (!url) continue;
+      pushTarget({
+        id: `domain:${Number(item.id || 0) || host}`,
+        kind: 'domain',
+        label: helpers.strOrNull(item.domain) || host,
+        host,
+        url,
+        domain_id: Number(item.id || 0) || null
+      });
+    }
+
+    const subdomainUrl = buildTenantSubdomainUrl(tenant, req);
+    if (subdomainUrl) {
+      try {
+        const parsed = new URL(subdomainUrl);
+        const installUrl = new URL(parsed.origin + '/shop/install-app');
+        installUrl.searchParams.set('source', 'qr');
+        pushTarget({
+          id: 'subdomain',
+          kind: 'subdomain',
+          label: helpers.strOrNull(tenant && tenant.subdomain)
+            ? `${String(tenant.subdomain).trim()}.${parsed.host.replace(/:\d+$/, '')}`
+            : parsed.host,
+          host: parsed.host,
+          url: installUrl.toString()
+        });
+      } catch (_) {}
+    }
+
+    return targets;
+  }
+
+  function buildTenantPwaDevInstallTargets(tenant, req) {
+    const tenantId = Number(tenant && tenant.id || 0) || 0;
+    if (!(tenantId > 0) || !req) return [];
+
+    const forwardedProto = firstHeaderValue(req.headers['x-forwarded-proto'], req.protocol || 'http');
+    const forwardedHost = firstHeaderValue(req.headers['x-forwarded-host'], req.get('host') || 'localhost:3000');
+    const currentHost = parseHostParts(forwardedHost);
+    const protocol = String(forwardedProto || '').trim().toLowerCase().replace(/:$/, '') === 'https'
+      ? 'https'
+      : 'http';
+
+    if (!isLocalDevHostname(currentHost.hostname)) return [];
+
+    const targets = [];
+    const seenHosts = new Set();
+    const tunnelState = readDevPwaTunnelState();
+
+    function pushTarget(rawTarget) {
+      if (!rawTarget || typeof rawTarget !== 'object') return;
+      const id = String(rawTarget.id || '').trim();
+      const host = normalizePublicHost(rawTarget.host);
+      const label = String(rawTarget.label || rawTarget.host || '').trim();
+      const kind = String(rawTarget.kind || '').trim() || 'dev-lan';
+      const explicitUrl = String(rawTarget.url || '').trim();
+      if (!id || !host || !label || seenHosts.has(host)) return;
+      const url = explicitUrl || buildTenantPwaInstallUrlForHost(host, req, {
+        protocol,
+        tenantId,
+        dev: true
+      });
+      if (!url) return;
+      seenHosts.add(host);
+      targets.push({
+        id,
+        kind,
+        label,
+        host,
+        url,
+        domain_id: null
+      });
+    }
+
+    const portSuffix = currentHost.port ? `:${currentHost.port}` : '';
+    const isLoopbackHost = currentHost.hostname === 'localhost' || currentHost.hostname === '127.0.0.1' || currentHost.hostname === '::1';
+
+    if (tunnelState && tunnelState.base_url && tunnelState.host) {
+      pushTarget({
+        id: `dev-tunnel:${tunnelState.host}`,
+        kind: 'dev-tunnel',
+        label: tunnelState.label,
+        host: tunnelState.host,
+        url: buildTenantPwaInstallUrlForBaseUrl(tunnelState.base_url, {
+          tenantId,
+          dev: true
+        })
+      });
+    }
+
+    if (currentHost.host && !isLoopbackHost && currentHost.hostname !== '0.0.0.0') {
+      pushTarget({
+        id: `dev-current:${currentHost.host}`,
+        kind: 'dev-current',
+        label: `Текущий адрес: ${currentHost.host}`,
+        host: currentHost.host
+      });
+    }
+
+    getLocalIpv4Hosts().forEach((item) => {
+      const host = normalizePublicHost(item && item.host);
+      if (!host) return;
+      const fullHost = `${host}${portSuffix}`;
+      const interfaceName = String(item && item.interface_name || '').trim();
+      pushTarget({
+        id: `dev-lan:${fullHost}`,
+        kind: 'dev-lan',
+        label: interfaceName ? `${interfaceName}: ${fullHost}` : `LAN: ${fullHost}`,
+        host: fullHost
+      });
+    });
+
+    if (!targets.length && currentHost.host && isLoopbackHost) {
+      pushTarget({
+        id: `dev-local:${currentHost.host}`,
+        kind: 'dev-localhost',
+        label: `Этот компьютер: ${currentHost.host}`,
+        host: currentHost.host
+      });
+    }
+
+    return targets;
   }
 
   function parseCommandArgs(value) {
@@ -543,10 +948,14 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
     const hostHeader = firstHeaderValue(forwardedHost, req.get('host') || 'localhost:3000');
     const baseUrl = `${protocol}://${hostHeader}`;
     const subdomainShopUrl = buildTenantSubdomainUrl(nextTenant, req);
+    const pwaInstallTargets = buildTenantPwaInstallTargets(nextTenant, req, domains);
+    const pwaInstallDevTargets = buildTenantPwaDevInstallTargets(nextTenant, req);
     return {
       ...nextTenant,
       domains,
       subdomain_shop_url: subdomainShopUrl,
+      pwa_install_targets: pwaInstallTargets,
+      pwa_install_dev_targets: pwaInstallDevTargets,
       telegram_mini_app_url: `${baseUrl}/tg-app?tenant_id=${tenant.id}`,
       max_mini_app_url: `${baseUrl}/max-app?tenant_id=${tenant.id}`,
       domain_setup: getTenantDomainSetup(req)
@@ -5485,6 +5894,62 @@ async function fetchStoreWithHours(tenantId, storeId) {
     } catch (err) {
       console.error('connect-domain error:', err);
       return res.status(500).json({ ok: false, error: 'CONNECT_FAILED' });
+    }
+  });
+
+  router.get('/pwa-install-qr', async (req, res) => {
+    try {
+      let QRCode = null;
+      try {
+        QRCode = require('qrcode');
+      } catch (requireErr) {
+        return res.status(503).json({ ok: false, error: 'PWA_INSTALL_QR_UNAVAILABLE' });
+      }
+
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      const targetId = String(req.query.target || '').trim();
+
+      if (!tenantId) {
+        return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+      }
+
+      const [rows] = await db.query(
+        'SELECT * FROM ten_tenants WHERE id=? LIMIT 1',
+        [tenantId]
+      );
+      if (!Array.isArray(rows) || !rows.length) {
+        return res.status(404).json({ ok: false, error: 'TENANT_NOT_FOUND' });
+      }
+
+      const tenant = await buildTenantResponse(rows[0], req);
+      const targets = Array.isArray(tenant && tenant.pwa_install_targets)
+        ? tenant.pwa_install_targets
+        : [];
+      const selectedTarget = targets.find((item) => String(item && item.id || '') === targetId)
+        || targets[0]
+        || null;
+
+      if (!selectedTarget || !selectedTarget.url) {
+        return res.status(404).json({ ok: false, error: 'PWA_INSTALL_TARGET_NOT_FOUND' });
+      }
+
+      const svg = await QRCode.toString(String(selectedTarget.url), {
+        type: 'svg',
+        errorCorrectionLevel: 'M',
+        margin: 1,
+        width: 320,
+        color: {
+          dark: '#111827',
+          light: '#FFFFFF'
+        }
+      });
+
+      res.setHeader('Content-Type', 'image/svg+xml; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+      return res.send(svg);
+    } catch (err) {
+      console.error('tenant pwa-install-qr error:', err);
+      return res.status(500).json({ ok: false, error: 'PWA_INSTALL_QR_FAILED' });
     }
   });
 

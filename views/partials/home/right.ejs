@@ -896,7 +896,82 @@
               <button class="product-footer-btn product-footer-save" type="button" id="settingsSoundsSaveBtn">Сохранить</button>
             </div>
             </div>
+        </div>
+      </div>
+
+      <div class="info-card settings-right-panel hidden" id="settingsPwaQrPanel">
+        <div class="settings-list-header">
+          <div class="settings-list-title">QR для установки PWA</div>
+          <div class="settings-list-subtitle">Сканируйте код с телефона, чтобы открыть install-страницу витрины.</div>
+        </div>
+        <div class="settings-site-form settings-panel-scroll">
+          <div class="settings-site-field" id="settingsDomainPwaQrField">
+            <label class="field-label">ДОМЕН ДЛЯ QR</label>
+            <div class="domain-pwa-card">
+              <div class="domain-pwa-top">
+                <select class="control domain-pwa-select" id="tenantPwaQrTargetSelect" aria-label="Домен для QR"></select>
+                <div class="domain-pwa-actions">
+                  <button class="btn btn-sm btn-secondary" type="button" id="tenantPwaQrOpenBtn">Открыть</button>
+                  <button class="btn btn-sm btn-secondary" type="button" id="tenantPwaQrCopyBtn">
+                    <i class="fas fa-copy"></i> Скопировать ссылку
+                  </button>
+                </div>
+              </div>
+              <div class="domain-pwa-preview" id="tenantPwaQrPreview">
+                <div class="domain-pwa-qr-wrap">
+                  <div
+                    class="domain-pwa-qr-image"
+                    id="tenantPwaQrImage"
+                    role="img"
+                    aria-label="QR-код для установки PWA витрины"
+                  ></div>
+                </div>
+                <div class="domain-pwa-meta">
+                  <div class="domain-pwa-title">Установка приложения витрины</div>
+                  <div class="domain-pwa-url" id="tenantPwaQrUrl"></div>
+                  <div class="field-hint" id="tenantPwaQrHint">Отсканируйте код с телефона, чтобы открыть install-страницу витрины и установить PWA.</div>
+                </div>
+              </div>
+              <div class="domain-pwa-empty hidden" id="tenantPwaQrEmpty">
+                Подключите рабочий домен или используйте субдомен tenant-а, чтобы сгенерировать QR.
+              </div>
+            </div>
           </div>
+
+          <div class="settings-site-field" id="settingsDomainPwaDevQrField">
+            <label class="field-label">DEV QR / ЛОКАЛЬНАЯ СБОРКА</label>
+            <div class="field-hint">Для быстрого LAN-теста телефон и компьютер должны быть в одной Wi-Fi сети. Для настоящей установки PWA с телефона запустите <code>npm run dev:pwa:tunnel</code>: в списке появится HTTPS tunnel.</div>
+            <div class="domain-pwa-card">
+              <div class="domain-pwa-top">
+                <select class="control domain-pwa-select" id="tenantPwaDevQrTargetSelect" aria-label="DEV адрес для QR"></select>
+                <div class="domain-pwa-actions">
+                  <button class="btn btn-sm btn-secondary" type="button" id="tenantPwaDevQrOpenBtn">Открыть</button>
+                  <button class="btn btn-sm btn-secondary" type="button" id="tenantPwaDevQrCopyBtn">
+                    <i class="fas fa-copy"></i> Скопировать ссылку
+                  </button>
+                </div>
+              </div>
+              <div class="domain-pwa-preview" id="tenantPwaDevQrPreview">
+                <div class="domain-pwa-qr-wrap">
+                  <div
+                    class="domain-pwa-qr-image"
+                    id="tenantPwaDevQrImage"
+                    role="img"
+                    aria-label="DEV QR-код для установки PWA витрины"
+                  ></div>
+                </div>
+                <div class="domain-pwa-meta">
+                  <div class="domain-pwa-title">Установка локальной сборки</div>
+                  <div class="domain-pwa-url" id="tenantPwaDevQrUrl"></div>
+                  <div class="field-hint" id="tenantPwaDevQrHint">Выберите HTTPS tunnel для настоящей установки PWA или localhost/LAN IP для простого открытия локальной витрины.</div>
+                </div>
+              </div>
+              <div class="domain-pwa-empty hidden" id="tenantPwaDevQrEmpty">
+                Откройте tenant UI по localhost или LAN-адресу, затем при необходимости запустите <code>npm run dev:pwa:tunnel</code>, чтобы получить HTTPS DEV QR.
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div class="info-card settings-right-panel hidden" id="settingsNotificationsPanel">

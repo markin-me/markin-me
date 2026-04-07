@@ -92,6 +92,7 @@ const SERVICE_WORKER_VERSION = (() => {
     : APP_CACHE_VERSION;
 })();
 const PORT = process.env.PORT || 3000;
+const DEV_PWA_TUNNEL_STATE_PATH = path.join(__dirname, 'tmp', 'dev-pwa-tunnel.json');
 const PERF_CONSOLE_LOGS_ENABLED = String(process.env.ENABLE_PERF_LOGS || '').trim() === '1';
 const TENANT_LOOKUP_CACHE_MS = Number(process.env.TENANT_LOOKUP_CACHE_MS || 60_000);
 const STATIC_FILE_VERSION_CACHE_MS = Number(process.env.STATIC_FILE_VERSION_CACHE_MS || 300_000);
@@ -115,6 +116,42 @@ function normalizeConfiguredHost(value) {
   } catch (e) {
     return normalizeHostForMatch(raw);
   }
+}
+
+function firstHeaderValue(raw, fallback = '') {
+  if (Array.isArray(raw)) {
+    for (const item of raw) {
+      const value = String(item || '').split(',')[0].trim();
+      if (value) return value;
+    }
+    return String(fallback || '').trim();
+  }
+  const value = String(raw || '').split(',')[0].trim();
+  return value || String(fallback || '').trim();
+}
+
+function getRequestRoutingHost(req) {
+  if (!req) return '';
+
+  const forwardedHost = normalizeConfiguredHost(
+    firstHeaderValue(req.headers && req.headers['x-forwarded-host'], '')
+  );
+  if (forwardedHost) return forwardedHost;
+
+  const hostHeader = normalizeConfiguredHost(
+    firstHeaderValue(req.headers && req.headers.host, '')
+  );
+  if (hostHeader) return hostHeader;
+
+  return normalizeHostForMatch(req.hostname);
+}
+
+function getRequestDisplayHost(req) {
+  if (!req) return '';
+  return firstHeaderValue(
+    req.headers && req.headers['x-forwarded-host'],
+    firstHeaderValue(req.headers && req.headers.host, req.hostname || '')
+  );
 }
 
 function getLocalTrustedAdminHosts() {
@@ -162,6 +199,23 @@ function buildTrustedAdminHosts() {
 }
 
 const TRUSTED_ADMIN_HOSTS = buildTrustedAdminHosts();
+
+function getRuntimeDevTunnelTrustedHosts() {
+  const hosts = new Set();
+  const add = (value) => {
+    const normalized = normalizeConfiguredHost(value);
+    if (normalized) hosts.add(normalized);
+  };
+
+  add(process.env.DEV_PWA_PUBLIC_BASE_URL);
+
+  try {
+    const payload = JSON.parse(fs.readFileSync(DEV_PWA_TUNNEL_STATE_PATH, 'utf8'));
+    add(payload && (payload.public_url || payload.url || payload.base_url));
+  } catch (_) {}
+
+  return hosts;
+}
 
 function nowMs() {
   return Number(process.hrtime.bigint()) / 1e6;
@@ -786,7 +840,9 @@ function normalizeHostForMatch(hostname) {
 
 function isTrustedAdminHost(hostname) {
   const host = normalizeHostForMatch(hostname);
-  return Boolean(host && TRUSTED_ADMIN_HOSTS.has(host));
+  if (!host) return false;
+  if (TRUSTED_ADMIN_HOSTS.has(host)) return true;
+  return getRuntimeDevTunnelTrustedHosts().has(host);
 }
 
 function isManagedTenantDomainRequest(req) {
@@ -806,7 +862,7 @@ function isMissingTenantDomainsTableError(err) {
 }
 
 async function resolveTenant(req) {
-  const host = normalizeHostForMatch(req.hostname);
+  const host = getRequestRoutingHost(req);
   const queryTenantId = Number(req.query.tenant_id);
   const querySubdomain = helpers.strOrNull(req.query.subdomain);
   let tenant = null;
@@ -900,7 +956,7 @@ async function findTenantByHost(hostname) {
 }
 
 async function isTenantHost(req) {
-  const host = normalizeHostForMatch(req.hostname);
+  const host = getRequestRoutingHost(req);
   if (!host) return false;
   const tenant = await findTenantByHost(host);
   if (tenant) req._resolvedTenant = tenant;
@@ -922,7 +978,7 @@ app.use(async (req, res, next) => {
   try {
     const tenantHost = await isTenantHost(req);
     if (tenantHost) return next();
-    if (!isTrustedAdminHost(req.hostname) || isManagedTenantDomainRequest(req)) {
+    if (!isTrustedAdminHost(getRequestRoutingHost(req)) || isManagedTenantDomainRequest(req)) {
       if (route.startsWith('/api/')) {
         return res.status(404).json({ ok: false, error: 'TENANT_NOT_FOUND' });
       }
@@ -936,6 +992,9 @@ app.use(async (req, res, next) => {
 
 async function renderShop(req, res) {
   try {
+    if (String(req.query && req.query.install || '').trim() === '1') {
+      return renderShopInstallPage(req, res);
+    }
     const tenant = req._resolvedTenant || await resolveTenant(req);
     const mapConfig = normalizeTenantMapConfig(tenant);
     const tenantView = tenant && typeof tenant === 'object'
@@ -951,6 +1010,30 @@ async function renderShop(req, res) {
   }
 }
 
+async function renderShopInstallPage(req, res) {
+  try {
+    const tenant = req._resolvedTenant || await resolveTenant(req);
+    const mapConfig = normalizeTenantMapConfig(tenant);
+    const tenantView = tenant && typeof tenant === 'object'
+      ? { ...tenant, store_address_map_enabled: Boolean(mapConfig.store_address_map_enabled) }
+      : tenant;
+    const tenantId = tenantView && tenantView.id ? tenantView.id : 1;
+    const tenantHostShop = Boolean(await findTenantByHost(getRequestRoutingHost(req)));
+    const shopUrl = tenantHostShop
+      ? '/'
+      : `/shop?tenant_id=${encodeURIComponent(String(tenantId))}`;
+    const pageTitle = (tenant && (tenant.site_name || tenant.name))
+      ? `Установить ${tenant.site_name || tenant.name}`
+      : 'Установить приложение';
+    const tenantInstallTitle = (tenant && (tenant.site_name || tenant.name))
+      ? `Установка приложения ${tenant.site_name || tenant.name}`
+      : 'Установка приложения';
+    res.render('pages/shop-install', { pageTitle: tenantInstallTitle, tenant: tenantView, tenantId, shopUrl });
+  } catch (err) {
+    console.error('Ошибка загрузки install-страницы витрины:', err);
+    res.status(500).send('Ошибка загрузки install-страницы');
+  }
+}
 
 // ------------------------------
 // API: Auth (публичные роуты)
@@ -970,7 +1053,7 @@ app.use(async (req, res, next) => {
   try {
     const tenantHost = await isTenantHost(req);
     if (!tenantHost) {
-      if (!isTrustedAdminHost(req.hostname) || isManagedTenantDomainRequest(req)) {
+      if (!isTrustedAdminHost(getRequestRoutingHost(req)) || isManagedTenantDomainRequest(req)) {
         if (route.startsWith('/api/')) {
           return res.status(404).json({ ok: false, error: 'TENANT_NOT_FOUND' });
         }
@@ -1015,7 +1098,7 @@ app.get('/manifest.json', async (req, res) => {
   try {
     const appType = normalizeManifestApp(req.query.app);
     const tenant = await resolveTenant(req);
-    const tenantHostShop = Boolean(await findTenantByHost(req.hostname));
+    const tenantHostShop = Boolean(await findTenantByHost(getRequestRoutingHost(req)));
     const startPath = normalizeManifestStartPath(req.query.start, {
       appType,
       tenantHostShop,
@@ -1055,10 +1138,21 @@ app.get('/manifest.json', async (req, res) => {
     res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8');
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     res.setHeader('Vary', 'Host');
+    const manifestId = appType === 'admin'
+      ? buildAdminManifestId(tenantId, startPath)
+      : `/pwa/shop/t${tenantId}`;
+    const relatedApplications = appType === 'admin'
+      ? undefined
+      : [{
+        platform: 'webapp',
+        url: String(req.originalUrl || '/manifest.json'),
+        id: manifestId
+      }];
+    const launchHandler = {
+      client_mode: ['navigate-existing', 'auto']
+    };
     res.json({
-      id: appType === 'admin'
-        ? buildAdminManifestId(tenantId, startPath)
-        : `/pwa/shop/t${tenantId}`,
+      id: manifestId,
       name: appType === 'admin' ? adminPageTitle : manifestName,
       short_name: appType === 'admin' ? adminPageTitle : manifestShortName,
       description: (tenant && tenant.site_description) ? tenant.site_description : undefined,
@@ -1068,7 +1162,10 @@ app.get('/manifest.json', async (req, res) => {
       orientation: 'portrait',
       background_color: '#ffffff',
       theme_color: '#ffffff',
-      icons
+      icons,
+      launch_handler: launchHandler,
+      related_applications: relatedApplications,
+      prefer_related_applications: false
     });
   } catch (err) {
     console.error('Ошибка генерации manifest:', err);
@@ -1081,6 +1178,9 @@ app.get('/manifest.json', async (req, res) => {
     res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8');
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     res.setHeader('Vary', 'Host');
+    const launchHandler = {
+      client_mode: ['navigate-existing', 'auto']
+    };
     res.json({
       id: appType === 'admin' ? '/pwa/admin/fallback' : '/pwa/shop/fallback',
       name: fallbackTitle,
@@ -1092,6 +1192,7 @@ app.get('/manifest.json', async (req, res) => {
       background_color: '#ffffff',
       theme_color: '#ffffff',
       icons: [],
+      launch_handler: launchHandler,
     });
   }
 });
@@ -1439,14 +1540,16 @@ app.get('/sw.js', (req, res) => {
 
 app.get('/.well-known/tenant-domain-check', async (req, res) => {
   try {
-    const hostAscii = normalizeHostForMatch(req.hostname);
+    const hostAscii = getRequestRoutingHost(req);
     const tenant = await findTenantByHost(hostAscii);
     if (!tenant) {
       return res.status(404).json({ ok: false, error: 'TENANT_NOT_FOUND' });
     }
     return res.json({
       ok: true,
-      host: req.hostname,
+      host: getRequestDisplayHost(req),
+      host_header: firstHeaderValue(req.headers && req.headers.host, '') || null,
+      forwarded_host: firstHeaderValue(req.headers && req.headers['x-forwarded-host'], '') || null,
       host_ascii: hostAscii,
       tenant_id: Number(tenant.id),
       tenant_name: tenant.name || null,
@@ -1470,9 +1573,12 @@ app.use(async (req, res, next) => {
     || req.path === '/max-app'
   ) return next();
   try {
-    const tenant = await findTenantByHost(req.hostname);
+    const tenant = await findTenantByHost(getRequestRoutingHost(req));
     if (tenant) {
       req._resolvedTenant = tenant;
+      if (req.path === '/install-app' || req.path === '/shop/install-app') {
+        return renderShopInstallPage(req, res);
+      }
       return renderShop(req, res);
     }
     if (isManagedTenantDomainRequest(req)) {
@@ -1492,9 +1598,9 @@ app.use(async (req, res, next) => {
     || req.path === '/max-app'
   ) return next();
   try {
-    const tenant = await findTenantByHost(req.hostname);
+    const tenant = await findTenantByHost(getRequestRoutingHost(req));
     if (tenant) return next();
-    if (isManagedTenantDomainRequest(req) || !isTrustedAdminHost(req.hostname)) {
+    if (isManagedTenantDomainRequest(req) || !isTrustedAdminHost(getRequestRoutingHost(req))) {
       return res.status(404).send('Домен не подключен');
     }
   } catch (err) {
@@ -1600,6 +1706,8 @@ app.get('/dashboard/settings', (req, res) =>
 // ------------------------------
 // Shop (витрина)
 // ------------------------------
+app.get('/install-app', renderShopInstallPage);
+app.get('/shop/install-app', renderShopInstallPage);
 app.get('/shop', renderShop);
 
 app.get('/auth', (req, res) => res.redirect('/login'));

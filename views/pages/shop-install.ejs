@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <%
+    const appleIcon = (typeof tenant !== 'undefined' && tenant) ? (tenant.apple_touch_icon_url || tenant.logo_light_url || tenant.logo_dark_url || tenant.favicon_light_url || tenant.favicon_dark_url) : '';
+    const shopManifestVersion = (typeof tenant !== 'undefined' && tenant && tenant.updated_at) ? String(tenant.updated_at) : String(appVersion || '');
+    const shopManifestHref = manifestUrl({
+      appType: 'shop',
+      startPath: '/',
+      tenantId: tenantId || ((typeof tenant !== 'undefined' && tenant && tenant.id) ? tenant.id : 0),
+      versionToken: shopManifestVersion
+    });
+    const shopPwaTitle = (typeof tenant !== 'undefined' && tenant && (tenant.site_name || tenant.name))
+      ? (tenant.site_name || tenant.name)
+      : (pageTitle || 'Витрина');
+  %>
+  <title><%= pageTitle || 'Установка приложения' %></title>
+  <meta name="tenant_id" content="<%= tenantId || 1 %>" />
+  <link rel="icon" href="<%= appleIcon || '' %>" />
+  <link rel="apple-touch-icon" href="<%= appleIcon || '' %>" />
+  <link rel="manifest" href="<%= shopManifestHref %>" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-title" content="<%= shopPwaTitle %>" />
+  <meta name="theme-color" content="#ffffff" />
+  <script>
+    window.__SHOP_INSTALL_PAGE_CONTEXT__ = {
+      title: <%- JSON.stringify(shopPwaTitle) %>,
+      icon: <%- JSON.stringify(appleIcon || '') %>,
+      shopUrl: <%- JSON.stringify(shopUrl || '/') %>,
+      source: <%- JSON.stringify(String((typeof source !== 'undefined' && source) || '')) %>
+    };
+  </script>
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+  <link rel="preload" href="<%= assetUrl('/static/css/shop.css?v=20260407k') %>" as="style" onload="this.onload=null;this.rel='stylesheet'">
+  <noscript><link rel="stylesheet" href="<%= assetUrl('/static/css/shop.css?v=20260407k') %>" /></noscript>
+  <link rel="preload" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
+  <noscript><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" /></noscript>
+</head>
+<body class="page-shop-install">
+  <main class="shop-install-page">
+    <div class="shop-install-page__splash" id="shopInstallPageSplash" aria-hidden="false">
+      <div class="shop-install-page__splash-card">
+        <% if (appleIcon) { %>
+          <img class="shop-install-page__splash-logo" src="<%= appleIcon %>" alt="" />
+        <% } else { %>
+          <div class="shop-install-page__splash-logo shop-install-page__splash-logo--fallback">
+            <i class="fas fa-mobile-alt"></i>
+          </div>
+        <% } %>
+        <div class="shop-install-page__splash-name"><%= shopPwaTitle %></div>
+        <div class="shop-install-loader shop-install-page__splash-loader hidden" id="shopInstallPageSplashLoader" aria-hidden="true">
+          <div class="shop-install-loader__orbit">
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+          <div class="shop-install-loader__text">Загружаем приложение...</div>
+        </div>
+      </div>
+    </div>
+    <section class="shop-install-page__card">
+      <div class="shop-install-page__halo"></div>
+      <div class="shop-install-page__content">
+        <% if (appleIcon) { %>
+          <img class="shop-install-page__icon" src="<%= appleIcon %>" alt="" />
+        <% } else { %>
+          <div class="shop-install-page__icon shop-install-page__icon--fallback">
+            <i class="fas fa-mobile-alt"></i>
+          </div>
+        <% } %>
+
+        <div class="shop-install-page__heading">
+          <h1 class="shop-install-page__title" id="shopInstallPageTitle">Установка приложения</h1>
+          <div class="shop-install-page__app-name" id="shopInstallPageAppName"><%= shopPwaTitle %></div>
+        </div>
+
+        <p class="shop-install-page__text hidden" id="shopInstallPageText"></p>
+        <div class="shop-install-loader hidden" id="shopInstallPageLoader" aria-hidden="true">
+          <div class="shop-install-loader__orbit">
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+          <div class="shop-install-loader__text">Ожидаем ответ браузера…</div>
+        </div>
+        <div class="shop-install-page__steps hidden" id="shopInstallPageSteps"></div>
+
+        <div class="shop-install-page__actions">
+          <button class="btn btn-primary hidden" id="shopInstallPageActionBtn" type="button">Установить</button>
+          <a class="btn btn-secondary hidden" id="shopInstallPageOpenBtn" href="<%= shopUrl || '/' %>">Отмена</a>
+        </div>
+
+        <div class="shop-install-page__hint hidden" id="shopInstallPageHint"></div>
+      </div>
+    </section>
+    <a class="shop-install-page__site-link hidden" id="shopInstallPageSiteLink" href="<%= shopUrl || '/' %>">Оформить заказ на сайте</a>
+  </main>
+
+  <script src="<%= assetUrl('/static/js/theme.js') %>" defer></script>
+  <script src="<%= assetUrl('/static/js/shop-pwa-presence.js?v=20260407a') %>" defer></script>
+  <script src="<%= assetUrl('/static/js/shop-install-page.js?v=20260407q') %>" defer></script>
+  <script>
+    (function () {
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', function () {
+          navigator.serviceWorker.register('/sw.js?v=<%= encodeURIComponent(serviceWorkerVersion || appVersion || "") %>', { scope: '/' }).catch(function () {});
+        });
+      }
+    })();
+  </script>
+</body>
+</html>

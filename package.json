@@ -8,6 +8,7 @@
     "thumbs": "node scripts/generate-product-thumbs.js",
     "emoji:atlas": "node scripts/build-emoji-atlas.js",
     "domain:connect": "node scripts/connect-tenant-domain.js",
+    "dev:pwa:tunnel": "node scripts/dev-pwa-tunnel.js",
     "addr:index:v1": "node scripts/import-local-address-v1.js",
     "address:service:install": "npm --prefix services/address-service install",
     "address:service:db:check": "npm --prefix services/address-service run db:check",
@@ -35,5 +36,8 @@
     "puppeteer": "^23.1.0",
     "sharp": "^0.33.5",
     "web-push": "^3.6.7"
+  },
+  "devDependencies": {
+    "localtunnel": "^2.0.2"
   }
 }

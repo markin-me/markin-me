@@ -21877,3 +21877,492 @@ body.page-shop .sidebar-open-tab{display:none}
 body.shop-portrait-guard-active {
   overflow: hidden !important;
 }
+
+.shop-install-open{overflow:hidden}
+.shop-install-sheet{position:fixed;inset:0;z-index:10020;display:block}
+.shop-install-sheet__backdrop{position:absolute;inset:0;background:rgba(15,23,42,.48);backdrop-filter:blur(6px)}
+.shop-install-sheet__dialog{
+  position:relative;
+  width:min(100%,480px);
+  margin:clamp(16px,4vh,32px) auto 0;
+  background:rgba(255,255,255,.98);
+  border:1px solid rgba(229,231,235,.9);
+  border-radius:28px;
+  box-shadow:0 28px 60px rgba(15,23,42,.24);
+  padding:24px 20px 20px;
+  display:grid;
+  gap:16px;
+}
+.shop-install-sheet__close{
+  position:absolute;
+  top:14px;
+  right:14px;
+  width:36px;
+  height:36px;
+  border:none;
+  border-radius:999px;
+  background:rgba(15,23,42,.06);
+  color:var(--color-text);
+  cursor:pointer;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+}
+.shop-install-sheet__hero{display:grid;gap:10px;padding-right:40px}
+.shop-install-sheet__icon{
+  width:68px;
+  height:68px;
+  border-radius:18px;
+  object-fit:cover;
+  box-shadow:0 12px 24px rgba(15,23,42,.14);
+}
+.shop-install-sheet__icon--fallback{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  background:linear-gradient(135deg,#fff2e8,#ffe0c2);
+  color:var(--color-primary);
+  font-size:28px;
+}
+.shop-install-sheet__eyebrow{
+  font-size:11px;
+  font-weight:800;
+  letter-spacing:.12em;
+  text-transform:uppercase;
+  color:var(--color-primary);
+}
+.shop-install-sheet__title{
+  margin:0;
+  font-size:28px;
+  line-height:1.05;
+  font-weight:900;
+  color:var(--color-text-strong);
+}
+.shop-install-sheet__text{
+  margin:0;
+  font-size:14px;
+  line-height:1.55;
+  color:var(--color-text-secondary);
+}
+.shop-install-loader{
+  display:grid;
+  justify-items:center;
+  gap:10px;
+  padding:12px 14px;
+  border-radius:18px;
+  background:linear-gradient(180deg, rgba(249,115,22,.08), rgba(249,115,22,.03));
+  border:1px solid rgba(249,115,22,.14);
+}
+.shop-install-loader__orbit{
+  position:relative;
+  width:58px;
+  height:58px;
+  animation:shop-install-loader-spin 2.6s linear infinite;
+}
+.shop-install-loader__orbit span{
+  position:absolute;
+  width:12px;
+  height:12px;
+  border-radius:999px;
+  background:linear-gradient(135deg, #f97316, #fb923c);
+  box-shadow:0 6px 12px rgba(249,115,22,.22);
+}
+.shop-install-loader__orbit span:nth-child(1){
+  top:0;
+  left:50%;
+  transform:translateX(-50%);
+}
+.shop-install-loader__orbit span:nth-child(2){
+  right:2px;
+  bottom:10px;
+}
+.shop-install-loader__orbit span:nth-child(3){
+  left:2px;
+  bottom:10px;
+}
+.shop-install-loader__text{
+  font-size:12px;
+  line-height:1.45;
+  font-weight:700;
+  text-align:center;
+  color:var(--color-primary);
+}
+.shop-install-sheet__steps{display:grid;gap:10px}
+.shop-install-sheet__step{
+  display:grid;
+  grid-template-columns:28px minmax(0,1fr);
+  gap:10px;
+  align-items:start;
+  padding:10px 12px;
+  border-radius:16px;
+  background:#f8fafc;
+  border:1px solid rgba(229,231,235,.9);
+  color:var(--color-text-secondary);
+  font-size:13px;
+  line-height:1.45;
+}
+.shop-install-sheet__step span{
+  width:28px;
+  height:28px;
+  border-radius:999px;
+  background:rgba(249,115,22,.14);
+  color:var(--color-primary);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  font-weight:800;
+}
+.shop-install-sheet__actions{display:flex;flex-wrap:wrap;gap:10px}
+.shop-install-sheet__actions .btn{flex:1 1 180px}
+.shop-install-sheet__hint{
+  font-size:12px;
+  line-height:1.5;
+  color:var(--color-text-muted);
+  padding:12px 14px;
+  border-radius:16px;
+  background:rgba(249,115,22,.08);
+}
+@media (max-width: 640px){
+  .shop-install-sheet__dialog{
+    width:calc(100% - 24px);
+    margin:12px auto 0;
+    padding:22px 16px 18px;
+    border-radius:24px;
+  }
+  .shop-install-sheet__title{font-size:24px}
+  .shop-install-sheet__actions .btn{flex:1 1 100%}
+}
+
+body.page-shop-install{
+  min-height:100vh;
+  overflow:auto;
+  background:
+    radial-gradient(circle at top left, rgba(249,115,22,.18), transparent 28%),
+    radial-gradient(circle at right 20%, rgba(17,24,39,.08), transparent 26%),
+    linear-gradient(180deg, #fffaf5 0%, #fff 34%, #f7f8fb 100%);
+}
+.shop-install-page{
+  min-height:100vh;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:flex-start;
+  gap:12px;
+  padding:28px 16px;
+}
+.shop-install-page__splash{
+  position:fixed;
+  inset:0;
+  z-index:160;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:24px;
+  background:linear-gradient(180deg, rgba(255,250,245,.98) 0%, rgba(255,255,255,.98) 34%, rgba(247,248,251,.99) 100%);
+}
+.shop-install-page__splash-card{
+  display:grid;
+  justify-items:center;
+  gap:16px;
+}
+.shop-install-page__splash-logo{
+  width:96px;
+  height:96px;
+  border-radius:28px;
+  object-fit:cover;
+  box-shadow:0 24px 48px rgba(15,23,42,.14);
+}
+.shop-install-page__splash-logo--fallback{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  background:linear-gradient(135deg,#fff2e8,#ffe1c6);
+  color:var(--color-primary);
+  font-size:38px;
+}
+.shop-install-page__splash-name{
+  max-width:min(82vw, 320px);
+  font-size:26px;
+  line-height:1.08;
+  font-weight:900;
+  color:var(--color-text-strong);
+  text-align:center;
+  text-wrap:balance;
+}
+.shop-install-page__splash-loader{
+  margin-top:2px;
+}
+.shop-install-page__splash.is-loading .shop-install-page__splash-loader{
+  display:grid!important;
+}
+.shop-install-page__card{
+  position:relative;
+  width:min(100%, 520px);
+  border-radius:32px;
+  background:rgba(255,255,255,.94);
+  border:1px solid rgba(229,231,235,.88);
+  box-shadow:0 30px 70px rgba(15,23,42,.12);
+  overflow:hidden;
+}
+.shop-install-page__halo{
+  position:absolute;
+  inset:auto -10% 58% auto;
+  width:220px;
+  height:220px;
+  border-radius:999px;
+  background:radial-gradient(circle, rgba(249,115,22,.22) 0%, rgba(249,115,22,0) 72%);
+  pointer-events:none;
+}
+.shop-install-page__content{
+  position:relative;
+  display:grid;
+  gap:18px;
+  padding:28px 22px 22px;
+  justify-items:center;
+  text-align:center;
+}
+.shop-install-page__icon{
+  width:74px;
+  height:74px;
+  border-radius:22px;
+  object-fit:cover;
+  box-shadow:0 14px 28px rgba(15,23,42,.14);
+}
+.shop-install-page__icon--fallback{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  background:linear-gradient(135deg,#fff2e8,#ffe1c6);
+  color:var(--color-primary);
+  font-size:30px;
+}
+.shop-install-page__eyebrow{
+  font-size:11px;
+  font-weight:900;
+  letter-spacing:.14em;
+  text-transform:uppercase;
+  color:var(--color-primary);
+}
+.shop-install-page__title{
+  margin:0;
+  font-size:24px;
+  line-height:1.1;
+  font-weight:900;
+  color:var(--color-text-strong);
+}
+.shop-install-page__heading{
+  display:grid;
+  gap:8px;
+  width:100%;
+  justify-items:center;
+  text-align:center;
+}
+.shop-install-page__app-name{
+  margin:0;
+  max-width:100%;
+  font-size:36px;
+  line-height:1.04;
+  font-weight:900;
+  color:var(--color-text-strong);
+  text-wrap:balance;
+}
+.shop-install-page__text{
+  margin:0;
+  font-size:15px;
+  line-height:1.6;
+  color:var(--color-text-secondary);
+}
+.shop-install-page__steps{
+  display:grid;
+  gap:10px;
+}
+.shop-install-page__step{
+  display:grid;
+  grid-template-columns:30px minmax(0,1fr);
+  gap:10px;
+  align-items:start;
+  padding:12px 13px;
+  border-radius:18px;
+  background:#fbfbfd;
+  border:1px solid rgba(229,231,235,.95);
+  font-size:13px;
+  line-height:1.45;
+  color:var(--color-text-secondary);
+}
+.shop-install-page__step span{
+  width:30px;
+  height:30px;
+  border-radius:999px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  background:rgba(249,115,22,.14);
+  color:var(--color-primary);
+  font-weight:800;
+}
+.shop-install-inline-arrow{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  margin:0 4px 0 2px;
+  color:var(--color-primary);
+  font-weight:900;
+}
+.shop-install-share-pill{
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  padding:3px 9px;
+  border-radius:999px;
+  background:rgba(249,115,22,.12);
+  color:var(--color-primary);
+  font-weight:800;
+  white-space:nowrap;
+}
+.shop-install-share-icon-wrap{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  width:24px;
+  height:24px;
+  flex:0 0 24px;
+  border-radius:999px;
+  background:#fff;
+  box-shadow:0 2px 10px rgba(15,23,42,.18);
+}
+.shop-install-share-icon{
+  display:block;
+  width:12px;
+  height:15px;
+  flex:0 0 auto;
+  object-fit:contain;
+  filter:saturate(1.08);
+}
+.shop-install-ios-toolbar-hint{
+  position:fixed;
+  left:50%;
+  bottom:calc(env(safe-area-inset-bottom, 0px) + 18px);
+  transform:translateX(-50%);
+  z-index:120;
+  display:grid;
+  justify-items:center;
+  gap:8px;
+  pointer-events:none;
+}
+.shop-install-ios-toolbar-hint__bubble{
+  display:inline-flex;
+  flex-direction:column;
+  align-items:center;
+  gap:7px;
+  padding:10px 16px 12px;
+  border-radius:999px;
+  background:rgba(17,24,39,.94);
+  color:#fff;
+  font-size:13px;
+  font-weight:800;
+  line-height:1;
+  box-shadow:0 16px 36px rgba(15,23,42,.22);
+  backdrop-filter:blur(10px);
+}
+.shop-install-ios-toolbar-hint__label{
+  display:block;
+  white-space:nowrap;
+  text-align:center;
+}
+.shop-install-ios-toolbar-hint__bubble i{
+  font-size:13px;
+}
+.shop-install-ios-toolbar-hint__arrow{
+  position:relative;
+  width:2px;
+  height:28px;
+  background:linear-gradient(180deg, rgba(249,115,22,.18), rgba(249,115,22,.95));
+}
+.shop-install-ios-toolbar-hint__arrow::after{
+  content:"";
+  position:absolute;
+  left:50%;
+  bottom:-1px;
+  width:10px;
+  height:10px;
+  border-right:2px solid #f97316;
+  border-bottom:2px solid #f97316;
+  transform:translateX(-50%) rotate(45deg);
+}
+.shop-install-ios-toolbar-hint.is-pulsing{
+  animation:shop-install-ios-toolbar-float 1.2s ease-in-out infinite;
+}
+.shop-install-ios-toolbar-hint.is-pulsing .shop-install-ios-toolbar-hint__bubble{
+  animation:shop-install-ios-toolbar-pulse 1.2s ease-in-out infinite;
+}
+.shop-install-page__actions{
+  width:100%;
+  display:grid;
+  grid-template-columns:repeat(2, minmax(0, 1fr));
+  gap:12px;
+}
+.shop-install-page__actions .btn{
+  width:100%;
+  min-width:0;
+  text-align:center;
+  justify-content:center;
+  text-decoration:none;
+}
+.shop-install-page__site-link{
+  display:block;
+  width:fit-content;
+  max-width:100%;
+  margin:4px auto 0;
+  color:#2563eb;
+  font-size:14px;
+  font-weight:700;
+  line-height:1.35;
+  text-align:center;
+  text-decoration:none;
+}
+.shop-install-page__site-link:hover,
+.shop-install-page__site-link:focus-visible{
+  color:#1d4ed8;
+  text-decoration:underline;
+}
+.shop-install-page__hint{
+  padding:12px 14px;
+  border-radius:16px;
+  background:rgba(249,115,22,.08);
+  color:var(--color-text-muted);
+  font-size:12px;
+  line-height:1.55;
+}
+@keyframes shop-install-loader-spin{
+  from{transform:rotate(0deg)}
+  to{transform:rotate(360deg)}
+}
+@keyframes shop-install-ios-toolbar-float{
+  0%,100%{transform:translateX(-50%) translateY(0)}
+  50%{transform:translateX(-50%) translateY(-4px)}
+}
+@keyframes shop-install-ios-toolbar-pulse{
+  0%,100%{box-shadow:0 16px 36px rgba(15,23,42,.22)}
+  50%{box-shadow:0 22px 42px rgba(249,115,22,.28)}
+}
+@media (max-width: 640px){
+  .shop-install-page{
+    align-items:flex-start;
+    padding:14px 12px 24px;
+  }
+  .shop-install-page__card{
+    border-radius:26px;
+  }
+  .shop-install-page__content{
+    padding:22px 16px 18px;
+  }
+  .shop-install-page__title{
+    font-size:22px;
+  }
+  .shop-install-page__app-name{
+    font-size:30px;
+  }
+  .shop-install-ios-toolbar-hint{
+    bottom:calc(env(safe-area-inset-bottom, 0px) + 14px);
+  }
+}
