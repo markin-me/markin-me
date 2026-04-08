@@ -16106,7 +16106,6 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
   function buildCheckoutBenefitDiscountDetailContent(item) {
     const data = item && typeof item === "object" ? item : {};
     const wrap = document.createElement("div");
-    const isMobileDetail = !!(window.matchMedia && window.matchMedia("(max-width: 768px)").matches);
 
     const title = str(data?.title || "").trim() || "Скидка";
     const badgeText = str(data?.badge_text || "").trim() || "Скидка";
@@ -16114,8 +16113,6 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     const minOrderAmount = Number(data?.min_order_amount || 0);
     const maxDiscountAmount = Number(data?.max_discount_amount || 0);
     const usagePerCustomer = Number(data?.usage_per_customer || 0);
-    const usageLimitRaw = data?.usage_limit;
-    const usageLimit = usageLimitRaw == null ? null : Number(usageLimitRaw || 0);
     const usageCount = Number(data?.usage_count || 0);
     const startsAt = str(data?.starts_at || "").trim();
     const endsAt = str(data?.ends_at || "").trim();
@@ -16126,8 +16123,6 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     const activationMode = str(data?.activation_mode || "").trim().toLowerCase();
     const promoEnabled = activationMode === "promo_code" || !!promoCode || codeMode === "unique";
     const promoValue = codeMode === "unique" ? "УНИКАЛЬНЫЕ КОДЫ" : (promoCode || "—");
-    const isActive = data?.is_active !== false && Number(data?.is_active ?? 1) !== 0;
-    const hideInBenefits = data?.hide_in_benefits === true || Number(data?.hide_in_benefits || 0) === 1;
     const isStackable = data?.is_stackable === true || Number(data?.is_stackable || 0) === 1;
 
     const moneyValue = (value) => {
@@ -16196,16 +16191,6 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       return "";
     })();
 
-    const audienceText = (() => {
-      const customers = Array.isArray(data?.customers) ? data.customers : [];
-      if (!customers.length) return "Все клиенты";
-      const categoryCount = customers.filter((it) => str(it?.entity_type || "").trim().toLowerCase() === "category").length;
-      const customerCount = customers.length - categoryCount;
-      if (customerCount > 0 && categoryCount > 0) return `Клиенты ${customerCount}, категории ${categoryCount}`;
-      if (categoryCount > 0) return categoryCount === 1 ? "Категория клиентов" : `Категории клиентов (${categoryCount})`;
-      return customerCount === 1 ? "Выбранный клиент" : `Выбранные клиенты (${customerCount})`;
-    })();
-
     const hero = document.createElement("div");
     hero.className = "discount-info-hero";
     hero.innerHTML = `
@@ -16213,8 +16198,6 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
         <div class="discount-info-hero-content">
           <div class="discount-info-badges discount-info-badges--right shop-checkout-benefit-discount-meta">
             <span class="discount-info-hero-badge shop-checkout-benefit-badge shop-checkout-benefit-badge--accent shop-checkout-benefit-discount-badge">${escapeHtml(badgeText)}</span>
-            ${isMobileDetail ? "" : `<span class="discount-info-badge shop-checkout-benefit-badge shop-checkout-benefit-badge--icon ${isActive ? "shop-checkout-benefit-badge--accent" : "shop-checkout-benefit-badge--neutral"}" title="${isActive ? "Активна" : "Неактивна"}" aria-label="${isActive ? "Активна" : "Неактивна"}"><i class="fas fa-power-off" aria-hidden="true"></i></span>`}
-            ${isMobileDetail ? "" : `<span class="discount-info-badge shop-checkout-benefit-badge shop-checkout-benefit-badge--icon shop-checkout-benefit-badge--accent" title="${hideInBenefits ? "Скрыта в выгодах" : "Показывается в выгодах"}" aria-label="${hideInBenefits ? "Скрыта в выгодах" : "Показывается в выгодах"}"><i class="fas ${hideInBenefits ? "fa-eye-slash" : "fa-eye"}" aria-hidden="true"></i></span>`}
             ${isStackable ? '<span class="discount-info-badge shop-checkout-benefit-badge shop-checkout-benefit-badge--icon shop-checkout-benefit-badge--accent" title="Можно совмещать" aria-label="Можно совмещать"><i class="fas fa-link" aria-hidden="true"></i></span>' : ""}
           </div>
           <div class="discount-info-title shop-profile-discount-title">${escapeHtml(title)}</div>
@@ -16244,7 +16227,6 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       <div class="discount-info-block-header"><i class="fas fa-exclamation-triangle"></i> Ограничения</div>
       <div class="discount-info-block-body">
         <div class="discount-info-row"><span class="discount-info-row-label">На клиента:</span><span class="discount-info-row-value">${usagePerCustomer > 0 ? `${usagePerCustomer} на клиента` : "без лимита на клиента"}</span></div>
-        <div class="discount-info-row"><span class="discount-info-row-label">Общий лимит:</span><span class="discount-info-row-value">${usageLimit == null || usageLimit <= 0 ? "без общего лимита" : String(usageLimit)}</span></div>
         <div class="discount-info-row"><span class="discount-info-row-label">Использовано:</span><span class="discount-info-row-value">${String(usageCount)}</span></div>
       </div>
     `;
@@ -16263,16 +16245,11 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     wrap.appendChild(periodBlock);
 
     const bottomGrid = document.createElement("div");
-    bottomGrid.className = "discount-info-bottom-grid";
+    bottomGrid.className = "discount-info-bottom-grid discount-info-bottom-grid--single";
     bottomGrid.innerHTML = `
       <div class="discount-info-mini-card">
-        <div class="discount-info-mini-header"><i class="fas fa-check-circle"></i> Доступно</div>
-        <div class="discount-info-mini-body">${isStackable ? "Можно совмещать с другими акциями" : "Не совмещается с другими акциями"}</div>
+        <div class="discount-info-mini-header"><i class="fas ${isStackable ? "fa-check-circle" : "fa-times-circle"}"></i> ${isStackable ? "Можно совмещать с другими акциями" : "Не совмещается с другими акциями"}</div>
       </div>
-      ${isMobileDetail ? "" : `<div class="discount-info-mini-card">
-        <div class="discount-info-mini-header"><i class="fas fa-users"></i> Аудитория</div>
-        <div class="discount-info-mini-body">${escapeHtml(audienceText)}</div>
-      </div>`}
     `;
     wrap.appendChild(bottomGrid);
 
@@ -16295,27 +16272,6 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       });
       productsSection.appendChild(chips);
       wrap.appendChild(productsSection);
-    }
-
-    const customers = Array.isArray(data?.customers) ? data.customers : [];
-    if (customers.length) {
-      const customersSection = document.createElement("div");
-      customersSection.className = "discount-info-section";
-      const customersTitle = document.createElement("div");
-      customersTitle.className = "discount-info-section-title";
-      customersTitle.textContent = "Выбранные клиенты";
-      customersSection.appendChild(customersTitle);
-      const chips = document.createElement("div");
-      chips.className = "discount-chips";
-      customers.forEach((customer) => {
-        const chip = document.createElement("span");
-        const entityType = str(customer?.entity_type || "").trim().toLowerCase();
-        chip.className = `discount-chip ${entityType === "category" ? "is-category" : ""}`.trim();
-        chip.textContent = str(customer?.title || customer?.name || "").trim() || `#${Number(customer?.entity_id || customer?.id || 0)}`;
-        chips.appendChild(chip);
-      });
-      customersSection.appendChild(chips);
-      wrap.appendChild(customersSection);
     }
 
     if (disabledReasonText) {
