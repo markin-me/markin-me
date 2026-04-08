@@ -7087,6 +7087,12 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   overflow:hidden;
   background:var(--color-surface);
 }
+.discount-info-mini-card--inline .discount-info-mini-header{
+  background:var(--color-surface);
+}
+.discount-info-mini-card--inline .discount-info-mini-body{
+  display:none;
+}
 .discount-info-mini-header{
   display:flex;
   align-items:center;

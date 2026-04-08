@@ -17303,6 +17303,13 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   background:var(--color-surface);
   align-items:center;
 }
+.discount-promo-row--history{
+  cursor:pointer;
+}
+.discount-promo-row--history.is-active{
+  border-color:var(--primary-45);
+  box-shadow:0 0 0 3px var(--primary-12);
+}
 .discount-promo-main{
   min-width:0;
 }
@@ -17310,6 +17317,12 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   font-size:14px;
   font-weight:700;
   letter-spacing:.06em;
+  color:var(--color-text);
+}
+.discount-promo-assigned{
+  margin-top:4px;
+  font-size:13px;
+  font-weight:600;
   color:var(--color-text);
 }
 .discount-promo-meta{

@@ -26787,6 +26787,18 @@ function renderSheetAddressList() {
       setBenefitsSectionItems(giftsBenefitsSection, data.gifts, (item) => renderCheckoutBenefitGiftCard(item, {
         onReceive: async (giftItem) => {
           try {
+            if (str(giftItem?.action_mode || "").trim().toLowerCase() === "claim_unique_promo") {
+              const discountId = Number(giftItem?.discount_id || 0) || null;
+              if (!(discountId > 0)) {
+                throw new Error("PROMO_INVALID");
+              }
+              await claimCheckoutBenefitPromo({
+                discount_id: discountId,
+              });
+              invalidateCheckoutBenefitsClientCache({ preview: true, progressProducts: false });
+              renderCustomerBenefits(await loadCustomerBenefits());
+              return;
+            }
             const added = await receiveCheckoutBenefitGiftToCart(giftItem);
             if (!added) return;
             renderCustomerBenefits(

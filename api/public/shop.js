@@ -7639,14 +7639,23 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     let promoCodes = [];
     let promoTargetsByDiscountId = new Map();
     let promoTargetProductsMap = new Map();
+    let promoClaimGiftCards = [];
     if (promoDiscountIds.length) {
-      const promoRowsByDiscountId = await loadBenefitPromoRowsMap({
-        tenantId,
-        storeId,
-        customerId,
-        discounts: promoDiscounts,
-        includeInactive: false,
-      });
+      const [promoRowsByDiscountId, allPromoRowsByDiscountId] = await Promise.all([
+        loadBenefitPromoRowsMap({
+          tenantId,
+          storeId,
+          customerId,
+          discounts: promoDiscounts,
+          includeInactive: false,
+        }),
+        loadAllBenefitPromoRowsMap({
+          tenantId,
+          storeId,
+          discounts: promoDiscounts,
+          includeInactive: false,
+        }),
+      ]);
       promoTargetsByDiscountId = await loadDiscountTargetRowsMap(tenantId, promoDiscountIds);
       promoTargetProductsMap = await loadCheckoutRewardProductsByIds(
         tenantId,
@@ -7674,6 +7683,75 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             getPublicDiscountProductsConfigMode(discount, 'any')
           ),
         }));
+      });
+
+      promoClaimGiftCards = promoDiscounts.flatMap((discount) => {
+        const discountId = Number(discount?.id || 0);
+        if (!(discountId > 0)) return [];
+        if (publicDiscountText(discount?.promo_code_mode).toLowerCase() !== 'unique') return [];
+        if (isHiddenBenefitsDiscount(discount)) return [];
+
+        const allRows = allPromoRowsByDiscountId.get(discountId) || [];
+        if (!allRows.length) return [];
+        const uniqueRows = allRows.filter((row) => publicDiscountText(row?.code_mode).toLowerCase() === 'unique');
+        if (!uniqueRows.length) return [];
+
+        const assignedToCustomerCount = Number(customerId || 0) > 0
+          ? uniqueRows.filter((row) => Number(row?.assigned_customer_id || 0) === Number(customerId || 0)).length
+          : 0;
+        const issueLimit = Number(discount?.usage_per_customer || 0);
+        if (issueLimit > 0 && assignedToCustomerCount >= issueLimit) return [];
+
+        const availableRows = uniqueRows.filter((row) => (
+          Number(row?.is_active || 0) === 1
+          && !(Number(row?.assigned_customer_id || 0) > 0)
+          && (
+            !(Number(row?.usage_limit || 0) > 0)
+            || Number(row?.usage_count || 0) < Number(row?.usage_limit || 0)
+          )
+        ));
+        const isReceivable = availableRows.length > 0;
+        const disabledReasonCode = isReceivable ? '' : 'PROMO_CLAIM_UNAVAILABLE';
+        const rewardMeta = getPublicPromoRewardMeta(discount);
+        const targetRows = promoTargetsByDiscountId.get(discountId) || [];
+        const rewardProducts = buildRewardProductsPayload(
+          targetRows,
+          promoTargetProductsMap,
+          getPublicDiscountProductsConfigMode(discount, 'any')
+        );
+        const rewardPhotoUrl = publicDiscountText(rewardProducts?.[0]?.photo_url) || null;
+
+        return [{
+          id: `claim_unique_promo_${discountId}`,
+          discount_id: discountId,
+          kind: 'gift',
+          title: publicDiscountText(discount?.title) || 'Промокод',
+          description: rewardMeta.description || publicDiscountText(discount?.description),
+          badge_text: 'Промокод',
+          apply_scope_text: rewardMeta.apply_scope_text || formatPublicApplyScopeText(discount?.apply_to),
+          expires_at: discount?.ends_at || null,
+          is_selected: false,
+          is_applicable: isReceivable,
+          disabled_reason_code: disabledReasonCode,
+          disabled_reason: disabledReasonCode ? buildPromoClaimDisabledReason(disabledReasonCode) : '',
+          action_mode: 'claim_unique_promo',
+          is_receivable: isReceivable,
+          reward_id: null,
+          reward_status: 'available',
+          product_count: 0,
+          photo_url: rewardPhotoUrl,
+          products: [],
+          reward_preview: {
+            kind: 'promo_code',
+            icon_kind: 'promo_code',
+            title: publicDiscountText(discount?.title) || 'Промокод',
+            description: rewardMeta.description || publicDiscountText(discount?.description),
+            badge_text: 'Промокод',
+            apply_scope_text: rewardMeta.apply_scope_text || formatPublicApplyScopeText(discount?.apply_to),
+            photo_url: rewardPhotoUrl,
+            products: rewardProducts,
+          },
+        }];
       });
     }
 
@@ -7703,7 +7781,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     return {
       discounts: [...automaticDiscounts, ...rewardDiscounts],
       promo_codes: promoCodes,
-      gifts: giftRewards,
+      gifts: [...promoClaimGiftCards, ...giftRewards],
       progress,
     };
   }

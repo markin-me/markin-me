@@ -1158,6 +1158,14 @@ function normalizePromoCodeRow(row) {
     usage_limit: row.usage_limit == null ? null : Number(row.usage_limit || 0),
     usage_count: Number(row.usage_count || 0),
     assigned_customer_id: row.assigned_customer_id == null ? null : Number(row.assigned_customer_id || 0),
+    assigned_customer_name: toText(row.assigned_customer_name) || '',
+    assigned_customer_phone: toText(row.assigned_customer_phone) || '',
+    last_used_at: row.last_used_at || null,
+    last_used_customer_id: row.last_used_customer_id == null ? null : Number(row.last_used_customer_id || 0),
+    last_used_customer_name: toText(row.last_used_customer_name) || '',
+    last_used_customer_phone: toText(row.last_used_customer_phone) || '',
+    last_order_id: row.last_order_id == null ? null : Number(row.last_order_id || 0),
+    last_order_public_id: toText(row.last_order_public_id) || '',
   };
 }
 
@@ -1662,14 +1670,139 @@ function generatePromoCode(length = 8) {
 
 async function getPromoCodeRows(db, tenantId, storeId, discountId) {
   const [rows] = await db.query(
-    `SELECT id, tenant_id, store_id, discount_id, code, code_mode, is_active, usage_limit, usage_count,
-            assigned_customer_id, created_at, updated_at
-     FROM mkt_discount_promo_codes
-     WHERE tenant_id = ? AND store_id = ? AND discount_id = ?
-     ORDER BY FIELD(code_mode, 'shared', 'unique'), created_at ASC, id ASC`,
+    `SELECT pc.id, pc.tenant_id, pc.store_id, pc.discount_id, pc.code, pc.code_mode, pc.is_active, pc.usage_limit, pc.usage_count,
+            pc.assigned_customer_id, pc.created_at, pc.updated_at,
+            ac.name AS assigned_customer_name, ac.phone AS assigned_customer_phone
+     FROM mkt_discount_promo_codes pc
+     LEFT JOIN cust_customers ac
+       ON ac.tenant_id = pc.tenant_id
+      AND ac.id = pc.assigned_customer_id
+     WHERE pc.tenant_id = ? AND pc.store_id = ? AND pc.discount_id = ?
+     ORDER BY FIELD(pc.code_mode, 'shared', 'unique'), pc.created_at ASC, pc.id ASC`,
     [tenantId, storeId, discountId]
   );
-  return rows.map(normalizePromoCodeRow);
+
+  const promoCodeIds = rows
+    .map((row) => Number(row?.id || 0))
+    .filter((id) => Number.isInteger(id) && id > 0);
+
+  const latestUsageByPromoCodeId = new Map();
+  if (promoCodeIds.length) {
+    const [usageRows] = await db.query(
+      `SELECT u.id AS usage_id,
+              u.promo_code_id,
+              u.customer_id AS last_used_customer_id,
+              u.used_at AS last_used_at,
+              c.name AS last_used_customer_name,
+              c.phone AS last_used_customer_phone,
+              o.id AS last_order_id,
+              o.public_id AS last_order_public_id
+       FROM mkt_discount_usage u
+       LEFT JOIN cust_customers c
+         ON c.tenant_id = u.tenant_id
+        AND c.id = u.customer_id
+       LEFT JOIN order_orders o
+         ON o.tenant_id = u.tenant_id
+        AND o.id = u.order_id
+       WHERE u.tenant_id = ?
+         AND u.discount_id = ?
+         AND u.promo_code_id IN (?)
+       ORDER BY u.promo_code_id ASC, u.used_at DESC, u.id DESC`,
+      [tenantId, discountId, promoCodeIds]
+    );
+
+    usageRows.forEach((row) => {
+      const promoCodeId = Number(row?.promo_code_id || 0);
+      if (!(promoCodeId > 0) || latestUsageByPromoCodeId.has(promoCodeId)) return;
+      latestUsageByPromoCodeId.set(promoCodeId, row);
+    });
+  }
+
+  return rows.map((row) => {
+    const promoCodeId = Number(row?.id || 0);
+    const latestUsage = latestUsageByPromoCodeId.get(promoCodeId) || null;
+    return normalizePromoCodeRow({
+      ...row,
+      ...(latestUsage || {}),
+    });
+  });
+}
+
+async function loadDiscountResponsePayload(db, tenantId, storeId, discountId) {
+  const [[discount]] = await db.query(
+    `SELECT * FROM mkt_discounts WHERE id = ? AND tenant_id = ? AND store_id = ?`,
+    [discountId, tenantId, storeId]
+  );
+
+  if (!discount) {
+    return null;
+  }
+
+  const [customerRows] = await db.query(
+    `SELECT dc.*, 
+            c.name AS customer_name, c.phone AS customer_phone,
+            cc.title AS category_title
+     FROM mkt_discount_customers dc
+     LEFT JOIN cust_customers c ON c.id = dc.customer_id
+     LEFT JOIN cust_categories cc ON cc.id = dc.customer_category_id
+     WHERE dc.discount_id = ? AND dc.tenant_id = ?`,
+    [discountId, tenantId]
+  );
+
+  const [productRows] = await db.query(
+    `SELECT dp.*, 
+            p.name AS product_title,
+            p.photos_json AS product_photos_json,
+            JSON_UNQUOTE(JSON_EXTRACT(p.photos_json, '$[0]')) AS product_image_url,
+            pc.title AS category_title,
+            cb.title AS combo_title
+     FROM mkt_discount_products dp
+     LEFT JOIN prod_products p ON p.id = dp.product_id
+     LEFT JOIN prod_categories pc ON pc.id = dp.category_id
+     LEFT JOIN prod_combos cb ON cb.id = dp.combo_id
+     WHERE dp.discount_id = ? AND dp.tenant_id = ?`,
+    [discountId, tenantId]
+  );
+
+  const customers = customerRows.map((row) => {
+    if (row.customer_id) {
+      return {
+        entity_type: 'customer',
+        entity_id: row.customer_id,
+        title: row.customer_name || row.customer_phone || `Клиент #${row.customer_id}`,
+        phone: row.customer_phone || '',
+      };
+    }
+    if (row.customer_category_id) {
+      return {
+        entity_type: 'category',
+        entity_id: row.customer_category_id,
+        title: row.category_title || `Категория #${row.customer_category_id}`,
+      };
+    }
+    return null;
+  }).filter(Boolean);
+
+  const products = productRows.map((row) => mapDiscountProductRow(row)).filter(Boolean);
+
+  const normalizedDiscount = normalizeDiscountRow(discount);
+  const normalizedMechanic = normalizeMechanicFromDiscount(normalizedDiscount);
+  const mechanicRefs = collectMechanicEntityRefs(normalizedMechanic);
+  const mechanicLookup = await loadMechanicEntityLookup(db, tenantId, mechanicRefs);
+  const enrichedMechanic = enrichMechanicForResponse(normalizedMechanic, mechanicLookup);
+  const promoCodes = await getPromoCodeRows(db, tenantId, storeId, discountId);
+
+  return {
+    discount: formatDiscountResponse({
+      ...discount,
+      mechanic_config_json: enrichedMechanic,
+    }, {
+      customers,
+      products,
+      promoCodes,
+    }),
+    promoCodes,
+  };
 }
 
 async function deletePromoCodes(conn, { tenantId, storeId, discountId, codeMode = null }) {
@@ -2271,6 +2404,53 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
    * GET /api/admin/discounts/:id
    * Получить скидку по ID с привязками
    */
+  router.get('/:id/promo-codes/:codeId', async (req, res) => {
+    try {
+      await ensureDiscountHideInBenefitsColumn();
+      await ensureDiscountProductConfigColumn();
+      const tenantId = req.tenantId || 1;
+      const storeId = req.storeId || 1;
+      const discountId = Number(req.params.id || 0);
+      const codeId = Number(req.params.codeId || 0);
+
+      if (!(discountId > 0) || !(codeId > 0)) {
+        return res.status(400).json({ ok: false, error: 'INVALID_ID' });
+      }
+
+      const payload = await loadDiscountResponsePayload(db, tenantId, storeId, discountId);
+      if (!payload?.discount) {
+        return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+      }
+
+      if (!isPromoSimpleDiscountMechanic(
+        normalizeMechanicType(payload.discount.mechanic_type, 'simple_discount'),
+        normalizeMechanicFromDiscount(payload.discount)
+      )) {
+        return res.status(409).json({ ok: false, error: 'PROMO_NOT_AVAILABLE' });
+      }
+
+      const promoCodeDetail = (Array.isArray(payload.promoCodes) ? payload.promoCodes : []).find((row) => (
+        Number(row?.id || 0) === codeId && String(row?.code_mode || '').trim() === 'unique'
+      ));
+      if (!promoCodeDetail) {
+        return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+      }
+
+      return res.json({
+        ok: true,
+        discount: payload.discount,
+        promo_code_detail: promoCodeDetail,
+      });
+    } catch (err) {
+      console.error('GET /api/admin/discounts/:id/promo-codes/:codeId error:', err);
+      return res.status(500).json({ ok: false, error: 'SERVER_ERROR' });
+    }
+  });
+
+  /**
+   * GET /api/admin/discounts/:id
+   * Получить скидку по ID с привязками
+   */
   router.get('/:id', async (req, res) => {
     try {
       await ensureDiscountHideInBenefitsColumn();
@@ -2283,101 +2463,12 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
         return res.status(400).json({ ok: false, error: 'INVALID_ID' });
       }
 
-      const [[discount]] = await db.query(
-        `SELECT * FROM mkt_discounts WHERE id = ? AND tenant_id = ? AND store_id = ?`,
-        [discountId, tenantId, storeId]
-      );
-
-      if (!discount) {
+      const payload = await loadDiscountResponsePayload(db, tenantId, storeId, discountId);
+      if (!payload?.discount) {
         return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
       }
 
-      // Получить привязки к клиентам с названиями
-      const [customerRows] = await db.query(
-        `SELECT dc.*, 
-                c.name AS customer_name, c.phone AS customer_phone,
-                cc.title AS category_title
-         FROM mkt_discount_customers dc
-         LEFT JOIN cust_customers c ON c.id = dc.customer_id
-         LEFT JOIN cust_categories cc ON cc.id = dc.customer_category_id
-         WHERE dc.discount_id = ? AND dc.tenant_id = ?`,
-        [discountId, tenantId]
-      );
-
-      // Получить привязки к товарам с названиями
-      const [productRows] = await db.query(
-        `SELECT dp.*, 
-                p.name AS product_title,
-                p.photos_json AS product_photos_json,
-                JSON_UNQUOTE(JSON_EXTRACT(p.photos_json, '$[0]')) AS product_image_url,
-                pc.title AS category_title,
-                cb.title AS combo_title
-         FROM mkt_discount_products dp
-         LEFT JOIN prod_products p ON p.id = dp.product_id
-         LEFT JOIN prod_categories pc ON pc.id = dp.category_id
-         LEFT JOIN prod_combos cb ON cb.id = dp.combo_id
-         WHERE dp.discount_id = ? AND dp.tenant_id = ?`,
-        [discountId, tenantId]
-      );
-
-      // Преобразуем в формат {entity_type, entity_id, title}
-      const customers = customerRows.map(row => {
-        if (row.customer_id) {
-          return {
-            entity_type: 'customer',
-            entity_id: row.customer_id,
-            title: row.customer_name || row.customer_phone || `Клиент #${row.customer_id}`,
-            phone: row.customer_phone || '',
-          };
-        }
-        if (row.customer_category_id) {
-          return { entity_type: 'category', entity_id: row.customer_category_id, title: row.category_title || `Категория #${row.customer_category_id}` };
-        }
-        return null;
-      }).filter(Boolean);
-
-      const productsLegacy = productRows.map(row => {
-        if (row.product_id) {
-          let imageUrl = null;
-          try {
-            const photos = JSON.parse(row.product_photos_json || '[]');
-            imageUrl = Array.isArray(photos) && photos.length ? String(photos[0] || '').trim() || null : null;
-          } catch {}
-          return {
-            entity_type: 'product',
-            entity_id: row.product_id,
-            title: row.product_title || `Товар #${row.product_id}`,
-            image_url: imageUrl,
-          };
-        }
-        if (row.category_id) {
-          return { entity_type: 'category', entity_id: row.category_id, title: row.category_title || `Категория #${row.category_id}` };
-        }
-        if (row.combo_id) {
-          return { entity_type: 'combo', entity_id: row.combo_id, title: row.combo_title || `Комбо #${row.combo_id}` };
-        }
-        return null;
-      }).filter(Boolean);
-      const products = productRows.map((row) => mapDiscountProductRow(row)).filter(Boolean);
-
-      const normalizedDiscount = normalizeDiscountRow(discount);
-      const normalizedMechanic = normalizeMechanicFromDiscount(normalizedDiscount);
-      const mechanicRefs = collectMechanicEntityRefs(normalizedMechanic);
-      const mechanicLookup = await loadMechanicEntityLookup(db, tenantId, mechanicRefs);
-      const enrichedMechanic = enrichMechanicForResponse(normalizedMechanic, mechanicLookup);
-      const promoCodes = await getPromoCodeRows(db, tenantId, storeId, discountId);
-
-      return res.json({
-        ok: true,
-        discount: formatDiscountResponse({
-          ...discount,
-          mechanic_config_json: enrichedMechanic,
-        }, {
-          customers,
-          products,
-          promoCodes,
-        }),
-      });
+      return res.json({ ok: true, discount: payload.discount });
     } catch (err) {
       console.error('GET /api/admin/discounts/:id error:', err);
       return res.status(500).json({ ok: false, error: 'SERVER_ERROR' });

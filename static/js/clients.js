@@ -1218,6 +1218,171 @@
     return state.discounts.filter((discount) => getDiscountTypeFilterKey(discount) === filterKey);
   }
 
+  function isUniquePromoDiscount(discount) {
+    const promo = getDiscountPromoFromDiscount(discount);
+    return promo.enabled && promo.code_mode === 'unique';
+  }
+
+  function getDiscountPromoCodeHistorySortGroup(row) {
+    if (Number(row?.usage_count || 0) > 0 || String(row?.last_used_at || '').trim()) return 0;
+    if (Number(row?.assigned_customer_id || 0) > 0) return 1;
+    return 2;
+  }
+
+  function sortDiscountPromoCodesForHistory(rows) {
+    return (Array.isArray(rows) ? rows.slice() : []).sort((a, b) => {
+      const groupDiff = getDiscountPromoCodeHistorySortGroup(a) - getDiscountPromoCodeHistorySortGroup(b);
+      if (groupDiff !== 0) return groupDiff;
+      return String(a?.code || '').localeCompare(String(b?.code || ''), 'ru-RU', { sensitivity: 'base' });
+    });
+  }
+
+  function getDiscountPromoCodeCustomerText(row, prefix = 'assigned') {
+    const key = prefix === 'last_used' ? 'last_used' : 'assigned';
+    const name = String(row?.[`${key}_customer_name`] || '').trim();
+    const phone = String(row?.[`${key}_customer_phone`] || '').trim();
+    const customerId = Number(row?.[`${key}_customer_id`] || 0);
+    return name || phone || (customerId > 0 ? `Клиент #${customerId}` : '');
+  }
+
+  function renderDiscountPromoCodeHistory() {
+    if (!elDiscountsList) return;
+
+    if (state.discountCenterMode !== 'history' || !state.activeDiscount || !isUniquePromoDiscount(state.activeDiscount)) {
+      renderDiscountOrders();
+      return;
+    }
+
+    const activeTab = tabsState.tabs.find((t) => t.key === tabsState.activeKey);
+    const activePromoCodeId = activeTab?.type === 'discount-promo-code' ? Number(activeTab.promoCodeId || 0) : 0;
+    const promoCodes = sortDiscountPromoCodesForHistory(
+      (Array.isArray(state.discountPromoCodes) ? state.discountPromoCodes : []).filter((row) => String(row?.code_mode || '').trim() === 'unique')
+    );
+
+    elDiscountsList.innerHTML = '';
+    if (elDiscountsEmptyHint) elDiscountsEmptyHint.classList.add('hidden');
+
+    if (!promoCodes.length) {
+      elDiscountsList.innerHTML = '<div class="empty-hint">Пока нет сгенерированных уникальных кодов</div>';
+      return;
+    }
+
+    promoCodes.forEach((promoCode) => {
+      const row = document.createElement('div');
+      row.className = 'discount-promo-row discount-promo-row--history';
+      row.classList.toggle('is-active', activePromoCodeId === Number(promoCode?.id || 0));
+      row.setAttribute('role', 'button');
+      row.tabIndex = 0;
+
+      const assignedCustomerText = getDiscountPromoCodeCustomerText(promoCode, 'assigned');
+      const usageLimitText = promoCode?.usage_limit == null ? 'без лимита' : `лимит ${Number(promoCode.usage_limit || 0)}`;
+      const createdAtText = formatDiscountInfoDateTime(promoCode?.created_at);
+      const isActive = Number(promoCode?.is_active || 0) === 1;
+
+      row.innerHTML = `
+        <div class="discount-promo-main">
+          <div class="discount-promo-code">${escapeHtml(String(promoCode?.code || '').trim())}</div>
+          ${assignedCustomerText ? `<div class="discount-promo-assigned">${escapeHtml(assignedCustomerText)}</div>` : ''}
+          <div class="discount-promo-meta">Использовано ${Number(promoCode?.usage_count || 0)} • ${escapeHtml(usageLimitText)} • ${escapeHtml(createdAtText)}</div>
+        </div>
+        <div class="discount-promo-actions">
+          <span class="discount-promo-status ${isActive ? '' : 'is-inactive'}">${isActive ? 'Активен' : 'Выключен'}</span>
+          <button type="button" class="btn btn-sm" data-promo-toggle-id="${Number(promoCode?.id || 0)}">${isActive ? 'Выключить' : 'Включить'}</button>
+        </div>
+      `;
+
+      const openPromoCodeDetail = () => {
+        void openDiscountPromoCodeTab(promoCode, state.activeDiscount);
+      };
+      row.addEventListener('click', openPromoCodeDetail);
+      row.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        openPromoCodeDetail();
+      });
+
+      const toggleBtn = row.querySelector('[data-promo-toggle-id]');
+      if (toggleBtn) {
+        toggleBtn.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          void toggleDiscountPromoCode(Number(promoCode?.id || 0), state.activeDiscountId);
+        });
+      }
+
+      elDiscountsList.appendChild(row);
+    });
+  }
+
+  async function activateDiscountPromoCodeTab(tab) {
+    const discountId = Number(tab?.parentDiscountId || 0);
+    const promoCodeId = Number(tab?.promoCodeId || 0);
+    if (!(discountId > 0) || !(promoCodeId > 0)) return;
+
+    const parentDiscount = state.discounts.find((item) => Number(item?.id || 0) === discountId) || state.activeDiscount;
+    if (parentDiscount) {
+      state.activeDiscount = parentDiscount;
+      state.activeDiscountId = discountId;
+      state.editingDiscountId = null;
+      renderDiscountInfo(parentDiscount, tab?.promoCodeSnapshot ? { promoCodeDetail: tab.promoCodeSnapshot } : {});
+    }
+
+    if (state.currentView === 'discounts' && state.discountCenterMode === 'history') {
+      renderDiscountCenterContent();
+    }
+    updateRightPanel();
+
+    try {
+      const json = await apiJson(`/api/admin/discounts/${discountId}/promo-codes/${promoCodeId}`);
+      if (!json?.discount || !json?.promo_code_detail || tabsState.activeKey !== tab.key) return;
+      state.activeDiscount = json.discount;
+      state.activeDiscountId = discountId;
+      state.editingDiscountId = null;
+      tab.title = String(json.promo_code_detail.code || '').trim() || tab.title;
+      tab.promoCodeSnapshot = json.promo_code_detail;
+      renderTabs();
+      renderDiscountInfo(json.discount, { promoCodeDetail: json.promo_code_detail });
+      if (state.currentView === 'discounts' && state.discountCenterMode === 'history') {
+        renderDiscountCenterContent();
+      }
+      updateRightPanel();
+    } catch (err) {
+      console.error('activateDiscountPromoCodeTab error:', err);
+    }
+  }
+
+  async function openDiscountPromoCodeTab(promoCode, discount = null) {
+    const promoCodeId = Number(promoCode?.id || 0);
+    const discountId = Number(discount?.id || promoCode?.discount_id || state.activeDiscountId || 0);
+    if (!(promoCodeId > 0) || !(discountId > 0)) return;
+
+    if (state.currentView !== 'discounts') {
+      switchView('discounts');
+    }
+
+    const tabKey = buildTabKey('discount-promo-code', `${discountId}:${promoCodeId}`);
+    let existing = tabsState.tabs.find((item) => item.key === tabKey);
+    if (!existing) {
+      existing = {
+        key: tabKey,
+        type: 'discount-promo-code',
+        id: `${discountId}:${promoCodeId}`,
+        parentDiscountId: discountId,
+        promoCodeId,
+        promoCodeSnapshot: promoCode,
+        title: String(promoCode?.code || '').trim() || `#${promoCodeId}`,
+      };
+      tabsState.tabs.push(existing);
+    } else {
+      existing.parentDiscountId = discountId;
+      existing.promoCodeId = promoCodeId;
+      existing.promoCodeSnapshot = promoCode;
+      existing.title = String(promoCode?.code || '').trim() || existing.title;
+    }
+
+    await setActiveTabKey(tabKey);
+  }
+
   function syncDiscountToolbarState() {
     if (!elToolbarBackBtn) return;
     const shouldShow = state.currentView === 'discounts'
@@ -1238,6 +1403,10 @@
 
   function renderDiscountCenterContent() {
     if (state.discountCenterMode === 'history') {
+      if (isUniquePromoDiscount(state.activeDiscount)) {
+        renderDiscountPromoCodeHistory();
+        return;
+      }
       renderDiscountOrders();
       return;
     }
@@ -1260,11 +1429,18 @@
     if (state.currentView !== 'discounts') return;
     if (reload) {
       state.discountOrders = [];
-      renderDiscountOrders();
-      loadDiscountOrders(discountId);
+      if (isUniquePromoDiscount(targetDiscount)) {
+        state.discountPromoCodes = [];
+      }
+      renderDiscountCenterContent();
+      if (isUniquePromoDiscount(targetDiscount)) {
+        void loadDiscountPromoCodes(discountId);
+      } else {
+        void loadDiscountOrders(discountId);
+      }
       return;
     }
-    renderDiscountOrders();
+    renderDiscountCenterContent();
   }
 
   function renderTabs() {
@@ -1302,7 +1478,7 @@
     tabsState.activeKey = key;
 
     // Keep center column in sync with active right-side tab.
-    const targetView = tab.type === 'discount'
+    const targetView = tab.type === 'discount' || tab.type === 'discount-promo-code'
       ? 'discounts'
       : tab.type === 'category'
         ? 'filter-categories'
@@ -1326,6 +1502,10 @@
           openDiscountHistory(discount, { reload: true });
         }
       }
+    }
+
+    if (tab.type === 'discount-promo-code') {
+      await activateDiscountPromoCodeTab(tab);
     }
 
     if (typeof tab.onActivate === "function") {
@@ -3226,12 +3406,14 @@
 
     elDePromoCodesList.innerHTML = uniqueCodes.map((row) => {
       const isActive = Number(row?.is_active || 0) === 1;
+      const assignedCustomerText = getDiscountPromoCodeCustomerText(row, 'assigned');
       const usageLimit = row?.usage_limit == null ? 'без лимита' : `лимит ${row.usage_limit}`;
-      const createdAt = row?.created_at ? new Date(row.created_at).toLocaleString('ru') : '—';
+      const createdAt = row?.created_at ? new Date(row.created_at).toLocaleString('ru-RU') : '-';
       return `
         <div class="discount-promo-row">
           <div class="discount-promo-main">
             <div class="discount-promo-code">${escapeHtml(row.code || '')}</div>
+            ${assignedCustomerText ? `<div class="discount-promo-assigned">${escapeHtml(assignedCustomerText)}</div>` : ''}
             <div class="discount-promo-meta">Использовано ${Number(row.usage_count || 0)} • ${usageLimit} • ${createdAt}</div>
           </div>
           <div class="discount-promo-actions">
@@ -3284,17 +3466,34 @@
   }
 
   async function loadDiscountPromoCodes(discountId) {
-    if (!(Number(discountId) > 0)) {
+    const targetDiscountId = Number(discountId || 0);
+    if (!(targetDiscountId > 0)) {
       state.discountPromoCodes = [];
       state.discountPromoCodesAccordionExpanded = false;
       renderDiscountPromoCodes();
+      if (state.discountCenterMode === 'history') {
+        renderDiscountCenterContent();
+      }
       return [];
     }
 
-    const json = await apiJson(`/api/admin/discounts/${discountId}/promo-codes`);
-    state.discountPromoCodes = Array.isArray(json.promo_codes) ? json.promo_codes : [];
+    const json = await apiJson(`/api/admin/discounts/${targetDiscountId}/promo-codes`);
+    state.discountPromoCodes = sortDiscountPromoCodesForHistory(Array.isArray(json.promo_codes) ? json.promo_codes : []);
     state.discountPromoCodesAccordionExpanded = false;
     renderDiscountPromoCodes();
+    if (state.activeDiscountId === targetDiscountId && state.discountCenterMode === 'history') {
+      renderDiscountCenterContent();
+    }
+
+    const activeTab = tabsState.tabs.find((tab) => tab.key === tabsState.activeKey);
+    if (activeTab?.type === 'discount-promo-code' && Number(activeTab.parentDiscountId || 0) === targetDiscountId) {
+      const nextSnapshot = state.discountPromoCodes.find((row) => Number(row?.id || 0) === Number(activeTab.promoCodeId || 0));
+      if (nextSnapshot) {
+        activeTab.promoCodeSnapshot = nextSnapshot;
+      }
+      await activateDiscountPromoCodeTab(activeTab);
+    }
+
     return state.discountPromoCodes;
   }
 
@@ -3338,8 +3537,8 @@
     }
   }
 
-  async function toggleDiscountPromoCode(codeId) {
-    const discountId = Number($('#de_id')?.value || 0);
+  async function toggleDiscountPromoCode(codeId, discountIdValue = null) {
+    const discountId = Number((discountIdValue ?? state.activeDiscountId ?? $('#de_id')?.value) || 0);
     if (!(discountId > 0) || !(Number(codeId) > 0)) return;
 
     try {
@@ -3652,7 +3851,7 @@
   }
 
   // Отрисовать заказы со скидкой в центральной колонке
-  function renderDiscountOrders() {
+    function renderDiscountOrders() {
     if (!elDiscountsList) return;
 
     // Если активна скидка, показываем её заказы
@@ -9105,6 +9304,13 @@
     return date.toLocaleDateString('ru-RU');
   }
 
+  function formatDiscountInfoDateTime(value) {
+    if (!value) return '?';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '?';
+    return date.toLocaleString('ru-RU');
+  }
+
   function formatDiscountInfoScheduleDaysText(value) {
     const days = parseDiscountScheduleDays(value);
     if (!days.length) return '';
@@ -9145,6 +9351,62 @@
     return rules;
   }
 
+  function getDiscountInfoDerivedAmountLimit(discount) {
+    const mechanic = getDiscountMechanic(discount);
+    if (mechanic.type !== 'simple_discount') return 0;
+
+    if (mechanic.simple_variant === 'promo_code') {
+      const promoReward = mechanic.promo_reward || {};
+      if (promoReward.reward_type !== 'discount' || promoReward.discount_type !== 'fixed') return 0;
+      return Math.max(0, Number(promoReward.discount_value || 0) || 0);
+    }
+
+    if (mechanic.discount_type !== 'fixed') return 0;
+    return Math.max(0, Number(mechanic.discount_value || 0) || 0);
+  }
+
+  function getDiscountInfoEffectiveMaxDiscount(discount) {
+    const explicitLimit = Math.max(0, Number(discount?.max_discount_amount || 0) || 0);
+    if (explicitLimit > 0) return explicitLimit;
+    return getDiscountInfoDerivedAmountLimit(discount);
+  }
+
+  function buildDiscountPromoCodeDetailRules(promoCodeDetail) {
+    const detail = promoCodeDetail && typeof promoCodeDetail === 'object' ? promoCodeDetail : null;
+    if (!detail) return [];
+
+    const rules = [];
+    const assignedCustomerText = String(
+      detail.assigned_customer_name
+      || detail.assigned_customer_phone
+      || (Number(detail.assigned_customer_id || 0) > 0 ? `Клиент #${Number(detail.assigned_customer_id || 0)}` : '')
+    ).trim();
+    const lastUsedCustomerText = String(
+      detail.last_used_customer_name
+      || detail.last_used_customer_phone
+      || (Number(detail.last_used_customer_id || 0) > 0 ? `Клиент #${Number(detail.last_used_customer_id || 0)}` : '')
+    ).trim();
+    const orderLabel = String(detail.last_order_public_id || '').trim() || (Number(detail.last_order_id || 0) > 0 ? `#${Number(detail.last_order_id || 0)}` : '');
+
+    if (detail.created_at) {
+      rules.push(`Дата создания: ${formatDiscountInfoDateTime(detail.created_at)}`);
+    }
+    if (assignedCustomerText) {
+      rules.push(`Закреплен за клиентом: ${assignedCustomerText}`);
+    }
+    if (lastUsedCustomerText) {
+      rules.push(`Последний клиент: ${lastUsedCustomerText}`);
+    }
+    if (detail.last_used_at) {
+      rules.push(`Последнее использование: ${formatDiscountInfoDateTime(detail.last_used_at)}`);
+    }
+    if (orderLabel) {
+      rules.push(`Заказ: ${orderLabel}`);
+    }
+
+    return rules;
+  }
+
   function buildDiscountInfoAudienceText(discount) {
     const customers = Array.isArray(discount?.customers) ? discount.customers : [];
     if (!customers.length) return 'Все клиенты';
@@ -9161,8 +9423,12 @@
     return customerCount === 1 ? 'Выбранный клиент' : `Выбранные клиенты (${customerCount})`;
   }
 
-  function renderDiscountInfo(discount) {
+  function renderDiscountInfo(discount, options = {}) {
     if (!discount) return;
+    const promoCodeDetail = options?.promoCodeDetail && typeof options.promoCodeDetail === 'object'
+      ? options.promoCodeDetail
+      : null;
+    const isPromoCodeDetailView = !!promoCodeDetail;
 
     const titleEl = $('#discountInfoTitle');
     const promoCodeEl = $('#discountInfoPromoCode');
@@ -9190,21 +9456,31 @@
     const timeRowEl = $('#discountInfoTimeRow');
     const stackableEl = $('#discountInfoStackable');
     const audienceEl = $('#discountInfoAudience');
+    const stackableCardEl = stackableEl ? stackableEl.closest('.discount-info-mini-card') : null;
+    const stackableHeaderEl = stackableCardEl ? stackableCardEl.querySelector('.discount-info-mini-header') : null;
+    const audienceCardEl = audienceEl ? audienceEl.closest('.discount-info-mini-card') : null;
+    const bottomGridEl = stackableEl ? stackableEl.closest('.discount-info-bottom-grid') : null;
+    const usagePerCustomerRowEl = usagePerCustomerEl ? usagePerCustomerEl.closest('.discount-info-row') : null;
 
-    const maxDiscount = Number(discount.max_discount_amount || 0);
+    const maxDiscount = getDiscountInfoEffectiveMaxDiscount(discount);
     const minOrder = Number(discount.min_order_amount || 0);
     const usagePerCustomer = Number(discount.usage_per_customer || 0);
-    const usageLimit = Number(discount.usage_limit || 0);
-    const usageCount = Number(discount.usage_count || 0);
+    const usageLimitValue = promoCodeDetail?.usage_limit ?? discount.usage_limit;
+    const usageLimit = usageLimitValue == null ? null : Number(usageLimitValue || 0);
+    const usageCount = Number((promoCodeDetail?.usage_count ?? discount.usage_count) || 0);
+    const isActive = promoCodeDetail ? Number(promoCodeDetail.is_active || 0) === 1 : !!discount.is_active;
     const promo = getDiscountPromoFromDiscount(discount);
-    const rules = buildDiscountInfoRules(discount);
+    const rules = [
+      ...buildDiscountPromoCodeDetailRules(promoCodeDetail),
+      ...buildDiscountInfoRules(discount),
+    ];
 
     if (titleEl) titleEl.textContent = discount.title || '—';
     if (promoCodeEl && promoCodeValueEl) {
       if (promo.enabled) {
-        promoCodeValueEl.textContent = promo.code_mode === 'shared'
-          ? (promo.shared_code || '—')
-          : 'Уникальные коды';
+        promoCodeValueEl.textContent = promoCodeDetail
+          ? (promoCodeDetail.code || '?')
+          : (promo.code_mode === 'shared' ? (promo.shared_code || '?') : 'Уникальные коды');
         promoCodeEl.classList.remove('hidden');
       } else {
         promoCodeValueEl.textContent = '—';
@@ -9215,7 +9491,7 @@
     applyDiscountInfoMainBadge(heroBadgeEl, discount);
 
     if (badgeEl) {
-      const isActive = !!discount.is_active;
+      badgeEl.classList.toggle('hidden', isPromoCodeDetailView);
       badgeEl.classList.remove('shop-checkout-benefit-badge--accent', 'shop-checkout-benefit-badge--selected', 'shop-checkout-benefit-badge--neutral');
       badgeEl.classList.add(isActive ? 'shop-checkout-benefit-badge--accent' : 'shop-checkout-benefit-badge--neutral');
       const label = isActive ? 'Активна' : 'Неактивна';
@@ -9227,6 +9503,7 @@
       statusIconEl.classList.add('fa-power-off');
     }
     if (benefitsBadgeEl) {
+      benefitsBadgeEl.classList.toggle('hidden', isPromoCodeDetailView);
       const isHiddenInBenefits = !!discount.hide_in_benefits;
       benefitsBadgeEl.classList.remove('shop-checkout-benefit-badge--neutral');
       benefitsBadgeEl.classList.add('shop-checkout-benefit-badge--accent');
@@ -9259,6 +9536,7 @@
         ? `${usagePerCustomer} на клиента`
         : 'без лимита на клиента';
     }
+    if (usagePerCustomerRowEl) usagePerCustomerRowEl.classList.toggle('hidden', isPromoCodeDetailView);
     if (usageLimitEl) {
       usageLimitEl.textContent = usageLimit > 0
         ? `${usageLimit}`
@@ -9293,12 +9571,17 @@
     if (timeEl) timeEl.textContent = timeText || '—';
     if (timeRowEl) timeRowEl.classList.toggle('hidden', !timeText);
 
+    if (stackableCardEl) stackableCardEl.classList.add('discount-info-mini-card--inline');
+    if (stackableHeaderEl) {
+      stackableHeaderEl.innerHTML = `<i class="fas ${discount.is_stackable ? 'fa-check-circle' : 'fa-times-circle'}"></i> ${discount.is_stackable ? 'Можно совмещать с другими акциями' : 'Не совмещается с другими акциями'}`;
+    }
     if (stackableEl) {
-      stackableEl.textContent = discount.is_stackable
-        ? 'Можно совмещать с другими акциями'
-        : 'Не совмещается с другими акциями';
+      stackableEl.textContent = '';
+      stackableEl.classList.add('hidden');
     }
     if (audienceEl) audienceEl.textContent = buildDiscountInfoAudienceText(discount);
+    if (audienceCardEl) audienceCardEl.classList.toggle('hidden', isPromoCodeDetailView);
+    if (bottomGridEl) bottomGridEl.classList.toggle('discount-info-bottom-grid--single', isPromoCodeDetailView);
 
     const productsEl = $('#discountInfoProducts');
     const productsSectionEl = $('#discountInfoProductsSection');
@@ -9322,7 +9605,10 @@
     const customersSectionEl = $('#discountInfoCustomersSection');
     if (customersEl) {
       const customers = Array.isArray(discount.customers) ? discount.customers : [];
-      if (customers.length > 0) {
+      if (isPromoCodeDetailView) {
+        if (customersSectionEl) customersSectionEl.classList.add('hidden');
+        customersEl.innerHTML = '';
+      } else if (customers.length > 0) {
         if (customersSectionEl) customersSectionEl.classList.remove('hidden');
         customersEl.innerHTML = customers.map((customer) => {
           const cls = customer.entity_type === 'category' ? 'is-category' : '';
@@ -11510,6 +11796,7 @@
     const isOrderTab = activeTab?.type === 'order';
     const isCategoryTab = activeTab?.type === 'category';
     const isDiscountTab = activeTab?.type === 'discount';
+    const isDiscountPromoCodeTab = activeTab?.type === 'discount-promo-code';
     const hasClientId = Number(state.activeClientId || 0) > 0;
     const noTabs = !activeTab;
 
@@ -11523,11 +11810,12 @@
 
     if (elDiscountEmpty) elDiscountEmpty.classList.toggle('hidden', !noTabs || state.currentView !== 'discounts');
     const isEditingDiscount = isDiscountTab && state.editingDiscountId !== null;
-    const isViewingDiscount = isDiscountTab && state.editingDiscountId === null && state.activeDiscount;
+    const isViewingDiscount = (isDiscountTab || isDiscountPromoCodeTab) && state.editingDiscountId === null && state.activeDiscount;
+    const showDiscountInfoFooter = isDiscountTab && state.editingDiscountId === null && state.activeDiscount;
     if (elDiscountEditorWrap) elDiscountEditorWrap.classList.toggle('hidden', !isEditingDiscount);
     if (elDiscountEditorFooter) elDiscountEditorFooter.classList.toggle('hidden', !isEditingDiscount);
     if (elDiscountInfoWrap) elDiscountInfoWrap.classList.toggle('hidden', !isViewingDiscount);
-    if (elDiscountInfoFooter) elDiscountInfoFooter.classList.toggle('hidden', !isViewingDiscount);
+    if (elDiscountInfoFooter) elDiscountInfoFooter.classList.toggle('hidden', !showDiscountInfoFooter);
     if (clientBenefitsFooter) {
       const showBenefitsFooter = isClientTab && state.currentView === 'clients' && hasClientId;
       clientBenefitsFooter.classList.toggle('hidden', !showBenefitsFooter);
@@ -15232,4 +15520,3 @@
     },
   };
 })();
-
