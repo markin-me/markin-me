@@ -8847,6 +8847,65 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     mobileGiftClaimBtn.onclick = null;
   }
 
+  function resetMobileBenefitDetailApplyUi() {
+    const mobileCartActionsBenefits = document.getElementById("shopMobileCartActionsBenefits");
+    const mobileBenefitsBackBtn = document.getElementById("shopMobileBenefitsBackBtn");
+    const mobileBenefitsApplyBtn = document.getElementById("shopMobileBenefitsApplyBtn");
+    if (mobileCartActionsBenefits) mobileCartActionsBenefits.classList.add("hidden");
+    if (mobileBenefitsBackBtn) mobileBenefitsBackBtn.onclick = null;
+    if (!mobileBenefitsApplyBtn) return;
+    mobileBenefitsApplyBtn.disabled = true;
+    mobileBenefitsApplyBtn.textContent = "Применить";
+    mobileBenefitsApplyBtn.classList.remove("is-active", "is-current");
+    mobileBenefitsApplyBtn.onclick = null;
+  }
+
+  function syncMobileBenefitDetailApplyUi({
+    visible = false,
+    enabled = false,
+    current = false,
+    onBack = null,
+    onSubmit = null,
+    submitLabel = "Применить",
+  } = {}) {
+    if (!window.matchMedia("(max-width: 768px)").matches) return;
+    const mobileCartActions = document.getElementById("shopMobileCartActions");
+    const mobileDeliveryProgressWrap = document.getElementById("shopMobileDeliveryProgressWrap");
+    const mobileCheckoutNameWrap = document.getElementById("shopMobileCheckoutNameWrap");
+    const mobileCheckoutCommentWrap = document.getElementById("shopMobileCheckoutCommentWrap");
+    const mobileBenefitsPromoWrap = document.getElementById("shopMobileBenefitsPromoWrap");
+    const mobileCartActionsCart = document.getElementById("shopMobileCartActionsCart");
+    const mobileCartActionsCheckout = document.getElementById("shopMobileCartActionsCheckout");
+    const mobileCartActionsBenefits = document.getElementById("shopMobileCartActionsBenefits");
+    const mobileCartActionsGiftClaim = document.getElementById("shopMobileCartActionsGiftClaim");
+    const mobileBenefitsBackBtn = document.getElementById("shopMobileBenefitsBackBtn");
+    const mobileBenefitsApplyBtn = document.getElementById("shopMobileBenefitsApplyBtn");
+    if (!mobileCartActionsBenefits || !mobileBenefitsApplyBtn) return;
+
+    mobileBenefitsApplyBtn.textContent = current ? "Выбрано" : (str(submitLabel || "").trim() || "Применить");
+    mobileBenefitsApplyBtn.disabled = !enabled;
+    mobileBenefitsApplyBtn.classList.toggle("is-current", current);
+    mobileBenefitsApplyBtn.classList.toggle("is-active", !current && enabled);
+    mobileBenefitsApplyBtn.setAttribute("aria-pressed", current ? "true" : "false");
+    mobileBenefitsApplyBtn.onclick = typeof onSubmit === "function" ? onSubmit : null;
+    if (mobileBenefitsBackBtn) mobileBenefitsBackBtn.onclick = typeof onBack === "function" ? onBack : null;
+
+    if (!visible) {
+      mobileCartActionsBenefits.classList.add("hidden");
+      return;
+    }
+
+    if (mobileCartActions) mobileCartActions.classList.remove("hidden");
+    if (mobileDeliveryProgressWrap) mobileDeliveryProgressWrap.classList.add("hidden");
+    if (mobileCheckoutNameWrap) mobileCheckoutNameWrap.classList.add("hidden");
+    if (mobileCheckoutCommentWrap) mobileCheckoutCommentWrap.classList.add("hidden");
+    if (mobileBenefitsPromoWrap) mobileBenefitsPromoWrap.classList.add("hidden");
+    if (mobileCartActionsCart) mobileCartActionsCart.classList.add("hidden");
+    if (mobileCartActionsCheckout) mobileCartActionsCheckout.classList.add("hidden");
+    if (mobileCartActionsGiftClaim) mobileCartActionsGiftClaim.classList.add("hidden");
+    mobileCartActionsBenefits.classList.remove("hidden");
+  }
+
   function syncMobileBenefitGiftClaimUi({
     visible = false,
     enabled = false,
@@ -17975,6 +18034,151 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     const selectedPromoRewardId = selectedPromoCard && normalizeCheckoutPromoSource(selectedPromoCard?.source) === "reward_promo"
       ? normalizeCheckoutSelectedDiscountId(selectedPromoCard?.reward_id || selectedPromoCard?.id)
       : null;
+    const rerenderBenefitsSheetForSelection = async ({
+      nextSelectedDiscountId,
+      nextSelectedDiscountSource,
+      nextPromoCode,
+      nextSelectedPromoSource,
+      nextSelectedPromoRewardId,
+    }) => {
+      const nextPreviewRequest = applyCheckoutBenefitsSelectionToPreviewRequest(previewRequest, {
+        selectedDiscountId: nextSelectedDiscountId,
+        selectedDiscountSource: nextSelectedDiscountSource,
+        promoCode: nextPromoCode,
+        selectedPromoSource: nextSelectedPromoSource,
+        selectedPromoRewardId: nextSelectedPromoRewardId,
+      });
+      const nextPrefetchedData = benefitsSnapshot?.basePreview && typeof benefitsSnapshot.basePreview === "object"
+        ? benefitsSnapshot.basePreview
+        : (data && typeof data === "object" ? data : null);
+      await renderCheckoutBenefitsSheet({
+        container,
+        getPreviewRequest: async () => nextPreviewRequest,
+        onBack,
+        onChangeSelection,
+        getManualPromoInputState,
+        onManualPromoInputChange,
+        onApplyManualPromo,
+        manualPromoHost,
+        manualPromoPlacement,
+        prefetchedData: nextPrefetchedData,
+      });
+    };
+    const buildSelectionPreviewState = ({
+      nextSelectedDiscountId,
+      nextSelectedDiscountSource,
+      nextPromoCode,
+      nextSelectedPromoSource,
+      nextSelectedPromoRewardId,
+    }) => {
+      const nextPreviewRequest = applyCheckoutBenefitsSelectionToPreviewRequest(previewRequest, {
+        selectedDiscountId: nextSelectedDiscountId,
+        selectedDiscountSource: nextSelectedDiscountSource,
+        promoCode: nextPromoCode,
+        selectedPromoSource: nextSelectedPromoSource,
+        selectedPromoRewardId: nextSelectedPromoRewardId,
+      });
+      const sourcePreviewData = benefitsSnapshot?.basePreview && typeof benefitsSnapshot.basePreview === "object"
+        ? benefitsSnapshot.basePreview
+        : (data && typeof data === "object" ? data : null);
+      const localizedPreviewData = buildLocalCheckoutBenefitsPreviewData(sourcePreviewData, {
+        previewRequest: nextPreviewRequest,
+        selectedDiscountId: nextSelectedDiscountId,
+        selectedDiscountSource: nextSelectedDiscountSource,
+        promoCode: nextPromoCode,
+        selectedPromoSource: nextSelectedPromoSource,
+        selectedPromoRewardId: nextSelectedPromoRewardId,
+      }) || sourcePreviewData;
+      const nextSnapshot = applyCheckoutBenefitsStoreSnapshot(nextPreviewRequest, localizedPreviewData, {
+        warmDetails: false,
+      });
+      const nextData = nextSnapshot?.derivedPreview || nextSnapshot?.basePreview || localizedPreviewData;
+      syncCheckoutBenefitsAppliedSnapshotDraft(nextPreviewRequest, nextData);
+      syncBenefitsBadgesUi(calculateAvailableBenefitsCount(nextData));
+      return {
+        nextPreviewRequest,
+        nextSnapshot,
+        nextData,
+      };
+    };
+    const buildDiscountSelectionState = (discountCard) => {
+      const nextSelectedDiscountId = discountCard?.is_selected
+        ? null
+        : normalizeCheckoutSelectedDiscountId(
+            normalizeCheckoutDiscountSource(discountCard?.source) === "reward_discount"
+              ? (discountCard?.reward_id || discountCard?.id)
+              : discountCard?.id
+          );
+      const nextSelectedDiscountSource = nextSelectedDiscountId
+        ? (normalizeCheckoutDiscountSource(discountCard?.source) || "discount")
+        : null;
+      let nextPromoCode = selectedPromoCode;
+      let nextSelectedPromoSource = selectedPromoSource;
+      let nextSelectedPromoRewardId = selectedPromoRewardId;
+      if (nextSelectedDiscountId && nextPromoCode) {
+        const currentPromoCard = promoCards.find((entry) => str(entry?.code || "").trim() === selectedPromoCode) || null;
+        if (currentPromoCard && !(isCheckoutBenefitStackable(discountCard) && isCheckoutBenefitStackable(currentPromoCard))) {
+          nextPromoCode = "";
+          nextSelectedPromoSource = null;
+          nextSelectedPromoRewardId = null;
+        }
+      }
+      return {
+        nextSelectedDiscountId,
+        nextSelectedDiscountSource,
+        nextPromoCode,
+        nextSelectedPromoSource,
+        nextSelectedPromoRewardId,
+        nextPromoSelectionMode: nextPromoCode ? undefined : null,
+      };
+    };
+    const buildPromoSelectionState = (promoCard) => {
+      const isSelected = promoCard?.is_selected === true;
+      const nextPromoCode = isSelected ? "" : str(promoCard?.code || "").trim();
+      const nextSelectedPromoSource = isSelected
+        ? null
+        : (normalizeCheckoutPromoSource(promoCard?.source) || "promo_code");
+      const nextSelectedPromoRewardId = isSelected
+        ? null
+        : (normalizeCheckoutPromoSource(promoCard?.source) === "reward_promo"
+            ? normalizeCheckoutSelectedDiscountId(promoCard?.reward_id || promoCard?.id)
+            : null);
+      let nextSelectedDiscountId = selectedDiscountId;
+      let nextSelectedDiscountSource = selectedDiscountSource;
+      if (!isSelected && nextSelectedDiscountId) {
+        const currentDiscountCard = discountCards.find((entry) => {
+          const entrySource = normalizeCheckoutDiscountSource(entry?.source) || "discount";
+          const entryId = entrySource === "reward_discount"
+            ? Number(entry?.reward_id || entry?.id || 0)
+            : Number(entry?.id || 0);
+          return entryId === Number(nextSelectedDiscountId || 0) && entrySource === nextSelectedDiscountSource;
+        }) || null;
+        if (currentDiscountCard && !(isCheckoutBenefitStackable(currentDiscountCard) && isCheckoutBenefitStackable(promoCard))) {
+          nextSelectedDiscountId = null;
+          nextSelectedDiscountSource = null;
+        }
+      }
+      return {
+        nextSelectedDiscountId,
+        nextSelectedDiscountSource,
+        nextPromoCode,
+        nextSelectedPromoSource,
+        nextSelectedPromoRewardId,
+        nextPromoSelectionMode: isSelected ? null : "list",
+      };
+    };
+    const findDiscountItemInPreview = (previewData, discountCard) => {
+      const targetKey = buildCheckoutBenefitDiscountSelectionKey(discountCard);
+      return Array.isArray(previewData?.discounts)
+        ? previewData.discounts.find((entry) => buildCheckoutBenefitDiscountSelectionKey(entry) === targetKey) || null
+        : null;
+    };
+    const findPromoItemInPreview = (previewData, promoCard) => {
+      const targetKey = buildCheckoutBenefitPromoSelectionKey(promoCard);
+      return Array.isArray(previewData?.promo_codes)
+        ? previewData.promo_codes.find((entry) => buildCheckoutBenefitPromoSelectionKey(entry) === targetKey) || null
+        : null;
+    };
 
     async function persistSelection({
       nextSelectedDiscountId,
@@ -18233,21 +18437,177 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     }
 
     function openCheckoutBenefitDiscountScreen(discountItem) {
+      const actionState = {
+        isSelected: discountItem?.is_selected === true,
+        canUseAction: discountItem?.is_selected === true || isCheckoutBenefitSelectable(discountItem),
+      };
+      const handleDetailBack = () => {
+        void reopenCheckoutBenefitsHost({
+          sourceScreen: getActiveCheckoutBenefitsSourceScreen("checkout"),
+        });
+      };
       const detailScreen = openCheckoutBenefitDetailScreen({
         sheetTitle: "\u0414\u0435\u0442\u0430\u043b\u0438 \u0430\u043a\u0446\u0438\u0438",
         showContentTitle: false,
         title: discountItem?.title || "\u0421\u043a\u0438\u0434\u043a\u0430",
+        onBack: handleDetailBack,
+        detailMode: "benefit-apply",
       });
       detailScreen.appendChild(buildCheckoutBenefitDiscountDetailContent(discountItem));
+      const externalFooterHost = detailScreen && detailScreen._externalFooterHost
+        ? detailScreen._externalFooterHost
+        : null;
+      const isMobileApplyDetail = window.matchMedia("(max-width: 768px)").matches;
+      let actionBtn = null;
+      if (externalFooterHost) {
+        const actions = document.createElement("div");
+        actions.className = "shop-checkout-benefit-detail-footer-actions";
+        actionBtn = document.createElement("button");
+        actionBtn.type = "button";
+        actionBtn.className = "shop-checkout-benefits-promo-entry-btn shop-checkout-benefit-claim-confirm shop-checkout-benefit-claim-confirm--footer";
+        actionBtn.textContent = actionState.isSelected ? "Выбрано" : "Применить";
+        actionBtn.disabled = !actionState.canUseAction;
+        actionBtn.classList.toggle("is-current", actionState.isSelected);
+        actionBtn.classList.toggle("is-active", !actionState.isSelected && actionState.canUseAction);
+        actions.appendChild(actionBtn);
+        externalFooterHost.appendChild(actions);
+      }
+      const syncApplyUi = (disabled = false) => {
+        if (actionBtn) {
+          actionBtn.disabled = !!disabled || !actionState.canUseAction;
+          actionBtn.textContent = actionState.isSelected ? "Выбрано" : "Применить";
+          actionBtn.classList.toggle("is-current", actionState.isSelected);
+          actionBtn.classList.toggle("is-active", !actionState.isSelected && actionState.canUseAction && !disabled);
+        }
+        syncMobileBenefitDetailApplyUi({
+          visible: isMobileApplyDetail,
+          enabled: actionState.canUseAction && !disabled,
+          current: actionState.isSelected,
+          onBack: handleDetailBack,
+          onSubmit: actionState.canUseAction && !disabled ? (() => { void submitDetailAction(); }) : null,
+          submitLabel: "Применить",
+        });
+      };
+      const submitDetailAction = async () => {
+        if (!actionState.canUseAction) return;
+        syncApplyUi(true);
+        const nextSelection = buildDiscountSelectionState(discountItem);
+        try {
+          await persistSelection(nextSelection);
+          const nextState = buildSelectionPreviewState(nextSelection);
+          const nextItem = findDiscountItemInPreview(nextState.nextData, discountItem) || discountItem;
+          openCheckoutBenefitDiscountScreen(nextItem);
+        } catch (err) {
+          syncApplyUi(false);
+          if (typeof showToast === "function") showToast(getCheckoutBenefitsActionErrorMessage(err));
+        }
+      };
+      if (actionBtn) {
+        actionBtn.addEventListener("click", () => {
+          void submitDetailAction();
+        });
+      }
+      syncApplyUi(false);
     }
 
     function openCheckoutBenefitPromoScreen(promoItem) {
+      const actionMode = str(promoItem?.action_mode || "select").trim().toLowerCase() || "select";
+      const actionState = {
+        isSelected: promoItem?.is_selected === true,
+        canUseAction: actionMode === "redeem_reward"
+          ? promoItem?.is_applicable === true
+          : (promoItem?.is_selected === true || isCheckoutBenefitSelectable(promoItem)),
+      };
+      const handleDetailBack = () => {
+        void reopenCheckoutBenefitsHost({
+          sourceScreen: getActiveCheckoutBenefitsSourceScreen("checkout"),
+        });
+      };
       const detailScreen = openCheckoutBenefitDetailScreen({
         sheetTitle: "\u0414\u0435\u0442\u0430\u043b\u0438 \u0430\u043a\u0446\u0438\u0438",
         showContentTitle: false,
         title: promoItem?.title || "\u041f\u0440\u043e\u043c\u043e\u043a\u043e\u0434",
+        onBack: handleDetailBack,
+        detailMode: "benefit-apply",
       });
       detailScreen.appendChild(buildCheckoutBenefitDiscountDetailContent(promoItem));
+      const externalFooterHost = detailScreen && detailScreen._externalFooterHost
+        ? detailScreen._externalFooterHost
+        : null;
+      const isMobileApplyDetail = window.matchMedia("(max-width: 768px)").matches;
+      let actionBtn = null;
+      if (externalFooterHost) {
+        const actions = document.createElement("div");
+        actions.className = "shop-checkout-benefit-detail-footer-actions";
+        actionBtn = document.createElement("button");
+        actionBtn.type = "button";
+        actionBtn.className = "shop-checkout-benefits-promo-entry-btn shop-checkout-benefit-claim-confirm shop-checkout-benefit-claim-confirm--footer";
+        actionBtn.textContent = actionMode === "redeem_reward"
+          ? "Получить"
+          : (actionState.isSelected ? "Выбрано" : "Применить");
+        actionBtn.disabled = !actionState.canUseAction;
+        actionBtn.classList.toggle("is-current", actionState.isSelected && actionMode !== "redeem_reward");
+        actionBtn.classList.toggle("is-active", (!actionState.isSelected || actionMode === "redeem_reward") && actionState.canUseAction);
+        actions.appendChild(actionBtn);
+        externalFooterHost.appendChild(actions);
+      }
+      const syncApplyUi = (disabled = false) => {
+        if (actionBtn) {
+          actionBtn.disabled = !!disabled || !actionState.canUseAction;
+          actionBtn.textContent = actionMode === "redeem_reward"
+            ? "Получить"
+            : (actionState.isSelected ? "Выбрано" : "Применить");
+          actionBtn.classList.toggle("is-current", actionState.isSelected && actionMode !== "redeem_reward");
+          actionBtn.classList.toggle("is-active", (!actionState.isSelected || actionMode === "redeem_reward") && actionState.canUseAction && !disabled);
+        }
+        syncMobileBenefitDetailApplyUi({
+          visible: isMobileApplyDetail,
+          enabled: actionState.canUseAction && !disabled,
+          current: actionState.isSelected && actionMode !== "redeem_reward",
+          onBack: handleDetailBack,
+          onSubmit: actionState.canUseAction && !disabled ? (() => { void submitDetailAction(); }) : null,
+          submitLabel: actionMode === "redeem_reward" ? "Получить" : "Применить",
+        });
+      };
+      const submitDetailAction = async () => {
+        if (!actionState.canUseAction) return;
+        syncApplyUi(true);
+        try {
+          if (actionMode === "redeem_reward") {
+            const nextData = await redeemCheckoutBenefitPromo({
+              ...previewRequest,
+              promo_code_id: Number(promoItem?.id || 0) || null,
+            });
+            await renderCheckoutBenefitsSheet({
+              container,
+              getPreviewRequest,
+              onBack,
+              onChangeSelection,
+              getManualPromoInputState,
+              onManualPromoInputChange,
+              onApplyManualPromo,
+              manualPromoHost,
+              manualPromoPlacement,
+              prefetchedData: nextData,
+            });
+            return;
+          }
+          const nextSelection = buildPromoSelectionState(promoItem);
+          await persistSelection(nextSelection);
+          const nextState = buildSelectionPreviewState(nextSelection);
+          const nextItem = findPromoItemInPreview(nextState.nextData, promoItem) || promoItem;
+          openCheckoutBenefitPromoScreen(nextItem);
+        } catch (err) {
+          syncApplyUi(false);
+          if (typeof showToast === "function") showToast(getCheckoutBenefitsActionErrorMessage(err));
+        }
+      };
+      if (actionBtn) {
+        actionBtn.addEventListener("click", () => {
+          void submitDetailAction();
+        });
+      }
+      syncApplyUi(false);
     }
 
     function openCheckoutBenefitGiftScreen(giftItem) {
@@ -18471,45 +18831,21 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
         openCheckoutBenefitDiscountScreen(discountCard);
       },
       onToggle: async (discountCard) => {
-        const nextSelectedDiscountId = discountCard?.is_selected
-          ? null
-          : normalizeCheckoutSelectedDiscountId(
-              normalizeCheckoutDiscountSource(discountCard?.source) === "reward_discount"
-                ? (discountCard?.reward_id || discountCard?.id)
-                : discountCard?.id
-            );
-        const nextSelectedDiscountSource = nextSelectedDiscountId
-          ? (normalizeCheckoutDiscountSource(discountCard?.source) || "discount")
-          : null;
-        let nextPromoCode = selectedPromoCode;
-        let nextSelectedPromoSource = selectedPromoSource;
-        let nextSelectedPromoRewardId = selectedPromoRewardId;
-        if (nextSelectedDiscountId && nextPromoCode) {
-          const currentPromoCard = promoCards.find((entry) => str(entry?.code || "").trim() === selectedPromoCode) || null;
-          if (currentPromoCard && !(isCheckoutBenefitStackable(discountCard) && isCheckoutBenefitStackable(currentPromoCard))) {
-            nextPromoCode = "";
-            nextSelectedPromoSource = null;
-            nextSelectedPromoRewardId = null;
-          }
-        }
+        const nextSelection = buildDiscountSelectionState(discountCard);
         await persistSelection({
-          nextSelectedDiscountId,
-          nextSelectedDiscountSource,
-          nextPromoCode,
-          nextSelectedPromoSource,
-          nextSelectedPromoRewardId,
-          nextPromoSelectionMode: nextPromoCode ? undefined : null,
+          nextSelectedDiscountId: nextSelection.nextSelectedDiscountId,
+          nextSelectedDiscountSource: nextSelection.nextSelectedDiscountSource,
+          nextPromoCode: nextSelection.nextPromoCode,
+          nextSelectedPromoSource: nextSelection.nextSelectedPromoSource,
+          nextSelectedPromoRewardId: nextSelection.nextSelectedPromoRewardId,
+          nextPromoSelectionMode: nextSelection.nextPromoSelectionMode,
         });
-        await renderCheckoutBenefitsSheet({
-          container,
-          getPreviewRequest,
-          onBack,
-          onChangeSelection,
-          getManualPromoInputState,
-          onManualPromoInputChange,
-          onApplyManualPromo,
-          manualPromoHost,
-          manualPromoPlacement,
+        await rerenderBenefitsSheetForSelection({
+          nextSelectedDiscountId: nextSelection.nextSelectedDiscountId,
+          nextSelectedDiscountSource: nextSelection.nextSelectedDiscountSource,
+          nextPromoCode: nextSelection.nextPromoCode,
+          nextSelectedPromoSource: nextSelection.nextSelectedPromoSource,
+          nextSelectedPromoRewardId: nextSelection.nextSelectedPromoRewardId,
         });
       },
     }));
@@ -18542,49 +18878,21 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
           return;
         }
 
-        const isSelected = promoCard?.is_selected === true;
-        const nextPromoCode = isSelected ? "" : str(promoCard?.code || "").trim();
-        const nextSelectedPromoSource = isSelected
-          ? null
-          : (normalizeCheckoutPromoSource(promoCard?.source) || "promo_code");
-        const nextSelectedPromoRewardId = isSelected
-          ? null
-          : (normalizeCheckoutPromoSource(promoCard?.source) === "reward_promo"
-              ? normalizeCheckoutSelectedDiscountId(promoCard?.reward_id || promoCard?.id)
-              : null);
-        let nextSelectedDiscountId = selectedDiscountId;
-        let nextSelectedDiscountSource = selectedDiscountSource;
-        if (!isSelected && nextSelectedDiscountId) {
-          const currentDiscountCard = discountCards.find((entry) => {
-            const entrySource = normalizeCheckoutDiscountSource(entry?.source) || "discount";
-            const entryId = entrySource === "reward_discount"
-              ? Number(entry?.reward_id || entry?.id || 0)
-              : Number(entry?.id || 0);
-            return entryId === Number(nextSelectedDiscountId || 0) && entrySource === nextSelectedDiscountSource;
-          }) || null;
-          if (currentDiscountCard && !(isCheckoutBenefitStackable(currentDiscountCard) && isCheckoutBenefitStackable(promoCard))) {
-            nextSelectedDiscountId = null;
-            nextSelectedDiscountSource = null;
-          }
-        }
+        const nextSelection = buildPromoSelectionState(promoCard);
         await persistSelection({
-          nextSelectedDiscountId,
-          nextSelectedDiscountSource,
-          nextPromoCode,
-          nextSelectedPromoSource,
-          nextSelectedPromoRewardId,
-          nextPromoSelectionMode: isSelected ? null : "list",
+          nextSelectedDiscountId: nextSelection.nextSelectedDiscountId,
+          nextSelectedDiscountSource: nextSelection.nextSelectedDiscountSource,
+          nextPromoCode: nextSelection.nextPromoCode,
+          nextSelectedPromoSource: nextSelection.nextSelectedPromoSource,
+          nextSelectedPromoRewardId: nextSelection.nextSelectedPromoRewardId,
+          nextPromoSelectionMode: nextSelection.nextPromoSelectionMode,
         });
-        await renderCheckoutBenefitsSheet({
-          container,
-          getPreviewRequest,
-          onBack,
-          onChangeSelection,
-          getManualPromoInputState,
-          onManualPromoInputChange,
-          onApplyManualPromo,
-          manualPromoHost,
-          manualPromoPlacement,
+        await rerenderBenefitsSheetForSelection({
+          nextSelectedDiscountId: nextSelection.nextSelectedDiscountId,
+          nextSelectedDiscountSource: nextSelection.nextSelectedDiscountSource,
+          nextPromoCode: nextSelection.nextPromoCode,
+          nextSelectedPromoSource: nextSelection.nextSelectedPromoSource,
+          nextSelectedPromoRewardId: nextSelection.nextSelectedPromoRewardId,
         });
       },
     }));
@@ -20430,6 +20738,7 @@ function applySheetAddressTitle(backMode = "cart") {
   }
   function hideCheckoutBenefitDetailView({ clearContent = false } = {}) {
     benefitDetailWrap.classList.add("hidden");
+    resetMobileBenefitDetailApplyUi();
     if (clearContent) {
       benefitDetailWrap.innerHTML = "";
     }
@@ -20448,10 +20757,12 @@ function applySheetAddressTitle(backMode = "cart") {
     const useFooterActionLayout = (
       detailMode === "gift-claim"
       || detailMode === "gift-action"
+      || detailMode === "benefit-apply"
     ) && !isMobileDetail;
     const hideMobileHeaderBack = (
       detailMode === "gift-claim"
       || detailMode === "gift-action"
+      || detailMode === "benefit-apply"
     ) && isMobileDetail;
     if (isDesktopBenefitsHostActive() && elCheckoutBenefitsContent && elCheckoutBenefitDetailContent) {
       cleanupCheckoutViewSubscriptions();
