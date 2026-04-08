@@ -8840,7 +8840,11 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     const mobileGiftClaimBackBtn = document.getElementById("shopMobileGiftClaimBackBtn");
     const mobileGiftClaimBtn = document.getElementById("shopMobileGiftClaimBtn");
     if (mobileCartActionsGiftClaim) mobileCartActionsGiftClaim.classList.add("hidden");
-    if (mobileGiftClaimBackBtn) mobileGiftClaimBackBtn.onclick = null;
+    if (mobileCartActionsGiftClaim) mobileCartActionsGiftClaim.classList.remove("is-single-action");
+    if (mobileGiftClaimBackBtn) {
+      mobileGiftClaimBackBtn.onclick = null;
+      mobileGiftClaimBackBtn.classList.remove("hidden");
+    }
     if (!mobileGiftClaimBtn) return;
     mobileGiftClaimBtn.disabled = true;
     mobileGiftClaimBtn.textContent = "Забрать";
@@ -8852,10 +8856,19 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     const mobileBenefitsBackBtn = document.getElementById("shopMobileBenefitsBackBtn");
     const mobileBenefitsApplyBtn = document.getElementById("shopMobileBenefitsApplyBtn");
     if (mobileCartActionsBenefits) mobileCartActionsBenefits.classList.add("hidden");
-    if (mobileBenefitsBackBtn) mobileBenefitsBackBtn.onclick = null;
+    if (mobileCartActionsBenefits) mobileCartActionsBenefits.classList.remove("is-single-action");
+    if (mobileBenefitsBackBtn) {
+      mobileBenefitsBackBtn.onclick = null;
+      mobileBenefitsBackBtn.classList.remove("hidden");
+    }
     if (!mobileBenefitsApplyBtn) return;
     mobileBenefitsApplyBtn.disabled = true;
     mobileBenefitsApplyBtn.textContent = "Применить";
+    mobileBenefitsApplyBtn.classList.remove(
+      "shop-checkout-benefits-promo-entry-btn",
+      "shop-checkout-benefit-claim-confirm",
+      "shop-checkout-benefit-claim-confirm--footer"
+    );
     mobileBenefitsApplyBtn.classList.remove("is-active", "is-current");
     mobileBenefitsApplyBtn.onclick = null;
   }
@@ -8882,13 +8895,22 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     const mobileBenefitsApplyBtn = document.getElementById("shopMobileBenefitsApplyBtn");
     if (!mobileCartActionsBenefits || !mobileBenefitsApplyBtn) return;
 
+    mobileCartActionsBenefits.classList.add("is-single-action");
+    mobileBenefitsApplyBtn.classList.add(
+      "shop-checkout-benefits-promo-entry-btn",
+      "shop-checkout-benefit-claim-confirm",
+      "shop-checkout-benefit-claim-confirm--footer"
+    );
     mobileBenefitsApplyBtn.textContent = current ? "Выбрано" : (str(submitLabel || "").trim() || "Применить");
     mobileBenefitsApplyBtn.disabled = !enabled;
     mobileBenefitsApplyBtn.classList.toggle("is-current", current);
     mobileBenefitsApplyBtn.classList.toggle("is-active", !current && enabled);
     mobileBenefitsApplyBtn.setAttribute("aria-pressed", current ? "true" : "false");
     mobileBenefitsApplyBtn.onclick = typeof onSubmit === "function" ? onSubmit : null;
-    if (mobileBenefitsBackBtn) mobileBenefitsBackBtn.onclick = typeof onBack === "function" ? onBack : null;
+    if (mobileBenefitsBackBtn) {
+      mobileBenefitsBackBtn.onclick = typeof onBack === "function" ? onBack : null;
+      mobileBenefitsBackBtn.classList.add("hidden");
+    }
 
     if (!visible) {
       mobileCartActionsBenefits.classList.add("hidden");
@@ -8927,10 +8949,14 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     const mobileGiftClaimBtn = document.getElementById("shopMobileGiftClaimBtn");
     if (!mobileCartActionsGiftClaim || !mobileGiftClaimBtn) return;
 
+    mobileCartActionsGiftClaim.classList.add("is-single-action");
     mobileGiftClaimBtn.textContent = str(submitLabel || "").trim() || "Забрать";
     mobileGiftClaimBtn.disabled = !enabled;
     mobileGiftClaimBtn.onclick = typeof onSubmit === "function" ? onSubmit : null;
-    if (mobileGiftClaimBackBtn) mobileGiftClaimBackBtn.onclick = typeof onBack === "function" ? onBack : null;
+    if (mobileGiftClaimBackBtn) {
+      mobileGiftClaimBackBtn.onclick = typeof onBack === "function" ? onBack : null;
+      mobileGiftClaimBackBtn.classList.add("hidden");
+    }
 
     if (!visible) {
       mobileCartActionsGiftClaim.classList.add("hidden");
@@ -9812,12 +9838,22 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     baseKey: "",
   };
 
+  const checkoutBenefitsDetailReturnState = {
+    source: "",
+    scrollTop: null,
+  };
+
   function clearCartBenefitsReturnState() {
     cartBenefitsReturnState.source = "";
     cartBenefitsReturnState.mobileScrollTop = null;
     cartBenefitsReturnState.desktopScrollTop = null;
     cartBenefitsReturnState.orderKey = "";
     cartBenefitsReturnState.baseKey = "";
+  }
+
+  function clearCheckoutBenefitsDetailReturnState() {
+    checkoutBenefitsDetailReturnState.source = "";
+    checkoutBenefitsDetailReturnState.scrollTop = null;
   }
 
   function getDesktopCartScrollElement() {
@@ -9858,6 +9894,35 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     const targetEl = scrollEl && typeof scrollEl.scrollTop === "number"
       ? scrollEl
       : (isMobilePlatform ? openCartSheetCtx?.listEl : getDesktopCartScrollElement());
+    if (!targetEl) return resolvedValue;
+    targetEl.scrollTop = resolvedValue;
+    window.requestAnimationFrame(() => {
+      try {
+        targetEl.scrollTop = resolvedValue;
+      } catch (_) {}
+    });
+    return resolvedValue;
+  }
+
+  function captureCheckoutBenefitsDetailReturnState(scrollEl = null) {
+    const targetEl = scrollEl && typeof scrollEl.scrollTop === "number"
+      ? scrollEl
+      : openCartSheetCtx?.benefitsScrollEl;
+    if (!targetEl) return;
+    checkoutBenefitsDetailReturnState.source = "benefit-detail";
+    checkoutBenefitsDetailReturnState.scrollTop = Math.max(0, Number(targetEl.scrollTop || 0));
+  }
+
+  function consumeCheckoutBenefitsDetailReturnScroll(scrollEl = null) {
+    if (checkoutBenefitsDetailReturnState.source !== "benefit-detail") return null;
+    const resolvedValue = Number.isFinite(Number(checkoutBenefitsDetailReturnState.scrollTop))
+      ? Math.max(0, Number(checkoutBenefitsDetailReturnState.scrollTop || 0))
+      : null;
+    clearCheckoutBenefitsDetailReturnState();
+    if (resolvedValue == null) return null;
+    const targetEl = scrollEl && typeof scrollEl.scrollTop === "number"
+      ? scrollEl
+      : openCartSheetCtx?.benefitsScrollEl;
     if (!targetEl) return resolvedValue;
     targetEl.scrollTop = resolvedValue;
     window.requestAnimationFrame(() => {
@@ -16102,7 +16167,9 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       ? maxDiscountAmount
       : (discountType === "fixed" && discountValue > 0 ? discountValue : 0);
     const usagePerCustomer = Number(data?.usage_per_customer || 0);
+    const usageLimit = Number(data?.usage_limit || 0);
     const usageCount = Number(data?.usage_count || 0);
+    const customerUsageCount = Number(data?.customer_usage_count || 0);
     const startsAt = str(data?.starts_at || "").trim();
     const endsAt = str(data?.ends_at || "").trim();
     const expiresAt = str(data?.expires_at || "").trim();
@@ -16111,6 +16178,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     const promoCode = str(data?.code || data?.promo_code || "").trim();
     const activationMode = str(data?.activation_mode || "").trim().toLowerCase();
     const promoEnabled = activationMode === "promo_code" || !!promoCode || codeMode === "unique";
+    const isUniquePromoDetail = promoEnabled && codeMode === "unique" && !!promoCode;
     const promoValue = codeMode === "unique" ? "УНИКАЛЬНЫЕ КОДЫ" : (promoCode || "—");
     const isStackable = data?.is_stackable === true || Number(data?.is_stackable || 0) === 1;
 
@@ -16126,6 +16194,14 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       : (Number(data?.discount_amount || 0) > 0
         ? `Экономия: ${moneyValue(data?.discount_amount)}`
         : "Экономия: без ограничения");
+
+    const usagePerCustomerText = usagePerCustomer > 0
+      ? `${usagePerCustomer} РЅР° РєР»РёРµРЅС‚Р°`
+      : "Р±РµР· Р»РёРјРёС‚Р° РЅР° РєР»РёРµРЅС‚Р°";
+    const usageLimitText = usageLimit > 0
+      ? String(usageLimit)
+      : "Р±РµР· РѕР±С‰РµРіРѕ Р»РёРјРёС‚Р°";
+    const usageCountText = String(isUniquePromoDetail ? usageCount : (customerUsageCount > 0 ? customerUsageCount : usageCount));
 
     const periodText = (() => {
       if (startsAt || endsAt) {
@@ -16197,6 +16273,10 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       </div>
     `;
     wrap.appendChild(hero);
+    if (isUniquePromoDetail) {
+      const heroPromoValueEl = hero.querySelector(".discount-info-hero-promo-value");
+      if (heroPromoValueEl) heroPromoValueEl.textContent = promoCode;
+    }
 
     const conditionsBlock = document.createElement("div");
     conditionsBlock.className = "discount-info-block";
@@ -16220,6 +16300,15 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       </div>
     `;
     wrap.appendChild(limitsBlock);
+    if (isUniquePromoDetail) {
+      const limitsBody = limitsBlock.querySelector(".discount-info-block-body");
+      if (limitsBody) {
+        limitsBody.innerHTML = `
+          <div class="discount-info-row"><span class="discount-info-row-label">Общий лимит:</span><span class="discount-info-row-value">${usageLimitText}</span></div>
+          <div class="discount-info-row"><span class="discount-info-row-label">Использовано:</span><span class="discount-info-row-value">${String(usageCount)}</span></div>
+        `;
+      }
+    }
 
     const periodBlock = document.createElement("div");
     periodBlock.className = "discount-info-block";
@@ -17050,6 +17139,8 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     let startLeft = 0;
     let isMouseDrag = false;
     let isDragging = false;
+    let isVerticalIntent = false;
+    let hasPointerCapture = false;
     let suppressClickUntil = 0;
 
     const hasOverflow = () => track.scrollWidth > track.clientWidth + 1;
@@ -17063,7 +17154,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     const finishPointer = (event) => {
       if (pointerId == null) return;
       if (event && event.pointerId !== pointerId) return;
-      if (isMouseDrag) {
+      if (isMouseDrag || hasPointerCapture) {
         track.classList.remove("is-dragging");
         try {
           track.releasePointerCapture(pointerId);
@@ -17072,6 +17163,8 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       pointerId = null;
       isMouseDrag = false;
       isDragging = false;
+      isVerticalIntent = false;
+      hasPointerCapture = false;
     };
 
     track.addEventListener("pointerdown", (event) => {
@@ -17085,10 +17178,13 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       startLeft = Number(track.scrollLeft || 0);
       isMouseDrag = event.pointerType === "mouse";
       isDragging = false;
+      isVerticalIntent = false;
+      hasPointerCapture = false;
       if (isMouseDrag) {
         track.classList.add("is-dragging");
         try {
           track.setPointerCapture(pointerId);
+          hasPointerCapture = true;
         } catch {}
       }
     });
@@ -17098,13 +17194,28 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       const deltaX = Number(event.clientX || 0) - startX;
       const deltaY = Number(event.clientY || 0) - startY;
       const absDeltaX = Math.abs(deltaX);
+      const absDeltaY = Math.abs(deltaY);
+      if (!isMouseDrag && !isDragging && !isVerticalIntent) {
+        if (absDeltaY >= dragThresholdPx && absDeltaY > absDeltaX) {
+          isVerticalIntent = true;
+          finishPointer(event);
+          return;
+        }
+      }
+      if (isVerticalIntent) return;
       if (!isDragging) {
         if (absDeltaX < dragThresholdPx) return;
-        if (!isMouseDrag && absDeltaX <= Math.abs(deltaY)) return;
+        if (!isMouseDrag && absDeltaX <= absDeltaY) return;
         isDragging = true;
+        track.classList.add("is-dragging");
+        if (!isMouseDrag) {
+          try {
+            track.setPointerCapture(pointerId);
+            hasPointerCapture = true;
+          } catch {}
+        }
       }
       markSuppressClick();
-      if (!isMouseDrag) return;
       event.preventDefault();
       track.scrollLeft = startLeft - deltaX;
     });
@@ -20423,6 +20534,9 @@ function applySheetAddressTitle(backMode = "cart") {
     benefitsModalShell.appendChild(benefitsFooterEl);
     benefitsWrap.innerHTML = "";
     benefitsWrap.appendChild(benefitsModalShell);
+    if (openCartSheetCtx && typeof openCartSheetCtx === "object") {
+      openCartSheetCtx.benefitsScrollEl = benefitsScrollEl;
+    }
 
     const getBenefitsPromoInputValue = () => str(openCartSheetCtx?.benefitsPromoInputValue || "");
     const syncBenefitsPromoDirtyState = () => {
@@ -20465,6 +20579,7 @@ function applySheetAddressTitle(backMode = "cart") {
       };
     };
     const closeBenefitsWithSave = async () => {
+      clearCheckoutBenefitsDetailReturnState();
       persistBenefitsState();
       restoreCheckoutDeliveryProgressAfterBenefits();
       const nextScreen = str(openCartSheetCtx?.benefitsSourceScreen || benefitsSourceScreen).trim().toLowerCase();
@@ -20479,6 +20594,7 @@ function applySheetAddressTitle(backMode = "cart") {
       await showSheetCheckout();
     };
     const closeBenefitsModal = async () => {
+      clearCheckoutBenefitsDetailReturnState();
       if (isMobile) {
         await closeBenefitsWithSave();
         return;
@@ -20618,6 +20734,7 @@ function applySheetAddressTitle(backMode = "cart") {
         },
         initialSection: pendingInitialSection,
       });
+      consumeCheckoutBenefitsDetailReturnScroll(benefitsScrollEl);
       pendingInitialSection = null;
     };
 
@@ -20670,6 +20787,7 @@ function applySheetAddressTitle(backMode = "cart") {
       || detailMode === "gift-action"
       || detailMode === "benefit-apply"
     ) && isMobileDetail;
+    captureCheckoutBenefitsDetailReturnState();
     if (isDesktopBenefitsHostActive() && elCheckoutBenefitsContent && elCheckoutBenefitDetailContent) {
       cleanupCheckoutViewSubscriptions();
       desktopCheckoutBenefitsState.sourceScreen = getActiveCheckoutBenefitsSourceScreen("cart");

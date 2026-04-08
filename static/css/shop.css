@@ -16030,7 +16030,7 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
   -ms-overflow-style: none;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior-x: contain;
-  touch-action: pan-x;
+  touch-action: pan-x pan-y pinch-zoom;
   cursor: grab;
   scroll-behavior: smooth;
 }
@@ -16461,7 +16461,7 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
   -ms-overflow-style: none;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior-x: contain;
-  touch-action: pan-x;
+  touch-action: pan-x pan-y pinch-zoom;
   cursor: grab;
   scroll-behavior: smooth;
 }
@@ -21534,6 +21534,24 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
   .shop-mobile-cart-actions-benefits.hidden,
   .shop-mobile-cart-actions-gift-claim.hidden {
     display: none;
+  }
+
+  .shop-mobile-cart-actions-benefits.is-single-action > .shop-checkout-back {
+    display: none;
+  }
+
+  .shop-mobile-cart-actions-benefits.is-single-action > .shop-checkout-submit-btn {
+    width: 100%;
+    flex: 1 1 auto;
+  }
+
+  .shop-mobile-cart-actions-gift-claim.is-single-action > .shop-checkout-back {
+    display: none;
+  }
+
+  .shop-mobile-cart-actions-gift-claim.is-single-action > .shop-checkout-submit-btn {
+    width: 100%;
+    flex: 1 1 auto;
   }
 
   .shop-mobile-order-details-actions {
