@@ -4995,12 +4995,16 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           badge_text: '\u041f\u043e\u0434\u0430\u0440\u043e\u043a',
           description: publicDiscountText(discount?.description) || '\u041f\u043e\u0434\u0430\u0440\u043e\u043a \u043f\u043e \u043f\u0440\u043e\u043c\u043e\u043a\u043e\u0434\u0443',
           apply_scope_text: '\u041d\u0430 \u0442\u043e\u0432\u0430\u0440\u044b',
+          discount_type: null,
+          discount_value: 0,
         };
       }
       return {
         badge_text: formatPublicDiscountBadgeText(reward?.discount_type, reward?.discount_value) || '\u0421\u043a\u0438\u0434\u043a\u0430',
         description: publicDiscountText(discount?.description) || '\u0421\u043a\u0438\u0434\u043a\u0430 \u043d\u0430 \u0442\u043e\u0432\u0430\u0440 \u043f\u043e \u043f\u0440\u043e\u043c\u043e\u043a\u043e\u0434\u0443',
         apply_scope_text: '\u041d\u0430 \u0442\u043e\u0432\u0430\u0440\u044b',
+        discount_type: publicDiscountText(reward?.discount_type).toLowerCase() || 'percent',
+        discount_value: Number(reward?.discount_value || 0),
       };
     }
 
@@ -5008,6 +5012,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       badge_text: formatPublicDiscountBadgeText(reward?.discount_type, reward?.discount_value) || '\u0421\u043a\u0438\u0434\u043a\u0430',
       description: publicDiscountText(discount?.description) || '\u0421\u043a\u0438\u0434\u043a\u0430 \u043f\u043e \u043f\u0440\u043e\u043c\u043e\u043a\u043e\u0434\u0443',
       apply_scope_text: formatPublicApplyScopeText(reward?.apply_to ?? discount?.apply_to),
+      discount_type: publicDiscountText(reward?.discount_type).toLowerCase() || 'percent',
+      discount_value: Number(reward?.discount_value || 0),
     };
   }
 
@@ -12648,9 +12654,23 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         kind: 'gift',
         title: publicDiscountText(discount?.title) || 'Промокод',
         description: rewardMeta.description || publicDiscountText(discount?.description),
-        badge_text: 'Промокод',
+        badge_text: rewardMeta.badge_text || 'Скидка',
         apply_scope_text: rewardMeta.apply_scope_text || formatPublicApplyScopeText(discount?.apply_to),
         expires_at: discount?.ends_at || null,
+        min_order_amount: discount?.min_order_amount != null ? Number(discount.min_order_amount || 0) : null,
+        max_discount_amount: discount?.max_discount_amount != null ? Number(discount.max_discount_amount || 0) : null,
+        usage_per_customer: discount?.usage_per_customer != null ? Number(discount.usage_per_customer || 0) : null,
+        usage_count: Number(promoCustomerUsageMap.get(discountId) || 0),
+        customer_usage_count: Number(promoCustomerUsageMap.get(discountId) || 0),
+        starts_at: discount?.starts_at || null,
+        ends_at: discount?.ends_at || null,
+        is_active: Number(discount?.is_active || 0) === 1,
+        hide_in_benefits: Number(discount?.hide_in_benefits || 0) === 1,
+        activation_mode: discount?.activation_mode || null,
+        promo_code_mode: discount?.promo_code_mode || null,
+        is_stackable: Number(discount?.is_stackable || 0) === 1,
+        discount_type: rewardMeta.discount_type || null,
+        discount_value: Number(rewardMeta.discount_value || 0),
         is_selected: false,
         is_applicable: isReceivable,
         disabled_reason_code: disabledReasonCode,
@@ -12667,7 +12687,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           icon_kind: 'promo_code',
           title: publicDiscountText(discount?.title) || 'Промокод',
           description: rewardMeta.description || publicDiscountText(discount?.description),
-          badge_text: 'Промокод',
+          badge_text: rewardMeta.badge_text || 'Скидка',
           apply_scope_text: rewardMeta.apply_scope_text || formatPublicApplyScopeText(discount?.apply_to),
           photo_url: rewardPhotoUrl,
           products: rewardProducts,
