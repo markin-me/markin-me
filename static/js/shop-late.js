@@ -8974,101 +8974,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     setBenefitsInnerOverlayMobileState(false);
   }
 
-  function openCheckoutBenefitDetailScreen({
-    sheetTitle = "",
-    title = "",
-    showContentTitle = false,
-    description = "",
-    onBack,
-    detailMode = "",
-  } = {}) {
-    const ctx = openCartSheetCtx;
-    const detailEl = ctx?.benefitDetailEl;
-    if (!detailEl) {
-      const fallback = document.createElement("div");
-      fallback.className = "shop-checkout-benefit-detail-screen";
-      return fallback;
-    }
-
-    clearBenefitsInnerOverlayHost();
-    resetMobileCheckoutCommentUi();
-    resetMobileBenefitsPromoUi();
-
-    if (ctx.checkoutEl) ctx.checkoutEl.classList.add("hidden");
-    if (ctx.benefitsEl) ctx.benefitsEl.classList.add("hidden");
-    if (ctx.listEl) ctx.listEl.classList.add("hidden");
-    if (ctx.productEl) ctx.productEl.classList.add("hidden");
-
-    const wrapEl = ctx.wrapEl;
-    const addressEl = wrapEl?.querySelector?.(".shop-address-content");
-    const pickupEl = wrapEl?.querySelector?.(".shop-pickup-content");
-    if (addressEl) addressEl.classList.add("hidden");
-    if (pickupEl) pickupEl.classList.add("hidden");
-
-    detailEl.classList.remove("hidden");
-    detailEl.classList.remove("shop-checkout-benefit-detail-content--with-footer");
-    detailEl.innerHTML = "";
-    detailEl.scrollTop = 0;
-
-    setCartSheetFooterMode(ctx, "hidden");
-
-    const shell = document.createElement("div");
-    shell.className = "shop-checkout-benefit-detail-screen";
-
-    if (showContentTitle && title) {
-      const titleEl = document.createElement("div");
-      titleEl.className = "shop-checkout-benefit-detail-title";
-      titleEl.textContent = title;
-      shell.appendChild(titleEl);
-    }
-
-    if (description) {
-      const descriptionEl = document.createElement("div");
-      descriptionEl.className = "shop-checkout-benefits-hint";
-      descriptionEl.textContent = description;
-      shell.appendChild(descriptionEl);
-    }
-
-    const useDesktopFooterLayout = detailMode === "gift-claim"
-      && !window.matchMedia("(max-width: 768px)").matches;
-    if (useDesktopFooterLayout) {
-      detailEl.classList.add("shop-checkout-benefit-detail-content--with-footer");
-      const scrollHost = document.createElement("div");
-      scrollHost.className = "shop-checkout-benefit-detail-scroll";
-      scrollHost.appendChild(shell);
-      detailEl.appendChild(scrollHost);
-      const footerHost = document.createElement("div");
-      footerHost.className = "shop-checkout-benefit-detail-footer";
-      detailEl.appendChild(footerHost);
-      shell._externalFooterHost = footerHost;
-    } else {
-      detailEl.appendChild(shell);
-    }
-
-    if (window.AppModal?.setTitle) window.AppModal.setTitle(sheetTitle || "Детали акции");
-    setSheetHeaderMode("subscreen", {
-      onBack: typeof onBack === "function"
-        ? onBack
-        : () => {
-            if (typeof ctx?.showSheetBenefits === "function") {
-              void ctx.showSheetBenefits();
-            }
-          },
-      showBackInHeader: !(detailMode === "gift-claim" && window.matchMedia("(max-width: 768px)").matches),
-    });
-
-    if (window.AppModal?.setTitle) window.AppModal.setTitle(sheetTitle || "Детали акции");
-    sheetNavigationState.type = "cart";
-    sheetNavigationState.screen = "benefitDetail";
-    sheetNavigationState.data = null;
-    if (typeof queueMobileUiStateSync === "function") {
-      queueMobileUiStateSync("openCheckoutBenefitDetailScreen.global");
-    } else if (typeof window.queueShopMobileUiStateSync === "function") {
-      window.queueShopMobileUiStateSync("openCheckoutBenefitDetailScreen.global");
-    }
-
-    return shell;
-  }
+  let openCheckoutBenefitDetailScreen = null;
 
   function normalizeCheckoutSelectedDiscountId(value) {
     const id = Number(value);
@@ -20745,7 +20651,7 @@ function applySheetAddressTitle(backMode = "cart") {
     hideDesktopCheckoutBenefitDetailView({ clearContent });
   }
 
-  function openCheckoutBenefitDetailScreen({
+  openCheckoutBenefitDetailScreen = function openCheckoutBenefitDetailScreen({
     sheetTitle = "",
     title = "",
     showContentTitle = false,
@@ -20935,7 +20841,7 @@ function applySheetAddressTitle(backMode = "cart") {
     }
 
     return shell;
-  }
+  };
 
   function showSheetCart() {
     invalidateAddressSheetUiState();
