@@ -16104,28 +16104,229 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
   }
 
   function buildCheckoutBenefitDiscountDetailContent(item) {
+    const data = item && typeof item === "object" ? item : {};
     const wrap = document.createElement("div");
-    wrap.appendChild(buildCheckoutBenefitCardDetailContent(item, {
-      primaryText: str(item?.badge_text || "").trim() || "\u0421\u043a\u0438\u0434\u043a\u0430",
-      isSelected: item?.is_selected === true,
-    }));
-    const productsSection = buildCheckoutBenefitTargetProductsContent(item?.products, "Что участвует");
-    if (productsSection.childNodes.length) wrap.appendChild(productsSection);
+    const isMobileDetail = !!(window.matchMedia && window.matchMedia("(max-width: 768px)").matches);
+
+    const title = str(data?.title || "").trim() || "Скидка";
+    const badgeText = str(data?.badge_text || "").trim() || "Скидка";
+    const applyText = str(data?.apply_scope_text || "").trim() || "на заказ";
+    const minOrderAmount = Number(data?.min_order_amount || 0);
+    const maxDiscountAmount = Number(data?.max_discount_amount || 0);
+    const usagePerCustomer = Number(data?.usage_per_customer || 0);
+    const usageLimitRaw = data?.usage_limit;
+    const usageLimit = usageLimitRaw == null ? null : Number(usageLimitRaw || 0);
+    const usageCount = Number(data?.usage_count || 0);
+    const startsAt = str(data?.starts_at || "").trim();
+    const endsAt = str(data?.ends_at || "").trim();
+    const expiresAt = str(data?.expires_at || "").trim();
+    const disabledReasonText = str(data?.disabled_reason || "").trim();
+    const codeMode = str(data?.code_mode || data?.promo_code_mode || "").trim().toLowerCase();
+    const promoCode = str(data?.code || data?.promo_code || "").trim();
+    const activationMode = str(data?.activation_mode || "").trim().toLowerCase();
+    const promoEnabled = activationMode === "promo_code" || !!promoCode || codeMode === "unique";
+    const promoValue = codeMode === "unique" ? "УНИКАЛЬНЫЕ КОДЫ" : (promoCode || "—");
+    const isActive = data?.is_active !== false && Number(data?.is_active ?? 1) !== 0;
+    const hideInBenefits = data?.hide_in_benefits === true || Number(data?.hide_in_benefits || 0) === 1;
+    const isStackable = data?.is_stackable === true || Number(data?.is_stackable || 0) === 1;
+
+    const moneyValue = (value) => {
+      const amount = Number(value || 0);
+      if (!(amount > 0)) return "—";
+      if (typeof money === "function") return money(amount);
+      return `${amount} ₽`;
+    };
+
+    const economyText = maxDiscountAmount > 0
+      ? `Экономия: до ${moneyValue(maxDiscountAmount)}`
+      : (Number(data?.discount_amount || 0) > 0
+        ? `Экономия: ${moneyValue(data?.discount_amount)}`
+        : "Экономия: без ограничения");
+
+    const periodText = (() => {
+      if (startsAt || endsAt) {
+        const from = formatCheckoutBenefitsDate(startsAt) || "—";
+        const to = formatCheckoutBenefitsDate(endsAt) || "—";
+        return `${from} — ${to}`;
+      }
+      if (expiresAt) {
+        const formatted = formatCheckoutBenefitsDate(expiresAt);
+        return formatted ? `до ${formatted}` : "Без ограничений";
+      }
+      return "Без ограничений";
+    })();
+
+    const scheduleDaysText = (() => {
+      const raw = data?.schedule_days;
+      let parsed = [];
+      if (Array.isArray(raw)) {
+        parsed = raw.map((d) => Number(d)).filter((d) => Number.isInteger(d) && d >= 0 && d <= 6);
+      } else {
+        const strValue = str(raw || "").trim();
+        if (strValue) {
+          try {
+            const json = JSON.parse(strValue);
+            if (Array.isArray(json)) {
+              parsed = json.map((d) => Number(d)).filter((d) => Number.isInteger(d) && d >= 0 && d <= 6);
+            }
+          } catch (_) {
+            parsed = strValue.split(",").map((d) => Number(d.trim())).filter((d) => Number.isInteger(d) && d >= 0 && d <= 6);
+          }
+        }
+      }
+      parsed = Array.from(new Set(parsed));
+      if (!parsed.length) return "";
+      if (parsed.length === 7) return "Ежедневно";
+      const order = [1, 2, 3, 4, 5, 6, 0];
+      const names = { 1: "Пн", 2: "Вт", 3: "Ср", 4: "Чт", 5: "Пт", 6: "Сб", 0: "Вс" };
+      parsed.sort((a, b) => order.indexOf(a) - order.indexOf(b));
+      return parsed.map((day) => names[day] || "").filter(Boolean).join(", ");
+    })();
+
+    const timeText = (() => {
+      const normalize = (value) => {
+        const matched = str(value || "").trim().match(/^(\d{2}:\d{2})/);
+        return matched ? matched[1] : "";
+      };
+      const from = normalize(data?.schedule_time_start);
+      const to = normalize(data?.schedule_time_end);
+      if (from && to) return `${from} — ${to}`;
+      if (from) return `с ${from}`;
+      if (to) return `до ${to}`;
+      return "";
+    })();
+
+    const audienceText = (() => {
+      const customers = Array.isArray(data?.customers) ? data.customers : [];
+      if (!customers.length) return "Все клиенты";
+      const categoryCount = customers.filter((it) => str(it?.entity_type || "").trim().toLowerCase() === "category").length;
+      const customerCount = customers.length - categoryCount;
+      if (customerCount > 0 && categoryCount > 0) return `Клиенты ${customerCount}, категории ${categoryCount}`;
+      if (categoryCount > 0) return categoryCount === 1 ? "Категория клиентов" : `Категории клиентов (${categoryCount})`;
+      return customerCount === 1 ? "Выбранный клиент" : `Выбранные клиенты (${customerCount})`;
+    })();
+
+    const hero = document.createElement("div");
+    hero.className = "discount-info-hero";
+    hero.innerHTML = `
+      <div class="discount-info-hero-main">
+        <div class="discount-info-hero-content">
+          <div class="discount-info-badges discount-info-badges--right shop-checkout-benefit-discount-meta">
+            <span class="discount-info-hero-badge shop-checkout-benefit-badge shop-checkout-benefit-badge--accent shop-checkout-benefit-discount-badge">${escapeHtml(badgeText)}</span>
+            ${isMobileDetail ? "" : `<span class="discount-info-badge shop-checkout-benefit-badge shop-checkout-benefit-badge--icon ${isActive ? "shop-checkout-benefit-badge--accent" : "shop-checkout-benefit-badge--neutral"}" title="${isActive ? "Активна" : "Неактивна"}" aria-label="${isActive ? "Активна" : "Неактивна"}"><i class="fas fa-power-off" aria-hidden="true"></i></span>`}
+            ${isMobileDetail ? "" : `<span class="discount-info-badge shop-checkout-benefit-badge shop-checkout-benefit-badge--icon shop-checkout-benefit-badge--accent" title="${hideInBenefits ? "Скрыта в выгодах" : "Показывается в выгодах"}" aria-label="${hideInBenefits ? "Скрыта в выгодах" : "Показывается в выгодах"}"><i class="fas ${hideInBenefits ? "fa-eye-slash" : "fa-eye"}" aria-hidden="true"></i></span>`}
+            ${isStackable ? '<span class="discount-info-badge shop-checkout-benefit-badge shop-checkout-benefit-badge--icon shop-checkout-benefit-badge--accent" title="Можно совмещать" aria-label="Можно совмещать"><i class="fas fa-link" aria-hidden="true"></i></span>' : ""}
+          </div>
+          <div class="discount-info-title shop-profile-discount-title">${escapeHtml(title)}</div>
+          ${promoEnabled ? `<div class="discount-info-hero-promo"><div class="discount-info-hero-promo-label">Промокод</div><div class="discount-info-hero-promo-value shop-checkout-benefit-main-value is-code">${escapeHtml(promoValue)}</div></div>` : ""}
+          <div class="discount-info-hero-subtitle">${escapeHtml(applyText)}</div>
+        </div>
+        <div class="discount-info-hero-economy">${escapeHtml(economyText)}</div>
+      </div>
+    `;
+    wrap.appendChild(hero);
+
+    const conditionsBlock = document.createElement("div");
+    conditionsBlock.className = "discount-info-block";
+    conditionsBlock.innerHTML = `
+      <div class="discount-info-block-header"><i class="fas fa-map-marker-alt"></i> Условия</div>
+      <div class="discount-info-block-body">
+        <div class="discount-info-row"><span class="discount-info-row-label">Применяется:</span><span class="discount-info-row-value">${escapeHtml(applyText)}</span></div>
+        <div class="discount-info-row"><span class="discount-info-row-label">Минимальная сумма:</span><span class="discount-info-row-value">${minOrderAmount > 0 ? escapeHtml(moneyValue(minOrderAmount)) : "без минимальной суммы"}</span></div>
+        <div class="discount-info-row"><span class="discount-info-row-label">Максимальная скидка:</span><span class="discount-info-row-value">${maxDiscountAmount > 0 ? escapeHtml(moneyValue(maxDiscountAmount)) : "без ограничения"}</span></div>
+      </div>
+    `;
+    wrap.appendChild(conditionsBlock);
+
+    const limitsBlock = document.createElement("div");
+    limitsBlock.className = "discount-info-block";
+    limitsBlock.innerHTML = `
+      <div class="discount-info-block-header"><i class="fas fa-exclamation-triangle"></i> Ограничения</div>
+      <div class="discount-info-block-body">
+        <div class="discount-info-row"><span class="discount-info-row-label">На клиента:</span><span class="discount-info-row-value">${usagePerCustomer > 0 ? `${usagePerCustomer} на клиента` : "без лимита на клиента"}</span></div>
+        <div class="discount-info-row"><span class="discount-info-row-label">Общий лимит:</span><span class="discount-info-row-value">${usageLimit == null || usageLimit <= 0 ? "без общего лимита" : String(usageLimit)}</span></div>
+        <div class="discount-info-row"><span class="discount-info-row-label">Использовано:</span><span class="discount-info-row-value">${String(usageCount)}</span></div>
+      </div>
+    `;
+    wrap.appendChild(limitsBlock);
+
+    const periodBlock = document.createElement("div");
+    periodBlock.className = "discount-info-block";
+    periodBlock.innerHTML = `
+      <div class="discount-info-block-header"><i class="fas fa-calendar-alt"></i> Срок действия</div>
+      <div class="discount-info-block-body">
+        <div class="discount-info-row"><span class="discount-info-row-value">${escapeHtml(periodText)}</span></div>
+        ${scheduleDaysText ? `<div class="discount-info-row"><span class="discount-info-row-label">Дни недели:</span><span class="discount-info-row-value">${escapeHtml(scheduleDaysText)}</span></div>` : ""}
+        ${timeText ? `<div class="discount-info-row"><span class="discount-info-row-label">Время:</span><span class="discount-info-row-value">${escapeHtml(timeText)}</span></div>` : ""}
+      </div>
+    `;
+    wrap.appendChild(periodBlock);
+
+    const bottomGrid = document.createElement("div");
+    bottomGrid.className = "discount-info-bottom-grid";
+    bottomGrid.innerHTML = `
+      <div class="discount-info-mini-card">
+        <div class="discount-info-mini-header"><i class="fas fa-check-circle"></i> Доступно</div>
+        <div class="discount-info-mini-body">${isStackable ? "Можно совмещать с другими акциями" : "Не совмещается с другими акциями"}</div>
+      </div>
+      ${isMobileDetail ? "" : `<div class="discount-info-mini-card">
+        <div class="discount-info-mini-header"><i class="fas fa-users"></i> Аудитория</div>
+        <div class="discount-info-mini-body">${escapeHtml(audienceText)}</div>
+      </div>`}
+    `;
+    wrap.appendChild(bottomGrid);
+
+    const products = Array.isArray(data?.products) ? data.products : [];
+    if (products.length) {
+      const productsSection = document.createElement("div");
+      productsSection.className = "discount-info-section";
+      const productsTitle = document.createElement("div");
+      productsTitle.className = "discount-info-section-title";
+      productsTitle.textContent = "Привязанные позиции";
+      productsSection.appendChild(productsTitle);
+      const chips = document.createElement("div");
+      chips.className = "discount-chips";
+      products.forEach((product) => {
+        const chip = document.createElement("span");
+        const entityType = str(product?.entity_type || product?.type || "").trim().toLowerCase();
+        chip.className = `discount-chip ${entityType === "category" ? "is-category" : (entityType === "combo" ? "is-combo" : "")}`.trim();
+        chip.textContent = str(product?.title || product?.name || "").trim() || `#${Number(product?.entity_id || product?.id || 0)}`;
+        chips.appendChild(chip);
+      });
+      productsSection.appendChild(chips);
+      wrap.appendChild(productsSection);
+    }
+
+    const customers = Array.isArray(data?.customers) ? data.customers : [];
+    if (customers.length) {
+      const customersSection = document.createElement("div");
+      customersSection.className = "discount-info-section";
+      const customersTitle = document.createElement("div");
+      customersTitle.className = "discount-info-section-title";
+      customersTitle.textContent = "Выбранные клиенты";
+      customersSection.appendChild(customersTitle);
+      const chips = document.createElement("div");
+      chips.className = "discount-chips";
+      customers.forEach((customer) => {
+        const chip = document.createElement("span");
+        const entityType = str(customer?.entity_type || "").trim().toLowerCase();
+        chip.className = `discount-chip ${entityType === "category" ? "is-category" : ""}`.trim();
+        chip.textContent = str(customer?.title || customer?.name || "").trim() || `#${Number(customer?.entity_id || customer?.id || 0)}`;
+        chips.appendChild(chip);
+      });
+      customersSection.appendChild(chips);
+      wrap.appendChild(customersSection);
+    }
+
+    if (disabledReasonText) {
+      const note = document.createElement("div");
+      note.className = "shop-checkout-benefit-disabled-reason";
+      note.textContent = disabledReasonText;
+      wrap.appendChild(note);
+    }
+
     return wrap;
   }
-
-  function buildCheckoutBenefitPromoDetailContent(item) {
-    const wrap = document.createElement("div");
-    wrap.appendChild(buildCheckoutBenefitCardDetailContent(item, {
-      primaryText: str(item?.code || "").trim() || "\u041f\u0440\u043e\u043c\u043e\u043a\u043e\u0434",
-      primaryClassName: "is-code",
-      isSelected: item?.is_selected === true,
-    }));
-    const productsSection = buildCheckoutBenefitTargetProductsContent(item?.products, "Что участвует");
-    if (productsSection.childNodes.length) wrap.appendChild(productsSection);
-    return wrap;
-  }
-
   function buildCheckoutBenefitProgressProductCard(snapshot, { onAdd, onOpen } = {}) {
     const item = snapshot && typeof snapshot === "object" ? snapshot : {};
     const card = document.createElement("div");
@@ -18049,7 +18250,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     function openCheckoutBenefitDiscountScreen(discountItem) {
       const detailScreen = openCheckoutBenefitDetailScreen({
         sheetTitle: "\u0414\u0435\u0442\u0430\u043b\u0438 \u0430\u043a\u0446\u0438\u0438",
-        showContentTitle: true,
+        showContentTitle: false,
         title: discountItem?.title || "\u0421\u043a\u0438\u0434\u043a\u0430",
       });
       detailScreen.appendChild(buildCheckoutBenefitDiscountDetailContent(discountItem));
@@ -18058,10 +18259,10 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     function openCheckoutBenefitPromoScreen(promoItem) {
       const detailScreen = openCheckoutBenefitDetailScreen({
         sheetTitle: "\u0414\u0435\u0442\u0430\u043b\u0438 \u0430\u043a\u0446\u0438\u0438",
-        showContentTitle: true,
+        showContentTitle: false,
         title: promoItem?.title || "\u041f\u0440\u043e\u043c\u043e\u043a\u043e\u0434",
       });
-      detailScreen.appendChild(buildCheckoutBenefitPromoDetailContent(promoItem));
+      detailScreen.appendChild(buildCheckoutBenefitDiscountDetailContent(promoItem));
     }
 
     function openCheckoutBenefitGiftScreen(giftItem) {

@@ -1,4 +1,4 @@
-(function () {
+﻿(function () {
   const categoriesListEl = document.getElementById("newOrderCategoriesList");
   const categoriesEmptyEl = document.getElementById("newOrderCategoriesEmpty");
   const productsGridEl = document.getElementById("newOrderProductsGrid");
@@ -228,6 +228,8 @@
     rightBenefitsRefreshTimerByOrder: new Map(),
     rightBenefitsTokenByClientId: new Map(),
     rightBenefitsClaimOptionsByOrder: new Map(),
+    rightBenefitsDiscountDetailsById: new Map(),
+    rightBenefitsDiscountDetailReqSeq: 0,
     rightAutoAddDismissedByOrder: new Map(),
     autoAdd: {
       groups: [],
@@ -7808,6 +7810,462 @@
     return wrap;
   }
 
+  function resolveRightOrderBenefitDiscountSourceId(item) {
+    const sourceDiscountId = Number(item?.source_discount_id || item?.discount_id || 0);
+    if (sourceDiscountId > 0) return sourceDiscountId;
+    const itemId = Number(item?.id || 0);
+    return itemId > 0 ? itemId : 0;
+  }
+
+  function formatRightOrderBenefitDiscountInfoAmount(value) {
+    const amount = Number(value || 0);
+    if (!(amount > 0)) return "—";
+    if (typeof money === "function") return money(amount);
+    return `${Math.round(amount)} ₽`;
+  }
+
+  function formatRightOrderBenefitDiscountInfoDate(value) {
+    if (!value) return "—";
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return "—";
+    return parsed.toLocaleDateString("ru-RU");
+  }
+
+  function parseRightOrderBenefitDiscountScheduleDays(value) {
+    if (Array.isArray(value)) {
+      return value
+        .map((item) => Number(item))
+        .filter((item) => Number.isInteger(item) && item >= 0 && item <= 6);
+    }
+    if (typeof value === "string" && value.trim()) {
+      try {
+        const parsed = JSON.parse(value);
+        if (Array.isArray(parsed)) {
+          return parsed
+            .map((item) => Number(item))
+            .filter((item) => Number.isInteger(item) && item >= 0 && item <= 6);
+        }
+      } catch {}
+    }
+    return [];
+  }
+
+  function formatRightOrderBenefitDiscountScheduleDaysText(value) {
+    const days = parseRightOrderBenefitDiscountScheduleDays(value);
+    if (!days.length) return "";
+    const uniqueDays = Array.from(new Set(days));
+    if (uniqueDays.length === 7) return "Ежедневно";
+    const sortOrder = [1, 2, 3, 4, 5, 6, 0];
+    const labels = {
+      1: "Пн",
+      2: "Вт",
+      3: "Ср",
+      4: "Чт",
+      5: "Пт",
+      6: "Сб",
+      0: "Вс",
+    };
+    uniqueDays.sort((a, b) => sortOrder.indexOf(a) - sortOrder.indexOf(b));
+    return uniqueDays.map((day) => labels[day] || "").filter(Boolean).join(", ");
+  }
+
+  function formatRightOrderBenefitDiscountTimeValue(value) {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    const matched = raw.match(/^(\d{2}:\d{2})/);
+    return matched ? matched[1] : raw;
+  }
+
+  function normalizeRightOrderBenefitDiscountMechanicType(discount) {
+    const mechanicTypeRaw = String(discount?.mechanic_type || discount?.mechanic?.type || "").trim().toLowerCase();
+    if (mechanicTypeRaw === "buy_x_get_y") return "buy_x_get_y";
+    if (mechanicTypeRaw === "threshold") return "threshold";
+    if (mechanicTypeRaw === "loyalty_progress") return "loyalty_progress";
+    return "simple_discount";
+  }
+
+  function buildRightOrderBenefitDiscountSubtitle(discount, fallbackItem = null) {
+    const mechanicType = normalizeRightOrderBenefitDiscountMechanicType(discount);
+    if (mechanicType === "buy_x_get_y") return "Акция 1+1";
+    if (mechanicType === "threshold") return "Пороговая акция";
+    if (mechanicType === "loyalty_progress") return "Накопительная акция";
+    const applyTo = String(discount?.apply_to || fallbackItem?.apply_to || "").trim().toLowerCase();
+    const targetMap = {
+      order: "весь заказ",
+      product: "товар",
+      category: "категорию",
+      combo: "комбо",
+    };
+    const target = targetMap[applyTo] || "заказ";
+    const activationMode = String(discount?.activation_mode || "").trim().toLowerCase();
+    if (activationMode === "promo_code") return `Промокод на ${target}`;
+    return `Скидка на ${target}`;
+  }
+
+  function buildRightOrderBenefitDiscountApplyText(discount, fallbackItem = null) {
+    const mechanicType = normalizeRightOrderBenefitDiscountMechanicType(discount);
+    if (mechanicType === "buy_x_get_y") {
+      const mechanic = discount?.mechanic && typeof discount.mechanic === "object" ? discount.mechanic : {};
+      const buyQty = Math.max(1, Number(mechanic?.buy_qty || 0) || 1);
+      const rewardQty = Math.max(1, Number(mechanic?.reward_qty || 0) || 1);
+      return `${buyQty}+${rewardQty}`;
+    }
+    if (mechanicType === "threshold") return "по порогам суммы";
+    if (mechanicType === "loyalty_progress") return "по накопительному порогу";
+    const applyTo = String(discount?.apply_to || fallbackItem?.apply_to || "").trim().toLowerCase();
+    const targetMap = {
+      order: "на весь заказ",
+      product: "на товар",
+      category: "на категорию",
+      combo: "на комбо",
+    };
+    return targetMap[applyTo] || "на заказ";
+  }
+
+  function formatRightOrderBenefitIssueModeText(value) {
+    const raw = String(value || "").trim().toLowerCase();
+    if (raw === "manual") return "Вручную";
+    if (raw === "code") return "Кодом";
+    return "Автоматически";
+  }
+
+  function buildRightOrderBenefitDiscountRules(discount) {
+    const rules = [];
+    const mechanicType = normalizeRightOrderBenefitDiscountMechanicType(discount);
+    if (mechanicType === "threshold") {
+      rules.push("Применяется лучшая ступень");
+    }
+    if (mechanicType === "loyalty_progress") {
+      const mechanic = discount?.mechanic && typeof discount.mechanic === "object" ? discount.mechanic : {};
+      rules.push(`Выдача награды: ${formatRightOrderBenefitIssueModeText(mechanic?.issue_mode)}`);
+    }
+    return rules;
+  }
+
+  function buildRightOrderBenefitDiscountAudienceText(discount) {
+    const customers = Array.isArray(discount?.customers) ? discount.customers : [];
+    if (!customers.length) return "Все клиенты";
+    const customerCount = customers.filter((item) => String(item?.entity_type || "").trim() !== "category").length;
+    const categoryCount = customers.filter((item) => String(item?.entity_type || "").trim() === "category").length;
+    if (customerCount > 0 && categoryCount > 0) return `Клиенты ${customerCount}, категории ${categoryCount}`;
+    if (categoryCount > 0) return categoryCount === 1 ? "Категория клиентов" : `Категории клиентов (${categoryCount})`;
+    return customerCount === 1 ? "Выбранный клиент" : `Выбранные клиенты (${customerCount})`;
+  }
+
+  function formatRightOrderBenefitDiscountBadgeText(discount, fallbackItem = null) {
+    const fallbackText = String(fallbackItem?.badge_text || "").trim() || "Скидка";
+    const type = String(discount?.discount_type || fallbackItem?.discount_type || "").trim().toLowerCase();
+    const value = Number(discount?.discount_value ?? fallbackItem?.discount_value ?? 0);
+    if (type === "fixed" && value > 0) return `-${value} ₽`;
+    if (type === "special_price" && value > 0) return `${value} ₽`;
+    if (type === "percent" && value > 0) return `-${Math.round(value)}%`;
+    return fallbackText;
+  }
+
+  function buildRightOrderBenefitDiscountMainBadgeDescriptor(discount, fallbackItem = null) {
+    const text = formatRightOrderBenefitDiscountBadgeText(discount, fallbackItem);
+    if (!text) return { kind: "none", text: "", icon: "", label: "" };
+    return { kind: "text", text, icon: "", label: text };
+  }
+
+  function buildRightOrderBenefitDiscountMarketingContent(discount, fallbackItem = null) {
+    const sourceDiscount = discount && typeof discount === "object" ? discount : {};
+    const sourceItem = fallbackItem && typeof fallbackItem === "object" ? fallbackItem : {};
+    const promo = sourceDiscount?.promo && typeof sourceDiscount.promo === "object" ? sourceDiscount.promo : {};
+    const activationMode = String(sourceDiscount?.activation_mode || "").trim().toLowerCase();
+    const promoEnabled = activationMode === "promo_code" || promo?.enabled === true;
+    const promoCodeMode = String(promo?.code_mode || sourceDiscount?.promo_code_mode || "shared").trim().toLowerCase();
+    const promoCodeValue = promoCodeMode === "unique"
+      ? "Уникальные коды"
+      : (String(promo?.shared_code || sourceDiscount?.promo_code || "").trim() || "—");
+    const titleText = String(sourceDiscount?.title || sourceItem?.title || "").trim() || "Скидка";
+    const subtitleText = buildRightOrderBenefitDiscountSubtitle(sourceDiscount, sourceItem);
+    const mainBadge = buildRightOrderBenefitDiscountMainBadgeDescriptor(sourceDiscount, sourceItem);
+    const isActive = sourceDiscount?.is_active !== false && Number(sourceDiscount?.is_active || 1) !== 0;
+    const hideInBenefits = sourceDiscount?.hide_in_benefits === true || Number(sourceDiscount?.hide_in_benefits || 0) === 1;
+    const isStackable = sourceDiscount?.is_stackable === true || Number(sourceDiscount?.is_stackable || 0) === 1;
+    const usageCount = Number(sourceDiscount?.usage_count || 0);
+    const usageLimit = Number(sourceDiscount?.usage_limit || 0);
+    const usagePerCustomer = Number(sourceDiscount?.usage_per_customer || 0);
+    const minOrderAmount = Number(sourceDiscount?.min_order_amount || 0);
+    const maxDiscountAmount = Number(sourceDiscount?.max_discount_amount || 0);
+    const rules = buildRightOrderBenefitDiscountRules(sourceDiscount);
+    const products = Array.isArray(sourceDiscount?.products) && sourceDiscount.products.length
+      ? sourceDiscount.products
+      : (Array.isArray(sourceItem?.products) ? sourceItem.products : []);
+    const customers = Array.isArray(sourceDiscount?.customers) ? sourceDiscount.customers : [];
+    const weekdaysText = formatRightOrderBenefitDiscountScheduleDaysText(sourceDiscount?.schedule_days);
+    const timeStart = formatRightOrderBenefitDiscountTimeValue(sourceDiscount?.schedule_time_start);
+    const timeEnd = formatRightOrderBenefitDiscountTimeValue(sourceDiscount?.schedule_time_end);
+    const timeText = timeStart && timeEnd
+      ? `${timeStart} — ${timeEnd}`
+      : (timeStart ? `с ${timeStart}` : (timeEnd ? `до ${timeEnd}` : ""));
+    const periodText = sourceDiscount?.starts_at || sourceDiscount?.ends_at
+      ? `${formatRightOrderBenefitDiscountInfoDate(sourceDiscount?.starts_at)} — ${formatRightOrderBenefitDiscountInfoDate(sourceDiscount?.ends_at)}`
+      : "Без ограничений";
+    const disabledReasonText = String(sourceItem?.disabled_reason || "").trim();
+    const economyText = maxDiscountAmount > 0
+      ? `Экономия: до ${formatRightOrderBenefitDiscountInfoAmount(maxDiscountAmount)}`
+      : "Экономия: без ограничения";
+
+    const wrap = document.createElement("div");
+
+    const hero = document.createElement("div");
+    hero.className = "discount-info-hero";
+
+    const heroMain = document.createElement("div");
+    heroMain.className = "discount-info-hero-main";
+
+    const heroContent = document.createElement("div");
+    heroContent.className = "discount-info-hero-content";
+
+    const badges = document.createElement("div");
+    badges.className = "discount-info-badges discount-info-badges--right shop-checkout-benefit-discount-meta";
+
+    if (mainBadge.kind !== "none") {
+      const mainBadgeEl = document.createElement("span");
+      mainBadgeEl.className = "discount-info-hero-badge shop-checkout-benefit-badge shop-checkout-benefit-badge--accent shop-checkout-benefit-discount-badge";
+      if (mainBadge.kind === "icon") {
+        mainBadgeEl.classList.add("shop-checkout-benefit-badge--icon");
+        mainBadgeEl.innerHTML = `<i class="fas ${mainBadge.icon}" aria-hidden="true"></i>`;
+        mainBadgeEl.setAttribute("title", mainBadge.label);
+        mainBadgeEl.setAttribute("aria-label", mainBadge.label);
+      } else {
+        mainBadgeEl.textContent = mainBadge.text;
+      }
+      badges.appendChild(mainBadgeEl);
+    }
+
+    const statusBadgeEl = document.createElement("span");
+    statusBadgeEl.className = `discount-info-badge shop-checkout-benefit-badge shop-checkout-benefit-badge--icon ${isActive ? "shop-checkout-benefit-badge--accent" : "shop-checkout-benefit-badge--neutral"}`;
+    statusBadgeEl.setAttribute("title", isActive ? "Активна" : "Неактивна");
+    statusBadgeEl.setAttribute("aria-label", isActive ? "Активна" : "Неактивна");
+    statusBadgeEl.innerHTML = `<i class="fas fa-power-off" aria-hidden="true"></i>`;
+    badges.appendChild(statusBadgeEl);
+
+    const benefitsBadgeEl = document.createElement("span");
+    benefitsBadgeEl.className = "discount-info-badge shop-checkout-benefit-badge shop-checkout-benefit-badge--icon shop-checkout-benefit-badge--accent";
+    benefitsBadgeEl.setAttribute("title", hideInBenefits ? "Скрыта в выгодах" : "Показывается в выгодах");
+    benefitsBadgeEl.setAttribute("aria-label", hideInBenefits ? "Скрыта в выгодах" : "Показывается в выгодах");
+    benefitsBadgeEl.innerHTML = `<i class="fas ${hideInBenefits ? "fa-eye-slash" : "fa-eye"}" aria-hidden="true"></i>`;
+    badges.appendChild(benefitsBadgeEl);
+
+    if (isStackable) {
+      const stackBadgeEl = document.createElement("span");
+      stackBadgeEl.className = "discount-info-badge shop-checkout-benefit-badge shop-checkout-benefit-badge--icon shop-checkout-benefit-badge--accent";
+      stackBadgeEl.setAttribute("title", "Можно совмещать");
+      stackBadgeEl.setAttribute("aria-label", "Можно совмещать");
+      stackBadgeEl.innerHTML = `<i class="fas fa-link" aria-hidden="true"></i>`;
+      badges.appendChild(stackBadgeEl);
+    }
+    heroContent.appendChild(badges);
+
+    const titleEl = document.createElement("div");
+    titleEl.className = "discount-info-title shop-profile-discount-title";
+    titleEl.textContent = titleText;
+    heroContent.appendChild(titleEl);
+
+    if (promoEnabled) {
+      const promoWrap = document.createElement("div");
+      promoWrap.className = "discount-info-hero-promo";
+      const promoLabel = document.createElement("div");
+      promoLabel.className = "discount-info-hero-promo-label";
+      promoLabel.textContent = "Промокод";
+      const promoValue = document.createElement("div");
+      promoValue.className = "discount-info-hero-promo-value shop-checkout-benefit-main-value is-code";
+      promoValue.textContent = promoCodeValue;
+      promoWrap.appendChild(promoLabel);
+      promoWrap.appendChild(promoValue);
+      heroContent.appendChild(promoWrap);
+    }
+
+    const subtitleEl = document.createElement("div");
+    subtitleEl.className = "discount-info-hero-subtitle";
+    subtitleEl.textContent = subtitleText;
+    heroContent.appendChild(subtitleEl);
+
+    heroMain.appendChild(heroContent);
+
+    const economyEl = document.createElement("div");
+    economyEl.className = "discount-info-hero-economy";
+    economyEl.textContent = economyText;
+    heroMain.appendChild(economyEl);
+
+    hero.appendChild(heroMain);
+    wrap.appendChild(hero);
+
+    const conditionsBlock = document.createElement("div");
+    conditionsBlock.className = "discount-info-block";
+    conditionsBlock.innerHTML = `
+      <div class="discount-info-block-header"><i class="fas fa-map-marker-alt"></i> Условия</div>
+      <div class="discount-info-block-body">
+        <div class="discount-info-row"><span class="discount-info-row-label">Применяется:</span><span class="discount-info-row-value"></span></div>
+        <div class="discount-info-row"><span class="discount-info-row-label">Минимальная сумма:</span><span class="discount-info-row-value"></span></div>
+        <div class="discount-info-row"><span class="discount-info-row-label">Максимальная скидка:</span><span class="discount-info-row-value"></span></div>
+      </div>
+    `;
+    const conditionRows = conditionsBlock.querySelectorAll(".discount-info-row-value");
+    if (conditionRows[0]) conditionRows[0].textContent = buildRightOrderBenefitDiscountApplyText(sourceDiscount, sourceItem);
+    if (conditionRows[1]) conditionRows[1].textContent = minOrderAmount > 0 ? formatRightOrderBenefitDiscountInfoAmount(minOrderAmount) : "без минимальной суммы";
+    if (conditionRows[2]) conditionRows[2].textContent = maxDiscountAmount > 0 ? formatRightOrderBenefitDiscountInfoAmount(maxDiscountAmount) : "без ограничения";
+    wrap.appendChild(conditionsBlock);
+
+    const limitsBlock = document.createElement("div");
+    limitsBlock.className = "discount-info-block";
+    limitsBlock.innerHTML = `
+      <div class="discount-info-block-header"><i class="fas fa-exclamation-triangle"></i> Ограничения</div>
+      <div class="discount-info-block-body">
+        <div class="discount-info-row"><span class="discount-info-row-label">На клиента:</span><span class="discount-info-row-value"></span></div>
+        <div class="discount-info-row"><span class="discount-info-row-label">Общий лимит:</span><span class="discount-info-row-value"></span></div>
+        <div class="discount-info-row"><span class="discount-info-row-label">Использовано:</span><span class="discount-info-row-value"></span></div>
+        <div class="discount-info-row discount-info-row--full hidden"><span class="discount-info-row-label">Доп. правила:</span><div class="discount-info-rules"></div></div>
+      </div>
+    `;
+    const limitRows = limitsBlock.querySelectorAll(".discount-info-row-value");
+    if (limitRows[0]) limitRows[0].textContent = usagePerCustomer > 0 ? `${usagePerCustomer} на клиента` : "без лимита на клиента";
+    if (limitRows[1]) limitRows[1].textContent = usageLimit > 0 ? String(usageLimit) : "без общего лимита";
+    if (limitRows[2]) limitRows[2].textContent = String(usageCount);
+    const rulesRowEl = limitsBlock.querySelector(".discount-info-row.discount-info-row--full");
+    const rulesListEl = limitsBlock.querySelector(".discount-info-rules");
+    if (rulesListEl) {
+      rulesListEl.innerHTML = "";
+      rules.forEach((rule) => {
+        const ruleEl = document.createElement("div");
+        ruleEl.className = "discount-info-rule-item";
+        ruleEl.textContent = rule;
+        rulesListEl.appendChild(ruleEl);
+      });
+    }
+    if (rulesRowEl) rulesRowEl.classList.toggle("hidden", !rules.length);
+    wrap.appendChild(limitsBlock);
+
+    const periodBlock = document.createElement("div");
+    periodBlock.className = "discount-info-block";
+    periodBlock.innerHTML = `
+      <div class="discount-info-block-header"><i class="fas fa-calendar-alt"></i> Срок действия</div>
+      <div class="discount-info-block-body">
+        <div class="discount-info-row"><span class="discount-info-row-value"></span></div>
+        <div class="discount-info-row hidden"><span class="discount-info-row-label">Дни недели:</span><span class="discount-info-row-value"></span></div>
+        <div class="discount-info-row hidden"><span class="discount-info-row-label">Время:</span><span class="discount-info-row-value"></span></div>
+      </div>
+    `;
+    const periodRows = periodBlock.querySelectorAll(".discount-info-row");
+    const periodValues = periodBlock.querySelectorAll(".discount-info-row-value");
+    if (periodValues[0]) periodValues[0].textContent = periodText;
+    if (periodValues[1]) periodValues[1].textContent = weekdaysText || "—";
+    if (periodValues[2]) periodValues[2].textContent = timeText || "—";
+    if (periodRows[1]) periodRows[1].classList.toggle("hidden", !weekdaysText);
+    if (periodRows[2]) periodRows[2].classList.toggle("hidden", !timeText);
+    wrap.appendChild(periodBlock);
+
+    const bottomGrid = document.createElement("div");
+    bottomGrid.className = "discount-info-bottom-grid";
+    bottomGrid.innerHTML = `
+      <div class="discount-info-mini-card">
+        <div class="discount-info-mini-header"><i class="fas fa-check-circle"></i> Доступно</div>
+        <div class="discount-info-mini-body">${isStackable ? "Можно совмещать с другими акциями" : "Не совмещается с другими акциями"}</div>
+      </div>
+      <div class="discount-info-mini-card">
+        <div class="discount-info-mini-header"><i class="fas fa-users"></i> Аудитория</div>
+        <div class="discount-info-mini-body">${buildRightOrderBenefitDiscountAudienceText(sourceDiscount)}</div>
+      </div>
+    `;
+    wrap.appendChild(bottomGrid);
+
+    if (products.length) {
+      const productsSection = document.createElement("div");
+      productsSection.className = "discount-info-section";
+      const title = document.createElement("div");
+      title.className = "discount-info-section-title";
+      title.textContent = "Привязанные позиции";
+      productsSection.appendChild(title);
+      const chips = document.createElement("div");
+      chips.className = "discount-chips";
+      products.forEach((product) => {
+        const chip = document.createElement("span");
+        const entityType = String(product?.entity_type || product?.type || "").trim().toLowerCase();
+        chip.className = `discount-chip ${entityType === "category" ? "is-category" : (entityType === "combo" ? "is-combo" : "")}`.trim();
+        chip.textContent = String(product?.title || product?.name || "").trim() || `#${Number(product?.entity_id || product?.id || 0)}`;
+        chips.appendChild(chip);
+      });
+      productsSection.appendChild(chips);
+      wrap.appendChild(productsSection);
+    }
+
+    if (customers.length) {
+      const customersSection = document.createElement("div");
+      customersSection.className = "discount-info-section";
+      const title = document.createElement("div");
+      title.className = "discount-info-section-title";
+      title.textContent = "Выбранные клиенты";
+      customersSection.appendChild(title);
+      const chips = document.createElement("div");
+      chips.className = "discount-chips";
+      customers.forEach((customer) => {
+        const chip = document.createElement("span");
+        const entityType = String(customer?.entity_type || "").trim().toLowerCase();
+        chip.className = `discount-chip ${entityType === "category" ? "is-category" : ""}`.trim();
+        chip.textContent = String(customer?.title || customer?.name || "").trim() || `#${Number(customer?.entity_id || customer?.id || 0)}`;
+        chips.appendChild(chip);
+      });
+      customersSection.appendChild(chips);
+      wrap.appendChild(customersSection);
+    }
+
+    if (disabledReasonText) {
+      const note = document.createElement("div");
+      note.className = "shop-checkout-benefit-disabled-reason";
+      note.textContent = disabledReasonText;
+      wrap.appendChild(note);
+    }
+
+    return wrap;
+  }
+
+  async function loadRightOrderBenefitDiscountDetails(discountId, opts = {}) {
+    const id = Number(discountId || 0);
+    if (!(id > 0)) return null;
+    if (opts?.force !== true && state.rightBenefitsDiscountDetailsById.has(id)) {
+      return state.rightBenefitsDiscountDetailsById.get(id) || null;
+    }
+    const json = await apiJson(`/api/admin/discounts/${id}`);
+    const discount = json?.discount && typeof json.discount === "object" ? json.discount : null;
+    if (discount) {
+      state.rightBenefitsDiscountDetailsById.set(id, discount);
+      return discount;
+    }
+    return null;
+  }
+
+  async function renderRightOrderBenefitDiscountDetailContent(host, item, { orderId = 0 } = {}) {
+    if (!host) return;
+    host.innerHTML = "";
+    host.appendChild(buildRightOrderBenefitDiscountMarketingContent(null, item));
+    const discountId = resolveRightOrderBenefitDiscountSourceId(item);
+    if (!(discountId > 0)) return;
+
+    const reqSeq = Number(state.rightBenefitsDiscountDetailReqSeq || 0) + 1;
+    state.rightBenefitsDiscountDetailReqSeq = reqSeq;
+    try {
+      const discount = await loadRightOrderBenefitDiscountDetails(discountId);
+      if (!discount) return;
+      if (Number(state.rightBenefitsDiscountDetailReqSeq || 0) !== reqSeq) return;
+      if (String(state.benefitsModal.screen || "main") !== "detail") return;
+      if (Number(state.benefitsModal.orderId || 0) !== Number(orderId || 0)) return;
+      const currentPayload = state.benefitsModal.payload && typeof state.benefitsModal.payload === "object"
+        ? state.benefitsModal.payload
+        : null;
+      if (String(currentPayload?.kind || "").trim() !== "discount") return;
+      const currentDiscountId = resolveRightOrderBenefitDiscountSourceId(currentPayload?.item || {});
+      if (currentDiscountId !== discountId) return;
+
+      host.innerHTML = "";
+      host.appendChild(buildRightOrderBenefitDiscountMarketingContent(discount, item));
+    } catch (error) {
+      console.warn("Failed to load discount details for benefits modal:", discountId, error);
+    }
+  }
+
   function buildRightOrderBenefitCardDetailContent(item, {
     primaryText = "",
     primaryClassName = "",
@@ -8024,6 +8482,15 @@
     shell.className = "shop-checkout-benefit-detail-screen";
     body.appendChild(shell);
 
+    const detailKind = String(payload?.kind || "").trim();
+    if (detailKind === "discount") {
+      const discountHost = document.createElement("div");
+      discountHost.className = "shop-checkout-benefit-discount-detail-screen";
+      shell.appendChild(discountHost);
+      void renderRightOrderBenefitDiscountDetailContent(discountHost, payload?.item || {}, { orderId: id });
+      return;
+    }
+
     const contentTitle = document.createElement("div");
     contentTitle.className = "shop-checkout-benefit-detail-title";
     contentTitle.textContent = String(payload?.item?.title || payload?.title || "Детали акции");
@@ -8038,10 +8505,7 @@
     }
 
     let content = null;
-    const detailKind = String(payload?.kind || "").trim();
-    if (detailKind === "discount") {
-      content = buildRightOrderBenefitDiscountDetailContent(payload?.item);
-    } else if (detailKind === "promo") {
+    if (detailKind === "promo") {
       content = buildRightOrderBenefitPromoDetailContent(payload?.item);
     } else if (detailKind === "gift") {
       content = buildRightOrderBenefitRewardPreviewContent(buildRightOrderBenefitGiftPreview(payload?.item));
@@ -8053,7 +8517,6 @@
       shell.appendChild(content);
     }
   }
-
   function getRightBenefitsOverlayElements() {
     const backdrop = document.getElementById("newOrderBenefitsOverlay");
     const title = document.getElementById("newOrderBenefitsTitle");
@@ -8694,6 +9157,15 @@
     const shell = document.createElement("div");
     shell.className = "shop-checkout-benefit-detail-screen";
     body.appendChild(shell);
+
+    const detailKind = String(payload?.kind || "").trim();
+    if (detailKind === "discount") {
+      const discountHost = document.createElement("div");
+      discountHost.className = "shop-checkout-benefit-discount-detail-screen";
+      shell.appendChild(discountHost);
+      void renderRightOrderBenefitDiscountDetailContent(discountHost, payload?.item || {}, { orderId: id });
+      return;
+    }
 
     const formatGiftClaimCount = (count) => {
       const normalized = Math.max(0, Number(count || 0));
@@ -18130,4 +18602,7 @@
   bindEvents();
   load();
 })();
+
+
+
 
