@@ -1788,30 +1788,16 @@
   }
 
   function getClientBenefitsOverlayElements() {
-    const backdrop = $("#clientBenefitsOverlay");
-    const title = $("#clientBenefitsTitle");
-    const closeBtn = $("#clientBenefitsCloseBtn");
-    const modeToggle = $("#clientBenefitsModeToggle");
-    const body = $("#clientBenefitsBody");
-    return { backdrop, title, closeBtn, modeToggle, body };
+    return window.AdminBenefitsModal?.getElements() || {};
   }
 
   function setClientBenefitsModeToggleState(mode = null) {
-    const { modeToggle } = getClientBenefitsOverlayElements();
-    if (!modeToggle) return;
-    const activeMode = normalizeClientBenefitsMode(mode || state.clientBenefitsModal.mode);
-    const buttons = Array.from(modeToggle.querySelectorAll(".shop-delivery-toggle-btn"));
-    buttons.forEach((button, index) => {
-      const buttonMode = index === 1 ? "all" : "customer";
-      const isActive = buttonMode === activeMode;
-      button.classList.toggle("is-active", isActive);
-      button.setAttribute("aria-pressed", isActive ? "true" : "false");
-      button.dataset.mode = buttonMode;
-    });
+    window.AdminBenefitsModal?.setModeToggleState(normalizeClientBenefitsMode(mode || state.clientBenefitsModal.mode));
   }
 
   function ensureClientBenefitsOverlay() {
-    if ($("#clientBenefitsOverlay")) return;
+    window.AdminBenefitsModal?.ensure();
+    return;
     const wrap = document.createElement("div");
     wrap.id = "clientBenefitsOverlay";
     wrap.className = "new-order-option-overlay hidden";
@@ -1867,9 +1853,7 @@
   }
 
   function closeClientBenefitsOverlay() {
-    const { backdrop, body } = getClientBenefitsOverlayElements();
-    if (backdrop) backdrop.classList.add("hidden");
-    if (body) body.innerHTML = "";
+    window.AdminBenefitsModal?.hide();
     state.clientBenefitsModal.customerId = null;
     state.clientBenefitsModal.mode = "customer";
     state.clientBenefitsModal.loading = false;
@@ -1953,6 +1937,11 @@
   }
 
   function getClientBenefitsRenderData(previewData) {
+    return window.AdminBenefitsModal?.buildRenderData(previewData, {
+      mode: normalizeClientBenefitsMode(previewData?.mode),
+      isCompletedDiscount: isClientBenefitsCompletedDiscountBenefit,
+      isCompletedPromo: isClientBenefitsCompletedPromoBenefit,
+    }) || { discounts: [], promo_codes: [], gifts: [], progress: [], completed: [] };
     const data = previewData && typeof previewData === "object" ? previewData : {};
     const mode = normalizeClientBenefitsMode(data?.mode);
     const discountsRaw = Array.isArray(data?.discounts) ? data.discounts.slice() : [];
@@ -2000,6 +1989,7 @@
   }
 
   function createClientBenefitsSection(title, emptyText, opts = {}) {
+    return window.AdminBenefitsModal?.createSection(title, emptyText, opts) || null;
     const section = document.createElement("section");
     section.className = "shop-checkout-benefits-section";
 
@@ -2033,6 +2023,8 @@
   }
 
   function setClientBenefitsSectionItems(sectionRef, items, renderItem) {
+    window.AdminBenefitsModal?.setSectionItems(sectionRef, items, renderItem);
+    return;
     if (!sectionRef?.list || !sectionRef?.empty || !sectionRef?.countEl) return;
     const rows = Array.isArray(items) ? items : [];
     sectionRef.list.innerHTML = "";
@@ -2045,6 +2037,7 @@
   }
 
   function createClientBenefitIcon(iconClass) {
+    return window.AdminBenefitsModal?.createIcon(iconClass) || null;
     const icon = document.createElement("i");
     icon.className = `fas ${iconClass}`;
     icon.setAttribute("aria-hidden", "true");
@@ -2052,6 +2045,7 @@
   }
 
   function getClientBenefitRewardIconName(kind) {
+    return window.AdminBenefitsModal?.getRewardIconName(kind) || "fa-gift";
     const normalized = String(kind || "").trim().toLowerCase();
     if (normalized === "promo_code") return "fa-ticket-alt";
     if (normalized === "discount") return "fa-percent";
@@ -2083,6 +2077,14 @@
   }
 
   function renderClientBenefitDiscountCard(item) {
+    return window.AdminBenefitsModal?.renderDiscountCard(item, {
+      isSelected: item?.is_selected === true,
+      canToggle: item?.is_selected === true || isClientBenefitSelectable(item),
+      isStackable: isClientBenefitStackable(item),
+      onAction: (entry) => handleClientBenefitsDiscountAction(entry),
+      isBusy: !!state.clientBenefitsModal.busyActionKey,
+      disabledReason: item?.is_applicable !== true ? item?.disabled_reason : "",
+    }) || null;
     const isSelected = item?.is_selected === true;
     const canToggle = isSelected || isClientBenefitSelectable(item);
     const card = document.createElement("div");
@@ -2138,6 +2140,21 @@
   }
 
   function renderClientBenefitPromoCard(item) {
+    {
+      const actionMode = String(item?.action_mode || "select").trim().toLowerCase() || "select";
+      return window.AdminBenefitsModal?.renderPromoCard(item, {
+        isSelected: item?.is_selected === true,
+        canToggle: actionMode === "redeem_reward"
+          ? item?.is_applicable === true
+          : (item?.is_selected === true || isClientBenefitSelectable(item)),
+        isStackable: isClientBenefitStackable(item),
+        codeText: String(item?.code || "").trim() || "-",
+        actionLabel: actionMode === "redeem_reward" ? "Получить" : "Применить",
+        onAction: (entry) => handleClientBenefitsPromoAction(entry),
+        isBusy: !!state.clientBenefitsModal.busyActionKey,
+        disabledReason: item?.is_applicable !== true ? item?.disabled_reason : "",
+      }) || null;
+    }
     const code = String(item?.code || "").trim();
     const isSelected = item?.is_selected === true;
     const actionMode = String(item?.action_mode || "select").trim().toLowerCase() || "select";
@@ -2199,6 +2216,33 @@
   }
 
   function renderClientBenefitGiftCard(item) {
+    {
+      const rewardPreview = item?.reward_preview && typeof item.reward_preview === "object" ? item.reward_preview : {};
+      const products = getClientBenefitGiftProducts(item);
+      const firstProduct = products[0] || null;
+      const actionMode = String(item?.action_mode || "receive").trim().toLowerCase() || "receive";
+      const titleText = String(item?.title || rewardPreview?.title || firstProduct?.title || "").trim() || "Подарок";
+      const photoUrl = String(item?.photo_url || rewardPreview?.photo_url || firstProduct?.photo_url || "").trim();
+      const actionKey = getClientBenefitsActionKey("gift", item);
+      const isBusy = state.clientBenefitsModal.busyActionKey === actionKey;
+      const canExecute = actionMode === "claim_unique_promo"
+        && item?.is_receivable !== false
+        && Number(item?.discount_id || 0) > 0;
+      const disabledReason = String(item?.disabled_reason || "").trim();
+      return window.AdminBenefitsModal?.renderGiftCard(item, {
+        titleText,
+        photoUrl,
+        actionLabel: actionMode === "claim_unique_promo" ? "Забрать" : "Получить",
+        canExecute,
+        onAction: (entry) => handleClientBenefitsGiftAction(entry),
+        isBusy,
+        disableWhileBusy: !!state.clientBenefitsModal.busyActionKey,
+        rewardKind: rewardPreview?.kind || rewardPreview?.icon_kind || "gift",
+        disabledReason: disabledReason || (actionMode !== "claim_unique_promo"
+          ? "Получение подарков доступно при оформлении заказа."
+          : ""),
+      }) || null;
+    }
     const rewardPreview = item?.reward_preview && typeof item.reward_preview === "object" ? item.reward_preview : {};
     const products = getClientBenefitGiftProducts(item);
     const firstProduct = products[0] || null;
@@ -2264,6 +2308,19 @@
   }
 
   function renderClientBenefitProgressCard(item) {
+    {
+      const actionKey = getClientBenefitsActionKey("progress", item);
+      const rewardPreview = item?.reward_preview && typeof item.reward_preview === "object" ? item.reward_preview : {};
+      return window.AdminBenefitsModal?.renderProgressCard(item, {
+        canAction: item?.is_claimable === true && !state.clientBenefitsModal.busyActionKey,
+        isBusy: state.clientBenefitsModal.busyActionKey === actionKey,
+        rewardPhotoUrl: rewardPreview?.photo_url,
+        rewardTitle: rewardPreview?.title || item?.title || "Награда",
+        rewardKind: rewardPreview?.kind || rewardPreview?.icon_kind || item?.reward_kind || "gift",
+        onAction: (entry) => handleClientBenefitsProgressAction(entry),
+        disabledReason: item?.is_applicable !== true ? item?.disabled_reason : "",
+      }) || null;
+    }
     const ratio = Math.max(0, Math.min(1, Number(item?.progress_ratio || 0)));
     const canClaim = item?.is_claimable === true && !state.clientBenefitsModal.busyActionKey;
     const actionKey = getClientBenefitsActionKey("progress", item);
@@ -2349,6 +2406,7 @@
   }
 
   function renderClientBenefitDisplayCard(item) {
+    return window.AdminBenefitsModal?.renderDisplayCard(item) || null;
     const card = document.createElement("div");
     card.className = "shop-profile-card shop-profile-discount-card shop-checkout-benefit-display-card";
 
@@ -2391,6 +2449,67 @@
   }
 
   function renderClientBenefitsOverlay() {
+    {
+      ensureClientBenefitsOverlay();
+      window.AdminBenefitsModal?.show({
+        title: "Выгоды",
+        showBack: false,
+        showModeToggle: true,
+        mode: state.clientBenefitsModal.mode,
+        onClose: closeClientBenefitsOverlay,
+        onModeChange: (nextMode) => {
+          void switchClientBenefitsMode(nextMode);
+        },
+      });
+      const { body } = getClientBenefitsOverlayElements();
+      if (!body) return;
+      body.innerHTML = "";
+
+      const shell = document.createElement("div");
+      shell.className = "shop-checkout-benefits-sheet";
+      body.appendChild(shell);
+
+      const hint = document.createElement("div");
+      hint.className = "shop-checkout-benefits-hint";
+      hint.textContent = "Здесь можно выбрать одну скидку и один промокод. Если у обоих включено совмещение, они применяются вместе.";
+      shell.appendChild(hint);
+
+      if (state.clientBenefitsModal.loading) {
+        const loading = document.createElement("div");
+        loading.className = "shop-checkout-benefits-loading";
+        loading.textContent = "Загрузка выгод...";
+        shell.appendChild(loading);
+        return;
+      }
+
+      if (state.clientBenefitsModal.error) {
+        const errorCard = document.createElement("div");
+        errorCard.className = "shop-profile-card shop-checkout-benefits-empty";
+        errorCard.textContent = getClientBenefitsActionErrorMessage({ message: state.clientBenefitsModal.error });
+        shell.appendChild(errorCard);
+        return;
+      }
+
+      const data = getClientBenefitsRenderData(state.clientBenefitsModal.data || {});
+      const discountsSection = createClientBenefitsSection("Скидки", "Для этого клиента доступных скидок нет.");
+      const promosSection = createClientBenefitsSection("Промокоды", "Для этого клиента доступных промокодов нет.");
+      const giftsSection = createClientBenefitsSection("Подарки", "Здесь появятся доступные подарки.", { horizontal: true });
+      const progressSection = createClientBenefitsSection("Накопления", "Здесь появится прогресс накопительных акций.");
+      const completedSection = createClientBenefitsSection("Завершенные", "Здесь появятся завершенные выгоды.");
+
+      shell.appendChild(discountsSection.section);
+      shell.appendChild(promosSection.section);
+      shell.appendChild(giftsSection.section);
+      shell.appendChild(progressSection.section);
+      shell.appendChild(completedSection.section);
+
+      setClientBenefitsSectionItems(discountsSection, data.discounts, renderClientBenefitDiscountCard);
+      setClientBenefitsSectionItems(promosSection, data.promo_codes, renderClientBenefitPromoCard);
+      setClientBenefitsSectionItems(giftsSection, data.gifts, renderClientBenefitGiftCard);
+      setClientBenefitsSectionItems(progressSection, data.progress, renderClientBenefitProgressCard);
+      setClientBenefitsSectionItems(completedSection, data.completed, renderClientBenefitDisplayCard);
+      return;
+    }
     ensureClientBenefitsOverlay();
     const { backdrop, title, body } = getClientBenefitsOverlayElements();
     if (!backdrop || !title || !body) return;
