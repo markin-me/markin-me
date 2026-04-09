@@ -1,5 +1,6 @@
 const express = require('express');
 const crypto = require('crypto');
+const discountHelpers = require('../helpers/discounts');
 const {
   customerAddressSelectFields,
   ensureCustomerAddressIdentityColumns,
@@ -17,6 +18,509 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
       return crypto.randomUUID().replace(/-/g, '');
     }
     return crypto.randomBytes(16).toString('hex');
+  }
+
+  function benefitText(value) {
+    return typeof value === 'string' ? value.trim() : '';
+  }
+
+  function parseBenefitObject(value, fallback = {}) {
+    if (!value) return fallback;
+    if (typeof value === 'object' && !Array.isArray(value)) return value;
+    if (typeof value === 'string') {
+      try {
+        const parsed = JSON.parse(value);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          return parsed;
+        }
+      } catch {}
+    }
+    return fallback;
+  }
+
+  function formatBenefitBadgeText(discountType, discountValue) {
+    const type = benefitText(discountType).toLowerCase();
+    const value = Number(discountValue);
+    if (!Number.isFinite(value) || value <= 0) return '';
+    if (type === 'percent') return `-${Math.round(value)}%`;
+    if (type === 'fixed') return `-${value} ₽`;
+    if (type === 'special_price') return `${value} ₽`;
+    return '';
+  }
+
+  function formatBenefitApplyScopeText(applyTo) {
+    const raw = benefitText(applyTo).toLowerCase();
+    if (raw === 'order') return 'На весь заказ';
+    if (raw === 'product') return 'На товары';
+    if (raw === 'category') return 'На категории товаров';
+    if (raw === 'combo') return 'На комбо';
+    return '';
+  }
+
+  function normalizeBenefitMechanicType(value) {
+    const raw = benefitText(value).toLowerCase();
+    if (['simple_discount', 'buy_x_get_y', 'threshold', 'loyalty_progress'].includes(raw)) return raw;
+    return 'simple_discount';
+  }
+
+  function normalizeBenefitProgressSlotCount(value) {
+    const normalized = Number(value || 0);
+    if (!Number.isFinite(normalized)) return 0;
+    return Math.max(0, Math.floor(normalized));
+  }
+
+  function formatBenefitProgressText(progressBasis, currentValue, thresholdValue) {
+    const safeCurrent = Math.max(0, Number(currentValue || 0));
+    const safeThreshold = Math.max(0, Number(thresholdValue || 0));
+    if (benefitText(progressBasis).toLowerCase() === 'amount') {
+      return `${Math.min(safeCurrent, safeThreshold || safeCurrent)} / ${safeThreshold || 0} ₽`;
+    }
+    return `${Math.min(safeCurrent, safeThreshold || safeCurrent)} / ${safeThreshold || 0}`;
+  }
+
+  function buildBenefitProgressVisual(progressBasis, thresholdValue) {
+    const safeThreshold = Math.max(0, Number(thresholdValue || 0));
+    if (benefitText(progressBasis).toLowerCase() === 'amount') {
+      return {
+        mode: 'amount',
+        current_value: 0,
+        threshold_value: safeThreshold,
+        progress_ratio: 0,
+      };
+    }
+    const slotCount = normalizeBenefitProgressSlotCount(safeThreshold);
+    const slotKind = benefitText(progressBasis).toLowerCase() === 'orders' ? 'order' : 'item';
+    return {
+      mode: slotKind === 'order' ? 'orders' : 'items',
+      slot_count: slotCount,
+      filled_count: 0,
+      slots: Array.from({ length: slotCount }, (_, index) => ({
+        index: index + 1,
+        kind: slotKind,
+        is_filled: false,
+      })),
+    };
+  }
+
+  function buildBenefitProgressRewardPreview(discount) {
+    const mechanic = parseBenefitObject(discount?.mechanic_config_json, {});
+    const rewardKind = benefitText(mechanic?.reward_kind).toLowerCase() || 'gift';
+    const reward = parseBenefitObject(mechanic?.reward, {});
+    if (rewardKind === 'discount') {
+      const discountReward = parseBenefitObject(reward?.discount, {});
+      return {
+        kind: 'discount',
+        icon_kind: 'discount',
+        title: benefitText(discount?.title) || 'Скидка',
+        description: benefitText(discount?.description),
+        badge_text: formatBenefitBadgeText(discountReward?.discount_type, discountReward?.discount_value) || 'Скидка',
+        apply_scope_text: formatBenefitApplyScopeText(discountReward?.apply_to),
+        photo_url: null,
+        products: [],
+      };
+    }
+    if (rewardKind === 'promo_code') {
+      const promoReward = parseBenefitObject(reward?.promo_code, {});
+      const sourceCode = benefitText(promoReward?.source_code);
+      return {
+        kind: 'promo_code',
+        icon_kind: 'promo_code',
+        title: benefitText(discount?.title) || 'Промокод',
+        description: benefitText(discount?.description) || 'Промокод в подарок',
+        badge_text: 'Промокод',
+        apply_scope_text: sourceCode ? `Источник: ${sourceCode}` : 'Промокод в подарок',
+        code_preview: sourceCode || null,
+        source_code: sourceCode || null,
+      };
+    }
+    return {
+      kind: 'gift',
+      icon_kind: 'gift',
+      title: benefitText(discount?.title) || 'Подарок',
+      description: benefitText(discount?.description) || 'Награда по акции',
+      badge_text: 'Подарок',
+      apply_scope_text: 'Награда по акции',
+      photo_url: null,
+      products: [],
+    };
+  }
+
+  function buildGeneralProgressBenefitCard(discount) {
+    const mechanic = parseBenefitObject(discount?.mechanic_config_json, {});
+    const progressBasis = benefitText(mechanic?.progress_basis).toLowerCase() || 'orders';
+    const thresholdValue = Number(mechanic?.threshold_value || mechanic?.buy_qty || 0);
+    const progressText = formatBenefitProgressText(progressBasis, 0, thresholdValue);
+    const rewardKind = benefitText(mechanic?.reward_kind).toLowerCase() || 'gift';
+    const rewardText = rewardKind === 'promo_code'
+      ? 'Промокод'
+      : rewardKind === 'discount'
+        ? 'Скидка'
+        : 'Подарок';
+    return {
+      id: Number(discount?.id || 0),
+      discount_id: Number(discount?.id || 0) || null,
+      kind: 'progress',
+      title: benefitText(discount?.title) || 'Накопительная акция',
+      description: benefitText(discount?.description) || `Прогресс: ${progressText}`,
+      badge_text: progressText,
+      apply_scope_text: `Следующая награда: ${rewardText}`,
+      expires_at: discount?.ends_at || null,
+      is_claimable: false,
+      pending_reward_count: 0,
+      progress_value: 0,
+      progress_display_value: 0,
+      threshold_value: thresholdValue,
+      progress_basis: progressBasis,
+      progress_ratio: 0,
+      reward_kind: rewardKind,
+      reward_qty: Math.max(1, Number(mechanic?.reward_qty || 1) || 1),
+      pending_reward_mode: benefitText(mechanic?.pending_reward_mode).toLowerCase() === 'single_pending' ? 'single_pending' : 'stack',
+      claim_mode: 'view',
+      discount_id: Number(discount?.id || 0) || null,
+      mechanic_type: 'loyalty_progress',
+      interaction_mode: 'details',
+      reward_preview: buildBenefitProgressRewardPreview(discount),
+      progress_visual: buildBenefitProgressVisual(progressBasis, thresholdValue),
+      can_issue: false,
+      is_issued: false,
+      issue_action: null,
+    };
+  }
+
+  function getPromoRewardMeta(discount) {
+    const config = parseBenefitObject(discount?.mechanic_config_json, {});
+    const reward = parseBenefitObject(config?.promo_reward, {});
+    const rewardType = benefitText(
+      reward?.reward_type
+        ?? (
+          ['gift', 'product_discount'].includes(benefitText(reward?.reward_kind).toLowerCase())
+            ? 'product'
+            : 'discount'
+        )
+    ).toLowerCase() === 'product'
+      ? 'product'
+      : 'discount';
+    const productRewardType = ['gift', 'product_discount'].includes(
+      benefitText(reward?.product_reward_type ?? reward?.reward_kind).toLowerCase()
+    )
+      ? benefitText(reward?.product_reward_type ?? reward?.reward_kind).toLowerCase()
+      : 'gift';
+
+    if (rewardType === 'product') {
+      if (productRewardType === 'gift') {
+        return {
+          badge_text: 'Подарок',
+          description: benefitText(discount?.description) || 'Подарок по промокоду',
+          apply_scope_text: 'На товары',
+        };
+      }
+      return {
+        badge_text: formatBenefitBadgeText(reward?.discount_type, reward?.discount_value) || 'Скидка',
+        description: benefitText(discount?.description) || 'Скидка на товар по промокоду',
+        apply_scope_text: 'На товары',
+      };
+    }
+
+    return {
+      badge_text: formatBenefitBadgeText(reward?.discount_type, reward?.discount_value) || 'Скидка',
+      description: benefitText(discount?.description) || 'Скидка по промокоду',
+      apply_scope_text: formatBenefitApplyScopeText(reward?.apply_to ?? discount?.apply_to),
+    };
+  }
+
+  function hasAudienceTargetRow(row) {
+    return Boolean(
+      benefitText(row?.target_type)
+      || Number(row?.customer_id || 0) > 0
+      || Number(row?.customer_category_id || 0) > 0
+    );
+  }
+
+  function isGeneralBenefitAudience(targetRows) {
+    const rows = Array.isArray(targetRows) ? targetRows.filter((row) => hasAudienceTargetRow(row)) : [];
+    if (!rows.length) return true;
+    return rows.some((row) => benefitText(row?.target_type).toLowerCase() === 'all');
+  }
+
+  function hasDirectCustomerBenefit(targetRows, customerId) {
+    const normalizedCustomerId = Number(customerId || 0);
+    if (!(normalizedCustomerId > 0)) return false;
+    return (Array.isArray(targetRows) ? targetRows : []).some((row) => (
+      benefitText(row?.target_type).toLowerCase() === 'customer'
+      && Number(row?.customer_id || 0) === normalizedCustomerId
+    ));
+  }
+
+  function groupDiscountRows(rows) {
+    const grouped = new Map();
+    for (const row of Array.isArray(rows) ? rows : []) {
+      const discountId = Number(row?.id || 0);
+      if (!(discountId > 0)) continue;
+      let entry = grouped.get(discountId);
+      if (!entry) {
+        entry = {
+          discount: { ...row },
+          targets: [],
+        };
+        grouped.set(discountId, entry);
+      }
+      if (hasAudienceTargetRow(row)) {
+        entry.targets.push({
+          target_type: row?.target_type,
+          customer_id: row?.customer_id,
+          customer_category_id: row?.customer_category_id,
+        });
+      }
+    }
+    return grouped;
+  }
+
+  function groupPromoRowsByDiscount(rows) {
+    const grouped = new Map();
+    for (const row of Array.isArray(rows) ? rows : []) {
+      const discountId = Number(row?.discount_id || 0);
+      if (!(discountId > 0)) continue;
+      if (!grouped.has(discountId)) grouped.set(discountId, []);
+      grouped.get(discountId).push(row);
+    }
+    return grouped;
+  }
+
+  function pickPromoCatalogRow(rows, customerId) {
+    const normalizedCustomerId = Number(customerId || 0);
+    const candidates = Array.isArray(rows) ? rows.filter(Boolean) : [];
+    if (!candidates.length) return null;
+    return candidates.slice().sort((a, b) => {
+      const score = (row) => {
+        const assignedCustomerId = Number(row?.assigned_customer_id || 0);
+        const codeMode = benefitText(row?.code_mode).toLowerCase();
+        const isActive = Number(row?.is_active || 0) === 1;
+        const usageLimit = Number(row?.usage_limit || 0);
+        const usageCount = Number(row?.usage_count || 0);
+        let rank = 0;
+        if (assignedCustomerId > 0 && assignedCustomerId === normalizedCustomerId) rank += 500;
+        else if (codeMode === 'shared') rank += 400;
+        else if (!(assignedCustomerId > 0)) rank += 200;
+        if (isActive) rank += 50;
+        if (!(usageLimit > 0) || usageCount < usageLimit) rank += 10;
+        return rank;
+      };
+      const rankDiff = score(b) - score(a);
+      if (rankDiff !== 0) return rankDiff;
+      return Number(a?.promo_code_id || a?.id || 0) - Number(b?.promo_code_id || b?.id || 0);
+    })[0] || null;
+  }
+
+  async function ensureBenefitPromoStorage() {
+    await db.query(
+      `CREATE TABLE IF NOT EXISTS \`mkt_customer_benefit_promos\` (
+         \`id\` int UNSIGNED NOT NULL AUTO_INCREMENT,
+         \`tenant_id\` int NOT NULL DEFAULT '1',
+         \`store_id\` int NOT NULL DEFAULT '1',
+         \`customer_id\` int NOT NULL,
+         \`promo_code_id\` int UNSIGNED NOT NULL,
+         \`discount_id\` int UNSIGNED NOT NULL,
+         \`created_at\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+         \`updated_at\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+         PRIMARY KEY (\`id\`),
+         UNIQUE KEY \`uq_mkt_customer_benefit_promos_customer_promo\` (\`tenant_id\`,\`store_id\`,\`customer_id\`,\`promo_code_id\`),
+         KEY \`idx_mkt_customer_benefit_promos_customer\` (\`tenant_id\`,\`store_id\`,\`customer_id\`),
+         KEY \`idx_mkt_customer_benefit_promos_promo\` (\`tenant_id\`,\`promo_code_id\`),
+         KEY \`idx_mkt_customer_benefit_promos_discount\` (\`tenant_id\`,\`discount_id\`),
+         CONSTRAINT \`fk_mkt_customer_benefit_promos_promo\`
+           FOREIGN KEY (\`promo_code_id\`) REFERENCES \`mkt_discount_promo_codes\` (\`id\`) ON DELETE CASCADE,
+         CONSTRAINT \`fk_mkt_customer_benefit_promos_discount\`
+           FOREIGN KEY (\`discount_id\`) REFERENCES \`mkt_discounts\` (\`id\`) ON DELETE CASCADE
+       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+    );
+  }
+
+  async function loadActiveCustomer(tenantId, customerId) {
+    const normalizedCustomerId = Number(customerId || 0);
+    if (!(normalizedCustomerId > 0)) return null;
+    const [rows] = await db.query(
+      `SELECT id, is_active
+         FROM cust_customers
+        WHERE tenant_id = ? AND id = ?
+        LIMIT 1`,
+      [tenantId, normalizedCustomerId]
+    );
+    const customer = Array.isArray(rows) && rows.length ? rows[0] : null;
+    if (!customer || Number(customer?.is_active || 0) !== 1) return null;
+    return customer;
+  }
+
+  async function buildGeneralBenefitsCatalog({ tenantId, storeId, customerId }) {
+    const normalizedCustomerId = Number(customerId || 0);
+    await ensureBenefitPromoStorage();
+
+    const [discountRows] = await db.query(
+      `SELECT d.*,
+              dc.target_type,
+              dc.customer_id,
+              dc.customer_category_id
+         FROM mkt_discounts d
+         LEFT JOIN mkt_discount_customers dc
+           ON dc.discount_id = d.id
+          AND dc.tenant_id = d.tenant_id
+        WHERE d.tenant_id = ?
+          AND (d.store_id = ? OR d.store_id = 0 OR d.store_id IS NULL)
+          AND d.is_active = 1
+        ORDER BY d.priority DESC, d.id ASC`,
+      [tenantId, storeId]
+    );
+
+    const [promoRows] = await db.query(
+      `SELECT pc.id AS promo_code_id,
+              pc.discount_id,
+              pc.code,
+              pc.code_mode,
+              pc.is_active,
+              pc.usage_limit,
+              pc.usage_count,
+              pc.assigned_customer_id,
+              cp.id AS saved_id
+         FROM mkt_discount_promo_codes pc
+         LEFT JOIN mkt_customer_benefit_promos cp
+           ON cp.tenant_id = pc.tenant_id
+          AND cp.store_id = ?
+          AND cp.customer_id = ?
+          AND cp.promo_code_id = pc.id
+        WHERE pc.tenant_id = ?
+          AND (pc.store_id = ? OR pc.store_id = 0 OR pc.store_id IS NULL)
+        ORDER BY pc.id ASC`,
+      [storeId, normalizedCustomerId, tenantId, storeId]
+    );
+
+    const promoRowsByDiscountId = groupPromoRowsByDiscount(promoRows);
+    const discountGroups = groupDiscountRows(discountRows);
+    const discounts = [];
+    const promoCodes = [];
+    const progress = [];
+
+    for (const entry of discountGroups.values()) {
+      const discount = entry?.discount;
+      const discountId = Number(discount?.id || 0);
+      const mechanicType = normalizeBenefitMechanicType(discount?.mechanic_type);
+      if (!(discountId > 0) || !discountHelpers.isDiscountActive(discount)) continue;
+      if (!isGeneralBenefitAudience(entry?.targets)) continue;
+
+      if (mechanicType === 'loyalty_progress') {
+        progress.push(buildGeneralProgressBenefitCard(discount));
+        continue;
+      }
+
+      const isIssuedDiscount = hasDirectCustomerBenefit(entry?.targets, normalizedCustomerId);
+      const discountApplyTo = benefitText(discount?.apply_to).toLowerCase();
+      const discountType = benefitText(discount?.discount_type).toLowerCase();
+      if (discountHelpers.isPromoSimpleDiscount(discount)) {
+        const rewardMeta = getPromoRewardMeta(discount);
+        const rows = promoRowsByDiscountId.get(discountId) || [];
+        const codeMode = benefitText(discount?.promo_code_mode).toLowerCase() === 'unique' ? 'unique' : 'shared';
+        const representativeRow = pickPromoCatalogRow(rows, normalizedCustomerId);
+        const issuedUniqueRow = rows.find((row) => (
+          benefitText(row?.code_mode).toLowerCase() === 'unique'
+          && Number(row?.assigned_customer_id || 0) === normalizedCustomerId
+        )) || null;
+        const hasSavedSharedPromo = rows.some((row) => Number(row?.saved_id || 0) > 0);
+        const hasAvailableSharedPromo = rows.some((row) => (
+          benefitText(row?.code_mode).toLowerCase() === 'shared'
+          && Number(row?.is_active || 0) === 1
+          && (!(Number(row?.usage_limit || 0) > 0) || Number(row?.usage_count || 0) < Number(row?.usage_limit || 0))
+        ));
+        const hasAvailableUniquePromo = rows.some((row) => (
+          benefitText(row?.code_mode).toLowerCase() === 'unique'
+          && Number(row?.is_active || 0) === 1
+          && (!(Number(row?.usage_limit || 0) > 0) || Number(row?.usage_count || 0) < Number(row?.usage_limit || 0))
+          && !(Number(row?.assigned_customer_id || 0) > 0)
+        ));
+
+        const isIssued = codeMode === 'unique'
+          ? Boolean(issuedUniqueRow)
+          : hasSavedSharedPromo;
+        const canIssue = codeMode === 'unique'
+          ? !isIssued && hasAvailableUniquePromo
+          : !isIssued && hasAvailableSharedPromo;
+        const issueDisabledReasonCode = isIssued
+          ? 'BENEFIT_ALREADY_ISSUED'
+          : (codeMode === 'unique' && !hasAvailableUniquePromo) || (codeMode === 'shared' && !hasAvailableSharedPromo)
+            ? 'PROMO_CLAIM_UNAVAILABLE'
+            : '';
+        const issueDisabledReason = issueDisabledReasonCode === 'BENEFIT_ALREADY_ISSUED'
+          ? 'Промокод уже выдан клиенту.'
+          : issueDisabledReasonCode === 'PROMO_CLAIM_UNAVAILABLE'
+            ? 'Свободных промокодов больше нет.'
+            : '';
+
+        if (!isIssued && !canIssue) {
+          continue;
+        }
+
+        promoCodes.push({
+          id: representativeRow ? Number(representativeRow.promo_code_id || 0) || discountId : discountId,
+          discount_id: discountId,
+          kind: 'promo_code',
+          title: benefitText(discount?.title) || 'Промокод',
+          description: rewardMeta.description,
+          badge_text: rewardMeta.badge_text,
+          apply_scope_text: rewardMeta.apply_scope_text,
+          expires_at: discount?.ends_at || null,
+          code: codeMode === 'shared' ? benefitText(representativeRow?.code) : benefitText(issuedUniqueRow?.code),
+          is_copyable: codeMode === 'shared' || isIssued,
+          is_stackable: Number(discount?.is_stackable || 0) === 1,
+          usage_limit: representativeRow?.usage_limit == null ? null : Number(representativeRow.usage_limit || 0),
+          usage_count: Number(representativeRow?.usage_count || 0),
+          status_text: isIssued ? 'Выдано' : (codeMode === 'unique' ? 'Уникальный' : 'Общий'),
+          mechanic_type: mechanicType,
+          promo_code_mode: codeMode,
+          is_issued: isIssued,
+          can_issue: canIssue,
+          issue_action: canIssue ? (codeMode === 'unique' ? 'promo_unique' : 'promo_shared') : null,
+          issue_disabled_reason_code: issueDisabledReasonCode || null,
+          issue_disabled_reason: issueDisabledReason || '',
+          issued_code: benefitText(issuedUniqueRow?.code) || null,
+        });
+        continue;
+      }
+
+      if (discountApplyTo === 'product' || discountType === 'special_price') {
+        continue;
+      }
+
+      const issueDisabledReasonCode = isIssuedDiscount ? 'BENEFIT_ALREADY_ISSUED' : '';
+      const issueDisabledReason = isIssuedDiscount ? 'Скидка уже выдана клиенту.' : '';
+      discounts.push({
+        id: discountId,
+        discount_id: discountId,
+        kind: 'discount',
+        title: benefitText(discount?.title) || 'Скидка',
+        description: benefitText(discount?.description),
+        badge_text: formatBenefitBadgeText(discount?.discount_type, discount?.discount_value) || 'Скидка',
+        apply_scope_text: formatBenefitApplyScopeText(discount?.apply_to),
+        expires_at: discount?.ends_at || null,
+        is_stackable: Number(discount?.is_stackable || 0) === 1,
+        priority: Number(discount?.priority || 0),
+        mechanic_type: mechanicType,
+        discount_type: benefitText(discount?.discount_type).toLowerCase() || 'percent',
+        discount_value: Number(discount?.discount_value || 0),
+        apply_to: benefitText(discount?.apply_to).toLowerCase() || 'order',
+        min_order_amount: discount?.min_order_amount != null ? Number(discount.min_order_amount || 0) : null,
+        max_discount_amount: discount?.max_discount_amount != null ? Number(discount.max_discount_amount || 0) : null,
+        status_text: isIssuedDiscount ? 'Выдано' : '',
+        is_issued: isIssuedDiscount,
+        can_issue: !isIssuedDiscount,
+        issue_action: !isIssuedDiscount ? 'discount' : null,
+        issue_disabled_reason_code: issueDisabledReasonCode || null,
+        issue_disabled_reason: issueDisabledReason,
+      });
+    }
+
+    return {
+      mode: 'all',
+      discounts,
+      promo_codes: promoCodes,
+      progress,
+    };
   }
 
   function mergeCustomerAddressSource(existing, patch) {
@@ -1563,6 +2067,246 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
       });
     } catch (e) {
       console.error('POST /api/admin/clients/:id/shop-session error:', e);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.get('/:id/benefits/catalog', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const clientId = Number(req.params.id);
+
+      if (!Number.isFinite(clientId) || clientId <= 0) {
+        return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      }
+
+      const customer = await loadActiveCustomer(tenantId, clientId);
+      if (!customer) {
+        return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+      }
+
+      const data = await buildGeneralBenefitsCatalog({
+        tenantId,
+        storeId,
+        customerId: clientId,
+      });
+      return res.json({ ok: true, data });
+    } catch (e) {
+      console.error('GET /api/admin/clients/:id/benefits/catalog error:', e);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.post('/:id/benefits/issue', async (req, res) => {
+    let conn = null;
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const clientId = Number(req.params.id);
+      const discountId = Number(req.body?.discount_id || 0);
+      const issueAction = benefitText(req.body?.issue_action).toLowerCase();
+
+      if (!Number.isFinite(clientId) || clientId <= 0 || !(discountId > 0)) {
+        return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      }
+      if (!['discount', 'promo_shared', 'promo_unique'].includes(issueAction)) {
+        return res.status(400).json({ ok: false, error: 'BENEFIT_ISSUE_INVALID' });
+      }
+
+      const customer = await loadActiveCustomer(tenantId, clientId);
+      if (!customer) {
+        return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+      }
+
+      if (issueAction === 'promo_shared') {
+        await ensureBenefitPromoStorage();
+      }
+
+      conn = await db.getConnection();
+      await conn.beginTransaction();
+
+      const [discountRows] = await conn.query(
+        `SELECT d.*
+           FROM mkt_discounts d
+          WHERE d.tenant_id = ?
+            AND (d.store_id = ? OR d.store_id = 0 OR d.store_id IS NULL)
+            AND d.id = ?
+          ORDER BY d.store_id DESC, d.id DESC
+          LIMIT 1
+          FOR UPDATE`,
+        [tenantId, storeId, discountId]
+      );
+      const discount = Array.isArray(discountRows) && discountRows.length ? discountRows[0] : null;
+      if (!discount || Number(discount?.is_active || 0) !== 1 || !discountHelpers.isDiscountActive(discount)) {
+        await conn.rollback();
+        return res.status(409).json({ ok: false, error: 'DISCOUNT_NOT_AVAILABLE' });
+      }
+
+      const [targetRows] = await conn.query(
+        `SELECT target_type, customer_id, customer_category_id
+           FROM mkt_discount_customers
+          WHERE tenant_id = ? AND discount_id = ?`,
+        [tenantId, discountId]
+      );
+      if (!isGeneralBenefitAudience(targetRows)) {
+        await conn.rollback();
+        return res.status(409).json({ ok: false, error: 'BENEFIT_ISSUE_UNSUPPORTED' });
+      }
+
+      if (issueAction === 'discount') {
+        if (discountHelpers.isPromoSimpleDiscount(discount)) {
+          await conn.rollback();
+          return res.status(409).json({ ok: false, error: 'BENEFIT_ISSUE_INVALID' });
+        }
+
+        const [existingRows] = await conn.query(
+          `SELECT id
+             FROM mkt_discount_customers
+            WHERE tenant_id = ?
+              AND discount_id = ?
+              AND target_type = 'customer'
+              AND customer_id = ?
+            LIMIT 1
+            FOR UPDATE`,
+          [tenantId, discountId, clientId]
+        );
+        if (Array.isArray(existingRows) && existingRows.length) {
+          await conn.rollback();
+          return res.status(409).json({ ok: false, error: 'BENEFIT_ALREADY_ISSUED' });
+        }
+
+        await conn.query(
+          `INSERT INTO mkt_discount_customers
+             (tenant_id, discount_id, target_type, customer_id)
+           VALUES (?, ?, 'customer', ?)`,
+          [tenantId, discountId, clientId]
+        );
+      } else if (issueAction === 'promo_shared') {
+        if (!discountHelpers.isPromoSimpleDiscount(discount) || benefitText(discount?.promo_code_mode).toLowerCase() !== 'shared') {
+          await conn.rollback();
+          return res.status(409).json({ ok: false, error: 'BENEFIT_ISSUE_INVALID' });
+        }
+
+        const [savedRows] = await conn.query(
+          `SELECT id
+             FROM mkt_customer_benefit_promos
+            WHERE tenant_id = ?
+              AND store_id = ?
+              AND customer_id = ?
+              AND discount_id = ?
+            LIMIT 1
+            FOR UPDATE`,
+          [tenantId, storeId, clientId, discountId]
+        );
+        if (Array.isArray(savedRows) && savedRows.length) {
+          await conn.rollback();
+          return res.status(409).json({ ok: false, error: 'BENEFIT_ALREADY_ISSUED' });
+        }
+
+        const [promoRows] = await conn.query(
+          `SELECT id AS promo_code_id
+             FROM mkt_discount_promo_codes
+            WHERE tenant_id = ?
+              AND (store_id = ? OR store_id = 0 OR store_id IS NULL)
+              AND discount_id = ?
+              AND code_mode = 'shared'
+              AND is_active = 1
+              AND (usage_limit IS NULL OR usage_limit = 0 OR usage_count < usage_limit)
+            ORDER BY id ASC
+            LIMIT 1
+            FOR UPDATE`,
+          [tenantId, storeId, discountId]
+        );
+        const promoRow = Array.isArray(promoRows) && promoRows.length ? promoRows[0] : null;
+        if (!(Number(promoRow?.promo_code_id || 0) > 0)) {
+          await conn.rollback();
+          return res.status(409).json({ ok: false, error: 'PROMO_CLAIM_UNAVAILABLE' });
+        }
+
+        await conn.query(
+          `INSERT INTO mkt_customer_benefit_promos
+             (tenant_id, store_id, customer_id, promo_code_id, discount_id)
+           VALUES (?, ?, ?, ?, ?)
+           ON DUPLICATE KEY UPDATE
+             discount_id = VALUES(discount_id),
+             updated_at = CURRENT_TIMESTAMP`,
+          [tenantId, storeId, clientId, Number(promoRow.promo_code_id || 0), discountId]
+        );
+      } else {
+        if (!discountHelpers.isPromoSimpleDiscount(discount) || benefitText(discount?.promo_code_mode).toLowerCase() !== 'unique') {
+          await conn.rollback();
+          return res.status(409).json({ ok: false, error: 'BENEFIT_ISSUE_INVALID' });
+        }
+
+        const [issuedRows] = await conn.query(
+          `SELECT id
+             FROM mkt_discount_promo_codes
+            WHERE tenant_id = ?
+              AND (store_id = ? OR store_id = 0 OR store_id IS NULL)
+              AND discount_id = ?
+              AND code_mode = 'unique'
+              AND assigned_customer_id = ?
+            LIMIT 1
+            FOR UPDATE`,
+          [tenantId, storeId, discountId, clientId]
+        );
+        if (Array.isArray(issuedRows) && issuedRows.length) {
+          await conn.rollback();
+          return res.status(409).json({ ok: false, error: 'BENEFIT_ALREADY_ISSUED' });
+        }
+
+        const [promoRows] = await conn.query(
+          `SELECT id AS promo_code_id
+             FROM mkt_discount_promo_codes
+            WHERE tenant_id = ?
+              AND (store_id = ? OR store_id = 0 OR store_id IS NULL)
+              AND discount_id = ?
+              AND code_mode = 'unique'
+              AND is_active = 1
+              AND (assigned_customer_id IS NULL OR assigned_customer_id = 0)
+              AND (usage_limit IS NULL OR usage_limit = 0 OR usage_count < usage_limit)
+            ORDER BY id ASC
+            LIMIT 1
+            FOR UPDATE`,
+          [tenantId, storeId, discountId]
+        );
+        const promoRow = Array.isArray(promoRows) && promoRows.length ? promoRows[0] : null;
+        if (!(Number(promoRow?.promo_code_id || 0) > 0)) {
+          await conn.rollback();
+          return res.status(409).json({ ok: false, error: 'PROMO_CLAIM_UNAVAILABLE' });
+        }
+
+        const [updateResult] = await conn.query(
+          `UPDATE mkt_discount_promo_codes
+              SET assigned_customer_id = ?, updated_at = NOW()
+            WHERE tenant_id = ?
+              AND id = ?
+              AND (assigned_customer_id IS NULL OR assigned_customer_id = 0)`,
+          [clientId, tenantId, Number(promoRow.promo_code_id || 0)]
+        );
+        if (!(Number(updateResult?.affectedRows || 0) > 0)) {
+          await conn.rollback();
+          return res.status(409).json({ ok: false, error: 'PROMO_CLAIM_UNAVAILABLE' });
+        }
+      }
+
+      await conn.commit();
+      conn.release();
+      conn = null;
+
+      const data = await buildGeneralBenefitsCatalog({
+        tenantId,
+        storeId,
+        customerId: clientId,
+      });
+      return res.json({ ok: true, data });
+    } catch (e) {
+      if (conn) {
+        try { await conn.rollback(); } catch {}
+        try { conn.release(); } catch {}
+      }
+      console.error('POST /api/admin/clients/:id/benefits/issue error:', e);
       return res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });

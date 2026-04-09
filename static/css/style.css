@@ -9857,6 +9857,41 @@ body.page-courier-screen.orders-checkout-mode #ordersCheckoutRightPane .panel-bo
   padding:6px 16px 18px;
 }
 
+.new-order-benefits-body > .admin-benefits-scroll-frame{
+  align-self:stretch;
+  justify-self:stretch;
+  min-height:0;
+  display:flex;
+  flex-direction:column;
+  overflow:hidden;
+  margin:-6px -16px -18px;
+}
+
+.new-order-benefits-body > .admin-benefits-scroll-frame .shop-checkout-benefits-modal-scroll,
+.new-order-benefits-body > .admin-benefits-scroll-frame .shop-checkout-benefit-detail-scroll{
+  flex:1;
+  min-height:0;
+  overflow:auto;
+  -webkit-overflow-scrolling:touch;
+  padding:12px 16px 18px;
+}
+
+.new-order-benefits-body > .admin-benefits-scroll-frame .shop-checkout-benefits-modal-footer,
+.new-order-benefits-body > .admin-benefits-scroll-frame .shop-checkout-benefit-detail-footer{
+  flex:0 0 auto;
+  padding:10px 16px calc(10px + env(safe-area-inset-bottom));
+  border-top:1px solid var(--color-border);
+  background:var(--color-surface);
+}
+
+.new-order-benefits-body > .admin-benefits-scroll-frame .shop-checkout-benefits-modal-footer .shop-checkout-benefits-promo-entry{
+  margin:0;
+}
+
+.new-order-benefits-body > .admin-benefits-scroll-frame .shop-checkout-benefit-detail-footer .shop-checkout-benefit-claim-confirm{
+  width:100%;
+}
+
 .new-order-benefits-body .shop-checkout-benefits-sheet{
   display:grid;
   gap:14px;
@@ -10185,6 +10220,11 @@ body.page-courier-screen.orders-checkout-mode #ordersCheckoutRightPane .panel-bo
   .new-order-benefits-claim-media{
     width:72px;
     height:72px;
+  }
+
+  .new-order-benefits-body > .admin-benefits-scroll-frame.has-footer .shop-checkout-benefits-modal-scroll,
+  .new-order-benefits-body > .admin-benefits-scroll-frame.admin-benefits-scroll-frame--detail .shop-checkout-benefit-detail-scroll{
+    padding-bottom:132px;
   }
 }
 
