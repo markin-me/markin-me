@@ -67,3 +67,30 @@ http://127.0.0.1:3400/health
 npm run address:service:install
 npm run address:service:db:check
 npm run address:service:start
+
+
+перезапуск сервиса адресов на Linux-сервере
+Если ты на сервере в корне актуального проекта и в package.json уже есть нужные скрипты, команды такие:
+
+npm run address:service:install
+npm run address:service:db:check
+npm run address:service:start
+
+Если npm пишет Missing script: "address:service:start", значит на сервере старая версия корневого package.json или ты не в той папке проекта.
+Тогда запускай сервис напрямую из его подпапки:
+
+cd /var/www/markin-me/markin-me-test/services/address-service
+npm install
+npm run db:check
+npm run start
+
+Если хочешь держать сервис в фоне после выхода из SSH, лучше запускать через pm2:
+
+pm2 start src/server.js --name markin-address --cwd /var/www/markin-me/markin-me-test/services/address-service
+pm2 save
+
+Проверка после запуска:
+
+curl http://127.0.0.1:3400/health
+
+Если включён токен, ответ UNAUTHORIZED без заголовка тоже означает, что сервис живой.

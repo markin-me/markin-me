@@ -37,6 +37,7 @@
   const WAIT_RETRY_MS = 1200;
   const MESSAGE_ALERT_COOLDOWN_MS = 900;
   const MESSAGE_ALERT_DELAY_MS = 5000;
+  const CHAT_BROWSER_ALERTS_ENABLED = false;
 
   let timerId = 0;
   let inFlight = false;
@@ -256,6 +257,7 @@
   }
 
   function requestNotificationPermissionSafe() {
+    if (!CHAT_BROWSER_ALERTS_ENABLED) return;
     if (!("Notification" in window)) return;
     if (Notification.permission !== "default") return;
     try {
@@ -265,6 +267,7 @@
   }
 
   function unlockAlertsOnce() {
+    if (!CHAT_BROWSER_ALERTS_ENABLED) return;
     const soundUrl = getTenantMessageSoundUrl();
     if (soundUrl) {
       try {
@@ -318,6 +321,7 @@
   }
 
   function playMessageAlertSound() {
+    if (!CHAT_BROWSER_ALERTS_ENABLED) return;
     const soundUrl = getTenantMessageSoundUrl();
     if (soundUrl) {
       try {
@@ -335,6 +339,7 @@
   }
 
   function showMessageNotification(title, body) {
+    if (!CHAT_BROWSER_ALERTS_ENABLED) return;
     if (!("Notification" in window) || Notification.permission !== "granted") return;
     try {
       const n = new Notification(String(title || "Новое сообщение"), {
@@ -349,6 +354,7 @@
   }
 
   function maybeNotifyUnreadIncrease(nextTotal) {
+    if (!CHAT_BROWSER_ALERTS_ENABLED) return;
     if (!unreadPrimed) return;
     if (!Number.isFinite(nextTotal) || nextTotal <= unreadTotal) return;
     scheduleDelayedMessageAlert();
@@ -461,6 +467,7 @@
   }
 
   function scheduleDelayedMessageAlert() {
+    if (!CHAT_BROWSER_ALERTS_ENABLED) return;
     const baselineUnanswered = Number(unansweredTotal || 0);
     const seq = Number(delayedAlertSeq || 0) + 1;
     delayedAlertSeq = seq;

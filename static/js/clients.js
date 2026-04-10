@@ -407,6 +407,7 @@
   const sheet = $("#clientSheet");
   const sheetBackdrop = $("#clientSheetBackdrop");
   const sheetClose = $("#clientSheetClose");
+  const clientMobileSheetCloseBtn = $("#clientMobileSheetCloseBtn");
   const chatRightSheetHost = document.querySelector("body.page-chat .page-col-right");
   const sheetInfo = {
     title: $("#sheetClientInfoTitle"),
@@ -1597,6 +1598,10 @@
       const closeBtn = e.target.closest("[data-tab-close]");
       if (closeBtn) {
         e.stopPropagation();
+        if (isChatRightSheetMode()) {
+          closeSheet();
+          return;
+        }
         const key = closeBtn.dataset.tabClose;
         if (key) closeTab(key);
         return;
@@ -14720,6 +14725,22 @@
   // Sheet events
   // -----------------------------
   if (sheetClose) sheetClose.addEventListener("click", closeSheet);
+  if (clientMobileSheetCloseBtn) {
+    clientMobileSheetCloseBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      closeSheet();
+    });
+  }
+  document.addEventListener("click", (event) => {
+    const trigger = event.target && event.target.closest
+      ? event.target.closest("#clientMobileSheetCloseBtn")
+      : null;
+    if (!trigger) return;
+    event.preventDefault();
+    event.stopPropagation();
+    closeSheet();
+  });
   if (sheetBackdrop) sheetBackdrop.addEventListener("click", closeSheet);
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") closeSheet();

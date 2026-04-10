@@ -8053,7 +8053,16 @@
     const node = document.createElement("div");
     node.id = "shopCompanyChatOrderDetailsView";
     node.className = "shop-company-chat-order-view hidden";
-    modalBody.insertBefore(node, composer);
+    const insertAnchor = (
+      footerIsland && footerIsland.parentElement === modalBody
+        ? footerIsland
+        : (composer && composer.parentElement === modalBody ? composer : null)
+    );
+    if (insertAnchor) {
+      modalBody.insertBefore(node, insertAnchor);
+    } else {
+      modalBody.appendChild(node);
+    }
     chatOrderDetailsView = node;
     return chatOrderDetailsView;
   }
@@ -8086,6 +8095,9 @@
     const isActive = active === true;
     const detailsView = ensureChatOrderDetailsViewNode();
     if (!detailsView) return;
+    if (modalBody && modalBody.classList) {
+      modalBody.classList.toggle("is-order-details-mode", isActive);
+    }
 
     if (isActive) {
       if (!chatOrderUiSnapshot) {
@@ -8093,6 +8105,7 @@
           feedHidden: feed.classList.contains("hidden"),
           scrollDownHidden: scrollDownBtn.classList.contains("hidden"),
           reactionHidden: reactionBar.classList.contains("hidden"),
+          footerHidden: footerIsland ? footerIsland.classList.contains("hidden") : true,
           composerHidden: composer.classList.contains("hidden"),
           selectionHidden: selectionToolbar.classList.contains("hidden"),
         };
@@ -8100,6 +8113,7 @@
       feed.classList.add("hidden");
       scrollDownBtn.classList.add("hidden");
       reactionBar.classList.add("hidden");
+      if (footerIsland) footerIsland.classList.add("hidden");
       composer.classList.add("hidden");
       selectionToolbar.classList.add("hidden");
       detailsView.classList.remove("hidden");
@@ -8111,12 +8125,14 @@
     detailsView.classList.add("hidden");
     if (!snapshot) {
       feed.classList.remove("hidden");
+      if (footerIsland) footerIsland.classList.remove("hidden");
       composer.classList.remove("hidden");
       return;
     }
     feed.classList.toggle("hidden", snapshot.feedHidden);
     scrollDownBtn.classList.toggle("hidden", snapshot.scrollDownHidden);
     reactionBar.classList.toggle("hidden", snapshot.reactionHidden);
+    if (footerIsland) footerIsland.classList.toggle("hidden", snapshot.footerHidden);
     composer.classList.toggle("hidden", snapshot.composerHidden);
     selectionToolbar.classList.toggle("hidden", snapshot.selectionHidden);
   }
@@ -12920,6 +12936,12 @@
     if (orderStrip) {
       clearTouchGesture();
       const touch = event.touches[0];
+      const orderCardEl = event.target.closest
+        ? event.target.closest("[data-chat-order-card-id]")
+        : null;
+      const pressedOrderId = toPositiveOrderId(
+        orderCardEl ? orderCardEl.getAttribute("data-chat-order-card-id") : 0
+      );
       clearOrderCardTouchPan();
       orderCardTouchPan = {
         strip: orderStrip,
@@ -12928,6 +12950,7 @@
         startLeft: Math.max(0, Number(orderStrip.scrollLeft || 0)),
         active: false,
         didDrag: false,
+        pressedOrderId: pressedOrderId,
       };
       return;
     }
@@ -13081,10 +13104,31 @@
     }
   }, { passive: false });
 
-  thread.addEventListener("touchend", function () {
+  thread.addEventListener("touchend", function (event) {
     if (orderCardTouchPan) {
+      const state = orderCardTouchPan;
       const shouldSuppressClick = orderCardTouchPan.didDrag === true;
       clearOrderCardTouchPan({ suppressClick: shouldSuppressClick });
+      if (!shouldSuppressClick) {
+        let tappedOrderId = toPositiveOrderId(state && state.pressedOrderId);
+        if (!tappedOrderId && event && event.changedTouches && event.changedTouches.length > 0) {
+          const touch = event.changedTouches[0];
+          const endTarget = document.elementFromPoint(
+            Number(touch.clientX || 0),
+            Number(touch.clientY || 0)
+          );
+          const endCard = endTarget && endTarget.closest
+            ? endTarget.closest("[data-chat-order-card-id]")
+            : null;
+          tappedOrderId = toPositiveOrderId(
+            endCard ? endCard.getAttribute("data-chat-order-card-id") : 0
+          );
+        }
+        if (tappedOrderId) {
+          suppressTapUntil = Math.max(suppressTapUntil, Date.now() + 320);
+          openChatOrderDetailsView(tappedOrderId).catch(function () {});
+        }
+      }
       return;
     }
     if (touchAttachmentTap) {
