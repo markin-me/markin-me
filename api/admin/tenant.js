@@ -242,12 +242,14 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
     if (explicit === 'http' || explicit === 'https') return explicit;
     if (String(process.env.TENANT_SUBDOMAIN_HTTPS_ENABLED || '').trim() === '1') return 'https';
     const host = String(baseHost || '').trim().toLowerCase();
-    if (!host) return 'http';
+    const forwardedProto = firstHeaderValue(req && req.headers ? req.headers['x-forwarded-proto'] : '', '');
+    const currentProtocol = String(forwardedProto || (req && req.protocol) || '').trim().toLowerCase().replace(/:$/, '');
+    if (!host) return currentProtocol === 'https' ? 'https' : 'http';
     if (host.includes('localhost') || /^\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?$/.test(host)) {
-      const currentProtocol = String((req && req.protocol) || 'http').trim().toLowerCase();
       return currentProtocol === 'https' ? 'https' : 'http';
     }
-    return 'http';
+    if (currentProtocol === 'http' || currentProtocol === 'https') return currentProtocol;
+    return 'https';
   }
 
   function buildTenantSubdomainUrl(tenant, req) {

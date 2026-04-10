@@ -117,6 +117,42 @@ function normalizeConfiguredHost(value) {
   }
 }
 
+function firstHeaderValue(raw, fallback = '') {
+  if (Array.isArray(raw)) {
+    for (const item of raw) {
+      const value = String(item || '').split(',')[0].trim();
+      if (value) return value;
+    }
+    return String(fallback || '').trim();
+  }
+  const value = String(raw || '').split(',')[0].trim();
+  return value || String(fallback || '').trim();
+}
+
+function getRequestRoutingHost(req) {
+  if (!req) return '';
+
+  const forwardedHost = normalizeConfiguredHost(
+    firstHeaderValue(req.headers && req.headers['x-forwarded-host'], '')
+  );
+  if (forwardedHost) return forwardedHost;
+
+  const hostHeader = normalizeConfiguredHost(
+    firstHeaderValue(req.headers && req.headers.host, '')
+  );
+  if (hostHeader) return hostHeader;
+
+  return normalizeHostForMatch(req.hostname);
+}
+
+function getRequestDisplayHost(req) {
+  if (!req) return '';
+  return firstHeaderValue(
+    req.headers && req.headers['x-forwarded-host'],
+    firstHeaderValue(req.headers && req.headers.host, req.hostname || '')
+  );
+}
+
 function getLocalTrustedAdminHosts() {
   const hosts = new Set();
   const interfaces = os.networkInterfaces();
@@ -806,7 +842,7 @@ function isMissingTenantDomainsTableError(err) {
 }
 
 async function resolveTenant(req) {
-  const host = normalizeHostForMatch(req.hostname);
+  const host = getRequestRoutingHost(req);
   const queryTenantId = Number(req.query.tenant_id);
   const querySubdomain = helpers.strOrNull(req.query.subdomain);
   let tenant = null;
@@ -900,7 +936,7 @@ async function findTenantByHost(hostname) {
 }
 
 async function isTenantHost(req) {
-  const host = normalizeHostForMatch(req.hostname);
+  const host = getRequestRoutingHost(req);
   if (!host) return false;
   const tenant = await findTenantByHost(host);
   if (tenant) req._resolvedTenant = tenant;
@@ -922,7 +958,7 @@ app.use(async (req, res, next) => {
   try {
     const tenantHost = await isTenantHost(req);
     if (tenantHost) return next();
-    if (!isTrustedAdminHost(req.hostname) || isManagedTenantDomainRequest(req)) {
+    if (!isTrustedAdminHost(getRequestRoutingHost(req)) || isManagedTenantDomainRequest(req)) {
       if (route.startsWith('/api/')) {
         return res.status(404).json({ ok: false, error: 'TENANT_NOT_FOUND' });
       }
@@ -970,7 +1006,7 @@ app.use(async (req, res, next) => {
   try {
     const tenantHost = await isTenantHost(req);
     if (!tenantHost) {
-      if (!isTrustedAdminHost(req.hostname) || isManagedTenantDomainRequest(req)) {
+      if (!isTrustedAdminHost(getRequestRoutingHost(req)) || isManagedTenantDomainRequest(req)) {
         if (route.startsWith('/api/')) {
           return res.status(404).json({ ok: false, error: 'TENANT_NOT_FOUND' });
         }
@@ -1015,7 +1051,7 @@ app.get('/manifest.json', async (req, res) => {
   try {
     const appType = normalizeManifestApp(req.query.app);
     const tenant = await resolveTenant(req);
-    const tenantHostShop = Boolean(await findTenantByHost(req.hostname));
+    const tenantHostShop = Boolean(await findTenantByHost(getRequestRoutingHost(req)));
     const startPath = normalizeManifestStartPath(req.query.start, {
       appType,
       tenantHostShop,
@@ -1439,14 +1475,16 @@ app.get('/sw.js', (req, res) => {
 
 app.get('/.well-known/tenant-domain-check', async (req, res) => {
   try {
-    const hostAscii = normalizeHostForMatch(req.hostname);
+    const hostAscii = getRequestRoutingHost(req);
     const tenant = await findTenantByHost(hostAscii);
     if (!tenant) {
       return res.status(404).json({ ok: false, error: 'TENANT_NOT_FOUND' });
     }
     return res.json({
       ok: true,
-      host: req.hostname,
+      host: getRequestDisplayHost(req),
+      host_header: firstHeaderValue(req.headers && req.headers.host, '') || null,
+      forwarded_host: firstHeaderValue(req.headers && req.headers['x-forwarded-host'], '') || null,
       host_ascii: hostAscii,
       tenant_id: Number(tenant.id),
       tenant_name: tenant.name || null,
@@ -1470,7 +1508,7 @@ app.use(async (req, res, next) => {
     || req.path === '/max-app'
   ) return next();
   try {
-    const tenant = await findTenantByHost(req.hostname);
+    const tenant = await findTenantByHost(getRequestRoutingHost(req));
     if (tenant) {
       req._resolvedTenant = tenant;
       return renderShop(req, res);
@@ -1492,9 +1530,9 @@ app.use(async (req, res, next) => {
     || req.path === '/max-app'
   ) return next();
   try {
-    const tenant = await findTenantByHost(req.hostname);
+    const tenant = await findTenantByHost(getRequestRoutingHost(req));
     if (tenant) return next();
-    if (isManagedTenantDomainRequest(req) || !isTrustedAdminHost(req.hostname)) {
+    if (isManagedTenantDomainRequest(req) || !isTrustedAdminHost(getRequestRoutingHost(req))) {
       return res.status(404).send('Домен не подключен');
     }
   } catch (err) {

@@ -4,9 +4,10 @@
   <%
     const appPageClassName = typeof pageClass === 'string' ? pageClass : '';
     const isChatViewportLocked = appPageClassName.split(/\s+/).includes('page-chat');
-    const appViewportContent = isChatViewportLocked
+    const appViewportBaseContent = isChatViewportLocked
       ? 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no'
       : 'width=device-width, initial-scale=1.0';
+    const appViewportContent = appViewportBaseContent + ', viewport-fit=cover';
   %>
   <meta charset="UTF-8" />
   <meta name="viewport" content="<%= appViewportContent %>" />
@@ -144,7 +145,7 @@
     })();
   </script>
 
-  <link rel="stylesheet" href="<%= assetUrl('/static/css/style.css?v=20260323d') %>" />
+  <link rel="stylesheet" href="<%= assetUrl('/static/css/style.css?v=20260410f') %>" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" />
   <% if (appPageStyles.length) { %>
     <% appPageStyles.forEach(function (src) { %>
@@ -252,12 +253,12 @@
   <script src="<%= assetUrl('/static/js/current-time.js') %>"></script>
   <script src="<%= assetUrl('/static/js/theme.js') %>"></script>
   <script src="<%= assetUrl('/static/js/sidebar.js') %>"></script>
-  <script src="<%= assetUrl('/static/js/admin-mobile-nav.js?v=20260321f') %>"></script>
+  <script src="<%= assetUrl('/static/js/admin-mobile-nav.js?v=20260410c') %>"></script>
   <% if (appActivePage !== 'chat' && appActivePage !== 'settings') { %>
-    <script src="<%= assetUrl('/static/js/chat-sidebar-badge.js') %>"></script>
+    <script src="<%= assetUrl('/static/js/chat-sidebar-badge.js?v=20260410a') %>"></script>
   <% } else if (appActivePage === 'settings') { %>
     <script>
-      window.__chatSidebarBadgeUrl = "<%= assetUrl('/static/js/chat-sidebar-badge.js') %>";
+      window.__chatSidebarBadgeUrl = "<%= assetUrl('/static/js/chat-sidebar-badge.js?v=20260410a') %>";
     </script>
   <% } %>
 
@@ -279,6 +280,40 @@
             .catch(function () {});
         });
       }
+    })();
+  </script>
+  <script>
+    (function () {
+      window.__BOT_NOTIFICATIONS_ONLY__ = true;
+      if (!('serviceWorker' in navigator)) return;
+
+      function safePromise(value) {
+        if (!value || typeof value.then !== 'function') return Promise.resolve(null);
+        return value.catch(function () { return null; });
+      }
+
+      function resolveRegistration() {
+        return safePromise(navigator.serviceWorker.getRegistration('/'))
+          .then(function (registration) {
+            if (registration) return registration;
+            return safePromise(navigator.serviceWorker.getRegistration());
+          });
+      }
+
+      function unsubscribePush(registration) {
+        if (!registration || !registration.pushManager || typeof registration.pushManager.getSubscription !== 'function') {
+          return Promise.resolve();
+        }
+        return safePromise(registration.pushManager.getSubscription())
+          .then(function (subscription) {
+            if (!subscription || typeof subscription.unsubscribe !== 'function') return;
+            return safePromise(subscription.unsubscribe());
+          });
+      }
+
+      resolveRegistration()
+        .then(unsubscribePush)
+        .catch(function () {});
     })();
   </script>
 

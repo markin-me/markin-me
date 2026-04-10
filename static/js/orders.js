@@ -113,6 +113,7 @@
   const courierDeliveredStatusId = toStatusId(rawWorkspaceConfig.courierDeliveredStatusId);
   const courierCanceledStatusIds = toStatusIdSet(rawWorkspaceConfig.courierCanceledStatusIds);
   const ordersCacheScope = String(rawWorkspaceConfig.cacheScope || workspaceMode || "orders").trim().toLowerCase() || "orders";
+  const ORDER_BROWSER_ALERTS_ENABLED = false;
 
   async function apiJson(url, opts = {}) {
     // РџРѕР»СѓС‡Р°РµРј С‚РѕРєРµРЅ Рё store_id РёР· localStorage
@@ -5597,11 +5598,13 @@
   }
 
   function playNewOrderSound() {
+    if (!ORDER_BROWSER_ALERTS_ENABLED) return;
     const soundUrl = state.tenantSounds && state.tenantSounds.sound_new_order_url;
     if (soundUrl) playNotificationSound(soundUrl);
   }
 
   function requestNotificationPermission() {
+    if (!ORDER_BROWSER_ALERTS_ENABLED) return Promise.resolve("disabled");
     if (!("Notification" in window)) return Promise.resolve("unsupported");
     if (Notification.permission === "granted") return Promise.resolve("granted");
     if (Notification.permission === "denied") return Promise.resolve("denied");
@@ -5609,6 +5612,7 @@
   }
 
   function showNewOrderNotification(orders) {
+    if (!ORDER_BROWSER_ALERTS_ENABLED) return;
     if (!("Notification" in window) || Notification.permission !== "granted") return;
     if (!orders || !orders.length) return;
     const o = orders[0];
@@ -6379,6 +6383,12 @@
     if (!isMobile()) closeSheet();
   });
 
+  if (notifyBtn && !ORDER_BROWSER_ALERTS_ENABLED) {
+    notifyBtn.classList.remove("is-enabled");
+    notifyBtn.title = "Браузерные уведомления отключены. Используйте уведомления через бота.";
+    notifyBtn.disabled = true;
+  }
+
   if (notifyBtn) {
     notifyBtn.addEventListener("click", () => {
       requestNotificationPermission().then((perm) => {
@@ -6392,6 +6402,11 @@
       notifyBtn.classList.add("is-enabled");
       notifyBtn.title = "РЈРІРµРґРѕРјР»РµРЅРёСЏ РІРєР»СЋС‡РµРЅС‹";
     }
+  }
+
+  if (notifyBtn && !ORDER_BROWSER_ALERTS_ENABLED) {
+    notifyBtn.classList.remove("is-enabled");
+    notifyBtn.disabled = true;
   }
 
   if (dateBtn && datePopover) {
