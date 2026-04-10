@@ -7673,6 +7673,21 @@ function renderSharedReadonlyOrderItemsHtml(items, order = null) {
   return html;
 }
 
+function sortRepeatOrderItemsForDisplay(items) {
+  return (Array.isArray(items) ? items : [])
+    .map((item, index) => ({ item, index }))
+    .sort((left, right) => {
+      const leftAuto = Number(left.item?.auto_add || 0) === 1
+        || str(left.item?.product_name || left.item?.name || "").trim().toLowerCase() === "приборы";
+      const rightAuto = Number(right.item?.auto_add || 0) === 1
+        || str(right.item?.product_name || right.item?.name || "").trim().toLowerCase() === "приборы";
+      if (leftAuto && !rightAuto) return 1;
+      if (!leftAuto && rightAuto) return -1;
+      return left.index - right.index;
+    })
+    .map((entry) => entry.item);
+}
+
 function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
   const isMobileSheet = window.matchMedia("(max-width: 1100px)").matches;
   if (isMobileSheet && !window.AppModal) return;
@@ -27725,10 +27740,11 @@ function renderSheetAddressList() {
       
       // Товары (используем формат корзины)
       if (order.items && Array.isArray(order.items) && order.items.length > 0) {
+        const orderItemsForDisplay = sortRepeatOrderItemsForDisplay(order.items);
         html += `<div class="shop-order-details-section">`;
         html += `<div class="shop-order-section-title">Товары</div>`;
         html += `<div class="shop-cart-items">`;
-        html += renderSharedReadonlyOrderItemsHtml(order.items, order);
+        html += renderSharedReadonlyOrderItemsHtml(orderItemsForDisplay, order);
         html += `</div>`;
         html += `</div>`;
       }
@@ -27778,7 +27794,7 @@ function renderSheetAddressList() {
       };
       bindRepeatOrderItemRows(
         detailView,
-        Array.isArray(order.items) ? order.items : [],
+        sortRepeatOrderItemsForDisplay(order.items),
         { onBack: reopenProfileOrderDetails, enableSwipeActions: true }
       );
       showMobileOrderDetailsActions(order);
@@ -35793,10 +35809,11 @@ function initShopLate() {
         
           // Товары
           if (order.items && Array.isArray(order.items) && order.items.length > 0) {
+            const orderItemsForDisplay = sortRepeatOrderItemsForDisplay(order.items);
             html += `<div class="shop-order-details-section">`;
             html += `<div class="shop-order-section-title">Товары</div>`;
             html += `<div class="shop-cart-items">`;
-            html += renderSharedReadonlyOrderItemsHtml(order.items, order);
+            html += renderSharedReadonlyOrderItemsHtml(orderItemsForDisplay, order);
             html += `</div>`;
             html += `</div>`;
           }
@@ -35844,7 +35861,7 @@ function initShopLate() {
           };
           bindRepeatOrderItemRows(
             detailView,
-            Array.isArray(order.items) ? order.items : [],
+            sortRepeatOrderItemsForDisplay(order.items),
             { onBack: reopenActiveOrderDetails, enableSwipeActions: true }
           );
         

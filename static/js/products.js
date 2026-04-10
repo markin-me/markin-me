@@ -4334,7 +4334,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     if (field === "stock") {
       const unitLabel = getProductListUnitLabel(product);
       const stockValue = toReadonlyProductFieldValue(product.stock_qty);
-      return stockValue && unitLabel ? `${stockValue} ${unitLabel}` : (stockValue || "—");
+      return stockValue && unitLabel ? `${stockValue} ${unitLabel}` : (stockValue || "∞");
     }
     if (field === "cost_price") return toReadonlyProductFieldValue(product.cost_price) || "—";
     if (field === "price") return toReadonlyProductFieldValue(product.price) || "—";
@@ -4357,6 +4357,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     if (field === "cost_price") product.cost_price = value;
     if (field === "price") product.price = value;
     if (field === "old_price") product.old_price = value;
+    if (field === "is_active") product.is_active = value ? 1 : 0;
     if (field === "site_visibility") product.site_visibility = value ? 1 : 0;
   }
 
@@ -4366,6 +4367,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     if (field === "cost_price") return product.cost_price != null ? Number(product.cost_price) : null;
     if (field === "price") return product.price != null ? Number(product.price) : 0;
     if (field === "old_price") return product.old_price != null ? Number(product.old_price) : null;
+    if (field === "is_active") return Boolean(product.is_active);
     if (field === "site_visibility") return Boolean(product.site_visibility);
     return null;
   }
@@ -4374,8 +4376,9 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     if (!row || !product || !field) return;
     const control = row.querySelector(`[data-inline-field="${field}"]`);
     if (!control) return;
-    if (field === "site_visibility") {
+    if (field === "is_active" || field === "site_visibility") {
       control.checked = Boolean(product.site_visibility);
+      if (field === "is_active") control.checked = Boolean(product.is_active);
       return;
     }
     control.value = getProductRowDisplayValue(product, field);
@@ -4454,6 +4457,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     const active = Number(product.id) === Number(state.selectedProductId) ? "is-active" : "";
     const selected = state.selectedProductIds.has(Number(product.id)) ? "is-selected" : "";
     const stockValue = getProductRowDisplayValue(product, "stock");
+    const stockUnitHint = getProductListUnitLabel(product);
     const costValue = getProductRowDisplayValue(product, "cost_price");
     const priceValue = getProductRowDisplayValue(product, "price");
     const oldPriceValue = getProductRowDisplayValue(product, "old_price");
@@ -4471,25 +4475,32 @@ function openAutoAddGroupModal({ mode, group } = {}) {
         <div class="product-main-head">
           <div class="product-title">${escapeHtml(product.name)}</div>
         </div>
-        <label class="switch switch-compact product-row-switch" aria-label="Показывать на сайте">
-          <input class="switch-input" type="checkbox" data-inline-field="site_visibility" ${Number(product.site_visibility) ? "checked" : ""} />
-          <span class="switch-ui" aria-hidden="true"></span>
-        </label>
+        <div class="product-row-switch-field field-wrap">
+          <label class="switch switch-compact product-row-switch" aria-label="Активен">
+            <input class="switch-input" type="checkbox" data-inline-field="is_active" ${Number(product.is_active) ? "checked" : ""} />
+            <span class="switch-ui" aria-hidden="true"></span>
+          </label>
+        </div>
+        <div class="product-row-switch-field field-wrap">
+          <label class="switch switch-compact product-row-switch" aria-label="Виден на сайте">
+            <input class="switch-input" type="checkbox" data-inline-field="site_visibility" ${Number(product.site_visibility) ? "checked" : ""} />
+            <span class="switch-ui" aria-hidden="true"></span>
+          </label>
+        </div>
         <div class="product-row-field product-row-field--stock field-wrap">
-          <label class="field-label">Остаток</label>
-          <input class="control control-sm product-row-input product-row-inline-input" type="text" inputmode="decimal" data-inline-field="stock" value="${escapeHtml(stockValue)}" placeholder="—" />
+          <div class="product-row-stock-input-wrap">
+            <input class="control control-sm product-row-input product-row-inline-input" type="text" inputmode="decimal" data-inline-field="stock" value="${escapeHtml(stockValue)}" placeholder="—" aria-label="Остаток" />
+            <span class="product-row-stock-unit-hint">${escapeHtml(stockUnitHint)}</span>
+          </div>
         </div>
         <div class="product-row-field field-wrap">
-          <label class="field-label">Себестоимость</label>
-          <input class="control control-sm product-row-input product-row-inline-input" type="text" inputmode="decimal" data-inline-field="cost_price" value="${escapeHtml(costValue)}" placeholder="—" />
+          <input class="control control-sm product-row-input product-row-inline-input" type="text" inputmode="decimal" data-inline-field="cost_price" value="${escapeHtml(costValue)}" placeholder="—" aria-label="Себестоимость" />
         </div>
         <div class="product-row-field field-wrap">
-          <label class="field-label">Цена</label>
-          <input class="control control-sm product-row-input product-row-inline-input" type="text" inputmode="decimal" data-inline-field="price" value="${escapeHtml(priceValue)}" placeholder="—" />
+          <input class="control control-sm product-row-input product-row-inline-input" type="text" inputmode="decimal" data-inline-field="price" value="${escapeHtml(priceValue)}" placeholder="—" aria-label="Цена" />
         </div>
         <div class="product-row-field field-wrap">
-          <label class="field-label">Старая цена</label>
-          <input class="control control-sm product-row-input product-row-inline-input" type="text" inputmode="decimal" data-inline-field="old_price" value="${escapeHtml(oldPriceValue)}" placeholder="—" />
+          <input class="control control-sm product-row-input product-row-inline-input" type="text" inputmode="decimal" data-inline-field="old_price" value="${escapeHtml(oldPriceValue)}" placeholder="—" aria-label="Старая цена" />
         </div>
       </div>
     `;
@@ -4515,7 +4526,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
           toggleProductCardSelection(id);
           return;
         }
-        if (event.target.closest(".product-row-field") || event.target.closest(".product-row-switch")) {
+        if (event.target.closest(".product-row-field") || event.target.closest(".product-row-switch") || event.target.closest(".product-row-switch-field")) {
           return;
         }
         const id = Number(row.dataset.id);
@@ -4536,27 +4547,27 @@ function openAutoAddGroupModal({ mode, group } = {}) {
       const product = state.products.find((x) => Number(x.id) === productId);
       if (!product) return;
 
-      const visibilityInput = row.querySelector('[data-inline-field="site_visibility"]');
-      if (visibilityInput) {
-        visibilityInput.addEventListener("click", (event) => event.stopPropagation());
-        visibilityInput.addEventListener("change", async () => {
-          const previousValue = Boolean(product.site_visibility);
-          const nextValue = Boolean(visibilityInput.checked);
-          visibilityInput.disabled = true;
+      row.querySelectorAll('[data-inline-field="is_active"], [data-inline-field="site_visibility"]').forEach((switchInput) => {
+        const field = switchInput.dataset.inlineField;
+        switchInput.addEventListener("click", (event) => event.stopPropagation());
+        switchInput.addEventListener("change", async () => {
+          const previousValue = Boolean(field === "is_active" ? product.is_active : product.site_visibility);
+          const nextValue = Boolean(switchInput.checked);
+          switchInput.disabled = true;
           try {
             await api(`/api/prod_products/${productId}`, {
               method: "PATCH",
-              body: JSON.stringify({ site_visibility: nextValue ? 1 : 0 }),
+              body: JSON.stringify({ [field]: nextValue ? 1 : 0 }),
             });
-            applyInlineProductValue(product, "site_visibility", nextValue ? 1 : 0);
+            applyInlineProductValue(product, field, nextValue ? 1 : 0);
           } catch (e) {
-            visibilityInput.checked = previousValue;
-            alert("Ошибка сохранения видимости товара: " + (e.message || "Неизвестная ошибка"));
+            switchInput.checked = previousValue;
+            alert("Ошибка сохранения статуса товара: " + (e.message || "Неизвестная ошибка"));
           } finally {
-            visibilityInput.disabled = false;
+            switchInput.disabled = false;
           }
         });
-      }
+      });
 
       row.querySelectorAll(".product-row-inline-input[data-inline-field]").forEach((input) => {
         const field = input.dataset.inlineField;

@@ -4109,12 +4109,48 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
 
 /* Products list variant */
 
+.product-list-header,
 .product-row{
+  --product-row-switch-field-w:64px;
   --product-row-field-w:100px;
   --product-row-stock-field-w:112px;
-  grid-template-columns:56px minmax(220px,1fr) auto var(--product-row-stock-field-w) repeat(3, var(--product-row-field-w));
+  grid-template-columns:50px minmax(220px,1fr) repeat(2, var(--product-row-switch-field-w)) var(--product-row-stock-field-w) repeat(3, var(--product-row-field-w));
+}
+.product-list-header{
+  position:sticky;
+  top:-12px;
+  z-index:5;
+  display:grid;
   align-items:center;
   gap:6px;
+  height:22px;
+  min-height:22px;
+  margin:-12px -12px 10px;
+  padding:12px 24px 0;
+  box-sizing:border-box;
+  color:var(--color-text-muted);
+  background:var(--color-surface);
+  font-size:9px;
+  line-height:10px;
+  pointer-events:none;
+}
+.product-list-header span{
+  min-width:0;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  text-align:center;
+}
+.product-list-header span:nth-child(-n+2){
+  text-align:left;
+}
+.product-row{
+  align-items:center;
+  gap:6px;
+}
+.order-row.product-row{
+  padding:0 12px 0 0;
+  overflow:hidden;
 }
 .product-main-head{
   min-width:0;
@@ -4123,8 +4159,15 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
 .product-row-switch{
   display:inline-flex;
   align-self:center;
-  justify-self:start;
+  justify-self:center;
   pointer-events:auto;
+}
+.product-row-switch-field{
+  width:var(--product-row-switch-field-w);
+  min-width:0;
+  justify-self:end;
+  align-self:center;
+  text-align:center;
 }
 .product-row-field{
   width:var(--product-row-field-w);
@@ -4135,17 +4178,46 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
 .product-row-field--stock{
   width:var(--product-row-stock-field-w);
 }
+.product-row-stock-input-wrap{
+  position:relative;
+}
+.product-row-stock-input-wrap .product-row-input{
+  padding-right:28px;
+}
+.product-row-stock-unit-hint{
+  position:absolute;
+  top:50%;
+  right:8px;
+  transform:translateY(-50%);
+  color:var(--color-text-muted);
+  font-size:11px;
+  line-height:1;
+  pointer-events:none;
+  opacity:0;
+}
+.product-row-stock-input-wrap:focus-within .product-row-stock-unit-hint:not(:empty){
+  opacity:1;
+}
 .product-row .control.product-row-input{
   pointer-events:auto;
   height:28px;
   min-height:28px;
   padding:2px 8px;
-  font-size:12px;
+  border-color:transparent;
+  background:transparent;
+  box-shadow:none;
+  font-size:14px;
+  font-weight:700;
   border-radius:8px;
   text-align:center;
+  transition:border-color var(--dur-fast) var(--ease-smooth), background var(--dur-fast) var(--ease-smooth), box-shadow var(--dur-fast) var(--ease-smooth);
+}
+.product-row .control.product-row-input:hover{
+  background:var(--color-surface-2);
 }
 .product-row .control.product-row-input:focus{
   border-color:var(--color-primary);
+  background:var(--color-surface);
   box-shadow:0 0 0 2px rgba(255, 122, 0, 0.12);
 }
 .product-row .field-label{
@@ -4154,19 +4226,23 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
 }
 
 @media (max-width:1680px){
+  .product-list-header,
   .product-row{
+    --product-row-switch-field-w:60px;
     --product-row-field-w:94px;
     --product-row-stock-field-w:106px;
-    grid-template-columns:52px minmax(180px,1fr) auto var(--product-row-stock-field-w) repeat(3, var(--product-row-field-w));
+    grid-template-columns:50px minmax(180px,1fr) repeat(2, var(--product-row-switch-field-w)) var(--product-row-stock-field-w) repeat(3, var(--product-row-field-w));
     gap:5px;
   }
 }
 
 @media (max-width:1400px){
+  .product-list-header,
   .product-row{
+    --product-row-switch-field-w:56px;
     --product-row-field-w:88px;
     --product-row-stock-field-w:100px;
-    grid-template-columns:52px minmax(150px,1fr) auto var(--product-row-stock-field-w) repeat(3, var(--product-row-field-w));
+    grid-template-columns:50px minmax(150px,1fr) repeat(2, var(--product-row-switch-field-w)) var(--product-row-stock-field-w) repeat(3, var(--product-row-field-w));
     gap:4px;
   }
 }
@@ -4178,12 +4254,31 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
 
 .product-row-photo-select{
   position:relative;
-  width:44px;
-  height:44px;
+  width:50px;
+  height:50px;
   display:grid;
   place-items:center;
-  border-radius:14px;
+  border-radius:11px 0 0 11px;
+  background:var(--primary-14);
+  border:0;
+  border-right:1px solid var(--primary-25);
+  overflow:hidden;
   cursor:pointer;
+}
+.product-row .product-thumb,
+.product-row .product-avatar{
+  width:100%;
+  height:100%;
+  border:0;
+  border-radius:0;
+  background:transparent;
+}
+.product-row .product-thumb{
+  object-fit:contain;
+  object-position:center center;
+}
+.product-row .product-avatar{
+  font-size:18px;
 }
 .product-row-select-input{
   position:absolute;
@@ -4214,8 +4309,12 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
 .order-row.product-row.is-selected .product-row-photo-select .product-thumb,
 .order-row.product-row.is-active .product-row-photo-select .product-avatar,
 .order-row.product-row.is-selected .product-row-photo-select .product-avatar{
-  border:2px solid var(--color-primary);
   box-shadow:none;
+}
+.order-row.product-row.is-active .product-row-photo-select,
+.order-row.product-row.is-selected .product-row-photo-select{
+  border:0;
+  border-right:2px solid var(--color-primary);
 }
 
 .products-bulk-footer-actions{
@@ -4336,7 +4435,7 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
   display:block;
 }
 
-.product-title{font-weight:900}
+.product-title{font-weight:500}
 .product-right{
   display:flex;
   gap:8px;
