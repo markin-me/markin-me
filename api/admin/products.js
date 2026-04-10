@@ -1384,24 +1384,34 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
     if (!norm.length) return res.status(400).json({ ok: false, error: 'EMPTY' });
 
     const conn = await db.getConnection();
+    const maxAttempts = 3;
     try {
-      await conn.beginTransaction();
-      let sort = 0;
-      for (const productId of norm) {
-        await conn.query(
-          `INSERT INTO prod_product_categories (tenant_id, product_id, category_id, sort_order)
-           VALUES (?,?,?,?)
-           ON DUPLICATE KEY UPDATE sort_order=VALUES(sort_order)`,
-          [tenantId, productId, categoryId, sort]
-        );
-        sort += 10;
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        try {
+          await conn.beginTransaction();
+          let sort = 0;
+          for (const productId of norm) {
+            await conn.query(
+              `INSERT INTO prod_product_categories (tenant_id, product_id, category_id, sort_order)
+               VALUES (?,?,?,?)
+               ON DUPLICATE KEY UPDATE sort_order=VALUES(sort_order)`,
+              [tenantId, productId, categoryId, sort]
+            );
+            sort += 10;
+          }
+          await conn.commit();
+          return res.json({ ok: true });
+        } catch (e) {
+          try { await conn.rollback(); } catch (_) {}
+          const isDeadlock = e && (e.code === 'ER_LOCK_DEADLOCK' || e.errno === 1213 || e.sqlState === '40001');
+          if (!isDeadlock || attempt >= maxAttempts) throw e;
+          await new Promise((resolve) => setTimeout(resolve, attempt * 60));
+        }
       }
-      await conn.commit();
-      res.json({ ok: true });
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
     } catch (e) {
-      await conn.rollback();
       console.error(e);
-      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
     } finally {
       conn.release();
     }

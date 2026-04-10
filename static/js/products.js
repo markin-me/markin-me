@@ -69,6 +69,13 @@
   const productsBulkFooter = $("#productsBulkFooter");
   const productsBulkSelectedCount = $("#productsBulkSelectedCount");
   const productsBulkToggleAllInput = $("#productsBulkToggleAllInput");
+  const productsBulkActions = $("#productsBulkActions");
+  const productsBulkCancelBtn = $("#productsBulkCancelBtn");
+  const productsBulkApplyBtn = $("#productsBulkApplyBtn");
+  const productsBulkActionsSelectedCount = $("#productsBulkActionsSelectedCount");
+  const productsBulkMenuWrap = $("#productsBulkMenuWrap");
+  const productsBulkMenuToggleBtn = $("#productsBulkMenuToggleBtn");
+  const productsBulkMenu = $("#productsBulkMenu");
   const categoriesMainList = $("#categoriesMainList");
   const categoriesEmptyHint = $("#categoriesEmptyHint");
   const optionsGroupsList = $("#optionsGroupsList");
@@ -232,6 +239,24 @@
   const navigationStack = [];
   let currentNavigationState = null;
   let suspendedProductNavigation = null;
+  let productRowsDragSuppressClickUntil = 0;
+  const productRowsDragState = {
+    armed: false,
+    active: false,
+    enabled: false,
+    pointerId: null,
+    startX: 0,
+    startY: 0,
+    currentY: 0,
+    anchorRow: null,
+    dragRows: [],
+    placeholder: null,
+    ghost: null,
+    scrollRAF: 0,
+    moveHandler: null,
+    upHandler: null,
+    saving: false,
+  };
 
   // Navigation functions
   function pushNavigationState(state) {
@@ -469,6 +494,17 @@
   const editingCombos = new Map(); // Map<comboTabId, { mode, blockDraft, products }>
   const editingAutoAdds = new Map(); // Map<autoAddGroupId, { mode, autoAddDraft, snapshotData }>
 
+  function getDefaultProductsBulkActions() {
+    return {
+      activate: false,
+      deactivate: false,
+      show: false,
+      hide: false,
+      infinite_stock: false,
+      zero_stock: false,
+    };
+  }
+
   const state = {
     mode: "products", // products | categories | ...
     categories: [],
@@ -486,6 +522,8 @@
     allCategoryId: null,
     selectedProductId: null,
     selectedProductIds: new Set(),
+    productsBulkActions: getDefaultProductsBulkActions(),
+    productsBulkApplying: false,
     selectedCategoryId: null,
     selectedProductCategories: [], // full objects
     optionGroups: [],
@@ -4400,11 +4438,83 @@ function openAutoAddGroupModal({ mode, group } = {}) {
       .filter(Number.isFinite);
   }
 
+  function closeProductsBulkMenu() {
+    if (!productsBulkMenu || !productsBulkMenuWrap) return;
+    productsBulkMenu.classList.add("hidden");
+    productsBulkMenuWrap.classList.remove("is-open");
+  }
+
+  function countSelectedProductsBulkActions() {
+    const actions = state.productsBulkActions || {};
+    return Object.values(actions).reduce((acc, value) => acc + (value ? 1 : 0), 0);
+  }
+
+  function setProductsBulkAction(actionKey, nextValue) {
+    const actions = state.productsBulkActions || (state.productsBulkActions = getDefaultProductsBulkActions());
+    actions[actionKey] = Boolean(nextValue);
+    if (actionKey === "activate" && actions.activate) actions.deactivate = false;
+    if (actionKey === "deactivate" && actions.deactivate) actions.activate = false;
+    if (actionKey === "show" && actions.show) actions.hide = false;
+    if (actionKey === "hide" && actions.hide) actions.show = false;
+    if (actionKey === "infinite_stock" && actions.infinite_stock) actions.zero_stock = false;
+    if (actionKey === "zero_stock" && actions.zero_stock) actions.infinite_stock = false;
+  }
+
+  function resetProductsBulkActions() {
+    state.productsBulkActions = getDefaultProductsBulkActions();
+    if (productsBulkMenu) {
+      productsBulkMenu.querySelectorAll("input[data-bulk-action]").forEach((input) => {
+        input.checked = false;
+      });
+    }
+  }
+
+  function syncProductsBulkActionsUi() {
+    if (productsBulkMenu) {
+      productsBulkMenu.querySelectorAll("input[data-bulk-action]").forEach((input) => {
+        const key = String(input.dataset.bulkAction || "");
+        input.checked = Boolean(state.productsBulkActions?.[key]);
+      });
+    }
+    if (productsBulkActionsSelectedCount) {
+      productsBulkActionsSelectedCount.textContent = String(countSelectedProductsBulkActions());
+    }
+    if (productsBulkApplyBtn) {
+      productsBulkApplyBtn.disabled = state.productsBulkApplying || countSelectedProductsBulkActions() === 0 || state.selectedProductIds.size === 0;
+    }
+    if (productsBulkCancelBtn) {
+      productsBulkCancelBtn.disabled = state.productsBulkApplying;
+    }
+    if (productsBulkMenuToggleBtn) {
+      productsBulkMenuToggleBtn.disabled = state.productsBulkApplying;
+    }
+  }
+
+  function buildProductsBulkPayload() {
+    const actions = state.productsBulkActions || {};
+    const payload = {};
+    if (actions.activate) payload.is_active = 1;
+    if (actions.deactivate) payload.is_active = 0;
+    if (actions.show) payload.site_visibility = 1;
+    if (actions.hide) payload.site_visibility = 0;
+    if (actions.infinite_stock) payload.stock = null;
+    if (actions.zero_stock) payload.stock = 0;
+    return payload;
+  }
+
+  function applyProductsBulkPayloadToLocalProduct(product, payload) {
+    if (!product || !payload) return;
+    if (Object.prototype.hasOwnProperty.call(payload, "is_active")) applyInlineProductValue(product, "is_active", payload.is_active);
+    if (Object.prototype.hasOwnProperty.call(payload, "site_visibility")) applyInlineProductValue(product, "site_visibility", payload.site_visibility);
+    if (Object.prototype.hasOwnProperty.call(payload, "stock")) applyInlineProductValue(product, "stock", payload.stock);
+  }
+
   function syncProductsBulkFooter() {
     if (!productsBulkFooter) return;
     const selectedCount = state.selectedProductIds.size;
     const shouldShow = state.mode === "products" && selectedCount > 0;
     productsBulkFooter.classList.toggle("hidden", !shouldShow);
+    if (!shouldShow) closeProductsBulkMenu();
     if (productsBulkSelectedCount) {
       productsBulkSelectedCount.textContent = String(selectedCount);
     }
@@ -4415,14 +4525,22 @@ function openAutoAddGroupModal({ mode, group } = {}) {
       productsBulkToggleAllInput.indeterminate = selectedInGroup > 0 && selectedInGroup < groupIds.length;
       productsBulkToggleAllInput.disabled = state.productsLoading || groupIds.length === 0;
     }
+    if (productsBulkActions) {
+      productsBulkActions.classList.toggle("hidden", !shouldShow);
+    }
+    syncProductsBulkActionsUi();
   }
 
   function clearProductsBulkSelection() {
     if (!state.selectedProductIds.size) {
+      resetProductsBulkActions();
+      closeProductsBulkMenu();
       syncProductsBulkFooter();
       return;
     }
     state.selectedProductIds.clear();
+    resetProductsBulkActions();
+    closeProductsBulkMenu();
     syncProductRowSelectionUI(productsList);
     syncProductsBulkFooter();
   }
@@ -4438,6 +4556,10 @@ function openAutoAddGroupModal({ mode, group } = {}) {
       state.selectedProductIds.delete(id);
     } else {
       state.selectedProductIds.add(id);
+    }
+    if (state.selectedProductIds.size === 0) {
+      resetProductsBulkActions();
+      closeProductsBulkMenu();
     }
     syncProductRowSelectionUI(productsList);
     syncProductsBulkFooter();
@@ -4457,6 +4579,10 @@ function openAutoAddGroupModal({ mode, group } = {}) {
       if (allSelected) state.selectedProductIds.delete(id);
       else state.selectedProductIds.add(id);
     });
+    if (state.selectedProductIds.size === 0) {
+      resetProductsBulkActions();
+      closeProductsBulkMenu();
+    }
     syncProductRowSelectionUI(productsList);
     syncProductsBulkFooter();
   }
@@ -4530,6 +4656,11 @@ function openAutoAddGroupModal({ mode, group } = {}) {
       if (row.dataset.boundClick === "1") return;
       row.dataset.boundClick = "1";
       row.addEventListener("click", async (event) => {
+        if (Date.now() < productRowsDragSuppressClickUntil) {
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
         if (event.target.closest(".product-row-select-control")) {
           event.preventDefault();
           event.stopPropagation();
@@ -4678,21 +4809,224 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     });
   }
 
+  function persistProductOrderFromDom() {
+    const ordered = $$(".order-row.product-row[data-id]", productsList).map((el) => Number(el.dataset.id)).filter(Number.isFinite);
+    return api("/api/sort/prod_products", {
+      method: "POST",
+      body: JSON.stringify({ category_id: state.currentCategoryId, orderedProductIds: ordered }),
+    });
+  }
+
+  function getProductRowsListInDomOrder() {
+    return $$(".order-row.product-row[data-id]", productsList);
+  }
+
+  function getProductRowsDragGroup(anchorRow) {
+    const anchorId = Number(anchorRow?.dataset.id);
+    if (!Number.isFinite(anchorId)) return [];
+    const rows = getProductRowsListInDomOrder();
+    if (!state.selectedProductIds.has(anchorId) || state.selectedProductIds.size < 2) {
+      return [anchorRow];
+    }
+    const selectedRows = rows.filter((row) => state.selectedProductIds.has(Number(row.dataset.id)));
+    return selectedRows.length ? selectedRows : [anchorRow];
+  }
+
+  function clearProductRowsDragVisuals() {
+    if (productRowsDragState.placeholder?.parentNode) {
+      productRowsDragState.placeholder.parentNode.removeChild(productRowsDragState.placeholder);
+    }
+    productRowsDragState.dragRows.forEach((row) => row.classList.remove("is-drag-hidden"));
+    productRowsDragState.placeholder = null;
+    productRowsDragState.ghost = null;
+    productRowsDragState.dragRows = [];
+    productsList?.classList.remove("is-product-dragging");
+  }
+
+  function stopProductRowsAutoScroll() {
+    if (productRowsDragState.scrollRAF) {
+      cancelAnimationFrame(productRowsDragState.scrollRAF);
+      productRowsDragState.scrollRAF = 0;
+    }
+  }
+
+  function updateProductRowsPlaceholderPosition(clientY) {
+    if (!productsList || !productRowsDragState.placeholder) return;
+    const placeholder = productRowsDragState.placeholder;
+    const candidates = getProductRowsListInDomOrder().filter((row) => !row.classList.contains("is-drag-hidden"));
+    let target = null;
+    for (const row of candidates) {
+      const rect = row.getBoundingClientRect();
+      if (clientY < rect.top + rect.height / 2) {
+        target = row;
+        break;
+      }
+    }
+    if (target) {
+      if (placeholder !== target.previousElementSibling) {
+        productsList.insertBefore(placeholder, target);
+      }
+      return;
+    }
+    const firstComboRow = productsList.querySelector(".order-row.combo-row");
+    if (firstComboRow) {
+      if (placeholder.nextElementSibling !== firstComboRow) {
+        productsList.insertBefore(placeholder, firstComboRow);
+      }
+    } else {
+      productsList.appendChild(placeholder);
+    }
+  }
+
+  function startProductRowsAutoScroll() {
+    if (productRowsDragState.scrollRAF) return;
+    const step = () => {
+      productRowsDragState.scrollRAF = 0;
+      if (!productRowsDragState.active || !productsScrollEl) return;
+      const rect = productsScrollEl.getBoundingClientRect();
+      const edge = 56;
+      let delta = 0;
+      if (productRowsDragState.currentY < rect.top + edge) {
+        delta = -Math.max(4, Math.round((rect.top + edge - productRowsDragState.currentY) / 6));
+      } else if (productRowsDragState.currentY > rect.bottom - edge) {
+        delta = Math.max(4, Math.round((productRowsDragState.currentY - (rect.bottom - edge)) / 6));
+      }
+      if (delta !== 0) {
+        productsScrollEl.scrollTop += delta;
+        updateProductRowsPlaceholderPosition(productRowsDragState.currentY);
+        productRowsDragState.scrollRAF = requestAnimationFrame(step);
+      }
+    };
+    productRowsDragState.scrollRAF = requestAnimationFrame(step);
+  }
+
+  function activateProductRowsDrag() {
+    if (!productsList || productRowsDragState.active || !productRowsDragState.anchorRow) return;
+    const dragRows = getProductRowsDragGroup(productRowsDragState.anchorRow);
+    if (!dragRows.length) return;
+
+    const firstRect = dragRows[0].getBoundingClientRect();
+    const lastRect = dragRows[dragRows.length - 1].getBoundingClientRect();
+    const placeholder = document.createElement("div");
+    placeholder.className = "product-rows-drag-placeholder";
+    const groupHeight = Math.max(24, Math.round(lastRect.bottom - firstRect.top));
+    placeholder.style.setProperty("--drag-group-height", `${groupHeight}px`);
+
+    dragRows[0].before(placeholder);
+    dragRows.forEach((row) => row.classList.add("is-drag-hidden"));
+
+    productRowsDragState.active = true;
+    productRowsDragState.dragRows = dragRows;
+    productRowsDragState.placeholder = placeholder;
+    productRowsDragState.ghost = null;
+    productsList.classList.add("is-product-dragging");
+    updateProductRowsPlaceholderPosition(productRowsDragState.currentY || productRowsDragState.startY);
+    startProductRowsAutoScroll();
+  }
+
+  function moveProductRowsDragGhost(clientX, clientY) {
+    return;
+  }
+
+  async function finishProductRowsDrag(cancelled = false) {
+    stopProductRowsAutoScroll();
+    const wasActive = productRowsDragState.active;
+    const dragRows = productRowsDragState.dragRows.slice();
+    const placeholder = productRowsDragState.placeholder;
+    try {
+      if (!cancelled && wasActive && productsList && placeholder && dragRows.length) {
+        dragRows.forEach((row) => productsList.insertBefore(row, placeholder));
+        if (!productRowsDragState.saving) {
+          productRowsDragState.saving = true;
+          try {
+            await persistProductOrderFromDom();
+          } catch (e) {
+            console.error(e);
+            try {
+              await refreshAll();
+            } catch (refreshError) {
+              console.error(refreshError);
+            }
+          } finally {
+            productRowsDragState.saving = false;
+          }
+        }
+        productRowsDragSuppressClickUntil = Date.now() + 180;
+      }
+    } finally {
+      clearProductRowsDragVisuals();
+      productRowsDragState.armed = false;
+      productRowsDragState.active = false;
+      productRowsDragState.pointerId = null;
+      productRowsDragState.anchorRow = null;
+      productRowsDragState.startX = 0;
+      productRowsDragState.startY = 0;
+      productRowsDragState.currentY = 0;
+    }
+  }
+
+  function bindProductRowsDragSort(enable) {
+    if (!productsList) return;
+    productRowsDragState.enabled = Boolean(enable);
+    if (productsList.dataset.productDragBound === "1") return;
+    productsList.dataset.productDragBound = "1";
+
+    productsList.addEventListener("pointerdown", (event) => {
+      if (!productRowsDragState.enabled) return;
+      if (productRowsDragState.saving) return;
+      if (event.button !== 0) return;
+      if (event.target.closest(".product-row-select-control") || event.target.closest(".product-row-field") || event.target.closest(".product-row-switch") || event.target.closest(".product-row-switch-field") || event.target.closest(".product-row-inline-input")) {
+        return;
+      }
+      const row = event.target.closest(".order-row.product-row[data-id]");
+      if (!row) return;
+      if (productsList.querySelector(".order-row.product-row.is-dragging")) return;
+
+      productRowsDragState.armed = true;
+      productRowsDragState.active = false;
+      productRowsDragState.pointerId = event.pointerId;
+      productRowsDragState.startX = event.clientX;
+      productRowsDragState.startY = event.clientY;
+      productRowsDragState.currentY = event.clientY;
+      productRowsDragState.anchorRow = row;
+
+      const moveHandler = (moveEvent) => {
+        if (moveEvent.pointerId !== productRowsDragState.pointerId) return;
+        productRowsDragState.currentY = moveEvent.clientY;
+        const dx = Math.abs(moveEvent.clientX - productRowsDragState.startX);
+        const dy = Math.abs(moveEvent.clientY - productRowsDragState.startY);
+        if (!productRowsDragState.active && (dx > 6 || dy > 6)) {
+          activateProductRowsDrag();
+        }
+        if (!productRowsDragState.active) return;
+        moveEvent.preventDefault();
+        updateProductRowsPlaceholderPosition(moveEvent.clientY);
+        startProductRowsAutoScroll();
+      };
+
+      const upHandler = async (upEvent) => {
+        if (upEvent.pointerId !== productRowsDragState.pointerId) return;
+        window.removeEventListener("pointermove", moveHandler, true);
+        window.removeEventListener("pointerup", upHandler, true);
+        window.removeEventListener("pointercancel", upHandler, true);
+        await finishProductRowsDrag(!productRowsDragState.active);
+      };
+
+      productRowsDragState.moveHandler = moveHandler;
+      productRowsDragState.upHandler = upHandler;
+      window.addEventListener("pointermove", moveHandler, true);
+      window.addEventListener("pointerup", upHandler, true);
+      window.addEventListener("pointercancel", upHandler, true);
+    });
+  }
+
   function syncProductRowsSortability() {
     if (!productsList) return;
     const canSortProducts = !state.productsHasMore && !state.productsLoading;
     $$(".order-row.product-row[data-id]", productsList).forEach((row) => {
-      row.setAttribute("draggable", canSortProducts ? "true" : "false");
+      row.setAttribute("draggable", "false");
     });
-    if (canSortProducts) {
-      makeSortable(productsList, ".order-row.product-row", async () => {
-        const ordered = $$(".order-row.product-row", productsList).map((el) => Number(el.dataset.id)).filter(Number.isFinite);
-        await api("/api/sort/prod_products", {
-          method: "POST",
-          body: JSON.stringify({ category_id: state.currentCategoryId, orderedProductIds: ordered }),
-        });
-      });
-    }
+    bindProductRowsDragSort(canSortProducts);
   }
 
   function appendProductRowsToList(items) {
@@ -15756,6 +16090,77 @@ const isViewMode = state.comboPanel.mode === "view";
       });
     }
 
+    if (productsBulkMenuToggleBtn && productsBulkMenu && productsBulkMenuWrap) {
+      productsBulkMenuToggleBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const nextOpen = productsBulkMenu.classList.contains("hidden");
+        productsBulkMenu.classList.toggle("hidden", !nextOpen);
+        productsBulkMenuWrap.classList.toggle("is-open", nextOpen);
+      });
+    }
+
+    if (productsBulkMenu) {
+      productsBulkMenu.addEventListener("click", (event) => event.stopPropagation());
+      productsBulkMenu.addEventListener("change", (event) => {
+        const input = event.target?.closest?.("input[data-bulk-action]");
+        if (!input) return;
+        const key = String(input.dataset.bulkAction || "");
+        if (!key) return;
+        setProductsBulkAction(key, input.checked);
+        productsBulkMenu.querySelectorAll("input[data-bulk-action]").forEach((itemInput) => {
+          const itemKey = String(itemInput.dataset.bulkAction || "");
+          itemInput.checked = Boolean(state.productsBulkActions?.[itemKey]);
+        });
+        syncProductsBulkActionsUi();
+      });
+    }
+
+    if (productsBulkCancelBtn) {
+      productsBulkCancelBtn.addEventListener("click", () => {
+        if (state.productsBulkApplying) return;
+        resetProductsBulkActions();
+        closeProductsBulkMenu();
+        syncProductsBulkFooter();
+      });
+    }
+
+    if (productsBulkApplyBtn) {
+      productsBulkApplyBtn.addEventListener("click", async () => {
+        if (state.productsBulkApplying) return;
+        const payload = buildProductsBulkPayload();
+        if (!Object.keys(payload).length) return;
+        const ids = Array.from(state.selectedProductIds).map((id) => Number(id)).filter(Number.isFinite);
+        if (!ids.length) return;
+        state.productsBulkApplying = true;
+        syncProductsBulkActionsUi();
+        try {
+          for (const id of ids) {
+            await api(`/api/prod_products/${id}`, {
+              method: "PATCH",
+              body: JSON.stringify(payload),
+            });
+            const product = state.products.find((item) => Number(item?.id) === id);
+            if (!product) continue;
+            applyProductsBulkPayloadToLocalProduct(product, payload);
+            const row = productsList?.querySelector?.(`.order-row.product-row[data-id="${id}"]`);
+            if (!row) continue;
+            if (Object.prototype.hasOwnProperty.call(payload, "is_active")) syncProductRowInlineControl(row, product, "is_active");
+            if (Object.prototype.hasOwnProperty.call(payload, "site_visibility")) syncProductRowInlineControl(row, product, "site_visibility");
+            if (Object.prototype.hasOwnProperty.call(payload, "stock")) syncProductRowInlineControl(row, product, "stock");
+          }
+          resetProductsBulkActions();
+          closeProductsBulkMenu();
+          syncProductsBulkFooter();
+        } catch (e) {
+          alert("Ошибка массового применения: " + (e.message || "Неизвестная ошибка"));
+        } finally {
+          state.productsBulkApplying = false;
+          syncProductsBulkActionsUi();
+        }
+      });
+    }
+
     if (addCategoryBtn) {
       addCategoryBtn.addEventListener("click", () => {
         enterCategoriesMode();
@@ -15805,6 +16210,7 @@ const isViewMode = state.comboPanel.mode === "view";
       });
       document.addEventListener("click", () => {
         addMainWrapper.classList.remove("is-open");
+        closeProductsBulkMenu();
       });
       addMainWrapper.addEventListener("click", (e) => e.stopPropagation());
     }

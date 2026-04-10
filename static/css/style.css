@@ -4372,6 +4372,16 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
   border:0;
   border-right:1px solid var(--primary-25);
 }
+.product-rows-drag-placeholder{
+  width:calc(100% - 36px);
+  margin-left:28px;
+  height:0;
+  border-top:2px solid var(--color-primary);
+  border-radius:999px;
+  margin-top:2px;
+  margin-bottom:2px;
+  box-sizing:border-box;
+}
 
 .products-bulk-footer-actions{
   display:flex;
@@ -4404,6 +4414,66 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
 .products-bulk-toggle-all-box{
   border-color:var(--color-primary);
 }
+.products-bulk-actions{
+  position:relative;
+  display:flex;
+  align-items:center;
+  gap:8px;
+}
+.products-bulk-actions .icon-btn{
+  min-width:36px;
+  height:36px;
+  padding:0 10px;
+  border-radius:999px;
+  font-size:18px;
+  line-height:1;
+}
+.products-bulk-actions-count{
+  font-size:13px;
+  color:var(--color-text-muted);
+  white-space:nowrap;
+}
+.products-bulk-menu-wrap{
+  position:relative;
+}
+.products-bulk-menu{
+  position:absolute;
+  right:0;
+  bottom:calc(100% + 8px);
+  width:min(320px, calc(100vw - 40px));
+  padding:8px;
+  border:1px solid var(--color-border);
+  border-radius:14px;
+  background:var(--color-surface);
+  box-shadow:0 12px 30px rgba(0,0,0,.16);
+  z-index:40;
+}
+.products-bulk-menu-item{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  min-height:42px;
+  padding:0 12px;
+  border:1px solid var(--primary-20);
+  border-radius:12px;
+  cursor:pointer;
+  user-select:none;
+  color:var(--color-text);
+  transition:border-color var(--dur-fast) var(--ease-smooth), background var(--dur-fast) var(--ease-smooth);
+}
+.products-bulk-menu-item + .products-bulk-menu-item{
+  margin-top:8px;
+}
+.products-bulk-menu-item:hover{
+  border-color:var(--color-primary);
+  background:var(--primary-10);
+}
+.products-bulk-menu-item input[type="checkbox"]{
+  width:16px;
+  height:16px;
+  accent-color:var(--color-primary);
+  margin:0;
+}
 @media (max-width: 1200px){
   .products-bulk-footer-actions{
     flex-wrap:wrap;
@@ -4411,6 +4481,14 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
   .products-bulk-footer-count{
     width:100%;
     margin-right:0;
+  }
+  .products-bulk-actions{
+    width:100%;
+    justify-content:flex-end;
+  }
+  .products-bulk-menu{
+    right:0;
+    left:auto;
   }
 }
 

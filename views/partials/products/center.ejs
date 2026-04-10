@@ -96,6 +96,40 @@
           </label>
           <span>Выбрано: <b id="productsBulkSelectedCount">0</b></span>
         </div>
+        <div class="products-bulk-actions" id="productsBulkActions">
+          <span class="products-bulk-actions-count">Выбрано: <b id="productsBulkActionsSelectedCount">0</b></span>
+          <div class="products-bulk-menu-wrap" id="productsBulkMenuWrap">
+            <button class="btn btn-ghost icon-btn" type="button" id="productsBulkMenuToggleBtn" aria-label="Действия">...</button>
+            <div class="products-bulk-menu hidden" id="productsBulkMenu">
+              <label class="products-bulk-menu-item">
+                <input type="checkbox" data-bulk-action="activate" />
+                <span>Сделать активными</span>
+              </label>
+              <label class="products-bulk-menu-item">
+                <input type="checkbox" data-bulk-action="deactivate" />
+                <span>Сделать неактивными</span>
+              </label>
+              <label class="products-bulk-menu-item">
+                <input type="checkbox" data-bulk-action="show" />
+                <span>Сделать видимыми</span>
+              </label>
+              <label class="products-bulk-menu-item">
+                <input type="checkbox" data-bulk-action="hide" />
+                <span>Сделать невидимыми</span>
+              </label>
+              <label class="products-bulk-menu-item">
+                <input type="checkbox" data-bulk-action="infinite_stock" />
+                <span>Бесконечный остаток</span>
+              </label>
+              <label class="products-bulk-menu-item">
+                <input type="checkbox" data-bulk-action="zero_stock" />
+                <span>Обнулить остаток</span>
+              </label>
+            </div>
+          </div>
+          <button class="btn btn-ghost icon-btn" type="button" id="productsBulkCancelBtn" aria-label="Сбросить действия">✕</button>
+          <button class="btn icon-btn" type="button" id="productsBulkApplyBtn" aria-label="Применить действия">✓</button>
+        </div>
       </div>
     </div>
   </div>
