@@ -1440,8 +1440,9 @@ function buildProductDetailsContent(
 
   /* ================= OPTIONS (БЕЗ ИЗМЕНЕНИЙ) ================= */
 
+  let optionsWrap = null;
   if (optionGroups.length) {
-    const optionsWrap = document.createElement("div");
+    optionsWrap = document.createElement("div");
     optionsWrap.className = "shop-pd-options";
 
     optionGroups.forEach((group) => {
@@ -2760,7 +2761,6 @@ function buildProductDetailsContent(
       }
     });
 
-    scroll.appendChild(optionsWrap);
   }
 
   /* ================= INGREDIENTS ================= */
@@ -3028,6 +3028,10 @@ function buildProductDetailsContent(
     });
 
     scroll.appendChild(ingredientsWrap);
+  }
+
+  if (optionsWrap) {
+    scroll.appendChild(optionsWrap);
   }
 
   if (product.description) {
@@ -7314,6 +7318,7 @@ optionGroups.forEach((group) => {
     if (!header) return;
 
     header.classList.remove("is-shop-sheet-shell", "has-favorites-category-chips");
+    header.style.position = "";
     header.querySelectorAll(".shop-delivery-toggle-wrap").forEach((el) => el.remove());
     header.querySelectorAll(".shop-favorites-header-chips-wrap").forEach((el) => el.remove());
     const orderBackBtn = header.querySelector(".app-modal-back-btn");
@@ -7329,9 +7334,16 @@ optionGroups.forEach((group) => {
       titleEl.classList.remove("hidden", "is-cart-address-title", "is-empty-address");
       titleEl.style.cursor = "";
       titleEl.onclick = null;
+      titleEl.style.position = "";
+      titleEl.style.left = "";
+      titleEl.style.transform = "";
+      titleEl.style.width = "";
+      titleEl.style.maxWidth = "";
       titleEl.style.textAlign = "";
       titleEl.style.flex = "";
     }
+    const actionsEl = header.querySelector(".app-modal-actions");
+    if (actionsEl) actionsEl.style.marginLeft = "";
 
     const closeBtn =
       header.querySelector("#appModalCloseBtn") ||
@@ -22844,6 +22856,14 @@ function renderSheetAddressList() {
     const phone = document.createElement("input");
     phone.className = "control";
     phone.type = "tel";
+    phone.name = "shop-login-phone";
+    phone.autocomplete = "off";
+    phone.inputMode = "tel";
+    phone.autocorrect = "off";
+    phone.autocapitalize = "off";
+    phone.spellcheck = false;
+    phone.setAttribute("data-lpignore", "true");
+    phone.setAttribute("data-form-type", "other");
     phone.value = "+7";
     phone.placeholder = "+7 (999) 999-99-99";
     form.appendChild(phoneLabel);
@@ -23395,6 +23415,32 @@ function renderSheetAddressList() {
       if (elMobileCartActionsCheckout) elMobileCartActionsCheckout.classList.add("hidden");
     }
     // Помечаем как профильный шит, чтобы работали повторный клик и Android Back
+    if (fromCheckout) {
+      const modalBody = window.AppModal?.body;
+      if (modalBody) {
+        modalBody.classList.remove(
+          "shop-cart-sheet-screen-cart",
+          "shop-cart-sheet-screen-benefits",
+          "shop-cart-sheet-screen-address"
+        );
+      }
+      const header = document.querySelector(".app-modal-header");
+      const toggleWrap = header?.querySelector(".shop-delivery-toggle-wrap");
+      if (toggleWrap) toggleWrap.remove();
+      const titleEl = header?.querySelector(".app-modal-title");
+      const actionsEl = header?.querySelector(".app-modal-actions");
+      if (header) header.style.position = "relative";
+      if (titleEl) {
+        titleEl.classList.remove("hidden");
+        titleEl.style.position = "absolute";
+        titleEl.style.left = "50%";
+        titleEl.style.transform = "translateX(-50%)";
+        titleEl.style.width = "max-content";
+        titleEl.style.maxWidth = "calc(100% - 104px)";
+        titleEl.style.textAlign = "center";
+      }
+      if (actionsEl) actionsEl.style.marginLeft = "auto";
+    }
     sheetNavigationState.type = 'profile';
     sheetNavigationState.screen = null;
     sheetNavigationState.data = null;
@@ -28375,10 +28421,17 @@ function renderSheetAddressList() {
   }
 
   async function handleProfileLogout({ closeModal } = {}) {
+    const cleared = await clearCartAll();
+    if (cleared === false) {
+      alert("Не удалось очистить корзину и вернуть подарки. Попробуйте еще раз.");
+      return false;
+    }
+    saveCheckoutDraft({});
     try { await apiJson("/api/public/auth/logout", { method: "POST", body: {} }); } catch {}
     clearCustomer();
     await refreshAddressState();
     if (closeModal && window.AppModal) window.AppModal.close("sheet");
+    return true;
   }
 
   async function openProfilePanel(meOverride, { forceOpen = false, initialTab, onLoginSuccess } = {}) {
@@ -28411,7 +28464,10 @@ function renderSheetAddressList() {
     const ctx = buildProfileContent({
       host: elProfileContent,
       me,
-      onLogout: async () => { await handleProfileLogout(); await openProfilePanel(null, { forceOpen: true }); },
+      onLogout: async () => {
+        const loggedOut = await handleProfileLogout();
+        if (loggedOut) await openProfilePanel(null, { forceOpen: true });
+      },
       initialTab,
     });
 
@@ -28437,8 +28493,8 @@ function renderSheetAddressList() {
     if (elProfileLogoutBtn && elProfileMenu) {
       elProfileLogoutBtn.onclick = async () => {
         elProfileMenu.classList.add("hidden");
-        await handleProfileLogout();
-        openProfilePanel();
+        const loggedOut = await handleProfileLogout();
+        if (loggedOut) openProfilePanel();
       };
     }
 

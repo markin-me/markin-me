@@ -152,6 +152,179 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
   const publicResponseCache = new Map();
   const publicResponseInflight = new Map();
   const PUBLIC_CACHE_MAX_KEYS = 2000;
+  const PRODUCT_BLOCK_KEYS = Object.freeze([
+    'description',
+    'variants',
+    'options',
+    'ingredients',
+    'promotions',
+  ]);
+
+  function getDefaultProductBlocksConfig() {
+    return {
+      description: false,
+      variants: false,
+      options: false,
+      ingredients: false,
+      promotions: false,
+    };
+  }
+
+  function normalizeProductBlocksConfig(rawValue, fallbackValue = null) {
+    let parsed = rawValue;
+    if (typeof parsed === 'string') {
+      const trimmed = parsed.trim();
+      if (!trimmed) parsed = null;
+      else {
+        try {
+          parsed = JSON.parse(trimmed);
+        } catch {
+          parsed = null;
+        }
+      }
+    }
+    const fallback = fallbackValue && typeof fallbackValue === 'object'
+      ? fallbackValue
+      : getDefaultProductBlocksConfig();
+    const out = {};
+    PRODUCT_BLOCK_KEYS.forEach((key) => {
+      out[key] = Boolean(parsed && typeof parsed === 'object' && parsed[key] != null ? parsed[key] : fallback[key]);
+    });
+    return out;
+  }
+
+  async function resolveProductBlocksConfigMap(tenantId, storeId, productRows = []) {
+    const rows = Array.isArray(productRows) ? productRows : [];
+    const rowById = new Map();
+    rows.forEach((row) => {
+      const productId = Number(row?.id || row?.product_id || 0);
+      if (productId > 0) rowById.set(productId, row);
+    });
+    const productIds = Array.from(rowById.keys());
+    const result = new Map();
+    if (!productIds.length) return result;
+
+    const unresolvedIds = [];
+    for (const productId of productIds) {
+      const row = rowById.get(productId);
+      const raw = row?.blocks_config_json ?? row?.blocks_config ?? null;
+      if (raw != null) {
+        result.set(productId, normalizeProductBlocksConfig(raw));
+      } else {
+        unresolvedIds.push(productId);
+      }
+    }
+    if (!unresolvedIds.length) return result;
+
+    const computedById = new Map();
+    unresolvedIds.forEach((productId) => {
+      const row = rowById.get(productId) || {};
+      computedById.set(productId, {
+        ...getDefaultProductBlocksConfig(),
+        description: Boolean(
+          String(row.description_short || '').trim()
+          || String(row.description || '').trim()
+        ),
+      });
+    });
+
+    const placeholders = unresolvedIds.map(() => '?').join(',');
+
+    const [variantRows] = await db.query(
+      `SELECT DISTINCT product_id
+       FROM prod_variant_assignments
+       WHERE tenant_id=? AND product_id IN (${placeholders}) AND is_active=1`,
+      [tenantId, ...unresolvedIds]
+    );
+    variantRows.forEach((row) => {
+      const cfg = computedById.get(Number(row.product_id));
+      if (cfg) cfg.variants = true;
+    });
+
+    const [optionRows] = await db.query(
+      `SELECT DISTINCT assign_id AS product_id
+       FROM prod_option_assignments
+       WHERE tenant_id=? AND assign_type='product' AND assign_id IN (${placeholders}) AND is_active=1`,
+      [tenantId, ...unresolvedIds]
+    );
+    optionRows.forEach((row) => {
+      const cfg = computedById.get(Number(row.product_id));
+      if (cfg) cfg.options = true;
+    });
+
+    const [ingredientRows] = await db.query(
+      `SELECT DISTINCT product_id
+       FROM prod_product_ingredients
+       WHERE tenant_id=? AND product_id IN (${placeholders})`,
+      [tenantId, ...unresolvedIds]
+    );
+    ingredientRows.forEach((row) => {
+      const cfg = computedById.get(Number(row.product_id));
+      if (cfg) cfg.ingredients = true;
+    });
+
+    const [promotionRows] = await db.query(
+      `SELECT p.id AS product_id,
+              CASE
+                WHEN EXISTS (
+                  SELECT 1
+                  FROM mkt_discount_products dp
+                  JOIN mkt_discounts d
+                    ON d.id = dp.discount_id
+                   AND d.tenant_id = dp.tenant_id
+                  WHERE dp.tenant_id = p.tenant_id
+                    AND d.store_id = ?
+                    AND dp.product_id = p.id
+                ) OR EXISTS (
+                  SELECT 1
+                  FROM prod_product_categories pc
+                  JOIN mkt_discount_products dp
+                    ON dp.tenant_id = pc.tenant_id
+                   AND dp.category_id = pc.category_id
+                  JOIN mkt_discounts d
+                    ON d.id = dp.discount_id
+                   AND d.tenant_id = dp.tenant_id
+                  WHERE pc.tenant_id = p.tenant_id
+                    AND d.store_id = ?
+                    AND pc.product_id = p.id
+                )
+                THEN 1 ELSE 0
+              END AS has_promotions
+       FROM prod_products p
+       WHERE p.tenant_id=? AND p.id IN (${placeholders})`,
+      [storeId, storeId, tenantId, ...unresolvedIds]
+    );
+    promotionRows.forEach((row) => {
+      const cfg = computedById.get(Number(row.product_id));
+      if (cfg) cfg.promotions = Number(row.has_promotions || 0) === 1;
+    });
+
+    unresolvedIds.forEach((productId) => {
+      result.set(productId, normalizeProductBlocksConfig(computedById.get(productId)));
+    });
+
+    return result;
+  }
+
+  async function getResolvedProductBlocksConfig(tenantId, storeId, productRow) {
+    const map = await resolveProductBlocksConfigMap(tenantId, storeId, [productRow]);
+    return map.get(Number(productRow?.id || productRow?.product_id || 0)) || getDefaultProductBlocksConfig();
+  }
+
+  async function applyPublicProductBlocksToRows(rows, tenantId, storeId) {
+    const list = Array.isArray(rows) ? rows : [];
+    if (!list.length) return;
+    const map = await resolveProductBlocksConfigMap(tenantId, storeId, list);
+    list.forEach((row) => {
+      const productId = Number(row?.id || row?.product_id || 0);
+      const blocksConfig = map.get(productId) || getDefaultProductBlocksConfig();
+      row.blocks_config = blocksConfig;
+      if (!blocksConfig.description) {
+        row.description_short = null;
+        row.description = null;
+      }
+    });
+  }
 
   async function ensureOrderDeliveryTypeColumns() {
     if (orderDeliveryTypeColumnsReady) return true;
@@ -1531,6 +1704,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
 
     const productIds = rows.map(r => Number(r.id)).filter(Boolean);
     if (!productIds.length) return;
+    const blocksConfigMap = await resolveProductBlocksConfigMap(tenantId, storeId, rows);
 
     // Р СџР С•Р В»РЎС“РЎвЂЎР В°Р ВµР С Р С”Р В°РЎвЂљР ВµР С–Р С•РЎР‚Р С‘Р С‘ Р Т‘Р В»РЎРЏ Р С”Р В°Р В¶Р Т‘Р С•Р С–Р С• РЎвЂљР С•Р Р†Р В°РЎР‚Р В°
     const placeholders = productIds.map(() => '?').join(',');
@@ -1577,6 +1751,14 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     // Р СџРЎР‚Р С‘Р СР ВµР Р…РЎРЏР ВµР С РЎРѓР С”Р С‘Р Т‘Р С”Р С‘ Р С” Р С”Р В°Р В¶Р Т‘Р С•Р СРЎС“ РЎвЂљР С•Р Р†Р В°РЎР‚РЎС“
     for (const row of rows) {
       const pid = Number(row.id);
+      const blocksConfig = blocksConfigMap.get(pid) || getDefaultProductBlocksConfig();
+      row.blocks_config = blocksConfig;
+      if (!blocksConfig.promotions) {
+        row.discount = null;
+        row.original_price = null;
+        row.discounted_price = null;
+        continue;
+      }
       const discounts = [];
       const seenIds = new Set();
 
@@ -2799,6 +2981,9 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         }
       });
     } catch (e) {
+      if (e?.httpStatus === 404 || e?.message === 'NOT_FOUND') {
+        return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+      }
       console.error(e);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
@@ -2838,6 +3023,9 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         expires_at: expiresAt.toISOString(),
       });
     } catch (e) {
+      if (e?.httpStatus === 404 || e?.message === 'NOT_FOUND') {
+        return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+      }
       console.error(e);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
@@ -8620,7 +8808,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
         if (allCategoryId && categoryId === allCategoryId) {
           const [rows] = await db.query(
-            `SELECT p.id, p.tenant_id, p.name, p.description_short, p.price, p.base_qty, p.base_unit_id, p.unit_id, p.photos_json,
+            `SELECT p.id, p.tenant_id, p.name, p.description_short, p.price, p.base_qty, p.base_unit_id, p.unit_id, p.photos_json, p.blocks_config_json,
               s.qty AS stock_qty,
               pc.sort_order AS link_sort_order
              FROM prod_products p
@@ -8638,6 +8826,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             r.is_available = (r.stock_qty == null || Number(r.stock_qty) > 0);
             attachProductThumbs(r);
           }
+          await applyPublicProductBlocksToRows(rows, tenantId, storeId);
           await enrichProductsWithDisplayPrice(rows, tenantId);
           await enrichProductsWithDiscounts(rows, tenantId, storeId);
           const payload = { ok: true, data: rows, combos: [], category_id: categoryId, lite: true };
@@ -8647,7 +8836,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         }
 
         const [rows] = await db.query(
-          `SELECT p.id, p.tenant_id, p.name, p.description_short, p.price, p.base_qty, p.base_unit_id, p.unit_id, p.photos_json,
+          `SELECT p.id, p.tenant_id, p.name, p.description_short, p.price, p.base_qty, p.base_unit_id, p.unit_id, p.photos_json, p.blocks_config_json,
             s.qty AS stock_qty,
             pc.sort_order AS link_sort_order
            FROM prod_product_categories pc
@@ -8666,6 +8855,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           r.is_available = (r.stock_qty == null || Number(r.stock_qty) > 0);
           attachProductThumbs(r);
         }
+        await applyPublicProductBlocksToRows(rows, tenantId, storeId);
         await enrichProductsWithDisplayPrice(rows, tenantId);
         await enrichProductsWithDiscounts(rows, tenantId, storeId);
         const payload = { ok: true, data: rows, combos: [], category_id: categoryId, lite: true };
@@ -8743,6 +8933,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           r.is_available = Number(r.is_available || 0) === 1;
           attachProductThumbs(r);
         }
+        await applyPublicProductBlocksToRows(rows, tenantId, storeId);
         await enrichProductsWithDisplayPrice(rows, tenantId);
         await enrichProductsWithDiscounts(rows, tenantId, storeId);
         const combos = await getCombosForCategoryCached(tenantId, storeId, categoryId);
@@ -8814,6 +9005,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         r.is_available = Number(r.is_available || 0) === 1;
         attachProductThumbs(r);
       }
+      await applyPublicProductBlocksToRows(rows, tenantId, storeId);
       await enrichProductsWithDisplayPrice(rows, tenantId);
       await enrichProductsWithDiscounts(rows, tenantId, storeId);
       const combos = await getCombosForCategoryCached(tenantId, storeId, categoryId);
@@ -9063,6 +9255,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       p.photos = safeJsonArray(p.photos_json);
       attachProductThumbs(p);
       p.is_available = Number(p.is_available || 0) === 1;
+      await applyPublicProductBlocksToRows([p], tenantId, storeId);
 
       await enrichProductsWithDisplayPrice([p], tenantId);
       await enrichProductsWithDiscounts([p], tenantId, storeId);
@@ -9090,6 +9283,24 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         cacheKey,
         PUBLIC_CACHE_TTL_MS.productIngredients,
         async () => {
+          const [productRows] = await db.query(
+            `SELECT id, description_short, description, blocks_config_json
+             FROM prod_products
+             WHERE tenant_id=? AND id=?
+             LIMIT 1`,
+            [tenantId, productId]
+          );
+          const productRow = Array.isArray(productRows) ? (productRows[0] || null) : null;
+          if (!productRow) {
+            const err = new Error('NOT_FOUND');
+            err.httpStatus = 404;
+            throw err;
+          }
+          const blocksConfig = await getResolvedProductBlocksConfig(tenantId, storeId, productRow);
+          if (!blocksConfig.ingredients) {
+            return { ok: true, data: [] };
+          }
+
           const [pcsRows] = await db.query(
             `SELECT id FROM prod_units WHERE tenant_id=? AND code='pcs' LIMIT 1`,
             [tenantId]
@@ -9216,6 +9427,15 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             if (!result[pid]) result[pid] = [];
             result[pid].push(r);
           }
+          const blocksConfigMap = await resolveProductBlocksConfigMap(
+            tenantId,
+            0,
+            sortedIds.map((id) => ({ id }))
+          );
+          sortedIds.forEach((pid) => {
+            const blocksConfig = blocksConfigMap.get(Number(pid)) || getDefaultProductBlocksConfig();
+            if (!blocksConfig.ingredients) result[pid] = [];
+          });
 
           return { ok: true, data: result };
         }
@@ -9307,6 +9527,15 @@ window.location.replace(${JSON.stringify(redirectUrl)});
               discount_tiers: tiersByGroupId.get(Number(v.id)) || [],
             });
           }
+          const blocksConfigMap = await resolveProductBlocksConfigMap(
+            tenantId,
+            0,
+            sortedIds.map((id) => ({ id }))
+          );
+          sortedIds.forEach((pid) => {
+            const blocksConfig = blocksConfigMap.get(Number(pid)) || getDefaultProductBlocksConfig();
+            if (!blocksConfig.variants) result[pid] = [];
+          });
 
           return { ok: true, data: result };
         }
@@ -9388,6 +9617,15 @@ window.location.replace(${JSON.stringify(redirectUrl)});
               priority: Number(r.priority || 0),
               sort_order: Number(r.sort_order || 0),
             });
+          });
+          const blocksConfigMap = await resolveProductBlocksConfigMap(
+            tenantId,
+            storeId,
+            sortedIds.map((id) => ({ id }))
+          );
+          sortedIds.forEach((pid) => {
+            const blocksConfig = blocksConfigMap.get(Number(pid)) || getDefaultProductBlocksConfig();
+            if (!blocksConfig.options) result[pid] = [];
           });
 
           return { ok: true, data: result };
@@ -9895,6 +10133,40 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         };
       }
 
+      const blocksConfigMap = await resolveProductBlocksConfigMap(
+        tenantId,
+        storeId,
+        ids.map((id) => ({ id }))
+      );
+      ids.forEach((pid) => {
+        const config = blocksConfigMap.get(Number(pid)) || getDefaultProductBlocksConfig();
+        const entry = result[pid] || {
+          option_item_ids: [],
+          option_items: [],
+          ingredients: [],
+          ingredient_price_diff: 0,
+          variant_group_id: null,
+          variant_value_index: null,
+          variant_label: '',
+          variant_unit_price: 0,
+        };
+        if (!config.options) {
+          entry.option_item_ids = [];
+          entry.option_items = [];
+        }
+        if (!config.ingredients) {
+          entry.ingredients = [];
+          entry.ingredient_price_diff = 0;
+        }
+        if (!config.variants) {
+          entry.variant_group_id = null;
+          entry.variant_value_index = null;
+          entry.variant_label = '';
+          entry.variant_unit_price = 0;
+        }
+        result[pid] = entry;
+      });
+
       res.json({ ok: true, data: result });
     } catch (e) {
       console.error(e);
@@ -9916,6 +10188,24 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         cacheKey,
         PUBLIC_CACHE_TTL_MS.productOptionAssignments,
         async () => {
+          const [productRows] = await db.query(
+            `SELECT id, description_short, description, blocks_config_json
+             FROM prod_products
+             WHERE tenant_id=? AND id=? AND is_active=1 AND site_visibility=1
+             LIMIT 1`,
+            [tenantId, productId]
+          );
+          const productRow = Array.isArray(productRows) ? (productRows[0] || null) : null;
+          if (!productRow) {
+            const err = new Error('NOT_FOUND');
+            err.httpStatus = 404;
+            throw err;
+          }
+          const blocksConfig = await getResolvedProductBlocksConfig(tenantId, storeId, productRow);
+          if (!blocksConfig.options) {
+            return { ok: true, data: [] };
+          }
+
           const [productCheck] = await db.query(
             `SELECT id FROM prod_products
              WHERE tenant_id=? AND id=? AND is_active=1 AND site_visibility=1
@@ -10233,6 +10523,24 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         cacheKey,
         PUBLIC_CACHE_TTL_MS.productVariants,
         async () => {
+          const [productRows] = await db.query(
+            `SELECT id, description_short, description, blocks_config_json
+             FROM prod_products
+             WHERE tenant_id=? AND id=?
+             LIMIT 1`,
+            [tenantId, productId]
+          );
+          const productRow = Array.isArray(productRows) ? (productRows[0] || null) : null;
+          if (!productRow) {
+            const err = new Error('NOT_FOUND');
+            err.httpStatus = 404;
+            throw err;
+          }
+          const blocksConfig = await getResolvedProductBlocksConfig(tenantId, storeId, productRow);
+          if (!blocksConfig.variants) {
+            return { ok: true, data: [] };
+          }
+
           const [variants] = await db.query(
             `SELECT
                vg.id,

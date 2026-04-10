@@ -13,6 +13,46 @@
     } catch {}
     return 1;
   })();
+  const PRODUCT_BLOCK_DEFINITIONS = Object.freeze([
+    { key: "description", label: "Описание" },
+    { key: "variants", label: "Варианты товара" },
+    { key: "options", label: "Опции" },
+    { key: "ingredients", label: "Состав" },
+    { key: "promotions", label: "Участие в акциях" },
+  ]);
+
+  function getDefaultProductBlocksConfig() {
+    return {
+      description: false,
+      variants: false,
+      options: false,
+      ingredients: false,
+      promotions: false,
+    };
+  }
+
+  function normalizeProductBlocksConfig(rawValue, fallbackValue = null) {
+    let parsed = rawValue;
+    if (typeof parsed === "string") {
+      const trimmed = parsed.trim();
+      if (!trimmed) parsed = null;
+      else {
+        try {
+          parsed = JSON.parse(trimmed);
+        } catch {
+          parsed = null;
+        }
+      }
+    }
+    const fallback = fallbackValue && typeof fallbackValue === "object"
+      ? fallbackValue
+      : getDefaultProductBlocksConfig();
+    const out = {};
+    PRODUCT_BLOCK_DEFINITIONS.forEach(({ key }) => {
+      out[key] = Boolean(parsed && typeof parsed === "object" && parsed[key] != null ? parsed[key] : fallback[key]);
+    });
+    return out;
+  }
 
   // left
   const categoriesNav = $("#categoriesNav");
@@ -4280,6 +4320,67 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     return formatNumberForInput(n);
   }
 
+  function getProductRowEditableValue(product, field) {
+    if (!product) return "";
+    if (field === "stock") return product.stock_qty != null ? formatNumberForInput(product.stock_qty) : "";
+    if (field === "cost_price") return product.cost_price != null ? formatNumberForInput(product.cost_price) : "";
+    if (field === "price") return product.price != null ? formatNumberForInput(product.price) : "";
+    if (field === "old_price") return product.old_price != null ? formatNumberForInput(product.old_price) : "";
+    return "";
+  }
+
+  function getProductRowDisplayValue(product, field) {
+    if (!product) return "—";
+    if (field === "stock") {
+      const unitLabel = getProductListUnitLabel(product);
+      const stockValue = toReadonlyProductFieldValue(product.stock_qty);
+      return stockValue && unitLabel ? `${stockValue} ${unitLabel}` : (stockValue || "—");
+    }
+    if (field === "cost_price") return toReadonlyProductFieldValue(product.cost_price) || "—";
+    if (field === "price") return toReadonlyProductFieldValue(product.price) || "—";
+    if (field === "old_price") return toReadonlyProductFieldValue(product.old_price) || "—";
+    return "—";
+  }
+
+  function parseProductRowInlineNumber(field, value, product) {
+    if (field !== "stock") return parseNumberFromInput(value);
+    const unitLabel = String(getProductListUnitLabel(product) || "").trim();
+    let normalized = String(value || "").trim();
+    if (unitLabel) normalized = normalized.replace(unitLabel, "").trim();
+    normalized = normalized.replace(/[^\d,.\-]/g, "");
+    return parseNumberFromInput(normalized);
+  }
+
+  function applyInlineProductValue(product, field, value) {
+    if (!product) return;
+    if (field === "stock") product.stock_qty = value;
+    if (field === "cost_price") product.cost_price = value;
+    if (field === "price") product.price = value;
+    if (field === "old_price") product.old_price = value;
+    if (field === "site_visibility") product.site_visibility = value ? 1 : 0;
+  }
+
+  function getInlineProductComparableValue(product, field) {
+    if (!product) return null;
+    if (field === "stock") return product.stock_qty != null ? Number(product.stock_qty) : null;
+    if (field === "cost_price") return product.cost_price != null ? Number(product.cost_price) : null;
+    if (field === "price") return product.price != null ? Number(product.price) : 0;
+    if (field === "old_price") return product.old_price != null ? Number(product.old_price) : null;
+    if (field === "site_visibility") return Boolean(product.site_visibility);
+    return null;
+  }
+
+  function syncProductRowInlineControl(row, product, field) {
+    if (!row || !product || !field) return;
+    const control = row.querySelector(`[data-inline-field="${field}"]`);
+    if (!control) return;
+    if (field === "site_visibility") {
+      control.checked = Boolean(product.site_visibility);
+      return;
+    }
+    control.value = getProductRowDisplayValue(product, field);
+  }
+
   function syncProductRowSelectionUI(root = productsList) {
     if (!root) return;
     $$(".order-row.product-row[data-id]", root).forEach((row) => {
@@ -4352,11 +4453,10 @@ function openAutoAddGroupModal({ mode, group } = {}) {
   function buildProductRowHtml(product, canSortProducts) {
     const active = Number(product.id) === Number(state.selectedProductId) ? "is-active" : "";
     const selected = state.selectedProductIds.has(Number(product.id)) ? "is-selected" : "";
-    const unitLabel = getProductListUnitLabel(product);
-    const stockValue = toReadonlyProductFieldValue(product.stock_qty);
-    const costValue = toReadonlyProductFieldValue(product.cost_price);
-    const priceValue = toReadonlyProductFieldValue(product.price);
-    const oldPriceValue = toReadonlyProductFieldValue(product.old_price);
+    const stockValue = getProductRowDisplayValue(product, "stock");
+    const costValue = getProductRowDisplayValue(product, "cost_price");
+    const priceValue = getProductRowDisplayValue(product, "price");
+    const oldPriceValue = getProductRowDisplayValue(product, "old_price");
     const hasPhoto = Array.isArray(product.photos) && product.photos.length > 0;
     const avatar = hasPhoto
       ? `<img class="product-thumb" src="${escapeHtml(product.photos[0])}" alt="" />`
@@ -4372,28 +4472,24 @@ function openAutoAddGroupModal({ mode, group } = {}) {
           <div class="product-title">${escapeHtml(product.name)}</div>
         </div>
         <label class="switch switch-compact product-row-switch" aria-label="Показывать на сайте">
-          <input class="switch-input" type="checkbox" ${Number(product.site_visibility) ? "checked" : ""} tabindex="-1" />
+          <input class="switch-input" type="checkbox" data-inline-field="site_visibility" ${Number(product.site_visibility) ? "checked" : ""} />
           <span class="switch-ui" aria-hidden="true"></span>
         </label>
-        <div class="product-row-field field-wrap">
+        <div class="product-row-field product-row-field--stock field-wrap">
           <label class="field-label">Остаток</label>
-          <input class="control control-sm product-row-input" type="text" value="${escapeHtml(stockValue)}" placeholder="—" readonly tabindex="-1" />
-        </div>
-        <div class="product-row-field field-wrap">
-          <label class="field-label">Ед. изм.</label>
-          <input class="control control-sm product-row-input" type="text" value="${escapeHtml(unitLabel)}" placeholder="—" readonly tabindex="-1" />
+          <input class="control control-sm product-row-input product-row-inline-input" type="text" inputmode="decimal" data-inline-field="stock" value="${escapeHtml(stockValue)}" placeholder="—" />
         </div>
         <div class="product-row-field field-wrap">
           <label class="field-label">Себестоимость</label>
-          <input class="control control-sm product-row-input" type="text" value="${escapeHtml(costValue)}" placeholder="—" readonly tabindex="-1" />
+          <input class="control control-sm product-row-input product-row-inline-input" type="text" inputmode="decimal" data-inline-field="cost_price" value="${escapeHtml(costValue)}" placeholder="—" />
         </div>
         <div class="product-row-field field-wrap">
           <label class="field-label">Цена</label>
-          <input class="control control-sm product-row-input" type="text" value="${escapeHtml(priceValue)}" placeholder="—" readonly tabindex="-1" />
+          <input class="control control-sm product-row-input product-row-inline-input" type="text" inputmode="decimal" data-inline-field="price" value="${escapeHtml(priceValue)}" placeholder="—" />
         </div>
         <div class="product-row-field field-wrap">
           <label class="field-label">Старая цена</label>
-          <input class="control control-sm product-row-input" type="text" value="${escapeHtml(oldPriceValue)}" placeholder="—" readonly tabindex="-1" />
+          <input class="control control-sm product-row-input product-row-inline-input" type="text" inputmode="decimal" data-inline-field="old_price" value="${escapeHtml(oldPriceValue)}" placeholder="—" />
         </div>
       </div>
     `;
@@ -4419,11 +4515,111 @@ function openAutoAddGroupModal({ mode, group } = {}) {
           toggleProductCardSelection(id);
           return;
         }
+        if (event.target.closest(".product-row-field") || event.target.closest(".product-row-switch")) {
+          return;
+        }
         const id = Number(row.dataset.id);
         const p = state.products.find((x) => Number(x.id) === id);
         if (!p) return;
         await openProductById(id);
         openProductTab(p, { activate: false });
+      });
+    });
+  }
+
+  function bindProductRowInlineEditors(root = productsList) {
+    if (!root) return;
+    $$(".order-row.product-row[data-id]", root).forEach((row) => {
+      if (row.dataset.boundInlineEditing === "1") return;
+      row.dataset.boundInlineEditing = "1";
+      const productId = Number(row.dataset.id);
+      const product = state.products.find((x) => Number(x.id) === productId);
+      if (!product) return;
+
+      const visibilityInput = row.querySelector('[data-inline-field="site_visibility"]');
+      if (visibilityInput) {
+        visibilityInput.addEventListener("click", (event) => event.stopPropagation());
+        visibilityInput.addEventListener("change", async () => {
+          const previousValue = Boolean(product.site_visibility);
+          const nextValue = Boolean(visibilityInput.checked);
+          visibilityInput.disabled = true;
+          try {
+            await api(`/api/prod_products/${productId}`, {
+              method: "PATCH",
+              body: JSON.stringify({ site_visibility: nextValue ? 1 : 0 }),
+            });
+            applyInlineProductValue(product, "site_visibility", nextValue ? 1 : 0);
+          } catch (e) {
+            visibilityInput.checked = previousValue;
+            alert("Ошибка сохранения видимости товара: " + (e.message || "Неизвестная ошибка"));
+          } finally {
+            visibilityInput.disabled = false;
+          }
+        });
+      }
+
+      row.querySelectorAll(".product-row-inline-input[data-inline-field]").forEach((input) => {
+        const field = input.dataset.inlineField;
+        input.addEventListener("click", (event) => event.stopPropagation());
+        input.addEventListener("focus", () => {
+          input.dataset.inlineOriginal = getProductRowEditableValue(product, field);
+          input.dataset.inlineCancelled = "";
+          input.value = getProductRowEditableValue(product, field);
+          input.select();
+        });
+        input.addEventListener("keydown", (event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            input.blur();
+            return;
+          }
+          if (event.key === "Escape") {
+            event.preventDefault();
+            input.dataset.inlineCancelled = "1";
+            input.value = getProductRowDisplayValue(product, field);
+            input.blur();
+          }
+        });
+        input.addEventListener("blur", async () => {
+          if (input.dataset.inlineSaving === "1") return;
+          if (input.dataset.inlineCancelled === "1") {
+            input.dataset.inlineCancelled = "";
+            input.value = getProductRowDisplayValue(product, field);
+            return;
+          }
+
+          const draftValue = String(input.value ?? "").trim();
+          const normalizedValue = parseProductRowInlineNumber(field, draftValue, product);
+          const previousComparable = getInlineProductComparableValue(product, field);
+          const nextComparable = field === "price"
+            ? (normalizedValue != null ? Number(normalizedValue) : 0)
+            : (normalizedValue != null ? Number(normalizedValue) : null);
+
+          if (previousComparable === nextComparable) {
+            input.value = getProductRowDisplayValue(product, field);
+            return;
+          }
+
+          const payload = {};
+          payload[field] = field === "price" ? (normalizedValue ?? 0) : normalizedValue;
+
+          input.dataset.inlineSaving = "1";
+          input.disabled = true;
+          try {
+            await api(`/api/prod_products/${productId}`, {
+              method: "PATCH",
+              body: JSON.stringify(payload),
+            });
+            applyInlineProductValue(product, field, payload[field]);
+            syncProductRowInlineControl(row, product, field);
+          } catch (e) {
+            input.value = getProductRowDisplayValue(product, field);
+            alert("Ошибка сохранения поля товара: " + (e.message || "Неизвестная ошибка"));
+          } finally {
+            input.dataset.inlineSaving = "";
+            input.disabled = false;
+          }
+        });
       });
     });
   }
@@ -4498,6 +4694,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
       productsList.appendChild(template.content);
     }
     bindProductRowClickHandlers(productsList);
+    bindProductRowInlineEditors(productsList);
     syncProductRowsSortability();
     syncProductsListEmptyState();
     syncProductRowSelectionUI(productsList);
@@ -4527,6 +4724,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
 
     productsList.innerHTML = productRows.join("") + comboRows.join("");
     bindProductRowClickHandlers(productsList);
+    bindProductRowInlineEditors(productsList);
     bindComboRowClickHandlers(productsList);
     hydrateComboRowThumbs();
     syncProductRowsSortability();
@@ -10865,6 +11063,7 @@ const isViewMode = state.comboPanel.mode === "view";
       categories: defaultSelected,   // Set<number>
       photos: initialPhotos.map((url) => ({ kind: "url", url })), // {kind:'url'|'file', url|file, preview}
       activePhotoIdx: initialPhotos.length > 0 ? 0 : -1,
+      blocksConfig: normalizeProductBlocksConfig(product?.blocks_config),
       optionGroups: new Set(),
       initialOptionGroups: new Set(),
       variantGroupId: null,
@@ -11045,6 +11244,7 @@ const isViewMode = state.comboPanel.mode === "view";
 
             // ✅ категории из chips
             category_ids: Array.from(draft.categories).filter((id) => Number.isFinite(id)),
+            blocks_config: normalizeProductBlocksConfig(draft.blocksConfig),
 
             // ✅ фото JSON
             photos_json: finalUrls
@@ -11315,6 +11515,7 @@ const isViewMode = state.comboPanel.mode === "view";
           }
           
           if (window.__productEditorRecalc) window.__productEditorRecalc = null;
+          if (window.__productEditorBlocks) window.__productEditorBlocks = null;
           return true;
         } catch (e) {
           console.error('Unexpected error in onSave', e);
@@ -11330,6 +11531,9 @@ const isViewMode = state.comboPanel.mode === "view";
         // Сбрасываем пересчёт из меню «три точки»
         if (window.__productEditorRecalc) {
           window.__productEditorRecalc = null;
+        }
+        if (window.__productEditorBlocks) {
+          window.__productEditorBlocks = null;
         }
         // Удаляем обработчик клавиатуры при закрытии
         if (keyboardHandler) {
@@ -11404,6 +11608,7 @@ const isViewMode = state.comboPanel.mode === "view";
       form.sku.value = product.sku || "";
       form.description_short.value = product.description_short || "";
       form.description.value = product.description || "";
+      draft.blocksConfig = normalizeProductBlocksConfig(product.blocks_config);
       form.price.value = product.price != null ? formatNumberForInput(product.price) : "";
       form.old_price.value = product.old_price != null ? formatNumberForInput(product.old_price) : "";
       form.cost_price.value = product.cost_price != null ? formatNumberForInput(product.cost_price) : "";
@@ -11500,12 +11705,45 @@ const isViewMode = state.comboPanel.mode === "view";
       priceInput: $("#pe_price", wrapper),
       discountAccordion: $("#peDiscountAccordion", wrapper),
       discountEmpty: $("#peDiscountEmpty", wrapper),
+      descriptionBlock: $("#peDescriptionAccordion", wrapper),
+      variantBlock: $("#peVariantBlock", wrapper),
+      optionBlock: $("#peOptionBlock", wrapper),
+      ingredientBlock: $("#peIngredientBlock", wrapper),
+      promotionsBlock: $("#pePromotionsBlock", wrapper),
     };
 
     const descriptionAccordion = $("#peDescriptionAccordion", wrapper);
     if (descriptionAccordion) {
       bindAccordionContainer(descriptionAccordion);
     }
+
+    function syncProductBlocksVisibility() {
+      const blocksConfig = normalizeProductBlocksConfig(draft.blocksConfig);
+      draft.blocksConfig = blocksConfig;
+      const blocksMap = {
+        description: ui.descriptionBlock,
+        variants: ui.variantBlock,
+        options: ui.optionBlock,
+        ingredients: ui.ingredientBlock,
+        promotions: ui.promotionsBlock,
+      };
+      Object.entries(blocksMap).forEach(([key, element]) => {
+        if (!element) return;
+        element.classList.toggle("hidden", !blocksConfig[key]);
+      });
+      if (!isView) {
+        window.__productEditorBlocks = {
+          definitions: PRODUCT_BLOCK_DEFINITIONS.slice(),
+          getConfig: () => ({ ...draft.blocksConfig }),
+          setBlock: (key, value) => {
+            if (!Object.prototype.hasOwnProperty.call(draft.blocksConfig, key)) return;
+            draft.blocksConfig[key] = Boolean(value);
+            syncProductBlocksVisibility();
+          },
+        };
+      }
+    }
+    syncProductBlocksVisibility();
 
     function openCatPicker() {
       if (isView) return;
@@ -16282,7 +16520,8 @@ const isViewMode = state.comboPanel.mode === "view";
         e.stopPropagation();
         const isProductEdit = currentNavigationState?.type === "product-edit";
         const recalc = window.__productEditorRecalc;
-        if (!isProductEdit || !recalc) return;
+        const blocks = window.__productEditorBlocks;
+        if (!isProductEdit || (!recalc && !blocks)) return;
 
         const closeDropdown = () => {
           const existing = document.getElementById("productFooterMoreDropdown");
@@ -16300,6 +16539,26 @@ const isViewMode = state.comboPanel.mode === "view";
         const dropdown = document.createElement("div");
         dropdown.id = "productFooterMoreDropdown";
         dropdown.className = "product-footer-more-dropdown";
+        const blocksConfig = blocks?.getConfig ? blocks.getConfig() : getDefaultProductBlocksConfig();
+        const blocksHtml = blocks ? `
+          <div class="product-footer-more-blocks">
+            <button type="button" class="product-footer-more-dropdown-item product-footer-more-blocks-trigger" data-action="toggle-blocks">
+              <span class="product-footer-more-blocks-trigger-main">
+                <i class="fas fa-chevron-down" aria-hidden="true"></i>
+                <span>Блоки</span>
+              </span>
+            </button>
+            <div class="product-footer-more-blocks-panel hidden" data-blocks-panel>
+              ${PRODUCT_BLOCK_DEFINITIONS.map(({ key, label }) => `
+                <label class="product-footer-more-block-row">
+                  <input type="checkbox" data-product-block-toggle="${key}" ${blocksConfig[key] ? "checked" : ""}>
+                  <span>${escapeHtml(label)}</span>
+                </label>
+              `).join("")}
+            </div>
+          </div>
+          ${recalc ? '<div class="product-footer-more-dropdown-sep" aria-hidden="true"></div>' : ''}
+        ` : "";
         dropdown.innerHTML = `
           <button type="button" class="product-footer-more-dropdown-item" data-action="recalc-cost">
             <i class="fas fa-sync-alt" aria-hidden="true"></i>
@@ -16318,6 +16577,35 @@ const isViewMode = state.comboPanel.mode === "view";
             <span>Пересчитать в составе</span>
           </button>
         `;
+        if (blocksHtml) {
+          dropdown.innerHTML = `${blocksHtml}${dropdown.innerHTML}`;
+        }
+
+        const blocksTrigger = dropdown.querySelector("[data-action=toggle-blocks]");
+        const blocksPanel = dropdown.querySelector("[data-blocks-panel]");
+        if (blocksTrigger && blocksPanel) {
+          blocksTrigger.addEventListener("click", (event) => {
+            event.stopPropagation();
+            blocksPanel.classList.toggle("hidden");
+            blocksTrigger.classList.toggle("is-open", !blocksPanel.classList.contains("hidden"));
+            positionDropdown();
+          });
+        }
+        dropdown.querySelectorAll("[data-product-block-toggle]").forEach((checkbox) => {
+          checkbox.addEventListener("click", (event) => event.stopPropagation());
+          checkbox.addEventListener("change", () => {
+            if (blocks?.setBlock) blocks.setBlock(checkbox.dataset.productBlockToggle, checkbox.checked);
+          });
+        });
+
+        function positionDropdown() {
+          const rect = footerMoreEditBtn.getBoundingClientRect();
+          const dropdownRect = dropdown.getBoundingClientRect();
+          let left = rect.right - dropdownRect.width;
+          left = Math.max(8, Math.min(left, window.innerWidth - dropdownRect.width - 8));
+          dropdown.style.left = `${left}px`;
+          dropdown.style.top = `${rect.top - dropdownRect.height - 8}px`;
+        }
 
         dropdown.querySelector("[data-action=recalc-cost]").addEventListener("click", () => {
           if (window.__productEditorRecalc?.recalcCost) window.__productEditorRecalc.recalcCost();
@@ -16337,12 +16625,7 @@ const isViewMode = state.comboPanel.mode === "view";
         });
 
         document.body.appendChild(dropdown);
-        const rect = footerMoreEditBtn.getBoundingClientRect();
-        const dropdownRect = dropdown.getBoundingClientRect();
-        let left = rect.right - dropdownRect.width;
-        left = Math.max(8, Math.min(left, window.innerWidth - dropdownRect.width - 8));
-        dropdown.style.left = `${left}px`;
-        dropdown.style.top = `${rect.top - dropdownRect.height - 8}px`;
+        positionDropdown();
 
         requestAnimationFrame(() => {
           document.addEventListener("click", closeDropdown);

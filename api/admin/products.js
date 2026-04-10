@@ -7,6 +7,13 @@ const multer = require('multer');
 module.exports = function makeAdminProductsRouter({ db, helpers }) {
   const router = express.Router();
   let hasCategoryCheckoutVisibilityColumn = null;
+  const PRODUCT_BLOCK_KEYS = Object.freeze([
+    "description",
+    "variants",
+    "options",
+    "ingredients",
+    "promotions",
+  ]);
   const ADMIN_CACHE_TTL_MS = Object.freeze({
     checkoutConstructorDraft: 30_000,
     newOrderManifest: 5_000,
@@ -138,6 +145,152 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       hasCategoryCheckoutVisibilityColumn = false;
     }
     return hasCategoryCheckoutVisibilityColumn;
+  }
+
+  function getDefaultProductBlocksConfig() {
+    return {
+      description: false,
+      variants: false,
+      options: false,
+      ingredients: false,
+      promotions: false,
+    };
+  }
+
+  function normalizeProductBlocksConfig(rawValue, fallbackValue = null) {
+    let parsed = rawValue;
+    if (typeof parsed === "string") {
+      const trimmed = parsed.trim();
+      if (!trimmed) parsed = null;
+      else {
+        try {
+          parsed = JSON.parse(trimmed);
+        } catch {
+          parsed = null;
+        }
+      }
+    }
+    const fallback = fallbackValue && typeof fallbackValue === "object"
+      ? fallbackValue
+      : getDefaultProductBlocksConfig();
+    const out = {};
+    PRODUCT_BLOCK_KEYS.forEach((key) => {
+      out[key] = Boolean(parsed && typeof parsed === "object" && parsed[key] != null ? parsed[key] : fallback[key]);
+    });
+    return out;
+  }
+
+  async function resolveProductBlocksConfigMap(tenantId, storeId, productRows = []) {
+    const rows = Array.isArray(productRows) ? productRows : [];
+    const rowById = new Map();
+    rows.forEach((row) => {
+      const productId = Number(row?.id || 0);
+      if (productId > 0) rowById.set(productId, row);
+    });
+    const productIds = Array.from(rowById.keys());
+    const result = new Map();
+    if (!productIds.length) return result;
+
+    const unresolvedIds = [];
+    for (const productId of productIds) {
+      const row = rowById.get(productId);
+      const raw = row?.blocks_config_json ?? row?.blocks_config ?? null;
+      if (raw != null) {
+        result.set(productId, normalizeProductBlocksConfig(raw));
+      } else {
+        unresolvedIds.push(productId);
+      }
+    }
+    if (!unresolvedIds.length) return result;
+
+    const computedById = new Map();
+    unresolvedIds.forEach((productId) => {
+      const row = rowById.get(productId) || {};
+      computedById.set(productId, {
+        ...getDefaultProductBlocksConfig(),
+        description: Boolean(
+          String(row.description_short || "").trim()
+          || String(row.description || "").trim()
+        ),
+      });
+    });
+
+    const placeholders = unresolvedIds.map(() => "?").join(",");
+
+    const [variantRows] = await db.query(
+      `SELECT DISTINCT product_id
+       FROM prod_variant_assignments
+       WHERE tenant_id=? AND product_id IN (${placeholders}) AND is_active=1`,
+      [tenantId, ...unresolvedIds]
+    );
+    variantRows.forEach((row) => {
+      const cfg = computedById.get(Number(row.product_id));
+      if (cfg) cfg.variants = true;
+    });
+
+    const [optionRows] = await db.query(
+      `SELECT DISTINCT assign_id AS product_id
+       FROM prod_option_assignments
+       WHERE tenant_id=? AND assign_type='product' AND assign_id IN (${placeholders}) AND is_active=1`,
+      [tenantId, ...unresolvedIds]
+    );
+    optionRows.forEach((row) => {
+      const cfg = computedById.get(Number(row.product_id));
+      if (cfg) cfg.options = true;
+    });
+
+    const [ingredientRows] = await db.query(
+      `SELECT DISTINCT product_id
+       FROM prod_product_ingredients
+       WHERE tenant_id=? AND product_id IN (${placeholders})`,
+      [tenantId, ...unresolvedIds]
+    );
+    ingredientRows.forEach((row) => {
+      const cfg = computedById.get(Number(row.product_id));
+      if (cfg) cfg.ingredients = true;
+    });
+
+    const [promotionRows] = await db.query(
+      `SELECT p.id AS product_id,
+              CASE
+                WHEN EXISTS (
+                  SELECT 1
+                  FROM mkt_discount_products dp
+                  JOIN mkt_discounts d
+                    ON d.id = dp.discount_id
+                   AND d.tenant_id = dp.tenant_id
+                  WHERE dp.tenant_id = p.tenant_id
+                    AND d.store_id = ?
+                    AND dp.product_id = p.id
+                ) OR EXISTS (
+                  SELECT 1
+                  FROM prod_product_categories pc
+                  JOIN mkt_discount_products dp
+                    ON dp.tenant_id = pc.tenant_id
+                   AND dp.category_id = pc.category_id
+                  JOIN mkt_discounts d
+                    ON d.id = dp.discount_id
+                   AND d.tenant_id = dp.tenant_id
+                  WHERE pc.tenant_id = p.tenant_id
+                    AND d.store_id = ?
+                    AND pc.product_id = p.id
+                )
+                THEN 1 ELSE 0
+              END AS has_promotions
+       FROM prod_products p
+       WHERE p.tenant_id=? AND p.id IN (${placeholders})`,
+      [storeId, storeId, tenantId, ...unresolvedIds]
+    );
+    promotionRows.forEach((row) => {
+      const cfg = computedById.get(Number(row.product_id));
+      if (cfg) cfg.promotions = Number(row.has_promotions || 0) === 1;
+    });
+
+    unresolvedIds.forEach((productId) => {
+      result.set(productId, normalizeProductBlocksConfig(computedById.get(productId)));
+    });
+
+    return result;
   }
 
   // Удаляет файлы фото с диска (оригинал + .webp + thumb)
@@ -689,7 +842,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
       const [rows] = await db.query(
         `SELECT p.id, p.name, p.sku, p.description_short, p.description, p.price, p.old_price, p.cost_price,
-                p.unit_id, p.base_unit_id, p.base_qty, p.photos_json, p.is_active, p.site_visibility,
+                p.unit_id, p.base_unit_id, p.base_qty, p.photos_json, p.blocks_config_json, p.is_active, p.site_visibility,
                 s.qty AS stock_qty
          FROM prod_products p
          LEFT JOIN prod_product_stocks s ON s.tenant_id=p.tenant_id AND s.store_id=? AND s.product_id=p.id
@@ -699,6 +852,8 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       if (!rows.length) return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
       const r = rows[0];
       r.photos = helpers.safeJsonArray(r.photos_json);
+      const blocksConfigMap = await resolveProductBlocksConfigMap(tenantId, storeId, [r]);
+      r.blocks_config = blocksConfigMap.get(Number(r.id)) || getDefaultProductBlocksConfig();
       res.json({ ok: true, data: r });
     } catch (e) {
       console.error(e);
@@ -818,7 +973,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
         p.id, p.tenant_id, p.name, p.sku, p.description_short, p.description,
         p.price, p.old_price, p.cost_price,
         p.unit_id, p.base_unit_id, p.base_qty,
-        p.photos_json,
+        p.photos_json, p.blocks_config_json,
         p.is_active, p.site_visibility,
         p.created_at, p.updated_at
       `;
@@ -855,6 +1010,10 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
           r.photos = helpers.safeJsonArray(r.photos_json);
           if (r.link_sort_order == null) missing.push(r);
         }
+        const blocksConfigMap = await resolveProductBlocksConfigMap(tenantId, storeId, rows);
+        rows.forEach((r) => {
+          r.blocks_config = blocksConfigMap.get(Number(r.id)) || getDefaultProductBlocksConfig();
+        });
 
         if (missing.length) {
           let next = await helpers.nextSortOrderForCategory(db, tenantId, categoryId, 10);
@@ -911,6 +1070,10 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
         : await db.query(baseSql, baseParams);
 
       for (const r of rows) r.photos = helpers.safeJsonArray(r.photos_json);
+      const blocksConfigMap = await resolveProductBlocksConfigMap(tenantId, storeId, rows);
+      rows.forEach((r) => {
+        r.blocks_config = blocksConfigMap.get(Number(r.id)) || getDefaultProductBlocksConfig();
+      });
 
       if (!paginationRequested) {
         return res.json({ ok: true, data: rows, category_id: categoryId });
@@ -961,17 +1124,19 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
 
       const is_active = helpers.toBool(req.body.is_active, true) ? 1 : 0;
       const site_visibility = helpers.toBool(req.body.site_visibility, true) ? 1 : 0;
+      const blocks_config = normalizeProductBlocksConfig(req.body.blocks_config);
+      const blocks_config_json = JSON.stringify(blocks_config);
 
       const photosArr = helpers.safeJsonArray(req.body.photos_json || req.body.photos);
       const photos_json = photosArr.length ? JSON.stringify(photosArr.slice(0, 10)) : null;
 
       const [result] = await db.query(
         `INSERT INTO prod_products
-          (tenant_id, name, sku, description_short, description, price, old_price, cost_price, unit_id, base_unit_id, base_qty, photos_json, is_active, site_visibility)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+          (tenant_id, name, sku, description_short, description, price, old_price, cost_price, unit_id, base_unit_id, base_qty, photos_json, blocks_config_json, is_active, site_visibility)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [
           tenantId, name, sku, description_short, description,
-          price, old_price, cost_price, unit_id, base_unit_id, base_qty, photos_json,
+          price, old_price, cost_price, unit_id, base_unit_id, base_qty, photos_json, blocks_config_json,
           is_active, site_visibility
         ]
       );
@@ -1018,6 +1183,9 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
 
       const is_active = helpers.toBool(req.body.is_active, true) ? 1 : 0;
       const site_visibility = helpers.toBool(req.body.site_visibility, true) ? 1 : 0;
+      const hasBlocksConfig = Object.prototype.hasOwnProperty.call(req.body || {}, 'blocks_config');
+      const blocks_config = hasBlocksConfig ? normalizeProductBlocksConfig(req.body.blocks_config) : null;
+      const blocks_config_json = hasBlocksConfig ? JSON.stringify(blocks_config) : null;
 
       const photosArr = helpers.safeJsonArray(req.body.photos_json || req.body.photos);
       const photos_json = photosArr.length ? JSON.stringify(photosArr.slice(0, 10)) : null;
@@ -1036,11 +1204,11 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
 
       await db.query(
         `UPDATE prod_products
-         SET name=?, sku=?, description_short=?, description=?, price=?, old_price=?, cost_price=?, unit_id=?, base_unit_id=?, base_qty=?, photos_json=?, is_active=?, site_visibility=?
+         SET name=?, sku=?, description_short=?, description=?, price=?, old_price=?, cost_price=?, unit_id=?, base_unit_id=?, base_qty=?, photos_json=?, blocks_config_json=COALESCE(?, blocks_config_json), is_active=?, site_visibility=?
          WHERE tenant_id=? AND id=?`,
         [
           name, sku, description_short, description,
-          price, old_price, cost_price, unit_id, base_unit_id, base_qty, photos_json,
+          price, old_price, cost_price, unit_id, base_unit_id, base_qty, photos_json, blocks_config_json,
           is_active, site_visibility,
           tenantId, id
         ]
@@ -1067,22 +1235,43 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
   router.patch('/prod_products/:id', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
       const id = Number(req.params.id);
       if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      const hasCostPrice = Object.prototype.hasOwnProperty.call(req.body || {}, 'cost_price');
+      const hasPrice = Object.prototype.hasOwnProperty.call(req.body || {}, 'price');
+      const hasOldPrice = Object.prototype.hasOwnProperty.call(req.body || {}, 'old_price');
+      const hasBaseQty = Object.prototype.hasOwnProperty.call(req.body || {}, 'base_qty');
+      const hasSiteVisibility = Object.prototype.hasOwnProperty.call(req.body || {}, 'site_visibility');
+      const hasStock = Object.prototype.hasOwnProperty.call(req.body || {}, 'stock');
       const cost_price = helpers.numOrNull(req.body.cost_price);
       const price = helpers.numOrNull(req.body.price);
+      const old_price = helpers.numOrNull(req.body.old_price);
       const base_qty = helpers.numOrNull(req.body.base_qty);
+      const stock_qty = helpers.numOrNull(req.body.stock);
+      const site_visibility = helpers.toBool(req.body.site_visibility, true) ? 1 : 0;
       const updates = [];
       const params = [];
-      if (cost_price != null) { updates.push('cost_price=?'); params.push(cost_price); }
-      if (price != null) { updates.push('price=?'); params.push(price); }
-      if (base_qty != null) { updates.push('base_qty=?'); params.push(base_qty); }
-      if (updates.length === 0) return res.json({ ok: true });
-      params.push(tenantId, id);
-      await db.query(
-        `UPDATE prod_products SET ${updates.join(', ')} WHERE tenant_id=? AND id=?`,
-        params
-      );
+      if (hasCostPrice) { updates.push('cost_price=?'); params.push(cost_price); }
+      if (hasPrice) { updates.push('price=?'); params.push(price ?? 0); }
+      if (hasOldPrice) { updates.push('old_price=?'); params.push(old_price); }
+      if (hasBaseQty) { updates.push('base_qty=?'); params.push(base_qty); }
+      if (hasSiteVisibility) { updates.push('site_visibility=?'); params.push(site_visibility); }
+      if (updates.length > 0) {
+        params.push(tenantId, id);
+        await db.query(
+          `UPDATE prod_products SET ${updates.join(', ')} WHERE tenant_id=? AND id=?`,
+          params
+        );
+      }
+      if (hasStock) {
+        await db.query(
+          `INSERT INTO prod_product_stocks (tenant_id, store_id, product_id, qty)
+           VALUES (?,?,?,?)
+           ON DUPLICATE KEY UPDATE qty=VALUES(qty)`,
+          [tenantId, storeId, id, stock_qty]
+        );
+      }
       res.json({ ok: true });
     } catch (e) {
       console.error(e);

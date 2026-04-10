@@ -3170,10 +3170,14 @@
       }
       body.innerHTML = "";
 
+      const frame = createClientBenefitsFrame();
+      if (!frame?.root || !frame.scrollEl) return;
+      body.appendChild(frame.root);
+      rememberClientBenefitsMainView(frame);
+
       const shell = document.createElement("div");
       shell.className = "shop-checkout-benefits-sheet";
-      body.appendChild(shell);
-      rememberClientBenefitsMainView({ root: shell, scrollEl: body });
+      frame.scrollEl.appendChild(shell);
       const isCatalogMode = isClientBenefitsCatalogMode();
 
       const hint = document.createElement("div");
@@ -3353,8 +3357,8 @@
     await loadClientBenefitsPreview();
   }
 
-  async function openClientBenefitsOverlay() {
-    const customerId = Number(state.activeClientId || 0);
+  async function openClientBenefitsOverlay(customerIdOverride = null) {
+    const customerId = Number(customerIdOverride || state.activeClientId || 0);
     if (!(customerId > 0)) return;
     ensureClientBenefitsOverlay();
     state.clientBenefitsModal.customerId = customerId;
@@ -16425,6 +16429,9 @@
     },
     openMobileSheet(options = {}) {
       return openSheet(options);
+    },
+    openBenefitsByClientId(id) {
+      return openClientBenefitsOverlay(id);
     },
     ensureOrderStatusesLoaded(force = false) {
       return ensureOrderStatusesLoaded(force);
