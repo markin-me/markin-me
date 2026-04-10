@@ -68,8 +68,7 @@
   const productsScrollEl = productsList ? productsList.closest(".panel-body") : null;
   const productsBulkFooter = $("#productsBulkFooter");
   const productsBulkSelectedCount = $("#productsBulkSelectedCount");
-  const productsBulkSelectAllBtn = $("#productsBulkSelectAllBtn");
-  const productsBulkClearBtn = $("#productsBulkClearBtn");
+  const productsBulkToggleAllInput = $("#productsBulkToggleAllInput");
   const categoriesMainList = $("#categoriesMainList");
   const categoriesEmptyHint = $("#categoriesEmptyHint");
   const optionsGroupsList = $("#optionsGroupsList");
@@ -4395,6 +4394,12 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     });
   }
 
+  function getCurrentProductGroupIds() {
+    return (Array.isArray(state.products) ? state.products : [])
+      .map((product) => Number(product?.id))
+      .filter(Number.isFinite);
+  }
+
   function syncProductsBulkFooter() {
     if (!productsBulkFooter) return;
     const selectedCount = state.selectedProductIds.size;
@@ -4403,11 +4408,12 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     if (productsBulkSelectedCount) {
       productsBulkSelectedCount.textContent = String(selectedCount);
     }
-    if (productsBulkSelectAllBtn) {
-      productsBulkSelectAllBtn.disabled = state.productsLoading;
-    }
-    if (productsBulkClearBtn) {
-      productsBulkClearBtn.disabled = selectedCount === 0;
+    if (productsBulkToggleAllInput) {
+      const groupIds = getCurrentProductGroupIds();
+      const selectedInGroup = groupIds.filter((id) => state.selectedProductIds.has(id)).length;
+      productsBulkToggleAllInput.checked = groupIds.length > 0 && selectedInGroup === groupIds.length;
+      productsBulkToggleAllInput.indeterminate = selectedInGroup > 0 && selectedInGroup < groupIds.length;
+      productsBulkToggleAllInput.disabled = state.productsLoading || groupIds.length === 0;
     }
   }
 
@@ -4437,7 +4443,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     syncProductsBulkFooter();
   }
 
-  async function selectAllProductCardsInCategory() {
+  async function toggleAllProductCardsInCategory() {
     if (state.mode !== "products") return;
     while (state.productsLoading) {
       await new Promise((resolve) => setTimeout(resolve, 50));
@@ -4445,9 +4451,11 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     while (state.productsHasMore) {
       await loadMoreProducts();
     }
-    (Array.isArray(state.products) ? state.products : []).forEach((product) => {
-      const id = Number(product?.id);
-      if (Number.isFinite(id)) state.selectedProductIds.add(id);
+    const groupIds = getCurrentProductGroupIds();
+    const allSelected = groupIds.length > 0 && groupIds.every((id) => state.selectedProductIds.has(id));
+    groupIds.forEach((id) => {
+      if (allSelected) state.selectedProductIds.delete(id);
+      else state.selectedProductIds.add(id);
     });
     syncProductRowSelectionUI(productsList);
     syncProductsBulkFooter();
@@ -4468,10 +4476,13 @@ function openAutoAddGroupModal({ mode, group } = {}) {
 
     return `
       <div class="order-row product-row ${active} ${selected}" data-id="${product.id}" draggable="${canSortProducts ? "true" : "false"}">
-        <label class="product-row-photo-select" aria-label="Выбрать товар">
+        <label class="product-row-select-control" aria-label="Выбрать товар">
           <input class="product-row-select-input" type="checkbox" ${selected ? "checked" : ""} tabindex="-1" />
-          ${avatar}
+          <span class="product-row-select-box" aria-hidden="true"></span>
         </label>
+        <div class="product-row-photo-select" aria-hidden="true">
+          ${avatar}
+        </div>
         <div class="product-main-head">
           <div class="product-title">${escapeHtml(product.name)}</div>
         </div>
@@ -4519,7 +4530,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
       if (row.dataset.boundClick === "1") return;
       row.dataset.boundClick = "1";
       row.addEventListener("click", async (event) => {
-        if (event.target.closest(".product-row-photo-select")) {
+        if (event.target.closest(".product-row-select-control")) {
           event.preventDefault();
           event.stopPropagation();
           const id = Number(row.dataset.id);
@@ -15734,15 +15745,14 @@ const isViewMode = state.comboPanel.mode === "view";
       productsScrollEl.addEventListener("scroll", maybeLoadMoreProductsOnScroll, { passive: true });
     }
 
-    if (productsBulkSelectAllBtn) {
-      productsBulkSelectAllBtn.addEventListener("click", async () => {
-        await selectAllProductCardsInCategory();
-      });
-    }
-
-    if (productsBulkClearBtn) {
-      productsBulkClearBtn.addEventListener("click", () => {
-        clearProductsBulkSelection();
+    if (productsBulkToggleAllInput) {
+      productsBulkToggleAllInput.addEventListener("change", async () => {
+        productsBulkToggleAllInput.disabled = true;
+        try {
+          await toggleAllProductCardsInCategory();
+        } finally {
+          syncProductsBulkFooter();
+        }
       });
     }
 

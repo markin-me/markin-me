@@ -89,9 +89,13 @@
     </div>
     <div class="panel-footer hidden" id="productsBulkFooter">
       <div class="products-bulk-footer-actions">
-        <div class="products-bulk-footer-count">Выбрано: <b id="productsBulkSelectedCount">0</b></div>
-        <button class="btn" type="button" id="productsBulkSelectAllBtn">Выделить все</button>
-        <button class="btn btn-ghost" type="button" id="productsBulkClearBtn">Снять выделение</button>
+        <div class="products-bulk-footer-count">
+          <label class="products-bulk-toggle-all" aria-label="Выделить все товары в текущей группе">
+            <input class="products-bulk-toggle-all-input" type="checkbox" id="productsBulkToggleAllInput" />
+            <span class="products-bulk-toggle-all-box" aria-hidden="true"></span>
+          </label>
+          <span>Выбрано: <b id="productsBulkSelectedCount">0</b></span>
+        </div>
       </div>
     </div>
   </div>

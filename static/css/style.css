@@ -4126,7 +4126,7 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
   height:22px;
   min-height:22px;
   margin:-12px -12px 10px;
-  padding:12px 24px 0;
+  padding:12px 24px 0 40px;
   box-sizing:border-box;
   color:var(--color-text-muted);
   background:var(--color-surface);
@@ -4145,12 +4145,15 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
   text-align:left;
 }
 .product-row{
+  position:relative;
   align-items:center;
   gap:6px;
 }
 .order-row.product-row{
+  width:calc(100% - 28px);
+  margin-left:28px;
   padding:0 12px 0 0;
-  overflow:hidden;
+  overflow:visible;
 }
 .product-main-head{
   min-width:0;
@@ -4287,6 +4290,59 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
   opacity:0;
   cursor:pointer;
 }
+.product-row-select-control{
+  position:absolute;
+  left:-26px;
+  top:50%;
+  z-index:2;
+  width:18px;
+  height:18px;
+  transform:translateY(-50%);
+  display:grid;
+  place-items:center;
+  cursor:pointer;
+}
+.product-row-select-box,
+.products-bulk-toggle-all-box{
+  position:relative;
+  display:block;
+  width:16px;
+  height:16px;
+  box-sizing:border-box;
+  border:1.5px solid var(--color-border-strong, var(--color-border));
+  border-radius:5px;
+  background:var(--color-surface);
+  transition:background var(--dur-fast) var(--ease-smooth),
+             border-color var(--dur-fast) var(--ease-smooth),
+             box-shadow var(--dur-fast) var(--ease-smooth);
+}
+.product-row-select-box::after,
+.products-bulk-toggle-all-box::after{
+  display:none;
+}
+.product-row-select-control:hover .product-row-select-box{
+  border-color:var(--color-primary);
+}
+.product-row-select-input:focus-visible + .product-row-select-box,
+.products-bulk-toggle-all-input:focus-visible + .products-bulk-toggle-all-box{
+  box-shadow:0 0 0 3px rgba(255, 122, 0, 0.16);
+}
+.product-row-select-input:checked + .product-row-select-box,
+.products-bulk-toggle-all-input:checked + .products-bulk-toggle-all-box{
+  border-color:var(--color-primary);
+  background:var(--color-primary);
+}
+.product-row-select-input:checked + .product-row-select-box::after,
+.products-bulk-toggle-all-input:checked + .products-bulk-toggle-all-box::after{
+  display:none;
+}
+.products-bulk-toggle-all-input:indeterminate + .products-bulk-toggle-all-box{
+  border-color:var(--color-primary);
+  background:rgba(255, 122, 0, 0.12);
+}
+.products-bulk-toggle-all-input:indeterminate + .products-bulk-toggle-all-box::after{
+  display:none;
+}
 .order-row.product-row.is-active{
   border:1px solid var(--color-border);
   box-shadow:none;
@@ -4297,11 +4353,11 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
   transform:none;
 }
 .order-row.product-row.is-selected{
-  border:2px solid var(--color-primary);
+  border:1px solid var(--color-border);
   box-shadow:none;
 }
 .order-row.product-row.is-selected:hover{
-  border-color:var(--color-primary);
+  border-color:var(--color-border);
   box-shadow:none;
   transform:none;
 }
@@ -4314,7 +4370,7 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
 .order-row.product-row.is-active .product-row-photo-select,
 .order-row.product-row.is-selected .product-row-photo-select{
   border:0;
-  border-right:2px solid var(--color-primary);
+  border-right:1px solid var(--primary-25);
 }
 
 .products-bulk-footer-actions{
@@ -4325,18 +4381,28 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
 }
 .products-bulk-footer-count{
   margin-right:auto;
+  display:flex;
+  align-items:center;
+  gap:8px;
   font-weight:700;
 }
-#productsBulkFooter .btn{
-  min-height:36px;
-  height:36px;
-  border-radius:999px;
-  padding:0 14px;
-  font-weight:700;
+.products-bulk-toggle-all{
+  position:relative;
+  width:20px;
+  height:20px;
+  display:grid;
+  place-items:center;
+  cursor:pointer;
 }
-#productsBulkFooter .btn:disabled{
-  opacity:.5;
-  cursor:not-allowed;
+.products-bulk-toggle-all-input{
+  position:absolute;
+  inset:0;
+  margin:0;
+  opacity:0;
+  cursor:pointer;
+}
+.products-bulk-toggle-all-box{
+  border-color:var(--color-primary);
 }
 @media (max-width: 1200px){
   .products-bulk-footer-actions{
