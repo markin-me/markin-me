@@ -4809,7 +4809,17 @@ optionGroups.forEach((group) => {
     });
 
     function resolveDesktopComboPanelBackHandler(overrideBack = null) {
-      if (typeof overrideBack === "function") return overrideBack;
+      if (typeof overrideBack === "function") {
+        return (event) => {
+          if (event && typeof event.preventDefault === "function") event.preventDefault();
+          if (event && typeof event.stopImmediatePropagation === "function") {
+            event.stopImmediatePropagation();
+          } else if (event && typeof event.stopPropagation === "function") {
+            event.stopPropagation();
+          }
+          overrideBack();
+        };
+      }
       if (openProductCtx && typeof openProductCtx.onBack === "function") {
         return () => {
           openProductCtx.onBack();
@@ -6271,6 +6281,33 @@ optionGroups.forEach((group) => {
 
     let pickerFooterUpdate = null;
 
+    function scrollComboPickerToSelectedRow() {
+      const selectedRow = container.querySelector(".shop-combo-picker-row.is-selected");
+      let scrollEl = selectedRow ? selectedRow.parentElement : null;
+      while (scrollEl && scrollEl !== document.body) {
+        const style = window.getComputedStyle(scrollEl);
+        const overflowY = style.overflowY || style.overflow;
+        if (
+          (overflowY === "auto" || overflowY === "scroll" || overflowY === "overlay") &&
+          scrollEl.scrollHeight > scrollEl.clientHeight
+        ) {
+          break;
+        }
+        scrollEl = scrollEl.parentElement;
+      }
+      if (!scrollEl || scrollEl === document.body) {
+        scrollEl = container.querySelector(".shop-combo-detail-scroll");
+      }
+      if (!selectedRow || !scrollEl) return;
+      const scrollRect = scrollEl.getBoundingClientRect();
+      const rowRect = selectedRow.getBoundingClientRect();
+      const targetTop =
+        scrollEl.scrollTop +
+        (rowRect.top - scrollRect.top) -
+        Math.max(0, (scrollEl.clientHeight - selectedRow.offsetHeight) / 2);
+      scrollEl.scrollTop = Math.max(0, targetTop);
+    }
+
     function renderBlockPicker(blockIndex, scrollToRestore) {
       let normalizedBlockIndex = Number(blockIndex);
       if (!Number.isFinite(normalizedBlockIndex)) normalizedBlockIndex = 0;
@@ -6292,7 +6329,7 @@ optionGroups.forEach((group) => {
         Promise.resolve()
           .then(() => hydrateBlockSelection(blockIndex, {
             useRandomizer: false,
-            preferSavedState: false,
+            preferSavedState: true,
           }))
           .catch(() => {})
           .finally(() => {
@@ -7231,6 +7268,11 @@ optionGroups.forEach((group) => {
         if (scrollToRestore.parentEl && scrollToRestore.parentEl.isConnected && scrollToRestore.parentTop >= 0) {
           scrollToRestore.parentEl.scrollTop = scrollToRestore.parentTop;
         }
+      } else {
+        requestAnimationFrame(() => {
+          scrollComboPickerToSelectedRow();
+          setTimeout(scrollComboPickerToSelectedRow, 80);
+        });
       }
 
       // Шаг назад: стрелка в шапке и кнопка "Назад" на Android
