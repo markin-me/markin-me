@@ -524,6 +524,9 @@
     selectedProductIds: new Set(),
     productsBulkActions: getDefaultProductsBulkActions(),
     productsBulkApplying: false,
+    productRowVariantsExpanded: new Set(),
+    productRowVariantsCache: new Map(),
+    productRowVariantsLoading: new Set(),
     selectedCategoryId: null,
     selectedProductCategories: [], // full objects
     optionGroups: [],
@@ -1663,6 +1666,22 @@
         .filter((p) => !(Number(p.is_active) === 0 && Number(p.site_visibility) === 0))
         .filter((p) => !knownIds.has(Number(p.id)));
 
+      const appendIds = append
+        .map((p) => Number(p?.id))
+        .filter((id) => Number.isFinite(id) && id > 0);
+      if (appendIds.length > 0) {
+        try {
+          const flagsRes = await apiGetComboBlockProductFlags(appendIds);
+          const flagsList = Array.isArray(flagsRes?.data) ? flagsRes.data : [];
+          const flagsByPid = new Map(flagsList.map((f) => [Number(f.product_id), f]));
+          append.forEach((p) => {
+            const flags = flagsByPid.get(Number(p?.id));
+            if (!flags) return;
+            p.has_variants = flags.has_variants ? 1 : 0;
+          });
+        } catch (_) {}
+      }
+
       state.products = (state.products || []).concat(append);
       state.productsOffset += chunkRaw.length;
       state.productsTotal = Number(res.total || 0);
@@ -1712,6 +1731,9 @@
     const cid = categoryId || state.currentCategoryId;
     productsRequestToken += 1;
     clearProductsBulkSelection();
+    state.productRowVariantsExpanded.clear();
+    state.productRowVariantsCache.clear();
+    state.productRowVariantsLoading.clear();
     if (!cid) {
       state.products = [];
       state.productsOffset = 0;
@@ -4595,6 +4617,37 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     const costValue = getProductRowDisplayValue(product, "cost_price");
     const priceValue = getProductRowDisplayValue(product, "price");
     const oldPriceValue = getProductRowDisplayValue(product, "old_price");
+    const hasVariants = Number(product?.has_variants || 0) > 0;
+    const isVariantsExpanded = hasVariants && state.productRowVariantsExpanded.has(Number(product.id));
+    const variantsRows = state.productRowVariantsCache.get(Number(product.id));
+    const variantsLoading = state.productRowVariantsLoading.has(Number(product.id));
+    const variantsInlineHtml = (() => {
+      if (!isVariantsExpanded) return "";
+      let itemsHtml = "";
+      if (variantsRows === undefined || variantsLoading) {
+        itemsHtml = `<div class="product-row-variants-item is-muted">Загрузка вариантов...</div>`;
+      } else if (Array.isArray(variantsRows) && variantsRows.length) {
+        itemsHtml = variantsRows.map((item) => {
+          const text = String(item?.text || "").trim();
+          const photo = String(item?.photo || "").trim();
+          const photoHtml = photo
+            ? `<img class="product-row-variants-photo" src="${escapeHtml(photo)}" alt="" />`
+            : `<div class="product-row-variants-photo product-row-variants-photo-placeholder" aria-hidden="true"></div>`;
+          const assignmentId = Number(item?.assignmentId || 0);
+          const valueIndex = Number(item?.valueIndex);
+          const isDefault = item?.isDefault === true;
+          const starIcon = isDefault ? "fas fa-star" : "far fa-star";
+          const starClass = isDefault ? "is-active" : "";
+          const starHtml = Number.isFinite(assignmentId) && assignmentId > 0 && Number.isFinite(valueIndex)
+            ? `<button class="product-row-variant-default-btn ${starClass}" type="button" data-variant-default-btn data-assignment-id="${assignmentId}" data-variant-index="${valueIndex}" aria-label="${isDefault ? "Вариант по умолчанию" : "Сделать вариантом по умолчанию"}"><i class="${starIcon}"></i></button>`
+            : `<span class="product-row-variant-default-btn is-disabled" aria-hidden="true"><i class="far fa-star"></i></span>`;
+          return `<div class="product-row-variants-item">${starHtml}${photoHtml}<div class="product-row-variants-text">${escapeHtml(text)}</div></div>`;
+        }).join("");
+      } else {
+        itemsHtml = `<div class="product-row-variants-item is-muted">Варианты не заданы</div>`;
+      }
+      return `<div class="product-row-variants-inline"><div class="product-row-variants-list">${itemsHtml}</div></div>`;
+    })();
     const hasPhoto = Array.isArray(product.photos) && product.photos.length > 0;
     const avatar = hasPhoto
       ? `<img class="product-thumb" src="${escapeHtml(product.photos[0])}" alt="" />`
@@ -4639,8 +4692,108 @@ function openAutoAddGroupModal({ mode, group } = {}) {
         <div class="product-row-field field-wrap">
           <input class="control control-sm product-row-input product-row-inline-input" type="text" inputmode="decimal" data-inline-field="old_price" value="${escapeHtml(oldPriceValue)}" placeholder="—" aria-label="Старая цена" />
         </div>
+        <div class="product-row-variants-indicator">
+          ${hasVariants
+            ? `<button class="product-row-variants-toggle" type="button" data-variants-toggle data-product-id="${Number(product.id)}" aria-expanded="${isVariantsExpanded ? "true" : "false"}" aria-label="${isVariantsExpanded ? "Свернуть варианты" : "Показать варианты"}"><i class="fas fa-chevron-${isVariantsExpanded ? "up" : "down"}"></i></button>`
+            : ""}
+        </div>
+        ${variantsInlineHtml}
       </div>
     `;
+  }
+
+  function getProductRowPhotoUrl(product) {
+    const photos = Array.isArray(product?.photos) ? product.photos : [];
+    const first = photos.length ? String(photos[0] || "").trim() : "";
+    return first || "";
+  }
+
+  function buildProductVariantsRows(product, groups) {
+    const productName = String(product?.name || "").trim();
+    const productPhoto = getProductRowPhotoUrl(product);
+    const out = [];
+    (Array.isArray(groups) ? groups : []).forEach((group) => {
+      const unit = String(group?.unit_short_title || group?.unit_code || group?.unit_title || "").trim();
+      const values = Array.isArray(group?.values) ? group.values : [];
+      const assignmentId = Number(group?.assignment_id || 0);
+      const rawDefaultIdx = group?.assignment_default_value_index ?? group?.default_value_index;
+      const defaultValueIndex = rawDefaultIdx != null ? Number(rawDefaultIdx) : null;
+      values.forEach((rawValue, valueIndex) => {
+        const value = String(rawValue ?? "").trim();
+        if (!value) return;
+        const text = unit ? `${value} ${unit} ${productName}` : `${value} ${productName}`;
+        out.push({
+          text,
+          photo: productPhoto,
+          assignmentId,
+          valueIndex: Number(valueIndex),
+          defaultValueIndex,
+          isDefault: Number.isFinite(defaultValueIndex) ? Number(defaultValueIndex) === Number(valueIndex) : false,
+        });
+      });
+    });
+    return out;
+  }
+
+  async function ensureProductRowVariantsLoaded(productId) {
+    const pid = Number(productId);
+    if (!Number.isFinite(pid) || pid <= 0) return [];
+    if (state.productRowVariantsCache.has(pid)) return state.productRowVariantsCache.get(pid) || [];
+    if (state.productRowVariantsLoading.has(pid)) return [];
+    const product = (state.products || []).find((p) => Number(p?.id) === pid);
+    if (!product) return [];
+    state.productRowVariantsLoading.add(pid);
+    try {
+      const res = await apiGetProductVariants(pid);
+      const groups = Array.isArray(res?.data) ? res.data : [];
+      const rows = buildProductVariantsRows(product, groups);
+      state.productRowVariantsCache.set(pid, rows);
+      return rows;
+    } catch (_) {
+      state.productRowVariantsCache.set(pid, []);
+      return [];
+    } finally {
+      state.productRowVariantsLoading.delete(pid);
+    }
+  }
+
+  async function toggleProductRowVariants(productId) {
+    const pid = Number(productId);
+    if (!Number.isFinite(pid) || pid <= 0) return;
+    const product = (state.products || []).find((p) => Number(p?.id) === pid);
+    if (!product || Number(product?.has_variants || 0) <= 0) return;
+    if (state.productRowVariantsExpanded.has(pid)) {
+      state.productRowVariantsExpanded.delete(pid);
+      renderProductsList();
+      return;
+    }
+    state.productRowVariantsExpanded.add(pid);
+    renderProductsList();
+    await ensureProductRowVariantsLoaded(pid);
+    renderProductsList();
+  }
+
+  async function setProductRowDefaultVariant(assignmentId, variantIndex) {
+    const aid = Number(assignmentId);
+    const idx = Number(variantIndex);
+    if (!Number.isFinite(aid) || aid <= 0 || !Number.isFinite(idx) || idx < 0) return;
+    await apiPatchVariantAssignment(aid, { default_value_index: idx });
+    state.productRowVariantsCache.forEach((rows, pid) => {
+      if (!Array.isArray(rows)) return;
+      let touched = false;
+      const updated = rows.map((row) => {
+        if (Number(row?.assignmentId || 0) !== aid) return row;
+        touched = true;
+        const rowIndex = Number(row?.valueIndex);
+        return {
+          ...row,
+          defaultValueIndex: idx,
+          isDefault: Number.isFinite(rowIndex) ? rowIndex === idx : false,
+        };
+      });
+      if (touched) state.productRowVariantsCache.set(pid, updated);
+    });
+    renderProductsList();
   }
 
   function syncProductsListEmptyState() {
@@ -4659,6 +4812,30 @@ function openAutoAddGroupModal({ mode, group } = {}) {
         if (Date.now() < productRowsDragSuppressClickUntil) {
           event.preventDefault();
           event.stopPropagation();
+          return;
+        }
+        const variantsToggleBtn = event.target.closest("[data-variants-toggle]");
+        if (variantsToggleBtn) {
+          event.preventDefault();
+          event.stopPropagation();
+          const toggleProductId = Number(variantsToggleBtn.dataset.productId || row.dataset.id);
+          await toggleProductRowVariants(toggleProductId);
+          return;
+        }
+        const variantDefaultBtn = event.target.closest("[data-variant-default-btn]");
+        if (variantDefaultBtn) {
+          event.preventDefault();
+          event.stopPropagation();
+          const assignmentId = Number(variantDefaultBtn.dataset.assignmentId || 0);
+          const variantIndex = Number(variantDefaultBtn.dataset.variantIndex || -1);
+          variantDefaultBtn.setAttribute("disabled", "disabled");
+          try {
+            await setProductRowDefaultVariant(assignmentId, variantIndex);
+          } catch (e) {
+            alert("Ошибка сохранения варианта по умолчанию: " + (e.message || "Неизвестная ошибка"));
+          } finally {
+            variantDefaultBtn.removeAttribute("disabled");
+          }
           return;
         }
         if (event.target.closest(".product-row-select-control")) {
@@ -4975,7 +5152,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
       if (!productRowsDragState.enabled) return;
       if (productRowsDragState.saving) return;
       if (event.button !== 0) return;
-      if (event.target.closest(".product-row-select-control") || event.target.closest(".product-row-field") || event.target.closest(".product-row-switch") || event.target.closest(".product-row-switch-field") || event.target.closest(".product-row-inline-input")) {
+      if (event.target.closest("[data-variants-toggle]") || event.target.closest("[data-variant-default-btn]") || event.target.closest(".product-row-select-control") || event.target.closest(".product-row-field") || event.target.closest(".product-row-switch") || event.target.closest(".product-row-switch-field") || event.target.closest(".product-row-inline-input")) {
         return;
       }
       const row = event.target.closest(".order-row.product-row[data-id]");

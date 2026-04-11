@@ -15430,7 +15430,7 @@
 
 
 
-      setDeliveryMapSearchStatus("РС‰РµРј город или адрес...", "loading");
+      setDeliveryMapSearchStatus("Ищем город или адрес...", "loading");
 
 
 
@@ -17666,22 +17666,6 @@
 
 
 
-          if (tabId === "site" && siteCard) siteCard.classList.remove("is-active");
-
-
-
-          if (tabId === "domain" && domainCard) domainCard.classList.remove("is-active");
-
-
-
-          if (tabId === "telegram-app" && telegramAppCard) telegramAppCard.classList.remove("is-active");
-
-
-
-          if (tabId === "max-app" && maxAppCard) maxAppCard.classList.remove("is-active");
-
-
-
           if (tabId === "brand" && brandCard) brandCard.classList.remove("is-active");
 
 
@@ -17855,22 +17839,6 @@
 
 
       if (tabId === "logo" && logoCard) logoCard.classList.add("is-active");
-
-
-
-      if (tabId === "site" && siteCard) siteCard.classList.add("is-active");
-
-
-
-      if (tabId === "domain" && domainCard) domainCard.classList.add("is-active");
-
-
-
-      if (tabId === "telegram-app" && telegramAppCard) telegramAppCard.classList.add("is-active");
-
-
-
-      if (tabId === "max-app" && maxAppCard) maxAppCard.classList.add("is-active");
 
 
 
@@ -22909,7 +22877,7 @@
 
 
 
-          alert("РЎРЅР°С‡Р°Р»Р° РґРѕР±Р°РІСЊС‚Рµ Р Т‘Р С•Р СР ВµР Р….");
+          alert("Сначала добавьте домен.");
 
 
 
@@ -23209,7 +23177,7 @@
 
 
 
-        ensureTab("order-time-options", "РРЅС‚РµСЂРІР°Р»С‹ времени");
+        ensureTab("order-time-options", "Интервалы времени");
 
 
 
@@ -25089,7 +25057,7 @@
 
 
 
-      setStoreAddressSuggestStatus("РС‰РµРј адрес…", "loading");
+      setStoreAddressSuggestStatus("Ищем адрес…", "loading");
 
 
 
@@ -29009,7 +28977,7 @@
 
 
 
-        return stage === "city" ? "РС‰РµРј города…" : "РС‰РµРј адреса…";
+        return stage === "city" ? "Ищем города…" : "Ищем адреса…";
 
 
 
@@ -29089,7 +29057,7 @@
 
 
 
-      if (stage === "city") return String(item && (item.city_name || item.value || item.label) || "Р“РѕСЂРѕРґ").trim();
+      if (stage === "city") return String(item && (item.city_name || item.value || item.label) || "Город").trim();
 
 
 
@@ -29097,7 +29065,7 @@
 
 
 
-        return String(item && (item.street_name || item.value || item.label) || "РЈР»РёС†Р°").trim();
+        return String(item && (item.street_name || item.value || item.label) || "Улица").trim();
 
 
 
@@ -29105,7 +29073,7 @@
 
 
 
-      return String(item && (item.value || item.label || item.full_address) || "РђРґСЂРµСЃ").trim();
+      return String(item && (item.value || item.label || item.full_address) || "Адрес").trim();
 
 
 
@@ -29121,7 +29089,7 @@
 
 
 
-      if (stage === "city") return "Р“РѕСЂРѕРґ";
+      if (stage === "city") return "Город";
 
 
 
@@ -29133,7 +29101,7 @@
 
 
 
-        return cityName ? `РЈР»РёС†Р° - ${cityName}` : "РЈР»РёС†Р°";
+        return cityName ? `Улица - ${cityName}` : "Улица";
 
 
 
@@ -29141,7 +29109,7 @@
 
 
 
-      return cityName || "РђРґСЂРµСЃ";
+      return cityName || "Адрес";
 
 
 
@@ -36869,7 +36837,7 @@
 
 
 
-        iconLabel: "РРєРѕРЅРєР° статуса"
+        iconLabel: "Иконка статуса"
 
 
 
@@ -36897,7 +36865,7 @@
 
 
 
-        iconLabel: "РРєРѕРЅРєР° оплаты"
+        iconLabel: "Иконка оплаты"
 
 
 
@@ -36925,7 +36893,7 @@
 
 
 
-      iconLabel: "РРєРѕРЅРєР° получения",
+      iconLabel: "Иконка получения",
 
 
 
@@ -36961,7 +36929,7 @@
 
 
 
-      iconLabel: "РРєРѕРЅРєР° интервала",
+      iconLabel: "Иконка интервала",
 
 
 
@@ -44577,7 +44545,7 @@
 
 
 
-        <div class="settings-system-map-group-title">РџРћР›РР“РћРќР« Р”РћРЎРўРђР’РљР</div>
+        <div class="settings-system-map-group-title">ПОЛИГОНЫ ДОСТАВКИ</div>
 
 
 
@@ -44589,7 +44557,7 @@
 
 
 
-          <span class="field-hint">РРЅСЃС‚СЂСѓРјРµРЅС‚ рисования и редактирования зон. Отдельная регистрация не нужна.</span>
+          <span class="field-hint">Инструмент рисования и редактирования зон. Отдельная регистрация не нужна.</span>
 
 
 
@@ -50237,7 +50205,7 @@
 
 
 
-        costField.innerHTML = `<label class="field-label">РЎРўРћРРњРћРЎРўР¬ Р”РћРЎРўРђР’РљР</label><input class="control settings-delivery-zone-pill-control" type="number" min="0" step="1" data-zone-tier-field="delivery_cost" value="${String(tier && tier.delivery_cost != null ? tier.delivery_cost : "")}">`;
+        costField.innerHTML = `<label class="field-label">СТОИМОСТЬ ДОСТАВКИ</label><input class="control settings-delivery-zone-pill-control" type="number" min="0" step="1" data-zone-tier-field="delivery_cost" value="${String(tier && tier.delivery_cost != null ? tier.delivery_cost : "")}">`;
 
 
 
@@ -50401,7 +50369,7 @@
 
 
 
-        costField.innerHTML = `<label class="field-label">РЎРўРћРРњРћРЎРўР¬ Р”РћРЎРўРђР’РљР</label><input class="control settings-delivery-zone-pill-control" type="number" min="0" step="1" data-delivery-tier-field="delivery_cost" value="${String(tier && tier.delivery_cost != null ? tier.delivery_cost : "")}">`;
+        costField.innerHTML = `<label class="field-label">СТОИМОСТЬ ДОСТАВКИ</label><input class="control settings-delivery-zone-pill-control" type="number" min="0" step="1" data-delivery-tier-field="delivery_cost" value="${String(tier && tier.delivery_cost != null ? tier.delivery_cost : "")}">`;
 
 
 
@@ -53841,7 +53809,7 @@
 
 
 
-              { label: "Р›РћР“РРќ", value: revealedItem.login, type: "text" },
+              { label: "ЛОГИН", value: revealedItem.login, type: "text" },
 
 
 
@@ -54001,7 +53969,7 @@
 
 
 
-            { key: "login", label: "Р›РћР“РРќ", type: "text", placeholder: "Необязательно" },
+            { key: "login", label: "ЛОГИН", type: "text", placeholder: "Необязательно" },
 
 
 
@@ -54913,7 +54881,7 @@
 
 
 
-        row.className = "order-row product-row settings-card";
+        row.className = "settings-home-card settings-card";
 
 
 
