@@ -58,6 +58,7 @@ function isPromoSimpleDiscount(discount) {
 
 function isDiscountActive(discount) {
   if (!discount || !discount.is_active) return false;
+  if (Number(discount?.is_deleted || 0) === 1 || discount?.is_deleted === true) return false;
 
   const now = new Date();
 
@@ -315,27 +316,72 @@ async function getOrderDiscounts(db, tenantId, storeId, customerId, orderTotal, 
 }
 
 async function recordDiscountUsage(db, tenantId, discountId, orderId, customerId, discountAmount, promoCodeId = null) {
+  const normalizedTenantId = Number(tenantId || 0);
+  const normalizedDiscountId = Number(discountId || 0);
+  const normalizedOrderId = Number(orderId || 0);
+  const normalizedCustomerId = Number(customerId || 0) || null;
+  const normalizedPromoCodeId = Number(promoCodeId || 0) || null;
+  const normalizedDiscountAmount = Number(discountAmount || 0);
+  if (!(normalizedTenantId > 0) || !(normalizedDiscountId > 0) || !(normalizedOrderId > 0) || !(normalizedDiscountAmount > 0)) {
+    return { recorded: false };
+  }
+
+  const [existingRows] = await db.query(
+    `SELECT id
+       FROM mkt_discount_usage
+      WHERE tenant_id = ?
+        AND discount_id = ?
+        AND order_id = ?
+        AND (
+          (? IS NULL AND promo_code_id IS NULL)
+          OR promo_code_id = ?
+        )
+      LIMIT 1`,
+    [
+      normalizedTenantId,
+      normalizedDiscountId,
+      normalizedOrderId,
+      normalizedPromoCodeId,
+      normalizedPromoCodeId,
+    ]
+  );
+  if (Array.isArray(existingRows) && existingRows.length) {
+    return {
+      recorded: false,
+      usageId: Number(existingRows[0]?.id || 0) || null,
+    };
+  }
+
   await db.query(
     `INSERT INTO mkt_discount_usage (tenant_id, discount_id, promo_code_id, order_id, customer_id, discount_amount)
      VALUES (?, ?, ?, ?, ?, ?)`,
-    [tenantId, discountId, promoCodeId || null, orderId, customerId || null, discountAmount]
+    [
+      normalizedTenantId,
+      normalizedDiscountId,
+      normalizedPromoCodeId,
+      normalizedOrderId,
+      normalizedCustomerId,
+      normalizedDiscountAmount,
+    ]
   );
 
   await db.query(
     `UPDATE mkt_discounts
         SET usage_count = usage_count + 1
       WHERE id = ? AND tenant_id = ?`,
-    [discountId, tenantId]
+    [normalizedDiscountId, normalizedTenantId]
   );
 
-  if (Number(promoCodeId || 0) > 0) {
+  if (normalizedPromoCodeId) {
     await db.query(
       `UPDATE mkt_discount_promo_codes
           SET usage_count = usage_count + 1
         WHERE id = ? AND tenant_id = ?`,
-      [promoCodeId, tenantId]
+      [normalizedPromoCodeId, normalizedTenantId]
     );
   }
+
+  return { recorded: true };
 }
 
 function applyBestDiscounts(discounts, price) {

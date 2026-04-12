@@ -915,6 +915,18 @@
       } else {
         rewardMedia.appendChild(createIcon(getRewardIconName(options.rewardKind || item?.reward_kind || "gift")));
       }
+      const availableRewardCount = Math.max(0, Number(item?.pending_reward_count || 0));
+      if (availableRewardCount > 0) {
+        const availableBadge = document.createElement("span");
+        availableBadge.className = "shop-checkout-benefit-progress-reward-badge";
+        const availableCount = document.createElement("span");
+        availableCount.className = "shop-checkout-benefit-progress-reward-badge-count";
+        availableCount.textContent = String(availableRewardCount);
+        availableBadge.appendChild(availableCount);
+        const badgeIcon = createIcon(getRewardIconName("gift"));
+        if (badgeIcon) availableBadge.appendChild(badgeIcon);
+        rewardMedia.appendChild(availableBadge);
+      }
       rewardSlot.appendChild(rewardMedia);
       rewardPane.appendChild(rewardSlot);
     }

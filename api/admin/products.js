@@ -7,6 +7,8 @@ const multer = require('multer');
 module.exports = function makeAdminProductsRouter({ db, helpers }) {
   const router = express.Router();
   let hasCategoryCheckoutVisibilityColumn = null;
+  let discountDeletedColumnsReady = false;
+  let ensureDiscountDeletedColumnsPromise = null;
   const PRODUCT_BLOCK_KEYS = Object.freeze([
     "description",
     "variants",
@@ -147,6 +149,49 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
     return hasCategoryCheckoutVisibilityColumn;
   }
 
+  async function ensureDiscountDeletedColumnsKnown() {
+    if (discountDeletedColumnsReady) return true;
+    if (ensureDiscountDeletedColumnsPromise) return ensureDiscountDeletedColumnsPromise;
+    ensureDiscountDeletedColumnsPromise = (async () => {
+      const [columnRows] = await db.query("SHOW COLUMNS FROM mkt_discounts");
+      const existing = new Set(
+        (Array.isArray(columnRows) ? columnRows : [])
+          .map((row) => String(row?.Field || "").trim())
+          .filter(Boolean)
+      );
+      if (!existing.has("is_deleted")) {
+        try {
+          await db.query("ALTER TABLE mkt_discounts ADD COLUMN `is_deleted` TINYINT(1) NOT NULL DEFAULT 0 AFTER `hide_in_benefits`");
+          existing.add("is_deleted");
+        } catch (err) {
+          if (String(err?.code || "") !== "ER_DUP_FIELDNAME") throw err;
+          existing.add("is_deleted");
+        }
+      }
+      if (!existing.has("deleted_at")) {
+        try {
+          await db.query("ALTER TABLE mkt_discounts ADD COLUMN `deleted_at` DATETIME NULL AFTER `is_deleted`");
+          existing.add("deleted_at");
+        } catch (err) {
+          if (String(err?.code || "") !== "ER_DUP_FIELDNAME") throw err;
+          existing.add("deleted_at");
+        }
+      }
+      discountDeletedColumnsReady = existing.has("is_deleted") && existing.has("deleted_at");
+      return discountDeletedColumnsReady;
+    })()
+      .catch((err) => {
+        ensureDiscountDeletedColumnsPromise = null;
+        throw err;
+      })
+      .finally(() => {
+        if (discountDeletedColumnsReady) {
+          ensureDiscountDeletedColumnsPromise = null;
+        }
+      });
+    return ensureDiscountDeletedColumnsPromise;
+  }
+
   function getDefaultProductBlocksConfig() {
     return {
       description: false,
@@ -215,6 +260,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       });
     });
 
+    await ensureDiscountDeletedColumnsKnown();
     const placeholders = unresolvedIds.map(() => "?").join(",");
 
     const [variantRows] = await db.query(
@@ -261,6 +307,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
                    AND d.tenant_id = dp.tenant_id
                   WHERE dp.tenant_id = p.tenant_id
                     AND d.store_id = ?
+                    AND d.is_deleted = 0
                     AND dp.product_id = p.id
                 ) OR EXISTS (
                   SELECT 1
@@ -273,6 +320,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
                    AND d.tenant_id = dp.tenant_id
                   WHERE pc.tenant_id = p.tenant_id
                     AND d.store_id = ?
+                    AND d.is_deleted = 0
                     AND pc.product_id = p.id
                 )
                 THEN 1 ELSE 0
@@ -896,6 +944,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
   // ------------------------------
   router.get('/prod_products/:id/discounts', async (req, res) => {
     try {
+      await ensureDiscountDeletedColumnsKnown();
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
       const productId = Number(req.params.id);
@@ -918,7 +967,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
                 'direct' AS link_type
          FROM mkt_discounts d
          JOIN mkt_discount_products dp ON dp.discount_id = d.id AND dp.tenant_id = d.tenant_id
-         WHERE d.tenant_id = ? AND d.store_id = ? AND dp.product_id = ?`,
+         WHERE d.tenant_id = ? AND d.store_id = ? AND d.is_deleted = 0 AND dp.product_id = ?`,
         [tenantId, storeId, productId]
       );
 
@@ -932,7 +981,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
            FROM mkt_discounts d
            JOIN mkt_discount_products dp ON dp.discount_id = d.id AND dp.tenant_id = d.tenant_id
            JOIN prod_categories pc ON pc.id = dp.category_id AND pc.tenant_id = dp.tenant_id
-           WHERE d.tenant_id = ? AND d.store_id = ? AND dp.category_id IN (?)`,
+           WHERE d.tenant_id = ? AND d.store_id = ? AND d.is_deleted = 0 AND dp.category_id IN (?)`,
           [tenantId, storeId, categoryIds]
         );
         categoryDiscounts = catDisc;
@@ -1242,6 +1291,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       const hasPrice = Object.prototype.hasOwnProperty.call(req.body || {}, 'price');
       const hasOldPrice = Object.prototype.hasOwnProperty.call(req.body || {}, 'old_price');
       const hasBaseQty = Object.prototype.hasOwnProperty.call(req.body || {}, 'base_qty');
+      const hasIsActive = Object.prototype.hasOwnProperty.call(req.body || {}, 'is_active');
       const hasSiteVisibility = Object.prototype.hasOwnProperty.call(req.body || {}, 'site_visibility');
       const hasStock = Object.prototype.hasOwnProperty.call(req.body || {}, 'stock');
       const cost_price = helpers.numOrNull(req.body.cost_price);
@@ -1249,6 +1299,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       const old_price = helpers.numOrNull(req.body.old_price);
       const base_qty = helpers.numOrNull(req.body.base_qty);
       const stock_qty = helpers.numOrNull(req.body.stock);
+      const is_active = helpers.toBool(req.body.is_active, true) ? 1 : 0;
       const site_visibility = helpers.toBool(req.body.site_visibility, true) ? 1 : 0;
       const updates = [];
       const params = [];
@@ -1256,6 +1307,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       if (hasPrice) { updates.push('price=?'); params.push(price ?? 0); }
       if (hasOldPrice) { updates.push('old_price=?'); params.push(old_price); }
       if (hasBaseQty) { updates.push('base_qty=?'); params.push(base_qty); }
+      if (hasIsActive) { updates.push('is_active=?'); params.push(is_active); }
       if (hasSiteVisibility) { updates.push('site_visibility=?'); params.push(site_visibility); }
       if (updates.length > 0) {
         params.push(tenantId, id);
@@ -1381,24 +1433,34 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
     if (!norm.length) return res.status(400).json({ ok: false, error: 'EMPTY' });
 
     const conn = await db.getConnection();
+    const maxAttempts = 3;
     try {
-      await conn.beginTransaction();
-      let sort = 0;
-      for (const productId of norm) {
-        await conn.query(
-          `INSERT INTO prod_product_categories (tenant_id, product_id, category_id, sort_order)
-           VALUES (?,?,?,?)
-           ON DUPLICATE KEY UPDATE sort_order=VALUES(sort_order)`,
-          [tenantId, productId, categoryId, sort]
-        );
-        sort += 10;
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        try {
+          await conn.beginTransaction();
+          let sort = 0;
+          for (const productId of norm) {
+            await conn.query(
+              `INSERT INTO prod_product_categories (tenant_id, product_id, category_id, sort_order)
+               VALUES (?,?,?,?)
+               ON DUPLICATE KEY UPDATE sort_order=VALUES(sort_order)`,
+              [tenantId, productId, categoryId, sort]
+            );
+            sort += 10;
+          }
+          await conn.commit();
+          return res.json({ ok: true });
+        } catch (e) {
+          try { await conn.rollback(); } catch (_) {}
+          const isDeadlock = e && (e.code === 'ER_LOCK_DEADLOCK' || e.errno === 1213 || e.sqlState === '40001');
+          if (!isDeadlock || attempt >= maxAttempts) throw e;
+          await new Promise((resolve) => setTimeout(resolve, attempt * 60));
+        }
       }
-      await conn.commit();
-      res.json({ ok: true });
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
     } catch (e) {
-      await conn.rollback();
       console.error(e);
-      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
     } finally {
       conn.release();
     }

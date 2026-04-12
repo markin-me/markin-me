@@ -157,7 +157,9 @@
   const elDiscountSaveBtn = $("#discountSaveBtn");
   const elDiscountDeleteBtn = $("#discountDeleteBtn");
   const elDiscountEditBtn = $("#discountEditBtn");
+  const elDiscountInfoDeleteBtn = $("#discountInfoDeleteBtn");
   const elDiscountInfoEditBtn = $("#discountInfoEditBtn");
+  const elDiscountInfoRestoreBtn = $("#discountInfoRestoreBtn");
   const elDeMechanicType = $("#de_mechanic_type");
   const elDeMechanicChoiceScroller = $("#de_mechanic_choice_scroller");
   const elDeMechanicChoiceGrid = $("#de_mechanic_choice_grid");
@@ -482,6 +484,9 @@
     editingDiscountId: null,    // ID редактируемой скидки
     activeDiscount: null,       // Данные активной скидки
     discountOrders: [],         // Заказы с применённой скидкой
+    discountProgressCustomers: [],
+    discountProgressPagination: { page: 1, limit: 100, total: 0, hasMore: false },
+    discountProgressLoading: false,
     discountCenterMode: 'list',
     // Picker для скидок
     discountPickerLevel: null,        // null | 'products' | 'customers'
@@ -529,6 +534,8 @@
     discountProgressDiscountProductsConfigMode: 'any',
     discountProgressDiscountProducts: [],
     discountProgressPromoSource: null,
+    discountLoyaltyPromoSources: [],
+    discountLoyaltyPromoSourcesLoaded: false,
     discountSharedPromoSources: [],
     discountSharedPromoSourcesLoaded: false,
     discountSimpleDiscountSources: [],
@@ -1186,6 +1193,20 @@
     return `${type}:${id}`;
   }
 
+  const DELETED_DISCOUNT_FILTER_ITEM = { key: 'deleted', title: 'Удаленные' };
+
+  function isDeletedDiscount(discount) {
+    return Number(discount?.is_deleted || 0) === 1 || discount?.is_deleted === true;
+  }
+
+  function getVisibleDiscounts() {
+    return (Array.isArray(state.discounts) ? state.discounts : []).filter((discount) => !isDeletedDiscount(discount));
+  }
+
+  function getDeletedDiscounts() {
+    return (Array.isArray(state.discounts) ? state.discounts : []).filter((discount) => isDeletedDiscount(discount));
+  }
+
   const DISCOUNT_TYPE_FILTER_ITEMS = [
     { key: 'simple_discount', title: 'Скидка' },
     { key: 'promo_code', title: 'Промокод' },
@@ -1203,15 +1224,17 @@
   }
 
   function getDiscountTypeFilterCounts() {
+    const visibleDiscounts = getVisibleDiscounts();
     const counts = {
-      all: state.discounts.length,
+      all: visibleDiscounts.length,
       simple_discount: 0,
       promo_code: 0,
       buy_x_get_y: 0,
       loyalty_progress: 0,
       threshold: 0,
+      deleted: getDeletedDiscounts().length,
     };
-    state.discounts.forEach((discount) => {
+    visibleDiscounts.forEach((discount) => {
       const key = getDiscountTypeFilterKey(discount);
       if (Object.prototype.hasOwnProperty.call(counts, key)) {
         counts[key] += 1;
@@ -1222,13 +1245,19 @@
 
   function getFilteredDiscounts() {
     const filterKey = String(state.activeDiscountTypeFilter || 'all');
-    if (filterKey === 'all') return state.discounts;
-    return state.discounts.filter((discount) => getDiscountTypeFilterKey(discount) === filterKey);
+    if (filterKey === 'deleted') return getDeletedDiscounts();
+    const visibleDiscounts = getVisibleDiscounts();
+    if (filterKey === 'all') return visibleDiscounts;
+    return visibleDiscounts.filter((discount) => getDiscountTypeFilterKey(discount) === filterKey);
   }
 
   function isUniquePromoDiscount(discount) {
     const promo = getDiscountPromoFromDiscount(discount);
     return promo.enabled && promo.code_mode === 'unique';
+  }
+
+  function isLoyaltyProgressDiscount(discount) {
+    return normalizeDiscountMechanicType(discount?.mechanic_type) === 'loyalty_progress';
   }
 
   function getDiscountPromoCodeHistorySortGroup(row) {
@@ -1286,6 +1315,7 @@
       const usageLimitText = promoCode?.usage_limit == null ? 'без лимита' : `лимит ${Number(promoCode.usage_limit || 0)}`;
       const createdAtText = formatDiscountInfoDateTime(promoCode?.created_at);
       const isActive = Number(promoCode?.is_active || 0) === 1;
+      const canTogglePromoCode = !isDeletedDiscount(state.activeDiscount);
 
       row.innerHTML = `
         <div class="discount-promo-main">
@@ -1295,7 +1325,9 @@
         </div>
         <div class="discount-promo-actions">
           <span class="discount-promo-status ${isActive ? '' : 'is-inactive'}">${isActive ? 'Активен' : 'Выключен'}</span>
-          <button type="button" class="btn btn-sm" data-promo-toggle-id="${Number(promoCode?.id || 0)}">${isActive ? 'Выключить' : 'Включить'}</button>
+          ${canTogglePromoCode
+            ? `<button type="button" class="btn btn-sm" data-promo-toggle-id="${Number(promoCode?.id || 0)}">${isActive ? 'Выключить' : 'Включить'}</button>`
+            : ''}
         </div>
       `;
 
@@ -1415,6 +1447,10 @@
         renderDiscountPromoCodeHistory();
         return;
       }
+      if (isLoyaltyProgressDiscount(state.activeDiscount)) {
+        renderDiscountProgressCustomers();
+        return;
+      }
       renderDiscountOrders();
       return;
     }
@@ -1437,12 +1473,17 @@
     if (state.currentView !== 'discounts') return;
     if (reload) {
       state.discountOrders = [];
+      state.discountProgressCustomers = [];
+      state.discountProgressPagination = { page: 1, limit: 100, total: 0, hasMore: false };
+      state.discountProgressLoading = false;
       if (isUniquePromoDiscount(targetDiscount)) {
         state.discountPromoCodes = [];
       }
       renderDiscountCenterContent();
       if (isUniquePromoDiscount(targetDiscount)) {
         void loadDiscountPromoCodes(discountId);
+      } else if (isLoyaltyProgressDiscount(targetDiscount)) {
+        void loadDiscountProgressCustomers(discountId);
       } else {
         void loadDiscountOrders(discountId);
       }
@@ -4023,9 +4064,17 @@
     const promoCodeId = Number(source.source_promo_code_id || source.promo_code_id || 0);
     const discountId = Number(source.source_discount_id || source.discount_id || 0);
     const code = String(source.source_code || source.code || '').trim();
-    if (!(promoCodeId > 0) || !code) return null;
+    const requestedCodeMode = String(source.source_code_mode || source.code_mode || '').trim().toLowerCase();
+    const sourceCodeMode = requestedCodeMode === 'unique'
+      ? 'unique'
+      : requestedCodeMode === 'shared'
+        ? 'shared'
+        : (promoCodeId > 0 ? 'shared' : (discountId > 0 ? 'unique' : 'shared'));
+    if (sourceCodeMode === 'shared' && (!(promoCodeId > 0) || !code)) return null;
+    if (sourceCodeMode === 'unique' && !(discountId > 0)) return null;
     return {
-      source_promo_code_id: promoCodeId,
+      source_code_mode: sourceCodeMode,
+      source_promo_code_id: sourceCodeMode === 'shared' && promoCodeId > 0 ? promoCodeId : null,
       source_discount_id: discountId > 0 ? discountId : null,
       source_code: code,
       source_discount_title: String(source.source_discount_title || source.discount_title || source.title || '').trim(),
@@ -4033,6 +4082,12 @@
       usage_count: Number(source.usage_count || 0),
       is_active: source.is_active !== false && source.is_active !== 0,
       promo_code_is_active: source.promo_code_is_active !== false && source.promo_code_is_active !== 0,
+      total_codes_count: Number(source.total_codes_count || 0),
+      active_codes_count: Number(source.active_codes_count || 0),
+      used_codes_count: Number(source.used_codes_count || 0),
+      assigned_codes_count: Number(source.assigned_codes_count || 0),
+      available_codes_count: Number(source.available_codes_count || 0),
+      sample_promo_code_id: Number(source.sample_promo_code_id || 0) || null,
     };
   }
 
@@ -4472,7 +4527,10 @@
     try {
       const json = await apiJson("/api/admin/discounts");
       state.discounts = json.discounts || [];
-      state.discountsTotals.all = state.discounts.length;
+      state.discountsTotals.all = getVisibleDiscounts().length;
+      if (Number(state.activeDiscountId || 0) > 0) {
+        state.activeDiscount = state.discounts.find((discount) => Number(discount?.id || 0) === Number(state.activeDiscountId || 0)) || null;
+      }
       renderDiscountFilters();
     } catch (err) {
       console.error("loadDiscounts error:", err);
@@ -4626,6 +4684,13 @@
   // Открыть редактор скидки
   async function openDiscountEditor(discountId) {
     const isNew = !discountId;
+    if (!isNew) {
+      const existingDiscount = state.discounts.find((item) => Number(item?.id || 0) === Number(discountId || 0));
+      if (isDeletedDiscount(existingDiscount)) {
+        alert('Удаленную акцию сначала восстановите');
+        return;
+      }
+    }
     const tabKey = isNew ? buildTabKey('discount', 'new') : buildTabKey('discount', discountId);
 
     let existing = tabsState.tabs.find(t => t.key === tabKey);
@@ -4874,28 +4939,152 @@
     }
   }
 
-  // Удалить скидку
-  async function deleteDiscount() {
-    const id = $('#de_id').value;
-    if (!id || id === 'new') return;
+  function resetTwoStepButton(btn) {
+    if (!btn) return;
+    btn.classList.remove("is-confirm");
+    if (btn.dataset.originalHtml != null) {
+      btn.innerHTML = btn.dataset.originalHtml;
+    }
+    if (btn.dataset.originalTitle != null) {
+      btn.title = btn.dataset.originalTitle;
+    }
+    if (btn.dataset.originalAria != null) {
+      btn.setAttribute("aria-label", btn.dataset.originalAria);
+    }
+    if (btn.__twoStepTimer) {
+      clearTimeout(btn.__twoStepTimer);
+      btn.__twoStepTimer = null;
+    }
+    btn.__twoStepArmed = false;
+  }
 
-    if (!confirm('Удалить эту скидку?')) return;
+  function attachTwoStepButton(btn, onConfirm, confirmText = "Удалить") {
+    if (!btn || btn.__twoStepBound) return;
+    btn.__twoStepBound = true;
+    btn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (btn.disabled) return;
+      if (btn.__twoStepArmed) {
+        resetTwoStepButton(btn);
+        onConfirm?.();
+        return;
+      }
+      btn.__twoStepArmed = true;
+      btn.classList.add("is-confirm");
+      if (btn.dataset.originalHtml == null) btn.dataset.originalHtml = btn.innerHTML;
+      if (btn.dataset.originalTitle == null) btn.dataset.originalTitle = btn.title || "";
+      if (btn.dataset.originalAria == null) btn.dataset.originalAria = btn.getAttribute("aria-label") || "";
+      btn.textContent = confirmText;
+      if (btn.__twoStepTimer) clearTimeout(btn.__twoStepTimer);
+      btn.__twoStepTimer = setTimeout(() => resetTwoStepButton(btn), 4000);
+    });
+  }
+
+  function resetDiscountDeleteButtons() {
+    resetTwoStepButton(elDiscountDeleteBtn);
+    resetTwoStepButton(elDiscountInfoDeleteBtn);
+  }
+
+  async function closeDiscountTabs(discountId) {
+    const normalizedDiscountId = Number(discountId || 0);
+    if (!(normalizedDiscountId > 0)) return;
+    const keys = tabsState.tabs
+      .filter((tab) => (
+        (tab?.type === "discount" && Number(tab?.id || 0) === normalizedDiscountId)
+        || (tab?.type === "discount-promo-code" && Number(tab?.parentDiscountId || 0) === normalizedDiscountId)
+      ))
+      .map((tab) => tab.key);
+    for (const key of keys) {
+      await closeTab(key);
+    }
+  }
+
+  async function focusDeletedDiscount(discountId) {
+    const deletedDiscount = state.discounts.find((discount) => (
+      Number(discount?.id || 0) === Number(discountId || 0) && isDeletedDiscount(discount)
+    )) || null;
+    state.activeDiscountFilter = "deleted";
+    state.activeDiscountTypeFilter = "deleted";
+    state.discountCenterMode = "list";
+    syncDiscountToolbarState();
+    renderDiscountFilters();
+    if (deletedDiscount) {
+      await openDiscountTab(deletedDiscount);
+      return;
+    }
+    state.activeDiscountId = null;
+    state.activeDiscount = null;
+    updateRightPanel();
+    renderDiscountsList();
+  }
+
+  async function restoreDiscount(discountIdValue = null) {
+    const discountId = Number(discountIdValue || state.activeDiscountId || 0);
+    if (!(discountId > 0)) return;
+    try {
+      await apiJson(`/api/admin/discounts/${discountId}/restore`, { method: "POST" });
+      await loadDiscounts();
+      state.activeDiscountFilter = "all";
+      state.activeDiscountTypeFilter = "all";
+      state.discountCenterMode = "list";
+      resetDiscountDeleteButtons();
+      const restoredDiscount = state.discounts.find((discount) => Number(discount?.id || 0) === discountId) || null;
+      if (restoredDiscount) {
+        await openDiscountTab(restoredDiscount);
+      } else {
+        await closeDiscountTabs(discountId);
+        renderDiscountFilters();
+        renderDiscountsList();
+        updateRightPanel();
+      }
+    } catch (err) {
+      console.error("restoreDiscount error:", err);
+      alert("Ошибка восстановления: " + err.message);
+    }
+  }
+
+  async function deleteDiscount(options = {}) {
+    const rawOptions = options && typeof options === "object" && !("target" in options)
+      ? options
+      : {};
+    const discountId = Number(
+      rawOptions.discountId
+      || state.activeDiscountId
+      || $("#de_id")?.value
+      || 0
+    );
+    if (!(discountId > 0)) return;
+
+    const focusDeletedAfterDelete = rawOptions.focusDeletedAfterDelete === true;
+    const shouldCloseTabs = rawOptions.closeTabs !== false && !focusDeletedAfterDelete;
 
     try {
-      await apiJson(`/api/admin/discounts/${id}`, { method: 'DELETE' });
-
-      // Перезагружаем список
+      await apiJson(`/api/admin/discounts/${discountId}`, { method: "DELETE" });
+      resetDiscountDeleteButtons();
       await loadDiscounts();
 
-      // Закрываем таб
-      closeActiveTab();
+      if (focusDeletedAfterDelete) {
+        await focusDeletedDiscount(discountId);
+        return;
+      }
 
-      state.editingDiscountId = null;
-      state.activeDiscount = null;
+      if (shouldCloseTabs) {
+        await closeDiscountTabs(discountId);
+      }
+
+      if (Number(state.activeDiscountId || 0) === discountId) {
+        state.activeDiscountId = null;
+        state.activeDiscount = null;
+        state.discountCenterMode = "list";
+      }
+
+      renderDiscountFilters();
+      renderDiscountsList();
       updateRightPanel();
     } catch (err) {
-      console.error('deleteDiscount error:', err);
-      alert('Ошибка удаления: ' + err.message);
+      console.error("deleteDiscount error:", err);
+      alert("Ошибка удаления: " + err.message);
     }
   }
 
@@ -4941,6 +5130,13 @@
 
   async function openDiscountEditor(discountId) {
     const isNew = !discountId;
+    if (!isNew) {
+      const existingDiscount = state.discounts.find((item) => Number(item?.id || 0) === Number(discountId || 0));
+      if (isDeletedDiscount(existingDiscount)) {
+        alert('Удаленную акцию сначала восстановите');
+        return;
+      }
+    }
     const tabKey = isNew ? buildTabKey('discount', 'new') : buildTabKey('discount', discountId);
 
     let existing = tabsState.tabs.find((t) => t.key === tabKey);
@@ -4955,6 +5151,7 @@
     tabsState.activeKey = tabKey;
     state.editingDiscountId = discountId || 'new';
     state.discountPromoCodes = [];
+    resetDiscountDeleteButtons();
 
     if (elDiscountEditorForm) {
       if (isNew) {
@@ -5236,6 +5433,13 @@
 
   async function openDiscountEditor(discountId) {
     const isNew = !discountId;
+    if (!isNew) {
+      const existingDiscount = state.discounts.find((item) => Number(item?.id || 0) === Number(discountId || 0));
+      if (isDeletedDiscount(existingDiscount)) {
+        alert('Удаленную акцию сначала восстановите');
+        return;
+      }
+    }
     const tabKey = isNew ? buildTabKey('discount', 'new') : buildTabKey('discount', discountId);
 
     let existing = tabsState.tabs.find((t) => t.key === tabKey);
@@ -5250,6 +5454,7 @@
     tabsState.activeKey = tabKey;
     state.editingDiscountId = discountId || 'new';
     state.discountPromoCodes = [];
+    resetDiscountDeleteButtons();
 
     if (elDiscountEditorForm) {
       if (isNew) {
@@ -5574,7 +5779,7 @@
       }).catch(() => {});
     }
     if (mechanic.type === 'loyalty_progress' && mechanic.reward_kind === 'promo_code') {
-      loadDiscountSharedPromoSources().then(() => {
+      loadDiscountLoyaltyPromoSources().then(() => {
         renderDiscountProgressPromoSource();
       }).catch(() => {});
     }
@@ -5762,7 +5967,7 @@
         }
       }
       if (rewardKind === 'promo_code' && !promoSource) {
-        alert('Прикрепите общий промокод для награды');
+        alert('Прикрепите промокод для награды');
         return;
       }
 
@@ -5788,11 +5993,13 @@
           },
           promo_code: rewardKind === 'promo_code'
             ? {
+                source_code_mode: promoSource?.source_code_mode || 'shared',
                 source_promo_code_id: promoSource?.source_promo_code_id || null,
                 source_discount_id: promoSource?.source_discount_id || null,
                 source_code: promoSource?.source_code || '',
               }
             : {
+                source_code_mode: null,
                 source_promo_code_id: null,
                 source_discount_id: null,
                 source_code: null,
@@ -6049,6 +6256,25 @@
     )) || null;
   }
 
+  function getDiscountPromoSourceLookupKey(source) {
+    const row = cloneDiscountPromoSource(source);
+    if (!row) return '';
+    if (row.source_code_mode === 'unique') {
+      const discountId = Number(row.source_discount_id || 0);
+      return discountId > 0 ? `unique:${discountId}` : '';
+    }
+    const promoCodeId = Number(row.source_promo_code_id || 0);
+    return promoCodeId > 0 ? `shared:${promoCodeId}` : '';
+  }
+
+  function findDiscountLoyaltyPromoSource(source) {
+    const lookupKey = getDiscountPromoSourceLookupKey(source);
+    if (!lookupKey) return null;
+    return (state.discountLoyaltyPromoSources || []).find((item) => (
+      getDiscountPromoSourceLookupKey(item) === lookupKey
+    )) || null;
+  }
+
   function findDiscountSimpleSource(source) {
     const discountId = Number(source?.discount_id || source?.source_discount_id || 0);
     return (state.discountSimpleDiscountSources || []).find((item) => (
@@ -6059,9 +6285,21 @@
   function getDiscountProgressPromoSourceSummaryText(source = state.discountProgressPromoSource) {
     const row = cloneDiscountPromoSource(source);
     if (!row) return 'Промокод не прикреплен';
-    const matched = findDiscountSharedPromoSource(row);
+    const matched = findDiscountLoyaltyPromoSource(row);
     const title = String(matched?.source_discount_title || row.source_discount_title || '').trim();
-    return title ? `${title} • ${row.source_code}` : row.source_code;
+    const sourceCodeMode = matched?.source_code_mode === 'unique' || row.source_code_mode === 'unique'
+      ? 'unique'
+      : 'shared';
+    if (sourceCodeMode === 'unique') {
+      const availableCodesCount = Math.max(0, Number(matched?.available_codes_count ?? row.available_codes_count ?? 0));
+      const totalCodesCount = Math.max(0, Number(matched?.total_codes_count ?? row.total_codes_count ?? 0));
+      const availabilityText = totalCodesCount > 0
+        ? `доступно ${availableCodesCount}/${totalCodesCount}`
+        : 'уникальные коды';
+      return title ? `${title} • Уникальный • ${availabilityText}` : `Уникальный • ${availabilityText}`;
+    }
+    const code = String(matched?.source_code || row.source_code || '').trim();
+    return title ? `${title} • ${code}` : (code || 'Промокод');
   }
 
   async function loadDiscountSharedPromoSources(forceReload = false) {
@@ -6079,6 +6317,23 @@
     }
     state.discountSharedPromoSourcesLoaded = true;
     return state.discountSharedPromoSources;
+  }
+
+  async function loadDiscountLoyaltyPromoSources(forceReload = false) {
+    if (!forceReload && state.discountLoyaltyPromoSourcesLoaded) {
+      return state.discountLoyaltyPromoSources;
+    }
+    try {
+      const json = await apiJson('/api/admin/discounts/loyalty-promo-sources');
+      state.discountLoyaltyPromoSources = Array.isArray(json.sources)
+        ? json.sources.map((item) => cloneDiscountPromoSource(item)).filter(Boolean)
+        : [];
+    } catch (err) {
+      console.error('loadDiscountLoyaltyPromoSources error:', err);
+      state.discountLoyaltyPromoSources = [];
+    }
+    state.discountLoyaltyPromoSourcesLoaded = true;
+    return state.discountLoyaltyPromoSources;
   }
 
   async function loadDiscountSimpleSources(forceReload = false) {
@@ -6100,25 +6355,36 @@
 
   function renderDiscountProgressPromoSourceList() {
     if (!elDeProgressPromoSourceList) return;
-    const selectedId = Number(state.discountProgressPromoSource?.source_promo_code_id || 0);
-    const rows = Array.isArray(state.discountSharedPromoSources) ? state.discountSharedPromoSources : [];
+    const selectedKey = getDiscountPromoSourceLookupKey(state.discountProgressPromoSource);
+    const rows = Array.isArray(state.discountLoyaltyPromoSources) ? state.discountLoyaltyPromoSources : [];
     if (!rows.length) {
-      elDeProgressPromoSourceList.innerHTML = '<div class="discount-audience-empty">Общие промокоды не найдены</div>';
+      elDeProgressPromoSourceList.innerHTML = '<div class="discount-audience-empty">Промокоды не найдены</div>';
       return;
     }
     elDeProgressPromoSourceList.innerHTML = rows.map((item) => {
-      const promoCodeId = Number(item?.source_promo_code_id || 0);
-      const isActive = promoCodeId === selectedId;
+      const lookupKey = getDiscountPromoSourceLookupKey(item);
+      const isUnique = item?.source_code_mode === 'unique';
+      const isActive = !!lookupKey && lookupKey === selectedKey;
       const statusBits = [];
+      statusBits.push(isUnique ? 'Уникальный' : 'Общий');
       statusBits.push(item?.is_active ? 'акция активна' : 'акция выключена');
-      statusBits.push(item?.promo_code_is_active ? 'код активен' : 'код выключен');
+      if (isUnique) {
+        const availableCodesCount = Math.max(0, Number(item?.available_codes_count || 0));
+        const totalCodesCount = Math.max(0, Number(item?.total_codes_count || 0));
+        statusBits.push(item?.promo_code_is_active ? 'коды активны' : 'нет активных кодов');
+        if (totalCodesCount > 0) {
+          statusBits.push(`доступно ${availableCodesCount}/${totalCodesCount}`);
+        }
+      } else {
+        statusBits.push(item?.promo_code_is_active ? 'код активен' : 'код выключен');
+      }
       if (Number(item?.usage_limit || 0) > 0) {
         statusBits.push(`${Number(item?.usage_count || 0)}/${Number(item?.usage_limit || 0)}`);
       }
       return `
-        <button type="button" class="discount-progress-promo-option${isActive ? ' is-active' : ''}" data-progress-promo-source-id="${promoCodeId}">
+        <button type="button" class="discount-progress-promo-option${isActive ? ' is-active' : ''}" data-progress-promo-source-key="${lookupKey}">
           <span class="discount-progress-promo-option-title">${escapeHtml(item.source_discount_title || `Акция #${item.source_discount_id || 0}`)}</span>
-          <span class="discount-progress-promo-option-code">${escapeHtml(item.source_code || '')}</span>
+          <span class="discount-progress-promo-option-code">${escapeHtml(isUnique ? 'Пул уникальных кодов' : (item.source_code || ''))}</span>
           <span class="discount-progress-promo-option-meta">${escapeHtml(statusBits.join(' • '))}</span>
         </button>
       `;
@@ -6127,15 +6393,23 @@
 
   function renderDiscountProgressPromoSource() {
     const current = cloneDiscountPromoSource(state.discountProgressPromoSource);
-    const matched = current ? findDiscountSharedPromoSource(current) : null;
+    const matched = current ? findDiscountLoyaltyPromoSource(current) : null;
     state.discountProgressPromoSource = current
       ? {
           ...current,
+          source_code_mode: matched?.source_code_mode || current.source_code_mode || 'shared',
           source_discount_title: matched?.source_discount_title || current.source_discount_title || '',
+          source_code: matched?.source_code || current.source_code || '',
           usage_limit: matched?.usage_limit ?? current.usage_limit ?? null,
           usage_count: matched?.usage_count ?? current.usage_count ?? 0,
           is_active: matched?.is_active ?? current.is_active ?? true,
           promo_code_is_active: matched?.promo_code_is_active ?? current.promo_code_is_active ?? true,
+          total_codes_count: matched?.total_codes_count ?? current.total_codes_count ?? 0,
+          active_codes_count: matched?.active_codes_count ?? current.active_codes_count ?? 0,
+          used_codes_count: matched?.used_codes_count ?? current.used_codes_count ?? 0,
+          assigned_codes_count: matched?.assigned_codes_count ?? current.assigned_codes_count ?? 0,
+          available_codes_count: matched?.available_codes_count ?? current.available_codes_count ?? 0,
+          sample_promo_code_id: matched?.sample_promo_code_id ?? current.sample_promo_code_id ?? null,
         }
       : null;
 
@@ -6151,9 +6425,13 @@
       elDeProgressAttachPromoBtn.textContent = state.discountProgressPromoSource ? 'Заменить промокод' : 'Прикрепить промокод';
     }
     if (elDeProgressPromoSourceHint) {
-      elDeProgressPromoSourceHint.textContent = state.discountProgressPromoSource
-        ? 'Награда будет ссылаться на выбранный общий промокод.'
-        : 'Можно прикрепить только существующий общий промокод.';
+      if (state.discountProgressPromoSource?.source_code_mode === 'unique') {
+        elDeProgressPromoSourceHint.textContent = 'Награда будет выдавать реальный уникальный код из пула выбранной акции.';
+      } else if (state.discountProgressPromoSource) {
+        elDeProgressPromoSourceHint.textContent = 'Награда будет ссылаться на выбранный общий промокод.';
+      } else {
+        elDeProgressPromoSourceHint.textContent = 'Можно прикрепить общий промокод или пул уникальных кодов.';
+      }
     }
     renderDiscountProgressPromoSourceList();
     renderDiscountProgressCountsVisualization();
@@ -6315,7 +6593,7 @@
       ? elDeProgressPromoSourcePicker.classList.contains('hidden')
       : !!forceOpen;
     if (shouldOpen) {
-      await loadDiscountSharedPromoSources();
+      await loadDiscountLoyaltyPromoSources();
       renderDiscountProgressPromoSource();
       elDeProgressPromoSourcePicker.classList.remove('hidden');
       elDeProgressPromoSourcePicker.hidden = false;
@@ -6964,10 +7242,15 @@
     }
     const promoSource = cloneDiscountPromoSource(state.discountProgressPromoSource);
     if (!promoSource) return null;
+    const isUniquePromoSource = promoSource.source_code_mode === 'unique';
     return {
       type: 'meta',
-      id: Number(promoSource.source_promo_code_id || 0),
-      title: promoSource.source_code || 'Промокод',
+      id: Number(isUniquePromoSource
+        ? (promoSource.source_discount_id || promoSource.source_promo_code_id || 0)
+        : (promoSource.source_promo_code_id || promoSource.source_discount_id || 0)),
+      title: isUniquePromoSource
+        ? (promoSource.source_discount_title || 'Уникальный промокод')
+        : (promoSource.source_code || 'Промокод'),
       photo: '',
       icon: 'fa-ticket-alt',
       count: 1,
@@ -7527,6 +7810,7 @@
     if (code === 'TITLE_REQUIRED') return 'Введите название акции.';
     if (code === 'INVALID_CUSTOMERS') return 'Проверьте выбранных клиентов и клиентские категории.';
     if (code === 'INVALID_PRODUCTS') return 'Проверьте выбранные товары, категории или комбо.';
+    if (code === 'DISCOUNT_DELETED') return 'Удаленную акцию сначала восстановите.';
     if (code === 'INVALID_DATE_RANGE') return 'Дата окончания не может быть раньше даты начала.';
     if (code === 'PERIOD_BOUNDS_REQUIRED') return 'Для ограничения по периоду укажите дату начала и дату окончания.';
     if (code === 'WEEKDAYS_REQUIRED') return 'Для ограничения по дням недели выберите хотя бы один день.';
@@ -7551,7 +7835,8 @@
     if (code === 'LOYALTY_QUALIFYING_ITEMS_REQUIRED') return 'Добавьте товары или категории для накопления.';
     if (code === 'INVALID_PROGRESS_SCOPE_ITEMS') return 'Проверьте область накопления и выбранные товары или категории.';
     if (code === 'LOYALTY_REWARD_PRODUCTS_REQUIRED') return 'Добавьте товары для награды накопительной акции.';
-    if (code === 'LOYALTY_PROMO_SOURCE_REQUIRED') return 'Прикрепите общий промокод для награды.';
+    if (code === 'LOYALTY_PROMO_SOURCE_REQUIRED') return 'Прикрепите промокод для награды.';
+    if (code === 'INVALID_LOYALTY_PROMO_SOURCE') return 'Выберите доступный источник промокода для награды.';
     if (code === 'INVALID_ISSUE_MODE') return 'Проверьте режим выдачи награды.';
     return code ? `Ошибка сохранения: ${code}` : 'Не удалось сохранить акцию.';
   }
@@ -8904,6 +9189,13 @@
 
   async function openDiscountEditor(discountId) {
     const isNew = !discountId;
+    if (!isNew) {
+      const existingDiscount = state.discounts.find((item) => Number(item?.id || 0) === Number(discountId || 0));
+      if (isDeletedDiscount(existingDiscount)) {
+        alert('Удаленную акцию сначала восстановите');
+        return;
+      }
+    }
     const tabKey = isNew ? buildTabKey('discount', 'new') : buildTabKey('discount', discountId);
 
     let existing = tabsState.tabs.find((t) => t.key === tabKey);
@@ -8918,6 +9210,7 @@
     tabsState.activeKey = tabKey;
     state.editingDiscountId = discountId || 'new';
     state.discountPromoCodes = [];
+    resetDiscountDeleteButtons();
 
     if (elDiscountEditorForm) {
       if (isNew) {
@@ -9125,7 +9418,7 @@
       }).catch(() => {});
     }
     if (mechanic.type === 'loyalty_progress' && mechanic.reward_kind === 'promo_code') {
-      loadDiscountSharedPromoSources().then(() => {
+      loadDiscountLoyaltyPromoSources().then(() => {
         renderDiscountProgressPromoSource();
       }).catch(() => {});
     }
@@ -9589,7 +9882,7 @@
       }).catch(() => {});
     }
     if (mechanic.type === 'loyalty_progress' && mechanic.reward_kind === 'promo_code') {
-      loadDiscountSharedPromoSources().then(() => {
+      loadDiscountLoyaltyPromoSources().then(() => {
         renderDiscountProgressPromoSource();
       }).catch(() => {});
     }
@@ -9845,7 +10138,7 @@
         }
       }
       if (rewardKind === 'promo_code' && !promoSource) {
-        alert('Прикрепите общий промокод для награды');
+        alert('Прикрепите промокод для награды');
         return;
       }
 
@@ -9871,11 +10164,13 @@
           },
           promo_code: rewardKind === 'promo_code'
             ? {
+                source_code_mode: promoSource?.source_code_mode || 'shared',
                 source_promo_code_id: promoSource?.source_promo_code_id || null,
                 source_discount_id: promoSource?.source_discount_id || null,
                 source_code: promoSource?.source_code || '',
               }
             : {
+                source_code_mode: null,
                 source_promo_code_id: null,
                 source_discount_id: null,
                 source_code: null,
@@ -10115,6 +10410,7 @@
   function renderDiscountListBadgesHtml(discount) {
     const parts = [];
     const mainBadge = getDiscountInfoMainBadgeDescriptor(discount);
+    const isDeleted = isDeletedDiscount(discount);
 
     if (mainBadge.kind === 'icon') {
       parts.push(`
@@ -10134,14 +10430,14 @@
       `);
     }
 
-    const activeLabel = discount.is_active ? 'Активна' : 'Неактивна';
+    const activeLabel = isDeleted ? 'Удалена' : (discount.is_active ? 'Активна' : 'Неактивна');
     parts.push(`
       <span
-        class="shop-checkout-benefit-badge shop-checkout-benefit-badge--icon ${discount.is_active ? 'shop-checkout-benefit-badge--accent' : 'shop-checkout-benefit-badge--neutral'}"
+        class="shop-checkout-benefit-badge shop-checkout-benefit-badge--icon ${isDeleted ? 'shop-checkout-benefit-badge--neutral' : (discount.is_active ? 'shop-checkout-benefit-badge--accent' : 'shop-checkout-benefit-badge--neutral')}"
         title="${activeLabel}"
         aria-label="${activeLabel}"
       >
-        <i class="fas fa-power-off" aria-hidden="true"></i>
+        <i class="fas ${isDeleted ? 'fa-trash' : 'fa-power-off'}" aria-hidden="true"></i>
       </span>
     `);
 
@@ -10382,6 +10678,7 @@
     const usageLimit = usageLimitValue == null ? null : Number(usageLimitValue || 0);
     const usageCount = Number((promoCodeDetail?.usage_count ?? discount.usage_count) || 0);
     const isActive = promoCodeDetail ? Number(promoCodeDetail.is_active || 0) === 1 : !!discount.is_active;
+    const isDeleted = isDeletedDiscount(discount);
     const promo = getDiscountPromoFromDiscount(discount);
     const rules = [
       ...buildDiscountPromoCodeDetailRules(promoCodeDetail),
@@ -10406,14 +10703,14 @@
     if (badgeEl) {
       badgeEl.classList.toggle('hidden', isPromoCodeDetailView);
       badgeEl.classList.remove('shop-checkout-benefit-badge--accent', 'shop-checkout-benefit-badge--selected', 'shop-checkout-benefit-badge--neutral');
-      badgeEl.classList.add(isActive ? 'shop-checkout-benefit-badge--accent' : 'shop-checkout-benefit-badge--neutral');
-      const label = isActive ? 'Активна' : 'Неактивна';
+      badgeEl.classList.add(!isDeleted && isActive ? 'shop-checkout-benefit-badge--accent' : 'shop-checkout-benefit-badge--neutral');
+      const label = isDeleted ? 'Удалена' : (isActive ? 'Активна' : 'Неактивна');
       badgeEl.setAttribute('title', label);
       badgeEl.setAttribute('aria-label', label);
     }
     if (statusIconEl) {
-      statusIconEl.classList.remove('fa-power-off');
-      statusIconEl.classList.add('fa-power-off');
+      statusIconEl.classList.remove('fa-power-off', 'fa-trash');
+      statusIconEl.classList.add(isDeleted ? 'fa-trash' : 'fa-power-off');
     }
     if (benefitsBadgeEl) {
       benefitsBadgeEl.classList.toggle('hidden', isPromoCodeDetailView);
@@ -10539,7 +10836,7 @@
     elDiscountsFilters.innerHTML = '';
 
     const counts = getDiscountTypeFilterCounts();
-    const filters = [{ key: 'all', title: 'Все скидки' }, ...DISCOUNT_TYPE_FILTER_ITEMS];
+    const filters = [{ key: 'all', title: 'Все скидки' }, ...DISCOUNT_TYPE_FILTER_ITEMS, DELETED_DISCOUNT_FILTER_ITEM];
 
     filters.forEach((filter) => {
       const btn = document.createElement('button');
@@ -10590,6 +10887,231 @@
       if (state.discountCenterMode === 'history') {
         renderDiscountOrders();
       }
+    }
+  }
+
+  async function loadDiscountProgressCustomers(discountId, { append = false } = {}) {
+    const targetId = Number(discountId || 0);
+    if (!(targetId > 0)) {
+      state.discountProgressCustomers = [];
+      state.discountProgressPagination = { page: 1, limit: 100, total: 0, hasMore: false };
+      state.discountProgressLoading = false;
+      renderDiscountCenterContent();
+      return;
+    }
+
+    const nextPage = append
+      ? Math.max(1, Number(state.discountProgressPagination?.page || 1) + 1)
+      : 1;
+
+    state.discountProgressLoading = true;
+    if (!append) {
+      state.discountProgressCustomers = [];
+      state.discountProgressPagination = { page: 1, limit: 100, total: 0, hasMore: false };
+    }
+    if (state.activeDiscountId === targetId && state.discountCenterMode === 'history') {
+      renderDiscountProgressCustomers();
+    }
+
+    try {
+      const json = await apiJson(`/api/admin/discounts/${targetId}/progress-customers?page=${nextPage}`);
+      if (state.activeDiscountId !== targetId) return;
+      const nextRows = Array.isArray(json?.customers) ? json.customers : [];
+      state.discountProgressCustomers = append
+        ? [...state.discountProgressCustomers, ...nextRows]
+        : nextRows;
+      state.discountProgressPagination = {
+        page: Number(json?.pagination?.page || nextPage) || nextPage,
+        limit: Number(json?.pagination?.limit || 100) || 100,
+        total: Number(json?.pagination?.total || state.discountProgressCustomers.length) || 0,
+        hasMore: Boolean(json?.pagination?.has_more),
+      };
+    } catch (err) {
+      console.error('loadDiscountProgressCustomers error:', err);
+      if (state.activeDiscountId !== targetId) return;
+      if (!append) {
+        state.discountProgressCustomers = [];
+        state.discountProgressPagination = { page: 1, limit: 100, total: 0, hasMore: false };
+      }
+    } finally {
+      if (state.activeDiscountId === targetId) {
+        state.discountProgressLoading = false;
+        if (state.discountCenterMode === 'history') {
+          renderDiscountProgressCustomers();
+        }
+      }
+    }
+  }
+
+  function renderDiscountProgressInlineVisual(item) {
+    const progressVisual = item?.progress_visual;
+    const ratio = Math.max(0, Math.min(1, Number(item?.progress_ratio || 0)));
+    if (progressVisual && typeof progressVisual === 'object') {
+      if (String(progressVisual?.mode || '').trim() === 'amount') {
+        const amountLayout = document.createElement('div');
+        amountLayout.className = 'shop-checkout-benefit-progress-amount-layout';
+        const amount = document.createElement('div');
+        amount.className = 'shop-checkout-benefit-progress-amount';
+        const bar = document.createElement('div');
+        bar.className = 'shop-checkout-benefit-progress-bar';
+        const fill = document.createElement('div');
+        fill.className = 'shop-checkout-benefit-progress-fill';
+        fill.style.width = `${Math.max(0, Math.min(100, Number(progressVisual?.progress_ratio ?? item?.progress_ratio ?? 0) * 100))}%`;
+        bar.appendChild(fill);
+        amount.appendChild(bar);
+        amountLayout.appendChild(amount);
+        return amountLayout;
+      }
+
+      const slots = Array.isArray(progressVisual?.slots) ? progressVisual.slots : [];
+      if (slots.length) {
+        const visualWrap = document.createElement('div');
+        visualWrap.className = 'shop-checkout-benefit-progress-visual';
+        const slotsWrap = document.createElement('div');
+        slotsWrap.className = 'shop-checkout-benefit-progress-slots';
+        if (String(progressVisual?.mode || '').trim() === 'orders') {
+          slotsWrap.classList.add('is-orders');
+        } else {
+          slotsWrap.classList.add('is-items');
+        }
+        slots.forEach((slot) => {
+          const slotEl = document.createElement('div');
+          slotEl.className = 'shop-checkout-benefit-progress-slot';
+          const isOrderSlot = String(progressVisual?.mode || slot?.kind || '').trim() === 'orders'
+            || String(slot?.kind || '').trim() === 'order';
+          slotEl.classList.add(isOrderSlot ? 'is-order' : 'is-item');
+          slotEl.classList.add(slot?.is_filled === true ? 'is-filled' : 'is-empty');
+          const slotTitle = String(slot?.title || '').trim();
+          if (slotTitle) {
+            slotEl.title = slotTitle;
+            slotEl.setAttribute('aria-label', slotTitle);
+          }
+          const media = document.createElement('span');
+          media.className = 'shop-checkout-benefit-progress-slot-media';
+          const placeholder = document.createElement('span');
+          placeholder.className = 'shop-checkout-benefit-progress-slot-placeholder';
+          if (isOrderSlot) {
+            placeholder.appendChild(createClientBenefitIcon('fa-receipt'));
+          } else if (slot?.is_filled === true) {
+            placeholder.appendChild(createClientBenefitIcon('fa-check'));
+          } else {
+            placeholder.textContent = '+';
+          }
+          media.appendChild(placeholder);
+          slotEl.appendChild(media);
+          slotsWrap.appendChild(slotEl);
+        });
+        bindClientBenefitsHorizontalTrack(slotsWrap);
+        visualWrap.appendChild(slotsWrap);
+        return visualWrap;
+      }
+    }
+
+    const amountLayout = document.createElement('div');
+    amountLayout.className = 'shop-checkout-benefit-progress-amount-layout';
+    const amount = document.createElement('div');
+    amount.className = 'shop-checkout-benefit-progress-amount';
+    const bar = document.createElement('div');
+    bar.className = 'shop-checkout-benefit-progress-bar';
+    const fill = document.createElement('div');
+    fill.className = 'shop-checkout-benefit-progress-fill';
+    fill.style.width = `${Math.round(ratio * 100)}%`;
+    bar.appendChild(fill);
+    amount.appendChild(bar);
+    amountLayout.appendChild(amount);
+    return amountLayout;
+  }
+
+  function renderDiscountProgressCustomers() {
+    if (!elDiscountsList) return;
+
+    if (state.discountCenterMode !== 'history' || !state.activeDiscount || !isLoyaltyProgressDiscount(state.activeDiscount)) {
+      renderDiscountsList();
+      return;
+    }
+
+    elDiscountsList.innerHTML = '';
+    if (elDiscountsEmptyHint) elDiscountsEmptyHint.classList.add('hidden');
+
+    const rows = Array.isArray(state.discountProgressCustomers) ? state.discountProgressCustomers : [];
+    if (!rows.length) {
+      elDiscountsList.innerHTML = `<div class="empty-hint">${state.discountProgressLoading ? 'Загрузка клиентов...' : 'Нет клиентов в аудитории акции'}</div>`;
+      return;
+    }
+
+    rows.forEach((entry) => {
+      const customer = entry?.customer && typeof entry.customer === 'object' ? entry.customer : {};
+      const progressCard = entry?.progress_card && typeof entry.progress_card === 'object' ? entry.progress_card : null;
+      const row = document.createElement('div');
+      row.className = 'discount-progress-customer-row new-order-benefits-body';
+
+      const customerMeta = document.createElement('div');
+      customerMeta.className = 'discount-progress-customer-meta';
+      const nameEl = document.createElement('div');
+      nameEl.className = 'discount-progress-customer-name';
+      nameEl.textContent = customer.name || customer.phone || (Number(customer.id || 0) > 0 ? `Клиент #${customer.id}` : 'Клиент');
+      customerMeta.appendChild(nameEl);
+
+      if (customer.phone) {
+        const phoneEl = document.createElement('div');
+        phoneEl.className = 'discount-progress-customer-phone';
+        phoneEl.textContent = customer.phone;
+        customerMeta.appendChild(phoneEl);
+      }
+
+      row.appendChild(customerMeta);
+
+      if (progressCard) {
+        const progressWrap = document.createElement('div');
+        progressWrap.className = 'discount-progress-inline';
+        const badgesWrap = document.createElement('div');
+        badgesWrap.className = 'discount-progress-summary-badges';
+
+        const claimedCount = Math.max(0, Number(progressCard?.claimed_reward_count || 0));
+        const claimedBadge = document.createElement('span');
+        claimedBadge.className = 'shop-checkout-benefit-badge shop-checkout-benefit-badge--neutral discount-progress-summary-badge';
+        claimedBadge.innerHTML = `<span class="discount-progress-summary-badge-label">Получено</span><span class="discount-progress-summary-badge-value">${escapeHtml(claimedCount)}</span>`;
+        badgesWrap.appendChild(claimedBadge);
+
+        const pendingCount = Math.max(0, Number(progressCard?.pending_reward_count || 0));
+        const pendingBadge = document.createElement('span');
+        pendingBadge.className = `shop-checkout-benefit-badge ${pendingCount > 0 ? 'shop-checkout-benefit-badge--accent' : 'shop-checkout-benefit-badge--neutral'} discount-progress-summary-badge`;
+        const pendingLabel = document.createElement('span');
+        pendingLabel.className = 'discount-progress-summary-badge-label';
+        pendingLabel.textContent = 'К получению';
+        pendingBadge.appendChild(pendingLabel);
+        const pendingValue = document.createElement('span');
+        pendingValue.className = 'discount-progress-summary-badge-value';
+        pendingValue.textContent = String(pendingCount);
+        pendingBadge.appendChild(pendingValue);
+        const pendingIcon = createClientBenefitIcon(getClientBenefitRewardIconName('gift'));
+        if (pendingIcon) pendingBadge.appendChild(pendingIcon);
+        badgesWrap.appendChild(pendingBadge);
+
+        progressWrap.appendChild(badgesWrap);
+        const visualNode = renderDiscountProgressInlineVisual(progressCard);
+        if (visualNode) {
+          const visualWrap = document.createElement('div');
+          visualWrap.className = 'discount-progress-inline-visual';
+          visualWrap.appendChild(visualNode);
+          progressWrap.appendChild(visualWrap);
+        }
+        row.appendChild(progressWrap);
+      }
+      elDiscountsList.appendChild(row);
+    });
+
+    if (state.discountProgressPagination?.hasMore || state.discountProgressLoading) {
+      const moreBtn = document.createElement('button');
+      moreBtn.type = 'button';
+      moreBtn.className = 'discount-progress-history-more';
+      moreBtn.textContent = state.discountProgressLoading ? 'Загрузка...' : 'Показать еще';
+      moreBtn.disabled = state.discountProgressLoading;
+      moreBtn.addEventListener('click', () => {
+        if (state.discountProgressLoading) return;
+        void loadDiscountProgressCustomers(state.activeDiscountId, { append: true });
+      });
+      elDiscountsList.appendChild(moreBtn);
     }
   }
 
@@ -10647,7 +11169,9 @@
 
     if (!filteredDiscounts.length) {
       if (elDiscountsEmptyHint) {
-        elDiscountsEmptyHint.textContent = 'Нет скидок этого типа';
+        elDiscountsEmptyHint.textContent = state.activeDiscountTypeFilter === 'deleted'
+          ? 'Нет удаленных акций'
+          : 'Нет скидок этого типа';
         elDiscountsEmptyHint.classList.remove('hidden');
       }
       return;
@@ -10662,6 +11186,7 @@
       const row = document.createElement('div');
       row.className = 'discount-row';
       row.classList.toggle('is-active', state.activeDiscountId === discount.id);
+      const isDeleted = isDeletedDiscount(discount);
 
       const promo = getDiscountPromoFromDiscount(discount);
       const mechanic = getDiscountMechanic(discount);
@@ -10688,6 +11213,7 @@
         <div class="discount-row-info">
           <div class="discount-row-title-wrap">
             <div class="discount-row-title">${escapeHtml(discount.title)}</div>
+            ${isDeleted ? '<span class="discount-row-badge">Удалена</span>' : ''}
           </div>
           <div class="discount-row-meta">${metaBits.join(' • ')}</div>
         </div>
@@ -10695,8 +11221,30 @@
           <div class="discount-row-badges shop-checkout-benefit-discount-meta">
             ${renderDiscountListBadgesHtml(discount)}
           </div>
+          ${isDeleted ? '' : `
+            <div class="discount-row-actions">
+              <button
+                type="button"
+                class="discount-row-action-btn"
+                data-discount-delete="${escapeHtml(discount.id)}"
+                title="Удалить"
+                aria-label="Удалить"
+              >
+                <i class="fas fa-trash"></i>
+              </button>
+            </div>
+          `}
         </div>
       `;
+
+      const deleteBtn = row.querySelector('[data-discount-delete]');
+      if (deleteBtn) {
+        deleteBtn.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          void deleteDiscount({ discountId: discount.id, immediate: true, focusDeletedAfterDelete: false });
+        });
+      }
 
       row.addEventListener('click', () => {
         openDiscountTab(discount);
@@ -10735,6 +11283,7 @@
     state.activeDiscount = targetDiscount;
     state.activeDiscountId = discountId;
     state.editingDiscountId = null;
+    resetDiscountDeleteButtons();
 
     renderTabs();
     renderDiscountInfo(targetDiscount);
@@ -12729,6 +13278,22 @@
     if (elDiscountEditorFooter) elDiscountEditorFooter.classList.toggle('hidden', !isEditingDiscount);
     if (elDiscountInfoWrap) elDiscountInfoWrap.classList.toggle('hidden', !isViewingDiscount);
     if (elDiscountInfoFooter) elDiscountInfoFooter.classList.toggle('hidden', !showDiscountInfoFooter);
+    const activeDiscountDeleted = isDeletedDiscount(state.activeDiscount);
+    if (elDiscountInfoDeleteBtn) {
+      elDiscountInfoDeleteBtn.classList.toggle('hidden', !showDiscountInfoFooter || activeDiscountDeleted);
+    }
+    if (elDiscountInfoEditBtn) {
+      elDiscountInfoEditBtn.classList.toggle('hidden', !showDiscountInfoFooter || activeDiscountDeleted);
+    }
+    if (elDiscountInfoRestoreBtn) {
+      elDiscountInfoRestoreBtn.classList.toggle('hidden', !showDiscountInfoFooter || !activeDiscountDeleted);
+    }
+    if (elDiscountDeleteBtn) {
+      elDiscountDeleteBtn.classList.toggle('hidden', !isEditingDiscount);
+    }
+    if (!showDiscountInfoFooter && !isEditingDiscount) {
+      resetDiscountDeleteButtons();
+    }
     if (clientBenefitsFooter) {
       const showBenefitsFooter = isClientTab && state.currentView === 'clients' && hasClientId;
       clientBenefitsFooter.classList.toggle('hidden', !showBenefitsFooter);
@@ -14887,7 +15452,21 @@
 
   // Кнопка удаления скидки
   if (elDiscountDeleteBtn) {
-    elDiscountDeleteBtn.addEventListener('click', deleteDiscount);
+    attachTwoStepButton(elDiscountDeleteBtn, () => {
+      void deleteDiscount({ focusDeletedAfterDelete: true, closeTabs: false });
+    }, 'Удалить');
+  }
+
+  if (elDiscountInfoDeleteBtn) {
+    attachTwoStepButton(elDiscountInfoDeleteBtn, () => {
+      void deleteDiscount({ focusDeletedAfterDelete: true, closeTabs: false });
+    }, 'Удалить');
+  }
+
+  if (elDiscountInfoRestoreBtn) {
+    elDiscountInfoRestoreBtn.addEventListener('click', () => {
+      void restoreDiscount();
+    });
   }
 
   // Кнопка редактирования скидки (из инфо-панели)
@@ -15487,10 +16066,10 @@
 
   if (elDeProgressPromoSourceList) {
     elDeProgressPromoSourceList.addEventListener('click', (e) => {
-      const btn = e.target.closest('[data-progress-promo-source-id]');
+      const btn = e.target.closest('[data-progress-promo-source-key]');
       if (!btn) return;
-      const sourceId = Number(btn.getAttribute('data-progress-promo-source-id') || 0);
-      const source = (state.discountSharedPromoSources || []).find((item) => Number(item?.source_promo_code_id || 0) === sourceId) || null;
+      const sourceKey = String(btn.getAttribute('data-progress-promo-source-key') || '').trim();
+      const source = (state.discountLoyaltyPromoSources || []).find((item) => getDiscountPromoSourceLookupKey(item) === sourceKey) || null;
       state.discountProgressPromoSource = cloneDiscountPromoSource(source);
       renderDiscountProgressPromoSource();
       if (elDeProgressPromoSourcePicker) {
@@ -15902,6 +16481,7 @@
     if (code === 'TITLE_REQUIRED') return 'Введите название акции.';
     if (code === 'INVALID_CUSTOMERS') return 'Проверьте выбранных клиентов и клиентские категории.';
     if (code === 'INVALID_PRODUCTS') return 'Проверьте выбранные товары, категории или комбо.';
+    if (code === 'DISCOUNT_DELETED') return 'Удаленную акцию сначала восстановите.';
     if (code === 'INVALID_DATE_RANGE') return 'Дата окончания не может быть раньше даты начала.';
     if (code === 'PERIOD_BOUNDS_REQUIRED') return 'Для ограничения по периоду укажите дату начала и дату окончания.';
     if (code === 'WEEKDAYS_REQUIRED') return 'Для ограничения по дням недели выберите хотя бы один день.';
@@ -15930,7 +16510,8 @@
     if (code === 'LOYALTY_QUALIFYING_ITEMS_REQUIRED') return 'Добавьте товары или категории для накопления.';
     if (code === 'INVALID_PROGRESS_SCOPE_ITEMS') return 'Проверьте область накопления и выбранные товары или категории.';
     if (code === 'LOYALTY_REWARD_PRODUCTS_REQUIRED') return 'Добавьте товары для награды накопительной акции.';
-    if (code === 'LOYALTY_PROMO_SOURCE_REQUIRED') return 'Прикрепите общий промокод для награды.';
+    if (code === 'LOYALTY_PROMO_SOURCE_REQUIRED') return 'Прикрепите промокод для награды.';
+    if (code === 'INVALID_LOYALTY_PROMO_SOURCE') return 'Выберите доступный источник промокода для награды.';
     if (code === 'INVALID_ISSUE_MODE') return 'Проверьте режим выдачи награды.';
     return code ? `Ошибка сохранения: ${code}` : 'Не удалось сохранить акцию.';
   }
@@ -16241,7 +16822,7 @@
         }
       }
       if (rewardKind === 'promo_code' && !promoSource) {
-        alert('Прикрепите общий промокод для награды');
+        alert('Прикрепите промокод для награды');
         return;
       }
 
@@ -16270,11 +16851,13 @@
           },
           promo_code: rewardKind === 'promo_code'
             ? {
+                source_code_mode: promoSource?.source_code_mode || 'shared',
                 source_promo_code_id: promoSource?.source_promo_code_id || null,
                 source_discount_id: promoSource?.source_discount_id || null,
                 source_code: promoSource?.source_code || '',
               }
             : {
+                source_code_mode: null,
                 source_promo_code_id: null,
                 source_discount_id: null,
                 source_code: null,
