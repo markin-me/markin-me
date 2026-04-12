@@ -186,6 +186,34 @@
             <!-- Список подключений -->
             <div id="settingsStoreTelegramList"></div>
           </div>
+          <div class="settings-site-field" id="settingsStoreMaxBlock">
+            <div class="settings-list-header">
+              <label class="field-label" style="margin-bottom:0">УВЕДОМЛЕНИЯ В MAX</label>
+              <button type="button" class="btn btn-icon btn-sm global-telegram-add-toggle" id="settingsStoreMaxToggleBtn" title="Добавить MAX">
+                <i class="fas fa-plus"></i>
+              </button>
+            </div>
+            <div class="global-telegram-connect hidden" id="settingsStoreMaxConnectBlock">
+              <% if (typeof systemMaxBotId !== 'undefined' && systemMaxBotId) { %>
+              <p class="field-hint">Получайте заявки в MAX с помощью нашего бота. Для этого перейдите по ссылке: <a href="https://max.ru/<%= systemMaxBotId %>" target="_blank" rel="noopener">https://max.ru/<%= systemMaxBotId %></a> и напишите команду <strong>/start</strong>. Через некоторое время бот пришлёт API key и Secret key, которые нужно вставить в поля ниже.</p>
+              <% } else { %>
+              <p class="field-hint">Перейдите в MAX-бота, напишите /start и вставьте полученные API key и Secret key в поля ниже.</p>
+              <% } %>
+              <div class="field-group">
+                <label class="field-label">MAX API KEY</label>
+                <input class="control" type="text" id="settingsStoreMaxApiKey" placeholder="Например: 1234567890" />
+              </div>
+              <div class="field-group">
+                <label class="field-label">SECRET KEY</label>
+                <input class="control" type="text" id="settingsStoreMaxSecretKey" placeholder="Ключ от MAX-бота" />
+              </div>
+              <div class="global-telegram-form-actions">
+                <button class="btn btn-primary btn-sm" type="button" id="settingsStoreMaxAddByKeysBtn">Добавить</button>
+                <button class="btn btn-link btn-sm" type="button" id="settingsStoreMaxCancelBtn">Отмена</button>
+              </div>
+            </div>
+            <div id="settingsStoreMaxList"></div>
+          </div>
         </form>
         <div class="panel-footer">
           <div class="stores-form-actions settings-footer-actions">
@@ -1337,6 +1365,56 @@
                 <i class="fas fa-times"></i>
               </button>
               <button class="product-footer-btn product-footer-save" id="settingsSystemTelegramSaveBtn" type="button">Сохранить</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="info-card settings-right-panel settings-right-panel-fixed-footer hidden" id="settingsSystemMaxBotPanel">
+        <div class="settings-panel-scroll">
+          <div class="settings-system-telegram-layout">
+            <div class="settings-system-telegram-group">
+              <div class="settings-site-field">
+                <label class="field-label">BOT ID / NICK</label>
+                <span class="field-hint">Например: id220807718849_bot, @id220807718849_bot или ссылка https://max.ru/id220807718849_bot</span>
+                <input class="control" type="text" id="settingsSystemMaxBotId" placeholder="id220807718849_bot" autocomplete="off" readonly onfocus="this.removeAttribute('readonly')" />
+              </div>
+              <div class="settings-site-field">
+                <label class="field-label">TOKEN</label>
+                <span class="field-hint">Системный token MAX-бота для webhook, привязки аккаунтов и админ-уведомлений</span>
+                <input class="control" type="text" id="settingsSystemMaxBotToken" placeholder="Введите token MAX-бота" autocomplete="off" readonly onfocus="this.removeAttribute('readonly')" />
+              </div>
+              <div class="settings-site-field">
+                <label class="field-label">WEBHOOK URL</label>
+                <span class="field-hint">Необязательно. Для MAX допускается только абсолютный HTTPS URL.</span>
+                <input class="control" type="text" id="settingsSystemMaxWebhookUrl" placeholder="https://example.com/api/max/webhook" autocomplete="off" readonly onfocus="this.removeAttribute('readonly')" />
+              </div>
+            </div>
+            <div class="settings-system-telegram-group settings-system-telegram-group--polling">
+              <div class="settings-site-field settings-site-inline-switch settings-system-telegram-switch-field">
+                <div class="settings-system-telegram-switch-copy">
+                  <label class="field-label">SYSTEM MAX POLLING</label>
+                  <span class="field-hint">Polling для системного MAX-бота, если webhook URL пустой.</span>
+                </div>
+                <label class="switch">
+                  <input class="switch-input" type="checkbox" id="settingsSystemMaxPollingEnabled" />
+                  <span class="switch-ui" aria-hidden="true"></span>
+                  <span class="switch-text">Включено</span>
+                </label>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="panel-footer">
+          <div class="product-footer-actions">
+            <div class="product-footer-view" id="settingsSystemMaxFooterView">
+              <button class="product-footer-btn product-footer-edit" id="settingsSystemMaxEditBtn" type="button">Редактировать</button>
+            </div>
+            <div class="product-footer-edit-mode hidden" id="settingsSystemMaxFooterEdit">
+              <button class="product-footer-btn product-footer-cancel" id="settingsSystemMaxCancelBtn" type="button" title="Отменить" aria-label="Отменить">
+                <i class="fas fa-times"></i>
+              </button>
+              <button class="product-footer-btn product-footer-save" id="settingsSystemMaxSaveBtn" type="button">Сохранить</button>
             </div>
           </div>
         </div>

@@ -287,4 +287,4 @@ function formatOrderMessage(p, opts = {}) {
   return lines.join('\n');
 }
 
-module.exports = { sendNewOrderNotification };
+module.exports = { sendNewOrderNotification, formatOrderMessage };

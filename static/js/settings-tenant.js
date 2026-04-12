@@ -764,6 +764,24 @@
 
 
 
+  let systemMaxDraftMode = false;
+
+  let systemMaxCancelConfirm = false;
+
+  let systemMaxOriginal = {
+
+    max_bot_id: "",
+
+    max_bot_token: "",
+
+    max_webhook_url: "",
+
+    max_env_enabled: false
+
+  };
+
+  let systemMaxDraft = { ...systemMaxOriginal };
+
   let systemMapDraftMode = false;
 
 
@@ -5004,6 +5022,7 @@
 
 
     const systemTelegramBotCard = document.getElementById("settingsSystemTelegramBotCard");
+    const systemMaxBotCard = document.getElementById("settingsSystemMaxBotCard");
 
 
 
@@ -5096,6 +5115,7 @@
 
 
     const systemTelegramBotPanel = document.getElementById("settingsSystemTelegramBotPanel");
+    const systemMaxBotPanel = document.getElementById("settingsSystemMaxBotPanel");
 
 
 
@@ -5797,6 +5817,24 @@
 
     const settingsSystemTelegramFooterEdit = document.getElementById("settingsSystemTelegramFooterEdit");
 
+    const settingsSystemMaxBotId = document.getElementById("settingsSystemMaxBotId");
+
+    const settingsSystemMaxBotToken = document.getElementById("settingsSystemMaxBotToken");
+
+    const settingsSystemMaxWebhookUrl = document.getElementById("settingsSystemMaxWebhookUrl");
+
+    const settingsSystemMaxPollingEnabled = document.getElementById("settingsSystemMaxPollingEnabled");
+
+    const settingsSystemMaxEditBtn = document.getElementById("settingsSystemMaxEditBtn");
+
+    const settingsSystemMaxSaveBtn = document.getElementById("settingsSystemMaxSaveBtn");
+
+    const settingsSystemMaxCancelBtn = document.getElementById("settingsSystemMaxCancelBtn");
+
+    const settingsSystemMaxFooterView = document.getElementById("settingsSystemMaxFooterView");
+
+    const settingsSystemMaxFooterEdit = document.getElementById("settingsSystemMaxFooterEdit");
+
 
 
     const settingsStoreTelegramList = document.getElementById("settingsStoreTelegramList");
@@ -5824,6 +5862,20 @@
 
 
     const settingsStoreTelegramCancelBtn = document.getElementById("settingsStoreTelegramCancelBtn");
+
+    const settingsStoreMaxList = document.getElementById("settingsStoreMaxList");
+
+    const settingsStoreMaxApiKey = document.getElementById("settingsStoreMaxApiKey");
+
+    const settingsStoreMaxSecretKey = document.getElementById("settingsStoreMaxSecretKey");
+
+    const settingsStoreMaxAddByKeysBtn = document.getElementById("settingsStoreMaxAddByKeysBtn");
+
+    const settingsStoreMaxToggleBtn = document.getElementById("settingsStoreMaxToggleBtn");
+
+    const settingsStoreMaxConnectBlock = document.getElementById("settingsStoreMaxConnectBlock");
+
+    const settingsStoreMaxCancelBtn = document.getElementById("settingsStoreMaxCancelBtn");
 
 
 
@@ -11554,6 +11606,88 @@
 
 
 
+    async function loadSystemMaxSettings() {
+
+      try {
+
+        const res = await authFetch("/api/admin/system/max-bot");
+
+        const data = await res.json();
+
+        if (!data || !data.ok || !data.data) return;
+
+        systemMaxOriginal = {
+
+          max_bot_id: String(data.data.max_bot_id || ""),
+
+          max_bot_token: String(data.data.max_bot_token || ""),
+
+          max_webhook_url: String(data.data.max_webhook_url || ""),
+
+          max_env_enabled: Boolean(data.data.max_env_enabled)
+
+        };
+
+        systemMaxDraft = { ...systemMaxOriginal };
+
+        applySystemMaxFormValues(systemMaxOriginal);
+
+        setSystemMaxDraftMode(false);
+
+      } catch (err) {
+
+        console.error("Failed to load system MAX settings:", err);
+
+      }
+
+    }
+
+    async function saveSystemMaxSettings(payload) {
+
+      try {
+
+        const res = await authFetch("/api/admin/system/max-bot", {
+
+          method: "PUT",
+
+          body: JSON.stringify(payload || {})
+
+        });
+
+        const data = await res.json();
+
+        if (!data || !data.ok || !data.data) return null;
+
+        systemMaxOriginal = {
+
+          max_bot_id: String(data.data.max_bot_id || ""),
+
+          max_bot_token: String(data.data.max_bot_token || ""),
+
+          max_webhook_url: String(data.data.max_webhook_url || ""),
+
+          max_env_enabled: Boolean(data.data.max_env_enabled)
+
+        };
+
+        systemMaxDraft = { ...systemMaxOriginal };
+
+        applySystemMaxFormValues(systemMaxOriginal);
+
+        setSystemMaxDraftMode(false);
+
+        return data.data;
+
+      } catch (err) {
+
+        console.error("Failed to save system MAX settings:", err);
+
+        return null;
+
+      }
+
+    }
+
     function normalizeSystemMapConfig(values) {
 
 
@@ -15430,7 +15564,7 @@
 
 
 
-      setDeliveryMapSearchStatus("РС‰РµРј город или адрес...", "loading");
+      setDeliveryMapSearchStatus("Ищем город или адрес...", "loading");
 
 
 
@@ -17352,6 +17486,8 @@
 
       if (systemTelegramBotPanel) systemTelegramBotPanel.classList.toggle("hidden", tabId !== "system-telegram-bot");
 
+      if (systemMaxBotPanel) systemMaxBotPanel.classList.toggle("hidden", tabId !== "system-max-bot");
+
 
 
       if (systemPollingPanel) systemPollingPanel.classList.toggle("hidden", tabId !== "system-polling");
@@ -17485,6 +17621,12 @@
       }
 
 
+
+      if (tabId === "system-max-bot") {
+
+        loadSystemMaxSettings();
+
+      }
 
       if (tabId === "system-polling") {
 
@@ -17666,22 +17808,6 @@
 
 
 
-          if (tabId === "site" && siteCard) siteCard.classList.remove("is-active");
-
-
-
-          if (tabId === "domain" && domainCard) domainCard.classList.remove("is-active");
-
-
-
-          if (tabId === "telegram-app" && telegramAppCard) telegramAppCard.classList.remove("is-active");
-
-
-
-          if (tabId === "max-app" && maxAppCard) maxAppCard.classList.remove("is-active");
-
-
-
           if (tabId === "brand" && brandCard) brandCard.classList.remove("is-active");
 
 
@@ -17855,22 +17981,6 @@
 
 
       if (tabId === "logo" && logoCard) logoCard.classList.add("is-active");
-
-
-
-      if (tabId === "site" && siteCard) siteCard.classList.add("is-active");
-
-
-
-      if (tabId === "domain" && domainCard) domainCard.classList.add("is-active");
-
-
-
-      if (tabId === "telegram-app" && telegramAppCard) telegramAppCard.classList.add("is-active");
-
-
-
-      if (tabId === "max-app" && maxAppCard) maxAppCard.classList.add("is-active");
 
 
 
@@ -18947,6 +19057,16 @@
 
 
 
+    if (systemMaxBotCard) {
+
+      systemMaxBotCard.addEventListener("click", () => {
+
+        ensureTab("system-max-bot", "MAX \u0431\u043e\u0442");
+
+      });
+
+    }
+
     if (systemPollingCard) {
 
 
@@ -19562,6 +19682,95 @@
 
 
 
+    if (settingsSystemMaxEditBtn) {
+
+      settingsSystemMaxEditBtn.addEventListener("click", () => {
+
+        systemMaxDraft = { ...systemMaxOriginal };
+
+        applySystemMaxFormValues(systemMaxDraft);
+
+        setSystemMaxDraftMode(true);
+
+        if (settingsSystemMaxBotId) {
+
+          settingsSystemMaxBotId.focus();
+
+          settingsSystemMaxBotId.select();
+
+        }
+
+      });
+
+    }
+
+    if (settingsSystemMaxCancelBtn) {
+      settingsSystemMaxCancelBtn.addEventListener("click", () => {
+        if (!systemMaxDraftMode) return;
+        cancelSystemMaxDraft();
+      });
+    }
+
+    if (settingsSystemMaxSaveBtn) {
+
+      settingsSystemMaxSaveBtn.addEventListener("click", async () => {
+
+        if (!systemMaxDraftMode) return;
+
+        systemMaxDraft = readSystemMaxFormValues();
+
+        const hasAnyValue = Boolean(
+
+          systemMaxDraft.max_bot_id
+
+          || systemMaxDraft.max_bot_token
+
+          || systemMaxDraft.max_webhook_url
+
+        );
+
+        if (hasAnyValue && !systemMaxDraft.max_bot_token) {
+
+          alert("Сначала заполните token MAX-бота или очистите всю конфигурацию.");
+
+          if (settingsSystemMaxBotToken) settingsSystemMaxBotToken.focus();
+
+          return;
+
+        }
+
+        if (systemMaxDraft.max_webhook_url && !/^https:\/\//i.test(systemMaxDraft.max_webhook_url)) {
+
+          alert("WEBHOOK URL для MAX должен начинаться с https://");
+
+          if (settingsSystemMaxWebhookUrl) settingsSystemMaxWebhookUrl.focus();
+
+          return;
+
+        }
+
+        const saved = await saveSystemMaxSettings({
+
+          max_bot_id: systemMaxDraft.max_bot_id || "",
+
+          max_bot_token: systemMaxDraft.max_bot_token || "",
+
+          max_webhook_url: systemMaxDraft.max_webhook_url || "",
+
+          max_env_enabled: systemMaxDraft.max_env_enabled ? 1 : 0
+
+        });
+
+        if (!saved) {
+
+          alert("Не удалось сохранить системные настройки MAX-бота.");
+
+        }
+
+      });
+
+    }
+
     [
 
 
@@ -19757,6 +19966,48 @@
 
 
 
+
+    [
+
+      settingsSystemMaxBotId,
+
+      settingsSystemMaxBotToken,
+
+      settingsSystemMaxWebhookUrl
+
+    ].forEach((input) => {
+
+      if (!input) return;
+
+      input.addEventListener("input", () => {
+
+        if (!systemMaxDraftMode) return;
+
+        resetSystemMaxCancelButton();
+
+      });
+
+    });
+
+    if (settingsSystemMaxPollingEnabled) {
+
+      settingsSystemMaxPollingEnabled.addEventListener("change", () => {
+
+        if (!systemMaxDraftMode) {
+
+          settingsSystemMaxPollingEnabled.checked = Boolean(systemMaxOriginal.max_env_enabled);
+
+          return;
+
+        }
+
+        systemMaxDraft.max_env_enabled = settingsSystemMaxPollingEnabled.checked;
+
+        resetSystemMaxCancelButton();
+
+      });
+
+    }
 
     if (settingsPollingEnvEnabled) {
 
@@ -20561,6 +20812,130 @@
 
 
 
+
+    function resetSystemMaxCancelButton() {
+
+      if (!settingsSystemMaxCancelBtn) return;
+
+      systemMaxCancelConfirm = false;
+
+      settingsSystemMaxCancelBtn.classList.remove("is-confirm");
+
+      settingsSystemMaxCancelBtn.title = "\u041e\u0442\u043c\u0435\u043d\u0438\u0442\u044c";
+
+      settingsSystemMaxCancelBtn.setAttribute("aria-label", "\u041e\u0442\u043c\u0435\u043d\u0438\u0442\u044c");
+
+      settingsSystemMaxCancelBtn.innerHTML = '<i class="fas fa-times"></i>';
+
+    }
+
+    function readSystemMaxFormValues() {
+
+      return {
+
+        max_bot_id: String((settingsSystemMaxBotId && settingsSystemMaxBotId.value) || "").trim(),
+
+        max_bot_token: String((settingsSystemMaxBotToken && settingsSystemMaxBotToken.value) || "").trim(),
+
+        max_webhook_url: String((settingsSystemMaxWebhookUrl && settingsSystemMaxWebhookUrl.value) || "").trim(),
+
+        max_env_enabled: Boolean(settingsSystemMaxPollingEnabled && settingsSystemMaxPollingEnabled.checked)
+
+      };
+
+    }
+
+    function applySystemMaxFormValues(values) {
+
+      if (settingsSystemMaxBotId) {
+
+        settingsSystemMaxBotId.value = String(values.max_bot_id || "");
+
+      }
+
+      if (settingsSystemMaxBotToken) {
+
+        settingsSystemMaxBotToken.value = String(values.max_bot_token || "");
+
+      }
+
+      if (settingsSystemMaxWebhookUrl) {
+
+        settingsSystemMaxWebhookUrl.value = String(values.max_webhook_url || "");
+
+      }
+
+      if (settingsSystemMaxPollingEnabled) {
+
+        settingsSystemMaxPollingEnabled.checked = Boolean(values.max_env_enabled);
+
+      }
+
+    }
+
+    function setSystemMaxDraftMode(enabled) {
+
+      systemMaxDraftMode = Boolean(enabled);
+
+      if (settingsSystemMaxBotId) {
+
+        settingsSystemMaxBotId.disabled = !systemMaxDraftMode;
+
+        settingsSystemMaxBotId.readOnly = !systemMaxDraftMode;
+
+      }
+
+      if (settingsSystemMaxBotToken) {
+
+        settingsSystemMaxBotToken.disabled = !systemMaxDraftMode;
+
+        settingsSystemMaxBotToken.readOnly = !systemMaxDraftMode;
+
+      }
+
+      if (settingsSystemMaxWebhookUrl) {
+
+        settingsSystemMaxWebhookUrl.disabled = !systemMaxDraftMode;
+
+        settingsSystemMaxWebhookUrl.readOnly = !systemMaxDraftMode;
+
+      }
+
+      if (settingsSystemMaxPollingEnabled) {
+
+        settingsSystemMaxPollingEnabled.disabled = !systemMaxDraftMode;
+
+      }
+
+      if (settingsSystemMaxFooterView) {
+
+        settingsSystemMaxFooterView.classList.toggle("hidden", systemMaxDraftMode);
+
+      }
+
+      if (settingsSystemMaxFooterEdit) {
+
+        settingsSystemMaxFooterEdit.classList.toggle("hidden", !systemMaxDraftMode);
+
+      }
+
+      if (!systemMaxDraftMode) {
+
+        resetSystemMaxCancelButton();
+
+      }
+
+    }
+
+    function cancelSystemMaxDraft() {
+
+      systemMaxDraft = { ...systemMaxOriginal };
+
+      applySystemMaxFormValues(systemMaxOriginal);
+
+      setSystemMaxDraftMode(false);
+
+    }
 
     function resetMaxCancelButton() {
 
@@ -22909,7 +23284,7 @@
 
 
 
-          alert("РЎРЅР°С‡Р°Р»Р° РґРѕР±Р°РІСЊС‚Рµ Р Т‘Р С•Р СР ВµР Р….");
+          alert("Сначала добавьте домен.");
 
 
 
@@ -23209,7 +23584,7 @@
 
 
 
-        ensureTab("order-time-options", "РРЅС‚РµСЂРІР°Р»С‹ времени");
+        ensureTab("order-time-options", "Интервалы времени");
 
 
 
@@ -23999,11 +24374,35 @@
 
     }
 
+    if (settingsStoreMaxList) {
 
+      settingsStoreMaxList.addEventListener("click", async (e) => {
 
+        const btn = e.target.closest("button[data-binding-id]");
 
+        if (!btn) return;
 
+        const bindingId = btn.getAttribute("data-binding-id");
 
+        const storeId = storesState.selectedId;
+
+        if (!storeId || !bindingId) return;
+
+        if (!confirm("Отключить уведомления в этот MAX-аккаунт?")) return;
+
+        try {
+
+          const res = await authFetch("/api/admin/tenant/stores/" + encodeURIComponent(storeId) + "/max/" + encodeURIComponent(bindingId), { method: "DELETE" });
+
+          const data = await res.json();
+
+          if (data && data.ok) loadStoreMaxBindings(storeId);
+
+        } catch (err) {}
+
+      });
+
+    }
 
     if (settingsPrintApiCopyToken) {
 
@@ -25089,7 +25488,7 @@
 
 
 
-      setStoreAddressSuggestStatus("РС‰РµРј адрес…", "loading");
+      setStoreAddressSuggestStatus("Ищем адрес…", "loading");
 
 
 
@@ -29009,7 +29408,7 @@
 
 
 
-        return stage === "city" ? "РС‰РµРј города…" : "РС‰РµРј адреса…";
+        return stage === "city" ? "Ищем города…" : "Ищем адреса…";
 
 
 
@@ -29089,7 +29488,7 @@
 
 
 
-      if (stage === "city") return String(item && (item.city_name || item.value || item.label) || "Р“РѕСЂРѕРґ").trim();
+      if (stage === "city") return String(item && (item.city_name || item.value || item.label) || "Город").trim();
 
 
 
@@ -29097,7 +29496,7 @@
 
 
 
-        return String(item && (item.street_name || item.value || item.label) || "РЈР»РёС†Р°").trim();
+        return String(item && (item.street_name || item.value || item.label) || "Улица").trim();
 
 
 
@@ -29105,7 +29504,7 @@
 
 
 
-      return String(item && (item.value || item.label || item.full_address) || "РђРґСЂРµСЃ").trim();
+      return String(item && (item.value || item.label || item.full_address) || "Адрес").trim();
 
 
 
@@ -29121,7 +29520,7 @@
 
 
 
-      if (stage === "city") return "Р“РѕСЂРѕРґ";
+      if (stage === "city") return "Город";
 
 
 
@@ -29133,7 +29532,7 @@
 
 
 
-        return cityName ? `РЈР»РёС†Р° - ${cityName}` : "РЈР»РёС†Р°";
+        return cityName ? `Улица - ${cityName}` : "Улица";
 
 
 
@@ -29141,7 +29540,7 @@
 
 
 
-      return cityName || "РђРґСЂРµСЃ";
+      return cityName || "Адрес";
 
 
 
@@ -36869,7 +37268,7 @@
 
 
 
-        iconLabel: "РРєРѕРЅРєР° статуса"
+        iconLabel: "Иконка статуса"
 
 
 
@@ -36897,7 +37296,7 @@
 
 
 
-        iconLabel: "РРєРѕРЅРєР° оплаты"
+        iconLabel: "Иконка оплаты"
 
 
 
@@ -36925,7 +37324,7 @@
 
 
 
-      iconLabel: "РРєРѕРЅРєР° получения",
+      iconLabel: "Иконка получения",
 
 
 
@@ -36961,7 +37360,7 @@
 
 
 
-      iconLabel: "РРєРѕРЅРєР° интервала",
+      iconLabel: "Иконка интервала",
 
 
 
@@ -37487,6 +37886,8 @@
 
       loadStoreTelegramBindings(store.id);
 
+      loadStoreMaxBindings(store.id);
+
 
 
     }
@@ -37570,6 +37971,14 @@
 
 
         if (settingsStoreTelegramConnectBlock) settingsStoreTelegramConnectBlock.classList.add("hidden");
+
+        if (settingsStoreMaxList) settingsStoreMaxList.innerHTML = "<div class=\"global-telegram-binding\"><div class=\"global-telegram-header\"><span class=\"muted\">Сначала сохраните филиал</span></div></div>";
+
+        if (settingsStoreMaxConnectBlock) settingsStoreMaxConnectBlock.classList.add("hidden");
+
+        if (settingsStoreMaxApiKey) settingsStoreMaxApiKey.value = "";
+
+        if (settingsStoreMaxSecretKey) settingsStoreMaxSecretKey.value = "";
 
 
 
@@ -40243,11 +40652,163 @@
 
     }
 
+    async function loadStoreMaxBindings(storeId) {
 
+      if (!settingsStoreMaxList) return;
 
+      settingsStoreMaxList.innerHTML = "<div class=\"muted\">Загрузка…</div>";
 
+      try {
 
+        const res = await authFetch("/api/admin/tenant/stores/" + encodeURIComponent(storeId) + "/max");
 
+        const data = await res.json();
+
+        if (!data || !data.ok) {
+
+          settingsStoreMaxList.innerHTML = "";
+
+          return;
+
+        }
+
+        let bindings = data.bindings || [];
+
+        const byUserId = new Map();
+
+        bindings.forEach((binding) => {
+
+          const userId = binding.max_user_id != null ? String(binding.max_user_id).trim() : "";
+
+          if (userId && !byUserId.has(userId)) byUserId.set(userId, binding);
+
+        });
+
+        bindings = Array.from(byUserId.values());
+
+        settingsStoreMaxList.innerHTML = "";
+
+        if (bindings.length === 0) {
+
+          settingsStoreMaxList.innerHTML = "<div class=\"global-telegram-binding\"><div class=\"global-telegram-header\"><span class=\"muted\">Нет подключённых аккаунтов</span></div></div>";
+
+          return;
+
+        }
+
+        bindings.forEach((binding) => {
+
+          const bindingEl = document.createElement("div");
+
+          bindingEl.className = "global-telegram-binding";
+
+          bindingEl.dataset.bindingId = binding.id;
+
+          const header = document.createElement("div");
+
+          header.className = "global-telegram-header";
+
+          const apiKeySpan = document.createElement("span");
+
+          apiKeySpan.className = "global-telegram-api-key";
+
+          apiKeySpan.textContent = "API: " + (binding.max_user_id || "—");
+
+          header.appendChild(apiKeySpan);
+
+          const actions = document.createElement("div");
+
+          actions.className = "global-telegram-actions";
+
+          const deleteBtn = document.createElement("button");
+
+          deleteBtn.type = "button";
+
+          deleteBtn.className = "btn btn-icon btn-sm btn-danger-text";
+
+          deleteBtn.title = "Отключить";
+
+          deleteBtn.dataset.bindingId = binding.id || "";
+
+          deleteBtn.innerHTML = "<i class=\"fas fa-times\"></i>";
+
+          actions.appendChild(deleteBtn);
+
+          header.appendChild(actions);
+
+          bindingEl.appendChild(header);
+
+          settingsStoreMaxList.appendChild(bindingEl);
+
+        });
+
+      } catch (e) {
+
+        console.error("loadStoreMaxBindings error:", e);
+
+        settingsStoreMaxList.innerHTML = "<div class=\"global-telegram-binding\"><div class=\"global-telegram-header\"><span class=\"muted\">Ошибка загрузки</span></div></div>";
+
+      }
+
+    }
+
+    if (settingsStoreMaxAddByKeysBtn) {
+
+      settingsStoreMaxAddByKeysBtn.addEventListener("click", async () => {
+
+        const storeId = storesState.selectedId;
+
+        const apiKey = settingsStoreMaxApiKey ? settingsStoreMaxApiKey.value.trim() : "";
+
+        const secretKey = settingsStoreMaxSecretKey ? settingsStoreMaxSecretKey.value.trim() : "";
+
+        if (!storeId || !apiKey || !secretKey) {
+
+          alert("Введите API key и Secret key от MAX-бота.");
+
+          return;
+
+        }
+
+        try {
+
+          const res = await authFetch("/api/admin/tenant/stores/" + encodeURIComponent(storeId) + "/max/add-by-keys", {
+
+            method: "POST",
+
+            headers: { "Content-Type": "application/json" },
+
+            body: JSON.stringify({ api_key: apiKey, secret_key: secretKey })
+
+          });
+
+          const data = await res.json();
+
+          if (!data || !data.ok) {
+
+            alert(data.error === "SECRET_INVALID_OR_EXPIRED" ? "Secret key недействителен или истёк. Напишите /start MAX-боту заново." : (data.error || "Ошибка"));
+
+            return;
+
+          }
+
+          if (settingsStoreMaxApiKey) settingsStoreMaxApiKey.value = "";
+
+          if (settingsStoreMaxSecretKey) settingsStoreMaxSecretKey.value = "";
+
+          if (settingsStoreMaxConnectBlock) settingsStoreMaxConnectBlock.classList.add("hidden");
+
+          loadStoreMaxBindings(storeId);
+
+        } catch (e) {
+
+          alert("Ошибка запроса");
+
+        }
+
+      });
+
+    }
 
     // Обработчик "+" для показа формы добавления (филиал)
 
@@ -40276,6 +40837,20 @@
       });
 
 
+
+    }
+
+    if (settingsStoreMaxToggleBtn) {
+
+      settingsStoreMaxToggleBtn.addEventListener("click", () => {
+
+        if (settingsStoreMaxConnectBlock) {
+
+          settingsStoreMaxConnectBlock.classList.toggle("hidden");
+
+        }
+
+      });
 
     }
 
@@ -40320,6 +40895,24 @@
       });
 
 
+
+    }
+
+    if (settingsStoreMaxCancelBtn) {
+
+      settingsStoreMaxCancelBtn.addEventListener("click", () => {
+
+        if (settingsStoreMaxConnectBlock) {
+
+          settingsStoreMaxConnectBlock.classList.add("hidden");
+
+        }
+
+        if (settingsStoreMaxApiKey) settingsStoreMaxApiKey.value = "";
+
+        if (settingsStoreMaxSecretKey) settingsStoreMaxSecretKey.value = "";
+
+      });
 
     }
 
@@ -44577,7 +45170,7 @@
 
 
 
-        <div class="settings-system-map-group-title">РџРћР›РР“РћРќР« Р”РћРЎРўРђР’РљР</div>
+        <div class="settings-system-map-group-title">ПОЛИГОНЫ ДОСТАВКИ</div>
 
 
 
@@ -44589,7 +45182,7 @@
 
 
 
-          <span class="field-hint">РРЅСЃС‚СЂСѓРјРµРЅС‚ рисования и редактирования зон. Отдельная регистрация не нужна.</span>
+          <span class="field-hint">Инструмент рисования и редактирования зон. Отдельная регистрация не нужна.</span>
 
 
 
@@ -50237,7 +50830,7 @@
 
 
 
-        costField.innerHTML = `<label class="field-label">РЎРўРћРРњРћРЎРўР¬ Р”РћРЎРўРђР’РљР</label><input class="control settings-delivery-zone-pill-control" type="number" min="0" step="1" data-zone-tier-field="delivery_cost" value="${String(tier && tier.delivery_cost != null ? tier.delivery_cost : "")}">`;
+        costField.innerHTML = `<label class="field-label">СТОИМОСТЬ ДОСТАВКИ</label><input class="control settings-delivery-zone-pill-control" type="number" min="0" step="1" data-zone-tier-field="delivery_cost" value="${String(tier && tier.delivery_cost != null ? tier.delivery_cost : "")}">`;
 
 
 
@@ -50401,7 +50994,7 @@
 
 
 
-        costField.innerHTML = `<label class="field-label">РЎРўРћРРњРћРЎРўР¬ Р”РћРЎРўРђР’РљР</label><input class="control settings-delivery-zone-pill-control" type="number" min="0" step="1" data-delivery-tier-field="delivery_cost" value="${String(tier && tier.delivery_cost != null ? tier.delivery_cost : "")}">`;
+        costField.innerHTML = `<label class="field-label">СТОИМОСТЬ ДОСТАВКИ</label><input class="control settings-delivery-zone-pill-control" type="number" min="0" step="1" data-delivery-tier-field="delivery_cost" value="${String(tier && tier.delivery_cost != null ? tier.delivery_cost : "")}">`;
 
 
 
@@ -53841,7 +54434,7 @@
 
 
 
-              { label: "Р›РћР“РРќ", value: revealedItem.login, type: "text" },
+              { label: "ЛОГИН", value: revealedItem.login, type: "text" },
 
 
 
@@ -54001,7 +54594,7 @@
 
 
 
-            { key: "login", label: "Р›РћР“РРќ", type: "text", placeholder: "Необязательно" },
+            { key: "login", label: "ЛОГИН", type: "text", placeholder: "Необязательно" },
 
 
 
@@ -54913,7 +55506,7 @@
 
 
 
-        row.className = "order-row product-row settings-card";
+        row.className = "settings-home-card settings-card";
 
 
 

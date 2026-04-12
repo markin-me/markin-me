@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const multer = require('multer');
 const { sendNewOrderNotification } = require('../telegramNotifications');
+const { sendNewOrderMaxNotification } = require('../maxNotifications');
 const { sendOrderToPrintBot } = require('../printPush');
 const makeChatTempRouter = require('../chatTemp');
 const {
@@ -17378,6 +17379,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
                 console.error('Telegram new order notify:', err)
               );
             }
+            sendNewOrderMaxNotification(tenantId, orderStoreId, payload, { db }).catch((err) =>
+              console.error('MAX new order notify:', err)
+            );
           }
 
           if (stockChangedProductIds.length) {

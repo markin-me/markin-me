@@ -68,8 +68,14 @@
   const productsScrollEl = productsList ? productsList.closest(".panel-body") : null;
   const productsBulkFooter = $("#productsBulkFooter");
   const productsBulkSelectedCount = $("#productsBulkSelectedCount");
-  const productsBulkSelectAllBtn = $("#productsBulkSelectAllBtn");
-  const productsBulkClearBtn = $("#productsBulkClearBtn");
+  const productsBulkToggleAllInput = $("#productsBulkToggleAllInput");
+  const productsBulkActions = $("#productsBulkActions");
+  const productsBulkCancelBtn = $("#productsBulkCancelBtn");
+  const productsBulkApplyBtn = $("#productsBulkApplyBtn");
+  const productsBulkActionsSelectedCount = $("#productsBulkActionsSelectedCount");
+  const productsBulkMenuWrap = $("#productsBulkMenuWrap");
+  const productsBulkMenuToggleBtn = $("#productsBulkMenuToggleBtn");
+  const productsBulkMenu = $("#productsBulkMenu");
   const categoriesMainList = $("#categoriesMainList");
   const categoriesEmptyHint = $("#categoriesEmptyHint");
   const optionsGroupsList = $("#optionsGroupsList");
@@ -233,6 +239,24 @@
   const navigationStack = [];
   let currentNavigationState = null;
   let suspendedProductNavigation = null;
+  let productRowsDragSuppressClickUntil = 0;
+  const productRowsDragState = {
+    armed: false,
+    active: false,
+    enabled: false,
+    pointerId: null,
+    startX: 0,
+    startY: 0,
+    currentY: 0,
+    anchorRow: null,
+    dragRows: [],
+    placeholder: null,
+    ghost: null,
+    scrollRAF: 0,
+    moveHandler: null,
+    upHandler: null,
+    saving: false,
+  };
 
   // Navigation functions
   function pushNavigationState(state) {
@@ -470,6 +494,17 @@
   const editingCombos = new Map(); // Map<comboTabId, { mode, blockDraft, products }>
   const editingAutoAdds = new Map(); // Map<autoAddGroupId, { mode, autoAddDraft, snapshotData }>
 
+  function getDefaultProductsBulkActions() {
+    return {
+      activate: false,
+      deactivate: false,
+      show: false,
+      hide: false,
+      infinite_stock: false,
+      zero_stock: false,
+    };
+  }
+
   const state = {
     mode: "products", // products | categories | ...
     categories: [],
@@ -487,6 +522,11 @@
     allCategoryId: null,
     selectedProductId: null,
     selectedProductIds: new Set(),
+    productsBulkActions: getDefaultProductsBulkActions(),
+    productsBulkApplying: false,
+    productRowVariantsExpanded: new Set(),
+    productRowVariantsCache: new Map(),
+    productRowVariantsLoading: new Set(),
     selectedCategoryId: null,
     selectedProductCategories: [], // full objects
     optionGroups: [],
@@ -1626,6 +1666,22 @@
         .filter((p) => !(Number(p.is_active) === 0 && Number(p.site_visibility) === 0))
         .filter((p) => !knownIds.has(Number(p.id)));
 
+      const appendIds = append
+        .map((p) => Number(p?.id))
+        .filter((id) => Number.isFinite(id) && id > 0);
+      if (appendIds.length > 0) {
+        try {
+          const flagsRes = await apiGetComboBlockProductFlags(appendIds);
+          const flagsList = Array.isArray(flagsRes?.data) ? flagsRes.data : [];
+          const flagsByPid = new Map(flagsList.map((f) => [Number(f.product_id), f]));
+          append.forEach((p) => {
+            const flags = flagsByPid.get(Number(p?.id));
+            if (!flags) return;
+            p.has_variants = flags.has_variants ? 1 : 0;
+          });
+        } catch (_) {}
+      }
+
       state.products = (state.products || []).concat(append);
       state.productsOffset += chunkRaw.length;
       state.productsTotal = Number(res.total || 0);
@@ -1675,6 +1731,9 @@
     const cid = categoryId || state.currentCategoryId;
     productsRequestToken += 1;
     clearProductsBulkSelection();
+    state.productRowVariantsExpanded.clear();
+    state.productRowVariantsCache.clear();
+    state.productRowVariantsLoading.clear();
     if (!cid) {
       state.products = [];
       state.productsOffset = 0;
@@ -4334,7 +4393,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     if (field === "stock") {
       const unitLabel = getProductListUnitLabel(product);
       const stockValue = toReadonlyProductFieldValue(product.stock_qty);
-      return stockValue && unitLabel ? `${stockValue} ${unitLabel}` : (stockValue || "—");
+      return stockValue && unitLabel ? `${stockValue} ${unitLabel}` : (stockValue || "∞");
     }
     if (field === "cost_price") return toReadonlyProductFieldValue(product.cost_price) || "—";
     if (field === "price") return toReadonlyProductFieldValue(product.price) || "—";
@@ -4357,6 +4416,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     if (field === "cost_price") product.cost_price = value;
     if (field === "price") product.price = value;
     if (field === "old_price") product.old_price = value;
+    if (field === "is_active") product.is_active = value ? 1 : 0;
     if (field === "site_visibility") product.site_visibility = value ? 1 : 0;
   }
 
@@ -4366,6 +4426,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     if (field === "cost_price") return product.cost_price != null ? Number(product.cost_price) : null;
     if (field === "price") return product.price != null ? Number(product.price) : 0;
     if (field === "old_price") return product.old_price != null ? Number(product.old_price) : null;
+    if (field === "is_active") return Boolean(product.is_active);
     if (field === "site_visibility") return Boolean(product.site_visibility);
     return null;
   }
@@ -4374,8 +4435,9 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     if (!row || !product || !field) return;
     const control = row.querySelector(`[data-inline-field="${field}"]`);
     if (!control) return;
-    if (field === "site_visibility") {
+    if (field === "is_active" || field === "site_visibility") {
       control.checked = Boolean(product.site_visibility);
+      if (field === "is_active") control.checked = Boolean(product.is_active);
       return;
     }
     control.value = getProductRowDisplayValue(product, field);
@@ -4392,28 +4454,115 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     });
   }
 
+  function getCurrentProductGroupIds() {
+    return (Array.isArray(state.products) ? state.products : [])
+      .map((product) => Number(product?.id))
+      .filter(Number.isFinite);
+  }
+
+  function closeProductsBulkMenu() {
+    if (!productsBulkMenu || !productsBulkMenuWrap) return;
+    productsBulkMenu.classList.add("hidden");
+    productsBulkMenuWrap.classList.remove("is-open");
+  }
+
+  function countSelectedProductsBulkActions() {
+    const actions = state.productsBulkActions || {};
+    return Object.values(actions).reduce((acc, value) => acc + (value ? 1 : 0), 0);
+  }
+
+  function setProductsBulkAction(actionKey, nextValue) {
+    const actions = state.productsBulkActions || (state.productsBulkActions = getDefaultProductsBulkActions());
+    actions[actionKey] = Boolean(nextValue);
+    if (actionKey === "activate" && actions.activate) actions.deactivate = false;
+    if (actionKey === "deactivate" && actions.deactivate) actions.activate = false;
+    if (actionKey === "show" && actions.show) actions.hide = false;
+    if (actionKey === "hide" && actions.hide) actions.show = false;
+    if (actionKey === "infinite_stock" && actions.infinite_stock) actions.zero_stock = false;
+    if (actionKey === "zero_stock" && actions.zero_stock) actions.infinite_stock = false;
+  }
+
+  function resetProductsBulkActions() {
+    state.productsBulkActions = getDefaultProductsBulkActions();
+    if (productsBulkMenu) {
+      productsBulkMenu.querySelectorAll("input[data-bulk-action]").forEach((input) => {
+        input.checked = false;
+      });
+    }
+  }
+
+  function syncProductsBulkActionsUi() {
+    if (productsBulkMenu) {
+      productsBulkMenu.querySelectorAll("input[data-bulk-action]").forEach((input) => {
+        const key = String(input.dataset.bulkAction || "");
+        input.checked = Boolean(state.productsBulkActions?.[key]);
+      });
+    }
+    if (productsBulkActionsSelectedCount) {
+      productsBulkActionsSelectedCount.textContent = String(countSelectedProductsBulkActions());
+    }
+    if (productsBulkApplyBtn) {
+      productsBulkApplyBtn.disabled = state.productsBulkApplying || countSelectedProductsBulkActions() === 0 || state.selectedProductIds.size === 0;
+    }
+    if (productsBulkCancelBtn) {
+      productsBulkCancelBtn.disabled = state.productsBulkApplying;
+    }
+    if (productsBulkMenuToggleBtn) {
+      productsBulkMenuToggleBtn.disabled = state.productsBulkApplying;
+    }
+  }
+
+  function buildProductsBulkPayload() {
+    const actions = state.productsBulkActions || {};
+    const payload = {};
+    if (actions.activate) payload.is_active = 1;
+    if (actions.deactivate) payload.is_active = 0;
+    if (actions.show) payload.site_visibility = 1;
+    if (actions.hide) payload.site_visibility = 0;
+    if (actions.infinite_stock) payload.stock = null;
+    if (actions.zero_stock) payload.stock = 0;
+    return payload;
+  }
+
+  function applyProductsBulkPayloadToLocalProduct(product, payload) {
+    if (!product || !payload) return;
+    if (Object.prototype.hasOwnProperty.call(payload, "is_active")) applyInlineProductValue(product, "is_active", payload.is_active);
+    if (Object.prototype.hasOwnProperty.call(payload, "site_visibility")) applyInlineProductValue(product, "site_visibility", payload.site_visibility);
+    if (Object.prototype.hasOwnProperty.call(payload, "stock")) applyInlineProductValue(product, "stock", payload.stock);
+  }
+
   function syncProductsBulkFooter() {
     if (!productsBulkFooter) return;
     const selectedCount = state.selectedProductIds.size;
     const shouldShow = state.mode === "products" && selectedCount > 0;
     productsBulkFooter.classList.toggle("hidden", !shouldShow);
+    if (!shouldShow) closeProductsBulkMenu();
     if (productsBulkSelectedCount) {
       productsBulkSelectedCount.textContent = String(selectedCount);
     }
-    if (productsBulkSelectAllBtn) {
-      productsBulkSelectAllBtn.disabled = state.productsLoading;
+    if (productsBulkToggleAllInput) {
+      const groupIds = getCurrentProductGroupIds();
+      const selectedInGroup = groupIds.filter((id) => state.selectedProductIds.has(id)).length;
+      productsBulkToggleAllInput.checked = groupIds.length > 0 && selectedInGroup === groupIds.length;
+      productsBulkToggleAllInput.indeterminate = selectedInGroup > 0 && selectedInGroup < groupIds.length;
+      productsBulkToggleAllInput.disabled = state.productsLoading || groupIds.length === 0;
     }
-    if (productsBulkClearBtn) {
-      productsBulkClearBtn.disabled = selectedCount === 0;
+    if (productsBulkActions) {
+      productsBulkActions.classList.toggle("hidden", !shouldShow);
     }
+    syncProductsBulkActionsUi();
   }
 
   function clearProductsBulkSelection() {
     if (!state.selectedProductIds.size) {
+      resetProductsBulkActions();
+      closeProductsBulkMenu();
       syncProductsBulkFooter();
       return;
     }
     state.selectedProductIds.clear();
+    resetProductsBulkActions();
+    closeProductsBulkMenu();
     syncProductRowSelectionUI(productsList);
     syncProductsBulkFooter();
   }
@@ -4430,11 +4579,15 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     } else {
       state.selectedProductIds.add(id);
     }
+    if (state.selectedProductIds.size === 0) {
+      resetProductsBulkActions();
+      closeProductsBulkMenu();
+    }
     syncProductRowSelectionUI(productsList);
     syncProductsBulkFooter();
   }
 
-  async function selectAllProductCardsInCategory() {
+  async function toggleAllProductCardsInCategory() {
     if (state.mode !== "products") return;
     while (state.productsLoading) {
       await new Promise((resolve) => setTimeout(resolve, 50));
@@ -4442,10 +4595,16 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     while (state.productsHasMore) {
       await loadMoreProducts();
     }
-    (Array.isArray(state.products) ? state.products : []).forEach((product) => {
-      const id = Number(product?.id);
-      if (Number.isFinite(id)) state.selectedProductIds.add(id);
+    const groupIds = getCurrentProductGroupIds();
+    const allSelected = groupIds.length > 0 && groupIds.every((id) => state.selectedProductIds.has(id));
+    groupIds.forEach((id) => {
+      if (allSelected) state.selectedProductIds.delete(id);
+      else state.selectedProductIds.add(id);
     });
+    if (state.selectedProductIds.size === 0) {
+      resetProductsBulkActions();
+      closeProductsBulkMenu();
+    }
     syncProductRowSelectionUI(productsList);
     syncProductsBulkFooter();
   }
@@ -4454,9 +4613,41 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     const active = Number(product.id) === Number(state.selectedProductId) ? "is-active" : "";
     const selected = state.selectedProductIds.has(Number(product.id)) ? "is-selected" : "";
     const stockValue = getProductRowDisplayValue(product, "stock");
+    const stockUnitHint = getProductListUnitLabel(product);
     const costValue = getProductRowDisplayValue(product, "cost_price");
     const priceValue = getProductRowDisplayValue(product, "price");
     const oldPriceValue = getProductRowDisplayValue(product, "old_price");
+    const hasVariants = Number(product?.has_variants || 0) > 0;
+    const isVariantsExpanded = hasVariants && state.productRowVariantsExpanded.has(Number(product.id));
+    const variantsRows = state.productRowVariantsCache.get(Number(product.id));
+    const variantsLoading = state.productRowVariantsLoading.has(Number(product.id));
+    const variantsInlineHtml = (() => {
+      if (!isVariantsExpanded) return "";
+      let itemsHtml = "";
+      if (variantsRows === undefined || variantsLoading) {
+        itemsHtml = `<div class="product-row-variants-item is-muted">Загрузка вариантов...</div>`;
+      } else if (Array.isArray(variantsRows) && variantsRows.length) {
+        itemsHtml = variantsRows.map((item) => {
+          const text = String(item?.text || "").trim();
+          const photo = String(item?.photo || "").trim();
+          const photoHtml = photo
+            ? `<img class="product-row-variants-photo" src="${escapeHtml(photo)}" alt="" />`
+            : `<div class="product-row-variants-photo product-row-variants-photo-placeholder" aria-hidden="true"></div>`;
+          const assignmentId = Number(item?.assignmentId || 0);
+          const valueIndex = Number(item?.valueIndex);
+          const isDefault = item?.isDefault === true;
+          const starIcon = isDefault ? "fas fa-star" : "far fa-star";
+          const starClass = isDefault ? "is-active" : "";
+          const starHtml = Number.isFinite(assignmentId) && assignmentId > 0 && Number.isFinite(valueIndex)
+            ? `<button class="product-row-variant-default-btn ${starClass}" type="button" data-variant-default-btn data-assignment-id="${assignmentId}" data-variant-index="${valueIndex}" aria-label="${isDefault ? "Вариант по умолчанию" : "Сделать вариантом по умолчанию"}"><i class="${starIcon}"></i></button>`
+            : `<span class="product-row-variant-default-btn is-disabled" aria-hidden="true"><i class="far fa-star"></i></span>`;
+          return `<div class="product-row-variants-item">${starHtml}${photoHtml}<div class="product-row-variants-text">${escapeHtml(text)}</div></div>`;
+        }).join("");
+      } else {
+        itemsHtml = `<div class="product-row-variants-item is-muted">Варианты не заданы</div>`;
+      }
+      return `<div class="product-row-variants-inline"><div class="product-row-variants-list">${itemsHtml}</div></div>`;
+    })();
     const hasPhoto = Array.isArray(product.photos) && product.photos.length > 0;
     const avatar = hasPhoto
       ? `<img class="product-thumb" src="${escapeHtml(product.photos[0])}" alt="" />`
@@ -4464,35 +4655,145 @@ function openAutoAddGroupModal({ mode, group } = {}) {
 
     return `
       <div class="order-row product-row ${active} ${selected}" data-id="${product.id}" draggable="${canSortProducts ? "true" : "false"}">
-        <label class="product-row-photo-select" aria-label="Выбрать товар">
+        <label class="product-row-select-control" aria-label="Выбрать товар">
           <input class="product-row-select-input" type="checkbox" ${selected ? "checked" : ""} tabindex="-1" />
-          ${avatar}
+          <span class="product-row-select-box" aria-hidden="true"></span>
         </label>
+        <div class="product-row-photo-select" aria-hidden="true">
+          ${avatar}
+        </div>
         <div class="product-main-head">
           <div class="product-title">${escapeHtml(product.name)}</div>
         </div>
-        <label class="switch switch-compact product-row-switch" aria-label="Показывать на сайте">
-          <input class="switch-input" type="checkbox" data-inline-field="site_visibility" ${Number(product.site_visibility) ? "checked" : ""} />
-          <span class="switch-ui" aria-hidden="true"></span>
-        </label>
+        <div class="product-row-switch-field field-wrap">
+          <label class="switch switch-compact product-row-switch" aria-label="Активен">
+            <input class="switch-input" type="checkbox" data-inline-field="is_active" ${Number(product.is_active) ? "checked" : ""} />
+            <span class="switch-ui" aria-hidden="true"></span>
+          </label>
+        </div>
+        <div class="product-row-switch-field field-wrap">
+          <label class="switch switch-compact product-row-switch" aria-label="Виден на сайте">
+            <input class="switch-input" type="checkbox" data-inline-field="site_visibility" ${Number(product.site_visibility) ? "checked" : ""} />
+            <span class="switch-ui" aria-hidden="true"></span>
+          </label>
+        </div>
         <div class="product-row-field product-row-field--stock field-wrap">
-          <label class="field-label">Остаток</label>
-          <input class="control control-sm product-row-input product-row-inline-input" type="text" inputmode="decimal" data-inline-field="stock" value="${escapeHtml(stockValue)}" placeholder="—" />
+          <div class="product-row-stock-input-wrap">
+            <input class="control control-sm product-row-input product-row-inline-input" type="text" inputmode="decimal" data-inline-field="stock" value="${escapeHtml(stockValue)}" placeholder="—" aria-label="Остаток" />
+            <span class="product-row-stock-unit-hint">${escapeHtml(stockUnitHint)}</span>
+          </div>
         </div>
         <div class="product-row-field field-wrap">
-          <label class="field-label">Себестоимость</label>
-          <input class="control control-sm product-row-input product-row-inline-input" type="text" inputmode="decimal" data-inline-field="cost_price" value="${escapeHtml(costValue)}" placeholder="—" />
+          <input class="control control-sm product-row-input product-row-inline-input" type="text" inputmode="decimal" data-inline-field="cost_price" value="${escapeHtml(costValue)}" placeholder="—" aria-label="Себестоимость" />
         </div>
         <div class="product-row-field field-wrap">
-          <label class="field-label">Цена</label>
-          <input class="control control-sm product-row-input product-row-inline-input" type="text" inputmode="decimal" data-inline-field="price" value="${escapeHtml(priceValue)}" placeholder="—" />
+          <input class="control control-sm product-row-input product-row-inline-input" type="text" inputmode="decimal" data-inline-field="price" value="${escapeHtml(priceValue)}" placeholder="—" aria-label="Цена" />
         </div>
         <div class="product-row-field field-wrap">
-          <label class="field-label">Старая цена</label>
-          <input class="control control-sm product-row-input product-row-inline-input" type="text" inputmode="decimal" data-inline-field="old_price" value="${escapeHtml(oldPriceValue)}" placeholder="—" />
+          <input class="control control-sm product-row-input product-row-inline-input" type="text" inputmode="decimal" data-inline-field="old_price" value="${escapeHtml(oldPriceValue)}" placeholder="—" aria-label="Старая цена" />
         </div>
+        <div class="product-row-variants-indicator">
+          ${hasVariants
+            ? `<button class="product-row-variants-toggle" type="button" data-variants-toggle data-product-id="${Number(product.id)}" aria-expanded="${isVariantsExpanded ? "true" : "false"}" aria-label="${isVariantsExpanded ? "Свернуть варианты" : "Показать варианты"}"><i class="fas fa-chevron-${isVariantsExpanded ? "up" : "down"}"></i></button>`
+            : ""}
+        </div>
+        ${variantsInlineHtml}
       </div>
     `;
+  }
+
+  function getProductRowPhotoUrl(product) {
+    const photos = Array.isArray(product?.photos) ? product.photos : [];
+    const first = photos.length ? String(photos[0] || "").trim() : "";
+    return first || "";
+  }
+
+  function buildProductVariantsRows(product, groups) {
+    const productName = String(product?.name || "").trim();
+    const productPhoto = getProductRowPhotoUrl(product);
+    const out = [];
+    (Array.isArray(groups) ? groups : []).forEach((group) => {
+      const unit = String(group?.unit_short_title || group?.unit_code || group?.unit_title || "").trim();
+      const values = Array.isArray(group?.values) ? group.values : [];
+      const assignmentId = Number(group?.assignment_id || 0);
+      const rawDefaultIdx = group?.assignment_default_value_index ?? group?.default_value_index;
+      const defaultValueIndex = rawDefaultIdx != null ? Number(rawDefaultIdx) : null;
+      values.forEach((rawValue, valueIndex) => {
+        const value = String(rawValue ?? "").trim();
+        if (!value) return;
+        const text = unit ? `${value} ${unit} ${productName}` : `${value} ${productName}`;
+        out.push({
+          text,
+          photo: productPhoto,
+          assignmentId,
+          valueIndex: Number(valueIndex),
+          defaultValueIndex,
+          isDefault: Number.isFinite(defaultValueIndex) ? Number(defaultValueIndex) === Number(valueIndex) : false,
+        });
+      });
+    });
+    return out;
+  }
+
+  async function ensureProductRowVariantsLoaded(productId) {
+    const pid = Number(productId);
+    if (!Number.isFinite(pid) || pid <= 0) return [];
+    if (state.productRowVariantsCache.has(pid)) return state.productRowVariantsCache.get(pid) || [];
+    if (state.productRowVariantsLoading.has(pid)) return [];
+    const product = (state.products || []).find((p) => Number(p?.id) === pid);
+    if (!product) return [];
+    state.productRowVariantsLoading.add(pid);
+    try {
+      const res = await apiGetProductVariants(pid);
+      const groups = Array.isArray(res?.data) ? res.data : [];
+      const rows = buildProductVariantsRows(product, groups);
+      state.productRowVariantsCache.set(pid, rows);
+      return rows;
+    } catch (_) {
+      state.productRowVariantsCache.set(pid, []);
+      return [];
+    } finally {
+      state.productRowVariantsLoading.delete(pid);
+    }
+  }
+
+  async function toggleProductRowVariants(productId) {
+    const pid = Number(productId);
+    if (!Number.isFinite(pid) || pid <= 0) return;
+    const product = (state.products || []).find((p) => Number(p?.id) === pid);
+    if (!product || Number(product?.has_variants || 0) <= 0) return;
+    if (state.productRowVariantsExpanded.has(pid)) {
+      state.productRowVariantsExpanded.delete(pid);
+      renderProductsList();
+      return;
+    }
+    state.productRowVariantsExpanded.add(pid);
+    renderProductsList();
+    await ensureProductRowVariantsLoaded(pid);
+    renderProductsList();
+  }
+
+  async function setProductRowDefaultVariant(assignmentId, variantIndex) {
+    const aid = Number(assignmentId);
+    const idx = Number(variantIndex);
+    if (!Number.isFinite(aid) || aid <= 0 || !Number.isFinite(idx) || idx < 0) return;
+    await apiPatchVariantAssignment(aid, { default_value_index: idx });
+    state.productRowVariantsCache.forEach((rows, pid) => {
+      if (!Array.isArray(rows)) return;
+      let touched = false;
+      const updated = rows.map((row) => {
+        if (Number(row?.assignmentId || 0) !== aid) return row;
+        touched = true;
+        const rowIndex = Number(row?.valueIndex);
+        return {
+          ...row,
+          defaultValueIndex: idx,
+          isDefault: Number.isFinite(rowIndex) ? rowIndex === idx : false,
+        };
+      });
+      if (touched) state.productRowVariantsCache.set(pid, updated);
+    });
+    renderProductsList();
   }
 
   function syncProductsListEmptyState() {
@@ -4508,14 +4809,43 @@ function openAutoAddGroupModal({ mode, group } = {}) {
       if (row.dataset.boundClick === "1") return;
       row.dataset.boundClick = "1";
       row.addEventListener("click", async (event) => {
-        if (event.target.closest(".product-row-photo-select")) {
+        if (Date.now() < productRowsDragSuppressClickUntil) {
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
+        const variantsToggleBtn = event.target.closest("[data-variants-toggle]");
+        if (variantsToggleBtn) {
+          event.preventDefault();
+          event.stopPropagation();
+          const toggleProductId = Number(variantsToggleBtn.dataset.productId || row.dataset.id);
+          await toggleProductRowVariants(toggleProductId);
+          return;
+        }
+        const variantDefaultBtn = event.target.closest("[data-variant-default-btn]");
+        if (variantDefaultBtn) {
+          event.preventDefault();
+          event.stopPropagation();
+          const assignmentId = Number(variantDefaultBtn.dataset.assignmentId || 0);
+          const variantIndex = Number(variantDefaultBtn.dataset.variantIndex || -1);
+          variantDefaultBtn.setAttribute("disabled", "disabled");
+          try {
+            await setProductRowDefaultVariant(assignmentId, variantIndex);
+          } catch (e) {
+            alert("Ошибка сохранения варианта по умолчанию: " + (e.message || "Неизвестная ошибка"));
+          } finally {
+            variantDefaultBtn.removeAttribute("disabled");
+          }
+          return;
+        }
+        if (event.target.closest(".product-row-select-control")) {
           event.preventDefault();
           event.stopPropagation();
           const id = Number(row.dataset.id);
           toggleProductCardSelection(id);
           return;
         }
-        if (event.target.closest(".product-row-field") || event.target.closest(".product-row-switch")) {
+        if (event.target.closest(".product-row-field") || event.target.closest(".product-row-switch") || event.target.closest(".product-row-switch-field")) {
           return;
         }
         const id = Number(row.dataset.id);
@@ -4536,27 +4866,27 @@ function openAutoAddGroupModal({ mode, group } = {}) {
       const product = state.products.find((x) => Number(x.id) === productId);
       if (!product) return;
 
-      const visibilityInput = row.querySelector('[data-inline-field="site_visibility"]');
-      if (visibilityInput) {
-        visibilityInput.addEventListener("click", (event) => event.stopPropagation());
-        visibilityInput.addEventListener("change", async () => {
-          const previousValue = Boolean(product.site_visibility);
-          const nextValue = Boolean(visibilityInput.checked);
-          visibilityInput.disabled = true;
+      row.querySelectorAll('[data-inline-field="is_active"], [data-inline-field="site_visibility"]').forEach((switchInput) => {
+        const field = switchInput.dataset.inlineField;
+        switchInput.addEventListener("click", (event) => event.stopPropagation());
+        switchInput.addEventListener("change", async () => {
+          const previousValue = Boolean(field === "is_active" ? product.is_active : product.site_visibility);
+          const nextValue = Boolean(switchInput.checked);
+          switchInput.disabled = true;
           try {
             await api(`/api/prod_products/${productId}`, {
               method: "PATCH",
-              body: JSON.stringify({ site_visibility: nextValue ? 1 : 0 }),
+              body: JSON.stringify({ [field]: nextValue ? 1 : 0 }),
             });
-            applyInlineProductValue(product, "site_visibility", nextValue ? 1 : 0);
+            applyInlineProductValue(product, field, nextValue ? 1 : 0);
           } catch (e) {
-            visibilityInput.checked = previousValue;
-            alert("Ошибка сохранения видимости товара: " + (e.message || "Неизвестная ошибка"));
+            switchInput.checked = previousValue;
+            alert("Ошибка сохранения статуса товара: " + (e.message || "Неизвестная ошибка"));
           } finally {
-            visibilityInput.disabled = false;
+            switchInput.disabled = false;
           }
         });
-      }
+      });
 
       row.querySelectorAll(".product-row-inline-input[data-inline-field]").forEach((input) => {
         const field = input.dataset.inlineField;
@@ -4656,21 +4986,224 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     });
   }
 
+  function persistProductOrderFromDom() {
+    const ordered = $$(".order-row.product-row[data-id]", productsList).map((el) => Number(el.dataset.id)).filter(Number.isFinite);
+    return api("/api/sort/prod_products", {
+      method: "POST",
+      body: JSON.stringify({ category_id: state.currentCategoryId, orderedProductIds: ordered }),
+    });
+  }
+
+  function getProductRowsListInDomOrder() {
+    return $$(".order-row.product-row[data-id]", productsList);
+  }
+
+  function getProductRowsDragGroup(anchorRow) {
+    const anchorId = Number(anchorRow?.dataset.id);
+    if (!Number.isFinite(anchorId)) return [];
+    const rows = getProductRowsListInDomOrder();
+    if (!state.selectedProductIds.has(anchorId) || state.selectedProductIds.size < 2) {
+      return [anchorRow];
+    }
+    const selectedRows = rows.filter((row) => state.selectedProductIds.has(Number(row.dataset.id)));
+    return selectedRows.length ? selectedRows : [anchorRow];
+  }
+
+  function clearProductRowsDragVisuals() {
+    if (productRowsDragState.placeholder?.parentNode) {
+      productRowsDragState.placeholder.parentNode.removeChild(productRowsDragState.placeholder);
+    }
+    productRowsDragState.dragRows.forEach((row) => row.classList.remove("is-drag-hidden"));
+    productRowsDragState.placeholder = null;
+    productRowsDragState.ghost = null;
+    productRowsDragState.dragRows = [];
+    productsList?.classList.remove("is-product-dragging");
+  }
+
+  function stopProductRowsAutoScroll() {
+    if (productRowsDragState.scrollRAF) {
+      cancelAnimationFrame(productRowsDragState.scrollRAF);
+      productRowsDragState.scrollRAF = 0;
+    }
+  }
+
+  function updateProductRowsPlaceholderPosition(clientY) {
+    if (!productsList || !productRowsDragState.placeholder) return;
+    const placeholder = productRowsDragState.placeholder;
+    const candidates = getProductRowsListInDomOrder().filter((row) => !row.classList.contains("is-drag-hidden"));
+    let target = null;
+    for (const row of candidates) {
+      const rect = row.getBoundingClientRect();
+      if (clientY < rect.top + rect.height / 2) {
+        target = row;
+        break;
+      }
+    }
+    if (target) {
+      if (placeholder !== target.previousElementSibling) {
+        productsList.insertBefore(placeholder, target);
+      }
+      return;
+    }
+    const firstComboRow = productsList.querySelector(".order-row.combo-row");
+    if (firstComboRow) {
+      if (placeholder.nextElementSibling !== firstComboRow) {
+        productsList.insertBefore(placeholder, firstComboRow);
+      }
+    } else {
+      productsList.appendChild(placeholder);
+    }
+  }
+
+  function startProductRowsAutoScroll() {
+    if (productRowsDragState.scrollRAF) return;
+    const step = () => {
+      productRowsDragState.scrollRAF = 0;
+      if (!productRowsDragState.active || !productsScrollEl) return;
+      const rect = productsScrollEl.getBoundingClientRect();
+      const edge = 56;
+      let delta = 0;
+      if (productRowsDragState.currentY < rect.top + edge) {
+        delta = -Math.max(4, Math.round((rect.top + edge - productRowsDragState.currentY) / 6));
+      } else if (productRowsDragState.currentY > rect.bottom - edge) {
+        delta = Math.max(4, Math.round((productRowsDragState.currentY - (rect.bottom - edge)) / 6));
+      }
+      if (delta !== 0) {
+        productsScrollEl.scrollTop += delta;
+        updateProductRowsPlaceholderPosition(productRowsDragState.currentY);
+        productRowsDragState.scrollRAF = requestAnimationFrame(step);
+      }
+    };
+    productRowsDragState.scrollRAF = requestAnimationFrame(step);
+  }
+
+  function activateProductRowsDrag() {
+    if (!productsList || productRowsDragState.active || !productRowsDragState.anchorRow) return;
+    const dragRows = getProductRowsDragGroup(productRowsDragState.anchorRow);
+    if (!dragRows.length) return;
+
+    const firstRect = dragRows[0].getBoundingClientRect();
+    const lastRect = dragRows[dragRows.length - 1].getBoundingClientRect();
+    const placeholder = document.createElement("div");
+    placeholder.className = "product-rows-drag-placeholder";
+    const groupHeight = Math.max(24, Math.round(lastRect.bottom - firstRect.top));
+    placeholder.style.setProperty("--drag-group-height", `${groupHeight}px`);
+
+    dragRows[0].before(placeholder);
+    dragRows.forEach((row) => row.classList.add("is-drag-hidden"));
+
+    productRowsDragState.active = true;
+    productRowsDragState.dragRows = dragRows;
+    productRowsDragState.placeholder = placeholder;
+    productRowsDragState.ghost = null;
+    productsList.classList.add("is-product-dragging");
+    updateProductRowsPlaceholderPosition(productRowsDragState.currentY || productRowsDragState.startY);
+    startProductRowsAutoScroll();
+  }
+
+  function moveProductRowsDragGhost(clientX, clientY) {
+    return;
+  }
+
+  async function finishProductRowsDrag(cancelled = false) {
+    stopProductRowsAutoScroll();
+    const wasActive = productRowsDragState.active;
+    const dragRows = productRowsDragState.dragRows.slice();
+    const placeholder = productRowsDragState.placeholder;
+    try {
+      if (!cancelled && wasActive && productsList && placeholder && dragRows.length) {
+        dragRows.forEach((row) => productsList.insertBefore(row, placeholder));
+        if (!productRowsDragState.saving) {
+          productRowsDragState.saving = true;
+          try {
+            await persistProductOrderFromDom();
+          } catch (e) {
+            console.error(e);
+            try {
+              await refreshAll();
+            } catch (refreshError) {
+              console.error(refreshError);
+            }
+          } finally {
+            productRowsDragState.saving = false;
+          }
+        }
+        productRowsDragSuppressClickUntil = Date.now() + 180;
+      }
+    } finally {
+      clearProductRowsDragVisuals();
+      productRowsDragState.armed = false;
+      productRowsDragState.active = false;
+      productRowsDragState.pointerId = null;
+      productRowsDragState.anchorRow = null;
+      productRowsDragState.startX = 0;
+      productRowsDragState.startY = 0;
+      productRowsDragState.currentY = 0;
+    }
+  }
+
+  function bindProductRowsDragSort(enable) {
+    if (!productsList) return;
+    productRowsDragState.enabled = Boolean(enable);
+    if (productsList.dataset.productDragBound === "1") return;
+    productsList.dataset.productDragBound = "1";
+
+    productsList.addEventListener("pointerdown", (event) => {
+      if (!productRowsDragState.enabled) return;
+      if (productRowsDragState.saving) return;
+      if (event.button !== 0) return;
+      if (event.target.closest("[data-variants-toggle]") || event.target.closest("[data-variant-default-btn]") || event.target.closest(".product-row-select-control") || event.target.closest(".product-row-field") || event.target.closest(".product-row-switch") || event.target.closest(".product-row-switch-field") || event.target.closest(".product-row-inline-input")) {
+        return;
+      }
+      const row = event.target.closest(".order-row.product-row[data-id]");
+      if (!row) return;
+      if (productsList.querySelector(".order-row.product-row.is-dragging")) return;
+
+      productRowsDragState.armed = true;
+      productRowsDragState.active = false;
+      productRowsDragState.pointerId = event.pointerId;
+      productRowsDragState.startX = event.clientX;
+      productRowsDragState.startY = event.clientY;
+      productRowsDragState.currentY = event.clientY;
+      productRowsDragState.anchorRow = row;
+
+      const moveHandler = (moveEvent) => {
+        if (moveEvent.pointerId !== productRowsDragState.pointerId) return;
+        productRowsDragState.currentY = moveEvent.clientY;
+        const dx = Math.abs(moveEvent.clientX - productRowsDragState.startX);
+        const dy = Math.abs(moveEvent.clientY - productRowsDragState.startY);
+        if (!productRowsDragState.active && (dx > 6 || dy > 6)) {
+          activateProductRowsDrag();
+        }
+        if (!productRowsDragState.active) return;
+        moveEvent.preventDefault();
+        updateProductRowsPlaceholderPosition(moveEvent.clientY);
+        startProductRowsAutoScroll();
+      };
+
+      const upHandler = async (upEvent) => {
+        if (upEvent.pointerId !== productRowsDragState.pointerId) return;
+        window.removeEventListener("pointermove", moveHandler, true);
+        window.removeEventListener("pointerup", upHandler, true);
+        window.removeEventListener("pointercancel", upHandler, true);
+        await finishProductRowsDrag(!productRowsDragState.active);
+      };
+
+      productRowsDragState.moveHandler = moveHandler;
+      productRowsDragState.upHandler = upHandler;
+      window.addEventListener("pointermove", moveHandler, true);
+      window.addEventListener("pointerup", upHandler, true);
+      window.addEventListener("pointercancel", upHandler, true);
+    });
+  }
+
   function syncProductRowsSortability() {
     if (!productsList) return;
     const canSortProducts = !state.productsHasMore && !state.productsLoading;
     $$(".order-row.product-row[data-id]", productsList).forEach((row) => {
-      row.setAttribute("draggable", canSortProducts ? "true" : "false");
+      row.setAttribute("draggable", "false");
     });
-    if (canSortProducts) {
-      makeSortable(productsList, ".order-row.product-row", async () => {
-        const ordered = $$(".order-row.product-row", productsList).map((el) => Number(el.dataset.id)).filter(Number.isFinite);
-        await api("/api/sort/prod_products", {
-          method: "POST",
-          body: JSON.stringify({ category_id: state.currentCategoryId, orderedProductIds: ordered }),
-        });
-      });
-    }
+    bindProductRowsDragSort(canSortProducts);
   }
 
   function appendProductRowsToList(items) {
@@ -15723,15 +16256,85 @@ const isViewMode = state.comboPanel.mode === "view";
       productsScrollEl.addEventListener("scroll", maybeLoadMoreProductsOnScroll, { passive: true });
     }
 
-    if (productsBulkSelectAllBtn) {
-      productsBulkSelectAllBtn.addEventListener("click", async () => {
-        await selectAllProductCardsInCategory();
+    if (productsBulkToggleAllInput) {
+      productsBulkToggleAllInput.addEventListener("change", async () => {
+        productsBulkToggleAllInput.disabled = true;
+        try {
+          await toggleAllProductCardsInCategory();
+        } finally {
+          syncProductsBulkFooter();
+        }
       });
     }
 
-    if (productsBulkClearBtn) {
-      productsBulkClearBtn.addEventListener("click", () => {
-        clearProductsBulkSelection();
+    if (productsBulkMenuToggleBtn && productsBulkMenu && productsBulkMenuWrap) {
+      productsBulkMenuToggleBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const nextOpen = productsBulkMenu.classList.contains("hidden");
+        productsBulkMenu.classList.toggle("hidden", !nextOpen);
+        productsBulkMenuWrap.classList.toggle("is-open", nextOpen);
+      });
+    }
+
+    if (productsBulkMenu) {
+      productsBulkMenu.addEventListener("click", (event) => event.stopPropagation());
+      productsBulkMenu.addEventListener("change", (event) => {
+        const input = event.target?.closest?.("input[data-bulk-action]");
+        if (!input) return;
+        const key = String(input.dataset.bulkAction || "");
+        if (!key) return;
+        setProductsBulkAction(key, input.checked);
+        productsBulkMenu.querySelectorAll("input[data-bulk-action]").forEach((itemInput) => {
+          const itemKey = String(itemInput.dataset.bulkAction || "");
+          itemInput.checked = Boolean(state.productsBulkActions?.[itemKey]);
+        });
+        syncProductsBulkActionsUi();
+      });
+    }
+
+    if (productsBulkCancelBtn) {
+      productsBulkCancelBtn.addEventListener("click", () => {
+        if (state.productsBulkApplying) return;
+        resetProductsBulkActions();
+        closeProductsBulkMenu();
+        syncProductsBulkFooter();
+      });
+    }
+
+    if (productsBulkApplyBtn) {
+      productsBulkApplyBtn.addEventListener("click", async () => {
+        if (state.productsBulkApplying) return;
+        const payload = buildProductsBulkPayload();
+        if (!Object.keys(payload).length) return;
+        const ids = Array.from(state.selectedProductIds).map((id) => Number(id)).filter(Number.isFinite);
+        if (!ids.length) return;
+        state.productsBulkApplying = true;
+        syncProductsBulkActionsUi();
+        try {
+          for (const id of ids) {
+            await api(`/api/prod_products/${id}`, {
+              method: "PATCH",
+              body: JSON.stringify(payload),
+            });
+            const product = state.products.find((item) => Number(item?.id) === id);
+            if (!product) continue;
+            applyProductsBulkPayloadToLocalProduct(product, payload);
+            const row = productsList?.querySelector?.(`.order-row.product-row[data-id="${id}"]`);
+            if (!row) continue;
+            if (Object.prototype.hasOwnProperty.call(payload, "is_active")) syncProductRowInlineControl(row, product, "is_active");
+            if (Object.prototype.hasOwnProperty.call(payload, "site_visibility")) syncProductRowInlineControl(row, product, "site_visibility");
+            if (Object.prototype.hasOwnProperty.call(payload, "stock")) syncProductRowInlineControl(row, product, "stock");
+          }
+          resetProductsBulkActions();
+          closeProductsBulkMenu();
+          syncProductsBulkFooter();
+        } catch (e) {
+          alert("Ошибка массового применения: " + (e.message || "Неизвестная ошибка"));
+        } finally {
+          state.productsBulkApplying = false;
+          syncProductsBulkActionsUi();
+        }
       });
     }
 
@@ -15784,6 +16387,7 @@ const isViewMode = state.comboPanel.mode === "view";
       });
       document.addEventListener("click", () => {
         addMainWrapper.classList.remove("is-open");
+        closeProductsBulkMenu();
       });
       addMainWrapper.addEventListener("click", (e) => e.stopPropagation());
     }

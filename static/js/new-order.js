@@ -2582,8 +2582,16 @@
           return { ...item, qty };
         })
         .filter(Boolean);
+      const sortedPreservedItems = preservedItems
+        .map((item, index) => ({
+          item,
+          index,
+          autoRank: isRightOrderAutoAddItem(item) ? 1 : 0,
+        }))
+        .sort((a, b) => a.autoRank - b.autoRank || a.index - b.index)
+        .map((entry) => entry.item);
       clearRightAutoAddDismissedIfCartEmpty(orderNum, preservedItems);
-      return preservedItems;
+      return sortedPreservedItems;
     }
     let cartItems = source
       .map((item) => (item && typeof item === "object" ? recalculateCartItemTotals(item) : null))
