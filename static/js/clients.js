@@ -484,6 +484,9 @@
     editingDiscountId: null,    // ID редактируемой скидки
     activeDiscount: null,       // Данные активной скидки
     discountOrders: [],         // Заказы с применённой скидкой
+    discountProgressCustomers: [],
+    discountProgressPagination: { page: 1, limit: 100, total: 0, hasMore: false },
+    discountProgressLoading: false,
     discountCenterMode: 'list',
     // Picker для скидок
     discountPickerLevel: null,        // null | 'products' | 'customers'
@@ -1253,6 +1256,10 @@
     return promo.enabled && promo.code_mode === 'unique';
   }
 
+  function isLoyaltyProgressDiscount(discount) {
+    return normalizeDiscountMechanicType(discount?.mechanic_type) === 'loyalty_progress';
+  }
+
   function getDiscountPromoCodeHistorySortGroup(row) {
     if (Number(row?.usage_count || 0) > 0 || String(row?.last_used_at || '').trim()) return 0;
     if (Number(row?.assigned_customer_id || 0) > 0) return 1;
@@ -1440,6 +1447,10 @@
         renderDiscountPromoCodeHistory();
         return;
       }
+      if (isLoyaltyProgressDiscount(state.activeDiscount)) {
+        renderDiscountProgressCustomers();
+        return;
+      }
       renderDiscountOrders();
       return;
     }
@@ -1462,12 +1473,17 @@
     if (state.currentView !== 'discounts') return;
     if (reload) {
       state.discountOrders = [];
+      state.discountProgressCustomers = [];
+      state.discountProgressPagination = { page: 1, limit: 100, total: 0, hasMore: false };
+      state.discountProgressLoading = false;
       if (isUniquePromoDiscount(targetDiscount)) {
         state.discountPromoCodes = [];
       }
       renderDiscountCenterContent();
       if (isUniquePromoDiscount(targetDiscount)) {
         void loadDiscountPromoCodes(discountId);
+      } else if (isLoyaltyProgressDiscount(targetDiscount)) {
+        void loadDiscountProgressCustomers(discountId);
       } else {
         void loadDiscountOrders(discountId);
       }
@@ -10871,6 +10887,231 @@
       if (state.discountCenterMode === 'history') {
         renderDiscountOrders();
       }
+    }
+  }
+
+  async function loadDiscountProgressCustomers(discountId, { append = false } = {}) {
+    const targetId = Number(discountId || 0);
+    if (!(targetId > 0)) {
+      state.discountProgressCustomers = [];
+      state.discountProgressPagination = { page: 1, limit: 100, total: 0, hasMore: false };
+      state.discountProgressLoading = false;
+      renderDiscountCenterContent();
+      return;
+    }
+
+    const nextPage = append
+      ? Math.max(1, Number(state.discountProgressPagination?.page || 1) + 1)
+      : 1;
+
+    state.discountProgressLoading = true;
+    if (!append) {
+      state.discountProgressCustomers = [];
+      state.discountProgressPagination = { page: 1, limit: 100, total: 0, hasMore: false };
+    }
+    if (state.activeDiscountId === targetId && state.discountCenterMode === 'history') {
+      renderDiscountProgressCustomers();
+    }
+
+    try {
+      const json = await apiJson(`/api/admin/discounts/${targetId}/progress-customers?page=${nextPage}`);
+      if (state.activeDiscountId !== targetId) return;
+      const nextRows = Array.isArray(json?.customers) ? json.customers : [];
+      state.discountProgressCustomers = append
+        ? [...state.discountProgressCustomers, ...nextRows]
+        : nextRows;
+      state.discountProgressPagination = {
+        page: Number(json?.pagination?.page || nextPage) || nextPage,
+        limit: Number(json?.pagination?.limit || 100) || 100,
+        total: Number(json?.pagination?.total || state.discountProgressCustomers.length) || 0,
+        hasMore: Boolean(json?.pagination?.has_more),
+      };
+    } catch (err) {
+      console.error('loadDiscountProgressCustomers error:', err);
+      if (state.activeDiscountId !== targetId) return;
+      if (!append) {
+        state.discountProgressCustomers = [];
+        state.discountProgressPagination = { page: 1, limit: 100, total: 0, hasMore: false };
+      }
+    } finally {
+      if (state.activeDiscountId === targetId) {
+        state.discountProgressLoading = false;
+        if (state.discountCenterMode === 'history') {
+          renderDiscountProgressCustomers();
+        }
+      }
+    }
+  }
+
+  function renderDiscountProgressInlineVisual(item) {
+    const progressVisual = item?.progress_visual;
+    const ratio = Math.max(0, Math.min(1, Number(item?.progress_ratio || 0)));
+    if (progressVisual && typeof progressVisual === 'object') {
+      if (String(progressVisual?.mode || '').trim() === 'amount') {
+        const amountLayout = document.createElement('div');
+        amountLayout.className = 'shop-checkout-benefit-progress-amount-layout';
+        const amount = document.createElement('div');
+        amount.className = 'shop-checkout-benefit-progress-amount';
+        const bar = document.createElement('div');
+        bar.className = 'shop-checkout-benefit-progress-bar';
+        const fill = document.createElement('div');
+        fill.className = 'shop-checkout-benefit-progress-fill';
+        fill.style.width = `${Math.max(0, Math.min(100, Number(progressVisual?.progress_ratio ?? item?.progress_ratio ?? 0) * 100))}%`;
+        bar.appendChild(fill);
+        amount.appendChild(bar);
+        amountLayout.appendChild(amount);
+        return amountLayout;
+      }
+
+      const slots = Array.isArray(progressVisual?.slots) ? progressVisual.slots : [];
+      if (slots.length) {
+        const visualWrap = document.createElement('div');
+        visualWrap.className = 'shop-checkout-benefit-progress-visual';
+        const slotsWrap = document.createElement('div');
+        slotsWrap.className = 'shop-checkout-benefit-progress-slots';
+        if (String(progressVisual?.mode || '').trim() === 'orders') {
+          slotsWrap.classList.add('is-orders');
+        } else {
+          slotsWrap.classList.add('is-items');
+        }
+        slots.forEach((slot) => {
+          const slotEl = document.createElement('div');
+          slotEl.className = 'shop-checkout-benefit-progress-slot';
+          const isOrderSlot = String(progressVisual?.mode || slot?.kind || '').trim() === 'orders'
+            || String(slot?.kind || '').trim() === 'order';
+          slotEl.classList.add(isOrderSlot ? 'is-order' : 'is-item');
+          slotEl.classList.add(slot?.is_filled === true ? 'is-filled' : 'is-empty');
+          const slotTitle = String(slot?.title || '').trim();
+          if (slotTitle) {
+            slotEl.title = slotTitle;
+            slotEl.setAttribute('aria-label', slotTitle);
+          }
+          const media = document.createElement('span');
+          media.className = 'shop-checkout-benefit-progress-slot-media';
+          const placeholder = document.createElement('span');
+          placeholder.className = 'shop-checkout-benefit-progress-slot-placeholder';
+          if (isOrderSlot) {
+            placeholder.appendChild(createClientBenefitIcon('fa-receipt'));
+          } else if (slot?.is_filled === true) {
+            placeholder.appendChild(createClientBenefitIcon('fa-check'));
+          } else {
+            placeholder.textContent = '+';
+          }
+          media.appendChild(placeholder);
+          slotEl.appendChild(media);
+          slotsWrap.appendChild(slotEl);
+        });
+        bindClientBenefitsHorizontalTrack(slotsWrap);
+        visualWrap.appendChild(slotsWrap);
+        return visualWrap;
+      }
+    }
+
+    const amountLayout = document.createElement('div');
+    amountLayout.className = 'shop-checkout-benefit-progress-amount-layout';
+    const amount = document.createElement('div');
+    amount.className = 'shop-checkout-benefit-progress-amount';
+    const bar = document.createElement('div');
+    bar.className = 'shop-checkout-benefit-progress-bar';
+    const fill = document.createElement('div');
+    fill.className = 'shop-checkout-benefit-progress-fill';
+    fill.style.width = `${Math.round(ratio * 100)}%`;
+    bar.appendChild(fill);
+    amount.appendChild(bar);
+    amountLayout.appendChild(amount);
+    return amountLayout;
+  }
+
+  function renderDiscountProgressCustomers() {
+    if (!elDiscountsList) return;
+
+    if (state.discountCenterMode !== 'history' || !state.activeDiscount || !isLoyaltyProgressDiscount(state.activeDiscount)) {
+      renderDiscountsList();
+      return;
+    }
+
+    elDiscountsList.innerHTML = '';
+    if (elDiscountsEmptyHint) elDiscountsEmptyHint.classList.add('hidden');
+
+    const rows = Array.isArray(state.discountProgressCustomers) ? state.discountProgressCustomers : [];
+    if (!rows.length) {
+      elDiscountsList.innerHTML = `<div class="empty-hint">${state.discountProgressLoading ? 'Загрузка клиентов...' : 'Нет клиентов в аудитории акции'}</div>`;
+      return;
+    }
+
+    rows.forEach((entry) => {
+      const customer = entry?.customer && typeof entry.customer === 'object' ? entry.customer : {};
+      const progressCard = entry?.progress_card && typeof entry.progress_card === 'object' ? entry.progress_card : null;
+      const row = document.createElement('div');
+      row.className = 'discount-progress-customer-row new-order-benefits-body';
+
+      const customerMeta = document.createElement('div');
+      customerMeta.className = 'discount-progress-customer-meta';
+      const nameEl = document.createElement('div');
+      nameEl.className = 'discount-progress-customer-name';
+      nameEl.textContent = customer.name || customer.phone || (Number(customer.id || 0) > 0 ? `Клиент #${customer.id}` : 'Клиент');
+      customerMeta.appendChild(nameEl);
+
+      if (customer.phone) {
+        const phoneEl = document.createElement('div');
+        phoneEl.className = 'discount-progress-customer-phone';
+        phoneEl.textContent = customer.phone;
+        customerMeta.appendChild(phoneEl);
+      }
+
+      row.appendChild(customerMeta);
+
+      if (progressCard) {
+        const progressWrap = document.createElement('div');
+        progressWrap.className = 'discount-progress-inline';
+        const badgesWrap = document.createElement('div');
+        badgesWrap.className = 'discount-progress-summary-badges';
+
+        const claimedCount = Math.max(0, Number(progressCard?.claimed_reward_count || 0));
+        const claimedBadge = document.createElement('span');
+        claimedBadge.className = 'shop-checkout-benefit-badge shop-checkout-benefit-badge--neutral discount-progress-summary-badge';
+        claimedBadge.innerHTML = `<span class="discount-progress-summary-badge-label">Получено</span><span class="discount-progress-summary-badge-value">${escapeHtml(claimedCount)}</span>`;
+        badgesWrap.appendChild(claimedBadge);
+
+        const pendingCount = Math.max(0, Number(progressCard?.pending_reward_count || 0));
+        const pendingBadge = document.createElement('span');
+        pendingBadge.className = `shop-checkout-benefit-badge ${pendingCount > 0 ? 'shop-checkout-benefit-badge--accent' : 'shop-checkout-benefit-badge--neutral'} discount-progress-summary-badge`;
+        const pendingLabel = document.createElement('span');
+        pendingLabel.className = 'discount-progress-summary-badge-label';
+        pendingLabel.textContent = 'К получению';
+        pendingBadge.appendChild(pendingLabel);
+        const pendingValue = document.createElement('span');
+        pendingValue.className = 'discount-progress-summary-badge-value';
+        pendingValue.textContent = String(pendingCount);
+        pendingBadge.appendChild(pendingValue);
+        const pendingIcon = createClientBenefitIcon(getClientBenefitRewardIconName('gift'));
+        if (pendingIcon) pendingBadge.appendChild(pendingIcon);
+        badgesWrap.appendChild(pendingBadge);
+
+        progressWrap.appendChild(badgesWrap);
+        const visualNode = renderDiscountProgressInlineVisual(progressCard);
+        if (visualNode) {
+          const visualWrap = document.createElement('div');
+          visualWrap.className = 'discount-progress-inline-visual';
+          visualWrap.appendChild(visualNode);
+          progressWrap.appendChild(visualWrap);
+        }
+        row.appendChild(progressWrap);
+      }
+      elDiscountsList.appendChild(row);
+    });
+
+    if (state.discountProgressPagination?.hasMore || state.discountProgressLoading) {
+      const moreBtn = document.createElement('button');
+      moreBtn.type = 'button';
+      moreBtn.className = 'discount-progress-history-more';
+      moreBtn.textContent = state.discountProgressLoading ? 'Загрузка...' : 'Показать еще';
+      moreBtn.disabled = state.discountProgressLoading;
+      moreBtn.addEventListener('click', () => {
+        if (state.discountProgressLoading) return;
+        void loadDiscountProgressCustomers(state.activeDiscountId, { append: true });
+      });
+      elDiscountsList.appendChild(moreBtn);
     }
   }
 

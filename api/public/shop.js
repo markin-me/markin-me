@@ -6524,6 +6524,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
              \`discount_id\` int UNSIGNED NOT NULL,
              \`progress_value\` decimal(12,2) NOT NULL DEFAULT '0.00',
              \`pending_reward_count\` int UNSIGNED NOT NULL DEFAULT '0',
+             \`claimed_reward_count\` int UNSIGNED NOT NULL DEFAULT '0',
              \`created_at\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
              \`updated_at\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
              PRIMARY KEY (\`id\`),
@@ -6531,6 +6532,15 @@ window.location.replace(${JSON.stringify(redirectUrl)});
              KEY \`idx_mkt_discount_progress_discount\` (\`tenant_id\`,\`discount_id\`)
            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
         );
+        try {
+          await db.query(
+            `ALTER TABLE \`mkt_discount_progress\`
+               ADD COLUMN \`claimed_reward_count\` int UNSIGNED NOT NULL DEFAULT '0'
+               AFTER \`pending_reward_count\``
+          );
+        } catch (error) {
+          if (String(error?.code || '') !== 'ER_DUP_FIELDNAME') throw error;
+        }
         await db.query(
           `CREATE TABLE IF NOT EXISTS \`mkt_discount_rewards\` (
              \`id\` int UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -7439,16 +7449,28 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     claimedCount = 1,
     thresholdValue,
     pendingRewardMode,
+    redemptionMode,
   }) {
     const safePendingRewardCount = Math.max(0, Number(pendingRewardCount || 0));
     const safeClaimedCount = Math.max(0, Math.min(safePendingRewardCount, Math.floor(Number(claimedCount || 0) || 0)));
     const nextPendingRewardCount = Math.max(0, safePendingRewardCount - safeClaimedCount);
     const normalizedThreshold = Number(thresholdValue || 0);
     const normalizedPendingMode = normalizePublicProgressPendingRewardMode(pendingRewardMode);
+    const normalizedRedemptionMode = publicDiscountText(redemptionMode).toLowerCase() || 'reset';
     let nextProgressValue = Math.max(0, Number(progressValue || 0));
 
-    if (normalizedPendingMode === 'single_pending') {
-      if (nextPendingRewardCount <= 0) {
+    if (normalizedRedemptionMode === 'subtract_threshold') {
+      if (normalizedThreshold > 0 && safeClaimedCount > 0) {
+        nextProgressValue = Math.max(0, nextProgressValue - (normalizedThreshold * safeClaimedCount));
+      }
+    } else if (normalizedRedemptionMode === 'keep_progress') {
+      nextProgressValue = Math.max(0, Number(progressValue || 0));
+    } else if (safeClaimedCount > 0) {
+      nextProgressValue = 0;
+    }
+
+    if (normalizedPendingMode === 'single_pending' && normalizedRedemptionMode !== 'keep_progress') {
+      if (nextPendingRewardCount <= 0 && normalizedRedemptionMode !== 'reset') {
         nextProgressValue = 0;
       } else if (normalizedThreshold > 0) {
         nextProgressValue = Math.min(nextProgressValue, normalizedThreshold);
@@ -7458,6 +7480,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     return {
       progressValue: roundPromoMoney(nextProgressValue),
       pendingRewardCount: nextPendingRewardCount,
+      claimedRewardCountIncrement: safeClaimedCount,
     };
   }
 
@@ -14995,6 +15018,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const pendingRewardMode = normalizePublicProgressPendingRewardMode(
         progressCard?.pending_reward_mode || mechanic?.pending_reward_mode
       );
+      const redemptionMode = publicDiscountText(
+        progressCard?.redemption_mode || mechanic?.redemption_mode
+      ).toLowerCase() || 'reset';
       let selectedRewardItems = normalizeSelectedRewardItems(req.body?.selected_reward_items);
       const selectedRewardProductIds = Array.isArray(req.body?.selected_reward_product_ids)
         ? req.body.selected_reward_product_ids
@@ -15133,14 +15159,19 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         claimedCount,
         thresholdValue: Number(progressCard?.threshold_value || 0),
         pendingRewardMode,
+        redemptionMode,
       });
       await conn.query(
         `UPDATE mkt_discount_progress
-            SET progress_value = ?, pending_reward_count = ?, updated_at = NOW()
+            SET progress_value = ?,
+                pending_reward_count = ?,
+                claimed_reward_count = COALESCE(claimed_reward_count, 0) + ?,
+                updated_at = NOW()
           WHERE tenant_id = ? AND customer_id = ? AND discount_id = ?`,
         [
           nextProgressState.progressValue,
           nextProgressState.pendingRewardCount,
+          Number(nextProgressState.claimedRewardCountIncrement || 0),
           tenantId,
           customerId,
           discountId,

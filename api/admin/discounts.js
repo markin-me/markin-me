@@ -1,4 +1,5 @@
 const express = require('express');
+const { buildAdminLoyaltyProgressCustomersPage } = require('../helpers/admin-loyalty-progress');
 
 const DISCOUNT_COLUMNS = `
   id, title, description, discount_type, discount_value,
@@ -3242,6 +3243,39 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
     } catch (err) {
       console.error('POST /api/admin/discounts/:id/toggle error:', err);
       return res.status(500).json({ ok: false, error: 'SERVER_ERROR' });
+    }
+  });
+
+  /**
+   * GET /api/admin/discounts/:id/progress-customers
+   * Получить список клиентов с прогрессом для накопительной акции
+   */
+  router.get('/:id/progress-customers', async (req, res) => {
+    try {
+      const tenantId = req.tenantId || 1;
+      const storeId = req.storeId || 1;
+      const discountId = parseInt(req.params.id, 10);
+      const page = Number(req.query?.page || 1);
+
+      const data = await buildAdminLoyaltyProgressCustomersPage({
+        db,
+        tenantId,
+        storeId,
+        discountId,
+        page,
+      });
+
+      return res.json({
+        ok: true,
+        customers: data.customers,
+        pagination: data.pagination,
+      });
+    } catch (err) {
+      console.error('GET /api/admin/discounts/:id/progress-customers error:', err);
+      return res.status(Number(err?.statusCode || 500)).json({
+        ok: false,
+        error: err?.code || 'SERVER_ERROR',
+      });
     }
   });
 

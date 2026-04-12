@@ -10199,6 +10199,7 @@ body.page-courier-screen.orders-checkout-mode #ordersCheckoutRightPane .panel-bo
   align-items:center;
   justify-content:center;
   overflow:hidden;
+  position:relative;
 }
 
 .new-order-benefits-body .shop-checkout-benefit-progress-reward-media img{
@@ -10210,6 +10211,59 @@ body.page-courier-screen.orders-checkout-mode #ordersCheckoutRightPane .panel-bo
 
 .new-order-benefits-body .shop-checkout-benefit-progress-reward-media i{
   font-size:28px;
+}
+
+.new-order-benefits-body .shop-checkout-benefit-progress-reward-badge{
+  position:absolute;
+  right:-8px;
+  bottom:-8px;
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  padding:4px 8px;
+  border-radius:999px;
+  background:var(--shop-buy);
+  color:#fff;
+  font-size:12px;
+  font-weight:700;
+  line-height:1;
+  box-shadow:0 10px 18px rgba(255, 122, 0, 0.22);
+  pointer-events:none;
+}
+
+.new-order-benefits-body .shop-checkout-benefit-progress-reward-badge-count{
+  min-width:10px;
+  text-align:center;
+}
+
+.new-order-benefits-body .shop-checkout-benefit-progress-reward-badge i{
+  font-size:12px;
+}
+
+.shop-checkout-benefit-badge{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  min-height:24px;
+  max-width:100%;
+  padding:4px 10px;
+  border-radius:999px;
+  font-size:12px;
+  font-weight:800;
+  line-height:1.15;
+  white-space:nowrap;
+}
+
+.shop-checkout-benefit-badge--accent{
+  background:linear-gradient(135deg, var(--shop-buy), #ffb15a);
+  color:var(--shop-buy-text);
+  box-shadow:0 8px 18px rgba(20, 29, 48, 0.16);
+}
+
+.shop-checkout-benefit-badge--neutral{
+  background:var(--color-surface-2);
+  color:var(--color-text-muted);
+  border:1px solid var(--color-border);
 }
 
 .new-order-benefits-claim-screen{
@@ -15878,6 +15932,140 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   white-space: nowrap;
   color: var(--color-success);
   font-size: 12px;
+}
+
+.discount-progress-customer-row{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:16px;
+  padding:14px 16px;
+  border:1px solid var(--color-border);
+  border-radius:18px;
+  background:#fff;
+  margin-bottom:12px;
+}
+
+.discount-progress-customer-meta{
+  min-width:0;
+  flex:0 1 220px;
+  display:grid;
+  gap:2px;
+}
+
+.discount-progress-customer-name{
+  min-width:0;
+  font-size:15px;
+  font-weight:700;
+  color:var(--color-text);
+}
+
+.discount-progress-customer-phone{
+  min-width:0;
+  font-size:13px;
+  color:var(--color-text-muted);
+}
+
+.discount-progress-customer-card{
+  display:grid;
+}
+
+.discount-progress-customer-card .shop-checkout-benefit-progress-card{
+  margin:0;
+}
+
+.discount-progress-inline-card{
+  flex:1 1 auto;
+  min-width:0;
+  margin:0;
+  padding:0;
+  border:none;
+  background:transparent;
+  box-shadow:none;
+}
+
+.discount-progress-inline{
+  flex:1 1 auto;
+  min-width:0;
+  display:flex;
+  align-items:center;
+  gap:12px;
+}
+
+.discount-progress-summary-badges{
+  flex:0 0 auto;
+  display:flex;
+  align-items:center;
+  gap:8px;
+}
+
+.discount-progress-summary-badge{
+  gap:6px;
+}
+
+.discount-progress-summary-badge-label{
+  opacity:0.9;
+}
+
+.discount-progress-summary-badge-value{
+  font-weight:900;
+}
+
+.discount-progress-summary-badge i{
+  font-size:12px;
+}
+
+.discount-progress-inline-visual{
+  flex:1 1 auto;
+  min-width:0;
+  display:flex;
+  align-items:center;
+}
+
+.discount-progress-inline-visual .shop-checkout-benefit-progress-visual,
+.discount-progress-inline-visual .shop-checkout-benefit-progress-amount-layout{
+  width:100%;
+}
+
+.discount-progress-available-badge{
+  flex:0 0 auto;
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  padding:6px 10px;
+  border-radius:999px;
+  background:var(--shop-buy);
+  color:#fff;
+  font-size:12px;
+  font-weight:700;
+  line-height:1;
+  box-shadow:0 10px 18px rgba(255, 122, 0, 0.22);
+}
+
+.discount-progress-available-badge-count{
+  min-width:10px;
+  text-align:center;
+}
+
+.discount-progress-available-badge i{
+  font-size:12px;
+}
+
+.discount-progress-history-more{
+  width:100%;
+  margin-top:4px;
+  border:none;
+  border-radius:16px;
+  padding:12px 14px;
+  background:rgba(255,122,0,0.1);
+  color:var(--shop-buy);
+  font-weight:700;
+  cursor:pointer;
+}
+
+.discount-progress-history-more:disabled{
+  opacity:0.6;
+  cursor:default;
 }
 
 /* ── Discount chips (product/customer selection) ── */
