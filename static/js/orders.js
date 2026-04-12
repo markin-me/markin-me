@@ -7,6 +7,7 @@
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
   const isMobile = () => window.matchMedia('(max-width: 768px)').matches;
+  let wasMobileViewport = isMobile();
   function getTenantId() {
     const meta = document.querySelector('meta[name="tenant_id"]');
     if (meta && meta.content) {
@@ -302,8 +303,8 @@
     addrToggleBtn: clientAddrToggleBtn,
     addrFormCard: clientAddrFormCard,
   } = desktopClientDom;
-  const sheetOrderInfoFooter = isCourierScreenPage && sheet ? $('[data-role="order-info-footer"]', sheet) : null;
-  const sheetOrderInfoPaymentBtn = isCourierScreenPage && sheet ? $('[data-role="order-info-payment-btn"]', sheet) : null;
+  const sheetOrderInfoFooter = sheet ? $('[data-role="order-info-footer"]', sheet) : null;
+  const sheetOrderInfoPaymentBtn = sheet ? $('[data-role="order-info-payment-btn"]', sheet) : null;
   const sharedOrderPanel = window.SharedOrderPanel || null;
   const sharedOrderPayment = window.SharedOrderPayment || null;
   const sharedOrderInfoRenderer = sharedOrderPanel && ordersRightPane
@@ -338,13 +339,13 @@
         },
       })
     : null;
-  const sheetOrderInfoRenderer = sharedOrderPanel && isCourierScreenPage && sheet
+  const sheetOrderInfoRenderer = sharedOrderPanel && sheet
     ? sharedOrderPanel.createInfoRenderer({
         root: sheet,
         footerEl: sheetOrderInfoFooter,
         clientInfoWrap: null,
         enableClientLink: true,
-        treatOrderCommentAsAddressComment: true,
+        treatOrderCommentAsAddressComment: isCourierWorkspace,
         helpers: {
           money,
           formatDateTime,
@@ -371,12 +372,8 @@
       })
     : null;
   const sharedOrderInfoRenderers = [sharedOrderInfoRenderer, sheetOrderInfoRenderer].filter(Boolean);
-  const orderInfoFooters = isCourierScreenPage
-    ? [orderInfoFooter, sheetOrderInfoFooter].filter(Boolean)
-    : [orderInfoFooter].filter(Boolean);
-  const orderInfoPaymentButtons = isCourierScreenPage
-    ? [orderInfoPaymentBtn, sheetOrderInfoPaymentBtn].filter(Boolean)
-    : [orderInfoPaymentBtn].filter(Boolean);
+  const orderInfoFooters = [orderInfoFooter, sheetOrderInfoFooter].filter(Boolean);
+  const orderInfoPaymentButtons = [orderInfoPaymentBtn, sheetOrderInfoPaymentBtn].filter(Boolean);
   const courierConnectionBanner = isCourierWorkspace ? $("#courierConnectionBanner") : null;
   const courierConnectionBannerText = courierConnectionBanner
     ? $(".courier-connection-banner__text", courierConnectionBanner)
@@ -647,6 +644,60 @@
     const iconClass = normalizeIconClass(iconValue);
     if (!iconClass) return "";
     return `<span class="order-time-icon"${titleAttr}><i class="${escapeHtml(iconClass)}"></i></span>`;
+  }
+
+  function renderTimeOptionIconMarkup(order) {
+    const iconValue = resolveTimeOptionIcon(order);
+    if (!iconValue) return "";
+    if (isIconUrl(iconValue)) {
+      return `<img src="${escapeHtml(iconValue)}" alt="" loading="lazy">`;
+    }
+    const iconClass = normalizeIconClass(iconValue);
+    if (!iconClass) return "";
+    return `<i class="${escapeHtml(iconClass)}"></i>`;
+  }
+
+  function getCourierScheduleBadgeValue(order) {
+    if (!order) return "—";
+    const timeOptionCode = String(order.time_option_code || "").trim().toLowerCase();
+    const isUrgent = Boolean(
+      order.is_urgent
+      || order.urgent
+      || timeOptionCode === "urgent"
+      || timeOptionCode === "asap"
+    );
+    if (isUrgent) return "Быстрее";
+    return formatScheduleText(order, { includeTitle: false }) || String(order.time_option_title || "").trim() || "—";
+  }
+
+  function buildCourierScheduleBadgeHtml(order) {
+    const value = getCourierScheduleBadgeValue(order);
+    const iconHtml = renderTimeOptionIconMarkup(order);
+    const title = String(order?.time_option_title || "").trim();
+    const titleAttr = title ? ` title="${escapeHtml(title)}"` : "";
+    return `
+      <button
+        class="order-stage-btn order-stage-btn--schedule is-static"
+        type="button"
+        disabled
+        aria-label="${escapeHtml(value)}"${titleAttr}
+      >
+        <span class="order-stage-btn-icon-shell" aria-hidden="true">
+          <span class="order-stage-btn-icon-wrap order-stage-btn-icon-current">
+            ${iconHtml}
+          </span>
+        </span>
+        <span class="order-stage-btn-content">
+          <span class="order-stage-btn-panel order-stage-btn-panel-current">
+            <span class="order-stage-btn-current">${escapeHtml(value)}</span>
+          </span>
+        </span>
+      </button>
+    `;
+  }
+
+  function shouldUseOrdersMobileCardLayout() {
+    return !isCourierWorkspace && isMobile();
   }
 
   function getStatusMetaById(statusId) {
@@ -2330,20 +2381,10 @@
         });
         courierOfflineState.queue.shift();
         processedAny = true;
-        if (json?.data) {
-          handleOrderEvent(json.data);
-        }
         syncCourierShadowOrdersFromQueue();
         applyCourierShadowOrdersToState();
-        if (isCourierWorkspace) {
-          ensureActiveStatusSelection();
-          renderStages();
-          renderOrders();
-          if (tabsState.tabs.length) {
-            syncTabsWithLatestOrders();
-          } else {
-            updateCourierActiveOrderInfo();
-          }
+        if (json?.data) {
+          handleOrderEvent(json.data);
         }
         persistCourierOfflineState();
       } catch (err) {
@@ -2527,18 +2568,14 @@
   function persistOrdersCacheNow() {
     const activeTab = tabsState.tabs.find((tab) => tab.key === tabsState.activeKey) || null;
     if (activeTab) captureCheckoutSessionForTab(activeTab);
+    const cachedDate = null;
 
     const payload = {
       ts: Date.now(),
       data: {
         activeStatusId: state.activeStatusId,
         storeTimezone: String(state.storeTimezone || "+0"),
-        date: {
-          start: state.date.start ? toDateKey(state.date.start) : null,
-          end: state.date.end ? toDateKey(state.date.end) : null,
-          viewYear: Number(state.date.viewYear || 0) || null,
-          viewMonth: Number(state.date.viewMonth || 0) || null,
-        },
+        date: cachedDate,
         tabs: tabsState.tabs.map(serializeTabForCache).filter(Boolean),
         activeKey: tabsState.activeKey,
       },
@@ -2590,18 +2627,9 @@
     state.lastEventId = null;
     state.clientsCache = new Map();
 
-    const start = parseDateKey(cache?.date?.start);
-    const end = parseDateKey(cache?.date?.end);
-    if (start) state.date.start = start;
-    if (end) state.date.end = end;
-    if (isValidCalendarView(cache?.date?.viewYear, cache?.date?.viewMonth)) {
-      state.date.viewYear = Number(cache.date.viewYear);
-      state.date.viewMonth = Number(cache.date.viewMonth);
-    } else {
-      const baseDate = state.date.start || getStoreDateNow(state.storeTimezone || "+0");
-      state.date.viewYear = baseDate.getFullYear();
-      state.date.viewMonth = baseDate.getMonth();
-    }
+    const baseDate = state.date.start || getStoreDateNow(state.storeTimezone || "+0");
+    state.date.viewYear = baseDate.getFullYear();
+    state.date.viewMonth = baseDate.getMonth();
 
     restoreUiTabsFromCache(cache);
     const activeTab = tabsState.tabs.find((tab) => tab.key === tabsState.activeKey) || null;
@@ -3914,20 +3942,9 @@
     let appliedOrder = null;
 
     if (optimisticOrder && prevStatusId !== nextStatusId) {
-      state.orders[orderIdx] = optimisticOrder;
-      rebuildOrdersStageIndex();
-      const countersChanged = applyStageCountersDelta(prevOrder, optimisticOrder);
-      if (countersChanged) renderStages();
-      renderOrders();
+      appliedOrder = handleOrderEvent(optimisticOrder, { localOnly: true }) || optimisticOrder;
       setStatusControlsDisabled(true);
-      if (tabsState.tabs.length) {
-        syncTabsWithLatestOrders();
-      } else if (state.activeOrderId) {
-        const activeOrder = state.orders.find((row) => Number(row?.id || 0) === Number(state.activeOrderId || 0)) || null;
-        if (activeOrder) setInfo(activeOrder);
-      }
       optimisticApplied = true;
-      appliedOrder = state.orders[orderIdx] || optimisticOrder;
     }
 
     const request = {
@@ -3964,13 +3981,7 @@
         return;
       }
       if (optimisticApplied && prevOrder) {
-        const rollbackIdx = state.orders.findIndex((row) => Number(row?.id || 0) === id);
-        if (rollbackIdx >= 0) {
-          state.orders[rollbackIdx] = prevOrder;
-        } else {
-          state.orders.push(prevOrder);
-        }
-        rebuildOrdersStageIndex();
+        handleOrderEvent(prevOrder, { localOnly: true });
       }
       try {
         await loadStatuses();
@@ -5063,6 +5074,36 @@
     return row;
   }
 
+  function syncOrdersListEmptyState() {
+    if (!elOrdersList || !elEmptyHint) return;
+    const hasRows = !!elOrdersList.querySelector(".order-row");
+    elEmptyHint.classList.toggle("hidden", hasRows);
+  }
+
+  function removeOrderRowFromDom(orderId) {
+    if (!elOrdersList) return;
+    const normalizedOrderId = Number(orderId || 0);
+    if (!(normalizedOrderId > 0)) return;
+    const row = $(`.order-row[data-order-id="${normalizedOrderId}"]`, elOrdersList);
+    if (row) row.remove();
+    syncOrdersListEmptyState();
+  }
+
+  function reconcileOrderListDom(order, { prevVisible = false, nextVisible = false } = {}) {
+    if (!elOrdersList) return;
+    const orderId = Number(order?.id || 0);
+    if (prevVisible && !nextVisible) {
+      removeOrderRowFromDom(orderId);
+      return;
+    }
+    if (nextVisible) {
+      upsertOrderRow(order);
+      syncOrdersListEmptyState();
+      return;
+    }
+    syncOrdersListEmptyState();
+  }
+
   function updateOrderRow(row, order) {
     row.setAttribute("data-order-id", String(order.id));
     const orderId = Number(order?.id || 0);
@@ -5150,6 +5191,7 @@
     if (isCourierWorkspace) {
       const pickupButtonHtml = buildCourierActionButtonHtml(order);
       const callButtonHtml = buildCourierCallButtonHtml(order);
+      const scheduleBadgeHtml = buildCourierScheduleBadgeHtml(order);
 
       row.innerHTML = `
         <div class="order-col order-id">
@@ -5172,10 +5214,6 @@
           </label>
         </div>
 
-        <div class="order-col order-indicators">
-          ${timeIconHtml}
-        </div>
-
         <div class="order-col order-client">
           <div class="order-client-name"><i class="fas fa-user"></i><span class="order-client-name-text">${escapeHtml(order.customer_name || "?")}</span></div>
           ${clientPhoneLineHtml}
@@ -5189,7 +5227,7 @@
         <div class="order-col order-courier-controls">
           <div class="order-courier-status-row">
             <div class="order-col order-stage">
-              ${stageCycleBtnHtml}
+              ${scheduleBadgeHtml}
             </div>
             <div class="order-col order-total">
               ${paymentHtml}
@@ -5198,6 +5236,55 @@
           <div class="order-courier-action-row">
             ${pickupButtonHtml}
             ${callButtonHtml}
+          </div>
+        </div>
+      `;
+
+      row.classList.remove("is-active");
+      applyOrderMultiSelectionState(row, orderId);
+      return;
+    }
+
+    if (shouldUseOrdersMobileCardLayout()) {
+      row.innerHTML = `
+        <div class="order-col order-id">
+          <label
+            class="order-id-select-hit"
+            data-action="order-multi-select"
+            data-order-id="${escapeHtml(order.id)}"
+            title="\u0412\u044b\u0431\u0440\u0430\u0442\u044c \u0437\u0430\u043a\u0430\u0437"
+          >
+            <input
+              type="checkbox"
+              class="order-id-select-checkbox"
+              data-role="order-multi-checkbox"
+              aria-label="\u0412\u044b\u0431\u0440\u0430\u0442\u044c \u0437\u0430\u043a\u0430\u0437 \u2116${escapeHtml(order.id)}"
+              tabindex="-1"
+              ${multiSelected ? "checked" : ""}
+            />
+            <div class="order-id-num">${escapeHtml(order.id)}</div>
+            <div class="order-id-time">${escapeHtml(formatTime(order.created_at))}</div>
+          </label>
+        </div>
+
+        <div class="order-col order-client">
+          <div class="order-client-name"><i class="fas fa-user"></i><span class="order-client-name-text">${escapeHtml(order.customer_name || "?")}</span></div>
+          ${clientPhoneLineHtml}
+        </div>
+
+        <div class="order-col order-address">
+          <div class="order-address-line"><i class="fas fa-map-marker-alt"></i> ${escapeHtml(listAddressDisplay)}</div>
+          <div class="order-address-comment muted"><i class="far fa-comment"></i> ${escapeHtml(addressCommentDisplay)}</div>
+        </div>
+
+        <div class="order-col order-orders-mobile-controls">
+          <div class="order-orders-mobile-status-row">
+            <div class="order-col order-stage">
+              ${stageCycleBtnHtml}
+            </div>
+            <div class="order-col order-total">
+              ${paymentHtml}
+            </div>
           </div>
         </div>
       `;
@@ -5563,6 +5650,27 @@
     applyDateFilter(true);
   }
 
+  async function resetWorkspaceDateFilterToTodayIfNeeded({ keepSelection = false, reloadData = true } = {}) {
+    const today = getStoreDateNow(state.storeTimezone || "+0");
+    const todayKey = toDateKey(today);
+    const todayYear = today.getFullYear();
+    const todayMonth = today.getMonth();
+    const startKey = state.date.start ? toDateKey(state.date.start) : "";
+    const endKey = state.date.end ? toDateKey(state.date.end) : "";
+    const hasTodayRange = startKey === todayKey && endKey === todayKey;
+    const hasTodayView = Number(state.date.viewYear) === todayYear && Number(state.date.viewMonth) === todayMonth;
+    if (hasTodayRange && hasTodayView) return false;
+
+    resetDateStateToToday(today);
+    renderCalendar();
+    updateDateLabel();
+    if (!reloadData || hasTodayRange) return true;
+    await loadStatuses();
+    ensureActiveStatusSelection();
+    await loadAndRenderOrders(keepSelection);
+    return true;
+  }
+
   // -----------------------------
   // SSE
   // -----------------------------
@@ -5583,7 +5691,7 @@
   let audioUnlocked = false;
 
   function unlockAudioOnce() {
-    if (audioUnlocked) return;
+    if (isCourierWorkspace || audioUnlocked) return;
     const url = state.tenantSounds && state.tenantSounds.sound_new_order_url;
     if (!url) return;
     const audio = new Audio(url);
@@ -5592,7 +5700,7 @@
   }
 
   function playNotificationSound(url) {
-    if (!url) return;
+    if (!url || isCourierWorkspace) return;
     const audio = new Audio(url);
     audio.play().catch(() => {});
   }
@@ -5715,12 +5823,13 @@
         state.activeOrderId = null;
         setInfo(null);
       }
-      if (applyStageCountersDelta(prevOrder, null)) {
+      const countersChanged = applyStageCountersDelta(prevOrder, null);
+      if (countersChanged && !skipStageRefresh) {
         renderStages();
       }
-      renderOrders();
+      reconcileOrderListDom(prevOrder || order, { prevVisible, nextVisible: false });
       schedulePersistOrdersCache();
-      return;
+      return null;
     }
 
     nextOrder = localOnly ? { ...order } : overlayCourierShadowOrder(order);
@@ -5751,21 +5860,19 @@
       }
     }
 
-    if (applyStageCountersDelta(prevOrder, nextOrder)) {
+    const countersChanged = applyStageCountersDelta(prevOrder, nextOrder);
+    if (countersChanged && !skipStageRefresh) {
       renderStages();
     }
-    if (!wasExisting || prevVisible !== nextVisible) {
-      renderOrders();
-    } else {
-      upsertOrderRow(nextOrder);
-    }
+    reconcileOrderListDom(nextOrder, { prevVisible, nextVisible });
 
-    const statusCode = (nextOrder.status_code || "").toLowerCase();
-    if (statusCode === "cancelled" || statusCode === "canceled") {
+    const statusCode = String(nextOrder.status_code || "").toLowerCase();
+    if (!isCourierWorkspace && (statusCode === "cancelled" || statusCode === "canceled")) {
       const url = state.tenantSounds && state.tenantSounds.sound_order_cancelled_url;
       if (url) playNotificationSound(url);
     }
     schedulePersistOrdersCache();
+    return nextOrder;
   }
 
   // Р¤РѕРЅРѕРІС‹Р№ РѕРїСЂРѕСЃ СЃРїРёСЃРєР° Р·Р°РєР°Р·РѕРІ (СЂРµР·РµСЂРІ, РєРѕРіРґР° SSE РѕР±СЂС‹РІР°РµС‚СЃСЏ РЅР° С…РѕСЃС‚РёРЅРіРµ)
@@ -6064,7 +6171,19 @@
       stopOrdersPolling();
       return;
     }
-    void resumeOrdersRealtime();
+    void resetWorkspaceDateFilterToTodayIfNeeded({
+      keepSelection: Boolean(tabsState.tabs.length || state.activeOrderId),
+    })
+      .catch(console.error)
+      .finally(() => {
+        if (isCourierWorkspace) {
+          setCourierOnlineState(navigator.onLine !== false);
+          if (navigator.onLine !== false) {
+            processCourierOfflineQueue().catch(console.error);
+          }
+        }
+        void resumeOrdersRealtime();
+      });
   });
 
   window.addEventListener("pagehide", () => {
@@ -6380,7 +6499,15 @@
   if (backdrop) backdrop.addEventListener("click", closeSheet);
 
   window.addEventListener("resize", () => {
-    if (!isMobile()) closeSheet();
+    const mobileNow = isMobile();
+    if (mobileNow !== wasMobileViewport) {
+      wasMobileViewport = mobileNow;
+      if (!isCourierWorkspace) {
+        renderOrders();
+        syncActiveOrderRowState();
+      }
+    }
+    if (!mobileNow) closeSheet();
   });
 
   if (notifyBtn && !ORDER_BROWSER_ALERTS_ENABLED) {
@@ -7138,11 +7265,13 @@
       hydrateCourierOfflineStateFromStorage();
 
       await loadStoreTimezone();
-      resetDateStateToToday();
       hydrateOrdersFromCache(cachedBootstrap);
       ensureDateStateInitialized();
-      renderCalendar();
-      updateDateLabel();
+      const didResetDateFilter = await resetWorkspaceDateFilterToTodayIfNeeded({ reloadData: false });
+      if (!didResetDateFilter) {
+        renderCalendar();
+        updateDateLabel();
+      }
       bindOrderTabsWheelScroll();
 
       try {
@@ -7203,8 +7332,10 @@
         processCourierOfflineQueue().catch(console.error);
       }
 
-      document.addEventListener("click", unlockAudioOnce, { once: true });
-      document.addEventListener("keydown", unlockAudioOnce, { once: true });
+      if (!isCourierWorkspace) {
+        document.addEventListener("click", unlockAudioOnce, { once: true });
+        document.addEventListener("keydown", unlockAudioOnce, { once: true });
+      }
 
       stopOrdersPolling();
       startOrdersPolling();
@@ -7234,13 +7365,6 @@
       processCourierOfflineQueue().catch(console.error);
     });
 
-    document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState !== "visible") return;
-      setCourierOnlineState(navigator.onLine !== false);
-      if (navigator.onLine !== false) {
-        processCourierOfflineQueue().catch(console.error);
-      }
-    });
   }
 
   window.addEventListener("beforeunload", () => {

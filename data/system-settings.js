@@ -35,6 +35,28 @@ function normalizeTelegramWebhookUrl(value) {
   return normalizeString(value);
 }
 
+function normalizeMaxBotId(value) {
+  let botId = normalizeString(value);
+  if (!botId) return '';
+
+  botId = botId.replace(/^https?:\/\/max\.ru\//i, '');
+  botId = botId.replace(/^@+/, '');
+  const queryIndex = botId.indexOf('?');
+  if (queryIndex >= 0) botId = botId.slice(0, queryIndex);
+  const slashIndex = botId.indexOf('/');
+  if (slashIndex >= 0) botId = botId.slice(0, slashIndex);
+
+  return botId.trim();
+}
+
+function normalizeMaxBotToken(value) {
+  return normalizeString(value);
+}
+
+function normalizeMaxWebhookUrl(value) {
+  return normalizeString(value);
+}
+
 function normalizeMapProviderName(value) {
   return normalizeString(value);
 }
@@ -138,6 +160,9 @@ function writeSystemSettings(nextState, options = {}) {
       telegram_tenant_enabled: hasOwn(nextState, 'telegram_tenant_enabled')
         ? Boolean(nextState.telegram_tenant_enabled)
         : Boolean(sourceState.telegram_tenant_enabled),
+      max_env_enabled: hasOwn(nextState, 'max_env_enabled')
+        ? Boolean(nextState.max_env_enabled)
+        : Boolean(sourceState.max_env_enabled),
       updated_at: new Date().toISOString(),
     };
 
@@ -157,6 +182,24 @@ function writeSystemSettings(nextState, options = {}) {
       payload.telegram_webhook_url = hasOwn(nextState, 'telegram_webhook_url')
         ? normalizeTelegramWebhookUrl(nextState.telegram_webhook_url)
         : normalizeTelegramWebhookUrl(currentState.telegram_webhook_url);
+    }
+
+    if (hasOwn(currentState, 'max_bot_id') || hasOwn(nextState, 'max_bot_id')) {
+      payload.max_bot_id = hasOwn(nextState, 'max_bot_id')
+        ? normalizeMaxBotId(nextState.max_bot_id)
+        : normalizeMaxBotId(currentState.max_bot_id);
+    }
+
+    if (hasOwn(currentState, 'max_bot_token') || hasOwn(nextState, 'max_bot_token')) {
+      payload.max_bot_token = hasOwn(nextState, 'max_bot_token')
+        ? normalizeMaxBotToken(nextState.max_bot_token)
+        : normalizeMaxBotToken(currentState.max_bot_token);
+    }
+
+    if (hasOwn(currentState, 'max_webhook_url') || hasOwn(nextState, 'max_webhook_url')) {
+      payload.max_webhook_url = hasOwn(nextState, 'max_webhook_url')
+        ? normalizeMaxWebhookUrl(nextState.max_webhook_url)
+        : normalizeMaxWebhookUrl(currentState.max_webhook_url);
     }
 
     if (hasOwn(currentState, 'provider_name') || hasOwn(nextState, 'provider_name')) {
@@ -250,6 +293,7 @@ function getBootstrappedPollingState(defaults = {}) {
   const nextState = {
     telegram_env_enabled: Boolean(defaults.telegram_env_enabled),
     telegram_tenant_enabled: Boolean(defaults.telegram_tenant_enabled),
+    max_env_enabled: Boolean(defaults.max_env_enabled),
   };
 
   if (fromFile && hasOwn(fromFile, 'telegram_env_enabled')) {
@@ -257,6 +301,9 @@ function getBootstrappedPollingState(defaults = {}) {
   }
   if (fromFile && hasOwn(fromFile, 'telegram_tenant_enabled')) {
     nextState.telegram_tenant_enabled = Boolean(fromFile.telegram_tenant_enabled);
+  }
+  if (fromFile && hasOwn(fromFile, 'max_env_enabled')) {
+    nextState.max_env_enabled = Boolean(fromFile.max_env_enabled);
   }
 
   return nextState;
@@ -278,6 +325,25 @@ function getEffectiveTelegramBotConfig(sourceState = readSystemSettings()) {
     telegram_bot_username: username,
     telegram_bot_token: token,
     telegram_webhook_url: webhookUrl,
+  };
+}
+
+function getEffectiveMaxBotConfig(sourceState = readSystemSettings()) {
+  const source = sourceState && typeof sourceState === 'object' ? sourceState : {};
+  const botId = hasOwn(source, 'max_bot_id')
+    ? normalizeMaxBotId(source.max_bot_id)
+    : normalizeMaxBotId(process.env.MAX_BOT_ID);
+  const token = hasOwn(source, 'max_bot_token')
+    ? normalizeMaxBotToken(source.max_bot_token)
+    : normalizeMaxBotToken(process.env.MAX_BOT_TOKEN);
+  const webhookUrl = hasOwn(source, 'max_webhook_url')
+    ? normalizeMaxWebhookUrl(source.max_webhook_url)
+    : normalizeMaxWebhookUrl(process.env.MAX_WEBHOOK_URL);
+
+  return {
+    max_bot_id: botId,
+    max_bot_token: token,
+    max_webhook_url: webhookUrl,
   };
 }
 
@@ -318,11 +384,15 @@ module.exports = {
   writeSystemSettings,
   getBootstrappedPollingState,
   getEffectiveTelegramBotConfig,
+  getEffectiveMaxBotConfig,
   getEffectiveMapProviderConfig,
   getEffectiveDeliveryZonePolygonConfig,
   normalizeTelegramBotUsername,
   normalizeTelegramBotToken,
   normalizeTelegramWebhookUrl,
+  normalizeMaxBotId,
+  normalizeMaxBotToken,
+  normalizeMaxWebhookUrl,
   normalizeMapProviderName,
   normalizeMapTileUrl,
   normalizeMapAttribution,

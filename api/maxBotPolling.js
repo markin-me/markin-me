@@ -750,6 +750,13 @@ function startMaxPolling(db, helpers) {
   const sendDedupTtlMs = Math.max(5 * 1000, Number(process.env.MAX_SEND_DEDUP_TTL_MS || 0) || (30 * 1000));
   const sendDedupMaxKeysPerToken = Math.max(500, Number(process.env.MAX_SEND_DEDUP_MAX_KEYS || 0) || 5000);
   let pollBusy = false;
+  let stopped = false;
+  let timer = null;
+
+  function schedulePoll(delayMs) {
+    if (stopped) return;
+    timer = setTimeout(poll, delayMs);
+  }
 
   function rememberIfNewEvent(token, eventKey) {
     if (!token || !eventKey) return true;
@@ -1052,8 +1059,9 @@ function startMaxPolling(db, helpers) {
   }
 
   async function poll() {
+    if (stopped) return;
     if (pollBusy) {
-      setTimeout(poll, 1000);
+      schedulePoll(1000);
       return;
     }
     pollBusy = true;
@@ -1076,11 +1084,20 @@ function startMaxPolling(db, helpers) {
       pollBusy = false;
     }
 
-    setTimeout(poll, 500);
+    schedulePoll(500);
   }
 
   console.log('MAX bot polling started (tenant tokens from DB)');
   poll();
+  return {
+    stop() {
+      stopped = true;
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+    },
+  };
 }
 
 module.exports = { startMaxPolling };

@@ -3436,10 +3436,10 @@ body.page-cash #cashJournalList.orders-list .order-client-phone-text{
 }
 
 body.page-courier-screen .orders-list .order-row.js-order{
-  grid-template-columns:70px 58px minmax(0,1fr) minmax(320px,360px);
+  grid-template-columns:70px minmax(0,1fr) minmax(320px,360px);
   grid-template-areas:
-    "id indicators client controls"
-    "id indicators address controls";
+    "id client controls"
+    "id address controls";
   gap:8px 10px;
   align-items:start;
 }
@@ -3795,6 +3795,31 @@ body.page-courier-screen .orders-list .order-courier-action-btn--pickup[aria-dis
 .order-row.shared-order-summary-row .order-col.order-stage .order-stage-btn.is-static .order-stage-btn-icon-next,
 .order-row.shared-order-summary-row .order-col.order-stage .order-stage-btn.is-static .order-stage-btn-panel-next{
   display:none;
+}
+.order-row.shared-order-summary-row .order-col.order-stage .order-stage-btn.order-stage-btn--schedule{
+  cursor:default;
+}
+.order-row.shared-order-summary-row .order-col.order-stage .order-stage-btn.order-stage-btn--schedule:hover{
+  background:var(--color-surface);
+  border-color:rgba(15,23,42,.08);
+  box-shadow:none;
+  transform:none;
+}
+.order-row.shared-order-summary-row .order-col.order-stage .order-stage-btn.order-stage-btn--schedule:disabled{
+  opacity:1;
+}
+.order-row.shared-order-summary-row .order-col.order-stage .order-stage-btn.order-stage-btn--schedule .order-stage-btn-content{
+  width:auto;
+  min-width:0;
+  flex:1 1 auto;
+}
+.order-row.shared-order-summary-row .order-col.order-stage .order-stage-btn.order-stage-btn--schedule .order-stage-btn-panel{
+  padding:0 12px 0 4px;
+}
+.order-row.shared-order-summary-row .order-col.order-stage .order-stage-btn.order-stage-btn--schedule .order-stage-btn-current{
+  font-size:13px;
+  font-weight:800;
+  color:var(--color-text);
 }
 @media (hover:hover) and (pointer:fine){
   .order-row.shared-order-summary-row .order-col.order-stage .order-stage-btn:not(.is-static):hover .order-stage-btn-icon-current,
@@ -5237,6 +5262,13 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
   background:transparent;
   gap:0;
 }
+#settingsSystemMaxBotPanel{
+  border:none;
+  border-radius:0;
+  padding:0;
+  background:transparent;
+  gap:0;
+}
 #settingsSystemMapPanel{
   border:none;
   border-radius:0;
@@ -5295,11 +5327,24 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
   scrollbar-width:none;
   -ms-overflow-style:none;
 }
+#settingsSystemMaxBotPanel .settings-panel-scroll{
+  padding:0;
+  scrollbar-width:none;
+  -ms-overflow-style:none;
+}
 #settingsSystemTelegramBotPanel .settings-panel-scroll::-webkit-scrollbar{
   width:0;
   height:0;
 }
+#settingsSystemMaxBotPanel .settings-panel-scroll::-webkit-scrollbar{
+  width:0;
+  height:0;
+}
 #settingsSystemTelegramBotPanel > .panel-footer{
+  padding:0;
+  border-top:none;
+}
+#settingsSystemMaxBotPanel > .panel-footer{
   padding:0;
   border-top:none;
 }
@@ -7933,24 +7978,47 @@ body.page-cash #clientAddresses .shop-address-actions{
     height:72px;
   }
 
+  body.page-orders .main-container,
   body.page-courier-screen .main-container{
     min-height:calc(100dvh - var(--header-height));
     padding:0;
     background:transparent;
   }
 
+  body.page-orders .page-col-center,
   body.page-courier-screen .page-col-center{
     min-height:calc(100dvh - var(--header-height));
-    padding-bottom:var(--admin-mobile-shell-courier-reserve);
     background:var(--color-surface);
     border-radius:22px 22px 0 0;
     overflow:visible;
   }
 
+  body.page-orders .page-col-center{
+    padding-bottom:var(--admin-mobile-shell-reserve);
+    width:100%;
+    max-width:100%;
+    align-items:stretch;
+  }
+
+  body.page-courier-screen .page-col-center{
+    padding-bottom:var(--admin-mobile-shell-courier-reserve);
+  }
+
+  body.page-orders #ordersCenterPane > .center-stack,
   body.page-courier-screen #ordersCenterPane > .center-stack{
     gap:0;
   }
 
+  body.page-orders #ordersCenterPane,
+  body.page-orders #ordersCenterPane > .center-stack,
+  body.page-orders #ordersCenterPane > .center-stack > .panel{
+    width:100%;
+    max-width:100%;
+    min-width:0;
+    align-self:stretch;
+  }
+
+  body.page-orders #ordersCenterPane > .center-stack > .orders-center-panel,
   body.page-courier-screen #ordersCenterPane > .center-stack > .orders-center-panel{
     border:none;
     border-radius:0;
@@ -7959,28 +8027,55 @@ body.page-cash #clientAddresses .shop-address-actions{
     overflow:visible;
   }
 
+  body.page-orders #ordersCenterPane,
+  body.page-orders #ordersCenterPane > .center-stack,
+  body.page-orders #ordersCenterPane > .center-stack > .orders-center-panel > .panel-body,
   body.page-courier-screen #ordersCenterPane,
   body.page-courier-screen #ordersCenterPane > .center-stack,
   body.page-courier-screen #ordersCenterPane > .center-stack > .orders-center-panel > .panel-body{
     background:transparent;
   }
 
+  body.page-orders #ordersCenterPane > .center-stack > .orders-center-panel > .panel-body::after{
+    height:var(--admin-mobile-shell-reserve);
+  }
+
   body.page-courier-screen #ordersCenterPane > .center-stack > .orders-center-panel > .panel-body::after{
     height:var(--admin-mobile-shell-courier-reserve);
   }
 
+  body.page-orders #ordersNotifyBtn,
+  body.page-orders #ordersAddBtn{
+    display:none;
+  }
+
+  body.page-orders .orders-list,
   body.page-courier-screen .orders-list{
     overflow-x:clip;
   }
 
-  body.page-courier-screen .orders-list .order-row.js-order{
-    grid-template-columns:70px minmax(0,1fr) auto;
+  body.page-orders .orders-list .order-row.js-order{
+    grid-template-columns:70px minmax(0,1fr);
     grid-template-areas:
-      "id client indicators"
-      "id address address"
-      "controls controls controls";
+      "id client"
+      "id address"
+      "controls controls";
     gap:8px 10px;
     align-items:start;
+  }
+
+  body.page-courier-screen .orders-list .order-row.js-order{
+    grid-template-columns:70px minmax(0,1fr);
+    grid-template-areas:
+      "id client"
+      "id address"
+      "controls controls";
+    gap:8px 10px;
+    align-items:start;
+  }
+
+  body.page-orders .orders-list .order-col.order-indicators{
+    display:none;
   }
 
   body.page-courier-screen .orders-list .order-col.order-indicators{
@@ -7991,6 +8086,9 @@ body.page-cash #clientAddresses .shop-address-actions{
     min-width:0;
   }
 
+  body.page-orders .orders-list .order-col.order-client,
+  body.page-orders .orders-list .order-col.order-address,
+  body.page-orders .orders-list .order-col.order-orders-mobile-controls,
   body.page-courier-screen .orders-list .order-col.order-client,
   body.page-courier-screen .orders-list .order-col.order-address,
   body.page-courier-screen .orders-list .order-col.order-courier-controls{
@@ -7998,14 +8096,57 @@ body.page-cash #clientAddresses .shop-address-actions{
     width:100%;
   }
 
+  body.page-orders .orders-list .order-col.order-orders-mobile-controls{
+    grid-area:controls;
+    min-width:0;
+    display:grid;
+    gap:8px;
+    align-content:start;
+  }
+
+  body.page-orders .orders-list .order-orders-mobile-status-row{
+    display:grid;
+    grid-template-columns:repeat(2, minmax(0,1fr));
+    grid-template-areas:"stage total";
+    gap:8px;
+    align-items:stretch;
+  }
+
+  body.page-orders .orders-list .order-orders-mobile-status-row .order-stage,
+  body.page-orders .orders-list .order-orders-mobile-status-row .order-total{
+    width:100%;
+    min-width:0;
+    align-self:stretch;
+  }
+
+  body.page-orders .orders-list .order-orders-mobile-status-row .order-stage{
+    justify-content:flex-start;
+  }
+
+  body.page-orders .orders-list .order-orders-mobile-status-row .order-total{
+    justify-content:flex-end;
+  }
+
+  body.page-orders .orders-list .order-orders-mobile-status-row .order-stage-btn,
+  body.page-orders .orders-list .order-orders-mobile-status-row .order-payment-btn{
+    width:100%;
+    min-width:0;
+  }
+
   body.page-courier-screen .orders-list .order-col.order-courier-controls{
     grid-area:controls;
   }
 
+  body.page-orders .orders-list .order-client-phone,
   body.page-courier-screen .orders-list .order-client-phone{
     grid-template-columns:16px minmax(0,1fr);
   }
 
+  body.page-orders .orders-list .order-client-name-text,
+  body.page-orders .orders-list .order-client-phone-text,
+  body.page-orders .orders-list .order-client-telegram-text,
+  body.page-orders .orders-list .order-address-line,
+  body.page-orders .orders-list .order-address-comment,
   body.page-courier-screen .orders-list .order-client-name-text,
   body.page-courier-screen .orders-list .order-client-phone-text,
   body.page-courier-screen .orders-list .order-client-telegram-text,
@@ -8017,6 +8158,8 @@ body.page-cash #clientAddresses .shop-address-actions{
     overflow-wrap:anywhere;
   }
 
+  body.page-orders .orders-list .order-stage-btn,
+  body.page-orders .orders-list .order-payment-btn,
   body.page-courier-screen .orders-list .order-stage-btn,
   body.page-courier-screen .orders-list .order-payment-btn,
   body.page-courier-screen .orders-list .order-courier-action-btn{
@@ -8024,10 +8167,13 @@ body.page-cash #clientAddresses .shop-address-actions{
     min-width:0;
   }
 
+  body.page-orders .orders-list .order-payment-btn-content,
   body.page-courier-screen .orders-list .order-payment-btn-content{
     min-width:0;
   }
 
+  body.page-orders .orders-list .order-payment-btn-total,
+  body.page-orders .orders-list .order-payment-btn-status,
   body.page-courier-screen .orders-list .order-payment-btn-total,
   body.page-courier-screen .orders-list .order-payment-btn-status{
     white-space:normal;
