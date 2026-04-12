@@ -18871,6 +18871,8 @@ body.page-chat .panel{
   font-weight:800;
   line-height:1.2;
   color:var(--color-text);
+  min-width:0;
+  flex:1 1 auto;
 }
 
 .chat-message-order-card__status{
@@ -18879,6 +18881,8 @@ body.page-chat .panel{
   font-weight:700;
   color:var(--color-primary);
   text-align:right;
+  white-space:nowrap;
+  flex:0 0 auto;
 }
 
 .chat-message-order-card__total{

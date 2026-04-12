@@ -392,6 +392,7 @@
   let feedEdgeSpringPinRaf = 0;
   let feedEdgeSpringTouchState = null;
   let mobileKeyboardTrackedFeedBottomDistance = null;
+  let mobileKeyboardFocusSessionActive = false;
   let sharedPullInFlight = false;
   let sharedHistoryHasMore = false;
   let sharedHistoryNextBeforeId = null;
@@ -6742,15 +6743,57 @@
     return true;
   }
 
-  function guardIOSNativeTextFocus(event) {
-    const node = event && event.currentTarget ? event.currentTarget : null;
-    if (!shouldGuardIOSNativeTextFocus(node)) return;
-    event.preventDefault();
+  function isChatIosKeyboardHiddenWithFocusedInput(node) {
+    if (!node || typeof node.focus !== "function") return false;
+    if (!isIOSMobileBrowser() || !shouldUseNativeMobileEmojiKeyboard()) return false;
+    if (!overlay.classList.contains("is-open")) return false;
+    if (document.activeElement !== node) return false;
+    if (mobileKeyboardFocusSessionActive !== true) return false;
+    if (Math.max(0, Number(overlay.dataset.keyboardInset || 0)) > 0) return false;
+    return !isMobileKeyboardViewportCompressed(getCurrentMobileViewportBottom());
+  }
+
+  function primeIosNativeTextFocus(node, options) {
+    const opts = options || {};
+    if (!node || typeof node.focus !== "function") return false;
+    mobileKeyboardFocusSessionActive = isIOSMobileBrowser();
     armLockedPageScrollRepair(900);
     captureMobileKeyboardViewportBaseBottom({ force: true });
+    rememberMobileKeyboardTrackedFeedBottomDistance({ force: true });
+    restoreLockedPageScrollForChat();
+    if (opts.blurFirst === true) {
+      try {
+        node.blur();
+      } catch {}
+    }
     focusChatTextField(node);
+    const schedule = typeof window.requestAnimationFrame === "function"
+      ? window.requestAnimationFrame.bind(window)
+      : function (cb) { return window.setTimeout(cb, 16); };
+    schedule(function () {
+      focusChatTextField(node);
+    });
     scheduleMobileKeyboardInsetSyncBurst();
     scheduleLockedPageScrollRepair();
+    return true;
+  }
+
+  function guardIOSNativeTextFocus(event) {
+    const node = event && event.currentTarget ? event.currentTarget : null;
+    if (isChatIosKeyboardHiddenWithFocusedInput(node)) {
+      event.preventDefault();
+      primeIosNativeTextFocus(node, { blurFirst: true });
+      return;
+    }
+    if (!shouldGuardIOSNativeTextFocus(node)) return;
+    event.preventDefault();
+    primeIosNativeTextFocus(node);
+  }
+
+  function repairIosTextFocusOnClick(event) {
+    const node = event && event.currentTarget ? event.currentTarget : null;
+    if (!isChatIosKeyboardHiddenWithFocusedInput(node)) return;
+    primeIosNativeTextFocus(node, { blurFirst: true });
   }
 
   function lockBackgroundPageScrollForChat() {
@@ -10912,6 +10955,28 @@
     }
   }
 
+  function handleChatTextInputFocus() {
+    if (!overlay.classList.contains("is-open")) return;
+    mobileKeyboardFocusSessionActive = isIOSMobileBrowser();
+    armLockedPageScrollRepair(900);
+    restoreLockedPageScrollForChat();
+    captureMobileKeyboardViewportBaseBottom({ force: true });
+    rememberMobileKeyboardTrackedFeedBottomDistance({ force: true });
+    scheduleMobileKeyboardInsetSyncBurst();
+    scheduleLockedPageScrollRepair();
+    scheduleAndroidFocusedComposerLift();
+  }
+
+  function handleChatTextInputBlur() {
+    disarmLockedPageScrollRepair();
+    scheduleMobileKeyboardInsetSyncBurst();
+    window.setTimeout(function () {
+      if (hasFocusedChatTextInput()) return;
+      mobileKeyboardFocusSessionActive = false;
+      scheduleMobileKeyboardInsetSync();
+    }, 40);
+  }
+
   function bindMobileKeyboardViewportSync() {
     if (mobileKeyboardViewportSyncBound) return;
     mobileKeyboardViewportSyncBound = true;
@@ -10952,6 +11017,7 @@
     mobileKeyboardLastViewportBottom = 0;
     mobileKeyboardViewportVisualShift = 0;
     mobileKeyboardTrackedFeedBottomDistance = null;
+    mobileKeyboardFocusSessionActive = false;
     setMobileFooterOverlayHeight(0);
     setMobileThreadBottomInset(0);
     setScrollDownComposerExtraOffset(0);
@@ -12247,21 +12313,11 @@
       schedulePersistAttachPreviewDraft();
     });
     attachPreviewCaption.addEventListener("touchend", guardIOSNativeTextFocus, { passive: false });
+    attachPreviewCaption.addEventListener("click", repairIosTextFocusOnClick);
 
-    attachPreviewCaption.addEventListener("focus", function () {
-      armLockedPageScrollRepair(900);
-      restoreLockedPageScrollForChat();
-      captureMobileKeyboardViewportBaseBottom({ force: true });
-      rememberMobileKeyboardTrackedFeedBottomDistance({ force: true });
-      scheduleMobileKeyboardInsetSyncBurst();
-      scheduleLockedPageScrollRepair();
-      scheduleAndroidFocusedComposerLift();
-    });
+    attachPreviewCaption.addEventListener("focus", handleChatTextInputFocus);
 
-    attachPreviewCaption.addEventListener("blur", function () {
-      disarmLockedPageScrollRepair();
-      scheduleMobileKeyboardInsetSyncBurst();
-    });
+    attachPreviewCaption.addEventListener("blur", handleChatTextInputBlur);
 
     attachPreviewOverlay.addEventListener("click", function (event) {
       if (event.target !== attachPreviewOverlay) return;
@@ -12714,23 +12770,17 @@
     persistComposerDraft(getActiveChatClientId());
   });
   input.addEventListener("touchend", guardIOSNativeTextFocus, { passive: false });
+  input.addEventListener("click", repairIosTextFocusOnClick);
 
   input.addEventListener("focus", function () {
-    armLockedPageScrollRepair(900);
-    restoreLockedPageScrollForChat();
-    captureMobileKeyboardViewportBaseBottom({ force: true });
-    rememberMobileKeyboardTrackedFeedBottomDistance({ force: true });
-    scheduleMobileKeyboardInsetSyncBurst();
-    scheduleLockedPageScrollRepair();
-    scheduleAndroidFocusedComposerLift();
+    handleChatTextInputFocus();
     syncComposerSendButtonFocusLock();
   });
 
   input.addEventListener("blur", function () {
     persistComposerDraft(getActiveChatClientId());
-    disarmLockedPageScrollRepair();
     scheduleLocalTypingStop(CHAT_TYPING_BLUR_STOP_MS);
-    scheduleMobileKeyboardInsetSyncBurst();
+    handleChatTextInputBlur();
     syncComposerSendButtonFocusLock();
   });
 

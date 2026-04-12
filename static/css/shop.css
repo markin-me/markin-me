@@ -8556,6 +8556,8 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
   font-size: 15px;
   font-weight: 800;
   line-height: 1.2;
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .shop-company-chat-order-card__status{
@@ -8563,6 +8565,8 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
   color: var(--shop-buy);
   font-weight: 700;
   text-align: right;
+  white-space: nowrap;
+  flex: 0 0 auto;
 }
 
 .shop-company-chat-order-card__meta{

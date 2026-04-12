@@ -10939,7 +10939,11 @@
       btn.style.removeProperty("display");
     }
     const shouldShow = forcedVisible || badgeCount > 0 || hiddenDistance >= CHAT_SCROLL_DOWN_SHOW_DISTANCE_PX;
+    const wasHidden = btn.classList.contains("hidden");
     btn.classList.toggle("hidden", !shouldShow);
+    if (shouldShow && wasHidden) {
+      requestAnimationFrame(syncAdminMobileChatScrollDownPosition);
+    }
 
     const badge = dom.center.scrollDownBadge;
     if (!badge) return;
@@ -16230,9 +16234,10 @@
     initOrderHeaderLiveSync();
     if (dom.center.messagesWrap && dom.center.messagesWrap.dataset.scrollDownBound !== "1") {
       dom.center.messagesWrap.dataset.scrollDownBound = "1";
+      let scheduleTouchGestureActiveRelease = () => {};
       if (dom.center.messagesWrap.dataset.touchGestureTrackBound !== "1") {
         dom.center.messagesWrap.dataset.touchGestureTrackBound = "1";
-        const scheduleTouchGestureActiveRelease = () => {
+        scheduleTouchGestureActiveRelease = () => {
           if (adminChatThreadTouchGestureReleaseTimer) {
             window.clearTimeout(adminChatThreadTouchGestureReleaseTimer);
           }
