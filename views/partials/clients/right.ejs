@@ -1039,17 +1039,25 @@
 
   <!-- Footer для редактирования скидки -->
   <div class="panel-footer hidden" id="discountEditorFooter">
-    <button type="button" class="btn btn-danger" id="discountDeleteBtn">
-      <i class="fas fa-trash"></i>
-    </button>
-    <button type="button" class="btn btn-primary" id="discountSaveBtn">Сохранить</button>
+    <div class="product-footer-actions">
+      <div class="product-footer-edit-mode">
+        <button class="product-footer-btn product-footer-delete" type="button" id="discountDeleteBtn" title="Удалить" aria-label="Удалить">
+          <i class="fas fa-trash"></i>
+        </button>
+        <button class="product-footer-btn product-footer-save" type="button" id="discountSaveBtn">Сохранить</button>
+      </div>
+    </div>
   </div>
 
   <!-- Footer для просмотра скидки -->
   <div class="panel-footer hidden" id="discountInfoFooter">
     <div class="product-footer-actions">
       <div class="product-footer-view">
+        <button class="product-footer-btn product-footer-delete" type="button" id="discountInfoDeleteBtn" title="Удалить" aria-label="Удалить">
+          <i class="fas fa-trash"></i>
+        </button>
         <button class="product-footer-btn product-footer-edit" type="button" id="discountInfoEditBtn">Редактировать</button>
+        <button class="product-footer-btn product-footer-save hidden" type="button" id="discountInfoRestoreBtn">Восстановить</button>
       </div>
     </div>
   </div>

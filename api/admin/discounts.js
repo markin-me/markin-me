@@ -5,7 +5,7 @@ const DISCOUNT_COLUMNS = `
   apply_to, min_order_amount, max_discount_amount,
   starts_at, ends_at, schedule_days, schedule_time_start, schedule_time_end,
   usage_limit, usage_per_customer, usage_count,
-  priority, is_stackable, is_active, hide_in_benefits,
+  priority, is_stackable, is_active, hide_in_benefits, is_deleted, deleted_at,
   activation_mode, reward_type, promo_code_mode, unique_code_usage_limit,
   mechanic_type, mechanic_config_json,
   created_at, updated_at
@@ -61,7 +61,9 @@ const DISCOUNT_MUTATION_ERROR_CODES = new Set([
   'INVALID_PROGRESS_SCOPE_ITEMS',
   'LOYALTY_REWARD_PRODUCTS_REQUIRED',
   'LOYALTY_PROMO_SOURCE_REQUIRED',
+  'INVALID_LOYALTY_PROMO_SOURCE',
   'INVALID_ISSUE_MODE',
+  'DISCOUNT_DELETED',
 ]);
 
 function toText(value) {
@@ -133,6 +135,7 @@ function normalizeDiscountRow(row) {
   if (!row || typeof row !== 'object') return row;
   const normalized = { ...row };
   normalized.hide_in_benefits = Number(normalized.hide_in_benefits || 0) === 1;
+  normalized.is_deleted = Number(normalized.is_deleted || 0) === 1;
   if (typeof normalized.schedule_days === 'string') {
     try {
       normalized.schedule_days = JSON.parse(normalized.schedule_days);
@@ -603,9 +606,18 @@ function normalizeLoyaltyDiscountReward(source = {}, fallback = {}) {
 function normalizeLoyaltyPromoSource(source = {}, fallback = {}) {
   const src = parseJsonObject(source, {});
   const base = parseJsonObject(fallback, {});
+  const sourcePromoCodeId = toIntOrNull(src.source_promo_code_id ?? base.source_promo_code_id);
+  const sourceDiscountId = toIntOrNull(src.source_discount_id ?? base.source_discount_id);
+  const requestedCodeMode = toText(src.source_code_mode ?? base.source_code_mode).toLowerCase();
+  const sourceCodeMode = requestedCodeMode === 'unique'
+    ? 'unique'
+    : requestedCodeMode === 'shared'
+      ? 'shared'
+      : (sourcePromoCodeId > 0 ? 'shared' : (sourceDiscountId > 0 ? 'unique' : 'shared'));
   return {
-    source_promo_code_id: toIntOrNull(src.source_promo_code_id ?? base.source_promo_code_id),
-    source_discount_id: toIntOrNull(src.source_discount_id ?? base.source_discount_id),
+    source_code_mode: sourceCodeMode,
+    source_promo_code_id: sourcePromoCodeId,
+    source_discount_id: sourceDiscountId,
     source_code: normalizePromoCode(src.source_code ?? base.source_code),
   };
 }
@@ -751,7 +763,7 @@ async function assertThresholdRewardSourcesExist(conn, tenantId, storeId, mechan
       `SELECT id, title, discount_type, discount_value, apply_to,
               is_active, activation_mode, mechanic_type, mechanic_config_json
          FROM mkt_discounts
-        WHERE tenant_id = ? AND store_id = ? AND id IN (?)`,
+        WHERE tenant_id = ? AND store_id = ? AND is_deleted = 0 AND id IN (?)`,
       [tenantId, storeId, discountIds]
     );
 
@@ -793,6 +805,7 @@ async function assertThresholdRewardSourcesExist(conn, tenantId, storeId, mechan
            ON d.id = pc.discount_id
           AND d.tenant_id = pc.tenant_id
           AND d.store_id = pc.store_id
+          AND d.is_deleted = 0
         WHERE pc.tenant_id = ? AND pc.store_id = ? AND pc.id IN (?)`,
       [tenantId, storeId, promoCodeIds]
     );
@@ -813,6 +826,90 @@ async function assertThresholdRewardSourcesExist(conn, tenantId, storeId, mechan
     if (promoCodeIds.some((id) => !validPromoCodeIds.has(id))) {
       throw createValidationError('INVALID_THRESHOLD_PROMO_SOURCE');
     }
+  }
+}
+
+async function assertLoyaltyProgressPromoSourceExists(conn, tenantId, storeId, mechanic) {
+  const rewardKind = normalizeLoyaltyRewardKind(mechanic?.reward_kind, 'gift');
+  if (rewardKind !== 'promo_code') return;
+
+  const promoSource = normalizeLoyaltyPromoSource(mechanic?.reward?.promo_code, {});
+  const sourceCodeMode = toText(promoSource?.source_code_mode).toLowerCase() === 'unique' ? 'unique' : 'shared';
+
+  if (sourceCodeMode === 'unique') {
+    const sourceDiscountId = Number(promoSource?.source_discount_id || 0);
+    if (!(sourceDiscountId > 0)) {
+      throw createValidationError('LOYALTY_PROMO_SOURCE_REQUIRED');
+    }
+
+    const [rows] = await conn.query(
+      `SELECT d.id,
+              d.mechanic_type,
+              d.mechanic_config_json,
+              d.promo_code_mode,
+              COUNT(pc.id) AS unique_codes_count
+         FROM mkt_discounts d
+         LEFT JOIN mkt_discount_promo_codes pc
+           ON pc.discount_id = d.id
+          AND pc.tenant_id = d.tenant_id
+          AND pc.store_id = d.store_id
+          AND pc.code_mode = 'unique'
+        WHERE d.tenant_id = ?
+          AND d.store_id = ?
+          AND d.is_deleted = 0
+          AND d.id = ?
+        GROUP BY d.id, d.mechanic_type, d.mechanic_config_json, d.promo_code_mode`,
+      [tenantId, storeId, sourceDiscountId]
+    );
+    const row = Array.isArray(rows) && rows.length ? rows[0] : null;
+    if (!row) {
+      throw createValidationError('INVALID_LOYALTY_PROMO_SOURCE');
+    }
+    const linkedMechanicType = normalizeMechanicType(row.mechanic_type, 'simple_discount');
+    const linkedMechanic = normalizeMechanicFromDiscount(row);
+    if (
+      toText(row?.promo_code_mode).toLowerCase() !== 'unique'
+      || !isPromoSimpleDiscountMechanic(linkedMechanicType, linkedMechanic)
+      || !(Number(row?.unique_codes_count || 0) > 0)
+    ) {
+      throw createValidationError('INVALID_LOYALTY_PROMO_SOURCE');
+    }
+    return;
+  }
+
+  const sourcePromoCodeId = Number(promoSource?.source_promo_code_id || 0);
+  if (!(sourcePromoCodeId > 0)) {
+    throw createValidationError('LOYALTY_PROMO_SOURCE_REQUIRED');
+  }
+
+  const [rows] = await conn.query(
+    `SELECT pc.id AS promo_code_id,
+            pc.code_mode,
+            d.mechanic_type,
+            d.mechanic_config_json
+       FROM mkt_discount_promo_codes pc
+       INNER JOIN mkt_discounts d
+         ON d.id = pc.discount_id
+        AND d.tenant_id = pc.tenant_id
+        AND d.store_id = pc.store_id
+        AND d.is_deleted = 0
+      WHERE pc.tenant_id = ?
+        AND pc.store_id = ?
+        AND pc.id = ?
+      LIMIT 1`,
+    [tenantId, storeId, sourcePromoCodeId]
+  );
+  const row = Array.isArray(rows) && rows.length ? rows[0] : null;
+  if (!row) {
+    throw createValidationError('INVALID_LOYALTY_PROMO_SOURCE');
+  }
+  const linkedMechanicType = normalizeMechanicType(row.mechanic_type, 'simple_discount');
+  const linkedMechanic = normalizeMechanicFromDiscount(row);
+  if (
+    toText(row?.code_mode).toLowerCase() !== 'shared'
+    || !isPromoSimpleDiscountMechanic(linkedMechanicType, linkedMechanic)
+  ) {
+    throw createValidationError('INVALID_LOYALTY_PROMO_SOURCE');
   }
 }
 
@@ -1058,7 +1155,11 @@ function assertMechanicIsValid(mechanicType, mechanic, { products = [] } = {}) {
     }
 
     if (rewardKind === 'promo_code') {
-      if (!(Number(mechanic?.reward?.promo_code?.source_promo_code_id) > 0) || !toText(mechanic?.reward?.promo_code?.source_code)) {
+      const promoSource = normalizeLoyaltyPromoSource(mechanic?.reward?.promo_code, {});
+      if (
+        (promoSource?.source_code_mode === 'unique' && !(Number(promoSource?.source_discount_id || 0) > 0))
+        || (promoSource?.source_code_mode !== 'unique' && !(Number(promoSource?.source_promo_code_id || 0) > 0))
+      ) {
         throw createValidationError('LOYALTY_PROMO_SOURCE_REQUIRED');
       }
       return;
@@ -1972,6 +2073,8 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
   let ensureDiscountProductConfigColumnPromise = null;
   let discountHideInBenefitsColumnReady = false;
   let ensureDiscountHideInBenefitsColumnPromise = null;
+  let discountDeletedColumnsReady = false;
+  let ensureDiscountDeletedColumnsPromise = null;
 
   async function ensureDiscountHideInBenefitsColumn() {
     if (discountHideInBenefitsColumnReady) return true;
@@ -2037,6 +2140,47 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
     return ensureDiscountProductConfigColumnPromise;
   }
 
+  async function ensureDiscountDeletedColumns() {
+    if (discountDeletedColumnsReady) return true;
+    if (ensureDiscountDeletedColumnsPromise) return ensureDiscountDeletedColumnsPromise;
+
+    ensureDiscountDeletedColumnsPromise = (async () => {
+      const [columnRows] = await db.query('SHOW COLUMNS FROM mkt_discounts');
+      const existing = new Set((Array.isArray(columnRows) ? columnRows : []).map((row) => String(row?.Field || '').trim()).filter(Boolean));
+      if (!existing.has('is_deleted')) {
+        try {
+          await db.query('ALTER TABLE mkt_discounts ADD COLUMN `is_deleted` TINYINT(1) NOT NULL DEFAULT 0 AFTER `hide_in_benefits`');
+          existing.add('is_deleted');
+        } catch (err) {
+          if (String(err?.code || '') !== 'ER_DUP_FIELDNAME') throw err;
+          existing.add('is_deleted');
+        }
+      }
+      if (!existing.has('deleted_at')) {
+        try {
+          await db.query('ALTER TABLE mkt_discounts ADD COLUMN `deleted_at` DATETIME NULL AFTER `is_deleted`');
+          existing.add('deleted_at');
+        } catch (err) {
+          if (String(err?.code || '') !== 'ER_DUP_FIELDNAME') throw err;
+          existing.add('deleted_at');
+        }
+      }
+      discountDeletedColumnsReady = existing.has('is_deleted') && existing.has('deleted_at');
+      return discountDeletedColumnsReady;
+    })()
+      .catch((err) => {
+        ensureDiscountDeletedColumnsPromise = null;
+        throw err;
+      })
+      .finally(() => {
+        if (discountDeletedColumnsReady) {
+          ensureDiscountDeletedColumnsPromise = null;
+        }
+      });
+
+    return ensureDiscountDeletedColumnsPromise;
+  }
+
   /**
    * GET /api/admin/discounts
    * Получить список всех скидок
@@ -2045,6 +2189,7 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
     try {
       await ensureDiscountHideInBenefitsColumn();
       await ensureDiscountProductConfigColumn();
+      await ensureDiscountDeletedColumns();
       const tenantId = req.tenantId || 1;
       const storeId = req.storeId || 1;
 
@@ -2052,7 +2197,7 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
         `SELECT ${DISCOUNT_COLUMNS}
          FROM mkt_discounts
          WHERE tenant_id = ? AND store_id = ?
-         ORDER BY priority DESC, created_at DESC`,
+         ORDER BY is_deleted ASC, priority DESC, created_at DESC`,
         [tenantId, storeId]
       );
 
@@ -2141,6 +2286,7 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
    */
   router.get('/stats', async (req, res) => {
     try {
+      await ensureDiscountDeletedColumns();
       const tenantId = req.tenantId || 1;
       const storeId = req.storeId || 1;
 
@@ -2151,7 +2297,7 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
           COUNT(u.id) AS usage_records
         FROM mkt_discounts d
         LEFT JOIN mkt_discount_usage u ON u.discount_id = d.id
-        WHERE d.tenant_id = ? AND d.store_id = ?
+        WHERE d.tenant_id = ? AND d.store_id = ? AND d.is_deleted = 0
         GROUP BY d.id
         ORDER BY total_discount_amount DESC`,
         [tenantId, storeId]
@@ -2166,6 +2312,7 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
 
   router.get('/shared-promo-sources', async (req, res) => {
     try {
+      await ensureDiscountDeletedColumns();
       const tenantId = req.tenantId || 1;
       const storeId = req.storeId || 1;
 
@@ -2188,7 +2335,7 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
           AND pc.tenant_id = d.tenant_id
           AND pc.store_id = d.store_id
           AND pc.code_mode = 'shared'
-         WHERE d.tenant_id = ? AND d.store_id = ?
+         WHERE d.tenant_id = ? AND d.store_id = ? AND d.is_deleted = 0
          ORDER BY d.is_active DESC, d.title ASC, d.id DESC`,
         [tenantId, storeId]
       );
@@ -2201,6 +2348,7 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
             return null;
           }
           return {
+            source_code_mode: 'shared',
             source_discount_id: Number(row.discount_id || 0),
             source_discount_title: toText(row.title) || `Акция #${row.discount_id}`,
             source_promo_code_id: Number(row.promo_code_id || 0),
@@ -2220,8 +2368,148 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
     }
   });
 
+  router.get('/loyalty-promo-sources', async (req, res) => {
+    try {
+      await ensureDiscountDeletedColumns();
+      const tenantId = req.tenantId || 1;
+      const storeId = req.storeId || 1;
+
+      const [sharedRowsResult, uniqueRowsResult] = await Promise.all([
+        db.query(
+          `SELECT d.id AS discount_id,
+                  d.title,
+                  d.is_active,
+                  d.mechanic_type,
+                  d.mechanic_config_json,
+                  d.activation_mode,
+                  d.promo_code_mode,
+                  pc.id AS promo_code_id,
+                  pc.code,
+                  pc.usage_limit,
+                  pc.usage_count,
+                  pc.is_active AS promo_code_is_active
+             FROM mkt_discounts d
+             INNER JOIN mkt_discount_promo_codes pc
+               ON pc.discount_id = d.id
+              AND pc.tenant_id = d.tenant_id
+              AND pc.store_id = d.store_id
+              AND pc.code_mode = 'shared'
+            WHERE d.tenant_id = ? AND d.store_id = ? AND d.is_deleted = 0
+            ORDER BY d.is_active DESC, d.title ASC, d.id DESC`,
+          [tenantId, storeId]
+        ),
+        db.query(
+          `SELECT d.id AS discount_id,
+                  d.title,
+                  d.is_active,
+                  d.mechanic_type,
+                  d.mechanic_config_json,
+                  d.activation_mode,
+                  d.promo_code_mode,
+                  d.unique_code_usage_limit,
+                  MIN(pc.id) AS sample_promo_code_id,
+                  MIN(pc.code) AS sample_code,
+                  COUNT(pc.id) AS total_codes_count,
+                  SUM(CASE WHEN pc.is_active = 1 THEN 1 ELSE 0 END) AS active_codes_count,
+                  SUM(CASE WHEN pc.usage_count > 0 THEN 1 ELSE 0 END) AS used_codes_count,
+                  SUM(CASE WHEN pc.assigned_customer_id IS NOT NULL AND pc.assigned_customer_id <> 0 THEN 1 ELSE 0 END) AS assigned_codes_count,
+                  SUM(
+                    CASE
+                      WHEN pc.is_active = 1
+                        AND (pc.assigned_customer_id IS NULL OR pc.assigned_customer_id = 0)
+                        AND (pc.usage_limit IS NULL OR pc.usage_limit = 0 OR pc.usage_count < pc.usage_limit)
+                      THEN 1
+                      ELSE 0
+                    END
+                  ) AS available_codes_count
+             FROM mkt_discounts d
+             INNER JOIN mkt_discount_promo_codes pc
+               ON pc.discount_id = d.id
+              AND pc.tenant_id = d.tenant_id
+              AND pc.store_id = d.store_id
+              AND pc.code_mode = 'unique'
+            WHERE d.tenant_id = ? AND d.store_id = ? AND d.is_deleted = 0
+            GROUP BY d.id,
+                     d.title,
+                     d.is_active,
+                     d.mechanic_type,
+                     d.mechanic_config_json,
+                     d.activation_mode,
+                     d.promo_code_mode,
+                     d.unique_code_usage_limit
+            ORDER BY d.is_active DESC, d.title ASC, d.id DESC`,
+          [tenantId, storeId]
+        ),
+      ]);
+
+      const sharedRows = Array.isArray(sharedRowsResult?.[0]) ? sharedRowsResult[0] : [];
+      const uniqueRows = Array.isArray(uniqueRowsResult?.[0]) ? uniqueRowsResult[0] : [];
+
+      const sharedSources = sharedRows
+        .map((row) => {
+          const mechanicType = normalizeMechanicType(row.mechanic_type, 'simple_discount');
+          const mechanic = normalizeMechanicFromDiscount(row);
+          if (!isPromoSimpleDiscountMechanic(mechanicType, mechanic)) {
+            return null;
+          }
+          return {
+            source_code_mode: 'shared',
+            source_discount_id: Number(row.discount_id || 0),
+            source_discount_title: toText(row.title) || `Акция #${row.discount_id}`,
+            source_promo_code_id: Number(row.promo_code_id || 0),
+            source_code: toText(row.code) || null,
+            usage_limit: row.usage_limit == null ? null : Number(row.usage_limit || 0),
+            usage_count: Number(row.usage_count || 0),
+            is_active: Number(row.is_active || 0) === 1,
+            promo_code_is_active: Number(row.promo_code_is_active || 0) === 1,
+          };
+        })
+        .filter((row) => row && row.source_discount_id > 0 && row.source_promo_code_id > 0 && row.source_code);
+
+      const uniqueSources = uniqueRows
+        .map((row) => {
+          const mechanicType = normalizeMechanicType(row.mechanic_type, 'simple_discount');
+          const mechanic = normalizeMechanicFromDiscount(row);
+          if (!isPromoSimpleDiscountMechanic(mechanicType, mechanic)) {
+            return null;
+          }
+          if (toText(row.promo_code_mode).toLowerCase() !== 'unique') {
+            return null;
+          }
+          const totalCodesCount = Number(row.total_codes_count || 0);
+          if (!(totalCodesCount > 0)) {
+            return null;
+          }
+          return {
+            source_code_mode: 'unique',
+            source_discount_id: Number(row.discount_id || 0),
+            source_discount_title: toText(row.title) || `Акция #${row.discount_id}`,
+            source_promo_code_id: null,
+            source_code: toText(row.sample_code) || null,
+            usage_limit: row.unique_code_usage_limit == null ? null : Number(row.unique_code_usage_limit || 0),
+            usage_count: Number(row.used_codes_count || 0),
+            is_active: Number(row.is_active || 0) === 1,
+            promo_code_is_active: Number(row.active_codes_count || 0) > 0,
+            total_codes_count: totalCodesCount,
+            active_codes_count: Number(row.active_codes_count || 0),
+            used_codes_count: Number(row.used_codes_count || 0),
+            assigned_codes_count: Number(row.assigned_codes_count || 0),
+            available_codes_count: Number(row.available_codes_count || 0),
+            sample_promo_code_id: Number(row.sample_promo_code_id || 0) || null,
+          };
+        })
+        .filter((row) => row && row.source_discount_id > 0);
+
+      return res.json({ ok: true, sources: [...sharedSources, ...uniqueSources] });
+    } catch (err) {
+      console.error('GET /api/admin/discounts/loyalty-promo-sources error:', err);
+      return res.status(500).json({ ok: false, error: 'SERVER_ERROR' });
+    }
+  });
+
   router.get('/simple-discount-sources', async (req, res) => {
     try {
+      await ensureDiscountDeletedColumns();
       const tenantId = req.tenantId || 1;
       const storeId = req.storeId || 1;
 
@@ -2236,7 +2524,7 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
                 mechanic_type,
                 mechanic_config_json
            FROM mkt_discounts
-          WHERE tenant_id = ? AND store_id = ?
+          WHERE tenant_id = ? AND store_id = ? AND is_deleted = 0
           ORDER BY is_active DESC, title ASC, id DESC`,
         [tenantId, storeId]
       );
@@ -2301,6 +2589,7 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
 
   router.post('/:id/promo-codes/generate', async (req, res) => {
     try {
+      await ensureDiscountDeletedColumns();
       const tenantId = req.tenantId || 1;
       const storeId = req.storeId || 1;
       const discountId = Number(req.params.id || 0);
@@ -2314,7 +2603,7 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
       }
 
       const [[discount]] = await db.query(
-        `SELECT id, mechanic_type, activation_mode, promo_code_mode, unique_code_usage_limit, mechanic_config_json
+        `SELECT id, is_deleted, mechanic_type, activation_mode, promo_code_mode, unique_code_usage_limit, mechanic_config_json
          FROM mkt_discounts
          WHERE tenant_id = ? AND store_id = ? AND id = ?
          LIMIT 1`,
@@ -2323,6 +2612,9 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
 
       if (!discount) {
         return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+      }
+      if (Number(discount.is_deleted || 0) === 1) {
+        return res.status(409).json({ ok: false, error: 'DISCOUNT_DELETED' });
       }
 
       if (!isPromoSimpleDiscountMechanic(normalizeMechanicType(discount.mechanic_type, 'simple_discount'), normalizeMechanicFromDiscount(discount))) {
@@ -2360,6 +2652,7 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
 
   router.post('/:id/promo-codes/:codeId/toggle', async (req, res) => {
     try {
+      await ensureDiscountDeletedColumns();
       const tenantId = req.tenantId || 1;
       const storeId = req.storeId || 1;
       const discountId = Number(req.params.id || 0);
@@ -2370,7 +2663,7 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
       }
 
       const [[promoCode]] = await db.query(
-        `SELECT pc.id, pc.is_active, d.mechanic_type, d.mechanic_config_json, d.activation_mode
+        `SELECT pc.id, pc.is_active, d.is_deleted, d.mechanic_type, d.mechanic_config_json, d.activation_mode
          FROM mkt_discount_promo_codes pc
          INNER JOIN mkt_discounts d ON d.id = pc.discount_id AND d.tenant_id = pc.tenant_id AND d.store_id = pc.store_id
          WHERE pc.tenant_id = ? AND pc.store_id = ? AND pc.discount_id = ? AND pc.id = ?
@@ -2380,6 +2673,9 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
 
       if (!promoCode) {
         return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+      }
+      if (Number(promoCode.is_deleted || 0) === 1) {
+        return res.status(409).json({ ok: false, error: 'DISCOUNT_DELETED' });
       }
       if (!isPromoSimpleDiscountMechanic(normalizeMechanicType(promoCode.mechanic_type, 'simple_discount'), normalizeMechanicFromDiscount(promoCode))) {
         return res.status(409).json({ ok: false, error: 'PROMO_NOT_AVAILABLE' });
@@ -2455,6 +2751,7 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
     try {
       await ensureDiscountHideInBenefitsColumn();
       await ensureDiscountProductConfigColumn();
+      await ensureDiscountDeletedColumns();
       const tenantId = req.tenantId || 1;
       const storeId = req.storeId || 1;
       const discountId = Number(req.params.id || 0);
@@ -2484,6 +2781,7 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
     const storeId = req.storeId || 1;
     await ensureDiscountHideInBenefitsColumn();
     await ensureDiscountProductConfigColumn();
+    await ensureDiscountDeletedColumns();
     const conn = await db.getConnection();
     let inTransaction = false;
     try {
@@ -2516,6 +2814,9 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
       assertMechanicIsValid(mechanicPayload.mechanicType, mechanicPayload.mechanic, { products });
       if (mechanicPayload.mechanicType === 'threshold') {
         await assertThresholdRewardSourcesExist(conn, tenantId, storeId, mechanicPayload.mechanic);
+      }
+      if (mechanicPayload.mechanicType === 'loyalty_progress') {
+        await assertLoyaltyProgressPromoSourceExists(conn, tenantId, storeId, mechanicPayload.mechanic);
       }
       if (promoEnabled && normalizePromoRewardType(mechanicPayload.mechanic?.promo_reward?.reward_type, 'discount') === 'product' && !promoRewardProducts.length) {
         return res.status(400).json({ ok: false, error: 'PROMO_REWARD_PRODUCTS_REQUIRED' });
@@ -2638,6 +2939,7 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
     const discountId = Number(req.params.id || 0);
     await ensureDiscountHideInBenefitsColumn();
     await ensureDiscountProductConfigColumn();
+    await ensureDiscountDeletedColumns();
 
     if (!(discountId > 0)) {
       return res.status(400).json({ ok: false, error: 'INVALID_ID' });
@@ -2658,6 +2960,9 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
 
       if (!existing) {
         return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+      }
+      if (Number(existing.is_deleted || 0) === 1) {
+        return res.status(409).json({ ok: false, error: 'DISCOUNT_DELETED' });
       }
 
       const mechanicPayload = buildMechanicStoragePayload(req.body, existing);
@@ -2688,6 +2993,9 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
       assertMechanicIsValid(mechanicPayload.mechanicType, mechanicPayload.mechanic, { products });
       if (mechanicPayload.mechanicType === 'threshold') {
         await assertThresholdRewardSourcesExist(conn, tenantId, storeId, mechanicPayload.mechanic, { currentDiscountId: discountId });
+      }
+      if (mechanicPayload.mechanicType === 'loyalty_progress') {
+        await assertLoyaltyProgressPromoSourceExists(conn, tenantId, storeId, mechanicPayload.mechanic);
       }
       if (promoEnabled && normalizePromoRewardType(mechanicPayload.mechanic?.promo_reward?.reward_type, 'discount') === 'product' && !promoRewardProducts.length) {
         return res.status(400).json({ ok: false, error: 'PROMO_REWARD_PRODUCTS_REQUIRED' });
@@ -2836,6 +3144,7 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
    */
   router.delete('/:id', async (req, res) => {
     try {
+      await ensureDiscountDeletedColumns();
       const tenantId = req.tenantId || 1;
       const storeId = req.storeId || 1;
       const discountId = Number(req.params.id || 0);
@@ -2844,50 +3153,53 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
         return res.status(400).json({ ok: false, error: 'INVALID_ID' });
       }
 
-      const conn = await db.getConnection();
-      try {
-        await conn.beginTransaction();
-        await conn.query(
-          `DELETE FROM mkt_discount_usage
-           WHERE tenant_id = ? AND discount_id = ?`,
-          [tenantId, discountId]
-        );
-        await conn.query(
-          `DELETE FROM mkt_discount_customers
-           WHERE tenant_id = ? AND discount_id = ?`,
-          [tenantId, discountId]
-        );
-        await conn.query(
-          `DELETE FROM mkt_discount_products
-           WHERE tenant_id = ? AND discount_id = ?`,
-          [tenantId, discountId]
-        );
-        await conn.query(
-          `DELETE FROM mkt_discount_promo_codes
-           WHERE tenant_id = ? AND store_id = ? AND discount_id = ?`,
-          [tenantId, storeId, discountId]
-        );
-        const [result] = await conn.query(
-          `DELETE FROM mkt_discounts WHERE id = ? AND tenant_id = ? AND store_id = ?`,
-          [discountId, tenantId, storeId]
-        );
+      const [result] = await db.query(
+        `UPDATE mkt_discounts
+            SET is_deleted = 1,
+                deleted_at = CURRENT_TIMESTAMP,
+                is_active = 0
+          WHERE id = ? AND tenant_id = ? AND store_id = ?`,
+        [discountId, tenantId, storeId]
+      );
 
-        if (result.affectedRows === 0) {
-          await conn.rollback();
-          conn.release();
-          return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
-        }
-
-        await conn.commit();
-        conn.release();
-        return res.json({ ok: true });
-      } catch (txErr) {
-        await conn.rollback();
-        conn.release();
-        throw txErr;
+      if (Number(result?.affectedRows || 0) === 0) {
+        return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
       }
+
+      return res.json({ ok: true });
     } catch (err) {
       console.error('DELETE /api/admin/discounts/:id error:', err);
+      return res.status(500).json({ ok: false, error: 'SERVER_ERROR' });
+    }
+  });
+
+  router.post('/:id/restore', async (req, res) => {
+    try {
+      await ensureDiscountDeletedColumns();
+      const tenantId = req.tenantId || 1;
+      const storeId = req.storeId || 1;
+      const discountId = Number(req.params.id || 0);
+
+      if (!(discountId > 0)) {
+        return res.status(400).json({ ok: false, error: 'INVALID_ID' });
+      }
+
+      const [result] = await db.query(
+        `UPDATE mkt_discounts
+            SET is_deleted = 0,
+                deleted_at = NULL,
+                is_active = 1
+          WHERE id = ? AND tenant_id = ? AND store_id = ?`,
+        [discountId, tenantId, storeId]
+      );
+
+      if (Number(result?.affectedRows || 0) === 0) {
+        return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+      }
+
+      return res.json({ ok: true, is_active: true });
+    } catch (err) {
+      console.error('POST /api/admin/discounts/:id/restore error:', err);
       return res.status(500).json({ ok: false, error: 'SERVER_ERROR' });
     }
   });
@@ -2898,6 +3210,7 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
    */
   router.post('/:id/toggle', async (req, res) => {
     try {
+      await ensureDiscountDeletedColumns();
       const tenantId = req.tenantId || 1;
       const storeId = req.storeId || 1;
       const discountId = Number(req.params.id || 0);
@@ -2907,12 +3220,15 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
       }
 
       const [[discount]] = await db.query(
-        `SELECT is_active FROM mkt_discounts WHERE id = ? AND tenant_id = ? AND store_id = ?`,
+        `SELECT is_active, is_deleted FROM mkt_discounts WHERE id = ? AND tenant_id = ? AND store_id = ?`,
         [discountId, tenantId, storeId]
       );
 
       if (!discount) {
         return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+      }
+      if (Number(discount.is_deleted || 0) === 1) {
+        return res.status(409).json({ ok: false, error: 'DISCOUNT_DELETED' });
       }
 
       const newStatus = Number(discount.is_active || 0) === 1 ? 0 : 1;

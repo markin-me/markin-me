@@ -130,6 +130,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
   let ensureDiscountProductConfigColumnPromise = null;
   let discountHideInBenefitsColumnReady = false;
   let ensureDiscountHideInBenefitsColumnPromise = null;
+  let discountDeletedColumnsReady = false;
+  let ensureDiscountDeletedColumnsPromise = null;
   let customerAddressIdentityColumnsReady = false;
   let ensureCustomerAddressIdentityColumnsPromise = null;
   let customerBenefitPromoStorageReady = false;
@@ -228,6 +230,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       });
     });
 
+    await ensureDiscountDeletedColumns();
     const placeholders = unresolvedIds.map(() => '?').join(',');
 
     const [variantRows] = await db.query(
@@ -274,6 +277,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
                    AND d.tenant_id = dp.tenant_id
                   WHERE dp.tenant_id = p.tenant_id
                     AND d.store_id = ?
+                    AND d.is_deleted = 0
                     AND dp.product_id = p.id
                 ) OR EXISTS (
                   SELECT 1
@@ -286,6 +290,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
                    AND d.tenant_id = dp.tenant_id
                   WHERE pc.tenant_id = p.tenant_id
                     AND d.store_id = ?
+                    AND d.is_deleted = 0
                     AND pc.product_id = p.id
                 )
                 THEN 1 ELSE 0
@@ -437,6 +442,47 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       });
 
     return ensureDiscountHideInBenefitsColumnPromise;
+  }
+
+  async function ensureDiscountDeletedColumns() {
+    if (discountDeletedColumnsReady) return true;
+    if (ensureDiscountDeletedColumnsPromise) return ensureDiscountDeletedColumnsPromise;
+
+    ensureDiscountDeletedColumnsPromise = (async () => {
+      const [columnRows] = await db.query('SHOW COLUMNS FROM mkt_discounts');
+      const existing = new Set((Array.isArray(columnRows) ? columnRows : []).map((row) => String(row?.Field || '').trim()).filter(Boolean));
+      if (!existing.has('is_deleted')) {
+        try {
+          await db.query('ALTER TABLE mkt_discounts ADD COLUMN `is_deleted` TINYINT(1) NOT NULL DEFAULT 0 AFTER `hide_in_benefits`');
+          existing.add('is_deleted');
+        } catch (err) {
+          if (String(err?.code || '') !== 'ER_DUP_FIELDNAME') throw err;
+          existing.add('is_deleted');
+        }
+      }
+      if (!existing.has('deleted_at')) {
+        try {
+          await db.query('ALTER TABLE mkt_discounts ADD COLUMN `deleted_at` DATETIME NULL AFTER `is_deleted`');
+          existing.add('deleted_at');
+        } catch (err) {
+          if (String(err?.code || '') !== 'ER_DUP_FIELDNAME') throw err;
+          existing.add('deleted_at');
+        }
+      }
+      discountDeletedColumnsReady = existing.has('is_deleted') && existing.has('deleted_at');
+      return discountDeletedColumnsReady;
+    })()
+      .catch((err) => {
+        ensureDiscountDeletedColumnsPromise = null;
+        throw err;
+      })
+      .finally(() => {
+        if (discountDeletedColumnsReady) {
+          ensureDiscountDeletedColumnsPromise = null;
+        }
+      });
+
+    return ensureDiscountDeletedColumnsPromise;
   }
 
   const customerAddressSelectFields = `
@@ -1722,11 +1768,12 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     }
 
     // Р СџР С•Р В»РЎС“РЎвЂЎР В°Р ВµР С Р Р†РЎРѓР Вµ Р В°Р С”РЎвЂљР С‘Р Р†Р Р…РЎвЂ№Р Вµ РЎРѓР С”Р С‘Р Т‘Р С”Р С‘ Р Р…Р В° РЎвЂљР С•Р Р†Р В°РЎР‚РЎвЂ№ Р С‘ Р С”Р В°РЎвЂљР ВµР С–Р С•РЎР‚Р С‘Р С‘
+    await ensureDiscountDeletedColumns();
     const [discountRows] = await db.query(
       `SELECT d.*, dp.product_id, dp.category_id, dp.combo_id
        FROM mkt_discounts d
        JOIN mkt_discount_products dp ON dp.discount_id = d.id AND dp.tenant_id = d.tenant_id
-       WHERE d.tenant_id = ? AND d.store_id = ? AND d.is_active = 1
+       WHERE d.tenant_id = ? AND d.store_id = ? AND d.is_active = 1 AND d.is_deleted = 0
          AND (dp.product_id IN (${placeholders}) OR dp.category_id IS NOT NULL)`,
       [tenantId, storeId, ...productIds]
     );
@@ -5231,6 +5278,62 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       .filter((card) => card.code);
   }
 
+  function buildPublicPromoSourceDetailCard(discount, {
+    promoRow = null,
+    promoRows = [],
+    customerId = 0,
+    targetRows = [],
+    targetProductsMap = new Map(),
+  } = {}) {
+    const discountRow = discount && typeof discount === 'object' ? discount : null;
+    if (!discountRow) return null;
+    const rewardMeta = getPublicPromoRewardMeta(discountRow);
+    const representativeRow = promoRow || pickBenefitPromoCatalogRow(promoRows, customerId) || null;
+    const promoCodeMode = publicDiscountText(
+      discountRow?.promo_code_mode || representativeRow?.code_mode
+    ).toLowerCase() === 'unique'
+      ? 'unique'
+      : 'shared';
+    const code = promoCodeMode === 'unique'
+      ? ''
+      : publicDiscountText(representativeRow?.code);
+    const codeMode = publicDiscountText(representativeRow?.code_mode || promoCodeMode).toLowerCase();
+    return {
+      id: Number(representativeRow?.promo_code_id || representativeRow?.id || discountRow?.id || 0) || null,
+      kind: 'promo_code',
+      title: publicDiscountText(discountRow?.title) || '\u041f\u0440\u043e\u043c\u043e\u043a\u043e\u0434',
+      description: rewardMeta.description,
+      badge_text: rewardMeta.badge_text,
+      discount_type: rewardMeta.discount_type || null,
+      discount_value: Number(rewardMeta.discount_value || 0),
+      apply_scope_text: rewardMeta.apply_scope_text,
+      min_order_amount: discountRow?.min_order_amount != null ? Number(discountRow.min_order_amount || 0) : null,
+      max_discount_amount: discountRow?.max_discount_amount != null ? Number(discountRow.max_discount_amount || 0) : null,
+      usage_per_customer: discountRow?.usage_per_customer != null ? Number(discountRow.usage_per_customer || 0) : null,
+      customer_usage_count: 0,
+      starts_at: discountRow?.starts_at || null,
+      ends_at: discountRow?.ends_at || null,
+      is_active: Number(discountRow?.is_active || 0) === 1,
+      hide_in_benefits: Number(discountRow?.hide_in_benefits || 0) === 1,
+      activation_mode: discountRow?.activation_mode || null,
+      promo_code_mode: promoCodeMode,
+      expires_at: discountRow?.ends_at || null,
+      code,
+      is_copyable: false,
+      is_stackable: Number(discountRow?.is_stackable || 0) === 1,
+      usage_limit: representativeRow?.usage_limit == null ? null : Number(representativeRow?.usage_limit || 0),
+      usage_count: Number(representativeRow?.usage_count || 0),
+      status_text: codeMode === 'shared'
+        ? '\u041e\u0431\u0449\u0438\u0439'
+        : '\u041f\u0435\u0440\u0441\u043e\u043d\u0430\u043b\u044c\u043d\u044b\u0439',
+      products: buildRewardProductsPayload(
+        targetRows,
+        targetProductsMap,
+        getPublicDiscountProductsConfigMode(discountRow, 'any')
+      ),
+    };
+  }
+
   function toPublicRewardStatusText(status) {
     const raw = publicDiscountText(status).toLowerCase();
     if (raw === 'used') return '\u0418\u0441\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u043d\u043e';
@@ -5766,30 +5869,83 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     };
   }
 
-  function buildPublicProgressPromoRewardPreview(discount, state) {
+  function buildPublicProgressPromoRewardPreview(discount, state, sourceDetailItem = null) {
     const reward = parsePublicDiscountObject(state?.mechanic?.reward, {});
     const promoSource = parsePublicDiscountObject(reward?.promo_code, {});
+    const sourceCodeMode = publicDiscountText(promoSource?.source_code_mode).toLowerCase() === 'unique'
+      ? 'unique'
+      : 'shared';
     const sourceCode = publicDiscountText(promoSource?.source_code);
+    const sourceTitle = publicDiscountText(promoSource?.source_discount_title);
+    const detailItem = sourceDetailItem && typeof sourceDetailItem === 'object'
+      ? sourceDetailItem
+      : null;
     return {
       kind: 'promo_code',
       icon_kind: 'promo_code',
       title: publicDiscountText(discount?.title) || 'Промокод',
       description: publicDiscountText(discount?.description) || 'Промокод в подарок',
       badge_text: 'Промокод',
-      apply_scope_text: sourceCode ? `Источник: ${sourceCode}` : 'Промокод в подарок',
-      code_preview: sourceCode || null,
-      source_code: sourceCode || null,
+      apply_scope_text: sourceCodeMode === 'unique'
+        ? (sourceTitle ? `Источник: ${sourceTitle}` : 'Уникальный промокод в подарок')
+        : (sourceCode ? `Источник: ${sourceCode}` : 'Промокод в подарок'),
+      code_preview: sourceCodeMode === 'unique' ? null : (sourceCode || null),
+      source_code: sourceCodeMode === 'unique' ? null : (sourceCode || null),
     };
   }
 
-  function buildPublicProgressRewardPreview(discount, state, productsMap = new Map(), availableRewardProductIds = null) {
+  function buildPublicProgressPromoRewardPreviewResolved(discount, state, sourceDetailItem = null) {
+    const reward = parsePublicDiscountObject(state?.mechanic?.reward, {});
+    const promoSource = parsePublicDiscountObject(reward?.promo_code, {});
+    const sourceCodeMode = publicDiscountText(promoSource?.source_code_mode).toLowerCase() === 'unique'
+      ? 'unique'
+      : 'shared';
+    const sourceCode = publicDiscountText(promoSource?.source_code);
+    const sourceTitle = publicDiscountText(promoSource?.source_discount_title);
+    const detailItem = sourceDetailItem && typeof sourceDetailItem === 'object'
+      ? sourceDetailItem
+      : null;
+    const defaultApplyScopeText = sourceCodeMode === 'unique'
+      ? (sourceTitle
+          ? `\u0418\u0441\u0442\u043e\u0447\u043d\u0438\u043a: ${sourceTitle}`
+          : '\u0423\u043d\u0438\u043a\u0430\u043b\u044c\u043d\u044b\u0439 \u043f\u0440\u043e\u043c\u043e\u043a\u043e\u0434 \u0432 \u043f\u043e\u0434\u0430\u0440\u043e\u043a')
+      : (sourceCode
+          ? `\u0418\u0441\u0442\u043e\u0447\u043d\u0438\u043a: ${sourceCode}`
+          : '\u041f\u0440\u043e\u043c\u043e\u043a\u043e\u0434 \u0432 \u043f\u043e\u0434\u0430\u0440\u043e\u043a');
+    const resolvedCode = sourceCodeMode === 'unique'
+      ? null
+      : (publicDiscountText(detailItem?.code || detailItem?.promo_code || sourceCode) || null);
+    return {
+      kind: 'promo_code',
+      icon_kind: 'promo_code',
+      title: publicDiscountText(detailItem?.title || discount?.title) || '\u041f\u0440\u043e\u043c\u043e\u043a\u043e\u0434',
+      description: publicDiscountText(detailItem?.description || discount?.description) || '\u041f\u0440\u043e\u043c\u043e\u043a\u043e\u0434 \u0432 \u043f\u043e\u0434\u0430\u0440\u043e\u043a',
+      badge_text: publicDiscountText(detailItem?.badge_text) || '\u041f\u0440\u043e\u043c\u043e\u043a\u043e\u0434',
+      apply_scope_text: publicDiscountText(detailItem?.apply_scope_text) || defaultApplyScopeText,
+      discount_type: publicDiscountText(detailItem?.discount_type).toLowerCase() || null,
+      discount_value: Number(detailItem?.discount_value || 0),
+      max_discount_amount: detailItem?.max_discount_amount != null ? Number(detailItem.max_discount_amount || 0) : null,
+      min_order_amount: detailItem?.min_order_amount != null ? Number(detailItem.min_order_amount || 0) : null,
+      activation_mode: publicDiscountText(detailItem?.activation_mode) || 'promo_code',
+      promo_code_mode: publicDiscountText(detailItem?.promo_code_mode) || sourceCodeMode,
+      code_preview: resolvedCode,
+      source_code: resolvedCode,
+      source_detail_item: detailItem,
+    };
+  }
+
+  function buildPublicProgressRewardPreview(discount, state, productsMap = new Map(), availableRewardProductIds = null, extra = null) {
     if (!discount) return null;
     const rewardKind = publicDiscountText(state?.rewardKind).toLowerCase() || 'gift';
     if (rewardKind === 'discount') {
       return buildPublicProgressDiscountRewardPreview(discount, state, productsMap);
     }
     if (rewardKind === 'promo_code') {
-      return buildPublicProgressPromoRewardPreview(discount, state);
+      return buildPublicProgressPromoRewardPreviewResolved(
+        discount,
+        state,
+        extra && typeof extra === 'object' ? (extra.sourceDetailItem || null) : null
+      );
     }
     return buildPublicProgressGiftRewardPreview(discount, state, productsMap, availableRewardProductIds);
   }
@@ -5911,6 +6067,50 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     };
   }
 
+  function buildPublicCompletedDeletedPromoCard(discount, promoRow) {
+    const rewardMeta = getPublicPromoRewardMeta(discount);
+    return {
+      id: `completed_deleted_promo_${Number(promoRow?.promo_code_id || promoRow?.id || 0)}`,
+      kind: 'completed',
+      title: publicDiscountText(promoRow?.code) || publicDiscountText(discount?.title) || 'Промокод',
+      description: publicDiscountText(discount?.title) || rewardMeta.description || publicDiscountText(discount?.description),
+      badge_text: rewardMeta.badge_text || 'Промокод',
+      apply_scope_text: rewardMeta.apply_scope_text || formatPublicApplyScopeText(discount?.apply_to),
+      status_text: 'Завершено',
+      completed_at: discount?.deleted_at || discount?.updated_at || promoRow?.updated_at || promoRow?.created_at || null,
+      completed_reason_text: 'Акция удалена',
+      source_kind: 'promo_code',
+      expires_at: discount?.ends_at || null,
+      code: publicDiscountText(promoRow?.code),
+    };
+  }
+
+  function isDeletedAvailableRewardPromoRow(rewardRow) {
+    return (
+      publicDiscountText(rewardRow?.reward_type).toLowerCase() === 'promo_code'
+      && publicDiscountText(rewardRow?.status).toLowerCase() === 'available'
+      && (Number(rewardRow?.discount_is_deleted || 0) === 1 || rewardRow?.discount_is_deleted === true)
+    );
+  }
+
+  function buildPublicCompletedDeletedRewardPromoCardFromRewardRow(rewardRow) {
+    const payload = parsePublicRewardPayload(rewardRow);
+    return {
+      id: `completed_deleted_reward_promo_${Number(rewardRow?.id || 0)}`,
+      kind: 'completed',
+      title: publicDiscountText(payload?.code || payload?.source_code || payload?.title) || 'Промокод',
+      description: publicDiscountText(payload?.title || payload?.description || rewardRow?.discount_title),
+      badge_text: publicDiscountText(payload?.badge_text) || 'Промокод',
+      apply_scope_text: publicDiscountText(payload?.apply_scope_text),
+      status_text: 'Завершено',
+      completed_at: rewardRow?.discount_deleted_at || rewardRow?.updated_at || rewardRow?.created_at || null,
+      completed_reason_text: 'Акция удалена',
+      source_kind: publicDiscountText(payload?.source_kind).toLowerCase() || 'promo_code',
+      expires_at: payload?.expires_at || null,
+      code: publicDiscountText(payload?.code || payload?.source_code),
+    };
+  }
+
   function buildPublicCompletedCardsFromRewardRows(rewardRows) {
     const completed = [];
     const seenKeys = new Set();
@@ -5930,17 +6130,23 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
       const rewardType = publicDiscountText(rewardRow?.reward_type).toLowerCase();
       const rewardStatus = publicDiscountText(rewardRow?.status).toLowerCase();
-      if (rewardStatus === 'available' || !['discount', 'promo_code'].includes(rewardType)) continue;
+      const isDeletedAvailablePromoReward = isDeletedAvailableRewardPromoRow(rewardRow);
+      if (!isDeletedAvailablePromoReward && (rewardStatus === 'available' || !['discount', 'promo_code'].includes(rewardType))) continue;
       const rewardKey = `reward_${Number(rewardRow?.id || 0)}`;
       if (seenKeys.has(rewardKey)) continue;
       seenKeys.add(rewardKey);
-      completed.push(buildPublicCompletedRewardCardFromRewardRow(rewardRow));
+      completed.push(
+        isDeletedAvailablePromoReward
+          ? buildPublicCompletedDeletedRewardPromoCardFromRewardRow(rewardRow)
+          : buildPublicCompletedRewardCardFromRewardRow(rewardRow)
+      );
     }
     return completed;
   }
 
   async function loadCustomerAssignedPromoDiscounts(tenantId, storeId, customerId) {
     if (!(Number(customerId || 0) > 0)) return [];
+    await ensureDiscountDeletedColumns();
     const [rows] = await db.query(
       `SELECT DISTINCT d.*
          FROM mkt_discount_promo_codes pc
@@ -5951,7 +6157,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           AND (pc.store_id = ? OR pc.store_id = 0 OR pc.store_id IS NULL)
           AND pc.assigned_customer_id = ?
           AND pc.is_active = 1
-          AND d.is_active = 1`,
+          AND d.is_active = 1
+          AND d.is_deleted = 0`,
       [tenantId, storeId, customerId]
     );
 
@@ -5996,6 +6203,54 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     return (Array.isArray(rows) ? rows : [])
       .map((row) => normalizeBenefitPromoSourceRow(row))
       .filter(Boolean);
+  }
+
+  async function loadBenefitPromoSourceRowsMapByPromoCodeIds(tenantId, storeId, promoCodeIds, { includeInactive = false } = {}) {
+    const ids = [...new Set((Array.isArray(promoCodeIds) ? promoCodeIds : []).map((id) => Number(id)).filter((id) => id > 0))];
+    if (!ids.length) return new Map();
+    const activeSql = includeInactive ? '' : ' AND is_active = 1';
+    const [rows] = await db.query(
+      `SELECT id AS promo_code_id,
+              discount_id,
+              code,
+              code_mode,
+              usage_limit,
+              usage_count,
+              assigned_customer_id,
+              is_active
+         FROM mkt_discount_promo_codes
+        WHERE tenant_id = ?
+          AND (store_id = ? OR store_id = 0 OR store_id IS NULL)
+          AND id IN (?)${activeSql}`,
+      [tenantId, storeId, ids]
+    );
+    return new Map(
+      (Array.isArray(rows) ? rows : [])
+        .map((row) => normalizeBenefitPromoSourceRow(row))
+        .filter(Boolean)
+        .map((row) => [Number(row?.promo_code_id || 0), row])
+    );
+  }
+
+  async function loadBenefitDiscountRowsByIds(tenantId, storeId, discountIds) {
+    const ids = [...new Set((Array.isArray(discountIds) ? discountIds : []).map((id) => Number(id)).filter((id) => id > 0))];
+    if (!ids.length) return new Map();
+    await ensureDiscountHideInBenefitsColumn();
+    await ensureDiscountDeletedColumns();
+    const [rows] = await db.query(
+      `SELECT d.*
+         FROM mkt_discounts d
+        WHERE d.tenant_id = ?
+          AND (d.store_id = ? OR d.store_id = 0 OR d.store_id IS NULL)
+          AND d.is_deleted = 0
+          AND d.id IN (?)`,
+      [tenantId, storeId, ids]
+    );
+    return new Map(
+      (Array.isArray(rows) ? rows : [])
+        .map((row) => [Number(row?.id || 0), row])
+        .filter(([id]) => id > 0)
+    );
   }
 
   async function loadCustomerSavedBenefitPromoCodeIds(tenantId, storeId, customerId, discountIds = []) {
@@ -6140,6 +6395,83 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     });
 
     return rowsByDiscountId;
+  }
+
+  async function loadCustomerDeletedPromoCompletedCards(tenantId, storeId, customerId) {
+    const normalizedCustomerId = Number(customerId || 0);
+    if (!(normalizedCustomerId > 0)) return [];
+    await ensureDiscountHideInBenefitsColumn();
+    await ensureDiscountDeletedColumns();
+
+    const [assignedRows] = await db.query(
+      `SELECT pc.id AS promo_code_id,
+              pc.code,
+              pc.code_mode,
+              pc.usage_limit,
+              pc.usage_count,
+              pc.assigned_customer_id,
+              pc.created_at AS promo_created_at,
+              pc.updated_at AS promo_updated_at,
+              d.*
+         FROM mkt_discount_promo_codes pc
+         INNER JOIN mkt_discounts d
+           ON d.id = pc.discount_id
+          AND d.tenant_id = pc.tenant_id
+          AND (d.store_id = pc.store_id OR d.store_id = 0 OR d.store_id IS NULL)
+        WHERE pc.tenant_id = ?
+          AND (pc.store_id = ? OR pc.store_id = 0 OR pc.store_id IS NULL)
+          AND pc.assigned_customer_id = ?
+          AND pc.is_active = 1
+          AND d.is_deleted = 1
+        ORDER BY pc.id DESC`,
+      [tenantId, storeId, normalizedCustomerId]
+    );
+
+    let savedRows = [];
+    try {
+      await ensureCustomerBenefitPromoStorage();
+      const [rows] = await db.query(
+        `SELECT pc.id AS promo_code_id,
+                pc.code,
+                pc.code_mode,
+                pc.usage_limit,
+                pc.usage_count,
+                pc.assigned_customer_id,
+                pc.created_at AS promo_created_at,
+                pc.updated_at AS promo_updated_at,
+                d.*
+           FROM mkt_customer_benefit_promos bp
+           INNER JOIN mkt_discount_promo_codes pc
+             ON pc.id = bp.promo_code_id
+            AND pc.tenant_id = bp.tenant_id
+           INNER JOIN mkt_discounts d
+             ON d.id = bp.discount_id
+            AND d.tenant_id = bp.tenant_id
+            AND (d.store_id = bp.store_id OR d.store_id = 0 OR d.store_id IS NULL)
+          WHERE bp.tenant_id = ?
+            AND bp.store_id = ?
+            AND bp.customer_id = ?
+            AND pc.is_active = 1
+            AND d.is_deleted = 1
+          ORDER BY bp.updated_at DESC, bp.id DESC`,
+        [tenantId, storeId, normalizedCustomerId]
+      );
+      savedRows = Array.isArray(rows) ? rows : [];
+    } catch (error) {
+      if (!isDiscountRuntimeTableMissingError(error)) {
+        console.warn('Failed to load deleted customer promo benefits for completed list:', error?.code || error?.message || error);
+      }
+    }
+
+    const completed = [];
+    const seenPromoCodeIds = new Set();
+    [...(Array.isArray(assignedRows) ? assignedRows : []), ...savedRows].forEach((row) => {
+      const promoCodeId = Number(row?.promo_code_id || 0);
+      if (!(promoCodeId > 0) || seenPromoCodeIds.has(promoCodeId)) return;
+      seenPromoCodeIds.add(promoCodeId);
+      completed.push(buildPublicCompletedDeletedPromoCard(row, row));
+    });
+    return completed;
   }
 
   function pickBenefitPromoCatalogRow(rows, customerId) {
@@ -6312,6 +6644,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
   async function loadCustomerRewardRows(tenantId, customerId, { statuses = null, rewardType = null } = {}) {
     if (!(Number(customerId || 0) > 0)) return [];
+    await ensureDiscountDeletedColumns();
     const params = [tenantId, customerId];
     let statusSql = '';
     const normalizedStatuses = Array.isArray(statuses)
@@ -6326,11 +6659,15 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       typeSql = ' AND r.reward_type = ?';
       params.push(rewardType);
     }
-    const sql = `SELECT r.*, d.title AS discount_title, d.description AS discount_description
+    const sql = `SELECT r.*,
+                        d.title AS discount_title,
+                        d.description AS discount_description,
+                        d.is_deleted AS discount_is_deleted,
+                        d.deleted_at AS discount_deleted_at
        FROM mkt_discount_rewards r
        LEFT JOIN mkt_discounts d
-         ON d.id = r.discount_id
-        AND d.tenant_id = r.tenant_id
+          ON d.id = r.discount_id
+         AND d.tenant_id = r.tenant_id
       WHERE r.tenant_id = ?
         AND r.customer_id = ?
         ${statusSql}${typeSql}
@@ -6351,17 +6688,18 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       statuses: ['available'],
       rewardType,
     });
+    const visibleRewardRows = rewardRows.filter((row) => !isDeletedAvailableRewardPromoRow(row));
     const normalizedRewardType = publicDiscountText(rewardType).toLowerCase();
     const shouldFilterGiftRewards = !normalizedRewardType || normalizedRewardType === 'gift';
-    if (!(Number(customerId || 0) > 0) || !shouldFilterGiftRewards || !rewardRows.length) {
-      return rewardRows;
+    if (!(Number(customerId || 0) > 0) || !shouldFilterGiftRewards || !visibleRewardRows.length) {
+      return visibleRewardRows;
     }
-    const giftRewardIds = rewardRows
+    const giftRewardIds = visibleRewardRows
       .filter((row) => publicDiscountText(row?.reward_type).toLowerCase() === 'gift')
       .map((row) => Number(row?.id || 0))
       .filter((rewardId) => rewardId > 0);
     if (!giftRewardIds.length) {
-      return rewardRows;
+      return visibleRewardRows;
     }
     const conflictingGiftRewardIds = await findActiveGiftRewardOrderConflicts(db, {
       tenantId,
@@ -6369,10 +6707,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       giftRewardIds,
     });
     if (!conflictingGiftRewardIds.length) {
-      return rewardRows;
+      return visibleRewardRows;
     }
     const conflictingGiftRewardIdSet = new Set(conflictingGiftRewardIds);
-    return rewardRows.filter((row) => {
+    return visibleRewardRows.filter((row) => {
       if (publicDiscountText(row?.reward_type).toLowerCase() !== 'gift') return true;
       return !conflictingGiftRewardIdSet.has(Number(row?.id || 0));
     });
@@ -6554,6 +6892,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     const normalizedPromoCodeId = Number(promoCodeId || 0);
     if (!(normalizedPromoCodeId > 0)) return null;
     await ensureDiscountHideInBenefitsColumn();
+    await ensureDiscountDeletedColumns();
     const [rows] = await conn.query(
       `SELECT pc.id AS promo_code_id,
               pc.discount_id,
@@ -6568,8 +6907,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
          FROM mkt_discount_promo_codes pc
          INNER JOIN mkt_discounts d
            ON d.id = pc.discount_id
-          AND d.tenant_id = pc.tenant_id
-          AND (d.store_id = pc.store_id OR d.store_id = 0 OR d.store_id IS NULL)
+           AND d.tenant_id = pc.tenant_id
+           AND (d.store_id = pc.store_id OR d.store_id = 0 OR d.store_id IS NULL)
+           AND d.is_deleted = 0
         WHERE pc.tenant_id = ?
           AND (pc.store_id = ? OR pc.store_id = 0 OR pc.store_id IS NULL)
           AND pc.id = ?
@@ -6584,6 +6924,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     const normalizedCode = normalizeOrderPromoCode(code);
     if (!normalizedCode) return null;
     await ensureDiscountHideInBenefitsColumn();
+    await ensureDiscountDeletedColumns();
     const [rows] = await conn.query(
       `SELECT pc.id AS promo_code_id,
               pc.discount_id,
@@ -6598,8 +6939,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
          FROM mkt_discount_promo_codes pc
          INNER JOIN mkt_discounts d
            ON d.id = pc.discount_id
-          AND d.tenant_id = pc.tenant_id
-          AND (d.store_id = pc.store_id OR d.store_id = 0 OR d.store_id IS NULL)
+           AND d.tenant_id = pc.tenant_id
+           AND (d.store_id = pc.store_id OR d.store_id = 0 OR d.store_id IS NULL)
+           AND d.is_deleted = 0
         WHERE pc.tenant_id = ?
           AND (pc.store_id = ? OR pc.store_id = 0 OR pc.store_id IS NULL)
           AND UPPER(REPLACE(pc.code, ' ', '')) = ?
@@ -6608,6 +6950,162 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       [tenantId, storeId, normalizedCode]
     );
     return Array.isArray(rows) && rows.length ? rows[0] : null;
+  }
+
+  async function saveCustomerBenefitPromoVisibility(conn, {
+    tenantId,
+    storeId,
+    customerId,
+    promoCodeId,
+    discountId,
+  }) {
+    const normalizedCustomerId = Number(customerId || 0);
+    const normalizedPromoCodeId = Number(promoCodeId || 0);
+    const normalizedDiscountId = Number(discountId || 0);
+    if (!(normalizedCustomerId > 0) || !(normalizedPromoCodeId > 0) || !(normalizedDiscountId > 0)) {
+      return;
+    }
+    await ensureCustomerBenefitPromoStorage();
+    await conn.query(
+      `INSERT INTO mkt_customer_benefit_promos (
+         tenant_id, store_id, customer_id, promo_code_id, discount_id
+       ) VALUES (?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE
+         discount_id = VALUES(discount_id),
+         updated_at = CURRENT_TIMESTAMP`,
+      [
+        tenantId,
+        storeId,
+        normalizedCustomerId,
+        normalizedPromoCodeId,
+        normalizedDiscountId,
+      ]
+    );
+  }
+
+  async function issueUniquePromoCodeFromDiscountPool(conn, {
+    tenantId,
+    storeId,
+    customerId,
+    discountId,
+    allowHiddenBenefitSave = false,
+  }) {
+    const normalizedCustomerId = Number(customerId || 0);
+    const normalizedDiscountId = Number(discountId || 0);
+    if (!(normalizedCustomerId > 0) || !(normalizedDiscountId > 0)) {
+      throw Object.assign(new Error('PROMO_INVALID'), { code: 'PROMO_INVALID' });
+    }
+
+    await ensureDiscountHideInBenefitsColumn();
+    await ensureDiscountDeletedColumns();
+
+    const [discountRows] = await conn.query(
+      `SELECT d.*
+         FROM mkt_discounts d
+        WHERE d.tenant_id = ?
+          AND (d.store_id = ? OR d.store_id = 0 OR d.store_id IS NULL)
+          AND d.is_deleted = 0
+          AND d.id = ?
+        ORDER BY d.store_id DESC, d.id DESC
+        LIMIT 1
+        FOR UPDATE`,
+      [tenantId, storeId, normalizedDiscountId]
+    );
+    const discount = Array.isArray(discountRows) && discountRows.length ? discountRows[0] : null;
+    if (!discount || !discountHelpers.isPromoSimpleDiscount(discount) || isPromoRewardRedeemAction(discount)) {
+      throw Object.assign(new Error('PROMO_INVALID'), { code: 'PROMO_INVALID' });
+    }
+    if (publicDiscountText(discount?.promo_code_mode).toLowerCase() !== 'unique') {
+      throw Object.assign(new Error('PROMO_INVALID'), { code: 'PROMO_INVALID' });
+    }
+
+    const visibility = isHiddenBenefitsDiscount(discount) ? 'hidden' : 'public';
+    if (visibility === 'hidden' && !allowHiddenBenefitSave) {
+      throw Object.assign(new Error('PROMO_NOT_AVAILABLE'), { code: 'PROMO_NOT_AVAILABLE' });
+    }
+    if (!discountHelpers.isDiscountActive(discount) || Number(discount?.is_active || 0) !== 1) {
+      throw Object.assign(new Error('PROMO_NOT_AVAILABLE'), { code: 'PROMO_NOT_AVAILABLE' });
+    }
+
+    const customerCategoryIds = await discountHelpers.getCustomerCategoryIds(db, tenantId, normalizedCustomerId);
+    const [promoAudienceRows] = await conn.query(
+      `SELECT target_type, customer_id, customer_category_id
+         FROM mkt_discount_customers
+        WHERE tenant_id = ? AND discount_id = ?`,
+      [tenantId, Number(discount?.id || 0)]
+    );
+    if (!discountHelpers.matchDiscountAudience(promoAudienceRows, normalizedCustomerId, customerCategoryIds)) {
+      throw Object.assign(new Error('PROMO_NOT_AVAILABLE'), { code: 'PROMO_NOT_AVAILABLE' });
+    }
+
+    const issueLimit = Number(discount?.usage_per_customer || 0);
+    if (issueLimit > 0) {
+      const [[issuedRow]] = await conn.query(
+        `SELECT COUNT(*) AS issued_count
+           FROM mkt_discount_promo_codes
+          WHERE tenant_id = ?
+            AND (store_id = ? OR store_id = 0 OR store_id IS NULL)
+            AND discount_id = ?
+            AND code_mode = 'unique'
+            AND assigned_customer_id = ?`,
+        [tenantId, storeId, normalizedDiscountId, normalizedCustomerId]
+      );
+      if (Number(issuedRow?.issued_count || 0) >= issueLimit) {
+        throw Object.assign(new Error('PROMO_CLAIM_LIMIT_REACHED'), { code: 'PROMO_CLAIM_LIMIT_REACHED' });
+      }
+    }
+
+    const [promoRows] = await conn.query(
+      `SELECT id AS promo_code_id,
+              code
+         FROM mkt_discount_promo_codes
+        WHERE tenant_id = ?
+          AND (store_id = ? OR store_id = 0 OR store_id IS NULL)
+          AND discount_id = ?
+          AND code_mode = 'unique'
+          AND is_active = 1
+          AND (assigned_customer_id IS NULL OR assigned_customer_id = 0)
+          AND (usage_limit IS NULL OR usage_limit = 0 OR usage_count < usage_limit)
+        ORDER BY id ASC
+        LIMIT 1
+        FOR UPDATE`,
+      [tenantId, storeId, normalizedDiscountId]
+    );
+    const promoRow = Array.isArray(promoRows) && promoRows.length ? promoRows[0] : null;
+    const promoCodeId = Number(promoRow?.promo_code_id || 0);
+    if (!(promoCodeId > 0)) {
+      throw Object.assign(new Error('PROMO_CLAIM_UNAVAILABLE'), { code: 'PROMO_CLAIM_UNAVAILABLE' });
+    }
+
+    const [updateResult] = await conn.query(
+      `UPDATE mkt_discount_promo_codes
+          SET assigned_customer_id = ?, updated_at = NOW()
+        WHERE tenant_id = ?
+          AND id = ?
+          AND (assigned_customer_id IS NULL OR assigned_customer_id = 0)`,
+      [normalizedCustomerId, tenantId, promoCodeId]
+    );
+    if (!(Number(updateResult?.affectedRows || 0) > 0)) {
+      throw Object.assign(new Error('PROMO_CLAIM_UNAVAILABLE'), { code: 'PROMO_CLAIM_UNAVAILABLE' });
+    }
+
+    if (visibility === 'hidden' && allowHiddenBenefitSave) {
+      await saveCustomerBenefitPromoVisibility(conn, {
+        tenantId,
+        storeId,
+        customerId: normalizedCustomerId,
+        promoCodeId,
+        discountId: normalizedDiscountId,
+      });
+    }
+
+    return {
+      discount,
+      promo_code_id: promoCodeId,
+      discount_id: normalizedDiscountId,
+      code: publicDiscountText(promoRow?.code),
+      visibility,
+    };
   }
 
   async function loadDiscountTargetRows(conn, tenantId, discountId) {
@@ -6849,6 +7347,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
     if (rewardKind === 'promo_code') {
       const promoSource = parsePublicDiscountObject(mechanic?.reward?.promo_code, {});
+      if (publicDiscountText(promoSource?.source_code_mode).toLowerCase() === 'unique') {
+        throw Object.assign(new Error('PROMO_INVALID'), { code: 'PROMO_INVALID' });
+      }
       const sourcePromoRow = await loadPromoSourceRowById(
         conn,
         tenantId,
@@ -7540,12 +8041,94 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         .filter((id) => id > 0)
     );
 
+    const progressPromoSourceConfigs = new Map();
+    const explicitProgressPromoSourceDiscountIds = new Set();
+    const progressPromoSourcePromoCodeIds = new Set();
+    for (const discount of discountRows) {
+      const discountId = Number(discount?.id || 0);
+      const state = getPublicProgressBenefitState(discount, progressMap.get(discountId) || null);
+      if (publicDiscountText(state?.rewardKind).toLowerCase() !== 'promo_code') continue;
+      const promoSource = parsePublicDiscountObject(state?.rewardConfig?.promo_code, {});
+      const sourceDiscountId = Number(promoSource?.source_discount_id || 0) || null;
+      const sourcePromoCodeId = Number(promoSource?.source_promo_code_id || 0) || null;
+      progressPromoSourceConfigs.set(discountId, {
+        sourceDiscountId,
+        sourcePromoCodeId,
+      });
+      if (sourceDiscountId > 0) explicitProgressPromoSourceDiscountIds.add(sourceDiscountId);
+      if (sourcePromoCodeId > 0) progressPromoSourcePromoCodeIds.add(sourcePromoCodeId);
+    }
+
+    const sourcePromoRowsByPromoCodeId = progressPromoSourcePromoCodeIds.size
+      ? await loadBenefitPromoSourceRowsMapByPromoCodeIds(
+          tenantId,
+          storeId,
+          [...progressPromoSourcePromoCodeIds],
+          { includeInactive: false }
+        )
+      : new Map();
+    const progressPromoSourceDiscountIds = new Set([...explicitProgressPromoSourceDiscountIds]);
+    Array.from(sourcePromoRowsByPromoCodeId.values()).forEach((row) => {
+      const sourceDiscountId = Number(row?.discount_id || 0);
+      if (sourceDiscountId > 0) progressPromoSourceDiscountIds.add(sourceDiscountId);
+    });
+    const progressPromoSourceDiscountIdsList = [...progressPromoSourceDiscountIds];
+    const [sourceDiscountMap, sourcePromoRows, sourceTargetRowsMap] = await Promise.all([
+      loadBenefitDiscountRowsByIds(tenantId, storeId, progressPromoSourceDiscountIdsList),
+      progressPromoSourceDiscountIdsList.length
+        ? loadBenefitPromoSourceRowsByDiscountIds(tenantId, storeId, progressPromoSourceDiscountIdsList, { includeInactive: false })
+        : Promise.resolve([]),
+      progressPromoSourceDiscountIdsList.length
+        ? loadDiscountTargetRowsMap(tenantId, progressPromoSourceDiscountIdsList)
+        : Promise.resolve(new Map()),
+    ]);
+    const sourcePromoRowsByDiscountId = new Map();
+    (Array.isArray(sourcePromoRows) ? sourcePromoRows : []).forEach((row) => {
+      const sourceDiscountId = Number(row?.discount_id || 0);
+      if (!(sourceDiscountId > 0)) return;
+      if (!sourcePromoRowsByDiscountId.has(sourceDiscountId)) sourcePromoRowsByDiscountId.set(sourceDiscountId, []);
+      sourcePromoRowsByDiscountId.get(sourceDiscountId).push(row);
+    });
+    const sourceTargetProductIds = [...new Set(
+      [...sourceTargetRowsMap.values()].flatMap((rows) => (
+        (Array.isArray(rows) ? rows : [])
+          .map((row) => Number(row?.product_id || 0))
+          .filter((id) => id > 0)
+      ))
+    )];
+    const sourceTargetProductsMap = sourceTargetProductIds.length
+      ? await loadCheckoutRewardProductsByIds(tenantId, sourceTargetProductIds)
+      : new Map();
+
     const visualMap = new Map();
     const rewardPreviewMap = new Map();
     for (const discount of discountRows) {
       const discountId = Number(discount?.id || 0);
       const state = getPublicProgressBenefitState(discount, progressMap.get(discountId) || null);
-      const rewardPreview = buildPublicProgressRewardPreview(discount, state, productsMap, availableRewardProductIds);
+      const promoSourceConfig = progressPromoSourceConfigs.get(discountId) || null;
+      const sourcePromoRow = Number(promoSourceConfig?.sourcePromoCodeId || 0) > 0
+        ? (sourcePromoRowsByPromoCodeId.get(Number(promoSourceConfig.sourcePromoCodeId || 0)) || null)
+        : null;
+      const sourceDiscountId = Number(promoSourceConfig?.sourceDiscountId || sourcePromoRow?.discount_id || 0) || null;
+      const sourceDetailItem = sourceDiscountId > 0
+        ? buildPublicPromoSourceDetailCard(
+            sourceDiscountMap.get(sourceDiscountId) || null,
+            {
+              promoRow: sourcePromoRow,
+              promoRows: sourcePromoRowsByDiscountId.get(sourceDiscountId) || [],
+              customerId,
+              targetRows: sourceTargetRowsMap.get(sourceDiscountId) || [],
+              targetProductsMap: sourceTargetProductsMap,
+            }
+          )
+        : null;
+      const rewardPreview = buildPublicProgressRewardPreview(
+        discount,
+        state,
+        productsMap,
+        availableRewardProductIds,
+        { sourceDetailItem }
+      );
       const rewardSlot = buildPublicProgressRewardSlot(state, rewardPreview);
       let visual = null;
       if (state.progressBasis === 'amount') {
@@ -7668,6 +8251,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     const ids = [...new Set((Array.isArray(discountIds) ? discountIds : []).map((id) => Number(id)).filter((id) => id > 0))];
     if (!ids.length) return new Map();
     await ensureDiscountProductConfigColumn();
+    await ensureDiscountDeletedColumns();
     const [rows] = await db.query(
       `SELECT dp.discount_id,
               dp.product_id,
@@ -7679,6 +8263,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
          INNER JOIN mkt_discounts d
            ON d.id = dp.discount_id
           AND d.tenant_id = dp.tenant_id
+          AND d.is_deleted = 0
         WHERE dp.tenant_id = ?
           AND dp.discount_id IN (?)`,
       [tenantId, ids]
@@ -7794,6 +8379,15 @@ window.location.replace(${JSON.stringify(redirectUrl)});
   }
 
   async function buildCustomerBenefitsResponse({ tenantId, storeId, customerId }) {
+    const deletedPromoCompletedCards = customerId > 0
+      ? await loadCustomerDeletedPromoCompletedCards(tenantId, storeId, customerId)
+      : [];
+    const availableRewardRowsRaw = customerId > 0
+      ? await loadCustomerRewardRows(tenantId, customerId, { statuses: ['available'] })
+      : [];
+    const deletedRewardPromoCompletedCards = availableRewardRowsRaw
+      .filter((row) => isDeletedAvailableRewardPromoRow(row))
+      .map((row) => buildPublicCompletedDeletedRewardPromoCardFromRewardRow(row));
     const customerDiscounts = await loadCustomerBenefitDiscountRows(tenantId, storeId, customerId);
     const automaticDiscountRows = customerDiscounts.filter((discount) => (
       isPublicAutomaticSimpleDiscount(discount) && !isHiddenBenefitsDiscount(discount)
@@ -7977,11 +8571,13 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       promo_codes: promoCodes,
       gifts: [...promoClaimGiftCards, ...giftRewards],
       progress,
+      completed: [...deletedPromoCompletedCards, ...deletedRewardPromoCompletedCards],
     };
   }
 
   async function loadCustomerBenefitDiscountRows(tenantId, storeId, customerId) {
     const hasHideInBenefitsColumn = await ensureDiscountHideInBenefitsColumn();
+    await ensureDiscountDeletedColumns();
     const [customerCats] = await db.query(
       `SELECT category_id
          FROM cust_customer_category_links
@@ -8012,7 +8608,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           AND dc.tenant_id = d.tenant_id
         WHERE d.tenant_id = ?
           AND (d.store_id = ? OR d.store_id = 0 OR d.store_id IS NULL)
-          AND d.is_active = 1`,
+          AND d.is_active = 1
+          AND d.is_deleted = 0`,
       [tenantId, storeId]
     );
 
@@ -8066,6 +8663,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
   async function loadAllBenefitDiscountRows(tenantId, storeId) {
     const hasHideInBenefitsColumn = await ensureDiscountHideInBenefitsColumn();
+    await ensureDiscountDeletedColumns();
     const [rows] = await db.query(
       `SELECT d.id, d.store_id, d.title, d.description, d.discount_type, d.discount_value,
               d.apply_to, d.min_order_amount, d.max_discount_amount, d.is_stackable,
@@ -8075,7 +8673,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
               d.unique_code_usage_limit, d.mechanic_type, d.mechanic_config_json
          FROM mkt_discounts d
         WHERE d.tenant_id = ?
-          AND (d.store_id = ? OR d.store_id = 0 OR d.store_id IS NULL)`,
+          AND (d.store_id = ? OR d.store_id = 0 OR d.store_id IS NULL)
+          AND d.is_deleted = 0`,
       [tenantId, storeId]
     );
 
@@ -8152,6 +8751,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
   router.get('/me/discounts', async (req, res) => {
     try {
+      await ensureDiscountDeletedColumns();
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
       const token = str(req.headers['x-customer-token']);
@@ -8171,7 +8771,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
                 'direct' AS link_type
          FROM mkt_discounts d
          JOIN mkt_discount_customers dc ON dc.discount_id = d.id AND dc.tenant_id = d.tenant_id
-         WHERE d.tenant_id = ? AND (d.store_id = ? OR d.store_id = 0 OR d.store_id IS NULL) AND dc.customer_id = ?`,
+         WHERE d.tenant_id = ? AND (d.store_id = ? OR d.store_id = 0 OR d.store_id IS NULL) AND d.is_deleted = 0 AND dc.customer_id = ?`,
         [tenantId, storeId, customerId]
       );
 
@@ -8200,7 +8800,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
                   'category' AS link_type
            FROM mkt_discounts d
            JOIN mkt_discount_customers dc ON dc.discount_id = d.id AND dc.tenant_id = d.tenant_id
-           WHERE d.tenant_id = ? AND (d.store_id = ? OR d.store_id = 0 OR d.store_id IS NULL) AND dc.customer_category_id IN (?)`,
+           WHERE d.tenant_id = ? AND (d.store_id = ? OR d.store_id = 0 OR d.store_id IS NULL) AND d.is_deleted = 0 AND dc.customer_category_id IN (?)`,
           [tenantId, storeId, categoryIds]
         );
         categoryDiscounts = catDisc;
@@ -10841,7 +11441,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           apply_to: publicDiscountText(entry?.apply_to).toLowerCase() || 'order',
           source_kind: sourceKind,
           promo_code: promoCode,
+          discount_id: Number(entry?.discount_id ?? entry?.discountId ?? entry?.source_discount_id ?? entry?.sourceDiscountId ?? 0) || null,
           promo_code_id: Number(entry?.promo_code_id || 0) || null,
+          reward_id: Number(entry?.reward_id || entry?.rewardId || 0) || null,
         };
       })
       .filter(Boolean);
@@ -10914,7 +11516,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     const sourceKind = publicDiscountText(entry?.source_kind ?? entry?.sourceKind).trim().toLowerCase();
     const title = publicDiscountText(entry?.title || entry?.name).trim().toLowerCase();
     const promoCode = normalizeOrderPromoCode(entry?.promo_code ?? entry?.promoCode ?? entry?.code) || '';
-    return `row:${sourceKind}:${title}:${promoCode}`;
+    const rewardId = Number(entry?.reward_id || entry?.rewardId || 0) || 0;
+    return `row:${sourceKind}:${title}:${promoCode}:${rewardId}`;
   }
 
   function mergeStoredCheckoutDiscountEntries(...lists) {
@@ -10933,7 +11536,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           apply_to: publicDiscountText(entry?.apply_to).toLowerCase() || 'order',
           source_kind: publicDiscountText(entry?.source_kind ?? entry?.sourceKind).toLowerCase() || null,
           promo_code: normalizeOrderPromoCode(entry?.promo_code ?? entry?.promoCode ?? entry?.code) || null,
+          discount_id: Number(entry?.discount_id ?? entry?.discountId ?? entry?.source_discount_id ?? entry?.sourceDiscountId ?? 0) || null,
           promo_code_id: Number(entry?.promo_code_id || 0) || null,
+          reward_id: Number(entry?.reward_id || entry?.rewardId || 0) || null,
         };
         const fingerprint = buildStoredCheckoutDiscountFingerprint(normalized);
         const existingIndex = indexByFingerprint.get(fingerprint);
@@ -10945,6 +11550,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         const existing = merged[existingIndex];
         existing.discount_amount = roundPromoMoney(Number(existing.discount_amount || 0) + amount);
         existing.amount = existing.discount_amount;
+        if (!existing.discount_id && normalized.discount_id) existing.discount_id = normalized.discount_id;
+        if (!existing.reward_id && normalized.reward_id) existing.reward_id = normalized.reward_id;
       });
     });
     return merged;
@@ -11229,6 +11836,197 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     return hasValues ? JSON.stringify(meta) : null;
   }
 
+  function buildOrderPromoReservationKey({
+    sourceKind = null,
+    promoCodeId = null,
+    rewardId = null,
+    promoCode = '',
+  } = {}) {
+    const normalizedSourceKind = normalizeCheckoutPromoSource(sourceKind) || 'promo_code';
+    const normalizedPromoCodeId = Number(promoCodeId || 0) || null;
+    const normalizedRewardId = Number(rewardId || 0) || null;
+    const normalizedCode = normalizeOrderPromoCode(promoCode);
+    if (normalizedSourceKind === 'reward_promo' && normalizedRewardId) {
+      return `reward_promo:${normalizedRewardId}`;
+    }
+    if (normalizedPromoCodeId) {
+      return `${normalizedSourceKind}:${normalizedPromoCodeId}`;
+    }
+    if (normalizedCode) {
+      return `${normalizedSourceKind}:code:${normalizedCode}`;
+    }
+    return '';
+  }
+
+  function extractOrderPromoReservationDescriptor(orderRow) {
+    const normalizedPromoCode = normalizeOrderPromoCode(orderRow?.promo_code);
+    if (!normalizedPromoCode) return null;
+
+    const discountsJson = normalizeStoredCheckoutDiscountEntries(orderRow?.discounts_json, {
+      promoCode: normalizedPromoCode,
+    });
+    const benefitsMeta = parseOrderBenefitsMetaJson(orderRow?.benefits_meta_json);
+    const promoEntries = discountsJson.filter((entry) => {
+      const sourceKind = publicDiscountText(entry?.source_kind).toLowerCase();
+      return ['promo_code', 'reward_promo'].includes(sourceKind);
+    });
+    const normalizedSourceKind = normalizeCheckoutPromoSource(benefitsMeta?.selected_promo_source)
+      || (promoEntries.some((entry) => publicDiscountText(entry?.source_kind).toLowerCase() === 'reward_promo')
+        ? 'reward_promo'
+        : promoEntries.some((entry) => publicDiscountText(entry?.source_kind).toLowerCase() === 'promo_code')
+          ? 'promo_code'
+          : null);
+    if (!normalizedSourceKind) return null;
+
+    const primaryPromoEntry = promoEntries.find((entry) => (
+      publicDiscountText(entry?.source_kind).toLowerCase() === normalizedSourceKind
+    )) || promoEntries[0] || null;
+    const promoCodeId = normalizedSourceKind === 'promo_code'
+      ? (Number(primaryPromoEntry?.promo_code_id || 0) || null)
+      : null;
+    const rewardId = normalizedSourceKind === 'reward_promo'
+      ? (
+          normalizeSelectedDiscountId(benefitsMeta?.selected_promo_reward_id)
+          || (Number(primaryPromoEntry?.reward_id || 0) || null)
+        )
+      : null;
+
+    return {
+      order_id: Number(orderRow?.id || 0) || null,
+      customer_id: Number(orderRow?.customer_id || 0) || null,
+      source_kind: normalizedSourceKind,
+      discount_id: Number(primaryPromoEntry?.discount_id || 0) || null,
+      promo_code_id: promoCodeId,
+      reward_id: rewardId,
+      promo_code: normalizedPromoCode,
+      key: buildOrderPromoReservationKey({
+        sourceKind: normalizedSourceKind,
+        promoCodeId,
+        rewardId,
+        promoCode: normalizedPromoCode,
+      }),
+    };
+  }
+
+  async function loadActiveOrderPromoReservationRows(queryable, {
+    tenantId,
+    storeId,
+    promoCodes = [],
+    excludeOrderId = null,
+    customerId = null,
+  } = {}) {
+    const normalizedTenantId = Number(tenantId || 0);
+    const normalizedStoreId = Number(storeId || 0);
+    const normalizedExcludeOrderId = Number(excludeOrderId || 0) || null;
+    const normalizedCustomerId = Number(customerId || 0) || null;
+    const normalizedCodes = Array.from(
+      new Set(
+        (Array.isArray(promoCodes) ? promoCodes : [])
+          .map((code) => normalizeOrderPromoCode(code))
+          .filter(Boolean)
+      )
+    );
+    if (!(normalizedTenantId > 0) || !(normalizedStoreId > 0) || !normalizedCodes.length) {
+      return [];
+    }
+
+    const hasBenefitsMetaColumn = await ensureOrderBenefitsMetaColumn();
+    const whereClauses = [
+      'o.tenant_id = ?',
+      'o.store_id = ?',
+      'o.is_active = 1',
+      "COALESCE(os.is_final, 0) = 0",
+      "LOWER(COALESCE(os.code, '')) NOT IN ('canceled', 'cancelled')",
+      "UPPER(REPLACE(COALESCE(o.promo_code, ''), ' ', '')) IN (?)",
+    ];
+    const params = [normalizedTenantId, normalizedStoreId, normalizedCodes];
+    if (normalizedExcludeOrderId) {
+      whereClauses.push('o.id <> ?');
+      params.push(normalizedExcludeOrderId);
+    }
+    if (normalizedCustomerId) {
+      whereClauses.push('o.customer_id = ?');
+      params.push(normalizedCustomerId);
+    }
+
+    const [rows] = await queryable.query(
+      `SELECT o.id,
+              o.customer_id,
+              o.promo_code,
+              o.discounts_json,
+              ${hasBenefitsMetaColumn ? 'o.benefits_meta_json' : 'NULL AS benefits_meta_json'}
+         FROM order_orders o
+         LEFT JOIN order_statuses os
+           ON os.tenant_id = o.tenant_id
+          AND os.store_id = o.store_id
+          AND os.id = o.status_id
+        WHERE ${whereClauses.join(' AND ')}`,
+      params
+    );
+    return Array.isArray(rows) ? rows : [];
+  }
+
+  function buildActiveOrderPromoReservationStatsMap(orderRows, currentCustomerId = null) {
+    const normalizedCurrentCustomerId = Number(currentCustomerId || 0) || null;
+    const stats = new Map();
+    (Array.isArray(orderRows) ? orderRows : []).forEach((orderRow) => {
+      const descriptor = extractOrderPromoReservationDescriptor(orderRow);
+      const key = descriptor?.key || '';
+      if (!key) return;
+      const current = stats.get(key) || {
+        totalReservations: 0,
+        customerReservations: 0,
+        orderIds: [],
+      };
+      current.totalReservations += 1;
+      if (
+        normalizedCurrentCustomerId
+        && Number(descriptor?.customer_id || 0) === normalizedCurrentCustomerId
+      ) {
+        current.customerReservations += 1;
+      }
+      if (Number(descriptor?.order_id || 0) > 0) {
+        current.orderIds.push(Number(descriptor.order_id));
+      }
+      stats.set(key, current);
+    });
+    return stats;
+  }
+
+  function readActiveOrderPromoReservationStats(statsMap, descriptor = {}) {
+    if (!(statsMap instanceof Map)) {
+      return { totalReservations: 0, customerReservations: 0, orderIds: [] };
+    }
+    const candidateKeys = [];
+    const exactKey = buildOrderPromoReservationKey(descriptor);
+    if (exactKey) candidateKeys.push(exactKey);
+    const fallbackCodeKey = buildOrderPromoReservationKey({
+      sourceKind: descriptor?.sourceKind,
+      promoCode: descriptor?.promoCode,
+    });
+    if (fallbackCodeKey && !candidateKeys.includes(fallbackCodeKey)) {
+      candidateKeys.push(fallbackCodeKey);
+    }
+    const fallbackPromoKey = buildOrderPromoReservationKey({
+      sourceKind: 'promo_code',
+      promoCode: descriptor?.promoCode,
+    });
+    if (fallbackPromoKey && !candidateKeys.includes(fallbackPromoKey)) {
+      candidateKeys.push(fallbackPromoKey);
+    }
+    const stats = candidateKeys
+      .map((key) => statsMap.get(key))
+      .find((entry) => entry);
+    if (!stats) {
+      return { totalReservations: 0, customerReservations: 0, orderIds: [] };
+    }
+    return {
+      totalReservations: Number(stats?.totalReservations || 0),
+      customerReservations: Number(stats?.customerReservations || 0),
+      orderIds: Array.isArray(stats?.orderIds) ? stats.orderIds.slice() : [],
+    };
+  }
+
   function isPromoRewardRedeemAction(discount) {
     const config = parsePublicDiscountObject(discount?.mechanic_config_json, {});
     const reward = parsePublicDiscountObject(config?.promo_reward, {});
@@ -11378,6 +12176,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     return {
       discount_id: Number(discount?.discount_id || discount?.id || 0),
       promo_code_id: Number(promoRow?.promo_code_id || 0) || null,
+      reward_id: Number(extra?.reward_id || 0) || null,
       title: publicDiscountText(discount?.title) || '\u041f\u0440\u043e\u043c\u043e\u043a\u043e\u0434',
       discount_type: extra.discount_type || null,
       discount_value: extra.discount_value ?? null,
@@ -11782,6 +12581,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     const normalizedPromoCode = normalizedSourceKind === 'promo_code' || normalizedSourceKind === 'reward_promo'
       ? (normalizeOrderPromoCode(extra?.promo_code ?? extra?.promoCode) || null)
       : null;
+    const normalizedDiscountId = Number(extra?.discount_id ?? extra?.discountId ?? extra?.source_discount_id ?? extra?.sourceDiscountId ?? 0) || null;
+    const normalizedPromoCodeId = Number(extra?.promo_code_id ?? extra?.promoCodeId ?? extra?.source_promo_code_id ?? extra?.sourcePromoCodeId ?? 0) || null;
+    const normalizedRewardId = Number(extra?.reward_id ?? extra?.rewardId ?? 0) || null;
     if (!(normalizedAmount > 0)) return;
 
     const current = targetMap.get(normalizedKey);
@@ -11789,6 +12591,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       current.amount = roundPromoMoney(Number(current.amount || 0) + normalizedAmount);
       if (!current.source_kind && normalizedSourceKind) current.source_kind = normalizedSourceKind;
       if (!current.promo_code && normalizedPromoCode) current.promo_code = normalizedPromoCode;
+      if (!current.discount_id && normalizedDiscountId) current.discount_id = normalizedDiscountId;
+      if (!current.promo_code_id && normalizedPromoCodeId) current.promo_code_id = normalizedPromoCodeId;
+      if (!current.reward_id && normalizedRewardId) current.reward_id = normalizedRewardId;
       return;
     }
 
@@ -11798,6 +12603,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       amount: normalizedAmount,
       source_kind: normalizedSourceKind,
       promo_code: normalizedPromoCode,
+      discount_id: normalizedDiscountId,
+      promo_code_id: normalizedPromoCodeId,
+      reward_id: normalizedRewardId,
     });
   }
 
@@ -11859,6 +12667,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         amount: roundPromoMoney(Number(entry?.amount || 0)),
         source_kind: publicDiscountText(entry?.source_kind).toLowerCase() || null,
         promo_code: normalizeOrderPromoCode(entry?.promo_code) || null,
+        discount_id: Number(entry?.discount_id || 0) || null,
+        promo_code_id: Number(entry?.promo_code_id || 0) || null,
+        reward_id: Number(entry?.reward_id || 0) || null,
       }));
     const discountTotal = roundPromoMoney(
       Math.max(0, normalizedSubtotal - normalizedItemsTotal)
@@ -11991,6 +12802,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       'PROMO_NOT_AVAILABLE',
       'PROMO_LIMIT_REACHED',
       'PROMO_CUSTOMER_LIMIT_REACHED',
+      'PROMO_RESERVED',
     ]);
 
     return (Array.isArray(promoEntries) ? promoEntries : [])
@@ -12092,6 +12904,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           {
             source_kind: promoEntry?.source || 'promo_code',
             promo_code: promoEntry?.selectionCode || promoEntry?.card?.code || null,
+            discount_id: Number(promoEntry?.discount?.id || promoEntry?.discount?.discount_id || 0) || null,
+            promo_code_id: Number(promoEntry?.promoRow?.promo_code_id || 0) || null,
+            reward_id: Number(promoEntry?.rewardId || 0) || null,
           }
         );
       }
@@ -12124,6 +12939,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           Number(discountOutcome.discountAmount || 0),
           {
             source_kind: discountEntry?.source || 'discount',
+            discount_id: Number(discountEntry?.sourceDiscountId || discountEntry?.selectionId || 0) || null,
+            reward_id: Number(discountEntry?.rewardId || 0) || null,
           }
         );
       }
@@ -12172,6 +12989,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             {
               source_kind: promoEntry?.source || 'promo_code',
               promo_code: promoEntry?.selectionCode || promoEntry?.card?.code || null,
+              discount_id: Number(promoEntry?.discount?.id || promoEntry?.discount?.discount_id || 0) || null,
+              promo_code_id: Number(promoEntry?.promoRow?.promo_code_id || 0) || null,
+              reward_id: Number(promoEntry?.rewardId || 0) || null,
             }
           );
         }
@@ -12209,6 +13029,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
   function buildPromoPreviewDisabledReason(errorCode) {
     switch (publicDiscountText(errorCode).toUpperCase()) {
+      case 'PROMO_RESERVED':
+        return 'Промокод уже зарезервирован в активном заказе.';
       case 'PROMO_LIMIT_REACHED':
         return '\u041b\u0438\u043c\u0438\u0442 \u043f\u0440\u043e\u043c\u043e\u043a\u043e\u0434\u0430 \u0438\u0441\u0447\u0435\u0440\u043f\u0430\u043d.';
       case 'PROMO_CUSTOMER_LIMIT_REACHED':
@@ -12317,8 +13139,14 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     const rewardRows = customerId > 0
       ? await loadCustomerRewardRows(tenantId, customerId, { statuses: ['available', 'used', 'expired'] })
       : [];
-    const availableRewardRows = rewardRows.filter((row) => publicDiscountText(row?.status).toLowerCase() === 'available');
-    const completedCards = buildPublicCompletedCardsFromRewardRows(rewardRows);
+    const availableRewardRows = rewardRows.filter((row) => (
+      publicDiscountText(row?.status).toLowerCase() === 'available'
+      && !isDeletedAvailableRewardPromoRow(row)
+    ));
+    const completedCards = [
+      ...buildPublicCompletedCardsFromRewardRows(rewardRows),
+      ...(customerId > 0 ? await loadCustomerDeletedPromoCompletedCards(tenantId, storeId, customerId) : []),
+    ];
     const redeemedSourcePromoIds = new Set(
       rewardRows
         .map((row) => {
@@ -12498,6 +13326,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     let promoTargetsByDiscountId = new Map();
     let promoCustomerUsageMap = new Map();
     let promoTargetPreviewProductsMap = new Map();
+    let activePromoReservationStats = new Map();
 
     if (promoDiscountIds.length) {
       promoRowsByDiscountId = previewMode === 'all'
@@ -12565,6 +13394,29 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       }
     }
 
+    const reservationPromoCodes = new Set();
+    allPromoRowsByDiscountId.forEach((rows) => {
+      (Array.isArray(rows) ? rows : []).forEach((row) => {
+        const code = normalizeOrderPromoCode(row?.code);
+        if (code) reservationPromoCodes.add(code);
+      });
+    });
+    availableRewardRows
+      .filter((row) => publicDiscountText(row?.reward_type).toLowerCase() === 'promo_code')
+      .forEach((row) => {
+        const payload = parsePublicRewardPayload(row);
+        const code = normalizeOrderPromoCode(payload?.code || payload?.source_code);
+        if (code) reservationPromoCodes.add(code);
+      });
+    if (reservationPromoCodes.size) {
+      const activePromoReservationRows = await loadActiveOrderPromoReservationRows(db, {
+        tenantId,
+        storeId,
+        promoCodes: [...reservationPromoCodes],
+      });
+      activePromoReservationStats = buildActiveOrderPromoReservationStatsMap(activePromoReservationRows, customerId);
+    }
+
     function buildPromoRuntimeConfig(discount) {
       return {
         ...getPromoRuntimeConfig(discount),
@@ -12579,6 +13431,11 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         previewItems.reduce((sum, item) => sum + Number(item?.line_total || 0), 0)
       );
       const discountAudienceMatched = opts?.discountAudienceMatched !== false;
+      const reservationStats = opts?.reservationStats && typeof opts.reservationStats === 'object'
+        ? opts.reservationStats
+        : null;
+      const reservedTotalCount = Number(reservationStats?.totalReservations || 0);
+      const reservedCustomerCount = Number(reservationStats?.customerReservations || 0);
 
       if (!promoRow || !discount || !publicDiscountText(promoRow?.code)) {
         return {
@@ -12602,7 +13459,21 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         };
       }
 
-      if (Number(promoRow?.usage_limit || 0) > 0 && Number(promoRow?.usage_count || 0) >= Number(promoRow?.usage_limit || 0)) {
+      if (reservedCustomerCount > 0) {
+        return {
+          isApplicable: false,
+          disabledReasonCode: 'PROMO_RESERVED',
+          disabledReason: buildPromoPreviewDisabledReason('PROMO_RESERVED'),
+          discountAmount: 0,
+          itemsTotalAfterPromo: itemsTotalBeforePromo,
+          items: previewItems,
+        };
+      }
+
+      if (
+        Number(promoRow?.usage_limit || 0) > 0
+        && (Number(promoRow?.usage_count || 0) + reservedTotalCount) >= Number(promoRow?.usage_limit || 0)
+      ) {
         return {
           isApplicable: false,
           disabledReasonCode: 'PROMO_LIMIT_REACHED',
@@ -12626,7 +13497,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
       if (Number(discount?.usage_per_customer || 0) > 0 && Number(customerId || 0) > 0) {
         const customerUsageCount = Number(promoCustomerUsageMap.get(Number(discount?.id || 0)) || 0);
-        if (customerUsageCount >= Number(discount?.usage_per_customer || 0)) {
+        if ((customerUsageCount + reservedCustomerCount) >= Number(discount?.usage_per_customer || 0)) {
           return {
             isApplicable: false,
             disabledReasonCode: 'PROMO_CUSTOMER_LIMIT_REACHED',
@@ -12664,11 +13535,22 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         const representativeRow = pickBenefitPromoCatalogRow(rows, customerId);
         const representativeCode = publicDiscountText(representativeRow?.code);
         const codeMode = publicDiscountText(representativeRow?.code_mode).toLowerCase();
+        const representativeReservationStats = readActiveOrderPromoReservationStats(
+          activePromoReservationStats,
+          {
+            sourceKind: 'promo_code',
+            promoCodeId: Number(representativeRow?.promo_code_id || representativeRow?.id || 0) || null,
+            promoCode: representativeCode,
+          }
+        );
         const baseOutcome = computeRegularPromoPreviewOutcome(
           discount,
           representativeRow,
           targetSets,
-          { discountAudienceMatched: audienceMatched }
+          {
+            discountAudienceMatched: audienceMatched,
+            reservationStats: representativeReservationStats,
+          }
         );
         const currentOutcome = selectedDiscountOutcome?.isApplicable && baseOutcome?.isApplicable
           ? computeCheckoutPromoPreviewEffect({
@@ -12748,8 +13630,15 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         const code = publicDiscountText(row?.code);
         const codeMode = publicDiscountText(row?.code_mode).toLowerCase();
         if (!code) continue;
+        const promoReservationStats = readActiveOrderPromoReservationStats(activePromoReservationStats, {
+          sourceKind: 'promo_code',
+          promoCodeId: Number(row?.promo_code_id || 0) || null,
+          promoCode: code,
+        });
 
-        const baseOutcome = computeRegularPromoPreviewOutcome(discount, row, targetSets);
+        const baseOutcome = computeRegularPromoPreviewOutcome(discount, row, targetSets, {
+          reservationStats: promoReservationStats,
+        });
         const currentOutcome = selectedDiscountOutcome?.isApplicable && baseOutcome?.isApplicable
           ? computeCheckoutPromoPreviewEffect({
               runtimeConfig,
@@ -12822,16 +13711,31 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     for (const rewardRow of availableRewardRows) {
       if (publicDiscountText(rewardRow?.reward_type).toLowerCase() !== 'promo_code') continue;
       const payload = parsePublicRewardPayload(rewardRow);
+      const rewardPromoReservationStats = readActiveOrderPromoReservationStats(activePromoReservationStats, {
+        sourceKind: 'reward_promo',
+        rewardId: Number(rewardRow?.id || 0) || null,
+        promoCode: publicDiscountText(payload?.code || payload?.source_code),
+      });
       const targetRows = getRewardPayloadTargetRows(payload);
       const targetSets = buildDiscountProductTargetSets(targetRows);
       const runtimeConfig = getRewardPromoRuntimeConfig(payload);
-      const baseOutcome = computeCheckoutPromoPreviewEffect({
+      const rewardBaseOutcome = computeCheckoutPromoPreviewEffect({
         runtimeConfig,
         targetSets,
         sourceItems: baseItems,
         sourceItemsTotal: itemsBaseTotal,
         productCategoriesMap,
       });
+      const baseOutcome = Number(rewardPromoReservationStats?.customerReservations || 0) > 0
+        ? {
+            isApplicable: false,
+            disabledReasonCode: 'PROMO_RESERVED',
+            disabledReason: buildPromoPreviewDisabledReason('PROMO_RESERVED'),
+            discountAmount: 0,
+            itemsTotalAfterPromo: roundPromoMoney(itemsBaseTotal),
+            items: cloneCheckoutBenefitItems(baseItems),
+          }
+        : rewardBaseOutcome;
       const currentOutcome = selectedDiscountOutcome?.isApplicable && baseOutcome?.isApplicable
         ? computeCheckoutPromoPreviewEffect({
             runtimeConfig,
@@ -12914,6 +13818,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           {
             source_kind: selectedPromoSource || selectedPromoEntry?.source || 'promo_code',
             promo_code: selectedPromoEntry?.selectionCode || selectedPromoCard?.code || promoCode || null,
+            discount_id: Number(selectedPromoEntry?.discount?.id || selectedPromoEntry?.discount?.discount_id || selectedPromoCard?.discount_id || 0) || null,
+            promo_code_id: Number(selectedPromoEntry?.promoRow?.promo_code_id || selectedPromoCard?.promo_code_id || 0) || null,
+            reward_id: Number(selectedPromoEntry?.rewardId || selectedPromoCard?.reward_id || 0) || null,
           }
         );
       }
@@ -13923,6 +14830,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       }
 
       await ensureDiscountHideInBenefitsColumn();
+      await ensureDiscountDeletedColumns();
       conn = await db.getConnection();
       await conn.beginTransaction();
 
@@ -13931,6 +14839,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
            FROM mkt_discounts d
           WHERE d.tenant_id = ?
             AND (d.store_id = ? OR d.store_id = 0 OR d.store_id IS NULL)
+            AND d.is_deleted = 0
             AND d.id = ?
           ORDER BY d.store_id DESC, d.id DESC
           LIMIT 1
@@ -14100,6 +15009,12 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         }));
       }
       let claimedCount = 1;
+      const progressPromoSource = rewardKind === 'promo_code'
+        ? parsePublicDiscountObject(mechanic?.reward?.promo_code, {})
+        : null;
+      const progressPromoSourceMode = publicDiscountText(progressPromoSource?.source_code_mode).toLowerCase() === 'unique'
+        ? 'unique'
+        : 'shared';
 
       if (rewardKind === 'gift') {
         const claimOptions = await buildCheckoutProgressGiftClaimOptionsData({
@@ -14187,6 +15102,15 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           });
         }
         claimedCount = selectedResolvedItems.length;
+      } else if (rewardKind === 'promo_code' && progressPromoSourceMode === 'unique') {
+        await issueUniquePromoCodeFromDiscountPool(conn, {
+          tenantId,
+          storeId,
+          customerId,
+          discountId: Number(progressPromoSource?.source_discount_id || 0),
+          allowHiddenBenefitSave: true,
+        });
+        claimedCount = 1;
       } else {
         const rewardDefinition = await buildRewardPayloadFromLoyaltyProgress(conn, {
           tenantId,
@@ -14239,11 +15163,12 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         try { await conn.rollback(); } catch {}
         try { conn.release(); } catch {}
       }
-      if (e?.code === 'PROMO_INVALID') {
-        return res.status(409).json({ ok: false, error: 'PROMO_INVALID' });
+      const errorCode = String(e?.code || e?.message || '');
+      if (['PROMO_INVALID', 'PROMO_NOT_AVAILABLE', 'PROMO_CLAIM_LIMIT_REACHED', 'PROMO_CLAIM_UNAVAILABLE'].includes(errorCode)) {
+        return res.status(409).json({ ok: false, error: errorCode });
       }
-      if (['DISCOUNT_INVALID', 'DISCOUNT_NOT_AVAILABLE', 'DISCOUNT_NOT_APPLICABLE', 'REWARD_NOT_APPLICABLE'].includes(String(e?.code || e?.message || ''))) {
-        return res.status(409).json({ ok: false, error: String(e?.code || e?.message || 'DISCOUNT_NOT_APPLICABLE') });
+      if (['DISCOUNT_INVALID', 'DISCOUNT_NOT_AVAILABLE', 'DISCOUNT_NOT_APPLICABLE', 'REWARD_NOT_APPLICABLE'].includes(errorCode)) {
+        return res.status(409).json({ ok: false, error: errorCode || 'DISCOUNT_NOT_APPLICABLE' });
       }
       console.error(e);
       return res.status(500).json({ ok: false, error: 'DB_ERROR' });
@@ -15510,6 +16435,16 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const selectedRewardPromoRow = selectedPromoSource === 'reward_promo'
         ? (availableRewardPromoRows.find((row) => Number(row?.id || 0) === Number(selectedPromoRewardId || 0)) || null)
         : null;
+      const activePromoReservationStats = promoCode
+        ? buildActiveOrderPromoReservationStatsMap(
+            await loadActiveOrderPromoReservationRows(db, {
+              tenantId,
+              storeId: orderStoreId,
+              promoCodes: [promoCode],
+            }),
+            customerId
+          )
+        : new Map();
 
       if (!useClientPricingSnapshotMode && promoCode) {
         if (selectedPromoSource === 'reward_promo') {
@@ -15521,6 +16456,14 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           const rewardCode = normalizeOrderPromoCode(rewardPayload?.code || rewardPayload?.source_code);
           if (!rewardCode || rewardCode !== promoCode) {
             return res.status(409).json({ ok: false, error: 'PROMO_INVALID' });
+          }
+          const rewardPromoReservationStats = readActiveOrderPromoReservationStats(activePromoReservationStats, {
+            sourceKind: 'reward_promo',
+            rewardId: Number(selectedRewardPromoRow?.id || 0) || null,
+            promoCode: rewardCode,
+          });
+          if (Number(rewardPromoReservationStats?.customerReservations || 0) > 0) {
+            return res.status(409).json({ ok: false, error: 'PROMO_RESERVED' });
           }
 
           const rewardPromoDiscount = {
@@ -15572,6 +16515,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
                 apply_to: 'order',
                 discount_type: rewardPromoRuntime.discountType,
                 discount_value: rewardPromoRuntime.discountValue,
+                source_kind: 'reward_promo',
+                reward_id: Number(selectedRewardPromoRow?.id || 0) || null,
               }));
             } else {
               let rewardPromoItemsDiscount = 0;
@@ -15608,6 +16553,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
                   discount_type: rewardPromoRuntime.discountType,
                   discount_value: rewardPromoRuntime.discountValue,
                   product_id: Number(item.product_id || 0) || null,
+                  source_kind: 'reward_promo',
+                  reward_id: Number(selectedRewardPromoRow?.id || 0) || null,
                 }));
               }
 
@@ -15666,6 +16613,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             addOrderDiscountAmount(giftDiscountAmount);
             pushOrderDiscountRecord(buildPromoUsageRecord(rewardPromoUsageSource, rewardPromoUsageRow, giftDiscountAmount, {
               apply_to: 'gift',
+              source_kind: 'reward_promo',
+              reward_id: Number(selectedRewardPromoRow?.id || 0) || null,
             }));
           } else {
             let rewardItemsDiscount = 0;
@@ -15701,6 +16650,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
                 discount_type: rewardPromoRuntime.discountType,
                 discount_value: rewardPromoRuntime.discountValue,
                 product_id: Number(item.product_id || 0) || null,
+                source_kind: 'reward_promo',
+                reward_id: Number(selectedRewardPromoRow?.id || 0) || null,
               }));
             }
 
@@ -15712,6 +16663,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             total = roundPrice(total - rewardItemsDiscount);
           }
         } else {
+          await ensureDiscountDeletedColumns();
           const [[promoRow]] = await db.query(
           `SELECT pc.id AS promo_code_id, pc.discount_id, pc.code, pc.code_mode, pc.is_active AS promo_is_active,
                   pc.usage_limit AS promo_usage_limit, pc.usage_count AS promo_usage_count, pc.assigned_customer_id,
@@ -15719,8 +16671,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
              FROM mkt_discount_promo_codes pc
              INNER JOIN mkt_discounts d
                ON d.id = pc.discount_id
-              AND d.tenant_id = pc.tenant_id
-              AND (d.store_id = pc.store_id OR d.store_id = 0 OR d.store_id IS NULL)
+               AND d.tenant_id = pc.tenant_id
+               AND (d.store_id = pc.store_id OR d.store_id = 0 OR d.store_id IS NULL)
+               AND d.is_deleted = 0
             WHERE pc.tenant_id = ?
               AND (pc.store_id = ? OR pc.store_id = 0 OR pc.store_id IS NULL)
               AND UPPER(REPLACE(pc.code, ' ', '')) = ?
@@ -15740,7 +16693,20 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           return res.status(409).json({ ok: false, error: 'PROMO_NOT_AVAILABLE' });
         }
 
-        if (Number(promoRow.promo_usage_limit || 0) > 0 && Number(promoRow.promo_usage_count || 0) >= Number(promoRow.promo_usage_limit || 0)) {
+        const promoReservationStats = readActiveOrderPromoReservationStats(activePromoReservationStats, {
+          sourceKind: 'promo_code',
+          promoCodeId: Number(promoRow?.promo_code_id || 0) || null,
+          promoCode: promoRow?.code,
+        });
+        if (Number(promoReservationStats?.customerReservations || 0) > 0) {
+          return res.status(409).json({ ok: false, error: 'PROMO_RESERVED' });
+        }
+
+        if (
+          Number(promoRow.promo_usage_limit || 0) > 0
+          && (Number(promoRow.promo_usage_count || 0) + Number(promoReservationStats?.totalReservations || 0))
+            >= Number(promoRow.promo_usage_limit || 0)
+        ) {
           return res.status(409).json({ ok: false, error: 'PROMO_LIMIT_REACHED' });
         }
 
@@ -15766,7 +16732,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
               WHERE tenant_id = ? AND discount_id = ? AND customer_id = ?`,
             [tenantId, Number(promoRow.discount_id || 0), Number(customerId || 0)]
           );
-          if (Number(promoCustomerUsage?.usage_count || 0) >= Number(promoRow.usage_per_customer || 0)) {
+          if (
+            (Number(promoCustomerUsage?.usage_count || 0) + Number(promoReservationStats?.customerReservations || 0))
+            >= Number(promoRow.usage_per_customer || 0)
+          ) {
             return res.status(409).json({ ok: false, error: 'PROMO_CUSTOMER_LIMIT_REACHED' });
           }
         }
@@ -15954,7 +16923,6 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         new Set(
           [
             Number(selectedRewardDiscountRow?.id || 0),
-            selectedPromoSource === 'reward_promo' ? Number(selectedRewardPromoRow?.id || 0) : 0,
             ...giftRewardUsageIds,
           ].filter((id) => Number.isInteger(id) && id > 0)
         )
@@ -16367,37 +17335,6 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       // Heavy post-actions run in background, response is already sent.
       setImmediate(async () => {
         try {
-          const usageMap = new Map();
-          for (const appliedDiscount of appliedDiscounts) {
-            const discountId = Number(appliedDiscount?.discount_id || 0);
-            if (!(discountId > 0)) continue;
-            const promoCodeId = Number(appliedDiscount?.promo_code_id || 0) || 0;
-            const key = `${discountId}:${promoCodeId}`;
-            const usageRecord = usageMap.get(key) || {
-              discount_id: discountId,
-              promo_code_id: promoCodeId || null,
-              discount_amount: 0,
-            };
-            usageRecord.discount_amount += Number(appliedDiscount?.discount_amount || 0);
-            usageMap.set(key, usageRecord);
-          }
-
-          for (const usageRecord of usageMap.values()) {
-            try {
-              await discountHelpers.recordDiscountUsage(
-                db,
-                tenantId,
-                usageRecord.discount_id,
-                orderId,
-                customerId,
-                usageRecord.discount_amount,
-                usageRecord.promo_code_id || null
-              );
-            } catch (discountErr) {
-              console.error('Failed to record discount usage:', discountErr);
-            }
-          }
-
           const payload = payloadForPostActions || await fetchOrderPayload(tenantId, orderStoreId, orderId, { storeTimezone });
 
           if (payload) {
