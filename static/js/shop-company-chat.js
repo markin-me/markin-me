@@ -406,6 +406,8 @@
   let contextMenuEditBtn = null;
   let contextMenuDeleteBtn = null;
   let contextMenuAnchorPoint = null;
+  let mobileContextSceneUi = null;
+  let mobileContextSceneState = null;
   let editingMessageId = "";
   let deleteConfirmUi = null;
   let pendingDeleteConfirm = null;
@@ -490,6 +492,11 @@
   let chatOrderFooterOutsideHandler = null;
 
   const LONG_PRESS_MS = 430;
+  const LONG_PRESS_MOVE_CANCEL_PX = 14;
+  const MOBILE_CONTEXT_MENU_APPEAR_DELAY_MS = 140;
+  const MOBILE_CONTEXT_RELAYOUT_LOCK_MS = 260;
+  const MOBILE_CONTEXT_CLONE_OPEN_TRANSITION = "transform .46s cubic-bezier(.22,.61,.36,1)";
+  const MOBILE_CONTEXT_CLONE_RELAYOUT_TRANSITION = "transform .26s cubic-bezier(.22,.61,.36,1)";
   const SWIPE_REPLY_TRIGGER = 56;
   const HEART_DOUBLE_TAP_MS = 280;
   const HEART_DOUBLE_TAP_MOVE_PX = 24;
@@ -7527,6 +7534,15 @@
 
     if (menu.dataset.bound === "1") return;
     menu.dataset.bound = "1";
+    menu.addEventListener("touchmove", function (event) {
+      if (!menu.classList.contains("is-reactions-expanded")) return;
+      const reactionsBox = event.target && event.target.closest
+        ? event.target.closest(".shop-company-chat-context-reactions")
+        : null;
+      if (!reactionsBox) return;
+      suppressTapUntil = Math.max(suppressTapUntil, Date.now() + 260);
+      event.stopPropagation();
+    }, { passive: true });
     menu.addEventListener("click", function (event) {
       if (Date.now() < suppressTapUntil) {
         event.preventDefault();
@@ -7543,7 +7559,6 @@
           hideReactionBar();
           const nextExpanded = !menu.classList.contains("is-reactions-expanded");
           setContextMenuReactionsExpanded(nextExpanded);
-          refreshContextMenuReactionBoxPosition();
           return;
         }
         if (!messageId || !reaction) return;
@@ -7599,8 +7614,330 @@
     });
   }
 
+  function ensureMobileContextSceneUi() {
+    if (mobileContextSceneUi && mobileContextSceneUi.root && mobileContextSceneUi.root.isConnected) {
+      return mobileContextSceneUi;
+    }
+
+    const root = document.createElement("div");
+    root.className = "shop-company-chat-mobile-context-scene hidden";
+    root.innerHTML =
+      '<div class="shop-company-chat-mobile-context-scene__backdrop"></div>' +
+      '<div class="shop-company-chat-mobile-context-scene__clone" aria-hidden="true"></div>';
+    overlay.appendChild(root);
+
+    const ui = {
+      root: root,
+      backdrop: root.querySelector(".shop-company-chat-mobile-context-scene__backdrop"),
+      cloneHost: root.querySelector(".shop-company-chat-mobile-context-scene__clone"),
+    };
+
+    if (ui.backdrop && ui.backdrop.dataset.bound !== "1") {
+      ui.backdrop.dataset.bound = "1";
+      ui.backdrop.addEventListener("click", function (event) {
+        if (Date.now() < suppressTapUntil) {
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        hideContextMenu();
+        hideReactionBar();
+      });
+    }
+
+    mobileContextSceneUi = ui;
+    return ui;
+  }
+
+  function shouldUseMobileContextScene() {
+    return isMobileChatViewport() && overlay.classList.contains("is-open");
+  }
+
+  function getMobileContextSceneViewportBox() {
+    const viewport = window.visualViewport;
+    const width = viewport ? Number(viewport.width || 0) : 0;
+    const height = viewport ? Number(viewport.height || 0) : 0;
+    const left = viewport ? Number(viewport.offsetLeft || 0) : 0;
+    const top = viewport ? Number(viewport.offsetTop || 0) : 0;
+    const resolvedWidth = Number.isFinite(width) && width > 0
+      ? width
+      : Math.max(
+          Number(window.innerWidth || 0),
+          Number(document.documentElement && document.documentElement.clientWidth || 0)
+        );
+    const resolvedHeight = Number.isFinite(height) && height > 0
+      ? height
+      : Math.max(
+          Number(window.innerHeight || 0),
+          Number(document.documentElement && document.documentElement.clientHeight || 0)
+        );
+    return {
+      left: Math.round(Number.isFinite(left) ? left : 0),
+      top: Math.round(Number.isFinite(top) ? top : 0),
+      width: Math.max(0, Math.round(resolvedWidth)),
+      height: Math.max(0, Math.round(resolvedHeight)),
+      right: Math.round((Number.isFinite(left) ? left : 0) + resolvedWidth),
+      bottom: Math.round((Number.isFinite(top) ? top : 0) + resolvedHeight),
+    };
+  }
+
+  function findContextMenuSourceNodes(messageId) {
+    const id = String(messageId || "").trim();
+    if (!id || !thread) return null;
+    const row = thread.querySelector('.shop-company-chat-row[data-message-id="' + cssEscape(id) + '"]');
+    if (!row) return null;
+    const bubble = row.querySelector('.shop-company-chat-bubble[data-message-id="' + cssEscape(id) + '"]');
+    if (!bubble) return null;
+    return {
+      row: row,
+      bubble: bubble,
+    };
+  }
+
+  function hideMobileContextScene() {
+    const scene = mobileContextSceneState;
+    if (scene && scene.sourceRow && scene.sourceRow.isConnected) {
+      scene.sourceRow.classList.remove("is-mobile-context-source-hidden");
+    }
+
+    const ui = mobileContextSceneUi;
+    if (ui) {
+      ui.root.classList.remove("is-open");
+      ui.root.classList.add("hidden");
+      if (ui.cloneHost) {
+        ui.cloneHost.classList.remove("is-user", "is-agent");
+        if (typeof ui.cloneHost.replaceChildren === "function") {
+          ui.cloneHost.replaceChildren();
+        } else {
+          ui.cloneHost.textContent = "";
+        }
+        ui.cloneHost.style.left = "";
+        ui.cloneHost.style.top = "";
+        ui.cloneHost.style.width = "";
+        ui.cloneHost.style.minWidth = "";
+        ui.cloneHost.style.maxWidth = "";
+        ui.cloneHost.style.transition = "";
+        ui.cloneHost.style.transform = "";
+      }
+    }
+
+    if (contextMenuEl) {
+      contextMenuEl.style.visibility = "";
+    }
+
+    mobileContextSceneState = null;
+  }
+
+  function layoutMobileContextScene(options) {
+    const scene = mobileContextSceneState;
+    if (!scene || !contextMenuEl || !scene.sourceBubble || !scene.sourceBubble.isConnected) return false;
+    const ui = ensureMobileContextSceneUi();
+    if (!ui || !ui.cloneHost) return false;
+
+    const bubbleRect = scene.sourceBubble.getBoundingClientRect();
+    if (!bubbleRect || bubbleRect.width <= 0 || bubbleRect.height <= 0) return false;
+
+    const menuWasHidden = contextMenuEl.classList.contains("hidden");
+    if (menuWasHidden) {
+      contextMenuEl.classList.remove("hidden");
+      contextMenuEl.style.visibility = "hidden";
+      contextMenuEl.style.opacity = "0";
+    }
+    const menuRect = contextMenuEl.getBoundingClientRect();
+    const menuWidth = Math.max(0, Number(menuRect.width || 0));
+    const menuHeight = Math.max(0, Number(menuRect.height || 0));
+    const viewportBox = getMobileContextSceneViewportBox();
+    const isOutgoing = scene.isOutgoing === true;
+    const sidePadding = 16;
+    const topPadding = 20;
+    const bottomPadding = 20;
+    const menuGap = 12;
+    const maxBubbleLeft = Math.max(viewportBox.left + sidePadding, viewportBox.right - bubbleRect.width - sidePadding);
+    const maxMenuLeft = Math.max(viewportBox.left + sidePadding, viewportBox.right - menuWidth - sidePadding);
+    const desiredBubbleLeft = isOutgoing
+      ? viewportBox.right - sidePadding - bubbleRect.width
+      : viewportBox.left + sidePadding;
+    const minBubbleTop = viewportBox.top + topPadding;
+    const maxBubbleTop = viewportBox.bottom - bottomPadding - bubbleRect.height;
+    const maxBubbleTopForMenu = viewportBox.bottom - bottomPadding - menuHeight - menuGap - bubbleRect.height;
+    const sourceBubbleTop = Math.round(Number(bubbleRect.top || 0));
+    const baseBubbleTop = Math.max(minBubbleTop, Math.min(sourceBubbleTop, maxBubbleTop));
+    const targetBubbleLeft = Math.round(
+      Math.min(Math.max(viewportBox.left + sidePadding, desiredBubbleLeft), maxBubbleLeft)
+    );
+    const targetBubbleTop = Math.round(
+      Math.max(minBubbleTop, Math.min(baseBubbleTop, maxBubbleTopForMenu))
+    );
+    const desiredMenuLeft = isOutgoing
+      ? targetBubbleLeft + bubbleRect.width - menuWidth
+      : targetBubbleLeft;
+    const targetMenuLeft = Math.round(
+      Math.min(Math.max(viewportBox.left + sidePadding, desiredMenuLeft), maxMenuLeft)
+    );
+    const targetMenuTop = Math.round(
+      Math.max(
+        viewportBox.top + topPadding,
+        Math.min(
+          targetBubbleTop + bubbleRect.height + menuGap,
+          viewportBox.bottom - bottomPadding - menuHeight
+        )
+      )
+    );
+    const originTranslateX = Number(bubbleRect.left) - Number(targetBubbleLeft);
+    const originTranslateY = Number(bubbleRect.top) - Number(targetBubbleTop);
+    const startScale = 1;
+    const opts = options && typeof options === "object" ? options : {};
+    const relayoutLocked = Number(scene.relayoutUnlockAt || 0) > Date.now();
+    const shouldAnimateRelayout = opts.animateRelayout === true && scene.isOpen === true && !relayoutLocked;
+    const openImmediately = (opts.openImmediately === true || scene.isOpen === true) && !shouldAnimateRelayout;
+
+    ui.root.classList.remove("hidden");
+    const prevCloneRect = shouldAnimateRelayout ? ui.cloneHost.getBoundingClientRect() : null;
+    const hasPrevCloneRect = !!(
+      prevCloneRect
+      && Number.isFinite(prevCloneRect.left)
+      && Number.isFinite(prevCloneRect.top)
+      && prevCloneRect.width > 0
+      && prevCloneRect.height > 0
+    );
+    ui.cloneHost.style.left = String(targetBubbleLeft) + "px";
+    ui.cloneHost.style.top = String(targetBubbleTop) + "px";
+    const bubbleWidthPx = Math.ceil(Number(bubbleRect.width || 0));
+    ui.cloneHost.style.width = String(bubbleWidthPx) + "px";
+    ui.cloneHost.style.minWidth = String(bubbleWidthPx) + "px";
+    ui.cloneHost.style.maxWidth = String(bubbleWidthPx) + "px";
+    ui.cloneHost.style.transition = "none";
+    ui.cloneHost.style.transform = openImmediately
+      ? "translate3d(0, 0, 0) scale(1)"
+      : "translate3d(" + originTranslateX + "px, " + originTranslateY + "px, 0) scale(" + startScale + ")";
+    // Keep iOS Safari from skipping the initial transform frame.
+    void ui.cloneHost.offsetHeight;
+
+    contextMenuEl.style.left = String(targetMenuLeft) + "px";
+    contextMenuEl.style.top = String(targetMenuTop) + "px";
+    contextMenuAnchorPoint = null;
+
+    const revealContextMenu = function () {
+      if (mobileContextSceneState !== scene) return;
+      if (!contextMenuEl || contextMenuEl.classList.contains("hidden")) return;
+      contextMenuEl.style.visibility = "";
+      contextMenuEl.style.transition = "opacity .18s ease";
+      contextMenuEl.style.opacity = "1";
+    };
+
+    if (shouldAnimateRelayout && hasPrevCloneRect) {
+      const relayoutTranslateX = Number(prevCloneRect.left) - Number(targetBubbleLeft);
+      const relayoutTranslateY = Number(prevCloneRect.top) - Number(targetBubbleTop);
+      ui.root.classList.add("is-open");
+      ui.cloneHost.style.transition = "none";
+      ui.cloneHost.style.transform = "translate3d(" + relayoutTranslateX + "px, " + relayoutTranslateY + "px, 0) scale(1)";
+      void ui.cloneHost.offsetWidth;
+      ui.cloneHost.style.transition = MOBILE_CONTEXT_CLONE_RELAYOUT_TRANSITION;
+      if (contextMenuEl.__mobileSceneMenuFadeTimer) {
+        window.clearTimeout(contextMenuEl.__mobileSceneMenuFadeTimer);
+      }
+      contextMenuEl.__mobileSceneMenuFadeTimer = window.setTimeout(function () {
+        contextMenuEl.__mobileSceneMenuFadeTimer = 0;
+        revealContextMenu();
+      }, MOBILE_CONTEXT_MENU_APPEAR_DELAY_MS);
+      requestAnimationFrame(function () {
+        if (mobileContextSceneState !== scene) return;
+        ui.cloneHost.style.transform = "translate3d(0, 0, 0) scale(1)";
+        scene.relayoutUnlockAt = Date.now() + MOBILE_CONTEXT_RELAYOUT_LOCK_MS;
+        scene.isOpen = true;
+      });
+      return true;
+    }
+
+    if (openImmediately) {
+      ui.root.classList.add("is-open");
+      ui.cloneHost.style.transition = "none";
+      if (contextMenuEl.__mobileSceneMenuFadeTimer) {
+        window.clearTimeout(contextMenuEl.__mobileSceneMenuFadeTimer);
+      }
+      contextMenuEl.__mobileSceneMenuFadeTimer = window.setTimeout(function () {
+        contextMenuEl.__mobileSceneMenuFadeTimer = 0;
+        revealContextMenu();
+      }, MOBILE_CONTEXT_MENU_APPEAR_DELAY_MS);
+      scene.isOpen = true;
+      return true;
+    }
+
+    requestAnimationFrame(function () {
+      if (mobileContextSceneState !== scene) return;
+      ui.root.classList.add("is-open");
+      ui.cloneHost.style.transition = MOBILE_CONTEXT_CLONE_OPEN_TRANSITION;
+      ui.cloneHost.style.transform = "translate3d(0, 0, 0) scale(1)";
+      if (contextMenuEl.__mobileSceneMenuFadeTimer) {
+        window.clearTimeout(contextMenuEl.__mobileSceneMenuFadeTimer);
+      }
+      contextMenuEl.__mobileSceneMenuFadeTimer = window.setTimeout(function () {
+        contextMenuEl.__mobileSceneMenuFadeTimer = 0;
+        revealContextMenu();
+      }, MOBILE_CONTEXT_MENU_APPEAR_DELAY_MS);
+      scene.relayoutUnlockAt = Date.now() + MOBILE_CONTEXT_RELAYOUT_LOCK_MS;
+      scene.isOpen = true;
+    });
+    return true;
+  }
+
+  function showMobileContextScene(messageId) {
+    if (!shouldUseMobileContextScene()) return false;
+    const source = findContextMenuSourceNodes(messageId);
+    if (!source || !contextMenuEl) return false;
+
+    if (contextMenuEl.__mobileSceneMenuFadeTimer) {
+      window.clearTimeout(contextMenuEl.__mobileSceneMenuFadeTimer);
+      contextMenuEl.__mobileSceneMenuFadeTimer = 0;
+    }
+    contextMenuEl.style.transition = "";
+    contextMenuEl.style.opacity = "";
+    contextMenuEl.style.visibility = "";
+
+    hideMobileContextScene();
+    const ui = ensureMobileContextSceneUi();
+    if (!ui || !ui.cloneHost) return false;
+
+    const bubbleClone = source.bubble.cloneNode(true);
+    bubbleClone.classList.add("shop-company-chat-bubble--mobile-context-clone");
+    bubbleClone.setAttribute("aria-hidden", "true");
+    const isOutgoing = source.row.classList.contains("is-user");
+    ui.cloneHost.classList.toggle("is-user", isOutgoing);
+    ui.cloneHost.classList.toggle("is-agent", !isOutgoing);
+    if (typeof ui.cloneHost.replaceChildren === "function") {
+      ui.cloneHost.replaceChildren(bubbleClone);
+    } else {
+      ui.cloneHost.textContent = "";
+      ui.cloneHost.appendChild(bubbleClone);
+    }
+    source.row.classList.add("is-mobile-context-source-hidden");
+
+    mobileContextSceneState = {
+      messageId: String(messageId || ""),
+      sourceRow: source.row,
+      sourceBubble: source.bubble,
+      isOutgoing: isOutgoing,
+      isOpen: false,
+      relayoutUnlockAt: 0,
+    };
+
+    ui.root.classList.remove("is-open");
+    ui.root.classList.remove("hidden");
+    suppressTapUntil = Math.max(suppressTapUntil, Date.now() + 420);
+    const didLayout = layoutMobileContextScene();
+    if (!didLayout) hideMobileContextScene();
+    return didLayout;
+  }
+
   function hideContextMenu() {
+    hideMobileContextScene();
     if (!contextMenuEl) return;
+    if (contextMenuEl.__mobileSceneMenuFadeTimer) {
+      window.clearTimeout(contextMenuEl.__mobileSceneMenuFadeTimer);
+      contextMenuEl.__mobileSceneMenuFadeTimer = 0;
+    }
     if (contextMenuEl.__touchGuardTimer) {
       window.clearTimeout(contextMenuEl.__touchGuardTimer);
       contextMenuEl.__touchGuardTimer = 0;
@@ -7608,6 +7945,9 @@
     contextMenuEl.style.pointerEvents = "";
     contextMenuEl.classList.add("hidden");
     setContextMenuReactionsExpanded(false);
+    contextMenuEl.style.visibility = "";
+    contextMenuEl.style.opacity = "";
+    contextMenuEl.style.transition = "";
     contextMenuEl.style.left = "";
     contextMenuEl.style.top = "";
     contextMenuMessageId = "";
@@ -7838,6 +8178,17 @@
     if (contextMenuDeleteBtn) contextMenuDeleteBtn.classList.remove("hidden");
 
     hideEmojiPopover();
+    hideReactionBar();
+    if (showMobileContextScene(id)) {
+      contextMenuAnchorPoint = null;
+      if (opts && opts.touchGuard === true) {
+        armContextMenuTouchGuard();
+      } else if (contextMenuEl) {
+        contextMenuEl.style.pointerEvents = "";
+      }
+      return;
+    }
+
     contextMenuAnchorPoint = {
       x: Number(x) || 0,
       y: Number(y) || 0,
@@ -7848,7 +8199,6 @@
     } else if (contextMenuEl) {
       contextMenuEl.style.pointerEvents = "";
     }
-    hideReactionBar();
   }
 
   function scrollToMessage(messageId, options) {
@@ -9930,16 +10280,31 @@
   function setContextMenuReactionsExpanded(expanded) {
     if (!contextMenuEl) return;
     const isExpanded = !!expanded;
+    const scheduleContextSceneRelayout = function (doubleFrame) {
+      requestAnimationFrame(function () {
+        const run = function () {
+          if (!contextMenuEl || contextMenuEl.classList.contains("hidden")) return;
+          if ((contextMenuEl.classList.contains("is-reactions-expanded")) !== isExpanded) return;
+          refreshContextMenuReactionBoxPosition();
+        };
+        if (doubleFrame) {
+          requestAnimationFrame(run);
+        } else {
+          run();
+        }
+      });
+    };
     if (isExpanded) {
       ensureContextMenuAllEmojiButtons(contextMenuEl);
       ensureEmojiDatasetLoaded().then(function () {
         if (!contextMenuEl || contextMenuEl.classList.contains("hidden")) return;
         if (!contextMenuEl.classList.contains("is-reactions-expanded")) return;
         ensureContextMenuAllEmojiButtons(contextMenuEl);
-        refreshContextMenuReactionBoxPosition();
+        scheduleContextSceneRelayout(true);
       }).catch(function () {});
     }
     contextMenuEl.classList.toggle("is-reactions-expanded", isExpanded);
+    scheduleContextSceneRelayout(true);
     const toggleBtn = contextMenuEl.querySelector('[data-chat-msg-reaction="__toggle_more__"]');
     if (!toggleBtn) return;
     toggleBtn.setAttribute("aria-expanded", isExpanded ? "true" : "false");
@@ -9948,6 +10313,10 @@
 
   function refreshContextMenuReactionBoxPosition() {
     if (!contextMenuEl || contextMenuEl.classList.contains("hidden")) return;
+    if (mobileContextSceneState) {
+      if (!layoutMobileContextScene({ animateRelayout: true })) hideContextMenu();
+      return;
+    }
     const anchor = contextMenuAnchorPoint;
     if (anchor && Number.isFinite(anchor.x) && Number.isFinite(anchor.y)) {
       positionFloatingBox(contextMenuEl, anchor.x, anchor.y, 8);
@@ -13040,6 +13409,7 @@
       replyTriggered: false,
       longPressFired: false,
       longPressTimer: 0,
+      allowSwipeReply: !!(bubble.closest(".shop-company-chat-row.is-agent")),
       doubleTapEligible: canUseMessageHeartShortcutTarget(event.target),
     };
 
@@ -13117,13 +13487,14 @@
     touchGesture.lastX = touch.clientX;
     touchGesture.lastY = touch.clientY;
 
-    if ((absX > 8 || absY > 8) && touchGesture.longPressTimer) {
+    if ((absX > LONG_PRESS_MOVE_CANCEL_PX || absY > LONG_PRESS_MOVE_CANCEL_PX) && touchGesture.longPressTimer) {
       clearTimeout(touchGesture.longPressTimer);
       touchGesture.longPressTimer = 0;
     }
 
     if (touchGesture.longPressFired) return;
     if (touchGesture.swipeRejected) return;
+    if (touchGesture.allowSwipeReply !== true) return;
 
     if (!touchGesture.swipeLocked) {
       if (absX < 10 && absY < 10) return;

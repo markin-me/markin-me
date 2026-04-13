@@ -8317,6 +8317,10 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
   -webkit-touch-callout: none;
 }
 
+.shop-company-chat-row.is-mobile-context-source-hidden{
+  visibility: hidden;
+}
+
 .shop-company-chat-row.is-agent{
   justify-content: flex-start;
 }
@@ -8849,7 +8853,19 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
   flex-direction: row-reverse;
 }
 
+.shop-company-chat-mobile-context-scene__clone.is-user .shop-company-chat-reactions{
+  right: calc(100% + 6px) !important;
+  left: auto !important;
+  flex-direction: row-reverse;
+}
+
 .shop-company-chat-row.is-agent .shop-company-chat-reactions{
+  left: calc(100% + 6px) !important;
+  right: auto !important;
+  flex-direction: row;
+}
+
+.shop-company-chat-mobile-context-scene__clone.is-agent .shop-company-chat-reactions{
   left: calc(100% + 6px) !important;
   right: auto !important;
   flex-direction: row;
@@ -8859,7 +8875,15 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
   margin-left: -9px;
 }
 
+.shop-company-chat-mobile-context-scene__clone.is-agent .shop-company-chat-reaction-pill + .shop-company-chat-reaction-pill{
+  margin-left: -9px;
+}
+
 .shop-company-chat-row.is-user .shop-company-chat-reaction-pill + .shop-company-chat-reaction-pill{
+  margin-right: -9px;
+}
+
+.shop-company-chat-mobile-context-scene__clone.is-user .shop-company-chat-reaction-pill + .shop-company-chat-reaction-pill{
   margin-right: -9px;
 }
 
@@ -8945,6 +8969,13 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
 .shop-company-chat-bubble.is-emoji-only-single .shop-company-chat-text{
   font-size: 76px;
   line-height: 1;
+}
+
+.shop-company-chat-bubble.is-emoji-only-single{
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
 }
 
 .shop-company-chat-bubble.is-emoji-only-single .shop-company-chat-author{
@@ -9112,7 +9143,74 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
 }
 
 .shop-company-chat-context-menu:not(.hidden){
-  animation: shop-company-chat-context-pop .24s cubic-bezier(.22,.76,.24,1);
+  animation: none;
+}
+
+.shop-company-chat-mobile-context-scene{
+  position: fixed;
+  inset: 0;
+  z-index: 1305;
+  pointer-events: none;
+}
+
+.shop-company-chat-mobile-context-scene__backdrop{
+  position: absolute;
+  inset: 0;
+  background: rgba(15, 23, 42, .34);
+  backdrop-filter: blur(14px) saturate(118%);
+  -webkit-backdrop-filter: blur(14px) saturate(118%);
+  opacity: 0;
+  pointer-events: auto;
+  transition: opacity .34s cubic-bezier(.22,.61,.36,1);
+}
+
+.shop-company-chat-mobile-context-scene.is-open .shop-company-chat-mobile-context-scene__backdrop{
+  opacity: 1;
+}
+
+.shop-company-chat-mobile-context-scene__clone{
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 0;
+  pointer-events: none;
+  opacity: 1;
+  transform: translate3d(0, 0, 0);
+  transition:
+    transform .68s cubic-bezier(.22,.61,.36,1);
+  will-change: transform;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  transform-style: preserve-3d;
+  contain: layout paint style;
+}
+
+.shop-company-chat-mobile-context-scene__clone > .shop-company-chat-bubble{
+  width: 100%;
+  max-width: none;
+  box-shadow: 0 18px 42px rgba(15, 23, 42, .24);
+}
+
+.shop-company-chat-mobile-context-scene__clone.is-user > .shop-company-chat-bubble{
+  background:#5f6167;
+  color:#ffffff;
+  border-bottom-right-radius:0;
+}
+
+.shop-company-chat-mobile-context-scene__clone.is-agent > .shop-company-chat-bubble{
+  background:#ffffff;
+  border-bottom-left-radius:0;
+}
+
+.shop-company-chat-mobile-context-scene__clone.is-user .shop-company-chat-time{
+  color:rgba(255,255,255,.75);
+}
+
+.shop-company-chat-mobile-context-scene__clone > .shop-company-chat-bubble.is-emoji-only-single{
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
 }
 
 @keyframes shop-company-chat-context-pop{
@@ -9132,8 +9230,8 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
 
 @keyframes shop-company-chat-context-reactions-expand{
   from{
-    opacity: .92;
-    transform: translateY(-2px) scale(.985);
+    opacity: .82;
+    transform: translateY(12px) scale(.985);
   }
   to{
     opacity: 1;
@@ -9144,7 +9242,7 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
 @keyframes shop-company-chat-context-extra-in{
   from{
     opacity: 0;
-    transform: translateY(6px) scale(.72);
+    transform: translateY(12px) scale(.9);
   }
   to{
     opacity: 1;
@@ -9194,14 +9292,18 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
   justify-content: start;
   align-content: start;
   gap: 3px;
-  width: min(244px, calc(100vw - 36px));
-  max-height: min(40vh, 216px);
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  max-height: min(24vh, 136px);
   overflow-y: auto;
   overflow-x: hidden;
+  overscroll-behavior: contain;
   padding: 2px;
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--color-border), transparent 12%) transparent;
-  animation: shop-company-chat-context-reactions-expand .2s cubic-bezier(.22,.76,.24,1);
+  transform-origin: bottom center;
+  animation: shop-company-chat-context-reactions-expand .46s cubic-bezier(.22,.61,.36,1);
 }
 
 .shop-company-chat-context-reaction--toggle{
@@ -9235,18 +9337,25 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
 
 .shop-company-chat-context-menu.is-reactions-expanded .shop-company-chat-context-reaction--extra,
 .shop-company-chat-context-menu.is-reactions-expanded .shop-company-chat-context-reaction[data-chat-msg-reaction-slot="extra-all"]{
-  animation: shop-company-chat-context-extra-in .18s cubic-bezier(.2,.88,.28,1) both;
+  animation: shop-company-chat-context-extra-in .46s cubic-bezier(.22,.61,.36,1) both;
   transform-origin: center;
   will-change: transform, opacity;
 }
 
 .shop-company-chat-context-menu.is-reactions-expanded .shop-company-chat-context-reactions::-webkit-scrollbar{
-  width: 6px;
+  width: 0;
+  height: 0;
+  display: none;
 }
 
 .shop-company-chat-context-menu.is-reactions-expanded .shop-company-chat-context-reactions::-webkit-scrollbar-thumb{
   background: color-mix(in srgb, var(--color-border), transparent 12%);
   border-radius: 999px;
+}
+
+.shop-company-chat-context-menu.is-reactions-expanded .shop-company-chat-context-reactions{
+  scrollbar-width: none;
+  -ms-overflow-style: none;
 }
 
 .shop-company-chat-context-btn{
