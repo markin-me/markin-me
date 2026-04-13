@@ -1991,6 +1991,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
          c.id AS customer_id,
          c.name,
          c.phone,
+         c.total_orders,
          DATE_FORMAT(c.birthday, '%Y-%m-%d') AS birthday,
          c.photo,
          c.is_active
@@ -2028,6 +2029,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       id: Number(r.customer_id),
       name: r.name,
       phone: r.phone,
+      total_orders: Number(r.total_orders || 0) || 0,
       birthday: r.birthday || null,
       photo: r.photo || null,
     };
@@ -5205,6 +5207,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       apply_to: publicDiscountText(discount?.apply_to).toLowerCase() || 'order',
       min_order_amount: discount?.min_order_amount != null ? Number(discount.min_order_amount || 0) : null,
       max_discount_amount: discount?.max_discount_amount != null ? Number(discount.max_discount_amount || 0) : null,
+      first_order_limit: discountHelpers.getDiscountFirstOrderLimit(discount),
     };
   }
 
@@ -5983,6 +5986,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       badge_text: state.pendingRewardCount > 0 ? `${state.pendingRewardCount}` : state.progressText,
       apply_scope_text: state.pendingRewardCount > 0 ? `\u041c\u043e\u0436\u043d\u043e \u0437\u0430\u0431\u0440\u0430\u0442\u044c: ${state.rewardText}` : `\u0421\u043b\u0435\u0434\u0443\u044e\u0449\u0430\u044f \u043d\u0430\u0433\u0440\u0430\u0434\u0430: ${state.rewardText}`,
       expires_at: discount?.ends_at || null,
+      first_order_limit: discountHelpers.getDiscountFirstOrderLimit(discount),
       is_claimable: state.pendingRewardCount > 0,
       pending_reward_count: state.pendingRewardCount,
       progress_value: state.progressValue,
@@ -7676,6 +7680,12 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         .filter((id) => id > 0)
     )];
     const productCategoriesMap = await loadCheckoutProductCategoriesMap(normalizedTenantId, productIds);
+    const firstOrderStats = await discountHelpers.getCustomerFirstOrderWindowStats(
+      queryable,
+      normalizedTenantId,
+      customerId,
+      { excludeOrderId: normalizedOrderId }
+    );
     const customerBenefitDiscountRows = await loadCustomerBenefitDiscountRows(normalizedTenantId, effectiveStoreId, customerId);
     const progressDiscountRows = Array.isArray(customerBenefitDiscountRows)
       ? customerBenefitDiscountRows.filter((discount) => isPublicProgressMechanic(discount))
@@ -7686,6 +7696,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     for (const discount of progressDiscountRows) {
       const discountId = Number(discount?.id || 0);
       if (!(discountId > 0)) continue;
+      if (!discountHelpers.isDiscountAllowedByFirstOrderLimit(discount, firstOrderStats)) continue;
       const accrualStatusId = await resolveDiscountBenefitAccrualStatusId(
         queryable,
         normalizedTenantId,
@@ -8412,7 +8423,11 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     const deletedRewardPromoCompletedCards = availableRewardRowsRaw
       .filter((row) => isDeletedAvailableRewardPromoRow(row))
       .map((row) => buildPublicCompletedDeletedRewardPromoCardFromRewardRow(row));
-    const customerDiscounts = await loadCustomerBenefitDiscountRows(tenantId, storeId, customerId);
+    const firstOrderStats = customerId > 0
+      ? await discountHelpers.getCustomerFirstOrderWindowStats(db, tenantId, customerId)
+      : { customerId: null, completedSuccessfulOrders: 0, activeReservedOrders: 0 };
+    const customerDiscounts = (await loadCustomerBenefitDiscountRows(tenantId, storeId, customerId))
+      .filter((discount) => discountHelpers.isDiscountAllowedByFirstOrderLimit(discount, firstOrderStats));
     const automaticDiscountRows = customerDiscounts.filter((discount) => (
       isPublicAutomaticSimpleDiscount(discount) && !isHiddenBenefitsDiscount(discount)
     ));
@@ -12250,6 +12265,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     switch (publicDiscountText(errorCode).toUpperCase()) {
       case 'DISCOUNT_CUSTOMER_LIMIT_REACHED':
         return '\u0412\u044b \u0443\u0436\u0435 \u0438\u0441\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u043b\u0438 \u044d\u0442\u0443 \u0441\u043a\u0438\u0434\u043a\u0443 \u043c\u0430\u043a\u0441\u0438\u043c\u0430\u043b\u044c\u043d\u043e\u0435 \u0447\u0438\u0441\u043b\u043e \u0440\u0430\u0437.';
+      case 'FIRST_ORDER_LIMIT_REACHED':
+        return '\u0410\u043a\u0446\u0438\u044f \u0434\u0435\u0439\u0441\u0442\u0432\u0443\u0435\u0442 \u0442\u043e\u043b\u044c\u043a\u043e \u043d\u0430 \u043f\u0435\u0440\u0432\u044b\u0435 \u0437\u0430\u043a\u0430\u0437\u044b \u043a\u043b\u0438\u0435\u043d\u0442\u0430.';
       case 'DISCOUNT_NOT_APPLICABLE':
         return '\u041d\u0435 \u043f\u043e\u0434\u0445\u043e\u0434\u0438\u0442 \u043a \u0442\u0435\u043a\u0443\u0449\u0435\u043c\u0443 \u0437\u0430\u043a\u0430\u0437\u0443.';
       case 'DISCOUNT_NOT_AVAILABLE':
@@ -12258,6 +12275,14 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       default:
         return '\u0421\u043a\u0438\u0434\u043a\u0430 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430.';
     }
+  }
+
+  function buildFirstOrderLimitDisabledReason(limit) {
+    const normalizedLimit = Number(limit || 0);
+    if (!(normalizedLimit > 0)) {
+      return buildDiscountPreviewDisabledReason('FIRST_ORDER_LIMIT_REACHED');
+    }
+    return `\u0410\u043a\u0446\u0438\u044f \u0434\u0435\u0439\u0441\u0442\u0432\u0443\u0435\u0442 \u0442\u043e\u043b\u044c\u043a\u043e \u043d\u0430 \u043f\u0435\u0440\u0432\u044b\u0435 ${normalizedLimit} \u0437\u0430\u043a\u0430\u0437\u043e\u0432 \u043a\u043b\u0438\u0435\u043d\u0442\u0430.`;
   }
 
   function getRewardPromoRuntimeConfig(payload) {
@@ -12403,6 +12428,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     selectedDiscountSource,
     discountEntries,
     allDiscountRows,
+    firstOrderStats = null,
   }) {
     const normalizedId = normalizeSelectedDiscountId(selectedDiscountId);
     if (normalizedId === null) {
@@ -12421,7 +12447,13 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         .find((discount) => Number(discount?.id || 0) === normalizedId && isPublicAutomaticSimpleDiscount(discount));
       return {
         entry: null,
-        errorCode: knownAutomaticDiscount ? 'DISCOUNT_NOT_AVAILABLE' : 'DISCOUNT_INVALID',
+        errorCode: knownAutomaticDiscount
+          ? (
+              discountHelpers.isDiscountAllowedByFirstOrderLimit(knownAutomaticDiscount, firstOrderStats)
+                ? 'DISCOUNT_NOT_AVAILABLE'
+                : 'FIRST_ORDER_LIMIT_REACHED'
+            )
+          : 'DISCOUNT_INVALID',
       };
     }
     return { entry: null, errorCode: 'DISCOUNT_INVALID' };
@@ -12454,7 +12486,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     return { entry: null, errorCode: 'PROMO_INVALID' };
   }
 
-  function resolveSelectedCheckoutDiscount({ selectedDiscountId, availableDiscounts, allDiscountRows }) {
+  function resolveSelectedCheckoutDiscount({ selectedDiscountId, availableDiscounts, allDiscountRows, firstOrderStats = null }) {
     const normalizedId = normalizeSelectedDiscountId(selectedDiscountId);
     if (normalizedId === null) {
       return { discount: null, errorCode: '' };
@@ -12471,7 +12503,13 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
     return {
       discount: null,
-      errorCode: knownAutomaticDiscount ? 'DISCOUNT_NOT_AVAILABLE' : 'DISCOUNT_INVALID',
+      errorCode: knownAutomaticDiscount
+        ? (
+            discountHelpers.isDiscountAllowedByFirstOrderLimit(knownAutomaticDiscount, firstOrderStats)
+              ? 'DISCOUNT_NOT_AVAILABLE'
+              : 'FIRST_ORDER_LIMIT_REACHED'
+          )
+        : 'DISCOUNT_INVALID',
     };
   }
 
@@ -12824,6 +12862,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     const serverLockedCodes = new Set([
       'PROMO_INVALID',
       'PROMO_NOT_AVAILABLE',
+      'FIRST_ORDER_LIMIT_REACHED',
       'PROMO_LIMIT_REACHED',
       'PROMO_CUSTOMER_LIMIT_REACHED',
       'PROMO_RESERVED',
@@ -13055,6 +13094,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     switch (publicDiscountText(errorCode).toUpperCase()) {
       case 'PROMO_RESERVED':
         return 'Промокод уже зарезервирован в активном заказе.';
+      case 'FIRST_ORDER_LIMIT_REACHED':
+        return '\u0410\u043a\u0446\u0438\u044f \u0434\u0435\u0439\u0441\u0442\u0432\u0443\u0435\u0442 \u0442\u043e\u043b\u044c\u043a\u043e \u043d\u0430 \u043f\u0435\u0440\u0432\u044b\u0435 \u0437\u0430\u043a\u0430\u0437\u044b \u043a\u043b\u0438\u0435\u043d\u0442\u0430.';
       case 'PROMO_LIMIT_REACHED':
         return '\u041b\u0438\u043c\u0438\u0442 \u043f\u0440\u043e\u043c\u043e\u043a\u043e\u0434\u0430 \u0438\u0441\u0447\u0435\u0440\u043f\u0430\u043d.';
       case 'PROMO_CUSTOMER_LIMIT_REACHED':
@@ -13105,6 +13146,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
   }) {
     const customerId = Number(customer?.id || 0) || null;
     const normalizedDraft = draft && typeof draft === 'object' ? draft : {};
+    const excludeOrderId = Number(normalizedDraft?.exclude_order_id || 0) || null;
     const previewMode = normalizeCheckoutBenefitsPreviewMode(
       mode ?? normalizedDraft?.benefits_mode ?? normalizedDraft?.mode
     );
@@ -13122,6 +13164,15 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       subtotalBeforeDiscount,
       itemsBaseTotal,
     } = normalizeCheckoutPreviewItems(normalizedDraft?.items);
+    const firstOrderStats = customerId > 0
+      ? await discountHelpers.getCustomerFirstOrderWindowStats(db, tenantId, customerId, { excludeOrderId })
+      : { customerId: null, completedSuccessfulOrders: 0, activeReservedOrders: 0 };
+    const isFirstOrderDiscountAllowed = (discount) => (
+      discountHelpers.isDiscountAllowedByFirstOrderLimit(discount, firstOrderStats)
+    );
+    const getFirstOrderDisabledReason = (discount) => (
+      buildFirstOrderLimitDisabledReason(discountHelpers.getDiscountFirstOrderLimit(discount))
+    );
 
     const customerBenefitDiscountRows = customerId > 0
       ? await loadCustomerBenefitDiscountRows(tenantId, storeId, customerId)
@@ -13209,11 +13260,22 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const audienceMatched = previewMode !== 'all'
         || discountAudienceMatchMap.get(discountId) !== false;
       const isDiscountAvailable = discountHelpers.isDiscountActive(discount) && audienceMatched;
+      const firstOrderAllowed = isFirstOrderDiscountAllowed(discount);
       let outcome;
       if (!isDiscountAvailable) {
         outcome = {
           isApplicable: false,
           errorCode: 'DISCOUNT_NOT_AVAILABLE',
+          discountAmount: 0,
+          items: cloneCheckoutBenefitItems(baseItems),
+          itemsTotalAfterDiscount: roundPromoMoney(itemsBaseTotal),
+          usageRecords: [],
+        };
+      } else if (!firstOrderAllowed) {
+        outcome = {
+          isApplicable: false,
+          errorCode: 'FIRST_ORDER_LIMIT_REACHED',
+          disabledReason: getFirstOrderDisabledReason(discount),
           discountAmount: 0,
           items: cloneCheckoutBenefitItems(baseItems),
           itemsTotalAfterDiscount: roundPromoMoney(itemsBaseTotal),
@@ -13244,7 +13306,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         discount_amount: roundPromoMoney(Number(outcome?.discountAmount || 0)),
         is_applicable: outcome?.isApplicable === true,
         disabled_reason_code: outcome?.isApplicable ? '' : publicDiscountText(outcome?.errorCode),
-        disabled_reason: outcome?.isApplicable ? '' : buildDiscountPreviewDisabledReason(outcome?.errorCode),
+        disabled_reason: outcome?.isApplicable ? '' : (publicDiscountText(outcome?.disabledReason) || buildDiscountPreviewDisabledReason(outcome?.errorCode)),
         is_selected: Boolean(isSelected),
         source: 'discount',
         reward_id: null,
@@ -13314,6 +13376,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       selectedDiscountSource,
       discountEntries,
       allDiscountRows: automaticDiscountRows,
+      firstOrderStats,
     });
     const selectedDiscountCard = selectedDiscountEntry?.card || null;
     const selectedDiscount = selectedDiscountEntry?.discount || null;
@@ -13483,6 +13546,17 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         };
       }
 
+      if (!isFirstOrderDiscountAllowed(discount)) {
+        return {
+          isApplicable: false,
+          disabledReasonCode: 'FIRST_ORDER_LIMIT_REACHED',
+          disabledReason: getFirstOrderDisabledReason(discount),
+          discountAmount: 0,
+          itemsTotalAfterPromo: itemsTotalBeforePromo,
+          items: previewItems,
+        };
+      }
+
       if (reservedCustomerCount > 0) {
         return {
           isApplicable: false,
@@ -13603,6 +13677,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           apply_scope_text: rewardMeta.apply_scope_text,
           min_order_amount: discount?.min_order_amount != null ? Number(discount.min_order_amount || 0) : null,
           max_discount_amount: discount?.max_discount_amount != null ? Number(discount.max_discount_amount || 0) : null,
+          first_order_limit: discountHelpers.getDiscountFirstOrderLimit(discount),
           usage_per_customer: discount?.usage_per_customer != null ? Number(discount.usage_per_customer || 0) : null,
           customer_usage_count: Number(promoCustomerUsageMap.get(discountId) || 0),
           starts_at: discount?.starts_at || null,
@@ -13689,6 +13764,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           apply_scope_text: rewardMeta.apply_scope_text,
           min_order_amount: discount?.min_order_amount != null ? Number(discount.min_order_amount || 0) : null,
           max_discount_amount: discount?.max_discount_amount != null ? Number(discount.max_discount_amount || 0) : null,
+          first_order_limit: discountHelpers.getDiscountFirstOrderLimit(discount),
           usage_per_customer: discount?.usage_per_customer != null ? Number(discount.usage_per_customer || 0) : null,
           customer_usage_count: Number(promoCustomerUsageMap.get(discountId) || 0),
           starts_at: discount?.starts_at || null,
@@ -13956,28 +14032,34 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       customerId,
       discounts: loyaltyDiscounts,
     });
-    if (previewMode === 'all') {
-      const progressDiscountMap = new Map(
-        loyaltyDiscounts
-          .map((discount) => [Number(discount?.id || 0), discount])
-          .filter(([discountId]) => discountId > 0)
-      );
-      progress = progress.map((card) => {
-        const discountId = Number(card?.discount_id || card?.id || 0);
-        const discount = progressDiscountMap.get(discountId) || null;
-        const isAvailable = !!discount
-          && discountHelpers.isDiscountActive(discount)
-          && discountAudienceMatchMap.get(discountId) !== false;
-        const disabledReasonCode = isAvailable ? '' : 'DISCOUNT_NOT_AVAILABLE';
-        return {
-          ...card,
-          is_applicable: isAvailable,
-          disabled_reason_code: disabledReasonCode,
-          disabled_reason: disabledReasonCode ? buildDiscountPreviewDisabledReason(disabledReasonCode) : '',
-          is_claimable: isAvailable && card?.is_claimable === true,
-        };
-      });
-    }
+    const progressDiscountMap = new Map(
+      loyaltyDiscounts
+        .map((discount) => [Number(discount?.id || 0), discount])
+        .filter(([discountId]) => discountId > 0)
+    );
+    progress = progress.map((card) => {
+      const discountId = Number(card?.discount_id || card?.id || 0);
+      const discount = progressDiscountMap.get(discountId) || null;
+      const audienceMatched = previewMode !== 'all'
+        || discountAudienceMatchMap.get(discountId) !== false;
+      const baseAvailable = !!discount
+        && discountHelpers.isDiscountActive(discount)
+        && audienceMatched;
+      const firstOrderAllowed = baseAvailable && isFirstOrderDiscountAllowed(discount);
+      const disabledReasonCode = !baseAvailable
+        ? 'DISCOUNT_NOT_AVAILABLE'
+        : (!firstOrderAllowed ? 'FIRST_ORDER_LIMIT_REACHED' : '');
+      const disabledReason = disabledReasonCode === 'FIRST_ORDER_LIMIT_REACHED'
+        ? getFirstOrderDisabledReason(discount)
+        : (disabledReasonCode ? buildDiscountPreviewDisabledReason(disabledReasonCode) : '');
+      return {
+        ...card,
+        is_applicable: !disabledReasonCode,
+        disabled_reason_code: disabledReasonCode,
+        disabled_reason: disabledReason,
+        is_claimable: !disabledReasonCode && card?.is_claimable === true,
+      };
+    });
     const details = await buildCheckoutBenefitsPreviewDetails({
       tenantId,
       storeId,
@@ -14070,6 +14152,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       .find((entry) => Number(entry?.discount_id || entry?.id || 0) === normalizedDiscountId);
     if (!progressCard) {
       throw Object.assign(new Error('DISCOUNT_INVALID'), { code: 'DISCOUNT_INVALID' });
+    }
+    if (publicDiscountText(progressCard?.disabled_reason_code).toUpperCase() === 'FIRST_ORDER_LIMIT_REACHED') {
+      throw Object.assign(new Error('FIRST_ORDER_LIMIT_REACHED'), { code: 'FIRST_ORDER_LIMIT_REACHED' });
     }
     if (progressCard?.is_claimable !== true || Number(progressCard?.pending_reward_count || 0) < 1) {
       throw Object.assign(new Error('DISCOUNT_NOT_APPLICABLE'), { code: 'DISCOUNT_NOT_APPLICABLE' });
@@ -14206,6 +14291,12 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     if (!resolvedLoyaltyDiscount) {
       throw Object.assign(new Error('DISCOUNT_NOT_AVAILABLE'), { code: 'DISCOUNT_NOT_AVAILABLE' });
     }
+    if (!discountHelpers.isDiscountAllowedByFirstOrderLimit(
+      resolvedLoyaltyDiscount,
+      await discountHelpers.getCustomerFirstOrderWindowStats(db, tenantId, customerId)
+    )) {
+      throw Object.assign(new Error('FIRST_ORDER_LIMIT_REACHED'), { code: 'FIRST_ORDER_LIMIT_REACHED' });
+    }
 
     if (getPublicProgressInteractionMode(resolvedLoyaltyDiscount) !== 'products_sheet') {
       throw Object.assign(new Error('DISCOUNT_NOT_APPLICABLE'), { code: 'DISCOUNT_NOT_APPLICABLE' });
@@ -14276,7 +14367,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
   function isCheckoutBenefitsPreviewDetailSkippableError(error) {
     const code = String(error?.code || error?.message || '');
-    return ['DISCOUNT_INVALID', 'DISCOUNT_NOT_AVAILABLE', 'DISCOUNT_NOT_APPLICABLE'].includes(code);
+    return ['DISCOUNT_INVALID', 'DISCOUNT_NOT_AVAILABLE', 'DISCOUNT_NOT_APPLICABLE', 'FIRST_ORDER_LIMIT_REACHED'].includes(code);
   }
 
   async function buildCheckoutBenefitsPreviewDetails({
@@ -14419,6 +14510,12 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       if (!discountHelpers.matchDiscountAudience(promoAudienceRows, customerId, customerCategoryIds)) {
         return res.status(409).json({ ok: false, error: 'PROMO_NOT_AVAILABLE' });
       }
+      if (!discountHelpers.isDiscountAllowedByFirstOrderLimit(
+        promoRow,
+        await discountHelpers.getCustomerFirstOrderWindowStats(conn, tenantId, customerId)
+      )) {
+        return res.status(409).json({ ok: false, error: 'FIRST_ORDER_LIMIT_REACHED' });
+      }
 
       const visibility = isHiddenBenefitsDiscount(promoRow) ? 'hidden' : 'public';
       if (visibility === 'hidden') {
@@ -14474,7 +14571,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
       return res.json({ ok: true, data });
     } catch (e) {
-      if (['DISCOUNT_INVALID', 'DISCOUNT_NOT_AVAILABLE', 'DISCOUNT_NOT_APPLICABLE'].includes(String(e?.code || e?.message || ''))) {
+      if (['DISCOUNT_INVALID', 'DISCOUNT_NOT_AVAILABLE', 'DISCOUNT_NOT_APPLICABLE', 'FIRST_ORDER_LIMIT_REACHED'].includes(String(e?.code || e?.message || ''))) {
         return res.status(409).json({ ok: false, error: String(e?.code || e?.message || 'DISCOUNT_INVALID') });
       }
       console.error(e);
@@ -14500,7 +14597,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
       return res.json({ ok: true, data });
     } catch (e) {
-      if (['DISCOUNT_INVALID', 'DISCOUNT_NOT_AVAILABLE', 'DISCOUNT_NOT_APPLICABLE'].includes(String(e?.code || e?.message || ''))) {
+      if (['DISCOUNT_INVALID', 'DISCOUNT_NOT_AVAILABLE', 'DISCOUNT_NOT_APPLICABLE', 'FIRST_ORDER_LIMIT_REACHED'].includes(String(e?.code || e?.message || ''))) {
         return res.status(409).json({ ok: false, error: String(e?.code || e?.message || 'DISCOUNT_INVALID') });
       }
       console.error(e);
@@ -14721,7 +14818,11 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         return res.status(409).json({ ok: false, error: 'PROMO_INVALID' });
       }
       if (previewCard?.is_applicable !== true) {
-        return res.status(409).json({ ok: false, error: 'PROMO_NOT_APPLICABLE' });
+        const previewErrorCode = publicDiscountText(previewCard?.disabled_reason_code).toUpperCase();
+        return res.status(409).json({
+          ok: false,
+          error: previewErrorCode === 'FIRST_ORDER_LIMIT_REACHED' ? 'FIRST_ORDER_LIMIT_REACHED' : 'PROMO_NOT_APPLICABLE',
+        });
       }
 
       await ensureDiscountRuntimeTables();
@@ -14765,6 +14866,13 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       if (!discountHelpers.matchDiscountAudience(promoAudienceRows, customerId, customerCategoryIds)) {
         await conn.rollback();
         return res.status(409).json({ ok: false, error: 'PROMO_NOT_AVAILABLE' });
+      }
+      if (!discountHelpers.isDiscountAllowedByFirstOrderLimit(
+        promoRow,
+        await discountHelpers.getCustomerFirstOrderWindowStats(conn, tenantId, customerId)
+      )) {
+        await conn.rollback();
+        return res.status(409).json({ ok: false, error: 'FIRST_ORDER_LIMIT_REACHED' });
       }
 
       if (Number(promoRow.usage_per_customer || 0) > 0) {
@@ -15199,7 +15307,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       if (['PROMO_INVALID', 'PROMO_NOT_AVAILABLE', 'PROMO_CLAIM_LIMIT_REACHED', 'PROMO_CLAIM_UNAVAILABLE'].includes(errorCode)) {
         return res.status(409).json({ ok: false, error: errorCode });
       }
-      if (['DISCOUNT_INVALID', 'DISCOUNT_NOT_AVAILABLE', 'DISCOUNT_NOT_APPLICABLE', 'REWARD_NOT_APPLICABLE'].includes(errorCode)) {
+      if (['DISCOUNT_INVALID', 'DISCOUNT_NOT_AVAILABLE', 'DISCOUNT_NOT_APPLICABLE', 'FIRST_ORDER_LIMIT_REACHED', 'REWARD_NOT_APPLICABLE'].includes(errorCode)) {
         return res.status(409).json({ ok: false, error: errorCode || 'DISCOUNT_NOT_APPLICABLE' });
       }
       console.error(e);
@@ -15600,6 +15708,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const customerCategoryIds = customerId
         ? await discountHelpers.getCustomerCategoryIds(db, tenantId, customerId)
         : [];
+      const firstOrderStats = customerId
+        ? await discountHelpers.getCustomerFirstOrderWindowStats(db, tenantId, customerId)
+        : { customerId: null, completedSuccessfulOrders: 0, activeReservedOrders: 0 };
       const customerBenefitDiscountRows = customerId
         ? await loadCustomerBenefitDiscountRows(tenantId, storeId, customerId)
         : [];
@@ -15726,6 +15837,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         selectedDiscountSource,
         discountEntries,
         allDiscountRows: automaticBenefitDiscountRows,
+        firstOrderStats,
       });
       const selectedDiscount = selectedDiscountEntry?.discount || null;
       const selectedRewardDiscountRow = publicDiscountText(selectedDiscountEntry?.source).toLowerCase() === 'reward_discount'
@@ -16478,6 +16590,84 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           )
         : new Map();
 
+      if (useClientPricingSnapshotMode && promoCode && selectedPromoSource !== 'reward_promo') {
+        await ensureDiscountDeletedColumns();
+        const [[snapshotPromoRow]] = await db.query(
+          `SELECT pc.id AS promo_code_id, pc.discount_id, pc.code, pc.code_mode, pc.is_active AS promo_is_active,
+                  pc.usage_limit AS promo_usage_limit, pc.usage_count AS promo_usage_count, pc.assigned_customer_id,
+                  d.*
+             FROM mkt_discount_promo_codes pc
+             INNER JOIN mkt_discounts d
+               ON d.id = pc.discount_id
+               AND d.tenant_id = pc.tenant_id
+               AND (d.store_id = pc.store_id OR d.store_id = 0 OR d.store_id IS NULL)
+               AND d.is_deleted = 0
+            WHERE pc.tenant_id = ?
+              AND (pc.store_id = ? OR pc.store_id = 0 OR pc.store_id IS NULL)
+              AND UPPER(REPLACE(pc.code, ' ', '')) = ?
+            ORDER BY pc.store_id DESC, pc.id DESC
+            LIMIT 1`,
+          [tenantId, orderStoreId, promoCode]
+        );
+
+        if (!snapshotPromoRow || !discountHelpers.isPromoSimpleDiscount(snapshotPromoRow) || !discountHelpers.isDiscountActive(snapshotPromoRow)) {
+          return res.status(409).json({ ok: false, error: 'PROMO_INVALID' });
+        }
+        if (isPromoRewardRedeemAction(snapshotPromoRow)) {
+          return res.status(409).json({ ok: false, error: 'PROMO_INVALID' });
+        }
+        if (Number(snapshotPromoRow.promo_is_active || 0) !== 1) {
+          return res.status(409).json({ ok: false, error: 'PROMO_NOT_AVAILABLE' });
+        }
+
+        const snapshotPromoReservationStats = readActiveOrderPromoReservationStats(activePromoReservationStats, {
+          sourceKind: 'promo_code',
+          promoCodeId: Number(snapshotPromoRow?.promo_code_id || 0) || null,
+          promoCode: snapshotPromoRow?.code,
+        });
+        if (Number(snapshotPromoReservationStats?.customerReservations || 0) > 0) {
+          return res.status(409).json({ ok: false, error: 'PROMO_RESERVED' });
+        }
+        if (
+          Number(snapshotPromoRow.promo_usage_limit || 0) > 0
+          && (Number(snapshotPromoRow.promo_usage_count || 0) + Number(snapshotPromoReservationStats?.totalReservations || 0))
+            >= Number(snapshotPromoRow.promo_usage_limit || 0)
+        ) {
+          return res.status(409).json({ ok: false, error: 'PROMO_LIMIT_REACHED' });
+        }
+        if (Number(snapshotPromoRow.assigned_customer_id || 0) > 0 && Number(snapshotPromoRow.assigned_customer_id || 0) !== Number(customerId || 0)) {
+          return res.status(409).json({ ok: false, error: 'PROMO_NOT_AVAILABLE' });
+        }
+
+        const [snapshotPromoAudienceRows] = await db.query(
+          `SELECT target_type, customer_id, customer_category_id
+             FROM mkt_discount_customers
+            WHERE tenant_id = ? AND discount_id = ?`,
+          [tenantId, Number(snapshotPromoRow.discount_id || 0)]
+        );
+
+        if (!discountHelpers.matchDiscountAudience(snapshotPromoAudienceRows, customerId, customerCategoryIds)) {
+          return res.status(409).json({ ok: false, error: 'PROMO_NOT_AVAILABLE' });
+        }
+        if (!discountHelpers.isDiscountAllowedByFirstOrderLimit(snapshotPromoRow, firstOrderStats)) {
+          return res.status(409).json({ ok: false, error: 'FIRST_ORDER_LIMIT_REACHED' });
+        }
+        if (Number(snapshotPromoRow.usage_per_customer || 0) > 0 && Number(customerId || 0) > 0) {
+          const [[snapshotPromoCustomerUsage]] = await db.query(
+            `SELECT COUNT(*) AS usage_count
+               FROM mkt_discount_usage
+              WHERE tenant_id = ? AND discount_id = ? AND customer_id = ?`,
+            [tenantId, Number(snapshotPromoRow.discount_id || 0), Number(customerId || 0)]
+          );
+          if (
+            (Number(snapshotPromoCustomerUsage?.usage_count || 0) + Number(snapshotPromoReservationStats?.customerReservations || 0))
+            >= Number(snapshotPromoRow.usage_per_customer || 0)
+          ) {
+            return res.status(409).json({ ok: false, error: 'PROMO_CUSTOMER_LIMIT_REACHED' });
+          }
+        }
+      }
+
       if (!useClientPricingSnapshotMode && promoCode) {
         if (selectedPromoSource === 'reward_promo') {
           if (!selectedRewardPromoRow) {
@@ -16755,6 +16945,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
         if (!discountHelpers.matchDiscountAudience(promoAudienceRows, customerId, customerCategoryIds)) {
           return res.status(409).json({ ok: false, error: 'PROMO_NOT_AVAILABLE' });
+        }
+        if (!discountHelpers.isDiscountAllowedByFirstOrderLimit(promoRow, firstOrderStats)) {
+          return res.status(409).json({ ok: false, error: 'FIRST_ORDER_LIMIT_REACHED' });
         }
 
         if (Number(promoRow.usage_per_customer || 0) > 0 && Number(customerId || 0) > 0) {

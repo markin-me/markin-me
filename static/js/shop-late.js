@@ -9404,10 +9404,12 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       : "";
     const customerCache = typeof getCustomerCache === "function" ? getCustomerCache() : null;
     const customerId = Number(customerCache?.id || 0) || 0;
+    const customerTotalOrders = Number(customerCache?.total_orders || 0) || 0;
     if (!token && !(customerId > 0)) return "";
     try {
       return JSON.stringify({
         customer_id: customerId > 0 ? customerId : null,
+        customer_total_orders: customerId > 0 ? customerTotalOrders : null,
         customer_token: customerId > 0 ? null : token,
         preview: {
           ...safePreviewRequest,
@@ -10563,6 +10565,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       : "";
     const customerCache = typeof getCustomerCache === "function" ? getCustomerCache() : null;
     const customerId = Number(customerCache?.id || 0) || 0;
+    const customerTotalOrders = Number(customerCache?.total_orders || 0) || 0;
 
     let tenantId = 0;
     try {
@@ -10584,6 +10587,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       tenant_id: tenantId > 0 ? tenantId : null,
       store_id: storeId > 0 ? storeId : null,
       customer_id: customerId > 0 ? customerId : null,
+      customer_total_orders: customerId > 0 ? customerTotalOrders : null,
       customer_token: customerId > 0 ? null : (token || null),
     };
   }
@@ -17815,7 +17819,8 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     if (!["promo_code", "reward_promo"].includes(source)) return false;
     const disabledReasonCode = str(item?.disabled_reason_code || "").trim().toUpperCase();
     return disabledReasonCode === "PROMO_CUSTOMER_LIMIT_REACHED"
-      || disabledReasonCode === "PROMO_LIMIT_REACHED";
+      || disabledReasonCode === "PROMO_LIMIT_REACHED"
+      || disabledReasonCode === "FIRST_ORDER_LIMIT_REACHED";
   }
 
   function isCompletedCustomerLimitDiscountBenefit(item) {
@@ -17835,6 +17840,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       "DISCOUNT_INVALID",
       "DISCOUNT_NOT_AVAILABLE",
       "DISCOUNT_CUSTOMER_LIMIT_REACHED",
+      "FIRST_ORDER_LIMIT_REACHED",
       "PROMO_INVALID",
       "PROMO_NOT_AVAILABLE",
       "PROMO_LIMIT_REACHED",
@@ -19557,13 +19563,14 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     }), { hideWhenEmpty: true });
     syncCheckoutBenefitsEmptyState();
 
+    const promoCards = (Array.isArray(data.promo_codes) ? data.promo_codes : [])
+      .filter((item) => !isCompletedCustomerLimitPromoBenefit(item));
+
     let selectedPromoCode = str(
-      (Array.isArray(data.promo_codes) ? data.promo_codes.find((item) => item?.is_selected)?.code : "") ||
+      (promoCards.find((item) => item?.is_selected)?.code || "") ||
       previewRequest?.promo_code ||
       ""
     ).trim();
-
-    const promoCards = Array.isArray(data.promo_codes) ? data.promo_codes.slice() : [];
     const actions = document.createElement("div");
     actions.className = "shop-checkout-benefits-actions";
 
@@ -35037,6 +35044,12 @@ function setBottomNavActive(tab) {
             return "Ошибка оформления заказа: " + (err?.message || "UNKNOWN");
         }
       };
+      const syncBenefitsAfterSuccessfulOrder = async () => {
+        invalidateCheckoutBenefitsClientCache({ preview: true, progressProducts: false });
+        try {
+          await fetchMeSafe({ force: true });
+        } catch (_) {}
+      };
 
       try {
         const res = await apiJson("/api/public/orders", { method: "POST", body: payload });
@@ -35055,6 +35068,7 @@ function setBottomNavActive(tab) {
               const res2 = await apiJson("/api/public/orders", { method: "POST", body: payload });
               if (res2.data && res2.data.id && res2.data.public_id) {
                 localStorage.setItem(LAST_ORDER_KEY, String(res2.data.public_id));
+                await syncBenefitsAfterSuccessfulOrder();
                 clearCartAll({ restoreGiftRewards: false });
                 saveCheckoutDraft({});
                 setCheckoutSubmitting(false);
@@ -35084,6 +35098,7 @@ function setBottomNavActive(tab) {
 
         if (res.data && res.data.id && res.data.public_id) {
           localStorage.setItem(LAST_ORDER_KEY, String(res.data.public_id));
+          await syncBenefitsAfterSuccessfulOrder();
           clearCartAll({ restoreGiftRewards: false });
           saveCheckoutDraft({});
           if (typeof window.updateActiveOrdersBadge === "function") { Promise.resolve(window.updateActiveOrdersBadge({ force: true })).catch(() => {}); }

@@ -751,6 +751,10 @@
             <label class="field-label" for="de_usage_per_customer">На клиента</label>
             <input class="control" id="de_usage_per_customer" name="usage_per_customer" type="number" min="0" placeholder="1" />
           </div>
+          <div class="field-wrap">
+            <label class="field-label" for="de_first_order_limit">На первый заказ</label>
+            <input class="control" id="de_first_order_limit" name="first_order_limit" type="number" min="1" step="1" placeholder="1" />
+          </div>
         </div>
 
         <div class="discount-help-row">
@@ -973,6 +977,10 @@
           <div class="discount-info-row">
             <span class="discount-info-row-label">Общий лимит:</span>
             <span class="discount-info-row-value" id="discountInfoUsageLimit">—</span>
+          </div>
+          <div class="discount-info-row">
+            <span class="discount-info-row-label">На первый заказ:</span>
+            <span class="discount-info-row-value" id="discountInfoFirstOrderLimit">—</span>
           </div>
           <div class="discount-info-row">
             <span class="discount-info-row-label">Использовано:</span>
