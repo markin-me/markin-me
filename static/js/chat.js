@@ -95,7 +95,7 @@
   const CHAT_MOBILE_CONTEXT_MENU_APPEAR_DELAY_MS = 140;
   const CHAT_MOBILE_CONTEXT_RELAYOUT_LOCK_MS = 260;
   const CHAT_MOBILE_CONTEXT_CLONE_OPEN_TRANSITION = "transform .46s cubic-bezier(.22,.61,.36,1)";
-  const CHAT_MOBILE_CONTEXT_CLONE_RELAYOUT_TRANSITION = "transform .26s cubic-bezier(.22,.61,.36,1)";
+  const CHAT_MOBILE_CONTEXT_CLONE_RELAYOUT_TRANSITION = "transform .46s cubic-bezier(.22,.61,.36,1)";
   const CHAT_TOUCH_CONTEXT_MOVE_CANCEL_PX = 9;
   const CHAT_TOUCH_SWIPE_REPLY_TRIGGER_PX = 56;
   const CHAT_TOUCH_SWIPE_MAX_SHIFT_PX = 96;
@@ -393,6 +393,18 @@
     activeOrdersLastFetchedAt: 0,
     activeOrdersHydratedClientId: 0,
     rightPanelOrderId: 0,
+
+    // Right column (chat) local tabs: order/client panels.
+    rightTabs: [],
+    activeRightTabKey: "",
+    rightTabActivationToken: 0,
+    rightPanelClientOrdersScrollTop: 0,
+    rightPanelClientContentTab: "addresses",
+    lastTouchLongPressContextMenuAt: 0,
+    touchContextMenuArmUntil: 0,
+    suppressOrderCardContextMenuUntil: 0,
+    rightOrderOpenedFromMessageBubble: false,
+    rightOrderOpenedFromHeader: false,
   };
   state.threadScrollTopByClient = sanitizeStoredThreadScrollTopByClient(state.store?.ui?.threadScrollTopByClient);
   state.threadPinnedBottomByClient = sanitizeStoredThreadPinnedBottomByClient(state.store?.ui?.threadPinnedBottomByClient);
@@ -3021,6 +3033,18 @@
     return safeView;
   }
 
+  function syncMobileClientCardFooter(view) {
+    if (!document.body || !document.body.classList.contains("page-chat")) return;
+    if (!isChatMobileViewport()) return;
+    const footer = document.getElementById("clientBenefitsFooter");
+    if (!footer) return;
+    const nextView = String(view || "").trim().toLowerCase();
+    const hasActiveClient = Number(state.activeClientId || 0) > 0;
+    const isOrderMode = document.body.classList.contains("chat-right-order-mode");
+    const shouldShow = nextView === "right" && !isOrderMode && hasActiveClient;
+    footer.classList.toggle("hidden", !shouldShow);
+  }
+
   function syncMobileChatView(view, options = {}) {
     if (!document.body || !document.body.classList.contains("page-chat")) return "center";
     if (!isChatMobileViewport()) {
@@ -3037,15 +3061,14 @@
     }
     document.body.classList.toggle("chat-mobile-left-open", nextView === "clients");
     document.body.classList.toggle("chat-mobile-right-open", nextView === "right");
-    if (nextView !== "right") {
-      document.body.classList.remove("sheet-open");
-    }
+    document.body.classList.remove("sheet-open");
     if (options.persistState !== false) {
       writePersistedMobileChatView(nextView);
     }
     if (nextView === "clients") {
       restoreClientsListScrollPosition({ defer: true });
     }
+    syncMobileClientCardFooter(nextView);
     return nextView;
   }
 
@@ -3077,24 +3100,29 @@
     return isOpen ? closeClientsPanel(options) : openClientsPanel(options);
   }
 
-  function openClientDetailsPanel(options = {}) {
+  async function openClientDetailsPanel(options = {}) {
     const activeClientId = Number(state.activeClientId || 0);
     if (activeClientId <= 0) return "clients";
+    showChatRightPane("client");
+    const selectedFromList = state.clients.find((client) => Number(client?.id || 0) === activeClientId) || null;
+    upsertChatRightTab("client", activeClientId, selectedFromList?.name || "");
     const clientsRightApi = getClientsRightApi();
+    if (clientsRightApi && typeof clientsRightApi.setChatRightForceEmpty === "function") {
+      clientsRightApi.setChatRightForceEmpty(false);
+    }
     if (clientsRightApi) {
-      const selectedFromList = state.clients.find((client) => Number(client?.id || 0) === activeClientId) || null;
       const isGuestClient = isGuestChatClient(selectedFromList);
       if (
         isGuestClient
         && typeof clientsRightApi.selectGuestChatClient === "function"
       ) {
-        clientsRightApi.selectGuestChatClient(
+        await clientsRightApi.selectGuestChatClient(
           activeClientId,
           selectedFromList?.name || "",
           { skipMobileSheet: true }
         ).catch(console.error);
       } else if (typeof clientsRightApi.selectClientById === "function") {
-        clientsRightApi.selectClientById(
+        await clientsRightApi.selectClientById(
           activeClientId,
           selectedFromList?.name || "",
           {
@@ -3104,7 +3132,10 @@
         ).catch(console.error);
       }
 
-      if (typeof clientsRightApi.openMobileSheet === "function") {
+      if (
+        typeof clientsRightApi.openMobileSheet === "function"
+        && !(document.body && document.body.classList.contains("page-chat"))
+      ) {
         clientsRightApi.openMobileSheet(options);
         return "right";
       }
@@ -3315,6 +3346,306 @@
     const api = window.__clientsDashboardApi;
     if (!api) return null;
     return api;
+  }
+
+  function getOrdersRightApi() {
+    const api = window.__ordersDashboardApi;
+    if (!api) return null;
+    return api;
+  }
+
+  function moveChatRightPaneNode(node, target) {
+    if (!node || !target || node.parentElement === target) return;
+    target.appendChild(node);
+  }
+
+  function captureClientOrdersListScrollTop() {
+    if (!document.body || !document.body.classList.contains("page-chat")) return;
+    const list = document.getElementById("clientOrdersList");
+    if (!list) return;
+    state.rightPanelClientOrdersScrollTop = Math.max(0, Number(list.scrollTop || 0));
+  }
+
+  function captureClientContentTab() {
+    if (!document.body || !document.body.classList.contains("page-chat")) return;
+    const activeTabBtn = document.querySelector('#clientContentTabs .shop-profile-tab.is-active[data-ctab]');
+    const tabValue = String(activeTabBtn?.getAttribute("data-ctab") || "").trim().toLowerCase();
+    if (tabValue === "orders" || tabValue === "addresses") {
+      state.rightPanelClientContentTab = tabValue;
+    }
+  }
+
+  function restoreClientOrdersListScrollTop() {
+    if (!document.body || !document.body.classList.contains("page-chat")) return;
+    const savedTop = Math.max(0, Number(state.rightPanelClientOrdersScrollTop || 0));
+    const list = document.getElementById("clientOrdersList");
+    if (!list) return;
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        list.scrollTop = savedTop;
+      });
+    });
+  }
+
+  function restoreClientPanelState() {
+    if (!document.body || !document.body.classList.contains("page-chat")) return;
+    const tabValue = String(state.rightPanelClientContentTab || "").trim().toLowerCase();
+    if (tabValue === "orders" || tabValue === "addresses") {
+      const tabBtn = document.querySelector(`#clientContentTabs .shop-profile-tab[data-ctab="${cssEscape(tabValue)}"]`);
+      if (tabBtn && typeof tabBtn.click === "function") {
+        tabBtn.click();
+      }
+    }
+    if (tabValue === "orders") {
+      restoreClientOrdersListScrollTop();
+    }
+  }
+
+  function hideLegacyRightPaneHeadersForChat() {
+    if (!document.body || !document.body.classList.contains("page-chat")) return;
+    const ids = ["clientTabsHeader", "orderTabsHeader", "orderTabsHeaderCheckout"];
+    ids.forEach((id) => {
+      const node = document.getElementById(id);
+      if (!node) return;
+      node.classList.add("hidden");
+      node.setAttribute("aria-hidden", "true");
+      node.style.setProperty("display", "none", "important");
+    });
+  }
+
+  function getChatRightTabsHeaderHost(mode) {
+    const nextMode = String(mode || "").trim().toLowerCase() === "order" ? "order" : "client";
+    if (nextMode === "order") {
+      const ordersPane = document.getElementById("ordersRightPane");
+      if (!ordersPane) return null;
+      return ordersPane.querySelector(".panel") || ordersPane;
+    }
+    return document.querySelector(".client-info-panel");
+  }
+
+  function placeChatRightTabsHeader(mode) {
+    if (!document.body || !document.body.classList.contains("page-chat")) return;
+    const header = document.getElementById("chatRightTabsHeader");
+    if (!header) return;
+    const host = getChatRightTabsHeaderHost(mode);
+    if (!host) return;
+    if (header.parentElement === host && host.firstElementChild === header) return;
+    host.insertBefore(header, host.firstChild || null);
+  }
+
+  function showChatRightPane(mode) {
+    const nextMode = String(mode || "").trim().toLowerCase() === "order" ? "order" : "client";
+    const host = document.querySelector(".page-chat .page-col-right");
+    const storage = document.getElementById("chatRightPaneStorage");
+    const clientPane = document.querySelector(".client-info-panel");
+    const ordersPane = document.getElementById("ordersRightPane");
+    const ordersCheckoutPane = document.getElementById("ordersCheckoutRightPane");
+    if (host && storage && clientPane && ordersPane && ordersCheckoutPane) {
+      if (nextMode === "order") {
+        moveChatRightPaneNode(clientPane, storage);
+        moveChatRightPaneNode(ordersPane, host);
+        moveChatRightPaneNode(ordersCheckoutPane, host);
+      } else {
+        moveChatRightPaneNode(ordersPane, storage);
+        moveChatRightPaneNode(ordersCheckoutPane, storage);
+        moveChatRightPaneNode(clientPane, host);
+      }
+    }
+    document.body.classList.toggle("chat-right-order-mode", nextMode === "order");
+    placeChatRightTabsHeader(nextMode);
+    hideLegacyRightPaneHeadersForChat();
+  }
+
+  function clearChatRightPane() {
+    if (!document.body || !document.body.classList.contains("page-chat")) return;
+    const host = document.querySelector(".page-chat .page-col-right");
+    const storage = document.getElementById("chatRightPaneStorage");
+    const clientPane = document.querySelector(".client-info-panel");
+    const ordersPane = document.getElementById("ordersRightPane");
+    const ordersCheckoutPane = document.getElementById("ordersCheckoutRightPane");
+    const tabsHeader = document.getElementById("chatRightTabsHeader");
+    if (host && storage) {
+      moveChatRightPaneNode(clientPane, host);
+      moveChatRightPaneNode(ordersPane, storage);
+      moveChatRightPaneNode(ordersCheckoutPane, storage);
+      moveChatRightPaneNode(tabsHeader, clientPane || storage);
+    }
+    document.body.classList.remove("chat-right-order-mode");
+    if (tabsHeader) {
+      tabsHeader.classList.add("hidden");
+      tabsHeader.setAttribute("aria-hidden", "true");
+    }
+    const clientEmpty = document.getElementById("clientEmpty");
+    const clientInfoWrap = document.getElementById("clientInfoWrap");
+    const clientOrderInfoWrap = document.getElementById("clientOrderInfoWrap");
+    if (clientEmpty) clientEmpty.classList.remove("hidden");
+    if (clientInfoWrap) clientInfoWrap.classList.add("hidden");
+    if (clientOrderInfoWrap) clientOrderInfoWrap.classList.add("hidden");
+    const clientsRightApi = getClientsRightApi();
+    if (clientsRightApi && typeof clientsRightApi.setChatRightForceEmpty === "function") {
+      clientsRightApi.setChatRightForceEmpty(true);
+    }
+    hideLegacyRightPaneHeadersForChat();
+  }
+
+  function buildChatRightTabKey(kind, id) {
+    const k = String(kind || "").trim().toLowerCase() === "order" ? "order" : "client";
+    const n = Number(id || 0);
+    return `${k}:${Number.isFinite(n) ? n : 0}`;
+  }
+
+  function renderChatRightTabs() {
+    if (!document.body || !document.body.classList.contains("page-chat")) return;
+    const wrap = document.getElementById("chatRightTabs");
+    if (!wrap) return;
+    const tabs = Array.isArray(state.rightTabs) ? state.rightTabs : [];
+    const clientsRightApi = getClientsRightApi();
+    if (clientsRightApi && typeof clientsRightApi.setChatRightForceEmpty === "function") {
+      clientsRightApi.setChatRightForceEmpty(tabs.length === 0);
+    }
+    const header = document.getElementById("chatRightTabsHeader");
+    if (header) {
+      const hasTabs = tabs.length > 0;
+      header.classList.toggle("hidden", !hasTabs);
+      header.setAttribute("aria-hidden", hasTabs ? "false" : "true");
+    }
+    wrap.innerHTML = tabs.map((t) => {
+      const key = buildChatRightTabKey(t.kind, t.id);
+      const selected = key && key === String(state.activeRightTabKey || "");
+      const title = t.kind === "order" ? `#${t.id}` : (String(t.title || "").trim() || "Клиент");
+      const safeTitle = escapeHtml(title);
+      return `
+        <div class="product-tab ${selected ? "is-active" : ""}" role="tab"
+          data-chat-right-tab="${escapeHtml(key)}"
+          aria-selected="${selected ? "true" : "false"}"
+          title="${safeTitle}">
+          <span class="product-tab-title">${safeTitle}</span>
+          <button class="product-tab-close" type="button" data-chat-right-tab-close="${escapeHtml(key)}" aria-label="Закрыть вкладку">&times;</button>
+        </div>
+      `;
+    }).join("");
+  }
+
+  function upsertChatRightTab(kind, id, title = "") {
+    const tabKind = String(kind || "").trim().toLowerCase() === "order" ? "order" : "client";
+    const n = Number(id || 0);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    if (!Array.isArray(state.rightTabs)) state.rightTabs = [];
+    const key = buildChatRightTabKey(tabKind, n);
+    const existing = state.rightTabs.find((t) => buildChatRightTabKey(t.kind, t.id) === key) || null;
+    if (existing) {
+      if (tabKind === "client" && title) existing.title = String(title || "").trim();
+    } else {
+      state.rightTabs.push({ kind: tabKind, id: n, title: String(title || "").trim() });
+    }
+    state.activeRightTabKey = key;
+    state.rightTabActivationToken += 1;
+    renderChatRightTabs();
+    return key;
+  }
+
+  function closeChatRightTab(key) {
+    const k = String(key || "").trim();
+    if (!k || !Array.isArray(state.rightTabs)) return;
+    state.rightTabs = state.rightTabs.filter((t) => buildChatRightTabKey(t.kind, t.id) !== k);
+    if (String(state.activeRightTabKey || "") === k) {
+      const last = state.rightTabs[state.rightTabs.length - 1] || null;
+      state.activeRightTabKey = last ? buildChatRightTabKey(last.kind, last.id) : "";
+    }
+    state.rightTabActivationToken += 1;
+    renderChatRightTabs();
+    if (state.activeRightTabKey) {
+      activateChatRightTab(state.activeRightTabKey).catch(console.error);
+      return;
+    }
+    state.rightTabActivationToken += 1;
+    clearChatRightPane();
+  }
+
+  async function activateChatRightTab(key) {
+    const k = String(key || "").trim();
+    if (!k) return;
+    const activationToken = ++state.rightTabActivationToken;
+    const tabExists = Array.isArray(state.rightTabs)
+      && state.rightTabs.some((t) => buildChatRightTabKey(t.kind, t.id) === k);
+    if (!tabExists) return;
+    const [kindRaw, idRaw] = k.split(":");
+    const kind = kindRaw === "order" ? "order" : "client";
+    const id = Number(idRaw || 0);
+    if (!Number.isFinite(id) || id <= 0) return;
+    state.activeRightTabKey = k;
+    renderChatRightTabs();
+    if (activationToken !== state.rightTabActivationToken) return;
+    const clientsRightApi = getClientsRightApi();
+    if (clientsRightApi && typeof clientsRightApi.setChatRightForceEmpty === "function") {
+      clientsRightApi.setChatRightForceEmpty(false);
+    }
+
+    if (kind === "order") {
+      captureClientContentTab();
+      captureClientOrdersListScrollTop();
+      showChatRightPane("order");
+      const ordersRightApi = getOrdersRightApi();
+      if (ordersRightApi && typeof ordersRightApi.openOrderById === "function") {
+        ordersRightApi.openOrderById(id, { openMobile: false });
+      }
+      if (activationToken !== state.rightTabActivationToken) return;
+      syncMobileChatView("right");
+      return;
+    }
+
+    showChatRightPane("client");
+    
+    const selectedFromList = state.clients.find((client) => Number(client?.id || 0) === id) || null;
+    const isGuestClient = isGuestChatClient(selectedFromList);
+    const preferredTitle = selectedFromList?.name || "";
+    if (clientsRightApi) {
+      if (isGuestClient && typeof clientsRightApi.selectGuestChatClient === "function") {
+        await clientsRightApi.selectGuestChatClient(id, preferredTitle, { skipMobileSheet: true }).catch(console.error);
+      } else if (typeof clientsRightApi.selectClientById === "function") {
+        await clientsRightApi.selectClientById(id, preferredTitle, { chatGuest: isGuestClient, skipMobileSheet: true }).catch(console.error);
+      }
+    }
+    if (activationToken !== state.rightTabActivationToken) return;
+    syncMobileChatView("right");
+    restoreClientPanelState();
+  }
+
+  function seedChatRightTabsFromCurrentState() {
+    if (!document.body || !document.body.classList.contains("page-chat")) return;
+
+    const activeClientId = Number(state.activeClientId || 0);
+    const activeClientFromList = (Array.isArray(state.clients) ? state.clients : [])
+      .find((client) => Number(client?.id || 0) === activeClientId) || null;
+    const activeClientTitle = String(
+      activeClientFromList?.name
+      || state.activeClient?.name
+      || ""
+    ).trim();
+
+    if (Number.isFinite(activeClientId) && activeClientId > 0) {
+      upsertChatRightTab("client", activeClientId, activeClientTitle);
+    }
+
+    const headerOrderId = Number(
+      (dom.center.mobileHeaderOrderBtn && dom.center.mobileHeaderOrderBtn.getAttribute("data-order-id"))
+      || (dom.center.headerOrder && dom.center.headerOrder.getAttribute("data-order-id"))
+      || state.rightPanelOrderId
+      || 0
+    );
+
+    if (Number.isFinite(headerOrderId) && headerOrderId > 0) {
+      upsertChatRightTab("order", headerOrderId);
+    }
+
+    const rightMode = document.body.classList.contains("chat-right-order-mode") ? "order" : "client";
+    if (rightMode === "order" && Number.isFinite(headerOrderId) && headerOrderId > 0) {
+      state.activeRightTabKey = buildChatRightTabKey("order", headerOrderId);
+    } else if (Number.isFinite(activeClientId) && activeClientId > 0) {
+      state.activeRightTabKey = buildChatRightTabKey("client", activeClientId);
+    }
+
+    renderChatRightTabs();
   }
 
   function getTenantId() {
@@ -4163,9 +4494,17 @@
     }
 
     if (changed || options.forceRender) {
-      renderChatHeader();
-      // Order cards are rendered inside message bubbles, so refresh the thread view too.
-      renderMessages({ disableAutoPin: true, smoothScroll: false, skipSaveScrollPosition: true });
+      try {
+        renderChatHeader();
+      } catch (err) {
+        console.error("Failed to render chat header from active orders:", err);
+      }
+      try {
+        // Order cards are rendered inside message bubbles, so refresh the thread view too.
+        renderMessages({ disableAutoPin: true, smoothScroll: false, skipSaveScrollPosition: true });
+      } catch (err) {
+        console.error("Failed to render chat messages from active orders:", err);
+      }
     }
     return changed;
   }
@@ -9526,7 +9865,11 @@
 
     const openClientThreadAndDetails = async (event) => {
       if (isAdminMobileChatLayout()) {
-        selectClient(client.id);
+        if (event) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+        await selectClient(client.id, { openDetails: false });
         return;
       }
       event.preventDefault();
@@ -9534,17 +9877,15 @@
       closeAllClientSwipeRows(null, { immediate: true });
       hideClientContextMenu();
       if (Number(state.activeClientId) !== Number(client.id)) {
-        await selectClient(client.id);
+        await selectClient(client.id, { openDetails: true });
+        return;
       }
-      openClientDetailsPanel();
+      await openClientDetailsPanel();
     };
 
     const mainBtn = $(".chat-client-row-main", row);
     if (mainBtn) {
       mainBtn.addEventListener("click", (event) => {
-        if (event.target.closest('[data-chat-client-open-details="1"]') && !isAdminMobileChatLayout()) {
-          return;
-        }
         if (Date.now() < suppressClientRowClickUntil) {
           event.preventDefault();
           event.stopPropagation();
@@ -9561,15 +9902,6 @@
       mainBtn.addEventListener("contextmenu", (event) => {
         event.preventDefault();
         showClientContextMenu(event.clientX, event.clientY, client.id);
-      });
-    }
-
-    const detailTriggers = $$('[data-chat-client-open-details="1"]', row);
-    if (detailTriggers.length) {
-      detailTriggers.forEach((trigger) => {
-        trigger.addEventListener("click", (event) => {
-          openClientThreadAndDetails(event).catch(console.error);
-        });
       });
     }
 
@@ -10611,11 +10943,11 @@
         if (!dom.center.contextMenu || dom.center.contextMenu.classList.contains("hidden")) return;
         if (!dom.center.contextMenu.classList.contains("is-reactions-expanded")) return;
         ensureContextMenuAllEmojiButtons(dom.center.contextMenu);
-        scheduleContextSceneRelayout(true);
+        scheduleContextSceneRelayout(false);
       }).catch(() => {});
     }
     dom.center.contextMenu.classList.toggle("is-reactions-expanded", isExpanded);
-    scheduleContextSceneRelayout(true);
+    scheduleContextSceneRelayout(false);
     const toggleBtn = $('[data-chat-msg-reaction="__toggle_more__"]', dom.center.contextMenu);
     if (!toggleBtn) return;
     toggleBtn.setAttribute("aria-expanded", isExpanded ? "true" : "false");
@@ -15022,6 +15354,9 @@
 
       const orderCard = event.target.closest("[data-chat-order-card-id]");
       if (orderCard) {
+        state.suppressOrderCardContextMenuUntil = Date.now() + 1200;
+        clearTouchContextGesture();
+        hideMessageContextMenu();
         if (Date.now() < suppressOrderCardClickUntil) {
           event.preventDefault();
           event.stopPropagation();
@@ -15099,7 +15434,31 @@
 
     dom.center.messages.addEventListener("contextmenu", (event) => {
       if (event.target.closest && event.target.closest("[data-chat-autolink]") && !state.selectionMode) return;
-      const messageEl = event.target.closest(".chat-message");
+      if (Date.now() < Number(state.suppressOrderCardContextMenuUntil || 0)) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      const messageElForContext = event.target && event.target.closest ? event.target.closest(".chat-message") : null;
+      const isOrderBubbleTarget = !!(
+        (event.target
+          && event.target.closest
+          && (
+            event.target.closest(".chat-message-bubble--order-card")
+            || event.target.closest("[data-chat-order-card-id]")
+          ))
+        || (messageElForContext && messageElForContext.querySelector(".chat-message-bubble--order-card"))
+      );
+      if (
+        isOrderBubbleTarget
+        && isChatMobileViewport()
+        && Date.now() > Number(state.touchContextMenuArmUntil || 0)
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      const messageEl = messageElForContext || event.target.closest(".chat-message");
       if (!messageEl || !state.activeClientId) return;
       const messageId = messageEl.getAttribute("data-message-id");
       if (!messageId) return;
@@ -15161,6 +15520,7 @@
         clearOrderCardTouchPan();
         return;
       }
+      const isOrderCardTouchTarget = !!(event.target && event.target.closest && event.target.closest("[data-chat-order-card-id]"));
 
       const messageId = String(messageBubble.getAttribute("data-message-id") || "");
       if (!messageId || !state.activeClientId) {
@@ -15184,6 +15544,11 @@
         clearOrderCardTouchPan();
       }
       clearTouchContextGesture();
+      if (isOrderCardTouchTarget) {
+        // Short tap on order cards should open the order only (click handler),
+        // without arming message context long-press flow for this touch.
+        return;
+      }
       touchContextGesture = {
         messageId,
         bubble: messageBubble,
@@ -15205,6 +15570,8 @@
       touchContextGesture.longPressTimer = window.setTimeout(() => {
         if (!touchContextGesture || touchContextGesture.messageId !== messageId) return;
         touchContextGesture.longPressFired = true;
+        state.lastTouchLongPressContextMenuAt = Date.now();
+        state.touchContextMenuArmUntil = state.lastTouchLongPressContextMenuAt + 1400;
         suppressTouchClickUntil = Math.max(suppressTouchClickUntil, Date.now() + 480);
         if (state.selectionMode) {
           toggleMessageSelection(messageId);
@@ -15329,6 +15696,7 @@
       if (orderCardTouchPan) {
         const shouldSuppressClick = orderCardTouchPan.didDrag === true;
         clearOrderCardTouchPan({ suppressClick: shouldSuppressClick });
+        clearTouchContextGesture();
         return;
       }
       if (touchAttachmentTap) {
@@ -15627,6 +15995,21 @@
     }
 
     document.addEventListener("click", (event) => {
+      const tabClose = event.target && event.target.closest && event.target.closest("[data-chat-right-tab-close]");
+      if (tabClose) {
+        event.preventDefault();
+        event.stopPropagation();
+        closeChatRightTab(tabClose.getAttribute("data-chat-right-tab-close"));
+        return;
+      }
+      const tabBtn = event.target && event.target.closest && event.target.closest("[data-chat-right-tab]");
+      if (tabBtn) {
+        event.preventDefault();
+        event.stopPropagation();
+        activateChatRightTab(tabBtn.getAttribute("data-chat-right-tab")).catch(console.error);
+        return;
+      }
+
       if (Date.now() < Number(suppressFloatingMenuAutoHideUntil || 0)) {
         event.preventDefault();
         event.stopPropagation();
@@ -15756,17 +16139,44 @@
       || 0
     );
     if (!Number.isFinite(headerOrderId) || headerOrderId <= 0) return;
-    const clientsRightApi = getClientsRightApi();
-    if (!clientsRightApi || typeof clientsRightApi.openOrderById !== "function") return;
-    clientsRightApi.openOrderById(headerOrderId);
+    state.rightOrderOpenedFromMessageBubble = false;
+    state.rightOrderOpenedFromHeader = true;
+    captureClientContentTab();
+    captureClientOrdersListScrollTop();
+    showChatRightPane("order");
+    upsertChatRightTab("order", headerOrderId);
+    const ordersRightApi = getOrdersRightApi();
+    if (!ordersRightApi || typeof ordersRightApi.openOrderById !== "function") return;
+    ordersRightApi.openOrderById(headerOrderId, { openMobile: false });
+    syncMobileChatView("right");
   }
 
-  function openOrderFromMessageCard(orderId) {
+  function openOrderFromMessageCard(orderId, options = {}) {
     const id = Number(orderId || 0);
     if (!Number.isFinite(id) || id <= 0) return;
-    const clientsRightApi = getClientsRightApi();
-    if (!clientsRightApi || typeof clientsRightApi.openOrderById !== "function") return;
-    clientsRightApi.openOrderById(id);
+    const opts = options && typeof options === "object" ? options : {};
+    state.rightOrderOpenedFromMessageBubble = opts.fromMessageBubble !== false;
+    state.rightOrderOpenedFromHeader = false;
+    captureClientContentTab();
+    captureClientOrdersListScrollTop();
+    showChatRightPane("order");
+    upsertChatRightTab("order", id);
+    const ordersRightApi = getOrdersRightApi();
+    if (!ordersRightApi || typeof ordersRightApi.openOrderById !== "function") return;
+    ordersRightApi.openOrderById(id, { openMobile: false });
+    syncMobileChatView("right");
+  }
+
+  function bindChatRightOrderOpenRequests() {
+    document.addEventListener("chat:right-order-open-request", (event) => {
+      const detail = event && event.detail && typeof event.detail === "object" ? event.detail : {};
+      const orderId = Number(detail.orderId || 0);
+      if (!Number.isFinite(orderId) || orderId <= 0) return;
+      const source = String(detail.source || "").trim().toLowerCase();
+      openOrderFromMessageCard(orderId, {
+        fromMessageBubble: source === "message-bubble",
+      });
+    });
   }
 
   function syncRightOrderPanelById(orderId, options = {}) {
@@ -15774,10 +16184,20 @@
     if (!Number.isFinite(id) || id <= 0) return false;
     const opts = options && typeof options === "object" ? options : {};
     if (opts.force !== true && Number(state.rightPanelOrderId || 0) === id) return false;
-    const clientsRightApi = getClientsRightApi();
-    if (!clientsRightApi || typeof clientsRightApi.openOrderById !== "function") return false;
-    clientsRightApi.openOrderById(id, { forceRefresh: opts.forceRefresh === true });
+    state.rightOrderOpenedFromMessageBubble = false;
+    state.rightOrderOpenedFromHeader = false;
+    captureClientContentTab();
+    captureClientOrdersListScrollTop();
+    showChatRightPane("order");
+    upsertChatRightTab("order", id);
+    const ordersRightApi = getOrdersRightApi();
+    if (!ordersRightApi || typeof ordersRightApi.openOrderById !== "function") return false;
+    ordersRightApi.openOrderById(id, {
+      forceRefresh: opts.forceRefresh === true,
+      openMobile: false,
+    });
     state.rightPanelOrderId = id;
+    syncMobileChatView("right");
     return true;
   }
 
@@ -15853,7 +16273,7 @@
       node.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
-        openClientDetailsPanel();
+        openClientDetailsPanel({ skipPersist: false }).catch(console.error);
       });
     });
   }
@@ -15965,6 +16385,7 @@
         || selectedFromList
         || state.activeClient
         || buildOptimisticActiveClientProfile(clientId, selectedFromList);
+      renderChatHeader();
       if (state.activeClient && typeof state.activeClient === "object") {
         setCachedActiveClientProfile(clientId, state.activeClient);
         setSharedClientDetailsToLocalStorage(clientId, { client: state.activeClient });
@@ -16073,9 +16494,54 @@
     state.store.lastOpenClientId = id;
     restoreComposerDraftForClient(id, { skipThreadViewportSync: true });
     state.rightPanelOrderId = 0;
+    showChatRightPane("client");
     state.headerOrderSnapshot = null;
     setHeaderLoading(true);
     saveStore();
+    const selectedForTab = state.clients.find((c) => Number(c.id) === id) || null;
+    const titleForTab = String(selectedForTab?.name || "").trim();
+    const shouldAutoOpenDesktopDetails = !isAdminMobileChatLayout() && opts.openDetails !== false;
+    const shouldOpenDetails = opts.openDetails === true || shouldAutoOpenDesktopDetails;
+
+    if (shouldAutoOpenDesktopDetails || opts.openDetails === true) {
+      upsertChatRightTab("client", id, titleForTab);
+    }
+    if (shouldOpenDetails) {
+      window.requestAnimationFrame(() => {
+        openClientDetailsPanel().catch(console.error);
+      });
+    }
+
+    const selectedFromList = state.clients.find((c) => Number(c.id) === id) || null;
+    const isGuestClient = isGuestChatClient(selectedFromList);
+    state.activeClient = isGuestClient
+      ? buildGuestActiveClientProfile(id, selectedFromList)
+      : (selectedFromList || buildOptimisticActiveClientProfile(id, selectedFromList));
+    try {
+      setActiveOrders([], { forceRender: true });
+    } catch (err) {
+      console.error("Failed to reset active orders on chat client select:", err);
+    }
+    try {
+      renderChatHeader();
+    } catch (err) {
+      console.error("Failed to render chat header on client select:", err);
+    }
+    state.activeOrdersHydratedClientId = 0;
+    // Start header/client payload loading immediately so it isn't blocked by later UI steps.
+    loadActiveClientData(id, selectedFromList, {
+      isGuest: isGuestClient,
+      renderThread: false,
+    }).catch(console.error);
+    try {
+      const clientsRightApi = getClientsRightApi();
+      if (clientsRightApi && typeof clientsRightApi.setChatRightForceEmpty === "function") {
+        clientsRightApi.setChatRightForceEmpty(false);
+      }
+    } catch (err) {
+      console.error("Failed to sync chat right empty state:", err);
+    }
+
     const syncMobileViewAfterRender = (() => {
       if (opts.restoreMobileView === true) {
         return () => {
@@ -16112,20 +16578,6 @@
     syncActiveThreadReadState({ clientId: id });
     restorePersistedAttachPreviewDraft(id).catch(console.error);
     pullThreadFromRemote(id, { skipReadMark: true, ignoreIncomingBadge: true }).catch(console.error);
-
-    const selectedFromList = state.clients.find((c) => Number(c.id) === id) || null;
-    const isGuestClient = isGuestChatClient(selectedFromList);
-
-    state.activeClient = isGuestClient
-      ? buildGuestActiveClientProfile(id, selectedFromList)
-      : (selectedFromList || buildOptimisticActiveClientProfile(id, selectedFromList));
-    setActiveOrders([], { forceRender: true });
-    state.activeOrdersHydratedClientId = 0;
-
-    loadActiveClientData(id, selectedFromList, {
-      isGuest: isGuestClient,
-      renderThread: false,
-    }).catch(console.error);
   }
 
   function mergeClientsIntoState(rows, { reset = false } = {}) {
@@ -16337,7 +16789,8 @@
         applyClientFilter();
       }
 
-      if (ensureSelection) {
+      const allowAutoSelect = ensureSelection && !isChatMobileViewport();
+      if (allowAutoSelect) {
         const persisted = Number(state.store.lastOpenClientId || 0);
         const target = state.filteredClients.find((c) => Number(c.id) === persisted) || state.filteredClients[0];
         if (target) {
@@ -16374,9 +16827,12 @@
     if (!isChatWidgetEnabledRuntime()) return;
     if (!dom.left.list) return;
     if (state.clientsLoadInFlight) return state.clientsLoadInFlight;
+    const mobileStart = isChatMobileViewport();
 
     const persistedClientId = Number(state.store?.lastOpenClientId || 0);
     if (
+      !mobileStart
+      &&
       persistedClientId > 0
       && Number(state.activeClientId || 0) !== persistedClientId
       && Array.isArray(state.store?.threads?.[String(persistedClientId)])
@@ -16384,7 +16840,7 @@
       selectClient(persistedClientId, { restoreMobileView: true }).catch(console.error);
     }
     // Do not block the first paint on slow DB/API responses.
-    state.clientsLoadInFlight = loadClientsPage({ reset: true, ensureSelection: true })
+    state.clientsLoadInFlight = loadClientsPage({ reset: true, ensureSelection: !mobileStart })
       .catch((err) => {
         if (isAbortError(err) || !isChatWidgetEnabledRuntime()) return;
         console.error(err);
@@ -16395,6 +16851,15 @@
         }
       })
       .finally(() => {
+        if (mobileStart) {
+          stopLocalTypingSession(state.activeClientId, { flush: true });
+          state.activeClientId = null;
+          state.activeClient = null;
+          setHeaderLoading(false);
+          setActiveOrders([], { forceRender: true });
+          renderMessages();
+          syncMobileChatView("clients", { persistState: true });
+        }
         state.clientsLoadInFlight = null;
         // If first page doesn't fill the viewport, continue paging in background.
         maybeLoadMoreClientsByScroll();
@@ -16423,6 +16888,12 @@
   async function flushPendingNotificationChatOpenRequest() {
     const request = normalizeChatNotificationOpenRequest(pendingNotificationChatOpenRequest);
     if (!request) return false;
+    if (isChatMobileViewport()) {
+      // Mobile chat must always start from clients list without auto-opening any thread/card.
+      pendingNotificationChatOpenRequest = null;
+      clearChatNotificationOpenRequestFromLocation();
+      return false;
+    }
     if (!syncChatWidgetEnabledFromTenant({ reload: true, resume: true })) return false;
 
     pendingNotificationChatOpenRequest = null;
@@ -16639,6 +17110,30 @@
       });
     }
 
+    const mobileRightBackBtn = document.getElementById("chatMobileRightBackBtn");
+    if (mobileRightBackBtn && mobileRightBackBtn.dataset.bound !== "1") {
+      mobileRightBackBtn.dataset.bound = "1";
+      mobileRightBackBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const isOrderMode = document.body && document.body.classList.contains("chat-right-order-mode");
+        if (isOrderMode && Number(state.activeClientId || 0) > 0) {
+          if (state.rightOrderOpenedFromMessageBubble === true || state.rightOrderOpenedFromHeader === true) {
+            state.rightOrderOpenedFromMessageBubble = false;
+            state.rightOrderOpenedFromHeader = false;
+            syncMobileChatView("center");
+            return;
+          }
+          showChatRightPane("client");
+          state.rightOrderOpenedFromHeader = false;
+          syncMobileChatView("right");
+          restoreClientPanelState();
+          return;
+        }
+        syncMobileChatView("center");
+      });
+    }
+
     initHeaderClientOpenAction();
 
     window.__adminChatMobileApi = {
@@ -16663,6 +17158,8 @@
     };
 
     if (!document.body || !document.body.classList.contains("page-chat")) return;
+    hideLegacyRightPaneHeadersForChat();
+    showChatRightPane("client");
     window.addEventListener("resize", () => {
       syncMobileChatViewFromState({ persistState: false });
     }, { passive: true });
@@ -16689,6 +17186,7 @@
     initSelectionToolbar();
     initHeaderOrderStatusAction();
     initHeaderOrderOpenAction();
+    bindChatRightOrderOpenRequests();
     initOrderHeaderLiveSync();
     if (dom.center.messagesWrap && dom.center.messagesWrap.dataset.scrollDownBound !== "1") {
       dom.center.messagesWrap.dataset.scrollDownBound = "1";
@@ -16789,6 +17287,7 @@
     bindAdminChatKeyboardViewportSync();
     scheduleAdminChatKeyboardViewportSync();
     renderChatHeader();
+    seedChatRightTabsFromCurrentState();
     syncSelectionUi();
     renderMessages();
     syncChatWidgetEnabledFromTenant({ reload: true, resume: true });

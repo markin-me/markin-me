@@ -7081,8 +7081,7 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
 .empty-text{color:var(--color-text-muted);font-size:13px;max-width:300px}
 
 .order-info-cards{display:grid;gap:12px}
-body.page-orders .order-info-cards > .info-card,
-body.page-courier-screen .order-info-cards > .info-card{
+:is(body.page-orders, body.page-courier-screen, body.page-chat.chat-right-order-mode) .order-info-cards > .info-card{
   border:none;
   border-radius:0;
   padding:0;
@@ -7122,10 +7121,8 @@ body.page-cash #cashOrdersRightPane .order-info-cards > .info-card{
   background:rgba(16,185,129,.12);
   border-color:rgba(16,185,129,.25);
 }
-body.page-orders .order-info-head .order-head-top,
-body.page-courier-screen .order-info-head .order-head-top{justify-content:center}
-body.page-orders .order-head-title-row,
-body.page-courier-screen .order-head-title-row{justify-items:center;align-items:center;text-align:center}
+:is(body.page-orders, body.page-courier-screen, body.page-chat.chat-right-order-mode) .order-info-head .order-head-top{justify-content:center}
+:is(body.page-orders, body.page-courier-screen, body.page-chat.chat-right-order-mode) .order-head-title-row{justify-items:center;align-items:center;text-align:center}
 .order-head-row{display:flex;align-items:center;gap:12px}
 .order-head-field{flex:1}
 .order-head-select{width:100%;height:36px;padding:0 10px;border-radius:8px;border:1px solid var(--color-border);background:var(--color-surface);font-size:14px;cursor:pointer}
@@ -7427,14 +7424,10 @@ body.page-courier-screen .order-head-title-row{justify-items:center;align-items:
 .order-client-history-card:hover{
   border-color:var(--primary-25);
 }
-body.page-orders #clientEditNameBtn,
-body.page-orders #clientAddrToggleBtn,
-body.page-orders #clientAddrFormCard,
-body.page-orders #clientAddresses .shop-address-actions,
-body.page-courier-screen #clientEditNameBtn,
-body.page-courier-screen #clientAddrToggleBtn,
-body.page-courier-screen #clientAddrFormCard,
-body.page-courier-screen #clientAddresses .shop-address-actions,
+:is(body.page-orders, body.page-courier-screen, body.page-chat.chat-right-order-mode) #clientEditNameBtn,
+:is(body.page-orders, body.page-courier-screen, body.page-chat.chat-right-order-mode) #clientAddrToggleBtn,
+:is(body.page-orders, body.page-courier-screen, body.page-chat.chat-right-order-mode) #clientAddrFormCard,
+:is(body.page-orders, body.page-courier-screen, body.page-chat.chat-right-order-mode) #clientAddresses .shop-address-actions,
 body.page-cash #clientEditNameBtn,
 body.page-cash #clientAddrToggleBtn,
 body.page-cash #clientAddrFormCard,
@@ -8044,6 +8037,18 @@ body.page-cash #clientAddresses .shop-address-actions{
     height:var(--admin-mobile-shell-courier-reserve);
   }
 
+  body.page-orders #ordersRightPane .orders-info > .order-info-footer{
+    padding-bottom:calc(10px + var(--admin-mobile-shell-reserve));
+  }
+
+  body.page-courier-screen #ordersRightPane .orders-info > .order-info-footer{
+    padding-bottom:calc(10px + var(--admin-mobile-shell-courier-reserve));
+  }
+
+  body.page-chat.chat-mobile-right-open.chat-right-order-mode #ordersRightPane .orders-info > .order-info-footer{
+    padding-bottom:calc(10px + var(--admin-mobile-shell-reserve));
+  }
+
   body.page-orders #ordersNotifyBtn,
   body.page-orders #ordersAddBtn{
     display:none;
@@ -8575,8 +8580,7 @@ body.page-cash #clientAddresses .shop-address-actions{
   flex-direction:column;
 }
 
-body.page-orders.orders-checkout-mode #ordersCheckoutRightPane,
-body.page-courier-screen.orders-checkout-mode #ordersCheckoutRightPane{
+:is(body.page-orders, body.page-courier-screen, body.page-chat.chat-right-order-mode).orders-checkout-mode #ordersCheckoutRightPane{
   background:var(--color-surface);
   border:1px solid var(--color-border);
   border-radius:var(--radius-lg);
@@ -8584,13 +8588,11 @@ body.page-courier-screen.orders-checkout-mode #ordersCheckoutRightPane{
   overflow:hidden;
 }
 
-body.page-orders.orders-checkout-mode #ordersCheckoutRightPane > .panel-header,
-body.page-courier-screen.orders-checkout-mode #ordersCheckoutRightPane > .panel-header{
+:is(body.page-orders, body.page-courier-screen, body.page-chat.chat-right-order-mode).orders-checkout-mode #ordersCheckoutRightPane > .panel-header{
   flex:0 0 auto;
 }
 
-body.page-orders.orders-checkout-mode #ordersCheckoutRightPane > #newOrderRightPanel,
-body.page-courier-screen.orders-checkout-mode #ordersCheckoutRightPane > #newOrderRightPanel{
+:is(body.page-orders, body.page-courier-screen, body.page-chat.chat-right-order-mode).orders-checkout-mode #ordersCheckoutRightPane > #newOrderRightPanel{
   border:none;
   border-radius:0;
   box-shadow:none;
@@ -8633,8 +8635,7 @@ body.page-courier-screen.orders-checkout-mode #ordersCheckoutRightPane > #newOrd
   flex:1 1 auto;
 }
 
-body.page-orders #ordersCheckoutRightPane > .panel,
-body.page-courier-screen #ordersCheckoutRightPane > .panel{
+:is(body.page-orders, body.page-courier-screen, body.page-chat.chat-right-order-mode) #ordersCheckoutRightPane > .panel{
   height:auto;
 }
 
@@ -8645,8 +8646,7 @@ body.page-courier-screen #ordersCheckoutRightPane > .panel{
   flex:1 1 auto;
 }
 
-body.page-orders #ordersRightPane .orders-info > .panel-header,
-body.page-courier-screen #ordersRightPane .orders-info > .panel-header{
+:is(body.page-orders, body.page-courier-screen, body.page-chat.chat-right-order-mode) #ordersRightPane .orders-info > .panel-header{
   flex:0 0 auto;
 }
 
@@ -8654,18 +8654,15 @@ body.page-cash #cashOrdersRightPane .orders-info > .panel-header{
   flex:0 0 auto;
 }
 
-body.page-orders #ordersCheckoutRightPane #orderTabsHeaderCheckout,
-body.page-courier-screen #ordersCheckoutRightPane #orderTabsHeaderCheckout{
+:is(body.page-orders, body.page-courier-screen, body.page-chat.chat-right-order-mode) #ordersCheckoutRightPane #orderTabsHeaderCheckout{
   flex:0 0 auto;
 }
 
-body.page-orders #ordersCheckoutRightPane #newOrderTabsHeader,
-body.page-courier-screen #ordersCheckoutRightPane #newOrderTabsHeader{
+:is(body.page-orders, body.page-courier-screen, body.page-chat.chat-right-order-mode) #ordersCheckoutRightPane #newOrderTabsHeader{
   display:none !important;
 }
 
-body.page-orders #ordersRightPane .orders-info > .panel-body,
-body.page-courier-screen #ordersRightPane .orders-info > .panel-body{
+:is(body.page-orders, body.page-courier-screen, body.page-chat.chat-right-order-mode) #ordersRightPane .orders-info > .panel-body{
   flex:1 1 auto;
   min-height:0;
   overflow:auto;
@@ -8677,8 +8674,7 @@ body.page-cash #cashOrdersRightPane .orders-info > .panel-body{
   overflow:auto;
 }
 
-body.page-orders #ordersRightPane .orders-info > .order-info-footer,
-body.page-courier-screen #ordersRightPane .orders-info > .order-info-footer{
+:is(body.page-orders, body.page-courier-screen, body.page-chat.chat-right-order-mode) #ordersRightPane .orders-info > .order-info-footer{
   margin-top:auto;
   flex:0 0 auto;
 }
@@ -8694,16 +8690,14 @@ body.page-cash #cashOrdersRightPane .orders-info > #cashPaymentFooter{
 }
 
 .page-new-order .page-col-right .panel-body,
-body.page-orders.orders-checkout-mode #ordersCheckoutRightPane .panel-body,
-body.page-courier-screen.orders-checkout-mode #ordersCheckoutRightPane .panel-body{
+:is(body.page-orders, body.page-courier-screen, body.page-chat.chat-right-order-mode).orders-checkout-mode #ordersCheckoutRightPane .panel-body{
   display:flex;
   flex-direction:column;
   min-height:0;
 }
 
 .page-new-order .page-col-right .panel-body::after,
-body.page-orders.orders-checkout-mode #ordersCheckoutRightPane .panel-body::after,
-body.page-courier-screen.orders-checkout-mode #ordersCheckoutRightPane .panel-body::after{
+:is(body.page-orders, body.page-courier-screen, body.page-chat.chat-right-order-mode).orders-checkout-mode #ordersCheckoutRightPane .panel-body::after{
   content:none;
   display:none;
 }
@@ -13537,11 +13531,23 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   flex:0 0 auto;
 }
 
+#clientMobileSheetCloseBtn{
+  display:none !important;
+}
+
 .product-tabs-header-inner{
   display:flex;
   align-items:center;
   gap:8px;
   min-width:0;
+}
+
+.chat-mobile-right-back{
+  display:none;
+}
+
+body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
+  display:none !important;
 }
 
 .product-tabs-home{
@@ -15876,6 +15882,151 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   padding:16px;
 }
 
+.client-info-panel > .panel-body::after{
+  display:none;
+  content:none;
+  height:0;
+}
+
+/* Client card: unified scroll behavior across all pages */
+.client-info-panel #clientInfoBody{
+  display:flex;
+  flex-direction:column;
+  min-height:0;
+  overflow:hidden;
+  scrollbar-width:none;
+  -ms-overflow-style:none;
+}
+
+.client-info-panel #clientInfoBody::-webkit-scrollbar{
+  display:none;
+  width:0;
+  height:0;
+}
+
+.client-info-panel #clientInfoWrap{
+  display:flex;
+  flex-direction:column;
+  flex:1 1 auto;
+  min-height:0 !important;
+  height:100%;
+}
+
+.client-info-panel #clientTabOrders.shop-profile-tab-panel.is-active{
+  display:flex;
+  flex-direction:column;
+  flex:1 1 auto;
+  min-height:0 !important;
+  height:100%;
+  overflow:hidden;
+}
+
+.client-info-panel #clientOrdersListView{
+  display:flex;
+  flex-direction:column;
+  flex:1 1 auto;
+  min-height:0 !important;
+  height:100%;
+  overflow:hidden;
+}
+
+.client-info-panel #clientOrdersList{
+  display:flex;
+  flex-direction:column;
+  flex:1 1 auto;
+  min-height:0 !important;
+  height:100%;
+  overflow-y:auto;
+  overflow-x:hidden;
+  scrollbar-width:none;
+  -ms-overflow-style:none;
+}
+
+.client-info-panel #clientOrdersList::-webkit-scrollbar{
+  display:none;
+  width:0;
+  height:0;
+}
+
+.client-info-panel #clientTabAddresses.shop-profile-tab-panel.is-active{
+  display:flex;
+  flex-direction:column;
+  align-items:stretch;
+  justify-content:flex-start;
+  align-content:start;
+  gap:12px;
+  min-height:0;
+  scrollbar-width:none;
+  -ms-overflow-style:none;
+}
+
+.client-info-panel #clientTabAddresses.shop-profile-tab-panel.is-active::-webkit-scrollbar{
+  display:none;
+  width:0;
+  height:0;
+}
+
+.client-info-panel #clientTabAddresses #clientAddresses{
+  flex:0 0 auto;
+  align-content:start;
+}
+
+.client-info-panel #clientAddrToggleBtn{
+  align-self:flex-start;
+  margin-top:0;
+}
+
+@media (min-width: 1025px){
+  :is(body.page-clients, body.page-orders, body.page-courier-screen, body.page-cash, body.page-chat) .client-info-panel > .panel-body{
+    display:flex;
+    flex-direction:column;
+    min-height:0;
+    overflow:hidden;
+  }
+
+  :is(body.page-clients, body.page-orders, body.page-courier-screen, body.page-cash, body.page-chat) .client-info-panel #clientInfoWrap{
+    display:grid;
+    grid-template-rows:auto auto minmax(0, 1fr);
+    gap:0;
+    flex:1 1 auto;
+    min-height:0;
+    height:100%;
+  }
+
+  :is(body.page-clients, body.page-orders, body.page-courier-screen, body.page-cash, body.page-chat) .client-info-panel #clientTabOrders.shop-profile-tab-panel.is-active{
+    display:flex;
+    flex-direction:column;
+    flex:1 1 auto;
+    min-height:0;
+    overflow:hidden;
+    padding-bottom:0;
+  }
+
+  :is(body.page-clients, body.page-orders, body.page-courier-screen, body.page-cash, body.page-chat) .client-info-panel #clientOrdersListView{
+    display:flex;
+    flex-direction:column;
+    flex:1 1 auto;
+    min-height:0;
+    overflow:hidden;
+  }
+
+  :is(body.page-clients, body.page-orders, body.page-courier-screen, body.page-cash, body.page-chat) .client-info-panel #clientOrdersList{
+    display:flex;
+    flex-direction:column;
+    flex:1 1 auto;
+    gap:10px;
+    min-height:0;
+    height:100%;
+    overflow-y:auto;
+    overflow-x:hidden;
+    padding-right:2px;
+  }
+
+  :is(body.page-clients, body.page-orders, body.page-courier-screen, body.page-cash, body.page-chat) .client-info-panel #clientOrdersList > *{
+    flex:0 0 auto;
+  }
+}
+
 .client-info-panel #filterEditorWrap:not(.hidden),
 .client-info-panel #discountEditorWrap:not(.hidden),
 .client-info-panel #discountInfoWrap:not(.hidden),
@@ -15885,6 +16036,51 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   flex-direction:column;
   gap:16px;
   min-height:100%;
+}
+
+/* Client order card (right panel): match chat/orders scroll behavior */
+.client-info-panel #clientOrderInfoWrap:not(.hidden){
+  gap:0;
+  min-height:0;
+  height:100%;
+  overflow:hidden;
+}
+
+.client-info-panel #clientOrderInfoWrap [data-info="content"]{
+  flex:1 1 auto;
+  min-height:0;
+  overflow-y:auto;
+  overflow-x:hidden;
+  scrollbar-width:none;
+  -ms-overflow-style:none;
+}
+
+.client-info-panel #clientOrderInfoWrap [data-info="content"]::-webkit-scrollbar{
+  display:none;
+  width:0;
+  height:0;
+}
+
+/* Client profile layout must not inherit generic 100%-min-height + gap,
+   otherwise orders tab loses scroll area. */
+.client-info-panel #clientInfoWrap:not(.hidden){
+  gap:0;
+  min-height:0;
+  height:100%;
+}
+
+.client-info-panel #clientTabOrders.shop-profile-tab-panel.is-active{
+  min-height:0;
+  height:100%;
+}
+
+.client-info-panel #clientOrdersListView{
+  min-height:0;
+  height:100%;
+}
+
+.client-info-panel #clientOrdersList{
+  overflow-y:auto !important;
 }
 
 .client-info-panel #filterEditorForm,
@@ -21566,7 +21762,7 @@ body.page-chat .panel{
 .chat-mobile-context-scene__clone > .chat-message-bubble{
   width:100%;
   max-width:none;
-  box-shadow:0 18px 42px rgba(15,23,42,.24);
+  box-shadow:none;
 }
 
 .chat-mobile-context-scene__clone.chat-message--out > .chat-message-bubble{
@@ -21660,6 +21856,8 @@ body.page-chat .panel{
   scrollbar-color:color-mix(in srgb, var(--color-border), transparent 12%) transparent;
   transform-origin:bottom center;
   animation:chat-message-menu-reactions-expand .46s cubic-bezier(.22,.61,.36,1);
+  animation-delay:0s;
+  animation-fill-mode:both;
 }
 
 .chat-message-menu-reaction--toggle{
@@ -21693,6 +21891,7 @@ body.page-chat .panel{
 .chat-message-menu.is-reactions-expanded .chat-message-menu-reaction--extra,
 .chat-message-menu.is-reactions-expanded .chat-message-menu-reaction[data-chat-msg-reaction-slot="extra-all"]{
   animation:chat-message-menu-extra-in .46s cubic-bezier(.22,.61,.36,1) both;
+  animation-delay:0s;
   transform-origin:center;
   will-change:transform, opacity;
 }
@@ -21715,8 +21914,8 @@ body.page-chat .panel{
 
 @keyframes chat-message-menu-reactions-expand{
   from{
-    opacity:.82;
-    transform:translateY(12px) scale(.985);
+    opacity:.95;
+    transform:translateY(2px) scale(.998);
   }
   to{
     opacity:1;
@@ -21726,8 +21925,8 @@ body.page-chat .panel{
 
 @keyframes chat-message-menu-extra-in{
   from{
-    opacity:0;
-    transform:translateY(12px) scale(.9);
+    opacity:.72;
+    transform:translateY(2px) scale(.98);
   }
   to{
     opacity:1;
@@ -22563,7 +22762,7 @@ body.page-chat .panel{
   body.page-chat .page-col-right{
     display:flex !important;
     position:fixed;
-    inset:var(--header-height) 0 0;
+    inset:var(--header-height) 0 var(--admin-mobile-shell-reserve) 0;
     z-index:88;
     padding:0;
     background:var(--color-surface);
@@ -22600,13 +22799,139 @@ body.page-chat .panel{
     overflow:hidden;
   }
 
-  body.page-chat .page-col-right > .client-info-panel > .panel-body{
+  body.page-chat .page-col-right > #ordersRightPane,
+  body.page-chat .page-col-right > #ordersCheckoutRightPane{
+    display:none;
+    flex-direction:column;
+    height:100%;
+    min-height:0;
+    width:100%;
+    background:var(--color-surface);
+    border-top-left-radius:var(--radius-lg);
+    border-top-right-radius:var(--radius-lg);
+    border-bottom-left-radius:0;
+    border-bottom-right-radius:0;
+    box-shadow:var(--shadow-sm);
+    overflow:hidden;
+  }
+
+  body.page-chat.chat-right-order-mode .page-col-right > .client-info-panel{
+    display:none;
+  }
+
+  body.page-chat.chat-right-order-mode .page-col-right > #ordersRightPane,
+  body.page-chat.chat-right-order-mode .page-col-right > #ordersCheckoutRightPane:not(.hidden){
+    display:flex;
+  }
+
+body.page-chat .page-col-right > .client-info-panel > .panel-body{
+  flex:1 1 auto;
+  min-height:0;
+  overflow:hidden;
+  padding-bottom:88px;
+}
+
+  body.page-chat .page-col-right #clientInfoWrap{
+    display:grid;
+    grid-template-rows:auto auto minmax(0, 1fr);
+    gap:0;
+    min-height:100%;
+    height:100%;
+  }
+
+  body.page-chat .page-col-right #clientTabOrders.shop-profile-tab-panel.is-active{
+    display:flex;
+    flex-direction:column;
     flex:1 1 auto;
     min-height:0;
+    overflow:hidden;
+    padding-bottom:0;
+  }
+
+  body.page-chat .page-col-right #clientTabAddresses.shop-profile-tab-panel.is-active{
+    display:flex;
+    flex-direction:column;
+    align-items:stretch;
+    justify-content:flex-start;
+    gap:12px;
+    min-height:0;
+    overflow:auto;
+    scrollbar-width:none;
+    -ms-overflow-style:none;
+  }
+
+  body.page-chat .page-col-right #clientTabAddresses.shop-profile-tab-panel.is-active::-webkit-scrollbar{
+    display:none;
+    width:0;
+    height:0;
+  }
+
+  body.page-chat .page-col-right #clientAddrToggleBtn{
+    align-self:flex-start;
+    margin-top:0;
+  }
+
+  body.page-chat .page-col-right #clientTabAddresses #clientAddresses{
+    flex:0 0 auto;
+    align-content:start;
+  }
+
+  body.page-chat .page-col-right #clientOrdersListView{
+    display:flex;
+    flex-direction:column;
+    flex:1 1 auto;
+    min-height:0;
+    overflow:hidden;
+  }
+
+  body.page-chat .page-col-right #clientOrdersList{
+    display:flex;
+    flex-direction:column;
+    flex:1 1 auto;
+    gap:10px;
+    min-height:0;
+    height:100%;
+    overflow-y:auto;
+    padding-right:2px;
+    padding-bottom:96px;
+    align-content:flex-start;
+    scrollbar-width:none;
+    -ms-overflow-style:none;
+  }
+
+  body.page-chat .page-col-right #clientOrdersList > *{
+    flex:0 0 auto;
+  }
+
+  body.page-chat .page-col-right #clientOrdersList::-webkit-scrollbar{
+    display:none;
+    width:0;
+    height:0;
   }
 
   body.page-chat .page-col-right #clientBenefitsFooter{
-    padding-bottom:calc(22px + env(safe-area-inset-bottom));
+    position:fixed;
+    right:12px;
+    bottom:calc(var(--chat-mobile-nav-panel-bottom) + 10px);
+    z-index:95;
+    margin:0;
+    padding:0;
+    background:transparent;
+    border-top:0;
+    width:auto;
+  }
+
+  body.page-chat .page-col-right #clientBenefitsFooter .shop-cart-footer{
+    margin:0;
+    padding:0;
+    border-top:0;
+    background:transparent;
+  }
+
+  body.page-chat .page-col-right #clientBenefitsFooter .shop-cart-footer-actions{
+    justify-content:flex-end;
+    gap:8px;
+    margin:0;
   }
 
   body.page-chat .page-col-right #clientTabsHeader,
@@ -22646,6 +22971,28 @@ body.page-chat .panel{
     font-size:16px;
     line-height:1;
     pointer-events:none;
+  }
+
+  body.page-chat .page-col-right #chatRightTabsHeader .chat-mobile-right-back{
+    display:inline-flex !important;
+    align-items:center;
+    justify-content:center;
+    width:40px;
+    height:40px;
+    min-width:40px;
+    flex:0 0 40px;
+  }
+
+  body.page-chat .page-col-right #chatRightTabsHeader .product-tabs{
+    display:none;
+  }
+
+  /* Chat right column uses its own tab strip (#chatRightTabsHeader). Force-hide legacy tab headers. */
+  body.page-chat .page-col-right #orderTabsHeader,
+  body.page-chat .page-col-right #orderTabsHeaderCheckout,
+  body.page-chat .page-col-right #clientTabsHeader,
+  body.page-chat .page-col-right #clientTabsHeader.hidden{
+    display:none !important;
   }
 
   .chat-delete-confirm-overlay{

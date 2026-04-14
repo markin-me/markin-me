@@ -363,47 +363,53 @@
   const elFilterDeleteBtn = $("#filterDeleteBtn");
 
   // client tabs (top-level, switching between clients)
-  const clientTabsHeader = $("#clientTabsHeader");
-  const clientTabs = $("#clientTabs");
-  const clientEmpty = $("#clientEmpty");
-  const clientInfoWrap = $("#clientInfoWrap");
-  const clientOrderInfoWrap = $("#clientOrderInfoWrap");
-  const clientBenefitsFooter = $("#clientBenefitsFooter");
-  const clientBenefitsOpenBtn = $("#clientBenefitsOpenBtn");
+  // In chat mode there may be other hidden scaffolds with similar ids.
+  // Always scope right-panel selectors to the actual visible right column.
+  const clientRightRoot = document.querySelector(".page-col-right .client-info-panel") || document;
+  const right$ = (sel) => $(sel, clientRightRoot);
+
+  const clientTabsHeader = right$("#clientTabsHeader");
+  const clientTabs = right$("#clientTabs");
+  const clientEmpty = right$("#clientEmpty");
+  const clientInfoWrap = right$("#clientInfoWrap");
+  const clientOrderInfoWrap = right$("#clientOrderInfoWrap");
+  const clientOrderInfoFooter = right$("#clientOrderInfoFooter");
+  const clientBenefitsFooter = right$("#clientBenefitsFooter");
+  const clientBenefitsOpenBtn = right$("#clientBenefitsOpenBtn");
 
   // profile header
-  const clientPhoto = $("#clientPhoto");
-  const clientPhotoPlaceholder = $("#clientPhotoPlaceholder");
+  const clientPhoto = right$("#clientPhoto");
+  const clientPhotoPlaceholder = right$("#clientPhotoPlaceholder");
 
   // info fields
-  const infoName = $("#clientInfoName");
-  const infoPhone = $("#clientInfoPhone");
-  const infoBirthday = $("#clientInfoBirthday");
+  const infoName = right$("#clientInfoName");
+  const infoPhone = right$("#clientInfoPhone");
+  const infoBirthday = right$("#clientInfoBirthday");
 
   // content tabs
-  const clientContentTabs = $("#clientContentTabs");
-  const clientTabAddresses = $("#clientTabAddresses");
-  const clientTabOrders = $("#clientTabOrders");
-  const clientTabDiscounts = $("#clientTabDiscounts");
-  const clientAddressesList = $("#clientAddresses");
-  const clientOrdersList = $("#clientOrdersList");
-  const clientOrdersListView = $("#clientOrdersListView");
-  const clientDiscountsList = $("#clientDiscountsList");
-  const clientDiscountsEmpty = $("#clientDiscountsEmpty");
-  const clientOrderDetailView = $("#clientOrderDetailView");
-  const clientOrderDetailContent = $("#clientOrderDetailContent");
-  const clientOrderBackBtn = $("#clientOrderBackBtn");
+  const clientContentTabs = right$("#clientContentTabs");
+  const clientTabAddresses = right$("#clientTabAddresses");
+  const clientTabOrders = right$("#clientTabOrders");
+  const clientTabDiscounts = right$("#clientTabDiscounts");
+  const clientAddressesList = right$("#clientAddresses");
+  const clientOrdersList = right$("#clientOrdersList");
+  const clientOrdersListView = right$("#clientOrdersListView");
+  const clientDiscountsList = right$("#clientDiscountsList");
+  const clientDiscountsEmpty = right$("#clientDiscountsEmpty");
+  const clientOrderDetailView = right$("#clientOrderDetailView");
+  const clientOrderDetailContent = right$("#clientOrderDetailContent");
+  const clientOrderBackBtn = right$("#clientOrderBackBtn");
 
   // address form
-  const addrToggleBtn = $("#clientAddrToggleBtn");
-  const addrFormCard = $("#clientAddrFormCard");
-  const addrStreet = $("#addrStreet");
-  const addrHouse = $("#addrHouse");
-  const addrEntrance = $("#addrEntrance");
-  const addrFloor = $("#addrFloor");
-  const addrApartment = $("#addrApartment");
-  const addrComment = $("#addrComment");
-  const addrAddBtn = $("#addrAddBtn");
+  const addrToggleBtn = right$("#clientAddrToggleBtn");
+  const addrFormCard = right$("#clientAddrFormCard");
+  const addrStreet = right$("#addrStreet");
+  const addrHouse = right$("#addrHouse");
+  const addrEntrance = right$("#addrEntrance");
+  const addrFloor = right$("#addrFloor");
+  const addrApartment = right$("#addrApartment");
+  const addrComment = right$("#addrComment");
+  const addrAddBtn = right$("#addrAddBtn");
 
   // sheet info (mobile)
   const sheet = $("#clientSheet");
@@ -1144,7 +1150,9 @@
   const tabsState = {
     tabs: [],
     activeKey: null,
+    activationToken: 0,
   };
+  let chatRightForceEmpty = false;
 
   const orderInfoEls = (() => {
     if (!clientOrderInfoWrap) return null;
@@ -1188,6 +1196,53 @@
       urgent: q('[data-info="delivery-urgent"]'),
     };
   })();
+  let sharedClientOrderInfoRenderer = null;
+  function getSharedClientOrderInfoRenderer() {
+    if (sharedClientOrderInfoRenderer) return sharedClientOrderInfoRenderer;
+    const sharedOrderPanel = window.SharedOrderPanel || null;
+    if (!sharedOrderPanel || !clientOrderInfoWrap) return null;
+    sharedClientOrderInfoRenderer = sharedOrderPanel.createInfoRenderer({
+        root: clientOrderInfoWrap,
+        footerEl: clientOrderInfoFooter,
+        clientInfoWrap,
+        enableClientLink: true,
+        helpers: {
+          money,
+          formatDateTimeNumeric,
+          formatDateTime: formatDateTimeNumeric,
+          formatScheduleText,
+          totalQty(items) {
+            return (Array.isArray(items) ? items : []).reduce((sum, item) => {
+              const qty = Number(item?.qty ?? item?.quantity ?? 0);
+              return sum + (Number.isFinite(qty) ? qty : 0);
+            }, 0);
+          },
+          buildOrderDiscountSummary(order) {
+            const items = parseOrderItems(order);
+            const summary = computeOrderSummary(order, items);
+            return {
+              subtotalBeforeDiscount: Number(summary?.subtotal || 0),
+              totalDiscount: Number(summary?.discountAmount || 0),
+              breakdown: Array.isArray(summary?.breakdown) ? summary.breakdown : [],
+              orderDiscountTitles: [],
+            };
+          },
+          renderOrderDiscountBreakdownHtml(summary) {
+            return renderDiscountBreakdownHtml({ breakdown: summary?.breakdown || [] });
+          },
+          renderOrderPaymentIcon(order) {
+            return `<i class="fas ${paymentIconClass(order?.payment_code)}"></i>`;
+          },
+          orderItemsToHtml(items, order) {
+            return renderOrderItemsHtmlShared(items, order || null);
+          },
+        },
+        renderInlineStatusMenus(order) {
+          renderClientOrderStatusMenu(order);
+        },
+      });
+    return sharedClientOrderInfoRenderer;
+  }
 
   function buildTabKey(type, id) {
     return `${type}:${id}`;
@@ -1521,9 +1576,19 @@
     updateRightPanel();
   }
 
+  function forceShowClientProfilePanel() {
+    if (clientEmpty) clientEmpty.classList.add("hidden");
+    if (clientOrderInfoWrap) clientOrderInfoWrap.classList.add("hidden");
+    if (clientInfoWrap) clientInfoWrap.classList.remove("hidden");
+  }
+
   async function setActiveTabKey(key) {
     const tab = tabsState.tabs.find((t) => t.key === key);
     if (!tab) return;
+    if (document.body?.classList?.contains('page-chat')) {
+      chatRightForceEmpty = false;
+    }
+    const activationToken = ++tabsState.activationToken;
     tabsState.activeKey = key;
 
     // Keep center column in sync with active right-side tab.
@@ -1538,6 +1603,7 @@
 
     renderTabs();
     hideEmptyState();
+    if (activationToken !== tabsState.activationToken) return;
 
     // Обработка активации таба в зависимости от типа
     if (tab.type === 'discount') {
@@ -1555,10 +1621,12 @@
 
     if (tab.type === 'discount-promo-code') {
       await activateDiscountPromoCodeTab(tab);
+      if (activationToken !== tabsState.activationToken) return;
     }
 
     if (typeof tab.onActivate === "function") {
       await tab.onActivate();
+      if (activationToken !== tabsState.activationToken) return;
     }
 
     syncDiscountToolbarState();
@@ -1576,6 +1644,7 @@
       tab.onActivate = onActivate || tab.onActivate;
     }
     if (activate) {
+      tabsState.activationToken += 1;
       setActiveTabKey(key);
     } else {
       renderTabs();
@@ -1589,6 +1658,7 @@
     const closedTab = tabsState.tabs[idx];
     const wasActive = tabsState.activeKey === key;
     tabsState.tabs.splice(idx, 1);
+    tabsState.activationToken += 1;
 
     if (closedTab.type === 'client') {
       if (state.activeClientId === closedTab.id) {
@@ -1619,6 +1689,7 @@
         const newIdx = Math.min(idx, tabsState.tabs.length - 1);
         await setActiveTabKey(tabsState.tabs[newIdx].key);
       } else {
+        tabsState.activationToken += 1;
         tabsState.activeKey = null;
         renderTabs();
         if (state.currentView === 'discounts') {
@@ -1739,6 +1810,38 @@
       breakdown.classList.toggle('is-open', willOpen);
       breakdown.setAttribute('aria-hidden', willOpen ? 'false' : 'true');
       discountInfoBtn.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+      return;
+    }
+
+    const markPaidBtn = e.target.closest('[data-action="order-mark-paid"]');
+    if (markPaidBtn && clientOrderInfoWrap.contains(markPaidBtn)) {
+      e.preventDefault();
+      e.stopPropagation();
+      openClientOrderPaymentDialog().catch(console.error);
+      return;
+    }
+
+    const statusNextBtn = e.target.closest('[data-action="order-status-next"]');
+    if (statusNextBtn && clientOrderInfoWrap.contains(statusNextBtn)) {
+      e.preventDefault();
+      e.stopPropagation();
+      cycleActiveClientOrderStatus().catch(console.error);
+      return;
+    }
+
+    const editOrderBtn = e.target.closest('[data-action="order-edit"]');
+    if (editOrderBtn && clientOrderInfoWrap.contains(editOrderBtn)) {
+      e.preventDefault();
+      e.stopPropagation();
+      openActiveClientOrderInOrders();
+      return;
+    }
+
+    const printOrderBtn = e.target.closest('[data-action="order-print"]');
+    if (printOrderBtn && clientOrderInfoWrap.contains(printOrderBtn)) {
+      e.preventDefault();
+      e.stopPropagation();
+      printActiveClientOrder().catch(console.error);
       return;
     }
 
@@ -13253,6 +13356,28 @@
 
   function updateRightPanel() {
     syncDiscountToolbarState();
+    const isChatPage = !!document.body?.classList?.contains('page-chat');
+    if (isChatPage && chatRightForceEmpty) {
+      if (clientEmpty) clientEmpty.classList.toggle('hidden', state.currentView !== 'clients');
+      if (clientInfoWrap) clientInfoWrap.classList.add('hidden');
+      if (clientOrderInfoWrap) clientOrderInfoWrap.classList.add('hidden');
+
+      if (elFilterCategoryEmpty) elFilterCategoryEmpty.classList.toggle('hidden', state.currentView !== 'filter-categories');
+      if (elFilterEditorWrap) elFilterEditorWrap.classList.add('hidden');
+      if (elFilterEditorFooter) elFilterEditorFooter.classList.add('hidden');
+
+      if (elDiscountEmpty) elDiscountEmpty.classList.toggle('hidden', state.currentView !== 'discounts');
+      if (elDiscountEditorWrap) elDiscountEditorWrap.classList.add('hidden');
+      if (elDiscountEditorFooter) elDiscountEditorFooter.classList.add('hidden');
+      if (elDiscountInfoWrap) elDiscountInfoWrap.classList.add('hidden');
+      if (elDiscountInfoFooter) elDiscountInfoFooter.classList.add('hidden');
+      if (elDiscountProductPicker) elDiscountProductPicker.classList.add('hidden');
+      if (elDiscountCustomerPicker) elDiscountCustomerPicker.classList.add('hidden');
+      if (elDiscountPickerFooter) elDiscountPickerFooter.classList.add('hidden');
+      if (clientBenefitsFooter) clientBenefitsFooter.classList.add('hidden');
+      return;
+    }
+
     const activeTab = tabsState.tabs.find((t) => t.key === tabsState.activeKey);
     const isClientTab = activeTab?.type === 'client';
     const isOrderTab = activeTab?.type === 'order';
@@ -13261,10 +13386,26 @@
     const isDiscountPromoCodeTab = activeTab?.type === 'discount-promo-code';
     const hasClientId = Number(state.activeClientId || 0) > 0;
     const noTabs = !activeTab;
+    // In chat mode right panel must be driven only by right tabs state.
+    // Otherwise we can render client card together with empty hint after tab-close races.
+    // Fallback: show client profile without tabs only in non-chat clients view.
+    // Do not force it when any right tab is active (especially order tab),
+    // otherwise async client loads can overlap order panel rendering.
+    const forceClientPanelWithoutTabs = !document.body?.classList?.contains('page-chat')
+      && noTabs
+      && hasClientId
+      && state.currentView === 'clients';
 
     if (clientEmpty) clientEmpty.classList.toggle('hidden', !noTabs || state.currentView !== 'clients');
-    if (clientInfoWrap) clientInfoWrap.classList.toggle('hidden', !isClientTab);
+    if (clientInfoWrap) clientInfoWrap.classList.toggle('hidden', !(isClientTab || forceClientPanelWithoutTabs));
     if (clientOrderInfoWrap) clientOrderInfoWrap.classList.toggle('hidden', !isOrderTab);
+    if (isOrderTab) {
+      const orderTabId = Number(activeTab?.id || 0);
+      const loadedOrderId = Number(state.activeOrder?.id || 0);
+      if (orderTabId > 0 && loadedOrderId !== orderTabId) {
+        Promise.resolve(activateOrderById(orderTabId)).catch(console.error);
+      }
+    }
 
     if (elFilterCategoryEmpty) elFilterCategoryEmpty.classList.toggle('hidden', !noTabs || state.currentView !== 'filter-categories');
     if (elFilterEditorWrap) elFilterEditorWrap.classList.toggle('hidden', !isCategoryTab);
@@ -13295,7 +13436,7 @@
       resetDiscountDeleteButtons();
     }
     if (clientBenefitsFooter) {
-      const showBenefitsFooter = isClientTab && state.currentView === 'clients' && hasClientId;
+      const showBenefitsFooter = (isClientTab || forceClientPanelWithoutTabs) && state.currentView === 'clients' && hasClientId;
       clientBenefitsFooter.classList.toggle('hidden', !showBenefitsFooter);
       if (!showBenefitsFooter) {
         closeClientBenefitsOverlay();
@@ -14568,6 +14709,30 @@
     }).join("");
   }
 
+  function applyChatRightForceEmpty(force = false) {
+    chatRightForceEmpty = !!force;
+    updateRightPanel();
+  }
+
+  function renderOrderItemsHtmlShared(items, order = null) {
+    const shared = window.SharedOrderItems;
+    if (shared && typeof shared.renderReadonlyOrderItems === "function") {
+      try {
+        return String(shared.renderReadonlyOrderItems(items, {
+          money,
+          order,
+          sortAutoAdd: true,
+          placeholderImage: "/static/img/placeholder.png",
+          preserveStoredLineTotals: true,
+          surface: "admin",
+        }) || "");
+      } catch (err) {
+        console.warn("Failed to render readonly order items in clients:", err);
+      }
+    }
+    return renderOrderItemsHtml(items);
+  }
+
   function parseOrderDiscounts(order) {
     const raw = order?.discounts_json;
     if (Array.isArray(raw)) return raw;
@@ -14713,6 +14878,11 @@
     text = "Нажмите на заказ в истории клиента, чтобы открыть детали."
   ) {
     if (!orderInfoEls) return;
+    const sharedRenderer = getSharedClientOrderInfoRenderer();
+    if (sharedRenderer && typeof sharedRenderer.showEmpty === "function") {
+      sharedRenderer.showEmpty();
+    }
+    if (clientOrderInfoFooter) clientOrderInfoFooter.classList.add("hidden");
     setNodesHidden(orderInfoEls.empty, false);
     setNodesHidden(orderInfoEls.content, true);
     setNodesText(orderInfoEls.emptyTitle, title);
@@ -14725,6 +14895,12 @@
       showClientOrderInfoEmpty();
       return;
     }
+    const sharedRenderer = getSharedClientOrderInfoRenderer();
+    if (sharedRenderer && typeof sharedRenderer.setOrder === "function") {
+      sharedRenderer.setOrder(order);
+      return;
+    }
+    if (clientOrderInfoFooter) clientOrderInfoFooter.classList.remove("hidden");
 
     const orderId = Number(order.id || 0);
     setNodesHidden(orderInfoEls.empty, true);
@@ -14869,15 +15045,119 @@
     }
   }
 
+  function getActiveClientOrder() {
+    const orderId = Number(state.activeOrderId || 0);
+    if (!(orderId > 0)) return null;
+    return state.activeOrder && Number(state.activeOrder?.id || 0) === orderId
+      ? state.activeOrder
+      : (state.orderCache.get(orderId) || null);
+  }
+
+  function getNextClientOrderStatusId(order) {
+    const statuses = getSortedOrderStatuses();
+    if (!statuses.length) return 0;
+    const currentStatusId = Number(order?.status_id || 0);
+    const currentIdx = statuses.findIndex((status) => Number(status?.id || 0) === currentStatusId);
+    const nextIdx = currentIdx >= 0 ? currentIdx + 1 : 0;
+    const next = statuses[nextIdx] || null;
+    return Number(next?.id || 0) || 0;
+  }
+
+  async function cycleActiveClientOrderStatus() {
+    const order = getActiveClientOrder();
+    if (!order) return;
+    const nextStatusId = getNextClientOrderStatusId(order);
+    if (!(nextStatusId > 0)) return;
+    await selectActiveClientOrderStatus(nextStatusId);
+  }
+
+  async function openClientOrderPaymentDialog(order) {
+    const targetOrder = order || getActiveClientOrder();
+    const orderId = Number(targetOrder?.id || 0);
+    if (!(orderId > 0)) return;
+    const sharedOrderPayment = window.SharedOrderPayment || null;
+    if (!sharedOrderPayment || typeof sharedOrderPayment.open !== "function") {
+      if (Number(targetOrder?.is_paid || 0) === 1) return;
+      try {
+        const json = await apiJson(`/api/admin/orders/${orderId}/paid`, {
+          method: "PUT",
+          body: { is_paid: 1 },
+        });
+        const updated = json?.data || null;
+        if (updated) {
+          state.activeOrder = updated;
+          state.orderCache.set(orderId, updated);
+          setSharedOrderDetails(updated);
+          updateClientOrderInState(updated);
+          renderClientOrderInfo(updated);
+        }
+      } catch (err) {
+        console.error(err);
+      }
+      return;
+    }
+
+    await sharedOrderPayment.open({
+      order: targetOrder,
+      apiJson,
+      money,
+      formatDateTimeNumeric,
+      getOrderId: (row) => Number(row?.id || 0),
+      getOrderNumber: (row) => String(Number(row?.id || 0) || "—"),
+      isPaidOrder: (row) => Number(row?.is_paid || 0) === 1,
+      onSuccess(updatedOrder) {
+        if (!updatedOrder || Number(updatedOrder?.id || 0) !== orderId) return;
+        state.activeOrder = updatedOrder;
+        state.orderCache.set(orderId, updatedOrder);
+        setSharedOrderDetails(updatedOrder);
+        updateClientOrderInState(updatedOrder);
+        renderClientOrderInfo(updatedOrder);
+      },
+      onError(err) {
+        console.error("clients payment modal error:", err);
+      },
+    });
+  }
+
+  async function printActiveClientOrder() {
+    const order = getActiveClientOrder();
+    const orderId = Number(order?.id || 0);
+    if (!(orderId > 0)) return;
+    let receiptHtml = "";
+    try {
+      const json = await apiJson(`/api/admin/orders/${orderId}/print-template`);
+      receiptHtml = String(json?.data?.html || "").trim();
+    } catch (err) {
+      console.error("Failed to load print template:", err);
+    }
+    if (!receiptHtml) return;
+    const width = 420;
+    const height = 640;
+    const left = (window.screen.width / 2) - (width / 2);
+    const top = (window.screen.height / 2) - (height / 2);
+    const printWindow = window.open("", "_blank", `width=${width},height=${height},left=${left},top=${top}`);
+    if (!printWindow) return;
+    printWindow.document.write(receiptHtml);
+    printWindow.document.close();
+    printWindow.onload = () => {
+      setTimeout(() => printWindow.print(), 220);
+    };
+    printWindow.addEventListener("afterprint", () => printWindow.close());
+  }
+
+  function openActiveClientOrderInOrders() {
+    const order = getActiveClientOrder();
+    const orderId = Number(order?.id || 0);
+    if (!(orderId > 0)) return;
+    window.location.href = `/dashboard/orders`;
+  }
+
   async function activateOrderById(orderId) {
     const id = Number(orderId || 0);
     if (!Number.isFinite(id) || id <= 0) return;
 
     state.activeOrderId = id;
     state.activeOrder = null;
-
-    const activeTab = tabsState.tabs.find((tab) => tab.key === tabsState.activeKey);
-    if (!activeTab || activeTab.type !== "order" || Number(activeTab.id) !== id) return;
 
     await ensureOrderStatusesLoaded();
 
@@ -14920,9 +15200,20 @@
     const id = Number(orderId || 0);
     if (!Number.isFinite(id) || id <= 0) return;
     const opts = options && typeof options === "object" ? options : {};
+
+    if (isChatBridgeMode) {
+      document.dispatchEvent(new CustomEvent("chat:right-order-open-request", {
+        detail: { orderId: id, source: "client-card" },
+      }));
+      return;
+    }
+
     const tabKey = buildTabKey("order", id);
     const isAlreadyActive = tabsState.activeKey === tabKey;
     if (isAlreadyActive && opts.forceRefresh !== true) {
+      // If order tab is already active, still re-activate data load.
+      // This prevents empty right panel after async client/profile races.
+      Promise.resolve(activateOrderById(id)).catch(console.error);
       if (isMobile()) openSheet();
       return;
     }
@@ -14944,9 +15235,19 @@
   async function openClientById(id) {
     closeClientBenefitsOverlay();
     const requestToken = ++clientProfileRequestToken;
-    state.activeClientId = Number(id) || null;
+    const clientId = Number(id) || null;
+    const expectedChatTabKey = clientId ? buildTabKey('client', clientId) : '';
+    const isExpectedClientTabActive = () => {
+      if (!expectedChatTabKey) return false;
+      if (tabsState.activeKey !== expectedChatTabKey) return false;
+      return tabsState.tabs.some((tab) => tab.key === expectedChatTabKey && tab.type === 'client');
+    };
+    if (!isExpectedClientTabActive()) return;
+
+    state.activeClientId = clientId;
     state.activeOrderId = null;
     state.activeOrder = null;
+    forceShowClientProfilePanel();
     const activeId = Number(state.activeClientId || 0);
     const cached = getCachedClientDetails(activeId);
     const hasCachedAddresses = !!(cached && Array.isArray(cached.addresses) && cached.addresses.length);
@@ -14972,6 +15273,7 @@
     try {
       const json = await apiJson(`/api/admin/clients/${state.activeClientId}`);
       if (requestToken !== clientProfileRequestToken) return;
+      if (!isExpectedClientTabActive()) return;
       loadedClient = json?.data || null;
       if (loadedClient) {
         setCachedClientDetails(activeId, { client: loadedClient });
@@ -14979,7 +15281,9 @@
     } catch (err) {
       console.error(err);
       if (requestToken !== clientProfileRequestToken) return;
+      if (!isExpectedClientTabActive()) return;
     }
+    if (!isExpectedClientTabActive()) return;
     setClient(loadedClient || cached?.client || null);
 
     // Ensure right-side tab title is the client name (not #id fallback).
@@ -14992,6 +15296,7 @@
       }
     }
     hideEmptyState();
+    forceShowClientProfilePanel();
 
     // Reset content tab to addresses and order detail view
     showOrdersList();
@@ -15029,6 +15334,7 @@
     );
     await Promise.allSettled(preloadTasks);
     if (requestToken !== clientProfileRequestToken) return;
+    if (!isExpectedClientTabActive()) return;
 
     // Reset address form
     if (addrFormCard) addrFormCard.classList.add("hidden");
@@ -15070,9 +15376,18 @@
     closeClientBenefitsOverlay();
     const requestToken = ++clientProfileRequestToken;
     const clientId = Number(id) || null;
+    const expectedChatTabKey = clientId ? buildTabKey('client', clientId) : '';
+    const isExpectedClientTabActive = () => {
+      if (!expectedChatTabKey) return false;
+      if (tabsState.activeKey !== expectedChatTabKey) return false;
+      return tabsState.tabs.some((tab) => tab.key === expectedChatTabKey && tab.type === 'client');
+    };
+    if (!isExpectedClientTabActive()) return;
+
     state.activeClientId = null;
     state.activeOrderId = null;
     state.activeOrder = null;
+    forceShowClientProfilePanel();
 
     $$(".order-row.is-active", document).forEach((n) => n.classList.remove("is-active"));
     const row = $(`.order-row[data-client-id="${clientId}"]`, document);
@@ -15090,6 +15405,7 @@
     }
 
     hideEmptyState();
+    forceShowClientProfilePanel();
     showOrdersList();
     setContentTab("addresses");
 
@@ -15100,6 +15416,7 @@
     renderClientOrders();
     renderClientDiscounts();
     if (requestToken !== clientProfileRequestToken) return;
+    if (!isExpectedClientTabActive()) return;
 
     if (addrFormCard) addrFormCard.classList.add("hidden");
     if (addrToggleBtn) addrToggleBtn.textContent = "+ \u041d\u043e\u0432\u044b\u0439 \u0430\u0434\u0440\u0435\u0441";
@@ -15117,7 +15434,7 @@
       ? (hintedTitle || "\u0413\u043e\u0441\u0442\u044c")
       : (String(clientData?.name || "").trim() || hintedTitle || "\u041a\u043b\u0438\u0435\u043d\u0442");
 
-    ensureTab({
+    const tab = ensureTab({
       type: 'client',
       id: clientId,
       title: title || '',
@@ -15126,7 +15443,11 @@
           ? openGuestClientById(clientId, title)
           : openClientById(clientId)
       ),
+      activate: false,
     });
+    if (tab?.key) {
+      await setActiveTabKey(tab.key);
+    }
 
     if (opts.forceRefresh === true) {
       activateOrderById(id).catch(console.error);
@@ -17045,6 +17366,9 @@
     },
     closeMobileSheet(options = {}) {
       return closeSheet(options);
+    },
+    setChatRightForceEmpty(force = false) {
+      applyChatRightForceEmpty(force);
     },
   };
 })();

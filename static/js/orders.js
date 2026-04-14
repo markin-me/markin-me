@@ -1557,18 +1557,6 @@
     orderTabsEls.forEach((el) => { el.innerHTML = html; });
   }
 
-  function goToOrdersHomeView() {
-    const activeTab = tabsState.tabs.find((tab) => tab.key === tabsState.activeKey) || null;
-    if (activeTab) captureCheckoutSessionForTab(activeTab);
-    tabsState.activeKey = null;
-    state.activeOrderId = null;
-    setOrdersCheckoutLayoutEnabled(false);
-    renderOrderTabs();
-    syncActiveOrderRowState();
-    setInfo(null);
-    schedulePersistOrdersCache();
-  }
-
   function setActiveOrderTab(key, { openMobile = false } = {}) {
     const prevTab = tabsState.tabs.find((t) => t.key === tabsState.activeKey) || null;
     if (prevTab) captureCheckoutSessionForTab(prevTab);
@@ -1636,6 +1624,18 @@
     }
 
     if (openMobile && isMobile()) openSheet();
+    schedulePersistOrdersCache();
+  }
+
+  function goToOrdersHomeView() {
+    tabsState.tabs = [];
+    tabsState.activeKey = null;
+    state.activeOrderId = null;
+    state.activeOrder = null;
+    renderOrderTabs();
+    syncActiveOrderRowState();
+    setInfo(null);
+    setOrdersCheckoutLayoutEnabled(false);
     schedulePersistOrdersCache();
   }
 
@@ -4073,7 +4073,16 @@
     sheetTitleEl.textContent = String(text || "РРЅС„РѕСЂРјР°С†РёСЏ").trim() || "РРЅС„РѕСЂРјР°С†РёСЏ";
   }
 
+  function shouldPreserveChatClientSurfaces() {
+    return !!(
+      document.body
+      && document.body.classList.contains("page-chat")
+      && !document.body.classList.contains("chat-right-order-mode")
+    );
+  }
+
   function hideClientSurfaces() {
+    if (shouldPreserveChatClientSurfaces()) return;
     clientSurfaces.forEach((dom) => {
       if (dom?.infoWrap) dom.infoWrap.classList.add("hidden");
     });
@@ -6202,6 +6211,14 @@
   // Click handlers
   // -----------------------------
   document.addEventListener("click", async (e) => {
+    const tabsHomeBtn = e.target.closest('[data-action="order-tabs-home"]');
+    if (tabsHomeBtn) {
+      e.preventDefault();
+      e.stopPropagation();
+      goToOrdersHomeView();
+      return;
+    }
+
     const tabCloseBtn = e.target.closest("[data-order-tab-close]");
     if (tabCloseBtn) {
       e.stopPropagation();
@@ -6214,14 +6231,6 @@
     if (tabEl) {
       const key = tabEl.getAttribute("data-order-tab-key");
       if (key) setActiveOrderTab(key, { openMobile: true });
-      return;
-    }
-
-    const tabsHomeBtn = e.target.closest('[data-action="order-tabs-home"]');
-    if (tabsHomeBtn) {
-      e.preventDefault();
-      e.stopPropagation();
-      goToOrdersHomeView();
       return;
     }
 
@@ -6604,6 +6613,20 @@
   if (dateReset) {
     dateReset.addEventListener("click", () => resetDateFilter());
   }
+
+  window.__ordersDashboardApi = {
+    async openOrderById(orderId, options = {}) {
+      const id = Number(orderId || 0);
+      if (!Number.isFinite(id) || id <= 0) return null;
+      const order = await ensureFullOrderById(id);
+      if (!order) return null;
+      const tab = ensureOrderTab(order, {
+        activate: true,
+        openMobile: options && options.openMobile !== false,
+      });
+      return tab || null;
+    },
+  };
 
   // РџРµСЂРµРєР»СЋС‡РµРЅРёРµ СЃС‚Р°С‚СѓСЃР° РїРѕ РєР»РёРєСѓ РЅР° Р±РѕР»СЊС€СѓСЋ РїРёР»СЋР»СЋ
   document.addEventListener("click", (e) => {

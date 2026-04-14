@@ -15,8 +15,8 @@
         type="button"
         class="chat-mobile-subheader-btn chat-mobile-subheader-btn--client"
         id="chatMobileHeaderClientBtn"
-        aria-label="Открыть профиль клиента"
-        title="Открыть профиль клиента"
+        aria-label="Открыть заказ"
+        title="Открыть заказ"
       >
         <span class="chat-mobile-subheader-client-text">
           <span class="chat-mobile-subheader-client-name" id="chatMobileHeaderName">—</span>
@@ -81,8 +81,8 @@
                 type="button"
                 class="chat-header-client-link"
                 id="chatHeaderClientBtn"
-                aria-label="Открыть профиль клиента"
-                title="Открыть профиль клиента"
+                aria-label="Открыть заказ"
+                title="Открыть заказ"
               >
                 <span class="order-client-name-text" id="chatHeaderName">—</span>
               </button>
@@ -304,5 +304,12 @@
 <div class="hidden" aria-hidden="true">
   <%- include('../clients/left') %>
   <%- include('../clients/center') %>
+  <%- include('../orders/stages') %>
+  <%- include('../orders/center') %>
+  <%- include('../orders/bottomsheet') %>
+</div>
+
+<div class="hidden" id="chatRightPaneStorage" aria-hidden="true">
+  <%- include('../orders/info') %>
 </div>
 

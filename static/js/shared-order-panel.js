@@ -8,6 +8,12 @@
     return Array.from(root.querySelectorAll(selector));
   }
 
+  function shouldPreserveChatClientPanel() {
+    if (typeof document === "undefined" || !document.body) return false;
+    return document.body.classList.contains("page-chat")
+      && !document.body.classList.contains("chat-right-order-mode");
+  }
+
   function escapeHtml(value) {
     return String(value == null ? "" : value)
       .replace(/&/g, "&amp;")
@@ -694,7 +700,7 @@
     function showEmpty() {
       setHiddenAll(infoEls.empty, false);
       setHiddenAll(infoEls.content, true);
-      if (clientInfoWrap) clientInfoWrap.classList.add("hidden");
+      if (clientInfoWrap && !shouldPreserveChatClientPanel()) clientInfoWrap.classList.add("hidden");
       if (footerEl) footerEl.classList.add("hidden");
       setPrintDisabled(true);
     }
@@ -702,7 +708,7 @@
     function showOrder() {
       setHiddenAll(infoEls.empty, true);
       setHiddenAll(infoEls.content, false);
-      if (clientInfoWrap) clientInfoWrap.classList.add("hidden");
+      if (clientInfoWrap && !shouldPreserveChatClientPanel()) clientInfoWrap.classList.add("hidden");
       if (footerEl) footerEl.classList.remove("hidden");
     }
 

@@ -1027,6 +1027,24 @@
 
     <div id="clientOrderInfoWrap" class="hidden">
       <%- include('../orders/info_content', { includeClientProfile: false }) %>
+      <div class="panel-footer order-info-footer hidden" id="clientOrderInfoFooter">
+        <div class="order-footer-actions">
+          <button class="order-footer-status-pill order-payment-pill" type="button" data-action="order-mark-paid" id="clientOrderInfoPaymentBtn" aria-label="Оплата заказа">
+            <span>Принять оплату</span>
+          </button>
+          <button class="order-footer-status-pill" type="button" data-action="order-status-next" aria-label="Статус заказа">
+            <span data-info="order-status">—</span>
+          </button>
+          <div class="order-head-actions order-footer-icon-actions">
+            <button class="icon-btn order-footer-icon-btn" type="button" data-action="order-edit" aria-label="Редактировать">
+              <i class="fas fa-pen"></i>
+            </button>
+            <button class="icon-btn order-footer-icon-btn" type="button" data-action="order-print" aria-label="Печать">
+              <i class="fas fa-print"></i>
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
   <!-- Footer для редактирования фильтра -->
