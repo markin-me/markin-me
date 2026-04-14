@@ -8739,8 +8739,9 @@ async function initAddresses() {
         if (groupType === "single" && group.is_required && group.items?.length > 0) {
           // ??? single ? is_required ? ????? ?????? ??????? ??? ?????????
           const defaultItem = group.items[0];
-          if (defaultItem?.price) {
-            price += Number(defaultItem.price || 0);
+          const defaultItemPrice = getOptionItemResolvedDefaultPrice(defaultItem);
+          if (Number.isFinite(defaultItemPrice)) {
+            price += defaultItemPrice;
           }
         } else if (groupType === "multiple_item" || groupType === "multiple_group") {
           const minSelect = Math.max(0, Number(group?.min_select ?? 0));
@@ -13004,6 +13005,16 @@ function updateCartBadge() {
     return match ? Number(match[0]) : NaN;
   }
 
+  function getOptionItemDefaultVariantIndex(optionItem) {
+    const variants = Array.isArray(optionItem?.variants) ? optionItem.variants : [];
+    const variantGroup = variants[0];
+    const values = Array.isArray(variantGroup?.values) ? variantGroup.values : [];
+    if (!values.length) return null;
+    const rawIndex = variantGroup?.default_value_index != null ? Number(variantGroup.default_value_index) : 0;
+    if (!Number.isFinite(rawIndex) || rawIndex < 0 || rawIndex >= values.length) return 0;
+    return rawIndex;
+  }
+
   /**
    * ???? ??????-????? ? ?????? ?????????? ???????? (?????? ?????).
    * ???????????? ??? ????? ?????? (??/?, ?/?? ? ?.?.): ?????????? ??????????? ??? ??? ????????? ???????? ??????.
@@ -13054,6 +13065,29 @@ function updateCartBadge() {
       unitPrice = unitPrice * (1 - discountPercent / 100);
     }
     return unitPrice;
+  }
+
+  function getOptionItemVariantPriceDiff(optionItem, variantGroup, selectedIndex) {
+    const unitPrice = Number(getOptionItemVariantUnitPrice(optionItem, variantGroup, selectedIndex) || 0);
+    const productId = Number(optionItem?.target_product_id || 0);
+    const targetProduct = productId > 0 ? state.productCache.get(productId) : null;
+    const basePrice = targetProduct
+      ? Number(targetProduct.price || 0)
+      : Number(optionItem?.price || 0);
+    if (!Number.isFinite(unitPrice) || !Number.isFinite(basePrice)) return 0;
+    return unitPrice - basePrice;
+  }
+
+  function getOptionItemResolvedDefaultPrice(optionItem) {
+    const basePrice = Number(optionItem?.price || 0);
+    if (!Number.isFinite(basePrice)) return 0;
+    const variants = Array.isArray(optionItem?.variants) ? optionItem.variants : [];
+    const variantGroup = variants[0];
+    const defaultVariantIndex = getOptionItemDefaultVariantIndex(optionItem);
+    if (!variantGroup || !Number.isFinite(Number(defaultVariantIndex))) {
+      return basePrice;
+    }
+    return basePrice + getOptionItemVariantPriceDiff(optionItem, variantGroup, Number(defaultVariantIndex));
   }
 
   function getVariantUnitPrice(product, variants, variantState) {
