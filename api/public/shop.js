@@ -1015,6 +1015,160 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     return { payload, cacheState: 'MISS' };
   }
 
+  function makeOptionItemExclusionScopeKey(productId, groupId) {
+    return `${Number(productId || 0)}:${Number(groupId || 0)}`;
+  }
+
+  async function loadOptionItemExclusionsMap(tenantId, productIds, groupIds = []) {
+    const productIdsList = Array.from(new Set(
+      (Array.isArray(productIds) ? productIds : [])
+        .map((id) => Number(id))
+        .filter((id) => Number.isFinite(id) && id > 0)
+    ));
+    if (!productIdsList.length) return new Map();
+
+    const groupIdsList = Array.from(new Set(
+      (Array.isArray(groupIds) ? groupIds : [])
+        .map((id) => Number(id))
+        .filter((id) => Number.isFinite(id) && id > 0)
+    ));
+
+    const sql = [
+      'SELECT product_id, group_id, option_item_id',
+      'FROM prod_option_item_exclusions',
+      `WHERE tenant_id=? AND product_id IN (${productIdsList.map(() => '?').join(',')})`,
+    ];
+    const params = [tenantId, ...productIdsList];
+
+    if (groupIdsList.length) {
+      sql.push(`AND group_id IN (${groupIdsList.map(() => '?').join(',')})`);
+      params.push(...groupIdsList);
+    }
+
+    let rows;
+    try {
+      [rows] = await db.query(sql.join(' '), params);
+    } catch (error) {
+      if (error?.code === 'ER_NO_SUCH_TABLE' || error?.code === 'ER_BAD_TABLE_ERROR') {
+        return new Map();
+      }
+      throw error;
+    }
+
+    const result = new Map();
+    (Array.isArray(rows) ? rows : []).forEach((row) => {
+      const key = makeOptionItemExclusionScopeKey(row?.product_id, row?.group_id);
+      if (!result.has(key)) result.set(key, new Set());
+      result.get(key).add(Number(row?.option_item_id || 0));
+    });
+    return result;
+  }
+
+  function getOptionItemExclusionSet(exclusionsMap, productId, groupId) {
+    if (!(exclusionsMap instanceof Map)) return new Set();
+    return exclusionsMap.get(makeOptionItemExclusionScopeKey(productId, groupId)) || new Set();
+  }
+
+  function makeVariantValueExclusionScopeKey(productId, groupId) {
+    return `${Number(productId || 0)}:${Number(groupId || 0)}`;
+  }
+
+  async function loadVariantValueExclusionsMap(tenantId, productIds, groupIds = []) {
+    const productIdsList = Array.from(new Set(
+      (Array.isArray(productIds) ? productIds : [])
+        .map((id) => Number(id))
+        .filter((id) => Number.isFinite(id) && id > 0)
+    ));
+    if (!productIdsList.length) return new Map();
+
+    const groupIdsList = Array.from(new Set(
+      (Array.isArray(groupIds) ? groupIds : [])
+        .map((id) => Number(id))
+        .filter((id) => Number.isFinite(id) && id > 0)
+    ));
+
+    const sql = [
+      'SELECT product_id, variant_group_id, value_index',
+      'FROM prod_variant_value_exclusions',
+      `WHERE tenant_id=? AND product_id IN (${productIdsList.map(() => '?').join(',')})`,
+    ];
+    const params = [tenantId, ...productIdsList];
+
+    if (groupIdsList.length) {
+      sql.push(`AND variant_group_id IN (${groupIdsList.map(() => '?').join(',')})`);
+      params.push(...groupIdsList);
+    }
+
+    let rows;
+    try {
+      [rows] = await db.query(sql.join(' '), params);
+    } catch (error) {
+      if (error?.code === 'ER_NO_SUCH_TABLE' || error?.code === 'ER_BAD_TABLE_ERROR') {
+        return new Map();
+      }
+      throw error;
+    }
+
+    const result = new Map();
+    (Array.isArray(rows) ? rows : []).forEach((row) => {
+      const key = makeVariantValueExclusionScopeKey(row?.product_id, row?.variant_group_id);
+      if (!result.has(key)) result.set(key, new Set());
+      result.get(key).add(Number(row?.value_index));
+    });
+    return result;
+  }
+
+  function getVariantValueExclusionSet(exclusionsMap, productId, groupId) {
+    if (!(exclusionsMap instanceof Map)) return new Set();
+    return exclusionsMap.get(makeVariantValueExclusionScopeKey(productId, groupId)) || new Set();
+  }
+
+  function getVariantTierRowsForValueIndex(tiers, valueIndex) {
+    const list = Array.isArray(tiers) ? tiers : [];
+    const exact = list.filter((tier) => Number(tier?.sort_order) === Number(valueIndex));
+    if (exact.length) return exact;
+    return list.filter((tier) => Number(tier?.sort_order) === Number(valueIndex) + 1);
+  }
+
+  function buildVisibleVariantData(values, tiers, defaultValueIndex, excludedValueIndexes) {
+    const sourceValues = Array.isArray(values) ? values : [];
+    const excludedSet = excludedValueIndexes instanceof Set
+      ? excludedValueIndexes
+      : new Set(
+          (Array.isArray(excludedValueIndexes) ? excludedValueIndexes : [])
+            .map((valueIndex) => Number(valueIndex))
+            .filter((valueIndex) => Number.isFinite(valueIndex) && valueIndex >= 0)
+        );
+    const visibleValueIndexes = sourceValues
+      .map((_, valueIndex) => valueIndex)
+      .filter((valueIndex) => !excludedSet.has(valueIndex));
+    if (!visibleValueIndexes.length) return null;
+
+    const filteredValues = visibleValueIndexes.map((valueIndex) => sourceValues[valueIndex]);
+    const rawDefaultIndex = defaultValueIndex != null ? Number(defaultValueIndex) : 0;
+    const resolvedOriginalDefaultIndex = visibleValueIndexes.includes(rawDefaultIndex)
+      ? rawDefaultIndex
+      : visibleValueIndexes[0];
+    const resolvedVisibleDefaultIndex = visibleValueIndexes.indexOf(resolvedOriginalDefaultIndex);
+    const filteredTiers = [];
+    visibleValueIndexes.forEach((originalValueIndex, visibleValueIndex) => {
+      getVariantTierRowsForValueIndex(tiers, originalValueIndex).forEach((tier) => {
+        filteredTiers.push({
+          ...tier,
+          sort_order: visibleValueIndex,
+        });
+      });
+    });
+
+    return {
+      values: filteredValues,
+      discount_tiers: filteredTiers,
+      default_value_index: resolvedVisibleDefaultIndex >= 0 ? resolvedVisibleDefaultIndex : 0,
+      visible_value_indexes: visibleValueIndexes,
+      resolved_original_default_index: resolvedOriginalDefaultIndex,
+    };
+  }
+
   const CHAT_ASSISTANT_GENDER_MALE = 'm';
   const CHAT_ASSISTANT_GENDER_FEMALE = 'f';
   const DEFAULT_CHAT_ASSISTANT_GENDER = CHAT_ASSISTANT_GENDER_MALE;
@@ -1752,6 +1906,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     );
 
     const variantGroupIds = [...new Set(vaRows.map((r) => Number(r.variant_group_id)).filter(Boolean))];
+    const variantValueExclusionsByScope = await loadVariantValueExclusionsMap(tenantId, productIds, variantGroupIds);
     let tiersByGroup = new Map();
     if (variantGroupIds.length) {
       const tierPlaceholders = variantGroupIds.map(() => '?').join(',');
@@ -1779,13 +1934,19 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       if (variantByProductId.has(pid)) continue;
       const values = safeJsonArray(r.values);
       if (!values.length) continue;
-      const defaultIdx = r.default_value_index != null ? Number(r.default_value_index) : 0;
       const tiers = tiersByGroup.get(Number(r.variant_group_id)) || [];
+      const variantData = buildVisibleVariantData(
+        values,
+        tiers,
+        r.default_value_index != null ? Number(r.default_value_index) : 0,
+        getVariantValueExclusionSet(variantValueExclusionsByScope, pid, Number(r.variant_group_id))
+      );
+      if (!variantData) continue;
       variantByProductId.set(pid, {
         unit_id: r.unit_id,
-        values,
-        default_value_index: defaultIdx >= 0 && defaultIdx < values.length ? defaultIdx : 0,
-        discount_tiers: tiers,
+        values: variantData.values,
+        default_value_index: variantData.default_value_index,
+        discount_tiers: variantData.discount_tiers,
       });
     }
 
@@ -1822,6 +1983,11 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       });
       optionGroupIds.add(Number(row.group_id));
     }
+    const optionItemExclusionsByScope = await loadOptionItemExclusionsMap(
+      tenantId,
+      productIds,
+      Array.from(optionGroupIds)
+    );
 
     const optionGroupDetailsById = new Map();
     if (optionGroupIds.size > 0) {
@@ -1884,6 +2050,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         const optionVariantGroupIds = Array.from(new Set(
           optionVariantRows.map((row) => Number(row.id)).filter((id) => Number.isFinite(id) && id > 0)
         ));
+        const optionVariantExclusionsByScope = await loadVariantValueExclusionsMap(tenantId, optionTargetProductIds, optionVariantGroupIds);
         const optionTiersByGroupId = new Map();
         if (optionVariantGroupIds.length > 0) {
           const [optionTierRows] = await db.query(
@@ -1905,13 +2072,19 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
           if (optionVariantsByProductId.has(pid)) continue;
           const values = safeJsonArray(optionVariantRow.values);
           if (!values.length) continue;
-          const defaultIdx = optionVariantRow.default_value_index != null ? Number(optionVariantRow.default_value_index) : 0;
+          const variantData = buildVisibleVariantData(
+            values,
+            optionTiersByGroupId.get(Number(optionVariantRow.id)) || [],
+            optionVariantRow.default_value_index != null ? Number(optionVariantRow.default_value_index) : 0,
+            getVariantValueExclusionSet(optionVariantExclusionsByScope, pid, Number(optionVariantRow.id))
+          );
+          if (!variantData) continue;
           optionVariantsByProductId.set(pid, [{
             id: Number(optionVariantRow.id),
             unit_id: optionVariantRow.unit_id ? Number(optionVariantRow.unit_id) : null,
-            values,
-            default_value_index: defaultIdx >= 0 && defaultIdx < values.length ? defaultIdx : 0,
-            discount_tiers: optionTiersByGroupId.get(Number(optionVariantRow.id)) || [],
+            values: variantData.values,
+            default_value_index: variantData.default_value_index,
+            discount_tiers: variantData.discount_tiers,
           }]);
         }
       }
@@ -1962,7 +2135,9 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         const details = optionGroupDetailsById.get(groupId) || null;
         if (!details) continue;
         const groupMeta = details.group || {};
-        const items = Array.isArray(details.items) ? details.items : [];
+        const excludedItemIds = getOptionItemExclusionSet(optionItemExclusionsByScope, Number(row.id), groupId);
+        const items = (Array.isArray(details.items) ? details.items : [])
+          .filter((item) => !excludedItemIds.has(Number(item?.id || 0)));
         if (!items.length) continue;
         const selectionType = str(groupMeta.selection_type || assignment.selection_type || 'single').trim().toLowerCase() || 'single';
         const minSelect = Number(groupMeta.min_select ?? assignment.min_select ?? 0);
@@ -9398,6 +9573,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         );
 
         const variantGroupIds = [...new Set(vaRows.map((r) => Number(r.variant_group_id)).filter(Boolean))];
+        const variantValueExclusionsByScope = await loadVariantValueExclusionsMap(tenantId, allProductIds, variantGroupIds);
         const tiersByGroup = new Map();
         if (variantGroupIds.length) {
           const [tierRows] = await db.query(
@@ -9424,11 +9600,18 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           if (variantByProductId.has(pid)) continue;
           const values = safeJsonArray(r.values);
           if (!values.length) continue;
+          const variantData = buildVisibleVariantData(
+            values,
+            tiersByGroup.get(Number(r.variant_group_id)) || [],
+            r.default_value_index != null ? Number(r.default_value_index) : 0,
+            getVariantValueExclusionSet(variantValueExclusionsByScope, pid, Number(r.variant_group_id))
+          );
+          if (!variantData) continue;
           variantByProductId.set(pid, {
             unit_id: r.unit_id,
-            values,
-            default_value_index: r.default_value_index != null ? Number(r.default_value_index) : 0,
-            discount_tiers: tiersByGroup.get(Number(r.variant_group_id)) || [],
+            values: variantData.values,
+            default_value_index: variantData.default_value_index,
+            discount_tiers: variantData.discount_tiers,
           });
         }
       }
@@ -9607,18 +9790,28 @@ window.location.replace(${JSON.stringify(redirectUrl)});
            ORDER BY va.sort_order ASC, vg.sort_order ASC`,
           [tenantId, ...upsellProductIds]
         );
+        const upsellVariantGroupIds = Array.from(new Set(
+          vaUpsellRows.map((row) => Number(row.variant_group_id)).filter((id) => Number.isFinite(id) && id > 0)
+        ));
+        const upsellVariantExclusionsByScope = await loadVariantValueExclusionsMap(tenantId, upsellProductIds, upsellVariantGroupIds);
         const variantMap = new Map();
         for (const r of vaUpsellRows) {
           const pid = Number(r.product_id);
           if (variantMap.has(pid)) continue;
           const values = safeJsonArray(r.values);
           if (!values.length) continue;
-          const defaultIdx = r.default_value_index != null ? Number(r.default_value_index) : 0;
-          const idx = defaultIdx >= 0 && defaultIdx < values.length ? defaultIdx : 0;
+          const variantData = buildVisibleVariantData(
+            values,
+            [],
+            r.default_value_index != null ? Number(r.default_value_index) : 0,
+            getVariantValueExclusionSet(upsellVariantExclusionsByScope, pid, Number(r.variant_group_id))
+          );
+          if (!variantData) continue;
+          const idx = variantData.default_value_index;
           variantMap.set(pid, {
             variant_group_id: Number(r.variant_group_id),
             variant_value_index: idx,
-            variant_label: String(values[idx]) + (r.unit_short_title ? ' ' + r.unit_short_title : ''),
+            variant_label: String(variantData.values[idx]) + (r.unit_short_title ? ' ' + r.unit_short_title : ''),
           });
         }
         for (const row of rows) {
@@ -10365,6 +10558,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           const groupIds = Array.from(
             new Set(variantRows.map((r) => Number(r.id)).filter((n) => Number.isFinite(n) && n > 0))
           );
+          const variantValueExclusionsByScope = await loadVariantValueExclusionsMap(tenantId, sortedIds, groupIds);
           const tiersByGroupId = new Map();
           if (groupIds.length) {
             const tierPlaceholders = groupIds.map(() => '?').join(',');
@@ -10388,6 +10582,13 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             if (!result[pid]) result[pid] = [];
             const groupDefaultIdx = v.group_default_value_index != null ? Number(v.group_default_value_index) : null;
             const assignmentDefaultIdx = v.assignment_default_value_index != null ? Number(v.assignment_default_value_index) : null;
+            const variantData = buildVisibleVariantData(
+              safeJsonArray(v.values),
+              tiersByGroupId.get(Number(v.id)) || [],
+              assignmentDefaultIdx != null ? assignmentDefaultIdx : groupDefaultIdx,
+              getVariantValueExclusionSet(variantValueExclusionsByScope, pid, Number(v.id))
+            );
+            if (!variantData) continue;
             result[pid].push({
               id: Number(v.id),
               title: str(v.title || ""),
@@ -10395,9 +10596,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
               unit_code: str(v.unit_code || ""),
               unit_title: str(v.unit_title || ""),
               unit_short_title: str(v.unit_short_title || ""),
-              values: safeJsonArray(v.values),
-              default_value_index: assignmentDefaultIdx != null ? assignmentDefaultIdx : groupDefaultIdx,
-              discount_tiers: tiersByGroupId.get(Number(v.id)) || [],
+              values: variantData.values,
+              default_value_index: variantData.default_value_index,
+              discount_tiers: variantData.discount_tiers,
             });
           }
           const blocksConfigMap = await resolveProductBlocksConfigMap(
@@ -10634,6 +10835,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         [tenantId, ...ids]
       );
       const groupIds = Array.from(new Set(variantRows.map((r) => Number(r.id)).filter((n) => Number.isFinite(n) && n > 0)));
+      const variantValueExclusionsByScope = await loadVariantValueExclusionsMap(tenantId, ids, groupIds);
       const tiersByGroupId = new Map();
       if (groupIds.length) {
         const [tiers] = await db.query(
@@ -10655,6 +10857,13 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         if (!variantsByProductId.has(pid)) variantsByProductId.set(pid, []);
         const groupDefaultIdx = v.group_default_value_index != null ? Number(v.group_default_value_index) : null;
         const assignmentDefaultIdx = v.assignment_default_value_index != null ? Number(v.assignment_default_value_index) : null;
+        const variantData = buildVisibleVariantData(
+          safeJsonArray(v.values),
+          tiersByGroupId.get(Number(v.id)) || [],
+          assignmentDefaultIdx != null ? assignmentDefaultIdx : groupDefaultIdx,
+          getVariantValueExclusionSet(variantValueExclusionsByScope, pid, Number(v.id))
+        );
+        if (!variantData) continue;
         variantsByProductId.get(pid).push({
           id: Number(v.id),
           title: str(v.title || ''),
@@ -10662,9 +10871,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           unit_code: str(v.unit_code || ''),
           unit_title: str(v.unit_title || ''),
           unit_short_title: str(v.unit_short_title || ''),
-          values: safeJsonArray(v.values),
-          default_value_index: assignmentDefaultIdx != null ? assignmentDefaultIdx : groupDefaultIdx,
-          discount_tiers: tiersByGroupId.get(Number(v.id)) || [],
+          values: variantData.values,
+          default_value_index: variantData.default_value_index,
+          discount_tiers: variantData.discount_tiers,
         });
       }
 
@@ -10717,6 +10926,11 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         });
         optionGroupIds.add(Number(r.group_id));
       }
+      const optionItemExclusionsByScope = await loadOptionItemExclusionsMap(
+        tenantId,
+        ids,
+        Array.from(optionGroupIds)
+      );
 
       const optionGroupDetailsById = new Map();
       if (optionGroupIds.size > 0) {
@@ -10785,6 +10999,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             [tenantId, ...targetOptionProductIds]
           );
           const ovGroupIds = Array.from(new Set(ovRows.map((r) => Number(r.id)).filter((n) => Number.isFinite(n) && n > 0)));
+          const optionVariantExclusionsByScope = await loadVariantValueExclusionsMap(tenantId, targetOptionProductIds, ovGroupIds);
           const ovTiersByGroupId = new Map();
           if (ovGroupIds.length) {
             const [ovTiers] = await db.query(
@@ -10805,6 +11020,13 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             if (!optionVariantsByProductId.has(pid)) optionVariantsByProductId.set(pid, []);
             const groupDefaultIdx = v.group_default_value_index != null ? Number(v.group_default_value_index) : null;
             const assignmentDefaultIdx = v.assignment_default_value_index != null ? Number(v.assignment_default_value_index) : null;
+            const variantData = buildVisibleVariantData(
+              safeJsonArray(v.values),
+              ovTiersByGroupId.get(Number(v.id)) || [],
+              assignmentDefaultIdx != null ? assignmentDefaultIdx : groupDefaultIdx,
+              getVariantValueExclusionSet(optionVariantExclusionsByScope, pid, Number(v.id))
+            );
+            if (!variantData) continue;
             optionVariantsByProductId.get(pid).push({
               id: Number(v.id),
               title: str(v.title || ''),
@@ -10812,9 +11034,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
               unit_code: str(v.unit_code || ''),
               unit_title: str(v.unit_title || ''),
               unit_short_title: str(v.unit_short_title || ''),
-              values: safeJsonArray(v.values),
-              default_value_index: assignmentDefaultIdx != null ? assignmentDefaultIdx : groupDefaultIdx,
-              discount_tiers: ovTiersByGroupId.get(Number(v.id)) || [],
+              values: variantData.values,
+              default_value_index: variantData.default_value_index,
+              discount_tiers: variantData.discount_tiers,
             });
           }
         }
@@ -10904,8 +11126,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           const details = optionGroupDetailsById.get(groupId) || null;
           if (!details) return;
           const groupMeta = details.group || {};
+          const excludedItemIds = getOptionItemExclusionSet(optionItemExclusionsByScope, Number(pid), groupId);
           const items = (Array.isArray(details.items) ? details.items : [])
-            .filter((item) => Number(item?.is_active ?? 1) === 1);
+            .filter((item) => Number(item?.is_active ?? 1) === 1)
+            .filter((item) => !excludedItemIds.has(Number(item?.id || 0)));
           if (!items.length) return;
 
           const selectionType = str(groupMeta.selection_type || assignment.selection_type || 'single').trim().toLowerCase() || 'single';
@@ -11151,10 +11375,16 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
       const id = Number(req.params.id);
+      const scopedProductId = Number(req.query?.product_id || 0);
       if (!Number.isFinite(id) || id <= 0) {
         return res.status(400).json({ ok: false, error: 'BAD_ID' });
       }
-      const cacheKey = makePublicCacheKey('option-group-by-id', { tenantId, storeId, id });
+      const cacheKey = makePublicCacheKey('option-group-by-id', {
+        tenantId,
+        storeId,
+        id,
+        productId: Number.isFinite(scopedProductId) && scopedProductId > 0 ? scopedProductId : 0,
+      });
       const cached = getPublicCache(cacheKey);
       if (cached) {
         res.set('x-public-cache', 'HIT');
@@ -11289,6 +11519,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         const variantGroupIds = Array.from(
           new Set(variantAssignments.map((va) => Number(va.variant_group_id)).filter(Number.isFinite))
         );
+        const variantValueExclusionsByScope = await loadVariantValueExclusionsMap(tenantId, productIds, variantGroupIds);
         if (variantGroupIds.length > 0) {
           const [tiers] = await db.query(
             `SELECT variant_group_id, min_quantity, discount_percent, sort_order
@@ -11319,6 +11550,13 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           // Р С›Р С—РЎР‚Р ВµР Т‘Р ВµР В»РЎРЏР ВµР С Р Т‘Р ВµРЎвЂћР С•Р В»РЎвЂљР Р…РЎвЂ№Р в„– Р С‘Р Р…Р Т‘Р ВµР С”РЎРѓ: РЎРѓР Р…Р В°РЎвЂЎР В°Р В»Р В° Р С‘Р В· Р С—РЎР‚Р С‘Р Р†РЎРЏР В·Р С”Р С‘, Р С—Р С•РЎвЂљР С•Р С Р С‘Р В· Р С–РЎР‚РЎС“Р С—Р С—РЎвЂ№
           const defaultIdx = assignmentDefaultIdx != null ? assignmentDefaultIdx : groupDefaultIdx;
           const groupId = Number(va.variant_group_id);
+          const variantData = buildVisibleVariantData(
+            safeJsonArray(va.variant_values),
+            tiersByGroupId.get(groupId) || [],
+            defaultIdx,
+            getVariantValueExclusionSet(variantValueExclusionsByScope, pid, groupId)
+          );
+          if (!variantData) continue;
           variantsByProductId.get(pid).push({
             variant_group_id: groupId,
             title: str(va.variant_title || ""),
@@ -11326,15 +11564,25 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             unit_code: str(va.unit_code || ""),
             unit_title: str(va.unit_title || ""),
             unit_short_title: str(va.unit_short_title || ""),
-            values: safeJsonArray(va.variant_values),
-            default_value_index: defaultIdx,
-            discount_tiers: tiersByGroupId.get(groupId) || [],
+            values: variantData.values,
+            default_value_index: variantData.default_value_index,
+            discount_tiers: variantData.discount_tiers,
           });
         }
       }
 
       // Р СњР С•РЎР‚Р СР В°Р В»Р С‘Р В·РЎС“Р ВµР С РЎРЊР В»Р ВµР СР ВµР Р…РЎвЂљРЎвЂ№
-      const normalizedItems = items.map((item) => {
+      let excludedItemIds = new Set();
+      if (Number.isFinite(scopedProductId) && scopedProductId > 0) {
+        excludedItemIds = getOptionItemExclusionSet(
+          await loadOptionItemExclusionsMap(tenantId, [scopedProductId], [id]),
+          scopedProductId,
+          id
+        );
+      }
+      const normalizedItems = items
+        .filter((item) => !excludedItemIds.has(Number(item?.id || 0)))
+        .map((item) => {
         const photos = safeJsonArray(item.product_photos_json);
         const productId = Number(item.target_product_id);
         const variants = variantsByProductId.get(productId) || [];
@@ -11437,11 +11685,14 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             [tenantId, productId]
           );
 
+          const variantGroupIds = Array.from(new Set(
+            variants.map((row) => Number(row.id)).filter((groupId) => Number.isFinite(groupId) && groupId > 0)
+          ));
+          const variantValueExclusionsByScope = await loadVariantValueExclusionsMap(tenantId, [productId], variantGroupIds);
+
           for (const v of variants) {
-            v.values = safeJsonArray(v.values);
             const groupDefaultIdx = v.group_default_value_index != null ? Number(v.group_default_value_index) : null;
             const assignmentDefaultIdx = v.assignment_default_value_index != null ? Number(v.assignment_default_value_index) : null;
-            v.default_value_index = assignmentDefaultIdx != null ? assignmentDefaultIdx : groupDefaultIdx;
             const [tiers] = await db.query(
               `SELECT min_quantity, discount_percent, sort_order
                FROM prod_variant_discount_tiers
@@ -11449,10 +11700,24 @@ window.location.replace(${JSON.stringify(redirectUrl)});
                ORDER BY sort_order ASC, min_quantity ASC`,
               [tenantId, v.id]
             );
-            v.discount_tiers = tiers;
+            const variantData = buildVisibleVariantData(
+              safeJsonArray(v.values),
+              tiers,
+              assignmentDefaultIdx != null ? assignmentDefaultIdx : groupDefaultIdx,
+              getVariantValueExclusionSet(variantValueExclusionsByScope, productId, Number(v.id))
+            );
+            if (!variantData) {
+              v.values = [];
+              v.default_value_index = null;
+              v.discount_tiers = [];
+              continue;
+            }
+            v.values = variantData.values;
+            v.default_value_index = variantData.default_value_index;
+            v.discount_tiers = variantData.discount_tiers;
           }
 
-          return { ok: true, data: variants };
+          return { ok: true, data: variants.filter((variant) => Array.isArray(variant.values) && variant.values.length) };
         }
       );
 

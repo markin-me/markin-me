@@ -90,22 +90,25 @@
     }
   }
 
-  async function loadOptionGroupDetails(groupId) {
+  async function loadOptionGroupDetails(groupId, productId = null) {
     const gid = Number(groupId);
     if (!Number.isFinite(gid)) return null;
-    if (state.optionGroupCache.has(gid)) return state.optionGroupCache.get(gid);
+    const pid = Number(productId || 0);
+    const cacheKey = `${gid}:${Number.isFinite(pid) && pid > 0 ? pid : 0}`;
+    if (state.optionGroupCache.has(cacheKey)) return state.optionGroupCache.get(cacheKey);
     try {
-      const res = await fetch(`/api/public/options/groups/${gid}`);
+      const query = Number.isFinite(pid) && pid > 0 ? `?product_id=${pid}` : "";
+      const res = await fetch(`/api/public/options/groups/${gid}${query}`);
       const data = await res.json().catch(() => null);
       if (!res.ok || !data || data.ok === false) {
-        state.optionGroupCache.set(gid, null);
+        state.optionGroupCache.set(cacheKey, null);
         return null;
       }
       const details = data.data || null;
-      state.optionGroupCache.set(gid, details);
+      state.optionGroupCache.set(cacheKey, details);
       return details;
     } catch {
-      state.optionGroupCache.set(gid, null);
+      state.optionGroupCache.set(cacheKey, null);
       return null;
     }
   }
@@ -578,7 +581,7 @@ async function resolveProductOptionGroups(productId) {
   const groups = [];
 
   for (const assignment of activeAssignments) {
-    const details = await loadOptionGroupDetails(assignment.group_id);
+    const details = await loadOptionGroupDetails(assignment.group_id, productId);
     const items = Array.isArray(details?.items) ? details.items : [];
     const activeItems = items.filter((item) => Number(item.is_active || 0) === 1);
     if (!activeItems.length) continue;
