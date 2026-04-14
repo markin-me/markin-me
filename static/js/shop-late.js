@@ -90,22 +90,25 @@
     }
   }
 
-  async function loadOptionGroupDetails(groupId) {
+  async function loadOptionGroupDetails(groupId, productId = null) {
     const gid = Number(groupId);
     if (!Number.isFinite(gid)) return null;
-    if (state.optionGroupCache.has(gid)) return state.optionGroupCache.get(gid);
+    const pid = Number(productId || 0);
+    const cacheKey = `${gid}:${Number.isFinite(pid) && pid > 0 ? pid : 0}`;
+    if (state.optionGroupCache.has(cacheKey)) return state.optionGroupCache.get(cacheKey);
     try {
-      const res = await fetch(`/api/public/options/groups/${gid}`);
+      const query = Number.isFinite(pid) && pid > 0 ? `?product_id=${pid}` : "";
+      const res = await fetch(`/api/public/options/groups/${gid}${query}`);
       const data = await res.json().catch(() => null);
       if (!res.ok || !data || data.ok === false) {
-        state.optionGroupCache.set(gid, null);
+        state.optionGroupCache.set(cacheKey, null);
         return null;
       }
       const details = data.data || null;
-      state.optionGroupCache.set(gid, details);
+      state.optionGroupCache.set(cacheKey, details);
       return details;
     } catch {
-      state.optionGroupCache.set(gid, null);
+      state.optionGroupCache.set(cacheKey, null);
       return null;
     }
   }
@@ -578,7 +581,7 @@ async function resolveProductOptionGroups(productId) {
   const groups = [];
 
   for (const assignment of activeAssignments) {
-    const details = await loadOptionGroupDetails(assignment.group_id);
+    const details = await loadOptionGroupDetails(assignment.group_id, productId);
     const items = Array.isArray(details?.items) ? details.items : [];
     const activeItems = items.filter((item) => Number(item.is_active || 0) === 1);
     if (!activeItems.length) continue;
@@ -9104,6 +9107,342 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     sourceDraft.benefits_promo_input_value = normalizeCheckoutBenefitsPromoInputValue(value || "");
   }
 
+  const CHECKOUT_PROMO_AUTH_RESUME_STORAGE_PREFIX = "shop_pending_promo_auth_resume_t";
+  const CHECKOUT_PROMO_AUTH_RESUME_TTL_MS = 30 * 60 * 1000;
+  let checkoutPromoAuthResumePromise = null;
+
+  function normalizeCheckoutPromoAuthReturnSurface(value, fallback = "cart") {
+    const normalized = str(value || "").trim().toLowerCase();
+    if (normalized === "cart" || normalized === "checkout" || normalized === "benefits") {
+      return normalized;
+    }
+    return fallback;
+  }
+
+  function buildCheckoutPromoAuthResumeStorageKey() {
+    const scope = typeof buildCheckoutBenefitsCacheScope === "function"
+      ? buildCheckoutBenefitsCacheScope()
+      : null;
+    const tenantId = Number(scope?.tenant_id || 0) || 0;
+    return tenantId > 0 ? `${CHECKOUT_PROMO_AUTH_RESUME_STORAGE_PREFIX}${tenantId}` : "";
+  }
+
+  function clearCheckoutPromoAuthResume() {
+    try {
+      const storageKey = buildCheckoutPromoAuthResumeStorageKey();
+      if (!storageKey) return;
+      localStorage.removeItem(storageKey);
+    } catch {}
+  }
+
+  function readCheckoutPromoAuthResume() {
+    try {
+      const storageKey = buildCheckoutPromoAuthResumeStorageKey();
+      if (!storageKey) return null;
+      const raw = localStorage.getItem(storageKey);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      const code = normalizeCheckoutBenefitsPromoInputValue(parsed?.code || "", { trim: true });
+      const returnSurface = normalizeCheckoutPromoAuthReturnSurface(parsed?.return_surface, "cart");
+      const sourceScreen = normalizeCheckoutBenefitsSourceScreen(
+        parsed?.source_screen,
+        returnSurface === "checkout" ? "checkout" : "cart-service"
+      );
+      const createdAt = Number(parsed?.created_at || 0) || 0;
+      if (!code || !createdAt || (Date.now() - createdAt) > CHECKOUT_PROMO_AUTH_RESUME_TTL_MS) {
+        clearCheckoutPromoAuthResume();
+        return null;
+      }
+      return {
+        code,
+        return_surface: returnSurface,
+        source_screen: sourceScreen,
+        created_at: createdAt,
+      };
+    } catch {
+      clearCheckoutPromoAuthResume();
+      return null;
+    }
+  }
+
+  function writeCheckoutPromoAuthResume(payload = {}) {
+    const code = normalizeCheckoutBenefitsPromoInputValue(payload?.code || "", { trim: true });
+    if (!code) return null;
+    const storageKey = buildCheckoutPromoAuthResumeStorageKey();
+    if (!storageKey) return null;
+    const nextPayload = {
+      code,
+      return_surface: normalizeCheckoutPromoAuthReturnSurface(payload?.return_surface, "cart"),
+      source_screen: normalizeCheckoutBenefitsSourceScreen(
+        payload?.source_screen,
+        payload?.return_surface === "checkout" ? "checkout" : "cart-service"
+      ),
+      created_at: Number(payload?.created_at || Date.now()) || Date.now(),
+    };
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(nextPayload));
+      return nextPayload;
+    } catch {
+      return null;
+    }
+  }
+
+  function createCheckoutPromoAuthRequiredError() {
+    const err = new Error("PROMO_AUTH_REQUIRED");
+    err.promoAuthRequired = true;
+    return err;
+  }
+
+  function isCheckoutPromoAuthRequiredError(err) {
+    return err?.promoAuthRequired === true || str(err?.message || "").trim() === "PROMO_AUTH_REQUIRED";
+  }
+
+  function syncCheckoutPromoInputValueToDraft(value) {
+    const nextDraft = loadCheckoutDraft();
+    setCheckoutBenefitsSavedPromoInputValue(nextDraft, value);
+    saveCheckoutDraft(nextDraft);
+    const savedValue = getCheckoutBenefitsSavedPromoInputValue(nextDraft);
+    if (openCartSheetCtx && typeof openCartSheetCtx === "object") {
+      openCartSheetCtx.benefitsPromoInputValue = savedValue;
+      openCartSheetCtx.benefitsPromoDirty = false;
+    }
+    if (desktopCheckoutBenefitsState && typeof desktopCheckoutBenefitsState === "object") {
+      desktopCheckoutBenefitsState.promoInputValue = savedValue;
+    }
+    return nextDraft;
+  }
+
+  function resolveCheckoutPromoAuthCartContext() {
+    const sheetScreen = str(sheetNavigationState?.screen || "").trim().toLowerCase();
+    const addressBackMode = str(
+      openCartSheetCtx?.addressBackMode || state?._addressListBackMode || ""
+    ).trim().toLowerCase();
+    if (sheetScreen === "checkout" || (sheetScreen === "address" && addressBackMode === "checkout")) {
+      return {
+        returnSurface: "checkout",
+        sourceScreen: "checkout",
+      };
+    }
+    if (cartViewMode === "checkout" || (cartViewMode === "address" && addressBackMode === "checkout")) {
+      return {
+        returnSurface: "checkout",
+        sourceScreen: "checkout",
+      };
+    }
+    return {
+      returnSurface: "cart",
+      sourceScreen: "cart-service",
+    };
+  }
+
+  function beginCheckoutPromoAuthHandoff(rawCode, {
+    returnSurface = "cart",
+    sourceScreen = "cart-service",
+  } = {}) {
+    const normalizedCode = normalizeCheckoutBenefitsPromoInputValue(rawCode || "", { trim: true });
+    if (!normalizedCode) return false;
+    syncCheckoutPromoInputValueToDraft(normalizedCode);
+    const handoff = writeCheckoutPromoAuthResume({
+      code: normalizedCode,
+      return_surface: returnSurface,
+      source_screen: sourceScreen,
+      created_at: Date.now(),
+    });
+    if (!handoff) return false;
+    if (typeof showToast === "function") {
+      showToast("Чтобы применить промокод, войдите в профиль.");
+    }
+    const handleLoginSuccess = (me) => {
+      const runResume = () => {
+        void resumeCheckoutPromoAuthHandoff({ me }).catch((err) => {
+          console.warn("resumeCheckoutPromoAuthHandoff failed:", err);
+        });
+      };
+      if (window.AppModal?.isOpen?.()) {
+        window.AppModal.close("sheet");
+        setTimeout(runResume, 0);
+        return;
+      }
+      runResume();
+    };
+    const handleLoginCancel = () => {
+      clearCheckoutPromoAuthResume();
+    };
+    if (window.matchMedia("(max-width: 768px)").matches || hasLiveCartSheetContext()) {
+      openLoginSheet({
+        onSuccess: handleLoginSuccess,
+        fromCheckout: true,
+        onCancel: handleLoginCancel,
+      });
+      return true;
+    }
+    void openProfilePanel(null, {
+      onLoginSuccess: handleLoginSuccess,
+      onLoginCancel: handleLoginCancel,
+    });
+    return true;
+  }
+
+  async function reopenCheckoutPromoAuthReturnSurface({
+    returnSurface = "cart",
+    sourceScreen = "cart-service",
+  } = {}) {
+    const normalizedReturnSurface = normalizeCheckoutPromoAuthReturnSurface(returnSurface, "cart");
+    const normalizedSourceScreen = normalizeCheckoutBenefitsSourceScreen(
+      sourceScreen,
+      normalizedReturnSurface === "checkout" ? "checkout" : "cart-service"
+    );
+
+    if (normalizedReturnSurface === "benefits") {
+      if (window.matchMedia("(max-width: 768px)").matches) {
+        await ensureCheckoutSheetContextReady();
+      }
+      await openUnifiedBenefitsSheet({
+        previewRequest: buildCheckoutBenefitsCurrentPreviewRequest(),
+        sourceScreen: normalizedSourceScreen,
+      });
+      return true;
+    }
+
+    if (normalizedReturnSurface === "checkout") {
+      if (window.matchMedia("(max-width: 768px)").matches) {
+        await openSheetCheckoutFlow();
+      } else if (typeof openDesktopCheckoutFlow === "function") {
+        await openDesktopCheckoutFlow();
+      }
+      return true;
+    }
+
+    if (window.matchMedia("(max-width: 768px)").matches) {
+      const ctx = await ensureCheckoutSheetContextReady();
+      if (ctx && typeof ctx.showSheetCart === "function") {
+        ctx.showSheetCart();
+      } else {
+        openCartSheet();
+      }
+      return true;
+    }
+
+    if (typeof showCartView === "function") {
+      showCartView();
+      return true;
+    }
+    return false;
+  }
+
+  async function applyCheckoutBenefitsManualPromoSelection(rawCode, {
+    savedInputValue = rawCode,
+    promoSelectionMode = "manual",
+    authResume = null,
+  } = {}) {
+    const normalizedCode = normalizeCheckoutBenefitsPromoInputValue(rawCode || "", { trim: true });
+    if (!normalizedCode) {
+      throw new Error("PROMO_CODE_REQUIRED");
+    }
+
+    const me = await fetchMeSafe();
+    if (!me) {
+      if (authResume) {
+        beginCheckoutPromoAuthHandoff(normalizedCode, authResume);
+        throw createCheckoutPromoAuthRequiredError();
+      }
+      throw new Error("UNAUTHORIZED");
+    }
+
+    const localApplyResult = applyManualPromoToCartBenefitsState(normalizedCode, {
+      savedInputValue: savedInputValue != null ? savedInputValue : normalizedCode,
+    });
+    if (localApplyResult.ok || localApplyResult.reason === "not_applicable") {
+      return {
+        ...localApplyResult,
+        resolvedCode: normalizedCode,
+        attachedPromoState: null,
+      };
+    }
+
+    const attachedPromoState = await attachManualCheckoutBenefitsPromoAndRefresh(normalizedCode, {
+      savedInputValue: savedInputValue != null ? savedInputValue : normalizedCode,
+      promoSelectionMode,
+      authResume,
+    });
+    const attachedPromo = attachedPromoState?.attachedPromo || null;
+    const fallbackCode = str(attachedPromo?.code || normalizedCode).trim() || normalizedCode;
+    return {
+      ...applyManualPromoToCartBenefitsState(fallbackCode, {
+        savedInputValue: fallbackCode,
+        attachResult: attachedPromo,
+        basePreviewOverride: attachedPromoState?.freshBasePreview || null,
+      }),
+      resolvedCode: fallbackCode,
+      attachedPromoState,
+    };
+  }
+
+  async function resumeCheckoutPromoAuthHandoff({ me = null } = {}) {
+    if (checkoutPromoAuthResumePromise) {
+      return checkoutPromoAuthResumePromise;
+    }
+    checkoutPromoAuthResumePromise = (async () => {
+      const pending = readCheckoutPromoAuthResume();
+      if (!pending) return false;
+      const currentCustomer = me || await fetchMeSafe({ force: true });
+      if (!currentCustomer || !hasCompletedCustomerName(currentCustomer)) return false;
+      if (!cartItemsResolved().length) {
+        clearCheckoutPromoAuthResume();
+        return false;
+      }
+
+      clearCheckoutPromoAuthResume();
+      syncCheckoutPromoInputValueToDraft(pending.code);
+      invalidateCheckoutBenefitsClientCache({ preview: true, progressProducts: false });
+      await ensureBenefitsStoreHydrated({
+        previewRequest: buildCheckoutBenefitsCurrentPreviewRequest(),
+        force: true,
+        warmDetails: false,
+      }).catch(() => null);
+
+      let applyResult = null;
+      let applyError = null;
+      try {
+        applyResult = await applyCheckoutBenefitsManualPromoSelection(pending.code, {
+          savedInputValue: pending.code,
+          promoSelectionMode: "manual",
+        });
+      } catch (err) {
+        applyError = err;
+      }
+
+      await reopenCheckoutPromoAuthReturnSurface({
+        returnSurface: pending.return_surface,
+        sourceScreen: pending.source_screen,
+      }).catch(() => false);
+
+      Promise.resolve(syncCartPricingSummaryUi()).catch(() => {});
+      Promise.resolve(syncCartBenefitsServiceBlocksUi()).catch(() => {});
+
+      if (!applyError && applyResult?.ok) {
+        return true;
+      }
+
+      if (applyResult?.reason === "not_applicable" && applyResult?.promoCard) {
+        if (typeof showToast === "function") {
+          showToast(getCheckoutBenefitsPromoInvalidationMessage(applyResult.promoCard));
+        }
+        return false;
+      }
+
+      if (!isCheckoutPromoAuthRequiredError(applyError) && typeof showToast === "function") {
+        showToast(getCheckoutBenefitsActionErrorMessage(applyError || { message: "PROMO_NOT_AVAILABLE" }));
+      }
+      return false;
+    })();
+    try {
+      return await checkoutPromoAuthResumePromise;
+    } finally {
+      checkoutPromoAuthResumePromise = null;
+    }
+  }
+
   function persistAttachedCheckoutBenefitsPromoToDraft(code, {
     savedInputValue = code,
     promoSelectionMode = "manual",
@@ -9122,13 +9461,23 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
   async function attachManualCheckoutBenefitsPromoAndRefresh(rawCode, {
     savedInputValue = rawCode,
     promoSelectionMode = "manual",
+    authResume = null,
   } = {}) {
     const normalizedCode = normalizeCheckoutBenefitsPromoInputValue(rawCode || "", { trim: true });
     if (!normalizedCode) {
       throw new Error("PROMO_CODE_REQUIRED");
     }
 
-    const attachedPromo = await attachCheckoutBenefitsPromoCode(normalizedCode);
+    let attachedPromo = null;
+    try {
+      attachedPromo = await attachCheckoutBenefitsPromoCode(normalizedCode);
+    } catch (err) {
+      if (authResume && String(err?.message || "").includes("UNAUTHORIZED")) {
+        beginCheckoutPromoAuthHandoff(normalizedCode, authResume);
+        throw createCheckoutPromoAuthRequiredError();
+      }
+      throw err;
+    }
     const resolvedCode = str(attachedPromo?.code || normalizedCode).trim() || normalizedCode;
     const nextDraft = persistAttachedCheckoutBenefitsPromoToDraft(resolvedCode, {
       savedInputValue: savedInputValue != null ? savedInputValue : resolvedCode,
@@ -9404,10 +9753,12 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       : "";
     const customerCache = typeof getCustomerCache === "function" ? getCustomerCache() : null;
     const customerId = Number(customerCache?.id || 0) || 0;
+    const customerTotalOrders = Number(customerCache?.total_orders || 0) || 0;
     if (!token && !(customerId > 0)) return "";
     try {
       return JSON.stringify({
         customer_id: customerId > 0 ? customerId : null,
+        customer_total_orders: customerId > 0 ? customerTotalOrders : null,
         customer_token: customerId > 0 ? null : token,
         preview: {
           ...safePreviewRequest,
@@ -10284,6 +10635,15 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     const normalizedCode = normalizeCheckoutBenefitsPromoInputValue(rawValue || "", { trim: true });
     if (!normalizedCode || !inputEl || !applyBtn) return false;
     if (applyBtn.dataset.loading === "1") return false;
+    const authContext = resolveCheckoutPromoAuthCartContext();
+    const me = await fetchMeSafe();
+    if (!me) {
+      beginCheckoutPromoAuthHandoff(normalizedCode, {
+        returnSurface: authContext.returnSurface,
+        sourceScreen: authContext.sourceScreen,
+      });
+      return false;
+    }
     const activePromoCode = normalizeCheckoutBenefitsPromoInputValue(
       buildCartBenefitsServiceSnapshot()?.activePromoCode || "",
       { trim: true }
@@ -10298,55 +10658,34 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     applyBtn.textContent = "Применяем...";
     updateCartBenefitsPromoApplyState(sectionEl);
     try {
-      const localApplyResult = applyManualPromoToCartBenefitsState(normalizedCode, {
+      const applyResult = await applyCheckoutBenefitsManualPromoSelection(normalizedCode, {
         savedInputValue: normalizedCode,
+        promoSelectionMode: "manual",
+        authResume: {
+          returnSurface: authContext.returnSurface,
+          sourceScreen: authContext.sourceScreen,
+        },
       });
-      if (localApplyResult.ok) {
-        inputEl.value = getCheckoutBenefitsSavedPromoInputValue(localApplyResult.nextDraft);
+      if (applyResult.ok) {
+        inputEl.value = getCheckoutBenefitsSavedPromoInputValue(applyResult.nextDraft);
         Promise.resolve(syncCartPricingSummaryUi()).catch(() => {});
         if (typeof syncCartBenefitsServiceBlocksUi === "function") {
           syncCartBenefitsServiceBlocksUi(sectionEl.closest(".shop-cart-list, .shop-cart-content, .shop-cart-sheet") || document);
         }
         return true;
       }
-      if (localApplyResult.reason === "not_applicable") {
+      if (applyResult.reason === "not_applicable") {
         if (typeof showToast === "function") {
-          showToast(getCheckoutBenefitsPromoInvalidationMessage(localApplyResult.promoCard));
+          showToast(getCheckoutBenefitsPromoInvalidationMessage(applyResult.promoCard));
         }
         return false;
       }
-
-      const attachedPromoState = await attachManualCheckoutBenefitsPromoAndRefresh(normalizedCode, {
-        savedInputValue: normalizedCode,
-        promoSelectionMode: "manual",
-      });
-      const attachedPromo = attachedPromoState?.attachedPromo || null;
-      const fallbackCode = str(attachedPromo?.code || normalizedCode).trim() || normalizedCode;
-      const fallbackApplyResult = applyManualPromoToCartBenefitsState(fallbackCode, {
-        savedInputValue: fallbackCode,
-        attachResult: attachedPromo,
-        basePreviewOverride: attachedPromoState?.freshBasePreview || null,
-      });
-      if (!fallbackApplyResult.ok) {
-        if (fallbackApplyResult.reason === "not_applicable") {
-          if (typeof showToast === "function") {
-            showToast(getCheckoutBenefitsPromoInvalidationMessage(fallbackApplyResult.promoCard));
-          }
-          return false;
-        }
-        if (typeof showToast === "function") {
-          showToast(getCheckoutBenefitsActionErrorMessage({ message: "PROMO_NOT_AVAILABLE" }));
-        }
-        return false;
-      }
-      inputEl.value = getCheckoutBenefitsSavedPromoInputValue(fallbackApplyResult.nextDraft);
-      Promise.resolve(syncCartPricingSummaryUi()).catch(() => {});
-      if (typeof syncCartBenefitsServiceBlocksUi === "function") {
-        syncCartBenefitsServiceBlocksUi(sectionEl.closest(".shop-cart-list, .shop-cart-content, .shop-cart-sheet") || document);
-      }
-      return true;
-    } catch (err) {
       if (typeof showToast === "function") {
+        showToast(getCheckoutBenefitsActionErrorMessage({ message: "PROMO_NOT_AVAILABLE" }));
+      }
+      return false;
+    } catch (err) {
+      if (!isCheckoutPromoAuthRequiredError(err) && typeof showToast === "function") {
         showToast(getCheckoutBenefitsActionErrorMessage(err));
       }
       return false;
@@ -10563,6 +10902,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       : "";
     const customerCache = typeof getCustomerCache === "function" ? getCustomerCache() : null;
     const customerId = Number(customerCache?.id || 0) || 0;
+    const customerTotalOrders = Number(customerCache?.total_orders || 0) || 0;
 
     let tenantId = 0;
     try {
@@ -10584,6 +10924,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       tenant_id: tenantId > 0 ? tenantId : null,
       store_id: storeId > 0 ? storeId : null,
       customer_id: customerId > 0 ? customerId : null,
+      customer_total_orders: customerId > 0 ? customerTotalOrders : null,
       customer_token: customerId > 0 ? null : (token || null),
     };
   }
@@ -17815,7 +18156,8 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     if (!["promo_code", "reward_promo"].includes(source)) return false;
     const disabledReasonCode = str(item?.disabled_reason_code || "").trim().toUpperCase();
     return disabledReasonCode === "PROMO_CUSTOMER_LIMIT_REACHED"
-      || disabledReasonCode === "PROMO_LIMIT_REACHED";
+      || disabledReasonCode === "PROMO_LIMIT_REACHED"
+      || disabledReasonCode === "FIRST_ORDER_LIMIT_REACHED";
   }
 
   function isCompletedCustomerLimitDiscountBenefit(item) {
@@ -17835,6 +18177,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       "DISCOUNT_INVALID",
       "DISCOUNT_NOT_AVAILABLE",
       "DISCOUNT_CUSTOMER_LIMIT_REACHED",
+      "FIRST_ORDER_LIMIT_REACHED",
       "PROMO_INVALID",
       "PROMO_NOT_AVAILABLE",
       "PROMO_LIMIT_REACHED",
@@ -18291,7 +18634,10 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
         try {
           await onApplyManualPromo(promoEntryInput.value || "");
         } catch (err) {
-          if (typeof showToast === "function") showToast(getCheckoutBenefitsActionErrorMessage(err));
+          if (!isCheckoutPromoAuthRequiredError(err) && typeof showToast === "function") {
+            if (err?.disabled_reason_code) showToast(getCheckoutBenefitsPromoInvalidationMessage(err));
+            else showToast(getCheckoutBenefitsActionErrorMessage(err));
+          }
           if (promoEntryApplyBtn.isConnected && typeof syncManualPromoApplyState === "function") {
             syncManualPromoApplyState();
           }
@@ -19557,13 +19903,14 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     }), { hideWhenEmpty: true });
     syncCheckoutBenefitsEmptyState();
 
+    const promoCards = (Array.isArray(data.promo_codes) ? data.promo_codes : [])
+      .filter((item) => !isCompletedCustomerLimitPromoBenefit(item));
+
     let selectedPromoCode = str(
-      (Array.isArray(data.promo_codes) ? data.promo_codes.find((item) => item?.is_selected)?.code : "") ||
+      (promoCards.find((item) => item?.is_selected)?.code || "") ||
       previewRequest?.promo_code ||
       ""
     ).trim();
-
-    const promoCards = Array.isArray(data.promo_codes) ? data.promo_codes.slice() : [];
     const actions = document.createElement("div");
     actions.className = "shop-checkout-benefits-actions";
 
@@ -19598,6 +19945,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
 
     resetBtn.addEventListener("click", async () => {
       selectedPromoCode = "";
+      clearCheckoutPromoAuthResume();
       if (typeof onResetPromo === "function") {
         await onResetPromo();
       }
@@ -20997,11 +21345,21 @@ function applySheetAddressTitle(backMode = "cart") {
     };
     const applyManualBenefitsPromoInput = async (rawValue) => {
       const normalizedValue = normalizeCheckoutBenefitsPromoInputValue(rawValue || "", { trim: true });
-      const attachedPromoState = await attachManualCheckoutBenefitsPromoAndRefresh(normalizedValue, {
+      const applyResult = await applyCheckoutBenefitsManualPromoSelection(normalizedValue, {
         savedInputValue: normalizedValue,
         promoSelectionMode: "manual",
+        authResume: {
+          returnSurface: "benefits",
+          sourceScreen: benefitsSourceScreen,
+        },
       });
-      const nextDraft = attachedPromoState?.nextDraft || loadCheckoutDraft();
+      if (!applyResult?.ok) {
+        if (applyResult?.reason === "not_applicable" && applyResult?.promoCard) {
+          throw applyResult.promoCard;
+        }
+        throw new Error("PROMO_NOT_AVAILABLE");
+      }
+      const nextDraft = applyResult?.nextDraft || loadCheckoutDraft();
       if (openCartSheetCtx) {
         openCartSheetCtx.benefitsPromoInputValue = getSavedBenefitsPromoInputValue(nextDraft);
         openCartSheetCtx.benefitsPromoDirty = false;
@@ -21103,6 +21461,7 @@ function applySheetAddressTitle(backMode = "cart") {
           nextDraft.selected_promo_reward_id = normalizeCheckoutSelectedDiscountId(selectedPromoRewardId);
           setSavedBenefitsPromoInputValue(nextDraft, savedInputValue);
           if (!str(nextDraft.promo_code || "").trim()) {
+            clearCheckoutPromoAuthResume();
             nextDraft.benefits_selected_promo_mode = null;
           } else if (promoSelectionMode === "list" || promoSelectionMode === "manual") {
             nextDraft.benefits_selected_promo_mode = promoSelectionMode;
@@ -23143,10 +23502,24 @@ function renderSheetAddressList() {
     } catch {}
 
     const me = await fetchMeSafe({ force: true });
-    if (!me || hasCompletedCustomerName(me)) return;
+    if (!me) {
+      clearCheckoutPromoAuthResume();
+      return;
+    }
+    if (hasCompletedCustomerName(me)) {
+      await resumeCheckoutPromoAuthHandoff({ me }).catch((e) => {
+        console.warn("resumeCheckoutPromoAuthHandoff after social login failed:", e);
+      });
+      return;
+    }
     openRequiredCustomerNamePrompt({
       me,
       note: "Укажите имя, чтобы завершить вход.",
+      onSuccess: (me2) => {
+        void resumeCheckoutPromoAuthHandoff({ me: me2 || me }).catch((e) => {
+          console.warn("resumeCheckoutPromoAuthHandoff after social name prompt failed:", e);
+        });
+      },
     });
   }
 
@@ -23719,7 +24092,7 @@ function renderSheetAddressList() {
     return wrap;
   }
 
-  function openLoginSheet({ onSuccess, fromCheckout = false } = {}) {
+  function openLoginSheet({ onSuccess, fromCheckout = false, onCancel = null } = {}) {
     if (!window.AppModal) return;
     let completedSuccessfully = false;
     const wrappedOnSuccess = (...args) => {
@@ -23781,6 +24154,9 @@ function renderSheetAddressList() {
         if (fromCheckout && openCartSheetCtx) {
           const hasItems = cartItemsResolved().length > 0;
           setCartSheetFooterMode(openCartSheetCtx, hasItems ? "cart" : "hidden");
+        }
+        if (!completedSuccessfully && typeof onCancel === "function") {
+          onCancel();
         }
         if (fromCheckout && !completedSuccessfully) {
           setTimeout(() => {
@@ -28769,6 +29145,7 @@ function renderSheetAddressList() {
       alert("Не удалось очистить корзину и вернуть подарки. Попробуйте еще раз.");
       return false;
     }
+    clearCheckoutPromoAuthResume();
     saveCheckoutDraft({});
     try { await apiJson("/api/public/auth/logout", { method: "POST", body: {} }); } catch {}
     clearCustomer();
@@ -28777,7 +29154,7 @@ function renderSheetAddressList() {
     return true;
   }
 
-  async function openProfilePanel(meOverride, { forceOpen = false, initialTab, onLoginSuccess } = {}) {
+  async function openProfilePanel(meOverride, { forceOpen = false, initialTab, onLoginSuccess, onLoginCancel } = {}) {
     if (!forceOpen && cartViewMode === "profile") {
       await restorePreviousPanel();
       return;
@@ -28788,6 +29165,12 @@ function renderSheetAddressList() {
 
     const me = meOverride || await fetchMeSafe();
     if (!me) {
+      const closeLoginPanel = () => {
+        if (typeof onLoginCancel === "function") {
+          onLoginCancel();
+        }
+        void restorePreviousPanel();
+      };
       const loginWrap = buildLoginContent({
         onSuccess: (me2) => {
           if (typeof onLoginSuccess === "function") {
@@ -28800,7 +29183,13 @@ function renderSheetAddressList() {
       elProfileContent.innerHTML = "";
       elProfileContent.appendChild(loginWrap);
       if (elProfileHeaderActions) elProfileHeaderActions.classList.add("hidden");
-      setCartHeader({ title: "Вход", showAddressChip: false, showProfileActions: false });
+      setCartHeader({
+        title: "Вход",
+        showAddressChip: false,
+        showProfileActions: false,
+        showClose: typeof onLoginCancel === "function",
+        onClose: typeof onLoginCancel === "function" ? closeLoginPanel : null,
+      });
       return;
     }
 
@@ -35037,6 +35426,12 @@ function setBottomNavActive(tab) {
             return "Ошибка оформления заказа: " + (err?.message || "UNKNOWN");
         }
       };
+      const syncBenefitsAfterSuccessfulOrder = async () => {
+        invalidateCheckoutBenefitsClientCache({ preview: true, progressProducts: false });
+        try {
+          await fetchMeSafe({ force: true });
+        } catch (_) {}
+      };
 
       try {
         const res = await apiJson("/api/public/orders", { method: "POST", body: payload });
@@ -35055,6 +35450,7 @@ function setBottomNavActive(tab) {
               const res2 = await apiJson("/api/public/orders", { method: "POST", body: payload });
               if (res2.data && res2.data.id && res2.data.public_id) {
                 localStorage.setItem(LAST_ORDER_KEY, String(res2.data.public_id));
+                await syncBenefitsAfterSuccessfulOrder();
                 clearCartAll({ restoreGiftRewards: false });
                 saveCheckoutDraft({});
                 setCheckoutSubmitting(false);
@@ -35084,6 +35480,7 @@ function setBottomNavActive(tab) {
 
         if (res.data && res.data.id && res.data.public_id) {
           localStorage.setItem(LAST_ORDER_KEY, String(res.data.public_id));
+          await syncBenefitsAfterSuccessfulOrder();
           clearCartAll({ restoreGiftRewards: false });
           saveCheckoutDraft({});
           if (typeof window.updateActiveOrdersBadge === "function") { Promise.resolve(window.updateActiveOrdersBadge({ force: true })).catch(() => {}); }

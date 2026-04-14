@@ -939,8 +939,13 @@
     return api("/api/admin/options/groups");
   }
 
-  async function apiGetOptionGroup(id) {
-    return api(`/api/admin/options/groups/${id}`);
+  async function apiGetOptionGroup(id, { productId = null } = {}) {
+    const params = new URLSearchParams();
+    if (Number.isFinite(Number(productId)) && Number(productId) > 0) {
+      params.set("product_id", String(Number(productId)));
+    }
+    const qs = params.toString();
+    return api(`/api/admin/options/groups/${id}${qs ? `?${qs}` : ""}`);
   }
 
   async function apiCreateOptionGroup(payload) {
@@ -992,8 +997,13 @@
     return api("/api/admin/variants/groups");
   }
 
-  async function apiGetVariantGroup(id) {
-    return api(`/api/admin/variants/groups/${id}`);
+  async function apiGetVariantGroup(id, { productId = null } = {}) {
+    const params = new URLSearchParams();
+    if (Number.isFinite(Number(productId)) && Number(productId) > 0) {
+      params.set("product_id", String(Number(productId)));
+    }
+    const qs = params.toString();
+    return api(`/api/admin/variants/groups/${id}${qs ? `?${qs}` : ""}`);
   }
 
   async function apiCreateVariantGroup(payload) {
@@ -1153,6 +1163,20 @@
 
   async function apiDisableProductOptionAssignment(productId, groupId) {
     return api(`/api/admin/products/${productId}/option-assignments/${groupId}`, { method: "PATCH" });
+  }
+
+  async function apiSetProductOptionItemExclusions(productId, groupId, excludedItemIds) {
+    return api(`/api/admin/products/${productId}/option-assignments/${groupId}/item-exclusions`, {
+      method: "PUT",
+      body: JSON.stringify({ excluded_item_ids: excludedItemIds }),
+    });
+  }
+
+  async function apiSetProductVariantValueExclusions(productId, groupId, excludedValueIndexes) {
+    return api(`/api/admin/products/${productId}/variant-assignments/${groupId}/value-exclusions`, {
+      method: "PUT",
+      body: JSON.stringify({ excluded_value_indexes: excludedValueIndexes }),
+    });
   }
 
   async function apiDeleteProduct(id) {
@@ -1805,9 +1829,22 @@
     state.variantGroups = Array.isArray(res.data) ? res.data : [];
   }
 
-  async function loadOptionGroupDetails(id) {
-    const res = await apiGetOptionGroup(id);
+  function makeOptionGroupCacheKey(groupId, productId = null) {
+    const safeGroupId = Number(groupId) || 0;
+    const safeProductId = Number(productId) || 0;
+    return `${safeGroupId}:${safeProductId}`;
+  }
+
+  function getCachedOptionGroupDetails(groupId, { productId = null } = {}) {
+    return state.optionGroupCache.get(makeOptionGroupCacheKey(groupId, productId)) || null;
+  }
+
+  async function loadOptionGroupDetails(id, { productId = null } = {}) {
+    const res = await apiGetOptionGroup(id, { productId });
     state.optionGroupDetails = res.data || null;
+    if (res.data) {
+      state.optionGroupCache.set(makeOptionGroupCacheKey(id, productId), res.data);
+    }
   }
 
   async function loadVariantGroupDetails(id) {
@@ -1862,13 +1899,14 @@
     schedulePersistProductsCache();
   }
 
-  async function ensureOptionGroupDetails(groupId) {
+  async function ensureOptionGroupDetails(groupId, { productId = null } = {}) {
     const id = Number(groupId);
     if (!Number.isFinite(id)) return null;
-    if (state.optionGroupCache.has(id)) return state.optionGroupCache.get(id);
-    const res = await apiGetOptionGroup(id);
+    const cacheKey = makeOptionGroupCacheKey(id, productId);
+    if (state.optionGroupCache.has(cacheKey)) return state.optionGroupCache.get(cacheKey);
+    const res = await apiGetOptionGroup(id, { productId });
     const details = res.data || null;
-    if (details) state.optionGroupCache.set(id, details);
+    if (details) state.optionGroupCache.set(cacheKey, details);
     return details;
   }
 
@@ -4308,7 +4346,85 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     `;
   }
 
-  function renderVariantValuesSummary(values, tiers, defaultValueIndex = null, { isEditable = false, groupId = null } = {}) {
+  function getVisibleOptionItems(items) {
+    return (Array.isArray(items) ? items : []).filter((item) => item?.is_excluded_for_product !== true);
+  }
+
+  function renderProductScopedOptionItemsSummary(items, { removable = false, groupId = null } = {}) {
+    const visibleItems = getVisibleOptionItems(items);
+    if (!visibleItems.length) {
+      return `<div class="empty-hint">РџРѕРєР° РЅРµС‚ РїСѓРЅРєС‚РѕРІ...</div>`;
+    }
+    return `
+      <div class="option-summary-list">
+        ${visibleItems.map((item) => {
+          const basePrice = item.product_price != null ? formatMoney(item.product_price) : "вЂ”";
+          const hasOverride = item.price_mode === "fixed" && item.price_value != null;
+          const overridePrice = hasOverride ? formatMoney(item.price_value) : "";
+          const qtyMin = item.qty_min ?? 1;
+          const qtyMax = item.qty_max ?? 1;
+          const limitLabel = `Р›РёРјРёС‚С‹: ${qtyMin}вЂ“${qtyMax}`;
+          const removeButton = removable && Number.isFinite(Number(groupId)) && Number.isFinite(Number(item.id))
+            ? `<button class="option-row-remove option-summary-remove" type="button" data-product-option-item-remove="${groupId}:${item.id}" title="\u0423\u0431\u0440\u0430\u0442\u044c \u043f\u0443\u043d\u043a\u0442 \u0443 \u044d\u0442\u043e\u0433\u043e \u0442\u043e\u0432\u0430\u0440\u0430" aria-label="\u0423\u0431\u0440\u0430\u0442\u044c \u043f\u0443\u043d\u043a\u0442 \u0443 \u044d\u0442\u043e\u0433\u043e \u0442\u043e\u0432\u0430\u0440\u0430"><i class="fas fa-times"></i></button>`
+            : "";
+          return `
+            <div class="option-summary-row ${removeButton ? "is-removable" : ""}">
+              <div>
+                <div class="option-summary-title">${escapeHtml(item.product_name || item.name || "")}</div>
+                <div class="option-summary-meta">${limitLabel}</div>
+              </div>
+              <div class="option-summary-price-wrap">
+                <div class="option-summary-price">
+                  ${hasOverride ? `<s>${basePrice}</s>` : `<span>${basePrice}</span>`}
+                  ${hasOverride ? `<span>${overridePrice}</span>` : ""}
+                </div>
+                ${removeButton}
+              </div>
+            </div>
+          `;
+        }).join("")}
+      </div>
+    `;
+  }
+
+  function renderProductScopedOptionItemsSummary(items, { removable = false, groupId = null } = {}) {
+    const visibleItems = getVisibleOptionItems(items);
+    if (!visibleItems.length) {
+      return `<div class="empty-hint">\u041f\u043e\u043a\u0430 \u043d\u0435\u0442 \u043f\u0443\u043d\u043a\u0442\u043e\u0432...</div>`;
+    }
+    return `
+      <div class="option-summary-list">
+        ${visibleItems.map((item) => {
+          const basePrice = item.product_price != null ? formatMoney(item.product_price) : "\u2014";
+          const hasOverride = item.price_mode === "fixed" && item.price_value != null;
+          const overridePrice = hasOverride ? formatMoney(item.price_value) : "";
+          const qtyMin = item.qty_min ?? 1;
+          const qtyMax = item.qty_max ?? 1;
+          const limitLabel = `\u041b\u0438\u043c\u0438\u0442\u044b: ${qtyMin}\u2013${qtyMax}`;
+          const removeButton = removable && Number.isFinite(Number(groupId)) && Number.isFinite(Number(item.id))
+            ? `<button class="option-row-remove option-summary-remove" type="button" data-product-option-item-remove="${groupId}:${item.id}" title="\u0423\u0431\u0440\u0430\u0442\u044c \u043f\u0443\u043d\u043a\u0442 \u0443 \u044d\u0442\u043e\u0433\u043e \u0442\u043e\u0432\u0430\u0440\u0430" aria-label="\u0423\u0431\u0440\u0430\u0442\u044c \u043f\u0443\u043d\u043a\u0442 \u0443 \u044d\u0442\u043e\u0433\u043e \u0442\u043e\u0432\u0430\u0440\u0430"><i class="fas fa-times"></i></button>`
+            : "";
+          return `
+            <div class="option-summary-row ${removeButton ? "is-removable" : ""}">
+              <div>
+                <div class="option-summary-title">${escapeHtml(item.product_name || item.name || "")}</div>
+                <div class="option-summary-meta">${limitLabel}</div>
+              </div>
+              <div class="option-summary-price-wrap">
+                <div class="option-summary-price">
+                  ${hasOverride ? `<s>${basePrice}</s>` : `<span>${basePrice}</span>`}
+                  ${hasOverride ? `<span>${overridePrice}</span>` : ""}
+                </div>
+                ${removeButton}
+              </div>
+            </div>
+          `;
+        }).join("")}
+      </div>
+    `;
+  }
+
+  function renderVariantValuesSummary(values, tiers, defaultValueIndex = null, { isEditable = false, groupId = null, valueIndexMap = null, removableValueIndexes = null } = {}) {
     const list = Array.isArray(values) ? values : [];
     if (!list.length) {
       return `<div class="empty-hint">Пока нет значений...</div>`;
@@ -4319,6 +4435,19 @@ function openAutoAddGroupModal({ mode, group } = {}) {
       if (Number.isFinite(idx)) tierMap.set(idx, tier);
     });
     const defaultIdx = defaultValueIndex != null ? Number(defaultValueIndex) : null;
+    const normalizedValueIndexMap = Array.isArray(valueIndexMap) && valueIndexMap.length === list.length
+      ? valueIndexMap.map((mappedIndex, idx) => {
+          const numericIndex = Number(mappedIndex);
+          return Number.isFinite(numericIndex) && numericIndex >= 0 ? numericIndex : idx;
+        })
+      : list.map((_, idx) => idx);
+    const removableIndexSet = removableValueIndexes instanceof Set
+      ? removableValueIndexes
+      : new Set(
+          (Array.isArray(removableValueIndexes) ? removableValueIndexes : [])
+            .map((mappedIndex) => Number(mappedIndex))
+            .filter((mappedIndex) => Number.isFinite(mappedIndex) && mappedIndex >= 0)
+        );
     const formatSignedPercent = (storedValue) => {
       const num = Number(storedValue || 0);
       const uiValue = Number.isFinite(num) ? -num : 0;
@@ -4333,6 +4462,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
           const discountRaw = tier.discount_percent != null ? tier.discount_percent : (tier.discount_value || 0);
           const discount = Number(discountRaw) || 0;
           const uiSigned = Number.isFinite(discount) ? -discount : 0;
+          const mappedValueIndex = normalizedValueIndexMap[idx];
           const metaLabel = uiSigned < 0
             ? `Скидка: ${formatSignedPercent(discount)}%`
             : (uiSigned > 0 ? `Надбавка: ${formatSignedPercent(discount)}%` : "Без изменения");
@@ -4357,6 +4487,81 @@ function openAutoAddGroupModal({ mode, group } = {}) {
               </div>
               <div class="option-summary-price">
                 <span>${uiSigned !== 0 ? `${formatSignedPercent(discount)}%` : ""}</span>
+              </div>
+            </div>
+          `;
+        }).join("")}
+      </div>
+    `;
+  }
+
+  function renderVariantValuesSummary(values, tiers, defaultValueIndex = null, { isEditable = false, groupId = null, valueIndexMap = null, removableValueIndexes = null } = {}) {
+    const list = Array.isArray(values) ? values : [];
+    if (!list.length) {
+      return `<div class="empty-hint">\u041f\u043e\u043a\u0430 \u043d\u0435\u0442 \u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0439...</div>`;
+    }
+    const tierMap = new Map();
+    (Array.isArray(tiers) ? tiers : []).forEach((tier) => {
+      const idx = Number(tier?.sort_order);
+      if (Number.isFinite(idx)) tierMap.set(idx, tier);
+    });
+    const defaultIdx = defaultValueIndex != null ? Number(defaultValueIndex) : null;
+    const normalizedValueIndexMap = Array.isArray(valueIndexMap) && valueIndexMap.length === list.length
+      ? valueIndexMap.map((mappedIndex, idx) => {
+          const numericIndex = Number(mappedIndex);
+          return Number.isFinite(numericIndex) && numericIndex >= 0 ? numericIndex : idx;
+        })
+      : list.map((_, idx) => idx);
+    const removableIndexSet = removableValueIndexes instanceof Set
+      ? removableValueIndexes
+      : new Set(
+          (Array.isArray(removableValueIndexes) ? removableValueIndexes : [])
+            .map((mappedIndex) => Number(mappedIndex))
+            .filter((mappedIndex) => Number.isFinite(mappedIndex) && mappedIndex >= 0)
+        );
+    const formatSignedPercent = (storedValue) => {
+      const num = Number(storedValue || 0);
+      const uiValue = Number.isFinite(num) ? -num : 0;
+      if (!uiValue) return "+0";
+      return `${uiValue > 0 ? "+" : ""}${uiValue}`;
+    };
+
+    return `
+      <div class="option-summary-list">
+        ${list.map((value, idx) => {
+          const tier = tierMap.get(idx) || {};
+          const discountRaw = tier.discount_percent != null ? tier.discount_percent : (tier.discount_value || 0);
+          const discount = Number(discountRaw) || 0;
+          const uiSigned = Number.isFinite(discount) ? -discount : 0;
+          const mappedValueIndex = normalizedValueIndexMap[idx];
+          const metaLabel = uiSigned < 0
+            ? `\u0421\u043a\u0438\u0434\u043a\u0430: ${formatSignedPercent(discount)}%`
+            : (uiSigned > 0 ? `\u041d\u0430\u0434\u0431\u0430\u0432\u043a\u0430: ${formatSignedPercent(discount)}%` : "\u0411\u0435\u0437 \u0438\u0437\u043c\u0435\u043d\u0435\u043d\u0438\u044f");
+          const isDefault = defaultIdx !== null && idx === defaultIdx;
+          const starIcon = isDefault
+            ? '<i class="fas fa-star" style="color: #ff7a00; margin-right: 8px;"></i>'
+            : '<i class="far fa-star" style="color: #888; margin-right: 8px;"></i>';
+          const starElement = isEditable && groupId != null
+            ? `<button type="button" class="variant-star-btn-inline" data-variant-star-group="${groupId}" data-variant-star-index="${mappedValueIndex}" style="background: none; border: none; padding: 0; cursor: pointer; display: inline-flex; align-items: center; margin-right: 8px;" title="${isDefault ? '\u0412\u0430\u0440\u0438\u0430\u043d\u0442 \u043f\u043e \u0443\u043c\u043e\u043b\u0447\u0430\u043d\u0438\u044e' : '\u0423\u0441\u0442\u0430\u043d\u043e\u0432\u0438\u0442\u044c \u043a\u0430\u043a \u0432\u0430\u0440\u0438\u0430\u043d\u0442 \u043f\u043e \u0443\u043c\u043e\u043b\u0447\u0430\u043d\u0438\u044e'}" aria-label="${isDefault ? '\u0412\u0430\u0440\u0438\u0430\u043d\u0442 \u043f\u043e \u0443\u043c\u043e\u043b\u0447\u0430\u043d\u0438\u044e' : '\u0423\u0441\u0442\u0430\u043d\u043e\u0432\u0438\u0442\u044c \u043a\u0430\u043a \u0432\u0430\u0440\u0438\u0430\u043d\u0442 \u043f\u043e \u0443\u043c\u043e\u043b\u0447\u0430\u043d\u0438\u044e'}">${starIcon}</button>`
+            : `<span style="margin-right: 8px;">${starIcon}</span>`;
+          const removeButton = isEditable && groupId != null && removableIndexSet.has(mappedValueIndex)
+            ? `<button class="option-row-remove option-summary-remove" type="button" data-product-variant-value-remove="${groupId}:${mappedValueIndex}" title="\u0423\u0431\u0440\u0430\u0442\u044c \u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0435 \u0443 \u044d\u0442\u043e\u0433\u043e \u0442\u043e\u0432\u0430\u0440\u0430" aria-label="\u0423\u0431\u0440\u0430\u0442\u044c \u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0435 \u0443 \u044d\u0442\u043e\u0433\u043e \u0442\u043e\u0432\u0430\u0440\u0430"><i class="fas fa-times"></i></button>`
+            : "";
+
+          return `
+            <div class="option-summary-row ${removeButton ? "is-removable" : ""}">
+              <div style="display: flex; align-items: center;">
+                ${starElement}
+                <div>
+                  <div class="option-summary-title">${escapeHtml(value)}</div>
+                  <div class="option-summary-meta">${metaLabel}</div>
+                </div>
+              </div>
+              <div class="option-summary-price-wrap">
+                <div class="option-summary-price">
+                  <span>${uiSigned !== 0 ? `${formatSignedPercent(discount)}%` : ""}</span>
+                </div>
+                ${removeButton}
               </div>
             </div>
           `;
@@ -5491,6 +5696,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
   function renderProductOptionsAccordion() {
     if (!productOptionsAccordion) return;
     const assignments = state.selectedProductOptionAssignments.filter((a) => a.is_active);
+    const productId = Number(state.selectedProductId || 0);
     if (!assignments.length) {
       productOptionsAccordion.innerHTML = `<div class="empty-hint">Опции не назначены...</div>`;
       return;
@@ -5498,7 +5704,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
 
     productOptionsAccordion.innerHTML = assignments.map((assignment) => {
       const groupId = Number(assignment.group_id);
-      const details = state.optionGroupCache.get(groupId);
+      const details = getCachedOptionGroupDetails(groupId, { productId });
       const typeLabel = getSelectionLabel(assignment.selection_type);
       const limitsLabel = formatOptionLimits(assignment.min_select, assignment.max_select);
       const itemsHtml = details ? renderOptionItemsSummary(details.items || []) : `<div class="muted">Раскройте, чтобы загрузить пункты.</div>`;
@@ -12810,6 +13016,9 @@ const isViewMode = state.comboPanel.mode === "view";
     let optionPickerSavedFooterState = null;
     let optionPickerSavedHandlers = null;
     const optionDetailsCache = new Map();
+    let productOptionItemsPickerState = null;
+    let productOptionItemsPickerSavedFooterState = null;
+    let productOptionItemsPickerSavedHandlers = null;
 
     let categoryPickerSelection = null;
     let categoryPickerSavedFooterState = null;
@@ -12818,7 +13027,706 @@ const isViewMode = state.comboPanel.mode === "view";
     let productVariantPickerSelection = null;
     let productVariantPickerSavedFooterState = null;
     let productVariantPickerSavedHandlers = null;
+    let productVariantValuesPickerState = null;
+    let productVariantValuesPickerSavedFooterState = null;
+    let productVariantValuesPickerSavedHandlers = null;
     const variantDetailsCache = new Map();
+
+    function getProductScopedOptionDetailsCacheKey(groupId) {
+      const safeGroupId = Number(groupId) || 0;
+      const safeProductId = Number(product?.id || 0);
+      return `${safeGroupId}:${safeProductId}`;
+    }
+
+    function getCachedProductScopedOptionDetails(groupId) {
+      const cacheKey = getProductScopedOptionDetailsCacheKey(groupId);
+      return optionDetailsCache.get(cacheKey) || state.optionGroupCache.get(cacheKey) || null;
+    }
+
+    function setCachedProductScopedOptionDetails(groupId, details) {
+      const cacheKey = getProductScopedOptionDetailsCacheKey(groupId);
+      optionDetailsCache.set(cacheKey, details);
+      state.optionGroupCache.set(cacheKey, details);
+    }
+
+    function clearCachedProductScopedOptionDetails(groupId) {
+      const cacheKey = getProductScopedOptionDetailsCacheKey(groupId);
+      optionDetailsCache.delete(cacheKey);
+      state.optionGroupCache.delete(cacheKey);
+    }
+
+    function getProductOptionPickerVisibleItems() {
+      if (!productOptionItemsPickerState) return [];
+      const query = String(productOptionItemsPickerState.query || "").trim().toLowerCase();
+      const categoryId = Number(productOptionItemsPickerState.categoryId || 0);
+      return (Array.isArray(productOptionItemsPickerState.items) ? productOptionItemsPickerState.items : [])
+        .filter((item) => {
+          if (categoryId > 0) {
+            const categoryIds = Array.isArray(item.category_ids) ? item.category_ids.map((id) => Number(id)) : [];
+            if (!categoryIds.includes(categoryId)) return false;
+          }
+          if (!query) return true;
+          return String(item.product_name || item.name || "").toLowerCase().includes(query);
+        });
+    }
+
+    function updateProductOptionPickerSelectAllState(overlay) {
+      if (!overlay || !productOptionItemsPickerState) return;
+      const input = overlay.querySelector("[data-product-option-picker-select-all]");
+      const label = overlay.querySelector("[data-product-option-picker-select-all-label]");
+      if (!input || !label) return;
+      const items = getProductOptionPickerVisibleItems();
+      const ids = items
+        .map((item) => Number(item.id))
+        .filter((id) => Number.isFinite(id) && id > 0);
+      const selectedCount = ids.filter((id) => productOptionItemsPickerState.selection.has(id)).length;
+      const allSelected = ids.length > 0 && selectedCount === ids.length;
+      const noneSelected = selectedCount === 0;
+      input.checked = allSelected;
+      input.indeterminate = !allSelected && !noneSelected;
+      input.disabled = ids.length === 0;
+      const text = allSelected ? "\u0421\u0431\u0440\u043e\u0441\u0438\u0442\u044c \u0432\u0441\u0435" : "\u0412\u044b\u0434\u0435\u043b\u0438\u0442\u044c \u0432\u0441\u0435";
+      label.textContent = text;
+      input.setAttribute("aria-label", text);
+    }
+
+    function renderProductOptionPickerTabs(overlay) {
+      if (!overlay || !productOptionItemsPickerState) return;
+      const tabsEl = overlay.querySelector("[data-product-option-picker-tabs]");
+      if (!tabsEl) return;
+      const itemCategoryIds = new Set();
+      (Array.isArray(productOptionItemsPickerState.items) ? productOptionItemsPickerState.items : []).forEach((item) => {
+        (Array.isArray(item.category_ids) ? item.category_ids : []).forEach((categoryId) => {
+          const id = Number(categoryId);
+          if (Number.isFinite(id) && id > 0) itemCategoryIds.add(id);
+        });
+      });
+      const tabs = [{ id: 0, title: "\u0412\u0441\u0435 \u0442\u043e\u0432\u0430\u0440\u044b" }].concat(
+        state.catalogCategories
+          .filter((category) => itemCategoryIds.has(Number(category.id)))
+          .filter((category) => {
+            const title = String(category?.title || "").trim();
+            const code = String(category?.code || "").trim().toLowerCase();
+            return code !== "all" && title !== "\u0412\u0441\u0435 \u0442\u043e\u0432\u0430\u0440\u044b";
+          })
+          .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.id - b.id)
+      );
+      tabsEl.innerHTML = tabs.map((tab) => {
+        const active = Number(productOptionItemsPickerState.categoryId || 0) === Number(tab.id || 0);
+        return `
+          <button class="option-picker-tab chip ${active ? "is-active" : ""}" type="button" data-product-option-picker-cat="${tab.id || 0}">
+            ${escapeHtml(tab.title || "")}
+          </button>
+        `;
+      }).join("");
+      if (typeof bindHorizontalScroll === "function") bindHorizontalScroll(tabsEl);
+      tabsEl.querySelectorAll("[data-product-option-picker-cat]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const nextCategoryId = Number(btn.dataset.productOptionPickerCat || 0);
+          productOptionItemsPickerState.categoryId = Number.isFinite(nextCategoryId) ? nextCategoryId : 0;
+          renderProductOptionPickerTabs(overlay);
+          renderProductOptionPickerList(overlay);
+        });
+      });
+    }
+
+    function renderProductOptionPickerList(overlay) {
+      if (!overlay || !productOptionItemsPickerState) return;
+      const listEl = overlay.querySelector("[data-product-option-picker-list]");
+      if (!listEl) return;
+      const items = getProductOptionPickerVisibleItems();
+      if (!items.length) {
+        listEl.innerHTML = '<div class="empty-hint">\u041d\u0435\u0442 \u043f\u0443\u043d\u043a\u0442\u043e\u0432 \u0434\u043b\u044f \u043e\u0442\u043e\u0431\u0440\u0430\u0436\u0435\u043d\u0438\u044f</div>';
+        updateProductOptionPickerSelectAllState(overlay);
+        return;
+      }
+      listEl.innerHTML = items.map((item) => {
+        const itemId = Number(item.id);
+        const checked = productOptionItemsPickerState.selection.has(itemId);
+        const photoList = Array.isArray(item.product_photos_json) ? item.product_photos_json : [];
+        const productPhoto = photoList.length ? photoList[0] : null;
+        return `
+          <div class="option-picker-row ${checked ? "is-selected" : ""}" data-product-option-picker-item="${itemId}">
+            ${productPhoto ? `<div class="option-picker-photo"><img src="${escapeHtml(productPhoto)}" alt="" /></div>` : '<div class="option-picker-photo"></div>'}
+            <div class="option-picker-meta">
+              <div class="options-row-title">${escapeHtml(item.product_name || item.name || "")}</div>
+              <div class="options-row-meta">${item.product_price != null ? formatMoney(item.product_price) : "вЂ”"}</div>
+            </div>
+            <input class="option-picker-checkbox" type="checkbox" data-product-option-picker-checkbox="${itemId}" ${checked ? "checked" : ""} />
+          </div>
+        `;
+      }).join("");
+      listEl.querySelectorAll("[data-product-option-picker-item]").forEach((row) => {
+        row.addEventListener("click", () => {
+          const itemId = Number(row.dataset.productOptionPickerItem);
+          if (!Number.isFinite(itemId) || itemId <= 0) return;
+          if (productOptionItemsPickerState.selection.has(itemId)) {
+            productOptionItemsPickerState.selection.delete(itemId);
+          } else {
+            productOptionItemsPickerState.selection.add(itemId);
+          }
+          renderProductOptionPickerList(overlay);
+        });
+      });
+      updateProductOptionPickerSelectAllState(overlay);
+    }
+
+    function restoreProductOptionItemsPickerFooter() {
+      const footer = $("#productInfoFooter");
+      const footerView = $("#productFooterView");
+      const footerEditMode = $("#productFooterEditMode");
+      const cancelBtn = $("#productFooterCancelBtn");
+      const saveBtn = $("#productFooterSaveBtn");
+      const deleteBtn = $("#productFooterDeleteEditBtn");
+      const moreBtn = $("#productFooterMoreEditBtn");
+      if (!footer || !footerView || !footerEditMode || !cancelBtn || !saveBtn || !productOptionItemsPickerSavedFooterState) return;
+
+      if (productOptionItemsPickerSavedFooterState.footerHidden) footer.classList.add("hidden");
+      else footer.classList.remove("hidden");
+      if (productOptionItemsPickerSavedFooterState.viewHidden) footerView.classList.add("hidden");
+      else footerView.classList.remove("hidden");
+      if (productOptionItemsPickerSavedFooterState.editHidden) footerEditMode.classList.add("hidden");
+      else footerEditMode.classList.remove("hidden");
+      if (deleteBtn) {
+        if (productOptionItemsPickerSavedFooterState.deleteBtnHidden) deleteBtn.classList.add("hidden");
+        else deleteBtn.classList.remove("hidden");
+      }
+      if (moreBtn) {
+        if (productOptionItemsPickerSavedFooterState.moreBtnHidden) moreBtn.classList.add("hidden");
+        else moreBtn.classList.remove("hidden");
+      }
+      if (productOptionItemsPickerSavedFooterState.cancelBtnIsFullwidth) cancelBtn.classList.add("is-fullwidth");
+      else cancelBtn.classList.remove("is-fullwidth");
+      if (productOptionItemsPickerSavedFooterState.cancelBtnIsConfirm) cancelBtn.classList.add("is-confirm");
+      else cancelBtn.classList.remove("is-confirm");
+      if (cancelBtn.dataset.pickerOriginalHtml) {
+        cancelBtn.innerHTML = cancelBtn.dataset.pickerOriginalHtml;
+        delete cancelBtn.dataset.pickerOriginalHtml;
+      }
+      if (productOptionItemsPickerSavedHandlers) {
+        cancelBtn.onclick = productOptionItemsPickerSavedHandlers.cancel;
+        saveBtn.onclick = productOptionItemsPickerSavedHandlers.save;
+      }
+      productOptionItemsPickerSavedFooterState = null;
+      productOptionItemsPickerSavedHandlers = null;
+    }
+
+    function closeProductOptionItemsPicker() {
+      const productInfoPanel = $("#productInfoPanel");
+      if (productInfoPanel) {
+        const overlay = productInfoPanel.querySelector(".picker-overlay[data-product-option-items-picker]");
+        if (overlay) overlay.remove();
+      }
+      const cancelBtn = $("#productFooterCancelBtn");
+      const saveBtn = $("#productFooterSaveBtn");
+      if (cancelBtn) delete cancelBtn.dataset.pickerType;
+      if (saveBtn) delete saveBtn.dataset.pickerType;
+      delete window._closeProductOptionItemsPickerFn;
+      delete window._saveProductOptionItemsPickerFn;
+      restoreProductOptionItemsPickerFooter();
+      productOptionItemsPickerState = null;
+    }
+
+    async function applyProductOptionItemsPickerSelection() {
+      if (!productOptionItemsPickerState || !product || !product.id) return;
+      const excludedItemIds = (Array.isArray(productOptionItemsPickerState.items) ? productOptionItemsPickerState.items : [])
+        .map((item) => Number(item.id))
+        .filter((itemId) => Number.isFinite(itemId) && itemId > 0 && !productOptionItemsPickerState.selection.has(itemId));
+      await apiSetProductOptionItemExclusions(product.id, productOptionItemsPickerState.groupId, excludedItemIds);
+      const details = await ensureOptionGroupDetails(productOptionItemsPickerState.groupId, { productId: product.id });
+      if (details) {
+        const nextDetails = {
+          ...details,
+          items: (Array.isArray(details.items) ? details.items : []).map((item) => ({
+            ...item,
+            is_excluded_for_product: excludedItemIds.includes(Number(item.id)),
+          })),
+          product_scope: {
+            product_id: Number(product.id),
+            excluded_item_ids: excludedItemIds,
+            visible_item_ids: (Array.isArray(details.items) ? details.items : [])
+              .map((item) => Number(item.id))
+              .filter((itemId) => Number.isFinite(itemId) && itemId > 0 && !excludedItemIds.includes(itemId)),
+          },
+        };
+        setCachedProductScopedOptionDetails(productOptionItemsPickerState.groupId, nextDetails);
+      }
+      closeProductOptionItemsPicker();
+      await renderOptionAccordion();
+    }
+
+    async function openProductOptionItemsPicker(groupId) {
+      const numericGroupId = Number(groupId);
+      if (!Number.isFinite(numericGroupId) || numericGroupId <= 0 || !isEdit || !product || !product.id) return;
+      if (!state.catalogCategories.length) {
+        await loadCatalogCategories();
+      }
+      const details = await ensureOptionGroupDetails(numericGroupId, { productId: product.id });
+      if (!details) return;
+      setCachedProductScopedOptionDetails(numericGroupId, details);
+      const items = Array.isArray(details.items) ? details.items : [];
+      const selection = new Set(
+        items
+          .filter((item) => item?.is_excluded_for_product !== true)
+          .map((item) => Number(item.id))
+          .filter((itemId) => Number.isFinite(itemId) && itemId > 0)
+      );
+      productOptionItemsPickerState = {
+        groupId: numericGroupId,
+        categoryId: 0,
+        query: "",
+        items,
+        selection,
+      };
+
+      const pickerOverlay = document.createElement("div");
+      pickerOverlay.className = "picker-overlay";
+      pickerOverlay.dataset.productOptionItemsPicker = "1";
+      const pickerContent = document.createElement("div");
+      pickerContent.className = "picker-overlay-content";
+      pickerContent.innerHTML = `
+        <div class="picker-overlay-header">
+          <div class="panel-title">\u041f\u0443\u043d\u043a\u0442\u044b</div>
+        </div>
+        <div class="picker-overlay-body">
+          <div class="info-card">
+            <div class="option-picker-tabs" data-product-option-picker-tabs></div>
+            <div class="option-picker-search" style="margin-bottom: 16px;">
+              <input class="control" type="search" data-product-option-picker-search placeholder="\u041f\u043e\u0438\u0441\u043a \u043f\u043e \u043d\u0430\u0437\u0432\u0430\u043d\u0438\u044e" />
+            </div>
+            <label class="option-picker-select-all">
+              <input type="checkbox" data-product-option-picker-select-all />
+              <span data-product-option-picker-select-all-label>\u0412\u044b\u0434\u0435\u043b\u0438\u0442\u044c \u0432\u0441\u0435</span>
+            </label>
+            <div class="option-picker-list" data-product-option-picker-list></div>
+          </div>
+        </div>
+      `;
+      pickerOverlay.appendChild(pickerContent);
+
+      const searchInput = pickerOverlay.querySelector("[data-product-option-picker-search]");
+      const selectAllInput = pickerOverlay.querySelector("[data-product-option-picker-select-all]");
+      if (searchInput) {
+        searchInput.addEventListener("input", () => {
+          productOptionItemsPickerState.query = searchInput.value || "";
+          renderProductOptionPickerList(pickerOverlay);
+        });
+      }
+      if (selectAllInput) {
+        selectAllInput.addEventListener("change", () => {
+          const visibleItems = getProductOptionPickerVisibleItems();
+          const ids = visibleItems
+            .map((item) => Number(item.id))
+            .filter((itemId) => Number.isFinite(itemId) && itemId > 0);
+          const selectedCount = ids.filter((itemId) => productOptionItemsPickerState.selection.has(itemId)).length;
+          const allSelected = ids.length > 0 && selectedCount === ids.length;
+          if (allSelected) ids.forEach((itemId) => productOptionItemsPickerState.selection.delete(itemId));
+          else ids.forEach((itemId) => productOptionItemsPickerState.selection.add(itemId));
+          renderProductOptionPickerList(pickerOverlay);
+        });
+      }
+
+      renderProductOptionPickerTabs(pickerOverlay);
+      renderProductOptionPickerList(pickerOverlay);
+
+      const productInfoPanel = $("#productInfoPanel");
+      if (productInfoPanel) {
+        const existingPicker = productInfoPanel.querySelector(".picker-overlay");
+        if (existingPicker) existingPicker.remove();
+        productInfoPanel.appendChild(pickerOverlay);
+      }
+
+      const footer = $("#productInfoFooter");
+      const footerView = $("#productFooterView");
+      const footerEditMode = $("#productFooterEditMode");
+      const cancelBtn = $("#productFooterCancelBtn");
+      const saveBtn = $("#productFooterSaveBtn");
+      const deleteBtn = $("#productFooterDeleteEditBtn");
+      const moreBtn = $("#productFooterMoreEditBtn");
+      if (footer && footerView && footerEditMode && cancelBtn && saveBtn) {
+        if (!productOptionItemsPickerSavedFooterState) {
+          productOptionItemsPickerSavedFooterState = {
+            footerHidden: footer.classList.contains("hidden"),
+            viewHidden: footerView.classList.contains("hidden"),
+            editHidden: footerEditMode.classList.contains("hidden"),
+            deleteBtnHidden: deleteBtn ? deleteBtn.classList.contains("hidden") : false,
+            moreBtnHidden: moreBtn ? moreBtn.classList.contains("hidden") : false,
+            cancelBtnIsConfirm: cancelBtn.classList.contains("is-confirm"),
+            cancelBtnIsFullwidth: cancelBtn.classList.contains("is-fullwidth"),
+          };
+          productOptionItemsPickerSavedHandlers = {
+            cancel: cancelBtn.onclick,
+            save: saveBtn.onclick,
+          };
+        }
+        footer.classList.remove("hidden");
+        footerView.classList.add("hidden");
+        footerEditMode.classList.remove("hidden");
+        if (deleteBtn) deleteBtn.classList.add("hidden");
+        if (moreBtn) moreBtn.classList.add("hidden");
+        cancelBtn.classList.remove("is-confirm");
+        cancelBtn.classList.add("is-fullwidth");
+        if (!cancelBtn.dataset.pickerOriginalHtml) {
+          cancelBtn.dataset.pickerOriginalHtml = cancelBtn.innerHTML;
+        }
+        cancelBtn.textContent = "\u041e\u0442\u043c\u0435\u043d\u0438\u0442\u044c";
+        cancelBtn.title = "\u041e\u0442\u043c\u0435\u043d\u0438\u0442\u044c";
+        cancelBtn.setAttribute("aria-label", "\u041e\u0442\u043c\u0435\u043d\u0438\u0442\u044c");
+        cancelBtn.dataset.pickerType = "product-option-items";
+        saveBtn.dataset.pickerType = "product-option-items";
+        window._closeProductOptionItemsPickerFn = () => {
+          closeProductOptionItemsPicker();
+        };
+        window._saveProductOptionItemsPickerFn = async () => {
+          await applyProductOptionItemsPickerSelection();
+        };
+      }
+    }
+
+    function getCachedProductScopedVariantDetails(groupId) {
+      return variantDetailsCache.get(Number(groupId)) || null;
+    }
+
+    function setCachedProductScopedVariantDetails(groupId, details) {
+      variantDetailsCache.set(Number(groupId), details);
+    }
+
+    function clearCachedProductScopedVariantDetails(groupId) {
+      variantDetailsCache.delete(Number(groupId));
+    }
+
+    function syncDraftProductVariantDefault(groupId, details) {
+      const numericGroupId = Number(groupId);
+      const resolvedDefaultValueIndex = Number(details?.product_scope?.resolved_default_value_index);
+      if (!Number.isFinite(numericGroupId) || numericGroupId <= 0) return;
+      if (!Number.isFinite(resolvedDefaultValueIndex) || resolvedDefaultValueIndex < 0) return;
+      if (!Array.isArray(draft.productVariants)) draft.productVariants = [];
+      const existing = draft.productVariants.find((variant) => Number(variant.id) === numericGroupId);
+      if (existing) existing.default_value_index = resolvedDefaultValueIndex;
+      else draft.productVariants.push({ id: numericGroupId, default_value_index: resolvedDefaultValueIndex });
+    }
+
+    async function ensureProductScopedVariantGroupDetails(groupId) {
+      const numericGroupId = Number(groupId);
+      if (!Number.isFinite(numericGroupId) || numericGroupId <= 0) return null;
+      const cached = getCachedProductScopedVariantDetails(numericGroupId);
+      if (cached) return cached;
+      const res = await apiGetVariantGroup(numericGroupId, { productId: product?.id || null });
+      const details = res.data || null;
+      if (details) {
+        setCachedProductScopedVariantDetails(numericGroupId, details);
+        syncDraftProductVariantDefault(numericGroupId, details);
+      }
+      return details;
+    }
+
+    function getProductScopedVariantSummaryPayload(groupId, group, details) {
+      const scoped = details?.product_scope;
+      if (scoped && Array.isArray(scoped.visible_values)) {
+        const visibleIndexes = Array.isArray(scoped.visible_value_indexes) ? scoped.visible_value_indexes : [];
+        const resolvedVisibleIndex = scoped.resolved_default_visible_index != null
+          ? Number(scoped.resolved_default_visible_index)
+          : null;
+        return {
+          values: scoped.visible_values,
+          tiers: Array.isArray(scoped.visible_tiers) ? scoped.visible_tiers : [],
+          defaultIdx: Number.isFinite(resolvedVisibleIndex) && resolvedVisibleIndex >= 0 ? resolvedVisibleIndex : null,
+          valueIndexMap: visibleIndexes,
+          removableValueIndexes: visibleIndexes,
+        };
+      }
+
+      const variantData = draft.productVariants?.find((variant) => Number(variant.id) === Number(groupId));
+      return {
+        values: details?.group?.values || group?.values || [],
+        tiers: details?.tiers || details?.discount_tiers || [],
+        defaultIdx: variantData?.default_value_index != null
+          ? Number(variantData.default_value_index)
+          : (details?.group?.default_value_index != null ? Number(details.group.default_value_index) : null),
+        valueIndexMap: null,
+        removableValueIndexes: null,
+      };
+    }
+
+    function getProductVariantValuePickerVisibleItems() {
+      if (!productVariantValuesPickerState) return [];
+      const query = String(productVariantValuesPickerState.query || "").trim().toLowerCase();
+      return (Array.isArray(productVariantValuesPickerState.valuesMeta) ? productVariantValuesPickerState.valuesMeta : [])
+        .filter((item) => !query || String(item?.value || "").toLowerCase().includes(query));
+    }
+
+    function updateProductVariantValuePickerSelectAllState(overlay) {
+      if (!overlay || !productVariantValuesPickerState) return;
+      const input = overlay.querySelector("[data-product-variant-picker-select-all]");
+      const label = overlay.querySelector("[data-product-variant-picker-select-all-label]");
+      if (!input || !label) return;
+      const items = getProductVariantValuePickerVisibleItems();
+      const ids = items
+        .map((item) => Number(item.index))
+        .filter((valueIndex) => Number.isFinite(valueIndex) && valueIndex >= 0);
+      const selectedCount = ids.filter((valueIndex) => productVariantValuesPickerState.selection.has(valueIndex)).length;
+      const allSelected = ids.length > 0 && selectedCount === ids.length;
+      const noneSelected = selectedCount === 0;
+      input.checked = allSelected;
+      input.indeterminate = !allSelected && !noneSelected;
+      input.disabled = ids.length === 0;
+      const text = allSelected ? "\u0421\u0431\u0440\u043e\u0441\u0438\u0442\u044c \u0432\u0441\u0435" : "\u0412\u044b\u0434\u0435\u043b\u0438\u0442\u044c \u0432\u0441\u0435";
+      label.textContent = text;
+      input.setAttribute("aria-label", text);
+    }
+
+    function renderProductVariantValuePickerList(overlay) {
+      if (!overlay || !productVariantValuesPickerState) return;
+      const listEl = overlay.querySelector("[data-product-variant-picker-list]");
+      if (!listEl) return;
+      const items = getProductVariantValuePickerVisibleItems();
+      if (!items.length) {
+        listEl.innerHTML = '<div class="empty-hint">\u041d\u0435\u0442 \u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0439 \u0434\u043b\u044f \u043e\u0442\u043e\u0431\u0440\u0430\u0436\u0435\u043d\u0438\u044f</div>';
+        updateProductVariantValuePickerSelectAllState(overlay);
+        return;
+      }
+      const formatMetaLabel = (discountPercent) => {
+        const numericDiscount = Number(discountPercent || 0);
+        const uiValue = Number.isFinite(numericDiscount) ? -numericDiscount : 0;
+        if (uiValue < 0) return `\u0421\u043a\u0438\u0434\u043a\u0430: ${uiValue}%`;
+        if (uiValue > 0) return `\u041d\u0430\u0434\u0431\u0430\u0432\u043a\u0430: +${uiValue}%`;
+        return "\u0411\u0435\u0437 \u0438\u0437\u043c\u0435\u043d\u0435\u043d\u0438\u044f";
+      };
+      listEl.innerHTML = items.map((item) => {
+        const valueIndex = Number(item.index);
+        const checked = productVariantValuesPickerState.selection.has(valueIndex);
+        return `
+          <div class="option-picker-row ${checked ? "is-selected" : ""}" data-product-variant-picker-item="${valueIndex}">
+            <div class="option-picker-meta">
+              <div class="options-row-title">${escapeHtml(item.value || "")}</div>
+              <div class="options-row-meta">${escapeHtml(formatMetaLabel(item.discount_percent))}</div>
+            </div>
+            <input class="option-picker-checkbox" type="checkbox" data-product-variant-picker-checkbox="${valueIndex}" ${checked ? "checked" : ""} />
+          </div>
+        `;
+      }).join("");
+      listEl.querySelectorAll("[data-product-variant-picker-item]").forEach((row) => {
+        row.addEventListener("click", () => {
+          const valueIndex = Number(row.dataset.productVariantPickerItem);
+          if (!Number.isFinite(valueIndex) || valueIndex < 0) return;
+          if (productVariantValuesPickerState.selection.has(valueIndex)) {
+            productVariantValuesPickerState.selection.delete(valueIndex);
+          } else {
+            productVariantValuesPickerState.selection.add(valueIndex);
+          }
+          renderProductVariantValuePickerList(overlay);
+        });
+      });
+      updateProductVariantValuePickerSelectAllState(overlay);
+    }
+
+    function restoreProductVariantValuesPickerFooter() {
+      const footer = $("#productInfoFooter");
+      const footerView = $("#productFooterView");
+      const footerEditMode = $("#productFooterEditMode");
+      const cancelBtn = $("#productFooterCancelBtn");
+      const saveBtn = $("#productFooterSaveBtn");
+      const deleteBtn = $("#productFooterDeleteEditBtn");
+      const moreBtn = $("#productFooterMoreEditBtn");
+      if (!footer || !footerView || !footerEditMode || !cancelBtn || !saveBtn || !productVariantValuesPickerSavedFooterState) return;
+
+      if (productVariantValuesPickerSavedFooterState.footerHidden) footer.classList.add("hidden");
+      else footer.classList.remove("hidden");
+      if (productVariantValuesPickerSavedFooterState.viewHidden) footerView.classList.add("hidden");
+      else footerView.classList.remove("hidden");
+      if (productVariantValuesPickerSavedFooterState.editHidden) footerEditMode.classList.add("hidden");
+      else footerEditMode.classList.remove("hidden");
+      if (deleteBtn) {
+        if (productVariantValuesPickerSavedFooterState.deleteBtnHidden) deleteBtn.classList.add("hidden");
+        else deleteBtn.classList.remove("hidden");
+      }
+      if (moreBtn) {
+        if (productVariantValuesPickerSavedFooterState.moreBtnHidden) moreBtn.classList.add("hidden");
+        else moreBtn.classList.remove("hidden");
+      }
+      if (productVariantValuesPickerSavedFooterState.cancelBtnIsFullwidth) cancelBtn.classList.add("is-fullwidth");
+      else cancelBtn.classList.remove("is-fullwidth");
+      if (productVariantValuesPickerSavedFooterState.cancelBtnIsConfirm) cancelBtn.classList.add("is-confirm");
+      else cancelBtn.classList.remove("is-confirm");
+      if (cancelBtn.dataset.pickerOriginalHtml) {
+        cancelBtn.innerHTML = cancelBtn.dataset.pickerOriginalHtml;
+        delete cancelBtn.dataset.pickerOriginalHtml;
+      }
+      if (productVariantValuesPickerSavedHandlers) {
+        cancelBtn.onclick = productVariantValuesPickerSavedHandlers.cancel;
+        saveBtn.onclick = productVariantValuesPickerSavedHandlers.save;
+      }
+      productVariantValuesPickerSavedFooterState = null;
+      productVariantValuesPickerSavedHandlers = null;
+    }
+
+    function closeProductVariantValuesPicker() {
+      const productInfoPanel = $("#productInfoPanel");
+      if (productInfoPanel) {
+        const overlay = productInfoPanel.querySelector(".picker-overlay[data-product-variant-values-picker]");
+        if (overlay) overlay.remove();
+      }
+      const cancelBtn = $("#productFooterCancelBtn");
+      const saveBtn = $("#productFooterSaveBtn");
+      if (cancelBtn) delete cancelBtn.dataset.pickerType;
+      if (saveBtn) delete saveBtn.dataset.pickerType;
+      delete window._closeProductVariantValuesPickerFn;
+      delete window._saveProductVariantValuesPickerFn;
+      restoreProductVariantValuesPickerFooter();
+      productVariantValuesPickerState = null;
+    }
+
+    async function applyProductVariantValueSelection(groupId, selection) {
+      const numericGroupId = Number(groupId);
+      if (!Number.isFinite(numericGroupId) || numericGroupId <= 0 || !product || !product.id) return;
+      const details = await ensureProductScopedVariantGroupDetails(numericGroupId);
+      const allIndexes = Array.isArray(details?.values_meta)
+        ? details.values_meta
+            .map((item) => Number(item.index))
+            .filter((valueIndex) => Number.isFinite(valueIndex) && valueIndex >= 0)
+        : [];
+      const excludedValueIndexes = allIndexes.filter((valueIndex) => !selection.has(valueIndex));
+      await apiSetProductVariantValueExclusions(product.id, numericGroupId, excludedValueIndexes);
+      clearCachedProductScopedVariantDetails(numericGroupId);
+      const refreshed = await ensureProductScopedVariantGroupDetails(numericGroupId);
+      if (refreshed) syncDraftProductVariantDefault(numericGroupId, refreshed);
+    }
+
+    async function applyProductVariantValuesPickerSelection() {
+      if (!productVariantValuesPickerState) return;
+      try {
+        await applyProductVariantValueSelection(productVariantValuesPickerState.groupId, productVariantValuesPickerState.selection);
+        closeProductVariantValuesPicker();
+        await renderVariantAccordion();
+      } catch (error) {
+        console.error("Failed to save product variant value selection", error);
+        const message = error?.message === "AT_LEAST_ONE_VALUE_REQUIRED"
+          ? "\u041d\u0443\u0436\u043d\u043e \u043e\u0441\u0442\u0430\u0432\u0438\u0442\u044c \u0445\u043e\u0442\u044f \u0431\u044b \u043e\u0434\u043d\u043e \u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0435"
+          : "\u041e\u0448\u0438\u0431\u043a\u0430 \u043f\u0440\u0438 \u0441\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u0438\u0438 \u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0439 \u0432\u0430\u0440\u0438\u0430\u043d\u0442\u0430";
+        if (typeof showToast === "function") showToast(message);
+        else alert(message);
+      }
+    }
+
+    async function openProductVariantValuesPicker(groupId) {
+      const numericGroupId = Number(groupId);
+      if (!Number.isFinite(numericGroupId) || numericGroupId <= 0 || !isEdit || !product || !product.id) return;
+      const details = await ensureProductScopedVariantGroupDetails(numericGroupId);
+      if (!details) return;
+      const valuesMeta = Array.isArray(details.values_meta) ? details.values_meta : [];
+      productVariantValuesPickerState = {
+        groupId: numericGroupId,
+        query: "",
+        valuesMeta,
+        selection: new Set(
+          valuesMeta
+            .filter((item) => item?.is_excluded_for_product !== true)
+            .map((item) => Number(item.index))
+            .filter((valueIndex) => Number.isFinite(valueIndex) && valueIndex >= 0)
+        ),
+      };
+
+      const pickerOverlay = document.createElement("div");
+      pickerOverlay.className = "picker-overlay";
+      pickerOverlay.dataset.productVariantValuesPicker = "1";
+      const pickerContent = document.createElement("div");
+      pickerContent.className = "picker-overlay-content";
+      pickerContent.innerHTML = `
+        <div class="picker-overlay-header">
+          <div class="panel-title">\u0417\u043d\u0430\u0447\u0435\u043d\u0438\u044f</div>
+        </div>
+        <div class="picker-overlay-body">
+          <div class="info-card">
+            <div class="option-picker-search" style="margin-bottom: 16px;">
+              <input class="control" type="search" data-product-variant-picker-search placeholder="\u041f\u043e\u0438\u0441\u043a \u043f\u043e \u043d\u0430\u0437\u0432\u0430\u043d\u0438\u044e" />
+            </div>
+            <label class="option-picker-select-all">
+              <input type="checkbox" data-product-variant-picker-select-all />
+              <span data-product-variant-picker-select-all-label>\u0412\u044b\u0434\u0435\u043b\u0438\u0442\u044c \u0432\u0441\u0435</span>
+            </label>
+            <div class="option-picker-list" data-product-variant-picker-list></div>
+          </div>
+        </div>
+      `;
+      pickerOverlay.appendChild(pickerContent);
+
+      const searchInput = pickerOverlay.querySelector("[data-product-variant-picker-search]");
+      const selectAllInput = pickerOverlay.querySelector("[data-product-variant-picker-select-all]");
+      if (searchInput) {
+        searchInput.addEventListener("input", () => {
+          productVariantValuesPickerState.query = searchInput.value || "";
+          renderProductVariantValuePickerList(pickerOverlay);
+        });
+      }
+      if (selectAllInput) {
+        selectAllInput.addEventListener("change", () => {
+          const visibleItems = getProductVariantValuePickerVisibleItems();
+          const ids = visibleItems
+            .map((item) => Number(item.index))
+            .filter((valueIndex) => Number.isFinite(valueIndex) && valueIndex >= 0);
+          const selectedCount = ids.filter((valueIndex) => productVariantValuesPickerState.selection.has(valueIndex)).length;
+          const allSelected = ids.length > 0 && selectedCount === ids.length;
+          if (allSelected) ids.forEach((valueIndex) => productVariantValuesPickerState.selection.delete(valueIndex));
+          else ids.forEach((valueIndex) => productVariantValuesPickerState.selection.add(valueIndex));
+          renderProductVariantValuePickerList(pickerOverlay);
+        });
+      }
+
+      renderProductVariantValuePickerList(pickerOverlay);
+
+      const productInfoPanel = $("#productInfoPanel");
+      if (productInfoPanel) {
+        const existingPicker = productInfoPanel.querySelector(".picker-overlay");
+        if (existingPicker) existingPicker.remove();
+        productInfoPanel.appendChild(pickerOverlay);
+      }
+
+      const footer = $("#productInfoFooter");
+      const footerView = $("#productFooterView");
+      const footerEditMode = $("#productFooterEditMode");
+      const cancelBtn = $("#productFooterCancelBtn");
+      const saveBtn = $("#productFooterSaveBtn");
+      const deleteBtn = $("#productFooterDeleteEditBtn");
+      const moreBtn = $("#productFooterMoreEditBtn");
+      if (footer && footerView && footerEditMode && cancelBtn && saveBtn) {
+        if (!productVariantValuesPickerSavedFooterState) {
+          productVariantValuesPickerSavedFooterState = {
+            footerHidden: footer.classList.contains("hidden"),
+            viewHidden: footerView.classList.contains("hidden"),
+            editHidden: footerEditMode.classList.contains("hidden"),
+            deleteBtnHidden: deleteBtn ? deleteBtn.classList.contains("hidden") : false,
+            moreBtnHidden: moreBtn ? moreBtn.classList.contains("hidden") : false,
+            cancelBtnIsConfirm: cancelBtn.classList.contains("is-confirm"),
+            cancelBtnIsFullwidth: cancelBtn.classList.contains("is-fullwidth"),
+          };
+          productVariantValuesPickerSavedHandlers = {
+            cancel: cancelBtn.onclick,
+            save: saveBtn.onclick,
+          };
+        }
+        footer.classList.remove("hidden");
+        footerView.classList.add("hidden");
+        footerEditMode.classList.remove("hidden");
+        if (deleteBtn) deleteBtn.classList.add("hidden");
+        if (moreBtn) moreBtn.classList.add("hidden");
+        cancelBtn.classList.remove("is-confirm");
+        cancelBtn.classList.add("is-fullwidth");
+        if (!cancelBtn.dataset.pickerOriginalHtml) {
+          cancelBtn.dataset.pickerOriginalHtml = cancelBtn.innerHTML;
+        }
+        cancelBtn.textContent = "\u041e\u0442\u043c\u0435\u043d\u0438\u0442\u044c";
+        cancelBtn.title = "\u041e\u0442\u043c\u0435\u043d\u0438\u0442\u044c";
+        cancelBtn.setAttribute("aria-label", "\u041e\u0442\u043c\u0435\u043d\u0438\u0442\u044c");
+        cancelBtn.dataset.pickerType = "product-variant-values";
+        saveBtn.dataset.pickerType = "product-variant-values";
+        window._closeProductVariantValuesPickerFn = () => {
+          closeProductVariantValuesPicker();
+        };
+        window._saveProductVariantValuesPickerFn = async () => {
+          await applyProductVariantValuesPickerSelection();
+        };
+      }
+    }
 
     async function refreshProductVariants(productId) {
       if (!productId) return;
@@ -12890,14 +13798,16 @@ const isViewMode = state.comboPanel.mode === "view";
             await refreshProductVariants(product.id);
             
             // Re-render the accordion content
-            const details = variantDetailsCache.get(groupId);
+            const details = getCachedProductScopedVariantDetails(groupId) || await ensureProductScopedVariantGroupDetails(groupId);
             if (details) {
-              const variantData = draft.productVariants?.find(v => Number(v.id) === groupId);
-              const defaultIdx = variantData?.default_value_index != null ? Number(variantData.default_value_index) : 
-                                (details?.group?.default_value_index != null ? Number(details.group.default_value_index) : null);
-              container.innerHTML = renderVariantValuesSummary(details?.group?.values || [], details?.tiers || [], defaultIdx, { isEditable: isEdit, groupId: groupId });
-              
-              // Re-bind handlers
+              const group = state.variantGroups.find((item) => Number(item.id) === groupId);
+              const summaryPayload = getProductScopedVariantSummaryPayload(groupId, group, details);
+              container.innerHTML = renderVariantValuesSummary(summaryPayload.values, summaryPayload.tiers, summaryPayload.defaultIdx, {
+                isEditable: isEdit,
+                groupId,
+                valueIndexMap: summaryPayload.valueIndexMap,
+                removableValueIndexes: summaryPayload.removableValueIndexes,
+              });
               bindVariantStarHandlers(container, groupId);
             }
             
@@ -13295,6 +14205,175 @@ const isViewMode = state.comboPanel.mode === "view";
       refreshOpenAccordions();
     }
 
+    async function renderVariantAccordion() {
+      if (!ui.variantAccordion) return;
+      const groupId = Number(draft.variantGroupId);
+      if (!Number.isFinite(groupId) || groupId <= 0) {
+        ui.variantAccordion.innerHTML = `<div class="empty-hint">\u0412\u0430\u0440\u0438\u0430\u043d\u0442 \u043d\u0435 \u0432\u044b\u0431\u0440\u0430\u043d...</div>`;
+        return;
+      }
+      const group = state.variantGroups.find((item) => Number(item.id) === groupId);
+      if (!group) {
+        ui.variantAccordion.innerHTML = `<div class="empty-hint">\u0412\u0430\u0440\u0438\u0430\u043d\u0442 \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d...</div>`;
+        return;
+      }
+
+      const unitLabel = getUnitLabel(group.unit_id);
+      const unitMeta = unitLabel ? `\u0415\u0434.: ${unitLabel}` : "\u0415\u0434.: \u2014";
+      const details = getCachedProductScopedVariantDetails(groupId);
+      const summaryPayload = details ? getProductScopedVariantSummaryPayload(groupId, group, details) : null;
+      const itemsHtml = summaryPayload
+        ? renderVariantValuesSummary(summaryPayload.values, summaryPayload.tiers, summaryPayload.defaultIdx, {
+            isEditable: isEdit,
+            groupId,
+            valueIndexMap: summaryPayload.valueIndexMap,
+            removableValueIndexes: summaryPayload.removableValueIndexes,
+          })
+        : `<div class="muted">\u0420\u0430\u0441\u043a\u0440\u043e\u0439\u0442\u0435, \u0447\u0442\u043e\u0431\u044b \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c \u0437\u043d\u0430\u0447\u0435\u043d\u0438\u044f.</div>`;
+
+      const actionsHtml = isView
+        ? `<span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>`
+        : `
+          ${isEdit && product && product.id ? `<button class="btn btn-icon btn-sm" type="button" data-product-variant-values-open="${groupId}" title="\u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c/\u0441\u043a\u0440\u044b\u0442\u044c \u0437\u043d\u0430\u0447\u0435\u043d\u0438\u044f" onclick="event.stopPropagation();"><i class="fas fa-plus"></i></button>` : ""}
+          <button class="btn btn-icon btn-sm btn-ghost" type="button" data-variant-edit="${groupId}" title="\u0418\u0437\u043c\u0435\u043d\u0438\u0442\u044c" onclick="event.stopPropagation();">
+            <i class="fas fa-pen"></i>
+          </button>
+          <button class="btn btn-icon btn-sm btn-ghost" type="button" data-variant-delete="${groupId}" title="\u0423\u0434\u0430\u043b\u0438\u0442\u044c" onclick="event.stopPropagation();">
+            <i class="fas fa-trash"></i>
+          </button>
+          <span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>
+        `;
+
+      ui.variantAccordion.innerHTML = `
+        <div class="acc-item" data-variant-group="${groupId}">
+          <div class="stage-item acc-trigger" role="button" tabindex="0" data-acc-trigger>
+            <span class="stage-meta stage-text">
+              <b>${escapeHtml(group.title || "")}</b>
+              <small>${escapeHtml(unitMeta)}</small>
+            </span>
+            <div class="option-actions-inline">
+              ${actionsHtml}
+            </div>
+          </div>
+          <div class="acc-panel" data-acc-panel>
+            <div class="acc-panel-inner">
+              ${itemsHtml}
+            </div>
+          </div>
+        </div>
+      `;
+
+      bindAccordionContainer(ui.variantAccordion);
+
+      if (!isView) {
+        ui.variantAccordion.querySelectorAll("[data-product-variant-values-open]").forEach((btn) => {
+          btn.addEventListener("click", async (e) => {
+            e.stopPropagation();
+            const id = Number(btn.dataset.productVariantValuesOpen);
+            if (!Number.isFinite(id) || id <= 0) return;
+            await openProductVariantValuesPicker(id);
+          });
+        });
+
+        ui.variantAccordion.querySelectorAll("[data-variant-edit]").forEach((btn) => {
+          btn.addEventListener("click", async (e) => {
+            e.stopPropagation();
+            const id = Number(btn.dataset.variantEdit);
+            if (!Number.isFinite(id)) return;
+            const groupItem = state.variantGroups.find((item) => Number(item.id) === id);
+            await loadVariantGroupDetails(id);
+            if (!state.variantGroupDetails?.group) return;
+            state.selectedVariantGroupId = id;
+            startVariantEdit({ silent: true });
+            openVariantGroupTab(id, groupItem?.title || "\u0412\u0430\u0440\u0438\u0430\u043d\u0442", { activate: true });
+          });
+        });
+
+        ui.variantAccordion.querySelectorAll("[data-variant-delete]").forEach((btn) => {
+          btn.addEventListener("click", async (e) => {
+            e.stopPropagation();
+            if (isEdit && product && product.id) {
+              for (const assignment of draft.initialVariantAssignments) {
+                if (Number.isFinite(assignment.assignment_id)) {
+                  await apiDeleteVariantAssignment(assignment.assignment_id);
+                }
+              }
+              await refreshProductVariants(product.id);
+            } else {
+              draft.variantGroupId = null;
+              draft.initialVariantGroupId = null;
+              draft.initialVariantAssignments = [];
+            }
+            clearCachedProductScopedVariantDetails(groupId);
+            renderVariantAccordion();
+          });
+        });
+
+        ui.variantAccordion.querySelectorAll("[data-product-variant-value-remove]").forEach((btn) => {
+          btn.addEventListener("click", async (e) => {
+            e.stopPropagation();
+            const [groupIdRaw, valueIndexRaw] = String(btn.dataset.productVariantValueRemove || "").split(":");
+            const scopedGroupId = Number(groupIdRaw);
+            const valueIndex = Number(valueIndexRaw);
+            if (!Number.isFinite(scopedGroupId) || scopedGroupId <= 0) return;
+            if (!Number.isFinite(valueIndex) || valueIndex < 0) return;
+            try {
+              const scopedDetails = getCachedProductScopedVariantDetails(scopedGroupId)
+                || await ensureProductScopedVariantGroupDetails(scopedGroupId);
+              const visibleIndexes = Array.isArray(scopedDetails?.product_scope?.visible_value_indexes)
+                ? scopedDetails.product_scope.visible_value_indexes
+                    .map((idx) => Number(idx))
+                    .filter((idx) => Number.isFinite(idx) && idx >= 0)
+                : [];
+              const nextSelection = new Set(visibleIndexes.filter((idx) => idx !== valueIndex));
+              await applyProductVariantValueSelection(scopedGroupId, nextSelection);
+              await renderVariantAccordion();
+            } catch (error) {
+              console.error("Failed to exclude variant value for product", error);
+              const message = error?.message === "AT_LEAST_ONE_VALUE_REQUIRED"
+                ? "\u041d\u0443\u0436\u043d\u043e \u043e\u0441\u0442\u0430\u0432\u0438\u0442\u044c \u0445\u043e\u0442\u044f \u0431\u044b \u043e\u0434\u043d\u043e \u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0435"
+                : "\u041e\u0448\u0438\u0431\u043a\u0430 \u043f\u0440\u0438 \u0441\u043a\u0440\u044b\u0442\u0438\u0438 \u0437\u043d\u0430\u0447\u0435\u043d\u0438\u044f \u0432\u0430\u0440\u0438\u0430\u043d\u0442\u0430";
+              if (typeof showToast === "function") showToast(message);
+              else alert(message);
+            }
+          });
+        });
+      }
+
+      ui.variantAccordion.querySelectorAll(".acc-item").forEach((item) => {
+        const id = Number(item.dataset.variantGroup);
+        if (!Number.isFinite(id)) return;
+        const trigger = item.querySelector("[data-acc-trigger]");
+        const panel = item.querySelector("[data-acc-panel]");
+        if (!trigger || !panel) return;
+        trigger.addEventListener("click", async () => {
+          if (getCachedProductScopedVariantDetails(id)) return;
+          const scopedDetails = await ensureProductScopedVariantGroupDetails(id);
+          const inner = panel.querySelector(".acc-panel-inner");
+          if (inner) {
+            const nextSummary = scopedDetails ? getProductScopedVariantSummaryPayload(id, group, scopedDetails) : null;
+            inner.innerHTML = nextSummary
+              ? renderVariantValuesSummary(nextSummary.values, nextSummary.tiers, nextSummary.defaultIdx, {
+                  isEditable: isEdit,
+                  groupId: id,
+                  valueIndexMap: nextSummary.valueIndexMap,
+                  removableValueIndexes: nextSummary.removableValueIndexes,
+                })
+              : `<div class="muted">\u0420\u0430\u0441\u043a\u0440\u043e\u0439\u0442\u0435, \u0447\u0442\u043e\u0431\u044b \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c \u0437\u043d\u0430\u0447\u0435\u043d\u0438\u044f.</div>`;
+            if (isEdit) bindVariantStarHandlers(inner, id);
+          }
+          refreshOpenAccordions();
+        });
+      });
+
+      if (isEdit && summaryPayload) {
+        const inner = ui.variantAccordion.querySelector(".acc-panel-inner");
+        if (inner) bindVariantStarHandlers(inner, groupId);
+      }
+
+      refreshOpenAccordions();
+    }
+
     if (ui.variantManageBtn && !isView) {
       ui.variantManageBtn.addEventListener("click", () => {
         openProductVariantPicker();
@@ -13354,9 +14433,9 @@ const isViewMode = state.comboPanel.mode === "view";
       }
 
       ui.optionAccordion.innerHTML = selected.map((g) => {
-        const details = optionDetailsCache.get(g.id);
+        const details = getCachedProductScopedOptionDetails(g.id);
         const limitsLabel = formatOptionLimits(g.min_select, g.max_select);
-        const itemsHtml = details ? renderOptionItemsSummary(details.items || []) : `<div class="muted">Раскройте, чтобы загрузить пункты.</div>`;
+        const itemsHtml = details ? renderProductScopedOptionItemsSummary(details.items || [], { removable: Boolean(isEdit && product && product.id), groupId: g.id }) : `<div class="muted">\u0420\u0430\u0441\u043a\u0440\u043e\u0439\u0442\u0435, \u0447\u0442\u043e\u0431\u044b \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c \u043f\u0443\u043d\u043a\u0442\u044b.</div>`;
         const actionsHtml = isView
           ? `<span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>`
           : `
@@ -13391,6 +14470,27 @@ const isViewMode = state.comboPanel.mode === "view";
       bindAccordionContainer(ui.optionAccordion);
 
       if (!isView) {
+        if (isEdit && product && product.id) {
+          ui.optionAccordion.querySelectorAll(".acc-item").forEach((item) => {
+            const groupId = Number(item.dataset.optionGroup);
+            if (!Number.isFinite(groupId) || groupId <= 0) return;
+            const actionsEl = item.querySelector(".option-actions-inline");
+            if (!actionsEl || actionsEl.querySelector(`[data-option-items-picker-open="${groupId}"]`)) return;
+            const addBtn = document.createElement("button");
+            addBtn.className = "btn btn-icon btn-sm";
+            addBtn.type = "button";
+            addBtn.dataset.optionItemsPickerOpen = String(groupId);
+            addBtn.title = "\u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c/\u0441\u043a\u0440\u044b\u0442\u044c \u043f\u0443\u043d\u043a\u0442\u044b";
+            addBtn.setAttribute("aria-label", "\u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c/\u0441\u043a\u0440\u044b\u0442\u044c \u043f\u0443\u043d\u043a\u0442\u044b");
+            addBtn.innerHTML = '<i class="fas fa-plus"></i>';
+            addBtn.addEventListener("click", async (e) => {
+              e.stopPropagation();
+              await openProductOptionItemsPicker(groupId);
+            });
+            actionsEl.prepend(addBtn);
+          });
+        }
+
         // Handle Edit button
         ui.optionAccordion.querySelectorAll("[data-option-edit]").forEach((btn) => {
           btn.addEventListener("click", async (e) => {
@@ -13423,7 +14523,7 @@ const isViewMode = state.comboPanel.mode === "view";
                 await apiDisableProductOptionAssignment(product.id, id);
                 draft.optionGroups.delete(id);
                 draft.initialOptionGroups.delete(id);
-                optionDetailsCache.delete(id);
+                clearCachedProductScopedOptionDetails(id);
                 renderOptionAccordion();
               } catch (e) {
                 console.error('Failed to delete option', e);
@@ -13432,11 +14532,42 @@ const isViewMode = state.comboPanel.mode === "view";
             } else {
               // For new products: just remove from draft
               draft.optionGroups.delete(id);
-              optionDetailsCache.delete(id);
+              clearCachedProductScopedOptionDetails(id);
               renderOptionAccordion();
             }
           });
         });
+
+        if (isEdit && product && product.id) {
+          ui.optionAccordion.querySelectorAll("[data-product-option-item-remove]").forEach((btn) => {
+            btn.addEventListener("click", async (e) => {
+              e.stopPropagation();
+              const [groupIdRaw, itemIdRaw] = String(btn.dataset.productOptionItemRemove || "").split(":");
+              const groupId = Number(groupIdRaw);
+              const itemId = Number(itemIdRaw);
+              if (!Number.isFinite(groupId) || groupId <= 0) return;
+              if (!Number.isFinite(itemId) || itemId <= 0) return;
+              try {
+                const details = getCachedProductScopedOptionDetails(groupId)
+                  || await ensureOptionGroupDetails(groupId, { productId: product.id });
+                const currentExcluded = new Set(
+                  Array.isArray(details?.product_scope?.excluded_item_ids)
+                    ? details.product_scope.excluded_item_ids.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)
+                    : []
+                );
+                currentExcluded.add(itemId);
+                await apiSetProductOptionItemExclusions(product.id, groupId, Array.from(currentExcluded));
+                clearCachedProductScopedOptionDetails(groupId);
+                const refreshedDetails = await ensureOptionGroupDetails(groupId, { productId: product.id });
+                if (refreshedDetails) setCachedProductScopedOptionDetails(groupId, refreshedDetails);
+                await renderOptionAccordion();
+              } catch (error) {
+                console.error("Failed to exclude option item for product", error);
+                alert("\u041e\u0448\u0438\u0431\u043a\u0430 \u043f\u0440\u0438 \u0441\u043a\u0440\u044b\u0442\u0438\u0438 \u043f\u0443\u043d\u043a\u0442\u0430 \u043e\u043f\u0446\u0438\u0438");
+              }
+            });
+          });
+        }
       }
 
       ui.optionAccordion.querySelectorAll(".acc-item").forEach((item) => {
@@ -13446,17 +14577,17 @@ const isViewMode = state.comboPanel.mode === "view";
         const panel = item.querySelector("[data-acc-panel]");
         if (!trigger || !panel) return;
         trigger.addEventListener("click", async () => {
-          if (optionDetailsCache.has(groupId)) return;
-          const details = await ensureOptionGroupDetails(groupId);
-          if (details) optionDetailsCache.set(groupId, details);
+          if (getCachedProductScopedOptionDetails(groupId)) return;
+          const details = await ensureOptionGroupDetails(groupId, { productId: product?.id || null });
+          if (details) setCachedProductScopedOptionDetails(groupId, details);
           const inner = panel.querySelector(".acc-panel-inner");
           if (inner) {
             inner.innerHTML = `
-              ${renderOptionItemsSummary(details?.items || [])}
+              ${renderProductScopedOptionItemsSummary(details?.items || [], { removable: Boolean(isEdit && product && product.id), groupId })}
             `;
           }
           refreshOpenAccordions();
-        }, { once: true });
+        });
       });
 
       refreshOpenAccordions();
@@ -16852,6 +17983,16 @@ const isViewMode = state.comboPanel.mode === "view";
           if (closeFn) closeFn();
           return;
         }
+        if (footerCancelBtn.dataset.pickerType === "product-option-items") {
+          const closeFn = window._closeProductOptionItemsPickerFn;
+          if (closeFn) closeFn();
+          return;
+        }
+        if (footerCancelBtn.dataset.pickerType === "product-variant-values") {
+          const closeFn = window._closeProductVariantValuesPickerFn;
+          if (closeFn) closeFn();
+          return;
+        }
         if (footerCancelBtn.dataset.pickerType === "ingredient") {
           const closeFn = window._closeIngredientPickerFn;
           if (closeFn) closeFn();
@@ -16969,6 +18110,20 @@ const isViewMode = state.comboPanel.mode === "view";
         }
         if (footerSaveBtn.dataset.pickerType === "option") {
           const saveFn = window._saveOptionPickerFn;
+          if (saveFn) {
+            await saveFn();
+          }
+          return;
+        }
+        if (footerSaveBtn.dataset.pickerType === "product-option-items") {
+          const saveFn = window._saveProductOptionItemsPickerFn;
+          if (saveFn) {
+            await saveFn();
+          }
+          return;
+        }
+        if (footerSaveBtn.dataset.pickerType === "product-variant-values") {
+          const saveFn = window._saveProductVariantValuesPickerFn;
           if (saveFn) {
             await saveFn();
           }

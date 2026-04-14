@@ -8339,6 +8339,7 @@
     if ($('#de_max_discount_amount')) $('#de_max_discount_amount').value = '';
     if ($('#de_usage_limit')) $('#de_usage_limit').value = '';
     if ($('#de_usage_per_customer')) $('#de_usage_per_customer').value = '';
+    if ($('#de_first_order_limit')) $('#de_first_order_limit').value = '';
     if (elDePriority) elDePriority.value = '0';
     if (elDePeriodEnabled) elDePeriodEnabled.checked = false;
     if (elDeWeekdaysEnabled) elDeWeekdaysEnabled.checked = false;
@@ -9807,6 +9808,7 @@
     $('#de_schedule_time_end').value = discount.schedule_time_end || '';
     $('#de_usage_limit').value = discount.usage_limit || '';
     $('#de_usage_per_customer').value = discount.usage_per_customer || '';
+    if ($('#de_first_order_limit')) $('#de_first_order_limit').value = discount.first_order_limit || '';
     if (elDePriority) elDePriority.value = discount.priority || '0';
     hydrateDiscountPeriodStateFromInputs();
     if (elDePeriodEnabled) elDePeriodEnabled.checked = Boolean(discount.starts_at || discount.ends_at);
@@ -10758,6 +10760,7 @@
     const maxDiscountEl = $('#discountInfoMaxDiscount');
     const usagePerCustomerEl = $('#discountInfoUsagePerCustomer');
     const usageLimitEl = $('#discountInfoUsageLimit');
+    const firstOrderLimitEl = $('#discountInfoFirstOrderLimit');
     const usageCountEl = $('#discountInfoUsageCount');
     const rulesEl = $('#discountInfoRules');
     const rulesRowEl = $('#discountInfoRulesRow');
@@ -10777,6 +10780,7 @@
     const maxDiscount = getDiscountInfoEffectiveMaxDiscount(discount);
     const minOrder = Number(discount.min_order_amount || 0);
     const usagePerCustomer = Number(discount.usage_per_customer || 0);
+    const firstOrderLimit = Number(discount.first_order_limit || 0);
     const usageLimitValue = promoCodeDetail?.usage_limit ?? discount.usage_limit;
     const usageLimit = usageLimitValue == null ? null : Number(usageLimitValue || 0);
     const usageCount = Number((promoCodeDetail?.usage_count ?? discount.usage_count) || 0);
@@ -10854,6 +10858,11 @@
       usageLimitEl.textContent = usageLimit > 0
         ? `${usageLimit}`
         : 'без общего лимита';
+    }
+    if (firstOrderLimitEl) {
+      firstOrderLimitEl.textContent = firstOrderLimit > 0
+        ? `Первые ${firstOrderLimit} заказов`
+        : 'Без ограничения';
     }
     if (usageCountEl) usageCountEl.textContent = String(usageCount);
 
@@ -16815,6 +16824,7 @@
     if (code === 'PROMO_CODE_TAKEN') return 'Такой промокод уже существует.';
     if (code === 'PROMO_REWARD_PRODUCTS_REQUIRED') return 'Добавьте товары для награды по промокоду.';
     if (code === 'INVALID_DISCOUNT_VALUE') return 'Укажите корректное значение скидки.';
+    if (code === 'INVALID_FIRST_ORDER_LIMIT') return 'Укажите корректное значение поля "На первый заказ".';
     if (code === 'SPECIAL_PRICE_PRODUCT_ONLY') return 'Спеццена доступна только для товара.';
     if (code === 'INVALID_MECHANIC_CONFIG') return 'Проверьте настройки механики акции.';
     if (code === 'QUALIFYING_ITEMS_REQUIRED') return 'Добавьте товары для условия акции 1+1.';
@@ -16929,6 +16939,9 @@
       schedule_time_end: elDeTimeEnabled?.checked ? ($('#de_schedule_time_end').value || null) : null,
       usage_limit: parseInt($('#de_usage_limit').value, 10) || null,
       usage_per_customer: parseInt($('#de_usage_per_customer').value, 10) || null,
+      first_order_limit: (String($('#de_first_order_limit')?.value || '').trim() === ''
+        ? null
+        : Number(String($('#de_first_order_limit')?.value || '').trim())),
       priority: parseInt(elDePriority?.value || '0', 10) || 0,
       is_stackable: $('#de_is_stackable').checked,
       is_active: $('#de_is_active').checked,
@@ -16949,6 +16962,16 @@
 
     if (!data.title) {
       alert('Введите название скидки');
+      return;
+    }
+
+    const firstOrderLimitRaw = String($('#de_first_order_limit')?.value || '').trim();
+    const firstOrderLimit = firstOrderLimitRaw === ''
+      ? null
+      : Number(firstOrderLimitRaw);
+
+    if (firstOrderLimitRaw !== '' && (!Number.isInteger(firstOrderLimit) || firstOrderLimit < 1)) {
+      alert('Укажите корректное значение поля "На первый заказ"');
       return;
     }
 

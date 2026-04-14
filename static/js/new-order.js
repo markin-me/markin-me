@@ -3997,6 +3997,10 @@
       use_original_line_totals_for_benefits: useOriginalLineTotalsForBenefits ? 1 : 0,
       items: buildRightOrderPayloadItems(previewCartItems),
     };
+    const excludeOrderId = Number(safeOrder.id || 0);
+    if (excludeOrderId > 0) {
+      request.exclude_order_id = excludeOrderId;
+    }
     if (opts?.includeMode) {
       request.mode = normalizeRightOrderBenefitsMode(opts.mode || getActiveRightOrderBenefitsMode());
     }

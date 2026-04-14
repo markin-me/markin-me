@@ -45,6 +45,7 @@ const DISCOUNT_MUTATION_ERROR_CODES = new Set([
   'PROMO_CODE_REQUIRED',
   'PROMO_REWARD_PRODUCTS_REQUIRED',
   'INVALID_DISCOUNT_VALUE',
+  'INVALID_FIRST_ORDER_LIMIT',
   'SPECIAL_PRICE_PRODUCT_ONLY',
   'INVALID_MECHANIC_CONFIG',
   'QUALIFYING_ITEMS_REQUIRED',
@@ -86,6 +87,32 @@ function toIntOrNull(value) {
   const num = toNumberOrNull(value);
   if (num === null) return null;
   return Math.max(0, Math.trunc(num));
+}
+
+function toPositiveIntOrNull(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const num = Number(value);
+  if (!Number.isInteger(num) || num < 1) return null;
+  return num;
+}
+
+function normalizeFirstOrderLimit(value) {
+  return toPositiveIntOrNull(value);
+}
+
+function resolveFirstOrderLimitInput(source, fallback = null) {
+  const hasOwn = source && Object.prototype.hasOwnProperty.call(source, 'first_order_limit');
+  if (!hasOwn) {
+    return normalizeFirstOrderLimit(fallback);
+  }
+  if (source.first_order_limit === null || source.first_order_limit === undefined || source.first_order_limit === '') {
+    return null;
+  }
+  const parsed = Number(source.first_order_limit);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw Object.assign(new Error('INVALID_FIRST_ORDER_LIMIT'), { statusCode: 400 });
+  }
+  return parsed;
 }
 
 function normalizeCountField(source, fallback, fieldName, defaultValue = 1) {
@@ -462,6 +489,7 @@ function normalizeSimpleDiscountMechanic(source = {}, discountRow = {}) {
   };
   return {
     type: 'simple_discount',
+    first_order_limit: normalizeFirstOrderLimit(src?.first_order_limit ?? base?.first_order_limit),
     simple_variant: simpleVariant,
     products_config_mode: normalizeProductConfigMode(src?.products_config_mode ?? base?.products_config_mode, 'any'),
     discount_type: simpleVariant === 'promo_code' ? promoReward.discount_type : baseDiscountType,
@@ -478,6 +506,7 @@ function normalizeBuyXGetYMechanic(source = {}, fallback = {}) {
 
   return {
     type: 'buy_x_get_y',
+    first_order_limit: normalizeFirstOrderLimit(src.first_order_limit ?? base.first_order_limit),
     accrual_status_id: toIntOrNull(src.accrual_status_id ?? base.accrual_status_id),
     buy_qty: Math.max(1, toIntOrNull(src.buy_qty ?? base.buy_qty) || 5),
     reward_qty: Math.max(1, toIntOrNull(src.reward_qty ?? base.reward_qty) || 1),
@@ -577,6 +606,7 @@ function normalizeThresholdMechanic(source = {}, fallback = {}) {
 
   return {
     type: 'threshold',
+    first_order_limit: normalizeFirstOrderLimit(src.first_order_limit ?? base.first_order_limit),
     accrual_status_id: toIntOrNull(src.accrual_status_id ?? base.accrual_status_id),
     threshold_basis: ['before_discounts', 'after_discounts'].includes(toText(src.threshold_basis || base.threshold_basis).toLowerCase())
       ? toText(src.threshold_basis || base.threshold_basis).toLowerCase()
@@ -662,6 +692,7 @@ function normalizeLoyaltyProgressMechanic(source = {}, fallback = {}) {
 
   return {
     type: 'loyalty_progress',
+    first_order_limit: normalizeFirstOrderLimit(src.first_order_limit ?? base.first_order_limit),
     accrual_status_id: toIntOrNull(src.accrual_status_id ?? base.accrual_status_id),
     buy_qty: normalizeCountField(src, base, 'buy_qty', 1),
     reward_qty: normalizeCountField(src, base, 'reward_qty', 1),
@@ -917,7 +948,11 @@ async function assertLoyaltyProgressPromoSourceExists(conn, tenantId, storeId, m
 function buildMechanicStoragePayload(body, existing = null) {
   const existingMechanic = existing ? normalizeMechanicFromDiscount(existing) : null;
   const mechanicType = normalizeMechanicType(body?.mechanic_type || existing?.mechanic_type, 'simple_discount');
-  const mechanicSource = parseJsonObject(body?.mechanic, {});
+  const firstOrderLimit = resolveFirstOrderLimitInput(body, existingMechanic?.first_order_limit);
+  const mechanicSource = {
+    ...parseJsonObject(body?.mechanic, {}),
+    first_order_limit: firstOrderLimit,
+  };
 
   if (mechanicType === 'buy_x_get_y') {
     const mechanic = normalizeBuyXGetYMechanic(mechanicSource, existingMechanic?.type === 'buy_x_get_y' ? existingMechanic : {});
@@ -967,6 +1002,7 @@ function buildMechanicStoragePayload(body, existing = null) {
   const simpleSource = simpleVariant === 'promo_code'
     ? {
         simple_variant: 'promo_code',
+        first_order_limit: firstOrderLimit,
         products_config_mode: mechanicSource?.products_config_mode ?? existingSimpleMechanic?.products_config_mode ?? 'any',
         promo_reward: {
           reward_type: mechanicSource?.promo_reward?.reward_type ?? existingSimpleMechanic?.promo_reward?.reward_type ?? 'discount',
@@ -979,6 +1015,7 @@ function buildMechanicStoragePayload(body, existing = null) {
       }
     : {
         simple_variant: simpleVariant,
+        first_order_limit: firstOrderLimit,
         products_config_mode: mechanicSource?.products_config_mode ?? existingSimpleMechanic?.products_config_mode ?? 'any',
         discount_type: body?.discount_type ?? mechanicSource?.discount_type ?? simpleVariant,
         discount_value: body?.discount_value ?? mechanicSource?.discount_value,
@@ -1694,6 +1731,7 @@ function formatDiscountResponse(discount, { customers = [], products = [], promo
     const mechanic = normalizeMechanicFromDiscount(normalized);
     return {
       ...normalized,
+      first_order_limit: mechanic.first_order_limit ?? null,
       mechanic_type: mechanicType,
       mechanic,
       reward_type: deriveRewardType(mechanicType, mechanic, normalized.reward_type),
@@ -1706,6 +1744,7 @@ function formatDiscountResponse(discount, { customers = [], products = [], promo
     const fallbackMechanic = normalizeSimpleDiscountMechanic({}, normalized);
     return {
       ...normalized,
+      first_order_limit: fallbackMechanic.first_order_limit ?? null,
       mechanic_type: 'simple_discount',
       mechanic: fallbackMechanic,
       reward_type: normalizeRewardTypeValue(normalized.reward_type, 'discount'),

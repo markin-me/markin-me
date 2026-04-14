@@ -1015,6 +1015,160 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     return { payload, cacheState: 'MISS' };
   }
 
+  function makeOptionItemExclusionScopeKey(productId, groupId) {
+    return `${Number(productId || 0)}:${Number(groupId || 0)}`;
+  }
+
+  async function loadOptionItemExclusionsMap(tenantId, productIds, groupIds = []) {
+    const productIdsList = Array.from(new Set(
+      (Array.isArray(productIds) ? productIds : [])
+        .map((id) => Number(id))
+        .filter((id) => Number.isFinite(id) && id > 0)
+    ));
+    if (!productIdsList.length) return new Map();
+
+    const groupIdsList = Array.from(new Set(
+      (Array.isArray(groupIds) ? groupIds : [])
+        .map((id) => Number(id))
+        .filter((id) => Number.isFinite(id) && id > 0)
+    ));
+
+    const sql = [
+      'SELECT product_id, group_id, option_item_id',
+      'FROM prod_option_item_exclusions',
+      `WHERE tenant_id=? AND product_id IN (${productIdsList.map(() => '?').join(',')})`,
+    ];
+    const params = [tenantId, ...productIdsList];
+
+    if (groupIdsList.length) {
+      sql.push(`AND group_id IN (${groupIdsList.map(() => '?').join(',')})`);
+      params.push(...groupIdsList);
+    }
+
+    let rows;
+    try {
+      [rows] = await db.query(sql.join(' '), params);
+    } catch (error) {
+      if (error?.code === 'ER_NO_SUCH_TABLE' || error?.code === 'ER_BAD_TABLE_ERROR') {
+        return new Map();
+      }
+      throw error;
+    }
+
+    const result = new Map();
+    (Array.isArray(rows) ? rows : []).forEach((row) => {
+      const key = makeOptionItemExclusionScopeKey(row?.product_id, row?.group_id);
+      if (!result.has(key)) result.set(key, new Set());
+      result.get(key).add(Number(row?.option_item_id || 0));
+    });
+    return result;
+  }
+
+  function getOptionItemExclusionSet(exclusionsMap, productId, groupId) {
+    if (!(exclusionsMap instanceof Map)) return new Set();
+    return exclusionsMap.get(makeOptionItemExclusionScopeKey(productId, groupId)) || new Set();
+  }
+
+  function makeVariantValueExclusionScopeKey(productId, groupId) {
+    return `${Number(productId || 0)}:${Number(groupId || 0)}`;
+  }
+
+  async function loadVariantValueExclusionsMap(tenantId, productIds, groupIds = []) {
+    const productIdsList = Array.from(new Set(
+      (Array.isArray(productIds) ? productIds : [])
+        .map((id) => Number(id))
+        .filter((id) => Number.isFinite(id) && id > 0)
+    ));
+    if (!productIdsList.length) return new Map();
+
+    const groupIdsList = Array.from(new Set(
+      (Array.isArray(groupIds) ? groupIds : [])
+        .map((id) => Number(id))
+        .filter((id) => Number.isFinite(id) && id > 0)
+    ));
+
+    const sql = [
+      'SELECT product_id, variant_group_id, value_index',
+      'FROM prod_variant_value_exclusions',
+      `WHERE tenant_id=? AND product_id IN (${productIdsList.map(() => '?').join(',')})`,
+    ];
+    const params = [tenantId, ...productIdsList];
+
+    if (groupIdsList.length) {
+      sql.push(`AND variant_group_id IN (${groupIdsList.map(() => '?').join(',')})`);
+      params.push(...groupIdsList);
+    }
+
+    let rows;
+    try {
+      [rows] = await db.query(sql.join(' '), params);
+    } catch (error) {
+      if (error?.code === 'ER_NO_SUCH_TABLE' || error?.code === 'ER_BAD_TABLE_ERROR') {
+        return new Map();
+      }
+      throw error;
+    }
+
+    const result = new Map();
+    (Array.isArray(rows) ? rows : []).forEach((row) => {
+      const key = makeVariantValueExclusionScopeKey(row?.product_id, row?.variant_group_id);
+      if (!result.has(key)) result.set(key, new Set());
+      result.get(key).add(Number(row?.value_index));
+    });
+    return result;
+  }
+
+  function getVariantValueExclusionSet(exclusionsMap, productId, groupId) {
+    if (!(exclusionsMap instanceof Map)) return new Set();
+    return exclusionsMap.get(makeVariantValueExclusionScopeKey(productId, groupId)) || new Set();
+  }
+
+  function getVariantTierRowsForValueIndex(tiers, valueIndex) {
+    const list = Array.isArray(tiers) ? tiers : [];
+    const exact = list.filter((tier) => Number(tier?.sort_order) === Number(valueIndex));
+    if (exact.length) return exact;
+    return list.filter((tier) => Number(tier?.sort_order) === Number(valueIndex) + 1);
+  }
+
+  function buildVisibleVariantData(values, tiers, defaultValueIndex, excludedValueIndexes) {
+    const sourceValues = Array.isArray(values) ? values : [];
+    const excludedSet = excludedValueIndexes instanceof Set
+      ? excludedValueIndexes
+      : new Set(
+          (Array.isArray(excludedValueIndexes) ? excludedValueIndexes : [])
+            .map((valueIndex) => Number(valueIndex))
+            .filter((valueIndex) => Number.isFinite(valueIndex) && valueIndex >= 0)
+        );
+    const visibleValueIndexes = sourceValues
+      .map((_, valueIndex) => valueIndex)
+      .filter((valueIndex) => !excludedSet.has(valueIndex));
+    if (!visibleValueIndexes.length) return null;
+
+    const filteredValues = visibleValueIndexes.map((valueIndex) => sourceValues[valueIndex]);
+    const rawDefaultIndex = defaultValueIndex != null ? Number(defaultValueIndex) : 0;
+    const resolvedOriginalDefaultIndex = visibleValueIndexes.includes(rawDefaultIndex)
+      ? rawDefaultIndex
+      : visibleValueIndexes[0];
+    const resolvedVisibleDefaultIndex = visibleValueIndexes.indexOf(resolvedOriginalDefaultIndex);
+    const filteredTiers = [];
+    visibleValueIndexes.forEach((originalValueIndex, visibleValueIndex) => {
+      getVariantTierRowsForValueIndex(tiers, originalValueIndex).forEach((tier) => {
+        filteredTiers.push({
+          ...tier,
+          sort_order: visibleValueIndex,
+        });
+      });
+    });
+
+    return {
+      values: filteredValues,
+      discount_tiers: filteredTiers,
+      default_value_index: resolvedVisibleDefaultIndex >= 0 ? resolvedVisibleDefaultIndex : 0,
+      visible_value_indexes: visibleValueIndexes,
+      resolved_original_default_index: resolvedOriginalDefaultIndex,
+    };
+  }
+
   const CHAT_ASSISTANT_GENDER_MALE = 'm';
   const CHAT_ASSISTANT_GENDER_FEMALE = 'f';
   const DEFAULT_CHAT_ASSISTANT_GENDER = CHAT_ASSISTANT_GENDER_MALE;
@@ -1618,6 +1772,61 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     return roundPrice(unitPrice);
   }
 
+  function getOptionItemDefaultVariantIndex(optionItem) {
+    const variants = Array.isArray(optionItem?.variants) ? optionItem.variants : [];
+    const variantGroup = variants[0];
+    const values = Array.isArray(variantGroup?.values) ? variantGroup.values : [];
+    if (!values.length) return null;
+    const rawIndex = variantGroup.default_value_index != null ? Number(variantGroup.default_value_index) : 0;
+    if (!Number.isFinite(rawIndex) || rawIndex < 0 || rawIndex >= values.length) return 0;
+    return rawIndex;
+  }
+
+  async function computeOptionItemResolvedDefaultPrice(optionItem, getConversionFactor, roundPrice) {
+    const basePrice = Number(optionItem?.price || 0);
+    if (!Number.isFinite(basePrice)) return 0;
+
+    const variants = Array.isArray(optionItem?.variants) ? optionItem.variants : [];
+    const variantGroup = variants[0];
+    const defaultVariantIndex = getOptionItemDefaultVariantIndex(optionItem);
+    if (!variantGroup || !Number.isFinite(Number(defaultVariantIndex))) {
+      return roundPrice(basePrice);
+    }
+
+    const targetProduct = optionItem?.target_product && typeof optionItem.target_product === 'object'
+      ? optionItem.target_product
+      : null;
+    if (targetProduct) {
+      const variantUnitPrice = await computeDisplayPriceForProduct(
+        targetProduct,
+        variantGroup,
+        getConversionFactor,
+        roundPrice
+      );
+      const targetBasePrice = Number(targetProduct.price || 0);
+      if (Number.isFinite(variantUnitPrice) && Number.isFinite(targetBasePrice)) {
+        return roundPrice(basePrice + (variantUnitPrice - targetBasePrice));
+      }
+    }
+
+    const values = Array.isArray(variantGroup.values) ? variantGroup.values : [];
+    const baseValue = parseVariantValueNumber(values[0]);
+    const selectedValue = parseVariantValueNumber(values[Number(defaultVariantIndex)]);
+    if (!(Number.isFinite(baseValue) && baseValue > 0 && Number.isFinite(selectedValue) && selectedValue > 0)) {
+      return roundPrice(basePrice);
+    }
+
+    let resolvedPrice = basePrice * (selectedValue / baseValue);
+    const tiers = Array.isArray(variantGroup.discount_tiers) ? variantGroup.discount_tiers : [];
+    const tier = tiers.find((t) => Number(t.sort_order) === Number(defaultVariantIndex));
+    const discountPercent = Number(tier?.discount_percent || 0) || 0;
+    if (discountPercent !== 0) {
+      resolvedPrice = resolvedPrice * (1 - discountPercent / 100);
+    }
+
+    return roundPrice(resolvedPrice);
+  }
+
   /**
    * Р СљР С‘Р Р…Р С‘Р СР В°Р В»РЎРЉР Р…Р В°РЎРЏ Р Р†Р С•Р В·Р СР С•Р В¶Р Р…Р В°РЎРЏ РЎвЂ Р ВµР Р…Р В° РЎвЂљР С•Р Р†Р В°РЎР‚Р В° РЎРѓ РЎС“РЎвЂЎРЎвЂРЎвЂљР С•Р С Р Р†Р В°РЎР‚Р С‘Р В°Р Р…РЎвЂљР С•Р Р† (Р С—Р С•РЎР‚РЎвЂ Р С‘Р в„–/Р С•Р В±РЎР‰РЎвЂР СР С•Р Р†).
    * Р вЂўРЎРѓР В»Р С‘ РЎС“ РЎвЂљР С•Р Р†Р В°РЎР‚Р В° Р ВµРЎРѓРЎвЂљРЎРЉ Р Р†Р В°РЎР‚Р С‘Р В°Р Р…РЎвЂљРЎвЂ№ РІР‚вЂќ Р С—Р ВµРЎР‚Р ВµР В±Р С‘РЎР‚Р В°Р ВµР С Р Р†РЎРѓР Вµ Р В·Р Р…Р В°РЎвЂЎР ВµР Р…Р С‘РЎРЏ Р С‘ Р Р†Р С•Р В·Р Р†РЎР‚Р В°РЎвЂ°Р В°Р ВµР С Р СР С‘Р Р…Р С‘Р СРЎС“Р С; Р С‘Р Р…Р В°РЎвЂЎР Вµ РІР‚вЂќ Р В±Р В°Р В·Р С•Р Р†РЎС“РЎР‹ РЎвЂ Р ВµР Р…РЎС“.
@@ -1656,7 +1865,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     return roundPrice(minPrice);
   }
 
-  async function enrichProductsWithDisplayPrice(rows, tenantId) {
+  async function enrichProductsWithDisplayPrice(rows, tenantId, storeId) {
     if (!rows.length) return;
     const productIds = [...new Set(rows.map((r) => Number(r.id)).filter(Boolean))];
     if (!productIds.length) return;
@@ -1697,6 +1906,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     );
 
     const variantGroupIds = [...new Set(vaRows.map((r) => Number(r.variant_group_id)).filter(Boolean))];
+    const variantValueExclusionsByScope = await loadVariantValueExclusionsMap(tenantId, productIds, variantGroupIds);
     let tiersByGroup = new Map();
     if (variantGroupIds.length) {
       const tierPlaceholders = variantGroupIds.map(() => '?').join(',');
@@ -1724,19 +1934,218 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       if (variantByProductId.has(pid)) continue;
       const values = safeJsonArray(r.values);
       if (!values.length) continue;
-      const defaultIdx = r.default_value_index != null ? Number(r.default_value_index) : 0;
       const tiers = tiersByGroup.get(Number(r.variant_group_id)) || [];
+      const variantData = buildVisibleVariantData(
+        values,
+        tiers,
+        r.default_value_index != null ? Number(r.default_value_index) : 0,
+        getVariantValueExclusionSet(variantValueExclusionsByScope, pid, Number(r.variant_group_id))
+      );
+      if (!variantData) continue;
       variantByProductId.set(pid, {
         unit_id: r.unit_id,
-        values,
-        default_value_index: defaultIdx >= 0 && defaultIdx < values.length ? defaultIdx : 0,
-        discount_tiers: tiers,
+        values: variantData.values,
+        default_value_index: variantData.default_value_index,
+        discount_tiers: variantData.discount_tiers,
       });
+    }
+
+    const [optionAssignmentRows] = await db.query(
+      `SELECT
+         a.assign_id AS product_id,
+         a.group_id,
+         a.selection_type AS assignment_selection_type,
+         a.min_select AS assignment_min_select,
+         g.selection_type AS group_selection_type,
+         g.min_select AS group_min_select,
+         g.is_required
+       FROM prod_option_assignments a
+       JOIN prod_option_groups g ON g.id = a.group_id AND g.tenant_id = a.tenant_id
+       WHERE a.tenant_id = ?
+         AND a.assign_type='product'
+         AND a.assign_id IN (${placeholders})
+         AND a.is_active = 1
+         AND g.is_active = 1
+       ORDER BY a.assign_id ASC, a.sort_order ASC, a.id ASC`,
+      [tenantId, ...productIds]
+    );
+    const optionAssignmentsByProductId = new Map();
+    const optionGroupIds = new Set();
+    for (const row of optionAssignmentRows) {
+      const pid = Number(row.product_id);
+      if (!Number.isFinite(pid) || pid <= 0) continue;
+      if (!optionAssignmentsByProductId.has(pid)) optionAssignmentsByProductId.set(pid, []);
+      optionAssignmentsByProductId.get(pid).push({
+        group_id: Number(row.group_id),
+        selection_type: row.assignment_selection_type || row.group_selection_type || 'single',
+        min_select: row.assignment_min_select ?? row.group_min_select ?? 0,
+        is_required: Number(row.is_required ?? 0) === 1,
+      });
+      optionGroupIds.add(Number(row.group_id));
+    }
+    const optionItemExclusionsByScope = await loadOptionItemExclusionsMap(
+      tenantId,
+      productIds,
+      Array.from(optionGroupIds)
+    );
+
+    const optionGroupDetailsById = new Map();
+    if (optionGroupIds.size > 0) {
+      const groupIdsArr = Array.from(optionGroupIds).filter((id) => Number.isFinite(id) && id > 0);
+      const [groupRows] = await db.query(
+        `SELECT id, selection_type, min_select, is_required
+         FROM prod_option_groups
+         WHERE tenant_id=? AND id IN (${groupIdsArr.map(() => '?').join(',')})`,
+        [tenantId, ...groupIdsArr]
+      );
+      const optionGroupMetaById = new Map(groupRows.map((row) => [Number(row.id), row]));
+
+      const [optionItemRows] = await db.query(
+        `SELECT
+           i.id,
+           i.group_id,
+           i.target_product_id,
+           i.price_mode,
+           i.price_value,
+           p.price AS product_price,
+           p.base_unit_id AS product_base_unit_id,
+           p.base_qty AS product_base_qty,
+           p.unit_id AS product_unit_id
+         FROM prod_option_items i
+         JOIN prod_products p ON p.tenant_id=i.tenant_id AND p.id=i.target_product_id
+         LEFT JOIN prod_product_stocks ps
+           ON ps.tenant_id = p.tenant_id AND ps.store_id = ? AND ps.product_id = p.id
+         WHERE i.tenant_id=?
+           AND i.group_id IN (${groupIdsArr.map(() => '?').join(',')})
+           AND i.target_type='product'
+           AND i.is_active=1
+           AND p.is_active=1
+           AND p.site_visibility=1
+           AND (ps.qty IS NULL OR ps.qty > 0)
+         ORDER BY i.group_id ASC, i.sort_order ASC, i.id ASC`,
+        [storeId, tenantId, ...groupIdsArr]
+      );
+
+      const optionTargetProductIds = Array.from(new Set(
+        optionItemRows.map((row) => Number(row.target_product_id)).filter((id) => Number.isFinite(id) && id > 0)
+      ));
+      const optionVariantsByProductId = new Map();
+      if (optionTargetProductIds.length > 0) {
+        const [optionVariantRows] = await db.query(
+          `SELECT
+             va.product_id,
+             vg.id,
+             vg.unit_id,
+             vg.values,
+             COALESCE(va.default_value_index, vg.default_value_index) AS default_value_index
+           FROM prod_variant_assignments va
+           JOIN prod_variant_groups vg ON vg.id = va.variant_group_id AND vg.tenant_id = va.tenant_id
+           WHERE va.tenant_id = ?
+             AND va.product_id IN (${optionTargetProductIds.map(() => '?').join(',')})
+             AND va.is_active = 1
+             AND vg.is_active = 1
+           ORDER BY va.product_id ASC, va.sort_order ASC, vg.sort_order ASC`,
+          [tenantId, ...optionTargetProductIds]
+        );
+        const optionVariantGroupIds = Array.from(new Set(
+          optionVariantRows.map((row) => Number(row.id)).filter((id) => Number.isFinite(id) && id > 0)
+        ));
+        const optionVariantExclusionsByScope = await loadVariantValueExclusionsMap(tenantId, optionTargetProductIds, optionVariantGroupIds);
+        const optionTiersByGroupId = new Map();
+        if (optionVariantGroupIds.length > 0) {
+          const [optionTierRows] = await db.query(
+            `SELECT variant_group_id, discount_percent, sort_order
+             FROM prod_variant_discount_tiers
+             WHERE tenant_id = ? AND variant_group_id IN (${optionVariantGroupIds.map(() => '?').join(',')})
+             ORDER BY variant_group_id ASC, sort_order ASC`,
+            [tenantId, ...optionVariantGroupIds]
+          );
+          for (const tierRow of optionTierRows) {
+            const gid = Number(tierRow.variant_group_id);
+            if (!optionTiersByGroupId.has(gid)) optionTiersByGroupId.set(gid, []);
+            optionTiersByGroupId.get(gid).push(tierRow);
+          }
+        }
+
+        for (const optionVariantRow of optionVariantRows) {
+          const pid = Number(optionVariantRow.product_id);
+          if (optionVariantsByProductId.has(pid)) continue;
+          const values = safeJsonArray(optionVariantRow.values);
+          if (!values.length) continue;
+          const variantData = buildVisibleVariantData(
+            values,
+            optionTiersByGroupId.get(Number(optionVariantRow.id)) || [],
+            optionVariantRow.default_value_index != null ? Number(optionVariantRow.default_value_index) : 0,
+            getVariantValueExclusionSet(optionVariantExclusionsByScope, pid, Number(optionVariantRow.id))
+          );
+          if (!variantData) continue;
+          optionVariantsByProductId.set(pid, [{
+            id: Number(optionVariantRow.id),
+            unit_id: optionVariantRow.unit_id ? Number(optionVariantRow.unit_id) : null,
+            values: variantData.values,
+            default_value_index: variantData.default_value_index,
+            discount_tiers: variantData.discount_tiers,
+          }]);
+        }
+      }
+
+      const optionItemsByGroupId = new Map();
+      for (const optionItemRow of optionItemRows) {
+        const gid = Number(optionItemRow.group_id);
+        if (!optionItemsByGroupId.has(gid)) optionItemsByGroupId.set(gid, []);
+        const targetProductId = Number(optionItemRow.target_product_id || 0);
+        optionItemsByGroupId.get(gid).push({
+          id: Number(optionItemRow.id),
+          target_product_id: targetProductId,
+          price: String(optionItemRow.price_mode || '').trim() === 'fixed'
+            ? Number(optionItemRow.price_value || 0)
+            : Number(optionItemRow.product_price || 0),
+          variants: optionVariantsByProductId.get(targetProductId) || [],
+          target_product: {
+            id: targetProductId,
+            price: Number(optionItemRow.product_price || 0),
+            base_unit_id: optionItemRow.product_base_unit_id,
+            base_qty: optionItemRow.product_base_qty,
+            unit_id: optionItemRow.product_unit_id,
+          },
+        });
+      }
+
+      for (const groupId of groupIdsArr) {
+        const meta = optionGroupMetaById.get(Number(groupId));
+        if (!meta) continue;
+        optionGroupDetailsById.set(Number(groupId), {
+          group: {
+            selection_type: meta.selection_type || 'single',
+            min_select: meta.min_select ?? 0,
+            is_required: Number(meta.is_required ?? 0) === 1,
+          },
+          items: optionItemsByGroupId.get(Number(groupId)) || [],
+        });
+      }
     }
 
     for (const row of rows) {
       const variant = variantByProductId.get(Number(row.id));
-      row.display_price = await computeDisplayPriceForProduct(row, variant, getConversionFactor, roundPrice);
+      let displayPrice = await computeDisplayPriceForProduct(row, variant, getConversionFactor, roundPrice);
+      const optionAssignments = optionAssignmentsByProductId.get(Number(row.id)) || [];
+      for (const assignment of optionAssignments) {
+        const groupId = Number(assignment?.group_id || 0);
+        if (!Number.isFinite(groupId) || groupId <= 0) continue;
+        const details = optionGroupDetailsById.get(groupId) || null;
+        if (!details) continue;
+        const groupMeta = details.group || {};
+        const excludedItemIds = getOptionItemExclusionSet(optionItemExclusionsByScope, Number(row.id), groupId);
+        const items = (Array.isArray(details.items) ? details.items : [])
+          .filter((item) => !excludedItemIds.has(Number(item?.id || 0)));
+        if (!items.length) continue;
+        const selectionType = str(groupMeta.selection_type || assignment.selection_type || 'single').trim().toLowerCase() || 'single';
+        const minSelect = Number(groupMeta.min_select ?? assignment.min_select ?? 0);
+        const requiredSingle = selectionType === 'single' && (Number(groupMeta.is_required || 0) === 1 || minSelect > 0);
+        if (!requiredSingle) continue;
+        displayPrice += await computeOptionItemResolvedDefaultPrice(items[0], getConversionFactor, roundPrice);
+      }
+      row.display_price = roundPrice(displayPrice);
     }
   }
 
@@ -1991,6 +2400,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
          c.id AS customer_id,
          c.name,
          c.phone,
+         c.total_orders,
          DATE_FORMAT(c.birthday, '%Y-%m-%d') AS birthday,
          c.photo,
          c.is_active
@@ -2028,6 +2438,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       id: Number(r.customer_id),
       name: r.name,
       phone: r.phone,
+      total_orders: Number(r.total_orders || 0) || 0,
       birthday: r.birthday || null,
       photo: r.photo || null,
     };
@@ -5205,6 +5616,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       apply_to: publicDiscountText(discount?.apply_to).toLowerCase() || 'order',
       min_order_amount: discount?.min_order_amount != null ? Number(discount.min_order_amount || 0) : null,
       max_discount_amount: discount?.max_discount_amount != null ? Number(discount.max_discount_amount || 0) : null,
+      first_order_limit: discountHelpers.getDiscountFirstOrderLimit(discount),
     };
   }
 
@@ -5983,6 +6395,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       badge_text: state.pendingRewardCount > 0 ? `${state.pendingRewardCount}` : state.progressText,
       apply_scope_text: state.pendingRewardCount > 0 ? `\u041c\u043e\u0436\u043d\u043e \u0437\u0430\u0431\u0440\u0430\u0442\u044c: ${state.rewardText}` : `\u0421\u043b\u0435\u0434\u0443\u044e\u0449\u0430\u044f \u043d\u0430\u0433\u0440\u0430\u0434\u0430: ${state.rewardText}`,
       expires_at: discount?.ends_at || null,
+      first_order_limit: discountHelpers.getDiscountFirstOrderLimit(discount),
       is_claimable: state.pendingRewardCount > 0,
       pending_reward_count: state.pendingRewardCount,
       progress_value: state.progressValue,
@@ -7676,6 +8089,12 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         .filter((id) => id > 0)
     )];
     const productCategoriesMap = await loadCheckoutProductCategoriesMap(normalizedTenantId, productIds);
+    const firstOrderStats = await discountHelpers.getCustomerFirstOrderWindowStats(
+      queryable,
+      normalizedTenantId,
+      customerId,
+      { excludeOrderId: normalizedOrderId }
+    );
     const customerBenefitDiscountRows = await loadCustomerBenefitDiscountRows(normalizedTenantId, effectiveStoreId, customerId);
     const progressDiscountRows = Array.isArray(customerBenefitDiscountRows)
       ? customerBenefitDiscountRows.filter((discount) => isPublicProgressMechanic(discount))
@@ -7686,6 +8105,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     for (const discount of progressDiscountRows) {
       const discountId = Number(discount?.id || 0);
       if (!(discountId > 0)) continue;
+      if (!discountHelpers.isDiscountAllowedByFirstOrderLimit(discount, firstOrderStats)) continue;
       const accrualStatusId = await resolveDiscountBenefitAccrualStatusId(
         queryable,
         normalizedTenantId,
@@ -8412,7 +8832,11 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     const deletedRewardPromoCompletedCards = availableRewardRowsRaw
       .filter((row) => isDeletedAvailableRewardPromoRow(row))
       .map((row) => buildPublicCompletedDeletedRewardPromoCardFromRewardRow(row));
-    const customerDiscounts = await loadCustomerBenefitDiscountRows(tenantId, storeId, customerId);
+    const firstOrderStats = customerId > 0
+      ? await discountHelpers.getCustomerFirstOrderWindowStats(db, tenantId, customerId)
+      : { customerId: null, completedSuccessfulOrders: 0, activeReservedOrders: 0 };
+    const customerDiscounts = (await loadCustomerBenefitDiscountRows(tenantId, storeId, customerId))
+      .filter((discount) => discountHelpers.isDiscountAllowedByFirstOrderLimit(discount, firstOrderStats));
     const automaticDiscountRows = customerDiscounts.filter((discount) => (
       isPublicAutomaticSimpleDiscount(discount) && !isHiddenBenefitsDiscount(discount)
     ));
@@ -9149,6 +9573,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         );
 
         const variantGroupIds = [...new Set(vaRows.map((r) => Number(r.variant_group_id)).filter(Boolean))];
+        const variantValueExclusionsByScope = await loadVariantValueExclusionsMap(tenantId, allProductIds, variantGroupIds);
         const tiersByGroup = new Map();
         if (variantGroupIds.length) {
           const [tierRows] = await db.query(
@@ -9175,11 +9600,18 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           if (variantByProductId.has(pid)) continue;
           const values = safeJsonArray(r.values);
           if (!values.length) continue;
+          const variantData = buildVisibleVariantData(
+            values,
+            tiersByGroup.get(Number(r.variant_group_id)) || [],
+            r.default_value_index != null ? Number(r.default_value_index) : 0,
+            getVariantValueExclusionSet(variantValueExclusionsByScope, pid, Number(r.variant_group_id))
+          );
+          if (!variantData) continue;
           variantByProductId.set(pid, {
             unit_id: r.unit_id,
-            values,
-            default_value_index: r.default_value_index != null ? Number(r.default_value_index) : 0,
-            discount_tiers: tiersByGroup.get(Number(r.variant_group_id)) || [],
+            values: variantData.values,
+            default_value_index: variantData.default_value_index,
+            discount_tiers: variantData.discount_tiers,
           });
         }
       }
@@ -9338,7 +9770,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         r.is_available = (r.stock_qty == null || Number(r.stock_qty) > 0);
         attachProductThumbs(r);
       }
-      await enrichProductsWithDisplayPrice(rows, tenantId);
+      await enrichProductsWithDisplayPrice(rows, tenantId, storeId);
       await enrichProductsWithDiscounts(rows, tenantId, storeId);
 
       // Р вЂќР С•Р В±Р В°Р Р†Р В»РЎРЏР ВµР С Р Т‘Р В°Р Р…Р Р…РЎвЂ№Р Вµ Р Т‘Р ВµРЎвЂћР С•Р В»РЎвЂљР Р…Р С•Р С–Р С• Р Р†Р В°РЎР‚Р С‘Р В°Р Р…РЎвЂљР В° Р Т‘Р В»РЎРЏ Р С”Р С•РЎР‚РЎР‚Р ВµР С”РЎвЂљР Р…Р С•Р С–Р С• Р Т‘Р С•Р В±Р В°Р Р†Р В»Р ВµР Р…Р С‘РЎРЏ Р Р† Р С”Р С•РЎР‚Р В·Р С‘Р Р…РЎС“
@@ -9358,18 +9790,28 @@ window.location.replace(${JSON.stringify(redirectUrl)});
            ORDER BY va.sort_order ASC, vg.sort_order ASC`,
           [tenantId, ...upsellProductIds]
         );
+        const upsellVariantGroupIds = Array.from(new Set(
+          vaUpsellRows.map((row) => Number(row.variant_group_id)).filter((id) => Number.isFinite(id) && id > 0)
+        ));
+        const upsellVariantExclusionsByScope = await loadVariantValueExclusionsMap(tenantId, upsellProductIds, upsellVariantGroupIds);
         const variantMap = new Map();
         for (const r of vaUpsellRows) {
           const pid = Number(r.product_id);
           if (variantMap.has(pid)) continue;
           const values = safeJsonArray(r.values);
           if (!values.length) continue;
-          const defaultIdx = r.default_value_index != null ? Number(r.default_value_index) : 0;
-          const idx = defaultIdx >= 0 && defaultIdx < values.length ? defaultIdx : 0;
+          const variantData = buildVisibleVariantData(
+            values,
+            [],
+            r.default_value_index != null ? Number(r.default_value_index) : 0,
+            getVariantValueExclusionSet(upsellVariantExclusionsByScope, pid, Number(r.variant_group_id))
+          );
+          if (!variantData) continue;
+          const idx = variantData.default_value_index;
           variantMap.set(pid, {
             variant_group_id: Number(r.variant_group_id),
             variant_value_index: idx,
-            variant_label: String(values[idx]) + (r.unit_short_title ? ' ' + r.unit_short_title : ''),
+            variant_label: String(variantData.values[idx]) + (r.unit_short_title ? ' ' + r.unit_short_title : ''),
           });
         }
         for (const row of rows) {
@@ -9451,7 +9893,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             attachProductThumbs(r);
           }
           await applyPublicProductBlocksToRows(rows, tenantId, storeId);
-          await enrichProductsWithDisplayPrice(rows, tenantId);
+          await enrichProductsWithDisplayPrice(rows, tenantId, storeId);
           await enrichProductsWithDiscounts(rows, tenantId, storeId);
           const payload = { ok: true, data: rows, combos: [], category_id: categoryId, lite: true };
           setPublicCache(cacheKey, payload, PUBLIC_CACHE_TTL_MS.products);
@@ -9480,7 +9922,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           attachProductThumbs(r);
         }
         await applyPublicProductBlocksToRows(rows, tenantId, storeId);
-        await enrichProductsWithDisplayPrice(rows, tenantId);
+        await enrichProductsWithDisplayPrice(rows, tenantId, storeId);
         await enrichProductsWithDiscounts(rows, tenantId, storeId);
         const payload = { ok: true, data: rows, combos: [], category_id: categoryId, lite: true };
         setPublicCache(cacheKey, payload, PUBLIC_CACHE_TTL_MS.products);
@@ -9558,7 +10000,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           attachProductThumbs(r);
         }
         await applyPublicProductBlocksToRows(rows, tenantId, storeId);
-        await enrichProductsWithDisplayPrice(rows, tenantId);
+        await enrichProductsWithDisplayPrice(rows, tenantId, storeId);
         await enrichProductsWithDiscounts(rows, tenantId, storeId);
         const combos = await getCombosForCategoryCached(tenantId, storeId, categoryId);
         const payload = { ok: true, data: rows, combos, category_id: categoryId };
@@ -9630,7 +10072,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         attachProductThumbs(r);
       }
       await applyPublicProductBlocksToRows(rows, tenantId, storeId);
-      await enrichProductsWithDisplayPrice(rows, tenantId);
+      await enrichProductsWithDisplayPrice(rows, tenantId, storeId);
       await enrichProductsWithDiscounts(rows, tenantId, storeId);
       const combos = await getCombosForCategoryCached(tenantId, storeId, categoryId);
       const payload = { ok: true, data: rows, combos, category_id: categoryId };
@@ -9774,7 +10216,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       }
 
       // Р С›Р В±Р С•Р С–Р В°РЎвЂ°Р В°Р ВµР С Р Р†РЎРѓР Вµ Р С—РЎР‚Р С•Р Т‘РЎС“Р С”РЎвЂљРЎвЂ№ Р В·Р В° Р С•Р Т‘Р С‘Р Р… Р С—РЎР‚Р С•РЎвЂ¦Р С•Р Т‘
-      await enrichProductsWithDisplayPrice(allProducts, tenantId);
+      await enrichProductsWithDisplayPrice(allProducts, tenantId, storeId);
       await enrichProductsWithDiscounts(allProducts, tenantId, storeId);
 
       // Р вЂњРЎР‚РЎС“Р С—Р С—Р С‘РЎР‚РЎС“Р ВµР С Р С—Р С• category_id
@@ -9881,7 +10323,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       p.is_available = Number(p.is_available || 0) === 1;
       await applyPublicProductBlocksToRows([p], tenantId, storeId);
 
-      await enrichProductsWithDisplayPrice([p], tenantId);
+      await enrichProductsWithDisplayPrice([p], tenantId, storeId);
       await enrichProductsWithDiscounts([p], tenantId, storeId);
 
       const payload = { ok: true, data: p };
@@ -10116,6 +10558,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           const groupIds = Array.from(
             new Set(variantRows.map((r) => Number(r.id)).filter((n) => Number.isFinite(n) && n > 0))
           );
+          const variantValueExclusionsByScope = await loadVariantValueExclusionsMap(tenantId, sortedIds, groupIds);
           const tiersByGroupId = new Map();
           if (groupIds.length) {
             const tierPlaceholders = groupIds.map(() => '?').join(',');
@@ -10139,6 +10582,13 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             if (!result[pid]) result[pid] = [];
             const groupDefaultIdx = v.group_default_value_index != null ? Number(v.group_default_value_index) : null;
             const assignmentDefaultIdx = v.assignment_default_value_index != null ? Number(v.assignment_default_value_index) : null;
+            const variantData = buildVisibleVariantData(
+              safeJsonArray(v.values),
+              tiersByGroupId.get(Number(v.id)) || [],
+              assignmentDefaultIdx != null ? assignmentDefaultIdx : groupDefaultIdx,
+              getVariantValueExclusionSet(variantValueExclusionsByScope, pid, Number(v.id))
+            );
+            if (!variantData) continue;
             result[pid].push({
               id: Number(v.id),
               title: str(v.title || ""),
@@ -10146,9 +10596,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
               unit_code: str(v.unit_code || ""),
               unit_title: str(v.unit_title || ""),
               unit_short_title: str(v.unit_short_title || ""),
-              values: safeJsonArray(v.values),
-              default_value_index: assignmentDefaultIdx != null ? assignmentDefaultIdx : groupDefaultIdx,
-              discount_tiers: tiersByGroupId.get(Number(v.id)) || [],
+              values: variantData.values,
+              default_value_index: variantData.default_value_index,
+              discount_tiers: variantData.discount_tiers,
             });
           }
           const blocksConfigMap = await resolveProductBlocksConfigMap(
@@ -10385,6 +10835,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         [tenantId, ...ids]
       );
       const groupIds = Array.from(new Set(variantRows.map((r) => Number(r.id)).filter((n) => Number.isFinite(n) && n > 0)));
+      const variantValueExclusionsByScope = await loadVariantValueExclusionsMap(tenantId, ids, groupIds);
       const tiersByGroupId = new Map();
       if (groupIds.length) {
         const [tiers] = await db.query(
@@ -10406,6 +10857,13 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         if (!variantsByProductId.has(pid)) variantsByProductId.set(pid, []);
         const groupDefaultIdx = v.group_default_value_index != null ? Number(v.group_default_value_index) : null;
         const assignmentDefaultIdx = v.assignment_default_value_index != null ? Number(v.assignment_default_value_index) : null;
+        const variantData = buildVisibleVariantData(
+          safeJsonArray(v.values),
+          tiersByGroupId.get(Number(v.id)) || [],
+          assignmentDefaultIdx != null ? assignmentDefaultIdx : groupDefaultIdx,
+          getVariantValueExclusionSet(variantValueExclusionsByScope, pid, Number(v.id))
+        );
+        if (!variantData) continue;
         variantsByProductId.get(pid).push({
           id: Number(v.id),
           title: str(v.title || ''),
@@ -10413,9 +10871,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           unit_code: str(v.unit_code || ''),
           unit_title: str(v.unit_title || ''),
           unit_short_title: str(v.unit_short_title || ''),
-          values: safeJsonArray(v.values),
-          default_value_index: assignmentDefaultIdx != null ? assignmentDefaultIdx : groupDefaultIdx,
-          discount_tiers: tiersByGroupId.get(Number(v.id)) || [],
+          values: variantData.values,
+          default_value_index: variantData.default_value_index,
+          discount_tiers: variantData.discount_tiers,
         });
       }
 
@@ -10468,6 +10926,11 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         });
         optionGroupIds.add(Number(r.group_id));
       }
+      const optionItemExclusionsByScope = await loadOptionItemExclusionsMap(
+        tenantId,
+        ids,
+        Array.from(optionGroupIds)
+      );
 
       const optionGroupDetailsById = new Map();
       if (optionGroupIds.size > 0) {
@@ -10536,6 +10999,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             [tenantId, ...targetOptionProductIds]
           );
           const ovGroupIds = Array.from(new Set(ovRows.map((r) => Number(r.id)).filter((n) => Number.isFinite(n) && n > 0)));
+          const optionVariantExclusionsByScope = await loadVariantValueExclusionsMap(tenantId, targetOptionProductIds, ovGroupIds);
           const ovTiersByGroupId = new Map();
           if (ovGroupIds.length) {
             const [ovTiers] = await db.query(
@@ -10556,6 +11020,13 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             if (!optionVariantsByProductId.has(pid)) optionVariantsByProductId.set(pid, []);
             const groupDefaultIdx = v.group_default_value_index != null ? Number(v.group_default_value_index) : null;
             const assignmentDefaultIdx = v.assignment_default_value_index != null ? Number(v.assignment_default_value_index) : null;
+            const variantData = buildVisibleVariantData(
+              safeJsonArray(v.values),
+              ovTiersByGroupId.get(Number(v.id)) || [],
+              assignmentDefaultIdx != null ? assignmentDefaultIdx : groupDefaultIdx,
+              getVariantValueExclusionSet(optionVariantExclusionsByScope, pid, Number(v.id))
+            );
+            if (!variantData) continue;
             optionVariantsByProductId.get(pid).push({
               id: Number(v.id),
               title: str(v.title || ''),
@@ -10563,9 +11034,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
               unit_code: str(v.unit_code || ''),
               unit_title: str(v.unit_title || ''),
               unit_short_title: str(v.unit_short_title || ''),
-              values: safeJsonArray(v.values),
-              default_value_index: assignmentDefaultIdx != null ? assignmentDefaultIdx : groupDefaultIdx,
-              discount_tiers: ovTiersByGroupId.get(Number(v.id)) || [],
+              values: variantData.values,
+              default_value_index: variantData.default_value_index,
+              discount_tiers: variantData.discount_tiers,
             });
           }
         }
@@ -10655,8 +11126,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           const details = optionGroupDetailsById.get(groupId) || null;
           if (!details) return;
           const groupMeta = details.group || {};
+          const excludedItemIds = getOptionItemExclusionSet(optionItemExclusionsByScope, Number(pid), groupId);
           const items = (Array.isArray(details.items) ? details.items : [])
-            .filter((item) => Number(item?.is_active ?? 1) === 1);
+            .filter((item) => Number(item?.is_active ?? 1) === 1)
+            .filter((item) => !excludedItemIds.has(Number(item?.id || 0)));
           if (!items.length) return;
 
           const selectionType = str(groupMeta.selection_type || assignment.selection_type || 'single').trim().toLowerCase() || 'single';
@@ -10902,10 +11375,16 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
       const id = Number(req.params.id);
+      const scopedProductId = Number(req.query?.product_id || 0);
       if (!Number.isFinite(id) || id <= 0) {
         return res.status(400).json({ ok: false, error: 'BAD_ID' });
       }
-      const cacheKey = makePublicCacheKey('option-group-by-id', { tenantId, storeId, id });
+      const cacheKey = makePublicCacheKey('option-group-by-id', {
+        tenantId,
+        storeId,
+        id,
+        productId: Number.isFinite(scopedProductId) && scopedProductId > 0 ? scopedProductId : 0,
+      });
       const cached = getPublicCache(cacheKey);
       if (cached) {
         res.set('x-public-cache', 'HIT');
@@ -11040,6 +11519,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         const variantGroupIds = Array.from(
           new Set(variantAssignments.map((va) => Number(va.variant_group_id)).filter(Number.isFinite))
         );
+        const variantValueExclusionsByScope = await loadVariantValueExclusionsMap(tenantId, productIds, variantGroupIds);
         if (variantGroupIds.length > 0) {
           const [tiers] = await db.query(
             `SELECT variant_group_id, min_quantity, discount_percent, sort_order
@@ -11070,6 +11550,13 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           // Р С›Р С—РЎР‚Р ВµР Т‘Р ВµР В»РЎРЏР ВµР С Р Т‘Р ВµРЎвЂћР С•Р В»РЎвЂљР Р…РЎвЂ№Р в„– Р С‘Р Р…Р Т‘Р ВµР С”РЎРѓ: РЎРѓР Р…Р В°РЎвЂЎР В°Р В»Р В° Р С‘Р В· Р С—РЎР‚Р С‘Р Р†РЎРЏР В·Р С”Р С‘, Р С—Р С•РЎвЂљР С•Р С Р С‘Р В· Р С–РЎР‚РЎС“Р С—Р С—РЎвЂ№
           const defaultIdx = assignmentDefaultIdx != null ? assignmentDefaultIdx : groupDefaultIdx;
           const groupId = Number(va.variant_group_id);
+          const variantData = buildVisibleVariantData(
+            safeJsonArray(va.variant_values),
+            tiersByGroupId.get(groupId) || [],
+            defaultIdx,
+            getVariantValueExclusionSet(variantValueExclusionsByScope, pid, groupId)
+          );
+          if (!variantData) continue;
           variantsByProductId.get(pid).push({
             variant_group_id: groupId,
             title: str(va.variant_title || ""),
@@ -11077,15 +11564,25 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             unit_code: str(va.unit_code || ""),
             unit_title: str(va.unit_title || ""),
             unit_short_title: str(va.unit_short_title || ""),
-            values: safeJsonArray(va.variant_values),
-            default_value_index: defaultIdx,
-            discount_tiers: tiersByGroupId.get(groupId) || [],
+            values: variantData.values,
+            default_value_index: variantData.default_value_index,
+            discount_tiers: variantData.discount_tiers,
           });
         }
       }
 
       // Р СњР С•РЎР‚Р СР В°Р В»Р С‘Р В·РЎС“Р ВµР С РЎРЊР В»Р ВµР СР ВµР Р…РЎвЂљРЎвЂ№
-      const normalizedItems = items.map((item) => {
+      let excludedItemIds = new Set();
+      if (Number.isFinite(scopedProductId) && scopedProductId > 0) {
+        excludedItemIds = getOptionItemExclusionSet(
+          await loadOptionItemExclusionsMap(tenantId, [scopedProductId], [id]),
+          scopedProductId,
+          id
+        );
+      }
+      const normalizedItems = items
+        .filter((item) => !excludedItemIds.has(Number(item?.id || 0)))
+        .map((item) => {
         const photos = safeJsonArray(item.product_photos_json);
         const productId = Number(item.target_product_id);
         const variants = variantsByProductId.get(productId) || [];
@@ -11188,11 +11685,14 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             [tenantId, productId]
           );
 
+          const variantGroupIds = Array.from(new Set(
+            variants.map((row) => Number(row.id)).filter((groupId) => Number.isFinite(groupId) && groupId > 0)
+          ));
+          const variantValueExclusionsByScope = await loadVariantValueExclusionsMap(tenantId, [productId], variantGroupIds);
+
           for (const v of variants) {
-            v.values = safeJsonArray(v.values);
             const groupDefaultIdx = v.group_default_value_index != null ? Number(v.group_default_value_index) : null;
             const assignmentDefaultIdx = v.assignment_default_value_index != null ? Number(v.assignment_default_value_index) : null;
-            v.default_value_index = assignmentDefaultIdx != null ? assignmentDefaultIdx : groupDefaultIdx;
             const [tiers] = await db.query(
               `SELECT min_quantity, discount_percent, sort_order
                FROM prod_variant_discount_tiers
@@ -11200,10 +11700,24 @@ window.location.replace(${JSON.stringify(redirectUrl)});
                ORDER BY sort_order ASC, min_quantity ASC`,
               [tenantId, v.id]
             );
-            v.discount_tiers = tiers;
+            const variantData = buildVisibleVariantData(
+              safeJsonArray(v.values),
+              tiers,
+              assignmentDefaultIdx != null ? assignmentDefaultIdx : groupDefaultIdx,
+              getVariantValueExclusionSet(variantValueExclusionsByScope, productId, Number(v.id))
+            );
+            if (!variantData) {
+              v.values = [];
+              v.default_value_index = null;
+              v.discount_tiers = [];
+              continue;
+            }
+            v.values = variantData.values;
+            v.default_value_index = variantData.default_value_index;
+            v.discount_tiers = variantData.discount_tiers;
           }
 
-          return { ok: true, data: variants };
+          return { ok: true, data: variants.filter((variant) => Array.isArray(variant.values) && variant.values.length) };
         }
       );
 
@@ -12250,6 +12764,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     switch (publicDiscountText(errorCode).toUpperCase()) {
       case 'DISCOUNT_CUSTOMER_LIMIT_REACHED':
         return '\u0412\u044b \u0443\u0436\u0435 \u0438\u0441\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u043b\u0438 \u044d\u0442\u0443 \u0441\u043a\u0438\u0434\u043a\u0443 \u043c\u0430\u043a\u0441\u0438\u043c\u0430\u043b\u044c\u043d\u043e\u0435 \u0447\u0438\u0441\u043b\u043e \u0440\u0430\u0437.';
+      case 'FIRST_ORDER_LIMIT_REACHED':
+        return '\u0410\u043a\u0446\u0438\u044f \u0434\u0435\u0439\u0441\u0442\u0432\u0443\u0435\u0442 \u0442\u043e\u043b\u044c\u043a\u043e \u043d\u0430 \u043f\u0435\u0440\u0432\u044b\u0435 \u0437\u0430\u043a\u0430\u0437\u044b \u043a\u043b\u0438\u0435\u043d\u0442\u0430.';
       case 'DISCOUNT_NOT_APPLICABLE':
         return '\u041d\u0435 \u043f\u043e\u0434\u0445\u043e\u0434\u0438\u0442 \u043a \u0442\u0435\u043a\u0443\u0449\u0435\u043c\u0443 \u0437\u0430\u043a\u0430\u0437\u0443.';
       case 'DISCOUNT_NOT_AVAILABLE':
@@ -12258,6 +12774,14 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       default:
         return '\u0421\u043a\u0438\u0434\u043a\u0430 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430.';
     }
+  }
+
+  function buildFirstOrderLimitDisabledReason(limit) {
+    const normalizedLimit = Number(limit || 0);
+    if (!(normalizedLimit > 0)) {
+      return buildDiscountPreviewDisabledReason('FIRST_ORDER_LIMIT_REACHED');
+    }
+    return `\u0410\u043a\u0446\u0438\u044f \u0434\u0435\u0439\u0441\u0442\u0432\u0443\u0435\u0442 \u0442\u043e\u043b\u044c\u043a\u043e \u043d\u0430 \u043f\u0435\u0440\u0432\u044b\u0435 ${normalizedLimit} \u0437\u0430\u043a\u0430\u0437\u043e\u0432 \u043a\u043b\u0438\u0435\u043d\u0442\u0430.`;
   }
 
   function getRewardPromoRuntimeConfig(payload) {
@@ -12403,6 +12927,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     selectedDiscountSource,
     discountEntries,
     allDiscountRows,
+    firstOrderStats = null,
   }) {
     const normalizedId = normalizeSelectedDiscountId(selectedDiscountId);
     if (normalizedId === null) {
@@ -12421,7 +12946,13 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         .find((discount) => Number(discount?.id || 0) === normalizedId && isPublicAutomaticSimpleDiscount(discount));
       return {
         entry: null,
-        errorCode: knownAutomaticDiscount ? 'DISCOUNT_NOT_AVAILABLE' : 'DISCOUNT_INVALID',
+        errorCode: knownAutomaticDiscount
+          ? (
+              discountHelpers.isDiscountAllowedByFirstOrderLimit(knownAutomaticDiscount, firstOrderStats)
+                ? 'DISCOUNT_NOT_AVAILABLE'
+                : 'FIRST_ORDER_LIMIT_REACHED'
+            )
+          : 'DISCOUNT_INVALID',
       };
     }
     return { entry: null, errorCode: 'DISCOUNT_INVALID' };
@@ -12454,7 +12985,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     return { entry: null, errorCode: 'PROMO_INVALID' };
   }
 
-  function resolveSelectedCheckoutDiscount({ selectedDiscountId, availableDiscounts, allDiscountRows }) {
+  function resolveSelectedCheckoutDiscount({ selectedDiscountId, availableDiscounts, allDiscountRows, firstOrderStats = null }) {
     const normalizedId = normalizeSelectedDiscountId(selectedDiscountId);
     if (normalizedId === null) {
       return { discount: null, errorCode: '' };
@@ -12471,7 +13002,13 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
     return {
       discount: null,
-      errorCode: knownAutomaticDiscount ? 'DISCOUNT_NOT_AVAILABLE' : 'DISCOUNT_INVALID',
+      errorCode: knownAutomaticDiscount
+        ? (
+            discountHelpers.isDiscountAllowedByFirstOrderLimit(knownAutomaticDiscount, firstOrderStats)
+              ? 'DISCOUNT_NOT_AVAILABLE'
+              : 'FIRST_ORDER_LIMIT_REACHED'
+          )
+        : 'DISCOUNT_INVALID',
     };
   }
 
@@ -12824,6 +13361,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     const serverLockedCodes = new Set([
       'PROMO_INVALID',
       'PROMO_NOT_AVAILABLE',
+      'FIRST_ORDER_LIMIT_REACHED',
       'PROMO_LIMIT_REACHED',
       'PROMO_CUSTOMER_LIMIT_REACHED',
       'PROMO_RESERVED',
@@ -13055,6 +13593,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     switch (publicDiscountText(errorCode).toUpperCase()) {
       case 'PROMO_RESERVED':
         return 'Промокод уже зарезервирован в активном заказе.';
+      case 'FIRST_ORDER_LIMIT_REACHED':
+        return '\u0410\u043a\u0446\u0438\u044f \u0434\u0435\u0439\u0441\u0442\u0432\u0443\u0435\u0442 \u0442\u043e\u043b\u044c\u043a\u043e \u043d\u0430 \u043f\u0435\u0440\u0432\u044b\u0435 \u0437\u0430\u043a\u0430\u0437\u044b \u043a\u043b\u0438\u0435\u043d\u0442\u0430.';
       case 'PROMO_LIMIT_REACHED':
         return '\u041b\u0438\u043c\u0438\u0442 \u043f\u0440\u043e\u043c\u043e\u043a\u043e\u0434\u0430 \u0438\u0441\u0447\u0435\u0440\u043f\u0430\u043d.';
       case 'PROMO_CUSTOMER_LIMIT_REACHED':
@@ -13105,6 +13645,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
   }) {
     const customerId = Number(customer?.id || 0) || null;
     const normalizedDraft = draft && typeof draft === 'object' ? draft : {};
+    const excludeOrderId = Number(normalizedDraft?.exclude_order_id || 0) || null;
     const previewMode = normalizeCheckoutBenefitsPreviewMode(
       mode ?? normalizedDraft?.benefits_mode ?? normalizedDraft?.mode
     );
@@ -13122,6 +13663,15 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       subtotalBeforeDiscount,
       itemsBaseTotal,
     } = normalizeCheckoutPreviewItems(normalizedDraft?.items);
+    const firstOrderStats = customerId > 0
+      ? await discountHelpers.getCustomerFirstOrderWindowStats(db, tenantId, customerId, { excludeOrderId })
+      : { customerId: null, completedSuccessfulOrders: 0, activeReservedOrders: 0 };
+    const isFirstOrderDiscountAllowed = (discount) => (
+      discountHelpers.isDiscountAllowedByFirstOrderLimit(discount, firstOrderStats)
+    );
+    const getFirstOrderDisabledReason = (discount) => (
+      buildFirstOrderLimitDisabledReason(discountHelpers.getDiscountFirstOrderLimit(discount))
+    );
 
     const customerBenefitDiscountRows = customerId > 0
       ? await loadCustomerBenefitDiscountRows(tenantId, storeId, customerId)
@@ -13209,11 +13759,22 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const audienceMatched = previewMode !== 'all'
         || discountAudienceMatchMap.get(discountId) !== false;
       const isDiscountAvailable = discountHelpers.isDiscountActive(discount) && audienceMatched;
+      const firstOrderAllowed = isFirstOrderDiscountAllowed(discount);
       let outcome;
       if (!isDiscountAvailable) {
         outcome = {
           isApplicable: false,
           errorCode: 'DISCOUNT_NOT_AVAILABLE',
+          discountAmount: 0,
+          items: cloneCheckoutBenefitItems(baseItems),
+          itemsTotalAfterDiscount: roundPromoMoney(itemsBaseTotal),
+          usageRecords: [],
+        };
+      } else if (!firstOrderAllowed) {
+        outcome = {
+          isApplicable: false,
+          errorCode: 'FIRST_ORDER_LIMIT_REACHED',
+          disabledReason: getFirstOrderDisabledReason(discount),
           discountAmount: 0,
           items: cloneCheckoutBenefitItems(baseItems),
           itemsTotalAfterDiscount: roundPromoMoney(itemsBaseTotal),
@@ -13244,7 +13805,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         discount_amount: roundPromoMoney(Number(outcome?.discountAmount || 0)),
         is_applicable: outcome?.isApplicable === true,
         disabled_reason_code: outcome?.isApplicable ? '' : publicDiscountText(outcome?.errorCode),
-        disabled_reason: outcome?.isApplicable ? '' : buildDiscountPreviewDisabledReason(outcome?.errorCode),
+        disabled_reason: outcome?.isApplicable ? '' : (publicDiscountText(outcome?.disabledReason) || buildDiscountPreviewDisabledReason(outcome?.errorCode)),
         is_selected: Boolean(isSelected),
         source: 'discount',
         reward_id: null,
@@ -13314,6 +13875,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       selectedDiscountSource,
       discountEntries,
       allDiscountRows: automaticDiscountRows,
+      firstOrderStats,
     });
     const selectedDiscountCard = selectedDiscountEntry?.card || null;
     const selectedDiscount = selectedDiscountEntry?.discount || null;
@@ -13483,6 +14045,17 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         };
       }
 
+      if (!isFirstOrderDiscountAllowed(discount)) {
+        return {
+          isApplicable: false,
+          disabledReasonCode: 'FIRST_ORDER_LIMIT_REACHED',
+          disabledReason: getFirstOrderDisabledReason(discount),
+          discountAmount: 0,
+          itemsTotalAfterPromo: itemsTotalBeforePromo,
+          items: previewItems,
+        };
+      }
+
       if (reservedCustomerCount > 0) {
         return {
           isApplicable: false,
@@ -13603,6 +14176,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           apply_scope_text: rewardMeta.apply_scope_text,
           min_order_amount: discount?.min_order_amount != null ? Number(discount.min_order_amount || 0) : null,
           max_discount_amount: discount?.max_discount_amount != null ? Number(discount.max_discount_amount || 0) : null,
+          first_order_limit: discountHelpers.getDiscountFirstOrderLimit(discount),
           usage_per_customer: discount?.usage_per_customer != null ? Number(discount.usage_per_customer || 0) : null,
           customer_usage_count: Number(promoCustomerUsageMap.get(discountId) || 0),
           starts_at: discount?.starts_at || null,
@@ -13689,6 +14263,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           apply_scope_text: rewardMeta.apply_scope_text,
           min_order_amount: discount?.min_order_amount != null ? Number(discount.min_order_amount || 0) : null,
           max_discount_amount: discount?.max_discount_amount != null ? Number(discount.max_discount_amount || 0) : null,
+          first_order_limit: discountHelpers.getDiscountFirstOrderLimit(discount),
           usage_per_customer: discount?.usage_per_customer != null ? Number(discount.usage_per_customer || 0) : null,
           customer_usage_count: Number(promoCustomerUsageMap.get(discountId) || 0),
           starts_at: discount?.starts_at || null,
@@ -13956,28 +14531,34 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       customerId,
       discounts: loyaltyDiscounts,
     });
-    if (previewMode === 'all') {
-      const progressDiscountMap = new Map(
-        loyaltyDiscounts
-          .map((discount) => [Number(discount?.id || 0), discount])
-          .filter(([discountId]) => discountId > 0)
-      );
-      progress = progress.map((card) => {
-        const discountId = Number(card?.discount_id || card?.id || 0);
-        const discount = progressDiscountMap.get(discountId) || null;
-        const isAvailable = !!discount
-          && discountHelpers.isDiscountActive(discount)
-          && discountAudienceMatchMap.get(discountId) !== false;
-        const disabledReasonCode = isAvailable ? '' : 'DISCOUNT_NOT_AVAILABLE';
-        return {
-          ...card,
-          is_applicable: isAvailable,
-          disabled_reason_code: disabledReasonCode,
-          disabled_reason: disabledReasonCode ? buildDiscountPreviewDisabledReason(disabledReasonCode) : '',
-          is_claimable: isAvailable && card?.is_claimable === true,
-        };
-      });
-    }
+    const progressDiscountMap = new Map(
+      loyaltyDiscounts
+        .map((discount) => [Number(discount?.id || 0), discount])
+        .filter(([discountId]) => discountId > 0)
+    );
+    progress = progress.map((card) => {
+      const discountId = Number(card?.discount_id || card?.id || 0);
+      const discount = progressDiscountMap.get(discountId) || null;
+      const audienceMatched = previewMode !== 'all'
+        || discountAudienceMatchMap.get(discountId) !== false;
+      const baseAvailable = !!discount
+        && discountHelpers.isDiscountActive(discount)
+        && audienceMatched;
+      const firstOrderAllowed = baseAvailable && isFirstOrderDiscountAllowed(discount);
+      const disabledReasonCode = !baseAvailable
+        ? 'DISCOUNT_NOT_AVAILABLE'
+        : (!firstOrderAllowed ? 'FIRST_ORDER_LIMIT_REACHED' : '');
+      const disabledReason = disabledReasonCode === 'FIRST_ORDER_LIMIT_REACHED'
+        ? getFirstOrderDisabledReason(discount)
+        : (disabledReasonCode ? buildDiscountPreviewDisabledReason(disabledReasonCode) : '');
+      return {
+        ...card,
+        is_applicable: !disabledReasonCode,
+        disabled_reason_code: disabledReasonCode,
+        disabled_reason: disabledReason,
+        is_claimable: !disabledReasonCode && card?.is_claimable === true,
+      };
+    });
     const details = await buildCheckoutBenefitsPreviewDetails({
       tenantId,
       storeId,
@@ -14070,6 +14651,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       .find((entry) => Number(entry?.discount_id || entry?.id || 0) === normalizedDiscountId);
     if (!progressCard) {
       throw Object.assign(new Error('DISCOUNT_INVALID'), { code: 'DISCOUNT_INVALID' });
+    }
+    if (publicDiscountText(progressCard?.disabled_reason_code).toUpperCase() === 'FIRST_ORDER_LIMIT_REACHED') {
+      throw Object.assign(new Error('FIRST_ORDER_LIMIT_REACHED'), { code: 'FIRST_ORDER_LIMIT_REACHED' });
     }
     if (progressCard?.is_claimable !== true || Number(progressCard?.pending_reward_count || 0) < 1) {
       throw Object.assign(new Error('DISCOUNT_NOT_APPLICABLE'), { code: 'DISCOUNT_NOT_APPLICABLE' });
@@ -14206,6 +14790,12 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     if (!resolvedLoyaltyDiscount) {
       throw Object.assign(new Error('DISCOUNT_NOT_AVAILABLE'), { code: 'DISCOUNT_NOT_AVAILABLE' });
     }
+    if (!discountHelpers.isDiscountAllowedByFirstOrderLimit(
+      resolvedLoyaltyDiscount,
+      await discountHelpers.getCustomerFirstOrderWindowStats(db, tenantId, customerId)
+    )) {
+      throw Object.assign(new Error('FIRST_ORDER_LIMIT_REACHED'), { code: 'FIRST_ORDER_LIMIT_REACHED' });
+    }
 
     if (getPublicProgressInteractionMode(resolvedLoyaltyDiscount) !== 'products_sheet') {
       throw Object.assign(new Error('DISCOUNT_NOT_APPLICABLE'), { code: 'DISCOUNT_NOT_APPLICABLE' });
@@ -14276,7 +14866,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
   function isCheckoutBenefitsPreviewDetailSkippableError(error) {
     const code = String(error?.code || error?.message || '');
-    return ['DISCOUNT_INVALID', 'DISCOUNT_NOT_AVAILABLE', 'DISCOUNT_NOT_APPLICABLE'].includes(code);
+    return ['DISCOUNT_INVALID', 'DISCOUNT_NOT_AVAILABLE', 'DISCOUNT_NOT_APPLICABLE', 'FIRST_ORDER_LIMIT_REACHED'].includes(code);
   }
 
   async function buildCheckoutBenefitsPreviewDetails({
@@ -14419,6 +15009,12 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       if (!discountHelpers.matchDiscountAudience(promoAudienceRows, customerId, customerCategoryIds)) {
         return res.status(409).json({ ok: false, error: 'PROMO_NOT_AVAILABLE' });
       }
+      if (!discountHelpers.isDiscountAllowedByFirstOrderLimit(
+        promoRow,
+        await discountHelpers.getCustomerFirstOrderWindowStats(conn, tenantId, customerId)
+      )) {
+        return res.status(409).json({ ok: false, error: 'FIRST_ORDER_LIMIT_REACHED' });
+      }
 
       const visibility = isHiddenBenefitsDiscount(promoRow) ? 'hidden' : 'public';
       if (visibility === 'hidden') {
@@ -14474,7 +15070,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
       return res.json({ ok: true, data });
     } catch (e) {
-      if (['DISCOUNT_INVALID', 'DISCOUNT_NOT_AVAILABLE', 'DISCOUNT_NOT_APPLICABLE'].includes(String(e?.code || e?.message || ''))) {
+      if (['DISCOUNT_INVALID', 'DISCOUNT_NOT_AVAILABLE', 'DISCOUNT_NOT_APPLICABLE', 'FIRST_ORDER_LIMIT_REACHED'].includes(String(e?.code || e?.message || ''))) {
         return res.status(409).json({ ok: false, error: String(e?.code || e?.message || 'DISCOUNT_INVALID') });
       }
       console.error(e);
@@ -14500,7 +15096,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
       return res.json({ ok: true, data });
     } catch (e) {
-      if (['DISCOUNT_INVALID', 'DISCOUNT_NOT_AVAILABLE', 'DISCOUNT_NOT_APPLICABLE'].includes(String(e?.code || e?.message || ''))) {
+      if (['DISCOUNT_INVALID', 'DISCOUNT_NOT_AVAILABLE', 'DISCOUNT_NOT_APPLICABLE', 'FIRST_ORDER_LIMIT_REACHED'].includes(String(e?.code || e?.message || ''))) {
         return res.status(409).json({ ok: false, error: String(e?.code || e?.message || 'DISCOUNT_INVALID') });
       }
       console.error(e);
@@ -14721,7 +15317,11 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         return res.status(409).json({ ok: false, error: 'PROMO_INVALID' });
       }
       if (previewCard?.is_applicable !== true) {
-        return res.status(409).json({ ok: false, error: 'PROMO_NOT_APPLICABLE' });
+        const previewErrorCode = publicDiscountText(previewCard?.disabled_reason_code).toUpperCase();
+        return res.status(409).json({
+          ok: false,
+          error: previewErrorCode === 'FIRST_ORDER_LIMIT_REACHED' ? 'FIRST_ORDER_LIMIT_REACHED' : 'PROMO_NOT_APPLICABLE',
+        });
       }
 
       await ensureDiscountRuntimeTables();
@@ -14765,6 +15365,13 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       if (!discountHelpers.matchDiscountAudience(promoAudienceRows, customerId, customerCategoryIds)) {
         await conn.rollback();
         return res.status(409).json({ ok: false, error: 'PROMO_NOT_AVAILABLE' });
+      }
+      if (!discountHelpers.isDiscountAllowedByFirstOrderLimit(
+        promoRow,
+        await discountHelpers.getCustomerFirstOrderWindowStats(conn, tenantId, customerId)
+      )) {
+        await conn.rollback();
+        return res.status(409).json({ ok: false, error: 'FIRST_ORDER_LIMIT_REACHED' });
       }
 
       if (Number(promoRow.usage_per_customer || 0) > 0) {
@@ -15199,7 +15806,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       if (['PROMO_INVALID', 'PROMO_NOT_AVAILABLE', 'PROMO_CLAIM_LIMIT_REACHED', 'PROMO_CLAIM_UNAVAILABLE'].includes(errorCode)) {
         return res.status(409).json({ ok: false, error: errorCode });
       }
-      if (['DISCOUNT_INVALID', 'DISCOUNT_NOT_AVAILABLE', 'DISCOUNT_NOT_APPLICABLE', 'REWARD_NOT_APPLICABLE'].includes(errorCode)) {
+      if (['DISCOUNT_INVALID', 'DISCOUNT_NOT_AVAILABLE', 'DISCOUNT_NOT_APPLICABLE', 'FIRST_ORDER_LIMIT_REACHED', 'REWARD_NOT_APPLICABLE'].includes(errorCode)) {
         return res.status(409).json({ ok: false, error: errorCode || 'DISCOUNT_NOT_APPLICABLE' });
       }
       console.error(e);
@@ -15600,6 +16207,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const customerCategoryIds = customerId
         ? await discountHelpers.getCustomerCategoryIds(db, tenantId, customerId)
         : [];
+      const firstOrderStats = customerId
+        ? await discountHelpers.getCustomerFirstOrderWindowStats(db, tenantId, customerId)
+        : { customerId: null, completedSuccessfulOrders: 0, activeReservedOrders: 0 };
       const customerBenefitDiscountRows = customerId
         ? await loadCustomerBenefitDiscountRows(tenantId, storeId, customerId)
         : [];
@@ -15726,6 +16336,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         selectedDiscountSource,
         discountEntries,
         allDiscountRows: automaticBenefitDiscountRows,
+        firstOrderStats,
       });
       const selectedDiscount = selectedDiscountEntry?.discount || null;
       const selectedRewardDiscountRow = publicDiscountText(selectedDiscountEntry?.source).toLowerCase() === 'reward_discount'
@@ -16478,6 +17089,84 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           )
         : new Map();
 
+      if (useClientPricingSnapshotMode && promoCode && selectedPromoSource !== 'reward_promo') {
+        await ensureDiscountDeletedColumns();
+        const [[snapshotPromoRow]] = await db.query(
+          `SELECT pc.id AS promo_code_id, pc.discount_id, pc.code, pc.code_mode, pc.is_active AS promo_is_active,
+                  pc.usage_limit AS promo_usage_limit, pc.usage_count AS promo_usage_count, pc.assigned_customer_id,
+                  d.*
+             FROM mkt_discount_promo_codes pc
+             INNER JOIN mkt_discounts d
+               ON d.id = pc.discount_id
+               AND d.tenant_id = pc.tenant_id
+               AND (d.store_id = pc.store_id OR d.store_id = 0 OR d.store_id IS NULL)
+               AND d.is_deleted = 0
+            WHERE pc.tenant_id = ?
+              AND (pc.store_id = ? OR pc.store_id = 0 OR pc.store_id IS NULL)
+              AND UPPER(REPLACE(pc.code, ' ', '')) = ?
+            ORDER BY pc.store_id DESC, pc.id DESC
+            LIMIT 1`,
+          [tenantId, orderStoreId, promoCode]
+        );
+
+        if (!snapshotPromoRow || !discountHelpers.isPromoSimpleDiscount(snapshotPromoRow) || !discountHelpers.isDiscountActive(snapshotPromoRow)) {
+          return res.status(409).json({ ok: false, error: 'PROMO_INVALID' });
+        }
+        if (isPromoRewardRedeemAction(snapshotPromoRow)) {
+          return res.status(409).json({ ok: false, error: 'PROMO_INVALID' });
+        }
+        if (Number(snapshotPromoRow.promo_is_active || 0) !== 1) {
+          return res.status(409).json({ ok: false, error: 'PROMO_NOT_AVAILABLE' });
+        }
+
+        const snapshotPromoReservationStats = readActiveOrderPromoReservationStats(activePromoReservationStats, {
+          sourceKind: 'promo_code',
+          promoCodeId: Number(snapshotPromoRow?.promo_code_id || 0) || null,
+          promoCode: snapshotPromoRow?.code,
+        });
+        if (Number(snapshotPromoReservationStats?.customerReservations || 0) > 0) {
+          return res.status(409).json({ ok: false, error: 'PROMO_RESERVED' });
+        }
+        if (
+          Number(snapshotPromoRow.promo_usage_limit || 0) > 0
+          && (Number(snapshotPromoRow.promo_usage_count || 0) + Number(snapshotPromoReservationStats?.totalReservations || 0))
+            >= Number(snapshotPromoRow.promo_usage_limit || 0)
+        ) {
+          return res.status(409).json({ ok: false, error: 'PROMO_LIMIT_REACHED' });
+        }
+        if (Number(snapshotPromoRow.assigned_customer_id || 0) > 0 && Number(snapshotPromoRow.assigned_customer_id || 0) !== Number(customerId || 0)) {
+          return res.status(409).json({ ok: false, error: 'PROMO_NOT_AVAILABLE' });
+        }
+
+        const [snapshotPromoAudienceRows] = await db.query(
+          `SELECT target_type, customer_id, customer_category_id
+             FROM mkt_discount_customers
+            WHERE tenant_id = ? AND discount_id = ?`,
+          [tenantId, Number(snapshotPromoRow.discount_id || 0)]
+        );
+
+        if (!discountHelpers.matchDiscountAudience(snapshotPromoAudienceRows, customerId, customerCategoryIds)) {
+          return res.status(409).json({ ok: false, error: 'PROMO_NOT_AVAILABLE' });
+        }
+        if (!discountHelpers.isDiscountAllowedByFirstOrderLimit(snapshotPromoRow, firstOrderStats)) {
+          return res.status(409).json({ ok: false, error: 'FIRST_ORDER_LIMIT_REACHED' });
+        }
+        if (Number(snapshotPromoRow.usage_per_customer || 0) > 0 && Number(customerId || 0) > 0) {
+          const [[snapshotPromoCustomerUsage]] = await db.query(
+            `SELECT COUNT(*) AS usage_count
+               FROM mkt_discount_usage
+              WHERE tenant_id = ? AND discount_id = ? AND customer_id = ?`,
+            [tenantId, Number(snapshotPromoRow.discount_id || 0), Number(customerId || 0)]
+          );
+          if (
+            (Number(snapshotPromoCustomerUsage?.usage_count || 0) + Number(snapshotPromoReservationStats?.customerReservations || 0))
+            >= Number(snapshotPromoRow.usage_per_customer || 0)
+          ) {
+            return res.status(409).json({ ok: false, error: 'PROMO_CUSTOMER_LIMIT_REACHED' });
+          }
+        }
+      }
+
       if (!useClientPricingSnapshotMode && promoCode) {
         if (selectedPromoSource === 'reward_promo') {
           if (!selectedRewardPromoRow) {
@@ -16755,6 +17444,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
         if (!discountHelpers.matchDiscountAudience(promoAudienceRows, customerId, customerCategoryIds)) {
           return res.status(409).json({ ok: false, error: 'PROMO_NOT_AVAILABLE' });
+        }
+        if (!discountHelpers.isDiscountAllowedByFirstOrderLimit(promoRow, firstOrderStats)) {
+          return res.status(409).json({ ok: false, error: 'FIRST_ORDER_LIMIT_REACHED' });
         }
 
         if (Number(promoRow.usage_per_customer || 0) > 0 && Number(customerId || 0) > 0) {
@@ -17480,7 +18172,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           }
         }
 
-        await enrichProductsWithDisplayPrice(uniqueProducts, tenantId);
+        await enrichProductsWithDisplayPrice(uniqueProducts, tenantId, storeId);
 
         for (const p of uniqueProducts) {
           displayPriceMap.set(p.id, p.display_price);

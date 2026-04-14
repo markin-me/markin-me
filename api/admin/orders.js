@@ -2783,7 +2783,9 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           tenantId,
           storeId,
           customerId,
-          itemsTotal
+          itemsTotal,
+          null,
+          { excludeOrderId: id }
         );
         if (Array.isArray(orderDiscountsForCustomer) && orderDiscountsForCustomer.length) {
           const applied = discountHelpers.applyBestDiscounts(orderDiscountsForCustomer, itemsTotal);

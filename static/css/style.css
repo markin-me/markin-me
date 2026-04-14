@@ -13513,6 +13513,19 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   font-size:12px;
   gap:4px;
 }
+.option-summary-price-wrap{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  margin-left:auto;
+}
+.option-summary-row.is-removable .option-row-remove{
+  position:static;
+  right:auto;
+  top:auto;
+  transform:none;
+  flex-shrink:0;
+}
 .product-header-actions{
   display:flex;
   align-items:center;
@@ -13712,13 +13725,36 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   outline: none;
 }
 
+#peVariantAccordion .stage-item.acc-trigger .option-actions-inline button.btn,
+#peVariantManageBtn,
+#peOptionManageBtn {
+  border: none;
+  box-shadow: none;
+  outline: none;
+}
+
 #peOptionAccordion .stage-item.acc-trigger .option-actions-inline button.btn:hover {
   background: var(--color-surface-2);
   border: none;
   box-shadow: none;
 }
 
+#peVariantAccordion .stage-item.acc-trigger .option-actions-inline button.btn:hover,
+#peVariantManageBtn:hover,
+#peOptionManageBtn:hover {
+  border: none;
+  box-shadow: none;
+}
+
 #peOptionAccordion .stage-item.acc-trigger .option-actions-inline button.btn:focus {
+  border: none;
+  box-shadow: none;
+  outline: none;
+}
+
+#peVariantAccordion .stage-item.acc-trigger .option-actions-inline button.btn:focus,
+#peVariantManageBtn:focus,
+#peOptionManageBtn:focus {
   border: none;
   box-shadow: none;
   outline: none;
@@ -16233,7 +16269,7 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
 }
 .discount-restrictions-inline-grid{
   display:grid;
-  grid-template-columns:repeat(4, minmax(0, 1fr));
+  grid-template-columns:repeat(auto-fit, minmax(132px, 1fr));
   gap:8px;
   width:100%;
   min-width:0;
