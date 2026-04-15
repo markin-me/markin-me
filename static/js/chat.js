@@ -358,6 +358,8 @@
     pendingScrollMessageIdsByClient: {},
     threadScrollTopByClient: {},
     threadPinnedBottomByClient: {},
+    forceDesktopBottomClientId: "",
+    forceDesktopBottomUntil: 0,
     peerTypingByClient: {},
     peerTypingUpdatedAtByClient: {},
     peerTypingHideTimers: {},
@@ -11020,14 +11022,17 @@
     if (adminChatThreadTouchGestureActive) return false;
     if (isAdminChatThreadEdgeSpringPositionControlled()) return false;
     const wrap = dom.center.messagesWrap;
-    if (!isAdminChatThreadVerticallyScrollable(wrap)) return false;
+    // If the thread fully fits into the viewport, treat it as bottom-pinned too.
+    // This preserves the visual bottom anchor when desktop width changes make
+    // bubbles wrap and the same thread suddenly becomes scrollable.
+    if (!isAdminChatThreadVerticallyScrollable(wrap)) return hasAdminChatThreadMessages();
     return (wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight) <= CHAT_STICKY_BOTTOM_THRESHOLD_PX;
   }
 
   function shouldPersistThreadPinnedBottom(wrap = dom.center.messagesWrap) {
     if (!wrap) return false;
     if (adminChatThreadTouchGestureActive) return false;
-    if (!isAdminChatThreadVerticallyScrollable(wrap)) return false;
+    if (!isAdminChatThreadVerticallyScrollable(wrap)) return hasAdminChatThreadMessages();
     return (wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight) <= CHAT_PINNED_BOTTOM_PERSIST_THRESHOLD_PX;
   }
 
@@ -12455,6 +12460,11 @@
 
     if (dom.center.contextMenu) {
       dom.center.contextMenu.style.visibility = "";
+    }
+    if (dom.center.messages) {
+      dom.center.messages
+        .querySelectorAll(".chat-message.is-mobile-context-source-hidden")
+        .forEach((node) => node.classList.remove("is-mobile-context-source-hidden"));
     }
 
     mobileContextSceneState = null;
@@ -14099,6 +14109,19 @@
       });
     });
     reconcileThreadMessageNodes(descriptors);
+    if (dom.center.messages) {
+      const mobileContextSceneOpen = !!(
+        mobileContextSceneUi
+        && mobileContextSceneUi.root
+        && !mobileContextSceneUi.root.classList.contains("hidden")
+        && mobileContextSceneUi.root.classList.contains("is-open")
+      );
+      if (!mobileContextSceneOpen) {
+        dom.center.messages
+          .querySelectorAll(".chat-message.is-mobile-context-source-hidden")
+          .forEach((node) => node.classList.remove("is-mobile-context-source-hidden"));
+      }
+    }
 
     if (state.contextMessageId) {
       const exists = thread.some((msg) => String(msg.id) === String(state.contextMessageId));
@@ -14132,6 +14155,24 @@
         } else {
           scrollMessagesToBottom({ behavior: smoothScroll ? "smooth-fast" : "auto" });
         }
+      }
+    }
+    if (dom.center.messagesWrap && !state.selectionMode && !isAdminMobileChatLayout()) {
+      const wrap = dom.center.messagesWrap;
+      const hiddenDistance = Math.max(
+        0,
+        Number(wrap.scrollHeight || 0) - Number(wrap.clientHeight || 0) - Number(wrap.scrollTop || 0)
+      );
+      const shouldForceDesktopBottomWindow = (
+        String(state.forceDesktopBottomClientId || "") === String(state.activeClientId || "")
+        && Date.now() < Number(state.forceDesktopBottomUntil || 0)
+      );
+      const shouldForceDesktopBottomSnap = (
+        (thread.length <= 12 && hiddenDistance > 120)
+        || (shouldForceDesktopBottomWindow && hiddenDistance > 24)
+      );
+      if (shouldForceDesktopBottomSnap) {
+        scrollMessagesToBottom({ behavior: "auto", keepPending: true });
       }
     }
     syncPendingScrollCountByViewport(state.activeClientId);
@@ -16364,7 +16405,11 @@
       state.activeOrdersHydratedClientId = 0;
       if (shouldRenderThread) {
         renderMessages({ disableAutoPin: true, smoothScroll: false, skipSaveScrollPosition: true });
-        restoreThreadScrollPosition(state.activeClientId);
+        if (isAdminMobileChatLayout()) {
+          restoreThreadScrollPosition(state.activeClientId);
+        } else {
+          scrollMessagesToBottom({ behavior: "auto", keepPending: true });
+        }
         saveThreadScrollPosition(state.activeClientId);
       }
       finishHeaderLoading();
@@ -16445,7 +16490,11 @@
       finishHeaderLoading();
       if (shouldRenderThread) {
         renderMessages({ disableAutoPin: true, smoothScroll: false, skipSaveScrollPosition: true });
-        restoreThreadScrollPosition(state.activeClientId);
+        if (isAdminMobileChatLayout()) {
+          restoreThreadScrollPosition(state.activeClientId);
+        } else {
+          scrollMessagesToBottom({ behavior: "auto", keepPending: true });
+        }
         saveThreadScrollPosition(state.activeClientId);
       }
     } catch (err) {
@@ -16457,7 +16506,11 @@
       setActiveOrders([], { forceRender: true });
       if (shouldRenderThread) {
         renderMessages({ disableAutoPin: true, smoothScroll: false, skipSaveScrollPosition: true });
-        restoreThreadScrollPosition(state.activeClientId);
+        if (isAdminMobileChatLayout()) {
+          restoreThreadScrollPosition(state.activeClientId);
+        } else {
+          scrollMessagesToBottom({ behavior: "auto", keepPending: true });
+        }
         saveThreadScrollPosition(state.activeClientId);
       }
       finishHeaderLoading();
@@ -16491,6 +16544,13 @@
     resetThreadImageDrop();
 
     state.activeClientId = id;
+    if (!isAdminMobileChatLayout()) {
+      state.forceDesktopBottomClientId = String(id);
+      state.forceDesktopBottomUntil = Date.now() + 3000;
+    } else {
+      state.forceDesktopBottomClientId = "";
+      state.forceDesktopBottomUntil = 0;
+    }
     state.store.lastOpenClientId = id;
     restoreComposerDraftForClient(id, { skipThreadViewportSync: true });
     state.rightPanelOrderId = 0;
@@ -16562,11 +16622,26 @@
 
     ensureActiveThreadSseConnection();
     applyClientFilter();
-    renderMessages({ disableAutoPin: true, smoothScroll: false, skipSaveScrollPosition: true });
+    const forceDesktopBottomOnSelect = !isAdminMobileChatLayout();
+    renderMessages({
+      disableAutoPin: !forceDesktopBottomOnSelect,
+      forceScrollBottom: forceDesktopBottomOnSelect,
+      smoothScroll: false,
+      skipSaveScrollPosition: true,
+    });
     if (typeof syncMobileViewAfterRender === "function") {
       syncMobileViewAfterRender();
     }
-    if (!restoreThreadScrollPosition(id)) {
+    if (!isAdminMobileChatLayout()) {
+      const hasPendingForClient = getPendingScrollNewCount(id) > 0;
+      scrollMessagesToBottom({ behavior: "auto", keepPending: hasPendingForClient });
+      saveThreadScrollPosition(id);
+      window.requestAnimationFrame(() => {
+        if (Number(state.activeClientId) !== Number(id)) return;
+        scrollMessagesToBottom({ behavior: "auto", keepPending: hasPendingForClient });
+        saveThreadScrollPosition(id);
+      });
+    } else if (!restoreThreadScrollPosition(id)) {
       const hasPendingForClient = getPendingScrollNewCount(id) > 0;
       scrollMessagesToBottom({ behavior: "auto", keepPending: hasPendingForClient });
       saveThreadScrollPosition(id);
