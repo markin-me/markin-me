@@ -13409,7 +13409,11 @@
       replyTriggered: false,
       longPressFired: false,
       longPressTimer: 0,
-      allowSwipeReply: !!(bubble.closest(".shop-company-chat-row.is-agent")),
+      allowSwipeReply: !!(
+        bubble.closest(".shop-company-chat-row.is-agent")
+        || bubble.closest(".shop-company-chat-row.is-user")
+      ),
+      swipeReplyDirection: -1,
       doubleTapEligible: canUseMessageHeartShortcutTarget(event.target),
     };
 
@@ -13502,7 +13506,8 @@
         clearTouchGesture();
         return;
       }
-      if (dx <= 0) {
+      const direction = Number(touchGesture.swipeReplyDirection || 1);
+      if ((dx * direction) <= 0) {
         clearTouchGesture();
         return;
       }
@@ -13510,12 +13515,14 @@
     }
 
     event.preventDefault();
-    const shift = Math.max(0, Math.min(96, dx));
+    const direction = Number(touchGesture.swipeReplyDirection || 1);
+    const shiftAbs = Math.max(0, Math.min(96, Math.abs(dx)));
+    const shift = shiftAbs * direction;
     touchGesture.swipeShift = shift;
     touchGesture.bubble.classList.add("is-swipe-active");
     touchGesture.bubble.style.transform = "translateX(" + shift + "px)";
 
-    if (shift >= SWIPE_REPLY_TRIGGER && !touchGesture.replyTriggered) {
+    if (shiftAbs >= SWIPE_REPLY_TRIGGER && !touchGesture.replyTriggered) {
       touchGesture.replyTriggered = true;
       suppressTapUntil = Date.now() + 560;
       setReplyByMessage(touchGesture.messageId);
@@ -13577,7 +13584,7 @@
       touchGesture.longPressTimer = 0;
     }
 
-    if (touchGesture.swipeShift > 0 && touchGesture.bubble) {
+    if (Math.abs(Number(touchGesture.swipeShift || 0)) > 0 && touchGesture.bubble) {
       const bubble = touchGesture.bubble;
       bubble.classList.add("is-swipe-returning");
       bubble.style.transform = "";

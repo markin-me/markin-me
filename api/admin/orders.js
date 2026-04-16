@@ -2122,14 +2122,25 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         if (ordersEvents && typeof ordersEvents.publish === "function") {
           ordersEvents.publish(tenantId, storeId, "order.updated", payload);
         }
+        const payloadStatusCode = String(payload?.status_code || "").trim().toLowerCase();
+        const payloadStatusTitle = String(payload?.status_title || "").trim().toLowerCase();
+        const shouldTryPrintEnqueue = payloadStatusCode === "new" || payloadStatusTitle.startsWith("нов");
         try {
-          const pushed = await sendOrderToPrintBot({ db, order: payload, tenantId, storeId });
-          if (!pushed) {
-            console.warn("Print enqueue returned false (admin/orders status update)", {
-              orderId: Number(payload?.id || id),
-              tenantId: Number(tenantId),
-              storeId: Number(storeId),
+          if (shouldTryPrintEnqueue) {
+            const pushed = await sendOrderToPrintBot({
+              db,
+              order: payload,
+              tenantId,
+              storeId,
+              silentSkipReasons: ["ORDER_STATUS_NOT_NEW"],
             });
+            if (!pushed) {
+              console.warn("Print enqueue returned false (admin/orders status update)", {
+                orderId: Number(payload?.id || id),
+                tenantId: Number(tenantId),
+                storeId: Number(storeId),
+              });
+            }
           }
         } catch (err) {
           console.error("Print enqueue failed (admin/orders status update):", {

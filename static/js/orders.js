@@ -115,6 +115,19 @@
   const courierCanceledStatusIds = toStatusIdSet(rawWorkspaceConfig.courierCanceledStatusIds);
   const ordersCacheScope = String(rawWorkspaceConfig.cacheScope || workspaceMode || "orders").trim().toLowerCase() || "orders";
   const ORDER_BROWSER_ALERTS_ENABLED = false;
+  const ORDER_UPDATED_EVENT = "dashboard:order-updated";
+
+  function emitOrderUpdated(order, meta = {}) {
+    if (!order || typeof order !== "object") return;
+    const id = Number(order.id || 0);
+    if (!Number.isFinite(id) || id <= 0) return;
+    document.dispatchEvent(new CustomEvent(ORDER_UPDATED_EVENT, {
+      detail: {
+        order: { ...order },
+        ...meta,
+      },
+    }));
+  }
 
   async function apiJson(url, opts = {}) {
     // РџРѕР»СѓС‡Р°РµРј С‚РѕРєРµРЅ Рё store_id РёР· localStorage
@@ -3629,12 +3642,19 @@
   }
 
   function getActiveOrder() {
+    const activeTab = tabsState.tabs.find((tab) => tab.key === tabsState.activeKey) || null;
+    if (activeTab && Number(activeTab.orderId || 0) > 0) {
+      const tabOrderId = Number(activeTab.orderId);
+      const fromStateByTab = state.orders.find((o) => Number(o.id) === tabOrderId) || null;
+      return fromStateByTab || activeTab.order || null;
+    }
+
     if (!state.activeOrderId) return null;
     const orderId = Number(state.activeOrderId);
     const fromState = state.orders.find((o) => Number(o.id) === orderId);
     if (fromState) return fromState;
-    const activeTab = tabsState.tabs.find((tab) => Number(tab.orderId) === orderId);
-    return activeTab?.order || null;
+    const fromTabs = tabsState.tabs.find((tab) => Number(tab.orderId) === orderId);
+    return fromTabs?.order || null;
   }
 
   function syncOrderPaymentFooter(order) {
@@ -3900,6 +3920,7 @@
     if (!statusMenus.length) return;
 
     const sortedStatuses = getSortedStatuses();
+    const orderId = Number(order?.id || state.activeOrderId || 0);
     const currentStatusId = Number(order?.status_id || 0);
     const currentStatus = getStatusMetaById(currentStatusId) || null;
     const optionsHtml = sortedStatuses.filter((status) => !isForbiddenStatusTransition(currentStatus, status)).map((status) => {
@@ -3912,6 +3933,7 @@
           type="button"
           data-action="order-status-menu-select"
           data-status-id="${statusId}"
+          ${orderId > 0 ? `data-order-id="${escapeHtml(orderId)}"` : ""}
           role="option"
           aria-selected="${statusId === currentStatusId ? "true" : "false"}"
         >
@@ -3932,7 +3954,8 @@
     if (!(id > 0) || !(nextStatusId > 0)) return;
 
     const orderIdx = state.orders.findIndex((row) => Number(row?.id || 0) === id);
-    const prevOrder = orderIdx >= 0 ? state.orders[orderIdx] : null;
+    const tabOrder = tabsState.tabs.find((tab) => Number(tab?.orderId || 0) === id)?.order || null;
+    const prevOrder = orderIdx >= 0 ? state.orders[orderIdx] : tabOrder;
     const prevStatusId = Number(prevOrder?.status_id || 0);
     const prevStatusMeta = getStatusMetaById(prevStatusId) || null;
     const optimisticOrder = buildOptimisticOrderStatusSnapshot(prevOrder, nextStatusId);
@@ -3969,6 +3992,12 @@
         method: request.method,
         body: request.body,
       });
+      if (!optimisticApplied) {
+        const freshOrder = await ensureFullOrderById(id);
+        if (freshOrder) {
+          handleOrderEvent(freshOrder, { localOnly: true, skipStageRefresh: true });
+        }
+      }
     } catch (err) {
       if (isCourierWorkspace && optimisticApplied && markCourierOfflineFromError(err)) {
         queueCourierMutation({
@@ -5825,10 +5854,39 @@
     let nextVisible = false;
 
     if (!shouldKeep) {
-      if (!wasExisting) return;
+      if (!wasExisting) {
+        const tabOnlyOrderId = Number(order?.id || 0);
+        if (tabOnlyOrderId > 0) {
+          const tab = tabsState.tabs.find((t) => Number(t?.orderId || 0) === tabOnlyOrderId) || null;
+          if (tab) {
+            tab.order = { ...tab.order, ...order };
+            tab.title = buildOrderTabTitle(tab.order);
+            if (tabsState.activeKey === tab.key) {
+              state.activeOrderId = tab.orderId;
+              setInfo(tab.order);
+            }
+            renderOrderTabs();
+            syncActiveOrderRowState();
+            emitOrderUpdated(tab.order, { localOnly: !!localOnly, tabOnly: true });
+            schedulePersistOrdersCache();
+            return tab.order;
+          }
+        }
+        return;
+      }
       state.orders.splice(idx, 1);
       rebuildOrdersStageIndex();
-      if (!tabsState.tabs.length && Number(state.activeOrderId || 0) === Number(order.id)) {
+      const tab = tabsState.tabs.find((t) => Number(t?.orderId || 0) === Number(order.id));
+      if (tab) {
+        tab.order = { ...tab.order, ...order };
+        tab.title = buildOrderTabTitle(tab.order);
+        if (tabsState.activeKey === tab.key) {
+          state.activeOrderId = tab.orderId;
+          setInfo(tab.order);
+        }
+        renderOrderTabs();
+        syncActiveOrderRowState();
+      } else if (!tabsState.tabs.length && Number(state.activeOrderId || 0) === Number(order.id)) {
         state.activeOrderId = null;
         setInfo(null);
       }
@@ -5837,6 +5895,7 @@
         renderStages();
       }
       reconcileOrderListDom(prevOrder || order, { prevVisible, nextVisible: false });
+      emitOrderUpdated(order, { removed: true, localOnly: !!localOnly });
       schedulePersistOrdersCache();
       return null;
     }
@@ -5880,6 +5939,7 @@
       const url = state.tenantSounds && state.tenantSounds.sound_order_cancelled_url;
       if (url) playNotificationSound(url);
     }
+    emitOrderUpdated(nextOrder, { localOnly: !!localOnly });
     schedulePersistOrdersCache();
     return nextOrder;
   }
@@ -6269,13 +6329,39 @@
     if (statusOptionBtn) {
       e.preventDefault();
       e.stopPropagation();
+      const infoTitleEl = document.querySelector('#ordersRightPane [data-info="order-title"]');
+      const titleOrderIdMatch = String(infoTitleEl?.textContent || "").match(/#\s*(\d+)/);
+      const activeTab = tabsState.tabs.find((tab) => tab.key === tabsState.activeKey) || null;
+      const activeOrder = getActiveOrder();
+      const orderId = Number(
+        statusOptionBtn.getAttribute("data-order-id")
+        || (titleOrderIdMatch ? Number(titleOrderIdMatch[1]) : 0)
+        || activeTab?.orderId
+        || activeOrder?.id
+        || state.activeOrderId
+        || 0
+      );
       const statusId = Number(statusOptionBtn.getAttribute("data-status-id"));
       if (!Number.isFinite(statusId) || statusId <= 0) {
         closeInlineStatusMenus();
         return;
       }
+      if (Number.isFinite(orderId) && orderId > 0) {
+        setStatusControlsDisabled(true);
+        updateOrderStatus(orderId, statusId)
+          .catch((err) => {
+            console.error(err);
+          })
+          .finally(() => {
+            setStatusControlsDisabled(false);
+            closeInlineStatusMenus();
+          });
+        return;
+      }
       selectActiveOrderStatus(statusId).catch((err) => {
         console.error(err);
+      }).finally(() => {
+        closeInlineStatusMenus();
       });
       return;
     }
@@ -6286,11 +6372,20 @@
       e.stopPropagation();
       const wrap = statusToggleBtn.closest('[data-role="order-inline-status"]');
       if (!wrap) return;
+      const dropdown = $('[data-role="order-status-menu"]', wrap);
+      const hasOptions = !!(dropdown && dropdown.querySelector('[data-action="order-status-menu-select"]'));
+      if (!hasOptions) {
+        try {
+          await loadStatuses();
+        } catch (err) {
+          console.error(err);
+        }
+      }
+      renderInlineStatusMenus(getActiveOrder());
       const shouldOpen = !wrap.classList.contains("is-open");
       closeInlineStatusMenus();
       if (shouldOpen) {
         wrap.classList.add("is-open");
-        const dropdown = $('[data-role="order-status-menu"]', wrap);
         if (dropdown) dropdown.classList.remove("hidden");
         statusToggleBtn.setAttribute("aria-expanded", "true");
       }
@@ -6626,6 +6721,25 @@
       });
       return tab || null;
     },
+    async cycleActiveOrderStatus() {
+      await cycleActiveOrderStatus();
+      return true;
+    },
+    async setOrderStatus(orderId, statusId) {
+      const id = Number(orderId || 0);
+      const nextStatusId = Number(statusId || 0);
+      if (!Number.isFinite(id) || id <= 0) return false;
+      if (!Number.isFinite(nextStatusId) || nextStatusId <= 0) return false;
+      await updateOrderStatus(id, nextStatusId);
+      return true;
+    },
+    applyOrderSnapshot(order) {
+      if (!order || typeof order !== "object") return false;
+      const id = Number(order.id || 0);
+      if (!Number.isFinite(id) || id <= 0) return false;
+      handleOrderEvent(order, { localOnly: true, skipStageRefresh: true });
+      return true;
+    },
   };
 
   // РџРµСЂРµРєР»СЋС‡РµРЅРёРµ СЃС‚Р°С‚СѓСЃР° РїРѕ РєР»РёРєСѓ РЅР° Р±РѕР»СЊС€СѓСЋ РїРёР»СЋР»СЋ
@@ -6647,10 +6761,12 @@
     e.preventDefault();
     e.stopPropagation();
     
-    const orderId = state.activeOrderId;
-    if (!orderId) return;
-    
-    const order = state.orders.find((o) => Number(o.id) === Number(orderId));
+    const activeTab = tabsState.tabs.find((tab) => tab.key === tabsState.activeKey) || null;
+    const fallbackOrderId = Number(activeTab?.orderId || state.activeOrderId || 0);
+    const order = getActiveOrder()
+      || state.orders.find((o) => Number(o.id) === fallbackOrderId)
+      || activeTab?.order
+      || null;
     if (!order) return;
     if (!isOrderPrintable(order)) return;
     

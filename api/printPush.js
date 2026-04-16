@@ -219,17 +219,24 @@ async function enqueuePrintJob(db, { tenantId, storeId, tokenId, order, html, cr
   return true;
 }
 
-async function sendOrderToPrintBot({ db, order, tenantId, storeId }) {
+async function sendOrderToPrintBot({ db, order, tenantId, storeId, silentSkipReasons }) {
+  const mutedReasons = new Set(
+    Array.isArray(silentSkipReasons)
+      ? silentSkipReasons.map((reason) => String(reason || "").trim()).filter(Boolean)
+      : []
+  );
   const orderIdDebug = Number(order?.id || order?.order_id || order?.orderId || 0);
   const fail = (reason, extra = {}) => {
     try {
-      console.warn("Print enqueue skipped:", {
-        reason,
-        orderId: orderIdDebug || null,
-        tenantId: Number(tenantId || order?.tenant_id || order?.tenantId || 0) || null,
-        storeId: Number(storeId || order?.store_id || order?.storeId || 0) || null,
-        ...extra,
-      });
+      if (!mutedReasons.has(String(reason || "").trim())) {
+        console.warn("Print enqueue skipped:", {
+          reason,
+          orderId: orderIdDebug || null,
+          tenantId: Number(tenantId || order?.tenant_id || order?.tenantId || 0) || null,
+          storeId: Number(storeId || order?.store_id || order?.storeId || 0) || null,
+          ...extra,
+        });
+      }
     } catch {}
     return false;
   };

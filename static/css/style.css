@@ -19667,6 +19667,26 @@ body.page-chat .panel{
   display:none;
 }
 
+#chatHeaderOrder.is-order-empty::after{
+  content:"Выберите клиента";
+  position:absolute;
+  left:50%;
+  top:50%;
+  transform:translate(-50%, -50%);
+  font-size:16px;
+  font-weight:800;
+  color:var(--color-text);
+  pointer-events:none;
+  white-space:nowrap;
+  z-index:2;
+}
+
+#chatHeaderOrder.is-order-empty > *{
+  opacity:0;
+  visibility:hidden;
+  pointer-events:none;
+}
+
 /* Must stay hidden even when shop.css is loaded later by clients.js */
 body.page-chat .chat-main-panel > .chat-main-body.panel-body::after{
   content:none !important;
@@ -22636,7 +22656,7 @@ body.page-chat .chat-main-panel > .chat-main-body > .chat-messages{
     padding:
       calc(var(--chat-mobile-thread-top-inset) + 20px)
       22px
-      calc(var(--chat-mobile-thread-bottom-inset) + 20px);
+      calc(max(var(--chat-mobile-thread-bottom-inset), var(--chat-mobile-footer-overlay-height)) + 20px);
   }
 
   body.page-chat .chat-messages{
@@ -22646,7 +22666,7 @@ body.page-chat .chat-main-panel > .chat-main-body > .chat-messages{
     padding:
       calc(var(--chat-mobile-thread-top-inset) + 8px)
       10px
-      calc(var(--chat-mobile-thread-bottom-inset) + 8px);
+      calc(max(var(--chat-mobile-thread-bottom-inset), var(--chat-mobile-footer-overlay-height)) + 8px);
     touch-action:pan-y;
   }
 
