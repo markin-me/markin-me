@@ -15311,31 +15311,20 @@
     showOrdersList();
     setContentTab("addresses");
 
-    const preloadTasks = isChatBridgeMode
-      ? [
-        loadClientDiscounts({
-          preferCache: true,
-          refresh: true,
-        }),
-        loadClientOrders({
-          preferCache: true,
-          refresh: useCacheOnlyForPreload ? !hasCachedOrders : true,
-        }),
-      ]
-      : [
-        loadAddresses({
-          preferCache: true,
-          refresh: useCacheOnlyForPreload ? !hasCachedAddresses : true,
-        }),
-        loadClientDiscounts({
-          preferCache: true,
-          refresh: true,
-        }),
-        loadClientOrders({
-          preferCache: true,
-          refresh: useCacheOnlyForPreload ? !hasCachedOrders : true,
-        }),
-      ];
+    const preloadTasks = [
+      loadAddresses({
+        preferCache: true,
+        refresh: useCacheOnlyForPreload ? !hasCachedAddresses : true,
+      }),
+      loadClientDiscounts({
+        preferCache: true,
+        refresh: true,
+      }),
+      loadClientOrders({
+        preferCache: true,
+        refresh: useCacheOnlyForPreload ? !hasCachedOrders : true,
+      }),
+    ];
     preloadTasks.push(
       prefetchClientBenefitsForCustomer(activeId, {
         modes: ["customer", "all"],
