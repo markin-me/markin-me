@@ -429,7 +429,7 @@
 
   let selectedTenantPwaTargetId = null;
   let selectedTenantPwaDevTargetId = null;
-  let tenantPwaDesignerSourceMode = "dev";
+  let tenantPwaDesignerSourceMode = "prod";
   let tenantPwaDesignerCardRatio = "1:1";
   let tenantPwaDesignerBackgroundPresetId = "warm-sun";
   let tenantPwaDesignerBackgroundGradientEnabled = true;
@@ -2098,7 +2098,7 @@
   }
 
   function ensureTenantPwaDesignerSourceMode() {
-    tenantPwaDesignerSourceMode = "dev";
+    tenantPwaDesignerSourceMode = "prod";
   }
 
   function isTenantPwaInstallTargetHttps(item) {
@@ -2112,25 +2112,12 @@
   }
 
   function getTenantPwaDesignerTargets() {
-    const sourceTargets = tenantPwaDesignerSourceMode === "dev" ? tenantPwaInstallDevTargets : tenantPwaInstallTargets;
-    return sourceTargets.filter(isTenantPwaInstallTargetHttps);
+    return tenantPwaInstallTargets.filter(isTenantPwaInstallTargetHttps);
   }
 
   function getSelectedTenantPwaDesignerTarget() {
     const targets = getTenantPwaDesignerTargets();
     if (!targets.length) return null;
-    if (tenantPwaDesignerSourceMode === "dev") {
-      const selected = selectedTenantPwaDevTargetId
-        ? targets.find((item) => item.id === selectedTenantPwaDevTargetId)
-        : null;
-      if (selected) {
-        selectedTenantPwaDevTargetId = selected.id;
-        return selected;
-      }
-      const preferredTarget = targets.find((item) => item && item.kind === "dev-tunnel") || targets[0];
-      selectedTenantPwaDevTargetId = preferredTarget ? preferredTarget.id : null;
-      return preferredTarget || null;
-    }
     const selected = selectedTenantPwaTargetId
       ? targets.find((item) => item.id === selectedTenantPwaTargetId)
       : null;
@@ -3235,8 +3222,7 @@
     renderTenantPwaDesignerStaticControls();
 
     const sourceOptions = [
-      { id: "prod", label: "Рабочая витрина" },
-      { id: "dev", label: "DEV / локальная сборка" }
+      { id: "prod", label: "Рабочая витрина" }
     ];
     if (sourceSelect) {
       sourceSelect.innerHTML = sourceOptions.map((item) => `
@@ -3250,9 +3236,7 @@
 
     if (targetSelect) {
       targetSelect.innerHTML = targets.map((item) => {
-        const prefix = tenantPwaDesignerSourceMode === "dev"
-          ? (item.kind === "dev-tunnel" ? "[HTTPS] " : item.kind === "dev-localhost" ? "[LOCAL] " : "")
-          : (item.kind === "subdomain" ? "Субдомен: " : "Домен: ");
+        const prefix = item.kind === "subdomain" ? "Субдомен: " : "Домен: ";
         const selectedAttr = selectedTarget && selectedTarget.id === item.id ? " selected" : "";
         return `<option value="${item.id}"${selectedAttr}>${prefix}${item.label}</option>`;
       }).join("");
@@ -3261,9 +3245,7 @@
     }
 
     if (sourceHint) {
-      sourceHint.textContent = tenantPwaDesignerSourceMode === "dev"
-        ? "DEV QR подходит для LAN-проверки или HTTPS tunnel, если нужно тестировать установку локальной сборки."
-        : "Рабочий QR ведет на подключенный домен витрины и подходит для реальной публикации.";
+      sourceHint.textContent = "Рабочий QR ведет на подключенный домен витрины и подходит для реальной публикации.";
     }
 
     if (emptyEl) emptyEl.classList.toggle("hidden", hasTargets);
@@ -3286,9 +3268,7 @@
         urlEl.removeAttribute("href");
       }
       if (targetHint) {
-        targetHint.textContent = tenantPwaDesignerSourceMode === "dev"
-          ? "Откройте tenant UI на localhost или LAN-адресе, чтобы появились DEV-цели."
-          : "Подключите рабочий домен или используйте субдомен tenant-а.";
+        targetHint.textContent = "Подключите рабочий домен или используйте субдомен tenant-а.";
       }
       if (hintEl) {
         hintEl.textContent = "Пока нет доступной ссылки для генерации QR-карточки.";
@@ -3341,11 +3321,9 @@
     }
 
     if (targetHint) {
-      targetHint.textContent = tenantPwaDesignerSourceMode === "dev"
-        ? ""
-        : selectedTarget.kind === "subdomain"
-          ? "Ссылка ведет на subdomain tenant-а."
-          : "Ссылка ведет на подключенный рабочий домен.";
+      targetHint.textContent = selectedTarget.kind === "subdomain"
+        ? "Ссылка ведет на subdomain tenant-а."
+        : "Ссылка ведет на подключенный рабочий домен.";
     }
 
     if (!isVisible) {
@@ -3518,6 +3496,7 @@
     containerEl.innerHTML = "";
 
     const QrCodeCtor = window.QRCode;
+    const QrCodeStylingCtor = window.QRCodeStyling;
     const safeUrl = String(url || "").trim();
     if (typeof QrCodeCtor !== "function" || !safeUrl) return false;
     const displaySize = Math.max(96, Math.round(Number(options.displaySize || options.size) || 136));
@@ -3539,6 +3518,33 @@
     containerEl.style.isolation = "isolate";
 
     try {
+      if (typeof QrCodeStylingCtor === "function") {
+        const qrOptions = buildTenantPwaDesignerQrCodeOptions(safeUrl, {
+          size: renderSize,
+          type: "canvas",
+          logoUrl,
+          margin: Math.max(4, Math.round(displaySize * 0.018)),
+          roundSize: true
+        });
+        qrOptions.backgroundOptions = { color: colorLight };
+        qrOptions.dotsOptions = Object.assign({}, qrOptions.dotsOptions, {
+          color: colorDark,
+          type: tenantPwaDesignerQrStyle
+        });
+        const styling = new QrCodeStylingCtor(qrOptions);
+        styling.append(containerEl);
+        const styledNode = containerEl.querySelector("canvas, img");
+        if (styledNode && styledNode.style) {
+          styledNode.setAttribute("data-tenant-qr-render", "1");
+          styledNode.style.display = "block";
+          styledNode.style.width = "100%";
+          styledNode.style.height = "100%";
+          styledNode.style.maxWidth = `${displaySize}px`;
+          styledNode.style.maxHeight = `${displaySize}px`;
+        }
+        return true;
+      }
+
       const correctLevel = QrCodeCtor.CorrectLevel
         ? (logoUrl && QrCodeCtor.CorrectLevel.H !== undefined
           ? QrCodeCtor.CorrectLevel.H
@@ -20674,12 +20680,8 @@
 
     if (tenantQrDesignerSourceSelect) {
       tenantQrDesignerSourceSelect.addEventListener("change", () => {
-        tenantPwaDesignerSourceMode = String(tenantQrDesignerSourceSelect.value || "prod").trim() === "dev" ? "dev" : "prod";
-        if (tenantPwaDesignerSourceMode === "prod") {
-          syncTenantPwaTargetFromSelectedDomain();
-        } else {
-          syncSelectedTenantPwaDevInstallTarget();
-        }
+        tenantPwaDesignerSourceMode = "prod";
+        syncTenantPwaTargetFromSelectedDomain();
         renderTenantPwaDesigner();
       });
     }
@@ -20687,11 +20689,7 @@
     if (tenantQrDesignerTargetSelect) {
       tenantQrDesignerTargetSelect.addEventListener("change", () => {
         const nextValue = String(tenantQrDesignerTargetSelect.value || "").trim() || null;
-        if (tenantPwaDesignerSourceMode === "dev") {
-          selectedTenantPwaDevTargetId = nextValue;
-        } else {
-          selectedTenantPwaTargetId = nextValue;
-        }
+        selectedTenantPwaTargetId = nextValue;
         renderTenantPwaDesigner();
       });
     }
