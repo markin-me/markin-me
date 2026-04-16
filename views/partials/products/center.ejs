@@ -29,6 +29,17 @@
     <div class="panel-body no-scrollbar">
 
       <div class="content-view" data-view-content="products">
+        <div class="product-list-header" id="productListHeader" aria-hidden="true">
+          <span></span>
+          <span></span>
+          <span>Активен</span>
+          <span>Видимость</span>
+          <span>Остаток</span>
+          <span>Себестоимость</span>
+          <span>Цена</span>
+          <span>Старая цена</span>
+          <span></span>
+        </div>
         <div class="orders-list" id="productsList"></div>
         <div class="empty-hint" id="productsEmptyHint">Пока нет товаров...</div>
       </div>
@@ -79,9 +90,47 @@
     </div>
     <div class="panel-footer hidden" id="productsBulkFooter">
       <div class="products-bulk-footer-actions">
-        <div class="products-bulk-footer-count">Выбрано: <b id="productsBulkSelectedCount">0</b></div>
-        <button class="btn" type="button" id="productsBulkSelectAllBtn">Выделить все</button>
-        <button class="btn btn-ghost" type="button" id="productsBulkClearBtn">Снять выделение</button>
+        <div class="products-bulk-footer-count">
+          <label class="products-bulk-toggle-all" aria-label="Выделить все товары в текущей группе">
+            <input class="products-bulk-toggle-all-input" type="checkbox" id="productsBulkToggleAllInput" />
+            <span class="products-bulk-toggle-all-box" aria-hidden="true"></span>
+          </label>
+          <span>Выбрано: <b id="productsBulkSelectedCount">0</b></span>
+        </div>
+        <div class="products-bulk-actions" id="productsBulkActions">
+          <span class="products-bulk-actions-count">Выбрано: <b id="productsBulkActionsSelectedCount">0</b></span>
+          <div class="products-bulk-menu-wrap" id="productsBulkMenuWrap">
+            <button class="btn btn-ghost icon-btn" type="button" id="productsBulkMenuToggleBtn" aria-label="Действия">...</button>
+            <div class="products-bulk-menu hidden" id="productsBulkMenu">
+              <label class="products-bulk-menu-item">
+                <input type="checkbox" data-bulk-action="activate" />
+                <span>Сделать активными</span>
+              </label>
+              <label class="products-bulk-menu-item">
+                <input type="checkbox" data-bulk-action="deactivate" />
+                <span>Сделать неактивными</span>
+              </label>
+              <label class="products-bulk-menu-item">
+                <input type="checkbox" data-bulk-action="show" />
+                <span>Сделать видимыми</span>
+              </label>
+              <label class="products-bulk-menu-item">
+                <input type="checkbox" data-bulk-action="hide" />
+                <span>Сделать невидимыми</span>
+              </label>
+              <label class="products-bulk-menu-item">
+                <input type="checkbox" data-bulk-action="infinite_stock" />
+                <span>Бесконечный остаток</span>
+              </label>
+              <label class="products-bulk-menu-item">
+                <input type="checkbox" data-bulk-action="zero_stock" />
+                <span>Обнулить остаток</span>
+              </label>
+            </div>
+          </div>
+          <button class="btn btn-ghost icon-btn" type="button" id="productsBulkCancelBtn" aria-label="Сбросить действия">✕</button>
+          <button class="btn icon-btn" type="button" id="productsBulkApplyBtn" aria-label="Применить действия">✓</button>
+        </div>
       </div>
     </div>
   </div>
@@ -212,7 +261,7 @@
       </label>
     </div>
 
-    <div class="info-card info-accordion" id="peDescriptionAccordion">
+    <div class="info-card info-accordion" id="peDescriptionAccordion" data-product-block="description">
       <div class="acc-item">
         <button class="stage-item acc-trigger" type="button" data-acc-trigger>
           <span class="stage-meta stage-text">
@@ -236,7 +285,7 @@
       </div>
     </div>
 
-    <div class="info-card product-options-card">
+    <div class="info-card product-options-card" id="peVariantBlock" data-product-block="variants">
       <div class="option-section-header">
         <div class="kv-label">Варианты товара</div>
         <div class="option-actions">
@@ -248,7 +297,7 @@
       <div class="info-accordion" id="peVariantAccordion"></div>
     </div>
 
-    <div class="info-card product-options-card">
+    <div class="info-card product-options-card" id="peOptionBlock" data-product-block="options">
       <div class="option-section-header">
         <div class="kv-label">Опции</div>
         <div class="option-actions">
@@ -278,7 +327,7 @@
       </div>
     </div>
 
-    <div class="info-card product-ingredients-card">
+    <div class="info-card product-ingredients-card" id="peIngredientBlock" data-product-block="ingredients">
       <div class="option-section-header">
         <div class="kv-label">Состав</div>
         <div class="option-actions" style="display: flex; align-items: center; gap: 12px;">
@@ -302,7 +351,7 @@
       <div class="info-accordion" id="peIngredientAccordion"></div>
     </div>
 
-    <div class="info-card product-options-card">
+    <div class="info-card product-options-card" id="pePromotionsBlock" data-product-block="promotions">
       <div class="option-section-header">
         <div class="kv-label">Участие в акциях</div>
       </div>

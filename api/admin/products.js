@@ -7,6 +7,15 @@ const multer = require('multer');
 module.exports = function makeAdminProductsRouter({ db, helpers }) {
   const router = express.Router();
   let hasCategoryCheckoutVisibilityColumn = null;
+  let discountDeletedColumnsReady = false;
+  let ensureDiscountDeletedColumnsPromise = null;
+  const PRODUCT_BLOCK_KEYS = Object.freeze([
+    "description",
+    "variants",
+    "options",
+    "ingredients",
+    "promotions",
+  ]);
   const ADMIN_CACHE_TTL_MS = Object.freeze({
     checkoutConstructorDraft: 30_000,
     newOrderManifest: 5_000,
@@ -138,6 +147,198 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       hasCategoryCheckoutVisibilityColumn = false;
     }
     return hasCategoryCheckoutVisibilityColumn;
+  }
+
+  async function ensureDiscountDeletedColumnsKnown() {
+    if (discountDeletedColumnsReady) return true;
+    if (ensureDiscountDeletedColumnsPromise) return ensureDiscountDeletedColumnsPromise;
+    ensureDiscountDeletedColumnsPromise = (async () => {
+      const [columnRows] = await db.query("SHOW COLUMNS FROM mkt_discounts");
+      const existing = new Set(
+        (Array.isArray(columnRows) ? columnRows : [])
+          .map((row) => String(row?.Field || "").trim())
+          .filter(Boolean)
+      );
+      if (!existing.has("is_deleted")) {
+        try {
+          await db.query("ALTER TABLE mkt_discounts ADD COLUMN `is_deleted` TINYINT(1) NOT NULL DEFAULT 0 AFTER `hide_in_benefits`");
+          existing.add("is_deleted");
+        } catch (err) {
+          if (String(err?.code || "") !== "ER_DUP_FIELDNAME") throw err;
+          existing.add("is_deleted");
+        }
+      }
+      if (!existing.has("deleted_at")) {
+        try {
+          await db.query("ALTER TABLE mkt_discounts ADD COLUMN `deleted_at` DATETIME NULL AFTER `is_deleted`");
+          existing.add("deleted_at");
+        } catch (err) {
+          if (String(err?.code || "") !== "ER_DUP_FIELDNAME") throw err;
+          existing.add("deleted_at");
+        }
+      }
+      discountDeletedColumnsReady = existing.has("is_deleted") && existing.has("deleted_at");
+      return discountDeletedColumnsReady;
+    })()
+      .catch((err) => {
+        ensureDiscountDeletedColumnsPromise = null;
+        throw err;
+      })
+      .finally(() => {
+        if (discountDeletedColumnsReady) {
+          ensureDiscountDeletedColumnsPromise = null;
+        }
+      });
+    return ensureDiscountDeletedColumnsPromise;
+  }
+
+  function getDefaultProductBlocksConfig() {
+    return {
+      description: false,
+      variants: false,
+      options: false,
+      ingredients: false,
+      promotions: false,
+    };
+  }
+
+  function normalizeProductBlocksConfig(rawValue, fallbackValue = null) {
+    let parsed = rawValue;
+    if (typeof parsed === "string") {
+      const trimmed = parsed.trim();
+      if (!trimmed) parsed = null;
+      else {
+        try {
+          parsed = JSON.parse(trimmed);
+        } catch {
+          parsed = null;
+        }
+      }
+    }
+    const fallback = fallbackValue && typeof fallbackValue === "object"
+      ? fallbackValue
+      : getDefaultProductBlocksConfig();
+    const out = {};
+    PRODUCT_BLOCK_KEYS.forEach((key) => {
+      out[key] = Boolean(parsed && typeof parsed === "object" && parsed[key] != null ? parsed[key] : fallback[key]);
+    });
+    return out;
+  }
+
+  async function resolveProductBlocksConfigMap(tenantId, storeId, productRows = []) {
+    const rows = Array.isArray(productRows) ? productRows : [];
+    const rowById = new Map();
+    rows.forEach((row) => {
+      const productId = Number(row?.id || 0);
+      if (productId > 0) rowById.set(productId, row);
+    });
+    const productIds = Array.from(rowById.keys());
+    const result = new Map();
+    if (!productIds.length) return result;
+
+    const unresolvedIds = [];
+    for (const productId of productIds) {
+      const row = rowById.get(productId);
+      const raw = row?.blocks_config_json ?? row?.blocks_config ?? null;
+      if (raw != null) {
+        result.set(productId, normalizeProductBlocksConfig(raw));
+      } else {
+        unresolvedIds.push(productId);
+      }
+    }
+    if (!unresolvedIds.length) return result;
+
+    const computedById = new Map();
+    unresolvedIds.forEach((productId) => {
+      const row = rowById.get(productId) || {};
+      computedById.set(productId, {
+        ...getDefaultProductBlocksConfig(),
+        description: Boolean(
+          String(row.description_short || "").trim()
+          || String(row.description || "").trim()
+        ),
+      });
+    });
+
+    await ensureDiscountDeletedColumnsKnown();
+    const placeholders = unresolvedIds.map(() => "?").join(",");
+
+    const [variantRows] = await db.query(
+      `SELECT DISTINCT product_id
+       FROM prod_variant_assignments
+       WHERE tenant_id=? AND product_id IN (${placeholders}) AND is_active=1`,
+      [tenantId, ...unresolvedIds]
+    );
+    variantRows.forEach((row) => {
+      const cfg = computedById.get(Number(row.product_id));
+      if (cfg) cfg.variants = true;
+    });
+
+    const [optionRows] = await db.query(
+      `SELECT DISTINCT assign_id AS product_id
+       FROM prod_option_assignments
+       WHERE tenant_id=? AND assign_type='product' AND assign_id IN (${placeholders}) AND is_active=1`,
+      [tenantId, ...unresolvedIds]
+    );
+    optionRows.forEach((row) => {
+      const cfg = computedById.get(Number(row.product_id));
+      if (cfg) cfg.options = true;
+    });
+
+    const [ingredientRows] = await db.query(
+      `SELECT DISTINCT product_id
+       FROM prod_product_ingredients
+       WHERE tenant_id=? AND product_id IN (${placeholders})`,
+      [tenantId, ...unresolvedIds]
+    );
+    ingredientRows.forEach((row) => {
+      const cfg = computedById.get(Number(row.product_id));
+      if (cfg) cfg.ingredients = true;
+    });
+
+    const [promotionRows] = await db.query(
+      `SELECT p.id AS product_id,
+              CASE
+                WHEN EXISTS (
+                  SELECT 1
+                  FROM mkt_discount_products dp
+                  JOIN mkt_discounts d
+                    ON d.id = dp.discount_id
+                   AND d.tenant_id = dp.tenant_id
+                  WHERE dp.tenant_id = p.tenant_id
+                    AND d.store_id = ?
+                    AND d.is_deleted = 0
+                    AND dp.product_id = p.id
+                ) OR EXISTS (
+                  SELECT 1
+                  FROM prod_product_categories pc
+                  JOIN mkt_discount_products dp
+                    ON dp.tenant_id = pc.tenant_id
+                   AND dp.category_id = pc.category_id
+                  JOIN mkt_discounts d
+                    ON d.id = dp.discount_id
+                   AND d.tenant_id = dp.tenant_id
+                  WHERE pc.tenant_id = p.tenant_id
+                    AND d.store_id = ?
+                    AND d.is_deleted = 0
+                    AND pc.product_id = p.id
+                )
+                THEN 1 ELSE 0
+              END AS has_promotions
+       FROM prod_products p
+       WHERE p.tenant_id=? AND p.id IN (${placeholders})`,
+      [storeId, storeId, tenantId, ...unresolvedIds]
+    );
+    promotionRows.forEach((row) => {
+      const cfg = computedById.get(Number(row.product_id));
+      if (cfg) cfg.promotions = Number(row.has_promotions || 0) === 1;
+    });
+
+    unresolvedIds.forEach((productId) => {
+      result.set(productId, normalizeProductBlocksConfig(computedById.get(productId)));
+    });
+
+    return result;
   }
 
   // Удаляет файлы фото с диска (оригинал + .webp + thumb)
@@ -369,10 +570,12 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
             readTableStamp("prod_variant_assignments", "tenant_id=?", [tenantId]),
             readTableStamp("prod_variant_groups", "tenant_id=?", [tenantId]),
             readTableStamp("prod_variant_discount_tiers", "tenant_id=?", [tenantId]),
+            readTableStamp("prod_variant_value_exclusions", "tenant_id=?", [tenantId]),
             readTableStamp("prod_product_ingredients", "tenant_id=?", [tenantId]),
             readTableStamp("prod_option_assignments", "tenant_id=?", [tenantId]),
             readTableStamp("prod_option_groups", "tenant_id=?", [tenantId]),
             readTableStamp("prod_option_items", "tenant_id=?", [tenantId]),
+            readTableStamp("prod_option_item_exclusions", "tenant_id=?", [tenantId]),
             readTableStamp("prod_combos", "tenant_id=?", [tenantId]),
             readTableStamp("prod_combo_set_blocks", "tenant_id=?", [tenantId]),
             readTableStamp("prod_combo_blocks", "tenant_id=?", [tenantId]),
@@ -689,7 +892,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
       const [rows] = await db.query(
         `SELECT p.id, p.name, p.sku, p.description_short, p.description, p.price, p.old_price, p.cost_price,
-                p.unit_id, p.base_unit_id, p.base_qty, p.photos_json, p.is_active, p.site_visibility,
+                p.unit_id, p.base_unit_id, p.base_qty, p.photos_json, p.blocks_config_json, p.is_active, p.site_visibility,
                 s.qty AS stock_qty
          FROM prod_products p
          LEFT JOIN prod_product_stocks s ON s.tenant_id=p.tenant_id AND s.store_id=? AND s.product_id=p.id
@@ -699,6 +902,8 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       if (!rows.length) return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
       const r = rows[0];
       r.photos = helpers.safeJsonArray(r.photos_json);
+      const blocksConfigMap = await resolveProductBlocksConfigMap(tenantId, storeId, [r]);
+      r.blocks_config = blocksConfigMap.get(Number(r.id)) || getDefaultProductBlocksConfig();
       res.json({ ok: true, data: r });
     } catch (e) {
       console.error(e);
@@ -741,6 +946,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
   // ------------------------------
   router.get('/prod_products/:id/discounts', async (req, res) => {
     try {
+      await ensureDiscountDeletedColumnsKnown();
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
       const productId = Number(req.params.id);
@@ -763,7 +969,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
                 'direct' AS link_type
          FROM mkt_discounts d
          JOIN mkt_discount_products dp ON dp.discount_id = d.id AND dp.tenant_id = d.tenant_id
-         WHERE d.tenant_id = ? AND d.store_id = ? AND dp.product_id = ?`,
+         WHERE d.tenant_id = ? AND d.store_id = ? AND d.is_deleted = 0 AND dp.product_id = ?`,
         [tenantId, storeId, productId]
       );
 
@@ -777,7 +983,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
            FROM mkt_discounts d
            JOIN mkt_discount_products dp ON dp.discount_id = d.id AND dp.tenant_id = d.tenant_id
            JOIN prod_categories pc ON pc.id = dp.category_id AND pc.tenant_id = dp.tenant_id
-           WHERE d.tenant_id = ? AND d.store_id = ? AND dp.category_id IN (?)`,
+           WHERE d.tenant_id = ? AND d.store_id = ? AND d.is_deleted = 0 AND dp.category_id IN (?)`,
           [tenantId, storeId, categoryIds]
         );
         categoryDiscounts = catDisc;
@@ -818,7 +1024,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
         p.id, p.tenant_id, p.name, p.sku, p.description_short, p.description,
         p.price, p.old_price, p.cost_price,
         p.unit_id, p.base_unit_id, p.base_qty,
-        p.photos_json,
+        p.photos_json, p.blocks_config_json,
         p.is_active, p.site_visibility,
         p.created_at, p.updated_at
       `;
@@ -855,6 +1061,10 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
           r.photos = helpers.safeJsonArray(r.photos_json);
           if (r.link_sort_order == null) missing.push(r);
         }
+        const blocksConfigMap = await resolveProductBlocksConfigMap(tenantId, storeId, rows);
+        rows.forEach((r) => {
+          r.blocks_config = blocksConfigMap.get(Number(r.id)) || getDefaultProductBlocksConfig();
+        });
 
         if (missing.length) {
           let next = await helpers.nextSortOrderForCategory(db, tenantId, categoryId, 10);
@@ -911,6 +1121,10 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
         : await db.query(baseSql, baseParams);
 
       for (const r of rows) r.photos = helpers.safeJsonArray(r.photos_json);
+      const blocksConfigMap = await resolveProductBlocksConfigMap(tenantId, storeId, rows);
+      rows.forEach((r) => {
+        r.blocks_config = blocksConfigMap.get(Number(r.id)) || getDefaultProductBlocksConfig();
+      });
 
       if (!paginationRequested) {
         return res.json({ ok: true, data: rows, category_id: categoryId });
@@ -961,17 +1175,19 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
 
       const is_active = helpers.toBool(req.body.is_active, true) ? 1 : 0;
       const site_visibility = helpers.toBool(req.body.site_visibility, true) ? 1 : 0;
+      const blocks_config = normalizeProductBlocksConfig(req.body.blocks_config);
+      const blocks_config_json = JSON.stringify(blocks_config);
 
       const photosArr = helpers.safeJsonArray(req.body.photos_json || req.body.photos);
       const photos_json = photosArr.length ? JSON.stringify(photosArr.slice(0, 10)) : null;
 
       const [result] = await db.query(
         `INSERT INTO prod_products
-          (tenant_id, name, sku, description_short, description, price, old_price, cost_price, unit_id, base_unit_id, base_qty, photos_json, is_active, site_visibility)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+          (tenant_id, name, sku, description_short, description, price, old_price, cost_price, unit_id, base_unit_id, base_qty, photos_json, blocks_config_json, is_active, site_visibility)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [
           tenantId, name, sku, description_short, description,
-          price, old_price, cost_price, unit_id, base_unit_id, base_qty, photos_json,
+          price, old_price, cost_price, unit_id, base_unit_id, base_qty, photos_json, blocks_config_json,
           is_active, site_visibility
         ]
       );
@@ -1018,6 +1234,9 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
 
       const is_active = helpers.toBool(req.body.is_active, true) ? 1 : 0;
       const site_visibility = helpers.toBool(req.body.site_visibility, true) ? 1 : 0;
+      const hasBlocksConfig = Object.prototype.hasOwnProperty.call(req.body || {}, 'blocks_config');
+      const blocks_config = hasBlocksConfig ? normalizeProductBlocksConfig(req.body.blocks_config) : null;
+      const blocks_config_json = hasBlocksConfig ? JSON.stringify(blocks_config) : null;
 
       const photosArr = helpers.safeJsonArray(req.body.photos_json || req.body.photos);
       const photos_json = photosArr.length ? JSON.stringify(photosArr.slice(0, 10)) : null;
@@ -1036,11 +1255,11 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
 
       await db.query(
         `UPDATE prod_products
-         SET name=?, sku=?, description_short=?, description=?, price=?, old_price=?, cost_price=?, unit_id=?, base_unit_id=?, base_qty=?, photos_json=?, is_active=?, site_visibility=?
+         SET name=?, sku=?, description_short=?, description=?, price=?, old_price=?, cost_price=?, unit_id=?, base_unit_id=?, base_qty=?, photos_json=?, blocks_config_json=COALESCE(?, blocks_config_json), is_active=?, site_visibility=?
          WHERE tenant_id=? AND id=?`,
         [
           name, sku, description_short, description,
-          price, old_price, cost_price, unit_id, base_unit_id, base_qty, photos_json,
+          price, old_price, cost_price, unit_id, base_unit_id, base_qty, photos_json, blocks_config_json,
           is_active, site_visibility,
           tenantId, id
         ]
@@ -1067,22 +1286,46 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
   router.patch('/prod_products/:id', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
       const id = Number(req.params.id);
       if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      const hasCostPrice = Object.prototype.hasOwnProperty.call(req.body || {}, 'cost_price');
+      const hasPrice = Object.prototype.hasOwnProperty.call(req.body || {}, 'price');
+      const hasOldPrice = Object.prototype.hasOwnProperty.call(req.body || {}, 'old_price');
+      const hasBaseQty = Object.prototype.hasOwnProperty.call(req.body || {}, 'base_qty');
+      const hasIsActive = Object.prototype.hasOwnProperty.call(req.body || {}, 'is_active');
+      const hasSiteVisibility = Object.prototype.hasOwnProperty.call(req.body || {}, 'site_visibility');
+      const hasStock = Object.prototype.hasOwnProperty.call(req.body || {}, 'stock');
       const cost_price = helpers.numOrNull(req.body.cost_price);
       const price = helpers.numOrNull(req.body.price);
+      const old_price = helpers.numOrNull(req.body.old_price);
       const base_qty = helpers.numOrNull(req.body.base_qty);
+      const stock_qty = helpers.numOrNull(req.body.stock);
+      const is_active = helpers.toBool(req.body.is_active, true) ? 1 : 0;
+      const site_visibility = helpers.toBool(req.body.site_visibility, true) ? 1 : 0;
       const updates = [];
       const params = [];
-      if (cost_price != null) { updates.push('cost_price=?'); params.push(cost_price); }
-      if (price != null) { updates.push('price=?'); params.push(price); }
-      if (base_qty != null) { updates.push('base_qty=?'); params.push(base_qty); }
-      if (updates.length === 0) return res.json({ ok: true });
-      params.push(tenantId, id);
-      await db.query(
-        `UPDATE prod_products SET ${updates.join(', ')} WHERE tenant_id=? AND id=?`,
-        params
-      );
+      if (hasCostPrice) { updates.push('cost_price=?'); params.push(cost_price); }
+      if (hasPrice) { updates.push('price=?'); params.push(price ?? 0); }
+      if (hasOldPrice) { updates.push('old_price=?'); params.push(old_price); }
+      if (hasBaseQty) { updates.push('base_qty=?'); params.push(base_qty); }
+      if (hasIsActive) { updates.push('is_active=?'); params.push(is_active); }
+      if (hasSiteVisibility) { updates.push('site_visibility=?'); params.push(site_visibility); }
+      if (updates.length > 0) {
+        params.push(tenantId, id);
+        await db.query(
+          `UPDATE prod_products SET ${updates.join(', ')} WHERE tenant_id=? AND id=?`,
+          params
+        );
+      }
+      if (hasStock) {
+        await db.query(
+          `INSERT INTO prod_product_stocks (tenant_id, store_id, product_id, qty)
+           VALUES (?,?,?,?)
+           ON DUPLICATE KEY UPDATE qty=VALUES(qty)`,
+          [tenantId, storeId, id, stock_qty]
+        );
+      }
       res.json({ ok: true });
     } catch (e) {
       console.error(e);
@@ -1192,24 +1435,34 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
     if (!norm.length) return res.status(400).json({ ok: false, error: 'EMPTY' });
 
     const conn = await db.getConnection();
+    const maxAttempts = 3;
     try {
-      await conn.beginTransaction();
-      let sort = 0;
-      for (const productId of norm) {
-        await conn.query(
-          `INSERT INTO prod_product_categories (tenant_id, product_id, category_id, sort_order)
-           VALUES (?,?,?,?)
-           ON DUPLICATE KEY UPDATE sort_order=VALUES(sort_order)`,
-          [tenantId, productId, categoryId, sort]
-        );
-        sort += 10;
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        try {
+          await conn.beginTransaction();
+          let sort = 0;
+          for (const productId of norm) {
+            await conn.query(
+              `INSERT INTO prod_product_categories (tenant_id, product_id, category_id, sort_order)
+               VALUES (?,?,?,?)
+               ON DUPLICATE KEY UPDATE sort_order=VALUES(sort_order)`,
+              [tenantId, productId, categoryId, sort]
+            );
+            sort += 10;
+          }
+          await conn.commit();
+          return res.json({ ok: true });
+        } catch (e) {
+          try { await conn.rollback(); } catch (_) {}
+          const isDeadlock = e && (e.code === 'ER_LOCK_DEADLOCK' || e.errno === 1213 || e.sqlState === '40001');
+          if (!isDeadlock || attempt >= maxAttempts) throw e;
+          await new Promise((resolve) => setTimeout(resolve, attempt * 60));
+        }
       }
-      await conn.commit();
-      res.json({ ok: true });
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
     } catch (e) {
-      await conn.rollback();
       console.error(e);
-      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
     } finally {
       conn.release();
     }
@@ -1241,6 +1494,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
     try {
       const tenantId = helpers.getTenantId(req);
       const id = Number(req.params.id);
+      const scopedProductId = Number(req.query?.product_id || 0);
       if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
 
       const [[group]] = await db.query(
@@ -1261,6 +1515,48 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
         [tenantId, id]
       );
 
+      const itemProductIds = items
+        .map((item) => Number(item.target_product_id))
+        .filter((productId) => Number.isFinite(productId) && productId > 0);
+      const itemCategoryMap = new Map();
+      if (itemProductIds.length) {
+        const [categoryRows] = await db.query(
+          `SELECT product_id, category_id
+           FROM prod_product_categories
+           WHERE tenant_id=? AND product_id IN (${itemProductIds.map(() => '?').join(',')})`,
+          [tenantId, ...itemProductIds]
+        );
+        (Array.isArray(categoryRows) ? categoryRows : []).forEach((row) => {
+          const productId = Number(row.product_id);
+          const categoryId = Number(row.category_id);
+          if (!Number.isFinite(productId) || productId <= 0) return;
+          if (!Number.isFinite(categoryId) || categoryId <= 0) return;
+          if (!itemCategoryMap.has(productId)) itemCategoryMap.set(productId, []);
+          itemCategoryMap.get(productId).push(categoryId);
+        });
+      }
+
+      let excludedItemIds = new Set();
+      if (Number.isFinite(scopedProductId) && scopedProductId > 0) {
+        try {
+          const [excludedRows] = await db.query(
+            `SELECT option_item_id
+             FROM prod_option_item_exclusions
+             WHERE tenant_id=? AND product_id=? AND group_id=?`,
+            [tenantId, scopedProductId, id]
+          );
+          excludedItemIds = new Set(
+            (Array.isArray(excludedRows) ? excludedRows : [])
+              .map((row) => Number(row.option_item_id))
+              .filter((itemId) => Number.isFinite(itemId) && itemId > 0)
+          );
+        } catch (error) {
+          if (error?.code !== 'ER_NO_SUCH_TABLE' && error?.code !== 'ER_BAD_TABLE_ERROR') {
+            throw error;
+          }
+        }
+      }
+
       const [assignments] = await db.query(
         `SELECT a.*, p.name AS product_name
          FROM prod_option_assignments a
@@ -1270,7 +1566,31 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
         [tenantId, id]
       );
 
-      res.json({ ok: true, data: { group, items, assignments } });
+      const normalizedItems = items.map((item) => ({
+        ...item,
+        category_ids: itemCategoryMap.get(Number(item.target_product_id)) || [],
+        is_excluded_for_product: excludedItemIds.has(Number(item.id)),
+      }));
+      const visibleItemIds = normalizedItems
+        .filter((item) => item.is_excluded_for_product !== true)
+        .map((item) => Number(item.id))
+        .filter((itemId) => Number.isFinite(itemId) && itemId > 0);
+
+      res.json({
+        ok: true,
+        data: {
+          group,
+          items: normalizedItems,
+          assignments,
+          product_scope: Number.isFinite(scopedProductId) && scopedProductId > 0
+            ? {
+                product_id: scopedProductId,
+                excluded_item_ids: Array.from(excludedItemIds),
+                visible_item_ids: visibleItemIds,
+              }
+            : null,
+        },
+      });
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
@@ -1855,6 +2175,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
       const id = Number(req.params.id);
+      const scopedProductId = Number(req.query?.product_id || 0);
       if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
 
       const [[group]] = await db.query(
@@ -1875,6 +2196,27 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
         [tenantId, id]
       );
 
+      let excludedValueIndexes = new Set();
+      if (Number.isFinite(scopedProductId) && scopedProductId > 0) {
+        try {
+          const [excludedRows] = await db.query(
+            `SELECT value_index
+             FROM prod_variant_value_exclusions
+             WHERE tenant_id=? AND product_id=? AND variant_group_id=?`,
+            [tenantId, scopedProductId, id]
+          );
+          excludedValueIndexes = new Set(
+            (Array.isArray(excludedRows) ? excludedRows : [])
+              .map((row) => Number(row.value_index))
+              .filter((valueIndex) => Number.isFinite(valueIndex) && valueIndex >= 0)
+          );
+        } catch (error) {
+          if (error?.code !== 'ER_NO_SUCH_TABLE' && error?.code !== 'ER_BAD_TABLE_ERROR') {
+            throw error;
+          }
+        }
+      }
+
       const [assignments] = await db.query(
         `SELECT a.*, p.name AS product_name
          FROM prod_variant_assignments a
@@ -1888,7 +2230,74 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
         a.default_value_index = a.default_value_index != null ? Number(a.default_value_index) : null;
       });
 
-      res.json({ ok: true, data: { group, tiers, assignments } });
+      const getTierRowsForValueIndex = (valueIndex) => {
+        const exact = tiers.filter((tier) => Number(tier?.sort_order) === Number(valueIndex));
+        if (exact.length) return exact;
+        return tiers.filter((tier) => Number(tier?.sort_order) === Number(valueIndex) + 1);
+      };
+
+      const valuesMeta = (Array.isArray(group.values) ? group.values : []).map((value, index) => {
+        const tierRows = getTierRowsForValueIndex(index);
+        const primaryTier = tierRows[0] || null;
+        return {
+          index,
+          value: value == null ? '' : String(value),
+          is_excluded_for_product: excludedValueIndexes.has(index),
+          discount_percent: primaryTier?.discount_percent != null ? Number(primaryTier.discount_percent) : 0,
+          tier_rows: tierRows.map((tier) => ({ ...tier })),
+        };
+      });
+
+      const visibleValueIndexes = valuesMeta
+        .filter((item) => item.is_excluded_for_product !== true)
+        .map((item) => Number(item.index))
+        .filter((valueIndex) => Number.isFinite(valueIndex) && valueIndex >= 0);
+
+      const scopedAssignment = Number.isFinite(scopedProductId) && scopedProductId > 0
+        ? assignments.find((assignment) => Number(assignment.product_id) === scopedProductId)
+        : null;
+      const rawDefaultValueIndex = scopedAssignment?.default_value_index != null
+        ? Number(scopedAssignment.default_value_index)
+        : group.default_value_index;
+      const resolvedDefaultValueIndex = visibleValueIndexes.includes(rawDefaultValueIndex)
+        ? rawDefaultValueIndex
+        : (visibleValueIndexes.length ? visibleValueIndexes[0] : null);
+      const resolvedDefaultVisibleIndex = resolvedDefaultValueIndex == null
+        ? null
+        : visibleValueIndexes.indexOf(resolvedDefaultValueIndex);
+      const visibleValues = visibleValueIndexes.map((valueIndex) => group.values[valueIndex]);
+      const visibleTiers = [];
+      visibleValueIndexes.forEach((originalValueIndex, visibleValueIndex) => {
+        getTierRowsForValueIndex(originalValueIndex).forEach((tier) => {
+          visibleTiers.push({
+            ...tier,
+            sort_order: visibleValueIndex,
+          });
+        });
+      });
+
+      res.json({
+        ok: true,
+        data: {
+          group,
+          tiers,
+          assignments,
+          values_meta: valuesMeta,
+          product_scope: Number.isFinite(scopedProductId) && scopedProductId > 0
+            ? {
+                product_id: scopedProductId,
+                excluded_value_indexes: Array.from(excludedValueIndexes),
+                visible_value_indexes: visibleValueIndexes,
+                visible_values: visibleValues,
+                visible_tiers: visibleTiers,
+                resolved_default_value_index: resolvedDefaultValueIndex,
+                resolved_default_visible_index: Number.isFinite(resolvedDefaultVisibleIndex) && resolvedDefaultVisibleIndex >= 0
+                  ? resolvedDefaultVisibleIndex
+                  : null,
+              }
+            : null,
+        },
+      });
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
@@ -3254,6 +3663,200 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
 
   router.patch('/admin/products/:id/option-assignments/:groupId', disableProductAssignment);
   router.delete('/admin/products/:id/option-assignments/:groupId', disableProductAssignment);
+
+  router.put('/admin/products/:id/option-assignments/:groupId/item-exclusions', async (req, res) => {
+    const tenantId = helpers.getTenantId(req);
+    const productId = Number(req.params.id);
+    const groupId = Number(req.params.groupId);
+    if (!Number.isFinite(productId) || productId <= 0) {
+      return res.status(400).json({ ok: false, error: 'BAD_ID' });
+    }
+    if (!Number.isFinite(groupId) || groupId <= 0) {
+      return res.status(400).json({ ok: false, error: 'BAD_GROUP_ID' });
+    }
+
+    const excludedItemIds = Array.from(new Set(
+      (Array.isArray(req.body?.excluded_item_ids) ? req.body.excluded_item_ids : [])
+        .map((itemId) => Number(itemId))
+        .filter((itemId) => Number.isFinite(itemId) && itemId > 0)
+    ));
+
+    const conn = await db.getConnection();
+    try {
+      await conn.beginTransaction();
+
+      const [assignmentRows] = await conn.query(
+        `SELECT id
+         FROM prod_option_assignments
+         WHERE tenant_id=? AND assign_type='product' AND assign_id=? AND group_id=?
+         LIMIT 1`,
+        [tenantId, productId, groupId]
+      );
+      if (!assignmentRows.length) {
+        await conn.rollback();
+        return res.status(404).json({ ok: false, error: 'ASSIGNMENT_NOT_FOUND' });
+      }
+
+      const [groupItemRows] = await conn.query(
+        `SELECT id
+         FROM prod_option_items
+         WHERE tenant_id=? AND group_id=? AND target_type='product'`,
+        [tenantId, groupId]
+      );
+      const validItemIds = new Set(
+        groupItemRows
+          .map((row) => Number(row.id))
+          .filter((itemId) => Number.isFinite(itemId) && itemId > 0)
+      );
+      const invalidItemIds = excludedItemIds.filter((itemId) => !validItemIds.has(itemId));
+      if (invalidItemIds.length) {
+        await conn.rollback();
+        return res.status(400).json({ ok: false, error: 'INVALID_ITEM_IDS', item_ids: invalidItemIds });
+      }
+
+      await conn.query(
+        `DELETE FROM prod_option_item_exclusions
+         WHERE tenant_id=? AND product_id=? AND group_id=?`,
+        [tenantId, productId, groupId]
+      );
+
+      if (excludedItemIds.length) {
+        await conn.query(
+          `INSERT INTO prod_option_item_exclusions
+           (tenant_id, product_id, group_id, option_item_id)
+           VALUES ${excludedItemIds.map(() => '(?,?,?,?)').join(',')}`,
+          excludedItemIds.flatMap((itemId) => [tenantId, productId, groupId, itemId])
+        );
+      }
+
+      await conn.commit();
+
+      const visibleItemIds = Array.from(validItemIds).filter((itemId) => !excludedItemIds.includes(itemId));
+      return res.json({
+        ok: true,
+        data: {
+          product_id: productId,
+          group_id: groupId,
+          excluded_item_ids: excludedItemIds,
+          visible_item_ids: visibleItemIds,
+        },
+      });
+    } catch (e) {
+      await conn.rollback();
+      console.error(e);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    } finally {
+      conn.release();
+    }
+  });
+
+  router.put('/admin/products/:id/variant-assignments/:groupId/value-exclusions', async (req, res) => {
+    const tenantId = helpers.getTenantId(req);
+    const productId = Number(req.params.id);
+    const groupId = Number(req.params.groupId);
+    if (!Number.isFinite(productId) || productId <= 0) {
+      return res.status(400).json({ ok: false, error: 'BAD_ID' });
+    }
+    if (!Number.isFinite(groupId) || groupId <= 0) {
+      return res.status(400).json({ ok: false, error: 'BAD_GROUP_ID' });
+    }
+
+    const excludedValueIndexes = Array.from(new Set(
+      (Array.isArray(req.body?.excluded_value_indexes) ? req.body.excluded_value_indexes : [])
+        .map((valueIndex) => Number(valueIndex))
+        .filter((valueIndex) => Number.isFinite(valueIndex) && valueIndex >= 0)
+    ));
+
+    const conn = await db.getConnection();
+    try {
+      await conn.beginTransaction();
+
+      const [assignmentRows] = await conn.query(
+        `SELECT id, default_value_index
+         FROM prod_variant_assignments
+         WHERE tenant_id=? AND product_id=? AND variant_group_id=? AND is_active=1
+         LIMIT 1`,
+        [tenantId, productId, groupId]
+      );
+      if (!assignmentRows.length) {
+        await conn.rollback();
+        return res.status(404).json({ ok: false, error: 'ASSIGNMENT_NOT_FOUND' });
+      }
+
+      const [groupRows] = await conn.query(
+        `SELECT \`values\`, default_value_index
+         FROM prod_variant_groups
+         WHERE tenant_id=? AND id=?
+         LIMIT 1`,
+        [tenantId, groupId]
+      );
+      if (!groupRows.length) {
+        await conn.rollback();
+        return res.status(404).json({ ok: false, error: 'GROUP_NOT_FOUND' });
+      }
+
+      const values = helpers.safeJsonArray(groupRows[0].values);
+      const invalidValueIndexes = excludedValueIndexes.filter((valueIndex) => valueIndex < 0 || valueIndex >= values.length);
+      if (invalidValueIndexes.length) {
+        await conn.rollback();
+        return res.status(400).json({ ok: false, error: 'INVALID_VALUE_INDEXES', value_indexes: invalidValueIndexes });
+      }
+
+      const visibleValueIndexes = values
+        .map((_, valueIndex) => valueIndex)
+        .filter((valueIndex) => !excludedValueIndexes.includes(valueIndex));
+      if (!visibleValueIndexes.length) {
+        await conn.rollback();
+        return res.status(400).json({ ok: false, error: 'AT_LEAST_ONE_VALUE_REQUIRED' });
+      }
+
+      await conn.query(
+        `DELETE FROM prod_variant_value_exclusions
+         WHERE tenant_id=? AND product_id=? AND variant_group_id=?`,
+        [tenantId, productId, groupId]
+      );
+
+      if (excludedValueIndexes.length) {
+        await conn.query(
+          `INSERT INTO prod_variant_value_exclusions
+           (tenant_id, product_id, variant_group_id, value_index)
+           VALUES ${excludedValueIndexes.map(() => '(?,?,?,?)').join(',')}`,
+          excludedValueIndexes.flatMap((valueIndex) => [tenantId, productId, groupId, valueIndex])
+        );
+      }
+
+      const assignmentDefaultValueIndex = assignmentRows[0].default_value_index != null
+        ? Number(assignmentRows[0].default_value_index)
+        : null;
+      const groupDefaultValueIndex = groupRows[0].default_value_index != null
+        ? Number(groupRows[0].default_value_index)
+        : null;
+      const rawDefaultValueIndex = assignmentDefaultValueIndex != null ? assignmentDefaultValueIndex : groupDefaultValueIndex;
+      const resolvedDefaultValueIndex = visibleValueIndexes.includes(rawDefaultValueIndex)
+        ? rawDefaultValueIndex
+        : visibleValueIndexes[0];
+
+      await conn.commit();
+
+      return res.json({
+        ok: true,
+        data: {
+          product_id: productId,
+          group_id: groupId,
+          excluded_value_indexes: excludedValueIndexes,
+          visible_value_indexes: visibleValueIndexes,
+          resolved_default_value_index: resolvedDefaultValueIndex,
+          resolved_default_visible_index: visibleValueIndexes.indexOf(resolvedDefaultValueIndex),
+        },
+      });
+    } catch (e) {
+      await conn.rollback();
+      console.error(e);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    } finally {
+      conn.release();
+    }
+  });
 
   // ------------------------------
   // Units: /api/admin/units

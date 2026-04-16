@@ -222,11 +222,14 @@
     rightCheckoutSubmittingByOrder: new Map(),
     rightBenefitsPreviewByOrder: new Map(),
     rightBenefitsPreviewKeyByOrder: new Map(),
+    rightBenefitsPreviewByClientMode: new Map(),
     rightBenefitsLoadingByOrder: new Set(),
     rightBenefitsReqSeqByOrder: new Map(),
     rightBenefitsRefreshTimerByOrder: new Map(),
     rightBenefitsTokenByClientId: new Map(),
     rightBenefitsClaimOptionsByOrder: new Map(),
+    rightBenefitsDiscountDetailsById: new Map(),
+    rightBenefitsDiscountDetailReqSeq: 0,
     rightAutoAddDismissedByOrder: new Map(),
     autoAdd: {
       groups: [],
@@ -269,7 +272,16 @@
       screen: "main",
       title: "Выгоды",
       payload: null,
+      promoInputValue: "",
       busy: false,
+      mainView: null,
+    },
+    clientBenefitsCatalogModal: {
+      customerId: 0,
+      data: null,
+      loading: false,
+      error: "",
+      busyActionKey: "",
     },
     cacheManifest: null,
   };
@@ -390,9 +402,11 @@
     let form = active?.form && typeof active.form === "object" ? active.form : {};
     const activeOrderId = Number(active?.id || 0);
     if (activeOrderId > 0) {
+      const preserveStoredLineTotals = isEditCheckout;
       const normalizedCart = normalizeRightOrderCartItemsWithAutoAdd(
         activeOrderId,
-        Array.isArray(form?.cartItems) ? form.cartItems : []
+        Array.isArray(form?.cartItems) ? form.cartItems : [],
+        { preserveStoredLineTotals }
       );
       const nextForm = { ...form, cartItems: normalizedCart };
       const nextActive = { ...active, form: nextForm };
@@ -415,6 +429,27 @@
     const cartSummary = getRightOrderCheckoutSummary(active);
     void ensureRightDeliveryQuoteFresh(active, cartSummary, { render: true });
     const cartItems = cartSummary.cartItems;
+    const snapshotForLinePricing = (
+      isEditCheckout
+      && active?.editCartTouched !== true
+      && active?.editPricingSnapshot
+      && typeof active.editPricingSnapshot === "object"
+    ) ? active.editPricingSnapshot : null;
+    const snapshotItemsTotalAfterDiscount = snapshotForLinePricing
+      ? Number(
+          snapshotForLinePricing?.subtotalAfterDiscount
+          ?? snapshotForLinePricing?.subtotal_after_discount
+          ?? NaN
+        )
+      : NaN;
+    const linePricingTargetItemsTotal = Number.isFinite(snapshotItemsTotalAfterDiscount)
+      ? roundPrice(Math.max(0, snapshotItemsTotalAfterDiscount))
+      : roundPrice(Number(cartSummary.subtotalAfterCustomerDiscount || 0));
+    const cartLineStates = buildRightOrderCartLineStates(
+      cartItems,
+      linePricingTargetItemsTotal,
+      cartSummary?.benefitsPreview
+    );
     const orderPayableTotal = cartSummary.payableTotal;
     const asapEtaLabel = cartSummary.isDeliveryMethod && Number(cartSummary.etaMinutes || 0) > 0
       ? `${Math.round(Number(cartSummary.etaMinutes || 0))} мин`
@@ -794,21 +829,27 @@
 
         <div class="new-order-right-cart">
           <div class="new-order-right-cart-list">
-            ${cartItems.length ? cartItems.map((item) => {
+            ${cartItems.length ? cartItems.map((item, itemIndex) => {
               const type = String(item?.type || "product");
               const qty = Math.max(1, Number(item?.qty || 1));
               const isGiftReward = isGiftRewardCartItem(item);
               const qtyEditable = !isGiftReward && isRightOrderAutoQtyEditable(item);
               const autoFreeQty = getRightOrderAutoFreeQty(item);
-              const isAutoAddItem = isRightOrderAutoAddItem(item);
-              const unitPrice = roundPrice(Number(item?.unit_price || 0));
-              const sum = getRightOrderCartLineTotal(item);
-              const unitOldPrice = roundPrice(Number(item?.unit_price_before_discount || 0));
-              const oldSum = roundPrice(unitOldPrice * qty);
-              const hasDiscount = !isAutoAddItem && oldSum > sum;
-              const discountPercent = hasDiscount && oldSum > 0
-                ? Math.max(1, Math.round(((oldSum - sum) / oldSum) * 100))
-                : 0;
+              const lineState = cartLineStates[itemIndex] || null;
+              const sum = lineState
+                ? roundPrice(Number(lineState.currentTotal || 0))
+                : getRightOrderCartLineTotal(item);
+              const fallbackUnitOldPrice = roundPrice(Number(item?.unit_price_before_discount || 0));
+              const fallbackOldSum = roundPrice(fallbackUnitOldPrice * qty);
+              const oldSum = lineState
+                ? roundPrice(Number(lineState.originalTotal || sum))
+                : fallbackOldSum;
+              const hasDiscount = oldSum > sum;
+              const discountPercent = lineState
+                ? Math.max(0, Number(lineState.discountPercent || 0))
+                : (hasDiscount && oldSum > 0
+                  ? Math.max(1, Math.round(((oldSum - sum) / oldSum) * 100))
+                  : 0);
               const titleBase = String(item?.name || (type === "combo" ? "РљРѕРјР±Рѕ" : "РўРѕРІР°СЂ"));
               const title = isGiftReward ? `${titleBase} (Подарок)` : titleBase;
               const sections = Array.isArray(item?.sections) ? item.sections : [];
@@ -1181,6 +1222,7 @@
       title: resolvedTitle,
       mode,
       editOrderId,
+      editCartTouched: false,
       storeId: Number(opts?.storeId || 0) > 0 ? Number(opts.storeId) : null,
       editPricingSnapshot: null,
       editPricingBaselineSignature: "",
@@ -1249,6 +1291,7 @@
       title: String(src?.title || base.title || "").trim() || base.title,
       mode: base.mode,
       editOrderId: base.editOrderId,
+      editCartTouched: src?.editCartTouched === true,
       storeId: Number(src?.storeId || base.storeId || 0) > 0 ? Number(src?.storeId || base.storeId) : null,
       editPricingSnapshot: src?.editPricingSnapshot && typeof src.editPricingSnapshot === "object"
         ? src.editPricingSnapshot
@@ -1565,7 +1608,7 @@
           <button type="button" class="new-order-right-calendar-nav" data-action="right-date-month-next" data-order-id="${Number(orderId || 0)}"><i class="fas fa-chevron-right"></i></button>
         </div>
         <div class="new-order-right-calendar-weekdays">
-          <span>РџРЅ</span><span>Р’С‚</span><span>РЎСЂ</span><span>Р§С‚</span><span>РџС‚</span><span>РЎР±</span><span>Р’СЃ</span>
+          <span>\u041f\u043d</span><span>\u0412\u0442</span><span>\u0421\u0440</span><span>\u0427\u0442</span><span>\u041f\u0442</span><span>\u0421\u0431</span><span>\u0412\u0441</span>
         </div>
         <div class="new-order-right-calendar-grid">${cells.join("")}</div>
       </div>
@@ -1806,29 +1849,62 @@
 
   function buildRightOrderStoredPricingSnapshot(order) {
     const src = order && typeof order === "object" ? order : {};
-    const subtotalBeforeDiscount = roundPrice(Math.max(0, Number(src?.items_total || 0)));
-    const totalDiscount = roundPrice(Math.max(0, Number(src?.discount_amount || 0)));
-    const subtotalAfterDiscount = roundPrice(Math.max(0, subtotalBeforeDiscount - totalDiscount));
     const deliveryCost = roundPrice(Math.max(0, Number(src?.delivery_cost || 0)));
     const totalPriceRaw = Number(src?.total_price || 0);
     const payableTotal = Number.isFinite(totalPriceRaw)
       ? roundPrice(Math.max(0, totalPriceRaw))
-      : roundPrice(subtotalAfterDiscount + deliveryCost);
+      : NaN;
     const breakdown = buildRightOrderDiscountBreakdownEntries(src?.discounts_json, {
       promoCode: src?.promo_code,
     });
+    const breakdownTotal = roundPrice(
+      (Array.isArray(breakdown) ? breakdown : []).reduce((sum, entry) => (
+        sum + Number(entry?.amount || 0)
+      ), 0)
+    );
+    const storedDiscount = roundPrice(Math.max(0, Number(src?.discount_amount || 0)));
+    const totalDiscount = roundPrice(
+      breakdown.length > 0 ? breakdownTotal : storedDiscount
+    );
+    const itemsTotalRaw = Number(src?.items_total);
+    const hasItemsTotal = Number.isFinite(itemsTotalRaw);
+    const itemsTotal = hasItemsTotal ? roundPrice(Math.max(0, itemsTotalRaw)) : NaN;
+    const subtotalAfterDiscount = Number.isFinite(payableTotal)
+      ? roundPrice(Math.max(0, payableTotal - deliveryCost))
+      : (
+          hasItemsTotal
+            ? roundPrice(Math.max(0, itemsTotal - totalDiscount))
+            : 0
+        );
+    const computedSubtotalBeforeDiscount = roundPrice(Math.max(0, subtotalAfterDiscount + totalDiscount));
+    let subtotalBeforeDiscount = computedSubtotalBeforeDiscount;
+    if (hasItemsTotal) {
+      const itemsAsBeforeDiscount = itemsTotal;
+      const itemsAsAfterDiscount = roundPrice(itemsTotal + totalDiscount);
+      const deltaAsBefore = Math.abs(itemsAsBeforeDiscount - computedSubtotalBeforeDiscount);
+      const deltaAsAfter = Math.abs(itemsAsAfterDiscount - computedSubtotalBeforeDiscount);
+      subtotalBeforeDiscount = deltaAsAfter < deltaAsBefore
+        ? itemsAsAfterDiscount
+        : itemsAsBeforeDiscount;
+      if (subtotalBeforeDiscount < computedSubtotalBeforeDiscount) {
+        subtotalBeforeDiscount = computedSubtotalBeforeDiscount;
+      }
+    }
+    const resolvedPayableTotal = Number.isFinite(payableTotal)
+      ? payableTotal
+      : roundPrice(subtotalAfterDiscount + deliveryCost);
     const hasSnapshot = breakdown.length > 0
       || subtotalBeforeDiscount > 0
       || totalDiscount > 0
       || deliveryCost > 0
-      || payableTotal > 0;
+      || resolvedPayableTotal > 0;
     if (!hasSnapshot) return null;
     return {
       subtotalBeforeDiscount,
       totalDiscount,
       subtotalAfterDiscount,
       deliveryCost,
-      payableTotal,
+      payableTotal: resolvedPayableTotal,
       breakdown,
     };
   }
@@ -2493,9 +2569,30 @@
     markRightAutoAddDismissed(orderId, groupId, pid);
   }
 
-  function normalizeRightOrderCartItemsWithAutoAdd(orderId, cartItemsRaw) {
+  function normalizeRightOrderCartItemsWithAutoAdd(orderId, cartItemsRaw, opts = {}) {
     const orderNum = Number(orderId || 0);
     const source = Array.isArray(cartItemsRaw) ? cartItemsRaw : [];
+    const preserveStoredLineTotals = opts?.preserveStoredLineTotals === true;
+    if (preserveStoredLineTotals) {
+      const preservedItems = source
+        .map((item) => {
+          if (!item || typeof item !== "object") return null;
+          const qty = Math.max(0, Number(item?.qty || 0));
+          if (!(qty > 0)) return null;
+          return { ...item, qty };
+        })
+        .filter(Boolean);
+      const sortedPreservedItems = preservedItems
+        .map((item, index) => ({
+          item,
+          index,
+          autoRank: isRightOrderAutoAddItem(item) ? 1 : 0,
+        }))
+        .sort((a, b) => a.autoRank - b.autoRank || a.index - b.index)
+        .map((entry) => entry.item);
+      clearRightAutoAddDismissedIfCartEmpty(orderNum, preservedItems);
+      return sortedPreservedItems;
+    }
     let cartItems = source
       .map((item) => (item && typeof item === "object" ? recalculateCartItemTotals(item) : null))
       .filter((item) => item && Math.max(0, Number(item?.qty || 0)) > 0);
@@ -2702,9 +2799,13 @@
     const order = state.rightOrders[index] || {};
     const form = order.form && typeof order.form === "object" ? { ...order.form } : {};
     form.cartItems = normalizeRightOrderCartItemsWithAutoAdd(id, cartItems);
-    state.rightOrders[index] = { ...order, form };
+    const shouldMarkTouched = String(order?.mode || "").trim().toLowerCase() === "edit";
+    state.rightOrders[index] = {
+      ...order,
+      form,
+      editCartTouched: shouldMarkTouched ? true : Boolean(order?.editCartTouched),
+    };
     invalidateRightDeliveryQuote(id);
-    invalidateRightOrderBenefitsPreview(id);
     scheduleRightOrderBenefitsRefresh(id);
     if (opts?.render) renderRightOrderTabs();
     return true;
@@ -2750,6 +2851,12 @@
     return `${id}:${normalizeRightOrderBenefitsMode(mode)}`;
   }
 
+  function getRightOrderBenefitsClientCacheSlot(clientId, mode = null) {
+    const id = Number(clientId || 0);
+    if (!(id > 0)) return "";
+    return `${id}:${normalizeRightOrderBenefitsMode(mode)}`;
+  }
+
   function getRightOrderBenefitsPreferredMode(form, fallbackMode = null) {
     const sourceForm = form && typeof form === "object" ? form : {};
     const storedMode = String(sourceForm.benefits_preview_mode || "").trim();
@@ -2759,17 +2866,7 @@
   }
 
   function setRightBenefitsModeToggleState(mode = null) {
-    const { modeToggle } = getRightBenefitsOverlayElements();
-    if (!modeToggle) return;
-    const activeMode = normalizeRightOrderBenefitsMode(mode || getActiveRightOrderBenefitsMode());
-    const buttons = Array.from(modeToggle.querySelectorAll(".shop-delivery-toggle-btn"));
-    buttons.forEach((button, index) => {
-      const buttonMode = index === 1 ? "all" : "customer";
-      const isActive = buttonMode === activeMode;
-      button.classList.toggle("is-active", isActive);
-      button.setAttribute("aria-pressed", isActive ? "true" : "false");
-      button.dataset.mode = buttonMode;
-    });
+    window.AdminBenefitsModal?.setModeToggleState(normalizeRightOrderBenefitsMode(mode || getActiveRightOrderBenefitsMode()));
   }
 
   function isRightOrderBenefitStackable(entry) {
@@ -2845,6 +2942,958 @@
     );
   }
 
+  function buildRightOrderBenefitsSelectionStateKey({ discountKey = "", promoKey = "" } = {}) {
+    const normalizedDiscountKey = String(discountKey || "").trim();
+    const normalizedPromoKey = String(promoKey || "").trim();
+    if (!normalizedDiscountKey && !normalizedPromoKey) return "__base__";
+    if (normalizedDiscountKey && normalizedPromoKey) return `${normalizedDiscountKey}|${normalizedPromoKey}`;
+    return normalizedDiscountKey || normalizedPromoKey || "__base__";
+  }
+
+  function buildRightOrderBenefitDiscountSelectionKey(entry) {
+    const source = normalizeRightOrderBenefitsDiscountSource(entry?.source) || "discount";
+    const id = normalizeRightOrderBenefitsSelectedId(
+      source === "reward_discount"
+        ? (entry?.reward_id || entry?.id)
+        : entry?.id
+    );
+    return source && id ? `${source}:${id}` : "";
+  }
+
+  function buildRightOrderBenefitPromoSelectionKey(entry) {
+    const source = normalizeRightOrderBenefitsPromoSource(entry?.source) || "promo_code";
+    if (source === "reward_promo") {
+      const rewardId = normalizeRightOrderBenefitsSelectedId(entry?.reward_id || entry?.id);
+      return rewardId ? `${source}:${rewardId}` : "";
+    }
+    const promoId = normalizeRightOrderBenefitsSelectedId(entry?.id);
+    return promoId ? `${source}:${promoId}` : "";
+  }
+
+  function buildRightOrderBenefitsLocalDiscountKey(selectedDiscountSource, selectedDiscountId) {
+    const source = normalizeRightOrderBenefitsDiscountSource(selectedDiscountSource);
+    const id = normalizeRightOrderBenefitsSelectedId(selectedDiscountId);
+    return source && id ? `${source}:${id}` : "";
+  }
+
+  function buildRightOrderBenefitsLocalPromoKey(previewData, {
+    promoCode,
+    selectedPromoSource,
+    selectedPromoRewardId,
+  } = {}) {
+    const source = normalizeRightOrderBenefitsPromoSource(selectedPromoSource);
+    if (!source) return "";
+    if (source === "reward_promo") {
+      const rewardId = normalizeRightOrderBenefitsSelectedId(selectedPromoRewardId);
+      return rewardId ? `${source}:${rewardId}` : "";
+    }
+    const normalizedCode = normalizeRightOrderBenefitsPromoCode(promoCode);
+    if (!normalizedCode) return "";
+    const promoCodeIndex = previewData?.client_calculation?.promo_code_index && typeof previewData.client_calculation.promo_code_index === "object"
+      ? previewData.client_calculation.promo_code_index
+      : null;
+    const indexedSelectionKey = String(promoCodeIndex?.[normalizedCode] || "").trim();
+    if (indexedSelectionKey) return indexedSelectionKey;
+    const promoCard = Array.isArray(previewData?.promo_codes)
+      ? previewData.promo_codes.find((entry) => (
+          (normalizeRightOrderBenefitsPromoSource(entry?.source) || "promo_code") === source
+          && normalizeRightOrderBenefitsPromoCode(entry?.code) === normalizedCode
+        ))
+      : null;
+    const promoId = normalizeRightOrderBenefitsSelectedId(promoCard?.id);
+    return promoId ? `${source}:${promoId}` : "";
+  }
+
+  function cloneRightOrderBenefitsSummary(summary) {
+    const safeSummary = summary && typeof summary === "object" ? summary : {};
+    return {
+      subtotal: roundPrice(Number(safeSummary?.subtotal || 0)),
+      items_total: roundPrice(Number(safeSummary?.items_total || 0)),
+      delivery: roundPrice(Number(safeSummary?.delivery || 0)),
+      discount_total: roundPrice(Number(safeSummary?.discount_total || 0)),
+      total: roundPrice(Number(safeSummary?.total || 0)),
+      discount_breakdown: Array.isArray(safeSummary?.discount_breakdown)
+        ? safeSummary.discount_breakdown.map((entry) => ({
+            key: String(entry?.key || "").trim(),
+            title: String(entry?.title || "").trim(),
+            amount: roundPrice(Number(entry?.amount || 0)),
+            source_kind: normalizeRightOrderDiscountBreakdownSourceKind(entry),
+            promo_code: normalizeRightOrderBenefitsPromoCode(entry?.promoCode || entry?.promo_code),
+          }))
+        : [],
+    };
+  }
+
+  function buildRightOrderBenefitsLocalPreviewItems(previewRequest = null) {
+    const sourceItems = Array.isArray(previewRequest?.items) ? previewRequest.items : [];
+    const useOriginalLineTotalsForBenefits = (
+      previewRequest?.use_original_line_totals_for_benefits === true
+      || Number(previewRequest?.use_original_line_totals_for_benefits || 0) === 1
+    );
+    return sourceItems
+      .map((rawItem) => {
+        if (!rawItem || typeof rawItem !== "object") return null;
+        const type = String(rawItem?.type || "").trim().toLowerCase() || "product";
+        const qty = Math.max(1, Number(rawItem?.qty || 1) || 1);
+        const lineTotalRaw = roundPrice(Math.max(0, Number(rawItem?.line_total || 0) || 0));
+        const originalLineTotal = roundPrice(Math.max(
+          lineTotalRaw,
+          Number(rawItem?.original_line_total ?? rawItem?.old_line_total ?? rawItem?.discount?.original_line_total ?? lineTotalRaw) || lineTotalRaw
+        ));
+        const lineTotal = useOriginalLineTotalsForBenefits ? originalLineTotal : lineTotalRaw;
+        if (type === "combo") {
+          const comboId = Number(rawItem?.combo_id || 0) || null;
+          if (!comboId) return null;
+          const comboItem = {
+            type: "combo",
+            cart_key: String(rawItem?.cart_key || "").trim() || "",
+            combo_id: comboId,
+            qty,
+            line_total: lineTotal,
+            auto_add: Number(rawItem?.auto_add || 0) === 1 ? 1 : 0,
+          };
+          if (!useOriginalLineTotalsForBenefits && originalLineTotal > lineTotal) {
+            comboItem.discount = { original_line_total: originalLineTotal };
+          }
+          return comboItem;
+        }
+        const productId = Number(rawItem?.product_id || 0) || null;
+        if (!productId) return null;
+        const variantGroupId = Number(rawItem?.variant_group_id || 0);
+        const variantValueIndex = Number(rawItem?.variant_value_index);
+        const optionItems = (Array.isArray(rawItem?.option_items) ? rawItem.option_items : [])
+          .map((option) => {
+            const optionId = Number(option?.id || option?.option_item_id || 0);
+            if (!(optionId > 0)) return null;
+            const optionQty = Math.max(1, Number(option?.qty ?? option?.quantity ?? 1) || 1);
+            const targetProductId = Number(option?.target_product_id || option?.product_id || 0);
+            const optionVariantGroupId = Number(option?.variant_group_id || 0);
+            const optionVariantValueIndex = Number(option?.variant_value_index);
+            return {
+              id: optionId,
+              qty: optionQty,
+              target_product_id: targetProductId > 0 ? targetProductId : null,
+              variant_group_id: optionVariantGroupId > 0 ? optionVariantGroupId : null,
+              variant_value_index: Number.isFinite(optionVariantValueIndex) && optionVariantValueIndex >= 0
+                ? optionVariantValueIndex
+                : null,
+            };
+          })
+          .filter(Boolean);
+        const ingredients = (Array.isArray(rawItem?.ingredients) ? rawItem.ingredients : [])
+          .map((ingredient) => {
+            const ingredientId = Number(ingredient?.ingredient_id || ingredient?.product_id || 0);
+            if (!(ingredientId > 0)) return null;
+            return {
+              ingredient_id: ingredientId,
+              qty: Number(ingredient?.qty ?? ingredient?.quantity ?? 0) || 0,
+            };
+          })
+          .filter(Boolean);
+        const productItem = {
+          type: "product",
+          cart_key: String(rawItem?.cart_key || "").trim() || "",
+          product_id: productId,
+          qty,
+          line_total: lineTotal,
+          auto_add: Number(rawItem?.auto_add || 0) === 1 ? 1 : 0,
+          variant_group_id: variantGroupId > 0 ? variantGroupId : null,
+          variant_value_index: Number.isFinite(variantValueIndex) && variantValueIndex >= 0
+            ? variantValueIndex
+            : null,
+          option_items: optionItems,
+          ingredients,
+        };
+        productItem.product_config = normalizeRightOrderBenefitProductConfig(
+          rawItem?.product_config || {
+            product_id: productId,
+            variant_group_id: productItem.variant_group_id,
+            variant_value_index: productItem.variant_value_index,
+            options: optionItems,
+            ingredients,
+          },
+          productId
+        );
+        if (!useOriginalLineTotalsForBenefits && originalLineTotal > lineTotal) {
+          productItem.discount = { original_line_total: originalLineTotal };
+        }
+        return productItem;
+      })
+      .filter(Boolean);
+  }
+
+  function buildRightOrderBenefitsLocalProductCategoriesMap(order, previewItems = []) {
+    const result = new Map();
+    const addCategory = (productId, categoryId) => {
+      const normalizedProductId = Number(productId || 0) || 0;
+      const normalizedCategoryId = Number(categoryId || 0) || 0;
+      if (!(normalizedProductId > 0) || !(normalizedCategoryId > 0)) return;
+      if (!result.has(normalizedProductId)) {
+        result.set(normalizedProductId, new Set());
+      }
+      result.get(normalizedProductId).add(normalizedCategoryId);
+    };
+
+    const formItems = Array.isArray(order?.form?.cartItems) ? order.form.cartItems : [];
+    formItems.forEach((item) => {
+      if (!item || item?.type === "combo") return;
+      const productId = Number(item?.product?.id || item?.product_id || 0) || 0;
+      if (!(productId > 0)) return;
+      const product = item?.product || {};
+      addCategory(productId, product?.category_id);
+      addCategory(productId, product?.categoryId);
+      (Array.isArray(product?.category_ids) ? product.category_ids : []).forEach((categoryId) => {
+        addCategory(productId, categoryId);
+      });
+      (Array.isArray(product?.categories) ? product.categories : []).forEach((category) => {
+        addCategory(productId, category?.id || category?.category_id || category);
+      });
+    });
+
+    const currentProducts = Array.isArray(state.currentProducts) ? state.currentProducts : [];
+    const currentProductsById = new Map(
+      currentProducts
+        .map((product) => [Number(product?.id || product?.product_id || 0), product])
+        .filter(([productId]) => productId > 0)
+    );
+
+    (Array.isArray(previewItems) ? previewItems : []).forEach((item) => {
+      if (!item || item?.type === "combo") return;
+      const productId = Number(item?.product_id || 0) || 0;
+      if (!(productId > 0)) return;
+      const product = currentProductsById.get(productId) || null;
+      addCategory(productId, product?.category_id);
+      addCategory(productId, product?.categoryId);
+      (Array.isArray(product?.category_ids) ? product.category_ids : []).forEach((categoryId) => {
+        addCategory(productId, categoryId);
+      });
+      (Array.isArray(product?.categories) ? product.categories : []).forEach((category) => {
+        addCategory(productId, category?.id || category?.category_id || category);
+      });
+    });
+
+    return new Map(
+      Array.from(result.entries()).map(([productId, categoryIds]) => [
+        productId,
+        Array.from(categoryIds.values()),
+      ])
+    );
+  }
+
+  function buildRightOrderBenefitsLocalProductConfigKey(value, fallbackProductId = null) {
+    const normalized = normalizeRightOrderBenefitProductConfig(value, fallbackProductId);
+    if (!normalized) return "";
+    try {
+      return JSON.stringify(normalized);
+    } catch {
+      return "";
+    }
+  }
+
+  function buildRightOrderBenefitsLocalTargetSets(targetSets = null) {
+    const safeTargetSets = targetSets && typeof targetSets === "object" ? targetSets : {};
+    const exactProductConfigKeysByProductId = new Map();
+    const exactProductConfigs = safeTargetSets.exact_product_configs_by_product_id && typeof safeTargetSets.exact_product_configs_by_product_id === "object"
+      ? safeTargetSets.exact_product_configs_by_product_id
+      : {};
+    Object.entries(exactProductConfigs).forEach(([rawProductId, configs]) => {
+      const productId = Number(rawProductId || 0) || 0;
+      if (!(productId > 0)) return;
+      const keys = new Set(
+        (Array.isArray(configs) ? configs : [])
+          .map((config) => buildRightOrderBenefitsLocalProductConfigKey(config, productId))
+          .filter(Boolean)
+      );
+      if (keys.size) {
+        exactProductConfigKeysByProductId.set(productId, keys);
+      }
+    });
+    return {
+      anyProductIds: new Set((Array.isArray(safeTargetSets.any_product_ids) ? safeTargetSets.any_product_ids : []).map((id) => Number(id || 0)).filter((id) => id > 0)),
+      categoryIds: new Set((Array.isArray(safeTargetSets.category_ids) ? safeTargetSets.category_ids : []).map((id) => Number(id || 0)).filter((id) => id > 0)),
+      comboIds: new Set((Array.isArray(safeTargetSets.combo_ids) ? safeTargetSets.combo_ids : []).map((id) => Number(id || 0)).filter((id) => id > 0)),
+      exactProductConfigKeysByProductId,
+    };
+  }
+
+  function matchRightOrderBenefitsLocalTargetScope(targetSets, item, productCategoriesMap, scope = "product") {
+    const normalizedScope = String(scope || "").trim().toLowerCase() || "product";
+    const matchesProduct = (() => {
+      if (!item || item?.type === "combo") return false;
+      const productId = Number(item?.product_id || 0) || 0;
+      if (!(productId > 0)) return false;
+      if (targetSets?.anyProductIds?.has(productId)) return true;
+      const exactConfigs = targetSets?.exactProductConfigKeysByProductId instanceof Map
+        ? targetSets.exactProductConfigKeysByProductId.get(productId)
+        : null;
+      if (!exactConfigs || !exactConfigs.size) return false;
+      const itemConfigKey = buildRightOrderBenefitsLocalProductConfigKey(
+        item?.product_config || item,
+        productId
+      );
+      return !!(itemConfigKey && exactConfigs.has(itemConfigKey));
+    })();
+    const matchesCategory = (() => {
+      if (!item || item?.type === "combo") return false;
+      const productId = Number(item?.product_id || 0) || 0;
+      if (!(productId > 0)) return false;
+      const categoryIds = productCategoriesMap.get(productId) || [];
+      return categoryIds.some((categoryId) => targetSets?.categoryIds?.has(Number(categoryId || 0)));
+    })();
+    const matchesCombo = !!(item?.type === "combo" && targetSets?.comboIds?.has(Number(item?.combo_id || 0)));
+    if (normalizedScope === "product") return matchesProduct;
+    if (normalizedScope === "category") return matchesCategory;
+    if (normalizedScope === "combo") return matchesCombo;
+    return matchesProduct || matchesCategory || matchesCombo;
+  }
+
+  function calculateRightOrderBenefitsLocalDiscountAmount(price, discountType, discountValue, maxDiscountAmount = null) {
+    const sourcePrice = Number(price || 0);
+    if (!(sourcePrice > 0)) return 0;
+
+    const normalizedType = String(discountType || "").trim().toLowerCase();
+    const normalizedValue = Number(discountValue || 0);
+    let amount = 0;
+
+    if (normalizedType === "percent") {
+      if (!(normalizedValue > 0)) return 0;
+      amount = sourcePrice * (normalizedValue / 100);
+    } else if (normalizedType === "fixed") {
+      if (!(normalizedValue > 0)) return 0;
+      amount = normalizedValue;
+    } else if (normalizedType === "special_price") {
+      amount = Math.max(0, sourcePrice - normalizedValue);
+    } else {
+      return 0;
+    }
+
+    const normalizedMaxDiscount = maxDiscountAmount != null ? Number(maxDiscountAmount || 0) : null;
+    if (Number.isFinite(normalizedMaxDiscount) && normalizedMaxDiscount > 0) {
+      amount = Math.min(amount, normalizedMaxDiscount);
+    }
+    amount = Math.min(amount, sourcePrice);
+    return roundPrice(amount);
+  }
+
+  function getRightOrderPricePrecisionFactor() {
+    const settings = getPriceRoundingSettings();
+    const precisionRaw = Number(settings?.precision);
+    const precision = Number.isFinite(precisionRaw) && precisionRaw > 0 ? Math.trunc(precisionRaw) : 0;
+    return precision > 0 ? Math.pow(10, precision) : 1;
+  }
+
+  function toRightOrderPriceUnits(value, factor) {
+    const normalizedFactor = Number(factor || 1) > 0 ? Number(factor || 1) : 1;
+    const amount = roundPrice(Math.max(0, Number(value || 0)));
+    return Math.max(0, Math.round(amount * normalizedFactor));
+  }
+
+  function fromRightOrderPriceUnits(units, factor) {
+    const normalizedFactor = Number(factor || 1) > 0 ? Number(factor || 1) : 1;
+    return roundPrice(Math.max(0, Number(units || 0)) / normalizedFactor);
+  }
+
+  function applyRightOrderLocalOrderDiscountAcrossItemsNoRemainder(items, discountAmount) {
+    const workingItems = (Array.isArray(items) ? items : [])
+      .map((item) => ({ ...item, discount: item?.discount ? { ...item.discount } : item?.discount }));
+    const eligible = [];
+    const precisionFactor = getRightOrderPricePrecisionFactor();
+    let baseItemsTotalUnits = 0;
+
+    workingItems.forEach((item, index) => {
+      const lineTotal = roundPrice(Math.max(0, Number(item?.line_total || 0)));
+      const lineTotalUnits = toRightOrderPriceUnits(lineTotal, precisionFactor);
+      item.line_total = fromRightOrderPriceUnits(lineTotalUnits, precisionFactor);
+      if (!(lineTotalUnits > 0)) return;
+      eligible.push({
+        index,
+        lineTotalUnits,
+        position: eligible.length,
+      });
+      baseItemsTotalUnits += lineTotalUnits;
+    });
+
+    const baseItemsTotal = fromRightOrderPriceUnits(baseItemsTotalUnits, precisionFactor);
+    if (!(baseItemsTotalUnits > 0) || !eligible.length) {
+      return {
+        items: workingItems,
+        discountAmount: 0,
+        itemsTotalAfterDiscount: roundPrice(baseItemsTotal),
+      };
+    }
+
+    const requestedDiscountUnits = toRightOrderPriceUnits(discountAmount, precisionFactor);
+    const targetDiscountUnits = Math.min(requestedDiscountUnits, baseItemsTotalUnits);
+    if (!(targetDiscountUnits > 0)) {
+      return {
+        items: workingItems,
+        discountAmount: 0,
+        itemsTotalAfterDiscount: roundPrice(baseItemsTotal),
+      };
+    }
+
+    const allocations = eligible.map((entry) => {
+      const lineUnits = Number(entry?.lineTotalUnits || 0);
+      const proportionalUnits = (targetDiscountUnits * lineUnits) / baseItemsTotalUnits;
+      const roundedDownUnits = Math.floor(proportionalUnits);
+      const safeUnits = Math.min(lineUnits, Math.max(0, roundedDownUnits));
+      return {
+        ...entry,
+        lineUnits,
+        shareUnits: safeUnits,
+        fractionalRemainder: proportionalUnits - roundedDownUnits,
+      };
+    });
+    let appliedDiscountUnits = allocations.reduce((sum, entry) => sum + Number(entry?.shareUnits || 0), 0);
+    let remainingDiscountUnits = Math.max(0, targetDiscountUnits - appliedDiscountUnits);
+    if (remainingDiscountUnits > 0) {
+      const sortedByRemainder = allocations.slice().sort((a, b) => (
+        Number(b?.fractionalRemainder || 0) - Number(a?.fractionalRemainder || 0)
+        || Number(b?.lineUnits || 0) - Number(a?.lineUnits || 0)
+        || Number(a?.position || 0) - Number(b?.position || 0)
+      ));
+      while (remainingDiscountUnits > 0) {
+        let progressed = false;
+        for (const entry of sortedByRemainder) {
+          const capUnits = Math.max(0, Number(entry?.lineUnits || 0) - Number(entry?.shareUnits || 0));
+          if (!(capUnits > 0)) continue;
+          entry.shareUnits += 1;
+          remainingDiscountUnits -= 1;
+          appliedDiscountUnits += 1;
+          progressed = true;
+          if (!(remainingDiscountUnits > 0)) break;
+        }
+        if (!progressed) break;
+      }
+    }
+
+    allocations.forEach((entry) => {
+      const lineUnits = Number(entry?.lineUnits || 0);
+      const discountUnits = Math.min(lineUnits, Math.max(0, Number(entry?.shareUnits || 0)));
+      const nextLineUnits = Math.max(0, lineUnits - discountUnits);
+      workingItems[entry.index].line_total = fromRightOrderPriceUnits(nextLineUnits, precisionFactor);
+    });
+
+    const itemsTotalAfterDiscount = roundPrice(
+      workingItems.reduce((sum, item) => sum + Number(item?.line_total || 0), 0)
+    );
+
+    return {
+      items: workingItems,
+      discountAmount: fromRightOrderPriceUnits(appliedDiscountUnits, precisionFactor),
+      itemsTotalAfterDiscount,
+    };
+  }
+
+  function buildRightOrderBenefitsDisabledReason(errorCode) {
+    const normalized = String(errorCode || "").trim().toUpperCase();
+    if (!normalized) return "";
+    return getRightOrderBenefitsActionErrorMessage({ message: normalized });
+  }
+
+  function buildRightOrderBenefitsPromoMinAmountReason(minOrderAmount, itemsTotalBeforePromo) {
+    const remainingAmount = roundPrice(Math.max(0, Number(minOrderAmount || 0) - Number(itemsTotalBeforePromo || 0)));
+    if (!(remainingAmount > 0)) {
+      return buildRightOrderBenefitsDisabledReason("PROMO_NOT_APPLICABLE");
+    }
+    return `Нужно еще ${toMoney(remainingAmount)} до применения.`;
+  }
+
+  function buildRightOrderBenefitsPromoNotApplicableOutcome(previewItems, itemsTotalBeforePromo, {
+    disabledReasonCode = "PROMO_NOT_APPLICABLE",
+    disabledReason = "",
+  } = {}) {
+    return {
+      isApplicable: false,
+      disabledReasonCode,
+      disabledReason: disabledReason || buildRightOrderBenefitsDisabledReason(disabledReasonCode),
+      discountAmount: 0,
+      itemsTotalAfterPromo: roundPrice(Number(itemsTotalBeforePromo || 0)),
+      items: previewItems.map((item) => ({ ...item, discount: item?.discount ? { ...item.discount } : item?.discount })),
+    };
+  }
+
+  function computeRightOrderBenefitsLocalDiscountOutcome(rule, previewItems, productCategoriesMap) {
+    const items = previewItems.map((item) => ({ ...item, discount: item?.discount ? { ...item.discount } : item?.discount }));
+    const baseItemsTotal = roundPrice(items.reduce((sum, item) => sum + Number(item?.line_total || 0), 0));
+    if (!rule) {
+      return {
+        isApplicable: false,
+        errorCode: "DISCOUNT_INVALID",
+        disabledReason: buildRightOrderBenefitsDisabledReason("DISCOUNT_INVALID"),
+        discountAmount: 0,
+        items,
+        itemsTotalAfterDiscount: baseItemsTotal,
+      };
+    }
+    if (rule?.server_locked) {
+      const errorCode = String(rule?.server_disabled_reason_code || "DISCOUNT_NOT_AVAILABLE").trim().toUpperCase() || "DISCOUNT_NOT_AVAILABLE";
+      return {
+        isApplicable: false,
+        errorCode,
+        disabledReason: String(rule?.server_disabled_reason || "").trim() || buildRightOrderBenefitsDisabledReason(errorCode),
+        discountAmount: 0,
+        items,
+        itemsTotalAfterDiscount: baseItemsTotal,
+      };
+    }
+
+    const applyTo = String(rule?.apply_to || "").trim().toLowerCase() || "order";
+    const minOrderAmount = rule?.min_order_amount != null ? Number(rule.min_order_amount || 0) : 0;
+    if (applyTo === "order") {
+      if (minOrderAmount > 0 && baseItemsTotal < minOrderAmount) {
+        return {
+          isApplicable: false,
+          errorCode: "DISCOUNT_NOT_APPLICABLE",
+          disabledReason: buildRightOrderBenefitsDisabledReason("DISCOUNT_NOT_APPLICABLE"),
+          discountAmount: 0,
+          items,
+          itemsTotalAfterDiscount: baseItemsTotal,
+        };
+      }
+      const orderDiscountAmount = calculateRightOrderBenefitsLocalDiscountAmount(
+        baseItemsTotal,
+        rule?.discount_type,
+        rule?.discount_value,
+        rule?.max_discount_amount
+      );
+      if (!(orderDiscountAmount > 0)) {
+        return {
+          isApplicable: false,
+          errorCode: "DISCOUNT_NOT_APPLICABLE",
+          disabledReason: buildRightOrderBenefitsDisabledReason("DISCOUNT_NOT_APPLICABLE"),
+          discountAmount: 0,
+          items,
+          itemsTotalAfterDiscount: baseItemsTotal,
+        };
+      }
+      const appliedOrderDiscount = applyRightOrderLocalOrderDiscountAcrossItemsNoRemainder(items, orderDiscountAmount);
+      if (!(Number(appliedOrderDiscount?.discountAmount || 0) > 0)) {
+        return {
+          isApplicable: false,
+          errorCode: "DISCOUNT_NOT_APPLICABLE",
+          disabledReason: buildRightOrderBenefitsDisabledReason("DISCOUNT_NOT_APPLICABLE"),
+          discountAmount: 0,
+          items,
+          itemsTotalAfterDiscount: baseItemsTotal,
+        };
+      }
+      return {
+        isApplicable: true,
+        errorCode: "",
+        disabledReason: "",
+        discountAmount: roundPrice(Number(appliedOrderDiscount.discountAmount || 0)),
+        items: Array.isArray(appliedOrderDiscount.items) ? appliedOrderDiscount.items : items,
+        itemsTotalAfterDiscount: roundPrice(Number(appliedOrderDiscount.itemsTotalAfterDiscount || baseItemsTotal)),
+      };
+    }
+
+    const resolvedTargets = buildRightOrderBenefitsLocalTargetSets(rule?.target_sets);
+    let itemsDiscount = 0;
+    items.forEach((item) => {
+      if (!matchRightOrderBenefitsLocalTargetScope(resolvedTargets, item, productCategoriesMap, applyTo === "combo" ? "combo" : applyTo || "any")) {
+        return;
+      }
+      const itemDiscount = calculateRightOrderBenefitsLocalDiscountAmount(
+        Number(item?.line_total || 0),
+        rule?.discount_type,
+        rule?.discount_value,
+        rule?.max_discount_amount
+      );
+      if (!(itemDiscount > 0)) return;
+      item.line_total = roundPrice(Math.max(0, Number(item?.line_total || 0) - itemDiscount));
+      itemsDiscount += itemDiscount;
+    });
+    if (!(itemsDiscount > 0)) {
+      return {
+        isApplicable: false,
+        errorCode: "DISCOUNT_NOT_APPLICABLE",
+        disabledReason: buildRightOrderBenefitsDisabledReason("DISCOUNT_NOT_APPLICABLE"),
+        discountAmount: 0,
+        items,
+        itemsTotalAfterDiscount: baseItemsTotal,
+      };
+    }
+    return {
+      isApplicable: true,
+      errorCode: "",
+      disabledReason: "",
+      discountAmount: roundPrice(itemsDiscount),
+      items,
+      itemsTotalAfterDiscount: roundPrice(items.reduce((sum, item) => sum + Number(item?.line_total || 0), 0)),
+    };
+  }
+
+  function computeRightOrderBenefitsLocalPromoOutcome(rule, previewItems, itemsTotalBeforePromo, productCategoriesMap) {
+    const items = previewItems.map((item) => ({ ...item, discount: item?.discount ? { ...item.discount } : item?.discount }));
+    const baseItemsTotal = roundPrice(Number(itemsTotalBeforePromo != null
+      ? itemsTotalBeforePromo
+      : items.reduce((sum, item) => sum + Number(item?.line_total || 0), 0)
+    ));
+    if (!rule) {
+      return buildRightOrderBenefitsPromoNotApplicableOutcome(items, baseItemsTotal, {
+        disabledReasonCode: "PROMO_INVALID",
+      });
+    }
+    if (rule?.server_locked) {
+      const disabledReasonCode = String(rule?.server_disabled_reason_code || "PROMO_NOT_AVAILABLE").trim().toUpperCase() || "PROMO_NOT_AVAILABLE";
+      return buildRightOrderBenefitsPromoNotApplicableOutcome(items, baseItemsTotal, {
+        disabledReasonCode,
+        disabledReason: String(rule?.server_disabled_reason || "").trim(),
+      });
+    }
+
+    const runtimeConfig = rule?.runtime_config && typeof rule.runtime_config === "object" ? rule.runtime_config : {};
+    const rewardType = String(runtimeConfig?.reward_type || "discount").trim().toLowerCase() || "discount";
+    const productRewardType = String(runtimeConfig?.product_reward_type || "gift").trim().toLowerCase() || "gift";
+    const applyTo = String(runtimeConfig?.apply_to || "order").trim().toLowerCase() || "order";
+    const minOrderAmount = runtimeConfig?.min_order_amount != null
+      ? Number(runtimeConfig.min_order_amount || 0)
+      : (rule?.min_order_amount != null ? Number(rule.min_order_amount || 0) : 0);
+    if (minOrderAmount > 0 && baseItemsTotal < minOrderAmount) {
+      return buildRightOrderBenefitsPromoNotApplicableOutcome(items, baseItemsTotal, {
+        disabledReasonCode: "PROMO_NOT_APPLICABLE",
+        disabledReason: buildRightOrderBenefitsPromoMinAmountReason(minOrderAmount, baseItemsTotal),
+      });
+    }
+
+    const resolvedTargets = buildRightOrderBenefitsLocalTargetSets(rule?.target_sets);
+    if (rewardType === "discount") {
+      if (applyTo === "order") {
+        const promoDiscountAmount = calculateRightOrderBenefitsLocalDiscountAmount(
+          baseItemsTotal,
+          runtimeConfig?.discount_type,
+          runtimeConfig?.discount_value,
+          runtimeConfig?.max_discount_amount
+        );
+        if (!(promoDiscountAmount > 0)) {
+          return buildRightOrderBenefitsPromoNotApplicableOutcome(items, baseItemsTotal);
+        }
+        const appliedPromoDiscount = applyRightOrderLocalOrderDiscountAcrossItemsNoRemainder(items, promoDiscountAmount);
+        if (!(Number(appliedPromoDiscount?.discountAmount || 0) > 0)) {
+          return buildRightOrderBenefitsPromoNotApplicableOutcome(items, baseItemsTotal);
+        }
+        return {
+          isApplicable: true,
+          disabledReasonCode: "",
+          disabledReason: "",
+          discountAmount: roundPrice(Number(appliedPromoDiscount.discountAmount || 0)),
+          items: Array.isArray(appliedPromoDiscount.items) ? appliedPromoDiscount.items : items,
+          itemsTotalAfterPromo: roundPrice(Number(appliedPromoDiscount.itemsTotalAfterDiscount || baseItemsTotal)),
+        };
+      }
+      let promoItemsDiscount = 0;
+      items.forEach((item) => {
+        if (!matchRightOrderBenefitsLocalTargetScope(resolvedTargets, item, productCategoriesMap, applyTo || "any")) {
+          return;
+        }
+        const itemDiscount = calculateRightOrderBenefitsLocalDiscountAmount(
+          Number(item?.line_total || 0),
+          runtimeConfig?.discount_type,
+          runtimeConfig?.discount_value,
+          runtimeConfig?.max_discount_amount
+        );
+        if (!(itemDiscount > 0)) return;
+        item.line_total = roundPrice(Math.max(0, Number(item?.line_total || 0) - itemDiscount));
+        promoItemsDiscount += itemDiscount;
+      });
+      if (!(promoItemsDiscount > 0)) {
+        return buildRightOrderBenefitsPromoNotApplicableOutcome(items, baseItemsTotal);
+      }
+      return {
+        isApplicable: true,
+        disabledReasonCode: "",
+        disabledReason: "",
+        discountAmount: roundPrice(promoItemsDiscount),
+        items,
+        itemsTotalAfterPromo: roundPrice(items.reduce((sum, item) => sum + Number(item?.line_total || 0), 0)),
+      };
+    }
+
+    if (productRewardType === "gift") {
+      const hasTargets = resolvedTargets.anyProductIds.size > 0
+        || resolvedTargets.categoryIds.size > 0
+        || resolvedTargets.comboIds.size > 0
+        || resolvedTargets.exactProductConfigKeysByProductId.size > 0;
+      return hasTargets
+        ? {
+            isApplicable: true,
+            disabledReasonCode: "",
+            disabledReason: "",
+            discountAmount: 0,
+            items,
+            itemsTotalAfterPromo: baseItemsTotal,
+          }
+        : buildRightOrderBenefitsPromoNotApplicableOutcome(items, baseItemsTotal);
+    }
+
+    let rewardItemsDiscount = 0;
+    items.forEach((item) => {
+      if (!matchRightOrderBenefitsLocalTargetScope(resolvedTargets, item, productCategoriesMap, "any")) {
+        return;
+      }
+      const itemDiscount = calculateRightOrderBenefitsLocalDiscountAmount(
+        Number(item?.line_total || 0),
+        runtimeConfig?.discount_type,
+        runtimeConfig?.discount_value,
+        runtimeConfig?.max_discount_amount
+      );
+      if (!(itemDiscount > 0)) return;
+      item.line_total = roundPrice(Math.max(0, Number(item?.line_total || 0) - itemDiscount));
+      rewardItemsDiscount += itemDiscount;
+    });
+    if (!(rewardItemsDiscount > 0)) {
+      return buildRightOrderBenefitsPromoNotApplicableOutcome(items, baseItemsTotal);
+    }
+    return {
+      isApplicable: true,
+      disabledReasonCode: "",
+      disabledReason: "",
+      discountAmount: roundPrice(rewardItemsDiscount),
+      items,
+      itemsTotalAfterPromo: roundPrice(items.reduce((sum, item) => sum + Number(item?.line_total || 0), 0)),
+    };
+  }
+
+  function buildRightOrderBenefitsLocalLineTotalsByCartKey(items = []) {
+    return (Array.isArray(items) ? items : []).reduce((acc, item) => {
+      const cartKey = String(item?.cart_key || "").trim();
+      if (!cartKey) return acc;
+      acc[cartKey] = roundPrice(Number(item?.line_total || 0));
+      return acc;
+    }, {});
+  }
+
+  function buildRightOrderBenefitsLocalSummarySnapshot(previewData, subtotalBeforeDiscount, itemsTotalAfterBenefits, discountBreakdown = []) {
+    const subtotal = roundPrice(Number(subtotalBeforeDiscount || 0));
+    const itemsTotal = roundPrice(Number(itemsTotalAfterBenefits || 0));
+    const delivery = roundPrice(Number(previewData?.summary?.delivery || 0));
+    return {
+      subtotal,
+      items_total: itemsTotal,
+      delivery,
+      discount_total: roundPrice(Math.max(0, subtotal - itemsTotal)),
+      total: roundPrice(itemsTotal + delivery),
+      discount_breakdown: (Array.isArray(discountBreakdown) ? discountBreakdown : [])
+        .filter((entry) => Number(entry?.amount || 0) > 0)
+        .map((entry) => ({
+          key: String(entry?.key || "").trim(),
+          title: String(entry?.title || "").trim() || "Скидка",
+          amount: roundPrice(Number(entry?.amount || 0)),
+          source_kind: String(entry?.source_kind || "").trim().toLowerCase() || null,
+          promo_code: normalizeRightOrderBenefitsPromoCode(entry?.promo_code),
+        })),
+    };
+  }
+
+  function resolveRightOrderBenefitsLocalSummary(previewData, {
+    selectedDiscountId,
+    selectedDiscountSource,
+    selectedPromoId,
+    selectedPromoSource,
+  } = {}) {
+    const summaryStates = previewData?.client_calculation?.summary_states;
+    if (!summaryStates || typeof summaryStates !== "object") return null;
+    const discountKey = buildRightOrderBenefitsLocalDiscountKey(selectedDiscountSource, selectedDiscountId);
+    const promoKey = normalizeRightOrderBenefitsPromoSource(selectedPromoSource) && normalizeRightOrderBenefitsSelectedId(selectedPromoId)
+      ? `${normalizeRightOrderBenefitsPromoSource(selectedPromoSource)}:${normalizeRightOrderBenefitsSelectedId(selectedPromoId)}`
+      : "";
+    const stateKey = buildRightOrderBenefitsSelectionStateKey({ discountKey, promoKey });
+    const summary = summaryStates[stateKey]
+      || (discountKey ? summaryStates[buildRightOrderBenefitsSelectionStateKey({ discountKey })] : null)
+      || (promoKey ? summaryStates[buildRightOrderBenefitsSelectionStateKey({ promoKey })] : null)
+      || summaryStates.__base__
+      || null;
+    return summary ? cloneRightOrderBenefitsSummary(summary) : null;
+  }
+
+  function buildRightOrderBenefitsLocalPreviewData(previewData, {
+    order = null,
+    previewRequest = null,
+  } = {}) {
+    if (!previewData || typeof previewData !== "object") return null;
+    const form = order?.form && typeof order.form === "object" ? order.form : {};
+    const selection = getRightOrderBenefitsSelectionState(form);
+    const selectedDiscountKey = buildRightOrderBenefitsLocalDiscountKey(
+      selection.selectedDiscountSource,
+      selection.selectedDiscountId
+    );
+    const selectedPromoKey = buildRightOrderBenefitsLocalPromoKey(previewData, {
+      promoCode: selection.promoCode,
+      selectedPromoSource: selection.selectedPromoSource,
+      selectedPromoRewardId: selection.selectedPromoRewardId,
+    });
+    const clientCalculation = previewData?.client_calculation && typeof previewData.client_calculation === "object"
+      ? previewData.client_calculation
+      : null;
+    const discountRules = Array.isArray(clientCalculation?.discount_rules) ? clientCalculation.discount_rules : [];
+    const promoRules = Array.isArray(clientCalculation?.promo_rules) ? clientCalculation.promo_rules : [];
+
+    if (Number(clientCalculation?.version || 0) >= 2 && (discountRules.length || promoRules.length)) {
+      const effectivePreviewRequest = previewRequest && typeof previewRequest === "object"
+        ? previewRequest
+        : buildRightOrderBenefitsPreviewRequest(order);
+      const baseItems = buildRightOrderBenefitsLocalPreviewItems(effectivePreviewRequest);
+      const baseItemsTotal = roundPrice(baseItems.reduce((sum, item) => sum + Number(item?.line_total || 0), 0));
+      const subtotalBeforeDiscount = roundPrice(baseItems.reduce((sum, item) => {
+        const originalLineTotal = Number(item?.discount?.original_line_total || item?.line_total || 0);
+        return sum + Math.max(Number(item?.line_total || 0), originalLineTotal);
+      }, 0));
+      const productCategoriesMap = buildRightOrderBenefitsLocalProductCategoriesMap(order, baseItems);
+      const discountRuleOutcomes = new Map(
+        discountRules
+          .map((rule) => [String(rule?.selection_key || "").trim(), computeRightOrderBenefitsLocalDiscountOutcome(rule, baseItems, productCategoriesMap)])
+          .filter(([selectionKey]) => !!selectionKey)
+      );
+      const selectedDiscountRule = discountRules.find((rule) => String(rule?.selection_key || "").trim() === selectedDiscountKey) || null;
+      const selectedDiscountOutcome = selectedDiscountKey ? (discountRuleOutcomes.get(selectedDiscountKey) || null) : null;
+      const hasSelectedDiscount = selectedDiscountOutcome?.isApplicable === true;
+      const promoSourceItems = hasSelectedDiscount
+        ? (Array.isArray(selectedDiscountOutcome?.items) ? selectedDiscountOutcome.items : baseItems)
+        : baseItems;
+      const promoSourceItemsTotal = hasSelectedDiscount
+        ? Number(selectedDiscountOutcome?.itemsTotalAfterDiscount || baseItemsTotal)
+        : baseItemsTotal;
+      const promoRuleOutcomes = new Map(
+        promoRules
+          .map((rule) => [String(rule?.selection_key || "").trim(), computeRightOrderBenefitsLocalPromoOutcome(rule, promoSourceItems, promoSourceItemsTotal, productCategoriesMap)])
+          .filter(([selectionKey]) => !!selectionKey)
+      );
+      const selectedPromoRule = promoRules.find((rule) => String(rule?.selection_key || "").trim() === selectedPromoKey) || null;
+      const selectedPromoOutcome = selectedPromoKey ? (promoRuleOutcomes.get(selectedPromoKey) || null) : null;
+      const canCombineSelectedBenefits = !hasSelectedDiscount || !selectedPromoRule || !selectedDiscountRule
+        ? true
+        : (isRightOrderBenefitStackable(selectedDiscountRule) && isRightOrderBenefitStackable(selectedPromoRule));
+      const hasSelectedPromo = selectedPromoOutcome?.isApplicable === true && canCombineSelectedBenefits;
+      const finalItems = hasSelectedPromo
+        ? (Array.isArray(selectedPromoOutcome?.items) ? selectedPromoOutcome.items : promoSourceItems)
+        : (hasSelectedDiscount ? promoSourceItems : baseItems);
+      const finalItemsTotal = hasSelectedPromo
+        ? Number(selectedPromoOutcome?.itemsTotalAfterPromo || promoSourceItemsTotal)
+        : (hasSelectedDiscount ? promoSourceItemsTotal : baseItemsTotal);
+
+      const discountCards = Array.isArray(previewData?.discounts)
+        ? previewData.discounts.map((entry) => {
+            const selectionKey = buildRightOrderBenefitDiscountSelectionKey(entry);
+            const outcome = selectionKey ? (discountRuleOutcomes.get(selectionKey) || null) : null;
+            const isApplicable = outcome ? outcome.isApplicable === true : entry?.is_applicable === true;
+            const disabledReasonCode = outcome?.errorCode
+              ? String(outcome.errorCode).trim().toUpperCase()
+              : String(entry?.disabled_reason_code || "").trim().toUpperCase();
+            const disabledReason = isApplicable
+              ? ""
+              : (String(outcome?.disabledReason || "").trim() || String(entry?.disabled_reason || "").trim());
+            return {
+              ...entry,
+              is_applicable: isApplicable,
+              disabled_reason_code: isApplicable ? "" : disabledReasonCode,
+              disabled_reason: isApplicable ? "" : disabledReason,
+              is_selected: isApplicable && selectionKey === selectedDiscountKey,
+            };
+          })
+        : [];
+      const promoCards = Array.isArray(previewData?.promo_codes)
+        ? previewData.promo_codes.map((entry) => {
+            const selectionKey = buildRightOrderBenefitPromoSelectionKey(entry);
+            const outcome = selectionKey ? (promoRuleOutcomes.get(selectionKey) || null) : null;
+            const isApplicable = outcome ? outcome.isApplicable === true : entry?.is_applicable === true;
+            const disabledReasonCode = outcome?.disabledReasonCode
+              ? String(outcome.disabledReasonCode).trim().toUpperCase()
+              : String(entry?.disabled_reason_code || "").trim().toUpperCase();
+            const disabledReason = isApplicable
+              ? ""
+              : (String(outcome?.disabledReason || "").trim() || String(entry?.disabled_reason || "").trim());
+            return {
+              ...entry,
+              is_applicable: isApplicable,
+              disabled_reason_code: isApplicable ? "" : disabledReasonCode,
+              disabled_reason: isApplicable ? "" : disabledReason,
+              is_selected: isApplicable && canCombineSelectedBenefits && selectionKey === selectedPromoKey,
+            };
+          })
+        : [];
+
+      const discountBreakdown = [];
+      if (hasSelectedDiscount && Number(selectedDiscountOutcome?.discountAmount || 0) > 0) {
+        const selectedDiscountCard = discountCards.find((entry) => entry?.is_selected) || null;
+        discountBreakdown.push({
+          key: `discount_${Number(selectedDiscountRule?.source_discount_id || selectedDiscountRule?.selection_id || 0) || "selected"}`,
+          title: String(selectedDiscountCard?.title || "").trim() || "Скидка",
+          amount: roundPrice(Number(selectedDiscountOutcome.discountAmount || 0)),
+          source_kind: String(selectedDiscountRule?.source || "discount").trim().toLowerCase() || "discount",
+          promo_code: null,
+        });
+      }
+      if (hasSelectedPromo && Number(selectedPromoOutcome?.discountAmount || 0) > 0) {
+        const selectedPromoCard = promoCards.find((entry) => entry?.is_selected) || null;
+        discountBreakdown.push({
+          key: `promo_${Number(selectedPromoRule?.selection_id || 0) || "selected"}`,
+          title: String(selectedPromoCard?.title || selectedPromoCard?.code || "").trim() || "Промокод",
+          amount: roundPrice(Number(selectedPromoOutcome.discountAmount || 0)),
+          source_kind: String(selectedPromoRule?.source || "promo_code").trim().toLowerCase() || "promo_code",
+          promo_code: normalizeRightOrderBenefitsPromoCode(
+            selectedPromoCard?.code || selection.promoCode || ""
+          ) || null,
+        });
+      }
+
+      return {
+        ...cloneRightOrderBenefitsPreviewData(previewData),
+        discounts: discountCards,
+        promo_codes: promoCards,
+        summary: buildRightOrderBenefitsLocalSummarySnapshot(
+          previewData,
+          subtotalBeforeDiscount,
+          finalItemsTotal,
+          discountBreakdown
+        ),
+        local_line_totals_by_cart_key: buildRightOrderBenefitsLocalLineTotalsByCartKey(finalItems),
+      };
+    }
+
+    const selectedPromoId = normalizeRightOrderBenefitsPromoSource(selection.selectedPromoSource) === "reward_promo"
+      ? selection.selectedPromoRewardId
+      : normalizeRightOrderBenefitsSelectedId(
+          Array.isArray(previewData?.promo_codes)
+            ? previewData.promo_codes.find((entry) => (
+                normalizeRightOrderBenefitsPromoCode(entry?.code) === normalizeRightOrderBenefitsPromoCode(selection.promoCode || "")
+              ))?.id
+            : null
+        );
+    const summary = resolveRightOrderBenefitsLocalSummary(previewData, {
+      selectedDiscountId: selection.selectedDiscountId,
+      selectedDiscountSource: selection.selectedDiscountSource,
+      selectedPromoId,
+      selectedPromoSource: selection.selectedPromoSource,
+    });
+    if (!summary) return cloneRightOrderBenefitsPreviewData(previewData);
+
+    return {
+      ...cloneRightOrderBenefitsPreviewData(previewData),
+      discounts: Array.isArray(previewData?.discounts)
+        ? previewData.discounts.map((entry) => ({
+            ...entry,
+            is_selected: buildRightOrderBenefitDiscountSelectionKey(entry) === selectedDiscountKey,
+          }))
+        : [],
+      promo_codes: Array.isArray(previewData?.promo_codes)
+        ? previewData.promo_codes.map((entry) => ({
+            ...entry,
+            is_selected: buildRightOrderBenefitPromoSelectionKey(entry) === selectedPromoKey,
+          }))
+        : [],
+      summary,
+    };
+  }
+
+  function resolveRightOrderBenefitsPreviewForOrder(previewData, order) {
+    if (!previewData || typeof previewData !== "object") return null;
+    const derived = buildRightOrderBenefitsLocalPreviewData(previewData, { order });
+    return derived && typeof derived === "object"
+      ? derived
+      : (cloneRightOrderBenefitsPreviewData(previewData) || null);
+  }
+
   function invalidateRightOrderBenefitsPreview(orderId) {
     const id = Number(orderId || 0);
     if (!(id > 0)) return;
@@ -2915,12 +3964,26 @@
     return true;
   }
 
+  function shouldRightOrderUseOriginalLineTotalsForBenefits(order) {
+    if (String(order?.mode || "").trim().toLowerCase() !== "edit") return false;
+    const snapshot = order?.editPricingSnapshot && typeof order.editPricingSnapshot === "object"
+      ? order.editPricingSnapshot
+      : null;
+    if (!snapshot) return false;
+    const breakdown = Array.isArray(snapshot?.breakdown) ? snapshot.breakdown : [];
+    return breakdown.some((entry) => {
+      const sourceKind = normalizeRightOrderDiscountBreakdownSourceKind(entry);
+      return sourceKind === "discount" || sourceKind === "promo_code";
+    });
+  }
+
   function buildRightOrderBenefitsPreviewRequest(order, opts = {}) {
     const safeOrder = order && typeof order === "object" ? order : {};
     const form = safeOrder.form && typeof safeOrder.form === "object" ? safeOrder.form : {};
     const selection = getRightOrderBenefitsSelectionState(form);
     const previewCartItems = (Array.isArray(form.cartItems) ? form.cartItems : [])
       .filter((item) => Number(item?.is_gift_reward || 0) !== 1);
+    const useOriginalLineTotalsForBenefits = shouldRightOrderUseOriginalLineTotalsForBenefits(safeOrder);
     const request = {
       customer_id: Number(form.clientId || 0) > 0 ? Number(form.clientId) : null,
       method_code: String(form.pickupMethod || "").trim() || "delivery",
@@ -2931,8 +3994,13 @@
         ? (selection.selectedPromoSource || "promo_code")
         : null,
       selected_promo_reward_id: selection.selectedPromoRewardId,
+      use_original_line_totals_for_benefits: useOriginalLineTotalsForBenefits ? 1 : 0,
       items: buildRightOrderPayloadItems(previewCartItems),
     };
+    const excludeOrderId = Number(safeOrder.id || 0);
+    if (excludeOrderId > 0) {
+      request.exclude_order_id = excludeOrderId;
+    }
     if (opts?.includeMode) {
       request.mode = normalizeRightOrderBenefitsMode(opts.mode || getActiveRightOrderBenefitsMode());
     }
@@ -2958,6 +4026,10 @@
   function getRightOrderBenefitsPreviewSnapshot(order, opts = {}) {
     const orderId = Number(order?.id || 0);
     if (!(orderId > 0)) return null;
+    const form = order?.form && typeof order.form === "object" ? order.form : {};
+    const clientId = Number(form?.clientId || 0);
+    const allowStale = opts?.allowStale === true;
+    const allowClientCache = opts?.allowClientCache === true;
     const requestedMode = opts?.mode != null
       ? normalizeRightOrderBenefitsMode(opts.mode)
       : null;
@@ -2966,20 +4038,134 @@
           ? [requestedMode, ...(requestedMode === "all" ? ["customer"] : ["all"])]
           : [requestedMode])
       : (opts?.preferApplied ? ["all", "customer"] : [getActiveRightOrderBenefitsMode()]);
+    const resolvePreview = (preview) => {
+      if (!preview) return null;
+      if (opts?.resolveForOrder === false) return preview;
+      return resolveRightOrderBenefitsPreviewForOrder(preview, order);
+    };
+    let staleSnapshot = null;
+    let staleClientSnapshot = null;
     for (const mode of modeQueue) {
       const slot = getRightOrderBenefitsCacheSlot(orderId, mode);
       const expectedKey = buildRightOrderBenefitsPreviewKey(order, mode);
       const storedKey = String(state.rightBenefitsPreviewKeyByOrder.get(slot) || "");
-      if (!expectedKey || storedKey !== expectedKey) continue;
       const snapshot = state.rightBenefitsPreviewByOrder.get(slot) || null;
-      if (snapshot) return snapshot;
+      if (allowStale && !staleSnapshot && snapshot) {
+        staleSnapshot = snapshot;
+      }
+      if (expectedKey && storedKey === expectedKey && snapshot) return resolvePreview(snapshot);
+      if (allowClientCache && clientId > 0) {
+        const clientSlot = getRightOrderBenefitsClientCacheSlot(clientId, mode);
+        const clientSnapshot = clientSlot ? (state.rightBenefitsPreviewByClientMode.get(clientSlot) || null) : null;
+        if (clientSnapshot && !staleClientSnapshot) {
+          staleClientSnapshot = clientSnapshot;
+        }
+      }
     }
+    if (allowStale && staleSnapshot) return resolvePreview(staleSnapshot);
+    if (allowClientCache && staleClientSnapshot) return resolvePreview(cloneRightOrderBenefitsPreviewData(staleClientSnapshot));
     return null;
+  }
+
+  async function prefetchRightOrderBenefitsModes(orderId, opts = {}) {
+    const id = Number(orderId || 0);
+    if (!(id > 0)) return;
+    const index = getRightOrderIndexById(id);
+    if (index < 0) return;
+    const order = state.rightOrders[index] || {};
+    const form = order.form && typeof order.form === "object" ? order.form : {};
+    const hasClient = Number(form.clientId || 0) > 0;
+    const primaryMode = hasClient ? "customer" : "all";
+    const skipModeRaw = String(opts?.skipMode || "").trim();
+    const skipMode = skipModeRaw ? normalizeRightOrderBenefitsMode(skipModeRaw) : null;
+    const modes = (hasClient ? [primaryMode, "all"] : [primaryMode])
+      .filter((mode, index, list) => list.indexOf(mode) === index)
+      .filter((mode) => !skipMode || mode !== skipMode);
+    await Promise.all(
+      modes.map((mode) => loadRightOrderBenefitsPreview(id, {
+        force: opts?.force === true,
+        render: false,
+        renderOverlay: false,
+        mode,
+      }).catch(() => null))
+    );
   }
 
   function queueRenderRightBenefitsModal(orderId) {
     if (Number(state.benefitsModal.orderId || 0) !== Number(orderId || 0)) return;
     renderRightBenefitsOverlay(Number(orderId || 0));
+  }
+
+  function getRightBenefitsMainViewSnapshot(orderId, mode = null) {
+    const id = Number(orderId || state.benefitsModal.orderId || 0);
+    if (!(id > 0)) return null;
+    const activeMode = normalizeRightOrderBenefitsMode(mode || state.benefitsModal.mode);
+    const cacheSlot = getRightOrderBenefitsCacheSlot(id, activeMode);
+    return state.rightBenefitsPreviewByOrder.get(cacheSlot) || null;
+  }
+
+  function getRightBenefitsMainViewRequestKey(orderId, mode = null) {
+    const id = Number(orderId || state.benefitsModal.orderId || 0);
+    if (!(id > 0)) return "";
+    const index = getRightOrderIndexById(id);
+    if (index < 0) return "";
+    const order = state.rightOrders[index] || {};
+    return buildRightOrderBenefitsPreviewKey(order, normalizeRightOrderBenefitsMode(mode || state.benefitsModal.mode));
+  }
+
+  function rememberRightBenefitsMainView(orderId, mode, frame) {
+    if (!frame?.root || !frame.scrollEl) return;
+    const id = Number(orderId || 0);
+    const activeMode = normalizeRightOrderBenefitsMode(mode || state.benefitsModal.mode);
+    state.benefitsModal.mainView = {
+      orderId: id,
+      mode: activeMode,
+      requestKey: getRightBenefitsMainViewRequestKey(id, activeMode),
+      snapshot: getRightBenefitsMainViewSnapshot(id, activeMode),
+      root: frame.root,
+      scrollEl: frame.scrollEl,
+      scrollTop: Number(frame.scrollEl.scrollTop || 0),
+    };
+  }
+
+  function captureRightBenefitsMainViewScroll() {
+    const mainView = state.benefitsModal.mainView;
+    if (!mainView?.scrollEl) return;
+    mainView.scrollTop = Number(mainView.scrollEl.scrollTop || 0);
+  }
+
+  function restoreRightBenefitsMainView(orderId) {
+    const id = Number(orderId || state.benefitsModal.orderId || 0);
+    if (!(id > 0)) return false;
+    const mainView = state.benefitsModal.mainView;
+    if (!mainView || Number(mainView.orderId || 0) !== id) return false;
+    if (!(mainView.root instanceof Element)) return false;
+    const activeMode = normalizeRightOrderBenefitsMode(state.benefitsModal.mode || mainView.mode);
+    if (normalizeRightOrderBenefitsMode(mainView.mode) !== activeMode) return false;
+    if (mainView.requestKey !== getRightBenefitsMainViewRequestKey(id, activeMode)) return false;
+    if (mainView.snapshot !== getRightBenefitsMainViewSnapshot(id, activeMode)) return false;
+
+    window.AdminBenefitsModal?.show({
+      title: "Выгоды",
+      showBack: false,
+      showModeToggle: true,
+      mode: activeMode,
+      onClose: closeRightBenefitsOverlay,
+      onModeChange: (nextMode) => {
+        void switchRightBenefitsOverlayMode(nextMode);
+      },
+      clearBody: false,
+    });
+    const { body } = getRightBenefitsOverlayElements();
+    if (!body) return false;
+    if (mainView.root.parentNode !== body) {
+      body.innerHTML = "";
+      body.appendChild(mainView.root);
+    }
+    if (mainView.scrollEl) {
+      mainView.scrollEl.scrollTop = Number(mainView.scrollTop || 0);
+    }
+    return true;
   }
 
   async function ensureRightOrderBenefitsCustomerToken(orderId) {
@@ -3042,15 +4228,35 @@
 
     const cacheSlot = getRightOrderBenefitsCacheSlot(id, mode);
     const requestKey = buildRightOrderBenefitsPreviewKey(order, mode);
+    const clientCacheSlot = getRightOrderBenefitsClientCacheSlot(customerId, mode);
     if (!opts?.force && requestKey === String(state.rightBenefitsPreviewKeyByOrder.get(cacheSlot) || "")) {
       const cached = state.rightBenefitsPreviewByOrder.get(cacheSlot) || null;
       if (cached) return cached;
     }
+    let seededFromClientCache = false;
+    if (!opts?.force && !opts?.prefetchedData && clientCacheSlot) {
+      const cachedByClientMode = state.rightBenefitsPreviewByClientMode.get(clientCacheSlot) || null;
+      if (cachedByClientMode) {
+        const clonedCached = cloneRightOrderBenefitsPreviewData(cachedByClientMode);
+        if (clonedCached) {
+          state.rightBenefitsPreviewByOrder.set(cacheSlot, clonedCached);
+          state.rightBenefitsPreviewKeyByOrder.set(cacheSlot, requestKey);
+          seededFromClientCache = true;
+          if (opts?.render) {
+            renderRightOrderTabs();
+            if (opts?.renderOverlay !== false) queueRenderRightBenefitsModal(id);
+          }
+          if (opts?.skipServerWhenCached) return clonedCached;
+        }
+      }
+    }
 
     const requestSeq = Number(state.rightBenefitsReqSeqByOrder.get(cacheSlot) || 0) + 1;
     state.rightBenefitsReqSeqByOrder.set(cacheSlot, requestSeq);
+    const snapshotBeforeRequest = state.rightBenefitsPreviewByOrder.get(cacheSlot) || null;
+    const keyBeforeRequest = String(state.rightBenefitsPreviewKeyByOrder.get(cacheSlot) || "");
     state.rightBenefitsLoadingByOrder.add(cacheSlot);
-    if (opts?.render) queueRenderRightBenefitsModal(id);
+    if (opts?.render && opts?.renderOverlay !== false) queueRenderRightBenefitsModal(id);
 
     try {
       let nextData = opts?.prefetchedData && typeof opts.prefetchedData === "object"
@@ -3085,20 +4291,31 @@
       }
       state.rightBenefitsPreviewByOrder.set(cacheSlot, nextData || {});
       state.rightBenefitsPreviewKeyByOrder.set(cacheSlot, requestKey);
+      if (clientCacheSlot) {
+        state.rightBenefitsPreviewByClientMode.set(
+          clientCacheSlot,
+          cloneRightOrderBenefitsPreviewData(nextData || {}) || {}
+        );
+      }
       state.rightBenefitsLoadingByOrder.delete(cacheSlot);
       if (opts?.render) {
         renderRightOrderTabs();
-        queueRenderRightBenefitsModal(id);
+        if (opts?.renderOverlay !== false) queueRenderRightBenefitsModal(id);
       }
       return nextData;
     } catch (error) {
       if (Number(state.rightBenefitsReqSeqByOrder.get(cacheSlot) || 0) !== requestSeq) return null;
       state.rightBenefitsLoadingByOrder.delete(cacheSlot);
-      state.rightBenefitsPreviewByOrder.delete(cacheSlot);
-      state.rightBenefitsPreviewKeyByOrder.delete(cacheSlot);
+      if (snapshotBeforeRequest) {
+        state.rightBenefitsPreviewByOrder.set(cacheSlot, snapshotBeforeRequest);
+        state.rightBenefitsPreviewKeyByOrder.set(cacheSlot, keyBeforeRequest);
+      } else if (!seededFromClientCache) {
+        state.rightBenefitsPreviewByOrder.delete(cacheSlot);
+        state.rightBenefitsPreviewKeyByOrder.delete(cacheSlot);
+      }
       if (opts?.render) {
         renderRightOrderTabs();
-        queueRenderRightBenefitsModal(id);
+        if (opts?.renderOverlay !== false) queueRenderRightBenefitsModal(id);
       }
       throw error;
     }
@@ -3129,6 +4346,7 @@
       void loadRightOrderBenefitsPreview(id, {
         force: true,
         render: opts?.render !== false,
+        renderOverlay: opts?.renderOverlay === true,
         mode: refreshMode,
       }).catch(() => {});
     }, delay);
@@ -3166,7 +4384,12 @@
     form.selected_promo_source = null;
     form.selected_promo_reward_id = null;
     form.benefits_preview_mode = null;
-    state.rightOrders[index] = { ...order, form };
+    const shouldMarkTouched = String(order?.mode || "").trim().toLowerCase() === "edit";
+    state.rightOrders[index] = {
+      ...order,
+      form,
+      editCartTouched: shouldMarkTouched ? true : Boolean(order?.editCartTouched),
+    };
     invalidateRightOrderBenefitsPreview(id);
     clearRightOrderBenefitsRefreshTimer(id);
     if (opts?.clearGiftItems) {
@@ -3185,11 +4408,61 @@
     const cartItemsCount = cartItems.reduce((sum, item) => sum + Math.max(1, Number(item?.qty || 1)), 0);
     const preferredBenefitsMode = getRightOrderBenefitsPreferredMode(form, null);
     const benefitsPreview = getRightOrderBenefitsPreviewSnapshot(order, preferredBenefitsMode
-      ? { mode: preferredBenefitsMode, preferApplied: true }
-      : { preferApplied: true });
-    const benefitsPreviewSummary = benefitsPreview?.summary && typeof benefitsPreview.summary === "object"
-      ? benefitsPreview.summary
-      : null;
+      ? { mode: preferredBenefitsMode, preferApplied: true, allowStale: true, allowClientCache: true }
+      : { preferApplied: true, allowStale: true, allowClientCache: true });
+    const benefitsPreviewSummary = (() => {
+      const raw = benefitsPreview?.summary && typeof benefitsPreview.summary === "object"
+        ? benefitsPreview.summary
+        : null;
+      if (!raw) return null;
+      const next = { ...raw };
+      const normalizedBreakdown = buildRightOrderDiscountBreakdownEntries(raw?.discount_breakdown, {
+        promoCode: form?.promo_code,
+      });
+      const breakdownTotal = roundPrice(
+        normalizedBreakdown.reduce((sum, entry) => sum + Number(entry?.amount || 0), 0)
+      );
+      let subtotalValue = Number(raw?.subtotal);
+      subtotalValue = Number.isFinite(subtotalValue) ? roundPrice(Math.max(0, subtotalValue)) : NaN;
+      let itemsTotalValue = Number(raw?.items_total);
+      itemsTotalValue = Number.isFinite(itemsTotalValue) ? roundPrice(Math.max(0, itemsTotalValue)) : NaN;
+      let discountTotalValue = Number(raw?.discount_total);
+      discountTotalValue = Number.isFinite(discountTotalValue) ? roundPrice(Math.max(0, discountTotalValue)) : NaN;
+
+      if (!Number.isFinite(discountTotalValue)) {
+        if (breakdownTotal > 0) {
+          discountTotalValue = breakdownTotal;
+        } else if (Number.isFinite(subtotalValue) && Number.isFinite(itemsTotalValue)) {
+          discountTotalValue = roundPrice(Math.max(0, subtotalValue - itemsTotalValue));
+        }
+      }
+      if (!Number.isFinite(subtotalValue)) {
+        if (Number.isFinite(itemsTotalValue) && Number.isFinite(discountTotalValue)) {
+          subtotalValue = roundPrice(itemsTotalValue + discountTotalValue);
+        } else {
+          subtotalValue = roundPrice(Math.max(0, subtotal));
+        }
+      }
+      if (!Number.isFinite(itemsTotalValue)) {
+        if (Number.isFinite(discountTotalValue)) {
+          itemsTotalValue = roundPrice(Math.max(0, subtotalValue - discountTotalValue));
+        } else {
+          itemsTotalValue = roundPrice(Math.max(0, subtotalValue));
+        }
+      }
+      if (!Number.isFinite(discountTotalValue)) {
+        discountTotalValue = roundPrice(Math.max(0, subtotalValue - itemsTotalValue));
+      }
+      if (breakdownTotal > 0 && discountTotalValue < breakdownTotal) {
+        discountTotalValue = breakdownTotal;
+        itemsTotalValue = roundPrice(Math.max(0, subtotalValue - discountTotalValue));
+      }
+
+      next.subtotal = subtotalValue;
+      next.discount_total = discountTotalValue;
+      next.items_total = itemsTotalValue;
+      return next;
+    })();
     const hasBenefitsPreview = benefitsPreviewSummary && Number.isFinite(Number(benefitsPreviewSummary?.items_total));
     const customerDiscountSummary = hasBenefitsPreview ? null : getRightOrderCustomerDiscountSummary(order, subtotal);
     const customerOrderDiscount = hasBenefitsPreview
@@ -3351,12 +4624,27 @@
     const explicitFree = Number(item?.auto_add_free_qty);
     if (Number.isFinite(explicitFree) && explicitFree > 0) return explicitFree;
     const qty = Math.max(0, Number(item?.qty || item?.quantity || 0));
-    const paidQty = Number(item?.auto_add_paid_qty);
-    if (Number.isFinite(paidQty)) {
-      return Math.max(0, qty - Math.max(0, paidQty));
+    const paidQty = getRightOrderAutoPaidQty(item, qty);
+    return Math.max(0, qty - paidQty);
+  }
+
+  function getRightOrderAutoPaidQty(item, qtyOverride = null) {
+    const qtySource = qtyOverride != null
+      ? Number(qtyOverride)
+      : Number(item?.qty || item?.quantity || 0);
+    const qty = Math.max(0, Number.isFinite(qtySource) ? qtySource : 0);
+    if (!isRightOrderAutoAddItem(item)) return qty;
+    const paidQtyRaw = Number(item?.auto_add_paid_qty);
+    if (Number.isFinite(paidQtyRaw)) {
+      return Math.max(0, Math.min(qty, paidQtyRaw));
     }
-    const lineTotal = getRightOrderCartLineTotal(item);
-    return Math.abs(lineTotal) < 0.000001 ? qty : 0;
+    const freeQtyRaw = Number(item?.auto_add_free_qty);
+    if (Number.isFinite(freeQtyRaw)) {
+      return Math.max(0, qty - Math.max(0, freeQtyRaw));
+    }
+    const lineTotalRaw = Number(item?.sum ?? item?.line_total ?? item?.total ?? item?.total_price);
+    if (Number.isFinite(lineTotalRaw) && Math.abs(lineTotalRaw) < 0.000001) return 0;
+    return qty;
   }
 
   function getRightOrderCartLineTotal(item) {
@@ -3364,24 +4652,225 @@
     if (isGiftRewardCartItem(item)) return 0;
     const unitPrice = Number(item?.unit_price || item?.price || 0);
     if (isRightOrderAutoAddItem(item)) {
-      const paidQtyRaw = Number(item?.auto_add_paid_qty);
-      if (Number.isFinite(paidQtyRaw)) {
-        const paidQty = Math.max(0, Math.min(qty, paidQtyRaw));
-        return roundPrice(unitPrice * paidQty);
-      }
-      const freeQtyRaw = Number(item?.auto_add_free_qty);
-      if (Number.isFinite(freeQtyRaw)) {
-        const paidQty = Math.max(0, qty - Math.max(0, freeQtyRaw));
-        return roundPrice(unitPrice * paidQty);
-      }
+      const paidQty = getRightOrderAutoPaidQty(item, qty);
+      return roundPrice(unitPrice * paidQty);
     }
     const lineTotal = Number(item?.sum ?? item?.line_total ?? item?.total ?? item?.total_price);
     if (Number.isFinite(lineTotal)) return roundPrice(lineTotal);
     return roundPrice(unitPrice * qty);
   }
 
+  function getRightOrderStoredOriginalLineTotal(item) {
+    const explicitOriginal = Number(item?.discount?.original_line_total || 0);
+    const storedOldLine = Number(item?.old_line_total || 0);
+    const resolved = Math.max(0, explicitOriginal, storedOldLine);
+    return resolved > 0 ? roundPrice(resolved) : 0;
+  }
+
+  function getRightOrderCartOriginalLineTotal(item, opts = {}) {
+    if (isGiftRewardCartItem(item)) return 0;
+    const qty = Math.max(0, Number(opts?.qty ?? item?.qty ?? item?.quantity ?? 0));
+    const currentLineTotal = Number.isFinite(Number(opts?.currentLineTotal))
+      ? roundPrice(Math.max(0, Number(opts.currentLineTotal)))
+      : getRightOrderCartLineTotal(item);
+    const storedOriginalLineTotal = Number.isFinite(Number(opts?.storedOriginalLineTotal))
+      ? roundPrice(Math.max(0, Number(opts.storedOriginalLineTotal)))
+      : getRightOrderStoredOriginalLineTotal(item);
+    if (storedOriginalLineTotal > currentLineTotal) return storedOriginalLineTotal;
+    const oldUnitPrice = Number(item?.unit_price_before_discount || item?.old_price || 0);
+    if (oldUnitPrice > 0) {
+      const paidQty = isRightOrderAutoAddItem(item) ? getRightOrderAutoPaidQty(item, qty) : qty;
+      const originalFromUnit = roundPrice(oldUnitPrice * paidQty);
+      if (originalFromUnit > currentLineTotal) return originalFromUnit;
+    }
+    return currentLineTotal;
+  }
+
+  function distributeRightOrderDiscountAcrossLines(lineStates, extraOrderDiscount) {
+    const states = Array.isArray(lineStates) ? lineStates : [];
+    const precisionFactor = getRightOrderPricePrecisionFactor();
+    const eligible = states
+      .map((entry, index) => {
+        const baseTotal = roundPrice(Math.max(0, Number(entry?.baseTotal || 0)));
+        const baseTotalUnits = toRightOrderPriceUnits(baseTotal, precisionFactor);
+        return {
+          index,
+          position: index,
+          baseTotalUnits,
+        };
+      })
+      .filter((entry) => entry.baseTotalUnits > 0);
+
+    const discountsByIndex = new Map();
+    if (!eligible.length) return discountsByIndex;
+
+    const totalDiscountUnits = toRightOrderPriceUnits(extraOrderDiscount, precisionFactor);
+    if (!(totalDiscountUnits > 0)) return discountsByIndex;
+
+    const baseTotalUnits = eligible.reduce((sum, entry) => sum + Number(entry.baseTotalUnits || 0), 0);
+    if (!(baseTotalUnits > 0)) return discountsByIndex;
+
+    const cappedDiscountUnits = Math.min(totalDiscountUnits, baseTotalUnits);
+    const allocations = eligible.map((entry) => {
+      const proportionalUnits = (cappedDiscountUnits * Number(entry.baseTotalUnits || 0)) / baseTotalUnits;
+      const roundedDownUnits = Math.floor(proportionalUnits);
+      const safeUnits = Math.min(Number(entry.baseTotalUnits || 0), Math.max(0, roundedDownUnits));
+      return {
+        ...entry,
+        shareUnits: safeUnits,
+        fractionalRemainder: proportionalUnits - roundedDownUnits,
+      };
+    });
+    let appliedDiscountUnits = allocations.reduce((sum, entry) => sum + Number(entry?.shareUnits || 0), 0);
+    let remainingDiscountUnits = Math.max(0, cappedDiscountUnits - appliedDiscountUnits);
+    if (remainingDiscountUnits > 0) {
+      const sortedByRemainder = allocations.slice().sort((a, b) => (
+        Number(b?.fractionalRemainder || 0) - Number(a?.fractionalRemainder || 0)
+        || Number(b?.baseTotalUnits || 0) - Number(a?.baseTotalUnits || 0)
+        || Number(a?.position || 0) - Number(b?.position || 0)
+      ));
+      while (remainingDiscountUnits > 0) {
+        let progressed = false;
+        for (const entry of sortedByRemainder) {
+          const capUnits = Math.max(0, Number(entry?.baseTotalUnits || 0) - Number(entry?.shareUnits || 0));
+          if (!(capUnits > 0)) continue;
+          entry.shareUnits += 1;
+          remainingDiscountUnits -= 1;
+          progressed = true;
+          if (!(remainingDiscountUnits > 0)) break;
+        }
+        if (!progressed) break;
+      }
+    }
+    allocations.forEach((entry) => {
+      const shareUnits = Math.min(
+        Number(entry?.baseTotalUnits || 0),
+        Math.max(0, Number(entry?.shareUnits || 0))
+      );
+      if (!(shareUnits > 0)) return;
+      discountsByIndex.set(entry.index, fromRightOrderPriceUnits(shareUnits, precisionFactor));
+    });
+    return discountsByIndex;
+  }
+
+  function buildRightOrderCartLineStates(cartItems, finalItemsTotal, previewData = null) {
+    const source = Array.isArray(cartItems) ? cartItems : [];
+    const rawLocalLineTotals = previewData?.local_line_totals_by_cart_key
+      && typeof previewData.local_line_totals_by_cart_key === "object"
+      ? previewData.local_line_totals_by_cart_key
+      : null;
+    const localLineTotalsByCartKey = rawLocalLineTotals
+      ? Object.entries(rawLocalLineTotals).reduce((acc, [rawKey, rawValue]) => {
+          const key = String(rawKey || "").trim();
+          if (!key) return acc;
+          const value = roundPrice(Math.max(0, Number(rawValue || 0)));
+          if (!Number.isFinite(value)) return acc;
+          acc[key] = value;
+          return acc;
+        }, {})
+      : null;
+    const resolveCartLineKey = (item) => {
+      const explicitKey = String(item?.cart_key || item?.key || "").trim();
+      if (explicitKey) return explicitKey;
+      const numericId = Number(item?.id || 0);
+      return numericId > 0 ? String(numericId) : "";
+    };
+    const lineStates = source.map((item) => {
+      const qty = Math.max(0, Number(item?.qty || item?.quantity || 0));
+      const baseTotal = roundPrice(Math.max(0, Number(getRightOrderCartLineTotal(item) || 0)));
+      const storedOriginalLineTotal = getRightOrderStoredOriginalLineTotal(item);
+      const cartLineKey = resolveCartLineKey(item);
+      const localLineTotalRaw = cartLineKey && localLineTotalsByCartKey
+        ? Number(localLineTotalsByCartKey[cartLineKey])
+        : NaN;
+      const hasLocalLineTotal = Number.isFinite(localLineTotalRaw);
+      const localLineTotal = hasLocalLineTotal
+        ? roundPrice(Math.max(0, localLineTotalRaw))
+        : baseTotal;
+      if (!(qty > 0) || isGiftRewardCartItem(item)) {
+        return {
+          baseTotal,
+          currentTotal: baseTotal,
+          originalTotal: baseTotal,
+          eligibleForLocal: false,
+          hasLocalLineTotal: false,
+        };
+      }
+      const originalTotal = getRightOrderCartOriginalLineTotal(item, {
+        qty,
+        currentLineTotal: baseTotal,
+        storedOriginalLineTotal,
+      });
+      return {
+        baseTotal,
+        currentTotal: localLineTotal,
+        originalTotal: roundPrice(Math.max(originalTotal, baseTotal, localLineTotal)),
+        eligibleForLocal: true,
+        hasLocalLineTotal,
+      };
+    });
+    const eligibleForLocalCount = lineStates.reduce((sum, entry) => (
+      sum + (entry?.eligibleForLocal ? 1 : 0)
+    ), 0);
+    const resolvedLocalCount = lineStates.reduce((sum, entry) => (
+      sum + (entry?.eligibleForLocal && entry?.hasLocalLineTotal ? 1 : 0)
+    ), 0);
+    const useLocalLineTotals = eligibleForLocalCount > 0 && resolvedLocalCount === eligibleForLocalCount;
+    if (useLocalLineTotals) {
+      return lineStates.map((entry) => {
+        const currentTotal = roundPrice(Math.max(0, Number(entry?.currentTotal || 0)));
+        const originalTotal = roundPrice(Math.max(
+          Number(entry?.originalTotal || 0),
+          Number(entry?.baseTotal || 0),
+          currentTotal
+        ));
+        let discountPercent = 0;
+        if (originalTotal > currentTotal && originalTotal > 0) {
+          discountPercent = Math.round(((originalTotal - currentTotal) / originalTotal) * 100);
+        }
+        if (!Number.isFinite(discountPercent) || discountPercent <= 0) discountPercent = 0;
+        if (discountPercent > 100) discountPercent = 100;
+        return {
+          currentTotal,
+          originalTotal: originalTotal > currentTotal ? originalTotal : currentTotal,
+          discountPercent,
+        };
+      });
+    }
+
+    const baseLinesTotal = roundPrice(
+      lineStates.reduce((sum, entry) => sum + Number(entry?.baseTotal || 0), 0)
+    );
+    const extraOrderDiscount = roundPrice(Math.max(
+      0,
+      baseLinesTotal - roundPrice(Number(finalItemsTotal || 0))
+    ));
+    const distributedByIndex = distributeRightOrderDiscountAcrossLines(lineStates, extraOrderDiscount);
+
+    return lineStates.map((entry, index) => {
+      const allocatedDiscount = roundPrice(Number(distributedByIndex.get(index) || 0));
+      const currentTotal = roundPrice(Math.max(0, Number(entry?.baseTotal || 0) - allocatedDiscount));
+      const originalTotal = roundPrice(Math.max(
+        Number(entry?.originalTotal || 0),
+        Number(entry?.baseTotal || 0),
+        currentTotal
+      ));
+      let discountPercent = 0;
+      if (originalTotal > currentTotal && originalTotal > 0) {
+        discountPercent = Math.round(((originalTotal - currentTotal) / originalTotal) * 100);
+      }
+      if (!Number.isFinite(discountPercent) || discountPercent <= 0) discountPercent = 0;
+      if (discountPercent > 100) discountPercent = 100;
+      return {
+        currentTotal,
+        originalTotal: originalTotal > currentTotal ? originalTotal : currentTotal,
+        discountPercent,
+      };
+    });
+  }
+
   function normalizeRightOrderDiscountBreakdownSourceKind(entry) {
-    const raw = String(entry?.source_kind || entry?.source || entry?.kind || "").trim().toLowerCase();
+    const raw = String(entry?.source_kind || entry?.sourceKind || entry?.source || entry?.kind || "").trim().toLowerCase();
     if (raw === "promo_code" || raw === "reward_promo") return "promo_code";
     if (raw === "reward_discount" || raw === "discount") return "discount";
     const key = String(entry?.key || "").trim().toLowerCase();
@@ -3469,13 +4958,10 @@
       if (!item || isGiftRewardCartItem(item)) return;
       const lineTotal = getRightOrderCartLineTotal(item);
       const qty = Math.max(0, Number(item?.qty || item?.quantity || 0));
-      const oldLineTotalRaw = Number(item?.old_line_total || item?.discount?.original_line_total || 0);
-      const oldUnitPrice = Number(item?.unit_price_before_discount || item?.old_price || 0);
-      const oldLineFromUnit = oldUnitPrice > 0 ? roundPrice(oldUnitPrice * qty) : 0;
-
-      let originalLineTotal = lineTotal;
-      if (oldLineTotalRaw > originalLineTotal) originalLineTotal = roundPrice(oldLineTotalRaw);
-      if (oldLineFromUnit > originalLineTotal) originalLineTotal = oldLineFromUnit;
+      const originalLineTotal = getRightOrderCartOriginalLineTotal(item, {
+        qty,
+        currentLineTotal: lineTotal,
+      });
 
       const lineDiscount = roundPrice(Math.max(0, originalLineTotal - lineTotal));
       if (!(lineDiscount > 0)) return;
@@ -3519,20 +5005,38 @@
       ? opts.benefitsSummary
       : null;
     if (benefitsSummary && Number.isFinite(Number(benefitsSummary?.discount_total))) {
-      const totalDiscount = roundPrice(Number(benefitsSummary?.discount_total || 0));
+      const totalDiscount = roundPrice(Math.max(0, Number(benefitsSummary?.discount_total || 0)));
       const subtotalBeforeDiscountRaw = Number(benefitsSummary?.subtotal);
-      let breakdown = mergeRightOrderDiscountBreakdownEntries(
-        buildRightOrderDiscountBreakdownEntries(benefitsSummary?.discount_breakdown, {
-          promoCode: opts?.promoCode,
-        }),
-        itemLevelSummary.breakdown
+      const subtotalAfterDiscountRaw = Number(benefitsSummary?.items_total);
+      const subtotalAfterDiscount = Number.isFinite(subtotalAfterDiscountRaw)
+        ? roundPrice(Math.max(0, subtotalAfterDiscountRaw))
+        : roundPrice(Math.max(0, Number(subtotal || 0)));
+      let subtotalBeforeDiscount = Number.isFinite(subtotalBeforeDiscountRaw)
+        ? roundPrice(Math.max(0, subtotalBeforeDiscountRaw))
+        : roundPrice(subtotalAfterDiscount + totalDiscount);
+      const minSubtotalBeforeDiscount = roundPrice(subtotalAfterDiscount + totalDiscount);
+      if (subtotalBeforeDiscount < minSubtotalBeforeDiscount) {
+        subtotalBeforeDiscount = minSubtotalBeforeDiscount;
+      }
+      let breakdown = buildRightOrderDiscountBreakdownEntries(benefitsSummary?.discount_breakdown, {
+        promoCode: opts?.promoCode,
+      });
+      if (!breakdown.length && totalDiscount > 0) {
+        breakdown = mergeRightOrderDiscountBreakdownEntries(itemLevelSummary.breakdown);
+      }
+      const breakdownTotal = roundPrice(
+        breakdown.reduce((sum, entry) => sum + Number(entry?.amount || 0), 0)
       );
-      breakdown = appendRightOrderOtherDiscountEntryIfNeeded(breakdown, totalDiscount);
+      const resolvedTotalDiscount = roundPrice(
+        breakdown.length > 0 ? breakdownTotal : totalDiscount
+      );
+      const minSubtotalBeforeDiscountResolved = roundPrice(subtotalAfterDiscount + resolvedTotalDiscount);
+      if (subtotalBeforeDiscount < minSubtotalBeforeDiscountResolved) {
+        subtotalBeforeDiscount = minSubtotalBeforeDiscountResolved;
+      }
       return {
-        subtotalBeforeDiscount: Number.isFinite(subtotalBeforeDiscountRaw)
-          ? roundPrice(subtotalBeforeDiscountRaw)
-          : roundPrice(Math.max(0, Number(subtotal || 0)) + totalDiscount),
-        totalDiscount,
+        subtotalBeforeDiscount,
+        totalDiscount: resolvedTotalDiscount,
         breakdown,
         orderDiscountTitles: [],
       };
@@ -3543,18 +5047,24 @@
       ? opts.orderDiscountTitles.map((x) => String(x || "").trim()).filter(Boolean)
       : [];
     const totalDiscount = roundPrice(itemLevelSummary.totalDiscount + customerOrderDiscount);
-    const subtotalBeforeDiscount = roundPrice(Math.max(0, subtotalAfterDiscount + totalDiscount));
+    let subtotalBeforeDiscount = roundPrice(Math.max(0, subtotalAfterDiscount + totalDiscount));
     let breakdown = mergeRightOrderDiscountBreakdownEntries(
       itemLevelSummary.breakdown,
       customerOrderDiscount > 0
         ? [{ key: "customer_discount", title: "\u041a\u043b\u0438\u0435\u043d\u0442\u0441\u043a\u0430\u044f \u0441\u043a\u0438\u0434\u043a\u0430", amount: customerOrderDiscount }]
         : []
     );
-    breakdown = appendRightOrderOtherDiscountEntryIfNeeded(breakdown, totalDiscount);
+    const breakdownTotal = roundPrice(
+      breakdown.reduce((sum, entry) => sum + Number(entry?.amount || 0), 0)
+    );
+    const resolvedTotalDiscount = roundPrice(
+      breakdown.length > 0 ? breakdownTotal : totalDiscount
+    );
+    subtotalBeforeDiscount = roundPrice(Math.max(0, subtotalAfterDiscount + resolvedTotalDiscount));
 
     return {
       subtotalBeforeDiscount,
-      totalDiscount,
+      totalDiscount: resolvedTotalDiscount,
       breakdown,
       orderDiscountTitles,
     };
@@ -3801,17 +5311,59 @@
     return vgId > 0 ? vgId : null;
   }
 
-  function buildRightOrderPayloadItems(cartItems) {
+  function buildRightOrderPayloadItems(cartItems, opts = {}) {
     const source = Array.isArray(cartItems) ? cartItems : [];
+    const localLineTotalsRaw = opts?.localLineTotalsByCartKey && typeof opts.localLineTotalsByCartKey === "object"
+      ? opts.localLineTotalsByCartKey
+      : null;
+    const normalizedLocalLineTotals = localLineTotalsRaw
+      ? Object.entries(localLineTotalsRaw).reduce((acc, [rawKey, rawValue]) => {
+          const key = String(rawKey || "").trim();
+          if (!key) return acc;
+          const value = roundPrice(Math.max(0, Number(rawValue || 0)));
+          if (!Number.isFinite(value)) return acc;
+          acc[key] = value;
+          return acc;
+        }, {})
+      : null;
+    const resolveCartLineKey = (item) => String(item?.cart_key || item?.key || item?.id || "").trim();
+    const localEligibleItems = source.filter((item) => (
+      item
+      && Math.max(0, Number(item?.qty || item?.quantity || 0)) > 0
+      && !isGiftRewardCartItem(item)
+    ));
+    const useLocalLineTotals = Boolean(
+      normalizedLocalLineTotals
+      && localEligibleItems.length
+      && localEligibleItems.every((item) => {
+        const key = resolveCartLineKey(item);
+        return key
+          && Object.prototype.hasOwnProperty.call(normalizedLocalLineTotals, key)
+          && Number.isFinite(Number(normalizedLocalLineTotals[key]));
+      })
+    );
+    const resolveLineTotalForPayload = (item, fallbackValue) => {
+      const fallback = roundPrice(Math.max(0, Number(fallbackValue || 0)));
+      if (!useLocalLineTotals) return fallback;
+      const key = resolveCartLineKey(item);
+      if (!key) return fallback;
+      const candidate = roundPrice(Math.max(0, Number(normalizedLocalLineTotals[key] || 0)));
+      return Number.isFinite(candidate) ? candidate : fallback;
+    };
     const out = [];
 
     source.forEach((item) => {
       const type = String(item?.type || "product");
       const qty = Math.max(1, Number(item?.qty || 1));
+      const cartKey = String(item?.cart_key || item?.key || item?.id || "").trim();
       if (type === "combo") {
         const comboId = Number(item?.combo_id || 0);
-        const lineTotal = roundPrice(Number(item?.sum || Number(item?.unit_price || 0) * qty));
-        const oldLineTotalRaw = roundPrice(Number(item?.unit_price_before_discount || 0) * qty);
+        const baseLineTotal = roundPrice(Number(item?.sum || Number(item?.unit_price || 0) * qty));
+        const lineTotal = resolveLineTotalForPayload(item, baseLineTotal);
+        const oldLineTotalRaw = getRightOrderCartOriginalLineTotal(item, {
+          qty,
+          currentLineTotal: baseLineTotal,
+        });
         const oldLineTotal = oldLineTotalRaw > lineTotal ? oldLineTotalRaw : 0;
         const seedSelections = getComboSeedSelectionsFromCartItem(item);
         if (!(comboId > 0) && !seedSelections.length) return;
@@ -3840,6 +5392,7 @@
 
         const comboPayload = {
           type: "combo",
+          cart_key: cartKey || null,
           combo_title: String(item?.combo_title || item?.name || "РљРѕРјР±Рѕ"),
           qty,
           line_total: lineTotal,
@@ -3853,8 +5406,13 @@
 
       const productId = Number(item?.product_id || 0);
       if (!(productId > 0)) return;
-      const lineTotal = getRightOrderCartLineTotal(item);
-      const originalLineTotal = roundPrice(Number(item?.unit_price_before_discount || item?.unit_price || 0) * qty);
+      const baseLineTotal = getRightOrderCartLineTotal(item);
+      const lineTotal = resolveLineTotalForPayload(item, baseLineTotal);
+      const originalLineTotalRaw = getRightOrderCartOriginalLineTotal(item, {
+        qty,
+        currentLineTotal: baseLineTotal,
+      });
+      const originalLineTotal = originalLineTotalRaw > lineTotal ? originalLineTotalRaw : lineTotal;
       const optionItemsSource = Array.isArray(item?.option_items) ? item.option_items : [];
       const optionItems = optionItemsSource
         .map((opt) => {
@@ -3879,6 +5437,7 @@
         ? Number(item.variant.selected_index)
         : null;
       out.push({
+        cart_key: cartKey || null,
         product_id: productId,
         qty,
         option_item_ids: optionItemIds,
@@ -4325,7 +5884,22 @@
       }
     }
 
-    const items = buildRightOrderPayloadItems(cartItems);
+    const displayedLineStates = buildRightOrderCartLineStates(
+      cartItems,
+      roundPrice(Number(summary?.subtotalAfterCustomerDiscount || 0)),
+      summary?.benefitsPreview
+    );
+    const localLineTotalsByCartKey = (() => {
+      const map = {};
+      cartItems.forEach((item, index) => {
+        const stateRow = displayedLineStates[index] || null;
+        const key = String(item?.cart_key || item?.key || item?.id || "").trim();
+        if (!key || !stateRow) return;
+        map[key] = roundPrice(Math.max(0, Number(stateRow?.currentTotal || 0)));
+      });
+      return Object.keys(map).length ? map : null;
+    })();
+    const items = buildRightOrderPayloadItems(cartItems, { localLineTotalsByCartKey });
     if (!items.length) {
       showNewOrderAlert("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0441\u043e\u0431\u0440\u0430\u0442\u044c \u043f\u043e\u0437\u0438\u0446\u0438\u0438 \u0437\u0430\u043a\u0430\u0437\u0430");
       return;
@@ -4940,6 +6514,7 @@
     state.rightOrders[index] = { ...order, form };
     invalidateRightOrderBenefitsPreview(Number(orderId || 0));
     scheduleRightOrderBenefitsRefresh(Number(orderId || 0));
+    void prefetchRightOrderBenefitsModes(Number(orderId || 0), { force: false });
     renderRightOrderTabs();
   }
 
@@ -4967,17 +6542,11 @@
   }
 
   function createRightOrderBenefitIcon(iconClass) {
-    const icon = document.createElement("i");
-    icon.className = `fas ${iconClass}`;
-    icon.setAttribute("aria-hidden", "true");
-    return icon;
+    return window.AdminBenefitsModal?.createIcon(iconClass) || document.createElement("i");
   }
 
   function getRightOrderBenefitRewardIconName(kind) {
-    const normalizedKind = String(kind || "").trim().toLowerCase();
-    if (normalizedKind === "promo_code") return "fa-ticket-alt";
-    if (normalizedKind === "discount") return "fa-percent";
-    return "fa-gift";
+    return window.AdminBenefitsModal?.getRewardIconName(kind) || "fa-gift";
   }
 
   function getRightOrderBenefitRewardKindLabel(kind) {
@@ -5344,6 +6913,10 @@
   }
 
   function bindRightOrderHorizontalTrack(track) {
+    if (window.AdminBenefitsModal?.bindHorizontalTrack) {
+      window.AdminBenefitsModal.bindHorizontalTrack(track);
+      return;
+    }
     if (!track || track.dataset.progressTrackBound === "1") return;
 
     const dragThresholdPx = 8;
@@ -5436,60 +7009,48 @@
     track.dataset.progressTrackBound = "1";
   }
 
+  function bindRightOrderWheelTrack(track) {
+    if (!track || track.dataset.horizontalWheelBound === "1") return;
+    track.addEventListener("wheel", (event) => {
+      const maxScrollLeft = Math.max(0, track.scrollWidth - track.clientWidth);
+      if (!(maxScrollLeft > 0)) return;
+      const deltaX = Number(event.deltaX || 0);
+      const deltaY = Number(event.deltaY || 0);
+      const primaryDelta = Math.abs(deltaX) > Math.abs(deltaY) ? deltaX : deltaY;
+      if (!Number.isFinite(primaryDelta) || Math.abs(primaryDelta) < 0.5) return;
+      const currentLeft = Number(track.scrollLeft || 0);
+      const nextLeft = Math.max(0, Math.min(maxScrollLeft, currentLeft + primaryDelta));
+      if (Math.abs(nextLeft - currentLeft) < 0.5) return;
+      event.preventDefault();
+      event.stopPropagation();
+      track.scrollLeft = nextLeft;
+    }, { passive: false, capture: true });
+    track.dataset.horizontalWheelBound = "1";
+  }
+
   function isRightOrderCompletedCustomerLimitPromoBenefit(item) {
-    const source = String(item?.source || "").trim().toLowerCase();
-    if (source !== "promo_code" && source !== "reward_promo") return false;
-    const disabledReasonCode = String(item?.disabled_reason_code || "").trim().toUpperCase();
-    return disabledReasonCode === "PROMO_CUSTOMER_LIMIT_REACHED"
-      || disabledReasonCode === "PROMO_LIMIT_REACHED";
+    return window.AdminBenefitsModal?.isCompletedPromoBenefit(item, {
+      sourceResolver: (entry) => {
+        const source = String(entry?.source || "").trim().toLowerCase();
+        return source === "reward_promo" ? "promo_code" : source;
+      },
+    }) === true;
   }
 
   function isRightOrderCompletedCustomerLimitDiscountBenefit(item) {
-    const source = String(item?.source || "").trim().toLowerCase();
-    return (source === "discount" || source === "reward_discount")
-      && String(item?.disabled_reason_code || "").trim().toUpperCase() === "DISCOUNT_CUSTOMER_LIMIT_REACHED";
+    return window.AdminBenefitsModal?.isCompletedDiscountBenefit(item) === true;
   }
 
   function formatRightOrderBenefitsDate(value) {
-    if (!value) return "";
-    const parsed = new Date(value);
-    if (Number.isNaN(parsed.getTime())) return "";
-    return parsed.toLocaleDateString("ru-RU");
+    return window.AdminBenefitsModal?.formatDate(value) || "";
   }
 
   function buildRightOrderBenefitCompletedDiscountCard(item) {
-    return {
-      id: Number(item?.id || 0) || null,
-      kind: "completed",
-      source_kind: "discount",
-      title: String(item?.title || "").trim() || "Скидка",
-      description: String(item?.description || "").trim(),
-      badge_text: String(item?.badge_text || "").trim(),
-      status_text: "Завершён",
-      apply_scope_text: String(item?.disabled_reason || "").trim() || String(item?.apply_scope_text || "").trim(),
-      expires_at: item?.expires_at || null,
-      completed_at: item?.completed_at || null,
-    };
+    return window.AdminBenefitsModal?.buildCompletedDiscountCard(item) || {};
   }
 
   function buildRightOrderBenefitCompletedPromoCard(item) {
-    const code = String(item?.code || "").trim();
-    const promoTitle = String(item?.title || "").trim();
-    const description = promoTitle && code && promoTitle !== code
-      ? promoTitle
-      : String(item?.description || "").trim();
-    return {
-      id: Number(item?.id || 0) || null,
-      kind: "completed",
-      source_kind: "promo_code",
-      title: code || promoTitle || "Промокод",
-      description,
-      badge_text: String(item?.badge_text || "").trim(),
-      status_text: "Завершён",
-      apply_scope_text: String(item?.disabled_reason || "").trim() || String(item?.apply_scope_text || "").trim(),
-      expires_at: item?.expires_at || null,
-      completed_at: item?.completed_at || null,
-    };
+    return window.AdminBenefitsModal?.buildCompletedPromoCard(item) || {};
   }
 
   function isRightOrderGiftBenefitVisible(item) {
@@ -5500,249 +7061,243 @@
   }
 
   function getRightOrderBenefitsRenderData(previewData) {
-    const data = previewData && typeof previewData === "object" ? previewData : {};
-    const previewMode = normalizeRightOrderBenefitsMode(data?.mode);
-    const discountCardsRaw = Array.isArray(data?.discounts) ? data.discounts.slice() : [];
-    const discountCards = [];
-    const promoCardsRaw = Array.isArray(data?.promo_codes) ? data.promo_codes.slice() : [];
-    const promoCards = [];
-    const completedCards = [];
-
-    discountCardsRaw.forEach((entry) => {
-      if (previewMode !== "all" && isRightOrderCompletedCustomerLimitDiscountBenefit(entry)) {
-        completedCards.push(buildRightOrderBenefitCompletedDiscountCard(entry));
-        return;
-      }
-      discountCards.push(entry);
-    });
-
-    promoCardsRaw.forEach((entry) => {
-      if (previewMode !== "all" && isRightOrderCompletedCustomerLimitPromoBenefit(entry)) {
-        completedCards.push(buildRightOrderBenefitCompletedPromoCard(entry));
-        return;
-      }
-      promoCards.push(entry);
-    });
-
-    if (Array.isArray(data?.completed)) {
-      completedCards.push(...data.completed);
-    }
-
-    return {
-      discounts: discountCards,
-      promo_codes: promoCards,
-      gifts: (Array.isArray(data?.gifts) ? data.gifts : []).filter((item) => isRightOrderGiftBenefitVisible(item)),
-      progress: Array.isArray(data?.progress) ? data.progress : [],
-      completed: completedCards,
-    };
+    return window.AdminBenefitsModal?.buildRenderData(previewData, {
+      mode: normalizeRightOrderBenefitsMode(previewData?.mode),
+      isCompletedDiscount: isRightOrderCompletedCustomerLimitDiscountBenefit,
+      isCompletedPromo: isRightOrderCompletedCustomerLimitPromoBenefit,
+      mapCompletedDiscount: buildRightOrderBenefitCompletedDiscountCard,
+      mapCompletedPromo: buildRightOrderBenefitCompletedPromoCard,
+      giftVisibility: isRightOrderGiftBenefitVisible,
+    }) || { discounts: [], promo_codes: [], gifts: [], progress: [], completed: [] };
   }
 
   function createRightOrderBenefitsSection(title, emptyText, opts = {}) {
-    const section = document.createElement("section");
-    section.className = "shop-checkout-benefits-section";
-
-    const head = document.createElement("div");
-    head.className = "shop-checkout-benefits-section-head";
-
-    const titleEl = document.createElement("div");
-    titleEl.className = "shop-checkout-benefits-section-title";
-    titleEl.textContent = title;
-    head.appendChild(titleEl);
-
-    const countEl = document.createElement("div");
-    countEl.className = "shop-checkout-benefits-section-count";
-    countEl.textContent = "0";
-    head.appendChild(countEl);
-    section.appendChild(head);
-
-    const list = document.createElement("div");
-    list.className = "shop-checkout-benefits-list";
-    if (opts?.horizontal === true) {
-      list.classList.add("shop-checkout-benefits-list--horizontal", "is-gifts");
-    }
-    section.appendChild(list);
-
-    const empty = document.createElement("div");
-    empty.className = "shop-profile-card shop-checkout-benefits-empty hidden";
-    empty.textContent = emptyText;
-    section.appendChild(empty);
-
-    return { section, list, countEl, empty };
+    return window.AdminBenefitsModal?.createSection(title, emptyText, opts) || null;
   }
 
   function setRightOrderBenefitsSectionItems(sectionRef, items, renderItem) {
-    if (!sectionRef?.list || !sectionRef?.empty || !sectionRef?.countEl) return;
-    const rows = Array.isArray(items) ? items : [];
-    sectionRef.list.innerHTML = "";
-    sectionRef.countEl.textContent = String(rows.length);
-    sectionRef.empty.classList.toggle("hidden", rows.length > 0);
-    rows.forEach((item) => {
-      const node = typeof renderItem === "function" ? renderItem(item) : null;
-      if (node) sectionRef.list.appendChild(node);
+    window.AdminBenefitsModal?.setSectionItems(sectionRef, items, renderItem);
+  }
+
+  function createRightOrderBenefitsFrame(options = {}) {
+    return window.AdminBenefitsModal?.createScrollableFrame(options) || null;
+  }
+
+  function bindRightOrderBenefitDetailFallback(node, onOpenDetails) {
+    return window.AdminBenefitsModal?.bindDetailFallback(node, onOpenDetails) || node;
+  }
+
+  function getRightClientBenefitsCatalogActionKey(prefix, item) {
+    const id = Number(item?.id || item?.reward_id || item?.discount_id || 0);
+    return id > 0 ? `${prefix}:${id}` : `${prefix}:${String(item?.id || item?.discount_id || "")}`;
+  }
+
+  function closeRightClientBenefitsCatalogOverlay() {
+    window.AdminBenefitsModal?.hide({ clearBody: false });
+    state.clientBenefitsCatalogModal.customerId = 0;
+    state.clientBenefitsCatalogModal.data = null;
+    state.clientBenefitsCatalogModal.loading = false;
+    state.clientBenefitsCatalogModal.error = "";
+    state.clientBenefitsCatalogModal.busyActionKey = "";
+  }
+
+  function renderRightClientBenefitsCatalogDisplayCard(item) {
+    return window.AdminBenefitsModal?.renderDisplayCard(item) || document.createElement("div");
+  }
+
+  async function issueRightClientBenefitsCatalogItem(item, issueAction, actionKey) {
+    const customerId = Number(state.clientBenefitsCatalogModal.customerId || 0);
+    const discountId = Number(item?.discount_id || item?.id || 0);
+    const action = String(issueAction || item?.issue_action || "").trim().toLowerCase();
+    if (!(customerId > 0) || !(discountId > 0) || !action) {
+      throw new Error("BENEFIT_ISSUE_INVALID");
+    }
+    state.clientBenefitsCatalogModal.busyActionKey = String(actionKey || "");
+    renderRightClientBenefitsCatalogOverlay();
+    try {
+      const json = await apiJson(`/api/admin/clients/${customerId}/benefits/issue`, {
+        method: "POST",
+        body: JSON.stringify({
+          discount_id: discountId,
+          issue_action: action,
+        }),
+      });
+      state.clientBenefitsCatalogModal.data = json?.data && typeof json.data === "object" ? json.data : {};
+      state.rightClientDiscountsByClientId.delete(customerId);
+      void ensureRightClientDiscountsLoaded(customerId);
+    } finally {
+      state.clientBenefitsCatalogModal.busyActionKey = "";
+      renderRightClientBenefitsCatalogOverlay();
+    }
+  }
+
+  function renderRightClientBenefitsCatalogDiscountCard(item) {
+    if (item?.is_issued === true || item?.can_issue !== true) {
+      return renderRightClientBenefitsCatalogDisplayCard(item);
+    }
+    const actionKey = getRightClientBenefitsCatalogActionKey("discount", item);
+    return window.AdminBenefitsModal?.renderDiscountCard(item, {
+      canToggle: item?.can_issue === true,
+      isStackable: isRightOrderBenefitStackable(item),
+      actionLabel: "Выдать",
+      onAction: (entry) => issueRightClientBenefitsCatalogItem(entry, "discount", actionKey),
+      isBusy: state.clientBenefitsCatalogModal.busyActionKey === actionKey,
+      disabledReason: item?.issue_disabled_reason || "",
+    }) || document.createElement("div");
+  }
+
+  function renderRightClientBenefitsCatalogPromoCard(item) {
+    if (item?.is_issued === true) {
+      const codeText = String(item?.issued_code || item?.code || "").trim()
+        || (String(item?.promo_code_mode || "").trim().toLowerCase() === "unique" ? "Уникальный код" : "-");
+      return window.AdminBenefitsModal?.renderPromoCard(item, {
+        canToggle: false,
+        codeText,
+        actionLabel: "Выдано",
+        disabledReason: "",
+      }) || document.createElement("div");
+    }
+    if (item?.can_issue !== true) {
+      return renderRightClientBenefitsCatalogDisplayCard(item);
+    }
+    const issueAction = String(item?.issue_action || "").trim().toLowerCase();
+    const actionKey = getRightClientBenefitsCatalogActionKey("promo", item);
+    const codeText = String(item?.issued_code || item?.code || "").trim()
+      || (String(item?.promo_code_mode || "").trim().toLowerCase() === "unique" ? "Уникальный код" : "-");
+    return window.AdminBenefitsModal?.renderPromoCard(item, {
+      canToggle: item?.can_issue === true,
+      isStackable: isRightOrderBenefitStackable(item),
+      codeText,
+      actionLabel: "Выдать",
+      onAction: (entry) => issueRightClientBenefitsCatalogItem(entry, issueAction, actionKey),
+      isBusy: state.clientBenefitsCatalogModal.busyActionKey === actionKey,
+      disabledReason: item?.issue_disabled_reason || "",
+    }) || document.createElement("div");
+  }
+
+  function renderRightClientBenefitsCatalogOverlay() {
+    window.AdminBenefitsModal?.show({
+      title: "Выгоды",
+      showBack: false,
+      showModeToggle: true,
+      mode: "all",
+      onClose: closeRightClientBenefitsCatalogOverlay,
+      onModeChange: () => {
+        window.AdminBenefitsModal?.setModeToggleState("all");
+      },
     });
+    const { body } = getRightBenefitsOverlayElements();
+    if (!body) return;
+    body.innerHTML = "";
+
+    const frame = createRightOrderBenefitsFrame();
+    if (!frame?.root || !frame.scrollEl) return;
+    body.appendChild(frame.root);
+
+    const shell = document.createElement("div");
+    shell.className = "shop-checkout-benefits-sheet";
+    frame.scrollEl.appendChild(shell);
+
+    const hint = document.createElement("div");
+    hint.className = "shop-checkout-benefits-hint";
+    hint.textContent = "Здесь можно смотреть общие акции и выдавать их клиенту. Применение к заказу доступно только во вкладке «Скидки клиента».";
+    shell.appendChild(hint);
+
+    if (state.clientBenefitsCatalogModal.loading) {
+      const loading = document.createElement("div");
+      loading.className = "shop-checkout-benefits-loading";
+      loading.textContent = "Загрузка выгод...";
+      shell.appendChild(loading);
+      return;
+    }
+
+    if (state.clientBenefitsCatalogModal.error) {
+      const errorCard = document.createElement("div");
+      errorCard.className = "shop-profile-card shop-checkout-benefits-empty";
+      errorCard.textContent = "Не удалось загрузить выгоды.";
+      shell.appendChild(errorCard);
+      return;
+    }
+
+    const data = state.clientBenefitsCatalogModal.data && typeof state.clientBenefitsCatalogModal.data === "object"
+      ? state.clientBenefitsCatalogModal.data
+      : {};
+    const discounts = (Array.isArray(data?.discounts) ? data.discounts : [])
+      .filter((item) => normalizeRightOrderBenefitDiscountMechanicType(item) === "simple_discount");
+    const promos = Array.isArray(data?.promo_codes) ? data.promo_codes : [];
+
+    const discountsSection = createRightOrderBenefitsSection("Скидки", "Общих скидок сейчас нет.");
+    const promosSection = createRightOrderBenefitsSection("Промокоды", "Общих промокодов сейчас нет.");
+    if (discountsSection?.section) {
+      shell.appendChild(discountsSection.section);
+      setRightOrderBenefitsSectionItems(discountsSection, discounts, renderRightClientBenefitsCatalogDiscountCard);
+    }
+    if (promosSection?.section) {
+      shell.appendChild(promosSection.section);
+      setRightOrderBenefitsSectionItems(promosSection, promos, renderRightClientBenefitsCatalogPromoCard);
+    }
+  }
+
+  async function openRightClientBenefitsCatalogOverlay(orderId) {
+    const customerId = Number(await ensureRightOrderBenefitsCustomerId(orderId) || 0);
+    if (!(customerId > 0)) {
+      showNewOrderAlert("Сначала выберите клиента для заказа");
+      return;
+    }
+    state.clientBenefitsCatalogModal.customerId = customerId;
+    state.clientBenefitsCatalogModal.data = null;
+    state.clientBenefitsCatalogModal.error = "";
+    state.clientBenefitsCatalogModal.loading = true;
+    renderRightClientBenefitsCatalogOverlay();
+    try {
+      const json = await apiJson(`/api/admin/clients/${customerId}/benefits/catalog`, {
+        method: "GET",
+      });
+      state.clientBenefitsCatalogModal.data = json?.data && typeof json.data === "object" ? json.data : {};
+    } catch (error) {
+      state.clientBenefitsCatalogModal.error = String(error?.message || "API_ERROR");
+    } finally {
+      state.clientBenefitsCatalogModal.loading = false;
+      renderRightClientBenefitsCatalogOverlay();
+    }
+  }
+
+  function resolveRightOrderBenefitsActivePromoCode(previewData, order = null) {
+    const selectedPromoCard = Array.isArray(previewData?.promo_codes)
+      ? previewData.promo_codes.find((entry) => entry?.is_selected && !!normalizeRightOrderBenefitsPromoCode(entry?.code))
+      : null;
+    const previewCode = normalizeRightOrderBenefitsPromoCode(selectedPromoCard?.code || "");
+    if (previewCode) return previewCode;
+    const form = order?.form && typeof order.form === "object" ? order.form : {};
+    return normalizeRightOrderBenefitsPromoCode(form?.promo_code || state.benefitsModal.promoInputValue || "");
   }
 
   function renderRightOrderBenefitDiscountCard(item, { onToggle, onOpenDetails } = {}) {
-    const isSelected = item?.is_selected === true;
-    const canToggle = isSelected || isRightOrderBenefitSelectable(item);
-    const card = document.createElement("div");
-    card.className = "shop-profile-card shop-profile-discount-card shop-checkout-benefit-discount-card";
-    if (isSelected) card.classList.add("is-selected");
-    if (!canToggle && !isSelected) card.classList.add("is-disabled");
-    if (typeof onOpenDetails === "function" || typeof onToggle === "function") {
-      card.tabIndex = 0;
-      card.setAttribute("role", "button");
-      const openDetails = () => {
-        if (typeof onOpenDetails === "function") {
-          onOpenDetails(item);
-          return;
-        }
-        if (typeof onToggle === "function" && canToggle) {
-          void onToggle(item);
-        }
-      };
-      card.addEventListener("click", () => {
-        openDetails();
-      });
-      card.addEventListener("keydown", (event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          openDetails();
-        }
-      });
-    }
-
-    const head = document.createElement("div");
-    head.className = "shop-checkout-benefit-card-head";
-    const title = document.createElement("div");
-    title.className = "shop-profile-discount-title";
-    title.textContent = String(item?.title || "Скидка");
-    head.appendChild(title);
-    if (isRightOrderBenefitStackable(item)) {
-      const meta = document.createElement("div");
-      meta.className = "shop-checkout-benefit-discount-meta";
-      const badge = document.createElement("span");
-      badge.className = "shop-checkout-benefit-stackable-badge";
-      badge.appendChild(createRightOrderBenefitIcon("fa-link"));
-      meta.appendChild(badge);
-      head.appendChild(meta);
-    }
-    card.appendChild(head);
-
-    const primaryRow = document.createElement("div");
-    primaryRow.className = "shop-checkout-benefit-primary-row";
-    const valueEl = document.createElement("div");
-    valueEl.className = "shop-checkout-benefit-main-value";
-    valueEl.textContent = String(item?.badge_text || "Скидка");
-    primaryRow.appendChild(valueEl);
-
-    const actionBtn = document.createElement("button");
-    actionBtn.type = "button";
-    actionBtn.className = "shop-checkout-benefit-apply-btn";
-    actionBtn.textContent = isSelected ? "Выбрано" : "Применить";
-    actionBtn.classList.add(isSelected ? "is-selected" : (canToggle ? "is-ready" : "is-conflict"));
-    actionBtn.disabled = !canToggle || typeof onToggle !== "function";
-    actionBtn.addEventListener("click", async (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      if (typeof onToggle !== "function") return;
-      await onToggle(item);
-    });
-    primaryRow.appendChild(actionBtn);
-
-    card.appendChild(primaryRow);
-    if (item?.is_applicable !== true && item?.disabled_reason) {
-      const note = document.createElement("div");
-      note.className = "shop-checkout-benefit-disabled-reason";
-      note.textContent = String(item.disabled_reason);
-      card.appendChild(note);
-    }
-    return card;
+    const node = window.AdminBenefitsModal?.renderDiscountCard(item, {
+      isSelected: item?.is_selected === true,
+      canToggle: item?.is_selected === true || isRightOrderBenefitSelectable(item),
+      isStackable: isRightOrderBenefitStackable(item),
+      onAction: onToggle,
+      onOpenDetails,
+      disabledReason: item?.is_applicable !== true ? item?.disabled_reason : "",
+    }) || null;
+    return bindRightOrderBenefitDetailFallback(node, () => onOpenDetails?.(item));
   }
 
   function renderRightOrderBenefitPromoCard(item, { onToggle, onOpenDetails } = {}) {
-    const normalizedCode = String(item?.code || "").trim();
-    const isSelected = item?.is_selected === true;
     const actionMode = String(item?.action_mode || "select").trim().toLowerCase() || "select";
-    const canToggle = actionMode === "redeem_reward"
-      ? item?.is_applicable === true
-      : (isSelected || isRightOrderBenefitSelectable(item));
-    const card = document.createElement("div");
-    card.className = "shop-profile-card shop-checkout-benefit-promo-card";
-    if (isSelected) card.classList.add("is-selected");
-    if (!canToggle && !isSelected) card.classList.add("is-disabled");
-    if (typeof onOpenDetails === "function" || typeof onToggle === "function") {
-      card.tabIndex = 0;
-      card.setAttribute("role", "button");
-      const openDetails = () => {
-        if (typeof onOpenDetails === "function") {
-          onOpenDetails(item);
-          return;
-        }
-        if (typeof onToggle === "function" && canToggle) {
-          void onToggle(item);
-        }
-      };
-      card.addEventListener("click", () => {
-        openDetails();
-      });
-      card.addEventListener("keydown", (event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          openDetails();
-        }
-      });
-    }
-
-    const head = document.createElement("div");
-    head.className = "shop-checkout-benefit-card-head";
-    const title = document.createElement("div");
-    title.className = "shop-profile-discount-title";
-    title.textContent = String(item?.title || "Промокод");
-    head.appendChild(title);
-    if (isRightOrderBenefitStackable(item)) {
-      const meta = document.createElement("div");
-      meta.className = "shop-checkout-benefit-discount-meta";
-      const badge = document.createElement("span");
-      badge.className = "shop-checkout-benefit-stackable-badge";
-      badge.appendChild(createRightOrderBenefitIcon("fa-link"));
-      meta.appendChild(badge);
-      head.appendChild(meta);
-    }
-    card.appendChild(head);
-
-    const primaryRow = document.createElement("div");
-    primaryRow.className = "shop-checkout-benefit-primary-row";
-    const codeEl = document.createElement("div");
-    codeEl.className = "shop-checkout-benefit-main-value is-code";
-    codeEl.textContent = normalizedCode || "-";
-    primaryRow.appendChild(codeEl);
-
-    const actionBtn = document.createElement("button");
-    actionBtn.type = "button";
-    actionBtn.className = "shop-checkout-benefit-apply-btn";
-    actionBtn.textContent = actionMode === "redeem_reward"
-      ? "Получить"
-      : (isSelected ? "Выбрано" : "Применить");
-    actionBtn.classList.add(isSelected ? "is-selected" : (canToggle ? "is-ready" : "is-conflict"));
-    actionBtn.disabled = !canToggle || typeof onToggle !== "function";
-    actionBtn.addEventListener("click", async (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      if (typeof onToggle !== "function") return;
-      await onToggle(item);
-    });
-    primaryRow.appendChild(actionBtn);
-    card.appendChild(primaryRow);
-
-    if (item?.is_applicable !== true && item?.disabled_reason) {
-      const note = document.createElement("div");
-      note.className = "shop-checkout-benefit-disabled-reason";
-      note.textContent = String(item.disabled_reason);
-      card.appendChild(note);
-    }
-
-    return card;
+    const node = window.AdminBenefitsModal?.renderPromoCard(item, {
+      isSelected: item?.is_selected === true,
+      canToggle: actionMode === "redeem_reward"
+        ? item?.is_applicable === true
+        : (item?.is_selected === true || isRightOrderBenefitSelectable(item)),
+      isStackable: isRightOrderBenefitStackable(item),
+      actionLabel: actionMode === "redeem_reward" ? "Получить" : "Применить",
+      onAction: onToggle,
+      onOpenDetails,
+      disabledReason: item?.is_applicable !== true ? item?.disabled_reason : "",
+    }) || null;
+    return bindRightOrderBenefitDetailFallback(node, () => onOpenDetails?.(item));
   }
 
   function renderRightOrderBenefitGiftCard(item, { onReceive, onOpen } = {}) {
@@ -5758,60 +7313,17 @@
       && products.length > 0
       && item?.is_receivable !== false;
 
-    const card = document.createElement("div");
-    card.className = "shop-profile-card shop-checkout-benefit-gift-card";
-    if (typeof onOpen === "function") {
-      card.tabIndex = 0;
-      card.setAttribute("role", "button");
-      card.addEventListener("click", () => {
-        onOpen(item);
-      });
-      card.addEventListener("keydown", (event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          onOpen(item);
-        }
-      });
-    }
-
-    const media = document.createElement("div");
-    media.className = "shop-checkout-benefit-gift-media";
-    if (photoUrl) {
-      const image = document.createElement("img");
-      image.src = photoUrl;
-      image.alt = titleText;
-      media.appendChild(image);
-    } else {
-      media.appendChild(createRightOrderBenefitIcon(getRightOrderBenefitRewardIconName("gift")));
-    }
-    if (productCount > 1) {
-      const countBadge = document.createElement("span");
-      countBadge.className = "shop-checkout-benefit-gift-count";
-      countBadge.textContent = String(productCount);
-      media.appendChild(countBadge);
-    }
-    card.appendChild(media);
-
-    const title = document.createElement("div");
-    title.className = "shop-checkout-benefit-gift-title";
-    title.textContent = titleText;
-    card.appendChild(title);
-
-    const actionBtn = document.createElement("button");
-    actionBtn.type = "button";
-    actionBtn.className = "shop-checkout-benefit-gift-action";
-    actionBtn.textContent = "Получить";
-    if (canReceive) actionBtn.classList.add("is-ready");
-    actionBtn.disabled = !canReceive;
-    actionBtn.addEventListener("click", async (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      if (!canReceive) return;
-      await onReceive(item);
-    });
-    card.appendChild(actionBtn);
-
-    return card;
+    const node = window.AdminBenefitsModal?.renderGiftCard(item, {
+      titleText,
+      photoUrl,
+      actionLabel: "Получить",
+      canExecute: canReceive,
+      onAction: onReceive,
+      onOpen,
+      rewardKind: "gift",
+      showDisabledReason: false,
+    }) || null;
+    return bindRightOrderBenefitDetailFallback(node, () => onOpen?.(item));
   }
 
   function renderRightOrderBenefitProgressCard(item, { onClaim, onOpenDetails } = {}) {
@@ -5832,7 +7344,9 @@
       ).trim().toLowerCase() || "gift";
       const rewardTitle = String(rewardSlot?.title || rewardPreview?.title || cardItem?.apply_scope_text || "").trim()
         || getRightOrderBenefitRewardKindLabel(rewardKind);
-      const slotEl = document.createElement("div");
+      const isInteractive = typeof onOpenDetails === "function";
+      const slotEl = document.createElement(isInteractive ? "button" : "div");
+      if (isInteractive) slotEl.type = "button";
       slotEl.className = "shop-checkout-benefit-progress-reward is-static";
       slotEl.title = rewardTitle;
       slotEl.setAttribute("aria-label", rewardTitle);
@@ -5858,6 +7372,13 @@
         media.appendChild(createRightOrderBenefitIcon(getRightOrderBenefitRewardIconName(rewardKind)));
       }
       slotEl.appendChild(media);
+      if (isInteractive) {
+        slotEl.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          onOpenDetails(cardItem);
+        });
+      }
       return slotEl;
     }
 
@@ -6024,65 +7545,12 @@
       note.textContent = String(item.disabled_reason);
       card.appendChild(note);
     }
-    return card;
+    return bindRightOrderBenefitDetailFallback(card, () => onOpenDetails?.(item));
   }
 
-  function renderRightOrderBenefitDisplayCard(item) {
-    const card = document.createElement("div");
-    card.className = "shop-profile-card shop-profile-discount-card shop-checkout-benefit-display-card";
-
-    const header = document.createElement("div");
-    header.className = "shop-profile-discount-header";
-    const title = document.createElement("div");
-    title.className = "shop-profile-discount-title";
-    title.textContent = String(item?.title || "Выгода");
-    header.appendChild(title);
-    const meta = document.createElement("div");
-    meta.className = "shop-checkout-benefit-discount-meta";
-    if (item?.badge_text) {
-      const badge = document.createElement("span");
-      badge.className = "sp-discount-badge";
-      badge.textContent = String(item.badge_text);
-      meta.appendChild(badge);
-    }
-    if (item?.status_text) {
-      const status = document.createElement("span");
-      status.className = "shop-checkout-benefit-status";
-      status.textContent = String(item.status_text);
-      meta.appendChild(status);
-    }
-    if (meta.children.length) header.appendChild(meta);
-    card.appendChild(header);
-
-    if (item?.description) {
-      const desc = document.createElement("div");
-      desc.className = "shop-profile-discount-desc";
-      desc.textContent = String(item.description);
-      card.appendChild(desc);
-    }
-    const details = document.createElement("div");
-    details.className = "shop-profile-discount-details";
-    if (item?.apply_scope_text) {
-      const scopeLine = document.createElement("div");
-      scopeLine.textContent = String(item.apply_scope_text);
-      details.appendChild(scopeLine);
-    }
-    const completedText = formatRightOrderBenefitsDate(item?.completed_at);
-    if (completedText) {
-      const dateLine = document.createElement("div");
-      dateLine.textContent = `Завершено ${completedText}`;
-      details.appendChild(dateLine);
-    }
-    const expiresText = formatRightOrderBenefitsDate(item?.expires_at);
-    if (expiresText) {
-      const expiresLine = document.createElement("div");
-      expiresLine.textContent = `До ${expiresText}`;
-      details.appendChild(expiresLine);
-    }
-    if (details.children.length) {
-      card.appendChild(details);
-    }
-    return card;
+  function renderRightOrderBenefitDisplayCard(item, options = {}) {
+    const node = window.AdminBenefitsModal?.renderDisplayCard(item, options) || null;
+    return bindRightOrderBenefitDetailFallback(node, () => options.onOpenDetails?.(item));
   }
 
   function appendRightOrderBenefitProductConfigLines(container, productItem) {
@@ -6318,6 +7786,462 @@
     return wrap;
   }
 
+  function resolveRightOrderBenefitDiscountSourceId(item) {
+    const sourceDiscountId = Number(item?.source_discount_id || item?.discount_id || 0);
+    if (sourceDiscountId > 0) return sourceDiscountId;
+    const itemId = Number(item?.id || 0);
+    return itemId > 0 ? itemId : 0;
+  }
+
+  function formatRightOrderBenefitDiscountInfoAmount(value) {
+    const amount = Number(value || 0);
+    if (!(amount > 0)) return "—";
+    if (typeof money === "function") return money(amount);
+    return `${Math.round(amount)} ₽`;
+  }
+
+  function formatRightOrderBenefitDiscountInfoDate(value) {
+    if (!value) return "—";
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return "—";
+    return parsed.toLocaleDateString("ru-RU");
+  }
+
+  function parseRightOrderBenefitDiscountScheduleDays(value) {
+    if (Array.isArray(value)) {
+      return value
+        .map((item) => Number(item))
+        .filter((item) => Number.isInteger(item) && item >= 0 && item <= 6);
+    }
+    if (typeof value === "string" && value.trim()) {
+      try {
+        const parsed = JSON.parse(value);
+        if (Array.isArray(parsed)) {
+          return parsed
+            .map((item) => Number(item))
+            .filter((item) => Number.isInteger(item) && item >= 0 && item <= 6);
+        }
+      } catch {}
+    }
+    return [];
+  }
+
+  function formatRightOrderBenefitDiscountScheduleDaysText(value) {
+    const days = parseRightOrderBenefitDiscountScheduleDays(value);
+    if (!days.length) return "";
+    const uniqueDays = Array.from(new Set(days));
+    if (uniqueDays.length === 7) return "Ежедневно";
+    const sortOrder = [1, 2, 3, 4, 5, 6, 0];
+    const labels = {
+      1: "Пн",
+      2: "Вт",
+      3: "Ср",
+      4: "Чт",
+      5: "Пт",
+      6: "Сб",
+      0: "Вс",
+    };
+    uniqueDays.sort((a, b) => sortOrder.indexOf(a) - sortOrder.indexOf(b));
+    return uniqueDays.map((day) => labels[day] || "").filter(Boolean).join(", ");
+  }
+
+  function formatRightOrderBenefitDiscountTimeValue(value) {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    const matched = raw.match(/^(\d{2}:\d{2})/);
+    return matched ? matched[1] : raw;
+  }
+
+  function normalizeRightOrderBenefitDiscountMechanicType(discount) {
+    const mechanicTypeRaw = String(discount?.mechanic_type || discount?.mechanic?.type || "").trim().toLowerCase();
+    if (mechanicTypeRaw === "buy_x_get_y") return "buy_x_get_y";
+    if (mechanicTypeRaw === "threshold") return "threshold";
+    if (mechanicTypeRaw === "loyalty_progress") return "loyalty_progress";
+    return "simple_discount";
+  }
+
+  function buildRightOrderBenefitDiscountSubtitle(discount, fallbackItem = null) {
+    const mechanicType = normalizeRightOrderBenefitDiscountMechanicType(discount);
+    if (mechanicType === "buy_x_get_y") return "Акция 1+1";
+    if (mechanicType === "threshold") return "Пороговая акция";
+    if (mechanicType === "loyalty_progress") return "Накопительная акция";
+    const applyTo = String(discount?.apply_to || fallbackItem?.apply_to || "").trim().toLowerCase();
+    const targetMap = {
+      order: "весь заказ",
+      product: "товар",
+      category: "категорию",
+      combo: "комбо",
+    };
+    const target = targetMap[applyTo] || "заказ";
+    const activationMode = String(discount?.activation_mode || "").trim().toLowerCase();
+    if (activationMode === "promo_code") return `Промокод на ${target}`;
+    return `Скидка на ${target}`;
+  }
+
+  function buildRightOrderBenefitDiscountApplyText(discount, fallbackItem = null) {
+    const mechanicType = normalizeRightOrderBenefitDiscountMechanicType(discount);
+    if (mechanicType === "buy_x_get_y") {
+      const mechanic = discount?.mechanic && typeof discount.mechanic === "object" ? discount.mechanic : {};
+      const buyQty = Math.max(1, Number(mechanic?.buy_qty || 0) || 1);
+      const rewardQty = Math.max(1, Number(mechanic?.reward_qty || 0) || 1);
+      return `${buyQty}+${rewardQty}`;
+    }
+    if (mechanicType === "threshold") return "по порогам суммы";
+    if (mechanicType === "loyalty_progress") return "по накопительному порогу";
+    const applyTo = String(discount?.apply_to || fallbackItem?.apply_to || "").trim().toLowerCase();
+    const targetMap = {
+      order: "на весь заказ",
+      product: "на товар",
+      category: "на категорию",
+      combo: "на комбо",
+    };
+    return targetMap[applyTo] || "на заказ";
+  }
+
+  function formatRightOrderBenefitIssueModeText(value) {
+    const raw = String(value || "").trim().toLowerCase();
+    if (raw === "manual") return "Вручную";
+    if (raw === "code") return "Кодом";
+    return "Автоматически";
+  }
+
+  function buildRightOrderBenefitDiscountRules(discount) {
+    const rules = [];
+    const mechanicType = normalizeRightOrderBenefitDiscountMechanicType(discount);
+    if (mechanicType === "threshold") {
+      rules.push("Применяется лучшая ступень");
+    }
+    if (mechanicType === "loyalty_progress") {
+      const mechanic = discount?.mechanic && typeof discount.mechanic === "object" ? discount.mechanic : {};
+      rules.push(`Выдача награды: ${formatRightOrderBenefitIssueModeText(mechanic?.issue_mode)}`);
+    }
+    return rules;
+  }
+
+  function buildRightOrderBenefitDiscountAudienceText(discount) {
+    const customers = Array.isArray(discount?.customers) ? discount.customers : [];
+    if (!customers.length) return "Все клиенты";
+    const customerCount = customers.filter((item) => String(item?.entity_type || "").trim() !== "category").length;
+    const categoryCount = customers.filter((item) => String(item?.entity_type || "").trim() === "category").length;
+    if (customerCount > 0 && categoryCount > 0) return `Клиенты ${customerCount}, категории ${categoryCount}`;
+    if (categoryCount > 0) return categoryCount === 1 ? "Категория клиентов" : `Категории клиентов (${categoryCount})`;
+    return customerCount === 1 ? "Выбранный клиент" : `Выбранные клиенты (${customerCount})`;
+  }
+
+  function formatRightOrderBenefitDiscountBadgeText(discount, fallbackItem = null) {
+    const fallbackText = String(fallbackItem?.badge_text || "").trim() || "Скидка";
+    const type = String(discount?.discount_type || fallbackItem?.discount_type || "").trim().toLowerCase();
+    const value = Number(discount?.discount_value ?? fallbackItem?.discount_value ?? 0);
+    if (type === "fixed" && value > 0) return `-${value} ₽`;
+    if (type === "special_price" && value > 0) return `${value} ₽`;
+    if (type === "percent" && value > 0) return `-${Math.round(value)}%`;
+    return fallbackText;
+  }
+
+  function buildRightOrderBenefitDiscountMainBadgeDescriptor(discount, fallbackItem = null) {
+    const text = formatRightOrderBenefitDiscountBadgeText(discount, fallbackItem);
+    if (!text) return { kind: "none", text: "", icon: "", label: "" };
+    return { kind: "text", text, icon: "", label: text };
+  }
+
+  function buildRightOrderBenefitDiscountMarketingContent(discount, fallbackItem = null) {
+    const sourceDiscount = discount && typeof discount === "object" ? discount : {};
+    const sourceItem = fallbackItem && typeof fallbackItem === "object" ? fallbackItem : {};
+    const promo = sourceDiscount?.promo && typeof sourceDiscount.promo === "object" ? sourceDiscount.promo : {};
+    const activationMode = String(sourceDiscount?.activation_mode || "").trim().toLowerCase();
+    const promoEnabled = activationMode === "promo_code" || promo?.enabled === true;
+    const promoCodeMode = String(promo?.code_mode || sourceDiscount?.promo_code_mode || "shared").trim().toLowerCase();
+    const promoCodeValue = promoCodeMode === "unique"
+      ? "Уникальные коды"
+      : (String(promo?.shared_code || sourceDiscount?.promo_code || "").trim() || "—");
+    const titleText = String(sourceDiscount?.title || sourceItem?.title || "").trim() || "Скидка";
+    const subtitleText = buildRightOrderBenefitDiscountSubtitle(sourceDiscount, sourceItem);
+    const mainBadge = buildRightOrderBenefitDiscountMainBadgeDescriptor(sourceDiscount, sourceItem);
+    const isActive = sourceDiscount?.is_active !== false && Number(sourceDiscount?.is_active || 1) !== 0;
+    const hideInBenefits = sourceDiscount?.hide_in_benefits === true || Number(sourceDiscount?.hide_in_benefits || 0) === 1;
+    const isStackable = sourceDiscount?.is_stackable === true || Number(sourceDiscount?.is_stackable || 0) === 1;
+    const usageCount = Number(sourceDiscount?.usage_count || 0);
+    const usageLimit = Number(sourceDiscount?.usage_limit || 0);
+    const usagePerCustomer = Number(sourceDiscount?.usage_per_customer || 0);
+    const minOrderAmount = Number(sourceDiscount?.min_order_amount || 0);
+    const maxDiscountAmount = Number(sourceDiscount?.max_discount_amount || 0);
+    const rules = buildRightOrderBenefitDiscountRules(sourceDiscount);
+    const products = Array.isArray(sourceDiscount?.products) && sourceDiscount.products.length
+      ? sourceDiscount.products
+      : (Array.isArray(sourceItem?.products) ? sourceItem.products : []);
+    const customers = Array.isArray(sourceDiscount?.customers) ? sourceDiscount.customers : [];
+    const weekdaysText = formatRightOrderBenefitDiscountScheduleDaysText(sourceDiscount?.schedule_days);
+    const timeStart = formatRightOrderBenefitDiscountTimeValue(sourceDiscount?.schedule_time_start);
+    const timeEnd = formatRightOrderBenefitDiscountTimeValue(sourceDiscount?.schedule_time_end);
+    const timeText = timeStart && timeEnd
+      ? `${timeStart} — ${timeEnd}`
+      : (timeStart ? `с ${timeStart}` : (timeEnd ? `до ${timeEnd}` : ""));
+    const periodText = sourceDiscount?.starts_at || sourceDiscount?.ends_at
+      ? `${formatRightOrderBenefitDiscountInfoDate(sourceDiscount?.starts_at)} — ${formatRightOrderBenefitDiscountInfoDate(sourceDiscount?.ends_at)}`
+      : "Без ограничений";
+    const disabledReasonText = String(sourceItem?.disabled_reason || "").trim();
+    const economyText = maxDiscountAmount > 0
+      ? `Экономия: до ${formatRightOrderBenefitDiscountInfoAmount(maxDiscountAmount)}`
+      : "Экономия: без ограничения";
+
+    const wrap = document.createElement("div");
+
+    const hero = document.createElement("div");
+    hero.className = "discount-info-hero";
+
+    const heroMain = document.createElement("div");
+    heroMain.className = "discount-info-hero-main";
+
+    const heroContent = document.createElement("div");
+    heroContent.className = "discount-info-hero-content";
+
+    const badges = document.createElement("div");
+    badges.className = "discount-info-badges discount-info-badges--right shop-checkout-benefit-discount-meta";
+
+    if (mainBadge.kind !== "none") {
+      const mainBadgeEl = document.createElement("span");
+      mainBadgeEl.className = "discount-info-hero-badge shop-checkout-benefit-badge shop-checkout-benefit-badge--accent shop-checkout-benefit-discount-badge";
+      if (mainBadge.kind === "icon") {
+        mainBadgeEl.classList.add("shop-checkout-benefit-badge--icon");
+        mainBadgeEl.innerHTML = `<i class="fas ${mainBadge.icon}" aria-hidden="true"></i>`;
+        mainBadgeEl.setAttribute("title", mainBadge.label);
+        mainBadgeEl.setAttribute("aria-label", mainBadge.label);
+      } else {
+        mainBadgeEl.textContent = mainBadge.text;
+      }
+      badges.appendChild(mainBadgeEl);
+    }
+
+    const statusBadgeEl = document.createElement("span");
+    statusBadgeEl.className = `discount-info-badge shop-checkout-benefit-badge shop-checkout-benefit-badge--icon ${isActive ? "shop-checkout-benefit-badge--accent" : "shop-checkout-benefit-badge--neutral"}`;
+    statusBadgeEl.setAttribute("title", isActive ? "Активна" : "Неактивна");
+    statusBadgeEl.setAttribute("aria-label", isActive ? "Активна" : "Неактивна");
+    statusBadgeEl.innerHTML = `<i class="fas fa-power-off" aria-hidden="true"></i>`;
+    badges.appendChild(statusBadgeEl);
+
+    const benefitsBadgeEl = document.createElement("span");
+    benefitsBadgeEl.className = "discount-info-badge shop-checkout-benefit-badge shop-checkout-benefit-badge--icon shop-checkout-benefit-badge--accent";
+    benefitsBadgeEl.setAttribute("title", hideInBenefits ? "Скрыта в выгодах" : "Показывается в выгодах");
+    benefitsBadgeEl.setAttribute("aria-label", hideInBenefits ? "Скрыта в выгодах" : "Показывается в выгодах");
+    benefitsBadgeEl.innerHTML = `<i class="fas ${hideInBenefits ? "fa-eye-slash" : "fa-eye"}" aria-hidden="true"></i>`;
+    badges.appendChild(benefitsBadgeEl);
+
+    if (isStackable) {
+      const stackBadgeEl = document.createElement("span");
+      stackBadgeEl.className = "discount-info-badge shop-checkout-benefit-badge shop-checkout-benefit-badge--icon shop-checkout-benefit-badge--accent";
+      stackBadgeEl.setAttribute("title", "Можно совмещать");
+      stackBadgeEl.setAttribute("aria-label", "Можно совмещать");
+      stackBadgeEl.innerHTML = `<i class="fas fa-link" aria-hidden="true"></i>`;
+      badges.appendChild(stackBadgeEl);
+    }
+    heroContent.appendChild(badges);
+
+    const titleEl = document.createElement("div");
+    titleEl.className = "discount-info-title shop-profile-discount-title";
+    titleEl.textContent = titleText;
+    heroContent.appendChild(titleEl);
+
+    if (promoEnabled) {
+      const promoWrap = document.createElement("div");
+      promoWrap.className = "discount-info-hero-promo";
+      const promoLabel = document.createElement("div");
+      promoLabel.className = "discount-info-hero-promo-label";
+      promoLabel.textContent = "Промокод";
+      const promoValue = document.createElement("div");
+      promoValue.className = "discount-info-hero-promo-value shop-checkout-benefit-main-value is-code";
+      promoValue.textContent = promoCodeValue;
+      promoWrap.appendChild(promoLabel);
+      promoWrap.appendChild(promoValue);
+      heroContent.appendChild(promoWrap);
+    }
+
+    const subtitleEl = document.createElement("div");
+    subtitleEl.className = "discount-info-hero-subtitle";
+    subtitleEl.textContent = subtitleText;
+    heroContent.appendChild(subtitleEl);
+
+    heroMain.appendChild(heroContent);
+
+    const economyEl = document.createElement("div");
+    economyEl.className = "discount-info-hero-economy";
+    economyEl.textContent = economyText;
+    heroMain.appendChild(economyEl);
+
+    hero.appendChild(heroMain);
+    wrap.appendChild(hero);
+
+    const conditionsBlock = document.createElement("div");
+    conditionsBlock.className = "discount-info-block";
+    conditionsBlock.innerHTML = `
+      <div class="discount-info-block-header"><i class="fas fa-map-marker-alt"></i> Условия</div>
+      <div class="discount-info-block-body">
+        <div class="discount-info-row"><span class="discount-info-row-label">Применяется:</span><span class="discount-info-row-value"></span></div>
+        <div class="discount-info-row"><span class="discount-info-row-label">Минимальная сумма:</span><span class="discount-info-row-value"></span></div>
+        <div class="discount-info-row"><span class="discount-info-row-label">Максимальная скидка:</span><span class="discount-info-row-value"></span></div>
+      </div>
+    `;
+    const conditionRows = conditionsBlock.querySelectorAll(".discount-info-row-value");
+    if (conditionRows[0]) conditionRows[0].textContent = buildRightOrderBenefitDiscountApplyText(sourceDiscount, sourceItem);
+    if (conditionRows[1]) conditionRows[1].textContent = minOrderAmount > 0 ? formatRightOrderBenefitDiscountInfoAmount(minOrderAmount) : "без минимальной суммы";
+    if (conditionRows[2]) conditionRows[2].textContent = maxDiscountAmount > 0 ? formatRightOrderBenefitDiscountInfoAmount(maxDiscountAmount) : "без ограничения";
+    wrap.appendChild(conditionsBlock);
+
+    const limitsBlock = document.createElement("div");
+    limitsBlock.className = "discount-info-block";
+    limitsBlock.innerHTML = `
+      <div class="discount-info-block-header"><i class="fas fa-exclamation-triangle"></i> Ограничения</div>
+      <div class="discount-info-block-body">
+        <div class="discount-info-row"><span class="discount-info-row-label">На клиента:</span><span class="discount-info-row-value"></span></div>
+        <div class="discount-info-row"><span class="discount-info-row-label">Общий лимит:</span><span class="discount-info-row-value"></span></div>
+        <div class="discount-info-row"><span class="discount-info-row-label">Использовано:</span><span class="discount-info-row-value"></span></div>
+        <div class="discount-info-row discount-info-row--full hidden"><span class="discount-info-row-label">Доп. правила:</span><div class="discount-info-rules"></div></div>
+      </div>
+    `;
+    const limitRows = limitsBlock.querySelectorAll(".discount-info-row-value");
+    if (limitRows[0]) limitRows[0].textContent = usagePerCustomer > 0 ? `${usagePerCustomer} на клиента` : "без лимита на клиента";
+    if (limitRows[1]) limitRows[1].textContent = usageLimit > 0 ? String(usageLimit) : "без общего лимита";
+    if (limitRows[2]) limitRows[2].textContent = String(usageCount);
+    const rulesRowEl = limitsBlock.querySelector(".discount-info-row.discount-info-row--full");
+    const rulesListEl = limitsBlock.querySelector(".discount-info-rules");
+    if (rulesListEl) {
+      rulesListEl.innerHTML = "";
+      rules.forEach((rule) => {
+        const ruleEl = document.createElement("div");
+        ruleEl.className = "discount-info-rule-item";
+        ruleEl.textContent = rule;
+        rulesListEl.appendChild(ruleEl);
+      });
+    }
+    if (rulesRowEl) rulesRowEl.classList.toggle("hidden", !rules.length);
+    wrap.appendChild(limitsBlock);
+
+    const periodBlock = document.createElement("div");
+    periodBlock.className = "discount-info-block";
+    periodBlock.innerHTML = `
+      <div class="discount-info-block-header"><i class="fas fa-calendar-alt"></i> Срок действия</div>
+      <div class="discount-info-block-body">
+        <div class="discount-info-row"><span class="discount-info-row-value"></span></div>
+        <div class="discount-info-row hidden"><span class="discount-info-row-label">Дни недели:</span><span class="discount-info-row-value"></span></div>
+        <div class="discount-info-row hidden"><span class="discount-info-row-label">Время:</span><span class="discount-info-row-value"></span></div>
+      </div>
+    `;
+    const periodRows = periodBlock.querySelectorAll(".discount-info-row");
+    const periodValues = periodBlock.querySelectorAll(".discount-info-row-value");
+    if (periodValues[0]) periodValues[0].textContent = periodText;
+    if (periodValues[1]) periodValues[1].textContent = weekdaysText || "—";
+    if (periodValues[2]) periodValues[2].textContent = timeText || "—";
+    if (periodRows[1]) periodRows[1].classList.toggle("hidden", !weekdaysText);
+    if (periodRows[2]) periodRows[2].classList.toggle("hidden", !timeText);
+    wrap.appendChild(periodBlock);
+
+    const bottomGrid = document.createElement("div");
+    bottomGrid.className = "discount-info-bottom-grid";
+    bottomGrid.innerHTML = `
+      <div class="discount-info-mini-card">
+        <div class="discount-info-mini-header"><i class="fas fa-check-circle"></i> Доступно</div>
+        <div class="discount-info-mini-body">${isStackable ? "Можно совмещать с другими акциями" : "Не совмещается с другими акциями"}</div>
+      </div>
+      <div class="discount-info-mini-card">
+        <div class="discount-info-mini-header"><i class="fas fa-users"></i> Аудитория</div>
+        <div class="discount-info-mini-body">${buildRightOrderBenefitDiscountAudienceText(sourceDiscount)}</div>
+      </div>
+    `;
+    wrap.appendChild(bottomGrid);
+
+    if (products.length) {
+      const productsSection = document.createElement("div");
+      productsSection.className = "discount-info-section";
+      const title = document.createElement("div");
+      title.className = "discount-info-section-title";
+      title.textContent = "Привязанные позиции";
+      productsSection.appendChild(title);
+      const chips = document.createElement("div");
+      chips.className = "discount-chips";
+      products.forEach((product) => {
+        const chip = document.createElement("span");
+        const entityType = String(product?.entity_type || product?.type || "").trim().toLowerCase();
+        chip.className = `discount-chip ${entityType === "category" ? "is-category" : (entityType === "combo" ? "is-combo" : "")}`.trim();
+        chip.textContent = String(product?.title || product?.name || "").trim() || `#${Number(product?.entity_id || product?.id || 0)}`;
+        chips.appendChild(chip);
+      });
+      productsSection.appendChild(chips);
+      wrap.appendChild(productsSection);
+    }
+
+    if (customers.length) {
+      const customersSection = document.createElement("div");
+      customersSection.className = "discount-info-section";
+      const title = document.createElement("div");
+      title.className = "discount-info-section-title";
+      title.textContent = "Выбранные клиенты";
+      customersSection.appendChild(title);
+      const chips = document.createElement("div");
+      chips.className = "discount-chips";
+      customers.forEach((customer) => {
+        const chip = document.createElement("span");
+        const entityType = String(customer?.entity_type || "").trim().toLowerCase();
+        chip.className = `discount-chip ${entityType === "category" ? "is-category" : ""}`.trim();
+        chip.textContent = String(customer?.title || customer?.name || "").trim() || `#${Number(customer?.entity_id || customer?.id || 0)}`;
+        chips.appendChild(chip);
+      });
+      customersSection.appendChild(chips);
+      wrap.appendChild(customersSection);
+    }
+
+    if (disabledReasonText) {
+      const note = document.createElement("div");
+      note.className = "shop-checkout-benefit-disabled-reason";
+      note.textContent = disabledReasonText;
+      wrap.appendChild(note);
+    }
+
+    return wrap;
+  }
+
+  async function loadRightOrderBenefitDiscountDetails(discountId, opts = {}) {
+    const id = Number(discountId || 0);
+    if (!(id > 0)) return null;
+    if (opts?.force !== true && state.rightBenefitsDiscountDetailsById.has(id)) {
+      return state.rightBenefitsDiscountDetailsById.get(id) || null;
+    }
+    const json = await apiJson(`/api/admin/discounts/${id}`);
+    const discount = json?.discount && typeof json.discount === "object" ? json.discount : null;
+    if (discount) {
+      state.rightBenefitsDiscountDetailsById.set(id, discount);
+      return discount;
+    }
+    return null;
+  }
+
+  async function renderRightOrderBenefitDiscountDetailContent(host, item, { orderId = 0 } = {}) {
+    if (!host) return;
+    host.innerHTML = "";
+    host.appendChild(buildRightOrderBenefitDiscountMarketingContent(null, item));
+    const discountId = resolveRightOrderBenefitDiscountSourceId(item);
+    if (!(discountId > 0)) return;
+
+    const reqSeq = Number(state.rightBenefitsDiscountDetailReqSeq || 0) + 1;
+    state.rightBenefitsDiscountDetailReqSeq = reqSeq;
+    try {
+      const discount = await loadRightOrderBenefitDiscountDetails(discountId);
+      if (!discount) return;
+      if (Number(state.rightBenefitsDiscountDetailReqSeq || 0) !== reqSeq) return;
+      if (String(state.benefitsModal.screen || "main") !== "detail") return;
+      if (Number(state.benefitsModal.orderId || 0) !== Number(orderId || 0)) return;
+      const currentPayload = state.benefitsModal.payload && typeof state.benefitsModal.payload === "object"
+        ? state.benefitsModal.payload
+        : null;
+      if (String(currentPayload?.kind || "").trim() !== "discount") return;
+      const currentDiscountId = resolveRightOrderBenefitDiscountSourceId(currentPayload?.item || {});
+      if (currentDiscountId !== discountId) return;
+
+      host.innerHTML = "";
+      host.appendChild(buildRightOrderBenefitDiscountMarketingContent(discount, item));
+    } catch (error) {
+      console.warn("Failed to load discount details for benefits modal:", discountId, error);
+    }
+  }
+
   function buildRightOrderBenefitCardDetailContent(item, {
     primaryText = "",
     primaryClassName = "",
@@ -6379,9 +8303,16 @@
 
     appendInfoLine("Описание:", item?.description || "");
     appendInfoLine("Условие:", item?.apply_scope_text || "");
+    appendInfoLine("Статус:", item?.status_text || "");
+    appendInfoLine("Причина:", item?.completed_reason_text || "");
 
     if (Number(item?.discount_amount || 0) > 0 && typeof money === "function") {
       appendInfoLine("Выгода:", money(Number(item.discount_amount || 0)));
+    }
+
+    const completedText = formatRightOrderBenefitsDate(item?.completed_at);
+    if (completedText) {
+      appendInfoLine("Завершено:", completedText);
     }
 
     const expiresText = formatRightOrderBenefitsDate(item?.expires_at);
@@ -6434,6 +8365,8 @@
     const previewData = getRightOrderBenefitsPreviewSnapshot(order, {
       mode: getActiveRightOrderBenefitsMode(),
       preferApplied: true,
+      allowStale: true,
+      allowClientCache: true,
     });
     const details = previewData?.details && typeof previewData.details === "object"
       ? previewData.details
@@ -6504,9 +8437,57 @@
     return wrap;
   }
 
+  function isRightOrderBenefitDetailItemMatch(left, right) {
+    const source = left && typeof left === "object" ? left : null;
+    const target = right && typeof right === "object" ? right : null;
+    if (!source || !target) return false;
+    const idKeys = ["id", "reward_id", "discount_id", "source_discount_id"];
+    for (const key of idKeys) {
+      const sourceId = Number(source?.[key] || 0);
+      const targetId = Number(target?.[key] || 0);
+      if (sourceId > 0 && targetId > 0 && sourceId === targetId) {
+        return true;
+      }
+    }
+    const sourceCode = String(source?.code || "").trim().toUpperCase();
+    const targetCode = String(target?.code || "").trim().toUpperCase();
+    if (sourceCode && targetCode && sourceCode === targetCode) {
+      return true;
+    }
+    return String(source?.title || "").trim() === String(target?.title || "").trim()
+      && String(source?.badge_text || "").trim() === String(target?.badge_text || "").trim();
+  }
+
+  function resolveRightOrderBenefitDetailItem(order, payload) {
+    const detailKind = String(payload?.kind || "").trim().toLowerCase();
+    const targetItem = payload?.item && typeof payload.item === "object" ? payload.item : null;
+    if (!targetItem || !order) return targetItem;
+    const previewData = getRightOrderBenefitsPreviewSnapshot(order, {
+      mode: getActiveRightOrderBenefitsMode(),
+      preferApplied: true,
+      allowStale: true,
+      allowClientCache: true,
+    });
+    const data = getRightOrderBenefitsRenderData(previewData);
+    let items = [];
+    if (detailKind === "discount") {
+      items = Array.isArray(data?.discounts) ? data.discounts : [];
+    } else if (detailKind === "promo") {
+      items = Array.isArray(data?.promo_codes) ? data.promo_codes : [];
+    } else if (detailKind === "gift") {
+      items = Array.isArray(data?.gifts) ? data.gifts : [];
+    } else if (detailKind === "progress") {
+      items = Array.isArray(data?.progress) ? data.progress : [];
+    } else if (detailKind === "completed") {
+      items = Array.isArray(data?.completed) ? data.completed : [];
+    }
+    return items.find((entry) => isRightOrderBenefitDetailItemMatch(entry, targetItem)) || targetItem;
+  }
+
   function openRightOrderBenefitDetailScreen(orderId, payload = {}) {
     const id = Number(orderId || 0);
     if (!(id > 0)) return;
+    captureRightBenefitsMainViewScroll();
     state.benefitsModal.orderId = id;
     state.benefitsModal.screen = "detail";
     state.benefitsModal.title = "Детали акции";
@@ -6516,116 +8497,187 @@
 
   function renderRightOrderBenefitDetailScreen(orderId) {
     const id = Number(orderId || 0);
-    const { body, title, backBtn, modeToggle } = getRightBenefitsOverlayElements();
-    if (!body || !title || !backBtn) return;
     const payload = state.benefitsModal.payload && typeof state.benefitsModal.payload === "object"
       ? state.benefitsModal.payload
       : null;
     const orderIndex = getRightOrderIndexById(id);
     const order = orderIndex >= 0 ? (state.rightOrders[orderIndex] || {}) : null;
-    title.textContent = state.benefitsModal.title || "Детали акции";
-    backBtn.classList.remove("hidden");
-    if (modeToggle) modeToggle.classList.add("hidden");
+    const detailKind = String(payload?.kind || "").trim().toLowerCase();
+    const item = resolveRightOrderBenefitDetailItem(order, payload);
+    if (payload && item && payload.item !== item) {
+      state.benefitsModal.payload = {
+        ...payload,
+        item,
+      };
+    }
+    const modalApi = window.AdminBenefitsModal;
+    const detailOptions = {
+      moneyFormatter: typeof money === "function" ? money : null,
+      formatProgressSummary: formatRightOrderBenefitProgressSummary,
+    };
+    let content = null;
+    let extraDescription = "";
+    let extraProductsSection = null;
+    let actionConfig = null;
+
+    if (detailKind === "discount") {
+      content = modalApi?.buildDiscountDetailContent(item, detailOptions)
+        || buildRightOrderBenefitDiscountDetailContent(item);
+      actionConfig = {
+        label: item?.is_selected === true ? "Выбрано" : "Применить",
+        enabled: item?.is_selected === true || isRightOrderBenefitSelectable(item),
+        current: item?.is_selected === true,
+        onClick: async () => {
+          await toggleRightOrderBenefitDiscount(id, item);
+        },
+      };
+    } else if (detailKind === "promo") {
+      const actionMode = String(item?.action_mode || "select").trim().toLowerCase() || "select";
+      content = modalApi?.buildDiscountDetailContent(item, {
+        ...detailOptions,
+        primaryText: String(item?.code || "").trim() || "Промокод",
+        primaryClassName: "is-code",
+      }) || buildRightOrderBenefitPromoDetailContent(item);
+      actionConfig = {
+        label: actionMode === "redeem_reward"
+          ? "Получить"
+          : (item?.is_selected === true ? "Выбрано" : "Применить"),
+        enabled: actionMode === "redeem_reward"
+          ? item?.is_applicable === true
+          : (item?.is_selected === true || isRightOrderBenefitSelectable(item)),
+        current: item?.is_selected === true && actionMode !== "redeem_reward",
+        onClick: async () => {
+          await toggleRightOrderBenefitPromo(id, item);
+        },
+      };
+    } else if (detailKind === "gift") {
+      const actionMode = String(item?.action_mode || "receive").trim().toLowerCase() || "receive";
+      if (actionMode === "claim_unique_promo") {
+        const codeText = String(item?.code || "").trim();
+        content = modalApi?.buildDiscountDetailContent(item, {
+          ...detailOptions,
+          primaryText: codeText || String(item?.badge_text || "").trim() || "Подарок",
+          primaryClassName: codeText ? "is-code" : "",
+        }) || buildRightOrderBenefitPromoDetailContent(item);
+      } else {
+        content = modalApi?.buildRewardPreviewContent(
+          modalApi?.buildGiftPreview(item) || buildRightOrderBenefitGiftPreview(item),
+          detailOptions
+        ) || buildRightOrderBenefitRewardPreviewContent(buildRightOrderBenefitGiftPreview(item));
+      }
+      actionConfig = {
+        label: actionMode === "claim_unique_promo" ? "Забрать" : "Получить",
+        enabled: item?.is_receivable !== false
+          && Number(actionMode === "claim_unique_promo" ? item?.discount_id : (item?.reward_id || item?.id) || 0) > 0,
+        current: false,
+        onClick: async () => {
+          await receiveRightOrderBenefitGift(id, item);
+        },
+      };
+    } else if (detailKind === "progress") {
+      content = modalApi?.buildProgressInfoContent(item, detailOptions)
+        || buildRightOrderBenefitProgressDetailContent(order, item);
+      const progressProductsData = getRightOrderBenefitProgressProductsData(order, item);
+      if (progressProductsData?.description) {
+        extraDescription = String(progressProductsData.description || "").trim();
+      }
+      extraProductsSection = modalApi?.buildTargetProductsContent(
+        progressProductsData?.items,
+        progressProductsData?.title || "Что участвует",
+        detailOptions
+      ) || null;
+      if (item?.is_claimable === true && String(item?.claim_mode || "").trim().toLowerCase() !== "gift_sheet") {
+        actionConfig = {
+          label: "Забрать",
+          enabled: true,
+          current: false,
+          onClick: async () => {
+            await claimRightOrderBenefitProgress(id, item);
+          },
+        };
+      }
+    } else if (detailKind === "completed") {
+      const sourceKind = String(item?.source_kind || "").trim().toLowerCase();
+      content = modalApi?.buildDiscountDetailContent(item, {
+        ...detailOptions,
+        primaryText: sourceKind === "promo_code"
+          ? (String(item?.code || "").trim() || String(item?.title || "").trim() || "Промокод")
+          : undefined,
+        primaryClassName: sourceKind === "promo_code" ? "is-code" : "",
+      }) || (sourceKind === "promo_code"
+        ? buildRightOrderBenefitPromoDetailContent(item)
+        : buildRightOrderBenefitDiscountDetailContent(item));
+    }
+
+    window.AdminBenefitsModal?.show({
+      title: state.benefitsModal.title || "Детали акции",
+      showBack: true,
+      showModeToggle: false,
+      mode: state.benefitsModal.mode,
+      onClose: closeRightBenefitsOverlay,
+      onBack: () => {
+        state.benefitsModal.screen = "main";
+        state.benefitsModal.title = "Выгоды";
+        state.benefitsModal.payload = null;
+        if (!restoreRightBenefitsMainView(Number(state.benefitsModal.orderId || 0))) {
+          renderRightBenefitsOverlay(Number(state.benefitsModal.orderId || 0));
+        }
+      },
+    });
+    const { body } = getRightBenefitsOverlayElements();
+    if (!body) return;
     body.innerHTML = "";
+
+    const frame = createRightOrderBenefitsFrame({ detailFooter: !!actionConfig });
+    if (!frame?.root || !frame.scrollEl) return;
+    body.appendChild(frame.root);
 
     const shell = document.createElement("div");
     shell.className = "shop-checkout-benefit-detail-screen";
-    body.appendChild(shell);
+    frame.scrollEl.appendChild(shell);
 
-    const contentTitle = document.createElement("div");
-    contentTitle.className = "shop-checkout-benefit-detail-title";
-    contentTitle.textContent = String(payload?.item?.title || payload?.title || "Детали акции");
-    shell.appendChild(contentTitle);
-
-    const description = String(payload?.item?.description || payload?.description || "").trim();
-    if (description) {
-      const descriptionEl = document.createElement("div");
-      descriptionEl.className = "shop-checkout-benefits-hint";
-      descriptionEl.textContent = description;
-      shell.appendChild(descriptionEl);
-    }
-
-    let content = null;
-    const detailKind = String(payload?.kind || "").trim();
-    if (detailKind === "discount") {
-      content = buildRightOrderBenefitDiscountDetailContent(payload?.item);
-    } else if (detailKind === "promo") {
-      content = buildRightOrderBenefitPromoDetailContent(payload?.item);
-    } else if (detailKind === "gift") {
-      content = buildRightOrderBenefitRewardPreviewContent(buildRightOrderBenefitGiftPreview(payload?.item));
-    } else if (detailKind === "progress") {
-      content = buildRightOrderBenefitProgressDetailContent(order, payload?.item || {});
-    }
-
-    if (content) {
+    if (content instanceof Element) {
       shell.appendChild(content);
     }
+    if (extraDescription) {
+      const descriptionEl = document.createElement("div");
+      descriptionEl.className = "shop-checkout-benefits-hint";
+      descriptionEl.textContent = extraDescription;
+      shell.appendChild(descriptionEl);
+    }
+    if (extraProductsSection instanceof Element && extraProductsSection.childNodes.length) {
+      shell.appendChild(extraProductsSection);
+    }
+    if (frame.footerEl && actionConfig) {
+      const actions = document.createElement("div");
+      actions.className = "shop-checkout-benefit-detail-footer-actions";
+      const actionBtn = document.createElement("button");
+      actionBtn.type = "button";
+      actionBtn.className = "shop-checkout-benefits-promo-entry-btn shop-checkout-benefit-claim-confirm shop-checkout-benefit-claim-confirm--footer";
+      actionBtn.textContent = String(actionConfig.label || "Применить");
+      actionBtn.disabled = actionConfig.enabled !== true;
+      actionBtn.classList.toggle("is-current", actionConfig.current === true);
+      actionBtn.classList.toggle("is-active", actionConfig.enabled === true && actionConfig.current !== true);
+      actionBtn.addEventListener("click", async () => {
+        if (actionBtn.disabled || typeof actionConfig.onClick !== "function") return;
+        actionBtn.disabled = true;
+        try {
+          await actionConfig.onClick();
+        } catch (error) {
+          showNewOrderAlert(getRightOrderBenefitsActionErrorMessage(error));
+          actionBtn.disabled = actionConfig.enabled !== true;
+        }
+      });
+      actions.appendChild(actionBtn);
+      frame.footerEl.appendChild(actions);
+    }
   }
-
   function getRightBenefitsOverlayElements() {
-    const backdrop = document.getElementById("newOrderBenefitsOverlay");
-    const title = document.getElementById("newOrderBenefitsTitle");
-    const body = document.getElementById("newOrderBenefitsBody");
-    const backBtn = document.getElementById("newOrderBenefitsBackBtn");
-    const closeBtn = document.getElementById("newOrderBenefitsCloseBtn");
-    const modeToggle = document.getElementById("newOrderBenefitsModeToggle");
-    return { backdrop, title, body, backBtn, closeBtn, modeToggle };
+    return window.AdminBenefitsModal?.getElements() || {};
   }
 
   function ensureRightBenefitsOverlay() {
-    if (document.getElementById("newOrderBenefitsOverlay")) return;
-    const wrap = document.createElement("div");
-    wrap.id = "newOrderBenefitsOverlay";
-    wrap.className = "new-order-option-overlay hidden";
-    wrap.innerHTML = `
-      <div class="new-order-option-sheet new-order-benefits-sheet">
-        <div class="new-order-option-sheet-head new-order-benefits-head">
-          <div class="new-order-benefits-head-top">
-            <button class="new-order-option-sheet-back hidden" type="button" id="newOrderBenefitsBackBtn" aria-label="Назад">
-              <i class="fas fa-arrow-left"></i>
-            </button>
-            <div class="new-order-option-sheet-title" id="newOrderBenefitsTitle">Выгоды</div>
-            <button class="new-order-option-sheet-back" type="button" id="newOrderBenefitsCloseBtn" aria-label="Закрыть">
-              <i class="fas fa-times"></i>
-            </button>
-          </div>
-          <div class="shop-delivery-toggle new-order-benefits-mode-toggle" id="newOrderBenefitsModeToggle" aria-label="Режим выгод">
-            <button class="shop-delivery-toggle-btn is-active" type="button" aria-pressed="true">Скидки клиента</button>
-            <button class="shop-delivery-toggle-btn" type="button" aria-pressed="false">Все акции</button>
-          </div>
-        </div>
-        <div class="new-order-option-sheet-list no-scrollbar new-order-benefits-body" id="newOrderBenefitsBody"></div>
-      </div>
-    `;
-    document.body.appendChild(wrap);
-    wrap.addEventListener("click", (event) => {
-      if (event.target === wrap) closeRightBenefitsOverlay();
-    });
-    const { backBtn, closeBtn } = getRightBenefitsOverlayElements();
-    if (closeBtn) closeBtn.addEventListener("click", (event) => {
-      event.preventDefault();
-      closeRightBenefitsOverlay();
-    });
-    if (backBtn) backBtn.addEventListener("click", (event) => {
-      event.preventDefault();
-      state.benefitsModal.screen = "main";
-      state.benefitsModal.title = "Выгоды";
-      state.benefitsModal.payload = null;
-      renderRightBenefitsOverlay(Number(state.benefitsModal.orderId || 0));
-    });
-    setRightBenefitsModeToggleState("customer");
-    const { modeToggle } = getRightBenefitsOverlayElements();
-    if (modeToggle) {
-      modeToggle.addEventListener("click", (event) => {
-        const target = event.target instanceof Element
-          ? event.target.closest(".shop-delivery-toggle-btn[data-mode]")
-          : null;
-        if (!target) return;
-        event.preventDefault();
-        const nextMode = normalizeRightOrderBenefitsMode(target.getAttribute("data-mode") || "customer");
-        void switchRightBenefitsOverlayMode(nextMode);
-      });
-    }
+    window.AdminBenefitsModal?.ensure();
   }
 
   async function switchRightBenefitsOverlayMode(mode, opts = {}) {
@@ -6654,14 +8706,16 @@
   }
 
   function closeRightBenefitsOverlay() {
-    const { backdrop, body } = getRightBenefitsOverlayElements();
-    if (backdrop) backdrop.classList.add("hidden");
-    if (body) body.innerHTML = "";
+    if (String(state.benefitsModal.screen || "main") === "main") {
+      captureRightBenefitsMainViewScroll();
+    }
+    window.AdminBenefitsModal?.hide({ clearBody: false });
     state.benefitsModal.orderId = 0;
     state.benefitsModal.mode = "customer";
     state.benefitsModal.screen = "main";
     state.benefitsModal.title = "Выгоды";
     state.benefitsModal.payload = null;
+    state.benefitsModal.promoInputValue = "";
     state.benefitsModal.busy = false;
     setRightBenefitsModeToggleState("customer");
   }
@@ -6767,15 +8821,44 @@
       : null;
     form.selected_promo_reward_id = normalizeRightOrderBenefitsSelectedId(selection?.selectedPromoRewardId);
     form.benefits_preview_mode = hasRightOrderBenefitsSelection(form) ? activeMode : null;
-    state.rightOrders[index] = { ...order, form };
-    invalidateRightOrderBenefitsPreview(id);
+    const shouldMarkTouched = String(order?.mode || "").trim().toLowerCase() === "edit";
+    state.rightOrders[index] = {
+      ...order,
+      form,
+      editCartTouched: shouldMarkTouched ? true : Boolean(order?.editCartTouched),
+    };
+    state.benefitsModal.promoInputValue = form.promo_code || "";
+    if (opts?.render !== false) {
+      renderRightOrderTabs();
+      if (opts?.renderOverlay !== false) queueRenderRightBenefitsModal(id);
+    }
     await loadRightOrderBenefitsPreview(id, {
       force: true,
       render: opts?.render !== false,
+      renderOverlay: opts?.renderOverlay !== false,
       prefetchedData: opts?.prefetchedData || null,
       mode: getRightOrderBenefitsPreferredMode(form, activeMode),
     });
     return state.rightOrders[index] || null;
+  }
+
+  async function applyRightOrderBenefitsManualPromo(orderId, rawValue) {
+    const id = Number(orderId || 0);
+    const index = getRightOrderIndexById(id);
+    if (index < 0) return;
+    const order = state.rightOrders[index] || {};
+    const form = order.form && typeof order.form === "object" ? order.form : {};
+    const selection = getRightOrderBenefitsSelectionState(form);
+    const promoCode = normalizeRightOrderBenefitsPromoCode(rawValue || "");
+    if (!promoCode) return;
+    state.benefitsModal.promoInputValue = promoCode;
+    await setRightOrderBenefitsSelection(id, {
+      selectedDiscountId: selection.selectedDiscountId,
+      selectedDiscountSource: selection.selectedDiscountSource,
+      promoCode,
+      selectedPromoSource: "promo_code",
+      selectedPromoRewardId: null,
+    });
   }
 
   async function toggleRightOrderBenefitDiscount(orderId, discountCard) {
@@ -6787,6 +8870,8 @@
     const previewData = getRightOrderBenefitsPreviewSnapshot(order, {
       mode: getActiveRightOrderBenefitsMode(),
       preferApplied: true,
+      allowStale: true,
+      allowClientCache: true,
     });
     const promoCards = Array.isArray(previewData?.promo_codes) ? previewData.promo_codes : [];
     const selection = getRightOrderBenefitsSelectionState(form);
@@ -6825,6 +8910,8 @@
     const previewData = getRightOrderBenefitsPreviewSnapshot(order, {
       mode: getActiveRightOrderBenefitsMode(),
       preferApplied: true,
+      allowStale: true,
+      allowClientCache: true,
     });
     const discountCards = Array.isArray(previewData?.discounts) ? previewData.discounts : [];
     const selection = getRightOrderBenefitsSelectionState(form);
@@ -7118,6 +9205,7 @@
     const id = Number(orderId || 0);
     const index = getRightOrderIndexById(id);
     if (index < 0) return;
+    captureRightBenefitsMainViewScroll();
     const order = state.rightOrders[index] || {};
     const token = await ensureRightOrderBenefitsCustomerToken(id);
     if (!token) throw new Error("UNAUTHORIZED");
@@ -7174,21 +9262,37 @@
 
   function renderRightOrderBenefitGiftClaimScreen(orderId) {
     const id = Number(orderId || 0);
-    const { body, title, backBtn, modeToggle } = getRightBenefitsOverlayElements();
-    if (!body || !title || !backBtn) return;
+    window.AdminBenefitsModal?.show({
+      title: state.benefitsModal.title || "Выбрать подарки",
+      showBack: true,
+      showModeToggle: false,
+      mode: state.benefitsModal.mode,
+      onClose: closeRightBenefitsOverlay,
+      onBack: () => {
+        state.benefitsModal.screen = "main";
+        state.benefitsModal.title = "Выгоды";
+        state.benefitsModal.payload = null;
+        if (!restoreRightBenefitsMainView(Number(state.benefitsModal.orderId || 0))) {
+          renderRightBenefitsOverlay(Number(state.benefitsModal.orderId || 0));
+        }
+      },
+    });
+    const { body } = getRightBenefitsOverlayElements();
+    if (!body) return;
     const claimState = state.rightBenefitsClaimOptionsByOrder.get(id) || null;
     const progressItem = claimState?.progressItem || null;
     const selectionLimit = Math.max(0, Number(claimState?.selection_limit || 0));
     const items = Array.isArray(claimState?.items) ? claimState.items : [];
     const isMobileGiftClaim = window.matchMedia("(max-width: 768px)").matches;
-    title.textContent = state.benefitsModal.title || "Выбрать подарки";
-    backBtn.classList.remove("hidden");
-    if (modeToggle) modeToggle.classList.add("hidden");
     body.innerHTML = "";
+
+    const frame = createRightOrderBenefitsFrame({ detailFooter: true });
+    if (!frame?.root || !frame.scrollEl) return;
+    body.appendChild(frame.root);
 
     const shell = document.createElement("div");
     shell.className = "shop-checkout-benefit-detail-screen";
-    body.appendChild(shell);
+    frame.scrollEl.appendChild(shell);
 
     const formatGiftClaimCount = (count) => {
       const normalized = Math.max(0, Number(count || 0));
@@ -7485,14 +9589,18 @@
     listEl.className = "shop-favorites-list shop-checkout-benefit-products-list shop-checkout-benefit-claim-list";
     shell.appendChild(listEl);
 
-    const actions = document.createElement("div");
-    actions.className = "shop-checkout-benefit-claim-actions";
     const confirmBtn = document.createElement("button");
     confirmBtn.type = "button";
-    confirmBtn.className = "btn btn-primary shop-checkout-benefit-claim-confirm";
+    confirmBtn.className = "btn btn-primary shop-checkout-benefit-claim-confirm shop-checkout-benefit-claim-confirm--footer";
     confirmBtn.textContent = "Забрать";
-    actions.appendChild(confirmBtn);
-    shell.appendChild(actions);
+    if (frame.footerEl) {
+      frame.footerEl.appendChild(confirmBtn);
+    } else {
+      const actions = document.createElement("div");
+      actions.className = "shop-checkout-benefit-claim-actions";
+      actions.appendChild(confirmBtn);
+      shell.appendChild(actions);
+    }
 
     const submitGiftClaimSelection = async () => {
       const selectedRewardItems = [];
@@ -7576,17 +9684,28 @@
 
   function renderRightBenefitsMainScreen(order) {
     const orderId = Number(order?.id || 0);
-    const { body, title, backBtn, modeToggle } = getRightBenefitsOverlayElements();
-    if (!body || !title || !backBtn) return;
-    title.textContent = "Выгоды";
-    backBtn.classList.add("hidden");
-    if (modeToggle) modeToggle.classList.remove("hidden");
-    setRightBenefitsModeToggleState(getActiveRightOrderBenefitsMode());
+    window.AdminBenefitsModal?.show({
+      title: "Выгоды",
+      showBack: false,
+      showModeToggle: true,
+      mode: getActiveRightOrderBenefitsMode(),
+      onClose: closeRightBenefitsOverlay,
+      onModeChange: (nextMode) => {
+        void switchRightBenefitsOverlayMode(nextMode);
+      },
+    });
+    const { body } = getRightBenefitsOverlayElements();
+    if (!body) return;
     body.innerHTML = "";
+
+    const frame = createRightOrderBenefitsFrame({ hasFooter: true });
+    if (!frame?.root || !frame.scrollEl) return;
+    body.appendChild(frame.root);
+    rememberRightBenefitsMainView(orderId, getActiveRightOrderBenefitsMode(), frame);
 
     const shell = document.createElement("div");
     shell.className = "shop-checkout-benefits-sheet";
-    body.appendChild(shell);
+    frame.scrollEl.appendChild(shell);
 
     const hint = document.createElement("div");
     hint.className = "shop-checkout-benefits-hint";
@@ -7594,7 +9713,32 @@
     shell.appendChild(hint);
 
     const currentMode = getActiveRightOrderBenefitsMode();
-    const previewData = getRightOrderBenefitsPreviewSnapshot(order, { mode: currentMode });
+    const previewData = getRightOrderBenefitsPreviewSnapshot(order, {
+      mode: currentMode,
+      allowStale: true,
+      allowClientCache: true,
+    });
+    const activePromoCode = resolveRightOrderBenefitsActivePromoCode(previewData, order);
+    if (frame.footerEl) {
+      const promoEntry = window.AdminBenefitsModal?.createPromoEntry({
+        value: state.benefitsModal.promoInputValue || activePromoCode,
+        activeValue: activePromoCode,
+        normalizeValue: (value) => normalizeRightOrderBenefitsPromoCode(value || ""),
+        inputName: "newOrderBenefitsPromoCode",
+        onInput: (value) => {
+          state.benefitsModal.promoInputValue = normalizeRightOrderBenefitsPromoCode(value || "");
+        },
+        onApply: async (value) => {
+          await applyRightOrderBenefitsManualPromo(orderId, value);
+        },
+        onError: (error) => {
+          showNewOrderAlert(getRightOrderBenefitsActionErrorMessage(error));
+        },
+      });
+      if (promoEntry?.root) {
+        frame.footerEl.appendChild(promoEntry.root);
+      }
+    }
     const isLoading = state.rightBenefitsLoadingByOrder.has(getRightOrderBenefitsCacheSlot(orderId, currentMode));
     if (!previewData) {
       const loading = document.createElement("div");
@@ -7603,7 +9747,7 @@
       shell.appendChild(loading);
       if (!isLoading) {
         void loadRightOrderBenefitsPreview(orderId, {
-          force: true,
+          force: false,
           render: true,
           mode: currentMode,
         }).catch((error) => {
@@ -7673,6 +9817,7 @@
       },
     }));
     bindRightOrderHorizontalTrack(giftSection.list);
+    bindRightOrderWheelTrack(giftSection.list);
     setRightOrderBenefitsSectionItems(progressSection, data.progress, (item) => renderRightOrderBenefitProgressCard(item, {
       onOpenDetails: (progressReward) => {
         openRightOrderBenefitDetailScreen(orderId, {
@@ -7692,7 +9837,14 @@
         }
       },
     }));
-    setRightOrderBenefitsSectionItems(completedSection, data.completed, renderRightOrderBenefitDisplayCard);
+    setRightOrderBenefitsSectionItems(completedSection, data.completed, (item) => renderRightOrderBenefitDisplayCard(item, {
+      onOpenDetails: (completedItem) => {
+        openRightOrderBenefitDetailScreen(orderId, {
+          kind: "completed",
+          item: completedItem,
+        });
+      },
+    }));
   }
 
   function renderRightBenefitsOverlay(orderId) {
@@ -7711,6 +9863,9 @@
       renderRightOrderBenefitDetailScreen(id);
       return;
     }
+    if (restoreRightBenefitsMainView(id)) {
+      return;
+    }
     const orderIndex = getRightOrderIndexById(id);
     if (orderIndex < 0) {
       closeRightBenefitsOverlay();
@@ -7727,19 +9882,33 @@
     const order = state.rightOrders[index] || {};
     const form = order.form && typeof order.form === "object" ? order.form : {};
     const customerId = Number(await ensureRightOrderBenefitsCustomerId(id) || 0);
-    const initialMode = customerId > 0 ? "customer" : "all";
+    const cachedMainView = state.benefitsModal.mainView && Number(state.benefitsModal.mainView.orderId || 0) === id
+      ? state.benefitsModal.mainView
+      : null;
+    const initialMode = cachedMainView
+      ? normalizeRightOrderBenefitsMode(cachedMainView.mode || "customer")
+      : (customerId > 0 ? "customer" : "all");
     state.benefitsModal.orderId = id;
     state.benefitsModal.mode = initialMode;
     state.benefitsModal.screen = "main";
     state.benefitsModal.title = "Выгоды";
     state.benefitsModal.payload = null;
+    state.benefitsModal.promoInputValue = normalizeRightOrderBenefitsPromoCode(form.promo_code);
+    if (restoreRightBenefitsMainView(id)) {
+      return;
+    }
     renderRightBenefitsOverlay(id);
+    const prefetchSecondaryPromise = prefetchRightOrderBenefitsModes(id, {
+      force: false,
+      skipMode: initialMode,
+    });
     try {
       await loadRightOrderBenefitsPreview(id, {
-        force: true,
+        force: false,
         render: true,
         mode: initialMode,
       });
+      void prefetchSecondaryPromise;
     } catch (error) {
       showNewOrderAlert(getRightOrderBenefitsActionErrorMessage(error));
     }
@@ -8196,7 +10365,7 @@
       : (cities[0] || getDefaultRightAddressCity());
 
     wrapEl.dataset.value = current;
-    valueEl.textContent = current || "вЂ”";
+    valueEl.textContent = current || "—";
     dropdown.innerHTML = "";
 
     cities.forEach((c) => {
@@ -9517,6 +11686,8 @@
       item.unit_price = roundPrice(item.sections.reduce((sum, section) => sum + Number(section?.price || 0), 0));
       item.photos = item.sections.map((section) => String(section?.photo_url || "")).filter(Boolean).slice(0, 4);
       item.sum = roundPrice(item.unit_price * qty);
+      const comboOldLineTotal = roundPrice(Number(item.unit_price_before_discount || 0) * qty);
+      item.old_line_total = comboOldLineTotal > item.sum ? comboOldLineTotal : 0;
       return item;
     }
 
@@ -9574,6 +11745,7 @@
         };
       }
       item.sum = 0;
+      item.old_line_total = 0;
       return item;
     }
     item.unit_price_before_discount = hasOldUnitPrice ? roundPrice(oldUnitPrice) : 0;
@@ -9586,6 +11758,11 @@
       };
     }
     item.sum = roundPrice(item.unit_price * qty);
+    const paidQtyForOldLine = isRightOrderAutoAddItem(item) ? getRightOrderAutoPaidQty(item, qty) : qty;
+    const oldLineTotal = hasOldUnitPrice
+      ? roundPrice(Number(item.unit_price_before_discount || 0) * paidQtyForOldLine)
+      : 0;
+    item.old_line_total = oldLineTotal > item.sum ? oldLineTotal : 0;
     return item;
   }
 
@@ -10396,7 +12573,7 @@
       });
       return `
         <div class="cart-row shop-combo-row">
-          ${photo ? `<img class="cart-thumb" src="${escapeHtml(photo)}" alt="" />` : `<div class="cart-thumb">вЂ”</div>`}
+          ${photo ? `<img class="cart-thumb" src="${escapeHtml(photo)}" alt="" />` : `<div class="cart-thumb">—</div>`}
           <div class="cart-mid shop-combo-mid">
             <div class="cart-title">${escapeHtml(name)}</div>
             ${detailsHtml ? `<div class="cart-sub-container">${detailsHtml}</div>` : ""}
@@ -10691,7 +12868,7 @@
             data-block-index="${blockIndex}"
             data-product-index="${idx}"
           >
-            ${photo ? `<img class="cart-thumb" src="${escapeHtml(photo)}" alt="" />` : `<div class="cart-thumb">вЂ”</div>`}
+            ${photo ? `<img class="cart-thumb" src="${escapeHtml(photo)}" alt="" />` : `<div class="cart-thumb">—</div>`}
             <div class="cart-mid shop-combo-picker-mid">
               <div class="cart-title">${escapeHtml(title)}</div>
               ${detailsHtml ? `<div class="cart-sub-container" ${isExpanded ? `style="display:none;"` : ""}>${detailsHtml}</div>` : ""}
@@ -11093,7 +13270,7 @@
           listCards.push(`
             <div class="shop-pd-option-card is-clickable" data-action="product-overlay-opt-select-none" data-group-id="${groupId}">
               <div class="shop-pd-option-card-content">
-                <div class="shop-pd-option-thumb">вЂ”</div>
+                <div class="shop-pd-option-thumb">—</div>
                 <div class="shop-pd-option-info">
                   <div class="shop-pd-option-name">РќРµ РІС‹Р±РёСЂР°С‚СЊ</div>
                 </div>
@@ -11123,7 +13300,7 @@
           return `
             <div class="shop-pd-option-card is-clickable ${selById.has(itemId) ? "is-selected" : ""} ${hasVariants ? "has-variants" : ""}">
               <div class="shop-pd-option-card-content" data-action="product-overlay-opt-select-single" data-group-id="${groupId}" data-item-id="${itemId}">
-                ${itemPhoto ? `<img class="shop-pd-option-thumb" src="${escapeHtml(itemPhoto)}" alt="" />` : `<div class="shop-pd-option-thumb">вЂ”</div>`}
+                ${itemPhoto ? `<img class="shop-pd-option-thumb" src="${escapeHtml(itemPhoto)}" alt="" />` : `<div class="shop-pd-option-thumb">—</div>`}
                 <div class="shop-pd-option-info">
                   <div class="shop-pd-option-name">${escapeHtml(itemName)}</div>
                   <div class="shop-pd-option-price">${escapeHtml(toMoney(optionPrice))}</div>
@@ -11142,7 +13319,7 @@
               <div class="shop-pd-option-cards">
                 <div class="shop-pd-option-card is-clickable" data-action="product-overlay-opt-open-group" data-group-id="${groupId}">
                   <div class="shop-pd-option-card-content">
-                    ${selectedPhoto ? `<img class="shop-pd-option-thumb" src="${escapeHtml(selectedPhoto)}" alt="" />` : `<div class="shop-pd-option-thumb">вЂ”</div>`}
+                    ${selectedPhoto ? `<img class="shop-pd-option-thumb" src="${escapeHtml(selectedPhoto)}" alt="" />` : `<div class="shop-pd-option-thumb">—</div>`}
                     <div class="shop-pd-option-info">
                       <div class="shop-pd-option-name">${escapeHtml(selectedName)}</div>
                       ${selectedItem ? `<div class="shop-pd-option-price">${escapeHtml(toMoney(rowPrice))}</div>` : ``}
@@ -11200,7 +13377,7 @@
         return `
           <div class="shop-pd-option-card is-clickable ${isSelected ? "is-selected" : ""} ${hasVariants ? "has-variants" : ""}">
             <div class="shop-pd-option-card-content" ${rowAction}>
-              ${photo ? `<img class="shop-pd-option-thumb" src="${escapeHtml(photo)}" alt="" />` : `<div class="shop-pd-option-thumb">вЂ”</div>`}
+              ${photo ? `<img class="shop-pd-option-thumb" src="${escapeHtml(photo)}" alt="" />` : `<div class="shop-pd-option-thumb">—</div>`}
               <span class="shop-pd-option-info">
                 <span class="shop-pd-option-name">${escapeHtml(name)}</span>
                 <span class="shop-pd-option-price">${escapeHtml(toMoney(rowPrice))}</span>
@@ -11349,7 +13526,7 @@
       return `
         <div class="shop-pd-option-card">
           <div class="shop-pd-option-card-content">
-            ${photo ? `<img class="shop-pd-option-thumb" src="${escapeHtml(photo)}" alt="" />` : `<div class="shop-pd-option-thumb">вЂ”</div>`}
+            ${photo ? `<img class="shop-pd-option-thumb" src="${escapeHtml(photo)}" alt="" />` : `<div class="shop-pd-option-thumb">—</div>`}
             <div class="shop-pd-option-info">
               <div class="shop-pd-option-name" title="${escapeHtml(ing.ingredient_name || "")}">${escapeHtml(ing.ingredient_name || "")}</div>
             </div>
@@ -14258,7 +16435,7 @@
         if (benefitsBtn) {
           const orderId = Number(benefitsBtn.getAttribute("data-order-id") || 0);
           if (!(orderId > 0)) return;
-          void openRightBenefitsOverlay(orderId);
+          void openRightClientBenefitsCatalogOverlay(orderId);
           return;
         }
 
@@ -15855,6 +18032,7 @@
       auto_add_group_id: autoAddGroupId,
       is_gift_reward: Number(orderItem?.is_gift_reward || 0) === 1 ? 1 : 0,
       gift_reward_id: Number(orderItem?.gift_reward_id || 0) > 0 ? Number(orderItem.gift_reward_id) : null,
+      old_line_total: oldLineTotal > lineTotal ? oldLineTotal : 0,
       unit_price_before_discount: oldUnitPrice > unitPrice ? oldUnitPrice : 0,
       unit_price: unitPrice,
       sum: lineTotal,
@@ -15892,6 +18070,7 @@
       : null;
     cartItem.is_gift_reward = Number(orderItem?.is_gift_reward || 0) === 1 ? 1 : 0;
     cartItem.gift_reward_id = Number(orderItem?.gift_reward_id || 0) > 0 ? Number(orderItem.gift_reward_id) : null;
+    cartItem.old_line_total = oldLineTotal > lineTotal ? oldLineTotal : 0;
     cartItem.unit_price = qty > 0 ? roundPrice(lineTotal / qty) : 0;
     cartItem.unit_price_before_discount = oldLineTotal > lineTotal && qty > 0 ? roundPrice(oldLineTotal / qty) : 0;
     cartItem.sum = lineTotal;
@@ -16276,6 +18455,7 @@
       name: String(orderItem?.name || orderItem?.combo_title || "РљРѕРјР±Рѕ"),
       qty,
       combo_discount_percent: comboDiscountPercent,
+      old_line_total: oldLineTotalRaw > lineTotal ? oldLineTotalRaw : 0,
       unit_price_before_discount: roundPrice(unitOldPrice),
       unit_price: roundPrice(unitPrice),
       sum: roundPrice(lineTotal),
@@ -16323,7 +18503,12 @@
       }
       cartItems.push(await buildCartItemFromOrderProduct(orderItem));
     }
-    const normalizedCartItems = normalizeRightOrderCartItemsWithAutoAdd(Number(draft.id || 0), cartItems);
+    const preserveStoredLineTotals = opts?.preserveStoredLineTotals !== false;
+    const normalizedCartItems = normalizeRightOrderCartItemsWithAutoAdd(
+      Number(draft.id || 0),
+      cartItems,
+      { preserveStoredLineTotals }
+    );
 
     const phoneRaw = String(src?.customer_phone || "").trim();
     const normalizedPhone = normalizePhoneRu(phoneRaw);
@@ -16416,7 +18601,7 @@
       selectedVariants: {},
       ingredientStateByProduct: {},
       optionSelections: {},
-      rightOrders: [draft],
+      rightOrders: [{ ...draft, editCartTouched: false }],
       rightAddressDraftByOrder: hasSessionAddressDraft ? { [draft.id]: sessionAddressDraft } : {},
       rightAddressSelectedIdByOrder: deliveryAddressId > 0 ? { [draft.id]: deliveryAddressId } : {},
       rightActiveOrderId: Number(draft.id || 0) || null,
@@ -16600,4 +18785,7 @@
   bindEvents();
   load();
 })();
+
+
+
 

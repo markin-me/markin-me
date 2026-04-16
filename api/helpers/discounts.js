@@ -36,6 +36,21 @@ function normalizeMechanicType(value) {
   return 'simple_discount';
 }
 
+function toPositiveIntOrNull(value) {
+  const num = Number(value);
+  if (!Number.isInteger(num) || num < 1) return null;
+  return num;
+}
+
+function getDiscountConfig(discount) {
+  return parseJsonObject(discount?.mechanic_config_json, {});
+}
+
+function getDiscountFirstOrderLimit(discount) {
+  const config = getDiscountConfig(discount);
+  return toPositiveIntOrNull(config?.first_order_limit ?? discount?.first_order_limit);
+}
+
 function getSimpleDiscountVariant(discount) {
   const config = parseJsonObject(discount?.mechanic_config_json, {});
   const fallback = toText(discount?.activation_mode).toLowerCase() === 'promo_code'
@@ -58,6 +73,7 @@ function isPromoSimpleDiscount(discount) {
 
 function isDiscountActive(discount) {
   if (!discount || !discount.is_active) return false;
+  if (Number(discount?.is_deleted || 0) === 1 || discount?.is_deleted === true) return false;
 
   const now = new Date();
 
@@ -202,7 +218,86 @@ async function filterDiscountsByCustomerUsage(db, tenantId, customerId, discount
   });
 }
 
-async function getActiveDiscountsForCustomer(db, tenantId, storeId, customerId) {
+async function getCustomerFirstOrderWindowStats(db, tenantId, customerId, { excludeOrderId = null } = {}) {
+  const normalizedTenantId = Number(tenantId || 0);
+  const normalizedCustomerId = Number(customerId || 0);
+  const normalizedExcludeOrderId = Number(excludeOrderId || 0) || null;
+  if (!(normalizedTenantId > 0) || !(normalizedCustomerId > 0)) {
+    return {
+      customerId: normalizedCustomerId > 0 ? normalizedCustomerId : null,
+      completedSuccessfulOrders: 0,
+      activeReservedOrders: 0,
+    };
+  }
+
+  const whereClauses = [
+    'o.tenant_id = ?',
+    'o.customer_id = ?',
+    'o.is_active = 1',
+    "LOWER(COALESCE(os.code, '')) NOT IN ('canceled', 'cancelled')",
+  ];
+  const params = [normalizedTenantId, normalizedCustomerId];
+  if (normalizedExcludeOrderId) {
+    whereClauses.push('o.id <> ?');
+    params.push(normalizedExcludeOrderId);
+  }
+
+  const [rows] = await db.query(
+    `SELECT COALESCE(os.is_final, 0) AS is_final,
+            COUNT(*) AS total_count
+       FROM order_orders o
+       LEFT JOIN order_statuses os
+         ON os.tenant_id = o.tenant_id
+        AND os.store_id = o.store_id
+        AND os.id = o.status_id
+      WHERE ${whereClauses.join(' AND ')}
+      GROUP BY COALESCE(os.is_final, 0)`,
+    params
+  );
+
+  let completedSuccessfulOrders = 0;
+  let activeReservedOrders = 0;
+  (Array.isArray(rows) ? rows : []).forEach((row) => {
+    const totalCount = Number(row?.total_count || 0);
+    if (Number(row?.is_final || 0) === 1) {
+      completedSuccessfulOrders += totalCount;
+      return;
+    }
+    activeReservedOrders += totalCount;
+  });
+
+  return {
+    customerId: normalizedCustomerId,
+    completedSuccessfulOrders,
+    activeReservedOrders,
+  };
+}
+
+function isDiscountAllowedByFirstOrderLimit(discount, firstOrderStats = null) {
+  const firstOrderLimit = getDiscountFirstOrderLimit(discount);
+  if (!(firstOrderLimit > 0)) return true;
+  const normalizedCustomerId = Number(firstOrderStats?.customerId || 0);
+  if (!(normalizedCustomerId > 0)) return false;
+  const completedSuccessfulOrders = Number(firstOrderStats?.completedSuccessfulOrders || 0);
+  const activeReservedOrders = Number(firstOrderStats?.activeReservedOrders || 0);
+  return (completedSuccessfulOrders + activeReservedOrders) < firstOrderLimit;
+}
+
+async function filterDiscountsByFirstOrderLimit(db, tenantId, customerId, discounts, options = {}) {
+  const list = Array.isArray(discounts) ? discounts : [];
+  if (!list.length) return list;
+  const limitedDiscounts = list.filter((discount) => getDiscountFirstOrderLimit(discount) > 0);
+  if (!limitedDiscounts.length) return list;
+
+  const normalizedCustomerId = Number(customerId || 0);
+  const firstOrderStats = normalizedCustomerId > 0
+    ? await getCustomerFirstOrderWindowStats(db, tenantId, normalizedCustomerId, options)
+    : { customerId: null, completedSuccessfulOrders: 0, activeReservedOrders: 0 };
+
+  return list.filter((discount) => isDiscountAllowedByFirstOrderLimit(discount, firstOrderStats));
+}
+
+async function getActiveDiscountsForCustomer(db, tenantId, storeId, customerId, options = {}) {
   const customerCategoryIds = await getCustomerCategoryIds(db, tenantId, customerId);
   const [rows] = await db.query(
     `SELECT d.*,
@@ -253,6 +348,7 @@ async function getActiveDiscountsForCustomer(db, tenantId, storeId, customerId) 
     });
 
   discounts = await filterDiscountsByCustomerUsage(db, tenantId, customerId, discounts);
+  discounts = await filterDiscountsByFirstOrderLimit(db, tenantId, customerId, discounts, options);
   return discounts;
 }
 
@@ -302,10 +398,10 @@ async function getActiveDiscountsForProduct(db, tenantId, storeId, productId, ca
   }));
 }
 
-async function getOrderDiscounts(db, tenantId, storeId, customerId, orderTotal, customerDiscounts = null) {
+async function getOrderDiscounts(db, tenantId, storeId, customerId, orderTotal, customerDiscounts = null, options = {}) {
   const eligibleDiscounts = Array.isArray(customerDiscounts)
     ? customerDiscounts
-    : await getActiveDiscountsForCustomer(db, tenantId, storeId, customerId);
+    : await getActiveDiscountsForCustomer(db, tenantId, storeId, customerId, options);
 
   return eligibleDiscounts.filter((discount) => {
     if (toText(discount?.apply_to).toLowerCase() !== 'order') return false;
@@ -315,27 +411,72 @@ async function getOrderDiscounts(db, tenantId, storeId, customerId, orderTotal, 
 }
 
 async function recordDiscountUsage(db, tenantId, discountId, orderId, customerId, discountAmount, promoCodeId = null) {
+  const normalizedTenantId = Number(tenantId || 0);
+  const normalizedDiscountId = Number(discountId || 0);
+  const normalizedOrderId = Number(orderId || 0);
+  const normalizedCustomerId = Number(customerId || 0) || null;
+  const normalizedPromoCodeId = Number(promoCodeId || 0) || null;
+  const normalizedDiscountAmount = Number(discountAmount || 0);
+  if (!(normalizedTenantId > 0) || !(normalizedDiscountId > 0) || !(normalizedOrderId > 0) || !(normalizedDiscountAmount > 0)) {
+    return { recorded: false };
+  }
+
+  const [existingRows] = await db.query(
+    `SELECT id
+       FROM mkt_discount_usage
+      WHERE tenant_id = ?
+        AND discount_id = ?
+        AND order_id = ?
+        AND (
+          (? IS NULL AND promo_code_id IS NULL)
+          OR promo_code_id = ?
+        )
+      LIMIT 1`,
+    [
+      normalizedTenantId,
+      normalizedDiscountId,
+      normalizedOrderId,
+      normalizedPromoCodeId,
+      normalizedPromoCodeId,
+    ]
+  );
+  if (Array.isArray(existingRows) && existingRows.length) {
+    return {
+      recorded: false,
+      usageId: Number(existingRows[0]?.id || 0) || null,
+    };
+  }
+
   await db.query(
     `INSERT INTO mkt_discount_usage (tenant_id, discount_id, promo_code_id, order_id, customer_id, discount_amount)
      VALUES (?, ?, ?, ?, ?, ?)`,
-    [tenantId, discountId, promoCodeId || null, orderId, customerId || null, discountAmount]
+    [
+      normalizedTenantId,
+      normalizedDiscountId,
+      normalizedPromoCodeId,
+      normalizedOrderId,
+      normalizedCustomerId,
+      normalizedDiscountAmount,
+    ]
   );
 
   await db.query(
     `UPDATE mkt_discounts
         SET usage_count = usage_count + 1
       WHERE id = ? AND tenant_id = ?`,
-    [discountId, tenantId]
+    [normalizedDiscountId, normalizedTenantId]
   );
 
-  if (Number(promoCodeId || 0) > 0) {
+  if (normalizedPromoCodeId) {
     await db.query(
       `UPDATE mkt_discount_promo_codes
           SET usage_count = usage_count + 1
         WHERE id = ? AND tenant_id = ?`,
-      [promoCodeId, tenantId]
+      [normalizedPromoCodeId, normalizedTenantId]
     );
   }
+
+  return { recorded: true };
 }
 
 function applyBestDiscounts(discounts, price) {
@@ -404,7 +545,10 @@ module.exports = {
   isAutomaticSimpleDiscount,
   isPromoSimpleDiscount,
   getCustomerCategoryIds,
+  getCustomerFirstOrderWindowStats,
+  getDiscountFirstOrderLimit,
   matchDiscountAudience,
+  isDiscountAllowedByFirstOrderLimit,
   getActiveDiscountsForProduct,
   getActiveDiscountsForCustomer,
   getOrderDiscounts,

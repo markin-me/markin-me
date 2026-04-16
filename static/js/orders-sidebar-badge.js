@@ -12,6 +12,7 @@
   const FALLBACK_POLL_MS = 5000;
   const WAIT_TIMEOUT_MS = 20000;
   const WAIT_RETRY_MS = 1200;
+  const ORDER_BROWSER_ALERTS_ENABLED = false;
 
   let inFlight = false;
   let waitLoopStarted = false;
@@ -82,6 +83,7 @@
   }
 
   function requestNotificationPermissionSafe() {
+    if (!ORDER_BROWSER_ALERTS_ENABLED) return;
     if (!("Notification" in window)) return;
     if (Notification.permission !== "default") return;
     try {
@@ -91,6 +93,7 @@
   }
 
   function unlockAlertsOnce() {
+    if (!ORDER_BROWSER_ALERTS_ENABLED) return;
     const soundUrl = getTenantOrderSoundUrl();
     if (soundUrl) {
       try {
@@ -112,6 +115,7 @@
   }
 
   function playNewOrderSound() {
+    if (!ORDER_BROWSER_ALERTS_ENABLED) return;
     const soundUrl = getTenantOrderSoundUrl();
     if (!soundUrl || !audioUnlocked) return;
     try {
@@ -122,6 +126,7 @@
   }
 
   function showNewOrderNotification(orders) {
+    if (!ORDER_BROWSER_ALERTS_ENABLED) return;
     if (!("Notification" in window) || Notification.permission !== "granted") return;
     if (!Array.isArray(orders) || orders.length <= 0) return;
     const inc = Math.max(1, Number(orders.length || 1));

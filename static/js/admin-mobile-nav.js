@@ -11,6 +11,7 @@
   if (!body || !mobileShell || !mobileShellHandle || !shell || !railShell || !railNav) return;
 
   const MOBILE_MEDIA = "(max-width: 768px)";
+  const MOBILE_SHELL_DRAWER_ENABLED = false;
   const activePage = String(body.dataset.adminActivePage || "").trim();
   const chatHref = String(body.dataset.adminChatUrl || "/dashboard/chat").trim() || "/dashboard/chat";
   const mediaQuery = window.matchMedia(MOBILE_MEDIA);
@@ -100,6 +101,7 @@
   }
 
   function canUseShellSwipe() {
+    if (!MOBILE_SHELL_DRAWER_ENABLED) return false;
     if (!isMobile()) return false;
     if (body.classList.contains("sidebar-open")) return false;
     if (body.classList.contains("sheet-open")) return false;
@@ -108,6 +110,7 @@
   }
 
   function readStoredShellCollapsed() {
+    if (!MOBILE_SHELL_DRAWER_ENABLED) return false;
     try {
       return localStorage.getItem(MOBILE_SHELL_STATE_KEY) === "1";
     } catch (_err) {
@@ -116,6 +119,12 @@
   }
 
   function persistShellCollapsed(value) {
+    if (!MOBILE_SHELL_DRAWER_ENABLED) {
+      try {
+        localStorage.removeItem(MOBILE_SHELL_STATE_KEY);
+      } catch (_err) {}
+      return;
+    }
     try {
       localStorage.setItem(MOBILE_SHELL_STATE_KEY, value ? "1" : "0");
     } catch (_err) {}
@@ -127,10 +136,18 @@
     return Number.isFinite(raw) && raw > 0 ? raw : 22;
   }
 
+  function getShellCollapsedVisibleHeight() {
+    const styles = window.getComputedStyle(mobileShell);
+    const raw = parseFloat(styles.getPropertyValue("--admin-mobile-shell-collapsed-visible-h"));
+    const handleZone = getShellHandleZoneHeight();
+    if (!Number.isFinite(raw) || raw <= 0) return handleZone;
+    return Math.max(handleZone, raw);
+  }
+
   function getShellCollapsedOffset() {
     const rect = mobileShell.getBoundingClientRect();
-    const handleZone = getShellHandleZoneHeight();
-    return Math.max(0, Math.round(Math.max(0, rect.height - handleZone)));
+    const collapsedVisibleHeight = getShellCollapsedVisibleHeight();
+    return Math.max(0, Math.round(Math.max(0, rect.height - collapsedVisibleHeight)));
   }
 
   function syncShellHandleState() {
@@ -145,6 +162,10 @@
   }
 
   function setShellSnapMotion(nextCollapsed, fromOffsetOverride) {
+    if (!MOBILE_SHELL_DRAWER_ENABLED) {
+      clearShellSnapMotion();
+      return;
+    }
     if (!isMobile()) {
       clearShellSnapMotion();
       return;
@@ -200,24 +221,25 @@
     }
 
     const handleZone = getShellHandleZoneHeight();
+    const collapsedVisibleHeight = getShellCollapsedVisibleHeight();
     const measuredHeight = Math.max(0, Number(mobileShell.getBoundingClientRect().height || 0));
     const shellHeight = Math.max(
-      handleZone,
+      collapsedVisibleHeight,
       dragging && shellDragMaxOffset > 0
-        ? shellDragMaxOffset + handleZone
+        ? shellDragMaxOffset + collapsedVisibleHeight
         : measuredHeight,
     );
     const maxOffset = Math.max(
       0,
       dragging && shellDragMaxOffset > 0
         ? shellDragMaxOffset
-        : (shellHeight - handleZone),
+        : (shellHeight - collapsedVisibleHeight),
     );
     const rawOffset = Number.isFinite(Number(offsetOverride))
       ? Number(offsetOverride)
       : (shellCollapsed ? maxOffset : 0);
     const liveOffset = Math.max(0, Math.min(maxOffset, rawOffset));
-    const visibleHeight = Math.max(handleZone, Math.max(0, shellHeight - liveOffset));
+    const visibleHeight = Math.max(collapsedVisibleHeight, Math.max(0, shellHeight - liveOffset));
 
     if (!freezeChatLayoutDuringDrag) {
       body.style.setProperty("--admin-mobile-shell-live-offset", `${Number(liveOffset.toFixed(3))}px`);
@@ -236,12 +258,13 @@
 
   function applyShellCollapsedState(nextCollapsed, options) {
     const config = options && typeof options === "object" ? options : {};
+    const targetCollapsed = MOBILE_SHELL_DRAWER_ENABLED && nextCollapsed === true;
     if (config.skipAnimation === true) {
       clearShellSnapMotion();
     } else {
-      setShellSnapMotion(nextCollapsed === true, config.fromOffset);
+      setShellSnapMotion(targetCollapsed, config.fromOffset);
     }
-    shellCollapsed = nextCollapsed === true;
+    shellCollapsed = targetCollapsed;
     body.classList.toggle("admin-mobile-shell-collapsed", shellCollapsed);
     syncShellHandleState();
     if (config.skipPersist !== true) {
@@ -663,6 +686,7 @@
     });
 
     if (!mobile) {
+      mobileShell.classList.remove("is-single-row");
       mobileShell.classList.remove("is-shell-dragging");
       mobileShell.style.removeProperty("--admin-mobile-shell-base-offset");
       clearShellSnapMotion();
@@ -678,6 +702,7 @@
 
   function renderRailModel(model) {
     if (!model || !Array.isArray(model.items) || !model.items.length || !isMobile()) {
+      mobileShell.classList.add("is-single-row");
       railNav.innerHTML = "";
       railShell.classList.add("hidden");
       railShell.setAttribute("aria-hidden", "true");
@@ -685,6 +710,7 @@
       return;
     }
 
+    mobileShell.classList.remove("is-single-row");
     railNav.innerHTML = model.items.map(function (item) {
       return (
         '<button type="button" class="admin-mobile-rail-link' + (item.active ? " is-active" : "") + '"' +
@@ -785,6 +811,10 @@
   }
 
   function bindShellGestures() {
+    if (!MOBILE_SHELL_DRAWER_ENABLED) {
+      resetShellDrag();
+      return;
+    }
     if (mobileShell.dataset.dragBound === "1") return;
     mobileShell.dataset.dragBound = "1";
 
@@ -879,7 +909,7 @@
     });
   }
 
-  shellCollapsed = readStoredShellCollapsed();
+  shellCollapsed = MOBILE_SHELL_DRAWER_ENABLED ? readStoredShellCollapsed() : false;
   bindShellGestures();
   bindShellMotionCleanup();
   ensureBottomNavBuilt();

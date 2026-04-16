@@ -1559,6 +1559,8 @@
         if (sheetScreen === "benefits") return "benefits";
         if (sheetScreen === "benefitDetail") {
           if (String(sheetData?.benefitDetailMode || "").trim() === "gift-claim") return "benefit-gift-claim";
+          if (String(sheetData?.benefitDetailMode || "").trim() === "gift-action") return "benefit-gift-claim";
+          if (String(sheetData?.benefitDetailMode || "").trim() === "benefit-apply") return "benefit-apply";
           return "sheet";
         }
         if (sheetScreen === "checkout") return "checkout";
@@ -1614,6 +1616,7 @@
     const panelName = String(panel || "");
     const benefitsSourceScreen = String(options.sheetData?.benefitsSourceScreen || "").trim().toLowerCase();
     if (panelName === "benefit-gift-claim") return isCartSheetOpen ? "gift-claim-actions" : "nav";
+    if (panelName === "benefit-apply") return isCartSheetOpen ? "benefit-apply-actions" : "nav";
     if (panelName === "benefits") {
       if (!isCartSheetOpen) return "nav";
       if (benefitsSourceScreen === "nav") return "benefits-nav-actions";
@@ -1649,7 +1652,7 @@
     const stateSnapshot = snapshot && typeof snapshot === "object" ? snapshot : window.getShopMobileUiState();
     const isMobile = Boolean(stateSnapshot && stateSnapshot.isMobile);
     const panelName = String(stateSnapshot?.panel || "").trim();
-    const isBenefitsPanel = panelName === "benefits" || panelName === "benefit-gift-claim";
+    const isBenefitsPanel = panelName === "benefits" || panelName === "benefit-gift-claim" || panelName === "benefit-apply";
     if (!isMobile) {
       document.body.classList.remove("shop-benefits-sheet-open");
       return;
@@ -1685,7 +1688,7 @@
     const sheetType = String(stateSnapshot?.sheet?.type || "").trim();
     const benefitsInnerOverlayOpen = document.body.classList.contains("shop-benefits-overlay-open");
     let mode = modeRaw || "nav";
-    if ((mode === "cart-actions" || mode === "cart-empty-actions" || mode === "checkout-actions" || mode === "benefits-actions" || mode === "benefits-nav-actions" || mode === "gift-claim-actions") && !(sheetOpen && sheetType === "cart")) {
+    if ((mode === "cart-actions" || mode === "cart-empty-actions" || mode === "checkout-actions" || mode === "benefits-actions" || mode === "benefits-nav-actions" || mode === "gift-claim-actions" || mode === "benefit-apply-actions") && !(sheetOpen && sheetType === "cart")) {
       mode = "nav";
     }
     if (benefitsInnerOverlayOpen && panelName === "benefits") {
@@ -1698,12 +1701,13 @@
     };
 
     const showProductActions = mode === "product-actions";
-    const showCartActions = mode === "cart-actions" || mode === "cart-empty-actions" || mode === "checkout-actions" || mode === "benefits-actions" || mode === "benefits-nav-actions" || mode === "gift-claim-actions";
+    const showCartActions = mode === "cart-actions" || mode === "cart-empty-actions" || mode === "checkout-actions" || mode === "benefits-actions" || mode === "benefits-nav-actions" || mode === "gift-claim-actions" || mode === "benefit-apply-actions";
     const showCartActionsCart = mode === "cart-actions";
     const showCartActionsCheckout = mode === "checkout-actions";
     const showCartActionsBenefits = mode === "benefits-actions";
     const showCartActionsBenefitsNav = mode === "benefits-nav-actions";
     const showCartActionsGiftClaim = mode === "gift-claim-actions";
+    const showCartActionsBenefitApply = mode === "benefit-apply-actions";
     const showAddressActions = mode === "address-actions";
     const showAddressConfirm = mode === "address-confirm";
     const showOrderDetailsActions = mode === "order-details-actions";
@@ -1713,7 +1717,7 @@
     setVisible(elMobileCartActions, showCartActions);
     setVisible(elMobileCartActionsCart, showCartActionsCart);
     setVisible(elMobileCartActionsCheckout, showCartActionsCheckout);
-    setVisible(elMobileCartActionsBenefits, showCartActionsBenefits);
+    setVisible(elMobileCartActionsBenefits, showCartActionsBenefits || showCartActionsBenefitApply);
     setVisible(elMobileCartActionsGiftClaim, showCartActionsGiftClaim);
     setVisible(elMobileBenefitsPromoWrap, showCartActionsBenefits || showCartActionsBenefitsNav);
     setVisible(elMobileBenefitsInlineApplyBtn, showCartActionsBenefitsNav);
@@ -1807,7 +1811,7 @@
     let tab = currentTab || "menu";
     if (!currentTab) {
       if (panel === "categories") tab = "menu";
-      else if (panel === "benefits" || panel === "benefit-gift-claim") tab = "benefits";
+      else if (panel === "benefits" || panel === "benefit-gift-claim" || panel === "benefit-apply") tab = "benefits";
       else if (panel === "cart" || panel === "checkout") tab = "cart";
       else if (panel === "profile") tab = "profile";
       else if (panel === "favorites") tab = "fav";
@@ -8735,8 +8739,9 @@ async function initAddresses() {
         if (groupType === "single" && group.is_required && group.items?.length > 0) {
           // ??? single ? is_required ? ????? ?????? ??????? ??? ?????????
           const defaultItem = group.items[0];
-          if (defaultItem?.price) {
-            price += Number(defaultItem.price || 0);
+          const defaultItemPrice = getOptionItemResolvedDefaultPrice(defaultItem);
+          if (Number.isFinite(defaultItemPrice)) {
+            price += defaultItemPrice;
           }
         } else if (groupType === "multiple_item" || groupType === "multiple_group") {
           const minSelect = Math.max(0, Number(group?.min_select ?? 0));
@@ -13000,6 +13005,16 @@ function updateCartBadge() {
     return match ? Number(match[0]) : NaN;
   }
 
+  function getOptionItemDefaultVariantIndex(optionItem) {
+    const variants = Array.isArray(optionItem?.variants) ? optionItem.variants : [];
+    const variantGroup = variants[0];
+    const values = Array.isArray(variantGroup?.values) ? variantGroup.values : [];
+    if (!values.length) return null;
+    const rawIndex = variantGroup?.default_value_index != null ? Number(variantGroup.default_value_index) : 0;
+    if (!Number.isFinite(rawIndex) || rawIndex < 0 || rawIndex >= values.length) return 0;
+    return rawIndex;
+  }
+
   /**
    * ???? ??????-????? ? ?????? ?????????? ???????? (?????? ?????).
    * ???????????? ??? ????? ?????? (??/?, ?/?? ? ?.?.): ?????????? ??????????? ??? ??? ????????? ???????? ??????.
@@ -13050,6 +13065,29 @@ function updateCartBadge() {
       unitPrice = unitPrice * (1 - discountPercent / 100);
     }
     return unitPrice;
+  }
+
+  function getOptionItemVariantPriceDiff(optionItem, variantGroup, selectedIndex) {
+    const unitPrice = Number(getOptionItemVariantUnitPrice(optionItem, variantGroup, selectedIndex) || 0);
+    const productId = Number(optionItem?.target_product_id || 0);
+    const targetProduct = productId > 0 ? state.productCache.get(productId) : null;
+    const basePrice = targetProduct
+      ? Number(targetProduct.price || 0)
+      : Number(optionItem?.price || 0);
+    if (!Number.isFinite(unitPrice) || !Number.isFinite(basePrice)) return 0;
+    return unitPrice - basePrice;
+  }
+
+  function getOptionItemResolvedDefaultPrice(optionItem) {
+    const basePrice = Number(optionItem?.price || 0);
+    if (!Number.isFinite(basePrice)) return 0;
+    const variants = Array.isArray(optionItem?.variants) ? optionItem.variants : [];
+    const variantGroup = variants[0];
+    const defaultVariantIndex = getOptionItemDefaultVariantIndex(optionItem);
+    if (!variantGroup || !Number.isFinite(Number(defaultVariantIndex))) {
+      return basePrice;
+    }
+    return basePrice + getOptionItemVariantPriceDiff(optionItem, variantGroup, Number(defaultVariantIndex));
   }
 
   function getVariantUnitPrice(product, variants, variantState) {

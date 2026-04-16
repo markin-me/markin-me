@@ -30,6 +30,7 @@
   const CHAT_THREAD_LAYOUT_BURST_GAP_MS = 110;
   const CHAT_THREAD_LAYOUT_BURST_COOLDOWN_MS = 260;
   const CHAT_SCROLL_DOWN_SHOW_DISTANCE_PX = 6;
+  const CHAT_SCROLL_DOWN_FORCE_SHOW_MS = 700;
   const CHAT_STICKY_BOTTOM_THRESHOLD_PX = 18;
   const CHAT_PINNED_BOTTOM_PERSIST_THRESHOLD_PX = 2;
   const CHAT_THREAD_EDGE_SPRING_TOUCH_LOCK_PX = 4;
@@ -65,6 +66,7 @@
   const CHAT_UNANSWERED_ALERT_DELAY_MS = 5000;
   const CHAT_PUSH_SYNC_DEBOUNCE_MS = 180;
   const CHAT_PUSH_SUBSCRIPTION_CLIENT_ID = 0;
+  const CHAT_BROWSER_ALERTS_ENABLED = false;
   const CHAT_AUTO_OPEN_QUERY_PARAM = "open_chat";
   const CHAT_AUTO_OPEN_SOURCE_PARAM = "chat_source";
   const CHAT_AUTO_OPEN_CLIENT_ID_PARAM = "chat_client_id";
@@ -89,6 +91,11 @@
   const CHAT_THREAD_EAGER_IMAGE_COUNT = 4;
   const CHAT_THREAD_LOAD_MORE_THRESHOLD_PX = 20;
   const CHAT_TOUCH_CONTEXT_LONG_PRESS_MS = 430;
+  const CHAT_TOUCH_CONTEXT_LONG_PRESS_MOVE_CANCEL_PX = 14;
+  const CHAT_MOBILE_CONTEXT_MENU_APPEAR_DELAY_MS = 140;
+  const CHAT_MOBILE_CONTEXT_RELAYOUT_LOCK_MS = 260;
+  const CHAT_MOBILE_CONTEXT_CLONE_OPEN_TRANSITION = "transform .46s cubic-bezier(.22,.61,.36,1)";
+  const CHAT_MOBILE_CONTEXT_CLONE_RELAYOUT_TRANSITION = "transform .46s cubic-bezier(.22,.61,.36,1)";
   const CHAT_TOUCH_CONTEXT_MOVE_CANCEL_PX = 9;
   const CHAT_TOUCH_SWIPE_REPLY_TRIGGER_PX = 56;
   const CHAT_TOUCH_SWIPE_MAX_SHIFT_PX = 96;
@@ -282,6 +289,7 @@
       selectionCloseBtn: $("#chatSelectionCloseBtn"),
       selectionCopyBtn: $("#chatSelectionCopyBtn"),
       selectionDeleteBtn: $("#chatSelectionDeleteBtn"),
+      startupSplash: $("#chatStartupSplash"),
       bootstrapLoader: $("#chatBootstrapLoader"),
     },
   };
@@ -350,6 +358,8 @@
     pendingScrollMessageIdsByClient: {},
     threadScrollTopByClient: {},
     threadPinnedBottomByClient: {},
+    forceDesktopBottomClientId: "",
+    forceDesktopBottomUntil: 0,
     peerTypingByClient: {},
     peerTypingUpdatedAtByClient: {},
     peerTypingHideTimers: {},
@@ -385,10 +395,28 @@
     activeOrdersLastFetchedAt: 0,
     activeOrdersHydratedClientId: 0,
     rightPanelOrderId: 0,
+
+    // Right column (chat) local tabs: order/client panels.
+    rightTabs: [],
+    activeRightTabKey: "",
+    rightTabActivationToken: 0,
+    rightPanelClientOrdersScrollTop: 0,
+    rightPanelClientContentTab: "addresses",
+    lastTouchLongPressContextMenuAt: 0,
+    touchContextMenuArmUntil: 0,
+    suppressOrderCardContextMenuUntil: 0,
+    rightOrderOpenedFromMessageBubble: false,
+    rightOrderOpenedFromHeader: false,
   };
   state.threadScrollTopByClient = sanitizeStoredThreadScrollTopByClient(state.store?.ui?.threadScrollTopByClient);
   state.threadPinnedBottomByClient = sanitizeStoredThreadPinnedBottomByClient(state.store?.ui?.threadPinnedBottomByClient);
   state.clientsPager = createDefaultClientsPager();
+  if (dom.center.startupSplash && document.body && dom.center.startupSplash.parentElement !== document.body) {
+    document.body.appendChild(dom.center.startupSplash);
+  }
+  if (document.body && dom.center.startupSplash && !dom.center.startupSplash.classList.contains("hidden")) {
+    document.body.classList.add("chat-startup-splash-active");
+  }
 
   function refreshDesktopHeaderDomRefs() {
     dom.center.headerOrder = $("#chatHeaderOrder");
@@ -740,6 +768,8 @@
   let threadLayoutAnimationLastRunAt = 0;
   let threadLayoutAnimationQuietUntil = 0;
   let threadLayoutAnimationToken = 0;
+  let scrollDownForceVisibleUntil = 0;
+  let scrollDownForceVisibleReleaseTimer = 0;
 
   function shouldSuppressPinnedBottomAutoScroll() {
     return Date.now() < Number(adminChatSuppressPinnedBottomUntil || 0);
@@ -2191,6 +2221,7 @@
 
   function syncAdminMobileChatOverlayLayout() {
     const stack = dom.center.stack;
+    const messagesWrap = dom.center.messagesWrap;
     if (!stack) return;
 
     if (!isAdminMobileChatLayout()) {
@@ -2200,6 +2231,9 @@
       stack.style.removeProperty("--chat-mobile-thread-top-inset");
       stack.style.removeProperty("--chat-mobile-thread-bottom-inset");
       stack.style.removeProperty("--chat-scroll-down-composer-extra");
+      if (messagesWrap) {
+        messagesWrap.style.removeProperty("padding-bottom");
+      }
       syncAdminMobileChatScrollDownPosition();
       syncComposerSendButtonFocusLock();
       return;
@@ -2216,6 +2250,11 @@
       "--chat-scroll-down-composer-extra",
       `${Math.max(0, bottomOverlayHeight - 26)}px`
     );
+    if (messagesWrap) {
+      // Hard fallback: reserve real footer height in the scrolling container itself.
+      // Use !important because mobile chat CSS sets padding-bottom: 0 !important.
+      messagesWrap.style.setProperty("padding-bottom", `${Math.max(0, bottomOverlayHeight)}px`, "important");
+    }
     syncAdminMobileThreadBottomInset();
     syncAdminMobileChatScrollDownPosition();
     syncComposerSendButtonFocusLock();
@@ -3005,6 +3044,18 @@
     return safeView;
   }
 
+  function syncMobileClientCardFooter(view) {
+    if (!document.body || !document.body.classList.contains("page-chat")) return;
+    if (!isChatMobileViewport()) return;
+    const footer = document.getElementById("clientBenefitsFooter");
+    if (!footer) return;
+    const nextView = String(view || "").trim().toLowerCase();
+    const hasActiveClient = Number(state.activeClientId || 0) > 0;
+    const isOrderMode = document.body.classList.contains("chat-right-order-mode");
+    const shouldShow = nextView === "right" && !isOrderMode && hasActiveClient;
+    footer.classList.toggle("hidden", !shouldShow);
+  }
+
   function syncMobileChatView(view, options = {}) {
     if (!document.body || !document.body.classList.contains("page-chat")) return "center";
     if (!isChatMobileViewport()) {
@@ -3021,15 +3072,14 @@
     }
     document.body.classList.toggle("chat-mobile-left-open", nextView === "clients");
     document.body.classList.toggle("chat-mobile-right-open", nextView === "right");
-    if (nextView !== "right") {
-      document.body.classList.remove("sheet-open");
-    }
+    document.body.classList.remove("sheet-open");
     if (options.persistState !== false) {
       writePersistedMobileChatView(nextView);
     }
     if (nextView === "clients") {
       restoreClientsListScrollPosition({ defer: true });
     }
+    syncMobileClientCardFooter(nextView);
     return nextView;
   }
 
@@ -3061,24 +3111,29 @@
     return isOpen ? closeClientsPanel(options) : openClientsPanel(options);
   }
 
-  function openClientDetailsPanel(options = {}) {
+  async function openClientDetailsPanel(options = {}) {
     const activeClientId = Number(state.activeClientId || 0);
     if (activeClientId <= 0) return "clients";
+    showChatRightPane("client");
+    const selectedFromList = state.clients.find((client) => Number(client?.id || 0) === activeClientId) || null;
+    upsertChatRightTab("client", activeClientId, selectedFromList?.name || "");
     const clientsRightApi = getClientsRightApi();
+    if (clientsRightApi && typeof clientsRightApi.setChatRightForceEmpty === "function") {
+      clientsRightApi.setChatRightForceEmpty(false);
+    }
     if (clientsRightApi) {
-      const selectedFromList = state.clients.find((client) => Number(client?.id || 0) === activeClientId) || null;
       const isGuestClient = isGuestChatClient(selectedFromList);
       if (
         isGuestClient
         && typeof clientsRightApi.selectGuestChatClient === "function"
       ) {
-        clientsRightApi.selectGuestChatClient(
+        await clientsRightApi.selectGuestChatClient(
           activeClientId,
           selectedFromList?.name || "",
           { skipMobileSheet: true }
         ).catch(console.error);
       } else if (typeof clientsRightApi.selectClientById === "function") {
-        clientsRightApi.selectClientById(
+        await clientsRightApi.selectClientById(
           activeClientId,
           selectedFromList?.name || "",
           {
@@ -3088,7 +3143,10 @@
         ).catch(console.error);
       }
 
-      if (typeof clientsRightApi.openMobileSheet === "function") {
+      if (
+        typeof clientsRightApi.openMobileSheet === "function"
+        && !(document.body && document.body.classList.contains("page-chat"))
+      ) {
         clientsRightApi.openMobileSheet(options);
         return "right";
       }
@@ -3152,9 +3210,12 @@
   let lastMessageHeartTap = null;
   let suppressFloatingMenuDocumentClickUntil = 0;
   let suppressFloatingMenuAutoHideUntil = 0;
+  let chatStartupSplashHideTimer = 0;
   const CHAT_TOUCH_MENU_INTERACTION_GUARD_MS = 380;
   let reactionBarAnchorRect = null;
   let contextMenuAnchorPoint = null;
+  let mobileContextSceneUi = null;
+  let mobileContextSceneState = null;
   let activeThreadSsePullTimer = 0;
   let activeThreadSsePullInFlight = false;
   let activeThreadSsePullPending = false;
@@ -3167,6 +3228,7 @@
   let webPushSubscriptionVapidKey = "";
   let webPushSyncRequestedWithPermission = false;
   let webPushSyncForceRequested = false;
+  let webPushDisableInFlight = false;
   let hardContextMenuBlockBound = false;
   const activeApiAbortControllers = new Set();
   const adminPushVapidStorageKey = "dashboard_chat_push_vapid_t" + String(getTenantId());
@@ -3212,6 +3274,24 @@
   function setChatBootstrapLoading(active) {
     const nextActive = active === true;
     state.isBootstrapLoading = nextActive;
+    if (dom.center.startupSplash) {
+      if (chatStartupSplashHideTimer) {
+        window.clearTimeout(chatStartupSplashHideTimer);
+        chatStartupSplashHideTimer = 0;
+      }
+      if (nextActive) {
+        if (document.body) document.body.classList.add("chat-startup-splash-active");
+        dom.center.startupSplash.classList.remove("hidden", "is-done");
+      } else {
+        dom.center.startupSplash.classList.add("is-done");
+        chatStartupSplashHideTimer = window.setTimeout(() => {
+          chatStartupSplashHideTimer = 0;
+          if (!dom.center.startupSplash) return;
+          dom.center.startupSplash.classList.add("hidden");
+          if (document.body) document.body.classList.remove("chat-startup-splash-active");
+        }, 320);
+      }
+    }
     if (dom.center.bootstrapLoader) {
       dom.center.bootstrapLoader.classList.toggle("hidden", !nextActive);
     }
@@ -3277,6 +3357,306 @@
     const api = window.__clientsDashboardApi;
     if (!api) return null;
     return api;
+  }
+
+  function getOrdersRightApi() {
+    const api = window.__ordersDashboardApi;
+    if (!api) return null;
+    return api;
+  }
+
+  function moveChatRightPaneNode(node, target) {
+    if (!node || !target || node.parentElement === target) return;
+    target.appendChild(node);
+  }
+
+  function captureClientOrdersListScrollTop() {
+    if (!document.body || !document.body.classList.contains("page-chat")) return;
+    const list = document.getElementById("clientOrdersList");
+    if (!list) return;
+    state.rightPanelClientOrdersScrollTop = Math.max(0, Number(list.scrollTop || 0));
+  }
+
+  function captureClientContentTab() {
+    if (!document.body || !document.body.classList.contains("page-chat")) return;
+    const activeTabBtn = document.querySelector('#clientContentTabs .shop-profile-tab.is-active[data-ctab]');
+    const tabValue = String(activeTabBtn?.getAttribute("data-ctab") || "").trim().toLowerCase();
+    if (tabValue === "orders" || tabValue === "addresses") {
+      state.rightPanelClientContentTab = tabValue;
+    }
+  }
+
+  function restoreClientOrdersListScrollTop() {
+    if (!document.body || !document.body.classList.contains("page-chat")) return;
+    const savedTop = Math.max(0, Number(state.rightPanelClientOrdersScrollTop || 0));
+    const list = document.getElementById("clientOrdersList");
+    if (!list) return;
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        list.scrollTop = savedTop;
+      });
+    });
+  }
+
+  function restoreClientPanelState() {
+    if (!document.body || !document.body.classList.contains("page-chat")) return;
+    const tabValue = String(state.rightPanelClientContentTab || "").trim().toLowerCase();
+    if (tabValue === "orders" || tabValue === "addresses") {
+      const tabBtn = document.querySelector(`#clientContentTabs .shop-profile-tab[data-ctab="${cssEscape(tabValue)}"]`);
+      if (tabBtn && typeof tabBtn.click === "function") {
+        tabBtn.click();
+      }
+    }
+    if (tabValue === "orders") {
+      restoreClientOrdersListScrollTop();
+    }
+  }
+
+  function hideLegacyRightPaneHeadersForChat() {
+    if (!document.body || !document.body.classList.contains("page-chat")) return;
+    const ids = ["clientTabsHeader", "orderTabsHeader", "orderTabsHeaderCheckout"];
+    ids.forEach((id) => {
+      const node = document.getElementById(id);
+      if (!node) return;
+      node.classList.add("hidden");
+      node.setAttribute("aria-hidden", "true");
+      node.style.setProperty("display", "none", "important");
+    });
+  }
+
+  function getChatRightTabsHeaderHost(mode) {
+    const nextMode = String(mode || "").trim().toLowerCase() === "order" ? "order" : "client";
+    if (nextMode === "order") {
+      const ordersPane = document.getElementById("ordersRightPane");
+      if (!ordersPane) return null;
+      return ordersPane.querySelector(".panel") || ordersPane;
+    }
+    return document.querySelector(".client-info-panel");
+  }
+
+  function placeChatRightTabsHeader(mode) {
+    if (!document.body || !document.body.classList.contains("page-chat")) return;
+    const header = document.getElementById("chatRightTabsHeader");
+    if (!header) return;
+    const host = getChatRightTabsHeaderHost(mode);
+    if (!host) return;
+    if (header.parentElement === host && host.firstElementChild === header) return;
+    host.insertBefore(header, host.firstChild || null);
+  }
+
+  function showChatRightPane(mode) {
+    const nextMode = String(mode || "").trim().toLowerCase() === "order" ? "order" : "client";
+    const host = document.querySelector(".page-chat .page-col-right");
+    const storage = document.getElementById("chatRightPaneStorage");
+    const clientPane = document.querySelector(".client-info-panel");
+    const ordersPane = document.getElementById("ordersRightPane");
+    const ordersCheckoutPane = document.getElementById("ordersCheckoutRightPane");
+    if (host && storage && clientPane && ordersPane && ordersCheckoutPane) {
+      if (nextMode === "order") {
+        moveChatRightPaneNode(clientPane, storage);
+        moveChatRightPaneNode(ordersPane, host);
+        moveChatRightPaneNode(ordersCheckoutPane, host);
+      } else {
+        moveChatRightPaneNode(ordersPane, storage);
+        moveChatRightPaneNode(ordersCheckoutPane, storage);
+        moveChatRightPaneNode(clientPane, host);
+      }
+    }
+    document.body.classList.toggle("chat-right-order-mode", nextMode === "order");
+    placeChatRightTabsHeader(nextMode);
+    hideLegacyRightPaneHeadersForChat();
+  }
+
+  function clearChatRightPane() {
+    if (!document.body || !document.body.classList.contains("page-chat")) return;
+    const host = document.querySelector(".page-chat .page-col-right");
+    const storage = document.getElementById("chatRightPaneStorage");
+    const clientPane = document.querySelector(".client-info-panel");
+    const ordersPane = document.getElementById("ordersRightPane");
+    const ordersCheckoutPane = document.getElementById("ordersCheckoutRightPane");
+    const tabsHeader = document.getElementById("chatRightTabsHeader");
+    if (host && storage) {
+      moveChatRightPaneNode(clientPane, host);
+      moveChatRightPaneNode(ordersPane, storage);
+      moveChatRightPaneNode(ordersCheckoutPane, storage);
+      moveChatRightPaneNode(tabsHeader, clientPane || storage);
+    }
+    document.body.classList.remove("chat-right-order-mode");
+    if (tabsHeader) {
+      tabsHeader.classList.add("hidden");
+      tabsHeader.setAttribute("aria-hidden", "true");
+    }
+    const clientEmpty = document.getElementById("clientEmpty");
+    const clientInfoWrap = document.getElementById("clientInfoWrap");
+    const clientOrderInfoWrap = document.getElementById("clientOrderInfoWrap");
+    if (clientEmpty) clientEmpty.classList.remove("hidden");
+    if (clientInfoWrap) clientInfoWrap.classList.add("hidden");
+    if (clientOrderInfoWrap) clientOrderInfoWrap.classList.add("hidden");
+    const clientsRightApi = getClientsRightApi();
+    if (clientsRightApi && typeof clientsRightApi.setChatRightForceEmpty === "function") {
+      clientsRightApi.setChatRightForceEmpty(true);
+    }
+    hideLegacyRightPaneHeadersForChat();
+  }
+
+  function buildChatRightTabKey(kind, id) {
+    const k = String(kind || "").trim().toLowerCase() === "order" ? "order" : "client";
+    const n = Number(id || 0);
+    return `${k}:${Number.isFinite(n) ? n : 0}`;
+  }
+
+  function renderChatRightTabs() {
+    if (!document.body || !document.body.classList.contains("page-chat")) return;
+    const wrap = document.getElementById("chatRightTabs");
+    if (!wrap) return;
+    const tabs = Array.isArray(state.rightTabs) ? state.rightTabs : [];
+    const clientsRightApi = getClientsRightApi();
+    if (clientsRightApi && typeof clientsRightApi.setChatRightForceEmpty === "function") {
+      clientsRightApi.setChatRightForceEmpty(tabs.length === 0);
+    }
+    const header = document.getElementById("chatRightTabsHeader");
+    if (header) {
+      const hasTabs = tabs.length > 0;
+      header.classList.toggle("hidden", !hasTabs);
+      header.setAttribute("aria-hidden", hasTabs ? "false" : "true");
+    }
+    wrap.innerHTML = tabs.map((t) => {
+      const key = buildChatRightTabKey(t.kind, t.id);
+      const selected = key && key === String(state.activeRightTabKey || "");
+      const title = t.kind === "order" ? `#${t.id}` : (String(t.title || "").trim() || "Клиент");
+      const safeTitle = escapeHtml(title);
+      return `
+        <div class="product-tab ${selected ? "is-active" : ""}" role="tab"
+          data-chat-right-tab="${escapeHtml(key)}"
+          aria-selected="${selected ? "true" : "false"}"
+          title="${safeTitle}">
+          <span class="product-tab-title">${safeTitle}</span>
+          <button class="product-tab-close" type="button" data-chat-right-tab-close="${escapeHtml(key)}" aria-label="Закрыть вкладку">&times;</button>
+        </div>
+      `;
+    }).join("");
+  }
+
+  function upsertChatRightTab(kind, id, title = "") {
+    const tabKind = String(kind || "").trim().toLowerCase() === "order" ? "order" : "client";
+    const n = Number(id || 0);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    if (!Array.isArray(state.rightTabs)) state.rightTabs = [];
+    const key = buildChatRightTabKey(tabKind, n);
+    const existing = state.rightTabs.find((t) => buildChatRightTabKey(t.kind, t.id) === key) || null;
+    if (existing) {
+      if (tabKind === "client" && title) existing.title = String(title || "").trim();
+    } else {
+      state.rightTabs.push({ kind: tabKind, id: n, title: String(title || "").trim() });
+    }
+    state.activeRightTabKey = key;
+    state.rightTabActivationToken += 1;
+    renderChatRightTabs();
+    return key;
+  }
+
+  function closeChatRightTab(key) {
+    const k = String(key || "").trim();
+    if (!k || !Array.isArray(state.rightTabs)) return;
+    state.rightTabs = state.rightTabs.filter((t) => buildChatRightTabKey(t.kind, t.id) !== k);
+    if (String(state.activeRightTabKey || "") === k) {
+      const last = state.rightTabs[state.rightTabs.length - 1] || null;
+      state.activeRightTabKey = last ? buildChatRightTabKey(last.kind, last.id) : "";
+    }
+    state.rightTabActivationToken += 1;
+    renderChatRightTabs();
+    if (state.activeRightTabKey) {
+      activateChatRightTab(state.activeRightTabKey).catch(console.error);
+      return;
+    }
+    state.rightTabActivationToken += 1;
+    clearChatRightPane();
+  }
+
+  async function activateChatRightTab(key) {
+    const k = String(key || "").trim();
+    if (!k) return;
+    const activationToken = ++state.rightTabActivationToken;
+    const tabExists = Array.isArray(state.rightTabs)
+      && state.rightTabs.some((t) => buildChatRightTabKey(t.kind, t.id) === k);
+    if (!tabExists) return;
+    const [kindRaw, idRaw] = k.split(":");
+    const kind = kindRaw === "order" ? "order" : "client";
+    const id = Number(idRaw || 0);
+    if (!Number.isFinite(id) || id <= 0) return;
+    state.activeRightTabKey = k;
+    renderChatRightTabs();
+    if (activationToken !== state.rightTabActivationToken) return;
+    const clientsRightApi = getClientsRightApi();
+    if (clientsRightApi && typeof clientsRightApi.setChatRightForceEmpty === "function") {
+      clientsRightApi.setChatRightForceEmpty(false);
+    }
+
+    if (kind === "order") {
+      captureClientContentTab();
+      captureClientOrdersListScrollTop();
+      showChatRightPane("order");
+      const ordersRightApi = getOrdersRightApi();
+      if (ordersRightApi && typeof ordersRightApi.openOrderById === "function") {
+        ordersRightApi.openOrderById(id, { openMobile: false });
+      }
+      if (activationToken !== state.rightTabActivationToken) return;
+      syncMobileChatView("right");
+      return;
+    }
+
+    showChatRightPane("client");
+    
+    const selectedFromList = state.clients.find((client) => Number(client?.id || 0) === id) || null;
+    const isGuestClient = isGuestChatClient(selectedFromList);
+    const preferredTitle = selectedFromList?.name || "";
+    if (clientsRightApi) {
+      if (isGuestClient && typeof clientsRightApi.selectGuestChatClient === "function") {
+        await clientsRightApi.selectGuestChatClient(id, preferredTitle, { skipMobileSheet: true }).catch(console.error);
+      } else if (typeof clientsRightApi.selectClientById === "function") {
+        await clientsRightApi.selectClientById(id, preferredTitle, { chatGuest: isGuestClient, skipMobileSheet: true }).catch(console.error);
+      }
+    }
+    if (activationToken !== state.rightTabActivationToken) return;
+    syncMobileChatView("right");
+    restoreClientPanelState();
+  }
+
+  function seedChatRightTabsFromCurrentState() {
+    if (!document.body || !document.body.classList.contains("page-chat")) return;
+
+    const activeClientId = Number(state.activeClientId || 0);
+    const activeClientFromList = (Array.isArray(state.clients) ? state.clients : [])
+      .find((client) => Number(client?.id || 0) === activeClientId) || null;
+    const activeClientTitle = String(
+      activeClientFromList?.name
+      || state.activeClient?.name
+      || ""
+    ).trim();
+
+    if (Number.isFinite(activeClientId) && activeClientId > 0) {
+      upsertChatRightTab("client", activeClientId, activeClientTitle);
+    }
+
+    const headerOrderId = Number(
+      (dom.center.mobileHeaderOrderBtn && dom.center.mobileHeaderOrderBtn.getAttribute("data-order-id"))
+      || (dom.center.headerOrder && dom.center.headerOrder.getAttribute("data-order-id"))
+      || state.rightPanelOrderId
+      || 0
+    );
+
+    if (Number.isFinite(headerOrderId) && headerOrderId > 0) {
+      upsertChatRightTab("order", headerOrderId);
+    }
+
+    const rightMode = document.body.classList.contains("chat-right-order-mode") ? "order" : "client";
+    if (rightMode === "order" && Number.isFinite(headerOrderId) && headerOrderId > 0) {
+      state.activeRightTabKey = buildChatRightTabKey("order", headerOrderId);
+    } else if (Number.isFinite(activeClientId) && activeClientId > 0) {
+      state.activeRightTabKey = buildChatRightTabKey("client", activeClientId);
+    }
+
+    renderChatRightTabs();
   }
 
   function getTenantId() {
@@ -4125,9 +4505,17 @@
     }
 
     if (changed || options.forceRender) {
-      renderChatHeader();
-      // Order cards are rendered inside message bubbles, so refresh the thread view too.
-      renderMessages({ disableAutoPin: true, smoothScroll: false, skipSaveScrollPosition: true });
+      try {
+        renderChatHeader();
+      } catch (err) {
+        console.error("Failed to render chat header from active orders:", err);
+      }
+      try {
+        // Order cards are rendered inside message bubbles, so refresh the thread view too.
+        renderMessages({ disableAutoPin: true, smoothScroll: false, skipSaveScrollPosition: true });
+      } catch (err) {
+        console.error("Failed to render chat messages from active orders:", err);
+      }
     }
     return changed;
   }
@@ -6758,6 +7146,13 @@
 
 
 
+  function cssEscape(value) {
+    if (typeof CSS !== "undefined" && CSS && typeof CSS.escape === "function") {
+      return CSS.escape(String(value || ""));
+    }
+    return String(value || "").replace(/["\\]/g, "\\$&");
+  }
+
   function getClientPreviewText(clientId) {
     const typingPreview = getClientTypingPreviewText(clientId);
     if (typingPreview) return typingPreview;
@@ -6997,6 +7392,7 @@
   }
 
   function requestMessageAlertNotificationPermission() {
+    if (!CHAT_BROWSER_ALERTS_ENABLED) return;
     if (!("Notification" in window)) return;
     if (Notification.permission !== "default") return;
     try {
@@ -7008,6 +7404,10 @@
   }
 
   function unlockMessageAlertsOnce() {
+    if (!CHAT_BROWSER_ALERTS_ENABLED) {
+      disableWebPushSubscription().catch(() => {});
+      return;
+    }
     const soundUrl = getTenantMessageSoundUrl();
     if (soundUrl) {
       try {
@@ -7247,6 +7647,7 @@
   }
 
   function maybeNotifyIncomingMessage(options = {}) {
+    if (!CHAT_BROWSER_ALERTS_ENABLED) return;
     const opts = options || {};
     if (Date.now() < Number(suppressMessageAlertUntil || 0)) return;
     const tabActive = isChatTabActiveForRead();
@@ -7264,12 +7665,17 @@
   }
 
   function initMessageAlerts() {
+    if (!CHAT_BROWSER_ALERTS_ENABLED) {
+      disableWebPushSubscription().catch(() => {});
+      return;
+    }
     document.addEventListener("click", unlockMessageAlertsOnce, { once: true, passive: true, capture: true });
     document.addEventListener("touchstart", unlockMessageAlertsOnce, { once: true, passive: true, capture: true });
     document.addEventListener("keydown", unlockMessageAlertsOnce, { once: true });
   }
 
   function isWebPushSupported() {
+    if (!CHAT_BROWSER_ALERTS_ENABLED) return false;
     if (typeof window === "undefined") return false;
     if (!("serviceWorker" in navigator)) return false;
     if (!("PushManager" in window)) return false;
@@ -7464,7 +7870,61 @@
     }).catch(() => {});
   }
 
+  async function disableWebPushSubscription() {
+    if (webPushDisableInFlight) return;
+    if (typeof window === "undefined") return;
+    if (!("serviceWorker" in navigator)) return;
+
+    webPushDisableInFlight = true;
+    try {
+      let registration = null;
+      try {
+        registration = await navigator.serviceWorker.getRegistration("/");
+      } catch {}
+      if (!registration) {
+        try {
+          registration = await navigator.serviceWorker.getRegistration();
+        } catch {}
+      }
+      if (!registration || !registration.pushManager) {
+        webPushSyncedFingerprint = "";
+        webPushSubscriptionVapidKey = "";
+        try { localStorage.removeItem(adminPushVapidStorageKey); } catch {}
+        return;
+      }
+
+      let subscription = null;
+      try {
+        subscription = await registration.pushManager.getSubscription();
+      } catch {}
+      const endpoint = String(subscription && subscription.endpoint || "");
+      if (subscription) {
+        try { await subscription.unsubscribe(); } catch {}
+      }
+      if (endpoint) {
+        await remoteUnsubscribeWebPushByEndpoint(endpoint);
+      }
+      webPushSyncedFingerprint = "";
+      webPushSubscriptionVapidKey = "";
+      try { localStorage.removeItem(adminPushVapidStorageKey); } catch {}
+    } catch {
+      // noop
+    } finally {
+      webPushDisableInFlight = false;
+    }
+  }
+
   function queueWebPushSubscriptionSync(options = {}) {
+    if (!CHAT_BROWSER_ALERTS_ENABLED) {
+      if (webPushSyncTimer) {
+        window.clearTimeout(webPushSyncTimer);
+        webPushSyncTimer = 0;
+      }
+      webPushSyncRequestedWithPermission = false;
+      webPushSyncForceRequested = false;
+      disableWebPushSubscription().catch(() => {});
+      return;
+    }
     if (!isChatWidgetEnabledRuntime()) {
       if (webPushSyncTimer) {
         window.clearTimeout(webPushSyncTimer);
@@ -7494,6 +7954,10 @@
   }
 
   async function syncWebPushSubscription(options = {}) {
+    if (!CHAT_BROWSER_ALERTS_ENABLED) {
+      await disableWebPushSubscription();
+      return;
+    }
     if (!isChatWidgetEnabledRuntime()) return;
     if (!isWebPushSupported()) return;
     if (!isWebPushSecureContext()) return;
@@ -7872,8 +8336,27 @@
     const bottomAlignedTop = wrap.scrollTop + offsetTop + targetRect.height - Math.max(0, wrap.clientHeight - gap);
     const nextTop = Math.max(0, placement === "bottom" ? bottomAlignedTop : centeredTop);
     const behavior = options.behavior === "auto" ? "auto" : "smooth";
+    const currentTop = Number(wrap.scrollTop || 0);
+    const movingAwayFromBottom = nextTop < (currentTop - CHAT_SCROLL_DOWN_SHOW_DISTANCE_PX);
+    if (movingAwayFromBottom) {
+      forceShowMessagesScrollDownButton();
+    }
 
     wrap.scrollTo({ top: nextTop, behavior });
+    if (behavior === "smooth") {
+      window.setTimeout(() => {
+        updateMessagesScrollDownButton();
+      }, 16);
+      window.setTimeout(() => {
+        updateMessagesScrollDownButton();
+      }, 90);
+      window.setTimeout(() => {
+        updateMessagesScrollDownButton();
+      }, 220);
+      window.setTimeout(() => {
+        updateMessagesScrollDownButton();
+      }, 360);
+    }
     target.classList.add("is-jump-highlight");
     if (target.__jumpTimer) clearTimeout(target.__jumpTimer);
     target.__jumpTimer = window.setTimeout(() => {
@@ -9263,6 +9746,7 @@
     document.addEventListener(ORDER_UPDATED_EVENT, (event) => {
       if (!isChatWidgetEnabledRuntime()) return;
       const order = event?.detail?.order;
+      const isLocalOnlyUpdate = event?.detail?.localOnly === true;
       if (!order || typeof order !== "object") return;
 
       const activeClientId = Number(state.activeClientId || state.activeClient?.id || 0);
@@ -9270,19 +9754,33 @@
 
       const orderId = Number(order.id || 0);
       if (!Number.isFinite(orderId) || orderId <= 0) return;
+      const currentHeaderOrderId = Number(state.headerOrderSnapshot?.id || state.headerOrderId || 0);
+      const currentRightOrderId = Number(state.rightPanelOrderId || 0);
+      const isCurrentHeaderOrder = currentHeaderOrderId > 0 && currentHeaderOrderId === orderId;
+      const isCurrentRightOrder = currentRightOrderId > 0 && currentRightOrderId === orderId;
 
       const ownerClientId = getOrderClientId(order);
       const existsInActive = (Array.isArray(state.activeOrders) ? state.activeOrders : [])
         .some((item) => Number(item?.id || 0) === orderId);
       const hydratedForActiveClient = Number(state.activeOrdersHydratedClientId || 0) === activeClientId;
 
-      if (ownerClientId > 0 && ownerClientId !== activeClientId && !existsInActive) return;
-      if (ownerClientId <= 0 && !existsInActive) return;
-      if (!hydratedForActiveClient && !existsInActive) return;
+      if (ownerClientId > 0 && ownerClientId !== activeClientId && !existsInActive && !isCurrentHeaderOrder && !isCurrentRightOrder) return;
+      if (ownerClientId <= 0 && !existsInActive && !isCurrentHeaderOrder && !isCurrentRightOrder) return;
+      if (!hydratedForActiveClient && !existsInActive && !isCurrentHeaderOrder && !isCurrentRightOrder) return;
+
+      if (isCurrentHeaderOrder || isCurrentRightOrder) {
+        state.headerOrderSnapshot = {
+          ...(state.headerOrderSnapshot && Number(state.headerOrderSnapshot?.id || 0) === orderId ? state.headerOrderSnapshot : {}),
+          ...order,
+        };
+      }
 
       const changed = upsertActiveOrder(order);
-      if (changed) {
-        hydrateHeaderOrderDetails(state.requestToken, activeClientId).catch(console.error);
+      if (changed || isCurrentHeaderOrder || isCurrentRightOrder) {
+        renderChatHeader();
+        if (!isLocalOnlyUpdate) {
+          hydrateHeaderOrderDetails(state.requestToken, activeClientId).catch(console.error);
+        }
       }
     });
 
@@ -9393,7 +9891,11 @@
 
     const openClientThreadAndDetails = async (event) => {
       if (isAdminMobileChatLayout()) {
-        selectClient(client.id);
+        if (event) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+        await selectClient(client.id, { openDetails: false });
         return;
       }
       event.preventDefault();
@@ -9401,17 +9903,15 @@
       closeAllClientSwipeRows(null, { immediate: true });
       hideClientContextMenu();
       if (Number(state.activeClientId) !== Number(client.id)) {
-        await selectClient(client.id);
+        await selectClient(client.id, { openDetails: true });
+        return;
       }
-      openClientDetailsPanel();
+      await openClientDetailsPanel();
     };
 
     const mainBtn = $(".chat-client-row-main", row);
     if (mainBtn) {
       mainBtn.addEventListener("click", (event) => {
-        if (event.target.closest('[data-chat-client-open-details="1"]') && !isAdminMobileChatLayout()) {
-          return;
-        }
         if (Date.now() < suppressClientRowClickUntil) {
           event.preventDefault();
           event.stopPropagation();
@@ -9428,15 +9928,6 @@
       mainBtn.addEventListener("contextmenu", (event) => {
         event.preventDefault();
         showClientContextMenu(event.clientX, event.clientY, client.id);
-      });
-    }
-
-    const detailTriggers = $$('[data-chat-client-open-details="1"]', row);
-    if (detailTriggers.length) {
-      detailTriggers.forEach((trigger) => {
-        trigger.addEventListener("click", (event) => {
-          openClientThreadAndDetails(event).catch(console.error);
-        });
       });
     }
 
@@ -10435,6 +10926,10 @@
 
   function refreshContextMenuReactionBoxPosition() {
     if (!dom.center.contextMenu || dom.center.contextMenu.classList.contains("hidden")) return;
+    if (mobileContextSceneState) {
+      if (!layoutMobileContextScene({ animateRelayout: true })) hideMessageContextMenu();
+      return;
+    }
     if (window.innerWidth <= 768 && state.contextMessageId) {
       repositionMessageContextMenu(state.contextMessageId, { forceMobile: true });
       return;
@@ -10453,6 +10948,20 @@
   function setContextMenuReactionsExpanded(expanded) {
     if (!dom.center.contextMenu) return;
     const isExpanded = !!expanded;
+    const scheduleContextSceneRelayout = (doubleFrame = false) => {
+      requestAnimationFrame(() => {
+        const run = () => {
+          if (!dom.center.contextMenu || dom.center.contextMenu.classList.contains("hidden")) return;
+          if (!!dom.center.contextMenu.classList.contains("is-reactions-expanded") !== isExpanded) return;
+          refreshContextMenuReactionBoxPosition();
+        };
+        if (doubleFrame) {
+          requestAnimationFrame(run);
+        } else {
+          run();
+        }
+      });
+    };
     if (isExpanded) {
       clearContextMenuTouchGuard();
       ensureContextMenuAllEmojiButtons(dom.center.contextMenu);
@@ -10460,17 +10969,11 @@
         if (!dom.center.contextMenu || dom.center.contextMenu.classList.contains("hidden")) return;
         if (!dom.center.contextMenu.classList.contains("is-reactions-expanded")) return;
         ensureContextMenuAllEmojiButtons(dom.center.contextMenu);
-        refreshContextMenuReactionBoxPosition();
+        scheduleContextSceneRelayout(false);
       }).catch(() => {});
     }
     dom.center.contextMenu.classList.toggle("is-reactions-expanded", isExpanded);
-    if (isExpanded) {
-      requestAnimationFrame(() => {
-        if (!dom.center.contextMenu || dom.center.contextMenu.classList.contains("hidden")) return;
-        if (!dom.center.contextMenu.classList.contains("is-reactions-expanded")) return;
-        refreshContextMenuReactionBoxPosition();
-      });
-    }
+    scheduleContextSceneRelayout(false);
     const toggleBtn = $('[data-chat-msg-reaction="__toggle_more__"]', dom.center.contextMenu);
     if (!toggleBtn) return;
     toggleBtn.setAttribute("aria-expanded", isExpanded ? "true" : "false");
@@ -10543,14 +11046,17 @@
     if (adminChatThreadTouchGestureActive) return false;
     if (isAdminChatThreadEdgeSpringPositionControlled()) return false;
     const wrap = dom.center.messagesWrap;
-    if (!isAdminChatThreadVerticallyScrollable(wrap)) return false;
+    // If the thread fully fits into the viewport, treat it as bottom-pinned too.
+    // This preserves the visual bottom anchor when desktop width changes make
+    // bubbles wrap and the same thread suddenly becomes scrollable.
+    if (!isAdminChatThreadVerticallyScrollable(wrap)) return hasAdminChatThreadMessages();
     return (wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight) <= CHAT_STICKY_BOTTOM_THRESHOLD_PX;
   }
 
   function shouldPersistThreadPinnedBottom(wrap = dom.center.messagesWrap) {
     if (!wrap) return false;
     if (adminChatThreadTouchGestureActive) return false;
-    if (!isAdminChatThreadVerticallyScrollable(wrap)) return false;
+    if (!isAdminChatThreadVerticallyScrollable(wrap)) return hasAdminChatThreadMessages();
     return (wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight) <= CHAT_PINNED_BOTTOM_PERSIST_THRESHOLD_PX;
   }
 
@@ -10840,8 +11346,17 @@
 
     const hiddenDistance = wrap.scrollHeight - wrap.clientHeight - wrap.scrollTop;
     const badgeCount = getScrollDownBadgeCount();
-    const shouldShow = badgeCount > 0 || hiddenDistance >= CHAT_SCROLL_DOWN_SHOW_DISTANCE_PX;
+    const forcedVisible = Date.now() < Number(scrollDownForceVisibleUntil || 0);
+    if (!forcedVisible && btn.dataset.forceVisible === "1") {
+      btn.dataset.forceVisible = "0";
+      btn.style.removeProperty("display");
+    }
+    const shouldShow = forcedVisible || badgeCount > 0 || hiddenDistance >= CHAT_SCROLL_DOWN_SHOW_DISTANCE_PX;
+    const wasHidden = btn.classList.contains("hidden");
     btn.classList.toggle("hidden", !shouldShow);
+    if (shouldShow && wasHidden) {
+      requestAnimationFrame(syncAdminMobileChatScrollDownPosition);
+    }
 
     const badge = dom.center.scrollDownBadge;
     if (!badge) return;
@@ -10858,6 +11373,38 @@
     badge.classList.remove("hidden");
   }
 
+  function forceShowMessagesScrollDownButton(durationMs = CHAT_SCROLL_DOWN_FORCE_SHOW_MS) {
+    const btn = dom.center.scrollDownBtn;
+    if (!btn) return;
+    const duration = Math.max(160, Number(durationMs || 0) || CHAT_SCROLL_DOWN_FORCE_SHOW_MS);
+    scrollDownForceVisibleUntil = Date.now() + duration;
+    if (scrollDownForceVisibleReleaseTimer) {
+      window.clearTimeout(scrollDownForceVisibleReleaseTimer);
+      scrollDownForceVisibleReleaseTimer = 0;
+    }
+    btn.dataset.forceVisible = "1";
+    btn.style.setProperty("display", "inline-flex", "important");
+    btn.classList.remove("hidden");
+    scrollDownForceVisibleReleaseTimer = window.setTimeout(() => {
+      scrollDownForceVisibleReleaseTimer = 0;
+      clearForcedMessagesScrollDownButtonVisibility();
+      updateMessagesScrollDownButton();
+    }, duration + 24);
+  }
+
+  function clearForcedMessagesScrollDownButtonVisibility() {
+    if (scrollDownForceVisibleReleaseTimer) {
+      window.clearTimeout(scrollDownForceVisibleReleaseTimer);
+      scrollDownForceVisibleReleaseTimer = 0;
+    }
+    scrollDownForceVisibleUntil = 0;
+    const btn = dom.center.scrollDownBtn;
+    if (btn && btn.dataset.forceVisible === "1") {
+      btn.dataset.forceVisible = "0";
+      btn.style.removeProperty("display");
+    }
+  }
+
   function stopMessagesSmoothScroll() {
     if (!state.messagesScrollRaf) return;
     cancelAnimationFrame(state.messagesScrollRaf);
@@ -10867,6 +11414,7 @@
   function scrollMessagesToBottom(options = {}) {
     const wrap = dom.center.messagesWrap;
     if (!wrap) return;
+    clearForcedMessagesScrollDownButtonVisibility();
 
     const clientIdAtSchedule = options.clientIdAtSchedule !== undefined
       ? String(options.clientIdAtSchedule || "")
@@ -11801,9 +12349,17 @@
 
   function hideMessageMenu() {
     setContextMenuReactionsExpanded(false);
+    hideMobileContextScene();
     if (dom.center.contextMenu) {
+      if (dom.center.contextMenu.__mobileSceneMenuFadeTimer) {
+        window.clearTimeout(dom.center.contextMenu.__mobileSceneMenuFadeTimer);
+        dom.center.contextMenu.__mobileSceneMenuFadeTimer = 0;
+      }
       clearContextMenuTouchGuard();
       dom.center.contextMenu.classList.add("hidden");
+      dom.center.contextMenu.style.visibility = "";
+      dom.center.contextMenu.style.opacity = "";
+      dom.center.contextMenu.style.transition = "";
     }
     contextMenuAnchorPoint = null;
     if (!dom.center.reactionBar || dom.center.reactionBar.classList.contains("hidden")) {
@@ -11814,6 +12370,331 @@
   function hideMessageContextMenu() {
     hideMessageMenu();
     hideReactionBar();
+  }
+
+  function ensureMobileContextSceneUi() {
+    if (mobileContextSceneUi && mobileContextSceneUi.root && mobileContextSceneUi.root.isConnected) {
+      return mobileContextSceneUi;
+    }
+
+    const root = document.createElement("div");
+    root.className = "chat-mobile-context-scene hidden";
+    root.innerHTML =
+      '<div class="chat-mobile-context-scene__backdrop"></div>' +
+      '<div class="chat-mobile-context-scene__clone" aria-hidden="true"></div>';
+    document.body.appendChild(root);
+
+    const ui = {
+      root: root,
+      backdrop: $(".chat-mobile-context-scene__backdrop", root),
+      cloneHost: $(".chat-mobile-context-scene__clone", root),
+    };
+
+    if (ui.backdrop && ui.backdrop.dataset.bound !== "1") {
+      ui.backdrop.dataset.bound = "1";
+      ui.backdrop.addEventListener("click", (event) => {
+        if (
+          Date.now() < Number(suppressFloatingMenuDocumentClickUntil || 0)
+          || Date.now() < Number(suppressFloatingMenuAutoHideUntil || 0)
+        ) {
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        hideMessageContextMenu();
+      });
+    }
+
+    mobileContextSceneUi = ui;
+    return ui;
+  }
+
+  function shouldUseMobileContextScene() {
+    return isAdminMobileChatLayout() && !!dom.center.messages;
+  }
+
+  function getMobileContextSceneViewportBox() {
+    const viewport = window.visualViewport;
+    const width = viewport ? Number(viewport.width || 0) : 0;
+    const height = viewport ? Number(viewport.height || 0) : 0;
+    const left = viewport ? Number(viewport.offsetLeft || 0) : 0;
+    const top = viewport ? Number(viewport.offsetTop || 0) : 0;
+    const resolvedWidth = Number.isFinite(width) && width > 0
+      ? width
+      : Math.max(
+          Number(window.innerWidth || 0),
+          Number(document.documentElement && document.documentElement.clientWidth || 0),
+        );
+    const resolvedTop = Number.isFinite(top) ? top : 0;
+    const resolvedBottom = getFloatingViewportBottom();
+    const resolvedHeight = Number.isFinite(height) && height > 0
+      ? height
+      : Math.max(0, resolvedBottom - resolvedTop);
+    return {
+      left: Math.round(Number.isFinite(left) ? left : 0),
+      top: Math.round(resolvedTop),
+      width: Math.max(0, Math.round(resolvedWidth)),
+      height: Math.max(0, Math.round(resolvedHeight)),
+      right: Math.round((Number.isFinite(left) ? left : 0) + resolvedWidth),
+      bottom: Math.round(resolvedBottom),
+    };
+  }
+
+  function findContextMessageSourceNodes(messageId) {
+    const key = String(messageId || "").trim();
+    if (!key || !dom.center.messages) return null;
+    const row = $(`.chat-message[data-message-id="${cssEscape(key)}"]`, dom.center.messages);
+    if (!row) return null;
+    const bubble = $(".chat-message-bubble", row);
+    if (!bubble) return null;
+    return {
+      row,
+      bubble,
+    };
+  }
+
+  function hideMobileContextScene() {
+    const scene = mobileContextSceneState;
+    if (scene && scene.sourceRow && scene.sourceRow.isConnected) {
+      scene.sourceRow.classList.remove("is-mobile-context-source-hidden");
+    }
+
+    const ui = mobileContextSceneUi;
+    if (ui) {
+      ui.root.classList.remove("is-open");
+      ui.root.classList.add("hidden");
+      if (ui.cloneHost) {
+        ui.cloneHost.classList.remove("chat-message--out", "chat-message--in");
+        if (typeof ui.cloneHost.replaceChildren === "function") {
+          ui.cloneHost.replaceChildren();
+        } else {
+          ui.cloneHost.textContent = "";
+        }
+        ui.cloneHost.style.left = "";
+        ui.cloneHost.style.top = "";
+        ui.cloneHost.style.width = "";
+        ui.cloneHost.style.minWidth = "";
+        ui.cloneHost.style.maxWidth = "";
+        ui.cloneHost.style.transition = "";
+        ui.cloneHost.style.transform = "";
+      }
+    }
+
+    if (dom.center.contextMenu) {
+      dom.center.contextMenu.style.visibility = "";
+    }
+    if (dom.center.messages) {
+      dom.center.messages
+        .querySelectorAll(".chat-message.is-mobile-context-source-hidden")
+        .forEach((node) => node.classList.remove("is-mobile-context-source-hidden"));
+    }
+
+    mobileContextSceneState = null;
+  }
+
+  function layoutMobileContextScene(options) {
+    const scene = mobileContextSceneState;
+    const contextMenuEl = dom.center.contextMenu;
+    if (!scene || !contextMenuEl || !scene.sourceBubble || !scene.sourceBubble.isConnected) return false;
+    const ui = ensureMobileContextSceneUi();
+    if (!ui || !ui.cloneHost) return false;
+
+    const bubbleRect = scene.sourceBubble.getBoundingClientRect();
+    if (!bubbleRect || bubbleRect.width <= 0 || bubbleRect.height <= 0) return false;
+
+    const menuWasHidden = contextMenuEl.classList.contains("hidden");
+    if (menuWasHidden) {
+      contextMenuEl.classList.remove("hidden");
+      contextMenuEl.style.visibility = "hidden";
+      contextMenuEl.style.opacity = "0";
+    }
+    const menuRect = contextMenuEl.getBoundingClientRect();
+    const menuWidth = Math.max(0, Number(menuRect.width || 0));
+    const menuHeight = Math.max(0, Number(menuRect.height || 0));
+    const viewportBox = getMobileContextSceneViewportBox();
+    const isOutgoing = scene.isOutgoing === true;
+    const sidePadding = 16;
+    const topPadding = 20;
+    const bottomPadding = 20;
+    const menuGap = 12;
+    const maxBubbleLeft = Math.max(viewportBox.left + sidePadding, viewportBox.right - bubbleRect.width - sidePadding);
+    const maxMenuLeft = Math.max(viewportBox.left + sidePadding, viewportBox.right - menuWidth - sidePadding);
+    const desiredBubbleLeft = isOutgoing
+      ? viewportBox.right - sidePadding - bubbleRect.width
+      : viewportBox.left + sidePadding;
+    const minBubbleTop = viewportBox.top + topPadding;
+    const maxBubbleTop = viewportBox.bottom - bottomPadding - bubbleRect.height;
+    const maxBubbleTopForMenu = viewportBox.bottom - bottomPadding - menuHeight - menuGap - bubbleRect.height;
+    const sourceBubbleTop = Math.round(Number(bubbleRect.top || 0));
+    const baseBubbleTop = Math.max(minBubbleTop, Math.min(sourceBubbleTop, maxBubbleTop));
+    const targetBubbleLeft = Math.round(
+      Math.min(Math.max(viewportBox.left + sidePadding, desiredBubbleLeft), maxBubbleLeft)
+    );
+    const targetBubbleTop = Math.round(
+      Math.max(minBubbleTop, Math.min(baseBubbleTop, maxBubbleTopForMenu))
+    );
+    const desiredMenuLeft = isOutgoing
+      ? targetBubbleLeft + bubbleRect.width - menuWidth
+      : targetBubbleLeft;
+    const targetMenuLeft = Math.round(
+      Math.min(Math.max(viewportBox.left + sidePadding, desiredMenuLeft), maxMenuLeft)
+    );
+    const targetMenuTop = Math.round(
+      Math.max(
+        viewportBox.top + topPadding,
+        Math.min(
+          targetBubbleTop + bubbleRect.height + menuGap,
+          viewportBox.bottom - bottomPadding - menuHeight
+        )
+      )
+    );
+    const originTranslateX = Number(bubbleRect.left) - Number(targetBubbleLeft);
+    const originTranslateY = Number(bubbleRect.top) - Number(targetBubbleTop);
+    const startScale = 1;
+    const opts = options && typeof options === "object" ? options : {};
+    const relayoutLocked = Number(scene.relayoutUnlockAt || 0) > Date.now();
+    const shouldAnimateRelayout = opts.animateRelayout === true && scene.isOpen === true && !relayoutLocked;
+    const openImmediately = (opts.openImmediately === true || scene.isOpen === true) && !shouldAnimateRelayout;
+
+    ui.root.classList.remove("hidden");
+    const prevCloneRect = shouldAnimateRelayout ? ui.cloneHost.getBoundingClientRect() : null;
+    const hasPrevCloneRect = !!(
+      prevCloneRect
+      && Number.isFinite(prevCloneRect.left)
+      && Number.isFinite(prevCloneRect.top)
+      && prevCloneRect.width > 0
+      && prevCloneRect.height > 0
+    );
+    ui.cloneHost.style.left = String(targetBubbleLeft) + "px";
+    ui.cloneHost.style.top = String(targetBubbleTop) + "px";
+    const bubbleWidthPx = Math.ceil(Number(bubbleRect.width || 0));
+    ui.cloneHost.style.width = String(bubbleWidthPx) + "px";
+    ui.cloneHost.style.minWidth = String(bubbleWidthPx) + "px";
+    ui.cloneHost.style.maxWidth = String(bubbleWidthPx) + "px";
+    ui.cloneHost.style.transition = "none";
+    ui.cloneHost.style.transform = openImmediately
+      ? "translate3d(0, 0, 0) scale(1)"
+      : "translate3d(" + originTranslateX + "px, " + originTranslateY + "px, 0) scale(" + startScale + ")";
+    // Keep iOS Safari from skipping the initial transform frame.
+    void ui.cloneHost.offsetHeight;
+
+    contextMenuEl.style.left = String(targetMenuLeft) + "px";
+    contextMenuEl.style.top = String(targetMenuTop) + "px";
+    contextMenuAnchorPoint = null;
+
+    const revealContextMenu = function () {
+      if (mobileContextSceneState !== scene) return;
+      if (!contextMenuEl || contextMenuEl.classList.contains("hidden")) return;
+      contextMenuEl.style.visibility = "";
+      contextMenuEl.style.transition = "opacity .18s ease";
+      contextMenuEl.style.opacity = "1";
+    };
+
+    if (shouldAnimateRelayout && hasPrevCloneRect) {
+      const relayoutTranslateX = Number(prevCloneRect.left) - Number(targetBubbleLeft);
+      const relayoutTranslateY = Number(prevCloneRect.top) - Number(targetBubbleTop);
+      ui.root.classList.add("is-open");
+      ui.cloneHost.style.transition = "none";
+      ui.cloneHost.style.transform = "translate3d(" + relayoutTranslateX + "px, " + relayoutTranslateY + "px, 0) scale(1)";
+      void ui.cloneHost.offsetWidth;
+      ui.cloneHost.style.transition = CHAT_MOBILE_CONTEXT_CLONE_RELAYOUT_TRANSITION;
+      if (contextMenuEl.__mobileSceneMenuFadeTimer) {
+        window.clearTimeout(contextMenuEl.__mobileSceneMenuFadeTimer);
+      }
+      contextMenuEl.__mobileSceneMenuFadeTimer = window.setTimeout(function () {
+        contextMenuEl.__mobileSceneMenuFadeTimer = 0;
+        revealContextMenu();
+      }, CHAT_MOBILE_CONTEXT_MENU_APPEAR_DELAY_MS);
+      requestAnimationFrame(function () {
+        if (mobileContextSceneState !== scene) return;
+        ui.cloneHost.style.transform = "translate3d(0, 0, 0) scale(1)";
+        scene.relayoutUnlockAt = Date.now() + CHAT_MOBILE_CONTEXT_RELAYOUT_LOCK_MS;
+        scene.isOpen = true;
+      });
+      return true;
+    }
+
+    if (openImmediately) {
+      ui.root.classList.add("is-open");
+      ui.cloneHost.style.transition = "none";
+      if (contextMenuEl.__mobileSceneMenuFadeTimer) {
+        window.clearTimeout(contextMenuEl.__mobileSceneMenuFadeTimer);
+      }
+      contextMenuEl.__mobileSceneMenuFadeTimer = window.setTimeout(function () {
+        contextMenuEl.__mobileSceneMenuFadeTimer = 0;
+        revealContextMenu();
+      }, CHAT_MOBILE_CONTEXT_MENU_APPEAR_DELAY_MS);
+      scene.isOpen = true;
+      return true;
+    }
+
+    requestAnimationFrame(function () {
+      if (mobileContextSceneState !== scene) return;
+      ui.root.classList.add("is-open");
+      ui.cloneHost.style.transition = CHAT_MOBILE_CONTEXT_CLONE_OPEN_TRANSITION;
+      ui.cloneHost.style.transform = "translate3d(0, 0, 0) scale(1)";
+      if (contextMenuEl.__mobileSceneMenuFadeTimer) {
+        window.clearTimeout(contextMenuEl.__mobileSceneMenuFadeTimer);
+      }
+      contextMenuEl.__mobileSceneMenuFadeTimer = window.setTimeout(function () {
+        contextMenuEl.__mobileSceneMenuFadeTimer = 0;
+        revealContextMenu();
+      }, CHAT_MOBILE_CONTEXT_MENU_APPEAR_DELAY_MS);
+      scene.relayoutUnlockAt = Date.now() + CHAT_MOBILE_CONTEXT_RELAYOUT_LOCK_MS;
+      scene.isOpen = true;
+    });
+    return true;
+  }
+
+  function showMobileContextScene(messageId) {
+    if (!shouldUseMobileContextScene() || !dom.center.contextMenu) return false;
+    const source = findContextMessageSourceNodes(messageId);
+    if (!source) return false;
+
+    if (dom.center.contextMenu.__mobileSceneMenuFadeTimer) {
+      window.clearTimeout(dom.center.contextMenu.__mobileSceneMenuFadeTimer);
+      dom.center.contextMenu.__mobileSceneMenuFadeTimer = 0;
+    }
+    dom.center.contextMenu.style.transition = "";
+    dom.center.contextMenu.style.opacity = "";
+    dom.center.contextMenu.style.visibility = "";
+
+    hideMobileContextScene();
+    const ui = ensureMobileContextSceneUi();
+    if (!ui || !ui.cloneHost) return false;
+
+    const bubbleClone = source.bubble.cloneNode(true);
+    bubbleClone.classList.add("chat-message-bubble--mobile-context-clone");
+    bubbleClone.setAttribute("aria-hidden", "true");
+    const isOutgoing = source.row.classList.contains("chat-message--out");
+    ui.cloneHost.classList.toggle("chat-message--out", isOutgoing);
+    ui.cloneHost.classList.toggle("chat-message--in", !isOutgoing);
+    if (typeof ui.cloneHost.replaceChildren === "function") {
+      ui.cloneHost.replaceChildren(bubbleClone);
+    } else {
+      ui.cloneHost.textContent = "";
+      ui.cloneHost.appendChild(bubbleClone);
+    }
+    source.row.classList.add("is-mobile-context-source-hidden");
+
+    mobileContextSceneState = {
+      messageId: String(messageId || ""),
+      sourceRow: source.row,
+      sourceBubble: source.bubble,
+      isOutgoing: isOutgoing,
+      isOpen: false,
+      relayoutUnlockAt: 0,
+    };
+
+    ui.root.classList.remove("is-open");
+    ui.root.classList.remove("hidden");
+    suppressFloatingMenuAutoHideUntil = Math.max(suppressFloatingMenuAutoHideUntil, Date.now() + 420);
+    suppressFloatingMenuDocumentClickUntil = Math.max(suppressFloatingMenuDocumentClickUntil, Date.now() + 420);
+    const didLayout = layoutMobileContextScene();
+    if (!didLayout) hideMobileContextScene();
+    return didLayout;
   }
 
   function clearContextMenuTouchGuard() {
@@ -12380,10 +13261,6 @@
     hideEmojiPopover();
     hideReactionBar();
     state.contextMessageId = String(messageId || "");
-    contextMenuAnchorPoint = {
-      x: Number(x) || 0,
-      y: Number(y) || 0,
-    };
     normalizeContextMenuReactionButtons(dom.center.contextMenu);
     setContextMenuReactionsExpanded(false);
     if (dom.center.menuPinLabel) dom.center.menuPinLabel.textContent = message.pinned ? "Открепить" : "Закрепить";
@@ -12391,6 +13268,20 @@
     if (dom.center.menuEditAction) dom.center.menuEditAction.classList.toggle("hidden", !canManageOwnMessage);
     if (dom.center.menuDeleteAction) dom.center.menuDeleteAction.classList.remove("hidden");
 
+    if (showMobileContextScene(messageId)) {
+      contextMenuAnchorPoint = null;
+      if (options.touchGuard === true) {
+        armContextMenuTouchGuard();
+      } else {
+        clearContextMenuTouchGuard();
+      }
+      return;
+    }
+
+    contextMenuAnchorPoint = {
+      x: Number(x) || 0,
+      y: Number(y) || 0,
+    };
     positionFloatingBox(dom.center.contextMenu, x, y, 8);
     repositionMessageContextMenu(messageId, {
       forceMobile: options.touchGuard === true || window.innerWidth <= 768,
@@ -12621,7 +13512,7 @@
 
     const setOrderStatusView = (text, _color, order = null) => {
       if (!dom.center.headerOrder) return;
-      const safeText = String(text || "вЂ”").trim() || "вЂ”";
+      const safeText = String(text || "\u2014").trim() || "\u2014";
       const stageCol = $(".order-col.order-stage", dom.center.headerOrder);
       if (!stageCol) return;
       stageCol.innerHTML = buildHeaderOrderStageButtonHtml(order, safeText);
@@ -12679,7 +13570,7 @@
       id = "—",
       time = "—",
       address = "Адрес не указан",
-      comment = "Нет комментария",
+      comment = "",
       statusText = "Без заказа",
       statusColor = "",
       total = "—",
@@ -12690,18 +13581,24 @@
       order = null,
       orderId = 0,
     } = {}) => {
-      const safeId = String(id || "вЂ”").trim() || "вЂ”";
-      const safeTime = String(time || "вЂ”").trim() || "вЂ”";
-      const safeClientName = String(clientName || "вЂ”").trim() || "вЂ”";
-      const safeClientPhone = String(clientPhone || "вЂ”").trim() || "вЂ”";
+      const isEmptyOrder = Number(orderId || 0) <= 0;
+      const safeId = String(id || "\u2014").trim() || "\u2014";
+      const safeTime = String(time || "\u2014").trim() || "\u2014";
+      const safeClientName = String(clientName || "\u2014").trim() || "\u2014";
+      const safeClientPhone = String(clientPhone || "\u2014").trim() || "\u2014";
+      const safeAddress = String(address || (isEmptyOrder ? "" : "Адрес не указан")).trim();
+      const safeComment = String(comment || "").trim();
       const mobileOrderLabel = Number(orderId || 0) > 0 ? `#${safeId}` : "—";
+      if (dom.center.headerOrder) {
+        dom.center.headerOrder.classList.toggle("is-order-empty", isEmptyOrder);
+      }
       if (dom.center.orderKind) dom.center.orderKind.textContent = kind;
       if (dom.center.orderId) dom.center.orderId.textContent = safeId;
       if (dom.center.mobileOrderId) dom.center.mobileOrderId.textContent = mobileOrderLabel;
       if (dom.center.orderTime) dom.center.orderTime.textContent = safeTime;
       if (dom.center.mobileOrderTime) dom.center.mobileOrderTime.textContent = safeTime;
-      if (dom.center.orderAddress) dom.center.orderAddress.textContent = address;
-      if (dom.center.orderComment) dom.center.orderComment.textContent = comment;
+      if (dom.center.orderAddress) dom.center.orderAddress.textContent = safeAddress || "—";
+      if (dom.center.orderComment) dom.center.orderComment.textContent = safeComment || "—";
       if (dom.center.headerName) dom.center.headerName.textContent = safeClientName;
       if (dom.center.mobileHeaderName) dom.center.mobileHeaderName.textContent = safeClientName;
       if (dom.center.headerPhone) dom.center.headerPhone.textContent = safeClientPhone;
@@ -12722,8 +13619,8 @@
         kind: "Последний заказ",
         id: "—",
         time: "—",
-        address: "Адрес не указан",
-        comment: "Нет комментария",
+        address: "",
+        comment: "",
         statusText: "—",
         total: "—",
         title: "Последний заказ: —",
@@ -12750,7 +13647,7 @@
         : null)
       : null;
     const snapshotOrder = snapshotFromList
-      ? { ...state.headerOrderSnapshot, ...snapshotFromList }
+      ? { ...snapshotFromList, ...state.headerOrderSnapshot }
       : (snapshotOrderId > 0 ? state.headerOrderSnapshot : null);
     const headerOrder = snapshotOrder || candidate.headerOrder;
     if (headerOrder && !state.orderStatusesLoaded && !state.orderStatusesLoading) {
@@ -12763,8 +13660,8 @@
         kind: "Последний заказ",
         id: "—",
         time: "—",
-        address: "Адрес не указан",
-        comment: "Нет комментария",
+        address: "",
+        comment: "",
         statusText: "Без заказа",
         total: "—",
         title: "Последний заказ: —",
@@ -13242,6 +14139,19 @@
       });
     });
     reconcileThreadMessageNodes(descriptors);
+    if (dom.center.messages) {
+      const mobileContextSceneOpen = !!(
+        mobileContextSceneUi
+        && mobileContextSceneUi.root
+        && !mobileContextSceneUi.root.classList.contains("hidden")
+        && mobileContextSceneUi.root.classList.contains("is-open")
+      );
+      if (!mobileContextSceneOpen) {
+        dom.center.messages
+          .querySelectorAll(".chat-message.is-mobile-context-source-hidden")
+          .forEach((node) => node.classList.remove("is-mobile-context-source-hidden"));
+      }
+    }
 
     if (state.contextMessageId) {
       const exists = thread.some((msg) => String(msg.id) === String(state.contextMessageId));
@@ -13275,6 +14185,24 @@
         } else {
           scrollMessagesToBottom({ behavior: smoothScroll ? "smooth-fast" : "auto" });
         }
+      }
+    }
+    if (dom.center.messagesWrap && !state.selectionMode && !isAdminMobileChatLayout()) {
+      const wrap = dom.center.messagesWrap;
+      const hiddenDistance = Math.max(
+        0,
+        Number(wrap.scrollHeight || 0) - Number(wrap.clientHeight || 0) - Number(wrap.scrollTop || 0)
+      );
+      const shouldForceDesktopBottomWindow = (
+        String(state.forceDesktopBottomClientId || "") === String(state.activeClientId || "")
+        && Date.now() < Number(state.forceDesktopBottomUntil || 0)
+      );
+      const shouldForceDesktopBottomSnap = (
+        (thread.length <= 12 && hiddenDistance > 120)
+        || (shouldForceDesktopBottomWindow && hiddenDistance > 24)
+      );
+      if (shouldForceDesktopBottomSnap) {
+        scrollMessagesToBottom({ behavior: "auto", keepPending: true });
       }
     }
     syncPendingScrollCountByViewport(state.activeClientId);
@@ -14497,6 +15425,9 @@
 
       const orderCard = event.target.closest("[data-chat-order-card-id]");
       if (orderCard) {
+        state.suppressOrderCardContextMenuUntil = Date.now() + 1200;
+        clearTouchContextGesture();
+        hideMessageContextMenu();
         if (Date.now() < suppressOrderCardClickUntil) {
           event.preventDefault();
           event.stopPropagation();
@@ -14574,7 +15505,31 @@
 
     dom.center.messages.addEventListener("contextmenu", (event) => {
       if (event.target.closest && event.target.closest("[data-chat-autolink]") && !state.selectionMode) return;
-      const messageEl = event.target.closest(".chat-message");
+      if (Date.now() < Number(state.suppressOrderCardContextMenuUntil || 0)) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      const messageElForContext = event.target && event.target.closest ? event.target.closest(".chat-message") : null;
+      const isOrderBubbleTarget = !!(
+        (event.target
+          && event.target.closest
+          && (
+            event.target.closest(".chat-message-bubble--order-card")
+            || event.target.closest("[data-chat-order-card-id]")
+          ))
+        || (messageElForContext && messageElForContext.querySelector(".chat-message-bubble--order-card"))
+      );
+      if (
+        isOrderBubbleTarget
+        && isChatMobileViewport()
+        && Date.now() > Number(state.touchContextMenuArmUntil || 0)
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      const messageEl = messageElForContext || event.target.closest(".chat-message");
       if (!messageEl || !state.activeClientId) return;
       const messageId = messageEl.getAttribute("data-message-id");
       if (!messageId) return;
@@ -14624,20 +15579,6 @@
       }
 
       const orderStrip = resolveOrderCardScrollStrip(event.target);
-      if (orderStrip) {
-        clearTouchContextGesture();
-        const touch = event.touches[0];
-        clearOrderCardTouchPan();
-        orderCardTouchPan = {
-          strip: orderStrip,
-          startX: Number(touch.clientX || 0),
-          startY: Number(touch.clientY || 0),
-          startLeft: Math.max(0, Number(orderStrip.scrollLeft || 0)),
-          active: false,
-          didDrag: false,
-        };
-        return;
-      }
 
       if (event.target.closest && event.target.closest("[data-chat-autolink]") && !state.selectionMode) {
         clearTouchContextGesture();
@@ -14647,17 +15588,38 @@
       const messageBubble = event.target.closest(".chat-message-bubble[data-message-id]");
       if (!messageBubble) {
         clearTouchContextGesture();
+        clearOrderCardTouchPan();
         return;
       }
+      const isOrderCardTouchTarget = !!(event.target && event.target.closest && event.target.closest("[data-chat-order-card-id]"));
 
       const messageId = String(messageBubble.getAttribute("data-message-id") || "");
       if (!messageId || !state.activeClientId) {
         clearTouchContextGesture();
+        clearOrderCardTouchPan();
         return;
       }
 
       const touch = event.touches[0];
+      if (orderStrip) {
+        clearOrderCardTouchPan();
+        orderCardTouchPan = {
+          strip: orderStrip,
+          startX: Number(touch.clientX || 0),
+          startY: Number(touch.clientY || 0),
+          startLeft: Math.max(0, Number(orderStrip.scrollLeft || 0)),
+          active: false,
+          didDrag: false,
+        };
+      } else {
+        clearOrderCardTouchPan();
+      }
       clearTouchContextGesture();
+      if (isOrderCardTouchTarget) {
+        // Short tap on order cards should open the order only (click handler),
+        // without arming message context long-press flow for this touch.
+        return;
+      }
       touchContextGesture = {
         messageId,
         bubble: messageBubble,
@@ -14672,12 +15634,19 @@
         replyTriggered: false,
         longPressFired: false,
         longPressTimer: 0,
+        allowSwipeReply: !!(
+          messageBubble.closest(".chat-message.chat-message--in")
+          || messageBubble.closest(".chat-message.chat-message--out")
+        ),
+        swipeReplyDirection: -1,
         doubleTapEligible: canUseMessageHeartShortcutTarget(event.target),
       };
 
       touchContextGesture.longPressTimer = window.setTimeout(() => {
         if (!touchContextGesture || touchContextGesture.messageId !== messageId) return;
         touchContextGesture.longPressFired = true;
+        state.lastTouchLongPressContextMenuAt = Date.now();
+        state.touchContextMenuArmUntil = state.lastTouchLongPressContextMenuAt + 1400;
         suppressTouchClickUntil = Math.max(suppressTouchClickUntil, Date.now() + 480);
         if (state.selectionMode) {
           toggleMessageSelection(messageId);
@@ -14698,6 +15667,7 @@
       if (orderCardTouchPan) {
         if (event.touches.length !== 1) {
           clearOrderCardTouchPan();
+          clearTouchContextGesture();
           return;
         }
         const touch = event.touches[0];
@@ -14712,10 +15682,12 @@
           if (absX < CHAT_ORDER_CARD_TOUCH_PAN_START_PX && absY < CHAT_ORDER_CARD_TOUCH_PAN_START_PX) return;
           if (absY > absX) {
             clearOrderCardTouchPan();
+            clearTouchContextGesture();
             return;
           }
           orderCardTouchPan.active = true;
           orderCardTouchPan.strip.classList.add("is-mouse-dragging");
+          clearTouchContextGesture();
         }
 
         event.preventDefault();
@@ -14755,13 +15727,14 @@
       const absX = Math.abs(dx);
       const absY = Math.abs(dy);
 
-      if ((absX > 8 || absY > 8) && touchContextGesture.longPressTimer) {
+      if ((absX > CHAT_TOUCH_CONTEXT_LONG_PRESS_MOVE_CANCEL_PX || absY > CHAT_TOUCH_CONTEXT_LONG_PRESS_MOVE_CANCEL_PX) && touchContextGesture.longPressTimer) {
         window.clearTimeout(touchContextGesture.longPressTimer);
         touchContextGesture.longPressTimer = 0;
       }
 
       if (touchContextGesture.longPressFired) return;
       if (touchContextGesture.swipeRejected) return;
+      if (touchContextGesture.allowSwipeReply !== true) return;
 
       if (!touchContextGesture.swipeLocked) {
         if (absX < 10 && absY < 10) return;
@@ -14769,7 +15742,8 @@
           clearTouchContextGesture();
           return;
         }
-        if (dx <= 0) {
+        const direction = Number(touchContextGesture.swipeReplyDirection || 1);
+        if ((dx * direction) <= 0) {
           clearTouchContextGesture();
           return;
         }
@@ -14777,12 +15751,14 @@
       }
 
       event.preventDefault();
-      const shift = Math.max(0, Math.min(CHAT_TOUCH_SWIPE_MAX_SHIFT_PX, dx));
+      const direction = Number(touchContextGesture.swipeReplyDirection || 1);
+      const shiftAbs = Math.max(0, Math.min(CHAT_TOUCH_SWIPE_MAX_SHIFT_PX, Math.abs(dx)));
+      const shift = shiftAbs * direction;
       touchContextGesture.swipeShift = shift;
       touchContextGesture.bubble.classList.add("is-swipe-active");
       touchContextGesture.bubble.style.transform = `translateX(${shift}px)`;
 
-      if (shift >= CHAT_TOUCH_SWIPE_REPLY_TRIGGER_PX && !touchContextGesture.replyTriggered) {
+      if (shiftAbs >= CHAT_TOUCH_SWIPE_REPLY_TRIGGER_PX && !touchContextGesture.replyTriggered) {
         touchContextGesture.replyTriggered = true;
         suppressTouchClickUntil = Math.max(suppressTouchClickUntil, Date.now() + 560);
         setComposerReplyByMessage(touchContextGesture.messageId);
@@ -14798,6 +15774,7 @@
       if (orderCardTouchPan) {
         const shouldSuppressClick = orderCardTouchPan.didDrag === true;
         clearOrderCardTouchPan({ suppressClick: shouldSuppressClick });
+        clearTouchContextGesture();
         return;
       }
       if (touchAttachmentTap) {
@@ -14821,7 +15798,7 @@
         window.clearTimeout(touchContextGesture.longPressTimer);
         touchContextGesture.longPressTimer = 0;
       }
-      if (touchContextGesture.swipeShift > 0 && touchContextGesture.bubble) {
+      if (Math.abs(Number(touchContextGesture.swipeShift || 0)) > 0 && touchContextGesture.bubble) {
         const bubble = touchContextGesture.bubble;
         bubble.classList.add("is-swipe-returning");
         bubble.style.transform = "";
@@ -14951,8 +15928,55 @@
       event.preventDefault();
     }, { passive: false });
 
-    dom.center.contextMenu.addEventListener("touchstart", () => {
+    dom.center.contextMenu.addEventListener("touchstart", (event) => {
       markFreshContextMenuTouchInteraction();
+      if (!dom.center.contextMenu.classList.contains("is-reactions-expanded")) return;
+      const reactionsBox = event.target && event.target.closest
+        ? event.target.closest(".chat-message-menu-reactions")
+        : null;
+      if (!reactionsBox) return;
+      suppressFloatingMenuAutoHideUntil = Math.max(
+        suppressFloatingMenuAutoHideUntil,
+        Date.now() + 1200,
+      );
+      suppressFloatingMenuDocumentClickUntil = Math.max(
+        suppressFloatingMenuDocumentClickUntil,
+        Date.now() + 1200,
+      );
+    }, { passive: true });
+
+    dom.center.contextMenu.addEventListener("touchmove", (event) => {
+      if (!dom.center.contextMenu.classList.contains("is-reactions-expanded")) return;
+      const reactionsBox = event.target && event.target.closest
+        ? event.target.closest(".chat-message-menu-reactions")
+        : null;
+      if (!reactionsBox) return;
+      suppressFloatingMenuAutoHideUntil = Math.max(
+        suppressFloatingMenuAutoHideUntil,
+        Date.now() + 320,
+      );
+      suppressFloatingMenuDocumentClickUntil = Math.max(
+        suppressFloatingMenuDocumentClickUntil,
+        Date.now() + 320,
+      );
+      event.stopPropagation();
+    }, { passive: true });
+
+    dom.center.contextMenu.addEventListener("touchend", (event) => {
+      if (!dom.center.contextMenu.classList.contains("is-reactions-expanded")) return;
+      const reactionsBox = event.target && event.target.closest
+        ? event.target.closest(".chat-message-menu-reactions")
+        : null;
+      if (!reactionsBox) return;
+      suppressFloatingMenuAutoHideUntil = Math.max(
+        suppressFloatingMenuAutoHideUntil,
+        Date.now() + 380,
+      );
+      suppressFloatingMenuDocumentClickUntil = Math.max(
+        suppressFloatingMenuDocumentClickUntil,
+        Date.now() + 380,
+      );
+      event.stopPropagation();
     }, { passive: true });
 
     dom.center.contextMenu.addEventListener("pointerdown", (event) => {
@@ -14997,6 +16021,21 @@
       if (action === "delete") deleteMessageFromContext(messageId);
     });
 
+    const contextMenuReactionsBox = $(".chat-message-menu-reactions", dom.center.contextMenu);
+    if (contextMenuReactionsBox) {
+      contextMenuReactionsBox.addEventListener("scroll", () => {
+        if (!dom.center.contextMenu.classList.contains("is-reactions-expanded")) return;
+        suppressFloatingMenuAutoHideUntil = Math.max(
+          suppressFloatingMenuAutoHideUntil,
+          Date.now() + 320,
+        );
+        suppressFloatingMenuDocumentClickUntil = Math.max(
+          suppressFloatingMenuDocumentClickUntil,
+          Date.now() + 320,
+        );
+      }, { passive: true });
+    }
+
     if (dom.center.reactionBar) {
       dom.center.reactionBar.addEventListener("touchstart", () => {
         markFreshReactionBarTouchInteraction();
@@ -15034,6 +16073,21 @@
     }
 
     document.addEventListener("click", (event) => {
+      const tabClose = event.target && event.target.closest && event.target.closest("[data-chat-right-tab-close]");
+      if (tabClose) {
+        event.preventDefault();
+        event.stopPropagation();
+        closeChatRightTab(tabClose.getAttribute("data-chat-right-tab-close"));
+        return;
+      }
+      const tabBtn = event.target && event.target.closest && event.target.closest("[data-chat-right-tab]");
+      if (tabBtn) {
+        event.preventDefault();
+        event.stopPropagation();
+        activateChatRightTab(tabBtn.getAttribute("data-chat-right-tab")).catch(console.error);
+        return;
+      }
+
       if (Date.now() < Number(suppressFloatingMenuAutoHideUntil || 0)) {
         event.preventDefault();
         event.stopPropagation();
@@ -15163,17 +16217,89 @@
       || 0
     );
     if (!Number.isFinite(headerOrderId) || headerOrderId <= 0) return;
-    const clientsRightApi = getClientsRightApi();
-    if (!clientsRightApi || typeof clientsRightApi.openOrderById !== "function") return;
-    clientsRightApi.openOrderById(headerOrderId);
+    state.rightOrderOpenedFromMessageBubble = false;
+    state.rightOrderOpenedFromHeader = true;
+    captureClientContentTab();
+    captureClientOrdersListScrollTop();
+    showChatRightPane("order");
+    upsertChatRightTab("order", headerOrderId);
+    const ordersRightApi = getOrdersRightApi();
+    if (!ordersRightApi || typeof ordersRightApi.openOrderById !== "function") return;
+    ordersRightApi.openOrderById(headerOrderId, { openMobile: false });
+    syncMobileChatView("right");
   }
 
-  function openOrderFromMessageCard(orderId) {
+  function openOrderFromMessageCard(orderId, options = {}) {
     const id = Number(orderId || 0);
     if (!Number.isFinite(id) || id <= 0) return;
-    const clientsRightApi = getClientsRightApi();
-    if (!clientsRightApi || typeof clientsRightApi.openOrderById !== "function") return;
-    clientsRightApi.openOrderById(id);
+    const opts = options && typeof options === "object" ? options : {};
+    state.rightOrderOpenedFromMessageBubble = opts.fromMessageBubble !== false;
+    state.rightOrderOpenedFromHeader = false;
+    captureClientContentTab();
+    captureClientOrdersListScrollTop();
+    showChatRightPane("order");
+    upsertChatRightTab("order", id);
+    const ordersRightApi = getOrdersRightApi();
+    if (!ordersRightApi || typeof ordersRightApi.openOrderById !== "function") return;
+    ordersRightApi.openOrderById(id, { openMobile: false });
+    syncMobileChatView("right");
+  }
+
+  function bindChatRightOrderOpenRequests() {
+    document.addEventListener("chat:right-order-open-request", (event) => {
+      const detail = event && event.detail && typeof event.detail === "object" ? event.detail : {};
+      const orderId = Number(detail.orderId || 0);
+      if (!Number.isFinite(orderId) || orderId <= 0) return;
+      const source = String(detail.source || "").trim().toLowerCase();
+      openOrderFromMessageCard(orderId, {
+        fromMessageBubble: source === "message-bubble",
+      });
+    });
+  }
+
+  function initChatRightOrderStatusActions() {
+    if (!document || document.body?.dataset?.chatRightOrderStatusBound === "1") return;
+    document.body.dataset.chatRightOrderStatusBound = "1";
+    document.addEventListener("click", async (event) => {
+      if (!document.body || !document.body.classList.contains("page-chat")) return;
+      if (!document.body.classList.contains("chat-right-order-mode")) return;
+
+      const cycleBtn = event.target && event.target.closest
+        ? event.target.closest('[data-action="order-status-next"]')
+        : null;
+      const rowBtn = event.target && event.target.closest
+        ? event.target.closest('[data-action="order-row-status-next"]')
+        : null;
+      if (!cycleBtn && !rowBtn) return;
+
+      const rightPane = document.querySelector("#ordersRightPane");
+      if (!rightPane) return;
+      const targetBtn = cycleBtn || rowBtn;
+      if (!rightPane.contains(targetBtn)) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      if (targetBtn.disabled) return;
+
+      const ordersRightApi = getOrdersRightApi();
+      if (!ordersRightApi) return;
+      try {
+        if (cycleBtn && typeof ordersRightApi.cycleActiveOrderStatus === "function") {
+          await ordersRightApi.cycleActiveOrderStatus();
+          return;
+        }
+        if (rowBtn && typeof ordersRightApi.setOrderStatus === "function") {
+          const orderId = Number(rowBtn.getAttribute("data-order-id") || 0);
+          const nextStatusId = Number(rowBtn.getAttribute("data-next-status-id") || 0);
+          if (!Number.isFinite(orderId) || orderId <= 0) return;
+          if (!Number.isFinite(nextStatusId) || nextStatusId <= 0) return;
+          await ordersRightApi.setOrderStatus(orderId, nextStatusId);
+        }
+      } catch (err) {
+        console.error(err);
+      }
+    }, true);
   }
 
   function syncRightOrderPanelById(orderId, options = {}) {
@@ -15181,10 +16307,20 @@
     if (!Number.isFinite(id) || id <= 0) return false;
     const opts = options && typeof options === "object" ? options : {};
     if (opts.force !== true && Number(state.rightPanelOrderId || 0) === id) return false;
-    const clientsRightApi = getClientsRightApi();
-    if (!clientsRightApi || typeof clientsRightApi.openOrderById !== "function") return false;
-    clientsRightApi.openOrderById(id, { forceRefresh: opts.forceRefresh === true });
+    state.rightOrderOpenedFromMessageBubble = false;
+    state.rightOrderOpenedFromHeader = false;
+    captureClientContentTab();
+    captureClientOrdersListScrollTop();
+    showChatRightPane("order");
+    upsertChatRightTab("order", id);
+    const ordersRightApi = getOrdersRightApi();
+    if (!ordersRightApi || typeof ordersRightApi.openOrderById !== "function") return false;
+    ordersRightApi.openOrderById(id, {
+      forceRefresh: opts.forceRefresh === true,
+      openMobile: false,
+    });
     state.rightPanelOrderId = id;
+    syncMobileChatView("right");
     return true;
   }
 
@@ -15202,6 +16338,31 @@
     const targetStatus = getHeaderOrderStatusMetaById(nextStatusId);
     if (targetStatus && isHeaderForbiddenStatusTransition(currentStatus, targetStatus)) return;
 
+    const prevHeaderSnapshot = state.headerOrderSnapshot ? { ...state.headerOrderSnapshot } : null;
+    const prevCachedOrder = state.orderDetailsCache.get(id);
+    const prevActiveOrders = (Array.isArray(state.activeOrders) ? state.activeOrders : []).map((order) => ({ ...order }));
+    let optimisticApplied = false;
+
+    if (sourceOrder && typeof sourceOrder === "object") {
+      const optimisticOrder = { ...sourceOrder, status_id: nextStatusId };
+      if (targetStatus) {
+        if (targetStatus.title != null) optimisticOrder.status_title = targetStatus.title;
+        if (targetStatus.code != null) optimisticOrder.status_code = targetStatus.code;
+        if (targetStatus.color != null) optimisticOrder.status_color = targetStatus.color;
+        if (targetStatus.icon != null) optimisticOrder.status_icon = targetStatus.icon;
+        optimisticOrder.status_is_final = Number(targetStatus.is_final || 0) || 0;
+      }
+      state.orderDetailsCache.set(id, optimisticOrder);
+      state.headerOrderSnapshot = { ...optimisticOrder };
+      setSharedOrderDetails(optimisticOrder);
+      upsertActiveOrder(optimisticOrder);
+      const ordersRightApi = getOrdersRightApi();
+      if (ordersRightApi && typeof ordersRightApi.applyOrderSnapshot === "function") {
+        ordersRightApi.applyOrderSnapshot(optimisticOrder);
+      }
+      optimisticApplied = true;
+    }
+
     state.headerOrderStatusMutationInFlight = true;
     renderChatHeader();
     try {
@@ -15218,12 +16379,33 @@
       state.headerOrderSnapshot = { ...freshOrder };
       setSharedOrderDetails(freshOrder);
       upsertActiveOrder(freshOrder);
+      const ordersRightApi = getOrdersRightApi();
+      if (ordersRightApi && typeof ordersRightApi.applyOrderSnapshot === "function") {
+        ordersRightApi.applyOrderSnapshot(freshOrder);
+      }
       if (Number(state.rightPanelOrderId || 0) === id) {
         syncRightOrderPanelById(id, { force: true, forceRefresh: true });
       }
       renderChatHeader();
     } catch (err) {
       console.error(err);
+      if (optimisticApplied) {
+        if (prevCachedOrder && typeof prevCachedOrder === "object") {
+          state.orderDetailsCache.set(id, { ...prevCachedOrder });
+          setSharedOrderDetails(prevCachedOrder);
+        } else {
+          state.orderDetailsCache.delete(id);
+        }
+        state.headerOrderSnapshot = prevHeaderSnapshot ? { ...prevHeaderSnapshot } : null;
+        setActiveOrders(prevActiveOrders, { forceRender: true });
+        const rollbackOrder = prevHeaderSnapshot && Number(prevHeaderSnapshot?.id || 0) === id
+          ? prevHeaderSnapshot
+          : (prevActiveOrders.find((order) => Number(order?.id || 0) === id) || null);
+        const ordersRightApi = getOrdersRightApi();
+        if (rollbackOrder && ordersRightApi && typeof ordersRightApi.applyOrderSnapshot === "function") {
+          ordersRightApi.applyOrderSnapshot(rollbackOrder);
+        }
+      }
     } finally {
       state.headerOrderStatusMutationInFlight = false;
       renderChatHeader();
@@ -15260,7 +16442,7 @@
       node.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
-        openClientDetailsPanel();
+        openClientDetailsPanel({ skipPersist: false }).catch(console.error);
       });
     });
   }
@@ -15351,7 +16533,11 @@
       state.activeOrdersHydratedClientId = 0;
       if (shouldRenderThread) {
         renderMessages({ disableAutoPin: true, smoothScroll: false, skipSaveScrollPosition: true });
-        restoreThreadScrollPosition(state.activeClientId);
+        if (isAdminMobileChatLayout()) {
+          restoreThreadScrollPosition(state.activeClientId);
+        } else {
+          scrollMessagesToBottom({ behavior: "auto", keepPending: true });
+        }
         saveThreadScrollPosition(state.activeClientId);
       }
       finishHeaderLoading();
@@ -15372,6 +16558,7 @@
         || selectedFromList
         || state.activeClient
         || buildOptimisticActiveClientProfile(clientId, selectedFromList);
+      renderChatHeader();
       if (state.activeClient && typeof state.activeClient === "object") {
         setCachedActiveClientProfile(clientId, state.activeClient);
         setSharedClientDetailsToLocalStorage(clientId, { client: state.activeClient });
@@ -15431,7 +16618,11 @@
       finishHeaderLoading();
       if (shouldRenderThread) {
         renderMessages({ disableAutoPin: true, smoothScroll: false, skipSaveScrollPosition: true });
-        restoreThreadScrollPosition(state.activeClientId);
+        if (isAdminMobileChatLayout()) {
+          restoreThreadScrollPosition(state.activeClientId);
+        } else {
+          scrollMessagesToBottom({ behavior: "auto", keepPending: true });
+        }
         saveThreadScrollPosition(state.activeClientId);
       }
     } catch (err) {
@@ -15443,7 +16634,11 @@
       setActiveOrders([], { forceRender: true });
       if (shouldRenderThread) {
         renderMessages({ disableAutoPin: true, smoothScroll: false, skipSaveScrollPosition: true });
-        restoreThreadScrollPosition(state.activeClientId);
+        if (isAdminMobileChatLayout()) {
+          restoreThreadScrollPosition(state.activeClientId);
+        } else {
+          scrollMessagesToBottom({ behavior: "auto", keepPending: true });
+        }
         saveThreadScrollPosition(state.activeClientId);
       }
       finishHeaderLoading();
@@ -15477,12 +16672,64 @@
     resetThreadImageDrop();
 
     state.activeClientId = id;
+    if (!isAdminMobileChatLayout()) {
+      state.forceDesktopBottomClientId = String(id);
+      state.forceDesktopBottomUntil = Date.now() + 3000;
+    } else {
+      state.forceDesktopBottomClientId = "";
+      state.forceDesktopBottomUntil = 0;
+    }
     state.store.lastOpenClientId = id;
     restoreComposerDraftForClient(id, { skipThreadViewportSync: true });
     state.rightPanelOrderId = 0;
+    showChatRightPane("client");
     state.headerOrderSnapshot = null;
     setHeaderLoading(true);
     saveStore();
+    const selectedForTab = state.clients.find((c) => Number(c.id) === id) || null;
+    const titleForTab = String(selectedForTab?.name || "").trim();
+    const shouldAutoOpenDesktopDetails = !isAdminMobileChatLayout() && opts.openDetails !== false;
+    const shouldOpenDetails = opts.openDetails === true || shouldAutoOpenDesktopDetails;
+
+    if (shouldAutoOpenDesktopDetails || opts.openDetails === true) {
+      upsertChatRightTab("client", id, titleForTab);
+    }
+    if (shouldOpenDetails) {
+      window.requestAnimationFrame(() => {
+        openClientDetailsPanel().catch(console.error);
+      });
+    }
+
+    const selectedFromList = state.clients.find((c) => Number(c.id) === id) || null;
+    const isGuestClient = isGuestChatClient(selectedFromList);
+    state.activeClient = isGuestClient
+      ? buildGuestActiveClientProfile(id, selectedFromList)
+      : (selectedFromList || buildOptimisticActiveClientProfile(id, selectedFromList));
+    try {
+      setActiveOrders([], { forceRender: true });
+    } catch (err) {
+      console.error("Failed to reset active orders on chat client select:", err);
+    }
+    try {
+      renderChatHeader();
+    } catch (err) {
+      console.error("Failed to render chat header on client select:", err);
+    }
+    state.activeOrdersHydratedClientId = 0;
+    // Start header/client payload loading immediately so it isn't blocked by later UI steps.
+    loadActiveClientData(id, selectedFromList, {
+      isGuest: isGuestClient,
+      renderThread: false,
+    }).catch(console.error);
+    try {
+      const clientsRightApi = getClientsRightApi();
+      if (clientsRightApi && typeof clientsRightApi.setChatRightForceEmpty === "function") {
+        clientsRightApi.setChatRightForceEmpty(false);
+      }
+    } catch (err) {
+      console.error("Failed to sync chat right empty state:", err);
+    }
+
     const syncMobileViewAfterRender = (() => {
       if (opts.restoreMobileView === true) {
         return () => {
@@ -15503,11 +16750,26 @@
 
     ensureActiveThreadSseConnection();
     applyClientFilter();
-    renderMessages({ disableAutoPin: true, smoothScroll: false, skipSaveScrollPosition: true });
+    const forceDesktopBottomOnSelect = !isAdminMobileChatLayout();
+    renderMessages({
+      disableAutoPin: !forceDesktopBottomOnSelect,
+      forceScrollBottom: forceDesktopBottomOnSelect,
+      smoothScroll: false,
+      skipSaveScrollPosition: true,
+    });
     if (typeof syncMobileViewAfterRender === "function") {
       syncMobileViewAfterRender();
     }
-    if (!restoreThreadScrollPosition(id)) {
+    if (!isAdminMobileChatLayout()) {
+      const hasPendingForClient = getPendingScrollNewCount(id) > 0;
+      scrollMessagesToBottom({ behavior: "auto", keepPending: hasPendingForClient });
+      saveThreadScrollPosition(id);
+      window.requestAnimationFrame(() => {
+        if (Number(state.activeClientId) !== Number(id)) return;
+        scrollMessagesToBottom({ behavior: "auto", keepPending: hasPendingForClient });
+        saveThreadScrollPosition(id);
+      });
+    } else if (!restoreThreadScrollPosition(id)) {
       const hasPendingForClient = getPendingScrollNewCount(id) > 0;
       scrollMessagesToBottom({ behavior: "auto", keepPending: hasPendingForClient });
       saveThreadScrollPosition(id);
@@ -15519,20 +16781,6 @@
     syncActiveThreadReadState({ clientId: id });
     restorePersistedAttachPreviewDraft(id).catch(console.error);
     pullThreadFromRemote(id, { skipReadMark: true, ignoreIncomingBadge: true }).catch(console.error);
-
-    const selectedFromList = state.clients.find((c) => Number(c.id) === id) || null;
-    const isGuestClient = isGuestChatClient(selectedFromList);
-
-    state.activeClient = isGuestClient
-      ? buildGuestActiveClientProfile(id, selectedFromList)
-      : (selectedFromList || buildOptimisticActiveClientProfile(id, selectedFromList));
-    setActiveOrders([], { forceRender: true });
-    state.activeOrdersHydratedClientId = 0;
-
-    loadActiveClientData(id, selectedFromList, {
-      isGuest: isGuestClient,
-      renderThread: false,
-    }).catch(console.error);
   }
 
   function mergeClientsIntoState(rows, { reset = false } = {}) {
@@ -15744,7 +16992,8 @@
         applyClientFilter();
       }
 
-      if (ensureSelection) {
+      const allowAutoSelect = false;
+      if (allowAutoSelect) {
         const persisted = Number(state.store.lastOpenClientId || 0);
         const target = state.filteredClients.find((c) => Number(c.id) === persisted) || state.filteredClients[0];
         if (target) {
@@ -15781,17 +17030,9 @@
     if (!isChatWidgetEnabledRuntime()) return;
     if (!dom.left.list) return;
     if (state.clientsLoadInFlight) return state.clientsLoadInFlight;
-
-    const persistedClientId = Number(state.store?.lastOpenClientId || 0);
-    if (
-      persistedClientId > 0
-      && Number(state.activeClientId || 0) !== persistedClientId
-      && Array.isArray(state.store?.threads?.[String(persistedClientId)])
-    ) {
-      selectClient(persistedClientId, { restoreMobileView: true }).catch(console.error);
-    }
+    const mobileStart = isChatMobileViewport();
     // Do not block the first paint on slow DB/API responses.
-    state.clientsLoadInFlight = loadClientsPage({ reset: true, ensureSelection: true })
+    state.clientsLoadInFlight = loadClientsPage({ reset: true, ensureSelection: false })
       .catch((err) => {
         if (isAbortError(err) || !isChatWidgetEnabledRuntime()) return;
         console.error(err);
@@ -15802,6 +17043,15 @@
         }
       })
       .finally(() => {
+        if (mobileStart) {
+          stopLocalTypingSession(state.activeClientId, { flush: true });
+          state.activeClientId = null;
+          state.activeClient = null;
+          setHeaderLoading(false);
+          setActiveOrders([], { forceRender: true });
+          renderMessages();
+          syncMobileChatView("clients", { persistState: true });
+        }
         state.clientsLoadInFlight = null;
         // If first page doesn't fill the viewport, continue paging in background.
         maybeLoadMoreClientsByScroll();
@@ -15830,6 +17080,12 @@
   async function flushPendingNotificationChatOpenRequest() {
     const request = normalizeChatNotificationOpenRequest(pendingNotificationChatOpenRequest);
     if (!request) return false;
+    if (isChatMobileViewport()) {
+      // Mobile chat must always start from clients list without auto-opening any thread/card.
+      pendingNotificationChatOpenRequest = null;
+      clearChatNotificationOpenRequestFromLocation();
+      return false;
+    }
     if (!syncChatWidgetEnabledFromTenant({ reload: true, resume: true })) return false;
 
     pendingNotificationChatOpenRequest = null;
@@ -16046,6 +17302,30 @@
       });
     }
 
+    const mobileRightBackBtn = document.getElementById("chatMobileRightBackBtn");
+    if (mobileRightBackBtn && mobileRightBackBtn.dataset.bound !== "1") {
+      mobileRightBackBtn.dataset.bound = "1";
+      mobileRightBackBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const isOrderMode = document.body && document.body.classList.contains("chat-right-order-mode");
+        if (isOrderMode && Number(state.activeClientId || 0) > 0) {
+          if (state.rightOrderOpenedFromMessageBubble === true || state.rightOrderOpenedFromHeader === true) {
+            state.rightOrderOpenedFromMessageBubble = false;
+            state.rightOrderOpenedFromHeader = false;
+            syncMobileChatView("center");
+            return;
+          }
+          showChatRightPane("client");
+          state.rightOrderOpenedFromHeader = false;
+          syncMobileChatView("right");
+          restoreClientPanelState();
+          return;
+        }
+        syncMobileChatView("center");
+      });
+    }
+
     initHeaderClientOpenAction();
 
     window.__adminChatMobileApi = {
@@ -16070,6 +17350,8 @@
     };
 
     if (!document.body || !document.body.classList.contains("page-chat")) return;
+    hideLegacyRightPaneHeadersForChat();
+    showChatRightPane("client");
     window.addEventListener("resize", () => {
       syncMobileChatViewFromState({ persistState: false });
     }, { passive: true });
@@ -16096,12 +17378,15 @@
     initSelectionToolbar();
     initHeaderOrderStatusAction();
     initHeaderOrderOpenAction();
+    initChatRightOrderStatusActions();
+    bindChatRightOrderOpenRequests();
     initOrderHeaderLiveSync();
     if (dom.center.messagesWrap && dom.center.messagesWrap.dataset.scrollDownBound !== "1") {
       dom.center.messagesWrap.dataset.scrollDownBound = "1";
+      let scheduleTouchGestureActiveRelease = () => {};
       if (dom.center.messagesWrap.dataset.touchGestureTrackBound !== "1") {
         dom.center.messagesWrap.dataset.touchGestureTrackBound = "1";
-        const scheduleTouchGestureActiveRelease = () => {
+        scheduleTouchGestureActiveRelease = () => {
           if (adminChatThreadTouchGestureReleaseTimer) {
             window.clearTimeout(adminChatThreadTouchGestureReleaseTimer);
           }
@@ -16195,6 +17480,7 @@
     bindAdminChatKeyboardViewportSync();
     scheduleAdminChatKeyboardViewportSync();
     renderChatHeader();
+    seedChatRightTabsFromCurrentState();
     syncSelectionUi();
     renderMessages();
     syncChatWidgetEnabledFromTenant({ reload: true, resume: true });

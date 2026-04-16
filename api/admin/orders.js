@@ -263,6 +263,23 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
     return Array.isArray(parsed) ? parsed : [];
   }
 
+  function normalizeOrderPromoCode(value) {
+    return String(value || "").replace(/\s+/g, "").toUpperCase();
+  }
+
+  function parseOrderRewardPayload(rawValue) {
+    if (!rawValue) return null;
+    let parsed = rawValue;
+    try {
+      if (typeof rawValue === "string") {
+        parsed = JSON.parse(rawValue);
+      }
+    } catch {
+      return null;
+    }
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  }
+
   function buildOrderBenefitsMetaJson(source, fallbackRaw = null) {
     const input = source && typeof source === "object" ? source : {};
     const fallback = parseOrderBenefitsMetaJson(fallbackRaw);
@@ -285,6 +302,258 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
     }
     const hasValues = Object.values(meta).some((value) => value !== null);
     return hasValues ? JSON.stringify(meta) : null;
+  }
+
+  async function resolveDeliveredOrderStatusId(queryable, tenantId, storeId) {
+    const normalizedTenantId = Number(tenantId || 0);
+    const normalizedStoreId = Number(storeId || 0);
+    if (!(normalizedTenantId > 0) || !(normalizedStoreId > 0)) return null;
+
+    const [deliveredRows] = await queryable.query(
+      `SELECT id
+         FROM order_statuses
+        WHERE tenant_id = ?
+          AND store_id = ?
+          AND is_active = 1
+          AND code = 'delivered'
+        ORDER BY sort ASC, id ASC
+        LIMIT 1`,
+      [normalizedTenantId, normalizedStoreId]
+    );
+    if (Array.isArray(deliveredRows) && deliveredRows.length) {
+      return Number(deliveredRows[0]?.id || 0) || null;
+    }
+
+    const [finalRows] = await queryable.query(
+      `SELECT id
+         FROM order_statuses
+        WHERE tenant_id = ?
+          AND store_id = ?
+          AND is_active = 1
+          AND is_final = 1
+          AND LOWER(COALESCE(code, '')) NOT IN ('canceled', 'cancelled')
+        ORDER BY sort ASC, id ASC
+        LIMIT 1`,
+      [normalizedTenantId, normalizedStoreId]
+    );
+    if (Array.isArray(finalRows) && finalRows.length) {
+      return Number(finalRows[0]?.id || 0) || null;
+    }
+
+    return null;
+  }
+
+  async function resolveOrderPromoUsageLink(queryable, {
+    tenantId,
+    storeId,
+    promoCode = "",
+  } = {}) {
+    const normalizedTenantId = Number(tenantId || 0);
+    const normalizedStoreId = Number(storeId || 0);
+    const normalizedPromoCode = normalizeOrderPromoCode(promoCode);
+    if (!(normalizedTenantId > 0) || !(normalizedStoreId > 0) || !normalizedPromoCode) return null;
+
+    const [rows] = await queryable.query(
+      `SELECT id AS promo_code_id, discount_id
+         FROM mkt_discount_promo_codes
+        WHERE tenant_id = ?
+          AND (store_id = ? OR store_id = 0 OR store_id IS NULL)
+          AND UPPER(REPLACE(COALESCE(code, ''), ' ', '')) = ?
+        ORDER BY (store_id = ?) DESC, id DESC
+        LIMIT 1`,
+      [normalizedTenantId, normalizedStoreId, normalizedPromoCode, normalizedStoreId]
+    );
+    if (!Array.isArray(rows) || !rows.length) return null;
+    return {
+      discount_id: Number(rows[0]?.discount_id || 0) || null,
+      promo_code_id: Number(rows[0]?.promo_code_id || 0) || null,
+    };
+  }
+
+  async function resolveOrderRewardPromoUsageLink(queryable, {
+    tenantId,
+    customerId,
+    rewardId = null,
+  } = {}) {
+    const normalizedTenantId = Number(tenantId || 0);
+    const normalizedCustomerId = Number(customerId || 0) || null;
+    const normalizedRewardId = Number(rewardId || 0) || null;
+    if (!(normalizedTenantId > 0) || !(normalizedCustomerId > 0) || !(normalizedRewardId > 0)) return null;
+
+    const [rows] = await queryable.query(
+      `SELECT reward_payload_json
+         FROM mkt_discount_rewards
+        WHERE tenant_id = ?
+          AND customer_id = ?
+          AND id = ?
+          AND reward_type = 'promo_code'
+        LIMIT 1`,
+      [normalizedTenantId, normalizedCustomerId, normalizedRewardId]
+    );
+    if (!Array.isArray(rows) || !rows.length) return null;
+    const payload = parseOrderRewardPayload(rows[0]?.reward_payload_json);
+    return {
+      discount_id: Number(payload?.source_discount_id || 0) || null,
+      promo_code_id: Number(payload?.source_promo_code_id || 0) || null,
+    };
+  }
+
+  async function buildOrderDiscountUsageMap(queryable, {
+    tenantId,
+    storeId,
+    customerId = null,
+    rawDiscounts = null,
+    orderPromoCode = null,
+    benefitsMetaRaw = null,
+  } = {}) {
+    const usageMap = new Map();
+    const normalizedTenantId = Number(tenantId || 0);
+    const normalizedStoreId = Number(storeId || 0);
+    const normalizedCustomerId = Number(customerId || 0) || null;
+    const normalizedOrderPromo = normalizeOrderPromoCode(orderPromoCode);
+    const benefitsMeta = parseOrderBenefitsMetaJson(benefitsMetaRaw);
+
+    for (const entry of parseOrderDiscountsJson(rawDiscounts)) {
+      let discountId = Number(entry?.discount_id || 0) || null;
+      let promoCodeId = Number(entry?.promo_code_id || 0) || null;
+      const discountAmount = roundMoney(Number(entry?.discount_amount ?? entry?.amount ?? 0));
+      if (!(discountAmount > 0)) continue;
+
+      const sourceKind = String(entry?.source_kind || entry?.sourceKind || "").trim().toLowerCase();
+      const entryPromoCode = normalizeOrderPromoCode(entry?.promo_code ?? entry?.promoCode ?? entry?.code ?? normalizedOrderPromo);
+      if (!(discountId > 0) && entryPromoCode) {
+        const promoLink = await resolveOrderPromoUsageLink(queryable, {
+          tenantId: normalizedTenantId,
+          storeId: normalizedStoreId,
+          promoCode: entryPromoCode,
+        });
+        if (promoLink?.discount_id) discountId = Number(promoLink.discount_id || 0) || null;
+        if (!promoCodeId && promoLink?.promo_code_id) promoCodeId = Number(promoLink.promo_code_id || 0) || null;
+      }
+
+      if (!(discountId > 0) && (sourceKind === "reward_promo" || benefitsMeta?.selected_promo_source === "reward_promo")) {
+        const rewardId = Number(entry?.reward_id || entry?.rewardId || benefitsMeta?.selected_promo_reward_id || 0) || null;
+        const rewardLink = await resolveOrderRewardPromoUsageLink(queryable, {
+          tenantId: normalizedTenantId,
+          customerId: normalizedCustomerId,
+          rewardId,
+        });
+        if (rewardLink?.discount_id) discountId = Number(rewardLink.discount_id || 0) || null;
+        if (!promoCodeId && rewardLink?.promo_code_id) promoCodeId = Number(rewardLink.promo_code_id || 0) || null;
+      }
+
+      if (!(discountId > 0)) continue;
+      const key = `${discountId}:${promoCodeId || 0}`;
+      const current = usageMap.get(key) || {
+        discount_id: discountId,
+        promo_code_id: promoCodeId,
+        discount_amount: 0,
+      };
+      current.discount_amount = roundMoney(Number(current.discount_amount || 0) + discountAmount);
+      usageMap.set(key, current);
+    }
+    return usageMap;
+  }
+
+  async function syncDeliveredOrderDiscountUsage(queryable, {
+    tenantId,
+    storeId,
+    orderId,
+    statusId,
+    customerId = null,
+    discountsJson = null,
+    orderPromoCode = null,
+    benefitsMetaRaw = null,
+  } = {}) {
+    const normalizedTenantId = Number(tenantId || 0);
+    const normalizedStoreId = Number(storeId || 0);
+    const normalizedOrderId = Number(orderId || 0);
+    const normalizedStatusId = Number(statusId || 0);
+    const normalizedCustomerId = Number(customerId || 0) || null;
+    if (!(normalizedTenantId > 0) || !(normalizedStoreId > 0) || !(normalizedOrderId > 0) || !(normalizedStatusId > 0)) {
+      return { applied: [] };
+    }
+
+    const deliveredStatusId = await resolveDeliveredOrderStatusId(queryable, normalizedTenantId, normalizedStoreId);
+    if (!(deliveredStatusId > 0) || deliveredStatusId !== normalizedStatusId) {
+      return { applied: [] };
+    }
+
+    const usageMap = await buildOrderDiscountUsageMap(queryable, {
+      tenantId: normalizedTenantId,
+      storeId: normalizedStoreId,
+      customerId: normalizedCustomerId,
+      rawDiscounts: discountsJson,
+      orderPromoCode,
+      benefitsMetaRaw,
+    });
+    if (!usageMap.size) return { applied: [] };
+
+    const applied = [];
+    for (const usageRecord of usageMap.values()) {
+      const result = await discountHelpers.recordDiscountUsage(
+        queryable,
+        normalizedTenantId,
+        usageRecord.discount_id,
+        normalizedOrderId,
+        normalizedCustomerId,
+        usageRecord.discount_amount,
+        usageRecord.promo_code_id || null
+      );
+      if (result?.recorded) {
+        applied.push(usageRecord);
+      }
+    }
+
+    return { applied };
+  }
+
+  async function syncDeliveredOrderRewardPromoUsage(queryable, {
+    tenantId,
+    storeId,
+    statusId,
+    customerId = null,
+    benefitsMetaRaw = null,
+  } = {}) {
+    const normalizedTenantId = Number(tenantId || 0);
+    const normalizedStoreId = Number(storeId || 0);
+    const normalizedStatusId = Number(statusId || 0);
+    const normalizedCustomerId = Number(customerId || 0) || null;
+    if (!(normalizedTenantId > 0) || !(normalizedStoreId > 0) || !(normalizedStatusId > 0) || !(normalizedCustomerId > 0)) {
+      return { applied: false, rewardId: null };
+    }
+
+    const deliveredStatusId = await resolveDeliveredOrderStatusId(queryable, normalizedTenantId, normalizedStoreId);
+    if (!(deliveredStatusId > 0) || deliveredStatusId !== normalizedStatusId) {
+      return { applied: false, rewardId: null };
+    }
+
+    const benefitsMeta = parseOrderBenefitsMetaJson(benefitsMetaRaw);
+    if (!benefitsMeta || benefitsMeta.selected_promo_source !== "reward_promo") {
+      return { applied: false, rewardId: null };
+    }
+
+    const rewardId = Number(benefitsMeta?.selected_promo_reward_id || 0) || null;
+    if (!(rewardId > 0)) {
+      return { applied: false, rewardId: null };
+    }
+
+    const [result] = await queryable.query(
+      `UPDATE mkt_discount_rewards
+          SET status = 'used',
+              used_at = COALESCE(used_at, NOW()),
+              updated_at = NOW()
+        WHERE tenant_id = ?
+          AND customer_id = ?
+          AND id = ?
+          AND reward_type = 'promo_code'
+          AND status IN ('available', 'used')`,
+      [normalizedTenantId, normalizedCustomerId, rewardId]
+    );
+    return {
+      applied: Number(result?.affectedRows || 0) > 0,
+      rewardId,
+    };
   }
 
   async function findActiveGiftRewardOrderConflicts(queryable, {
@@ -1623,6 +1892,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       const storeId = helpers.getStoreId(req);
       const id = Number(req.params.id);
       const statusId = Number(req.body.status_id);
+      const hasBenefitsMetaColumn = await ensureOrderBenefitsMetaColumn();
 
       if (!Number.isFinite(id) || id <= 0) {
         safeRelease();
@@ -1651,7 +1921,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       }
 
       const [orderRows] = await conn.query(
-        `SELECT id, public_id, customer_id, items, status_id, stock_deducted_at, stock_document_id
+        `SELECT id, public_id, customer_id, promo_code, items, discounts_json, ${hasBenefitsMetaColumn ? "benefits_meta_json," : "NULL AS benefits_meta_json,"} status_id, stock_deducted_at, stock_document_id
          FROM order_orders
          WHERE tenant_id=? AND store_id=? AND id=? AND is_active=1
          LIMIT 1
@@ -1668,19 +1938,22 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       const orderRow = orderRows[0];
       const currentStatusId = Number(orderRow?.status_id || 0);
       let currentStatusCode = "";
+      let currentStatusIsFinal = false;
       if (currentStatusId > 0) {
         const [currentStatusRows] = await conn.query(
-          `SELECT code
+          `SELECT code, is_final
            FROM order_statuses
            WHERE tenant_id=? AND store_id=? AND id=?
            LIMIT 1`,
           [tenantId, storeId, currentStatusId]
         );
         currentStatusCode = String(currentStatusRows[0]?.code || "").trim().toLowerCase();
+        currentStatusIsFinal = Number(currentStatusRows[0]?.is_final || 0) === 1;
       }
       const targetStatusCode = String(statusRows[0]?.code || "").trim().toLowerCase();
       const isCanceledTarget = targetStatusCode === "canceled" || targetStatusCode === "cancelled";
-      if (currentStatusCode === "delivered" && isCanceledTarget) {
+      const isCurrentSuccessfulFinal = currentStatusIsFinal && currentStatusCode !== "canceled" && currentStatusCode !== "cancelled";
+      if (isCurrentSuccessfulFinal && isCanceledTarget) {
         await conn.rollback();
         transactionStarted = false;
         safeRelease();
@@ -1797,6 +2070,22 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
             [tenantId, rewardCustomerId, giftRewardIds]
           );
         }
+        const canceledBenefitsMeta = parseOrderBenefitsMetaJson(orderRow?.benefits_meta_json);
+        const canceledRewardPromoId = canceledBenefitsMeta?.selected_promo_source === "reward_promo"
+          ? (Number(canceledBenefitsMeta?.selected_promo_reward_id || 0) || null)
+          : null;
+        if (rewardCustomerId > 0 && canceledRewardPromoId) {
+          await conn.query(
+            `UPDATE mkt_discount_rewards
+                SET status='available', used_at=NULL, updated_at=NOW()
+              WHERE tenant_id=?
+                AND customer_id=?
+                AND reward_type='promo_code'
+                AND status='used'
+                AND id=?`,
+            [tenantId, rewardCustomerId, canceledRewardPromoId]
+          );
+        }
       }
 
       await accrueOrderBenefitsIfAvailable({
@@ -1804,6 +2093,24 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         tenantId,
         storeId,
         orderId: id,
+      });
+
+      await syncDeliveredOrderDiscountUsage(conn, {
+        tenantId,
+        storeId,
+        orderId: id,
+        statusId,
+        customerId: Number(orderRow?.customer_id || 0) || null,
+        discountsJson: orderRow?.discounts_json || null,
+        orderPromoCode: orderRow?.promo_code || null,
+        benefitsMetaRaw: orderRow?.benefits_meta_json || null,
+      });
+      await syncDeliveredOrderRewardPromoUsage(conn, {
+        tenantId,
+        storeId,
+        statusId,
+        customerId: Number(orderRow?.customer_id || 0) || null,
+        benefitsMetaRaw: orderRow?.benefits_meta_json || null,
       });
 
       await conn.commit();
@@ -1815,14 +2122,25 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         if (ordersEvents && typeof ordersEvents.publish === "function") {
           ordersEvents.publish(tenantId, storeId, "order.updated", payload);
         }
+        const payloadStatusCode = String(payload?.status_code || "").trim().toLowerCase();
+        const payloadStatusTitle = String(payload?.status_title || "").trim().toLowerCase();
+        const shouldTryPrintEnqueue = payloadStatusCode === "new" || payloadStatusTitle.startsWith("нов");
         try {
-          const pushed = await sendOrderToPrintBot({ db, order: payload, tenantId, storeId });
-          if (!pushed) {
-            console.warn("Print enqueue returned false (admin/orders status update)", {
-              orderId: Number(payload?.id || id),
-              tenantId: Number(tenantId),
-              storeId: Number(storeId),
+          if (shouldTryPrintEnqueue) {
+            const pushed = await sendOrderToPrintBot({
+              db,
+              order: payload,
+              tenantId,
+              storeId,
+              silentSkipReasons: ["ORDER_STATUS_NOT_NEW"],
             });
+            if (!pushed) {
+              console.warn("Print enqueue returned false (admin/orders status update)", {
+                orderId: Number(payload?.id || id),
+                tenantId: Number(tenantId),
+                storeId: Number(storeId),
+              });
+            }
           }
         } catch (err) {
           console.error("Print enqueue failed (admin/orders status update):", {
@@ -1929,7 +2247,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       const hasBenefitsMetaColumn = await ensureOrderBenefitsMetaColumn();
 
       const [existingRows] = await db.query(
-        `SELECT id, public_id, customer_id, promo_code, address_comment, cutlery_qty, discounts_json,
+        `SELECT id, public_id, customer_id, promo_code, address_comment, cutlery_qty, discounts_json, status_id,
                 ${hasBenefitsMetaColumn ? "benefits_meta_json," : ""}
                 items
          FROM order_orders
@@ -2454,16 +2772,31 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       const hasItemsTotalOverride = Number.isFinite(itemsTotalOverrideRaw) && itemsTotalOverrideRaw >= 0;
       const discountAmountOverrideRaw = Number(req.body?.discount_amount_override);
       const hasDiscountAmountOverride = Number.isFinite(discountAmountOverrideRaw) && discountAmountOverrideRaw >= 0;
+      const hasProvidedDiscountsJson = Array.isArray(req.body?.discounts_json);
+      const hasProvidedDiscountSnapshot = (
+        hasItemsTotalOverride
+        || hasDiscountAmountOverride
+        || hasProvidedDiscountsJson
+      );
+      const providedDiscountsJsonTotal = hasProvidedDiscountsJson
+        ? roundMoney(
+            req.body.discounts_json.reduce((sum, row) => (
+              sum + Number(row?.discount_amount ?? row?.amount ?? 0)
+            ), 0)
+          )
+        : 0;
 
       let customerOrderDiscountAmount = 0;
       let appliedOrderDiscounts = [];
-      if (!hasItemsTotalOverride && Number(customerId || 0) > 0 && itemsTotal > 0) {
+      if (!hasProvidedDiscountSnapshot && Number(customerId || 0) > 0 && itemsTotal > 0) {
         const orderDiscountsForCustomer = await discountHelpers.getOrderDiscounts(
           db,
           tenantId,
           storeId,
           customerId,
-          itemsTotal
+          itemsTotal,
+          null,
+          { excludeOrderId: id }
         );
         if (Array.isArray(orderDiscountsForCustomer) && orderDiscountsForCustomer.length) {
           const applied = discountHelpers.applyBestDiscounts(orderDiscountsForCustomer, itemsTotal);
@@ -2476,7 +2809,9 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         : roundMoney(Math.max(0, itemsTotal - customerOrderDiscountAmount));
       const discountAmount = hasDiscountAmountOverride
         ? roundMoney(Math.max(0, discountAmountOverrideRaw))
-        : roundMoney(itemLevelDiscountAmount + customerOrderDiscountAmount);
+        : hasProvidedDiscountsJson
+          ? roundMoney(Math.max(0, providedDiscountsJsonTotal))
+          : roundMoney(itemLevelDiscountAmount + customerOrderDiscountAmount);
 
       let deliveryCost = 0;
       if (isDeliveryMethod) {
@@ -2611,11 +2946,11 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         discountsJson = parseOrderDiscountsJson(existing?.discounts_json);
       }
       discountsJson = Array.isArray(discountsJson) ? discountsJson : [];
-      if (!hasItemsTotalOverride) {
+      if (!hasProvidedDiscountSnapshot && !hasItemsTotalOverride) {
         discountsJson = discountsJson
           .filter((row) => String(row?.apply_to || "").trim().toLowerCase() !== "order");
       }
-      if (!hasItemsTotalOverride && customerOrderDiscountAmount > 0 && appliedOrderDiscounts.length) {
+      if (!hasProvidedDiscountSnapshot && !hasItemsTotalOverride && customerOrderDiscountAmount > 0 && appliedOrderDiscounts.length) {
         discountsJson.push(
           ...appliedOrderDiscounts.map((row) => ({
             discount_id: Number(row?.id || 0),
@@ -2768,6 +3103,28 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         });
       } catch (accrualErr) {
         console.error("Failed to accrue order benefits after admin order save:", accrualErr);
+      }
+
+      try {
+        await syncDeliveredOrderDiscountUsage(db, {
+          tenantId,
+          storeId,
+          orderId: id,
+          statusId: Number(existing?.status_id || 0) || null,
+          customerId: Number(customerId || 0) || null,
+          discountsJson,
+          orderPromoCode: existing?.promo_code || null,
+          benefitsMetaRaw: benefitsMetaJson,
+        });
+        await syncDeliveredOrderRewardPromoUsage(db, {
+          tenantId,
+          storeId,
+          statusId: Number(existing?.status_id || 0) || null,
+          customerId: Number(customerId || 0) || null,
+          benefitsMetaRaw: benefitsMetaJson,
+        });
+      } catch (usageErr) {
+        console.error("Failed to sync delivered discount usage after admin order save:", usageErr);
       }
 
       const payload = await fetchOrderPayload(tenantId, storeId, id);

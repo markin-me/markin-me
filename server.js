@@ -15,17 +15,32 @@ const { URL, domainToASCII } = require('url');
 const db = require('./db');
 const helpers = require('./api/helpers');
 const { createOrdersEventsHub } = require('./api/ordersEvents');
-const { startPolling: startTelegramPolling, handleWebhookUpdate, setWebhook, deleteWebhook } = require('./api/telegramBot');
+const {
+  startPolling: startTelegramPolling,
+  handleWebhookUpdate: handleTelegramWebhookUpdate,
+  setWebhook: setTelegramWebhook,
+  deleteWebhook: deleteTelegramWebhook
+} = require('./api/telegramBot');
 const { startMaxPolling } = require('./api/maxBotPolling');
+const {
+  startPolling: startSystemMaxPolling,
+  handleWebhookUpdate: handleSystemMaxWebhookUpdate,
+  setWebhook: setSystemMaxWebhook,
+  deleteWebhook: deleteSystemMaxWebhook
+} = require('./api/systemMaxBot');
 const { startTenantTelegramAuthPolling } = require('./api/tgAuthBotPolling');
 const {
   readSystemSettings,
   writeSystemSettings,
   getBootstrappedPollingState,
   getEffectiveTelegramBotConfig,
+  getEffectiveMaxBotConfig,
   normalizeTelegramBotUsername,
   normalizeTelegramBotToken,
   normalizeTelegramWebhookUrl,
+  normalizeMaxBotId,
+  normalizeMaxBotToken,
+  normalizeMaxWebhookUrl,
 } = require('./data/system-settings');
 const {
   getTenantMapConfig,
@@ -100,11 +115,13 @@ const SLOW_REQUEST_LOG_MS = Math.max(0, Number(process.env.SLOW_REQUEST_LOG_MS |
 const runtimePollingState = {
   telegram_env_enabled: String(process.env.DISABLE_TELEGRAM_POLLING || '').trim() !== '1',
   telegram_tenant_enabled: String(process.env.DISABLE_TG_AUTH_POLLING || '').trim() !== '1',
+  max_env_enabled: String(process.env.DISABLE_MAX_POLLING || '').trim() !== '1',
 };
 const tenantLookupCache = new Map();
 const staticVersionCache = new Map();
 let telegramEnvPollingHandle = null;
 let telegramTenantPollingHandle = null;
+let maxEnvPollingHandle = null;
 let fatalErrorLogged = false;
 
 function normalizeConfiguredHost(value) {
@@ -223,6 +240,28 @@ function nowMs() {
 
 function hasOwn(target, key) {
   return Boolean(target) && Object.prototype.hasOwnProperty.call(target, key);
+}
+
+function isAbsoluteHttpUrl(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return false;
+  try {
+    const parsed = new URL(raw);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function isAbsoluteHttpsUrl(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return false;
+  try {
+    const parsed = new URL(raw);
+    return parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
 }
 
 function buildMapGeocoderScopeLabel(scope, countryCode) {
@@ -467,12 +506,25 @@ function getSystemTelegramConfig(sourceState = readSystemSettings()) {
   return getEffectiveTelegramBotConfig(sourceState);
 }
 
+function getSystemMaxConfig(sourceState = readSystemSettings()) {
+  return getEffectiveMaxBotConfig(sourceState);
+}
+
 async function removeTelegramWebhook(token) {
   if (!token) return;
   try {
-    await deleteWebhook(token);
+    await deleteTelegramWebhook(token);
   } catch (e) {
     console.error('Telegram deleteWebhook error:', e.message || e);
+  }
+}
+
+async function removeSystemMaxWebhook(token) {
+  if (!token) return;
+  try {
+    await deleteSystemMaxWebhook(token);
+  } catch (e) {
+    console.error('System MAX deleteWebhook error:', e.message || e);
   }
 }
 
@@ -1408,7 +1460,7 @@ self.addEventListener('fetch', function (event) {
   }
 
   if (request.mode === 'navigate' && url.pathname.indexOf('/dashboard') === 0) {
-    if (url.pathname === '/dashboard/chat') {
+    if (url.pathname === '/dashboard/chat' || url.pathname === '/dashboard/courier-screen') {
       event.respondWith(networkFirstPage(request));
       return;
     }
@@ -1703,7 +1755,8 @@ app.get('/dashboard/team', (req, res) => res.render('pages/home', { activePage: 
 app.get('/dashboard/settings', (req, res) =>
   res.render('pages/home', {
     activePage: 'settings',
-    telegramBotUsername: getSystemTelegramConfig().telegram_bot_username
+    telegramBotUsername: getSystemTelegramConfig().telegram_bot_username,
+    systemMaxBotId: getSystemMaxConfig().max_bot_id
   })
 );
 
@@ -1724,7 +1777,16 @@ app.post('/api/telegram/webhook', (req, res) => {
   const token = getSystemTelegramConfig().telegram_bot_token;
   const update = req.body;
   if (token && update) {
-    handleWebhookUpdate(db, token, update).catch((err) => console.error('Telegram webhook:', err));
+    handleTelegramWebhookUpdate(db, token, update).catch((err) => console.error('Telegram webhook:', err));
+  }
+});
+
+app.post('/api/max/webhook', (req, res) => {
+  res.sendStatus(200);
+  const token = getSystemMaxConfig().max_bot_token;
+  const update = req.body;
+  if (token && update) {
+    handleSystemMaxWebhookUpdate(db, token, update).catch((err) => console.error('System MAX webhook:', err));
   }
 });
 
@@ -1823,7 +1885,7 @@ async function syncSystemTelegramRuntime(previousConfig = null) {
 
   if (nextWebhookUrl) {
     try {
-      await setWebhook(nextToken, nextWebhookUrl);
+      await setTelegramWebhook(nextToken, nextWebhookUrl);
     } catch (e) {
       console.error('Telegram setWebhook error:', e.message || e);
     }
@@ -1854,6 +1916,72 @@ function stopTenantTelegramPollingIfRunning() {
   } finally {
     telegramTenantPollingHandle = null;
   }
+}
+
+function startMaxEnvPollingIfNeeded() {
+  if (!runtimePollingState.max_env_enabled) return;
+  if (maxEnvPollingHandle) return;
+
+  const systemMaxConfig = getSystemMaxConfig();
+  const maxToken = systemMaxConfig.max_bot_token;
+  const webhookUrl = systemMaxConfig.max_webhook_url;
+  if (!maxToken || webhookUrl) return;
+
+  try {
+    maxEnvPollingHandle = startSystemMaxPolling(db, maxToken) || null;
+  } catch (e) {
+    console.error('System MAX bot start error:', e.message || e);
+  }
+}
+
+function stopMaxEnvPollingIfRunning() {
+  if (!maxEnvPollingHandle) return;
+  try {
+    if (typeof maxEnvPollingHandle.stop === 'function') maxEnvPollingHandle.stop();
+  } catch (e) {
+    console.error('System MAX bot stop error:', e.message || e);
+  } finally {
+    maxEnvPollingHandle = null;
+  }
+}
+
+async function syncSystemMaxRuntime(previousConfig = null) {
+  const nextConfig = getSystemMaxConfig();
+  const previousToken = previousConfig && typeof previousConfig === 'object'
+    ? String(previousConfig.max_bot_token || '').trim()
+    : '';
+  const previousWebhookUrl = previousConfig && typeof previousConfig === 'object'
+    ? String(previousConfig.max_webhook_url || '').trim()
+    : '';
+  const nextToken = String(nextConfig.max_bot_token || '').trim();
+  const nextWebhookUrl = String(nextConfig.max_webhook_url || '').trim();
+
+  stopMaxEnvPollingIfRunning();
+
+  if (previousToken && previousToken !== nextToken) {
+    await removeSystemMaxWebhook(previousToken);
+  }
+
+  if (!runtimePollingState.max_env_enabled || !nextToken) {
+    const tokenToDisable = nextToken || previousToken;
+    if (tokenToDisable && (nextWebhookUrl || previousWebhookUrl)) {
+      await removeSystemMaxWebhook(tokenToDisable);
+    }
+    return nextConfig;
+  }
+
+  if (nextWebhookUrl) {
+    try {
+      await setSystemMaxWebhook(nextToken, nextWebhookUrl);
+    } catch (e) {
+      console.error('System MAX setWebhook error:', e.message || e);
+    }
+    return nextConfig;
+  }
+
+  await removeSystemMaxWebhook(nextToken);
+  startMaxEnvPollingIfNeeded();
+  return nextConfig;
 }
 
 app.get('/api/admin/system/polling', authMiddleware, (req, res) => {
@@ -1908,6 +2036,16 @@ app.get('/api/admin/system/telegram-bot', authMiddleware, (req, res) => {
       ...getSystemTelegramConfig(),
       telegram_env_enabled: Boolean(runtimePollingState.telegram_env_enabled),
       telegram_tenant_enabled: Boolean(runtimePollingState.telegram_tenant_enabled),
+    },
+  });
+});
+
+app.get('/api/admin/system/max-bot', authMiddleware, (req, res) => {
+  return res.json({
+    ok: true,
+    data: {
+      ...getSystemMaxConfig(),
+      max_env_enabled: Boolean(runtimePollingState.max_env_enabled),
     },
   });
 });
@@ -1980,6 +2118,69 @@ app.put('/api/admin/system/telegram-bot', authMiddleware, async (req, res) => {
       ...getSystemTelegramConfig(savedState),
       telegram_env_enabled: Boolean(runtimePollingState.telegram_env_enabled),
       telegram_tenant_enabled: Boolean(runtimePollingState.telegram_tenant_enabled),
+    },
+  });
+});
+
+app.put('/api/admin/system/max-bot', authMiddleware, async (req, res) => {
+  const body = req.body || {};
+  const hasBotId = hasOwn(body, 'max_bot_id');
+  const hasToken = hasOwn(body, 'max_bot_token');
+  const hasWebhook = hasOwn(body, 'max_webhook_url');
+  const hasEnvEnabled = hasOwn(body, 'max_env_enabled');
+  const hasConfigFields = hasBotId || hasToken || hasWebhook;
+
+  if (!hasConfigFields && !hasEnvEnabled) {
+    return res.status(400).json({ ok: false, error: 'NO_FIELDS' });
+  }
+
+  const previousConfig = getSystemMaxConfig();
+  const maxBotId = hasBotId
+    ? normalizeMaxBotId(body.max_bot_id)
+    : previousConfig.max_bot_id;
+  const maxBotToken = hasToken
+    ? normalizeMaxBotToken(body.max_bot_token)
+    : previousConfig.max_bot_token;
+  const maxWebhookUrl = hasWebhook
+    ? normalizeMaxWebhookUrl(body.max_webhook_url)
+    : previousConfig.max_webhook_url;
+  const isClearingConfig = !maxBotId && !maxBotToken && !maxWebhookUrl;
+
+  if (hasConfigFields && !maxBotToken && !isClearingConfig) {
+    return res.status(400).json({ ok: false, error: 'TOKEN_REQUIRED' });
+  }
+
+  if (maxWebhookUrl && !isAbsoluteHttpsUrl(maxWebhookUrl)) {
+    return res.status(400).json({ ok: false, error: 'INVALID_WEBHOOK_URL' });
+  }
+
+  if (hasEnvEnabled) {
+    runtimePollingState.max_env_enabled = Boolean(body.max_env_enabled);
+  }
+
+  const savedState = writeSystemSettings(
+    {
+      max_bot_id: maxBotId,
+      max_bot_token: maxBotToken,
+      max_webhook_url: maxWebhookUrl,
+      max_env_enabled: runtimePollingState.max_env_enabled,
+    },
+    { defaults: runtimePollingState }
+  );
+
+  if (!savedState) {
+    return res.status(500).json({ ok: false, error: 'SYSTEM_SETTINGS_WRITE_FAILED' });
+  }
+
+  if (hasConfigFields || hasEnvEnabled) {
+    await syncSystemMaxRuntime(previousConfig);
+  }
+
+  return res.json({
+    ok: true,
+    data: {
+      ...getSystemMaxConfig(savedState),
+      max_env_enabled: Boolean(runtimePollingState.max_env_enabled),
     },
   });
 });
@@ -2278,10 +2479,12 @@ server.on('listening', () => {
   console.log(`📝 Откройте http://localhost:${PORT}/login в браузере`);
   syncSystemTelegramRuntime().catch((e) => console.error('Telegram runtime sync error:', e.message || e));
 
+  syncSystemMaxRuntime().catch((e) => console.error('System MAX runtime sync error:', e.message || e));
+
   try {
     startMaxPolling(db, helpers);
   } catch (e) {
-    console.error('MAX bot start error:', e.message || e);
+    console.error('MAX tenant polling start error:', e.message || e);
   }
 
   if (runtimePollingState.telegram_tenant_enabled) {

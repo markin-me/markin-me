@@ -2,7 +2,7 @@
   <div class="panel orders-info">
     <div class="panel-header product-tabs-header hidden" id="orderTabsHeader">
       <div class="product-tabs-header-inner">
-        <button class="product-tabs-home" type="button" data-action="order-tabs-home" aria-label="Главный экран заказов">
+        <button class="product-tabs-home" type="button" data-action="order-tabs-home" aria-label="Главная" title="Главная">
           <i class="fas fa-home"></i>
         </button>
         <div class="product-tabs" id="orderTabs"></div>
@@ -14,9 +14,11 @@
     <div class="panel-footer order-info-footer hidden" id="orderInfoFooter">
       <div class="order-footer-actions">
         <button class="order-footer-status-pill order-payment-pill" type="button" data-action="order-mark-paid" id="orderInfoPaymentBtn" aria-label="Оплата заказа">
+          <i class="fas fa-wallet order-footer-mobile-icon" aria-hidden="true"></i>
           <span>Принять оплату</span>
         </button>
         <button class="order-footer-status-pill" type="button" data-action="order-status-next" aria-label="Статус заказа">
+          <i class="fas fa-truck order-footer-mobile-icon" aria-hidden="true"></i>
           <span data-info="order-status">—</span>
         </button>
         <div class="order-head-actions order-footer-icon-actions">
@@ -35,7 +37,7 @@
 <div class="hidden" id="ordersCheckoutRightPane">
   <div class="panel-header product-tabs-header hidden" id="orderTabsHeaderCheckout">
     <div class="product-tabs-header-inner">
-      <button class="product-tabs-home" type="button" data-action="order-tabs-home" aria-label="Главный экран заказов">
+      <button class="product-tabs-home" type="button" data-action="order-tabs-home" aria-label="Главная" title="Главная">
         <i class="fas fa-home"></i>
       </button>
       <div class="product-tabs" id="orderTabsCheckout"></div>
