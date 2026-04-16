@@ -1018,7 +1018,11 @@ async function renderShopInstallPage(req, res) {
       ? { ...tenant, store_address_map_enabled: Boolean(mapConfig.store_address_map_enabled) }
       : tenant;
     const tenantId = tenantView && tenantView.id ? tenantView.id : 1;
-    const tenantHostShop = Boolean(await findTenantByHost(getRequestRoutingHost(req)));
+    const tenantHostShop = Boolean(
+      req._resolvedTenant
+      && tenantView
+      && Number(req._resolvedTenant.id || 0) === Number(tenantView.id || 0)
+    );
     const shopUrl = tenantHostShop
       ? '/'
       : `/shop?tenant_id=${encodeURIComponent(String(tenantId))}`;
@@ -1149,7 +1153,7 @@ app.get('/manifest.json', async (req, res) => {
         id: manifestId
       }];
     const launchHandler = {
-      client_mode: ['navigate-existing', 'auto']
+      client_mode: 'navigate-existing'
     };
     res.json({
       id: manifestId,
@@ -1179,7 +1183,7 @@ app.get('/manifest.json', async (req, res) => {
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     res.setHeader('Vary', 'Host');
     const launchHandler = {
-      client_mode: ['navigate-existing', 'auto']
+      client_mode: 'navigate-existing'
     };
     res.json({
       id: appType === 'admin' ? '/pwa/admin/fallback' : '/pwa/shop/fallback',

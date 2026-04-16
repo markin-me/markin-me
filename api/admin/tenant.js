@@ -47,6 +47,12 @@ const {
 module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
   const router = express.Router();
   const devPwaTunnelStatePath = path.resolve(__dirname, '../../tmp/dev-pwa-tunnel.json');
+  const DEV_PWA_TUNNEL_VALIDATE_CACHE_MS = 30_000;
+  let devPwaTunnelValidationCache = {
+    key: '',
+    expiresAt: 0,
+    value: null
+  };
   const subdomainRe = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
   const tenantChatColumns = [
     {
@@ -96,6 +102,12 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
       sql: "text DEFAULT NULL COMMENT 'JSON list of tenant map provider accounts'"
     }
   ];
+  const tenantPwaColumns = [
+    {
+      name: 'pwa_qr_badge_text',
+      sql: "varchar(120) DEFAULT NULL COMMENT 'Custom PWA QR card badge text'"
+    }
+  ];
   const MAP_PROVIDER_KEEP_VALUE = '__saved__';
   const MAP_PROVIDER_API_KEY_PLACEHOLDER_TEST_RE = /(\{\{\s*api[_-]?key\s*\}\}|\{\s*api[_-]?key\s*\}|%API[_-]?KEY%|\$API[_-]?KEY\$)/i;
   const MAP_PROVIDER_API_KEY_PLACEHOLDER_REPLACE_RE = /(\{\{\s*api[_-]?key\s*\}\}|\{\s*api[_-]?key\s*\}|%API[_-]?KEY%|\$API[_-]?KEY\$)/gi;
@@ -114,6 +126,8 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
   let ensureTenantChatColumnsPromise = null;
   let tenantMapProviderColumnsReady = false;
   let ensureTenantMapProviderColumnsPromise = null;
+  let tenantPwaColumnsReady = false;
+  let ensureTenantPwaColumnsPromise = null;
   let deliveryZoneTablesReady = false;
   let ensureDeliveryZoneTablesPromise = null;
   let orderDeliveryTypeColumnsReady = false;
@@ -281,7 +295,12 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
   function isLocalDevHostname(hostname) {
     const normalized = String(hostname || '').trim().toLowerCase();
     if (!normalized) return false;
-    if (normalized === 'localhost' || normalized === '::1' || normalized === '0.0.0.0') return true;
+    if (
+      normalized === 'localhost'
+      || normalized.endsWith('.localhost')
+      || normalized === '::1'
+      || normalized === '0.0.0.0'
+    ) return true;
     return isPrivateIpv4Host(normalized);
   }
 
@@ -511,6 +530,37 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
     }
   }
 
+  async function getReachableDevPwaTunnelState() {
+    const state = readDevPwaTunnelState();
+    if (!state || !state.base_url) return null;
+
+    const cacheKey = String(state.base_url || '').trim();
+    if (
+      cacheKey
+      && devPwaTunnelValidationCache.key === cacheKey
+      && devPwaTunnelValidationCache.expiresAt > Date.now()
+    ) {
+      return devPwaTunnelValidationCache.value;
+    }
+
+    let nextValue = null;
+    try {
+      const parsed = new URL(`${cacheKey}/`);
+      await dns.lookup(parsed.hostname);
+      nextValue = state;
+    } catch (_) {
+      nextValue = null;
+    }
+
+    devPwaTunnelValidationCache = {
+      key: cacheKey,
+      expiresAt: Date.now() + DEV_PWA_TUNNEL_VALIDATE_CACHE_MS,
+      value: nextValue
+    };
+
+    return nextValue;
+  }
+
   function buildTenantPwaInstallTargets(tenant, req, domains = []) {
     const targets = [];
     const seenHosts = new Set();
@@ -555,6 +605,9 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
     if (subdomainUrl) {
       try {
         const parsed = new URL(subdomainUrl);
+        if (isLocalDevHostname(parsed.hostname)) {
+          return targets;
+        }
         const installUrl = new URL(parsed.origin + '/shop/install-app');
         installUrl.searchParams.set('source', 'qr');
         pushTarget({
@@ -572,7 +625,7 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
     return targets;
   }
 
-  function buildTenantPwaDevInstallTargets(tenant, req) {
+  function buildTenantPwaDevInstallTargets(tenant, req, options = {}) {
     const tenantId = Number(tenant && tenant.id || 0) || 0;
     if (!(tenantId > 0) || !req) return [];
 
@@ -583,11 +636,13 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
       ? 'https'
       : 'http';
 
-    if (!isLocalDevHostname(currentHost.hostname)) return [];
+    const isLocalDevHost = isLocalDevHostname(currentHost.hostname);
 
     const targets = [];
     const seenHosts = new Set();
-    const tunnelState = readDevPwaTunnelState();
+    const tunnelState = options && Object.prototype.hasOwnProperty.call(options, 'tunnelState')
+      ? options.tunnelState
+      : readDevPwaTunnelState();
 
     function pushTarget(rawTarget) {
       if (!rawTarget || typeof rawTarget !== 'object') return;
@@ -628,6 +683,10 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
           dev: true
         })
       });
+    }
+
+    if (!isLocalDevHost) {
+      return targets;
     }
 
     if (currentHost.host && !isLoopbackHost && currentHost.hostname !== '0.0.0.0') {
@@ -949,7 +1008,10 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
     const baseUrl = `${protocol}://${hostHeader}`;
     const subdomainShopUrl = buildTenantSubdomainUrl(nextTenant, req);
     const pwaInstallTargets = buildTenantPwaInstallTargets(nextTenant, req, domains);
-    const pwaInstallDevTargets = buildTenantPwaDevInstallTargets(nextTenant, req);
+    const reachableDevTunnelState = await getReachableDevPwaTunnelState();
+    const pwaInstallDevTargets = buildTenantPwaDevInstallTargets(nextTenant, req, {
+      tunnelState: reachableDevTunnelState
+    });
     return {
       ...nextTenant,
       domains,
@@ -1685,6 +1747,48 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
 
   async function ensureTenantMapProviderColumns() {
     return ensureTenantMapConfigColumns(db);
+  }
+
+  async function ensureTenantPwaColumns() {
+    if (tenantPwaColumnsReady) return true;
+    if (ensureTenantPwaColumnsPromise) return ensureTenantPwaColumnsPromise;
+
+    ensureTenantPwaColumnsPromise = (async () => {
+      const [columnRows] = await db.query('SHOW COLUMNS FROM ten_tenants');
+      const existing = new Set(
+        (Array.isArray(columnRows) ? columnRows : [])
+          .map((row) => String(row?.Field || '').trim())
+          .filter(Boolean)
+      );
+
+      for (const column of tenantPwaColumns) {
+        if (existing.has(column.name)) continue;
+        try {
+          await db.query(`ALTER TABLE ten_tenants ADD COLUMN \`${column.name}\` ${column.sql}`);
+          existing.add(column.name);
+        } catch (err) {
+          if (String(err?.code || '') === 'ER_DUP_FIELDNAME') {
+            existing.add(column.name);
+            continue;
+          }
+          throw err;
+        }
+      }
+
+      tenantPwaColumnsReady = tenantPwaColumns.every((column) => existing.has(column.name));
+      return tenantPwaColumnsReady;
+    })()
+      .catch((err) => {
+        ensureTenantPwaColumnsPromise = null;
+        throw err;
+      })
+      .finally(() => {
+        if (tenantPwaColumnsReady) {
+          ensureTenantPwaColumnsPromise = null;
+        }
+      });
+
+    return ensureTenantPwaColumnsPromise;
   }
 
   async function ensureDeliveryZoneTables() {
@@ -3408,6 +3512,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
       const stockDeductStatusIdRaw = req.body.order_stock_deduct_status_id !== undefined ? helpers.numOrNull(req.body.order_stock_deduct_status_id) : undefined;
       const siteName = req.body.site_name !== undefined ? helpers.strOrNull(req.body.site_name) : undefined;
       const siteDescription = req.body.site_description !== undefined ? helpers.strOrNull(req.body.site_description) : undefined;
+      const pwaQrBadgeTextRaw = req.body.pwa_qr_badge_text !== undefined ? helpers.strOrNull(req.body.pwa_qr_badge_text) : undefined;
       const subdomain = req.body.subdomain !== undefined ? normalizeSubdomain(req.body.subdomain) : undefined;
       await ensureTenantDomainsTable();
 
@@ -3503,6 +3608,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
 
       await ensureTenantChatColumns();
       await ensureTenantMapProviderColumns();
+      await ensureTenantPwaColumns();
 
       const [currentRows] = await db.query(
         'SELECT * FROM ten_tenants WHERE id=? LIMIT 1',
@@ -3593,6 +3699,9 @@ async function fetchStoreWithHours(tenantId, storeId) {
       }
       const nextSiteName = siteName !== undefined ? siteName : current.site_name;
       const nextSiteDescription = siteDescription !== undefined ? siteDescription : current.site_description;
+      const nextPwaQrBadgeText = pwaQrBadgeTextRaw !== undefined
+        ? (String(pwaQrBadgeTextRaw || '').replace(/\s+/g, ' ').trim().slice(0, 56) || null)
+        : (current.pwa_qr_badge_text ?? null);
       let nextSubdomain = subdomain !== undefined ? subdomain : current.subdomain;
 
       if (subdomain !== undefined) {
@@ -3685,8 +3794,8 @@ async function fetchStoreWithHours(tenantId, storeId) {
       }
 
       await db.query(
-        'UPDATE ten_tenants SET name=?, email=?, phone=?, timezone=?, logo_light_url=?, logo_dark_url=?, favicon_light_url=?, favicon_dark_url=?, apple_touch_icon_url=?, android_icon_url=?, price_rounding_mode=?, price_rounding_precision=?, order_stock_deduct_mode=?, order_stock_deduct_status_id=?, site_name=?, site_description=?, subdomain=?, custom_domain=?, custom_domain_ascii=?, sound_new_order_url=?, sound_order_cancelled_url=?, sound_new_message_url=?, img_webp_quality=?, img_thumb_quality=?, img_thumb_width=?, img_main_width=?, img_webp_aggressive=?, img_delete_original=?, max_bot_id=?, max_bot_token=?, max_mini_app_enabled=?, max_login_enabled=?, telegram_bot_username=?, telegram_bot_token=?, tg_mini_app_enabled=?, tg_login_enabled=?, chat_welcome_message=?, chat_welcome_enabled=?, chat_assistant_name=?, chat_operator_name=?, chat_assistant_gender=?, chat_quick_questions_json=?, chat_quick_questions_enabled=?, chat_widget_enabled=?, chat_guest_thread_ttl_days=?, chat_thread_ttl_days=? WHERE id=?',
-        [nextName, nextEmail, nextPhone, nextTimezone, nextLogoLight, nextLogoDark, nextFaviconLight, nextFaviconDark, nextAppleTouchIcon, nextAndroidIcon, nextRoundingMode, nextRoundingPrecision, nextStockDeductMode, nextStockDeductStatusId, nextSiteName, nextSiteDescription, nextSubdomain, nextCustomDomain, nextCustomDomainAscii, nextSoundNewOrder, nextSoundCancelled, nextSoundNewMessage, nextImgWebpQuality, nextImgThumbQuality, nextImgThumbWidth, nextImgMainWidth, nextImgWebpAggressive, nextImgDeleteOriginal, nextMaxBotId, nextMaxBotToken, nextMaxMiniAppEnabled, nextMaxLoginEnabled, nextTelegramBotUsername, nextTelegramBotToken, nextTgMiniAppEnabled, nextTgLoginEnabled, nextChatWelcomeMessage, nextChatWelcomeEnabled, nextChatAssistantName, nextChatOperatorName, nextChatAssistantGender, nextChatQuickQuestionsJson, nextChatQuickQuestionsEnabled, nextChatWidgetEnabled, nextChatGuestThreadTtlDays, nextChatThreadTtlDays, tenantId]
+        'UPDATE ten_tenants SET name=?, email=?, phone=?, timezone=?, logo_light_url=?, logo_dark_url=?, favicon_light_url=?, favicon_dark_url=?, apple_touch_icon_url=?, android_icon_url=?, price_rounding_mode=?, price_rounding_precision=?, order_stock_deduct_mode=?, order_stock_deduct_status_id=?, site_name=?, site_description=?, pwa_qr_badge_text=?, subdomain=?, custom_domain=?, custom_domain_ascii=?, sound_new_order_url=?, sound_order_cancelled_url=?, sound_new_message_url=?, img_webp_quality=?, img_thumb_quality=?, img_thumb_width=?, img_main_width=?, img_webp_aggressive=?, img_delete_original=?, max_bot_id=?, max_bot_token=?, max_mini_app_enabled=?, max_login_enabled=?, telegram_bot_username=?, telegram_bot_token=?, tg_mini_app_enabled=?, tg_login_enabled=?, chat_welcome_message=?, chat_welcome_enabled=?, chat_assistant_name=?, chat_operator_name=?, chat_assistant_gender=?, chat_quick_questions_json=?, chat_quick_questions_enabled=?, chat_widget_enabled=?, chat_guest_thread_ttl_days=?, chat_thread_ttl_days=? WHERE id=?',
+        [nextName, nextEmail, nextPhone, nextTimezone, nextLogoLight, nextLogoDark, nextFaviconLight, nextFaviconDark, nextAppleTouchIcon, nextAndroidIcon, nextRoundingMode, nextRoundingPrecision, nextStockDeductMode, nextStockDeductStatusId, nextSiteName, nextSiteDescription, nextPwaQrBadgeText, nextSubdomain, nextCustomDomain, nextCustomDomainAscii, nextSoundNewOrder, nextSoundCancelled, nextSoundNewMessage, nextImgWebpQuality, nextImgThumbQuality, nextImgThumbWidth, nextImgMainWidth, nextImgWebpAggressive, nextImgDeleteOriginal, nextMaxBotId, nextMaxBotToken, nextMaxMiniAppEnabled, nextMaxLoginEnabled, nextTelegramBotUsername, nextTelegramBotToken, nextTgMiniAppEnabled, nextTgLoginEnabled, nextChatWelcomeMessage, nextChatWelcomeEnabled, nextChatAssistantName, nextChatOperatorName, nextChatAssistantGender, nextChatQuickQuestionsJson, nextChatQuickQuestionsEnabled, nextChatWidgetEnabled, nextChatGuestThreadTtlDays, nextChatThreadTtlDays, tenantId]
       );
 
       const [rows] = await db.query(

@@ -33,14 +33,14 @@
   const isLoopbackHost = hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
   const isInsecureInstallOrigin = !window.isSecureContext && window.location.protocol === "http:" && !isLoopbackHost;
   const standaloneMedia = window.matchMedia ? window.matchMedia("(display-mode: standalone)") : null;
-  const promptDiscoveryTimeoutMs = isAndroid ? 5000 : 1800;
+  const promptDiscoveryTimeoutMs = isAndroid ? 2600 : 1400;
   const pwaPresence = window.__SHOP_PWA_PRESENCE__ || null;
   const actionLabel = "Установить приложение";
   const cancelLabel = "Отмена";
   let deferredPrompt = null;
   let resolvedState = "checking";
   let redirected = false;
-  let suppressInstalledRedirect = false;
+  let postInstallMonitorPromise = null;
 
   function getInstallTitle() {
     return `Установка приложения ${appTitle}`;
@@ -131,10 +131,6 @@
       redirectToShop();
       return true;
     }
-    if (hasRecentPresence()) {
-      redirectToShop();
-      return true;
-    }
     if (typeof navigator.getInstalledRelatedApps !== "function") return false;
 
     try {
@@ -147,6 +143,47 @@
     } catch (_) {}
 
     return false;
+  }
+
+  async function waitForStandaloneActivation(timeoutMs = 4600) {
+    if (!isAndroid) return false;
+    if (isStandalone()) {
+      markRecentPresence("standalone");
+      return true;
+    }
+    const startedAt = Date.now();
+    while ((Date.now() - startedAt) < timeoutMs) {
+      await new Promise((resolve) => window.setTimeout(resolve, 250));
+      if (isStandalone()) {
+        markRecentPresence("standalone");
+        return true;
+      }
+    }
+    return false;
+  }
+
+  async function handleInstalledLaunchTransition(timeoutMs = 4600) {
+    if (redirected) return true;
+    if (postInstallMonitorPromise) return postInstallMonitorPromise;
+    resolvedState = "checking";
+    toggleSheet(true);
+    renderState();
+    postInstallMonitorPromise = (async () => {
+      const activated = await waitForStandaloneActivation(timeoutMs);
+      if (activated || isStandalone()) {
+        redirectToShop();
+        return true;
+      }
+      resolvedState = "installed";
+      toggleSheet(true);
+      renderState();
+      return false;
+    })();
+    try {
+      return await postInstallMonitorPromise;
+    } finally {
+      postInstallMonitorPromise = null;
+    }
   }
 
   function renderSteps(items) {
@@ -177,10 +214,10 @@
 
     if (resolvedState === "prompt") {
       text = "Нажмите кнопку ниже, чтобы открыть системное окно установки приложения.";
-      hint = "После установки витрина будет открываться как отдельное приложение.";
+      hint = "После установки приложение появится на экране телефона. Если Android не откроет его сам, запустите приложение вручную.";
       showAction = true;
     } else if (resolvedState === "installed") {
-      text = "Приложение установлено. Сайт больше не открывается автоматически после нажатия на установку.";
+      text = "Приложение установлено.";
       hint = "Если приложение не открылось само, запустите его с экрана телефона.";
     } else if (resolvedState === "ios") {
       text = "На iPhone и iPad установка выполняется через меню Safari.";
@@ -248,13 +285,7 @@
   function resolveState() {
     if (redirected) return;
     if (isStandalone()) {
-      if (suppressInstalledRedirect) {
-        resolvedState = "installed";
-        toggleSheet(true);
-        renderState();
-      } else {
-        redirectToShop();
-      }
+      redirectToShop();
       return;
     }
     if (deferredPrompt) {
@@ -268,10 +299,6 @@
     renderState();
   }
 
-  function resolveStateSoon(delayMs = 1200) {
-    window.setTimeout(resolveState, delayMs);
-  }
-
   async function handleInstallAction() {
     if (!deferredPrompt) return;
 
@@ -281,11 +308,7 @@
       deferredPrompt = null;
 
       if (choice && choice.outcome === "accepted") {
-        suppressInstalledRedirect = true;
-        resolvedState = "checking";
-        toggleSheet(true);
-        renderState();
-        resolveStateSoon(2200);
+        void handleInstalledLaunchTransition();
         return;
       }
 
@@ -316,13 +339,7 @@
   window.addEventListener("appinstalled", () => {
     deferredPrompt = null;
     markRecentPresence("appinstalled");
-    if (suppressInstalledRedirect) {
-      resolvedState = "installed";
-      toggleSheet(true);
-      renderState();
-      return;
-    }
-    redirectToShop();
+    void handleInstalledLaunchTransition();
   });
 
   if (isStandalone()) {
@@ -331,10 +348,18 @@
     return;
   }
 
-  Promise.allSettled([
-    detectInstalledApp(),
-    new Promise((resolve) => window.setTimeout(resolve, promptDiscoveryTimeoutMs))
-  ]).then(() => {
-    resolveState();
+  toggleSheet(true);
+  renderState();
+
+  Promise.resolve().then(async () => {
+    if (await detectInstalledApp()) return;
+    if (isInsecureInstallOrigin || deferredPrompt) {
+      resolveState();
+      return;
+    }
+    window.setTimeout(() => {
+      if (redirected || deferredPrompt || resolvedState !== "checking") return;
+      resolveState();
+    }, promptDiscoveryTimeoutMs);
   });
 })();

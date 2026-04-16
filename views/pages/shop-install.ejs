@@ -40,6 +40,19 @@
   <noscript><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" /></noscript>
 </head>
 <body class="page-shop-install">
+  <script>window.__SHOP_INLINE_SPLASH_STARTED_AT__ = Date.now();</script>
+  <div id="shopSplash" style="position:fixed;inset:0;z-index:99999;background:#fff;display:flex;align-items:center;justify-content:center;transition:opacity .3s ease;opacity:1;">
+    <div style="display:flex;flex-direction:column;align-items:center;gap:16px;">
+      <% if (appleIcon) { %>
+        <img src="<%= appleIcon %>" alt="" style="width:64px;height:64px;border-radius:16px;object-fit:cover;" />
+      <% } %>
+      <div style="width:48px;height:3px;background:#eee;border-radius:2px;overflow:hidden;">
+        <div style="width:40%;height:100%;background:#f60;border-radius:2px;animation:splashBar 1.2s ease-in-out infinite;"></div>
+      </div>
+    </div>
+    <style>@keyframes splashBar{0%{transform:translateX(-100%)}50%{transform:translateX(150%)}100%{transform:translateX(-100%)}}#shopSplash.is-done{opacity:0;pointer-events:none}</style>
+  </div>
+  <noscript><style>#shopSplash{display:none!important}</style></noscript>
   <main class="shop-install-page">
     <div class="shop-install-page__splash" id="shopInstallPageSplash" aria-hidden="false">
       <div class="shop-install-page__splash-card">
@@ -101,13 +114,11 @@
 
   <script src="<%= assetUrl('/static/js/theme.js') %>" defer></script>
   <script src="<%= assetUrl('/static/js/shop-pwa-presence.js?v=20260407a') %>" defer></script>
-  <script src="<%= assetUrl('/static/js/shop-install-page.js?v=20260407q') %>" defer></script>
+  <script src="<%= assetUrl('/static/js/shop-install-page.js?v=20260409a') %>" defer></script>
   <script>
     (function () {
       if ('serviceWorker' in navigator) {
-        window.addEventListener('load', function () {
-          navigator.serviceWorker.register('/sw.js?v=<%= encodeURIComponent(serviceWorkerVersion || appVersion || "") %>', { scope: '/' }).catch(function () {});
-        });
+        navigator.serviceWorker.register('/sw.js?v=<%= encodeURIComponent(serviceWorkerVersion || appVersion || "") %>', { scope: '/' }).catch(function () {});
       }
     })();
   </script>
