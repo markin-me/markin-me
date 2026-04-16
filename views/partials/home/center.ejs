@@ -1,59 +1,59 @@
-﻿<% if (activePage === "settings") { %>
+<% if (activePage === "settings") { %>
   <div class="center-stack">
     <div class="panel toolbar-island">
       <div class="toolbar">
         <div class="toolbar-title">
           <i class="fas fa-store" id="settingsCenterIcon"></i>
           <div class="toolbar-title-text">
-            <span id="settingsCenterTitle">РљРѕРјРїР°РЅРёСЏ</span>
+            <span id="settingsCenterTitle">Компания</span>
             <span class="muted" id="settingsCenterSubtitle"></span>
           </div>
         </div>
         <div class="toolbar-right">
-          <label class="switch settings-chat-subheader-switch hidden" id="settingsChatWidgetSwitchWrap" title="Р’РєР»/РІС‹РєР» С‡Р°С‚Р° РЅР° РІРёС‚СЂРёРЅРµ">
+          <label class="switch settings-chat-subheader-switch hidden" id="settingsChatWidgetSwitchWrap" title="Вкл/выкл чата на витрине">
             <input class="switch-input" type="checkbox" id="settingsChatWidgetEnabledSwitch" />
             <span class="switch-ui" aria-hidden="true"></span>
-            <span class="switch-text">Р’РєР»/РІС‹РєР» С‡Р°С‚Р°</span>
+            <span class="switch-text">Вкл/выкл чата</span>
           </label>
           <div class="settings-delivery-map-search-toolbar hidden" id="settingsDeliveryMapSearchToolbar">
             <div class="settings-delivery-map-search-wrap" id="settingsDeliveryMapSearchWrap">
               <div class="settings-delivery-map-search-field">
-                <input class="control settings-delivery-map-search-input settings-delivery-map-search-input--toolbar" type="text" id="settingsDeliveryMapSearchInput" placeholder="Р’РІРµРґРёС‚Рµ РіРѕСЂРѕРґ РёР»Рё Р°РґСЂРµСЃ" autocomplete="off" />
-                <button class="settings-delivery-map-search-clear" id="settingsDeliveryMapSearchClear" type="button" aria-label="РћС‡РёСЃС‚РёС‚СЊ РїРѕРёСЃРє РЅР° РєР°СЂС‚Рµ">
+                <input class="control settings-delivery-map-search-input settings-delivery-map-search-input--toolbar" type="text" id="settingsDeliveryMapSearchInput" placeholder="Введите город или адрес" autocomplete="off" />
+                <button class="settings-delivery-map-search-clear" id="settingsDeliveryMapSearchClear" type="button" aria-label="Очистить поиск на карте">
                   <i class="fas fa-times"></i>
                 </button>
               </div>
-              <div class="settings-delivery-map-search-popover hidden" id="settingsDeliveryMapSearchPopover" role="dialog" aria-label="Р РµР·СѓР»СЊС‚Р°С‚С‹ РїРѕРёСЃРєР° РЅР° РєР°СЂС‚Рµ">
+              <div class="settings-delivery-map-search-popover hidden" id="settingsDeliveryMapSearchPopover" role="dialog" aria-label="Результаты поиска на карте">
                 <div class="settings-delivery-map-search-status hidden" id="settingsDeliveryMapSearchStatus"></div>
                 <div class="settings-delivery-map-results hidden" id="settingsDeliveryMapResults"></div>
               </div>
             </div>
           </div>
           <div class="new-order-right-select-wrap cash-toolbar-filter settings-delivery-city-selector hidden" id="settingsDeliveryCitySelector">
-            <button class="new-order-right-select-trigger cash-toolbar-filter-trigger" id="settingsDeliveryCityChip" type="button" aria-haspopup="listbox" aria-expanded="false" aria-label="Р’С‹Р±СЂР°С‚СЊ РіРѕСЂРѕРґ РЅР° РєР°СЂС‚Рµ РґРѕСЃС‚Р°РІРєРё">
+            <button class="new-order-right-select-trigger cash-toolbar-filter-trigger" id="settingsDeliveryCityChip" type="button" aria-haspopup="listbox" aria-expanded="false" aria-label="Выбрать город на карте доставки">
               <span class="cash-toolbar-filter-main">
                 <i class="fas fa-map-marker-alt"></i>
-                <span id="settingsDeliveryCityChipText">Р“РѕСЂРѕРґ</span>
+                <span id="settingsDeliveryCityChipText">Город</span>
               </span>
               <i class="fas fa-chevron-down"></i>
             </button>
-            <div class="new-order-right-select-menu no-scrollbar" id="settingsDeliveryCityDropdown" role="listbox" aria-label="Р“РѕСЂРѕРґ РєР°СЂС‚С‹ РґРѕСЃС‚Р°РІРєРё"></div>
+            <div class="new-order-right-select-menu no-scrollbar" id="settingsDeliveryCityDropdown" role="listbox" aria-label="Город карты доставки"></div>
           </div>
-          <button class="icon-btn hidden" id="settingsDeliveryMapConfigBtn" type="button" title="РќР°СЃС‚СЂРѕР№РєР° РєР°СЂС‚С‹" aria-label="РќР°СЃС‚СЂРѕР№РєР° РєР°СЂС‚С‹">
+          <button class="icon-btn hidden" id="settingsDeliveryMapConfigBtn" type="button" title="Настройка карты" aria-label="Настройка карты">
             <i class="fas fa-cog"></i>
           </button>
           <div class="settings-create-menu-wrap" id="settingsCreateMenuWrap">
-            <button class="btn btn-icon btn-primary" id="settingsAddOrderBtn" type="button" title="РќРѕРІС‹Р№ С„РёР»РёР°Р»" aria-label="РќРѕРІР°СЏ С‚РѕС‡РєР° РїСЂРѕРґР°Р¶">
+            <button class="btn btn-icon btn-primary" id="settingsAddOrderBtn" type="button" title="Новый филиал" aria-label="Новая точка продаж">
               <i class="fas fa-plus"></i>
             </button>
-            <div class="settings-create-menu hidden" id="settingsDeliveryCreateMenu" role="menu" aria-label="РЎРѕР·РґР°РЅРёРµ РЅР°СЃС‚СЂРѕРµРє РґРѕСЃС‚Р°РІРєРё">
+            <div class="settings-create-menu hidden" id="settingsDeliveryCreateMenu" role="menu" aria-label="Создание настроек доставки">
               <button class="settings-create-menu-item" id="settingsDeliveryCreateConditionBtn" type="button" role="menuitem">
-                <span class="settings-create-menu-item-title">РЈСЃР»РѕРІРёСЏ РґРѕСЃС‚Р°РІРєРё</span>
-                <span class="settings-create-menu-item-text">РћР±С‹С‡РЅР°СЏ РЅР°СЃС‚СЂРѕР№РєР° Р±РµР· Р·РѕРЅ</span>
+                <span class="settings-create-menu-item-title">Условия доставки</span>
+                <span class="settings-create-menu-item-text">Обычная настройка без зон</span>
               </button>
               <button class="settings-create-menu-item hidden" id="settingsDeliveryCreateZoneBtn" type="button" role="menuitem">
-                <span class="settings-create-menu-item-title">Р—РѕРЅР° РґРѕСЃС‚Р°РІРєРё</span>
-                <span class="settings-create-menu-item-text">РќР°СЂРёСЃРѕРІР°С‚СЊ РїРѕР»РёРіРѕРЅС‹ РЅР° РєР°СЂС‚Рµ</span>
+                <span class="settings-create-menu-item-title">Зона доставки</span>
+                <span class="settings-create-menu-item-text">Нарисовать полигоны на карте</span>
               </button>
             </div>
           </div>
@@ -67,132 +67,132 @@
           <button class="settings-home-card settings-card" id="settingsLogoCard" type="button">
             <div class="product-avatar"><i class="fas fa-icons"></i></div>
             <div class="order-col">
-              <div class="product-title">Р›РѕРіРѕС‚РёРї Рё С„Р°РІРёРєРѕРЅ</div>
-              <div class="muted">РЎРІРµС‚Р»Р°СЏ Рё С‚С‘РјРЅР°СЏ С‚РµРјС‹</div>
+              <div class="product-title">Логотип и фавикон</div>
+              <div class="muted">Светлая и тёмная темы</div>
             </div>
             <div class="order-col">
-              <span class="badge">РћС‚РєСЂС‹С‚СЊ</span>
+              <span class="badge">Открыть</span>
             </div>
           </button>
 
           <button class="settings-home-card settings-card" id="settingsBrandCard" type="button">
             <div class="product-avatar"><i class="fas fa-id-card"></i></div>
             <div class="order-col">
-              <div class="product-title">Р”Р°РЅРЅС‹Рµ Р±СЂРµРЅРґР°</div>
-              <div class="muted">РќР°Р·РІР°РЅРёРµ, РєРѕРЅС‚Р°РєС‚С‹, РґРѕСЃС‚СѓРї</div>
+              <div class="product-title">Данные бренда</div>
+              <div class="muted">Название, контакты, доступ</div>
             </div>
             <div class="order-col">
-              <span class="badge">РћС‚РєСЂС‹С‚СЊ</span>
+              <span class="badge">Открыть</span>
             </div>
           </button>
 
           <button class="settings-home-card settings-card" id="settingsOrderStatusesCard" type="button">
             <div class="product-avatar"><i class="fas fa-tasks"></i></div>
             <div class="order-col">
-              <div class="product-title">Р­С‚Р°РїС‹ Р·Р°РєР°Р·РѕРІ</div>
-              <div class="muted">РЎРїРёСЃРѕРє СЃС‚Р°С‚СѓСЃРѕРІ Р·Р°РєР°Р·Р°</div>
+              <div class="product-title">Этапы заказов</div>
+              <div class="muted">Список статусов заказа</div>
             </div>
             <div class="order-col">
-              <span class="badge">РћС‚РєСЂС‹С‚СЊ</span>
+              <span class="badge">Открыть</span>
             </div>
           </button>
 
           <button class="settings-home-card settings-card" id="settingsOrderPaymentsCard" type="button">
             <div class="product-avatar"><i class="fas fa-credit-card"></i></div>
             <div class="order-col">
-              <div class="product-title">РЎРїРѕСЃРѕР±С‹ РѕРїР»Р°С‚С‹</div>
-              <div class="muted">РўРёРїС‹ РѕРїР»Р°С‚С‹ РґР»СЏ Р·Р°РєР°Р·Р°</div>
+              <div class="product-title">Способы оплаты</div>
+              <div class="muted">Типы оплаты для заказа</div>
             </div>
             <div class="order-col">
-              <span class="badge">РћС‚РєСЂС‹С‚СЊ</span>
+              <span class="badge">Открыть</span>
             </div>
           </button>
 
           <button class="settings-home-card settings-card" id="settingsOrderDeliveryCard" type="button">
             <div class="product-avatar"><i class="fas fa-truck"></i></div>
             <div class="order-col">
-              <div class="product-title">РЎРїРѕСЃРѕР±С‹ РїРѕР»СѓС‡РµРЅРёСЏ</div>
-              <div class="muted">Р’Р°СЂРёР°РЅС‚С‹ РїРѕР»СѓС‡РµРЅРёСЏ Р·Р°РєР°Р·Р°</div>
+              <div class="product-title">Способы получения</div>
+              <div class="muted">Варианты получения заказа</div>
             </div>
             <div class="order-col">
-              <span class="badge">РћС‚РєСЂС‹С‚СЊ</span>
+              <span class="badge">Открыть</span>
             </div>
           </button>
 
           <button class="settings-home-card settings-card" id="settingsOrderTimeOptionsCard" type="button">
             <div class="product-avatar"><i class="fas fa-clock"></i></div>
             <div class="order-col">
-              <div class="product-title">РРЅС‚РµСЂРІР°Р»С‹ РІСЂРµРјРµРЅРё</div>
-              <div class="muted">Р’Р°СЂРёР°РЅС‚С‹ РІСЂРµРјРµРЅРё Р·Р°РєР°Р·Р°</div>
+              <div class="product-title">Интервалы времени</div>
+              <div class="muted">Варианты времени заказа</div>
             </div>
             <div class="order-col">
-              <span class="badge">РћС‚РєСЂС‹С‚СЊ</span>
+              <span class="badge">Открыть</span>
             </div>
           </button>
 
           <button class="settings-home-card settings-card" id="settingsNotificationsCard" type="button">
             <div class="product-avatar"><i class="fab fa-telegram-plane"></i></div>
             <div class="order-col">
-              <div class="product-title">РЈРІРµРґРѕРјР»РµРЅРёСЏ</div>
-              <div class="muted">РџРѕРґРєР»СЋС‡РµРЅРёРµ Рё СѓРїСЂР°РІР»РµРЅРёРµ Telegram-СѓРІРµРґРѕРјР»РµРЅРёСЏРјРё</div>
+              <div class="product-title">Уведомления</div>
+              <div class="muted">Подключение и управление Telegram-уведомлениями</div>
             </div>
             <div class="order-col">
-              <span class="badge">РћС‚РєСЂС‹С‚СЊ</span>
+              <span class="badge">Открыть</span>
             </div>
           </button>
 
           <button class="settings-home-card settings-card" id="settingsSoundsCard" type="button" data-settings-chat-card="1">
             <div class="product-avatar"><i class="fas fa-bell"></i></div>
             <div class="order-col">
-              <div class="product-title">Р—РІСѓРєРё</div>
-              <div class="muted">РЎРёРіРЅР°Р»С‹ Рё СѓРІРµРґРѕРјР»РµРЅРёСЏ</div>
+              <div class="product-title">Звуки</div>
+              <div class="muted">Сигналы и уведомления</div>
             </div>
             <div class="order-col">
-              <span class="badge">РћС‚РєСЂС‹С‚СЊ</span>
+              <span class="badge">Открыть</span>
             </div>
           </button>
 
           <button class="settings-home-card settings-card" id="settingsChatAssistantNameCard" type="button" data-settings-chat-card="1">
             <div class="product-avatar"><i class="fas fa-robot"></i></div>
             <div class="order-col">
-              <div class="product-title">РџРѕРјРѕС‰РЅРёРє</div>
-              <div class="muted">РРјСЏ, РїСЂРёРІРµС‚СЃС‚РІРёРµ Рё РІРѕРїСЂРѕСЃС‹</div>
+              <div class="product-title">Помощник</div>
+              <div class="muted">Имя, приветствие и вопросы</div>
             </div>
             <div class="order-col">
-              <span class="badge">РћС‚РєСЂС‹С‚СЊ</span>
+              <span class="badge">Открыть</span>
             </div>
           </button>
 
           <button class="settings-home-card settings-card" id="settingsChatOperatorNameCard" type="button" data-settings-chat-card="1">
             <div class="product-avatar"><i class="fas fa-user-tie"></i></div>
             <div class="order-col">
-              <div class="product-title">РћРїРµСЂР°С‚РѕСЂ</div>
-              <div class="muted">РРјСЏ РІ РґРёР°Р»РѕРіР°С…</div>
+              <div class="product-title">Оператор</div>
+              <div class="muted">Имя в диалогах</div>
             </div>
             <div class="order-col">
-              <span class="badge">РћС‚РєСЂС‹С‚СЊ</span>
+              <span class="badge">Открыть</span>
             </div>
           </button>
 
           <button class="settings-home-card settings-card" id="settingsChatMessageSettingsCard" type="button" data-settings-chat-card="1">
             <div class="product-avatar"><i class="fas fa-clock"></i></div>
             <div class="order-col">
-              <div class="product-title">РЎРѕРѕР±С‰РµРЅРёСЏ</div>
-              <div class="muted">РЎСЂРѕРє Р¶РёР·РЅРё С‡Р°С‚РѕРІ</div>
+              <div class="product-title">Сообщения</div>
+              <div class="muted">Срок жизни чатов</div>
             </div>
             <div class="order-col">
-              <span class="badge">РћС‚РєСЂС‹С‚СЊ</span>
+              <span class="badge">Открыть</span>
             </div>
           </button>
 
           <button class="settings-home-card settings-card" id="settingsImagesCard" type="button">
             <div class="product-avatar"><i class="fas fa-image"></i></div>
             <div class="order-col">
-              <div class="product-title">Р¤РѕС‚Рѕ С‚РѕРІР°СЂРѕРІ</div>
-              <div class="muted">РљР°С‡РµСЃС‚РІРѕ, СЂР°Р·РјРµСЂ Рё РєРѕРЅРІРµСЂС‚Р°С†РёСЏ</div>
+              <div class="product-title">Фото товаров</div>
+              <div class="muted">Качество, размер и конвертация</div>
             </div>
             <div class="order-col">
-              <span class="badge">РћС‚РєСЂС‹С‚СЊ</span>
+              <span class="badge">Открыть</span>
             </div>
           </button>
 
@@ -200,18 +200,18 @@
             <div class="product-avatar"><i class="fas fa-plug"></i></div>
             <div class="order-col">
               <div class="product-title">API</div>
-              <div class="muted">РџРµС‡Р°С‚СЊ Р·Р°РєР°Р·РѕРІ РЅР° СѓРґР°Р»С‘РЅРЅРѕРј РїСЂРёРЅС‚РµСЂРµ</div>
+              <div class="muted">Печать заказов на удалённом принтере</div>
             </div>
             <div class="order-col">
-              <span class="badge">РћС‚РєСЂС‹С‚СЊ</span>
+              <span class="badge">Открыть</span>
             </div>
           </button>
         </div>
 
         <div class="empty-state hidden" id="settingsStoresEmpty">
           <div class="empty-icon"><i class="fas fa-store"></i></div>
-          <div class="empty-title">Р¤РёР»РёР°Р»С‹</div>
-          <div class="empty-text">РџРѕРєР° РЅРµС‚ РґР°РЅРЅС‹С… РґР»СЏ СЌС‚РѕРіРѕ СЂР°Р·РґРµР»Р°.</div>
+          <div class="empty-title">Филиалы</div>
+          <div class="empty-text">Пока нет данных для этого раздела.</div>
         </div>
       </div>
     </div>
@@ -222,11 +222,11 @@
           <button class="settings-home-card settings-card" id="settingsPrintApiCard" type="button">
             <div class="product-avatar"><i class="fas fa-plug"></i></div>
             <div class="order-col">
-              <div class="product-title">РќР°СЃС‚СЂРѕР№РєР° РїСЂРёРЅС‚РµСЂР°</div>
-              <div class="muted">РџРµС‡Р°С‚СЊ Р·Р°РєР°Р·РѕРІ Рё СѓРІРµРґРѕРјР»РµРЅРёСЏ</div>
+              <div class="product-title">Настройка принтера</div>
+              <div class="muted">Печать заказов и уведомления</div>
             </div>
             <div class="order-col">
-              <span class="badge">РћС‚РєСЂС‹С‚СЊ</span>
+              <span class="badge">Открыть</span>
             </div>
           </button>
         </div>
@@ -238,8 +238,8 @@
         <div class="stores-list orders-list settings-cards" id="storesList"></div>
         <div class="empty-state hidden" id="storesEmpty">
           <div class="empty-icon"><i class="fas fa-store"></i></div>
-          <div class="empty-title">РќРµС‚ С‚РѕС‡РµРє РїСЂРѕРґР°Р¶</div>
-          <div class="empty-text">РЎРѕР·РґР°Р№С‚Рµ РїРµСЂРІСѓСЋ С‚РѕС‡РєСѓ, С‡С‚РѕР±С‹ РЅР°С‡Р°С‚СЊ СЂР°Р±РѕС‚Сѓ РІ РЅРѕРІРѕРј СЂР°Р№РѕРЅРµ.</div>
+          <div class="empty-title">Нет точек продаж</div>
+          <div class="empty-text">Создайте первую точку, чтобы начать работу в новом районе.</div>
         </div>
       </div>
     </div>
@@ -248,39 +248,39 @@
       <div class="panel-body no-scrollbar">
         <div class="settings-delivery-map-card" id="settingsDeliveryMapBlock">
           <div class="settings-delivery-map-empty hidden" id="settingsDeliveryMapEmpty">
-            <div class="settings-delivery-map-empty-title">РљР°СЂС‚Р° РЅРµ РЅР°СЃС‚СЂРѕРµРЅР°</div>
-            <div class="settings-delivery-map-empty-text">Р—Р°РїРѕР»РЅРёС‚Рµ РїР°СЂР°РјРµС‚СЂС‹ РїСЂРѕРІР°Р№РґРµСЂР° РІ СЂР°Р·РґРµР»Рµ В«РЎРёСЃС‚РµРјРЅС‹Рµ -> РљР°СЂС‚Р°В», С‡С‚РѕР±С‹ РїРѕРєР°Р·Р°С‚СЊ РїРѕРґР»РѕР¶РєСѓ Р·РґРµСЃСЊ.</div>
+            <div class="settings-delivery-map-empty-title">Карта не настроена</div>
+            <div class="settings-delivery-map-empty-text">Заполните параметры провайдера в разделе «Системные -> Карта», чтобы показать подложку здесь.</div>
           </div>
           <div class="settings-delivery-map-canvas hidden" id="settingsDeliveryMapCanvas"></div>
           <div class="settings-delivery-zone-map-overlay hidden" id="settingsDeliveryZoneMapOverlay">
-            <div class="settings-delivery-zone-map-hint" id="settingsDeliveryZoneMapHint">РџРѕСЃС‚Р°РІСЊС‚Рµ РїРµСЂРІСѓСЋ С‚РѕС‡РєСѓ Р·РѕРЅС‹</div>
+            <div class="settings-delivery-zone-map-hint" id="settingsDeliveryZoneMapHint">Поставьте первую точку зоны</div>
             <div class="settings-delivery-zone-map-actions">
               <button class="btn btn-secondary btn-sm settings-delivery-zone-map-action-btn" type="button" id="settingsDeliveryZoneUndoBtn">
                 <i class="fas fa-undo"></i>
-                <span>РќР°Р·Р°Рґ</span>
+                <span>Назад</span>
               </button>
               <button class="btn btn-secondary btn-sm settings-delivery-zone-map-action-btn" type="button" id="settingsDeliveryZoneClearPointsBtn">
                 <i class="fas fa-eraser"></i>
-                <span>РћС‡РёСЃС‚РёС‚СЊ С‚РѕС‡РєРё</span>
+                <span>Очистить точки</span>
               </button>
               <button class="btn btn-secondary btn-sm settings-delivery-zone-map-action-btn hidden" type="button" id="settingsDeliveryZoneAddPolygonBtn">
                 <i class="fas fa-plus"></i>
-                <span>Р”РѕР±Р°РІРёС‚СЊ РїРѕР»РёРіРѕРЅ</span>
+                <span>Добавить полигон</span>
               </button>
               <button class="btn btn-secondary btn-sm settings-delivery-zone-map-action-btn hidden" type="button" id="settingsDeliveryZoneRemovePolygonBtn">
                 <i class="fas fa-trash"></i>
-                <span>РЈРґР°Р»РёС‚СЊ РїРѕР»РёРіРѕРЅ</span>
+                <span>Удалить полигон</span>
               </button>
             </div>
           </div>
           <div class="settings-delivery-zone-point-menu hidden" id="settingsDeliveryZonePointMenu">
-            <button class="settings-delivery-zone-point-menu-item" type="button" id="settingsDeliveryZonePointMenuFinishBtn">Р—Р°РІРµСЂС€РёС‚СЊ</button>
-            <button class="settings-delivery-zone-point-menu-item" type="button" id="settingsDeliveryZonePointMenuContinueBtn">РџСЂРѕРґРѕР»Р¶РёС‚СЊ</button>
-            <button class="settings-delivery-zone-point-menu-item is-danger" type="button" id="settingsDeliveryZonePointMenuRemoveLastBtn">РЈРґР°Р»РёС‚СЊ РїРѕСЃР»РµРґРЅСЋСЋ С‚РѕС‡РєСѓ</button>
+            <button class="settings-delivery-zone-point-menu-item" type="button" id="settingsDeliveryZonePointMenuFinishBtn">Завершить</button>
+            <button class="settings-delivery-zone-point-menu-item" type="button" id="settingsDeliveryZonePointMenuContinueBtn">Продолжить</button>
+            <button class="settings-delivery-zone-point-menu-item is-danger" type="button" id="settingsDeliveryZonePointMenuRemoveLastBtn">Удалить последнюю точку</button>
           </div>
           <div class="settings-delivery-zone-context-menu hidden" id="settingsDeliveryZoneContextMenu">
-            <button class="settings-delivery-zone-context-menu-item" type="button" id="settingsDeliveryZoneContextEditBtn">Р РµРґР°РєС‚РёСЂРѕРІР°С‚СЊ</button>
-            <button class="settings-delivery-zone-context-menu-item is-danger" type="button" id="settingsDeliveryZoneContextDeleteBtn">РЈРґР°Р»РёС‚СЊ</button>
+            <button class="settings-delivery-zone-context-menu-item" type="button" id="settingsDeliveryZoneContextEditBtn">Редактировать</button>
+            <button class="settings-delivery-zone-context-menu-item is-danger" type="button" id="settingsDeliveryZoneContextDeleteBtn">Удалить</button>
           </div>
         </div>
       </div>
@@ -292,45 +292,46 @@
           <button class="settings-home-card settings-card" id="settingsSiteCard" type="button">
             <div class="product-avatar"><i class="fas fa-globe"></i></div>
             <div class="order-col">
-              <div class="product-title">Р”Р°РЅРЅС‹Рµ СЃР°Р№С‚Р°</div>
-              <div class="muted">РќР°Р·РІР°РЅРёРµ, РѕРїРёСЃР°РЅРёРµ, РґРѕРјРµРЅ</div>
+              <div class="product-title">Данные сайта</div>
+              <div class="muted">Название, описание, домен</div>
             </div>
             <div class="order-col">
-              <span class="badge">РћС‚РєСЂС‹С‚СЊ</span>
+              <span class="badge">Открыть</span>
             </div>
           </button>
 
           <button class="settings-home-card settings-card" id="settingsDomainCard" type="button">
             <div class="product-avatar"><i class="fas fa-link"></i></div>
             <div class="order-col">
-              <div class="product-title">Р”РѕРјРµРЅ</div>
-              <div class="muted">РџРѕРґРєР»СЋС‡РёС‚СЊ СЃРІРѕР№ РґРѕРјРµРЅ</div>
+              <div class="product-title">Домен</div>
+              <div class="muted">Подключить свой домен</div>
             </div>
             <div class="order-col">
-              <span class="badge">РћС‚РєСЂС‹С‚СЊ</span>
+              <span class="badge">Открыть</span>
             </div>
           </button>
 
           <button class="settings-home-card settings-card" id="settingsPwaQrCard" type="button">
             <div class="product-avatar"><i class="fas fa-qrcode"></i></div>
             <div class="order-col">
-              <div class="product-title">QR РґР»СЏ PWA</div>
-              <div class="muted">РЎРіРµРЅРµСЂРёСЂРѕРІР°С‚СЊ QR-РєРѕРґ РґР»СЏ СѓСЃС‚Р°РЅРѕРІРєРё РІРёС‚СЂРёРЅС‹</div>
+              <div class="product-title">QR для PWA</div>
+              <div class="muted">Сгенерировать QR-код для установки витрины</div>
             </div>
             <div class="order-col">
-              <span class="badge">РћС‚РєСЂС‹С‚СЊ</span>
+              <span class="badge">Открыть</span>
             </div>
           </button>
 
-          <button class="settings-home-card settings-card" id="settingsTelegramAppCard" type="button">`r`n          <button class="settings-home-card settings-card" id="settingsTelegramAppCard" type="button">`r`n            <div class="product-avatar product-avatar--image">
+          <button class="settings-home-card settings-card" id="settingsTelegramAppCard" type="button">
+            <div class="product-avatar product-avatar--image">
               <img class="product-avatar-img" src="/static/uploads/auth/telegram-auth.png" alt="Telegram mini app icon" loading="lazy" />
             </div>
             <div class="order-col">
-              <div class="product-title">РњРёРЅРё-РїСЂРёР»РѕР¶РµРЅРёРµ Telegram</div>
-              <div class="muted">РЎСЃС‹Р»РєР° РґР»СЏ Telegram-Р±РѕС‚Р°</div>
+              <div class="product-title">Мини-приложение Telegram</div>
+              <div class="muted">Ссылка для Telegram-бота</div>
             </div>
             <div class="order-col">
-              <span class="badge">РћС‚РєСЂС‹С‚СЊ</span>
+              <span class="badge">Открыть</span>
             </div>
           </button>
 
@@ -339,11 +340,11 @@
               <img class="product-avatar-img" src="/static/uploads/auth/max-auth.png" alt="MAX mini app icon" loading="lazy" />
             </div>
             <div class="order-col">
-              <div class="product-title">РњРёРЅРё-РїСЂРёР»РѕР¶РµРЅРёРµ MAX</div>
-              <div class="muted">РўРѕРєРµРЅ Р±РѕС‚Р° РґР»СЏ Р°РІС‚РѕСЂРёР·Р°С†РёРё</div>
+              <div class="product-title">Мини-приложение MAX</div>
+              <div class="muted">Токен бота для авторизации</div>
             </div>
             <div class="order-col">
-              <span class="badge">РћС‚РєСЂС‹С‚СЊ</span>
+              <span class="badge">Открыть</span>
             </div>
           </button>
         </div>
@@ -356,44 +357,44 @@
           <button class="settings-home-card settings-card" id="settingsSystemMapCard" type="button">
             <div class="product-avatar"><i class="fas fa-map-marked-alt"></i></div>
             <div class="order-col">
-              <div class="product-title">РљР°СЂС‚Р°</div>
-              <div class="muted">РџСЂРѕРІР°Р№РґРµСЂ, tile URL, Р°С‚СЂРёР±СѓС†РёСЏ Рё РјР°СЃС€С‚Р°Р±</div>
+              <div class="product-title">Карта</div>
+              <div class="muted">Провайдер, tile URL, атрибуция и масштаб</div>
             </div>
             <div class="order-col">
-              <span class="badge">РћС‚РєСЂС‹С‚СЊ</span>
+              <span class="badge">Открыть</span>
             </div>
           </button>
 
           <button class="settings-home-card settings-card" id="settingsSystemDeliveryZonePolygonCard" type="button">
             <div class="product-avatar"><i class="fas fa-draw-polygon"></i></div>
             <div class="order-col">
-              <div class="product-title">РџРѕР»РёРіРѕРЅС‹ РґРѕСЃС‚Р°РІРєРё</div>
-              <div class="muted">РЎРµСЂРІРёСЃ СЂРёСЃРѕРІР°РЅРёСЏ Р·РѕРЅ РґР»СЏ РєР°СЂС‚С‹</div>
+              <div class="product-title">Полигоны доставки</div>
+              <div class="muted">Сервис рисования зон для карты</div>
             </div>
             <div class="order-col">
-              <span class="badge">РћС‚РєСЂС‹С‚СЊ</span>
+              <span class="badge">Открыть</span>
             </div>
           </button>
 
           <button class="settings-home-card settings-card" id="settingsSystemTelegramBotCard" type="button">
             <div class="product-avatar"><i class="fab fa-telegram-plane"></i></div>
             <div class="order-col">
-              <div class="product-title">Telegram Р±РѕС‚</div>
-              <div class="muted">Username, token Рё webhook СЃРёСЃС‚РµРјРЅРѕРіРѕ Р±РѕС‚Р°</div>
+              <div class="product-title">Telegram бот</div>
+              <div class="muted">Username, token и webhook системного бота</div>
             </div>
             <div class="order-col">
-              <span class="badge">РћС‚РєСЂС‹С‚СЊ</span>
+              <span class="badge">Открыть</span>
             </div>
           </button>
 
           <button class="settings-home-card settings-card" id="settingsSystemMaxBotCard" type="button">
             <div class="product-avatar"><i class="fas fa-robot"></i></div>
             <div class="order-col">
-              <div class="product-title">MAX Р±РѕС‚</div>
-              <div class="muted">Bot ID, token Рё webhook СЃРёСЃС‚РµРјРЅРѕРіРѕ Р±РѕС‚Р°</div>
+              <div class="product-title">MAX бот</div>
+              <div class="muted">Bot ID, token и webhook системного бота</div>
             </div>
             <div class="order-col">
-              <span class="badge">РћС‚РєСЂС‹С‚СЊ</span>
+              <span class="badge">Открыть</span>
             </div>
           </button>
         </div>
@@ -406,14 +407,14 @@
       <div class="toolbar">
         <div class="toolbar-title">
           <i class="fas fa-home"></i>
-          <span>РњРµРЅСЋ</span>
+          <span>Меню</span>
         </div>
       </div>
     </div>
 
     <div class="panel orders-center-panel">
       <div class="panel-body no-scrollbar">
-        <p class="muted">РўСѓС‚ Р±СѓРґСѓС‚ С‚РѕРІР°СЂС‹ РёР· Р±Р°Р·С‹ РґР°РЅРЅС‹С…...</p>
+        <p class="muted">Тут будут товары из базы данных...</p>
       </div>
     </div>
   </div>

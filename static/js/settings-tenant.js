@@ -1,4 +1,4 @@
-﻿(() => {
+(() => {
 
 
 
@@ -6,15 +6,15 @@
 
 
 
-    if (key == "password_hash") return "вЂўвЂўвЂўвЂўвЂўвЂў";
+    if (key == "password_hash") return "••••••";
 
 
 
-    if (key == "is_active") return Number(value) == 1 ? "Р”Р°" : "РќРµС‚";
+    if (key == "is_active") return Number(value) == 1 ? "Да" : "Нет";
 
 
 
-    if (value === null || value === undefined || value === "") return "вЂ”";
+    if (value === null || value === undefined || value === "") return "—";
 
 
 
@@ -282,7 +282,7 @@
 
 
 
-      console.error("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕС…СЂР°РЅРёС‚СЊ С‡Р°СЃРѕРІРѕР№ РїРѕСЏСЃ:", err);
+      console.error("Не удалось сохранить часовой пояс:", err);
 
 
 
@@ -1741,7 +1741,7 @@
 
 
 
-        connectHint.textContent = "РђРІС‚РѕРїРѕРґРєР»СЋС‡РµРЅРёРµ РґРѕРјРµРЅР° РІСЂРµРјРµРЅРЅРѕ РЅРµРґРѕСЃС‚СѓРїРЅРѕ.";
+        connectHint.textContent = "Автоподключение домена временно недоступно.";
 
 
 
@@ -1749,7 +1749,7 @@
 
 
 
-        connectHint.textContent = "РЎРЅР°С‡Р°Р»Р° РЅР°Р¶РјРёС‚Рµ В«РџСЂРѕРІРµСЂРёС‚СЊ РґРѕРјРµРЅВ», Р·Р°С‚РµРј В«РџРѕРґРєР»СЋС‡РёС‚СЊ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРёВ».";
+        connectHint.textContent = "Сначала нажмите «Проверить домен», затем «Подключить автоматически».";
 
 
 
@@ -1757,7 +1757,7 @@
 
 
 
-        connectHint.textContent = "РЎРЅР°С‡Р°Р»Р° СЃРѕС…СЂР°РЅРёС‚Рµ РґРѕРјРµРЅ Рё РїСЂРѕРїРёС€РёС‚Рµ РґРІРµ A-Р·Р°РїРёСЃРё.";
+        connectHint.textContent = "Сначала сохраните домен и пропишите две A-записи.";
 
 
 
@@ -2072,8 +2072,8 @@
   ];
 
   const TENANT_PWA_QR_BG_PRESETS = [
-    { id: "warm-sun", label: "РўРµРїР»С‹Р№", swatch: "linear-gradient(135deg,#fff7ed 0%,#fdba74 100%)", fill: "linear-gradient(135deg,#fff7ed 0%,#fdba74 100%)", text: "#7c2d12", muted: "rgba(124,45,18,.72)", chipBg: "rgba(255,255,255,.62)", chipText: "#b45309" },
-    { id: "midnight", label: "РќРѕС‡СЊ", swatch: "linear-gradient(135deg,#0f172a 0%,#334155 100%)", fill: "linear-gradient(135deg,#0f172a 0%,#334155 100%)", text: "#f8fafc", muted: "rgba(248,250,252,.78)", chipBg: "rgba(255,255,255,.14)", chipText: "#e2e8f0" },
+    { id: "warm-sun", label: "Теплый", swatch: "linear-gradient(135deg,#fff7ed 0%,#fdba74 100%)", fill: "linear-gradient(135deg,#fff7ed 0%,#fdba74 100%)", text: "#7c2d12", muted: "rgba(124,45,18,.72)", chipBg: "rgba(255,255,255,.62)", chipText: "#b45309" },
+    { id: "midnight", label: "Ночь", swatch: "linear-gradient(135deg,#0f172a 0%,#334155 100%)", fill: "linear-gradient(135deg,#0f172a 0%,#334155 100%)", text: "#f8fafc", muted: "rgba(248,250,252,.78)", chipBg: "rgba(255,255,255,.14)", chipText: "#e2e8f0" },
     { id: "mint", label: "Mint", swatch: "linear-gradient(135deg,#ecfdf5 0%,#86efac 100%)", fill: "linear-gradient(135deg,#ecfdf5 0%,#86efac 100%)", text: "#14532d", muted: "rgba(20,83,45,.72)", chipBg: "rgba(255,255,255,.62)", chipText: "#15803d" },
     { id: "berry", label: "Berry", swatch: "linear-gradient(135deg,#7f1d1d 0%,#fda4af 100%)", fill: "linear-gradient(135deg,#7f1d1d 0%,#fda4af 100%)", text: "#fff1f2", muted: "rgba(255,241,242,.82)", chipBg: "rgba(255,255,255,.14)", chipText: "#ffe4e6" },
     { id: "sky", label: "Sky", swatch: "linear-gradient(135deg,#eff6ff 0%,#60a5fa 100%)", fill: "linear-gradient(135deg,#eff6ff 0%,#60a5fa 100%)", text: "#172554", muted: "rgba(23,37,84,.72)", chipBg: "rgba(255,255,255,.7)", chipText: "#1d4ed8" },
@@ -2247,8 +2247,8 @@
     layerEl.setAttribute("aria-hidden", visible ? "false" : "true");
     if (triggerEl) {
       triggerEl.setAttribute("aria-expanded", visible ? "true" : "false");
-      triggerEl.setAttribute("aria-label", visible ? "Р—Р°РєСЂС‹С‚СЊ СѓРІРµР»РёС‡РµРЅРЅРѕРµ РїСЂРµРІСЊСЋ QR" : "РћС‚РєСЂС‹С‚СЊ СѓРІРµР»РёС‡РµРЅРЅРѕРµ РїСЂРµРІСЊСЋ QR");
-      triggerEl.setAttribute("title", visible ? "РЎРІРµСЂРЅСѓС‚СЊ РїСЂРµРІСЊСЋ" : "РЈРІРµР»РёС‡РёС‚СЊ РїСЂРµРІСЊСЋ");
+      triggerEl.setAttribute("aria-label", visible ? "Закрыть увеличенное превью QR" : "Открыть увеличенное превью QR");
+      triggerEl.setAttribute("title", visible ? "Свернуть превью" : "Увеличить превью");
     }
   }
 
@@ -2573,7 +2573,7 @@
     };
     const title = liveSiteName
       || String((tenant && (tenant.site_name || tenant.name)) || "").trim()
-      || "Р’РёС‚СЂРёРЅР°";
+      || "Витрина";
     const logoUrl = String(
       readTenantAssetInputValue("apple_touch_icon_url")
       || readTenantAssetInputValue("logo_light_url")
@@ -2598,7 +2598,7 @@
   function sanitizeTenantPwaDesignerFileName(value) {
     const raw = String(value || "").trim().toLowerCase();
     return raw
-      .replace(/[^a-zР°-СЏ0-9-_]+/gi, "-")
+      .replace(/[^a-zа-я0-9-_]+/gi, "-")
       .replace(/^-+|-+$/g, "")
       || "qr-card";
   }
@@ -2706,7 +2706,7 @@
     return Math.max(min, Math.min(max, value));
   }
 
-  function normalizeTenantPwaDesignerBadgeText(value, fallback = "РЈРЎРўРђРќРћР’РљРђ РџР РР›РћР–Р•РќРРЇ") {
+  function normalizeTenantPwaDesignerBadgeText(value, fallback = "УСТАНОВКА ПРИЛОЖЕНИЯ") {
     const normalized = String(value || "")
       .replace(/\s+/g, " ")
       .trim()
@@ -2938,7 +2938,7 @@
     }
 
     if (bgGradientBtn) {
-      bgGradientBtn.textContent = tenantPwaDesignerBackgroundGradientEnabled ? "Р“СЂР°РґРёРµРЅС‚: РІРєР»" : "Р“СЂР°РґРёРµРЅС‚: РІС‹РєР»";
+      bgGradientBtn.textContent = tenantPwaDesignerBackgroundGradientEnabled ? "Градиент: вкл" : "Градиент: выкл";
       bgGradientBtn.classList.toggle("is-active", tenantPwaDesignerBackgroundGradientEnabled);
     }
 
@@ -3235,8 +3235,8 @@
     renderTenantPwaDesignerStaticControls();
 
     const sourceOptions = [
-      { id: "prod", label: "Р Р°Р±РѕС‡Р°СЏ РІРёС‚СЂРёРЅР°" },
-      { id: "dev", label: "DEV / Р»РѕРєР°Р»СЊРЅР°СЏ СЃР±РѕСЂРєР°" }
+      { id: "prod", label: "Рабочая витрина" },
+      { id: "dev", label: "DEV / локальная сборка" }
     ];
     if (sourceSelect) {
       sourceSelect.innerHTML = sourceOptions.map((item) => `
@@ -3252,7 +3252,7 @@
       targetSelect.innerHTML = targets.map((item) => {
         const prefix = tenantPwaDesignerSourceMode === "dev"
           ? (item.kind === "dev-tunnel" ? "[HTTPS] " : item.kind === "dev-localhost" ? "[LOCAL] " : "")
-          : (item.kind === "subdomain" ? "РЎСѓР±РґРѕРјРµРЅ: " : "Р”РѕРјРµРЅ: ");
+          : (item.kind === "subdomain" ? "Субдомен: " : "Домен: ");
         const selectedAttr = selectedTarget && selectedTarget.id === item.id ? " selected" : "";
         return `<option value="${item.id}"${selectedAttr}>${prefix}${item.label}</option>`;
       }).join("");
@@ -3262,8 +3262,8 @@
 
     if (sourceHint) {
       sourceHint.textContent = tenantPwaDesignerSourceMode === "dev"
-        ? "DEV QR РїРѕРґС…РѕРґРёС‚ РґР»СЏ LAN-РїСЂРѕРІРµСЂРєРё РёР»Рё HTTPS tunnel, РµСЃР»Рё РЅСѓР¶РЅРѕ С‚РµСЃС‚РёСЂРѕРІР°С‚СЊ СѓСЃС‚Р°РЅРѕРІРєСѓ Р»РѕРєР°Р»СЊРЅРѕР№ СЃР±РѕСЂРєРё."
-        : "Р Р°Р±РѕС‡РёР№ QR РІРµРґРµС‚ РЅР° РїРѕРґРєР»СЋС‡РµРЅРЅС‹Р№ РґРѕРјРµРЅ РІРёС‚СЂРёРЅС‹ Рё РїРѕРґС…РѕРґРёС‚ РґР»СЏ СЂРµР°Р»СЊРЅРѕР№ РїСѓР±Р»РёРєР°С†РёРё.";
+        ? "DEV QR подходит для LAN-проверки или HTTPS tunnel, если нужно тестировать установку локальной сборки."
+        : "Рабочий QR ведет на подключенный домен витрины и подходит для реальной публикации.";
     }
 
     if (emptyEl) emptyEl.classList.toggle("hidden", hasTargets);
@@ -3277,7 +3277,7 @@
       if (!hasSiteLogo) tenantPwaDesignerUseSiteLogo = false;
       logoToggleEl.checked = hasSiteLogo && tenantPwaDesignerUseSiteLogo;
       logoToggleEl.disabled = !hasSiteLogo;
-      logoToggleEl.title = hasSiteLogo ? "" : "РЎРЅР°С‡Р°Р»Р° Р·Р°РіСЂСѓР·РёС‚Рµ Р»РѕРіРѕС‚РёРї СЃР°Р№С‚Р°";
+      logoToggleEl.title = hasSiteLogo ? "" : "Сначала загрузите логотип сайта";
     }
 
     if (!hasTargets) {
@@ -3287,11 +3287,11 @@
       }
       if (targetHint) {
         targetHint.textContent = tenantPwaDesignerSourceMode === "dev"
-          ? "РћС‚РєСЂРѕР№С‚Рµ tenant UI РЅР° localhost РёР»Рё LAN-Р°РґСЂРµСЃРµ, С‡С‚РѕР±С‹ РїРѕСЏРІРёР»РёСЃСЊ DEV-С†РµР»Рё."
-          : "РџРѕРґРєР»СЋС‡РёС‚Рµ СЂР°Р±РѕС‡РёР№ РґРѕРјРµРЅ РёР»Рё РёСЃРїРѕР»СЊР·СѓР№С‚Рµ СЃСѓР±РґРѕРјРµРЅ tenant-Р°.";
+          ? "Откройте tenant UI на localhost или LAN-адресе, чтобы появились DEV-цели."
+          : "Подключите рабочий домен или используйте субдомен tenant-а.";
       }
       if (hintEl) {
-        hintEl.textContent = "РџРѕРєР° РЅРµС‚ РґРѕСЃС‚СѓРїРЅРѕР№ СЃСЃС‹Р»РєРё РґР»СЏ РіРµРЅРµСЂР°С†РёРё QR-РєР°СЂС‚РѕС‡РєРё.";
+        hintEl.textContent = "Пока нет доступной ссылки для генерации QR-карточки.";
       }
       if (targetHint) {
         targetHint.textContent = "";
@@ -3307,7 +3307,7 @@
         cardEyebrowEl,
         cardDomainEl,
         tenantInfo,
-        "HTTPS РЅРµРґРѕСЃС‚СѓРїРµРЅ"
+        "HTTPS недоступен"
       );
       setTenantPwaDesignerQrEmpty(qrMount);
       if (tenantPwaDesignerExpanded && expandedLayerEl) {
@@ -3344,8 +3344,8 @@
       targetHint.textContent = tenantPwaDesignerSourceMode === "dev"
         ? ""
         : selectedTarget.kind === "subdomain"
-          ? "РЎСЃС‹Р»РєР° РІРµРґРµС‚ РЅР° subdomain tenant-Р°."
-          : "РЎСЃС‹Р»РєР° РІРµРґРµС‚ РЅР° РїРѕРґРєР»СЋС‡РµРЅРЅС‹Р№ СЂР°Р±РѕС‡РёР№ РґРѕРјРµРЅ.";
+          ? "Ссылка ведет на subdomain tenant-а."
+          : "Ссылка ведет на подключенный рабочий домен.";
     }
 
     if (!isVisible) {
@@ -3373,7 +3373,7 @@
     const selectedTarget = getSelectedTenantPwaDesignerTarget();
     const htmlToImage = window.htmlToImage;
     if (!cardEl || !selectedTarget || !selectedTarget.url || !htmlToImage || typeof htmlToImage.toPng !== "function") {
-      alert("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕС…СЂР°РЅРёС‚СЊ РєР°СЂС‚РѕС‡РєСѓ.");
+      alert("Не удалось сохранить карточку.");
       return;
     }
     const tenantInfo = getTenantPwaDesignerTenantInfo();
@@ -3391,7 +3391,7 @@
       );
     } catch (err) {
       console.error("tenant qr designer save card error:", err);
-      alert("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕС…СЂР°РЅРёС‚СЊ РєР°СЂС‚РѕС‡РєСѓ.");
+      alert("Не удалось сохранить карточку.");
     }
   }
 
@@ -3403,7 +3403,7 @@
     const selectedTarget = getSelectedTenantPwaDesignerTarget();
     const tenantInfo = getTenantPwaDesignerTenantInfo();
     if (!selectedTarget || !selectedTarget.url) {
-      alert("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕС…СЂР°РЅРёС‚СЊ QR.");
+      alert("Не удалось сохранить QR.");
       return;
     }
     const fileName = `${sanitizeTenantPwaDesignerFileName(tenantInfo.title)}-qr.png`;
@@ -3411,7 +3411,7 @@
     const qrSize = 1400;
     const htmlToImage = window.htmlToImage;
     if (!document.body) {
-      alert("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕС…СЂР°РЅРёС‚СЊ QR.");
+      alert("Не удалось сохранить QR.");
       return;
     }
     const mount = document.createElement("div");
@@ -3464,7 +3464,7 @@
       throw new Error("QR_EXPORT_FAILED");
     } catch (err) {
       console.error("tenant qr designer save qr error:", err);
-      alert("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕС…СЂР°РЅРёС‚СЊ QR.");
+      alert("Не удалось сохранить QR.");
     } finally {
       mount.remove();
     }
@@ -3765,7 +3765,7 @@
 
     if (selectEl) {
       selectEl.innerHTML = tenantPwaInstallTargets.map((item) => {
-        const tag = item.kind === "subdomain" ? "РЎСѓР±РґРѕРјРµРЅ" : "Р”РѕРјРµРЅ";
+        const tag = item.kind === "subdomain" ? "Субдомен" : "Домен";
         const selectedAttr = selected && selected.id === item.id ? " selected" : "";
         return `<option value="${item.id}"${selectedAttr}>${tag}: ${item.label}</option>`;
       }).join("");
@@ -3787,14 +3787,14 @@
     if (urlEl) urlEl.textContent = String(selected.url || "");
     if (hintEl) {
       hintEl.textContent = selected.kind === "subdomain"
-        ? "Р­С‚РѕС‚ QR РѕС‚РєСЂС‹РІР°РµС‚ install-СЃС‚СЂР°РЅРёС†Сѓ РІРёС‚СЂРёРЅС‹ РЅР° СЃСѓР±РґРѕРјРµРЅРµ tenant-Р°."
-        : "Р­С‚РѕС‚ QR РѕС‚РєСЂС‹РІР°РµС‚ install-СЃС‚СЂР°РЅРёС†Сѓ РІРёС‚СЂРёРЅС‹ РЅР° РІС‹Р±СЂР°РЅРЅРѕРј РїРѕРґРєР»СЋС‡РµРЅРЅРѕРј РґРѕРјРµРЅРµ.";
+        ? "Этот QR открывает install-страницу витрины на субдомене tenant-а."
+        : "Этот QR открывает install-страницу витрины на выбранном подключенном домене.";
     }
 
     if (qrEl) {
       const rendered = renderTenantPwaQrImage(qrEl, selected.url);
       if (!rendered && hintEl) {
-        hintEl.textContent = "РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕР±СЂР°С‚СЊ QR Р Р† Р±СЂР°СѓР·РµСЂРµ. РЎСЃС‹Р»РєР° РЅРёР¶Рµ РІСЃС‘ СЂР°РІРЅРѕ РіРѕС‚РѕРІР°, РµС‘ РјРѕР¶РЅРѕ РѕС‚РєСЂС‹С‚СЊ РёР»Рё СЃРєРѕРїРёСЂРѕРІР°С‚СЊ.";
+        hintEl.textContent = "Не удалось собрать QR РІ браузере. Ссылка ниже всё равно готова, её можно открыть или скопировать.";
       }
     }
 
@@ -3852,22 +3852,22 @@
     } catch (_) {}
     if (hintEl) {
       hintEl.textContent = selected.kind === "dev-tunnel"
-        ? "Р­С‚РѕС‚ DEV QR РёСЃРїРѕР»СЊР·СѓРµС‚ HTTPS tunnel. РўРµР»РµС„РѕРЅ РѕС‚РєСЂРѕРµС‚ Р»РѕРєР°Р»СЊРЅСѓСЋ РІРёС‚СЂРёРЅСѓ С‡РµСЂРµР· Р·Р°С‰РёС‰РµРЅРЅС‹Р№ Р°РґСЂРµСЃ, Рё Р±СЂР°СѓР·РµСЂ СЃРјРѕР¶РµС‚ РїРѕРєР°Р·Р°С‚СЊ СѓСЃС‚Р°РЅРѕРІРєСѓ PWA."
+        ? "Этот DEV QR использует HTTPS tunnel. Телефон откроет локальную витрину через защищенный адрес, и браузер сможет показать установку PWA."
         : selected.kind === "dev-current"
-        ? "Р­С‚РѕС‚ DEV QR РёСЃРїРѕР»СЊР·СѓРµС‚ С‚РµРєСѓС‰РёР№ Р°РґСЂРµСЃ, РїРѕ РєРѕС‚РѕСЂРѕРјСѓ РѕС‚РєСЂС‹С‚Р° Р°РґРјРёРЅРєР°."
+        ? "Этот DEV QR использует текущий адрес, по которому открыта админка."
         : selected.kind === "dev-localhost"
-          ? "Р­С‚РѕС‚ DEV QR РѕС‚РєСЂРѕРµС‚СЃСЏ С‚РѕР»СЊРєРѕ РЅР° СЌС‚РѕРј Р¶Рµ РєРѕРјРїСЊСЋС‚РµСЂРµ."
-          : "Р­С‚РѕС‚ DEV QR РёСЃРїРѕР»СЊР·СѓРµС‚ LAN IP. РўРµР»РµС„РѕРЅ Рё РєРѕРјРїСЊСЋС‚РµСЂ РґРѕР»Р¶РЅС‹ Р±С‹С‚СЊ Р Р† РѕРґРЅРѕР№ СЃРµС‚Рё.";
+          ? "Этот DEV QR откроется только на этом же компьютере."
+          : "Этот DEV QR использует LAN IP. Телефон и компьютер должны быть РІ одной сети.";
     }
 
     if (hintEl && isInsecureLanUrl) {
-      hintEl.textContent = "Р­С‚РѕС‚ DEV QR РѕС‚РєСЂРѕРµС‚ Р»РѕРєР°Р»СЊРЅСѓСЋ РІРёС‚СЂРёРЅСѓ, РЅРѕ Р±СЂР°СѓР·РµСЂ РЅРµ РїРѕРєР°Р¶РµС‚ РЅР°С‚РёРІРЅСѓСЋ СѓСЃС‚Р°РЅРѕРІРєСѓ PWA РЅР° LAN IP РїРѕ HTTP. Р”Р»СЏ install prompt РЅСѓР¶РµРЅ HTTPS-РґРѕРјРµРЅ.";
+      hintEl.textContent = "Этот DEV QR откроет локальную витрину, но браузер не покажет нативную установку PWA на LAN IP по HTTP. Для install prompt нужен HTTPS-домен.";
     }
 
     if (qrEl) {
       const rendered = renderTenantPwaQrImage(qrEl, selected.url);
       if (!rendered && hintEl) {
-        hintEl.textContent = "РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕР±СЂР°С‚СЊ DEV QR Р Р† Р±СЂР°СѓР·РµСЂРµ. РЎСЃС‹Р»РєСѓ РЅРёР¶Рµ РІСЃРµ СЂР°РІРЅРѕ РјРѕР¶РЅРѕ РѕС‚РєСЂС‹С‚СЊ РёР»Рё СЃРєРѕРїРёСЂРѕРІР°С‚СЊ.";
+        hintEl.textContent = "Не удалось собрать DEV QR РІ браузере. Ссылку ниже все равно можно открыть или скопировать.";
       }
     }
 
@@ -4028,7 +4028,7 @@
 
 
 
-        connectHint.textContent = "РђРІС‚РѕРїРѕРґРєР»СЋС‡РµРЅРёРµ РґРѕРјРµРЅР° РІСЂРµРјРµРЅРЅРѕ РЅРµРґРѕСЃС‚СѓРїРЅРѕ.";
+        connectHint.textContent = "Автоподключение домена временно недоступно.";
 
 
 
@@ -4036,7 +4036,7 @@
 
 
 
-        connectHint.textContent = "РЎРЅР°С‡Р°Р»Р° РЅР°Р¶РјРёС‚Рµ В«РџСЂРѕРІРµСЂРёС‚СЊ РґРѕРјРµРЅВ», Р·Р°С‚РµРј В«РџРѕРґРєР»СЋС‡РёС‚СЊ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРёВ».";
+        connectHint.textContent = "Сначала нажмите «Проверить домен», затем «Подключить автоматически».";
 
 
 
@@ -4044,7 +4044,7 @@
 
 
 
-        connectHint.textContent = "РЎРЅР°С‡Р°Р»Р° РґРѕР±Р°РІСЊС‚Рµ РґРѕРјРµРЅ Рё РїСЂРѕРїРёС€РёС‚Рµ РґРІРµ A-Р·Р°РїРёСЃРё.";
+        connectHint.textContent = "Сначала добавьте домен и пропишите две A-записи.";
 
 
 
@@ -4100,7 +4100,7 @@
 
 
 
-      console.error("РќРµ СѓРґР°Р»РѕСЃСЊ РѕР±РЅРѕРІРёС‚СЊ РїСЂРѕС„РёР»СЊ:", err);
+      console.error("Не удалось обновить профиль:", err);
 
 
 
@@ -4368,7 +4368,7 @@
 
 
 
-    if (label) label.textContent = url ? "Р¤Р°Р№Р» Р·Р°РіСЂСѓР¶РµРЅ" : "Р¤Р°Р№Р» РЅРµ РІС‹Р±СЂР°РЅ";
+    if (label) label.textContent = url ? "Файл загружен" : "Файл не выбран";
 
 
 
@@ -4880,7 +4880,7 @@
 
 
 
-        tgLoginEnabledInput.title = hasRequired ? "" : "РЎРЅР°С‡Р°Р»Р° Р·Р°РїРѕР»РЅРёС‚Рµ РёРјСЏ Р±РѕС‚Р° Рё С‚РѕРєРµРЅ Telegram";
+        tgLoginEnabledInput.title = hasRequired ? "" : "Сначала заполните имя бота и токен Telegram";
 
 
 
@@ -4916,11 +4916,11 @@
 
 
 
-      // Р‘РµР·РѕРїР°СЃРЅС‹Р№ СЃР±СЂРѕСЃ Telegram-СЂРµР¶РёРјР° РїСЂСЏРјРѕ Р·РґРµСЃСЊ:
+      // Безопасный сброс Telegram-режима прямо здесь:
 
 
 
-      // loadTenantProfile РІС‹Р·С‹РІР°РµС‚СЃСЏ СЂР°РЅСЊС€Рµ, С‡РµРј РёРЅРёС†РёР°Р»РёР·РёСЂСѓСЋС‚СЃСЏ РЅРёР¶РЅРёРµ const-РїРµСЂРµРјРµРЅРЅС‹Рµ.
+      // loadTenantProfile вызывается раньше, чем инициализируются нижние const-переменные.
 
 
 
@@ -5068,7 +5068,7 @@
 
 
 
-        maxLoginEnabledInput.title = hasRequired ? "" : "РЎРЅР°С‡Р°Р»Р° Р·Р°РїРѕР»РЅРёС‚Рµ ID Р±РѕС‚Р° Рё С‚РѕРєРµРЅ MAX";
+        maxLoginEnabledInput.title = hasRequired ? "" : "Сначала заполните ID бота и токен MAX";
 
 
 
@@ -5240,7 +5240,7 @@
 
 
 
-      // Р¤Р°РІРёРєРѕРЅ Р Р† РїР°РЅРµР»Рё В«Р”Р°РЅРЅС‹Рµ СЃР°Р№С‚Р°В»
+      // Фавикон РІ панели «Данные сайта»
 
 
 
@@ -5340,7 +5340,7 @@
 
 
 
-      // Р¤РѕС‚Рѕ С‚РѕРІР°СЂРѕРІ вЂ” Р·Р°РїРѕР»РЅРёС‚СЊ РЅР°СЃС‚СЂРѕР№РєРё РєРѕРЅРІРµСЂС‚Р°С†РёРё
+      // Фото товаров — заполнить настройки конвертации
 
 
 
@@ -5359,7 +5359,7 @@
     } catch (err) {
       const errMessage = err && err.message ? String(err.message) : String(err || "");
       const errStack = err && err.stack ? String(err.stack) : "";
-      console.error("РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РіСЂСѓР·РёС‚СЊ РїСЂРѕС„РёР»СЊ tenant:", errMessage, errStack);
+      console.error("Не удалось загрузить профиль tenant:", errMessage, errStack);
     }
 
 
@@ -5396,7 +5396,7 @@
 
 
 
-      console.error("РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РіСЂСѓР·РёС‚СЊ Р¤РёР»РёР°Р»С‹:", err);
+      console.error("Не удалось загрузить Филиалы:", err);
 
 
 
@@ -5452,7 +5452,7 @@
 
 
 
-      console.error("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕР·РґР°С‚СЊ С‚РѕС‡РєСѓ РїСЂРѕРґР°Р¶:", err);
+      console.error("Не удалось создать точку продаж:", err);
 
 
 
@@ -5508,7 +5508,7 @@
 
 
 
-      console.error("РќРµ СѓРґР°Р»РѕСЃСЊ РѕР±РЅРѕРІРёС‚СЊ С‚РѕС‡РєСѓ РїСЂРѕРґР°Р¶:", err);
+      console.error("Не удалось обновить точку продаж:", err);
 
 
 
@@ -6000,11 +6000,11 @@
 
 
 
-          settingsAddOrderBtn.title = "РќРѕРІР°СЏ РЅР°СЃС‚СЂРѕР№РєР° РґРѕСЃС‚Р°РІРєРё";
+          settingsAddOrderBtn.title = "Новая настройка доставки";
 
 
 
-          settingsAddOrderBtn.setAttribute("aria-label", "РќРѕРІР°СЏ РЅР°СЃС‚СЂРѕР№РєР° РґРѕСЃС‚Р°РІРєРё");
+          settingsAddOrderBtn.setAttribute("aria-label", "Новая настройка доставки");
 
 
 
@@ -6012,11 +6012,11 @@
 
 
 
-          settingsAddOrderBtn.title = "РќРѕРІС‹Р№ С„РёР»РёР°Р»";
+          settingsAddOrderBtn.title = "Новый филиал";
 
 
 
-          settingsAddOrderBtn.setAttribute("aria-label", "РќРѕРІР°СЏ С‚РѕС‡РєР° РїСЂРѕРґР°Р¶");
+          settingsAddOrderBtn.setAttribute("aria-label", "Новая точка продаж");
 
 
 
@@ -6040,11 +6040,11 @@
 
 
 
-          settingsAddOrderBtn.title = "Р”РѕР±Р°РІРёС‚СЊ";
+          settingsAddOrderBtn.title = "Добавить";
 
 
 
-          settingsAddOrderBtn.setAttribute("aria-label", "Р”РѕР±Р°РІРёС‚СЊ");
+          settingsAddOrderBtn.setAttribute("aria-label", "Добавить");
 
 
 
@@ -6164,7 +6164,7 @@
 
 
 
-            ? "Р¤РёР»РёР°Р»С‹"
+            ? "Филиалы"
 
 
 
@@ -6172,7 +6172,7 @@
 
 
 
-              ? "РЎР°Р№С‚"
+              ? "Сайт"
 
 
 
@@ -6180,7 +6180,7 @@
 
 
 
-                ? "РќР°СЃС‚СЂРѕР№РєРё С‡Р°С‚Р°"
+                ? "Настройки чата"
 
 
 
@@ -6188,7 +6188,7 @@
 
 
 
-                  ? "РќР°СЃС‚СЂРѕР№РєР° РїСЂРёРЅС‚РµСЂР°"
+                  ? "Настройка принтера"
 
 
 
@@ -6196,7 +6196,7 @@
 
 
 
-                    ? "РЎРёСЃС‚РµРјРЅС‹Рµ"
+                    ? "Системные"
 
 
 
@@ -6204,11 +6204,11 @@
 
 
 
-                      ? "Р”РѕСЃС‚Р°РІРєР°"
+                      ? "Доставка"
 
 
 
-                      : "РљРѕРјРїР°РЅРёСЏ";
+                      : "Компания";
 
 
 
@@ -6228,7 +6228,7 @@
 
 
 
-            ? "Р—Р°РіСЂСѓР·РєР°..."
+            ? "Загрузка..."
 
 
 
@@ -6236,7 +6236,7 @@
 
 
 
-              ? "Р—РІСѓРєРё, РїРѕРјРѕС‰РЅРёРє Рё СЃРѕРѕР±С‰РµРЅРёСЏ"
+              ? "Звуки, помощник и сообщения"
 
 
 
@@ -6244,7 +6244,7 @@
 
 
 
-                ? "Р”Р»СЏ РїРµС‡Р°С‚Рё Р·Р°РєР°Р·РѕРІ"
+                ? "Для печати заказов"
 
 
 
@@ -6252,7 +6252,7 @@
 
 
 
-                  ? "Р—Р°РіСЂСѓР·РєР°..."
+                  ? "Загрузка..."
 
 
 
@@ -6380,7 +6380,7 @@
 
 
 
-        if (settingsCenterTitle) settingsCenterTitle.textContent = "Р§Р°С‚";
+        if (settingsCenterTitle) settingsCenterTitle.textContent = "Чат";
 
 
 
@@ -6548,7 +6548,7 @@
 
 
 
-            ? "Р¤РёР»РёР°Р»С‹"
+            ? "Филиалы"
 
 
 
@@ -6556,7 +6556,7 @@
 
 
 
-              ? "РЎР°Р№С‚"
+              ? "Сайт"
 
 
 
@@ -6576,7 +6576,7 @@
 
 
 
-                  : "РљРѕРјРїР°РЅРёСЏ";
+                  : "Компания";
 
 
 
@@ -6588,7 +6588,7 @@
 
 
 
-          settingsCenterSubtitle.textContent = isStores ? "Р—Р°РіСЂСѓР·РєР°..." : "";
+          settingsCenterSubtitle.textContent = isStores ? "Загрузка..." : "";
 
 
 
@@ -6612,7 +6612,7 @@
 
 
 
-          settingsCenterSubtitle.textContent = "РќР°СЃС‚СЂРѕР№РєР° РїСЂРёРЅС‚РµСЂР° РґР»СЏ РїРµС‡Р°С‚Рё Р·Р°РєР°Р·РѕРІ";
+          settingsCenterSubtitle.textContent = "Настройка принтера для печати заказов";
 
 
 
@@ -7728,15 +7728,15 @@
 
 
 
-      "РќРѕРІРѕР°Р»С‚Р°Р№СЃРє",
+      "Новоалтайск",
 
 
 
-      "Р‘Р°СЂРЅР°СѓР»",
+      "Барнаул",
 
 
 
-      "РќРѕРІРѕСЃРёР±РёСЂСЃРє",
+      "Новосибирск",
 
 
 
@@ -7748,7 +7748,7 @@
 
 
 
-      STORE_ADDRESS_ALLOWED_ROOT_CITIES.map((cityName) => String(cityName || "").trim().toLowerCase().replace(/С‘/g, "Рµ"))
+      STORE_ADDRESS_ALLOWED_ROOT_CITIES.map((cityName) => String(cityName || "").trim().toLowerCase().replace(/ё/g, "е"))
 
 
 
@@ -7760,15 +7760,15 @@
 
 
 
-      [normalizeStoreCitySearchKey("РќРѕРІРѕР°Р»С‚Р°Р№СЃРє")]: Object.freeze({ lat: 53.412156, lng: 83.9320738 }),
+      [normalizeStoreCitySearchKey("Новоалтайск")]: Object.freeze({ lat: 53.412156, lng: 83.9320738 }),
 
 
 
-      [normalizeStoreCitySearchKey("Р‘Р°СЂРЅР°СѓР»")]: Object.freeze({ lat: 53.3475493, lng: 83.7788448 }),
+      [normalizeStoreCitySearchKey("Барнаул")]: Object.freeze({ lat: 53.3475493, lng: 83.7788448 }),
 
 
 
-      [normalizeStoreCitySearchKey("РќРѕРІРѕСЃРёР±РёСЂСЃРє")]: Object.freeze({ lat: 55.028191, lng: 82.9211489 }),
+      [normalizeStoreCitySearchKey("Новосибирск")]: Object.freeze({ lat: 55.028191, lng: 82.9211489 }),
 
 
 
@@ -8151,11 +8151,11 @@
 
 
 
-    printer_status: "РќР°Р¶РјРёС‚Рµ \"РџСЂРѕРІРµСЂРёС‚СЊ РїРѕРґРєР»СЋС‡РµРЅРёРµ\"",
+    printer_status: "Нажмите \"Проверить подключение\"",
 
 
 
-    printer_name: "РЎС‚Р°С‚СѓСЃ РЅРµ РїСЂРѕРІРµСЂРµРЅ",
+    printer_name: "Статус не проверен",
 
 
 
@@ -8271,31 +8271,31 @@
 
 
 
-      0: "Р’СЃ",
+      0: "Вс",
 
 
 
-      1: "РџРЅ",
+      1: "Пн",
 
 
 
-      2: "Р’С‚",
+      2: "Вт",
 
 
 
-      3: "РЎСЂ",
+      3: "Ср",
 
 
 
-      4: "Р§С‚",
+      4: "Чт",
 
 
 
-      5: "РџС‚",
+      5: "Пт",
 
 
 
-      6: "РЎР±"
+      6: "Сб"
 
 
 
@@ -12011,7 +12011,7 @@
 
 
 
-        ? [{ day: null, label: "Р•Р¶РµРґРЅРµРІРЅРѕ" }]
+        ? [{ day: null, label: "Ежедневно" }]
 
 
 
@@ -12223,7 +12223,7 @@
 
 
 
-        switchLabel.textContent = "Р’С‹С…РѕРґРЅРѕР№";
+        switchLabel.textContent = "Выходной";
 
 
 
@@ -12371,7 +12371,7 @@
 
 
 
-        ? [{ day: null, label: "Р•Р¶РµРґРЅРµРІРЅРѕ" }]
+        ? [{ day: null, label: "Ежедневно" }]
 
 
 
@@ -12583,7 +12583,7 @@
 
 
 
-        switchLabel.textContent = "Р’С‹С…РѕРґРЅРѕР№";
+        switchLabel.textContent = "Выходной";
 
 
 
@@ -13893,11 +13893,11 @@
 
 
 
-          ? "Р”РѕР±Р°РІСЊС‚Рµ Рё РІС‹Р±РµСЂРёС‚Рµ Р°РєС‚РёРІРЅС‹Р№ API key Р Р† СЂР°Р·РґРµР»Рµ В«Р”РѕСЃС‚Р°РІРєР° -> РќР°СЃС‚СЂРѕР№РєР° РєР°СЂС‚С‹В», С‡С‚РѕР±С‹ РѕС‚РєСЂС‹С‚СЊ РєР°СЂС‚Сѓ С„РёР»РёР°Р»Р°."
+          ? "Добавьте и выберите активный API key РІ разделе «Доставка -> Настройка карты», чтобы открыть карту филиала."
 
 
 
-          : "Р”РѕР±Р°РІСЊС‚Рµ Рё РІС‹Р±РµСЂРёС‚Рµ Р°РєС‚РёРІРЅС‹Р№ API key Р Р† СЂР°Р·РґРµР»Рµ В«Р”РѕСЃС‚Р°РІРєР° -> РќР°СЃС‚СЂРѕР№РєР° РєР°СЂС‚С‹В», С‡С‚РѕР±С‹ РїРѕРєР°Р·Р°С‚СЊ РїРѕРґР»РѕР¶РєСѓ Р·РґРµСЃСЊ.";
+          : "Добавьте и выберите активный API key РІ разделе «Доставка -> Настройка карты», чтобы показать подложку здесь.";
 
 
 
@@ -13909,11 +13909,11 @@
 
 
 
-        ? "РЎРЅР°С‡Р°Р»Р° РЅР°СЃС‚СЂРѕР№С‚Рµ РєР°СЂС‚Сѓ Р Р† СЂР°Р·РґРµР»Рµ В«РЎРёСЃС‚РµРјРЅС‹Рµ -> РљР°СЂС‚Р°В»."
+        ? "Сначала настройте карту РІ разделе «Системные -> Карта»."
 
 
 
-        : "Р—Р°РїРѕР»РЅРёС‚Рµ РїР°СЂР°РјРµС‚СЂС‹ РїСЂРѕРІР°Р№РґРµСЂР° Р Р† СЂР°Р·РґРµР»Рµ В«РЎРёСЃС‚РµРјРЅС‹Рµ -> РљР°СЂС‚Р°В», С‡С‚РѕР±С‹ РїРѕРєР°Р·Р°С‚СЊ РїРѕРґР»РѕР¶РєСѓ Р·РґРµСЃСЊ.";
+        : "Заполните параметры провайдера РІ разделе «Системные -> Карта», чтобы показать подложку здесь.";
 
 
 
@@ -13949,7 +13949,7 @@
 
 
 
-        console.error("РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РіСЂСѓР·РёС‚СЊ resolved-РєРѕРЅС„РёРіСѓСЂР°С†РёСЋ РєР°СЂС‚С‹ tenant:", err);
+        console.error("Не удалось загрузить resolved-конфигурацию карты tenant:", err);
 
 
 
@@ -14105,11 +14105,11 @@
 
 
 
-      settingsSystemMapCancelBtn.title = "РћС‚РјРµРЅРёС‚СЊ";
+      settingsSystemMapCancelBtn.title = "Отменить";
 
 
 
-      settingsSystemMapCancelBtn.setAttribute("aria-label", "РћС‚РјРµРЅРёС‚СЊ");
+      settingsSystemMapCancelBtn.setAttribute("aria-label", "Отменить");
 
 
 
@@ -14141,11 +14141,11 @@
 
 
 
-      settingsSystemDeliveryZonePolygonCancelBtn.title = "РћС‚РјРµРЅРёС‚СЊ";
+      settingsSystemDeliveryZonePolygonCancelBtn.title = "Отменить";
 
 
 
-      settingsSystemDeliveryZonePolygonCancelBtn.setAttribute("aria-label", "РћС‚РјРµРЅРёС‚СЊ");
+      settingsSystemDeliveryZonePolygonCancelBtn.setAttribute("aria-label", "Отменить");
 
 
 
@@ -14805,7 +14805,7 @@
 
 
 
-      return String(scope || "").trim() === "global" ? "Р’РµСЃСЊ РјРёСЂ" : "Р РѕСЃСЃРёСЏ";
+      return String(scope || "").trim() === "global" ? "Весь мир" : "Россия";
 
 
 
@@ -14821,7 +14821,7 @@
 
 
 
-      return String(item && item.result_type || "").trim() === "address" ? "РђРґСЂРµСЃ" : "Р“РѕСЂРѕРґ";
+      return String(item && item.result_type || "").trim() === "address" ? "Адрес" : "Город";
 
 
 
@@ -14941,7 +14941,7 @@
 
 
 
-        title.textContent = item.label || "Р‘РµР· РЅР°Р·РІР°РЅРёСЏ";
+        title.textContent = item.label || "Без названия";
 
 
 
@@ -14957,7 +14957,7 @@
 
 
 
-        meta.textContent = `${getDeliveryMapSearchResultTypeLabel(item)} вЂў ${getDeliveryMapSearchScopeLabel(item.scope)}`;
+        meta.textContent = `${getDeliveryMapSearchResultTypeLabel(item)} • ${getDeliveryMapSearchScopeLabel(item.scope)}`;
 
 
 
@@ -15453,7 +15453,7 @@
 
 
 
-      settingsDeliveryCityChipText.textContent = getSelectedDeliveryStoreCityLabel() || "Р“РѕСЂРѕРґ";
+      settingsDeliveryCityChipText.textContent = getSelectedDeliveryStoreCityLabel() || "Город";
 
 
 
@@ -15773,7 +15773,7 @@
 
 
 
-      title.textContent = store.name || `Р¤РёР»РёР°Р» #${store.id}`;
+      title.textContent = store.name || `Филиал #${store.id}`;
 
 
 
@@ -17345,7 +17345,7 @@
 
 
 
-        setDeliveryMapSearchStatus("Р’РІРµРґРёС‚Рµ РіРѕСЂРѕРґ РёР»Рё Р°РґСЂРµСЃ РґР»СЏ РїРѕРёСЃРєР°", "empty");
+        setDeliveryMapSearchStatus("Введите город или адрес для поиска", "empty");
 
 
 
@@ -17365,7 +17365,7 @@
 
 
 
-        setDeliveryMapSearchStatus("РќР°СЃС‚СЂРѕР№С‚Рµ РіРµРѕРєРѕРґРµСЂ Р Р† СЂР°Р·РґРµР»Рµ В«РЎРёСЃС‚РµРјРЅС‹Рµ -> РљР°СЂС‚Р°В».", "error");
+        setDeliveryMapSearchStatus("Настройте геокодер РІ разделе «Системные -> Карта».", "error");
 
 
 
@@ -17385,7 +17385,7 @@
 
 
 
-        setDeliveryMapSearchStatus("РљР°СЂС‚Р° РµС‰С‘ РЅРµ РіРѕС‚РѕРІР°.", "error");
+        setDeliveryMapSearchStatus("Карта ещё не готова.", "error");
 
 
 
@@ -17409,7 +17409,7 @@
 
 
 
-      setDeliveryMapSearchStatus("РС‰РµРј РіРѕСЂРѕРґ РёР»Рё Р°РґСЂРµСЃ...", "loading");
+      setDeliveryMapSearchStatus("Ищем город или адрес...", "loading");
 
 
 
@@ -17433,7 +17433,7 @@
 
 
 
-          setDeliveryMapSearchStatus("РќРµ СѓРґР°Р»РѕСЃСЊ РІС‹РїРѕР»РЅРёС‚СЊ РїРѕРёСЃРє.", "error");
+          setDeliveryMapSearchStatus("Не удалось выполнить поиск.", "error");
 
 
 
@@ -17457,7 +17457,7 @@
 
 
 
-          setDeliveryMapSearchStatus("РќРёС‡РµРіРѕ РЅРµ РЅР°Р№РґРµРЅРѕ.", "empty");
+          setDeliveryMapSearchStatus("Ничего не найдено.", "empty");
 
 
 
@@ -17473,7 +17473,7 @@
 
 
 
-        setDeliveryMapSearchStatus(`РџРѕРёСЃРє: ${data.data.scope_label || "Р РѕСЃСЃРёСЏ"}`, "ready");
+        setDeliveryMapSearchStatus(`Поиск: ${data.data.scope_label || "Россия"}`, "ready");
 
 
 
@@ -17489,7 +17489,7 @@
 
 
 
-        setDeliveryMapSearchStatus("РќРµ СѓРґР°Р»РѕСЃСЊ РІС‹РїРѕР»РЅРёС‚СЊ РїРѕРёСЃРє.", "error");
+        setDeliveryMapSearchStatus("Не удалось выполнить поиск.", "error");
 
 
 
@@ -17553,7 +17553,7 @@
 
 
 
-          showDeliveryMapEmpty("Leaflet РЅРµ РїРѕРґРєР»СЋС‡С‘РЅ. РџСЂРѕРІРµСЂСЊС‚Рµ Р»РѕРєР°Р»СЊРЅС‹Рµ assets РєР°СЂС‚С‹.");
+          showDeliveryMapEmpty("Leaflet не подключён. Проверьте локальные assets карты.");
 
 
 
@@ -17637,7 +17637,7 @@
 
 
 
-          showDeliveryMapEmpty("Leaflet РЅРµ РїРѕРґРєР»СЋС‡С‘РЅ. РџСЂРѕРІРµСЂСЊС‚Рµ Р»РѕРєР°Р»СЊРЅС‹Рµ assets РєР°СЂС‚С‹.");
+          showDeliveryMapEmpty("Leaflet не подключён. Проверьте локальные assets карты.");
 
 
 
@@ -17673,7 +17673,7 @@
 
 
 
-        showDeliveryMapEmpty("РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РіСЂСѓР·РёС‚СЊ РЅР°СЃС‚СЂРѕР№РєСѓ РєР°СЂС‚С‹ tenant.");
+        showDeliveryMapEmpty("Не удалось загрузить настройку карты tenant.");
 
 
 
@@ -17817,19 +17817,19 @@
 
 
 
-      if (source === "city") return "РѕС‚ РІС‹Р±СЂР°РЅРЅРѕРіРѕ РіРѕСЂРѕРґР°";
+      if (source === "city") return "от выбранного города";
 
 
 
-      if (source === "street") return "РѕС‚ РІС‹Р±СЂР°РЅРЅРѕР№ СѓР»РёС†С‹";
+      if (source === "street") return "от выбранной улицы";
 
 
 
-      if (source === "house") return "РѕС‚ РІС‹Р±СЂР°РЅРЅРѕРіРѕ РґРѕРјР°";
+      if (source === "house") return "от выбранного дома";
 
 
 
-      return "РїРѕ С‚РµРєСѓС‰РµРјСѓ Р°РґСЂРµСЃСѓ";
+      return "по текущему адресу";
 
 
 
@@ -17889,7 +17889,7 @@
 
 
 
-        settingsStoreAddressMapHint.textContent = `РўРѕС‡РєР° РІСЂСѓС‡РЅСѓСЋ СѓС‚РѕС‡РЅРµРЅР°: ${point.lat.toFixed(6)}, ${point.lng.toFixed(6)}.`;
+        settingsStoreAddressMapHint.textContent = `Точка вручную уточнена: ${point.lat.toFixed(6)}, ${point.lng.toFixed(6)}.`;
 
 
 
@@ -17905,7 +17905,7 @@
 
 
 
-        settingsStoreAddressMapHint.textContent = `Р‘Р°Р·РѕРІР°СЏ С‚РѕС‡РєР° ${getStoreAddressMapSourceLabel(point.source)}: ${point.lat.toFixed(6)}, ${point.lng.toFixed(6)}.`;
+        settingsStoreAddressMapHint.textContent = `Базовая точка ${getStoreAddressMapSourceLabel(point.source)}: ${point.lat.toFixed(6)}, ${point.lng.toFixed(6)}.`;
 
 
 
@@ -17917,7 +17917,7 @@
 
 
 
-      settingsStoreAddressMapHint.textContent = "РљР°СЂС‚Р° СѓС‚РѕС‡РЅСЏРµС‚ С‚РѕР»СЊРєРѕ РєРѕРѕСЂРґРёРЅР°С‚Сѓ. РўРµРєСЃС‚ Р°РґСЂРµСЃР° РѕСЃС‚Р°С‘С‚СЃСЏ РєР°Рє Р Р† РїРѕР»СЏС… РІС‹С€Рµ.";
+      settingsStoreAddressMapHint.textContent = "Карта уточняет только координату. Текст адреса остаётся как РІ полях выше.";
 
 
 
@@ -17973,7 +17973,7 @@
 
 
 
-        settingsStoreAddressMapCoords.textContent = "РљРѕРѕСЂРґРёРЅР°С‚Р° РµС‰С‘ РЅРµ РІС‹Р±СЂР°РЅР°.";
+        settingsStoreAddressMapCoords.textContent = "Координата ещё не выбрана.";
 
 
 
@@ -17993,7 +17993,7 @@
 
 
 
-      settingsStoreAddressMapCoords.textContent = `РЁРёСЂРѕС‚Р° ${lat.toFixed(6)}, РґРѕР»РіРѕС‚Р° ${lng.toFixed(6)}.`;
+      settingsStoreAddressMapCoords.textContent = `Широта ${lat.toFixed(6)}, долгота ${lng.toFixed(6)}.`;
 
 
 
@@ -18961,7 +18961,7 @@
 
 
 
-          setStoreAddressMapModalStatus("Leaflet РЅРµ РїРѕРґРєР»СЋС‡С‘РЅ. РџСЂРѕРІРµСЂСЊС‚Рµ Р»РѕРєР°Р»СЊРЅС‹Рµ assets РєР°СЂС‚С‹.", "error");
+          setStoreAddressMapModalStatus("Leaflet не подключён. Проверьте локальные assets карты.", "error");
 
 
 
@@ -19001,7 +19001,7 @@
 
 
 
-          setStoreAddressMapModalStatus("РќРµ СѓРґР°Р»РѕСЃСЊ РёРЅРёС†РёР°Р»РёР·РёСЂРѕРІР°С‚СЊ РєР°СЂС‚Сѓ.", "error");
+          setStoreAddressMapModalStatus("Не удалось инициализировать карту.", "error");
 
 
 
@@ -19025,11 +19025,11 @@
 
 
 
-            ? `РљР»РёРєРЅРёС‚Рµ РїРѕ РєР°СЂС‚Рµ РёР»Рё РїРµСЂРµС‚Р°С‰РёС‚Рµ РјР°СЂРєРµСЂ. Р‘Р°Р·РѕРІС‹Р№ Р°РґСЂРµСЃ: ${query}.`
+            ? `Кликните по карте или перетащите маркер. Базовый адрес: ${query}.`
 
 
 
-            : "РљР»РёРєРЅРёС‚Рµ РїРѕ РєР°СЂС‚Рµ РёР»Рё РїРµСЂРµС‚Р°С‰РёС‚Рµ РјР°СЂРєРµСЂ, С‡С‚РѕР±С‹ СѓС‚РѕС‡РЅРёС‚СЊ РєРѕРѕСЂРґРёРЅР°С‚Сѓ.";
+            : "Кликните по карте или перетащите маркер, чтобы уточнить координату.";
 
 
 
@@ -19129,7 +19129,7 @@
 
 
 
-        setStoreAddressMapModalStatus("РќРµ СѓРґР°Р»РѕСЃСЊ РѕС‚РєСЂС‹С‚СЊ РєР°СЂС‚Сѓ С„РёР»РёР°Р»Р°.", "error");
+        setStoreAddressMapModalStatus("Не удалось открыть карту филиала.", "error");
 
 
 
@@ -19161,7 +19161,7 @@
 
 
 
-        setStoreAddressMapModalStatus("РЎРЅР°С‡Р°Р»Р° РІС‹Р±РµСЂРёС‚Рµ С‚РѕС‡РєСѓ РЅР° РєР°СЂС‚Рµ.", "error");
+        setStoreAddressMapModalStatus("Сначала выберите точку на карте.", "error");
 
 
 
@@ -19573,7 +19573,7 @@
 
 
 
-        closeBtn.setAttribute("aria-label", "Р—Р°РєСЂС‹С‚СЊ");
+        closeBtn.setAttribute("aria-label", "Закрыть");
 
 
 
@@ -19948,7 +19948,7 @@
 
 
 
-        ensureTab("logo", "Р›РѕРіРѕС‚РёРї Рё С„Р°РІРёРєРѕРЅ");
+        ensureTab("logo", "Логотип и фавикон");
 
 
 
@@ -19972,7 +19972,7 @@
 
 
 
-        ensureTab("site", "Р”Р°РЅРЅС‹Рµ СЃР°Р№С‚Р°");
+        ensureTab("site", "Данные сайта");
 
 
 
@@ -20091,6 +20091,7 @@
     const tenantQrDesignerCardEyebrow = document.getElementById("tenantQrDesignerCardEyebrow");
     const tenantQrDesignerCardEyebrowInput = document.getElementById("tenantQrDesignerCardEyebrowInput");
     const tenantQrDesignerExpandedCloseBtn = document.getElementById("tenantQrDesignerExpandedCloseBtn");
+    const tenantQrDesignerExpandedLayer = document.getElementById("tenantQrDesignerExpandedLayer");
 
 
 
@@ -20102,7 +20103,7 @@
 
 
 
-        ensureTab("domain", "Р”РѕРјРµРЅ");
+        ensureTab("domain", "Домен");
 
 
 
@@ -20118,7 +20119,7 @@
 
       pwaQrCard.addEventListener("click", () => {
 
-        ensureTab("pwa-qr", "QR РґР»СЏ СѓСЃС‚Р°РЅРѕРІРєРё PWA");
+        ensureTab("pwa-qr", "QR для установки PWA");
 
       });
 
@@ -20420,11 +20421,11 @@
       const data = await updateTenantFields({ subdomain: nextSubdomain || null });
       if (!data || !data.ok) {
         if (data && data.error === "INVALID_SUBDOMAIN") {
-          alert("РЎСѓР±РґРѕРјРµРЅ: С‚РѕР»СЊРєРѕ Р»Р°С‚РёРЅРёС†Р°, С†РёС„СЂС‹ Рё РґРµС„РёСЃ.");
+          alert("Субдомен: только латиница, цифры и дефис.");
         } else if (data && data.error === "SUBDOMAIN_TAKEN") {
-          alert("РЎСѓР±РґРѕРјРµРЅ СѓР¶Рµ Р·Р°РЅСЏС‚.");
+          alert("Субдомен уже занят.");
         } else {
-          alert("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕС…СЂР°РЅРёС‚СЊ СЃСѓР±РґРѕРјРµРЅ.");
+          alert("Не удалось сохранить субдомен.");
         }
         await loadTenantProfile();
         return false;
@@ -20470,7 +20471,7 @@
           data = null;
         }
         if (!data || !data.ok || !data.tenant) {
-          alert("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕС…СЂР°РЅРёС‚СЊ СЃРѕСЃС‚РѕСЏРЅРёРµ РґРѕРјРµРЅРѕРІ.");
+          alert("Не удалось сохранить состояние доменов.");
           await loadTenantProfile();
           return false;
         }
@@ -20524,9 +20525,9 @@
 
     if (domainSaveBtn) {
       domainSaveBtn.addEventListener("click", async () => {
-        const idleText = String(domainSaveBtn.textContent || "РЎРѕС…СЂР°РЅРёС‚СЊ");
+        const idleText = String(domainSaveBtn.textContent || "Сохранить");
         domainSaveBtn.disabled = true;
-        domainSaveBtn.textContent = "РЎРѕС…СЂР°РЅРµРЅРёРµ...";
+        domainSaveBtn.textContent = "Сохранение...";
         try {
           if (domainManageMode && !domainDraftMode) {
             const domainsSaved = await submitDomainEnabledDraftIfChanged();
@@ -20544,7 +20545,7 @@
           }
         } finally {
           domainSaveBtn.disabled = false;
-          domainSaveBtn.textContent = idleText || "РЎРѕС…СЂР°РЅРёС‚СЊ";
+          domainSaveBtn.textContent = idleText || "Сохранить";
         }
       });
     }
@@ -20630,12 +20631,12 @@
         const selectedTarget = getSelectedTenantPwaInstallTarget();
         if (!selectedTarget || !selectedTarget.url || !navigator.clipboard) return;
         navigator.clipboard.writeText(selectedTarget.url).then(() => {
-          tenantPwaQrCopyBtn.innerHTML = '<i class="fas fa-check"></i> РЎРєРѕРїРёСЂРѕРІР°РЅРѕ';
+          tenantPwaQrCopyBtn.innerHTML = '<i class="fas fa-check"></i> Скопировано';
           setTimeout(() => {
             tenantPwaQrCopyBtn.innerHTML = copyBtnOriginalHtml;
           }, 1500);
         }).catch(() => {
-          alert("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРєРѕРїРёСЂРѕРІР°С‚СЊ СЃСЃС‹Р»РєСѓ.");
+          alert("Не удалось скопировать ссылку.");
         });
       });
     }
@@ -20661,12 +20662,12 @@
         const selectedTarget = getSelectedTenantPwaDevInstallTarget();
         if (!selectedTarget || !selectedTarget.url || !navigator.clipboard) return;
         navigator.clipboard.writeText(selectedTarget.url).then(() => {
-          tenantPwaDevQrCopyBtn.innerHTML = '<i class="fas fa-check"></i> РЎРєРѕРїРёСЂРѕРІР°РЅРѕ';
+          tenantPwaDevQrCopyBtn.innerHTML = '<i class="fas fa-check"></i> Скопировано';
           setTimeout(() => {
             tenantPwaDevQrCopyBtn.innerHTML = copyBtnOriginalHtml;
           }, 1500);
         }).catch(() => {
-          alert("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРєРѕРїРёСЂРѕРІР°С‚СЊ СЃСЃС‹Р»РєСѓ.");
+          alert("Не удалось скопировать ссылку.");
         });
       });
     }
@@ -20779,7 +20780,7 @@
           renderTenantPwaDesigner();
         } catch (err) {
           console.error("tenant qr background upload error:", err);
-          alert("РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РіСЂСѓР·РёС‚СЊ С„РѕРЅ.");
+          alert("Не удалось загрузить фон.");
         } finally {
           tenantQrDesignerBackgroundInput.value = "";
         }
@@ -20808,7 +20809,7 @@
           renderTenantPwaDesigner();
         } catch (err) {
           console.error("tenant qr logo upload error:", err);
-          alert("РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РіСЂСѓР·РёС‚СЊ Р»РѕРіРѕС‚РёРї.");
+          alert("Не удалось загрузить логотип.");
         } finally {
           tenantQrDesignerLogoInput.value = "";
         }
@@ -20819,7 +20820,7 @@
       tenantQrDesignerUseSiteLogoBtn.addEventListener("click", () => {
         const tenantInfo = getTenantPwaDesignerTenantInfo();
         if (!tenantInfo.logoUrl) {
-          alert("РЈ СЃР°Р№С‚Р° РїРѕРєР° РЅРµС‚ Р»РѕРіРѕС‚РёРїР° РґР»СЏ РІСЃС‚Р°РІРєРё Р Р† С†РµРЅС‚СЂ QR.");
+          alert("У сайта пока нет логотипа для вставки РІ центр QR.");
           return;
         }
         tenantPwaDesignerLogoImage = tenantInfo.logoUrl;
@@ -20843,7 +20844,7 @@
           await navigator.clipboard.writeText(String(selectedTarget.url || ""));
           pulseTenantPwaDesignerButton(tenantQrDesignerCopyBtn, '<i class="fas fa-check"></i>');
         } catch (_) {
-          alert("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРєРѕРїРёСЂРѕРІР°С‚СЊ СЃСЃС‹Р»РєСѓ.");
+          alert("Не удалось скопировать ссылку.");
         }
       });
     }
@@ -20937,6 +20938,19 @@
     if (tenantQrDesignerExpandedCloseBtn) {
       tenantQrDesignerExpandedCloseBtn.addEventListener("click", () => {
         closeTenantPwaDesignerExpanded();
+      });
+    }
+
+    if (tenantQrDesignerExpandedLayer) {
+      tenantQrDesignerExpandedLayer.addEventListener("click", (event) => {
+        if (!tenantPwaDesignerExpanded) return;
+        const targetEl = event && event.target;
+        if (!targetEl || !targetEl.closest) return;
+        const eyebrowEl = targetEl.closest(".tenant-qr-card__eyebrow");
+        if (!eyebrowEl) return;
+        event.preventDefault();
+        event.stopPropagation();
+        setTenantPwaDesignerBadgeEditing(true);
       });
     }
 
@@ -21123,7 +21137,7 @@
 
 
 
-            alert("РќРµ СѓРґР°Р»РѕСЃСЊ РёР·РјРµРЅРёС‚СЊ СЃРѕСЃС‚РѕСЏРЅРёРµ РґРѕРјРµРЅР°.");
+            alert("Не удалось изменить состояние домена.");
 
 
 
@@ -21147,7 +21161,7 @@
 
 
 
-          if (!window.confirm("РЈРґР°Р»РёС‚СЊ РґРѕРјРµРЅ?")) return;
+          if (!window.confirm("Удалить домен?")) return;
 
 
 
@@ -21199,7 +21213,7 @@
 
 
 
-            alert("РќРµ СѓРґР°Р»РѕСЃСЊ СѓРґР°Р»РёС‚СЊ РґРѕРјРµРЅ.");
+            alert("Не удалось удалить домен.");
 
 
 
@@ -21231,7 +21245,7 @@
 
 
 
-        ensureTab("telegram-app", "РњРёРЅРё-РїСЂРёР»РѕР¶РµРЅРёРµ Telegram");
+        ensureTab("telegram-app", "Мини-приложение Telegram");
 
 
 
@@ -21255,7 +21269,7 @@
 
 
 
-        ensureTab("max-app", "РњРёРЅРё-РїСЂРёР»РѕР¶РµРЅРёРµ MAX");
+        ensureTab("max-app", "Мини-приложение MAX");
 
 
 
@@ -21279,7 +21293,7 @@
 
 
 
-        ensureTab("system-map", "РљР°СЂС‚Р°");
+        ensureTab("system-map", "Карта");
 
 
 
@@ -21303,7 +21317,7 @@
 
 
 
-        ensureTab("system-delivery-zone-polygon", "РџРѕР»РёРіРѕРЅС‹ РґРѕСЃС‚Р°РІРєРё");
+        ensureTab("system-delivery-zone-polygon", "Полигоны доставки");
 
 
 
@@ -21502,7 +21516,7 @@
 
 
 
-          alert("РЈРєР°Р¶РёС‚Рµ tile URL РґР»СЏ РєР°СЂС‚С‹.");
+          alert("Укажите tile URL для карты.");
 
 
 
@@ -21522,7 +21536,7 @@
 
 
 
-          alert("Tile URL РґРѕР»Р¶РµРЅ СЃРѕРґРµСЂР¶Р°С‚СЊ С€Р°Р±Р»РѕРЅС‹ {z}, {x}, {y}.");
+          alert("Tile URL должен содержать шаблоны {z}, {x}, {y}.");
 
 
 
@@ -21546,7 +21560,7 @@
 
 
 
-          alert("MAX ZOOM РґРѕР»Р¶РµРЅ Р±С‹С‚СЊ С‡РёСЃР»РѕРј РѕС‚ 0 РґРѕ 22.");
+          alert("MAX ZOOM должен быть числом от 0 до 22.");
 
 
 
@@ -21566,7 +21580,7 @@
 
 
 
-          alert("РЈРєР°Р¶РёС‚Рµ URL РїРѕРёСЃРєР° РіРѕСЂРѕРґРѕРІ.");
+          alert("Укажите URL поиска городов.");
 
 
 
@@ -21586,7 +21600,7 @@
 
 
 
-          alert("GEOCODER SEARCH URL РґРѕР»Р¶РµРЅ РЅР°С‡РёРЅР°С‚СЊСЃСЏ СЃ http:// РёР»Рё https://");
+          alert("GEOCODER SEARCH URL должен начинаться с http:// или https://");
 
 
 
@@ -21610,7 +21624,7 @@
 
 
 
-          alert("RESULT LIMIT РґРѕР»Р¶РµРЅ Р±С‹С‚СЊ С‡РёСЃР»РѕРј РѕС‚ 1 РґРѕ 10.");
+          alert("RESULT LIMIT должен быть числом от 1 до 10.");
 
 
 
@@ -21654,7 +21668,7 @@
 
 
 
-          alert("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕС…СЂР°РЅРёС‚СЊ РЅР°СЃС‚СЂРѕР№РєРё РєР°СЂС‚С‹.");
+          alert("Не удалось сохранить настройки карты.");
 
 
 
@@ -21779,7 +21793,7 @@
 
 
 
-          alert("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕС…СЂР°РЅРёС‚СЊ РЅР°СЃС‚СЂРѕР№РєРё РїРѕР»РёРіРѕРЅРѕРІ РґРѕСЃС‚Р°РІРєРё.");
+          alert("Не удалось сохранить настройки полигонов доставки.");
 
 
 
@@ -21900,7 +21914,7 @@
 
 
 
-          alert("РЎРЅР°С‡Р°Р»Р° Р·Р°РїРѕР»РЅРёС‚Рµ token Telegram-Р±РѕС‚Р° РёР»Рё РѕС‡РёСЃС‚РёС‚Рµ РІСЃСЋ РєРѕРЅС„РёРіСѓСЂР°С†РёСЋ.");
+          alert("Сначала заполните token Telegram-бота или очистите всю конфигурацию.");
 
 
 
@@ -21948,7 +21962,7 @@
 
 
 
-          alert("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕС…СЂР°РЅРёС‚СЊ СЃРёСЃС‚РµРјРЅС‹Рµ РЅР°СЃС‚СЂРѕР№РєРё Telegram-Р±РѕС‚Р°.");
+          alert("Не удалось сохранить системные настройки Telegram-бота.");
 
 
 
@@ -22017,7 +22031,7 @@
 
         if (hasAnyValue && !systemMaxDraft.max_bot_token) {
 
-          alert("РЎРЅР°С‡Р°Р»Р° Р·Р°РїРѕР»РЅРёС‚Рµ token MAX-Р±РѕС‚Р° РёР»Рё РѕС‡РёСЃС‚РёС‚Рµ РІСЃСЋ РєРѕРЅС„РёРіСѓСЂР°С†РёСЋ.");
+          alert("Сначала заполните token MAX-бота или очистите всю конфигурацию.");
 
           if (settingsSystemMaxBotToken) settingsSystemMaxBotToken.focus();
 
@@ -22027,7 +22041,7 @@
 
         if (systemMaxDraft.max_webhook_url && !/^https:\/\//i.test(systemMaxDraft.max_webhook_url)) {
 
-          alert("WEBHOOK URL РґР»СЏ MAX РґРѕР»Р¶РµРЅ РЅР°С‡РёРЅР°С‚СЊСЃСЏ СЃ https://");
+          alert("WEBHOOK URL для MAX должен начинаться с https://");
 
           if (settingsSystemMaxWebhookUrl) settingsSystemMaxWebhookUrl.focus();
 
@@ -22049,7 +22063,7 @@
 
         if (!saved) {
 
-          alert("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕС…СЂР°РЅРёС‚СЊ СЃРёСЃС‚РµРјРЅС‹Рµ РЅР°СЃС‚СЂРѕР№РєРё MAX-Р±РѕС‚Р°.");
+          alert("Не удалось сохранить системные настройки MAX-бота.");
 
         }
 
@@ -22383,7 +22397,7 @@
 
 
 
-    // Telegram bot username вЂ” save on change
+    // Telegram bot username — save on change
 
 
 
@@ -22531,7 +22545,7 @@
 
 
 
-      maxLoginEnabledEl.title = hasRequired ? "" : "РЎРЅР°С‡Р°Р»Р° Р·Р°РїРѕР»РЅРёС‚Рµ ID Р±РѕС‚Р° Рё С‚РѕРєРµРЅ MAX";
+      maxLoginEnabledEl.title = hasRequired ? "" : "Сначала заполните ID бота и токен MAX";
 
 
 
@@ -22567,7 +22581,7 @@
 
 
 
-      tgLoginEnabledEl.title = hasRequired ? "" : "РЎРЅР°С‡Р°Р»Р° Р·Р°РїРѕР»РЅРёС‚Рµ РёРјСЏ Р±РѕС‚Р° Рё С‚РѕРєРµРЅ Telegram";
+      tgLoginEnabledEl.title = hasRequired ? "" : "Сначала заполните имя бота и токен Telegram";
 
 
 
@@ -23732,7 +23746,7 @@
 
 
 
-          alert("РЎРЅР°С‡Р°Р»Р° Р·Р°РїРѕР»РЅРёС‚Рµ РёРјСЏ Р±РѕС‚Р° Рё С‚РѕРєРµРЅ Telegram");
+          alert("Сначала заполните имя бота и токен Telegram");
 
 
 
@@ -23784,7 +23798,7 @@
 
 
 
-          alert("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕС…СЂР°РЅРёС‚СЊ РЅР°СЃС‚СЂРѕР№РєРё Telegram.");
+          alert("Не удалось сохранить настройки Telegram.");
 
 
 
@@ -23952,7 +23966,7 @@
 
 
 
-    // Telegram bot token вЂ” save on blur
+    // Telegram bot token — save on blur
 
 
 
@@ -24173,7 +24187,7 @@
 
 
 
-            alert("РЎСѓР±РґРѕРјРµРЅ: С‚РѕР»СЊРєРѕ Р»Р°С‚РёРЅРёС†Р°, С†РёС„СЂС‹ Рё РґРµС„РёСЃ.");
+            alert("Субдомен: только латиница, цифры и дефис.");
 
 
 
@@ -24181,7 +24195,7 @@
 
 
 
-            alert("РЎСѓР±РґРѕРјРµРЅ СѓР¶Рµ Р·Р°РЅСЏС‚.");
+            alert("Субдомен уже занят.");
 
 
 
@@ -24189,7 +24203,7 @@
 
 
 
-            alert("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕС…СЂР°РЅРёС‚СЊ РґР°РЅРЅС‹Рµ СЃР°Р№С‚Р°.");
+            alert("Не удалось сохранить данные сайта.");
 
 
 
@@ -24370,7 +24384,7 @@
 
 
 
-          alert("РЎРЅР°С‡Р°Р»Р° Р·Р°РїРѕР»РЅРёС‚Рµ ID Р±РѕС‚Р° Рё С‚РѕРєРµРЅ MAX");
+          alert("Сначала заполните ID бота и токен MAX");
 
 
 
@@ -24422,7 +24436,7 @@
 
 
 
-          alert("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕС…СЂР°РЅРёС‚СЊ РЅР°СЃС‚СЂРѕР№РєРё MAX.");
+          alert("Не удалось сохранить настройки MAX.");
 
 
 
@@ -24662,7 +24676,7 @@
 
 
 
-            alert("РЎРЅР°С‡Р°Р»Р° Р·Р°РїРѕР»РЅРёС‚Рµ ID Р±РѕС‚Р° Рё С‚РѕРєРµРЅ MAX");
+            alert("Сначала заполните ID бота и токен MAX");
 
 
 
@@ -24818,7 +24832,7 @@
 
 
 
-          alert("РЎРЅР°С‡Р°Р»Р° Р·Р°РїРѕР»РЅРёС‚Рµ РёРјСЏ Р±РѕС‚Р° Рё С‚РѕРєРµРЅ Telegram");
+          alert("Сначала заполните имя бота и токен Telegram");
 
 
 
@@ -24906,7 +24920,7 @@
 
 
 
-    // РљРѕРїРёСЂРѕРІР°РЅРёРµ СЃСЃС‹Р»РєРё Telegram mini app
+    // Копирование ссылки Telegram mini app
 
 
 
@@ -25022,7 +25036,7 @@
 
 
 
-    // Р—Р°РїРѕР»РЅСЏРµРј РїСЂРµС„РёРєСЃ/СЃСѓС„С„РёРєСЃ СЃСѓР±РґРѕРјРµРЅР°
+    // Заполняем префикс/суффикс субдомена
 
 
 
@@ -25291,15 +25305,15 @@
 
 
 
-        setCheckState("domainCheckDns", "pending", "РџСЂРѕРІРµСЂСЏРµРј...");
+        setCheckState("domainCheckDns", "pending", "Проверяем...");
 
 
 
-        setCheckState("domainCheckHttp", "pending", "РџСЂРѕРІРµСЂСЏРµРј...");
+        setCheckState("domainCheckHttp", "pending", "Проверяем...");
 
 
 
-        setCheckState("domainCheckSsl", "pending", "РџСЂРѕРІРµСЂСЏРµРј...");
+        setCheckState("domainCheckSsl", "pending", "Проверяем...");
 
 
 
@@ -25372,7 +25386,7 @@
 
 
 
-                connectHint.textContent = "Р”РѕРјРµРЅ СѓР¶Рµ РїРѕРґРєР»СЋС‡РµРЅ Рё СЂР°Р±РѕС‚Р°РµС‚ РїРѕ HTTPS.";
+                connectHint.textContent = "Домен уже подключен и работает по HTTPS.";
 
 
 
@@ -25380,7 +25394,7 @@
 
 
 
-                connectHint.textContent = "DNS РЅР°Р№РґРµРЅ. РўРµРїРµСЂСЊ РЅР°Р¶РјРёС‚Рµ В«РџРѕРґРєР»СЋС‡РёС‚СЊ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРёВ».";
+                connectHint.textContent = "DNS найден. Теперь нажмите «Подключить автоматически».";
 
 
 
@@ -25388,7 +25402,7 @@
 
 
 
-                connectHint.textContent = "РЎРЅР°С‡Р°Р»Р° РїСЂРѕРїРёС€РёС‚Рµ РґРІРµ A-Р·Р°РїРёСЃРё Сѓ СЂРµРіРёСЃС‚СЂР°С‚РѕСЂР° РґРѕРјРµРЅР°.";
+                connectHint.textContent = "Сначала пропишите две A-записи у регистратора домена.";
 
 
 
@@ -25416,15 +25430,15 @@
 
 
 
-            setCheckState("domainCheckDns", "fail", "РћС€РёР±РєР° РїСЂРѕРІРµСЂРєРё");
+            setCheckState("domainCheckDns", "fail", "Ошибка проверки");
 
 
 
-            setCheckState("domainCheckHttp", "fail", "РћС€РёР±РєР° РїСЂРѕРІРµСЂРєРё");
+            setCheckState("domainCheckHttp", "fail", "Ошибка проверки");
 
 
 
-            setCheckState("domainCheckSsl", "fail", "РћС€РёР±РєР° РїСЂРѕРІРµСЂРєРё");
+            setCheckState("domainCheckSsl", "fail", "Ошибка проверки");
 
 
 
@@ -25436,15 +25450,15 @@
 
 
 
-          setCheckState("domainCheckDns", "fail", "РћС€РёР±РєР° СЃРµС‚Рё");
+          setCheckState("domainCheckDns", "fail", "Ошибка сети");
 
 
 
-          setCheckState("domainCheckHttp", "fail", "РћС€РёР±РєР° СЃРµС‚Рё");
+          setCheckState("domainCheckHttp", "fail", "Ошибка сети");
 
 
 
-          setCheckState("domainCheckSsl", "fail", "РћС€РёР±РєР° СЃРµС‚Рё");
+          setCheckState("domainCheckSsl", "fail", "Ошибка сети");
 
 
 
@@ -25538,7 +25552,7 @@
 
 
 
-          alert("РЎРЅР°С‡Р°Р»Р° СЃРѕС…СЂР°РЅРёС‚Рµ РґРѕРјРµРЅ.");
+          alert("Сначала сохраните домен.");
 
 
 
@@ -25570,7 +25584,7 @@
 
 
 
-          alert("РЎРЅР°С‡Р°Р»Р° РґРѕР±Р°РІСЊС‚Рµ РґРѕРјРµРЅ.");
+          alert("Сначала добавьте домен.");
 
 
 
@@ -25594,7 +25608,7 @@
 
 
 
-        connectBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> РџРѕРґРєР»СЋС‡Р°РµРј';
+        connectBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Подключаем';
 
 
 
@@ -25602,7 +25616,7 @@
 
 
 
-          connectHint.textContent = "РџРѕРґРєР»СЋС‡Р°РµРј РґРѕРјРµРЅ Рё РІС‹РїСѓСЃРєР°РµРј СЃРµСЂС‚РёС„РёРєР°С‚. Р­С‚Рѕ РјРѕР¶РµС‚ Р·Р°РЅСЏС‚СЊ РїР°СЂСѓ РјРёРЅСѓС‚.";
+          connectHint.textContent = "Подключаем домен и выпускаем сертификат. Это может занять пару минут.";
 
 
 
@@ -25650,11 +25664,11 @@
 
 
 
-                ? "РЎРЅР°С‡Р°Р»Р° РїСЂРѕРїРёС€РёС‚Рµ РґРІРµ A-Р·Р°РїРёСЃРё Рё РґРѕР¶РґРёС‚РµСЃСЊ РѕР±РЅРѕРІР»РµРЅРёСЏ DNS."
+                ? "Сначала пропишите две A-записи и дождитесь обновления DNS."
 
 
 
-                : "РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕРґРєР»СЋС‡РёС‚СЊ РґРѕРјРµРЅ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё.";
+                : "Не удалось подключить домен автоматически.";
 
 
 
@@ -25662,7 +25676,7 @@
 
 
 
-            alert(data && data.error ? String(data.error) : "РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕРґРєР»СЋС‡РёС‚СЊ РґРѕРјРµРЅ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё.");
+            alert(data && data.error ? String(data.error) : "Не удалось подключить домен автоматически.");
 
 
 
@@ -25706,7 +25720,7 @@
 
 
 
-            connectHint.textContent = "Р”РѕРјРµРЅ РїРѕРґРєР»СЋС‡РµРЅ. Р¤РёРЅР°Р»СЊРЅРѕ РїСЂРѕРІРµСЂСЏРµРј СЃР°Р№С‚ Рё СЃРµСЂС‚РёС„РёРєР°С‚.";
+            connectHint.textContent = "Домен подключен. Финально проверяем сайт и сертификат.";
 
 
 
@@ -25726,7 +25740,7 @@
 
 
 
-            connectHint.textContent = "РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕРґРєР»СЋС‡РёС‚СЊ РґРѕРјРµРЅ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё.";
+            connectHint.textContent = "Не удалось подключить домен автоматически.";
 
 
 
@@ -25734,7 +25748,7 @@
 
 
 
-          alert("РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕРґРєР»СЋС‡РёС‚СЊ РґРѕРјРµРЅ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё.");
+          alert("Не удалось подключить домен автоматически.");
 
 
 
@@ -25774,7 +25788,7 @@
 
 
 
-        ensureTab("brand", "Р”Р°РЅРЅС‹Рµ Р±СЂРµРЅРґР°");
+        ensureTab("brand", "Данные бренда");
 
 
 
@@ -25798,7 +25812,7 @@
 
 
 
-        ensureTab("order-statuses", "Р­С‚Р°РїС‹ Р·Р°РєР°Р·РѕРІ");
+        ensureTab("order-statuses", "Этапы заказов");
 
 
 
@@ -25822,7 +25836,7 @@
 
 
 
-        ensureTab("order-payments", "РЎРїРѕСЃРѕР±С‹ РѕРїР»Р°С‚С‹");
+        ensureTab("order-payments", "Способы оплаты");
 
 
 
@@ -25846,7 +25860,7 @@
 
 
 
-        ensureTab("order-delivery", "РЎРїРѕСЃРѕР±С‹ РїРѕР»СѓС‡РµРЅРёСЏ");
+        ensureTab("order-delivery", "Способы получения");
 
 
 
@@ -25870,7 +25884,7 @@
 
 
 
-        ensureTab("order-time-options", "РРЅС‚РµСЂРІР°Р»С‹ РІСЂРµРјРµРЅРё");
+        ensureTab("order-time-options", "Интервалы времени");
 
 
 
@@ -25894,7 +25908,7 @@
 
 
 
-        ensureTab("sounds", "Р—РІСѓРєРё СѓРІРµРґРѕРјР»РµРЅРёР№");
+        ensureTab("sounds", "Звуки уведомлений");
 
 
 
@@ -25982,7 +25996,7 @@
 
 
 
-        ensureTab("notifications", "РЈРІРµРґРѕРјР»РµРЅРёСЏ");
+        ensureTab("notifications", "Уведомления");
 
 
 
@@ -26006,7 +26020,7 @@
 
 
 
-        ensureTab("images", "Р¤РѕС‚Рѕ С‚РѕРІР°СЂРѕРІ");
+        ensureTab("images", "Фото товаров");
 
 
 
@@ -26242,7 +26256,7 @@
 
 
 
-        settingsPrintApiSaveSettingsBtn.textContent = "РЎРѕС…СЂР°РЅРµРЅРёРµ...";
+        settingsPrintApiSaveSettingsBtn.textContent = "Сохранение...";
 
 
 
@@ -26274,11 +26288,11 @@
 
 
 
-          console.error("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕС…СЂР°РЅРёС‚СЊ РЅР°СЃС‚СЂРѕР№РєРё print API:", err);
+          console.error("Не удалось сохранить настройки print API:", err);
 
 
 
-          alert("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕС…СЂР°РЅРёС‚СЊ РЅР°СЃС‚СЂРѕР№РєРё СѓРІРµРґРѕРјР»РµРЅРёР№ CRM_Print_Push_Bot.");
+          alert("Не удалось сохранить настройки уведомлений CRM_Print_Push_Bot.");
 
 
 
@@ -26290,7 +26304,7 @@
 
 
 
-          settingsPrintApiSaveSettingsBtn.textContent = initialText || "РЎРѕС…СЂР°РЅРёС‚СЊ";
+          settingsPrintApiSaveSettingsBtn.textContent = initialText || "Сохранить";
 
 
 
@@ -26354,11 +26368,11 @@
 
 
 
-          console.error("РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РіСЂСѓР·РёС‚СЊ Р·РІСѓРє РЅРѕРІРѕРіРѕ Р·Р°РєР°Р·Р°:", err);
+          console.error("Не удалось загрузить звук нового заказа:", err);
 
 
 
-          alert("РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РіСЂСѓР·РёС‚СЊ Р·РІСѓРє РЅРѕРІРѕРіРѕ Р·Р°РєР°Р·Р°.");
+          alert("Не удалось загрузить звук нового заказа.");
 
 
 
@@ -26430,11 +26444,11 @@
 
 
 
-          console.error("РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РіСЂСѓР·РёС‚СЊ Р·РІСѓРє РЅРѕРІРѕРіРѕ СЃРѕРѕР±С‰РµРЅРёСЏ:", err);
+          console.error("Не удалось загрузить звук нового сообщения:", err);
 
 
 
-          alert("РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РіСЂСѓР·РёС‚СЊ Р·РІСѓРє РЅРѕРІРѕРіРѕ СЃРѕРѕР±С‰РµРЅРёСЏ.");
+          alert("Не удалось загрузить звук нового сообщения.");
 
 
 
@@ -26630,7 +26644,7 @@
 
 
 
-        if (!confirm("РћС‚РєР»СЋС‡РёС‚СЊ СѓРІРµРґРѕРјР»РµРЅРёСЏ Р Р† СЌС‚РѕС‚ С‡Р°С‚?")) return;
+        if (!confirm("Отключить уведомления РІ этот чат?")) return;
 
 
 
@@ -26674,7 +26688,7 @@
 
         if (!storeId || !bindingId) return;
 
-        if (!confirm("РћС‚РєР»СЋС‡РёС‚СЊ СѓРІРµРґРѕРјР»РµРЅРёСЏ РІ СЌС‚РѕС‚ MAX-Р°РєРєР°СѓРЅС‚?")) return;
+        if (!confirm("Отключить уведомления в этот MAX-аккаунт?")) return;
 
         try {
 
@@ -26714,7 +26728,7 @@
 
 
 
-          console.error("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРєРѕРїРёСЂРѕРІР°С‚СЊ С‚РѕРєРµРЅ:", err);
+          console.error("Не удалось скопировать токен:", err);
 
 
 
@@ -26758,7 +26772,7 @@
 
 
 
-          alert("Р’РІРµРґРёС‚Рµ API key Рё Secret key РѕС‚ Р±РѕС‚Р°.");
+          alert("Введите API key и Secret key от бота.");
 
 
 
@@ -26802,7 +26816,7 @@
 
 
 
-            alert(data.error === "SECRET_INVALID_OR_EXPIRED" ? "Secret key РЅРµРґРµР№СЃС‚РІРёС‚РµР»РµРЅ РёР»Рё РёСЃС‚С‘Рє. РќР°РїРёС€РёС‚Рµ /start Р±РѕС‚Сѓ Р·Р°РЅРѕРІРѕ." : (data.error || "РћС€РёР±РєР°"));
+            alert(data.error === "SECRET_INVALID_OR_EXPIRED" ? "Secret key недействителен или истёк. Напишите /start боту заново." : (data.error || "Ошибка"));
 
 
 
@@ -26834,7 +26848,7 @@
 
 
 
-          alert("РћС€РёР±РєР° Р·Р°РїСЂРѕСЃР°");
+          alert("Ошибка запроса");
 
 
 
@@ -26870,7 +26884,7 @@
 
 
 
-      openStoreTab(tabId, "РќРѕРІР°СЏ С‚РѕС‡РєР°");
+      openStoreTab(tabId, "Новая точка");
 
 
 
@@ -27166,7 +27180,7 @@
 
 
 
-        return String(item && item.city_name || "").trim() || getStoreAddressShortLabel(item) || "Р“РѕСЂРѕРґ";
+        return String(item && item.city_name || "").trim() || getStoreAddressShortLabel(item) || "Город";
 
 
 
@@ -27174,7 +27188,7 @@
 
 
 
-      return getStoreAddressShortLabel(item) || String(item && item.label || "").trim() || "РђРґСЂРµСЃ";
+      return getStoreAddressShortLabel(item) || String(item && item.label || "").trim() || "Адрес";
 
 
 
@@ -27194,7 +27208,7 @@
 
 
 
-        return "Р“РѕСЂРѕРґ";
+        return "Город";
 
 
 
@@ -27206,7 +27220,7 @@
 
 
 
-      return city ? `РђРґСЂРµСЃ вЂў ${city}` : "РђРґСЂРµСЃ";
+      return city ? `Адрес • ${city}` : "Адрес";
 
 
 
@@ -27774,7 +27788,7 @@
 
 
 
-      setStoreAddressSuggestStatus("РС‰РµРј Р°РґСЂРµСЃвЂ¦", "loading");
+      setStoreAddressSuggestStatus("Ищем адрес…", "loading");
 
 
 
@@ -27810,7 +27824,7 @@
 
 
 
-            setStoreAddressSuggestStatus("РќР°СЃС‚СЂРѕР№С‚Рµ РіРµРѕРєРѕРґРµСЂ Р Р† СЂР°Р·РґРµР»Рµ В«РЎРёСЃС‚РµРјРЅС‹Рµ -> РљР°СЂС‚Р°В».", "error");
+            setStoreAddressSuggestStatus("Настройте геокодер РІ разделе «Системные -> Карта».", "error");
 
 
 
@@ -27826,7 +27840,7 @@
 
 
 
-          setStoreAddressSuggestStatus("РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕР»СѓС‡РёС‚СЊ РїРѕРґСЃРєР°Р·РєРё Р°РґСЂРµСЃР°.", "error");
+          setStoreAddressSuggestStatus("Не удалось получить подсказки адреса.", "error");
 
 
 
@@ -27874,7 +27888,7 @@
 
 
 
-          setStoreAddressSuggestStatus("РќРёС‡РµРіРѕ РЅРµ РЅР°Р№РґРµРЅРѕ.", "empty");
+          setStoreAddressSuggestStatus("Ничего не найдено.", "empty");
 
 
 
@@ -27890,7 +27904,7 @@
 
 
 
-        setStoreAddressSuggestStatus(`РџРѕРёСЃРє: ${data.data.scope_label || "Р РѕСЃСЃРёСЏ"}`, "ready");
+        setStoreAddressSuggestStatus(`Поиск: ${data.data.scope_label || "Россия"}`, "ready");
 
 
 
@@ -27902,7 +27916,7 @@
 
 
 
-        console.error("РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕР»СѓС‡РёС‚СЊ РїРѕРґСЃРєР°Р·РєРё Р°РґСЂРµСЃР° С„РёР»РёР°Р»Р°:", err);
+        console.error("Не удалось получить подсказки адреса филиала:", err);
 
 
 
@@ -27910,7 +27924,7 @@
 
 
 
-        setStoreAddressSuggestStatus("РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕР»СѓС‡РёС‚СЊ РїРѕРґСЃРєР°Р·РєРё Р°РґСЂРµСЃР°.", "error");
+        setStoreAddressSuggestStatus("Не удалось получить подсказки адреса.", "error");
 
 
 
@@ -28110,7 +28124,7 @@
 
 
 
-        .replace(/\b(?:Рі|РіРѕСЂРѕРґ)\.?\s+/g, "")
+        .replace(/\b(?:г|город)\.?\s+/g, "")
 
 
 
@@ -28134,7 +28148,7 @@
 
 
 
-        .replace(/\b(?:СѓР»РёС†Р°|СѓР»|РїСЂРѕСЃРїРµРєС‚|РїСЂ-РєС‚|РїСЂРѕСЃРї|РїРµСЂРµСѓР»РѕРє|РїРµСЂ|Р±СѓР»СЊРІР°СЂ|Р±СѓР»|РїР»РѕС‰Р°РґСЊ|РїР»|С€РѕСЃСЃРµ|С€|РїСЂРѕРµР·Рґ|РїСЂ-Рґ|РЅР°Р±РµСЂРµР¶РЅР°СЏ|РЅР°Р±|С‚СЂР°РєС‚|С‚СѓРїРёРє|С‚СѓРї|Р°Р»Р»РµСЏ|Р»РёРЅРёСЏ|РјРёРєСЂРѕСЂР°Р№РѕРЅ|РјРєСЂ)\b/g, " ")
+        .replace(/\b(?:улица|ул|проспект|пр-кт|просп|переулок|пер|бульвар|бул|площадь|пл|шоссе|ш|проезд|пр-д|набережная|наб|тракт|тупик|туп|аллея|линия|микрорайон|мкр)\b/g, " ")
 
 
 
@@ -28294,7 +28308,7 @@
 
 
 
-      return /^\d+$/.test(String(token || "").trim()) && /^(Р№|СЏ|С‹Р№|Р°СЏ)$/.test(String(nextToken || "").trim());
+      return /^\d+$/.test(String(token || "").trim()) && /^(й|я|ый|ая)$/.test(String(nextToken || "").trim());
 
 
 
@@ -29198,7 +29212,7 @@
 
 
 
-      if (/\b(?:РґРѕРј|Рґ|РєРѕСЂРїСѓСЃ|РєРѕСЂРї|СЃС‚СЂРѕРµРЅРёРµ|СЃС‚СЂ|Р»РёС‚РµСЂ|РєРІ|РєРІР°СЂС‚РёСЂР°|РїРѕРґСЉРµР·Рґ|РїРѕРґ|СЌС‚Р°Р¶|СЌС‚)\b/.test(normalized)) {
+      if (/\b(?:дом|д|корпус|корп|строение|стр|литер|кв|квартира|подъезд|под|этаж|эт)\b/.test(normalized)) {
 
 
 
@@ -31694,7 +31708,7 @@
 
 
 
-        return stage === "city" ? "РС‰РµРј РіРѕСЂРѕРґР°вЂ¦" : "РС‰РµРј Р°РґСЂРµСЃР°вЂ¦";
+        return stage === "city" ? "Ищем города…" : "Ищем адреса…";
 
 
 
@@ -31702,15 +31716,15 @@
 
 
 
-      if (mode === "local") return "РџРѕС…РѕР¶РёРµ РІР°СЂРёР°РЅС‚С‹";
+      if (mode === "local") return "Похожие варианты";
 
 
 
-      if (mode === "ready") return `РџРѕРёСЃРє: ${remoteScopeLabel || "Р РѕСЃСЃРёСЏ"}`;
+      if (mode === "ready") return `Поиск: ${remoteScopeLabel || "Россия"}`;
 
 
 
-      if (mode === "empty") return "РќРёС‡РµРіРѕ РЅРµ РЅР°Р№РґРµРЅРѕ.";
+      if (mode === "empty") return "Ничего не найдено.";
 
 
 
@@ -31730,11 +31744,11 @@
 
 
 
-      if (stage === "city") return String(item && (item.city_name || item.value || item.label) || "Р“РѕСЂРѕРґ").trim();
+      if (stage === "city") return String(item && (item.city_name || item.value || item.label) || "Город").trim();
 
 
 
-      return String(item && (item.value || item.label || item.full_address) || "РђРґСЂРµСЃ").trim();
+      return String(item && (item.value || item.label || item.full_address) || "Адрес").trim();
 
 
 
@@ -31750,7 +31764,7 @@
 
 
 
-      if (stage === "city") return "Р“РѕСЂРѕРґ";
+      if (stage === "city") return "Город";
 
 
 
@@ -31758,7 +31772,7 @@
 
 
 
-      return cityName || "РђРґСЂРµСЃ";
+      return cityName || "Адрес";
 
 
 
@@ -31774,7 +31788,7 @@
 
 
 
-      if (stage === "city") return String(item && (item.city_name || item.value || item.label) || "Р“РѕСЂРѕРґ").trim();
+      if (stage === "city") return String(item && (item.city_name || item.value || item.label) || "Город").trim();
 
 
 
@@ -31782,7 +31796,7 @@
 
 
 
-        return String(item && (item.street_name || item.value || item.label) || "РЈР»РёС†Р°").trim();
+        return String(item && (item.street_name || item.value || item.label) || "Улица").trim();
 
 
 
@@ -31790,7 +31804,7 @@
 
 
 
-      return String(item && (item.value || item.label || item.full_address) || "РђРґСЂРµСЃ").trim();
+      return String(item && (item.value || item.label || item.full_address) || "Адрес").trim();
 
 
 
@@ -31806,7 +31820,7 @@
 
 
 
-      if (stage === "city") return "Р“РѕСЂРѕРґ";
+      if (stage === "city") return "Город";
 
 
 
@@ -31818,7 +31832,7 @@
 
 
 
-        return cityName ? `РЈР»РёС†Р° - ${cityName}` : "РЈР»РёС†Р°";
+        return cityName ? `Улица - ${cityName}` : "Улица";
 
 
 
@@ -31826,7 +31840,7 @@
 
 
 
-      return cityName || "РђРґСЂРµСЃ";
+      return cityName || "Адрес";
 
 
 
@@ -33374,7 +33388,7 @@
 
 
 
-            setStoreAddressSuggestStatus(stage, "Р›РѕРєР°Р»СЊРЅС‹Р№ СЃРїСЂР°РІРѕС‡РЅРёРє Р°РґСЂРµСЃРѕРІ РµС‰С‘ РЅРµ Р·Р°РіСЂСѓР¶РµРЅ.", "error");
+            setStoreAddressSuggestStatus(stage, "Локальный справочник адресов ещё не загружен.", "error");
 
 
 
@@ -33390,7 +33404,7 @@
 
 
 
-          setStoreAddressSuggestStatus(stage, "РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕР»СѓС‡РёС‚СЊ РїРѕРґСЃРєР°Р·РєРё Р°РґСЂРµСЃР°.", "error");
+          setStoreAddressSuggestStatus(stage, "Не удалось получить подсказки адреса.", "error");
 
 
 
@@ -33502,7 +33516,7 @@
 
 
 
-        console.error("РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕР»СѓС‡РёС‚СЊ РїРѕРґСЃРєР°Р·РєРё Р°РґСЂРµСЃР° С„РёР»РёР°Р»Р°:", err);
+        console.error("Не удалось получить подсказки адреса филиала:", err);
 
 
 
@@ -33530,7 +33544,7 @@
 
 
 
-        setStoreAddressSuggestStatus(stage, "РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕР»СѓС‡РёС‚СЊ РїРѕРґСЃРєР°Р·РєРё Р°РґСЂРµСЃР°.", "error");
+        setStoreAddressSuggestStatus(stage, "Не удалось получить подсказки адреса.", "error");
 
 
 
@@ -34086,7 +34100,7 @@
 
 
 
-            setStoreAddressSuggestStatus(stage, "Р›РѕРєР°Р»СЊРЅС‹Р№ СЃРїСЂР°РІРѕС‡РЅРёРє Р°РґСЂРµСЃРѕРІ РµС‰С‘ РЅРµ Р·Р°РіСЂСѓР¶РµРЅ.", "error");
+            setStoreAddressSuggestStatus(stage, "Локальный справочник адресов ещё не загружен.", "error");
 
 
 
@@ -34102,7 +34116,7 @@
 
 
 
-          setStoreAddressSuggestStatus(stage, "РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕР»СѓС‡РёС‚СЊ РїРѕРґСЃРєР°Р·РєРё Р°РґСЂРµСЃР°.", "error");
+          setStoreAddressSuggestStatus(stage, "Не удалось получить подсказки адреса.", "error");
 
 
 
@@ -34202,7 +34216,7 @@
 
 
 
-        console.error("РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕР»СѓС‡РёС‚СЊ РїРѕРґСЃРєР°Р·РєРё Р°РґСЂРµСЃР° С„РёР»РёР°Р»Р°:", err);
+        console.error("Не удалось получить подсказки адреса филиала:", err);
 
 
 
@@ -34230,7 +34244,7 @@
 
 
 
-        setStoreAddressSuggestStatus(stage, "РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕР»СѓС‡РёС‚СЊ РїРѕРґСЃРєР°Р·РєРё Р°РґСЂРµСЃР°.", "error");
+        setStoreAddressSuggestStatus(stage, "Не удалось получить подсказки адреса.", "error");
 
 
 
@@ -34758,7 +34772,7 @@
 
 
 
-                  console.error("РќРµ СѓРґР°Р»РѕСЃСЊ РЅРѕСЂРјР°Р»РёР·РѕРІР°С‚СЊ РіРѕСЂРѕРґ С„РёР»РёР°Р»Р°:", error);
+                  console.error("Не удалось нормализовать город филиала:", error);
 
 
 
@@ -35214,7 +35228,7 @@
 
 
 
-          console.error("РќРµ СѓРґР°Р»РѕСЃСЊ СЂР°Р·СЂРµС€РёС‚СЊ РіРѕСЂРѕРґ С„РёР»РёР°Р»Р°:", error);
+          console.error("Не удалось разрешить город филиала:", error);
 
 
 
@@ -38138,7 +38152,7 @@
 
 
 
-          return "РљРѕРґ СѓР¶Рµ РёСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ. Р’РІРµРґРёС‚Рµ РґСЂСѓРіРѕР№.";
+          return "Код уже используется. Введите другой.";
 
 
 
@@ -38146,7 +38160,7 @@
 
 
 
-          return "РќР°Р·РІР°РЅРёРµ С„РёР»РёР°Р»Р° РѕР±СЏР·Р°С‚РµР»СЊРЅРѕ.";
+          return "Название филиала обязательно.";
 
 
 
@@ -38154,7 +38168,7 @@
 
 
 
-          return "Р’РІРµРґРёС‚Рµ РїРѕР»РЅС‹Р№ Р°РґСЂРµСЃ С„РёР»РёР°Р»Р°.";
+          return "Введите полный адрес филиала.";
 
 
 
@@ -38162,7 +38176,7 @@
 
 
 
-          return "РќР°СЃС‚СЂРѕР№С‚Рµ РіРµРѕРєРѕРґРµСЂ Р Р† СЂР°Р·РґРµР»Рµ В«РЎРёСЃС‚РµРјРЅС‹Рµ -> РљР°СЂС‚Р°В».";
+          return "Настройте геокодер РІ разделе «Системные -> Карта».";
 
 
 
@@ -38170,7 +38184,7 @@
 
 
 
-          return "РќРµ СѓРґР°Р»РѕСЃСЊ РЅР°Р№С‚Рё Р°РґСЂРµСЃ. РЈС‚РѕС‡РЅРёС‚Рµ Р°РґСЂРµСЃ С„РёР»РёР°Р»Р°.";
+          return "Не удалось найти адрес. Уточните адрес филиала.";
 
 
 
@@ -38178,7 +38192,7 @@
 
 
 
-          return "РќРµ СѓРґР°Р»РѕСЃСЊ РѕРїСЂРµРґРµР»РёС‚СЊ РіРѕСЂРѕРґ РїРѕ Р°РґСЂРµСЃСѓ. РЈС‚РѕС‡РЅРёС‚Рµ Р°РґСЂРµСЃ С„РёР»РёР°Р»Р°.";
+          return "Не удалось определить город по адресу. Уточните адрес филиала.";
 
 
 
@@ -38186,7 +38200,7 @@
 
 
 
-          return "РќРµ СѓРґР°Р»РѕСЃСЊ РѕРїСЂРµРґРµР»РёС‚СЊ РєРѕРѕСЂРґРёРЅР°С‚С‹ РїРѕ Р°РґСЂРµСЃСѓ. РЈС‚РѕС‡РЅРёС‚Рµ Р°РґСЂРµСЃ С„РёР»РёР°Р»Р°.";
+          return "Не удалось определить координаты по адресу. Уточните адрес филиала.";
 
 
 
@@ -38194,7 +38208,7 @@
 
 
 
-          return "РЎРµСЂРІРёСЃ РіРµРѕРєРѕРґРёСЂРѕРІР°РЅРёСЏ РІСЂРµРјРµРЅРЅРѕ РЅРµРґРѕСЃС‚СѓРїРµРЅ. РџРѕРїСЂРѕР±СѓР№С‚Рµ РїРѕР·Р¶Рµ.";
+          return "Сервис геокодирования временно недоступен. Попробуйте позже.";
 
 
 
@@ -38202,7 +38216,7 @@
 
 
 
-          return "РќР°Р№РґРµРЅРѕ РЅРµСЃРєРѕР»СЊРєРѕ РїРѕС…РѕР¶РёС… Р°РґСЂРµСЃРѕРІ. Р’С‹Р±РµСЂРёС‚Рµ С‚РѕС‡РЅС‹Р№ РІР°СЂРёР°РЅС‚ РёР· РїРѕРґСЃРєР°Р·РѕРє.";
+          return "Найдено несколько похожих адресов. Выберите точный вариант из подсказок.";
 
 
 
@@ -38218,7 +38232,7 @@
 
 
 
-          return "РђРґСЂРµСЃРЅС‹Р№ СЃРµСЂРІРёСЃ РІСЂРµРјРµРЅРЅРѕ РЅРµРґРѕСЃС‚СѓРїРµРЅ. РџРѕРїСЂРѕР±СѓР№С‚Рµ РїРѕР·Р¶Рµ.";
+          return "Адресный сервис временно недоступен. Попробуйте позже.";
 
 
 
@@ -38226,7 +38240,7 @@
 
 
 
-          return "РЁРёСЂРѕС‚Р° РґРѕР»Р¶РЅР° Р±С‹С‚СЊ Р Р† РґРёР°РїР°Р·РѕРЅРµ РѕС‚ -90 РґРѕ 90.";
+          return "Широта должна быть РІ диапазоне от -90 до 90.";
 
 
 
@@ -38234,7 +38248,7 @@
 
 
 
-          return "Р”РѕР»РіРѕС‚Р° РґРѕР»Р¶РЅР° Р±С‹С‚СЊ Р Р† РґРёР°РїР°Р·РѕРЅРµ РѕС‚ -180 РґРѕ 180.";
+          return "Долгота должна быть РІ диапазоне от -180 до 180.";
 
 
 
@@ -38322,7 +38336,7 @@
 
 
 
-          `РђРґСЂРµСЃ Р±СѓРґРµС‚ СЃРѕС…СЂР°РЅС‘РЅ Р Р† РЅРѕСЂРјР°Р»РёР·РѕРІР°РЅРЅРѕРј РІРёРґРµ:\n\n${previewText}\n\nРџСЂРѕРґРѕР»Р¶РёС‚СЊ СЃРѕС…СЂР°РЅРµРЅРёРµ?`
+          `Адрес будет сохранён РІ нормализованном виде:\n\n${previewText}\n\nПродолжить сохранение?`
 
 
 
@@ -38410,11 +38424,11 @@
 
 
 
-          ? "РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕР·РґР°С‚СЊ С„РёР»РёР°Р»."
+          ? "Не удалось создать филиал."
 
 
 
-          : "РќРµ СѓРґР°Р»РѕСЃСЊ РѕР±РЅРѕРІРёС‚СЊ С„РёР»РёР°Р».";
+          : "Не удалось обновить филиал.";
 
 
 
@@ -38474,7 +38488,7 @@
 
 
 
-          alert("Р’С‹Р±РµСЂРёС‚Рµ РіРѕСЂРѕРґ РёР· РїРѕРґСЃРєР°Р·РѕРє Р»РѕРєР°Р»СЊРЅРѕРіРѕ СЃРїСЂР°РІРѕС‡РЅРёРєР°.");
+          alert("Выберите город из подсказок локального справочника.");
 
 
 
@@ -38490,7 +38504,7 @@
 
 
 
-          alert("РџРѕСЃР»Рµ РІС‹Р±РѕСЂР° СѓР»РёС†С‹ СѓРєР°Р¶РёС‚Рµ РЅРѕРјРµСЂ РґРѕРјР°.");
+          alert("После выбора улицы укажите номер дома.");
 
 
 
@@ -38542,7 +38556,7 @@
 
 
 
-        ensureTab(activeRightTabId, data.store.name || "Р¤РёР»РёР°Р»");
+        ensureTab(activeRightTabId, data.store.name || "Филиал");
 
 
 
@@ -38558,7 +38572,7 @@
 
 
 
-        ensureTab(activeRightTabId, data.store.name || "Р¤РёР»РёР°Р»");
+        ensureTab(activeRightTabId, data.store.name || "Филиал");
 
 
 
@@ -38778,7 +38792,7 @@
 
 
 
-          alert("Р’РІРµРґРёС‚Рµ РЅР°Р·РІР°РЅРёРµ С„РёР»РёР°Р»Р°.");
+          alert("Введите название филиала.");
 
 
 
@@ -38794,7 +38808,7 @@
 
 
 
-          alert("Р’РІРµРґРёС‚Рµ РіРѕСЂРѕРґ С„РёР»РёР°Р»Р°.");
+          alert("Введите город филиала.");
 
 
 
@@ -38814,7 +38828,7 @@
 
 
 
-          alert(mapModeEnabled ? "Р’РІРµРґРёС‚Рµ Р°РґСЂРµСЃ С„РёР»РёР°Р»Р° Рё РІС‹Р±РµСЂРёС‚Рµ РІР°СЂРёР°РЅС‚ РёР· РїРѕРґСЃРєР°Р·РѕРє." : "Р’РІРµРґРёС‚Рµ Р°РґСЂРµСЃ С„РёР»РёР°Р»Р°.");
+          alert(mapModeEnabled ? "Введите адрес филиала и выберите вариант из подсказок." : "Введите адрес филиала.");
 
 
 
@@ -38886,7 +38900,7 @@
 
 
 
-            alert("РџРѕСЃР»Рµ РІС‹Р±РѕСЂР° СѓР»РёС†С‹ СѓРєР°Р¶РёС‚Рµ РЅРѕРјРµСЂ РґРѕРјР°.");
+            alert("После выбора улицы укажите номер дома.");
 
 
 
@@ -38938,7 +38952,7 @@
 
 
 
-            alert(getStoreSaveErrorMessage(data && data.error, "РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕР·РґР°С‚СЊ С„РёР»РёР°Р»."));
+            alert(getStoreSaveErrorMessage(data && data.error, "Не удалось создать филиал."));
 
 
 
@@ -38970,7 +38984,7 @@
 
 
 
-            alert(getStoreSaveErrorMessage(data && data.error, "РќРµ СѓРґР°Р»РѕСЃСЊ РѕР±РЅРѕРІРёС‚СЊ С„РёР»РёР°Р»."));
+            alert(getStoreSaveErrorMessage(data && data.error, "Не удалось обновить филиал."));
 
 
 
@@ -39014,7 +39028,7 @@
 
 
 
-          ensureTab(activeRightTabId, data.store.name || "Р¤РёР»РёР°Р»");
+          ensureTab(activeRightTabId, data.store.name || "Филиал");
 
 
 
@@ -39030,7 +39044,7 @@
 
 
 
-          ensureTab(activeRightTabId, data.store.name || "Р¤РёР»РёР°Р»");
+          ensureTab(activeRightTabId, data.store.name || "Филиал");
 
 
 
@@ -39554,7 +39568,7 @@
 
 
 
-        iconLabel: "РРєРѕРЅРєР° СЃС‚Р°С‚СѓСЃР°"
+        iconLabel: "Иконка статуса"
 
 
 
@@ -39582,7 +39596,7 @@
 
 
 
-        iconLabel: "РРєРѕРЅРєР° РѕРїР»Р°С‚С‹"
+        iconLabel: "Иконка оплаты"
 
 
 
@@ -39610,7 +39624,7 @@
 
 
 
-      iconLabel: "РРєРѕРЅРєР° РїРѕР»СѓС‡РµРЅРёСЏ",
+      iconLabel: "Иконка получения",
 
 
 
@@ -39646,7 +39660,7 @@
 
 
 
-      iconLabel: "РРєРѕРЅРєР° РёРЅС‚РµСЂРІР°Р»Р°",
+      iconLabel: "Иконка интервала",
 
 
 
@@ -39778,7 +39792,7 @@
 
 
 
-        emptyOpt.textContent = "РќРµС‚ Р°РєС‚РёРІРЅС‹С… СЌС‚Р°РїРѕРІ";
+        emptyOpt.textContent = "Нет активных этапов";
 
 
 
@@ -39814,7 +39828,7 @@
 
 
 
-        opt.textContent = item.title || `Р­С‚Р°Рї #${item.id}`;
+        opt.textContent = item.title || `Этап #${item.id}`;
 
 
 
@@ -40018,7 +40032,7 @@
 
 
 
-        title.textContent = store.name || `РўРѕС‡РєР° #${store.id}`;
+        title.textContent = store.name || `Точка #${store.id}`;
 
 
 
@@ -40030,7 +40044,7 @@
 
 
 
-        const status = Number(store.is_active) === 1 ? "Р°РєС‚РёРІРЅР°" : "РІС‹РєР»СЋС‡РµРЅР°";
+        const status = Number(store.is_active) === 1 ? "активна" : "выключена";
 
 
 
@@ -40232,7 +40246,7 @@
 
 
 
-        settingsStoreSaveText.textContent = mode === "create" ? "РЎРѕР·РґР°С‚СЊ" : "РЎРѕС…СЂР°РЅРёС‚СЊ";
+        settingsStoreSaveText.textContent = mode === "create" ? "Создать" : "Сохранить";
 
 
 
@@ -40252,13 +40266,13 @@
 
 
 
-        if (settingsStoreTelegramList) settingsStoreTelegramList.innerHTML = "<div class=\"global-telegram-binding\"><div class=\"global-telegram-header\"><span class=\"muted\">РЎРЅР°С‡Р°Р»Р° СЃРѕС…СЂР°РЅРёС‚Рµ С„РёР»РёР°Р»</span></div></div>";
+        if (settingsStoreTelegramList) settingsStoreTelegramList.innerHTML = "<div class=\"global-telegram-binding\"><div class=\"global-telegram-header\"><span class=\"muted\">Сначала сохраните филиал</span></div></div>";
 
 
 
         if (settingsStoreTelegramConnectBlock) settingsStoreTelegramConnectBlock.classList.add("hidden");
 
-        if (settingsStoreMaxList) settingsStoreMaxList.innerHTML = "<div class=\"global-telegram-binding\"><div class=\"global-telegram-header\"><span class=\"muted\">РЎРЅР°С‡Р°Р»Р° СЃРѕС…СЂР°РЅРёС‚Рµ С„РёР»РёР°Р»</span></div></div>";
+        if (settingsStoreMaxList) settingsStoreMaxList.innerHTML = "<div class=\"global-telegram-binding\"><div class=\"global-telegram-header\"><span class=\"muted\">Сначала сохраните филиал</span></div></div>";
 
         if (settingsStoreMaxConnectBlock) settingsStoreMaxConnectBlock.classList.add("hidden");
 
@@ -40380,7 +40394,7 @@
 
 
 
-        settingsStoreTimezoneValue.textContent = selectedOption ? selectedOption.textContent : "вЂ”";
+        settingsStoreTimezoneValue.textContent = selectedOption ? selectedOption.textContent : "—";
 
 
 
@@ -40792,7 +40806,7 @@
 
 
 
-      ensureTab(tabId, title || "Р¤РёР»РёР°Р»");
+      ensureTab(tabId, title || "Филиал");
 
 
 
@@ -40852,7 +40866,7 @@
 
 
 
-      openStoreTab(tabId, store.name || "Р¤РёР»РёР°Р»");
+      openStoreTab(tabId, store.name || "Филиал");
 
 
 
@@ -40924,7 +40938,7 @@
 
 
 
-          settingsCenterSubtitle.textContent = count ? `Р’СЃРµРіРѕ С‚РѕС‡РµРє: ${count}` : "РўРѕС‡РµРє РїРѕРєР° РЅРµС‚";
+          settingsCenterSubtitle.textContent = count ? `Всего точек: ${count}` : "Точек пока нет";
 
 
 
@@ -41044,7 +41058,7 @@
 
 
 
-        opt.textContent = store.name ? `${store.name} (#${store.id})` : `Р¤РёР»РёР°Р» #${store.id}`;
+        opt.textContent = store.name ? `${store.name} (#${store.id})` : `Филиал #${store.id}`;
 
 
 
@@ -41104,11 +41118,11 @@
 
 
 
-      const statusText = options.statusText || "РќР°Р¶РјРёС‚Рµ \"РџСЂРѕРІРµСЂРёС‚СЊ РїРѕРґРєР»СЋС‡РµРЅРёРµ\"";
+      const statusText = options.statusText || "Нажмите \"Проверить подключение\"";
 
 
 
-      const printerText = options.printerText || "РЎС‚Р°С‚СѓСЃ РЅРµ РїСЂРѕРІРµСЂРµРЅ";
+      const printerText = options.printerText || "Статус не проверен";
 
 
 
@@ -41176,11 +41190,11 @@
 
 
 
-      const statusText = connectionEstablished ? "РЎРѕРµРґРёРЅРµРЅРёРµ СѓСЃС‚Р°РЅРѕРІР»РµРЅРѕ" : "РЎРѕРµРґРёРЅРµРЅРёРµ СЂР°Р·РѕСЂРІР°РЅРѕ";
+      const statusText = connectionEstablished ? "Соединение установлено" : "Соединение разорвано";
 
 
 
-      const printerText = printerOnline ? (printerName || "РќРµ РѕРїСЂРµРґРµР»РµРЅ") : "РќРµС‚ РїРѕРґРєР»СЋС‡РµРЅРЅС‹С… РїСЂРёРЅС‚РµСЂРѕРІ";
+      const printerText = printerOnline ? (printerName || "Не определен") : "Нет подключенных принтеров";
 
 
 
@@ -41324,7 +41338,7 @@
 
 
 
-          labelEl.textContent = url ? "Р¤Р°Р№Р» Р·Р°РіСЂСѓР¶РµРЅ" : "Р¤Р°Р№Р» РЅРµ РІС‹Р±СЂР°РЅ";
+          labelEl.textContent = url ? "Файл загружен" : "Файл не выбран";
 
 
 
@@ -41616,7 +41630,7 @@
 
 
 
-        settingsPrintApiGenerateBtn.textContent = printApiOriginal.token ? "РџРµСЂРµСЃРѕР·РґР°С‚СЊ С‚РѕРєРµРЅ" : "РЎРіРµРЅРµСЂРёСЂРѕРІР°С‚СЊ С‚РѕРєРµРЅ";
+        settingsPrintApiGenerateBtn.textContent = printApiOriginal.token ? "Пересоздать токен" : "Сгенерировать токен";
 
 
 
@@ -42020,11 +42034,11 @@
 
 
 
-            statusText: "РЎРЅР°С‡Р°Р»Р° СЃРіРµРЅРµСЂРёСЂСѓР№С‚Рµ С‚РѕРєРµРЅ",
+            statusText: "Сначала сгенерируйте токен",
 
 
 
-            printerText: "РќРµС‚ С‚РѕРєРµРЅР° РїРѕРґРєР»СЋС‡РµРЅРёСЏ"
+            printerText: "Нет токена подключения"
 
 
 
@@ -42036,7 +42050,7 @@
 
 
 
-            settingsPrintApiGenerateBtn.textContent = "РЎРіРµРЅРµСЂРёСЂРѕРІР°С‚СЊ С‚РѕРєРµРЅ";
+            settingsPrintApiGenerateBtn.textContent = "Сгенерировать токен";
 
 
 
@@ -42084,11 +42098,11 @@
 
 
 
-          statusText: token ? "РќР°Р¶РјРёС‚Рµ \"РџСЂРѕРІРµСЂРёС‚СЊ РїРѕРґРєР»СЋС‡РµРЅРёРµ\"" : "РЎРЅР°С‡Р°Р»Р° СЃРіРµРЅРµСЂРёСЂСѓР№С‚Рµ С‚РѕРєРµРЅ",
+          statusText: token ? "Нажмите \"Проверить подключение\"" : "Сначала сгенерируйте токен",
 
 
 
-          printerText: token ? "РЎС‚Р°С‚СѓСЃ РЅРµ РїСЂРѕРІРµСЂРµРЅ" : "РќРµС‚ С‚РѕРєРµРЅР° РїРѕРґРєР»СЋС‡РµРЅРёСЏ"
+          printerText: token ? "Статус не проверен" : "Нет токена подключения"
 
 
 
@@ -42100,7 +42114,7 @@
 
 
 
-          settingsPrintApiGenerateBtn.textContent = token ? "РџРµСЂРµСЃРѕР·РґР°С‚СЊ С‚РѕРєРµРЅ" : "РЎРіРµРЅРµСЂРёСЂРѕРІР°С‚СЊ С‚РѕРєРµРЅ";
+          settingsPrintApiGenerateBtn.textContent = token ? "Пересоздать токен" : "Сгенерировать токен";
 
 
 
@@ -42124,7 +42138,7 @@
 
 
 
-        console.error("РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РіСЂСѓР·РёС‚СЊ print API:", err);
+        console.error("Не удалось загрузить print API:", err);
 
 
 
@@ -42136,11 +42150,11 @@
 
 
 
-          statusText: "РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РіСЂСѓР·РёС‚СЊ С‚РѕРєРµРЅ",
+          statusText: "Не удалось загрузить токен",
 
 
 
-          printerText: "РћС€РёР±РєР° Р·Р°РїСЂРѕСЃР°"
+          printerText: "Ошибка запроса"
 
 
 
@@ -42216,11 +42230,11 @@
 
 
 
-            statusText: "РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕР·РґР°С‚СЊ С‚РѕРєРµРЅ",
+            statusText: "Не удалось создать токен",
 
 
 
-            printerText: "РћС€РёР±РєР° Р·Р°РїСЂРѕСЃР°"
+            printerText: "Ошибка запроса"
 
 
 
@@ -42256,11 +42270,11 @@
 
 
 
-          statusText: token ? "РќР°Р¶РјРёС‚Рµ \"РџСЂРѕРІРµСЂРёС‚СЊ РїРѕРґРєР»СЋС‡РµРЅРёРµ\"" : "РЎРЅР°С‡Р°Р»Р° СЃРіРµРЅРµСЂРёСЂСѓР№С‚Рµ С‚РѕРєРµРЅ",
+          statusText: token ? "Нажмите \"Проверить подключение\"" : "Сначала сгенерируйте токен",
 
 
 
-          printerText: token ? "РЎС‚Р°С‚СѓСЃ РЅРµ РїСЂРѕРІРµСЂРµРЅ" : "РќРµС‚ С‚РѕРєРµРЅР° РїРѕРґРєР»СЋС‡РµРЅРёСЏ"
+          printerText: token ? "Статус не проверен" : "Нет токена подключения"
 
 
 
@@ -42268,7 +42282,7 @@
 
 
 
-        if (settingsPrintApiGenerateBtn) settingsPrintApiGenerateBtn.textContent = "РџРµСЂРµСЃРѕР·РґР°С‚СЊ С‚РѕРєРµРЅ";
+        if (settingsPrintApiGenerateBtn) settingsPrintApiGenerateBtn.textContent = "Пересоздать токен";
 
 
 
@@ -42280,7 +42294,7 @@
 
 
 
-        console.error("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕР·РґР°С‚СЊ print API:", err);
+        console.error("Не удалось создать print API:", err);
 
 
 
@@ -42316,11 +42330,11 @@
 
 
 
-          statusText: "РЎРЅР°С‡Р°Р»Р° СЃРіРµРЅРµСЂРёСЂСѓР№С‚Рµ С‚РѕРєРµРЅ",
+          statusText: "Сначала сгенерируйте токен",
 
 
 
-          printerText: "РќРµС‚ С‚РѕРєРµРЅР° РїРѕРґРєР»СЋС‡РµРЅРёСЏ"
+          printerText: "Нет токена подключения"
 
 
 
@@ -42352,7 +42366,7 @@
 
 
 
-        settingsPrintApiCheckBtn.textContent = "РџСЂРѕРІРµСЂРєР°...";
+        settingsPrintApiCheckBtn.textContent = "Проверка...";
 
 
 
@@ -42380,11 +42394,11 @@
 
 
 
-            statusText: "РџСЂРѕРІРµСЂРєР° РЅРµ РїСЂРѕР№РґРµРЅР°",
+            statusText: "Проверка не пройдена",
 
 
 
-            printerText: "РўРѕРєРµРЅ РЅРµ РЅР°Р№РґРµРЅ"
+            printerText: "Токен не найден"
 
 
 
@@ -42452,7 +42466,7 @@
 
 
 
-        console.error("РќРµ СѓРґР°Р»РѕСЃСЊ РїСЂРѕРІРµСЂРёС‚СЊ РїРѕРґРєР»СЋС‡РµРЅРёРµ print API:", err);
+        console.error("Не удалось проверить подключение print API:", err);
 
 
 
@@ -42464,11 +42478,11 @@
 
 
 
-          statusText: "РќРµ СѓРґР°Р»РѕСЃСЊ РїСЂРѕРІРµСЂРёС‚СЊ",
+          statusText: "Не удалось проверить",
 
 
 
-          printerText: "РћС€РёР±РєР° Р·Р°РїСЂРѕСЃР°"
+          printerText: "Ошибка запроса"
 
 
 
@@ -42488,7 +42502,7 @@
 
 
 
-          settingsPrintApiCheckBtn.textContent = initialText || "РџСЂРѕРІРµСЂРёС‚СЊ РїРѕРґРєР»СЋС‡РµРЅРёРµ";
+          settingsPrintApiCheckBtn.textContent = initialText || "Проверить подключение";
 
 
 
@@ -42576,11 +42590,11 @@
 
 
 
-            statusText: "РЎРЅР°С‡Р°Р»Р° РІС‹Р±РµСЂРёС‚Рµ С„РёР»РёР°Р»",
+            statusText: "Сначала выберите филиал",
 
 
 
-            printerText: "РќРµС‚ РґР°РЅРЅС‹С… РґР»СЏ РїСЂРѕРІРµСЂРєРё"
+            printerText: "Нет данных для проверки"
 
 
 
@@ -42728,7 +42742,7 @@
 
 
 
-      settingsStoreTelegramList.innerHTML = "<div class=\"muted\">Р—Р°РіСЂСѓР·РєР°вЂ¦</div>";
+      settingsStoreTelegramList.innerHTML = "<div class=\"muted\">Загрузка…</div>";
 
 
 
@@ -42796,7 +42810,7 @@
 
 
 
-          settingsStoreTelegramList.innerHTML = "<div class=\"global-telegram-binding\"><div class=\"global-telegram-header\"><span class=\"muted\">РќРµС‚ РїРѕРґРєР»СЋС‡С‘РЅРЅС‹С… Р°РєРєР°СѓРЅС‚РѕРІ</span></div></div>";
+          settingsStoreTelegramList.innerHTML = "<div class=\"global-telegram-binding\"><div class=\"global-telegram-header\"><span class=\"muted\">Нет подключённых аккаунтов</span></div></div>";
 
 
 
@@ -42848,7 +42862,7 @@
 
 
 
-          apiKeySpan.textContent = "API: " + (b.telegram_chat_id || "вЂ”");
+          apiKeySpan.textContent = "API: " + (b.telegram_chat_id || "—");
 
 
 
@@ -42884,7 +42898,7 @@
 
 
 
-          deleteBtn.title = "РћС‚РєР»СЋС‡РёС‚СЊ";
+          deleteBtn.title = "Отключить";
 
 
 
@@ -42928,7 +42942,7 @@
 
 
 
-        settingsStoreTelegramList.innerHTML = "<div class=\"global-telegram-binding\"><div class=\"global-telegram-header\"><span class=\"muted\">РћС€РёР±РєР° Р·Р°РіСЂСѓР·РєРё</span></div></div>";
+        settingsStoreTelegramList.innerHTML = "<div class=\"global-telegram-binding\"><div class=\"global-telegram-header\"><span class=\"muted\">Ошибка загрузки</span></div></div>";
 
 
 
@@ -42942,7 +42956,7 @@
 
       if (!settingsStoreMaxList) return;
 
-      settingsStoreMaxList.innerHTML = "<div class=\"muted\">Р—Р°РіСЂСѓР·РєР°вЂ¦</div>";
+      settingsStoreMaxList.innerHTML = "<div class=\"muted\">Загрузка…</div>";
 
       try {
 
@@ -42976,7 +42990,7 @@
 
         if (bindings.length === 0) {
 
-          settingsStoreMaxList.innerHTML = "<div class=\"global-telegram-binding\"><div class=\"global-telegram-header\"><span class=\"muted\">РќРµС‚ РїРѕРґРєР»СЋС‡С‘РЅРЅС‹С… Р°РєРєР°СѓРЅС‚РѕРІ</span></div></div>";
+          settingsStoreMaxList.innerHTML = "<div class=\"global-telegram-binding\"><div class=\"global-telegram-header\"><span class=\"muted\">Нет подключённых аккаунтов</span></div></div>";
 
           return;
 
@@ -42998,7 +43012,7 @@
 
           apiKeySpan.className = "global-telegram-api-key";
 
-          apiKeySpan.textContent = "API: " + (binding.max_user_id || "вЂ”");
+          apiKeySpan.textContent = "API: " + (binding.max_user_id || "—");
 
           header.appendChild(apiKeySpan);
 
@@ -43012,7 +43026,7 @@
 
           deleteBtn.className = "btn btn-icon btn-sm btn-danger-text";
 
-          deleteBtn.title = "РћС‚РєР»СЋС‡РёС‚СЊ";
+          deleteBtn.title = "Отключить";
 
           deleteBtn.dataset.bindingId = binding.id || "";
 
@@ -43032,7 +43046,7 @@
 
         console.error("loadStoreMaxBindings error:", e);
 
-        settingsStoreMaxList.innerHTML = "<div class=\"global-telegram-binding\"><div class=\"global-telegram-header\"><span class=\"muted\">РћС€РёР±РєР° Р·Р°РіСЂСѓР·РєРё</span></div></div>";
+        settingsStoreMaxList.innerHTML = "<div class=\"global-telegram-binding\"><div class=\"global-telegram-header\"><span class=\"muted\">Ошибка загрузки</span></div></div>";
 
       }
 
@@ -43050,7 +43064,7 @@
 
         if (!storeId || !apiKey || !secretKey) {
 
-          alert("Р’РІРµРґРёС‚Рµ API key Рё Secret key РѕС‚ MAX-Р±РѕС‚Р°.");
+          alert("Введите API key и Secret key от MAX-бота.");
 
           return;
 
@@ -43072,7 +43086,7 @@
 
           if (!data || !data.ok) {
 
-            alert(data.error === "SECRET_INVALID_OR_EXPIRED" ? "Secret key РЅРµРґРµР№СЃС‚РІРёС‚РµР»РµРЅ РёР»Рё РёСЃС‚С‘Рє. РќР°РїРёС€РёС‚Рµ /start MAX-Р±РѕС‚Сѓ Р·Р°РЅРѕРІРѕ." : (data.error || "РћС€РёР±РєР°"));
+            alert(data.error === "SECRET_INVALID_OR_EXPIRED" ? "Secret key недействителен или истёк. Напишите /start MAX-боту заново." : (data.error || "Ошибка"));
 
             return;
 
@@ -43088,7 +43102,7 @@
 
         } catch (e) {
 
-          alert("РћС€РёР±РєР° Р·Р°РїСЂРѕСЃР°");
+          alert("Ошибка запроса");
 
         }
 
@@ -43096,7 +43110,7 @@
 
     }
 
-    // РћР±СЂР°Р±РѕС‚С‡РёРє "+" РґР»СЏ РїРѕРєР°Р·Р° С„РѕСЂРјС‹ РґРѕР±Р°РІР»РµРЅРёСЏ (С„РёР»РёР°Р»)
+    // Обработчик "+" для показа формы добавления (филиал)
 
 
 
@@ -43146,7 +43160,7 @@
 
 
 
-    // РћР±СЂР°Р±РѕС‚С‡РёРє "РћС‚РјРµРЅР°" РґР»СЏ СЃРєСЂС‹С‚РёСЏ С„РѕСЂРјС‹ (С„РёР»РёР°Р»)
+    // Обработчик "Отмена" для скрытия формы (филиал)
 
 
 
@@ -43232,7 +43246,7 @@
 
 
 
-      globalTelegramBindings.innerHTML = "<div class=\"muted\">Р—Р°РіСЂСѓР·РєР°вЂ¦</div>";
+      globalTelegramBindings.innerHTML = "<div class=\"muted\">Загрузка…</div>";
 
 
 
@@ -43284,7 +43298,7 @@
 
 
 
-          globalTelegramBindings.innerHTML = "<div class=\"global-telegram-binding\"><div class=\"global-telegram-header\"><span class=\"muted\">РќРµС‚ РїРѕРґРєР»СЋС‡С‘РЅРЅС‹С… Р°РєРєР°СѓРЅС‚РѕРІ</span></div></div>";
+          globalTelegramBindings.innerHTML = "<div class=\"global-telegram-binding\"><div class=\"global-telegram-header\"><span class=\"muted\">Нет подключённых аккаунтов</span></div></div>";
 
 
 
@@ -43320,7 +43334,7 @@
 
 
 
-          // РљРѕРјРїР°РєС‚РЅС‹Р№ Р·Р°РіРѕР»РѕРІРѕРє: API key + С€РµСЃС‚РµСЂС‘РЅРєР° + РѕС‚РєР»СЋС‡РёС‚СЊ
+          // Компактный заголовок: API key + шестерёнка + отключить
 
 
 
@@ -43344,7 +43358,7 @@
 
 
 
-          apiKeySpan.textContent = "API: " + (b.telegram_chat_id || "вЂ”");
+          apiKeySpan.textContent = "API: " + (b.telegram_chat_id || "—");
 
 
 
@@ -43368,7 +43382,7 @@
 
 
 
-          // РљРЅРѕРїРєР° С€РµСЃС‚РµСЂС‘РЅРєРё РґР»СЏ СЂР°СЃРєСЂС‹С‚РёСЏ С„РёР»РёР°Р»РѕРІ
+          // Кнопка шестерёнки для раскрытия филиалов
 
 
 
@@ -43388,7 +43402,7 @@
 
 
 
-            gearBtn.title = "РќР°СЃС‚СЂРѕР№РєРё С„РёР»РёР°Р»РѕРІ";
+            gearBtn.title = "Настройки филиалов";
 
 
 
@@ -43412,7 +43426,7 @@
 
 
 
-          // РљРЅРѕРїРєР° СѓРґР°Р»РµРЅРёСЏ
+          // Кнопка удаления
 
 
 
@@ -43428,7 +43442,7 @@
 
 
 
-          deleteBtn.title = "РћС‚РєР»СЋС‡РёС‚СЊ";
+          deleteBtn.title = "Отключить";
 
 
 
@@ -43460,7 +43474,7 @@
 
 
 
-          // РђРєРєРѕСЂРґРµРѕРЅ СЃ С„РёР»РёР°Р»Р°РјРё (СЃРєСЂС‹С‚ РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ)
+          // Аккордеон с филиалами (скрыт по умолчанию)
 
 
 
@@ -43520,7 +43534,7 @@
 
 
 
-              storeRow.innerHTML = "<label class=\"toggle-switch\"><input type=\"checkbox\" data-global-telegram-store=\"" + store.id + "\" data-binding-id=\"" + b.id + "\"" + (isEnabled ? " checked" : "") + "><span class=\"toggle-slider\"></span></label><span class=\"store-name\">" + (store.name || "Р¤РёР»РёР°Р» #" + store.id) + "</span>";
+              storeRow.innerHTML = "<label class=\"toggle-switch\"><input type=\"checkbox\" data-global-telegram-store=\"" + store.id + "\" data-binding-id=\"" + b.id + "\"" + (isEnabled ? " checked" : "") + "><span class=\"toggle-slider\"></span></label><span class=\"store-name\">" + (store.name || "Филиал #" + store.id) + "</span>";
 
 
 
@@ -43584,7 +43598,7 @@
 
 
 
-    // РћР±СЂР°Р±РѕС‚С‡РёРє "+" РґР»СЏ РїРѕРєР°Р·Р° С„РѕСЂРјС‹ РґРѕР±Р°РІР»РµРЅРёСЏ
+    // Обработчик "+" для показа формы добавления
 
 
 
@@ -43620,7 +43634,7 @@
 
 
 
-    // РћР±СЂР°Р±РѕС‚С‡РёРє "РћС‚РјРµРЅР°" РґР»СЏ СЃРєСЂС‹С‚РёСЏ С„РѕСЂРјС‹
+    // Обработчик "Отмена" для скрытия формы
 
 
 
@@ -43664,7 +43678,7 @@
 
 
 
-    // РћР±СЂР°Р±РѕС‚С‡РёРє РґРѕР±Р°РІР»РµРЅРёСЏ РіР»РѕР±Р°Р»СЊРЅРѕРіРѕ Telegram
+    // Обработчик добавления глобального Telegram
 
 
 
@@ -43688,7 +43702,7 @@
 
 
 
-          alert("Р’РІРµРґРёС‚Рµ API key Рё Secret key РѕС‚ Р±РѕС‚Р°.");
+          alert("Введите API key и Secret key от бота.");
 
 
 
@@ -43732,7 +43746,7 @@
 
 
 
-            alert(data.error === "SECRET_INVALID_OR_EXPIRED" ? "Secret key РЅРµРґРµР№СЃС‚РІРёС‚РµР»РµРЅ РёР»Рё РёСЃС‚С‘Рє. РќР°РїРёС€РёС‚Рµ /start Р±РѕС‚Сѓ Р·Р°РЅРѕРІРѕ." : (data.error || "РћС€РёР±РєР°"));
+            alert(data.error === "SECRET_INVALID_OR_EXPIRED" ? "Secret key недействителен или истёк. Напишите /start боту заново." : (data.error || "Ошибка"));
 
 
 
@@ -43764,7 +43778,7 @@
 
 
 
-          alert("РћС€РёР±РєР° РїРѕРґРєР»СЋС‡РµРЅРёСЏ");
+          alert("Ошибка подключения");
 
 
 
@@ -43784,7 +43798,7 @@
 
 
 
-    // РћР±СЂР°Р±РѕС‚С‡РёРєРё РґР»СЏ РіР»РѕР±Р°Р»СЊРЅС‹С… Telegram РїСЂРёРІСЏР·РѕРє
+    // Обработчики для глобальных Telegram привязок
 
 
 
@@ -43796,7 +43810,7 @@
 
 
 
-        // РЁРµСЃС‚РµСЂС‘РЅРєР° вЂ” toggle Р°РєРєРѕСЂРґРµРѕРЅ С„РёР»РёР°Р»РѕРІ
+        // Шестерёнка — toggle аккордеон филиалов
 
 
 
@@ -43844,7 +43858,7 @@
 
 
 
-        // РЈРґР°Р»РµРЅРёРµ
+        // Удаление
 
 
 
@@ -43864,7 +43878,7 @@
 
 
 
-          if (!confirm("РћС‚РєР»СЋС‡РёС‚СЊ Telegram?")) return;
+          if (!confirm("Отключить Telegram?")) return;
 
 
 
@@ -43884,7 +43898,7 @@
 
 
 
-              alert(data.error || "РћС€РёР±РєР°");
+              alert(data.error || "Ошибка");
 
 
 
@@ -43904,7 +43918,7 @@
 
 
 
-            alert("РћС€РёР±РєР° СѓРґР°Р»РµРЅРёСЏ");
+            alert("Ошибка удаления");
 
 
 
@@ -43984,11 +43998,11 @@
 
 
 
-              checkbox.checked = !isEnabled; // РћС‚РєР°С‚С‹РІР°РµРј
+              checkbox.checked = !isEnabled; // Откатываем
 
 
 
-              alert(data.error || "РћС€РёР±РєР°");
+              alert(data.error || "Ошибка");
 
 
 
@@ -44004,7 +44018,7 @@
 
 
 
-            alert("РћС€РёР±РєР° СЃРѕС…СЂР°РЅРµРЅРёСЏ");
+            alert("Ошибка сохранения");
 
 
 
@@ -44124,7 +44138,7 @@
 
 
 
-        console.error("РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РіСЂСѓР·РёС‚СЊ СЃРїРёСЃРѕРє:", type, err);
+        console.error("Не удалось загрузить список:", type, err);
 
 
 
@@ -44184,7 +44198,7 @@
 
 
 
-        console.error("РќРµ СѓРґР°Р»РѕСЃСЊ РѕР±РЅРѕРІРёС‚СЊ Р·Р°РїРёСЃСЊ:", err);
+        console.error("Не удалось обновить запись:", err);
 
 
 
@@ -44248,7 +44262,7 @@
 
 
 
-        console.error("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕС…СЂР°РЅРёС‚СЊ СЃРѕСЂС‚РёСЂРѕРІРєСѓ:", err);
+        console.error("Не удалось сохранить сортировку:", err);
 
 
 
@@ -44752,7 +44766,7 @@
 
 
 
-        switches.appendChild(createSwitch("РџРѕ СѓРјРѕР»С‡Р°РЅРёСЋ", Number(item[cfg.defaultField]) === 1, async (checked) => {
+        switches.appendChild(createSwitch("По умолчанию", Number(item[cfg.defaultField]) === 1, async (checked) => {
 
 
 
@@ -44768,7 +44782,7 @@
 
 
 
-            alert("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕС…СЂР°РЅРёС‚СЊ Р·РЅР°С‡РµРЅРёРµ РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ.");
+            alert("Не удалось сохранить значение по умолчанию.");
 
 
 
@@ -44800,7 +44814,7 @@
 
 
 
-        switches.appendChild(createSwitch("РљР»РёРµРЅС‚ РѕР±СЏР·Р°С‚РµР»РµРЅ", Number(item.require_client_data ?? 1) === 1, async (checked) => {
+        switches.appendChild(createSwitch("Клиент обязателен", Number(item.require_client_data ?? 1) === 1, async (checked) => {
 
 
 
@@ -44812,7 +44826,7 @@
 
 
 
-            alert("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕС…СЂР°РЅРёС‚СЊ РѕР±СЏР·Р°С‚РµР»СЊРЅРѕСЃС‚СЊ РґР°РЅРЅС‹С… РєР»РёРµРЅС‚Р°.");
+            alert("Не удалось сохранить обязательность данных клиента.");
 
 
 
@@ -44828,7 +44842,7 @@
 
 
 
-        switches.appendChild(createSwitch("РќР° СЃР°Р№С‚Рµ", Number(item.show_on_site ?? 1) === 1, async (checked) => {
+        switches.appendChild(createSwitch("На сайте", Number(item.show_on_site ?? 1) === 1, async (checked) => {
 
 
 
@@ -44840,7 +44854,7 @@
 
 
 
-            alert("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕС…СЂР°РЅРёС‚СЊ РІРёРґРёРјРѕСЃС‚СЊ РЅР° СЃР°Р№С‚Рµ.");
+            alert("Не удалось сохранить видимость на сайте.");
 
 
 
@@ -44864,7 +44878,7 @@
 
 
 
-        switches.appendChild(createSwitch("Р¤РёРЅР°Р»СЊРЅС‹Р№", Number(item.is_final) === 1, async (checked) => {
+        switches.appendChild(createSwitch("Финальный", Number(item.is_final) === 1, async (checked) => {
 
 
 
@@ -44876,7 +44890,7 @@
 
 
 
-            alert("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕС…СЂР°РЅРёС‚СЊ С„РёРЅР°Р»СЊРЅС‹Р№ СЃС‚Р°С‚СѓСЃ.");
+            alert("Не удалось сохранить финальный статус.");
 
 
 
@@ -44896,7 +44910,7 @@
 
 
 
-      const activeSwitch = createSwitch("РђРєС‚РёРІРµРЅ", Number(item.is_active) === 1, async (checked) => {
+      const activeSwitch = createSwitch("Активен", Number(item.is_active) === 1, async (checked) => {
 
 
 
@@ -44908,7 +44922,7 @@
 
 
 
-          alert("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕС…СЂР°РЅРёС‚СЊ Р°РєС‚РёРІРЅРѕСЃС‚СЊ.");
+          alert("Не удалось сохранить активность.");
 
 
 
@@ -44944,19 +44958,19 @@
 
 
 
-          { key: "starts_at", label: "РќР°С‡Р°Р»Рѕ", type: "time" },
+          { key: "starts_at", label: "Начало", type: "time" },
 
 
 
-          { key: "ends_at", label: "РљРѕРЅРµС†", type: "time" },
+          { key: "ends_at", label: "Конец", type: "time" },
 
 
 
-          { key: "step_minutes", label: "РЁР°Рі (РјРёРЅ)", type: "number", attrs: { min: 1 } },
+          { key: "step_minutes", label: "Шаг (мин)", type: "number", attrs: { min: 1 } },
 
 
 
-          { key: "lead_minutes", label: "Р—Р°РїР°СЃ (РјРёРЅ)", type: "number", attrs: { min: 0 } }
+          { key: "lead_minutes", label: "Запас (мин)", type: "number", attrs: { min: 0 } }
 
 
 
@@ -45068,7 +45082,7 @@
 
 
 
-        const timeSwitch = createSwitch("РќР°СЃС‚СЂРѕРёС‚СЊ РІСЂРµРјСЏ", Number(localItem.has_time_window) === 1, async (checked) => {
+        const timeSwitch = createSwitch("Настроить время", Number(localItem.has_time_window) === 1, async (checked) => {
 
 
 
@@ -45272,7 +45286,7 @@
 
 
 
-          alert("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕС…СЂР°РЅРёС‚СЊ РЅР°Р·РІР°РЅРёРµ.");
+          alert("Не удалось сохранить название.");
 
 
 
@@ -45428,7 +45442,7 @@
 
 
 
-        empty.textContent = "РќРµС‚ РґР°РЅРЅС‹С….";
+        empty.textContent = "Нет данных.";
 
 
 
@@ -45656,7 +45670,7 @@
 
 
 
-          alert("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕС…СЂР°РЅРёС‚СЊ Р°РєС‚РёРІРЅРѕСЃС‚СЊ.");
+          alert("Не удалось сохранить активность.");
 
 
 
@@ -45776,7 +45790,7 @@
 
 
 
-        alert("РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РіСЂСѓР·РёС‚СЊ РёРєРѕРЅРєСѓ.");
+        alert("Не удалось загрузить иконку.");
 
 
 
@@ -46028,7 +46042,7 @@
 
 
 
-    // Р¤Р°РІРёРєРѕРЅ Р Р† РїР°РЅРµР»Рё В«Р”Р°РЅРЅС‹Рµ СЃР°Р№С‚Р°В»
+    // Фавикон РІ панели «Данные сайта»
 
 
 
@@ -46564,7 +46578,7 @@
 
 
 
-          alert("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕС…СЂР°РЅРёС‚СЊ РЅР°СЃС‚СЂРѕР№РєРё РѕРєСЂСѓРіР»РµРЅРёСЏ.");
+          alert("Не удалось сохранить настройки округления.");
 
 
 
@@ -46712,7 +46726,7 @@
 
 
 
-          alert("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕС…СЂР°РЅРёС‚СЊ РїСЂР°РІРёР»Рѕ СЃРїРёСЃР°РЅРёСЏ РѕСЃС‚Р°С‚РєРѕРІ.");
+          alert("Не удалось сохранить правило списания остатков.");
 
 
 
@@ -47456,7 +47470,7 @@
 
 
 
-        <div class="settings-system-map-group-title">РџРћР›РР“РћРќР« Р”РћРЎРўРђР’РљР</div>
+        <div class="settings-system-map-group-title">ПОЛИГОНЫ ДОСТАВКИ</div>
 
 
 
@@ -47468,7 +47482,7 @@
 
 
 
-          <span class="field-hint">РРЅСЃС‚СЂСѓРјРµРЅС‚ СЂРёСЃРѕРІР°РЅРёСЏ Рё СЂРµРґР°РєС‚РёСЂРѕРІР°РЅРёСЏ Р·РѕРЅ. РћС‚РґРµР»СЊРЅР°СЏ СЂРµРіРёСЃС‚СЂР°С†РёСЏ РЅРµ РЅСѓР¶РЅР°.</span>
+          <span class="field-hint">Инструмент рисования и редактирования зон. Отдельная регистрация не нужна.</span>
 
 
 
@@ -48468,7 +48482,7 @@
 
 
 
-        return "Р—Р°СЂРµРіРёСЃС‚СЂРёСЂСѓР№С‚РµСЃСЊ РЅР° thunderforest.com, РѕС‚РєСЂРѕР№С‚Рµ Dashboard -> API Keys, СЃРєРѕРїРёСЂСѓР№С‚Рµ РєР»СЋС‡ Рё РґРѕР±Р°РІСЊС‚Рµ РµРіРѕ РЅРёР¶Рµ. Р›РѕРіРёРЅ Рё РїР°СЂРѕР»СЊ РјРѕР¶РЅРѕ СЃРѕС…СЂР°РЅРёС‚СЊ СЂСЏРґРѕРј РєР°Рє РїР°РјСЏС‚РєСѓ.";
+        return "Зарегистрируйтесь на thunderforest.com, откройте Dashboard -> API Keys, скопируйте ключ и добавьте его ниже. Логин и пароль можно сохранить рядом как памятку.";
 
 
 
@@ -48480,7 +48494,7 @@
 
 
 
-        return `РџСЂРѕРІР°Р№РґРµСЂ РєР°СЂС‚С‹: ${normalizedProvider}. Р”РѕР±Р°РІСЊС‚Рµ API key РЅРёР¶Рµ; Р»РѕРіРёРЅ Рё РїР°СЂРѕР»СЊ РјРѕР¶РЅРѕ СЃРѕС…СЂР°РЅРёС‚СЊ СЂСЏРґРѕРј РєР°Рє РїР°РјСЏС‚РєСѓ.`;
+        return `Провайдер карты: ${normalizedProvider}. Добавьте API key ниже; логин и пароль можно сохранить рядом как памятку.`;
 
 
 
@@ -48488,7 +48502,7 @@
 
 
 
-      return "Р”РѕР±Р°РІСЊС‚Рµ API key РЅРёР¶Рµ; Р»РѕРіРёРЅ Рё РїР°СЂРѕР»СЊ РјРѕР¶РЅРѕ СЃРѕС…СЂР°РЅРёС‚СЊ СЂСЏРґРѕРј РєР°Рє РїР°РјСЏС‚РєСѓ.";
+      return "Добавьте API key ниже; логин и пароль можно сохранить рядом как памятку.";
 
 
 
@@ -48512,15 +48526,15 @@
 
 
 
-      if (raw.length <= 2) return `${raw.slice(0, 1)}вЂў`;
+      if (raw.length <= 2) return `${raw.slice(0, 1)}•`;
 
 
 
-      if (raw.length <= 8) return `${raw.slice(0, 1)}вЂўвЂўвЂўвЂў${raw.slice(-1)}`;
+      if (raw.length <= 8) return `${raw.slice(0, 1)}••••${raw.slice(-1)}`;
 
 
 
-      return `${raw.slice(0, 4)}вЂўвЂўвЂўвЂў${raw.slice(-4)}`;
+      return `${raw.slice(0, 4)}••••${raw.slice(-4)}`;
 
 
 
@@ -49964,11 +49978,11 @@
 
 
 
-      if (isDeliveryMapConfigTab(tab)) return "РљР°СЂС‚Р°";
+      if (isDeliveryMapConfigTab(tab)) return "Карта";
 
 
 
-      if (!tab) return "РќР°СЃС‚СЂРѕР№РєР° РґРѕСЃС‚Р°РІРєРё";
+      if (!tab) return "Настройка доставки";
 
 
 
@@ -49988,7 +50002,7 @@
 
 
 
-      return tab.mode === "create" ? "РќРѕРІР°СЏ РЅР°СЃС‚СЂРѕР№РєР°" : "РќР°СЃС‚СЂРѕР№РєР° РґРѕСЃС‚Р°РІРєРё";
+      return tab.mode === "create" ? "Новая настройка" : "Настройка доставки";
 
 
 
@@ -50060,7 +50074,7 @@
 
 
 
-      if (!tiers.length) return "РќРµС‚ С‚Р°СЂРёС„РѕРІ";
+      if (!tiers.length) return "Нет тарифов";
 
 
 
@@ -50080,11 +50094,11 @@
 
 
 
-        ? `РћС‚ ${minOrder} РІвЂљР… -> ${deliveryCost} РІвЂљР…`
+        ? `От ${minOrder} в‚Ѕ -> ${deliveryCost} в‚Ѕ`
 
 
 
-        : `${deliveryCost} РІвЂљР… РґРѕСЃС‚Р°РІРєР°`;
+        : `${deliveryCost} в‚Ѕ доставка`;
 
 
 
@@ -50680,7 +50694,7 @@
 
 
 
-      if (isDeliveryMapConfigTab(tab)) return "РљР°СЂС‚Р°";
+      if (isDeliveryMapConfigTab(tab)) return "Карта";
 
 
 
@@ -50704,7 +50718,7 @@
 
 
 
-        return tab && tab.mode === "create" ? "РќРѕРІР°СЏ Р·РѕРЅР°" : "Р—РѕРЅР° РґРѕСЃС‚Р°РІРєРё";
+        return tab && tab.mode === "create" ? "Новая зона" : "Зона доставки";
 
 
 
@@ -50712,7 +50726,7 @@
 
 
 
-      if (!tab) return "РќР°СЃС‚СЂРѕР№РєР° РґРѕСЃС‚Р°РІРєРё";
+      if (!tab) return "Настройка доставки";
 
 
 
@@ -50732,7 +50746,7 @@
 
 
 
-      return tab.mode === "create" ? "РќРѕРІР°СЏ РЅР°СЃС‚СЂРѕР№РєР°" : "РќР°СЃС‚СЂРѕР№РєР° РґРѕСЃС‚Р°РІРєРё";
+      return tab.mode === "create" ? "Новая настройка" : "Настройка доставки";
 
 
 
@@ -50824,7 +50838,7 @@
 
 
 
-        settingsDeliverySubtitle.textContent = showCreateSubtitle ? "РќРѕРІР°СЏ РЅР°СЃС‚СЂРѕР№РєР°" : "";
+        settingsDeliverySubtitle.textContent = showCreateSubtitle ? "Новая настройка" : "";
 
 
 
@@ -50840,7 +50854,7 @@
 
 
 
-        settingsDeliverySaveText.textContent = tab && tab.mode === "create" ? "РЎРѕР·РґР°С‚СЊ" : "РЎРѕС…СЂР°РЅРёС‚СЊ";
+        settingsDeliverySaveText.textContent = tab && tab.mode === "create" ? "Создать" : "Сохранить";
 
 
 
@@ -51068,11 +51082,11 @@
 
 
 
-        closeBtn.setAttribute("aria-label", "Р—Р°РєСЂС‹С‚СЊ");
+        closeBtn.setAttribute("aria-label", "Закрыть");
 
 
 
-        closeBtn.textContent = "Р“вЂ”";
+        closeBtn.textContent = "Г—";
 
 
 
@@ -51232,7 +51246,7 @@
 
 
 
-        title.textContent = normalized.name || `РќР°СЃС‚СЂРѕР№РєР° #${normalized.id}`;
+        title.textContent = normalized.name || `Настройка #${normalized.id}`;
 
 
 
@@ -51252,15 +51266,15 @@
 
 
 
-          ? `${normalized.eta_minutes} РјРёРЅ`
+          ? `${normalized.eta_minutes} мин`
 
 
 
-          : "Р‘РµР· РІСЂРµРјРµРЅРё";
+          : "Без времени";
 
 
 
-        subtitle.textContent = `${formatDeliverySettingTierSummary(normalized)} вЂў ${etaText}`;
+        subtitle.textContent = `${formatDeliverySettingTierSummary(normalized)} • ${etaText}`;
 
 
 
@@ -51296,7 +51310,7 @@
 
 
 
-          `РџРµСЂРµРєР»СЋС‡РёС‚СЊ Р°РєС‚РёРІРЅРѕСЃС‚СЊ СѓСЃР»РѕРІРёСЏ РґРѕСЃС‚Р°РІРєРё ${normalized.name || normalized.id}`,
+          `Переключить активность условия доставки ${normalized.name || normalized.id}`,
 
 
 
@@ -51344,7 +51358,7 @@
 
 
 
-              alert("РќРµ СѓРґР°Р»РѕСЃСЊ РёР·РјРµРЅРёС‚СЊ Р°РєС‚РёРІРЅРѕСЃС‚СЊ СѓСЃР»РѕРІРёСЏ РґРѕСЃС‚Р°РІРєРё.");
+              alert("Не удалось изменить активность условия доставки.");
 
 
 
@@ -51956,7 +51970,7 @@
 
 
 
-      if (!tiers.length) return "РќРµС‚ С‚Р°СЂРёС„РѕРІ";
+      if (!tiers.length) return "Нет тарифов";
 
 
 
@@ -51976,11 +51990,11 @@
 
 
 
-        ? `РћС‚ ${minOrder} РІвЂљР… РІвЂ вЂ™ ${deliveryCost} РІвЂљР…`
+        ? `От ${minOrder} в‚Ѕ в†’ ${deliveryCost} в‚Ѕ`
 
 
 
-        : `${deliveryCost} РІвЂљР… РґРѕСЃС‚Р°РІРєР°`;
+        : `${deliveryCost} в‚Ѕ доставка`;
 
 
 
@@ -52108,7 +52122,7 @@
 
 
 
-        title.textContent = normalized.name || `Р—РѕРЅР° #${normalized.id}`;
+        title.textContent = normalized.name || `Зона #${normalized.id}`;
 
 
 
@@ -52128,15 +52142,15 @@
 
 
 
-          ? `${normalized.eta_minutes} РјРёРЅ`
+          ? `${normalized.eta_minutes} мин`
 
 
 
-          : "Р‘РµР· РІСЂРµРјРµРЅРё";
+          : "Без времени";
 
 
 
-        subtitle.textContent = `${formatDeliveryZoneTierSummary(normalized)} вЂў ${etaText}`;
+        subtitle.textContent = `${formatDeliveryZoneTierSummary(normalized)} • ${etaText}`;
 
 
 
@@ -52176,7 +52190,7 @@
 
 
 
-          `РџРµСЂРµРєР»СЋС‡РёС‚СЊ Р°РєС‚РёРІРЅРѕСЃС‚СЊ Р·РѕРЅС‹ РґРѕСЃС‚Р°РІРєРё ${normalized.name || normalized.id}`,
+          `Переключить активность зоны доставки ${normalized.name || normalized.id}`,
 
 
 
@@ -52224,7 +52238,7 @@
 
 
 
-              alert("РќРµ СѓРґР°Р»РѕСЃСЊ РёР·РјРµРЅРёС‚СЊ Р°РєС‚РёРІРЅРѕСЃС‚СЊ Р·РѕРЅС‹ РґРѕСЃС‚Р°РІРєРё.");
+              alert("Не удалось изменить активность зоны доставки.");
 
 
 
@@ -52360,7 +52374,7 @@
 
 
 
-        empty.textContent = "РќРµС‚ РґРѕСЃС‚СѓРїРЅС‹С… С„РёР»РёР°Р»РѕРІ";
+        empty.textContent = "Нет доступных филиалов";
 
 
 
@@ -52388,7 +52402,7 @@
 
 
 
-        empty.textContent = "РќР°Р¶РјРёС‚Рµ Р’В«+Р’В», С‡С‚РѕР±С‹ РІС‹Р±СЂР°С‚СЊ С„РёР»РёР°Р»С‹";
+        empty.textContent = "Нажмите В«+В», чтобы выбрать филиалы";
 
 
 
@@ -52464,7 +52478,7 @@
 
 
 
-        title.textContent = store && store.name ? store.name : `Р¤РёР»РёР°Р» #${storeId}`;
+        title.textContent = store && store.name ? store.name : `Филиал #${storeId}`;
 
 
 
@@ -52728,11 +52742,11 @@
 
 
 
-        ? "Р’С‹Р±РµСЂРёС‚Рµ РѕРґРёРЅ РёР»Рё РЅРµСЃРєРѕР»СЊРєРѕ С„РёР»РёР°Р»РѕРІ РґР»СЏ СЌС‚РѕР№ Р·РѕРЅС‹ РґРѕСЃС‚Р°РІРєРё."
+        ? "Выберите один или несколько филиалов для этой зоны доставки."
 
 
 
-        : "РќРµС‚ РґРѕСЃС‚СѓРїРЅС‹С… С„РёР»РёР°Р»РѕРІ РґР»СЏ РІС‹Р±РѕСЂР°.";
+        : "Нет доступных филиалов для выбора.";
 
 
 
@@ -52784,7 +52798,7 @@
 
 
 
-          empty.textContent = "РЎРЅР°С‡Р°Р»Р° СЃРѕР·РґР°Р№С‚Рµ С„РёР»РёР°Р» Р Р† СЂР°Р·РґРµР»Рµ С„РёР»РёР°Р»РѕРІ.";
+          empty.textContent = "Сначала создайте филиал РІ разделе филиалов.";
 
 
 
@@ -52872,7 +52886,7 @@
 
 
 
-          title.textContent = store.name || `Р¤РёР»РёР°Р» #${storeId}`;
+          title.textContent = store.name || `Филиал #${storeId}`;
 
 
 
@@ -52980,15 +52994,15 @@
 
 
 
-        title: "Р’С‹Р±РѕСЂ С„РёР»РёР°Р»РѕРІ",
+        title: "Выбор филиалов",
 
 
 
-        saveText: "РџСЂРёРјРµРЅРёС‚СЊ",
+        saveText: "Применить",
 
 
 
-        cancelText: "РћС‚РјРµРЅР°",
+        cancelText: "Отмена",
 
 
 
@@ -53100,7 +53114,7 @@
 
 
 
-        minField.innerHTML = `<label class="field-label">РћРў РЎРЈРњРњР«</label><input class="control settings-delivery-zone-pill-control" type="number" min="0" step="1" data-zone-tier-field="min_order_amount" value="${String(tier && tier.min_order_amount != null ? tier.min_order_amount : "")}">`;
+        minField.innerHTML = `<label class="field-label">ОТ СУММЫ</label><input class="control settings-delivery-zone-pill-control" type="number" min="0" step="1" data-zone-tier-field="min_order_amount" value="${String(tier && tier.min_order_amount != null ? tier.min_order_amount : "")}">`;
 
 
 
@@ -53116,7 +53130,7 @@
 
 
 
-        costField.innerHTML = `<label class="field-label">РЎРўРћРРњРћРЎРўР¬ Р”РћРЎРўРђР’РљР</label><input class="control settings-delivery-zone-pill-control" type="number" min="0" step="1" data-zone-tier-field="delivery_cost" value="${String(tier && tier.delivery_cost != null ? tier.delivery_cost : "")}">`;
+        costField.innerHTML = `<label class="field-label">СТОИМОСТЬ ДОСТАВКИ</label><input class="control settings-delivery-zone-pill-control" type="number" min="0" step="1" data-zone-tier-field="delivery_cost" value="${String(tier && tier.delivery_cost != null ? tier.delivery_cost : "")}">`;
 
 
 
@@ -53140,7 +53154,7 @@
 
 
 
-        removeBtn.setAttribute("aria-label", "РЈРґР°Р»РёС‚СЊ РїРѕСЂРѕРі");
+        removeBtn.setAttribute("aria-label", "Удалить порог");
 
 
 
@@ -53264,7 +53278,7 @@
 
 
 
-        minField.innerHTML = `<label class="field-label">РћРў РЎРЈРњРњР«</label><input class="control settings-delivery-zone-pill-control" type="number" min="0" step="1" data-delivery-tier-field="min_order_amount" value="${String(tier && tier.min_order_amount != null ? tier.min_order_amount : "")}">`;
+        minField.innerHTML = `<label class="field-label">ОТ СУММЫ</label><input class="control settings-delivery-zone-pill-control" type="number" min="0" step="1" data-delivery-tier-field="min_order_amount" value="${String(tier && tier.min_order_amount != null ? tier.min_order_amount : "")}">`;
 
 
 
@@ -53280,7 +53294,7 @@
 
 
 
-        costField.innerHTML = `<label class="field-label">РЎРўРћРРњРћРЎРўР¬ Р”РћРЎРўРђР’РљР</label><input class="control settings-delivery-zone-pill-control" type="number" min="0" step="1" data-delivery-tier-field="delivery_cost" value="${String(tier && tier.delivery_cost != null ? tier.delivery_cost : "")}">`;
+        costField.innerHTML = `<label class="field-label">СТОИМОСТЬ ДОСТАВКИ</label><input class="control settings-delivery-zone-pill-control" type="number" min="0" step="1" data-delivery-tier-field="delivery_cost" value="${String(tier && tier.delivery_cost != null ? tier.delivery_cost : "")}">`;
 
 
 
@@ -53304,7 +53318,7 @@
 
 
 
-        removeBtn.setAttribute("aria-label", "РЈРґР°Р»РёС‚СЊ РїРѕСЂРѕРі");
+        removeBtn.setAttribute("aria-label", "Удалить порог");
 
 
 
@@ -53388,7 +53402,7 @@
 
 
 
-        return "1. РљР»РёРєР°Р№С‚Рµ РїРѕ РєР°СЂС‚Рµ, С‡С‚РѕР±С‹ РїРѕСЃС‚Р°РІРёС‚СЊ С‚РѕС‡РєРё\n2. РЎР»РµРґРёС‚Рµ Р·Р° Р»РёРЅРёРµР№ Рё Р·Р°Р»РёРІРєРѕР№ Р±СѓРґСѓС‰РµР№ Р·РѕРЅС‹\n3. РќР°Р¶РјРёС‚Рµ РЅР° РїРѕСЃР»РµРґРЅСЋСЋ С‚РѕС‡РєСѓ Рё РІС‹Р±РµСЂРёС‚Рµ В«Р—Р°РІРµСЂС€РёС‚СЊВ»\n4. РџРѕСЃР»Рµ СЃРѕР·РґР°РЅРёСЏ РјРѕР¶РЅРѕ РґРІРёРіР°С‚СЊ С‚РѕС‡РєРё РјС‹С€РєРѕР№";
+        return "1. Кликайте по карте, чтобы поставить точки\n2. Следите за линией и заливкой будущей зоны\n3. Нажмите на последнюю точку и выберите «Завершить»\n4. После создания можно двигать точки мышкой";
 
 
 
@@ -53400,7 +53414,7 @@
 
 
 
-        return "1. РљР»РёРєР°Р№С‚Рµ РїРѕ РєР°СЂС‚Рµ, С‡С‚РѕР±С‹ РїРѕСЃС‚Р°РІРёС‚СЊ С‚РѕС‡РєРё\n2. РџРѕСЃР»Рµ РІС‚РѕСЂРѕР№ С‚РѕС‡РєРё РЅР° Р»РёРЅРёСЏС… РїРѕСЏРІР»СЏСЋС‚СЃСЏ С‚РѕС‡РєРё РґР»СЏ РІСЃС‚Р°РІРєРё РЅРѕРІС‹С… РІРµСЂС€РёРЅ\n3. РќР°Р¶РјРёС‚Рµ РЅР° РїРѕСЃР»РµРґРЅСЋСЋ С‚РѕС‡РєСѓ Рё РІС‹Р±РµСЂРёС‚Рµ В«Р—Р°РІРµСЂС€РёС‚СЊВ»\n4. РџРѕСЃР»Рµ СЃРѕР·РґР°РЅРёСЏ РјРѕР¶РЅРѕ СѓС‚РѕС‡РЅСЏС‚СЊ С„РѕСЂРјСѓ Р·РѕРЅС‹";
+        return "1. Кликайте по карте, чтобы поставить точки\n2. После второй точки на линиях появляются точки для вставки новых вершин\n3. Нажмите на последнюю точку и выберите «Завершить»\n4. После создания можно уточнять форму зоны";
 
 
 
@@ -53412,7 +53426,7 @@
 
 
 
-        return "1. РћСЃРЅРѕРІРЅС‹Рµ С‚РѕС‡РєРё РїРѕРєР°Р·С‹РІР°СЋС‚ РІРµСЂС€РёРЅС‹ РІС‹Р±СЂР°РЅРЅРѕРіРѕ РїРѕР»РёРіРѕРЅР°\n2. РўРѕС‡РєРё РЅР° Р»РёРЅРёСЏС… РІСЃС‚Р°РІР»СЏСЋС‚ РЅРѕРІС‹Рµ РІРµСЂС€РёРЅС‹ РјРµР¶РґСѓ СЃСѓС‰РµСЃС‚РІСѓСЋС‰РёРјРё\n3. РџРѕС‚СЏРЅРёС‚Рµ Р»СЋР±СѓСЋ Р°РєС‚РёРІРЅСѓСЋ С‚РѕС‡РєСѓ, С‡С‚РѕР±С‹ РёР·РјРµРЅРёС‚СЊ С„РѕСЂРјСѓ Р·РѕРЅС‹\n4. РџРѕСЃР»Рµ РїСЂР°РІРєРё СЃРѕС…СЂР°РЅРёС‚Рµ РёР·РјРµРЅРµРЅРёСЏ";
+        return "1. Основные точки показывают вершины выбранного полигона\n2. Точки на линиях вставляют новые вершины между существующими\n3. Потяните любую активную точку, чтобы изменить форму зоны\n4. После правки сохраните изменения";
 
 
 
@@ -53420,7 +53434,7 @@
 
 
 
-      return "1. Р—РѕРЅР° РѕС‚РєСЂС‹С‚Р° Р Р† СЂРµР¶РёРјРµ РїСЂРѕСЃРјРѕС‚СЂР°\n2. РћСЃРЅРѕРІРЅС‹Рµ С‚РѕС‡РєРё РїРѕРєР°Р·С‹РІР°СЋС‚ РІРµСЂС€РёРЅС‹ РІС‹Р±СЂР°РЅРЅРѕРіРѕ РїРѕР»РёРіРѕРЅР°\n3. РќР°Р¶РјРёС‚Рµ В«Р РµРґР°РєС‚РёСЂРѕРІР°С‚СЊВ», С‡С‚РѕР±С‹ РІРєР»СЋС‡РёС‚СЊ РїРµСЂРµС‚Р°СЃРєРёРІР°РЅРёРµ С‚РѕС‡РµРє\n4. РџРѕСЃР»Рµ РІРєР»СЋС‡РµРЅРёСЏ СЂРµРґР°РєС‚РёСЂРѕРІР°РЅРёСЏ РїРѕСЏРІСЏС‚СЃСЏ Рё С‚РѕС‡РєРё РЅР° Р»РёРЅРёСЏС…";
+      return "1. Зона открыта РІ режиме просмотра\n2. Основные точки показывают вершины выбранного полигона\n3. Нажмите «Редактировать», чтобы включить перетаскивание точек\n4. После включения редактирования появятся и точки на линиях";
 
 
 
@@ -53956,7 +53970,7 @@
 
 
 
-        swatchBtn.setAttribute("aria-label", `Р’С‹Р±СЂР°С‚СЊ С†РІРµС‚ ${color.toUpperCase()}`);
+        swatchBtn.setAttribute("aria-label", `Выбрать цвет ${color.toUpperCase()}`);
 
 
 
@@ -54416,7 +54430,7 @@
 
 
 
-        settingsDeliveryZoneSubtitle.textContent = showCreateSubtitle ? "РќРѕРІР°СЏ Р·РѕРЅР°" : "";
+        settingsDeliveryZoneSubtitle.textContent = showCreateSubtitle ? "Новая зона" : "";
 
 
 
@@ -54432,7 +54446,7 @@
 
 
 
-        settingsDeliveryZoneSaveText.textContent = tab && tab.mode === "create" ? "РЎРѕР·РґР°С‚СЊ" : "РЎРѕС…СЂР°РЅРёС‚СЊ";
+        settingsDeliveryZoneSaveText.textContent = tab && tab.mode === "create" ? "Создать" : "Сохранить";
 
 
 
@@ -55080,7 +55094,7 @@
 
 
 
-        && !window.confirm("Р—Р°РєСЂС‹С‚СЊ РІРєР»Р°РґРєСѓ Р·РѕРЅС‹ РґРѕСЃС‚Р°РІРєРё Р±РµР· СЃРѕС…СЂР°РЅРµРЅРёСЏ?")
+        && !window.confirm("Закрыть вкладку зоны доставки без сохранения?")
 
 
 
@@ -55572,7 +55586,7 @@
 
 
 
-        console.error("РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РіСЂСѓР·РёС‚СЊ РЅР°СЃС‚СЂРѕР№РєРё РґРѕСЃС‚Р°РІРєРё:", err);
+        console.error("Не удалось загрузить настройки доставки:", err);
 
 
 
@@ -55616,7 +55630,7 @@
 
 
 
-        console.error("РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РіСЂСѓР·РёС‚СЊ Р·РѕРЅС‹ РґРѕСЃС‚Р°РІРєРё:", err);
+        console.error("Не удалось загрузить зоны доставки:", err);
 
 
 
@@ -55672,7 +55686,7 @@
 
 
 
-        console.error("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕР·РґР°С‚СЊ Р·РѕРЅСѓ РґРѕСЃС‚Р°РІРєРё:", err);
+        console.error("Не удалось создать зону доставки:", err);
 
 
 
@@ -55728,7 +55742,7 @@
 
 
 
-        console.error("РќРµ СѓРґР°Р»РѕСЃСЊ РѕР±РЅРѕРІРёС‚СЊ Р·РѕРЅСѓ РґРѕСЃС‚Р°РІРєРё:", err);
+        console.error("Не удалось обновить зону доставки:", err);
 
 
 
@@ -55780,7 +55794,7 @@
 
 
 
-        console.error("РќРµ СѓРґР°Р»РѕСЃСЊ СѓРґР°Р»РёС‚СЊ Р·РѕРЅСѓ РґРѕСЃС‚Р°РІРєРё:", err);
+        console.error("Не удалось удалить зону доставки:", err);
 
 
 
@@ -55824,7 +55838,7 @@
 
 
 
-        console.error("РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РіСЂСѓР·РёС‚СЊ РЅР°СЃС‚СЂРѕР№РєРё РєР°СЂС‚С‹ tenant:", err);
+        console.error("Не удалось загрузить настройки карты tenant:", err);
 
 
 
@@ -55880,7 +55894,7 @@
 
 
 
-        console.error("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕС…СЂР°РЅРёС‚СЊ РЅР°СЃС‚СЂРѕР№РєРё РєР°СЂС‚С‹ tenant:", err);
+        console.error("Не удалось сохранить настройки карты tenant:", err);
 
 
 
@@ -55924,7 +55938,7 @@
 
 
 
-        console.error("РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕРєР°Р·Р°С‚СЊ РґР°РЅРЅС‹Рµ API РєР°СЂС‚С‹:", err);
+        console.error("Не удалось показать данные API карты:", err);
 
 
 
@@ -55956,11 +55970,11 @@
 
 
 
-          ? `РџСЂРѕРІР°Р№РґРµСЂ: ${deliveryMapAccountsProviderName}`
+          ? `Провайдер: ${deliveryMapAccountsProviderName}`
 
 
 
-          : "Р”РѕР±Р°РІСЊС‚Рµ tenant-РєР»СЋС‡Рё РєР°СЂС‚С‹";
+          : "Добавьте tenant-ключи карты";
 
 
 
@@ -56416,7 +56430,7 @@
 
 
 
-        key.textContent = summary.api_key || "РљР»СЋС‡ СЃРєСЂС‹С‚";
+        key.textContent = summary.api_key || "Ключ скрыт";
 
 
 
@@ -56456,11 +56470,11 @@
 
 
 
-        viewBtn.title = isRevealOpen ? "РЎРєСЂС‹С‚СЊ РґР°РЅРЅС‹Рµ API" : "РџСЂРѕСЃРјРѕС‚СЂРµС‚СЊ РґР°РЅРЅС‹Рµ API";
+        viewBtn.title = isRevealOpen ? "Скрыть данные API" : "Просмотреть данные API";
 
 
 
-        viewBtn.setAttribute("aria-label", isRevealOpen ? "РЎРєСЂС‹С‚СЊ РґР°РЅРЅС‹Рµ API" : "РџСЂРѕСЃРјРѕС‚СЂРµС‚СЊ РґР°РЅРЅС‹Рµ API");
+        viewBtn.setAttribute("aria-label", isRevealOpen ? "Скрыть данные API" : "Просмотреть данные API");
 
 
 
@@ -56512,7 +56526,7 @@
 
 
 
-            alert("РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕРєР°Р·Р°С‚СЊ РґР°РЅРЅС‹Рµ API.");
+            alert("Не удалось показать данные API.");
 
 
 
@@ -56576,11 +56590,11 @@
 
 
 
-        editBtn.title = isEditOpen ? "РЎРєСЂС‹С‚СЊ СЂРµРґР°РєС‚РёСЂРѕРІР°РЅРёРµ" : "Р РµРґР°РєС‚РёСЂРѕРІР°С‚СЊ";
+        editBtn.title = isEditOpen ? "Скрыть редактирование" : "Редактировать";
 
 
 
-        editBtn.setAttribute("aria-label", isEditOpen ? "РЎРєСЂС‹С‚СЊ СЂРµРґР°РєС‚РёСЂРѕРІР°РЅРёРµ" : "Р РµРґР°РєС‚РёСЂРѕРІР°С‚СЊ");
+        editBtn.setAttribute("aria-label", isEditOpen ? "Скрыть редактирование" : "Редактировать");
 
 
 
@@ -56704,7 +56718,7 @@
 
 
 
-            reveal.textContent = "Р—Р°РіСЂСѓР·РєР° РґР°РЅРЅС‹С… API...";
+            reveal.textContent = "Загрузка данных API...";
 
 
 
@@ -56720,11 +56734,11 @@
 
 
 
-              { label: "Р›РћР“РРќ", value: revealedItem.login, type: "text" },
+              { label: "ЛОГИН", value: revealedItem.login, type: "text" },
 
 
 
-              { label: "РџРђР РћР›Р¬", value: revealedItem.password, type: "text" }
+              { label: "ПАРОЛЬ", value: revealedItem.password, type: "text" }
 
 
 
@@ -56744,7 +56758,7 @@
 
 
 
-              empty.textContent = "Р”Р°РЅРЅС‹Рµ РІС…РѕРґР° РЅРµ Р·Р°РїРѕР»РЅРµРЅС‹.";
+              empty.textContent = "Данные входа не заполнены.";
 
 
 
@@ -56876,15 +56890,15 @@
 
 
 
-            { key: "api_key", label: "API KEY", type: "text", placeholder: "Р’РІРµРґРёС‚Рµ API key" },
+            { key: "api_key", label: "API KEY", type: "text", placeholder: "Введите API key" },
 
 
 
-            { key: "login", label: "Р›РћР“РРќ", type: "text", placeholder: "РќРµРѕР±СЏР·Р°С‚РµР»СЊРЅРѕ" },
+            { key: "login", label: "ЛОГИН", type: "text", placeholder: "Необязательно" },
 
 
 
-            { key: "password", label: "РџРђР РћР›Р¬", type: "password", placeholder: "РќРµРѕР±СЏР·Р°С‚РµР»СЊРЅРѕ" }
+            { key: "password", label: "ПАРОЛЬ", type: "password", placeholder: "Необязательно" }
 
 
 
@@ -57000,7 +57014,7 @@
 
 
 
-          cancelBtn.textContent = "РћС‚РјРµРЅР°";
+          cancelBtn.textContent = "Отмена";
 
 
 
@@ -57040,7 +57054,7 @@
 
 
 
-          applyBtn.textContent = "РЎРѕС…СЂР°РЅРёС‚СЊ";
+          applyBtn.textContent = "Сохранить";
 
 
 
@@ -57056,7 +57070,7 @@
 
 
 
-              alert("Р’РІРµРґРёС‚Рµ API key.");
+              alert("Введите API key.");
 
 
 
@@ -57616,7 +57630,7 @@
 
 
 
-        console.error("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕР·РґР°С‚СЊ РЅР°СЃС‚СЂРѕР№РєСѓ РґРѕСЃС‚Р°РІРєРё:", err);
+        console.error("Не удалось создать настройку доставки:", err);
 
 
 
@@ -57672,7 +57686,7 @@
 
 
 
-        console.error("РќРµ СѓРґР°Р»РѕСЃСЊ РѕР±РЅРѕРІРёС‚СЊ РЅР°СЃС‚СЂРѕР№РєСѓ РґРѕСЃС‚Р°РІРєРё:", err);
+        console.error("Не удалось обновить настройку доставки:", err);
 
 
 
@@ -57724,7 +57738,7 @@
 
 
 
-        console.error("РќРµ СѓРґР°Р»РѕСЃСЊ СѓРґР°Р»РёС‚СЊ РЅР°СЃС‚СЂРѕР№РєСѓ РґРѕСЃС‚Р°РІРєРё:", err);
+        console.error("Не удалось удалить настройку доставки:", err);
 
 
 
@@ -57840,7 +57854,7 @@
 
 
 
-        title.textContent = setting.name || `РќР°СЃС‚СЂРѕР№РєР° #${setting.id}`;
+        title.textContent = setting.name || `Настройка #${setting.id}`;
 
 
 
@@ -57864,15 +57878,15 @@
 
 
 
-          ? `${normalized.eta_minutes} РјРёРЅ`
+          ? `${normalized.eta_minutes} мин`
 
 
 
-          : "Р‘РµР· РІСЂРµРјРµРЅРё";
+          : "Без времени";
 
 
 
-        subtitle.textContent = `${formatDeliverySettingTierSummary(normalized)} вЂў ${etaText}`;
+        subtitle.textContent = `${formatDeliverySettingTierSummary(normalized)} • ${etaText}`;
 
 
 
@@ -57912,7 +57926,7 @@
 
 
 
-        badge.textContent = "РћС‚РєСЂС‹С‚СЊ";
+        badge.textContent = "Открыть";
 
 
 
@@ -58036,7 +58050,7 @@
 
 
 
-        empty.textContent = "РќРµС‚ РґРѕСЃС‚СѓРїРЅС‹С… С„РёР»РёР°Р»РѕРІ";
+        empty.textContent = "Нет доступных филиалов";
 
 
 
@@ -58072,7 +58086,7 @@
 
 
 
-        empty.textContent = "РќР°Р¶РјРёС‚Рµ Р’В«+Р’В», С‡С‚РѕР±С‹ РІС‹Р±СЂР°С‚СЊ С„РёР»РёР°Р»С‹";
+        empty.textContent = "Нажмите В«+В», чтобы выбрать филиалы";
 
 
 
@@ -58156,7 +58170,7 @@
 
 
 
-        title.textContent = store && store.name ? store.name : `Р¤РёР»РёР°Р» #${storeId}`;
+        title.textContent = store && store.name ? store.name : `Филиал #${storeId}`;
 
 
 
@@ -58212,7 +58226,7 @@
 
 
 
-        removeBtn.setAttribute("aria-label", `РЈРґР°Р»РёС‚СЊ С„РёР»РёР°Р» ${storeId}`);
+        removeBtn.setAttribute("aria-label", `Удалить филиал ${storeId}`);
 
 
 
@@ -58276,7 +58290,7 @@
 
 
 
-      settingsDeliveryDefaultStore.innerHTML = '<option value="">вЂ” РЅРµ РІС‹Р±СЂР°РЅ вЂ”</option>';
+      settingsDeliveryDefaultStore.innerHTML = '<option value="">— не выбран —</option>';
 
 
 
@@ -58296,7 +58310,7 @@
 
 
 
-        opt.textContent = store.name || `Р¤РёР»РёР°Р» #${store.id}`;
+        opt.textContent = store.name || `Филиал #${store.id}`;
 
 
 
@@ -58368,7 +58382,7 @@
 
 
 
-          : "вЂ” РЅРµ РІС‹Р±СЂР°РЅ вЂ”";
+          : "— не выбран —";
 
 
 
@@ -58412,7 +58426,7 @@
 
 
 
-        emptyOption.textContent = "вЂ” РЅРµ РІС‹Р±СЂР°РЅ вЂ”";
+        emptyOption.textContent = "— не выбран —";
 
 
 
@@ -58460,7 +58474,7 @@
 
 
 
-          option.textContent = store.name || `Р¤РёР»РёР°Р» #${storeId}`;
+          option.textContent = store.name || `Филиал #${storeId}`;
 
 
 
@@ -59084,11 +59098,11 @@
 
 
 
-        ? "Р’С‹Р±РµСЂРёС‚Рµ РѕРґРёРЅ РёР»Рё РЅРµСЃРєРѕР»СЊРєРѕ С„РёР»РёР°Р»РѕРІ РґР»СЏ СЌС‚РѕР№ РЅР°СЃС‚СЂРѕР№РєРё РґРѕСЃС‚Р°РІРєРё."
+        ? "Выберите один или несколько филиалов для этой настройки доставки."
 
 
 
-        : "РќРµС‚ РґРѕСЃС‚СѓРїРЅС‹С… С„РёР»РёР°Р»РѕРІ РґР»СЏ РІС‹Р±РѕСЂР°.";
+        : "Нет доступных филиалов для выбора.";
 
 
 
@@ -59140,7 +59154,7 @@
 
 
 
-          empty.textContent = "РЎРЅР°С‡Р°Р»Р° СЃРѕР·РґР°Р№С‚Рµ С„РёР»РёР°Р» Р Р† СЂР°Р·РґРµР»Рµ С„РёР»РёР°Р»РѕРІ.";
+          empty.textContent = "Сначала создайте филиал РІ разделе филиалов.";
 
 
 
@@ -59228,7 +59242,7 @@
 
 
 
-          title.textContent = store.name || `Р¤РёР»РёР°Р» #${storeId}`;
+          title.textContent = store.name || `Филиал #${storeId}`;
 
 
 
@@ -59336,15 +59350,15 @@
 
 
 
-        title: "Р’С‹Р±РѕСЂ С„РёР»РёР°Р»РѕРІ",
+        title: "Выбор филиалов",
 
 
 
-        saveText: "РџСЂРёРјРµРЅРёС‚СЊ",
+        saveText: "Применить",
 
 
 
-        cancelText: "РћС‚РјРµРЅР°",
+        cancelText: "Отмена",
 
 
 
@@ -59516,7 +59530,7 @@
 
 
 
-        settingsDeliverySaveText.textContent = mode === "create" ? "РЎРѕР·РґР°С‚СЊ" : "РЎРѕС…СЂР°РЅРёС‚СЊ";
+        settingsDeliverySaveText.textContent = mode === "create" ? "Создать" : "Сохранить";
 
 
 
@@ -59544,7 +59558,7 @@
 
 
 
-          settingsDeliverySubtitle.textContent = "РќРѕРІР°СЏ РЅР°СЃС‚СЂРѕР№РєР°";
+          settingsDeliverySubtitle.textContent = "Новая настройка";
 
 
 
@@ -59628,7 +59642,7 @@
 
 
 
-      ensureTab(DELIVERY_TAB_ID, setting.name || "РќР°СЃС‚СЂРѕР№РєР° РґРѕСЃС‚Р°РІРєРё");
+      ensureTab(DELIVERY_TAB_ID, setting.name || "Настройка доставки");
 
 
 
@@ -59680,7 +59694,7 @@
 
 
 
-          settingsCenterSubtitle.textContent = count ? `РќР°СЃС‚СЂРѕРµРє: ${count}` : "РќР°СЃС‚СЂРѕРµРє РїРѕРєР° РЅРµС‚";
+          settingsCenterSubtitle.textContent = count ? `Настроек: ${count}` : "Настроек пока нет";
 
 
 
@@ -59764,7 +59778,7 @@
 
 
 
-      ensureTab(DELIVERY_TAB_ID, "РќРѕРІР°СЏ РЅР°СЃС‚СЂРѕР№РєР°");
+      ensureTab(DELIVERY_TAB_ID, "Новая настройка");
 
 
 
@@ -59840,7 +59854,7 @@
 
 
 
-        settingsCenterSubtitle.textContent = items.length ? `РќР°СЃС‚СЂРѕРµРє: ${items.length}` : "РќР°СЃС‚СЂРѕРµРє РїРѕРєР° РЅРµС‚";
+        settingsCenterSubtitle.textContent = items.length ? `Настроек: ${items.length}` : "Настроек пока нет";
 
 
 
@@ -60156,7 +60170,7 @@
 
 
 
-          alert("Р’РІРµРґРёС‚Рµ API key.");
+          alert("Введите API key.");
 
 
 
@@ -60284,7 +60298,7 @@
 
 
 
-          settingsCenterTitle.textContent = "Р”РѕСЃС‚Р°РІРєР°";
+          settingsCenterTitle.textContent = "Доставка";
 
 
 
@@ -60296,7 +60310,7 @@
 
 
 
-          settingsCenterSubtitle.textContent = "Р—Р°РіСЂСѓР·РєР°...";
+          settingsCenterSubtitle.textContent = "Загрузка...";
 
 
 
@@ -60592,7 +60606,7 @@
 
 
 
-            alert("РњРѕР¶РЅРѕ СЃРѕС…СЂР°РЅРёС‚СЊ РЅРµ Р±РѕР»СЊС€Рµ 20 API.");
+            alert("Можно сохранить не больше 20 API.");
 
 
 
@@ -60608,7 +60622,7 @@
 
 
 
-            alert("РЈ РєР°Р¶РґРѕРіРѕ API РґРѕР»Р¶РµРЅ Р±С‹С‚СЊ Р·Р°РїРѕР»РЅРµРЅ РєР»СЋС‡.");
+            alert("У каждого API должен быть заполнен ключ.");
 
 
 
@@ -60628,7 +60642,7 @@
 
 
 
-            alert("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕС…СЂР°РЅРёС‚СЊ РЅР°СЃС‚СЂРѕР№РєРё РєР°СЂС‚С‹.");
+            alert("Не удалось сохранить настройки карты.");
 
 
 
@@ -60740,7 +60754,7 @@
 
 
 
-          alert("Р’РІРµРґРёС‚Рµ РЅР°Р·РІР°РЅРёРµ РЅР°СЃС‚СЂРѕР№РєРё РґРѕСЃС‚Р°РІРєРё.");
+          alert("Введите название настройки доставки.");
 
 
 
@@ -60772,7 +60786,7 @@
 
 
 
-            alert("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕР·РґР°С‚СЊ РЅР°СЃС‚СЂРѕР№РєСѓ РґРѕСЃС‚Р°РІРєРё.");
+            alert("Не удалось создать настройку доставки.");
 
 
 
@@ -60828,7 +60842,7 @@
 
 
 
-            alert("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕС…СЂР°РЅРёС‚СЊ РёР·РјРµРЅРµРЅРёСЏ.");
+            alert("Не удалось сохранить изменения.");
 
 
 
@@ -60912,7 +60926,7 @@
 
 
 
-          alert("Р’РІРµРґРёС‚Рµ РЅР°Р·РІР°РЅРёРµ РЅР°СЃС‚СЂРѕР№РєРё РґРѕСЃС‚Р°РІРєРё.");
+          alert("Введите название настройки доставки.");
 
 
 
@@ -60944,7 +60958,7 @@
 
 
 
-            alert("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕР·РґР°С‚СЊ РЅР°СЃС‚СЂРѕР№РєСѓ РґРѕСЃС‚Р°РІРєРё.");
+            alert("Не удалось создать настройку доставки.");
 
 
 
@@ -60968,7 +60982,7 @@
 
 
 
-          ensureTab(DELIVERY_TAB_ID, data.item.name || "РќР°СЃС‚СЂРѕР№РєР° РґРѕСЃС‚Р°РІРєРё");
+          ensureTab(DELIVERY_TAB_ID, data.item.name || "Настройка доставки");
 
 
 
@@ -60992,7 +61006,7 @@
 
 
 
-            alert("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕС…СЂР°РЅРёС‚СЊ РёР·РјРµРЅРµРЅРёСЏ.");
+            alert("Не удалось сохранить изменения.");
 
 
 
@@ -61012,7 +61026,7 @@
 
 
 
-          ensureTab(DELIVERY_TAB_ID, data.item.name || "РќР°СЃС‚СЂРѕР№РєР° РґРѕСЃС‚Р°РІРєРё");
+          ensureTab(DELIVERY_TAB_ID, data.item.name || "Настройка доставки");
 
 
 
@@ -61152,7 +61166,7 @@
 
 
 
-          alert("РњРѕР¶РЅРѕ СЃРѕС…СЂР°РЅРёС‚СЊ РЅРµ Р±РѕР»СЊС€Рµ 20 API.");
+          alert("Можно сохранить не больше 20 API.");
 
 
 
@@ -61168,7 +61182,7 @@
 
 
 
-          alert("РЈ РєР°Р¶РґРѕРіРѕ API РґРѕР»Р¶РµРЅ Р±С‹С‚СЊ Р·Р°РїРѕР»РЅРµРЅ РєР»СЋС‡.");
+          alert("У каждого API должен быть заполнен ключ.");
 
 
 
@@ -61188,7 +61202,7 @@
 
 
 
-          alert("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕС…СЂР°РЅРёС‚СЊ РЅР°СЃС‚СЂРѕР№РєРё РєР°СЂС‚С‹.");
+          alert("Не удалось сохранить настройки карты.");
 
 
 
@@ -61272,7 +61286,7 @@
 
 
 
-        if (!confirm("РЈРґР°Р»РёС‚СЊ СЌС‚Сѓ РЅР°СЃС‚СЂРѕР№РєСѓ РґРѕСЃС‚Р°РІРєРё?")) return;
+        if (!confirm("Удалить эту настройку доставки?")) return;
 
 
 
@@ -61284,7 +61298,7 @@
 
 
 
-          alert("РќРµ СѓРґР°Р»РѕСЃСЊ СѓРґР°Р»РёС‚СЊ РЅР°СЃС‚СЂРѕР№РєСѓ.");
+          alert("Не удалось удалить настройку.");
 
 
 
@@ -61316,7 +61330,7 @@
 
 
 
-        if (!confirm("РЈРґР°Р»РёС‚СЊ СЌС‚Сѓ РЅР°СЃС‚СЂРѕР№РєСѓ РґРѕСЃС‚Р°РІРєРё?")) return;
+        if (!confirm("Удалить эту настройку доставки?")) return;
 
 
 
@@ -61328,7 +61342,7 @@
 
 
 
-          alert("РќРµ СѓРґР°Р»РѕСЃСЊ СѓРґР°Р»РёС‚СЊ РЅР°СЃС‚СЂРѕР№РєСѓ.");
+          alert("Не удалось удалить настройку.");
 
 
 
@@ -61368,7 +61382,7 @@
 
 
 
-    // --- Р¤РѕС‚Рѕ С‚РѕРІР°СЂРѕРІ (images settings) ---
+    // --- Фото товаров (images settings) ---
 
 
 
@@ -62092,19 +62106,19 @@
 
 
 
-        if (pointsCount <= 0) return "РџРѕСЃС‚Р°РІСЊС‚Рµ РїРµСЂРІСѓСЋ С‚РѕС‡РєСѓ Р·РѕРЅС‹";
+        if (pointsCount <= 0) return "Поставьте первую точку зоны";
 
 
 
-        if (pointsCount === 1) return "РџРѕСЃС‚Р°РІСЊС‚Рµ СЃР»РµРґСѓСЋС‰СѓСЋ С‚РѕС‡РєСѓ";
+        if (pointsCount === 1) return "Поставьте следующую точку";
 
 
 
-        if (pointsCount === 2) return "РџРѕСЃР»Рµ РІС‚РѕСЂРѕР№ С‚РѕС‡РєРё РЅР° Р»РёРЅРёРё РїРѕСЏРІРёС‚СЃСЏ РІСЃРїРѕРјРѕРіР°С‚РµР»СЊРЅР°СЏ С‚РѕС‡РєР°";
+        if (pointsCount === 2) return "После второй точки на линии появится вспомогательная точка";
 
 
 
-        return "РќР°Р¶РјРёС‚Рµ РЅР° РїРѕСЃР»РµРґРЅСЋСЋ С‚РѕС‡РєСѓ, С‡С‚РѕР±С‹ Р·Р°РІРµСЂС€РёС‚СЊ РёР»Рё РїСЂРѕРґРѕР»Р¶РёС‚СЊ РєРѕРЅС‚СѓСЂ";
+        return "Нажмите на последнюю точку, чтобы завершить или продолжить контур";
 
 
 
@@ -62116,7 +62130,7 @@
 
 
 
-        return "РўСЏРЅРёС‚Рµ РѕСЃРЅРѕРІРЅС‹Рµ С‚РѕС‡РєРё РёР»Рё С‚РѕС‡РєРё РЅР° Р»РёРЅРёСЏС…, С‡С‚РѕР±С‹ РјРµРЅСЏС‚СЊ С„РѕСЂРјСѓ Р·РѕРЅС‹";
+        return "Тяните основные точки или точки на линиях, чтобы менять форму зоны";
 
 
 
@@ -62128,7 +62142,7 @@
 
 
 
-        return "РќР°Р¶РјРёС‚Рµ В«Р РµРґР°РєС‚РёСЂРѕРІР°С‚СЊВ», С‡С‚РѕР±С‹ РІРєР»СЋС‡РёС‚СЊ Р°РєС‚РёРІРЅС‹Рµ С‚РѕС‡РєРё РїРѕР»РёРіРѕРЅР°";
+        return "Нажмите «Редактировать», чтобы включить активные точки полигона";
 
 
 
@@ -62140,7 +62154,7 @@
 
 
 
-        return "Р—РѕРЅР° СЃРѕР·РґР°РЅР°. РўРѕС‡РєРё РјРѕР¶РЅРѕ РґРІРёРіР°С‚СЊ РјС‹С€РєРѕР№";
+        return "Зона создана. Точки можно двигать мышкой";
 
 
 
@@ -62148,7 +62162,7 @@
 
 
 
-      return "РџРѕСЃС‚Р°РІСЊС‚Рµ РїРµСЂРІСѓСЋ С‚РѕС‡РєСѓ Р·РѕРЅС‹";
+      return "Поставьте первую точку зоны";
 
 
 
@@ -66308,7 +66322,7 @@
 
 
 
-          showDeliveryMapEmpty("Leaflet РЅРµ РїРѕРґРєР»СЋС‡С‘РЅ. РџСЂРѕРІРµСЂСЊС‚Рµ assets РєР°СЂС‚С‹.");
+          showDeliveryMapEmpty("Leaflet не подключён. Проверьте assets карты.");
 
 
 
@@ -66392,7 +66406,7 @@
 
 
 
-          showDeliveryMapEmpty("Leaflet РЅРµ РїРѕРґРєР»СЋС‡С‘РЅ. РџСЂРѕРІРµСЂСЊС‚Рµ assets РєР°СЂС‚С‹.");
+          showDeliveryMapEmpty("Leaflet не подключён. Проверьте assets карты.");
 
 
 
@@ -66424,7 +66438,7 @@
 
 
 
-        showDeliveryMapEmpty("РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РіСЂСѓР·РёС‚СЊ РЅР°СЃС‚СЂРѕР№РєРё РєР°СЂС‚С‹.");
+        showDeliveryMapEmpty("Не удалось загрузить настройки карты.");
 
 
 
@@ -66844,7 +66858,7 @@
 
 
 
-            error: "Р—Р°РїРѕР»РЅРёС‚Рµ РѕР±Рµ СЃСѓРјРјС‹ Р Р† РєР°Р¶РґРѕРј С‚Р°СЂРёС„РЅРѕРј РїРѕСЂРѕРіРµ.",
+            error: "Заполните обе суммы РІ каждом тарифном пороге.",
 
 
 
@@ -66876,7 +66890,7 @@
 
 
 
-            error: "РЎСѓРјРјС‹ С‚Р°СЂРёС„РѕРІ РґРѕР»Р¶РЅС‹ Р±С‹С‚СЊ РїРѕР»РѕР¶РёС‚РµР»СЊРЅС‹РјРё С‡РёСЃР»Р°РјРё РёР»Рё РЅСѓР»С‘Рј.",
+            error: "Суммы тарифов должны быть положительными числами или нулём.",
 
 
 
@@ -66920,7 +66934,7 @@
 
 
 
-          error: "Р”РѕР±Р°РІСЊС‚Рµ С…РѕС‚СЏ Р±С‹ РѕРґРёРЅ С‚Р°СЂРёС„ РґР»СЏ Р·РѕРЅС‹ РґРѕСЃС‚Р°РІРєРё.",
+          error: "Добавьте хотя бы один тариф для зоны доставки.",
 
 
 
@@ -66984,7 +66998,7 @@
 
 
 
-        if (result.error === "Р”РѕР±Р°РІСЊС‚Рµ С…РѕС‚СЏ Р±С‹ РѕРґРёРЅ С‚Р°СЂРёС„ РґР»СЏ Р·РѕРЅС‹ РґРѕСЃС‚Р°РІРєРё.") {
+        if (result.error === "Добавьте хотя бы один тариф для зоны доставки.") {
 
 
 
@@ -66996,7 +67010,7 @@
 
 
 
-            error: "Р”РѕР±Р°РІСЊС‚Рµ С…РѕС‚СЏ Р±С‹ РѕРґРёРЅ С‚Р°СЂРёС„ РґР»СЏ РѕР±С‰РµР№ РґРѕСЃС‚Р°РІРєРё.",
+            error: "Добавьте хотя бы один тариф для общей доставки.",
 
 
 
@@ -67060,7 +67074,7 @@
 
 
 
-        return { ok: false, error: "Р’РІРµРґРёС‚Рµ РЅР°Р·РІР°РЅРёРµ Р·РѕРЅС‹ РґРѕСЃС‚Р°РІРєРё.", focus: settingsDeliveryZoneName };
+        return { ok: false, error: "Введите название зоны доставки.", focus: settingsDeliveryZoneName };
 
 
 
@@ -67080,7 +67094,7 @@
 
 
 
-        return { ok: false, error: "Р’С‹Р±РµСЂРёС‚Рµ С…РѕС‚СЏ Р±С‹ РѕРґРёРЅ С„РёР»РёР°Р» РґР»СЏ Р·РѕРЅС‹.", focus: deliveryZoneStoresList };
+        return { ok: false, error: "Выберите хотя бы один филиал для зоны.", focus: deliveryZoneStoresList };
 
 
 
@@ -67124,7 +67138,7 @@
 
 
 
-          error: "Р—Р°РІРµСЂС€РёС‚Рµ С‚РµРєСѓС‰РёР№ РєРѕРЅС‚СѓСЂ С‡РµСЂРµР· РїРѕСЃР»РµРґРЅСЋСЋ С‚РѕС‡РєСѓ РёР»Рё РѕС‡РёСЃС‚РёС‚Рµ РµРіРѕ.",
+          error: "Завершите текущий контур через последнюю точку или очистите его.",
 
 
 
@@ -67152,7 +67166,7 @@
 
 
 
-        return { ok: false, error: "РџРѕСЃС‚Р°РІСЊС‚Рµ С‚РѕС‡РєРё РЅР° РєР°СЂС‚Рµ Рё Р·Р°РІРµСЂС€РёС‚Рµ РєРѕРЅС‚СѓСЂ С‡РµСЂРµР· РїРѕСЃР»РµРґРЅСЋСЋ С‚РѕС‡РєСѓ.", focus: settingsDeliveryMapBlock };
+        return { ok: false, error: "Поставьте точки на карте и завершите контур через последнюю точку.", focus: settingsDeliveryMapBlock };
 
 
 
@@ -67164,7 +67178,7 @@
 
 
 
-        return { ok: false, error: "РќР°СЂРёСЃСѓР№С‚Рµ С…РѕС‚СЏ Р±С‹ РѕРґРёРЅ РїРѕР»РёРіРѕРЅ РЅР° РєР°СЂС‚Рµ.", focus: settingsDeliveryMapBlock };
+        return { ok: false, error: "Нарисуйте хотя бы один полигон на карте.", focus: settingsDeliveryMapBlock };
 
 
 
@@ -67188,7 +67202,7 @@
 
 
 
-        return { ok: false, error: "Р’СЂРµРјСЏ РґРѕСЃС‚Р°РІРєРё РґРѕР»Р¶РЅРѕ Р±С‹С‚СЊ РїРѕР»РѕР¶РёС‚РµР»СЊРЅС‹Рј С‡РёСЃР»РѕРј.", focus: settingsDeliveryZoneEtaMinutes };
+        return { ok: false, error: "Время доставки должно быть положительным числом.", focus: settingsDeliveryZoneEtaMinutes };
 
 
 
@@ -67372,7 +67386,7 @@
 
 
 
-          alert("Р—РѕРЅС‹ РґРѕСЃС‚Р°РІРєРё РґРѕСЃС‚СѓРїРЅС‹ С‚РѕР»СЊРєРѕ РєРѕРіРґР° РІРєР»СЋС‡РµРЅС‹ РєР°СЂС‚Р° Рё СЃРµСЂРІРёСЃ РїРѕР»РёРіРѕРЅРѕРІ.");
+          alert("Зоны доставки доступны только когда включены карта и сервис полигонов.");
 
 
 
@@ -68456,7 +68470,7 @@
 
 
 
-          alert("РЎРЅР°С‡Р°Р»Р° РІС‹Р±РµСЂРёС‚Рµ РїРѕР»РёРіРѕРЅ Р·РѕРЅС‹ РЅР° РєР°СЂС‚Рµ.");
+          alert("Сначала выберите полигон зоны на карте.");
 
 
 
@@ -68560,7 +68574,7 @@
 
 
 
-          alert("Р”Р»СЏ Р·Р°РІРµСЂС€РµРЅРёСЏ Р·РѕРЅС‹ РЅСѓР¶РЅРѕ РїРѕСЃС‚Р°РІРёС‚СЊ РјРёРЅРёРјСѓРј 3 С‚РѕС‡РєРё.");
+          alert("Для завершения зоны нужно поставить минимум 3 точки.");
 
 
 
@@ -68688,7 +68702,7 @@
 
 
 
-        if (!confirm("РЈРґР°Р»РёС‚СЊ СЌС‚Сѓ Р·РѕРЅСѓ РґРѕСЃС‚Р°РІРєРё?")) return;
+        if (!confirm("Удалить эту зону доставки?")) return;
 
 
 
@@ -68700,7 +68714,7 @@
 
 
 
-          alert("РќРµ СѓРґР°Р»РѕСЃСЊ СѓРґР°Р»РёС‚СЊ Р·РѕРЅСѓ РґРѕСЃС‚Р°РІРєРё.");
+          alert("Не удалось удалить зону доставки.");
 
 
 
@@ -68744,7 +68758,7 @@
 
 
 
-          alert(saveState.error || "РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕРґРіРѕС‚РѕРІРёС‚СЊ Р·РѕРЅСѓ РґРѕСЃС‚Р°РІРєРё.");
+          alert(saveState.error || "Не удалось подготовить зону доставки.");
 
 
 
@@ -68764,7 +68778,7 @@
 
 
 
-        const idleText = settingsDeliveryZoneSaveText ? settingsDeliveryZoneSaveText.textContent : "РЎРѕС…СЂР°РЅРёС‚СЊ";
+        const idleText = settingsDeliveryZoneSaveText ? settingsDeliveryZoneSaveText.textContent : "Сохранить";
 
 
 
@@ -68772,7 +68786,7 @@
 
 
 
-        if (settingsDeliveryZoneSaveText) settingsDeliveryZoneSaveText.textContent = "РЎРѕС…СЂР°РЅРµРЅРёРµ...";
+        if (settingsDeliveryZoneSaveText) settingsDeliveryZoneSaveText.textContent = "Сохранение...";
 
 
 
@@ -68812,11 +68826,11 @@
 
 
 
-              ? "РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕР·РґР°С‚СЊ Р·РѕРЅСѓ РґРѕСЃС‚Р°РІРєРё."
+              ? "Не удалось создать зону доставки."
 
 
 
-              : "РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕС…СЂР°РЅРёС‚СЊ РёР·РјРµРЅРµРЅРёСЏ Р·РѕРЅС‹.");
+              : "Не удалось сохранить изменения зоны.");
 
 
 
@@ -68936,7 +68950,7 @@
 
 
 
-          if (settingsDeliveryZoneSaveText) settingsDeliveryZoneSaveText.textContent = idleText || "РЎРѕС…СЂР°РЅРёС‚СЊ";
+          if (settingsDeliveryZoneSaveText) settingsDeliveryZoneSaveText.textContent = idleText || "Сохранить";
 
 
 
@@ -69064,7 +69078,7 @@
 
 
 
-        if (!confirm("РЈРґР°Р»РёС‚СЊ СЌС‚Сѓ Р·РѕРЅСѓ РґРѕСЃС‚Р°РІРєРё?")) return;
+        if (!confirm("Удалить эту зону доставки?")) return;
 
 
 
@@ -69076,7 +69090,7 @@
 
 
 
-          alert("РќРµ СѓРґР°Р»РѕСЃСЊ СѓРґР°Р»РёС‚СЊ Р·РѕРЅСѓ РґРѕСЃС‚Р°РІРєРё.");
+          alert("Не удалось удалить зону доставки.");
 
 
 
@@ -69276,7 +69290,7 @@
 
 
 
-            alert("РќРµ СѓРґР°Р»РѕСЃСЊ РѕС‚РјРµРЅРёС‚СЊ РёР·РјРµРЅРµРЅРёСЏ Р·РІСѓРєРѕРІ.");
+            alert("Не удалось отменить изменения звуков.");
 
 
 
@@ -69368,7 +69382,7 @@
 
 
 
-        const idleText = String(settingsSoundsSaveBtn.textContent || "РЎРѕС…СЂР°РЅРёС‚СЊ");
+        const idleText = String(settingsSoundsSaveBtn.textContent || "Сохранить");
 
 
 
@@ -69376,7 +69390,7 @@
 
 
 
-        settingsSoundsSaveBtn.textContent = "РЎРѕС…СЂР°РЅРµРЅРёРµ...";
+        settingsSoundsSaveBtn.textContent = "Сохранение...";
 
 
 
@@ -69396,7 +69410,7 @@
 
 
 
-            alert("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕС…СЂР°РЅРёС‚СЊ Р·РІСѓРєРё.");
+            alert("Не удалось сохранить звуки.");
 
 
 
@@ -69436,7 +69450,7 @@
 
 
 
-          settingsSoundsSaveBtn.textContent = idleText || "РЎРѕС…СЂР°РЅРёС‚СЊ";
+          settingsSoundsSaveBtn.textContent = idleText || "Сохранить";
 
 
 
@@ -70448,7 +70462,7 @@
 
 
 
-        imagesSaveBtn.textContent = "РЎРѕС…СЂР°РЅРµРЅРёРµ...";
+        imagesSaveBtn.textContent = "Сохранение...";
 
 
 
@@ -70460,7 +70474,7 @@
 
 
 
-        imagesSaveBtn.textContent = "РЎРѕС…СЂР°РЅРёС‚СЊ";
+        imagesSaveBtn.textContent = "Сохранить";
 
 
 
