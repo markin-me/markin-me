@@ -24,6 +24,7 @@
   const SHARED_ORDER_DETAILS_CACHE_TTL_MS = 15 * 60 * 1000;
   const SHARED_ORDER_DETAILS_CACHE_MAX = 400;
   const CHAT_MOBILE_VIEW_STORAGE_KEY = `dashboard:chat:mobile:view:v1:${tenantId}`;
+  const MARKETING_BANNERS_STORAGE_KEY = `dashboard:marketing:banners:v1:${tenantId}`;
 
   function writePersistedMobileChatView(view) {
     if (!document.body || !document.body.classList.contains("page-chat")) return String(view || "");
@@ -122,6 +123,1132 @@
     } catch {}
   }
 
+  function getBannerTypeMeta(type) {
+    const normalized = String(type || '').trim().toLowerCase();
+    if (normalized === 'feed') {
+      return {
+        key: 'feed',
+        title: 'Врезка в ленту',
+        singular: 'Врезка в ленту',
+        tabTitle: 'Новая врезка',
+        icon: 'fas fa-grip-lines',
+      };
+    }
+    if (normalized === 'small') {
+      return {
+        key: 'small',
+        title: 'Малый баннер',
+        singular: 'Малый баннер',
+        tabTitle: 'Новый малый баннер',
+        icon: 'fas fa-image',
+      };
+    }
+    return {
+      key: 'hero',
+      title: 'Главный',
+      singular: 'Главный баннер',
+      tabTitle: 'Новый главный баннер',
+      icon: 'fas fa-images',
+    };
+  }
+
+  const BANNER_ASPECT_RATIO_OPTIONS = [
+    { value: '1:1', width: 34, height: 34 },
+    { value: '2:3', width: 26, height: 39 },
+    { value: '3:2', width: 39, height: 26 },
+    { value: '3:4', width: 30, height: 40 },
+    { value: '4:3', width: 40, height: 30 },
+    { value: '16:9', width: 44, height: 25 },
+    { value: '9:16', width: 25, height: 44 },
+  ];
+
+  function getBannerAspectRatioOptions(type = state.activeBannerType) {
+    const bannerType = getBannerTypeMeta(type).key;
+    if (bannerType === 'feed') {
+      return BANNER_ASPECT_RATIO_OPTIONS.filter((item) => item.value === '16:9');
+    }
+    if (bannerType === 'small') {
+      return BANNER_ASPECT_RATIO_OPTIONS.filter((item) => item.value === '1:1');
+    }
+    return BANNER_ASPECT_RATIO_OPTIONS;
+  }
+
+  function getDefaultBannerAspectRatio(type = state.activeBannerType) {
+    return getBannerAspectRatioOptions(type)[0]?.value || '1:1';
+  }
+
+  function normalizeBannerAspectRatio(value, type = state.activeBannerType) {
+    const normalized = String(value || '').trim();
+    const allowed = getBannerAspectRatioOptions(type);
+    return allowed.some((item) => item.value === normalized)
+      ? normalized
+      : getDefaultBannerAspectRatio(type);
+  }
+
+  function getBannerAspectRatioDimensions(value, type = state.activeBannerType) {
+    const normalized = normalizeBannerAspectRatio(value, type);
+    return getBannerAspectRatioOptions(type).find((item) => item.value === normalized)
+      || BANNER_ASPECT_RATIO_OPTIONS.find((item) => item.value === normalized)
+      || BANNER_ASPECT_RATIO_OPTIONS[0];
+  }
+
+  function normalizeBannerTitlePosition(value) {
+    return String(value || '').trim().toLowerCase() === 'bottom' ? 'bottom' : 'top';
+  }
+
+  function normalizeBannerColor(value, fallback) {
+    const normalized = String(value || '').trim();
+    return /^#[0-9a-fA-F]{6}$/.test(normalized) ? normalized.toLowerCase() : fallback;
+  }
+
+  function normalizeBannerOpacity(value, fallback = 90) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return fallback;
+    return Math.max(0, Math.min(100, Math.round(parsed)));
+  }
+
+  function buildBannerTitleBackgroundColor(color, opacity) {
+    const hex = normalizeBannerColor(color, '#ffffff').replace('#', '');
+    const alpha = normalizeBannerOpacity(opacity, 90) / 100;
+    const r = parseInt(hex.slice(0, 2), 16);
+    const g = parseInt(hex.slice(2, 4), 16);
+    const b = parseInt(hex.slice(4, 6), 16);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+
+  function sanitizeBannerPhotoUrls(items) {
+    if (!Array.isArray(items)) return [];
+    return items
+      .map((item) => String(item || '').trim())
+      .filter(Boolean)
+      .slice(0, 10);
+  }
+
+  function sanitizeBannerPhotoSizesMap(items, allowedPhotos = []) {
+    const allowed = new Set(
+      (Array.isArray(allowedPhotos) ? allowedPhotos : [])
+        .map((item) => String(item || '').trim())
+        .filter(Boolean)
+    );
+    if (!items || typeof items !== 'object') return {};
+    return Object.entries(items).reduce((acc, [key, value]) => {
+      const url = String(key || '').trim();
+      const size = Number(value || 0);
+      if (!url || !allowed.has(url) || !Number.isFinite(size) || size <= 0) return acc;
+      acc[url] = size;
+      return acc;
+    }, {});
+  }
+
+  function formatBannerFileSize(bytes) {
+    const size = Number(bytes || 0);
+    if (!Number.isFinite(size) || size <= 0) return '';
+    if (size < 1024) return `${size} B`;
+    if (size < 1024 * 1024) return `${(size / 1024).toFixed(size < 10 * 1024 ? 1 : 0)} KB`;
+    return `${(size / (1024 * 1024)).toFixed(size < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+  }
+
+  async function apiUploadBannerImages(files) {
+    const token = localStorage.getItem('authToken');
+    const fd = new FormData();
+    files.forEach((file) => fd.append('images', file));
+    const headers = { 'x-tenant-id': String(tenantId) };
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const res = await fetch('/api/upload/product-images', {
+      method: 'POST',
+      headers,
+      body: fd,
+    });
+    if (res.status === 401) {
+      localStorage.removeItem('authToken');
+      localStorage.removeItem('user');
+      localStorage.removeItem('tenant');
+      window.location.href = '/login';
+      throw new Error('UNAUTHORIZED');
+    }
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data || data.ok === false) {
+      throw new Error((data && data.error) || `HTTP_${res.status}`);
+    }
+    return { urls: data.urls || [], sizes: data.sizes || [] };
+  }
+
+  function isLikelyBannerImageFile(file) {
+    if (!file) return false;
+    const mime = String(file.type || '').toLowerCase();
+    if (mime.startsWith('image/')) return true;
+    const name = String(file.name || '').toLowerCase();
+    return /\.(jpe?g|png|webp|gif|bmp|svg|heic|heif|avif)$/i.test(name);
+  }
+
+  function pickBannerImageFiles(input) {
+    return Array.from(input || []).filter((file) => isLikelyBannerImageFile(file));
+  }
+
+  function parseBannerImageUrlsFromText(text) {
+    if (!text || typeof text !== 'string') return [];
+    const result = [];
+    const seen = new Set();
+    const push = (value) => {
+      const raw = String(value || '').trim();
+      if (!raw || seen.has(raw)) return;
+      const low = raw.toLowerCase();
+      const isDataImage = low.startsWith('data:image/');
+      const isHttp = low.startsWith('http://') || low.startsWith('https://');
+      if (!(isDataImage || isHttp)) return;
+      seen.add(raw);
+      result.push(raw);
+    };
+    text.split(/\r?\n/).forEach(push);
+    const imgSrcRe = /<img[^>]+src=["']([^"']+)["']/gi;
+    let match;
+    while ((match = imgSrcRe.exec(text)) !== null) push(match[1]);
+    return result;
+  }
+
+  async function fetchBannerImageAsFile(url, idx = 0) {
+    try {
+      const res = await fetch(url, { credentials: 'omit', mode: 'cors' });
+      if (!res.ok) return null;
+      const blob = await res.blob();
+      if (!isLikelyBannerImageFile({ type: blob.type || '' })) return null;
+      const lowType = String(blob.type || '').toLowerCase();
+      const ext = lowType.includes('png')
+        ? 'png'
+        : lowType.includes('webp')
+          ? 'webp'
+          : lowType.includes('gif')
+            ? 'gif'
+            : 'jpg';
+      return new File([blob], `banner-drop-${Date.now()}-${idx}.${ext}`, { type: blob.type || 'image/jpeg' });
+    } catch {
+      return null;
+    }
+  }
+
+  const bannerFileFromItemEntry = (item) => new Promise((resolve) => {
+    try {
+      if (!item || typeof item.webkitGetAsEntry !== 'function') return resolve(null);
+      const entry = item.webkitGetAsEntry();
+      if (!entry || !entry.isFile || typeof entry.file !== 'function') return resolve(null);
+      entry.file(
+        (file) => resolve(file || null),
+        () => resolve(null)
+      );
+    } catch {
+      resolve(null);
+    }
+  });
+
+  async function extractBannerImagesFromDataTransfer(dt) {
+    try {
+      if (!dt) return [];
+      const anyFiles = Array.from(dt.files || []);
+      if (anyFiles.length) return anyFiles;
+      const direct = pickBannerImageFiles(dt.files || []);
+      if (direct.length) return direct;
+      const rawFiles = Array.from(dt.files || []).filter((file) => file && Number(file.size) > 0);
+      if (rawFiles.length) return rawFiles;
+      const items = Array.from(dt.items || []);
+      const itemFiles = items.map((item) => item && item.getAsFile && item.getAsFile()).filter((file) => isLikelyBannerImageFile(file));
+      if (itemFiles.length) return itemFiles;
+      const entryFiles = (await Promise.all(items.map((item) => bannerFileFromItemEntry(item)))).filter((file) => isLikelyBannerImageFile(file));
+      if (entryFiles.length) return entryFiles;
+      const payload = [];
+      const uriList = dt.getData && dt.getData('text/uri-list');
+      const plain = dt.getData && dt.getData('text/plain');
+      const html = dt.getData && dt.getData('text/html');
+      if (uriList) payload.push(uriList);
+      if (plain) payload.push(plain);
+      if (html) payload.push(html);
+      const urls = parseBannerImageUrlsFromText(payload.join('\n'));
+      if (!urls.length) return [];
+      const fetched = await Promise.all(urls.slice(0, 6).map((url, idx) => fetchBannerImageAsFile(url, idx)));
+      return fetched.filter((file) => isLikelyBannerImageFile(file));
+    } catch {
+      return [];
+    }
+  }
+
+  function extractBannerImagesFromClipboard(cb) {
+    try {
+      if (!cb) return [];
+      const direct = pickBannerImageFiles(cb.files || []);
+      if (direct.length) return direct;
+      const items = Array.from(cb.items || []);
+      return items.map((item) => item && item.getAsFile && item.getAsFile()).filter((file) => isLikelyBannerImageFile(file));
+    } catch {
+      return [];
+    }
+  }
+
+  function sanitizeBannerDrafts(items) {
+    if (!Array.isArray(items)) return [];
+    return items
+      .map((item) => {
+        const typeMeta = getBannerTypeMeta(item?.type);
+        const id = String(item?.id || '').trim();
+        if (!id) return null;
+        const title = String(item?.title || '').trim() || typeMeta.tabTitle;
+        const description = String(item?.description || '').trim();
+        const createdAt = Number(item?.createdAt || Date.now());
+        const aspectRatio = normalizeBannerAspectRatio(item?.aspectRatio, typeMeta.key);
+        const showTitleOnCard = item?.showTitleOnCard === true;
+        const titlePosition = normalizeBannerTitlePosition(item?.titlePosition);
+        const titleColor = normalizeBannerColor(item?.titleColor, '#1f2937');
+        const titleBackgroundEnabled = item?.titleBackgroundEnabled !== false;
+        const titleBackgroundColor = normalizeBannerColor(item?.titleBackgroundColor, '#ffffff');
+        const titleBackgroundOpacity = normalizeBannerOpacity(item?.titleBackgroundOpacity, 90);
+        const photos = sanitizeBannerPhotoUrls(item?.photos);
+        const photoSizes = sanitizeBannerPhotoSizesMap(item?.photoSizes, photos);
+        const stretchPhoto = item?.stretchPhoto === true;
+        return {
+          id,
+          type: typeMeta.key,
+          title,
+          description,
+          createdAt,
+          aspectRatio,
+          showTitleOnCard,
+          titlePosition,
+          titleColor,
+          titleBackgroundEnabled,
+          titleBackgroundColor,
+          titleBackgroundOpacity,
+          photos,
+          photoSizes,
+          stretchPhoto,
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => Number(b?.createdAt || 0) - Number(a?.createdAt || 0));
+  }
+
+  function createEmptyBannerPlacements() {
+    return { hero: [], feed: [], small: [] };
+  }
+
+  function sanitizeBannerPlacements(items, drafts = []) {
+    const source = items && typeof items === 'object' ? items : {};
+    const knownIds = new Set(
+      (Array.isArray(drafts) ? drafts : [])
+        .map((item) => String(item?.id || '').trim())
+        .filter(Boolean)
+    );
+    const next = createEmptyBannerPlacements();
+
+    Object.keys(next).forEach((type) => {
+      const seen = new Set();
+      const rawList = Array.isArray(source[type]) ? source[type] : [];
+      next[type] = rawList
+        .map((id) => String(id || '').trim())
+        .filter((id) => {
+          if (!id || !knownIds.has(id) || seen.has(id)) return false;
+          seen.add(id);
+          return true;
+        });
+    });
+
+    return next;
+  }
+
+  function readBannerStorage() {
+    try {
+      const raw = localStorage.getItem(MARKETING_BANNERS_STORAGE_KEY);
+      if (!raw) {
+        return { enabled: false, drafts: [], placements: createEmptyBannerPlacements() };
+      }
+      const parsed = JSON.parse(raw);
+      const drafts = sanitizeBannerDrafts(parsed?.drafts);
+      return {
+        enabled: parsed?.enabled === true,
+        drafts,
+        placements: sanitizeBannerPlacements(parsed?.placements, drafts),
+      };
+    } catch {
+      return { enabled: false, drafts: [], placements: createEmptyBannerPlacements() };
+    }
+  }
+
+  function persistBannerStorage() {
+    try {
+      const drafts = sanitizeBannerDrafts(state.bannersDrafts);
+      const placements = sanitizeBannerPlacements(state.bannerPlacements, drafts);
+      state.bannersDrafts = drafts;
+      state.bannerPlacements = placements;
+      localStorage.setItem(MARKETING_BANNERS_STORAGE_KEY, JSON.stringify({
+        enabled: state.bannersEnabled === true,
+        drafts,
+        placements,
+      }));
+    } catch {}
+  }
+
+  function loadBannerStorage() {
+    const stored = readBannerStorage();
+    state.bannersEnabled = stored.enabled;
+    state.bannersDrafts = stored.drafts;
+    state.bannerPlacements = stored.placements;
+  }
+
+  function getBannerDraftsByType(type = state.activeBannerType) {
+    const bannerType = getBannerTypeMeta(type).key;
+    return (Array.isArray(state.bannersDrafts) ? state.bannersDrafts : []).filter((item) => item.type === bannerType);
+  }
+
+  function getBannerDraftById(id) {
+    const targetId = String(id || '').trim();
+    if (!targetId) return null;
+    return (Array.isArray(state.bannersDrafts) ? state.bannersDrafts : []).find((item) => String(item?.id || '') === targetId) || null;
+  }
+
+  function getBannerPlacementsByType(type = state.activeBannerType) {
+    const bannerType = getBannerTypeMeta(type).key;
+    const placements = state.bannerPlacements && typeof state.bannerPlacements === 'object'
+      ? state.bannerPlacements
+      : createEmptyBannerPlacements();
+    return Array.isArray(placements[bannerType]) ? placements[bannerType] : [];
+  }
+
+  function getPlacedBannerDraftsByType(type = state.activeBannerType) {
+    return getBannerPlacementsByType(type)
+      .map((bannerId) => getBannerDraftById(bannerId))
+      .filter(Boolean);
+  }
+
+  function isBannerPlaced(bannerId, type = state.activeBannerType) {
+    const targetId = String(bannerId || '').trim();
+    if (!targetId) return false;
+    return getBannerPlacementsByType(type).includes(targetId);
+  }
+
+  function setBannerPlacementsByType(type, bannerIds) {
+    const meta = getBannerTypeMeta(type);
+    state.bannerPlacements = sanitizeBannerPlacements({
+      ...createEmptyBannerPlacements(),
+      ...(state.bannerPlacements && typeof state.bannerPlacements === 'object' ? state.bannerPlacements : {}),
+      [meta.key]: Array.isArray(bannerIds) ? bannerIds : [],
+    }, state.bannersDrafts);
+    persistBannerStorage();
+  }
+
+  function clearBannerDragState() {
+    state.bannerDragState = null;
+    if (elBannersPlacementTrack) {
+      elBannersPlacementTrack.querySelectorAll('.banner-placement-card').forEach((item) => {
+        item.classList.remove('is-dragging', 'is-drag-over');
+      });
+    }
+    if (elBannersList) {
+      elBannersList.classList.remove('is-drag-over');
+      elBannersList.querySelectorAll('.order-row').forEach((row) => {
+        row.classList.remove('is-dragging', 'is-drag-over');
+      });
+    }
+  }
+
+  function addBannerToPlacement(bannerId, insertIndex = null) {
+    const targetId = String(bannerId || '').trim();
+    if (!targetId) return;
+    const current = [...getBannerPlacementsByType()];
+    if (current.includes(targetId)) return;
+    if (typeof insertIndex === 'number' && insertIndex >= 0 && insertIndex <= current.length) {
+      current.splice(insertIndex, 0, targetId);
+    } else {
+      current.push(targetId);
+    }
+    setBannerPlacementsByType(state.activeBannerType, current);
+    renderBannerPlacement();
+    renderBannerList();
+  }
+
+  function removeBannerFromPlacement(bannerId) {
+    const targetId = String(bannerId || '').trim();
+    if (!targetId) return;
+    const current = getBannerPlacementsByType();
+    if (!current.includes(targetId)) return;
+    setBannerPlacementsByType(state.activeBannerType, current.filter((id) => id !== targetId));
+    renderBannerPlacement();
+    renderBannerList();
+  }
+
+  function updateBannerDraftAspectRatio(bannerId, aspectRatio) {
+    const targetId = String(bannerId || '').trim();
+    if (!targetId) return;
+    let changed = false;
+    state.bannersDrafts = sanitizeBannerDrafts(
+      state.bannersDrafts.map((item) => {
+        if (String(item?.id || '') !== targetId) return item;
+        const nextAspectRatio = normalizeBannerAspectRatio(aspectRatio, item?.type);
+        if (item?.aspectRatio === nextAspectRatio) return item;
+        changed = true;
+        return {
+          ...item,
+          aspectRatio: nextAspectRatio,
+        };
+      })
+    );
+    if (!changed) return;
+    persistBannerStorage();
+  }
+
+  function updateBannerDraftCardTitle(bannerId, title) {
+    const targetId = String(bannerId || '').trim();
+    if (!targetId) return;
+    let changed = false;
+    state.bannersDrafts = sanitizeBannerDrafts(
+      state.bannersDrafts.map((item) => {
+        if (String(item?.id || '') !== targetId) return item;
+        const nextTitle = String(title || '').trim() || getBannerTypeMeta(item?.type).tabTitle;
+        if (item?.title === nextTitle) return item;
+        changed = true;
+        return {
+          ...item,
+          title: nextTitle,
+        };
+      })
+    );
+    if (!changed) return;
+    persistBannerStorage();
+  }
+
+  function updateBannerDraftDescription(bannerId, description) {
+    const targetId = String(bannerId || '').trim();
+    if (!targetId) return;
+    let changed = false;
+    state.bannersDrafts = sanitizeBannerDrafts(
+      state.bannersDrafts.map((item) => {
+        if (String(item?.id || '') !== targetId) return item;
+        const nextDescription = String(description || '').trim();
+        if (item?.description === nextDescription) return item;
+        changed = true;
+        return {
+          ...item,
+          description: nextDescription,
+        };
+      })
+    );
+    if (!changed) return;
+    persistBannerStorage();
+  }
+
+  function updateBannerDraftTitleVisibility(bannerId, showTitleOnCard) {
+    const targetId = String(bannerId || '').trim();
+    if (!targetId) return;
+    let changed = false;
+    state.bannersDrafts = sanitizeBannerDrafts(
+      state.bannersDrafts.map((item) => {
+        if (String(item?.id || '') !== targetId) return item;
+        const nextValue = showTitleOnCard === true;
+        if (item?.showTitleOnCard === nextValue) return item;
+        changed = true;
+        return {
+          ...item,
+          showTitleOnCard: nextValue,
+        };
+      })
+    );
+    if (!changed) return;
+    persistBannerStorage();
+  }
+
+  function updateBannerDraftTitlePosition(bannerId, titlePosition) {
+    const targetId = String(bannerId || '').trim();
+    if (!targetId) return;
+    let changed = false;
+    state.bannersDrafts = sanitizeBannerDrafts(
+      state.bannersDrafts.map((item) => {
+        if (String(item?.id || '') !== targetId) return item;
+        const nextPosition = normalizeBannerTitlePosition(titlePosition);
+        if (item?.titlePosition === nextPosition) return item;
+        changed = true;
+        return {
+          ...item,
+          titlePosition: nextPosition,
+        };
+      })
+    );
+    if (!changed) return;
+    persistBannerStorage();
+  }
+
+  function updateBannerDraftTitleColor(bannerId, titleColor) {
+    const targetId = String(bannerId || '').trim();
+    if (!targetId) return;
+    let changed = false;
+    state.bannersDrafts = sanitizeBannerDrafts(
+      state.bannersDrafts.map((item) => {
+        if (String(item?.id || '') !== targetId) return item;
+        const nextColor = normalizeBannerColor(titleColor, '#1f2937');
+        if (item?.titleColor === nextColor) return item;
+        changed = true;
+        return {
+          ...item,
+          titleColor: nextColor,
+        };
+      })
+    );
+    if (!changed) return;
+    persistBannerStorage();
+  }
+
+  function updateBannerDraftTitleBackgroundEnabled(bannerId, titleBackgroundEnabled) {
+    const targetId = String(bannerId || '').trim();
+    if (!targetId) return;
+    let changed = false;
+    state.bannersDrafts = sanitizeBannerDrafts(
+      state.bannersDrafts.map((item) => {
+        if (String(item?.id || '') !== targetId) return item;
+        const nextValue = titleBackgroundEnabled === true;
+        if (item?.titleBackgroundEnabled === nextValue) return item;
+        changed = true;
+        return {
+          ...item,
+          titleBackgroundEnabled: nextValue,
+        };
+      })
+    );
+    if (!changed) return;
+    persistBannerStorage();
+  }
+
+  function updateBannerDraftTitleBackgroundColor(bannerId, titleBackgroundColor) {
+    const targetId = String(bannerId || '').trim();
+    if (!targetId) return;
+    let changed = false;
+    state.bannersDrafts = sanitizeBannerDrafts(
+      state.bannersDrafts.map((item) => {
+        if (String(item?.id || '') !== targetId) return item;
+        const nextColor = normalizeBannerColor(titleBackgroundColor, '#ffffff');
+        if (item?.titleBackgroundColor === nextColor) return item;
+        changed = true;
+        return {
+          ...item,
+          titleBackgroundColor: nextColor,
+        };
+      })
+    );
+    if (!changed) return;
+    persistBannerStorage();
+  }
+
+  function updateBannerDraftTitleBackgroundOpacity(bannerId, titleBackgroundOpacity) {
+    const targetId = String(bannerId || '').trim();
+    if (!targetId) return;
+    let changed = false;
+    state.bannersDrafts = sanitizeBannerDrafts(
+      state.bannersDrafts.map((item) => {
+        if (String(item?.id || '') !== targetId) return item;
+        const nextOpacity = normalizeBannerOpacity(titleBackgroundOpacity, 90);
+        if (item?.titleBackgroundOpacity === nextOpacity) return item;
+        changed = true;
+        return {
+          ...item,
+          titleBackgroundOpacity: nextOpacity,
+        };
+      })
+    );
+    if (!changed) return;
+    persistBannerStorage();
+  }
+
+  function updateBannerDraftPhotos(bannerId, updater) {
+    const targetId = String(bannerId || '').trim();
+    if (!targetId || typeof updater !== 'function') return null;
+    let changed = false;
+    let nextBanner = null;
+    state.bannersDrafts = sanitizeBannerDrafts(
+      state.bannersDrafts.map((item) => {
+        if (String(item?.id || '') !== targetId) return item;
+        const nextPhotos = sanitizeBannerPhotoUrls(updater(Array.isArray(item?.photos) ? item.photos.slice() : []));
+        const prevPhotos = sanitizeBannerPhotoUrls(item?.photos);
+        if (JSON.stringify(prevPhotos) === JSON.stringify(nextPhotos)) {
+          nextBanner = item;
+          return item;
+        }
+        changed = true;
+        nextBanner = {
+          ...item,
+          photos: nextPhotos,
+        };
+        return nextBanner;
+      })
+    );
+    if (!changed) return nextBanner;
+    persistBannerStorage();
+    return nextBanner;
+  }
+
+  function updateBannerDraftPhotoStretch(bannerId, stretchPhoto) {
+    const targetId = String(bannerId || '').trim();
+    if (!targetId) return null;
+    let changed = false;
+    let nextBanner = null;
+    state.bannersDrafts = sanitizeBannerDrafts(
+      state.bannersDrafts.map((item) => {
+        if (String(item?.id || '') !== targetId) return item;
+        const nextValue = stretchPhoto === true;
+        if (item?.stretchPhoto === nextValue) {
+          nextBanner = item;
+          return item;
+        }
+        changed = true;
+        nextBanner = {
+          ...item,
+          stretchPhoto: nextValue,
+        };
+        return nextBanner;
+      })
+    );
+    if (!changed) return nextBanner;
+    persistBannerStorage();
+    return nextBanner;
+  }
+
+  async function uploadBannerFilesNow(bannerId, files) {
+    const banner = getBannerDraftById(bannerId);
+    if (!banner) return;
+    const currentPhotos = Array.isArray(banner.photos) ? banner.photos : [];
+    const canAdd = Math.max(0, 10 - currentPhotos.length);
+    const selected = pickBannerImageFiles(files).slice(0, canAdd);
+    if (!selected.length) return;
+    const uploadResult = await apiUploadBannerImages(selected);
+    const urls = Array.isArray(uploadResult?.urls) ? uploadResult.urls.filter(Boolean) : [];
+    const sizes = Array.isArray(uploadResult?.sizes) ? uploadResult.sizes : [];
+    if (!urls.length) return;
+    state.bannersDrafts = sanitizeBannerDrafts(
+      state.bannersDrafts.map((item) => {
+        if (String(item?.id || '') !== String(bannerId || '').trim()) return item;
+        const nextPhotos = sanitizeBannerPhotoUrls([...(Array.isArray(item?.photos) ? item.photos : []), ...urls]);
+        const nextPhotoSizes = {
+          ...(item?.photoSizes && typeof item.photoSizes === 'object' ? item.photoSizes : {}),
+        };
+        urls.forEach((url, idx) => {
+          const normalizedUrl = String(url || '').trim();
+          const size = Number(sizes[idx] || 0);
+          if (normalizedUrl && Number.isFinite(size) && size > 0) {
+            nextPhotoSizes[normalizedUrl] = size;
+          }
+        });
+        return {
+          ...item,
+          photos: nextPhotos,
+          photoSizes: sanitizeBannerPhotoSizesMap(nextPhotoSizes, nextPhotos),
+        };
+      })
+    );
+    persistBannerStorage();
+  }
+
+  function syncBannerTabTitle(bannerId, title) {
+    const tab = tabsState.tabs.find((item) => item.key === buildTabKey('banner', bannerId));
+    if (!tab) return;
+    tab.title = String(title || '').trim() || 'Баннер';
+    renderTabs();
+  }
+
+  function renderBannerAspectRatioPicker(banner, isEditing = false) {
+    if (!bannerRatioRail || !bannerRatioField) return;
+    bannerRatioRail.innerHTML = '';
+
+    const current = banner && typeof banner === 'object' ? banner : getBannerDraftById(state.activeBannerId);
+    if (!current) {
+      bannerRatioField.classList.add('hidden');
+      return;
+    }
+
+    const options = getBannerAspectRatioOptions(current.type);
+    const selectedValue = normalizeBannerAspectRatio(current.aspectRatio, current.type);
+    const selectedTitlePosition = normalizeBannerTitlePosition(current.titlePosition);
+    bannerRatioField.classList.toggle('hidden', options.length === 0);
+
+    options.forEach((option) => {
+      const ratio = option.width / option.height;
+      const cardHeight = 104;
+      const cardWidth = Math.max(64, Math.round(cardHeight * ratio));
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'banner-ratio-option';
+      button.dataset.bannerRatio = option.value;
+      button.style.width = `${cardWidth}px`;
+      button.setAttribute('role', 'option');
+      button.setAttribute('aria-selected', String(selectedValue === option.value));
+      button.disabled = !isEditing;
+      button.classList.toggle('is-selected', selectedValue === option.value);
+      const showTitleSlots = current.showTitleOnCard === true;
+      button.innerHTML = `
+        ${showTitleSlots ? `<span class="banner-ratio-option-title-slot is-top ${selectedTitlePosition === 'top' && selectedValue === option.value ? 'is-selected' : ''}" data-title-position="top"></span>` : ''}
+        ${showTitleSlots ? `<span class="banner-ratio-option-title-slot is-bottom ${selectedTitlePosition === 'bottom' && selectedValue === option.value ? 'is-selected' : ''}" data-title-position="bottom"></span>` : ''}
+        <span class="banner-ratio-option-label">${escapeHtml(option.value)}</span>
+      `;
+      button.addEventListener('click', () => {
+        updateBannerDraftAspectRatio(current.id, option.value);
+        const nextBanner = getBannerDraftById(current.id);
+        renderBannerAspectRatioPicker(nextBanner, isEditing);
+        renderBannerPhotoRail(nextBanner, isEditing);
+        if (document.querySelector('.product-photo-grid-modal-overlay[data-banner-photo-modal="1"]')) {
+          openBannerPhotoModal(current.id);
+        }
+        renderBannerPlacement();
+        renderBannerList();
+      });
+      if (showTitleSlots) {
+        button.querySelectorAll('[data-title-position]').forEach((slot) => {
+          slot.addEventListener('click', (event) => {
+            if (!isEditing) return;
+            event.preventDefault();
+            event.stopPropagation();
+            updateBannerDraftAspectRatio(current.id, option.value);
+            updateBannerDraftTitlePosition(current.id, slot.dataset.titlePosition);
+            const nextBanner = getBannerDraftById(current.id);
+            renderBannerAspectRatioPicker(nextBanner, isEditing);
+            renderBannerPhotoRail(nextBanner, isEditing);
+            if (document.querySelector('.product-photo-grid-modal-overlay[data-banner-photo-modal="1"]')) {
+              openBannerPhotoModal(current.id);
+            }
+            renderBannerPlacement();
+          });
+        });
+      }
+      bannerRatioRail.appendChild(button);
+    });
+  }
+
+  function getBannerPhotoTileSize(banner, height = 132) {
+    const ratio = getBannerAspectRatioDimensions(banner?.aspectRatio, banner?.type);
+    const width = Math.max(72, Math.round(height * (ratio.width / ratio.height)));
+    return { width, height, ratio };
+  }
+
+  function closeBannerPhotoModal() {
+    document.querySelectorAll('.product-photo-grid-modal-overlay[data-banner-photo-modal="1"]').forEach((el) => el.remove());
+  }
+
+  function renderBannerPhotoRail(banner, isEditing = false) {
+    if (!bannerPhotoRail || !bannerPhotoField) return;
+    bannerPhotoRail.innerHTML = '';
+    const current = banner && typeof banner === 'object' ? banner : getBannerDraftById(state.activeBannerId);
+    if (!current) {
+      bannerPhotoField.classList.add('hidden');
+      return;
+    }
+    bannerPhotoField.classList.remove('hidden');
+    if (bannerPhotosInput) {
+      bannerPhotosInput.dataset.bannerId = String(current.id || '');
+    }
+    const photos = Array.isArray(current.photos) ? current.photos : [];
+    const tile = getBannerPhotoTileSize(current, 132);
+    const photoFit = current?.stretchPhoto === true ? 'cover' : 'contain';
+
+    photos.forEach((url, idx) => {
+      const item = document.createElement('div');
+      item.className = 'banner-photo-item';
+      item.dataset.photoIdx = String(idx);
+      item.draggable = isEditing;
+      item.style.width = `${tile.width}px`;
+      const dragAttr = isEditing ? ' draggable="true"' : '';
+      item.innerHTML = `
+        <div class="banner-photo-tile"${dragAttr} style="width:${tile.width}px;height:${tile.height}px;">
+          <img src="${escapeHtml(url)}" alt="" style="object-fit:${photoFit};">
+          ${isEditing ? `<button type="button" class="banner-photo-remove" data-role="remove-photo" data-photo-idx="${idx}" aria-label="Удалить фото"><i class="fas fa-times"></i></button>` : ''}
+        </div>
+        <div class="banner-photo-size">${idx === 0 ? 'Превью' : ''}</div>
+      `;
+      if (isEditing) {
+        item.addEventListener('dragstart', (event) => {
+          item.classList.add('is-dragging');
+          if (event.dataTransfer) {
+            event.dataTransfer.effectAllowed = 'move';
+            event.dataTransfer.setData('text/plain', String(idx));
+          }
+        });
+        item.addEventListener('dragend', () => {
+          item.classList.remove('is-dragging');
+          bannerPhotoRail.querySelectorAll('.banner-photo-item').forEach((el) => el.classList.remove('is-drop-target'));
+        });
+        item.addEventListener('dragover', (event) => {
+          const dragIdx = Number(event.dataTransfer?.getData('text/plain'));
+          if (!Number.isFinite(dragIdx) || dragIdx === idx) return;
+          event.preventDefault();
+          if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+          item.classList.add('is-drop-target');
+        });
+        item.addEventListener('dragleave', () => item.classList.remove('is-drop-target'));
+        item.addEventListener('drop', (event) => {
+          const dragIdx = Number(event.dataTransfer?.getData('text/plain'));
+          item.classList.remove('is-drop-target');
+          if (!Number.isFinite(dragIdx) || dragIdx < 0 || dragIdx === idx) return;
+          event.preventDefault();
+          updateBannerDraftPhotos(current.id, (items) => {
+            const next = items.slice();
+            const [moved] = next.splice(dragIdx, 1);
+            next.splice(idx, 0, moved);
+            return next;
+          });
+          const nextBanner = getBannerDraftById(current.id);
+          renderBannerPhotoRail(nextBanner, isEditing);
+          renderBannerPlacement();
+        });
+      }
+      bannerPhotoRail.appendChild(item);
+    });
+
+    if (isEditing && photos.length < 10) {
+      const addBtn = document.createElement('button');
+      addBtn.type = 'button';
+      addBtn.className = 'banner-photo-tile banner-photo-tile--add';
+      addBtn.style.width = `${tile.width}px`;
+      addBtn.style.height = `${tile.height}px`;
+      addBtn.setAttribute('aria-label', 'Добавить фото');
+      addBtn.innerHTML = '<i class="fas fa-plus"></i>';
+      addBtn.addEventListener('click', () => openBannerPhotoModal(current.id));
+      addBtn.addEventListener('dragover', (event) => {
+        const dt = event.dataTransfer;
+        const hasFiles = !!dt && ((dt.files && dt.files.length > 0) || Array.from(dt.types || []).includes('Files'));
+        if (!hasFiles) return;
+        event.preventDefault();
+        if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+        addBtn.classList.add('is-drag-over');
+      });
+      addBtn.addEventListener('dragleave', () => addBtn.classList.remove('is-drag-over'));
+      addBtn.addEventListener('drop', async (event) => {
+        event.preventDefault();
+        addBtn.classList.remove('is-drag-over');
+        const files = await extractBannerImagesFromDataTransfer(event.dataTransfer);
+        if (!files.length) return;
+        try {
+          await uploadBannerFilesNow(current.id, files);
+          const nextBanner = getBannerDraftById(current.id);
+          renderBannerPhotoRail(nextBanner, isEditing);
+          renderBannerPlacement();
+        } catch {
+          alert('Ошибка загрузки фотографий');
+        }
+      });
+      bannerPhotoRail.appendChild(addBtn);
+    }
+
+    bannerPhotoRail.onclick = (event) => {
+      const removeBtn = event.target.closest('[data-role="remove-photo"]');
+      if (removeBtn) {
+        if (!isEditing) return;
+        const idx = Number(removeBtn.getAttribute('data-photo-idx'));
+        if (!Number.isFinite(idx) || idx < 0) return;
+        updateBannerDraftPhotos(current.id, (items) => items.filter((_, itemIdx) => itemIdx !== idx));
+        const nextBanner = getBannerDraftById(current.id);
+        renderBannerPhotoRail(nextBanner, isEditing);
+        renderBannerPlacement();
+        return;
+      }
+      const photoTile = event.target.closest('.banner-photo-tile');
+      if (photoTile && !photoTile.classList.contains('banner-photo-tile--add')) {
+        openBannerPhotoModal(current.id);
+      }
+    };
+  }
+
+  function openBannerPhotoModal(bannerId = state.activeBannerId) {
+    const banner = getBannerDraftById(bannerId);
+    if (!banner) return;
+    if (bannerPhotosInput) {
+      bannerPhotosInput.dataset.bannerId = String(banner.id || '');
+    }
+    closeBannerPhotoModal();
+    const overlay = document.createElement('div');
+    overlay.className = 'product-photo-grid-modal-overlay';
+    overlay.setAttribute('data-banner-photo-modal', '1');
+    const card = document.createElement('div');
+    card.className = 'product-photo-grid-modal-card';
+    card.innerHTML = `
+      <div class="product-photo-grid-modal-head">
+        <div class="product-photo-grid-modal-title">Фото баннера</div>
+        <button type="button" class="product-photo-grid-modal-close" aria-label="Закрыть"><i class="fas fa-times"></i></button>
+      </div>
+      <div class="product-photo-grid-modal-body">
+        <div class="product-photo-grid-modal-grid banner-photo-modal-grid"></div>
+      </div>
+      <div class="product-photo-grid-modal-foot">
+        <button type="button" class="btn" data-role="close">Закрыть</button>
+      </div>
+    `;
+    const grid = card.querySelector('.banner-photo-modal-grid');
+    const modalBody = card.querySelector('.product-photo-grid-modal-body');
+    if (modalBody) {
+      const dropHint = document.createElement('div');
+      dropHint.className = 'product-photo-grid-modal-drop-hint';
+      dropHint.textContent = 'Перетащите фото сюда или отпустите для загрузки';
+      modalBody.appendChild(dropHint);
+    }
+    const renderGrid = () => {
+      const current = getBannerDraftById(bannerId);
+      if (!grid || !current) return;
+      grid.innerHTML = '';
+      const photos = Array.isArray(current.photos) ? current.photos : [];
+      const photoSizes = current?.photoSizes && typeof current.photoSizes === 'object' ? current.photoSizes : {};
+      const tile = getBannerPhotoTileSize(current, 132);
+      const photoFit = current?.stretchPhoto === true ? 'cover' : 'contain';
+      photos.forEach((url, idx) => {
+        const item = document.createElement('div');
+        item.className = 'product-photo-grid-modal-item banner-photo-modal-item';
+        item.dataset.photoIdx = String(idx);
+        item.draggable = true;
+        item.style.width = `${tile.width}px`;
+        item.innerHTML = `
+          <div class="product-photo-grid-modal-tile banner-photo-modal-tile" style="width:${tile.width}px;height:${tile.height}px;" draggable="true">
+            <img src="${escapeHtml(url)}" alt="" style="object-fit:${photoFit};">
+            <button type="button" class="product-photo-grid-modal-remove" data-role="remove-photo" data-photo-idx="${idx}" aria-label="Удалить фото"><i class="fas fa-times"></i></button>
+          </div>
+          <div class="product-photo-grid-modal-size">${[idx === 0 ? 'Превью' : '', formatBannerFileSize(photoSizes[url])].filter(Boolean).join(' • ')}</div>
+        `;
+        grid.appendChild(item);
+      });
+      if (photos.length < 10) {
+        const addBtn = document.createElement('button');
+        addBtn.type = 'button';
+        addBtn.className = 'product-photo-grid-modal-tile product-photo-grid-modal-tile--add banner-photo-modal-tile';
+        addBtn.setAttribute('data-role', 'add-photo');
+        addBtn.style.width = `${tile.width}px`;
+        addBtn.style.height = `${tile.height}px`;
+        addBtn.innerHTML = '<i class="fas fa-plus"></i>';
+        grid.appendChild(addBtn);
+      }
+    };
+
+    let externalDragDepth = 0;
+    const hasExternalFilePayload = (dt) => {
+      if (!dt) return false;
+      const types = Array.from(dt.types || []).map((t) => String(t));
+      if (dt.files && dt.files.length > 0) return true;
+      return types.includes('Files') || types.includes('application/x-moz-file') || types.includes('public.file-url');
+    };
+    const setFileDragState = (active) => card.classList.toggle('is-file-drag-over', !!active);
+    const clearFileDragState = () => {
+      externalDragDepth = 0;
+      setFileDragState(false);
+    };
+    const onFileDragEnter = (event) => {
+      if (!hasExternalFilePayload(event.dataTransfer)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      externalDragDepth += 1;
+      setFileDragState(true);
+    };
+    const onFileDragOver = (event) => {
+      if (!hasExternalFilePayload(event.dataTransfer)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+      setFileDragState(true);
+    };
+    const onFileDragLeave = (event) => {
+      if (!hasExternalFilePayload(event.dataTransfer)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      externalDragDepth = Math.max(0, externalDragDepth - 1);
+      if (!externalDragDepth) setFileDragState(false);
+    };
+    const onFileDrop = async (event) => {
+      if (!hasExternalFilePayload(event.dataTransfer)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      clearFileDragState();
+      try {
+        const files = await extractBannerImagesFromDataTransfer(event.dataTransfer);
+        if (!files.length) return;
+        await uploadBannerFilesNow(bannerId, files);
+        renderGrid();
+        renderBannerPhotoRail(getBannerDraftById(bannerId), true);
+        renderBannerPlacement();
+      } catch {
+        alert('Ошибка загрузки фотографий');
+      }
+    };
+
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+    renderGrid();
+    const onClose = () => closeBannerPhotoModal();
+    card.querySelector('.product-photo-grid-modal-close')?.addEventListener('click', onClose);
+    card.querySelector('[data-role="close"]')?.addEventListener('click', onClose);
+    overlay.addEventListener('click', (event) => { if (event.target === overlay) onClose(); });
+    overlay.addEventListener('dragenter', onFileDragEnter, true);
+    card.addEventListener('dragenter', onFileDragEnter, true);
+    overlay.addEventListener('dragover', onFileDragOver);
+    card.addEventListener('dragover', onFileDragOver);
+    overlay.addEventListener('dragleave', onFileDragLeave, true);
+    card.addEventListener('dragleave', onFileDragLeave, true);
+    overlay.addEventListener('drop', onFileDrop);
+    card.addEventListener('drop', onFileDrop);
+
+    let dragPhotoIdx = -1;
+    grid?.addEventListener('dragstart', (event) => {
+      const item = event.target.closest?.('.banner-photo-modal-item[data-photo-idx]');
+      if (!item) return;
+      const idx = Number(item.getAttribute('data-photo-idx'));
+      if (!Number.isFinite(idx) || idx < 0) return;
+      dragPhotoIdx = idx;
+      item.classList.add('is-dragging');
+      if (event.dataTransfer) {
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('text/plain', String(idx));
+      }
+    });
+    grid?.addEventListener('dragover', (event) => {
+      if (dragPhotoIdx < 0) return;
+      const item = event.target.closest?.('.banner-photo-modal-item[data-photo-idx]');
+      if (!item) return;
+      const idx = Number(item.getAttribute('data-photo-idx'));
+      if (!Number.isFinite(idx) || idx < 0 || idx === dragPhotoIdx) return;
+      event.preventDefault();
+      item.classList.add('is-drop-target');
+    });
+    grid?.addEventListener('dragleave', (event) => {
+      const item = event.target.closest?.('.banner-photo-modal-item[data-photo-idx]');
+      if (!item) return;
+      item.classList.remove('is-drop-target');
+    });
+    grid?.addEventListener('drop', (event) => {
+      const item = event.target.closest?.('.banner-photo-modal-item[data-photo-idx]');
+      if (!item) return;
+      const dropIdx = Number(item.getAttribute('data-photo-idx'));
+      item.classList.remove('is-drop-target');
+      if (!Number.isFinite(dragPhotoIdx) || dragPhotoIdx < 0 || !Number.isFinite(dropIdx) || dropIdx < 0 || dragPhotoIdx === dropIdx) return;
+      event.preventDefault();
+      updateBannerDraftPhotos(bannerId, (items) => {
+        const next = items.slice();
+        const [moved] = next.splice(dragPhotoIdx, 1);
+        next.splice(dropIdx, 0, moved);
+        return next;
+      });
+      dragPhotoIdx = -1;
+      renderGrid();
+      renderBannerPhotoRail(getBannerDraftById(bannerId), true);
+      renderBannerPlacement();
+    });
+    grid?.addEventListener('dragend', () => {
+      dragPhotoIdx = -1;
+      clearFileDragState();
+      grid.querySelectorAll('.banner-photo-modal-item.is-dragging').forEach((el) => el.classList.remove('is-dragging'));
+      grid.querySelectorAll('.banner-photo-modal-item.is-drop-target').forEach((el) => el.classList.remove('is-drop-target'));
+    });
+    card.addEventListener('click', (event) => {
+      const removeBtn = event.target.closest?.('[data-role="remove-photo"]');
+      if (removeBtn) {
+        const idx = Number(removeBtn.getAttribute('data-photo-idx'));
+        if (Number.isFinite(idx) && idx >= 0) {
+          updateBannerDraftPhotos(bannerId, (items) => items.filter((_, itemIdx) => itemIdx !== idx));
+          renderGrid();
+          renderBannerPhotoRail(getBannerDraftById(bannerId), true);
+          renderBannerPlacement();
+        }
+        return;
+      }
+      if (event.target.closest?.('[data-role="add-photo"]') && bannerPhotosInput) {
+        bannerPhotosInput.click();
+      }
+    });
+  }
+
   // -----------------------------
   // DOM
   // -----------------------------
@@ -137,6 +1264,8 @@
   const elSortToggle = $("#clientsSortToggle");
   const elSortDropdown = $("#clientsSortDropdown");
   const elSortWrap = $("#clientsSortWrap");
+  const elBannersSwitchWrap = $("#clientsBannersSwitchWrap");
+  const elBannersEnabledSwitch = $("#clientsBannersEnabledSwitch");
   const elAddBtn = $("#clientsAddBtn");
   const elOpenFilterCategoriesBtn = $("#openFilterCategoriesBtn");
   const elClientsScroll = elList ? elList.closest(".panel-body") : null;
@@ -145,9 +1274,31 @@
   const elDiscountsFilters = $("#discountsFiltersList");
   const elAddDiscountBtn = $("#addDiscountBtn");
 
+  // Banners accordion
+  const elBannersFilters = $("#bannersFiltersList");
+  if (elBannersFilters) {
+    const bannerAccordionTitle = elBannersFilters.closest('.acc-item')?.querySelector('[data-acc-trigger] .stage-text b');
+    if (bannerAccordionTitle) {
+      bannerAccordionTitle.textContent = 'Баннеры';
+    }
+  }
+
   // Discounts view elements
   const elDiscountsList = $("#discountsList");
   const elDiscountsEmptyHint = $("#discountsEmptyHint");
+  const elBannersList = $("#bannersList");
+  const elBannersEmptyHint = $("#bannersEmptyHint");
+  const elBannersPlacementZone = $("#bannersPlacementZone");
+  const elBannersPlacementTrack = $("#bannersPlacementTrack");
+  const elBannerPickerOverlay = $("#bannerPickerOverlay");
+  const elBannerPickerBackdrop = $("#bannerPickerBackdrop");
+  const elBannerPickerTitle = $("#bannerPickerTitle");
+  const elBannerPickerSubtitle = $("#bannerPickerSubtitle");
+  const elBannerPickerList = $("#bannerPickerList");
+  const elBannerPickerEmptyHint = $("#bannerPickerEmptyHint");
+  const elBannerPickerCloseBtn = $("#bannerPickerCloseBtn");
+  const elBannerPickerCancelBtn = $("#bannerPickerCancelBtn");
+  const elBannerPickerSaveBtn = $("#bannerPickerSaveBtn");
   const elDiscountEmpty = $("#discountEmpty");
   const elDiscountEditorWrap = $("#discountEditorWrap");
   const elDiscountEditorForm = $("#discountEditorForm");
@@ -371,11 +1522,91 @@
   const clientTabsHeader = right$("#clientTabsHeader");
   const clientTabs = right$("#clientTabs");
   const clientEmpty = right$("#clientEmpty");
+  const bannerEmpty = right$("#bannerEmpty");
+  const bannerInfoWrap = right$("#bannerInfoWrap");
+  const bannerInfoFooter = right$("#bannerInfoFooter");
+  const bannerInfoTitle = right$("#bannerInfoTitle");
+  const bannerInfoMeta = right$("#bannerInfoMeta");
+  const bannerInfoText = right$("#bannerInfoText");
+  const bannerTitleInput = right$("#bannerTitleInput");
+  const bannerDescriptionInput = right$("#bannerDescriptionInput");
+  const bannerTitleSettingsBtn = right$("#bannerTitleSettingsBtn");
+  const bannerTitlePopover = right$("#bannerTitlePopover");
+  const bannerTitleOnCardSwitch = right$("#bannerTitleOnCardSwitch");
+  const bannerTitleColorInput = right$("#bannerTitleColorInput");
+  const bannerTitleBackgroundSwitch = right$("#bannerTitleBackgroundSwitch");
+  const bannerTitleBackgroundColorInput = right$("#bannerTitleBackgroundColorInput");
+  const bannerTitleBackgroundOpacityInput = right$("#bannerTitleBackgroundOpacityInput");
+  const bannerTitleBackgroundOpacityValue = right$("#bannerTitleBackgroundOpacityValue");
+  const bannerRatioField = right$("#bannerRatioField");
+  const bannerRatioFieldLabel = right$("#bannerRatioFieldLabel");
+  const bannerRatioRail = right$("#bannerRatioRail");
+  const bannerPhotoField = right$("#bannerPhotoField");
+  const bannerPhotoFieldLabel = right$("#bannerPhotoFieldLabel");
+  const bannerPhotoStretchSwitch = right$("#bannerPhotoStretchSwitch");
+  const bannerPhotoRail = right$("#bannerPhotoRail");
+  const bannerPhotosInput = right$("#bannerPhotosInput");
+  const bannerInfoDeleteBtn = right$("#bannerInfoDeleteBtn");
+  const bannerInfoEditBtn = right$("#bannerInfoEditBtn");
   const clientInfoWrap = right$("#clientInfoWrap");
   const clientOrderInfoWrap = right$("#clientOrderInfoWrap");
   const clientOrderInfoFooter = right$("#clientOrderInfoFooter");
   const clientBenefitsFooter = right$("#clientBenefitsFooter");
   const clientBenefitsOpenBtn = right$("#clientBenefitsOpenBtn");
+
+  if (bannerEmpty) {
+    const emptyTitle = bannerEmpty.querySelector('.empty-title');
+    const emptyText = bannerEmpty.querySelector('.empty-text');
+    if (emptyTitle) emptyTitle.textContent = 'Выберите баннер';
+    if (emptyText) emptyText.textContent = 'Нажмите на баннер слева или создайте новый';
+  }
+  if (bannerInfoTitle) bannerInfoTitle.textContent = 'Новый баннер';
+  if (bannerInfoMeta) bannerInfoMeta.textContent = 'Главный баннер';
+  if (bannerInfoText) bannerInfoText.textContent = 'Содержимое блока появится здесь.';
+  if (bannerTitleInput) bannerTitleInput.placeholder = 'Название';
+  if (bannerDescriptionInput) bannerDescriptionInput.placeholder = 'Описание';
+  if (bannerTitleColorInput) bannerTitleColorInput.value = '#1f2937';
+  if (bannerTitleBackgroundColorInput) bannerTitleBackgroundColorInput.value = '#ffffff';
+  if (bannerTitleBackgroundOpacityInput) bannerTitleBackgroundOpacityInput.value = '90';
+  if (bannerTitleBackgroundOpacityValue) bannerTitleBackgroundOpacityValue.textContent = '90%';
+  if (bannerRatioFieldLabel) {
+    bannerRatioFieldLabel.textContent = '\u0421\u043e\u043e\u0442\u043d\u043e\u0448\u0435\u043d\u0438\u0435 \u0441\u0442\u043e\u0440\u043e\u043d';
+  }
+  if (bannerPhotoFieldLabel) {
+    bannerPhotoFieldLabel.textContent = 'Фото';
+  }
+  if (bannerRatioRail) {
+    bannerRatioRail.addEventListener('wheel', (event) => {
+      if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+      if (bannerRatioRail.scrollWidth <= bannerRatioRail.clientWidth) return;
+      event.preventDefault();
+      bannerRatioRail.scrollLeft += event.deltaY;
+    }, { passive: false });
+  }
+
+  if (elBannersPlacementTrack) {
+    elBannersPlacementTrack.addEventListener('wheel', (event) => {
+      if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+      if (elBannersPlacementTrack.scrollWidth <= elBannersPlacementTrack.clientWidth) return;
+      event.preventDefault();
+      elBannersPlacementTrack.scrollLeft += event.deltaY;
+    }, { passive: false });
+  }
+  if (bannerPhotoRail) {
+    bannerPhotoRail.addEventListener('wheel', (event) => {
+      if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+      if (bannerPhotoRail.scrollWidth <= bannerPhotoRail.clientWidth) return;
+      event.preventDefault();
+      bannerPhotoRail.scrollLeft += event.deltaY;
+    }, { passive: false });
+  }
+  if (bannerInfoDeleteBtn) {
+    bannerInfoDeleteBtn.title = 'Удалить';
+    bannerInfoDeleteBtn.setAttribute('aria-label', 'Удалить');
+  }
+  if (bannerInfoEditBtn) {
+    bannerInfoEditBtn.textContent = 'Редактировать';
+  }
 
   // profile header
   const clientPhoto = right$("#clientPhoto");
@@ -433,7 +1664,7 @@
   // State
   // -----------------------------
   const state = {
-    currentView: "clients",   // "clients" | "filter-categories" | "discounts"
+    currentView: "clients",   // "clients" | "filter-categories" | "discounts" | "banners"
     activeFilter: "all",      // "all" | "custom_<id>"
     activeCustomFilterId: null,
     q: "",
@@ -482,6 +1713,15 @@
     customFilters: [],        // Кастомные фильтры из БД
     editingFilterId: null,    // ID фильтра, который редактируем
     // Скидки и акции
+    bannersEnabled: false,
+    bannersDrafts: [],
+    bannerPlacements: createEmptyBannerPlacements(),
+    activeBannerType: 'hero',
+    activeBannerId: null,
+    editingBannerId: null,
+    bannerPickerOpen: false,
+    bannerPickerDraftSelection: new Set(),
+    bannerDragState: null,
     discounts: [],
     discountsTotals: { all: 0 },
     activeDiscountFilter: "all",
@@ -1596,7 +2836,9 @@
       ? 'discounts'
       : tab.type === 'category'
         ? 'filter-categories'
-        : 'clients';
+        : tab.type === 'banner'
+          ? 'banners'
+          : 'clients';
     if (state.currentView !== targetView) {
       switchView(targetView);
     }
@@ -1677,6 +2919,13 @@
         state.discountOrders = [];
         state.discountCenterMode = 'list';
       }
+    } else if (closedTab.type === 'banner') {
+      if (String(state.activeBannerId || '') === String(closedTab.id)) {
+        state.activeBannerId = null;
+      }
+      if (String(state.editingBannerId || '') === String(closedTab.id)) {
+        state.editingBannerId = null;
+      }
     } else if (closedTab.type === 'order') {
       if (state.activeOrderId === closedTab.id) {
         state.activeOrderId = null;
@@ -1694,6 +2943,8 @@
         renderTabs();
         if (state.currentView === 'discounts') {
           renderDiscountsList();
+        } else if (state.currentView === 'banners') {
+          renderBannerList();
         }
         syncDiscountToolbarState();
         updateRightPanel();
@@ -2772,14 +4023,14 @@
     }
 
     window.AdminBenefitsModal?.show({
-      title: state.clientBenefitsModal.title || "Р”РµС‚Р°Р»Рё Р°РєС†РёРё",
+      title: state.clientBenefitsModal.title || "Детали акции",
       showBack: true,
       showModeToggle: false,
       mode: state.clientBenefitsModal.mode,
       onClose: closeClientBenefitsOverlay,
       onBack: () => {
         state.clientBenefitsModal.screen = "main";
-        state.clientBenefitsModal.title = "Р’С‹РіРѕРґС‹";
+        state.clientBenefitsModal.title = "Выгоды";
         state.clientBenefitsModal.payload = null;
         renderClientBenefitsOverlay();
       },
@@ -4748,6 +5999,476 @@
   }
 
   // Открыть таб скидки
+  function renderBannerFilters() {
+    if (!elBannersFilters) return;
+    elBannersFilters.innerHTML = '';
+
+    ['hero', 'feed', 'small'].forEach((type) => {
+      const meta = getBannerTypeMeta(type);
+      const count = getBannerDraftsByType(type).length;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'stage-item';
+      btn.classList.toggle('is-active', state.currentView === 'banners' && state.activeBannerType === meta.key);
+      btn.dataset.bannerType = meta.key;
+      btn.innerHTML = `
+        <span class="stage-meta stage-text"><b>${escapeHtml(meta.title)}</b></span>
+        <span class="stage-count">${escapeHtml(String(count))}</span>
+      `;
+      btn.addEventListener('click', () => {
+        state.activeBannerType = meta.key;
+        state.activeBannerId = null;
+        state.editingBannerId = null;
+        closeBannerPicker();
+        if (state.currentView !== 'banners') {
+          switchView('banners');
+        } else {
+          renderBannerFilters();
+          renderBannerPlacement();
+          renderBannerList();
+          updateRightPanel();
+        }
+      });
+      elBannersFilters.appendChild(btn);
+    });
+  }
+
+  function renderBannerList() {
+    if (!elBannersList) return;
+    elBannersList.innerHTML = '';
+
+    const drafts = getBannerDraftsByType();
+    if (!drafts.length) {
+      if (elBannersEmptyHint) elBannersEmptyHint.classList.remove('hidden');
+      return;
+    }
+    if (elBannersEmptyHint) elBannersEmptyHint.classList.add('hidden');
+
+    drafts.forEach((banner) => {
+      const meta = getBannerTypeMeta(banner.type);
+      const isPlaced = isBannerPlaced(banner.id, banner.type);
+      const row = document.createElement('div');
+      row.className = 'order-row';
+      row.draggable = true;
+      row.dataset.bannerId = banner.id;
+      row.setAttribute('role', 'button');
+      row.setAttribute('tabindex', '0');
+      row.classList.toggle('is-banner-placed', isPlaced);
+      row.classList.toggle('is-active', String(state.activeBannerId || '') === String(banner.id));
+      row.innerHTML = `
+        <div class="order-icon"><i class="${escapeHtml(meta.icon)}"></i></div>
+        <div class="order-mid">
+          <strong>${escapeHtml(banner.title)}</strong>
+          <div class="muted">${escapeHtml(meta.singular)} • Черновик</div>
+        </div>
+        ${isPlaced ? '<div class="banner-row-badge">Размещён</div>' : ''}
+      `;
+      row.addEventListener('click', () => openBannerTab(banner.id));
+      row.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        openBannerTab(banner.id);
+      });
+      row.addEventListener('dragstart', (event) => {
+        state.bannerDragState = { source: 'list', bannerId: banner.id };
+        row.classList.add('is-dragging');
+        if (event.dataTransfer) {
+          event.dataTransfer.effectAllowed = 'move';
+          event.dataTransfer.setData('text/plain', String(banner.id));
+        }
+      });
+      row.addEventListener('dragend', () => {
+        clearBannerDragState();
+      });
+      elBannersList.appendChild(row);
+    });
+  }
+
+  function reorderBannerPlacement(fromIndex, toIndex) {
+    const current = [...getBannerPlacementsByType()];
+    if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return;
+    if (fromIndex >= current.length || toIndex >= current.length) return;
+    const [moved] = current.splice(fromIndex, 1);
+    current.splice(toIndex, 0, moved);
+    setBannerPlacementsByType(state.activeBannerType, current);
+    renderBannerPlacement();
+  }
+
+  function renderBannerPlacement() {
+    if (!elBannersPlacementTrack) return;
+    elBannersPlacementTrack.innerHTML = '';
+
+    const placedDrafts = getPlacedBannerDraftsByType();
+    const placementBody = elBannersPlacementZone?.querySelector('.banners-placement-body');
+    const placementTrackHeight = Math.round(elBannersPlacementTrack.clientHeight || 0);
+    const placementBodyHeight = Math.round(placementBody?.clientHeight || 0);
+    const cardHeight = Math.max(104, placementTrackHeight || placementBodyHeight || 0);
+    if (elBannersPlacementZone) {
+      elBannersPlacementZone.classList.toggle('is-empty', placedDrafts.length === 0);
+    }
+
+    placedDrafts.forEach((banner, index) => {
+      const meta = getBannerTypeMeta(banner.type);
+      const ratio = getBannerAspectRatioDimensions(banner.aspectRatio, banner.type);
+      const cardWidth = Math.max(132, Math.round(cardHeight * (ratio.width / ratio.height)));
+      const previewPhoto = Array.isArray(banner.photos) ? String(banner.photos[0] || '').trim() : '';
+      const card = document.createElement('div');
+      card.className = 'banner-placement-card';
+      const titlePosition = normalizeBannerTitlePosition(banner.titlePosition);
+      const showTitleOnCard = banner.showTitleOnCard === true && String(banner.title || '').trim() !== '';
+      card.draggable = true;
+      card.dataset.bannerId = banner.id;
+      card.dataset.placementIndex = String(index);
+      card.style.height = `${cardHeight}px`;
+      card.style.width = `${cardWidth}px`;
+      card.style.flex = `0 0 ${cardWidth}px`;
+      const mainMarkup = `
+        <div class="banner-placement-card-main">
+          ${previewPhoto
+            ? `<img class="banner-placement-card-preview" src="${escapeHtml(previewPhoto)}" alt="" style="object-fit:${banner?.stretchPhoto === true ? 'cover' : 'contain'};">`
+            : `<div class="banner-placement-card-icon"><i class="${escapeHtml(meta.icon)}"></i></div>`}
+        </div>
+      `;
+      const titleStyleParts = [
+        `color:${escapeHtml(banner.titleColor || '#1f2937')}`,
+        banner.titleBackgroundEnabled === false
+          ? 'background:transparent'
+          : `background:${buildBannerTitleBackgroundColor(banner.titleBackgroundColor || '#ffffff', banner.titleBackgroundOpacity)}`,
+      ];
+      const titleMarkup = showTitleOnCard
+        ? `<div class="banner-placement-card-display-title" style="${titleStyleParts.join(';')}">${escapeHtml(banner.title)}</div>`
+        : '';
+      card.innerHTML = `
+        <div class="banner-placement-card-stack ${showTitleOnCard && titlePosition === 'bottom' ? 'is-title-bottom' : 'is-title-top'}">
+          ${showTitleOnCard && titlePosition !== 'bottom' ? titleMarkup : ''}
+          ${mainMarkup}
+          ${showTitleOnCard && titlePosition === 'bottom' ? titleMarkup : ''}
+        </div>
+      `.trim();
+
+      card.addEventListener('click', () => openBannerTab(banner.id));
+      card.addEventListener('dragstart', (event) => {
+        state.bannerDragState = { source: 'placement', bannerId: banner.id, index };
+        card.classList.add('is-dragging');
+        if (event.dataTransfer) {
+          event.dataTransfer.effectAllowed = 'move';
+          event.dataTransfer.setData('text/plain', String(banner.id));
+        }
+      });
+      card.addEventListener('dragend', () => {
+        clearBannerDragState();
+      });
+      card.addEventListener('dragover', (event) => {
+        if (!state.bannerDragState) return;
+        event.preventDefault();
+        if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+        card.classList.add('is-drag-over');
+      });
+      card.addEventListener('dragleave', () => {
+        card.classList.remove('is-drag-over');
+      });
+      card.addEventListener('drop', (event) => {
+        event.preventDefault();
+        card.classList.remove('is-drag-over');
+        if (!state.bannerDragState) return;
+        if (state.bannerDragState.source === 'placement') {
+          reorderBannerPlacement(state.bannerDragState.index, index);
+        } else if (state.bannerDragState.source === 'list') {
+          addBannerToPlacement(state.bannerDragState.bannerId, index);
+        }
+        clearBannerDragState();
+      });
+
+      elBannersPlacementTrack.appendChild(card);
+    });
+
+    const addCard = document.createElement('button');
+    addCard.type = 'button';
+    addCard.className = 'banner-placement-card banner-placement-add-card';
+    addCard.setAttribute('aria-label', 'Добавить баннеры в размещение');
+    addCard.setAttribute('title', 'Добавить баннеры в размещение');
+    addCard.style.height = `${cardHeight}px`;
+    addCard.innerHTML = `
+      <span class="banner-placement-add-icon"><i class="fas fa-plus"></i></span>
+      <span class="banner-placement-add-label">Добавить</span>
+    `;
+    addCard.addEventListener('click', () => openBannerPicker());
+    addCard.addEventListener('dragover', (event) => {
+      if (!state.bannerDragState) return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+      addCard.classList.add('is-drag-over');
+    });
+    addCard.addEventListener('dragleave', () => {
+      addCard.classList.remove('is-drag-over');
+    });
+    addCard.addEventListener('drop', (event) => {
+      event.preventDefault();
+      addCard.classList.remove('is-drag-over');
+      if (!state.bannerDragState) return;
+      if (state.bannerDragState.source === 'placement' && placedDrafts.length) {
+        reorderBannerPlacement(state.bannerDragState.index, placedDrafts.length - 1);
+      } else if (state.bannerDragState.source === 'list') {
+        addBannerToPlacement(state.bannerDragState.bannerId);
+      }
+      clearBannerDragState();
+    });
+    elBannersPlacementTrack.appendChild(addCard);
+
+  }
+
+  if (elBannersList) {
+    elBannersList.addEventListener('dragover', (event) => {
+      if (state.bannerDragState?.source !== 'placement') return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+      elBannersList.classList.add('is-drag-over');
+    });
+    elBannersList.addEventListener('dragleave', (event) => {
+      if (event.currentTarget !== event.target && elBannersList.contains(event.relatedTarget)) return;
+      elBannersList.classList.remove('is-drag-over');
+    });
+    elBannersList.addEventListener('drop', (event) => {
+      if (state.bannerDragState?.source !== 'placement') return;
+      event.preventDefault();
+      elBannersList.classList.remove('is-drag-over');
+      removeBannerFromPlacement(state.bannerDragState.bannerId);
+      clearBannerDragState();
+    });
+  }
+
+  function closeBannerPicker() {
+    state.bannerPickerOpen = false;
+    state.bannerPickerDraftSelection = new Set();
+    if (elBannerPickerOverlay) {
+      elBannerPickerOverlay.classList.add('hidden');
+      elBannerPickerOverlay.setAttribute('aria-hidden', 'true');
+    }
+  }
+
+  function openBannerPicker() {
+    if (state.currentView !== 'banners') return;
+    state.bannerPickerOpen = true;
+    state.bannerPickerDraftSelection = new Set(getBannerPlacementsByType());
+    renderBannerPicker();
+  }
+
+  function renderBannerPicker() {
+    if (!elBannerPickerOverlay || !elBannerPickerList) return;
+    if (!state.bannerPickerOpen) {
+      elBannerPickerOverlay.classList.add('hidden');
+      elBannerPickerOverlay.setAttribute('aria-hidden', 'true');
+      return;
+    }
+
+    const meta = getBannerTypeMeta(state.activeBannerType);
+    const drafts = getBannerDraftsByType();
+    if (elBannerPickerTitle) {
+      elBannerPickerTitle.textContent = `Размещение: ${meta.title}`;
+    }
+    if (elBannerPickerSubtitle) {
+      elBannerPickerSubtitle.textContent = 'Выберите один или несколько баннеров для верхнего блока.';
+    }
+
+    elBannerPickerList.innerHTML = '';
+    if (elBannerPickerEmptyHint) {
+      elBannerPickerEmptyHint.classList.toggle('hidden', drafts.length > 0);
+    }
+
+    drafts.forEach((banner) => {
+      const selected = state.bannerPickerDraftSelection.has(String(banner.id));
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'banner-picker-row';
+      row.classList.toggle('is-selected', selected);
+      row.dataset.bannerId = banner.id;
+      row.innerHTML = `
+        <span class="banner-picker-check"><i class="fas fa-check"></i></span>
+        <span class="banner-picker-row-copy">
+          <span class="banner-picker-row-title">${escapeHtml(banner.title)}</span>
+          <span class="banner-picker-row-meta">${escapeHtml(meta.singular)} • Черновик</span>
+        </span>
+      `;
+      row.addEventListener('click', () => {
+        const bannerId = String(banner.id);
+        if (state.bannerPickerDraftSelection.has(bannerId)) {
+          state.bannerPickerDraftSelection.delete(bannerId);
+        } else {
+          state.bannerPickerDraftSelection.add(bannerId);
+        }
+        renderBannerPicker();
+      });
+      elBannerPickerList.appendChild(row);
+    });
+
+    if (elBannerPickerSaveBtn) {
+      elBannerPickerSaveBtn.disabled = false;
+    }
+    elBannerPickerOverlay.classList.remove('hidden');
+    elBannerPickerOverlay.setAttribute('aria-hidden', 'false');
+  }
+
+  function saveBannerPickerSelection() {
+    const drafts = getBannerDraftsByType();
+    const current = getBannerPlacementsByType();
+    const selection = state.bannerPickerDraftSelection instanceof Set
+      ? state.bannerPickerDraftSelection
+      : new Set();
+    const selectedIds = new Set(
+      [...selection]
+        .map((id) => String(id || '').trim())
+        .filter(Boolean)
+    );
+    const kept = current.filter((id) => selectedIds.has(String(id)));
+    const additions = drafts
+      .map((banner) => String(banner.id))
+      .filter((id) => selectedIds.has(id) && !kept.includes(id));
+    setBannerPlacementsByType(state.activeBannerType, [...kept, ...additions]);
+    renderBannerFilters();
+    renderBannerPlacement();
+    renderBannerList();
+    closeBannerPicker();
+  }
+
+  function adjustBannerDescriptionHeight() {
+    if (!bannerDescriptionInput) return;
+    bannerDescriptionInput.style.height = 'auto';
+    bannerDescriptionInput.style.height = `${bannerDescriptionInput.scrollHeight}px`;
+  }
+
+  function renderBannerInfo(banner) {
+    const current = banner && typeof banner === 'object' ? banner : getBannerDraftById(state.activeBannerId);
+    const isEditing = !!current && String(state.editingBannerId || '') === String(current.id || '');
+    if (bannerInfoTitle) {
+      bannerInfoTitle.textContent = '';
+    }
+    if (bannerInfoMeta) {
+      bannerInfoMeta.textContent = '';
+    }
+    if (bannerInfoText) {
+      bannerInfoText.textContent = '';
+    }
+    if (bannerTitleInput) {
+      bannerTitleInput.value = current?.title || '';
+      bannerTitleInput.disabled = !isEditing;
+    }
+    if (bannerDescriptionInput) {
+      bannerDescriptionInput.value = current?.description || '';
+      bannerDescriptionInput.disabled = !isEditing;
+      adjustBannerDescriptionHeight();
+    }
+    if (bannerTitleOnCardSwitch) {
+      bannerTitleOnCardSwitch.checked = current?.showTitleOnCard === true;
+      bannerTitleOnCardSwitch.disabled = !isEditing;
+    }
+    if (bannerTitleColorInput) {
+      bannerTitleColorInput.value = current?.titleColor || '#1f2937';
+      bannerTitleColorInput.disabled = !isEditing;
+    }
+    if (bannerTitleBackgroundSwitch) {
+      bannerTitleBackgroundSwitch.checked = current?.titleBackgroundEnabled !== false;
+      bannerTitleBackgroundSwitch.disabled = !isEditing;
+    }
+    if (bannerTitleBackgroundColorInput) {
+      bannerTitleBackgroundColorInput.value = current?.titleBackgroundColor || '#ffffff';
+      bannerTitleBackgroundColorInput.disabled = !isEditing || (current?.titleBackgroundEnabled === false);
+    }
+    if (bannerTitleBackgroundOpacityInput) {
+      const opacity = normalizeBannerOpacity(current?.titleBackgroundOpacity, 90);
+      bannerTitleBackgroundOpacityInput.value = String(opacity);
+      bannerTitleBackgroundOpacityInput.disabled = !isEditing || (current?.titleBackgroundEnabled === false);
+      if (bannerTitleBackgroundOpacityValue) {
+        bannerTitleBackgroundOpacityValue.textContent = `${opacity}%`;
+      }
+    }
+    if (bannerPhotoStretchSwitch) {
+      bannerPhotoStretchSwitch.checked = current?.stretchPhoto === true;
+      bannerPhotoStretchSwitch.disabled = !isEditing;
+    }
+    renderBannerAspectRatioPicker(current, isEditing);
+    renderBannerPhotoRail(current, isEditing);
+    if (bannerInfoEditBtn) {
+      bannerInfoEditBtn.textContent = isEditing ? 'Сохранить' : 'Редактировать';
+    }
+  }
+
+  function openBannerTab(bannerId) {
+    const banner = getBannerDraftById(bannerId);
+    if (!banner) return;
+
+    ensureTab({
+      type: 'banner',
+      id: banner.id,
+      title: banner.title,
+      onActivate: () => activateBannerTab(banner.id),
+    });
+  }
+
+  function activateBannerTab(bannerId) {
+    const banner = getBannerDraftById(bannerId);
+    if (!banner) return;
+    state.activeBannerType = banner.type;
+    state.activeBannerId = banner.id;
+    if (String(state.editingBannerId || '') !== String(banner.id)) {
+      state.editingBannerId = null;
+    }
+    renderBannerInfo(banner);
+    renderBannerFilters();
+    renderBannerPlacement();
+    renderBannerList();
+    updateRightPanel();
+  }
+
+  function createBannerDraft(type = state.activeBannerType) {
+    const meta = getBannerTypeMeta(type);
+    const draft = {
+      id: `banner_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      type: meta.key,
+      title: meta.tabTitle,
+      description: '',
+      createdAt: Date.now(),
+      aspectRatio: getDefaultBannerAspectRatio(meta.key),
+      showTitleOnCard: false,
+      titlePosition: 'top',
+      titleColor: '#1f2937',
+      titleBackgroundEnabled: true,
+      titleBackgroundColor: '#ffffff',
+      titleBackgroundOpacity: 90,
+      photos: [],
+      photoSizes: {},
+      stretchPhoto: false,
+    };
+    state.bannersDrafts = sanitizeBannerDrafts([draft, ...state.bannersDrafts]);
+    state.activeBannerType = meta.key;
+    state.editingBannerId = draft.id;
+    persistBannerStorage();
+    renderBannerFilters();
+    renderBannerPlacement();
+    renderBannerList();
+    if (state.bannerPickerOpen) {
+      renderBannerPicker();
+    }
+    openBannerTab(draft.id);
+  }
+
+  async function deleteActiveBanner() {
+    const banner = getBannerDraftById(state.activeBannerId);
+    if (!banner) return;
+
+    state.bannersDrafts = sanitizeBannerDrafts(
+      state.bannersDrafts.filter((item) => String(item?.id || '') !== String(banner.id))
+    );
+    state.bannerPlacements = sanitizeBannerPlacements(state.bannerPlacements, state.bannersDrafts);
+    persistBannerStorage();
+    renderBannerFilters();
+    renderBannerPlacement();
+    renderBannerList();
+    if (state.bannerPickerOpen) {
+      renderBannerPicker();
+    }
+    await closeTab(buildTabKey('banner', banner.id));
+  }
+
   async function openDiscountTab(discount) {
     if (state.currentView !== 'discounts') {
       switchView('discounts');
@@ -13329,6 +15050,7 @@
         clients: 'Клиенты',
         'filter-categories': 'Категории',
         discounts: 'Скидки',
+        banners: 'Баннеры',
       };
       elToolbarText.textContent = titles[viewName] || 'Клиенты';
     }
@@ -13339,6 +15061,7 @@
           clients: 'fas fa-users',
           'filter-categories': 'fas fa-filter',
           discounts: 'fas fa-percentage',
+          banners: 'fas fa-images',
         };
         icon.className = icons[viewName] || 'fas fa-users';
       }
@@ -13346,14 +15069,24 @@
 
     if (elSearchWrap) elSearchWrap.style.display = viewName === 'clients' ? '' : 'none';
     if (elSortWrap) elSortWrap.style.display = viewName === 'clients' ? '' : 'none';
+    if (elBannersSwitchWrap) elBannersSwitchWrap.classList.toggle('hidden', viewName !== 'banners');
+    if (elBannersEnabledSwitch) elBannersEnabledSwitch.checked = state.bannersEnabled === true;
     if (viewName !== 'clients') {
       closeClientBenefitsOverlay();
+    }
+    if (viewName !== 'banners') {
+      closeBannerPicker();
     }
 
     if (viewName === 'filter-categories') {
       renderFilterCategoriesList();
     } else if (viewName === 'discounts') {
       renderDiscountCenterContent();
+    } else if (viewName === 'banners') {
+      renderBannerFilters();
+      renderBannerPlacement();
+      renderBannerList();
+      renderBannerPicker();
     } else if (viewName === 'clients') {
       maybeLoadMoreClientsOnScroll();
       ensureClientsScrollable().catch(console.error);
@@ -13383,6 +15116,9 @@
       if (elDiscountProductPicker) elDiscountProductPicker.classList.add('hidden');
       if (elDiscountCustomerPicker) elDiscountCustomerPicker.classList.add('hidden');
       if (elDiscountPickerFooter) elDiscountPickerFooter.classList.add('hidden');
+      if (bannerEmpty) bannerEmpty.classList.toggle('hidden', state.currentView !== 'banners');
+      if (bannerInfoWrap) bannerInfoWrap.classList.add('hidden');
+      if (bannerInfoFooter) bannerInfoFooter.classList.add('hidden');
       if (clientBenefitsFooter) clientBenefitsFooter.classList.add('hidden');
       return;
     }
@@ -13393,6 +15129,7 @@
     const isCategoryTab = activeTab?.type === 'category';
     const isDiscountTab = activeTab?.type === 'discount';
     const isDiscountPromoCodeTab = activeTab?.type === 'discount-promo-code';
+    const isBannerTab = activeTab?.type === 'banner';
     const hasClientId = Number(state.activeClientId || 0) > 0;
     const noTabs = !activeTab;
     // In chat mode right panel must be driven only by right tabs state.
@@ -13444,6 +15181,9 @@
     if (!showDiscountInfoFooter && !isEditingDiscount) {
       resetDiscountDeleteButtons();
     }
+    if (bannerEmpty) bannerEmpty.classList.toggle('hidden', !noTabs || state.currentView !== 'banners');
+    if (bannerInfoWrap) bannerInfoWrap.classList.toggle('hidden', !isBannerTab);
+    if (bannerInfoFooter) bannerInfoFooter.classList.toggle('hidden', !isBannerTab);
     if (clientBenefitsFooter) {
       const showBenefitsFooter = (isClientTab || forceClientPanelWithoutTabs) && state.currentView === 'clients' && hasClientId;
       clientBenefitsFooter.classList.toggle('hidden', !showBenefitsFooter);
@@ -15717,6 +17457,8 @@
       if (state.currentView === 'filter-categories') {
         // Создать новую категорию/фильтр
         openFilterEditor(null);
+      } else if (state.currentView === 'banners') {
+        createBannerDraft();
       } else if (state.currentView === 'discounts') {
         // Создать новую скидку
         openDiscountEditor(null);
@@ -15737,6 +17479,40 @@
   if (elAddDiscountBtn) {
     elAddDiscountBtn.addEventListener('click', () => {
       switchView('discounts');
+    });
+  }
+
+  if (elBannersEnabledSwitch) {
+    elBannersEnabledSwitch.addEventListener('change', () => {
+      state.bannersEnabled = elBannersEnabledSwitch.checked === true;
+      persistBannerStorage();
+      if (state.currentView === 'banners') {
+        updateRightPanel();
+      }
+    });
+  }
+
+  if (elBannerPickerBackdrop) {
+    elBannerPickerBackdrop.addEventListener('click', () => {
+      closeBannerPicker();
+    });
+  }
+
+  if (elBannerPickerCloseBtn) {
+    elBannerPickerCloseBtn.addEventListener('click', () => {
+      closeBannerPicker();
+    });
+  }
+
+  if (elBannerPickerCancelBtn) {
+    elBannerPickerCancelBtn.addEventListener('click', () => {
+      closeBannerPicker();
+    });
+  }
+
+  if (elBannerPickerSaveBtn) {
+    elBannerPickerSaveBtn.addEventListener('click', () => {
+      saveBannerPickerSelection();
     });
   }
 
@@ -15796,6 +17572,183 @@
         openDiscountEditor(state.activeDiscount.id);
       }
     });
+  });
+
+  if (bannerInfoDeleteBtn) {
+    attachTwoStepButton(bannerInfoDeleteBtn, () => {
+      void deleteActiveBanner();
+    }, 'Удалить');
+  }
+
+  if (bannerInfoEditBtn) {
+    bannerInfoEditBtn.addEventListener('click', () => {
+      const banner = getBannerDraftById(state.activeBannerId);
+      if (!banner) return;
+      const isEditing = String(state.editingBannerId || '') === String(banner.id);
+      state.editingBannerId = isEditing ? null : banner.id;
+      if (isEditing) {
+        persistBannerStorage();
+      }
+      renderBannerInfo(banner);
+    });
+  }
+
+  if (bannerTitleInput) {
+    bannerTitleInput.addEventListener('input', () => {
+      const banner = getBannerDraftById(state.activeBannerId);
+      if (!banner || String(state.editingBannerId || '') !== String(banner.id)) return;
+      updateBannerDraftCardTitle(banner.id, bannerTitleInput.value);
+      const nextBanner = getBannerDraftById(banner.id);
+      syncBannerTabTitle(banner.id, nextBanner?.title || bannerTitleInput.value);
+      renderBannerInfo(nextBanner);
+      renderBannerPlacement();
+      renderBannerList();
+    });
+  }
+
+  if (bannerDescriptionInput) {
+    bannerDescriptionInput.addEventListener('input', () => {
+      const banner = getBannerDraftById(state.activeBannerId);
+      if (!banner || String(state.editingBannerId || '') !== String(banner.id)) return;
+      adjustBannerDescriptionHeight();
+      updateBannerDraftDescription(banner.id, bannerDescriptionInput.value);
+    });
+  }
+
+  if (bannerTitleSettingsBtn && bannerTitlePopover) {
+    bannerTitleSettingsBtn.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      bannerTitlePopover.classList.toggle('hidden');
+    });
+    document.addEventListener('click', (event) => {
+      if (bannerTitlePopover.classList.contains('hidden')) return;
+      if (bannerTitlePopover.contains(event.target) || bannerTitleSettingsBtn.contains(event.target)) return;
+      bannerTitlePopover.classList.add('hidden');
+    });
+  }
+
+  if (bannerTitleOnCardSwitch) {
+    bannerTitleOnCardSwitch.addEventListener('change', () => {
+      const banner = getBannerDraftById(state.activeBannerId);
+      if (!banner || String(state.editingBannerId || '') !== String(banner.id)) return;
+      updateBannerDraftTitleVisibility(banner.id, bannerTitleOnCardSwitch.checked);
+      const nextBanner = getBannerDraftById(banner.id);
+      renderBannerInfo(nextBanner);
+      renderBannerPlacement();
+    });
+  }
+
+  if (bannerTitleColorInput) {
+    bannerTitleColorInput.addEventListener('input', () => {
+      const banner = getBannerDraftById(state.activeBannerId);
+      if (!banner || String(state.editingBannerId || '') !== String(banner.id)) return;
+      updateBannerDraftTitleColor(banner.id, bannerTitleColorInput.value);
+      const nextBanner = getBannerDraftById(banner.id);
+      renderBannerInfo(nextBanner);
+      renderBannerPlacement();
+    });
+  }
+
+  if (bannerTitleBackgroundSwitch) {
+    bannerTitleBackgroundSwitch.addEventListener('change', () => {
+      const banner = getBannerDraftById(state.activeBannerId);
+      if (!banner || String(state.editingBannerId || '') !== String(banner.id)) return;
+      updateBannerDraftTitleBackgroundEnabled(banner.id, bannerTitleBackgroundSwitch.checked);
+      const nextBanner = getBannerDraftById(banner.id);
+      renderBannerInfo(nextBanner);
+      renderBannerPlacement();
+    });
+  }
+
+  if (bannerTitleBackgroundColorInput) {
+    bannerTitleBackgroundColorInput.addEventListener('input', () => {
+      const banner = getBannerDraftById(state.activeBannerId);
+      if (!banner || String(state.editingBannerId || '') !== String(banner.id)) return;
+      updateBannerDraftTitleBackgroundColor(banner.id, bannerTitleBackgroundColorInput.value);
+      const nextBanner = getBannerDraftById(banner.id);
+      renderBannerInfo(nextBanner);
+      renderBannerPlacement();
+    });
+  }
+
+  if (bannerTitleBackgroundOpacityInput) {
+    bannerTitleBackgroundOpacityInput.addEventListener('input', () => {
+      const banner = getBannerDraftById(state.activeBannerId);
+      if (!banner || String(state.editingBannerId || '') !== String(banner.id)) return;
+      const nextOpacity = normalizeBannerOpacity(bannerTitleBackgroundOpacityInput.value, 90);
+      if (bannerTitleBackgroundOpacityValue) {
+        bannerTitleBackgroundOpacityValue.textContent = `${nextOpacity}%`;
+      }
+      updateBannerDraftTitleBackgroundOpacity(banner.id, nextOpacity);
+      const nextBanner = getBannerDraftById(banner.id);
+      renderBannerInfo(nextBanner);
+      renderBannerPlacement();
+    });
+  }
+
+  if (bannerPhotoStretchSwitch) {
+    bannerPhotoStretchSwitch.addEventListener('change', () => {
+      const banner = getBannerDraftById(state.activeBannerId);
+      if (!banner || String(state.editingBannerId || '') !== String(banner.id)) return;
+      const nextBanner = updateBannerDraftPhotoStretch(banner.id, bannerPhotoStretchSwitch.checked) || getBannerDraftById(banner.id);
+      renderBannerInfo(nextBanner);
+      renderBannerPlacement();
+      if (document.querySelector('.product-photo-grid-modal-overlay[data-banner-photo-modal="1"]')) {
+        openBannerPhotoModal(banner.id);
+      }
+    });
+  }
+
+  if (bannerPhotosInput) {
+    bannerPhotosInput.addEventListener('change', async () => {
+      const targetBannerId = String(
+        bannerPhotosInput.dataset.bannerId
+        || state.editingBannerId
+        || state.activeBannerId
+        || ''
+      ).trim();
+      const files = pickBannerImageFiles(Array.from(bannerPhotosInput.files || []));
+      bannerPhotosInput.value = '';
+      if (!targetBannerId || !files.length) return;
+      try {
+        await uploadBannerFilesNow(targetBannerId, files);
+        const nextBanner = getBannerDraftById(targetBannerId);
+        renderBannerInfo(nextBanner);
+        renderBannerPlacement();
+        if (document.querySelector('.product-photo-grid-modal-overlay[data-banner-photo-modal="1"]')) {
+          openBannerPhotoModal(targetBannerId);
+        }
+      } catch {
+        alert('Ошибка загрузки фотографий');
+      }
+    });
+  }
+
+  document.addEventListener('paste', async (event) => {
+    const targetBannerId = String(state.editingBannerId || state.activeBannerId || '').trim();
+    if (!targetBannerId || !bannerInfoWrap || bannerInfoWrap.classList.contains('hidden')) return;
+    const files = extractBannerImagesFromClipboard(event.clipboardData);
+    if (!files.length) return;
+    event.preventDefault();
+    try {
+      await uploadBannerFilesNow(targetBannerId, files);
+      const nextBanner = getBannerDraftById(targetBannerId);
+      renderBannerInfo(nextBanner);
+      renderBannerPlacement();
+      if (document.querySelector('.product-photo-grid-modal-overlay[data-banner-photo-modal="1"]')) {
+        openBannerPhotoModal(targetBannerId);
+      }
+    } catch {
+      alert('Ошибка загрузки фотографий');
+    }
+  });
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    if (state.bannerPickerOpen) {
+      closeBannerPicker();
+    }
   });
 
   // Кнопка добавления товаров в скидку
@@ -17323,6 +19276,12 @@
   if (filterTitleInput) {
     filterTitleInput.addEventListener('input', () => scheduleFilterDraftCountPreview());
   }
+  loadBannerStorage();
+  if (elBannersEnabledSwitch) {
+    elBannersEnabledSwitch.checked = state.bannersEnabled === true;
+  }
+  renderBannerFilters();
+  renderBannerPlacement();
   updateDiscountPromoUi();
   updateDiscountRestrictionUi();
 

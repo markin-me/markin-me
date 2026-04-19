@@ -94,3 +94,9 @@ pm2 save
 curl http://127.0.0.1:3400/health
 
 Если включён токен, ответ UNAUTHORIZED без заголовка тоже означает, что сервис живой.
+
+
+запуск приложения из корня папки
+
+cd mobile-apps/mobile-user && npx expo start
+cd mobile-apps/mobile-admin && npx expo start

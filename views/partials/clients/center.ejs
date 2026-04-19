@@ -42,6 +42,12 @@
         </div>
 
         <!-- Add button (context-dependent) -->
+        <label class="switch settings-chat-subheader-switch hidden" id="clientsBannersSwitchWrap" title="Показывать блоки на витрине">
+          <input class="switch-input" type="checkbox" id="clientsBannersEnabledSwitch" />
+          <span class="switch-ui" aria-hidden="true"></span>
+          <span class="switch-text">Показывать на витрине</span>
+        </label>
+
         <button id="clientsAddBtn" class="icon-btn" type="button" aria-label="Добавить" title="Добавить">
           <i class="fas fa-plus"></i>
         </button>
@@ -74,6 +80,64 @@
           <!-- JS отрисует сюда список скидок или заказов -->
         </div>
         <div class="empty-hint hidden" id="discountsEmptyHint">Пока нет скидок. Нажмите «+» для создания.</div>
+      </div>
+
+      <div class="content-view hidden banners-content-view" data-view-content="banners">
+        <div class="banners-layout">
+          <div class="banners-placement-zone" id="bannersPlacementZone">
+            <div class="banners-placement-head">
+              <div class="banners-placement-copy">
+                <div class="banners-placement-title">Размещение на витрине</div>
+              </div>
+            </div>
+
+            <div class="banners-placement-body">
+              <div class="banners-placement-track no-scrollbar" id="bannersPlacementTrack"></div>
+            </div>
+          </div>
+
+          <div class="banners-list-scroll" id="bannersListScroll">
+            <div class="orders-list" id="bannersList">
+              <!-- JS отрисует сюда список баннеров -->
+            </div>
+            <div class="empty-hint hidden" id="bannersEmptyHint">Пока нет баннеров. Нажмите «+» для создания.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="admin-sheet-overlay hidden" id="bannerPickerOverlay" aria-hidden="true">
+    <div class="admin-sheet-backdrop" id="bannerPickerBackdrop"></div>
+    <div class="admin-sheet-panel" role="dialog" aria-modal="true" aria-labelledby="bannerPickerTitle">
+      <div class="admin-sheet-header">
+        <div>
+          <div class="admin-sheet-title" id="bannerPickerTitle">Размещение баннеров</div>
+          <div class="admin-sheet-subtitle" id="bannerPickerSubtitle">Выберите баннеры для блока на витрине</div>
+        </div>
+        <button
+          type="button"
+          class="icon-btn admin-sheet-close"
+          id="bannerPickerCloseBtn"
+          aria-label="Закрыть"
+          title="Закрыть"
+        >
+          <i class="fas fa-times"></i>
+        </button>
+      </div>
+
+      <div class="admin-sheet-body no-scrollbar">
+        <div class="admin-sheet-list" id="bannerPickerList"></div>
+        <div class="empty-hint hidden" id="bannerPickerEmptyHint">Нет баннеров этого типа для размещения.</div>
+      </div>
+
+      <div class="panel-footer admin-sheet-footer">
+        <div class="product-footer-actions">
+          <div class="product-footer-view">
+            <button class="product-footer-btn product-footer-cancel is-fullwidth" type="button" id="bannerPickerCancelBtn">Отменить</button>
+            <button class="product-footer-btn product-footer-save" type="button" id="bannerPickerSaveBtn">Сохранить</button>
+          </div>
+        </div>
       </div>
     </div>
   </div>

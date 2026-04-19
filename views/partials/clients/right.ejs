@@ -35,6 +35,12 @@
     </div>
 
     <!-- Форма редактирования фильтра/выборки -->
+    <div id="bannerEmpty" class="empty-state hidden">
+      <div class="empty-icon"><i class="fas fa-images"></i></div>
+      <div class="empty-title">Выберите баннер</div>
+      <div class="empty-text">Нажмите на баннер слева или создайте новый</div>
+    </div>
+
     <div id="filterEditorWrap" class="hidden">
       <form id="filterEditorForm" class="form-grid" autocomplete="off">
         <div class="field-wrap">
@@ -1031,6 +1037,78 @@
       </div>
     </div>
 
+    <div id="bannerInfoWrap" class="banner-settings-panel hidden">
+      <div class="empty-title" id="bannerInfoTitle">Новый баннер</div>
+      <div class="empty-text" id="bannerInfoMeta">Главный баннер</div>
+      <div class="empty-text" id="bannerInfoText">Содержимое блока появится здесь.</div>
+      <div class="banner-title-row" id="bannerTitleRow">
+        <div class="banner-title-input-wrap">
+          <input
+            id="bannerTitleInput"
+            class="banner-title-input"
+            type="text"
+            placeholder="Название"
+            autocomplete="off"
+          />
+          <button type="button" class="banner-title-more-btn" id="bannerTitleSettingsBtn" aria-label="Настройки названия" title="Настройки названия">
+            <i class="fas fa-ellipsis-h"></i>
+          </button>
+          <div class="banner-title-popover hidden" id="bannerTitlePopover">
+            <label class="switch banner-title-popover-switch" id="bannerTitleOnCardSwitchWrap" title="Показывать название на карточке">
+              <input class="switch-input" type="checkbox" id="bannerTitleOnCardSwitch" />
+              <span class="switch-ui" aria-hidden="true"></span>
+              <span class="banner-title-switch-label">на карточке</span>
+            </label>
+            <div class="banner-title-color-row">
+              <span class="banner-title-color-label">Цвет шрифта</span>
+              <input type="color" id="bannerTitleColorInput" class="banner-title-color-input" value="#1f2937" />
+            </div>
+            <label class="switch banner-title-popover-switch" id="bannerTitleBackgroundSwitchWrap" title="Фон у текста">
+              <input class="switch-input" type="checkbox" id="bannerTitleBackgroundSwitch" />
+              <span class="switch-ui" aria-hidden="true"></span>
+              <span class="banner-title-switch-label">фон текста</span>
+            </label>
+            <div class="banner-title-color-row">
+              <span class="banner-title-color-label">Цвет фона</span>
+              <input type="color" id="bannerTitleBackgroundColorInput" class="banner-title-color-input" value="#ffffff" />
+            </div>
+            <div class="banner-title-opacity-row">
+              <span class="banner-title-color-label">Прозрачность фона</span>
+              <div class="banner-title-opacity-control">
+                <input type="range" id="bannerTitleBackgroundOpacityInput" min="0" max="100" step="1" value="90" />
+                <span id="bannerTitleBackgroundOpacityValue">90%</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="banner-description-row" id="bannerDescriptionRow">
+        <textarea
+          id="bannerDescriptionInput"
+          class="banner-description-input"
+          rows="1"
+          placeholder="Описание"
+          autocomplete="off"
+        ></textarea>
+      </div>
+      <div class="banner-ratio-field" id="bannerRatioField">
+        <div class="field-label" id="bannerRatioFieldLabel"></div>
+        <div class="banner-ratio-rail no-scrollbar" id="bannerRatioRail" role="listbox" aria-label="Banner aspect ratio"></div>
+      </div>
+      <div class="banner-photo-field" id="bannerPhotoField">
+        <div class="banner-photo-head">
+          <div class="field-label" id="bannerPhotoFieldLabel">Фото</div>
+          <label class="switch banner-photo-switch" id="bannerPhotoStretchSwitchWrap" title="Растягивать фото">
+            <input class="switch-input" type="checkbox" id="bannerPhotoStretchSwitch" />
+            <span class="switch-ui" aria-hidden="true"></span>
+            <span class="banner-photo-switch-label">растягивать</span>
+          </label>
+        </div>
+        <div class="banner-photo-rail no-scrollbar" id="bannerPhotoRail"></div>
+        <input id="bannerPhotosInput" type="file" accept="image/*" multiple class="hidden" />
+      </div>
+    </div>
+
     <%- include('./profile_content') %>
 
     <div id="clientOrderInfoWrap" class="hidden">
@@ -1091,6 +1169,17 @@
   </div>
 
   <!-- Footer для карточки клиента: кнопка выгод -->
+  <div class="panel-footer hidden" id="bannerInfoFooter">
+    <div class="product-footer-actions">
+      <div class="product-footer-view">
+        <button class="product-footer-btn product-footer-delete" type="button" id="bannerInfoDeleteBtn" title="Удалить" aria-label="Удалить">
+          <i class="fas fa-trash"></i>
+        </button>
+        <button class="product-footer-btn product-footer-edit" type="button" id="bannerInfoEditBtn">Редактировать</button>
+      </div>
+    </div>
+  </div>
+
   <div class="panel-footer new-order-right-footer hidden" id="clientBenefitsFooter">
     <div class="shop-cart-footer">
       <div class="shop-cart-footer-actions">
