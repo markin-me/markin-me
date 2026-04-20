@@ -12182,6 +12182,21 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         unit_id: toPositiveIntOrNull(raw.unit_id ?? pricing?.unit_id),
         unit_price_override: toFiniteNumberOrNull(raw.unit_price_override ?? raw.price ?? raw.unit_price),
         unit_price_before_discount: toFiniteNumberOrNull(raw.unit_price_before_discount ?? raw.old_price),
+        option_items: (Array.isArray(raw?.option_items) ? raw.option_items : (Array.isArray(raw?.options) ? raw.options : []))
+          .map((option) => ({
+            id: toPositiveIntOrNull(option?.id || option?.option_item_id),
+            qty: Math.max(1, Number(option?.qty ?? option?.quantity ?? 1) || 1),
+            target_product_id: toPositiveIntOrNull(option?.target_product_id || option?.product_id),
+            variant_group_id: toPositiveIntOrNull(option?.variant_group_id),
+            variant_value_index: toNonNegativeIntOrNull(option?.variant_value_index),
+          }))
+          .filter((option) => option.id),
+        ingredients: (Array.isArray(raw?.ingredients) ? raw.ingredients : [])
+          .map((ingredient) => ({
+            ingredient_id: toPositiveIntOrNull(ingredient?.ingredient_id || ingredient?.product_id),
+            qty: Number(ingredient?.qty ?? ingredient?.quantity ?? 0),
+          }))
+          .filter((ingredient) => ingredient.ingredient_id),
         ingredients_display: normalizeFavoriteIngredients(rawIngredients, 64).map((ing) => ({
           ingredient_id: ing.ingredient_id,
           name: str(ing.name || ing.ingredient_name || '').trim(),
@@ -12248,6 +12263,90 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           : (Array.isArray(rawItem?.sections) ? rawItem.sections : []);
         const selections = normalizeCheckoutPreviewComboSelections(selectionsSource, 24);
         if (!comboId && !selections.length) continue;
+        if (!comboId && selections.length) {
+          const normalizedSelections = selections
+            .map((selection) => {
+              const productId = Number(selection?.product_id || 0) || null;
+              if (!(productId > 0)) return null;
+              const currentUnitPrice = roundPromoMoney(Math.max(
+                0,
+                Number(selection?.unit_price_override ?? 0) || 0
+              ));
+              const originalUnitPrice = roundPromoMoney(Math.max(
+                currentUnitPrice,
+                Number(selection?.unit_price_before_discount ?? currentUnitPrice) || currentUnitPrice
+              ));
+              const currentLineTotal = roundPromoMoney(currentUnitPrice * qty);
+              const selectionOriginalLineTotal = roundPromoMoney(originalUnitPrice * qty);
+              const item = {
+                type: 'product',
+                product_id: productId,
+                qty,
+                line_total: currentLineTotal,
+                auto_add: Number(rawItem?.auto_add || 0) === 1 ? 1 : 0,
+                variant_group_id: toPositiveIntOrNull(selection?.variant_group_id),
+                variant_value_index: toNonNegativeIntOrNull(selection?.variant_value_index),
+                option_items: Array.isArray(selection?.option_items) ? selection.option_items : [],
+                ingredients: Array.isArray(selection?.ingredients) ? selection.ingredients : [],
+              };
+              if (selectionOriginalLineTotal > currentLineTotal) {
+                item.discount = { original_line_total: selectionOriginalLineTotal };
+              }
+              return {
+                item,
+                currentLineTotal,
+                originalLineTotal: selectionOriginalLineTotal,
+              };
+            })
+            .filter(Boolean);
+          if (!normalizedSelections.length) continue;
+          const requestedCurrentLineTotal = lineTotal;
+          const requestedOriginalLineTotal = originalLineTotal;
+          const totalSelectionCurrent = roundPromoMoney(
+            normalizedSelections.reduce((sum, entry) => sum + Number(entry?.currentLineTotal || 0), 0)
+          );
+          const totalSelectionOriginal = roundPromoMoney(
+            normalizedSelections.reduce((sum, entry) => sum + Number(entry?.originalLineTotal || 0), 0)
+          );
+          if (totalSelectionCurrent > 0 && Math.abs(requestedCurrentLineTotal - totalSelectionCurrent) >= 0.01) {
+            const scale = requestedCurrentLineTotal / totalSelectionCurrent;
+            let assigned = 0;
+            normalizedSelections.forEach((entry, index) => {
+              const baseValue = Number(entry?.currentLineTotal || 0);
+              const nextLineTotal = index === normalizedSelections.length - 1
+                ? roundPromoMoney(requestedCurrentLineTotal - assigned)
+                : roundPromoMoney(baseValue * scale);
+              assigned = roundPromoMoney(assigned + nextLineTotal);
+              entry.item.line_total = Math.max(0, nextLineTotal);
+            });
+          }
+          if (totalSelectionOriginal > 0 && Math.abs(requestedOriginalLineTotal - totalSelectionOriginal) >= 0.01) {
+            const scale = requestedOriginalLineTotal / totalSelectionOriginal;
+            let assigned = 0;
+            normalizedSelections.forEach((entry, index) => {
+              if (!entry.item?.discount || typeof entry.item.discount !== 'object') return;
+              const baseValue = Number(entry?.originalLineTotal || entry?.currentLineTotal || 0);
+              const nextOriginalLineTotal = index === normalizedSelections.length - 1
+                ? roundPromoMoney(requestedOriginalLineTotal - assigned)
+                : roundPromoMoney(baseValue * scale);
+              assigned = roundPromoMoney(assigned + nextOriginalLineTotal);
+              entry.item.discount.original_line_total = Math.max(
+                Number(entry.item.line_total || 0),
+                nextOriginalLineTotal
+              );
+            });
+          }
+          normalizedSelections.forEach((entry) => {
+            normalizedItems.push(entry.item);
+          });
+          normalizedSelections.forEach((selection) => {
+            const productId = Number(selection?.item?.product_id || 0);
+            if (productId > 0) productIds.add(productId);
+          });
+          subtotalBeforeDiscount += requestedOriginalLineTotal;
+          itemsBaseTotal += requestedCurrentLineTotal;
+          continue;
+        }
         selections.forEach((selection) => {
           const productId = Number(selection?.product_id || 0);
           if (productId > 0) productIds.add(productId);
@@ -13999,6 +14098,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         tenantId,
         storeId,
         promoCodes: [...reservationPromoCodes],
+        excludeOrderId,
       });
       activePromoReservationStats = buildActiveOrderPromoReservationStatsMap(activePromoReservationRows, customerId);
     }
@@ -17084,6 +17184,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
               tenantId,
               storeId: orderStoreId,
               promoCodes: [promoCode],
+              excludeOrderId: null,
             }),
             customerId
           )
@@ -18240,6 +18341,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           free_delivery_from: defaultSettings.free_delivery_from != null ? Number(defaultSettings.free_delivery_from) : null,
           eta_minutes: defaultSettings.eta_minutes != null ? Number(defaultSettings.eta_minutes) : null,
           price_tiers: Array.isArray(defaultSettings.price_tiers) ? defaultSettings.price_tiers : [],
+          default_store_id: defaultSettings.default_store_id != null ? Number(defaultSettings.default_store_id) : null,
+          zones: Array.isArray(deliveryZones) ? deliveryZones : [],
           has_settings: Boolean(defaultSettings.has_settings),
           delivery_revision: deliveryRevision,
           store_address_map_enabled: storeAddressMapEnabled,
