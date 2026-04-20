@@ -19263,30 +19263,34 @@
   // -----------------------------
   // Init
   // -----------------------------
-  initClientsAccordion();
-
-  // Инициализируем кастомный select для логики условий
-  const logicSelectWrap = $('#fe_logic');
-  if (logicSelectWrap) {
-    initCustomSelects(logicSelectWrap.parentElement);
-    logicSelectWrap.addEventListener('cs-change', () => scheduleFilterDraftCountPreview());
-  }
-
-  const filterTitleInput = $('#fe_title');
-  if (filterTitleInput) {
-    filterTitleInput.addEventListener('input', () => scheduleFilterDraftCountPreview());
-  }
-  loadBannerStorage();
-  if (elBannersEnabledSwitch) {
-    elBannersEnabledSwitch.checked = state.bannersEnabled === true;
-  }
-  renderBannerFilters();
-  renderBannerPlacement();
-  updateDiscountPromoUi();
-  updateDiscountRestrictionUi();
-
   const isChatBridgeMode = !!(document.body && document.body.classList.contains("page-chat"));
-  if (!isChatBridgeMode) {
+  const isOrdersBenefitsBridgeMode = !!(document.body && document.body.classList.contains("page-orders"));
+
+  if (!isOrdersBenefitsBridgeMode) {
+    initClientsAccordion();
+
+    // Инициализируем кастомный select для логики условий
+    const logicSelectWrap = $('#fe_logic');
+    if (logicSelectWrap) {
+      initCustomSelects(logicSelectWrap.parentElement);
+      logicSelectWrap.addEventListener('cs-change', () => scheduleFilterDraftCountPreview());
+    }
+
+    const filterTitleInput = $('#fe_title');
+    if (filterTitleInput) {
+      filterTitleInput.addEventListener('input', () => scheduleFilterDraftCountPreview());
+    }
+    loadBannerStorage();
+    if (elBannersEnabledSwitch) {
+      elBannersEnabledSwitch.checked = state.bannersEnabled === true;
+    }
+    renderBannerFilters();
+    renderBannerPlacement();
+    updateDiscountPromoUi();
+    updateDiscountRestrictionUi();
+  }
+
+  if (!isChatBridgeMode && !isOrdersBenefitsBridgeMode) {
     const initialClientOpenRequest = getClientOpenRequestFromUrl();
     updateDiscountPromoUi();
 

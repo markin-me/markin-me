@@ -4067,6 +4067,37 @@
     return null;
   }
 
+  async function ensureRightOrderBenefitsPreviewFresh(orderId, opts = {}) {
+    const id = Number(orderId || 0);
+    if (!(id > 0)) return null;
+    const index = getRightOrderIndexById(id);
+    if (index < 0) return null;
+    const order = state.rightOrders[index] || {};
+    if (getRightOrderActiveEditPricingSnapshot(order)) {
+      return getRightOrderBenefitsPreviewSnapshot(order, {
+        mode: getRightOrderBenefitsPreferredMode(order?.form, getActiveRightOrderBenefitsMode()),
+        preferApplied: true,
+      });
+    }
+    const form = order.form && typeof order.form === "object" ? order.form : {};
+    const hasPreviewState = ["customer", "all"].some((mode) => {
+      const slot = getRightOrderBenefitsCacheSlot(id, mode);
+      return state.rightBenefitsPreviewByOrder.has(slot) || state.rightBenefitsPreviewKeyByOrder.has(slot);
+    });
+    const shouldRefresh = hasPreviewState || (
+      Number(form.clientId || 0) > 0
+      || hasRightOrderBenefitsSelection(form)
+      || (Array.isArray(form.cartItems) ? form.cartItems : []).some((item) => Number(item?.is_gift_reward || 0) === 1)
+    );
+    if (!shouldRefresh) return null;
+    return loadRightOrderBenefitsPreview(id, {
+      force: true,
+      render: opts?.render !== false,
+      renderOverlay: opts?.renderOverlay === true,
+      mode: getRightOrderBenefitsPreferredMode(form, getActiveRightOrderBenefitsMode()),
+    });
+  }
+
   async function prefetchRightOrderBenefitsModes(orderId, opts = {}) {
     const id = Number(orderId || 0);
     if (!(id > 0)) return;
@@ -4408,8 +4439,8 @@
     const cartItemsCount = cartItems.reduce((sum, item) => sum + Math.max(1, Number(item?.qty || 1)), 0);
     const preferredBenefitsMode = getRightOrderBenefitsPreferredMode(form, null);
     const benefitsPreview = getRightOrderBenefitsPreviewSnapshot(order, preferredBenefitsMode
-      ? { mode: preferredBenefitsMode, preferApplied: true, allowStale: true, allowClientCache: true }
-      : { preferApplied: true, allowStale: true, allowClientCache: true });
+      ? { mode: preferredBenefitsMode, preferApplied: true }
+      : { preferApplied: true });
     const benefitsPreviewSummary = (() => {
       const raw = benefitsPreview?.summary && typeof benefitsPreview.summary === "object"
         ? benefitsPreview.summary
@@ -5812,6 +5843,16 @@
       const refreshBaseSummary = getRightOrderCheckoutSummary(order);
       await ensureRightDeliveryQuoteFresh(order, refreshBaseSummary, { force: true, render: true });
       order = state.rightOrders[index] || order;
+    }
+    try {
+      await ensureRightOrderBenefitsPreviewFresh(id, {
+        render: true,
+        renderOverlay: Number(state.benefitsModal.orderId || 0) === id,
+      });
+      order = state.rightOrders[index] || order;
+    } catch (error) {
+      showNewOrderAlert(getRightOrderBenefitsActionErrorMessage(error));
+      return;
     }
     const summary = getRightOrderCheckoutSummary(order);
     const deliveryAddress = String(form.address || "").trim();
@@ -16435,7 +16476,7 @@
         if (benefitsBtn) {
           const orderId = Number(benefitsBtn.getAttribute("data-order-id") || 0);
           if (!(orderId > 0)) return;
-          void openRightClientBenefitsCatalogOverlay(orderId);
+          void openRightBenefitsOverlay(orderId);
           return;
         }
 

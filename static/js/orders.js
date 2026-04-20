@@ -316,6 +316,8 @@
     addrToggleBtn: clientAddrToggleBtn,
     addrFormCard: clientAddrFormCard,
   } = desktopClientDom;
+  const ordersClientBenefitsFooter = $("#ordersClientBenefitsFooter");
+  const ordersClientBenefitsOpenBtn = $("#ordersClientBenefitsOpenBtn");
   const sheetOrderInfoFooter = sheet ? $('[data-role="order-info-footer"]', sheet) : null;
   const sheetOrderInfoPaymentBtn = sheet ? $('[data-role="order-info-payment-btn"]', sheet) : null;
   const sharedOrderPanel = window.SharedOrderPanel || null;
@@ -4117,16 +4119,23 @@
     });
   }
 
+  function setOrdersClientBenefitsFooterVisible(isVisible) {
+    if (!ordersClientBenefitsFooter) return;
+    ordersClientBenefitsFooter.classList.toggle("hidden", !isVisible);
+  }
+
   function showEmptyInfo() {
     if (sharedOrderInfoRenderers.length) {
       sharedOrderInfoRenderers.forEach((renderer) => renderer.showEmpty());
       hideClientSurfaces();
+      setOrdersClientBenefitsFooterVisible(false);
       setSheetTitle("РРЅС„РѕСЂРјР°С†РёСЏ");
       return;
     }
     setHiddenAll(infoEls.empty, false);
     setHiddenAll(infoEls.content, true);
     hideClientSurfaces();
+    setOrdersClientBenefitsFooterVisible(false);
     orderInfoFooters.forEach((footer) => footer.classList.add("hidden"));
     setSheetTitle("РРЅС„РѕСЂРјР°С†РёСЏ");
   }
@@ -4135,12 +4144,14 @@
     if (sharedOrderInfoRenderers.length) {
       sharedOrderInfoRenderers.forEach((renderer) => renderer.showOrder());
       hideClientSurfaces();
+      setOrdersClientBenefitsFooterVisible(false);
       setSheetTitle("РРЅС„РѕСЂРјР°С†РёСЏ");
       return;
     }
     setHiddenAll(infoEls.empty, true);
     setHiddenAll(infoEls.content, false);
     hideClientSurfaces();
+    setOrdersClientBenefitsFooterVisible(false);
     orderInfoFooters.forEach((footer) => footer.classList.remove("hidden"));
     setSheetTitle("РРЅС„РѕСЂРјР°С†РёСЏ");
   }
@@ -4151,6 +4162,7 @@
     hideClientSurfaces();
     const targetDom = surface === "sheet" ? sheetClientDom : desktopClientDom;
     if (targetDom?.infoWrap) targetDom.infoWrap.classList.remove("hidden");
+    setOrdersClientBenefitsFooterVisible(surface === "desktop");
     orderInfoFooters.forEach((footer) => footer.classList.add("hidden"));
     setSheetTitle(surface === "sheet" ? "РљР»РёРµРЅС‚" : "РРЅС„РѕСЂРјР°С†РёСЏ");
   }
@@ -4235,6 +4247,16 @@
 
   bindClientContentTabs(desktopClientDom);
   bindClientContentTabs(sheetClientDom);
+
+  if (ordersClientBenefitsOpenBtn) {
+    ordersClientBenefitsOpenBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      const activeClientTab = getActiveClientTab();
+      const clientId = Number(activeClientTab?.clientId || 0);
+      if (!(clientId > 0)) return;
+      void window.__clientsDashboardApi?.openBenefitsByClientId?.(clientId);
+    });
+  }
 
   function renderClientAddressesHtml(addresses) {
     const list = Array.isArray(addresses) ? addresses : [];
@@ -4471,6 +4493,7 @@
     syncOrderPaymentFooter(order);
     if (sharedOrderInfoRenderers.length) {
       hideClientSurfaces();
+      setOrdersClientBenefitsFooterVisible(false);
       setSheetTitle("РРЅС„РѕСЂРјР°С†РёСЏ");
       sharedOrderInfoRenderers.forEach((renderer) => renderer.setOrder(order));
       return;
