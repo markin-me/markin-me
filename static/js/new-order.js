@@ -4474,7 +4474,13 @@
       use_original_line_totals_for_benefits: useOriginalLineTotalsForBenefits ? 1 : 0,
       items: buildRightOrderPayloadItems(previewCartItems),
     };
-    const excludeOrderId = Number(safeOrder.id || 0);
+    const excludeOrderId = (() => {
+      const editOrderId = Number(safeOrder?.editOrderId || 0);
+      if (String(safeOrder?.mode || "").trim().toLowerCase() === "edit" && editOrderId > 0) {
+        return editOrderId;
+      }
+      return Number(safeOrder?.id || 0);
+    })();
     if (excludeOrderId > 0) {
       request.exclude_order_id = excludeOrderId;
     }
@@ -4552,6 +4558,7 @@
     const order = state.rightOrders[index] || {};
     const form = order.form && typeof order.form === "object" ? order.form : {};
     const hasClient = Number(form.clientId || 0) > 0;
+    const strictCurrentSelection = opts?.strictCurrentSelection === true;
     const preferredMode = hasClient
       ? "customer"
       : getRightOrderBenefitsPreferredMode(form, opts?.mode || getActiveRightOrderBenefitsMode());
@@ -4561,8 +4568,8 @@
     modes.forEach((mode) => {
       const basePreview = getRightOrderBenefitsPreviewSnapshot(order, {
         mode,
-        preferApplied: true,
-        allowStale: true,
+        preferApplied: !strictCurrentSelection,
+        allowStale: !strictCurrentSelection,
         allowClientCache: true,
         resolveForOrder: false,
       });
@@ -5565,11 +5572,15 @@
       if (subtotalBeforeDiscount < minSubtotalBeforeDiscount) {
         subtotalBeforeDiscount = minSubtotalBeforeDiscount;
       }
-      let breakdown = buildRightOrderDiscountBreakdownEntries(benefitsSummary?.discount_breakdown, {
+      const benefitsBreakdown = buildRightOrderDiscountBreakdownEntries(benefitsSummary?.discount_breakdown, {
         promoCode: opts?.promoCode,
       });
+      let breakdown = mergeRightOrderDiscountBreakdownEntries(
+        benefitsBreakdown,
+        itemLevelSummary.breakdown
+      );
       if (!breakdown.length && totalDiscount > 0) {
-        breakdown = mergeRightOrderDiscountBreakdownEntries(itemLevelSummary.breakdown);
+        breakdown = appendRightOrderOtherDiscountEntryIfNeeded([], totalDiscount);
       }
       const breakdownTotal = roundPrice(
         breakdown.reduce((sum, entry) => sum + Number(entry?.amount || 0), 0)
@@ -9406,6 +9417,10 @@
     if (index < 0) return null;
     const order = state.rightOrders[index] || {};
     const form = order.form && typeof order.form === "object" ? { ...order.form } : {};
+    const previousSelection = getRightOrderBenefitsSelectionState(form);
+    const previousPreviewMode = String(form.benefits_preview_mode || "").trim()
+      ? normalizeRightOrderBenefitsMode(form.benefits_preview_mode)
+      : null;
     const activeMode = normalizeRightOrderBenefitsMode(opts?.mode || getActiveRightOrderBenefitsMode());
     form.promo_code = normalizeRightOrderBenefitsPromoCode(selection?.promoCode);
     form.selected_discount_id = normalizeRightOrderBenefitsSelectedId(selection?.selectedDiscountId);
@@ -9418,12 +9433,32 @@
     form.selected_promo_reward_id = normalizeRightOrderBenefitsSelectedId(selection?.selectedPromoRewardId);
     form.benefits_preview_mode = hasRightOrderBenefitsSelection(form) ? activeMode : null;
     const shouldMarkTouched = String(order?.mode || "").trim().toLowerCase() === "edit";
-    state.rightOrders[index] = {
+    const selectionChanged = (
+      previousSelection.promoCode !== form.promo_code
+      || previousSelection.selectedDiscountId !== form.selected_discount_id
+      || previousSelection.selectedDiscountSource !== form.selected_discount_source
+      || previousSelection.selectedPromoSource !== form.selected_promo_source
+      || previousSelection.selectedPromoRewardId !== form.selected_promo_reward_id
+      || previousPreviewMode !== form.benefits_preview_mode
+    );
+    const nextOrder = {
       ...order,
       form,
       editCartTouched: shouldMarkTouched ? true : Boolean(order?.editCartTouched),
     };
-    seedRightOrderBenefitsPreviewLocally(id, { mode: activeMode });
+    if (shouldMarkTouched && selectionChanged) {
+      nextOrder.editPricingSnapshot = null;
+      nextOrder.editPricingBaselineSignature = "";
+    }
+    state.rightOrders[index] = nextOrder;
+    if (selectionChanged) {
+      invalidateRightOrderBenefitsPreview(id);
+      clearRightOrderBenefitsRefreshTimer(id);
+    }
+    seedRightOrderBenefitsPreviewLocally(id, {
+      mode: activeMode,
+      strictCurrentSelection: selectionChanged,
+    });
     state.benefitsModal.promoInputValue = form.promo_code || "";
     if (opts?.render !== false) {
       renderRightOrderTabs();
