@@ -7703,6 +7703,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         }
       ),
     };
+    return data;
   }
 
   function collectLoyaltyProgressGiftRewardTargetRows(mechanic) {
@@ -9026,6 +9027,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
   async function loadCustomerBenefitDiscountRows(tenantId, storeId, customerId) {
     const hasHideInBenefitsColumn = await ensureDiscountHideInBenefitsColumn();
     await ensureDiscountDeletedColumns();
+    await discountHelpers.ensureCustomerBenefitDiscountStorage(db);
+    await ensureCustomerBenefitPromoStorage();
     const [customerCats] = await db.query(
       `SELECT category_id
          FROM cust_customer_category_links
@@ -9049,16 +9052,28 @@ window.location.replace(${JSON.stringify(redirectUrl)});
               d.starts_at, d.ends_at, d.schedule_days, d.schedule_time_start, d.schedule_time_end,
               d.priority, d.is_active, ${hasHideInBenefitsColumn ? 'd.hide_in_benefits' : '0 AS hide_in_benefits'}, d.activation_mode, d.reward_type, d.promo_code_mode,
               d.unique_code_usage_limit, d.mechanic_type, d.mechanic_config_json,
-              dc.target_type, dc.customer_id, dc.customer_category_id
+              dc.target_type, dc.customer_id, dc.customer_category_id,
+              IF(cbd.id IS NULL, 0, 1) AS is_customer_benefit_issued,
+              IF(cbp.id IS NULL, 0, 1) AS is_customer_promo_saved
          FROM mkt_discounts d
          LEFT JOIN mkt_discount_customers dc
            ON dc.discount_id = d.id
           AND dc.tenant_id = d.tenant_id
+         LEFT JOIN mkt_customer_benefit_discounts cbd
+           ON cbd.discount_id = d.id
+          AND cbd.tenant_id = d.tenant_id
+          AND cbd.store_id = ?
+          AND cbd.customer_id = ?
+         LEFT JOIN mkt_customer_benefit_promos cbp
+           ON cbp.discount_id = d.id
+          AND cbp.tenant_id = d.tenant_id
+          AND cbp.store_id = ?
+          AND cbp.customer_id = ?
         WHERE d.tenant_id = ?
           AND (d.store_id = ? OR d.store_id = 0 OR d.store_id IS NULL)
           AND d.is_active = 1
           AND d.is_deleted = 0`,
-      [tenantId, storeId]
+      [storeId, customerId, storeId, customerId, tenantId, storeId]
     );
 
     const byDiscountId = new Map();
@@ -9072,8 +9087,16 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           discount: { ...row },
           hasTargets: false,
           matches: false,
+          manuallyIssued: false,
+          savedPromo: false,
         };
         byDiscountId.set(discountId, entry);
+      }
+      if (Number(row?.is_customer_benefit_issued || 0) === 1) {
+        entry.manuallyIssued = true;
+      }
+      if (Number(row?.is_customer_promo_saved || 0) === 1) {
+        entry.savedPromo = true;
       }
 
       const hasTargetRow = Boolean(
@@ -9099,9 +9122,16 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       .filter((entry) => {
         if (!entry?.discount) return false;
         if (!discountHelpers.isDiscountActive(entry.discount)) return false;
-        return !entry.hasTargets || entry.matches;
+        if (isHiddenBenefitsDiscount(entry.discount) && !entry.manuallyIssued && !entry.savedPromo && !(entry.hasTargets && entry.matches)) return false;
+        return !entry.hasTargets || entry.matches || entry.manuallyIssued || entry.savedPromo;
       })
-      .map((entry) => entry.discount)
+      .map((entry) => ({
+        ...entry.discount,
+        is_customer_benefit_issued: entry.manuallyIssued,
+        is_customer_promo_saved: entry.savedPromo,
+        is_customer_audience_match: entry.matches,
+        has_customer_audience_targets: entry.hasTargets,
+      }))
       .sort((a, b) => {
         const priorityDiff = Number(b?.priority || 0) - Number(a?.priority || 0);
         if (priorityDiff !== 0) return priorityDiff;
@@ -13787,7 +13817,15 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         );
     const automaticDiscountRows = benefitDiscountRows.filter((discount) => (
       isPublicAutomaticSimpleDiscount(discount)
-      && (previewMode === 'all' || !isHiddenBenefitsDiscount(discount))
+      && (
+        previewMode === 'all'
+        || !isHiddenBenefitsDiscount(discount)
+        || discount?.is_customer_benefit_issued === true
+        || (
+          discount?.has_customer_audience_targets === true
+          && discount?.is_customer_audience_match === true
+        )
+      )
     ));
     const automaticDiscountIds = automaticDiscountRows
       .map((discount) => Number(discount?.id || 0))

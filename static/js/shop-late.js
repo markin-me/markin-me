@@ -8902,6 +8902,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     const mobileBenefitsPromoWrap = document.getElementById("shopMobileBenefitsPromoWrap");
     const mobileBenefitsPromoInput = document.getElementById("shopMobileBenefitsPromoInput");
     if (mobileBenefitsPromoInput) {
+      ensureMobileBenefitsPromoInputBehavior(mobileBenefitsPromoInput);
       try { mobileBenefitsPromoInput.blur(); } catch {}
     }
     if (mobileBenefitsPromoWrap) mobileBenefitsPromoWrap.classList.add("hidden");
@@ -9092,6 +9093,18 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
   function normalizeCheckoutBenefitsPromoInputValue(value, { trim = false } = {}) {
     const normalizedValue = str(value || "").toUpperCase();
     return trim ? normalizedValue.trim() : normalizedValue;
+  }
+
+  function ensureMobileBenefitsPromoInputBehavior(inputEl) {
+    if (!inputEl || inputEl._shopBenefitsPromoInputBound) return;
+    inputEl.readOnly = false;
+    inputEl.addEventListener("input", () => {
+      const normalizedValue = normalizeCheckoutBenefitsPromoInputValue(inputEl.value || "");
+      if (inputEl.value !== normalizedValue) {
+        inputEl.value = normalizedValue;
+      }
+    });
+    inputEl._shopBenefitsPromoInputBound = true;
   }
 
   function getCheckoutBenefitsSavedPromoInputValue(sourceDraft) {
@@ -18024,6 +18037,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       : typeof onOpenInfo === "function";
     const openPrimaryAction = async () => {
       if (!hasPrimaryAction) return;
+      if (card?.classList?.contains("is-claim-loading")) return;
       if (interactionMode === "products_sheet") {
         await onOpenProducts(item);
         return;
@@ -18067,7 +18081,19 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       event.preventDefault();
       event.stopPropagation();
       if (!canClaim) return;
-      await onClaim(item);
+      if (card.classList.contains("is-claim-loading")) return;
+      card.classList.add("is-claim-loading");
+      card.setAttribute("aria-busy", "true");
+      claimBtn.disabled = true;
+      try {
+        await onClaim(item);
+      } finally {
+        if (card.isConnected) {
+          card.classList.remove("is-claim-loading");
+          card.removeAttribute("aria-busy");
+          claimBtn.disabled = !canClaim;
+        }
+      }
     });
     if (canClaim) {
       claimBtn.classList.add("is-ready");
@@ -18110,6 +18136,13 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     main.appendChild(progressWrap);
     layout.appendChild(main);
     card.appendChild(layout);
+
+    if (canClaim) {
+      const loadingOverlay = document.createElement("div");
+      loadingOverlay.className = "shop-checkout-benefit-gift-loading";
+      loadingOverlay.innerHTML = '<div class="shop-checkout-sending-spinner" aria-hidden="true"></div>';
+      card.appendChild(loadingOverlay);
+    }
 
     return card;
   }
@@ -18595,9 +18628,15 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       promoEntryInput.autocomplete = "new-password";
       promoEntryInput.autocorrect = "off";
       promoEntryInput.autocapitalize = "characters";
+      promoEntryInput.inputMode = "text";
+      promoEntryInput.enterKeyHint = "done";
       promoEntryInput.spellcheck = false;
+      promoEntryInput.setAttribute("aria-autocomplete", "none");
       promoEntryInput.setAttribute("data-lpignore", "true");
-      promoEntryInput.value = str(promoEntryState?.value || "");
+      promoEntryInput.setAttribute("data-form-type", "other");
+      promoEntryInput.setAttribute("data-1p-ignore", "true");
+      promoEntryInput.setAttribute("data-bwignore", "true");
+      promoEntryInput.value = normalizeCheckoutBenefitsPromoInputValue(promoEntryState?.value || "");
 
       const promoEntryApplyBtn = document.createElement("button");
       promoEntryApplyBtn.type = "button";
@@ -18628,6 +18667,23 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
         }
         if (typeof syncManualPromoApplyState === "function") syncManualPromoApplyState();
       });
+      const focusPromoEntryInput = () => {
+        if (!window.matchMedia("(max-width: 768px)").matches) return;
+        if (document.activeElement === promoEntryInput) return;
+        try {
+          promoEntryInput.focus({ preventScroll: true });
+        } catch {
+          promoEntryInput.focus();
+        }
+      };
+      promoEntryInput.addEventListener("pointerdown", (event) => {
+        event.stopPropagation();
+        focusPromoEntryInput();
+      });
+      promoEntryInput.addEventListener("touchend", (event) => {
+        event.stopPropagation();
+        focusPromoEntryInput();
+      }, { passive: true });
       promoEntryApplyBtn.addEventListener("click", async () => {
         if (promoEntryApplyBtn.disabled) return;
         promoEntryApplyBtn.disabled = true;

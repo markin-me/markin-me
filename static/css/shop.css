@@ -16769,6 +16769,21 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
 .shop-checkout-benefit-progress-card{
   display: grid;
   gap: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+.shop-checkout-benefit-progress-card.is-claim-loading .shop-checkout-benefit-gift-loading{
+  display: flex;
+}
+
+.shop-checkout-benefit-progress-card.is-claim-loading .shop-checkout-benefit-progress-claim{
+  cursor: default;
+}
+
+.shop-checkout-benefit-progress-card.is-claim-loading .shop-checkout-sending-spinner{
+  width: 24px;
+  height: 24px;
 }
 
 .shop-checkout-benefit-progress-layout{
