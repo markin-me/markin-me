@@ -8905,6 +8905,121 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       .filter(Boolean);
   }
 
+  async function loadPublicCategoryTitlesByIds(tenantId, categoryIds) {
+    const ids = [...new Set((Array.isArray(categoryIds) ? categoryIds : []).map((id) => Number(id)).filter((id) => id > 0))];
+    if (!ids.length) return new Map();
+    const [rows] = await db.query(
+      `SELECT id, title
+         FROM prod_categories
+        WHERE tenant_id = ? AND id IN (?)`,
+      [tenantId, ids]
+    );
+    return new Map(
+      (Array.isArray(rows) ? rows : []).map((row) => [
+        Number(row?.id || 0),
+        publicDiscountText(row?.title) || `#${Number(row?.id || 0)}`,
+      ])
+    );
+  }
+
+  function buildPublicBuyXGetYTargetPayload(items, productsMap, categoriesMap, configMode = 'any') {
+    const result = [];
+    const seen = new Set();
+    (Array.isArray(items) ? items : []).forEach((item) => {
+      const row = normalizePublicDiscountTargetRow(item, configMode);
+      if (!row) return;
+      const entityType = publicDiscountText(row?.entity_type).toLowerCase();
+      const entityId = Number(
+        entityType === 'category'
+          ? row?.category_id
+          : (entityType === 'combo' ? row?.combo_id : row?.product_id)
+      );
+      if (!(entityId > 0)) return;
+      const key = `${entityType}:${entityId}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+
+      if (entityType === 'category') {
+        result.push({
+          id: entityId,
+          entity_id: entityId,
+          category_id: entityId,
+          entity_type: 'category',
+          title: publicDiscountText(item?.title || item?.name) || categoriesMap.get(entityId) || `#${entityId}`,
+        });
+        return;
+      }
+
+      if (entityType === 'combo') {
+        result.push({
+          id: entityId,
+          entity_id: entityId,
+          combo_id: entityId,
+          entity_type: 'combo',
+          title: publicDiscountText(item?.title || item?.name) || `#${entityId}`,
+        });
+        return;
+      }
+
+      const product = productsMap.get(entityId) || null;
+      result.push({
+        id: entityId,
+        entity_id: entityId,
+        product_id: entityId,
+        entity_type: 'product',
+        title: publicDiscountText(item?.title || item?.name) || publicDiscountText(product?.title) || '\u0422\u043e\u0432\u0430\u0440',
+        photo_url: product?.photo_url || null,
+        price: Number(product?.price || 0),
+        config_mode: normalizePublicProductConfigMode(row?.config_mode, configMode),
+        product_config: row?.product_config || null,
+      });
+    });
+    return result;
+  }
+
+  function buildPublicBuyXGetYDetailCard(discount, mechanic, productsMap, categoriesMap) {
+    const buyQty = Math.max(1, Number(mechanic?.buy_qty || 0) || 1);
+    const rewardQty = Math.max(1, Number(mechanic?.reward_qty || 0) || 1);
+    const badgeText = formatPublicBuyXGetYBadge(mechanic);
+    const configMode = normalizePublicProductConfigMode(mechanic?.qualifying_items_config_mode, 'any');
+    return {
+      id: Number(discount?.id || 0),
+      kind: 'discount',
+      mechanic_type: 'buy_x_get_y',
+      title: publicDiscountText(discount?.title) || `\u0410\u043a\u0446\u0438\u044f ${badgeText}`,
+      description: publicDiscountText(discount?.description),
+      badge_text: badgeText,
+      apply_scope_text: `\u0410\u043a\u0446\u0438\u044f ${badgeText}`,
+      expires_at: discount?.ends_at || null,
+      is_stackable: Number(discount?.is_stackable || 0) === 1,
+      priority: Number(discount?.priority || 0),
+      discount_type: 'buy_x_get_y',
+      discount_value: 0,
+      apply_to: 'product',
+      min_order_amount: discount?.min_order_amount != null ? Number(discount.min_order_amount || 0) : null,
+      max_discount_amount: discount?.max_discount_amount != null ? Number(discount.max_discount_amount || 0) : null,
+      usage_limit: discount?.usage_limit != null ? Number(discount.usage_limit || 0) : null,
+      usage_per_customer: discount?.usage_per_customer != null ? Number(discount.usage_per_customer || 0) : null,
+      usage_count: Number(discount?.usage_count || 0),
+      customer_usage_count: Number(discount?.customer_usage_count || 0),
+      starts_at: discount?.starts_at || null,
+      ends_at: discount?.ends_at || null,
+      schedule_days: discount?.schedule_days || null,
+      schedule_time_start: discount?.schedule_time_start || null,
+      schedule_time_end: discount?.schedule_time_end || null,
+      is_active: Number(discount?.is_active || 0) === 1,
+      buy_qty: buyQty,
+      reward_qty: rewardQty,
+      repeat_mode: publicDiscountText(mechanic?.repeat_mode).toLowerCase() === 'repeat' ? 'repeat' : 'single',
+      products: buildPublicBuyXGetYTargetPayload(
+        mechanic?.qualifying_items || [],
+        productsMap,
+        categoriesMap,
+        configMode
+      ),
+    };
+  }
+
   function buildGiftRewardPayload(discount, mechanic, productsMap) {
     const configMode = normalizePublicProductConfigMode(
       mechanic?.gift_products_config_mode ?? mechanic?.reward?.gift_products_config_mode,
@@ -9439,6 +9554,67 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.get('/discounts/:id/buy-x-get-y-detail', async (req, res) => {
+    try {
+      await ensureDiscountDeletedColumns();
+      const hasHideInBenefitsColumn = await ensureDiscountHideInBenefitsColumn();
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const discountId = Number(req.params.id);
+      if (!Number.isInteger(discountId) || discountId <= 0) {
+        return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      }
+
+      const [rows] = await db.query(
+        `SELECT d.id, d.store_id, d.title, d.description, d.discount_type, d.discount_value,
+                d.apply_to, d.min_order_amount, d.max_discount_amount, d.is_stackable,
+                d.usage_limit, d.usage_per_customer, d.usage_count,
+                d.starts_at, d.ends_at, d.schedule_days, d.schedule_time_start, d.schedule_time_end,
+                d.priority, d.is_active, ${hasHideInBenefitsColumn ? 'd.hide_in_benefits' : '0 AS hide_in_benefits'},
+                d.activation_mode, d.reward_type, d.promo_code_mode, d.mechanic_type, d.mechanic_config_json
+           FROM mkt_discounts d
+          WHERE d.tenant_id = ?
+            AND d.id = ?
+            AND (d.store_id = ? OR d.store_id = 0 OR d.store_id IS NULL)
+            AND d.is_active = 1
+            AND d.is_deleted = 0
+            AND d.mechanic_type = 'buy_x_get_y'
+          ORDER BY CASE WHEN d.store_id = ? THEN 0 ELSE 1 END, d.priority DESC, d.id ASC
+          LIMIT 1`,
+        [tenantId, discountId, storeId, storeId]
+      );
+      const discount = Array.isArray(rows) && rows.length ? rows[0] : null;
+      if (!discount || !discountHelpers.isDiscountActive(discount)) {
+        return res.status(404).json({ ok: false, error: 'DISCOUNT_NOT_AVAILABLE' });
+      }
+
+      const mechanic = parsePublicDiscountObject(discount?.mechanic_config_json, {});
+      const targetRows = Array.isArray(mechanic?.qualifying_items) ? mechanic.qualifying_items : [];
+      const normalizedTargets = targetRows
+        .map((row) => normalizePublicDiscountTargetRow(row, normalizePublicProductConfigMode(mechanic?.qualifying_items_config_mode, 'any')))
+        .filter(Boolean);
+      const productIds = normalizedTargets
+        .filter((row) => publicDiscountText(row?.entity_type).toLowerCase() === 'product')
+        .map((row) => Number(row?.product_id || 0))
+        .filter((id) => id > 0);
+      const categoryIds = normalizedTargets
+        .filter((row) => publicDiscountText(row?.entity_type).toLowerCase() === 'category')
+        .map((row) => Number(row?.category_id || 0))
+        .filter((id) => id > 0);
+
+      const [productsMap, categoriesMap] = await Promise.all([
+        loadCheckoutRewardProductsByIds(tenantId, productIds),
+        loadPublicCategoryTitlesByIds(tenantId, categoryIds),
+      ]);
+      const data = buildPublicBuyXGetYDetailCard(discount, mechanic, productsMap, categoriesMap);
+
+      return res.json({ ok: true, data });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });
 

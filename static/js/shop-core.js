@@ -2016,6 +2016,11 @@
       }
       return true;
     } else if (benefitDetailEl && !benefitDetailEl.classList.contains('hidden')) {
+      const customBackHandler = sheetNavigationState.data?.customBackHandler;
+      if (typeof customBackHandler === "function") {
+        customBackHandler();
+        return true;
+      }
       if (typeof openCartSheetCtx?.showSheetBenefits === "function") {
         openCartSheetCtx.showSheetBenefits();
       }

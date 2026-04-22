@@ -278,6 +278,7 @@
 const comboProductIngredientsCache = new Map();
 const comboProductVariantsCache = new Map();
 const productDetailsConfigCache = new Map();
+const productBuyXGetYDetailCache = new Map();
 const comboProductBatchWarmupCache = new Map();
 const comboDetailsCache = new Map();
 const comboProductPreviewSharedCache = new Map();
@@ -3215,6 +3216,9 @@ function createProductBuyXGetYActionCard(product) {
 
   const card = document.createElement("div");
   card.className = "shop-product-action-card";
+  card.tabIndex = 0;
+  card.setAttribute("role", "button");
+  card.setAttribute("aria-label", `${titleText}. Акция ${badgeText}`);
 
   const content = document.createElement("div");
   content.className = "shop-product-action-card__content";
@@ -3236,7 +3240,127 @@ function createProductBuyXGetYActionCard(product) {
   card.appendChild(content);
   card.appendChild(badge);
 
+  const openDetails = async (event = null) => {
+    if (event) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+    if (card.__isOpeningActionDetails) return;
+    card.__isOpeningActionDetails = true;
+    card.classList.add("is-loading");
+    try {
+      const opened = await openProductBuyXGetYBenefitDetail(product);
+      if (!opened && typeof showToast === "function") {
+        showToast("Не удалось открыть детали акции");
+      }
+    } catch (err) {
+      console.error("Failed to open product action details:", err);
+      if (typeof showToast === "function") {
+        showToast("Не удалось открыть детали акции");
+      }
+    } finally {
+      card.__isOpeningActionDetails = false;
+      card.classList.remove("is-loading");
+    }
+  };
+
+  card.addEventListener("click", openDetails);
+  card.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      void openDetails(event);
+    }
+  });
+
   return card;
+}
+
+async function loadProductBuyXGetYBenefitDetail(source) {
+  const discountId = Number(source?.id || source?.discount_id || 0);
+  if (!(discountId > 0)) return null;
+
+  const cached = productBuyXGetYDetailCache.get(discountId);
+  if (cached) return cached;
+
+  const promise = apiJson(`/api/public/discounts/${encodeURIComponent(discountId)}/buy-x-get-y-detail`)
+    .then((json) => {
+      const detail = json?.data && typeof json.data === "object" ? json.data : null;
+      if (!detail) throw new Error("EMPTY_BUY_X_GET_Y_DETAIL");
+      productBuyXGetYDetailCache.set(discountId, detail);
+      return detail;
+    })
+    .catch((err) => {
+      productBuyXGetYDetailCache.delete(discountId);
+      throw err;
+    });
+
+  productBuyXGetYDetailCache.set(discountId, promise);
+  return promise;
+}
+
+async function openProductBuyXGetYBenefitDetail(product) {
+  const source = product?.buy_x_get_y_badge;
+  if (!source || typeof source !== "object") return false;
+
+  const discountId = Number(source?.id || source?.discount_id || 0);
+  const productId = Number(product?.id || 0);
+  if (!(discountId > 0) || !(productId > 0)) return false;
+
+  const detail = await loadProductBuyXGetYBenefitDetail(source);
+  if (!detail) return false;
+
+  const isMobile = window.matchMedia("(max-width: 768px)").matches;
+  if (!isMobile) {
+    if (typeof showDesktopBenefitsView === "function") {
+      const opened = await showDesktopBenefitsView(null, { sourceScreen: "cart" });
+      if (!opened) return false;
+    } else if (!isDesktopBenefitsHostActive()) {
+      const activated = applyDesktopBenefitsViewState("cart");
+      if (!activated) return false;
+    }
+  } else if (!isDesktopBenefitsHostActive()) {
+    const isModalOpen = window.AppModal && typeof window.AppModal.isOpen === "function"
+      ? window.AppModal.isOpen()
+      : false;
+    if (!hasLiveCartSheetContext() || !isModalOpen) {
+      openCartSheet();
+      if (!hasLiveCartSheetContext()) {
+        await waitForUiTick();
+      }
+    }
+  }
+
+  if (typeof openCheckoutBenefitDetailScreen !== "function") {
+    if (!isMobile) return false;
+    await ensureCheckoutSheetContextReady();
+  }
+  if (typeof openCheckoutBenefitDetailScreen !== "function") return false;
+
+  const restoreProduct = async () => {
+    const isMobile = window.matchMedia("(max-width: 768px)").matches;
+    if (!isMobile && window.AppModal && typeof window.AppModal.isOpen === "function" && window.AppModal.isOpen()) {
+      try {
+        window.AppModal.close();
+      } catch (_) {}
+    }
+    await openProductDetails(productId);
+  };
+
+  const detailScreen = openCheckoutBenefitDetailScreen({
+    sheetTitle: "Детали акции",
+    title: detail?.title || source?.title || "Акция",
+    showContentTitle: false,
+    onBack: restoreProduct,
+    detailMode: "product-buy-x-get-y",
+  });
+  if (!detailScreen) return false;
+
+  detailScreen.appendChild(buildCheckoutBenefitDiscountDetailContent({
+    ...detail,
+    title: detail?.title || source?.title || "Акция",
+    badge_text: detail?.badge_text || source?.badge_text || "",
+    apply_scope_text: detail?.apply_scope_text || `Акция ${source?.badge_text || ""}`.trim(),
+  }));
+  return true;
 }
 
 
@@ -7506,6 +7630,11 @@ optionGroups.forEach((group) => {
         closeBtn.removeEventListener("click", addressCaptureHandler, true);
       }
       closeBtn._shopAddressCaptureHandler = null;
+      const benefitDetailCaptureHandler = closeBtn._shopBenefitDetailCaptureHandler;
+      if (typeof benefitDetailCaptureHandler === "function") {
+        closeBtn.removeEventListener("click", benefitDetailCaptureHandler, true);
+      }
+      closeBtn._shopBenefitDetailCaptureHandler = null;
       closeBtn.onclick = null;
       closeBtn.classList.remove("hidden");
       closeBtn.style.visibility = "";
@@ -21635,6 +21764,19 @@ function applySheetAddressTitle(backMode = "cart") {
       || detailMode === "gift-action"
       || detailMode === "benefit-apply"
     ) && isMobileDetail;
+    const returnFromDetail = async () => {
+      if (typeof onBack === "function") {
+        await onBack();
+        return;
+      }
+      if (!isMobileDetail && typeof showDesktopBenefitsView === "function") {
+        await showDesktopBenefitsView(null, {
+          sourceScreen: getActiveCheckoutBenefitsSourceScreen("cart"),
+        });
+        return;
+      }
+      await showSheetBenefits();
+    };
     captureCheckoutBenefitsDetailReturnState();
     if (isDesktopBenefitsHostActive() && elCheckoutBenefitsContent && elCheckoutBenefitDetailContent) {
       cleanupCheckoutViewSubscriptions();
@@ -21661,7 +21803,7 @@ function applySheetAddressTitle(backMode = "cart") {
         addressAsTitle: false,
         showClose: true,
         onClose: () => {
-          void restoreDesktopBenefitsSourceView(getActiveCheckoutBenefitsSourceScreen("cart"));
+          void returnFromDetail();
         },
         useSheetHeaderShell: true,
       });
@@ -21681,13 +21823,7 @@ function applySheetAddressTitle(backMode = "cart") {
       desktopBackBtn.className = "shop-checkout-benefits-back";
       desktopBackBtn.innerHTML = '<i class="fas fa-arrow-left"></i><span>Назад</span>';
       desktopBackBtn.addEventListener("click", async () => {
-        if (typeof onBack === "function") {
-          await onBack();
-          return;
-        }
-        await showDesktopBenefitsView(null, {
-          sourceScreen: getActiveCheckoutBenefitsSourceScreen("cart"),
-        });
+        await returnFromDetail();
       });
       desktopShell.appendChild(desktopBackBtn);
 
@@ -21777,8 +21913,8 @@ function applySheetAddressTitle(backMode = "cart") {
     clearSheetAddressTitleMode();
     if (window.AppModal?.setTitle) window.AppModal.setTitle(sheetTitle || "\u0414\u0435\u0442\u0430\u043b\u0438 \u0430\u043a\u0446\u0438\u0438");
     setSheetHeaderMode("subscreen", {
-      onBack: typeof onBack === "function" ? onBack : () => {
-        void showSheetBenefits();
+      onBack: () => {
+        void returnFromDetail();
       },
       showBackInHeader: !hideMobileHeaderBack,
     });
@@ -21786,20 +21922,29 @@ function applySheetAddressTitle(backMode = "cart") {
     setShopModalHeaderShellMode(true);
     const detailCloseBtn = getShopModalCloseButton();
     if (detailCloseBtn) {
-      detailCloseBtn.onclick = () => {
-        if (typeof onBack === "function") {
-          void onBack();
-          return;
+      const benefitDetailCaptureHandler = (event) => {
+        if (event) {
+          event.preventDefault();
+          event.stopPropagation();
+          if (typeof event.stopImmediatePropagation === "function") {
+            event.stopImmediatePropagation();
+          }
         }
-        void showSheetBenefits();
+        void returnFromDetail();
+      };
+      detailCloseBtn.addEventListener("click", benefitDetailCaptureHandler, true);
+      detailCloseBtn._shopBenefitDetailCaptureHandler = benefitDetailCaptureHandler;
+      detailCloseBtn.onclick = () => {
+        void returnFromDetail();
       };
     }
 
     sheetNavigationState.type = "cart";
     sheetNavigationState.screen = "benefitDetail";
-    sheetNavigationState.data = detailMode
-      ? { benefitDetailMode: String(detailMode || "").trim() || null }
-      : null;
+    sheetNavigationState.data = {
+      benefitDetailMode: detailMode ? String(detailMode || "").trim() || null : null,
+      customBackHandler: returnFromDetail,
+    };
     if (typeof queueMobileUiStateSync === "function") {
       queueMobileUiStateSync("openCheckoutBenefitDetailScreen");
     } else if (typeof window.queueShopMobileUiStateSync === "function") {
