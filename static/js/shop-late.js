@@ -9814,6 +9814,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
         product_id: productId,
         qty,
         line_total: roundPrice(Number(pricing?.lineTotal || 0)),
+        benefits_excluded_line_total: roundPrice(Number(pricing?.benefitsExcludedLineTotal || 0)),
         original_line_total: roundPrice(originalUnit * qtyForBase),
         auto_add: Number(item?.auto_add || 0) === 1 ? 1 : 0,
         variant_group_id: variantGroupId > 0 ? variantGroupId : null,
@@ -12167,6 +12168,10 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
         const type = str(rawItem?.type || "").trim().toLowerCase() || "product";
         const qty = Math.max(1, Number(rawItem?.qty || 1) || 1);
         const lineTotal = roundPrice(Math.max(0, Number(rawItem?.line_total || 0) || 0));
+        const benefitsExcludedLineTotal = roundPrice(Math.min(
+          lineTotal,
+          Math.max(0, Number(rawItem?.benefits_excluded_line_total ?? rawItem?.discount_excluded_line_total ?? 0) || 0)
+        ));
         const originalLineTotal = roundPrice(Math.max(
           lineTotal,
           Number(rawItem?.original_line_total ?? rawItem?.old_line_total ?? rawItem?.discount?.original_line_total ?? lineTotal) || lineTotal
@@ -12184,6 +12189,9 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
           };
           if (originalLineTotal > lineTotal) {
             comboItem.discount = { original_line_total: originalLineTotal };
+          }
+          if (benefitsExcludedLineTotal > 0) {
+            comboItem.benefits_excluded_line_total = benefitsExcludedLineTotal;
           }
           return comboItem;
         }
@@ -12246,6 +12254,9 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
         );
         if (originalLineTotal > lineTotal) {
           productItem.discount = { original_line_total: originalLineTotal };
+        }
+        if (benefitsExcludedLineTotal > 0) {
+          productItem.benefits_excluded_line_total = benefitsExcludedLineTotal;
         }
         return productItem;
       })
@@ -12422,32 +12433,64 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     return roundPrice(Math.max(0, Number(units || 0)) / normalizedFactor);
   }
 
+  function getLocalCheckoutBenefitsExcludedLineTotal(item) {
+    const lineTotal = roundPrice(Math.max(0, Number(item?.line_total || 0)));
+    const excluded = roundPrice(Math.max(
+      0,
+      Number(item?.benefits_excluded_line_total ?? item?.discount_excluded_line_total ?? 0) || 0
+    ));
+    return roundPrice(Math.min(lineTotal, excluded));
+  }
+
+  function getLocalCheckoutBenefitsEligibleLineTotal(item) {
+    const lineTotal = roundPrice(Math.max(0, Number(item?.line_total || 0)));
+    return roundPrice(Math.max(0, lineTotal - getLocalCheckoutBenefitsExcludedLineTotal(item)));
+  }
+
+  function getLocalCheckoutBenefitsEligibleItemsTotal(items = []) {
+    return roundPrice(
+      (Array.isArray(items) ? items : []).reduce(
+        (sum, item) => sum + getLocalCheckoutBenefitsEligibleLineTotal(item),
+        0
+      )
+    );
+  }
+
   function applyLocalOrderDiscountAcrossItemsNoRemainder(items, discountAmount) {
     const workingItems = (Array.isArray(items) ? items : [])
       .map((item) => ({ ...item, discount: item?.discount ? { ...item.discount } : item?.discount }));
     const eligible = [];
     const precisionFactor = getLocalCheckoutPricePrecisionFactor();
     let baseItemsTotalUnits = 0;
+    let fullItemsTotalUnits = 0;
 
     workingItems.forEach((item, index) => {
       const lineTotal = roundPrice(Math.max(0, Number(item?.line_total || 0)));
       const lineTotalUnits = toLocalCheckoutPriceUnits(lineTotal, precisionFactor);
+      const eligibleLineTotal = getLocalCheckoutBenefitsEligibleLineTotal(item);
+      const eligibleLineUnits = Math.min(
+        lineTotalUnits,
+        toLocalCheckoutPriceUnits(eligibleLineTotal, precisionFactor)
+      );
       item.line_total = fromLocalCheckoutPriceUnits(lineTotalUnits, precisionFactor);
-      if (!(lineTotalUnits > 0)) return;
+      fullItemsTotalUnits += lineTotalUnits;
+      if (!(eligibleLineUnits > 0)) return;
       eligible.push({
         index,
         lineTotalUnits,
+        eligibleLineUnits,
         position: eligible.length,
       });
-      baseItemsTotalUnits += lineTotalUnits;
+      baseItemsTotalUnits += eligibleLineUnits;
     });
     const baseItemsTotal = fromLocalCheckoutPriceUnits(baseItemsTotalUnits, precisionFactor);
+    const fullItemsTotal = fromLocalCheckoutPriceUnits(fullItemsTotalUnits, precisionFactor);
 
     if (!(baseItemsTotalUnits > 0) || !eligible.length) {
       return {
         items: workingItems,
         discountAmount: 0,
-        itemsTotalAfterDiscount: roundPrice(baseItemsTotal),
+        itemsTotalAfterDiscount: roundPrice(fullItemsTotal),
       };
     }
 
@@ -12457,12 +12500,12 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       return {
         items: workingItems,
         discountAmount: 0,
-        itemsTotalAfterDiscount: roundPrice(baseItemsTotal),
+        itemsTotalAfterDiscount: roundPrice(fullItemsTotal),
       };
     }
 
     const allocations = eligible.map((entry) => {
-      const lineUnits = Number(entry?.lineTotalUnits || 0);
+      const lineUnits = Number(entry?.eligibleLineUnits || 0);
       const proportionalUnits = (targetDiscountUnits * lineUnits) / baseItemsTotalUnits;
       const roundedDownUnits = Math.floor(proportionalUnits);
       const safeUnits = Math.min(lineUnits, Math.max(0, roundedDownUnits));
@@ -12496,9 +12539,9 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       }
     }
     allocations.forEach((entry) => {
-      const lineUnits = Number(entry?.lineUnits || 0);
-      const discountUnits = Math.min(lineUnits, Math.max(0, Number(entry?.shareUnits || 0)));
-      const nextLineUnits = Math.max(0, lineUnits - discountUnits);
+      const lineTotalUnits = Number(entry?.lineTotalUnits || 0);
+      const discountUnits = Math.min(Number(entry?.lineUnits || 0), Math.max(0, Number(entry?.shareUnits || 0)));
+      const nextLineUnits = Math.max(0, lineTotalUnits - discountUnits);
       workingItems[entry.index].line_total = fromLocalCheckoutPriceUnits(nextLineUnits, precisionFactor);
     });
 
@@ -12544,6 +12587,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
   function computeLocalCheckoutBenefitsDiscountOutcome(rule, previewItems, productCategoriesMap) {
     const items = previewItems.map((item) => ({ ...item, discount: item?.discount ? { ...item.discount } : item?.discount }));
     const baseItemsTotal = roundPrice(items.reduce((sum, item) => sum + Number(item?.line_total || 0), 0));
+    const eligibleItemsTotal = getLocalCheckoutBenefitsEligibleItemsTotal(items);
     if (!rule) {
       return {
         isApplicable: false,
@@ -12569,7 +12613,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     const applyTo = str(rule?.apply_to || "").trim().toLowerCase() || "order";
     const minOrderAmount = rule?.min_order_amount != null ? Number(rule.min_order_amount || 0) : 0;
     if (applyTo === "order") {
-      if (minOrderAmount > 0 && baseItemsTotal < minOrderAmount) {
+      if (minOrderAmount > 0 && eligibleItemsTotal < minOrderAmount) {
         return {
           isApplicable: false,
           errorCode: "DISCOUNT_NOT_APPLICABLE",
@@ -12580,7 +12624,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
         };
       }
       const orderDiscountAmount = calculateLocalCheckoutBenefitsDiscountAmount(
-        baseItemsTotal,
+        eligibleItemsTotal,
         rule?.discount_type,
         rule?.discount_value,
         rule?.max_discount_amount
@@ -12623,7 +12667,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
         return;
       }
       const itemDiscount = calculateLocalCheckoutBenefitsDiscountAmount(
-        Number(item?.line_total || 0),
+        getLocalCheckoutBenefitsEligibleLineTotal(item),
         rule?.discount_type,
         rule?.discount_value,
         rule?.max_discount_amount
@@ -12658,6 +12702,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       ? itemsTotalBeforePromo
       : items.reduce((sum, item) => sum + Number(item?.line_total || 0), 0)
     ));
+    const eligibleItemsTotal = getLocalCheckoutBenefitsEligibleItemsTotal(items);
     if (!rule) {
       return buildLocalCheckoutBenefitsPromoNotApplicableOutcome(items, baseItemsTotal, {
         disabledReasonCode: "PROMO_INVALID",
@@ -12680,10 +12725,10 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     const minOrderAmount = runtimeConfig?.min_order_amount != null
       ? Number(runtimeConfig.min_order_amount || 0)
       : (rule?.min_order_amount != null ? Number(rule.min_order_amount || 0) : 0);
-    if (minOrderAmount > 0 && baseItemsTotal < minOrderAmount) {
+    if (minOrderAmount > 0 && eligibleItemsTotal < minOrderAmount) {
       return buildLocalCheckoutBenefitsPromoNotApplicableOutcome(items, baseItemsTotal, {
         disabledReasonCode: "PROMO_NOT_APPLICABLE",
-        disabledReason: buildLocalCheckoutBenefitsPromoMinAmountReason(minOrderAmount, baseItemsTotal),
+        disabledReason: buildLocalCheckoutBenefitsPromoMinAmountReason(minOrderAmount, eligibleItemsTotal),
       });
     }
 
@@ -12691,7 +12736,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     if (rewardType === "discount") {
       if (applyTo === "order") {
         const promoDiscountAmount = calculateLocalCheckoutBenefitsDiscountAmount(
-          baseItemsTotal,
+          eligibleItemsTotal,
           runtimeConfig?.discount_type,
           runtimeConfig?.discount_value,
           runtimeConfig?.max_discount_amount
@@ -12718,7 +12763,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
           return;
         }
         const itemDiscount = calculateLocalCheckoutBenefitsDiscountAmount(
-          Number(item?.line_total || 0),
+          getLocalCheckoutBenefitsEligibleLineTotal(item),
           runtimeConfig?.discount_type,
           runtimeConfig?.discount_value,
           runtimeConfig?.max_discount_amount
@@ -12763,7 +12808,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
         return;
       }
       const itemDiscount = calculateLocalCheckoutBenefitsDiscountAmount(
-        Number(item?.line_total || 0),
+        getLocalCheckoutBenefitsEligibleLineTotal(item),
         runtimeConfig?.discount_type,
         runtimeConfig?.discount_value,
         runtimeConfig?.max_discount_amount
@@ -35528,6 +35573,10 @@ function setBottomNavActive(tab) {
           const lineTotal = lineState
             ? roundPrice(Number(lineState.currentTotal || 0))
             : roundPrice(Number(pricing.lineTotal || 0));
+          const benefitsExcludedLineTotal = roundPrice(Math.min(
+            lineTotal,
+            Math.max(0, Number(pricing?.benefitsExcludedLineTotal || 0))
+          ));
           const originalLineTotal = lineState
             ? roundPrice(Number(lineState.originalTotal || 0))
             : roundPrice(Number(pricing.unitPrice || 0) * Number(pricing.paidQty || 0));
@@ -35556,6 +35605,7 @@ function setBottomNavActive(tab) {
             is_gift_reward: Number(x.is_gift_reward || 0) === 1 ? 1 : 0,
             gift_reward_id: Number(x.gift_reward_id || 0) > 0 ? Number(x.gift_reward_id) : null,
             line_total: lineTotal, // Отправляем уже посчитанную итоговую цену
+            benefits_excluded_line_total: benefitsExcludedLineTotal,
             original_line_total: safeOriginalLineTotal, // Цена до скидки
           };
         }),

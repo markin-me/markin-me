@@ -3352,6 +3352,10 @@
           Number(rawItem?.original_line_total ?? rawItem?.old_line_total ?? rawItem?.discount?.original_line_total ?? lineTotalRaw) || lineTotalRaw
         ));
         const lineTotal = useOriginalLineTotalsForBenefits ? originalLineTotal : lineTotalRaw;
+        const benefitsExcludedLineTotal = useOriginalLineTotalsForBenefits ? 0 : roundPrice(Math.min(
+          lineTotal,
+          Math.max(0, Number(rawItem?.benefits_excluded_line_total ?? rawItem?.discount_excluded_line_total ?? 0) || 0)
+        ));
         if (type === "combo") {
           const comboId = Number(rawItem?.combo_id || 0) || null;
           const comboSelections = Array.isArray(rawItem?.selections)
@@ -3510,6 +3514,9 @@
           if (!useOriginalLineTotalsForBenefits && originalLineTotal > lineTotal) {
             comboItem.discount = { original_line_total: originalLineTotal };
           }
+          if (benefitsExcludedLineTotal > 0) {
+            comboItem.benefits_excluded_line_total = benefitsExcludedLineTotal;
+          }
           acc.push(comboItem);
           return acc;
         }
@@ -3572,6 +3579,9 @@
         );
         if (!useOriginalLineTotalsForBenefits && originalLineTotal > lineTotal) {
           productItem.discount = { original_line_total: originalLineTotal };
+        }
+        if (benefitsExcludedLineTotal > 0) {
+          productItem.benefits_excluded_line_total = benefitsExcludedLineTotal;
         }
         acc.push(productItem);
         return acc;
@@ -3757,32 +3767,64 @@
     return roundPrice(Math.max(0, Number(units || 0)) / normalizedFactor);
   }
 
+  function getRightOrderBenefitsExcludedLineTotal(item) {
+    const lineTotal = roundPrice(Math.max(0, Number(item?.line_total || 0)));
+    const excluded = roundPrice(Math.max(
+      0,
+      Number(item?.benefits_excluded_line_total ?? item?.discount_excluded_line_total ?? 0) || 0
+    ));
+    return roundPrice(Math.min(lineTotal, excluded));
+  }
+
+  function getRightOrderBenefitsEligibleLineTotal(item) {
+    const lineTotal = roundPrice(Math.max(0, Number(item?.line_total || 0)));
+    return roundPrice(Math.max(0, lineTotal - getRightOrderBenefitsExcludedLineTotal(item)));
+  }
+
+  function getRightOrderBenefitsEligibleItemsTotal(items = []) {
+    return roundPrice(
+      (Array.isArray(items) ? items : []).reduce(
+        (sum, item) => sum + getRightOrderBenefitsEligibleLineTotal(item),
+        0
+      )
+    );
+  }
+
   function applyRightOrderLocalOrderDiscountAcrossItemsNoRemainder(items, discountAmount) {
     const workingItems = (Array.isArray(items) ? items : [])
       .map((item) => ({ ...item, discount: item?.discount ? { ...item.discount } : item?.discount }));
     const eligible = [];
     const precisionFactor = getRightOrderPricePrecisionFactor();
     let baseItemsTotalUnits = 0;
+    let fullItemsTotalUnits = 0;
 
     workingItems.forEach((item, index) => {
       const lineTotal = roundPrice(Math.max(0, Number(item?.line_total || 0)));
       const lineTotalUnits = toRightOrderPriceUnits(lineTotal, precisionFactor);
+      const eligibleLineTotal = getRightOrderBenefitsEligibleLineTotal(item);
+      const eligibleLineUnits = Math.min(
+        lineTotalUnits,
+        toRightOrderPriceUnits(eligibleLineTotal, precisionFactor)
+      );
       item.line_total = fromRightOrderPriceUnits(lineTotalUnits, precisionFactor);
-      if (!(lineTotalUnits > 0)) return;
+      fullItemsTotalUnits += lineTotalUnits;
+      if (!(eligibleLineUnits > 0)) return;
       eligible.push({
         index,
         lineTotalUnits,
+        eligibleLineUnits,
         position: eligible.length,
       });
-      baseItemsTotalUnits += lineTotalUnits;
+      baseItemsTotalUnits += eligibleLineUnits;
     });
 
     const baseItemsTotal = fromRightOrderPriceUnits(baseItemsTotalUnits, precisionFactor);
+    const fullItemsTotal = fromRightOrderPriceUnits(fullItemsTotalUnits, precisionFactor);
     if (!(baseItemsTotalUnits > 0) || !eligible.length) {
       return {
         items: workingItems,
         discountAmount: 0,
-        itemsTotalAfterDiscount: roundPrice(baseItemsTotal),
+        itemsTotalAfterDiscount: roundPrice(fullItemsTotal),
       };
     }
 
@@ -3792,12 +3834,12 @@
       return {
         items: workingItems,
         discountAmount: 0,
-        itemsTotalAfterDiscount: roundPrice(baseItemsTotal),
+        itemsTotalAfterDiscount: roundPrice(fullItemsTotal),
       };
     }
 
     const allocations = eligible.map((entry) => {
-      const lineUnits = Number(entry?.lineTotalUnits || 0);
+      const lineUnits = Number(entry?.eligibleLineUnits || 0);
       const proportionalUnits = (targetDiscountUnits * lineUnits) / baseItemsTotalUnits;
       const roundedDownUnits = Math.floor(proportionalUnits);
       const safeUnits = Math.min(lineUnits, Math.max(0, roundedDownUnits));
@@ -3832,9 +3874,9 @@
     }
 
     allocations.forEach((entry) => {
-      const lineUnits = Number(entry?.lineUnits || 0);
-      const discountUnits = Math.min(lineUnits, Math.max(0, Number(entry?.shareUnits || 0)));
-      const nextLineUnits = Math.max(0, lineUnits - discountUnits);
+      const lineTotalUnits = Number(entry?.lineTotalUnits || 0);
+      const discountUnits = Math.min(Number(entry?.lineUnits || 0), Math.max(0, Number(entry?.shareUnits || 0)));
+      const nextLineUnits = Math.max(0, lineTotalUnits - discountUnits);
       workingItems[entry.index].line_total = fromRightOrderPriceUnits(nextLineUnits, precisionFactor);
     });
 
@@ -3880,6 +3922,7 @@
   function computeRightOrderBenefitsLocalDiscountOutcome(rule, previewItems, productCategoriesMap) {
     const items = previewItems.map((item) => ({ ...item, discount: item?.discount ? { ...item.discount } : item?.discount }));
     const baseItemsTotal = roundPrice(items.reduce((sum, item) => sum + Number(item?.line_total || 0), 0));
+    const eligibleItemsTotal = getRightOrderBenefitsEligibleItemsTotal(items);
     if (!rule) {
       return {
         isApplicable: false,
@@ -3905,7 +3948,7 @@
     const applyTo = String(rule?.apply_to || "").trim().toLowerCase() || "order";
     const minOrderAmount = rule?.min_order_amount != null ? Number(rule.min_order_amount || 0) : 0;
     if (applyTo === "order") {
-      if (minOrderAmount > 0 && baseItemsTotal < minOrderAmount) {
+      if (minOrderAmount > 0 && eligibleItemsTotal < minOrderAmount) {
         return {
           isApplicable: false,
           errorCode: "DISCOUNT_NOT_APPLICABLE",
@@ -3916,7 +3959,7 @@
         };
       }
       const orderDiscountAmount = calculateRightOrderBenefitsLocalDiscountAmount(
-        baseItemsTotal,
+        eligibleItemsTotal,
         rule?.discount_type,
         rule?.discount_value,
         rule?.max_discount_amount
@@ -3959,7 +4002,7 @@
         return;
       }
       const itemDiscount = calculateRightOrderBenefitsLocalDiscountAmount(
-        Number(item?.line_total || 0),
+        getRightOrderBenefitsEligibleLineTotal(item),
         rule?.discount_type,
         rule?.discount_value,
         rule?.max_discount_amount
@@ -3994,6 +4037,7 @@
       ? itemsTotalBeforePromo
       : items.reduce((sum, item) => sum + Number(item?.line_total || 0), 0)
     ));
+    const eligibleItemsTotal = getRightOrderBenefitsEligibleItemsTotal(items);
     if (!rule) {
       return buildRightOrderBenefitsPromoNotApplicableOutcome(items, baseItemsTotal, {
         disabledReasonCode: "PROMO_INVALID",
@@ -4014,10 +4058,10 @@
     const minOrderAmount = runtimeConfig?.min_order_amount != null
       ? Number(runtimeConfig.min_order_amount || 0)
       : (rule?.min_order_amount != null ? Number(rule.min_order_amount || 0) : 0);
-    if (minOrderAmount > 0 && baseItemsTotal < minOrderAmount) {
+    if (minOrderAmount > 0 && eligibleItemsTotal < minOrderAmount) {
       return buildRightOrderBenefitsPromoNotApplicableOutcome(items, baseItemsTotal, {
         disabledReasonCode: "PROMO_NOT_APPLICABLE",
-        disabledReason: buildRightOrderBenefitsPromoMinAmountReason(minOrderAmount, baseItemsTotal),
+        disabledReason: buildRightOrderBenefitsPromoMinAmountReason(minOrderAmount, eligibleItemsTotal),
       });
     }
 
@@ -4025,7 +4069,7 @@
     if (rewardType === "discount") {
       if (applyTo === "order") {
         const promoDiscountAmount = calculateRightOrderBenefitsLocalDiscountAmount(
-          baseItemsTotal,
+          eligibleItemsTotal,
           runtimeConfig?.discount_type,
           runtimeConfig?.discount_value,
           runtimeConfig?.max_discount_amount
@@ -4052,7 +4096,7 @@
           return;
         }
         const itemDiscount = calculateRightOrderBenefitsLocalDiscountAmount(
-          Number(item?.line_total || 0),
+          getRightOrderBenefitsEligibleLineTotal(item),
           runtimeConfig?.discount_type,
           runtimeConfig?.discount_value,
           runtimeConfig?.max_discount_amount
@@ -4097,7 +4141,7 @@
         return;
       }
       const itemDiscount = calculateRightOrderBenefitsLocalDiscountAmount(
-        Number(item?.line_total || 0),
+        getRightOrderBenefitsEligibleLineTotal(item),
         runtimeConfig?.discount_type,
         runtimeConfig?.discount_value,
         runtimeConfig?.max_discount_amount
@@ -4963,6 +5007,7 @@
     const cartItems = Array.isArray(form?.cartItems) ? form.cartItems : [];
     const activeEditPricingSnapshot = getRightOrderActiveEditPricingSnapshot(order);
     const subtotal = roundPrice(cartItems.reduce((sum, item) => sum + getRightOrderCartLineTotal(item), 0));
+    const subtotalEligibleForBenefits = getRightOrderCartBenefitsEligibleTotal(cartItems);
     const cartItemsCount = cartItems.reduce((sum, item) => sum + Math.max(1, Number(item?.qty || 1)), 0);
     const benefitsPreview = clientId > 0
       ? getRightOrderBenefitsPreviewSnapshot(order, {
@@ -5026,7 +5071,7 @@
       return next;
     })();
     const hasBenefitsPreview = benefitsPreviewSummary && Number.isFinite(Number(benefitsPreviewSummary?.items_total));
-    const customerDiscountSummary = hasBenefitsPreview ? null : getRightOrderCustomerDiscountSummary(order, subtotal);
+    const customerDiscountSummary = hasBenefitsPreview ? null : getRightOrderCustomerDiscountSummary(order, subtotalEligibleForBenefits);
     const customerOrderDiscount = hasBenefitsPreview
       ? roundPrice(Number(benefitsPreviewSummary?.discount_total || 0))
       : roundPrice(Number(customerDiscountSummary?.amount || 0));
@@ -5222,6 +5267,29 @@
     return roundPrice(unitPrice * qty);
   }
 
+  function getRightOrderCartBenefitsExcludedLineTotal(item) {
+    const lineTotal = getRightOrderCartLineTotal(item);
+    const excluded = roundPrice(Math.max(
+      0,
+      Number(item?.benefits_excluded_line_total ?? item?.discount_excluded_line_total ?? 0) || 0
+    ));
+    return roundPrice(Math.min(lineTotal, excluded));
+  }
+
+  function getRightOrderCartBenefitsEligibleLineTotal(item) {
+    const lineTotal = getRightOrderCartLineTotal(item);
+    return roundPrice(Math.max(0, lineTotal - getRightOrderCartBenefitsExcludedLineTotal(item)));
+  }
+
+  function getRightOrderCartBenefitsEligibleTotal(cartItems = []) {
+    return roundPrice(
+      (Array.isArray(cartItems) ? cartItems : []).reduce(
+        (sum, item) => sum + getRightOrderCartBenefitsEligibleLineTotal(item),
+        0
+      )
+    );
+  }
+
   function getRightOrderStoredOriginalLineTotal(item) {
     const explicitOriginal = Number(item?.discount?.original_line_total || 0);
     const storedOldLine = Number(item?.old_line_total || 0);
@@ -5255,13 +5323,21 @@
       .map((entry, index) => {
         const baseTotal = roundPrice(Math.max(0, Number(entry?.baseTotal || 0)));
         const baseTotalUnits = toRightOrderPriceUnits(baseTotal, precisionFactor);
+        const eligibleBaseTotal = entry?.eligibleBaseTotal != null
+          ? roundPrice(Math.max(0, Number(entry.eligibleBaseTotal || 0)))
+          : baseTotal;
+        const eligibleBaseTotalUnits = Math.min(
+          baseTotalUnits,
+          toRightOrderPriceUnits(eligibleBaseTotal, precisionFactor)
+        );
         return {
           index,
           position: index,
           baseTotalUnits,
+          eligibleBaseTotalUnits,
         };
       })
-      .filter((entry) => entry.baseTotalUnits > 0);
+      .filter((entry) => entry.eligibleBaseTotalUnits > 0);
 
     const discountsByIndex = new Map();
     if (!eligible.length) return discountsByIndex;
@@ -5269,16 +5345,18 @@
     const totalDiscountUnits = toRightOrderPriceUnits(extraOrderDiscount, precisionFactor);
     if (!(totalDiscountUnits > 0)) return discountsByIndex;
 
-    const baseTotalUnits = eligible.reduce((sum, entry) => sum + Number(entry.baseTotalUnits || 0), 0);
+    const baseTotalUnits = eligible.reduce((sum, entry) => sum + Number(entry.eligibleBaseTotalUnits || 0), 0);
     if (!(baseTotalUnits > 0)) return discountsByIndex;
 
     const cappedDiscountUnits = Math.min(totalDiscountUnits, baseTotalUnits);
     const allocations = eligible.map((entry) => {
-      const proportionalUnits = (cappedDiscountUnits * Number(entry.baseTotalUnits || 0)) / baseTotalUnits;
+      const lineUnits = Number(entry.eligibleBaseTotalUnits || 0);
+      const proportionalUnits = (cappedDiscountUnits * lineUnits) / baseTotalUnits;
       const roundedDownUnits = Math.floor(proportionalUnits);
-      const safeUnits = Math.min(Number(entry.baseTotalUnits || 0), Math.max(0, roundedDownUnits));
+      const safeUnits = Math.min(lineUnits, Math.max(0, roundedDownUnits));
       return {
         ...entry,
+        lineUnits,
         shareUnits: safeUnits,
         fractionalRemainder: proportionalUnits - roundedDownUnits,
       };
@@ -5288,13 +5366,13 @@
     if (remainingDiscountUnits > 0) {
       const sortedByRemainder = allocations.slice().sort((a, b) => (
         Number(b?.fractionalRemainder || 0) - Number(a?.fractionalRemainder || 0)
-        || Number(b?.baseTotalUnits || 0) - Number(a?.baseTotalUnits || 0)
+        || Number(b?.lineUnits || 0) - Number(a?.lineUnits || 0)
         || Number(a?.position || 0) - Number(b?.position || 0)
       ));
       while (remainingDiscountUnits > 0) {
         let progressed = false;
         for (const entry of sortedByRemainder) {
-          const capUnits = Math.max(0, Number(entry?.baseTotalUnits || 0) - Number(entry?.shareUnits || 0));
+          const capUnits = Math.max(0, Number(entry?.lineUnits || 0) - Number(entry?.shareUnits || 0));
           if (!(capUnits > 0)) continue;
           entry.shareUnits += 1;
           remainingDiscountUnits -= 1;
@@ -5306,7 +5384,7 @@
     }
     allocations.forEach((entry) => {
       const shareUnits = Math.min(
-        Number(entry?.baseTotalUnits || 0),
+        Number(entry?.lineUnits || 0),
         Math.max(0, Number(entry?.shareUnits || 0))
       );
       if (!(shareUnits > 0)) return;
@@ -5354,10 +5432,13 @@
           baseTotal,
           currentTotal: baseTotal,
           originalTotal: baseTotal,
+          eligibleBaseTotal: 0,
           eligibleForLocal: false,
           hasLocalLineTotal: false,
         };
       }
+      const benefitsExcludedLineTotal = getRightOrderCartBenefitsExcludedLineTotal(item);
+      const eligibleBaseTotal = roundPrice(Math.max(0, baseTotal - benefitsExcludedLineTotal));
       const originalTotal = getRightOrderCartOriginalLineTotal(item, {
         qty,
         currentLineTotal: baseTotal,
@@ -5367,6 +5448,7 @@
         baseTotal,
         currentTotal: localLineTotal,
         originalTotal: roundPrice(Math.max(originalTotal, baseTotal, localLineTotal)),
+        eligibleBaseTotal,
         eligibleForLocal: true,
         hasLocalLineTotal,
       };
@@ -5974,6 +6056,10 @@
       if (!(productId > 0)) return;
       const baseLineTotal = getRightOrderCartLineTotal(item);
       const lineTotal = resolveLineTotalForPayload(item, baseLineTotal);
+      const benefitsExcludedLineTotal = roundPrice(Math.min(
+        lineTotal,
+        Math.max(0, Number(item?.benefits_excluded_line_total ?? item?.discount_excluded_line_total ?? 0) || 0)
+      ));
       const originalLineTotalRaw = getRightOrderCartOriginalLineTotal(item, {
         qty,
         currentLineTotal: baseLineTotal,
@@ -6018,6 +6104,7 @@
         auto_add_group_id: Number(item?.auto_add_group_id || 0) > 0 ? Number(item.auto_add_group_id) : null,
         line_total: lineTotal,
         original_line_total: originalLineTotal,
+        benefits_excluded_line_total: benefitsExcludedLineTotal,
       });
     });
 
@@ -12410,11 +12497,18 @@
     );
     const oldFromDb = roundPrice(oldBasePrice + ingredientDiff);
     const unitPrice = roundPrice(Math.max(0, unitBeforeDiscount - unitDiscountAmount));
-    const hasApiDiscount = unitDiscountAmount > 0;
     const buyXGetYRule = Number(item?.auto_add || 0) === 1 ? null : getNewOrderBuyXGetYRule(item);
-    const buyXGetYFreeQty = calculateNewOrderBuyXGetYFreeQty(qty, buyXGetYRule);
+    const buyXGetYApplication = calculateNewOrderBuyXGetYApplication(qty, buyXGetYRule);
+    const buyXGetYFreeQty = buyXGetYApplication.freeQty;
     const paidQty = Math.max(0, qty - buyXGetYFreeQty);
     const hasBuyXGetYDiscount = buyXGetYFreeQty > 0;
+    const isBuyXGetYStackable = !hasBuyXGetYDiscount || buyXGetYRule?.isStackable;
+    const extraDiscountEligibleQty = Math.max(0, qty - Number(buyXGetYApplication.participatingQty || 0));
+    const buyXGetYPaidParticipatingQty = Math.max(0, Number(buyXGetYApplication.paidParticipatingQty || 0));
+    const benefitsExcludedLineTotal = !isBuyXGetYStackable
+      ? roundPrice(unitBeforeDiscount * buyXGetYPaidParticipatingQty)
+      : 0;
+    const hasApiDiscount = unitDiscountAmount > 0 && (isBuyXGetYStackable || extraDiscountEligibleQty > 0);
     const oldUnitPrice = (hasApiDiscount || hasBuyXGetYDiscount) ? unitBeforeDiscount : oldFromDb;
     const hasOldUnitPrice = Number.isFinite(oldUnitPrice) && oldUnitPrice > 0 && (oldUnitPrice > unitPrice || hasBuyXGetYDiscount);
     if (isGiftRewardCartItem(item)) {
@@ -12434,20 +12528,31 @@
       }
       item.sum = 0;
       item.old_line_total = 0;
+      item.benefits_excluded_line_total = 0;
       return item;
     }
     item.unit_price_before_discount = hasOldUnitPrice ? roundPrice(oldUnitPrice) : 0;
     item.unit_price = unitPrice;
     item.buy_x_get_y_free_qty = hasBuyXGetYDiscount ? buyXGetYFreeQty : 0;
+    item.benefits_excluded_line_total = benefitsExcludedLineTotal > 0 ? benefitsExcludedLineTotal : 0;
     if (item.pricing && typeof item.pricing === "object") {
       item.pricing = {
         ...item.pricing,
         unit_before_discount: unitBeforeDiscount,
-        discount_amount: roundPrice(unitDiscountAmount),
-        buy_x_get_y_discount_amount: hasBuyXGetYDiscount ? roundPrice(unitPrice * buyXGetYFreeQty) : 0,
+        discount_amount: isBuyXGetYStackable
+          ? roundPrice(unitDiscountAmount)
+          : roundPrice(unitDiscountAmount * extraDiscountEligibleQty),
+        buy_x_get_y_discount_amount: hasBuyXGetYDiscount
+          ? roundPrice((isBuyXGetYStackable ? unitPrice : unitBeforeDiscount) * buyXGetYFreeQty)
+          : 0,
       };
     }
-    item.sum = roundPrice(item.unit_price * paidQty);
+    item.sum = isBuyXGetYStackable
+      ? roundPrice(item.unit_price * paidQty)
+      : roundPrice(
+          (unitBeforeDiscount * buyXGetYPaidParticipatingQty)
+          + (unitPrice * extraDiscountEligibleQty)
+        );
     const paidQtyForOldLine = isRightOrderAutoAddItem(item) ? getRightOrderAutoPaidQty(item, qty) : qty;
     const oldLineTotal = hasOldUnitPrice
       ? roundPrice(Number(item.unit_price_before_discount || 0) * paidQtyForOldLine)
@@ -12516,20 +12621,44 @@
       buyQty,
       rewardQty,
       repeatMode,
+      isStackable: badge?.is_stackable === true || Number(badge?.is_stackable || 0) === 1,
+    };
+  }
+
+  function calculateNewOrderBuyXGetYApplication(qty, rule) {
+    const itemQty = Math.max(0, Math.floor(Number(qty || 0)));
+    if (!rule) {
+      return {
+        applications: 0,
+        freeQty: 0,
+        participatingQty: 0,
+        paidParticipatingQty: 0,
+      };
+    }
+    const buyQty = Math.max(1, Math.floor(Number(rule?.buyQty || 0)) || 1);
+    const rewardQty = Math.max(1, Math.floor(Number(rule?.rewardQty || 0)) || 1);
+    const groupQty = buyQty + rewardQty;
+    if (!(itemQty >= groupQty)) {
+      return {
+        applications: 0,
+        freeQty: 0,
+        participatingQty: 0,
+        paidParticipatingQty: 0,
+      };
+    }
+    const applications = rule?.repeatMode === "repeat" ? Math.floor(itemQty / groupQty) : 1;
+    const freeQty = Math.min(itemQty, applications * rewardQty);
+    const participatingQty = Math.min(itemQty, applications * groupQty);
+    return {
+      applications,
+      freeQty,
+      participatingQty,
+      paidParticipatingQty: Math.max(0, participatingQty - freeQty),
     };
   }
 
   function calculateNewOrderBuyXGetYFreeQty(qty, rule) {
-    if (!rule) return 0;
-    const itemQty = Math.max(0, Math.floor(Number(qty || 0)));
-    const buyQty = Math.max(1, Math.floor(Number(rule?.buyQty || 0)) || 1);
-    const rewardQty = Math.max(1, Math.floor(Number(rule?.rewardQty || 0)) || 1);
-    const groupQty = buyQty + rewardQty;
-    if (!(itemQty >= groupQty)) return 0;
-    if (rule?.repeatMode === "repeat") {
-      return Math.min(itemQty, Math.floor(itemQty / groupQty) * rewardQty);
-    }
-    return Math.min(itemQty, rewardQty);
+    return calculateNewOrderBuyXGetYApplication(qty, rule).freeQty;
   }
 
   function getCurrentProductUnitPricing(product, productId) {

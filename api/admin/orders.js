@@ -338,7 +338,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
     });
 
     const [discountRows] = await db.query(
-      `SELECT id, title, priority, mechanic_config_json, is_active, is_deleted, starts_at, ends_at,
+      `SELECT id, title, priority, mechanic_config_json, is_active, is_deleted, is_stackable, starts_at, ends_at,
               schedule_days, schedule_time_start, schedule_time_end, usage_limit, usage_count
          FROM mkt_discounts
         WHERE tenant_id=? AND store_id=? AND mechanic_type='buy_x_get_y'
@@ -360,6 +360,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           buy_qty: Math.max(1, Number(mechanic?.buy_qty || 0) || 1),
           reward_qty: Math.max(1, Number(mechanic?.reward_qty || 0) || 1),
           repeat_mode: String(mechanic?.repeat_mode || "").trim().toLowerCase() === "repeat" ? "repeat" : "single",
+          is_stackable: Number(row?.is_stackable || 0) === 1,
           targetSets,
         };
       })
@@ -380,6 +381,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         buy_qty: badge.buy_qty,
         reward_qty: badge.reward_qty,
         repeat_mode: badge.repeat_mode,
+        is_stackable: badge.is_stackable,
       };
     });
     return source;
@@ -2511,6 +2513,10 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         const qty = Math.max(1, Number(rawItem?.qty || rawItem?.quantity || 1));
         const lineTotal = roundMoney(Number(rawItem?.line_total ?? rawItem?.sum ?? rawItem?.total ?? 0));
         const originalLineTotal = roundMoney(Number(rawItem?.original_line_total ?? rawItem?.old_line_total ?? lineTotal));
+        const benefitsExcludedLineTotal = roundMoney(Math.min(
+          lineTotal,
+          Math.max(0, Number(rawItem?.benefits_excluded_line_total ?? rawItem?.discount_excluded_line_total ?? 0) || 0)
+        ));
 
         if (String(rawItem?.type || "").toLowerCase() === "combo" || Number(rawItem?.combo_id || 0) > 0) {
           const comboId = Number(rawItem?.combo_id || 0);
@@ -2521,6 +2527,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
             qty,
             line_total: lineTotal,
             old_line_total: originalLineTotal,
+            benefits_excluded_line_total: benefitsExcludedLineTotal,
             sections: Array.isArray(rawItem?.sections) ? rawItem.sections : [],
             selections: Array.isArray(rawItem?.selections) ? rawItem.selections : [],
           });
@@ -2569,6 +2576,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           gift_reward_id: Number(rawItem?.gift_reward_id || 0) > 0 ? Number(rawItem.gift_reward_id) : null,
           line_total: lineTotal,
           old_line_total: originalLineTotal,
+          benefits_excluded_line_total: benefitsExcludedLineTotal,
         });
       }
 
@@ -2718,6 +2726,10 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         item.qty = qty;
         item.line_total = lineTotal;
         item.old_line_total = oldLineTotal;
+        item.benefits_excluded_line_total = roundMoney(Math.min(
+          lineTotal,
+          Math.max(0, Number(item?.benefits_excluded_line_total ?? item?.discount_excluded_line_total ?? 0) || 0)
+        ));
 
         if (String(item?.type || "").toLowerCase() === "combo" || Number(item?.combo_id || 0) > 0) {
           const comboTitle = toText(item?.combo_title || item?.name) || "\u041a\u043e\u043c\u0431\u043e";
@@ -2893,6 +2905,14 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       }
 
       const itemsTotal = roundMoney(items.reduce((sum, item) => sum + Number(item?.line_total || 0), 0));
+      const itemsDiscountEligibleTotal = roundMoney(items.reduce((sum, item) => {
+        const lineTotal = Number(item?.line_total || 0);
+        const excludedTotal = Math.min(
+          lineTotal,
+          Math.max(0, Number(item?.benefits_excluded_line_total ?? item?.discount_excluded_line_total ?? 0) || 0)
+        );
+        return sum + Math.max(0, lineTotal - excludedTotal);
+      }, 0));
       const oldItemsTotal = roundMoney(items.reduce((sum, item) => {
         const line = Number(item?.line_total || 0);
         const old = Number(item?.old_line_total || line);
@@ -2919,18 +2939,18 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
 
       let customerOrderDiscountAmount = 0;
       let appliedOrderDiscounts = [];
-      if (!hasProvidedDiscountSnapshot && Number(customerId || 0) > 0 && itemsTotal > 0) {
+      if (!hasProvidedDiscountSnapshot && Number(customerId || 0) > 0 && itemsDiscountEligibleTotal > 0) {
         const orderDiscountsForCustomer = await discountHelpers.getOrderDiscounts(
           db,
           tenantId,
           storeId,
           customerId,
-          itemsTotal,
+          itemsDiscountEligibleTotal,
           null,
           { excludeOrderId: id }
         );
         if (Array.isArray(orderDiscountsForCustomer) && orderDiscountsForCustomer.length) {
-          const applied = discountHelpers.applyBestDiscounts(orderDiscountsForCustomer, itemsTotal);
+          const applied = discountHelpers.applyBestDiscounts(orderDiscountsForCustomer, itemsDiscountEligibleTotal);
           customerOrderDiscountAmount = roundMoney(Math.max(0, Number(applied?.totalDiscount || 0)));
           appliedOrderDiscounts = Array.isArray(applied?.appliedDiscounts) ? applied.appliedDiscounts : [];
         }

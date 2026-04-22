@@ -3868,7 +3868,9 @@
     // Применяем скидку если есть
     const product = item?.product;
     const buyXGetYRule = !isAutoItem ? getCatalogBuyXGetYRule(product) : null;
-    const buyXGetYFreeQty = calculateCatalogBuyXGetYFreeQty(paidQty, buyXGetYRule);
+    const buyXGetYApplication = calculateCatalogBuyXGetYApplication(paidQty, buyXGetYRule);
+    const buyXGetYFreeQty = buyXGetYApplication.freeQty;
+    let benefitsExcludedLineTotal = 0;
     if (buyXGetYFreeQty > 0) {
       const buyXGetYDiscountAmount = roundPrice(unitPrice * buyXGetYFreeQty);
       if (buyXGetYDiscountAmount > 0) {
@@ -3882,16 +3884,23 @@
         };
         lineTotal = roundPrice(Math.max(0, lineTotal - buyXGetYDiscountAmount));
       }
+      if (buyXGetYRule && !buyXGetYRule.isStackable) {
+        benefitsExcludedLineTotal = roundPrice(unitPrice * Math.max(0, Number(buyXGetYApplication.paidParticipatingQty || 0)));
+      }
     }
     if (product?.discount && product.discount.discount_amount > 0 && !isAutoItem) {
       discountInfo = discountInfo || product.discount;
       // Рассчитываем скидку на lineTotal
-      const simpleDiscountAmount = calculateProductDiscountAmount(lineTotal, product.discount);
+      const simpleDiscountBase = benefitsExcludedLineTotal > 0
+        ? roundPrice(unitPrice * Math.max(0, paidQty - Number(buyXGetYApplication.participatingQty || 0)))
+        : lineTotal;
+      const simpleDiscountAmount = calculateProductDiscountAmount(simpleDiscountBase, product.discount);
       discountAmount = roundPrice(discountAmount + simpleDiscountAmount);
       lineTotal = roundPrice(lineTotal - simpleDiscountAmount);
     }
 
-    return { lineTotal, unitPrice, paidQty, freeQty, isAuto: isAutoItem, parts, discountAmount, discountInfo };
+    benefitsExcludedLineTotal = roundPrice(Math.min(lineTotal, Math.max(0, benefitsExcludedLineTotal)));
+    return { lineTotal, unitPrice, paidQty, freeQty, isAuto: isAutoItem, parts, discountAmount, discountInfo, benefitsExcludedLineTotal };
   }
 
   function computeCartTotals(items) {
@@ -8667,19 +8676,44 @@ async function initAddresses() {
       buyQty,
       rewardQty,
       repeatMode,
+      isStackable: Number(source.is_stackable || 0) === 1 || source.is_stackable === true,
+    };
+  }
+
+  function calculateCatalogBuyXGetYApplication(qty, rule) {
+    const itemQty = Math.max(0, Math.floor(Number(qty || 0)));
+    if (!rule) {
+      return {
+        applications: 0,
+        freeQty: 0,
+        participatingQty: 0,
+        paidParticipatingQty: 0,
+      };
+    }
+    const buyQty = Math.max(1, Math.floor(Number(rule?.buyQty || 0)) || 1);
+    const rewardQty = Math.max(1, Math.floor(Number(rule?.rewardQty || 0)) || 1);
+    const groupQty = buyQty + rewardQty;
+    if (!(itemQty >= groupQty)) {
+      return {
+        applications: 0,
+        freeQty: 0,
+        participatingQty: 0,
+        paidParticipatingQty: 0,
+      };
+    }
+    const applications = rule?.repeatMode === "repeat" ? Math.floor(itemQty / groupQty) : 1;
+    const freeQty = Math.min(itemQty, applications * rewardQty);
+    const participatingQty = Math.min(itemQty, applications * groupQty);
+    return {
+      applications,
+      freeQty,
+      participatingQty,
+      paidParticipatingQty: Math.max(0, participatingQty - freeQty),
     };
   }
 
   function calculateCatalogBuyXGetYFreeQty(qty, rule) {
-    const itemQty = Math.max(0, Math.floor(Number(qty || 0)));
-    const buyQty = Math.max(1, Math.floor(Number(rule?.buyQty || 0)) || 1);
-    const rewardQty = Math.max(1, Math.floor(Number(rule?.rewardQty || 0)) || 1);
-    const groupQty = buyQty + rewardQty;
-    if (!(itemQty >= groupQty)) return 0;
-    if (rule?.repeatMode === "repeat") {
-      return Math.min(itemQty, Math.floor(itemQty / groupQty) * rewardQty);
-    }
-    return Math.min(itemQty, rewardQty);
+    return calculateCatalogBuyXGetYApplication(qty, rule).freeQty;
   }
 
   function syncCatalogProductDiscountBadge(card, product, calculatedPrice = null) {

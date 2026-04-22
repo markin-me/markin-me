@@ -2223,6 +2223,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
             buy_qty: Math.max(1, Number(mechanic?.buy_qty || 0) || 1),
             reward_qty: Math.max(1, Number(mechanic?.reward_qty || 0) || 1),
             repeat_mode: publicDiscountText(mechanic?.repeat_mode).toLowerCase() === 'repeat' ? 'repeat' : 'single',
+            is_stackable: Number(disc?.is_stackable || 0) === 1,
             target_sets: targetSets,
           });
         }
@@ -2261,6 +2262,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
             buy_qty: promoBadge.buy_qty,
             reward_qty: promoBadge.reward_qty,
             repeat_mode: promoBadge.repeat_mode,
+            is_stackable: promoBadge.is_stackable,
           };
           break;
         }
@@ -2701,7 +2703,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     });
 
     const [discountRows] = await db.query(
-      `SELECT id, title, priority, mechanic_config_json, is_active, is_deleted, starts_at, ends_at,
+      `SELECT id, title, priority, mechanic_config_json, is_active, is_deleted, is_stackable, starts_at, ends_at,
               schedule_days, schedule_time_start, schedule_time_end, usage_limit, usage_count
          FROM mkt_discounts
         WHERE tenant_id=? AND store_id=? AND mechanic_type='buy_x_get_y'
@@ -2723,6 +2725,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
           buy_qty: Math.max(1, Number(mechanic?.buy_qty || 0) || 1),
           reward_qty: Math.max(1, Number(mechanic?.reward_qty || 0) || 1),
           repeat_mode: publicDiscountText(mechanic?.repeat_mode).toLowerCase() === 'repeat' ? 'repeat' : 'single',
+          is_stackable: Number(row?.is_stackable || 0) === 1,
           target_sets: targetSets,
         };
       })
@@ -2745,6 +2748,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         buy_qty: badge.buy_qty,
         reward_qty: badge.reward_qty,
         repeat_mode: badge.repeat_mode,
+        is_stackable: badge.is_stackable,
       };
     });
     return source;
@@ -12589,6 +12593,15 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         ?? ((Number(rawItem?.price ?? rawItem?.unit_price ?? 0) || 0) * qty)
       );
       const lineTotal = roundPromoMoney(Math.max(0, Number.isFinite(lineTotalRaw) ? lineTotalRaw : 0));
+      const benefitsExcludedLineTotalRaw = Number(
+        rawItem?.benefits_excluded_line_total
+        ?? rawItem?.discount_excluded_line_total
+        ?? 0
+      );
+      const benefitsExcludedLineTotal = roundPromoMoney(Math.min(
+        lineTotal,
+        Math.max(0, Number.isFinite(benefitsExcludedLineTotalRaw) ? benefitsExcludedLineTotalRaw : 0)
+      ));
       const originalLineTotalRaw = Number(
         rawItem?.original_line_total
         ?? rawItem?.old_line_total
@@ -12703,6 +12716,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           auto_add: Number(rawItem?.auto_add || 0) === 1 ? 1 : 0,
           selections,
         };
+        if (benefitsExcludedLineTotal > 0) {
+          item.benefits_excluded_line_total = benefitsExcludedLineTotal;
+        }
         if (originalLineTotal > lineTotal) {
           item.discount = { original_line_total: originalLineTotal };
         }
@@ -12740,6 +12756,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           }))
           .filter((ingredient) => ingredient.ingredient_id),
       };
+      if (benefitsExcludedLineTotal > 0) {
+        item.benefits_excluded_line_total = benefitsExcludedLineTotal;
+      }
       item.product_config = normalizePublicProductConfigPayload(item, productId);
       if (originalLineTotal > lineTotal) {
         item.discount = { original_line_total: originalLineTotal };
@@ -13192,6 +13211,29 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     });
   }
 
+  function getCheckoutBenefitExcludedLineTotal(item) {
+    const lineTotal = roundPromoMoney(Math.max(0, Number(item?.line_total || 0)));
+    const excluded = roundPromoMoney(Math.max(
+      0,
+      Number(item?.benefits_excluded_line_total ?? item?.discount_excluded_line_total ?? 0) || 0
+    ));
+    return roundPromoMoney(Math.min(lineTotal, excluded));
+  }
+
+  function getCheckoutBenefitEligibleLineTotal(item) {
+    const lineTotal = roundPromoMoney(Math.max(0, Number(item?.line_total || 0)));
+    return roundPromoMoney(Math.max(0, lineTotal - getCheckoutBenefitExcludedLineTotal(item)));
+  }
+
+  function getCheckoutBenefitItemsEligibleTotal(items) {
+    return roundPromoMoney(
+      (Array.isArray(items) ? items : []).reduce(
+        (sum, item) => sum + getCheckoutBenefitEligibleLineTotal(item),
+        0
+      )
+    );
+  }
+
   function isCheckoutBenefitStackable(entry) {
     return Number(entry?.is_stackable || 0) === 1 || entry?.is_stackable === true;
   }
@@ -13246,9 +13288,17 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     productCategoriesMap,
   }) {
     const previewItems = cloneCheckoutBenefitItems(sourceItems);
+    const sourceLineItemsTotal = roundPromoMoney(previewItems.reduce((sum, item) => sum + Number(item?.line_total || 0), 0));
     const itemsTotalBeforePromo = sourceItemsTotal != null
       ? roundPromoMoney(Number(sourceItemsTotal || 0))
-      : roundPromoMoney(previewItems.reduce((sum, item) => sum + Number(item?.line_total || 0), 0));
+      : sourceLineItemsTotal;
+    const excludedItemsTotal = roundPromoMoney(
+      previewItems.reduce((sum, item) => sum + getCheckoutBenefitExcludedLineTotal(item), 0)
+    );
+    const eligibleItemsTotal = roundPromoMoney(Math.min(
+      getCheckoutBenefitItemsEligibleTotal(previewItems),
+      Math.max(0, itemsTotalBeforePromo - excludedItemsTotal)
+    ));
     const rewardType = publicDiscountText(runtimeConfig?.rewardType || 'discount').toLowerCase() || 'discount';
     const productRewardType = publicDiscountText(runtimeConfig?.productRewardType || 'gift').toLowerCase() || 'gift';
     const applyTo = publicDiscountText(runtimeConfig?.applyTo || 'order').toLowerCase() || 'order';
@@ -13262,18 +13312,18 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       : null;
     const resolvedTargets = targetSets || { productIds: new Set(), categoryIds: new Set(), comboIds: new Set() };
 
-    if (minOrderAmount > 0 && itemsTotalBeforePromo < minOrderAmount) {
+    if (minOrderAmount > 0 && eligibleItemsTotal < minOrderAmount) {
       return buildPromoNotApplicablePreviewOutcome(
         previewItems,
         itemsTotalBeforePromo,
-        buildPromoMinAmountDisabledReason(minOrderAmount, itemsTotalBeforePromo)
+        buildPromoMinAmountDisabledReason(minOrderAmount, eligibleItemsTotal)
       );
     }
 
     if (rewardType === 'discount') {
       if (applyTo === 'order') {
         const promoOrderDiscount = discountHelpers.calculateDiscount(
-          itemsTotalBeforePromo,
+          eligibleItemsTotal,
           discountType,
           discountValue,
           maxDiscountAmount
@@ -13297,7 +13347,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         if (!matchesScope) continue;
 
         const promoItemDiscount = discountHelpers.calculateDiscount(
-          Number(item.line_total || 0),
+          getCheckoutBenefitEligibleLineTotal(item),
           discountType,
           discountValue,
           maxDiscountAmount
@@ -13340,7 +13390,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       if (!matchesReward) continue;
 
       const rewardDiscount = discountHelpers.calculateDiscount(
-        Number(item.line_total || 0),
+        getCheckoutBenefitEligibleLineTotal(item),
         discountType,
         discountValue,
         maxDiscountAmount
@@ -13470,10 +13520,11 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     const baseItemsTotal = roundPromoMoney(
       nextItems.reduce((sum, item) => sum + Number(item?.line_total || 0), 0)
     );
+    const eligibleItemsTotal = getCheckoutBenefitItemsEligibleTotal(nextItems);
 
     if (applyTo === 'order') {
       const minOrderAmount = discount?.min_order_amount != null ? Number(discount.min_order_amount || 0) : 0;
-      if (minOrderAmount > 0 && baseItemsTotal < minOrderAmount) {
+      if (minOrderAmount > 0 && eligibleItemsTotal < minOrderAmount) {
         return {
           isApplicable: false,
           errorCode: 'DISCOUNT_NOT_APPLICABLE',
@@ -13485,7 +13536,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       }
 
       const orderDiscountAmount = discountHelpers.calculateDiscount(
-        baseItemsTotal,
+        eligibleItemsTotal,
         discountType,
         discountValue,
         maxDiscountAmount
@@ -13522,8 +13573,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       if (!matches) continue;
 
       const baseLineTotal = roundPromoMoney(Number(item?.line_total || 0));
+      const eligibleLineTotal = getCheckoutBenefitEligibleLineTotal(item);
       const lineDiscountAmount = discountHelpers.calculateDiscount(
-        baseLineTotal,
+        eligibleLineTotal,
         discountType,
         discountValue,
         maxDiscountAmount
@@ -16621,6 +16673,12 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           if (normalizedItem.line_total != null) {
             normalizedItem.line_total = roundPrice(Number(normalizedItem.line_total || 0));
           }
+          if (normalizedItem.benefits_excluded_line_total != null) {
+            normalizedItem.benefits_excluded_line_total = roundPrice(Math.min(
+              Number(normalizedItem.line_total || 0),
+              Math.max(0, Number(normalizedItem.benefits_excluded_line_total || 0))
+            ));
+          }
           if (normalizedItem.price != null) {
             normalizedItem.price = roundPrice(Number(normalizedItem.price || 0));
           }
@@ -17415,6 +17473,14 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         };
 
         // Р вЂќР С•Р В±Р В°Р Р†Р В»РЎРЏР ВµР С Р С‘Р Р…РЎвЂћР С•РЎР‚Р СР В°РЎвЂ Р С‘РЎР‹ Р С• РЎРѓР С”Р С‘Р Т‘Р С”Р Вµ Р ВµРЎРѓР В»Р С‘ Р ВµРЎРѓРЎвЂљРЎРЉ
+        const benefitsExcludedLineTotalFromRequest = roundPrice(Math.min(
+          lineTotalAfterDiscount,
+          Math.max(0, Number(it?.benefits_excluded_line_total ?? it?.discount_excluded_line_total ?? 0) || 0)
+        ));
+        if (benefitsExcludedLineTotalFromRequest > 0) {
+          itemEntry.benefits_excluded_line_total = benefitsExcludedLineTotalFromRequest;
+        }
+
         if (isGiftReward) {
           itemEntry.is_gift_reward = 1;
           itemEntry.gift_reward_id = giftRewardId;
@@ -17653,7 +17719,14 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           const rewardPromoMinOrderAmount = rewardPromoRuntime?.minOrderAmount != null
             ? Number(rewardPromoRuntime.minOrderAmount || 0)
             : 0;
-          if (rewardPromoMinOrderAmount > 0 && roundPrice(total) < rewardPromoMinOrderAmount) {
+          const rewardPromoExcludedTotal = roundPrice(
+            normItems.reduce((sum, item) => sum + getCheckoutBenefitExcludedLineTotal(item), 0)
+          );
+          const rewardPromoEligibleTotal = roundPrice(Math.min(
+            getCheckoutBenefitItemsEligibleTotal(normItems),
+            Math.max(0, total - rewardPromoExcludedTotal)
+          ));
+          if (rewardPromoMinOrderAmount > 0 && rewardPromoEligibleTotal < rewardPromoMinOrderAmount) {
             return res.status(409).json({ ok: false, error: 'PROMO_NOT_APPLICABLE' });
           }
           const rewardPromoTargetRows = getRewardPayloadTargetRows(rewardPayload);
@@ -17674,7 +17747,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           if (rewardPromoRuntime.rewardType === 'discount') {
             if (rewardPromoRuntime.applyTo === 'order') {
               const promoOrderDiscount = roundPrice(discountHelpers.calculateDiscount(
-                total,
+                rewardPromoEligibleTotal,
                 rewardPromoRuntime.discountType,
                 rewardPromoRuntime.discountValue,
                 rewardPromoMaxDiscountAmount
@@ -17705,8 +17778,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
                 if (!matchesScope) continue;
 
                 const baseLineTotal = roundPrice(Number(item.line_total || 0));
+                const eligibleLineTotal = getCheckoutBenefitEligibleLineTotal(item);
                 const promoItemDiscount = roundPrice(discountHelpers.calculateDiscount(
-                  baseLineTotal,
+                  eligibleLineTotal,
                   rewardPromoRuntime.discountType,
                   rewardPromoRuntime.discountValue,
                   rewardPromoMaxDiscountAmount
@@ -17802,8 +17876,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
               if (!matchesReward) continue;
 
               const baseLineTotal = roundPrice(Number(item.line_total || 0));
+              const eligibleLineTotal = getCheckoutBenefitEligibleLineTotal(item);
               const rewardDiscount = roundPrice(discountHelpers.calculateDiscount(
-                baseLineTotal,
+                eligibleLineTotal,
                 rewardPromoRuntime.discountType,
                 rewardPromoRuntime.discountValue,
                 rewardPromoMaxDiscountAmount
@@ -17924,14 +17999,21 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         const promoTargetRows = await loadDiscountTargetRows(db, tenantId, Number(promoRow.discount_id || 0));
         const promoTargets = buildDiscountProductTargetSets(promoTargetRows);
         const promoMinOrderAmount = promoRow?.min_order_amount != null ? Number(promoRow.min_order_amount || 0) : 0;
-        if (promoMinOrderAmount > 0 && roundPrice(total) < promoMinOrderAmount) {
+        const promoExcludedTotal = roundPrice(
+          normItems.reduce((sum, item) => sum + getCheckoutBenefitExcludedLineTotal(item), 0)
+        );
+        const promoEligibleTotal = roundPrice(Math.min(
+          getCheckoutBenefitItemsEligibleTotal(normItems),
+          Math.max(0, total - promoExcludedTotal)
+        ));
+        if (promoMinOrderAmount > 0 && promoEligibleTotal < promoMinOrderAmount) {
           return res.status(409).json({ ok: false, error: 'PROMO_NOT_APPLICABLE' });
         }
 
         if (promoRuntime.rewardType === 'discount') {
           if (promoRuntime.applyTo === 'order') {
             const promoOrderDiscount = roundPrice(discountHelpers.calculateDiscount(
-              total,
+              promoEligibleTotal,
               promoRuntime.discountType,
               promoRuntime.discountValue,
               promoRow.max_discount_amount ? Number(promoRow.max_discount_amount) : null
@@ -17960,8 +18042,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
               if (!matchesScope) continue;
 
               const baseLineTotal = roundPrice(Number(item.line_total || 0));
+              const eligibleLineTotal = getCheckoutBenefitEligibleLineTotal(item);
               const promoItemDiscount = roundPrice(discountHelpers.calculateDiscount(
-                baseLineTotal,
+                eligibleLineTotal,
                 promoRuntime.discountType,
                 promoRuntime.discountValue,
                 promoRow.max_discount_amount ? Number(promoRow.max_discount_amount) : null
@@ -18054,8 +18137,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             if (!matchesReward) continue;
 
             const baseLineTotal = roundPrice(Number(item.line_total || 0));
+            const eligibleLineTotal = getCheckoutBenefitEligibleLineTotal(item);
             const rewardDiscount = roundPrice(discountHelpers.calculateDiscount(
-              baseLineTotal,
+              eligibleLineTotal,
               promoRuntime.discountType,
               promoRuntime.discountValue,
               promoRow.max_discount_amount ? Number(promoRow.max_discount_amount) : null
