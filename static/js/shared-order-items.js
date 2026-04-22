@@ -358,6 +358,17 @@
     );
   }
 
+  function getBuyXGetYBadgeText(item) {
+    var badge = item && item.buy_x_get_y_badge;
+    if (badge && typeof badge === "object") return str(badge.badge_text || "").trim();
+    return "";
+  }
+
+  function renderBuyXGetYBadgeHtml(item) {
+    var text = getBuyXGetYBadgeText(item);
+    return text ? '<span class="order-item-bogo-badge">' + escapeHtml(text) + "</span>" : "";
+  }
+
   function renderComboThumbHtml(item, opts) {
     var selections = Array.isArray(item && item.selections) ? item.selections : [];
     var selectionPhotos = selections
@@ -370,6 +381,7 @@
 
     return (
       '<div class="cart-combo-thumb">' +
+        renderBuyXGetYBadgeHtml(item) +
         photoOrder.map(function (index) {
           var photo = photos[index] || "";
           if (!photo) {
@@ -389,7 +401,15 @@
     var photos = cleanPhotos(item && item.photos, 4);
     var placeholder = str(opts && opts.placeholderImage).trim() || "/static/img/placeholder.png";
     var mainPhoto = photos[0] || placeholder;
-    return '<img class="cart-thumb" src="' + escapeHtml(mainPhoto) + '" alt="" />';
+    var badgeHtml = renderBuyXGetYBadgeHtml(item);
+    var imageHtml = '<img class="cart-thumb" src="' + escapeHtml(mainPhoto) + '" alt="" />';
+    if (!badgeHtml) return imageHtml;
+    return (
+      '<span class="order-item-thumb-wrap">' +
+        badgeHtml +
+        imageHtml +
+      "</span>"
+    );
   }
 
   function renderDetailLines(lines) {

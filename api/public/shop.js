@@ -2182,17 +2182,55 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     const [discountRows] = await db.query(
       `SELECT d.*, dp.product_id, dp.category_id, dp.combo_id
        FROM mkt_discounts d
-       JOIN mkt_discount_products dp ON dp.discount_id = d.id AND dp.tenant_id = d.tenant_id
+       LEFT JOIN mkt_discount_products dp ON dp.discount_id = d.id AND dp.tenant_id = d.tenant_id
        WHERE d.tenant_id = ? AND d.store_id = ? AND d.is_active = 1 AND d.is_deleted = 0
-         AND (dp.product_id IN (${placeholders}) OR dp.category_id IS NOT NULL)`,
+         AND (
+           d.mechanic_type = 'buy_x_get_y'
+           OR dp.product_id IN (${placeholders})
+           OR dp.category_id IS NOT NULL
+         )`,
       [tenantId, storeId, ...productIds]
     );
 
     // Р вЂњРЎР‚РЎС“Р С—Р С—Р С‘РЎР‚РЎС“Р ВµР С РЎРѓР С”Р С‘Р Т‘Р С”Р С‘ Р С—Р С• РЎвЂљР С•Р Р†Р В°РЎР‚Р В°Р С Р С‘ Р С”Р В°РЎвЂљР ВµР С–Р С•РЎР‚Р С‘РЎРЏР С
     const discountsByProduct = new Map();
     const discountsByCategory = new Map();
+    const buyXGetYBadges = [];
+    const seenBuyXGetYBadgeIds = new Set();
 
     for (const disc of discountRows) {
+      const mechanicType = normalizePublicMechanicType(disc?.mechanic_type);
+      if (mechanicType === 'buy_x_get_y') {
+        const discountId = Number(disc.id || 0);
+        if (seenBuyXGetYBadgeIds.has(discountId)) continue;
+        seenBuyXGetYBadgeIds.add(discountId);
+        const mechanic = parsePublicDiscountObject(disc?.mechanic_config_json, {});
+        const targetSets = buildPublicProductTargetSets(mechanic?.qualifying_items || []);
+        const badgeText = formatPublicBuyXGetYBadge(mechanic);
+        if (
+          badgeText
+          && (
+            targetSets.anyProductIds.size
+            || targetSets.productIds.size
+            || targetSets.categoryIds.size
+          )
+        ) {
+          buyXGetYBadges.push({
+            id: discountId,
+            priority: Number(disc.priority || 0),
+            badge_text: badgeText,
+            title: publicDiscountText(disc?.title) || badgeText,
+            buy_qty: Math.max(1, Number(mechanic?.buy_qty || 0) || 1),
+            reward_qty: Math.max(1, Number(mechanic?.reward_qty || 0) || 1),
+            repeat_mode: publicDiscountText(mechanic?.repeat_mode).toLowerCase() === 'repeat' ? 'repeat' : 'single',
+            target_sets: targetSets,
+          });
+        }
+        continue;
+      }
+      if (mechanicType !== 'simple_discount') {
+        continue;
+      }
       if (disc.product_id) {
         const pid = Number(disc.product_id);
         if (!discountsByProduct.has(pid)) discountsByProduct.set(pid, []);
@@ -2206,10 +2244,27 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     }
 
     // Р СџРЎР‚Р С‘Р СР ВµР Р…РЎРЏР ВµР С РЎРѓР С”Р С‘Р Т‘Р С”Р С‘ Р С” Р С”Р В°Р В¶Р Т‘Р С•Р СРЎС“ РЎвЂљР С•Р Р†Р В°РЎР‚РЎС“
+    buyXGetYBadges.sort((a, b) => (b.priority || 0) - (a.priority || 0));
+
     for (const row of rows) {
       const pid = Number(row.id);
       const blocksConfig = blocksConfigMap.get(pid) || getDefaultProductBlocksConfig();
       row.blocks_config = blocksConfig;
+      row.buy_x_get_y_badge = null;
+      for (const promoBadge of buyXGetYBadges) {
+        const productItem = { type: 'product', product_id: pid };
+        if (matchDiscountTargetScope(promoBadge.target_sets, productItem, catByProduct, 'any')) {
+          row.buy_x_get_y_badge = {
+            id: promoBadge.id,
+            badge_text: promoBadge.badge_text,
+            title: promoBadge.title,
+            buy_qty: promoBadge.buy_qty,
+            reward_qty: promoBadge.reward_qty,
+            repeat_mode: promoBadge.repeat_mode,
+          };
+          break;
+        }
+      }
       if (!blocksConfig.promotions) {
         row.discount = null;
         row.original_price = null;
@@ -2555,6 +2610,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       const parsed = r.items ? JSON.parse(r.items) : [];
       if (Array.isArray(parsed)) items = parsed;
     } catch {}
+    await enrichPublicOrderItemsWithBuyXGetYBadges(tenantId, storeId, items);
     let discountsJson = [];
     try {
       if (Array.isArray(r.discounts_json)) {
@@ -2617,6 +2673,81 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       time_option_title: r.timeOptionTitle ?? null,
     };
     return snapshot;
+  }
+
+  async function enrichPublicOrderItemsWithBuyXGetYBadges(tenantId, storeId, items) {
+    const source = Array.isArray(items) ? items : [];
+    const productIds = [...new Set(
+      source
+        .map((item) => Number(item?.product_id || 0))
+        .filter((id) => id > 0)
+    )];
+    if (!productIds.length) return source;
+
+    const placeholders = productIds.map(() => '?').join(',');
+    const [categoryRows] = await db.query(
+      `SELECT product_id, category_id
+         FROM prod_product_categories
+        WHERE tenant_id=? AND product_id IN (${placeholders})`,
+      [tenantId, ...productIds]
+    );
+    const productCategoriesMap = new Map();
+    (Array.isArray(categoryRows) ? categoryRows : []).forEach((row) => {
+      const productId = Number(row?.product_id || 0);
+      const categoryId = Number(row?.category_id || 0);
+      if (!(productId > 0) || !(categoryId > 0)) return;
+      if (!productCategoriesMap.has(productId)) productCategoriesMap.set(productId, []);
+      productCategoriesMap.get(productId).push(categoryId);
+    });
+
+    const [discountRows] = await db.query(
+      `SELECT id, title, priority, mechanic_config_json, is_active, is_deleted, starts_at, ends_at,
+              schedule_days, schedule_time_start, schedule_time_end, usage_limit, usage_count
+         FROM mkt_discounts
+        WHERE tenant_id=? AND store_id=? AND mechanic_type='buy_x_get_y'
+          AND is_active=1 AND is_deleted=0`,
+      [tenantId, storeId]
+    );
+    const badges = (Array.isArray(discountRows) ? discountRows : [])
+      .filter((row) => discountHelpers.isDiscountActive(row))
+      .map((row) => {
+        const mechanic = parsePublicDiscountObject(row?.mechanic_config_json, {});
+        const targetSets = buildPublicProductTargetSets(mechanic?.qualifying_items || []);
+        if (!targetSets.productIds.size && !targetSets.anyProductIds.size && !targetSets.categoryIds.size) return null;
+        const badgeText = formatPublicBuyXGetYBadge(mechanic);
+        return {
+          id: Number(row?.id || 0),
+          priority: Number(row?.priority || 0),
+          badge_text: badgeText,
+          title: publicDiscountText(row?.title) || badgeText,
+          buy_qty: Math.max(1, Number(mechanic?.buy_qty || 0) || 1),
+          reward_qty: Math.max(1, Number(mechanic?.reward_qty || 0) || 1),
+          repeat_mode: publicDiscountText(mechanic?.repeat_mode).toLowerCase() === 'repeat' ? 'repeat' : 'single',
+          target_sets: targetSets,
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => Number(b?.priority || 0) - Number(a?.priority || 0));
+    if (!badges.length) return source;
+
+    source.forEach((item) => {
+      if (!item || typeof item !== 'object') return;
+      if (item.buy_x_get_y_badge && typeof item.buy_x_get_y_badge === 'object') return;
+      const productId = Number(item?.product_id || 0);
+      if (!(productId > 0)) return;
+      const productItem = { type: 'product', product_id: productId };
+      const badge = badges.find((row) => matchDiscountTargetScope(row.target_sets, productItem, productCategoriesMap, 'any'));
+      if (!badge) return;
+      item.buy_x_get_y_badge = {
+        id: badge.id,
+        badge_text: badge.badge_text,
+        title: badge.title,
+        buy_qty: badge.buy_qty,
+        reward_qty: badge.reward_qty,
+        repeat_mode: badge.repeat_mode,
+      };
+    });
+    return source;
   }
 
   function toPositiveIntOrNull(v) {
@@ -5513,6 +5644,12 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     const raw = publicDiscountText(value).toLowerCase();
     if (['simple_discount', 'buy_x_get_y', 'threshold', 'loyalty_progress'].includes(raw)) return raw;
     return 'simple_discount';
+  }
+
+  function formatPublicBuyXGetYBadge(mechanic) {
+    const buyQty = Math.max(1, Number(mechanic?.buy_qty || 0) || 0);
+    const rewardQty = Math.max(1, Number(mechanic?.reward_qty || 0) || 0);
+    return `${buyQty}+${rewardQty}`;
   }
 
   async function ensureOrderBenefitsMetaColumn() {

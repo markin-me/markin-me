@@ -1730,6 +1730,7 @@
     editingDiscountId: null,    // ID редактируемой скидки
     activeDiscount: null,       // Данные активной скидки
     discountOrders: [],         // Заказы с применённой скидкой
+    discountHistoryProducts: [],
     discountProgressCustomers: [],
     discountProgressPagination: { page: 1, limit: 100, total: 0, hasMore: false },
     discountProgressLoading: false,
@@ -2768,6 +2769,7 @@
     if (state.currentView !== 'discounts') return;
     if (reload) {
       state.discountOrders = [];
+      state.discountHistoryProducts = [];
       state.discountProgressCustomers = [];
       state.discountProgressPagination = { page: 1, limit: 100, total: 0, hasMore: false };
       state.discountProgressLoading = false;
@@ -8509,26 +8511,7 @@
       };
     }
 
-    if (target === 'buy_reward') {
-      let activeValue = String(state.discountBuyRewardUiMode || '').trim();
-      const rewardKind = String(elDeBuyRewardKind?.value || 'gift').trim();
-      const rewardSource = String(elDeBuyRewardSource?.value || 'same_pool').trim();
-      if (!activeValue && rewardKind === 'product_discount') {
-        activeValue = 'discount';
-      } else if (!activeValue && rewardSource === 'reward_list') {
-        const rewardSelection = getDiscountBuyRewardSelection();
-        activeValue = rewardSelection.length > 1 ? 'product_list' : (rewardSelection.length === 1 ? 'product' : '');
-      }
-      return {
-        title: 'Что добавить в награду',
-        choices: [
-          { value: 'product', label: 'Товар' },
-          { value: 'product_list', label: 'Список товаров' },
-          { value: 'discount', label: 'Скидка' },
-        ],
-        activeValue,
-      };
-    }
+    if (target === 'buy_reward') return null;
 
     if (target === 'progress_scope') {
       return {
@@ -9228,36 +9211,12 @@
   }
 
   function getDiscountBuySlotPreview(role) {
-    const rewardUiMode = String(state.discountBuyRewardUiMode || '').trim();
-    const rewardSource = String(elDeBuyRewardSource?.value || 'same_pool').trim() || 'same_pool';
-    const rewardKind = String(elDeBuyRewardKind?.value || 'gift').trim() || 'gift';
     if (role === 'buy') {
       const mode = getDiscountBuyConditionUiMode();
       const emptyTitle = mode === 'category' ? 'Выберите категории' : 'Выберите товары';
       return buildDiscountBuyPreview(getDiscountBuyConditionSelection(), emptyTitle, 'fa-plus');
     }
-    if (rewardKind === 'product_discount' || rewardUiMode === 'discount') {
-      return {
-        isEmpty: false,
-        title: 'Скидка',
-        count: 1,
-        photo: '',
-        icon: 'fa-percent',
-      };
-    }
-    if (rewardUiMode === 'product' || rewardUiMode === 'product_list' || rewardSource === 'reward_list') {
-      return buildDiscountBuyPreview(getDiscountBuyRewardSelection(), 'Выберите товары-награды', 'fa-plus');
-    }
-    if (rewardUiMode === 'legacy_same_pool') {
-      return getDiscountBuySlotPreview('buy');
-    }
-    return {
-      isEmpty: true,
-      title: 'Выберите награду',
-      count: 0,
-      photo: '',
-      icon: 'fa-plus',
-    };
+    return getDiscountBuySlotPreview('buy');
   }
 
   function getDiscountBuyVisualColumnCount() {
@@ -9304,7 +9263,6 @@
       0,
       Number(elDeBuyVisualRows?.clientWidth || elDeBuyVisualCard?.clientWidth || elDeBuyXGetYWrap?.clientWidth || 0) - 4
     );
-    const rewardSource = String(elDeBuyRewardSource?.value || 'same_pool').trim() || 'same_pool';
     const buyPreview = getDiscountBuySlotPreview('buy');
     const rewardPreview = getDiscountBuySlotPreview('reward');
     const slots = [];
@@ -9313,7 +9271,7 @@
       const isBuySlot = index < buyQty;
       slots.push({
         role: isBuySlot ? 'buy' : 'reward',
-        target: isBuySlot ? 'buy_condition' : 'buy_reward',
+        target: 'buy_condition',
         preview: isBuySlot ? buyPreview : rewardPreview,
       });
     }
@@ -10122,7 +10080,7 @@
     if (elDeRewardQty) elDeRewardQty.value = '1';
     if (elDeBuyConditionUiMode) elDeBuyConditionUiMode.value = 'product';
     state.discountBuyConditionUiMode = 'product';
-    if (elDeBuyQualifyingMode) elDeBuyQualifyingMode.value = 'pool';
+    if (elDeBuyQualifyingMode) elDeBuyQualifyingMode.value = 'same_sku';
     if (elDeBuyRepeatMode) elDeBuyRepeatMode.value = 'single';
     if (elDeBuyRewardSource) elDeBuyRewardSource.value = 'same_pool';
     if (elDeBuyRewardKind) elDeBuyRewardKind.value = 'gift';
@@ -10868,9 +10826,6 @@
     const isLoyalty = mechanicType === 'loyalty_progress';
     const isThreshold = mechanicType === 'threshold';
     const applyTo = $('#de_apply_to')?.value || 'order';
-    const buyConditionUiMode = getDiscountBuyConditionUiMode();
-    const rewardSource = elDeBuyRewardSource?.value || 'same_pool';
-    const rewardKind = elDeBuyRewardKind?.value || 'gift';
     const progressBasis = getDiscountProgressBasis();
     const progressScopeMode = getDiscountProgressScopeMode();
     const progressRewardKind = normalizeDiscountProgressRewardKind(elDeProgressRewardKind?.value || 'gift');
@@ -10888,7 +10843,7 @@
     if (!isBuyXGetY && !isLoyalty) closeDiscountSlotPicker();
     if (elDeBuyConditionProductsWrap) elDeBuyConditionProductsWrap.classList.add('hidden');
     if (elDeBuyRewardProductsWrap) elDeBuyRewardProductsWrap.classList.add('hidden');
-    if (elDeBuyRewardDiscountWrap) elDeBuyRewardDiscountWrap.classList.toggle('hidden', !isBuyXGetY || rewardKind !== 'product_discount');
+    if (elDeBuyRewardDiscountWrap) elDeBuyRewardDiscountWrap.classList.add('hidden');
     if (elDeProgressScopeModeWrap) elDeProgressScopeModeWrap.classList.add('hidden');
     if (elDeProgressScopeItemsWrap) elDeProgressScopeItemsWrap.classList.add('hidden');
     if (elDeProgressRewardGiftWrap) elDeProgressRewardGiftWrap.classList.toggle('hidden', !isLoyalty || progressRewardKind !== 'gift');
@@ -10901,6 +10856,12 @@
       syncDiscountChoiceGroup('de_discount_type');
     }
     if (isBuyXGetY) {
+      if (elDeBuyRewardSource) elDeBuyRewardSource.value = 'same_pool';
+      if (elDeBuyRewardKind) elDeBuyRewardKind.value = 'gift';
+      if (elDeBuyRewardDiscountType) elDeBuyRewardDiscountType.value = 'percent';
+      if (elDeBuyRewardDiscountValue) elDeBuyRewardDiscountValue.value = '';
+      state.discountBuyRewardUiMode = '';
+      state.discountBuyRewardProducts = [];
       syncDiscountBuyHiddenQualifyingMode();
       syncDiscountBuyConditionUiCopy();
       renderDiscountBuyVisualization();
@@ -10917,8 +10878,30 @@
   }
 
   function updateDiscountHideInBenefitsHint() {
-    if (!elDeHideInBenefitsHint) return;
     const mechanicType = elDeMechanicType?.value || 'simple_discount';
+    const isBuyXGetY = mechanicType === 'buy_x_get_y';
+    const hideInBenefitsSwitch = elDeHideInBenefits?.closest('.switch');
+    if (elDeHideInBenefits) {
+      if (isBuyXGetY && !state.discountBuyXGetYHideInBenefitsForced) {
+        state.discountBuyXGetYHideInBenefitsForced = true;
+        state.discountHideInBenefitsBeforeBuyXGetY = !!elDeHideInBenefits.checked;
+      }
+      if (isBuyXGetY) {
+        elDeHideInBenefits.checked = true;
+      } else if (state.discountBuyXGetYHideInBenefitsForced) {
+        elDeHideInBenefits.checked = !!state.discountHideInBenefitsBeforeBuyXGetY;
+        state.discountBuyXGetYHideInBenefitsForced = false;
+        state.discountHideInBenefitsBeforeBuyXGetY = null;
+      }
+    }
+    if (hideInBenefitsSwitch) {
+      hideInBenefitsSwitch.classList.toggle('hidden', isBuyXGetY);
+      hideInBenefitsSwitch.hidden = isBuyXGetY;
+    }
+    if (!elDeHideInBenefitsHint) return;
+    elDeHideInBenefitsHint.classList.toggle('hidden', isBuyXGetY);
+    elDeHideInBenefitsHint.hidden = isBuyXGetY;
+    if (isBuyXGetY) return;
     const simpleVariant = normalizeSimpleVariant(elDeSimpleVariant?.value || 'percent');
     const isPromoSimple = mechanicType === 'simple_discount' && simpleVariant === 'promo_code';
     elDeHideInBenefitsHint.textContent = isPromoSimple
@@ -11564,15 +11547,9 @@
 
     state.discountBuyConditionProducts = cloneDiscountEntities(mechanic.qualifying_items || []);
     state.discountBuyConditionConfigMode = normalizeDiscountProductConfigMode(mechanic.qualifying_items_config_mode || 'any');
-    state.discountBuyRewardProducts = cloneDiscountEntities(mechanic.reward_products || []);
-    state.discountBuyRewardConfigMode = normalizeDiscountProductConfigMode(mechanic.reward_products_config_mode || 'any');
-    state.discountBuyRewardUiMode = mechanic.type === 'buy_x_get_y'
-      ? (mechanic.reward_kind === 'product_discount'
-          ? 'discount'
-          : (mechanic.reward_source === 'reward_list'
-              ? (state.discountBuyRewardProducts.length > 1 ? 'product_list' : (state.discountBuyRewardProducts.length === 1 ? 'product' : ''))
-              : 'legacy_same_pool'))
-      : '';
+    state.discountBuyRewardProducts = [];
+    state.discountBuyRewardConfigMode = 'any';
+    state.discountBuyRewardUiMode = '';
     state.discountThresholdTiers = Array.isArray(mechanic.tiers) && mechanic.tiers.length
       ? mechanic.tiers.map((tier) => buildEmptyThresholdTier(tier))
       : [buildEmptyThresholdTier()];
@@ -11582,12 +11559,12 @@
 
     if (elDeBuyQty) elDeBuyQty.value = mechanic.buy_qty ?? 1;
     if (elDeRewardQty) elDeRewardQty.value = mechanic.reward_qty ?? 1;
-    if (elDeBuyQualifyingMode) elDeBuyQualifyingMode.value = mechanic.qualifying_mode || 'pool';
+    if (elDeBuyQualifyingMode) elDeBuyQualifyingMode.value = 'same_sku';
     if (elDeBuyRepeatMode) elDeBuyRepeatMode.value = mechanic.repeat_mode || 'single';
-    if (elDeBuyRewardSource) elDeBuyRewardSource.value = mechanic.reward_source || 'same_pool';
-    if (elDeBuyRewardKind) elDeBuyRewardKind.value = mechanic.reward_kind || 'gift';
-    if (elDeBuyRewardDiscountType) elDeBuyRewardDiscountType.value = mechanic.reward_discount?.discount_type || 'percent';
-    if (elDeBuyRewardDiscountValue) elDeBuyRewardDiscountValue.value = mechanic.reward_discount?.discount_value ?? '';
+    if (elDeBuyRewardSource) elDeBuyRewardSource.value = 'same_pool';
+    if (elDeBuyRewardKind) elDeBuyRewardKind.value = 'gift';
+    if (elDeBuyRewardDiscountType) elDeBuyRewardDiscountType.value = 'percent';
+    if (elDeBuyRewardDiscountValue) elDeBuyRewardDiscountValue.value = '';
     if (elDeThresholdBasis) elDeThresholdBasis.value = mechanic.threshold_basis || 'before_discounts';
     if (elDeThresholdApplyMode) elDeThresholdApplyMode.value = mechanic.threshold_apply_mode || 'best_only';
     if (elDeProgressBasis) elDeProgressBasis.value = mechanic.type === 'loyalty_progress' ? (mechanic.progress_basis || 'orders') : 'orders';
@@ -11765,7 +11742,7 @@
       priority: parseInt(elDePriority?.value || '0', 10) || 0,
       is_stackable: $('#de_is_stackable').checked,
       is_active: $('#de_is_active').checked,
-      hide_in_benefits: !!elDeHideInBenefits?.checked,
+      hide_in_benefits: mechanicType === 'buy_x_get_y' || !!elDeHideInBenefits?.checked,
       promo: promoEnabled
         ? {
             enabled: true,
@@ -12702,6 +12679,7 @@
     const targetId = Number(discountId || 0);
     if (!(targetId > 0)) {
       state.discountOrders = [];
+      state.discountHistoryProducts = [];
       renderDiscountCenterContent();
       return;
     }
@@ -12710,6 +12688,7 @@
       const json = await apiJson(`/api/admin/discounts/${targetId}/orders`);
       if (state.activeDiscountId !== targetId) return;
       state.discountOrders = Array.isArray(json.orders) ? json.orders : [];
+      state.discountHistoryProducts = Array.isArray(json.products) ? json.products : [];
       if (state.discountCenterMode === 'history') {
         renderDiscountOrders();
       }
@@ -12717,6 +12696,7 @@
       console.error('loadDiscountOrders error:', err);
       if (state.activeDiscountId !== targetId) return;
       state.discountOrders = [];
+      state.discountHistoryProducts = [];
       if (state.discountCenterMode === 'history') {
         renderDiscountOrders();
       }
@@ -12948,6 +12928,49 @@
     }
   }
 
+  function buildDiscountHistoryProductCard(product) {
+    const price = product?.display_price != null ? product.display_price : product?.price;
+    const photos = Array.isArray(product?.photos) ? product.photos : [];
+    const thumb = String(product?.thumb || product?.photo_thumb || photos[0] || '').trim();
+    const name = String(product?.name || product?.title || '').trim() || `Товар #${Number(product?.id || 0) || ''}`;
+    return `
+      <div class="banner-placement-card discount-history-product-card" data-product-id="${escapeHtml(product?.id || '')}">
+        <div class="discount-history-product-media">
+            ${thumb
+              ? `<img class="banner-placement-card-preview" src="${escapeHtml(thumb)}" alt="" loading="lazy" />`
+              : '<div class="banner-placement-card-icon"><i class="fas fa-image"></i></div>'}
+        </div>
+        <div class="discount-history-product-title">${escapeHtml(name)}</div>
+        <div class="discount-history-product-price">${escapeHtml(money(price || 0))}</div>
+      </div>
+    `;
+  }
+
+  function appendDiscountHistoryProductsBlock(targetEl) {
+    if (!targetEl) return;
+    const mechanic = getDiscountMechanic(state.activeDiscount);
+    if (mechanic.type !== 'buy_x_get_y') return;
+    const products = Array.isArray(state.discountHistoryProducts) ? state.discountHistoryProducts : [];
+    if (!products.length) return;
+
+    const block = document.createElement('div');
+    block.className = 'banners-placement-zone discount-history-products';
+    block.innerHTML = `
+      <div class="banners-placement-head">
+        <div class="banners-placement-copy">
+          <div class="banners-placement-title">Участвуют в акции</div>
+        </div>
+      </div>
+      <div class="banners-placement-body">
+        <div class="banners-placement-track no-scrollbar">
+          ${products.map((product) => buildDiscountHistoryProductCard(product)).join('')}
+        </div>
+      </div>
+    `;
+    bindHorizontalWheelScroll(block.querySelector('.banners-placement-track'));
+    targetEl.appendChild(block);
+  }
+
   function renderDiscountOrders() {
     if (!elDiscountsList) return;
 
@@ -12958,9 +12981,13 @@
 
     elDiscountsList.innerHTML = '';
     if (elDiscountsEmptyHint) elDiscountsEmptyHint.classList.add('hidden');
+    appendDiscountHistoryProductsBlock(elDiscountsList);
 
     if (!state.discountOrders.length) {
-      elDiscountsList.innerHTML = '<div class="empty-hint">Нет заказов с этой скидкой</div>';
+      const empty = document.createElement('div');
+      empty.className = 'empty-hint';
+      empty.textContent = 'Нет заказов с этой скидкой';
+      elDiscountsList.appendChild(empty);
       return;
     }
 
@@ -18887,7 +18914,7 @@
       priority: parseInt(elDePriority?.value || '0', 10) || 0,
       is_stackable: $('#de_is_stackable').checked,
       is_active: $('#de_is_active').checked,
-      hide_in_benefits: !!elDeHideInBenefits?.checked,
+      hide_in_benefits: mechanicType === 'buy_x_get_y' || !!elDeHideInBenefits?.checked,
       promo: promoEnabled
         ? {
             enabled: true,
@@ -19005,16 +19032,9 @@
       const buyQty = Math.max(1, parseInt(elDeBuyQty?.value, 10) || 0);
       const rewardQty = Math.max(1, parseInt(elDeRewardQty?.value, 10) || 0);
       const conditionUiMode = getDiscountBuyConditionUiMode();
-      const rewardSource = elDeBuyRewardSource?.value || 'same_pool';
-      const rewardKind = elDeBuyRewardKind?.value || 'gift';
-      const rewardDiscountValue = parseFloat(elDeBuyRewardDiscountValue?.value) || 0;
       const qualifyingItems = await buildDiscountEntityTargetPayloadList(
         getDiscountBuyConditionSelection(),
         getDiscountProductConfigModeForTarget('buy_condition')
-      );
-      const rewardProducts = await buildDiscountEntityTargetPayloadList(
-        getDiscountBuyRewardSelection(),
-        getDiscountProductConfigModeForTarget('buy_reward')
       );
 
       if (conditionUiMode === 'product' && qualifyingItems.length !== 1) {
@@ -19029,29 +19049,21 @@
         alert('Добавьте категории для условия акции');
         return;
       }
-      if (rewardSource === 'reward_list' && !rewardProducts.length) {
-        alert('Добавьте товары-награды');
-        return;
-      }
-      if (rewardKind === 'product_discount' && !(rewardDiscountValue > 0)) {
-        alert('Введите корректную скидку для товара-награды');
-        return;
-      }
 
       data.mechanic = {
         buy_qty: buyQty,
         reward_qty: rewardQty,
-        qualifying_mode: 'pool',
+        qualifying_mode: 'same_sku',
         repeat_mode: elDeBuyRepeatMode?.value || 'single',
-        reward_source: rewardSource,
-        reward_kind: rewardKind,
+        reward_source: 'same_pool',
+        reward_kind: 'gift',
         qualifying_items_config_mode: getDiscountProductConfigModeForTarget('buy_condition'),
-        reward_products_config_mode: getDiscountProductConfigModeForTarget('buy_reward'),
+        reward_products_config_mode: 'any',
         qualifying_items: qualifyingItems,
-        reward_products: rewardSource === 'reward_list' ? rewardProducts : [],
+        reward_products: [],
         reward_discount: {
-          discount_type: elDeBuyRewardDiscountType?.value || 'percent',
-          discount_value: rewardKind === 'product_discount' ? rewardDiscountValue : null,
+          discount_type: 'percent',
+          discount_value: null,
         },
       };
     } else if (mechanicType === 'loyalty_progress') {

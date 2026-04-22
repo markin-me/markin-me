@@ -1016,6 +1016,13 @@ function buildProductDetailsContent(
   });
   img.style.objectFit = "cover";
   media.appendChild(img);
+  const bogoBadge = typeof createCatalogBuyXGetYBadge === "function"
+    ? createCatalogBuyXGetYBadge(product)
+    : null;
+  if (bogoBadge) {
+    bogoBadge.classList.add("shop-product-hero-bogo-badge");
+    media.appendChild(bogoBadge);
+  }
 
   hero.appendChild(media);
 
@@ -3052,6 +3059,9 @@ function buildProductDetailsContent(
     scroll.appendChild(acc);
   }
 
+  const actionCard = createProductBuyXGetYActionCard(product);
+  if (actionCard) scroll.appendChild(actionCard);
+
   wrap.appendChild(scroll);
 
   const footer = document.createElement("div");
@@ -3122,6 +3132,13 @@ function buildShopProductHero(product, { onBack } = {}) {
   });
 
   media.appendChild(img);
+  const bogoBadge = typeof createCatalogBuyXGetYBadge === "function"
+    ? createCatalogBuyXGetYBadge(product)
+    : null;
+  if (bogoBadge) {
+    bogoBadge.classList.add("shop-product-hero-bogo-badge");
+    media.appendChild(bogoBadge);
+  }
 
   /* ================= Overlay header ================= */
   const header = document.createElement("div");
@@ -3179,12 +3196,47 @@ function buildShopProductHero(product, { onBack } = {}) {
   const title = document.createElement("h1");
   title.className = "shop-product-hero-title";
   title.textContent = product.title || "";
+  const actionCard = createProductBuyXGetYActionCard(product);
 
   meta.appendChild(title);
+  if (actionCard) meta.appendChild(actionCard);
 
   hero.appendChild(meta);
 
   return hero;
+}
+
+function createProductBuyXGetYActionCard(product) {
+  const source = product?.buy_x_get_y_badge;
+  if (!source || typeof source !== "object") return null;
+  const badgeText = str(source.badge_text || "").trim();
+  if (!badgeText) return null;
+  const titleText = str(source.title || badgeText).trim() || badgeText;
+
+  const card = document.createElement("div");
+  card.className = "shop-product-action-card";
+
+  const content = document.createElement("div");
+  content.className = "shop-product-action-card__content";
+
+  const title = document.createElement("div");
+  title.className = "shop-product-action-card__title";
+  title.textContent = titleText;
+
+  const type = document.createElement("div");
+  type.className = "shop-product-action-card__type";
+  type.textContent = `Акция ${badgeText}`;
+
+  const badge = document.createElement("span");
+  badge.className = "shop-product-action-card__badge";
+  badge.textContent = badgeText;
+
+  content.appendChild(title);
+  content.appendChild(type);
+  card.appendChild(content);
+  card.appendChild(badge);
+
+  return card;
 }
 
 

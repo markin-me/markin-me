@@ -158,9 +158,9 @@
   const CHECKOUT_SCREEN_ID = "__checkout_screen__";
   const CHECKOUT_DRAFT_CACHE_VERSION = 1;
   const CHECKOUT_DRAFT_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
-  const CHECKOUT_PRODUCTS_CACHE_VERSION = 3;
+  const CHECKOUT_PRODUCTS_CACHE_VERSION = 4;
   const CHECKOUT_PRODUCTS_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
-  const NEW_ORDER_CLIENT_CACHE_VERSION = 2;
+  const NEW_ORDER_CLIENT_CACHE_VERSION = 3;
   const NEW_ORDER_CLIENT_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
   const state = {
@@ -699,8 +699,12 @@
     );
     const renderCartThumb = (item) => {
       const photos = Array.isArray(item?.photos) ? item.photos.filter(Boolean).slice(0, 4) : [];
-      if (!photos.length) return `<span class="new-order-right-cart-thumb-placeholder"><i class="fas fa-image"></i></span>`;
-      if (photos.length === 1) return `<img class="new-order-right-cart-thumb-single" src="${escapeHtml(String(photos[0]))}" alt="" />`;
+      const bogoBadgeText = getNewOrderBuyXGetYBadgeText(item);
+      const badgeHtml = bogoBadgeText
+        ? `<span class="shop-sheet-discount-badge new-order-cart-bogo-badge">${escapeHtml(bogoBadgeText)}</span>`
+        : "";
+      if (!photos.length) return `${badgeHtml}<span class="new-order-right-cart-thumb-placeholder"><i class="fas fa-image"></i></span>`;
+      if (photos.length === 1) return `${badgeHtml}<img class="new-order-right-cart-thumb-single" src="${escapeHtml(String(photos[0]))}" alt="" />`;
       const p1 = photos[0] || "";
       const p2 = photos[1] || "";
       const p3 = photos[2] || "";
@@ -708,6 +712,7 @@
       // Layout order: top-left #1, top-right #3, bottom-left #4, bottom-right #2
       const slots = [p1, p3, p4, p2];
       return `
+        ${badgeHtml}
         <span class="new-order-right-cart-thumb-grid">
           ${slots.map((src) => src ? `<img src="${escapeHtml(String(src))}" alt="" />` : `<span class="new-order-right-cart-thumb-cell-empty"></span>`).join("")}
         </span>
@@ -2700,6 +2705,9 @@
           discount_tiers: Array.isArray(primaryVariantGroup?.discount_tiers) ? primaryVariantGroup.discount_tiers.map((tier) => ({ ...tier })) : [],
         } : null,
       },
+      buy_x_get_y_badge: product?.buy_x_get_y_badge && typeof product.buy_x_get_y_badge === "object"
+        ? { ...product.buy_x_get_y_badge }
+        : null,
       option_items: [],
       ingredients: buildDefaultIngredientsSnapshotForProduct(pid),
       auto_add: 1,
@@ -12165,6 +12173,9 @@
         ingredients: buildIngredientsSnapshotForProduct(selectedProductId),
         photoUrl: getProductPhoto(selectedProduct),
         price: Number.isFinite(Number(price)) ? roundPrice(Number(price)) : 0,
+        buyXGetYBadge: selectedProduct?.buy_x_get_y_badge && typeof selectedProduct.buy_x_get_y_badge === "object"
+          ? { ...selectedProduct.buy_x_get_y_badge }
+          : null,
       });
     });
 
@@ -12235,6 +12246,7 @@
             discount_tiers: Array.isArray(one.variantGroup?.discount_tiers) ? one.variantGroup.discount_tiers.map((tier) => ({ ...tier })) : [],
           } : null,
         },
+        buy_x_get_y_badge: one?.buyXGetYBadge && typeof one.buyXGetYBadge === "object" ? { ...one.buyXGetYBadge } : null,
         ingredients: Array.isArray(one?.ingredients) ? one.ingredients.map((row) => ({ ...row })) : [],
         photos: [String(one.photoUrl || "")].filter(Boolean),
       };
@@ -12288,6 +12300,7 @@
             discount_tiers: Array.isArray(item.variantGroup?.discount_tiers) ? item.variantGroup.discount_tiers.map((tier) => ({ ...tier })) : [],
           } : null,
         },
+        buy_x_get_y_badge: item?.buyXGetYBadge && typeof item.buyXGetYBadge === "object" ? { ...item.buyXGetYBadge } : null,
         ingredients: Array.isArray(item?.ingredients) ? item.ingredients.map((row) => ({ ...row })) : [],
       })),
     };
@@ -12387,7 +12400,7 @@
       Number(item?.pricing?.base_price || 0)
     );
     const unitBeforeDiscount = roundPrice(basePrice + ingredientDiff);
-    const discountAmount = calculateProductDiscountAmount(unitBeforeDiscount, item?.pricing?.discount);
+    const unitDiscountAmount = calculateProductDiscountAmount(unitBeforeDiscount, item?.pricing?.discount);
     const oldBasePrice = calcSnapshotPrice(
       item.pricing && typeof item.pricing === "object"
         ? { ...item.pricing, base_price: Number(item?.pricing?.old_price || 0) }
@@ -12396,10 +12409,14 @@
       Number(item?.pricing?.old_price || 0)
     );
     const oldFromDb = roundPrice(oldBasePrice + ingredientDiff);
-    const unitPrice = roundPrice(Math.max(0, unitBeforeDiscount - discountAmount));
-    const hasApiDiscount = discountAmount > 0;
-    const oldUnitPrice = hasApiDiscount ? unitBeforeDiscount : oldFromDb;
-    const hasOldUnitPrice = Number.isFinite(oldUnitPrice) && oldUnitPrice > unitPrice;
+    const unitPrice = roundPrice(Math.max(0, unitBeforeDiscount - unitDiscountAmount));
+    const hasApiDiscount = unitDiscountAmount > 0;
+    const buyXGetYRule = Number(item?.auto_add || 0) === 1 ? null : getNewOrderBuyXGetYRule(item);
+    const buyXGetYFreeQty = calculateNewOrderBuyXGetYFreeQty(qty, buyXGetYRule);
+    const paidQty = Math.max(0, qty - buyXGetYFreeQty);
+    const hasBuyXGetYDiscount = buyXGetYFreeQty > 0;
+    const oldUnitPrice = (hasApiDiscount || hasBuyXGetYDiscount) ? unitBeforeDiscount : oldFromDb;
+    const hasOldUnitPrice = Number.isFinite(oldUnitPrice) && oldUnitPrice > 0 && (oldUnitPrice > unitPrice || hasBuyXGetYDiscount);
     if (isGiftRewardCartItem(item)) {
       const giftUnitBeforeDiscount = roundPrice(Math.max(
         Number(item?.unit_price_before_discount || 0),
@@ -12421,14 +12438,16 @@
     }
     item.unit_price_before_discount = hasOldUnitPrice ? roundPrice(oldUnitPrice) : 0;
     item.unit_price = unitPrice;
+    item.buy_x_get_y_free_qty = hasBuyXGetYDiscount ? buyXGetYFreeQty : 0;
     if (item.pricing && typeof item.pricing === "object") {
       item.pricing = {
         ...item.pricing,
         unit_before_discount: unitBeforeDiscount,
-        discount_amount: roundPrice(discountAmount),
+        discount_amount: roundPrice(unitDiscountAmount),
+        buy_x_get_y_discount_amount: hasBuyXGetYDiscount ? roundPrice(unitPrice * buyXGetYFreeQty) : 0,
       };
     }
-    item.sum = roundPrice(item.unit_price * qty);
+    item.sum = roundPrice(item.unit_price * paidQty);
     const paidQtyForOldLine = isRightOrderAutoAddItem(item) ? getRightOrderAutoPaidQty(item, qty) : qty;
     const oldLineTotal = hasOldUnitPrice
       ? roundPrice(Number(item.unit_price_before_discount || 0) * paidQtyForOldLine)
@@ -12460,6 +12479,57 @@
     }
     if (discountAmount > srcPrice) discountAmount = srcPrice;
     return Math.round(discountAmount * 100) / 100;
+  }
+
+  function getNewOrderBuyXGetYBadgeSource(source) {
+    if (!source || typeof source !== "object") return null;
+    const direct = source.buy_x_get_y_badge;
+    if (direct && typeof direct === "object") return direct;
+    const productId = Number(source?.product_id || source?.id || 0);
+    const product = productId > 0 ? getProductById(productId) : null;
+    return product?.buy_x_get_y_badge && typeof product.buy_x_get_y_badge === "object"
+      ? product.buy_x_get_y_badge
+      : null;
+  }
+
+  function getNewOrderBuyXGetYBadgeText(source) {
+    const badge = getNewOrderBuyXGetYBadgeSource(source);
+    const text = String(badge?.badge_text || "").trim();
+    return text || "";
+  }
+
+  function cloneNewOrderBuyXGetYBadge(source) {
+    const badge = getNewOrderBuyXGetYBadgeSource(source);
+    return badge && typeof badge === "object" ? { ...badge } : null;
+  }
+
+  function getNewOrderBuyXGetYRule(source) {
+    const badge = getNewOrderBuyXGetYBadgeSource(source);
+    if (!badge) return null;
+    const badgeMatch = String(badge?.badge_text || "").trim().match(/^(\d+)\s*\+\s*(\d+)$/);
+    const buyQty = Math.max(1, Math.floor(Number(badge?.buy_qty ?? badgeMatch?.[1] ?? 0)) || 1);
+    const rewardQty = Math.max(1, Math.floor(Number(badge?.reward_qty ?? badgeMatch?.[2] ?? 0)) || 1);
+    const repeatMode = String(badge?.repeat_mode || "").trim().toLowerCase() === "repeat" ? "repeat" : "single";
+    return {
+      id: Number(badge?.id || 0) || null,
+      title: String(badge?.title || badge?.badge_text || "1+1").trim() || "1+1",
+      buyQty,
+      rewardQty,
+      repeatMode,
+    };
+  }
+
+  function calculateNewOrderBuyXGetYFreeQty(qty, rule) {
+    if (!rule) return 0;
+    const itemQty = Math.max(0, Math.floor(Number(qty || 0)));
+    const buyQty = Math.max(1, Math.floor(Number(rule?.buyQty || 0)) || 1);
+    const rewardQty = Math.max(1, Math.floor(Number(rule?.rewardQty || 0)) || 1);
+    const groupQty = buyQty + rewardQty;
+    if (!(itemQty >= groupQty)) return 0;
+    if (rule?.repeatMode === "repeat") {
+      return Math.min(itemQty, Math.floor(itemQty / groupQty) * rewardQty);
+    }
+    return Math.min(itemQty, rewardQty);
   }
 
   function getCurrentProductUnitPricing(product, productId) {
@@ -12638,6 +12708,9 @@
           discount_tiers: Array.isArray(primaryVariantGroup?.discount_tiers) ? primaryVariantGroup.discount_tiers.map((tier) => ({ ...tier })) : [],
         } : null,
       },
+      buy_x_get_y_badge: product?.buy_x_get_y_badge && typeof product.buy_x_get_y_badge === "object"
+        ? { ...product.buy_x_get_y_badge }
+        : null,
       option_items: optionItems,
       ingredients: buildIngredientsSnapshotForProduct(pid),
       auto_add: 0,
@@ -14456,6 +14529,7 @@
             const photoUrl = getProductPhoto(product);
             const name = String(product?.name || "РўРѕРІР°СЂ");
             const productId = Number(product?.id || 0);
+            const buyXGetYBadgeText = getNewOrderBuyXGetYBadgeText(product);
             const isUnavailable = !isProductAvailableFlag(product);
             const hasComposition = Array.isArray(state.productIngredients.get(productId)) && (state.productIngredients.get(productId) || []).length > 0;
             const popoverKey = getCheckoutIngredientsPopoverKey(sectionKey, productId);
@@ -14468,6 +14542,7 @@
             return `
               <article class="new-order-checkout-product-item ${productId === selectedProductId ? "is-selected" : ""} ${hasComposition ? "has-composition" : ""} ${isUnavailable ? "is-unavailable" : ""}" data-product-id="${productId}" data-category-id="${categoryId}" data-section-key="${sectionKey}" data-is-available="${isUnavailable ? "0" : "1"}">
                 <span class="new-order-checkout-product-photo-wrap">
+                  ${buyXGetYBadgeText ? `<span class="new-order-checkout-bogo-badge">${escapeHtml(buyXGetYBadgeText)}</span>` : ""}
                   ${photoUrl ? `<img class="new-order-checkout-product-photo" src="${escapeHtml(photoUrl)}" alt="" />` : `<span class="new-order-checkout-product-photo-placeholder"><i class="fas fa-image"></i></span>`}
                 </span>
                 <span class="new-order-checkout-product-name" title="${escapeHtml(name)}">${escapeHtml(name)}</span>
@@ -15476,6 +15551,7 @@
       const discountPercent = hasOldPrice && oldPrice > price
         ? Math.max(1, Math.round(((oldPrice - price) / oldPrice) * 100))
         : 0;
+      const buyXGetYBadgeText = getNewOrderBuyXGetYBadgeText(product);
       const variantChips = getVariantChipsForProduct(pid);
       const ingredientRows = getIngredientRowsForProduct(pid);
       const optionGroups = Array.isArray(state.productOptionGroups.get(pid)) ? state.productOptionGroups.get(pid) : [];
@@ -15520,6 +15596,7 @@
         ${discountPercent > 0 ? `<span class="shop-sheet-discount-badge new-order-card-discount-badge">-${escapeHtml(formatDiscountPercentLabel(discountPercent))}%</span>` : ""}
         <div class="new-order-product-content no-scrollbar">
           <div class="new-order-product-photo-wrap">
+            ${buyXGetYBadgeText ? `<span class="new-order-card-bogo-badge">${escapeHtml(buyXGetYBadgeText)}</span>` : ""}
             ${photoUrl ? `<img class="new-order-product-photo" src="${escapeHtml(photoUrl)}" alt="" />` : `<div class="new-order-product-photo-placeholder"><i class="fas fa-image\"></i></div>`}
           </div>
           <div class="new-order-product-main">
@@ -18761,6 +18838,7 @@
         base_qty: 1,
         variant_group: null,
       },
+      buy_x_get_y_badge: cloneNewOrderBuyXGetYBadge(orderItem),
       option_items: [],
       ingredients: [],
       auto_add: autoAdd,
@@ -18805,6 +18883,7 @@
       : null;
     cartItem.is_gift_reward = Number(orderItem?.is_gift_reward || 0) === 1 ? 1 : 0;
     cartItem.gift_reward_id = Number(orderItem?.gift_reward_id || 0) > 0 ? Number(orderItem.gift_reward_id) : null;
+    cartItem.buy_x_get_y_badge = cloneNewOrderBuyXGetYBadge(orderItem) || cloneNewOrderBuyXGetYBadge(product);
     cartItem.old_line_total = oldLineTotal > lineTotal ? oldLineTotal : 0;
     cartItem.unit_price = qty > 0 ? roundPrice(lineTotal / qty) : 0;
     cartItem.unit_price_before_discount = oldLineTotal > lineTotal && qty > 0 ? roundPrice(oldLineTotal / qty) : 0;
