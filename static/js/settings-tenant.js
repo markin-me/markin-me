@@ -1995,6 +1995,7 @@
       } else {
         listEl.innerHTML = effectiveDomains.map((item) => {
           const label = item.domain || item.domain_ascii;
+          const domainUrl = label ? `https://${String(label).trim()}` : "";
           const isEnabled = getDomainEnabledState(item);
           const isSelected = selected
             ? selected.id === item.id
@@ -2007,6 +2008,14 @@
               <div class="domain-managed-meta">
                 <span class="domain-managed-domain">${label}</span>
                 <span class="domain-managed-status${isEnabled ? "" : " is-disabled"}">${isEnabled ? "\u0421\u0430\u0439\u0442 \u0432\u043a\u043b\u044e\u0447\u0435\u043d" : "\u041f\u043e\u043a\u0430\u0437\u044b\u0432\u0430\u0435\u0442\u0441\u044f \u0437\u0430\u0433\u043b\u0443\u0448\u043a\u0430"}</span>
+                ${domainUrl ? `
+                <div class="settings-subdomain-actions domain-managed-link-actions">
+                  <button class="btn btn-sm btn-secondary" type="button" data-domain-link-action="open" data-domain-url="${domainUrl}">Перейти на сайт</button>
+                  <button class="btn btn-sm btn-icon btn-secondary" type="button" data-domain-link-action="copy" data-domain-url="${domainUrl}" title="Скопировать ссылку" aria-label="Скопировать ссылку">
+                    <i class="fas fa-copy"></i>
+                  </button>
+                </div>
+                ` : ""}
               </div>
               ${canShowManageActions ? `
               <div class="domain-managed-actions">
@@ -18701,6 +18710,7 @@
 
 
         const actionBtn = event.target.closest("[data-domain-action]");
+        const linkActionBtn = event.target.closest("[data-domain-link-action]");
 
 
 
@@ -18721,6 +18731,25 @@
 
 
         selectedTenantDomainId = domainId;
+
+        if (linkActionBtn) {
+          const linkAction = String(linkActionBtn.getAttribute("data-domain-link-action") || "").trim();
+          const domainUrl = String(linkActionBtn.getAttribute("data-domain-url") || "").trim();
+          if (!domainUrl) return;
+          if (linkAction === "open") {
+            window.open(domainUrl, "_blank");
+            return;
+          }
+          if (linkAction === "copy" && navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+            navigator.clipboard.writeText(domainUrl).then(() => {
+              const icon = linkActionBtn.querySelector("i");
+              if (!icon) return;
+              icon.className = "fas fa-check";
+              setTimeout(function () { icon.className = "fas fa-copy"; }, 1500);
+            }).catch(() => {});
+            return;
+          }
+        }
 
 
 

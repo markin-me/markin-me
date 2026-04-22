@@ -7037,6 +7037,7 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
 .domain-managed-ascii{font-size:11px;color:var(--color-text-muted);overflow-wrap:anywhere}
 .domain-managed-status{font-size:11px;font-weight:600;color:var(--color-text-muted)}
 .domain-managed-status.is-disabled{color:var(--color-warning,#f39c12)}
+.domain-managed-link-actions{margin-top:8px}
 .domain-managed-actions{display:flex;align-items:center;gap:6px;flex:0 0 auto}
 .domain-managed-switch{gap:0}
 .domain-managed-btn{width:28px;height:28px;border-radius:8px;border:1px solid var(--color-border);background:var(--color-surface);color:var(--color-text-muted);display:flex;align-items:center;justify-content:center;cursor:pointer;transition:background var(--dur-fast) var(--ease-smooth),color var(--dur-fast) var(--ease-smooth),border-color var(--dur-fast) var(--ease-smooth)}
