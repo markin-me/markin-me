@@ -7073,7 +7073,108 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
 .domain-pwa-empty{padding:12px;border:1px dashed var(--color-border);border-radius:10px;background:var(--color-surface);font-size:13px;color:var(--color-text-muted)}
 .tenant-qr-inline-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(76px,92px);gap:10px;align-items:stretch}
 .tenant-qr-inline-col{min-width:0}
-.tenant-qr-color-input{padding:4px 6px;height:38px}
+.tenant-qr-color-picker{position:relative}
+.tenant-qr-color-picker__toggle{
+  width:100%;
+  height:38px;
+  border-radius:10px;
+  border:1px solid var(--color-border);
+  background:var(--color-surface);
+  padding:6px 8px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  cursor:pointer
+}
+.tenant-qr-color-picker__bar{
+  position:relative;
+  width:100%;
+  height:10px;
+  border-radius:999px;
+  background:linear-gradient(90deg,#ff0000 0%,#ffff00 17%,#00ff00 33%,#00ffff 50%,#0000ff 67%,#ff00ff 83%,#ff0000 100%);
+  box-shadow:inset 0 0 0 1px rgba(15,23,42,.12)
+}
+.tenant-qr-color-picker__marker{
+  position:absolute;
+  top:50%;
+  left:50%;
+  width:12px;
+  height:12px;
+  border-radius:999px;
+  border:2px solid #fff;
+  box-shadow:0 0 0 1px rgba(15,23,42,.28);
+  transform:translate(-50%,-50%);
+  pointer-events:none
+}
+.tenant-qr-color-picker__panel{
+  position:absolute;
+  right:0;
+  bottom:46px;
+  width:216px;
+  padding:10px;
+  border-radius:12px;
+  border:1px solid var(--color-border);
+  background:var(--color-surface);
+  box-shadow:0 16px 32px rgba(15,23,42,.18);
+  z-index:30;
+  display:grid;
+  gap:8px
+}
+.tenant-qr-color-picker__sv{
+  position:relative;
+  height:132px;
+  border-radius:8px;
+  overflow:hidden;
+  cursor:crosshair;
+  background:linear-gradient(to top,#000,transparent), linear-gradient(to right,#fff,hsl(0,100%,50%))
+}
+.tenant-qr-color-picker__sv-cursor{
+  position:absolute;
+  width:12px;
+  height:12px;
+  border-radius:999px;
+  border:2px solid #fff;
+  box-shadow:0 0 0 1px rgba(15,23,42,.48);
+  transform:translate(-50%,-50%);
+  pointer-events:none
+}
+.tenant-qr-color-picker__hue{
+  position:relative;
+  height:10px;
+  border-radius:999px;
+  cursor:pointer;
+  background:linear-gradient(90deg,#ff0000 0%,#ffff00 17%,#00ff00 33%,#00ffff 50%,#0000ff 67%,#ff00ff 83%,#ff0000 100%)
+}
+.tenant-qr-color-picker__hue-cursor{
+  position:absolute;
+  top:50%;
+  width:12px;
+  height:12px;
+  border-radius:999px;
+  border:2px solid #fff;
+  box-shadow:0 0 0 1px rgba(15,23,42,.48);
+  transform:translate(-50%,-50%);
+  pointer-events:none
+}
+.tenant-qr-color-picker__rgb{
+  display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:8px
+}
+.tenant-qr-color-picker__rgb label{
+  display:grid;
+  gap:4px
+}
+.tenant-qr-color-picker__rgb input{
+  height:30px;
+  text-align:center;
+  padding:4px 6px
+}
+.tenant-qr-color-picker__rgb span{
+  font-size:11px;
+  color:var(--color-text-muted);
+  text-align:center
+}
 .tenant-qr-ratio-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(72px,1fr));gap:8px}
 .tenant-qr-ratio-btn{
   height:38px;border-radius:12px;border:1px solid var(--color-border);background:var(--color-surface);
@@ -7081,14 +7182,6 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
 }
 .tenant-qr-ratio-btn:hover{border-color:var(--color-primary);transform:translateY(-1px)}
 .tenant-qr-ratio-btn.is-active{background:var(--primary-12);border-color:var(--primary-25);color:var(--color-primary)}
-.tenant-qr-swatch-row{display:flex;flex-wrap:wrap;gap:10px}
-.tenant-qr-swatch{
-  position:relative;width:34px;height:34px;border-radius:999px;border:2px solid rgba(255,255,255,.85);
-  box-shadow:0 8px 20px rgba(15,23,42,.1), 0 0 0 1px var(--color-border);cursor:pointer;transition:transform .16s ease, box-shadow .16s ease
-}
-.tenant-qr-swatch:hover{transform:translateY(-1px)}
-.tenant-qr-swatch.is-active{box-shadow:0 10px 24px rgba(15,23,42,.14), 0 0 0 2px var(--color-primary)}
-.tenant-qr-swatch--bg{width:34px;height:34px}
 .tenant-qr-toolbar{display:flex;flex-wrap:wrap;gap:8px}
 .tenant-qr-toolbar>.btn{justify-content:center}
 .tenant-qr-upload-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:8px}
@@ -7174,6 +7267,9 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
   outline:2px solid rgba(249,115,22,.42);
   outline-offset:3px;
 }
+.tenant-qr-card-stage--placeholder{
+  pointer-events:none;
+}
 .tenant-qr-card-stage::-webkit-scrollbar{display:none}
 .tenant-qr-card{
   position:relative;width:280px;height:280px;border-radius:var(--tenant-qr-card-radius,30px);overflow:hidden;
@@ -7240,6 +7336,7 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
 }
 .tenant-qr-card__eyebrow{
   display:inline-flex;align-items:center;justify-content:center;
+  gap:calc(6px * var(--tenant-qr-content-scale,1));
   box-sizing:border-box;
   max-width:100%;
   min-width:0;
@@ -7262,6 +7359,16 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
   overflow:hidden;
   text-overflow:ellipsis
 }
+.tenant-qr-card__eyebrow-icon{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  opacity:.72;
+  font-size:calc(10px * var(--tenant-qr-content-scale,1));
+  line-height:1;
+  flex:0 0 auto
+}
+.tenant-qr-card.is-exporting .tenant-qr-card__eyebrow-icon{display:none!important}
 .tenant-qr-card__eyebrow-input{
   width:100%;
   min-width:0;
@@ -7281,6 +7388,9 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
   box-shadow:inset 0 0 0 1px rgba(249,115,22,.45)
 }
 .tenant-qr-card__eyebrow.is-editing .tenant-qr-card__eyebrow-text{
+  display:none
+}
+.tenant-qr-card__eyebrow.is-editing .tenant-qr-card__eyebrow-icon{
   display:none
 }
 .tenant-qr-card.is-square .tenant-qr-card__eyebrow{
@@ -7303,7 +7413,7 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
 }
 .tenant-qr-card__qr-shell{
   width:min(var(--tenant-qr-shell-size,160px),100%);max-width:100%;aspect-ratio:1/1;
-  padding:calc(8px * var(--tenant-qr-content-scale,1));
+  padding:calc(4px * var(--tenant-qr-content-scale,1));
   border-radius:var(--tenant-qr-shell-radius,22px);
   background:rgba(255,255,255,.96);
   box-shadow:0 20px 35px rgba(15,23,42,.18);display:flex;align-items:center;justify-content:center;overflow:hidden
@@ -7311,11 +7421,11 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
 .tenant-qr-card.is-vertical .tenant-qr-card__qr-shell{
   justify-self:center;
   align-self:end;
-  padding:calc(8px * var(--tenant-qr-content-scale,1));
+  padding:calc(4px * var(--tenant-qr-content-scale,1));
   border-radius:var(--tenant-qr-shell-radius,20px)
 }
 .tenant-qr-card.is-vertical-tall .tenant-qr-card__qr-shell{
-  padding:calc(7px * var(--tenant-qr-content-scale,1));
+  padding:calc(3px * var(--tenant-qr-content-scale,1));
   border-radius:var(--tenant-qr-shell-radius,18px)
 }
 .tenant-qr-card.is-square .tenant-qr-card__qr-shell{
@@ -7323,7 +7433,7 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
   align-self:end
 }
 .tenant-qr-card__qr{
-  width:94%;height:94%;display:flex;align-items:center;justify-content:center;
+  width:96%;height:96%;display:flex;align-items:center;justify-content:center;
   min-width:0;min-height:0;overflow:hidden
 }
 .tenant-qr-card__qr.is-loading::before{
@@ -7667,15 +7777,15 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
   .tenant-qr-card{border-radius:var(--tenant-qr-card-radius,24px)}
   .tenant-qr-card__content{padding:18px 16px 16px}
   .tenant-qr-card__layout{gap:14px}
-  .tenant-qr-card__qr-shell{width:min(76%,204px);padding:8px}
-  .tenant-qr-card.is-vertical .tenant-qr-card__qr-shell{width:min(70%,182px)}
-  .tenant-qr-card.is-vertical-tall .tenant-qr-card__qr-shell{width:min(66%,152px);padding:7px}
+  .tenant-qr-card__qr-shell{width:min(76%,204px);padding:4px}
+  .tenant-qr-card.is-vertical .tenant-qr-card__qr-shell{width:min(70%,182px);padding:4px}
+  .tenant-qr-card.is-vertical-tall .tenant-qr-card__qr-shell{width:min(66%,152px);padding:3px}
   .tenant-qr-card.is-horizontal .tenant-qr-card__content{padding:16px}
   .tenant-qr-card.is-horizontal .tenant-qr-card__layout{
     grid-template-columns:minmax(96px,38%) minmax(0,1fr);
     gap:14px
   }
-  .tenant-qr-card.is-horizontal .tenant-qr-card__qr-shell{max-width:138px;padding:8px}
+  .tenant-qr-card.is-horizontal .tenant-qr-card__qr-shell{max-width:138px;padding:4px}
 }
 
 .empty-state{

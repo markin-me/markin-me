@@ -947,6 +947,7 @@
                     <div class="tenant-qr-card__meta">
                       <div class="tenant-qr-card__eyebrow" id="tenantQrDesignerCardEyebrow" role="button" tabindex="0" aria-label="Редактировать название карточки">
                         <span class="tenant-qr-card__eyebrow-text" id="tenantQrDesignerCardEyebrowText">УСТАНОВКА ПРИЛОЖЕНИЯ</span>
+                        <span class="tenant-qr-card__eyebrow-icon" aria-hidden="true"><i class="fas fa-pen"></i></span>
                         <input class="tenant-qr-card__eyebrow-input hidden" id="tenantQrDesignerCardEyebrowInput" type="text" maxlength="56" autocomplete="off" aria-label="Название карточки QR" />
                       </div>
                       <div class="tenant-qr-card__title" id="tenantQrDesignerCardTitle">Витрина</div>
@@ -1017,10 +1018,28 @@
                 </select>
               </div>
               <div class="tenant-qr-inline-col">
-                <input class="control tenant-qr-color-input" id="tenantQrDesignerColorInput" type="color" value="#111827" aria-label="Свой цвет QR" />
+                <div class="tenant-qr-color-picker" id="tenantQrDesignerQrColorPicker">
+                  <button class="tenant-qr-color-picker__toggle" type="button" id="tenantQrDesignerQrColorToggle" aria-label="Выбрать цвет QR">
+                    <span class="tenant-qr-color-picker__bar" id="tenantQrDesignerQrColorBar">
+                      <span class="tenant-qr-color-picker__marker" id="tenantQrDesignerQrColorMarker"></span>
+                    </span>
+                  </button>
+                  <div class="tenant-qr-color-picker__panel hidden" id="tenantQrDesignerQrColorPanel">
+                    <div class="tenant-qr-color-picker__sv" id="tenantQrDesignerQrSv">
+                      <span class="tenant-qr-color-picker__sv-cursor" id="tenantQrDesignerQrSvCursor"></span>
+                    </div>
+                    <div class="tenant-qr-color-picker__hue" id="tenantQrDesignerQrHue">
+                      <span class="tenant-qr-color-picker__hue-cursor" id="tenantQrDesignerQrHueCursor"></span>
+                    </div>
+                    <div class="tenant-qr-color-picker__rgb">
+                      <label><input class="control" id="tenantQrDesignerQrR" type="number" min="0" max="255" step="1" inputmode="numeric" /><span>R</span></label>
+                      <label><input class="control" id="tenantQrDesignerQrG" type="number" min="0" max="255" step="1" inputmode="numeric" /><span>G</span></label>
+                      <label><input class="control" id="tenantQrDesignerQrB" type="number" min="0" max="255" step="1" inputmode="numeric" /><span>B</span></label>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
-            <div class="tenant-qr-swatch-row" id="tenantQrDesignerColorPalette"></div>
           </div>
 
           <div class="settings-site-field tenant-qr-stepper-field">
@@ -1061,10 +1080,26 @@
             <label class="field-label">ФОН КАРТОЧКИ</label>
             <div class="tenant-qr-inline-grid tenant-qr-inline-grid--bg-controls">
               <div class="tenant-qr-inline-col">
-                <div class="tenant-qr-swatch-row tenant-qr-swatch-row--bg" id="tenantQrDesignerBgPalette"></div>
-              </div>
-              <div class="tenant-qr-inline-col">
-                <input class="control tenant-qr-color-input" id="tenantQrDesignerBackgroundColorInput" type="color" value="#fdba74" aria-label="Свой цвет фона" />
+                <div class="tenant-qr-color-picker" id="tenantQrDesignerBgColorPicker">
+                  <button class="tenant-qr-color-picker__toggle" type="button" id="tenantQrDesignerBgColorToggle" aria-label="Выбрать цвет фона карточки">
+                    <span class="tenant-qr-color-picker__bar" id="tenantQrDesignerBgColorBar">
+                      <span class="tenant-qr-color-picker__marker" id="tenantQrDesignerBgColorMarker"></span>
+                    </span>
+                  </button>
+                  <div class="tenant-qr-color-picker__panel hidden" id="tenantQrDesignerBgColorPanel">
+                    <div class="tenant-qr-color-picker__sv" id="tenantQrDesignerBgSv">
+                      <span class="tenant-qr-color-picker__sv-cursor" id="tenantQrDesignerBgSvCursor"></span>
+                    </div>
+                    <div class="tenant-qr-color-picker__hue" id="tenantQrDesignerBgHue">
+                      <span class="tenant-qr-color-picker__hue-cursor" id="tenantQrDesignerBgHueCursor"></span>
+                    </div>
+                    <div class="tenant-qr-color-picker__rgb">
+                      <label><input class="control" id="tenantQrDesignerBgR" type="number" min="0" max="255" step="1" inputmode="numeric" /><span>R</span></label>
+                      <label><input class="control" id="tenantQrDesignerBgG" type="number" min="0" max="255" step="1" inputmode="numeric" /><span>G</span></label>
+                      <label><input class="control" id="tenantQrDesignerBgB" type="number" min="0" max="255" step="1" inputmode="numeric" /><span>B</span></label>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
             <div class="tenant-qr-toolbar">
