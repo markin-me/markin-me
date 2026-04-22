@@ -2016,6 +2016,11 @@
       }
       return true;
     } else if (benefitDetailEl && !benefitDetailEl.classList.contains('hidden')) {
+      const customBackHandler = sheetNavigationState.data?.customBackHandler;
+      if (typeof customBackHandler === "function") {
+        customBackHandler();
+        return true;
+      }
       if (typeof openCartSheetCtx?.showSheetBenefits === "function") {
         openCartSheetCtx.showSheetBenefits();
       }
@@ -3862,14 +3867,40 @@
 
     // Применяем скидку если есть
     const product = item?.product;
+    const buyXGetYRule = !isAutoItem ? getCatalogBuyXGetYRule(product) : null;
+    const buyXGetYApplication = calculateCatalogBuyXGetYApplication(paidQty, buyXGetYRule);
+    const buyXGetYFreeQty = buyXGetYApplication.freeQty;
+    let benefitsExcludedLineTotal = 0;
+    if (buyXGetYFreeQty > 0) {
+      const buyXGetYDiscountAmount = roundPrice(unitPrice * buyXGetYFreeQty);
+      if (buyXGetYDiscountAmount > 0) {
+        discountAmount = roundPrice(discountAmount + buyXGetYDiscountAmount);
+        discountInfo = {
+          id: buyXGetYRule.id,
+          title: buyXGetYRule.title,
+          discount_type: "buy_x_get_y",
+          discount_value: buyXGetYRule.rewardQty,
+          discount_amount: buyXGetYDiscountAmount,
+        };
+        lineTotal = roundPrice(Math.max(0, lineTotal - buyXGetYDiscountAmount));
+      }
+      if (buyXGetYRule && !buyXGetYRule.isStackable) {
+        benefitsExcludedLineTotal = roundPrice(unitPrice * Math.max(0, Number(buyXGetYApplication.paidParticipatingQty || 0)));
+      }
+    }
     if (product?.discount && product.discount.discount_amount > 0 && !isAutoItem) {
-      discountInfo = product.discount;
+      discountInfo = discountInfo || product.discount;
       // Рассчитываем скидку на lineTotal
-      discountAmount = calculateProductDiscountAmount(lineTotal, discountInfo);
-      lineTotal = roundPrice(lineTotal - discountAmount);
+      const simpleDiscountBase = benefitsExcludedLineTotal > 0
+        ? roundPrice(unitPrice * Math.max(0, paidQty - Number(buyXGetYApplication.participatingQty || 0)))
+        : lineTotal;
+      const simpleDiscountAmount = calculateProductDiscountAmount(simpleDiscountBase, product.discount);
+      discountAmount = roundPrice(discountAmount + simpleDiscountAmount);
+      lineTotal = roundPrice(lineTotal - simpleDiscountAmount);
     }
 
-    return { lineTotal, unitPrice, paidQty, freeQty, isAuto: isAutoItem, parts, discountAmount, discountInfo };
+    benefitsExcludedLineTotal = roundPrice(Math.min(lineTotal, Math.max(0, benefitsExcludedLineTotal)));
+    return { lineTotal, unitPrice, paidQty, freeQty, isAuto: isAutoItem, parts, discountAmount, discountInfo, benefitsExcludedLineTotal };
   }
 
   function computeCartTotals(items) {
@@ -8619,6 +8650,72 @@ async function initAddresses() {
     return badge;
   }
 
+  function getCatalogBuyXGetYBadgeText(product) {
+    return str(product?.buy_x_get_y_badge?.badge_text || "").trim();
+  }
+
+  function createCatalogBuyXGetYBadge(product) {
+    const text = getCatalogBuyXGetYBadgeText(product);
+    if (!text) return null;
+    const badge = document.createElement("div");
+    badge.className = "sp-card-bogo-badge";
+    badge.textContent = text;
+    return badge;
+  }
+
+  function getCatalogBuyXGetYRule(product) {
+    const source = product?.buy_x_get_y_badge;
+    if (!source || typeof source !== "object") return null;
+    const badgeMatch = str(source.badge_text || "").trim().match(/^(\d+)\s*\+\s*(\d+)$/);
+    const buyQty = Math.max(1, Math.floor(Number(source.buy_qty ?? badgeMatch?.[1] ?? 0)) || 1);
+    const rewardQty = Math.max(1, Math.floor(Number(source.reward_qty ?? badgeMatch?.[2] ?? 0)) || 1);
+    const repeatMode = str(source.repeat_mode || "").trim().toLowerCase() === "repeat" ? "repeat" : "single";
+    return {
+      id: Number(source.id || 0) || null,
+      title: str(source.title || source.badge_text || "1+1").trim() || "1+1",
+      buyQty,
+      rewardQty,
+      repeatMode,
+      isStackable: Number(source.is_stackable || 0) === 1 || source.is_stackable === true,
+    };
+  }
+
+  function calculateCatalogBuyXGetYApplication(qty, rule) {
+    const itemQty = Math.max(0, Math.floor(Number(qty || 0)));
+    if (!rule) {
+      return {
+        applications: 0,
+        freeQty: 0,
+        participatingQty: 0,
+        paidParticipatingQty: 0,
+      };
+    }
+    const buyQty = Math.max(1, Math.floor(Number(rule?.buyQty || 0)) || 1);
+    const rewardQty = Math.max(1, Math.floor(Number(rule?.rewardQty || 0)) || 1);
+    const groupQty = buyQty + rewardQty;
+    if (!(itemQty >= groupQty)) {
+      return {
+        applications: 0,
+        freeQty: 0,
+        participatingQty: 0,
+        paidParticipatingQty: 0,
+      };
+    }
+    const applications = rule?.repeatMode === "repeat" ? Math.floor(itemQty / groupQty) : 1;
+    const freeQty = Math.min(itemQty, applications * rewardQty);
+    const participatingQty = Math.min(itemQty, applications * groupQty);
+    return {
+      applications,
+      freeQty,
+      participatingQty,
+      paidParticipatingQty: Math.max(0, participatingQty - freeQty),
+    };
+  }
+
+  function calculateCatalogBuyXGetYFreeQty(qty, rule) {
+    return calculateCatalogBuyXGetYApplication(qty, rule).freeQty;
+  }
+
   function syncCatalogProductDiscountBadge(card, product, calculatedPrice = null) {
     if (!card || !product) return;
     const media = $(".sp-media", card);
@@ -9302,6 +9399,8 @@ async function initAddresses() {
 
         const productDiscountBadge = createCatalogDiscountBadge(getCatalogProductDiscountBadge(p));
         if (productDiscountBadge) media.appendChild(productDiscountBadge);
+        const productBuyXGetYBadge = createCatalogBuyXGetYBadge(p);
+        if (productBuyXGetYBadge) media.appendChild(productBuyXGetYBadge);
 
         card.appendChild(media);
 
@@ -10398,7 +10497,16 @@ async function initAddresses() {
         alt: '',
         usePicture: true,
       });
-      row.appendChild(img);
+      if (img && img.classList) img.classList.add("cart-thumb-node");
+      const thumbWrap = document.createElement("div");
+      thumbWrap.className = "cart-thumb-wrap";
+      thumbWrap.appendChild(img);
+      const cartBuyXGetYBadge = createCatalogBuyXGetYBadge(product);
+      if (cartBuyXGetYBadge) {
+        cartBuyXGetYBadge.classList.add("cart-bogo-badge");
+        thumbWrap.appendChild(cartBuyXGetYBadge);
+      }
+      row.appendChild(thumbWrap);
 
       const mid = document.createElement("div");
       mid.className = "cart-mid";
@@ -12488,6 +12596,7 @@ function updateCartBadge() {
   function _createUpsellCard(p, scrollEl, upsellEl, listEl) {
     const price = p.display_price != null ? p.display_price : (p.price || 0);
     const thumb = p.thumb || (Array.isArray(p.photos) && p.photos[0]) || "";
+    const buyXGetYBadgeText = getCatalogBuyXGetYBadgeText(p);
     const card = document.createElement("div");
     card.className = "cart-upsell-card";
     card.dataset.productId = String(p.id);
@@ -12501,6 +12610,7 @@ function updateCartBadge() {
     card.innerHTML =
       '<div class="cart-upsell-photo">' +
         (thumb ? '<img src="' + escapeHtml(thumb) + '" alt="" loading="lazy" />' : '<div class="cart-upsell-no-photo"></div>') +
+        (buyXGetYBadgeText ? '<span class="sp-card-bogo-badge cart-upsell-bogo-badge">' + escapeHtml(buyXGetYBadgeText) + '</span>' : '') +
       '</div>' +
       '<div class="cart-upsell-name">' + escapeHtml(p.name || "") + '</div>' +
       (descText ? '<div class="cart-upsell-desc">' + descText + '</div>' : '') +

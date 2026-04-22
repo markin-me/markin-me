@@ -251,6 +251,17 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
     ));
   }
 
+  function hasCustomerCategoryBenefit(targetRows, customerCategoryIds = []) {
+    const categoryIdSet = customerCategoryIds instanceof Set
+      ? customerCategoryIds
+      : new Set((Array.isArray(customerCategoryIds) ? customerCategoryIds : []).map((id) => Number(id)).filter((id) => id > 0));
+    if (!categoryIdSet.size) return false;
+    return (Array.isArray(targetRows) ? targetRows : []).some((row) => (
+      Number(row?.customer_category_id || 0) > 0
+      && categoryIdSet.has(Number(row.customer_category_id || 0))
+    ));
+  }
+
   function groupDiscountRows(rows) {
     const grouped = new Map();
     for (const row of Array.isArray(rows) ? rows : []) {
@@ -353,6 +364,9 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
   async function buildGeneralBenefitsCatalog({ tenantId, storeId, customerId }) {
     const normalizedCustomerId = Number(customerId || 0);
     await ensureBenefitPromoStorage();
+    await discountHelpers.ensureCustomerBenefitDiscountStorage(db);
+    const customerCategoryIds = await discountHelpers.getCustomerCategoryIds(db, tenantId, normalizedCustomerId);
+    const customerCategoryIdSet = new Set(customerCategoryIds);
 
     const [discountRows] = await db.query(
       `SELECT d.*,
@@ -392,6 +406,20 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
       [storeId, normalizedCustomerId, tenantId, storeId]
     );
 
+    const [issuedDiscountRows] = await db.query(
+      `SELECT discount_id
+         FROM mkt_customer_benefit_discounts
+        WHERE tenant_id = ?
+          AND store_id = ?
+          AND customer_id = ?`,
+      [tenantId, storeId, normalizedCustomerId]
+    );
+    const issuedDiscountIds = new Set(
+      (Array.isArray(issuedDiscountRows) ? issuedDiscountRows : [])
+        .map((row) => Number(row?.discount_id || 0))
+        .filter((id) => id > 0)
+    );
+
     const promoRowsByDiscountId = groupPromoRowsByDiscount(promoRows);
     const discountGroups = groupDiscountRows(discountRows);
     const discounts = [];
@@ -403,17 +431,22 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
       const discountId = Number(discount?.id || 0);
       const mechanicType = normalizeBenefitMechanicType(discount?.mechanic_type);
       if (!(discountId > 0) || !discountHelpers.isDiscountActive(discount)) continue;
-      if (!isGeneralBenefitAudience(entry?.targets)) continue;
+      const isGeneralAudience = isGeneralBenefitAudience(entry?.targets);
+      const isAudienceAssigned = hasDirectCustomerBenefit(entry?.targets, normalizedCustomerId)
+        || hasCustomerCategoryBenefit(entry?.targets, customerCategoryIdSet);
+      const isManualIssued = issuedDiscountIds.has(discountId);
 
       if (mechanicType === 'loyalty_progress') {
+        if (!isGeneralAudience && !isAudienceAssigned) continue;
         progress.push(buildGeneralProgressBenefitCard(discount));
         continue;
       }
 
-      const isIssuedDiscount = hasDirectCustomerBenefit(entry?.targets, normalizedCustomerId);
+      const isIssuedDiscount = isManualIssued || isAudienceAssigned;
       const discountApplyTo = benefitText(discount?.apply_to).toLowerCase();
       const discountType = benefitText(discount?.discount_type).toLowerCase();
       if (discountHelpers.isPromoSimpleDiscount(discount)) {
+        if (!isGeneralAudience && !isAudienceAssigned) continue;
         const rewardMeta = getPromoRewardMeta(discount);
         const rows = promoRowsByDiscountId.get(discountId) || [];
         const codeMode = benefitText(discount?.promo_code_mode).toLowerCase() === 'unique' ? 'unique' : 'shared';
@@ -2122,6 +2155,9 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
       if (issueAction === 'promo_shared') {
         await ensureBenefitPromoStorage();
       }
+      if (issueAction === 'discount') {
+        await discountHelpers.ensureCustomerBenefitDiscountStorage(db);
+      }
 
       conn = await db.getConnection();
       await conn.beginTransaction();
@@ -2149,7 +2185,7 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
           WHERE tenant_id = ? AND discount_id = ?`,
         [tenantId, discountId]
       );
-      if (!isGeneralBenefitAudience(targetRows)) {
+      if (issueAction !== 'discount' && !isGeneralBenefitAudience(targetRows)) {
         await conn.rollback();
         return res.status(409).json({ ok: false, error: 'BENEFIT_ISSUE_UNSUPPORTED' });
       }
@@ -2160,27 +2196,30 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
           return res.status(409).json({ ok: false, error: 'BENEFIT_ISSUE_INVALID' });
         }
 
+        const customerCategoryIds = await discountHelpers.getCustomerCategoryIds(conn, tenantId, clientId);
+        const isAudienceAssigned = hasDirectCustomerBenefit(targetRows, clientId)
+          || hasCustomerCategoryBenefit(targetRows, customerCategoryIds);
         const [existingRows] = await conn.query(
           `SELECT id
-             FROM mkt_discount_customers
+             FROM mkt_customer_benefit_discounts
             WHERE tenant_id = ?
+              AND store_id = ?
               AND discount_id = ?
-              AND target_type = 'customer'
               AND customer_id = ?
             LIMIT 1
             FOR UPDATE`,
-          [tenantId, discountId, clientId]
+          [tenantId, storeId, discountId, clientId]
         );
-        if (Array.isArray(existingRows) && existingRows.length) {
+        if (isAudienceAssigned || (Array.isArray(existingRows) && existingRows.length)) {
           await conn.rollback();
           return res.status(409).json({ ok: false, error: 'BENEFIT_ALREADY_ISSUED' });
         }
 
         await conn.query(
-          `INSERT INTO mkt_discount_customers
-             (tenant_id, discount_id, target_type, customer_id)
-           VALUES (?, ?, 'customer', ?)`,
-          [tenantId, discountId, clientId]
+          `INSERT INTO mkt_customer_benefit_discounts
+             (tenant_id, store_id, customer_id, discount_id)
+           VALUES (?, ?, ?, ?)`,
+          [tenantId, storeId, clientId, discountId]
         );
       } else if (issueAction === 'promo_shared') {
         if (!discountHelpers.isPromoSimpleDiscount(discount) || benefitText(discount?.promo_code_mode).toLowerCase() !== 'shared') {
@@ -2361,8 +2400,32 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
       );
 
       // Объединяем и убираем дубликаты
+      await discountHelpers.ensureCustomerBenefitDiscountStorage(db);
+      const [manualDiscounts] = await db.query(
+        `SELECT DISTINCT d.id, d.title, d.discount_type, d.discount_value,
+                d.apply_to, d.is_active, d.starts_at, d.ends_at,
+                d.min_order_amount, d.max_discount_amount, d.is_stackable, d.priority,
+                d.usage_limit, d.usage_count, d.schedule_days, d.schedule_time_start, d.schedule_time_end,
+                'manual' AS link_type
+         FROM mkt_discounts d
+         JOIN mkt_customer_benefit_discounts cbd
+           ON cbd.discount_id = d.id
+          AND cbd.tenant_id = d.tenant_id
+          AND cbd.store_id = ?
+          AND cbd.customer_id = ?
+         WHERE d.tenant_id = ?
+           AND (d.store_id = ? OR d.store_id = 0 OR d.store_id IS NULL)`,
+        [storeId, clientId, tenantId, storeId]
+      );
+
       const allDiscounts = [...directDiscounts];
       const existingIds = new Set(directDiscounts.map(d => d.id));
+      for (const discount of manualDiscounts) {
+        if (!existingIds.has(discount.id)) {
+          allDiscounts.push(discount);
+          existingIds.add(discount.id);
+        }
+      }
       
       for (const discount of categoryDiscounts) {
         if (!existingIds.has(discount.id)) {

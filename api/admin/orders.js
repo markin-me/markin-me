@@ -263,6 +263,137 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
     return Array.isArray(parsed) ? parsed : [];
   }
 
+  function parseOrderJsonObject(rawValue, fallback = {}) {
+    if (!rawValue) return fallback;
+    if (rawValue && typeof rawValue === "object" && !Array.isArray(rawValue)) return rawValue;
+    if (typeof rawValue === "string") {
+      try {
+        const parsed = JSON.parse(rawValue);
+        return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : fallback;
+      } catch {
+        return fallback;
+      }
+    }
+    return fallback;
+  }
+
+  function formatOrderBuyXGetYBadge(mechanic) {
+    const buyQty = Math.max(1, Number(mechanic?.buy_qty || 0) || 1);
+    const rewardQty = Math.max(1, Number(mechanic?.reward_qty || 0) || 1);
+    return `${buyQty}+${rewardQty}`;
+  }
+
+  function getOrderDiscountTargetEntityType(row) {
+    const explicitType = String(row?.entity_type || row?.target_type || row?.type || "").trim().toLowerCase();
+    if (["product", "category"].includes(explicitType)) return explicitType;
+    if (Number(row?.product_id || 0) > 0) return "product";
+    if (Number(row?.category_id || 0) > 0) return "category";
+    return "";
+  }
+
+  function buildOrderBuyXGetYTargetSets(rows) {
+    const sets = { productIds: new Set(), categoryIds: new Set() };
+    (Array.isArray(rows) ? rows : []).forEach((row) => {
+      if (!row || typeof row !== "object") return;
+      const type = getOrderDiscountTargetEntityType(row);
+      const productId = Number(row?.product_id ?? row?.entity_id ?? row?.id ?? 0);
+      const categoryId = Number(row?.category_id ?? row?.entity_id ?? row?.id ?? 0);
+      if (type === "product" && productId > 0) sets.productIds.add(productId);
+      if (type === "category" && categoryId > 0) sets.categoryIds.add(categoryId);
+    });
+    return sets;
+  }
+
+  function orderBuyXGetYBadgeMatchesProduct(badge, productId, productCategoriesMap) {
+    const pid = Number(productId || 0);
+    if (!(pid > 0)) return false;
+    if (badge?.targetSets?.productIds?.has(pid)) return true;
+    const categories = productCategoriesMap.get(pid) || [];
+    return categories.some((categoryId) => badge?.targetSets?.categoryIds?.has(Number(categoryId)));
+  }
+
+  async function enrichOrderItemsWithBuyXGetYBadges(tenantId, storeId, items) {
+    const source = Array.isArray(items) ? items : [];
+    const productIds = [...new Set(
+      source
+        .map((item) => Number(item?.product_id || 0))
+        .filter((id) => id > 0)
+    )];
+    if (!productIds.length) return source;
+
+    const placeholders = productIds.map(() => "?").join(",");
+    const [categoryRows] = await db.query(
+      `SELECT product_id, category_id
+         FROM prod_product_categories
+        WHERE tenant_id=? AND product_id IN (${placeholders})`,
+      [tenantId, ...productIds]
+    );
+    const productCategoriesMap = new Map();
+    (Array.isArray(categoryRows) ? categoryRows : []).forEach((row) => {
+      const productId = Number(row?.product_id || 0);
+      const categoryId = Number(row?.category_id || 0);
+      if (!(productId > 0) || !(categoryId > 0)) return;
+      if (!productCategoriesMap.has(productId)) productCategoriesMap.set(productId, []);
+      productCategoriesMap.get(productId).push(categoryId);
+    });
+
+    const [discountRows] = await db.query(
+      `SELECT id, title, priority, mechanic_config_json, is_active, is_deleted, is_stackable, starts_at, ends_at,
+              schedule_days, schedule_time_start, schedule_time_end, usage_limit, usage_count
+         FROM mkt_discounts
+        WHERE tenant_id=? AND store_id=? AND mechanic_type='buy_x_get_y'
+          AND is_active=1 AND is_deleted=0`,
+      [tenantId, storeId]
+    );
+    const badges = (Array.isArray(discountRows) ? discountRows : [])
+      .filter((row) => discountHelpers.isDiscountActive(row))
+      .map((row) => {
+        const mechanic = parseOrderJsonObject(row?.mechanic_config_json, {});
+        const targetSets = buildOrderBuyXGetYTargetSets(mechanic?.qualifying_items || []);
+        if (!targetSets.productIds.size && !targetSets.categoryIds.size) return null;
+        const badgeText = formatOrderBuyXGetYBadge(mechanic);
+        return {
+          id: Number(row?.id || 0),
+          priority: Number(row?.priority || 0),
+          badge_text: badgeText,
+          title: String(row?.title || badgeText).trim() || badgeText,
+          buy_qty: Math.max(1, Number(mechanic?.buy_qty || 0) || 1),
+          reward_qty: Math.max(1, Number(mechanic?.reward_qty || 0) || 1),
+          repeat_mode: String(mechanic?.repeat_mode || "").trim().toLowerCase() === "repeat" ? "repeat" : "single",
+          is_stackable: Number(row?.is_stackable || 0) === 1,
+          targetSets,
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => Number(b?.priority || 0) - Number(a?.priority || 0));
+    if (!badges.length) return source;
+
+    source.forEach((item) => {
+      if (!item || typeof item !== "object") return;
+      if (item.buy_x_get_y_badge && typeof item.buy_x_get_y_badge === "object") return;
+      const productId = Number(item?.product_id || 0);
+      const badge = badges.find((row) => orderBuyXGetYBadgeMatchesProduct(row, productId, productCategoriesMap));
+      if (!badge) return;
+      item.buy_x_get_y_badge = {
+        id: badge.id,
+        badge_text: badge.badge_text,
+        title: badge.title,
+        buy_qty: badge.buy_qty,
+        reward_qty: badge.reward_qty,
+        repeat_mode: badge.repeat_mode,
+        is_stackable: badge.is_stackable,
+      };
+    });
+    return source;
+  }
+
+  async function enrichOrdersWithBuyXGetYBadges(tenantId, storeId, orders) {
+    const list = Array.isArray(orders) ? orders : [];
+    const allItems = list.flatMap((order) => Array.isArray(order?.items) ? order.items : []);
+    await enrichOrderItemsWithBuyXGetYBadges(tenantId, storeId, allItems);
+    return list;
+  }
+
   function normalizeOrderPromoCode(value) {
     return String(value || "").replace(/\s+/g, "").toUpperCase();
   }
@@ -1004,6 +1135,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       const parsed = r.items ? JSON.parse(r.items) : [];
       if (Array.isArray(parsed)) items = parsed;
     } catch {}
+    await enrichOrderItemsWithBuyXGetYBadges(tenantId, storeId, items);
     const discountsJson = parseOrderDiscountsJson(r.discounts_json);
     const benefitsMeta = parseOrderBenefitsMetaJson(r.benefits_meta_json);
     const itemsTotal = items.reduce((sum, item) => sum + Number(item.line_total || 0), 0);
@@ -1367,6 +1499,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           delivery_zone_name: helpers.strOrNull(r.deliveryZoneName),
         };
       });
+      await enrichOrdersWithBuyXGetYBadges(tenantId, storeId, baseData);
       const data = await attachRefundDataToOrders(db, tenantId, storeId, baseData, { storeTimezone });
 
       res.json({ ok: true, data });
@@ -2380,6 +2513,10 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         const qty = Math.max(1, Number(rawItem?.qty || rawItem?.quantity || 1));
         const lineTotal = roundMoney(Number(rawItem?.line_total ?? rawItem?.sum ?? rawItem?.total ?? 0));
         const originalLineTotal = roundMoney(Number(rawItem?.original_line_total ?? rawItem?.old_line_total ?? lineTotal));
+        const benefitsExcludedLineTotal = roundMoney(Math.min(
+          lineTotal,
+          Math.max(0, Number(rawItem?.benefits_excluded_line_total ?? rawItem?.discount_excluded_line_total ?? 0) || 0)
+        ));
 
         if (String(rawItem?.type || "").toLowerCase() === "combo" || Number(rawItem?.combo_id || 0) > 0) {
           const comboId = Number(rawItem?.combo_id || 0);
@@ -2390,6 +2527,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
             qty,
             line_total: lineTotal,
             old_line_total: originalLineTotal,
+            benefits_excluded_line_total: benefitsExcludedLineTotal,
             sections: Array.isArray(rawItem?.sections) ? rawItem.sections : [],
             selections: Array.isArray(rawItem?.selections) ? rawItem.selections : [],
           });
@@ -2438,6 +2576,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           gift_reward_id: Number(rawItem?.gift_reward_id || 0) > 0 ? Number(rawItem.gift_reward_id) : null,
           line_total: lineTotal,
           old_line_total: originalLineTotal,
+          benefits_excluded_line_total: benefitsExcludedLineTotal,
         });
       }
 
@@ -2587,6 +2726,10 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         item.qty = qty;
         item.line_total = lineTotal;
         item.old_line_total = oldLineTotal;
+        item.benefits_excluded_line_total = roundMoney(Math.min(
+          lineTotal,
+          Math.max(0, Number(item?.benefits_excluded_line_total ?? item?.discount_excluded_line_total ?? 0) || 0)
+        ));
 
         if (String(item?.type || "").toLowerCase() === "combo" || Number(item?.combo_id || 0) > 0) {
           const comboTitle = toText(item?.combo_title || item?.name) || "\u041a\u043e\u043c\u0431\u043e";
@@ -2762,6 +2905,14 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       }
 
       const itemsTotal = roundMoney(items.reduce((sum, item) => sum + Number(item?.line_total || 0), 0));
+      const itemsDiscountEligibleTotal = roundMoney(items.reduce((sum, item) => {
+        const lineTotal = Number(item?.line_total || 0);
+        const excludedTotal = Math.min(
+          lineTotal,
+          Math.max(0, Number(item?.benefits_excluded_line_total ?? item?.discount_excluded_line_total ?? 0) || 0)
+        );
+        return sum + Math.max(0, lineTotal - excludedTotal);
+      }, 0));
       const oldItemsTotal = roundMoney(items.reduce((sum, item) => {
         const line = Number(item?.line_total || 0);
         const old = Number(item?.old_line_total || line);
@@ -2788,18 +2939,18 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
 
       let customerOrderDiscountAmount = 0;
       let appliedOrderDiscounts = [];
-      if (!hasProvidedDiscountSnapshot && Number(customerId || 0) > 0 && itemsTotal > 0) {
+      if (!hasProvidedDiscountSnapshot && Number(customerId || 0) > 0 && itemsDiscountEligibleTotal > 0) {
         const orderDiscountsForCustomer = await discountHelpers.getOrderDiscounts(
           db,
           tenantId,
           storeId,
           customerId,
-          itemsTotal,
+          itemsDiscountEligibleTotal,
           null,
           { excludeOrderId: id }
         );
         if (Array.isArray(orderDiscountsForCustomer) && orderDiscountsForCustomer.length) {
-          const applied = discountHelpers.applyBestDiscounts(orderDiscountsForCustomer, itemsTotal);
+          const applied = discountHelpers.applyBestDiscounts(orderDiscountsForCustomer, itemsDiscountEligibleTotal);
           customerOrderDiscountAmount = roundMoney(Math.max(0, Number(applied?.totalDiscount || 0)));
           appliedOrderDiscounts = Array.isArray(applied?.appliedDiscounts) ? applied.appliedDiscounts : [];
         }
