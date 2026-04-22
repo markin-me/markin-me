@@ -1015,6 +1015,10 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
       const allCategoryId = await helpers.getAllCategoryId(db, tenantId);
+      const q = helpers.strOrNull(req.query.q);
+      const hasSearch = Boolean(q);
+      const searchSql = hasSearch ? ' AND (p.name LIKE ? OR p.sku LIKE ?)' : '';
+      const searchParams = hasSearch ? [`%${q}%`, `%${q}%`] : [];
 
       const categoryId = Number(req.query.category_id || allCategoryId);
       if (!Number.isFinite(categoryId)) return res.status(400).json({ ok: false, error: 'BAD_CATEGORY_ID' });
@@ -1049,9 +1053,9 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
            ON s.tenant_id = p.tenant_id AND s.store_id = ? AND s.product_id = p.id
          LEFT JOIN prod_product_categories pc
            ON pc.tenant_id = p.tenant_id AND pc.product_id = p.id AND pc.category_id = ?
-         WHERE p.tenant_id=?
+         WHERE p.tenant_id=?${searchSql}
          ORDER BY COALESCE(pc.sort_order, 999999) ASC, p.id ASC`;
-        const baseParams = [storeId, categoryId, tenantId];
+        const baseParams = [storeId, categoryId, tenantId, ...searchParams];
         const [rows] = paginationRequested
           ? await db.query(`${baseSql} LIMIT ? OFFSET ?`, [...baseParams, limit, offset])
           : await db.query(baseSql, baseParams);
@@ -1092,8 +1096,8 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
         const [[cntRow]] = await db.query(
           `SELECT COUNT(*) AS c
            FROM prod_products p
-           WHERE p.tenant_id=?`,
-          [tenantId]
+           WHERE p.tenant_id=?${searchSql}`,
+          [tenantId, ...searchParams]
         );
 
         return res.json({
@@ -1113,9 +1117,9 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
            ON p.tenant_id = pc.tenant_id AND p.id = pc.product_id
          LEFT JOIN prod_product_stocks s
            ON s.tenant_id = p.tenant_id AND s.store_id = ? AND s.product_id = p.id
-         WHERE pc.tenant_id=? AND pc.category_id=?
+         WHERE pc.tenant_id=? AND pc.category_id=?${searchSql}
          ORDER BY pc.sort_order ASC, pc.id ASC`;
-      const baseParams = [storeId, tenantId, categoryId];
+      const baseParams = [storeId, tenantId, categoryId, ...searchParams];
       const [rows] = paginationRequested
         ? await db.query(`${baseSql} LIMIT ? OFFSET ?`, [...baseParams, limit, offset])
         : await db.query(baseSql, baseParams);
@@ -1135,8 +1139,8 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
          FROM prod_product_categories pc
          JOIN prod_products p
            ON p.tenant_id = pc.tenant_id AND p.id = pc.product_id
-         WHERE pc.tenant_id=? AND pc.category_id=?`,
-        [tenantId, categoryId]
+         WHERE pc.tenant_id=? AND pc.category_id=?${searchSql}`,
+        [tenantId, categoryId, ...searchParams]
       );
 
       res.json({

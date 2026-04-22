@@ -191,6 +191,17 @@ function parseJsonObject(value, fallback = {}) {
   return fallback;
 }
 
+function parseJsonArray(value, fallback = []) {
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'string' && value.trim()) {
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) return parsed;
+    } catch {}
+  }
+  return fallback;
+}
+
 function normalizeProductConfigMode(value, fallback = 'any') {
   const raw = toText(value).toLowerCase();
   if (PRODUCT_CONFIG_MODES.has(raw)) return raw;
@@ -502,7 +513,6 @@ function normalizeSimpleDiscountMechanic(source = {}, discountRow = {}) {
 function normalizeBuyXGetYMechanic(source = {}, fallback = {}) {
   const src = parseJsonObject(source, {});
   const base = parseJsonObject(fallback, {});
-  const rewardDiscount = parseJsonObject(src.reward_discount, parseJsonObject(base.reward_discount, {}));
 
   return {
     type: 'buy_x_get_y',
@@ -510,27 +520,21 @@ function normalizeBuyXGetYMechanic(source = {}, fallback = {}) {
     accrual_status_id: toIntOrNull(src.accrual_status_id ?? base.accrual_status_id),
     buy_qty: Math.max(1, toIntOrNull(src.buy_qty ?? base.buy_qty) || 5),
     reward_qty: Math.max(1, toIntOrNull(src.reward_qty ?? base.reward_qty) || 1),
-    qualifying_mode: ['same_sku', 'pool'].includes(toText(src.qualifying_mode || base.qualifying_mode).toLowerCase())
-      ? toText(src.qualifying_mode || base.qualifying_mode).toLowerCase()
-      : 'same_sku',
+    qualifying_mode: 'same_sku',
     repeat_mode: ['single', 'repeat'].includes(toText(src.repeat_mode || base.repeat_mode).toLowerCase())
       ? toText(src.repeat_mode || base.repeat_mode).toLowerCase()
       : 'single',
-    reward_source: ['same_pool', 'reward_list'].includes(toText(src.reward_source || base.reward_source).toLowerCase())
-      ? toText(src.reward_source || base.reward_source).toLowerCase()
-      : 'same_pool',
-    reward_kind: ['gift', 'product_discount'].includes(toText(src.reward_kind || base.reward_kind).toLowerCase())
-      ? toText(src.reward_kind || base.reward_kind).toLowerCase()
-      : 'gift',
+    reward_source: 'same_pool',
+    reward_kind: 'gift',
     qualifying_items_config_mode: normalizeProductConfigMode(src.qualifying_items_config_mode ?? base.qualifying_items_config_mode, 'any'),
-    reward_products_config_mode: normalizeProductConfigMode(src.reward_products_config_mode ?? base.reward_products_config_mode, 'any'),
+    reward_products_config_mode: 'any',
     reward_selection_mode: 'customer_choice',
     reward_item_addition: 'line_item',
-    qualifying_items: normalizeEntityList(src.qualifying_items ?? base.qualifying_items, ['product', 'category', 'combo']),
-    reward_products: normalizeEntityList(src.reward_products ?? base.reward_products, ['product']),
+    qualifying_items: normalizeEntityList(src.qualifying_items ?? base.qualifying_items, ['product', 'category']),
+    reward_products: [],
     reward_discount: {
-      discount_type: normalizeDiscountType(rewardDiscount.discount_type, 'percent'),
-      discount_value: toNumberOrNull(rewardDiscount.discount_value),
+      discount_type: 'percent',
+      discount_value: null,
     },
   };
 }
@@ -1128,18 +1132,16 @@ function assertMechanicIsValid(mechanicType, mechanic, { products = [] } = {}) {
     if (!(Number(mechanic?.buy_qty) > 0) || !(Number(mechanic?.reward_qty) > 0)) {
       throw createValidationError('INVALID_MECHANIC_CONFIG');
     }
-    if (mechanic.qualifying_mode === 'pool' && !mechanic.qualifying_items.length) {
+    if (!mechanic.qualifying_items.length) {
       throw createValidationError('QUALIFYING_ITEMS_REQUIRED');
     }
-    if (mechanic.qualifying_mode === 'pool') {
-      const typeSet = new Set(
-        (Array.isArray(mechanic.qualifying_items) ? mechanic.qualifying_items : [])
-          .map((item) => toText(item?.entity_type || item?.type).toLowerCase())
-          .filter(Boolean)
-      );
-      if (typeSet.has('product') && typeSet.has('category')) {
-        throw createValidationError('INVALID_QUALIFYING_ITEMS');
-      }
+    const typeSet = new Set(
+      (Array.isArray(mechanic.qualifying_items) ? mechanic.qualifying_items : [])
+        .map((item) => toText(item?.entity_type || item?.type).toLowerCase())
+        .filter(Boolean)
+    );
+    if (typeSet.has('product') && typeSet.has('category')) {
+      throw createValidationError('INVALID_QUALIFYING_ITEMS');
     }
     if (mechanic.reward_source === 'reward_list' && !mechanic.reward_products.length) {
       throw createValidationError('REWARD_PRODUCTS_REQUIRED');
@@ -1601,6 +1603,82 @@ function enrichMechanicForResponse(mechanic, lookup) {
   }
 
   return mechanic;
+}
+
+function mapDiscountHistoryProductRow(row) {
+  const photos = parseJsonArray(row?.photos_json, []).filter(Boolean);
+  const thumb = photos[0] || null;
+  return {
+    id: Number(row?.id || 0),
+    name: toText(row?.name) || `Товар #${row?.id}`,
+    price: Number(row?.price || 0),
+    display_price: Number(row?.price || 0),
+    photos,
+    thumb,
+    photo_thumb: thumb,
+    stock_qty: row?.stock_qty == null ? null : Number(row.stock_qty || 0),
+    is_available: row?.stock_qty == null || Number(row.stock_qty || 0) > 0,
+    source_entity_type: toText(row?.source_entity_type) || null,
+    source_entity_id: Number(row?.source_entity_id || 0) || null,
+  };
+}
+
+async function loadDiscountHistoryProducts(dbConn, tenantId, storeId, discountRow) {
+  const mechanic = normalizeMechanicFromDiscount(discountRow);
+  if (mechanic.type !== 'buy_x_get_y') return [];
+
+  const productIds = new Set();
+  const categoryIds = new Set();
+  (Array.isArray(mechanic.qualifying_items) ? mechanic.qualifying_items : []).forEach((item) => {
+    const entityType = toText(item?.entity_type || item?.type).toLowerCase();
+    const entityId = Number(item?.entity_id || item?.id || 0);
+    if (!(entityId > 0)) return;
+    if (entityType === 'product') productIds.add(entityId);
+    if (entityType === 'category') categoryIds.add(entityId);
+  });
+
+  const byId = new Map();
+
+  if (productIds.size) {
+    const ids = [...productIds];
+    const [rows] = await dbConn.query(
+      `SELECT p.id, p.name, p.price, p.photos_json, s.qty AS stock_qty,
+              'product' AS source_entity_type, p.id AS source_entity_id
+       FROM prod_products p
+       LEFT JOIN prod_product_stocks s
+         ON s.tenant_id = p.tenant_id AND s.store_id = ? AND s.product_id = p.id
+       WHERE p.tenant_id = ? AND p.id IN (?)
+       ORDER BY p.id ASC`,
+      [storeId, tenantId, ids]
+    );
+    (Array.isArray(rows) ? rows : []).forEach((row) => {
+      const mapped = mapDiscountHistoryProductRow(row);
+      if (mapped.id > 0) byId.set(mapped.id, mapped);
+    });
+  }
+
+  if (categoryIds.size) {
+    const ids = [...categoryIds];
+    const [rows] = await dbConn.query(
+      `SELECT p.id, p.name, p.price, p.photos_json, s.qty AS stock_qty,
+              'category' AS source_entity_type, pc.category_id AS source_entity_id
+       FROM prod_product_categories pc
+       JOIN prod_products p ON p.tenant_id = pc.tenant_id AND p.id = pc.product_id
+       LEFT JOIN prod_product_stocks s
+         ON s.tenant_id = p.tenant_id AND s.store_id = ? AND s.product_id = p.id
+       WHERE pc.tenant_id = ? AND pc.category_id IN (?)
+         AND p.is_active = 1 AND p.site_visibility = 1
+       ORDER BY pc.sort_order ASC, pc.id ASC
+       LIMIT 60`,
+      [storeId, tenantId, ids]
+    );
+    (Array.isArray(rows) ? rows : []).forEach((row) => {
+      const mapped = mapDiscountHistoryProductRow(row);
+      if (mapped.id > 0 && !byId.has(mapped.id)) byId.set(mapped.id, mapped);
+    });
+  }
+
+  return [...byId.values()];
 }
 
 function mapMechanicProductLookupRow(row) {
@@ -2897,7 +2975,7 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
           toIntOrNull(req.body?.priority) || 0,
           toBoolFlag(req.body?.is_stackable) ? 1 : 0,
           toBoolFlag(req.body?.is_active, true) ? 1 : 0,
-          toBoolFlag(req.body?.hide_in_benefits) ? 1 : 0,
+          (mechanicPayload.mechanicType === 'buy_x_get_y' || toBoolFlag(req.body?.hide_in_benefits)) ? 1 : 0,
           activationMode,
           mechanicPayload.rewardType,
           promoCodeMode,
@@ -3078,9 +3156,13 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
           priorityValue,
           toBoolFlag(req.body?.is_stackable) ? 1 : 0,
           toBoolFlag(req.body?.is_active, true) ? 1 : 0,
-          Object.prototype.hasOwnProperty.call(req.body || {}, 'hide_in_benefits')
-            ? (toBoolFlag(req.body?.hide_in_benefits) ? 1 : 0)
-            : (toBoolFlag(existing?.hide_in_benefits) ? 1 : 0),
+          mechanicPayload.mechanicType === 'buy_x_get_y'
+            ? 1
+            : (
+                Object.prototype.hasOwnProperty.call(req.body || {}, 'hide_in_benefits')
+                  ? (toBoolFlag(req.body?.hide_in_benefits) ? 1 : 0)
+                  : (toBoolFlag(existing?.hide_in_benefits) ? 1 : 0)
+              ),
           activationModeResolved,
           mechanicPayload.rewardType,
           promoCodeMode,
@@ -3333,6 +3415,17 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
       }
 
       // Получаем заказы из истории использования скидки
+      const [[discountRow]] = await db.query(
+        `SELECT ${DISCOUNT_COLUMNS}
+         FROM mkt_discounts
+         WHERE tenant_id = ? AND store_id = ? AND id = ?
+         LIMIT 1`,
+        [tenantId, storeId, discountId]
+      );
+      if (!discountRow) {
+        return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+      }
+
       const [orders] = await db.query(
         `SELECT 
           u.id AS usage_id,
@@ -3354,7 +3447,9 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
         [discountId, tenantId]
       );
 
-      return res.json({ ok: true, orders });
+      const products = await loadDiscountHistoryProducts(db, tenantId, storeId, discountRow);
+
+      return res.json({ ok: true, orders, products });
     } catch (err) {
       console.error('GET /api/admin/discounts/:id/orders error:', err);
       return res.status(500).json({ ok: false, error: 'SERVER_ERROR' });

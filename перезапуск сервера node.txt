@@ -24,11 +24,11 @@ a1186497.xsph.ru
 IP-адрес
 141.8.192.15
 
-Логин
-a1186497
+Логин спринтхост/спринтбокс
+a1186497 / b1259362
 
 Пароль
-evvawewaar
+evvawewaar / qzovukqq
 
 
 установлена ппринудительная установка светлой темы! - иметь ввиду
@@ -94,3 +94,9 @@ pm2 save
 curl http://127.0.0.1:3400/health
 
 Если включён токен, ответ UNAUTHORIZED без заголовка тоже означает, что сервис живой.
+
+
+запуск приложения из корня папки
+
+cd mobile-apps/mobile-user && npx expo start
+cd mobile-apps/mobile-admin && npx expo start

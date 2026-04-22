@@ -479,6 +479,27 @@ async function recordDiscountUsage(db, tenantId, discountId, orderId, customerId
   return { recorded: true };
 }
 
+async function ensureCustomerBenefitDiscountStorage(executor) {
+  if (!executor || typeof executor.query !== 'function') return;
+  await executor.query(
+    `CREATE TABLE IF NOT EXISTS \`mkt_customer_benefit_discounts\` (
+       \`id\` int UNSIGNED NOT NULL AUTO_INCREMENT,
+       \`tenant_id\` int NOT NULL DEFAULT '1',
+       \`store_id\` int NOT NULL DEFAULT '1',
+       \`customer_id\` int NOT NULL,
+       \`discount_id\` int UNSIGNED NOT NULL,
+       \`created_at\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+       \`updated_at\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+       PRIMARY KEY (\`id\`),
+       UNIQUE KEY \`uq_mkt_customer_benefit_discounts_customer_discount\` (\`tenant_id\`,\`store_id\`,\`customer_id\`,\`discount_id\`),
+       KEY \`idx_mkt_customer_benefit_discounts_customer\` (\`tenant_id\`,\`store_id\`,\`customer_id\`),
+       KEY \`idx_mkt_customer_benefit_discounts_discount\` (\`tenant_id\`,\`discount_id\`),
+       CONSTRAINT \`fk_mkt_customer_benefit_discounts_discount\`
+         FOREIGN KEY (\`discount_id\`) REFERENCES \`mkt_discounts\` (\`id\`) ON DELETE CASCADE
+     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+  );
+}
+
 function applyBestDiscounts(discounts, price) {
   if (!discounts || discounts.length === 0) {
     return { totalDiscount: 0, appliedDiscounts: [] };
@@ -553,6 +574,7 @@ module.exports = {
   getActiveDiscountsForCustomer,
   getOrderDiscounts,
   recordDiscountUsage,
+  ensureCustomerBenefitDiscountStorage,
   applyBestDiscounts,
   getBestDiscount,
 };

@@ -54,6 +54,75 @@
     return out;
   }
 
+  const PRODUCTS_TOOLBAR_FILTERS_STORAGE_KEY = "products:toolbar-filters:v1";
+  const PRODUCTS_TOOLBAR_MODE_KEYS = Object.freeze(["products", "options", "variants"]);
+  const PRODUCTS_TOOLBAR_SEARCH_DEBOUNCE_MS = 220;
+  const PRODUCTS_TOOLBAR_FILTER_DEFINITIONS = Object.freeze({
+    products: [
+      { key: "active", label: "Активные" },
+      { key: "inactive", label: "Неактивные" },
+      { key: "visible", label: "Видимые" },
+      { key: "hidden", label: "Скрытые" },
+      { key: "in_stock", label: "В наличии" },
+      { key: "ended", label: "Закончились" },
+    ],
+    options: [
+      { key: "active", label: "Активные" },
+      { key: "inactive", label: "Неактивные" },
+    ],
+    variants: [
+      { key: "active", label: "Активные" },
+      { key: "inactive", label: "Неактивные" },
+    ],
+  });
+
+  function normalizeProductsToolbarQuery(value) {
+    return String(value || "").trim();
+  }
+
+  function getDefaultProductsToolbarFilters(mode) {
+    if (mode === "products") {
+      return {
+        active: true,
+        inactive: true,
+        visible: true,
+        hidden: false,
+        in_stock: true,
+        ended: true,
+      };
+    }
+    return {
+      active: true,
+      inactive: true,
+    };
+  }
+
+  function normalizeProductsToolbarFilters(mode, rawFilters = null) {
+    const defaults = getDefaultProductsToolbarFilters(mode);
+    const source = rawFilters && typeof rawFilters === "object" ? rawFilters : {};
+    const out = {};
+    Object.keys(defaults).forEach((key) => {
+      out[key] = source[key] == null ? defaults[key] : Boolean(source[key]);
+    });
+    return out;
+  }
+
+  function loadStoredProductsToolbarFilters() {
+    const out = {};
+    try {
+      const raw = localStorage.getItem(PRODUCTS_TOOLBAR_FILTERS_STORAGE_KEY);
+      const parsed = raw ? JSON.parse(raw) : null;
+      PRODUCTS_TOOLBAR_MODE_KEYS.forEach((mode) => {
+        out[mode] = normalizeProductsToolbarFilters(mode, parsed?.[mode]);
+      });
+    } catch {
+      PRODUCTS_TOOLBAR_MODE_KEYS.forEach((mode) => {
+        out[mode] = normalizeProductsToolbarFilters(mode);
+      });
+    }
+    return out;
+  }
+
   // left
   const categoriesNav = $("#categoriesNav");
   const addCategoryBtn = $("#addCategoryBtn");
@@ -62,7 +131,16 @@
   // center
   const toolbarText = $("#productsToolbarText");
   const toolbarIcon = $("#productsToolbarIcon");
+  const productsToolbarControls = $("#productsToolbarControls");
+  const productsSearchWrap = $("#productsSearchWrap");
+  const productsSearchInput = $("#productsSearchInput");
+  const productsSearchToggle = $("#productsSearchToggle");
+  const productsFilterWrap = $("#productsFilterWrap");
+  const productsFilterToggle = $("#productsFilterToggle");
+  const productsFilterDropdown = $("#productsFilterDropdown");
   const addMainBtn = $("#addMainBtn");
+  const addMainWrapper = $("#addMainWrapper");
+  const addMainDropdown = $("#addMainDropdown");
   const productsList = $("#productsList");
   const productsEmptyHint = $("#productsEmptyHint");
   const productsScrollEl = productsList ? productsList.closest(".panel-body") : null;
@@ -527,6 +605,15 @@
     productRowVariantsExpanded: new Set(),
     productRowVariantsCache: new Map(),
     productRowVariantsLoading: new Set(),
+    productsToolbar: (() => {
+      const stored = loadStoredProductsToolbarFilters();
+      return {
+        products: { query: "", searchOpen: false, filters: stored.products },
+        options: { query: "", searchOpen: false, filters: stored.options },
+        variants: { query: "", searchOpen: false, filters: stored.variants },
+      };
+    })(),
+    productsToolbarFilterOpen: false,
     selectedCategoryId: null,
     selectedProductCategories: [], // full objects
     optionGroups: [],
@@ -653,6 +740,7 @@
   const PRODUCTS_PAGE_LIMIT = 80;
   const PRODUCTS_SCROLL_THRESHOLD_PX = 220;
   let productsRequestToken = 0;
+  let productsToolbarSearchTimer = null;
 
   function schedulePersistProductsCache(delay = 180) {
     return;
@@ -660,7 +748,9 @@
 
   function normalizeCategoryCacheKey(categoryId) {
     const id = Number(categoryId || 0);
-    return Number.isFinite(id) && id > 0 ? String(id) : "0";
+    const safeId = Number.isFinite(id) && id > 0 ? String(id) : "0";
+    const query = normalizeProductsToolbarQuery(state.productsToolbar?.products?.query || "").toLowerCase();
+    return `${safeId}::${query}`;
   }
 
   function getCachedCategoryProducts(categoryId) {
@@ -693,6 +783,75 @@
       combosInCategory: Array.isArray(payload?.combosInCategory) ? payload.combosInCategory : [],
       ts: Date.now(),
     });
+  }
+
+  function getProductsToolbarState(mode = state.mode) {
+    if (!PRODUCTS_TOOLBAR_MODE_KEYS.includes(mode)) return null;
+    return state.productsToolbar?.[mode] || null;
+  }
+
+  function persistProductsToolbarFilters() {
+    try {
+      const payload = {};
+      PRODUCTS_TOOLBAR_MODE_KEYS.forEach((mode) => {
+        payload[mode] = normalizeProductsToolbarFilters(mode, state.productsToolbar?.[mode]?.filters);
+      });
+      localStorage.setItem(PRODUCTS_TOOLBAR_FILTERS_STORAGE_KEY, JSON.stringify(payload));
+    } catch {}
+  }
+
+  function isProductsToolbarModeVisible(mode = state.mode) {
+    return PRODUCTS_TOOLBAR_MODE_KEYS.includes(mode);
+  }
+
+  function getProductsToolbarSearchPlaceholder(mode = state.mode) {
+    if (mode === "products") return "Название или SKU...";
+    return "Поиск по названию...";
+  }
+
+  function isFiniteProductStockValue(product) {
+    return product?.stock_qty != null && Number.isFinite(Number(product.stock_qty));
+  }
+
+  function filterProductsCollection(items) {
+    const filters = normalizeProductsToolbarFilters("products", state.productsToolbar?.products?.filters);
+    return (Array.isArray(items) ? items : []).filter((product) => {
+      const isActive = Number(product?.is_active || 0) === 1;
+      const isVisible = Number(product?.site_visibility || 0) === 1;
+      const activeAllowed = isActive ? filters.active : filters.inactive;
+      const visibilityAllowed = isVisible ? filters.visible : filters.hidden;
+      if (!activeAllowed || !visibilityAllowed) return false;
+
+      const hasFiniteStock = isFiniteProductStockValue(product);
+      const isEnded = hasFiniteStock && Number(product.stock_qty) <= 0;
+      return isEnded ? filters.ended : filters.in_stock;
+    });
+  }
+
+  function getFilteredOptionGroups() {
+    const toolbarState = getProductsToolbarState("options");
+    const query = normalizeProductsToolbarQuery(toolbarState?.query || "").toLowerCase();
+    const filters = normalizeProductsToolbarFilters("options", toolbarState?.filters);
+    return (Array.isArray(state.optionGroups) ? state.optionGroups : []).filter((group) => {
+      const title = String(group?.title || "").toLowerCase();
+      if (query && !title.includes(query)) return false;
+      return Number(group?.is_active || 0) === 1 ? filters.active : filters.inactive;
+    });
+  }
+
+  function getFilteredVariantGroups() {
+    const toolbarState = getProductsToolbarState("variants");
+    const query = normalizeProductsToolbarQuery(toolbarState?.query || "").toLowerCase();
+    const filters = normalizeProductsToolbarFilters("variants", toolbarState?.filters);
+    return (Array.isArray(state.variantGroups) ? state.variantGroups : []).filter((group) => {
+      const title = String(group?.title || "").toLowerCase();
+      if (query && !title.includes(query)) return false;
+      return Number(group?.is_active || 0) === 1 ? filters.active : filters.inactive;
+    });
+  }
+
+  function shouldHideProductCombos() {
+    return normalizeProductsToolbarQuery(state.productsToolbar?.products?.query || "").length > 0;
   }
 
   function getCachedProductDetails(productId) {
@@ -1348,6 +1507,150 @@
     });
   }
 
+  function closeProductsFilterDropdown() {
+    state.productsToolbarFilterOpen = false;
+    if (productsFilterDropdown) productsFilterDropdown.classList.add("hidden");
+    if (productsFilterWrap) productsFilterWrap.classList.remove("is-open");
+  }
+
+  function applyProductsToolbarLocalFilters() {
+    if (state.mode === "products") {
+      renderProductsList();
+    } else if (state.mode === "options") {
+      renderAllOptionGroupsLists();
+    } else if (state.mode === "variants") {
+      renderVariantGroupsList(variantsGroupsList, variantsGroupsEmpty);
+    }
+    syncProductsBulkFooter();
+  }
+
+  function renderProductsFilterDropdown() {
+    if (!productsFilterDropdown) return;
+    if (!isProductsToolbarModeVisible()) {
+      productsFilterDropdown.innerHTML = "";
+      return;
+    }
+
+    const mode = state.mode;
+    const defs = PRODUCTS_TOOLBAR_FILTER_DEFINITIONS[mode] || [];
+    const filters = normalizeProductsToolbarFilters(mode, getProductsToolbarState(mode)?.filters);
+    productsFilterDropdown.innerHTML = `
+      <div class="products-filter-menu">
+        ${defs.map((item) => `
+          <label class="products-filter-option">
+            <input type="checkbox" data-products-filter-key="${item.key}" ${filters[item.key] ? "checked" : ""} />
+            <span class="products-filter-option-text">${escapeHtml(item.label)}</span>
+          </label>
+        `).join("")}
+      </div>
+    `;
+
+    productsFilterDropdown.querySelectorAll("input[data-products-filter-key]").forEach((input) => {
+      input.addEventListener("change", () => {
+        const toolbarState = getProductsToolbarState(mode);
+        if (!toolbarState) return;
+        const key = String(input.dataset.productsFilterKey || "");
+        toolbarState.filters[key] = input.checked;
+        toolbarState.filters = normalizeProductsToolbarFilters(mode, toolbarState.filters);
+        persistProductsToolbarFilters();
+        renderProductsFilterDropdown();
+        applyProductsToolbarLocalFilters();
+      });
+    });
+  }
+
+  function syncProductsToolbar() {
+    const isVisible = isProductsToolbarModeVisible();
+    if (productsToolbarControls) {
+      productsToolbarControls.classList.toggle("is-toolbar-mode-hidden", !isVisible);
+    }
+    if (productsSearchWrap) {
+      productsSearchWrap.classList.toggle("hidden", !isVisible);
+    }
+    if (productsFilterWrap) {
+      productsFilterWrap.classList.toggle("hidden", !isVisible);
+    }
+
+    if (!isVisible) {
+      if (productsSearchWrap) productsSearchWrap.classList.remove("is-open");
+      if (productsSearchInput) productsSearchInput.value = "";
+      closeProductsFilterDropdown();
+      return;
+    }
+
+    const toolbarState = getProductsToolbarState();
+    if (productsSearchWrap) {
+      productsSearchWrap.classList.toggle("is-open", Boolean(toolbarState?.searchOpen));
+    }
+    if (productsSearchInput) {
+      productsSearchInput.placeholder = getProductsToolbarSearchPlaceholder(state.mode);
+      productsSearchInput.value = toolbarState?.query || "";
+    }
+    renderProductsFilterDropdown();
+    if (productsFilterDropdown) {
+      productsFilterDropdown.classList.toggle("hidden", !state.productsToolbarFilterOpen);
+    }
+    if (productsFilterWrap) {
+      productsFilterWrap.classList.toggle("is-open", Boolean(state.productsToolbarFilterOpen));
+    }
+  }
+
+  function scheduleProductsToolbarSearchReload() {
+    if (productsToolbarSearchTimer) {
+      clearTimeout(productsToolbarSearchTimer);
+      productsToolbarSearchTimer = null;
+    }
+    if (state.mode !== "products") return;
+    productsToolbarSearchTimer = setTimeout(() => {
+      productsToolbarSearchTimer = null;
+      if (state.mode !== "products") return;
+      refreshProductsOnly(true).catch(console.error);
+    }, PRODUCTS_TOOLBAR_SEARCH_DEBOUNCE_MS);
+  }
+
+  function handleProductsToolbarSearchInput() {
+    const toolbarState = getProductsToolbarState();
+    if (!toolbarState || !productsSearchInput) return;
+    toolbarState.query = normalizeProductsToolbarQuery(productsSearchInput.value);
+    if (state.mode === "products") {
+      scheduleProductsToolbarSearchReload();
+      return;
+    }
+    applyProductsToolbarLocalFilters();
+  }
+
+  async function closeProductsToolbarSearch() {
+    const toolbarState = getProductsToolbarState();
+    if (!toolbarState) return;
+    const hadQuery = Boolean(toolbarState.query);
+    toolbarState.searchOpen = false;
+    toolbarState.query = "";
+    if (productsToolbarSearchTimer) {
+      clearTimeout(productsToolbarSearchTimer);
+      productsToolbarSearchTimer = null;
+    }
+    syncProductsToolbar();
+    if (!hadQuery) return;
+    if (state.mode === "products") {
+      await refreshProductsOnly(true);
+      return;
+    }
+    applyProductsToolbarLocalFilters();
+  }
+
+  function openProductsToolbarSearch() {
+    const toolbarState = getProductsToolbarState();
+    if (!toolbarState) return;
+    toolbarState.searchOpen = true;
+    syncProductsToolbar();
+    if (productsSearchInput) {
+      requestAnimationFrame(() => {
+        productsSearchInput.focus();
+        productsSearchInput.select();
+      });
+    }
+  }
+
   // ---------------- Views ----------------
 
   function showView(name) {
@@ -1419,6 +1722,7 @@
     showView("products");
     showDetailsEmpty();
     syncActiveMenuItems();
+    syncProductsToolbar();
     syncProductsBulkFooter();
     schedulePersistProductsCache();
   }
@@ -1431,6 +1735,7 @@
     clearProductSelection();
     showDetailsEmpty();
     syncActiveMenuItems();
+    syncProductsToolbar();
   }
 
   function enterOptionsMode() {
@@ -1442,6 +1747,7 @@
     clearProductSelection();
     showDetailsEmpty();
     syncActiveMenuItems();
+    syncProductsToolbar();
   }
 
   function enterVariantsMode() {
@@ -1453,6 +1759,7 @@
     clearProductSelection();
     showDetailsEmpty();
     syncActiveMenuItems();
+    syncProductsToolbar();
   }
 
   async function enterAutoAddMode() {
@@ -1463,6 +1770,7 @@
     clearProductSelection();
     showDetailsEmpty();
     syncActiveMenuItems();
+    syncProductsToolbar();
     await loadAutoAddManagement();
     renderAutoAddGroupsList();
   }
@@ -1476,6 +1784,7 @@
     clearProductSelection();
     showDetailsEmpty();
     syncActiveMenuItems();
+    syncProductsToolbar();
     await loadUnitsManagement();
     await loadUnitConversions();
     renderUnitsList();
@@ -1489,6 +1798,7 @@
     clearProductSelection();
     showDetailsEmpty();
     syncActiveMenuItems();
+    syncProductsToolbar();
     await loadComboBlocks();
     renderComboBlocksList();
   }
@@ -1667,6 +1977,8 @@
     qs.set("offset", String(offset));
     qs.set("limit", String(limit));
     qs.set("list", "1");
+    const searchQuery = normalizeProductsToolbarQuery(state.productsToolbar?.products?.query || "");
+    if (searchQuery) qs.set("q", searchQuery);
     return qs;
   }
 
@@ -1687,7 +1999,6 @@
       const chunkRaw = Array.isArray(res.data) ? res.data : [];
       const knownIds = new Set((state.products || []).map((p) => Number(p.id)));
       const append = chunkRaw
-        .filter((p) => !(Number(p.is_active) === 0 && Number(p.site_visibility) === 0))
         .filter((p) => !knownIds.has(Number(p.id)));
 
       const appendIds = append
@@ -2837,7 +3148,7 @@ function buildOptionGroupPayload(formValues) {
 
   function renderOptionGroupsList(listEl = optionsGroupsList, emptyEl = optionsGroupsEmpty) {
     if (!listEl || !emptyEl) return;
-    const list = state.optionGroups
+    const list = getFilteredOptionGroups()
       .slice()
       .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.id - b.id);
 
@@ -4194,7 +4505,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     if (!emptyEl) emptyEl = variantsGroupsEmpty;
     if (!listEl) return;
 
-    const groups = state.variantGroups || [];
+    const groups = getFilteredVariantGroups();
     const disableSwitch = state.variantPanel.mode === "edit";
 
     emptyEl?.classList.toggle("hidden", groups.length > 0);
@@ -4660,7 +4971,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
   }
 
   function getCurrentProductGroupIds() {
-    return (Array.isArray(state.products) ? state.products : [])
+    return filterProductsCollection(state.products)
       .map((product) => Number(product?.id))
       .filter(Number.isFinite);
   }
@@ -4738,7 +5049,10 @@ function openAutoAddGroupModal({ mode, group } = {}) {
 
   function syncProductsBulkFooter() {
     if (!productsBulkFooter) return;
-    const selectedCount = state.selectedProductIds.size;
+    const visibleGroupIds = getCurrentProductGroupIds();
+    const selectedCount = state.mode === "products"
+      ? visibleGroupIds.filter((id) => state.selectedProductIds.has(id)).length
+      : state.selectedProductIds.size;
     const shouldShow = state.mode === "products" && selectedCount > 0;
     productsBulkFooter.classList.toggle("hidden", !shouldShow);
     if (!shouldShow) closeProductsBulkMenu();
@@ -4746,11 +5060,10 @@ function openAutoAddGroupModal({ mode, group } = {}) {
       productsBulkSelectedCount.textContent = String(selectedCount);
     }
     if (productsBulkToggleAllInput) {
-      const groupIds = getCurrentProductGroupIds();
-      const selectedInGroup = groupIds.filter((id) => state.selectedProductIds.has(id)).length;
-      productsBulkToggleAllInput.checked = groupIds.length > 0 && selectedInGroup === groupIds.length;
-      productsBulkToggleAllInput.indeterminate = selectedInGroup > 0 && selectedInGroup < groupIds.length;
-      productsBulkToggleAllInput.disabled = state.productsLoading || groupIds.length === 0;
+      const selectedInGroup = visibleGroupIds.filter((id) => state.selectedProductIds.has(id)).length;
+      productsBulkToggleAllInput.checked = visibleGroupIds.length > 0 && selectedInGroup === visibleGroupIds.length;
+      productsBulkToggleAllInput.indeterminate = selectedInGroup > 0 && selectedInGroup < visibleGroupIds.length;
+      productsBulkToggleAllInput.disabled = state.productsLoading || visibleGroupIds.length === 0;
     }
     if (productsBulkActions) {
       productsBulkActions.classList.toggle("hidden", !shouldShow);
@@ -5003,8 +5316,8 @@ function openAutoAddGroupModal({ mode, group } = {}) {
 
   function syncProductsListEmptyState() {
     if (!productsEmptyHint) return;
-    const combos = state.combosInCategory ?? [];
-    const empty = state.products.length === 0 && combos.length === 0;
+    const combos = shouldHideProductCombos() ? [] : (state.combosInCategory ?? []);
+    const empty = filterProductsCollection(state.products).length === 0 && combos.length === 0;
     productsEmptyHint.style.display = empty ? "block" : "none";
   }
 
@@ -5084,6 +5397,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
               body: JSON.stringify({ [field]: nextValue ? 1 : 0 }),
             });
             applyInlineProductValue(product, field, nextValue ? 1 : 0);
+            renderProductsList();
           } catch (e) {
             switchInput.checked = previousValue;
             alert("Ошибка сохранения статуса товара: " + (e.message || "Неизвестная ошибка"));
@@ -5146,7 +5460,11 @@ function openAutoAddGroupModal({ mode, group } = {}) {
               body: JSON.stringify(payload),
             });
             applyInlineProductValue(product, field, payload[field]);
-            syncProductRowInlineControl(row, product, field);
+            if (field === "stock") {
+              renderProductsList();
+            } else {
+              syncProductRowInlineControl(row, product, field);
+            }
           } catch (e) {
             input.value = getProductRowDisplayValue(product, field);
             alert("Ошибка сохранения поля товара: " + (e.message || "Неизвестная ошибка"));
@@ -5413,7 +5731,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
 
   function appendProductRowsToList(items) {
     if (!productsList) return;
-    const list = Array.isArray(items) ? items : [];
+    const list = filterProductsCollection(items);
     if (!list.length) {
       syncProductRowsSortability();
       syncProductsListEmptyState();
@@ -5442,8 +5760,9 @@ function openAutoAddGroupModal({ mode, group } = {}) {
   function renderProductsList() {
     if (!productsList) return;
     const canSortProducts = !state.productsHasMore && !state.productsLoading;
-    const productRows = state.products.map((product) => buildProductRowHtml(product, canSortProducts));
-    const combos = state.combosInCategory ?? [];
+    const visibleProducts = filterProductsCollection(state.products);
+    const productRows = visibleProducts.map((product) => buildProductRowHtml(product, canSortProducts));
+    const combos = shouldHideProductCombos() ? [] : (state.combosInCategory ?? []);
     const comboRows = combos.map((c) => {
       const title = (c.title || "").trim() || "Комбо";
       const gridPlaceholder = `<div class="combo-row-photo-grid" data-combo-grid-id="${c.id}">${buildComboRowPhotoGridHtml([])}</div>`;
@@ -17383,6 +17702,42 @@ const isViewMode = state.comboPanel.mode === "view";
       });
     }
 
+    if (productsSearchToggle) {
+      productsSearchToggle.addEventListener("click", () => {
+        const toolbarState = getProductsToolbarState();
+        if (!toolbarState) return;
+        if (toolbarState.searchOpen) {
+          closeProductsToolbarSearch().catch(console.error);
+        } else {
+          openProductsToolbarSearch();
+        }
+      });
+    }
+
+    if (productsSearchInput) {
+      productsSearchInput.addEventListener("input", handleProductsToolbarSearchInput);
+      productsSearchInput.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          closeProductsToolbarSearch().catch(console.error);
+        }
+      });
+    }
+
+    if (productsFilterToggle) {
+      productsFilterToggle.addEventListener("click", (event) => {
+        if (!isProductsToolbarModeVisible()) return;
+        event.preventDefault();
+        event.stopPropagation();
+        state.productsToolbarFilterOpen = !state.productsToolbarFilterOpen;
+        syncProductsToolbar();
+      });
+    }
+
+    if (productsFilterDropdown) {
+      productsFilterDropdown.addEventListener("click", (event) => event.stopPropagation());
+    }
+
     if (productsScrollEl) {
       productsScrollEl.addEventListener("scroll", maybeLoadMoreProductsOnScroll, { passive: true });
     }
@@ -17457,6 +17812,7 @@ const isViewMode = state.comboPanel.mode === "view";
             if (Object.prototype.hasOwnProperty.call(payload, "site_visibility")) syncProductRowInlineControl(row, product, "site_visibility");
             if (Object.prototype.hasOwnProperty.call(payload, "stock")) syncProductRowInlineControl(row, product, "stock");
           }
+          renderProductsList();
           resetProductsBulkActions();
           closeProductsBulkMenu();
           syncProductsBulkFooter();
@@ -17479,10 +17835,8 @@ const isViewMode = state.comboPanel.mode === "view";
     if (addMainBtn) {
       addMainBtn.addEventListener("click", (e) => {
         if (state.mode === "products") {
-          const wrapper = document.getElementById("addMainWrapper");
-          const dropdown = document.getElementById("addMainDropdown");
-          if (wrapper && dropdown) {
-            wrapper.classList.toggle("is-open");
+          if (addMainWrapper && addMainDropdown) {
+            addMainWrapper.classList.toggle("is-open");
             e.stopPropagation();
           }
           return;
@@ -17505,8 +17859,6 @@ const isViewMode = state.comboPanel.mode === "view";
       });
     }
 
-    const addMainDropdown = document.getElementById("addMainDropdown");
-    const addMainWrapper = document.getElementById("addMainWrapper");
     if (addMainDropdown && addMainWrapper) {
       addMainDropdown.addEventListener("click", (e) => {
         const item = e.target.closest("[data-add-action]");
@@ -17518,6 +17870,7 @@ const isViewMode = state.comboPanel.mode === "view";
       });
       document.addEventListener("click", () => {
         addMainWrapper.classList.remove("is-open");
+        closeProductsFilterDropdown();
         closeProductsBulkMenu();
       });
       addMainWrapper.addEventListener("click", (e) => e.stopPropagation());
@@ -18995,6 +19348,7 @@ const isViewMode = state.comboPanel.mode === "view";
     clearProductSelection();
     showDetailsEmpty();
     syncActiveMenuItems();
+    syncProductsToolbar();
     await loadStockDocuments("in");
     renderStockDocList(stockInList, stockInEmpty, "in");
   }
@@ -19007,6 +19361,7 @@ const isViewMode = state.comboPanel.mode === "view";
     clearProductSelection();
     showDetailsEmpty();
     syncActiveMenuItems();
+    syncProductsToolbar();
     await loadStockDocuments("out");
     renderStockDocList(stockOutList, stockOutEmpty, "out");
   }
@@ -19019,6 +19374,7 @@ const isViewMode = state.comboPanel.mode === "view";
     clearProductSelection();
     showDetailsEmpty();
     syncActiveMenuItems();
+    syncProductsToolbar();
     await loadStockDocuments(); // все типы
     renderStockDocList(stockMovementsList, stockMovementsEmpty);
   }
