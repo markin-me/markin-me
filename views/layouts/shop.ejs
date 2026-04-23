@@ -45,6 +45,10 @@
       tenantId: <%- JSON.stringify((tenantId || ((typeof tenant !== 'undefined' && tenant && tenant.id) ? tenant.id : 0)) || 0) %>,
       versionToken: <%- JSON.stringify(shopManifestVersion) %>
     };
+    window.__SHOP_INSTALL_CONTEXT__ = {
+      title: <%- JSON.stringify(shopPwaTitle) %>,
+      icon: <%- JSON.stringify(appleIcon || '') %>
+    };
   </script>
   <% if (typeof tenant !== 'undefined' && tenant) { %>
     <script>
@@ -86,6 +90,40 @@
     <span class="shop-connection-banner__text"></span>
   </div>
 
+  <div class="shop-install-sheet hidden" id="shopInstallSheet" aria-hidden="true">
+    <div class="shop-install-sheet__backdrop" id="shopInstallBackdrop"></div>
+    <div class="shop-install-sheet__dialog" role="dialog" aria-modal="true" aria-labelledby="shopInstallTitle">
+      <button class="shop-install-sheet__close" id="shopInstallCloseBtn" type="button" aria-label="Закрыть">
+        <i class="fas fa-times"></i>
+      </button>
+      <div class="shop-install-sheet__hero">
+        <% if (appleIcon) { %>
+          <img class="shop-install-sheet__icon" src="<%= appleIcon %>" alt="" />
+        <% } else { %>
+          <div class="shop-install-sheet__icon shop-install-sheet__icon--fallback">
+            <i class="fas fa-mobile-alt"></i>
+          </div>
+        <% } %>
+        <h2 class="shop-install-sheet__title" id="shopInstallTitle">Установка приложения</h2>
+        <p class="shop-install-sheet__text" id="shopInstallText"></p>
+        <div class="shop-install-loader hidden" id="shopInstallLoader" aria-hidden="true">
+          <div class="shop-install-loader__orbit">
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+          <div class="shop-install-loader__text">Ждем ответ Android браузера…</div>
+        </div>
+      </div>
+      <div class="shop-install-sheet__steps hidden" id="shopInstallSteps"></div>
+      <div class="shop-install-sheet__actions">
+        <button class="btn btn-primary hidden" id="shopInstallActionBtn" type="button">Установить</button>
+        <button class="btn btn-secondary" id="shopInstallContinueBtn" type="button">Отмена</button>
+      </div>
+      <div class="shop-install-sheet__hint hidden" id="shopInstallHint"></div>
+    </div>
+  </div>
+
   <div class="main-container shop-main shop-grid">
     <section class="page-col page-col-left">
       <%- include(leftPartial) %>
@@ -111,6 +149,7 @@
   <script>window.__shopLateUrl = "<%= assetUrl('/static/js/shop-late.js?v=20260422b') %>";window.__shopChatUrl = "<%= assetUrl('/static/js/shop-company-chat.js?typing_hotfix=14&v=20260412a') %>";</script>
   <script src="<%= assetUrl('/static/js/theme.js') %>" defer></script>
   <script src="<%= assetUrl('/static/js/appModal.js') %>" defer></script>
+  <script src="<%= assetUrl('/static/js/shop-pwa-presence.js?v=20260407a') %>" defer></script>
 
   <% if (Array.isArray(pageScripts)) { %>
     <% pageScripts.forEach(function (src) { %>
@@ -120,9 +159,7 @@
   <script>
     (function () {
       if ('serviceWorker' in navigator) {
-        window.addEventListener('load', function () {
-          navigator.serviceWorker.register('/sw.js?v=<%= encodeURIComponent(serviceWorkerVersion || appVersion || "") %>', { scope: '/' }).catch(function () {});
-        });
+        navigator.serviceWorker.register('/sw.js?v=<%= encodeURIComponent(serviceWorkerVersion || appVersion || "") %>', { scope: '/' }).catch(function () {});
       }
     })();
   </script>

@@ -424,6 +424,38 @@
 
   let selectedTenantDomainId = null;
 
+  let tenantPwaInstallTargets = [];
+  let tenantPwaInstallDevTargets = [];
+
+  let selectedTenantPwaTargetId = null;
+  let selectedTenantPwaDevTargetId = null;
+  let tenantPwaDesignerSourceMode = "prod";
+  let tenantPwaDesignerCardRatio = "1:1";
+  let tenantPwaDesignerBackgroundPresetId = "warm-sun";
+  let tenantPwaDesignerBackgroundGradientEnabled = true;
+  let tenantPwaDesignerBackgroundCustomColor = "";
+  let tenantPwaDesignerBackgroundImage = "";
+  let tenantPwaDesignerQrStyle = "square";
+  let tenantPwaDesignerQrColor = "#111827";
+  let tenantPwaDesignerActiveColorPicker = null;
+  let tenantPwaDesignerColorPickerDrag = null;
+  let tenantPwaDesignerCornerRadius = 30;
+  let tenantPwaDesignerBadgeText = "";
+  let tenantPwaDesignerUseSiteLogo = false;
+  let tenantPwaDesignerQrInstance = null;
+  let tenantPwaDesignerQrRenderMode = "styled";
+  let tenantPwaDesignerQrPreviewRenderSeq = 0;
+  let tenantPwaDesignerRenderRafId = 0;
+  let tenantPwaDesignerPreviewRafId = 0;
+  let tenantPwaDesignerExpanded = false;
+  let tenantPwaDesignerExpandedLayoutRafId = 0;
+  let tenantPwaDesignerExpandedStagePlaceholder = null;
+  let tenantPwaDesignerExpandedStageParent = null;
+  let tenantPwaDesignerExpandedStageNextSibling = null;
+  let tenantPwaDesignerBadgeEditing = false;
+  let tenantPwaDesignerBadgeSaveSeq = 0;
+  let tenantPwaDesignerBadgeCommitTs = 0;
+
   let runDomainStatusCheck = null;
 
   let domainEnabledDraft = null;
@@ -1714,7 +1746,7 @@
 
 
 
-        connectHint.textContent = "Автоподключение домена временно недоступно.";
+        connectHint.textContent = "\u0410\u0432\u0442\u043e\u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d\u0438\u0435 \u0434\u043e\u043c\u0435\u043d\u0430 \u0432\u0440\u0435\u043c\u0435\u043d\u043d\u043e \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u043e.";
 
 
 
@@ -1722,7 +1754,7 @@
 
 
 
-        connectHint.textContent = "Сначала нажмите «Проверить домен», затем «Подключить автоматически».";
+        connectHint.textContent = "\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u043d\u0430\u0436\u043c\u0438\u0442\u0435 \u00ab\u041f\u0440\u043e\u0432\u0435\u0440\u0438\u0442\u044c \u0434\u043e\u043c\u0435\u043d\u00bb, \u0437\u0430\u0442\u0435\u043c \u00ab\u041f\u043e\u0434\u043a\u043b\u044e\u0447\u0438\u0442\u044c \u0430\u0432\u0442\u043e\u043c\u0430\u0442\u0438\u0447\u0435\u0441\u043a\u0438\u00bb.";
 
 
 
@@ -1730,7 +1762,7 @@
 
 
 
-        connectHint.textContent = "Сначала сохраните домен и пропишите две A-записи.";
+        connectHint.textContent = "\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u0441\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u0435 \u0434\u043e\u043c\u0435\u043d \u0438 \u043f\u0440\u043e\u043f\u0438\u0448\u0438\u0442\u0435 \u0434\u0432\u0435 A-\u0437\u0430\u043f\u0438\u0441\u0438.";
 
 
 
@@ -1834,6 +1866,36 @@
 
 
 
+  function normalizeTenantPwaInstallTargets(value) {
+
+    if (!Array.isArray(value)) return [];
+
+    return value.map((item) => {
+
+      if (!item || typeof item !== "object") return null;
+
+      const id = String(item.id || "").trim();
+      const url = String(item.url || "").trim();
+      const host = String(item.host || "").trim().toLowerCase();
+      const label = String(item.label || item.host || "").trim();
+      const kind = String(item.kind || "").trim().toLowerCase() || "domain";
+      const domainId = Number(item.domain_id || 0) || null;
+
+      if (!id || !url || !host || !label) return null;
+
+      return {
+        id,
+        url,
+        host,
+        label,
+        kind,
+        domain_id: domainId
+      };
+
+    }).filter(Boolean);
+
+  }
+
   function getFirstEnabledTenantDomain() {
 
 
@@ -1926,6 +1988,2139 @@
 
 
 
+  function getDefaultTenantPwaInstallTarget() {
+
+    const selectedDomain = getSelectedTenantDomain();
+    const selectedDomainId = Number(selectedDomain && selectedDomain.id || 0) || 0;
+
+    if (selectedDomainId > 0) {
+      const preferred = tenantPwaInstallTargets.find((item) => item.id === `domain:${selectedDomainId}`);
+      if (preferred) return preferred;
+    }
+
+    return tenantPwaInstallTargets[0] || null;
+
+  }
+
+  function getSelectedTenantPwaInstallTarget() {
+
+    if (selectedTenantPwaTargetId) {
+      const selected = tenantPwaInstallTargets.find((item) => item.id === selectedTenantPwaTargetId);
+      if (selected) return selected;
+    }
+
+    return getDefaultTenantPwaInstallTarget();
+
+  }
+
+  function getDefaultTenantPwaDevInstallTarget() {
+
+    const tunnelTarget = tenantPwaInstallDevTargets.find((item) => item && item.kind === "dev-tunnel");
+    if (tunnelTarget) return tunnelTarget;
+
+    return tenantPwaInstallDevTargets[0] || null;
+
+  }
+
+  function getSelectedTenantPwaDevInstallTarget() {
+
+    if (selectedTenantPwaDevTargetId) {
+      const selected = tenantPwaInstallDevTargets.find((item) => item.id === selectedTenantPwaDevTargetId);
+      if (selected) return selected;
+    }
+
+    return getDefaultTenantPwaDevInstallTarget();
+
+  }
+
+  function syncSelectedTenantPwaInstallTarget() {
+
+    const selected = getSelectedTenantPwaInstallTarget();
+    selectedTenantPwaTargetId = selected ? selected.id : null;
+    return selected;
+
+  }
+
+  function syncSelectedTenantPwaDevInstallTarget() {
+
+    const selected = getSelectedTenantPwaDevInstallTarget();
+    selectedTenantPwaDevTargetId = selected ? selected.id : null;
+    return selected;
+
+  }
+
+  function syncTenantPwaTargetFromSelectedDomain() {
+
+    const selectedDomain = getSelectedTenantDomain();
+    const selectedDomainId = Number(selectedDomain && selectedDomain.id || 0) || 0;
+
+    if (selectedDomainId > 0) {
+      const matched = tenantPwaInstallTargets.find((item) => item.id === `domain:${selectedDomainId}`);
+      if (matched) {
+        selectedTenantPwaTargetId = matched.id;
+        return matched;
+      }
+    }
+
+    return syncSelectedTenantPwaInstallTarget();
+
+  }
+
+  const TENANT_PWA_QR_CARD_RATIOS = [
+    { id: "1:1", label: "1:1", widthUnits: 1, heightUnits: 1, exportWidth: 1080, exportHeight: 1080 },
+    { id: "1:2", label: "1:2", widthUnits: 1, heightUnits: 2, exportWidth: 1080, exportHeight: 2160 },
+    { id: "2:1", label: "2:1", widthUnits: 2, heightUnits: 1, exportWidth: 2160, exportHeight: 1080 },
+    { id: "3:4", label: "3:4", widthUnits: 3, heightUnits: 4, exportWidth: 1200, exportHeight: 1600 },
+    { id: "4:3", label: "4:3", widthUnits: 4, heightUnits: 3, exportWidth: 1600, exportHeight: 1200 },
+    { id: "9:16", label: "9:16", widthUnits: 9, heightUnits: 16, exportWidth: 1080, exportHeight: 1920 },
+    { id: "16:9", label: "16:9", widthUnits: 16, heightUnits: 9, exportWidth: 1600, exportHeight: 900 }
+  ];
+
+  const TENANT_PWA_QR_BG_PRESETS = [
+    { id: "warm-sun", label: "Теплый", swatch: "linear-gradient(135deg,#fff7ed 0%,#fdba74 100%)", fill: "linear-gradient(135deg,#fff7ed 0%,#fdba74 100%)", text: "#7c2d12", muted: "rgba(124,45,18,.72)", chipBg: "rgba(255,255,255,.62)", chipText: "#b45309" },
+    { id: "midnight", label: "Ночь", swatch: "linear-gradient(135deg,#0f172a 0%,#334155 100%)", fill: "linear-gradient(135deg,#0f172a 0%,#334155 100%)", text: "#f8fafc", muted: "rgba(248,250,252,.78)", chipBg: "rgba(255,255,255,.14)", chipText: "#e2e8f0" },
+    { id: "mint", label: "Mint", swatch: "linear-gradient(135deg,#ecfdf5 0%,#86efac 100%)", fill: "linear-gradient(135deg,#ecfdf5 0%,#86efac 100%)", text: "#14532d", muted: "rgba(20,83,45,.72)", chipBg: "rgba(255,255,255,.62)", chipText: "#15803d" },
+    { id: "berry", label: "Berry", swatch: "linear-gradient(135deg,#7f1d1d 0%,#fda4af 100%)", fill: "linear-gradient(135deg,#7f1d1d 0%,#fda4af 100%)", text: "#fff1f2", muted: "rgba(255,241,242,.82)", chipBg: "rgba(255,255,255,.14)", chipText: "#ffe4e6" },
+    { id: "sky", label: "Sky", swatch: "linear-gradient(135deg,#eff6ff 0%,#60a5fa 100%)", fill: "linear-gradient(135deg,#eff6ff 0%,#60a5fa 100%)", text: "#172554", muted: "rgba(23,37,84,.72)", chipBg: "rgba(255,255,255,.7)", chipText: "#1d4ed8" },
+    { id: "graphite", label: "Graphite", swatch: "linear-gradient(135deg,#111827 0%,#f97316 100%)", fill: "linear-gradient(135deg,#111827 0%,#f97316 100%)", text: "#fff7ed", muted: "rgba(255,247,237,.84)", chipBg: "rgba(255,255,255,.16)", chipText: "#fed7aa" }
+  ];
+
+  const TENANT_PWA_QR_COLOR_PRESETS = [
+    { id: "ink", label: "Ink", value: "#111827" },
+    { id: "orange", label: "Orange", value: "#ea580c" },
+    { id: "blue", label: "Blue", value: "#1d4ed8" },
+    { id: "green", label: "Green", value: "#15803d" },
+    { id: "rose", label: "Rose", value: "#be123c" },
+    { id: "violet", label: "Violet", value: "#6d28d9" }
+  ];
+
+  function findTenantPwaDesignerRatioConfig(id) {
+    return TENANT_PWA_QR_CARD_RATIOS.find((item) => item.id === id) || TENANT_PWA_QR_CARD_RATIOS[0];
+  }
+
+  function findTenantPwaDesignerBackgroundPreset(id) {
+    return TENANT_PWA_QR_BG_PRESETS.find((item) => item.id === id) || TENANT_PWA_QR_BG_PRESETS[0];
+  }
+
+  function ensureTenantPwaDesignerSourceMode() {
+    tenantPwaDesignerSourceMode = "prod";
+  }
+
+  function isTenantPwaInstallTargetHttps(item) {
+    const rawUrl = String(item && item.url || "").trim();
+    if (!rawUrl) return false;
+    try {
+      return new URL(rawUrl, window.location.origin).protocol === "https:";
+    } catch (_) {
+      return /^https:\/\//i.test(rawUrl);
+    }
+  }
+
+  function getTenantPwaDesignerTargets() {
+    return tenantPwaInstallTargets.filter(isTenantPwaInstallTargetHttps);
+  }
+
+  function getSelectedTenantPwaDesignerTarget() {
+    const targets = getTenantPwaDesignerTargets();
+    if (!targets.length) return null;
+    const selected = selectedTenantPwaTargetId
+      ? targets.find((item) => item.id === selectedTenantPwaTargetId)
+      : null;
+    if (selected) {
+      selectedTenantPwaTargetId = selected.id;
+      return selected;
+    }
+    const fallbackTarget = targets[0] || null;
+    selectedTenantPwaTargetId = fallbackTarget ? fallbackTarget.id : null;
+    return fallbackTarget;
+  }
+
+  function getTenantPwaDesignerLogoUrl() {
+    const tenantInfo = getTenantPwaDesignerTenantInfo();
+    return tenantPwaDesignerUseSiteLogo
+      ? String(tenantInfo.logoUrl || "").trim()
+      : "";
+  }
+
+  function isTenantPwaDesignerPanelVisible() {
+    const panelEl = document.getElementById("settingsPwaQrPanel");
+    return !!(panelEl && !panelEl.classList.contains("hidden"));
+  }
+
+  function setTenantPwaDesignerQrLoading(containerEl) {
+    if (!containerEl) return;
+    containerEl.innerHTML = "";
+    containerEl.classList.remove("is-empty");
+    containerEl.classList.add("is-loading");
+  }
+
+  function setTenantPwaDesignerQrEmpty(containerEl) {
+    if (!containerEl) return;
+    containerEl.innerHTML = "";
+    containerEl.classList.remove("is-loading");
+    containerEl.classList.add("is-empty");
+  }
+
+  function isTenantPwaDesignerDesktopExpandedMode() {
+    return !window
+      || !window.matchMedia
+      || window.matchMedia("(min-width: 769px)").matches;
+  }
+
+  function getTenantPwaDesignerExpandedViewportBounds() {
+    if (!window || !document) return null;
+    if (!isTenantPwaDesignerDesktopExpandedMode()) {
+      const headerHeight = Math.max(
+        0,
+        parseFloat(window.getComputedStyle(document.documentElement).getPropertyValue("--header-height")) || 0
+      );
+      const top = Math.round(Math.max(0, headerHeight));
+      return {
+        overlay: {
+          left: 0,
+          top,
+          width: Math.max(320, window.innerWidth),
+          height: Math.max(320, window.innerHeight - top)
+        },
+        focus: {
+          left: 0,
+          top,
+          width: Math.max(320, window.innerWidth),
+          height: Math.max(320, window.innerHeight - top)
+        }
+      };
+    }
+    const sidebarEl = document.querySelector(".app-sidebar");
+    const leftColEl = document.querySelector(".page-col-left");
+    const centerColEl = document.querySelector(".page-col-center");
+    if (!leftColEl || !centerColEl) return null;
+    const sidebarRect = sidebarEl && typeof sidebarEl.getBoundingClientRect === "function"
+      ? sidebarEl.getBoundingClientRect()
+      : null;
+    const leftRect = leftColEl.getBoundingClientRect();
+    const centerRect = centerColEl.getBoundingClientRect();
+    const inset = 10;
+    const overlayLeft = Math.round(Math.max(12, ((sidebarRect && sidebarRect.left) || leftRect.left) + inset));
+    const overlayTop = Math.round(
+      Math.max(12, Math.min((sidebarRect && sidebarRect.top) || leftRect.top, leftRect.top, centerRect.top) + inset)
+    );
+    const overlayRight = Math.round(Math.min(window.innerWidth - 12, centerRect.right - inset));
+    const overlayBottom = Math.round(
+      Math.min(
+        window.innerHeight - 12,
+        Math.max((sidebarRect && sidebarRect.bottom) || leftRect.bottom, leftRect.bottom, centerRect.bottom) - inset
+      )
+    );
+    const focusLeft = Math.round(Math.max(12, leftRect.left + inset));
+    const focusTop = Math.round(Math.max(12, Math.min(leftRect.top, centerRect.top) + inset));
+    const focusRight = Math.round(Math.min(window.innerWidth - 12, centerRect.right - inset));
+    const focusBottom = Math.round(Math.min(window.innerHeight - 12, Math.max(leftRect.bottom, centerRect.bottom) - inset));
+    return {
+      overlay: {
+        left: overlayLeft,
+        top: overlayTop,
+        width: Math.max(320, overlayRight - overlayLeft),
+        height: Math.max(320, overlayBottom - overlayTop)
+      },
+      focus: {
+        left: focusLeft,
+        top: focusTop,
+        width: Math.max(320, focusRight - focusLeft),
+        height: Math.max(320, focusBottom - focusTop)
+      }
+    };
+  }
+
+  function setTenantPwaDesignerExpandedLayerVisibility(visible) {
+    const layerEl = ensureTenantPwaDesignerExpandedLayerMounted();
+    const triggerEl = document.getElementById("tenantQrDesignerStage");
+    if (!layerEl) return;
+    layerEl.classList.toggle("hidden", !visible);
+    layerEl.setAttribute("aria-hidden", visible ? "false" : "true");
+    if (triggerEl) {
+      triggerEl.setAttribute("aria-expanded", visible ? "true" : "false");
+      triggerEl.setAttribute("aria-label", visible
+        ? "\u0417\u0430\u043a\u0440\u044b\u0442\u044c \u0443\u0432\u0435\u043b\u0438\u0447\u0435\u043d\u043d\u043e\u0435 \u043f\u0440\u0435\u0432\u044c\u044e QR"
+        : "\u041e\u0442\u043a\u0440\u044b\u0442\u044c \u0443\u0432\u0435\u043b\u0438\u0447\u0435\u043d\u043d\u043e\u0435 \u043f\u0440\u0435\u0432\u044c\u044e QR");
+      triggerEl.setAttribute("title", visible
+        ? "\u0421\u0432\u0435\u0440\u043d\u0443\u0442\u044c \u043f\u0440\u0435\u0432\u044c\u044e"
+        : "\u0423\u0432\u0435\u043b\u0438\u0447\u0438\u0442\u044c \u043f\u0440\u0435\u0432\u044c\u044e");
+    }
+  }
+
+  function ensureTenantPwaDesignerExpandedLayerMounted() {
+    const layerEl = document.getElementById("tenantQrDesignerExpandedLayer");
+    if (!layerEl || !document || !document.body) return layerEl;
+    if (layerEl.parentElement !== document.body) {
+      document.body.appendChild(layerEl);
+    }
+    return layerEl;
+  }
+
+  function clearTenantPwaDesignerExpandedMirror() {
+    restoreTenantPwaDesignerExpandedLiveStage();
+    const shellEl = document.getElementById("tenantQrDesignerExpandedShell");
+    if (!shellEl) return;
+    shellEl.querySelectorAll('.tenant-qr-card-stage.is-expanded').forEach((node) => node.remove());
+  }
+
+  function buildTenantPwaDesignerStagePlaceholder(stageEl) {
+    if (!stageEl || typeof document === "undefined") return null;
+    const placeholder = stageEl.cloneNode(true);
+    placeholder.removeAttribute("id");
+    placeholder.removeAttribute("role");
+    placeholder.removeAttribute("tabindex");
+    placeholder.removeAttribute("title");
+    placeholder.setAttribute("aria-hidden", "true");
+    placeholder.classList.remove("is-expanded");
+    placeholder.classList.remove("tenant-qr-card-stage--trigger");
+    placeholder.classList.add("tenant-qr-card-stage--placeholder");
+    placeholder.querySelectorAll("[id]").forEach((node) => node.removeAttribute("id"));
+    placeholder.querySelectorAll("[role]").forEach((node) => node.removeAttribute("role"));
+    placeholder.querySelectorAll("[tabindex]").forEach((node) => node.removeAttribute("tabindex"));
+    placeholder.querySelectorAll("[aria-label]").forEach((node) => node.removeAttribute("aria-label"));
+    placeholder.querySelectorAll("[title]").forEach((node) => node.removeAttribute("title"));
+    const sourceCanvases = Array.from(stageEl.querySelectorAll("canvas"));
+    const targetCanvases = Array.from(placeholder.querySelectorAll("canvas"));
+    sourceCanvases.forEach((sourceCanvas, index) => {
+      const targetCanvas = targetCanvases[index];
+      if (!targetCanvas) return;
+      const clonedCanvasImage = cloneTenantPwaDesignerCanvasAsImageNode(sourceCanvas);
+      if (clonedCanvasImage && targetCanvas.parentNode) {
+        targetCanvas.parentNode.replaceChild(clonedCanvasImage, targetCanvas);
+        return;
+      }
+      const context = typeof targetCanvas.getContext === "function" ? targetCanvas.getContext("2d") : null;
+      if (!context) return;
+      try {
+        context.clearRect(0, 0, targetCanvas.width, targetCanvas.height);
+        context.drawImage(sourceCanvas, 0, 0);
+      } catch (_) {}
+    });
+    return placeholder;
+  }
+
+  function moveTenantPwaDesignerStageToExpandedShell() {
+    const stageEl = document.getElementById("tenantQrDesignerStage");
+    const shellEl = document.getElementById("tenantQrDesignerExpandedShell");
+    if (!stageEl || !shellEl) return null;
+    if (stageEl.parentElement !== shellEl) {
+      tenantPwaDesignerExpandedStageParent = stageEl.parentElement || null;
+      tenantPwaDesignerExpandedStageNextSibling = stageEl.nextSibling || null;
+      if (tenantPwaDesignerExpandedStageParent) {
+        const placeholder = buildTenantPwaDesignerStagePlaceholder(stageEl) || document.createElement("div");
+        if (!placeholder.classList.contains("tenant-qr-card-stage")) {
+          placeholder.className = "tenant-qr-card-stage tenant-qr-card-stage--placeholder";
+          const rect = stageEl.getBoundingClientRect();
+          if (rect.width > 0) placeholder.style.width = `${Math.round(rect.width)}px`;
+          if (rect.height > 0) placeholder.style.height = `${Math.round(rect.height)}px`;
+        }
+        tenantPwaDesignerExpandedStageParent.insertBefore(placeholder, stageEl);
+        tenantPwaDesignerExpandedStagePlaceholder = placeholder;
+      }
+      shellEl.appendChild(stageEl);
+    }
+    stageEl.classList.add("is-expanded");
+    stageEl.classList.remove("tenant-qr-card-stage--trigger");
+    stageEl.setAttribute("aria-hidden", "true");
+    return stageEl;
+  }
+
+  function restoreTenantPwaDesignerExpandedLiveStage() {
+    const stageEl = document.getElementById("tenantQrDesignerStage");
+    const shellEl = document.getElementById("tenantQrDesignerExpandedShell");
+    if (stageEl && shellEl && stageEl.parentElement === shellEl && tenantPwaDesignerExpandedStageParent) {
+      if (tenantPwaDesignerExpandedStageNextSibling && tenantPwaDesignerExpandedStageNextSibling.parentNode === tenantPwaDesignerExpandedStageParent) {
+        tenantPwaDesignerExpandedStageParent.insertBefore(stageEl, tenantPwaDesignerExpandedStageNextSibling);
+      } else {
+        tenantPwaDesignerExpandedStageParent.appendChild(stageEl);
+      }
+      stageEl.classList.remove("is-expanded");
+      stageEl.classList.add("tenant-qr-card-stage--trigger");
+      stageEl.removeAttribute("aria-hidden");
+    }
+    if (tenantPwaDesignerExpandedStagePlaceholder) {
+      tenantPwaDesignerExpandedStagePlaceholder.remove();
+    }
+    tenantPwaDesignerExpandedStagePlaceholder = null;
+    tenantPwaDesignerExpandedStageParent = null;
+    tenantPwaDesignerExpandedStageNextSibling = null;
+  }
+
+  function cloneTenantPwaDesignerCanvasNode(sourceCanvas) {
+    if (!sourceCanvas || typeof document === "undefined") return null;
+    const clonedCanvas = document.createElement("canvas");
+    clonedCanvas.className = sourceCanvas.className;
+    clonedCanvas.style.cssText = sourceCanvas.style.cssText;
+    clonedCanvas.width = Number(sourceCanvas.width) || 0;
+    clonedCanvas.height = Number(sourceCanvas.height) || 0;
+    Object.keys(sourceCanvas.dataset || {}).forEach((key) => {
+      clonedCanvas.dataset[key] = sourceCanvas.dataset[key];
+    });
+    const context = typeof clonedCanvas.getContext === "function" ? clonedCanvas.getContext("2d") : null;
+    if (context) {
+      try {
+        context.clearRect(0, 0, clonedCanvas.width, clonedCanvas.height);
+        context.drawImage(sourceCanvas, 0, 0);
+      } catch (_) {}
+    }
+    return clonedCanvas;
+  }
+
+  function cloneTenantPwaDesignerCanvasAsImageNode(sourceCanvas) {
+    if (!sourceCanvas || typeof document === "undefined") return null;
+    try {
+      const dataUrl = sourceCanvas.toDataURL("image/png");
+      if (!dataUrl) return null;
+      const imgEl = document.createElement("img");
+      imgEl.className = sourceCanvas.className;
+      imgEl.style.cssText = sourceCanvas.style.cssText;
+      imgEl.setAttribute("data-tenant-qr-render", "1");
+      imgEl.alt = "";
+      imgEl.src = dataUrl;
+      return imgEl;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function buildTenantPwaDesignerExpandedMountChildren(sourceMount) {
+    if (!sourceMount || typeof document === "undefined") return null;
+    const fragment = document.createDocumentFragment();
+    Array.from(sourceMount.childNodes || []).forEach((childNode) => {
+      if (childNode && childNode.nodeType === Node.ELEMENT_NODE && childNode.tagName === "CANVAS") {
+        const clonedCanvasImage = cloneTenantPwaDesignerCanvasAsImageNode(childNode);
+        if (clonedCanvasImage) {
+          fragment.appendChild(clonedCanvasImage);
+          return;
+        }
+        const clonedCanvas = cloneTenantPwaDesignerCanvasNode(childNode);
+        if (clonedCanvas) {
+          fragment.appendChild(clonedCanvas);
+          return;
+        }
+        return;
+      }
+      fragment.appendChild(childNode.cloneNode(true));
+    });
+    return fragment;
+  }
+
+  function syncTenantPwaDesignerExpandedQrMount(sourceMount, targetMount) {
+    if (!sourceMount || !targetMount) return false;
+    if (sourceMount.classList.contains("is-loading")) return false;
+    targetMount.className = sourceMount.className;
+    targetMount.style.cssText = sourceMount.style.cssText;
+    const fragment = buildTenantPwaDesignerExpandedMountChildren(sourceMount);
+    if (!fragment) return false;
+    targetMount.replaceChildren(fragment);
+    const sourceCanvas = sourceMount.querySelector("canvas");
+    const targetCanvas = targetMount.querySelector("canvas");
+    if (sourceCanvas && targetCanvas) {
+      const sourceBlank = isTenantQrCanvasLikelyBlank(sourceCanvas);
+      const targetBlank = isTenantQrCanvasLikelyBlank(targetCanvas);
+      if (!sourceBlank && targetBlank) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  function syncTenantPwaDesignerExpandedMirrorContent(sourceStage, targetStage) {
+    if (!sourceStage || !targetStage) return targetStage;
+    const preservedStageGeometry = {
+      left: targetStage.style.left,
+      top: targetStage.style.top,
+      width: targetStage.style.width,
+      height: targetStage.style.height,
+      transform: targetStage.style.transform
+    };
+    targetStage.style.cssText = sourceStage.style.cssText;
+    if (preservedStageGeometry.left) targetStage.style.left = preservedStageGeometry.left;
+    if (preservedStageGeometry.top) targetStage.style.top = preservedStageGeometry.top;
+    if (preservedStageGeometry.width) targetStage.style.width = preservedStageGeometry.width;
+    if (preservedStageGeometry.height) targetStage.style.height = preservedStageGeometry.height;
+    if (preservedStageGeometry.transform) targetStage.style.transform = preservedStageGeometry.transform;
+    targetStage.className = "tenant-qr-card-stage is-expanded";
+
+    const sourceCard = sourceStage.querySelector(".tenant-qr-card");
+    const targetCard = targetStage.querySelector(".tenant-qr-card");
+    if (sourceCard && targetCard) {
+      targetCard.className = sourceCard.className;
+      targetCard.style.cssText = sourceCard.style.cssText;
+    }
+
+    const sourceBg = sourceStage.querySelector(".tenant-qr-card__bg");
+    const targetBg = targetStage.querySelector(".tenant-qr-card__bg");
+    if (sourceBg && targetBg) {
+      targetBg.className = sourceBg.className;
+      targetBg.style.cssText = sourceBg.style.cssText;
+    }
+
+    const sourceContent = sourceStage.querySelector(".tenant-qr-card__content");
+    const targetContent = targetStage.querySelector(".tenant-qr-card__content");
+    if (sourceContent && targetContent) {
+      targetContent.className = sourceContent.className;
+      targetContent.style.cssText = sourceContent.style.cssText;
+    }
+
+    const sourceLayout = sourceStage.querySelector(".tenant-qr-card__layout");
+    const targetLayout = targetStage.querySelector(".tenant-qr-card__layout");
+    if (sourceLayout && targetLayout) {
+      targetLayout.className = sourceLayout.className;
+      targetLayout.style.cssText = sourceLayout.style.cssText;
+    }
+
+    const syncTextNode = (selector) => {
+      const sourceEl = sourceStage.querySelector(selector);
+      const targetEl = targetStage.querySelector(selector);
+      if (!sourceEl || !targetEl) return;
+      targetEl.className = sourceEl.className;
+      targetEl.style.cssText = sourceEl.style.cssText;
+      targetEl.textContent = sourceEl.textContent;
+    };
+    syncTextNode(".tenant-qr-card__eyebrow");
+    syncTextNode(".tenant-qr-card__title");
+    syncTextNode(".tenant-qr-card__domain");
+
+    const sourceShell = sourceStage.querySelector(".tenant-qr-card__qr-shell");
+    const targetShell = targetStage.querySelector(".tenant-qr-card__qr-shell");
+    if (sourceShell && targetShell) {
+      targetShell.className = sourceShell.className;
+      targetShell.style.cssText = sourceShell.style.cssText;
+    }
+
+    const sourceMount = sourceStage.querySelector(".tenant-qr-card__qr");
+    const targetMount = targetStage.querySelector(".tenant-qr-card__qr");
+    if (sourceMount && targetMount) {
+      const clonedOk = syncTenantPwaDesignerExpandedQrMount(sourceMount, targetMount);
+      if (!clonedOk) {
+        const selectedTarget = getSelectedTenantPwaDesignerTarget();
+        const qrUrl = selectedTarget && selectedTarget.url ? String(selectedTarget.url) : "";
+        if (qrUrl) {
+          const displaySize = getTenantPwaDesignerQrPreviewSize(targetMount);
+          renderTenantPwaQrImage(targetMount, qrUrl, {
+            displaySize,
+            renderScale: 1,
+            colorDark: tenantPwaDesignerQrColor,
+            logoUrl: getTenantPwaDesignerLogoUrl()
+          });
+        }
+      }
+    }
+
+    return targetStage;
+  }
+
+  function syncTenantPwaDesignerExpandedMirror() {
+    const stageEl = document.getElementById("tenantQrDesignerStage");
+    const shellEl = document.getElementById("tenantQrDesignerExpandedShell");
+    if (!stageEl || !shellEl) return null;
+    let cloneEl = shellEl.querySelector('.tenant-qr-card-stage.is-expanded');
+    if (!cloneEl) {
+      cloneEl = stageEl.cloneNode(true);
+      cloneEl.removeAttribute("id");
+      cloneEl.removeAttribute("role");
+      cloneEl.removeAttribute("tabindex");
+      cloneEl.removeAttribute("title");
+      cloneEl.setAttribute("aria-hidden", "true");
+      cloneEl.classList.remove("tenant-qr-card-stage--trigger");
+      cloneEl.classList.add("is-expanded");
+      cloneEl.querySelectorAll("[id]").forEach((node) => node.removeAttribute("id"));
+      cloneEl.querySelectorAll("[role]").forEach((node) => node.removeAttribute("role"));
+      cloneEl.querySelectorAll("[tabindex]").forEach((node) => node.removeAttribute("tabindex"));
+      cloneEl.querySelectorAll("[aria-label]").forEach((node) => node.removeAttribute("aria-label"));
+      cloneEl.querySelectorAll("[title]").forEach((node) => node.removeAttribute("title"));
+      shellEl.appendChild(cloneEl);
+    }
+    return syncTenantPwaDesignerExpandedMirrorContent(stageEl, cloneEl);
+  }
+
+  function closeTenantPwaDesignerExpanded() {
+    tenantPwaDesignerExpanded = false;
+    if (tenantPwaDesignerExpandedLayoutRafId && window && typeof window.cancelAnimationFrame === "function") {
+      window.cancelAnimationFrame(tenantPwaDesignerExpandedLayoutRafId);
+      tenantPwaDesignerExpandedLayoutRafId = 0;
+    }
+    const layerEl = document.getElementById("tenantQrDesignerExpandedLayer");
+    const shellEl = document.getElementById("tenantQrDesignerExpandedShell");
+    if (layerEl) {
+      layerEl.style.left = "";
+      layerEl.style.top = "";
+      layerEl.style.width = "";
+      layerEl.style.height = "";
+    }
+    if (shellEl) {
+      shellEl.style.left = "";
+      shellEl.style.top = "";
+      shellEl.style.width = "";
+      shellEl.style.height = "";
+    }
+    clearTenantPwaDesignerExpandedMirror();
+    setTenantPwaDesignerExpandedLayerVisibility(false);
+  }
+
+  function openTenantPwaDesignerExpanded() {
+    const selectedTarget = getSelectedTenantPwaDesignerTarget();
+    if (!selectedTarget || !selectedTarget.url || !isTenantPwaDesignerPanelVisible()) return;
+    tenantPwaDesignerExpanded = true;
+    setTenantPwaDesignerExpandedLayerVisibility(true);
+    renderTenantPwaDesigner();
+  }
+
+  function syncTenantPwaDesignerExpandedLayout() {
+    const layerEl = ensureTenantPwaDesignerExpandedLayerMounted();
+    const viewportEl = document.getElementById("tenantQrDesignerExpandedViewport");
+    const shellEl = document.getElementById("tenantQrDesignerExpandedShell");
+    const stageEl = document.getElementById("tenantQrDesignerStage");
+    if (!tenantPwaDesignerExpanded || !layerEl || !viewportEl || !shellEl || !stageEl) return null;
+    const expandedStageEl = shellEl.querySelector('.tenant-qr-card-stage.is-expanded') || syncTenantPwaDesignerExpandedMirror();
+    if (!expandedStageEl) return null;
+    const bounds = getTenantPwaDesignerExpandedViewportBounds();
+    if (!bounds) return null;
+    const isDesktop = isTenantPwaDesignerDesktopExpandedMode();
+    layerEl.classList.toggle("is-mobile", !isDesktop);
+    layerEl.style.left = `${bounds.overlay.left}px`;
+    layerEl.style.top = `${bounds.overlay.top}px`;
+    layerEl.style.width = `${bounds.overlay.width}px`;
+    layerEl.style.height = `${bounds.overlay.height}px`;
+    if (shellEl) {
+      shellEl.style.left = "50%";
+      shellEl.style.top = "50%";
+    }
+    const viewportRect = viewportEl.getBoundingClientRect();
+    const availableWidth = Math.max(
+      260,
+      (isDesktop ? bounds.focus.width : viewportRect.width) - (isDesktop ? 72 : 32)
+    );
+    const availableHeight = Math.max(
+      260,
+      (isDesktop ? bounds.focus.height : viewportRect.height) - (isDesktop ? 72 : 96)
+    );
+    const naturalWidth = Math.max(1, Number(stageEl.offsetWidth) || 1);
+    const naturalHeight = Math.max(1, Number(stageEl.offsetHeight) || 1);
+    const scale = Math.max(1, Math.min(availableWidth / naturalWidth, availableHeight / naturalHeight));
+    shellEl.style.width = `${Math.round(naturalWidth * scale)}px`;
+    shellEl.style.height = `${Math.round(naturalHeight * scale)}px`;
+    expandedStageEl.style.left = "50%";
+    expandedStageEl.style.top = "50%";
+    expandedStageEl.style.width = `${naturalWidth}px`;
+    expandedStageEl.style.height = `${naturalHeight}px`;
+    expandedStageEl.style.transform = `translate(-50%, -50%) scale(${scale})`;
+    return { maxWidth: availableWidth, maxHeight: availableHeight, scale };
+  }
+
+  function scheduleTenantPwaDesignerExpandedLayoutSync() {
+    if (tenantPwaDesignerExpandedLayoutRafId && window && typeof window.cancelAnimationFrame === "function") {
+      window.cancelAnimationFrame(tenantPwaDesignerExpandedLayoutRafId);
+      tenantPwaDesignerExpandedLayoutRafId = 0;
+    }
+    if (!tenantPwaDesignerExpanded) return;
+    if (!window || typeof window.requestAnimationFrame !== "function") {
+      syncTenantPwaDesignerExpandedLayout();
+      return;
+    }
+    tenantPwaDesignerExpandedLayoutRafId = window.requestAnimationFrame(() => {
+      tenantPwaDesignerExpandedLayoutRafId = 0;
+      syncTenantPwaDesignerExpandedLayout();
+    });
+  }
+
+  function applyTenantPwaDesignerCardState(cardEl, bgEl, titleEl, eyebrowEl, domainEl, tenantInfo, domainText, options = {}) {
+    if (!cardEl || !bgEl) return;
+    const safeTenantInfo = tenantInfo && typeof tenantInfo === "object" ? tenantInfo : getTenantPwaDesignerTenantInfo();
+    applyTenantPwaDesignerCardRatio(cardEl, options);
+    applyTenantPwaDesignerCardBackground(cardEl, bgEl);
+    if (eyebrowEl) {
+      const textEl = eyebrowEl.querySelector(".tenant-qr-card__eyebrow-text");
+      const badgeText = getTenantPwaDesignerBadgeText();
+      if (textEl) textEl.textContent = badgeText;
+      else eyebrowEl.textContent = badgeText;
+    }
+    if (titleEl) titleEl.textContent = safeTenantInfo.title;
+    if (domainEl) {
+      domainEl.textContent = "";
+      domainEl.hidden = true;
+    }
+    if (window && typeof window.requestAnimationFrame === "function") {
+      window.requestAnimationFrame(() => {
+        fitTenantPwaDesignerEyebrow(cardEl, eyebrowEl);
+        fitTenantPwaDesignerTitle(cardEl, titleEl);
+      });
+    }
+  }
+
+  function scheduleTenantPwaDesignerPreviewRender(containerEl, url) {
+    if (!containerEl) return;
+    if (tenantPwaDesignerPreviewRafId && window && typeof window.cancelAnimationFrame === "function") {
+      window.cancelAnimationFrame(tenantPwaDesignerPreviewRafId);
+      tenantPwaDesignerPreviewRafId = 0;
+    }
+    setTenantPwaDesignerQrLoading(containerEl);
+    const runPreviewRender = () => {
+      tenantPwaDesignerPreviewRafId = 0;
+      if (!isTenantPwaDesignerPanelVisible()) return;
+      const rendered = renderTenantPwaDesignerQrPreview(containerEl, url);
+      containerEl.classList.toggle("is-loading", !rendered);
+      if (tenantPwaDesignerExpanded) {
+        syncTenantPwaDesignerExpandedMirror();
+        scheduleTenantPwaDesignerExpandedLayoutSync();
+      }
+    };
+    if (!window || typeof window.requestAnimationFrame !== "function") {
+      window.setTimeout(runPreviewRender, 0);
+      return;
+    }
+    tenantPwaDesignerPreviewRafId = window.requestAnimationFrame(() => {
+      tenantPwaDesignerPreviewRafId = window.requestAnimationFrame(runPreviewRender);
+    });
+  }
+
+  function scheduleTenantPwaDesignerRender() {
+    if (tenantPwaDesignerRenderRafId && window && typeof window.cancelAnimationFrame === "function") {
+      window.cancelAnimationFrame(tenantPwaDesignerRenderRafId);
+      tenantPwaDesignerRenderRafId = 0;
+    }
+    if (!window || typeof window.requestAnimationFrame !== "function") {
+      renderTenantPwaDesigner();
+      return;
+    }
+    tenantPwaDesignerRenderRafId = window.requestAnimationFrame(() => {
+      tenantPwaDesignerRenderRafId = 0;
+      renderTenantPwaDesigner();
+    });
+  }
+
+  function getTenantPwaDesignerTenantInfo() {
+    const tenant = typeof getAuthTenant === "function" ? getAuthTenant() : null;
+    const siteNameInput = document.querySelector('[data-site-input="site_name"]');
+    const liveSiteName = String((siteNameInput && siteNameInput.value) || "").trim();
+    const readTenantAssetInputValue = (key) => {
+      const input = document.querySelector(`[data-tenant-input="${key}"]`);
+      return String((input && input.value) || "").trim();
+    };
+    const title = liveSiteName
+      || String((tenant && (tenant.site_name || tenant.name)) || "").trim()
+      || "Витрина";
+    const logoUrl = String(
+      readTenantAssetInputValue("apple_touch_icon_url")
+      || readTenantAssetInputValue("logo_light_url")
+      || readTenantAssetInputValue("logo_dark_url")
+      || readTenantAssetInputValue("favicon_light_url")
+      || readTenantAssetInputValue("favicon_dark_url")
+      || (tenant && (
+        tenant.apple_touch_icon_url
+        || tenant.logo_light_url
+        || tenant.logo_dark_url
+        || tenant.favicon_light_url
+        || tenant.favicon_dark_url
+      )) || ""
+    ).trim();
+    return { title, logoUrl };
+  }
+
+  function escapeCssUrlValue(value) {
+    return String(value || "").replace(/"/g, '\\"');
+  }
+
+  function sanitizeTenantPwaDesignerFileName(value) {
+    const raw = String(value || "").trim().toLowerCase();
+    return raw
+      .replace(/[^a-zа-я0-9-_]+/gi, "-")
+      .replace(/^-+|-+$/g, "")
+      || "qr-card";
+  }
+
+  function readImageFileAsDataUrl(file) {
+    return new Promise((resolve, reject) => {
+      if (!file) {
+        resolve("");
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = () => reject(reader.error || new Error("READ_FILE_FAILED"));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function waitForTenantPwaQrImageAssets(rootEl, timeoutMs = 1800) {
+    if (!rootEl || typeof rootEl.querySelectorAll !== "function") {
+      return Promise.resolve();
+    }
+    const pendingImages = Array.from(rootEl.querySelectorAll("img")).filter((img) => (
+      img
+      && !(img.complete && Number(img.naturalWidth || 0) > 0)
+    ));
+    if (!pendingImages.length) {
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      let isResolved = false;
+      const finish = () => {
+        if (isResolved) return;
+        isResolved = true;
+        resolve();
+      };
+      const timeoutId = window.setTimeout(finish, Math.max(200, Number(timeoutMs) || 1800));
+      let remaining = pendingImages.length;
+      const handleDone = () => {
+        remaining -= 1;
+        if (remaining <= 0) {
+          window.clearTimeout(timeoutId);
+          finish();
+        }
+      };
+      pendingImages.forEach((img) => {
+        img.addEventListener("load", handleDone, { once: true });
+        img.addEventListener("error", handleDone, { once: true });
+      });
+    });
+  }
+
+  function downloadBlob(blob, fileName) {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  function downloadDataUrl(dataUrl, fileName) {
+    const link = document.createElement("a");
+    link.href = dataUrl;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  }
+
+  function buildTenantQrTransparentDataUrlFromCanvas(canvasEl) {
+    if (!canvasEl || typeof canvasEl.getContext !== "function") return "";
+    const width = Math.max(1, Number(canvasEl.width) || 0);
+    const height = Math.max(1, Number(canvasEl.height) || 0);
+    if (!width || !height) return "";
+    const outCanvas = document.createElement("canvas");
+    outCanvas.width = width;
+    outCanvas.height = height;
+    const ctx = outCanvas.getContext("2d");
+    if (!ctx) return "";
+    ctx.clearRect(0, 0, width, height);
+    ctx.drawImage(canvasEl, 0, 0, width, height);
+    let imageData;
+    try {
+      imageData = ctx.getImageData(0, 0, width, height);
+    } catch (_) {
+      return outCanvas.toDataURL("image/png");
+    }
+    const data = imageData.data;
+    let visiblePixels = 0;
+    let minLum = 255;
+    let maxLum = 0;
+    const totalPixels = Math.max(1, Math.floor(data.length / 4));
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i];
+      const g = data[i + 1];
+      const b = data[i + 2];
+      const a = data[i + 3];
+      if (a === 0) continue;
+      if (r >= 246 && g >= 246 && b >= 246) {
+        data[i + 3] = 0;
+        continue;
+      }
+      visiblePixels += 1;
+      const lum = Math.round((r * 0.299) + (g * 0.587) + (b * 0.114));
+      if (lum < minLum) minLum = lum;
+      if (lum > maxLum) maxLum = lum;
+    }
+    // If transparency conversion removed too much (or almost no contrast left),
+    // signal caller to fallback to a visible non-transparent export.
+    if ((visiblePixels / totalPixels) < 0.015 || (maxLum - minLum) < 10) {
+      return "";
+    }
+    ctx.putImageData(imageData, 0, 0);
+    return outCanvas.toDataURL("image/png");
+  }
+
+  function buildTenantQrTransparentDataUrlFromImage(imageEl) {
+    if (!imageEl || !imageEl.src) return "";
+    const width = Math.max(1, Number(imageEl.naturalWidth || imageEl.width) || 0);
+    const height = Math.max(1, Number(imageEl.naturalHeight || imageEl.height) || 0);
+    if (!width || !height) return "";
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return "";
+    ctx.clearRect(0, 0, width, height);
+    ctx.drawImage(imageEl, 0, 0, width, height);
+    return buildTenantQrTransparentDataUrlFromCanvas(canvas);
+  }
+
+  function isTenantQrCanvasLikelyBlank(canvasEl) {
+    if (!canvasEl || typeof canvasEl.getContext !== "function") return true;
+    const width = Math.max(1, Number(canvasEl.width) || 0);
+    const height = Math.max(1, Number(canvasEl.height) || 0);
+    if (!width || !height) return true;
+    const ctx = canvasEl.getContext("2d");
+    if (!ctx) return true;
+    let imageData;
+    try {
+      imageData = ctx.getImageData(0, 0, width, height);
+    } catch (_) {
+      return false;
+    }
+    const data = imageData.data;
+    const totalPixels = Math.max(1, Math.floor(data.length / 4));
+    let visiblePixels = 0;
+    let minLum = 255;
+    let maxLum = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      const a = data[i + 3];
+      if (a < 8) continue;
+      visiblePixels += 1;
+      const lum = Math.round((data[i] * 0.299) + (data[i + 1] * 0.587) + (data[i + 2] * 0.114));
+      if (lum < minLum) minLum = lum;
+      if (lum > maxLum) maxLum = lum;
+    }
+    if (visiblePixels / totalPixels < 0.01) return true;
+    return (maxLum - minLum) < 8;
+  }
+
+  function getTenantQrRenderedNodes(rootEl) {
+    if (!rootEl || typeof rootEl.querySelector !== "function") {
+      return { canvasEl: null, imageEl: null };
+    }
+    const renderEl = rootEl.querySelector('[data-tenant-qr-render="1"]');
+    const canvasEl = renderEl && renderEl.tagName === "CANVAS"
+      ? renderEl
+      : rootEl.querySelector("canvas");
+    const imageEl = renderEl && renderEl.tagName === "IMG"
+      ? renderEl
+      : rootEl.querySelector('img[data-tenant-qr-render="1"], img');
+    return { canvasEl, imageEl };
+  }
+
+  async function waitForTenantQrVisibleRender(rootEl, timeoutMs = 2200) {
+    const deadline = Date.now() + Math.max(400, Number(timeoutMs) || 2200);
+    while (Date.now() < deadline) {
+      const { canvasEl, imageEl } = getTenantQrRenderedNodes(rootEl);
+      if (canvasEl && !isTenantQrCanvasLikelyBlank(canvasEl)) return true;
+      if (imageEl && imageEl.complete && Number(imageEl.naturalWidth || 0) > 0) return true;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    return false;
+  }
+
+  function pulseTenantPwaDesignerButton(btn, html) {
+    if (!btn || !html) return;
+    const original = btn.innerHTML;
+    btn.innerHTML = html;
+    setTimeout(() => {
+      btn.innerHTML = original;
+    }, 1400);
+  }
+
+  function getTenantPwaDesignerBackgroundBaseColor(presetId) {
+    switch (String(presetId || "").trim()) {
+      case "midnight":
+        return "#334155";
+      case "mint":
+        return "#86efac";
+      case "berry":
+        return "#fb7185";
+      case "sky":
+        return "#60a5fa";
+      case "graphite":
+        return "#111827";
+      case "warm-sun":
+      default:
+        return "#fdba74";
+    }
+  }
+
+  function getTenantPwaDesignerActiveBackgroundColor() {
+    const customColor = String(tenantPwaDesignerBackgroundCustomColor || "").trim();
+    return customColor || getTenantPwaDesignerBackgroundBaseColor(tenantPwaDesignerBackgroundPresetId);
+  }
+
+  function clampTenantPwaDesignerValue(value, min, max) {
+    return Math.max(min, Math.min(max, value));
+  }
+
+  function normalizeTenantPwaDesignerBadgeText(value, fallback = "УСТАНОВКА ПРИЛОЖЕНИЯ") {
+    const normalized = String(value || "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 56);
+    return normalized || fallback;
+  }
+
+  function getTenantPwaDesignerBadgeText() {
+    if (tenantPwaDesignerBadgeText) {
+      return normalizeTenantPwaDesignerBadgeText(tenantPwaDesignerBadgeText);
+    }
+    const tenant = typeof getAuthTenant === "function" ? getAuthTenant() : null;
+    return normalizeTenantPwaDesignerBadgeText(tenant && tenant.pwa_qr_badge_text);
+  }
+
+  async function saveTenantPwaDesignerBadgeText() {
+    const nextText = normalizeTenantPwaDesignerBadgeText(tenantPwaDesignerBadgeText);
+    const saveSeq = ++tenantPwaDesignerBadgeSaveSeq;
+    try {
+      const response = await authFetch("/api/admin/tenant", {
+        method: "PUT",
+        body: JSON.stringify({ pwa_qr_badge_text: nextText })
+      });
+      const data = await response.json();
+      if (!data || !data.ok || !data.tenant) return;
+      if (saveSeq !== tenantPwaDesignerBadgeSaveSeq) return;
+      if (typeof updateTenantCache === "function") {
+        updateTenantCache(data.tenant);
+      }
+    } catch (_) {}
+  }
+
+  function setTenantPwaDesignerBadgeEditing(active) {
+    const eyebrowEl = document.getElementById("tenantQrDesignerCardEyebrow");
+    const textEl = document.getElementById("tenantQrDesignerCardEyebrowText");
+    const inputEl = document.getElementById("tenantQrDesignerCardEyebrowInput");
+    if (!eyebrowEl || !textEl || !inputEl) return;
+    tenantPwaDesignerBadgeEditing = !!active;
+    eyebrowEl.classList.toggle("is-editing", tenantPwaDesignerBadgeEditing);
+    textEl.classList.toggle("hidden", tenantPwaDesignerBadgeEditing);
+    inputEl.classList.toggle("hidden", !tenantPwaDesignerBadgeEditing);
+    if (tenantPwaDesignerBadgeEditing) {
+      inputEl.value = getTenantPwaDesignerBadgeText();
+      inputEl.focus();
+      inputEl.select();
+      return;
+    }
+    textEl.textContent = getTenantPwaDesignerBadgeText();
+  }
+
+  function commitTenantPwaDesignerBadgeEdit(save = true) {
+    if (!tenantPwaDesignerBadgeEditing) return;
+    const inputEl = document.getElementById("tenantQrDesignerCardEyebrowInput");
+    const previousText = getTenantPwaDesignerBadgeText();
+    const nextText = normalizeTenantPwaDesignerBadgeText(inputEl && inputEl.value);
+    tenantPwaDesignerBadgeText = nextText;
+    setTenantPwaDesignerBadgeEditing(false);
+    tenantPwaDesignerBadgeCommitTs = Date.now();
+    renderTenantPwaDesigner();
+    if (save && nextText !== previousText) {
+      void saveTenantPwaDesignerBadgeText();
+    }
+  }
+
+  function mixTenantPwaDesignerHexColors(primary, secondary, weight) {
+    const safeWeight = clampTenantPwaDesignerValue(Number(weight) || 0, 0, 1);
+    const normalize = (value) => {
+      const raw = String(value || "").trim().replace(/^#/, "");
+      const hex = raw.length === 3
+        ? raw.split("").map((chunk) => `${chunk}${chunk}`).join("")
+        : raw.padEnd(6, "0").slice(0, 6);
+      return {
+        r: parseInt(hex.slice(0, 2), 16),
+        g: parseInt(hex.slice(2, 4), 16),
+        b: parseInt(hex.slice(4, 6), 16)
+      };
+    };
+    const left = normalize(primary);
+    const right = normalize(secondary);
+    const toHex = (value) => Math.round(value).toString(16).padStart(2, "0");
+    const r = left.r + (right.r - left.r) * safeWeight;
+    const g = left.g + (right.g - left.g) * safeWeight;
+    const b = left.b + (right.b - left.b) * safeWeight;
+    return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+  }
+
+  function getTenantPwaDesignerColorLuma(hexColor) {
+    const color = mixTenantPwaDesignerHexColors(hexColor, hexColor, 0);
+    const raw = color.replace(/^#/, "");
+    const rgb = [0, 2, 4].map((offset) => parseInt(raw.slice(offset, offset + 2), 16) / 255);
+    const linear = rgb.map((channel) => (
+      channel <= 0.03928
+        ? channel / 12.92
+        : Math.pow((channel + 0.055) / 1.055, 2.4)
+    ));
+    return (0.2126 * linear[0]) + (0.7152 * linear[1]) + (0.0722 * linear[2]);
+  }
+
+  function buildTenantPwaDesignerBackgroundStyle() {
+    const baseColor = getTenantPwaDesignerActiveBackgroundColor();
+    const isGradient = !!tenantPwaDesignerBackgroundGradientEnabled;
+    const hasCustomImage = !!tenantPwaDesignerBackgroundImage;
+    if (hasCustomImage) {
+      return {
+        fill: "linear-gradient(135deg,#111827 0%,#334155 100%)",
+        text: "#ffffff",
+        muted: "rgba(255,255,255,.84)",
+        chipBg: "rgba(255,255,255,.16)",
+        chipText: "#ffffff",
+        swatch: baseColor
+      };
+    }
+    const startColor = mixTenantPwaDesignerHexColors(baseColor, "#ffffff", 0.32);
+    const endColor = mixTenantPwaDesignerHexColors(baseColor, "#0f172a", 0.18);
+    const fill = isGradient
+      ? `linear-gradient(135deg,${startColor} 0%,${endColor} 100%)`
+      : baseColor;
+    const sampleColor = isGradient
+      ? mixTenantPwaDesignerHexColors(startColor, endColor, 0.5)
+      : baseColor;
+    const isDark = getTenantPwaDesignerColorLuma(sampleColor) < 0.42;
+    return {
+      fill,
+      text: isDark ? "#f8fafc" : "#111827",
+      muted: isDark ? "rgba(248,250,252,.82)" : "rgba(17,24,39,.68)",
+      chipBg: isDark ? "rgba(255,255,255,.16)" : "rgba(255,255,255,.62)",
+      chipText: isDark ? "#ffffff" : mixTenantPwaDesignerHexColors(baseColor, "#7c2d12", 0.45),
+      swatch: fill
+    };
+  }
+
+  function getTenantPwaDesignerBackgroundSwatch(presetId) {
+    return getTenantPwaDesignerBackgroundBaseColor(presetId);
+  }
+
+  function fitTenantPwaDesignerTitle(cardEl, titleEl) {
+    if (!cardEl || !titleEl) return;
+    const ratio = findTenantPwaDesignerRatioConfig(tenantPwaDesignerCardRatio);
+    const contentScale = Number(cardEl.style.getPropertyValue("--tenant-qr-content-scale")) || 1;
+    const isHorizontal = ratio.widthUnits > ratio.heightUnits;
+    const isSquare = ratio.widthUnits === ratio.heightUnits;
+    const isVerticalTall = !isHorizontal && ratio.heightUnits / Math.max(ratio.widthUnits, 1) >= 1.75;
+    const maxSize = Math.max(
+      12,
+      Math.round((isHorizontal ? 30 : isVerticalTall ? 28 : isSquare ? 30 : 36) * contentScale)
+    );
+    const minSize = Math.max(
+      10,
+      Math.round((isHorizontal ? 14 : isVerticalTall ? 16 : isSquare ? 16 : 18) * contentScale)
+    );
+    let nextSize = maxSize;
+    titleEl.style.fontSize = `${nextSize}px`;
+    while (nextSize > minSize && titleEl.scrollWidth > titleEl.clientWidth + 1) {
+      nextSize -= 1;
+      titleEl.style.fontSize = `${nextSize}px`;
+    }
+  }
+
+  function fitTenantPwaDesignerEyebrow(cardEl, eyebrowEl) {
+    if (!cardEl || !eyebrowEl) return;
+    const ratio = findTenantPwaDesignerRatioConfig(tenantPwaDesignerCardRatio);
+    const contentScale = Number(cardEl.style.getPropertyValue("--tenant-qr-content-scale")) || 1;
+    const isHorizontal = ratio.widthUnits > ratio.heightUnits;
+    const isSquare = ratio.widthUnits === ratio.heightUnits;
+    const isVerticalTall = !isHorizontal && ratio.heightUnits / Math.max(ratio.widthUnits, 1) >= 1.75;
+    const maxSize = Math.max(
+      6,
+      Math.round((isHorizontal ? 9 : isVerticalTall ? 9 : isSquare ? 10 : 11) * contentScale)
+    );
+    const minSize = Math.max(
+      4,
+      Math.round((isHorizontal ? 5 : isVerticalTall ? 6 : isSquare ? 7 : 8) * contentScale)
+    );
+    const baseLetterSpacing = isHorizontal ? 0.03 : isVerticalTall ? 0.03 : isSquare ? 0.05 : 0.08;
+    const minLetterSpacing = isHorizontal ? 0 : 0.01;
+    let nextSize = maxSize;
+    let nextLetterSpacing = baseLetterSpacing;
+    eyebrowEl.style.fontSize = `${nextSize}px`;
+    eyebrowEl.style.letterSpacing = `${nextLetterSpacing}em`;
+    while (
+      eyebrowEl.scrollWidth > eyebrowEl.clientWidth + 1
+      && (nextSize > minSize || nextLetterSpacing > minLetterSpacing)
+    ) {
+      if (nextSize > minSize) {
+        nextSize -= 1;
+        eyebrowEl.style.fontSize = `${nextSize}px`;
+        continue;
+      }
+      nextLetterSpacing = Math.max(
+        minLetterSpacing,
+        Number((nextLetterSpacing - 0.01).toFixed(3))
+      );
+      eyebrowEl.style.letterSpacing = `${nextLetterSpacing}em`;
+    }
+  }
+
+  function waitForTenantPwaQrRenderReady(rootEl, timeoutMs = 2000) {
+    if (!rootEl || typeof rootEl.querySelector !== "function") {
+      return Promise.resolve();
+    }
+    const deadline = Date.now() + Math.max(200, Number(timeoutMs) || 2000);
+    return new Promise((resolve) => {
+      const check = () => {
+        const renderEl = rootEl.querySelector('[data-tenant-qr-render="1"], canvas, img');
+        if (renderEl) {
+          if (renderEl.tagName === "CANVAS") {
+            const w = Number(renderEl.width || 0);
+            const h = Number(renderEl.height || 0);
+            if (w > 0 && h > 0) {
+              resolve();
+              return;
+            }
+          } else if (renderEl.tagName === "IMG") {
+            if (renderEl.complete && Number(renderEl.naturalWidth || 0) > 0) {
+              resolve();
+              return;
+            }
+          } else {
+            resolve();
+            return;
+          }
+        }
+        if (Date.now() >= deadline) {
+          resolve();
+          return;
+        }
+        window.setTimeout(check, 40);
+      };
+      check();
+    });
+  }
+
+  function clampTenantQrUnit(value) {
+    return Math.max(0, Math.min(1, Number(value) || 0));
+  }
+
+  function clampTenantQrRgb(value) {
+    return Math.max(0, Math.min(255, Math.round(Number(value) || 0)));
+  }
+
+  function hexToRgb(hex) {
+    const raw = String(hex || "").trim().replace(/^#/, "");
+    const full = raw.length === 3 ? raw.split("").map((s) => `${s}${s}`).join("") : raw.padEnd(6, "0").slice(0, 6);
+    return {
+      r: parseInt(full.slice(0, 2), 16) || 0,
+      g: parseInt(full.slice(2, 4), 16) || 0,
+      b: parseInt(full.slice(4, 6), 16) || 0
+    };
+  }
+
+  function rgbToHex(r, g, b) {
+    const part = (n) => clampTenantQrRgb(n).toString(16).padStart(2, "0");
+    return `#${part(r)}${part(g)}${part(b)}`;
+  }
+
+  function rgbToHsv(r, g, b) {
+    const rn = clampTenantQrRgb(r) / 255;
+    const gn = clampTenantQrRgb(g) / 255;
+    const bn = clampTenantQrRgb(b) / 255;
+    const max = Math.max(rn, gn, bn);
+    const min = Math.min(rn, gn, bn);
+    const d = max - min;
+    let h = 0;
+    if (d > 0) {
+      if (max === rn) h = ((gn - bn) / d) % 6;
+      else if (max === gn) h = ((bn - rn) / d) + 2;
+      else h = ((rn - gn) / d) + 4;
+      h *= 60;
+      if (h < 0) h += 360;
+    }
+    const s = max === 0 ? 0 : d / max;
+    return { h, s, v: max };
+  }
+
+  function hsvToRgb(h, s, v) {
+    const hue = ((Number(h) || 0) % 360 + 360) % 360;
+    const sat = clampTenantQrUnit(s);
+    const val = clampTenantQrUnit(v);
+    const c = val * sat;
+    const x = c * (1 - Math.abs(((hue / 60) % 2) - 1));
+    const m = val - c;
+    let rp = 0; let gp = 0; let bp = 0;
+    if (hue < 60) { rp = c; gp = x; }
+    else if (hue < 120) { rp = x; gp = c; }
+    else if (hue < 180) { gp = c; bp = x; }
+    else if (hue < 240) { gp = x; bp = c; }
+    else if (hue < 300) { rp = x; bp = c; }
+    else { rp = c; bp = x; }
+    return { r: Math.round((rp + m) * 255), g: Math.round((gp + m) * 255), b: Math.round((bp + m) * 255) };
+  }
+
+  function getTenantQrPicker(kind) {
+    const isBg = kind === "bg";
+    return {
+      wrap: document.getElementById(isBg ? "tenantQrDesignerBgColorPicker" : "tenantQrDesignerQrColorPicker"),
+      toggle: document.getElementById(isBg ? "tenantQrDesignerBgColorToggle" : "tenantQrDesignerQrColorToggle"),
+      panel: document.getElementById(isBg ? "tenantQrDesignerBgColorPanel" : "tenantQrDesignerQrColorPanel"),
+      marker: document.getElementById(isBg ? "tenantQrDesignerBgColorMarker" : "tenantQrDesignerQrColorMarker"),
+      sv: document.getElementById(isBg ? "tenantQrDesignerBgSv" : "tenantQrDesignerQrSv"),
+      svCursor: document.getElementById(isBg ? "tenantQrDesignerBgSvCursor" : "tenantQrDesignerQrSvCursor"),
+      hue: document.getElementById(isBg ? "tenantQrDesignerBgHue" : "tenantQrDesignerQrHue"),
+      hueCursor: document.getElementById(isBg ? "tenantQrDesignerBgHueCursor" : "tenantQrDesignerQrHueCursor"),
+      r: document.getElementById(isBg ? "tenantQrDesignerBgR" : "tenantQrDesignerQrR"),
+      g: document.getElementById(isBg ? "tenantQrDesignerBgG" : "tenantQrDesignerQrG"),
+      b: document.getElementById(isBg ? "tenantQrDesignerBgB" : "tenantQrDesignerQrB")
+    };
+  }
+
+  function getTenantQrColor(kind) {
+    return kind === "bg" ? getTenantPwaDesignerActiveBackgroundColor() : tenantPwaDesignerQrColor;
+  }
+
+  function applyTenantQrColor(kind, hex) {
+    if (kind === "bg") {
+      tenantPwaDesignerBackgroundCustomColor = String(hex || "").trim() || "#fdba74";
+      tenantPwaDesignerBackgroundImage = "";
+    } else {
+      tenantPwaDesignerQrColor = String(hex || "").trim() || "#111827";
+    }
+    renderTenantPwaDesigner();
+  }
+
+  function syncTenantQrPicker(kind) {
+    const picker = getTenantQrPicker(kind);
+    if (!picker.wrap || !picker.marker || !picker.sv || !picker.svCursor || !picker.hueCursor) return;
+    const rgb = hexToRgb(getTenantQrColor(kind));
+    const hsv = rgbToHsv(rgb.r, rgb.g, rgb.b);
+    const pure = hsvToRgb(hsv.h, 1, 1);
+    picker.marker.style.left = `${(hsv.h / 360) * 100}%`;
+    picker.marker.style.background = rgbToHex(rgb.r, rgb.g, rgb.b);
+    picker.sv.style.background = `linear-gradient(to top,#000,transparent), linear-gradient(to right,#fff,${rgbToHex(pure.r, pure.g, pure.b)})`;
+    picker.svCursor.style.left = `${hsv.s * 100}%`;
+    picker.svCursor.style.top = `${(1 - hsv.v) * 100}%`;
+    picker.hueCursor.style.left = `${(hsv.h / 360) * 100}%`;
+    picker.hueCursor.style.background = rgbToHex(rgb.r, rgb.g, rgb.b);
+    if (picker.r) picker.r.value = String(rgb.r);
+    if (picker.g) picker.g.value = String(rgb.g);
+    if (picker.b) picker.b.value = String(rgb.b);
+  }
+
+  function openTenantQrPicker(kind, open) {
+    const picker = getTenantQrPicker(kind);
+    if (!picker.panel) return;
+    const isOpen = !!open;
+    picker.panel.classList.toggle("hidden", !isOpen);
+    if (isOpen) {
+      tenantPwaDesignerActiveColorPicker = kind;
+      syncTenantQrPicker(kind);
+    } else if (tenantPwaDesignerActiveColorPicker === kind) {
+      tenantPwaDesignerActiveColorPicker = null;
+    }
+  }
+
+  function renderTenantPwaDesignerStaticControls() {
+    const ratioGroupEl = document.getElementById("tenantQrDesignerRatioGroup");
+    const bgPaletteEl = document.getElementById("tenantQrDesignerBgPalette");
+    const bgGradientBtn = document.getElementById("tenantQrDesignerBackgroundGradientBtn");
+    const backgroundColorInput = document.getElementById("tenantQrDesignerBackgroundColorInput");
+    const colorPaletteEl = document.getElementById("tenantQrDesignerColorPalette");
+    const styleSelect = document.getElementById("tenantQrDesignerStyleSelect");
+    const colorInput = document.getElementById("tenantQrDesignerColorInput");
+    const cornerRadiusInput = document.getElementById("tenantQrDesignerCornerRadiusInput");
+
+    if (ratioGroupEl) {
+      ratioGroupEl.innerHTML = TENANT_PWA_QR_CARD_RATIOS.map((item) => `
+        <button
+          class="tenant-qr-ratio-btn${tenantPwaDesignerCardRatio === item.id ? " is-active" : ""}"
+          type="button"
+          data-tenant-qr-ratio="${item.id}"
+        >${item.label}</button>
+      `).join("");
+    }
+
+    if (bgPaletteEl) {
+      const activeBgColor = getTenantPwaDesignerActiveBackgroundColor().toLowerCase();
+      bgPaletteEl.innerHTML = TENANT_PWA_QR_BG_PRESETS.map((item) => `
+        <button
+          class="tenant-qr-swatch tenant-qr-swatch--bg${!tenantPwaDesignerBackgroundImage && activeBgColor === getTenantPwaDesignerBackgroundBaseColor(item.id).toLowerCase() ? " is-active" : ""}"
+          type="button"
+          data-tenant-qr-bg="${item.id}"
+          title="${item.label}"
+          aria-label="${item.label}"
+          style="background:${getTenantPwaDesignerBackgroundSwatch(item.id)}"
+        ></button>
+      `).join("");
+    }
+
+    if (bgGradientBtn) {
+      bgGradientBtn.textContent = tenantPwaDesignerBackgroundGradientEnabled ? "Градиент: вкл" : "Градиент: выкл";
+      bgGradientBtn.classList.toggle("is-active", tenantPwaDesignerBackgroundGradientEnabled);
+    }
+
+    if (colorPaletteEl) {
+      colorPaletteEl.innerHTML = TENANT_PWA_QR_COLOR_PRESETS.map((item) => `
+        <button
+          class="tenant-qr-swatch${tenantPwaDesignerQrColor.toLowerCase() === item.value.toLowerCase() ? " is-active" : ""}"
+          type="button"
+          data-tenant-qr-color="${item.value}"
+          title="${item.label}"
+          aria-label="${item.label}"
+          style="background:${item.value}"
+        ></button>
+      `).join("");
+    }
+
+    if (styleSelect) styleSelect.value = tenantPwaDesignerQrStyle;
+    if (colorInput) colorInput.value = tenantPwaDesignerQrColor;
+    if (backgroundColorInput) backgroundColorInput.value = getTenantPwaDesignerActiveBackgroundColor();
+    syncTenantQrPicker("qr");
+    syncTenantQrPicker("bg");
+    if (cornerRadiusInput) {
+      const maxCornerRadius = getTenantPwaDesignerCornerRadiusLimit();
+      tenantPwaDesignerCornerRadius = normalizeTenantPwaDesignerCornerRadius(
+        tenantPwaDesignerCornerRadius,
+        tenantPwaDesignerCornerRadius,
+        maxCornerRadius
+      );
+      cornerRadiusInput.max = String(maxCornerRadius);
+      cornerRadiusInput.value = String(tenantPwaDesignerCornerRadius);
+    }
+  }
+
+  function getTenantPwaDesignerCardMetrics(maxWidth = 224, maxHeight = 252) {
+    const ratio = findTenantPwaDesignerRatioConfig(tenantPwaDesignerCardRatio);
+    const safeMaxWidth = Math.max(120, Number(maxWidth) || 224);
+    const safeMaxHeight = Math.max(120, Number(maxHeight) || 252);
+    const unitScale = Math.min(safeMaxWidth / ratio.widthUnits, safeMaxHeight / ratio.heightUnits);
+    const cardWidth = Math.round(ratio.widthUnits * unitScale);
+    const cardHeight = Math.round(ratio.heightUnits * unitScale);
+    return { ratio, cardWidth, cardHeight };
+  }
+
+  function getTenantPwaDesignerCornerRadiusLimit() {
+    const metrics = getTenantPwaDesignerCardMetrics();
+    return Math.max(0, Math.round(Math.min(metrics.cardWidth, metrics.cardHeight) / 2));
+  }
+
+  function normalizeTenantPwaDesignerCornerRadius(rawValue, fallback = 30, maxValue = getTenantPwaDesignerCornerRadiusLimit()) {
+    const numericValue = Number(rawValue);
+    if (!Number.isFinite(numericValue)) return fallback;
+    return Math.max(0, Math.min(Math.max(0, Number(maxValue) || 0), Math.round(numericValue)));
+  }
+
+  function bindTenantPwaDesignerStepper(inputEl, minusEl, plusEl, onChange) {
+    if (!inputEl || inputEl.dataset.tenantQrStepperBound === "1") return;
+    inputEl.dataset.tenantQrStepperBound = "1";
+    const normalizeValue = (rawValue) => {
+      const parsedMin = Number(inputEl.min);
+      const parsedMax = Number(inputEl.max);
+      const safeMin = inputEl.min !== "" && Number.isFinite(parsedMin) ? parsedMin : 0;
+      const safeMax = inputEl.max !== "" && Number.isFinite(parsedMax)
+        ? parsedMax
+        : getTenantPwaDesignerCornerRadiusLimit();
+      const safeStep = Math.max(1, Number(inputEl.step) || 1);
+      const numericValue = Number(rawValue);
+      const fallbackValue = normalizeTenantPwaDesignerCornerRadius(inputEl.value, tenantPwaDesignerCornerRadius, safeMax);
+      if (!Number.isFinite(numericValue)) return fallbackValue;
+      const steppedValue = safeMin + Math.round((numericValue - safeMin) / safeStep) * safeStep;
+      return Math.max(safeMin, Math.min(safeMax, steppedValue));
+    };
+    const applyValue = (rawValue) => {
+      const nextValue = normalizeValue(rawValue);
+      inputEl.value = String(nextValue);
+      if (typeof onChange === "function") onChange(nextValue);
+    };
+    const syncInput = () => applyValue(inputEl.value);
+    inputEl.addEventListener("input", syncInput);
+    inputEl.addEventListener("change", syncInput);
+    const bindRepeatButton = (buttonEl, direction) => {
+      if (!buttonEl) return;
+      let holdTimeoutId = 0;
+      let holdIntervalId = 0;
+      let ignoreClickUntil = 0;
+      const stopHold = () => {
+        window.clearTimeout(holdTimeoutId);
+        window.clearInterval(holdIntervalId);
+        holdTimeoutId = 0;
+        holdIntervalId = 0;
+        buttonEl.classList.remove("is-pressed");
+      };
+      const stepOnce = () => {
+        const safeStep = Math.max(1, Number(inputEl.step) || 1);
+        applyValue(normalizeValue(inputEl.value) + (direction * safeStep));
+      };
+      buttonEl.addEventListener("pointerdown", (event) => {
+        if (event.button !== undefined && event.button !== 0) return;
+        event.preventDefault();
+        ignoreClickUntil = Date.now() + 600;
+        buttonEl.classList.add("is-pressed");
+        stepOnce();
+        try {
+          if (buttonEl.setPointerCapture && event.pointerId != null) {
+            buttonEl.setPointerCapture(event.pointerId);
+          }
+        } catch (_) {}
+        holdTimeoutId = window.setTimeout(() => {
+          holdIntervalId = window.setInterval(stepOnce, 80);
+        }, 320);
+      });
+      ["pointerup", "pointercancel", "lostpointercapture"].forEach((eventName) => {
+        buttonEl.addEventListener(eventName, stopHold);
+      });
+      buttonEl.addEventListener("click", (event) => {
+        if (Date.now() <= ignoreClickUntil) {
+          event.preventDefault();
+          return;
+        }
+        stepOnce();
+      });
+    };
+    bindRepeatButton(minusEl, -1);
+    bindRepeatButton(plusEl, 1);
+  }
+
+  function applyTenantPwaDesignerCardRatio(cardEl, options = {}) {
+    if (!cardEl) return;
+    const safeOptions = options && typeof options === "object" ? options : {};
+    const baseMetrics = getTenantPwaDesignerCardMetrics();
+    const metrics = getTenantPwaDesignerCardMetrics(safeOptions.maxWidth, safeOptions.maxHeight);
+    const { ratio, cardWidth, cardHeight } = metrics;
+    const isHorizontal = ratio.widthUnits > ratio.heightUnits;
+    const isVertical = ratio.heightUnits > ratio.widthUnits;
+    const isSquare = !isHorizontal && !isVertical;
+    const isVerticalTall = isVertical && ratio.heightUnits / Math.max(ratio.widthUnits, 1) >= 1.75;
+    const baseScale = Math.min(cardWidth / 224, cardHeight / 224);
+    const contentScale = isVerticalTall
+      ? Math.max(0.42, Math.min(1, baseScale * 0.82))
+      : isVertical
+        ? Math.max(0.48, Math.min(1, baseScale * 0.9))
+        : isHorizontal
+          ? Math.max(0.58, Math.min(1, baseScale * 0.94))
+          : Math.max(0.54, Math.min(0.92, baseScale * 0.92));
+    const qrShellSize = isVerticalTall
+      ? Math.min(cardWidth * 0.56, cardHeight * 0.4, 152 * contentScale + 10)
+      : isVertical
+        ? Math.min(cardWidth * 0.62, cardHeight * 0.48, 184 * contentScale + 16)
+        : isHorizontal
+          ? Math.min(cardWidth * 0.42, cardHeight * 0.78, 206 * contentScale)
+          : Math.min(cardWidth * 0.58, cardHeight * 0.58, 190 * contentScale);
+    cardEl.style.width = `${cardWidth}px`;
+    cardEl.style.height = `${cardHeight}px`;
+    cardEl.style.setProperty("--tenant-qr-content-scale", contentScale.toFixed(3));
+    cardEl.style.setProperty("--tenant-qr-shell-size", `${Math.round(qrShellSize)}px`);
+    const defaultMinSide = Math.max(1, Math.min(baseMetrics.cardWidth, baseMetrics.cardHeight));
+    const currentMinSide = Math.max(1, Math.min(cardWidth, cardHeight));
+    const cardRadiusScale = currentMinSide / defaultMinSide;
+    const cardRadius = normalizeTenantPwaDesignerCornerRadius(
+      tenantPwaDesignerCornerRadius * cardRadiusScale,
+      30,
+      Math.round(currentMinSide / 2)
+    );
+    cardEl.style.setProperty("--tenant-qr-card-radius", `${cardRadius}px`);
+    cardEl.style.removeProperty("--tenant-qr-shell-radius");
+    cardEl.classList.toggle("is-horizontal", isHorizontal);
+    cardEl.classList.toggle("is-vertical", isVertical);
+    cardEl.classList.toggle("is-vertical-tall", isVerticalTall);
+    cardEl.classList.toggle("is-square", isSquare);
+  }
+
+  function applyTenantPwaDesignerCardBackground(cardEl, bgEl) {
+    if (!cardEl || !bgEl) return;
+    const hasCustomImage = !!tenantPwaDesignerBackgroundImage;
+    const backgroundStyle = buildTenantPwaDesignerBackgroundStyle();
+    bgEl.style.background = backgroundStyle.fill;
+    bgEl.style.backgroundImage = hasCustomImage
+      ? `linear-gradient(180deg, rgba(15,23,42,.16), rgba(15,23,42,.08)), url("${escapeCssUrlValue(tenantPwaDesignerBackgroundImage)}")`
+      : backgroundStyle.fill;
+    bgEl.style.backgroundSize = hasCustomImage ? "cover" : "cover";
+    bgEl.style.backgroundPosition = hasCustomImage ? "center" : "center";
+    cardEl.style.setProperty("--tenant-qr-card-text", backgroundStyle.text);
+    cardEl.style.setProperty("--tenant-qr-card-muted", backgroundStyle.muted);
+    cardEl.style.setProperty("--tenant-qr-chip-bg", backgroundStyle.chipBg);
+    cardEl.style.setProperty("--tenant-qr-chip-text", backgroundStyle.chipText);
+  }
+
+  function buildTenantPwaDesignerQrOptions(url, config) {
+    const tenantInfo = getTenantPwaDesignerTenantInfo();
+    const logoImage = tenantPwaDesignerUseSiteLogo && tenantInfo.logoUrl
+      ? String(tenantInfo.logoUrl)
+      : "";
+    const safeConfig = config && typeof config === "object" ? config : {};
+    const rawSize = Number(safeConfig.size);
+    const rawMargin = Number(safeConfig.margin);
+    const size = Math.max(128, Number.isFinite(rawSize) && rawSize > 0 ? rawSize : 360);
+    const margin = Math.max(0, Number.isFinite(rawMargin) ? rawMargin : 16);
+    const type = String(safeConfig.type || "svg").trim() || "svg";
+    const roundSize = safeConfig.roundSize !== undefined ? !!safeConfig.roundSize : true;
+    const imageOptions = {
+      hideBackgroundDots: true,
+      imageSize: 0.28,
+      margin: Math.max(4, Math.round(size * 0.018)),
+      crossOrigin: logoImage ? "anonymous" : undefined
+    };
+    const resolveCornerTypes = (style) => {
+      const safeStyle = String(style || "square").trim() || "square";
+      if (safeStyle === "dots") {
+        return { squareType: "dot", dotType: "dot" };
+      }
+      if (safeStyle === "rounded" || safeStyle === "extra-rounded") {
+        return { squareType: "extra-rounded", dotType: "dot" };
+      }
+      if (safeStyle === "classy-rounded") {
+        return { squareType: "extra-rounded", dotType: "dot" };
+      }
+      if (safeStyle === "classy") {
+        return { squareType: "extra-rounded", dotType: "square" };
+      }
+      return { squareType: "square", dotType: "square" };
+    };
+    const cornerTypes = resolveCornerTypes(tenantPwaDesignerQrStyle);
+    return {
+      width: size,
+      height: size,
+      type,
+      data: String(url || ""),
+      margin,
+      qrOptions: { errorCorrectionLevel: "H" },
+      dotsOptions: {
+        color: tenantPwaDesignerQrColor,
+        type: tenantPwaDesignerQrStyle,
+        roundSize
+      },
+      cornersSquareOptions: {
+        color: tenantPwaDesignerQrColor,
+        type: cornerTypes.squareType
+      },
+      cornersDotOptions: {
+        color: tenantPwaDesignerQrColor,
+        type: cornerTypes.dotType
+      },
+      backgroundOptions: {
+        color: "#ffffff"
+      },
+      image: logoImage || undefined,
+      imageOptions
+    };
+  }
+
+  function buildTenantPwaDesignerQrCodeOptions(url, config) {
+    return buildTenantPwaDesignerQrOptions(url, config);
+  }
+
+  function getTenantPwaDesignerQrPreviewSize(containerEl) {
+    if (!containerEl || typeof containerEl.getBoundingClientRect !== "function") {
+      return 168;
+    }
+    const rect = containerEl.getBoundingClientRect();
+    const parentRect = containerEl.parentElement && typeof containerEl.parentElement.getBoundingClientRect === "function"
+      ? containerEl.parentElement.getBoundingClientRect()
+      : null;
+    const bounds = [
+      rect.width,
+      rect.height,
+      parentRect ? parentRect.width : null,
+      parentRect ? parentRect.height : null
+    ].filter((value) => Number.isFinite(value) && value > 0);
+    const baseSize = bounds.length ? Math.min(...bounds) : 168;
+    const safeSize = Math.max(96, Math.floor(baseSize));
+    return safeSize % 2 === 0 ? safeSize : safeSize - 1;
+  }
+
+  function renderTenantPwaDesignerQrPreview(containerEl, url) {
+    if (!containerEl) return false;
+    tenantPwaDesignerQrRenderMode = "basic";
+    tenantPwaDesignerQrInstance = null;
+    if (!url) {
+      setTenantPwaDesignerQrEmpty(containerEl);
+      return false;
+    }
+    const previewSize = getTenantPwaDesignerQrPreviewSize(containerEl);
+    return renderTenantPwaQrImage(containerEl, url, {
+      displaySize: previewSize,
+      renderScale: 3,
+      colorDark: tenantPwaDesignerQrColor,
+      logoUrl: getTenantPwaDesignerLogoUrl()
+    });
+  }
+
+  function renderTenantPwaDesigner() {
+    const sourceSelect = document.getElementById("tenantQrDesignerSourceSelect");
+    const sourceHint = document.getElementById("tenantQrDesignerSourceHint");
+    const targetSelect = document.getElementById("tenantQrDesignerTargetSelect");
+    const targetHint = document.getElementById("tenantQrDesignerTargetHint");
+    const previewWrap = document.getElementById("tenantQrDesignerPreviewWrap");
+    const emptyEl = document.getElementById("tenantQrDesignerEmpty");
+    const hintEl = document.getElementById("tenantQrDesignerHint");
+    const linkboxEl = document.getElementById("tenantQrDesignerLinkbox");
+    const urlEl = document.getElementById("tenantQrDesignerUrl");
+    const actionsEl = document.getElementById("tenantQrDesignerActions");
+    const cardEl = document.getElementById("tenantQrDesignerCard");
+    const bgEl = document.getElementById("tenantQrDesignerCardBg");
+    const qrMount = document.getElementById("tenantQrDesignerQrMount");
+    const cardTitleEl = document.getElementById("tenantQrDesignerCardTitle");
+    const cardEyebrowEl = document.getElementById("tenantQrDesignerCardEyebrow");
+    const cardDomainEl = document.getElementById("tenantQrDesignerCardDomain");
+    const logoToggleEl = document.getElementById("tenantQrDesignerUseSiteLogoToggle");
+    const expandedLayerEl = document.getElementById("tenantQrDesignerExpandedLayer");
+    const isVisible = isTenantPwaDesignerPanelVisible();
+
+    if (!targetSelect || !cardEl || !bgEl || !qrMount) return;
+    if (!isVisible && tenantPwaDesignerExpanded) {
+      closeTenantPwaDesignerExpanded();
+    }
+
+    ensureTenantPwaDesignerSourceMode();
+    renderTenantPwaDesignerStaticControls();
+
+    const sourceOptions = [
+      { id: "prod", label: "\u0420\u0430\u0431\u043e\u0447\u0430\u044f \u0432\u0438\u0442\u0440\u0438\u043d\u0430" }
+    ];
+    if (sourceSelect) {
+      sourceSelect.innerHTML = sourceOptions.map((item) => `
+        <option value="${item.id}"${tenantPwaDesignerSourceMode === item.id ? " selected" : ""}>${item.label}</option>
+      `).join("");
+    }
+
+    const targets = getTenantPwaDesignerTargets();
+    const selectedTarget = getSelectedTenantPwaDesignerTarget();
+    const hasTargets = !!selectedTarget;
+
+    if (targetSelect) {
+      targetSelect.innerHTML = targets.map((item) => {
+        const prefix = item.kind === "subdomain"
+          ? "\u0421\u0443\u0431\u0434\u043e\u043c\u0435\u043d: "
+          : "\u0414\u043e\u043c\u0435\u043d: ";
+        const selectedAttr = selectedTarget && selectedTarget.id === item.id ? " selected" : "";
+        return `<option value="${item.id}"${selectedAttr}>${prefix}${item.label}</option>`;
+      }).join("");
+      targetSelect.disabled = !hasTargets;
+      if (selectedTarget) targetSelect.value = selectedTarget.id;
+    }
+
+    if (sourceHint) {
+      sourceHint.textContent = "\u0420\u0430\u0431\u043e\u0447\u0438\u0439 QR \u0432\u0435\u0434\u0435\u0442 \u043d\u0430 \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d\u043d\u044b\u0439 \u0434\u043e\u043c\u0435\u043d \u0432\u0438\u0442\u0440\u0438\u043d\u044b \u0438 \u043f\u043e\u0434\u0445\u043e\u0434\u0438\u0442 \u0434\u043b\u044f \u0440\u0435\u0430\u043b\u044c\u043d\u043e\u0439 \u043f\u0443\u0431\u043b\u0438\u043a\u0430\u0446\u0438\u0438.";
+    }
+
+    if (emptyEl) emptyEl.classList.toggle("hidden", hasTargets);
+    if (previewWrap) previewWrap.classList.remove("hidden");
+    if (actionsEl) actionsEl.classList.toggle("hidden", !hasTargets);
+    if (linkboxEl) linkboxEl.classList.toggle("hidden", !hasTargets);
+
+    const tenantInfo = getTenantPwaDesignerTenantInfo();
+    if (logoToggleEl) {
+      const hasSiteLogo = !!tenantInfo.logoUrl;
+      if (!hasSiteLogo) tenantPwaDesignerUseSiteLogo = false;
+      logoToggleEl.checked = hasSiteLogo && tenantPwaDesignerUseSiteLogo;
+      logoToggleEl.disabled = !hasSiteLogo;
+      logoToggleEl.title = hasSiteLogo
+        ? ""
+        : "\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u0435 \u043b\u043e\u0433\u043e\u0442\u0438\u043f \u0441\u0430\u0439\u0442\u0430";
+    }
+
+    if (!hasTargets) {
+      if (urlEl) {
+        urlEl.textContent = "";
+        urlEl.removeAttribute("href");
+      }
+      if (targetHint) {
+        targetHint.textContent = "\u041f\u043e\u0434\u043a\u043b\u044e\u0447\u0438\u0442\u0435 \u0440\u0430\u0431\u043e\u0447\u0438\u0439 \u0434\u043e\u043c\u0435\u043d \u0438\u043b\u0438 \u0438\u0441\u043f\u043e\u043b\u044c\u0437\u0443\u0439\u0442\u0435 \u0441\u0443\u0431\u0434\u043e\u043c\u0435\u043d tenant-\u0430.";
+      }
+      if (hintEl) {
+        hintEl.textContent = "\u041f\u043e\u043a\u0430 \u043d\u0435\u0442 \u0434\u043e\u0441\u0442\u0443\u043f\u043d\u043e\u0439 \u0441\u0441\u044b\u043b\u043a\u0438 \u0434\u043b\u044f \u0433\u0435\u043d\u0435\u0440\u0430\u0446\u0438\u0438 QR-\u043a\u0430\u0440\u0442\u043e\u0447\u043a\u0438.";
+      }
+      if (tenantPwaDesignerPreviewRafId && window && typeof window.cancelAnimationFrame === "function") {
+        window.cancelAnimationFrame(tenantPwaDesignerPreviewRafId);
+        tenantPwaDesignerPreviewRafId = 0;
+      }
+      applyTenantPwaDesignerCardState(
+        cardEl,
+        bgEl,
+        cardTitleEl,
+        cardEyebrowEl,
+        cardDomainEl,
+        tenantInfo,
+        "HTTPS \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u0435\u043d"
+      );
+      setTenantPwaDesignerQrEmpty(qrMount);
+      if (tenantPwaDesignerExpanded && expandedLayerEl) {
+        setTenantPwaDesignerExpandedLayerVisibility(true);
+        syncTenantPwaDesignerExpandedMirror();
+        scheduleTenantPwaDesignerExpandedLayoutSync();
+      }
+      tenantPwaDesignerQrInstance = null;
+      return;
+    }
+
+    const selectedUrl = String(selectedTarget.url || "");
+    let selectedHost = selectedTarget.label || selectedUrl;
+    try {
+      const parsed = new URL(selectedUrl, window.location.origin);
+      selectedHost = parsed.host || selectedHost;
+    } catch (_) {}
+
+    applyTenantPwaDesignerCardState(
+      cardEl,
+      bgEl,
+      cardTitleEl,
+      cardEyebrowEl,
+      cardDomainEl,
+      tenantInfo,
+      selectedHost
+    );
+    if (urlEl) {
+      urlEl.textContent = selectedUrl;
+      urlEl.href = selectedUrl;
+    }
+
+    if (targetHint) {
+      targetHint.textContent = selectedTarget.kind === "subdomain"
+        ? "\u0421\u0441\u044b\u043b\u043a\u0430 \u0432\u0435\u0434\u0435\u0442 \u043d\u0430 subdomain tenant-\u0430."
+        : "\u0421\u0441\u044b\u043b\u043a\u0430 \u0432\u0435\u0434\u0435\u0442 \u043d\u0430 \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d\u043d\u044b\u0439 \u0440\u0430\u0431\u043e\u0447\u0438\u0439 \u0434\u043e\u043c\u0435\u043d.";
+    }
+
+    if (!isVisible) {
+      if (tenantPwaDesignerPreviewRafId && window && typeof window.cancelAnimationFrame === "function") {
+        window.cancelAnimationFrame(tenantPwaDesignerPreviewRafId);
+        tenantPwaDesignerPreviewRafId = 0;
+      }
+      setTenantPwaDesignerQrEmpty(qrMount);
+      tenantPwaDesignerQrInstance = null;
+      return;
+    }
+
+    scheduleTenantPwaDesignerPreviewRender(qrMount, selectedUrl);
+    if (tenantPwaDesignerExpanded && expandedLayerEl) {
+      setTenantPwaDesignerExpandedLayerVisibility(true);
+      syncTenantPwaDesignerExpandedMirror();
+      scheduleTenantPwaDesignerExpandedLayoutSync();
+    } else if (expandedLayerEl) {
+      setTenantPwaDesignerExpandedLayerVisibility(false);
+    }
+  }
+
+  async function downloadTenantPwaDesignerCard() {
+    const cardEl = document.getElementById("tenantQrDesignerCard");
+    const selectedTarget = getSelectedTenantPwaDesignerTarget();
+    if (!cardEl || !selectedTarget || !selectedTarget.url || !htmlToImage || typeof htmlToImage.toPng !== "function") {
+      alert("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0441\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c \u043a\u0430\u0440\u0442\u043e\u0447\u043a\u0443.");
+      return;
+    }
+    const tenantInfo = getTenantPwaDesignerTenantInfo();
+    const ratio = findTenantPwaDesignerRatioConfig(tenantPwaDesignerCardRatio);
+    cardEl.classList.add("is-exporting");
+    try {
+      const dataUrl = await htmlToImage.toPng(cardEl, {
+        cacheBust: true,
+        pixelRatio: 2,
+        canvasWidth: ratio.exportWidth,
+        canvasHeight: ratio.exportHeight
+      });
+      downloadDataUrl(
+        dataUrl,
+        `${sanitizeTenantPwaDesignerFileName(tenantInfo.title)}-${tenantPwaDesignerCardRatio.replace(":", "x")}-card.png`
+      );
+    } catch (err) {
+      console.error("tenant qr designer save card error:", err);
+      alert("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0441\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c \u043a\u0430\u0440\u0442\u043e\u0447\u043a\u0443.");
+    } finally {
+      cardEl.classList.remove("is-exporting");
+    }
+  }
+
+  function downloadTenantPwaDesignerQr() {
+    downloadTenantPwaDesignerQrSafe();
+  }
+
+  async function downloadTenantPwaDesignerQrSafe() {
+    const selectedTarget = getSelectedTenantPwaDesignerTarget();
+    const tenantInfo = getTenantPwaDesignerTenantInfo();
+    if (!selectedTarget || !selectedTarget.url) {
+      alert("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0441\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c QR.");
+      return;
+    }
+    const fileName = `${sanitizeTenantPwaDesignerFileName(tenantInfo.title)}-qr.png`;
+    const logoUrl = getTenantPwaDesignerLogoUrl();
+    const qrSize = 1400;
+    if (!document.body) {
+      alert("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0441\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c QR.");
+      return;
+    }
+    const mount = document.createElement("div");
+    mount.style.position = "fixed";
+    mount.style.left = "-10000px";
+    mount.style.top = "0";
+    mount.style.width = `${qrSize}px`;
+    mount.style.height = `${qrSize}px`;
+    mount.style.padding = "0";
+    mount.style.margin = "0";
+    mount.style.background = "transparent";
+    mount.style.pointerEvents = "none";
+    mount.style.opacity = "1";
+    document.body.appendChild(mount);
+    try {
+      const rendered = renderTenantPwaQrImage(mount, selectedTarget.url, {
+        displaySize: qrSize,
+        renderSize: qrSize,
+        colorDark: tenantPwaDesignerQrColor,
+        colorLight: "#ffffff",
+        logoUrl
+      });
+      if (!rendered) throw new Error("QR_RENDER_FAILED");
+      await waitForTenantPwaQrRenderReady(mount);
+      await waitForTenantPwaQrImageAssets(mount);
+      let { canvasEl, imageEl } = getTenantQrRenderedNodes(mount);
+      const visibleReady = await waitForTenantQrVisibleRender(mount, 2400);
+      if (!visibleReady || (canvasEl && isTenantQrCanvasLikelyBlank(canvasEl))) {
+        mount.innerHTML = "";
+        const fallbackRendered = renderTenantPwaQrImage(mount, selectedTarget.url, {
+          displaySize: qrSize,
+          renderSize: qrSize,
+          colorDark: tenantPwaDesignerQrColor,
+          colorLight: "#ffffff",
+          logoUrl
+        });
+        if (fallbackRendered) {
+          await waitForTenantPwaQrRenderReady(mount);
+          await waitForTenantPwaQrImageAssets(mount);
+          await waitForTenantQrVisibleRender(mount, 2400);
+          ({ canvasEl, imageEl } = getTenantQrRenderedNodes(mount));
+        }
+      } else {
+        ({ canvasEl, imageEl } = getTenantQrRenderedNodes(mount));
+      }
+      if (canvasEl && typeof canvasEl.toDataURL === "function") {
+        const transparentDataUrl = buildTenantQrTransparentDataUrlFromCanvas(canvasEl);
+        downloadDataUrl(transparentDataUrl || canvasEl.toDataURL("image/png"), fileName);
+        return;
+      }
+      if (imageEl && imageEl.src) {
+        const transparentDataUrl = buildTenantQrTransparentDataUrlFromImage(imageEl);
+        downloadDataUrl(transparentDataUrl || imageEl.src, fileName);
+        return;
+      }
+      throw new Error("QR_EXPORT_FAILED");
+    } catch (err) {
+      console.error("tenant qr designer save qr error:", err);
+      alert("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0441\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c QR.");
+    } finally {
+      mount.remove();
+    }
+  }
+
+  async function downloadTenantPwaQrPng(url, fileName, size = 1400) {
+    if (!document.body) return false;
+    const mount = document.createElement("div");
+    mount.style.position = "fixed";
+    mount.style.left = "-10000px";
+    mount.style.top = "0";
+    mount.style.width = `${Math.max(128, Number(size) || 1400)}px`;
+    mount.style.height = `${Math.max(128, Number(size) || 1400)}px`;
+    mount.style.pointerEvents = "none";
+    mount.style.opacity = "0";
+    document.body.appendChild(mount);
+    try {
+      const rendered = renderTenantPwaQrImage(mount, url, {
+        displaySize: Math.max(128, Number(size) || 1400),
+        renderSize: Math.max(128, Number(size) || 1400),
+        colorLight: "#ffffff"
+      });
+      if (!rendered) return false;
+      await waitForTenantPwaQrRenderReady(mount);
+      await waitForTenantPwaQrImageAssets(mount);
+      const renderEl = mount.querySelector('[data-tenant-qr-render="1"]');
+      const canvasEl = renderEl && renderEl.tagName === "CANVAS"
+        ? renderEl
+        : mount.querySelector("canvas");
+      const imageEl = renderEl && renderEl.tagName === "IMG"
+        ? renderEl
+        : mount.querySelector('img[data-tenant-qr-render="1"], img');
+      if (canvasEl && typeof canvasEl.toDataURL === "function") {
+        const transparentDataUrl = buildTenantQrTransparentDataUrlFromCanvas(canvasEl);
+        downloadDataUrl(transparentDataUrl || canvasEl.toDataURL("image/png"), fileName);
+        return true;
+      }
+      if (imageEl && imageEl.src) {
+        const transparentDataUrl = buildTenantQrTransparentDataUrlFromImage(imageEl);
+        downloadDataUrl(transparentDataUrl || imageEl.src, fileName);
+        return true;
+      }
+      return false;
+    } catch (err) {
+      console.error("tenant qr safe export error:", err);
+      return false;
+    } finally {
+      mount.remove();
+    }
+  }
+
+  function renderTenantPwaQrImage(containerEl, url, options = {}) {
+
+    if (!containerEl) return false;
+
+    containerEl.innerHTML = "";
+
+    const QrCodeCtor = window.QRCode;
+    const QrCodeStylingCtor = typeof window.QRCodeStyling === "function"
+      ? window.QRCodeStyling
+      : (window.QRCodeStyling && typeof window.QRCodeStyling.default === "function"
+        ? window.QRCodeStyling.default
+        : (window.QRCodeStyling && typeof window.QRCodeStyling.QRCodeStyling === "function"
+          ? window.QRCodeStyling.QRCodeStyling
+          : null));
+    const safeUrl = String(url || "").trim();
+    if ((typeof QrCodeCtor !== "function" && typeof QrCodeStylingCtor !== "function") || !safeUrl) return false;
+    const displaySize = Math.max(96, Math.round(Number(options.displaySize || options.size) || 136));
+    const renderScale = Math.max(1, Number(options.renderScale) || 1);
+    const renderSize = Math.max(
+      displaySize,
+      Math.round(Number(options.renderSize) || (displaySize * renderScale))
+    );
+    const colorDark = String(options.colorDark || "#111827").trim() || "#111827";
+    const colorLight = String(options.colorLight || "#ffffff").trim() || "#ffffff";
+    const preferBasicRenderer = !!options.preferBasicRenderer;
+    const logoUrl = String(options.logoUrl || "").trim();
+    const logoBadgeSize = logoUrl
+      ? Math.max(22, Math.round(displaySize * 0.18))
+      : 0;
+    const logoBadgeBorderSize = Math.max(2, Math.round(logoBadgeSize * 0.08));
+    const logoBadgeInnerPadding = Math.max(3, Math.round(logoBadgeSize * 0.12));
+
+    containerEl.style.position = "relative";
+    containerEl.style.isolation = "isolate";
+
+    try {
+      if (!preferBasicRenderer && typeof QrCodeStylingCtor === "function") {
+        const qrOptions = buildTenantPwaDesignerQrCodeOptions(safeUrl, {
+          size: renderSize,
+          type: "canvas",
+          logoUrl,
+          margin: 0,
+          roundSize: true
+        });
+        qrOptions.backgroundOptions = { color: colorLight };
+        const resolveCornerTypes = (style) => {
+          const safeStyle = String(style || "square").trim() || "square";
+          if (safeStyle === "dots") {
+            return { squareType: "dot", dotType: "dot" };
+          }
+          if (safeStyle === "rounded" || safeStyle === "extra-rounded") {
+            return { squareType: "extra-rounded", dotType: "dot" };
+          }
+          if (safeStyle === "classy-rounded") {
+            return { squareType: "extra-rounded", dotType: "dot" };
+          }
+          if (safeStyle === "classy") {
+            return { squareType: "extra-rounded", dotType: "square" };
+          }
+          return { squareType: "square", dotType: "square" };
+        };
+        const cornerTypes = resolveCornerTypes(tenantPwaDesignerQrStyle);
+        qrOptions.dotsOptions = Object.assign({}, qrOptions.dotsOptions, {
+          color: colorDark,
+          type: tenantPwaDesignerQrStyle
+        });
+        qrOptions.cornersSquareOptions = Object.assign({}, qrOptions.cornersSquareOptions, {
+          color: colorDark,
+          type: cornerTypes.squareType
+        });
+        qrOptions.cornersDotOptions = Object.assign({}, qrOptions.cornersDotOptions, {
+          color: colorDark,
+          type: cornerTypes.dotType
+        });
+        const styling = new QrCodeStylingCtor(qrOptions);
+        styling.append(containerEl);
+        const styledNode = containerEl.querySelector("canvas, img");
+        if (styledNode && styledNode.style) {
+          styledNode.setAttribute("data-tenant-qr-render", "1");
+          styledNode.style.display = "block";
+          styledNode.style.width = "100%";
+          styledNode.style.height = "100%";
+          styledNode.style.maxWidth = `${displaySize}px`;
+          styledNode.style.maxHeight = `${displaySize}px`;
+        }
+        return true;
+      }
+
+      const correctLevel = QrCodeCtor.CorrectLevel
+        ? (logoUrl && QrCodeCtor.CorrectLevel.H !== undefined
+          ? QrCodeCtor.CorrectLevel.H
+          : QrCodeCtor.CorrectLevel.M)
+        : undefined;
+      new QrCodeCtor(containerEl, {
+        text: safeUrl,
+        width: renderSize,
+        height: renderSize,
+        colorDark,
+        colorLight,
+        correctLevel
+      });
+      const syncRenderedNodes = () => {
+        const childNodes = Array.from(containerEl.children || []);
+        const canvasEl = childNodes.find((node) => node && node.tagName === "CANVAS");
+        const imageEl = childNodes.find((node) => (
+          node
+          && node.tagName === "IMG"
+          && node.getAttribute("data-tenant-qr-logo-img") !== "1"
+        ));
+        if (canvasEl && canvasEl.style) {
+          canvasEl.setAttribute("data-tenant-qr-render", "1");
+          canvasEl.style.display = "block";
+          canvasEl.style.width = "100%";
+          canvasEl.style.height = "100%";
+          canvasEl.style.maxWidth = `${displaySize}px`;
+          canvasEl.style.maxHeight = `${displaySize}px`;
+        }
+        if (imageEl) {
+          if (canvasEl) {
+            imageEl.setAttribute("aria-hidden", "true");
+            imageEl.remove();
+          } else if (imageEl.style) {
+            imageEl.setAttribute("data-tenant-qr-render", "1");
+            imageEl.style.display = "block";
+            imageEl.style.width = "100%";
+            imageEl.style.height = "100%";
+            imageEl.style.maxWidth = `${displaySize}px`;
+            imageEl.style.maxHeight = `${displaySize}px`;
+          }
+        }
+        const existingLogoBadge = containerEl.querySelector('[data-tenant-qr-logo="1"]');
+        if (existingLogoBadge) existingLogoBadge.remove();
+        if (!logoUrl) return;
+        const logoBadgeEl = document.createElement("div");
+        logoBadgeEl.setAttribute("data-tenant-qr-logo", "1");
+        logoBadgeEl.style.position = "absolute";
+        logoBadgeEl.style.left = "50%";
+        logoBadgeEl.style.top = "50%";
+        logoBadgeEl.style.width = `${logoBadgeSize}px`;
+        logoBadgeEl.style.height = `${logoBadgeSize}px`;
+        logoBadgeEl.style.transform = "translate(-50%, -50%)";
+        logoBadgeEl.style.display = "flex";
+        logoBadgeEl.style.alignItems = "center";
+        logoBadgeEl.style.justifyContent = "center";
+        logoBadgeEl.style.borderRadius = "999px";
+        logoBadgeEl.style.background = "#ffffff";
+        logoBadgeEl.style.boxSizing = "border-box";
+        logoBadgeEl.style.border = `${logoBadgeBorderSize}px solid #ffffff`;
+        logoBadgeEl.style.padding = `${logoBadgeInnerPadding}px`;
+        logoBadgeEl.style.overflow = "hidden";
+        logoBadgeEl.style.pointerEvents = "none";
+        logoBadgeEl.style.zIndex = "2";
+        const logoImgEl = document.createElement("img");
+        logoImgEl.setAttribute("data-tenant-qr-logo-img", "1");
+        logoImgEl.alt = "";
+        logoImgEl.decoding = "async";
+        logoImgEl.referrerPolicy = "no-referrer";
+        if (/^https?:\/\//i.test(logoUrl)) {
+          logoImgEl.crossOrigin = "anonymous";
+        }
+        logoImgEl.src = logoUrl;
+        logoImgEl.style.display = "block";
+        logoImgEl.style.width = "100%";
+        logoImgEl.style.height = "100%";
+        logoImgEl.style.objectFit = "contain";
+        logoBadgeEl.appendChild(logoImgEl);
+        containerEl.appendChild(logoBadgeEl);
+      };
+      syncRenderedNodes();
+      if (window && typeof window.requestAnimationFrame === "function") {
+        window.requestAnimationFrame(syncRenderedNodes);
+      }
+      return true;
+    } catch (err) {
+      console.error("tenant qr render error:", err);
+      containerEl.innerHTML = "";
+      return false;
+    }
+
+  }
+
   function syncSelectedTenantDomain() {
 
 
@@ -2010,8 +4205,8 @@
                 <span class="domain-managed-status${isEnabled ? "" : " is-disabled"}">${isEnabled ? "\u0421\u0430\u0439\u0442 \u0432\u043a\u043b\u044e\u0447\u0435\u043d" : "\u041f\u043e\u043a\u0430\u0437\u044b\u0432\u0430\u0435\u0442\u0441\u044f \u0437\u0430\u0433\u043b\u0443\u0448\u043a\u0430"}</span>
                 ${domainUrl ? `
                 <div class="settings-subdomain-actions domain-managed-link-actions">
-                  <button class="btn btn-sm btn-secondary" type="button" data-domain-link-action="open" data-domain-url="${domainUrl}">Перейти на сайт</button>
-                  <button class="btn btn-sm btn-icon btn-secondary" type="button" data-domain-link-action="copy" data-domain-url="${domainUrl}" title="Скопировать ссылку" aria-label="Скопировать ссылку">
+                  <button class="btn btn-sm btn-secondary" type="button" data-domain-link-action="open" data-domain-url="${domainUrl}">������� �� ����</button>
+                  <button class="btn btn-sm btn-icon btn-secondary" type="button" data-domain-link-action="copy" data-domain-url="${domainUrl}" title="����������� ������" aria-label="����������� ������">
                     <i class="fas fa-copy"></i>
                   </button>
                 </div>
@@ -2051,8 +4246,132 @@
     }
   }
 
+  function renderTenantPwaInstallQr() {
+    scheduleTenantPwaDesignerRender();
+    return;
+
+    const selectEl = document.getElementById("tenantPwaQrTargetSelect");
+    const openBtn = document.getElementById("tenantPwaQrOpenBtn");
+    const copyBtn = document.getElementById("tenantPwaQrCopyBtn");
+    const previewEl = document.getElementById("tenantPwaQrPreview");
+    const emptyEl = document.getElementById("tenantPwaQrEmpty");
+    const qrEl = document.getElementById("tenantPwaQrImage");
+    const urlEl = document.getElementById("tenantPwaQrUrl");
+    const hintEl = document.getElementById("tenantPwaQrHint");
+    const selected = syncSelectedTenantPwaInstallTarget();
+    const hasTargets = !!selected;
+
+    if (selectEl) {
+      selectEl.innerHTML = tenantPwaInstallTargets.map((item) => {
+        const tag = item.kind === "subdomain"
+          ? "\u0421\u0443\u0431\u0434\u043e\u043c\u0435\u043d"
+          : "\u0414\u043e\u043c\u0435\u043d";
+        const selectedAttr = selected && selected.id === item.id ? " selected" : "";
+        return `<option value="${item.id}"${selectedAttr}>${tag}: ${item.label}</option>`;
+      }).join("");
+      selectEl.disabled = !hasTargets;
+      if (selected) selectEl.value = selected.id;
+    }
+
+    if (previewEl) previewEl.classList.toggle("hidden", !hasTargets);
+    if (emptyEl) emptyEl.classList.toggle("hidden", hasTargets);
+    if (openBtn) openBtn.disabled = !hasTargets;
+    if (copyBtn) copyBtn.disabled = !hasTargets;
+
+    if (!hasTargets) {
+      if (qrEl) qrEl.innerHTML = "";
+      if (urlEl) urlEl.textContent = "";
+      return;
+    }
+
+    if (urlEl) urlEl.textContent = String(selected.url || "");
+    if (hintEl) {
+      hintEl.textContent = selected.kind === "subdomain"
+        ? "\u042d\u0442\u043e\u0442 QR \u043e\u0442\u043a\u0440\u044b\u0432\u0430\u0435\u0442 install-\u0441\u0442\u0440\u0430\u043d\u0438\u0446\u0443 \u0432\u0438\u0442\u0440\u0438\u043d\u044b \u043d\u0430 \u0441\u0443\u0431\u0434\u043e\u043c\u0435\u043d\u0435 tenant-\u0430."
+        : "\u042d\u0442\u043e\u0442 QR \u043e\u0442\u043a\u0440\u044b\u0432\u0430\u0435\u0442 install-\u0441\u0442\u0440\u0430\u043d\u0438\u0446\u0443 \u0432\u0438\u0442\u0440\u0438\u043d\u044b \u043d\u0430 \u0432\u044b\u0431\u0440\u0430\u043d\u043d\u043e\u043c \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d\u043d\u043e\u043c \u0434\u043e\u043c\u0435\u043d\u0435.";
+    }
+
+    if (qrEl) {
+      const rendered = renderTenantPwaQrImage(qrEl, selected.url);
+      if (!rendered && hintEl) {
+        hintEl.textContent = "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0441\u043e\u0431\u0440\u0430\u0442\u044c QR \u0432 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0435. \u0421\u0441\u044b\u043b\u043a\u0430 \u043d\u0438\u0436\u0435 \u0432\u0441\u0451 \u0440\u0430\u0432\u043d\u043e \u0433\u043e\u0442\u043e\u0432\u0430, \u0435\u0451 \u043c\u043e\u0436\u043d\u043e \u043e\u0442\u043a\u0440\u044b\u0442\u044c \u0438\u043b\u0438 \u0441\u043a\u043e\u043f\u0438\u0440\u043e\u0432\u0430\u0442\u044c.";
+      }
+    }
+
+  }
 
 
+
+
+  function renderTenantPwaDevInstallQr() {
+    scheduleTenantPwaDesignerRender();
+    return;
+
+    const selectEl = document.getElementById("tenantPwaDevQrTargetSelect");
+    const openBtn = document.getElementById("tenantPwaDevQrOpenBtn");
+    const copyBtn = document.getElementById("tenantPwaDevQrCopyBtn");
+    const previewEl = document.getElementById("tenantPwaDevQrPreview");
+    const emptyEl = document.getElementById("tenantPwaDevQrEmpty");
+    const qrEl = document.getElementById("tenantPwaDevQrImage");
+    const urlEl = document.getElementById("tenantPwaDevQrUrl");
+    const hintEl = document.getElementById("tenantPwaDevQrHint");
+    const selected = syncSelectedTenantPwaDevInstallTarget();
+    const hasTargets = !!selected;
+
+    if (selectEl) {
+      selectEl.innerHTML = tenantPwaInstallDevTargets.map((item) => {
+        const kindLabel = item.kind === "dev-tunnel"
+          ? "[HTTPS] "
+          : item.kind === "dev-localhost"
+            ? "[LOCAL] "
+            : "";
+        const selectedAttr = selected && selected.id === item.id ? " selected" : "";
+        return `<option value="${item.id}"${selectedAttr}>${kindLabel}${item.label}</option>`;
+      }).join("");
+      selectEl.disabled = !hasTargets;
+      if (selected) selectEl.value = selected.id;
+    }
+
+    if (previewEl) previewEl.classList.toggle("hidden", !hasTargets);
+    if (emptyEl) emptyEl.classList.toggle("hidden", hasTargets);
+    if (openBtn) openBtn.disabled = !hasTargets;
+    if (copyBtn) copyBtn.disabled = !hasTargets;
+
+    if (!hasTargets) {
+      if (qrEl) qrEl.innerHTML = "";
+      if (urlEl) urlEl.textContent = "";
+      return;
+    }
+
+    if (urlEl) urlEl.textContent = String(selected.url || "");
+    let isInsecureLanUrl = false;
+    try {
+      const parsed = new URL(String(selected.url || ""), window.location.origin);
+      const host = String(parsed.hostname || "").trim().toLowerCase();
+      isInsecureLanUrl = parsed.protocol === "http:" && host !== "localhost" && host !== "127.0.0.1" && host !== "::1";
+    } catch (_) {}
+    if (hintEl) {
+      hintEl.textContent = selected.kind === "dev-tunnel"
+        ? "\u042d\u0442\u043e\u0442 DEV QR \u0438\u0441\u043f\u043e\u043b\u044c\u0437\u0443\u0435\u0442 HTTPS tunnel. \u0422\u0435\u043b\u0435\u0444\u043e\u043d \u043e\u0442\u043a\u0440\u043e\u0435\u0442 \u043b\u043e\u043a\u0430\u043b\u044c\u043d\u0443\u044e \u0432\u0438\u0442\u0440\u0438\u043d\u0443 \u0447\u0435\u0440\u0435\u0437 \u0437\u0430\u0449\u0438\u0449\u0435\u043d\u043d\u044b\u0439 \u0430\u0434\u0440\u0435\u0441, \u0438 \u0431\u0440\u0430\u0443\u0437\u0435\u0440 \u0441\u043c\u043e\u0436\u0435\u0442 \u043f\u043e\u043a\u0430\u0437\u0430\u0442\u044c \u0443\u0441\u0442\u0430\u043d\u043e\u0432\u043a\u0443 PWA."
+        : selected.kind === "dev-current"
+        ? "\u042d\u0442\u043e\u0442 DEV QR \u0438\u0441\u043f\u043e\u043b\u044c\u0437\u0443\u0435\u0442 \u0442\u0435\u043a\u0443\u0449\u0438\u0439 \u0430\u0434\u0440\u0435\u0441, \u043f\u043e \u043a\u043e\u0442\u043e\u0440\u043e\u043c\u0443 \u043e\u0442\u043a\u0440\u044b\u0442\u0430 \u0430\u0434\u043c\u0438\u043d\u043a\u0430."
+        : selected.kind === "dev-localhost"
+          ? "\u042d\u0442\u043e\u0442 DEV QR \u043e\u0442\u043a\u0440\u043e\u0435\u0442\u0441\u044f \u0442\u043e\u043b\u044c\u043a\u043e \u043d\u0430 \u044d\u0442\u043e\u043c \u0436\u0435 \u043a\u043e\u043c\u043f\u044c\u044e\u0442\u0435\u0440\u0435."
+          : "\u042d\u0442\u043e\u0442 DEV QR \u0438\u0441\u043f\u043e\u043b\u044c\u0437\u0443\u0435\u0442 LAN IP. \u0422\u0435\u043b\u0435\u0444\u043e\u043d \u0438 \u043a\u043e\u043c\u043f\u044c\u044e\u0442\u0435\u0440 \u0434\u043e\u043b\u0436\u043d\u044b \u0431\u044b\u0442\u044c \u0432 \u043e\u0434\u043d\u043e\u0439 \u0441\u0435\u0442\u0438.";
+    }
+
+    if (hintEl && isInsecureLanUrl) {
+      hintEl.textContent = "\u042d\u0442\u043e\u0442 DEV QR \u043e\u0442\u043a\u0440\u043e\u0435\u0442 \u043b\u043e\u043a\u0430\u043b\u044c\u043d\u0443\u044e \u0432\u0438\u0442\u0440\u0438\u043d\u0443, \u043d\u043e \u0431\u0440\u0430\u0443\u0437\u0435\u0440 \u043d\u0435 \u043f\u043e\u043a\u0430\u0436\u0435\u0442 \u043d\u0430\u0442\u0438\u0432\u043d\u0443\u044e \u0443\u0441\u0442\u0430\u043d\u043e\u0432\u043a\u0443 PWA \u043d\u0430 LAN IP \u043f\u043e HTTP. \u0414\u043b\u044f install prompt \u043d\u0443\u0436\u0435\u043d HTTPS-\u0434\u043e\u043c\u0435\u043d.";
+    }
+
+    if (qrEl) {
+      const rendered = renderTenantPwaQrImage(qrEl, selected.url);
+      if (!rendered && hintEl) {
+        hintEl.textContent = "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0441\u043e\u0431\u0440\u0430\u0442\u044c DEV QR \u0432 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0435. \u0421\u0441\u044b\u043b\u043a\u0443 \u043d\u0438\u0436\u0435 \u0432\u0441\u0435 \u0440\u0430\u0432\u043d\u043e \u043c\u043e\u0436\u043d\u043e \u043e\u0442\u043a\u0440\u044b\u0442\u044c \u0438\u043b\u0438 \u0441\u043a\u043e\u043f\u0438\u0440\u043e\u0432\u0430\u0442\u044c.";
+      }
+    }
+
+  }
 
   function getCurrentDomainValue() {
 
@@ -2095,6 +4414,19 @@
 
 
     tenantDomains = normalizeTenantDomains(tenant && tenant.domains);
+
+    tenantPwaInstallTargets = normalizeTenantPwaInstallTargets(tenant && tenant.pwa_install_targets);
+    if (selectedTenantPwaTargetId && !tenantPwaInstallTargets.some((item) => item.id === selectedTenantPwaTargetId)) {
+      selectedTenantPwaTargetId = null;
+    }
+    tenantPwaInstallDevTargets = normalizeTenantPwaInstallTargets(tenant && tenant.pwa_install_dev_targets);
+    if (selectedTenantPwaDevTargetId && !tenantPwaInstallDevTargets.some((item) => item.id === selectedTenantPwaDevTargetId)) {
+      selectedTenantPwaDevTargetId = null;
+    }
+    const preferredDevTunnelTarget = tenantPwaInstallDevTargets.find((item) => item && item.kind === "dev-tunnel");
+    if (preferredDevTunnelTarget && selectedTenantPwaDevTargetId !== preferredDevTunnelTarget.id) {
+      selectedTenantPwaDevTargetId = preferredDevTunnelTarget.id;
+    }
 
 
 
@@ -2175,6 +4507,8 @@
 
 
     renderTenantDomains();
+    renderTenantPwaInstallQr();
+    renderTenantPwaDevInstallQr();
 
 
 
@@ -2194,7 +4528,7 @@
 
 
 
-        connectHint.textContent = "Автоподключение домена временно недоступно.";
+        connectHint.textContent = "\u0410\u0432\u0442\u043e\u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d\u0438\u0435 \u0434\u043e\u043c\u0435\u043d\u0430 \u0432\u0440\u0435\u043c\u0435\u043d\u043d\u043e \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u043e.";
 
 
 
@@ -2202,7 +4536,7 @@
 
 
 
-        connectHint.textContent = "Сначала нажмите «Проверить домен», затем «Подключить автоматически».";
+        connectHint.textContent = "\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u043d\u0430\u0436\u043c\u0438\u0442\u0435 \u00ab\u041f\u0440\u043e\u0432\u0435\u0440\u0438\u0442\u044c \u0434\u043e\u043c\u0435\u043d\u00bb, \u0437\u0430\u0442\u0435\u043c \u00ab\u041f\u043e\u0434\u043a\u043b\u044e\u0447\u0438\u0442\u044c \u0430\u0432\u0442\u043e\u043c\u0430\u0442\u0438\u0447\u0435\u0441\u043a\u0438\u00bb.";
 
 
 
@@ -2210,7 +4544,7 @@
 
 
 
-        connectHint.textContent = "Сначала добавьте домен и пропишите две A-записи.";
+        connectHint.textContent = "\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u0434\u043e\u0431\u0430\u0432\u044c\u0442\u0435 \u0434\u043e\u043c\u0435\u043d \u0438 \u043f\u0440\u043e\u043f\u0438\u0448\u0438\u0442\u0435 \u0434\u0432\u0435 A-\u0437\u0430\u043f\u0438\u0441\u0438.";
 
 
 
@@ -3406,7 +5740,7 @@
 
 
 
-      // Фавикон в панели «Данные сайта»
+      // Фавикон РІ панели «Данные сайта»
 
 
 
@@ -4166,11 +6500,11 @@
 
 
 
-          settingsAddOrderBtn.title = "Новая настройка доставки";
+          settingsAddOrderBtn.title = "\u041d\u043e\u0432\u0430\u044f \u043d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0430 \u0434\u043e\u0441\u0442\u0430\u0432\u043a\u0438";
 
 
 
-          settingsAddOrderBtn.setAttribute("aria-label", "Новая настройка доставки");
+          settingsAddOrderBtn.setAttribute("aria-label", "\u041d\u043e\u0432\u0430\u044f \u043d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0430 \u0434\u043e\u0441\u0442\u0430\u0432\u043a\u0438");
 
 
 
@@ -4178,11 +6512,11 @@
 
 
 
-          settingsAddOrderBtn.title = "Новый филиал";
+          settingsAddOrderBtn.title = "\u041d\u043e\u0432\u044b\u0439 \u0444\u0438\u043b\u0438\u0430\u043b";
 
 
 
-          settingsAddOrderBtn.setAttribute("aria-label", "Новая точка продаж");
+          settingsAddOrderBtn.setAttribute("aria-label", "\u041d\u043e\u0432\u0430\u044f \u0442\u043e\u0447\u043a\u0430 \u043f\u0440\u043e\u0434\u0430\u0436");
 
 
 
@@ -4206,11 +6540,11 @@
 
 
 
-          settingsAddOrderBtn.title = "Добавить";
+          settingsAddOrderBtn.title = "\u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c";
 
 
 
-          settingsAddOrderBtn.setAttribute("aria-label", "Добавить");
+          settingsAddOrderBtn.setAttribute("aria-label", "\u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c");
 
 
 
@@ -4327,54 +6661,18 @@
 
 
           section === "stores"
-
-
-
-            ? "Филиалы"
-
-
-
+            ? "\u0424\u0438\u043b\u0438\u0430\u043b\u044b"
             : section === "site"
-
-
-
-              ? "Сайт"
-
-
-
+              ? "\u0421\u0430\u0439\u0442"
               : section === "chats"
-
-
-
-                ? "Настройки чата"
-
-
-
+                ? "\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438 \u0447\u0430\u0442\u0430"
                 : section === "api"
-
-
-
-                  ? "Настройка принтера"
-
-
-
+                  ? "\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0430 \u043f\u0440\u0438\u043d\u0442\u0435\u0440\u0430"
                   : section === "system"
-
-
-
-                    ? "Системные"
-
-
-
+                    ? "\u0421\u0438\u0441\u0442\u0435\u043c\u043d\u044b\u0435"
                     : section === "delivery"
-
-
-
-                      ? "Доставка"
-
-
-
-                      : "Компания";
+                      ? "\u0414\u043e\u0441\u0442\u0430\u0432\u043a\u0430"
+                      : "\u041a\u043e\u043c\u043f\u0430\u043d\u0438\u044f";
 
 
 
@@ -4391,37 +6689,13 @@
 
 
           section === "stores"
-
-
-
-            ? "Загрузка..."
-
-
-
+            ? "\u0417\u0430\u0433\u0440\u0443\u0437\u043a\u0430..."
             : section === "chats"
-
-
-
-              ? "Звуки, помощник и сообщения"
-
-
-
+              ? "\u0417\u0432\u0443\u043a\u0438, \u043f\u043e\u043c\u043e\u0449\u043d\u0438\u043a \u0438 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u044f"
               : section === "api"
-
-
-
-                ? "Для печати заказов"
-
-
-
+                ? "\u0414\u043b\u044f \u043f\u0435\u0447\u0430\u0442\u0438 \u0437\u0430\u043a\u0430\u0437\u043e\u0432"
                 : section === "delivery"
-
-
-
-                  ? "Загрузка..."
-
-
-
+                  ? "\u0417\u0430\u0433\u0440\u0443\u0437\u043a\u0430..."
                   : "";
 
 
@@ -4711,38 +6985,14 @@
 
 
           settingsCenterTitle.textContent = isStores
-
-
-
-            ? "Филиалы"
-
-
-
+            ? "\u0424\u0438\u043b\u0438\u0430\u043b\u044b"
             : isSite
-
-
-
-              ? "Сайт"
-
-
-
+              ? "\u0421\u0430\u0439\u0442"
               : isChats
-
-
-
                 ? "\u0427\u0430\u0442\u044b"
-
-
-
                 : isApi
-
-
-
                   ? "API"
-
-
-
-                  : "Компания";
+                  : "\u041a\u043e\u043c\u043f\u0430\u043d\u0438\u044f";
 
 
 
@@ -4754,7 +7004,7 @@
 
 
 
-          settingsCenterSubtitle.textContent = isStores ? "Загрузка..." : "";
+          settingsCenterSubtitle.textContent = isStores ? "\u0417\u0430\u0433\u0440\u0443\u0437\u043a\u0430..." : "";
 
 
 
@@ -4778,7 +7028,7 @@
 
 
 
-          settingsCenterSubtitle.textContent = "Настройка принтера для печати заказов";
+          settingsCenterSubtitle.textContent = "\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0430 \u043f\u0440\u0438\u043d\u0442\u0435\u0440\u0430 \u0434\u043b\u044f \u043f\u0435\u0447\u0430\u0442\u0438 \u0437\u0430\u043a\u0430\u0437\u043e\u0432";
 
 
 
@@ -4967,6 +7217,8 @@
 
 
     const siteCard = document.getElementById("settingsSiteCard");
+    const pwaQrCard = document.getElementById("settingsPwaQrCard");
+    const domainCard = document.getElementById("settingsDomainCard");
 
 
 
@@ -5056,6 +7308,7 @@
 
 
     const domainPanel = document.getElementById("settingsDomainPanel");
+    const pwaQrPanel = document.getElementById("settingsPwaQrPanel");
 
 
 
@@ -12057,11 +14310,11 @@
 
 
 
-          ? "Добавьте и выберите активный API key в разделе «Доставка -> Настройка карты», чтобы открыть карту филиала."
+          ? "Добавьте и выберите активный API key РІ разделе «Доставка -> Настройка карты», чтобы открыть карту филиала."
 
 
 
-          : "Добавьте и выберите активный API key в разделе «Доставка -> Настройка карты», чтобы показать подложку здесь.";
+          : "Добавьте и выберите активный API key РІ разделе «Доставка -> Настройка карты», чтобы показать подложку здесь.";
 
 
 
@@ -12073,11 +14326,11 @@
 
 
 
-        ? "Сначала настройте карту в разделе «Системные -> Карта»."
+        ? "Сначала настройте карту РІ разделе «Системные -> Карта»."
 
 
 
-        : "Заполните параметры провайдера в разделе «Системные -> Карта», чтобы показать подложку здесь.";
+        : "Заполните параметры провайдера РІ разделе «Системные -> Карта», чтобы показать подложку здесь.";
 
 
 
@@ -12269,11 +14522,11 @@
 
 
 
-      settingsSystemMapCancelBtn.title = "Отменить";
+      settingsSystemMapCancelBtn.title = "\u041e\u0442\u043c\u0435\u043d\u0438\u0442\u044c";
 
 
 
-      settingsSystemMapCancelBtn.setAttribute("aria-label", "Отменить");
+      settingsSystemMapCancelBtn.setAttribute("aria-label", "\u041e\u0442\u043c\u0435\u043d\u0438\u0442\u044c");
 
 
 
@@ -12305,11 +14558,11 @@
 
 
 
-      settingsSystemDeliveryZonePolygonCancelBtn.title = "Отменить";
+      settingsSystemDeliveryZonePolygonCancelBtn.title = "\u041e\u0442\u043c\u0435\u043d\u0438\u0442\u044c";
 
 
 
-      settingsSystemDeliveryZonePolygonCancelBtn.setAttribute("aria-label", "Отменить");
+      settingsSystemDeliveryZonePolygonCancelBtn.setAttribute("aria-label", "\u041e\u0442\u043c\u0435\u043d\u0438\u0442\u044c");
 
 
 
@@ -15529,7 +17782,7 @@
 
 
 
-        setDeliveryMapSearchStatus("Настройте геокодер в разделе «Системные -> Карта».", "error");
+        setDeliveryMapSearchStatus("Настройте геокодер РІ разделе «Системные -> Карта».", "error");
 
 
 
@@ -16081,7 +18334,7 @@
 
 
 
-      settingsStoreAddressMapHint.textContent = "Карта уточняет только координату. Текст адреса остаётся как в полях выше.";
+      settingsStoreAddressMapHint.textContent = "\u041a\u0430\u0440\u0442\u0430 \u0443\u0442\u043e\u0447\u043d\u044f\u0435\u0442 \u0442\u043e\u043b\u044c\u043a\u043e \u043a\u043e\u043e\u0440\u0434\u0438\u043d\u0430\u0442\u0443. \u0422\u0435\u043a\u0441\u0442 \u0430\u0434\u0440\u0435\u0441\u0430 \u043e\u0441\u0442\u0430\u0451\u0442\u0441\u044f \u043a\u0430\u043a \u0432 \u043f\u043e\u043b\u044f\u0445 \u0432\u044b\u0448\u0435.";
 
 
 
@@ -17426,6 +19679,10 @@
 
 
       if (domainPanel) domainPanel.classList.toggle("hidden", tabId !== "domain");
+      if (pwaQrPanel) pwaQrPanel.classList.toggle("hidden", tabId !== "pwa-qr");
+      if (tabId !== "pwa-qr" && tenantPwaDesignerExpanded) {
+        closeTenantPwaDesignerExpanded();
+      }
 
 
 
@@ -17733,7 +19990,7 @@
 
 
 
-        closeBtn.setAttribute("aria-label", "Закрыть");
+        closeBtn.setAttribute("aria-label", "\u0417\u0430\u043a\u0440\u044b\u0442\u044c");
 
 
 
@@ -17814,6 +20071,23 @@
 
 
           if (tabId === "logo" && logoCard) logoCard.classList.remove("is-active");
+
+
+
+          if (tabId === "site" && siteCard) siteCard.classList.remove("is-active");
+
+
+
+          if (tabId === "domain" && domainCard) domainCard.classList.remove("is-active");
+          if (tabId === "pwa-qr" && pwaQrCard) pwaQrCard.classList.remove("is-active");
+
+
+
+          if (tabId === "telegram-app" && telegramAppCard) telegramAppCard.classList.remove("is-active");
+
+
+
+          if (tabId === "max-app" && maxAppCard) maxAppCard.classList.remove("is-active");
 
 
 
@@ -17993,6 +20267,24 @@
 
 
 
+      if (tabId === "site" && siteCard) siteCard.classList.add("is-active");
+
+
+
+      if (tabId === "domain" && domainCard) domainCard.classList.add("is-active");
+      if (tabId === "pwa-qr" && pwaQrCard) pwaQrCard.classList.add("is-active");
+      if (tabId === "pwa-qr") scheduleTenantPwaDesignerRender();
+
+
+
+      if (tabId === "telegram-app" && telegramAppCard) telegramAppCard.classList.add("is-active");
+
+
+
+      if (tabId === "max-app" && maxAppCard) maxAppCard.classList.add("is-active");
+
+
+
       if (tabId === "brand" && brandCard) brandCard.classList.add("is-active");
 
 
@@ -18059,11 +20351,23 @@
 
     }
 
+    function ensureSettingsSectionActive(sectionId) {
+      const targetSection = String(sectionId || "").trim();
+      if (!targetSection) return;
+      const currentSection = String(document.body.getAttribute("data-settings-section") || "").trim();
+      if (currentSection === targetSection) return;
+      const sectionBtn = document.querySelector(`[data-settings-section="${targetSection}"]`);
+      if (sectionBtn && typeof sectionBtn.click === "function") {
+        sectionBtn.click();
+      }
+    }
 
-
-
-
-
+    if (window) {
+      window.__openSettingsPwaQrTab = () => {
+        ensureSettingsSectionActive("site");
+        ensureTab("pwa-qr", "QR \u0434\u043b\u044f \u0443\u0441\u0442\u0430\u043d\u043e\u0432\u043a\u0438 PWA");
+      };
+    }
 
     if (logoCard) {
 
@@ -18110,10 +20414,6 @@
 
 
 
-
-
-
-    const domainCard = document.getElementById("settingsDomainCard");
 
 
 
@@ -18184,6 +20484,40 @@
 
     const domainSubdomainInputEl = document.getElementById("subdomainInput");
 
+    const tenantPwaQrTargetSelect = document.getElementById("tenantPwaQrTargetSelect");
+    const tenantPwaQrOpenBtn = document.getElementById("tenantPwaQrOpenBtn");
+    const tenantPwaQrCopyBtn = document.getElementById("tenantPwaQrCopyBtn");
+    const tenantPwaDevQrTargetSelect = document.getElementById("tenantPwaDevQrTargetSelect");
+    const tenantPwaDevQrOpenBtn = document.getElementById("tenantPwaDevQrOpenBtn");
+    const tenantPwaDevQrCopyBtn = document.getElementById("tenantPwaDevQrCopyBtn");
+    const tenantQrDesignerSourceSelect = document.getElementById("tenantQrDesignerSourceSelect");
+    const tenantQrDesignerTargetSelect = document.getElementById("tenantQrDesignerTargetSelect");
+    const tenantQrDesignerRatioGroup = document.getElementById("tenantQrDesignerRatioGroup");
+    const tenantQrDesignerStyleSelect = document.getElementById("tenantQrDesignerStyleSelect");
+    const tenantQrDesignerColorInput = document.getElementById("tenantQrDesignerColorInput");
+    const tenantQrDesignerBackgroundColorInput = document.getElementById("tenantQrDesignerBackgroundColorInput");
+    const tenantQrDesignerCornerRadiusInput = document.getElementById("tenantQrDesignerCornerRadiusInput");
+    const tenantQrDesignerCornerRadiusMinus = document.getElementById("tenantQrDesignerCornerRadiusMinus");
+    const tenantQrDesignerCornerRadiusPlus = document.getElementById("tenantQrDesignerCornerRadiusPlus");
+    const tenantQrDesignerColorPalette = document.getElementById("tenantQrDesignerColorPalette");
+    const tenantQrDesignerBgPalette = document.getElementById("tenantQrDesignerBgPalette");
+    const tenantQrDesignerBackgroundGradientBtn = document.getElementById("tenantQrDesignerBackgroundGradientBtn");
+    const tenantQrDesignerBackgroundInput = document.getElementById("tenantQrDesignerBackgroundInput");
+    const tenantQrDesignerBackgroundUploadBtn = document.getElementById("tenantQrDesignerBackgroundUploadBtn");
+    const tenantQrDesignerUseSiteLogoToggle = document.getElementById("tenantQrDesignerUseSiteLogoToggle");
+    const tenantQrDesignerLogoInput = null;
+    const tenantQrDesignerLogoUploadBtn = null;
+    const tenantQrDesignerUseSiteLogoBtn = null;
+    const tenantQrDesignerLogoResetBtn = null;
+    const tenantQrDesignerCopyBtn = document.getElementById("tenantQrDesignerCopyBtn");
+    const tenantQrDesignerSaveCardBtn = document.getElementById("tenantQrDesignerSaveCardBtn");
+    const tenantQrDesignerSaveQrBtn = document.getElementById("tenantQrDesignerSaveQrBtn");
+    const tenantQrDesignerStage = document.getElementById("tenantQrDesignerStage");
+    const tenantQrDesignerCardEyebrow = document.getElementById("tenantQrDesignerCardEyebrow");
+    const tenantQrDesignerCardEyebrowInput = document.getElementById("tenantQrDesignerCardEyebrowInput");
+    const tenantQrDesignerExpandedCloseBtn = document.getElementById("tenantQrDesignerExpandedCloseBtn");
+    const tenantQrDesignerExpandedLayer = document.getElementById("tenantQrDesignerExpandedLayer");
+
 
 
     if (domainCard) {
@@ -18205,6 +20539,29 @@
     }
 
 
+
+    if (pwaQrCard) {
+
+      pwaQrCard.addEventListener("click", () => {
+
+        ensureSettingsSectionActive("site");
+
+        ensureTab("pwa-qr", "QR \u0434\u043b\u044f \u0443\u0441\u0442\u0430\u043d\u043e\u0432\u043a\u0438 PWA");
+
+      });
+
+    }
+
+    if (document && !document.__settingsPwaQrCardDelegatedBound) {
+      document.__settingsPwaQrCardDelegatedBound = true;
+      document.addEventListener("click", (event) => {
+        const targetEl = event.target;
+        if (!targetEl || !targetEl.closest) return;
+        if (!targetEl.closest("#settingsPwaQrCard")) return;
+        ensureSettingsSectionActive("site");
+        ensureTab("pwa-qr", "QR \u0434\u043b\u044f \u0443\u0441\u0442\u0430\u043d\u043e\u0432\u043a\u0438 PWA");
+      });
+    }
 
     function resetDomainCancelButton() {
 
@@ -18406,6 +20763,8 @@
       }
 
       renderTenantDomains();
+      renderTenantPwaInstallQr();
+      renderTenantPwaDevInstallQr();
 
       const connectBtnEl = document.getElementById("domainConnectBtn");
       if (connectBtnEl) {
@@ -18689,6 +21048,453 @@
 
 
 
+    if (tenantPwaQrTargetSelect) {
+      tenantPwaQrTargetSelect.addEventListener("change", () => {
+        selectedTenantPwaTargetId = String(tenantPwaQrTargetSelect.value || "").trim() || null;
+        renderTenantPwaInstallQr();
+      });
+    }
+
+    if (tenantPwaQrOpenBtn) {
+      tenantPwaQrOpenBtn.addEventListener("click", () => {
+        const selectedTarget = getSelectedTenantPwaInstallTarget();
+        if (!selectedTarget || !selectedTarget.url) return;
+        window.open(selectedTarget.url, "_blank");
+      });
+    }
+
+    if (tenantPwaQrCopyBtn) {
+      const copyBtnOriginalHtml = tenantPwaQrCopyBtn.innerHTML;
+      tenantPwaQrCopyBtn.addEventListener("click", () => {
+        const selectedTarget = getSelectedTenantPwaInstallTarget();
+        if (!selectedTarget || !selectedTarget.url || !navigator.clipboard) return;
+        navigator.clipboard.writeText(selectedTarget.url).then(() => {
+          tenantPwaQrCopyBtn.innerHTML = '<i class="fas fa-check"></i> Скопировано';
+          setTimeout(() => {
+            tenantPwaQrCopyBtn.innerHTML = copyBtnOriginalHtml;
+          }, 1500);
+        }).catch(() => {
+          alert("Не удалось скопировать ссылку.");
+        });
+      });
+    }
+
+    if (tenantPwaDevQrTargetSelect) {
+      tenantPwaDevQrTargetSelect.addEventListener("change", () => {
+        selectedTenantPwaDevTargetId = String(tenantPwaDevQrTargetSelect.value || "").trim() || null;
+        renderTenantPwaDevInstallQr();
+      });
+    }
+
+    if (tenantPwaDevQrOpenBtn) {
+      tenantPwaDevQrOpenBtn.addEventListener("click", () => {
+        const selectedTarget = getSelectedTenantPwaDevInstallTarget();
+        if (!selectedTarget || !selectedTarget.url) return;
+        window.open(selectedTarget.url, "_blank");
+      });
+    }
+
+    if (tenantPwaDevQrCopyBtn) {
+      const copyBtnOriginalHtml = tenantPwaDevQrCopyBtn.innerHTML;
+      tenantPwaDevQrCopyBtn.addEventListener("click", () => {
+        const selectedTarget = getSelectedTenantPwaDevInstallTarget();
+        if (!selectedTarget || !selectedTarget.url || !navigator.clipboard) return;
+        navigator.clipboard.writeText(selectedTarget.url).then(() => {
+          tenantPwaDevQrCopyBtn.innerHTML = '<i class="fas fa-check"></i> Скопировано';
+          setTimeout(() => {
+            tenantPwaDevQrCopyBtn.innerHTML = copyBtnOriginalHtml;
+          }, 1500);
+        }).catch(() => {
+          alert("Не удалось скопировать ссылку.");
+        });
+      });
+    }
+
+    if (tenantQrDesignerSourceSelect) {
+      tenantQrDesignerSourceSelect.addEventListener("change", () => {
+        tenantPwaDesignerSourceMode = "prod";
+        syncTenantPwaTargetFromSelectedDomain();
+        renderTenantPwaDesigner();
+      });
+    }
+
+    if (tenantQrDesignerTargetSelect) {
+      tenantQrDesignerTargetSelect.addEventListener("change", () => {
+        const nextValue = String(tenantQrDesignerTargetSelect.value || "").trim() || null;
+        selectedTenantPwaTargetId = nextValue;
+        renderTenantPwaDesigner();
+      });
+    }
+
+    if (tenantQrDesignerRatioGroup) {
+      tenantQrDesignerRatioGroup.addEventListener("click", (event) => {
+        const btn = event.target && event.target.closest("[data-tenant-qr-ratio]");
+        if (!btn) return;
+        tenantPwaDesignerCardRatio = String(btn.getAttribute("data-tenant-qr-ratio") || "1:1").trim() || "1:1";
+        renderTenantPwaDesigner();
+      });
+    }
+
+    if (tenantQrDesignerStyleSelect) {
+      tenantQrDesignerStyleSelect.addEventListener("change", () => {
+        tenantPwaDesignerQrStyle = String(tenantQrDesignerStyleSelect.value || "rounded").trim() || "rounded";
+        renderTenantPwaDesigner();
+      });
+    }
+
+    if (tenantQrDesignerColorInput) {
+      tenantQrDesignerColorInput.addEventListener("input", () => {
+        tenantPwaDesignerQrColor = String(tenantQrDesignerColorInput.value || "#111827").trim() || "#111827";
+        renderTenantPwaDesigner();
+      });
+    }
+
+    if (tenantQrDesignerBackgroundColorInput) {
+      tenantQrDesignerBackgroundColorInput.addEventListener("input", () => {
+        tenantPwaDesignerBackgroundCustomColor = String(tenantQrDesignerBackgroundColorInput.value || "").trim();
+        tenantPwaDesignerBackgroundImage = "";
+        renderTenantPwaDesigner();
+      });
+    }
+
+    const bindPicker = (kind) => {
+      const picker = getTenantQrPicker(kind);
+      if (!picker.wrap || picker.wrap.dataset.tenantQrPickerBound === "1") return;
+      picker.wrap.dataset.tenantQrPickerBound = "1";
+      if (picker.toggle) {
+        picker.toggle.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const hidden = picker.panel ? picker.panel.classList.contains("hidden") : true;
+          openTenantQrPicker("qr", false);
+          openTenantQrPicker("bg", false);
+          openTenantQrPicker(kind, hidden);
+        });
+      }
+      const dragStart = (target, event) => {
+        const point = event.touches && event.touches[0] ? event.touches[0] : event;
+        if (!point) return;
+        event.preventDefault();
+        event.stopPropagation();
+        openTenantQrPicker(kind, true);
+        tenantPwaDesignerColorPickerDrag = { kind, target };
+      };
+      if (picker.sv) {
+        picker.sv.addEventListener("mousedown", (event) => dragStart("sv", event));
+        picker.sv.addEventListener("touchstart", (event) => dragStart("sv", event), { passive: false });
+      }
+      if (picker.hue) {
+        picker.hue.addEventListener("mousedown", (event) => dragStart("hue", event));
+        picker.hue.addEventListener("touchstart", (event) => dragStart("hue", event), { passive: false });
+      }
+      const applyRgb = () => {
+        const r = clampTenantQrRgb(picker.r && picker.r.value);
+        const g = clampTenantQrRgb(picker.g && picker.g.value);
+        const b = clampTenantQrRgb(picker.b && picker.b.value);
+        applyTenantQrColor(kind, rgbToHex(r, g, b));
+      };
+      if (picker.r) picker.r.addEventListener("input", applyRgb);
+      if (picker.g) picker.g.addEventListener("input", applyRgb);
+      if (picker.b) picker.b.addEventListener("input", applyRgb);
+    };
+    bindPicker("qr");
+    bindPicker("bg");
+
+    bindTenantPwaDesignerStepper(
+      tenantQrDesignerCornerRadiusInput,
+      tenantQrDesignerCornerRadiusMinus,
+      tenantQrDesignerCornerRadiusPlus,
+      (nextValue) => {
+        tenantPwaDesignerCornerRadius = normalizeTenantPwaDesignerCornerRadius(nextValue, 30);
+        renderTenantPwaDesigner();
+      }
+    );
+
+    if (tenantQrDesignerColorPalette) {
+      tenantQrDesignerColorPalette.addEventListener("click", (event) => {
+        const btn = event.target && event.target.closest("[data-tenant-qr-color]");
+        if (!btn) return;
+        tenantPwaDesignerQrColor = String(btn.getAttribute("data-tenant-qr-color") || "#111827").trim() || "#111827";
+        renderTenantPwaDesigner();
+      });
+    }
+
+    if (tenantQrDesignerBgPalette) {
+      tenantQrDesignerBgPalette.addEventListener("click", (event) => {
+        const btn = event.target && event.target.closest("[data-tenant-qr-bg]");
+        if (!btn) return;
+        tenantPwaDesignerBackgroundPresetId = String(btn.getAttribute("data-tenant-qr-bg") || "warm-sun").trim() || "warm-sun";
+        tenantPwaDesignerBackgroundCustomColor = "";
+        tenantPwaDesignerBackgroundImage = "";
+        renderTenantPwaDesigner();
+      });
+    }
+
+    if (tenantQrDesignerBackgroundGradientBtn) {
+      tenantQrDesignerBackgroundGradientBtn.addEventListener("click", () => {
+        tenantPwaDesignerBackgroundGradientEnabled = !tenantPwaDesignerBackgroundGradientEnabled;
+        tenantPwaDesignerBackgroundImage = "";
+        renderTenantPwaDesigner();
+      });
+    }
+
+    if (tenantQrDesignerBackgroundUploadBtn && tenantQrDesignerBackgroundInput) {
+      tenantQrDesignerBackgroundUploadBtn.addEventListener("click", () => {
+        tenantQrDesignerBackgroundInput.click();
+      });
+    }
+
+    if (tenantQrDesignerBackgroundInput) {
+      tenantQrDesignerBackgroundInput.addEventListener("change", async () => {
+        const file = tenantQrDesignerBackgroundInput.files && tenantQrDesignerBackgroundInput.files[0];
+        if (!file) return;
+        try {
+          tenantPwaDesignerBackgroundImage = await readImageFileAsDataUrl(file);
+          renderTenantPwaDesigner();
+        } catch (err) {
+          console.error("tenant qr background upload error:", err);
+          alert("Не удалось загрузить фон.");
+        } finally {
+          tenantQrDesignerBackgroundInput.value = "";
+        }
+      });
+    }
+
+    if (tenantQrDesignerUseSiteLogoToggle) {
+      tenantQrDesignerUseSiteLogoToggle.addEventListener("change", () => {
+        tenantPwaDesignerUseSiteLogo = !!tenantQrDesignerUseSiteLogoToggle.checked;
+        renderTenantPwaDesigner();
+      });
+    }
+
+    if (tenantQrDesignerLogoUploadBtn && tenantQrDesignerLogoInput) {
+      tenantQrDesignerLogoUploadBtn.addEventListener("click", () => {
+        tenantQrDesignerLogoInput.click();
+      });
+    }
+
+    if (tenantQrDesignerLogoInput) {
+      tenantQrDesignerLogoInput.addEventListener("change", async () => {
+        const file = tenantQrDesignerLogoInput.files && tenantQrDesignerLogoInput.files[0];
+        if (!file) return;
+        try {
+          tenantPwaDesignerLogoImage = await readImageFileAsDataUrl(file);
+          renderTenantPwaDesigner();
+        } catch (err) {
+          console.error("tenant qr logo upload error:", err);
+          alert("Не удалось загрузить логотип.");
+        } finally {
+          tenantQrDesignerLogoInput.value = "";
+        }
+      });
+    }
+
+    if (tenantQrDesignerUseSiteLogoBtn) {
+      tenantQrDesignerUseSiteLogoBtn.addEventListener("click", () => {
+        const tenantInfo = getTenantPwaDesignerTenantInfo();
+        if (!tenantInfo.logoUrl) {
+          alert("\u0423 \u0441\u0430\u0439\u0442\u0430 \u043f\u043e\u043a\u0430 \u043d\u0435\u0442 \u043b\u043e\u0433\u043e\u0442\u0438\u043f\u0430 \u0434\u043b\u044f \u0432\u0441\u0442\u0430\u0432\u043a\u0438 \u0432 \u0446\u0435\u043d\u0442\u0440 QR.");
+          return;
+        }
+        tenantPwaDesignerLogoImage = tenantInfo.logoUrl;
+        renderTenantPwaDesigner();
+      });
+    }
+
+    if (tenantQrDesignerLogoResetBtn) {
+      tenantQrDesignerLogoResetBtn.addEventListener("click", () => {
+        tenantPwaDesignerLogoImage = "";
+        renderTenantPwaDesigner();
+      });
+    }
+
+
+    if (tenantQrDesignerCopyBtn) {
+      tenantQrDesignerCopyBtn.addEventListener("click", async () => {
+        const selectedTarget = getSelectedTenantPwaDesignerTarget();
+        if (!selectedTarget || !selectedTarget.url || !navigator.clipboard) return;
+        try {
+          await navigator.clipboard.writeText(String(selectedTarget.url || ""));
+          pulseTenantPwaDesignerButton(tenantQrDesignerCopyBtn, '<i class="fas fa-check"></i>');
+        } catch (_) {
+          alert("Не удалось скопировать ссылку.");
+        }
+      });
+    }
+
+    if (tenantQrDesignerSaveCardBtn) {
+      tenantQrDesignerSaveCardBtn.addEventListener("click", () => {
+        downloadTenantPwaDesignerCard();
+      });
+    }
+
+    if (tenantQrDesignerSaveQrBtn) {
+      tenantQrDesignerSaveQrBtn.addEventListener("click", () => {
+        downloadTenantPwaDesignerQrSafe();
+      });
+    }
+
+    if (tenantQrDesignerCardEyebrow) {
+      const startBadgeEdit = (event) => {
+        if (event) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+        setTenantPwaDesignerBadgeEditing(true);
+      };
+      tenantQrDesignerCardEyebrow.addEventListener("click", startBadgeEdit);
+      tenantQrDesignerCardEyebrow.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        startBadgeEdit(event);
+      });
+    }
+
+    if (tenantQrDesignerCardEyebrowInput) {
+      tenantQrDesignerCardEyebrowInput.addEventListener("click", (event) => {
+        event.stopPropagation();
+      });
+      tenantQrDesignerCardEyebrowInput.addEventListener("keydown", (event) => {
+        // Prevent stage-level keyboard shortcuts (Enter/Space) while typing label text.
+        event.stopPropagation();
+        if (event.key === "Enter") {
+          event.preventDefault();
+          commitTenantPwaDesignerBadgeEdit(true);
+          return;
+        }
+        if (event.key === "Escape") {
+          event.preventDefault();
+          commitTenantPwaDesignerBadgeEdit(false);
+        }
+      });
+      tenantQrDesignerCardEyebrowInput.addEventListener("blur", () => {
+        window.setTimeout(() => {
+          commitTenantPwaDesignerBadgeEdit(true);
+        }, 0);
+      });
+    }
+
+    if (document && !document.__tenantPwaDesignerBadgeOutsideClickBound) {
+      document.__tenantPwaDesignerBadgeOutsideClickBound = true;
+      document.addEventListener("pointerdown", (event) => {
+        const targetEl = event && event.target;
+        const qrPicker = getTenantQrPicker("qr");
+        const bgPicker = getTenantQrPicker("bg");
+        if (!(qrPicker.wrap && qrPicker.wrap.contains(targetEl))) openTenantQrPicker("qr", false);
+        if (!(bgPicker.wrap && bgPicker.wrap.contains(targetEl))) openTenantQrPicker("bg", false);
+        if (!tenantPwaDesignerBadgeEditing) return;
+        const eyebrowEl = document.getElementById("tenantQrDesignerCardEyebrow");
+        if (eyebrowEl && eyebrowEl.contains(targetEl)) return;
+        commitTenantPwaDesignerBadgeEdit(true);
+      });
+    }
+
+    if (tenantQrDesignerStage) {
+      tenantQrDesignerStage.addEventListener("click", (event) => {
+        const targetEl = event && event.target;
+        if ((Date.now() - tenantPwaDesignerBadgeCommitTs) < 220) return;
+        if (tenantPwaDesignerBadgeEditing) {
+          commitTenantPwaDesignerBadgeEdit(true);
+          return;
+        }
+        if (targetEl && targetEl.closest && targetEl.closest("#tenantQrDesignerCardEyebrow")) return;
+        if (tenantPwaDesignerExpanded) {
+          closeTenantPwaDesignerExpanded();
+          return;
+        }
+        openTenantPwaDesignerExpanded();
+      });
+      tenantQrDesignerStage.addEventListener("keydown", (event) => {
+        if (tenantPwaDesignerBadgeEditing) return;
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        if (tenantPwaDesignerExpanded) {
+          closeTenantPwaDesignerExpanded();
+          return;
+        }
+        openTenantPwaDesignerExpanded();
+      });
+    }
+
+    if (tenantQrDesignerExpandedCloseBtn) {
+      tenantQrDesignerExpandedCloseBtn.addEventListener("click", () => {
+        closeTenantPwaDesignerExpanded();
+      });
+    }
+
+    if (tenantQrDesignerExpandedLayer) {
+      tenantQrDesignerExpandedLayer.addEventListener("click", (event) => {
+        if (!tenantPwaDesignerExpanded) return;
+        const targetEl = event && event.target;
+        if (!targetEl || !targetEl.closest) return;
+        const eyebrowEl = targetEl.closest(".tenant-qr-card__eyebrow");
+        if (!eyebrowEl) return;
+        event.preventDefault();
+        event.stopPropagation();
+        setTenantPwaDesignerBadgeEditing(true);
+      });
+    }
+
+    if (window && !window.__tenantPwaDesignerExpandedBound) {
+      window.__tenantPwaDesignerExpandedBound = true;
+      const movePicker = (clientX, clientY) => {
+        if (!tenantPwaDesignerColorPickerDrag) return;
+        const drag = tenantPwaDesignerColorPickerDrag;
+        const picker = getTenantQrPicker(drag.kind);
+        if (!picker || !picker.panel || picker.panel.classList.contains("hidden")) return;
+        const base = rgbToHsv(...Object.values(hexToRgb(getTenantQrColor(drag.kind))));
+        if (drag.target === "hue" && picker.hue) {
+          const rect = picker.hue.getBoundingClientRect();
+          const h = clampTenantQrUnit((clientX - rect.left) / Math.max(1, rect.width)) * 360;
+          const rgb = hsvToRgb(h, base.s, base.v);
+          applyTenantQrColor(drag.kind, rgbToHex(rgb.r, rgb.g, rgb.b));
+          return;
+        }
+        if (drag.target === "sv" && picker.sv) {
+          const rect = picker.sv.getBoundingClientRect();
+          const s = clampTenantQrUnit((clientX - rect.left) / Math.max(1, rect.width));
+          const v = 1 - clampTenantQrUnit((clientY - rect.top) / Math.max(1, rect.height));
+          const rgb = hsvToRgb(base.h, s, v);
+          applyTenantQrColor(drag.kind, rgbToHex(rgb.r, rgb.g, rgb.b));
+        }
+      };
+      window.addEventListener("resize", () => {
+        if (!tenantPwaDesignerExpanded) return;
+        scheduleTenantPwaDesignerExpandedLayoutSync();
+        renderTenantPwaDesigner();
+      });
+      window.addEventListener("scroll", () => {
+        if (!tenantPwaDesignerExpanded) return;
+        scheduleTenantPwaDesignerExpandedLayoutSync();
+      }, true);
+      window.addEventListener("keydown", (event) => {
+        if (event.key !== "Escape" || !tenantPwaDesignerExpanded) return;
+        closeTenantPwaDesignerExpanded();
+      });
+      window.addEventListener("mousemove", (event) => {
+        movePicker(event.clientX, event.clientY);
+      });
+      window.addEventListener("mouseup", () => {
+        tenantPwaDesignerColorPickerDrag = null;
+      });
+      window.addEventListener("touchmove", (event) => {
+        const touch = event.touches && event.touches[0];
+        if (!touch) return;
+        event.preventDefault();
+        movePicker(touch.clientX, touch.clientY);
+      }, { passive: false });
+      window.addEventListener("touchend", () => {
+        tenantPwaDesignerColorPickerDrag = null;
+      });
+    }
+
+
+    const tenantQrDesignerSiteNameInput = document.querySelector('[data-site-input="site_name"]');
+    if (tenantQrDesignerSiteNameInput) {
+      tenantQrDesignerSiteNameInput.addEventListener("input", () => {
+        renderTenantPwaDesigner();
+      });
+    }
+
     setDomainDraftMode(false);
 
 
@@ -18731,6 +21537,7 @@
 
 
         selectedTenantDomainId = domainId;
+        syncTenantPwaTargetFromSelectedDomain();
 
         if (linkActionBtn) {
           const linkAction = String(linkActionBtn.getAttribute("data-domain-link-action") || "").trim();
@@ -23115,7 +25922,7 @@
 
 
 
-                connectHint.textContent = "Домен уже подключен и работает по HTTPS.";
+                connectHint.textContent = "\u0414\u043e\u043c\u0435\u043d \u0443\u0436\u0435 \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0451\u043d \u0438 \u0440\u0430\u0431\u043e\u0442\u0430\u0435\u0442 \u043f\u043e HTTPS.";
 
 
 
@@ -23131,7 +25938,7 @@
 
 
 
-                connectHint.textContent = "Сначала пропишите две A-записи у регистратора домена.";
+                connectHint.textContent = "\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u043f\u0440\u043e\u043f\u0438\u0448\u0438\u0442\u0435 \u0434\u0432\u0435 A-\u0437\u0430\u043f\u0438\u0441\u0438 \u0443 \u0440\u0435\u0433\u0438\u0441\u0442\u0440\u0430\u0442\u043e\u0440\u0430 \u0434\u043e\u043c\u0435\u043d\u0430.";
 
 
 
@@ -23345,7 +26152,7 @@
 
 
 
-          connectHint.textContent = "Подключаем домен и выпускаем сертификат. Это может занять пару минут.";
+          connectHint.textContent = "\u041f\u043e\u0434\u043a\u043b\u044e\u0447\u0430\u0435\u043c \u0434\u043e\u043c\u0435\u043d \u0438 \u0432\u044b\u043f\u0443\u0441\u043a\u0430\u0435\u043c \u0441\u0435\u0440\u0442\u0438\u0444\u0438\u043a\u0430\u0442. \u042d\u0442\u043e \u043c\u043e\u0436\u0435\u0442 \u0437\u0430\u043d\u044f\u0442\u044c \u043f\u0430\u0440\u0443 \u043c\u0438\u043d\u0443\u0442.";
 
 
 
@@ -23393,11 +26200,11 @@
 
 
 
-                ? "Сначала пропишите две A-записи и дождитесь обновления DNS."
+                ? "\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u043f\u0440\u043e\u043f\u0438\u0448\u0438\u0442\u0435 \u0434\u0432\u0435 A-\u0437\u0430\u043f\u0438\u0441\u0438 \u0438 \u0434\u043e\u0436\u0434\u0438\u0442\u0435\u0441\u044c \u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u044f DNS."
 
 
 
-                : "Не удалось подключить домен автоматически.";
+                : "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0438\u0442\u044c \u0434\u043e\u043c\u0435\u043d \u0430\u0432\u0442\u043e\u043c\u0430\u0442\u0438\u0447\u0435\u0441\u043a\u0438.";
 
 
 
@@ -23405,7 +26212,7 @@
 
 
 
-            alert(data && data.error ? String(data.error) : "Не удалось подключить домен автоматически.");
+            alert(data && data.error ? String(data.error) : "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0438\u0442\u044c \u0434\u043e\u043c\u0435\u043d \u0430\u0432\u0442\u043e\u043c\u0430\u0442\u0438\u0447\u0435\u0441\u043a\u0438.");
 
 
 
@@ -23449,7 +26256,7 @@
 
 
 
-            connectHint.textContent = "Домен подключен. Финально проверяем сайт и сертификат.";
+            connectHint.textContent = "\u0414\u043e\u043c\u0435\u043d \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0451\u043d. \u0424\u0438\u043d\u0430\u043b\u044c\u043d\u043e \u043f\u0440\u043e\u0432\u0435\u0440\u044f\u0435\u043c \u0441\u0430\u0439\u0442 \u0438 \u0441\u0435\u0440\u0442\u0438\u0444\u0438\u043a\u0430\u0442.";
 
 
 
@@ -23469,7 +26276,7 @@
 
 
 
-            connectHint.textContent = "Не удалось подключить домен автоматически.";
+            connectHint.textContent = "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0438\u0442\u044c \u0434\u043e\u043c\u0435\u043d \u0430\u0432\u0442\u043e\u043c\u0430\u0442\u0438\u0447\u0435\u0441\u043a\u0438.";
 
 
 
@@ -24373,7 +27180,7 @@
 
 
 
-        if (!confirm("Отключить уведомления в этот чат?")) return;
+        if (!confirm("Отключить уведомления РІ этот чат?")) return;
 
 
 
@@ -25553,7 +28360,7 @@
 
 
 
-            setStoreAddressSuggestStatus("Настройте геокодер в разделе «Системные -> Карта».", "error");
+            setStoreAddressSuggestStatus("Настройте геокодер РІ разделе «Системные -> Карта».", "error");
 
 
 
@@ -35905,7 +38712,7 @@
 
 
 
-          return "Настройте геокодер в разделе «Системные -> Карта».";
+          return "Настройте геокодер РІ разделе «Системные -> Карта».";
 
 
 
@@ -35969,7 +38776,7 @@
 
 
 
-          return "Широта должна быть в диапазоне от -90 до 90.";
+          return "Широта должна быть РІ диапазоне от -90 до 90.";
 
 
 
@@ -35977,7 +38784,7 @@
 
 
 
-          return "Долгота должна быть в диапазоне от -180 до 180.";
+          return "Долгота должна быть РІ диапазоне от -180 до 180.";
 
 
 
@@ -36065,7 +38872,7 @@
 
 
 
-          `Адрес будет сохранён в нормализованном виде:\n\n${previewText}\n\nПродолжить сохранение?`
+          `Адрес будет сохранён РІ нормализованном виде:\n\n${previewText}\n\nПродолжить сохранение?`
 
 
 
@@ -40627,7 +43434,7 @@
 
 
 
-          deleteBtn.title = "Отключить";
+          deleteBtn.title = "\u041e\u0442\u043a\u043b\u044e\u0447\u0438\u0442\u044c";
 
 
 
@@ -40755,7 +43562,7 @@
 
           deleteBtn.className = "btn btn-icon btn-sm btn-danger-text";
 
-          deleteBtn.title = "Отключить";
+          deleteBtn.title = "\u041e\u0442\u043a\u043b\u044e\u0447\u0438\u0442\u044c";
 
           deleteBtn.dataset.bindingId = binding.id || "";
 
@@ -41131,7 +43938,7 @@
 
 
 
-            gearBtn.title = "Настройки филиалов";
+            gearBtn.title = "\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438 \u0444\u0438\u043b\u0438\u0430\u043b\u043e\u0432";
 
 
 
@@ -41171,7 +43978,7 @@
 
 
 
-          deleteBtn.title = "Отключить";
+          deleteBtn.title = "\u041e\u0442\u043a\u043b\u044e\u0447\u0438\u0442\u044c";
 
 
 
@@ -43771,7 +46578,7 @@
 
 
 
-    // Фавикон в панели «Данные сайта»
+    // Фавикон РІ панели «Данные сайта»
 
 
 
@@ -45211,7 +48018,7 @@
 
 
 
-          <span class="field-hint">Инструмент рисования и редактирования зон. Отдельная регистрация не нужна.</span>
+          <span class="field-hint">\u0418\u043d\u0441\u0442\u0440\u0443\u043c\u0435\u043d\u0442 \u0440\u0438\u0441\u043e\u0432\u0430\u043d\u0438\u044f \u0438 \u0440\u0435\u0434\u0430\u043a\u0442\u0438\u0440\u043e\u0432\u0430\u043d\u0438\u044f \u0437\u043e\u043d. \u041e\u0442\u0434\u0435\u043b\u044c\u043d\u0430\u044f \u0440\u0435\u0433\u0438\u0441\u0442\u0440\u0430\u0446\u0438\u044f \u043d\u0435 \u043d\u0443\u0436\u043d\u0430.</span>
 
 
 
@@ -47823,11 +50630,11 @@
 
 
 
-        ? `От ${minOrder} ₽ -> ${deliveryCost} ₽`
+        ? `От ${minOrder} в‚Ѕ -> ${deliveryCost} в‚Ѕ`
 
 
 
-        : `${deliveryCost} ₽ доставка`;
+        : `${deliveryCost} в‚Ѕ доставка`;
 
 
 
@@ -48811,11 +51618,11 @@
 
 
 
-        closeBtn.setAttribute("aria-label", "Закрыть");
+        closeBtn.setAttribute("aria-label", "\u0417\u0430\u043a\u0440\u044b\u0442\u044c");
 
 
 
-        closeBtn.textContent = "×";
+        closeBtn.textContent = "Г—";
 
 
 
@@ -49719,11 +52526,11 @@
 
 
 
-        ? `От ${minOrder} ₽ → ${deliveryCost} ₽`
+        ? `От ${minOrder} в‚Ѕ в†’ ${deliveryCost} в‚Ѕ`
 
 
 
-        : `${deliveryCost} ₽ доставка`;
+        : `${deliveryCost} в‚Ѕ доставка`;
 
 
 
@@ -50131,7 +52938,7 @@
 
 
 
-        empty.textContent = "Нажмите «+», чтобы выбрать филиалы";
+        empty.textContent = "Нажмите В«+В», чтобы выбрать филиалы";
 
 
 
@@ -50527,7 +53334,7 @@
 
 
 
-          empty.textContent = "Сначала создайте филиал в разделе филиалов.";
+          empty.textContent = "Сначала создайте филиал РІ разделе филиалов.";
 
 
 
@@ -50883,7 +53690,7 @@
 
 
 
-        removeBtn.setAttribute("aria-label", "Удалить порог");
+        removeBtn.setAttribute("aria-label", "\u0423\u0434\u0430\u043b\u0438\u0442\u044c \u043f\u043e\u0440\u043e\u0433");
 
 
 
@@ -51047,7 +53854,7 @@
 
 
 
-        removeBtn.setAttribute("aria-label", "Удалить порог");
+        removeBtn.setAttribute("aria-label", "\u0423\u0434\u0430\u043b\u0438\u0442\u044c \u043f\u043e\u0440\u043e\u0433");
 
 
 
@@ -51699,7 +54506,7 @@
 
 
 
-        swatchBtn.setAttribute("aria-label", `Выбрать цвет ${color.toUpperCase()}`);
+        swatchBtn.setAttribute("aria-label", `\u0412\u044b\u0431\u0440\u0430\u0442\u044c \u0446\u0432\u0435\u0442 ${color.toUpperCase()}`);
 
 
 
@@ -54203,7 +57010,7 @@
 
 
 
-        viewBtn.setAttribute("aria-label", isRevealOpen ? "Скрыть данные API" : "Просмотреть данные API");
+        viewBtn.setAttribute("aria-label", isRevealOpen ? "\u0421\u043a\u0440\u044b\u0442\u044c \u0434\u0430\u043d\u043d\u044b\u0435 API" : "\u041f\u0440\u043e\u0441\u043c\u043e\u0442\u0440\u0435\u0442\u044c \u0434\u0430\u043d\u043d\u044b\u0435 API");
 
 
 
@@ -54323,7 +57130,7 @@
 
 
 
-        editBtn.setAttribute("aria-label", isEditOpen ? "Скрыть редактирование" : "Редактировать");
+        editBtn.setAttribute("aria-label", isEditOpen ? "\u0421\u043a\u0440\u044b\u0442\u044c \u0440\u0435\u0434\u0430\u043a\u0442\u0438\u0440\u043e\u0432\u0430\u043d\u0438\u0435" : "\u0420\u0435\u0434\u0430\u043a\u0442\u0438\u0440\u043e\u0432\u0430\u0442\u044c");
 
 
 
@@ -55815,7 +58622,7 @@
 
 
 
-        empty.textContent = "Нажмите «+», чтобы выбрать филиалы";
+        empty.textContent = "Нажмите В«+В», чтобы выбрать филиалы";
 
 
 
@@ -55955,7 +58762,7 @@
 
 
 
-        removeBtn.setAttribute("aria-label", `Удалить филиал ${storeId}`);
+        removeBtn.setAttribute("aria-label", `\u0423\u0434\u0430\u043b\u0438\u0442\u044c \u0444\u0438\u043b\u0438\u0430\u043b ${storeId}`);
 
 
 
@@ -56883,7 +59690,7 @@
 
 
 
-          empty.textContent = "Сначала создайте филиал в разделе филиалов.";
+          empty.textContent = "Сначала создайте филиал РІ разделе филиалов.";
 
 
 
@@ -64587,7 +67394,7 @@
 
 
 
-            error: "Заполните обе суммы в каждом тарифном пороге.",
+            error: "Заполните обе суммы РІ каждом тарифном пороге.",
 
 
 
@@ -68232,6 +71039,7 @@
 
 
 })();
+
 
 
 

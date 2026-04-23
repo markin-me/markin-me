@@ -107,6 +107,7 @@ const SERVICE_WORKER_VERSION = (() => {
     : APP_CACHE_VERSION;
 })();
 const PORT = process.env.PORT || 3000;
+const DEV_PWA_TUNNEL_STATE_PATH = path.join(__dirname, 'tmp', 'dev-pwa-tunnel.json');
 const PERF_CONSOLE_LOGS_ENABLED = String(process.env.ENABLE_PERF_LOGS || '').trim() === '1';
 const TENANT_LOOKUP_CACHE_MS = Number(process.env.TENANT_LOOKUP_CACHE_MS || 60_000);
 const STATIC_FILE_VERSION_CACHE_MS = Number(process.env.STATIC_FILE_VERSION_CACHE_MS || 300_000);
@@ -215,6 +216,23 @@ function buildTrustedAdminHosts() {
 }
 
 const TRUSTED_ADMIN_HOSTS = buildTrustedAdminHosts();
+
+function getRuntimeDevTunnelTrustedHosts() {
+  const hosts = new Set();
+  const add = (value) => {
+    const normalized = normalizeConfiguredHost(value);
+    if (normalized) hosts.add(normalized);
+  };
+
+  add(process.env.DEV_PWA_PUBLIC_BASE_URL);
+
+  try {
+    const payload = JSON.parse(fs.readFileSync(DEV_PWA_TUNNEL_STATE_PATH, 'utf8'));
+    add(payload && (payload.public_url || payload.url || payload.base_url));
+  } catch (_) {}
+
+  return hosts;
+}
 
 function nowMs() {
   return Number(process.hrtime.bigint()) / 1e6;
@@ -874,7 +892,9 @@ function normalizeHostForMatch(hostname) {
 
 function isTrustedAdminHost(hostname) {
   const host = normalizeHostForMatch(hostname);
-  return Boolean(host && TRUSTED_ADMIN_HOSTS.has(host));
+  if (!host) return false;
+  if (TRUSTED_ADMIN_HOSTS.has(host)) return true;
+  return getRuntimeDevTunnelTrustedHosts().has(host);
 }
 
 function isManagedTenantDomainRequest(req) {
@@ -1024,6 +1044,9 @@ app.use(async (req, res, next) => {
 
 async function renderShop(req, res) {
   try {
+    if (String(req.query && req.query.install || '').trim() === '1') {
+      return renderShopInstallPage(req, res);
+    }
     const tenant = req._resolvedTenant || await resolveTenant(req);
     const mapConfig = normalizeTenantMapConfig(tenant);
     const tenantView = tenant && typeof tenant === 'object'
@@ -1039,6 +1062,34 @@ async function renderShop(req, res) {
   }
 }
 
+async function renderShopInstallPage(req, res) {
+  try {
+    const tenant = req._resolvedTenant || await resolveTenant(req);
+    const mapConfig = normalizeTenantMapConfig(tenant);
+    const tenantView = tenant && typeof tenant === 'object'
+      ? { ...tenant, store_address_map_enabled: Boolean(mapConfig.store_address_map_enabled) }
+      : tenant;
+    const tenantId = tenantView && tenantView.id ? tenantView.id : 1;
+    const tenantHostShop = Boolean(
+      req._resolvedTenant
+      && tenantView
+      && Number(req._resolvedTenant.id || 0) === Number(tenantView.id || 0)
+    );
+    const shopUrl = tenantHostShop
+      ? '/'
+      : `/shop?tenant_id=${encodeURIComponent(String(tenantId))}`;
+    const pageTitle = (tenant && (tenant.site_name || tenant.name))
+      ? `Установить ${tenant.site_name || tenant.name}`
+      : 'Установить приложение';
+    const tenantInstallTitle = (tenant && (tenant.site_name || tenant.name))
+      ? `Установка приложения ${tenant.site_name || tenant.name}`
+      : 'Установка приложения';
+    res.render('pages/shop-install', { pageTitle: tenantInstallTitle, tenant: tenantView, tenantId, shopUrl });
+  } catch (err) {
+    console.error('Ошибка загрузки install-страницы витрины:', err);
+    res.status(500).send('Ошибка загрузки install-страницы');
+  }
+}
 
 // ------------------------------
 // API: Auth (публичные роуты)
@@ -1143,10 +1194,21 @@ app.get('/manifest.json', async (req, res) => {
     res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8');
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     res.setHeader('Vary', 'Host');
+    const manifestId = appType === 'admin'
+      ? buildAdminManifestId(tenantId, startPath)
+      : `/pwa/shop/t${tenantId}`;
+    const relatedApplications = appType === 'admin'
+      ? undefined
+      : [{
+        platform: 'webapp',
+        url: String(req.originalUrl || '/manifest.json'),
+        id: manifestId
+      }];
+    const launchHandler = {
+      client_mode: 'navigate-existing'
+    };
     res.json({
-      id: appType === 'admin'
-        ? buildAdminManifestId(tenantId, startPath)
-        : `/pwa/shop/t${tenantId}`,
+      id: manifestId,
       name: appType === 'admin' ? adminPageTitle : manifestName,
       short_name: appType === 'admin' ? adminPageTitle : manifestShortName,
       description: (tenant && tenant.site_description) ? tenant.site_description : undefined,
@@ -1156,7 +1218,10 @@ app.get('/manifest.json', async (req, res) => {
       orientation: 'portrait',
       background_color: '#ffffff',
       theme_color: '#ffffff',
-      icons
+      icons,
+      launch_handler: launchHandler,
+      related_applications: relatedApplications,
+      prefer_related_applications: false
     });
   } catch (err) {
     console.error('Ошибка генерации manifest:', err);
@@ -1169,6 +1234,9 @@ app.get('/manifest.json', async (req, res) => {
     res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8');
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     res.setHeader('Vary', 'Host');
+    const launchHandler = {
+      client_mode: 'navigate-existing'
+    };
     res.json({
       id: appType === 'admin' ? '/pwa/admin/fallback' : '/pwa/shop/fallback',
       name: fallbackTitle,
@@ -1180,6 +1248,7 @@ app.get('/manifest.json', async (req, res) => {
       background_color: '#ffffff',
       theme_color: '#ffffff',
       icons: [],
+      launch_handler: launchHandler,
     });
   }
 });
@@ -1563,6 +1632,9 @@ app.use(async (req, res, next) => {
     const tenant = await findTenantByHost(getRequestRoutingHost(req));
     if (tenant) {
       req._resolvedTenant = tenant;
+      if (req.path === '/install-app' || req.path === '/shop/install-app') {
+        return renderShopInstallPage(req, res);
+      }
       return renderShop(req, res);
     }
     if (isManagedTenantDomainRequest(req)) {
@@ -1691,6 +1763,8 @@ app.get('/dashboard/settings', (req, res) =>
 // ------------------------------
 // Shop (витрина)
 // ------------------------------
+app.get('/install-app', renderShopInstallPage);
+app.get('/shop/install-app', renderShopInstallPage);
 app.get('/shop', renderShop);
 
 app.get('/auth', (req, res) => res.redirect('/login'));

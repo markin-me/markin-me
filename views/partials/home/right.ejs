@@ -924,7 +924,197 @@
               <button class="product-footer-btn product-footer-save" type="button" id="settingsSoundsSaveBtn">Сохранить</button>
             </div>
             </div>
+        </div>
+      </div>
+
+      <div class="info-card settings-right-panel settings-right-panel-fixed-footer hidden" id="settingsPwaQrPanel">
+        <div class="settings-site-field tenant-qr-designer-preview-field" id="tenantQrDesignerPreviewWrap">
+          <div class="tenant-qr-preview-top">
+            <div
+              class="tenant-qr-card-stage tenant-qr-card-stage--trigger"
+              id="tenantQrDesignerStage"
+              role="button"
+              tabindex="0"
+              aria-expanded="false"
+              aria-label="Открыть увеличенное превью QR"
+              title="Увеличить превью"
+            >
+              <div class="tenant-qr-card" id="tenantQrDesignerCard">
+                <div class="tenant-qr-card__bg" id="tenantQrDesignerCardBg"></div>
+                <div class="tenant-qr-card__overlay"></div>
+                <div class="tenant-qr-card__content">
+                  <div class="tenant-qr-card__layout" id="tenantQrDesignerCardLayout">
+                    <div class="tenant-qr-card__meta">
+                      <div class="tenant-qr-card__eyebrow" id="tenantQrDesignerCardEyebrow" role="button" tabindex="0" aria-label="Редактировать название карточки">
+                        <span class="tenant-qr-card__eyebrow-text" id="tenantQrDesignerCardEyebrowText">УСТАНОВКА ПРИЛОЖЕНИЯ</span>
+                        <span class="tenant-qr-card__eyebrow-icon" aria-hidden="true"><i class="fas fa-pen"></i></span>
+                        <input class="tenant-qr-card__eyebrow-input hidden" id="tenantQrDesignerCardEyebrowInput" type="text" maxlength="56" autocomplete="off" aria-label="Название карточки QR" />
+                      </div>
+                      <div class="tenant-qr-card__title" id="tenantQrDesignerCardTitle">Витрина</div>
+                    </div>
+                    <div class="tenant-qr-card__qr-shell">
+                      <div class="tenant-qr-card__qr" id="tenantQrDesignerQrMount" role="img" aria-label="Стилизованный QR-код"></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="tenant-qr-preview-side">
+              <div class="tenant-qr-actions" id="tenantQrDesignerActions">
+                <button class="btn btn-sm btn-secondary" type="button" id="tenantQrDesignerSaveCardBtn">Скачать карточку</button>
+                <button class="btn btn-sm btn-secondary" type="button" id="tenantQrDesignerSaveQrBtn">Скачать QR</button>
+              </div>
+              <div class="settings-site-inline-switch tenant-qr-logo-toggle-field">
+                <label class="field-label" for="tenantQrDesignerUseSiteLogoToggle">ЛОГОТИП В ЦЕНТРЕ QR</label>
+                <label class="switch">
+                  <input class="switch-input" type="checkbox" id="tenantQrDesignerUseSiteLogoToggle" aria-label="Использовать логотип сайта в центре QR" />
+                  <span class="switch-ui" aria-hidden="true"></span>
+                </label>
+              </div>
+            </div>
           </div>
+          <div class="tenant-qr-ratio-inline-field">
+            <label class="field-label">ФОРМАТ КАРТОЧКИ</label>
+            <div class="tenant-qr-ratio-grid tenant-qr-ratio-grid--inline" id="tenantQrDesignerRatioGroup"></div>
+          </div>
+        </div>
+        <div class="tenant-qr-expanded-layer hidden" id="tenantQrDesignerExpandedLayer" aria-hidden="true">
+          <div class="tenant-qr-expanded-viewport" id="tenantQrDesignerExpandedViewport">
+            <button class="tenant-qr-expanded-close" type="button" id="tenantQrDesignerExpandedCloseBtn" aria-label="Закрыть увеличенное превью QR">
+              <i class="fas fa-times"></i>
+            </button>
+            <div class="tenant-qr-expanded-shell" id="tenantQrDesignerExpandedShell">
+            </div>
+          </div>
+        </div>
+        <div class="settings-site-form settings-panel-scroll no-scrollbar">
+          <div class="settings-site-field">
+            <label class="field-label">АДРЕС ДЛЯ QR</label>
+            <select class="control" id="tenantQrDesignerTargetSelect" aria-label="Адрес для QR"></select>
+            <div class="field-hint" id="tenantQrDesignerTargetHint">Подключите рабочий домен или используйте субдомен tenant-а.</div>
+          </div>
+
+          <div class="tenant-qr-linkbox tenant-qr-linkbox--compact" id="tenantQrDesignerLinkbox">
+            <div class="tenant-qr-linkbox__compact-row">
+              <div class="tenant-qr-linkbox__label tenant-qr-linkbox__label--inline">Ссылка</div>
+              <a class="tenant-qr-linkbox__url tenant-qr-linkbox__url--single-line" id="tenantQrDesignerUrl" href="#" target="_blank" rel="noopener noreferrer"></a>
+              <button class="btn btn-sm btn-secondary tenant-qr-linkbox__copy" type="button" id="tenantQrDesignerCopyBtn" title="Скопировать ссылку" aria-label="Скопировать ссылку">
+                <i class="fas fa-copy"></i>
+              </button>
+            </div>
+          </div>
+
+          <div class="settings-site-field">
+            <label class="field-label">СТИЛЬ QR</label>
+            <div class="tenant-qr-inline-grid">
+              <div class="tenant-qr-inline-col">
+                <select class="control" id="tenantQrDesignerStyleSelect" aria-label="Стиль QR">
+                  <option value="square">Квадраты</option>
+                  <option value="dots">Кружки</option>
+                  <option value="rounded">Rounded</option>
+                  <option value="classy">Classy</option>
+                  <option value="classy-rounded">Classy Rounded</option>
+                  <option value="extra-rounded">Extra Rounded</option>
+                </select>
+              </div>
+              <div class="tenant-qr-inline-col">
+                <div class="tenant-qr-color-picker" id="tenantQrDesignerQrColorPicker">
+                  <button class="tenant-qr-color-picker__toggle" type="button" id="tenantQrDesignerQrColorToggle" aria-label="Выбрать цвет QR">
+                    <span class="tenant-qr-color-picker__bar" id="tenantQrDesignerQrColorBar">
+                      <span class="tenant-qr-color-picker__marker" id="tenantQrDesignerQrColorMarker"></span>
+                    </span>
+                  </button>
+                  <div class="tenant-qr-color-picker__panel hidden" id="tenantQrDesignerQrColorPanel">
+                    <div class="tenant-qr-color-picker__sv" id="tenantQrDesignerQrSv">
+                      <span class="tenant-qr-color-picker__sv-cursor" id="tenantQrDesignerQrSvCursor"></span>
+                    </div>
+                    <div class="tenant-qr-color-picker__hue" id="tenantQrDesignerQrHue">
+                      <span class="tenant-qr-color-picker__hue-cursor" id="tenantQrDesignerQrHueCursor"></span>
+                    </div>
+                    <div class="tenant-qr-color-picker__rgb">
+                      <label><input class="control" id="tenantQrDesignerQrR" type="number" min="0" max="255" step="1" inputmode="numeric" /><span>R</span></label>
+                      <label><input class="control" id="tenantQrDesignerQrG" type="number" min="0" max="255" step="1" inputmode="numeric" /><span>G</span></label>
+                      <label><input class="control" id="tenantQrDesignerQrB" type="number" min="0" max="255" step="1" inputmode="numeric" /><span>B</span></label>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-site-field tenant-qr-stepper-field">
+            <div class="tenant-qr-stepper-head">
+              <label class="field-label" for="tenantQrDesignerCornerRadiusInput">СКРУГЛЕНИЕ УГЛОВ</label>
+              <div class="discount-stepper">
+                <button
+                  type="button"
+                  class="discount-stepper-btn"
+                  id="tenantQrDesignerCornerRadiusMinus"
+                  aria-label="Уменьшить скругление углов QR-карточки"
+                >
+                  <span aria-hidden="true">-</span>
+                </button>
+                <input
+                  class="control discount-stepper-input"
+                  id="tenantQrDesignerCornerRadiusInput"
+                  type="number"
+                  min="0"
+                  max="999"
+                  step="2"
+                  value="30"
+                  inputmode="numeric"
+                />
+                <button
+                  type="button"
+                  class="discount-stepper-btn"
+                  id="tenantQrDesignerCornerRadiusPlus"
+                  aria-label="Увеличить скругление углов QR-карточки"
+                >
+                  <span aria-hidden="true">+</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-site-field">
+            <label class="field-label">ФОН КАРТОЧКИ</label>
+            <div class="tenant-qr-inline-grid tenant-qr-inline-grid--bg-controls">
+              <div class="tenant-qr-inline-col">
+                <div class="tenant-qr-color-picker" id="tenantQrDesignerBgColorPicker">
+                  <button class="tenant-qr-color-picker__toggle" type="button" id="tenantQrDesignerBgColorToggle" aria-label="Выбрать цвет фона карточки">
+                    <span class="tenant-qr-color-picker__bar" id="tenantQrDesignerBgColorBar">
+                      <span class="tenant-qr-color-picker__marker" id="tenantQrDesignerBgColorMarker"></span>
+                    </span>
+                  </button>
+                  <div class="tenant-qr-color-picker__panel hidden" id="tenantQrDesignerBgColorPanel">
+                    <div class="tenant-qr-color-picker__sv" id="tenantQrDesignerBgSv">
+                      <span class="tenant-qr-color-picker__sv-cursor" id="tenantQrDesignerBgSvCursor"></span>
+                    </div>
+                    <div class="tenant-qr-color-picker__hue" id="tenantQrDesignerBgHue">
+                      <span class="tenant-qr-color-picker__hue-cursor" id="tenantQrDesignerBgHueCursor"></span>
+                    </div>
+                    <div class="tenant-qr-color-picker__rgb">
+                      <label><input class="control" id="tenantQrDesignerBgR" type="number" min="0" max="255" step="1" inputmode="numeric" /><span>R</span></label>
+                      <label><input class="control" id="tenantQrDesignerBgG" type="number" min="0" max="255" step="1" inputmode="numeric" /><span>G</span></label>
+                      <label><input class="control" id="tenantQrDesignerBgB" type="number" min="0" max="255" step="1" inputmode="numeric" /><span>B</span></label>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="tenant-qr-toolbar">
+              <button class="btn btn-sm btn-secondary" type="button" id="tenantQrDesignerBackgroundGradientBtn">Градиент: вкл</button>
+            </div>
+            <div class="tenant-qr-upload-row">
+              <button class="btn btn-sm btn-secondary" type="button" id="tenantQrDesignerBackgroundUploadBtn">Загрузить свой фон</button>
+            </div>
+            <input class="hidden" id="tenantQrDesignerBackgroundInput" type="file" accept="image/*" />
+          </div>
+
+          <div class="domain-pwa-empty hidden" id="tenantQrDesignerEmpty">
+            Нет доступной ссылки для QR.
+          </div>
+        </div>
       </div>
 
       <div class="info-card settings-right-panel hidden" id="settingsNotificationsPanel">
