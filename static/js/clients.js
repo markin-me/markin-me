@@ -25,6 +25,7 @@
   const SHARED_ORDER_DETAILS_CACHE_MAX = 400;
   const CHAT_MOBILE_VIEW_STORAGE_KEY = `dashboard:chat:mobile:view:v1:${tenantId}`;
   const MARKETING_BANNERS_STORAGE_KEY = `dashboard:marketing:banners:v1:${tenantId}`;
+  const MARKETING_BONUS_CARDS_STORAGE_KEY = `dashboard:marketing:bonus-cards:v1:${tenantId}`;
 
   function writePersistedMobileChatView(view) {
     if (!document.body || !document.body.classList.contains("page-chat")) return String(view || "");
@@ -205,6 +206,16 @@
     const parsed = Number(value);
     if (!Number.isFinite(parsed)) return fallback;
     return Math.max(0, Math.min(100, Math.round(parsed)));
+  }
+
+  function normalizeHexColor(value, fallback = '#f8fafc') {
+    return normalizeBannerColor(value, fallback);
+  }
+
+  function normalizeNumberInputValue(value, fallback = 0) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return Number(fallback) || 0;
+    return Math.max(0, Math.round(parsed));
   }
 
   function buildBannerTitleBackgroundColor(color, opacity) {
@@ -489,6 +500,101 @@
     state.bannersEnabled = stored.enabled;
     state.bannersDrafts = stored.drafts;
     state.bannerPlacements = stored.placements;
+  }
+
+  function createDefaultBonusLevels() {
+    return [
+      { id: 'starter', title: 'Стартовый', subtitle: 'от 0 ₽', designColor: '#f8fafc', accentColor: '#f97316', minSpent: 0, minOrders: 0 },
+      { id: 'silver', title: 'Серебряный', subtitle: 'от 10 000 ₽', designColor: '#f1f5f9', accentColor: '#f97316', minSpent: 10000, minOrders: 5 },
+      { id: 'gold', title: 'Золотой', subtitle: 'от 25 000 ₽', designColor: '#e2e8f0', accentColor: '#f97316', minSpent: 25000, minOrders: 10 },
+    ];
+  }
+
+  function createDefaultBonusClientEvents() {
+    return [
+      { id: 'evt1', clientName: 'Иван Петров', phone: '+7 (900) 123-45-67', action: 'Присоединился к программе', status: 'Стартовый', at: 'Сегодня, 12:40' },
+      { id: 'evt2', clientName: 'Мария Соколова', phone: '+7 (921) 222-11-00', action: 'Повысил статус', status: 'Серебряный', at: 'Сегодня, 11:18' },
+      { id: 'evt3', clientName: 'Алексей Орлов', phone: '+7 (915) 555-89-10', action: 'Повысил статус', status: 'Золотой', at: 'Вчера, 20:03' },
+    ];
+  }
+
+  function sanitizeBonusLevels(items) {
+    const source = Array.isArray(items) ? items : [];
+    const next = source
+      .map((item, idx) => {
+        const title = String(item?.title || '').trim();
+        if (!title) return null;
+        return {
+          id: String(item?.id || `level_${idx + 1}`),
+          title,
+          subtitle: String(item?.subtitle || '').trim() || `Уровень ${idx + 1}`,
+          designColor: normalizeHexColor(item?.designColor, '#f8fafc'),
+          accentColor: normalizeHexColor(item?.accentColor, '#f97316'),
+          minSpent: normalizeNumberInputValue(item?.minSpent, 0),
+          minOrders: normalizeNumberInputValue(item?.minOrders, 0),
+        };
+      })
+      .filter(Boolean);
+    return next.length ? next : createDefaultBonusLevels();
+  }
+
+  function sanitizeBonusClientEvents(items) {
+    const source = Array.isArray(items) ? items : [];
+    const next = source
+      .map((item, idx) => ({
+        id: String(item?.id || `event_${idx + 1}`),
+        clientName: String(item?.clientName || '').trim() || `Клиент #${idx + 1}`,
+        phone: String(item?.phone || '').trim() || '—',
+        action: String(item?.action || '').trim() || 'Изменение статуса',
+        status: String(item?.status || '').trim() || '—',
+        at: String(item?.at || '').trim() || '—',
+      }))
+      .filter((item) => item.clientName);
+    return next.length ? next : createDefaultBonusClientEvents();
+  }
+
+  function readBonusCardsStorage() {
+    try {
+      const raw = localStorage.getItem(MARKETING_BONUS_CARDS_STORAGE_KEY);
+      if (!raw) {
+        return {
+          enabled: false,
+          levels: createDefaultBonusLevels(),
+          events: createDefaultBonusClientEvents(),
+        };
+      }
+      const parsed = JSON.parse(raw);
+      return {
+        enabled: parsed?.enabled === true,
+        levels: sanitizeBonusLevels(parsed?.levels),
+        events: sanitizeBonusClientEvents(parsed?.events),
+      };
+    } catch {
+      return {
+        enabled: false,
+        levels: createDefaultBonusLevels(),
+        events: createDefaultBonusClientEvents(),
+      };
+    }
+  }
+
+  function persistBonusCardsStorage() {
+    try {
+      localStorage.setItem(MARKETING_BONUS_CARDS_STORAGE_KEY, JSON.stringify({
+        enabled: state.bonusProgramEnabled === true,
+        levels: sanitizeBonusLevels(state.bonusLevels),
+        events: sanitizeBonusClientEvents(state.bonusClientEvents),
+      }));
+    } catch {}
+  }
+
+  function loadBonusCardsStorage() {
+    const stored = readBonusCardsStorage();
+    state.bonusProgramEnabled = stored.enabled;
+    state.bonusProgramEnabledDraft = stored.enabled;
+    state.bonusLevels = sanitizeBonusLevels(stored.levels);
+    state.bonusLevelsDraft = sanitizeBonusLevels(stored.levels);
+    state.bonusClientEvents = sanitizeBonusClientEvents(stored.events);
   }
 
   function getBannerDraftsByType(type = state.activeBannerType) {
@@ -1266,8 +1372,17 @@
   const elSortWrap = $("#clientsSortWrap");
   const elBannersSwitchWrap = $("#clientsBannersSwitchWrap");
   const elBannersEnabledSwitch = $("#clientsBannersEnabledSwitch");
+  const elBonusProgramSwitchWrap = $("#clientsBonusProgramSwitchWrap");
+  const elBonusProgramSwitch = $("#clientsBonusProgramSwitch");
+  const elBonusFlipAllBtn = $("#clientsBonusFlipAllBtn");
+  const elBonusEditBtn = $("#clientsBonusEditBtn");
+  const elBonusEditSaveBtn = $("#clientsBonusEditSaveBtn");
+  const elBonusEditCancelBtn = $("#clientsBonusEditCancelBtn");
   const elAddBtn = $("#clientsAddBtn");
   const elOpenFilterCategoriesBtn = $("#openFilterCategoriesBtn");
+  const elBonusCardsBtn = $("#bonusCardsBtn");
+  const elBonusReferralsBtn = $("#bonusReferralsBtn");
+  const elBonusProgramsBtn = $("#bonusProgramsBtn");
   const elClientsScroll = elList ? elList.closest(".panel-body") : null;
 
   // Discounts accordion
@@ -1290,6 +1405,13 @@
   const elBannersEmptyHint = $("#bannersEmptyHint");
   const elBannersPlacementZone = $("#bannersPlacementZone");
   const elBannersPlacementTrack = $("#bannersPlacementTrack");
+  const elBonusLevelsZone = $("#bonusLevelsZone");
+  const elBonusLevelsScroll = $("#bonusLevelsScroll");
+  const elBonusLevelsTrack = $("#bonusLevelsTrack");
+  const elBonusLevelsScale = $("#bonusLevelsScale");
+  const elBonusLevelsScalePoints = $("#bonusLevelsScalePoints");
+  const elBonusClientsList = $("#bonusClientsList");
+  const elBonusClientsEmptyHint = $("#bonusClientsEmptyHint");
   const elBannerPickerOverlay = $("#bannerPickerOverlay");
   const elBannerPickerBackdrop = $("#bannerPickerBackdrop");
   const elBannerPickerTitle = $("#bannerPickerTitle");
@@ -1664,7 +1786,7 @@
   // State
   // -----------------------------
   const state = {
-    currentView: "clients",   // "clients" | "filter-categories" | "discounts" | "banners"
+    currentView: "clients",   // "clients" | "filter-categories" | "discounts" | "banners" | "bonus-cards"
     activeFilter: "all",      // "all" | "custom_<id>"
     activeCustomFilterId: null,
     q: "",
@@ -1722,6 +1844,13 @@
     bannerPickerOpen: false,
     bannerPickerDraftSelection: new Set(),
     bannerDragState: null,
+    bonusProgramEnabled: false,
+    bonusProgramEnabledDraft: false,
+    bonusCardsEditing: false,
+    bonusLevels: createDefaultBonusLevels(),
+    bonusLevelsDraft: createDefaultBonusLevels(),
+    bonusClientEvents: createDefaultBonusClientEvents(),
+    bonusFlippedLevelIds: new Set(),
     discounts: [],
     discountsTotals: { all: 0 },
     activeDiscountFilter: "all",
@@ -6033,6 +6162,262 @@
       });
       elBannersFilters.appendChild(btn);
     });
+  }
+
+  function syncBonusMenuState() {
+    if (elBonusCardsBtn) {
+      elBonusCardsBtn.classList.toggle('is-active', state.currentView === 'bonus-cards');
+    }
+    if (elBonusReferralsBtn) {
+      elBonusReferralsBtn.classList.remove('is-active');
+    }
+    if (elBonusProgramsBtn) {
+      elBonusProgramsBtn.classList.remove('is-active');
+    }
+  }
+
+  function getCurrentBonusLevels() {
+    return state.bonusCardsEditing ? state.bonusLevelsDraft : state.bonusLevels;
+  }
+
+  function normalizeBonusFlipState(levels = getCurrentBonusLevels()) {
+    const allowedIds = new Set((Array.isArray(levels) ? levels : []).map((level) => String(level?.id || '').trim()).filter(Boolean));
+    state.bonusFlippedLevelIds = new Set(
+      [...(state.bonusFlippedLevelIds || new Set())].filter((id) => allowedIds.has(String(id || '').trim()))
+    );
+  }
+
+  function isBonusLevelFlipped(levelId) {
+    const targetId = String(levelId || '').trim();
+    if (!targetId) return false;
+    return state.bonusFlippedLevelIds.has(targetId);
+  }
+
+  function areAllBonusLevelsFlipped(levels = getCurrentBonusLevels()) {
+    const list = Array.isArray(levels) ? levels : [];
+    if (!list.length) return false;
+    return list.every((level) => isBonusLevelFlipped(level?.id));
+  }
+
+  function toggleBonusLevelFlip(levelId) {
+    const targetId = String(levelId || '').trim();
+    if (!targetId) return;
+    if (state.bonusFlippedLevelIds.has(targetId)) {
+      state.bonusFlippedLevelIds.delete(targetId);
+    } else {
+      state.bonusFlippedLevelIds.add(targetId);
+    }
+    syncBonusToolbarState();
+    renderBonusLevels();
+  }
+
+  function toggleAllBonusLevelsFlip() {
+    const levels = getCurrentBonusLevels();
+    normalizeBonusFlipState(levels);
+    const shouldFlipAll = !areAllBonusLevelsFlipped(levels);
+    const next = new Set(state.bonusFlippedLevelIds);
+    (Array.isArray(levels) ? levels : []).forEach((level) => {
+      const levelId = String(level?.id || '').trim();
+      if (!levelId) return;
+      if (shouldFlipAll) next.add(levelId);
+      else next.delete(levelId);
+    });
+    state.bonusFlippedLevelIds = next;
+    syncBonusToolbarState();
+    renderBonusLevels();
+  }
+
+  function syncBonusToolbarState() {
+    const isBonusCardsView = state.currentView === 'bonus-cards';
+    if (elBonusProgramSwitchWrap) elBonusProgramSwitchWrap.classList.toggle('hidden', !isBonusCardsView);
+    if (elBonusFlipAllBtn) {
+      elBonusFlipAllBtn.classList.toggle('hidden', !isBonusCardsView);
+      const allFlipped = areAllBonusLevelsFlipped(getCurrentBonusLevels());
+      elBonusFlipAllBtn.classList.toggle('is-active', allFlipped);
+      elBonusFlipAllBtn.setAttribute('title', allFlipped ? 'Показать лицевую сторону всех' : 'Показать условия всех');
+      elBonusFlipAllBtn.setAttribute('aria-label', allFlipped ? 'Показать лицевую сторону всех' : 'Показать условия всех');
+    }
+    if (elBonusEditBtn) elBonusEditBtn.classList.toggle('hidden', !isBonusCardsView);
+    if (elBonusEditSaveBtn) elBonusEditSaveBtn.classList.toggle('hidden', !isBonusCardsView || !state.bonusCardsEditing);
+    if (elBonusEditCancelBtn) elBonusEditCancelBtn.classList.toggle('hidden', !isBonusCardsView || !state.bonusCardsEditing);
+    if (elBonusProgramSwitch) {
+      elBonusProgramSwitch.checked = (state.bonusCardsEditing ? state.bonusProgramEnabledDraft : state.bonusProgramEnabled) === true;
+      elBonusProgramSwitch.disabled = !state.bonusCardsEditing;
+    }
+  }
+
+  function renderBonusLevels() {
+    if (!elBonusLevelsTrack) return;
+    elBonusLevelsTrack.innerHTML = '';
+
+    const levels = state.bonusCardsEditing ? state.bonusLevelsDraft : state.bonusLevels;
+    normalizeBonusFlipState(levels);
+    levels.forEach((level, index) => {
+      const levelId = String(level?.id || '').trim() || `level_${index + 1}`;
+      const isFlipped = isBonusLevelFlipped(levelId);
+      const isEditing = state.bonusCardsEditing === true;
+      const card = document.createElement('div');
+      card.className = `banner-placement-card bonus-level-card${isFlipped ? ' is-flipped' : ''}`;
+      card.dataset.bonusLevelId = levelId;
+      card.innerHTML = `
+        <div class="bonus-level-flip-scene">
+          <div class="bonus-level-flip-inner">
+            <div class="bonus-level-face bonus-level-face--front">
+              <button class="bonus-level-flip-btn" type="button" data-bonus-flip-id="${escapeHtml(levelId)}" aria-label="Перевернуть карточку" title="Перевернуть карточку">
+                <i class="fas fa-sync-alt"></i>
+              </button>
+              <div class="bonus-level-front-main" style="background:${escapeHtml(level.designColor || '#f8fafc')}">
+                <div class="banner-placement-card-icon" style="color:${escapeHtml(level.accentColor || '#f97316')}"><i class="fas fa-medal"></i></div>
+              </div>
+              <div class="bonus-level-front-copy">
+                ${
+                  isEditing
+                    ? `<input class="control bonus-level-field bonus-level-title-input" type="text" data-bonus-level-index="${index}" data-bonus-level-field="title" value="${escapeHtml(level.title)}" />`
+                    : `<div class="banner-placement-card-title">${escapeHtml(level.title)}</div>`
+                }
+                <div class="banner-placement-card-display-title">${escapeHtml(level.subtitle || '')}</div>
+                ${isEditing ? `<input class="control bonus-level-field bonus-level-color-input" type="color" data-bonus-level-index="${index}" data-bonus-level-field="designColor" value="${escapeHtml(level.designColor || '#f8fafc')}" />` : ''}
+              </div>
+            </div>
+            <div class="bonus-level-face bonus-level-face--back">
+              <button class="bonus-level-flip-btn" type="button" data-bonus-flip-id="${escapeHtml(levelId)}" aria-label="Перевернуть карточку" title="Перевернуть карточку">
+                <i class="fas fa-sync-alt"></i>
+              </button>
+              <div class="bonus-level-back-head">Условия</div>
+              <div class="bonus-level-back-grid">
+                <label class="bonus-level-back-field">
+                  <span>Мин. сумма, ₽</span>
+                  <input class="control bonus-level-field" type="number" min="0" step="1" data-bonus-level-index="${index}" data-bonus-level-field="minSpent" value="${escapeHtml(String(level.minSpent || 0))}" ${isEditing ? '' : 'disabled'} />
+                </label>
+                <label class="bonus-level-back-field">
+                  <span>Мин. заказов</span>
+                  <input class="control bonus-level-field" type="number" min="0" step="1" data-bonus-level-index="${index}" data-bonus-level-field="minOrders" value="${escapeHtml(String(level.minOrders || 0))}" ${isEditing ? '' : 'disabled'} />
+                </label>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+      elBonusLevelsTrack.appendChild(card);
+    });
+
+    if (state.bonusCardsEditing) {
+      const addCard = document.createElement('button');
+      addCard.type = 'button';
+      addCard.className = 'banner-placement-card bonus-level-add-card';
+      addCard.setAttribute('aria-label', 'Добавить уровень');
+      addCard.title = 'Добавить уровень';
+      addCard.innerHTML = `
+        <div class="banner-placement-card-main">
+          <div class="banner-placement-card-icon"><i class="fas fa-medal"></i></div>
+        </div>
+        <div class="banner-placement-card-stack">
+          <div class="banner-placement-card-display-title">Новый уровень</div>
+        </div>
+      `;
+      addCard.addEventListener('click', () => {
+        if (!state.bonusCardsEditing) return;
+        const next = [...state.bonusLevelsDraft, {
+          id: `level_${Date.now()}`,
+          title: `Новый уровень ${state.bonusLevelsDraft.length + 1}`,
+          subtitle: 'Порог не задан',
+        }];
+        state.bonusLevelsDraft = sanitizeBonusLevels(next);
+        renderBonusLevels();
+      });
+      elBonusLevelsTrack.appendChild(addCard);
+    }
+
+    requestAnimationFrame(() => {
+      renderBonusLevelsScale(levels.length);
+    });
+  }
+
+  function renderBonusLevelsScale(levelCount = 0) {
+    if (!elBonusLevelsScale || !elBonusLevelsScalePoints) return;
+    const safeCount = Math.max(0, Number(levelCount) || 0);
+    elBonusLevelsScalePoints.innerHTML = '';
+    elBonusLevelsScale.classList.toggle('is-editing', state.bonusCardsEditing === true);
+    const cards = Array.from(elBonusLevelsTrack.querySelectorAll('.banner-placement-card'));
+    const scaleRect = elBonusLevelsScale.getBoundingClientRect();
+    const hasLayout = cards.length > 0 && scaleRect.width > 0;
+    const centers = hasLayout
+      ? cards.map((card) => {
+          const rect = card.getBoundingClientRect();
+          return (rect.left + (rect.width / 2)) - scaleRect.left;
+        })
+      : [];
+
+    const fallbackStart = 20;
+    const fallbackEnd = Math.max(fallbackStart, scaleRect.width - 20);
+    const start = centers.length ? centers[0] : fallbackStart;
+    const end = centers.length ? centers[centers.length - 1] : fallbackEnd;
+    elBonusLevelsScale.style.setProperty('--bonus-scale-start', `${Math.max(0, start)}px`);
+    elBonusLevelsScale.style.setProperty('--bonus-scale-end', `${Math.max(0, end)}px`);
+
+    const baseLevelsCount = Math.max(0, safeCount);
+    centers.forEach((centerX, idx) => {
+      const point = document.createElement('span');
+      const isAddPoint = state.bonusCardsEditing && idx >= baseLevelsCount;
+      point.className = `bonus-levels-scale-point${isAddPoint ? ' is-add' : ''}`;
+      point.title = isAddPoint ? 'Добавить уровень' : `Уровень ${idx + 1}`;
+      point.style.left = `${centerX}px`;
+      if (isAddPoint) point.innerHTML = '<i class="fas fa-plus"></i>';
+      elBonusLevelsScalePoints.appendChild(point);
+    });
+  }
+
+  function renderBonusClientsList() {
+    if (!elBonusClientsList) return;
+    elBonusClientsList.innerHTML = '';
+    const events = Array.isArray(state.bonusClientEvents) ? state.bonusClientEvents : [];
+    if (!events.length) {
+      if (elBonusClientsEmptyHint) elBonusClientsEmptyHint.classList.remove('hidden');
+      return;
+    }
+    if (elBonusClientsEmptyHint) elBonusClientsEmptyHint.classList.add('hidden');
+
+    events.forEach((eventItem) => {
+      const row = document.createElement('div');
+      row.className = 'order-row';
+      row.innerHTML = `
+        <div class="order-icon"><i class="fas fa-user-check"></i></div>
+        <div class="order-mid">
+          <strong>${escapeHtml(eventItem.clientName)}</strong>
+          <div class="muted">${escapeHtml(eventItem.action)} • ${escapeHtml(eventItem.status)}</div>
+          <div class="muted">${escapeHtml(eventItem.phone)}</div>
+        </div>
+        <div class="order-actions">
+          <div class="pill" style="padding:6px 10px;font-size:12px;height:32px;display:flex;align-items:center;">${escapeHtml(eventItem.at)}</div>
+        </div>
+      `;
+      elBonusClientsList.appendChild(row);
+    });
+  }
+
+  function enterBonusCardsEditMode() {
+    state.bonusCardsEditing = true;
+    state.bonusProgramEnabledDraft = state.bonusProgramEnabled === true;
+    state.bonusLevelsDraft = sanitizeBonusLevels(state.bonusLevels);
+    syncBonusToolbarState();
+    renderBonusLevels();
+  }
+
+  function cancelBonusCardsEditMode() {
+    state.bonusCardsEditing = false;
+    state.bonusProgramEnabledDraft = state.bonusProgramEnabled === true;
+    state.bonusLevelsDraft = sanitizeBonusLevels(state.bonusLevels);
+    syncBonusToolbarState();
+    renderBonusLevels();
+  }
+
+  function saveBonusCardsEditMode() {
+    state.bonusProgramEnabled = state.bonusProgramEnabledDraft === true;
+    state.bonusLevels = sanitizeBonusLevels(state.bonusLevelsDraft);
+    state.bonusCardsEditing = false;
+    persistBonusCardsStorage();
+    syncBonusToolbarState();
+    renderBonusLevels();
   }
 
   function renderBannerList() {
@@ -15078,6 +15463,7 @@
         'filter-categories': 'Категории',
         discounts: 'Скидки',
         banners: 'Баннеры',
+        'bonus-cards': 'Бонусные карты',
       };
       elToolbarText.textContent = titles[viewName] || 'Клиенты';
     }
@@ -15089,6 +15475,7 @@
           'filter-categories': 'fas fa-filter',
           discounts: 'fas fa-percentage',
           banners: 'fas fa-images',
+          'bonus-cards': 'fas fa-gift',
         };
         icon.className = icons[viewName] || 'fas fa-users';
       }
@@ -15098,6 +15485,9 @@
     if (elSortWrap) elSortWrap.style.display = viewName === 'clients' ? '' : 'none';
     if (elBannersSwitchWrap) elBannersSwitchWrap.classList.toggle('hidden', viewName !== 'banners');
     if (elBannersEnabledSwitch) elBannersEnabledSwitch.checked = state.bannersEnabled === true;
+    if (elAddBtn) elAddBtn.classList.toggle('hidden', viewName === 'bonus-cards');
+    syncBonusToolbarState();
+    syncBonusMenuState();
     if (viewName !== 'clients') {
       closeClientBenefitsOverlay();
     }
@@ -15114,6 +15504,9 @@
       renderBannerPlacement();
       renderBannerList();
       renderBannerPicker();
+    } else if (viewName === 'bonus-cards') {
+      renderBonusLevels();
+      renderBonusClientsList();
     } else if (viewName === 'clients') {
       maybeLoadMoreClientsOnScroll();
       ensureClientsScrollable().catch(console.error);
@@ -15125,6 +15518,10 @@
 
   function updateRightPanel() {
     syncDiscountToolbarState();
+    const isBonusCardsView = state.currentView === 'bonus-cards';
+    if (clientTabsHeader) {
+      clientTabsHeader.classList.toggle('hidden', isBonusCardsView || tabsState.tabs.length === 0);
+    }
     const isChatPage = !!document.body?.classList?.contains('page-chat');
     if (isChatPage && chatRightForceEmpty) {
       if (clientEmpty) clientEmpty.classList.toggle('hidden', state.currentView !== 'clients');
@@ -15168,6 +15565,28 @@
       && noTabs
       && hasClientId
       && state.currentView === 'clients';
+
+    if (isBonusCardsView) {
+      if (clientEmpty) clientEmpty.classList.add('hidden');
+      if (clientInfoWrap) clientInfoWrap.classList.add('hidden');
+      if (clientOrderInfoWrap) clientOrderInfoWrap.classList.add('hidden');
+      if (elFilterCategoryEmpty) elFilterCategoryEmpty.classList.add('hidden');
+      if (elFilterEditorWrap) elFilterEditorWrap.classList.add('hidden');
+      if (elFilterEditorFooter) elFilterEditorFooter.classList.add('hidden');
+      if (elDiscountEmpty) elDiscountEmpty.classList.add('hidden');
+      if (elDiscountEditorWrap) elDiscountEditorWrap.classList.add('hidden');
+      if (elDiscountEditorFooter) elDiscountEditorFooter.classList.add('hidden');
+      if (elDiscountInfoWrap) elDiscountInfoWrap.classList.add('hidden');
+      if (elDiscountInfoFooter) elDiscountInfoFooter.classList.add('hidden');
+      if (elDiscountProductPicker) elDiscountProductPicker.classList.add('hidden');
+      if (elDiscountCustomerPicker) elDiscountCustomerPicker.classList.add('hidden');
+      if (elDiscountPickerFooter) elDiscountPickerFooter.classList.add('hidden');
+      if (bannerEmpty) bannerEmpty.classList.add('hidden');
+      if (bannerInfoWrap) bannerInfoWrap.classList.add('hidden');
+      if (bannerInfoFooter) bannerInfoFooter.classList.add('hidden');
+      if (clientBenefitsFooter) clientBenefitsFooter.classList.add('hidden');
+      return;
+    }
 
     if (clientEmpty) clientEmpty.classList.toggle('hidden', !noTabs || state.currentView !== 'clients');
     if (clientInfoWrap) clientInfoWrap.classList.toggle('hidden', !(isClientTab || forceClientPanelWithoutTabs));
@@ -17502,6 +17921,12 @@
     });
   }
 
+  if (elBonusCardsBtn) {
+    elBonusCardsBtn.addEventListener('click', () => {
+      switchView('bonus-cards');
+    });
+  }
+
   // Кнопка "Скидки" — переключить на view скидок
   if (elAddDiscountBtn) {
     elAddDiscountBtn.addEventListener('click', () => {
@@ -17518,6 +17943,112 @@
       }
     });
   }
+
+  if (elBonusEditBtn) {
+    elBonusEditBtn.addEventListener('click', () => {
+      if (state.currentView !== 'bonus-cards') return;
+      enterBonusCardsEditMode();
+    });
+  }
+
+  if (elBonusEditCancelBtn) {
+    elBonusEditCancelBtn.addEventListener('click', () => {
+      if (state.currentView !== 'bonus-cards') return;
+      cancelBonusCardsEditMode();
+    });
+  }
+
+  if (elBonusEditSaveBtn) {
+    elBonusEditSaveBtn.addEventListener('click', () => {
+      if (state.currentView !== 'bonus-cards') return;
+      saveBonusCardsEditMode();
+    });
+  }
+
+  if (elBonusProgramSwitch) {
+    elBonusProgramSwitch.addEventListener('change', () => {
+      if (!state.bonusCardsEditing) {
+        elBonusProgramSwitch.checked = state.bonusProgramEnabled === true;
+        return;
+      }
+      state.bonusProgramEnabledDraft = elBonusProgramSwitch.checked === true;
+    });
+  }
+
+  if (elBonusFlipAllBtn) {
+    elBonusFlipAllBtn.addEventListener('click', () => {
+      if (state.currentView !== 'bonus-cards') return;
+      toggleAllBonusLevelsFlip();
+    });
+  }
+
+  if (elBonusLevelsTrack) {
+    elBonusLevelsTrack.addEventListener('click', (event) => {
+      const flipBtn = event.target.closest('[data-bonus-flip-id]');
+      if (!flipBtn) return;
+      const levelId = String(flipBtn.getAttribute('data-bonus-flip-id') || '').trim();
+      if (!levelId) return;
+      event.preventDefault();
+      event.stopPropagation();
+      toggleBonusLevelFlip(levelId);
+    });
+    elBonusLevelsTrack.addEventListener('input', (event) => {
+      if (!state.bonusCardsEditing) return;
+      const input = event.target.closest('.bonus-level-field');
+      if (!input) return;
+      const idx = Number(input.dataset.bonusLevelIndex);
+      if (!Number.isFinite(idx) || idx < 0) return;
+      const next = [...state.bonusLevelsDraft];
+      if (!next[idx]) return;
+      const field = String(input.dataset.bonusLevelField || '').trim();
+      if (!field) return;
+      const current = { ...next[idx] };
+      if (field === 'title') {
+        current.title = String(input.value || '').trim() || current.title;
+      } else if (field === 'designColor') {
+        current.designColor = normalizeHexColor(input.value, current.designColor || '#f8fafc');
+      } else if (field === 'minSpent') {
+        current.minSpent = normalizeNumberInputValue(input.value, current.minSpent || 0);
+        current.subtitle = `от ${Number(current.minSpent || 0).toLocaleString('ru-RU')} ₽`;
+      } else if (field === 'minOrders') {
+        current.minOrders = normalizeNumberInputValue(input.value, current.minOrders || 0);
+      }
+      next[idx] = {
+        ...current,
+      };
+      state.bonusLevelsDraft = sanitizeBonusLevels(next);
+      const levelId = String(current.id || '').trim();
+      const card = levelId ? elBonusLevelsTrack.querySelector(`.bonus-level-card[data-bonus-level-id="${levelId}"]`) : null;
+      if (card && field === 'designColor') {
+        const frontMain = card.querySelector('.bonus-level-front-main');
+        if (frontMain) frontMain.style.background = String(current.designColor || '#f8fafc');
+      }
+      if (card && field === 'minSpent') {
+        const subtitleEl = card.querySelector('.bonus-level-face--front .banner-placement-card-display-title');
+        if (subtitleEl) subtitleEl.textContent = String(current.subtitle || '');
+      }
+    });
+    elBonusLevelsTrack.addEventListener('scroll', () => {
+      if (state.currentView !== 'bonus-cards') return;
+      renderBonusLevelsScale((state.bonusCardsEditing ? state.bonusLevelsDraft : state.bonusLevels).length);
+    }, { passive: true });
+  }
+
+  if (elBonusLevelsScroll) {
+    elBonusLevelsScroll.addEventListener('wheel', (event) => {
+      if (state.currentView !== 'bonus-cards') return;
+      if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+      if (elBonusLevelsScroll.scrollWidth <= elBonusLevelsScroll.clientWidth) return;
+      event.preventDefault();
+      elBonusLevelsScroll.scrollLeft += event.deltaY;
+      renderBonusLevelsScale((state.bonusCardsEditing ? state.bonusLevelsDraft : state.bonusLevels).length);
+    }, { passive: false });
+  }
+
+  window.addEventListener('resize', () => {
+    if (state.currentView !== 'bonus-cards') return;
+    renderBonusLevelsScale((state.bonusCardsEditing ? state.bonusLevelsDraft : state.bonusLevels).length);
+  });
 
   if (elBannerPickerBackdrop) {
     elBannerPickerBackdrop.addEventListener('click', () => {
@@ -19293,11 +19824,16 @@
       filterTitleInput.addEventListener('input', () => scheduleFilterDraftCountPreview());
     }
     loadBannerStorage();
+    loadBonusCardsStorage();
     if (elBannersEnabledSwitch) {
       elBannersEnabledSwitch.checked = state.bannersEnabled === true;
     }
+    syncBonusMenuState();
+    syncBonusToolbarState();
     renderBannerFilters();
     renderBannerPlacement();
+    renderBonusLevels();
+    renderBonusClientsList();
     updateDiscountPromoUi();
     updateDiscountRestrictionUi();
   }

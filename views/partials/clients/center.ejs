@@ -48,6 +48,25 @@
           <span class="switch-text">Показывать на витрине</span>
         </label>
 
+        <label class="switch settings-chat-subheader-switch hidden" id="clientsBonusProgramSwitchWrap" title="Включить бонусную программу">
+          <input class="switch-input" type="checkbox" id="clientsBonusProgramSwitch" />
+          <span class="switch-ui" aria-hidden="true"></span>
+          <span class="switch-text">Бонусная программа</span>
+        </label>
+        <button id="clientsBonusFlipAllBtn" class="icon-btn hidden" type="button" aria-label="Перевернуть все карточки" title="Перевернуть все карточки">
+          <i class="fas fa-sync-alt"></i>
+        </button>
+
+        <button id="clientsBonusEditCancelBtn" class="icon-btn hidden" type="button" aria-label="Отменить изменения" title="Отменить изменения">
+          <i class="fas fa-times"></i>
+        </button>
+        <button id="clientsBonusEditSaveBtn" class="icon-btn hidden" type="button" aria-label="Сохранить изменения" title="Сохранить изменения">
+          <i class="fas fa-check"></i>
+        </button>
+        <button id="clientsBonusEditBtn" class="icon-btn hidden" type="button" aria-label="Режим редактирования" title="Режим редактирования">
+          <i class="fas fa-cog"></i>
+        </button>
+
         <button id="clientsAddBtn" class="icon-btn" type="button" aria-label="Добавить" title="Добавить">
           <i class="fas fa-plus"></i>
         </button>
@@ -101,6 +120,34 @@
               <!-- JS отрисует сюда список баннеров -->
             </div>
             <div class="empty-hint hidden" id="bannersEmptyHint">Пока нет баннеров. Нажмите «+» для создания.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="content-view hidden banners-content-view" data-view-content="bonus-cards">
+        <div class="banners-layout">
+          <div class="banners-placement-zone" id="bonusLevelsZone">
+            <div class="banners-placement-head">
+              <div class="banners-placement-copy">
+                <div class="banners-placement-title">Уровни</div>
+              </div>
+            </div>
+            <div class="banners-placement-body">
+              <div class="bonus-levels-scroll no-scrollbar" id="bonusLevelsScroll">
+                <div class="bonus-levels-canvas" id="bonusLevelsCanvas">
+                  <div class="banners-placement-track" id="bonusLevelsTrack"></div>
+                  <div class="bonus-levels-scale" id="bonusLevelsScale">
+                    <div class="bonus-levels-scale-line" aria-hidden="true"></div>
+                    <div class="bonus-levels-scale-points" id="bonusLevelsScalePoints"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="banners-list-scroll" id="bonusClientsListScroll">
+            <div class="orders-list" id="bonusClientsList"></div>
+            <div class="empty-hint hidden" id="bonusClientsEmptyHint">Пока нет клиентов по бонусной программе.</div>
           </div>
         </div>
       </div>

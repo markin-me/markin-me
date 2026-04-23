@@ -1,8 +1,8 @@
 {
-  "telegram_env_enabled": true,
-  "telegram_tenant_enabled": true,
-  "max_env_enabled": true,
-  "updated_at": "2026-04-12T05:30:21.273Z",
+  "telegram_env_enabled": false,
+  "telegram_tenant_enabled": false,
+  "max_env_enabled": false,
+  "updated_at": "2026-04-23T08:26:03.908Z",
   "telegram_bot_username": "test_mme_shop_bot",
   "telegram_bot_token": "8538936423:AAH-pLLsjHrwczZI-dShKQgy0rWHar3reHU",
   "telegram_webhook_url": "",
