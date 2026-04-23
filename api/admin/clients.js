@@ -2152,7 +2152,7 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
         return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
       }
 
-      if (issueAction === 'promo_shared') {
+      if (issueAction === 'promo_shared' || issueAction === 'promo_unique') {
         await ensureBenefitPromoStorage();
       }
       if (issueAction === 'discount') {
@@ -2328,6 +2328,16 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
           await conn.rollback();
           return res.status(409).json({ ok: false, error: 'PROMO_CLAIM_UNAVAILABLE' });
         }
+
+        await conn.query(
+          `INSERT INTO mkt_customer_benefit_promos
+             (tenant_id, store_id, customer_id, promo_code_id, discount_id)
+           VALUES (?, ?, ?, ?, ?)
+           ON DUPLICATE KEY UPDATE
+             discount_id = VALUES(discount_id),
+             updated_at = CURRENT_TIMESTAMP`,
+          [tenantId, storeId, clientId, Number(promoRow.promo_code_id || 0), discountId]
+        );
       }
 
       await conn.commit();
