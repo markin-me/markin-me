@@ -1,4 +1,4 @@
-:root{
+﻿:root{
   --font-main:-apple-system,BlinkMacSystemFont,'Roboto',system-ui,sans-serif;
 
   --color-bg:#F9FAFB;
@@ -32,7 +32,7 @@
 
   --header-height:50px;
 
-  /* ✅ единые имена (как у тебя в layout+js) */
+  /* вњ… РµРґРёРЅС‹Рµ РёРјРµРЅР° (РєР°Рє Сѓ С‚РµР±СЏ РІ layout+js) */
   --sidebar-width:200px;
   --sidebar-collapsed:60px;
 
@@ -59,7 +59,7 @@
   --admin-mobile-shell-fade-duration:300ms;
   --admin-mobile-shell-fade-ease:cubic-bezier(.2,.8,.2,1);
 
-  /* ✅ Switch vars */
+  /* вњ… Switch vars */
   --switch-w:40px;
   --switch-h:25px;
   --switch-pad:3px;
@@ -292,7 +292,7 @@ body[data-admin-active-page] > header{
   flex-shrink:0;
 }
 
-/* Статус «Мы закрыты» в хедере — только на мобилке */
+/* РЎС‚Р°С‚СѓСЃ В«РњС‹ Р·Р°РєСЂС‹С‚С‹В» РІ С…РµРґРµСЂРµ вЂ” С‚РѕР»СЊРєРѕ РЅР° РјРѕР±РёР»РєРµ */
 .header-store-status{
   display:none;
 }
@@ -344,7 +344,7 @@ body[data-admin-active-page] > header{
 }
 .icon-btn:hover{background:var(--color-surface-2);transform:translateY(-1px)}
 
-/* ✅ вернули “как раньше” для темы/профиля */
+/* вњ… РІРµСЂРЅСѓР»Рё вЂњРєР°Рє СЂР°РЅСЊС€РµвЂќ РґР»СЏ С‚РµРјС‹/РїСЂРѕС„РёР»СЏ */
 .header-btn{
   width:40px;height:40px;
   border-radius:10px;
@@ -883,7 +883,7 @@ body.page-home .page-col-right .panel{
   border-color:var(--color-primary-hover);
 }
 
-/* Меню «три точки» в футере — только по высоте контента */
+/* РњРµРЅСЋ В«С‚СЂРё С‚РѕС‡РєРёВ» РІ С„СѓС‚РµСЂРµ вЂ” С‚РѕР»СЊРєРѕ РїРѕ РІС‹СЃРѕС‚Рµ РєРѕРЅС‚РµРЅС‚Р° */
 .product-footer-more-dropdown{
   position:fixed;
   z-index:1000;
@@ -1008,7 +1008,7 @@ body.page-home .page-col-right .panel{
   box-shadow:0 0 0 2px rgba(255, 122, 0, 0.18);
 }
 
-/* Выпадающее меню «+»: Товар / Комбо-набор (как user-menu) */
+/* Р’С‹РїР°РґР°СЋС‰РµРµ РјРµРЅСЋ В«+В»: РўРѕРІР°СЂ / РљРѕРјР±Рѕ-РЅР°Р±РѕСЂ (РєР°Рє user-menu) */
 .add-main-wrapper{
   position:relative;
 }
@@ -2045,7 +2045,7 @@ body.page-home .page-col-right .panel{
   will-change:transform,width;
 }
 
-/* Круглая оранжевая кнопка свернуть/развернуть — на границе между первым и вторым пунктами */
+/* РљСЂСѓРіР»Р°СЏ РѕСЂР°РЅР¶РµРІР°СЏ РєРЅРѕРїРєР° СЃРІРµСЂРЅСѓС‚СЊ/СЂР°Р·РІРµСЂРЅСѓС‚СЊ вЂ” РЅР° РіСЂР°РЅРёС†Рµ РјРµР¶РґСѓ РїРµСЂРІС‹Рј Рё РІС‚РѕСЂС‹Рј РїСѓРЅРєС‚Р°РјРё */
 .sidebar-edge-toggle{
   position:absolute;
   top:31px;
@@ -2081,7 +2081,7 @@ body.page-home .page-col-right .panel{
 html[data-sidebar-collapsed="1"] .sidebar-edge-toggle .sidebar-edge-collapsed{display:block}
 html[data-sidebar-collapsed="1"] .sidebar-edge-toggle .sidebar-edge-expanded{display:none}
 
-/* Вкладка "Открыть меню" на мобильных, когда сайдбар закрыт */
+/* Р’РєР»Р°РґРєР° "РћС‚РєСЂС‹С‚СЊ РјРµРЅСЋ" РЅР° РјРѕР±РёР»СЊРЅС‹С…, РєРѕРіРґР° СЃР°Р№РґР±Р°СЂ Р·Р°РєСЂС‹С‚ */
 .sidebar-open-tab{
   display:none;
   position:fixed;
@@ -2210,7 +2210,7 @@ html[data-sidebar-collapsed="1"] .sidebar-edge-toggle .sidebar-edge-expanded{dis
   z-index:1;
 }
 
-/* collapsed desktop (ровные иконки) */
+/* collapsed desktop (СЂРѕРІРЅС‹Рµ РёРєРѕРЅРєРё) */
 @media (min-width:769px){
   html[data-sidebar-collapsed="1"] .app-sidebar{width:var(--sidebar-collapsed)}
   html[data-sidebar-collapsed="1"] .app-sidebar-nav{padding:8px}
@@ -2949,7 +2949,7 @@ html[data-sidebar-collapsed="1"] .sidebar-edge-toggle .sidebar-edge-expanded{dis
   gap:10px;
 }
 
-/* Cash receipt preview (right column) — отступы как у товаров */
+/* Cash receipt preview (right column) вЂ” РѕС‚СЃС‚СѓРїС‹ РєР°Рє Сѓ С‚РѕРІР°СЂРѕРІ */
 .cash-info.panel .panel-body{
   padding:8px;
 }
@@ -3109,7 +3109,7 @@ html[data-sidebar-collapsed="1"] .sidebar-edge-toggle .sidebar-edge-expanded{dis
   justify-content:center;
 }
 
-/* Стили как в печатном чеке (orders.js) */
+/* РЎС‚РёР»Рё РєР°Рє РІ РїРµС‡Р°С‚РЅРѕРј С‡РµРєРµ (orders.js) */
 .receipt-header{
   text-align:center;
   font-weight:bold;
@@ -4728,7 +4728,7 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
   }
 }
 
-/* Комбо-набор в списке — одна строка, сетка 2×2 как в карточке */
+/* РљРѕРјР±Рѕ-РЅР°Р±РѕСЂ РІ СЃРїРёСЃРєРµ вЂ” РѕРґРЅР° СЃС‚СЂРѕРєР°, СЃРµС‚РєР° 2Г—2 РєР°Рє РІ РєР°СЂС‚РѕС‡РєРµ */
 .order-row.combo-row{
   padding:8px 12px;
   grid-template-columns:52px 1fr auto;
@@ -4834,8 +4834,8 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
   display:grid;
   gap:8px;
 }
-/* В редакторе блока комбо список товаров визуально входит в основной контейнер,
-   поэтому убираем дополнительную карточку-обертку */
+/* Р’ СЂРµРґР°РєС‚РѕСЂРµ Р±Р»РѕРєР° РєРѕРјР±Рѕ СЃРїРёСЃРѕРє С‚РѕРІР°СЂРѕРІ РІРёР·СѓР°Р»СЊРЅРѕ РІС…РѕРґРёС‚ РІ РѕСЃРЅРѕРІРЅРѕР№ РєРѕРЅС‚РµР№РЅРµСЂ,
+   РїРѕСЌС‚РѕРјСѓ СѓР±РёСЂР°РµРј РґРѕРїРѕР»РЅРёС‚РµР»СЊРЅСѓСЋ РєР°СЂС‚РѕС‡РєСѓ-РѕР±РµСЂС‚РєСѓ */
 #comboInfo .info-card.info-accordion{
   border:none;
   border-radius:0;
@@ -7791,7 +7791,7 @@ body.page-cash #clientAddresses .shop-address-actions{
   .order-item-composition{font-size:12px}
 }
 
-/* Фото товаров в заказе */
+/* Р¤РѕС‚Рѕ С‚РѕРІР°СЂРѕРІ РІ Р·Р°РєР°Р·Рµ */
 .order-item-photos{
   display:grid;
   gap:8px;
@@ -7935,16 +7935,16 @@ body.page-cash #clientAddresses .shop-address-actions{
 }
 /* ================= Products accordion helpers ================= */
 
-/* Отступы между аккордеонами */
+/* РћС‚СЃС‚СѓРїС‹ РјРµР¶РґСѓ Р°РєРєРѕСЂРґРµРѕРЅР°РјРё */
 .products-accordion {
   display: flex;
   flex-direction: column;
-  gap: 7px; /* 6-8px среднее значение */
+  gap: 7px; /* 6-8px СЃСЂРµРґРЅРµРµ Р·РЅР°С‡РµРЅРёРµ */
 }
 
 .products-accordion .stage-item{min-height:52px}
 
-/* Выделение цветом заголовков аккордеонов */
+/* Р’С‹РґРµР»РµРЅРёРµ С†РІРµС‚РѕРј Р·Р°РіРѕР»РѕРІРєРѕРІ Р°РєРєРѕСЂРґРµРѕРЅРѕРІ */
 .products-accordion .acc-trigger {
   background: var(--primary-14);
   border-color: var(--primary-25);
@@ -7959,7 +7959,7 @@ body.page-cash #clientAddresses .shop-address-actions{
   background: var(--primary-18);
 }
 
-/* Убрать подписи (small) из всех пунктов меню */
+/* РЈР±СЂР°С‚СЊ РїРѕРґРїРёСЃРё (small) РёР· РІСЃРµС… РїСѓРЅРєС‚РѕРІ РјРµРЅСЋ */
 .products-accordion .stage-text small {
   display: none;
 }
@@ -7970,19 +7970,19 @@ body.page-cash #clientAddresses .shop-address-actions{
   transition:max-height var(--dur-med) var(--ease-smooth);
 }
 
-/* В редакторе блока комбо секция "Товары в блоке" всегда раскрыта,
-   поэтому панель не должна схлопываться */
+/* Р’ СЂРµРґР°РєС‚РѕСЂРµ Р±Р»РѕРєР° РєРѕРјР±Рѕ СЃРµРєС†РёСЏ "РўРѕРІР°СЂС‹ РІ Р±Р»РѕРєРµ" РІСЃРµРіРґР° СЂР°СЃРєСЂС‹С‚Р°,
+   РїРѕСЌС‚РѕРјСѓ РїР°РЅРµР»СЊ РЅРµ РґРѕР»Р¶РЅР° СЃС…Р»РѕРїС‹РІР°С‚СЊСЃСЏ */
 #comboInfo .acc-panel{
   max-height:none;
   overflow:visible;
 }
 
-/* Отступы между пунктами меню внутри аккордеона */
+/* РћС‚СЃС‚СѓРїС‹ РјРµР¶РґСѓ РїСѓРЅРєС‚Р°РјРё РјРµРЅСЋ РІРЅСѓС‚СЂРё Р°РєРєРѕСЂРґРµРѕРЅР° */
 .acc-panel-inner{
   margin-top:10px;
   display: flex;
   flex-direction: column;
-  gap: 5px; /* 4-6px среднее значение - отступ между stage-item */
+  gap: 5px; /* 4-6px СЃСЂРµРґРЅРµРµ Р·РЅР°С‡РµРЅРёРµ - РѕС‚СЃС‚СѓРї РјРµР¶РґСѓ stage-item */
 }
 
 .acc-header{
@@ -12816,7 +12816,7 @@ body.page-cash #cashOrdersRightPane .orders-info > #cashPaymentFooter{
   left:50%;
   width:500px;
   max-width:calc(100vw - 24px);
-  /* фиксируем формат: 500×1000 на десктопе, но не выходим за пределы экрана */
+  /* С„РёРєСЃРёСЂСѓРµРј С„РѕСЂРјР°С‚: 500Г—1000 РЅР° РґРµСЃРєС‚РѕРїРµ, РЅРѕ РЅРµ РІС‹С…РѕРґРёРј Р·Р° РїСЂРµРґРµР»С‹ СЌРєСЂР°РЅР° */
   height:min(1000px, calc(100vh - 90px));
   max-height:calc(100vh - 90px);
   transform:translate(-50%,-46%) scale(.98);
@@ -12908,7 +12908,7 @@ body.page-cash #cashOrdersRightPane .orders-info > #cashPaymentFooter{
 
 .field-label{font-size:12px;color:var(--color-text-muted);margin-bottom:6px;display:block}
 
-/* Подпись на границе инпута (как в составе: Кол-во, Ед., Цена, Себест.) */
+/* РџРѕРґРїРёСЃСЊ РЅР° РіСЂР°РЅРёС†Рµ РёРЅРїСѓС‚Р° (РєР°Рє РІ СЃРѕСЃС‚Р°РІРµ: РљРѕР»-РІРѕ, Р•Рґ., Р¦РµРЅР°, РЎРµР±РµСЃС‚.) */
 .field-wrap{position:relative}
 .field-wrap .field-label{
   position:absolute;
@@ -13050,7 +13050,7 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   background:var(--color-surface-2);
 }
 
-/* ================= Inline modal (категории внутри модалки) ================= */
+/* ================= Inline modal (РєР°С‚РµРіРѕСЂРёРё РІРЅСѓС‚СЂРё РјРѕРґР°Р»РєРё) ================= */
 .inline-backdrop{
   position:fixed;
   inset:0;
@@ -14050,7 +14050,7 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
 }
 .picker-title{font-weight:900}
 
-/* ================= Switch (Apple, ровный) ================= */
+/* ================= Switch (Apple, СЂРѕРІРЅС‹Р№) ================= */
 .switch{
   position:relative;
   display:inline-flex;
@@ -14237,7 +14237,7 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   padding:10px;
 }
 
-/* В этом месте (под 150x150) миниатюры поменьше */
+/* Р’ СЌС‚РѕРј РјРµСЃС‚Рµ (РїРѕРґ 150x150) РјРёРЅРёР°С‚СЋСЂС‹ РїРѕРјРµРЅСЊС€Рµ */
 .product-photo-thumbs-wrapper{
   margin-top:8px;
   display:flex;
@@ -14266,7 +14266,7 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   border-radius:2px;
 }
 
-/* JS рисует .img-thumb — делаем их 40x40 только в этом контейнере */
+/* JS СЂРёСЃСѓРµС‚ .img-thumb вЂ” РґРµР»Р°РµРј РёС… 40x40 С‚РѕР»СЊРєРѕ РІ СЌС‚РѕРј РєРѕРЅС‚РµР№РЅРµСЂРµ */
 .img-thumb-wrapper{
   position:relative;
   cursor:move;
@@ -14385,7 +14385,7 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   cursor:grabbing;
 }
 
-/* верхние кнопки фото */
+/* РІРµСЂС…РЅРёРµ РєРЅРѕРїРєРё С„РѕС‚Рѕ */
 .product-photo-tools{
   display:flex;
   align-items:center;
@@ -14409,7 +14409,7 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   cursor:default;
 }
 
-/* правая часть в топе */
+/* РїСЂР°РІР°СЏ С‡Р°СЃС‚СЊ РІ С‚РѕРїРµ */
 .product-editor-meta{
   min-width:0;
   display:flex;
@@ -14429,7 +14429,7 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   margin-right:-12px;
 }
 
-/* Для img main используем существующий класс, но в этом месте он должен быть 150x150 */
+/* Р”Р»СЏ img main РёСЃРїРѕР»СЊР·СѓРµРј СЃСѓС‰РµСЃС‚РІСѓСЋС‰РёР№ РєР»Р°СЃСЃ, РЅРѕ РІ СЌС‚РѕРј РјРµСЃС‚Рµ РѕРЅ РґРѕР»Р¶РµРЅ Р±С‹С‚СЊ 150x150 */
 .product-photo-main .img-main{
   width:100%;
   height:100%;
@@ -14438,7 +14438,7 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
 }
 .img-main.hidden{display:none}
 
-/* Стрелки навигации фото */
+/* РЎС‚СЂРµР»РєРё РЅР°РІРёРіР°С†РёРё С„РѕС‚Рѕ */
 .photo-nav-btn{
   position:absolute;
   top:50%;
@@ -14542,7 +14542,7 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   background:var(--color-surface-2);
 }
 
-/* Точки-индикаторы */
+/* РўРѕС‡РєРё-РёРЅРґРёРєР°С‚РѕСЂС‹ */
 .photo-dots{
   position:absolute;
   bottom:8px;
@@ -14576,14 +14576,14 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   display:none;
 }
 
-/* мобилка: в колонку */
+/* РјРѕР±РёР»РєР°: РІ РєРѕР»РѕРЅРєСѓ */
 @media (max-width:520px){
   .product-editor-top{
     grid-template-columns:1fr;
   }
 }
 /* ================= Fix: product photo in list ================= */
-/* Фото в списке товаров всегда маленькое (как аватар), не влияет на высоту строки */
+/* Р¤РѕС‚Рѕ РІ СЃРїРёСЃРєРµ С‚РѕРІР°СЂРѕРІ РІСЃРµРіРґР° РјР°Р»РµРЅСЊРєРѕРµ (РєР°Рє Р°РІР°С‚Р°СЂ), РЅРµ РІР»РёСЏРµС‚ РЅР° РІС‹СЃРѕС‚Сѓ СЃС‚СЂРѕРєРё */
 .product-thumb{
   width:44px;
   height:44px;
@@ -14594,7 +14594,7 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   border:1px solid var(--primary-25);
 }
 
-/* Блок комбо: строка товара с фото, шеврон слева, звезда и крестик справа */
+/* Р‘Р»РѕРє РєРѕРјР±Рѕ: СЃС‚СЂРѕРєР° С‚РѕРІР°СЂР° СЃ С„РѕС‚Рѕ, С€РµРІСЂРѕРЅ СЃР»РµРІР°, Р·РІРµР·РґР° Рё РєСЂРµСЃС‚РёРє СЃРїСЂР°РІР° */
 .combo-block-product-row-wrapper{
   display:flex;
   flex-direction:column;
@@ -14658,18 +14658,18 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
 .option-item-actions .fa-star.is-default{
   color:var(--primary);
 }
-/* Область списка товаров в блоке комбо: скролл и отступ снизу, чтобы раскрытый контент не уходил под футер */
+/* РћР±Р»Р°СЃС‚СЊ СЃРїРёСЃРєР° С‚РѕРІР°СЂРѕРІ РІ Р±Р»РѕРєРµ РєРѕРјР±Рѕ: СЃРєСЂРѕР»Р» Рё РѕС‚СЃС‚СѓРї СЃРЅРёР·Сѓ, С‡С‚РѕР±С‹ СЂР°СЃРєСЂС‹С‚С‹Р№ РєРѕРЅС‚РµРЅС‚ РЅРµ СѓС…РѕРґРёР» РїРѕРґ С„СѓС‚РµСЂ */
 .combo-block-products-panel-inner{
   max-height:min(55vh, 480px);
   overflow-y:auto;
   padding-bottom:80px;
-  /* общий контейнер со скроллом, но без видимого скроллбара */
+  /* РѕР±С‰РёР№ РєРѕРЅС‚РµР№РЅРµСЂ СЃРѕ СЃРєСЂРѕР»Р»РѕРј, РЅРѕ Р±РµР· РІРёРґРёРјРѕРіРѕ СЃРєСЂРѕР»Р»Р±Р°СЂР° */
   scrollbar-width:none; /* Firefox */
 }
 .combo-block-products-panel-inner::-webkit-scrollbar{
   display:none; /* WebKit */
 }
-/* Внутри блока комбо убираем "рамку" вокруг товаров — остаётся общий контейнер */
+/* Р’РЅСѓС‚СЂРё Р±Р»РѕРєР° РєРѕРјР±Рѕ СѓР±РёСЂР°РµРј "СЂР°РјРєСѓ" РІРѕРєСЂСѓРі С‚РѕРІР°СЂРѕРІ вЂ” РѕСЃС‚Р°С‘С‚СЃСЏ РѕР±С‰РёР№ РєРѕРЅС‚РµР№РЅРµСЂ */
 .combo-block-products-panel-inner .option-item-row.combo-block-product-row{
   background:transparent;
   border:none;
@@ -14787,7 +14787,7 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   text-align:center;
 }
 
-/* на всякий случай: если где-то попадёт img в row без класса */
+/* РЅР° РІСЃСЏРєРёР№ СЃР»СѓС‡Р°Р№: РµСЃР»Рё РіРґРµ-С‚Рѕ РїРѕРїР°РґС‘С‚ img РІ row Р±РµР· РєР»Р°СЃСЃР° */
 .order-row img{
   max-width:100%;
   height:auto;
@@ -14815,7 +14815,7 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
 }
 
 .product-header-title{
-  max-width:300px;           /* как ты просил */
+  max-width:300px;           /* РєР°Рє С‚С‹ РїСЂРѕСЃРёР» */
   white-space:nowrap;
   overflow:hidden;
   text-overflow:ellipsis;
@@ -14846,7 +14846,7 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   flex-direction:column;
 }
 
-/* если у тебя эти классы уже есть — этот блок просто “перебьёт” */
+/* РµСЃР»Рё Сѓ С‚РµР±СЏ СЌС‚Рё РєР»Р°СЃСЃС‹ СѓР¶Рµ РµСЃС‚СЊ вЂ” СЌС‚РѕС‚ Р±Р»РѕРє РїСЂРѕСЃС‚Рѕ вЂњРїРµСЂРµР±СЊС‘С‚вЂќ */
 .product-photo-main{
   width:150px;
   height:150px;
@@ -14873,7 +14873,7 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   padding:10px;
 }
 
-/* Сетка 4 фото из первых блоков комбо (когда своих фото нет) */
+/* РЎРµС‚РєР° 4 С„РѕС‚Рѕ РёР· РїРµСЂРІС‹С… Р±Р»РѕРєРѕРІ РєРѕРјР±Рѕ (РєРѕРіРґР° СЃРІРѕРёС… С„РѕС‚Рѕ РЅРµС‚) */
 .combo-set-photo-grid{
   display:grid;
   grid-template-columns:1fr 1fr;
@@ -14934,7 +14934,7 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   border-radius:2px;
 }
 
-/* поддержка двух вариантов миниатюр (если JS рисует img-thumb или product-photo-thumb) */
+/* РїРѕРґРґРµСЂР¶РєР° РґРІСѓС… РІР°СЂРёР°РЅС‚РѕРІ РјРёРЅРёР°С‚СЋСЂ (РµСЃР»Рё JS СЂРёСЃСѓРµС‚ img-thumb РёР»Рё product-photo-thumb) */
 #infoPhotoThumbs .img-thumb,
 #infoPhotoThumbs .product-photo-thumb{
   width:40px;
@@ -14958,7 +14958,7 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   .product-info-top{ grid-template-columns:1fr; }
 }
 /* ================= Fix: Center column main panel should stretch and scroll ================= */
-/* center-stack содержит 2 панели: toolbar + контент. Контентная панель должна занимать остаток высоты. */
+/* center-stack СЃРѕРґРµСЂР¶РёС‚ 2 РїР°РЅРµР»Рё: toolbar + РєРѕРЅС‚РµРЅС‚. РљРѕРЅС‚РµРЅС‚РЅР°СЏ РїР°РЅРµР»СЊ РґРѕР»Р¶РЅР° Р·Р°РЅРёРјР°С‚СЊ РѕСЃС‚Р°С‚РѕРє РІС‹СЃРѕС‚С‹. */
 .center-stack{
   display:flex;
   flex-direction:column;
@@ -14973,18 +14973,18 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   min-height: 0;
 }
 
-/* верхняя панель (toolbar) — по контенту */
+/* РІРµСЂС…РЅСЏСЏ РїР°РЅРµР»СЊ (toolbar) вЂ” РїРѕ РєРѕРЅС‚РµРЅС‚Сѓ */
 .center-stack > .panel:first-child{
   flex: 0 0 auto;
 }
 
-/* нижняя панель (основной контент) — заполняет всё оставшееся */
+/* РЅРёР¶РЅСЏСЏ РїР°РЅРµР»СЊ (РѕСЃРЅРѕРІРЅРѕР№ РєРѕРЅС‚РµРЅС‚) вЂ” Р·Р°РїРѕР»РЅСЏРµС‚ РІСЃС‘ РѕСЃС‚Р°РІС€РµРµСЃСЏ */
 .center-stack > .panel:not(.toolbar-island){
   flex: 1 1 auto;
   min-height: 0;
 }
 
-/* panel-body внутри контентной панели — скроллится */
+/* panel-body РІРЅСѓС‚СЂРё РєРѕРЅС‚РµРЅС‚РЅРѕР№ РїР°РЅРµР»Рё вЂ” СЃРєСЂРѕР»Р»РёС‚СЃСЏ */
 .center-stack > .panel:not(.toolbar-island) > .panel-body{
   flex: 1 1 auto;
   min-height: 0;
@@ -14992,7 +14992,7 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
 }
 
 /* ================= Fix: Hide product info header when nothing selected ================= */
-/* Работает автоматически через :has() (Chrome/Edge/Safari). */
+/* Р Р°Р±РѕС‚Р°РµС‚ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё С‡РµСЂРµР· :has() (Chrome/Edge/Safari). */
 #productInfoPanel:has(#productEmpty:not(.hidden)) .product-info-header,
 #productInfoPanel:has(#categoryEmpty:not(.hidden)) .product-info-header,
 #productInfoPanel:has(#optionEmpty:not(.hidden)) .product-info-header{
@@ -15004,7 +15004,7 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   display: flex !important;
 }
 
-/* подсказки (используется в админке и витрине) */
+/* РїРѕРґСЃРєР°Р·РєРё (РёСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ РІ Р°РґРјРёРЅРєРµ Рё РІРёС‚СЂРёРЅРµ) */
 .empty-hint{
   margin-top:10px;
   padding:12px;
@@ -15016,7 +15016,7 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   font-weight:600;
 }
 
-/* Picker overlay - перекрывает header */
+/* Picker overlay - РїРµСЂРµРєСЂС‹РІР°РµС‚ header */
 .picker-overlay {
   position: absolute;
   top: 0;
@@ -15056,12 +15056,12 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   padding-bottom: 200px;
 }
 
-/* Footer закреплен внизу */
+/* Footer Р·Р°РєСЂРµРїР»РµРЅ РІРЅРёР·Сѓ */
 #productInfoPanel {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  position: relative; /* Для позиционирования .picker-overlay внутри панели */
+  position: relative; /* Р”Р»СЏ РїРѕР·РёС†РёРѕРЅРёСЂРѕРІР°РЅРёСЏ .picker-overlay РІРЅСѓС‚СЂРё РїР°РЅРµР»Рё */
 }
 
 #productInfoPanel .panel-body {
@@ -15070,12 +15070,12 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   overflow-y: auto;
 }
 
-/* Когда открыт комбо — контент с самого верха, без пустого поля сверху */
+/* РљРѕРіРґР° РѕС‚РєСЂС‹С‚ РєРѕРјР±Рѕ вЂ” РєРѕРЅС‚РµРЅС‚ СЃ СЃР°РјРѕРіРѕ РІРµСЂС…Р°, Р±РµР· РїСѓСЃС‚РѕРіРѕ РїРѕР»СЏ СЃРІРµСЂС…Сѓ */
 #productInfoPanel:has(#comboSetInfo:not(.hidden)) .panel-body {
   padding-top: 0;
 }
 
-/* Для редактора товара сохраняем такой же верхний отступ, как в режиме просмотра */
+/* Р”Р»СЏ СЂРµРґР°РєС‚РѕСЂР° С‚РѕРІР°СЂР° СЃРѕС…СЂР°РЅСЏРµРј С‚Р°РєРѕР№ Р¶Рµ РІРµСЂС…РЅРёР№ РѕС‚СЃС‚СѓРї, РєР°Рє РІ СЂРµР¶РёРјРµ РїСЂРѕСЃРјРѕС‚СЂР° */
 #productInfoPanel:has(.product-editor-wrapper) .panel-body {
   padding-top: 12px;
 }
@@ -15096,22 +15096,22 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   margin-top: 0;
   background: #fff;
 }
-/* Когда открыт комбо — показываем только #comboSetInfo, остальные дети body скрыты (убирает пустое место сверху) */
+/* РљРѕРіРґР° РѕС‚РєСЂС‹С‚ РєРѕРјР±Рѕ вЂ” РїРѕРєР°Р·С‹РІР°РµРј С‚РѕР»СЊРєРѕ #comboSetInfo, РѕСЃС‚Р°Р»СЊРЅС‹Рµ РґРµС‚Рё body СЃРєСЂС‹С‚С‹ (СѓР±РёСЂР°РµС‚ РїСѓСЃС‚РѕРµ РјРµСЃС‚Рѕ СЃРІРµСЂС…Сѓ) */
 #productInfoPanel:has(#comboSetInfo:not(.hidden)) #productInfoBody > *:not(#comboSetInfo) {
   display: none !important;
 }
 
-/* Просмотр товара/категории: отступы */
+/* РџСЂРѕСЃРјРѕС‚СЂ С‚РѕРІР°СЂР°/РєР°С‚РµРіРѕСЂРёРё: РѕС‚СЃС‚СѓРїС‹ */
 #productInfoPanel #productInfo:not(.hidden),
 #productInfoPanel #categoryInfo:not(.hidden) {
   padding: 12px 1px;
 }
 
-/* Комбо-набор: минимальные отступы по периметру, ближе к краям */
+/* РљРѕРјР±Рѕ-РЅР°Р±РѕСЂ: РјРёРЅРёРјР°Р»СЊРЅС‹Рµ РѕС‚СЃС‚СѓРїС‹ РїРѕ РїРµСЂРёРјРµС‚СЂСѓ, Р±Р»РёР¶Рµ Рє РєСЂР°СЏРј */
 #productInfoPanel #comboSetInfo:not(.hidden) {
   padding: 6px 4px;
 }
-/* Режим просмотра комбо: скрыть кнопки добавления и удаления */
+/* Р РµР¶РёРј РїСЂРѕСЃРјРѕС‚СЂР° РєРѕРјР±Рѕ: СЃРєСЂС‹С‚СЊ РєРЅРѕРїРєРё РґРѕР±Р°РІР»РµРЅРёСЏ Рё СѓРґР°Р»РµРЅРёСЏ */
 #comboSetInfo.combo-set-view-mode #comboSetCategoryChipPlus,
 #comboSetInfo.combo-set-view-mode .chip-remove,
 #comboSetInfo.combo-set-view-mode #comboSetBlocksAddBtn,
@@ -15132,7 +15132,7 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   gap: 12px;
   margin-bottom: 10px;
 }
-/* Карточка заголовка секции «Блоки в наборе»: белый фон, рамка, скругления, шеврон справа по образцу */
+/* РљР°СЂС‚РѕС‡РєР° Р·Р°РіРѕР»РѕРІРєР° СЃРµРєС†РёРё В«Р‘Р»РѕРєРё РІ РЅР°Р±РѕСЂРµВ»: Р±РµР»С‹Р№ С„РѕРЅ, СЂР°РјРєР°, СЃРєСЂСѓРіР»РµРЅРёСЏ, С€РµРІСЂРѕРЅ СЃРїСЂР°РІР° РїРѕ РѕР±СЂР°Р·С†Сѓ */
 .combo-set-blocks-header-card {
   flex: 1;
   min-width: 0;
@@ -15161,7 +15161,7 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   line-height: 1.35;
   margin-top: 0;
 }
-/* Строка блока в наборе: карточка как на образце — белый фон, рамка, шеврон справа, крестик внутри */
+/* РЎС‚СЂРѕРєР° Р±Р»РѕРєР° РІ РЅР°Р±РѕСЂРµ: РєР°СЂС‚РѕС‡РєР° РєР°Рє РЅР° РѕР±СЂР°Р·С†Рµ вЂ” Р±РµР»С‹Р№ С„РѕРЅ, СЂР°РјРєР°, С€РµРІСЂРѕРЅ СЃРїСЂР°РІР°, РєСЂРµСЃС‚РёРє РІРЅСѓС‚СЂРё */
 #comboSetBlocksList .combo-set-block-acc-item .combo-set-block-acc-header {
   display: flex;
   align-items: center;
@@ -15243,7 +15243,7 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
 #comboSetBlocksList .combo-set-block-acc-item + .combo-set-block-acc-item {
   margin-top: 8px;
 }
-/* Список товаров — ровно друг под другом, без смещения */
+/* РЎРїРёСЃРѕРє С‚РѕРІР°СЂРѕРІ вЂ” СЂРѕРІРЅРѕ РґСЂСѓРі РїРѕРґ РґСЂСѓРіРѕРј, Р±РµР· СЃРјРµС‰РµРЅРёСЏ */
 #comboSetBlocksList .combo-set-block-panel-inner .combo-set-block-products-list {
   display: flex;
   flex-direction: column;
@@ -15265,7 +15265,7 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   box-shadow: none;
   flex-shrink: 0;
 }
-/* Фиксированная сетка — шеврон, фото, название, цена (старая/новая) ровно друг под другом */
+/* Р¤РёРєСЃРёСЂРѕРІР°РЅРЅР°СЏ СЃРµС‚РєР° вЂ” С€РµРІСЂРѕРЅ, С„РѕС‚Рѕ, РЅР°Р·РІР°РЅРёРµ, С†РµРЅР° (СЃС‚Р°СЂР°СЏ/РЅРѕРІР°СЏ) СЂРѕРІРЅРѕ РґСЂСѓРі РїРѕРґ РґСЂСѓРіРѕРј */
 #comboSetBlocksList .combo-set-block-panel-inner .option-item-row.combo-block-product-row {
   display: grid;
   grid-template-columns: 32px 44px minmax(0, 1fr) minmax(90px, auto);
@@ -15812,7 +15812,7 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   font-weight:700;font-size:16px;
 }
 
-/* ── Clients toolbar: expandable search ── */
+/* в”Ђв”Ђ Clients toolbar: expandable search в”Ђв”Ђ */
 .cl-search-wrap{
   display:flex;
   align-items:center;
@@ -15924,7 +15924,7 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   }
 }
 
-/* ── Clients toolbar: sort dropdown ── */
+/* в”Ђв”Ђ Clients toolbar: sort dropdown в”Ђв”Ђ */
 .cl-sort-wrap{position:relative;}
 #clientsSortToggle{
   display:flex;
@@ -16004,7 +16004,7 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   background:var(--primary-12);
 }
 
-/* ── Clients accordion ── */
+/* в”Ђв”Ђ Clients accordion в”Ђв”Ђ */
 .clients-accordion{
   display:flex;
   flex-direction:column;
@@ -16041,7 +16041,7 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   margin-left:auto;
 }
 
-/* ── Filter Editor Form ── */
+/* в”Ђв”Ђ Filter Editor Form в”Ђв”Ђ */
 #filterEditorForm .control{
   appearance:none;
   -webkit-appearance:none;
@@ -16111,7 +16111,7 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   margin-left:auto;
 }
 
-/* ── Custom Select Component (modern dropdown style) ── */
+/* в”Ђв”Ђ Custom Select Component (modern dropdown style) в”Ђв”Ђ */
 .custom-select{
   position:relative;
   display:inline-flex;
@@ -16212,6 +16212,10 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
 }
 
 .client-info-panel #clientInfoBody:has(#bannerInfoWrap:not(.hidden)){
+  padding:0;
+}
+
+.client-info-panel #clientInfoBody:has(#bonusLevelInfoWrap:not(.hidden)){
   padding:0;
 }
 
@@ -16504,7 +16508,7 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   }
 }
 
-/* ── Filter category row (compact single line) ── */
+/* в”Ђв”Ђ Filter category row (compact single line) в”Ђв”Ђ */
 .filter-category-row{
   display:flex;
   align-items:center;
@@ -16545,7 +16549,7 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   border-radius:12px;
 }
 
-/* ── Discount Editor Form ── */
+/* в”Ђв”Ђ Discount Editor Form в”Ђв”Ђ */
 #discountEditorForm .control{
   appearance:none;
   -webkit-appearance:none;
@@ -16828,7 +16832,7 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   margin-top:4px;
 }
 
-/* ── Discount Info Panel ── */
+/* в”Ђв”Ђ Discount Info Panel в”Ђв”Ђ */
 .discount-info-header{
   display:flex;
   align-items:center;
@@ -16922,7 +16926,7 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   color:var(--color-text);
 }
 
-/* ── Discount row (list item) ── */
+/* в”Ђв”Ђ Discount row (list item) в”Ђв”Ђ */
 .discount-row{
   display:flex;
   align-items:center;
@@ -17123,7 +17127,7 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
 #bonusLevelsZone .banners-placement-body{
   display:flex;
   min-height:0;
-  overflow:hidden;
+  overflow:visible;
   padding-bottom:10px;
 }
 
@@ -17133,7 +17137,7 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   width:100%;
   height:auto;
   overflow-x:auto;
-  overflow-y:hidden;
+  overflow-y:visible;
 }
 
 #bonusLevelsCanvas{
@@ -17162,8 +17166,15 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
 }
 
 #bonusLevelsTrack .bonus-level-card{
+  position:relative;
   cursor:default;
   user-select:auto;
+  will-change:transform;
+}
+
+.bonus-level-card.is-flipping{
+  z-index:5;
+  animation:bonus-level-lift-flip .56s cubic-bezier(.2,.8,.2,1);
 }
 
 .bonus-level-flip-scene{
@@ -17178,7 +17189,7 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   width:100%;
   height:100%;
   transform-style:preserve-3d;
-  transition:transform .45s cubic-bezier(.2,.7,.2,1);
+  transition:transform .56s cubic-bezier(.2,.7,.2,1);
 }
 
 .bonus-level-card.is-flipped .bonus-level-flip-inner{
@@ -17200,6 +17211,18 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   display:flex;
   flex-direction:column;
   gap:10px;
+}
+
+@keyframes bonus-level-lift-flip{
+  0%{
+    transform:translateY(0) scale(1);
+  }
+  38%{
+    transform:translateY(-8px) scale(1.01);
+  }
+  100%{
+    transform:translateY(0) scale(1);
+  }
 }
 
 .bonus-level-front-main{
@@ -17844,6 +17867,139 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   text-align:right;
 }
 
+.bonus-level-preview-wrap{
+  width:min(300px, 100%);
+  margin:0 auto;
+}
+
+.bonus-level-preview-card{
+  width:100%;
+  aspect-ratio:16/9;
+  border-radius:20px;
+  overflow:hidden;
+  border:1px solid rgba(20, 121, 36, 0.45);
+  box-shadow:0 10px 24px rgba(15, 23, 42, 0.12);
+  display:grid;
+  grid-template-rows:minmax(0, 1fr) 42px;
+  background:linear-gradient(135deg, #1f8d2e 0%, #147924 100%);
+}
+
+.bonus-level-preview-main{
+  position:relative;
+  padding:14px 14px 8px;
+  background:linear-gradient(135deg, #46b13b 0%, #289733 100%);
+  border-radius:0 0 16px 16px;
+  z-index:2;
+}
+
+.bonus-level-preview-title{
+  display:inline-flex;
+  max-width:calc(100% - 124px);
+  min-height:24px;
+  align-items:center;
+  padding:2px 10px;
+  border-radius:999px;
+  font-size:13px;
+  line-height:1.2;
+  font-weight:700;
+  color:#f8fafc;
+  background:rgba(15, 23, 42, 0.28);
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+.bonus-level-preview-title::after{
+  content:'\203A';
+  margin-left:8px;
+  font-size:15px;
+  line-height:1;
+  opacity:.9;
+}
+
+.bonus-level-preview-bonus-label{
+  margin-top:14px;
+  font-size:12px;
+  color:rgba(248, 250, 252, 0.86);
+  font-weight:600;
+}
+
+.bonus-level-preview-bonus-value{
+  margin-top:2px;
+  font-size:30px;
+  line-height:1.05;
+  font-weight:900;
+  color:#ffffff;
+  letter-spacing:-0.01em;
+}
+
+.bonus-level-preview-qr{
+  position:absolute;
+  box-sizing:border-box;
+  right:10px;
+  top:10px;
+  width:96px;
+  aspect-ratio:1/1;
+  border-radius:14px;
+  border:2px solid rgba(255, 255, 255, 0.96);
+  outline:1px solid rgba(255, 255, 255, 0.34);
+  outline-offset:0;
+  background:
+    linear-gradient(45deg, rgba(255,255,255,0.8) 25%, transparent 25%) -4px 0/8px 8px,
+    linear-gradient(-45deg, rgba(255,255,255,0.8) 25%, transparent 25%) -4px 0/8px 8px,
+    linear-gradient(45deg, transparent 75%, rgba(255,255,255,0.8) 75%) -4px 0/8px 8px,
+    linear-gradient(-45deg, transparent 75%, rgba(255,255,255,0.8) 75%) -4px 0/8px 8px,
+    #f8fafc;
+  display:flex;
+  align-items:flex-end;
+  justify-content:center;
+  padding-bottom:7px;
+}
+
+.bonus-level-preview-qr span{
+  font-size:10px;
+  font-weight:800;
+  color:#1f2937;
+  letter-spacing:.08em;
+}
+
+.bonus-level-preview-sub{
+  height:42px;
+  padding:0 14px;
+  display:flex;
+  align-items:center;
+  gap:10px;
+  background:transparent;
+  z-index:1;
+}
+
+.bonus-level-preview-cashback-icon{
+  width:28px;
+  height:28px;
+  border-radius:999px;
+  background:rgba(255,255,255,0.2);
+  color:#ffffff;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  font-size:13px;
+}
+
+.bonus-level-preview-cashback-text{
+  font-size:12px;
+  font-weight:600;
+  color:rgba(255,255,255,0.9);
+}
+
+.bonus-level-preview-cashback-value{
+  margin-left:auto;
+  font-size:30px;
+  line-height:1;
+  font-weight:900;
+  color:#ffffff;
+  letter-spacing:-0.01em;
+}
+
 .banner-ratio-field{
   width:100%;
   margin-top:0;
@@ -18171,7 +18327,7 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   color:var(--color-text-muted);
 }
 
-/* История применения скидки: одна строка на запись */
+/* РСЃС‚РѕСЂРёСЏ РїСЂРёРјРµРЅРµРЅРёСЏ СЃРєРёРґРєРё: РѕРґРЅР° СЃС‚СЂРѕРєР° РЅР° Р·Р°РїРёСЃСЊ */
 .clients-panel .order-row.discount-order-row{
   grid-template-columns: minmax(0, 1fr) auto !important;
   gap: 12px;
@@ -18348,7 +18504,7 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   cursor:default;
 }
 
-/* ── Discount chips (product/customer selection) ── */
+/* в”Ђв”Ђ Discount chips (product/customer selection) в”Ђв”Ђ */
 .discount-chips-wrap{
   display:flex;
   flex-wrap:wrap;
@@ -19315,7 +19471,7 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   color:var(--color-text-muted);
 }
 
-/* ── Discount info sections ── */
+/* в”Ђв”Ђ Discount info sections в”Ђв”Ђ */
 .discount-info-section{
   margin-top:16px;
 }
@@ -19326,7 +19482,7 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   color:var(--color-text);
 }
 
-/* ── Order item old price (strikethrough) ── */
+/* в”Ђв”Ђ Order item old price (strikethrough) в”Ђв”Ђ */
 .discount-promo-panel{
   border:none;
   border-radius:0;
@@ -21052,7 +21208,7 @@ body.page-chat .panel{
 }
 
 #chatHeaderOrder.is-order-empty::after{
-  content:"Выберите клиента";
+  content:"Р’С‹Р±РµСЂРёС‚Рµ РєР»РёРµРЅС‚Р°";
   position:absolute;
   left:50%;
   top:50%;
@@ -26572,3 +26728,4 @@ body.page-new-order .page-col-left > .panel:not(#cashierQueuePanel){
     flex-direction:column;
   }
 }
+

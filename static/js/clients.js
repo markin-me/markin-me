@@ -26,6 +26,7 @@
   const CHAT_MOBILE_VIEW_STORAGE_KEY = `dashboard:chat:mobile:view:v1:${tenantId}`;
   const MARKETING_BANNERS_STORAGE_KEY = `dashboard:marketing:banners:v1:${tenantId}`;
   const MARKETING_BONUS_CARDS_STORAGE_KEY = `dashboard:marketing:bonus-cards:v1:${tenantId}`;
+  const BONUS_LEVEL_FLIP_ANIMATION_MS = 560;
 
   function writePersistedMobileChatView(view) {
     if (!document.body || !document.body.classList.contains("page-chat")) return String(view || "");
@@ -504,9 +505,9 @@
 
   function createDefaultBonusLevels() {
     return [
-      { id: 'starter', title: 'Стартовый', subtitle: 'от 0 ₽', designColor: '#f8fafc', accentColor: '#f97316', minSpent: 0, minOrders: 0 },
-      { id: 'silver', title: 'Серебряный', subtitle: 'от 10 000 ₽', designColor: '#f1f5f9', accentColor: '#f97316', minSpent: 10000, minOrders: 5 },
-      { id: 'gold', title: 'Золотой', subtitle: 'от 25 000 ₽', designColor: '#e2e8f0', accentColor: '#f97316', minSpent: 25000, minOrders: 10 },
+      { id: 'starter', title: 'Стартовый', subtitle: 'от 0 ₽', description: '', designColor: '#f8fafc', accentColor: '#f97316', minSpent: 0, minOrders: 0, showTitleOnCard: true, titleColor: '#1f2937', titleBackgroundEnabled: true, titleBackgroundColor: '#ffffff', titleBackgroundOpacity: 90, cashbackPercent: 1 },
+      { id: 'silver', title: 'Серебряный', subtitle: 'от 10 000 ₽', description: '', designColor: '#f1f5f9', accentColor: '#f97316', minSpent: 10000, minOrders: 5, showTitleOnCard: true, titleColor: '#1f2937', titleBackgroundEnabled: true, titleBackgroundColor: '#ffffff', titleBackgroundOpacity: 90, cashbackPercent: 3 },
+      { id: 'gold', title: 'Золотой', subtitle: 'от 25 000 ₽', description: '', designColor: '#e2e8f0', accentColor: '#f97316', minSpent: 25000, minOrders: 10, showTitleOnCard: true, titleColor: '#1f2937', titleBackgroundEnabled: true, titleBackgroundColor: '#ffffff', titleBackgroundOpacity: 90, cashbackPercent: 5 },
     ];
   }
 
@@ -528,10 +529,17 @@
           id: String(item?.id || `level_${idx + 1}`),
           title,
           subtitle: String(item?.subtitle || '').trim() || `Уровень ${idx + 1}`,
+          description: String(item?.description || '').trim(),
           designColor: normalizeHexColor(item?.designColor, '#f8fafc'),
           accentColor: normalizeHexColor(item?.accentColor, '#f97316'),
           minSpent: normalizeNumberInputValue(item?.minSpent, 0),
           minOrders: normalizeNumberInputValue(item?.minOrders, 0),
+          showTitleOnCard: item?.showTitleOnCard !== false,
+          titleColor: normalizeHexColor(item?.titleColor, '#1f2937'),
+          titleBackgroundEnabled: item?.titleBackgroundEnabled !== false,
+          titleBackgroundColor: normalizeHexColor(item?.titleBackgroundColor, '#ffffff'),
+          titleBackgroundOpacity: normalizeBannerOpacity(item?.titleBackgroundOpacity, 90),
+          cashbackPercent: normalizeNumberInputValue(item?.cashbackPercent, 1),
         };
       })
       .filter(Boolean);
@@ -1645,11 +1653,29 @@
   const clientTabs = right$("#clientTabs");
   const clientEmpty = right$("#clientEmpty");
   const bannerEmpty = right$("#bannerEmpty");
+  const bonusLevelEmpty = right$("#bonusLevelEmpty");
   const bannerInfoWrap = right$("#bannerInfoWrap");
   const bannerInfoFooter = right$("#bannerInfoFooter");
+  const bonusLevelInfoWrap = right$("#bonusLevelInfoWrap");
+  const bonusLevelInfoFooter = right$("#bonusLevelInfoFooter");
   const bannerInfoTitle = right$("#bannerInfoTitle");
   const bannerInfoMeta = right$("#bannerInfoMeta");
   const bannerInfoText = right$("#bannerInfoText");
+  const bonusLevelTitleInput = right$("#bonusLevelTitleInput");
+  const bonusLevelDescriptionInput = right$("#bonusLevelDescriptionInput");
+  const bonusLevelTitleSettingsBtn = right$("#bonusLevelTitleSettingsBtn");
+  const bonusLevelTitlePopover = right$("#bonusLevelTitlePopover");
+  const bonusLevelTitleOnCardSwitch = right$("#bonusLevelTitleOnCardSwitch");
+  const bonusLevelTitleColorInput = right$("#bonusLevelTitleColorInput");
+  const bonusLevelTitleBackgroundSwitch = right$("#bonusLevelTitleBackgroundSwitch");
+  const bonusLevelTitleBackgroundColorInput = right$("#bonusLevelTitleBackgroundColorInput");
+  const bonusLevelTitleBackgroundOpacityInput = right$("#bonusLevelTitleBackgroundOpacityInput");
+  const bonusLevelTitleBackgroundOpacityValue = right$("#bonusLevelTitleBackgroundOpacityValue");
+  const bonusLevelPreviewCard = right$("#bonusLevelPreviewCard");
+  const bonusLevelPreviewMain = right$("#bonusLevelPreviewMain");
+  const bonusLevelPreviewTitle = right$("#bonusLevelPreviewTitle");
+  const bonusLevelPreviewBonusValue = right$("#bonusLevelPreviewBonusValue");
+  const bonusLevelPreviewCashbackValue = right$("#bonusLevelPreviewCashbackValue");
   const bannerTitleInput = right$("#bannerTitleInput");
   const bannerDescriptionInput = right$("#bannerDescriptionInput");
   const bannerTitleSettingsBtn = right$("#bannerTitleSettingsBtn");
@@ -1670,6 +1696,8 @@
   const bannerPhotosInput = right$("#bannerPhotosInput");
   const bannerInfoDeleteBtn = right$("#bannerInfoDeleteBtn");
   const bannerInfoEditBtn = right$("#bannerInfoEditBtn");
+  const bonusLevelInfoDeleteBtn = right$("#bonusLevelInfoDeleteBtn");
+  const bonusLevelInfoEditBtn = right$("#bonusLevelInfoEditBtn");
   const clientInfoWrap = right$("#clientInfoWrap");
   const clientOrderInfoWrap = right$("#clientOrderInfoWrap");
   const clientOrderInfoFooter = right$("#clientOrderInfoFooter");
@@ -1728,6 +1756,9 @@
   }
   if (bannerInfoEditBtn) {
     bannerInfoEditBtn.textContent = 'Редактировать';
+  }
+  if (bonusLevelInfoEditBtn) {
+    bonusLevelInfoEditBtn.textContent = 'Редактировать';
   }
 
   // profile header
@@ -1851,6 +1882,11 @@
     bonusLevelsDraft: createDefaultBonusLevels(),
     bonusClientEvents: createDefaultBonusClientEvents(),
     bonusFlippedLevelIds: new Set(),
+    bonusAnimatingLevelIds: new Set(),
+    bonusFlipAnimationTimer: null,
+    activeBonusLevelId: null,
+    editingBonusLevelId: null,
+    bonusLevelEditorDraft: null,
     discounts: [],
     discountsTotals: { all: 0 },
     activeDiscountFilter: "all",
@@ -2969,6 +3005,8 @@
         ? 'filter-categories'
         : tab.type === 'banner'
           ? 'banners'
+          : tab.type === 'bonus-level'
+            ? 'bonus-cards'
           : 'clients';
     if (state.currentView !== targetView) {
       switchView(targetView);
@@ -3057,6 +3095,15 @@
       if (String(state.editingBannerId || '') === String(closedTab.id)) {
         state.editingBannerId = null;
       }
+    } else if (closedTab.type === 'bonus-level') {
+      if (String(state.activeBonusLevelId || '') === String(closedTab.id)) {
+        state.activeBonusLevelId = null;
+        state.bonusLevelEditorDraft = null;
+      }
+      if (String(state.editingBonusLevelId || '') === String(closedTab.id)) {
+        state.editingBonusLevelId = null;
+        state.bonusLevelEditorDraft = null;
+      }
     } else if (closedTab.type === 'order') {
       if (state.activeOrderId === closedTab.id) {
         state.activeOrderId = null;
@@ -3076,6 +3123,8 @@
           renderDiscountsList();
         } else if (state.currentView === 'banners') {
           renderBannerList();
+        } else if (state.currentView === 'bonus-cards') {
+          renderBonusLevels();
         }
         syncDiscountToolbarState();
         updateRightPanel();
@@ -6180,10 +6229,54 @@
     return state.bonusCardsEditing ? state.bonusLevelsDraft : state.bonusLevels;
   }
 
+  function getBonusLevelById(levelId, levels = getCurrentBonusLevels()) {
+    const targetId = String(levelId || '').trim();
+    if (!targetId) return null;
+    const list = Array.isArray(levels) ? levels : [];
+    return list.find((item) => String(item?.id || '').trim() === targetId) || null;
+  }
+
+  function updateBonusLevelInCollections(levelId, updater) {
+    const targetId = String(levelId || '').trim();
+    if (!targetId || typeof updater !== 'function') return null;
+    let appliedLevel = null;
+    const applyList = (list) => sanitizeBonusLevels(
+      (Array.isArray(list) ? list : []).map((item) => {
+        if (String(item?.id || '').trim() !== targetId) return item;
+        const nextItem = updater({ ...item }) || item;
+        appliedLevel = nextItem;
+        return nextItem;
+      })
+    );
+    state.bonusLevels = applyList(state.bonusLevels);
+    state.bonusLevelsDraft = applyList(state.bonusLevelsDraft);
+    return appliedLevel;
+  }
+
+  function getActiveBonusLevelForInfo() {
+    const activeId = String(state.activeBonusLevelId || '').trim();
+    if (!activeId) return null;
+    if (String(state.editingBonusLevelId || '').trim() === activeId && state.bonusLevelEditorDraft && String(state.bonusLevelEditorDraft.id || '').trim() === activeId) {
+      return state.bonusLevelEditorDraft;
+    }
+    return getBonusLevelById(activeId, state.bonusLevels) || getBonusLevelById(activeId, state.bonusLevelsDraft);
+  }
+
+  function syncBonusLevelTabTitle(levelId, title) {
+    const tabKey = buildTabKey('bonus-level', levelId);
+    const tab = tabsState.tabs.find((item) => item.key === tabKey);
+    if (!tab) return;
+    tab.title = String(title || '').trim() || 'Уровень';
+    renderTabs();
+  }
+
   function normalizeBonusFlipState(levels = getCurrentBonusLevels()) {
     const allowedIds = new Set((Array.isArray(levels) ? levels : []).map((level) => String(level?.id || '').trim()).filter(Boolean));
     state.bonusFlippedLevelIds = new Set(
       [...(state.bonusFlippedLevelIds || new Set())].filter((id) => allowedIds.has(String(id || '').trim()))
+    );
+    state.bonusAnimatingLevelIds = new Set(
+      [...(state.bonusAnimatingLevelIds || new Set())].filter((id) => allowedIds.has(String(id || '').trim()))
     );
   }
 
@@ -6199,9 +6292,29 @@
     return list.every((level) => isBonusLevelFlipped(level?.id));
   }
 
+  function markBonusLevelsFlipping(levelIds) {
+    const ids = (Array.isArray(levelIds) ? levelIds : [])
+      .map((id) => String(id || '').trim())
+      .filter(Boolean);
+    if (!ids.length) return;
+    ids.forEach((id) => state.bonusAnimatingLevelIds.add(id));
+    if (state.bonusFlipAnimationTimer) {
+      clearTimeout(state.bonusFlipAnimationTimer);
+      state.bonusFlipAnimationTimer = null;
+    }
+    state.bonusFlipAnimationTimer = setTimeout(() => {
+      state.bonusAnimatingLevelIds.clear();
+      state.bonusFlipAnimationTimer = null;
+      if (state.currentView === 'bonus-cards') {
+        renderBonusLevels();
+      }
+    }, BONUS_LEVEL_FLIP_ANIMATION_MS);
+  }
+
   function toggleBonusLevelFlip(levelId) {
     const targetId = String(levelId || '').trim();
     if (!targetId) return;
+    markBonusLevelsFlipping([targetId]);
     if (state.bonusFlippedLevelIds.has(targetId)) {
       state.bonusFlippedLevelIds.delete(targetId);
     } else {
@@ -6216,12 +6329,15 @@
     normalizeBonusFlipState(levels);
     const shouldFlipAll = !areAllBonusLevelsFlipped(levels);
     const next = new Set(state.bonusFlippedLevelIds);
+    const affectedIds = [];
     (Array.isArray(levels) ? levels : []).forEach((level) => {
       const levelId = String(level?.id || '').trim();
       if (!levelId) return;
+      affectedIds.push(levelId);
       if (shouldFlipAll) next.add(levelId);
       else next.delete(levelId);
     });
+    markBonusLevelsFlipping(affectedIds);
     state.bonusFlippedLevelIds = next;
     syncBonusToolbarState();
     renderBonusLevels();
@@ -6246,6 +6362,169 @@
     }
   }
 
+  function renderBonusLevelInfo(level = null) {
+    const current = level && typeof level === 'object' ? level : getActiveBonusLevelForInfo();
+    if (!current) return;
+    const isEditing = String(state.editingBonusLevelId || '').trim() === String(current.id || '').trim();
+    if (bonusLevelTitleInput) {
+      bonusLevelTitleInput.value = String(current.title || '');
+      bonusLevelTitleInput.disabled = !isEditing;
+    }
+    if (bonusLevelDescriptionInput) {
+      bonusLevelDescriptionInput.value = String(current.description || '');
+      bonusLevelDescriptionInput.disabled = !isEditing;
+      adjustBonusLevelDescriptionHeight();
+    }
+    if (bonusLevelTitleSettingsBtn) {
+      bonusLevelTitleSettingsBtn.disabled = !isEditing;
+    }
+    if (bonusLevelTitleOnCardSwitch) {
+      bonusLevelTitleOnCardSwitch.checked = current.showTitleOnCard !== false;
+      bonusLevelTitleOnCardSwitch.disabled = !isEditing;
+    }
+    if (bonusLevelTitleColorInput) {
+      bonusLevelTitleColorInput.value = normalizeHexColor(current.titleColor, '#1f2937');
+      bonusLevelTitleColorInput.disabled = !isEditing;
+    }
+    if (bonusLevelTitleBackgroundSwitch) {
+      bonusLevelTitleBackgroundSwitch.checked = current.titleBackgroundEnabled !== false;
+      bonusLevelTitleBackgroundSwitch.disabled = !isEditing;
+    }
+    if (bonusLevelTitleBackgroundColorInput) {
+      bonusLevelTitleBackgroundColorInput.value = normalizeHexColor(current.titleBackgroundColor, '#ffffff');
+      bonusLevelTitleBackgroundColorInput.disabled = !isEditing || current.titleBackgroundEnabled === false;
+    }
+    if (bonusLevelTitleBackgroundOpacityInput) {
+      const opacity = normalizeBannerOpacity(current.titleBackgroundOpacity, 90);
+      bonusLevelTitleBackgroundOpacityInput.value = String(opacity);
+      bonusLevelTitleBackgroundOpacityInput.disabled = !isEditing || current.titleBackgroundEnabled === false;
+      if (bonusLevelTitleBackgroundOpacityValue) {
+        bonusLevelTitleBackgroundOpacityValue.textContent = `${opacity}%`;
+      }
+    }
+    if (bonusLevelInfoEditBtn) {
+      bonusLevelInfoEditBtn.textContent = isEditing ? '\u0421\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c' : '\u0420\u0435\u0434\u0430\u043a\u0442\u0438\u0440\u043e\u0432\u0430\u0442\u044c';
+    }
+    if (!isEditing && bonusLevelTitlePopover) {
+      bonusLevelTitlePopover.classList.add('hidden');
+    }
+    renderBonusLevelPreview(current);
+  }
+
+  function renderBonusLevelPreview(level = null) {
+    const current = level && typeof level === 'object' ? level : getActiveBonusLevelForInfo();
+    if (!current) return;
+    if (bonusLevelPreviewTitle) {
+      bonusLevelPreviewTitle.textContent = String(current.title || '').trim() || 'Уровень';
+      bonusLevelPreviewTitle.style.color = normalizeHexColor(current.titleColor, '#1f2937');
+      if (current.titleBackgroundEnabled === false) {
+        bonusLevelPreviewTitle.style.background = 'transparent';
+      } else {
+        bonusLevelPreviewTitle.style.background = buildBannerTitleBackgroundColor(
+          current.titleBackgroundColor || '#ffffff',
+          current.titleBackgroundOpacity
+        );
+      }
+      bonusLevelPreviewTitle.style.display = current.showTitleOnCard === false ? 'none' : 'inline-flex';
+    }
+    if (bonusLevelPreviewBonusValue) {
+      bonusLevelPreviewBonusValue.textContent = '0 ₽';
+    }
+    if (bonusLevelPreviewCashbackValue) {
+      const cashback = normalizeNumberInputValue(current.cashbackPercent, 1);
+      bonusLevelPreviewCashbackValue.textContent = `${cashback}%`;
+    }
+    if (bonusLevelPreviewMain) {
+      const surface = normalizeHexColor(current.designColor, '#46b13b');
+      bonusLevelPreviewMain.style.background = `linear-gradient(135deg, rgba(70,177,59,.92) 0%, rgba(40,151,51,.92) 100%), ${surface}`;
+    }
+  }
+
+  function applyBonusLevelEditorDraftPatch(patch = {}) {
+    const activeId = String(state.activeBonusLevelId || '').trim();
+    if (!activeId) return;
+    if (String(state.editingBonusLevelId || '').trim() !== activeId) return;
+    if (!state.bonusLevelEditorDraft || String(state.bonusLevelEditorDraft.id || '').trim() !== activeId) return;
+    state.bonusLevelEditorDraft = {
+      ...state.bonusLevelEditorDraft,
+      ...patch,
+    };
+    renderBonusLevelInfo();
+  }
+
+  function saveBonusLevelInfoChanges() {
+    const activeId = String(state.activeBonusLevelId || '').trim();
+    if (!activeId) return;
+    if (String(state.editingBonusLevelId || '').trim() !== activeId) return;
+    const draft = state.bonusLevelEditorDraft && String(state.bonusLevelEditorDraft.id || '').trim() === activeId
+      ? state.bonusLevelEditorDraft
+      : null;
+    if (!draft) return;
+    const nextLevel = {
+      ...draft,
+      title: String(draft.title || '').trim() || 'Уровень',
+      description: String(draft.description || '').trim(),
+      titleColor: normalizeHexColor(draft.titleColor, '#1f2937'),
+      titleBackgroundColor: normalizeHexColor(draft.titleBackgroundColor, '#ffffff'),
+      titleBackgroundOpacity: normalizeBannerOpacity(draft.titleBackgroundOpacity, 90),
+      showTitleOnCard: draft.showTitleOnCard !== false,
+      titleBackgroundEnabled: draft.titleBackgroundEnabled !== false,
+    };
+    updateBonusLevelInCollections(activeId, () => nextLevel);
+    state.editingBonusLevelId = null;
+    state.bonusLevelEditorDraft = null;
+    syncBonusLevelTabTitle(activeId, nextLevel.title);
+    persistBonusCardsStorage();
+    renderBonusLevels();
+    renderBonusLevelInfo();
+  }
+
+  function openBonusLevelTab(levelId) {
+    const level = getBonusLevelById(levelId);
+    if (!level) return;
+    ensureTab({
+      type: 'bonus-level',
+      id: level.id,
+      title: level.title,
+      onActivate: () => activateBonusLevelTab(level.id),
+    });
+  }
+
+  function activateBonusLevelTab(levelId) {
+    const level = getBonusLevelById(levelId);
+    if (!level) return;
+    state.activeBonusLevelId = level.id;
+    if (String(state.editingBonusLevelId || '') !== String(level.id)) {
+      state.editingBonusLevelId = null;
+      state.bonusLevelEditorDraft = null;
+    }
+    renderBonusLevelInfo(level);
+    renderBonusLevels();
+    updateRightPanel();
+  }
+
+  async function deleteActiveBonusLevel() {
+    const activeId = String(state.activeBonusLevelId || '').trim();
+    if (!activeId) return;
+    if (!Array.isArray(state.bonusLevels) || state.bonusLevels.length <= 1) {
+      alert('Нужен минимум один уровень');
+      return;
+    }
+    state.bonusLevels = sanitizeBonusLevels(
+      state.bonusLevels.filter((item) => String(item?.id || '').trim() !== activeId)
+    );
+    state.bonusLevelsDraft = sanitizeBonusLevels(
+      state.bonusLevelsDraft.filter((item) => String(item?.id || '').trim() !== activeId)
+    );
+    state.bonusFlippedLevelIds.delete(activeId);
+    state.bonusAnimatingLevelIds.delete(activeId);
+    state.editingBonusLevelId = null;
+    state.bonusLevelEditorDraft = null;
+    persistBonusCardsStorage();
+    renderBonusLevels();
+    await closeTab(buildTabKey('bonus-level', activeId));
+  }
+
   function renderBonusLevels() {
     if (!elBonusLevelsTrack) return;
     elBonusLevelsTrack.innerHTML = '';
@@ -6255,9 +6534,11 @@
     levels.forEach((level, index) => {
       const levelId = String(level?.id || '').trim() || `level_${index + 1}`;
       const isFlipped = isBonusLevelFlipped(levelId);
+      const isFlipping = state.bonusAnimatingLevelIds.has(levelId);
+      const isActive = String(state.activeBonusLevelId || '') === levelId;
       const isEditing = state.bonusCardsEditing === true;
       const card = document.createElement('div');
-      card.className = `banner-placement-card bonus-level-card${isFlipped ? ' is-flipped' : ''}`;
+      card.className = `banner-placement-card bonus-level-card${isActive ? ' is-active' : ''}${isFlipped ? ' is-flipped' : ''}${isFlipping ? ' is-flipping' : ''}`;
       card.dataset.bonusLevelId = levelId;
       card.innerHTML = `
         <div class="bonus-level-flip-scene">
@@ -6298,6 +6579,38 @@
           </div>
         </div>
       `;
+      const titleNode = card.querySelector('.bonus-level-face--front .banner-placement-card-title');
+      if (titleNode) {
+        titleNode.style.color = String(level.titleColor || '#1f2937');
+        if (level.titleBackgroundEnabled !== false) {
+          titleNode.style.background = buildBannerTitleBackgroundColor(level.titleBackgroundColor || '#ffffff', level.titleBackgroundOpacity);
+          titleNode.style.padding = '2px 10px';
+          titleNode.style.borderRadius = '999px';
+        } else {
+          titleNode.style.background = 'transparent';
+          titleNode.style.padding = '0';
+          titleNode.style.borderRadius = '0';
+        }
+        if (level.showTitleOnCard === false) {
+          titleNode.style.display = 'none';
+        } else {
+          titleNode.style.display = '';
+        }
+      }
+      card.addEventListener('click', (event) => {
+        if (event.target.closest('[data-bonus-flip-id]')) return;
+        if (event.target.closest('.bonus-level-field')) return;
+        openBonusLevelTab(levelId);
+      });
+      card.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        if (event.target.closest('[data-bonus-flip-id]')) return;
+        if (event.target.closest('.bonus-level-field')) return;
+        event.preventDefault();
+        openBonusLevelTab(levelId);
+      });
+      card.setAttribute('role', 'button');
+      card.setAttribute('tabindex', '0');
       elBonusLevelsTrack.appendChild(card);
     });
 
@@ -6321,6 +6634,13 @@
           id: `level_${Date.now()}`,
           title: `Новый уровень ${state.bonusLevelsDraft.length + 1}`,
           subtitle: 'Порог не задан',
+          description: '',
+          showTitleOnCard: true,
+          titleColor: '#1f2937',
+          titleBackgroundEnabled: true,
+          titleBackgroundColor: '#ffffff',
+          titleBackgroundOpacity: 90,
+          cashbackPercent: 1,
         }];
         state.bonusLevelsDraft = sanitizeBonusLevels(next);
         renderBonusLevels();
@@ -6721,6 +7041,12 @@
     if (!bannerDescriptionInput) return;
     bannerDescriptionInput.style.height = 'auto';
     bannerDescriptionInput.style.height = `${bannerDescriptionInput.scrollHeight}px`;
+  }
+
+  function adjustBonusLevelDescriptionHeight() {
+    if (!bonusLevelDescriptionInput) return;
+    bonusLevelDescriptionInput.style.height = 'auto';
+    bonusLevelDescriptionInput.style.height = `${bonusLevelDescriptionInput.scrollHeight}px`;
   }
 
   function renderBannerInfo(banner) {
@@ -15520,7 +15846,7 @@
     syncDiscountToolbarState();
     const isBonusCardsView = state.currentView === 'bonus-cards';
     if (clientTabsHeader) {
-      clientTabsHeader.classList.toggle('hidden', isBonusCardsView || tabsState.tabs.length === 0);
+      clientTabsHeader.classList.toggle('hidden', tabsState.tabs.length === 0);
     }
     const isChatPage = !!document.body?.classList?.contains('page-chat');
     if (isChatPage && chatRightForceEmpty) {
@@ -15543,6 +15869,9 @@
       if (bannerEmpty) bannerEmpty.classList.toggle('hidden', state.currentView !== 'banners');
       if (bannerInfoWrap) bannerInfoWrap.classList.add('hidden');
       if (bannerInfoFooter) bannerInfoFooter.classList.add('hidden');
+      if (bonusLevelEmpty) bonusLevelEmpty.classList.toggle('hidden', state.currentView !== 'bonus-cards');
+      if (bonusLevelInfoWrap) bonusLevelInfoWrap.classList.add('hidden');
+      if (bonusLevelInfoFooter) bonusLevelInfoFooter.classList.add('hidden');
       if (clientBenefitsFooter) clientBenefitsFooter.classList.add('hidden');
       return;
     }
@@ -15554,6 +15883,7 @@
     const isDiscountTab = activeTab?.type === 'discount';
     const isDiscountPromoCodeTab = activeTab?.type === 'discount-promo-code';
     const isBannerTab = activeTab?.type === 'banner';
+    const isBonusLevelTab = activeTab?.type === 'bonus-level';
     const hasClientId = Number(state.activeClientId || 0) > 0;
     const noTabs = !activeTab;
     // In chat mode right panel must be driven only by right tabs state.
@@ -15584,6 +15914,9 @@
       if (bannerEmpty) bannerEmpty.classList.add('hidden');
       if (bannerInfoWrap) bannerInfoWrap.classList.add('hidden');
       if (bannerInfoFooter) bannerInfoFooter.classList.add('hidden');
+      if (bonusLevelEmpty) bonusLevelEmpty.classList.toggle('hidden', !noTabs || state.currentView !== 'bonus-cards');
+      if (bonusLevelInfoWrap) bonusLevelInfoWrap.classList.toggle('hidden', !isBonusLevelTab);
+      if (bonusLevelInfoFooter) bonusLevelInfoFooter.classList.toggle('hidden', !isBonusLevelTab);
       if (clientBenefitsFooter) clientBenefitsFooter.classList.add('hidden');
       return;
     }
@@ -15630,6 +15963,9 @@
     if (bannerEmpty) bannerEmpty.classList.toggle('hidden', !noTabs || state.currentView !== 'banners');
     if (bannerInfoWrap) bannerInfoWrap.classList.toggle('hidden', !isBannerTab);
     if (bannerInfoFooter) bannerInfoFooter.classList.toggle('hidden', !isBannerTab);
+    if (bonusLevelEmpty) bonusLevelEmpty.classList.add('hidden');
+    if (bonusLevelInfoWrap) bonusLevelInfoWrap.classList.add('hidden');
+    if (bonusLevelInfoFooter) bonusLevelInfoFooter.classList.add('hidden');
     if (clientBenefitsFooter) {
       const showBenefitsFooter = (isClientTab || forceClientPanelWithoutTabs) && state.currentView === 'clients' && hasClientId;
       clientBenefitsFooter.classList.toggle('hidden', !showBenefitsFooter);
@@ -18017,6 +18353,12 @@
         ...current,
       };
       state.bonusLevelsDraft = sanitizeBonusLevels(next);
+      if (field === 'title') {
+        syncBonusLevelTabTitle(current.id, current.title);
+        if (String(state.activeBonusLevelId || '') === String(current.id || '').trim()) {
+          renderBonusLevelInfo(current);
+        }
+      }
       const levelId = String(current.id || '').trim();
       const card = levelId ? elBonusLevelsTrack.querySelector(`.bonus-level-card[data-bonus-level-id="${levelId}"]`) : null;
       if (card && field === 'designColor') {
@@ -18136,6 +18478,99 @@
     attachTwoStepButton(bannerInfoDeleteBtn, () => {
       void deleteActiveBanner();
     }, 'Удалить');
+  }
+
+  if (bonusLevelInfoDeleteBtn) {
+    attachTwoStepButton(bonusLevelInfoDeleteBtn, () => {
+      void deleteActiveBonusLevel();
+    }, 'Удалить');
+  }
+
+  if (bonusLevelInfoEditBtn) {
+    bonusLevelInfoEditBtn.addEventListener('click', () => {
+      const level = getBonusLevelById(state.activeBonusLevelId, state.bonusLevels);
+      if (!level) return;
+      const isEditing = String(state.editingBonusLevelId || '') === String(level.id || '');
+      if (isEditing) {
+        saveBonusLevelInfoChanges();
+        return;
+      }
+      state.editingBonusLevelId = level.id;
+      state.bonusLevelEditorDraft = { ...level };
+      renderBonusLevelInfo();
+    });
+  }
+
+  if (bonusLevelTitleInput) {
+    bonusLevelTitleInput.addEventListener('input', () => {
+      applyBonusLevelEditorDraftPatch({
+        title: String(bonusLevelTitleInput.value || '').trim(),
+      });
+    });
+  }
+
+  if (bonusLevelDescriptionInput) {
+    bonusLevelDescriptionInput.addEventListener('input', () => {
+      adjustBonusLevelDescriptionHeight();
+      applyBonusLevelEditorDraftPatch({
+        description: String(bonusLevelDescriptionInput.value || ''),
+      });
+    });
+  }
+
+  if (bonusLevelTitleSettingsBtn && bonusLevelTitlePopover) {
+    bonusLevelTitleSettingsBtn.addEventListener('click', (event) => {
+      if (String(state.editingBonusLevelId || '').trim() !== String(state.activeBonusLevelId || '').trim()) return;
+      event.preventDefault();
+      event.stopPropagation();
+      bonusLevelTitlePopover.classList.toggle('hidden');
+    });
+    document.addEventListener('click', (event) => {
+      if (bonusLevelTitlePopover.classList.contains('hidden')) return;
+      if (bonusLevelTitlePopover.contains(event.target) || bonusLevelTitleSettingsBtn.contains(event.target)) return;
+      bonusLevelTitlePopover.classList.add('hidden');
+    });
+  }
+
+  if (bonusLevelTitleOnCardSwitch) {
+    bonusLevelTitleOnCardSwitch.addEventListener('change', () => {
+      applyBonusLevelEditorDraftPatch({
+        showTitleOnCard: bonusLevelTitleOnCardSwitch.checked === true,
+      });
+    });
+  }
+
+  if (bonusLevelTitleColorInput) {
+    bonusLevelTitleColorInput.addEventListener('input', () => {
+      applyBonusLevelEditorDraftPatch({
+        titleColor: normalizeHexColor(bonusLevelTitleColorInput.value, '#1f2937'),
+      });
+    });
+  }
+
+  if (bonusLevelTitleBackgroundSwitch) {
+    bonusLevelTitleBackgroundSwitch.addEventListener('change', () => {
+      applyBonusLevelEditorDraftPatch({
+        titleBackgroundEnabled: bonusLevelTitleBackgroundSwitch.checked === true,
+      });
+    });
+  }
+
+  if (bonusLevelTitleBackgroundColorInput) {
+    bonusLevelTitleBackgroundColorInput.addEventListener('input', () => {
+      applyBonusLevelEditorDraftPatch({
+        titleBackgroundColor: normalizeHexColor(bonusLevelTitleBackgroundColorInput.value, '#ffffff'),
+      });
+    });
+  }
+
+  if (bonusLevelTitleBackgroundOpacityInput) {
+    bonusLevelTitleBackgroundOpacityInput.addEventListener('input', () => {
+      const opacity = normalizeBannerOpacity(bonusLevelTitleBackgroundOpacityInput.value, 90);
+      applyBonusLevelEditorDraftPatch({
+        titleBackgroundOpacity: opacity,
+      });
+    });
   }
 
   if (bannerInfoEditBtn) {

@@ -41,6 +41,12 @@
       <div class="empty-text">Нажмите на баннер слева или создайте новый</div>
     </div>
 
+    <div id="bonusLevelEmpty" class="empty-state hidden">
+      <div class="empty-icon"><i class="fas fa-gift"></i></div>
+      <div class="empty-title">Выберите уровень</div>
+      <div class="empty-text">Нажмите на карточку уровня слева</div>
+    </div>
+
     <div id="filterEditorWrap" class="hidden">
       <form id="filterEditorForm" class="form-grid" autocomplete="off">
         <div class="field-wrap">
@@ -1109,6 +1115,76 @@
       </div>
     </div>
 
+    <div id="bonusLevelInfoWrap" class="banner-settings-panel hidden">
+      <div class="banner-title-row" id="bonusLevelTitleRow">
+        <div class="banner-title-input-wrap">
+          <input
+            id="bonusLevelTitleInput"
+            class="banner-title-input"
+            type="text"
+            placeholder="Название"
+            autocomplete="off"
+          />
+          <button type="button" class="banner-title-more-btn" id="bonusLevelTitleSettingsBtn" aria-label="Настройки названия" title="Настройки названия">
+            <i class="fas fa-ellipsis-h"></i>
+          </button>
+          <div class="banner-title-popover hidden" id="bonusLevelTitlePopover">
+            <label class="switch banner-title-popover-switch" id="bonusLevelTitleOnCardSwitchWrap" title="Показывать название на карточке">
+              <input class="switch-input" type="checkbox" id="bonusLevelTitleOnCardSwitch" />
+              <span class="switch-ui" aria-hidden="true"></span>
+              <span class="banner-title-switch-label">на карточке</span>
+            </label>
+            <div class="banner-title-color-row">
+              <span class="banner-title-color-label">Цвет шрифта</span>
+              <input type="color" id="bonusLevelTitleColorInput" class="banner-title-color-input" value="#1f2937" />
+            </div>
+            <label class="switch banner-title-popover-switch" id="bonusLevelTitleBackgroundSwitchWrap" title="Фон у текста">
+              <input class="switch-input" type="checkbox" id="bonusLevelTitleBackgroundSwitch" />
+              <span class="switch-ui" aria-hidden="true"></span>
+              <span class="banner-title-switch-label">фон текста</span>
+            </label>
+            <div class="banner-title-color-row">
+              <span class="banner-title-color-label">Цвет фона</span>
+              <input type="color" id="bonusLevelTitleBackgroundColorInput" class="banner-title-color-input" value="#ffffff" />
+            </div>
+            <div class="banner-title-opacity-row">
+              <span class="banner-title-color-label">Прозрачность фона</span>
+              <div class="banner-title-opacity-control">
+                <input type="range" id="bonusLevelTitleBackgroundOpacityInput" min="0" max="100" step="1" value="90" />
+                <span id="bonusLevelTitleBackgroundOpacityValue">90%</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="banner-description-row" id="bonusLevelDescriptionRow">
+        <textarea
+          id="bonusLevelDescriptionInput"
+          class="banner-description-input"
+          rows="1"
+          placeholder="Описание"
+          autocomplete="off"
+        ></textarea>
+      </div>
+      <div class="bonus-level-preview-wrap" id="bonusLevelPreviewWrap">
+        <div class="bonus-level-preview-card" id="bonusLevelPreviewCard">
+          <div class="bonus-level-preview-main" id="bonusLevelPreviewMain">
+            <div class="bonus-level-preview-title" id="bonusLevelPreviewTitle">Название уровня</div>
+            <div class="bonus-level-preview-bonus-label">Бонусы</div>
+            <div class="bonus-level-preview-bonus-value" id="bonusLevelPreviewBonusValue">0 ₽</div>
+            <div class="bonus-level-preview-qr" id="bonusLevelPreviewQr" aria-label="Место для QR">
+              <span>QR</span>
+            </div>
+          </div>
+          <div class="bonus-level-preview-sub">
+            <div class="bonus-level-preview-cashback-icon"><i class="fas fa-coins"></i></div>
+            <div class="bonus-level-preview-cashback-text">Кэшбек</div>
+            <div class="bonus-level-preview-cashback-value" id="bonusLevelPreviewCashbackValue">1%</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <%- include('./profile_content') %>
 
     <div id="clientOrderInfoWrap" class="hidden">
@@ -1176,6 +1252,17 @@
           <i class="fas fa-trash"></i>
         </button>
         <button class="product-footer-btn product-footer-edit" type="button" id="bannerInfoEditBtn">Редактировать</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel-footer hidden" id="bonusLevelInfoFooter">
+    <div class="product-footer-actions">
+      <div class="product-footer-view">
+        <button class="product-footer-btn product-footer-delete" type="button" id="bonusLevelInfoDeleteBtn" title="Удалить" aria-label="Удалить">
+          <i class="fas fa-trash"></i>
+        </button>
+        <button class="product-footer-btn product-footer-edit" type="button" id="bonusLevelInfoEditBtn">Редактировать</button>
       </div>
     </div>
   </div>
