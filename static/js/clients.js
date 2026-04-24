@@ -1779,6 +1779,8 @@
   const bonusLevelPreviewTitle = right$("#bonusLevelPreviewTitle");
   const bonusLevelPreviewBonusValue = right$("#bonusLevelPreviewBonusValue");
   const bonusLevelPreviewCashbackValue = right$("#bonusLevelPreviewCashbackValue");
+  const bonusLevelPreviewCategoryCount = right$("#bonusLevelPreviewCategoryCount");
+  const bonusLevelPreviewCategoryValue = right$("#bonusLevelPreviewCategoryValue");
   const bonusLevelPreviewQr = right$("#bonusLevelPreviewQr");
   const bonusLevelQrBtn = right$("#bonusLevelQrBtn");
   const bonusLevelQrPopover = right$("#bonusLevelQrPopover");
@@ -7915,6 +7917,14 @@
       const cashback = normalizeNumberInputValue(current.cashbackPercent, 1);
       bonusLevelPreviewCashbackValue.textContent = `${cashback}%`;
     }
+    if (bonusLevelPreviewCategoryCount) {
+      const categoryLimit = Math.max(0, Math.floor(Number(current.favoriteCategoriesLimit || 0)));
+      bonusLevelPreviewCategoryCount.textContent = String(categoryLimit);
+    }
+    if (bonusLevelPreviewCategoryValue) {
+      const categoryBonus = normalizeNumberInputValue(current.favoriteCategoriesBonusPercent, 0);
+      bonusLevelPreviewCategoryValue.textContent = `${categoryBonus}%`;
+    }
     if (bonusLevelPreviewQr) {
       bonusLevelPreviewQr.style.display = current.qrEnabled === false ? 'none' : 'flex';
       bonusLevelPreviewQr.style.color = '#111827';
@@ -7935,7 +7945,7 @@
       const previewSub = bonusLevelPreviewCard?.querySelector('.bonus-level-preview-sub');
       if (previewSub) {
         previewSub.style.background = 'transparent';
-        previewSub.querySelectorAll('.bonus-level-preview-cashback-icon, .bonus-level-preview-cashback-text, .bonus-level-preview-cashback-value').forEach((node) => {
+        previewSub.querySelectorAll('.bonus-level-preview-cashback-icon, .bonus-level-preview-cashback-value, .bonus-level-preview-category-icon, .bonus-level-preview-category-count, .bonus-level-preview-category-value').forEach((node) => {
           node.style.color = contentColor;
         });
       }
@@ -8069,6 +8079,8 @@
       const baseColor = normalizeHexColor(level.baseColor, '#1f8d2e');
       const contentColor = normalizeHexColor(level.contentColor, '#ffffff');
       const cashbackValue = normalizeNumberInputValue(level.cashbackPercent, 1);
+      const favoriteCategoryBonus = normalizeNumberInputValue(level.favoriteCategoriesBonusPercent, 0);
+      const favoriteCategoryLimit = Math.max(0, Math.floor(Number(level.favoriteCategoriesLimit || 0)));
       const card = document.createElement('div');
       card.className = `banner-placement-card bonus-level-card${isActive ? ' is-active' : ''}${isFlipped ? ' is-flipped' : ''}${isFlipping ? ' is-flipping' : ''}`;
       card.dataset.bonusLevelId = levelId;
@@ -8091,9 +8103,15 @@
                   <div class="bonus-level-preview-qr"><span>QR</span></div>
                 </div>
                 <div class="bonus-level-preview-sub" style="color:${escapeHtml(contentColor)};">
-                  <div class="bonus-level-preview-cashback-icon" style="color:${escapeHtml(contentColor)};"><i class="fas fa-coins"></i></div>
-                  <div class="bonus-level-preview-cashback-text" style="color:${escapeHtml(contentColor)};">Кэшбек</div>
-                  <div class="bonus-level-preview-cashback-value" style="color:${escapeHtml(contentColor)};">${escapeHtml(`${cashbackValue}%`)}</div>
+                  <div class="bonus-level-preview-cashback-side">
+                    <div class="bonus-level-preview-cashback-icon" style="color:${escapeHtml(contentColor)};"><i class="fas fa-undo-alt"></i></div>
+                    <div class="bonus-level-preview-cashback-value" style="color:${escapeHtml(contentColor)};">${escapeHtml(`${cashbackValue}%`)}</div>
+                  </div>
+                  <div class="bonus-level-preview-category-side">
+                    <div class="bonus-level-preview-category-icon" style="color:${escapeHtml(contentColor)};"><i class="fas fa-tags"></i></div>
+                    <div class="bonus-level-preview-category-count" style="color:${escapeHtml(contentColor)};">${escapeHtml(String(favoriteCategoryLimit))}</div>
+                    <div class="bonus-level-preview-category-value" style="color:${escapeHtml(contentColor)};">${escapeHtml(`${favoriteCategoryBonus}%`)}</div>
+                  </div>
                 </div>
               </div>
             </div>
