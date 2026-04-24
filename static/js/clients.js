@@ -219,6 +219,25 @@
     return Math.max(0, Math.round(parsed));
   }
 
+  function normalizeBonusRangeAmount(value, fallback = 0) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return Math.max(0, Math.floor(Number(fallback) || 0));
+    return Math.max(0, Math.floor(parsed));
+  }
+
+  function normalizeBonusRangePercent(value, fallback = 0) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return Math.max(0, Number(fallback) || 0);
+    return Math.max(0, Math.round(parsed * 100) / 100);
+  }
+
+  function formatBonusRangePercentValue(value) {
+    return new Intl.NumberFormat('ru-RU', {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 2,
+    }).format(normalizeBonusRangePercent(value, 0));
+  }
+
   function buildBannerTitleBackgroundColor(color, opacity) {
     const hex = normalizeBannerColor(color, '#ffffff').replace('#', '');
     const alpha = normalizeBannerOpacity(opacity, 90) / 100;
@@ -505,9 +524,9 @@
 
   function createDefaultBonusLevels() {
     return [
-      { id: 'starter', title: 'Стартовый', subtitle: 'от 0 ₽', description: '', designColor: '#f8fafc', accentColor: '#f97316', minSpent: 0, minOrders: 0, showTitleOnCard: true, titleColor: '#1f2937', titleBackgroundEnabled: true, titleBackgroundColor: '#ffffff', titleBackgroundOpacity: 90, cashbackPercent: 1 },
-      { id: 'silver', title: 'Серебряный', subtitle: 'от 10 000 ₽', description: '', designColor: '#f1f5f9', accentColor: '#f97316', minSpent: 10000, minOrders: 5, showTitleOnCard: true, titleColor: '#1f2937', titleBackgroundEnabled: true, titleBackgroundColor: '#ffffff', titleBackgroundOpacity: 90, cashbackPercent: 3 },
-      { id: 'gold', title: 'Золотой', subtitle: 'от 25 000 ₽', description: '', designColor: '#e2e8f0', accentColor: '#f97316', minSpent: 25000, minOrders: 10, showTitleOnCard: true, titleColor: '#1f2937', titleBackgroundEnabled: true, titleBackgroundColor: '#ffffff', titleBackgroundOpacity: 90, cashbackPercent: 5 },
+      { id: 'starter', title: 'Стартовый', subtitle: 'от 0 ₽', description: '', designColor: '#f8fafc', accentColor: '#f97316', minSpent: 0, minOrders: 0, showTitleOnCard: true, titleColor: '#1f2937', titleBackgroundEnabled: true, titleBackgroundColor: '#ffffff', titleBackgroundOpacity: 90, cashbackPercent: 1, redeemPercent: 0, qrEnabled: true, mainColor: '#46b13b', baseColor: '#1f8d2e', contentColor: '#ffffff', activationDelayValue: 0, activationDelayUnit: 'immediate', lifetimeValue: 0, lifetimeUnit: 'forever', orderBonusRanges: [], favoriteCategoriesBonusPercent: 0, favoriteCategoriesLimit: 0 },
+      { id: 'silver', title: 'Серебряный', subtitle: 'от 10 000 ₽', description: '', designColor: '#f1f5f9', accentColor: '#f97316', minSpent: 10000, minOrders: 5, showTitleOnCard: true, titleColor: '#1f2937', titleBackgroundEnabled: true, titleBackgroundColor: '#ffffff', titleBackgroundOpacity: 90, cashbackPercent: 3, redeemPercent: 0, qrEnabled: true, mainColor: '#46b13b', baseColor: '#1f8d2e', contentColor: '#ffffff', activationDelayValue: 0, activationDelayUnit: 'immediate', lifetimeValue: 0, lifetimeUnit: 'forever', orderBonusRanges: [], favoriteCategoriesBonusPercent: 0, favoriteCategoriesLimit: 0 },
+      { id: 'gold', title: 'Золотой', subtitle: 'от 25 000 ₽', description: '', designColor: '#e2e8f0', accentColor: '#f97316', minSpent: 25000, minOrders: 10, showTitleOnCard: true, titleColor: '#1f2937', titleBackgroundEnabled: true, titleBackgroundColor: '#ffffff', titleBackgroundOpacity: 90, cashbackPercent: 5, redeemPercent: 0, qrEnabled: true, mainColor: '#46b13b', baseColor: '#1f8d2e', contentColor: '#ffffff', activationDelayValue: 0, activationDelayUnit: 'immediate', lifetimeValue: 0, lifetimeUnit: 'forever', orderBonusRanges: [], favoriteCategoriesBonusPercent: 0, favoriteCategoriesLimit: 0 },
     ];
   }
 
@@ -517,6 +536,33 @@
       { id: 'evt2', clientName: 'Мария Соколова', phone: '+7 (921) 222-11-00', action: 'Повысил статус', status: 'Серебряный', at: 'Сегодня, 11:18' },
       { id: 'evt3', clientName: 'Алексей Орлов', phone: '+7 (915) 555-89-10', action: 'Повысил статус', status: 'Золотой', at: 'Вчера, 20:03' },
     ];
+  }
+
+  function sanitizeBonusRangeRows(items) {
+    return (Array.isArray(items) ? items : [])
+      .map((item) => {
+        const amount = normalizeBonusRangeAmount(item?.amount, 0);
+        const percent = normalizeBonusRangePercent(item?.percent, 0);
+        if (!(amount > 0) || !(percent > 0)) return null;
+        return { amount, percent };
+      })
+      .filter(Boolean)
+      .sort((a, b) => Number(a.amount || 0) - Number(b.amount || 0));
+  }
+
+  function normalizeBonusLevelTimingValue(value, fallback = 0) {
+    const normalized = normalizeNumberInputValue(value, fallback);
+    return Math.max(0, Math.floor(Number(normalized || 0)));
+  }
+
+  function normalizeBonusLevelActivationUnit(value) {
+    const normalized = String(value || '').trim().toLowerCase();
+    return ['hours', 'days', 'immediate'].includes(normalized) ? normalized : 'immediate';
+  }
+
+  function normalizeBonusLevelLifetimeUnit(value) {
+    const normalized = String(value || '').trim().toLowerCase();
+    return ['hours', 'days', 'months', 'forever'].includes(normalized) ? normalized : 'forever';
   }
 
   function sanitizeBonusLevels(items) {
@@ -540,6 +586,18 @@
           titleBackgroundColor: normalizeHexColor(item?.titleBackgroundColor, '#ffffff'),
           titleBackgroundOpacity: normalizeBannerOpacity(item?.titleBackgroundOpacity, 90),
           cashbackPercent: normalizeNumberInputValue(item?.cashbackPercent, 1),
+          redeemPercent: normalizeNumberInputValue(item?.redeemPercent, 0),
+          qrEnabled: item?.qrEnabled !== false,
+          mainColor: normalizeHexColor(item?.mainColor ?? item?.designColor, '#46b13b'),
+          baseColor: normalizeHexColor(item?.baseColor, '#1f8d2e'),
+          contentColor: normalizeHexColor(item?.contentColor, '#ffffff'),
+          activationDelayValue: normalizeBonusLevelTimingValue(item?.activationDelayValue, 0),
+          activationDelayUnit: normalizeBonusLevelActivationUnit(item?.activationDelayUnit),
+          lifetimeValue: normalizeBonusLevelTimingValue(item?.lifetimeValue, 0),
+          lifetimeUnit: normalizeBonusLevelLifetimeUnit(item?.lifetimeUnit),
+          orderBonusRanges: sanitizeBonusRangeRows(item?.orderBonusRanges),
+          favoriteCategoriesBonusPercent: normalizeNumberInputValue(item?.favoriteCategoriesBonusPercent, 0),
+          favoriteCategoriesLimit: normalizeNumberInputValue(item?.favoriteCategoriesLimit, 0),
         };
       })
       .filter(Boolean);
@@ -1460,6 +1518,8 @@
   const elDePeriodReset = $("#de_period_reset");
   let activeDiscountHelpTrigger = null;
   let activeDiscountHelpPopover = null;
+  let activeBonusLevelHelpTrigger = null;
+  let activeBonusLevelHelpPopover = null;
   const elDeWeekdaysEnabled = $("#de_weekdays_enabled");
   const elDeWeekdaysFields = $("#de_weekdays_fields");
   const elDeTimeEnabled = $("#de_time_enabled");
@@ -1676,6 +1736,52 @@
   const bonusLevelPreviewTitle = right$("#bonusLevelPreviewTitle");
   const bonusLevelPreviewBonusValue = right$("#bonusLevelPreviewBonusValue");
   const bonusLevelPreviewCashbackValue = right$("#bonusLevelPreviewCashbackValue");
+  const bonusLevelPreviewQr = right$("#bonusLevelPreviewQr");
+  const bonusLevelQrBtn = right$("#bonusLevelQrBtn");
+  const bonusLevelQrPopover = right$("#bonusLevelQrPopover");
+  const bonusLevelQrEnabledSwitch = right$("#bonusLevelQrEnabledSwitch");
+  const bonusLevelMainColorBtn = right$("#bonusLevelMainColorBtn");
+  const bonusLevelMainColorPopover = right$("#bonusLevelMainColorPopover");
+  const bonusLevelMainColorInput = right$("#bonusLevelMainColorInput");
+  const bonusLevelBaseColorBtn = right$("#bonusLevelBaseColorBtn");
+  const bonusLevelBaseColorPopover = right$("#bonusLevelBaseColorPopover");
+  const bonusLevelBaseColorInput = right$("#bonusLevelBaseColorInput");
+  const bonusLevelContentColorBtn = right$("#bonusLevelContentColorBtn");
+  const bonusLevelContentColorPopover = right$("#bonusLevelContentColorPopover");
+  const bonusLevelContentColorInput = right$("#bonusLevelContentColorInput");
+  const bonusLevelRangePill = right$("#bonusLevelRangePill");
+  const bonusLevelRangeSummary = right$("#bonusLevelRangeSummary");
+  const bonusLevelRangeInfoBtn = right$("#bonusLevelRangeInfoBtn");
+  const bonusLevelRangeEditBtn = right$("#bonusLevelRangeEditBtn");
+  const bonusLevelCashbackPercentInput = right$("#bonusLevelCashbackPercentInput");
+  const bonusLevelRedeemPercentInput = right$("#bonusLevelRedeemPercentInput");
+  const bonusLevelActivationFieldWrap = right$("#bonusLevelActivationFieldWrap");
+  const bonusLevelActivationDelayValueWrap = right$("#bonusLevelActivationDelayValueWrap");
+  const bonusLevelActivationDelayValueInput = right$("#bonusLevelActivationDelayValueInput");
+  const bonusLevelActivationDelayUnitDotsBtn = right$("#bonusLevelActivationDelayUnitDotsBtn");
+  const bonusLevelActivationDelayInputUnitMenu = right$("#bonusLevelActivationDelayInputUnitMenu");
+  const bonusLevelActivationDelayUnitSelect = right$("#bonusLevelActivationDelayUnitSelect");
+  const bonusLevelActivationDelayUnitWrap = right$("#bonusLevelActivationDelayUnitWrap");
+  const bonusLevelActivationDelayUnitTrigger = right$("#bonusLevelActivationDelayUnitTrigger");
+  const bonusLevelActivationDelayUnitText = right$("#bonusLevelActivationDelayUnitText");
+  const bonusLevelActivationDelayUnitMenu = right$("#bonusLevelActivationDelayUnitMenu");
+  const bonusLevelActivationDelayHint = right$("#bonusLevelActivationDelayHint");
+  const bonusLevelLifetimeFieldWrap = right$("#bonusLevelLifetimeFieldWrap");
+  const bonusLevelLifetimeValueWrap = right$("#bonusLevelLifetimeValueWrap");
+  const bonusLevelLifetimeValueInput = right$("#bonusLevelLifetimeValueInput");
+  const bonusLevelLifetimeUnitDotsBtn = right$("#bonusLevelLifetimeUnitDotsBtn");
+  const bonusLevelLifetimeInputUnitMenu = right$("#bonusLevelLifetimeInputUnitMenu");
+  const bonusLevelLifetimeUnitSelect = right$("#bonusLevelLifetimeUnitSelect");
+  const bonusLevelLifetimeUnitWrap = right$("#bonusLevelLifetimeUnitWrap");
+  const bonusLevelLifetimeUnitTrigger = right$("#bonusLevelLifetimeUnitTrigger");
+  const bonusLevelLifetimeUnitText = right$("#bonusLevelLifetimeUnitText");
+  const bonusLevelLifetimeUnitMenu = right$("#bonusLevelLifetimeUnitMenu");
+  const bonusLevelLifetimeHint = right$("#bonusLevelLifetimeHint");
+  const bonusLevelFavoriteCategoriesBonusPercentInput = right$("#bonusLevelFavoriteCategoriesBonusPercentInput");
+  const bonusLevelFavoriteCategoriesLimitInput = right$("#bonusLevelFavoriteCategoriesLimitInput");
+  const bonusLevelFavoriteCategoriesIcons = right$("#bonusLevelFavoriteCategoriesIcons");
+  const bonusLevelFavoriteCategoriesInfoBtn = right$("#bonusLevelFavoriteCategoriesInfoBtn");
+  const bonusLevelFavoriteCategoriesEditBtn = right$("#bonusLevelFavoriteCategoriesEditBtn");
   const bannerTitleInput = right$("#bannerTitleInput");
   const bannerDescriptionInput = right$("#bannerDescriptionInput");
   const bannerTitleSettingsBtn = right$("#bannerTitleSettingsBtn");
@@ -6362,6 +6468,454 @@
     }
   }
 
+  function closeBonusLevelInlinePopovers(exceptPopover = null) {
+    [
+      bonusLevelQrPopover,
+      bonusLevelMainColorPopover,
+      bonusLevelBaseColorPopover,
+      bonusLevelContentColorPopover,
+    ].forEach((popover) => {
+      if (!popover || popover === exceptPopover) return;
+      popover.classList.add('hidden');
+    });
+  }
+
+  function bindBonusLevelInlinePopover(triggerEl, popoverEl) {
+    if (!triggerEl || !popoverEl) return;
+    triggerEl.addEventListener('click', (event) => {
+      if (String(state.editingBonusLevelId || '').trim() !== String(state.activeBonusLevelId || '').trim()) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const shouldOpen = popoverEl.classList.contains('hidden');
+      closeBonusLevelInlinePopovers();
+      if (shouldOpen) popoverEl.classList.remove('hidden');
+    });
+    document.addEventListener('click', (event) => {
+      if (popoverEl.classList.contains('hidden')) return;
+      if (popoverEl.contains(event.target) || triggerEl.contains(event.target)) return;
+      popoverEl.classList.add('hidden');
+    });
+  }
+
+  function getBonusLevelTimingUnitLabel(unit) {
+    const normalized = String(unit || '').trim().toLowerCase();
+    if (normalized === 'hours') return 'Часы';
+    if (normalized === 'days') return 'Дни';
+    if (normalized === 'months') return 'Месяцы';
+    if (normalized === 'immediate') return 'Сразу';
+    if (normalized === 'forever') return 'Бессрочно';
+    return '';
+  }
+
+  function closeBonusLevelUnitMenus(exceptMenu = null) {
+    [
+      [bonusLevelActivationDelayUnitWrap, bonusLevelActivationDelayUnitTrigger, bonusLevelActivationDelayUnitMenu],
+      [bonusLevelLifetimeUnitWrap, bonusLevelLifetimeUnitTrigger, bonusLevelLifetimeUnitMenu],
+      [null, bonusLevelActivationDelayUnitDotsBtn, bonusLevelActivationDelayInputUnitMenu],
+      [null, bonusLevelLifetimeUnitDotsBtn, bonusLevelLifetimeInputUnitMenu],
+    ].forEach(([wrap, trigger, menu]) => {
+      if (!menu) return;
+      if (menu === exceptMenu) {
+        if (wrap) wrap.classList.add('is-open');
+        if (trigger) trigger.setAttribute('aria-expanded', 'true');
+        return;
+      }
+      menu.classList.add('hidden');
+      if (wrap) wrap.classList.remove('is-open');
+      if (trigger) trigger.setAttribute('aria-expanded', 'false');
+    });
+  }
+
+  function syncBonusLevelTimingMenuSelection(menuEl, value) {
+    if (!menuEl) return;
+    menuEl.querySelectorAll('.new-order-right-select-option').forEach((option) => {
+      const isSelected = String(option.dataset.value || '') === String(value || '');
+      option.classList.toggle('is-selected', isSelected);
+      option.setAttribute('aria-selected', isSelected ? 'true' : 'false');
+    });
+  }
+
+  function renderBonusLevelTimingControls(level = null) {
+    const current = level && typeof level === 'object' ? level : getActiveBonusLevelForInfo();
+    if (!current) return;
+
+    const activationUnit = normalizeBonusLevelActivationUnit(current.activationDelayUnit);
+    const lifetimeUnit = normalizeBonusLevelLifetimeUnit(current.lifetimeUnit);
+    const activationValueMode = activationUnit !== 'immediate';
+    const lifetimeValueMode = lifetimeUnit !== 'forever';
+
+    if (bonusLevelActivationFieldWrap) {
+      bonusLevelActivationFieldWrap.classList.toggle('is-value-mode', activationValueMode);
+    }
+    if (bonusLevelLifetimeFieldWrap) {
+      bonusLevelLifetimeFieldWrap.classList.toggle('is-value-mode', lifetimeValueMode);
+    }
+    if (bonusLevelActivationDelayValueWrap) {
+      bonusLevelActivationDelayValueWrap.classList.toggle('hidden', !activationValueMode);
+    }
+    if (bonusLevelLifetimeValueWrap) {
+      bonusLevelLifetimeValueWrap.classList.toggle('hidden', !lifetimeValueMode);
+    }
+    if (bonusLevelActivationDelayUnitWrap) {
+      bonusLevelActivationDelayUnitWrap.classList.toggle('hidden', activationValueMode);
+    }
+    if (bonusLevelLifetimeUnitWrap) {
+      bonusLevelLifetimeUnitWrap.classList.toggle('hidden', lifetimeValueMode);
+    }
+    if (bonusLevelActivationDelayUnitDotsBtn) {
+      bonusLevelActivationDelayUnitDotsBtn.classList.toggle('hidden', !activationValueMode);
+    }
+    if (bonusLevelLifetimeUnitDotsBtn) {
+      bonusLevelLifetimeUnitDotsBtn.classList.toggle('hidden', !lifetimeValueMode);
+    }
+
+    if (bonusLevelActivationDelayValueInput) {
+      bonusLevelActivationDelayValueInput.value = String(normalizeBonusLevelTimingValue(current.activationDelayValue, 0));
+      bonusLevelActivationDelayValueInput.disabled = !activationValueMode || String(state.editingBonusLevelId || '').trim() !== String(current.id || '').trim();
+    }
+    if (bonusLevelLifetimeValueInput) {
+      bonusLevelLifetimeValueInput.value = String(normalizeBonusLevelTimingValue(current.lifetimeValue, 0));
+      bonusLevelLifetimeValueInput.disabled = !lifetimeValueMode || String(state.editingBonusLevelId || '').trim() !== String(current.id || '').trim();
+    }
+
+    if (bonusLevelActivationDelayUnitSelect) bonusLevelActivationDelayUnitSelect.value = activationUnit;
+    if (bonusLevelLifetimeUnitSelect) bonusLevelLifetimeUnitSelect.value = lifetimeUnit;
+    if (bonusLevelActivationDelayUnitText) bonusLevelActivationDelayUnitText.textContent = getBonusLevelTimingUnitLabel(activationUnit);
+    if (bonusLevelLifetimeUnitText) bonusLevelLifetimeUnitText.textContent = getBonusLevelTimingUnitLabel(lifetimeUnit);
+    syncBonusLevelTimingMenuSelection(bonusLevelActivationDelayUnitMenu, activationUnit);
+    syncBonusLevelTimingMenuSelection(bonusLevelLifetimeUnitMenu, lifetimeUnit);
+    syncBonusLevelTimingMenuSelection(bonusLevelActivationDelayInputUnitMenu, activationUnit);
+    syncBonusLevelTimingMenuSelection(bonusLevelLifetimeInputUnitMenu, lifetimeUnit);
+
+    const isEditing = String(state.editingBonusLevelId || '').trim() === String(current.id || '').trim();
+    if (bonusLevelActivationDelayUnitTrigger) bonusLevelActivationDelayUnitTrigger.disabled = !isEditing || activationValueMode;
+    if (bonusLevelLifetimeUnitTrigger) bonusLevelLifetimeUnitTrigger.disabled = !isEditing || lifetimeValueMode;
+    if (bonusLevelActivationDelayUnitDotsBtn) bonusLevelActivationDelayUnitDotsBtn.disabled = !isEditing || !activationValueMode;
+    if (bonusLevelLifetimeUnitDotsBtn) bonusLevelLifetimeUnitDotsBtn.disabled = !isEditing || !lifetimeValueMode;
+    if (bonusLevelActivationDelayHint) bonusLevelActivationDelayHint.classList.add('hidden');
+    if (bonusLevelLifetimeHint) bonusLevelLifetimeHint.classList.add('hidden');
+    closeBonusLevelUnitMenus();
+    if (!isEditing) closeBonusLevelUnitMenus();
+  }
+
+  function bindBonusLevelUnitSelect(triggerEl, wrapEl, menuEl, onSelect) {
+    if (!triggerEl || !wrapEl || !menuEl || typeof onSelect !== 'function') return;
+    triggerEl.addEventListener('click', (event) => {
+      if (String(state.editingBonusLevelId || '').trim() !== String(state.activeBonusLevelId || '').trim()) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const willOpen = menuEl.classList.contains('hidden');
+      closeBonusLevelUnitMenus();
+      if (!willOpen) return;
+      wrapEl.classList.add('is-open');
+      menuEl.classList.remove('hidden');
+      triggerEl.setAttribute('aria-expanded', 'true');
+    });
+
+    menuEl.querySelectorAll('.new-order-right-select-option').forEach((option) => {
+      option.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        onSelect(String(option.dataset.value || '').trim());
+        closeBonusLevelUnitMenus();
+      });
+    });
+  }
+
+  function bindBonusLevelInlineUnitMenu(triggerEl, menuEl, onSelect) {
+    if (!triggerEl || !menuEl || typeof onSelect !== 'function') return;
+    triggerEl.addEventListener('click', (event) => {
+      if (String(state.editingBonusLevelId || '').trim() !== String(state.activeBonusLevelId || '').trim()) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const willOpen = menuEl.classList.contains('hidden');
+      closeBonusLevelUnitMenus();
+      if (!willOpen) return;
+      menuEl.classList.remove('hidden');
+      triggerEl.setAttribute('aria-expanded', 'true');
+    });
+
+    menuEl.querySelectorAll('.new-order-right-select-option').forEach((option) => {
+      option.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        onSelect(String(option.dataset.value || '').trim());
+        closeBonusLevelUnitMenus();
+      });
+    });
+  }
+
+  function buildBonusLevelRangeLines(level = null) {
+    const current = level && typeof level === 'object' ? level : getActiveBonusLevelForInfo();
+    const rows = Array.isArray(current?.orderBonusRanges) ? current.orderBonusRanges : [];
+    if (!rows.length) return [];
+    return rows.map((row, index) => {
+      const amount = normalizeBonusRangeAmount(row?.amount, 0);
+      const nextAmount = normalizeBonusRangeAmount(rows[index + 1]?.amount, 0);
+      const rangeLabel = nextAmount > amount
+        ? `от ${amount.toLocaleString('ru-RU')} до ${(nextAmount - 1).toLocaleString('ru-RU')} ₽`
+        : `от ${amount.toLocaleString('ru-RU')} ₽ и более`;
+      return `${rangeLabel} / +${formatBonusRangePercentValue(row?.percent)}%`;
+    });
+  }
+
+  function formatBonusLevelRangeSummary(level = null) {
+    const lines = buildBonusLevelRangeLines(level);
+    if (!lines.length) return '—';
+    const current = level && typeof level === 'object' ? level : getActiveBonusLevelForInfo();
+    const rows = Array.isArray(current?.orderBonusRanges) ? current.orderBonusRanges : [];
+    const firstRow = rows[0];
+    const lastRow = rows[rows.length - 1];
+    if (!firstRow || !lastRow) return '—';
+    const minAmount = normalizeBonusRangeAmount(firstRow.amount, 0);
+    const minPercent = formatBonusRangePercentValue(firstRow.percent);
+    const maxPercent = formatBonusRangePercentValue(lastRow.percent);
+    return `от ${minAmount.toLocaleString('ru-RU')} ₽ и выше / от ${minPercent}% до ${maxPercent}%`;
+  }
+
+  function formatBonusLevelRangeHelpText(level = null) {
+    const lines = buildBonusLevelRangeLines(level);
+    if (!lines.length) return 'Дополнительные бонусы за сумму заказа не настроены.';
+    return lines.map((line, index) => `${index + 1}. ${line}`).join('\n');
+  }
+
+  function closeBonusLevelRangeEditor() {
+    const { backdrop } = getClientBenefitsOverlayElements();
+    if (backdrop) backdrop.classList.remove('bonus-range-editor-overlay');
+    window.AdminBenefitsModal?.hide();
+  }
+
+  function collectBonusRangeEditorRows(rowsRoot) {
+    if (!(rowsRoot instanceof Element)) return [];
+    const rows = Array.from(rowsRoot.querySelectorAll('.bonus-range-editor-input-row'));
+    return sanitizeBonusRangeRows(rows.map((row) => ({
+      amount: normalizeBonusRangeAmount(row.querySelector('[data-bonus-range-field="amount"]')?.value, 0),
+      percent: normalizeBonusRangePercent(row.querySelector('[data-bonus-range-field="percent"]')?.value, 0),
+    })));
+  }
+
+  function appendBonusRangeEditorRow(rowsRoot, row = null) {
+    if (!(rowsRoot instanceof Element)) return null;
+    const nextRow = row && typeof row === 'object' ? row : {};
+    const rowEl = document.createElement('div');
+    rowEl.className = 'bonus-range-editor-input-row';
+    rowEl.innerHTML = `
+      <input
+        class="control bonus-range-editor-input"
+        type="number"
+        min="0"
+        step="1"
+        placeholder="Сумма заказа, ₽"
+        data-bonus-range-field="amount"
+        value="${escapeHtml(String(normalizeBonusRangeAmount(nextRow.amount, 0) || ''))}"
+      />
+      <input
+        class="control bonus-range-editor-input bonus-range-percent-input"
+        type="number"
+        min="0"
+        max="100"
+        step="0.1"
+        placeholder="Бонус, %"
+        data-bonus-range-field="percent"
+        value="${escapeHtml(String(normalizeBonusRangePercent(nextRow.percent, 0) || ''))}"
+      />
+    `;
+    rowsRoot.appendChild(rowEl);
+    return rowEl;
+  }
+
+  function openBonusLevelRangeEditor() {
+    if (String(state.editingBonusLevelId || '').trim() !== String(state.activeBonusLevelId || '').trim()) return;
+    const current = getActiveBonusLevelForInfo();
+    if (!current) return;
+
+    window.AdminBenefitsModal?.show({
+      title: 'Пороги',
+      showBack: false,
+      showModeToggle: false,
+      onClose: closeBonusLevelRangeEditor,
+    });
+
+    const { backdrop, body } = getClientBenefitsOverlayElements();
+    if (!body) return;
+    if (backdrop) backdrop.classList.add('bonus-range-editor-overlay');
+    body.innerHTML = '';
+
+    const frame = window.AdminBenefitsModal?.createScrollableFrame({ hasFooter: true });
+    if (!frame?.root || !frame.scrollEl || !frame.footerEl) return;
+    body.appendChild(frame.root);
+
+    const shell = document.createElement('div');
+    shell.className = 'bonus-range-editor-modal';
+    frame.scrollEl.appendChild(shell);
+
+    const title = document.createElement('div');
+    title.className = 'bonus-range-editor-title';
+    title.textContent = 'Дополнительные бонусы за сумму заказа';
+    shell.appendChild(title);
+
+    const note = document.createElement('div');
+    note.className = 'bonus-range-editor-row';
+    note.textContent = 'Укажите сумму заказа и процент бонуса для каждого порога.';
+    shell.appendChild(note);
+
+    const rowsRoot = document.createElement('div');
+    rowsRoot.className = 'bonus-range-editor-rows';
+    shell.appendChild(rowsRoot);
+
+    const sourceRows = Array.isArray(current.orderBonusRanges) && current.orderBonusRanges.length
+      ? current.orderBonusRanges
+      : [{ amount: 0, percent: 0 }];
+    sourceRows.forEach((row) => appendBonusRangeEditorRow(rowsRoot, row));
+
+    const addBtn = document.createElement('button');
+    addBtn.type = 'button';
+    addBtn.className = 'bonus-range-editor-add-btn';
+    addBtn.textContent = '+';
+    addBtn.setAttribute('aria-label', 'Добавить порог');
+    addBtn.addEventListener('click', () => {
+      appendBonusRangeEditorRow(rowsRoot, { amount: 0, percent: 0 });
+    });
+    shell.appendChild(addBtn);
+
+    const actions = document.createElement('div');
+    actions.className = 'bonus-range-editor-footer-actions';
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'shop-checkout-benefits-promo-entry-btn';
+    cancelBtn.textContent = 'Отмена';
+    cancelBtn.addEventListener('click', () => {
+      closeBonusLevelRangeEditor();
+    });
+    actions.appendChild(cancelBtn);
+
+    const saveBtn = document.createElement('button');
+    saveBtn.type = 'button';
+    saveBtn.className = 'shop-checkout-benefits-promo-entry-btn is-active';
+    saveBtn.textContent = 'Сохранить';
+    saveBtn.addEventListener('click', () => {
+      const nextRows = collectBonusRangeEditorRows(rowsRoot);
+      applyBonusLevelEditorDraftPatch({
+        orderBonusRanges: nextRows,
+      });
+      updateBonusLevelInCollections(current.id, (level) => ({
+        ...level,
+        orderBonusRanges: nextRows,
+      }));
+      persistBonusCardsStorage();
+      renderBonusLevels();
+      renderBonusLevelInfo();
+      closeBonusLevelRangeEditor();
+    });
+    actions.appendChild(saveBtn);
+
+    frame.footerEl.appendChild(actions);
+  }
+
+  function formatBonusLevelFavoriteCategoriesHelpText(level = null) {
+    const current = level && typeof level === 'object' ? level : getActiveBonusLevelForInfo();
+    const bonusPercent = normalizeNumberInputValue(current?.favoriteCategoriesBonusPercent, 0);
+    const limit = Math.max(0, Math.floor(Number(current?.favoriteCategoriesLimit || 0)));
+    if (!(bonusPercent > 0) && !(limit > 0)) {
+      return 'Дополнительный бонус за любимые категории не настроен.';
+    }
+    const lines = [];
+    if (bonusPercent > 0) lines.push(`Кэшбек: +${bonusPercent}%`);
+    if (limit > 0) lines.push(`Количество категорий: ${limit}`);
+    return lines.join('\n');
+  }
+
+  function renderBonusLevelFavoriteCategoryIcons(level = null) {
+    if (!bonusLevelFavoriteCategoriesIcons) return;
+    const current = level && typeof level === 'object' ? level : getActiveBonusLevelForInfo();
+    const limit = Math.max(0, Math.floor(Number(current?.favoriteCategoriesLimit || 0)));
+    const bonusPercent = normalizeNumberInputValue(current?.favoriteCategoriesBonusPercent, 0);
+    bonusLevelFavoriteCategoriesIcons.innerHTML = '';
+    if (!(limit > 0) || !(bonusPercent > 0)) {
+      bonusLevelFavoriteCategoriesIcons.textContent = '—';
+      return;
+    }
+    const visibleCount = Math.min(limit, 4);
+    for (let i = 0; i < visibleCount; i += 1) {
+      const badge = document.createElement('span');
+      badge.className = 'bonus-level-favorite-category-icon';
+      badge.innerHTML = '<i class="fas fa-tag" aria-hidden="true"></i>';
+      bonusLevelFavoriteCategoriesIcons.appendChild(badge);
+    }
+    if (limit > visibleCount) {
+      const rest = document.createElement('span');
+      rest.className = 'bonus-level-favorite-category-icon';
+      rest.textContent = `+${limit - visibleCount}`;
+      bonusLevelFavoriteCategoriesIcons.appendChild(rest);
+    }
+  }
+
+  function syncBonusLevelSwatchButtons(level = null) {
+    const current = level && typeof level === 'object' ? level : getActiveBonusLevelForInfo();
+    if (!current) return;
+    if (bonusLevelMainColorBtn) bonusLevelMainColorBtn.style.background = normalizeHexColor(current.mainColor, '#46b13b');
+    if (bonusLevelBaseColorBtn) bonusLevelBaseColorBtn.style.background = normalizeHexColor(current.baseColor, '#1f8d2e');
+    if (bonusLevelContentColorBtn) {
+      bonusLevelContentColorBtn.style.background = normalizeHexColor(current.contentColor, '#ffffff');
+      bonusLevelContentColorBtn.style.boxShadow = 'inset 0 0 0 1px rgba(15,23,42,.08)';
+    }
+    if (bonusLevelQrBtn) {
+      bonusLevelQrBtn.classList.toggle('is-active', current.qrEnabled !== false);
+    }
+  }
+
+  function ensureBonusLevelHelpPopover() {
+    if (activeBonusLevelHelpPopover && document.body.contains(activeBonusLevelHelpPopover)) {
+      return activeBonusLevelHelpPopover;
+    }
+    const popover = document.createElement('div');
+    popover.className = 'discount-help-popover bonus-level-range-help-popover hidden';
+    popover.hidden = true;
+    popover.setAttribute('aria-hidden', 'true');
+    const text = document.createElement('div');
+    text.className = 'discount-help-popover-text';
+    popover.appendChild(text);
+    document.body.appendChild(popover);
+    activeBonusLevelHelpPopover = popover;
+    return popover;
+  }
+
+  function closeBonusLevelHelpPopover() {
+    if (activeBonusLevelHelpPopover) {
+      activeBonusLevelHelpPopover.style.left = '';
+      activeBonusLevelHelpPopover.style.top = '';
+      activeBonusLevelHelpPopover.classList.add('hidden');
+      activeBonusLevelHelpPopover.hidden = true;
+      activeBonusLevelHelpPopover.setAttribute('aria-hidden', 'true');
+    }
+    if (activeBonusLevelHelpTrigger) {
+      activeBonusLevelHelpTrigger.setAttribute('aria-expanded', 'false');
+    }
+    activeBonusLevelHelpTrigger = null;
+  }
+
+  function openBonusLevelHelpPopover(triggerEl, text) {
+    if (!triggerEl) return;
+    const popover = ensureBonusLevelHelpPopover();
+    const textEl = popover.querySelector('.discount-help-popover-text');
+    if (!textEl) return;
+    const isSameOpen = activeBonusLevelHelpTrigger === triggerEl && !popover.hidden;
+    if (isSameOpen) {
+      closeBonusLevelHelpPopover();
+      return;
+    }
+    closeBonusLevelHelpPopover();
+    textEl.textContent = String(text || '').trim() || 'Нет данных.';
+    activeBonusLevelHelpTrigger = triggerEl;
+    activeBonusLevelHelpPopover = popover;
+    popover.hidden = false;
+    popover.classList.remove('hidden');
+    popover.setAttribute('aria-hidden', 'false');
+    triggerEl.setAttribute('aria-expanded', 'true');
+    positionDiscountHelpPopover(triggerEl, popover);
+  }
+
   function renderBonusLevelInfo(level = null) {
     const current = level && typeof level === 'object' ? level : getActiveBonusLevelForInfo();
     if (!current) return;
@@ -6402,6 +6956,55 @@
         bonusLevelTitleBackgroundOpacityValue.textContent = `${opacity}%`;
       }
     }
+    if (bonusLevelQrEnabledSwitch) {
+      bonusLevelQrEnabledSwitch.checked = current.qrEnabled !== false;
+      bonusLevelQrEnabledSwitch.disabled = !isEditing;
+    }
+    if (bonusLevelMainColorInput) {
+      bonusLevelMainColorInput.value = normalizeHexColor(current.mainColor, '#46b13b');
+      bonusLevelMainColorInput.disabled = !isEditing;
+    }
+    if (bonusLevelBaseColorInput) {
+      bonusLevelBaseColorInput.value = normalizeHexColor(current.baseColor, '#1f8d2e');
+      bonusLevelBaseColorInput.disabled = !isEditing;
+    }
+    if (bonusLevelContentColorInput) {
+      bonusLevelContentColorInput.value = normalizeHexColor(current.contentColor, '#ffffff');
+      bonusLevelContentColorInput.disabled = !isEditing;
+    }
+    if (bonusLevelQrBtn) bonusLevelQrBtn.disabled = !isEditing;
+    if (bonusLevelMainColorBtn) bonusLevelMainColorBtn.disabled = !isEditing;
+    if (bonusLevelBaseColorBtn) bonusLevelBaseColorBtn.disabled = !isEditing;
+    if (bonusLevelContentColorBtn) bonusLevelContentColorBtn.disabled = !isEditing;
+    if (!isEditing) closeBonusLevelInlinePopovers();
+    if (bonusLevelCashbackPercentInput) {
+      bonusLevelCashbackPercentInput.value = String(normalizeNumberInputValue(current.cashbackPercent, 1) || 0);
+      bonusLevelCashbackPercentInput.disabled = !isEditing;
+    }
+    if (bonusLevelRedeemPercentInput) {
+      bonusLevelRedeemPercentInput.value = String(normalizeNumberInputValue(current.redeemPercent, 0) || 0);
+      bonusLevelRedeemPercentInput.disabled = !isEditing;
+    }
+    if (bonusLevelRangeSummary) {
+      const rangeSummaryText = formatBonusLevelRangeSummary(current);
+      const rangeHelpText = formatBonusLevelRangeHelpText(current);
+      bonusLevelRangeSummary.textContent = rangeSummaryText;
+      bonusLevelRangeSummary.title = rangeHelpText;
+      if (bonusLevelRangePill) {
+        bonusLevelRangePill.title = rangeHelpText;
+      }
+    }
+    renderBonusLevelTimingControls(current);
+    if (bonusLevelFavoriteCategoriesBonusPercentInput) {
+      bonusLevelFavoriteCategoriesBonusPercentInput.value = String(normalizeNumberInputValue(current.favoriteCategoriesBonusPercent, 0) || 0);
+      bonusLevelFavoriteCategoriesBonusPercentInput.disabled = !isEditing;
+    }
+    if (bonusLevelFavoriteCategoriesLimitInput) {
+      bonusLevelFavoriteCategoriesLimitInput.value = String(Math.max(0, Math.floor(Number(current.favoriteCategoriesLimit || 0))));
+      bonusLevelFavoriteCategoriesLimitInput.disabled = !isEditing;
+    }
+    renderBonusLevelFavoriteCategoryIcons(current);
+    syncBonusLevelSwatchButtons(current);
     if (bonusLevelInfoEditBtn) {
       bonusLevelInfoEditBtn.textContent = isEditing ? '\u0421\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c' : '\u0420\u0435\u0434\u0430\u043a\u0442\u0438\u0440\u043e\u0432\u0430\u0442\u044c';
     }
@@ -6419,11 +7022,15 @@
       bonusLevelPreviewTitle.style.color = normalizeHexColor(current.titleColor, '#1f2937');
       if (current.titleBackgroundEnabled === false) {
         bonusLevelPreviewTitle.style.background = 'transparent';
+        bonusLevelPreviewTitle.style.padding = '0';
+        bonusLevelPreviewTitle.style.borderRadius = '0';
       } else {
         bonusLevelPreviewTitle.style.background = buildBannerTitleBackgroundColor(
           current.titleBackgroundColor || '#ffffff',
           current.titleBackgroundOpacity
         );
+        bonusLevelPreviewTitle.style.padding = '2px 10px';
+        bonusLevelPreviewTitle.style.borderRadius = '999px';
       }
       bonusLevelPreviewTitle.style.display = current.showTitleOnCard === false ? 'none' : 'inline-flex';
     }
@@ -6434,9 +7041,30 @@
       const cashback = normalizeNumberInputValue(current.cashbackPercent, 1);
       bonusLevelPreviewCashbackValue.textContent = `${cashback}%`;
     }
+    if (bonusLevelPreviewQr) {
+      bonusLevelPreviewQr.style.display = current.qrEnabled === false ? 'none' : 'flex';
+      bonusLevelPreviewQr.style.color = '#111827';
+      bonusLevelPreviewQr.style.background = 'rgba(255,255,255,.94)';
+    }
+    const mainColor = normalizeHexColor(current.mainColor, '#46b13b');
+    const baseColor = normalizeHexColor(current.baseColor, '#1f8d2e');
+    const contentColor = normalizeHexColor(current.contentColor, '#ffffff');
+    if (bonusLevelPreviewCard) {
+      bonusLevelPreviewCard.style.background = baseColor;
+    }
     if (bonusLevelPreviewMain) {
-      const surface = normalizeHexColor(current.designColor, '#46b13b');
-      bonusLevelPreviewMain.style.background = `linear-gradient(135deg, rgba(70,177,59,.92) 0%, rgba(40,151,51,.92) 100%), ${surface}`;
+      bonusLevelPreviewMain.style.background = mainColor;
+      bonusLevelPreviewMain.style.color = contentColor;
+      bonusLevelPreviewMain.querySelectorAll('.bonus-level-preview-bonus-label, .bonus-level-preview-bonus-value').forEach((node) => {
+        node.style.color = contentColor;
+      });
+      const previewSub = bonusLevelPreviewCard?.querySelector('.bonus-level-preview-sub');
+      if (previewSub) {
+        previewSub.style.background = 'transparent';
+        previewSub.querySelectorAll('.bonus-level-preview-cashback-icon, .bonus-level-preview-cashback-text, .bonus-level-preview-cashback-value').forEach((node) => {
+          node.style.color = contentColor;
+        });
+      }
     }
   }
 
@@ -6469,6 +7097,19 @@
       titleBackgroundOpacity: normalizeBannerOpacity(draft.titleBackgroundOpacity, 90),
       showTitleOnCard: draft.showTitleOnCard !== false,
       titleBackgroundEnabled: draft.titleBackgroundEnabled !== false,
+      qrEnabled: draft.qrEnabled !== false,
+      cashbackPercent: normalizeNumberInputValue(draft.cashbackPercent, 1),
+      redeemPercent: normalizeNumberInputValue(draft.redeemPercent, 0),
+      mainColor: normalizeHexColor(draft.mainColor, '#46b13b'),
+      baseColor: normalizeHexColor(draft.baseColor, '#1f8d2e'),
+      contentColor: normalizeHexColor(draft.contentColor, '#ffffff'),
+      activationDelayValue: normalizeBonusLevelTimingValue(draft.activationDelayValue, 0),
+      activationDelayUnit: normalizeBonusLevelActivationUnit(draft.activationDelayUnit),
+      lifetimeValue: normalizeBonusLevelTimingValue(draft.lifetimeValue, 0),
+      lifetimeUnit: normalizeBonusLevelLifetimeUnit(draft.lifetimeUnit),
+      orderBonusRanges: sanitizeBonusRangeRows(draft.orderBonusRanges),
+      favoriteCategoriesBonusPercent: normalizeNumberInputValue(draft.favoriteCategoriesBonusPercent, 0),
+      favoriteCategoriesLimit: normalizeNumberInputValue(draft.favoriteCategoriesLimit, 0),
     };
     updateBonusLevelInCollections(activeId, () => nextLevel);
     state.editingBonusLevelId = null;
@@ -6537,6 +7178,10 @@
       const isFlipping = state.bonusAnimatingLevelIds.has(levelId);
       const isActive = String(state.activeBonusLevelId || '') === levelId;
       const isEditing = state.bonusCardsEditing === true;
+      const mainColor = normalizeHexColor(level.mainColor ?? level.designColor, '#46b13b');
+      const baseColor = normalizeHexColor(level.baseColor, '#1f8d2e');
+      const contentColor = normalizeHexColor(level.contentColor, '#ffffff');
+      const cashbackValue = normalizeNumberInputValue(level.cashbackPercent, 1);
       const card = document.createElement('div');
       card.className = `banner-placement-card bonus-level-card${isActive ? ' is-active' : ''}${isFlipped ? ' is-flipped' : ''}${isFlipping ? ' is-flipping' : ''}`;
       card.dataset.bonusLevelId = levelId;
@@ -6547,17 +7192,22 @@
               <button class="bonus-level-flip-btn" type="button" data-bonus-flip-id="${escapeHtml(levelId)}" aria-label="Перевернуть карточку" title="Перевернуть карточку">
                 <i class="fas fa-sync-alt"></i>
               </button>
-              <div class="bonus-level-front-main" style="background:${escapeHtml(level.designColor || '#f8fafc')}">
-                <div class="banner-placement-card-icon" style="color:${escapeHtml(level.accentColor || '#f97316')}"><i class="fas fa-medal"></i></div>
-              </div>
-              <div class="bonus-level-front-copy">
-                ${
-                  isEditing
-                    ? `<input class="control bonus-level-field bonus-level-title-input" type="text" data-bonus-level-index="${index}" data-bonus-level-field="title" value="${escapeHtml(level.title)}" />`
-                    : `<div class="banner-placement-card-title">${escapeHtml(level.title)}</div>`
-                }
-                <div class="banner-placement-card-display-title">${escapeHtml(level.subtitle || '')}</div>
-                ${isEditing ? `<input class="control bonus-level-field bonus-level-color-input" type="color" data-bonus-level-index="${index}" data-bonus-level-field="designColor" value="${escapeHtml(level.designColor || '#f8fafc')}" />` : ''}
+              <div class="bonus-level-preview-card" style="background:${escapeHtml(baseColor)};">
+                <div class="bonus-level-preview-main" style="background:${escapeHtml(mainColor)};color:${escapeHtml(contentColor)};">
+                  ${
+                    isEditing
+                      ? `<input class="control bonus-level-field bonus-level-title-input" type="text" data-bonus-level-index="${index}" data-bonus-level-field="title" value="${escapeHtml(level.title)}" />`
+                      : `<div class="bonus-level-preview-title">${escapeHtml(level.title)}</div>`
+                  }
+                  <div class="bonus-level-preview-bonus-label">Бонусы</div>
+                  <div class="bonus-level-preview-bonus-value">0 ₽</div>
+                  <div class="bonus-level-preview-qr"><span>QR</span></div>
+                </div>
+                <div class="bonus-level-preview-sub" style="color:${escapeHtml(contentColor)};">
+                  <div class="bonus-level-preview-cashback-icon" style="color:${escapeHtml(contentColor)};"><i class="fas fa-coins"></i></div>
+                  <div class="bonus-level-preview-cashback-text" style="color:${escapeHtml(contentColor)};">Кэшбек</div>
+                  <div class="bonus-level-preview-cashback-value" style="color:${escapeHtml(contentColor)};">${escapeHtml(`${cashbackValue}%`)}</div>
+                </div>
               </div>
             </div>
             <div class="bonus-level-face bonus-level-face--back">
@@ -6579,7 +7229,7 @@
           </div>
         </div>
       `;
-      const titleNode = card.querySelector('.bonus-level-face--front .banner-placement-card-title');
+      const titleNode = card.querySelector('.bonus-level-face--front .bonus-level-preview-title');
       if (titleNode) {
         titleNode.style.color = String(level.titleColor || '#1f2937');
         if (level.titleBackgroundEnabled !== false) {
@@ -6641,6 +7291,7 @@
           titleBackgroundColor: '#ffffff',
           titleBackgroundOpacity: 90,
           cashbackPercent: 1,
+          redeemPercent: 0,
         }];
         state.bonusLevelsDraft = sanitizeBonusLevels(next);
         renderBonusLevels();
@@ -18343,6 +18994,7 @@
         current.title = String(input.value || '').trim() || current.title;
       } else if (field === 'designColor') {
         current.designColor = normalizeHexColor(input.value, current.designColor || '#f8fafc');
+        current.mainColor = current.designColor;
       } else if (field === 'minSpent') {
         current.minSpent = normalizeNumberInputValue(input.value, current.minSpent || 0);
         current.subtitle = `от ${Number(current.minSpent || 0).toLocaleString('ru-RU')} ₽`;
@@ -18362,8 +19014,8 @@
       const levelId = String(current.id || '').trim();
       const card = levelId ? elBonusLevelsTrack.querySelector(`.bonus-level-card[data-bonus-level-id="${levelId}"]`) : null;
       if (card && field === 'designColor') {
-        const frontMain = card.querySelector('.bonus-level-front-main');
-        if (frontMain) frontMain.style.background = String(current.designColor || '#f8fafc');
+        const previewMain = card.querySelector('.bonus-level-preview-main');
+        if (previewMain) previewMain.style.background = String(current.mainColor || current.designColor || '#46b13b');
       }
       if (card && field === 'minSpent') {
         const subtitleEl = card.querySelector('.bonus-level-face--front .banner-placement-card-display-title');
@@ -18570,6 +19222,169 @@
       applyBonusLevelEditorDraftPatch({
         titleBackgroundOpacity: opacity,
       });
+    });
+  }
+
+  bindBonusLevelInlinePopover(bonusLevelQrBtn, bonusLevelQrPopover);
+  bindBonusLevelInlinePopover(bonusLevelMainColorBtn, bonusLevelMainColorPopover);
+  bindBonusLevelInlinePopover(bonusLevelBaseColorBtn, bonusLevelBaseColorPopover);
+  bindBonusLevelInlinePopover(bonusLevelContentColorBtn, bonusLevelContentColorPopover);
+  bindBonusLevelUnitSelect(
+    bonusLevelActivationDelayUnitTrigger,
+    bonusLevelActivationDelayUnitWrap,
+    bonusLevelActivationDelayUnitMenu,
+    (value) => {
+      applyBonusLevelEditorDraftPatch({
+        activationDelayUnit: normalizeBonusLevelActivationUnit(value),
+      });
+    }
+  );
+  bindBonusLevelUnitSelect(
+    bonusLevelLifetimeUnitTrigger,
+    bonusLevelLifetimeUnitWrap,
+    bonusLevelLifetimeUnitMenu,
+    (value) => {
+      applyBonusLevelEditorDraftPatch({
+        lifetimeUnit: normalizeBonusLevelLifetimeUnit(value),
+      });
+    }
+  );
+  bindBonusLevelInlineUnitMenu(
+    bonusLevelActivationDelayUnitDotsBtn,
+    bonusLevelActivationDelayInputUnitMenu,
+    (value) => {
+      applyBonusLevelEditorDraftPatch({
+        activationDelayUnit: normalizeBonusLevelActivationUnit(value),
+      });
+    }
+  );
+  bindBonusLevelInlineUnitMenu(
+    bonusLevelLifetimeUnitDotsBtn,
+    bonusLevelLifetimeInputUnitMenu,
+    (value) => {
+      applyBonusLevelEditorDraftPatch({
+        lifetimeUnit: normalizeBonusLevelLifetimeUnit(value),
+      });
+    }
+  );
+
+  if (bonusLevelQrEnabledSwitch) {
+    bonusLevelQrEnabledSwitch.addEventListener('change', () => {
+      applyBonusLevelEditorDraftPatch({
+        qrEnabled: bonusLevelQrEnabledSwitch.checked === true,
+      });
+    });
+  }
+
+  if (bonusLevelMainColorInput) {
+    bonusLevelMainColorInput.addEventListener('input', () => {
+      applyBonusLevelEditorDraftPatch({
+        mainColor: normalizeHexColor(bonusLevelMainColorInput.value, '#46b13b'),
+      });
+    });
+  }
+
+  if (bonusLevelBaseColorInput) {
+    bonusLevelBaseColorInput.addEventListener('input', () => {
+      applyBonusLevelEditorDraftPatch({
+        baseColor: normalizeHexColor(bonusLevelBaseColorInput.value, '#1f8d2e'),
+      });
+    });
+  }
+
+  if (bonusLevelContentColorInput) {
+    bonusLevelContentColorInput.addEventListener('input', () => {
+      applyBonusLevelEditorDraftPatch({
+        contentColor: normalizeHexColor(bonusLevelContentColorInput.value, '#ffffff'),
+      });
+    });
+  }
+
+  if (bonusLevelCashbackPercentInput) {
+    bonusLevelCashbackPercentInput.addEventListener('input', () => {
+      applyBonusLevelEditorDraftPatch({
+        cashbackPercent: normalizeNumberInputValue(bonusLevelCashbackPercentInput.value, 1),
+      });
+    });
+  }
+
+  if (bonusLevelRedeemPercentInput) {
+    bonusLevelRedeemPercentInput.addEventListener('input', () => {
+      applyBonusLevelEditorDraftPatch({
+        redeemPercent: normalizeNumberInputValue(bonusLevelRedeemPercentInput.value, 0),
+      });
+    });
+  }
+
+  if (bonusLevelFavoriteCategoriesBonusPercentInput) {
+    bonusLevelFavoriteCategoriesBonusPercentInput.addEventListener('input', () => {
+      applyBonusLevelEditorDraftPatch({
+        favoriteCategoriesBonusPercent: normalizeNumberInputValue(bonusLevelFavoriteCategoriesBonusPercentInput.value, 0),
+      });
+    });
+  }
+
+  if (bonusLevelFavoriteCategoriesLimitInput) {
+    bonusLevelFavoriteCategoriesLimitInput.addEventListener('input', () => {
+      applyBonusLevelEditorDraftPatch({
+        favoriteCategoriesLimit: normalizeNumberInputValue(bonusLevelFavoriteCategoriesLimitInput.value, 0),
+      });
+    });
+  }
+
+  if (bonusLevelActivationDelayValueInput) {
+    bonusLevelActivationDelayValueInput.addEventListener('input', () => {
+      applyBonusLevelEditorDraftPatch({
+        activationDelayValue: normalizeBonusLevelTimingValue(bonusLevelActivationDelayValueInput.value, 0),
+      });
+    });
+  }
+
+  if (bonusLevelLifetimeValueInput) {
+    bonusLevelLifetimeValueInput.addEventListener('input', () => {
+      applyBonusLevelEditorDraftPatch({
+        lifetimeValue: normalizeBonusLevelTimingValue(bonusLevelLifetimeValueInput.value, 0),
+      });
+    });
+  }
+
+  if (bonusLevelActivationDelayUnitSelect) {
+    bonusLevelActivationDelayUnitSelect.addEventListener('change', () => {
+      applyBonusLevelEditorDraftPatch({
+        activationDelayUnit: normalizeBonusLevelActivationUnit(bonusLevelActivationDelayUnitSelect.value),
+      });
+    });
+  }
+
+  if (bonusLevelLifetimeUnitSelect) {
+    bonusLevelLifetimeUnitSelect.addEventListener('change', () => {
+      applyBonusLevelEditorDraftPatch({
+        lifetimeUnit: normalizeBonusLevelLifetimeUnit(bonusLevelLifetimeUnitSelect.value),
+      });
+    });
+  }
+
+  if (bonusLevelRangeInfoBtn) {
+    bonusLevelRangeInfoBtn.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openBonusLevelHelpPopover(bonusLevelRangeInfoBtn, formatBonusLevelRangeHelpText());
+    });
+  }
+
+  if (bonusLevelRangeEditBtn) {
+    bonusLevelRangeEditBtn.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openBonusLevelRangeEditor();
+    });
+  }
+
+  if (bonusLevelFavoriteCategoriesInfoBtn) {
+    bonusLevelFavoriteCategoriesInfoBtn.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openBonusLevelHelpPopover(bonusLevelFavoriteCategoriesInfoBtn, formatBonusLevelFavoriteCategoriesHelpText());
     });
   }
 
@@ -19006,6 +19821,23 @@
   }
 
   document.addEventListener('click', (e) => {
+    if (
+      !e.target.closest('#bonusLevelActivationDelayUnitWrap') &&
+      !e.target.closest('#bonusLevelLifetimeUnitWrap') &&
+      !e.target.closest('#bonusLevelActivationDelayValueWrap') &&
+      !e.target.closest('#bonusLevelLifetimeValueWrap')
+    ) {
+      closeBonusLevelUnitMenus();
+    }
+    if (
+      activeBonusLevelHelpPopover &&
+      !activeBonusLevelHelpPopover.classList.contains('hidden') &&
+      !e.target.closest('.bonus-level-range-help-popover') &&
+      !e.target.closest('#bonusLevelRangeInfoBtn') &&
+      !e.target.closest('#bonusLevelFavoriteCategoriesInfoBtn')
+    ) {
+      closeBonusLevelHelpPopover();
+    }
     if (
       activeDiscountHelpPopover &&
       !activeDiscountHelpPopover.classList.contains('hidden') &&

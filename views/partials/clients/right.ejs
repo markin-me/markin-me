@@ -1,4 +1,4 @@
-<div class="panel client-info-panel">
+﻿<div class="panel client-info-panel">
   <div class="panel-header product-tabs-header hidden" id="clientTabsHeader">
     <div class="product-tabs" id="clientTabs"></div>
     <button
@@ -1167,19 +1167,279 @@
         ></textarea>
       </div>
       <div class="bonus-level-preview-wrap" id="bonusLevelPreviewWrap">
-        <div class="bonus-level-preview-card" id="bonusLevelPreviewCard">
-          <div class="bonus-level-preview-main" id="bonusLevelPreviewMain">
-            <div class="bonus-level-preview-title" id="bonusLevelPreviewTitle">Название уровня</div>
-            <div class="bonus-level-preview-bonus-label">Бонусы</div>
-            <div class="bonus-level-preview-bonus-value" id="bonusLevelPreviewBonusValue">0 ₽</div>
-            <div class="bonus-level-preview-qr" id="bonusLevelPreviewQr" aria-label="Место для QR">
-              <span>QR</span>
+        <div class="bonus-level-preview-row">
+          <div class="bonus-level-preview-swatches bonus-level-preview-swatches--left">
+            <div class="bonus-level-swatch-wrap">
+              <button
+                type="button"
+                class="bonus-level-swatch-btn bonus-level-swatch-btn--icon"
+                id="bonusLevelQrBtn"
+                aria-label="Настройки QR"
+                title="Настройки QR"
+              >
+                <i class="fas fa-qrcode" aria-hidden="true"></i>
+              </button>
+              <div class="bonus-level-swatch-popover hidden" id="bonusLevelQrPopover">
+                <div class="bonus-level-swatch-popover-title">QR-код</div>
+                <label class="switch bonus-level-qr-switch" title="Показывать QR-код на карточке">
+                  <input class="switch-input" type="checkbox" id="bonusLevelQrEnabledSwitch" />
+                  <span class="switch-ui" aria-hidden="true"></span>
+                  <span class="switch-text">Показывать</span>
+                </label>
+              </div>
             </div>
           </div>
-          <div class="bonus-level-preview-sub">
-            <div class="bonus-level-preview-cashback-icon"><i class="fas fa-coins"></i></div>
-            <div class="bonus-level-preview-cashback-text">Кэшбек</div>
-            <div class="bonus-level-preview-cashback-value" id="bonusLevelPreviewCashbackValue">1%</div>
+          <div class="bonus-level-preview-card" id="bonusLevelPreviewCard">
+            <div class="bonus-level-preview-main" id="bonusLevelPreviewMain">
+              <div class="bonus-level-preview-title" id="bonusLevelPreviewTitle">Название уровня</div>
+              <div class="bonus-level-preview-bonus-label">Бонусы</div>
+              <div class="bonus-level-preview-bonus-value" id="bonusLevelPreviewBonusValue">0 ₽</div>
+              <div class="bonus-level-preview-qr" id="bonusLevelPreviewQr" aria-label="Место для QR">
+                <span>QR</span>
+              </div>
+            </div>
+            <div class="bonus-level-preview-sub">
+              <div class="bonus-level-preview-cashback-icon"><i class="fas fa-coins"></i></div>
+              <div class="bonus-level-preview-cashback-text">Кэшбек</div>
+              <div class="bonus-level-preview-cashback-value" id="bonusLevelPreviewCashbackValue">1%</div>
+            </div>
+          </div>
+          <div class="bonus-level-preview-swatches bonus-level-preview-swatches--right">
+            <div class="bonus-level-swatch-wrap">
+              <button type="button" class="bonus-level-swatch-btn" id="bonusLevelMainColorBtn" aria-label="Цвет верхнего фона" title="Цвет верхнего фона"></button>
+              <div class="bonus-level-swatch-popover hidden" id="bonusLevelMainColorPopover">
+                <div class="bonus-level-swatch-popover-title">Верхний фон</div>
+                <input type="color" id="bonusLevelMainColorInput" class="bonus-level-swatch-color" value="#46b13b" />
+              </div>
+            </div>
+            <div class="bonus-level-swatch-wrap">
+              <button type="button" class="bonus-level-swatch-btn" id="bonusLevelBaseColorBtn" aria-label="Цвет нижнего фона" title="Цвет нижнего фона"></button>
+              <div class="bonus-level-swatch-popover hidden" id="bonusLevelBaseColorPopover">
+                <div class="bonus-level-swatch-popover-title">Нижний фон</div>
+                <input type="color" id="bonusLevelBaseColorInput" class="bonus-level-swatch-color" value="#1f8d2e" />
+              </div>
+            </div>
+            <div class="bonus-level-swatch-wrap">
+              <button type="button" class="bonus-level-swatch-btn" id="bonusLevelContentColorBtn" aria-label="Цвет элементов" title="Цвет элементов"></button>
+              <div class="bonus-level-swatch-popover hidden" id="bonusLevelContentColorPopover">
+                <div class="bonus-level-swatch-popover-title">Цвет элементов</div>
+                <input type="color" id="bonusLevelContentColorInput" class="bonus-level-swatch-color" value="#ffffff" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="bonus-level-rules-wrap" id="bonusLevelRulesWrap">
+        <div class="bonus-level-rules-title">Условия бонусов</div>
+
+        <div class="form-row-2 bonus-level-rules-grid">
+          <label class="field-wrap">
+            <span class="field-label" for="bonusLevelCashbackPercentInput">Кэшбек, %</span>
+            <input
+              id="bonusLevelCashbackPercentInput"
+              class="control bonus-level-rule-input"
+              type="number"
+              min="0"
+              max="100"
+              step="0.1"
+              placeholder="0"
+              autocomplete="off"
+            />
+          </label>
+          <label class="field-wrap">
+            <span class="field-label" for="bonusLevelRedeemPercentInput">Можно списывать, %</span>
+            <input
+              id="bonusLevelRedeemPercentInput"
+              class="control bonus-level-rule-input"
+              type="number"
+              min="0"
+              max="100"
+              step="1"
+              placeholder="0"
+              autocomplete="off"
+            />
+          </label>
+        </div>
+
+        <div class="field-wrap bonus-level-rules-switch-row">
+          <label class="switch" title="Разрешить одновременно списывать и начислять бонусы">
+            <input class="switch-input" type="checkbox" id="bonusLevelAllowSimultaneousSwitch" />
+            <span class="switch-ui" aria-hidden="true"></span>
+            <span class="switch-text">Одновременно списывать и начислять</span>
+          </label>
+        </div>
+
+        <div class="field-wrap bonus-level-timing-field bonus-level-timing-field--activation" id="bonusLevelActivationFieldWrap">
+          <label class="field-label" for="bonusLevelActivationDelayValueInput">&#1057;&#1090;&#1072;&#1085;&#1091;&#1090; &#1072;&#1082;&#1090;&#1080;&#1074;&#1085;&#1099;</label>
+          <div class="bonus-level-inline-combo">
+            <div class="bonus-level-inline-input-wrap" id="bonusLevelActivationDelayValueWrap">
+              <input
+                id="bonusLevelActivationDelayValueInput"
+                class="control bonus-level-rule-input"
+                type="number"
+                min="0"
+                step="1"
+                placeholder="0"
+                autocomplete="off"
+              />
+              <button type="button" class="bonus-level-inline-menu-btn hidden" id="bonusLevelActivationDelayUnitDotsBtn" aria-label="Выбрать единицу активации бонусов" title="Выбрать единицу активации бонусов">
+                <i class="fas fa-ellipsis-h" aria-hidden="true"></i>
+              </button>
+              <div class="new-order-right-select-menu no-scrollbar hidden bonus-level-inline-menu" id="bonusLevelActivationDelayInputUnitMenu" role="listbox" aria-label="Единица активации бонусов">
+                <button class="new-order-right-select-option" type="button" data-value="hours">&#1063;&#1072;&#1089;&#1099;</button>
+                <button class="new-order-right-select-option" type="button" data-value="days">&#1044;&#1085;&#1080;</button>
+                <button class="new-order-right-select-option" type="button" data-value="immediate">&#1057;&#1088;&#1072;&#1079;&#1091;</button>
+              </div>
+            </div>
+            <select id="bonusLevelActivationDelayUnitSelect" class="control hidden">
+              <option value="hours">Часы</option>
+              <option value="days">Дни</option>
+              <option value="immediate">Сразу</option>
+            </select>
+            <div class="new-order-right-select-wrap settings-delivery-city-selector bonus-level-unit-select" id="bonusLevelActivationDelayUnitWrap">
+              <button class="new-order-right-select-trigger bonus-level-unit-select-trigger" id="bonusLevelActivationDelayUnitTrigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-label="Единица активации бонусов">
+                <span class="cash-toolbar-filter-main">
+                  <span id="bonusLevelActivationDelayUnitText">Сразу</span>
+                </span>
+                <i class="fas fa-chevron-down"></i>
+              </button>
+              <div class="new-order-right-select-menu no-scrollbar hidden" id="bonusLevelActivationDelayUnitMenu" role="listbox" aria-label="Единица активации бонусов">
+                <button class="new-order-right-select-option" type="button" data-value="hours">Часы</button>
+                <button class="new-order-right-select-option" type="button" data-value="days">Дни</button>
+                <button class="new-order-right-select-option" type="button" data-value="immediate">Сразу</button>
+              </div>
+            </div>
+          </div>
+          <div class="bonus-level-inline-hint hidden" id="bonusLevelActivationDelayHint"></div>
+        </div>
+
+        <div class="field-wrap bonus-level-timing-field bonus-level-timing-field--lifetime" id="bonusLevelLifetimeFieldWrap">
+          <label class="field-label" for="bonusLevelLifetimeValueInput">Время жизни бонусов</label>
+          <div class="bonus-level-inline-combo">
+            <div class="bonus-level-inline-input-wrap" id="bonusLevelLifetimeValueWrap">
+              <input
+                id="bonusLevelLifetimeValueInput"
+                class="control bonus-level-rule-input"
+                type="number"
+                min="0"
+                step="1"
+                placeholder="0"
+                autocomplete="off"
+              />
+              <button type="button" class="bonus-level-inline-menu-btn hidden" id="bonusLevelLifetimeUnitDotsBtn" aria-label="Выбрать единицу срока жизни бонусов" title="Выбрать единицу срока жизни бонусов">
+                <i class="fas fa-ellipsis-h" aria-hidden="true"></i>
+              </button>
+              <div class="new-order-right-select-menu no-scrollbar hidden bonus-level-inline-menu" id="bonusLevelLifetimeInputUnitMenu" role="listbox" aria-label="Единица срока жизни бонусов">
+                <button class="new-order-right-select-option" type="button" data-value="hours">&#1063;&#1072;&#1089;&#1099;</button>
+                <button class="new-order-right-select-option" type="button" data-value="days">&#1044;&#1085;&#1080;</button>
+                <button class="new-order-right-select-option" type="button" data-value="months">&#1052;&#1077;&#1089;&#1103;&#1094;&#1099;</button>
+                <button class="new-order-right-select-option" type="button" data-value="forever">&#1041;&#1077;&#1089;&#1089;&#1088;&#1086;&#1095;&#1085;&#1086;</button>
+              </div>
+            </div>
+            <select id="bonusLevelLifetimeUnitSelect" class="control hidden">
+              <option value="hours">Часы</option>
+              <option value="days">Дни</option>
+              <option value="months">Месяцы</option>
+              <option value="forever">Бессрочно</option>
+            </select>
+            <div class="new-order-right-select-wrap settings-delivery-city-selector bonus-level-unit-select" id="bonusLevelLifetimeUnitWrap">
+              <button class="new-order-right-select-trigger bonus-level-unit-select-trigger" id="bonusLevelLifetimeUnitTrigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-label="Единица срока жизни бонусов">
+                <span class="cash-toolbar-filter-main">
+                  <span id="bonusLevelLifetimeUnitText">Бессрочно</span>
+                </span>
+                <i class="fas fa-chevron-down"></i>
+              </button>
+              <div class="new-order-right-select-menu no-scrollbar hidden" id="bonusLevelLifetimeUnitMenu" role="listbox" aria-label="Единица срока жизни бонусов">
+                <button class="new-order-right-select-option" type="button" data-value="hours">Часы</button>
+                <button class="new-order-right-select-option" type="button" data-value="days">Дни</button>
+                <button class="new-order-right-select-option" type="button" data-value="months">Месяцы</button>
+                <button class="new-order-right-select-option" type="button" data-value="forever">Бессрочно</button>
+              </div>
+            </div>
+          </div>
+          <div class="bonus-level-inline-hint hidden" id="bonusLevelLifetimeHint"></div>
+        </div>
+
+        <div class="field-wrap bonus-level-range-field bonus-level-range-pill--right">
+          <span class="field-label">Дополнительные бонусы за сумму заказа</span>
+          <div class="bonus-level-range-pill" id="bonusLevelRangePill">
+            <div class="bonus-level-range-pill-text" id="bonusLevelRangeSummary">—</div>
+            <div class="bonus-level-range-pill-actions">
+              <button
+                class="bonus-level-range-action-btn"
+                type="button"
+                id="bonusLevelRangeInfoBtn"
+                aria-label="Показать расшифровку по текущему уровню"
+                title="Подробно"
+                aria-expanded="false"
+              >
+                <i class="fas fa-info"></i>
+              </button>
+              <button
+                class="bonus-level-range-action-btn"
+                type="button"
+                id="bonusLevelRangeEditBtn"
+                aria-label="Открыть модалку редактирования порогов"
+                title="Редактировать"
+              >
+                <i class="fas fa-ellipsis-h"></i>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="field-wrap bonus-level-range-field bonus-level-range-pill--right">
+          <span class="field-label">Доп. бонус за покупку любимых категорий</span>
+          <div class="bonus-level-rules-grid">
+            <label class="field-wrap">
+              <span class="field-label" for="bonusLevelFavoriteCategoriesBonusPercentInput">Кэшбек, %</span>
+              <input
+                id="bonusLevelFavoriteCategoriesBonusPercentInput"
+                class="control bonus-level-rule-input"
+                type="number"
+                min="0"
+                step="0.1"
+                placeholder="0"
+                autocomplete="off"
+              />
+            </label>
+            <label class="field-wrap">
+              <span class="field-label" for="bonusLevelFavoriteCategoriesLimitInput">Количество категорий</span>
+              <input
+                id="bonusLevelFavoriteCategoriesLimitInput"
+                class="control bonus-level-rule-input"
+                type="number"
+                min="0"
+                step="1"
+                placeholder="0"
+                autocomplete="off"
+              />
+            </label>
+          </div>
+          <div class="bonus-level-range-pill bonus-level-favorite-categories-pill" id="bonusLevelFavoriteCategoriesPill">
+            <div class="bonus-level-favorite-categories-icons" id="bonusLevelFavoriteCategoriesIcons"></div>
+            <div class="bonus-level-range-pill-actions">
+              <button
+                class="bonus-level-range-action-btn"
+                type="button"
+                id="bonusLevelFavoriteCategoriesInfoBtn"
+                aria-label="Показать список категорий"
+                title="Подробно"
+                aria-expanded="false"
+              >
+                <i class="fas fa-info"></i>
+              </button>
+              <button
+                class="bonus-level-range-action-btn"
+                type="button"
+                id="bonusLevelFavoriteCategoriesEditBtn"
+                aria-label="Открыть модалку выбора категорий"
+                title="Редактировать"
+              >
+                <i class="fas fa-ellipsis-h"></i>
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -1293,4 +1553,6 @@
     <button type="button" class="btn btn-primary" id="discountPickerApplyBtn">Применить</button>
   </div>
 </div>
+
+
 
