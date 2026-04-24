@@ -18075,6 +18075,133 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   white-space:pre-line;
 }
 
+.bonus-level-requirements-field{
+  gap:10px;
+}
+
+.bonus-level-requirements-pill{
+  margin-top:8px;
+}
+
+.bonus-level-rules-title-row{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:8px;
+}
+
+.bonus-level-requirements-editor-grid{
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto minmax(0,1fr) auto minmax(0,1fr);
+  gap:8px;
+  align-items:end;
+}
+
+.bonus-level-requirements-top-grid{
+  display:grid;
+  grid-template-columns:minmax(0,1fr);
+  gap:8px;
+  align-items:end;
+}
+
+.bonus-level-requirements-top-grid .field-wrap,
+.bonus-level-requirements-editor-grid .field-wrap{
+  margin-top:0;
+  overflow:visible;
+}
+
+.bonus-level-requirements-top-grid .field-label,
+.bonus-level-requirements-editor-grid .field-label{
+  display:block;
+  position:relative !important;
+  top:0 !important;
+  left:0 !important;
+  padding:0;
+  margin-bottom:10px !important;
+  background:transparent;
+  font-size:12px;
+  font-weight:600;
+}
+
+.bonus-level-modal-section-title{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:8px;
+  font-size:13px;
+  font-weight:700;
+  color:var(--color-text);
+}
+
+.bonus-level-retention-section{
+  display:grid;
+  gap:10px;
+  margin-top:12px;
+}
+
+.bonus-level-retention-editor-grid{
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto minmax(0,1fr) auto minmax(0,1fr);
+  gap:8px;
+  align-items:end;
+}
+
+.bonus-level-retention-editor-grid .field-wrap{
+  margin-top:0;
+  overflow:visible;
+}
+
+.bonus-level-retention-editor-grid .field-label{
+  display:block;
+  position:relative !important;
+  top:0 !important;
+  left:0 !important;
+  padding:0;
+  margin-bottom:10px !important;
+  background:transparent;
+  font-size:12px;
+  font-weight:600;
+}
+
+.bonus-level-requirement-mode{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  min-height:40px;
+}
+
+.bonus-level-requirement-mode-btn{
+  width:40px;
+  height:40px;
+  border-radius:50%;
+  border:1px solid var(--border-color);
+  background:var(--color-surface-soft);
+  color:var(--color-text);
+  font-size:12px;
+  font-weight:700;
+  cursor:pointer;
+  transition:background .15s ease,border-color .15s ease,color .15s ease,box-shadow .15s ease;
+}
+
+.bonus-level-requirement-mode-btn.is-active{
+  border-color:var(--color-primary);
+  background:var(--color-primary);
+  color:#fff;
+  box-shadow:0 4px 12px rgba(255,106,18,.22);
+}
+
+.bonus-level-requirement-period-field{
+  min-width:0;
+}
+
+.bonus-level-requirement-period-value-wrap{
+  position:relative;
+}
+
+.bonus-level-requirement-period-value-wrap .bonus-level-rule-input{
+  padding-right:42px;
+}
+
 .bonus-range-editor-modal{
   display:grid;
   gap:10px;

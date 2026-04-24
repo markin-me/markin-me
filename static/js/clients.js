@@ -573,6 +573,22 @@
     return ['hours', 'days', 'months', 'forever'].includes(normalized) ? normalized : 'forever';
   }
 
+  function normalizeBonusLevelRequirementValue(value) {
+    const raw = String(value ?? '').trim();
+    if (!raw) return null;
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed) || parsed < 0) return null;
+    return Math.floor(parsed);
+  }
+
+  function normalizeBonusLevelRequirementMode(value) {
+    return String(value || '').trim().toLowerCase() === 'or' ? 'or' : 'and';
+  }
+
+  function normalizeBonusLevelRetentionStrategy(value) {
+    return String(value || '').trim().toLowerCase() === 'custom' ? 'custom' : 'match';
+  }
+
   function sanitizeBonusLevels(items) {
     const source = Array.isArray(items) ? items : [];
     const next = source
@@ -607,6 +623,24 @@
           favoriteCategoriesBonusPercent: normalizeNumberInputValue(item?.favoriteCategoriesBonusPercent, 0),
           favoriteCategoriesLimit: normalizeNumberInputValue(item?.favoriteCategoriesLimit, 0),
           favoriteCategoryIds: normalizeBonusLevelFavoriteCategoryIds(item?.favoriteCategoryIds),
+          requirementAmount: normalizeBonusLevelRequirementValue(item?.requirementAmount),
+          requirementMode: normalizeBonusLevelRequirementMode(item?.requirementMode),
+          requirementOrders: normalizeBonusLevelRequirementValue(item?.requirementOrders),
+          requirementReferralMode: normalizeBonusLevelRequirementMode(item?.requirementReferralMode),
+          requirementReferrals: normalizeBonusLevelRequirementValue(item?.requirementReferrals),
+          requirementPeriodDays: normalizeBonusLevelRequirementValue(item?.requirementPeriodDays),
+          retentionStrategy: normalizeBonusLevelRetentionStrategy(item?.retentionStrategy || (
+            normalizeBonusLevelRequirementValue(item?.retentionAmount) != null ||
+            normalizeBonusLevelRequirementValue(item?.retentionOrders) != null ||
+            normalizeBonusLevelRequirementValue(item?.retentionReferrals) != null
+              ? 'custom'
+              : 'match'
+          )),
+          retentionAmount: normalizeBonusLevelRequirementValue(item?.retentionAmount),
+          retentionMode: normalizeBonusLevelRequirementMode(item?.retentionMode),
+          retentionOrders: normalizeBonusLevelRequirementValue(item?.retentionOrders),
+          retentionReferralMode: normalizeBonusLevelRequirementMode(item?.retentionReferralMode),
+          retentionReferrals: normalizeBonusLevelRequirementValue(item?.retentionReferrals),
         };
       })
       .filter(Boolean);
@@ -1786,11 +1820,14 @@
   const bonusLevelLifetimeUnitText = right$("#bonusLevelLifetimeUnitText");
   const bonusLevelLifetimeUnitMenu = right$("#bonusLevelLifetimeUnitMenu");
   const bonusLevelLifetimeHint = right$("#bonusLevelLifetimeHint");
-  const bonusLevelFavoriteCategoriesBonusPercentInput = right$("#bonusLevelFavoriteCategoriesBonusPercentInput");
-  const bonusLevelFavoriteCategoriesLimitInput = right$("#bonusLevelFavoriteCategoriesLimitInput");
   const bonusLevelFavoriteCategoriesIcons = right$("#bonusLevelFavoriteCategoriesIcons");
   const bonusLevelFavoriteCategoriesInfoBtn = right$("#bonusLevelFavoriteCategoriesInfoBtn");
   const bonusLevelFavoriteCategoriesEditBtn = right$("#bonusLevelFavoriteCategoriesEditBtn");
+  const bonusLevelRequirementsPill = right$("#bonusLevelRequirementsPill");
+  const bonusLevelRequirementsSummary = right$("#bonusLevelRequirementsSummary");
+  const bonusLevelRequirementsInfoBtn = right$("#bonusLevelRequirementsInfoBtn");
+  const bonusLevelRequirementsDetailsInfoBtn = right$("#bonusLevelRequirementsDetailsInfoBtn");
+  const bonusLevelRequirementsEditBtn = right$("#bonusLevelRequirementsEditBtn");
   const bannerTitleInput = right$("#bannerTitleInput");
   const bannerDescriptionInput = right$("#bannerDescriptionInput");
   const bannerTitleSettingsBtn = right$("#bannerTitleSettingsBtn");
@@ -6688,6 +6725,620 @@
     return lines.map((line, index) => `${index + 1}. ${line}`).join('\n');
   }
 
+  function formatBonusLevelRequirementsHelpText() {
+    return [
+      '1. \u0421\u0443\u043c\u043c\u0430 \u0437\u0430\u043a\u0430\u0437\u043e\u0432 - \u043c\u0438\u043d\u0438\u043c\u0430\u043b\u044c\u043d\u0430\u044f \u043e\u0431\u0449\u0430\u044f \u0441\u0443\u043c\u043c\u0430 \u0437\u0430\u043a\u0430\u0437\u043e\u0432 \u0434\u043b\u044f \u043f\u0435\u0440\u0435\u0445\u043e\u0434\u0430 \u043d\u0430 \u0443\u0440\u043e\u0432\u0435\u043d\u044c.',
+      '2. \u041a\u043e\u043b\u0438\u0447\u0435\u0441\u0442\u0432\u043e \u0437\u0430\u043a\u0430\u0437\u043e\u0432 - \u0441\u043a\u043e\u043b\u044c\u043a\u043e \u0437\u0430\u043a\u0430\u0437\u043e\u0432 \u043d\u0443\u0436\u043d\u043e \u0441\u0434\u0435\u043b\u0430\u0442\u044c \u0434\u043b\u044f \u043f\u0435\u0440\u0435\u0445\u043e\u0434\u0430 \u043d\u0430 \u0443\u0440\u043e\u0432\u0435\u043d\u044c.',
+      '3. \u041f\u0440\u0438\u0433\u043b\u0430\u0448\u0451\u043d\u043d\u044b\u0435 \u0440\u0435\u0444\u0435\u0440\u0430\u043b\u044b - \u0441\u043a\u043e\u043b\u044c\u043a\u043e \u0440\u0435\u0444\u0435\u0440\u0430\u043b\u043e\u0432 \u043d\u0443\u0436\u043d\u043e \u043f\u0440\u0438\u0432\u0435\u0441\u0442\u0438.',
+      '4. \u041f\u0443\u0441\u0442\u043e\u0439 \u0438\u043d\u043f\u0443\u0442 \u043d\u0435 \u0443\u0447\u0438\u0442\u044b\u0432\u0430\u0435\u0442\u0441\u044f \u0432 \u0442\u0440\u0435\u0431\u043e\u0432\u0430\u043d\u0438\u044f\u0445.',
+      '5. "\u0438" - \u043d\u0443\u0436\u043d\u043e \u0432\u044b\u043f\u043e\u043b\u043d\u0438\u0442\u044c \u0441\u0432\u044f\u0437\u0430\u043d\u043d\u044b\u0435 \u0443\u0441\u043b\u043e\u0432\u0438\u044f.',
+      '6. "\u0438\u043b\u0438" - \u0434\u043e\u0441\u0442\u0430\u0442\u043e\u0447\u043d\u043e \u0432\u044b\u043f\u043e\u043b\u043d\u0438\u0442\u044c \u043e\u0434\u043d\u043e \u0438\u0437 \u0441\u0432\u044f\u0437\u0430\u043d\u043d\u044b\u0445 \u0443\u0441\u043b\u043e\u0432\u0438\u0439.',
+      '7. \u041f\u0435\u0440\u0438\u043e\u0434 - \u0437\u0430 \u0441\u043a\u043e\u043b\u044c\u043a\u043e \u0434\u043d\u0435\u0439 \u0441\u0447\u0438\u0442\u0430\u044e\u0442\u0441\u044f \u0437\u0430\u043a\u0430\u0437\u044b; \u0435\u0441\u043b\u0438 \u043f\u0443\u0441\u0442\u043e, \u0443\u0441\u043b\u043e\u0432\u0438\u044f \u0431\u0435\u0441\u0441\u0440\u043e\u0447\u043d\u044b.',
+    ].join('\n');
+  }
+
+  function formatBonusLevelRequirementsSummary(level = null) {
+    const current = level && typeof level === 'object' ? level : getActiveBonusLevelForInfo();
+    const amount = normalizeBonusLevelRequirementValue(current?.requirementAmount);
+    const orders = normalizeBonusLevelRequirementValue(current?.requirementOrders);
+    const referrals = normalizeBonusLevelRequirementValue(current?.requirementReferrals);
+    const periodDays = normalizeBonusLevelRequirementValue(current?.requirementPeriodDays);
+    const mode = normalizeBonusLevelRequirementMode(current?.requirementMode) === 'or' ? '\u0438\u043b\u0438' : '\u0438';
+    const referralMode = normalizeBonusLevelRequirementMode(current?.requirementReferralMode) === 'or' ? '\u0438\u043b\u0438' : '\u0438';
+    const parts = [
+      amount != null ? `${amount.toLocaleString('ru-RU')} \u20bd` : null,
+      orders != null ? `${orders.toLocaleString('ru-RU')} \u0437\u0430\u043a.` : null,
+      referrals != null ? `${referrals.toLocaleString('ru-RU')} \u0440\u0435\u0444.` : null,
+    ];
+    const filledCount = parts.filter(Boolean).length;
+    if (!filledCount) return '\u041d\u0435 \u043d\u0430\u0441\u0442\u0440\u043e\u0435\u043d\u043e';
+    const expression = parts[0] && parts[1] && parts[2]
+      ? `${parts[0]} ${mode} ${parts[1]} ${referralMode} ${parts[2]}`
+      : parts[0] && parts[1]
+        ? `${parts[0]} ${mode} ${parts[1]}`
+        : parts[1] && parts[2]
+          ? `${parts[1]} ${referralMode} ${parts[2]}`
+          : parts.filter(Boolean).join('');
+    return `${expression} / ${periodDays != null ? `${periodDays} \u0434\u043d.` : '\u0431\u0435\u0441\u0441\u0440\u043e\u0447\u043d\u043e'}`;
+  }
+
+  function formatBonusLevelRequirementsDetailsText(level = null) {
+    const current = level && typeof level === 'object' ? level : getActiveBonusLevelForInfo();
+    const amount = normalizeBonusLevelRequirementValue(current?.requirementAmount);
+    const orders = normalizeBonusLevelRequirementValue(current?.requirementOrders);
+    const referrals = normalizeBonusLevelRequirementValue(current?.requirementReferrals);
+    const periodDays = normalizeBonusLevelRequirementValue(current?.requirementPeriodDays);
+    const mode = normalizeBonusLevelRequirementMode(current?.requirementMode) === 'or' ? '\u0438\u043b\u0438' : '\u0438';
+    const referralMode = normalizeBonusLevelRequirementMode(current?.requirementReferralMode) === 'or' ? '\u0438\u043b\u0438' : '\u0438';
+    const retentionStrategy = normalizeBonusLevelRetentionStrategy(current?.retentionStrategy);
+    const retentionAmount = retentionStrategy === 'custom'
+      ? normalizeBonusLevelRequirementValue(current?.retentionAmount)
+      : amount;
+    const retentionOrders = retentionStrategy === 'custom'
+      ? normalizeBonusLevelRequirementValue(current?.retentionOrders)
+      : orders;
+    const retentionReferrals = retentionStrategy === 'custom'
+      ? normalizeBonusLevelRequirementValue(current?.retentionReferrals)
+      : referrals;
+    const retentionMode = retentionStrategy === 'custom'
+      ? (normalizeBonusLevelRequirementMode(current?.retentionMode) === 'or' ? '\u0438\u043b\u0438' : '\u0438')
+      : mode;
+    const retentionReferralMode = retentionStrategy === 'custom'
+      ? (normalizeBonusLevelRequirementMode(current?.retentionReferralMode) === 'or' ? '\u0438\u043b\u0438' : '\u0438')
+      : referralMode;
+    const formatMoneyRequirement = (value) => value == null
+      ? '\u041d\u0435 \u0443\u0447\u0438\u0442\u044b\u0432\u0430\u0435\u0442\u0441\u044f'
+      : `${value.toLocaleString('ru-RU')} \u20bd`;
+    const formatCountRequirement = (value) => value == null
+      ? '\u041d\u0435 \u0443\u0447\u0438\u0442\u044b\u0432\u0430\u0435\u0442\u0441\u044f'
+      : value.toLocaleString('ru-RU');
+    const formatPeriod = () => periodDays == null
+      ? '\u0411\u0435\u0441\u0441\u0440\u043e\u0447\u043d\u043e'
+      : `${periodDays.toLocaleString('ru-RU')} \u0434\u043d.`;
+
+    return [
+      '\u041f\u0435\u0440\u0435\u0445\u043e\u0434 \u043d\u0430 \u0443\u0440\u043e\u0432\u0435\u043d\u044c',
+      `\u0421\u0443\u043c\u043c\u0430 \u0437\u0430\u043a\u0430\u0437\u043e\u0432: ${formatMoneyRequirement(amount)}`,
+      `\u041a\u043e\u043b\u0438\u0447\u0435\u0441\u0442\u0432\u043e \u0437\u0430\u043a\u0430\u0437\u043e\u0432: ${formatCountRequirement(orders)}`,
+      `\u041f\u0440\u0438\u0433\u043b\u0430\u0448\u0451\u043d\u043d\u044b\u0435 \u0440\u0435\u0444\u0435\u0440\u0430\u043b\u044b: ${formatCountRequirement(referrals)}`,
+      `\u0421\u0432\u044f\u0437\u044c: ${mode} / ${referralMode}`,
+      `\u041f\u0435\u0440\u0438\u043e\u0434: ${formatPeriod()}`,
+      '',
+      '\u0423\u0434\u0435\u0440\u0436\u0430\u043d\u0438\u0435 \u0443\u0440\u043e\u0432\u043d\u044f',
+      `\u0422\u0438\u043f: ${retentionStrategy === 'custom' ? '\u0421\u0432\u043e\u0438' : '\u0421\u043e\u0432\u043f\u0430\u0434\u0430\u044e\u0442'}`,
+      `\u0421\u0443\u043c\u043c\u0430 \u0437\u0430\u043a\u0430\u0437\u043e\u0432: ${formatMoneyRequirement(retentionAmount)}`,
+      `\u041a\u043e\u043b\u0438\u0447\u0435\u0441\u0442\u0432\u043e \u0437\u0430\u043a\u0430\u0437\u043e\u0432: ${formatCountRequirement(retentionOrders)}`,
+      `\u041f\u0440\u0438\u0433\u043b\u0430\u0448\u0451\u043d\u043d\u044b\u0435 \u0440\u0435\u0444\u0435\u0440\u0430\u043b\u044b: ${formatCountRequirement(retentionReferrals)}`,
+      `\u0421\u0432\u044f\u0437\u044c: ${retentionMode} / ${retentionReferralMode}`,
+      `\u041f\u0435\u0440\u0438\u043e\u0434 \u043f\u0440\u043e\u0432\u0435\u0440\u043a\u0438: ${formatPeriod()}`,
+    ].join('\n');
+  }
+
+  function showBonusLevelRequirementsValidationMessage(message) {
+    if (typeof window.showToast === 'function') {
+      window.showToast(message);
+      return;
+    }
+    alert(message);
+  }
+
+  function closeBonusLevelRequirementsEditor() {
+    const { backdrop } = getClientBenefitsOverlayElements();
+    if (backdrop) backdrop.classList.remove('bonus-range-editor-overlay');
+    window.AdminBenefitsModal?.hide();
+  }
+
+  function openBonusLevelRequirementsEditor() {
+    if (String(state.editingBonusLevelId || '').trim() !== String(state.activeBonusLevelId || '').trim()) return;
+    const current = getActiveBonusLevelForInfo();
+    if (!current) return;
+
+    window.AdminBenefitsModal?.show({
+      title: '\u0423\u0441\u043b\u043e\u0432\u0438\u044f \u043f\u0435\u0440\u0435\u0445\u043e\u0434\u0430 \u043d\u0430 \u0443\u0440\u043e\u0432\u0435\u043d\u044c',
+      showBack: false,
+      showModeToggle: false,
+      onClose: closeBonusLevelRequirementsEditor,
+    });
+
+    const { backdrop, body } = getClientBenefitsOverlayElements();
+    if (!body) return;
+    if (backdrop) backdrop.classList.add('bonus-range-editor-overlay');
+    body.innerHTML = '';
+
+    const frame = window.AdminBenefitsModal?.createScrollableFrame({ hasFooter: true });
+    if (!frame?.root || !frame.scrollEl || !frame.footerEl) return;
+    body.appendChild(frame.root);
+
+    const shell = document.createElement('div');
+    shell.className = 'bonus-range-editor-modal';
+    frame.scrollEl.appendChild(shell);
+
+    const transitionTitle = document.createElement('div');
+    transitionTitle.className = 'bonus-level-modal-section-title';
+    transitionTitle.innerHTML = `
+      <span>\u0423\u0441\u043b\u043e\u0432\u0438\u044f \u043f\u0435\u0440\u0435\u0445\u043e\u0434\u0430 \u043d\u0430 \u0443\u0440\u043e\u0432\u0435\u043d\u044c</span>
+      <button
+        class="bonus-level-range-action-btn"
+        type="button"
+        id="bonusLevelRequirementsModalInfoBtn"
+        aria-label="\u041a\u0430\u043a \u0440\u0430\u0431\u043e\u0442\u0430\u044e\u0442 \u0443\u0441\u043b\u043e\u0432\u0438\u044f \u043f\u0435\u0440\u0435\u0445\u043e\u0434\u0430 \u043d\u0430 \u0443\u0440\u043e\u0432\u0435\u043d\u044c"
+        title="\u041f\u043e\u0434\u0440\u043e\u0431\u043d\u043e"
+        aria-expanded="false"
+      >
+        <i class="fas fa-info"></i>
+      </button>
+    `;
+    shell.appendChild(transitionTitle);
+    const transitionInfoBtn = transitionTitle.querySelector('#bonusLevelRequirementsModalInfoBtn');
+    if (transitionInfoBtn) {
+      transitionInfoBtn.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        openBonusLevelHelpPopover(transitionInfoBtn, formatBonusLevelRequirementsHelpText());
+      });
+    }
+
+    const note = document.createElement('div');
+    note.className = 'bonus-range-editor-row';
+    note.textContent = '\u041f\u0443\u0441\u0442\u044b\u0435 \u043f\u043e\u043b\u044f \u043d\u0435 \u0443\u0447\u0438\u0442\u044b\u0432\u0430\u044e\u0442\u0441\u044f. \u041f\u0443\u0441\u0442\u043e\u0439 \u043f\u0435\u0440\u0438\u043e\u0434 - \u0431\u0435\u0441\u0441\u0440\u043e\u0447\u043d\u043e.';
+    shell.appendChild(note);
+
+    const initialPeriodDays = normalizeBonusLevelRequirementValue(current.requirementPeriodDays);
+    let selectedMode = normalizeBonusLevelRequirementMode(current.requirementMode);
+    let selectedReferralMode = normalizeBonusLevelRequirementMode(current.requirementReferralMode);
+    let selectedRetentionStrategy = normalizeBonusLevelRetentionStrategy(current.retentionStrategy);
+    let selectedRetentionMode = normalizeBonusLevelRequirementMode(current.retentionMode);
+    let selectedRetentionReferralMode = normalizeBonusLevelRequirementMode(current.retentionReferralMode);
+    let selectedPeriodUnit = initialPeriodDays == null ? 'forever' : 'days';
+    const initialRetentionAmount = normalizeBonusLevelRequirementValue(current.retentionAmount);
+    const initialRetentionOrders = normalizeBonusLevelRequirementValue(current.retentionOrders);
+    const initialRetentionReferrals = normalizeBonusLevelRequirementValue(current.retentionReferrals);
+
+    const periodControls = document.createElement('div');
+    periodControls.className = 'bonus-level-requirements-top-grid';
+    periodControls.innerHTML = `
+      <div class="field-wrap bonus-level-requirement-period-field">
+        <span class="field-label" for="bonusLevelRequirementModalPeriodInput">\u041f\u0435\u0440\u0438\u043e\u0434</span>
+        <div class="bonus-level-inline-input-wrap bonus-level-requirement-period-value-wrap" id="bonusLevelRequirementPeriodValueWrap">
+          <input id="bonusLevelRequirementModalPeriodInput" class="control bonus-level-rule-input" type="number" min="0" step="1" placeholder="0" autocomplete="off" value="${escapeHtml(String(initialPeriodDays ?? ''))}" />
+          <button type="button" class="bonus-level-inline-menu-btn" id="bonusLevelRequirementPeriodDotsBtn" aria-label="\u0412\u044b\u0431\u0440\u0430\u0442\u044c \u0435\u0434\u0438\u043d\u0438\u0446\u0443 \u043f\u0435\u0440\u0438\u043e\u0434\u0430" title="\u0412\u044b\u0431\u0440\u0430\u0442\u044c \u0435\u0434\u0438\u043d\u0438\u0446\u0443 \u043f\u0435\u0440\u0438\u043e\u0434\u0430">
+            <i class="fas fa-ellipsis-h" aria-hidden="true"></i>
+          </button>
+          <div class="new-order-right-select-menu no-scrollbar hidden bonus-level-inline-menu" id="bonusLevelRequirementPeriodInlineMenu" role="listbox" aria-label="\u041f\u0435\u0440\u0438\u043e\u0434">
+            <button class="new-order-right-select-option" type="button" data-period-unit="days">\u0414\u043d\u0438</button>
+            <button class="new-order-right-select-option" type="button" data-period-unit="forever">\u0411\u0435\u0441\u0441\u0440\u043e\u0447\u043d\u043e</button>
+          </div>
+        </div>
+        <div class="new-order-right-select-wrap settings-delivery-city-selector bonus-level-unit-select bonus-level-requirement-period-select" id="bonusLevelRequirementPeriodUnitWrap">
+          <button class="new-order-right-select-trigger bonus-level-unit-select-trigger" id="bonusLevelRequirementPeriodUnitTrigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-label="\u041f\u0435\u0440\u0438\u043e\u0434">
+            <span class="cash-toolbar-filter-main"><span id="bonusLevelRequirementPeriodUnitText">\u0411\u0435\u0441\u0441\u0440\u043e\u0447\u043d\u043e</span></span>
+            <i class="fas fa-chevron-down"></i>
+          </button>
+          <div class="new-order-right-select-menu no-scrollbar hidden" id="bonusLevelRequirementPeriodUnitMenu" role="listbox" aria-label="\u041f\u0435\u0440\u0438\u043e\u0434">
+            <button class="new-order-right-select-option" type="button" data-period-unit="days">\u0414\u043d\u0438</button>
+            <button class="new-order-right-select-option" type="button" data-period-unit="forever">\u0411\u0435\u0441\u0441\u0440\u043e\u0447\u043d\u043e</button>
+          </div>
+        </div>
+      </div>
+    `;
+    shell.appendChild(periodControls);
+
+    const fields = document.createElement('div');
+    fields.className = 'bonus-level-requirements-editor-grid';
+    fields.innerHTML = `
+      <label class="field-wrap">
+        <span class="field-label" for="bonusLevelRequirementModalAmountInput">\u0421\u0443\u043c\u043c\u0430 \u0437\u0430\u043a\u0430\u0437\u043e\u0432</span>
+        <input id="bonusLevelRequirementModalAmountInput" class="control bonus-level-rule-input" type="number" min="0" step="1" placeholder="\u041d\u0435 \u0443\u0447\u0438\u0442\u044b\u0432\u0430\u0442\u044c" autocomplete="off" value="${escapeHtml(String(normalizeBonusLevelRequirementValue(current.requirementAmount) ?? ''))}" />
+      </label>
+      <label class="field-wrap">
+        <span class="field-label">\u0423\u0441\u043b\u043e\u0432\u0438\u0435</span>
+        <div class="bonus-level-requirement-mode" aria-label="\u0421\u0432\u044f\u0437\u044c \u0443\u0441\u043b\u043e\u0432\u0438\u0439 \u0443\u0440\u043e\u0432\u043d\u044f">
+          <button type="button" class="bonus-level-requirement-mode-btn" id="bonusLevelRequirementModeToggle" aria-pressed="false">\u0438</button>
+        </div>
+      </label>
+      <label class="field-wrap">
+        <span class="field-label" for="bonusLevelRequirementModalOrdersInput">\u041a\u043e\u043b\u0438\u0447\u0435\u0441\u0442\u0432\u043e \u0437\u0430\u043a\u0430\u0437\u043e\u0432</span>
+        <input id="bonusLevelRequirementModalOrdersInput" class="control bonus-level-rule-input" type="number" min="0" step="1" placeholder="\u041d\u0435 \u0443\u0447\u0438\u0442\u044b\u0432\u0430\u0442\u044c" autocomplete="off" value="${escapeHtml(String(normalizeBonusLevelRequirementValue(current.requirementOrders) ?? ''))}" />
+      </label>
+      <label class="field-wrap">
+        <span class="field-label">\u0423\u0441\u043b\u043e\u0432\u0438\u0435</span>
+        <div class="bonus-level-requirement-mode" aria-label="\u0421\u0432\u044f\u0437\u044c \u0437\u0430\u043a\u0430\u0437\u043e\u0432 \u0438 \u0440\u0435\u0444\u0435\u0440\u0430\u043b\u043e\u0432">
+          <button type="button" class="bonus-level-requirement-mode-btn" id="bonusLevelRequirementReferralModeToggle" aria-pressed="false">\u0438</button>
+        </div>
+      </label>
+      <label class="field-wrap">
+        <span class="field-label" for="bonusLevelRequirementModalReferralsInput">\u041f\u0440\u0438\u0433\u043b. \u0440\u0435\u0444\u0435\u0440\u0430\u043b\u044b</span>
+        <input id="bonusLevelRequirementModalReferralsInput" class="control bonus-level-rule-input" type="number" min="0" step="1" placeholder="\u041d\u0435 \u0443\u0447\u0438\u0442\u044b\u0432\u0430\u0442\u044c" autocomplete="off" value="${escapeHtml(String(normalizeBonusLevelRequirementValue(current.requirementReferrals) ?? ''))}" />
+      </label>
+    `;
+    shell.appendChild(fields);
+
+    const retentionSection = document.createElement('div');
+    retentionSection.className = 'bonus-level-retention-section hidden';
+    retentionSection.innerHTML = `
+      <div class="bonus-level-modal-section-title">
+        <span>\u0423\u0441\u043b\u043e\u0432\u0438\u044f \u0443\u0434\u0435\u0440\u0436\u0430\u043d\u0438\u044f \u0443\u0440\u043e\u0432\u043d\u044f</span>
+      </div>
+      <div class="bonus-level-requirements-top-grid">
+        <div class="field-wrap bonus-level-retention-strategy-field">
+          <span class="field-label" for="bonusLevelRetentionStrategyTrigger">\u0423\u0434\u0435\u0440\u0436\u0430\u043d\u0438\u0435</span>
+          <div class="new-order-right-select-wrap settings-delivery-city-selector bonus-level-unit-select bonus-level-retention-strategy-select" id="bonusLevelRetentionStrategyWrap">
+            <button class="new-order-right-select-trigger bonus-level-unit-select-trigger" id="bonusLevelRetentionStrategyTrigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-label="\u0423\u0441\u043b\u043e\u0432\u0438\u044f \u0443\u0434\u0435\u0440\u0436\u0430\u043d\u0438\u044f">
+              <span class="cash-toolbar-filter-main"><span id="bonusLevelRetentionStrategyText">\u0421\u043e\u0432\u043f\u0430\u0434\u0430\u044e\u0442</span></span>
+              <i class="fas fa-chevron-down"></i>
+            </button>
+            <div class="new-order-right-select-menu no-scrollbar hidden" id="bonusLevelRetentionStrategyMenu" role="listbox" aria-label="\u0423\u0441\u043b\u043e\u0432\u0438\u044f \u0443\u0434\u0435\u0440\u0436\u0430\u043d\u0438\u044f">
+              <button class="new-order-right-select-option" type="button" data-retention-strategy="match">\u0421\u043e\u0432\u043f\u0430\u0434\u0430\u044e\u0442</button>
+              <button class="new-order-right-select-option" type="button" data-retention-strategy="custom">\u0421\u0432\u043e\u0438</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="bonus-level-retention-editor-grid">
+        <label class="field-wrap">
+          <span class="field-label" for="bonusLevelRetentionModalAmountInput">\u0421\u0443\u043c\u043c\u0430 \u0437\u0430\u043a\u0430\u0437\u043e\u0432</span>
+          <input id="bonusLevelRetentionModalAmountInput" class="control bonus-level-rule-input" type="number" min="0" step="1" placeholder="\u041d\u0435 \u0443\u0447\u0438\u0442\u044b\u0432\u0430\u0442\u044c" autocomplete="off" value="${escapeHtml(String(normalizeBonusLevelRequirementValue(current.retentionAmount) ?? ''))}" />
+        </label>
+        <label class="field-wrap">
+          <span class="field-label">\u0423\u0441\u043b\u043e\u0432\u0438\u0435</span>
+          <div class="bonus-level-requirement-mode" aria-label="\u0421\u0432\u044f\u0437\u044c \u0443\u0441\u043b\u043e\u0432\u0438\u0439 \u0443\u0434\u0435\u0440\u0436\u0430\u043d\u0438\u044f">
+            <button type="button" class="bonus-level-requirement-mode-btn" id="bonusLevelRetentionModeToggle" aria-pressed="false">\u0438</button>
+          </div>
+        </label>
+        <label class="field-wrap">
+          <span class="field-label" for="bonusLevelRetentionModalOrdersInput">\u041a\u043e\u043b\u0438\u0447\u0435\u0441\u0442\u0432\u043e \u0437\u0430\u043a\u0430\u0437\u043e\u0432</span>
+          <input id="bonusLevelRetentionModalOrdersInput" class="control bonus-level-rule-input" type="number" min="0" step="1" placeholder="\u041d\u0435 \u0443\u0447\u0438\u0442\u044b\u0432\u0430\u0442\u044c" autocomplete="off" value="${escapeHtml(String(normalizeBonusLevelRequirementValue(current.retentionOrders) ?? ''))}" />
+        </label>
+        <label class="field-wrap">
+          <span class="field-label">\u0423\u0441\u043b\u043e\u0432\u0438\u0435</span>
+          <div class="bonus-level-requirement-mode" aria-label="\u0421\u0432\u044f\u0437\u044c \u0437\u0430\u043a\u0430\u0437\u043e\u0432 \u0438 \u0440\u0435\u0444\u0435\u0440\u0430\u043b\u043e\u0432">
+            <button type="button" class="bonus-level-requirement-mode-btn" id="bonusLevelRetentionReferralModeToggle" aria-pressed="false">\u0438</button>
+          </div>
+        </label>
+        <label class="field-wrap">
+          <span class="field-label" for="bonusLevelRetentionModalReferralsInput">\u041f\u0440\u0438\u0433\u043b. \u0440\u0435\u0444\u0435\u0440\u0430\u043b\u044b</span>
+          <input id="bonusLevelRetentionModalReferralsInput" class="control bonus-level-rule-input" type="number" min="0" step="1" placeholder="\u041d\u0435 \u0443\u0447\u0438\u0442\u044b\u0432\u0430\u0442\u044c" autocomplete="off" value="${escapeHtml(String(normalizeBonusLevelRequirementValue(current.retentionReferrals) ?? ''))}" />
+        </label>
+      </div>
+    `;
+    shell.appendChild(retentionSection);
+
+    const modeToggleBtn = fields.querySelector('#bonusLevelRequirementModeToggle');
+    const syncModeButton = () => {
+      if (!modeToggleBtn) return;
+      const normalizedMode = normalizeBonusLevelRequirementMode(selectedMode);
+      modeToggleBtn.textContent = normalizedMode === 'or' ? '\u0438\u043b\u0438' : '\u0438';
+      modeToggleBtn.classList.add('is-active');
+      modeToggleBtn.setAttribute('aria-pressed', normalizedMode === 'or' ? 'true' : 'false');
+    };
+    if (modeToggleBtn) {
+      modeToggleBtn.addEventListener('click', () => {
+        selectedMode = normalizeBonusLevelRequirementMode(selectedMode) === 'or' ? 'and' : 'or';
+        syncModeButton();
+        syncMatchedRetentionValues();
+      });
+    }
+    syncModeButton();
+
+    const referralModeToggleBtn = fields.querySelector('#bonusLevelRequirementReferralModeToggle');
+    const syncReferralModeButton = () => {
+      if (!referralModeToggleBtn) return;
+      const normalizedMode = normalizeBonusLevelRequirementMode(selectedReferralMode);
+      referralModeToggleBtn.textContent = normalizedMode === 'or' ? '\u0438\u043b\u0438' : '\u0438';
+      referralModeToggleBtn.classList.add('is-active');
+      referralModeToggleBtn.setAttribute('aria-pressed', normalizedMode === 'or' ? 'true' : 'false');
+    };
+    if (referralModeToggleBtn) {
+      referralModeToggleBtn.addEventListener('click', () => {
+        selectedReferralMode = normalizeBonusLevelRequirementMode(selectedReferralMode) === 'or' ? 'and' : 'or';
+        syncReferralModeButton();
+        syncMatchedRetentionValues();
+      });
+    }
+    syncReferralModeButton();
+
+    const retentionModeToggleBtn = retentionSection.querySelector('#bonusLevelRetentionModeToggle');
+    const syncRetentionModeButton = () => {
+      if (!retentionModeToggleBtn) return;
+      const normalizedMode = normalizeBonusLevelRequirementMode(selectedRetentionMode);
+      retentionModeToggleBtn.textContent = normalizedMode === 'or' ? '\u0438\u043b\u0438' : '\u0438';
+      retentionModeToggleBtn.classList.add('is-active');
+      retentionModeToggleBtn.setAttribute('aria-pressed', normalizedMode === 'or' ? 'true' : 'false');
+    };
+    if (retentionModeToggleBtn) {
+      retentionModeToggleBtn.addEventListener('click', () => {
+        if (selectedRetentionStrategy !== 'custom') return;
+        selectedRetentionMode = normalizeBonusLevelRequirementMode(selectedRetentionMode) === 'or' ? 'and' : 'or';
+        syncRetentionModeButton();
+      });
+    }
+    syncRetentionModeButton();
+
+    const retentionReferralModeToggleBtn = retentionSection.querySelector('#bonusLevelRetentionReferralModeToggle');
+    const syncRetentionReferralModeButton = () => {
+      if (!retentionReferralModeToggleBtn) return;
+      const normalizedMode = normalizeBonusLevelRequirementMode(selectedRetentionReferralMode);
+      retentionReferralModeToggleBtn.textContent = normalizedMode === 'or' ? '\u0438\u043b\u0438' : '\u0438';
+      retentionReferralModeToggleBtn.classList.add('is-active');
+      retentionReferralModeToggleBtn.setAttribute('aria-pressed', normalizedMode === 'or' ? 'true' : 'false');
+    };
+    if (retentionReferralModeToggleBtn) {
+      retentionReferralModeToggleBtn.addEventListener('click', () => {
+        if (selectedRetentionStrategy !== 'custom') return;
+        selectedRetentionReferralMode = normalizeBonusLevelRequirementMode(selectedRetentionReferralMode) === 'or' ? 'and' : 'or';
+        syncRetentionReferralModeButton();
+      });
+    }
+    syncRetentionReferralModeButton();
+
+    const amountInput = fields.querySelector('#bonusLevelRequirementModalAmountInput');
+    const ordersInput = fields.querySelector('#bonusLevelRequirementModalOrdersInput');
+    const referralsInput = fields.querySelector('#bonusLevelRequirementModalReferralsInput');
+    const retentionAmountInput = retentionSection.querySelector('#bonusLevelRetentionModalAmountInput');
+    const retentionOrdersInput = retentionSection.querySelector('#bonusLevelRetentionModalOrdersInput');
+    const retentionReferralsInput = retentionSection.querySelector('#bonusLevelRetentionModalReferralsInput');
+    const retentionStrategyWrap = retentionSection.querySelector('#bonusLevelRetentionStrategyWrap');
+    const retentionStrategyTrigger = retentionSection.querySelector('#bonusLevelRetentionStrategyTrigger');
+    const retentionStrategyMenu = retentionSection.querySelector('#bonusLevelRetentionStrategyMenu');
+    const retentionStrategyText = retentionSection.querySelector('#bonusLevelRetentionStrategyText');
+    const getRetentionStrategyLabel = (strategy) => strategy === 'custom' ? '\u0421\u0432\u043e\u0438' : '\u0421\u043e\u0432\u043f\u0430\u0434\u0430\u044e\u0442';
+    const closeRetentionStrategyMenu = () => {
+      if (retentionStrategyMenu) retentionStrategyMenu.classList.add('hidden');
+      if (retentionStrategyWrap) retentionStrategyWrap.classList.remove('is-open');
+      if (retentionStrategyTrigger) retentionStrategyTrigger.setAttribute('aria-expanded', 'false');
+    };
+    const syncRetentionStrategyUi = () => {
+      const isCustom = selectedRetentionStrategy === 'custom';
+      if (retentionStrategyText) retentionStrategyText.textContent = getRetentionStrategyLabel(selectedRetentionStrategy);
+      if (retentionAmountInput) {
+        retentionAmountInput.value = isCustom
+          ? String(initialRetentionAmount ?? '')
+          : String(amountInput?.value ?? '');
+      }
+      if (retentionOrdersInput) {
+        retentionOrdersInput.value = isCustom
+          ? String(initialRetentionOrders ?? '')
+          : String(ordersInput?.value ?? '');
+      }
+      if (retentionReferralsInput) {
+        retentionReferralsInput.value = isCustom
+          ? String(initialRetentionReferrals ?? '')
+          : String(referralsInput?.value ?? '');
+      }
+      if (!isCustom) {
+        selectedRetentionMode = normalizeBonusLevelRequirementMode(selectedMode);
+        selectedRetentionReferralMode = normalizeBonusLevelRequirementMode(selectedReferralMode);
+        syncRetentionModeButton();
+        syncRetentionReferralModeButton();
+      }
+      [retentionAmountInput, retentionOrdersInput, retentionReferralsInput, retentionModeToggleBtn, retentionReferralModeToggleBtn].forEach((control) => {
+        if (!control) return;
+        control.disabled = !isCustom;
+        control.classList.toggle('is-disabled', !isCustom);
+      });
+      retentionSection.querySelectorAll('[data-retention-strategy]').forEach((button) => {
+        const isSelected = String(button.dataset.retentionStrategy || '') === selectedRetentionStrategy;
+        button.classList.toggle('is-selected', isSelected);
+        button.setAttribute('aria-selected', isSelected ? 'true' : 'false');
+      });
+    };
+    const selectRetentionStrategy = (strategy) => {
+      selectedRetentionStrategy = normalizeBonusLevelRetentionStrategy(strategy);
+      syncRetentionStrategyUi();
+      closeRetentionStrategyMenu();
+    };
+    if (retentionStrategyTrigger && retentionStrategyMenu) {
+      retentionStrategyTrigger.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const shouldOpen = retentionStrategyMenu.classList.contains('hidden');
+        closeRetentionStrategyMenu();
+        if (!shouldOpen) return;
+        retentionStrategyWrap?.classList.add('is-open');
+        retentionStrategyMenu.classList.remove('hidden');
+        retentionStrategyTrigger.setAttribute('aria-expanded', 'true');
+      });
+    }
+    retentionSection.querySelectorAll('[data-retention-strategy]').forEach((button) => {
+      button.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        selectRetentionStrategy(String(button.dataset.retentionStrategy || 'match'));
+      });
+    });
+    syncRetentionStrategyUi();
+
+    const periodValueWrap = periodControls.querySelector('#bonusLevelRequirementPeriodValueWrap');
+    const periodUnitWrap = periodControls.querySelector('#bonusLevelRequirementPeriodUnitWrap');
+    const periodUnitTrigger = periodControls.querySelector('#bonusLevelRequirementPeriodUnitTrigger');
+    const periodUnitMenu = periodControls.querySelector('#bonusLevelRequirementPeriodUnitMenu');
+    const periodInlineMenu = periodControls.querySelector('#bonusLevelRequirementPeriodInlineMenu');
+    const periodDotsBtn = periodControls.querySelector('#bonusLevelRequirementPeriodDotsBtn');
+    const periodUnitText = periodControls.querySelector('#bonusLevelRequirementPeriodUnitText');
+
+    const getPeriodUnitLabel = (unit) => unit === 'days' ? '\u0414\u043d\u0438' : '\u0411\u0435\u0441\u0441\u0440\u043e\u0447\u043d\u043e';
+    const closePeriodMenus = () => {
+      if (periodUnitMenu) periodUnitMenu.classList.add('hidden');
+      if (periodInlineMenu) periodInlineMenu.classList.add('hidden');
+      closeRetentionStrategyMenu();
+      if (periodUnitWrap) periodUnitWrap.classList.remove('is-open');
+      if (periodUnitTrigger) periodUnitTrigger.setAttribute('aria-expanded', 'false');
+      if (periodDotsBtn) periodDotsBtn.setAttribute('aria-expanded', 'false');
+    };
+    const syncPeriodUi = () => {
+      const isDays = selectedPeriodUnit === 'days';
+      if (periodValueWrap) periodValueWrap.classList.toggle('hidden', !isDays);
+      if (periodUnitWrap) periodUnitWrap.classList.toggle('hidden', isDays);
+      retentionSection.classList.toggle('hidden', !isDays);
+      if (periodUnitText) periodUnitText.textContent = getPeriodUnitLabel(selectedPeriodUnit);
+      periodControls.querySelectorAll('[data-period-unit]').forEach((button) => {
+        const isSelected = String(button.dataset.periodUnit || '') === selectedPeriodUnit;
+        button.classList.toggle('is-selected', isSelected);
+        button.setAttribute('aria-selected', isSelected ? 'true' : 'false');
+      });
+    };
+    const selectPeriodUnit = (unit) => {
+      selectedPeriodUnit = unit === 'days' ? 'days' : 'forever';
+      syncPeriodUi();
+      closePeriodMenus();
+    };
+
+    const syncMatchedRetentionValues = () => {
+      if (selectedRetentionStrategy !== 'match') return;
+      if (retentionAmountInput) retentionAmountInput.value = String(amountInput?.value ?? '');
+      if (retentionOrdersInput) retentionOrdersInput.value = String(ordersInput?.value ?? '');
+      if (retentionReferralsInput) retentionReferralsInput.value = String(referralsInput?.value ?? '');
+      selectedRetentionMode = normalizeBonusLevelRequirementMode(selectedMode);
+      selectedRetentionReferralMode = normalizeBonusLevelRequirementMode(selectedReferralMode);
+      syncRetentionModeButton();
+      syncRetentionReferralModeButton();
+    };
+
+    if (periodUnitTrigger && periodUnitMenu) {
+      periodUnitTrigger.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const shouldOpen = periodUnitMenu.classList.contains('hidden');
+        closePeriodMenus();
+        if (!shouldOpen) return;
+        periodUnitWrap?.classList.add('is-open');
+        periodUnitMenu.classList.remove('hidden');
+        periodUnitTrigger.setAttribute('aria-expanded', 'true');
+      });
+    }
+    if (periodDotsBtn && periodInlineMenu) {
+      periodDotsBtn.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const shouldOpen = periodInlineMenu.classList.contains('hidden');
+        closePeriodMenus();
+        if (!shouldOpen) return;
+        periodInlineMenu.classList.remove('hidden');
+        periodDotsBtn.setAttribute('aria-expanded', 'true');
+      });
+    }
+    periodControls.querySelectorAll('[data-period-unit]').forEach((button) => {
+      button.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        selectPeriodUnit(String(button.dataset.periodUnit || 'forever'));
+      });
+    });
+    amountInput?.addEventListener('input', syncMatchedRetentionValues);
+    ordersInput?.addEventListener('input', syncMatchedRetentionValues);
+    referralsInput?.addEventListener('input', syncMatchedRetentionValues);
+    syncPeriodUi();
+
+    const actions = document.createElement('div');
+    actions.className = 'bonus-range-editor-footer-actions';
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'shop-checkout-benefits-promo-entry-btn';
+    cancelBtn.textContent = '\u041e\u0442\u043c\u0435\u043d\u0430';
+    cancelBtn.addEventListener('click', () => {
+      closeBonusLevelRequirementsEditor();
+    });
+    actions.appendChild(cancelBtn);
+
+    const saveBtn = document.createElement('button');
+    saveBtn.type = 'button';
+    saveBtn.className = 'shop-checkout-benefits-promo-entry-btn is-active';
+    saveBtn.textContent = '\u0421\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c';
+    saveBtn.addEventListener('click', () => {
+      const amountInput = fields.querySelector('#bonusLevelRequirementModalAmountInput');
+      const ordersInput = fields.querySelector('#bonusLevelRequirementModalOrdersInput');
+      const referralsInput = fields.querySelector('#bonusLevelRequirementModalReferralsInput');
+      const periodInput = periodControls.querySelector('#bonusLevelRequirementModalPeriodInput');
+      const retentionAmountInput = retentionSection.querySelector('#bonusLevelRetentionModalAmountInput');
+      const retentionOrdersInput = retentionSection.querySelector('#bonusLevelRetentionModalOrdersInput');
+      const retentionReferralsInput = retentionSection.querySelector('#bonusLevelRetentionModalReferralsInput');
+      const amountRaw = String(amountInput?.value ?? '').trim();
+      const ordersRaw = String(ordersInput?.value ?? '').trim();
+      const referralsRaw = String(referralsInput?.value ?? '').trim();
+      const periodRaw = String(periodInput?.value ?? '').trim();
+      const retentionAmountRaw = String(retentionAmountInput?.value ?? '').trim();
+      const retentionOrdersRaw = String(retentionOrdersInput?.value ?? '').trim();
+      const retentionReferralsRaw = String(retentionReferralsInput?.value ?? '').trim();
+      const amount = normalizeBonusLevelRequirementValue(amountRaw);
+      const orders = normalizeBonusLevelRequirementValue(ordersRaw);
+      const referrals = normalizeBonusLevelRequirementValue(referralsRaw);
+      const periodDays = selectedPeriodUnit === 'days' ? normalizeBonusLevelRequirementValue(periodRaw) : null;
+      const retentionAmount = normalizeBonusLevelRequirementValue(retentionAmountRaw);
+      const retentionOrders = normalizeBonusLevelRequirementValue(retentionOrdersRaw);
+      const retentionReferrals = normalizeBonusLevelRequirementValue(retentionReferralsRaw);
+      const amountFilled = amountRaw !== '' && amount != null;
+      const ordersFilled = ordersRaw !== '' && orders != null;
+      const referralsFilled = referralsRaw !== '' && referrals != null;
+      const retentionAmountFilled = retentionAmountRaw !== '' && retentionAmount != null;
+      const retentionOrdersFilled = retentionOrdersRaw !== '' && retentionOrders != null;
+      const retentionReferralsFilled = retentionReferralsRaw !== '' && retentionReferrals != null;
+
+      if ((amountRaw !== '' && amount == null) || (ordersRaw !== '' && orders == null) || (referralsRaw !== '' && referrals == null)) {
+        showBonusLevelRequirementsValidationMessage('\u0417\u0430\u043f\u043e\u043b\u043d\u0438\u0442\u0435 \u0443\u0441\u043b\u043e\u0432\u0438\u044f \u043a\u043e\u0440\u0440\u0435\u043a\u0442\u043d\u044b\u043c\u0438 \u0447\u0438\u0441\u043b\u0430\u043c\u0438.');
+        return;
+      }
+      if (selectedMode === 'and' && (!amountFilled || !ordersFilled)) {
+        showBonusLevelRequirementsValidationMessage('\u0414\u043b\u044f \u0440\u0435\u0436\u0438\u043c\u0430 "\u0438" \u0437\u0430\u043f\u043e\u043b\u043d\u0438\u0442\u0435 \u0441\u0443\u043c\u043c\u0443 \u0438 \u043a\u043e\u043b\u0438\u0447\u0435\u0441\u0442\u0432\u043e \u0437\u0430\u043a\u0430\u0437\u043e\u0432.');
+        return;
+      }
+      if (selectedReferralMode === 'and' && (!ordersFilled || !referralsFilled)) {
+        showBonusLevelRequirementsValidationMessage('\u0414\u043b\u044f \u0440\u0435\u0436\u0438\u043c\u0430 "\u0438" \u0437\u0430\u043f\u043e\u043b\u043d\u0438\u0442\u0435 \u043a\u043e\u043b\u0438\u0447\u0435\u0441\u0442\u0432\u043e \u0437\u0430\u043a\u0430\u0437\u043e\u0432 \u0438 \u0440\u0435\u0444\u0435\u0440\u0430\u043b\u043e\u0432.');
+        return;
+      }
+      if (selectedMode === 'or' && selectedReferralMode === 'or' && !amountFilled && !ordersFilled && !referralsFilled) {
+        showBonusLevelRequirementsValidationMessage('\u0414\u043b\u044f \u0440\u0435\u0436\u0438\u043c\u0430 "\u0438\u043b\u0438" \u0437\u0430\u043f\u043e\u043b\u043d\u0438\u0442\u0435 \u0445\u043e\u0442\u044f \u0431\u044b \u043e\u0434\u043d\u043e \u0443\u0441\u043b\u043e\u0432\u0438\u0435.');
+        return;
+      }
+      if (selectedPeriodUnit === 'days' && periodDays == null) {
+        showBonusLevelRequirementsValidationMessage('\u0423\u043a\u0430\u0436\u0438\u0442\u0435 \u043f\u0435\u0440\u0438\u043e\u0434 \u0432 \u0434\u043d\u044f\u0445 \u0438\u043b\u0438 \u0432\u044b\u0431\u0435\u0440\u0438\u0442\u0435 "\u0411\u0435\u0441\u0441\u0440\u043e\u0447\u043d\u043e".');
+        return;
+      }
+      if (selectedPeriodUnit === 'days' && selectedRetentionStrategy === 'custom') {
+        if ((retentionAmountRaw !== '' && retentionAmount == null) || (retentionOrdersRaw !== '' && retentionOrders == null) || (retentionReferralsRaw !== '' && retentionReferrals == null)) {
+          showBonusLevelRequirementsValidationMessage('\u0417\u0430\u043f\u043e\u043b\u043d\u0438\u0442\u0435 \u0443\u0441\u043b\u043e\u0432\u0438\u044f \u0443\u0434\u0435\u0440\u0436\u0430\u043d\u0438\u044f \u043a\u043e\u0440\u0440\u0435\u043a\u0442\u043d\u044b\u043c\u0438 \u0447\u0438\u0441\u043b\u0430\u043c\u0438.');
+          return;
+        } else if (selectedRetentionMode === 'and' && (!retentionAmountFilled || !retentionOrdersFilled)) {
+          showBonusLevelRequirementsValidationMessage('\u0414\u043b\u044f \u0443\u0434\u0435\u0440\u0436\u0430\u043d\u0438\u044f \u0443\u0440\u043e\u0432\u043d\u044f \u0437\u0430\u043f\u043e\u043b\u043d\u0438\u0442\u0435 \u0441\u0443\u043c\u043c\u0443 \u0438 \u043a\u043e\u043b\u0438\u0447\u0435\u0441\u0442\u0432\u043e \u0437\u0430\u043a\u0430\u0437\u043e\u0432.');
+          return;
+        } else if (selectedRetentionReferralMode === 'and' && (!retentionOrdersFilled || !retentionReferralsFilled)) {
+          showBonusLevelRequirementsValidationMessage('\u0414\u043b\u044f \u0443\u0434\u0435\u0440\u0436\u0430\u043d\u0438\u044f \u0443\u0440\u043e\u0432\u043d\u044f \u0437\u0430\u043f\u043e\u043b\u043d\u0438\u0442\u0435 \u043a\u043e\u043b\u0438\u0447\u0435\u0441\u0442\u0432\u043e \u0437\u0430\u043a\u0430\u0437\u043e\u0432 \u0438 \u0440\u0435\u0444\u0435\u0440\u0430\u043b\u043e\u0432.');
+          return;
+        } else if (selectedRetentionMode === 'or' && selectedRetentionReferralMode === 'or' && !retentionAmountFilled && !retentionOrdersFilled && !retentionReferralsFilled) {
+          showBonusLevelRequirementsValidationMessage('\u0414\u043b\u044f \u0443\u0434\u0435\u0440\u0436\u0430\u043d\u0438\u044f \u0443\u0440\u043e\u0432\u043d\u044f \u0437\u0430\u043f\u043e\u043b\u043d\u0438\u0442\u0435 \u0445\u043e\u0442\u044f \u0431\u044b \u043e\u0434\u043d\u043e \u0443\u0441\u043b\u043e\u0432\u0438\u0435.');
+          return;
+        }
+      }
+
+      const nextPatch = {
+        requirementAmount: amountFilled ? amount : null,
+        requirementMode: normalizeBonusLevelRequirementMode(selectedMode),
+        requirementOrders: ordersFilled ? orders : null,
+        requirementReferralMode: normalizeBonusLevelRequirementMode(selectedReferralMode),
+        requirementReferrals: referralsFilled ? referrals : null,
+        requirementPeriodDays: selectedPeriodUnit === 'days' ? periodDays : null,
+        retentionStrategy: selectedPeriodUnit === 'days' ? normalizeBonusLevelRetentionStrategy(selectedRetentionStrategy) : 'match',
+        retentionAmount: selectedPeriodUnit === 'days' && selectedRetentionStrategy === 'custom' && retentionAmountFilled ? retentionAmount : null,
+        retentionMode: normalizeBonusLevelRequirementMode(selectedRetentionMode),
+        retentionOrders: selectedPeriodUnit === 'days' && selectedRetentionStrategy === 'custom' && retentionOrdersFilled ? retentionOrders : null,
+        retentionReferralMode: normalizeBonusLevelRequirementMode(selectedRetentionReferralMode),
+        retentionReferrals: selectedPeriodUnit === 'days' && selectedRetentionStrategy === 'custom' && retentionReferralsFilled ? retentionReferrals : null,
+      };
+      applyBonusLevelEditorDraftPatch(nextPatch);
+      updateBonusLevelInCollections(current.id, (level) => ({
+        ...level,
+        ...nextPatch,
+      }));
+      persistBonusCardsStorage();
+      renderBonusLevels();
+      renderBonusLevelInfo();
+      closeBonusLevelRequirementsEditor();
+    });
+    actions.appendChild(saveBtn);
+
+    frame.footerEl.appendChild(actions);
+  }
+
   function closeBonusLevelRangeEditor() {
     const { backdrop } = getClientBenefitsOverlayElements();
     if (backdrop) backdrop.classList.remove('bonus-range-editor-overlay');
@@ -7212,13 +7863,19 @@
       }
     }
     renderBonusLevelTimingControls(current);
-    if (bonusLevelFavoriteCategoriesBonusPercentInput) {
-      bonusLevelFavoriteCategoriesBonusPercentInput.value = String(normalizeNumberInputValue(current.favoriteCategoriesBonusPercent, 0) || 0);
-      bonusLevelFavoriteCategoriesBonusPercentInput.disabled = !isEditing;
+    if (bonusLevelRequirementsSummary) {
+      const requirementsSummaryText = formatBonusLevelRequirementsSummary(current);
+      const requirementsHelpText = formatBonusLevelRequirementsHelpText();
+      const requirementsDetailsText = formatBonusLevelRequirementsDetailsText(current);
+      bonusLevelRequirementsSummary.textContent = requirementsSummaryText;
+      bonusLevelRequirementsSummary.title = requirementsDetailsText;
+      if (bonusLevelRequirementsPill) {
+        bonusLevelRequirementsPill.title = requirementsDetailsText;
+      }
+      if (bonusLevelRequirementsDetailsInfoBtn) bonusLevelRequirementsDetailsInfoBtn.title = requirementsDetailsText;
     }
-    if (bonusLevelFavoriteCategoriesLimitInput) {
-      bonusLevelFavoriteCategoriesLimitInput.value = String(Math.max(0, Math.floor(Number(current.favoriteCategoriesLimit || 0))));
-      bonusLevelFavoriteCategoriesLimitInput.disabled = !isEditing;
+    if (bonusLevelRequirementsEditBtn) {
+      bonusLevelRequirementsEditBtn.disabled = !isEditing;
     }
     renderBonusLevelFavoriteCategoryIcons(current);
     syncBonusLevelSwatchButtons(current);
@@ -7328,6 +7985,18 @@
       favoriteCategoriesBonusPercent: normalizeNumberInputValue(draft.favoriteCategoriesBonusPercent, 0),
       favoriteCategoriesLimit: normalizeNumberInputValue(draft.favoriteCategoriesLimit, 0),
       favoriteCategoryIds: normalizeBonusLevelFavoriteCategoryIds(draft.favoriteCategoryIds),
+      requirementAmount: normalizeBonusLevelRequirementValue(draft.requirementAmount),
+      requirementMode: normalizeBonusLevelRequirementMode(draft.requirementMode),
+      requirementOrders: normalizeBonusLevelRequirementValue(draft.requirementOrders),
+      requirementReferralMode: normalizeBonusLevelRequirementMode(draft.requirementReferralMode),
+      requirementReferrals: normalizeBonusLevelRequirementValue(draft.requirementReferrals),
+      requirementPeriodDays: normalizeBonusLevelRequirementValue(draft.requirementPeriodDays),
+      retentionStrategy: normalizeBonusLevelRetentionStrategy(draft.retentionStrategy),
+      retentionAmount: normalizeBonusLevelRequirementValue(draft.retentionAmount),
+      retentionMode: normalizeBonusLevelRequirementMode(draft.retentionMode),
+      retentionOrders: normalizeBonusLevelRequirementValue(draft.retentionOrders),
+      retentionReferralMode: normalizeBonusLevelRequirementMode(draft.retentionReferralMode),
+      retentionReferrals: normalizeBonusLevelRequirementValue(draft.retentionReferrals),
     };
     updateBonusLevelInCollections(activeId, () => nextLevel);
     state.editingBonusLevelId = null;
@@ -19534,22 +20203,6 @@
     });
   }
 
-  if (bonusLevelFavoriteCategoriesBonusPercentInput) {
-    bonusLevelFavoriteCategoriesBonusPercentInput.addEventListener('input', () => {
-      applyBonusLevelEditorDraftPatch({
-        favoriteCategoriesBonusPercent: normalizeNumberInputValue(bonusLevelFavoriteCategoriesBonusPercentInput.value, 0),
-      });
-    });
-  }
-
-  if (bonusLevelFavoriteCategoriesLimitInput) {
-    bonusLevelFavoriteCategoriesLimitInput.addEventListener('input', () => {
-      applyBonusLevelEditorDraftPatch({
-        favoriteCategoriesLimit: normalizeNumberInputValue(bonusLevelFavoriteCategoriesLimitInput.value, 0),
-      });
-    });
-  }
-
   if (bonusLevelActivationDelayValueInput) {
     bonusLevelActivationDelayValueInput.addEventListener('input', () => {
       applyBonusLevelEditorDraftPatch({
@@ -19603,6 +20256,30 @@
       event.preventDefault();
       event.stopPropagation();
       openBonusLevelHelpPopover(bonusLevelFavoriteCategoriesInfoBtn, formatBonusLevelFavoriteCategoriesHelpText());
+    });
+  }
+
+  if (bonusLevelRequirementsInfoBtn) {
+    bonusLevelRequirementsInfoBtn.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openBonusLevelHelpPopover(bonusLevelRequirementsInfoBtn, formatBonusLevelRequirementsHelpText());
+    });
+  }
+
+  if (bonusLevelRequirementsDetailsInfoBtn) {
+    bonusLevelRequirementsDetailsInfoBtn.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openBonusLevelHelpPopover(bonusLevelRequirementsDetailsInfoBtn, formatBonusLevelRequirementsDetailsText());
+    });
+  }
+
+  if (bonusLevelRequirementsEditBtn) {
+    bonusLevelRequirementsEditBtn.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openBonusLevelRequirementsEditor();
     });
   }
 
@@ -20060,7 +20737,9 @@
       !activeBonusLevelHelpPopover.classList.contains('hidden') &&
       !e.target.closest('.bonus-level-range-help-popover') &&
       !e.target.closest('#bonusLevelRangeInfoBtn') &&
-      !e.target.closest('#bonusLevelFavoriteCategoriesInfoBtn')
+      !e.target.closest('#bonusLevelFavoriteCategoriesInfoBtn') &&
+      !e.target.closest('#bonusLevelRequirementsInfoBtn') &&
+      !e.target.closest('#bonusLevelRequirementsDetailsInfoBtn')
     ) {
       closeBonusLevelHelpPopover();
     }

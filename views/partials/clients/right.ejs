@@ -1362,7 +1362,7 @@
         </div>
 
         <div class="field-wrap bonus-level-range-field bonus-level-range-pill--right">
-          <span class="field-label">Дополнительные бонусы за сумму заказа</span>
+          <div class="bonus-level-rules-title">Дополнительные бонусы за сумму заказа</div>
           <div class="bonus-level-range-pill" id="bonusLevelRangePill">
             <div class="bonus-level-range-pill-text" id="bonusLevelRangeSummary">—</div>
             <div class="bonus-level-range-pill-actions">
@@ -1390,33 +1390,7 @@
         </div>
 
         <div class="field-wrap bonus-level-range-field bonus-level-range-pill--right">
-          <span class="field-label">Доп. бонус за покупку любимых категорий</span>
-          <div class="form-row-2 bonus-level-rules-grid">
-            <label class="field-wrap">
-              <span class="field-label" for="bonusLevelFavoriteCategoriesBonusPercentInput">Кэшбек, %</span>
-              <input
-                id="bonusLevelFavoriteCategoriesBonusPercentInput"
-                class="control bonus-level-rule-input"
-                type="number"
-                min="0"
-                step="0.1"
-                placeholder="0"
-                autocomplete="off"
-              />
-            </label>
-            <label class="field-wrap">
-              <span class="field-label" for="bonusLevelFavoriteCategoriesLimitInput">Количество категорий</span>
-              <input
-                id="bonusLevelFavoriteCategoriesLimitInput"
-                class="control bonus-level-rule-input"
-                type="number"
-                min="0"
-                step="1"
-                placeholder="0"
-                autocomplete="off"
-              />
-            </label>
-          </div>
+          <div class="bonus-level-rules-title">Доп. бонус за покупку любимых категорий</div>
           <div class="bonus-level-range-pill bonus-level-favorite-categories-pill" id="bonusLevelFavoriteCategoriesPill">
             <div class="bonus-level-favorite-categories-icons" id="bonusLevelFavoriteCategoriesIcons"></div>
             <div class="bonus-level-range-pill-actions">
@@ -1435,6 +1409,46 @@
                 type="button"
                 id="bonusLevelFavoriteCategoriesEditBtn"
                 aria-label="Открыть модалку выбора категорий"
+                title="Редактировать"
+              >
+                <i class="fas fa-ellipsis-h"></i>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="field-wrap bonus-level-range-field bonus-level-requirements-field">
+          <div class="bonus-level-rules-title bonus-level-rules-title-row">
+            <span>Условия перехода на уровень</span>
+            <button
+              class="bonus-level-range-action-btn"
+              type="button"
+              id="bonusLevelRequirementsInfoBtn"
+              aria-label="Как работают условия перехода на уровень"
+              title="Подробно"
+              aria-expanded="false"
+            >
+              <i class="fas fa-info"></i>
+            </button>
+          </div>
+          <div class="bonus-level-range-pill bonus-level-requirements-pill" id="bonusLevelRequirementsPill">
+            <div class="bonus-level-range-pill-text" id="bonusLevelRequirementsSummary">Не настроено</div>
+            <div class="bonus-level-range-pill-actions">
+              <button
+                class="bonus-level-range-action-btn"
+                type="button"
+                id="bonusLevelRequirementsDetailsInfoBtn"
+                aria-label="Показать настроенные условия перехода на уровень"
+                title="Настроенные условия"
+                aria-expanded="false"
+              >
+                <i class="fas fa-info"></i>
+              </button>
+              <button
+                class="bonus-level-range-action-btn"
+                type="button"
+                id="bonusLevelRequirementsEditBtn"
+                aria-label="Открыть модалку настройки условий перехода"
                 title="Редактировать"
               >
                 <i class="fas fa-ellipsis-h"></i>
