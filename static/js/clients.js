@@ -6859,7 +6859,25 @@
     for (let i = 0; i < visibleCount; i += 1) {
       const badge = document.createElement('span');
       badge.className = 'bonus-level-favorite-category-icon';
-      badge.innerHTML = '<i class="fas fa-tag" aria-hidden="true"></i>';
+      const categoryId = selectedIds[i];
+      if (categoryId) {
+        const photo = getDiscountEntityPhoto({ type: 'category', id: categoryId });
+        const category = (state.catalogCategories || []).find((entry) => Number(entry?.id || 0) === Number(categoryId));
+        const titleText = String(category?.title || `Категория #${categoryId}`).trim();
+        badge.title = titleText;
+        const icon = String(category?.icon || '').trim();
+        if (photo) {
+          badge.innerHTML = `<img src="${escapeHtml(photo)}" alt="${escapeHtml(titleText)}">`;
+        } else if (icon && isDiscountEntityImageUrl(icon)) {
+          badge.innerHTML = `<img src="${escapeHtml(icon)}" alt="${escapeHtml(titleText)}">`;
+        } else if (icon) {
+          badge.innerHTML = `<i class="${escapeHtml(icon)}" aria-hidden="true"></i>`;
+        } else {
+          badge.innerHTML = '<i class="fas fa-tag" aria-hidden="true"></i>';
+        }
+      } else {
+        badge.innerHTML = '<i class="fas fa-tag" aria-hidden="true"></i>';
+      }
       bonusLevelFavoriteCategoriesIcons.appendChild(badge);
     }
     if (visibleSourceCount > visibleCount) {
@@ -6883,7 +6901,7 @@
     const categories = await loadCatalogCategories();
 
     window.AdminBenefitsModal?.show({
-      title: 'Любимые категории',
+      title: 'Категории на выбор',
       showBack: false,
       showModeToggle: false,
       onClose: closeBonusLevelFavoriteCategoriesEditor,

@@ -19160,8 +19160,30 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
 }
 
 .bonus-level-favorite-category-card{
-  border-radius:18px;
-  padding:12px 14px;
+  border-radius:999px;
+  padding:10px 18px;
+  min-height:62px;
+  gap:14px;
+  background:var(--primary-12);
+  border-color:var(--primary-25);
+}
+
+.bonus-level-favorite-category-card .option-picker-photo{
+  width:42px;
+  height:42px;
+  flex:0 0 42px;
+  border-radius:999px;
+  overflow:hidden;
+  background:var(--color-surface);
+  border:1px solid var(--color-border);
+}
+
+.bonus-level-favorite-category-card .option-picker-photo img{
+  object-fit:cover;
+}
+
+.bonus-level-favorite-category-card .option-picker-title{
+  font-weight:700;
 }
 
 .bonus-level-favorite-category-card input[type="checkbox"]{
