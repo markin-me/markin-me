@@ -231,6 +231,14 @@
     return Math.max(0, Math.round(parsed * 100) / 100);
   }
 
+  function normalizeBonusLevelFavoriteCategoryIds(items) {
+    return Array.from(new Set(
+      (Array.isArray(items) ? items : [])
+        .map((item) => Number(item || 0))
+        .filter((id) => Number.isFinite(id) && id > 0)
+    ));
+  }
+
   function formatBonusRangePercentValue(value) {
     return new Intl.NumberFormat('ru-RU', {
       minimumFractionDigits: 0,
@@ -524,9 +532,9 @@
 
   function createDefaultBonusLevels() {
     return [
-      { id: 'starter', title: 'Стартовый', subtitle: 'от 0 ₽', description: '', designColor: '#f8fafc', accentColor: '#f97316', minSpent: 0, minOrders: 0, showTitleOnCard: true, titleColor: '#1f2937', titleBackgroundEnabled: true, titleBackgroundColor: '#ffffff', titleBackgroundOpacity: 90, cashbackPercent: 1, redeemPercent: 0, qrEnabled: true, mainColor: '#46b13b', baseColor: '#1f8d2e', contentColor: '#ffffff', activationDelayValue: 0, activationDelayUnit: 'immediate', lifetimeValue: 0, lifetimeUnit: 'forever', orderBonusRanges: [], favoriteCategoriesBonusPercent: 0, favoriteCategoriesLimit: 0 },
-      { id: 'silver', title: 'Серебряный', subtitle: 'от 10 000 ₽', description: '', designColor: '#f1f5f9', accentColor: '#f97316', minSpent: 10000, minOrders: 5, showTitleOnCard: true, titleColor: '#1f2937', titleBackgroundEnabled: true, titleBackgroundColor: '#ffffff', titleBackgroundOpacity: 90, cashbackPercent: 3, redeemPercent: 0, qrEnabled: true, mainColor: '#46b13b', baseColor: '#1f8d2e', contentColor: '#ffffff', activationDelayValue: 0, activationDelayUnit: 'immediate', lifetimeValue: 0, lifetimeUnit: 'forever', orderBonusRanges: [], favoriteCategoriesBonusPercent: 0, favoriteCategoriesLimit: 0 },
-      { id: 'gold', title: 'Золотой', subtitle: 'от 25 000 ₽', description: '', designColor: '#e2e8f0', accentColor: '#f97316', minSpent: 25000, minOrders: 10, showTitleOnCard: true, titleColor: '#1f2937', titleBackgroundEnabled: true, titleBackgroundColor: '#ffffff', titleBackgroundOpacity: 90, cashbackPercent: 5, redeemPercent: 0, qrEnabled: true, mainColor: '#46b13b', baseColor: '#1f8d2e', contentColor: '#ffffff', activationDelayValue: 0, activationDelayUnit: 'immediate', lifetimeValue: 0, lifetimeUnit: 'forever', orderBonusRanges: [], favoriteCategoriesBonusPercent: 0, favoriteCategoriesLimit: 0 },
+      { id: 'starter', title: 'Стартовый', subtitle: 'от 0 ₽', description: '', designColor: '#f8fafc', accentColor: '#f97316', minSpent: 0, minOrders: 0, showTitleOnCard: true, titleColor: '#1f2937', titleBackgroundEnabled: true, titleBackgroundColor: '#ffffff', titleBackgroundOpacity: 90, cashbackPercent: 1, redeemPercent: 0, qrEnabled: true, mainColor: '#46b13b', baseColor: '#1f8d2e', contentColor: '#ffffff', activationDelayValue: 0, activationDelayUnit: 'immediate', lifetimeValue: 0, lifetimeUnit: 'forever', orderBonusRanges: [], favoriteCategoriesBonusPercent: 0, favoriteCategoriesLimit: 0, favoriteCategoryIds: [] },
+      { id: 'silver', title: 'Серебряный', subtitle: 'от 10 000 ₽', description: '', designColor: '#f1f5f9', accentColor: '#f97316', minSpent: 10000, minOrders: 5, showTitleOnCard: true, titleColor: '#1f2937', titleBackgroundEnabled: true, titleBackgroundColor: '#ffffff', titleBackgroundOpacity: 90, cashbackPercent: 3, redeemPercent: 0, qrEnabled: true, mainColor: '#46b13b', baseColor: '#1f8d2e', contentColor: '#ffffff', activationDelayValue: 0, activationDelayUnit: 'immediate', lifetimeValue: 0, lifetimeUnit: 'forever', orderBonusRanges: [], favoriteCategoriesBonusPercent: 0, favoriteCategoriesLimit: 0, favoriteCategoryIds: [] },
+      { id: 'gold', title: 'Золотой', subtitle: 'от 25 000 ₽', description: '', designColor: '#e2e8f0', accentColor: '#f97316', minSpent: 25000, minOrders: 10, showTitleOnCard: true, titleColor: '#1f2937', titleBackgroundEnabled: true, titleBackgroundColor: '#ffffff', titleBackgroundOpacity: 90, cashbackPercent: 5, redeemPercent: 0, qrEnabled: true, mainColor: '#46b13b', baseColor: '#1f8d2e', contentColor: '#ffffff', activationDelayValue: 0, activationDelayUnit: 'immediate', lifetimeValue: 0, lifetimeUnit: 'forever', orderBonusRanges: [], favoriteCategoriesBonusPercent: 0, favoriteCategoriesLimit: 0, favoriteCategoryIds: [] },
     ];
   }
 
@@ -598,6 +606,7 @@
           orderBonusRanges: sanitizeBonusRangeRows(item?.orderBonusRanges),
           favoriteCategoriesBonusPercent: normalizeNumberInputValue(item?.favoriteCategoriesBonusPercent, 0),
           favoriteCategoriesLimit: normalizeNumberInputValue(item?.favoriteCategoriesLimit, 0),
+          favoriteCategoryIds: normalizeBonusLevelFavoriteCategoryIds(item?.favoriteCategoryIds),
         };
       })
       .filter(Boolean);
@@ -6817,38 +6826,228 @@
     const current = level && typeof level === 'object' ? level : getActiveBonusLevelForInfo();
     const bonusPercent = normalizeNumberInputValue(current?.favoriteCategoriesBonusPercent, 0);
     const limit = Math.max(0, Math.floor(Number(current?.favoriteCategoriesLimit || 0)));
+    const favoriteCategoryIds = normalizeBonusLevelFavoriteCategoryIds(current?.favoriteCategoryIds);
     if (!(bonusPercent > 0) && !(limit > 0)) {
       return 'Дополнительный бонус за любимые категории не настроен.';
     }
     const lines = [];
     if (bonusPercent > 0) lines.push(`Кэшбек: +${bonusPercent}%`);
     if (limit > 0) lines.push(`Количество категорий: ${limit}`);
+    if (favoriteCategoryIds.length) {
+      const categoryTitles = favoriteCategoryIds.map((id) => {
+        const category = (state.catalogCategories || []).find((entry) => Number(entry?.id || 0) === id);
+        return String(category?.title || `Категория #${id}`).trim();
+      });
+      lines.push(`Категории: ${categoryTitles.join(', ')}`);
+    }
     return lines.join('\n');
   }
 
   function renderBonusLevelFavoriteCategoryIcons(level = null) {
     if (!bonusLevelFavoriteCategoriesIcons) return;
     const current = level && typeof level === 'object' ? level : getActiveBonusLevelForInfo();
+    const selectedIds = normalizeBonusLevelFavoriteCategoryIds(current?.favoriteCategoryIds);
     const limit = Math.max(0, Math.floor(Number(current?.favoriteCategoriesLimit || 0)));
     const bonusPercent = normalizeNumberInputValue(current?.favoriteCategoriesBonusPercent, 0);
     bonusLevelFavoriteCategoriesIcons.innerHTML = '';
-    if (!(limit > 0) || !(bonusPercent > 0)) {
+    const visibleSourceCount = selectedIds.length || limit;
+    if (!(visibleSourceCount > 0) || !(bonusPercent > 0)) {
       bonusLevelFavoriteCategoriesIcons.textContent = '—';
       return;
     }
-    const visibleCount = Math.min(limit, 4);
+    const visibleCount = Math.min(visibleSourceCount, 4);
     for (let i = 0; i < visibleCount; i += 1) {
       const badge = document.createElement('span');
       badge.className = 'bonus-level-favorite-category-icon';
       badge.innerHTML = '<i class="fas fa-tag" aria-hidden="true"></i>';
       bonusLevelFavoriteCategoriesIcons.appendChild(badge);
     }
-    if (limit > visibleCount) {
+    if (visibleSourceCount > visibleCount) {
       const rest = document.createElement('span');
       rest.className = 'bonus-level-favorite-category-icon';
-      rest.textContent = `+${limit - visibleCount}`;
+      rest.textContent = `+${visibleSourceCount - visibleCount}`;
       bonusLevelFavoriteCategoriesIcons.appendChild(rest);
     }
+  }
+
+  function closeBonusLevelFavoriteCategoriesEditor() {
+    const { backdrop } = getClientBenefitsOverlayElements();
+    if (backdrop) backdrop.classList.remove('bonus-range-editor-overlay');
+    window.AdminBenefitsModal?.hide();
+  }
+
+  async function openBonusLevelFavoriteCategoriesEditor() {
+    if (String(state.editingBonusLevelId || '').trim() !== String(state.activeBonusLevelId || '').trim()) return;
+    const current = getActiveBonusLevelForInfo();
+    if (!current) return;
+    const categories = await loadCatalogCategories();
+
+    window.AdminBenefitsModal?.show({
+      title: 'Любимые категории',
+      showBack: false,
+      showModeToggle: false,
+      onClose: closeBonusLevelFavoriteCategoriesEditor,
+    });
+
+    const { backdrop, body } = getClientBenefitsOverlayElements();
+    if (!body) return;
+    if (backdrop) backdrop.classList.add('bonus-range-editor-overlay');
+    body.innerHTML = '';
+
+    const frame = window.AdminBenefitsModal?.createScrollableFrame({ hasFooter: true });
+    if (!frame?.root || !frame.scrollEl || !frame.footerEl) return;
+    body.appendChild(frame.root);
+
+    const shell = document.createElement('div');
+    shell.className = 'bonus-range-editor-modal';
+    frame.scrollEl.appendChild(shell);
+
+    const title = document.createElement('div');
+    title.className = 'bonus-range-editor-title';
+    title.textContent = 'Доп. бонус за покупку любимых категорий';
+    shell.appendChild(title);
+
+    const note = document.createElement('div');
+    note.className = 'bonus-range-editor-row';
+    note.textContent = 'Укажите процент кэшбека и количество любимых категорий.';
+    shell.appendChild(note);
+
+    const rowEl = document.createElement('div');
+    rowEl.className = 'bonus-range-editor-input-row';
+    rowEl.innerHTML = `
+      <input
+        class="control bonus-range-editor-input"
+        type="number"
+        min="0"
+        step="0.1"
+        placeholder="Кэшбек, %"
+        data-bonus-favorite-field="percent"
+        value="${escapeHtml(String(normalizeNumberInputValue(current.favoriteCategoriesBonusPercent, 0) || ''))}"
+      />
+      <input
+        class="control bonus-range-editor-input"
+        type="number"
+        min="0"
+        step="1"
+        placeholder="Количество категорий"
+        data-bonus-favorite-field="limit"
+        value="${escapeHtml(String(Math.max(0, Math.floor(Number(current.favoriteCategoriesLimit || 0))) || ''))}"
+      />
+    `;
+    shell.appendChild(rowEl);
+
+    const categoriesTitle = document.createElement('div');
+    categoriesTitle.className = 'bonus-range-editor-title';
+    categoriesTitle.textContent = 'Категории тенанта';
+    shell.appendChild(categoriesTitle);
+
+    const selectedCategoryIds = new Set(normalizeBonusLevelFavoriteCategoryIds(current.favoriteCategoryIds));
+    const categoriesToolbar = document.createElement('div');
+    categoriesToolbar.className = 'bonus-level-favorite-categories-toolbar';
+
+    const selectAllBtn = document.createElement('button');
+    selectAllBtn.type = 'button';
+    selectAllBtn.className = 'shop-chip-btn discount-promo-apply-chip';
+    selectAllBtn.textContent = 'Выделить все';
+    categoriesToolbar.appendChild(selectAllBtn);
+
+    const resetAllBtn = document.createElement('button');
+    resetAllBtn.type = 'button';
+    resetAllBtn.className = 'shop-chip-btn discount-promo-apply-chip';
+    resetAllBtn.textContent = 'Сбросить все';
+    categoriesToolbar.appendChild(resetAllBtn);
+
+    shell.appendChild(categoriesToolbar);
+    const categoriesList = document.createElement('div');
+    categoriesList.className = 'option-picker-list';
+    if (Array.isArray(categories) && categories.length) {
+      categoriesList.innerHTML = categories.map((category) => {
+        const categoryId = Number(category?.id || 0);
+        const isChecked = selectedCategoryIds.has(categoryId);
+        const titleText = String(category?.title || `Категория #${categoryId}`).trim();
+        const photo = getDiscountEntityPhoto({ type: 'category', id: categoryId });
+        const icon = String(category?.icon || '').trim();
+        const media = photo
+          ? `<span class="option-picker-photo"><img src="${escapeHtml(photo)}" alt="${escapeHtml(titleText)}"></span>`
+          : `<span class="option-picker-photo">${icon ? (isDiscountEntityImageUrl(icon) ? `<img src="${escapeHtml(icon)}" alt="${escapeHtml(titleText)}">` : `<i class="${escapeHtml(icon)}" aria-hidden="true"></i>`) : '<i class="fas fa-layer-group" aria-hidden="true"></i>'}</span>`;
+        return `
+          <label class="option-picker-row bonus-level-favorite-category-card${isChecked ? ' is-selected' : ''}">
+            <input type="checkbox" data-bonus-favorite-category-id="${categoryId}" ${isChecked ? 'checked' : ''} />
+            ${media}
+            <span class="option-picker-title">${escapeHtml(String(category?.title || `Категория #${categoryId}`).trim())}</span>
+          </label>
+        `;
+      }).join('');
+      const syncCategorySelectionUi = () => {
+        categoriesList.querySelectorAll('input[type="checkbox"][data-bonus-favorite-category-id]').forEach((input) => {
+          const row = input.closest('.option-picker-row');
+          if (row) row.classList.toggle('is-selected', input.checked);
+        });
+      };
+      categoriesList.querySelectorAll('input[type="checkbox"][data-bonus-favorite-category-id]').forEach((input) => {
+        input.addEventListener('change', syncCategorySelectionUi);
+      });
+      selectAllBtn.addEventListener('click', () => {
+        categoriesList.querySelectorAll('input[type="checkbox"][data-bonus-favorite-category-id]').forEach((input) => {
+          input.checked = true;
+        });
+        syncCategorySelectionUi();
+      });
+      resetAllBtn.addEventListener('click', () => {
+        categoriesList.querySelectorAll('input[type="checkbox"][data-bonus-favorite-category-id]').forEach((input) => {
+          input.checked = false;
+        });
+        syncCategorySelectionUi();
+      });
+      syncCategorySelectionUi();
+    } else {
+      categoriesList.innerHTML = '<div class="option-picker-empty">Категории не найдены</div>';
+      selectAllBtn.disabled = true;
+      resetAllBtn.disabled = true;
+    }
+    shell.appendChild(categoriesList);
+
+    const actions = document.createElement('div');
+    actions.className = 'bonus-range-editor-footer-actions';
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'shop-checkout-benefits-promo-entry-btn';
+    cancelBtn.textContent = 'Отмена';
+    cancelBtn.addEventListener('click', () => {
+      closeBonusLevelFavoriteCategoriesEditor();
+    });
+    actions.appendChild(cancelBtn);
+
+    const saveBtn = document.createElement('button');
+    saveBtn.type = 'button';
+    saveBtn.className = 'shop-checkout-benefits-promo-entry-btn is-active';
+    saveBtn.textContent = 'Сохранить';
+    saveBtn.addEventListener('click', () => {
+      const percentInput = rowEl.querySelector('[data-bonus-favorite-field="percent"]');
+      const limitInput = rowEl.querySelector('[data-bonus-favorite-field="limit"]');
+      const nextCategoryIds = normalizeBonusLevelFavoriteCategoryIds(
+        Array.from(categoriesList.querySelectorAll('input[type="checkbox"][data-bonus-favorite-category-id]:checked'))
+          .map((input) => input.getAttribute('data-bonus-favorite-category-id'))
+      );
+      const nextPatch = {
+        favoriteCategoriesBonusPercent: normalizeNumberInputValue(percentInput?.value, 0),
+        favoriteCategoriesLimit: normalizeNumberInputValue(limitInput?.value, 0),
+        favoriteCategoryIds: nextCategoryIds,
+      };
+      applyBonusLevelEditorDraftPatch(nextPatch);
+      updateBonusLevelInCollections(current.id, (level) => ({
+        ...level,
+        ...nextPatch,
+      }));
+      persistBonusCardsStorage();
+      renderBonusLevels();
+      renderBonusLevelInfo();
+      closeBonusLevelFavoriteCategoriesEditor();
+    });
+    actions.appendChild(saveBtn);
+
+    frame.footerEl.appendChild(actions);
   }
 
   function syncBonusLevelSwatchButtons(level = null) {
@@ -7110,6 +7309,7 @@
       orderBonusRanges: sanitizeBonusRangeRows(draft.orderBonusRanges),
       favoriteCategoriesBonusPercent: normalizeNumberInputValue(draft.favoriteCategoriesBonusPercent, 0),
       favoriteCategoriesLimit: normalizeNumberInputValue(draft.favoriteCategoriesLimit, 0),
+      favoriteCategoryIds: normalizeBonusLevelFavoriteCategoryIds(draft.favoriteCategoryIds),
     };
     updateBonusLevelInCollections(activeId, () => nextLevel);
     state.editingBonusLevelId = null;
@@ -19385,6 +19585,14 @@
       event.preventDefault();
       event.stopPropagation();
       openBonusLevelHelpPopover(bonusLevelFavoriteCategoriesInfoBtn, formatBonusLevelFavoriteCategoriesHelpText());
+    });
+  }
+
+  if (bonusLevelFavoriteCategoriesEditBtn) {
+    bonusLevelFavoriteCategoriesEditBtn.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openBonusLevelFavoriteCategoriesEditor();
     });
   }
 

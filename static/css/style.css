@@ -19151,6 +19151,27 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   padding:0 14px;
 }
 
+.bonus-level-favorite-categories-toolbar{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  margin:8px 0 12px;
+  flex-wrap:wrap;
+}
+
+.bonus-level-favorite-category-card{
+  border-radius:18px;
+  padding:12px 14px;
+}
+
+.bonus-level-favorite-category-card input[type="checkbox"]{
+  position:absolute;
+  opacity:0;
+  pointer-events:none;
+  width:1px;
+  height:1px;
+}
+
 .bonus-level-rules-wrap .control{
   border-radius:999px;
 }
