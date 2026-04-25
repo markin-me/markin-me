@@ -1204,8 +1204,10 @@
                 <div class="bonus-level-preview-cashback-value" id="bonusLevelPreviewCashbackValue">1%</div>
               </div>
               <div class="bonus-level-preview-category-side">
-                <div class="bonus-level-preview-category-icon"><i class="fas fa-tags"></i></div>
-                <div class="bonus-level-preview-category-count" id="bonusLevelPreviewCategoryCount">0</div>
+                <div class="bonus-level-preview-category-icon" aria-hidden="true">
+                  <span></span><span></span><span></span><span></span>
+                  <div class="bonus-level-preview-category-count" id="bonusLevelPreviewCategoryCount">0</div>
+                </div>
                 <div class="bonus-level-preview-category-value" id="bonusLevelPreviewCategoryValue">0%</div>
               </div>
             </div>
@@ -1244,11 +1246,11 @@
             <span class="field-label" for="bonusLevelCashbackPercentInput">Кэшбек, %</span>
             <input
               id="bonusLevelCashbackPercentInput"
-              class="control bonus-level-rule-input"
+              class="control bonus-level-rule-input bonus-level-percent-spinner-input"
               type="number"
               min="0"
               max="100"
-              step="0.1"
+              step="1"
               placeholder="0"
               autocomplete="off"
             />
@@ -1257,11 +1259,24 @@
             <span class="field-label" for="bonusLevelRedeemPercentInput">Можно списывать, %</span>
             <input
               id="bonusLevelRedeemPercentInput"
-              class="control bonus-level-rule-input"
+              class="control bonus-level-rule-input bonus-level-percent-spinner-input"
               type="number"
               min="0"
               max="100"
               step="1"
+              placeholder="0"
+              autocomplete="off"
+            />
+          </label>
+          <label class="field-wrap">
+            <span class="field-label" for="bonusLevelReferralBonusPercentInput">Доп % за рефералов</span>
+            <input
+              id="bonusLevelReferralBonusPercentInput"
+              class="control bonus-level-rule-input bonus-level-percent-spinner-input"
+              type="number"
+              min="0"
+              max="100"
+              step="0.1"
               placeholder="0"
               autocomplete="off"
             />

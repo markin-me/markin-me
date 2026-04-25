@@ -219,6 +219,12 @@
     return Math.max(0, Math.round(parsed));
   }
 
+  function normalizeBonusPercentInputValue(value, fallback = 0) {
+    const parsed = Number(String(value ?? '').replace(',', '.'));
+    if (!Number.isFinite(parsed)) return Math.max(0, Number(fallback) || 0);
+    return Math.max(0, Math.round(parsed * 10) / 10);
+  }
+
   function normalizeBonusRangeAmount(value, fallback = 0) {
     const parsed = Number(value);
     if (!Number.isFinite(parsed)) return Math.max(0, Math.floor(Number(fallback) || 0));
@@ -532,9 +538,9 @@
 
   function createDefaultBonusLevels() {
     return [
-      { id: 'starter', title: 'Стартовый', subtitle: 'от 0 ₽', description: '', designColor: '#f8fafc', accentColor: '#f97316', minSpent: 0, minOrders: 0, showTitleOnCard: true, titleColor: '#1f2937', titleBackgroundEnabled: true, titleBackgroundColor: '#ffffff', titleBackgroundOpacity: 90, cashbackPercent: 1, redeemPercent: 0, qrEnabled: true, mainColor: '#46b13b', baseColor: '#1f8d2e', contentColor: '#ffffff', activationDelayValue: 0, activationDelayUnit: 'immediate', lifetimeValue: 0, lifetimeUnit: 'forever', orderBonusRanges: [], favoriteCategoriesBonusPercent: 0, favoriteCategoriesLimit: 0, favoriteCategoryIds: [] },
-      { id: 'silver', title: 'Серебряный', subtitle: 'от 10 000 ₽', description: '', designColor: '#f1f5f9', accentColor: '#f97316', minSpent: 10000, minOrders: 5, showTitleOnCard: true, titleColor: '#1f2937', titleBackgroundEnabled: true, titleBackgroundColor: '#ffffff', titleBackgroundOpacity: 90, cashbackPercent: 3, redeemPercent: 0, qrEnabled: true, mainColor: '#46b13b', baseColor: '#1f8d2e', contentColor: '#ffffff', activationDelayValue: 0, activationDelayUnit: 'immediate', lifetimeValue: 0, lifetimeUnit: 'forever', orderBonusRanges: [], favoriteCategoriesBonusPercent: 0, favoriteCategoriesLimit: 0, favoriteCategoryIds: [] },
-      { id: 'gold', title: 'Золотой', subtitle: 'от 25 000 ₽', description: '', designColor: '#e2e8f0', accentColor: '#f97316', minSpent: 25000, minOrders: 10, showTitleOnCard: true, titleColor: '#1f2937', titleBackgroundEnabled: true, titleBackgroundColor: '#ffffff', titleBackgroundOpacity: 90, cashbackPercent: 5, redeemPercent: 0, qrEnabled: true, mainColor: '#46b13b', baseColor: '#1f8d2e', contentColor: '#ffffff', activationDelayValue: 0, activationDelayUnit: 'immediate', lifetimeValue: 0, lifetimeUnit: 'forever', orderBonusRanges: [], favoriteCategoriesBonusPercent: 0, favoriteCategoriesLimit: 0, favoriteCategoryIds: [] },
+      { id: 'starter', title: 'Стартовый', subtitle: 'от 0 ₽', description: '', designColor: '#f8fafc', accentColor: '#f97316', minSpent: 0, minOrders: 0, showTitleOnCard: true, titleColor: '#1f2937', titleBackgroundEnabled: true, titleBackgroundColor: '#ffffff', titleBackgroundOpacity: 90, cashbackPercent: 1, redeemPercent: 0, referralBonusPercent: 0, qrEnabled: true, mainColor: '#46b13b', baseColor: '#1f8d2e', contentColor: '#ffffff', activationDelayValue: 0, activationDelayUnit: 'immediate', lifetimeValue: 0, lifetimeUnit: 'forever', orderBonusRanges: [], favoriteCategoriesBonusPercent: 0, favoriteCategoriesLimit: 0, favoriteCategoryIds: [] },
+      { id: 'silver', title: 'Серебряный', subtitle: 'от 10 000 ₽', description: '', designColor: '#f1f5f9', accentColor: '#f97316', minSpent: 10000, minOrders: 5, showTitleOnCard: true, titleColor: '#1f2937', titleBackgroundEnabled: true, titleBackgroundColor: '#ffffff', titleBackgroundOpacity: 90, cashbackPercent: 3, redeemPercent: 0, referralBonusPercent: 0, qrEnabled: true, mainColor: '#46b13b', baseColor: '#1f8d2e', contentColor: '#ffffff', activationDelayValue: 0, activationDelayUnit: 'immediate', lifetimeValue: 0, lifetimeUnit: 'forever', orderBonusRanges: [], favoriteCategoriesBonusPercent: 0, favoriteCategoriesLimit: 0, favoriteCategoryIds: [] },
+      { id: 'gold', title: 'Золотой', subtitle: 'от 25 000 ₽', description: '', designColor: '#e2e8f0', accentColor: '#f97316', minSpent: 25000, minOrders: 10, showTitleOnCard: true, titleColor: '#1f2937', titleBackgroundEnabled: true, titleBackgroundColor: '#ffffff', titleBackgroundOpacity: 90, cashbackPercent: 5, redeemPercent: 0, referralBonusPercent: 0, qrEnabled: true, mainColor: '#46b13b', baseColor: '#1f8d2e', contentColor: '#ffffff', activationDelayValue: 0, activationDelayUnit: 'immediate', lifetimeValue: 0, lifetimeUnit: 'forever', orderBonusRanges: [], favoriteCategoriesBonusPercent: 0, favoriteCategoriesLimit: 0, favoriteCategoryIds: [] },
     ];
   }
 
@@ -611,6 +617,7 @@
           titleBackgroundOpacity: normalizeBannerOpacity(item?.titleBackgroundOpacity, 90),
           cashbackPercent: normalizeNumberInputValue(item?.cashbackPercent, 1),
           redeemPercent: normalizeNumberInputValue(item?.redeemPercent, 0),
+          referralBonusPercent: normalizeBonusPercentInputValue(item?.referralBonusPercent, 0),
           qrEnabled: item?.qrEnabled !== false,
           mainColor: normalizeHexColor(item?.mainColor ?? item?.designColor, '#46b13b'),
           baseColor: normalizeHexColor(item?.baseColor, '#1f8d2e'),
@@ -1779,6 +1786,7 @@
   const bonusLevelPreviewTitle = right$("#bonusLevelPreviewTitle");
   const bonusLevelPreviewBonusValue = right$("#bonusLevelPreviewBonusValue");
   const bonusLevelPreviewCashbackValue = right$("#bonusLevelPreviewCashbackValue");
+  const bonusLevelPreviewCategorySide = right$(".bonus-level-preview-category-side");
   const bonusLevelPreviewCategoryCount = right$("#bonusLevelPreviewCategoryCount");
   const bonusLevelPreviewCategoryValue = right$("#bonusLevelPreviewCategoryValue");
   const bonusLevelPreviewQr = right$("#bonusLevelPreviewQr");
@@ -1800,6 +1808,7 @@
   const bonusLevelRangeEditBtn = right$("#bonusLevelRangeEditBtn");
   const bonusLevelCashbackPercentInput = right$("#bonusLevelCashbackPercentInput");
   const bonusLevelRedeemPercentInput = right$("#bonusLevelRedeemPercentInput");
+  const bonusLevelReferralBonusPercentInput = right$("#bonusLevelReferralBonusPercentInput");
   const bonusLevelActivationFieldWrap = right$("#bonusLevelActivationFieldWrap");
   const bonusLevelActivationDelayValueWrap = right$("#bonusLevelActivationDelayValueWrap");
   const bonusLevelActivationDelayValueInput = right$("#bonusLevelActivationDelayValueInput");
@@ -7855,6 +7864,10 @@
       bonusLevelRedeemPercentInput.value = String(normalizeNumberInputValue(current.redeemPercent, 0) || 0);
       bonusLevelRedeemPercentInput.disabled = !isEditing;
     }
+    if (bonusLevelReferralBonusPercentInput) {
+      bonusLevelReferralBonusPercentInput.value = String(normalizeBonusPercentInputValue(current.referralBonusPercent, 0) || 0);
+      bonusLevelReferralBonusPercentInput.disabled = !isEditing;
+    }
     if (bonusLevelRangeSummary) {
       const rangeSummaryText = formatBonusLevelRangeSummary(current);
       const rangeHelpText = formatBonusLevelRangeHelpText(current);
@@ -7917,9 +7930,12 @@
       const cashback = normalizeNumberInputValue(current.cashbackPercent, 1);
       bonusLevelPreviewCashbackValue.textContent = `${cashback}%`;
     }
+    const previewCategoryLimit = Math.max(0, Math.floor(Number(current.favoriteCategoriesLimit || 0)));
+    if (bonusLevelPreviewCategorySide) {
+      bonusLevelPreviewCategorySide.classList.toggle('hidden', previewCategoryLimit <= 0);
+    }
     if (bonusLevelPreviewCategoryCount) {
-      const categoryLimit = Math.max(0, Math.floor(Number(current.favoriteCategoriesLimit || 0)));
-      bonusLevelPreviewCategoryCount.textContent = String(categoryLimit);
+      bonusLevelPreviewCategoryCount.textContent = String(previewCategoryLimit);
     }
     if (bonusLevelPreviewCategoryValue) {
       const categoryBonus = normalizeNumberInputValue(current.favoriteCategoriesBonusPercent, 0);
@@ -7984,6 +8000,7 @@
       qrEnabled: draft.qrEnabled !== false,
       cashbackPercent: normalizeNumberInputValue(draft.cashbackPercent, 1),
       redeemPercent: normalizeNumberInputValue(draft.redeemPercent, 0),
+      referralBonusPercent: normalizeBonusPercentInputValue(draft.referralBonusPercent, 0),
       mainColor: normalizeHexColor(draft.mainColor, '#46b13b'),
       baseColor: normalizeHexColor(draft.baseColor, '#1f8d2e'),
       contentColor: normalizeHexColor(draft.contentColor, '#ffffff'),
@@ -8107,9 +8124,11 @@
                     <div class="bonus-level-preview-cashback-icon" style="color:${escapeHtml(contentColor)};"><i class="fas fa-undo-alt"></i></div>
                     <div class="bonus-level-preview-cashback-value" style="color:${escapeHtml(contentColor)};">${escapeHtml(`${cashbackValue}%`)}</div>
                   </div>
-                  <div class="bonus-level-preview-category-side">
-                    <div class="bonus-level-preview-category-icon" style="color:${escapeHtml(contentColor)};"><i class="fas fa-tags"></i></div>
-                    <div class="bonus-level-preview-category-count" style="color:${escapeHtml(contentColor)};">${escapeHtml(String(favoriteCategoryLimit))}</div>
+                  <div class="bonus-level-preview-category-side${favoriteCategoryLimit > 0 ? '' : ' hidden'}">
+                    <div class="bonus-level-preview-category-icon" style="color:${escapeHtml(contentColor)};" aria-hidden="true">
+                      <span></span><span></span><span></span><span></span>
+                      <div class="bonus-level-preview-category-count" style="color:${escapeHtml(contentColor)};">${escapeHtml(String(favoriteCategoryLimit))}</div>
+                    </div>
                     <div class="bonus-level-preview-category-value" style="color:${escapeHtml(contentColor)};">${escapeHtml(`${favoriteCategoryBonus}%`)}</div>
                   </div>
                 </div>
@@ -8197,6 +8216,7 @@
           titleBackgroundOpacity: 90,
           cashbackPercent: 1,
           redeemPercent: 0,
+          referralBonusPercent: 0,
         }];
         state.bonusLevelsDraft = sanitizeBonusLevels(next);
         renderBonusLevels();
@@ -20217,6 +20237,14 @@
     bonusLevelRedeemPercentInput.addEventListener('input', () => {
       applyBonusLevelEditorDraftPatch({
         redeemPercent: normalizeNumberInputValue(bonusLevelRedeemPercentInput.value, 0),
+      });
+    });
+  }
+
+  if (bonusLevelReferralBonusPercentInput) {
+    bonusLevelReferralBonusPercentInput.addEventListener('input', () => {
+      applyBonusLevelEditorDraftPatch({
+        referralBonusPercent: normalizeBonusPercentInputValue(bonusLevelReferralBonusPercentInput.value, 0),
       });
     });
   }
