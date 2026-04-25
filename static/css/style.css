@@ -18167,6 +18167,40 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   font-weight:600;
 }
 
+.bonus-level-tariff-editor-grid{
+  display:grid;
+  grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+  gap:10px;
+  align-items:end;
+}
+
+.bonus-level-tariff-editor-grid .field-wrap{
+  margin-top:0;
+  overflow:visible;
+}
+
+.bonus-level-tariff-editor-grid .field-label{
+  display:block;
+  position:relative !important;
+  top:0 !important;
+  left:0 !important;
+  padding:0;
+  margin-bottom:10px !important;
+  background:transparent;
+  font-size:12px;
+  font-weight:600;
+}
+
+.bonus-level-tariff-unit-chips{
+  grid-template-columns:repeat(3, minmax(0, 1fr));
+}
+
+.bonus-level-tariff-bonus-switch{
+  grid-column:1 / -1;
+  justify-content:flex-start;
+  gap:10px;
+}
+
 .bonus-level-requirement-mode{
   display:flex;
   align-items:center;

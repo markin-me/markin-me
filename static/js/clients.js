@@ -539,9 +539,9 @@
 
   function createDefaultBonusLevels() {
     return [
-      { id: 'starter', title: 'Стартовый', subtitle: 'от 0 ₽', description: '', designColor: '#f8fafc', accentColor: '#f97316', minSpent: 0, minOrders: 0, accessType: 'conditions', showTitleOnCard: true, titleColor: '#1f2937', titleBackgroundEnabled: true, titleBackgroundColor: '#ffffff', titleBackgroundOpacity: 90, cashbackPercent: 1, redeemPercent: 0, referralBonusPercent: 0, qrEnabled: true, mainColor: '#46b13b', baseColor: '#1f8d2e', contentColor: '#ffffff', activationDelayValue: 0, activationDelayUnit: 'immediate', lifetimeValue: 0, lifetimeUnit: 'forever', orderBonusRanges: [], favoriteCategoriesBonusPercent: 0, favoriteCategoriesLimit: 0, favoriteCategoryIds: [] },
-      { id: 'silver', title: 'Серебряный', subtitle: 'от 10 000 ₽', description: '', designColor: '#f1f5f9', accentColor: '#f97316', minSpent: 10000, minOrders: 5, accessType: 'conditions', showTitleOnCard: true, titleColor: '#1f2937', titleBackgroundEnabled: true, titleBackgroundColor: '#ffffff', titleBackgroundOpacity: 90, cashbackPercent: 3, redeemPercent: 0, referralBonusPercent: 0, qrEnabled: true, mainColor: '#46b13b', baseColor: '#1f8d2e', contentColor: '#ffffff', activationDelayValue: 0, activationDelayUnit: 'immediate', lifetimeValue: 0, lifetimeUnit: 'forever', orderBonusRanges: [], favoriteCategoriesBonusPercent: 0, favoriteCategoriesLimit: 0, favoriteCategoryIds: [] },
-      { id: 'gold', title: 'Золотой', subtitle: 'от 25 000 ₽', description: '', designColor: '#e2e8f0', accentColor: '#f97316', minSpent: 25000, minOrders: 10, accessType: 'conditions', showTitleOnCard: true, titleColor: '#1f2937', titleBackgroundEnabled: true, titleBackgroundColor: '#ffffff', titleBackgroundOpacity: 90, cashbackPercent: 5, redeemPercent: 0, referralBonusPercent: 0, qrEnabled: true, mainColor: '#46b13b', baseColor: '#1f8d2e', contentColor: '#ffffff', activationDelayValue: 0, activationDelayUnit: 'immediate', lifetimeValue: 0, lifetimeUnit: 'forever', orderBonusRanges: [], favoriteCategoriesBonusPercent: 0, favoriteCategoriesLimit: 0, favoriteCategoryIds: [] },
+      { id: 'starter', title: 'Стартовый', subtitle: 'от 0 ₽', description: '', designColor: '#f8fafc', accentColor: '#f97316', minSpent: 0, minOrders: 0, accessType: 'conditions', tariffPrice: 0, tariffPeriodValue: 1, tariffPeriodUnit: 'months', tariffPayWithBonus: false, showTitleOnCard: true, titleColor: '#1f2937', titleBackgroundEnabled: true, titleBackgroundColor: '#ffffff', titleBackgroundOpacity: 90, cashbackPercent: 1, redeemPercent: 0, referralBonusPercent: 0, qrEnabled: true, mainColor: '#46b13b', baseColor: '#1f8d2e', contentColor: '#ffffff', activationDelayValue: 0, activationDelayUnit: 'immediate', lifetimeValue: 0, lifetimeUnit: 'forever', orderBonusRanges: [], favoriteCategoriesBonusPercent: 0, favoriteCategoriesLimit: 0, favoriteCategoryIds: [] },
+      { id: 'silver', title: 'Серебряный', subtitle: 'от 10 000 ₽', description: '', designColor: '#f1f5f9', accentColor: '#f97316', minSpent: 10000, minOrders: 5, accessType: 'conditions', tariffPrice: 0, tariffPeriodValue: 1, tariffPeriodUnit: 'months', tariffPayWithBonus: false, showTitleOnCard: true, titleColor: '#1f2937', titleBackgroundEnabled: true, titleBackgroundColor: '#ffffff', titleBackgroundOpacity: 90, cashbackPercent: 3, redeemPercent: 0, referralBonusPercent: 0, qrEnabled: true, mainColor: '#46b13b', baseColor: '#1f8d2e', contentColor: '#ffffff', activationDelayValue: 0, activationDelayUnit: 'immediate', lifetimeValue: 0, lifetimeUnit: 'forever', orderBonusRanges: [], favoriteCategoriesBonusPercent: 0, favoriteCategoriesLimit: 0, favoriteCategoryIds: [] },
+      { id: 'gold', title: 'Золотой', subtitle: 'от 25 000 ₽', description: '', designColor: '#e2e8f0', accentColor: '#f97316', minSpent: 25000, minOrders: 10, accessType: 'conditions', tariffPrice: 0, tariffPeriodValue: 1, tariffPeriodUnit: 'months', tariffPayWithBonus: false, showTitleOnCard: true, titleColor: '#1f2937', titleBackgroundEnabled: true, titleBackgroundColor: '#ffffff', titleBackgroundOpacity: 90, cashbackPercent: 5, redeemPercent: 0, referralBonusPercent: 0, qrEnabled: true, mainColor: '#46b13b', baseColor: '#1f8d2e', contentColor: '#ffffff', activationDelayValue: 0, activationDelayUnit: 'immediate', lifetimeValue: 0, lifetimeUnit: 'forever', orderBonusRanges: [], favoriteCategoriesBonusPercent: 0, favoriteCategoriesLimit: 0, favoriteCategoryIds: [] },
     ];
   }
 
@@ -603,6 +603,11 @@
     return ['conditions', 'join', 'paid'].includes(normalized) ? normalized : 'conditions';
   }
 
+  function normalizeBonusLevelTariffPeriodUnit(value) {
+    const normalized = String(value || '').trim().toLowerCase();
+    return ['days', 'months', 'forever'].includes(normalized) ? normalized : 'months';
+  }
+
   function sanitizeBonusLevels(items) {
     const source = Array.isArray(items) ? items : [];
     const next = source
@@ -619,6 +624,10 @@
           minSpent: normalizeNumberInputValue(item?.minSpent, 0),
           minOrders: normalizeNumberInputValue(item?.minOrders, 0),
           accessType: normalizeBonusLevelAccessType(item?.accessType),
+          tariffPrice: normalizeNumberInputValue(item?.tariffPrice, 0),
+          tariffPeriodValue: normalizeBonusLevelTimingValue(item?.tariffPeriodValue, 1),
+          tariffPeriodUnit: normalizeBonusLevelTariffPeriodUnit(item?.tariffPeriodUnit),
+          tariffPayWithBonus: item?.tariffPayWithBonus === true,
           showTitleOnCard: item?.showTitleOnCard !== false,
           titleColor: normalizeHexColor(item?.titleColor, '#1f2937'),
           titleBackgroundEnabled: item?.titleBackgroundEnabled !== false,
@@ -1819,6 +1828,8 @@
   const bonusLevelRangeSummary = right$("#bonusLevelRangeSummary");
   const bonusLevelRangeInfoBtn = right$("#bonusLevelRangeInfoBtn");
   const bonusLevelRangeEditBtn = right$("#bonusLevelRangeEditBtn");
+  const bonusLevelRequirementsField = right$("#bonusLevelRequirementsField");
+  const bonusLevelRequirementsTitle = right$("#bonusLevelRequirementsTitle");
   const bonusLevelAccessChips = right$("#bonusLevelAccessChips");
   const bonusLevelCashbackPercentInput = right$("#bonusLevelCashbackPercentInput");
   const bonusLevelRedeemPercentInput = right$("#bonusLevelRedeemPercentInput");
@@ -6840,6 +6851,32 @@
     ].join('\n');
   }
 
+  function formatBonusLevelTariffPeriod(level = null) {
+    const current = level && typeof level === 'object' ? level : getActiveBonusLevelForInfo();
+    const periodValue = normalizeBonusLevelTimingValue(current?.tariffPeriodValue, 1);
+    const periodUnit = normalizeBonusLevelTariffPeriodUnit(current?.tariffPeriodUnit);
+    if (periodUnit === 'forever') return '\u0431\u0435\u0441\u0441\u0440\u043e\u0447\u043d\u043e';
+    const unitLabel = periodUnit === 'days' ? '\u0434\u043d.' : '\u043c\u0435\u0441.';
+    return `${periodValue.toLocaleString('ru-RU')} ${unitLabel}`;
+  }
+
+  function formatBonusLevelTariffSummary(level = null) {
+    const current = level && typeof level === 'object' ? level : getActiveBonusLevelForInfo();
+    const price = normalizeNumberInputValue(current?.tariffPrice, 0);
+    const payWithBonus = current?.tariffPayWithBonus === true ? '\u0431\u043e\u043d\u0443\u0441\u0430\u043c\u0438: \u0434\u0430' : '\u0431\u043e\u043d\u0443\u0441\u0430\u043c\u0438: \u043d\u0435\u0442';
+    return `${price.toLocaleString('ru-RU')} \u20bd / ${formatBonusLevelTariffPeriod(current)} / ${payWithBonus}`;
+  }
+
+  function formatBonusLevelTariffDetailsText(level = null) {
+    const current = level && typeof level === 'object' ? level : getActiveBonusLevelForInfo();
+    return [
+      '\u041f\u043b\u0430\u0442\u043d\u044b\u0439 \u0442\u0430\u0440\u0438\u0444',
+      `\u0426\u0435\u043d\u0430: ${normalizeNumberInputValue(current?.tariffPrice, 0).toLocaleString('ru-RU')} \u20bd`,
+      `\u041f\u0435\u0440\u0438\u043e\u0434: ${formatBonusLevelTariffPeriod(current)}`,
+      `\u041e\u043f\u043b\u0430\u0442\u0430 \u0431\u043e\u043d\u0443\u0441\u0430\u043c\u0438: ${current?.tariffPayWithBonus === true ? '\u0434\u0430' : '\u043d\u0435\u0442'}`,
+    ].join('\n');
+  }
+
   function showBonusLevelRequirementsValidationMessage(message) {
     if (typeof window.showToast === 'function') {
       window.showToast(message);
@@ -6852,6 +6889,121 @@
     const { backdrop } = getClientBenefitsOverlayElements();
     if (backdrop) backdrop.classList.remove('bonus-range-editor-overlay');
     window.AdminBenefitsModal?.hide();
+  }
+
+  function closeBonusLevelTariffEditor() {
+    const { backdrop } = getClientBenefitsOverlayElements();
+    if (backdrop) backdrop.classList.remove('bonus-range-editor-overlay');
+    window.AdminBenefitsModal?.hide();
+  }
+
+  function openBonusLevelTariffEditor() {
+    if (String(state.editingBonusLevelId || '').trim() !== String(state.activeBonusLevelId || '').trim()) return;
+    const current = getActiveBonusLevelForInfo();
+    if (!current) return;
+
+    window.AdminBenefitsModal?.show({
+      title: '\u041f\u043b\u0430\u0442\u043d\u044b\u0439 \u0442\u0430\u0440\u0438\u0444',
+      showBack: false,
+      showModeToggle: false,
+      onClose: closeBonusLevelTariffEditor,
+    });
+
+    const { backdrop, body } = getClientBenefitsOverlayElements();
+    if (!body) return;
+    if (backdrop) backdrop.classList.add('bonus-range-editor-overlay');
+    body.innerHTML = '';
+
+    const frame = window.AdminBenefitsModal?.createScrollableFrame({ hasFooter: true });
+    if (!frame?.root || !frame.scrollEl || !frame.footerEl) return;
+    body.appendChild(frame.root);
+
+    const shell = document.createElement('div');
+    shell.className = 'bonus-range-editor-modal';
+    frame.scrollEl.appendChild(shell);
+
+    const note = document.createElement('div');
+    note.className = 'bonus-range-editor-row';
+    note.textContent = '\u0423\u043a\u0430\u0436\u0438\u0442\u0435 \u0446\u0435\u043d\u0443, \u043f\u0435\u0440\u0438\u043e\u0434 \u0434\u043e\u0441\u0442\u0443\u043f\u0430 \u0438 \u043c\u043e\u0436\u043d\u043e \u043b\u0438 \u043e\u043f\u043b\u0430\u0447\u0438\u0432\u0430\u0442\u044c \u0442\u0430\u0440\u0438\u0444 \u0431\u043e\u043d\u0443\u0441\u0430\u043c\u0438.';
+    shell.appendChild(note);
+
+    const unit = normalizeBonusLevelTariffPeriodUnit(current.tariffPeriodUnit);
+    const fields = document.createElement('div');
+    fields.className = 'bonus-level-tariff-editor-grid';
+    fields.innerHTML = `
+      <label class="field-wrap">
+        <span class="field-label" for="bonusLevelTariffPriceInput">\u0426\u0435\u043d\u0430, \u20bd</span>
+        <input id="bonusLevelTariffPriceInput" class="control bonus-level-rule-input" type="number" min="0" step="1" placeholder="0" autocomplete="off" value="${escapeHtml(String(normalizeNumberInputValue(current.tariffPrice, 0) || 0))}" />
+      </label>
+      <label class="field-wrap">
+        <span class="field-label" for="bonusLevelTariffPeriodInput">\u041f\u0435\u0440\u0438\u043e\u0434</span>
+        <input id="bonusLevelTariffPeriodInput" class="control bonus-level-rule-input" type="number" min="1" step="1" placeholder="1" autocomplete="off" value="${escapeHtml(String(normalizeBonusLevelTimingValue(current.tariffPeriodValue, 1) || 1))}" />
+      </label>
+      <div class="field-wrap">
+        <span class="field-label">\u0415\u0434\u0438\u043d\u0438\u0446\u0430</span>
+        <div class="bonus-level-access-chips bonus-level-tariff-unit-chips" id="bonusLevelTariffUnitChips">
+          <button type="button" class="bonus-level-access-chip${unit === 'days' ? ' is-active' : ''}" data-tariff-period-unit="days">\u0414\u043d\u0438</button>
+          <button type="button" class="bonus-level-access-chip${unit === 'months' ? ' is-active' : ''}" data-tariff-period-unit="months">\u041c\u0435\u0441\u044f\u0446\u044b</button>
+          <button type="button" class="bonus-level-access-chip${unit === 'forever' ? ' is-active' : ''}" data-tariff-period-unit="forever">\u0411\u0435\u0441\u0441\u0440\u043e\u0447\u043d\u043e</button>
+        </div>
+      </div>
+      <label class="switch bonus-level-tariff-bonus-switch">
+        <input class="switch-input" type="checkbox" id="bonusLevelTariffPayWithBonusInput" ${current.tariffPayWithBonus === true ? 'checked' : ''} />
+        <span class="switch-ui" aria-hidden="true"></span>
+        <span class="switch-text">\u041c\u043e\u0436\u043d\u043e \u043e\u043f\u043b\u0430\u0447\u0438\u0432\u0430\u0442\u044c \u0431\u043e\u043d\u0443\u0441\u0430\u043c\u0438</span>
+      </label>
+    `;
+    shell.appendChild(fields);
+
+    let selectedUnit = unit;
+    const periodInput = fields.querySelector('#bonusLevelTariffPeriodInput');
+    const syncUnit = () => {
+      fields.querySelectorAll('[data-tariff-period-unit]').forEach((button) => {
+        const isActive = String(button.getAttribute('data-tariff-period-unit') || '') === selectedUnit;
+        button.classList.toggle('is-active', isActive);
+      });
+      if (periodInput) periodInput.disabled = selectedUnit === 'forever';
+    };
+    fields.querySelectorAll('[data-tariff-period-unit]').forEach((button) => {
+      button.addEventListener('click', () => {
+        selectedUnit = normalizeBonusLevelTariffPeriodUnit(button.getAttribute('data-tariff-period-unit'));
+        syncUnit();
+      });
+    });
+    syncUnit();
+
+    const actions = document.createElement('div');
+    actions.className = 'bonus-range-editor-footer-actions';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'shop-checkout-benefits-promo-entry-btn';
+    cancelBtn.textContent = '\u041e\u0442\u043c\u0435\u043d\u0430';
+    cancelBtn.addEventListener('click', closeBonusLevelTariffEditor);
+    actions.appendChild(cancelBtn);
+
+    const saveBtn = document.createElement('button');
+    saveBtn.type = 'button';
+    saveBtn.className = 'shop-checkout-benefits-promo-entry-btn is-active';
+    saveBtn.textContent = '\u0421\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c';
+    saveBtn.addEventListener('click', () => {
+      const nextPatch = {
+        tariffPrice: normalizeNumberInputValue(fields.querySelector('#bonusLevelTariffPriceInput')?.value, 0),
+        tariffPeriodValue: selectedUnit === 'forever' ? 0 : normalizeBonusLevelTimingValue(periodInput?.value, 1),
+        tariffPeriodUnit: normalizeBonusLevelTariffPeriodUnit(selectedUnit),
+        tariffPayWithBonus: fields.querySelector('#bonusLevelTariffPayWithBonusInput')?.checked === true,
+      };
+      applyBonusLevelEditorDraftPatch(nextPatch);
+      updateBonusLevelInCollections(current.id, (level) => ({
+        ...level,
+        ...nextPatch,
+      }));
+      persistBonusCardsStorage();
+      renderBonusLevels();
+      renderBonusLevelInfo();
+      closeBonusLevelTariffEditor();
+    });
+    actions.appendChild(saveBtn);
+    frame.footerEl.appendChild(actions);
   }
 
   function openBonusLevelRequirementsEditor() {
@@ -7875,6 +8027,13 @@
         chip.disabled = !isEditing;
       });
     }
+    const accessType = normalizeBonusLevelAccessType(current.accessType);
+    if (bonusLevelRequirementsField) {
+      bonusLevelRequirementsField.classList.toggle('hidden', accessType === 'join');
+    }
+    if (bonusLevelRequirementsTitle) {
+      bonusLevelRequirementsTitle.textContent = accessType === 'paid' ? '\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0430 \u0442\u0430\u0440\u0438\u0444\u0430' : '\u0423\u0441\u043b\u043e\u0432\u0438\u044f \u043f\u0435\u0440\u0435\u0445\u043e\u0434\u0430 \u043d\u0430 \u0443\u0440\u043e\u0432\u0435\u043d\u044c';
+    }
     if (bonusLevelQrBtn) bonusLevelQrBtn.disabled = !isEditing;
     if (bonusLevelMainColorBtn) bonusLevelMainColorBtn.disabled = !isEditing;
     if (bonusLevelBaseColorBtn) bonusLevelBaseColorBtn.disabled = !isEditing;
@@ -7903,9 +8062,9 @@
     }
     renderBonusLevelTimingControls(current);
     if (bonusLevelRequirementsSummary) {
-      const requirementsSummaryText = formatBonusLevelRequirementsSummary(current);
-      const requirementsHelpText = formatBonusLevelRequirementsHelpText();
-      const requirementsDetailsText = formatBonusLevelRequirementsDetailsText(current);
+      const isPaidAccess = accessType === 'paid';
+      const requirementsSummaryText = isPaidAccess ? formatBonusLevelTariffSummary(current) : formatBonusLevelRequirementsSummary(current);
+      const requirementsDetailsText = isPaidAccess ? formatBonusLevelTariffDetailsText(current) : formatBonusLevelRequirementsDetailsText(current);
       bonusLevelRequirementsSummary.textContent = requirementsSummaryText;
       bonusLevelRequirementsSummary.title = requirementsDetailsText;
       if (bonusLevelRequirementsPill) {
@@ -8023,6 +8182,10 @@
       titleBackgroundEnabled: draft.titleBackgroundEnabled !== false,
       qrEnabled: draft.qrEnabled !== false,
       accessType: normalizeBonusLevelAccessType(draft.accessType),
+      tariffPrice: normalizeNumberInputValue(draft.tariffPrice, 0),
+      tariffPeriodValue: normalizeBonusLevelTimingValue(draft.tariffPeriodValue, 1),
+      tariffPeriodUnit: normalizeBonusLevelTariffPeriodUnit(draft.tariffPeriodUnit),
+      tariffPayWithBonus: draft.tariffPayWithBonus === true,
       cashbackPercent: normalizeNumberInputValue(draft.cashbackPercent, 1),
       redeemPercent: normalizeNumberInputValue(draft.redeemPercent, 0),
       referralBonusPercent: normalizeBonusPercentInputValue(draft.referralBonusPercent, 0),
@@ -8245,6 +8408,10 @@
           titleBackgroundColor: '#ffffff',
           titleBackgroundOpacity: 90,
           accessType: 'conditions',
+          tariffPrice: 0,
+          tariffPeriodValue: 1,
+          tariffPeriodUnit: 'months',
+          tariffPayWithBonus: false,
           cashbackPercent: 1,
           redeemPercent: 0,
           referralBonusPercent: 0,
@@ -20402,6 +20569,11 @@
     bonusLevelRequirementsInfoBtn.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
+      const current = getActiveBonusLevelForInfo();
+      if (normalizeBonusLevelAccessType(current?.accessType) === 'paid') {
+        openBonusLevelHelpPopover(bonusLevelRequirementsInfoBtn, formatBonusLevelTariffDetailsText(current));
+        return;
+      }
       openBonusLevelHelpPopover(bonusLevelRequirementsInfoBtn, formatBonusLevelRequirementsHelpText());
     });
   }
@@ -20410,7 +20582,13 @@
     bonusLevelRequirementsDetailsInfoBtn.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
-      openBonusLevelHelpPopover(bonusLevelRequirementsDetailsInfoBtn, formatBonusLevelRequirementsDetailsText());
+      const current = getActiveBonusLevelForInfo();
+      openBonusLevelHelpPopover(
+        bonusLevelRequirementsDetailsInfoBtn,
+        normalizeBonusLevelAccessType(current?.accessType) === 'paid'
+          ? formatBonusLevelTariffDetailsText(current)
+          : formatBonusLevelRequirementsDetailsText(current)
+      );
     });
   }
 
@@ -20418,6 +20596,11 @@
     bonusLevelRequirementsEditBtn.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
+      const current = getActiveBonusLevelForInfo();
+      if (normalizeBonusLevelAccessType(current?.accessType) === 'paid') {
+        openBonusLevelTariffEditor();
+        return;
+      }
       openBonusLevelRequirementsEditor();
     });
   }
