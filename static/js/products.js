@@ -5233,6 +5233,149 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     `;
   }
 
+  function productBelongsToCurrentCategory(categoryIds) {
+    const cid = Number(state.currentCategoryId || 0);
+    if (!(cid > 0)) return false;
+    if (Number(state.allCategoryId || 0) === cid) return true;
+    return (Array.isArray(categoryIds) ? categoryIds : [])
+      .map((id) => Number(id || 0))
+      .some((id) => id === cid);
+  }
+
+  function upsertSavedProductInList(product, categoryIds) {
+    if (!product || !productsList) return;
+    const productId = Number(product.id || 0);
+    if (!(productId > 0)) return;
+    const existingIndex = (state.products || []).findIndex((p) => Number(p.id) === productId);
+    const previous = existingIndex >= 0 ? state.products[existingIndex] : null;
+    const merged = { ...(previous || {}), ...product };
+    const shouldKeepInCategory = productBelongsToCurrentCategory(categoryIds);
+    const shouldShow = shouldKeepInCategory && filterProductsCollection([merged]).length > 0;
+    const existingRow = productsList.querySelector(`.order-row.product-row[data-id="${productId}"]`);
+
+    if (shouldKeepInCategory) {
+      if (existingIndex >= 0) state.products[existingIndex] = merged;
+      else state.products.push(merged);
+    } else if (existingIndex >= 0) {
+      state.products.splice(existingIndex, 1);
+    }
+
+    if (!shouldShow) {
+      if (existingRow) existingRow.remove();
+      syncProductsListEmptyState();
+      syncProductsBulkFooter();
+      setCachedCategoryProducts(state.currentCategoryId, {
+        products: state.products,
+        productsOffset: state.productsOffset,
+        productsTotal: state.productsTotal,
+        productsHasMore: state.productsHasMore,
+        combosInCategory: state.combosInCategory,
+      });
+      return;
+    }
+
+    const canSortProducts = !state.productsHasMore && !state.productsLoading;
+    const template = document.createElement("template");
+    template.innerHTML = buildProductRowHtml(merged, canSortProducts).trim();
+    const nextRow = template.content.firstElementChild;
+    if (!nextRow) return;
+
+    if (existingRow) {
+      existingRow.replaceWith(nextRow);
+    } else {
+      const firstComboRow = productsList.querySelector(".order-row.combo-row");
+      if (firstComboRow) firstComboRow.before(nextRow);
+      else productsList.appendChild(nextRow);
+    }
+    bindProductRowClickHandlers(productsList);
+    bindProductRowInlineEditors(productsList);
+    syncProductRowsSortability();
+    syncProductsListEmptyState();
+    syncProductRowSelectionUI(productsList);
+    syncProductsBulkFooter();
+    setCachedCategoryProducts(state.currentCategoryId, {
+      products: state.products,
+      productsOffset: state.productsOffset,
+      productsTotal: state.productsTotal,
+      productsHasMore: state.productsHasMore,
+      combosInCategory: state.combosInCategory,
+    });
+  }
+
+  function buildComboRowHtml(combo) {
+    const title = (combo?.title || "").trim() || "Комбо";
+    const comboId = Number(combo?.id || 0);
+    const gridPlaceholder = `<div class="combo-row-photo-grid" data-combo-grid-id="${comboId}">${buildComboRowPhotoGridHtml(getCachedComboRowPhotos(comboId) || [])}</div>`;
+    return `
+        <div class="order-row combo-row" data-combo-id="${comboId}" draggable="false">
+          ${gridPlaceholder}
+          <div class="combo-row-content">
+            <span class="product-title">${escapeHtml(title)}</span>
+            <span class="pill combo-row-pill">Комбо</span>
+            <span class="muted combo-row-muted">Комбо-набор</span>
+          </div>
+          <div class="product-right"></div>
+        </div>
+      `;
+  }
+
+  function comboBelongsToCurrentCategory(combo) {
+    const cid = Number(state.currentCategoryId || 0);
+    if (!(cid > 0)) return false;
+    if (Number(state.allCategoryId || 0) === cid) return true;
+    const cat = state.categories.find((c) => Number(c.id) === cid);
+    const categoryCode = cat && cat.code && String(cat.code).trim() && cat.code !== "all"
+      ? String(cat.code).trim()
+      : "";
+    return Boolean(categoryCode) && String(combo?.category_code || "").trim() === categoryCode;
+  }
+
+  function upsertSavedComboInList(combo) {
+    if (!combo || !productsList) return;
+    const comboId = Number(combo.id || 0);
+    if (!(comboId > 0)) return;
+    const shouldShow = !shouldHideProductCombos() && comboBelongsToCurrentCategory(combo);
+    const existingIndex = (state.combosInCategory || []).findIndex((c) => Number(c.id) === comboId);
+    const existingRow = productsList.querySelector(`.order-row.combo-row[data-combo-id="${comboId}"]`);
+
+    if (shouldShow) {
+      if (existingIndex >= 0) state.combosInCategory[existingIndex] = { ...state.combosInCategory[existingIndex], ...combo };
+      else state.combosInCategory.push(combo);
+    } else if (existingIndex >= 0) {
+      state.combosInCategory.splice(existingIndex, 1);
+    }
+
+    if (!shouldShow) {
+      if (existingRow) existingRow.remove();
+      syncProductsListEmptyState();
+      setCachedCategoryProducts(state.currentCategoryId, {
+        products: state.products,
+        productsOffset: state.productsOffset,
+        productsTotal: state.productsTotal,
+        productsHasMore: state.productsHasMore,
+        combosInCategory: state.combosInCategory,
+      });
+      return;
+    }
+
+    const template = document.createElement("template");
+    template.innerHTML = buildComboRowHtml(combo).trim();
+    const nextRow = template.content.firstElementChild;
+    if (!nextRow) return;
+    if (existingRow) existingRow.replaceWith(nextRow);
+    else productsList.appendChild(nextRow);
+    bindComboRowClickHandlers(productsList);
+    hydrateComboRowThumbs();
+    syncProductsListEmptyState();
+    setCachedCategoryProducts(state.currentCategoryId, {
+      products: state.products,
+      productsOffset: state.productsOffset,
+      productsTotal: state.productsTotal,
+      productsHasMore: state.productsHasMore,
+      combosInCategory: state.combosInCategory,
+    });
+  }
+
   function getProductRowPhotoUrl(product) {
     const photos = Array.isArray(product?.photos) ? product.photos : [];
     const first = photos.length ? String(photos[0] || "").trim() : "";
@@ -5410,7 +5553,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
               body: JSON.stringify({ [field]: nextValue ? 1 : 0 }),
             });
             applyInlineProductValue(product, field, nextValue ? 1 : 0);
-            renderProductsList();
+            upsertSavedProductInList(product, [state.currentCategoryId]);
           } catch (e) {
             switchInput.checked = previousValue;
             alert("Ошибка сохранения статуса товара: " + (e.message || "Неизвестная ошибка"));
@@ -5474,7 +5617,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
             });
             applyInlineProductValue(product, field, payload[field]);
             if (field === "stock") {
-              renderProductsList();
+              upsertSavedProductInList(product, [state.currentCategoryId]);
             } else {
               syncProductRowInlineControl(row, product, field);
             }
@@ -11192,7 +11335,7 @@ const isViewMode = state.comboPanel.mode === "view";
           if (activeKey && activeKey.startsWith("combo-set:")) {
             closeTab(activeKey);
           }
-          if (state.mode === "products") await refreshProductsOnly(true);
+          if (state.mode === "products") upsertSavedComboInList(res.data);
           if (Number.isFinite(newComboId)) {
             clearCachedComboSetDetails(newComboId);
             clearCachedComboRowPhotos(newComboId);
@@ -11241,7 +11384,7 @@ const isViewMode = state.comboPanel.mode === "view";
       const tab = tabsState.tabs.find((t) => t.key === `combo-set:${comboId}`);
       if (tab && combo?.title) tab.title = (combo.title || "").trim() || "Комбо";
       activateComboSetTab();
-      if (state.mode === "products") await refreshProductsOnly(true);
+      if (state.mode === "products" && combo) upsertSavedComboInList(combo);
     } catch (e) {
       console.error("saveComboSet update", e);
       if (typeof toast !== "undefined") toast("Ошибка сохранения");
@@ -12484,12 +12627,17 @@ const isViewMode = state.comboPanel.mode === "view";
             }
           }
 
-          // Обновление данных
+          let savedProductForView = null;
           try {
-            await refreshAll();
+            const productRes = await apiGetProduct(productId);
+            savedProductForView = productRes?.data || null;
+            if (savedProductForView) {
+              upsertSavedProductInList(savedProductForView, payload.category_ids);
+              clearCachedProductDetails(productId);
+              clearCachedProductView(productId);
+            }
           } catch (e) {
-            console.error('Failed to refresh', e);
-            // Не критично, продолжаем
+            console.error('Failed to update saved product row', e);
           }
           
           // Return to product details if editing
@@ -12504,7 +12652,7 @@ const isViewMode = state.comboPanel.mode === "view";
             currentNavigationState = null;
             
             // Find updated product in state
-            let updatedProduct = state.products.find(p => p.id === productId);
+            let updatedProduct = savedProductForView || state.products.find(p => p.id === productId);
             
             // If product not found (e.g., it's in a different category), try to reload it
             if (!updatedProduct && productId) {
@@ -12565,12 +12713,7 @@ const isViewMode = state.comboPanel.mode === "view";
             clearNavigationStack();
             currentNavigationState = null;
             // New product - find it and show details
-            try {
-              await refreshProductsOnly(true);
-            } catch (e) {
-              console.error('Failed to refresh products', e);
-            }
-            const newProduct = state.products.find(p => p.id === productId);
+            const newProduct = savedProductForView || state.products.find(p => p.id === productId);
             if (newProduct) {
               clearNavigationStack();
               // Сначала заменяем таб «Новый товар» на таб с реальным id, чтобы showProductDetails не добавил дубликат
