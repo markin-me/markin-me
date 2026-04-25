@@ -26,6 +26,7 @@
   const CHAT_MOBILE_VIEW_STORAGE_KEY = `dashboard:chat:mobile:view:v1:${tenantId}`;
   const MARKETING_BANNERS_STORAGE_KEY = `dashboard:marketing:banners:v1:${tenantId}`;
   const MARKETING_BONUS_CARDS_STORAGE_KEY = `dashboard:marketing:bonus-cards:v1:${tenantId}`;
+  const BONUS_HISTORY_PAGE_SIZE = 50;
   const BONUS_LEVEL_FLIP_ANIMATION_MS = 560;
 
   function writePersistedMobileChatView(view) {
@@ -538,17 +539,19 @@
 
   function createDefaultBonusLevels() {
     return [
-      { id: 'starter', title: 'Стартовый', subtitle: 'от 0 ₽', description: '', designColor: '#f8fafc', accentColor: '#f97316', minSpent: 0, minOrders: 0, showTitleOnCard: true, titleColor: '#1f2937', titleBackgroundEnabled: true, titleBackgroundColor: '#ffffff', titleBackgroundOpacity: 90, cashbackPercent: 1, redeemPercent: 0, referralBonusPercent: 0, qrEnabled: true, mainColor: '#46b13b', baseColor: '#1f8d2e', contentColor: '#ffffff', activationDelayValue: 0, activationDelayUnit: 'immediate', lifetimeValue: 0, lifetimeUnit: 'forever', orderBonusRanges: [], favoriteCategoriesBonusPercent: 0, favoriteCategoriesLimit: 0, favoriteCategoryIds: [] },
-      { id: 'silver', title: 'Серебряный', subtitle: 'от 10 000 ₽', description: '', designColor: '#f1f5f9', accentColor: '#f97316', minSpent: 10000, minOrders: 5, showTitleOnCard: true, titleColor: '#1f2937', titleBackgroundEnabled: true, titleBackgroundColor: '#ffffff', titleBackgroundOpacity: 90, cashbackPercent: 3, redeemPercent: 0, referralBonusPercent: 0, qrEnabled: true, mainColor: '#46b13b', baseColor: '#1f8d2e', contentColor: '#ffffff', activationDelayValue: 0, activationDelayUnit: 'immediate', lifetimeValue: 0, lifetimeUnit: 'forever', orderBonusRanges: [], favoriteCategoriesBonusPercent: 0, favoriteCategoriesLimit: 0, favoriteCategoryIds: [] },
-      { id: 'gold', title: 'Золотой', subtitle: 'от 25 000 ₽', description: '', designColor: '#e2e8f0', accentColor: '#f97316', minSpent: 25000, minOrders: 10, showTitleOnCard: true, titleColor: '#1f2937', titleBackgroundEnabled: true, titleBackgroundColor: '#ffffff', titleBackgroundOpacity: 90, cashbackPercent: 5, redeemPercent: 0, referralBonusPercent: 0, qrEnabled: true, mainColor: '#46b13b', baseColor: '#1f8d2e', contentColor: '#ffffff', activationDelayValue: 0, activationDelayUnit: 'immediate', lifetimeValue: 0, lifetimeUnit: 'forever', orderBonusRanges: [], favoriteCategoriesBonusPercent: 0, favoriteCategoriesLimit: 0, favoriteCategoryIds: [] },
+      { id: 'starter', title: 'Стартовый', subtitle: 'от 0 ₽', description: '', designColor: '#f8fafc', accentColor: '#f97316', minSpent: 0, minOrders: 0, accessType: 'conditions', showTitleOnCard: true, titleColor: '#1f2937', titleBackgroundEnabled: true, titleBackgroundColor: '#ffffff', titleBackgroundOpacity: 90, cashbackPercent: 1, redeemPercent: 0, referralBonusPercent: 0, qrEnabled: true, mainColor: '#46b13b', baseColor: '#1f8d2e', contentColor: '#ffffff', activationDelayValue: 0, activationDelayUnit: 'immediate', lifetimeValue: 0, lifetimeUnit: 'forever', orderBonusRanges: [], favoriteCategoriesBonusPercent: 0, favoriteCategoriesLimit: 0, favoriteCategoryIds: [] },
+      { id: 'silver', title: 'Серебряный', subtitle: 'от 10 000 ₽', description: '', designColor: '#f1f5f9', accentColor: '#f97316', minSpent: 10000, minOrders: 5, accessType: 'conditions', showTitleOnCard: true, titleColor: '#1f2937', titleBackgroundEnabled: true, titleBackgroundColor: '#ffffff', titleBackgroundOpacity: 90, cashbackPercent: 3, redeemPercent: 0, referralBonusPercent: 0, qrEnabled: true, mainColor: '#46b13b', baseColor: '#1f8d2e', contentColor: '#ffffff', activationDelayValue: 0, activationDelayUnit: 'immediate', lifetimeValue: 0, lifetimeUnit: 'forever', orderBonusRanges: [], favoriteCategoriesBonusPercent: 0, favoriteCategoriesLimit: 0, favoriteCategoryIds: [] },
+      { id: 'gold', title: 'Золотой', subtitle: 'от 25 000 ₽', description: '', designColor: '#e2e8f0', accentColor: '#f97316', minSpent: 25000, minOrders: 10, accessType: 'conditions', showTitleOnCard: true, titleColor: '#1f2937', titleBackgroundEnabled: true, titleBackgroundColor: '#ffffff', titleBackgroundOpacity: 90, cashbackPercent: 5, redeemPercent: 0, referralBonusPercent: 0, qrEnabled: true, mainColor: '#46b13b', baseColor: '#1f8d2e', contentColor: '#ffffff', activationDelayValue: 0, activationDelayUnit: 'immediate', lifetimeValue: 0, lifetimeUnit: 'forever', orderBonusRanges: [], favoriteCategoriesBonusPercent: 0, favoriteCategoriesLimit: 0, favoriteCategoryIds: [] },
     ];
   }
 
   function createDefaultBonusClientEvents() {
     return [
-      { id: 'evt1', clientName: 'Иван Петров', phone: '+7 (900) 123-45-67', action: 'Присоединился к программе', status: 'Стартовый', at: 'Сегодня, 12:40' },
-      { id: 'evt2', clientName: 'Мария Соколова', phone: '+7 (921) 222-11-00', action: 'Повысил статус', status: 'Серебряный', at: 'Сегодня, 11:18' },
-      { id: 'evt3', clientName: 'Алексей Орлов', phone: '+7 (915) 555-89-10', action: 'Повысил статус', status: 'Золотой', at: 'Вчера, 20:03' },
+      { id: 'evt1', type: 'join', clientName: 'Иван Петров', phone: '+7 (900) 123-45-67', action: 'Присоединился к программе', status: 'Стартовый', at: 'Сегодня, 12:40' },
+      { id: 'evt2', type: 'level_up', clientName: 'Мария Соколова', phone: '+7 (921) 222-11-00', action: 'Повысил статус', status: 'Серебряный', at: 'Сегодня, 11:18' },
+      { id: 'evt3', type: 'accrual', clientName: 'Иван Петров', phone: '+7 (900) 123-45-67', action: 'Начисление бонусов', status: '+120 бонусов', amount: 120, at: 'Сегодня, 10:44' },
+      { id: 'evt4', type: 'redeem', clientName: 'Мария Соколова', phone: '+7 (921) 222-11-00', action: 'Списание бонусов', status: '-80 бонусов', amount: -80, at: 'Вчера, 21:12' },
+      { id: 'evt5', type: 'expire', clientName: 'Алексей Орлов', phone: '+7 (915) 555-89-10', action: 'Сгорание бонусов', status: '-45 бонусов', amount: -45, at: 'Вчера, 20:03' },
     ];
   }
 
@@ -595,6 +598,11 @@
     return String(value || '').trim().toLowerCase() === 'custom' ? 'custom' : 'match';
   }
 
+  function normalizeBonusLevelAccessType(value) {
+    const normalized = String(value || '').trim().toLowerCase();
+    return ['conditions', 'join', 'paid'].includes(normalized) ? normalized : 'conditions';
+  }
+
   function sanitizeBonusLevels(items) {
     const source = Array.isArray(items) ? items : [];
     const next = source
@@ -610,6 +618,7 @@
           accentColor: normalizeHexColor(item?.accentColor, '#f97316'),
           minSpent: normalizeNumberInputValue(item?.minSpent, 0),
           minOrders: normalizeNumberInputValue(item?.minOrders, 0),
+          accessType: normalizeBonusLevelAccessType(item?.accessType),
           showTitleOnCard: item?.showTitleOnCard !== false,
           titleColor: normalizeHexColor(item?.titleColor, '#1f2937'),
           titleBackgroundEnabled: item?.titleBackgroundEnabled !== false,
@@ -659,10 +668,13 @@
     const next = source
       .map((item, idx) => ({
         id: String(item?.id || `event_${idx + 1}`),
+        type: String(item?.type || 'status').trim(),
         clientName: String(item?.clientName || '').trim() || `Клиент #${idx + 1}`,
         phone: String(item?.phone || '').trim() || '—',
         action: String(item?.action || '').trim() || 'Изменение статуса',
         status: String(item?.status || '').trim() || '—',
+        amount: Number.isFinite(Number(item?.amount)) ? Number(item.amount) : null,
+        balance: Number.isFinite(Number(item?.balance)) ? Number(item.balance) : null,
         at: String(item?.at || '').trim() || '—',
       }))
       .filter((item) => item.clientName);
@@ -1528,6 +1540,7 @@
   const elBonusLevelsScalePoints = $("#bonusLevelsScalePoints");
   const elBonusClientsList = $("#bonusClientsList");
   const elBonusClientsEmptyHint = $("#bonusClientsEmptyHint");
+  const elBonusHistoryPagination = $("#bonusHistoryPagination");
   const elBannerPickerOverlay = $("#bannerPickerOverlay");
   const elBannerPickerBackdrop = $("#bannerPickerBackdrop");
   const elBannerPickerTitle = $("#bannerPickerTitle");
@@ -1806,6 +1819,7 @@
   const bonusLevelRangeSummary = right$("#bonusLevelRangeSummary");
   const bonusLevelRangeInfoBtn = right$("#bonusLevelRangeInfoBtn");
   const bonusLevelRangeEditBtn = right$("#bonusLevelRangeEditBtn");
+  const bonusLevelAccessChips = right$("#bonusLevelAccessChips");
   const bonusLevelCashbackPercentInput = right$("#bonusLevelCashbackPercentInput");
   const bonusLevelRedeemPercentInput = right$("#bonusLevelRedeemPercentInput");
   const bonusLevelReferralBonusPercentInput = right$("#bonusLevelReferralBonusPercentInput");
@@ -2044,6 +2058,7 @@
     bonusLevels: createDefaultBonusLevels(),
     bonusLevelsDraft: createDefaultBonusLevels(),
     bonusClientEvents: createDefaultBonusClientEvents(),
+    bonusHistoryPage: 1,
     bonusFlippedLevelIds: new Set(),
     bonusAnimatingLevelIds: new Set(),
     bonusFlipAnimationTimer: null,
@@ -7851,6 +7866,15 @@
       bonusLevelContentColorInput.value = normalizeHexColor(current.contentColor, '#ffffff');
       bonusLevelContentColorInput.disabled = !isEditing;
     }
+    if (bonusLevelAccessChips) {
+      const accessType = normalizeBonusLevelAccessType(current.accessType);
+      bonusLevelAccessChips.querySelectorAll('[data-bonus-access-type]').forEach((chip) => {
+        const isActive = String(chip.getAttribute('data-bonus-access-type') || '') === accessType;
+        chip.classList.toggle('is-active', isActive);
+        chip.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+        chip.disabled = !isEditing;
+      });
+    }
     if (bonusLevelQrBtn) bonusLevelQrBtn.disabled = !isEditing;
     if (bonusLevelMainColorBtn) bonusLevelMainColorBtn.disabled = !isEditing;
     if (bonusLevelBaseColorBtn) bonusLevelBaseColorBtn.disabled = !isEditing;
@@ -7998,6 +8022,7 @@
       showTitleOnCard: draft.showTitleOnCard !== false,
       titleBackgroundEnabled: draft.titleBackgroundEnabled !== false,
       qrEnabled: draft.qrEnabled !== false,
+      accessType: normalizeBonusLevelAccessType(draft.accessType),
       cashbackPercent: normalizeNumberInputValue(draft.cashbackPercent, 1),
       redeemPercent: normalizeNumberInputValue(draft.redeemPercent, 0),
       referralBonusPercent: normalizeBonusPercentInputValue(draft.referralBonusPercent, 0),
@@ -8080,6 +8105,11 @@
     await closeTab(buildTabKey('bonus-level', activeId));
   }
 
+  function getBonusLevelTitleInputWidth(title) {
+    const length = Array.from(String(title || '')).length;
+    return `${Math.min(34, Math.max(6, length + 5))}ch`;
+  }
+
   function renderBonusLevels() {
     if (!elBonusLevelsTrack) return;
     elBonusLevelsTrack.innerHTML = '';
@@ -8112,7 +8142,7 @@
                 <div class="bonus-level-preview-main" style="background:${escapeHtml(mainColor)};color:${escapeHtml(contentColor)};">
                   ${
                     isEditing
-                      ? `<input class="control bonus-level-field bonus-level-title-input" type="text" data-bonus-level-index="${index}" data-bonus-level-field="title" value="${escapeHtml(level.title)}" />`
+                      ? `<input class="control bonus-level-field bonus-level-title-input" type="text" data-bonus-level-index="${index}" data-bonus-level-field="title" value="${escapeHtml(level.title)}" style="width:${escapeHtml(getBonusLevelTitleInputWidth(level.title))};" />`
                       : `<div class="bonus-level-preview-title">${escapeHtml(level.title)}</div>`
                   }
                   <div class="bonus-level-preview-bonus-label">Бонусы</div>
@@ -8214,6 +8244,7 @@
           titleBackgroundEnabled: true,
           titleBackgroundColor: '#ffffff',
           titleBackgroundOpacity: 90,
+          accessType: 'conditions',
           cashbackPercent: 1,
           redeemPercent: 0,
           referralBonusPercent: 0,
@@ -8269,25 +8300,75 @@
     const events = Array.isArray(state.bonusClientEvents) ? state.bonusClientEvents : [];
     if (!events.length) {
       if (elBonusClientsEmptyHint) elBonusClientsEmptyHint.classList.remove('hidden');
+      if (elBonusHistoryPagination) {
+        elBonusHistoryPagination.classList.add('hidden');
+        elBonusHistoryPagination.innerHTML = '';
+      }
       return;
     }
     if (elBonusClientsEmptyHint) elBonusClientsEmptyHint.classList.add('hidden');
 
-    events.forEach((eventItem) => {
+    const totalPages = Math.max(1, Math.ceil(events.length / BONUS_HISTORY_PAGE_SIZE));
+    state.bonusHistoryPage = Math.min(Math.max(1, Number(state.bonusHistoryPage || 1)), totalPages);
+    const pageStart = (state.bonusHistoryPage - 1) * BONUS_HISTORY_PAGE_SIZE;
+    const pageEvents = events.slice(pageStart, pageStart + BONUS_HISTORY_PAGE_SIZE);
+    const eventIconMap = {
+      join: 'fa-user-check',
+      level_up: 'fa-arrow-up',
+      level_down: 'fa-arrow-down',
+      accrual: 'fa-plus',
+      redeem: 'fa-minus',
+      expire: 'fa-hourglass-end',
+      adjustment: 'fa-pen',
+    };
+
+    pageEvents.forEach((eventItem) => {
+      const type = String(eventItem.type || 'status').trim();
+      const typeClass = type.replace(/[^a-z0-9_-]/gi, '');
+      const icon = eventIconMap[type] || 'fa-history';
+      const amount = Number(eventItem.amount);
+      const amountText = Number.isFinite(amount) && amount !== 0
+        ? `${amount > 0 ? '+' : ''}${amount.toLocaleString('ru-RU')} бонусов`
+        : '';
+      const balance = Number(eventItem.balance);
+      const balanceText = Number.isFinite(balance)
+        ? `Баланс: ${balance.toLocaleString('ru-RU')}`
+        : '';
+      const metaParts = [eventItem.phone, amountText, balanceText].filter((part) => String(part || '').trim());
       const row = document.createElement('div');
-      row.className = 'order-row';
+      row.className = `order-row bonus-history-row bonus-history-row--${typeClass || 'status'}`;
       row.innerHTML = `
-        <div class="order-icon"><i class="fas fa-user-check"></i></div>
+        <div class="order-icon"><i class="fas ${escapeHtml(icon)}"></i></div>
         <div class="order-mid">
           <strong>${escapeHtml(eventItem.clientName)}</strong>
           <div class="muted">${escapeHtml(eventItem.action)} • ${escapeHtml(eventItem.status)}</div>
-          <div class="muted">${escapeHtml(eventItem.phone)}</div>
+          <div class="muted">${escapeHtml(metaParts.join(' • '))}</div>
         </div>
         <div class="order-actions">
           <div class="pill" style="padding:6px 10px;font-size:12px;height:32px;display:flex;align-items:center;">${escapeHtml(eventItem.at)}</div>
         </div>
       `;
       elBonusClientsList.appendChild(row);
+    });
+
+    if (!elBonusHistoryPagination) return;
+    if (totalPages <= 1) {
+      elBonusHistoryPagination.classList.add('hidden');
+      elBonusHistoryPagination.innerHTML = '';
+      return;
+    }
+    elBonusHistoryPagination.classList.remove('hidden');
+    elBonusHistoryPagination.innerHTML = `
+      <button type="button" class="bonus-history-page-btn" data-bonus-history-page="${state.bonusHistoryPage - 1}" ${state.bonusHistoryPage <= 1 ? 'disabled' : ''}>Назад</button>
+      <span class="bonus-history-page-text">${state.bonusHistoryPage} / ${totalPages}</span>
+      <button type="button" class="bonus-history-page-btn" data-bonus-history-page="${state.bonusHistoryPage + 1}" ${state.bonusHistoryPage >= totalPages ? 'disabled' : ''}>Вперёд</button>
+    `;
+    elBonusHistoryPagination.querySelectorAll('[data-bonus-history-page]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const nextPage = Number(button.getAttribute('data-bonus-history-page') || 1);
+        state.bonusHistoryPage = Math.min(Math.max(1, nextPage), totalPages);
+        renderBonusClientsList();
+      });
     });
   }
 
@@ -19916,6 +19997,7 @@
       if (!field) return;
       const current = { ...next[idx] };
       if (field === 'title') {
+        input.style.width = getBonusLevelTitleInputWidth(input.value);
         current.title = String(input.value || '').trim() || current.title;
       } else if (field === 'designColor') {
         current.designColor = normalizeHexColor(input.value, current.designColor || '#f8fafc');
@@ -20221,6 +20303,17 @@
     bonusLevelContentColorInput.addEventListener('input', () => {
       applyBonusLevelEditorDraftPatch({
         contentColor: normalizeHexColor(bonusLevelContentColorInput.value, '#ffffff'),
+      });
+    });
+  }
+
+  if (bonusLevelAccessChips) {
+    bonusLevelAccessChips.querySelectorAll('[data-bonus-access-type]').forEach((chip) => {
+      chip.addEventListener('click', () => {
+        if (chip.disabled) return;
+        applyBonusLevelEditorDraftPatch({
+          accessType: normalizeBonusLevelAccessType(chip.getAttribute('data-bonus-access-type')),
+        });
       });
     });
   }

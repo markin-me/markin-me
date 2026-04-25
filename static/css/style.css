@@ -18044,8 +18044,12 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
 }
 
 #bonusLevelsTrack .bonus-level-preview-title{
-  max-width:calc(100% - 124px);
+  max-width:calc(100% - 52px);
   font-size:13px;
+  white-space:normal;
+  overflow:visible;
+  text-overflow:clip;
+  overflow-wrap:anywhere;
 }
 
 #bonusLevelsTrack .bonus-level-preview-bonus-label,
@@ -18289,8 +18293,27 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
 }
 
 .bonus-level-title-input{
-  height:32px;
-  padding:0 10px;
+  max-width:calc(100% - 46px);
+  min-width:6ch;
+  height:22px;
+  min-height:22px;
+  padding:1px 8px;
+  border:none;
+  border-radius:999px !important;
+  background:rgba(255,255,255,.88);
+  color:var(--color-text);
+  font-size:12px;
+  line-height:1.2;
+  font-weight:700;
+  box-shadow:none;
+}
+
+#bonusLevelsTrack .bonus-level-title-input{
+  display:inline-flex;
+  align-items:center;
+  white-space:nowrap;
+  overflow:visible;
+  text-overflow:clip;
 }
 
 .bonus-level-color-input{
@@ -18425,6 +18448,39 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   min-height:0;
   overflow-y:auto;
   overflow-x:hidden;
+}
+
+.bonus-history-pagination{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:8px;
+  padding:10px 0 2px;
+}
+
+.bonus-history-page-btn{
+  height:32px;
+  min-width:82px;
+  border:1px solid var(--color-border);
+  border-radius:999px;
+  background:var(--color-surface-2);
+  color:var(--color-text);
+  font-size:12px;
+  font-weight:700;
+  cursor:pointer;
+}
+
+.bonus-history-page-btn:disabled{
+  opacity:.5;
+  cursor:not-allowed;
+}
+
+.bonus-history-page-text{
+  min-width:54px;
+  text-align:center;
+  color:var(--color-text-muted);
+  font-size:12px;
+  font-weight:700;
 }
 
 .banner-placement-card{
@@ -19199,6 +19255,48 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   font-size:13px;
   font-weight:700;
   color:var(--color-text);
+}
+
+.bonus-level-access-wrap{
+  grid-column:1 / -1;
+  display:grid;
+  gap:8px;
+}
+
+.bonus-level-access-chips{
+  display:grid;
+  grid-template-columns:repeat(3, minmax(0, 1fr));
+  gap:8px;
+}
+
+.bonus-level-access-chip{
+  min-width:0;
+  height:40px;
+  border:1px solid var(--color-border);
+  border-radius:999px;
+  background:var(--color-surface-2);
+  color:var(--color-text);
+  font-size:12px;
+  font-weight:800;
+  line-height:1.1;
+  cursor:pointer;
+  padding:0 10px;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  transition:background .15s ease,border-color .15s ease,color .15s ease,box-shadow .15s ease;
+}
+
+.bonus-level-access-chip.is-active{
+  border-color:var(--color-primary);
+  background:var(--color-primary);
+  color:#fff;
+  box-shadow:0 4px 12px rgba(255,106,18,.18);
+}
+
+.bonus-level-access-chip:disabled{
+  cursor:not-allowed;
+  opacity:.7;
 }
 
 .bonus-level-range-pill{
