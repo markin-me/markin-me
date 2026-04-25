@@ -1677,6 +1677,170 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     `;
   }
 
+  function normalizeProductFulfillmentMode(value) {
+    return String(value || '').trim() === 'made_to_order' ? 'made_to_order' : 'stock';
+  }
+
+  function getPositiveIds(values) {
+    return [...new Set((Array.isArray(values) ? values : [])
+      .map((id) => Number(id || 0))
+      .filter((id) => Number.isFinite(id) && id > 0))];
+  }
+
+  function isStockQtyAvailable(qty) {
+    return qty == null || Number(qty) > 0;
+  }
+
+  function isRequiredIngredient(row) {
+    const quantity = Number(row?.quantity || 0);
+    if (!Number.isFinite(quantity) || quantity <= 0) return false;
+    if (Number(row?.is_variable || 0) !== 1) return true;
+    if (row?.quantity_min == null) return true;
+    return Number(row.quantity_min || 0) > 0;
+  }
+
+  async function buildPublicProductAvailabilityMap(tenantId, storeId, productIds) {
+    const rootIds = getPositiveIds(productIds);
+    if (!rootIds.length) return new Map();
+
+    const productsById = new Map();
+    const ingredientsByProductId = new Map();
+    const optionGroupsByProductId = new Map();
+    const loadedProductIds = new Set();
+    const loadedIngredientParentIds = new Set();
+    const loadedOptionParentIds = new Set();
+    const pendingIds = new Set(rootIds);
+
+    while (pendingIds.size) {
+      const idsToLoad = [...pendingIds].filter((id) => !loadedProductIds.has(id));
+      pendingIds.clear();
+
+      if (idsToLoad.length) {
+        const ph = idsToLoad.map(() => '?').join(',');
+        const [productRows] = await db.query(
+          `SELECT p.id, p.fulfillment_mode, p.is_active, s.qty AS stock_qty
+           FROM prod_products p
+           LEFT JOIN prod_product_stocks s
+             ON s.tenant_id=p.tenant_id AND s.store_id=? AND s.product_id=p.id
+           WHERE p.tenant_id=? AND p.id IN (${ph})`,
+          [storeId, tenantId, ...idsToLoad]
+        );
+        idsToLoad.forEach((id) => loadedProductIds.add(id));
+        (Array.isArray(productRows) ? productRows : []).forEach((row) => {
+          productsById.set(Number(row.id), row);
+        });
+      }
+
+      const ingredientParents = [...productsById.keys()].filter((id) => !loadedIngredientParentIds.has(id));
+      if (ingredientParents.length) {
+        const ph = ingredientParents.map(() => '?').join(',');
+        const [ingredientRows] = await db.query(
+          `SELECT product_id, ingredient_id, quantity, quantity_min, is_variable
+           FROM prod_product_ingredients
+           WHERE tenant_id=? AND product_id IN (${ph})`,
+          [tenantId, ...ingredientParents]
+        );
+        ingredientParents.forEach((id) => loadedIngredientParentIds.add(id));
+        (Array.isArray(ingredientRows) ? ingredientRows : []).forEach((row) => {
+          const productId = Number(row.product_id || 0);
+          const ingredientId = Number(row.ingredient_id || 0);
+          if (!(productId > 0) || !(ingredientId > 0)) return;
+          if (!ingredientsByProductId.has(productId)) ingredientsByProductId.set(productId, []);
+          ingredientsByProductId.get(productId).push(row);
+          if (!loadedProductIds.has(ingredientId)) pendingIds.add(ingredientId);
+        });
+      }
+
+      const optionParents = [...productsById.keys()].filter((id) => !loadedOptionParentIds.has(id));
+      if (optionParents.length) {
+        const ph = optionParents.map(() => '?').join(',');
+        const [optionRows] = await db.query(
+          `SELECT oa.assign_id AS product_id, og.id AS group_id, oi.target_product_id
+           FROM prod_option_assignments oa
+           JOIN prod_option_groups og
+             ON og.tenant_id=oa.tenant_id AND og.id=oa.group_id
+           JOIN prod_option_items oi
+             ON oi.tenant_id=og.tenant_id AND oi.group_id=og.id
+           WHERE oa.tenant_id=?
+             AND oa.assign_type='product'
+             AND oa.assign_id IN (${ph})
+             AND oa.is_active=1
+             AND og.is_active=1
+             AND COALESCE(og.out_of_stock_action, 1)=0
+             AND oi.target_type='product'
+             AND oi.is_active=1
+             AND oi.target_product_id IS NOT NULL`,
+          [tenantId, ...optionParents]
+        );
+        optionParents.forEach((id) => loadedOptionParentIds.add(id));
+        (Array.isArray(optionRows) ? optionRows : []).forEach((row) => {
+          const productId = Number(row.product_id || 0);
+          const groupId = Number(row.group_id || 0);
+          const targetProductId = Number(row.target_product_id || 0);
+          if (!(productId > 0) || !(groupId > 0) || !(targetProductId > 0)) return;
+          if (!optionGroupsByProductId.has(productId)) optionGroupsByProductId.set(productId, new Map());
+          const groups = optionGroupsByProductId.get(productId);
+          if (!groups.has(groupId)) groups.set(groupId, []);
+          groups.get(groupId).push(targetProductId);
+          if (!loadedProductIds.has(targetProductId)) pendingIds.add(targetProductId);
+        });
+      }
+    }
+
+    const memo = new Map();
+    function isAvailable(productId, stack = new Set()) {
+      const id = Number(productId || 0);
+      if (!(id > 0)) return false;
+      if (memo.has(id)) return memo.get(id);
+      if (stack.has(id)) return false;
+      const product = productsById.get(id);
+      if (!product || Number(product.is_active || 0) !== 1) {
+        memo.set(id, false);
+        return false;
+      }
+
+      stack.add(id);
+      let available = true;
+      if (normalizeProductFulfillmentMode(product.fulfillment_mode) === 'made_to_order') {
+        const requiredIngredients = (ingredientsByProductId.get(id) || []).filter(isRequiredIngredient);
+        available = requiredIngredients.length > 0 && requiredIngredients.every((row) => isAvailable(Number(row.ingredient_id || 0), stack));
+      } else {
+        available = isStockQtyAvailable(product.stock_qty);
+      }
+
+      if (available) {
+        const groups = optionGroupsByProductId.get(id);
+        if (groups && groups.size) {
+          for (const targetIds of groups.values()) {
+            if (!targetIds.some((targetId) => isAvailable(targetId, stack))) {
+              available = false;
+              break;
+            }
+          }
+        }
+      }
+
+      stack.delete(id);
+      memo.set(id, available);
+      return available;
+    }
+
+    const result = new Map();
+    rootIds.forEach((id) => result.set(id, isAvailable(id)));
+    return result;
+  }
+
+  async function applyPublicProductAvailability(rows, tenantId, storeId) {
+    const list = Array.isArray(rows) ? rows : [];
+    const ids = getPositiveIds(list.map((row) => row?.id ?? row?.product_id));
+    if (!ids.length) return;
+    const availability = await buildPublicProductAvailabilityMap(tenantId, storeId, ids);
+    list.forEach((row) => {
+      const id = Number(row?.id ?? row?.product_id ?? 0);
+      if (id > 0 && availability.has(id)) row.is_available = availability.get(id);
+    });
+  }
+
   function getConversionFactorMap(tenantId, db) {
     const map = new Map();
     return async function getConversionFactor(fromUnitId, toUnitId) {
@@ -9664,7 +9828,6 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     try {
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
-      const productIsAvailableSql = getProductIsAvailableSql('p', 's');
 
       const [blocks] = await db.query(
         `SELECT id, title, sort_order, min_select, max_select FROM prod_combo_blocks
@@ -9680,11 +9843,11 @@ window.location.replace(${JSON.stringify(redirectUrl)});
            JOIN prod_products p ON p.id = bp.product_id AND p.tenant_id = bp.tenant_id
            LEFT JOIN prod_product_stocks s ON s.tenant_id=p.tenant_id AND s.store_id=? AND s.product_id=p.id
            WHERE bp.tenant_id=? AND bp.block_id=? AND p.is_active=1 AND p.site_visibility=1
-             AND ${productIsAvailableSql}
            ORDER BY bp.sort_order ASC, bp.id ASC`,
-          [storeId, tenantId, block.id, storeId, storeId, storeId]
+          [storeId, tenantId, block.id]
         );
-        const products = productsRaw.map((r) => {
+        await applyPublicProductAvailability(productsRaw, tenantId, storeId);
+        const products = productsRaw.filter((r) => r.is_available === true).map((r) => {
           const photos = safeJsonArray(r.product_photos_json);
           return {
             product_id: r.product_id,
@@ -9718,7 +9881,6 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     try {
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
-      const productIsAvailableSql = getProductIsAvailableSql('p', 's');
       const id = Number(req.params.id);
       if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
       const cacheKey = makePublicCacheKey('combo-by-id', { tenantId, storeId, id });
@@ -9753,17 +9915,18 @@ window.location.replace(${JSON.stringify(redirectUrl)});
                JOIN prod_products p ON p.id = bp.product_id AND p.tenant_id = bp.tenant_id
                LEFT JOIN prod_product_stocks s ON s.tenant_id=p.tenant_id AND s.store_id=? AND s.product_id=p.id
                WHERE bp.tenant_id=? AND bp.block_id=? AND p.is_active=1 AND p.site_visibility=1
-                 AND ${productIsAvailableSql}
                ORDER BY bp.sort_order ASC, bp.id ASC`,
-              [storeId, tenantId, sb.block_id, storeId, storeId, storeId]
+              [storeId, tenantId, sb.block_id]
             );
+            await applyPublicProductAvailability(productsRaw, tenantId, storeId);
+            const availableProductsRaw = productsRaw.filter((r) => r.is_available === true);
             const minSelect = Math.max(1, Number(sb.min_select) || 1);
-            if (!productsRaw.length) {
+            if (availableProductsRaw.length < minSelect) {
               const err = new Error('OUT_OF_STOCK');
               err.httpStatus = 409;
               throw err;
             }
-            const products = productsRaw.map((r) => {
+            const products = availableProductsRaw.map((r) => {
               const photos = safeJsonArray(r.product_photos_json);
               return {
                 product_id: r.product_id,
@@ -9896,6 +10059,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
          ORDER BY bp.block_id ASC, bp.sort_order ASC, bp.id ASC`,
         [storeId, storeId, storeId, storeId, tenantId, ...blockIds]
       );
+      await applyPublicProductAvailability(allBlockProductsRaw, tenantId, storeId);
 
       const blockProductsById = new Map();
       for (const row of allBlockProductsRaw) {
@@ -10117,6 +10281,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         r.is_available = (r.stock_qty == null || Number(r.stock_qty) > 0);
         attachProductThumbs(r);
       }
+      await applyPublicProductAvailability(rows, tenantId, storeId);
       await enrichProductsWithDisplayPrice(rows, tenantId, storeId);
       await enrichProductsWithDiscounts(rows, tenantId, storeId);
 
@@ -10239,6 +10404,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             r.is_available = (r.stock_qty == null || Number(r.stock_qty) > 0);
             attachProductThumbs(r);
           }
+          await applyPublicProductAvailability(rows, tenantId, storeId);
           await applyPublicProductBlocksToRows(rows, tenantId, storeId);
           await enrichProductsWithDisplayPrice(rows, tenantId, storeId);
           await enrichProductsWithDiscounts(rows, tenantId, storeId);
@@ -10268,6 +10434,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           r.is_available = (r.stock_qty == null || Number(r.stock_qty) > 0);
           attachProductThumbs(r);
         }
+        await applyPublicProductAvailability(rows, tenantId, storeId);
         await applyPublicProductBlocksToRows(rows, tenantId, storeId);
         await enrichProductsWithDisplayPrice(rows, tenantId, storeId);
         await enrichProductsWithDiscounts(rows, tenantId, storeId);
@@ -10346,6 +10513,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           r.is_available = Number(r.is_available || 0) === 1;
           attachProductThumbs(r);
         }
+        await applyPublicProductAvailability(rows, tenantId, storeId);
         await applyPublicProductBlocksToRows(rows, tenantId, storeId);
         await enrichProductsWithDisplayPrice(rows, tenantId, storeId);
         await enrichProductsWithDiscounts(rows, tenantId, storeId);
@@ -10418,6 +10586,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         r.is_available = Number(r.is_available || 0) === 1;
         attachProductThumbs(r);
       }
+      await applyPublicProductAvailability(rows, tenantId, storeId);
       await applyPublicProductBlocksToRows(rows, tenantId, storeId);
       await enrichProductsWithDisplayPrice(rows, tenantId, storeId);
       await enrichProductsWithDiscounts(rows, tenantId, storeId);
@@ -10563,6 +10732,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       }
 
       // Р С›Р В±Р С•Р С–Р В°РЎвЂ°Р В°Р ВµР С Р Р†РЎРѓР Вµ Р С—РЎР‚Р С•Р Т‘РЎС“Р С”РЎвЂљРЎвЂ№ Р В·Р В° Р С•Р Т‘Р С‘Р Р… Р С—РЎР‚Р С•РЎвЂ¦Р С•Р Т‘
+      await applyPublicProductAvailability(allProducts, tenantId, storeId);
       await enrichProductsWithDisplayPrice(allProducts, tenantId, storeId);
       await enrichProductsWithDiscounts(allProducts, tenantId, storeId);
 
@@ -10668,6 +10838,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       p.photos = safeJsonArray(p.photos_json);
       attachProductThumbs(p);
       p.is_available = Number(p.is_available || 0) === 1;
+      await applyPublicProductAvailability([p], tenantId, storeId);
       await applyPublicProductBlocksToRows([p], tenantId, storeId);
 
       await enrichProductsWithDisplayPrice([p], tenantId, storeId);

@@ -9394,6 +9394,48 @@ body.page-cash #clientAddresses .shop-address-actions{
   background:var(--color-surface-2);
 }
 
+.product-fulfillment-mode-field{
+  width:176px;
+  margin-top:12px;
+  clear:both;
+}
+
+.product-fulfillment-mode-field .field-label{
+  position:static;
+  display:block;
+  margin:0 0 6px 12px;
+  padding:0;
+  background:transparent;
+  color:var(--color-text);
+  font-size:12px;
+  font-weight:600;
+  line-height:1.25;
+  z-index:auto;
+}
+
+.product-fulfillment-select .new-order-right-select-trigger{
+  height:40px;
+  justify-content:center;
+  border-radius:999px;
+  font-size:14px;
+  font-weight:800;
+  padding:0 14px;
+}
+
+.product-fulfillment-select .new-order-right-select-menu{
+  left:0;
+  right:auto;
+  width:176px;
+  transform:none;
+  border-radius:22px;
+  padding:8px;
+}
+
+.product-fulfillment-select .new-order-right-select-option{
+  height:38px;
+  font-size:14px;
+}
+
 .new-order-right-change-input{
   margin-top:0;
 }
@@ -13648,6 +13690,19 @@ body.page-cash #cashOrdersRightPane .orders-info > #cashPaymentFooter{
   background:var(--color-surface);
   margin-bottom:0;
   line-height:1;
+  pointer-events:none;
+}
+
+#productEditorForm .product-fulfillment-mode-field > .field-label{
+  position:static;
+  display:block;
+  margin:0 0 6px 12px;
+  padding:0;
+  background:transparent;
+  color:var(--color-text);
+  font-size:12px;
+  font-weight:600;
+  line-height:1.25;
   pointer-events:none;
 }
 
@@ -18167,11 +18222,24 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   font-weight:600;
 }
 
+.bonus-level-tariff-editor-header{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:16px;
+}
+
 .bonus-level-tariff-editor-grid{
   display:grid;
-  grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+  grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(0,1fr);
   gap:10px;
   align-items:end;
+}
+
+.bonus-level-tariff-editor-rows{
+  display:flex;
+  flex-direction:column;
+  gap:10px;
 }
 
 .bonus-level-tariff-editor-grid .field-wrap{
@@ -18191,14 +18259,38 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   font-weight:600;
 }
 
-.bonus-level-tariff-unit-chips{
-  grid-template-columns:repeat(3, minmax(0, 1fr));
+.bonus-level-tariff-period-field{
+  display:block;
+}
+
+.bonus-level-tariff-period-select{
+  width:100%;
+  min-width:0;
 }
 
 .bonus-level-tariff-bonus-switch{
-  grid-column:1 / -1;
+  flex:0 0 auto;
   justify-content:flex-start;
   gap:10px;
+  margin:0;
+}
+
+.bonus-level-tariff-add-btn{
+  width:100%;
+  min-height:40px;
+  border:1px dashed rgba(148,163,184,.45);
+  border-radius:999px;
+  background:#f8fafc;
+  color:var(--color-text);
+  font-size:22px;
+  line-height:1;
+  font-weight:500;
+  cursor:pointer;
+}
+
+.bonus-level-tariff-add-btn:hover{
+  border-color:rgba(255,106,0,.45);
+  color:var(--color-primary);
 }
 
 .bonus-level-requirement-mode{

@@ -20,6 +20,19 @@
     { key: "ingredients", label: "Состав" },
     { key: "promotions", label: "Участие в акциях" },
   ]);
+  const PRODUCT_FULFILLMENT_MODES = Object.freeze([
+    { value: "stock", label: "Со склада" },
+    { value: "made_to_order", label: "Под заказ" },
+  ]);
+
+  function normalizeProductFulfillmentMode(value) {
+    return String(value || "").trim() === "made_to_order" ? "made_to_order" : "stock";
+  }
+
+  function getProductFulfillmentModeLabel(value) {
+    const normalized = normalizeProductFulfillmentMode(value);
+    return PRODUCT_FULFILLMENT_MODES.find((item) => item.value === normalized)?.label || PRODUCT_FULFILLMENT_MODES[0].label;
+  }
 
   function getDefaultProductBlocksConfig() {
     return {
@@ -12256,6 +12269,12 @@ const isViewMode = state.comboPanel.mode === "view";
             return false;
           }
 
+          const fulfillmentMode = normalizeProductFulfillmentMode(form.fulfillment_mode?.value);
+          if (fulfillmentMode === "made_to_order" && draftIngredients.size === 0) {
+            showToast('Для режима "Под заказ" добавьте состав товара.');
+            return false;
+          }
+
           // сначала грузим новые фото (если есть)
           const newFiles = draft.photos.filter((x) => x.kind === "file").map((x) => x.file);
           let newUrls = [];
@@ -12299,6 +12318,7 @@ const isViewMode = state.comboPanel.mode === "view";
             stock: parseNumberFromInput(form.stock?.value),
             is_active: form.is_active.checked ? 1 : 0,
             site_visibility: form.site_visibility.checked ? 1 : 0,
+            fulfillment_mode: fulfillmentMode,
 
             // ✅ категории из chips
             category_ids: Array.from(draft.categories).filter((id) => Number.isFinite(id)),
@@ -12681,10 +12701,67 @@ const isViewMode = state.comboPanel.mode === "view";
       }
       form.is_active.checked = Boolean(product.is_active);
       form.site_visibility.checked = Boolean(product.site_visibility);
+      if (form.fulfillment_mode) {
+        form.fulfillment_mode.value = normalizeProductFulfillmentMode(product.fulfillment_mode);
+      }
     } else {
       if (form.cost_price) {
         form.cost_price.value = formatNumberForInput(0);
       }
+      if (form.fulfillment_mode) {
+        form.fulfillment_mode.value = "stock";
+      }
+    }
+
+    const fulfillmentWrap = $("#peFulfillmentModeWrap", wrapper);
+    const fulfillmentTrigger = $("#peFulfillmentModeTrigger", wrapper);
+    const fulfillmentMenu = $("#peFulfillmentModeMenu", wrapper);
+    const fulfillmentText = $("#peFulfillmentModeText", wrapper);
+    const fulfillmentSelect = form.fulfillment_mode || $("#pe_fulfillment_mode", wrapper);
+
+    function syncFulfillmentModeSelect() {
+      if (!fulfillmentSelect) return;
+      const value = normalizeProductFulfillmentMode(fulfillmentSelect.value);
+      fulfillmentSelect.value = value;
+      if (fulfillmentText) fulfillmentText.textContent = getProductFulfillmentModeLabel(value);
+      if (fulfillmentMenu) {
+        fulfillmentMenu.querySelectorAll("[data-value]").forEach((option) => {
+          option.classList.toggle("is-selected", String(option.dataset.value || "") === value);
+        });
+      }
+    }
+
+    function closeFulfillmentModeMenu() {
+      fulfillmentWrap?.classList.remove("is-open");
+      fulfillmentMenu?.classList.add("hidden");
+      fulfillmentTrigger?.setAttribute("aria-expanded", "false");
+    }
+
+    if (fulfillmentTrigger && fulfillmentMenu && fulfillmentSelect) {
+      syncFulfillmentModeSelect();
+      fulfillmentTrigger.disabled = isView;
+      fulfillmentTrigger.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (isView) return;
+        const nextOpen = !fulfillmentWrap?.classList.contains("is-open");
+        fulfillmentWrap?.classList.toggle("is-open", nextOpen);
+        fulfillmentMenu.classList.toggle("hidden", !nextOpen);
+        fulfillmentTrigger.setAttribute("aria-expanded", nextOpen ? "true" : "false");
+        if (nextOpen) {
+          setTimeout(() => document.addEventListener("click", closeFulfillmentModeMenu, { once: true }), 0);
+        }
+      });
+      fulfillmentMenu.querySelectorAll("[data-value]").forEach((option) => {
+        option.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (isView) return;
+          fulfillmentSelect.value = normalizeProductFulfillmentMode(option.dataset.value);
+          syncFulfillmentModeSelect();
+          closeFulfillmentModeMenu();
+        });
+      });
     }
 
     if (isView) {

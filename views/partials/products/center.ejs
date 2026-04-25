@@ -283,6 +283,24 @@
       </label>
     </div>
 
+    <div class="field-wrap product-fulfillment-mode-field">
+      <label class="field-label" for="pe_fulfillment_mode">Режим продажи</label>
+      <select class="control hidden" id="pe_fulfillment_mode" name="fulfillment_mode">
+        <option value="stock">Со склада</option>
+        <option value="made_to_order">Под заказ</option>
+      </select>
+      <div class="new-order-right-select-wrap settings-delivery-city-selector product-fulfillment-select" id="peFulfillmentModeWrap">
+        <button class="new-order-right-select-trigger product-fulfillment-select-trigger" id="peFulfillmentModeTrigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-label="Режим продажи">
+          <span id="peFulfillmentModeText">Со склада</span>
+          <i class="fas fa-chevron-down" aria-hidden="true"></i>
+        </button>
+        <div class="new-order-right-select-menu no-scrollbar hidden" id="peFulfillmentModeMenu" role="listbox" aria-label="Режим продажи">
+          <button class="new-order-right-select-option" type="button" data-value="stock">Со склада</button>
+          <button class="new-order-right-select-option" type="button" data-value="made_to_order">Под заказ</button>
+        </div>
+      </div>
+    </div>
+
     <div class="info-card info-accordion" id="peDescriptionAccordion" data-product-block="description">
       <div class="acc-item">
         <button class="stage-item acc-trigger" type="button" data-acc-trigger>

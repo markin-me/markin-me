@@ -539,9 +539,9 @@
 
   function createDefaultBonusLevels() {
     return [
-      { id: 'starter', title: 'Стартовый', subtitle: 'от 0 ₽', description: '', designColor: '#f8fafc', accentColor: '#f97316', minSpent: 0, minOrders: 0, accessType: 'conditions', tariffPrice: 0, tariffPeriodValue: 1, tariffPeriodUnit: 'months', tariffPayWithBonus: false, showTitleOnCard: true, titleColor: '#1f2937', titleBackgroundEnabled: true, titleBackgroundColor: '#ffffff', titleBackgroundOpacity: 90, cashbackPercent: 1, redeemPercent: 0, referralBonusPercent: 0, qrEnabled: true, mainColor: '#46b13b', baseColor: '#1f8d2e', contentColor: '#ffffff', activationDelayValue: 0, activationDelayUnit: 'immediate', lifetimeValue: 0, lifetimeUnit: 'forever', orderBonusRanges: [], favoriteCategoriesBonusPercent: 0, favoriteCategoriesLimit: 0, favoriteCategoryIds: [] },
-      { id: 'silver', title: 'Серебряный', subtitle: 'от 10 000 ₽', description: '', designColor: '#f1f5f9', accentColor: '#f97316', minSpent: 10000, minOrders: 5, accessType: 'conditions', tariffPrice: 0, tariffPeriodValue: 1, tariffPeriodUnit: 'months', tariffPayWithBonus: false, showTitleOnCard: true, titleColor: '#1f2937', titleBackgroundEnabled: true, titleBackgroundColor: '#ffffff', titleBackgroundOpacity: 90, cashbackPercent: 3, redeemPercent: 0, referralBonusPercent: 0, qrEnabled: true, mainColor: '#46b13b', baseColor: '#1f8d2e', contentColor: '#ffffff', activationDelayValue: 0, activationDelayUnit: 'immediate', lifetimeValue: 0, lifetimeUnit: 'forever', orderBonusRanges: [], favoriteCategoriesBonusPercent: 0, favoriteCategoriesLimit: 0, favoriteCategoryIds: [] },
-      { id: 'gold', title: 'Золотой', subtitle: 'от 25 000 ₽', description: '', designColor: '#e2e8f0', accentColor: '#f97316', minSpent: 25000, minOrders: 10, accessType: 'conditions', tariffPrice: 0, tariffPeriodValue: 1, tariffPeriodUnit: 'months', tariffPayWithBonus: false, showTitleOnCard: true, titleColor: '#1f2937', titleBackgroundEnabled: true, titleBackgroundColor: '#ffffff', titleBackgroundOpacity: 90, cashbackPercent: 5, redeemPercent: 0, referralBonusPercent: 0, qrEnabled: true, mainColor: '#46b13b', baseColor: '#1f8d2e', contentColor: '#ffffff', activationDelayValue: 0, activationDelayUnit: 'immediate', lifetimeValue: 0, lifetimeUnit: 'forever', orderBonusRanges: [], favoriteCategoriesBonusPercent: 0, favoriteCategoriesLimit: 0, favoriteCategoryIds: [] },
+      { id: 'starter', title: 'Стартовый', subtitle: 'от 0 ₽', description: '', designColor: '#f8fafc', accentColor: '#f97316', minSpent: 0, minOrders: 0, accessType: 'conditions', tariffPrice: 0, tariffDiscountPercent: 0, tariffPeriodValue: 1, tariffPeriodUnit: 'months', tariffPayWithBonus: false, showTitleOnCard: true, titleColor: '#1f2937', titleBackgroundEnabled: true, titleBackgroundColor: '#ffffff', titleBackgroundOpacity: 90, cashbackPercent: 1, redeemPercent: 0, referralBonusPercent: 0, qrEnabled: true, mainColor: '#46b13b', baseColor: '#1f8d2e', contentColor: '#ffffff', activationDelayValue: 0, activationDelayUnit: 'immediate', lifetimeValue: 0, lifetimeUnit: 'forever', orderBonusRanges: [], favoriteCategoriesBonusPercent: 0, favoriteCategoriesLimit: 0, favoriteCategoryIds: [] },
+      { id: 'silver', title: 'Серебряный', subtitle: 'от 10 000 ₽', description: '', designColor: '#f1f5f9', accentColor: '#f97316', minSpent: 10000, minOrders: 5, accessType: 'conditions', tariffPrice: 0, tariffDiscountPercent: 0, tariffPeriodValue: 1, tariffPeriodUnit: 'months', tariffPayWithBonus: false, showTitleOnCard: true, titleColor: '#1f2937', titleBackgroundEnabled: true, titleBackgroundColor: '#ffffff', titleBackgroundOpacity: 90, cashbackPercent: 3, redeemPercent: 0, referralBonusPercent: 0, qrEnabled: true, mainColor: '#46b13b', baseColor: '#1f8d2e', contentColor: '#ffffff', activationDelayValue: 0, activationDelayUnit: 'immediate', lifetimeValue: 0, lifetimeUnit: 'forever', orderBonusRanges: [], favoriteCategoriesBonusPercent: 0, favoriteCategoriesLimit: 0, favoriteCategoryIds: [] },
+      { id: 'gold', title: 'Золотой', subtitle: 'от 25 000 ₽', description: '', designColor: '#e2e8f0', accentColor: '#f97316', minSpent: 25000, minOrders: 10, accessType: 'conditions', tariffPrice: 0, tariffDiscountPercent: 0, tariffPeriodValue: 1, tariffPeriodUnit: 'months', tariffPayWithBonus: false, showTitleOnCard: true, titleColor: '#1f2937', titleBackgroundEnabled: true, titleBackgroundColor: '#ffffff', titleBackgroundOpacity: 90, cashbackPercent: 5, redeemPercent: 0, referralBonusPercent: 0, qrEnabled: true, mainColor: '#46b13b', baseColor: '#1f8d2e', contentColor: '#ffffff', activationDelayValue: 0, activationDelayUnit: 'immediate', lifetimeValue: 0, lifetimeUnit: 'forever', orderBonusRanges: [], favoriteCategoriesBonusPercent: 0, favoriteCategoriesLimit: 0, favoriteCategoryIds: [] },
     ];
   }
 
@@ -608,6 +608,32 @@
     return ['days', 'months', 'forever'].includes(normalized) ? normalized : 'months';
   }
 
+  function sanitizeBonusTariffRows(items, fallback = null) {
+    const source = Array.isArray(items) ? items : [];
+    const next = source
+      .map((item) => ({
+        price: normalizeNumberInputValue(item?.price, 0),
+        discountPercent: normalizeBonusPercentInputValue(item?.discountPercent, 0),
+        periodValue: normalizeBonusLevelTimingValue(item?.periodValue, 1),
+        periodUnit: normalizeBonusLevelTariffPeriodUnit(item?.periodUnit),
+      }))
+      .map((item) => ({
+        ...item,
+        periodValue: item.periodUnit === 'forever' ? 0 : Math.max(1, item.periodValue || 1),
+      }));
+    if (next.length) return next;
+    const fallbackRow = fallback && typeof fallback === 'object'
+      ? {
+          price: normalizeNumberInputValue(fallback.price, 0),
+          discountPercent: normalizeBonusPercentInputValue(fallback.discountPercent, 0),
+          periodValue: normalizeBonusLevelTimingValue(fallback.periodValue, 1),
+          periodUnit: normalizeBonusLevelTariffPeriodUnit(fallback.periodUnit),
+        }
+      : { price: 0, discountPercent: 0, periodValue: 1, periodUnit: 'months' };
+    if (fallbackRow.periodUnit === 'forever') fallbackRow.periodValue = 0;
+    return [fallbackRow];
+  }
+
   function sanitizeBonusLevels(items) {
     const source = Array.isArray(items) ? items : [];
     const next = source
@@ -625,8 +651,15 @@
           minOrders: normalizeNumberInputValue(item?.minOrders, 0),
           accessType: normalizeBonusLevelAccessType(item?.accessType),
           tariffPrice: normalizeNumberInputValue(item?.tariffPrice, 0),
+          tariffDiscountPercent: normalizeBonusPercentInputValue(item?.tariffDiscountPercent, 0),
           tariffPeriodValue: normalizeBonusLevelTimingValue(item?.tariffPeriodValue, 1),
           tariffPeriodUnit: normalizeBonusLevelTariffPeriodUnit(item?.tariffPeriodUnit),
+          tariffRows: sanitizeBonusTariffRows(item?.tariffRows, {
+            price: item?.tariffPrice,
+            discountPercent: item?.tariffDiscountPercent,
+            periodValue: item?.tariffPeriodValue,
+            periodUnit: item?.tariffPeriodUnit,
+          }),
           tariffPayWithBonus: item?.tariffPayWithBonus === true,
           showTitleOnCard: item?.showTitleOnCard !== false,
           titleColor: normalizeHexColor(item?.titleColor, '#1f2937'),
@@ -6862,17 +6895,34 @@
 
   function formatBonusLevelTariffSummary(level = null) {
     const current = level && typeof level === 'object' ? level : getActiveBonusLevelForInfo();
-    const price = normalizeNumberInputValue(current?.tariffPrice, 0);
+    const rows = sanitizeBonusTariffRows(current?.tariffRows, {
+      price: current?.tariffPrice,
+      discountPercent: current?.tariffDiscountPercent,
+      periodValue: current?.tariffPeriodValue,
+      periodUnit: current?.tariffPeriodUnit,
+    });
+    const firstRow = rows[0] || {};
+    const price = normalizeNumberInputValue(firstRow.price, 0);
+    const discount = normalizeBonusPercentInputValue(firstRow.discountPercent, 0);
     const payWithBonus = current?.tariffPayWithBonus === true ? '\u0431\u043e\u043d\u0443\u0441\u0430\u043c\u0438: \u0434\u0430' : '\u0431\u043e\u043d\u0443\u0441\u0430\u043c\u0438: \u043d\u0435\u0442';
-    return `${price.toLocaleString('ru-RU')} \u20bd / ${formatBonusLevelTariffPeriod(current)} / ${payWithBonus}`;
+    const rowsText = rows.length > 1 ? ` / ${rows.length} \u043f\u043e\u0440\u043e\u0433\u0430` : '';
+    return `${price.toLocaleString('ru-RU')} \u20bd / ${formatBonusLevelTariffPeriod({ tariffPeriodValue: firstRow.periodValue, tariffPeriodUnit: firstRow.periodUnit })} / \u0441\u043a\u0438\u0434\u043a\u0430: ${discount}%${rowsText} / ${payWithBonus}`;
   }
 
   function formatBonusLevelTariffDetailsText(level = null) {
     const current = level && typeof level === 'object' ? level : getActiveBonusLevelForInfo();
+    const rows = sanitizeBonusTariffRows(current?.tariffRows, {
+      price: current?.tariffPrice,
+      discountPercent: current?.tariffDiscountPercent,
+      periodValue: current?.tariffPeriodValue,
+      periodUnit: current?.tariffPeriodUnit,
+    });
+    const rowLines = rows.map((row, index) => (
+      `${index + 1}. ${normalizeNumberInputValue(row.price, 0).toLocaleString('ru-RU')} \u20bd / ${formatBonusLevelTariffPeriod({ tariffPeriodValue: row.periodValue, tariffPeriodUnit: row.periodUnit })} / \u0441\u043a\u0438\u0434\u043a\u0430 ${normalizeBonusPercentInputValue(row.discountPercent, 0)}%`
+    ));
     return [
       '\u041f\u043b\u0430\u0442\u043d\u044b\u0439 \u0442\u0430\u0440\u0438\u0444',
-      `\u0426\u0435\u043d\u0430: ${normalizeNumberInputValue(current?.tariffPrice, 0).toLocaleString('ru-RU')} \u20bd`,
-      `\u041f\u0435\u0440\u0438\u043e\u0434: ${formatBonusLevelTariffPeriod(current)}`,
+      ...rowLines,
       `\u041e\u043f\u043b\u0430\u0442\u0430 \u0431\u043e\u043d\u0443\u0441\u0430\u043c\u0438: ${current?.tariffPayWithBonus === true ? '\u0434\u0430' : '\u043d\u0435\u0442'}`,
     ].join('\n');
   }
@@ -6922,55 +6972,161 @@
     shell.className = 'bonus-range-editor-modal';
     frame.scrollEl.appendChild(shell);
 
-    const note = document.createElement('div');
-    note.className = 'bonus-range-editor-row';
-    note.textContent = '\u0423\u043a\u0430\u0436\u0438\u0442\u0435 \u0446\u0435\u043d\u0443, \u043f\u0435\u0440\u0438\u043e\u0434 \u0434\u043e\u0441\u0442\u0443\u043f\u0430 \u0438 \u043c\u043e\u0436\u043d\u043e \u043b\u0438 \u043e\u043f\u043b\u0430\u0447\u0438\u0432\u0430\u0442\u044c \u0442\u0430\u0440\u0438\u0444 \u0431\u043e\u043d\u0443\u0441\u0430\u043c\u0438.';
-    shell.appendChild(note);
-
-    const unit = normalizeBonusLevelTariffPeriodUnit(current.tariffPeriodUnit);
-    const fields = document.createElement('div');
-    fields.className = 'bonus-level-tariff-editor-grid';
-    fields.innerHTML = `
-      <label class="field-wrap">
-        <span class="field-label" for="bonusLevelTariffPriceInput">\u0426\u0435\u043d\u0430, \u20bd</span>
-        <input id="bonusLevelTariffPriceInput" class="control bonus-level-rule-input" type="number" min="0" step="1" placeholder="0" autocomplete="off" value="${escapeHtml(String(normalizeNumberInputValue(current.tariffPrice, 0) || 0))}" />
-      </label>
-      <label class="field-wrap">
-        <span class="field-label" for="bonusLevelTariffPeriodInput">\u041f\u0435\u0440\u0438\u043e\u0434</span>
-        <input id="bonusLevelTariffPeriodInput" class="control bonus-level-rule-input" type="number" min="1" step="1" placeholder="1" autocomplete="off" value="${escapeHtml(String(normalizeBonusLevelTimingValue(current.tariffPeriodValue, 1) || 1))}" />
-      </label>
-      <div class="field-wrap">
-        <span class="field-label">\u0415\u0434\u0438\u043d\u0438\u0446\u0430</span>
-        <div class="bonus-level-access-chips bonus-level-tariff-unit-chips" id="bonusLevelTariffUnitChips">
-          <button type="button" class="bonus-level-access-chip${unit === 'days' ? ' is-active' : ''}" data-tariff-period-unit="days">\u0414\u043d\u0438</button>
-          <button type="button" class="bonus-level-access-chip${unit === 'months' ? ' is-active' : ''}" data-tariff-period-unit="months">\u041c\u0435\u0441\u044f\u0446\u044b</button>
-          <button type="button" class="bonus-level-access-chip${unit === 'forever' ? ' is-active' : ''}" data-tariff-period-unit="forever">\u0411\u0435\u0441\u0441\u0440\u043e\u0447\u043d\u043e</button>
-        </div>
-      </div>
+    const header = document.createElement('div');
+    header.className = 'bonus-level-tariff-editor-header';
+    header.innerHTML = `
+      <div class="bonus-range-editor-title">\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0430 \u0442\u0430\u0440\u0438\u0444\u0430</div>
       <label class="switch bonus-level-tariff-bonus-switch">
         <input class="switch-input" type="checkbox" id="bonusLevelTariffPayWithBonusInput" ${current.tariffPayWithBonus === true ? 'checked' : ''} />
         <span class="switch-ui" aria-hidden="true"></span>
         <span class="switch-text">\u041c\u043e\u0436\u043d\u043e \u043e\u043f\u043b\u0430\u0447\u0438\u0432\u0430\u0442\u044c \u0431\u043e\u043d\u0443\u0441\u0430\u043c\u0438</span>
       </label>
     `;
-    shell.appendChild(fields);
+    shell.appendChild(header);
 
-    let selectedUnit = unit;
-    const periodInput = fields.querySelector('#bonusLevelTariffPeriodInput');
-    const syncUnit = () => {
-      fields.querySelectorAll('[data-tariff-period-unit]').forEach((button) => {
+    const rowsRoot = document.createElement('div');
+    rowsRoot.className = 'bonus-level-tariff-editor-rows';
+    shell.appendChild(rowsRoot);
+
+    const tariffRows = sanitizeBonusTariffRows(current.tariffRows, {
+      price: current.tariffPrice,
+      discountPercent: current.tariffDiscountPercent,
+      periodValue: current.tariffPeriodValue,
+      periodUnit: current.tariffPeriodUnit,
+    });
+
+    const getTariffUnitLabel = (value) => {
+      const normalized = normalizeBonusLevelTariffPeriodUnit(value);
+      if (normalized === 'days') return '\u0414\u043d\u0438';
+      if (normalized === 'months') return '\u041c\u0435\u0441\u044f\u0446\u044b';
+      return '\u0411\u0435\u0441\u0441\u0440\u043e\u0447\u043d\u043e';
+    };
+
+    const closeTariffRowUnitMenus = (rowEl, exceptMenu = null) => {
+      rowEl.querySelectorAll('[data-tariff-unit-menu]').forEach((menu) => {
+        if (menu === exceptMenu) return;
+        menu.classList.add('hidden');
+      });
+      rowEl.querySelectorAll('[data-tariff-unit-wrap]').forEach((wrap) => wrap.classList.remove('is-open'));
+      rowEl.querySelectorAll('[data-tariff-unit-trigger], [data-tariff-unit-dots]').forEach((trigger) => {
+        trigger.setAttribute('aria-expanded', 'false');
+      });
+    };
+
+    const syncTariffRowUnit = (rowEl) => {
+      const selectedUnit = normalizeBonusLevelTariffPeriodUnit(rowEl.dataset.tariffPeriodUnit);
+      const isValueMode = selectedUnit !== 'forever';
+      const periodInput = rowEl.querySelector('[data-tariff-row-field="periodValue"]');
+      const periodValueWrap = rowEl.querySelector('[data-tariff-period-value-wrap]');
+      const periodUnitWrap = rowEl.querySelector('[data-tariff-unit-wrap]');
+      const periodUnitText = rowEl.querySelector('[data-tariff-unit-text]');
+      if (periodValueWrap) periodValueWrap.classList.toggle('hidden', !isValueMode);
+      if (periodUnitWrap) periodUnitWrap.classList.toggle('hidden', isValueMode);
+      if (periodInput) periodInput.disabled = !isValueMode;
+      if (periodUnitText) periodUnitText.textContent = getTariffUnitLabel(selectedUnit);
+      rowEl.querySelectorAll('[data-tariff-period-unit]').forEach((button) => {
         const isActive = String(button.getAttribute('data-tariff-period-unit') || '') === selectedUnit;
         button.classList.toggle('is-active', isActive);
+        button.classList.toggle('is-selected', isActive);
+        button.setAttribute('aria-selected', isActive ? 'true' : 'false');
       });
-      if (periodInput) periodInput.disabled = selectedUnit === 'forever';
     };
-    fields.querySelectorAll('[data-tariff-period-unit]').forEach((button) => {
-      button.addEventListener('click', () => {
-        selectedUnit = normalizeBonusLevelTariffPeriodUnit(button.getAttribute('data-tariff-period-unit'));
-        syncUnit();
-      });
+
+    const appendTariffRow = (row = {}) => {
+      const rowEl = document.createElement('div');
+      rowEl.className = 'bonus-level-tariff-editor-grid bonus-level-tariff-editor-row';
+      rowEl.dataset.tariffPeriodUnit = normalizeBonusLevelTariffPeriodUnit(row.periodUnit);
+      rowEl.innerHTML = `
+        <label class="field-wrap">
+          <span class="field-label">\u0426\u0435\u043d\u0430, \u20bd</span>
+          <input class="control bonus-level-rule-input" type="number" min="0" step="1" placeholder="0" autocomplete="off" data-tariff-row-field="price" value="${escapeHtml(String(normalizeNumberInputValue(row.price, 0) || 0))}" />
+        </label>
+        <div class="field-wrap bonus-level-tariff-period-field">
+          <span class="field-label">\u041f\u0435\u0440\u0438\u043e\u0434</span>
+          <div class="bonus-level-inline-input-wrap bonus-level-tariff-period-value-wrap" data-tariff-period-value-wrap>
+            <input class="control bonus-level-rule-input" type="number" min="1" step="1" placeholder="1" autocomplete="off" data-tariff-row-field="periodValue" value="${escapeHtml(String(normalizeBonusLevelTimingValue(row.periodValue, 1) || 1))}" />
+            <button type="button" class="bonus-level-inline-menu-btn" data-tariff-unit-dots aria-label="\u0412\u044b\u0431\u0440\u0430\u0442\u044c \u0435\u0434\u0438\u043d\u0438\u0446\u0443 \u043f\u0435\u0440\u0438\u043e\u0434\u0430" title="\u0412\u044b\u0431\u0440\u0430\u0442\u044c \u0435\u0434\u0438\u043d\u0438\u0446\u0443 \u043f\u0435\u0440\u0438\u043e\u0434\u0430">
+              <i class="fas fa-ellipsis-h" aria-hidden="true"></i>
+            </button>
+            <div class="new-order-right-select-menu no-scrollbar hidden bonus-level-inline-menu" data-tariff-unit-menu role="listbox" aria-label="\u0415\u0434\u0438\u043d\u0438\u0446\u0430">
+              <button class="new-order-right-select-option" type="button" data-tariff-period-unit="days">\u0414\u043d\u0438</button>
+              <button class="new-order-right-select-option" type="button" data-tariff-period-unit="months">\u041c\u0435\u0441\u044f\u0446\u044b</button>
+              <button class="new-order-right-select-option" type="button" data-tariff-period-unit="forever">\u0411\u0435\u0441\u0441\u0440\u043e\u0447\u043d\u043e</button>
+            </div>
+          </div>
+          <div class="new-order-right-select-wrap settings-delivery-city-selector bonus-level-unit-select bonus-level-tariff-period-select" data-tariff-unit-wrap>
+            <button class="new-order-right-select-trigger bonus-level-unit-select-trigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-label="\u0415\u0434\u0438\u043d\u0438\u0446\u0430" data-tariff-unit-trigger>
+              <span class="cash-toolbar-filter-main"><span data-tariff-unit-text>\u0411\u0435\u0441\u0441\u0440\u043e\u0447\u043d\u043e</span></span>
+              <i class="fas fa-chevron-down"></i>
+            </button>
+            <div class="new-order-right-select-menu no-scrollbar hidden" data-tariff-unit-menu role="listbox" aria-label="\u0415\u0434\u0438\u043d\u0438\u0446\u0430">
+              <button class="new-order-right-select-option" type="button" data-tariff-period-unit="days">\u0414\u043d\u0438</button>
+              <button class="new-order-right-select-option" type="button" data-tariff-period-unit="months">\u041c\u0435\u0441\u044f\u0446\u044b</button>
+              <button class="new-order-right-select-option" type="button" data-tariff-period-unit="forever">\u0411\u0435\u0441\u0441\u0440\u043e\u0447\u043d\u043e</button>
+            </div>
+          </div>
+        </div>
+        <label class="field-wrap">
+          <span class="field-label">\u0421\u043a\u0438\u0434\u043a\u0430 \u043d\u0430 \u0442\u0430\u0440\u0438\u0444, %</span>
+          <input class="control bonus-level-rule-input" type="number" min="0" step="0.1" placeholder="0" autocomplete="off" data-tariff-row-field="discountPercent" value="${escapeHtml(String(normalizeBonusPercentInputValue(row.discountPercent, 0) || 0))}" />
+        </label>
+      `;
+      rowsRoot.appendChild(rowEl);
+      syncTariffRowUnit(rowEl);
+      return rowEl;
+    };
+
+    tariffRows.forEach((row) => appendTariffRow(row));
+
+    rowsRoot.addEventListener('click', (event) => {
+      const rowEl = event.target.closest('.bonus-level-tariff-editor-row');
+      if (!rowEl) return;
+      const trigger = event.target.closest('[data-tariff-unit-trigger]');
+      const dotsBtn = event.target.closest('[data-tariff-unit-dots]');
+      const unitBtn = event.target.closest('[data-tariff-period-unit]');
+      if (trigger) {
+        event.preventDefault();
+        event.stopPropagation();
+        const menu = rowEl.querySelector('[data-tariff-unit-wrap] [data-tariff-unit-menu]');
+        if (!menu) return;
+        const shouldOpen = menu.classList.contains('hidden');
+        closeTariffRowUnitMenus(rowEl);
+        if (!shouldOpen) return;
+        rowEl.querySelector('[data-tariff-unit-wrap]')?.classList.add('is-open');
+        menu.classList.remove('hidden');
+        trigger.setAttribute('aria-expanded', 'true');
+        return;
+      }
+      if (dotsBtn) {
+        event.preventDefault();
+        event.stopPropagation();
+        const menu = dotsBtn.closest('[data-tariff-period-value-wrap]')?.querySelector('[data-tariff-unit-menu]');
+        if (!menu) return;
+        const shouldOpen = menu.classList.contains('hidden');
+        closeTariffRowUnitMenus(rowEl);
+        if (!shouldOpen) return;
+        menu.classList.remove('hidden');
+        dotsBtn.setAttribute('aria-expanded', 'true');
+        return;
+      }
+      if (unitBtn) {
+        event.preventDefault();
+        event.stopPropagation();
+        rowEl.dataset.tariffPeriodUnit = normalizeBonusLevelTariffPeriodUnit(unitBtn.getAttribute('data-tariff-period-unit'));
+        syncTariffRowUnit(rowEl);
+        closeTariffRowUnitMenus(rowEl);
+      }
     });
-    syncUnit();
+
+    const addBtn = document.createElement('button');
+    addBtn.type = 'button';
+    addBtn.className = 'bonus-level-tariff-add-btn';
+    addBtn.textContent = '+';
+    addBtn.setAttribute('aria-label', '\u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u043f\u043e\u0440\u043e\u0433 \u0442\u0430\u0440\u0438\u0444\u0430');
+    addBtn.addEventListener('click', () => {
+      appendTariffRow({ price: 0, discountPercent: 0, periodValue: 1, periodUnit: 'months' });
+    });
+    shell.appendChild(addBtn);
 
     const actions = document.createElement('div');
     actions.className = 'bonus-range-editor-footer-actions';
@@ -6986,11 +7142,22 @@
     saveBtn.className = 'shop-checkout-benefits-promo-entry-btn is-active';
     saveBtn.textContent = '\u0421\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c';
     saveBtn.addEventListener('click', () => {
+      const nextRows = sanitizeBonusTariffRows(
+        Array.from(rowsRoot.querySelectorAll('.bonus-level-tariff-editor-row')).map((rowEl) => ({
+          price: rowEl.querySelector('[data-tariff-row-field="price"]')?.value,
+          discountPercent: rowEl.querySelector('[data-tariff-row-field="discountPercent"]')?.value,
+          periodValue: rowEl.querySelector('[data-tariff-row-field="periodValue"]')?.value,
+          periodUnit: rowEl.dataset.tariffPeriodUnit,
+        }))
+      );
+      const firstRow = nextRows[0] || { price: 0, discountPercent: 0, periodValue: 1, periodUnit: 'months' };
       const nextPatch = {
-        tariffPrice: normalizeNumberInputValue(fields.querySelector('#bonusLevelTariffPriceInput')?.value, 0),
-        tariffPeriodValue: selectedUnit === 'forever' ? 0 : normalizeBonusLevelTimingValue(periodInput?.value, 1),
-        tariffPeriodUnit: normalizeBonusLevelTariffPeriodUnit(selectedUnit),
-        tariffPayWithBonus: fields.querySelector('#bonusLevelTariffPayWithBonusInput')?.checked === true,
+        tariffPrice: normalizeNumberInputValue(firstRow.price, 0),
+        tariffDiscountPercent: normalizeBonusPercentInputValue(firstRow.discountPercent, 0),
+        tariffPeriodValue: firstRow.periodUnit === 'forever' ? 0 : normalizeBonusLevelTimingValue(firstRow.periodValue, 1),
+        tariffPeriodUnit: normalizeBonusLevelTariffPeriodUnit(firstRow.periodUnit),
+        tariffRows: nextRows,
+        tariffPayWithBonus: header.querySelector('#bonusLevelTariffPayWithBonusInput')?.checked === true,
       };
       applyBonusLevelEditorDraftPatch(nextPatch);
       updateBonusLevelInCollections(current.id, (level) => ({
@@ -8183,8 +8350,15 @@
       qrEnabled: draft.qrEnabled !== false,
       accessType: normalizeBonusLevelAccessType(draft.accessType),
       tariffPrice: normalizeNumberInputValue(draft.tariffPrice, 0),
+      tariffDiscountPercent: normalizeBonusPercentInputValue(draft.tariffDiscountPercent, 0),
       tariffPeriodValue: normalizeBonusLevelTimingValue(draft.tariffPeriodValue, 1),
       tariffPeriodUnit: normalizeBonusLevelTariffPeriodUnit(draft.tariffPeriodUnit),
+      tariffRows: sanitizeBonusTariffRows(draft.tariffRows, {
+        price: draft.tariffPrice,
+        discountPercent: draft.tariffDiscountPercent,
+        periodValue: draft.tariffPeriodValue,
+        periodUnit: draft.tariffPeriodUnit,
+      }),
       tariffPayWithBonus: draft.tariffPayWithBonus === true,
       cashbackPercent: normalizeNumberInputValue(draft.cashbackPercent, 1),
       redeemPercent: normalizeNumberInputValue(draft.redeemPercent, 0),
@@ -8409,8 +8583,10 @@
           titleBackgroundOpacity: 90,
           accessType: 'conditions',
           tariffPrice: 0,
+          tariffDiscountPercent: 0,
           tariffPeriodValue: 1,
           tariffPeriodUnit: 'months',
+          tariffRows: [{ price: 0, discountPercent: 0, periodValue: 1, periodUnit: 'months' }],
           tariffPayWithBonus: false,
           cashbackPercent: 1,
           redeemPercent: 0,

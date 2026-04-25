@@ -41,11 +41,15 @@ function toUnitPricePerBase(rawPrice, baseQty) {
   return Math.round(value * 1000000) / 1000000;
 }
 
+function normalizeProductFulfillmentMode(value) {
+  return String(value || '').trim() === 'made_to_order' ? 'made_to_order' : 'stock';
+}
+
 async function loadProductData(db, tenantId, productIds) {
   if (!productIds.length) return new Map();
   const placeholders = productIds.map(() => '?').join(',');
   const [rows] = await db.query(
-    `SELECT id, name, unit_id, base_unit_id, base_qty, cost_price, price
+    `SELECT id, name, unit_id, base_unit_id, base_qty, cost_price, price, fulfillment_mode
      FROM prod_products
      WHERE tenant_id=? AND id IN (${placeholders})`,
     [tenantId, ...productIds]
@@ -308,29 +312,50 @@ async function buildDeductions({ db, tenantId, items }) {
     if (targetProductId > 0) productIdsSet.add(Number(targetProductId));
   }
 
-  const defaultIngredientsByParentProduct = await loadDefaultIngredientsByParentProducts(
-    db,
-    tenantId,
-    [...parentProductIdsNeedingDefaultIngredientsSet]
-  );
-  defaultIngredientsByParentProduct.forEach((ingredientsList, parentProductId) => {
-    if (Number(parentProductId) > 0) parentProductIdsForIngredientSet.add(Number(parentProductId));
-    (Array.isArray(ingredientsList) ? ingredientsList : []).forEach((ing) => {
-      const ingPid = Number(ing?.ingredientId || 0);
-      if (ingPid > 0) {
-        productIdsSet.add(ingPid);
-        ingredientIdsSet.add(ingPid);
-      }
-    });
-  });
+  const productsById = new Map();
+  const defaultIngredientsByParentProduct = new Map();
+  const loadedDefaultIngredientsForParentIds = new Set();
 
-  const productIds = [...productIdsSet];
+  while (true) {
+    const productIdsToLoad = [...productIdsSet].filter((id) => !productsById.has(Number(id)));
+    if (productIdsToLoad.length) {
+      const loadedProducts = await loadProductData(db, tenantId, productIdsToLoad);
+      loadedProducts.forEach((row, id) => productsById.set(Number(id), row));
+    }
+
+    const parentIdsToLoad = [
+      ...new Set([
+        ...[...parentProductIdsNeedingDefaultIngredientsSet],
+        ...[...productsById.entries()]
+          .filter(([, product]) => normalizeProductFulfillmentMode(product?.fulfillment_mode) === 'made_to_order')
+          .map(([id]) => Number(id)),
+      ]),
+    ].filter((id) => Number(id) > 0 && !loadedDefaultIngredientsForParentIds.has(Number(id)));
+
+    if (!parentIdsToLoad.length) break;
+    parentIdsToLoad.forEach((id) => loadedDefaultIngredientsForParentIds.add(Number(id)));
+
+    const loadedIngredients = await loadDefaultIngredientsByParentProducts(db, tenantId, parentIdsToLoad);
+    loadedIngredients.forEach((ingredientsList, parentProductId) => {
+      const pid = Number(parentProductId || 0);
+      if (pid <= 0) return;
+      defaultIngredientsByParentProduct.set(pid, ingredientsList);
+      parentProductIdsForIngredientSet.add(pid);
+      (Array.isArray(ingredientsList) ? ingredientsList : []).forEach((ing) => {
+        const ingPid = Number(ing?.ingredientId || 0);
+        if (ingPid > 0) {
+          productIdsSet.add(ingPid);
+          ingredientIdsSet.add(ingPid);
+        }
+      });
+    });
+  }
+
   const variantGroupIds = [...variantGroupIdsSet];
   const parentProductIdsForIngredient = [...parentProductIdsForIngredientSet];
   const ingredientIds = [...ingredientIdsSet];
 
-  const [productsById, variantGroupUnits, ingredientUnits] = await Promise.all([
-    loadProductData(db, tenantId, productIds),
+  const [variantGroupUnits, ingredientUnits] = await Promise.all([
     loadVariantGroupUnits(db, tenantId, variantGroupIds),
     loadIngredientUnits(db, tenantId, parentProductIdsForIngredient, ingredientIds),
   ]);
@@ -362,6 +387,63 @@ async function buildDeductions({ db, tenantId, items }) {
     return quantity * Number(factor);
   }
 
+  async function consumeProductIngredients(parentProductId, unitsCount, explicitIngredients = null, stack = new Set()) {
+    const parentId = Number(parentProductId || 0);
+    const multiplier = Number(unitsCount || 0);
+    if (!(parentId > 0) || !Number.isFinite(multiplier) || multiplier <= 0 || stack.has(parentId)) return;
+
+    const rows = Array.isArray(explicitIngredients) && explicitIngredients.length
+      ? explicitIngredients
+      : (defaultIngredientsByParentProduct.get(parentId) || []).map((ing) => ({
+          ingredient_id: ing.ingredientId,
+          quantity: ing.quantity,
+          unit_id: ing.unitId || null,
+        }));
+    if (!rows.length) return;
+
+    stack.add(parentId);
+    for (const ing of rows) {
+      const ingPid = Number(ing?.ingredient_id || ing?.product_id || 0);
+      if (!ingPid) continue;
+
+      const ingredientProduct = productsById.get(ingPid);
+      if (!ingredientProduct) continue;
+
+      const ingQty = toPositiveNumber(ing?.quantity ?? ing?.qty ?? 0, 0);
+      if (!ingQty) continue;
+
+      let ingredientUnitId = Number(ing?.unit_id || 0);
+      if (!ingredientUnitId) {
+        ingredientUnitId = Number(ingredientUnits.get(`${parentId}_${ingPid}`) || 0);
+      }
+
+      const ingTotalQty = ingQty * multiplier;
+      const ingQtyInBase = ingredientUnitId
+        ? await getQtyInBaseForProduct(ingredientProduct, ingTotalQty, ingredientUnitId)
+        : ingTotalQty;
+
+      await consumeProduct(ingPid, ingQtyInBase, null, stack);
+    }
+    stack.delete(parentId);
+  }
+
+  async function consumeProduct(productId, quantityInBase, explicitIngredients = null, stack = new Set()) {
+    const pid = Number(productId || 0);
+    const qty = roundQty(quantityInBase);
+    if (!(pid > 0) || qty <= 0) return;
+
+    const product = productsById.get(pid);
+    if (!product) return;
+
+    if (normalizeProductFulfillmentMode(product.fulfillment_mode) !== 'made_to_order') {
+      addDeduction(pid, qty);
+      return;
+    }
+
+    const baseQty = toPositiveNumber(product.base_qty, 1);
+    await consumeProductIngredients(pid, qty / baseQty, explicitIngredients, stack);
+  }
+
   for (const item of normalizedItems) {
     if (!item) continue;
 
@@ -373,6 +455,17 @@ async function buildDeductions({ db, tenantId, items }) {
 
       for (const selection of selections) {
         const selectionPid = Number(selection?.product_id || 0);
+        let selectionIngredients = Array.isArray(selection?.ingredients_display)
+          ? selection.ingredients_display
+          : (Array.isArray(selection?.ingredients) ? selection.ingredients : []);
+        if ((!Array.isArray(selectionIngredients) || !selectionIngredients.length) && selectionPid > 0) {
+          selectionIngredients = (defaultIngredientsByParentProduct.get(selectionPid) || []).map((ing) => ({
+            ingredient_id: ing.ingredientId,
+            quantity: ing.quantity,
+            unit_id: ing.unitId || null,
+          }));
+        }
+
         const selectionProduct = productsById.get(selectionPid);
         if (selectionProduct) {
           let consumedPerUnit = null;
@@ -399,41 +492,7 @@ async function buildDeductions({ db, tenantId, items }) {
             consumedPerUnit = toPositiveNumber(selectionProduct.base_qty, 1);
           }
 
-          addDeduction(selectionPid, consumedPerUnit * comboQty);
-        }
-
-        let selectionIngredients = Array.isArray(selection?.ingredients_display)
-          ? selection.ingredients_display
-          : (Array.isArray(selection?.ingredients) ? selection.ingredients : []);
-        if ((!Array.isArray(selectionIngredients) || !selectionIngredients.length) && selectionPid > 0) {
-          selectionIngredients = (defaultIngredientsByParentProduct.get(selectionPid) || []).map((ing) => ({
-            ingredient_id: ing.ingredientId,
-            quantity: ing.quantity,
-            unit_id: ing.unitId || null,
-          }));
-        }
-
-        for (const ing of selectionIngredients) {
-          const ingPid = Number(ing?.ingredient_id || ing?.product_id || 0);
-          if (!ingPid) continue;
-
-          const ingredientProduct = productsById.get(ingPid);
-          if (!ingredientProduct) continue;
-
-          const ingQty = toPositiveNumber(ing?.quantity ?? ing?.qty ?? 0, 0);
-          if (!ingQty) continue;
-
-          let ingredientUnitId = Number(ing?.unit_id || 0);
-          if (!ingredientUnitId && selectionPid > 0) {
-            ingredientUnitId = Number(ingredientUnits.get(`${selectionPid}_${ingPid}`) || 0);
-          }
-
-          const ingTotalQty = ingQty * comboQty;
-          const ingQtyInBase = ingredientUnitId
-            ? await getQtyInBaseForProduct(ingredientProduct, ingTotalQty, ingredientUnitId)
-            : ingTotalQty;
-
-          addDeduction(ingPid, ingQtyInBase);
+          await consumeProduct(selectionPid, consumedPerUnit * comboQty, selectionIngredients);
         }
       }
       continue;
@@ -466,7 +525,8 @@ async function buildDeductions({ db, tenantId, items }) {
         consumedPerUnit = baseQty;
       }
 
-      addDeduction(pid, consumedPerUnit * parentItemQty);
+      const itemIngredients = Array.isArray(item.ingredients) ? item.ingredients : [];
+      await consumeProduct(pid, consumedPerUnit * parentItemQty, itemIngredients);
     }
 
     const optionsRaw = Array.isArray(item.options)
@@ -509,38 +569,7 @@ async function buildDeductions({ db, tenantId, items }) {
         consumedPerOption = toPositiveNumber(optionProduct.base_qty, 1);
       }
 
-      addDeduction(optionPid, consumedPerOption * optionUnitsCount);
-    }
-
-    let ingredients = Array.isArray(item.ingredients) ? item.ingredients : [];
-    if ((!Array.isArray(ingredients) || !ingredients.length) && pid > 0) {
-      ingredients = (defaultIngredientsByParentProduct.get(pid) || []).map((ing) => ({
-        ingredient_id: ing.ingredientId,
-        quantity: ing.quantity,
-        unit_id: ing.unitId || null,
-      }));
-    }
-    for (const ing of ingredients) {
-      const ingPid = Number(ing?.ingredient_id || ing?.product_id || 0);
-      if (!ingPid) continue;
-
-      const ingredientProduct = productsById.get(ingPid);
-      if (!ingredientProduct) continue;
-
-      const ingQty = toPositiveNumber(ing?.quantity ?? ing?.qty ?? 0, 0);
-      if (!ingQty) continue;
-
-      let ingredientUnitId = Number(ing?.unit_id || 0);
-      if (!ingredientUnitId && pid > 0) {
-        ingredientUnitId = Number(ingredientUnits.get(`${pid}_${ingPid}`) || 0);
-      }
-
-      const ingTotalQty = ingQty * parentItemQty;
-      const ingQtyInBase = ingredientUnitId
-        ? await getQtyInBaseForProduct(ingredientProduct, ingTotalQty, ingredientUnitId)
-        : ingTotalQty;
-
-      addDeduction(ingPid, ingQtyInBase);
+      await consumeProduct(optionPid, consumedPerOption * optionUnitsCount);
     }
   }
 

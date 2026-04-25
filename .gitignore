@@ -12,6 +12,7 @@ static/uploads/*
 !static/uploads/auth/**
 db-tools/
 AGENTS.md
+a1186497_test.sql
 # Временные скрипты для настройки
 setup-tenant-1-login.js
 setup-tenant-1-quick.js
