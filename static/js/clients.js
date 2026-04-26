@@ -1850,11 +1850,15 @@
   const right$ = (sel) => $(sel, clientRightRoot);
 
   const clientTabsHeader = right$("#clientTabsHeader");
+  const clientTabsHomeBtn = right$("#clientTabsHomeBtn");
   const clientTabs = right$("#clientTabs");
   const clientEmpty = right$("#clientEmpty");
   const bannerEmpty = right$("#bannerEmpty");
   const bonusLevelEmpty = right$("#bonusLevelEmpty");
   const bonusReferralsEmpty = right$("#bonusReferralsEmpty");
+  const bonusReferralFirstPurchaseRewardInput = right$("#bonusReferralFirstPurchaseRewardInput");
+  const bonusReferralRegistrationRewardInput = right$("#bonusReferralRegistrationRewardInput");
+  const bonusReferralInviteLink = right$("#bonusReferralInviteLink");
   const bannerInfoWrap = right$("#bannerInfoWrap");
   const bannerInfoFooter = right$("#bannerInfoFooter");
   const bonusLevelInfoWrap = right$("#bonusLevelInfoWrap");
@@ -2141,6 +2145,8 @@
     referralProgramEnabled: false,
     referralProgramEnabledDraft: false,
     referralEditing: false,
+    referralFirstPurchaseReward: 50,
+    referralRegistrationReward: 50,
     bonusReferralLevels: createDefaultBonusReferralLevels(),
     bonusReferralLevelsDraft: createDefaultBonusReferralLevels(),
     bonusReferralEvents: createDefaultBonusReferralEvents(),
@@ -3221,7 +3227,17 @@
   function renderTabs() {
     if (!clientTabsHeader || !clientTabs) return;
     const hasTabs = tabsState.tabs.length > 0;
-    clientTabsHeader.classList.toggle("hidden", !hasTabs);
+    const isBonusReferralsView = state.currentView === 'bonus-referrals';
+    clientTabsHeader.classList.toggle("hidden", !hasTabs && !isBonusReferralsView);
+    if (clientTabsHomeBtn) {
+      clientTabsHomeBtn.classList.toggle('hidden', !isBonusReferralsView);
+      clientTabsHomeBtn.classList.toggle('is-active', isBonusReferralsView);
+    }
+    clientTabs.classList.toggle('hidden', isBonusReferralsView);
+    if (isBonusReferralsView) {
+      showEmptyState();
+      return;
+    }
     if (!hasTabs) {
       clientTabs.innerHTML = "";
       showEmptyState();
@@ -3433,6 +3449,16 @@
         clientTabs.scrollLeft += e.deltaY;
       }
     }, { passive: false });
+  }
+
+  if (clientTabsHomeBtn) {
+    clientTabsHomeBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (state.currentView !== 'bonus-referrals') return;
+      tabsState.activeKey = null;
+      renderTabs();
+      updateRightPanel();
+    });
   }
 
   if (elToolbarBackBtn) {
@@ -8767,6 +8793,59 @@
         renderBonusClientsList();
       });
     });
+  }
+
+  function normalizeBonusReferralRewardValue(value, fallback = 0) {
+    const raw = String(value ?? '').replace(',', '.').trim();
+    if (!raw) return Math.max(0, Number(fallback || 0));
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed) || parsed < 0) return Math.max(0, Number(fallback || 0));
+    return parsed;
+  }
+
+  function getBonusReferralShopUrl() {
+    const tenant = getDiscountPickerTenantFromStorage();
+    const protocol = (window.location && window.location.protocol) || 'https:';
+    const customDomain = String(tenant?.custom_domain || '').trim();
+    const subdomainShopUrl = String(tenant?.subdomain_shop_url || tenant?.shop_url || tenant?.public_shop_url || '').trim();
+    const subdomain = String(tenant?.subdomain || '').trim();
+    const setup = tenant?.domain_setup && typeof tenant.domain_setup === 'object' ? tenant.domain_setup : {};
+    if (customDomain) return `${protocol}//${customDomain}`;
+    if (subdomainShopUrl) return subdomainShopUrl;
+    if (subdomain) {
+      const setupProtocol = String(setup.subdomain_protocol || protocol).trim().replace(/:$/, '');
+      const baseHost = String(setup.subdomain_base_host || window.location.hostname || '').trim();
+      const port = !setup.subdomain_base_host && window.location.port ? `:${window.location.port}` : '';
+      if (baseHost) return `${setupProtocol || 'https'}://${subdomain}.${baseHost}${port}`;
+    }
+    return `${window.location.origin || ''}/shop?tenant_id=${encodeURIComponent(String(tenantId))}`;
+  }
+
+  function buildBonusReferralInviteUrl() {
+    const baseUrl = getBonusReferralShopUrl();
+    try {
+      const url = new URL(baseUrl, window.location.origin);
+      const activeClientId = Number(state.activeClientId || 0);
+      url.searchParams.set('ref', activeClientId > 0 ? `client-${activeClientId}` : `tenant-${tenantId}`);
+      return url.toString();
+    } catch {
+      const glue = String(baseUrl).includes('?') ? '&' : '?';
+      return `${baseUrl}${glue}ref=${encodeURIComponent(`tenant-${tenantId}`)}`;
+    }
+  }
+
+  function renderBonusReferralRightHome() {
+    if (bonusReferralFirstPurchaseRewardInput) {
+      bonusReferralFirstPurchaseRewardInput.value = String(state.referralFirstPurchaseReward ?? 50).replace('.', ',');
+    }
+    if (bonusReferralRegistrationRewardInput) {
+      bonusReferralRegistrationRewardInput.value = String(state.referralRegistrationReward ?? 50).replace('.', ',');
+    }
+    if (bonusReferralInviteLink) {
+      const inviteUrl = buildBonusReferralInviteUrl();
+      bonusReferralInviteLink.href = inviteUrl;
+      bonusReferralInviteLink.textContent = inviteUrl;
+    }
   }
 
   function renderBonusReferralLevels() {
@@ -18029,7 +18108,14 @@
     const isBonusCardsView = state.currentView === 'bonus-cards';
     const isBonusReferralsView = state.currentView === 'bonus-referrals';
     if (clientTabsHeader) {
-      clientTabsHeader.classList.toggle('hidden', tabsState.tabs.length === 0);
+      clientTabsHeader.classList.toggle('hidden', tabsState.tabs.length === 0 && !isBonusReferralsView);
+    }
+    if (clientTabsHomeBtn) {
+      clientTabsHomeBtn.classList.toggle('hidden', !isBonusReferralsView);
+      clientTabsHomeBtn.classList.toggle('is-active', isBonusReferralsView);
+    }
+    if (clientTabs) {
+      clientTabs.classList.toggle('hidden', isBonusReferralsView);
     }
     const isChatPage = !!document.body?.classList?.contains('page-chat');
     if (isChatPage && chatRightForceEmpty) {
@@ -18054,6 +18140,7 @@
       if (bannerInfoFooter) bannerInfoFooter.classList.add('hidden');
       if (bonusLevelEmpty) bonusLevelEmpty.classList.toggle('hidden', state.currentView !== 'bonus-cards');
       if (bonusReferralsEmpty) bonusReferralsEmpty.classList.toggle('hidden', state.currentView !== 'bonus-referrals');
+      if (state.currentView === 'bonus-referrals') renderBonusReferralRightHome();
       if (bonusLevelInfoWrap) bonusLevelInfoWrap.classList.add('hidden');
       if (bonusLevelInfoFooter) bonusLevelInfoFooter.classList.add('hidden');
       if (clientBenefitsFooter) clientBenefitsFooter.classList.add('hidden');
@@ -18100,6 +18187,7 @@
       if (bannerInfoFooter) bannerInfoFooter.classList.add('hidden');
       if (bonusLevelEmpty) bonusLevelEmpty.classList.toggle('hidden', !noTabs || state.currentView !== 'bonus-cards');
       if (bonusReferralsEmpty) bonusReferralsEmpty.classList.toggle('hidden', state.currentView !== 'bonus-referrals');
+      if (state.currentView === 'bonus-referrals') renderBonusReferralRightHome();
       if (bonusLevelInfoWrap) bonusLevelInfoWrap.classList.toggle('hidden', !isBonusLevelTab || state.currentView !== 'bonus-cards');
       if (bonusLevelInfoFooter) bonusLevelInfoFooter.classList.toggle('hidden', !isBonusLevelTab || state.currentView !== 'bonus-cards');
       if (clientBenefitsFooter) clientBenefitsFooter.classList.add('hidden');
@@ -20526,6 +20614,24 @@
       }
       state.referralProgramEnabledDraft = elReferralProgramSwitch.checked === true;
       renderBonusReferralLevels();
+    });
+  }
+
+  if (bonusReferralFirstPurchaseRewardInput) {
+    bonusReferralFirstPurchaseRewardInput.addEventListener('input', () => {
+      state.referralFirstPurchaseReward = normalizeBonusReferralRewardValue(
+        bonusReferralFirstPurchaseRewardInput.value,
+        state.referralFirstPurchaseReward
+      );
+    });
+  }
+
+  if (bonusReferralRegistrationRewardInput) {
+    bonusReferralRegistrationRewardInput.addEventListener('input', () => {
+      state.referralRegistrationReward = normalizeBonusReferralRewardValue(
+        bonusReferralRegistrationRewardInput.value,
+        state.referralRegistrationReward
+      );
     });
   }
 

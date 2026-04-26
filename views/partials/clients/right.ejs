@@ -1,6 +1,11 @@
 ﻿<div class="panel client-info-panel">
   <div class="panel-header product-tabs-header hidden" id="clientTabsHeader">
-    <div class="product-tabs" id="clientTabs"></div>
+    <div class="product-tabs-header-inner">
+      <button class="product-tabs-home hidden" type="button" id="clientTabsHomeBtn" aria-label="Главная" title="Главная">
+        <i class="fas fa-home"></i>
+      </button>
+      <div class="product-tabs" id="clientTabs"></div>
+    </div>
     <button
       type="button"
       class="icon-btn client-mobile-sheet-close"
@@ -48,14 +53,26 @@
     </div>
 
     <div id="bonusReferralsEmpty" class="empty-state hidden bonus-referrals-right-placeholder">
-      <div class="bonus-referrals-right-tabs">
-        <button type="button" class="bonus-referrals-right-tab is-active">Обзор</button>
-        <button type="button" class="bonus-referrals-right-tab">Участники</button>
-        <button type="button" class="bonus-referrals-right-tab">Начисления</button>
-      </div>
-      <div class="empty-icon"><i class="fas fa-user-friends"></i></div>
-      <div class="empty-title">Рефералы</div>
-      <div class="empty-text">Выберите реферальное событие или уровень слева</div>
+      <section class="bonus-referrals-right-section">
+        <h3 class="bonus-referrals-right-title">Бонусы за рекомендацию</h3>
+        <div class="bonus-referrals-right-fields">
+          <label class="bonus-referrals-right-row" for="bonusReferralFirstPurchaseRewardInput">
+            <span>После первой покупки друга</span>
+            <input class="control bonus-referrals-right-input" id="bonusReferralFirstPurchaseRewardInput" type="text" inputmode="numeric" value="50" />
+          </label>
+          <label class="bonus-referrals-right-row" for="bonusReferralRegistrationRewardInput">
+            <span>Получателю начисляется за регистрацию</span>
+            <input class="control bonus-referrals-right-input" id="bonusReferralRegistrationRewardInput" type="text" inputmode="numeric" value="50" />
+          </label>
+        </div>
+      </section>
+
+      <section class="bonus-referrals-right-section">
+        <h3 class="bonus-referrals-right-title">Пригласите первых клиентов</h3>
+        <a class="bonus-referrals-invite-link" id="bonusReferralInviteLink" href="/shop" target="_blank" rel="noopener">
+          /shop
+        </a>
+      </section>
     </div>
 
     <div id="filterEditorWrap" class="hidden">

@@ -18830,32 +18830,61 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
 
 .bonus-referrals-right-placeholder{
   align-items:stretch;
+  justify-content:flex-start;
   text-align:left;
+  gap:22px;
 }
 
-.bonus-referrals-right-tabs{
-  display:flex;
-  gap:6px;
+.bonus-referrals-right-section{
   width:100%;
-  margin-bottom:28px;
-  padding:0 2px;
 }
 
-.bonus-referrals-right-tab{
-  height:32px;
-  padding:0 12px;
-  border:1px solid var(--color-border);
-  border-radius:999px;
-  background:var(--color-surface-2);
+.bonus-referrals-right-title{
+  margin:0 0 12px;
+  font-size:15px;
+  line-height:1.25;
+  font-weight:900;
   color:var(--color-text);
-  font-size:12px;
-  font-weight:700;
 }
 
-.bonus-referrals-right-tab.is-active{
-  border-color:rgba(255,106,0,.45);
-  background:rgba(255,106,0,.12);
+.bonus-referrals-right-fields{
+  display:grid;
+  gap:10px;
+}
+
+.bonus-referrals-right-row{
+  display:grid;
+  grid-template-columns:minmax(0,1fr) 92px;
+  align-items:center;
+  gap:10px;
+  font-size:13px;
+  font-weight:700;
+  color:var(--color-text-muted);
+}
+
+.bonus-referrals-right-input.control{
+  height:40px;
+  border-radius:999px;
+  text-align:center;
+  font-weight:900;
+  color:var(--color-text);
+}
+
+.bonus-referrals-invite-link{
+  display:block;
+  width:100%;
   color:var(--color-primary);
+  font-size:13px;
+  line-height:1.35;
+  font-weight:700;
+  text-decoration:none;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+.bonus-referrals-invite-link:hover{
+  text-decoration:underline;
 }
 
 .bonus-history-pagination{
