@@ -18576,6 +18576,288 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   overflow-x:hidden;
 }
 
+#bonusReferralLevelsZone{
+  min-height:0;
+  height:auto;
+}
+
+#bonusReferralLevelsZone .banners-placement-body{
+  display:flex;
+  min-height:0;
+  overflow:visible;
+  padding-bottom:10px;
+}
+
+#bonusReferralLevelsScroll{
+  width:100%;
+  overflow-x:auto;
+  overflow-y:visible;
+}
+
+#bonusReferralLevelsTrack{
+  width:100%;
+  overflow:visible;
+  display:grid;
+  grid-template-columns:146px minmax(28px, 1fr) 146px minmax(28px, 1fr) 146px minmax(28px, 1fr) 146px;
+  align-items:center;
+  gap:10px;
+}
+
+#bonusReferralLevelsTrack .bonus-referral-level-card{
+  position:relative;
+  width:146px;
+  height:146px;
+  aspect-ratio:1 / 1;
+  padding:14px;
+  align-items:stretch;
+  justify-content:center;
+  flex-direction:column;
+  border-radius:24px;
+}
+
+#bonusReferralLevelsTrack .bonus-referral-level-card.is-disabled{
+  opacity:.46;
+}
+
+.bonus-referral-level-main{
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  gap:0;
+}
+
+.bonus-referral-level-head{
+  position:absolute;
+  top:12px;
+  left:12px;
+  right:10px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:8px;
+  min-height:22px;
+}
+
+.bonus-referral-level-head > span{
+  min-width:0;
+  color:var(--color-text);
+  font-size:12px;
+  font-weight:800;
+  white-space:nowrap;
+}
+
+.bonus-referral-level-icon{
+  width:38px;
+  height:38px;
+  border-radius:14px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  background:rgba(255,106,0,.12);
+  color:var(--color-primary);
+}
+
+.bonus-referral-level-copy{
+  min-width:0;
+  display:flex;
+  flex-direction:column;
+  gap:3px;
+}
+
+.bonus-referral-level-copy strong{
+  font-size:14px;
+  color:var(--color-text);
+  white-space:nowrap;
+}
+
+.bonus-referral-level-copy span,
+.bonus-referral-level-meta span{
+  font-size:12px;
+  color:var(--color-text-muted);
+  line-height:1.25;
+}
+
+.bonus-referral-level-meta{
+  display:flex;
+  flex-direction:column;
+  align-items:flex-start;
+  justify-content:flex-end;
+  gap:10px;
+}
+
+.bonus-referral-level-meta b{
+  font-size:22px;
+  color:var(--color-primary);
+}
+
+.bonus-referral-level-arrow{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  color:var(--color-primary);
+  font-size:20px;
+}
+
+.bonus-referral-level-switch{
+  position:relative;
+  top:auto;
+  right:auto;
+  z-index:3;
+  margin:0;
+  min-height:20px;
+  --switch-w:34px;
+  --switch-h:20px;
+  --switch-pad:2px;
+}
+
+.bonus-referral-level-switch .switch-text{
+  display:none;
+}
+
+.bonus-referral-level-switch .switch-ui{
+  box-shadow:0 2px 8px rgba(15,23,42,.14), inset 0 1px 2px rgba(0,0,0,.05);
+}
+
+.bonus-referral-percent-field{
+  position:absolute;
+  left:14px;
+  right:14px;
+  bottom:14px;
+  height:40px;
+  display:flex;
+  align-items:center;
+  padding:0;
+  border:none;
+  background:transparent;
+  box-shadow:none;
+}
+
+.bonus-referral-percent-input{
+  width:100%;
+  height:40px;
+  min-height:40px;
+  text-align:center;
+  font-size:20px;
+  font-weight:800;
+  padding:0 30px 0 12px;
+  border:1px solid var(--color-border);
+  border-radius:999px !important;
+  background:var(--color-surface-2);
+  box-shadow:inset 0 1px 2px rgba(15,23,42,.04);
+  outline:none;
+}
+
+.bonus-referral-percent-stepper{
+  position:absolute;
+  top:50%;
+  right:9px;
+  transform:translateY(-50%);
+  width:18px;
+  height:30px;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  gap:0;
+}
+
+.bonus-referral-percent-step{
+  flex:0 0 auto;
+  width:18px;
+  height:14px;
+  border:none;
+  border-radius:4px;
+  background:transparent;
+  color:rgba(75,85,99,.58);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  cursor:pointer;
+  font-size:13px;
+  line-height:1;
+  padding:0;
+}
+
+.bonus-referral-percent-step:hover{
+  color:var(--color-primary);
+}
+
+.bonus-referral-percent-step:disabled{
+  opacity:.45;
+  cursor:not-allowed;
+}
+
+.bonus-referral-percent-view{
+  position:absolute;
+  right:14px;
+  bottom:14px;
+  display:flex;
+  align-items:baseline;
+  gap:4px;
+  color:var(--color-primary);
+}
+
+.bonus-referral-percent-view strong{
+  font-size:26px;
+  line-height:1;
+  font-weight:900;
+}
+
+.bonus-referral-percent-view span{
+  font-size:18px;
+  font-weight:900;
+}
+
+#bonusReferralsListScroll{
+  flex:1 1 auto;
+  min-height:0;
+  overflow-y:auto;
+  overflow-x:hidden;
+}
+
+.bonus-referral-row-grid{
+  display:grid;
+  grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(0,1.2fr);
+  gap:14px;
+  align-items:center;
+}
+
+.bonus-referral-actions{
+  min-width:126px;
+  align-items:flex-end;
+}
+
+.bonus-referrals-right-placeholder{
+  align-items:stretch;
+  text-align:left;
+}
+
+.bonus-referrals-right-tabs{
+  display:flex;
+  gap:6px;
+  width:100%;
+  margin-bottom:28px;
+  padding:0 2px;
+}
+
+.bonus-referrals-right-tab{
+  height:32px;
+  padding:0 12px;
+  border:1px solid var(--color-border);
+  border-radius:999px;
+  background:var(--color-surface-2);
+  color:var(--color-text);
+  font-size:12px;
+  font-weight:700;
+}
+
+.bonus-referrals-right-tab.is-active{
+  border-color:rgba(255,106,0,.45);
+  background:rgba(255,106,0,.12);
+  color:var(--color-primary);
+}
+
 .bonus-history-pagination{
   display:flex;
   align-items:center;

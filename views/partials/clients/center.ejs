@@ -53,6 +53,12 @@
           <span class="switch-ui" aria-hidden="true"></span>
           <span class="switch-text">Бонусная программа</span>
         </label>
+
+        <label class="switch settings-chat-subheader-switch hidden" id="clientsReferralProgramSwitchWrap" title="Включить реферальную систему">
+          <input class="switch-input" type="checkbox" id="clientsReferralProgramSwitch" />
+          <span class="switch-ui" aria-hidden="true"></span>
+          <span class="switch-text">Реферальная система</span>
+        </label>
         <button id="clientsBonusFlipAllBtn" class="icon-btn hidden" type="button" aria-label="Перевернуть все карточки" title="Перевернуть все карточки">
           <i class="fas fa-sync-alt"></i>
         </button>
@@ -149,6 +155,28 @@
             <div class="orders-list" id="bonusClientsList"></div>
             <div class="empty-hint hidden" id="bonusClientsEmptyHint">Пока нет истории бонусной программы.</div>
             <div class="bonus-history-pagination hidden" id="bonusHistoryPagination"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="content-view hidden banners-content-view" data-view-content="bonus-referrals">
+        <div class="banners-layout">
+          <div class="banners-placement-zone" id="bonusReferralLevelsZone">
+            <div class="banners-placement-head">
+              <div class="banners-placement-copy">
+                <div class="banners-placement-title">Уровни рефералов</div>
+              </div>
+            </div>
+            <div class="banners-placement-body">
+              <div class="bonus-referral-levels-scroll no-scrollbar" id="bonusReferralLevelsScroll">
+                <div class="banners-placement-track" id="bonusReferralLevelsTrack"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="banners-list-scroll" id="bonusReferralsListScroll">
+            <div class="orders-list" id="bonusReferralsList"></div>
+            <div class="empty-hint hidden" id="bonusReferralsEmptyHint">Пока нет реферальных событий.</div>
           </div>
         </div>
       </div>

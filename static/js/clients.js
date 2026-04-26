@@ -555,6 +555,23 @@
     ];
   }
 
+  function createDefaultBonusReferralLevels() {
+    return [
+      { id: 'ref_start', title: 'Старт', invitedCount: 0, percent: 0, enabled: true },
+      { id: 'ref_partner', title: 'Партнёр', invitedCount: 1, percent: 5, enabled: true },
+      { id: 'ref_ambassador', title: 'Амбассадор', invitedCount: 2, percent: 8, enabled: false },
+      { id: 'ref_leader', title: 'Лидер', invitedCount: 3, percent: 12, enabled: false },
+    ];
+  }
+
+  function createDefaultBonusReferralEvents() {
+    return [
+      { id: 'ref_evt1', inviterName: 'Иван Петров', inviterPhone: '+7 (900) 123-45-67', referralName: 'Олег Смирнов', referralPhone: '+7 (913) 456-78-90', relation: 'Реферал Ивана Петрова', status: 'Зарегистрировался по ссылке', reward: '+150 бонусов', at: 'Сегодня, 13:10' },
+      { id: 'ref_evt2', inviterName: 'Мария Соколова', inviterPhone: '+7 (921) 222-11-00', referralName: 'Анна Белова', referralPhone: '+7 (923) 111-22-33', relation: 'Реферал Марии Соколовой', status: 'Первый заказ оплачен', reward: '+240 бонусов', at: 'Вчера, 19:42' },
+      { id: 'ref_evt3', inviterName: 'Без приглашения', inviterPhone: '—', referralName: 'Дмитрий Ковалёв', referralPhone: '+7 (905) 777-66-55', relation: 'Самостоятельная регистрация', status: 'Зарегистрировался без реферала', reward: '—', at: 'Вчера, 16:05' },
+    ];
+  }
+
   function sanitizeBonusRangeRows(items) {
     return (Array.isArray(items) ? items : [])
       .map((item) => {
@@ -606,6 +623,19 @@
   function normalizeBonusLevelTariffPeriodUnit(value) {
     const normalized = String(value || '').trim().toLowerCase();
     return ['days', 'months', 'forever'].includes(normalized) ? normalized : 'months';
+  }
+
+  function formatBonusReferralPercentValue(value) {
+    const normalized = normalizeBonusReferralPercentValue(value, 0);
+    return Number.isInteger(normalized)
+      ? String(normalized)
+      : String(normalized).replace('.', ',');
+  }
+
+  function normalizeBonusReferralPercentValue(value, fallback = 0) {
+    const parsed = Number(String(value ?? '').replace(',', '.'));
+    if (!Number.isFinite(parsed)) return Math.max(0, Number(fallback) || 0);
+    return Math.max(0, Math.round(parsed * 10000) / 10000);
   }
 
   function sanitizeBonusTariffRows(items, fallback = null) {
@@ -1544,6 +1574,8 @@
   const elBannersEnabledSwitch = $("#clientsBannersEnabledSwitch");
   const elBonusProgramSwitchWrap = $("#clientsBonusProgramSwitchWrap");
   const elBonusProgramSwitch = $("#clientsBonusProgramSwitch");
+  const elReferralProgramSwitchWrap = $("#clientsReferralProgramSwitchWrap");
+  const elReferralProgramSwitch = $("#clientsReferralProgramSwitch");
   const elBonusFlipAllBtn = $("#clientsBonusFlipAllBtn");
   const elBonusEditBtn = $("#clientsBonusEditBtn");
   const elBonusEditSaveBtn = $("#clientsBonusEditSaveBtn");
@@ -1583,6 +1615,9 @@
   const elBonusClientsList = $("#bonusClientsList");
   const elBonusClientsEmptyHint = $("#bonusClientsEmptyHint");
   const elBonusHistoryPagination = $("#bonusHistoryPagination");
+  const elBonusReferralLevelsTrack = $("#bonusReferralLevelsTrack");
+  const elBonusReferralsList = $("#bonusReferralsList");
+  const elBonusReferralsEmptyHint = $("#bonusReferralsEmptyHint");
   const elBannerPickerOverlay = $("#bannerPickerOverlay");
   const elBannerPickerBackdrop = $("#bannerPickerBackdrop");
   const elBannerPickerTitle = $("#bannerPickerTitle");
@@ -1819,6 +1854,7 @@
   const clientEmpty = right$("#clientEmpty");
   const bannerEmpty = right$("#bannerEmpty");
   const bonusLevelEmpty = right$("#bonusLevelEmpty");
+  const bonusReferralsEmpty = right$("#bonusReferralsEmpty");
   const bannerInfoWrap = right$("#bannerInfoWrap");
   const bannerInfoFooter = right$("#bannerInfoFooter");
   const bonusLevelInfoWrap = right$("#bonusLevelInfoWrap");
@@ -2038,7 +2074,7 @@
   // State
   // -----------------------------
   const state = {
-    currentView: "clients",   // "clients" | "filter-categories" | "discounts" | "banners" | "bonus-cards"
+    currentView: "clients",   // "clients" | "filter-categories" | "discounts" | "banners" | "bonus-cards" | "bonus-referrals"
     activeFilter: "all",      // "all" | "custom_<id>"
     activeCustomFilterId: null,
     q: "",
@@ -2102,6 +2138,12 @@
     bonusLevels: createDefaultBonusLevels(),
     bonusLevelsDraft: createDefaultBonusLevels(),
     bonusClientEvents: createDefaultBonusClientEvents(),
+    referralProgramEnabled: false,
+    referralProgramEnabledDraft: false,
+    referralEditing: false,
+    bonusReferralLevels: createDefaultBonusReferralLevels(),
+    bonusReferralLevelsDraft: createDefaultBonusReferralLevels(),
+    bonusReferralEvents: createDefaultBonusReferralEvents(),
     bonusHistoryPage: 1,
     bonusFlippedLevelIds: new Set(),
     bonusAnimatingLevelIds: new Set(),
@@ -6440,7 +6482,7 @@
       elBonusCardsBtn.classList.toggle('is-active', state.currentView === 'bonus-cards');
     }
     if (elBonusReferralsBtn) {
-      elBonusReferralsBtn.classList.remove('is-active');
+      elBonusReferralsBtn.classList.toggle('is-active', state.currentView === 'bonus-referrals');
     }
     if (elBonusProgramsBtn) {
       elBonusProgramsBtn.classList.remove('is-active');
@@ -6567,7 +6609,10 @@
 
   function syncBonusToolbarState() {
     const isBonusCardsView = state.currentView === 'bonus-cards';
+    const isBonusReferralsView = state.currentView === 'bonus-referrals';
+    const isEditableBonusView = isBonusCardsView || isBonusReferralsView;
     if (elBonusProgramSwitchWrap) elBonusProgramSwitchWrap.classList.toggle('hidden', !isBonusCardsView);
+    if (elReferralProgramSwitchWrap) elReferralProgramSwitchWrap.classList.toggle('hidden', !isBonusReferralsView);
     if (elBonusFlipAllBtn) {
       elBonusFlipAllBtn.classList.toggle('hidden', !isBonusCardsView);
       const allFlipped = areAllBonusLevelsFlipped(getCurrentBonusLevels());
@@ -6575,12 +6620,21 @@
       elBonusFlipAllBtn.setAttribute('title', allFlipped ? 'Показать лицевую сторону всех' : 'Показать условия всех');
       elBonusFlipAllBtn.setAttribute('aria-label', allFlipped ? 'Показать лицевую сторону всех' : 'Показать условия всех');
     }
-    if (elBonusEditBtn) elBonusEditBtn.classList.toggle('hidden', !isBonusCardsView);
-    if (elBonusEditSaveBtn) elBonusEditSaveBtn.classList.toggle('hidden', !isBonusCardsView || !state.bonusCardsEditing);
-    if (elBonusEditCancelBtn) elBonusEditCancelBtn.classList.toggle('hidden', !isBonusCardsView || !state.bonusCardsEditing);
+    const isEditingCurrent = isBonusCardsView ? state.bonusCardsEditing === true : state.referralEditing === true;
+    if (elBonusEditBtn) {
+      elBonusEditBtn.classList.toggle('hidden', !isEditableBonusView);
+      elBonusEditBtn.setAttribute('title', isBonusReferralsView ? 'Редактировать рефералы' : 'Режим редактирования');
+      elBonusEditBtn.setAttribute('aria-label', isBonusReferralsView ? 'Редактировать рефералы' : 'Режим редактирования');
+    }
+    if (elBonusEditSaveBtn) elBonusEditSaveBtn.classList.toggle('hidden', !isEditableBonusView || !isEditingCurrent);
+    if (elBonusEditCancelBtn) elBonusEditCancelBtn.classList.toggle('hidden', !isEditableBonusView || !isEditingCurrent);
     if (elBonusProgramSwitch) {
       elBonusProgramSwitch.checked = (state.bonusCardsEditing ? state.bonusProgramEnabledDraft : state.bonusProgramEnabled) === true;
       elBonusProgramSwitch.disabled = !state.bonusCardsEditing;
+    }
+    if (elReferralProgramSwitch) {
+      elReferralProgramSwitch.checked = (state.referralEditing ? state.referralProgramEnabledDraft : state.referralProgramEnabled) === true;
+      elReferralProgramSwitch.disabled = !state.referralEditing;
     }
   }
 
@@ -8715,6 +8769,105 @@
     });
   }
 
+  function renderBonusReferralLevels() {
+    if (!elBonusReferralLevelsTrack) return;
+    elBonusReferralLevelsTrack.innerHTML = '';
+    const sourceLevels = state.referralEditing ? state.bonusReferralLevelsDraft : state.bonusReferralLevels;
+    const levels = Array.isArray(sourceLevels) ? sourceLevels : [];
+    const isReferralSystemEnabled = (state.referralEditing ? state.referralProgramEnabledDraft : state.referralProgramEnabled) === true;
+    levels.forEach((level, index) => {
+      const card = document.createElement('div');
+      const isConfigurable = index > 0;
+      const hasEnabledSwitch = index > 1;
+      const isLevelEnabled = index < 2 ? true : level.enabled === true;
+      const isEnabled = isReferralSystemEnabled && isLevelEnabled;
+      const percent = normalizeBonusReferralPercentValue(level.percent ?? String(level.reward || '').replace(/[^\d.,]/g, ''), 0);
+      const levelTitle = index > 0 ? `${index}-й уровень` : '';
+      card.className = `banner-placement-card bonus-referral-level-card${isEnabled ? '' : ' is-disabled'}`;
+      card.dataset.referralLevelIndex = String(index);
+      card.innerHTML = `
+        ${index > 0 ? `
+          <div class="bonus-referral-level-head">
+            <span>${escapeHtml(levelTitle)}</span>
+            ${hasEnabledSwitch && state.referralEditing ? `
+              <label class="switch bonus-referral-level-switch" title="Включить уровень">
+                <input class="switch-input" type="checkbox" data-referral-level-enabled="${index}" ${isLevelEnabled ? 'checked' : ''} />
+                <span class="switch-ui" aria-hidden="true"></span>
+              </label>
+            ` : ''}
+          </div>
+        ` : ''}
+        <div class="bonus-referral-level-main">
+          <div class="bonus-referral-level-icon"><i class="fas fa-user-plus" aria-hidden="true"></i></div>
+        </div>
+        ${isConfigurable ? `
+          ${state.referralEditing ? `
+            <div class="bonus-referral-percent-field">
+              <input class="control bonus-referral-percent-input" type="text" inputmode="decimal" data-referral-level-percent="${index}" value="${escapeHtml(formatBonusReferralPercentValue(percent))}" ${isReferralSystemEnabled ? '' : 'disabled'} />
+              <div class="bonus-referral-percent-stepper" aria-hidden="false">
+                <button class="bonus-referral-percent-step" type="button" data-referral-percent-step="0.1" data-referral-level-index="${index}" ${isReferralSystemEnabled ? '' : 'disabled'} aria-label="Увеличить процент">
+                  <i class="fas fa-caret-up" aria-hidden="true"></i>
+                </button>
+                <button class="bonus-referral-percent-step" type="button" data-referral-percent-step="-0.1" data-referral-level-index="${index}" ${isReferralSystemEnabled ? '' : 'disabled'} aria-label="Уменьшить процент">
+                  <i class="fas fa-caret-down" aria-hidden="true"></i>
+                </button>
+              </div>
+            </div>
+          ` : `
+            <div class="bonus-referral-percent-view">
+              <strong>${escapeHtml(formatBonusReferralPercentValue(percent))}</strong>
+              <span>%</span>
+            </div>
+          `}
+        ` : ''}
+      `;
+      elBonusReferralLevelsTrack.appendChild(card);
+      if (index < levels.length - 1) {
+        const arrow = document.createElement('div');
+        arrow.className = 'bonus-referral-level-arrow';
+        arrow.innerHTML = '<i class="fas fa-arrow-right" aria-hidden="true"></i>';
+        elBonusReferralLevelsTrack.appendChild(arrow);
+      }
+    });
+  }
+
+  function renderBonusReferralsList() {
+    if (!elBonusReferralsList) return;
+    elBonusReferralsList.innerHTML = '';
+    const events = Array.isArray(state.bonusReferralEvents) ? state.bonusReferralEvents : [];
+    if (!events.length) {
+      if (elBonusReferralsEmptyHint) elBonusReferralsEmptyHint.classList.remove('hidden');
+      return;
+    }
+    if (elBonusReferralsEmptyHint) elBonusReferralsEmptyHint.classList.add('hidden');
+    events.forEach((eventItem) => {
+      const row = document.createElement('div');
+      row.className = 'order-row bonus-referral-row';
+      row.innerHTML = `
+        <div class="order-icon"><i class="fas fa-user-friends"></i></div>
+        <div class="order-mid bonus-referral-row-grid">
+          <div>
+            <strong>${escapeHtml(eventItem.inviterName || 'Без приглашения')}</strong>
+            <div class="muted">${escapeHtml(eventItem.inviterPhone || '—')}</div>
+          </div>
+          <div>
+            <strong>${escapeHtml(eventItem.referralName || 'Клиент')}</strong>
+            <div class="muted">${escapeHtml(eventItem.referralPhone || '—')}</div>
+          </div>
+          <div>
+            <strong>${escapeHtml(eventItem.relation || '—')}</strong>
+            <div class="muted">${escapeHtml(eventItem.status || '—')}</div>
+          </div>
+        </div>
+        <div class="order-actions bonus-referral-actions">
+          <div class="pill">${escapeHtml(eventItem.reward || '—')}</div>
+          <div class="muted">${escapeHtml(eventItem.at || '—')}</div>
+        </div>
+      `;
+      elBonusReferralsList.appendChild(row);
+    });
+  }
+
   function enterBonusCardsEditMode() {
     state.bonusCardsEditing = true;
     state.bonusProgramEnabledDraft = state.bonusProgramEnabled === true;
@@ -8738,6 +8891,30 @@
     persistBonusCardsStorage();
     syncBonusToolbarState();
     renderBonusLevels();
+  }
+
+  function enterReferralEditMode() {
+    state.referralEditing = true;
+    state.referralProgramEnabledDraft = state.referralProgramEnabled === true;
+    state.bonusReferralLevelsDraft = (Array.isArray(state.bonusReferralLevels) ? state.bonusReferralLevels : []).map((level) => ({ ...level }));
+    syncBonusToolbarState();
+    renderBonusReferralLevels();
+  }
+
+  function cancelReferralEditMode() {
+    state.referralEditing = false;
+    state.referralProgramEnabledDraft = state.referralProgramEnabled === true;
+    state.bonusReferralLevelsDraft = (Array.isArray(state.bonusReferralLevels) ? state.bonusReferralLevels : []).map((level) => ({ ...level }));
+    syncBonusToolbarState();
+    renderBonusReferralLevels();
+  }
+
+  function saveReferralEditMode() {
+    state.referralProgramEnabled = state.referralProgramEnabledDraft === true;
+    state.bonusReferralLevels = (Array.isArray(state.bonusReferralLevelsDraft) ? state.bonusReferralLevelsDraft : []).map((level) => ({ ...level }));
+    state.referralEditing = false;
+    syncBonusToolbarState();
+    renderBonusReferralLevels();
   }
 
   function renderBannerList() {
@@ -17790,6 +17967,7 @@
         discounts: 'Скидки',
         banners: 'Баннеры',
         'bonus-cards': 'Бонусные карты',
+        'bonus-referrals': 'Рефералы',
       };
       elToolbarText.textContent = titles[viewName] || 'Клиенты';
     }
@@ -17802,6 +17980,7 @@
           discounts: 'fas fa-percentage',
           banners: 'fas fa-images',
           'bonus-cards': 'fas fa-gift',
+          'bonus-referrals': 'fas fa-user-friends',
         };
         icon.className = icons[viewName] || 'fas fa-users';
       }
@@ -17811,7 +17990,7 @@
     if (elSortWrap) elSortWrap.style.display = viewName === 'clients' ? '' : 'none';
     if (elBannersSwitchWrap) elBannersSwitchWrap.classList.toggle('hidden', viewName !== 'banners');
     if (elBannersEnabledSwitch) elBannersEnabledSwitch.checked = state.bannersEnabled === true;
-    if (elAddBtn) elAddBtn.classList.toggle('hidden', viewName === 'bonus-cards');
+    if (elAddBtn) elAddBtn.classList.toggle('hidden', viewName === 'bonus-cards' || viewName === 'bonus-referrals');
     syncBonusToolbarState();
     syncBonusMenuState();
     if (viewName !== 'clients') {
@@ -17833,6 +18012,9 @@
     } else if (viewName === 'bonus-cards') {
       renderBonusLevels();
       renderBonusClientsList();
+    } else if (viewName === 'bonus-referrals') {
+      renderBonusReferralLevels();
+      renderBonusReferralsList();
     } else if (viewName === 'clients') {
       maybeLoadMoreClientsOnScroll();
       ensureClientsScrollable().catch(console.error);
@@ -17845,6 +18027,7 @@
   function updateRightPanel() {
     syncDiscountToolbarState();
     const isBonusCardsView = state.currentView === 'bonus-cards';
+    const isBonusReferralsView = state.currentView === 'bonus-referrals';
     if (clientTabsHeader) {
       clientTabsHeader.classList.toggle('hidden', tabsState.tabs.length === 0);
     }
@@ -17870,6 +18053,7 @@
       if (bannerInfoWrap) bannerInfoWrap.classList.add('hidden');
       if (bannerInfoFooter) bannerInfoFooter.classList.add('hidden');
       if (bonusLevelEmpty) bonusLevelEmpty.classList.toggle('hidden', state.currentView !== 'bonus-cards');
+      if (bonusReferralsEmpty) bonusReferralsEmpty.classList.toggle('hidden', state.currentView !== 'bonus-referrals');
       if (bonusLevelInfoWrap) bonusLevelInfoWrap.classList.add('hidden');
       if (bonusLevelInfoFooter) bonusLevelInfoFooter.classList.add('hidden');
       if (clientBenefitsFooter) clientBenefitsFooter.classList.add('hidden');
@@ -17896,7 +18080,7 @@
       && hasClientId
       && state.currentView === 'clients';
 
-    if (isBonusCardsView) {
+    if (isBonusCardsView || isBonusReferralsView) {
       if (clientEmpty) clientEmpty.classList.add('hidden');
       if (clientInfoWrap) clientInfoWrap.classList.add('hidden');
       if (clientOrderInfoWrap) clientOrderInfoWrap.classList.add('hidden');
@@ -17915,13 +18099,15 @@
       if (bannerInfoWrap) bannerInfoWrap.classList.add('hidden');
       if (bannerInfoFooter) bannerInfoFooter.classList.add('hidden');
       if (bonusLevelEmpty) bonusLevelEmpty.classList.toggle('hidden', !noTabs || state.currentView !== 'bonus-cards');
-      if (bonusLevelInfoWrap) bonusLevelInfoWrap.classList.toggle('hidden', !isBonusLevelTab);
-      if (bonusLevelInfoFooter) bonusLevelInfoFooter.classList.toggle('hidden', !isBonusLevelTab);
+      if (bonusReferralsEmpty) bonusReferralsEmpty.classList.toggle('hidden', state.currentView !== 'bonus-referrals');
+      if (bonusLevelInfoWrap) bonusLevelInfoWrap.classList.toggle('hidden', !isBonusLevelTab || state.currentView !== 'bonus-cards');
+      if (bonusLevelInfoFooter) bonusLevelInfoFooter.classList.toggle('hidden', !isBonusLevelTab || state.currentView !== 'bonus-cards');
       if (clientBenefitsFooter) clientBenefitsFooter.classList.add('hidden');
       return;
     }
 
     if (clientEmpty) clientEmpty.classList.toggle('hidden', !noTabs || state.currentView !== 'clients');
+    if (bonusReferralsEmpty) bonusReferralsEmpty.classList.add('hidden');
     if (clientInfoWrap) clientInfoWrap.classList.toggle('hidden', !(isClientTab || forceClientPanelWithoutTabs));
     if (clientOrderInfoWrap) clientOrderInfoWrap.classList.toggle('hidden', !isOrderTab);
     if (isOrderTab) {
@@ -20263,6 +20449,12 @@
     });
   }
 
+  if (elBonusReferralsBtn) {
+    elBonusReferralsBtn.addEventListener('click', () => {
+      switchView('bonus-referrals');
+    });
+  }
+
   // Кнопка "Скидки" — переключить на view скидок
   if (elAddDiscountBtn) {
     elAddDiscountBtn.addEventListener('click', () => {
@@ -20282,22 +20474,37 @@
 
   if (elBonusEditBtn) {
     elBonusEditBtn.addEventListener('click', () => {
-      if (state.currentView !== 'bonus-cards') return;
-      enterBonusCardsEditMode();
+      if (state.currentView === 'bonus-cards') {
+        enterBonusCardsEditMode();
+        return;
+      }
+      if (state.currentView === 'bonus-referrals') {
+        enterReferralEditMode();
+      }
     });
   }
 
   if (elBonusEditCancelBtn) {
     elBonusEditCancelBtn.addEventListener('click', () => {
-      if (state.currentView !== 'bonus-cards') return;
-      cancelBonusCardsEditMode();
+      if (state.currentView === 'bonus-cards') {
+        cancelBonusCardsEditMode();
+        return;
+      }
+      if (state.currentView === 'bonus-referrals') {
+        cancelReferralEditMode();
+      }
     });
   }
 
   if (elBonusEditSaveBtn) {
     elBonusEditSaveBtn.addEventListener('click', () => {
-      if (state.currentView !== 'bonus-cards') return;
-      saveBonusCardsEditMode();
+      if (state.currentView === 'bonus-cards') {
+        saveBonusCardsEditMode();
+        return;
+      }
+      if (state.currentView === 'bonus-referrals') {
+        saveReferralEditMode();
+      }
     });
   }
 
@@ -20308,6 +20515,17 @@
         return;
       }
       state.bonusProgramEnabledDraft = elBonusProgramSwitch.checked === true;
+    });
+  }
+
+  if (elReferralProgramSwitch) {
+    elReferralProgramSwitch.addEventListener('change', () => {
+      if (!state.referralEditing) {
+        elReferralProgramSwitch.checked = state.referralProgramEnabled === true;
+        return;
+      }
+      state.referralProgramEnabledDraft = elReferralProgramSwitch.checked === true;
+      renderBonusReferralLevels();
     });
   }
 
@@ -20387,6 +20605,57 @@
       elBonusLevelsScroll.scrollLeft += event.deltaY;
       renderBonusLevelsScale((state.bonusCardsEditing ? state.bonusLevelsDraft : state.bonusLevels).length);
     }, { passive: false });
+  }
+
+  if (elBonusReferralLevelsTrack) {
+    elBonusReferralLevelsTrack.addEventListener('input', (event) => {
+      if (!state.referralEditing) return;
+      const input = event.target.closest('[data-referral-level-percent]');
+      if (!input) return;
+      const idx = Number(input.getAttribute('data-referral-level-percent'));
+      if (!Number.isFinite(idx) || idx < 0) return;
+      const next = Array.isArray(state.bonusReferralLevelsDraft)
+        ? state.bonusReferralLevelsDraft.map((level) => ({ ...level }))
+        : [];
+      if (!next[idx]) return;
+      const percent = normalizeBonusReferralPercentValue(input.value, 0);
+      next[idx].percent = percent;
+      next[idx].reward = percent > 0 ? `+${percent}%` : '—';
+      state.bonusReferralLevelsDraft = next;
+    });
+    elBonusReferralLevelsTrack.addEventListener('click', (event) => {
+      if (!state.referralEditing) return;
+      const button = event.target.closest('[data-referral-percent-step]');
+      if (!button) return;
+      const idx = Number(button.getAttribute('data-referral-level-index'));
+      const step = Number(button.getAttribute('data-referral-percent-step'));
+      if (!Number.isFinite(idx) || idx < 0 || !Number.isFinite(step)) return;
+      const next = Array.isArray(state.bonusReferralLevelsDraft)
+        ? state.bonusReferralLevelsDraft.map((level) => ({ ...level }))
+        : [];
+      if (!next[idx]) return;
+      const input = elBonusReferralLevelsTrack.querySelector(`[data-referral-level-percent="${idx}"]`);
+      const currentPercent = normalizeBonusReferralPercentValue(input?.value ?? next[idx].percent, 0);
+      const percent = normalizeBonusReferralPercentValue(currentPercent + step, 0);
+      next[idx].percent = percent;
+      next[idx].reward = percent > 0 ? `+${percent}%` : '—';
+      state.bonusReferralLevelsDraft = next;
+      if (input) input.value = formatBonusReferralPercentValue(percent);
+    });
+    elBonusReferralLevelsTrack.addEventListener('change', (event) => {
+      if (!state.referralEditing) return;
+      const input = event.target.closest('[data-referral-level-enabled]');
+      if (!input) return;
+      const idx = Number(input.getAttribute('data-referral-level-enabled'));
+      if (!Number.isFinite(idx) || idx < 0) return;
+      const next = Array.isArray(state.bonusReferralLevelsDraft)
+        ? state.bonusReferralLevelsDraft.map((level) => ({ ...level }))
+        : [];
+      if (!next[idx]) return;
+      next[idx].enabled = input.checked === true;
+      state.bonusReferralLevelsDraft = next;
+      renderBonusReferralLevels();
+    });
   }
 
   window.addEventListener('resize', () => {
@@ -20506,7 +20775,7 @@
   if (bonusLevelTitleInput) {
     bonusLevelTitleInput.addEventListener('input', () => {
       applyBonusLevelEditorDraftPatch({
-        title: String(bonusLevelTitleInput.value || '').trim(),
+        title: String(bonusLevelTitleInput.value || ''),
       });
     });
   }
@@ -22504,6 +22773,8 @@
     renderBannerPlacement();
     renderBonusLevels();
     renderBonusClientsList();
+    renderBonusReferralLevels();
+    renderBonusReferralsList();
     updateDiscountPromoUi();
     updateDiscountRestrictionUi();
   }
