@@ -1906,6 +1906,7 @@
   const bonusLevelAccessChips = right$("#bonusLevelAccessChips");
   const bonusLevelCashbackPercentInput = right$("#bonusLevelCashbackPercentInput");
   const bonusLevelRedeemPercentInput = right$("#bonusLevelRedeemPercentInput");
+  const bonusLevelReferralBonusField = right$("#bonusLevelReferralBonusField");
   const bonusLevelReferralBonusPercentInput = right$("#bonusLevelReferralBonusPercentInput");
   const bonusLevelActivationFieldWrap = right$("#bonusLevelActivationFieldWrap");
   const bonusLevelActivationDelayValueWrap = right$("#bonusLevelActivationDelayValueWrap");
@@ -6875,23 +6876,32 @@
     return lines.map((line, index) => `${index + 1}. ${line}`).join('\n');
   }
 
+  function isReferralSystemEnabled() {
+    return state.referralProgramEnabled === true;
+  }
+
   function formatBonusLevelRequirementsHelpText() {
-    return [
+    const lines = [
       '1. \u0421\u0443\u043c\u043c\u0430 \u0437\u0430\u043a\u0430\u0437\u043e\u0432 - \u043c\u0438\u043d\u0438\u043c\u0430\u043b\u044c\u043d\u0430\u044f \u043e\u0431\u0449\u0430\u044f \u0441\u0443\u043c\u043c\u0430 \u0437\u0430\u043a\u0430\u0437\u043e\u0432 \u0434\u043b\u044f \u043f\u0435\u0440\u0435\u0445\u043e\u0434\u0430 \u043d\u0430 \u0443\u0440\u043e\u0432\u0435\u043d\u044c.',
       '2. \u041a\u043e\u043b\u0438\u0447\u0435\u0441\u0442\u0432\u043e \u0437\u0430\u043a\u0430\u0437\u043e\u0432 - \u0441\u043a\u043e\u043b\u044c\u043a\u043e \u0437\u0430\u043a\u0430\u0437\u043e\u0432 \u043d\u0443\u0436\u043d\u043e \u0441\u0434\u0435\u043b\u0430\u0442\u044c \u0434\u043b\u044f \u043f\u0435\u0440\u0435\u0445\u043e\u0434\u0430 \u043d\u0430 \u0443\u0440\u043e\u0432\u0435\u043d\u044c.',
-      '3. \u041f\u0440\u0438\u0433\u043b\u0430\u0448\u0451\u043d\u043d\u044b\u0435 \u0440\u0435\u0444\u0435\u0440\u0430\u043b\u044b - \u0441\u043a\u043e\u043b\u044c\u043a\u043e \u0440\u0435\u0444\u0435\u0440\u0430\u043b\u043e\u0432 \u043d\u0443\u0436\u043d\u043e \u043f\u0440\u0438\u0432\u0435\u0441\u0442\u0438.',
-      '4. \u041f\u0443\u0441\u0442\u043e\u0439 \u0438\u043d\u043f\u0443\u0442 \u043d\u0435 \u0443\u0447\u0438\u0442\u044b\u0432\u0430\u0435\u0442\u0441\u044f \u0432 \u0442\u0440\u0435\u0431\u043e\u0432\u0430\u043d\u0438\u044f\u0445.',
-      '5. "\u0438" - \u043d\u0443\u0436\u043d\u043e \u0432\u044b\u043f\u043e\u043b\u043d\u0438\u0442\u044c \u0441\u0432\u044f\u0437\u0430\u043d\u043d\u044b\u0435 \u0443\u0441\u043b\u043e\u0432\u0438\u044f.',
-      '6. "\u0438\u043b\u0438" - \u0434\u043e\u0441\u0442\u0430\u0442\u043e\u0447\u043d\u043e \u0432\u044b\u043f\u043e\u043b\u043d\u0438\u0442\u044c \u043e\u0434\u043d\u043e \u0438\u0437 \u0441\u0432\u044f\u0437\u0430\u043d\u043d\u044b\u0445 \u0443\u0441\u043b\u043e\u0432\u0438\u0439.',
-      '7. \u041f\u0435\u0440\u0438\u043e\u0434 - \u0437\u0430 \u0441\u043a\u043e\u043b\u044c\u043a\u043e \u0434\u043d\u0435\u0439 \u0441\u0447\u0438\u0442\u0430\u044e\u0442\u0441\u044f \u0437\u0430\u043a\u0430\u0437\u044b; \u0435\u0441\u043b\u0438 \u043f\u0443\u0441\u0442\u043e, \u0443\u0441\u043b\u043e\u0432\u0438\u044f \u0431\u0435\u0441\u0441\u0440\u043e\u0447\u043d\u044b.',
-    ].join('\n');
+    ];
+    if (isReferralSystemEnabled()) {
+      lines.push('3. \u041f\u0440\u0438\u0433\u043b\u0430\u0448\u0451\u043d\u043d\u044b\u0435 \u0440\u0435\u0444\u0435\u0440\u0430\u043b\u044b - \u0441\u043a\u043e\u043b\u044c\u043a\u043e \u0440\u0435\u0444\u0435\u0440\u0430\u043b\u043e\u0432 \u043d\u0443\u0436\u043d\u043e \u043f\u0440\u0438\u0432\u0435\u0441\u0442\u0438.');
+    }
+    lines.push(
+      '\u041f\u0443\u0441\u0442\u043e\u0439 \u0438\u043d\u043f\u0443\u0442 \u043d\u0435 \u0443\u0447\u0438\u0442\u044b\u0432\u0430\u0435\u0442\u0441\u044f \u0432 \u0442\u0440\u0435\u0431\u043e\u0432\u0430\u043d\u0438\u044f\u0445.',
+      '"\u0438" - \u043d\u0443\u0436\u043d\u043e \u0432\u044b\u043f\u043e\u043b\u043d\u0438\u0442\u044c \u0441\u0432\u044f\u0437\u0430\u043d\u043d\u044b\u0435 \u0443\u0441\u043b\u043e\u0432\u0438\u044f.',
+      '"\u0438\u043b\u0438" - \u0434\u043e\u0441\u0442\u0430\u0442\u043e\u0447\u043d\u043e \u0432\u044b\u043f\u043e\u043b\u043d\u0438\u0442\u044c \u043e\u0434\u043d\u043e \u0438\u0437 \u0441\u0432\u044f\u0437\u0430\u043d\u043d\u044b\u0445 \u0443\u0441\u043b\u043e\u0432\u0438\u0439.',
+      '\u041f\u0435\u0440\u0438\u043e\u0434 - \u0437\u0430 \u0441\u043a\u043e\u043b\u044c\u043a\u043e \u0434\u043d\u0435\u0439 \u0441\u0447\u0438\u0442\u0430\u044e\u0442\u0441\u044f \u0437\u0430\u043a\u0430\u0437\u044b; \u0435\u0441\u043b\u0438 \u043f\u0443\u0441\u0442\u043e, \u0443\u0441\u043b\u043e\u0432\u0438\u044f \u0431\u0435\u0441\u0441\u0440\u043e\u0447\u043d\u044b.'
+    );
+    return lines.join('\n');
   }
 
   function formatBonusLevelRequirementsSummary(level = null) {
     const current = level && typeof level === 'object' ? level : getActiveBonusLevelForInfo();
     const amount = normalizeBonusLevelRequirementValue(current?.requirementAmount);
     const orders = normalizeBonusLevelRequirementValue(current?.requirementOrders);
-    const referrals = normalizeBonusLevelRequirementValue(current?.requirementReferrals);
+    const referrals = isReferralSystemEnabled() ? normalizeBonusLevelRequirementValue(current?.requirementReferrals) : null;
     const periodDays = normalizeBonusLevelRequirementValue(current?.requirementPeriodDays);
     const mode = normalizeBonusLevelRequirementMode(current?.requirementMode) === 'or' ? '\u0438\u043b\u0438' : '\u0438';
     const referralMode = normalizeBonusLevelRequirementMode(current?.requirementReferralMode) === 'or' ? '\u0438\u043b\u0438' : '\u0438';
@@ -6916,7 +6926,7 @@
     const current = level && typeof level === 'object' ? level : getActiveBonusLevelForInfo();
     const amount = normalizeBonusLevelRequirementValue(current?.requirementAmount);
     const orders = normalizeBonusLevelRequirementValue(current?.requirementOrders);
-    const referrals = normalizeBonusLevelRequirementValue(current?.requirementReferrals);
+    const referrals = isReferralSystemEnabled() ? normalizeBonusLevelRequirementValue(current?.requirementReferrals) : null;
     const periodDays = normalizeBonusLevelRequirementValue(current?.requirementPeriodDays);
     const mode = normalizeBonusLevelRequirementMode(current?.requirementMode) === 'or' ? '\u0438\u043b\u0438' : '\u0438';
     const referralMode = normalizeBonusLevelRequirementMode(current?.requirementReferralMode) === 'or' ? '\u0438\u043b\u0438' : '\u0438';
@@ -6927,9 +6937,9 @@
     const retentionOrders = retentionStrategy === 'custom'
       ? normalizeBonusLevelRequirementValue(current?.retentionOrders)
       : orders;
-    const retentionReferrals = retentionStrategy === 'custom'
+    const retentionReferrals = isReferralSystemEnabled() && retentionStrategy === 'custom'
       ? normalizeBonusLevelRequirementValue(current?.retentionReferrals)
-      : referrals;
+      : (isReferralSystemEnabled() ? referrals : null);
     const retentionMode = retentionStrategy === 'custom'
       ? (normalizeBonusLevelRequirementMode(current?.retentionMode) === 'or' ? '\u0438\u043b\u0438' : '\u0438')
       : mode;
@@ -6946,22 +6956,37 @@
       ? '\u0411\u0435\u0441\u0441\u0440\u043e\u0447\u043d\u043e'
       : `${periodDays.toLocaleString('ru-RU')} \u0434\u043d.`;
 
-    return [
+    const details = [
       '\u041f\u0435\u0440\u0435\u0445\u043e\u0434 \u043d\u0430 \u0443\u0440\u043e\u0432\u0435\u043d\u044c',
       `\u0421\u0443\u043c\u043c\u0430 \u0437\u0430\u043a\u0430\u0437\u043e\u0432: ${formatMoneyRequirement(amount)}`,
       `\u041a\u043e\u043b\u0438\u0447\u0435\u0441\u0442\u0432\u043e \u0437\u0430\u043a\u0430\u0437\u043e\u0432: ${formatCountRequirement(orders)}`,
-      `\u041f\u0440\u0438\u0433\u043b\u0430\u0448\u0451\u043d\u043d\u044b\u0435 \u0440\u0435\u0444\u0435\u0440\u0430\u043b\u044b: ${formatCountRequirement(referrals)}`,
-      `\u0421\u0432\u044f\u0437\u044c: ${mode} / ${referralMode}`,
+    ];
+    if (isReferralSystemEnabled()) {
+      details.push(
+        `\u041f\u0440\u0438\u0433\u043b\u0430\u0448\u0451\u043d\u043d\u044b\u0435 \u0440\u0435\u0444\u0435\u0440\u0430\u043b\u044b: ${formatCountRequirement(referrals)}`,
+        `\u0421\u0432\u044f\u0437\u044c: ${mode} / ${referralMode}`
+      );
+    } else {
+      details.push(`\u0421\u0432\u044f\u0437\u044c: ${mode}`);
+    }
+    details.push(
       `\u041f\u0435\u0440\u0438\u043e\u0434: ${formatPeriod()}`,
       '',
       '\u0423\u0434\u0435\u0440\u0436\u0430\u043d\u0438\u0435 \u0443\u0440\u043e\u0432\u043d\u044f',
       `\u0422\u0438\u043f: ${retentionStrategy === 'custom' ? '\u0421\u0432\u043e\u0438' : '\u0421\u043e\u0432\u043f\u0430\u0434\u0430\u044e\u0442'}`,
       `\u0421\u0443\u043c\u043c\u0430 \u0437\u0430\u043a\u0430\u0437\u043e\u0432: ${formatMoneyRequirement(retentionAmount)}`,
       `\u041a\u043e\u043b\u0438\u0447\u0435\u0441\u0442\u0432\u043e \u0437\u0430\u043a\u0430\u0437\u043e\u0432: ${formatCountRequirement(retentionOrders)}`,
-      `\u041f\u0440\u0438\u0433\u043b\u0430\u0448\u0451\u043d\u043d\u044b\u0435 \u0440\u0435\u0444\u0435\u0440\u0430\u043b\u044b: ${formatCountRequirement(retentionReferrals)}`,
-      `\u0421\u0432\u044f\u0437\u044c: ${retentionMode} / ${retentionReferralMode}`,
-      `\u041f\u0435\u0440\u0438\u043e\u0434 \u043f\u0440\u043e\u0432\u0435\u0440\u043a\u0438: ${formatPeriod()}`,
-    ].join('\n');
+    );
+    if (isReferralSystemEnabled()) {
+      details.push(
+        `\u041f\u0440\u0438\u0433\u043b\u0430\u0448\u0451\u043d\u043d\u044b\u0435 \u0440\u0435\u0444\u0435\u0440\u0430\u043b\u044b: ${formatCountRequirement(retentionReferrals)}`,
+        `\u0421\u0432\u044f\u0437\u044c: ${retentionMode} / ${retentionReferralMode}`
+      );
+    } else {
+      details.push(`\u0421\u0432\u044f\u0437\u044c: ${retentionMode}`);
+    }
+    details.push(`\u041f\u0435\u0440\u0438\u043e\u0434 \u043f\u0440\u043e\u0432\u0435\u0440\u043a\u0438: ${formatPeriod()}`);
+    return details.join('\n');
   }
 
   function formatBonusLevelTariffPeriod(level = null) {
@@ -7308,6 +7333,7 @@
     note.textContent = '\u041f\u0443\u0441\u0442\u044b\u0435 \u043f\u043e\u043b\u044f \u043d\u0435 \u0443\u0447\u0438\u0442\u044b\u0432\u0430\u044e\u0442\u0441\u044f. \u041f\u0443\u0441\u0442\u043e\u0439 \u043f\u0435\u0440\u0438\u043e\u0434 - \u0431\u0435\u0441\u0441\u0440\u043e\u0447\u043d\u043e.';
     shell.appendChild(note);
 
+    const referralRequirementsEnabled = isReferralSystemEnabled();
     const initialPeriodDays = normalizeBonusLevelRequirementValue(current.requirementPeriodDays);
     let selectedMode = normalizeBonusLevelRequirementMode(current.requirementMode);
     let selectedReferralMode = normalizeBonusLevelRequirementMode(current.requirementReferralMode);
@@ -7365,6 +7391,7 @@
         <span class="field-label" for="bonusLevelRequirementModalOrdersInput">\u041a\u043e\u043b\u0438\u0447\u0435\u0441\u0442\u0432\u043e \u0437\u0430\u043a\u0430\u0437\u043e\u0432</span>
         <input id="bonusLevelRequirementModalOrdersInput" class="control bonus-level-rule-input" type="number" min="0" step="1" placeholder="\u041d\u0435 \u0443\u0447\u0438\u0442\u044b\u0432\u0430\u0442\u044c" autocomplete="off" value="${escapeHtml(String(normalizeBonusLevelRequirementValue(current.requirementOrders) ?? ''))}" />
       </label>
+      ${referralRequirementsEnabled ? `
       <label class="field-wrap">
         <span class="field-label">\u0423\u0441\u043b\u043e\u0432\u0438\u0435</span>
         <div class="bonus-level-requirement-mode" aria-label="\u0421\u0432\u044f\u0437\u044c \u0437\u0430\u043a\u0430\u0437\u043e\u0432 \u0438 \u0440\u0435\u0444\u0435\u0440\u0430\u043b\u043e\u0432">
@@ -7375,6 +7402,7 @@
         <span class="field-label" for="bonusLevelRequirementModalReferralsInput">\u041f\u0440\u0438\u0433\u043b. \u0440\u0435\u0444\u0435\u0440\u0430\u043b\u044b</span>
         <input id="bonusLevelRequirementModalReferralsInput" class="control bonus-level-rule-input" type="number" min="0" step="1" placeholder="\u041d\u0435 \u0443\u0447\u0438\u0442\u044b\u0432\u0430\u0442\u044c" autocomplete="off" value="${escapeHtml(String(normalizeBonusLevelRequirementValue(current.requirementReferrals) ?? ''))}" />
       </label>
+      ` : ''}
     `;
     shell.appendChild(fields);
 
@@ -7414,6 +7442,7 @@
           <span class="field-label" for="bonusLevelRetentionModalOrdersInput">\u041a\u043e\u043b\u0438\u0447\u0435\u0441\u0442\u0432\u043e \u0437\u0430\u043a\u0430\u0437\u043e\u0432</span>
           <input id="bonusLevelRetentionModalOrdersInput" class="control bonus-level-rule-input" type="number" min="0" step="1" placeholder="\u041d\u0435 \u0443\u0447\u0438\u0442\u044b\u0432\u0430\u0442\u044c" autocomplete="off" value="${escapeHtml(String(normalizeBonusLevelRequirementValue(current.retentionOrders) ?? ''))}" />
         </label>
+        ${referralRequirementsEnabled ? `
         <label class="field-wrap">
           <span class="field-label">\u0423\u0441\u043b\u043e\u0432\u0438\u0435</span>
           <div class="bonus-level-requirement-mode" aria-label="\u0421\u0432\u044f\u0437\u044c \u0437\u0430\u043a\u0430\u0437\u043e\u0432 \u0438 \u0440\u0435\u0444\u0435\u0440\u0430\u043b\u043e\u0432">
@@ -7424,6 +7453,7 @@
           <span class="field-label" for="bonusLevelRetentionModalReferralsInput">\u041f\u0440\u0438\u0433\u043b. \u0440\u0435\u0444\u0435\u0440\u0430\u043b\u044b</span>
           <input id="bonusLevelRetentionModalReferralsInput" class="control bonus-level-rule-input" type="number" min="0" step="1" placeholder="\u041d\u0435 \u0443\u0447\u0438\u0442\u044b\u0432\u0430\u0442\u044c" autocomplete="off" value="${escapeHtml(String(normalizeBonusLevelRequirementValue(current.retentionReferrals) ?? ''))}" />
         </label>
+        ` : ''}
       </div>
     `;
     shell.appendChild(retentionSection);
@@ -7680,11 +7710,11 @@
       const retentionReferralsInput = retentionSection.querySelector('#bonusLevelRetentionModalReferralsInput');
       const amountRaw = String(amountInput?.value ?? '').trim();
       const ordersRaw = String(ordersInput?.value ?? '').trim();
-      const referralsRaw = String(referralsInput?.value ?? '').trim();
+      const referralsRaw = referralRequirementsEnabled ? String(referralsInput?.value ?? '').trim() : '';
       const periodRaw = String(periodInput?.value ?? '').trim();
       const retentionAmountRaw = String(retentionAmountInput?.value ?? '').trim();
       const retentionOrdersRaw = String(retentionOrdersInput?.value ?? '').trim();
-      const retentionReferralsRaw = String(retentionReferralsInput?.value ?? '').trim();
+      const retentionReferralsRaw = referralRequirementsEnabled ? String(retentionReferralsInput?.value ?? '').trim() : '';
       const amount = normalizeBonusLevelRequirementValue(amountRaw);
       const orders = normalizeBonusLevelRequirementValue(ordersRaw);
       const referrals = normalizeBonusLevelRequirementValue(referralsRaw);
@@ -7707,11 +7737,11 @@
         showBonusLevelRequirementsValidationMessage('\u0414\u043b\u044f \u0440\u0435\u0436\u0438\u043c\u0430 "\u0438" \u0437\u0430\u043f\u043e\u043b\u043d\u0438\u0442\u0435 \u0441\u0443\u043c\u043c\u0443 \u0438 \u043a\u043e\u043b\u0438\u0447\u0435\u0441\u0442\u0432\u043e \u0437\u0430\u043a\u0430\u0437\u043e\u0432.');
         return;
       }
-      if (selectedReferralMode === 'and' && (!ordersFilled || !referralsFilled)) {
+      if (referralRequirementsEnabled && selectedReferralMode === 'and' && (!ordersFilled || !referralsFilled)) {
         showBonusLevelRequirementsValidationMessage('\u0414\u043b\u044f \u0440\u0435\u0436\u0438\u043c\u0430 "\u0438" \u0437\u0430\u043f\u043e\u043b\u043d\u0438\u0442\u0435 \u043a\u043e\u043b\u0438\u0447\u0435\u0441\u0442\u0432\u043e \u0437\u0430\u043a\u0430\u0437\u043e\u0432 \u0438 \u0440\u0435\u0444\u0435\u0440\u0430\u043b\u043e\u0432.');
         return;
       }
-      if (selectedMode === 'or' && selectedReferralMode === 'or' && !amountFilled && !ordersFilled && !referralsFilled) {
+      if (selectedMode === 'or' && (!referralRequirementsEnabled || selectedReferralMode === 'or') && !amountFilled && !ordersFilled && !referralsFilled) {
         showBonusLevelRequirementsValidationMessage('\u0414\u043b\u044f \u0440\u0435\u0436\u0438\u043c\u0430 "\u0438\u043b\u0438" \u0437\u0430\u043f\u043e\u043b\u043d\u0438\u0442\u0435 \u0445\u043e\u0442\u044f \u0431\u044b \u043e\u0434\u043d\u043e \u0443\u0441\u043b\u043e\u0432\u0438\u0435.');
         return;
       }
@@ -7726,10 +7756,10 @@
         } else if (selectedRetentionMode === 'and' && (!retentionAmountFilled || !retentionOrdersFilled)) {
           showBonusLevelRequirementsValidationMessage('\u0414\u043b\u044f \u0443\u0434\u0435\u0440\u0436\u0430\u043d\u0438\u044f \u0443\u0440\u043e\u0432\u043d\u044f \u0437\u0430\u043f\u043e\u043b\u043d\u0438\u0442\u0435 \u0441\u0443\u043c\u043c\u0443 \u0438 \u043a\u043e\u043b\u0438\u0447\u0435\u0441\u0442\u0432\u043e \u0437\u0430\u043a\u0430\u0437\u043e\u0432.');
           return;
-        } else if (selectedRetentionReferralMode === 'and' && (!retentionOrdersFilled || !retentionReferralsFilled)) {
+        } else if (referralRequirementsEnabled && selectedRetentionReferralMode === 'and' && (!retentionOrdersFilled || !retentionReferralsFilled)) {
           showBonusLevelRequirementsValidationMessage('\u0414\u043b\u044f \u0443\u0434\u0435\u0440\u0436\u0430\u043d\u0438\u044f \u0443\u0440\u043e\u0432\u043d\u044f \u0437\u0430\u043f\u043e\u043b\u043d\u0438\u0442\u0435 \u043a\u043e\u043b\u0438\u0447\u0435\u0441\u0442\u0432\u043e \u0437\u0430\u043a\u0430\u0437\u043e\u0432 \u0438 \u0440\u0435\u0444\u0435\u0440\u0430\u043b\u043e\u0432.');
           return;
-        } else if (selectedRetentionMode === 'or' && selectedRetentionReferralMode === 'or' && !retentionAmountFilled && !retentionOrdersFilled && !retentionReferralsFilled) {
+        } else if (selectedRetentionMode === 'or' && (!referralRequirementsEnabled || selectedRetentionReferralMode === 'or') && !retentionAmountFilled && !retentionOrdersFilled && !retentionReferralsFilled) {
           showBonusLevelRequirementsValidationMessage('\u0414\u043b\u044f \u0443\u0434\u0435\u0440\u0436\u0430\u043d\u0438\u044f \u0443\u0440\u043e\u0432\u043d\u044f \u0437\u0430\u043f\u043e\u043b\u043d\u0438\u0442\u0435 \u0445\u043e\u0442\u044f \u0431\u044b \u043e\u0434\u043d\u043e \u0443\u0441\u043b\u043e\u0432\u0438\u0435.');
           return;
         }
@@ -7739,15 +7769,15 @@
         requirementAmount: amountFilled ? amount : null,
         requirementMode: normalizeBonusLevelRequirementMode(selectedMode),
         requirementOrders: ordersFilled ? orders : null,
-        requirementReferralMode: normalizeBonusLevelRequirementMode(selectedReferralMode),
-        requirementReferrals: referralsFilled ? referrals : null,
+        requirementReferralMode: referralRequirementsEnabled ? normalizeBonusLevelRequirementMode(selectedReferralMode) : 'and',
+        requirementReferrals: referralRequirementsEnabled && referralsFilled ? referrals : null,
         requirementPeriodDays: selectedPeriodUnit === 'days' ? periodDays : null,
         retentionStrategy: selectedPeriodUnit === 'days' ? normalizeBonusLevelRetentionStrategy(selectedRetentionStrategy) : 'match',
         retentionAmount: selectedPeriodUnit === 'days' && selectedRetentionStrategy === 'custom' && retentionAmountFilled ? retentionAmount : null,
         retentionMode: normalizeBonusLevelRequirementMode(selectedRetentionMode),
         retentionOrders: selectedPeriodUnit === 'days' && selectedRetentionStrategy === 'custom' && retentionOrdersFilled ? retentionOrders : null,
-        retentionReferralMode: normalizeBonusLevelRequirementMode(selectedRetentionReferralMode),
-        retentionReferrals: selectedPeriodUnit === 'days' && selectedRetentionStrategy === 'custom' && retentionReferralsFilled ? retentionReferrals : null,
+        retentionReferralMode: referralRequirementsEnabled ? normalizeBonusLevelRequirementMode(selectedRetentionReferralMode) : 'and',
+        retentionReferrals: referralRequirementsEnabled && selectedPeriodUnit === 'days' && selectedRetentionStrategy === 'custom' && retentionReferralsFilled ? retentionReferrals : null,
       };
       applyBonusLevelEditorDraftPatch(nextPatch);
       updateBonusLevelInCollections(current.id, (level) => ({
@@ -8294,9 +8324,12 @@
       bonusLevelRedeemPercentInput.value = String(normalizeNumberInputValue(current.redeemPercent, 0) || 0);
       bonusLevelRedeemPercentInput.disabled = !isEditing;
     }
+    if (bonusLevelReferralBonusField) {
+      bonusLevelReferralBonusField.classList.toggle('hidden', !isReferralSystemEnabled());
+    }
     if (bonusLevelReferralBonusPercentInput) {
       bonusLevelReferralBonusPercentInput.value = String(normalizeBonusPercentInputValue(current.referralBonusPercent, 0) || 0);
-      bonusLevelReferralBonusPercentInput.disabled = !isEditing;
+      bonusLevelReferralBonusPercentInput.disabled = !isEditing || !isReferralSystemEnabled();
     }
     if (bonusLevelRangeSummary) {
       const rangeSummaryText = formatBonusLevelRangeSummary(current);
