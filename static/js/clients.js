@@ -556,10 +556,10 @@
 
   function createDefaultBonusReferralLevels() {
     return [
-      { id: 'ref_start', title: 'Старт', invitedCount: 0, percent: 0, enabled: true },
-      { id: 'ref_partner', title: 'Партнёр', invitedCount: 1, percent: 5, enabled: true },
-      { id: 'ref_ambassador', title: 'Амбассадор', invitedCount: 2, percent: 8, enabled: false },
-      { id: 'ref_leader', title: 'Лидер', invitedCount: 3, percent: 12, enabled: false },
+      { id: 'ref_example', title: '\u041f\u0440\u0438\u043c\u0435\u0440', invitedCount: 0, percent: 0, enabled: true, isExample: true },
+      { id: 'ref_level_1', title: '1-\u0439 \u0443\u0440\u043e\u0432\u0435\u043d\u044c', invitedCount: 1, percent: 0, enabled: false },
+      { id: 'ref_level_2', title: '2-\u0439 \u0443\u0440\u043e\u0432\u0435\u043d\u044c', invitedCount: 2, percent: 0, enabled: false },
+      { id: 'ref_level_3', title: '3-\u0439 \u0443\u0440\u043e\u0432\u0435\u043d\u044c', invitedCount: 3, percent: 0, enabled: false },
     ];
   }
 
@@ -663,7 +663,8 @@
     return [fallbackRow];
   }
 
-  function sanitizeBonusLevels(items) {
+  function sanitizeBonusLevels(items, options = {}) {
+    const withDefaults = options?.withDefaults !== false;
     const source = Array.isArray(items) ? items : [];
     const next = source
       .map((item, idx) => {
@@ -731,10 +732,11 @@
         };
       })
       .filter(Boolean);
-    return next.length ? next : createDefaultBonusLevels();
+    return next.length || !withDefaults ? next : createDefaultBonusLevels();
   }
 
-  function sanitizeBonusClientEvents(items) {
+  function sanitizeBonusClientEvents(items, options = {}) {
+    const withDefaults = options?.withDefaults !== false;
     const source = Array.isArray(items) ? items : [];
     const next = source
       .map((item, idx) => ({
@@ -749,7 +751,23 @@
         at: String(item?.at || '').trim() || '—',
       }))
       .filter((item) => item.clientName);
-    return next.length ? next : createDefaultBonusClientEvents();
+    return next.length || !withDefaults ? next : createDefaultBonusClientEvents();
+  }
+
+  function sanitizeBonusReferralEvents(items) {
+    return (Array.isArray(items) ? items : [])
+      .map((item, idx) => ({
+        id: String(item?.id || `referral_event_${idx + 1}`),
+        inviterName: String(item?.inviterName || '').trim() || 'Без приглашения',
+        inviterPhone: String(item?.inviterPhone || '').trim() || '—',
+        referralName: String(item?.referralName || '').trim() || `Клиент #${idx + 1}`,
+        referralPhone: String(item?.referralPhone || '').trim() || '—',
+        relation: String(item?.relation || '').trim() || '—',
+        status: String(item?.status || '').trim() || '—',
+        reward: String(item?.reward || '').trim() || '—',
+        at: String(item?.at || '').trim() || '—',
+      }))
+      .filter((item) => item.referralName);
   }
 
   function mapBonusApiLevelToState(item, idx = 0) {
@@ -815,14 +833,38 @@
 
   function mapBonusApiReferralLevelToState(item, idx = 0) {
     const percent = normalizeBonusReferralPercentValue(item?.percent, 0);
+    const levelNumber = Math.min(3, Math.max(1, normalizeNumberInputValue(item?.invited_count ?? item?.invitedCount, idx + 1)));
     return {
-      id: String(item?.code || item?.id || `referral_${idx + 1}`),
-      title: String(item?.title || '').trim() || `\u0423\u0440\u043e\u0432\u0435\u043d\u044c ${idx + 1}`,
-      invitedCount: normalizeNumberInputValue(item?.invited_count ?? item?.invitedCount, idx),
+      id: `ref_level_${levelNumber}`,
+      sourceCode: String(item?.code || ''),
+      title: `${levelNumber}-\u0439 \u0443\u0440\u043e\u0432\u0435\u043d\u044c`,
+      invitedCount: levelNumber,
       percent,
       enabled: item?.is_active !== false && item?.enabled !== false,
       reward: percent > 0 ? `+${percent}%` : '\u2014',
     };
+  }
+
+  function mergeBonusReferralLevels(apiLevels = []) {
+    const defaults = createDefaultBonusReferralLevels();
+    const next = defaults.map((level) => ({ ...level }));
+    const byInvitedCount = new Map(
+      (Array.isArray(apiLevels) ? apiLevels : [])
+        .filter((level) => /^ref_level_[1-3]$/.test(String(level?.sourceCode || level?.id || '')))
+        .filter((level) => Number(level?.invitedCount || 0) >= 1 && Number(level?.invitedCount || 0) <= 3)
+        .map((level) => [Number(level.invitedCount), level])
+    );
+    for (let index = 1; index <= 3; index += 1) {
+      const saved = byInvitedCount.get(index);
+      if (!saved) continue;
+      next[index] = {
+        ...next[index],
+        percent: normalizeBonusReferralPercentValue(saved.percent, 0),
+        enabled: saved.enabled === true,
+        reward: normalizeBonusReferralPercentValue(saved.percent, 0) > 0 ? `+${normalizeBonusReferralPercentValue(saved.percent, 0)}%` : '\u2014',
+      };
+    }
+    return next;
   }
 
   function buildBonusConfigPayload(overrides = {}) {
@@ -832,11 +874,14 @@
       settings: {
         bonus_program_enabled: overrides.bonusProgramEnabled ?? state.bonusProgramEnabled,
         referral_program_enabled: overrides.referralProgramEnabled ?? state.referralProgramEnabled,
+        bonus_point_amount: overrides.bonusPointAmount ?? state.bonusPointAmount,
+        bonus_ruble_amount: overrides.bonusRubleAmount ?? state.bonusRubleAmount,
+        bonus_point_rate: overrides.bonusPointRate ?? state.bonusPointRate,
         referral_registration_reward: overrides.referralRegistrationReward ?? state.referralRegistrationReward,
         referral_first_purchase_reward: overrides.referralFirstPurchaseReward ?? state.referralFirstPurchaseReward,
         allow_redeem_and_accrue: false,
       },
-      levels: sanitizeBonusLevels(levelsSource).map((level, idx) => ({
+      levels: sanitizeBonusLevels(levelsSource, { withDefaults: false }).map((level, idx) => ({
         code: String(level.id || `level_${idx + 1}`),
         sort_order: idx,
         title: level.title,
@@ -886,20 +931,49 @@
         retentionReferralMode: level.retentionReferralMode,
         retentionReferrals: level.retentionReferrals,
       })),
-      referral_levels: (Array.isArray(referralLevelsSource) ? referralLevelsSource : []).map((level, idx) => ({
-        code: String(level?.id || `referral_${idx + 1}`),
-        title: String(level?.title || '').trim() || `\u0423\u0440\u043e\u0432\u0435\u043d\u044c ${idx + 1}`,
-        invited_count: normalizeNumberInputValue(level?.invitedCount, idx),
-        percent: normalizeBonusReferralPercentValue(level?.percent, 0),
-        sort_order: idx,
-        is_active: idx < 2 ? true : level?.enabled === true,
-      })),
+      referral_levels: (Array.isArray(referralLevelsSource) ? referralLevelsSource : [])
+        .filter((level) => level?.isExample !== true && Number(level?.invitedCount || 0) >= 1 && Number(level?.invitedCount || 0) <= 3)
+        .slice(0, 3)
+        .map((level, idx) => {
+          const levelNumber = Math.min(3, Math.max(1, normalizeNumberInputValue(level?.invitedCount, idx + 1)));
+          return {
+            code: `ref_level_${levelNumber}`,
+            title: `${levelNumber}-\u0439 \u0443\u0440\u043e\u0432\u0435\u043d\u044c`,
+            invited_count: levelNumber,
+            percent: normalizeBonusReferralPercentValue(level?.percent, 0),
+            sort_order: levelNumber - 1,
+            is_active: level?.enabled === true,
+          };
+        }),
     };
   }
 
   async function persistBonusCardsStorage(overrides = {}) {
     const payload = buildBonusConfigPayload(overrides);
     await apiJson('/api/admin/bonus/config', { method: 'PUT', body: payload });
+  }
+
+  let bonusConfigSavingOverlay = null;
+  function ensureBonusConfigSavingOverlay() {
+    if (bonusConfigSavingOverlay) return bonusConfigSavingOverlay;
+    const overlay = document.createElement('div');
+    overlay.className = 'shop-checkout-sending-overlay hidden';
+    overlay.innerHTML = `
+      <div class="shop-checkout-sending-card">
+        <div class="shop-checkout-sending-spinner" aria-hidden="true"></div>
+        <div class="shop-checkout-sending-text"></div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    bonusConfigSavingOverlay = overlay;
+    return overlay;
+  }
+
+  function setBonusConfigSaving(isSaving, text = '\u041f\u043e\u0434\u043e\u0436\u0434\u0438\u0442\u0435, \u0441\u043e\u0445\u0440\u0430\u043d\u044f\u0435\u043c...') {
+    const overlay = ensureBonusConfigSavingOverlay();
+    const textEl = overlay.querySelector('.shop-checkout-sending-text');
+    if (textEl) textEl.textContent = text;
+    overlay.classList.toggle('hidden', !isSaving);
   }
 
   function reportBonusConfigSaveError(err) {
@@ -920,15 +994,24 @@
     const settings = json?.settings && typeof json.settings === 'object' ? json.settings : {};
     state.bonusProgramEnabled = settings.bonus_program_enabled === true;
     state.bonusProgramEnabledDraft = state.bonusProgramEnabled;
-    state.bonusLevels = levels.length ? sanitizeBonusLevels(levels) : [];
+    state.bonusPointAmount = normalizeBonusPointRateValue(settings.bonus_point_amount, 1);
+    state.bonusPointAmountDraft = state.bonusPointAmount;
+    state.bonusRubleAmount = normalizeBonusPointRateValue(settings.bonus_ruble_amount, settings.bonus_point_rate || 1);
+    state.bonusRubleAmountDraft = state.bonusRubleAmount;
+    state.bonusPointRate = normalizeBonusPointRateValue(settings.bonus_point_rate, state.bonusRubleAmount / state.bonusPointAmount);
+    state.bonusPointRateDraft = state.bonusPointRate;
+    state.bonusLevels = sanitizeBonusLevels(levels, { withDefaults: false });
     state.bonusLevelsDraft = state.bonusLevels.map((level) => ({ ...level }));
-    state.bonusClientEvents = sanitizeBonusClientEvents(state.bonusClientEvents);
+    state.bonusClientEvents = sanitizeBonusClientEvents(json?.bonus_events, { withDefaults: false });
     state.referralProgramEnabled = settings.referral_program_enabled === true;
     state.referralProgramEnabledDraft = state.referralProgramEnabled;
-    state.referralFirstPurchaseReward = normalizeBonusReferralRewardValue(settings.referral_first_purchase_reward, 50);
-    state.referralRegistrationReward = normalizeBonusReferralRewardValue(settings.referral_registration_reward, 50);
-    state.bonusReferralLevels = referralLevels;
+    state.referralFirstPurchaseReward = normalizeBonusReferralRewardValue(settings.referral_first_purchase_reward, 0);
+    state.referralFirstPurchaseRewardDraft = state.referralFirstPurchaseReward;
+    state.referralRegistrationReward = normalizeBonusReferralRewardValue(settings.referral_registration_reward, 0);
+    state.referralRegistrationRewardDraft = state.referralRegistrationReward;
+    state.bonusReferralLevels = mergeBonusReferralLevels(referralLevels);
     state.bonusReferralLevelsDraft = (Array.isArray(state.bonusReferralLevels) ? state.bonusReferralLevels : []).map((level) => ({ ...level }));
+    state.bonusReferralEvents = sanitizeBonusReferralEvents(json?.referral_events);
   }
 
   function getBannerDraftsByType(type = state.activeBannerType) {
@@ -1706,6 +1789,9 @@
   const elSortWrap = $("#clientsSortWrap");
   const elBannersSwitchWrap = $("#clientsBannersSwitchWrap");
   const elBannersEnabledSwitch = $("#clientsBannersEnabledSwitch");
+  const elBonusPointRateWrap = $("#clientsBonusPointRateWrap");
+  const elBonusPointAmountInput = $("#clientsBonusPointAmountInput");
+  const elBonusRubleAmountInput = $("#clientsBonusRubleAmountInput");
   const elBonusProgramSwitchWrap = $("#clientsBonusProgramSwitchWrap");
   const elBonusProgramSwitch = $("#clientsBonusProgramSwitch");
   const elReferralProgramSwitchWrap = $("#clientsReferralProgramSwitchWrap");
@@ -2273,18 +2359,26 @@
     bannerDragState: null,
     bonusProgramEnabled: false,
     bonusProgramEnabledDraft: false,
+    bonusPointAmount: 1,
+    bonusPointAmountDraft: 1,
+    bonusRubleAmount: 1,
+    bonusRubleAmountDraft: 1,
+    bonusPointRate: 1,
+    bonusPointRateDraft: 1,
     bonusCardsEditing: false,
     bonusLevels: createDefaultBonusLevels(),
     bonusLevelsDraft: createDefaultBonusLevels(),
-    bonusClientEvents: createDefaultBonusClientEvents(),
+    bonusClientEvents: [],
     referralProgramEnabled: false,
     referralProgramEnabledDraft: false,
     referralEditing: false,
-    referralFirstPurchaseReward: 50,
-    referralRegistrationReward: 50,
+    referralFirstPurchaseReward: 0,
+    referralFirstPurchaseRewardDraft: 0,
+    referralRegistrationReward: 0,
+    referralRegistrationRewardDraft: 0,
     bonusReferralLevels: createDefaultBonusReferralLevels(),
     bonusReferralLevelsDraft: createDefaultBonusReferralLevels(),
-    bonusReferralEvents: createDefaultBonusReferralEvents(),
+    bonusReferralEvents: [],
     bonusHistoryPage: 1,
     bonusFlippedLevelIds: new Set(),
     bonusAnimatingLevelIds: new Set(),
@@ -6772,6 +6866,7 @@
     const isBonusCardsView = state.currentView === 'bonus-cards';
     const isBonusReferralsView = state.currentView === 'bonus-referrals';
     const isEditableBonusView = isBonusCardsView || isBonusReferralsView;
+    if (elBonusPointRateWrap) elBonusPointRateWrap.classList.toggle('hidden', !isBonusCardsView);
     if (elBonusProgramSwitchWrap) elBonusProgramSwitchWrap.classList.toggle('hidden', !isBonusCardsView);
     if (elReferralProgramSwitchWrap) elReferralProgramSwitchWrap.classList.toggle('hidden', !isBonusReferralsView);
     if (elBonusFlipAllBtn) {
@@ -6792,6 +6887,16 @@
     if (elBonusProgramSwitch) {
       elBonusProgramSwitch.checked = (state.bonusCardsEditing ? state.bonusProgramEnabledDraft : state.bonusProgramEnabled) === true;
       elBonusProgramSwitch.disabled = !state.bonusCardsEditing;
+    }
+    if (elBonusPointAmountInput) {
+      elBonusPointAmountInput.value = formatBonusPointRateValue(state.bonusCardsEditing ? state.bonusPointAmountDraft : state.bonusPointAmount);
+      resizeBonusPointRateInput(elBonusPointAmountInput);
+      elBonusPointAmountInput.disabled = !state.bonusCardsEditing;
+    }
+    if (elBonusRubleAmountInput) {
+      elBonusRubleAmountInput.value = formatBonusPointRateValue(state.bonusCardsEditing ? state.bonusRubleAmountDraft : state.bonusRubleAmount);
+      resizeBonusPointRateInput(elBonusRubleAmountInput);
+      elBonusRubleAmountInput.disabled = !state.bonusCardsEditing;
     }
     if (elReferralProgramSwitch) {
       elReferralProgramSwitch.checked = (state.referralEditing ? state.referralProgramEnabledDraft : state.referralProgramEnabled) === true;
@@ -8802,25 +8907,34 @@
       elBonusLevelsTrack.appendChild(card);
     });
 
-    if (state.bonusCardsEditing) {
+    const shouldShowAddCard = state.bonusCardsEditing || levels.length === 0;
+    if (shouldShowAddCard) {
       const addCard = document.createElement('button');
       addCard.type = 'button';
       addCard.className = 'banner-placement-card bonus-level-add-card';
       addCard.setAttribute('aria-label', 'Добавить уровень');
       addCard.title = 'Добавить уровень';
       addCard.innerHTML = `
-        <div class="banner-placement-card-main">
-          <div class="banner-placement-card-icon"><i class="fas fa-medal"></i></div>
-        </div>
-        <div class="banner-placement-card-stack">
-          <div class="banner-placement-card-display-title">Новый уровень</div>
+        <div class="bonus-level-preview-card bonus-level-add-preview-card">
+          <div class="bonus-level-preview-main">
+            <div class="bonus-level-preview-title">\u041d\u043e\u0432\u044b\u0439 \u0443\u0440\u043e\u0432\u0435\u043d\u044c</div>
+          </div>
+          <div class="bonus-level-preview-sub">
+            <div class="bonus-level-add-action">
+              <span class="bonus-level-add-action-icon"><i class="fas fa-plus" aria-hidden="true"></i></span>
+              <span>\u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c</span>
+            </div>
+          </div>
         </div>
       `;
       addCard.addEventListener('click', () => {
-        if (!state.bonusCardsEditing) return;
-        const next = [...state.bonusLevelsDraft, {
+        if (!state.bonusCardsEditing) {
+          enterBonusCardsEditMode();
+        }
+        const draftLevels = Array.isArray(state.bonusLevelsDraft) ? state.bonusLevelsDraft : [];
+        const next = [...draftLevels, {
           id: `level_${Date.now()}`,
-          title: `Новый уровень ${state.bonusLevelsDraft.length + 1}`,
+          title: `Новый уровень ${draftLevels.length + 1}`,
           subtitle: 'Порог не задан',
           description: '',
           showTitleOnCard: true,
@@ -8828,6 +8942,11 @@
           titleBackgroundEnabled: true,
           titleBackgroundColor: '#ffffff',
           titleBackgroundOpacity: 90,
+          designColor: '#f3f4f6',
+          accentColor: '#64748b',
+          mainColor: '#f3f4f6',
+          baseColor: '#d1d5db',
+          contentColor: '#64748b',
           accessType: 'conditions',
           tariffPrice: 0,
           tariffDiscountPercent: 0,
@@ -8858,27 +8977,22 @@
     const cards = Array.from(elBonusLevelsTrack.querySelectorAll('.banner-placement-card'));
     const scaleRect = elBonusLevelsScale.getBoundingClientRect();
     const hasLayout = cards.length > 0 && scaleRect.width > 0;
-    const centers = hasLayout
-      ? cards.map((card) => {
-          const rect = card.getBoundingClientRect();
-          return (rect.left + (rect.width / 2)) - scaleRect.left;
-        })
-      : [];
-
+    const cardRects = hasLayout ? cards.map((card) => card.getBoundingClientRect()) : [];
     const fallbackStart = 20;
     const fallbackEnd = Math.max(fallbackStart, scaleRect.width - 20);
-    const start = centers.length ? centers[0] : fallbackStart;
-    const end = centers.length ? centers[centers.length - 1] : fallbackEnd;
+    const start = cardRects.length ? cardRects[0].left - scaleRect.left : fallbackStart;
+    const end = cardRects.length ? cardRects[cardRects.length - 1].right - scaleRect.left : fallbackEnd;
     elBonusLevelsScale.style.setProperty('--bonus-scale-start', `${Math.max(0, start)}px`);
     elBonusLevelsScale.style.setProperty('--bonus-scale-end', `${Math.max(0, end)}px`);
 
     const baseLevelsCount = Math.max(0, safeCount);
-    centers.forEach((centerX, idx) => {
+    cardRects.forEach((rect, idx) => {
+      const pointX = rect.left - scaleRect.left;
       const point = document.createElement('span');
       const isAddPoint = state.bonusCardsEditing && idx >= baseLevelsCount;
       point.className = `bonus-levels-scale-point${isAddPoint ? ' is-add' : ''}`;
       point.title = isAddPoint ? 'Добавить уровень' : `Уровень ${idx + 1}`;
-      point.style.left = `${centerX}px`;
+      point.style.left = `${pointX}px`;
       if (isAddPoint) point.innerHTML = '<i class="fas fa-plus"></i>';
       elBonusLevelsScalePoints.appendChild(point);
     });
@@ -8970,6 +9084,27 @@
     return parsed;
   }
 
+  function normalizeBonusPointRateValue(value, fallback = 1) {
+    const raw = String(value ?? '').replace(',', '.').trim();
+    if (!raw) return Math.max(0.0001, Number(fallback || 1));
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed) || parsed <= 0) return Math.max(0.0001, Number(fallback || 1));
+    return Math.round(parsed * 10000) / 10000;
+  }
+
+  function formatBonusPointRateValue(value) {
+    const normalized = normalizeBonusPointRateValue(value, 1);
+    return Number.isInteger(normalized)
+      ? String(normalized)
+      : String(normalized).replace('.', ',');
+  }
+
+  function resizeBonusPointRateInput(input) {
+    if (!input) return;
+    const length = Math.max(1, String(input.value || '').length);
+    input.style.width = `${Math.min(92, Math.max(20, length * 8 + 8))}px`;
+  }
+
   function getBonusReferralShopUrl() {
     const tenant = getDiscountPickerTenantFromStorage();
     const protocol = (window.location && window.location.protocol) || 'https:';
@@ -9002,11 +9137,17 @@
   }
 
   function renderBonusReferralRightHome() {
+    const firstPurchaseReward = state.referralEditing
+      ? state.referralFirstPurchaseRewardDraft
+      : state.referralFirstPurchaseReward;
+    const registrationReward = state.referralEditing
+      ? state.referralRegistrationRewardDraft
+      : state.referralRegistrationReward;
     if (bonusReferralFirstPurchaseRewardInput) {
-      bonusReferralFirstPurchaseRewardInput.value = String(state.referralFirstPurchaseReward ?? 50).replace('.', ',');
+      bonusReferralFirstPurchaseRewardInput.value = String(firstPurchaseReward ?? 0).replace('.', ',');
     }
     if (bonusReferralRegistrationRewardInput) {
-      bonusReferralRegistrationRewardInput.value = String(state.referralRegistrationReward ?? 50).replace('.', ',');
+      bonusReferralRegistrationRewardInput.value = String(registrationReward ?? 0).replace('.', ',');
     }
     if (bonusReferralInviteLink) {
       const inviteUrl = buildBonusReferralInviteUrl();
@@ -9024,8 +9165,8 @@
     levels.forEach((level, index) => {
       const card = document.createElement('div');
       const isConfigurable = index > 0;
-      const hasEnabledSwitch = index > 1;
-      const isLevelEnabled = index < 2 ? true : level.enabled === true;
+      const hasEnabledSwitch = index > 0;
+      const isLevelEnabled = index === 0 ? true : level.enabled === true;
       const isEnabled = isReferralSystemEnabled && isLevelEnabled;
       const percent = normalizeBonusReferralPercentValue(level.percent ?? String(level.reward || '').replace(/[^\d.,]/g, ''), 0);
       const levelTitle = index > 0 ? `${index}-й уровень` : '';
@@ -9117,7 +9258,10 @@
   function enterBonusCardsEditMode() {
     state.bonusCardsEditing = true;
     state.bonusProgramEnabledDraft = state.bonusProgramEnabled === true;
-    state.bonusLevelsDraft = sanitizeBonusLevels(state.bonusLevels);
+    state.bonusPointAmountDraft = state.bonusPointAmount;
+    state.bonusRubleAmountDraft = state.bonusRubleAmount;
+    state.bonusPointRateDraft = state.bonusPointRate;
+    state.bonusLevelsDraft = sanitizeBonusLevels(state.bonusLevels, { withDefaults: false });
     syncBonusToolbarState();
     renderBonusLevels();
   }
@@ -9125,63 +9269,94 @@
   function cancelBonusCardsEditMode() {
     state.bonusCardsEditing = false;
     state.bonusProgramEnabledDraft = state.bonusProgramEnabled === true;
-    state.bonusLevelsDraft = sanitizeBonusLevels(state.bonusLevels);
+    state.bonusPointAmountDraft = state.bonusPointAmount;
+    state.bonusRubleAmountDraft = state.bonusRubleAmount;
+    state.bonusPointRateDraft = state.bonusPointRate;
+    state.bonusLevelsDraft = sanitizeBonusLevels(state.bonusLevels, { withDefaults: false });
     syncBonusToolbarState();
     renderBonusLevels();
   }
 
   async function saveBonusCardsEditMode() {
     const nextEnabled = state.bonusProgramEnabledDraft === true;
-    const nextLevels = sanitizeBonusLevels(state.bonusLevelsDraft);
+    const nextBonusPointAmount = normalizeBonusPointRateValue(state.bonusPointAmountDraft, 1);
+    const nextBonusRubleAmount = normalizeBonusPointRateValue(state.bonusRubleAmountDraft, 1);
+    const nextBonusPointRate = normalizeBonusPointRateValue(nextBonusRubleAmount / nextBonusPointAmount, 1);
+    const nextLevels = sanitizeBonusLevels(state.bonusLevelsDraft, { withDefaults: false });
+    setBonusConfigSaving(true, '\u041f\u043e\u0434\u043e\u0436\u0434\u0438\u0442\u0435, \u0441\u043e\u0445\u0440\u0430\u043d\u044f\u0435\u043c \u0431\u043e\u043d\u0443\u0441\u043d\u0443\u044e \u043f\u0440\u043e\u0433\u0440\u0430\u043c\u043c\u0443...');
     try {
       await persistBonusCardsStorage({
         bonusProgramEnabled: nextEnabled,
+        bonusPointAmount: nextBonusPointAmount,
+        bonusRubleAmount: nextBonusRubleAmount,
+        bonusPointRate: nextBonusPointRate,
         levels: nextLevels,
       });
     } catch (err) {
+      setBonusConfigSaving(false);
       reportBonusConfigSaveError(err);
       return;
     }
     state.bonusProgramEnabled = nextEnabled;
+    state.bonusPointAmount = nextBonusPointAmount;
+    state.bonusRubleAmount = nextBonusRubleAmount;
+    state.bonusPointRate = nextBonusPointRate;
     state.bonusLevels = nextLevels;
     state.bonusCardsEditing = false;
     syncBonusToolbarState();
     renderBonusLevels();
+    setBonusConfigSaving(false);
   }
 
   function enterReferralEditMode() {
     state.referralEditing = true;
     state.referralProgramEnabledDraft = state.referralProgramEnabled === true;
+    state.referralFirstPurchaseRewardDraft = state.referralFirstPurchaseReward;
+    state.referralRegistrationRewardDraft = state.referralRegistrationReward;
     state.bonusReferralLevelsDraft = (Array.isArray(state.bonusReferralLevels) ? state.bonusReferralLevels : []).map((level) => ({ ...level }));
     syncBonusToolbarState();
+    renderBonusReferralRightHome();
     renderBonusReferralLevels();
   }
 
   function cancelReferralEditMode() {
     state.referralEditing = false;
     state.referralProgramEnabledDraft = state.referralProgramEnabled === true;
+    state.referralFirstPurchaseRewardDraft = state.referralFirstPurchaseReward;
+    state.referralRegistrationRewardDraft = state.referralRegistrationReward;
     state.bonusReferralLevelsDraft = (Array.isArray(state.bonusReferralLevels) ? state.bonusReferralLevels : []).map((level) => ({ ...level }));
     syncBonusToolbarState();
+    renderBonusReferralRightHome();
     renderBonusReferralLevels();
   }
 
   async function saveReferralEditMode() {
     const nextEnabled = state.referralProgramEnabledDraft === true;
     const nextLevels = (Array.isArray(state.bonusReferralLevelsDraft) ? state.bonusReferralLevelsDraft : []).map((level) => ({ ...level }));
+    const nextFirstPurchaseReward = normalizeBonusReferralRewardValue(state.referralFirstPurchaseRewardDraft, 0);
+    const nextRegistrationReward = normalizeBonusReferralRewardValue(state.referralRegistrationRewardDraft, 0);
+    setBonusConfigSaving(true, '\u041f\u043e\u0434\u043e\u0436\u0434\u0438\u0442\u0435, \u0441\u043e\u0445\u0440\u0430\u043d\u044f\u0435\u043c \u0440\u0435\u0444\u0435\u0440\u0430\u043b\u044c\u043d\u0443\u044e \u0441\u0438\u0441\u0442\u0435\u043c\u0443...');
     try {
       await persistBonusCardsStorage({
         referralProgramEnabled: nextEnabled,
+        referralFirstPurchaseReward: nextFirstPurchaseReward,
+        referralRegistrationReward: nextRegistrationReward,
         referralLevels: nextLevels,
       });
     } catch (err) {
+      setBonusConfigSaving(false);
       reportBonusConfigSaveError(err);
       return;
     }
     state.referralProgramEnabled = nextEnabled;
+    state.referralFirstPurchaseReward = nextFirstPurchaseReward;
+    state.referralRegistrationReward = nextRegistrationReward;
     state.bonusReferralLevels = nextLevels;
     state.referralEditing = false;
     syncBonusToolbarState();
+    renderBonusReferralRightHome();
     renderBonusReferralLevels();
+    setBonusConfigSaving(false);
   }
 
   function renderBannerList() {
@@ -20794,6 +20969,32 @@
     });
   }
 
+  if (elBonusPointAmountInput) {
+    elBonusPointAmountInput.addEventListener('input', () => {
+      if (!state.bonusCardsEditing) {
+        elBonusPointAmountInput.value = formatBonusPointRateValue(state.bonusPointAmount);
+        resizeBonusPointRateInput(elBonusPointAmountInput);
+        return;
+      }
+      resizeBonusPointRateInput(elBonusPointAmountInput);
+      state.bonusPointAmountDraft = normalizeBonusPointRateValue(elBonusPointAmountInput.value, state.bonusPointAmountDraft);
+      state.bonusPointRateDraft = normalizeBonusPointRateValue(state.bonusRubleAmountDraft / state.bonusPointAmountDraft, 1);
+    });
+  }
+
+  if (elBonusRubleAmountInput) {
+    elBonusRubleAmountInput.addEventListener('input', () => {
+      if (!state.bonusCardsEditing) {
+        elBonusRubleAmountInput.value = formatBonusPointRateValue(state.bonusRubleAmount);
+        resizeBonusPointRateInput(elBonusRubleAmountInput);
+        return;
+      }
+      resizeBonusPointRateInput(elBonusRubleAmountInput);
+      state.bonusRubleAmountDraft = normalizeBonusPointRateValue(elBonusRubleAmountInput.value, state.bonusRubleAmountDraft);
+      state.bonusPointRateDraft = normalizeBonusPointRateValue(state.bonusRubleAmountDraft / state.bonusPointAmountDraft, 1);
+    });
+  }
+
   if (elReferralProgramSwitch) {
     elReferralProgramSwitch.addEventListener('change', () => {
       if (!state.referralEditing) {
@@ -20807,18 +21008,26 @@
 
   if (bonusReferralFirstPurchaseRewardInput) {
     bonusReferralFirstPurchaseRewardInput.addEventListener('input', () => {
-      state.referralFirstPurchaseReward = normalizeBonusReferralRewardValue(
+      if (!state.referralEditing) {
+        bonusReferralFirstPurchaseRewardInput.value = String(state.referralFirstPurchaseReward ?? 0).replace('.', ',');
+        return;
+      }
+      state.referralFirstPurchaseRewardDraft = normalizeBonusReferralRewardValue(
         bonusReferralFirstPurchaseRewardInput.value,
-        state.referralFirstPurchaseReward
+        state.referralFirstPurchaseRewardDraft
       );
     });
   }
 
   if (bonusReferralRegistrationRewardInput) {
     bonusReferralRegistrationRewardInput.addEventListener('input', () => {
-      state.referralRegistrationReward = normalizeBonusReferralRewardValue(
+      if (!state.referralEditing) {
+        bonusReferralRegistrationRewardInput.value = String(state.referralRegistrationReward ?? 0).replace('.', ',');
+        return;
+      }
+      state.referralRegistrationRewardDraft = normalizeBonusReferralRewardValue(
         bonusReferralRegistrationRewardInput.value,
-        state.referralRegistrationReward
+        state.referralRegistrationRewardDraft
       );
     });
   }

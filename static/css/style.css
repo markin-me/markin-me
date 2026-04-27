@@ -1920,6 +1920,40 @@ body.page-home .page-col-right .panel{
   font-weight:700;
   white-space:nowrap;
 }
+.bonus-point-rate-control{
+  height:34px;
+  padding:0;
+  display:inline-flex;
+  align-items:center;
+  gap:3px;
+  margin-right:8px;
+  color:var(--color-text);
+  font-size:13px;
+  font-weight:600;
+  white-space:nowrap;
+}
+.bonus-point-rate-control.hidden{
+  display:none !important;
+}
+.bonus-point-rate-input{
+  width:20px;
+  min-width:20px;
+  max-width:92px;
+  height:22px;
+  border:0;
+  border-radius:0;
+  background:transparent;
+  color:var(--color-text);
+  font-size:13px;
+  font-weight:800;
+  text-align:center;
+  outline:none;
+  box-shadow:none;
+}
+.bonus-point-rate-input:disabled{
+  opacity:.78;
+  cursor:default;
+}
 .settings-chat-assistant-main-switch{
   margin-left:auto;
   flex:0 0 auto;
@@ -18592,24 +18626,58 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
 }
 
 .bonus-level-add-card{
-  opacity:.62;
-  border-style:dashed;
-  border-color:var(--color-border);
+  padding:0;
+  border:none;
+  opacity:1;
+  background:transparent;
   cursor:pointer;
 }
 
 .bonus-level-add-card:hover{
-  opacity:.85;
-  border-color:var(--shop-buy);
+  transform:translateY(-1px);
 }
 
-.bonus-level-add-card .banner-placement-card-display-title{
-  position:static;
-  margin:0 14px;
-  border-radius:10px;
-  text-align:left;
-  background:rgba(255,255,255,.72);
-  color:var(--color-text-muted);
+.bonus-level-add-card .bonus-level-add-preview-card{
+  background:#d1d5db;
+}
+
+.bonus-level-add-card .bonus-level-preview-main{
+  background:#f3f4f6;
+  color:#64748b;
+}
+
+.bonus-level-add-card .bonus-level-preview-title{
+  color:#64748b;
+  background:#ffffff;
+  padding:2px 10px;
+  border-radius:999px;
+}
+
+.bonus-level-add-card .bonus-level-preview-sub{
+  color:#64748b;
+  background:#d1d5db;
+}
+
+.bonus-level-add-action{
+  width:100%;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:8px;
+  color:#64748b;
+  font-size:16px;
+  font-weight:800;
+}
+
+.bonus-level-add-action-icon{
+  width:22px;
+  height:22px;
+  border-radius:999px;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  background:rgba(255,255,255,.7);
+  color:#64748b;
 }
 
 #bonusClientsListScroll{
@@ -28832,3 +28900,50 @@ body.page-new-order .page-col-left > .panel:not(#cashierQueuePanel){
   }
 }
 
+.shop-checkout-sending-overlay{
+  position:fixed;
+  inset:0;
+  z-index:10020;
+  display:grid;
+  place-items:center;
+  background:rgba(15,23,42,.32);
+  backdrop-filter:blur(1px);
+}
+
+.shop-checkout-sending-overlay.hidden{
+  display:none !important;
+}
+
+.shop-checkout-sending-card{
+  min-width:260px;
+  max-width:min(92vw,360px);
+  border-radius:16px;
+  background:#fff;
+  border:1px solid var(--color-border,#e2e8f0);
+  box-shadow:0 16px 38px rgba(15,23,42,.18);
+  padding:16px 18px;
+  display:flex;
+  align-items:center;
+  gap:12px;
+}
+
+.shop-checkout-sending-spinner{
+  width:22px;
+  height:22px;
+  border-radius:50%;
+  border:3px solid rgba(249,115,22,.25);
+  border-top-color:#f97316;
+  animation:shopCheckoutSpin .8s linear infinite;
+  flex:0 0 auto;
+}
+
+.shop-checkout-sending-text{
+  font-weight:700;
+  font-size:15px;
+  line-height:1.25;
+  color:var(--color-text,#0f172a);
+}
+
+@keyframes shopCheckoutSpin{
+  to{ transform:rotate(360deg); }
+}

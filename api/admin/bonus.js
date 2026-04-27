@@ -62,6 +62,15 @@ function nullableNonNegativeInt(value, fieldName) {
   return nonNegativeInt(value, fieldName, null);
 }
 
+function positiveNumber(value, fieldName, fallback = 1) {
+  if (value === undefined || value === null || value === '') return fallback;
+  const parsed = Number(String(value).replace(',', '.'));
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw makeHttpError(fieldName);
+  }
+  return parsed;
+}
+
 function enumValue(value, allowed, fieldName, fallback = null) {
   const text = String(value ?? '').trim().toLowerCase();
   if (!text && fallback !== null) return fallback;
@@ -82,9 +91,14 @@ function normalizeHexColor(value) {
 }
 
 function normalizeSettings(payload = {}) {
+  const bonusPointAmount = positiveNumber(pick(payload, 'bonus_point_amount', 'bonusPointAmount'), 'INVALID_SETTINGS', 1);
+  const bonusRubleAmount = positiveNumber(pick(payload, 'bonus_ruble_amount', 'bonusRubleAmount'), 'INVALID_SETTINGS', 1);
   return {
     bonus_program_enabled: boolFlag(pick(payload, 'bonus_program_enabled', 'bonusProgramEnabled'), false) ? 1 : 0,
     referral_program_enabled: boolFlag(pick(payload, 'referral_program_enabled', 'referralProgramEnabled'), false) ? 1 : 0,
+    bonus_point_amount: bonusPointAmount,
+    bonus_ruble_amount: bonusRubleAmount,
+    bonus_point_rate: Math.round((bonusRubleAmount / bonusPointAmount) * 10000) / 10000,
     referral_registration_reward: nonNegativeNumber(
       pick(payload, 'referral_registration_reward', 'referralRegistrationReward'),
       'INVALID_SETTINGS',
@@ -251,6 +265,9 @@ function mapSettingsRow(row) {
   return {
     bonus_program_enabled: Number(row?.bonus_program_enabled || 0) === 1,
     referral_program_enabled: Number(row?.referral_program_enabled || 0) === 1,
+    bonus_point_amount: Number(row?.bonus_point_amount || 1),
+    bonus_ruble_amount: Number(row?.bonus_ruble_amount || row?.bonus_point_rate || 1),
+    bonus_point_rate: Number(row?.bonus_point_rate || 1),
     referral_registration_reward: Number(row?.referral_registration_reward || 0),
     referral_first_purchase_reward: Number(row?.referral_first_purchase_reward || 0),
     allow_redeem_and_accrue: Number(row?.allow_redeem_and_accrue || 0) === 1,
@@ -308,9 +325,74 @@ function mapBonusLevelRow(row, children) {
   };
 }
 
+function formatEventDate(value) {
+  if (!value) return '';
+  const date = value instanceof Date ? value : new Date(value);
+  if (!Number.isFinite(date.getTime())) return String(value);
+  return date.toLocaleString('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    year: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function formatBonusAmount(value) {
+  const amount = Number(value || 0);
+  if (!Number.isFinite(amount) || amount === 0) return '—';
+  return `${amount > 0 ? '+' : ''}${amount.toLocaleString('ru-RU')} бонусов`;
+}
+
+function mapBonusTransactionRow(row) {
+  const type = String(row.type || 'adjustment');
+  const actionByType = {
+    join: 'Присоединился к программе',
+    level_up: 'Повысил статус',
+    accrual: 'Начисление бонусов',
+    redeem: 'Списание бонусов',
+    expire: 'Сгорание бонусов',
+    adjustment: 'Корректировка бонусов',
+    referral_accrual: 'Начисление за реферала',
+    refund: 'Возврат бонусов',
+  };
+  return {
+    id: `bonus_tx_${row.id}`,
+    type,
+    clientName: row.customer_name || `Клиент #${row.customer_id}`,
+    phone: row.customer_phone || '',
+    action: row.reason || actionByType[type] || 'Операция с бонусами',
+    status: row.level_title || formatBonusAmount(row.amount),
+    amount: Number(row.amount || 0),
+    balance: row.balance_after == null ? null : Number(row.balance_after),
+    at: formatEventDate(row.created_at),
+  };
+}
+
+function mapReferralEventRow(row) {
+  const statusByCode = {
+    registered: 'Зарегистрировался по ссылке',
+    first_purchase_paid: 'Первый заказ оплачен',
+    cancelled: 'Отменён',
+  };
+  const inviterName = row.inviter_name || 'Без приглашения';
+  return {
+    id: `referral_${row.id}`,
+    inviterName,
+    inviterPhone: row.inviter_phone || '—',
+    referralName: row.referral_name || `Клиент #${row.referral_customer_id}`,
+    referralPhone: row.referral_phone || '',
+    relation: row.inviter_name ? `Реферал ${row.inviter_name}` : 'Самостоятельная регистрация',
+    status: statusByCode[String(row.status || '')] || String(row.status || ''),
+    reward: formatBonusAmount(row.reward_amount),
+    at: formatEventDate(row.first_purchase_paid_at || row.registered_at || row.created_at),
+  };
+}
+
 async function loadConfig(db, tenantId) {
   const [[settingsRow]] = await db.query(
     `SELECT bonus_program_enabled, referral_program_enabled,
+            bonus_point_amount, bonus_ruble_amount, bonus_point_rate,
             referral_registration_reward, referral_first_purchase_reward,
             allow_redeem_and_accrue
        FROM mkt_bonus_program_settings
@@ -352,6 +434,38 @@ async function loadConfig(db, tenantId) {
       WHERE tenant_id = ?
       ORDER BY sort_order ASC, invited_count ASC, id ASC`,
     [tenantId]
+  );
+  const [bonusEventRows] = await db.query(
+    `SELECT t.id, t.customer_id, t.type, t.amount, t.balance_after, t.reason, t.created_at,
+            c.name AS customer_name, c.phone AS customer_phone,
+            l.title AS level_title
+       FROM mkt_customer_bonus_transactions t
+       LEFT JOIN cust_customers c ON c.tenant_id = t.tenant_id AND c.id = t.customer_id
+       LEFT JOIN mkt_bonus_levels l ON l.id = t.level_id
+      WHERE t.tenant_id = ?
+      ORDER BY t.created_at DESC, t.id DESC
+      LIMIT 50`,
+    [tenantId]
+  );
+  const [referralEventRows] = await db.query(
+    `SELECT r.id, r.inviter_customer_id, r.referral_customer_id, r.status,
+            r.registered_at, r.first_purchase_paid_at, r.created_at,
+            inviter.name AS inviter_name, inviter.phone AS inviter_phone,
+            referral.name AS referral_name, referral.phone AS referral_phone,
+            rewards.reward_amount
+       FROM mkt_customer_referrals r
+       LEFT JOIN cust_customers inviter ON inviter.tenant_id = r.tenant_id AND inviter.id = r.inviter_customer_id
+       LEFT JOIN cust_customers referral ON referral.tenant_id = r.tenant_id AND referral.id = r.referral_customer_id
+       LEFT JOIN (
+         SELECT tenant_id, referral_id, SUM(amount) AS reward_amount
+           FROM mkt_referral_rewards
+          WHERE tenant_id = ?
+          GROUP BY tenant_id, referral_id
+       ) rewards ON rewards.tenant_id = r.tenant_id AND rewards.referral_id = r.id
+      WHERE r.tenant_id = ?
+      ORDER BY r.registered_at DESC, r.id DESC
+      LIMIT 50`,
+    [tenantId, tenantId]
   );
 
   const tariffsByLevel = new Map();
@@ -397,6 +511,8 @@ async function loadConfig(db, tenantId) {
       sort_order: Number(row.sort_order || 0),
       is_active: Number(row.is_active || 0) === 1,
     })),
+    bonus_events: bonusEventRows.map(mapBonusTransactionRow),
+    referral_events: referralEventRows.map(mapReferralEventRow),
   };
 }
 
@@ -440,11 +556,15 @@ async function saveConfig(db, tenantId, payload) {
     await conn.query(
       `INSERT INTO mkt_bonus_program_settings
         (tenant_id, bonus_program_enabled, referral_program_enabled,
+         bonus_point_amount, bonus_ruble_amount, bonus_point_rate,
          referral_registration_reward, referral_first_purchase_reward, allow_redeem_and_accrue)
-       VALUES (?, ?, ?, ?, ?, ?)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE
          bonus_program_enabled = VALUES(bonus_program_enabled),
          referral_program_enabled = VALUES(referral_program_enabled),
+         bonus_point_amount = VALUES(bonus_point_amount),
+         bonus_ruble_amount = VALUES(bonus_ruble_amount),
+         bonus_point_rate = VALUES(bonus_point_rate),
          referral_registration_reward = VALUES(referral_registration_reward),
          referral_first_purchase_reward = VALUES(referral_first_purchase_reward),
          allow_redeem_and_accrue = VALUES(allow_redeem_and_accrue)`,
@@ -452,6 +572,9 @@ async function saveConfig(db, tenantId, payload) {
         tenantId,
         settings.bonus_program_enabled,
         settings.referral_program_enabled,
+        settings.bonus_point_amount,
+        settings.bonus_ruble_amount,
+        settings.bonus_point_rate,
         settings.referral_registration_reward,
         settings.referral_first_purchase_reward,
         settings.allow_redeem_and_accrue,
