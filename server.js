@@ -59,6 +59,7 @@ const {
 // routers
 const makeAuthRouter = require('./api/auth');
 const makeAdminClientsRouter = require('./api/admin/clients');
+const makeAdminBonusRouter = require('./api/admin/bonus');
 const makeAdminDiscountsRouter = require('./api/admin/discounts');
 const makeAdminOrdersRouter = require('./api/admin/orders');
 const makeAdminProductsRouter = require('./api/admin/products');
@@ -1801,6 +1802,7 @@ app.use('/api/chat-temp', makeChatTempRouter());
 // API: Admin (требуют авторизации)
 // ------------------------------
 app.use('/api/admin/clients', authMiddleware, makeAdminClientsRouter({ db, helpers }));
+app.use('/api/admin/bonus', authMiddleware, makeAdminBonusRouter({ db, helpers }));
 app.use('/api/admin/discounts', authMiddleware, makeAdminDiscountsRouter({ db, helpers }));
 app.use('/api/admin/orders', authMiddleware, makeAdminOrdersRouter({ db, helpers, ordersEvents }));
 app.use('/api/admin/tenant', authMiddleware, makeAdminTenantRouter({ db, helpers }));

@@ -25,7 +25,6 @@
   const SHARED_ORDER_DETAILS_CACHE_MAX = 400;
   const CHAT_MOBILE_VIEW_STORAGE_KEY = `dashboard:chat:mobile:view:v1:${tenantId}`;
   const MARKETING_BANNERS_STORAGE_KEY = `dashboard:marketing:banners:v1:${tenantId}`;
-  const MARKETING_BONUS_CARDS_STORAGE_KEY = `dashboard:marketing:bonus-cards:v1:${tenantId}`;
   const BONUS_HISTORY_PAGE_SIZE = 50;
   const BONUS_LEVEL_FLIP_ANIMATION_MS = 560;
 
@@ -753,48 +752,183 @@
     return next.length ? next : createDefaultBonusClientEvents();
   }
 
-  function readBonusCardsStorage() {
-    try {
-      const raw = localStorage.getItem(MARKETING_BONUS_CARDS_STORAGE_KEY);
-      if (!raw) {
-        return {
-          enabled: false,
-          levels: createDefaultBonusLevels(),
-          events: createDefaultBonusClientEvents(),
-        };
-      }
-      const parsed = JSON.parse(raw);
-      return {
-        enabled: parsed?.enabled === true,
-        levels: sanitizeBonusLevels(parsed?.levels),
-        events: sanitizeBonusClientEvents(parsed?.events),
-      };
-    } catch {
-      return {
-        enabled: false,
-        levels: createDefaultBonusLevels(),
-        events: createDefaultBonusClientEvents(),
-      };
-    }
+  function mapBonusApiLevelToState(item, idx = 0) {
+    const code = String(item?.code || item?.id || `level_${idx + 1}`).trim();
+    return {
+      id: code,
+      title: String(item?.title || '').trim(),
+      subtitle: String(item?.subtitle || '').trim(),
+      description: String(item?.description || '').trim(),
+      designColor: item?.design_color || item?.designColor || '#f8fafc',
+      accentColor: item?.accent_color || item?.accentColor || '#f97316',
+      minSpent: item?.min_spent ?? item?.minSpent,
+      minOrders: item?.min_orders ?? item?.minOrders,
+      accessType: item?.access_type || item?.accessType,
+      tariffPrice: item?.tariff_price ?? item?.tariffPrice,
+      tariffDiscountPercent: item?.tariff_discount_percent ?? item?.tariffDiscountPercent,
+      tariffPeriodValue: item?.tariff_period_value ?? item?.tariffPeriodValue,
+      tariffPeriodUnit: item?.tariff_period_unit || item?.tariffPeriodUnit,
+      tariffRows: Array.isArray(item?.tariff_rows) ? item.tariff_rows.map((row) => ({
+        price: row?.price,
+        discountPercent: row?.discount_percent ?? row?.discountPercent,
+        periodValue: row?.period_value ?? row?.periodValue,
+        periodUnit: row?.period_unit || row?.periodUnit,
+      })) : [],
+      tariffPayWithBonus: item?.tariff_pay_with_bonus === true || item?.tariffPayWithBonus === true,
+      showTitleOnCard: item?.show_title_on_card ?? item?.showTitleOnCard,
+      titleColor: item?.title_color || item?.titleColor,
+      titleBackgroundEnabled: item?.title_background_enabled ?? item?.titleBackgroundEnabled,
+      titleBackgroundColor: item?.title_background_color || item?.titleBackgroundColor,
+      titleBackgroundOpacity: item?.title_background_opacity ?? item?.titleBackgroundOpacity,
+      cashbackPercent: item?.cashback_percent ?? item?.cashbackPercent,
+      redeemPercent: item?.redeem_percent ?? item?.redeemPercent,
+      referralBonusPercent: item?.referral_bonus_percent ?? item?.referralBonusPercent,
+      qrEnabled: item?.qr_enabled ?? item?.qrEnabled,
+      mainColor: item?.main_color || item?.mainColor || item?.design_color || item?.designColor,
+      baseColor: item?.base_color || item?.baseColor,
+      contentColor: item?.content_color || item?.contentColor,
+      activationDelayValue: item?.activation_delay_value ?? item?.activationDelayValue,
+      activationDelayUnit: item?.activation_delay_unit || item?.activationDelayUnit,
+      lifetimeValue: item?.lifetime_value ?? item?.lifetimeValue,
+      lifetimeUnit: item?.lifetime_unit || item?.lifetimeUnit,
+      orderBonusRanges: Array.isArray(item?.order_bonus_ranges) ? item.order_bonus_ranges.map((row) => ({
+        amount: row?.amount,
+        percent: row?.percent,
+      })) : [],
+      favoriteCategoriesBonusPercent: item?.favorite_categories_bonus_percent ?? item?.favoriteCategoriesBonusPercent,
+      favoriteCategoriesLimit: item?.favorite_categories_limit ?? item?.favoriteCategoriesLimit,
+      favoriteCategoryIds: item?.favorite_category_ids || item?.favoriteCategoryIds || [],
+      requirementAmount: item?.requirement_amount ?? item?.requirementAmount,
+      requirementMode: item?.requirement_mode || item?.requirementMode,
+      requirementOrders: item?.requirement_orders ?? item?.requirementOrders,
+      requirementReferralMode: item?.requirement_referral_mode || item?.requirementReferralMode,
+      requirementReferrals: item?.requirement_referrals ?? item?.requirementReferrals,
+      requirementPeriodDays: item?.requirement_period_days ?? item?.requirementPeriodDays,
+      retentionStrategy: item?.retention_strategy || item?.retentionStrategy,
+      retentionAmount: item?.retention_amount ?? item?.retentionAmount,
+      retentionMode: item?.retention_mode || item?.retentionMode,
+      retentionOrders: item?.retention_orders ?? item?.retentionOrders,
+      retentionReferralMode: item?.retention_referral_mode || item?.retentionReferralMode,
+      retentionReferrals: item?.retention_referrals ?? item?.retentionReferrals,
+    };
   }
 
-  function persistBonusCardsStorage() {
-    try {
-      localStorage.setItem(MARKETING_BONUS_CARDS_STORAGE_KEY, JSON.stringify({
-        enabled: state.bonusProgramEnabled === true,
-        levels: sanitizeBonusLevels(state.bonusLevels),
-        events: sanitizeBonusClientEvents(state.bonusClientEvents),
-      }));
-    } catch {}
+  function mapBonusApiReferralLevelToState(item, idx = 0) {
+    const percent = normalizeBonusReferralPercentValue(item?.percent, 0);
+    return {
+      id: String(item?.code || item?.id || `referral_${idx + 1}`),
+      title: String(item?.title || '').trim() || `\u0423\u0440\u043e\u0432\u0435\u043d\u044c ${idx + 1}`,
+      invitedCount: normalizeNumberInputValue(item?.invited_count ?? item?.invitedCount, idx),
+      percent,
+      enabled: item?.is_active !== false && item?.enabled !== false,
+      reward: percent > 0 ? `+${percent}%` : '\u2014',
+    };
   }
 
-  function loadBonusCardsStorage() {
-    const stored = readBonusCardsStorage();
-    state.bonusProgramEnabled = stored.enabled;
-    state.bonusProgramEnabledDraft = stored.enabled;
-    state.bonusLevels = sanitizeBonusLevels(stored.levels);
-    state.bonusLevelsDraft = sanitizeBonusLevels(stored.levels);
-    state.bonusClientEvents = sanitizeBonusClientEvents(stored.events);
+  function buildBonusConfigPayload(overrides = {}) {
+    const levelsSource = overrides.levels || state.bonusLevels;
+    const referralLevelsSource = overrides.referralLevels || state.bonusReferralLevels;
+    return {
+      settings: {
+        bonus_program_enabled: overrides.bonusProgramEnabled ?? state.bonusProgramEnabled,
+        referral_program_enabled: overrides.referralProgramEnabled ?? state.referralProgramEnabled,
+        referral_registration_reward: overrides.referralRegistrationReward ?? state.referralRegistrationReward,
+        referral_first_purchase_reward: overrides.referralFirstPurchaseReward ?? state.referralFirstPurchaseReward,
+        allow_redeem_and_accrue: false,
+      },
+      levels: sanitizeBonusLevels(levelsSource).map((level, idx) => ({
+        code: String(level.id || `level_${idx + 1}`),
+        sort_order: idx,
+        title: level.title,
+        subtitle: level.subtitle,
+        description: level.description,
+        designColor: level.designColor,
+        accentColor: level.accentColor,
+        minSpent: level.minSpent,
+        minOrders: level.minOrders,
+        accessType: level.accessType,
+        tariffPrice: level.tariffPrice,
+        tariffDiscountPercent: level.tariffDiscountPercent,
+        tariffPeriodValue: level.tariffPeriodValue,
+        tariffPeriodUnit: level.tariffPeriodUnit,
+        tariffRows: level.tariffRows,
+        tariffPayWithBonus: level.tariffPayWithBonus,
+        showTitleOnCard: level.showTitleOnCard,
+        titleColor: level.titleColor,
+        titleBackgroundEnabled: level.titleBackgroundEnabled,
+        titleBackgroundColor: level.titleBackgroundColor,
+        titleBackgroundOpacity: level.titleBackgroundOpacity,
+        cashbackPercent: level.cashbackPercent,
+        redeemPercent: level.redeemPercent,
+        referralBonusPercent: level.referralBonusPercent,
+        qrEnabled: level.qrEnabled,
+        mainColor: level.mainColor,
+        baseColor: level.baseColor,
+        contentColor: level.contentColor,
+        activationDelayValue: level.activationDelayValue,
+        activationDelayUnit: level.activationDelayUnit,
+        lifetimeValue: level.lifetimeValue,
+        lifetimeUnit: level.lifetimeUnit,
+        orderBonusRanges: level.orderBonusRanges,
+        favoriteCategoriesBonusPercent: level.favoriteCategoriesBonusPercent,
+        favoriteCategoriesLimit: level.favoriteCategoriesLimit,
+        favoriteCategoryIds: level.favoriteCategoryIds,
+        requirementAmount: level.requirementAmount,
+        requirementMode: level.requirementMode,
+        requirementOrders: level.requirementOrders,
+        requirementReferralMode: level.requirementReferralMode,
+        requirementReferrals: level.requirementReferrals,
+        requirementPeriodDays: level.requirementPeriodDays,
+        retentionStrategy: level.retentionStrategy,
+        retentionAmount: level.retentionAmount,
+        retentionMode: level.retentionMode,
+        retentionOrders: level.retentionOrders,
+        retentionReferralMode: level.retentionReferralMode,
+        retentionReferrals: level.retentionReferrals,
+      })),
+      referral_levels: (Array.isArray(referralLevelsSource) ? referralLevelsSource : []).map((level, idx) => ({
+        code: String(level?.id || `referral_${idx + 1}`),
+        title: String(level?.title || '').trim() || `\u0423\u0440\u043e\u0432\u0435\u043d\u044c ${idx + 1}`,
+        invited_count: normalizeNumberInputValue(level?.invitedCount, idx),
+        percent: normalizeBonusReferralPercentValue(level?.percent, 0),
+        sort_order: idx,
+        is_active: idx < 2 ? true : level?.enabled === true,
+      })),
+    };
+  }
+
+  async function persistBonusCardsStorage(overrides = {}) {
+    const payload = buildBonusConfigPayload(overrides);
+    await apiJson('/api/admin/bonus/config', { method: 'PUT', body: payload });
+  }
+
+  function reportBonusConfigSaveError(err) {
+    console.error('Failed to save bonus config:', err);
+    alert('\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0441\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c \u0431\u043e\u043d\u0443\u0441\u043d\u0443\u044e \u043f\u0440\u043e\u0433\u0440\u0430\u043c\u043c\u0443');
+  }
+
+  function persistBonusCardsStorageSoon(overrides = {}) {
+    void persistBonusCardsStorage(overrides).catch(reportBonusConfigSaveError);
+  }
+
+  async function loadBonusCardsStorage() {
+    const json = await apiJson('/api/admin/bonus/config');
+    const levels = Array.isArray(json?.levels) ? json.levels.map(mapBonusApiLevelToState) : [];
+    const referralLevels = Array.isArray(json?.referral_levels)
+      ? json.referral_levels.map(mapBonusApiReferralLevelToState)
+      : [];
+    const settings = json?.settings && typeof json.settings === 'object' ? json.settings : {};
+    state.bonusProgramEnabled = settings.bonus_program_enabled === true;
+    state.bonusProgramEnabledDraft = state.bonusProgramEnabled;
+    state.bonusLevels = levels.length ? sanitizeBonusLevels(levels) : [];
+    state.bonusLevelsDraft = state.bonusLevels.map((level) => ({ ...level }));
+    state.bonusClientEvents = sanitizeBonusClientEvents(state.bonusClientEvents);
+    state.referralProgramEnabled = settings.referral_program_enabled === true;
+    state.referralProgramEnabledDraft = state.referralProgramEnabled;
+    state.referralFirstPurchaseReward = normalizeBonusReferralRewardValue(settings.referral_first_purchase_reward, 50);
+    state.referralRegistrationReward = normalizeBonusReferralRewardValue(settings.referral_registration_reward, 50);
+    state.bonusReferralLevels = referralLevels;
+    state.bonusReferralLevelsDraft = (Array.isArray(state.bonusReferralLevels) ? state.bonusReferralLevels : []).map((level) => ({ ...level }));
   }
 
   function getBannerDraftsByType(type = state.activeBannerType) {
@@ -7269,7 +7403,7 @@
         ...level,
         ...nextPatch,
       }));
-      persistBonusCardsStorage();
+      persistBonusCardsStorageSoon();
       renderBonusLevels();
       renderBonusLevelInfo();
       closeBonusLevelTariffEditor();
@@ -7784,7 +7918,7 @@
         ...level,
         ...nextPatch,
       }));
-      persistBonusCardsStorage();
+      persistBonusCardsStorageSoon();
       renderBonusLevels();
       renderBonusLevelInfo();
       closeBonusLevelRequirementsEditor();
@@ -7918,7 +8052,7 @@
         ...level,
         orderBonusRanges: nextRows,
       }));
-      persistBonusCardsStorage();
+      persistBonusCardsStorageSoon();
       renderBonusLevels();
       renderBonusLevelInfo();
       closeBonusLevelRangeEditor();
@@ -8164,7 +8298,7 @@
         ...level,
         ...nextPatch,
       }));
-      persistBonusCardsStorage();
+      persistBonusCardsStorageSoon();
       renderBonusLevels();
       renderBonusLevelInfo();
       closeBonusLevelFavoriteCategoriesEditor();
@@ -8504,7 +8638,7 @@
     state.editingBonusLevelId = null;
     state.bonusLevelEditorDraft = null;
     syncBonusLevelTabTitle(activeId, nextLevel.title);
-    persistBonusCardsStorage();
+    persistBonusCardsStorageSoon();
     renderBonusLevels();
     renderBonusLevelInfo();
   }
@@ -8550,7 +8684,7 @@
     state.bonusAnimatingLevelIds.delete(activeId);
     state.editingBonusLevelId = null;
     state.bonusLevelEditorDraft = null;
-    persistBonusCardsStorage();
+    persistBonusCardsStorageSoon();
     renderBonusLevels();
     await closeTab(buildTabKey('bonus-level', activeId));
   }
@@ -8996,11 +9130,21 @@
     renderBonusLevels();
   }
 
-  function saveBonusCardsEditMode() {
-    state.bonusProgramEnabled = state.bonusProgramEnabledDraft === true;
-    state.bonusLevels = sanitizeBonusLevels(state.bonusLevelsDraft);
+  async function saveBonusCardsEditMode() {
+    const nextEnabled = state.bonusProgramEnabledDraft === true;
+    const nextLevels = sanitizeBonusLevels(state.bonusLevelsDraft);
+    try {
+      await persistBonusCardsStorage({
+        bonusProgramEnabled: nextEnabled,
+        levels: nextLevels,
+      });
+    } catch (err) {
+      reportBonusConfigSaveError(err);
+      return;
+    }
+    state.bonusProgramEnabled = nextEnabled;
+    state.bonusLevels = nextLevels;
     state.bonusCardsEditing = false;
-    persistBonusCardsStorage();
     syncBonusToolbarState();
     renderBonusLevels();
   }
@@ -9021,9 +9165,20 @@
     renderBonusReferralLevels();
   }
 
-  function saveReferralEditMode() {
-    state.referralProgramEnabled = state.referralProgramEnabledDraft === true;
-    state.bonusReferralLevels = (Array.isArray(state.bonusReferralLevelsDraft) ? state.bonusReferralLevelsDraft : []).map((level) => ({ ...level }));
+  async function saveReferralEditMode() {
+    const nextEnabled = state.referralProgramEnabledDraft === true;
+    const nextLevels = (Array.isArray(state.bonusReferralLevelsDraft) ? state.bonusReferralLevelsDraft : []).map((level) => ({ ...level }));
+    try {
+      await persistBonusCardsStorage({
+        referralProgramEnabled: nextEnabled,
+        referralLevels: nextLevels,
+      });
+    } catch (err) {
+      reportBonusConfigSaveError(err);
+      return;
+    }
+    state.referralProgramEnabled = nextEnabled;
+    state.bonusReferralLevels = nextLevels;
     state.referralEditing = false;
     syncBonusToolbarState();
     renderBonusReferralLevels();
@@ -20620,11 +20775,11 @@
   if (elBonusEditSaveBtn) {
     elBonusEditSaveBtn.addEventListener('click', () => {
       if (state.currentView === 'bonus-cards') {
-        saveBonusCardsEditMode();
+        void saveBonusCardsEditMode();
         return;
       }
       if (state.currentView === 'bonus-referrals') {
-        saveReferralEditMode();
+        void saveReferralEditMode();
       }
     });
   }
@@ -22902,18 +23057,23 @@
       filterTitleInput.addEventListener('input', () => scheduleFilterDraftCountPreview());
     }
     loadBannerStorage();
-    loadBonusCardsStorage();
     if (elBannersEnabledSwitch) {
       elBannersEnabledSwitch.checked = state.bannersEnabled === true;
     }
-    syncBonusMenuState();
-    syncBonusToolbarState();
     renderBannerFilters();
     renderBannerPlacement();
-    renderBonusLevels();
-    renderBonusClientsList();
-    renderBonusReferralLevels();
-    renderBonusReferralsList();
+    void loadBonusCardsStorage()
+      .catch((err) => {
+        console.error('Failed to load bonus config:', err);
+      })
+      .finally(() => {
+        syncBonusMenuState();
+        syncBonusToolbarState();
+        renderBonusLevels();
+        renderBonusClientsList();
+        renderBonusReferralLevels();
+        renderBonusReferralsList();
+      });
     updateDiscountPromoUi();
     updateDiscountRestrictionUi();
   }
