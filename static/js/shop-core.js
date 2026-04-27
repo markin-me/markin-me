@@ -12368,6 +12368,26 @@ function updateCartBadge() {
     };
   }
 
+  function hasCompleteUpsellVariantDefaults(defaults) {
+    if (!defaults || typeof defaults !== "object") return false;
+    const groupId = Number(defaults.variant_group_id);
+    const valueIndex = Number(defaults.variant_value_index);
+    const label = str(defaults.variant_label || "").trim();
+    const unitPrice = Number(defaults.variant_unit_price || 0);
+    return Number.isFinite(groupId)
+      && Number.isFinite(valueIndex)
+      && !!label
+      && unitPrice > 0;
+  }
+
+  function shouldLoadFullUpsellDefaultsBeforeAdd(product, cacheEntry, defaults) {
+    if (cacheEntry?.data) return false;
+    const defaultVariant = product?.default_variant && typeof product.default_variant === "object"
+      ? product.default_variant
+      : null;
+    return !!defaultVariant && !hasCompleteUpsellVariantDefaults(defaults);
+  }
+
   async function loadCartEnhancersData() {
     if (cartEnhancersDataLoadPromise) return cartEnhancersDataLoadPromise;
     cartEnhancersDataLoadPromise = (async () => {
@@ -12956,9 +12976,14 @@ function updateCartBadge() {
       : new Map();
 
     const cachedDefaults = getUpsellDefaultConfigCacheEntry(pid);
-    const defaults = buildImmediateUpsellDefaults(effectiveProduct, cachedDefaults);
+    let defaults = buildImmediateUpsellDefaults(effectiveProduct, cachedDefaults);
     if (!cachedDefaults?.data) {
-      void warmUpsellDefaultConfig(pid, effectiveProduct).catch(() => {});
+      const defaultsPromise = warmUpsellDefaultConfig(pid, effectiveProduct);
+      if (shouldLoadFullUpsellDefaultsBeforeAdd(effectiveProduct, cachedDefaults, defaults)) {
+        defaults = await defaultsPromise;
+      } else {
+        void defaultsPromise.catch(() => {});
+      }
     }
     const normalizedVariantUnitPrice = Number(defaults?.variant_unit_price || 0);
     const normalizedVariantGroupId = defaults?.variant_group_id != null ? Number(defaults.variant_group_id) : null;
@@ -13218,8 +13243,8 @@ function updateCartBadge() {
     if (!Number.isFinite(numericValue)) return basePrice;
 
     const factor = getConversionFactor(variantUnitId, baseUnitId);
-    if (factor == null) return basePrice;
-    const qtyInBase = numericValue * Number(factor || 0);
+    const effectiveFactor = factor != null ? Number(factor || 0) : 1;
+    const qtyInBase = numericValue * effectiveFactor;
     if (!Number.isFinite(qtyInBase) || qtyInBase <= 0) return basePrice;
 
     let unitPrice = basePrice * (qtyInBase / baseQty);

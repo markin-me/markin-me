@@ -465,17 +465,21 @@ function prefetchComboDetails(comboIds, opts = {}) {
 
 function normalizeComboVariantList(rawList) {
   const variants = Array.isArray(rawList) ? rawList : [];
-  return variants.map((v) => ({
-    id: Number(v.id),
-    title: str(v.title || ""),
-    unit_id: v.unit_id ? Number(v.unit_id) : null,
-    unit_code: str(v.unit_code || ""),
-    unit_title: str(v.unit_title || ""),
-    unit_short_title: str(v.unit_short_title || ""),
-    values: Array.isArray(v.values) ? v.values : [],
-    discount_tiers: Array.isArray(v.discount_tiers) ? v.discount_tiers : [],
-    default_value_index: v.default_value_index != null ? Number(v.default_value_index) : null,
-  }));
+  return variants.map((v) => {
+    const groupId = Number(v.id ?? v.variant_group_id ?? 0);
+    return {
+      id: Number.isFinite(groupId) && groupId > 0 ? groupId : null,
+      variant_group_id: Number.isFinite(groupId) && groupId > 0 ? groupId : null,
+      title: str(v.title || ""),
+      unit_id: v.unit_id ? Number(v.unit_id) : null,
+      unit_code: str(v.unit_code || ""),
+      unit_title: str(v.unit_title || ""),
+      unit_short_title: str(v.unit_short_title || ""),
+      values: Array.isArray(v.values) ? v.values : [],
+      discount_tiers: Array.isArray(v.discount_tiers) ? v.discount_tiers : [],
+      default_value_index: v.default_value_index != null ? Number(v.default_value_index) : null,
+    };
+  });
 }
 
 async function preloadComboProductsData(productIds) {
@@ -705,6 +709,86 @@ async function resolveProductDetailsConfig(productId) {
     productDetailsConfigCache.delete(pid);
     throw e;
   }
+}
+
+function formatRootVariantValueLabel(variantGroup, valueIndex) {
+  const values = Array.isArray(variantGroup?.values) ? variantGroup.values : [];
+  const idx = Number(valueIndex);
+  if (!Number.isFinite(idx) || idx < 0 || idx >= values.length) return "";
+  const rawValue = str(values[idx] || "").trim();
+  if (!rawValue) return "";
+  const unit = str(
+    variantGroup?.unit_short_title ||
+    variantGroup?.unit_code ||
+    variantGroup?.unit_title ||
+    ""
+  ).trim();
+  if (!unit || /[a-zа-я]/i.test(rawValue)) return rawValue;
+  return `${rawValue} ${unit}`;
+}
+
+async function hydrateCartVariantUnitPrices() {
+  const cart = Array.isArray(state.cart) ? state.cart : [];
+  const targets = cart.filter((item) => {
+    const pid = Number(item?.product_id || 0);
+    const groupId = Number(item?.variant_group_id || 0);
+    const valueIndex = Number(item?.variant_value_index);
+    return pid > 0 && groupId > 0 && Number.isFinite(valueIndex) && valueIndex >= 0;
+  });
+  if (!targets.length) return false;
+
+  const productIds = Array.from(new Set(targets.map((item) => Number(item.product_id))));
+  await Promise.allSettled(productIds.map(async (productId) => {
+    await Promise.allSettled([
+      ensureProduct(productId),
+      resolveProductVariants(productId),
+    ]);
+  }));
+
+  let changed = false;
+  for (const item of targets) {
+    const productId = Number(item.product_id || 0);
+    const product = state.productCache.get(productId) || null;
+    if (!product) continue;
+    const variants = await resolveProductVariants(productId);
+    const groupId = Number(item.variant_group_id || 0);
+    const valueIndex = Number(item.variant_value_index);
+    const variantGroup = (Array.isArray(variants) ? variants : []).find((group) => (
+      Number(group?.id || group?.variant_group_id || 0) === groupId
+    )) || (Array.isArray(variants) ? variants[0] : null);
+    const values = Array.isArray(variantGroup?.values) ? variantGroup.values : [];
+    if (!variantGroup || !values.length || valueIndex < 0 || valueIndex >= values.length) continue;
+
+    const label = formatRootVariantValueLabel(variantGroup, valueIndex);
+    const nextPrice = getVariantUnitPrice(product, [variantGroup], {
+      selectedIndex: valueIndex,
+      value: values[valueIndex],
+      label,
+    });
+    if (!(Number(nextPrice) > 0)) continue;
+
+    if (Math.abs(Number(item.variant_unit_price || 0) - Number(nextPrice || 0)) > 0.005) {
+      item.variant_unit_price = Number(nextPrice || 0);
+      changed = true;
+    }
+    if (!str(item.variant_label || "").trim() && label) {
+      item.variant_label = label;
+      changed = true;
+    }
+    const groupTitle = str(variantGroup?.title || variantGroup?.title_label || "").trim();
+    if (!str(item.variant_group_title || "").trim() && groupTitle) {
+      item.variant_group_title = groupTitle;
+      changed = true;
+    }
+    const unit = str(variantGroup?.unit_short_title || variantGroup?.unit_title || variantGroup?.unit_code || "").trim();
+    if (!str(item.variant_unit || "").trim() && unit) {
+      item.variant_unit = unit;
+      changed = true;
+    }
+  }
+
+  if (changed) saveCart();
+  return changed;
 }
 
 function prefetchProductDetailsConfig(productIds, opts = {}) {
@@ -3395,7 +3479,7 @@ async function renderProductDetailsInto(container, product, { onBack, cartKey, p
   const selectionState = new Map();
   const ingredientState = new Map();
   const variantState = {
-    groupId: variants[0]?.id ?? null,
+    groupId: variants[0]?.id ?? variants[0]?.variant_group_id ?? null,
     selectedIndex: null,
     value: null,
     label: "",
@@ -4544,7 +4628,7 @@ optionGroups.forEach((group) => {
       variants?.[0]?.unit_code ||
       ""
     ).trim();
-    const variantValueLabel = str(variantState.label || "").trim();
+    const variantValueLabel = str(variantState.label || "").trim() || formatVariantValueLabelByIndex(selectedVariantIndex);
     const variantLabel = hasVariantSelection
       ? composeVariantLabelValueFirst(variantValueLabel, variantGroupTitle)
       : "";
@@ -4653,7 +4737,7 @@ optionGroups.forEach((group) => {
       variants?.[0]?.unit_code ||
       ""
     ).trim();
-    const variantValueLabel = str(variantState.label || "").trim();
+    const variantValueLabel = str(variantState.label || "").trim() || formatVariantValueLabelByIndex(selectedVariantIndex);
     const variantLabel = hasVariantSelection
       ? composeVariantLabelValueFirst(variantValueLabel, variantGroupTitle)
       : "";
@@ -35878,6 +35962,18 @@ function initShopLate() {
       console.warn("maybePromptCustomerNameCompletionAfterSocialLogin failed:", e);
     });
     prewarmCartPricingContext("init");
+    Promise.resolve((async () => {
+      await loadUnitConversions();
+      if (await hydrateCartVariantUnitPrices()) {
+        renderCart();
+        updateCartBadge();
+        if (typeof syncShopCartPricingSummaryUi === "function") {
+          await syncShopCartPricingSummaryUi();
+        }
+      }
+    })()).catch((e) => {
+      console.warn("initShopLate: cart variant hydration failed", e);
+    });
     try { void preloadCartEnhancers(); } catch {}
     Promise.resolve(initAddresses()).catch((e) => {
       console.warn("initShopLate: initAddresses failed", e);
@@ -35885,9 +35981,10 @@ function initShopLate() {
     runWhenIdle(async () => {
       try {
         await loadUnitConversions();
+        const cartVariantsHydrated = await hydrateCartVariantUnitPrices();
         await loadAutoAdd();
         await loadUpsellProducts();
-        if (applyAutoAddRules()) {
+        if (applyAutoAddRules() || cartVariantsHydrated) {
           saveCart();
           if (typeof syncAllProductCardsFromCart === "function") syncAllProductCardsFromCart();
         }

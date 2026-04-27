@@ -11259,15 +11259,15 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         const hasLetters = /[a-zР°-СЏ]/i.test(rawValue);
         return hasLetters ? rawValue : `${rawValue} ${unit}`;
       };
-      const getSimpleVariantPrice = (basePrice, values, selectedIndex, discountTiers) => {
+      const getSimpleVariantPrice = (basePrice, baseQty, values, selectedIndex, discountTiers) => {
         const price = Number(basePrice || 0);
+        const productBaseQty = Number(baseQty || 1) || 1;
         const idx = Number(selectedIndex);
         const list = Array.isArray(values) ? values : [];
         if (!list.length || !Number.isFinite(idx) || idx < 0 || idx >= list.length) return price;
-        const baseValue = parseVariantValueNumber(list[0]);
         const selectedValue = parseVariantValueNumber(list[idx]);
-        if (Number.isFinite(baseValue) && baseValue > 0 && Number.isFinite(selectedValue) && selectedValue > 0) {
-          let out = price * (selectedValue / baseValue);
+        if (Number.isFinite(productBaseQty) && productBaseQty > 0 && Number.isFinite(selectedValue) && selectedValue > 0) {
+          let out = price * (selectedValue / productBaseQty);
           const tiers = Array.isArray(discountTiers) ? discountTiers : [];
           const tier = tiers.find((t) => Number(t.sort_order) === idx);
           const discountPercent = Number(tier?.discount_percent || 0) || 0;
@@ -11474,6 +11474,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
              i.sort_order,
              p.name AS product_name,
              p.price AS product_price,
+             p.base_qty AS product_base_qty,
              p.photos_json AS product_photos_json
            FROM prod_option_items i
            JOIN prod_products p ON p.tenant_id=i.tenant_id AND p.id=i.target_product_id
@@ -11571,6 +11572,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             title: str(item.product_name || ''),
             name: str(item.product_name || ''),
             product_price: Number(item.product_price || 0),
+            product_base_qty: Number(item.product_base_qty || 1) || 1,
             price_mode: str(item.price_mode || 'from_target'),
             price_value: Number(item.price_value || 0),
             price: str(item.price_mode || '') === 'fixed'
@@ -11630,6 +11632,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           variantLabel = groupTitle ? `${groupTitle}: ${valueLabel}` : valueLabel;
           variantUnitPrice = getSimpleVariantPrice(
             Number(product.price || 0),
+            Number(product.base_qty || 1) || 1,
             variantValues,
             safeIdx,
             firstVariantGroup.discount_tiers || []
@@ -11680,6 +11683,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
                 : 0;
               const variantUnitPriceForOption = getSimpleVariantPrice(
                 Number(out.price || 0),
+                Number(item.product_base_qty || 1) || 1,
                 itemVariantValues,
                 safeVariantIdx,
                 firstItemVariantGroup.discount_tiers || []
