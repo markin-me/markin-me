@@ -29813,6 +29813,7 @@ function setActiveNav(key) {
   const activeKeyRaw = String(key || "").trim().toLowerCase();
   const activeKey = activeKeyRaw === "categories" ? "menu" : activeKeyRaw;
   const map = {
+    home: $("#shopNavHome"),
     menu: elNavMenu,
     benefits: elNavCategories,
     cart: elNavCart,
@@ -29827,6 +29828,7 @@ function setActiveNav(key) {
     if (k === activeKey) el.setAttribute("aria-current", "page");
     else el.removeAttribute("aria-current");
   });
+  document.body.classList.toggle("shop-home-tab-active", activeKey === "home");
 
   if (activeKey !== "cart" && activeKey !== "benefits") {
     if (elMobileAddressActions) elMobileAddressActions.classList.add("hidden");
@@ -29887,6 +29889,7 @@ function setBottomNavActive(tab) {
     if (isActive) b.setAttribute("aria-current", "page");
     else b.removeAttribute("aria-current");
   });
+  document.body.classList.toggle("shop-home-tab-active", tab === "home");
   if (typeof queueMobileUiStateSync === "function") {
     queueMobileUiStateSync(`setBottomNavActive:${tab}`);
   } else if (typeof window.queueShopMobileUiStateSync === "function") {
@@ -36199,9 +36202,22 @@ function initShopLate() {
         }
       });
 
-      // "Главная" (домик):
+      // "Каталог":
       // 1) если открыт любой шит/модалка — закрываем и возвращаемся в каталог
       // 2) если ничего не открыто — скроллим каталог наверх (внутренний скролл-контейнер на мобилке)
+      const elNavHome = $("#shopNavHome");
+      if (elNavHome) {
+        elNavHome.addEventListener("click", () => {
+          const isAnySheetOpen =
+            window.AppModal &&
+            typeof window.AppModal.isOpen === "function" &&
+            window.AppModal.isOpen();
+
+          if (isAnySheetOpen) closeShopSheetIfOpen();
+          setActiveNav("home");
+        });
+      }
+
       if (elNavMenu) {
         elNavMenu.addEventListener("click", () => {
           const isAnySheetOpen =

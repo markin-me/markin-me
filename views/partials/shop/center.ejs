@@ -1,5 +1,33 @@
 <div class="center-stack">
   <div class="panel">
+    <section class="shop-catalog-delivery-widget" id="shopCatalogDeliveryWidget" aria-label="Способ получения">
+      <div class="shop-catalog-delivery-widget__modes">
+        <button class="shop-catalog-delivery-widget__mode is-active" type="button" data-mode="delivery">
+          <span class="shop-catalog-delivery-widget__icon" data-role="delivery-icon">
+            <i class="fas fa-truck" aria-hidden="true"></i>
+          </span>
+          <span class="shop-catalog-delivery-widget__text">
+            <span class="shop-catalog-delivery-widget__title" data-role="delivery-title">Доставка</span>
+            <span class="shop-catalog-delivery-widget__meta" data-role="delivery-hours"></span>
+          </span>
+        </button>
+        <button class="shop-catalog-delivery-widget__mode" type="button" data-mode="pickup">
+          <span class="shop-catalog-delivery-widget__icon" data-role="pickup-icon">
+            <i class="fas fa-store" aria-hidden="true"></i>
+          </span>
+          <span class="shop-catalog-delivery-widget__text">
+            <span class="shop-catalog-delivery-widget__title" data-role="pickup-title">Самовывоз</span>
+            <span class="shop-catalog-delivery-widget__meta" data-role="pickup-hours"></span>
+          </span>
+        </button>
+      </div>
+      <button class="shop-catalog-delivery-widget__address" type="button" data-role="address">
+        <i class="fas fa-location-dot shop-catalog-delivery-widget__address-icon" aria-hidden="true"></i>
+        <span class="shop-catalog-delivery-widget__address-text" data-role="address-text">Укажите адрес доставки</span>
+        <i class="fas fa-chevron-right shop-catalog-delivery-widget__address-arrow" aria-hidden="true"></i>
+      </button>
+    </section>
+
     <div class="toolbar">
       <div class="toolbar-title">
         <i class="fas fa-utensils"></i>
@@ -37,5 +65,9 @@
         <div class="empty-text">Добавьте товары в админке или выберите другую категорию</div>
       </div>
     </div>
+  </div>
+
+  <div class="panel shop-home-empty-panel" aria-hidden="true">
+    <div class="panel-body"></div>
   </div>
 </div>

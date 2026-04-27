@@ -244,10 +244,12 @@
     $("[data-shop-products-empty]");
 
   const elNavCategories = $("#shopNavCategories");
+  const elNavHome = $("#shopNavHome");
   const elNavMenu = $("#shopNavMenu");
   const elNavCart = $("#shopNavCart");
   const elNavProfile = $("#shopNavProfile");
   const elNavFav = $("#shopNavFav");
+  const elCatalogDeliveryWidget = $("#shopCatalogDeliveryWidget");
 
   const elNavCartBadge = $("#shopNavCartBadge") || $("#shopCartBadge");
   const elCartOpenDesktop = $("#shopCartOpenDesktopBtn");
@@ -1547,7 +1549,7 @@
     if (!active) return null;
     const raw = String(active.getAttribute("data-tab") || "").trim().toLowerCase();
     if (raw === "categories") return "menu";
-    if (raw === "menu" || raw === "benefits" || raw === "cart" || raw === "fav" || raw === "profile") {
+    if (raw === "home" || raw === "menu" || raw === "benefits" || raw === "cart" || raw === "fav" || raw === "profile") {
       return raw;
     }
     return null;
@@ -1661,12 +1663,13 @@
     const normalizeTab = (rawTab) => {
       const t = String(rawTab || "").toLowerCase();
       if (t === "categories") return "menu";
-      if (t === "menu" || t === "benefits" || t === "cart" || t === "fav" || t === "profile") return t;
+      if (t === "home" || t === "menu" || t === "benefits" || t === "cart" || t === "fav" || t === "profile") return t;
       return "menu";
     };
 
     const tab = normalizeTab(stateSnapshot.tab);
     const navMap = {
+      home: elNavHome,
       menu: elNavMenu,
       benefits: elNavCategories,
       cart: elNavCart,
@@ -1682,6 +1685,7 @@
       if (active) btn.setAttribute("aria-current", "page");
       else btn.removeAttribute("aria-current");
     });
+    document.body.classList.toggle("shop-home-tab-active", tab === "home");
 
     const modeRaw = String(stateSnapshot.footerMode || "nav");
     const sheetOpen = Boolean(stateSnapshot?.sheet?.open);
@@ -1817,6 +1821,7 @@
       else if (panel === "favorites") tab = "fav";
       else tab = "menu";
     }
+    if (tab !== "home") document.body.classList.remove("shop-home-tab-active");
 
     return setMobileUiStateSnapshot(
       {
@@ -5848,6 +5853,136 @@
     return hoursText;
   }
 
+  function getCatalogDeliveryMethodMeta(mode) {
+    const config = getShopOrderConfigSnapshot();
+    const methods = Array.isArray(config?.methods) ? config.methods : [];
+    const method = mode === "pickup"
+      ? (methods.find((item) => str(item?.code).trim() !== "delivery") || null)
+      : (methods.find((item) => str(item?.code).trim() === "delivery") || null);
+    return {
+      title: str(method?.title || "").trim() || (mode === "pickup" ? "\u0421\u0430\u043c\u043e\u0432\u044b\u0432\u043e\u0437" : "\u0414\u043e\u0441\u0442\u0430\u0432\u043a\u0430"),
+      icon: str(method?.icon || "").trim() || (mode === "pickup" ? "fas fa-store" : "fas fa-truck"),
+    };
+  }
+
+  function setCatalogDeliveryIcon(target, iconRaw, fallback) {
+    if (!target) return;
+    const resolvedIcon = str(iconRaw || fallback || "").trim() || "fas fa-circle";
+    if (target.dataset.icon === resolvedIcon) return;
+    target.dataset.icon = resolvedIcon;
+    target.innerHTML = "";
+    const isUrl = resolvedIcon.includes("/") || resolvedIcon.startsWith("http");
+    if (isUrl) {
+      const img = document.createElement("img");
+      img.src = resolvedIcon;
+      img.alt = "";
+      target.appendChild(img);
+      return;
+    }
+    const icon = document.createElement("i");
+    if (resolvedIcon.includes(" ")) {
+      icon.className = resolvedIcon;
+    } else if (resolvedIcon.startsWith("fa-")) {
+      icon.className = `fas ${resolvedIcon}`;
+    } else {
+      icon.className = `fas fa-${resolvedIcon}`;
+    }
+    icon.setAttribute("aria-hidden", "true");
+    target.appendChild(icon);
+  }
+
+  function getCatalogPickupHoursText() {
+    const stores = Array.isArray(window._pickupStores) ? window._pickupStores : [];
+    if (!stores.length) return getResolvedCartHeaderHoursText("pickup") || "";
+    const candidateIds = [
+      Number(window._selectedPickupStoreId || 0),
+      Number(getActiveStoreId() || 0),
+    ].filter((id) => Number.isFinite(id) && id > 0);
+    let store = null;
+    for (const id of candidateIds) {
+      store = stores.find((item) => Number(item?.id) === id) || null;
+      if (store) break;
+    }
+    if (!store) store = stores[0] || null;
+    if (!store) return "";
+    const hoursRange = getStoreTodayHoursRangeForList(store.storeHours, store.timezone);
+    if (hoursRange) return `\u0441 ${hoursRange.replace(/\s*-\s*/, " \u0434\u043e ")}`;
+    const nextOpening = findNextStoreOpeningForList(store.storeHours, store.timezone);
+    return nextOpening?.time ? `\u0441 ${nextOpening.time}` : "";
+  }
+
+  function getCatalogDeliveryHoursText() {
+    const text = str(getResolvedCartHeaderHoursText("delivery") || "").trim();
+    const range = text.match(/(\d{2}:\d{2})\s*(?:-|до|\u0434\u043e)\s*(\d{2}:\d{2})/i);
+    if (range) return `\u0441 ${range[1]} \u0434\u043e ${range[2]}`;
+    const single = text.match(/(\d{2}:\d{2})/);
+    return single ? `\u0441 ${single[1]}` : text;
+  }
+
+  function updateCatalogDeliveryWidgetUi() {
+    if (!elCatalogDeliveryWidget) return;
+    const mode = window._deliveryMode === "pickup" ? "pickup" : "delivery";
+    const deliveryMeta = getCatalogDeliveryMethodMeta("delivery");
+    const pickupMeta = getCatalogDeliveryMethodMeta("pickup");
+
+    const deliveryTitle = elCatalogDeliveryWidget.querySelector('[data-role="delivery-title"]');
+    const pickupTitle = elCatalogDeliveryWidget.querySelector('[data-role="pickup-title"]');
+    const deliveryHours = elCatalogDeliveryWidget.querySelector('[data-role="delivery-hours"]');
+    const pickupHours = elCatalogDeliveryWidget.querySelector('[data-role="pickup-hours"]');
+    const deliveryIcon = elCatalogDeliveryWidget.querySelector('[data-role="delivery-icon"]');
+    const pickupIcon = elCatalogDeliveryWidget.querySelector('[data-role="pickup-icon"]');
+    const addressBtn = elCatalogDeliveryWidget.querySelector('[data-role="address"]');
+    const addressText = elCatalogDeliveryWidget.querySelector('[data-role="address-text"]');
+    const addressIcon = elCatalogDeliveryWidget.querySelector(".shop-catalog-delivery-widget__address-icon");
+
+    if (deliveryTitle) deliveryTitle.textContent = deliveryMeta.title;
+    if (pickupTitle) pickupTitle.textContent = pickupMeta.title;
+    if (deliveryHours) {
+      deliveryHours.innerHTML = `<span>\u0414\u043e\u0441\u0442\u0430\u0432\u043b\u044f\u0435\u043c</span><span>${escapeHtml(getCatalogDeliveryHoursText())}</span>`;
+    }
+    if (pickupHours) {
+      pickupHours.innerHTML = `<span>\u0412\u0440\u0435\u043c\u044f \u0440\u0430\u0431\u043e\u0442\u044b</span><span>${escapeHtml(getCatalogPickupHoursText())}</span>`;
+    }
+    setCatalogDeliveryIcon(deliveryIcon, deliveryMeta.icon, "fas fa-truck");
+    setCatalogDeliveryIcon(pickupIcon, pickupMeta.icon, "fas fa-store");
+
+    elCatalogDeliveryWidget.querySelectorAll(".shop-catalog-delivery-widget__mode").forEach((button) => {
+      const active = button.getAttribute("data-mode") === mode;
+      button.classList.toggle("is-active", active);
+      button.setAttribute("aria-pressed", active ? "true" : "false");
+    });
+
+    const line = str(getCartHeaderAddressLine() || "").trim();
+    const placeholder = getCartModeHeaderPlaceholder(mode);
+    if (addressText) addressText.textContent = line || placeholder;
+    if (addressBtn) {
+      addressBtn.classList.toggle("is-placeholder", !line);
+      addressBtn.setAttribute("aria-label", line || placeholder);
+      addressBtn.title = line || placeholder;
+    }
+    if (addressIcon) {
+      addressIcon.className = "fas fa-location-dot shop-catalog-delivery-widget__address-icon";
+    }
+  }
+
+  function bindCatalogDeliveryWidget() {
+    if (!elCatalogDeliveryWidget || elCatalogDeliveryWidget.dataset.bound === "1") return;
+    elCatalogDeliveryWidget.querySelectorAll(".shop-catalog-delivery-widget__mode").forEach((button) => {
+      button.addEventListener("click", () => {
+        void setCartModeHeaderMode(button.getAttribute("data-mode"));
+      });
+    });
+    const addressBtn = elCatalogDeliveryWidget.querySelector('[data-role="address"]');
+    if (addressBtn) {
+      addressBtn.addEventListener("click", () => {
+        const mode = window._deliveryMode === "pickup" ? "pickup" : "delivery";
+        void openAddressEditorFromCheckout({ preferredMode: mode, backMode: "header" });
+      });
+    }
+    elCatalogDeliveryWidget.dataset.bound = "1";
+    updateCatalogDeliveryWidgetUi();
+  }
+
   function getCartModeHeaderMetaSnapshot() {
     const store = getCartHeaderStatusStore();
     const mode = window._deliveryMode === "pickup" ? "pickup" : "delivery";
@@ -6043,6 +6178,7 @@
         deliveryProgressLabelEl.innerHTML = deliveryProgressVisible ? deliveryProgressLabelHtml : "";
       }
     });
+    updateCatalogDeliveryWidgetUi();
   }
 
   async function openCartModeAddressSelector(triggerEl) {
@@ -13566,6 +13702,8 @@ async function initCore() {
     renderCart();
     // Apply cart-header address mode immediately on first paint.
     showCartView();
+    bindCatalogDeliveryWidget();
+    updateCatalogDeliveryWidgetUi();
     updateCartBadge();
     try { void preloadCartEnhancers(); } catch {}
     bindLateActionDelegates();
