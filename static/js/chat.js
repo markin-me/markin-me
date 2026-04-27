@@ -72,7 +72,7 @@
   const CHAT_AUTO_OPEN_CLIENT_ID_PARAM = "chat_client_id";
   const CHAT_AUTO_OPEN_MESSAGE_ID_PARAM = "chat_message_id";
   const CHAT_MESSAGE_JUMP_BOTTOM_GAP_PX = 14;
-  const CHAT_CLIENTS_PAGE_SIZE = 20;
+  const CHAT_CLIENTS_PAGE_SIZE = 10;
   const CHAT_CLIENTS_LOAD_MORE_THRESHOLD_PX = 140;
   const CHAT_CLIENTS_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
   const CHAT_REMOTE_CLIENTS_PAGE_CACHE_TTL_MS = 1200;
@@ -89,6 +89,8 @@
   const CHAT_THREAD_SYNC_COALESCE_MS = 350;
   const CHAT_FULL_THREAD_PULL_COOLDOWN_MS = 30000;
   const CHAT_THREAD_EAGER_IMAGE_COUNT = 4;
+  const CHAT_DEBUG_NET_STORAGE_KEY = "dashboard:chat:debug-net:v1";
+  const CHAT_DEBUG_NET_MAX_EVENTS = 4000;
   const CHAT_THREAD_LOAD_MORE_THRESHOLD_PX = 20;
   const CHAT_TOUCH_CONTEXT_LONG_PRESS_MS = 430;
   const CHAT_TOUCH_CONTEXT_LONG_PRESS_MOVE_CANCEL_PX = 14;
@@ -294,6 +296,212 @@
     },
   };
 
+  function shouldEnableChatDebugNetByDefault() {
+    try {
+      const parsed = new URL(window.location.href);
+      const fromQuery = String(parsed.searchParams.get("chat_debug_net") || "").trim();
+      if (fromQuery === "1" || fromQuery.toLowerCase() === "true") return true;
+    } catch {}
+    try {
+      return localStorage.getItem(CHAT_DEBUG_NET_STORAGE_KEY) === "1";
+    } catch {
+      return false;
+    }
+  }
+
+  function installChatDebugNetworkCapture() {
+    if (window.__chatDebugNet && window.__chatDebugNet.__installed === true) return window.__chatDebugNet;
+
+    const state = {
+      enabled: shouldEnableChatDebugNetByDefault(),
+      events: [],
+      observer: null,
+      startedAt: Date.now(),
+      fetchPatched: false,
+      originalFetch: typeof window.fetch === "function" ? window.fetch.bind(window) : null,
+      isRecording: false,
+    };
+
+    function safeNowIso() {
+      try {
+        return new Date().toISOString();
+      } catch {
+        return "";
+      }
+    }
+
+    function pushEvent(event) {
+      if (!state.enabled) return;
+      const payload = event && typeof event === "object" ? event : { type: "unknown" };
+      payload.ts = payload.ts || safeNowIso();
+      state.events.push(payload);
+      if (state.events.length > CHAT_DEBUG_NET_MAX_EVENTS) {
+        state.events.splice(0, state.events.length - CHAT_DEBUG_NET_MAX_EVENTS);
+      }
+    }
+
+    function classifyUrl(url) {
+      const value = String(url || "");
+      if (!value) return "unknown";
+      if (value.includes("/api/")) return "api";
+      if (/\/(?:uploads|static\/uploads)\//i.test(value)) return "upload-image";
+      if (value.includes("/static/")) return "static";
+      return "other";
+    }
+
+    function patchFetch() {
+      if (state.fetchPatched || !state.originalFetch) return;
+      state.fetchPatched = true;
+      window.fetch = async function patchedFetch(input, init) {
+        const startedAt = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+        const method = String((init && init.method) || "GET").toUpperCase();
+        const url = typeof input === "string"
+          ? input
+          : String((input && input.url) || "");
+        try {
+          const response = await state.originalFetch(input, init);
+          const finishedAt = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+          pushEvent({
+            type: "fetch",
+            phase: "end",
+            method,
+            url,
+            group: classifyUrl(url),
+            status: Number(response && response.status || 0),
+            ok: !!(response && response.ok),
+            duration_ms: Math.max(0, Math.round(finishedAt - startedAt)),
+          });
+          return response;
+        } catch (error) {
+          const finishedAt = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+          pushEvent({
+            type: "fetch",
+            phase: "error",
+            method,
+            url,
+            group: classifyUrl(url),
+            error: String(error && (error.message || error.name) || error || "fetch_error"),
+            duration_ms: Math.max(0, Math.round(finishedAt - startedAt)),
+          });
+          throw error;
+        }
+      };
+    }
+
+    function observeResources() {
+      if (state.observer || typeof PerformanceObserver !== "function") return;
+      try {
+        state.observer = new PerformanceObserver((list) => {
+          if (!state.enabled) return;
+          const entries = list.getEntries();
+          entries.forEach((entry) => {
+            const name = String(entry && entry.name || "");
+            const initiatorType = String(entry && entry.initiatorType || "");
+            if (!name) return;
+            if (!/^(fetch|xmlhttprequest|img|script|link)$/i.test(initiatorType)) return;
+            pushEvent({
+              type: "resource",
+              initiator: initiatorType || "unknown",
+              url: name,
+              group: classifyUrl(name),
+              duration_ms: Number.isFinite(Number(entry.duration))
+                ? Math.max(0, Math.round(Number(entry.duration)))
+                : 0,
+              transfer_size: Number.isFinite(Number(entry.transferSize)) ? Number(entry.transferSize) : null,
+              encoded_body_size: Number.isFinite(Number(entry.encodedBodySize)) ? Number(entry.encodedBodySize) : null,
+              decoded_body_size: Number.isFinite(Number(entry.decodedBodySize)) ? Number(entry.decodedBodySize) : null,
+            });
+          });
+        });
+        state.observer.observe({ type: "resource", buffered: true });
+      } catch {}
+    }
+
+    function setEnabled(nextEnabled) {
+      state.enabled = nextEnabled === true;
+      try {
+        localStorage.setItem(CHAT_DEBUG_NET_STORAGE_KEY, state.enabled ? "1" : "0");
+      } catch {}
+      if (state.enabled && !state.isRecording) {
+        state.isRecording = true;
+        pushEvent({ type: "session", phase: "start", href: window.location.href });
+      }
+      if (!state.enabled && state.isRecording) {
+        state.isRecording = false;
+        pushEvent({ type: "session", phase: "stop", href: window.location.href });
+      }
+      return state.enabled;
+    }
+
+    function clear() {
+      state.events = [];
+      return true;
+    }
+
+    function getEvents() {
+      return state.events.slice();
+    }
+
+    function getSummary() {
+      const rows = getEvents();
+      const byGroup = {};
+      rows.forEach((row) => {
+        const key = String(row && row.group || "unknown");
+        byGroup[key] = Number(byGroup[key] || 0) + 1;
+      });
+      return {
+        enabled: state.enabled,
+        total: rows.length,
+        by_group: byGroup,
+        started_at: state.startedAt,
+      };
+    }
+
+    function exportJson(fileName = "") {
+      const payload = {
+        meta: {
+          href: window.location.href,
+          userAgent: navigator.userAgent,
+          createdAt: safeNowIso(),
+          summary: getSummary(),
+        },
+        events: getEvents(),
+      };
+      const json = JSON.stringify(payload, null, 2);
+      const blob = new Blob([json], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = String(fileName || `chat-debug-net-${Date.now()}.json`);
+      a.click();
+      window.setTimeout(() => {
+        URL.revokeObjectURL(url);
+      }, 1500);
+      return payload.meta.summary;
+    }
+
+    patchFetch();
+    observeResources();
+    if (state.enabled) {
+      state.isRecording = true;
+      pushEvent({ type: "session", phase: "start", href: window.location.href });
+    }
+
+    const api = {
+      __installed: true,
+      enable() { return setEnabled(true); },
+      disable() { return setEnabled(false); },
+      clear,
+      events: getEvents,
+      summary: getSummary,
+      exportJson,
+    };
+    window.__chatDebugNet = api;
+    return api;
+  }
+
+  installChatDebugNetworkCapture();
+
   const state = {
     clients: [],
     filteredClients: [],
@@ -380,6 +588,7 @@
     threadDropDragDepth: 0,
     clientsPager: null,
     clientsLoadInFlight: null,
+    clientsViewportPrefillDone: false,
     threadHistoryByClient: {},
     activeThreadWaitAbortController: null,
     summariesWaitAbortController: null,
@@ -599,6 +808,22 @@
               '<span class="order-stage-btn-meta">Сменить</span>' +
             '</span>'
           ) : '') +
+        '</span>' +
+      '</button>';
+  }
+
+  function buildHeaderOrderStagePlaceholderHtml() {
+    return '' +
+      '<button class="order-stage-btn is-static" id="chatOrderStatus" type="button" aria-label="Выберите клиента" title="Выберите клиента" disabled aria-disabled="true">' +
+        '<span class="order-stage-btn-icon-shell" aria-hidden="true">' +
+          '<span class="order-stage-btn-icon-wrap order-stage-btn-icon-current">' +
+            '<i class="fas fa-minus"></i>' +
+          '</span>' +
+        '</span>' +
+        '<span class="order-stage-btn-content">' +
+          '<span class="order-stage-btn-panel order-stage-btn-panel-current">' +
+            '<span class="order-stage-btn-current">Выберите клиента</span>' +
+          '</span>' +
         '</span>' +
       '</button>';
   }
@@ -6647,8 +6872,10 @@
         ? uiThreadScrollMap
         : legacyThreadScrollMap;
       const nextStore = {
-        threads: parsed && typeof parsed.threads === "object" ? parsed.threads : {},
-        hiddenMessageIds: parsed && typeof parsed.hiddenMessageIds === "object" ? parsed.hiddenMessageIds : {},
+        // Do not restore full chat histories on page load.
+        // Threads are loaded on demand when operator opens a client.
+        threads: {},
+        hiddenMessageIds: {},
         lastOpenClientId: Number(parsed?.lastOpenClientId || 0) || null,
         clientsCache: Array.isArray(parsed?.clientsCache) ? parsed.clientsCache : [],
         clientsCacheUpdatedAt: Number.isFinite(Number(parsed?.clientsCacheUpdatedAt))
@@ -6662,37 +6889,19 @@
         },
       };
       let changed = false;
+      if (parsed && typeof parsed.threads === "object" && Object.keys(parsed.threads).length) {
+        changed = true;
+      }
+      if (parsed && typeof parsed.hiddenMessageIds === "object" && Object.keys(parsed.hiddenMessageIds).length) {
+        changed = true;
+      }
       TEST_CHAT_IDS_TO_PRUNE.forEach((id) => {
-        if (Object.prototype.hasOwnProperty.call(nextStore.threads, id)) {
-          delete nextStore.threads[id];
-          changed = true;
-        }
-        if (Object.prototype.hasOwnProperty.call(nextStore.hiddenMessageIds, id)) {
-          delete nextStore.hiddenMessageIds[id];
-          changed = true;
-        }
         if (Object.prototype.hasOwnProperty.call(nextStore.ui.threadScrollTopByClient, id)) {
           delete nextStore.ui.threadScrollTopByClient[id];
           changed = true;
         }
         if (Object.prototype.hasOwnProperty.call(nextStore.ui.composerDraftByClient, id)) {
           delete nextStore.ui.composerDraftByClient[id];
-          changed = true;
-        }
-      });
-      Object.keys(nextStore.threads || {}).forEach((clientId) => {
-        const thread = Array.isArray(nextStore.threads[clientId]) ? nextStore.threads[clientId] : [];
-        const nextThread = thread.filter((message) => !isLegacyClientOrderSeedMessageId(message?.id));
-        if (nextThread.length !== thread.length) {
-          nextStore.threads[clientId] = nextThread;
-          changed = true;
-        }
-      });
-      Object.keys(nextStore.hiddenMessageIds || {}).forEach((clientId) => {
-        const hiddenList = Array.isArray(nextStore.hiddenMessageIds[clientId]) ? nextStore.hiddenMessageIds[clientId] : [];
-        const nextHiddenList = hiddenList.filter((messageId) => !isLegacyClientOrderSeedMessageId(messageId));
-        if (nextHiddenList.length !== hiddenList.length) {
-          nextStore.hiddenMessageIds[clientId] = nextHiddenList;
           changed = true;
         }
       });
@@ -6878,7 +7087,14 @@
   function saveStore() {
     try {
       syncUiStateIntoStore();
-      localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(state.store));
+      // Persist only lightweight UI/cache state.
+      // Full thread payloads are intentionally not persisted.
+      const lightweightStore = {
+        ...state.store,
+        threads: {},
+        hiddenMessageIds: {},
+      };
+      localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(lightweightStore));
     } catch {}
   }
 
@@ -9859,7 +10075,7 @@
     row.className = `chat-client-row${active ? " is-active" : ""}`;
     row.setAttribute("data-client-id", String(client.id));
     row.innerHTML = `
-      <button type="button" class="chat-client-row-main" aria-label="${escapeHtml(client.name || `РљР»РёРµРЅС‚ #${client.id}`)}">
+      <button type="button" class="chat-client-row-main" aria-label="${escapeHtml(client.name || `Клиент #${client.id}`)}">
         <span class="chat-client-main">
         <span class="chat-client-top">
           <span class="chat-client-name" data-chat-client-open-details="1">${escapeHtml(client.name || `Клиент #${client.id}`)}</span>
@@ -9959,7 +10175,20 @@
     const maxTop = Math.max(0, dom.left.list.scrollHeight - dom.left.list.clientHeight);
     dom.left.list.scrollTop = Math.max(0, Math.min(targetTop, maxTop));
     saveClientsListScrollPosition();
-    maybeLoadMoreClientsByScroll();
+  }
+
+  function syncActiveClientRowSelection(previousClientId, nextClientId) {
+    if (!dom.left.list) return;
+    const prevId = Number(previousClientId || 0);
+    const nextId = Number(nextClientId || 0);
+    if (prevId > 0) {
+      const prevRow = dom.left.list.querySelector(`.chat-client-row[data-client-id="${cssEscape(String(prevId))}"]`);
+      if (prevRow) prevRow.classList.remove("is-active");
+    }
+    if (nextId > 0) {
+      const nextRow = dom.left.list.querySelector(`.chat-client-row[data-client-id="${cssEscape(String(nextId))}"]`);
+      if (nextRow) nextRow.classList.add("is-active");
+    }
   }
 
   function normalizeEmojiCategoryName(rawCategory) {
@@ -13515,6 +13744,12 @@
       const safeText = String(text || "\u2014").trim() || "\u2014";
       const stageCol = $(".order-col.order-stage", dom.center.headerOrder);
       if (!stageCol) return;
+      const isEmptyOrder = !order || Number(order?.id || 0) <= 0;
+      if (isEmptyOrder) {
+        stageCol.innerHTML = buildHeaderOrderStagePlaceholderHtml();
+        refreshDesktopHeaderDomRefs();
+        return;
+      }
       stageCol.innerHTML = buildHeaderOrderStageButtonHtml(order, safeText);
       refreshDesktopHeaderDomRefs();
     };
@@ -13580,6 +13815,7 @@
       clientPhone = "—",
       order = null,
       orderId = 0,
+      emptyMessage = "Выберите клиента",
     } = {}) => {
       const isEmptyOrder = Number(orderId || 0) <= 0;
       const safeId = String(id || "\u2014").trim() || "\u2014";
@@ -13591,6 +13827,11 @@
       const mobileOrderLabel = Number(orderId || 0) > 0 ? `#${safeId}` : "—";
       if (dom.center.headerOrder) {
         dom.center.headerOrder.classList.toggle("is-order-empty", isEmptyOrder);
+        if (isEmptyOrder) {
+          dom.center.headerOrder.dataset.emptyMessage = String(emptyMessage || "Выберите клиента").trim() || "Выберите клиента";
+        } else {
+          delete dom.center.headerOrder.dataset.emptyMessage;
+        }
       }
       if (dom.center.orderKind) dom.center.orderKind.textContent = kind;
       if (dom.center.orderId) dom.center.orderId.textContent = safeId;
@@ -13621,12 +13862,13 @@
         time: "—",
         address: "",
         comment: "",
-        statusText: "—",
+        statusText: "Выберите клиента",
         total: "—",
         title: "Последний заказ: —",
         clientName: "Выберите клиента",
         clientPhone: "Нажмите на чат в левом списке",
         orderId: 0,
+        emptyMessage: "Выберите клиента",
       });
       cancelEditingMessage();
       clearComposerReply();
@@ -13662,12 +13904,13 @@
         time: "—",
         address: "",
         comment: "",
-        statusText: "Без заказа",
+        statusText: "У клиента нет заказов",
         total: "—",
         title: "Последний заказ: —",
         clientName: state.activeClient.name || `Клиент #${state.activeClient.id}`,
         clientPhone: formatPhoneDigitsToRU(state.activeClient.phone),
         orderId: 0,
+        emptyMessage: "У клиента нет заказов",
       });
     } else {
       const currentOrderId = Number(currentOrder?.id || 0);
@@ -16649,11 +16892,16 @@
     const id = Number(clientId || 0);
     if (!Number.isFinite(id) || id <= 0) return;
     const opts = options && typeof options === "object" ? options : {};
+    // Show header loading immediately on click, before any heavy sync work below.
+    setHeaderLoading(true);
+    if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+      await new Promise((resolve) => window.requestAnimationFrame(() => resolve()));
+    }
     suppressMessageAlertUntil = Date.now() + 3000;
     const previousActiveClientId = state.activeClientId;
     stopLocalTypingSession(previousActiveClientId, { flush: true });
     saveThreadScrollPosition(previousActiveClientId);
-    flushUiStatePersist();
+    scheduleUiStatePersist(0);
 
     closeAttachPreview({ focusComposer: false, clearPersistedDraft: false });
     cancelEditingMessage();
@@ -16684,8 +16932,7 @@
     state.rightPanelOrderId = 0;
     showChatRightPane("client");
     state.headerOrderSnapshot = null;
-    setHeaderLoading(true);
-    saveStore();
+    scheduleUiStatePersist(0);
     const selectedForTab = state.clients.find((c) => Number(c.id) === id) || null;
     const titleForTab = String(selectedForTab?.name || "").trim();
     const shouldAutoOpenDesktopDetails = !isAdminMobileChatLayout() && opts.openDetails !== false;
@@ -16749,7 +16996,7 @@
     })();
 
     ensureActiveThreadSseConnection();
-    applyClientFilter();
+    syncActiveClientRowSelection(previousActiveClientId, id);
     const forceDesktopBottomOnSelect = !isAdminMobileChatLayout();
     renderMessages({
       disableAutoPin: !forceDesktopBottomOnSelect,
@@ -17026,11 +17273,26 @@
     loadClientsPage({ reset: false, ensureSelection: false }).catch(console.error);
   }
 
+  function maybePrefillClientsViewportOnce() {
+    if (!dom.left.list) return;
+    if (state.clientsViewportPrefillDone) return;
+    const pager = ensureClientsPager();
+    if (!pager.hasMore || pager.loading) return;
+    const isScrollable = Number(dom.left.list.scrollHeight || 0) > Number(dom.left.list.clientHeight || 0);
+    if (isScrollable) {
+      state.clientsViewportPrefillDone = true;
+      return;
+    }
+    state.clientsViewportPrefillDone = true;
+    loadClientsPage({ reset: false, ensureSelection: false }).catch(console.error);
+  }
+
   async function loadClients() {
     if (!isChatWidgetEnabledRuntime()) return;
     if (!dom.left.list) return;
     if (state.clientsLoadInFlight) return state.clientsLoadInFlight;
     const mobileStart = isChatMobileViewport();
+    state.clientsViewportPrefillDone = false;
     // Do not block the first paint on slow DB/API responses.
     state.clientsLoadInFlight = loadClientsPage({ reset: true, ensureSelection: false })
       .catch((err) => {
@@ -17053,8 +17315,7 @@
           syncMobileChatView("clients", { persistState: true });
         }
         state.clientsLoadInFlight = null;
-        // If first page doesn't fill the viewport, continue paging in background.
-        maybeLoadMoreClientsByScroll();
+        maybePrefillClientsViewportOnce();
       });
     return state.clientsLoadInFlight;
   }

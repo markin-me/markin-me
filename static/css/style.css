@@ -23268,7 +23268,7 @@ body.page-chat .panel{
 }
 
 #chatHeaderOrder.is-order-empty::after{
-  content:"Р’С‹Р±РµСЂРёС‚Рµ РєР»РёРµРЅС‚Р°";
+  content:attr(data-empty-message);
   position:absolute;
   left:50%;
   top:50%;

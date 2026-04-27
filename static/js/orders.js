@@ -1,4 +1,4 @@
-(function () {
+﻿(function () {
   if (typeof window !== "undefined" && window.__ordersPageInitialized) return;
   if (typeof window !== "undefined") {
     window.__ordersPageInitialized = true;
@@ -611,8 +611,52 @@
     return valueText;
   }
 
+  const CP1251_PUNCT_TO_BYTE = Object.freeze({
+    0x201A: 0x82, 0x201E: 0x84, 0x2026: 0x85, 0x2020: 0x86, 0x2021: 0x87, 0x20AC: 0x88,
+    0x2030: 0x89, 0x0409: 0x8A, 0x2039: 0x8B, 0x040A: 0x8C, 0x040C: 0x8D, 0x040B: 0x8E,
+    0x040F: 0x8F, 0x0452: 0x90, 0x2018: 0x91, 0x2019: 0x92, 0x201C: 0x93, 0x201D: 0x94,
+    0x2022: 0x95, 0x2013: 0x96, 0x2014: 0x97, 0x2122: 0x99, 0x0459: 0x9A, 0x203A: 0x9B,
+    0x045A: 0x9C, 0x045C: 0x9D, 0x045B: 0x9E, 0x045F: 0x9F, 0x00A0: 0xA0, 0x040E: 0xA1,
+    0x045E: 0xA2, 0x0408: 0xA3, 0x00A4: 0xA4, 0x0490: 0xA5, 0x00A6: 0xA6, 0x00A7: 0xA7,
+    0x00A9: 0xA9, 0x0404: 0xAA, 0x00AB: 0xAB, 0x00AC: 0xAC, 0x00AD: 0xAD, 0x00AE: 0xAE,
+    0x0407: 0xAF, 0x00B0: 0xB0, 0x00B1: 0xB1, 0x0406: 0xB2, 0x0456: 0xB3, 0x0491: 0xB4,
+    0x00B5: 0xB5, 0x00B6: 0xB6, 0x00B7: 0xB7, 0x2116: 0xB9, 0x0454: 0xBA, 0x00BB: 0xBB,
+    0x0458: 0xBC, 0x0405: 0xBD, 0x0455: 0xBE, 0x0457: 0xBF,
+  });
+  const MOJIBAKE_RE = /(?:Р[\u0400-\u04FF\u2018-\u203A]|С[\u0400-\u04FF\u2018-\u203A]|вЂ|в„–|Г—)/;
+
+  function cp1251ByteForCodePoint(code) {
+    if (code >= 0x00 && code <= 0x7F) return code;
+    if (code >= 0x0410 && code <= 0x044F) return code - 0x350;
+    if (code === 0x0401) return 0xA8;
+    if (code === 0x0451) return 0xB8;
+    if (Object.prototype.hasOwnProperty.call(CP1251_PUNCT_TO_BYTE, code)) {
+      return CP1251_PUNCT_TO_BYTE[code];
+    }
+    return null;
+  }
+
+  function decodeCp1251Mojibake(value) {
+    const raw = String(value ?? "");
+    if (!raw || !MOJIBAKE_RE.test(raw)) return raw;
+    const bytes = [];
+    for (const ch of raw) {
+      const code = ch.codePointAt(0);
+      const b = cp1251ByteForCodePoint(code);
+      if (b == null) return raw;
+      bytes.push(b);
+    }
+    try {
+      const decoded = new TextDecoder("utf-8").decode(new Uint8Array(bytes));
+      if (!decoded || decoded.includes("\uFFFD")) return raw;
+      return decoded;
+    } catch {
+      return raw;
+    }
+  }
+
   function escapeHtml(s) {
-    return String(s ?? "")
+    return decodeCp1251Mojibake(s)
       .replaceAll("&", "&amp;")
       .replaceAll("<", "&lt;")
       .replaceAll(">", "&gt;")
@@ -1267,7 +1311,7 @@
 
   function buildOrderDeliveryZoneLabel(order) {
     const zoneName = getOrderDeliveryZoneName(order);
-    return zoneName ? `Р—РѕРЅР° РґРѕСЃС‚Р°РІРєРё: ${zoneName}` : "";
+    return zoneName ? `Зона доставки: ${zoneName}` : "";
   }
 
   function formatOrderListAddress(order, shortAddress) {
@@ -3533,9 +3577,10 @@
   }
 
   function setTextAll(list, value) {
+    const normalizedValue = decodeCp1251Mojibake(value);
     list.forEach((el) => {
       if (!el) return;
-      el.textContent = value;
+      el.textContent = normalizedValue;
     });
   }
 
@@ -4518,7 +4563,7 @@
       setTextAll(infoEls.deliveryDatetime, "?");
       setTextAll(infoEls.deliveryQty, "0 С€С‚.");
       setTextAll(infoEls.deliveryInterval, "?");
-      setTextAll(infoEls.deliveryAddressTitle, "РђРґСЂРµСЃ РґРѕСЃС‚Р°РІРєРё");
+      setTextAll(infoEls.deliveryAddressTitle, "Адрес доставки");
       setTextAll(infoEls.deliveryZone, "");
       setTextAll(infoEls.deliveryAddress, "?");
       setHtmlAll(infoEls.itemsList, '<div class="muted">?</div>');
@@ -4627,7 +4672,7 @@
     setTextAll(infoEls.deliveryType, methodTitle || "?");
     setTextAll(infoEls.deliveryDatetime, formatDateTime(order.created_at) || "?");
 
-    const deliverySectionTitle = order.method_code === "pickup" ? "РђРґСЂРµСЃ СЃР°РјРѕРІС‹РІРѕР·Р°" : "РђРґСЂРµСЃ РґРѕСЃС‚Р°РІРєРё";
+    const deliverySectionTitle = order.method_code === "pickup" ? "Адрес самовывоза" : "Адрес доставки";
     setTextAll(infoEls.deliveryAddressTitle, deliverySectionTitle);
 
     const zoneVisible = shouldShowOrderDeliveryZone(order);
@@ -6869,7 +6914,7 @@
     const dateStr = `${day}.${month}.${year}, ${hours}:${minutes}`;
 
     const methodTitle = receiptOrder.method_title || (receiptOrder.method_code === "pickup" ? "РЎР°РјРѕРІС‹РІРѕР·" : "Р”РѕСЃС‚Р°РІРєР°");
-    const deliverySectionTitle = receiptOrder.method_code === "pickup" ? "РЎР°РјРѕРІС‹РІРѕР·:" : "Р”РѕСЃС‚Р°РІРєР°:";
+    const deliverySectionTitle = receiptOrder.method_code === "pickup" ? "Самовывоз:" : "Доставка:";
     let address = receiptOrder.address;
     if (!address && receiptOrder.pickup_store_address) {
       address = receiptOrder.pickup_store_name
@@ -7582,3 +7627,4 @@
     startOrdersPolling();
   });
 })();
+

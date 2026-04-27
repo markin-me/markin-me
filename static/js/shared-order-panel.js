@@ -1,4 +1,4 @@
-(function () {
+﻿(function () {
   function toArray(value) {
     return Array.isArray(value) ? value.filter(Boolean) : [];
   }
@@ -993,3 +993,4 @@
     createInfoRenderer: createInfoRenderer
   };
 })();
+
