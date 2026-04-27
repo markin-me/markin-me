@@ -56,10 +56,10 @@
           <span></span>
           <span>Активен</span>
           <span>Видимость</span>
+          <span>Режим продажи</span>
           <span>Остаток</span>
           <span>Себестоимость</span>
           <span>Цена</span>
-          <span>Старая цена</span>
           <span></span>
         </div>
         <div class="orders-list" id="productsList"></div>
@@ -147,6 +147,14 @@
               <label class="products-bulk-menu-item">
                 <input type="checkbox" data-bulk-action="zero_stock" />
                 <span>Обнулить остаток</span>
+              </label>
+              <label class="products-bulk-menu-item">
+                <input type="checkbox" data-bulk-action="fulfillment_stock" />
+                <span>Сделать Со склада</span>
+              </label>
+              <label class="products-bulk-menu-item">
+                <input type="checkbox" data-bulk-action="fulfillment_made_to_order" />
+                <span>Сделать Под заказ</span>
               </label>
             </div>
           </div>

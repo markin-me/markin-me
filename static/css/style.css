@@ -4240,9 +4240,10 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
 [data-view-content="products"] .product-row{
   --product-row-switch-field-w:clamp(52px, 3.8vw, 64px);
   --product-row-field-w:clamp(74px, 5.6vw, 92px);
+  --product-row-mode-field-w:clamp(112px, 8vw, 144px);
   --product-row-stock-field-w:clamp(84px, 6.4vw, 106px);
   --product-row-indicator-w:clamp(18px, 1.8vw, 22px);
-  grid-template-columns:50px minmax(220px,1fr) repeat(2, var(--product-row-switch-field-w)) var(--product-row-stock-field-w) repeat(3, var(--product-row-field-w)) var(--product-row-indicator-w);
+  grid-template-columns:50px minmax(220px,1fr) repeat(2, var(--product-row-switch-field-w)) var(--product-row-mode-field-w) var(--product-row-stock-field-w) repeat(2, var(--product-row-field-w)) var(--product-row-indicator-w);
 }
 [data-view-content="products"] .product-list-header{
   position:sticky;
@@ -4308,6 +4309,46 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
 }
 .product-row-field--stock{
   width:100%;
+}
+.product-row-fulfillment-field{
+  width:100%;
+  min-width:0;
+  justify-self:end;
+  align-self:center;
+}
+.product-row-fulfillment-toggle{
+  width:100%;
+  height:28px;
+  min-height:28px;
+  border:1px solid var(--color-border);
+  border-radius:999px;
+  background:var(--color-surface);
+  color:var(--color-text);
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:8px;
+  padding:0 12px;
+  font-size:13px;
+  font-weight:700;
+  line-height:1;
+  cursor:pointer;
+  pointer-events:auto;
+  white-space:nowrap;
+  transition:border-color var(--dur-fast) var(--ease-smooth), background var(--dur-fast) var(--ease-smooth), box-shadow var(--dur-fast) var(--ease-smooth);
+}
+.product-row-fulfillment-toggle:hover{
+  border-color:rgba(255, 122, 0, 0.45);
+  background:var(--color-surface-2);
+}
+.product-row-fulfillment-toggle:focus-visible{
+  outline:none;
+  border-color:var(--color-primary);
+  box-shadow:0 0 0 2px rgba(255, 122, 0, 0.12);
+}
+.product-row-fulfillment-toggle:disabled{
+  opacity:.7;
+  cursor:wait;
 }
 .product-row-stock-input-wrap{
   position:relative;
@@ -4467,9 +4508,10 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
   [data-view-content="products"] .product-row{
     --product-row-switch-field-w:clamp(50px, 3.6vw, 58px);
     --product-row-field-w:clamp(70px, 5.2vw, 86px);
+    --product-row-mode-field-w:clamp(104px, 7.7vw, 130px);
     --product-row-stock-field-w:clamp(80px, 6.1vw, 100px);
     --product-row-indicator-w:clamp(16px, 1.7vw, 20px);
-    grid-template-columns:50px minmax(180px,1fr) repeat(2, var(--product-row-switch-field-w)) var(--product-row-stock-field-w) repeat(3, var(--product-row-field-w)) var(--product-row-indicator-w);
+    grid-template-columns:50px minmax(180px,1fr) repeat(2, var(--product-row-switch-field-w)) var(--product-row-mode-field-w) var(--product-row-stock-field-w) repeat(2, var(--product-row-field-w)) var(--product-row-indicator-w);
     gap:5px;
   }
 }
@@ -4479,9 +4521,10 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
   [data-view-content="products"] .product-row{
     --product-row-switch-field-w:clamp(46px, 3.4vw, 54px);
     --product-row-field-w:clamp(64px, 4.8vw, 78px);
+    --product-row-mode-field-w:clamp(96px, 7.4vw, 116px);
     --product-row-stock-field-w:clamp(74px, 5.6vw, 92px);
     --product-row-indicator-w:clamp(14px, 1.5vw, 18px);
-    grid-template-columns:50px minmax(150px,1fr) repeat(2, var(--product-row-switch-field-w)) var(--product-row-stock-field-w) repeat(3, var(--product-row-field-w)) var(--product-row-indicator-w);
+    grid-template-columns:50px minmax(150px,1fr) repeat(2, var(--product-row-switch-field-w)) var(--product-row-mode-field-w) var(--product-row-stock-field-w) repeat(2, var(--product-row-field-w)) var(--product-row-indicator-w);
     gap:4px;
   }
 }

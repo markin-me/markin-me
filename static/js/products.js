@@ -78,6 +78,8 @@
       { key: "hidden", label: "Скрытые" },
       { key: "in_stock", label: "В наличии" },
       { key: "ended", label: "Закончились" },
+      { key: "fulfillment_stock", label: "Со склада" },
+      { key: "fulfillment_made_to_order", label: "Под заказ" },
     ],
     options: [
       { key: "active", label: "Активные" },
@@ -102,6 +104,8 @@
         hidden: false,
         in_stock: true,
         ended: true,
+        fulfillment_stock: true,
+        fulfillment_made_to_order: true,
       };
     }
     return {
@@ -593,6 +597,8 @@
       hide: false,
       infinite_stock: false,
       zero_stock: false,
+      fulfillment_stock: false,
+      fulfillment_made_to_order: false,
     };
   }
 
@@ -834,6 +840,12 @@
       const activeAllowed = isActive ? filters.active : filters.inactive;
       const visibilityAllowed = isVisible ? filters.visible : filters.hidden;
       if (!activeAllowed || !visibilityAllowed) return false;
+
+      const fulfillmentMode = normalizeProductFulfillmentMode(product?.fulfillment_mode);
+      const fulfillmentAllowed = fulfillmentMode === "made_to_order"
+        ? filters.fulfillment_made_to_order
+        : filters.fulfillment_stock;
+      if (!fulfillmentAllowed) return false;
 
       const hasFiniteStock = isFiniteProductStockValue(product);
       const isEnded = hasFiniteStock && Number(product.stock_qty) <= 0;
@@ -4947,6 +4959,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     if (field === "old_price") product.old_price = value;
     if (field === "is_active") product.is_active = value ? 1 : 0;
     if (field === "site_visibility") product.site_visibility = value ? 1 : 0;
+    if (field === "fulfillment_mode") product.fulfillment_mode = normalizeProductFulfillmentMode(value);
   }
 
   function getInlineProductComparableValue(product, field) {
@@ -4970,6 +4983,29 @@ function openAutoAddGroupModal({ mode, group } = {}) {
       return;
     }
     control.value = getProductRowDisplayValue(product, field);
+  }
+
+  function syncProductRowFulfillmentControl(row, product) {
+    if (!row || !product) return;
+    const button = row.querySelector("[data-fulfillment-toggle]");
+    if (!button) return;
+    const mode = normalizeProductFulfillmentMode(product.fulfillment_mode);
+    button.dataset.mode = mode;
+    const text = button.querySelector("span");
+    if (text) text.textContent = getProductFulfillmentModeLabel(mode);
+  }
+
+  function syncProductEditorFulfillmentControl(productId, mode) {
+    if (Number(state.selectedProductId || 0) !== Number(productId || 0)) return;
+    const form = document.querySelector("#productEditorForm");
+    if (!form || !form.fulfillment_mode) return;
+    const normalized = normalizeProductFulfillmentMode(mode);
+    form.fulfillment_mode.value = normalized;
+    const text = document.querySelector("#peFulfillmentModeText");
+    if (text) text.textContent = getProductFulfillmentModeLabel(normalized);
+    document.querySelectorAll("#peFulfillmentModeMenu [data-value]").forEach((option) => {
+      option.classList.toggle("is-selected", normalizeProductFulfillmentMode(option.dataset.value) === normalized);
+    });
   }
 
   function syncProductRowSelectionUI(root = productsList) {
@@ -5009,6 +5045,8 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     if (actionKey === "hide" && actions.hide) actions.show = false;
     if (actionKey === "infinite_stock" && actions.infinite_stock) actions.zero_stock = false;
     if (actionKey === "zero_stock" && actions.zero_stock) actions.infinite_stock = false;
+    if (actionKey === "fulfillment_stock" && actions.fulfillment_stock) actions.fulfillment_made_to_order = false;
+    if (actionKey === "fulfillment_made_to_order" && actions.fulfillment_made_to_order) actions.fulfillment_stock = false;
   }
 
   function resetProductsBulkActions() {
@@ -5050,6 +5088,8 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     if (actions.hide) payload.site_visibility = 0;
     if (actions.infinite_stock) payload.stock = null;
     if (actions.zero_stock) payload.stock = 0;
+    if (actions.fulfillment_stock) payload.fulfillment_mode = "stock";
+    if (actions.fulfillment_made_to_order) payload.fulfillment_mode = "made_to_order";
     return payload;
   }
 
@@ -5058,6 +5098,23 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     if (Object.prototype.hasOwnProperty.call(payload, "is_active")) applyInlineProductValue(product, "is_active", payload.is_active);
     if (Object.prototype.hasOwnProperty.call(payload, "site_visibility")) applyInlineProductValue(product, "site_visibility", payload.site_visibility);
     if (Object.prototype.hasOwnProperty.call(payload, "stock")) applyInlineProductValue(product, "stock", payload.stock);
+    if (Object.prototype.hasOwnProperty.call(payload, "fulfillment_mode")) applyInlineProductValue(product, "fulfillment_mode", payload.fulfillment_mode);
+  }
+
+  function syncProductRowAfterBulkPayload(product, payload) {
+    if (!productsList || !product || !payload) return;
+    const id = Number(product.id || 0);
+    if (!(id > 0)) return;
+    const row = productsList.querySelector(`.order-row.product-row[data-id="${id}"]`);
+    if (!filterProductsCollection([product]).length) {
+      if (row) row.remove();
+      return;
+    }
+    if (!row) return;
+    if (Object.prototype.hasOwnProperty.call(payload, "is_active")) syncProductRowInlineControl(row, product, "is_active");
+    if (Object.prototype.hasOwnProperty.call(payload, "site_visibility")) syncProductRowInlineControl(row, product, "site_visibility");
+    if (Object.prototype.hasOwnProperty.call(payload, "stock")) syncProductRowInlineControl(row, product, "stock");
+    if (Object.prototype.hasOwnProperty.call(payload, "fulfillment_mode")) syncProductRowFulfillmentControl(row, product);
   }
 
   function syncProductsBulkFooter() {
@@ -5147,7 +5204,8 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     const stockUnitHint = getProductListUnitLabel(product);
     const costValue = getProductRowDisplayValue(product, "cost_price");
     const priceValue = getProductRowDisplayValue(product, "price");
-    const oldPriceValue = getProductRowDisplayValue(product, "old_price");
+    const fulfillmentMode = normalizeProductFulfillmentMode(product.fulfillment_mode);
+    const fulfillmentLabel = getProductFulfillmentModeLabel(fulfillmentMode);
     const hasVariants = Number(product?.has_variants || 0) > 0;
     const isVariantsExpanded = hasVariants && state.productRowVariantsExpanded.has(Number(product.id));
     const variantsRows = state.productRowVariantsCache.get(Number(product.id));
@@ -5208,6 +5266,11 @@ function openAutoAddGroupModal({ mode, group } = {}) {
             <span class="switch-ui" aria-hidden="true"></span>
           </label>
         </div>
+        <div class="product-row-fulfillment-field field-wrap">
+          <button class="product-row-fulfillment-toggle" type="button" data-fulfillment-toggle data-mode="${escapeHtml(fulfillmentMode)}" aria-label="Режим продажи товара">
+            <span>${escapeHtml(fulfillmentLabel)}</span>
+          </button>
+        </div>
         <div class="product-row-field product-row-field--stock field-wrap">
           <div class="product-row-stock-input-wrap">
             <input class="control control-sm product-row-input product-row-inline-input" type="text" inputmode="decimal" data-inline-field="stock" value="${escapeHtml(stockValue)}" placeholder="—" aria-label="Остаток" />
@@ -5219,9 +5282,6 @@ function openAutoAddGroupModal({ mode, group } = {}) {
         </div>
         <div class="product-row-field field-wrap">
           <input class="control control-sm product-row-input product-row-inline-input" type="text" inputmode="decimal" data-inline-field="price" value="${escapeHtml(priceValue)}" placeholder="—" aria-label="Цена" />
-        </div>
-        <div class="product-row-field field-wrap">
-          <input class="control control-sm product-row-input product-row-inline-input" type="text" inputmode="decimal" data-inline-field="old_price" value="${escapeHtml(oldPriceValue)}" placeholder="—" aria-label="Старая цена" />
         </div>
         <div class="product-row-variants-indicator">
           ${hasVariants
@@ -5470,6 +5530,51 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     renderProductsList();
   }
 
+  async function toggleProductRowFulfillment(productId, button) {
+    const id = Number(productId || 0);
+    if (!(id > 0) || !button || button.dataset.saving === "1") return;
+    const product = state.products.find((x) => Number(x.id) === id);
+    if (!product) return;
+
+    const previousMode = normalizeProductFulfillmentMode(product.fulfillment_mode);
+    const nextMode = previousMode === "made_to_order" ? "stock" : "made_to_order";
+
+    button.dataset.saving = "1";
+    button.disabled = true;
+    try {
+      if (nextMode === "made_to_order") {
+        const ingredientsRes = await apiGetProductIngredients(id);
+        const ingredients = Array.isArray(ingredientsRes?.data) ? ingredientsRes.data : [];
+        if (!ingredients.length) {
+          showToast("Не удалось сменить режим продажи: добавьте состав товара.");
+          return;
+        }
+      }
+
+      await api(`/api/prod_products/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ fulfillment_mode: nextMode }),
+      });
+      applyInlineProductValue(product, "fulfillment_mode", nextMode);
+      syncProductRowFulfillmentControl(button.closest(".product-row"), product);
+      syncProductEditorFulfillmentControl(id, nextMode);
+      clearCachedProductDetails(id);
+      clearCachedProductView(id);
+      setCachedCategoryProducts(state.currentCategoryId, {
+        products: state.products,
+        productsOffset: state.productsOffset,
+        productsTotal: state.productsTotal,
+        productsHasMore: state.productsHasMore,
+        combosInCategory: state.combosInCategory,
+      });
+    } catch (e) {
+      showToast("Не удалось сменить режим продажи.");
+    } finally {
+      button.dataset.saving = "";
+      button.disabled = false;
+    }
+  }
+
   function syncProductsListEmptyState() {
     if (!productsEmptyHint) return;
     const combos = shouldHideProductCombos() ? [] : (state.combosInCategory ?? []);
@@ -5519,6 +5624,13 @@ function openAutoAddGroupModal({ mode, group } = {}) {
           toggleProductCardSelection(id);
           return;
         }
+        const fulfillmentToggle = event.target.closest("[data-fulfillment-toggle]");
+        if (fulfillmentToggle) {
+          event.preventDefault();
+          event.stopPropagation();
+          await toggleProductRowFulfillment(Number(row.dataset.id), fulfillmentToggle);
+          return;
+        }
         if (event.target.closest(".product-row-field") || event.target.closest(".product-row-switch") || event.target.closest(".product-row-switch-field")) {
           return;
         }
@@ -5539,6 +5651,15 @@ function openAutoAddGroupModal({ mode, group } = {}) {
       const productId = Number(row.dataset.id);
       const product = state.products.find((x) => Number(x.id) === productId);
       if (!product) return;
+
+      const fulfillmentToggle = row.querySelector("[data-fulfillment-toggle]");
+      if (fulfillmentToggle) {
+        fulfillmentToggle.addEventListener("click", async (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          await toggleProductRowFulfillment(productId, fulfillmentToggle);
+        });
+      }
 
       row.querySelectorAll('[data-inline-field="is_active"], [data-inline-field="site_visibility"]').forEach((switchInput) => {
         const field = switchInput.dataset.inlineField;
@@ -5831,7 +5952,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
       if (!productRowsDragState.enabled) return;
       if (productRowsDragState.saving) return;
       if (event.button !== 0) return;
-      if (event.target.closest("[data-variants-toggle]") || event.target.closest("[data-variant-default-btn]") || event.target.closest(".product-row-select-control") || event.target.closest(".product-row-field") || event.target.closest(".product-row-switch") || event.target.closest(".product-row-switch-field") || event.target.closest(".product-row-inline-input")) {
+      if (event.target.closest("[data-variants-toggle]") || event.target.closest("[data-variant-default-btn]") || event.target.closest("[data-fulfillment-toggle]") || event.target.closest(".product-row-select-control") || event.target.closest(".product-row-field") || event.target.closest(".product-row-switch") || event.target.closest(".product-row-switch-field") || event.target.closest(".product-row-inline-input")) {
         return;
       }
       const row = event.target.closest(".order-row.product-row[data-id]");
@@ -18017,22 +18138,67 @@ const isViewMode = state.comboPanel.mode === "view";
         if (!ids.length) return;
         state.productsBulkApplying = true;
         syncProductsBulkActionsUi();
+        const skippedNoIngredients = [];
+        const failedNames = [];
         try {
           for (const id of ids) {
-            await api(`/api/prod_products/${id}`, {
-              method: "PATCH",
-              body: JSON.stringify(payload),
-            });
             const product = state.products.find((item) => Number(item?.id) === id);
-            if (!product) continue;
+            if (!product) {
+              failedNames.push(String(id));
+              continue;
+            }
+
+            if (
+              normalizeProductFulfillmentMode(payload.fulfillment_mode) === "made_to_order" &&
+              normalizeProductFulfillmentMode(product.fulfillment_mode) !== "made_to_order"
+            ) {
+              try {
+                const ingredientsRes = await apiGetProductIngredients(id);
+                const ingredients = Array.isArray(ingredientsRes?.data) ? ingredientsRes.data : [];
+                if (!ingredients.length) {
+                  skippedNoIngredients.push(product.name || String(id));
+                  continue;
+                }
+              } catch (e) {
+                skippedNoIngredients.push(product.name || String(id));
+                continue;
+              }
+            }
+
+            try {
+              await api(`/api/prod_products/${id}`, {
+                method: "PATCH",
+                body: JSON.stringify(payload),
+              });
+            } catch (e) {
+              failedNames.push(product.name || String(id));
+              continue;
+            }
+
             applyProductsBulkPayloadToLocalProduct(product, payload);
-            const row = productsList?.querySelector?.(`.order-row.product-row[data-id="${id}"]`);
-            if (!row) continue;
-            if (Object.prototype.hasOwnProperty.call(payload, "is_active")) syncProductRowInlineControl(row, product, "is_active");
-            if (Object.prototype.hasOwnProperty.call(payload, "site_visibility")) syncProductRowInlineControl(row, product, "site_visibility");
-            if (Object.prototype.hasOwnProperty.call(payload, "stock")) syncProductRowInlineControl(row, product, "stock");
+            syncProductRowAfterBulkPayload(product, payload);
+            if (Object.prototype.hasOwnProperty.call(payload, "fulfillment_mode")) {
+              syncProductEditorFulfillmentControl(id, payload.fulfillment_mode);
+              clearCachedProductDetails(id);
+              clearCachedProductView(id);
+            }
           }
-          renderProductsList();
+          syncProductsListEmptyState();
+          setCachedCategoryProducts(state.currentCategoryId, {
+            products: state.products,
+            productsOffset: state.productsOffset,
+            productsTotal: state.productsTotal,
+            productsHasMore: state.productsHasMore,
+            combosInCategory: state.combosInCategory,
+          });
+          if (skippedNoIngredients.length) {
+            const suffix = skippedNoIngredients.length === 1 ? `: ${skippedNoIngredients[0]}` : ` (${skippedNoIngredients.length})`;
+            showToast(`У товара не поменялся режим продажи, нужно заполнить состав${suffix}`);
+          }
+          if (failedNames.length) {
+            const suffix = failedNames.length === 1 ? `: ${failedNames[0]}` : ` (${failedNames.length})`;
+            showToast(`Не удалось применить действие к товару${suffix}`);
+          }
           resetProductsBulkActions();
           closeProductsBulkMenu();
           syncProductsBulkFooter();
