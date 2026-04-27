@@ -11218,6 +11218,9 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   body.page-shop .shop-products-panel{
     width: 100%;
     max-width: 100vw;
+    border-top-left-radius: 30px;
+    border-top-right-radius: 30px;
+    overflow: hidden;
   }
   body.page-shop .shop-products-panel .panel-body{
     padding-left: 8px;
@@ -14857,6 +14860,287 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
   display: none;
 }
 
+.shop-home-empty-panel .panel-body{
+  padding: 18px 12px calc(var(--shop-bottomnav-h) + 18px);
+}
+
+.shop-home-bonus-card{
+  display: grid;
+  justify-items: center;
+}
+
+.shop-home-bonus-card__action{
+  margin-top: 14px;
+  max-width: calc(100% - 112px);
+  height: 34px;
+  border: none;
+  border-radius: 999px;
+  background: var(--color-primary);
+  color: #fff;
+  padding: 0 18px;
+  font-size: 13px;
+  line-height: 1;
+  font-weight: 900;
+  cursor: pointer;
+  box-shadow: 0 8px 18px rgba(255, 106, 18, .22);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.shop-home-bonus-card__action:active{
+  transform: translateY(1px);
+}
+
+.shop-home-bonus-card.hidden{
+  display: none;
+}
+
+:where(.shop-home-bonus-card, .shop-bonus-cards-sheet) .bonus-level-preview-card{
+  width: 300px;
+  max-width: 300px;
+  min-width: 300px;
+  aspect-ratio: 16/9;
+  border-radius: 30px;
+  overflow: hidden;
+  border: none;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.12);
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) 42px;
+  background: linear-gradient(135deg, #1f8d2e 0%, #147924 100%);
+}
+
+:where(.shop-home-bonus-card, .shop-bonus-cards-sheet) .bonus-level-preview-main{
+  position: relative;
+  padding: 14px 14px 8px;
+  background: linear-gradient(135deg, #46b13b 0%, #289733 100%);
+  border-radius: 0 0 30px 30px;
+  z-index: 2;
+  margin-bottom: -6px;
+}
+
+:where(.shop-home-bonus-card, .shop-bonus-cards-sheet) .bonus-level-preview-title{
+  display: inline-flex;
+  max-width: calc(100% - 124px);
+  min-height: 24px;
+  align-items: center;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 13px;
+  line-height: 1.2;
+  font-weight: 700;
+  color: #f8fafc;
+  background: rgba(15, 23, 42, 0.28);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+:where(.shop-home-bonus-card, .shop-bonus-cards-sheet) .bonus-level-preview-title::after{
+  content: '\203A';
+  margin-left: 8px;
+  font-size: 15px;
+  line-height: 1;
+  opacity: .9;
+}
+
+:where(.shop-home-bonus-card, .shop-bonus-cards-sheet) .bonus-level-preview-bonus-label{
+  margin-top: 14px;
+  font-size: 12px;
+  color: rgba(248, 250, 252, 0.86);
+  font-weight: 600;
+}
+
+:where(.shop-home-bonus-card, .shop-bonus-cards-sheet) .bonus-level-preview-bonus-value{
+  margin-top: 2px;
+  font-size: 30px;
+  line-height: 1.05;
+  font-weight: 900;
+  color: #ffffff;
+  letter-spacing: 0;
+}
+
+:where(.shop-home-bonus-card, .shop-bonus-cards-sheet) .bonus-level-preview-qr{
+  position: absolute;
+  box-sizing: border-box;
+  right: 10px;
+  top: 10px;
+  width: 96px;
+  aspect-ratio: 1/1;
+  border-radius: 30px;
+  border: 2px solid rgba(255, 255, 255, 0.96);
+  outline: 1px solid rgba(255, 255, 255, 0.34);
+  outline-offset: 0;
+  background:
+    linear-gradient(45deg, rgba(255,255,255,0.8) 25%, transparent 25%) -4px 0/8px 8px,
+    linear-gradient(-45deg, rgba(255,255,255,0.8) 25%, transparent 25%) -4px 0/8px 8px,
+    linear-gradient(45deg, transparent 75%, rgba(255,255,255,0.8) 75%) -4px 0/8px 8px,
+    linear-gradient(-45deg, transparent 75%, rgba(255,255,255,0.8) 75%) -4px 0/8px 8px,
+    #f8fafc;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 7px;
+}
+
+:where(.shop-home-bonus-card, .shop-bonus-cards-sheet) .bonus-level-preview-qr span{
+  font-size: 10px;
+  font-weight: 800;
+  color: #1f2937;
+  letter-spacing: .08em;
+}
+
+:where(.shop-home-bonus-card, .shop-bonus-cards-sheet) .bonus-level-preview-sub{
+  height: 42px;
+  padding: 0 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: transparent;
+  z-index: 1;
+}
+
+:where(.shop-home-bonus-card, .shop-bonus-cards-sheet) .bonus-level-preview-cashback-side,
+:where(.shop-home-bonus-card, .shop-bonus-cards-sheet) .bonus-level-preview-category-side{
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+:where(.shop-home-bonus-card, .shop-bonus-cards-sheet) .bonus-level-preview-cashback-side{
+  gap: 8px;
+}
+
+:where(.shop-home-bonus-card, .shop-bonus-cards-sheet) .bonus-level-preview-category-side{
+  gap: 6px;
+  margin-left: auto;
+}
+
+:where(.shop-home-bonus-card, .shop-bonus-cards-sheet) .bonus-level-preview-category-side.hidden{
+  display: none;
+}
+
+:where(.shop-home-bonus-card, .shop-bonus-cards-sheet) .bonus-level-preview-cashback-icon,
+:where(.shop-home-bonus-card, .shop-bonus-cards-sheet) .bonus-level-preview-category-icon{
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.2);
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+}
+
+:where(.shop-home-bonus-card, .shop-bonus-cards-sheet) .bonus-level-preview-category-icon{
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(2, 6px);
+  grid-template-rows: repeat(2, 6px);
+  gap: 3px;
+  place-content: center;
+}
+
+:where(.shop-home-bonus-card, .shop-bonus-cards-sheet) .bonus-level-preview-category-icon span{
+  width: 6px;
+  height: 6px;
+  border-radius: 2px;
+  background: currentColor;
+  opacity: .95;
+}
+
+:where(.shop-home-bonus-card, .shop-bonus-cards-sheet) .bonus-level-preview-cashback-value,
+:where(.shop-home-bonus-card, .shop-bonus-cards-sheet) .bonus-level-preview-category-value{
+  font-size: 22px;
+  line-height: 1;
+  font-weight: 900;
+  color: #ffffff;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+
+:where(.shop-home-bonus-card, .shop-bonus-cards-sheet) .bonus-level-preview-category-count{
+  position: absolute;
+  top: -6px;
+  right: -7px;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.28);
+  color: #ffffff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+  box-shadow: 0 0 0 1px rgba(255,255,255,0.2);
+}
+
+.shop-bonus-cards-sheet{
+  padding: 18px 0 calc(var(--shop-bottomnav-h) + 18px);
+}
+
+.shop-bonus-cards-carousel{
+  position: relative;
+  width: 100%;
+}
+
+.shop-bonus-cards-carousel__track{
+  display: flex;
+  gap: 14px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x mandatory;
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  padding: 8px 42px 18px;
+}
+
+.shop-bonus-cards-carousel__track::-webkit-scrollbar{
+  display: none;
+}
+
+.shop-bonus-cards-carousel__slide{
+  flex: 0 0 300px;
+  display: flex;
+  justify-content: center;
+  scroll-snap-align: center;
+}
+
+.shop-bonus-cards-carousel__arrow{
+  position: absolute;
+  top: 50%;
+  z-index: 2;
+  width: 34px;
+  height: 34px;
+  border: none;
+  border-radius: 999px;
+  background: rgba(248, 250, 252, .94);
+  color: var(--color-text-muted);
+  box-shadow: 0 8px 20px rgba(15, 23, 42, .12);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transform: translateY(-50%);
+}
+
+.shop-bonus-cards-carousel__arrow--prev{
+  left: 10px;
+}
+
+.shop-bonus-cards-carousel__arrow--next{
+  right: 10px;
+}
+
 @media (max-width: 768px){
   body.page-shop:has(#shopNavHome.is-active) .center-stack > .panel:first-child,
   body.page-shop.shop-home-tab-active .center-stack > .panel:not(.shop-home-empty-panel){
@@ -14867,6 +15151,9 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
   body.page-shop.shop-home-tab-active .shop-home-empty-panel{
     display: block;
     min-height: calc(100vh - var(--shop-bottomnav-h) - env(safe-area-inset-bottom));
+    border-top-left-radius: 30px;
+    border-top-right-radius: 30px;
+    overflow: hidden;
   }
 
   body.page-shop:has(#shopNavHome.is-active) #shopCatChipsWrap{

@@ -173,6 +173,31 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     };
   }
 
+  function mapPublicBonusLevelRow(row) {
+    return {
+      id: Number(row.id || 0),
+      code: row.code || '',
+      sort_order: Number(row.sort_order || 0),
+      title: row.title || '',
+      access_type: row.access_type || 'conditions',
+      cashback_percent: Number(row.cashback_percent || 0),
+      redeem_percent: Number(row.redeem_percent || 0),
+      referral_bonus_percent: Number(row.referral_bonus_percent || 0),
+      favorite_categories_bonus_percent: Number(row.favorite_categories_bonus_percent || 0),
+      favorite_categories_limit: Number(row.favorite_categories_limit || 0),
+      qr_enabled: Number(row.qr_enabled || 0) === 1,
+      show_title_on_card: Number(row.show_title_on_card || 0) === 1,
+      design_color: row.design_color || null,
+      main_color: row.main_color || row.design_color || null,
+      base_color: row.base_color || null,
+      content_color: row.content_color || null,
+      title_color: row.title_color || null,
+      title_background_enabled: Number(row.title_background_enabled || 0) === 1,
+      title_background_color: row.title_background_color || null,
+      title_background_opacity: Number(row.title_background_opacity || 0),
+    };
+  }
+
   function normalizeProductBlocksConfig(rawValue, fallbackValue = null) {
     let parsed = rawValue;
     if (typeof parsed === 'string') {
@@ -1570,6 +1595,47 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       return res.json({ ok: true, data: rows || [] });
     } catch (e) {
       console.error(e);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.get('/bonus/config', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const [[settingsRow]] = await db.query(
+        `SELECT bonus_program_enabled, bonus_point_amount, bonus_ruble_amount, bonus_point_rate
+         FROM mkt_bonus_program_settings
+         WHERE tenant_id=?
+         LIMIT 1`,
+        [tenantId]
+      );
+      const [levelRows] = await db.query(
+        `SELECT id, code, sort_order, title, access_type,
+                cashback_percent, redeem_percent, referral_bonus_percent,
+                favorite_categories_bonus_percent, favorite_categories_limit,
+                qr_enabled, show_title_on_card,
+                design_color, main_color, base_color, content_color,
+                title_color, title_background_enabled, title_background_color, title_background_opacity
+         FROM mkt_bonus_levels
+         WHERE tenant_id=? AND is_active=1
+         ORDER BY sort_order ASC, id ASC`,
+        [tenantId]
+      );
+
+      return res.json({
+        ok: true,
+        data: {
+          settings: {
+            bonus_program_enabled: Number(settingsRow?.bonus_program_enabled || 0) === 1,
+            bonus_point_amount: Number(settingsRow?.bonus_point_amount || 1),
+            bonus_ruble_amount: Number(settingsRow?.bonus_ruble_amount || settingsRow?.bonus_point_rate || 1),
+            bonus_point_rate: Number(settingsRow?.bonus_point_rate || 1),
+          },
+          levels: (Array.isArray(levelRows) ? levelRows : []).map(mapPublicBonusLevelRow),
+        },
+      });
+    } catch (e) {
+      console.error('GET /api/public/bonus/config error:', e);
       return res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });

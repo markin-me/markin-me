@@ -250,6 +250,7 @@
   const elNavProfile = $("#shopNavProfile");
   const elNavFav = $("#shopNavFav");
   const elCatalogDeliveryWidget = $("#shopCatalogDeliveryWidget");
+  const elHomeBonusCard = $("#shopHomeBonusCard");
 
   const elNavCartBadge = $("#shopNavCartBadge") || $("#shopCartBadge");
   const elCartOpenDesktop = $("#shopCartOpenDesktopBtn");
@@ -551,6 +552,156 @@
     const div = document.createElement("div");
     div.textContent = String(s);
     return div.innerHTML;
+  }
+
+  function normalizeShopHexColor(value, fallback) {
+    const text = String(value || "").trim();
+    return /^#[0-9a-fA-F]{6}$/.test(text) ? text.toLowerCase() : fallback;
+  }
+
+  function normalizeShopOpacity(value, fallback = 90) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return fallback;
+    return Math.max(0, Math.min(100, Math.round(parsed)));
+  }
+
+  function buildShopRgbaColor(color, opacity) {
+    const hex = normalizeShopHexColor(color, "#ffffff").replace("#", "");
+    const alpha = normalizeShopOpacity(opacity, 90) / 100;
+    const r = parseInt(hex.slice(0, 2), 16);
+    const g = parseInt(hex.slice(2, 4), 16);
+    const b = parseInt(hex.slice(4, 6), 16);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+
+  function normalizeShopCardPercent(value, fallback = 0) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return Math.max(0, Number(fallback) || 0);
+    return Math.max(0, Math.round(parsed));
+  }
+
+  function getHomeBonusActionText(accessType) {
+    const type = String(accessType || "").trim();
+    if (type === "join") return "Присоединиться";
+    if (type === "paid") return "Подключить";
+    return "Участвовать";
+  }
+
+  function setBonusCardsSheetHeader(active) {
+    const header = document.querySelector(".app-modal-header");
+    if (!header) return;
+    header.classList.toggle("is-shop-sheet-shell", !!active);
+  }
+
+  function buildBonusLevelPreviewCardHtml(level) {
+    const mainColor = normalizeShopHexColor(level?.main_color || level?.design_color, "#46b13b");
+    const baseColor = normalizeShopHexColor(level?.base_color, "#1f8d2e");
+    const contentColor = normalizeShopHexColor(level?.content_color, "#ffffff");
+    const titleColor = normalizeShopHexColor(level?.title_color, "#1f2937");
+    const cashbackValue = normalizeShopCardPercent(level?.cashback_percent, 1);
+    const favoriteCategoryBonus = normalizeShopCardPercent(level?.favorite_categories_bonus_percent, 0);
+    const favoriteCategoryLimit = Math.max(0, Math.floor(Number(level?.favorite_categories_limit || 0)));
+    const showTitle = level?.show_title_on_card !== false;
+    const titleStyle = level?.title_background_enabled === false
+      ? `color:${escapeHtml(titleColor)};background:transparent;padding:0;border-radius:0;${showTitle ? "" : "display:none;"}`
+      : `color:${escapeHtml(titleColor)};background:${escapeHtml(buildShopRgbaColor(level?.title_background_color || "#ffffff", level?.title_background_opacity))};padding:2px 10px;border-radius:999px;${showTitle ? "" : "display:none;"}`;
+    const qrStyle = level?.qr_enabled === false ? "display:none;" : "";
+
+    return `
+      <div class="bonus-level-preview-card" style="background:${escapeHtml(baseColor)};">
+        <div class="bonus-level-preview-main" style="background:${escapeHtml(mainColor)};color:${escapeHtml(contentColor)};">
+          <div class="bonus-level-preview-title" style="${titleStyle}">${escapeHtml(level?.title || "Уровень")}</div>
+          <div class="bonus-level-preview-bonus-label" style="color:${escapeHtml(contentColor)};">Бонусы</div>
+          <div class="bonus-level-preview-bonus-value" style="color:${escapeHtml(contentColor)};">0 ₽</div>
+          <div class="bonus-level-preview-qr" style="${qrStyle}"><span>QR</span></div>
+        </div>
+        <div class="bonus-level-preview-sub" style="color:${escapeHtml(contentColor)};">
+          <div class="bonus-level-preview-cashback-side">
+            <div class="bonus-level-preview-cashback-icon" style="color:${escapeHtml(contentColor)};"><i class="fas fa-undo-alt" aria-hidden="true"></i></div>
+            <div class="bonus-level-preview-cashback-value" style="color:${escapeHtml(contentColor)};">${escapeHtml(`${cashbackValue}%`)}</div>
+          </div>
+          <div class="bonus-level-preview-category-side${favoriteCategoryLimit > 0 ? "" : " hidden"}">
+            <div class="bonus-level-preview-category-icon" style="color:${escapeHtml(contentColor)};" aria-hidden="true">
+              <span></span><span></span><span></span><span></span>
+              <div class="bonus-level-preview-category-count" style="color:${escapeHtml(contentColor)};">${escapeHtml(String(favoriteCategoryLimit))}</div>
+            </div>
+            <div class="bonus-level-preview-category-value" style="color:${escapeHtml(contentColor)};">${escapeHtml(`${favoriteCategoryBonus}%`)}</div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderBonusCardsSheetContent(wrap) {
+    if (!wrap) return;
+    const data = state.homeBonusConfig && typeof state.homeBonusConfig === "object" ? state.homeBonusConfig : null;
+    const levels = data?.settings?.bonus_program_enabled === true && Array.isArray(data.levels)
+      ? data.levels.filter((level) => level && String(level.title || "").trim())
+      : [];
+    if (!levels.length) {
+      wrap.innerHTML = "";
+      return;
+    }
+
+    wrap.innerHTML = `
+      <div class="shop-bonus-cards-carousel">
+        <button class="shop-bonus-cards-carousel__arrow shop-bonus-cards-carousel__arrow--prev" type="button" aria-label="Предыдущая карта">
+          <i class="fas fa-chevron-left" aria-hidden="true"></i>
+        </button>
+        <div class="shop-bonus-cards-carousel__track" data-bonus-cards-track>
+          ${levels.map((level) => `
+            <div class="shop-bonus-cards-carousel__slide">
+              ${buildBonusLevelPreviewCardHtml(level)}
+            </div>
+          `).join("")}
+        </div>
+        <button class="shop-bonus-cards-carousel__arrow shop-bonus-cards-carousel__arrow--next" type="button" aria-label="Следующая карта">
+          <i class="fas fa-chevron-right" aria-hidden="true"></i>
+        </button>
+      </div>
+    `;
+
+    const track = wrap.querySelector("[data-bonus-cards-track]");
+    const scrollToStep = (direction) => {
+      if (!track) return;
+      const firstSlide = track.querySelector(".shop-bonus-cards-carousel__slide");
+      const step = firstSlide ? firstSlide.getBoundingClientRect().width : track.clientWidth;
+      track.scrollBy({ left: direction * Math.max(1, step), behavior: "smooth" });
+    };
+    wrap.querySelector(".shop-bonus-cards-carousel__arrow--prev")?.addEventListener("click", () => scrollToStep(-1));
+    wrap.querySelector(".shop-bonus-cards-carousel__arrow--next")?.addEventListener("click", () => scrollToStep(1));
+  }
+
+  function openHomeBonusCardsSheet() {
+    if (!window.AppModal || typeof window.AppModal.open !== "function") return;
+    const wrap = document.createElement("div");
+    wrap.className = "shop-cart-sheet shop-bonus-cards-sheet";
+    renderBonusCardsSheetContent(wrap);
+    window.AppModal.open({
+      title: "Бонусные карты",
+      content: wrap,
+      showCancel: false,
+      showSave: false,
+      onClose: () => {
+        setBonusCardsSheetHeader(false);
+        if (window.AppModal?.body) {
+          window.AppModal.body.classList.remove(
+            "shop-cart-sheet-body",
+            "shop-cart-sheet-screen-benefits",
+            "shop-bonus-cards-sheet-body"
+          );
+        }
+      },
+    });
+    if (window.AppModal?.body) {
+      window.AppModal.body.classList.add(
+        "shop-cart-sheet-body",
+        "shop-cart-sheet-screen-benefits",
+        "shop-bonus-cards-sheet-body"
+      );
+    }
+    setBonusCardsSheetHeader(true);
+    void loadHomeBonusConfig().then(() => renderBonusCardsSheetContent(wrap));
   }
 
   // -----------------------------
@@ -925,6 +1076,8 @@
       byGroupId: new Map(),
     },
     autoAddDismissed: loadAutoAddDismissed(),
+    homeBonusConfig: null,
+    _homeBonusLoading: null,
 
     // addresses (cart header chip)
     addresses: [],
@@ -5981,6 +6134,85 @@
     }
     elCatalogDeliveryWidget.dataset.bound = "1";
     updateCatalogDeliveryWidgetUi();
+  }
+
+  function getHomeBonusFirstLevel(config) {
+    const data = config && typeof config === "object" ? config : null;
+    if (!data?.settings?.bonus_program_enabled) return null;
+    const levels = Array.isArray(data.levels) ? data.levels : [];
+    return levels.find((level) => level && String(level.title || "").trim()) || null;
+  }
+
+  function renderHomeBonusCard() {
+    if (!elHomeBonusCard) return;
+    const level = getHomeBonusFirstLevel(state.homeBonusConfig);
+    if (!level) {
+      elHomeBonusCard.classList.add("hidden");
+      elHomeBonusCard.innerHTML = "";
+      return;
+    }
+
+    const mainColor = "#f3f4f6";
+    const baseColor = "#d1d5db";
+    const contentColor = "#64748b";
+    const titleColor = "#64748b";
+    const cashbackValue = normalizeShopCardPercent(level.cashback_percent, 1);
+    const favoriteCategoryBonus = normalizeShopCardPercent(level.favorite_categories_bonus_percent, 0);
+    const favoriteCategoryLimit = Math.max(0, Math.floor(Number(level.favorite_categories_limit || 0)));
+    const showTitle = level.show_title_on_card !== false;
+    const titleStyle = level.title_background_enabled === false
+      ? `color:${escapeHtml(titleColor)};background:transparent;padding:0;border-radius:0;${showTitle ? "" : "display:none;"}`
+      : `color:${escapeHtml(titleColor)};background:#ffffff;padding:2px 10px;border-radius:999px;${showTitle ? "" : "display:none;"}`;
+    const qrStyle = level.qr_enabled === false ? "display:none;" : "";
+    const actionText = getHomeBonusActionText(level.access_type);
+
+    elHomeBonusCard.innerHTML = `
+      <div class="bonus-level-preview-card shop-home-bonus-card__preview" style="background:${escapeHtml(baseColor)};">
+        <div class="bonus-level-preview-main" style="background:${escapeHtml(mainColor)};color:${escapeHtml(contentColor)};">
+          <div class="bonus-level-preview-title" style="${titleStyle}">${escapeHtml(level.title || "Уровень")}</div>
+          <button class="shop-home-bonus-card__action" type="button">${escapeHtml(actionText)}</button>
+          <div class="bonus-level-preview-qr" style="${qrStyle}"><span>QR</span></div>
+        </div>
+        <div class="bonus-level-preview-sub" style="color:${escapeHtml(contentColor)};">
+          <div class="bonus-level-preview-cashback-side">
+            <div class="bonus-level-preview-cashback-icon" style="color:${escapeHtml(contentColor)};"><i class="fas fa-undo-alt" aria-hidden="true"></i></div>
+            <div class="bonus-level-preview-cashback-value" style="color:${escapeHtml(contentColor)};">${escapeHtml(`${cashbackValue}%`)}</div>
+          </div>
+          <div class="bonus-level-preview-category-side${favoriteCategoryLimit > 0 ? "" : " hidden"}">
+            <div class="bonus-level-preview-category-icon" style="color:${escapeHtml(contentColor)};" aria-hidden="true">
+              <span></span><span></span><span></span><span></span>
+              <div class="bonus-level-preview-category-count" style="color:${escapeHtml(contentColor)};">${escapeHtml(String(favoriteCategoryLimit))}</div>
+            </div>
+            <div class="bonus-level-preview-category-value" style="color:${escapeHtml(contentColor)};">${escapeHtml(`${favoriteCategoryBonus}%`)}</div>
+          </div>
+        </div>
+      </div>
+    `;
+    const actionBtn = elHomeBonusCard.querySelector(".shop-home-bonus-card__action");
+    if (actionBtn) actionBtn.addEventListener("click", openHomeBonusCardsSheet);
+    elHomeBonusCard.classList.remove("hidden");
+  }
+
+  async function loadHomeBonusConfig() {
+    if (!elHomeBonusCard) return null;
+    if (state.homeBonusConfig) return state.homeBonusConfig;
+    if (state._homeBonusLoading) return state._homeBonusLoading;
+    state._homeBonusLoading = apiJson("/api/public/bonus/config")
+      .then((json) => {
+        state.homeBonusConfig = json?.data && typeof json.data === "object" ? json.data : null;
+        renderHomeBonusCard();
+        return state.homeBonusConfig;
+      })
+      .catch((err) => {
+        console.error("Failed to load bonus config:", err);
+        elHomeBonusCard.classList.add("hidden");
+        elHomeBonusCard.innerHTML = "";
+        return null;
+      })
+      .finally(() => {
+        state._homeBonusLoading = null;
+      });
+    return state._homeBonusLoading;
   }
 
   function getCartModeHeaderMetaSnapshot() {
@@ -13669,6 +13901,7 @@ async function initCore() {
 
     renderProducts();
     prioritizeAboveFoldCardImages();
+    void loadHomeBonusConfig();
     await cartEnhancersStartupPromise;
     const startupAutoChanged = applyAutoAddRules();
     clearAutoAddDismissedIfCartEmpty();
