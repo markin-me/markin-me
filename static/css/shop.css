@@ -15084,12 +15084,16 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
 }
 
 .shop-bonus-cards-sheet{
-  padding: 18px 0 calc(var(--shop-bottomnav-h) + 18px);
+  padding: 18px 0 calc(var(--shop-bottomnav-h) + 92px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
 }
 
 .shop-bonus-cards-carousel{
   position: relative;
   width: 100%;
+  flex: 0 0 auto;
 }
 
 .shop-bonus-cards-carousel__track{
@@ -15139,6 +15143,194 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
 
 .shop-bonus-cards-carousel__arrow--next{
   right: 10px;
+}
+
+.shop-bonus-cards-advantages-host{
+  padding: 0 0 24px;
+}
+
+.shop-bonus-cards-advantages{
+  position: relative;
+  display: grid;
+  gap: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 16px;
+  overflow: hidden;
+}
+
+.shop-bonus-cards-advantage-row{
+  min-height: 44px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 9px 16px;
+  background: var(--color-surface);
+}
+
+.shop-bonus-cards-advantage-row:nth-child(even){
+  background: var(--color-surface-2);
+}
+
+.shop-bonus-cards-advantage-label{
+  font-size: 12px;
+  line-height: 1.2;
+  font-weight: 800;
+  color: var(--color-text);
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.shop-bonus-cards-advantage-value{
+  min-height: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--color-text);
+  padding: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 1.2;
+  font-weight: 700;
+  text-align: right;
+}
+
+.shop-bonus-cards-advantage-value > span{
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: normal;
+  justify-self: end;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+.shop-bonus-cards-info-btn{
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--color-text);
+  font-size: 13px;
+  line-height: 1;
+  font-weight: 900;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.shop-bonus-cards-info-popover{
+  position: absolute;
+  right: 8px;
+  top: 100%;
+  z-index: 5;
+  width: min(280px, calc(100vw - 70px));
+  padding: 12px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  background: var(--color-surface);
+  box-shadow: 0 14px 30px rgba(15, 23, 42, .16);
+  color: var(--color-text);
+  font-size: 13px;
+  line-height: 1.35;
+  font-weight: 500;
+}
+
+.shop-bonus-cards-info-popover.hidden{
+  display: none;
+}
+
+.shop-bonus-cards-conditions{
+  margin-top: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--color-border);
+  border-radius: 16px;
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.shop-bonus-cards-conditions-title{
+  font-size: 14px;
+  line-height: 1.2;
+  font-weight: 900;
+}
+
+.shop-bonus-cards-conditions-subtitle{
+  margin-top: 8px;
+  font-size: 13px;
+  line-height: 1.25;
+  font-weight: 700;
+  color: var(--color-text-muted);
+}
+
+.shop-bonus-cards-conditions-list{
+  margin-top: 10px;
+  display: grid;
+  gap: 6px;
+}
+
+.shop-bonus-cards-progress-item{
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+}
+
+.shop-bonus-cards-progress-icon{
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  background: var(--color-surface-2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+}
+
+.shop-bonus-cards-progress-main{
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.shop-bonus-cards-progress-title{
+  font-size: 13px;
+  line-height: 1.25;
+  font-weight: 800;
+  color: var(--color-text);
+}
+
+.shop-bonus-cards-progress-value{
+  font-size: 14px;
+  line-height: 1.25;
+  font-weight: 900;
+  color: var(--color-text);
+}
+
+.shop-bonus-cards-progress-bar{
+  width: 100%;
+  height: 6px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--color-surface-2);
+}
+
+.shop-bonus-cards-progress-fill{
+  height: 100%;
+  border-radius: inherit;
+  background: var(--shop-accent, #ff6b18);
 }
 
 @media (max-width: 768px){
@@ -22566,7 +22758,8 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
   .shop-mobile-cart-actions-cart,
   .shop-mobile-cart-actions-checkout,
   .shop-mobile-cart-actions-benefits,
-  .shop-mobile-cart-actions-gift-claim {
+  .shop-mobile-cart-actions-gift-claim,
+  .shop-mobile-cart-actions-bonus-cards {
     display: flex;
     align-items: center;
     gap: 10px;
@@ -22581,8 +22774,14 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
   .shop-mobile-cart-actions-cart.hidden,
   .shop-mobile-cart-actions-checkout.hidden,
   .shop-mobile-cart-actions-benefits.hidden,
-  .shop-mobile-cart-actions-gift-claim.hidden {
+  .shop-mobile-cart-actions-gift-claim.hidden,
+  .shop-mobile-cart-actions-bonus-cards.hidden {
     display: none;
+  }
+
+  .shop-mobile-cart-actions-bonus-cards > .shop-checkout-submit-btn {
+    width: 100%;
+    flex: 1 1 auto;
   }
 
   .shop-mobile-cart-actions-benefits.is-single-action > .shop-checkout-back {

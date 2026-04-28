@@ -276,6 +276,8 @@
   const elMobileCartActionsCheckout = $("#shopMobileCartActionsCheckout");
   const elMobileCartActionsBenefits = $("#shopMobileCartActionsBenefits");
   const elMobileCartActionsGiftClaim = $("#shopMobileCartActionsGiftClaim");
+  const elMobileBonusCardsActions = $("#shopMobileBonusCardsActions");
+  const elMobileBonusCardsActionBtn = $("#shopMobileBonusCardsActionBtn");
   const elMobileCartClearBtn = $("#shopMobileCartClearBtn");
   const elMobileCheckoutBtn = $("#shopMobileCheckoutBtn");
   const elMobileGiftClaimBtn = $("#shopMobileGiftClaimBtn");
@@ -580,6 +582,68 @@
     return Math.max(0, Math.round(parsed));
   }
 
+  function formatShopBonusNumber(value, fallback = 0) {
+    const parsed = Number(value);
+    const safe = Number.isFinite(parsed) ? parsed : Number(fallback) || 0;
+    return new Intl.NumberFormat("ru-RU", {
+      maximumFractionDigits: 2,
+    }).format(safe);
+  }
+
+  function formatShopBonusMoney(value) {
+    return `${formatShopBonusNumber(Math.max(0, Math.floor(Number(value || 0))))} ₽`;
+  }
+
+  function formatShopBonusPercent(value, fallback = 0) {
+    return `${formatShopBonusNumber(value, fallback)}%`;
+  }
+
+  function formatShopBonusPeriod(value, unit) {
+    const n = Math.max(0, Math.floor(Number(value || 0)));
+    const u = String(unit || "").trim();
+    if (u === "immediate") return "Сразу";
+    if (u === "forever") return "Бессрочно";
+    if (!n) return "Сразу";
+    if (u === "hours") return `${n} ч`;
+    if (u === "days") return `${n} дн.`;
+    if (u === "months") return `${n} мес.`;
+    return String(n);
+  }
+
+  function getShopBonusRanges(level) {
+    return (Array.isArray(level?.order_bonus_ranges) ? level.order_bonus_ranges : [])
+      .map((row) => ({
+        amount: Math.max(0, Number(row?.amount || 0)),
+        percent: Math.max(0, Number(row?.percent || 0)),
+      }))
+      .filter((row) => row.amount > 0 && row.percent > 0)
+      .sort((a, b) => a.amount - b.amount);
+  }
+
+  function getShopBonusRangeSummary(level) {
+    const rows = getShopBonusRanges(level);
+    if (!rows.length) return "Не настроено";
+    const first = rows[0];
+    const percents = rows.map((row) => row.percent);
+    const minPercent = Math.min(...percents);
+    const maxPercent = Math.max(...percents);
+    const percentText = minPercent === maxPercent
+      ? `+${formatShopBonusPercent(minPercent)}`
+      : `от ${formatShopBonusPercent(minPercent)} до ${formatShopBonusPercent(maxPercent)}`;
+    return `от ${formatShopBonusMoney(first.amount)} и выше / ${percentText}`;
+  }
+
+  function getShopBonusRangeDetails(level) {
+    const rows = getShopBonusRanges(level);
+    return rows.map((row, index) => {
+      const next = rows[index + 1] || null;
+      const amountText = next
+        ? `от ${formatShopBonusMoney(row.amount)} до ${formatShopBonusMoney(Math.max(row.amount, next.amount - 1))}`
+        : `от ${formatShopBonusMoney(row.amount)} и более`;
+      return `${index + 1}. ${amountText} / +${formatShopBonusPercent(row.percent)}`;
+    });
+  }
+
   function getHomeBonusActionText(accessType) {
     const type = String(accessType || "").trim();
     if (type === "join") return "Присоединиться";
@@ -632,6 +696,157 @@
     `;
   }
 
+  function buildBonusCardsAdvantageRow(label, value, options = {}) {
+    const info = options.info === true;
+    return `
+      <div class="shop-bonus-cards-advantage-row">
+        <div class="shop-bonus-cards-advantage-label">${escapeHtml(label)}</div>
+        <div class="shop-bonus-cards-advantage-value">
+          <span>${escapeHtml(value)}</span>
+          ${info ? '<button class="shop-bonus-cards-info-btn" type="button" data-bonus-range-info aria-label="Подробнее">i</button>' : ""}
+        </div>
+      </div>
+    `;
+  }
+
+  function buildBonusCardsAdvantagesHtml(level, settings) {
+    const favoriteBonus = Math.max(0, Number(level?.favorite_categories_bonus_percent || 0));
+    const favoriteLimit = Math.max(0, Math.floor(Number(level?.favorite_categories_limit || 0)));
+    const favoriteText = favoriteBonus > 0 || favoriteLimit > 0
+      ? `Кэшбек: +${formatShopBonusPercent(favoriteBonus)} / Количество категорий: ${favoriteLimit}`
+      : "Не настроено";
+    return `
+      <div class="shop-bonus-cards-advantages" data-bonus-cards-advantages>
+        ${buildBonusCardsAdvantageRow("Кэшбек, %", formatShopBonusPercent(level?.cashback_percent, 0))}
+        ${buildBonusCardsAdvantageRow("Можно списывать, %", formatShopBonusPercent(level?.redeem_percent, 0))}
+        ${buildBonusCardsAdvantageRow("Доп % за рефералов", formatShopBonusPercent(level?.referral_bonus_percent, 0))}
+        ${buildBonusCardsAdvantageRow("Одновременно списывать и начислять", settings?.allow_redeem_and_accrue ? "Да" : "Нет")}
+        ${buildBonusCardsAdvantageRow("Станут активны", formatShopBonusPeriod(level?.activation_delay_value, level?.activation_delay_unit))}
+        ${buildBonusCardsAdvantageRow("Время жизни бонусов", formatShopBonusPeriod(level?.lifetime_value, level?.lifetime_unit))}
+        ${buildBonusCardsAdvantageRow("Дополнительные бонусы за сумму заказа", getShopBonusRangeSummary(level), { info: getShopBonusRanges(level).length > 0 })}
+        ${buildBonusCardsAdvantageRow("Доп. бонус за покупку любимых категорий", favoriteText)}
+        <div class="shop-bonus-cards-info-popover hidden" data-bonus-range-popover></div>
+      </div>
+    `;
+  }
+
+  function buildBonusCardsConditionsHtml(level) {
+    return buildBonusCardsConditionsProgressHtml(level);
+    if (String(level?.access_type || "").trim() !== "conditions") return "";
+    const rows = [];
+    const amount = Math.max(0, Number(progress.amount_target || level?.requirement_amount || 0));
+    const orders = Math.max(0, Math.floor(Number(progress.orders_target || level?.requirement_orders || 0)));
+    const referrals = Math.max(0, Math.floor(Number(progress.referrals_target || level?.requirement_referrals || 0)));
+    if (amount > 0) rows.push({ icon: "💰", title: "Сумма заказов", value: `0 ₽ / ${formatShopBonusMoney(amount)}` });
+    if (orders > 0) rows.push({ icon: "🛒", title: "Количество заказов", value: `0 / ${orders}` });
+    if (referrals > 0) rows.push({ icon: "👥", title: "Рефералы", value: `0 / ${referrals}` });
+    if (!rows.length) return "";
+    return `
+      <div class="shop-bonus-cards-conditions">
+        <div class="shop-bonus-cards-conditions-title">До нового уровня</div>
+        <div class="shop-bonus-cards-conditions-subtitle">Выполните любое условие:</div>
+        <div class="shop-bonus-cards-conditions-list">
+          ${rows.map((row) => `
+            <div class="shop-bonus-cards-progress-item">
+              <div class="shop-bonus-cards-progress-icon" aria-hidden="true">${escapeHtml(row.icon)}</div>
+              <div class="shop-bonus-cards-progress-main">
+                <div class="shop-bonus-cards-progress-title">${escapeHtml(row.title)}</div>
+                <div class="shop-bonus-cards-progress-value">${escapeHtml(row.value)}</div>
+              </div>
+            </div>
+          `).join("")}
+        </div>
+      </div>
+    `;
+  }
+
+  function getShopBonusProgressRatio(current, target) {
+    const currentValue = Math.max(0, Number(current || 0));
+    const targetValue = Math.max(0, Number(target || 0));
+    if (!(targetValue > 0)) return 0;
+    return Math.max(0, Math.min(100, (currentValue / targetValue) * 100));
+  }
+
+  function buildBonusCardsProgressItemHtml(row) {
+    const ratio = getShopBonusProgressRatio(row.current, row.target);
+    return `
+      <div class="shop-bonus-cards-progress-item">
+        <div class="shop-bonus-cards-progress-icon" aria-hidden="true">${escapeHtml(row.icon)}</div>
+        <div class="shop-bonus-cards-progress-main">
+          <div class="shop-bonus-cards-progress-title">${escapeHtml(row.title)}</div>
+          <div class="shop-bonus-cards-progress-value">${escapeHtml(row.value)}</div>
+          <div class="shop-bonus-cards-progress-bar" aria-hidden="true">
+            <div class="shop-bonus-cards-progress-fill" style="width:${ratio}%;"></div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function buildBonusCardsConditionsProgressHtml(level) {
+    if (String(level?.access_type || "").trim() !== "conditions") return "";
+    const progress = level?.progress && typeof level.progress === "object" ? level.progress : {};
+    const rows = [];
+    const amount = Math.max(0, Number(progress.amount_target || level?.requirement_amount || 0));
+    const orders = Math.max(0, Math.floor(Number(progress.orders_target || level?.requirement_orders || 0)));
+    const referrals = Math.max(0, Math.floor(Number(progress.referrals_target || level?.requirement_referrals || 0)));
+    const amountCurrent = Math.max(0, Number(progress.amount_current || 0));
+    const ordersCurrent = Math.max(0, Math.floor(Number(progress.orders_current || 0)));
+    const referralsCurrent = Math.max(0, Math.floor(Number(progress.referrals_current || 0)));
+
+    if (amount > 0) rows.push({
+      icon: "💰",
+      title: "Сумма заказов",
+      value: `${formatShopBonusMoney(amountCurrent)} / ${formatShopBonusMoney(amount)}`,
+      current: amountCurrent,
+      target: amount,
+    });
+    if (orders > 0) rows.push({
+      icon: "🛒",
+      title: "Количество заказов",
+      value: `${ordersCurrent} / ${orders}`,
+      current: ordersCurrent,
+      target: orders,
+    });
+    if (referrals > 0) rows.push({
+      icon: "👥",
+      title: "Рефералы",
+      value: `${referralsCurrent} / ${referrals}`,
+      current: referralsCurrent,
+      target: referrals,
+    });
+    if (!rows.length) return "";
+
+    const isRetention = String(progress.scope || "").trim() === "retention";
+    return `
+      <div class="shop-bonus-cards-conditions">
+        <div class="shop-bonus-cards-conditions-title">${isRetention ? "Удержание уровня" : "До нового уровня"}</div>
+        <div class="shop-bonus-cards-conditions-subtitle">Выполните любое условие:</div>
+        <div class="shop-bonus-cards-conditions-list">
+          ${rows.map(buildBonusCardsProgressItemHtml).join("")}
+        </div>
+      </div>
+    `;
+  }
+
+  function updateBonusCardsSheetAdvantages(wrap, levels, activeIndex) {
+    const host = wrap?.querySelector("[data-bonus-cards-advantages-host]");
+    if (!host) return;
+    const index = Math.max(0, Math.min(levels.length - 1, Number(activeIndex || 0)));
+    const level = levels[index];
+    host.innerHTML = buildBonusCardsAdvantagesHtml(level, state.homeBonusConfig?.settings || {}) + buildBonusCardsConditionsProgressHtml(level);
+    if (elMobileBonusCardsActionBtn) elMobileBonusCardsActionBtn.textContent = getHomeBonusActionText(level?.access_type);
+    const infoBtn = host.querySelector("[data-bonus-range-info]");
+    const popover = host.querySelector("[data-bonus-range-popover]");
+    if (!infoBtn || !popover) return;
+    infoBtn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const rows = getShopBonusRangeDetails(levels[index]);
+      popover.innerHTML = rows.map((row) => `<div>${escapeHtml(row)}</div>`).join("");
+      popover.classList.toggle("hidden");
+    });
+  }
+
   function renderBonusCardsSheetContent(wrap) {
     if (!wrap) return;
     const data = state.homeBonusConfig && typeof state.homeBonusConfig === "object" ? state.homeBonusConfig : null;
@@ -659,9 +874,37 @@
           <i class="fas fa-chevron-right" aria-hidden="true"></i>
         </button>
       </div>
+      <div class="shop-bonus-cards-advantages-host" data-bonus-cards-advantages-host></div>
     `;
 
     const track = wrap.querySelector("[data-bonus-cards-track]");
+    let activeIndex = 0;
+    let scrollTimer = null;
+    const getActiveIndex = () => {
+      if (!track) return 0;
+      const slides = Array.from(track.querySelectorAll(".shop-bonus-cards-carousel__slide"));
+      if (!slides.length) return 0;
+      const trackRect = track.getBoundingClientRect();
+      const center = trackRect.left + trackRect.width / 2;
+      let bestIndex = 0;
+      let bestDistance = Infinity;
+      slides.forEach((slide, index) => {
+        const rect = slide.getBoundingClientRect();
+        const slideCenter = rect.left + rect.width / 2;
+        const distance = Math.abs(slideCenter - center);
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          bestIndex = index;
+        }
+      });
+      return bestIndex;
+    };
+    const syncActiveAdvantages = () => {
+      const nextIndex = getActiveIndex();
+      if (nextIndex === activeIndex && wrap.querySelector("[data-bonus-cards-advantages]")) return;
+      activeIndex = nextIndex;
+      updateBonusCardsSheetAdvantages(wrap, levels, activeIndex);
+    };
     const scrollToStep = (direction) => {
       if (!track) return;
       const firstSlide = track.querySelector(".shop-bonus-cards-carousel__slide");
@@ -670,6 +913,11 @@
     };
     wrap.querySelector(".shop-bonus-cards-carousel__arrow--prev")?.addEventListener("click", () => scrollToStep(-1));
     wrap.querySelector(".shop-bonus-cards-carousel__arrow--next")?.addEventListener("click", () => scrollToStep(1));
+    track?.addEventListener("scroll", () => {
+      if (scrollTimer) clearTimeout(scrollTimer);
+      scrollTimer = setTimeout(syncActiveAdvantages, 90);
+    }, { passive: true });
+    updateBonusCardsSheetAdvantages(wrap, levels, activeIndex);
   }
 
   function openHomeBonusCardsSheet() {
@@ -677,6 +925,9 @@
     const wrap = document.createElement("div");
     wrap.className = "shop-cart-sheet shop-bonus-cards-sheet";
     renderBonusCardsSheetContent(wrap);
+    sheetNavigationState.type = "bonus-cards";
+    sheetNavigationState.screen = "main";
+    sheetNavigationState.data = null;
     window.AppModal.open({
       title: "Бонусные карты",
       content: wrap,
@@ -684,6 +935,8 @@
       showSave: false,
       onClose: () => {
         setBonusCardsSheetHeader(false);
+        if (elMobileCartActions) elMobileCartActions.classList.add("hidden");
+        if (elMobileBonusCardsActions) elMobileBonusCardsActions.classList.add("hidden");
         if (window.AppModal?.body) {
           window.AppModal.body.classList.remove(
             "shop-cart-sheet-body",
@@ -691,6 +944,9 @@
             "shop-bonus-cards-sheet-body"
           );
         }
+        sheetNavigationState.type = null;
+        sheetNavigationState.screen = null;
+        sheetNavigationState.data = null;
       },
     });
     if (window.AppModal?.body) {
@@ -701,6 +957,7 @@
       );
     }
     setBonusCardsSheetHeader(true);
+    syncMobileUiState("bonus-cards-sheet-open");
     void loadHomeBonusConfig().then(() => renderBonusCardsSheetContent(wrap));
   }
 
@@ -1077,6 +1334,7 @@
     },
     autoAddDismissed: loadAutoAddDismissed(),
     homeBonusConfig: null,
+    _homeBonusToken: "",
     _homeBonusLoading: null,
 
     // addresses (cart header chip)
@@ -1725,6 +1983,7 @@
         return "cart";
       }
       if (sheetType === "categories") return "categories";
+      if (sheetType === "bonus-cards") return "bonus-cards";
       if (sheetType === "profile") return sheetScreen === "orderDetails" ? "profile-order-details" : "profile";
       if (sheetType === "favorites") return "favorites";
       if (sheetType === "activeOrders") return sheetScreen === "details" ? "active-orders-details" : "active-orders-list";
@@ -1756,6 +2015,7 @@
     if (isVisibleNode(elActiveOrdersSheetCollapsed)) return "active-orders-collapsed";
     if (isVisibleNode(elMobileCartActions)) {
       if (isVisibleNode(elMobileCartActionsGiftClaim)) return "gift-claim-actions";
+      if (isVisibleNode(elMobileBonusCardsActions)) return "bonus-cards-actions";
       if (isVisibleNode(elMobileBenefitsInlineApplyBtn)) return "benefits-nav-actions";
       if (isVisibleNode(elMobileCartActionsBenefits)) return "benefits-actions";
       if (isVisibleNode(elMobileCartActionsCheckout)) return "checkout-actions";
@@ -1772,6 +2032,7 @@
     const benefitsSourceScreen = String(options.sheetData?.benefitsSourceScreen || "").trim().toLowerCase();
     if (panelName === "benefit-gift-claim") return isCartSheetOpen ? "gift-claim-actions" : "nav";
     if (panelName === "benefit-apply") return isCartSheetOpen ? "benefit-apply-actions" : "nav";
+    if (panelName === "bonus-cards") return Boolean(options.sheetOpen) && String(options.sheetType || "") === "bonus-cards" ? "bonus-cards-actions" : "nav";
     if (panelName === "benefits") {
       if (!isCartSheetOpen) return "nav";
       if (benefitsSourceScreen === "nav") return "benefits-nav-actions";
@@ -1848,6 +2109,9 @@
     if ((mode === "cart-actions" || mode === "cart-empty-actions" || mode === "checkout-actions" || mode === "benefits-actions" || mode === "benefits-nav-actions" || mode === "gift-claim-actions" || mode === "benefit-apply-actions") && !(sheetOpen && sheetType === "cart")) {
       mode = "nav";
     }
+    if (mode === "bonus-cards-actions" && !(sheetOpen && sheetType === "bonus-cards")) {
+      mode = "nav";
+    }
     if (benefitsInnerOverlayOpen && panelName === "benefits") {
       mode = "nav";
     }
@@ -1858,13 +2122,14 @@
     };
 
     const showProductActions = mode === "product-actions";
-    const showCartActions = mode === "cart-actions" || mode === "cart-empty-actions" || mode === "checkout-actions" || mode === "benefits-actions" || mode === "benefits-nav-actions" || mode === "gift-claim-actions" || mode === "benefit-apply-actions";
+    const showCartActions = mode === "cart-actions" || mode === "cart-empty-actions" || mode === "checkout-actions" || mode === "benefits-actions" || mode === "benefits-nav-actions" || mode === "gift-claim-actions" || mode === "benefit-apply-actions" || mode === "bonus-cards-actions";
     const showCartActionsCart = mode === "cart-actions";
     const showCartActionsCheckout = mode === "checkout-actions";
     const showCartActionsBenefits = mode === "benefits-actions";
     const showCartActionsBenefitsNav = mode === "benefits-nav-actions";
     const showCartActionsGiftClaim = mode === "gift-claim-actions";
     const showCartActionsBenefitApply = mode === "benefit-apply-actions";
+    const showBonusCardsActions = mode === "bonus-cards-actions";
     const showAddressActions = mode === "address-actions";
     const showAddressConfirm = mode === "address-confirm";
     const showOrderDetailsActions = mode === "order-details-actions";
@@ -1876,6 +2141,7 @@
     setVisible(elMobileCartActionsCheckout, showCartActionsCheckout);
     setVisible(elMobileCartActionsBenefits, showCartActionsBenefits || showCartActionsBenefitApply);
     setVisible(elMobileCartActionsGiftClaim, showCartActionsGiftClaim);
+    setVisible(elMobileBonusCardsActions, showBonusCardsActions);
     setVisible(elMobileBenefitsPromoWrap, showCartActionsBenefits || showCartActionsBenefitsNav);
     setVisible(elMobileBenefitsInlineApplyBtn, showCartActionsBenefitsNav);
     setVisible(elMobileAddressActions, showAddressActions);
@@ -6195,8 +6461,11 @@
 
   async function loadHomeBonusConfig() {
     if (!elHomeBonusCard) return null;
-    if (state.homeBonusConfig) return state.homeBonusConfig;
+    const token = getCustomerToken();
+    if (state.homeBonusConfig && state._homeBonusToken === token) return state.homeBonusConfig;
     if (state._homeBonusLoading) return state._homeBonusLoading;
+    if (state._homeBonusToken !== token) state.homeBonusConfig = null;
+    state._homeBonusToken = token;
     state._homeBonusLoading = apiJson("/api/public/bonus/config")
       .then((json) => {
         state.homeBonusConfig = json?.data && typeof json.data === "object" ? json.data : null;

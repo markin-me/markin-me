@@ -173,9 +173,10 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     };
   }
 
-  function mapPublicBonusLevelRow(row) {
+  function mapPublicBonusLevelRow(row, children = {}) {
+    const levelId = Number(row.id || 0);
     return {
-      id: Number(row.id || 0),
+      id: levelId,
       code: row.code || '',
       sort_order: Number(row.sort_order || 0),
       title: row.title || '',
@@ -185,6 +186,24 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       referral_bonus_percent: Number(row.referral_bonus_percent || 0),
       favorite_categories_bonus_percent: Number(row.favorite_categories_bonus_percent || 0),
       favorite_categories_limit: Number(row.favorite_categories_limit || 0),
+      requirement_amount: row.requirement_amount == null ? null : Number(row.requirement_amount),
+      requirement_mode: row.requirement_mode || 'and',
+      requirement_orders: row.requirement_orders == null ? null : Number(row.requirement_orders),
+      requirement_referral_mode: row.requirement_referral_mode || 'and',
+      requirement_referrals: row.requirement_referrals == null ? null : Number(row.requirement_referrals),
+      requirement_period_days: row.requirement_period_days == null ? null : Number(row.requirement_period_days),
+      retention_strategy: row.retention_strategy || 'match',
+      retention_amount: row.retention_amount == null ? null : Number(row.retention_amount),
+      retention_mode: row.retention_mode || 'and',
+      retention_orders: row.retention_orders == null ? null : Number(row.retention_orders),
+      retention_referral_mode: row.retention_referral_mode || 'and',
+      retention_referrals: row.retention_referrals == null ? null : Number(row.retention_referrals),
+      progress: children.progressByLevel?.get(levelId) || null,
+      activation_delay_value: Number(row.activation_delay_value || 0),
+      activation_delay_unit: row.activation_delay_unit || 'immediate',
+      lifetime_value: Number(row.lifetime_value || 0),
+      lifetime_unit: row.lifetime_unit || 'forever',
+      order_bonus_ranges: children.rangesByLevel?.get(levelId) || [],
       qr_enabled: Number(row.qr_enabled || 0) === 1,
       show_title_on_card: Number(row.show_title_on_card || 0) === 1,
       design_color: row.design_color || null,
@@ -196,6 +215,119 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       title_background_color: row.title_background_color || null,
       title_background_opacity: Number(row.title_background_opacity || 0),
     };
+  }
+
+  function toMysqlDateTime(value) {
+    const date = value instanceof Date ? value : new Date(value);
+    if (!Number.isFinite(date.getTime())) return null;
+    const pad = (part) => String(part).padStart(2, '0');
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+  }
+
+  function maxDateOrNull(...values) {
+    const dates = values
+      .map((value) => (value instanceof Date ? value : new Date(value)))
+      .filter((date) => Number.isFinite(date.getTime()));
+    if (!dates.length) return null;
+    return new Date(Math.max(...dates.map((date) => date.getTime())));
+  }
+
+  function getPublicBonusRequirementTargets(levelRow, accountRow) {
+    const isCurrentLevel = Number(accountRow?.level_id || 0) > 0
+      && Number(accountRow?.level_id || 0) === Number(levelRow?.id || 0);
+    const useRetention = isCurrentLevel;
+    const retentionStrategy = String(levelRow?.retention_strategy || 'match');
+    if (useRetention && retentionStrategy === 'custom') {
+      return {
+        scope: 'retention',
+        amount: levelRow.retention_amount == null ? null : Number(levelRow.retention_amount),
+        orders: levelRow.retention_orders == null ? null : Number(levelRow.retention_orders),
+        referrals: levelRow.retention_referrals == null ? null : Number(levelRow.retention_referrals),
+        mode: levelRow.retention_mode || 'and',
+        referralMode: levelRow.retention_referral_mode || 'and',
+      };
+    }
+    return {
+      scope: useRetention ? 'retention' : 'requirement',
+      amount: levelRow.requirement_amount == null ? null : Number(levelRow.requirement_amount),
+      orders: levelRow.requirement_orders == null ? null : Number(levelRow.requirement_orders),
+      referrals: levelRow.requirement_referrals == null ? null : Number(levelRow.requirement_referrals),
+      mode: levelRow.requirement_mode || 'and',
+      referralMode: levelRow.requirement_referral_mode || 'and',
+    };
+  }
+
+  async function loadPublicBonusProgressByLevel(tenantId, customer, levelRows) {
+    const customerId = Number(customer?.id || 0);
+    const rows = Array.isArray(levelRows) ? levelRows : [];
+    const progressByLevel = new Map();
+    if (!(tenantId > 0) || !(customerId > 0) || !rows.length) return progressByLevel;
+
+    const [[accountRow]] = await db.query(
+      `SELECT id, customer_id, level_id, joined_at, level_assigned_at
+       FROM mkt_customer_bonus_accounts
+       WHERE tenant_id=? AND customer_id=?
+       LIMIT 1`,
+      [tenantId, customerId]
+    );
+    if (!accountRow?.joined_at) return progressByLevel;
+
+    for (const levelRow of rows) {
+      const targets = getPublicBonusRequirementTargets(levelRow, accountRow);
+      const amountTarget = Math.max(0, Number(targets.amount || 0));
+      const ordersTarget = Math.max(0, Math.floor(Number(targets.orders || 0)));
+      const referralsTarget = Math.max(0, Math.floor(Number(targets.referrals || 0)));
+      if (!(amountTarget > 0) && !(ordersTarget > 0) && !(referralsTarget > 0)) continue;
+
+      const periodDays = Math.max(0, Math.floor(Number(levelRow.requirement_period_days || 0)));
+      const periodStart = periodDays > 0 ? new Date(Date.now() - periodDays * 24 * 60 * 60 * 1000) : null;
+      const baseStart = targets.scope === 'retention'
+        ? (accountRow.level_assigned_at || accountRow.joined_at)
+        : accountRow.joined_at;
+      const sinceDate = periodStart ? maxDateOrNull(baseStart, periodStart) : maxDateOrNull(baseStart);
+      const sinceAt = toMysqlDateTime(sinceDate);
+      if (!sinceAt) continue;
+
+      const [[orderStats]] = await db.query(
+        `SELECT COUNT(*) AS orders_count,
+                COALESCE(SUM(COALESCE(o.total_price, 0)), 0) AS orders_amount
+         FROM order_orders o
+         LEFT JOIN order_statuses os
+           ON os.tenant_id = o.tenant_id
+          AND os.store_id = o.store_id
+          AND os.id = o.status_id
+         WHERE o.tenant_id=?
+           AND o.customer_id=?
+           AND o.is_active=1
+           AND o.created_at >= ?
+           AND LOWER(COALESCE(os.code, '')) NOT IN ('canceled', 'cancelled')
+           AND (o.is_paid=1 OR COALESCE(os.is_final, 0)=1)`,
+        [tenantId, customerId, sinceAt]
+      );
+      const [[referralStats]] = await db.query(
+        `SELECT COUNT(*) AS referrals_count
+         FROM mkt_customer_referrals
+         WHERE tenant_id=?
+           AND inviter_customer_id=?
+           AND status IN ('registered', 'first_purchase_paid')
+           AND registered_at >= ?`,
+        [tenantId, customerId, sinceAt]
+      );
+
+      progressByLevel.set(Number(levelRow.id || 0), {
+        scope: targets.scope,
+        since_at: sinceAt,
+        period_days: periodDays || null,
+        amount_current: Number(orderStats?.orders_amount || 0),
+        amount_target: amountTarget || null,
+        orders_current: Number(orderStats?.orders_count || 0),
+        orders_target: ordersTarget || null,
+        referrals_current: Number(referralStats?.referrals_count || 0),
+        referrals_target: referralsTarget || null,
+      });
+    }
+
+    return progressByLevel;
   }
 
   function normalizeProductBlocksConfig(rawValue, fallbackValue = null) {
@@ -1602,8 +1734,11 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
   router.get('/bonus/config', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
+      const token = str(req.headers['x-customer-token']);
+      const customer = token ? await getCustomerByToken(tenantId, token) : null;
       const [[settingsRow]] = await db.query(
-        `SELECT bonus_program_enabled, bonus_point_amount, bonus_ruble_amount, bonus_point_rate
+        `SELECT bonus_program_enabled, bonus_point_amount, bonus_ruble_amount, bonus_point_rate,
+                allow_redeem_and_accrue
          FROM mkt_bonus_program_settings
          WHERE tenant_id=?
          LIMIT 1`,
@@ -1613,6 +1748,11 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         `SELECT id, code, sort_order, title, access_type,
                 cashback_percent, redeem_percent, referral_bonus_percent,
                 favorite_categories_bonus_percent, favorite_categories_limit,
+                requirement_amount, requirement_mode, requirement_orders,
+                requirement_referral_mode, requirement_referrals, requirement_period_days,
+                retention_strategy, retention_amount, retention_mode, retention_orders,
+                retention_referral_mode, retention_referrals,
+                activation_delay_value, activation_delay_unit, lifetime_value, lifetime_unit,
                 qr_enabled, show_title_on_card,
                 design_color, main_color, base_color, content_color,
                 title_color, title_background_enabled, title_background_color, title_background_opacity
@@ -1621,6 +1761,24 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
          ORDER BY sort_order ASC, id ASC`,
         [tenantId]
       );
+      const [rangeRows] = await db.query(
+        `SELECT level_id, amount, percent, sort_order
+         FROM mkt_bonus_level_order_ranges
+         WHERE tenant_id=?
+         ORDER BY level_id ASC, amount ASC, sort_order ASC, id ASC`,
+        [tenantId]
+      );
+      const rangesByLevel = new Map();
+      (Array.isArray(rangeRows) ? rangeRows : []).forEach((row) => {
+        const levelId = Number(row.level_id || 0);
+        if (!rangesByLevel.has(levelId)) rangesByLevel.set(levelId, []);
+        rangesByLevel.get(levelId).push({
+          amount: Number(row.amount || 0),
+          percent: Number(row.percent || 0),
+          sort_order: Number(row.sort_order || 0),
+        });
+      });
+      const progressByLevel = await loadPublicBonusProgressByLevel(tenantId, customer, levelRows);
 
       return res.json({
         ok: true,
@@ -1630,8 +1788,9 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
             bonus_point_amount: Number(settingsRow?.bonus_point_amount || 1),
             bonus_ruble_amount: Number(settingsRow?.bonus_ruble_amount || settingsRow?.bonus_point_rate || 1),
             bonus_point_rate: Number(settingsRow?.bonus_point_rate || 1),
+            allow_redeem_and_accrue: Number(settingsRow?.allow_redeem_and_accrue || 0) === 1,
           },
-          levels: (Array.isArray(levelRows) ? levelRows : []).map(mapPublicBonusLevelRow),
+          levels: (Array.isArray(levelRows) ? levelRows : []).map((row) => mapPublicBonusLevelRow(row, { rangesByLevel, progressByLevel })),
         },
       });
     } catch (e) {
