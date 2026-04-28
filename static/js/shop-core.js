@@ -984,8 +984,35 @@
   function openHomeBonusLevelSheet(level) {
     if (!window.AppModal || typeof window.AppModal.open !== "function") return;
     const title = String(level?.title || "Уровень").trim() || "Уровень";
+    const favoriteLimit = Math.max(0, Math.floor(Number(level?.favorite_categories_limit || 0)));
+    const favoriteBonusText = formatShopBonusPercent(level?.favorite_categories_bonus_percent, 0);
+    const favoriteCategoriesText = `${favoriteLimit} категорий · ${favoriteBonusText}`;
     const wrap = document.createElement("div");
     wrap.className = "shop-cart-sheet shop-bonus-cards-sheet shop-bonus-level-sheet";
+    wrap.innerHTML = `
+      <div class="shop-bonus-level-balance-card">
+        <div class="shop-bonus-level-balance-main">
+          <div class="shop-bonus-level-balance-label">Бонусы</div>
+          <div class="shop-bonus-level-balance-value">${escapeHtml(formatShopBonusMoney(getBonusLevelPreviewBalance(level)))}</div>
+        </div>
+        <button class="shop-bonus-level-accruals-link" type="button">Начисления &gt;</button>
+      </div>
+    `;
+    wrap.insertAdjacentHTML("beforeend", `
+      <div class="shop-bonus-level-metric-row">
+        <div class="shop-bonus-level-metric-card">
+          <div class="shop-bonus-level-metric-label">Кэшбек</div>
+          <div class="shop-bonus-level-metric-value">
+            <i class="fas fa-undo-alt" aria-hidden="true"></i>
+            <span>${escapeHtml(formatShopBonusPercent(level?.cashback_percent, 0))}</span>
+          </div>
+        </div>
+        <div class="shop-bonus-level-metric-card">
+          <div class="shop-bonus-level-metric-label">${escapeHtml(favoriteCategoriesText)}</div>
+          <button class="shop-bonus-level-metric-action" type="button">Выбрать</button>
+        </div>
+      </div>
+    `);
     sheetNavigationState.type = "bonus-level";
     sheetNavigationState.screen = "main";
     sheetNavigationState.data = { levelId: Number(level?.id || 0) || null };

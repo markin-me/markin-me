@@ -15094,6 +15094,114 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
   -webkit-overflow-scrolling: touch;
 }
 
+.shop-bonus-level-balance-card{
+  min-height: 78px;
+  margin: 8px 20px 0;
+  padding: 14px 18px;
+  border-radius: 30px;
+  background: var(--color-surface);
+  box-shadow: 0 12px 34px rgba(15, 23, 42, .10);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.shop-bonus-level-balance-main{
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.shop-bonus-level-balance-label{
+  font-size: 13px;
+  line-height: 1.2;
+  font-weight: 800;
+  color: var(--color-text-muted);
+}
+
+.shop-bonus-level-balance-value{
+  font-size: 28px;
+  line-height: 1;
+  font-weight: 900;
+  color: var(--color-text);
+}
+
+.shop-bonus-level-accruals-link{
+  flex: 0 0 auto;
+  border: none;
+  background: transparent;
+  color: var(--color-text);
+  font-size: 14px;
+  line-height: 1.2;
+  font-weight: 900;
+  cursor: pointer;
+  padding: 8px 0 8px 8px;
+}
+
+.shop-bonus-level-metric-row{
+  margin: 12px 20px 0;
+  display: grid;
+  grid-template-columns: minmax(0, .68fr) minmax(0, 1.32fr);
+  gap: 10px;
+}
+
+.shop-bonus-level-metric-card{
+  min-width: 0;
+  min-height: 88px;
+  padding: 14px 16px;
+  border-radius: 30px;
+  background: var(--color-surface);
+  box-shadow: 0 12px 34px rgba(15, 23, 42, .10);
+  display: grid;
+  align-content: space-between;
+  gap: 10px;
+}
+
+.shop-bonus-level-metric-label{
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  line-height: 1.2;
+  font-weight: 800;
+}
+
+.shop-bonus-level-metric-value{
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-text);
+  font-size: 24px;
+  line-height: 1;
+  font-weight: 900;
+}
+
+.shop-bonus-level-metric-value i{
+  flex: 0 0 auto;
+  color: var(--shop-accent, #ff6b18);
+  font-size: 18px;
+}
+
+.shop-bonus-level-metric-action{
+  justify-self: start;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: none;
+  background: transparent;
+  color: var(--shop-accent, #ff6b18);
+  font-size: 18px;
+  line-height: 1.1;
+  font-weight: 900;
+  cursor: pointer;
+  padding: 0;
+}
+
 .shop-bonus-cards-carousel{
   position: relative;
   width: 100%;
