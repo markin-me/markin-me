@@ -660,6 +660,13 @@
     return getCustomerToken() ? "Присоединиться" : "Войти и присоединиться";
   }
 
+  function getHomeBonusSheetActionText(level) {
+    const isAuthorized = !!getCustomerToken();
+    const type = String(level?.access_type || "").trim();
+    if (type === "paid") return isAuthorized ? "Подключить" : "Войти и подключить";
+    return isAuthorized ? "Присоединиться" : "Войти и присоединиться";
+  }
+
   function getBonusLevelPreviewBalance(level) {
     const account = state.homeBonusConfig?.account || null;
     if (!account || Number(account.level_id || 0) !== Number(level?.id || 0)) return 0;
@@ -713,33 +720,53 @@
 
   function buildBonusCardsAdvantageRow(label, value, options = {}) {
     const info = options.info === true;
+    const delta = String(options.delta || "").trim();
     return `
       <div class="shop-bonus-cards-advantage-row">
         <div class="shop-bonus-cards-advantage-label">${escapeHtml(label)}</div>
         <div class="shop-bonus-cards-advantage-value">
           <span>${escapeHtml(value)}</span>
+          ${delta ? `<span class="shop-bonus-cards-advantage-delta">${escapeHtml(delta)}</span>` : ""}
           ${info ? '<button class="shop-bonus-cards-info-btn" type="button" data-bonus-range-info aria-label="Подробнее">i</button>' : ""}
         </div>
       </div>
     `;
   }
 
-  function buildBonusCardsAdvantagesHtml(level, settings) {
+  function formatShopBonusCompareDelta(value, baseValue, suffix = "%") {
+    const current = Number(value || 0);
+    const base = Number(baseValue || 0);
+    const diff = current - base;
+    if (Math.abs(diff) < 0.0001) return "";
+    const sign = diff > 0 ? "+" : "-";
+    const abs = Math.abs(diff);
+    const formatted = suffix === "%"
+      ? formatShopBonusPercent(abs, 0)
+      : String(Math.round(abs));
+    return `${sign}${formatted}`;
+  }
+
+  function buildBonusCardsAdvantagesHtml(level, settings, baseLevel = null) {
     const favoriteBonus = Math.max(0, Number(level?.favorite_categories_bonus_percent || 0));
     const favoriteLimit = Math.max(0, Math.floor(Number(level?.favorite_categories_limit || 0)));
+    const baseFavoriteBonus = Math.max(0, Number(baseLevel?.favorite_categories_bonus_percent || 0));
+    const baseFavoriteLimit = Math.max(0, Math.floor(Number(baseLevel?.favorite_categories_limit || 0)));
+    const favoriteBonusDelta = baseLevel ? formatShopBonusCompareDelta(favoriteBonus, baseFavoriteBonus) : "";
+    const favoriteLimitDelta = baseLevel ? formatShopBonusCompareDelta(favoriteLimit, baseFavoriteLimit, "") : "";
+    const favoriteDelta = [favoriteBonusDelta ? `кэшбек ${favoriteBonusDelta}` : "", favoriteLimitDelta ? `категории ${favoriteLimitDelta}` : ""].filter(Boolean).join(" · ");
     const favoriteText = favoriteBonus > 0 || favoriteLimit > 0
       ? `Кэшбек: +${formatShopBonusPercent(favoriteBonus)} / Количество категорий: ${favoriteLimit}`
       : "Не настроено";
     return `
       <div class="shop-bonus-cards-advantages" data-bonus-cards-advantages>
-        ${buildBonusCardsAdvantageRow("Кэшбек, %", formatShopBonusPercent(level?.cashback_percent, 0))}
-        ${buildBonusCardsAdvantageRow("Можно списывать, %", formatShopBonusPercent(level?.redeem_percent, 0))}
-        ${buildBonusCardsAdvantageRow("Доп % за рефералов", formatShopBonusPercent(level?.referral_bonus_percent, 0))}
+        ${buildBonusCardsAdvantageRow("Кэшбек, %", formatShopBonusPercent(level?.cashback_percent, 0), { delta: baseLevel ? formatShopBonusCompareDelta(level?.cashback_percent, baseLevel?.cashback_percent) : "" })}
+        ${buildBonusCardsAdvantageRow("Можно списывать, %", formatShopBonusPercent(level?.redeem_percent, 0), { delta: baseLevel ? formatShopBonusCompareDelta(level?.redeem_percent, baseLevel?.redeem_percent) : "" })}
+        ${buildBonusCardsAdvantageRow("Доп % за рефералов", formatShopBonusPercent(level?.referral_bonus_percent, 0), { delta: baseLevel ? formatShopBonusCompareDelta(level?.referral_bonus_percent, baseLevel?.referral_bonus_percent) : "" })}
         ${buildBonusCardsAdvantageRow("Одновременно списывать и начислять", settings?.allow_redeem_and_accrue ? "Да" : "Нет")}
         ${buildBonusCardsAdvantageRow("Станут активны", formatShopBonusPeriod(level?.activation_delay_value, level?.activation_delay_unit))}
         ${buildBonusCardsAdvantageRow("Время жизни бонусов", formatShopBonusPeriod(level?.lifetime_value, level?.lifetime_unit))}
         ${buildBonusCardsAdvantageRow("Дополнительные бонусы за сумму заказа", getShopBonusRangeSummary(level), { info: getShopBonusRanges(level).length > 0 })}
-        ${buildBonusCardsAdvantageRow("Доп. бонус за покупку любимых категорий", favoriteText)}
+        ${buildBonusCardsAdvantageRow("Доп. бонус за покупку любимых категорий", favoriteText, { delta: favoriteDelta })}
         <div class="shop-bonus-cards-info-popover hidden" data-bonus-range-popover></div>
       </div>
     `;
@@ -849,10 +876,20 @@
     if (!host) return;
     const index = Math.max(0, Math.min(levels.length - 1, Number(activeIndex || 0)));
     const level = levels[index];
-    host.innerHTML = buildBonusCardsAdvantagesHtml(level, state.homeBonusConfig?.settings || {}) + buildBonusCardsConditionsProgressHtml(level);
+    const baseLevelId = Number(state.homeBonusConfig?.account?.level_id || 0);
+    const baseLevel = baseLevelId > 0
+      ? levels.find((item) => Number(item?.id || 0) === baseLevelId) || null
+      : null;
+    host.innerHTML = buildBonusCardsAdvantagesHtml(level, state.homeBonusConfig?.settings || {}, baseLevel) + buildBonusCardsConditionsProgressHtml(level);
     if (elMobileBonusCardsActionBtn) {
-      elMobileBonusCardsActionBtn.textContent = getHomeBonusJoinActionText();
+      elMobileBonusCardsActionBtn.textContent = getHomeBonusSheetActionText(level);
       elMobileBonusCardsActionBtn.onclick = () => {
+        if (String(level?.access_type || "").trim() === "paid") {
+          if (!getCustomerToken() && typeof openProfileSheet === "function") {
+            openProfileSheet();
+          }
+          return;
+        }
         void joinHomeBonusProgram();
       };
     }
@@ -867,7 +904,7 @@
     });
   }
 
-  function renderBonusCardsSheetContent(wrap) {
+  function renderBonusCardsSheetContent(wrap, options = {}) {
     if (!wrap) return;
     const data = state.homeBonusConfig && typeof state.homeBonusConfig === "object" ? state.homeBonusConfig : null;
     const levels = data?.settings?.bonus_program_enabled === true && Array.isArray(data.levels)
@@ -898,7 +935,11 @@
     `;
 
     const track = wrap.querySelector("[data-bonus-cards-track]");
-    let activeIndex = 0;
+    const initialLevelId = Number(options.initialLevelId || 0);
+    const initialIndex = initialLevelId > 0
+      ? Math.max(0, levels.findIndex((level) => Number(level?.id || 0) === initialLevelId))
+      : 0;
+    let activeIndex = initialIndex;
     let scrollTimer = null;
     const getActiveIndex = () => {
       if (!track) return 0;
@@ -931,20 +972,29 @@
       const step = firstSlide ? firstSlide.getBoundingClientRect().width : track.clientWidth;
       track.scrollBy({ left: direction * Math.max(1, step), behavior: "smooth" });
     };
+    const scrollToIndex = (index) => {
+      if (!track) return;
+      const slides = Array.from(track.querySelectorAll(".shop-bonus-cards-carousel__slide"));
+      const slide = slides[Math.max(0, Math.min(slides.length - 1, Number(index || 0)))];
+      if (!slide) return;
+      const left = slide.offsetLeft - Math.max(0, (track.clientWidth - slide.clientWidth) / 2);
+      track.scrollTo({ left: Math.max(0, left), behavior: "auto" });
+    };
     wrap.querySelector(".shop-bonus-cards-carousel__arrow--prev")?.addEventListener("click", () => scrollToStep(-1));
     wrap.querySelector(".shop-bonus-cards-carousel__arrow--next")?.addEventListener("click", () => scrollToStep(1));
     track?.addEventListener("scroll", () => {
       if (scrollTimer) clearTimeout(scrollTimer);
       scrollTimer = setTimeout(syncActiveAdvantages, 90);
     }, { passive: true });
+    requestAnimationFrame(() => scrollToIndex(activeIndex));
     updateBonusCardsSheetAdvantages(wrap, levels, activeIndex);
   }
 
-  function openHomeBonusCardsSheet() {
+  function openHomeBonusCardsSheet(options = {}) {
     if (!window.AppModal || typeof window.AppModal.open !== "function") return;
     const wrap = document.createElement("div");
     wrap.className = "shop-cart-sheet shop-bonus-cards-sheet";
-    renderBonusCardsSheetContent(wrap);
+    renderBonusCardsSheetContent(wrap, options);
     sheetNavigationState.type = "bonus-cards";
     sheetNavigationState.screen = "main";
     sheetNavigationState.data = null;
@@ -978,7 +1028,51 @@
     }
     setBonusCardsSheetHeader(true);
     syncMobileUiState("bonus-cards-sheet-open");
-    void loadHomeBonusConfig().then(() => renderBonusCardsSheetContent(wrap));
+    void loadHomeBonusConfig().then(() => renderBonusCardsSheetContent(wrap, options));
+  }
+
+  function getHomeBonusNextLevel(level) {
+    const levels = Array.isArray(state.homeBonusConfig?.levels) ? state.homeBonusConfig.levels : [];
+    if (!levels.length) return null;
+    const currentId = Number(level?.id || 0);
+    const ordered = levels
+      .filter((item) => item && String(item.title || "").trim())
+      .slice()
+      .sort((a, b) => (Number(a?.sort_order || 0) - Number(b?.sort_order || 0)) || (Number(a?.id || 0) - Number(b?.id || 0)));
+    const index = ordered.findIndex((item) => Number(item?.id || 0) === currentId);
+    return index >= 0 ? (ordered[index + 1] || null) : null;
+  }
+
+  function getHomeBonusLevelProgressRatio(level) {
+    const progress = level?.progress && typeof level.progress === "object" ? level.progress : null;
+    if (!progress) return 0;
+    const values = [
+      [progress.amount_current, progress.amount_target],
+      [progress.orders_current, progress.orders_target],
+      [progress.referrals_current, progress.referrals_target],
+    ].map(([current, target]) => {
+      const targetValue = Number(target || 0);
+      if (!(targetValue > 0)) return 0;
+      return Math.max(0, Math.min(1, Number(current || 0) / targetValue));
+    });
+    return Math.max(0, ...values);
+  }
+
+  function buildHomeBonusLevelProgressHtml(level) {
+    const nextLevel = getHomeBonusNextLevel(level);
+    if (!nextLevel) return "";
+    const progressPercent = Math.round(getHomeBonusLevelProgressRatio(nextLevel) * 100);
+    const customerPhoto = String(getCustomerCache()?.photo || "").trim();
+    return `
+      <button class="shop-bonus-level-progress-card" type="button" data-open-bonus-cards-current>
+        <div class="shop-bonus-level-progress-avatar" aria-hidden="true">
+          ${customerPhoto ? `<img src="${escapeHtml(customerPhoto)}" alt="" loading="lazy" />` : '<i class="fas fa-user"></i>'}
+        </div>
+        <div class="shop-bonus-level-progress-track" aria-label="Прогресс до следующего уровня">
+          <div class="shop-bonus-level-progress-fill" style="width:${escapeHtml(String(progressPercent))}%;"></div>
+        </div>
+      </button>
+    `;
   }
 
   function openHomeBonusLevelSheet(level) {
@@ -990,6 +1084,7 @@
     const wrap = document.createElement("div");
     wrap.className = "shop-cart-sheet shop-bonus-cards-sheet shop-bonus-level-sheet";
     wrap.innerHTML = `
+      ${buildHomeBonusLevelProgressHtml(level)}
       <div class="shop-bonus-level-balance-card">
         <div class="shop-bonus-level-balance-main">
           <div class="shop-bonus-level-balance-label">Бонусы</div>
@@ -1044,6 +1139,10 @@
     }
     setBonusCardsSheetHeader(true);
     syncMobileUiState("bonus-level-sheet-open");
+    wrap.querySelector("[data-open-bonus-cards-current]")?.addEventListener("click", () => {
+      const accountLevelId = Number(state.homeBonusConfig?.account?.level_id || 0);
+      openHomeBonusCardsSheet({ initialLevelId: accountLevelId || Number(level?.id || 0) || 0 });
+    });
   }
 
   function bindHomeBonusLevelTitle(level) {
@@ -6620,7 +6719,7 @@
       ? `color:${escapeHtml(titleColor)};background:transparent;padding:0;border-radius:0;${showTitle ? "" : "display:none;"}`
       : `color:${escapeHtml(titleColor)};background:#ffffff;padding:2px 10px;border-radius:999px;${showTitle ? "" : "display:none;"}`;
     const qrStyle = level.qr_enabled === false ? "display:none;" : "";
-    const actionText = getHomeBonusJoinActionText();
+    const actionText = "Присоединиться";
 
     elHomeBonusCard.innerHTML = `
       <div class="bonus-level-preview-card shop-home-bonus-card__preview" style="background:${escapeHtml(baseColor)};">
@@ -6646,7 +6745,7 @@
     `;
     const actionBtn = elHomeBonusCard.querySelector(".shop-home-bonus-card__action");
     if (actionBtn) actionBtn.addEventListener("click", () => {
-      void joinHomeBonusProgram();
+      openHomeBonusCardsSheet();
     });
     elHomeBonusCard.classList.remove("hidden");
   }
