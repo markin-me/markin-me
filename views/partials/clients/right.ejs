@@ -53,6 +53,116 @@
     </div>
 
     <div id="bonusReferralsEmpty" class="empty-state hidden bonus-referrals-right-placeholder">
+      <div class="empty-icon"><i class="fas fa-user-friends"></i></div>
+      <div class="empty-title">Выберите карточку рефералов</div>
+      <div class="empty-text">Нажмите на первую карточку слева, чтобы настроить стиль и приглашения</div>
+    </div>
+
+    <div id="bonusReferralCardInfoWrap" class="banner-settings-panel hidden bonus-referral-card-settings">
+      <div class="bonus-level-preview-wrap" id="bonusReferralCardPreviewWrap">
+        <div class="bonus-level-preview-row">
+          <div class="bonus-level-preview-swatches bonus-level-preview-swatches--left">
+            <div class="bonus-level-swatch-wrap">
+              <button
+                type="button"
+                class="bonus-level-swatch-btn bonus-level-swatch-btn--icon"
+                id="bonusReferralCardQrBtn"
+                aria-label="Настройки QR"
+                title="Настройки QR"
+              >
+                <i class="fas fa-qrcode" aria-hidden="true"></i>
+              </button>
+              <div class="bonus-level-swatch-popover hidden" id="bonusReferralCardQrPopover">
+                <div class="bonus-level-swatch-popover-title">QR-код</div>
+                <label class="switch bonus-level-qr-switch" title="Показывать QR-код на карточке">
+                  <input class="switch-input" type="checkbox" id="bonusReferralCardQrEnabledSwitch" />
+                  <span class="switch-ui" aria-hidden="true"></span>
+                  <span class="switch-text">Показывать</span>
+                </label>
+              </div>
+            </div>
+            <div class="bonus-level-swatch-wrap">
+              <button
+                type="button"
+                class="bonus-level-swatch-btn bonus-level-swatch-btn--icon"
+                id="bonusReferralCardTitleBackgroundBtn"
+                aria-label="Фон текста"
+                title="Фон текста"
+              >
+                <i class="fas fa-fill-drip" aria-hidden="true"></i>
+              </button>
+              <div class="banner-title-popover hidden" id="bonusReferralCardTitleBackgroundPopover">
+                <label class="switch banner-title-popover-switch" title="Фон у текста">
+                  <input class="switch-input" type="checkbox" id="bonusReferralCardTitleBackgroundSwitch" />
+                  <span class="switch-ui" aria-hidden="true"></span>
+                  <span class="banner-title-switch-label">фон текста</span>
+                </label>
+                <div class="banner-title-color-row">
+                  <span class="banner-title-color-label">Цвет фона</span>
+                  <input type="color" id="bonusReferralCardTitleBackgroundColorInput" class="banner-title-color-input" value="#ffffff" />
+                </div>
+                <div class="banner-title-opacity-row">
+                  <span class="banner-title-color-label">Прозрачность фона</span>
+                  <div class="banner-title-opacity-control">
+                    <input type="range" id="bonusReferralCardTitleBackgroundOpacityInput" min="0" max="100" step="1" value="90" />
+                    <span id="bonusReferralCardTitleBackgroundOpacityValue">90%</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="bonus-level-preview-card bonus-referral-card-preview" id="bonusReferralCardPreviewCard">
+            <div class="bonus-level-preview-main" id="bonusReferralCardPreviewMain">
+              <div class="bonus-level-preview-title" id="bonusReferralCardPreviewTitle">Рефералы</div>
+              <div class="bonus-level-preview-bonus-label">Приглашения</div>
+              <div class="bonus-level-preview-bonus-value" id="bonusReferralCardPreviewBonusValue">0</div>
+              <div class="bonus-level-preview-qr" id="bonusReferralCardPreviewQr" aria-label="Место для QR">
+                <span>QR</span>
+              </div>
+            </div>
+            <div class="bonus-level-preview-sub">
+              <div class="bonus-level-preview-cashback-side">
+                <div class="bonus-level-preview-cashback-icon"><i class="fas fa-user-plus"></i></div>
+                <div class="bonus-level-preview-cashback-value">1%</div>
+              </div>
+              <div class="bonus-referral-invite-side">
+                <button class="bonus-referral-invite-pill" id="bonusReferralCardPreviewInviteBtn" type="button">Пригласить</button>
+              </div>
+            </div>
+          </div>
+          <div class="bonus-level-preview-swatches bonus-level-preview-swatches--right">
+            <div class="bonus-level-swatch-wrap">
+              <button type="button" class="bonus-level-swatch-btn" id="bonusReferralCardMainColorBtn" aria-label="Цвет верхнего фона" title="Цвет верхнего фона"></button>
+              <div class="bonus-level-swatch-popover hidden" id="bonusReferralCardMainColorPopover">
+                <div class="bonus-level-swatch-popover-title">Верхний фон</div>
+                <input type="color" id="bonusReferralCardMainColorInput" class="bonus-level-swatch-color" value="#f3f4f6" />
+              </div>
+            </div>
+            <div class="bonus-level-swatch-wrap">
+              <button type="button" class="bonus-level-swatch-btn" id="bonusReferralCardBaseColorBtn" aria-label="Цвет нижнего фона" title="Цвет нижнего фона"></button>
+              <div class="bonus-level-swatch-popover hidden" id="bonusReferralCardBaseColorPopover">
+                <div class="bonus-level-swatch-popover-title">Нижний фон</div>
+                <input type="color" id="bonusReferralCardBaseColorInput" class="bonus-level-swatch-color" value="#d1d5db" />
+              </div>
+            </div>
+            <div class="bonus-level-swatch-wrap">
+              <button type="button" class="bonus-level-swatch-btn" id="bonusReferralCardContentColorBtn" aria-label="Цвет элементов" title="Цвет элементов"></button>
+              <div class="bonus-level-swatch-popover hidden" id="bonusReferralCardContentColorPopover">
+                <div class="bonus-level-swatch-popover-title">Цвет элементов</div>
+                <input type="color" id="bonusReferralCardContentColorInput" class="bonus-level-swatch-color" value="#64748b" />
+              </div>
+            </div>
+            <div class="bonus-level-swatch-wrap">
+              <button type="button" class="bonus-level-swatch-btn" id="bonusReferralCardButtonColorBtn" aria-label="Цвет кнопки" title="Цвет кнопки"></button>
+              <div class="bonus-level-swatch-popover hidden" id="bonusReferralCardButtonColorPopover">
+                <div class="bonus-level-swatch-popover-title">Цвет кнопки</div>
+                <input type="color" id="bonusReferralCardButtonColorInput" class="bonus-level-swatch-color" value="#ff6a00" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <section class="bonus-referrals-right-section">
         <h3 class="bonus-referrals-right-title">Бонусы за рекомендацию</h3>
         <div class="bonus-referrals-right-fields">
@@ -72,6 +182,11 @@
         <a class="bonus-referrals-invite-link" id="bonusReferralInviteLink" href="/shop" target="_blank" rel="noopener">
           /shop
         </a>
+      </section>
+
+      <section class="bonus-referrals-right-section">
+        <h3 class="bonus-referrals-right-title">Уровни</h3>
+        <div class="bonus-referral-level-settings-list" id="bonusReferralLevelsSettings"></div>
       </section>
     </div>
 
@@ -1625,4 +1740,3 @@
     <button type="button" class="btn btn-primary" id="discountPickerApplyBtn">Применить</button>
   </div>
 </div>
-

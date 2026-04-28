@@ -718,6 +718,52 @@
     `;
   }
 
+  function getHomeReferralCardSettings(config = state.homeBonusConfig) {
+    const settings = config?.settings && typeof config.settings === "object" ? config.settings : {};
+    if (settings.referral_program_enabled !== true) return null;
+    const levels = Array.isArray(config?.referral_levels) ? config.referral_levels : [];
+    const firstLevel = levels.find((level) => level?.is_active !== false) || null;
+    return {
+      mainColor: normalizeShopHexColor(settings.referral_card_main_color, "#f3f4f6"),
+      baseColor: normalizeShopHexColor(settings.referral_card_base_color, "#d1d5db"),
+      contentColor: normalizeShopHexColor(settings.referral_card_content_color, "#64748b"),
+      buttonColor: normalizeShopHexColor(settings.referral_card_button_color, "#ff6a00"),
+      qrEnabled: settings.referral_card_qr_enabled !== false,
+      titleBackgroundEnabled: settings.referral_card_title_background_enabled !== false,
+      titleBackgroundColor: normalizeShopHexColor(settings.referral_card_title_background_color, "#ffffff"),
+      titleBackgroundOpacity: normalizeShopOpacity(settings.referral_card_title_background_opacity, 90),
+      percent: normalizeShopCardPercent(firstLevel?.percent, 0),
+    };
+  }
+
+  function buildHomeReferralCardHtml(config = state.homeBonusConfig) {
+    const design = getHomeReferralCardSettings(config);
+    if (!design) return "";
+    const titleStyle = design.titleBackgroundEnabled
+      ? `color:${escapeHtml(design.contentColor)};background:${escapeHtml(buildShopRgbaColor(design.titleBackgroundColor, design.titleBackgroundOpacity))};padding:2px 10px;border-radius:999px;`
+      : `color:${escapeHtml(design.contentColor)};background:transparent;padding:0;border-radius:0;`;
+    const qrStyle = design.qrEnabled ? "" : "display:none;";
+    return `
+      <div class="bonus-level-preview-card shop-home-referral-card__preview" style="background:${escapeHtml(design.baseColor)};">
+        <div class="bonus-level-preview-main" style="background:${escapeHtml(design.mainColor)};color:${escapeHtml(design.contentColor)};">
+          <div class="bonus-level-preview-title" style="${titleStyle}">Рефералы</div>
+          <div class="bonus-level-preview-bonus-label" style="color:${escapeHtml(design.contentColor)};">Приглашения</div>
+          <div class="bonus-level-preview-bonus-value" style="color:${escapeHtml(design.contentColor)};">0</div>
+          <div class="bonus-level-preview-qr" style="${qrStyle}"><span>QR</span></div>
+        </div>
+        <div class="bonus-level-preview-sub" style="color:${escapeHtml(design.contentColor)};">
+          <div class="bonus-level-preview-cashback-side">
+            <div class="bonus-level-preview-cashback-icon" style="color:${escapeHtml(design.contentColor)};"><i class="fas fa-user-plus" aria-hidden="true"></i></div>
+            <div class="bonus-level-preview-cashback-value" style="color:${escapeHtml(design.contentColor)};">${escapeHtml(`${design.percent}%`)}</div>
+          </div>
+          <div class="shop-home-referral-invite-side">
+            <button class="shop-home-referral-invite-pill" type="button" style="background:${escapeHtml(design.buttonColor)};">Пригласить</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
   function buildBonusCardsAdvantageRow(label, value, options = {}) {
     const info = options.info === true;
     const delta = String(options.delta || "").trim();
@@ -6691,18 +6737,27 @@
   function renderHomeBonusCard() {
     if (!elHomeBonusCard) return;
     const level = getHomeBonusFirstLevel(state.homeBonusConfig);
-    if (!level) {
+    const referralCardHtml = buildHomeReferralCardHtml(state.homeBonusConfig);
+    if (!level && !referralCardHtml) {
       elHomeBonusCard.classList.add("hidden");
       elHomeBonusCard.innerHTML = "";
       return;
     }
 
     if (isHomeBonusJoined()) {
-      elHomeBonusCard.innerHTML = buildBonusLevelPreviewCardHtml(level)
-        .replace('class="bonus-level-preview-card"', 'class="bonus-level-preview-card shop-home-bonus-card__preview"');
-      const balanceEl = elHomeBonusCard.querySelector(".bonus-level-preview-bonus-value");
+      const bonusCardHtml = level ? buildBonusLevelPreviewCardHtml(level)
+        .replace('class="bonus-level-preview-card"', 'class="bonus-level-preview-card shop-home-bonus-card__preview"') : "";
+      elHomeBonusCard.innerHTML = `
+        <div class="shop-home-cards-scroll no-scrollbar">
+          <div class="shop-home-cards-track">
+            ${bonusCardHtml ? `<div class="shop-home-cards-slide">${bonusCardHtml}</div>` : ""}
+            ${referralCardHtml ? `<div class="shop-home-cards-slide">${referralCardHtml}</div>` : ""}
+          </div>
+        </div>
+      `;
+      const balanceEl = elHomeBonusCard.querySelector(".shop-home-bonus-card__preview .bonus-level-preview-bonus-value");
       if (balanceEl) balanceEl.textContent = formatShopBonusMoney(getBonusLevelPreviewBalance(level));
-      bindHomeBonusLevelTitle(level);
+      if (level) bindHomeBonusLevelTitle(level);
       elHomeBonusCard.classList.remove("hidden");
       return;
     }
@@ -6711,17 +6766,17 @@
     const baseColor = "#d1d5db";
     const contentColor = "#64748b";
     const titleColor = "#64748b";
-    const cashbackValue = normalizeShopCardPercent(level.cashback_percent, 1);
-    const favoriteCategoryBonus = normalizeShopCardPercent(level.favorite_categories_bonus_percent, 0);
-    const favoriteCategoryLimit = Math.max(0, Math.floor(Number(level.favorite_categories_limit || 0)));
-    const showTitle = level.show_title_on_card !== false;
-    const titleStyle = level.title_background_enabled === false
+    const cashbackValue = normalizeShopCardPercent(level?.cashback_percent, 1);
+    const favoriteCategoryBonus = normalizeShopCardPercent(level?.favorite_categories_bonus_percent, 0);
+    const favoriteCategoryLimit = Math.max(0, Math.floor(Number(level?.favorite_categories_limit || 0)));
+    const showTitle = level?.show_title_on_card !== false;
+    const titleStyle = level?.title_background_enabled === false
       ? `color:${escapeHtml(titleColor)};background:transparent;padding:0;border-radius:0;${showTitle ? "" : "display:none;"}`
       : `color:${escapeHtml(titleColor)};background:#ffffff;padding:2px 10px;border-radius:999px;${showTitle ? "" : "display:none;"}`;
-    const qrStyle = level.qr_enabled === false ? "display:none;" : "";
+    const qrStyle = level?.qr_enabled === false ? "display:none;" : "";
     const actionText = "Присоединиться";
 
-    elHomeBonusCard.innerHTML = `
+    const bonusCardHtml = level ? `
       <div class="bonus-level-preview-card shop-home-bonus-card__preview" style="background:${escapeHtml(baseColor)};">
         <div class="bonus-level-preview-main" style="background:${escapeHtml(mainColor)};color:${escapeHtml(contentColor)};">
           <div class="bonus-level-preview-title" style="${titleStyle}">${escapeHtml(level.title || "Уровень")}</div>
@@ -6740,6 +6795,14 @@
             </div>
             <div class="bonus-level-preview-category-value" style="color:${escapeHtml(contentColor)};">${escapeHtml(`${favoriteCategoryBonus}%`)}</div>
           </div>
+        </div>
+      </div>
+    ` : "";
+    elHomeBonusCard.innerHTML = `
+      <div class="shop-home-cards-scroll no-scrollbar">
+        <div class="shop-home-cards-track">
+          ${bonusCardHtml ? `<div class="shop-home-cards-slide">${bonusCardHtml}</div>` : ""}
+          ${referralCardHtml ? `<div class="shop-home-cards-slide">${referralCardHtml}</div>` : ""}
         </div>
       </div>
     `;

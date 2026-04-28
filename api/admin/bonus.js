@@ -90,6 +90,14 @@ function normalizeHexColor(value) {
   return /^#[0-9a-fA-F]{6}$/.test(text) ? text.toLowerCase() : null;
 }
 
+function normalizeHexColorOrDefault(value, fallback) {
+  return normalizeHexColor(value) || fallback;
+}
+
+function opacityPercent(value, fieldName, fallback = 90) {
+  return Math.min(100, nonNegativeInt(value, fieldName, fallback));
+}
+
 function normalizeSettings(payload = {}) {
   const bonusPointAmount = positiveNumber(pick(payload, 'bonus_point_amount', 'bonusPointAmount'), 'INVALID_SETTINGS', 1);
   const bonusRubleAmount = positiveNumber(pick(payload, 'bonus_ruble_amount', 'bonusRubleAmount'), 'INVALID_SETTINGS', 1);
@@ -108,6 +116,36 @@ function normalizeSettings(payload = {}) {
       pick(payload, 'referral_first_purchase_reward', 'referralFirstPurchaseReward'),
       'INVALID_SETTINGS',
       0
+    ),
+    referral_card_main_color: normalizeHexColorOrDefault(
+      pick(payload, 'referral_card_main_color', 'referralCardMainColor'),
+      '#f3f4f6'
+    ),
+    referral_card_base_color: normalizeHexColorOrDefault(
+      pick(payload, 'referral_card_base_color', 'referralCardBaseColor'),
+      '#d1d5db'
+    ),
+    referral_card_content_color: normalizeHexColorOrDefault(
+      pick(payload, 'referral_card_content_color', 'referralCardContentColor'),
+      '#64748b'
+    ),
+    referral_card_button_color: normalizeHexColorOrDefault(
+      pick(payload, 'referral_card_button_color', 'referralCardButtonColor'),
+      '#ff6a00'
+    ),
+    referral_card_qr_enabled: boolFlag(pick(payload, 'referral_card_qr_enabled', 'referralCardQrEnabled'), true) ? 1 : 0,
+    referral_card_title_background_enabled: boolFlag(
+      pick(payload, 'referral_card_title_background_enabled', 'referralCardTitleBackgroundEnabled'),
+      true
+    ) ? 1 : 0,
+    referral_card_title_background_color: normalizeHexColorOrDefault(
+      pick(payload, 'referral_card_title_background_color', 'referralCardTitleBackgroundColor'),
+      '#ffffff'
+    ),
+    referral_card_title_background_opacity: opacityPercent(
+      pick(payload, 'referral_card_title_background_opacity', 'referralCardTitleBackgroundOpacity'),
+      'INVALID_SETTINGS',
+      90
     ),
     allow_redeem_and_accrue: boolFlag(pick(payload, 'allow_redeem_and_accrue', 'allowRedeemAndAccrue'), false) ? 1 : 0,
   };
@@ -270,6 +308,14 @@ function mapSettingsRow(row) {
     bonus_point_rate: Number(row?.bonus_point_rate || 1),
     referral_registration_reward: Number(row?.referral_registration_reward || 0),
     referral_first_purchase_reward: Number(row?.referral_first_purchase_reward || 0),
+    referral_card_main_color: row?.referral_card_main_color || '#f3f4f6',
+    referral_card_base_color: row?.referral_card_base_color || '#d1d5db',
+    referral_card_content_color: row?.referral_card_content_color || '#64748b',
+    referral_card_button_color: row?.referral_card_button_color || '#ff6a00',
+    referral_card_qr_enabled: row ? Number(row.referral_card_qr_enabled || 0) === 1 : true,
+    referral_card_title_background_enabled: row ? Number(row.referral_card_title_background_enabled || 0) === 1 : true,
+    referral_card_title_background_color: row?.referral_card_title_background_color || '#ffffff',
+    referral_card_title_background_opacity: Number(row?.referral_card_title_background_opacity || 90),
     allow_redeem_and_accrue: Number(row?.allow_redeem_and_accrue || 0) === 1,
   };
 }
@@ -394,6 +440,10 @@ async function loadConfig(db, tenantId) {
     `SELECT bonus_program_enabled, referral_program_enabled,
             bonus_point_amount, bonus_ruble_amount, bonus_point_rate,
             referral_registration_reward, referral_first_purchase_reward,
+            referral_card_main_color, referral_card_base_color,
+            referral_card_content_color, referral_card_button_color,
+            referral_card_qr_enabled, referral_card_title_background_enabled,
+            referral_card_title_background_color, referral_card_title_background_opacity,
             allow_redeem_and_accrue
        FROM mkt_bonus_program_settings
       WHERE tenant_id = ?
@@ -557,8 +607,13 @@ async function saveConfig(db, tenantId, payload) {
       `INSERT INTO mkt_bonus_program_settings
         (tenant_id, bonus_program_enabled, referral_program_enabled,
          bonus_point_amount, bonus_ruble_amount, bonus_point_rate,
-         referral_registration_reward, referral_first_purchase_reward, allow_redeem_and_accrue)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         referral_registration_reward, referral_first_purchase_reward,
+         referral_card_main_color, referral_card_base_color,
+         referral_card_content_color, referral_card_button_color,
+         referral_card_qr_enabled, referral_card_title_background_enabled,
+         referral_card_title_background_color, referral_card_title_background_opacity,
+         allow_redeem_and_accrue)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE
          bonus_program_enabled = VALUES(bonus_program_enabled),
          referral_program_enabled = VALUES(referral_program_enabled),
@@ -567,6 +622,14 @@ async function saveConfig(db, tenantId, payload) {
          bonus_point_rate = VALUES(bonus_point_rate),
          referral_registration_reward = VALUES(referral_registration_reward),
          referral_first_purchase_reward = VALUES(referral_first_purchase_reward),
+         referral_card_main_color = VALUES(referral_card_main_color),
+         referral_card_base_color = VALUES(referral_card_base_color),
+         referral_card_content_color = VALUES(referral_card_content_color),
+         referral_card_button_color = VALUES(referral_card_button_color),
+         referral_card_qr_enabled = VALUES(referral_card_qr_enabled),
+         referral_card_title_background_enabled = VALUES(referral_card_title_background_enabled),
+         referral_card_title_background_color = VALUES(referral_card_title_background_color),
+         referral_card_title_background_opacity = VALUES(referral_card_title_background_opacity),
          allow_redeem_and_accrue = VALUES(allow_redeem_and_accrue)`,
       [
         tenantId,
@@ -577,6 +640,14 @@ async function saveConfig(db, tenantId, payload) {
         settings.bonus_point_rate,
         settings.referral_registration_reward,
         settings.referral_first_purchase_reward,
+        settings.referral_card_main_color,
+        settings.referral_card_base_color,
+        settings.referral_card_content_color,
+        settings.referral_card_button_color,
+        settings.referral_card_qr_enabled,
+        settings.referral_card_title_background_enabled,
+        settings.referral_card_title_background_color,
+        settings.referral_card_title_background_opacity,
         settings.allow_redeem_and_accrue,
       ]
     );

@@ -14865,8 +14865,34 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
 }
 
 .shop-home-bonus-card{
+  display: block;
+  width: 100%;
+}
+
+.shop-home-cards-scroll{
+  width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x mandatory;
+  -webkit-overflow-scrolling: touch;
+}
+
+.shop-home-cards-track{
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  width: max-content;
+  min-width: 100%;
+  padding: 0 12px;
+}
+
+.shop-home-cards-slide{
+  flex: 0 0 auto;
+  width: 300px;
   display: grid;
   justify-items: center;
+  scroll-snap-align: center;
 }
 
 .shop-home-bonus-card__action{
@@ -14897,6 +14923,13 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
 
 .shop-home-bonus-card.hidden{
   display: none;
+}
+
+@media (min-width: 769px){
+  .shop-home-empty-panel,
+  .shop-home-bonus-card{
+    display: none !important;
+  }
 }
 
 :where(.shop-home-bonus-card, .shop-bonus-cards-sheet) .bonus-level-preview-card{
@@ -15092,6 +15125,34 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
   overflow-y: auto;
   overflow-x: hidden;
   -webkit-overflow-scrolling: touch;
+}
+
+.shop-home-referral-invite-side{
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 0;
+  align-self: center;
+  margin-left: auto;
+  transform: translateY(3px);
+}
+
+.shop-home-referral-invite-pill{
+  min-width: 0;
+  max-width: 112px;
+  height: 26px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 999px;
+  background: #ff6a00;
+  color: #ffffff;
+  font-size: 12px;
+  line-height: 1;
+  font-weight: 900;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-shadow: 0 8px 18px rgba(255, 106, 0, .18);
 }
 
 .shop-bonus-level-progress-card{
@@ -15510,6 +15571,10 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
 }
 
 @media (max-width: 768px){
+  body.page-shop .shop-home-empty-panel{
+    display: none;
+  }
+
   body.page-shop:has(#shopNavHome.is-active) .center-stack > .panel:first-child,
   body.page-shop.shop-home-tab-active .center-stack > .panel:not(.shop-home-empty-panel){
     display: none;

@@ -879,6 +879,14 @@
         bonus_point_rate: overrides.bonusPointRate ?? state.bonusPointRate,
         referral_registration_reward: overrides.referralRegistrationReward ?? state.referralRegistrationReward,
         referral_first_purchase_reward: overrides.referralFirstPurchaseReward ?? state.referralFirstPurchaseReward,
+        referral_card_main_color: overrides.referralCardMainColor ?? state.referralCardMainColor,
+        referral_card_base_color: overrides.referralCardBaseColor ?? state.referralCardBaseColor,
+        referral_card_content_color: overrides.referralCardContentColor ?? state.referralCardContentColor,
+        referral_card_button_color: overrides.referralCardButtonColor ?? state.referralCardButtonColor,
+        referral_card_qr_enabled: overrides.referralCardQrEnabled ?? state.referralCardQrEnabled,
+        referral_card_title_background_enabled: overrides.referralCardTitleBackgroundEnabled ?? state.referralCardTitleBackgroundEnabled,
+        referral_card_title_background_color: overrides.referralCardTitleBackgroundColor ?? state.referralCardTitleBackgroundColor,
+        referral_card_title_background_opacity: overrides.referralCardTitleBackgroundOpacity ?? state.referralCardTitleBackgroundOpacity,
         allow_redeem_and_accrue: false,
       },
       levels: sanitizeBonusLevels(levelsSource, { withDefaults: false }).map((level, idx) => ({
@@ -1009,6 +1017,22 @@
     state.referralFirstPurchaseRewardDraft = state.referralFirstPurchaseReward;
     state.referralRegistrationReward = normalizeBonusReferralRewardValue(settings.referral_registration_reward, 0);
     state.referralRegistrationRewardDraft = state.referralRegistrationReward;
+    state.referralCardMainColor = normalizeHexColor(settings.referral_card_main_color, '#f3f4f6');
+    state.referralCardMainColorDraft = state.referralCardMainColor;
+    state.referralCardBaseColor = normalizeHexColor(settings.referral_card_base_color, '#d1d5db');
+    state.referralCardBaseColorDraft = state.referralCardBaseColor;
+    state.referralCardContentColor = normalizeHexColor(settings.referral_card_content_color, '#64748b');
+    state.referralCardContentColorDraft = state.referralCardContentColor;
+    state.referralCardButtonColor = normalizeHexColor(settings.referral_card_button_color, '#ff6a00');
+    state.referralCardButtonColorDraft = state.referralCardButtonColor;
+    state.referralCardQrEnabled = settings.referral_card_qr_enabled !== false;
+    state.referralCardQrEnabledDraft = state.referralCardQrEnabled;
+    state.referralCardTitleBackgroundEnabled = settings.referral_card_title_background_enabled !== false;
+    state.referralCardTitleBackgroundEnabledDraft = state.referralCardTitleBackgroundEnabled;
+    state.referralCardTitleBackgroundColor = normalizeHexColor(settings.referral_card_title_background_color, '#ffffff');
+    state.referralCardTitleBackgroundColorDraft = state.referralCardTitleBackgroundColor;
+    state.referralCardTitleBackgroundOpacity = normalizeBannerOpacity(settings.referral_card_title_background_opacity, 90);
+    state.referralCardTitleBackgroundOpacityDraft = state.referralCardTitleBackgroundOpacity;
     state.bonusReferralLevels = mergeBonusReferralLevels(referralLevels);
     state.bonusReferralLevelsDraft = (Array.isArray(state.bonusReferralLevels) ? state.bonusReferralLevels : []).map((level) => ({ ...level }));
     state.bonusReferralEvents = sanitizeBonusReferralEvents(json?.referral_events);
@@ -2076,6 +2100,8 @@
   const bannerEmpty = right$("#bannerEmpty");
   const bonusLevelEmpty = right$("#bonusLevelEmpty");
   const bonusReferralsEmpty = right$("#bonusReferralsEmpty");
+  const bonusReferralCardInfoWrap = right$("#bonusReferralCardInfoWrap");
+  const bonusReferralLevelsSettings = right$("#bonusReferralLevelsSettings");
   const bonusReferralFirstPurchaseRewardInput = right$("#bonusReferralFirstPurchaseRewardInput");
   const bonusReferralRegistrationRewardInput = right$("#bonusReferralRegistrationRewardInput");
   const bonusReferralInviteLink = right$("#bonusReferralInviteLink");
@@ -2117,6 +2143,32 @@
   const bonusLevelContentColorBtn = right$("#bonusLevelContentColorBtn");
   const bonusLevelContentColorPopover = right$("#bonusLevelContentColorPopover");
   const bonusLevelContentColorInput = right$("#bonusLevelContentColorInput");
+  const bonusReferralCardPreviewCard = right$("#bonusReferralCardPreviewCard");
+  const bonusReferralCardPreviewMain = right$("#bonusReferralCardPreviewMain");
+  const bonusReferralCardPreviewTitle = right$("#bonusReferralCardPreviewTitle");
+  const bonusReferralCardPreviewInviteBtn = right$("#bonusReferralCardPreviewInviteBtn");
+  const bonusReferralCardPreviewQr = right$("#bonusReferralCardPreviewQr");
+  const bonusReferralCardQrBtn = right$("#bonusReferralCardQrBtn");
+  const bonusReferralCardQrPopover = right$("#bonusReferralCardQrPopover");
+  const bonusReferralCardQrEnabledSwitch = right$("#bonusReferralCardQrEnabledSwitch");
+  const bonusReferralCardTitleBackgroundBtn = right$("#bonusReferralCardTitleBackgroundBtn");
+  const bonusReferralCardTitleBackgroundPopover = right$("#bonusReferralCardTitleBackgroundPopover");
+  const bonusReferralCardTitleBackgroundSwitch = right$("#bonusReferralCardTitleBackgroundSwitch");
+  const bonusReferralCardTitleBackgroundColorInput = right$("#bonusReferralCardTitleBackgroundColorInput");
+  const bonusReferralCardTitleBackgroundOpacityInput = right$("#bonusReferralCardTitleBackgroundOpacityInput");
+  const bonusReferralCardTitleBackgroundOpacityValue = right$("#bonusReferralCardTitleBackgroundOpacityValue");
+  const bonusReferralCardMainColorBtn = right$("#bonusReferralCardMainColorBtn");
+  const bonusReferralCardMainColorPopover = right$("#bonusReferralCardMainColorPopover");
+  const bonusReferralCardMainColorInput = right$("#bonusReferralCardMainColorInput");
+  const bonusReferralCardBaseColorBtn = right$("#bonusReferralCardBaseColorBtn");
+  const bonusReferralCardBaseColorPopover = right$("#bonusReferralCardBaseColorPopover");
+  const bonusReferralCardBaseColorInput = right$("#bonusReferralCardBaseColorInput");
+  const bonusReferralCardContentColorBtn = right$("#bonusReferralCardContentColorBtn");
+  const bonusReferralCardContentColorPopover = right$("#bonusReferralCardContentColorPopover");
+  const bonusReferralCardContentColorInput = right$("#bonusReferralCardContentColorInput");
+  const bonusReferralCardButtonColorBtn = right$("#bonusReferralCardButtonColorBtn");
+  const bonusReferralCardButtonColorPopover = right$("#bonusReferralCardButtonColorPopover");
+  const bonusReferralCardButtonColorInput = right$("#bonusReferralCardButtonColorInput");
   const bonusLevelRangePill = right$("#bonusLevelRangePill");
   const bonusLevelRangeSummary = right$("#bonusLevelRangeSummary");
   const bonusLevelRangeInfoBtn = right$("#bonusLevelRangeInfoBtn");
@@ -2376,6 +2428,22 @@
     referralFirstPurchaseRewardDraft: 0,
     referralRegistrationReward: 0,
     referralRegistrationRewardDraft: 0,
+    referralCardMainColor: '#f3f4f6',
+    referralCardMainColorDraft: '#f3f4f6',
+    referralCardBaseColor: '#d1d5db',
+    referralCardBaseColorDraft: '#d1d5db',
+    referralCardContentColor: '#64748b',
+    referralCardContentColorDraft: '#64748b',
+    referralCardButtonColor: '#ff6a00',
+    referralCardButtonColorDraft: '#ff6a00',
+    referralCardQrEnabled: true,
+    referralCardQrEnabledDraft: true,
+    referralCardTitleBackgroundEnabled: true,
+    referralCardTitleBackgroundEnabledDraft: true,
+    referralCardTitleBackgroundColor: '#ffffff',
+    referralCardTitleBackgroundColorDraft: '#ffffff',
+    referralCardTitleBackgroundOpacity: 90,
+    referralCardTitleBackgroundOpacityDraft: 90,
     bonusReferralLevels: createDefaultBonusReferralLevels(),
     bonusReferralLevelsDraft: createDefaultBonusReferralLevels(),
     bonusReferralEvents: [],
@@ -3457,13 +3525,18 @@
     if (!clientTabsHeader || !clientTabs) return;
     const hasTabs = tabsState.tabs.length > 0;
     const isBonusReferralsView = state.currentView === 'bonus-referrals';
-    clientTabsHeader.classList.toggle("hidden", !hasTabs && !isBonusReferralsView);
+    const visibleTabs = isBonusReferralsView
+      ? tabsState.tabs.filter((tab) => tab.type === 'bonus-referral-card')
+      : tabsState.tabs;
+    const hasVisibleTabs = visibleTabs.length > 0;
+    clientTabsHeader.classList.toggle("hidden", !hasVisibleTabs && !isBonusReferralsView);
     if (clientTabsHomeBtn) {
       clientTabsHomeBtn.classList.toggle('hidden', !isBonusReferralsView);
-      clientTabsHomeBtn.classList.toggle('is-active', isBonusReferralsView);
+      clientTabsHomeBtn.classList.toggle('is-active', isBonusReferralsView && !hasVisibleTabs);
     }
-    clientTabs.classList.toggle('hidden', isBonusReferralsView);
-    if (isBonusReferralsView) {
+    clientTabs.classList.toggle('hidden', isBonusReferralsView && !hasVisibleTabs);
+    if (isBonusReferralsView && !hasVisibleTabs) {
+      clientTabs.innerHTML = "";
       showEmptyState();
       return;
     }
@@ -3472,7 +3545,7 @@
       showEmptyState();
       return;
     }
-    clientTabs.innerHTML = tabsState.tabs.map((tab) => {
+    clientTabs.innerHTML = visibleTabs.map((tab) => {
       const isActive = tab.key === tabsState.activeKey;
       const fallbackTitle = tab.type === 'order' ? `#${tab.id}` : 'Клиент';
       return `
@@ -3516,6 +3589,8 @@
           ? 'banners'
           : tab.type === 'bonus-level'
             ? 'bonus-cards'
+          : tab.type === 'bonus-referral-card'
+            ? 'bonus-referrals'
           : 'clients';
     if (state.currentView !== targetView) {
       switchView(targetView);
@@ -3613,6 +3688,8 @@
         state.editingBonusLevelId = null;
         state.bonusLevelEditorDraft = null;
       }
+    } else if (closedTab.type === 'bonus-referral-card') {
+      closeBonusReferralCardInlinePopovers();
     } else if (closedTab.type === 'order') {
       if (state.activeOrderId === closedTab.id) {
         state.activeOrderId = null;
@@ -3634,6 +3711,8 @@
           renderBannerList();
         } else if (state.currentView === 'bonus-cards') {
           renderBonusLevels();
+        } else if (state.currentView === 'bonus-referrals') {
+          renderBonusReferralLevels();
         }
         syncDiscountToolbarState();
         updateRightPanel();
@@ -3684,6 +3763,7 @@
     clientTabsHomeBtn.addEventListener('click', (e) => {
       e.preventDefault();
       if (state.currentView !== 'bonus-referrals') return;
+      tabsState.tabs = tabsState.tabs.filter((tab) => tab.type !== 'bonus-referral-card');
       tabsState.activeKey = null;
       renderTabs();
       updateRightPanel();
@@ -6933,6 +7013,232 @@
     });
   }
 
+  function getReferralCardDesign() {
+    return {
+      mainColor: normalizeHexColor(state.referralEditing ? state.referralCardMainColorDraft : state.referralCardMainColor, '#f3f4f6'),
+      baseColor: normalizeHexColor(state.referralEditing ? state.referralCardBaseColorDraft : state.referralCardBaseColor, '#d1d5db'),
+      contentColor: normalizeHexColor(state.referralEditing ? state.referralCardContentColorDraft : state.referralCardContentColor, '#64748b'),
+      buttonColor: normalizeHexColor(state.referralEditing ? state.referralCardButtonColorDraft : state.referralCardButtonColor, '#ff6a00'),
+      qrEnabled: (state.referralEditing ? state.referralCardQrEnabledDraft : state.referralCardQrEnabled) !== false,
+      titleBackgroundEnabled: (state.referralEditing ? state.referralCardTitleBackgroundEnabledDraft : state.referralCardTitleBackgroundEnabled) !== false,
+      titleBackgroundColor: normalizeHexColor(state.referralEditing ? state.referralCardTitleBackgroundColorDraft : state.referralCardTitleBackgroundColor, '#ffffff'),
+      titleBackgroundOpacity: normalizeBannerOpacity(state.referralEditing ? state.referralCardTitleBackgroundOpacityDraft : state.referralCardTitleBackgroundOpacity, 90),
+    };
+  }
+
+  function closeBonusReferralCardInlinePopovers(exceptPopover = null) {
+    [
+      bonusReferralCardQrPopover,
+      bonusReferralCardTitleBackgroundPopover,
+      bonusReferralCardMainColorPopover,
+      bonusReferralCardBaseColorPopover,
+      bonusReferralCardContentColorPopover,
+      bonusReferralCardButtonColorPopover,
+    ].forEach((popover) => {
+      if (!popover || popover === exceptPopover) return;
+      popover.classList.add('hidden');
+    });
+  }
+
+  function bindBonusReferralCardInlinePopover(triggerEl, popoverEl) {
+    if (!triggerEl || !popoverEl) return;
+    triggerEl.addEventListener('click', (event) => {
+      if (!state.referralEditing) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const shouldOpen = popoverEl.classList.contains('hidden');
+      closeBonusReferralCardInlinePopovers();
+      if (shouldOpen) popoverEl.classList.remove('hidden');
+    });
+    document.addEventListener('click', (event) => {
+      if (popoverEl.classList.contains('hidden')) return;
+      if (popoverEl.contains(event.target) || triggerEl.contains(event.target)) return;
+      popoverEl.classList.add('hidden');
+    });
+  }
+
+  function syncBonusReferralCardSwatches(design = getReferralCardDesign()) {
+    if (bonusReferralCardMainColorBtn) bonusReferralCardMainColorBtn.style.background = design.mainColor;
+    if (bonusReferralCardBaseColorBtn) bonusReferralCardBaseColorBtn.style.background = design.baseColor;
+    if (bonusReferralCardContentColorBtn) {
+      bonusReferralCardContentColorBtn.style.background = design.contentColor;
+      bonusReferralCardContentColorBtn.style.boxShadow = 'inset 0 0 0 1px rgba(15,23,42,.08)';
+    }
+    if (bonusReferralCardButtonColorBtn) bonusReferralCardButtonColorBtn.style.background = design.buttonColor;
+    if (bonusReferralCardQrBtn) bonusReferralCardQrBtn.classList.toggle('is-active', design.qrEnabled);
+    if (bonusReferralCardTitleBackgroundBtn) bonusReferralCardTitleBackgroundBtn.classList.toggle('is-active', design.titleBackgroundEnabled);
+  }
+
+  function renderBonusReferralCardPreview() {
+    const design = getReferralCardDesign();
+    if (bonusReferralCardPreviewCard) bonusReferralCardPreviewCard.style.background = design.baseColor;
+    if (bonusReferralCardPreviewMain) {
+      bonusReferralCardPreviewMain.style.background = design.mainColor;
+      bonusReferralCardPreviewMain.style.color = design.contentColor;
+      bonusReferralCardPreviewMain.querySelectorAll('.bonus-level-preview-bonus-label, .bonus-level-preview-bonus-value').forEach((node) => {
+        node.style.color = design.contentColor;
+      });
+    }
+    if (bonusReferralCardPreviewTitle) {
+      bonusReferralCardPreviewTitle.textContent = 'Рефералы';
+      bonusReferralCardPreviewTitle.style.color = design.contentColor;
+      if (design.titleBackgroundEnabled) {
+        bonusReferralCardPreviewTitle.style.background = buildBannerTitleBackgroundColor(design.titleBackgroundColor, design.titleBackgroundOpacity);
+        bonusReferralCardPreviewTitle.style.padding = '2px 10px';
+        bonusReferralCardPreviewTitle.style.borderRadius = '999px';
+      } else {
+        bonusReferralCardPreviewTitle.style.background = 'transparent';
+        bonusReferralCardPreviewTitle.style.padding = '0';
+        bonusReferralCardPreviewTitle.style.borderRadius = '0';
+      }
+    }
+    const previewSub = bonusReferralCardPreviewCard?.querySelector('.bonus-level-preview-sub');
+    if (previewSub) {
+        previewSub.querySelectorAll('.bonus-level-preview-cashback-icon, .bonus-level-preview-cashback-value').forEach((node) => {
+          node.style.color = design.contentColor;
+        });
+    }
+    if (bonusReferralCardPreviewInviteBtn) {
+      bonusReferralCardPreviewInviteBtn.style.background = design.buttonColor;
+    }
+    if (bonusReferralCardPreviewQr) {
+      bonusReferralCardPreviewQr.style.display = design.qrEnabled ? 'flex' : 'none';
+      bonusReferralCardPreviewQr.style.color = '#111827';
+      bonusReferralCardPreviewQr.style.background = 'rgba(255,255,255,.94)';
+    }
+    if (bonusReferralCardQrEnabledSwitch) {
+      bonusReferralCardQrEnabledSwitch.checked = design.qrEnabled;
+      bonusReferralCardQrEnabledSwitch.disabled = !state.referralEditing;
+    }
+    if (bonusReferralCardTitleBackgroundSwitch) {
+      bonusReferralCardTitleBackgroundSwitch.checked = design.titleBackgroundEnabled;
+      bonusReferralCardTitleBackgroundSwitch.disabled = !state.referralEditing;
+    }
+    if (bonusReferralCardTitleBackgroundColorInput) {
+      bonusReferralCardTitleBackgroundColorInput.value = design.titleBackgroundColor;
+      bonusReferralCardTitleBackgroundColorInput.disabled = !state.referralEditing || !design.titleBackgroundEnabled;
+    }
+    if (bonusReferralCardTitleBackgroundOpacityInput) {
+      bonusReferralCardTitleBackgroundOpacityInput.value = String(design.titleBackgroundOpacity);
+      bonusReferralCardTitleBackgroundOpacityInput.disabled = !state.referralEditing || !design.titleBackgroundEnabled;
+      if (bonusReferralCardTitleBackgroundOpacityValue) {
+        bonusReferralCardTitleBackgroundOpacityValue.textContent = `${design.titleBackgroundOpacity}%`;
+      }
+    }
+    if (bonusReferralCardMainColorInput) {
+      bonusReferralCardMainColorInput.value = design.mainColor;
+      bonusReferralCardMainColorInput.disabled = !state.referralEditing;
+    }
+    if (bonusReferralCardBaseColorInput) {
+      bonusReferralCardBaseColorInput.value = design.baseColor;
+      bonusReferralCardBaseColorInput.disabled = !state.referralEditing;
+    }
+    if (bonusReferralCardContentColorInput) {
+      bonusReferralCardContentColorInput.value = design.contentColor;
+      bonusReferralCardContentColorInput.disabled = !state.referralEditing;
+    }
+    if (bonusReferralCardButtonColorInput) {
+      bonusReferralCardButtonColorInput.value = design.buttonColor;
+      bonusReferralCardButtonColorInput.disabled = !state.referralEditing;
+    }
+    if (bonusReferralCardQrBtn) bonusReferralCardQrBtn.disabled = !state.referralEditing;
+    if (bonusReferralCardTitleBackgroundBtn) bonusReferralCardTitleBackgroundBtn.disabled = !state.referralEditing;
+    if (bonusReferralCardMainColorBtn) bonusReferralCardMainColorBtn.disabled = !state.referralEditing;
+    if (bonusReferralCardBaseColorBtn) bonusReferralCardBaseColorBtn.disabled = !state.referralEditing;
+    if (bonusReferralCardContentColorBtn) bonusReferralCardContentColorBtn.disabled = !state.referralEditing;
+    if (bonusReferralCardButtonColorBtn) bonusReferralCardButtonColorBtn.disabled = !state.referralEditing;
+    if (!state.referralEditing) closeBonusReferralCardInlinePopovers();
+    syncBonusReferralCardSwatches(design);
+  }
+
+  function renderBonusReferralLevelsSettings() {
+    if (!bonusReferralLevelsSettings) return;
+    const sourceLevels = state.referralEditing ? state.bonusReferralLevelsDraft : state.bonusReferralLevels;
+    const levels = Array.isArray(sourceLevels) ? sourceLevels : [];
+    const isReferralSystemEnabled = (state.referralEditing ? state.referralProgramEnabledDraft : state.referralProgramEnabled) === true;
+    const rows = levels
+      .map((level, index) => ({ level, index }))
+      .filter(({ index }) => index > 0);
+    if (!rows.length) {
+      bonusReferralLevelsSettings.innerHTML = '<div class="bonus-referral-level-settings-empty">Уровни не настроены</div>';
+      return;
+    }
+    bonusReferralLevelsSettings.innerHTML = rows.map(({ level, index }) => {
+      const title = String(level?.title || `${index}-й уровень`).trim();
+      const percent = normalizeBonusReferralPercentValue(level?.percent ?? String(level?.reward || '').replace(/[^\d.,]/g, ''), 0);
+      const enabled = level?.enabled === true;
+      const previousEnabled = index <= 1 || levels[index - 1]?.enabled === true;
+      const switchDisabledAttr = state.referralEditing && isReferralSystemEnabled && (enabled || previousEnabled) ? '' : 'disabled';
+      const inputDisabledAttr = state.referralEditing && isReferralSystemEnabled && enabled ? '' : 'disabled';
+      return `
+        <div class="bonus-referral-level-settings-row">
+          <div class="bonus-referral-level-settings-title">${escapeHtml(title)}</div>
+          <label class="switch bonus-referral-level-settings-switch" title="Включить уровень">
+            <input class="switch-input" type="checkbox" data-referral-settings-enabled="${index}" ${enabled ? 'checked' : ''} ${switchDisabledAttr} />
+            <span class="switch-ui" aria-hidden="true"></span>
+          </label>
+          <div class="bonus-referral-level-settings-field">
+            <input class="control bonus-referral-level-settings-input" type="text" inputmode="decimal" data-referral-settings-percent="${index}" value="${escapeHtml(formatBonusReferralPercentValue(percent))}" ${inputDisabledAttr} />
+            <div class="bonus-referral-percent-stepper" aria-hidden="false">
+              <button class="bonus-referral-percent-step" type="button" data-referral-settings-step="0.1" data-referral-settings-index="${index}" ${inputDisabledAttr} aria-label="Увеличить процент">
+                <i class="fas fa-caret-up" aria-hidden="true"></i>
+              </button>
+              <button class="bonus-referral-percent-step" type="button" data-referral-settings-step="-0.1" data-referral-settings-index="${index}" ${inputDisabledAttr} aria-label="Уменьшить процент">
+                <i class="fas fa-caret-down" aria-hidden="true"></i>
+              </button>
+            </div>
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  function renderBonusReferralCardFaceHtml() {
+    const design = getReferralCardDesign();
+    return `
+      <div class="bonus-level-preview-card bonus-referral-program-preview" style="background:${escapeHtml(design.baseColor)};">
+        <div class="bonus-level-preview-main" style="background:${escapeHtml(design.mainColor)};color:${escapeHtml(design.contentColor)};">
+          <div class="bonus-level-preview-title" style="color:${escapeHtml(design.contentColor)};${design.titleBackgroundEnabled ? `background:${escapeHtml(buildBannerTitleBackgroundColor(design.titleBackgroundColor, design.titleBackgroundOpacity))};padding:2px 10px;border-radius:999px;` : 'background:transparent;padding:0;border-radius:0;'}">Рефералы</div>
+          <div class="bonus-level-preview-bonus-label" style="color:${escapeHtml(design.contentColor)};">Приглашения</div>
+          <div class="bonus-level-preview-bonus-value" style="color:${escapeHtml(design.contentColor)};">0</div>
+          <div class="bonus-level-preview-qr" style="${design.qrEnabled ? '' : 'display:none;'}"><span>QR</span></div>
+        </div>
+        <div class="bonus-level-preview-sub" style="color:${escapeHtml(design.contentColor)};">
+          <div class="bonus-level-preview-cashback-side">
+            <div class="bonus-level-preview-cashback-icon" style="color:${escapeHtml(design.contentColor)};"><i class="fas fa-user-plus" aria-hidden="true"></i></div>
+            <div class="bonus-level-preview-cashback-value" style="color:${escapeHtml(design.contentColor)};">1%</div>
+          </div>
+          <div class="bonus-referral-invite-side">
+            <button class="bonus-referral-invite-pill" type="button" style="background:${escapeHtml(design.buttonColor)};">Пригласить</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderBonusReferralCardInfo() {
+    renderBonusReferralRightHome();
+    renderBonusReferralCardPreview();
+    renderBonusReferralLevelsSettings();
+  }
+
+  function activateBonusReferralCardTab() {
+    renderBonusReferralCardInfo();
+    renderBonusReferralLevels();
+  }
+
+  function openBonusReferralCardTab() {
+    if (state.currentView !== 'bonus-referrals') {
+      switchView('bonus-referrals');
+    }
+    ensureTab({
+      type: 'bonus-referral-card',
+      id: 'referral-card',
+      title: 'Уровни рефералов',
+      onActivate: activateBonusReferralCardTab,
+    });
+  }
+
   function getBonusLevelTimingUnitLabel(unit) {
     const normalized = String(unit || '').trim().toLowerCase();
     if (normalized === 'hours') return 'Часы';
@@ -9154,6 +9460,7 @@
       bonusReferralInviteLink.href = inviteUrl;
       bonusReferralInviteLink.textContent = inviteUrl;
     }
+    renderBonusReferralCardPreview();
   }
 
   function renderBonusReferralLevels() {
@@ -9164,8 +9471,22 @@
     const isReferralSystemEnabled = (state.referralEditing ? state.referralProgramEnabledDraft : state.referralProgramEnabled) === true;
     levels.forEach((level, index) => {
       const card = document.createElement('div');
-      const isConfigurable = index > 0;
-      const hasEnabledSwitch = index > 0;
+      if (index === 0) {
+        const tabKey = buildTabKey('bonus-referral-card', 'referral-card');
+        card.className = `banner-placement-card bonus-referral-level-card bonus-referral-program-card${isReferralSystemEnabled ? '' : ' is-disabled'}${tabsState.activeKey === tabKey ? ' is-active' : ''}`;
+        card.dataset.referralLevelIndex = String(index);
+        card.setAttribute('role', 'button');
+        card.setAttribute('tabindex', '0');
+        card.innerHTML = renderBonusReferralCardFaceHtml();
+        elBonusReferralLevelsTrack.appendChild(card);
+        if (index < levels.length - 1) {
+          const arrow = document.createElement('div');
+          arrow.className = 'bonus-referral-level-arrow';
+          arrow.innerHTML = '<i class="fas fa-arrow-right" aria-hidden="true"></i>';
+          elBonusReferralLevelsTrack.appendChild(arrow);
+        }
+        return;
+      }
       const isLevelEnabled = index === 0 ? true : level.enabled === true;
       const isEnabled = isReferralSystemEnabled && isLevelEnabled;
       const percent = normalizeBonusReferralPercentValue(level.percent ?? String(level.reward || '').replace(/[^\d.,]/g, ''), 0);
@@ -9176,36 +9497,16 @@
         ${index > 0 ? `
           <div class="bonus-referral-level-head">
             <span>${escapeHtml(levelTitle)}</span>
-            ${hasEnabledSwitch && state.referralEditing ? `
-              <label class="switch bonus-referral-level-switch" title="Включить уровень">
-                <input class="switch-input" type="checkbox" data-referral-level-enabled="${index}" ${isLevelEnabled ? 'checked' : ''} />
-                <span class="switch-ui" aria-hidden="true"></span>
-              </label>
-            ` : ''}
           </div>
         ` : ''}
         <div class="bonus-referral-level-main">
           <div class="bonus-referral-level-icon"><i class="fas fa-user-plus" aria-hidden="true"></i></div>
         </div>
-        ${isConfigurable ? `
-          ${state.referralEditing ? `
-            <div class="bonus-referral-percent-field">
-              <input class="control bonus-referral-percent-input" type="text" inputmode="decimal" data-referral-level-percent="${index}" value="${escapeHtml(formatBonusReferralPercentValue(percent))}" ${isReferralSystemEnabled ? '' : 'disabled'} />
-              <div class="bonus-referral-percent-stepper" aria-hidden="false">
-                <button class="bonus-referral-percent-step" type="button" data-referral-percent-step="0.1" data-referral-level-index="${index}" ${isReferralSystemEnabled ? '' : 'disabled'} aria-label="Увеличить процент">
-                  <i class="fas fa-caret-up" aria-hidden="true"></i>
-                </button>
-                <button class="bonus-referral-percent-step" type="button" data-referral-percent-step="-0.1" data-referral-level-index="${index}" ${isReferralSystemEnabled ? '' : 'disabled'} aria-label="Уменьшить процент">
-                  <i class="fas fa-caret-down" aria-hidden="true"></i>
-                </button>
-              </div>
-            </div>
-          ` : `
-            <div class="bonus-referral-percent-view">
-              <strong>${escapeHtml(formatBonusReferralPercentValue(percent))}</strong>
-              <span>%</span>
-            </div>
-          `}
+        ${index > 0 ? `
+          <div class="bonus-referral-percent-view">
+            <strong>${escapeHtml(formatBonusReferralPercentValue(percent))}</strong>
+            <span>%</span>
+          </div>
         ` : ''}
       `;
       elBonusReferralLevelsTrack.appendChild(card);
@@ -9313,9 +9614,18 @@
     state.referralProgramEnabledDraft = state.referralProgramEnabled === true;
     state.referralFirstPurchaseRewardDraft = state.referralFirstPurchaseReward;
     state.referralRegistrationRewardDraft = state.referralRegistrationReward;
+    state.referralCardMainColorDraft = state.referralCardMainColor;
+    state.referralCardBaseColorDraft = state.referralCardBaseColor;
+    state.referralCardContentColorDraft = state.referralCardContentColor;
+    state.referralCardButtonColorDraft = state.referralCardButtonColor;
+    state.referralCardQrEnabledDraft = state.referralCardQrEnabled !== false;
+    state.referralCardTitleBackgroundEnabledDraft = state.referralCardTitleBackgroundEnabled !== false;
+    state.referralCardTitleBackgroundColorDraft = state.referralCardTitleBackgroundColor;
+    state.referralCardTitleBackgroundOpacityDraft = state.referralCardTitleBackgroundOpacity;
     state.bonusReferralLevelsDraft = (Array.isArray(state.bonusReferralLevels) ? state.bonusReferralLevels : []).map((level) => ({ ...level }));
     syncBonusToolbarState();
     renderBonusReferralRightHome();
+    renderBonusReferralLevelsSettings();
     renderBonusReferralLevels();
   }
 
@@ -9324,9 +9634,18 @@
     state.referralProgramEnabledDraft = state.referralProgramEnabled === true;
     state.referralFirstPurchaseRewardDraft = state.referralFirstPurchaseReward;
     state.referralRegistrationRewardDraft = state.referralRegistrationReward;
+    state.referralCardMainColorDraft = state.referralCardMainColor;
+    state.referralCardBaseColorDraft = state.referralCardBaseColor;
+    state.referralCardContentColorDraft = state.referralCardContentColor;
+    state.referralCardButtonColorDraft = state.referralCardButtonColor;
+    state.referralCardQrEnabledDraft = state.referralCardQrEnabled !== false;
+    state.referralCardTitleBackgroundEnabledDraft = state.referralCardTitleBackgroundEnabled !== false;
+    state.referralCardTitleBackgroundColorDraft = state.referralCardTitleBackgroundColor;
+    state.referralCardTitleBackgroundOpacityDraft = state.referralCardTitleBackgroundOpacity;
     state.bonusReferralLevelsDraft = (Array.isArray(state.bonusReferralLevels) ? state.bonusReferralLevels : []).map((level) => ({ ...level }));
     syncBonusToolbarState();
     renderBonusReferralRightHome();
+    renderBonusReferralLevelsSettings();
     renderBonusReferralLevels();
   }
 
@@ -9335,12 +9654,28 @@
     const nextLevels = (Array.isArray(state.bonusReferralLevelsDraft) ? state.bonusReferralLevelsDraft : []).map((level) => ({ ...level }));
     const nextFirstPurchaseReward = normalizeBonusReferralRewardValue(state.referralFirstPurchaseRewardDraft, 0);
     const nextRegistrationReward = normalizeBonusReferralRewardValue(state.referralRegistrationRewardDraft, 0);
+    const nextCardMainColor = normalizeHexColor(state.referralCardMainColorDraft, '#f3f4f6');
+    const nextCardBaseColor = normalizeHexColor(state.referralCardBaseColorDraft, '#d1d5db');
+    const nextCardContentColor = normalizeHexColor(state.referralCardContentColorDraft, '#64748b');
+    const nextCardButtonColor = normalizeHexColor(state.referralCardButtonColorDraft, '#ff6a00');
+    const nextCardQrEnabled = state.referralCardQrEnabledDraft !== false;
+    const nextCardTitleBackgroundEnabled = state.referralCardTitleBackgroundEnabledDraft !== false;
+    const nextCardTitleBackgroundColor = normalizeHexColor(state.referralCardTitleBackgroundColorDraft, '#ffffff');
+    const nextCardTitleBackgroundOpacity = normalizeBannerOpacity(state.referralCardTitleBackgroundOpacityDraft, 90);
     setBonusConfigSaving(true, '\u041f\u043e\u0434\u043e\u0436\u0434\u0438\u0442\u0435, \u0441\u043e\u0445\u0440\u0430\u043d\u044f\u0435\u043c \u0440\u0435\u0444\u0435\u0440\u0430\u043b\u044c\u043d\u0443\u044e \u0441\u0438\u0441\u0442\u0435\u043c\u0443...');
     try {
       await persistBonusCardsStorage({
         referralProgramEnabled: nextEnabled,
         referralFirstPurchaseReward: nextFirstPurchaseReward,
         referralRegistrationReward: nextRegistrationReward,
+        referralCardMainColor: nextCardMainColor,
+        referralCardBaseColor: nextCardBaseColor,
+        referralCardContentColor: nextCardContentColor,
+        referralCardButtonColor: nextCardButtonColor,
+        referralCardQrEnabled: nextCardQrEnabled,
+        referralCardTitleBackgroundEnabled: nextCardTitleBackgroundEnabled,
+        referralCardTitleBackgroundColor: nextCardTitleBackgroundColor,
+        referralCardTitleBackgroundOpacity: nextCardTitleBackgroundOpacity,
         referralLevels: nextLevels,
       });
     } catch (err) {
@@ -9351,10 +9686,19 @@
     state.referralProgramEnabled = nextEnabled;
     state.referralFirstPurchaseReward = nextFirstPurchaseReward;
     state.referralRegistrationReward = nextRegistrationReward;
+    state.referralCardMainColor = nextCardMainColor;
+    state.referralCardBaseColor = nextCardBaseColor;
+    state.referralCardContentColor = nextCardContentColor;
+    state.referralCardButtonColor = nextCardButtonColor;
+    state.referralCardQrEnabled = nextCardQrEnabled;
+    state.referralCardTitleBackgroundEnabled = nextCardTitleBackgroundEnabled;
+    state.referralCardTitleBackgroundColor = nextCardTitleBackgroundColor;
+    state.referralCardTitleBackgroundOpacity = nextCardTitleBackgroundOpacity;
     state.bonusReferralLevels = nextLevels;
     state.referralEditing = false;
     syncBonusToolbarState();
     renderBonusReferralRightHome();
+    renderBonusReferralLevelsSettings();
     renderBonusReferralLevels();
     setBonusConfigSaving(false);
   }
@@ -18470,15 +18814,16 @@
     syncDiscountToolbarState();
     const isBonusCardsView = state.currentView === 'bonus-cards';
     const isBonusReferralsView = state.currentView === 'bonus-referrals';
+    const hasBonusReferralCardTab = tabsState.tabs.some((tab) => tab.type === 'bonus-referral-card');
     if (clientTabsHeader) {
-      clientTabsHeader.classList.toggle('hidden', tabsState.tabs.length === 0 && !isBonusReferralsView);
+      clientTabsHeader.classList.toggle('hidden', isBonusReferralsView ? false : tabsState.tabs.length === 0);
     }
     if (clientTabsHomeBtn) {
       clientTabsHomeBtn.classList.toggle('hidden', !isBonusReferralsView);
-      clientTabsHomeBtn.classList.toggle('is-active', isBonusReferralsView);
+      clientTabsHomeBtn.classList.toggle('is-active', isBonusReferralsView && !hasBonusReferralCardTab);
     }
     if (clientTabs) {
-      clientTabs.classList.toggle('hidden', isBonusReferralsView);
+      clientTabs.classList.toggle('hidden', isBonusReferralsView && !hasBonusReferralCardTab);
     }
     const isChatPage = !!document.body?.classList?.contains('page-chat');
     if (isChatPage && chatRightForceEmpty) {
@@ -18506,6 +18851,7 @@
       if (state.currentView === 'bonus-referrals') renderBonusReferralRightHome();
       if (bonusLevelInfoWrap) bonusLevelInfoWrap.classList.add('hidden');
       if (bonusLevelInfoFooter) bonusLevelInfoFooter.classList.add('hidden');
+      if (bonusReferralCardInfoWrap) bonusReferralCardInfoWrap.classList.add('hidden');
       if (clientBenefitsFooter) clientBenefitsFooter.classList.add('hidden');
       return;
     }
@@ -18518,6 +18864,7 @@
     const isDiscountPromoCodeTab = activeTab?.type === 'discount-promo-code';
     const isBannerTab = activeTab?.type === 'banner';
     const isBonusLevelTab = activeTab?.type === 'bonus-level';
+    const isBonusReferralCardTab = activeTab?.type === 'bonus-referral-card';
     const hasClientId = Number(state.activeClientId || 0) > 0;
     const noTabs = !activeTab;
     // In chat mode right panel must be driven only by right tabs state.
@@ -18549,7 +18896,8 @@
       if (bannerInfoWrap) bannerInfoWrap.classList.add('hidden');
       if (bannerInfoFooter) bannerInfoFooter.classList.add('hidden');
       if (bonusLevelEmpty) bonusLevelEmpty.classList.toggle('hidden', !noTabs || state.currentView !== 'bonus-cards');
-      if (bonusReferralsEmpty) bonusReferralsEmpty.classList.toggle('hidden', state.currentView !== 'bonus-referrals');
+      if (bonusReferralsEmpty) bonusReferralsEmpty.classList.toggle('hidden', state.currentView !== 'bonus-referrals' || isBonusReferralCardTab);
+      if (bonusReferralCardInfoWrap) bonusReferralCardInfoWrap.classList.toggle('hidden', !isBonusReferralCardTab || state.currentView !== 'bonus-referrals');
       if (state.currentView === 'bonus-referrals') renderBonusReferralRightHome();
       if (bonusLevelInfoWrap) bonusLevelInfoWrap.classList.toggle('hidden', !isBonusLevelTab || state.currentView !== 'bonus-cards');
       if (bonusLevelInfoFooter) bonusLevelInfoFooter.classList.toggle('hidden', !isBonusLevelTab || state.currentView !== 'bonus-cards');
@@ -18559,6 +18907,7 @@
 
     if (clientEmpty) clientEmpty.classList.toggle('hidden', !noTabs || state.currentView !== 'clients');
     if (bonusReferralsEmpty) bonusReferralsEmpty.classList.add('hidden');
+    if (bonusReferralCardInfoWrap) bonusReferralCardInfoWrap.classList.add('hidden');
     if (clientInfoWrap) clientInfoWrap.classList.toggle('hidden', !(isClientTab || forceClientPanelWithoutTabs));
     if (clientOrderInfoWrap) clientOrderInfoWrap.classList.toggle('hidden', !isOrderTab);
     if (isOrderTab) {
@@ -21002,6 +21351,7 @@
         return;
       }
       state.referralProgramEnabledDraft = elReferralProgramSwitch.checked === true;
+      renderBonusReferralLevelsSettings();
       renderBonusReferralLevels();
     });
   }
@@ -21031,6 +21381,143 @@
       );
     });
   }
+
+  if (bonusReferralLevelsSettings) {
+    bonusReferralLevelsSettings.addEventListener('input', (event) => {
+      if (!state.referralEditing) return;
+      const input = event.target.closest('[data-referral-settings-percent]');
+      if (!input) return;
+      const idx = Number(input.getAttribute('data-referral-settings-percent'));
+      if (!Number.isFinite(idx) || idx < 0) return;
+      const next = Array.isArray(state.bonusReferralLevelsDraft)
+        ? state.bonusReferralLevelsDraft.map((level) => ({ ...level }))
+        : [];
+      if (!next[idx]) return;
+      const percent = normalizeBonusReferralPercentValue(input.value, 0);
+      next[idx].percent = percent;
+      next[idx].reward = percent > 0 ? `+${percent}%` : '—';
+      state.bonusReferralLevelsDraft = next;
+      renderBonusReferralLevels();
+    });
+    bonusReferralLevelsSettings.addEventListener('change', (event) => {
+      if (!state.referralEditing) return;
+      const input = event.target.closest('[data-referral-settings-enabled]');
+      if (!input) return;
+      const idx = Number(input.getAttribute('data-referral-settings-enabled'));
+      if (!Number.isFinite(idx) || idx < 0) return;
+      const next = Array.isArray(state.bonusReferralLevelsDraft)
+        ? state.bonusReferralLevelsDraft.map((level) => ({ ...level }))
+        : [];
+      if (!next[idx]) return;
+      const shouldEnable = input.checked === true;
+      if (shouldEnable && idx > 1 && next[idx - 1]?.enabled !== true) {
+        renderBonusReferralLevelsSettings();
+        return;
+      }
+      next[idx].enabled = shouldEnable;
+      if (!shouldEnable) {
+        for (let i = idx + 1; i < next.length; i += 1) {
+          if (next[i]) next[i].enabled = false;
+        }
+      }
+      state.bonusReferralLevelsDraft = next;
+      renderBonusReferralLevelsSettings();
+      renderBonusReferralLevels();
+    });
+    bonusReferralLevelsSettings.addEventListener('click', (event) => {
+      if (!state.referralEditing) return;
+      const button = event.target.closest('[data-referral-settings-step]');
+      if (!button) return;
+      event.preventDefault();
+      const idx = Number(button.getAttribute('data-referral-settings-index'));
+      const step = Number(button.getAttribute('data-referral-settings-step'));
+      if (!Number.isFinite(idx) || !Number.isFinite(step)) return;
+      const next = Array.isArray(state.bonusReferralLevelsDraft)
+        ? state.bonusReferralLevelsDraft.map((level) => ({ ...level }))
+        : [];
+      if (!next[idx] || next[idx].enabled !== true) return;
+      const current = normalizeBonusReferralPercentValue(next[idx].percent ?? String(next[idx].reward || '').replace(/[^\d.,]/g, ''), 0);
+      const percent = normalizeBonusReferralPercentValue(current + step, 0);
+      next[idx].percent = percent;
+      next[idx].reward = percent > 0 ? `+${percent}%` : '—';
+      state.bonusReferralLevelsDraft = next;
+      renderBonusReferralLevelsSettings();
+      renderBonusReferralLevels();
+    });
+  }
+
+  bindBonusReferralCardInlinePopover(bonusReferralCardQrBtn, bonusReferralCardQrPopover);
+  bindBonusReferralCardInlinePopover(bonusReferralCardTitleBackgroundBtn, bonusReferralCardTitleBackgroundPopover);
+  bindBonusReferralCardInlinePopover(bonusReferralCardMainColorBtn, bonusReferralCardMainColorPopover);
+  bindBonusReferralCardInlinePopover(bonusReferralCardBaseColorBtn, bonusReferralCardBaseColorPopover);
+  bindBonusReferralCardInlinePopover(bonusReferralCardContentColorBtn, bonusReferralCardContentColorPopover);
+  bindBonusReferralCardInlinePopover(bonusReferralCardButtonColorBtn, bonusReferralCardButtonColorPopover);
+
+  if (bonusReferralCardQrEnabledSwitch) {
+    bonusReferralCardQrEnabledSwitch.addEventListener('change', () => {
+      if (!state.referralEditing) {
+        bonusReferralCardQrEnabledSwitch.checked = state.referralCardQrEnabled !== false;
+        return;
+      }
+      state.referralCardQrEnabledDraft = bonusReferralCardQrEnabledSwitch.checked === true;
+      renderBonusReferralCardPreview();
+      renderBonusReferralLevels();
+    });
+  }
+
+  if (bonusReferralCardTitleBackgroundSwitch) {
+    bonusReferralCardTitleBackgroundSwitch.addEventListener('change', () => {
+      if (!state.referralEditing) {
+        bonusReferralCardTitleBackgroundSwitch.checked = state.referralCardTitleBackgroundEnabled !== false;
+        return;
+      }
+      state.referralCardTitleBackgroundEnabledDraft = bonusReferralCardTitleBackgroundSwitch.checked === true;
+      renderBonusReferralCardPreview();
+      renderBonusReferralLevels();
+    });
+  }
+
+  if (bonusReferralCardTitleBackgroundColorInput) {
+    bonusReferralCardTitleBackgroundColorInput.addEventListener('input', () => {
+      if (!state.referralEditing) {
+        bonusReferralCardTitleBackgroundColorInput.value = normalizeHexColor(state.referralCardTitleBackgroundColor, '#ffffff');
+        return;
+      }
+      state.referralCardTitleBackgroundColorDraft = normalizeHexColor(bonusReferralCardTitleBackgroundColorInput.value, '#ffffff');
+      renderBonusReferralCardPreview();
+      renderBonusReferralLevels();
+    });
+  }
+
+  if (bonusReferralCardTitleBackgroundOpacityInput) {
+    bonusReferralCardTitleBackgroundOpacityInput.addEventListener('input', () => {
+      if (!state.referralEditing) {
+        bonusReferralCardTitleBackgroundOpacityInput.value = String(normalizeBannerOpacity(state.referralCardTitleBackgroundOpacity, 90));
+        return;
+      }
+      state.referralCardTitleBackgroundOpacityDraft = normalizeBannerOpacity(bonusReferralCardTitleBackgroundOpacityInput.value, 90);
+      renderBonusReferralCardPreview();
+      renderBonusReferralLevels();
+    });
+  }
+
+  [
+    [bonusReferralCardMainColorInput, 'referralCardMainColorDraft', '#f3f4f6'],
+    [bonusReferralCardBaseColorInput, 'referralCardBaseColorDraft', '#d1d5db'],
+    [bonusReferralCardContentColorInput, 'referralCardContentColorDraft', '#64748b'],
+    [bonusReferralCardButtonColorInput, 'referralCardButtonColorDraft', '#ff6a00'],
+  ].forEach(([input, field, fallback]) => {
+    if (!input) return;
+    input.addEventListener('input', () => {
+      if (!state.referralEditing) {
+        input.value = normalizeHexColor(state[field.replace('Draft', '')], fallback);
+        return;
+      }
+      state[field] = normalizeHexColor(input.value, fallback);
+      renderBonusReferralCardPreview();
+      renderBonusReferralLevels();
+    });
+  });
 
   if (elBonusFlipAllBtn) {
     elBonusFlipAllBtn.addEventListener('click', () => {
@@ -21127,6 +21614,12 @@
       state.bonusReferralLevelsDraft = next;
     });
     elBonusReferralLevelsTrack.addEventListener('click', (event) => {
+      const programCard = event.target.closest('.bonus-referral-program-card');
+      if (programCard) {
+        event.preventDefault();
+        openBonusReferralCardTab();
+        return;
+      }
       if (!state.referralEditing) return;
       const button = event.target.closest('[data-referral-percent-step]');
       if (!button) return;
@@ -21158,6 +21651,13 @@
       next[idx].enabled = input.checked === true;
       state.bonusReferralLevelsDraft = next;
       renderBonusReferralLevels();
+    });
+    elBonusReferralLevelsTrack.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      const programCard = event.target.closest('.bonus-referral-program-card');
+      if (!programCard) return;
+      event.preventDefault();
+      openBonusReferralCardTab();
     });
   }
 

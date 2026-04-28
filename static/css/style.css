@@ -18709,7 +18709,7 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   width:100%;
   overflow:visible;
   display:grid;
-  grid-template-columns:146px minmax(28px, 1fr) 146px minmax(28px, 1fr) 146px minmax(28px, 1fr) 146px;
+  grid-template-columns:260px minmax(28px, 1fr) 146px minmax(28px, 1fr) 146px minmax(28px, 1fr) 146px;
   align-items:center;
   gap:10px;
 }
@@ -18724,6 +18724,70 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   justify-content:center;
   flex-direction:column;
   border-radius:24px;
+}
+
+#bonusReferralLevelsTrack .bonus-referral-program-card{
+  width:260px;
+  height:146px;
+  aspect-ratio:16 / 9;
+  padding:0;
+  cursor:pointer;
+  overflow:hidden;
+}
+
+#bonusReferralLevelsTrack .bonus-referral-program-card.is-active{
+  box-shadow:0 0 0 2px rgba(255,106,0,.38), 0 14px 34px rgba(15,23,42,.12);
+}
+
+#bonusReferralLevelsTrack .bonus-referral-program-card .bonus-level-preview-card{
+  width:100%;
+  min-width:0;
+  max-width:none;
+  height:100%;
+  border-radius:inherit;
+  border:none;
+  grid-template-rows:minmax(0,1fr) 42px;
+  box-shadow:none;
+}
+
+#bonusReferralLevelsTrack .bonus-referral-program-card .bonus-level-preview-main{
+  padding:14px 14px 8px;
+  border-radius:24px;
+  box-shadow:none;
+  margin-bottom:-6px;
+}
+
+#bonusReferralLevelsTrack .bonus-referral-program-card .bonus-level-preview-title{
+  max-width:calc(100% - 52px);
+  font-size:13px;
+  white-space:normal;
+  overflow:visible;
+  text-overflow:clip;
+  overflow-wrap:anywhere;
+}
+
+#bonusReferralLevelsTrack .bonus-referral-program-card .bonus-level-preview-sub{
+  height:42px;
+  padding:0 14px;
+  border-radius:0;
+}
+
+#bonusReferralLevelsTrack .bonus-referral-program-card .bonus-level-preview-cashback-value,
+#bonusReferralLevelsTrack .bonus-referral-program-card .bonus-level-preview-category-value{
+  font-size:22px;
+  line-height:1;
+}
+
+#bonusReferralLevelsTrack .bonus-referral-program-card .bonus-level-preview-bonus-label,
+#bonusReferralLevelsTrack .bonus-referral-program-card .bonus-level-preview-bonus-value{
+  display:none;
+}
+
+#bonusReferralLevelsTrack .bonus-referral-program-card .bonus-level-preview-qr{
+  width:32px;
+  height:32px;
+  right:12px;
+  top:12px;
 }
 
 #bonusReferralLevelsTrack .bonus-referral-level-card.is-disabled{
@@ -18940,10 +19004,34 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
 }
 
 .bonus-referrals-right-placeholder{
-  align-items:stretch;
-  justify-content:flex-start;
-  text-align:left;
-  gap:22px;
+  align-items:center;
+  justify-content:center;
+  text-align:center;
+  gap:10px;
+}
+
+.bonus-referral-card-settings{
+  display:flex;
+  flex-direction:column;
+  gap:18px;
+}
+
+.bonus-referral-card-settings.hidden{
+  display:none;
+}
+
+.bonus-referral-card-settings .bonus-level-preview-wrap{
+  margin-bottom:0;
+}
+
+.bonus-referral-card-preview .bonus-level-preview-title{
+  color:inherit;
+}
+
+#bonusReferralCardTitleBackgroundPopover{
+  left:calc(100% + 8px);
+  right:auto;
+  top:0;
 }
 
 .bonus-referrals-right-section{
@@ -18996,6 +19084,75 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
 
 .bonus-referrals-invite-link:hover{
   text-decoration:underline;
+}
+
+.bonus-referral-level-settings-head,
+.bonus-referral-level-settings-row{
+  display:grid;
+  grid-template-columns:minmax(0,1fr) 64px 92px;
+  align-items:center;
+  gap:10px;
+}
+
+.bonus-referral-level-settings-head{
+  margin-bottom:8px;
+  color:var(--color-text-muted);
+  font-size:11px;
+  line-height:1.2;
+  font-weight:800;
+  text-transform:uppercase;
+}
+
+.bonus-referral-level-settings-row{
+  min-height:46px;
+  padding:8px 0;
+  border-top:1px solid var(--color-border);
+}
+
+.bonus-referral-level-settings-title{
+  min-width:0;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  color:var(--color-text);
+  font-size:13px;
+  font-weight:800;
+}
+
+.bonus-referral-level-settings-switch{
+  justify-self:center;
+  margin:0;
+}
+
+.bonus-referral-level-settings-field{
+  position:relative;
+  width:92px;
+}
+
+.bonus-referral-level-settings-input.control{
+  width:92px;
+  height:38px;
+  border-radius:999px;
+  text-align:center;
+  font-weight:900;
+  padding-right:28px;
+}
+
+.bonus-referral-level-settings-field .bonus-referral-percent-stepper{
+  right:8px;
+  height:28px;
+}
+
+.bonus-referral-level-settings-field .bonus-referral-percent-step{
+  width:18px;
+  height:13px;
+}
+
+.bonus-referral-level-settings-empty{
+  padding:10px 0;
+  color:var(--color-text-muted);
+  font-size:13px;
+  font-weight:700;
 }
 
 .bonus-history-pagination{
@@ -21078,6 +21235,34 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   justify-content:center;
   font-size:10px;
   font-weight:800;
+}
+
+.bonus-referral-invite-side{
+  display:flex;
+  align-items:center;
+  justify-content:flex-end;
+  min-width:0;
+  align-self:center;
+  margin-left:auto;
+  transform:translateY(3px);
+}
+
+.bonus-referral-invite-pill{
+  min-width:0;
+  max-width:112px;
+  height:26px;
+  padding:0 14px;
+  border:none;
+  border-radius:999px;
+  background:#ff6a00;
+  color:#ffffff;
+  font-size:12px;
+  line-height:1;
+  font-weight:900;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  box-shadow:0 8px 18px rgba(255,106,0,.18);
 }
 #de_progress_status_filter_wrap{
   width:100%;

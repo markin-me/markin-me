@@ -1763,8 +1763,13 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       const token = str(req.headers['x-customer-token']);
       const customer = token ? await getCustomerByToken(tenantId, token) : null;
       const [[settingsRow]] = await db.query(
-        `SELECT bonus_program_enabled, bonus_point_amount, bonus_ruble_amount, bonus_point_rate,
-                allow_redeem_and_accrue
+        `SELECT bonus_program_enabled, referral_program_enabled,
+                bonus_point_amount, bonus_ruble_amount, bonus_point_rate,
+                allow_redeem_and_accrue,
+                referral_card_main_color, referral_card_base_color,
+                referral_card_content_color, referral_card_button_color,
+                referral_card_qr_enabled, referral_card_title_background_enabled,
+                referral_card_title_background_color, referral_card_title_background_opacity
          FROM mkt_bonus_program_settings
          WHERE tenant_id=?
          LIMIT 1`,
@@ -1806,19 +1811,44 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       });
       const progressByLevel = await loadPublicBonusProgressByLevel(tenantId, customer, levelRows);
       const account = await loadPublicBonusAccount(tenantId, customer);
+      const [referralRows] = await db.query(
+        `SELECT id, code, title, invited_count, percent, sort_order, is_active
+         FROM mkt_referral_levels
+         WHERE tenant_id=? AND is_active=1
+         ORDER BY sort_order ASC, invited_count ASC, id ASC`,
+        [tenantId]
+      );
 
       return res.json({
         ok: true,
         data: {
           settings: {
             bonus_program_enabled: Number(settingsRow?.bonus_program_enabled || 0) === 1,
+            referral_program_enabled: Number(settingsRow?.referral_program_enabled || 0) === 1,
             bonus_point_amount: Number(settingsRow?.bonus_point_amount || 1),
             bonus_ruble_amount: Number(settingsRow?.bonus_ruble_amount || settingsRow?.bonus_point_rate || 1),
             bonus_point_rate: Number(settingsRow?.bonus_point_rate || 1),
             allow_redeem_and_accrue: Number(settingsRow?.allow_redeem_and_accrue || 0) === 1,
+            referral_card_main_color: settingsRow?.referral_card_main_color || '#f3f4f6',
+            referral_card_base_color: settingsRow?.referral_card_base_color || '#d1d5db',
+            referral_card_content_color: settingsRow?.referral_card_content_color || '#64748b',
+            referral_card_button_color: settingsRow?.referral_card_button_color || '#ff6a00',
+            referral_card_qr_enabled: settingsRow ? Number(settingsRow.referral_card_qr_enabled || 0) === 1 : true,
+            referral_card_title_background_enabled: settingsRow ? Number(settingsRow.referral_card_title_background_enabled || 0) === 1 : true,
+            referral_card_title_background_color: settingsRow?.referral_card_title_background_color || '#ffffff',
+            referral_card_title_background_opacity: Number(settingsRow?.referral_card_title_background_opacity || 90),
           },
           account,
           levels: (Array.isArray(levelRows) ? levelRows : []).map((row) => mapPublicBonusLevelRow(row, { rangesByLevel, progressByLevel })),
+          referral_levels: (Array.isArray(referralRows) ? referralRows : []).map((row) => ({
+            id: Number(row.id || 0),
+            code: row.code || '',
+            title: row.title || '',
+            invited_count: Number(row.invited_count || 0),
+            percent: Number(row.percent || 0),
+            sort_order: Number(row.sort_order || 0),
+            is_active: Number(row.is_active || 0) === 1,
+          })),
         },
       });
     } catch (e) {
