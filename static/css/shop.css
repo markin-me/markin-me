@@ -14939,6 +14939,10 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
   white-space: nowrap;
 }
 
+.shop-home-bonus-card .bonus-level-preview-title[role="button"]{
+  cursor: pointer;
+}
+
 :where(.shop-home-bonus-card, .shop-bonus-cards-sheet) .bonus-level-preview-title::after{
   content: '\203A';
   margin-left: 8px;

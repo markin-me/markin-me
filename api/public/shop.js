@@ -217,6 +217,32 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     };
   }
 
+  function mapPublicBonusAccountRow(row) {
+    if (!row) return null;
+    return {
+      id: Number(row.id || 0),
+      customer_id: Number(row.customer_id || 0),
+      level_id: row.level_id == null ? null : Number(row.level_id),
+      balance: Number(row.balance || 0),
+      status: row.status || 'active',
+      joined_at: row.joined_at || null,
+      level_assigned_at: row.level_assigned_at || null,
+    };
+  }
+
+  async function loadPublicBonusAccount(tenantId, customer) {
+    const customerId = Number(customer?.id || 0);
+    if (!(tenantId > 0) || !(customerId > 0)) return null;
+    const [[row]] = await db.query(
+      `SELECT id, customer_id, level_id, balance, status, joined_at, level_assigned_at
+       FROM mkt_customer_bonus_accounts
+       WHERE tenant_id=? AND customer_id=?
+       LIMIT 1`,
+      [tenantId, customerId]
+    );
+    return mapPublicBonusAccountRow(row);
+  }
+
   function toMysqlDateTime(value) {
     const date = value instanceof Date ? value : new Date(value);
     if (!Number.isFinite(date.getTime())) return null;
@@ -1779,6 +1805,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         });
       });
       const progressByLevel = await loadPublicBonusProgressByLevel(tenantId, customer, levelRows);
+      const account = await loadPublicBonusAccount(tenantId, customer);
 
       return res.json({
         ok: true,
@@ -1790,12 +1817,128 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
             bonus_point_rate: Number(settingsRow?.bonus_point_rate || 1),
             allow_redeem_and_accrue: Number(settingsRow?.allow_redeem_and_accrue || 0) === 1,
           },
+          account,
           levels: (Array.isArray(levelRows) ? levelRows : []).map((row) => mapPublicBonusLevelRow(row, { rangesByLevel, progressByLevel })),
         },
       });
     } catch (e) {
       console.error('GET /api/public/bonus/config error:', e);
       return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.post('/bonus/join', async (req, res) => {
+    let conn = null;
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const token = str(req.headers['x-customer-token']);
+      const customer = token ? await getCustomerByToken(tenantId, token) : null;
+      if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+      const customerId = Number(customer.id || 0);
+      if (!(customerId > 0)) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+
+      const [[settingsRow]] = await db.query(
+        `SELECT bonus_program_enabled
+         FROM mkt_bonus_program_settings
+         WHERE tenant_id=?
+         LIMIT 1`,
+        [tenantId]
+      );
+      if (Number(settingsRow?.bonus_program_enabled || 0) !== 1) {
+        return res.status(409).json({ ok: false, error: 'BONUS_PROGRAM_DISABLED' });
+      }
+
+      const existingPublicAccount = await loadPublicBonusAccount(tenantId, customer);
+      if (existingPublicAccount?.joined_at) {
+        return res.json({
+          ok: true,
+          data: {
+            account: existingPublicAccount,
+            already_joined: true,
+          },
+        });
+      }
+
+      const [[joinLevel]] = await db.query(
+        `SELECT id, title
+         FROM mkt_bonus_levels
+         WHERE tenant_id=? AND is_active=1 AND access_type='join'
+         ORDER BY sort_order ASC, id ASC
+         LIMIT 1`,
+        [tenantId]
+      );
+      const joinLevelId = Number(joinLevel?.id || 0);
+      if (!(joinLevelId > 0)) {
+        return res.status(409).json({ ok: false, error: 'BONUS_JOIN_LEVEL_NOT_FOUND' });
+      }
+
+      conn = await db.getConnection();
+      await conn.beginTransaction();
+
+      const [[existingAccount]] = await conn.query(
+        `SELECT id, customer_id, level_id, balance, status, joined_at, level_assigned_at
+         FROM mkt_customer_bonus_accounts
+         WHERE tenant_id=? AND customer_id=?
+         LIMIT 1
+         FOR UPDATE`,
+        [tenantId, customerId]
+      );
+
+      let accountId = Number(existingAccount?.id || 0);
+      const alreadyJoined = !!existingAccount?.joined_at;
+      if (accountId > 0) {
+        await conn.query(
+          `UPDATE mkt_customer_bonus_accounts
+           SET level_id = COALESCE(level_id, ?),
+               status = 'active',
+               joined_at = COALESCE(joined_at, NOW()),
+               level_assigned_at = COALESCE(level_assigned_at, NOW())
+           WHERE tenant_id=? AND customer_id=?`,
+          [joinLevelId, tenantId, customerId]
+        );
+      } else {
+        const [insertResult] = await conn.query(
+          `INSERT INTO mkt_customer_bonus_accounts
+             (tenant_id, customer_id, level_id, balance, total_accrued, total_redeemed, total_expired, status, joined_at, level_assigned_at)
+           VALUES (?, ?, ?, 0, 0, 0, 0, 'active', NOW(), NOW())`,
+          [tenantId, customerId, joinLevelId]
+        );
+        accountId = Number(insertResult.insertId || 0);
+      }
+
+      if (!alreadyJoined) {
+        await conn.query(
+          `INSERT INTO mkt_customer_bonus_transactions
+             (tenant_id, account_id, customer_id, level_id, type, amount, balance_after, reason, created_at)
+           VALUES (?, ?, ?, ?, 'join', 0, 0, ?, NOW())`,
+          [tenantId, accountId || null, customerId, joinLevelId, 'join']
+        );
+      }
+
+      const [[accountRow]] = await conn.query(
+        `SELECT id, customer_id, level_id, balance, status, joined_at, level_assigned_at
+         FROM mkt_customer_bonus_accounts
+         WHERE tenant_id=? AND customer_id=?
+         LIMIT 1`,
+        [tenantId, customerId]
+      );
+      await conn.commit();
+
+      return res.json({
+        ok: true,
+        data: {
+          account: mapPublicBonusAccountRow(accountRow),
+          already_joined: alreadyJoined,
+        },
+      });
+    } catch (e) {
+      if (conn) {
+        try { await conn.rollback(); } catch {}
+      }
+      console.error('POST /api/public/bonus/join error:', e);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    } finally {
+      if (conn) conn.release();
     }
   });
 

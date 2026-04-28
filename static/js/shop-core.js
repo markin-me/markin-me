@@ -651,6 +651,21 @@
     return "Участвовать";
   }
 
+  function isHomeBonusJoined(config = state.homeBonusConfig) {
+    const account = config && typeof config === "object" ? config.account : null;
+    return !!account?.joined_at && Number(account?.id || 0) > 0;
+  }
+
+  function getHomeBonusJoinActionText() {
+    return getCustomerToken() ? "Присоединиться" : "Войти и присоединиться";
+  }
+
+  function getBonusLevelPreviewBalance(level) {
+    const account = state.homeBonusConfig?.account || null;
+    if (!account || Number(account.level_id || 0) !== Number(level?.id || 0)) return 0;
+    return Number(account.balance || 0);
+  }
+
   function setBonusCardsSheetHeader(active) {
     const header = document.querySelector(".app-modal-header");
     if (!header) return;
@@ -835,7 +850,12 @@
     const index = Math.max(0, Math.min(levels.length - 1, Number(activeIndex || 0)));
     const level = levels[index];
     host.innerHTML = buildBonusCardsAdvantagesHtml(level, state.homeBonusConfig?.settings || {}) + buildBonusCardsConditionsProgressHtml(level);
-    if (elMobileBonusCardsActionBtn) elMobileBonusCardsActionBtn.textContent = getHomeBonusActionText(level?.access_type);
+    if (elMobileBonusCardsActionBtn) {
+      elMobileBonusCardsActionBtn.textContent = getHomeBonusJoinActionText();
+      elMobileBonusCardsActionBtn.onclick = () => {
+        void joinHomeBonusProgram();
+      };
+    }
     const infoBtn = host.querySelector("[data-bonus-range-info]");
     const popover = host.querySelector("[data-bonus-range-popover]");
     if (!infoBtn || !popover) return;
@@ -959,6 +979,130 @@
     setBonusCardsSheetHeader(true);
     syncMobileUiState("bonus-cards-sheet-open");
     void loadHomeBonusConfig().then(() => renderBonusCardsSheetContent(wrap));
+  }
+
+  function openHomeBonusLevelSheet(level) {
+    if (!window.AppModal || typeof window.AppModal.open !== "function") return;
+    const title = String(level?.title || "Уровень").trim() || "Уровень";
+    const wrap = document.createElement("div");
+    wrap.className = "shop-cart-sheet shop-bonus-cards-sheet shop-bonus-level-sheet";
+    sheetNavigationState.type = "bonus-level";
+    sheetNavigationState.screen = "main";
+    sheetNavigationState.data = { levelId: Number(level?.id || 0) || null };
+    window.AppModal.open({
+      title,
+      content: wrap,
+      showCancel: false,
+      showSave: false,
+      onClose: () => {
+        setBonusCardsSheetHeader(false);
+        if (window.AppModal?.body) {
+          window.AppModal.body.classList.remove(
+            "shop-cart-sheet-body",
+            "shop-cart-sheet-screen-benefits",
+            "shop-bonus-cards-sheet-body"
+          );
+        }
+        sheetNavigationState.type = null;
+        sheetNavigationState.screen = null;
+        sheetNavigationState.data = null;
+      },
+    });
+    if (window.AppModal?.body) {
+      window.AppModal.body.classList.add(
+        "shop-cart-sheet-body",
+        "shop-cart-sheet-screen-benefits",
+        "shop-bonus-cards-sheet-body"
+      );
+    }
+    setBonusCardsSheetHeader(true);
+    syncMobileUiState("bonus-level-sheet-open");
+  }
+
+  function bindHomeBonusLevelTitle(level) {
+    const titleEl = elHomeBonusCard?.querySelector?.(".bonus-level-preview-title");
+    if (!titleEl) return;
+    titleEl.setAttribute("role", "button");
+    titleEl.setAttribute("tabindex", "0");
+    titleEl.addEventListener("click", (event) => {
+      event.stopPropagation();
+      openHomeBonusLevelSheet(level);
+    });
+    titleEl.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      openHomeBonusLevelSheet(level);
+    });
+  }
+
+  function invalidateHomeBonusConfig() {
+    state.homeBonusConfig = null;
+    state._homeBonusToken = "";
+    state._homeBonusLoading = null;
+  }
+
+  async function refreshHomeBonusConfigUi() {
+    invalidateHomeBonusConfig();
+    const config = await loadHomeBonusConfig();
+    const sheet = document.querySelector(".shop-bonus-cards-sheet");
+    if (sheet) renderBonusCardsSheetContent(sheet);
+    syncMobileUiState("bonus-config-refresh");
+    return config;
+  }
+
+  async function joinHomeBonusProgram(options = {}) {
+    const joinOptions = options && typeof options === "object" ? options : {};
+    const token = getCustomerToken();
+    if (!token) {
+      if (typeof openProfileSheet === "function") {
+        const reopenBonusSheet = sheetNavigationState.type === "bonus-cards";
+        openProfileSheet({
+          onLoginSuccess: () => {
+            if (window.AppModal?.isOpen?.() && sheetNavigationState.type === "profile") {
+              window.AppModal.close("sheet");
+            }
+            void joinHomeBonusProgram({ reopenBonusSheet });
+          },
+        });
+      }
+      return;
+    }
+    if (joinHomeBonusProgram._busy) return;
+    joinHomeBonusProgram._busy = true;
+    if (elMobileBonusCardsActionBtn) elMobileBonusCardsActionBtn.disabled = true;
+    const homeActionBtn = elHomeBonusCard?.querySelector?.(".shop-home-bonus-card__action");
+    if (homeActionBtn) homeActionBtn.disabled = true;
+    try {
+      await apiJson("/api/public/bonus/join", { method: "POST", body: {} });
+      await refreshHomeBonusConfigUi();
+      if (joinOptions.reopenBonusSheet) {
+        openHomeBonusCardsSheet();
+      }
+      if (typeof showToast === "function") showToast("Вы присоединились к бонусной программе");
+    } catch (err) {
+      const msg = String(err?.message || "");
+      if (err?.httpStatus === 401 || msg === "UNAUTHORIZED") {
+        clearCustomer();
+        if (typeof openProfileSheet === "function") {
+          const reopenBonusSheet = sheetNavigationState.type === "bonus-cards";
+          openProfileSheet({
+            onLoginSuccess: () => {
+              if (window.AppModal?.isOpen?.() && sheetNavigationState.type === "profile") {
+                window.AppModal.close("sheet");
+              }
+              void joinHomeBonusProgram({ reopenBonusSheet });
+            },
+          });
+        }
+        return;
+      }
+      console.error("Failed to join bonus program:", err);
+      if (typeof showToast === "function") showToast("Не удалось присоединиться к бонусной программе");
+    } finally {
+      joinHomeBonusProgram._busy = false;
+      if (elMobileBonusCardsActionBtn) elMobileBonusCardsActionBtn.disabled = false;
+      if (homeActionBtn) homeActionBtn.disabled = false;
+    }
   }
 
   // -----------------------------
@@ -2032,7 +2176,11 @@
     const benefitsSourceScreen = String(options.sheetData?.benefitsSourceScreen || "").trim().toLowerCase();
     if (panelName === "benefit-gift-claim") return isCartSheetOpen ? "gift-claim-actions" : "nav";
     if (panelName === "benefit-apply") return isCartSheetOpen ? "benefit-apply-actions" : "nav";
-    if (panelName === "bonus-cards") return Boolean(options.sheetOpen) && String(options.sheetType || "") === "bonus-cards" ? "bonus-cards-actions" : "nav";
+    if (panelName === "bonus-cards") {
+      return Boolean(options.sheetOpen) && String(options.sheetType || "") === "bonus-cards" && !isHomeBonusJoined()
+        ? "bonus-cards-actions"
+        : "nav";
+    }
     if (panelName === "benefits") {
       if (!isCartSheetOpen) return "nav";
       if (benefitsSourceScreen === "nav") return "benefits-nav-actions";
@@ -2109,7 +2257,7 @@
     if ((mode === "cart-actions" || mode === "cart-empty-actions" || mode === "checkout-actions" || mode === "benefits-actions" || mode === "benefits-nav-actions" || mode === "gift-claim-actions" || mode === "benefit-apply-actions") && !(sheetOpen && sheetType === "cart")) {
       mode = "nav";
     }
-    if (mode === "bonus-cards-actions" && !(sheetOpen && sheetType === "bonus-cards")) {
+    if (mode === "bonus-cards-actions" && (!(sheetOpen && sheetType === "bonus-cards") || isHomeBonusJoined())) {
       mode = "nav";
     }
     if (benefitsInnerOverlayOpen && panelName === "benefits") {
@@ -6406,6 +6554,11 @@
     const data = config && typeof config === "object" ? config : null;
     if (!data?.settings?.bonus_program_enabled) return null;
     const levels = Array.isArray(data.levels) ? data.levels : [];
+    const accountLevelId = Number(data.account?.level_id || 0);
+    if (accountLevelId > 0) {
+      const currentLevel = levels.find((level) => Number(level?.id || 0) === accountLevelId);
+      if (currentLevel) return currentLevel;
+    }
     return levels.find((level) => level && String(level.title || "").trim()) || null;
   }
 
@@ -6415,6 +6568,16 @@
     if (!level) {
       elHomeBonusCard.classList.add("hidden");
       elHomeBonusCard.innerHTML = "";
+      return;
+    }
+
+    if (isHomeBonusJoined()) {
+      elHomeBonusCard.innerHTML = buildBonusLevelPreviewCardHtml(level)
+        .replace('class="bonus-level-preview-card"', 'class="bonus-level-preview-card shop-home-bonus-card__preview"');
+      const balanceEl = elHomeBonusCard.querySelector(".bonus-level-preview-bonus-value");
+      if (balanceEl) balanceEl.textContent = formatShopBonusMoney(getBonusLevelPreviewBalance(level));
+      bindHomeBonusLevelTitle(level);
+      elHomeBonusCard.classList.remove("hidden");
       return;
     }
 
@@ -6430,7 +6593,7 @@
       ? `color:${escapeHtml(titleColor)};background:transparent;padding:0;border-radius:0;${showTitle ? "" : "display:none;"}`
       : `color:${escapeHtml(titleColor)};background:#ffffff;padding:2px 10px;border-radius:999px;${showTitle ? "" : "display:none;"}`;
     const qrStyle = level.qr_enabled === false ? "display:none;" : "";
-    const actionText = getHomeBonusActionText(level.access_type);
+    const actionText = getHomeBonusJoinActionText();
 
     elHomeBonusCard.innerHTML = `
       <div class="bonus-level-preview-card shop-home-bonus-card__preview" style="background:${escapeHtml(baseColor)};">
@@ -6455,7 +6618,9 @@
       </div>
     `;
     const actionBtn = elHomeBonusCard.querySelector(".shop-home-bonus-card__action");
-    if (actionBtn) actionBtn.addEventListener("click", openHomeBonusCardsSheet);
+    if (actionBtn) actionBtn.addEventListener("click", () => {
+      void joinHomeBonusProgram();
+    });
     elHomeBonusCard.classList.remove("hidden");
   }
 
