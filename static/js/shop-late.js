@@ -5500,6 +5500,8 @@ optionGroups.forEach((group) => {
         type: "combo",
         combo_id: comboId,
         combo_title: combo.title || "Комбо",
+        category_id: combo.category_id != null ? Number(combo.category_id) : null,
+        combo_category_id: combo.category_id != null ? Number(combo.category_id) : null,
         qty: safeQty,
         selections,
         unit_price_override: unitPrice,
@@ -5613,6 +5615,8 @@ optionGroups.forEach((group) => {
           type: "combo",
           combo_id: comboId,
           combo_title: combo.title || "Комбо",
+          category_id: combo.category_id != null ? Number(combo.category_id) : null,
+          combo_category_id: combo.category_id != null ? Number(combo.category_id) : null,
           qty: safeQty,
           selections,
           unit_price_before_discount: roundPrice(draftSumOld),
@@ -6449,6 +6453,8 @@ optionGroups.forEach((group) => {
               type: "combo",
               combo_id: comboId,
               combo_title: combo.title || "Комбо",
+              category_id: combo.category_id != null ? Number(combo.category_id) : null,
+              combo_category_id: combo.category_id != null ? Number(combo.category_id) : null,
               qty: desiredQty,
               selections,
               unit_price_before_discount: roundPrice(draftSumOld),
@@ -6496,6 +6502,8 @@ optionGroups.forEach((group) => {
               type: "combo",
               combo_id: comboId,
               combo_title: combo.title || "Комбо",
+              category_id: combo.category_id != null ? Number(combo.category_id) : null,
+              combo_category_id: combo.category_id != null ? Number(combo.category_id) : null,
               qty: desiredQty,
               selections,
               unit_price_before_discount: roundPrice(sumOld),
@@ -7468,6 +7476,8 @@ optionGroups.forEach((group) => {
             type: "combo",
             combo_id: comboId,
             combo_title: combo.title || "Комбо",
+            category_id: combo.category_id != null ? Number(combo.category_id) : null,
+            combo_category_id: combo.category_id != null ? Number(combo.category_id) : null,
             qty: desiredQty,
             selections,
             unit_price_before_discount: roundPrice(sumOld),
@@ -7489,6 +7499,8 @@ optionGroups.forEach((group) => {
             type: "combo",
             combo_id: comboId,
             combo_title: combo.title || "Комбо",
+            category_id: combo.category_id != null ? Number(combo.category_id) : null,
+            combo_category_id: combo.category_id != null ? Number(combo.category_id) : null,
             qty: desiredQty,
             selections,
             unit_price_before_discount: roundPrice(sumOld),
@@ -13615,6 +13627,121 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     });
   }
 
+  function getCartBonusActiveLevel(config = null) {
+    const data = config && typeof config === "object" ? config : state.homeBonusConfig;
+    const account = data?.account && typeof data.account === "object" ? data.account : null;
+    if (!account?.joined_at || !(Number(account?.id || 0) > 0)) return null;
+    const levelId = Number(account?.level_id || 0);
+    if (!(levelId > 0)) return null;
+    const levels = Array.isArray(data?.levels) ? data.levels : [];
+    return levels.find((level) => Number(level?.id || 0) === levelId) || null;
+  }
+
+  function getCartBonusFavoriteCategoryIds(levelId) {
+    const key = String(Number(levelId || 0) || 0);
+    const cache = state.homeBonusFavoriteCategoriesByLevel instanceof Map
+      ? state.homeBonusFavoriteCategoriesByLevel.get(key)
+      : null;
+    return Array.isArray(cache?.selected_ids)
+      ? new Set(cache.selected_ids.map((id) => Number(id || 0)).filter((id) => id > 0))
+      : new Set();
+  }
+
+  function getCartBonusProductCategoryIds(product) {
+    const ids = new Set();
+    if (Array.isArray(product?.category_ids)) {
+      product.category_ids.forEach((id) => {
+        const numericId = Number(id || 0);
+        if (numericId > 0) ids.add(numericId);
+      });
+    }
+    [product?.category_id, product?._category_id].forEach((id) => {
+      const numericId = Number(id || 0);
+      if (numericId > 0) ids.add(numericId);
+    });
+    return ids;
+  }
+
+  function cartBonusItemMatchesFavoriteCategory(item, selectedCategoryIds) {
+    if (!(selectedCategoryIds instanceof Set) || !selectedCategoryIds.size) return false;
+    if (str(item?.type || "").trim() === "combo") {
+      const comboCategoryIds = [
+        item?.category_id,
+        item?.combo_category_id,
+        item?._category_id,
+      ].map((id) => Number(id || 0)).filter((id) => id > 0);
+      if (!comboCategoryIds.length && state.combosByCategory instanceof Map) {
+        const comboId = Number(item?.combo_id || 0);
+        state.combosByCategory.forEach((combos, categoryId) => {
+          if (!(comboId > 0) || !Array.isArray(combos)) return;
+          if (combos.some((combo) => Number(combo?.id || 0) === comboId)) {
+            const numericCategoryId = Number(categoryId || 0);
+            if (numericCategoryId > 0) comboCategoryIds.push(numericCategoryId);
+          }
+        });
+      }
+      return comboCategoryIds.some((id) => selectedCategoryIds.has(id));
+    }
+    const productCategoryIds = getCartBonusProductCategoryIds(item?.product || {});
+    if (!productCategoryIds.size) return false;
+    return Array.from(productCategoryIds).some((id) => selectedCategoryIds.has(id));
+  }
+
+  function calculateCartBonusPreview(cartItems, lineStates, itemsTotal, level) {
+    const safeItems = Array.isArray(cartItems) ? cartItems : [];
+    const safeLineStates = Array.isArray(lineStates) ? lineStates : [];
+    const lineTotalsByKey = new Map(
+      safeLineStates
+        .filter((entry) => str(entry?.key || "").trim())
+        .map((entry) => [str(entry.key).trim(), roundPrice(Math.max(0, Number(entry?.currentTotal || 0)))])
+    );
+    const cashbackPercent = Math.max(0, Number(level?.cashback_percent || 0));
+    const favoritePercent = Math.max(0, Number(level?.favorite_categories_bonus_percent || 0));
+    const selectedCategoryIds = favoritePercent > 0
+      ? getCartBonusFavoriteCategoryIds(level?.id)
+      : new Set();
+    let rawBonus = 0;
+
+    safeItems.forEach((item) => {
+      const key = str(item?.key || "").trim();
+      if (!key) return;
+      const lineTotal = roundPrice(Math.max(0, Number(lineTotalsByKey.get(key) || 0)));
+      if (!(lineTotal > 0)) return;
+      const percent = cartBonusItemMatchesFavoriteCategory(item, selectedCategoryIds)
+        ? favoritePercent
+        : cashbackPercent;
+      if (!(percent > 0)) return;
+      rawBonus += lineTotal * percent / 100;
+    });
+
+    return Math.floor(Math.max(0, rawBonus));
+  }
+
+  async function ensureCartBonusPreviewLevel() {
+    const token = typeof getCustomerToken === "function"
+      ? str(getCustomerToken() || "").trim()
+      : "";
+    if (!token) return null;
+    let config = state.homeBonusConfig;
+    try {
+      if (typeof loadHomeBonusConfig === "function") {
+        config = await loadHomeBonusConfig();
+      }
+    } catch (error) {
+      console.warn("Failed to load cart bonus config:", error);
+    }
+    const level = getCartBonusActiveLevel(config);
+    if (!level) return null;
+    if (Number(level?.favorite_categories_bonus_percent || 0) > 0 && typeof loadHomeBonusFavoriteCategories === "function") {
+      try {
+        await loadHomeBonusFavoriteCategories(level);
+      } catch (error) {
+        console.warn("Failed to load cart bonus favorite categories:", error);
+      }
+    }
+    return level;
+  }
+
   function setCartPricingSummaryLoading(sectionEl) {
     if (!sectionEl || !sectionEl.isConnected) return;
     const content = sectionEl.querySelector(".shop-cart-pricing-summary-content");
@@ -13799,6 +13926,16 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       if (detailItems.length > 0 || summaryState.discountDetailNote) {
         summary.appendChild(details);
       }
+    }
+
+    if (Number(summaryState.bonusAccrualAmount || 0) > 0) {
+      summary.appendChild(
+        createCartPricingSummaryRow(
+          "Бонусы",
+          `+${money(summaryState.bonusAccrualAmount || 0)}`,
+          "shop-checkout-bonus-row"
+        )
+      );
     }
 
     const divider = document.createElement("div");
@@ -14622,6 +14759,16 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       }
     }
 
+    if (Number(summaryState.bonusAccrualAmount || 0) > 0) {
+      summary.appendChild(
+        createCartPricingSummaryRow(
+          "Бонусы",
+          `+${money(summaryState.bonusAccrualAmount || 0)}`,
+          "shop-checkout-bonus-row"
+        )
+      );
+    }
+
     const divider = document.createElement("div");
     divider.className = "shop-order-summary-divider";
     summary.appendChild(divider);
@@ -14705,6 +14852,15 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     const paymentState = resolveCartPricingPaymentState(draft);
     const total = roundPrice(itemsTotal + (deliveryState.isDelivery ? Number(deliveryState.cost || 0) : 0));
     const changeState = resolveCartPricingChangeState(draft, total, paymentState.code);
+    const lineStates = buildCartPricingLineStates(
+      cartItems,
+      itemsTotal,
+      previewBundle.localPreviewData || previewBundle.previewData || null
+    );
+    const bonusLevel = getCartBonusActiveLevel();
+    const bonusAccrualAmount = bonusLevel
+      ? calculateCartBonusPreview(cartItems, lineStates, itemsTotal, bonusLevel)
+      : 0;
 
     return {
       visible: true,
@@ -14724,11 +14880,8 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       defaultDeliverySettings,
       discountDetailItems: discountDetails.items,
       discountDetailNote: discountDetails.note,
-      lineStates: buildCartPricingLineStates(
-        cartItems,
-        itemsTotal,
-        previewBundle.localPreviewData || previewBundle.previewData || null
-      ),
+      bonusAccrualAmount,
+      lineStates,
     };
   }
 
@@ -14812,6 +14965,15 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     const summaryState = buildCartPricingSnapshot();
     if (!summaryState || summaryState.visible === false) {
       return summaryState;
+    }
+    const bonusLevel = await ensureCartBonusPreviewLevel();
+    if (bonusLevel) {
+      summaryState.bonusAccrualAmount = calculateCartBonusPreview(
+        cartItems,
+        summaryState.lineStates,
+        summaryState.itemsTotal,
+        bonusLevel
+      );
     }
     if (str(methodCode || "").trim() !== "delivery") {
       return summaryState;

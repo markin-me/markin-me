@@ -10770,6 +10770,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const gridPhotosFinal = gridPhotos.slice(0, 4);
       const entry = {
         id: combo.id,
+        category_id: Number(categoryId || 0) || null,
         title: combo.title || '',
         description: combo.description || '',
         discount_percent: discountPercent,

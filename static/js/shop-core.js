@@ -4174,6 +4174,8 @@
           key: item.key,
           type: "combo",
           combo_id: item.combo_id,
+          category_id: item.category_id != null ? Number(item.category_id) : null,
+          combo_category_id: item.combo_category_id != null ? Number(item.combo_category_id) : null,
           combo_title: item.combo_title || "Комбо",
           qty,
           selections: Array.isArray(item.selections) ? item.selections : [],

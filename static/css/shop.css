@@ -22427,6 +22427,11 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
   text-align: right;
 }
 
+.shop-checkout-bonus-row .shop-order-summary-value {
+  font-weight: 600;
+  color: var(--color-primary);
+}
+
 .shop-order-summary-discount-label-wrap {
   display: inline-flex;
   align-items: center;
