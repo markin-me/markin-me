@@ -1108,17 +1108,357 @@
     const nextLevel = getHomeBonusNextLevel(level);
     if (!nextLevel) return "";
     const progressPercent = Math.round(getHomeBonusLevelProgressRatio(nextLevel) * 100);
-    const customerPhoto = String(getCustomerCache()?.photo || "").trim();
+    const customer = getCustomerCache() || {};
+    const customerPhoto = String(customer?.photo || "").trim();
+    const customerName = String(customer?.name || customer?.full_name || customer?.phone || "Профиль").trim() || "Профиль";
     return `
       <button class="shop-bonus-level-progress-card" type="button" data-open-bonus-cards-current>
         <div class="shop-bonus-level-progress-avatar" aria-hidden="true">
           ${customerPhoto ? `<img src="${escapeHtml(customerPhoto)}" alt="" loading="lazy" />` : '<i class="fas fa-user"></i>'}
         </div>
-        <div class="shop-bonus-level-progress-track" aria-label="Прогресс до следующего уровня">
-          <div class="shop-bonus-level-progress-fill" style="width:${escapeHtml(String(progressPercent))}%;"></div>
+        <div class="shop-bonus-level-progress-main">
+          <div class="shop-bonus-level-progress-name">${escapeHtml(customerName)}</div>
+          <div class="shop-bonus-level-progress-track" aria-label="Прогресс до следующего уровня">
+            <div class="shop-bonus-level-progress-fill" style="width:${escapeHtml(String(progressPercent))}%;"></div>
+          </div>
         </div>
       </button>
     `;
+  }
+
+  function formatShopBonusDateTime(value) {
+    const date = value instanceof Date ? value : new Date(value);
+    if (!Number.isFinite(date.getTime())) return "";
+    return new Intl.DateTimeFormat("ru-RU", {
+      day: "2-digit",
+      month: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(date);
+  }
+
+  function getBonusTransactionTypeMeta(type) {
+    const key = String(type || "").trim();
+    if (key === "accrual") return { label: "Начисление", sign: "+", tone: "plus" };
+    if (key === "referral_accrual") return { label: "Рефералы", sign: "+", tone: "plus" };
+    if (key === "redeem") return { label: "Списание", sign: "-", tone: "minus" };
+    if (key === "expire") return { label: "Сгорание", sign: "-", tone: "minus" };
+    if (key === "refund") return { label: "Возврат", sign: "+", tone: "plus" };
+    if (key === "level_up") return { label: "Новый уровень", sign: "", tone: "neutral" };
+    if (key === "join") return { label: "Вступление", sign: "", tone: "neutral" };
+    return { label: "Корректировка", sign: "", tone: "neutral" };
+  }
+
+  function buildBonusTransactionsHtml(items, filter = "all") {
+    const rows = Array.isArray(items) ? items : [];
+    const filtered = filter === "all" ? rows : rows.filter((item) => String(item?.type || "") === filter);
+    if (!filtered.length) {
+      return '<div class="shop-bonus-sheet-empty">Движений пока нет</div>';
+    }
+    return `
+      <div class="shop-bonus-accruals-list">
+        ${filtered.map((item) => {
+          const meta = getBonusTransactionTypeMeta(item?.type);
+          const amount = Math.abs(Number(item?.amount || 0));
+          const reason = String(item?.reason || item?.level_title || meta.label).trim();
+          const dateText = formatShopBonusDateTime(item?.created_at);
+          const amountText = amount > 0 ? `${meta.sign}${formatShopBonusMoney(amount)}` : "0 ₽";
+          return `
+            <div class="shop-bonus-accrual-row">
+              <div class="shop-bonus-accrual-main">
+                <div class="shop-bonus-accrual-title">${escapeHtml(meta.label)}</div>
+                <div class="shop-bonus-accrual-subtitle">${escapeHtml(reason)}</div>
+              </div>
+              <div class="shop-bonus-accrual-side">
+                <div class="shop-bonus-accrual-amount is-${escapeHtml(meta.tone)}">${escapeHtml(amountText)}</div>
+                <div class="shop-bonus-accrual-date">${escapeHtml(dateText)}</div>
+              </div>
+            </div>
+          `;
+        }).join("")}
+      </div>
+    `;
+  }
+
+  function shouldReturnToBonusLevelOnClose(event) {
+    return String(event?.reason || "").trim() === "close";
+  }
+
+  function returnToBonusLevelSheet(level) {
+    if (!level) return;
+    setTimeout(() => {
+      openHomeBonusLevelSheet(level);
+    }, 0);
+  }
+
+  async function openHomeBonusAccrualsSheet(options = {}) {
+    if (!window.AppModal || typeof window.AppModal.open !== "function") return;
+    const sourceLevel = options && typeof options === "object" ? options.sourceLevel : null;
+    const wrap = document.createElement("div");
+    wrap.className = "shop-cart-sheet shop-bonus-cards-sheet shop-bonus-accruals-sheet";
+    const filters = [
+      ["all", "Все"],
+      ["accrual", "Начисления"],
+      ["redeem", "Списания"],
+      ["expire", "Сгорания"],
+      ["referral_accrual", "Рефералы"],
+    ];
+    let activeFilter = "all";
+    let transactions = [];
+    const render = (status = "") => {
+      wrap.innerHTML = `
+        <div class="shop-bonus-sheet-chips">
+          ${filters.map(([value, label]) => `
+            <button class="shop-bonus-sheet-chip${value === activeFilter ? " is-active" : ""}" type="button" data-bonus-transaction-filter="${escapeHtml(value)}">${escapeHtml(label)}</button>
+          `).join("")}
+        </div>
+        <div class="shop-bonus-accruals-host">
+          ${status || buildBonusTransactionsHtml(transactions, activeFilter)}
+        </div>
+      `;
+      wrap.querySelectorAll("[data-bonus-transaction-filter]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          activeFilter = String(btn.dataset.bonusTransactionFilter || "all");
+          render();
+        });
+      });
+    };
+    render('<div class="shop-bonus-sheet-empty">Загружаем...</div>');
+    sheetNavigationState.type = "bonus-accruals";
+    sheetNavigationState.screen = "main";
+    sheetNavigationState.data = null;
+    window.AppModal.open({
+      title: "Начисления",
+      content: wrap,
+      showCancel: false,
+      showSave: false,
+      onClose: (event) => {
+        setBonusCardsSheetHeader(false);
+        if (window.AppModal?.body) {
+          window.AppModal.body.classList.remove(
+            "shop-cart-sheet-body",
+            "shop-cart-sheet-screen-benefits",
+            "shop-bonus-cards-sheet-body"
+          );
+        }
+        sheetNavigationState.type = null;
+        sheetNavigationState.screen = null;
+        sheetNavigationState.data = null;
+        if (shouldReturnToBonusLevelOnClose(event)) {
+          returnToBonusLevelSheet(sourceLevel);
+        }
+      },
+    });
+    if (window.AppModal?.body) {
+      window.AppModal.body.classList.add(
+        "shop-cart-sheet-body",
+        "shop-cart-sheet-screen-benefits",
+        "shop-bonus-cards-sheet-body"
+      );
+    }
+    setBonusCardsSheetHeader(true);
+    syncMobileUiState("bonus-accruals-sheet-open");
+    if (!getCustomerToken()) {
+      render('<div class="shop-bonus-sheet-empty">Войдите, чтобы увидеть начисления</div>');
+      return;
+    }
+    try {
+      const json = await apiJson("/api/public/bonus/transactions");
+      transactions = Array.isArray(json?.data) ? json.data : [];
+      render();
+    } catch (err) {
+      console.error("load bonus transactions error:", err);
+      render('<div class="shop-bonus-sheet-empty">Не удалось загрузить начисления</div>');
+    }
+  }
+
+  function getHomeBonusFavoriteCategoriesCache(levelId) {
+    const key = String(Number(levelId || 0) || 0);
+    return state.homeBonusFavoriteCategoriesByLevel.get(key) || null;
+  }
+
+  async function loadHomeBonusFavoriteCategories(level, options = {}) {
+    const levelId = Number(level?.id || 0);
+    if (!(levelId > 0)) return null;
+    const key = String(levelId);
+    if (!options.force) {
+      const cached = state.homeBonusFavoriteCategoriesByLevel.get(key);
+      if (cached) return cached;
+      const pending = state._homeBonusFavoriteCategoriesLoading.get(key);
+      if (pending) return pending;
+    }
+    const pending = apiJson(`/api/public/bonus/favorite-categories?level_id=${encodeURIComponent(String(levelId))}`)
+      .then((json) => {
+        const data = json?.data && typeof json.data === "object" ? json.data : null;
+        state.homeBonusFavoriteCategoriesByLevel.set(key, data);
+        return data;
+      })
+      .finally(() => {
+        state._homeBonusFavoriteCategoriesLoading.delete(key);
+      });
+    state._homeBonusFavoriteCategoriesLoading.set(key, pending);
+    return pending;
+  }
+
+  function buildBonusCategoryIconHtml(category) {
+    const icon = String(category?.icon || "").trim();
+    const title = String(category?.title || "").trim();
+    if (icon) {
+      return `<span class="shop-bonus-category-icon" title="${escapeHtml(title)}"><img src="${escapeHtml(icon)}" alt="" loading="lazy" /></span>`;
+    }
+    return `<span class="shop-bonus-category-icon" title="${escapeHtml(title)}"><i class="fas fa-tag" aria-hidden="true"></i></span>`;
+  }
+
+  function buildHomeBonusFavoriteCategoriesSlotHtml(level) {
+    const levelId = Number(level?.id || 0);
+    const cache = getHomeBonusFavoriteCategoriesCache(levelId);
+    const selectedIds = Array.isArray(cache?.selected_ids) ? cache.selected_ids.map((id) => Number(id || 0)) : [];
+    const categories = Array.isArray(cache?.categories) ? cache.categories : [];
+    const selected = selectedIds
+      .map((id) => categories.find((item) => Number(item?.id || 0) === id))
+      .filter(Boolean);
+    if (selected.length) {
+      const visible = selected.slice(0, 3);
+      const hiddenCount = Math.max(0, selected.length - visible.length);
+      return `
+        <button class="shop-bonus-level-category-icons" type="button" data-open-bonus-favorite-categories>
+          ${visible.map(buildBonusCategoryIconHtml).join("")}
+          ${hiddenCount > 0 ? `<span class="shop-bonus-category-more">+${escapeHtml(String(hiddenCount))}</span>` : ""}
+        </button>
+      `;
+    }
+    return '<button class="shop-bonus-level-metric-action" type="button" data-open-bonus-favorite-categories>Выбрать</button>';
+  }
+
+  function updateHomeBonusFavoriteCategoriesSlot(wrap, level) {
+    const slot = wrap?.querySelector("[data-bonus-favorite-categories-slot]");
+    if (!slot) return;
+    slot.innerHTML = buildHomeBonusFavoriteCategoriesSlotHtml(level);
+    slot.querySelector("[data-open-bonus-favorite-categories]")?.addEventListener("click", () => {
+      void openHomeBonusFavoriteCategoriesSheet(level);
+    });
+  }
+
+  async function openHomeBonusFavoriteCategoriesSheet(level) {
+    if (!window.AppModal || typeof window.AppModal.open !== "function") return;
+    const levelId = Number(level?.id || 0);
+    if (!(levelId > 0)) return;
+    const wrap = document.createElement("div");
+    wrap.className = "shop-cart-sheet shop-bonus-cards-sheet shop-bonus-favorite-categories-sheet";
+    const renderLoading = () => {
+      wrap.innerHTML = '<div class="shop-bonus-sheet-empty">Загружаем...</div>';
+    };
+    const render = (data) => {
+      const categories = Array.isArray(data?.categories) ? data.categories : [];
+      const limit = Math.max(0, Math.floor(Number(data?.limit || level?.favorite_categories_limit || 0)));
+      const selectedIds = new Set((Array.isArray(data?.selected_ids) ? data.selected_ids : []).map((id) => Number(id || 0)).filter((id) => id > 0));
+      const locked = selectedIds.size > 0 || data?.locked === true;
+      wrap.innerHTML = `
+        <div class="shop-bonus-favorite-categories-note">${locked ? "Выбранные категории" : `Можно выбрать: ${escapeHtml(String(limit))}`}</div>
+        <div class="shop-bonus-favorite-categories-list">
+          ${categories.length ? categories.map((category) => {
+            const categoryId = Number(category?.id || 0);
+            const checked = selectedIds.has(categoryId);
+            return `
+              <button class="shop-bonus-favorite-category${checked ? " is-selected" : ""}${locked ? " is-locked" : ""}" type="button" data-bonus-favorite-category-id="${escapeHtml(String(categoryId))}" ${locked ? "disabled" : ""}>
+                ${buildBonusCategoryIconHtml(category)}
+                <span>${escapeHtml(category?.title || "")}</span>
+              </button>
+            `;
+          }).join("") : '<div class="shop-bonus-sheet-empty">Категории не настроены</div>'}
+        </div>
+        ${locked || !categories.length || !(limit > 0) ? "" : `<button class="shop-bonus-favorite-categories-save" type="button" data-save-bonus-favorite-categories>${getCustomerToken() ? "Сохранить" : "Войти и выбрать"}</button>`}
+      `;
+      if (locked || !categories.length || !(limit > 0)) return;
+      const picked = new Set();
+      const syncPicked = () => {
+        wrap.querySelectorAll("[data-bonus-favorite-category-id]").forEach((btn) => {
+          const categoryId = Number(btn.dataset.bonusFavoriteCategoryId || 0);
+          btn.classList.toggle("is-selected", picked.has(categoryId));
+        });
+        const saveBtn = wrap.querySelector("[data-save-bonus-favorite-categories]");
+        if (saveBtn) saveBtn.disabled = picked.size !== limit;
+      };
+      wrap.querySelectorAll("[data-bonus-favorite-category-id]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const categoryId = Number(btn.dataset.bonusFavoriteCategoryId || 0);
+          if (!(categoryId > 0)) return;
+          if (picked.has(categoryId)) picked.delete(categoryId);
+          else if (picked.size < limit) picked.add(categoryId);
+          syncPicked();
+        });
+      });
+      wrap.querySelector("[data-save-bonus-favorite-categories]")?.addEventListener("click", async () => {
+        if (!getCustomerToken()) {
+          if (typeof openProfileSheet === "function") {
+            openProfileSheet({
+              onLoginSuccess: () => {
+                void openHomeBonusFavoriteCategoriesSheet(level);
+              },
+            });
+          }
+          return;
+        }
+        try {
+          const json = await apiJson("/api/public/bonus/favorite-categories", {
+            method: "POST",
+            body: { level_id: levelId, category_ids: Array.from(picked) },
+          });
+          const nextData = {
+            ...data,
+            selected_ids: Array.isArray(json?.data?.selected_ids) ? json.data.selected_ids : Array.from(picked),
+            locked: true,
+          };
+          state.homeBonusFavoriteCategoriesByLevel.set(String(levelId), nextData);
+          openHomeBonusLevelSheet(level);
+        } catch (err) {
+          console.error("save bonus favorite categories error:", err);
+        }
+      });
+      syncPicked();
+    };
+    renderLoading();
+    sheetNavigationState.type = "bonus-favorite-categories";
+    sheetNavigationState.screen = "main";
+    sheetNavigationState.data = { levelId };
+    window.AppModal.open({
+      title: "Выбрать категории",
+      content: wrap,
+      showCancel: false,
+      showSave: false,
+      onClose: (event) => {
+        setBonusCardsSheetHeader(false);
+        if (window.AppModal?.body) {
+          window.AppModal.body.classList.remove(
+            "shop-cart-sheet-body",
+            "shop-cart-sheet-screen-benefits",
+            "shop-bonus-cards-sheet-body"
+          );
+        }
+        sheetNavigationState.type = null;
+        sheetNavigationState.screen = null;
+        sheetNavigationState.data = null;
+        if (shouldReturnToBonusLevelOnClose(event)) {
+          returnToBonusLevelSheet(level);
+        }
+      },
+    });
+    if (window.AppModal?.body) {
+      window.AppModal.body.classList.add(
+        "shop-cart-sheet-body",
+        "shop-cart-sheet-screen-benefits",
+        "shop-bonus-cards-sheet-body"
+      );
+    }
+    setBonusCardsSheetHeader(true);
+    syncMobileUiState("bonus-favorite-categories-sheet-open");
+    try {
+      const data = await loadHomeBonusFavoriteCategories(level, { force: true });
+      render(data || {});
+    } catch (err) {
+      console.error("load bonus favorite categories error:", err);
+      wrap.innerHTML = '<div class="shop-bonus-sheet-empty">Не удалось загрузить категории</div>';
+    }
   }
 
   function openHomeBonusLevelSheet(level) {
@@ -1150,7 +1490,9 @@
         </div>
         <div class="shop-bonus-level-metric-card">
           <div class="shop-bonus-level-metric-label">${escapeHtml(favoriteCategoriesText)}</div>
-          <button class="shop-bonus-level-metric-action" type="button">Выбрать</button>
+          <div data-bonus-favorite-categories-slot>
+            ${buildHomeBonusFavoriteCategoriesSlotHtml(level)}
+          </div>
         </div>
       </div>
     `);
@@ -1188,6 +1530,15 @@
     wrap.querySelector("[data-open-bonus-cards-current]")?.addEventListener("click", () => {
       const accountLevelId = Number(state.homeBonusConfig?.account?.level_id || 0);
       openHomeBonusCardsSheet({ initialLevelId: accountLevelId || Number(level?.id || 0) || 0 });
+    });
+    wrap.querySelector(".shop-bonus-level-accruals-link")?.addEventListener("click", () => {
+      void openHomeBonusAccrualsSheet({ sourceLevel: level });
+    });
+    updateHomeBonusFavoriteCategoriesSlot(wrap, level);
+    void loadHomeBonusFavoriteCategories(level).then(() => {
+      updateHomeBonusFavoriteCategoriesSlot(wrap, level);
+    }).catch((err) => {
+      console.error("load bonus favorite categories error:", err);
     });
   }
 
@@ -1652,6 +2003,8 @@
     homeBonusConfig: null,
     _homeBonusToken: "",
     _homeBonusLoading: null,
+    homeBonusFavoriteCategoriesByLevel: new Map(),
+    _homeBonusFavoriteCategoriesLoading: new Map(),
 
     // addresses (cart header chip)
     addresses: [],

@@ -1972,6 +1972,208 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     }
   });
 
+  router.get('/bonus/transactions', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const token = str(req.headers['x-customer-token']);
+      const customer = token ? await getCustomerByToken(tenantId, token) : null;
+      const customerId = Number(customer?.id || 0);
+      if (!(customerId > 0)) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+
+      const type = str(req.query.type).trim();
+      const allowedTypes = new Set(['join', 'level_up', 'accrual', 'redeem', 'expire', 'adjustment', 'referral_accrual', 'refund']);
+      const typeFilter = allowedTypes.has(type) ? type : '';
+      const params = [tenantId, customerId];
+      let whereType = '';
+      if (typeFilter) {
+        whereType = ' AND t.type = ?';
+        params.push(typeFilter);
+      }
+      const [rows] = await db.query(
+        `SELECT t.id, t.level_id, t.order_id, t.referral_id, t.reward_id,
+                t.type, t.amount, t.balance_after, t.reason, t.created_at,
+                bl.title AS level_title
+         FROM mkt_customer_bonus_transactions t
+         LEFT JOIN mkt_bonus_levels bl
+           ON bl.tenant_id = t.tenant_id
+          AND bl.id = t.level_id
+         WHERE t.tenant_id=? AND t.customer_id=?${whereType}
+         ORDER BY t.created_at DESC, t.id DESC
+         LIMIT 100`,
+        params
+      );
+      return res.json({
+        ok: true,
+        data: (Array.isArray(rows) ? rows : []).map((row) => ({
+          id: Number(row.id || 0),
+          level_id: row.level_id == null ? null : Number(row.level_id),
+          level_title: row.level_title || '',
+          order_id: row.order_id == null ? null : Number(row.order_id),
+          referral_id: row.referral_id == null ? null : Number(row.referral_id),
+          reward_id: row.reward_id == null ? null : Number(row.reward_id),
+          type: row.type || '',
+          amount: Number(row.amount || 0),
+          balance_after: row.balance_after == null ? null : Number(row.balance_after),
+          reason: row.reason || '',
+          created_at: row.created_at || null,
+        })),
+      });
+    } catch (e) {
+      console.error('GET /api/public/bonus/transactions error:', e);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.get('/bonus/favorite-categories', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const levelId = Number(req.query.level_id || req.query.levelId || 0);
+      if (!(levelId > 0)) return res.status(400).json({ ok: false, error: 'INVALID_LEVEL' });
+      const token = str(req.headers['x-customer-token']);
+      const customer = token ? await getCustomerByToken(tenantId, token) : null;
+      const customerId = Number(customer?.id || 0);
+
+      const [[levelRow]] = await db.query(
+        `SELECT id, favorite_categories_limit, favorite_categories_bonus_percent
+         FROM mkt_bonus_levels
+         WHERE tenant_id=? AND id=? AND is_active=1
+         LIMIT 1`,
+        [tenantId, levelId]
+      );
+      if (!levelRow) return res.status(404).json({ ok: false, error: 'LEVEL_NOT_FOUND' });
+
+      const [categoryRows] = await db.query(
+        `SELECT pc.id, pc.title, pc.icon, pc.sort_order
+         FROM mkt_bonus_level_favorite_categories lfc
+         JOIN prod_categories pc
+           ON pc.tenant_id = lfc.tenant_id
+          AND pc.id = lfc.category_id
+         WHERE lfc.tenant_id=? AND lfc.level_id=? AND pc.is_active=1
+         ORDER BY pc.sort_order ASC, pc.id ASC`,
+        [tenantId, levelId]
+      );
+      let selectedRows = [];
+      if (customerId > 0) {
+        const [rows] = await db.query(
+          `SELECT category_id
+           FROM mkt_customer_bonus_favorite_categories
+           WHERE tenant_id=? AND customer_id=? AND level_id=?
+           ORDER BY id ASC`,
+          [tenantId, customerId, levelId]
+        );
+        selectedRows = Array.isArray(rows) ? rows : [];
+      }
+      const selectedIds = selectedRows.map((row) => Number(row.category_id || 0)).filter((id) => id > 0);
+      return res.json({
+        ok: true,
+        data: {
+          level_id: levelId,
+          limit: Math.max(0, Math.floor(Number(levelRow.favorite_categories_limit || 0))),
+          bonus_percent: Number(levelRow.favorite_categories_bonus_percent || 0),
+          selected_ids: selectedIds,
+          locked: selectedIds.length > 0,
+          categories: (Array.isArray(categoryRows) ? categoryRows : []).map((row) => ({
+            id: Number(row.id || 0),
+            title: row.title || '',
+            icon: row.icon || '',
+            sort_order: Number(row.sort_order || 0),
+          })),
+        },
+      });
+    } catch (e) {
+      console.error('GET /api/public/bonus/favorite-categories error:', e);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.post('/bonus/favorite-categories', async (req, res) => {
+    let conn = null;
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const token = str(req.headers['x-customer-token']);
+      const customer = token ? await getCustomerByToken(tenantId, token) : null;
+      const customerId = Number(customer?.id || 0);
+      if (!(customerId > 0)) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+      const levelId = Number(req.body?.level_id || req.body?.levelId || 0);
+      if (!(levelId > 0)) return res.status(400).json({ ok: false, error: 'INVALID_LEVEL' });
+      const requestedIds = Array.isArray(req.body?.category_ids || req.body?.categoryIds)
+        ? [...new Set((req.body.category_ids || req.body.categoryIds).map((id) => Number(id || 0)).filter((id) => id > 0))]
+        : [];
+
+      const [[levelRow]] = await db.query(
+        `SELECT id, favorite_categories_limit
+         FROM mkt_bonus_levels
+         WHERE tenant_id=? AND id=? AND is_active=1
+         LIMIT 1`,
+        [tenantId, levelId]
+      );
+      if (!levelRow) return res.status(404).json({ ok: false, error: 'LEVEL_NOT_FOUND' });
+      const limit = Math.max(0, Math.floor(Number(levelRow.favorite_categories_limit || 0)));
+      if (!(limit > 0) || !requestedIds.length || requestedIds.length > limit) {
+        return res.status(400).json({ ok: false, error: 'INVALID_CATEGORIES' });
+      }
+
+      const [allowedRows] = await db.query(
+        `SELECT category_id
+         FROM mkt_bonus_level_favorite_categories
+         WHERE tenant_id=? AND level_id=? AND category_id IN (${requestedIds.map(() => '?').join(',')})`,
+        [tenantId, levelId, ...requestedIds]
+      );
+      const allowedIds = new Set((Array.isArray(allowedRows) ? allowedRows : []).map((row) => Number(row.category_id || 0)));
+      const categoryIds = requestedIds.filter((id) => allowedIds.has(id));
+      if (categoryIds.length !== requestedIds.length) {
+        return res.status(400).json({ ok: false, error: 'INVALID_CATEGORIES' });
+      }
+
+      conn = await db.getConnection();
+      await conn.beginTransaction();
+      const [existingRows] = await conn.query(
+        `SELECT category_id
+         FROM mkt_customer_bonus_favorite_categories
+         WHERE tenant_id=? AND customer_id=? AND level_id=?
+         ORDER BY id ASC
+         FOR UPDATE`,
+        [tenantId, customerId, levelId]
+      );
+      if (Array.isArray(existingRows) && existingRows.length) {
+        await conn.commit();
+        return res.json({
+          ok: true,
+          data: {
+            level_id: levelId,
+            selected_ids: existingRows.map((row) => Number(row.category_id || 0)).filter((id) => id > 0),
+            locked: true,
+          },
+        });
+      }
+      for (const categoryId of categoryIds) {
+        await conn.query(
+          `INSERT INTO mkt_customer_bonus_favorite_categories
+             (tenant_id, customer_id, level_id, category_id)
+           VALUES (?, ?, ?, ?)`,
+          [tenantId, customerId, levelId, categoryId]
+        );
+      }
+      await conn.commit();
+      return res.json({
+        ok: true,
+        data: {
+          level_id: levelId,
+          selected_ids: categoryIds,
+          locked: true,
+        },
+      });
+    } catch (e) {
+      if (conn) {
+        try { await conn.rollback(); } catch {}
+      }
+      console.error('POST /api/public/bonus/favorite-categories error:', e);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    } finally {
+      if (conn) conn.release();
+    }
+  });
+
   router.get('/changes/wait', async (req, res) => {
     try {
       if (!ordersEvents || typeof ordersEvents.waitForChanges !== 'function') {
