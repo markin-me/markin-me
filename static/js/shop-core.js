@@ -673,6 +673,88 @@
     return Number(account.balance || 0);
   }
 
+  function getCartBonusAccountLevel() {
+    const config = state.homeBonusConfig && typeof state.homeBonusConfig === "object" ? state.homeBonusConfig : null;
+    const account = config?.account && typeof config.account === "object" ? config.account : null;
+    if (!account?.joined_at || !(Number(account?.id || 0) > 0)) return null;
+    const levelId = Number(account?.level_id || 0);
+    if (!(levelId > 0)) return null;
+    const levels = Array.isArray(config?.levels) ? config.levels : [];
+    return levels.find((level) => Number(level?.id || 0) === levelId) || null;
+  }
+
+  function buildCartBonusRedeemSection() {
+    const level = getCartBonusAccountLevel();
+    if (!level) return null;
+    const balance = Math.max(0, Number(state.homeBonusConfig?.account?.balance || 0));
+    const canRedeem = balance > 0;
+    if (!canRedeem && state.cartBonusRedeemEnabled) {
+      state.cartBonusRedeemEnabled = false;
+    }
+    const section = document.createElement("section");
+    section.className = "shop-cart-bonus-redeem-section";
+    section.innerHTML = `
+      <div class="shop-bonus-level-balance-card shop-cart-bonus-redeem-card">
+        <div class="shop-bonus-level-balance-main">
+          <div class="shop-bonus-level-balance-label">\u0411\u043e\u043d\u0443\u0441\u044b</div>
+          <div class="shop-bonus-level-balance-value">${escapeHtml(formatShopBonusMoney(balance))}</div>
+        </div>
+        <div class="shop-cart-bonus-redeem-available">
+          <div class="shop-cart-bonus-redeem-available-label">\u041c\u043e\u0436\u043d\u043e \u0441\u043f\u0438\u0441\u0430\u0442\u044c</div>
+          <div class="shop-cart-bonus-redeem-available-value" data-cart-bonus-redeem-available>${escapeHtml(formatShopBonusMoney(0))}</div>
+        </div>
+        <label class="shop-cart-bonus-redeem-switch${canRedeem ? "" : " is-disabled"}">
+          <input type="checkbox" data-cart-bonus-redeem-toggle ${state.cartBonusRedeemEnabled && canRedeem ? "checked" : ""} ${canRedeem ? "" : "disabled"} />
+          <span class="shop-cart-bonus-redeem-slider" aria-hidden="true"></span>
+          <span>\u0421\u043f\u0438\u0441\u0430\u0442\u044c</span>
+        </label>
+      </div>
+    `;
+    return section;
+  }
+
+  function bindCartBonusRedeemSection(rootEl) {
+    if (!rootEl || !rootEl.querySelectorAll) return;
+    rootEl.querySelectorAll(".shop-cart-bonus-redeem-section").forEach((section) => {
+      if (section.dataset.cartBonusRedeemEventsBound === "1") return;
+      section.dataset.cartBonusRedeemEventsBound = "1";
+      ["click", "mousedown", "mouseup", "pointerdown", "pointerup", "touchstart", "touchend", "input", "change"].forEach((eventName) => {
+        const listenerOptions = eventName === "touchstart" || eventName === "touchend" ? { passive: true } : undefined;
+        section.addEventListener(eventName, (event) => {
+          event.stopPropagation();
+        }, listenerOptions);
+      });
+    });
+    rootEl.querySelectorAll("[data-cart-bonus-redeem-toggle]").forEach((input) => {
+      if (input.dataset.cartBonusRedeemBound === "1") return;
+      input.dataset.cartBonusRedeemBound = "1";
+      input.addEventListener("click", (event) => {
+        event.stopPropagation();
+      });
+      input.addEventListener("change", (event) => {
+        event.stopPropagation();
+        const balance = Math.max(0, Number(state.homeBonusConfig?.account?.balance || 0));
+        state.cartBonusRedeemEnabled = balance > 0 && !!input.checked;
+        input.checked = state.cartBonusRedeemEnabled;
+        if (typeof window.refreshShopCartBonusRedeemUi === "function") {
+          try {
+            window.refreshShopCartBonusRedeemUi();
+          } catch (error) {
+            console.warn("Failed to refresh cart bonus redeem UI:", error);
+          }
+        } else if (typeof window.refreshShopCartPricingLocalUi === "function") {
+          try {
+            window.refreshShopCartPricingLocalUi();
+          } catch (error) {
+            console.warn("Failed to refresh cart pricing after bonus redeem toggle:", error);
+          }
+        } else if (typeof window.syncShopCartPricingSummaryUi === "function") {
+          Promise.resolve(window.syncShopCartPricingSummaryUi()).catch(() => {});
+        }
+      });
+    });
+  }
+
   function setBonusCardsSheetHeader(active) {
     const header = document.querySelector(".app-modal-header");
     if (!header) return;
@@ -1473,7 +1555,7 @@
       ${buildHomeBonusLevelProgressHtml(level)}
       <div class="shop-bonus-level-balance-card">
         <div class="shop-bonus-level-balance-main">
-          <div class="shop-bonus-level-balance-label">Бонусы</div>
+          <div class="shop-bonus-level-balance-label">\u0411\u043e\u043d\u0443\u0441\u044b</div>
           <div class="shop-bonus-level-balance-value">${escapeHtml(formatShopBonusMoney(getBonusLevelPreviewBalance(level)))}</div>
         </div>
         <button class="shop-bonus-level-accruals-link" type="button">Начисления &gt;</button>
@@ -2005,6 +2087,8 @@
     _homeBonusLoading: null,
     homeBonusFavoriteCategoriesByLevel: new Map(),
     _homeBonusFavoriteCategoriesLoading: new Map(),
+    cartBonusRedeemEnabled: false,
+    cartBonusRedeemAvailableAmount: 0,
 
     // addresses (cart header chip)
     addresses: [],
@@ -12267,6 +12351,8 @@ async function initAddresses() {
         </div>
       `;
       listEl.appendChild(pricingSummarySection);
+      const bonusRedeemSection = buildCartBonusRedeemSection();
+      if (bonusRedeemSection) listEl.appendChild(bonusRedeemSection);
     }
 
     if (totalEl) totalEl.textContent = money(total);
@@ -12276,6 +12362,7 @@ async function initAddresses() {
       if (typeof window.syncShopCartBenefitsServiceUi === "function") {
         Promise.resolve(window.syncShopCartBenefitsServiceUi(listEl)).catch(() => {});
       }
+      bindCartBonusRedeemSection(listEl);
     }
     return { items: activeItems, total, displayItems: items };
   }

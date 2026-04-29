@@ -15271,6 +15271,105 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
   padding: 8px 0 8px 8px;
 }
 
+.shop-cart-bonus-redeem-section{
+  margin: 0;
+}
+
+.shop-cart-bonus-redeem-card{
+  margin: 0;
+  width: 100%;
+  min-height: 74px;
+}
+
+.shop-cart-bonus-redeem-available{
+  min-width: 0;
+  margin-left: auto;
+  display: grid;
+  gap: 4px;
+  text-align: right;
+}
+
+.shop-cart-bonus-redeem-available-label{
+  font-size: 12px;
+  line-height: 1.2;
+  font-weight: 800;
+  color: var(--color-text-muted);
+}
+
+.shop-cart-bonus-redeem-available-value{
+  font-size: 18px;
+  line-height: 1;
+  font-weight: 900;
+  color: var(--color-text);
+}
+
+.shop-cart-bonus-redeem-switch{
+  position: relative;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 11px;
+  line-height: 1.2;
+  font-weight: 900;
+  color: var(--color-text);
+  cursor: pointer;
+  user-select: none;
+}
+
+.shop-cart-bonus-redeem-switch.is-disabled{
+  cursor: default;
+  color: var(--color-text-muted);
+}
+
+.shop-cart-bonus-redeem-switch input{
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.shop-cart-bonus-redeem-slider{
+  position: relative;
+  width: 42px;
+  height: 26px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-2);
+  box-shadow: inset 0 1px 2px rgba(15, 23, 42, .08);
+  transition: background-color .16s ease, border-color .16s ease;
+}
+
+.shop-cart-bonus-redeem-slider::after{
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--color-surface);
+  box-shadow: 0 4px 10px rgba(15, 23, 42, .18);
+  transition: transform .16s ease;
+}
+
+.shop-cart-bonus-redeem-switch input:checked + .shop-cart-bonus-redeem-slider{
+  border-color: var(--color-primary);
+  background: var(--color-primary);
+}
+
+.shop-cart-bonus-redeem-switch input:checked + .shop-cart-bonus-redeem-slider::after{
+  transform: translateX(16px);
+}
+
+.shop-cart-bonus-redeem-switch input:disabled + .shop-cart-bonus-redeem-slider{
+  opacity: .55;
+}
+
 .shop-bonus-level-metric-row{
   margin: 12px 20px 0;
   display: grid;
@@ -22430,6 +22529,17 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
 .shop-checkout-bonus-row .shop-order-summary-value {
   font-weight: 600;
   color: var(--color-primary);
+}
+
+.shop-checkout-bonus-row.is-blocked .shop-order-summary-value {
+  text-decoration: line-through;
+  text-decoration-thickness: 2px;
+  opacity: .72;
+}
+
+.shop-order-summary-bonus-note {
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .shop-order-summary-discount-label-wrap {

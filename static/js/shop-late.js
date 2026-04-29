@@ -13742,6 +13742,17 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     return level;
   }
 
+  function calculateCartBonusRedeemAmount(itemsTotal, level) {
+    const account = state.homeBonusConfig?.account && typeof state.homeBonusConfig.account === "object"
+      ? state.homeBonusConfig.account
+      : null;
+    const balance = Math.floor(Math.max(0, Number(account?.balance || 0)));
+    const redeemPercent = Math.max(0, Number(level?.redeem_percent || 0));
+    if (!(balance > 0) || !(redeemPercent > 0)) return 0;
+    const limit = Math.floor(Math.max(0, Number(itemsTotal || 0)) * redeemPercent / 100);
+    return Math.max(0, Math.min(balance, limit));
+  }
+
   function setCartPricingSummaryLoading(sectionEl) {
     if (!sectionEl || !sectionEl.isConnected) return;
     const content = sectionEl.querySelector(".shop-cart-pricing-summary-content");
@@ -13764,6 +13775,58 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     row.appendChild(labelEl);
     row.appendChild(valueEl);
     return row;
+  }
+
+  function createCartBonusAccrualSummaryRow(summaryState) {
+    const row = document.createElement("div");
+    row.className = "shop-order-summary-row shop-checkout-bonus-row";
+    if (summaryState?.bonusAccrualBlockedByRedeem) {
+      row.classList.add("is-blocked");
+    }
+
+    const labelWrap = document.createElement("span");
+    labelWrap.className = "shop-order-summary-discount-label-wrap";
+
+    const label = document.createElement("span");
+    label.className = "shop-order-summary-label";
+    label.textContent = "\u0411\u043e\u043d\u0443\u0441\u044b";
+    labelWrap.appendChild(label);
+
+    const details = document.createElement("div");
+    details.className = "shop-order-summary-discount-breakdown shop-order-summary-bonus-note";
+    details.setAttribute("aria-hidden", "true");
+    details.textContent = "\u041d\u0430 \u0432\u0430\u0448\u0435\u043c \u0443\u0440\u043e\u0432\u043d\u0435 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u043e \u043e\u0434\u043d\u043e\u0432\u0440\u0435\u043c\u0435\u043d\u043d\u043e \u0441\u043f\u0438\u0441\u044b\u0432\u0430\u0442\u044c \u0438 \u043d\u0430\u0447\u0438\u0441\u043b\u044f\u0442\u044c";
+
+    if (summaryState?.bonusAccrualBlockedByRedeem) {
+      const infoBtn = document.createElement("button");
+      infoBtn.type = "button";
+      infoBtn.className = "shop-order-summary-discount-info-btn";
+      infoBtn.setAttribute("aria-label", "\u041f\u043e\u0447\u0435\u043c\u0443 \u0431\u043e\u043d\u0443\u0441\u044b \u043d\u0435 \u043d\u0430\u0447\u0438\u0441\u043b\u044f\u044e\u0442\u0441\u044f");
+      infoBtn.setAttribute("aria-expanded", "false");
+      infoBtn.innerHTML = `<i class="fas fa-info"></i>`;
+      infoBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        const willOpen = !details.classList.contains("is-open");
+        details.classList.toggle("is-open", willOpen);
+        details.setAttribute("aria-hidden", willOpen ? "false" : "true");
+        infoBtn.setAttribute("aria-expanded", willOpen ? "true" : "false");
+      });
+      labelWrap.appendChild(infoBtn);
+    }
+
+    const value = document.createElement("span");
+    value.className = "shop-order-summary-value";
+    value.textContent = `+${money(summaryState?.bonusAccrualAmount || 0)}`;
+
+    row.appendChild(labelWrap);
+    row.appendChild(value);
+
+    const fragment = document.createDocumentFragment();
+    fragment.appendChild(row);
+    if (summaryState?.bonusAccrualBlockedByRedeem) {
+      fragment.appendChild(details);
+    }
+    return fragment;
   }
 
   function applyCartPricingLineStatesToList(listEl, lineStates) {
@@ -13929,13 +13992,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     }
 
     if (Number(summaryState.bonusAccrualAmount || 0) > 0) {
-      summary.appendChild(
-        createCartPricingSummaryRow(
-          "Бонусы",
-          `+${money(summaryState.bonusAccrualAmount || 0)}`,
-          "shop-checkout-bonus-row"
-        )
-      );
+      summary.appendChild(createCartBonusAccrualSummaryRow(summaryState));
     }
 
     const divider = document.createElement("div");
@@ -14025,7 +14082,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     const subtotalBeforeDiscount = roundPrice(
       Math.max(0, Number(subtotalBeforeDiscountRaw || 0) - Number(giftRewardDiscount || 0))
     );
-    const discountAmount = roundPrice(
+    let discountAmount = roundPrice(
       Math.max(0, Number(discountAmountRaw || 0) - Number(giftRewardDiscount || 0))
     );
     const orderLevelDiscount = roundPrice(Math.max(0, Number(cartTotals.total || 0) - itemsTotal));
@@ -14760,13 +14817,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     }
 
     if (Number(summaryState.bonusAccrualAmount || 0) > 0) {
-      summary.appendChild(
-        createCartPricingSummaryRow(
-          "Бонусы",
-          `+${money(summaryState.bonusAccrualAmount || 0)}`,
-          "shop-checkout-bonus-row"
-        )
-      );
+      summary.appendChild(createCartBonusAccrualSummaryRow(summaryState));
     }
 
     const divider = document.createElement("div");
@@ -14822,7 +14873,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     const subtotalBeforeDiscount = roundPrice(
       Math.max(0, Number(subtotalBeforeDiscountRaw || 0) - Number(giftRewardDiscount || 0))
     );
-    const discountAmount = roundPrice(
+    let discountAmount = roundPrice(
       Math.max(0, Number(discountAmountRaw || 0) - Number(giftRewardDiscount || 0))
     );
     const orderLevelDiscount = roundPrice(Math.max(0, Number(cartTotals.total || 0) - itemsTotal));
@@ -14850,17 +14901,43 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       defaultDeliverySettings
     );
     const paymentState = resolveCartPricingPaymentState(draft);
-    const total = roundPrice(itemsTotal + (deliveryState.isDelivery ? Number(deliveryState.cost || 0) : 0));
-    const changeState = resolveCartPricingChangeState(draft, total, paymentState.code);
     const lineStates = buildCartPricingLineStates(
       cartItems,
       itemsTotal,
       previewBundle.localPreviewData || previewBundle.previewData || null
     );
     const bonusLevel = getCartBonusActiveLevel();
+    const bonusRedeemAvailableAmount = bonusLevel
+      ? calculateCartBonusRedeemAmount(itemsTotal, bonusLevel)
+      : 0;
+    const bonusRedeemEnabled = !!state.cartBonusRedeemEnabled && bonusRedeemAvailableAmount > 0;
+    const bonusRedeemAmount = bonusRedeemEnabled ? bonusRedeemAvailableAmount : 0;
+    const baseDiscountDetailItems = Array.isArray(discountDetails.items) ? discountDetails.items : [];
+    const discountDetailItems = bonusRedeemAmount > 0
+      ? [
+          ...baseDiscountDetailItems,
+          {
+            key: "bonus_redeem",
+            title: "\u0411\u043e\u043d\u0443\u0441\u044b",
+            amount: bonusRedeemAmount,
+            sourceKind: "bonus",
+            promoCode: null,
+          },
+        ]
+      : baseDiscountDetailItems;
+    const finalDiscountAmount = bonusRedeemAmount > 0
+      ? roundPrice(discountAmount + bonusRedeemAmount)
+      : discountAmount;
+    const total = roundPrice(
+      Math.max(0, Number(itemsTotal || 0) - Number(bonusRedeemAmount || 0))
+      + (deliveryState.isDelivery ? Number(deliveryState.cost || 0) : 0)
+    );
+    const changeState = resolveCartPricingChangeState(draft, total, paymentState.code);
     const bonusAccrualAmount = bonusLevel
       ? calculateCartBonusPreview(cartItems, lineStates, itemsTotal, bonusLevel)
       : 0;
+    const allowRedeemAndAccrue = Number(state.homeBonusConfig?.settings?.allow_redeem_and_accrue || 0) === 1;
+    const bonusAccrualBlockedByRedeem = bonusRedeemEnabled && !allowRedeemAndAccrue && bonusAccrualAmount > 0;
 
     return {
       visible: true,
@@ -14868,7 +14945,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       isDelivery: deliveryState.isDelivery,
       subtotalBeforeDiscount,
       itemsTotal,
-      discountAmount,
+      discountAmount: finalDiscountAmount,
       deliveryCost: Number(deliveryState.cost || 0),
       deliveryFreeNote: deliveryState.freeNote,
       deliveryMinNote: deliveryState.minNote,
@@ -14878,9 +14955,13 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       total,
       deliveryQuote,
       defaultDeliverySettings,
-      discountDetailItems: discountDetails.items,
+      discountDetailItems,
       discountDetailNote: discountDetails.note,
       bonusAccrualAmount,
+      bonusRedeemEnabled,
+      bonusRedeemAvailableAmount,
+      bonusRedeemAmount,
+      bonusAccrualBlockedByRedeem,
       lineStates,
     };
   }
@@ -14974,6 +15055,37 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
         summaryState.itemsTotal,
         bonusLevel
       );
+      const bonusRedeemAvailableAmount = calculateCartBonusRedeemAmount(summaryState.itemsTotal, bonusLevel);
+      const bonusRedeemEnabled = !!state.cartBonusRedeemEnabled && bonusRedeemAvailableAmount > 0;
+      const bonusRedeemAmount = bonusRedeemEnabled ? bonusRedeemAvailableAmount : 0;
+      const baseDiscountAmount = roundPrice(Math.max(
+        0,
+        Number(summaryState.discountAmount || 0) - Number(summaryState.bonusRedeemAmount || 0)
+      ));
+      const baseDiscountDetails = Array.isArray(summaryState.discountDetailItems)
+        ? summaryState.discountDetailItems.filter((entry) => str(entry?.key || "").trim() !== "bonus_redeem")
+        : [];
+      summaryState.discountAmount = roundPrice(baseDiscountAmount + bonusRedeemAmount);
+      summaryState.discountDetailItems = bonusRedeemAmount > 0
+        ? [
+            ...baseDiscountDetails,
+            {
+              key: "bonus_redeem",
+              title: "\u0411\u043e\u043d\u0443\u0441\u044b",
+              amount: bonusRedeemAmount,
+              sourceKind: "bonus",
+              promoCode: null,
+            },
+          ]
+        : baseDiscountDetails;
+      summaryState.bonusRedeemEnabled = bonusRedeemEnabled;
+      summaryState.bonusRedeemAvailableAmount = bonusRedeemAvailableAmount;
+      summaryState.bonusRedeemAmount = bonusRedeemAmount;
+      summaryState.bonusAccrualBlockedByRedeem = (
+        summaryState.bonusRedeemEnabled
+        && Number(state.homeBonusConfig?.settings?.allow_redeem_and_accrue || 0) !== 1
+        && Number(summaryState.bonusAccrualAmount || 0) > 0
+      );
     }
     if (str(methodCode || "").trim() !== "delivery") {
       return summaryState;
@@ -15004,7 +15116,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       defaultDeliverySettings
     );
     const total = roundPrice(
-      Number(summaryState.itemsTotal || 0)
+      Math.max(0, Number(summaryState.itemsTotal || 0) - Number(summaryState.bonusRedeemAmount || 0))
       + (deliveryState.isDelivery ? Number(deliveryState.cost || 0) : 0)
     );
     const paymentCode = str(draft?.payment_code || "").trim();
@@ -15029,21 +15141,113 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       .filter((node) => node && node.isConnected);
   }
 
-  function applyCartPricingStateToSummarySections(summaryState = null, sections = null) {
+  function applyCartPricingStateToSummarySections(summaryState = null, sections = null, options = {}) {
     const effectiveSummaryState = summaryState && typeof summaryState === "object"
       ? summaryState
       : buildCartPricingSnapshot();
     const targetSections = Array.isArray(sections) ? sections : getConnectedCartPricingSummarySections();
     if (!targetSections.length) return effectiveSummaryState;
+    const updateLineStates = options?.updateLineStates !== false;
     targetSections.forEach((section) => {
       renderCartPricingSummarySection(section, effectiveSummaryState);
       const listEl = section.parentElement;
-      if (listEl && Array.isArray(effectiveSummaryState?.lineStates)) {
+      if (updateLineStates && listEl && Array.isArray(effectiveSummaryState?.lineStates)) {
         applyCartPricingLineStatesToList(listEl, effectiveSummaryState.lineStates);
       }
     });
     return effectiveSummaryState;
   }
+
+  function updateCartBonusRedeemSections(summaryState = null) {
+    const safeState = summaryState && typeof summaryState === "object" ? summaryState : buildCartPricingSnapshot();
+    let amount = Math.floor(Math.max(0, Number(safeState?.bonusRedeemAvailableAmount || 0)));
+    if (amount > 0) {
+      state.cartBonusRedeemAvailableAmount = amount;
+    } else if (state.cartBonusRedeemEnabled && Number(state.cartBonusRedeemAvailableAmount || 0) > 0) {
+      amount = Math.floor(Math.max(0, Number(state.cartBonusRedeemAvailableAmount || 0)));
+    }
+    document.querySelectorAll(".shop-cart-bonus-redeem-section").forEach((section) => {
+      section.querySelectorAll("[data-cart-bonus-redeem-available]").forEach((node) => {
+        node.textContent = money(amount);
+      });
+      section.querySelectorAll("[data-cart-bonus-redeem-toggle]").forEach((input) => {
+        const balance = Math.max(0, Number(state.homeBonusConfig?.account?.balance || 0));
+        const disabled = !(balance > 0);
+        input.disabled = disabled;
+        if (disabled) {
+          state.cartBonusRedeemEnabled = false;
+        }
+        input.checked = !!state.cartBonusRedeemEnabled && !disabled;
+        input.closest(".shop-cart-bonus-redeem-switch")?.classList.toggle("is-disabled", disabled);
+      });
+    });
+  }
+
+  function captureCartBonusRedeemScrollState() {
+    const containers = [];
+    const seen = new Set();
+    const addContainer = (node) => {
+      if (!node || seen.has(node)) return;
+      seen.add(node);
+      containers.push(node);
+    };
+
+    document.querySelectorAll(".shop-cart-bonus-redeem-section").forEach((section) => {
+      addContainer(section.closest(".shop-cart-list"));
+      addContainer(section.closest(".shop-cart-sheet"));
+      addContainer(section.closest(".app-modal-body"));
+    });
+
+    return containers.map((node) => ({
+      node,
+      left: Math.max(0, Number(node.scrollLeft || 0)),
+      top: Math.max(0, Number(node.scrollTop || 0)),
+    }));
+  }
+
+  function restoreCartBonusRedeemScrollState(scrollState) {
+    const entries = Array.isArray(scrollState) ? scrollState : [];
+    if (!entries.length) return;
+
+    const restore = () => {
+      entries.forEach((entry) => {
+        const node = entry?.node;
+        if (!node || !node.isConnected) return;
+        node.scrollLeft = Math.max(0, Number(entry.left || 0));
+        node.scrollTop = Math.max(0, Number(entry.top || 0));
+        if (node.matches?.(".shop-cart-list") && typeof window.syncShopCartModeHeaderSticky === "function") {
+          window.syncShopCartModeHeaderSticky(node, { forceExpand: Number(entry.top || 0) <= 6 });
+        }
+      });
+    };
+
+    restore();
+    requestAnimationFrame(() => {
+      restore();
+      requestAnimationFrame(restore);
+    });
+  }
+
+  let cartBonusRedeemPreToggleScrollState = null;
+
+  function rememberCartBonusRedeemScrollBeforeToggle(event) {
+    const target = event?.target;
+    if (!target || typeof target.closest !== "function") return;
+    if (!target.closest(".shop-cart-bonus-redeem-section")) return;
+    cartBonusRedeemPreToggleScrollState = captureCartBonusRedeemScrollState();
+  }
+
+  ["pointerdown", "mousedown", "touchstart"].forEach((eventName) => {
+    document.addEventListener(eventName, rememberCartBonusRedeemScrollBeforeToggle, {
+      capture: true,
+      passive: true,
+    });
+  });
+  document.addEventListener("keydown", (event) => {
+    const key = str(event?.key || "").trim();
+    if (key !== " " && key !== "Enter") return;
+    rememberCartBonusRedeemScrollBeforeToggle(event);
+  }, true);
 
   function applyCartPricingStateImmediately(summaryState = null) {
     const effectiveSummaryState = summaryState && typeof summaryState === "object"
@@ -15052,7 +15256,122 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     applyCartPricingCheckoutTotals(effectiveSummaryState);
     syncCartBenefitsServiceBlocksUi();
     applyCartPricingStateToSummarySections(effectiveSummaryState);
+    updateCartBonusRedeemSections(effectiveSummaryState);
     return effectiveSummaryState;
+  }
+
+  function refreshCartPricingLocalUi() {
+    let summaryState = null;
+    try {
+      summaryState = buildCartPricingSnapshot();
+    } catch (error) {
+      console.warn("Failed to build cart pricing state for bonus redeem:", error);
+      return null;
+    }
+    try {
+      applyCartPricingCheckoutTotals(summaryState);
+    } catch (error) {
+      console.warn("Failed to update cart totals for bonus redeem:", error);
+    }
+    getConnectedCartPricingSummarySections().forEach((section) => {
+      try {
+        renderCartPricingSummarySection(section, summaryState);
+      } catch (error) {
+        console.warn("Failed to render cart summary for bonus redeem:", error);
+      }
+    });
+    try {
+      updateCartBonusRedeemSections(summaryState);
+    } catch (error) {
+      console.warn("Failed to update bonus redeem section:", error);
+    }
+    return summaryState;
+  }
+
+  function refreshCartPricingSummarySectionsTextUi(summaryState = null) {
+    const snapshot = summaryState && typeof summaryState === "object" ? summaryState : buildCartPricingSnapshot();
+    if (!snapshot || snapshot.visible === false) return snapshot;
+
+    const updateRowByLabel = (root, labelText, valueText, display = "") => {
+      if (!root) return;
+      const rows = Array.from(root.querySelectorAll(".shop-order-summary-row"));
+      const row = rows.find((entry) => str(entry.querySelector(".shop-order-summary-label")?.textContent || "").trim() === labelText);
+      if (!row) return;
+      const value = row.querySelector(".shop-order-summary-value");
+      if (value) value.textContent = valueText;
+      row.style.display = display;
+    };
+
+    getConnectedCartPricingSummarySections().forEach((section) => {
+      const summary = section.querySelector(".shop-order-summary");
+      if (!summary) return;
+      section.classList.remove("hidden");
+      updateRowByLabel(summary, "Стоимость доставки", money(snapshot.deliveryCost || 0), snapshot.isDelivery ? "" : "none");
+      updateRowByLabel(summary, "Сумма товаров", money(snapshot.subtotalBeforeDiscount || 0));
+      updateRowByLabel(summary, "Скидка", `-${money(snapshot.discountAmount || 0)}`, Number(snapshot.discountAmount || 0) > 0 ? "" : "none");
+      updateRowByLabel(summary, "Бонусы", `+${money(snapshot.bonusAccrualAmount || 0)}`, Number(snapshot.bonusAccrualAmount || 0) > 0 ? "" : "none");
+      const totalValue = summary.querySelector(".shop-order-summary-total-value");
+      if (totalValue) totalValue.textContent = money(snapshot.total || 0);
+    });
+
+    return snapshot;
+  }
+
+  function resetCartBonusRedeemScrollPosition() {
+    const lists = Array.from(document.querySelectorAll(".shop-cart-bonus-redeem-section"))
+      .map((section) => section.closest(".shop-cart-list"))
+      .filter(Boolean);
+    if (!lists.length) return;
+    const restore = () => {
+      lists.forEach((list) => {
+        if (!list?.isConnected) return;
+        list.scrollTop = 0;
+        if (typeof window.syncShopCartModeHeaderSticky === "function") {
+          window.syncShopCartModeHeaderSticky(list, { forceExpand: true });
+        }
+      });
+    };
+    restore();
+    requestAnimationFrame(() => {
+      restore();
+      requestAnimationFrame(restore);
+    });
+  }
+
+  function refreshCartBonusRedeemUi() {
+    const scrollState = cartBonusRedeemPreToggleScrollState || captureCartBonusRedeemScrollState();
+    cartBonusRedeemPreToggleScrollState = null;
+    let summaryState = null;
+    try {
+      summaryState = buildCartPricingSnapshot();
+    } catch (error) {
+      console.warn("Failed to build cart pricing state for bonus redeem:", error);
+      return null;
+    }
+    try {
+      applyCartPricingCheckoutTotals(summaryState);
+    } catch (error) {
+      console.warn("Failed to update cart totals for bonus redeem:", error);
+    }
+    try {
+      applyCartPricingStateToSummarySections(summaryState, null, { updateLineStates: false });
+    } catch (error) {
+      console.warn("Failed to update cart summary for bonus redeem:", error);
+    }
+    try {
+      updateCartBonusRedeemSections(summaryState);
+      restoreCartBonusRedeemScrollState(scrollState);
+    } catch (error) {
+      console.warn("Failed to update bonus redeem section:", error);
+    }
+    try {
+      if (typeof window.refreshOpenShopCheckoutPricingUi === "function") {
+        window.refreshOpenShopCheckoutPricingUi(summaryState);
+      }
+    } catch (error) {
+      console.warn("Failed to update checkout pricing for bonus redeem:", error);
+    }
+    return summaryState;
   }
 
   let cartPricingAsyncRefreshTimer = 0;
@@ -15124,6 +15443,8 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
   }
 
   window.syncShopCartPricingSummaryUi = syncCartPricingSummaryUi;
+  window.refreshShopCartPricingLocalUi = refreshCartPricingLocalUi;
+  window.refreshShopCartBonusRedeemUi = refreshCartBonusRedeemUi;
   window.applyShopCartPricingTotalsToButtons = applyCartPricingCheckoutTotals;
   window.getShopCartPricingSnapshot = buildCartPricingSnapshot;
 
@@ -21672,6 +21993,7 @@ function applySheetAddressTitle(backMode = "cart") {
     addressWrap.classList.add("hidden");
     productWrap.classList.add("hidden");
     pickupSheetWrap.classList.add("hidden");
+    resetCartBonusRedeemScrollPosition();
 
     setCartSheetFooterMode(openCartSheetCtx, cartItemsResolved().length ? "cart" : "hidden");
     const mobileBenefitsPromoWrap = document.getElementById("shopMobileBenefitsPromoWrap");
@@ -22298,6 +22620,16 @@ function applySheetAddressTitle(backMode = "cart") {
     const restoredCartScrollTop = list ? consumeCartBenefitsReturnScroll("mobile", list) : null;
     if (list && restoredCartScrollTop == null) {
       list.scrollTop = 0;
+      if (typeof window.syncShopCartModeHeaderSticky === "function") {
+        window.syncShopCartModeHeaderSticky(list, { forceExpand: true });
+      }
+      requestAnimationFrame(() => {
+        if (!list?.isConnected) return;
+        list.scrollTop = 0;
+        if (typeof window.syncShopCartModeHeaderSticky === "function") {
+          window.syncShopCartModeHeaderSticky(list, { forceExpand: true });
+        }
+      });
     }
     if (typeof syncCartPricingSummaryUi === "function") {
       Promise.resolve(syncCartPricingSummaryUi()).catch(() => {});
@@ -35236,6 +35568,66 @@ function setBottomNavActive(tab) {
     totalRow.appendChild(totalLabel);
     totalRow.appendChild(totalValue);
 
+    const refreshCheckoutPricingFromSnapshot = (summaryState = null) => {
+      const snapshot = summaryState && typeof summaryState === "object"
+        ? summaryState
+        : (typeof buildCartPricingSnapshot === "function" ? buildCartPricingSnapshot() : null);
+      if (!snapshot || snapshot.visible === false) return null;
+
+      const nextSubtotal = roundPrice(Number(snapshot.subtotalBeforeDiscount || 0));
+      const nextDiscount = roundPrice(Number(snapshot.discountAmount || 0));
+      const nextTotal = roundPrice(Number(snapshot.total || 0));
+      const nextDelivery = roundPrice(Number(snapshot.deliveryCost || 0));
+      const nextIsDelivery = Boolean(snapshot.isDelivery);
+
+      subtotalValue.textContent = money(nextSubtotal);
+      if (discountValue) discountValue.textContent = `-${money(nextDiscount)}`;
+      discountRow.style.display = nextDiscount > 0 ? "" : "none";
+      if (totalValue) totalValue.textContent = money(nextTotal);
+      if (deliveryInfoWrap) deliveryInfoWrap.style.display = nextIsDelivery ? "" : "none";
+      if (deliveryCostValue) deliveryCostValue.textContent = nextIsDelivery ? money(nextDelivery) : "—";
+
+      if (deliveryFreeNote) {
+        if (nextIsDelivery && snapshot.deliveryFreeNote) {
+          deliveryFreeNote.textContent = snapshot.deliveryFreeNote;
+          deliveryFreeNote.style.display = "";
+        } else {
+          deliveryFreeNote.style.display = "none";
+        }
+      }
+      if (deliveryMinNote) {
+        if (nextIsDelivery && snapshot.deliveryMinNote) {
+          deliveryMinNote.textContent = snapshot.deliveryMinNote;
+          deliveryMinNote.style.display = "";
+        } else {
+          deliveryMinNote.style.display = "none";
+        }
+      }
+
+      updateChangeOptions(nextTotal);
+      setCheckoutSubmitLabel(nextTotal);
+      if (actions?.submitBtn) {
+        actions.submitBtn.disabled = nextIsDelivery && Boolean(snapshot.deliveryMinNote);
+      }
+      if (container && container.classList?.contains("shop-checkout-content--overlay")) {
+        requestAnimationFrame(() => {
+          if (!container?.isConnected) return;
+          const maxScrollTop = Math.max(0, Number(container.scrollHeight || 0) - Number(container.clientHeight || 0));
+          const currentScrollTop = Math.max(0, Number(container.scrollTop || 0));
+          if (currentScrollTop > maxScrollTop) {
+            container.scrollTop = maxScrollTop;
+          }
+        });
+      }
+      return snapshot;
+    };
+    window.refreshOpenShopCheckoutPricingUi = refreshCheckoutPricingFromSnapshot;
+    registerCheckoutCleanup(() => {
+      if (window.refreshOpenShopCheckoutPricingUi === refreshCheckoutPricingFromSnapshot) {
+        window.refreshOpenShopCheckoutPricingUi = null;
+      }
+    });
+
     function updatePaymentSummaryRows() {
       const paymentTitle = getSelectedPaymentTitle();
       paymentSummaryValue.textContent = paymentTitle;
@@ -35679,6 +36071,52 @@ function setBottomNavActive(tab) {
         const snapshotTotal = roundPrice(
           Number(pricingSnapshotState?.total || (snapshotItemsTotal + snapshotDeliveryCost))
         );
+        const snapshotBonusRedeemAmount = roundPrice(Math.max(0, Number(pricingSnapshotState?.bonusRedeemAmount || 0)));
+        const distributeBonusRedeemAcrossPayloadItems = (payloadItems, redeemAmount) => {
+          const safeItems = Array.isArray(payloadItems) ? payloadItems : [];
+          const totalRedeem = roundPrice(Math.max(0, Number(redeemAmount || 0)));
+          if (!(totalRedeem > 0) || !safeItems.length) return 0;
+
+          const entries = safeItems
+            .map((item) => {
+              const lineTotal = roundPrice(Math.max(0, Number(item?.line_total || 0)));
+              const excludedTotal = roundPrice(Math.min(
+                lineTotal,
+                Math.max(0, Number(item?.benefits_excluded_line_total ?? item?.discount_excluded_line_total ?? 0) || 0)
+              ));
+              const eligibleTotal = roundPrice(Math.max(0, lineTotal - excludedTotal));
+              return { item, lineTotal, excludedTotal, eligibleTotal };
+            })
+            .filter((entry) => entry.eligibleTotal > 0);
+
+          const eligibleTotal = roundPrice(entries.reduce((sum, entry) => sum + entry.eligibleTotal, 0));
+          const appliedTotal = roundPrice(Math.min(totalRedeem, eligibleTotal));
+          if (!(appliedTotal > 0)) return 0;
+
+          let distributed = 0;
+          entries.forEach((entry, index) => {
+            const remaining = roundPrice(appliedTotal - distributed);
+            if (!(remaining > 0)) return;
+            const isLast = index === entries.length - 1;
+            const rawShare = isLast
+              ? remaining
+              : roundPrice(appliedTotal * (entry.eligibleTotal / eligibleTotal));
+            const share = roundPrice(Math.min(remaining, entry.eligibleTotal, rawShare));
+            if (!(share > 0)) return;
+
+            const nextLineTotal = roundPrice(Math.max(0, entry.lineTotal - share));
+            entry.item.line_total = nextLineTotal;
+            if (entry.item.benefits_excluded_line_total != null) {
+              entry.item.benefits_excluded_line_total = roundPrice(Math.min(
+                nextLineTotal,
+                Math.max(0, Number(entry.item.benefits_excluded_line_total || 0))
+              ));
+            }
+            distributed = roundPrice(distributed + share);
+          });
+
+          return distributed;
+        };
         const snapshotDiscountBreakdown = Array.isArray(previewSummary?.discount_breakdown)
           ? previewSummary.discount_breakdown
               .map((entry, index) => {
@@ -35859,6 +36297,18 @@ function setBottomNavActive(tab) {
           };
         }),
       };
+
+      const distributedBonusRedeemAmount = distributeBonusRedeemAcrossPayloadItems(
+        payload.items,
+        snapshotBonusRedeemAmount
+      );
+      if (distributedBonusRedeemAmount > 0) {
+        const distributedItemsTotal = roundPrice(
+          payload.items.reduce((sum, item) => sum + Number(item?.line_total || 0), 0)
+        );
+        payload.pricing_snapshot.summary.items_total = distributedItemsTotal;
+        payload.pricing_snapshot.summary.total = roundPrice(distributedItemsTotal + snapshotDeliveryCost);
+      }
 
       const isAuthed = !!(getCustomerToken() && me);
       const requireClientData = isMethodClientDataRequired(payload.method_code);
