@@ -13867,6 +13867,61 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     });
   }
 
+  function buildCartPricingBonusRedeemDisplayLineStates(lineStates, bonusRedeemAmount) {
+    const states = Array.isArray(lineStates)
+      ? lineStates.map((entry) => ({ ...entry }))
+      : [];
+    const totalRedeem = roundPrice(Math.max(0, Number(bonusRedeemAmount || 0)));
+    if (!(totalRedeem > 0) || !states.length) return states;
+
+    const eligible = states
+      .map((entry, index) => ({
+        index,
+        currentTotal: roundPrice(Math.max(0, Number(entry?.currentTotal || 0))),
+      }))
+      .filter((entry) => entry.currentTotal > 0);
+    const eligibleTotal = roundPrice(
+      eligible.reduce((sum, entry) => sum + Number(entry.currentTotal || 0), 0)
+    );
+    const appliedTotal = roundPrice(Math.min(totalRedeem, eligibleTotal));
+    if (!(appliedTotal > 0)) return states;
+
+    let distributed = 0;
+    eligible.forEach((entry, entryIndex) => {
+      const remaining = roundPrice(appliedTotal - distributed);
+      if (!(remaining > 0)) return;
+      const rawShare = entryIndex === eligible.length - 1
+        ? remaining
+        : roundPrice(appliedTotal * (entry.currentTotal / eligibleTotal));
+      const share = roundPrice(Math.min(remaining, entry.currentTotal, rawShare));
+      if (!(share > 0)) return;
+
+      const stateEntry = states[entry.index];
+      const currentTotal = roundPrice(Math.max(0, entry.currentTotal - share));
+      const originalTotal = roundPrice(Math.max(
+        Number(stateEntry?.originalTotal || 0),
+        Number(entry.currentTotal || 0),
+        currentTotal
+      ));
+      let discountPercent = 0;
+      if (originalTotal > currentTotal && originalTotal > 0) {
+        discountPercent = Math.round(((originalTotal - currentTotal) / originalTotal) * 100);
+      }
+      if (!Number.isFinite(discountPercent) || discountPercent <= 0) discountPercent = 0;
+      if (discountPercent > 100) discountPercent = 100;
+
+      stateEntry.currentTotal = currentTotal;
+      stateEntry.originalTotal = originalTotal > currentTotal ? originalTotal : currentTotal;
+      stateEntry.discountPercent = discountPercent;
+      if ("discountAmount" in stateEntry) {
+        stateEntry.discountAmount = roundPrice(Math.max(0, stateEntry.originalTotal - stateEntry.currentTotal));
+      }
+      distributed = roundPrice(distributed + share);
+    });
+
+    return states;
+  }
+
   function renderCartPricingSummarySection(sectionEl, summaryState) {
     if (!sectionEl || !sectionEl.isConnected) return;
     const content = sectionEl.querySelector(".shop-cart-pricing-summary-content");
@@ -14912,6 +14967,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       : 0;
     const bonusRedeemEnabled = !!state.cartBonusRedeemEnabled && bonusRedeemAvailableAmount > 0;
     const bonusRedeemAmount = bonusRedeemEnabled ? bonusRedeemAvailableAmount : 0;
+    const displayLineStates = buildCartPricingBonusRedeemDisplayLineStates(lineStates, bonusRedeemAmount);
     const baseDiscountDetailItems = Array.isArray(discountDetails.items) ? discountDetails.items : [];
     const discountDetailItems = bonusRedeemAmount > 0
       ? [
@@ -14963,6 +15019,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       bonusRedeemAmount,
       bonusAccrualBlockedByRedeem,
       lineStates,
+      displayLineStates,
     };
   }
 
@@ -15081,6 +15138,10 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       summaryState.bonusRedeemEnabled = bonusRedeemEnabled;
       summaryState.bonusRedeemAvailableAmount = bonusRedeemAvailableAmount;
       summaryState.bonusRedeemAmount = bonusRedeemAmount;
+      summaryState.displayLineStates = buildCartPricingBonusRedeemDisplayLineStates(
+        summaryState.lineStates,
+        bonusRedeemAmount
+      );
       summaryState.bonusAccrualBlockedByRedeem = (
         summaryState.bonusRedeemEnabled
         && Number(state.homeBonusConfig?.settings?.allow_redeem_and_accrue || 0) !== 1
@@ -15151,8 +15212,11 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     targetSections.forEach((section) => {
       renderCartPricingSummarySection(section, effectiveSummaryState);
       const listEl = section.parentElement;
-      if (updateLineStates && listEl && Array.isArray(effectiveSummaryState?.lineStates)) {
-        applyCartPricingLineStatesToList(listEl, effectiveSummaryState.lineStates);
+      const displayLineStates = Array.isArray(effectiveSummaryState?.displayLineStates)
+        ? effectiveSummaryState.displayLineStates
+        : effectiveSummaryState?.lineStates;
+      if (updateLineStates && listEl && Array.isArray(displayLineStates)) {
+        applyCartPricingLineStatesToList(listEl, displayLineStates);
       }
     });
     return effectiveSummaryState;
@@ -32903,9 +32967,11 @@ function setBottomNavActive(tab) {
 
     // Итог товаров после всех скидок (включая клиентскую скидку)
     const previewSummary = checkoutBenefitsPreview?.summary || null;
-    const orderTotal = previewSummary
+    const snapshotBonusRedeemAmount = roundPrice(Math.max(0, Number(initialPricingSnapshot?.bonusRedeemAmount || 0)));
+    const orderTotalBeforeBonus = previewSummary
       ? roundPrice(Number(previewSummary.items_total || 0))
       : roundPrice(Math.max(0, baseOrderTotal - customerOrderDiscountAmount));
+    const orderTotal = roundPrice(Math.max(0, orderTotalBeforeBonus - snapshotBonusRedeemAmount));
     const cachedDeliveryQuoteForOrderTotal = getCartPricingCachedDeliveryQuote(orderTotal);
     if (cachedDeliveryQuoteForOrderTotal) {
       deliveryQuote = cachedDeliveryQuoteForOrderTotal;
@@ -36047,8 +36113,15 @@ function setBottomNavActive(tab) {
           ? (normalizeCheckoutPromoSource(currentDraft?.selected_promo_source) || "promo_code")
           : null;
         const pricingSnapshotState = buildCartPricingSnapshot();
+        const snapshotBonusRedeemAmount = roundPrice(Math.max(0, Number(pricingSnapshotState?.bonusRedeemAmount || 0)));
+        const snapshotBonusLevel = getCartBonusActiveLevel();
+        const snapshotBonusAccountId = Number(state.homeBonusConfig?.account?.id || 0);
+        const snapshotBonusLevelId = Number(snapshotBonusLevel?.id || 0);
+        const payloadLineStates = snapshotBonusRedeemAmount > 0 && Array.isArray(pricingSnapshotState?.displayLineStates)
+          ? pricingSnapshotState.displayLineStates
+          : pricingSnapshotState?.lineStates;
         const lineStatesByKey = new Map(
-          (Array.isArray(pricingSnapshotState?.lineStates) ? pricingSnapshotState.lineStates : [])
+          (Array.isArray(payloadLineStates) ? payloadLineStates : [])
             .map((entry) => [str(entry?.key || "").trim(), entry])
             .filter(([key]) => key)
         );
@@ -36071,7 +36144,6 @@ function setBottomNavActive(tab) {
         const snapshotTotal = roundPrice(
           Number(pricingSnapshotState?.total || (snapshotItemsTotal + snapshotDeliveryCost))
         );
-        const snapshotBonusRedeemAmount = roundPrice(Math.max(0, Number(pricingSnapshotState?.bonusRedeemAmount || 0)));
         const distributeBonusRedeemAcrossPayloadItems = (payloadItems, redeemAmount) => {
           const safeItems = Array.isArray(payloadItems) ? payloadItems : [];
           const totalRedeem = roundPrice(Math.max(0, Number(redeemAmount || 0)));
@@ -36170,6 +36242,12 @@ function setBottomNavActive(tab) {
         selected_promo_source: normalizedSelectedPromoSource,
         selected_promo_reward_id: normalizedSelectedPromoRewardId,
         benefits_preview_mode: null,
+        bonus_redeem_enabled: Boolean(pricingSnapshotState?.bonusRedeemEnabled),
+        bonus_redeem_amount: snapshotBonusRedeemAmount,
+        bonus_accrual_amount: roundPrice(Number(pricingSnapshotState?.bonusAccrualAmount || 0)),
+        bonus_accrual_blocked_by_redeem: Boolean(pricingSnapshotState?.bonusAccrualBlockedByRedeem),
+        bonus_account_id: snapshotBonusAccountId > 0 ? snapshotBonusAccountId : null,
+        bonus_level_id: snapshotBonusLevelId > 0 ? snapshotBonusLevelId : null,
         use_client_pricing_snapshot: true,
         pricing_snapshot: {
           version: 1,
@@ -36298,10 +36376,13 @@ function setBottomNavActive(tab) {
         }),
       };
 
-      const distributedBonusRedeemAmount = distributeBonusRedeemAcrossPayloadItems(
-        payload.items,
-        snapshotBonusRedeemAmount
-      );
+      const displayBonusRedeemAppliedToPayload = snapshotBonusRedeemAmount > 0 && Array.isArray(pricingSnapshotState?.displayLineStates);
+      const distributedBonusRedeemAmount = displayBonusRedeemAppliedToPayload
+        ? snapshotBonusRedeemAmount
+        : distributeBonusRedeemAcrossPayloadItems(
+            payload.items,
+            snapshotBonusRedeemAmount
+          );
       if (distributedBonusRedeemAmount > 0) {
         const distributedItemsTotal = roundPrice(
           payload.items.reduce((sum, item) => sum + Number(item?.line_total || 0), 0)
@@ -36424,6 +36505,10 @@ function setBottomNavActive(tab) {
             return "Промокод не подходит к текущему заказу.";
           case "REWARD_INVALID":
             return "Подарок уже недоступен.";
+          case "BONUS_ACCOUNT_NOT_FOUND":
+            return "Бонусная карта недоступна.";
+          case "BONUS_BALANCE_NOT_ENOUGH":
+            return "Недостаточно бонусов для списания.";
           default:
             return "Ошибка оформления заказа: " + (err?.message || "UNKNOWN");
         }

@@ -785,8 +785,363 @@ async function saveConfig(db, tenantId, payload) {
   }
 }
 
+function toMysqlDateTime(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (!Number.isFinite(date.getTime())) return null;
+  const pad = (part) => String(part).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+function maxDateOrNull(...values) {
+  const dates = values
+    .map((value) => (value instanceof Date ? value : new Date(value)))
+    .filter((date) => Number.isFinite(date.getTime()));
+  if (!dates.length) return null;
+  return new Date(Math.max(...dates.map((date) => date.getTime())));
+}
+
+function getBonusRequirementTargets(levelRow, accountRow) {
+  const isCurrentLevel = Number(accountRow?.level_id || 0) > 0
+    && Number(accountRow?.level_id || 0) === Number(levelRow?.id || 0);
+  const useRetention = isCurrentLevel;
+  const retentionStrategy = String(levelRow?.retention_strategy || 'match');
+  if (useRetention && retentionStrategy === 'custom') {
+    return {
+      scope: 'retention',
+      amount: levelRow.retention_amount == null ? null : Number(levelRow.retention_amount),
+      orders: levelRow.retention_orders == null ? null : Number(levelRow.retention_orders),
+      referrals: levelRow.retention_referrals == null ? null : Number(levelRow.retention_referrals),
+    };
+  }
+  return {
+    scope: useRetention ? 'retention' : 'requirement',
+    amount: levelRow.requirement_amount == null ? null : Number(levelRow.requirement_amount),
+    orders: levelRow.requirement_orders == null ? null : Number(levelRow.requirement_orders),
+    referrals: levelRow.requirement_referrals == null ? null : Number(levelRow.requirement_referrals),
+  };
+}
+
+async function loadBonusProgressByLevel(db, tenantId, customerId, accountRow, levels) {
+  const rows = Array.isArray(levels) ? levels : [];
+  const progressByLevel = new Map();
+  if (!(tenantId > 0) || !(customerId > 0) || !accountRow?.joined_at || !rows.length) return progressByLevel;
+
+  for (const levelRow of rows) {
+    const targets = getBonusRequirementTargets(levelRow, accountRow);
+    const amountTarget = Math.max(0, Number(targets.amount || 0));
+    const ordersTarget = Math.max(0, Math.floor(Number(targets.orders || 0)));
+    const referralsTarget = Math.max(0, Math.floor(Number(targets.referrals || 0)));
+    if (!(amountTarget > 0) && !(ordersTarget > 0) && !(referralsTarget > 0)) continue;
+
+    const periodDays = Math.max(0, Math.floor(Number(levelRow.requirement_period_days || 0)));
+    const periodStart = periodDays > 0 ? new Date(Date.now() - periodDays * 24 * 60 * 60 * 1000) : null;
+    const baseStart = targets.scope === 'retention'
+      ? (accountRow.level_assigned_at || accountRow.joined_at)
+      : accountRow.joined_at;
+    const sinceDate = periodStart ? maxDateOrNull(baseStart, periodStart) : maxDateOrNull(baseStart);
+    const sinceAt = toMysqlDateTime(sinceDate);
+    if (!sinceAt) continue;
+
+    const [[orderStats]] = await db.query(
+      `SELECT COUNT(*) AS orders_count,
+              COALESCE(SUM(COALESCE(o.total_price, 0)), 0) AS orders_amount
+         FROM order_orders o
+         LEFT JOIN order_statuses os
+           ON os.tenant_id = o.tenant_id
+          AND os.store_id = o.store_id
+          AND os.id = o.status_id
+        WHERE o.tenant_id = ?
+          AND o.customer_id = ?
+          AND o.is_active = 1
+          AND o.created_at >= ?
+          AND LOWER(COALESCE(os.code, '')) NOT IN ('canceled', 'cancelled')
+          AND (o.is_paid = 1 OR COALESCE(os.is_final, 0) = 1)`,
+      [tenantId, customerId, sinceAt]
+    );
+    const [[referralStats]] = await db.query(
+      `SELECT COUNT(*) AS referrals_count
+         FROM mkt_customer_referrals
+        WHERE tenant_id = ?
+          AND inviter_customer_id = ?
+          AND status IN ('registered', 'first_purchase_paid')
+          AND registered_at >= ?`,
+      [tenantId, customerId, sinceAt]
+    );
+
+    progressByLevel.set(Number(levelRow.id || 0), {
+      scope: targets.scope,
+      since_at: sinceAt,
+      period_days: periodDays || null,
+      amount_current: Number(orderStats?.orders_amount || 0),
+      amount_target: amountTarget || null,
+      orders_current: Number(orderStats?.orders_count || 0),
+      orders_target: ordersTarget || null,
+      referrals_current: Number(referralStats?.referrals_count || 0),
+      referrals_target: referralsTarget || null,
+    });
+  }
+
+  return progressByLevel;
+}
+
 module.exports = function makeAdminBonusRouter({ db, helpers }) {
   const router = express.Router();
+
+  router.post('/customers/:customerId/join', async (req, res) => {
+    let conn;
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const customerId = Number(req.params.customerId || 0);
+      if (!Number.isInteger(customerId) || customerId <= 0) {
+        return res.status(400).json({ ok: false, error: 'INVALID_CUSTOMER_ID' });
+      }
+
+      const [[customerRow]] = await db.query(
+        `SELECT id
+           FROM cust_customers
+          WHERE tenant_id = ? AND id = ?
+          LIMIT 1`,
+        [tenantId, customerId]
+      );
+      if (!customerRow) {
+        return res.status(404).json({ ok: false, error: 'CUSTOMER_NOT_FOUND' });
+      }
+
+      const [[settingsRow]] = await db.query(
+        `SELECT bonus_program_enabled
+           FROM mkt_bonus_program_settings
+          WHERE tenant_id = ?
+          LIMIT 1`,
+        [tenantId]
+      );
+      if (Number(settingsRow?.bonus_program_enabled || 0) !== 1) {
+        return res.status(409).json({ ok: false, error: 'BONUS_PROGRAM_DISABLED' });
+      }
+
+      const [[joinLevel]] = await db.query(
+        `SELECT id, title
+           FROM mkt_bonus_levels
+          WHERE tenant_id = ? AND is_active = 1 AND access_type = 'join'
+          ORDER BY sort_order ASC, id ASC
+          LIMIT 1`,
+        [tenantId]
+      );
+      const joinLevelId = Number(joinLevel?.id || 0);
+      if (!(joinLevelId > 0)) {
+        return res.status(409).json({ ok: false, error: 'BONUS_JOIN_LEVEL_NOT_FOUND' });
+      }
+
+      conn = await db.getConnection();
+      await conn.beginTransaction();
+
+      const [[existingAccount]] = await conn.query(
+        `SELECT id, customer_id, level_id, balance, status, joined_at, level_assigned_at
+           FROM mkt_customer_bonus_accounts
+          WHERE tenant_id = ? AND customer_id = ?
+          LIMIT 1
+          FOR UPDATE`,
+        [tenantId, customerId]
+      );
+
+      let accountId = Number(existingAccount?.id || 0);
+      const alreadyJoined = !!existingAccount?.joined_at;
+      if (accountId > 0) {
+        await conn.query(
+          `UPDATE mkt_customer_bonus_accounts
+              SET level_id = COALESCE(level_id, ?),
+                  status = 'active',
+                  joined_at = COALESCE(joined_at, NOW()),
+                  level_assigned_at = COALESCE(level_assigned_at, NOW())
+            WHERE tenant_id = ? AND customer_id = ?`,
+          [joinLevelId, tenantId, customerId]
+        );
+      } else {
+        const [insertResult] = await conn.query(
+          `INSERT INTO mkt_customer_bonus_accounts
+             (tenant_id, customer_id, level_id, balance, total_accrued, total_redeemed, total_expired, status, joined_at, level_assigned_at)
+           VALUES (?, ?, ?, 0, 0, 0, 0, 'active', NOW(), NOW())`,
+          [tenantId, customerId, joinLevelId]
+        );
+        accountId = Number(insertResult.insertId || 0);
+      }
+
+      if (!alreadyJoined) {
+        await conn.query(
+          `INSERT INTO mkt_customer_bonus_transactions
+             (tenant_id, account_id, customer_id, level_id, type, amount, balance_after, reason, created_at)
+           VALUES (?, ?, ?, ?, 'join', 0, 0, ?, NOW())`,
+          [tenantId, accountId || null, customerId, joinLevelId, 'join']
+        );
+      }
+
+      const [[accountRow]] = await conn.query(
+        `SELECT id, customer_id, level_id, balance, total_accrued, total_redeemed,
+                total_expired, status, joined_at, level_assigned_at
+           FROM mkt_customer_bonus_accounts
+          WHERE tenant_id = ? AND customer_id = ?
+          LIMIT 1`,
+        [tenantId, customerId]
+      );
+      await conn.commit();
+
+      return res.json({
+        ok: true,
+        data: {
+          account: accountRow ? {
+            id: Number(accountRow.id || 0),
+            customer_id: Number(accountRow.customer_id || 0),
+            level_id: accountRow.level_id == null ? null : Number(accountRow.level_id),
+            balance: Number(accountRow.balance || 0),
+            total_accrued: Number(accountRow.total_accrued || 0),
+            total_redeemed: Number(accountRow.total_redeemed || 0),
+            total_expired: Number(accountRow.total_expired || 0),
+            status: accountRow.status || 'active',
+            joined_at: accountRow.joined_at || null,
+            level_assigned_at: accountRow.level_assigned_at || null,
+          } : null,
+          already_joined: alreadyJoined,
+        },
+      });
+    } catch (err) {
+      if (conn) {
+        try { await conn.rollback(); } catch {}
+      }
+      console.error('POST /api/admin/bonus/customers/:customerId/join error:', err);
+      return res.status(500).json({ ok: false, error: 'SERVER_ERROR' });
+    } finally {
+      if (conn) conn.release();
+    }
+  });
+
+  router.get('/customers/:customerId/card', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const customerId = Number(req.params.customerId || 0);
+      if (!Number.isInteger(customerId) || customerId <= 0) {
+        return res.status(400).json({ ok: false, error: 'INVALID_CUSTOMER_ID' });
+      }
+
+      const [[customerRow]] = await db.query(
+        `SELECT
+            c.id, c.name, c.phone, c.photo,
+            COALESCE(order_metrics.total_orders, 0) AS total_orders,
+            COALESCE(order_metrics.total_spent, 0) AS total_spent
+           FROM cust_customers c
+           LEFT JOIN (
+             SELECT
+               tenant_id,
+               customer_id,
+               COUNT(*) AS total_orders,
+               COALESCE(SUM(COALESCE(total_price, 0)), 0) AS total_spent
+             FROM order_orders
+             WHERE tenant_id = ? AND is_active = 1 AND customer_id IS NOT NULL
+             GROUP BY tenant_id, customer_id
+           ) order_metrics
+             ON order_metrics.tenant_id = c.tenant_id
+            AND order_metrics.customer_id = c.id
+          WHERE c.tenant_id = ? AND c.id = ?
+          LIMIT 1`,
+        [tenantId, tenantId, customerId]
+      );
+      if (!customerRow) {
+        return res.status(404).json({ ok: false, error: 'CUSTOMER_NOT_FOUND' });
+      }
+
+      const config = await loadConfig(db, tenantId);
+      const [[accountRow]] = await db.query(
+        `SELECT id, customer_id, level_id, balance, total_accrued, total_redeemed,
+                total_expired, status, joined_at, level_assigned_at
+           FROM mkt_customer_bonus_accounts
+          WHERE tenant_id = ? AND customer_id = ?
+          LIMIT 1`,
+        [tenantId, customerId]
+      );
+      const accountLevelId = Number(accountRow?.level_id || 0);
+      const level = config.levels.find((item) => Number(item?.id || 0) === accountLevelId)
+        || config.levels.find((item) => item?.is_active)
+        || config.levels[0]
+        || null;
+      const levelId = Number(level?.id || accountLevelId || 0);
+      const progressByLevel = await loadBonusProgressByLevel(db, tenantId, customerId, accountRow, config.levels);
+      const levelsWithProgress = config.levels.map((item) => ({
+        ...item,
+        progress: progressByLevel.get(Number(item?.id || 0)) || null,
+      }));
+      const currentLevel = level
+        ? (levelsWithProgress.find((item) => Number(item?.id || 0) === Number(level.id || 0)) || level)
+        : null;
+
+      let favoriteCategories = [];
+      if (levelId > 0) {
+        const [categoryRows] = await db.query(
+          `SELECT pc.id, pc.title, pc.icon,
+                  CASE WHEN selected.category_id IS NULL THEN 0 ELSE 1 END AS selected
+             FROM mkt_bonus_level_favorite_categories lfc
+             JOIN prod_categories pc
+               ON pc.tenant_id = lfc.tenant_id AND pc.id = lfc.category_id
+             LEFT JOIN mkt_customer_bonus_favorite_categories selected
+               ON selected.tenant_id = lfc.tenant_id
+              AND selected.customer_id = ?
+              AND selected.level_id = lfc.level_id
+              AND selected.category_id = lfc.category_id
+            WHERE lfc.tenant_id = ? AND lfc.level_id = ? AND pc.is_active = 1
+            ORDER BY selected.category_id IS NULL ASC, selected.created_at ASC, pc.sort_order ASC, pc.id ASC`,
+          [customerId, tenantId, levelId]
+        );
+        favoriteCategories = (Array.isArray(categoryRows) ? categoryRows : []).map((row) => ({
+          id: Number(row.id || 0),
+          title: row.title || '',
+          icon: row.icon || null,
+          selected: Number(row.selected || 0) === 1,
+        }));
+      }
+
+      const [transactionRows] = await db.query(
+        `SELECT t.id, t.level_id, t.type, t.amount, t.balance_after, t.reason, t.created_at,
+                l.title AS level_title
+           FROM mkt_customer_bonus_transactions t
+           LEFT JOIN mkt_bonus_levels l ON l.tenant_id = t.tenant_id AND l.id = t.level_id
+          WHERE t.tenant_id = ? AND t.customer_id = ?
+          ORDER BY t.created_at DESC, t.id DESC
+          LIMIT 10`,
+        [tenantId, customerId]
+      );
+
+      return res.json({
+        ok: true,
+        data: {
+          settings: config.settings,
+          customer: {
+            id: Number(customerRow.id || 0),
+            name: customerRow.name || '',
+            phone: customerRow.phone || '',
+            photo: customerRow.photo || '',
+            total_orders: Number(customerRow.total_orders || 0),
+            total_spent: Number(customerRow.total_spent || 0),
+          },
+          account: accountRow ? {
+            id: Number(accountRow.id || 0),
+            customer_id: Number(accountRow.customer_id || 0),
+            level_id: accountRow.level_id == null ? null : Number(accountRow.level_id),
+            balance: Number(accountRow.balance || 0),
+            total_accrued: Number(accountRow.total_accrued || 0),
+            total_redeemed: Number(accountRow.total_redeemed || 0),
+            total_expired: Number(accountRow.total_expired || 0),
+            status: accountRow.status || 'active',
+            joined_at: accountRow.joined_at || null,
+            level_assigned_at: accountRow.level_assigned_at || null,
+          } : null,
+          level: currentLevel,
+          levels: levelsWithProgress,
+          favorite_categories: favoriteCategories,
+          transactions: (Array.isArray(transactionRows) ? transactionRows : []).map(mapBonusTransactionRow),
+        },
+      });
+    } catch (err) {
+      console.error('GET /api/admin/bonus/customers/:customerId/card error:', err);
+      return res.status(500).json({ ok: false, error: 'SERVER_ERROR' });
+    }
+  });
 
   router.get('/config', async (req, res) => {
     try {

@@ -240,11 +240,27 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       selected_promo_source: normalizeOrderBenefitsPromoSource(parsed?.selected_promo_source),
       selected_promo_reward_id: normalizeOrderBenefitsSelectedId(parsed?.selected_promo_reward_id),
       benefits_preview_mode: normalizeOrderBenefitsPreviewMode(parsed?.benefits_preview_mode),
+      bonus_redeem_enabled: parsed?.bonus_redeem_enabled === true || parsed?.bonus_redeem_enabled === "true" || Number(parsed?.bonus_redeem_enabled || 0) === 1,
+      bonus_redeem_amount: Number.isFinite(Number(parsed?.bonus_redeem_amount)) && Number(parsed?.bonus_redeem_amount) > 0
+        ? Number(parsed.bonus_redeem_amount)
+        : null,
+      bonus_accrual_amount: Number.isFinite(Number(parsed?.bonus_accrual_amount)) && Number(parsed?.bonus_accrual_amount) > 0
+        ? Number(parsed.bonus_accrual_amount)
+        : null,
+      bonus_accrual_blocked_by_redeem: parsed?.bonus_accrual_blocked_by_redeem === true || parsed?.bonus_accrual_blocked_by_redeem === "true" || Number(parsed?.bonus_accrual_blocked_by_redeem || 0) === 1,
+      bonus_account_id: Number.isFinite(Number(parsed?.bonus_account_id)) && Number(parsed?.bonus_account_id) > 0
+        ? Number(parsed.bonus_account_id)
+        : null,
+      bonus_level_id: Number.isFinite(Number(parsed?.bonus_level_id)) && Number(parsed?.bonus_level_id) > 0
+        ? Number(parsed.bonus_level_id)
+        : null,
     };
     if (!meta.selected_discount_id) meta.selected_discount_source = null;
     if (meta.selected_promo_source === "reward_promo" && !meta.selected_promo_reward_id) {
       meta.selected_promo_source = null;
     }
+    if (!meta.bonus_redeem_amount) meta.bonus_redeem_enabled = null;
+    if (!meta.bonus_accrual_blocked_by_redeem) meta.bonus_accrual_blocked_by_redeem = null;
     const hasValues = Object.values(meta).some((value) => value !== null);
     return hasValues ? meta : null;
   }
@@ -261,6 +277,259 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       return [];
     }
     return Array.isArray(parsed) ? parsed : [];
+  }
+
+  function getOrderBonusRedeemAmount(rawDiscounts, benefitsMetaRaw = null) {
+    const benefitsMeta = benefitsMetaRaw && typeof benefitsMetaRaw === "object" && !Array.isArray(benefitsMetaRaw)
+      ? benefitsMetaRaw
+      : parseOrderBenefitsMetaJson(benefitsMetaRaw);
+    let amount = 0;
+    for (const entry of parseOrderDiscountsJson(rawDiscounts)) {
+      const key = String(entry?.key || "").trim().toLowerCase();
+      const sourceKind = String(entry?.source_kind || entry?.sourceKind || "").trim().toLowerCase();
+      const title = String(entry?.title || entry?.name || "").trim().toLowerCase();
+      if (key !== "bonus_redeem" && sourceKind !== "bonus" && title !== "бонусы") continue;
+      amount = roundMoney(amount + Math.max(0, Number(entry?.discount_amount ?? entry?.amount ?? 0)));
+    }
+    if (!(amount > 0)) {
+      amount = roundMoney(Math.max(0, Number(benefitsMeta?.bonus_redeem_amount || 0)));
+    }
+    return amount;
+  }
+
+  async function loadBonusProgramSettings(queryable, tenantId) {
+    const [rows] = await queryable.query(
+      `SELECT bonus_program_enabled, allow_redeem_and_accrue
+         FROM mkt_bonus_program_settings
+        WHERE tenant_id=?
+        LIMIT 1`,
+      [tenantId]
+    );
+    const row = Array.isArray(rows) && rows.length ? rows[0] : null;
+    return {
+      enabled: Number(row?.bonus_program_enabled || 0) === 1,
+      allowRedeemAndAccrue: Number(row?.allow_redeem_and_accrue || 0) === 1,
+    };
+  }
+
+  async function getBonusTransactionAmount(queryable, tenantId, orderId, type, reason) {
+    const [rows] = await queryable.query(
+      `SELECT COALESCE(SUM(amount), 0) AS amount
+         FROM mkt_customer_bonus_transactions
+        WHERE tenant_id=? AND type=? AND reason=?`,
+      [tenantId, type, reason]
+    );
+    return roundMoney(Math.max(0, Number(rows?.[0]?.amount || 0)));
+  }
+
+  async function reserveOrderBonusRedeem(queryable, {
+    tenantId,
+    orderId,
+    customerId,
+    discountsJson = null,
+    benefitsMetaRaw = null,
+  } = {}) {
+    const normalizedTenantId = Number(tenantId || 0);
+    const normalizedOrderId = Number(orderId || 0);
+    const normalizedCustomerId = Number(customerId || 0);
+    if (!(normalizedTenantId > 0) || !(normalizedOrderId > 0) || !(normalizedCustomerId > 0)) return { reserved: 0 };
+
+    const targetAmount = getOrderBonusRedeemAmount(discountsJson, benefitsMetaRaw);
+    const reserveReason = `order:${normalizedOrderId}:bonus_reserve`;
+    const releaseReason = `order:${normalizedOrderId}:bonus_release`;
+    const redeemReason = `order:${normalizedOrderId}:bonus_redeem`;
+    const alreadyRedeemed = await getBonusTransactionAmount(queryable, normalizedTenantId, normalizedOrderId, "redeem", redeemReason);
+    if (alreadyRedeemed > 0) return { reserved: alreadyRedeemed };
+
+    const reservedAmount = await getBonusTransactionAmount(queryable, normalizedTenantId, normalizedOrderId, "adjustment", reserveReason);
+    const releasedAmount = await getBonusTransactionAmount(queryable, normalizedTenantId, normalizedOrderId, "refund", releaseReason);
+    const activeReserved = roundMoney(Math.max(0, reservedAmount - releasedAmount));
+    if (!(targetAmount > 0)) {
+      if (activeReserved > 0) {
+        await releaseOrderBonusReserve(queryable, { tenantId, orderId, customerId });
+      }
+      return { reserved: 0 };
+    }
+
+    const [accountRows] = await queryable.query(
+      `SELECT id, customer_id, level_id, balance, status, joined_at
+         FROM mkt_customer_bonus_accounts
+        WHERE tenant_id=? AND customer_id=?
+        LIMIT 1
+        FOR UPDATE`,
+      [normalizedTenantId, normalizedCustomerId]
+    );
+    const account = Array.isArray(accountRows) && accountRows.length ? accountRows[0] : null;
+    if (!account?.joined_at || Number(account?.id || 0) <= 0) {
+      const err = new Error("BONUS_ACCOUNT_NOT_FOUND");
+      err.code = "BONUS_ACCOUNT_NOT_FOUND";
+      throw err;
+    }
+
+    if (activeReserved > targetAmount) {
+      const diff = roundMoney(activeReserved - targetAmount);
+      const nextBalance = roundMoney(Number(account.balance || 0) + diff);
+      await queryable.query(
+        `UPDATE mkt_customer_bonus_accounts
+            SET balance=?
+          WHERE tenant_id=? AND id=?`,
+        [nextBalance, normalizedTenantId, Number(account.id)]
+      );
+      await queryable.query(
+        `INSERT INTO mkt_customer_bonus_transactions
+           (tenant_id, account_id, customer_id, level_id, type, amount, balance_after, reason, created_at)
+         VALUES (?, ?, ?, ?, 'refund', ?, ?, ?, NOW())`,
+        [normalizedTenantId, Number(account.id), normalizedCustomerId, account.level_id || null, diff, nextBalance, releaseReason]
+      );
+      return { reserved: targetAmount };
+    }
+
+    const diff = roundMoney(targetAmount - activeReserved);
+    if (!(diff > 0)) return { reserved: targetAmount };
+    const currentBalance = roundMoney(Number(account.balance || 0));
+    if (currentBalance < diff) {
+      const err = new Error("BONUS_BALANCE_NOT_ENOUGH");
+      err.code = "BONUS_BALANCE_NOT_ENOUGH";
+      throw err;
+    }
+    const nextBalance = roundMoney(currentBalance - diff);
+    await queryable.query(
+      `UPDATE mkt_customer_bonus_accounts
+          SET balance=?
+        WHERE tenant_id=? AND id=?`,
+      [nextBalance, normalizedTenantId, Number(account.id)]
+    );
+      await queryable.query(
+        `INSERT INTO mkt_customer_bonus_transactions
+           (tenant_id, account_id, customer_id, level_id, type, amount, balance_after, reason, created_at)
+         VALUES (?, ?, ?, ?, 'adjustment', ?, ?, ?, NOW())`,
+        [normalizedTenantId, Number(account.id), normalizedCustomerId, account.level_id || null, diff, nextBalance, reserveReason]
+      );
+    return { reserved: targetAmount };
+  }
+
+  async function releaseOrderBonusReserve(queryable, {
+    tenantId,
+    orderId,
+    customerId,
+  } = {}) {
+    const normalizedTenantId = Number(tenantId || 0);
+    const normalizedOrderId = Number(orderId || 0);
+    const normalizedCustomerId = Number(customerId || 0);
+    if (!(normalizedTenantId > 0) || !(normalizedOrderId > 0) || !(normalizedCustomerId > 0)) return { released: 0 };
+    const reserveReason = `order:${normalizedOrderId}:bonus_reserve`;
+    const releaseReason = `order:${normalizedOrderId}:bonus_release`;
+    const redeemReason = `order:${normalizedOrderId}:bonus_redeem`;
+    const redeemedAmount = await getBonusTransactionAmount(queryable, normalizedTenantId, normalizedOrderId, "redeem", redeemReason);
+    if (redeemedAmount > 0) return { released: 0 };
+    const reservedAmount = await getBonusTransactionAmount(queryable, normalizedTenantId, normalizedOrderId, "adjustment", reserveReason);
+    const releasedAmount = await getBonusTransactionAmount(queryable, normalizedTenantId, normalizedOrderId, "refund", releaseReason);
+    const activeReserved = roundMoney(Math.max(0, reservedAmount - releasedAmount));
+    if (!(activeReserved > 0)) return { released: 0 };
+    const [accountRows] = await queryable.query(
+      `SELECT id, customer_id, level_id, balance
+         FROM mkt_customer_bonus_accounts
+        WHERE tenant_id=? AND customer_id=?
+        LIMIT 1
+        FOR UPDATE`,
+      [normalizedTenantId, normalizedCustomerId]
+    );
+    const account = Array.isArray(accountRows) && accountRows.length ? accountRows[0] : null;
+    if (!(Number(account?.id || 0) > 0)) return { released: 0 };
+    const nextBalance = roundMoney(Number(account.balance || 0) + activeReserved);
+    await queryable.query(
+      `UPDATE mkt_customer_bonus_accounts
+          SET balance=?
+        WHERE tenant_id=? AND id=?`,
+      [nextBalance, normalizedTenantId, Number(account.id)]
+    );
+    await queryable.query(
+      `INSERT INTO mkt_customer_bonus_transactions
+         (tenant_id, account_id, customer_id, level_id, type, amount, balance_after, reason, created_at)
+       VALUES (?, ?, ?, ?, 'refund', ?, ?, ?, NOW())`,
+      [normalizedTenantId, Number(account.id), normalizedCustomerId, account.level_id || null, activeReserved, nextBalance, releaseReason]
+    );
+    return { released: activeReserved };
+  }
+
+  async function settleOrderBonus(queryable, {
+    tenantId,
+    orderId,
+    customerId,
+    discountsJson = null,
+    benefitsMetaRaw = null,
+  } = {}) {
+    const normalizedTenantId = Number(tenantId || 0);
+    const normalizedOrderId = Number(orderId || 0);
+    const normalizedCustomerId = Number(customerId || 0);
+    if (!(normalizedTenantId > 0) || !(normalizedOrderId > 0) || !(normalizedCustomerId > 0)) return { redeemed: 0, accrued: 0 };
+    const benefitsMeta = parseOrderBenefitsMetaJson(benefitsMetaRaw);
+    const redeemAmount = getOrderBonusRedeemAmount(discountsJson, benefitsMeta);
+    if (redeemAmount > 0) {
+      await reserveOrderBonusRedeem(queryable, {
+        tenantId: normalizedTenantId,
+        orderId: normalizedOrderId,
+        customerId: normalizedCustomerId,
+        discountsJson,
+        benefitsMetaRaw: benefitsMeta,
+      });
+    }
+    const [accountRows] = await queryable.query(
+      `SELECT id, customer_id, level_id, balance
+         FROM mkt_customer_bonus_accounts
+        WHERE tenant_id=? AND customer_id=?
+        LIMIT 1
+        FOR UPDATE`,
+      [normalizedTenantId, normalizedCustomerId]
+    );
+    const account = Array.isArray(accountRows) && accountRows.length ? accountRows[0] : null;
+    if (!(Number(account?.id || 0) > 0)) return { redeemed: 0, accrued: 0 };
+
+    const redeemReason = `order:${normalizedOrderId}:bonus_redeem`;
+    const existingRedeem = await getBonusTransactionAmount(queryable, normalizedTenantId, normalizedOrderId, "redeem", redeemReason);
+    let redeemed = 0;
+    if (redeemAmount > 0 && !(existingRedeem > 0)) {
+      await queryable.query(
+        `UPDATE mkt_customer_bonus_accounts
+            SET total_redeemed=COALESCE(total_redeemed,0)+?
+          WHERE tenant_id=? AND id=?`,
+        [redeemAmount, normalizedTenantId, Number(account.id)]
+      );
+      await queryable.query(
+        `INSERT INTO mkt_customer_bonus_transactions
+           (tenant_id, account_id, customer_id, level_id, type, amount, balance_after, reason, created_at)
+         VALUES (?, ?, ?, ?, 'redeem', ?, ?, ?, NOW())`,
+        [normalizedTenantId, Number(account.id), normalizedCustomerId, account.level_id || null, redeemAmount, Number(account.balance || 0), redeemReason]
+      );
+      redeemed = redeemAmount;
+    }
+
+    const settings = await loadBonusProgramSettings(queryable, normalizedTenantId);
+    const blockedByRedeem = Boolean(benefitsMeta?.bonus_accrual_blocked_by_redeem)
+      || (redeemAmount > 0 && !settings.allowRedeemAndAccrue);
+    const accrualAmount = blockedByRedeem ? 0 : roundMoney(Math.max(0, Number(benefitsMeta?.bonus_accrual_amount || 0)));
+    const accrualReason = `order:${normalizedOrderId}:bonus_accrual`;
+    const existingAccrual = await getBonusTransactionAmount(queryable, normalizedTenantId, normalizedOrderId, "accrual", accrualReason);
+    let accrued = 0;
+    if (settings.enabled && accrualAmount > 0 && !(existingAccrual > 0)) {
+      const currentBalance = roundMoney(Number(account.balance || 0));
+      const nextBalance = roundMoney(currentBalance + accrualAmount);
+      await queryable.query(
+        `UPDATE mkt_customer_bonus_accounts
+            SET balance=?,
+                total_accrued=COALESCE(total_accrued,0)+?
+          WHERE tenant_id=? AND id=?`,
+        [nextBalance, accrualAmount, normalizedTenantId, Number(account.id)]
+      );
+      await queryable.query(
+        `INSERT INTO mkt_customer_bonus_transactions
+           (tenant_id, account_id, customer_id, level_id, type, amount, balance_after, reason, created_at)
+         VALUES (?, ?, ?, ?, 'accrual', ?, ?, ?, NOW())`,
+        [normalizedTenantId, Number(account.id), normalizedCustomerId, account.level_id || null, accrualAmount, nextBalance, accrualReason]
+      );
+      accrued = accrualAmount;
+    }
+    return { redeemed, accrued };
   }
 
   function parseOrderJsonObject(rawValue, fallback = {}) {
@@ -426,11 +695,35 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       selected_promo_source: readValue("selected_promo_source", normalizeOrderBenefitsPromoSource),
       selected_promo_reward_id: readValue("selected_promo_reward_id", normalizeOrderBenefitsSelectedId),
       benefits_preview_mode: readValue("benefits_preview_mode", normalizeOrderBenefitsPreviewMode),
+      bonus_redeem_enabled: readValue("bonus_redeem_enabled", (value) => (
+        value === true || value === "true" || Number(value || 0) === 1
+      )),
+      bonus_redeem_amount: readValue("bonus_redeem_amount", (value) => {
+        const amount = Number(value || 0);
+        return Number.isFinite(amount) && amount > 0 ? amount : null;
+      }),
+      bonus_accrual_amount: readValue("bonus_accrual_amount", (value) => {
+        const amount = Number(value || 0);
+        return Number.isFinite(amount) && amount > 0 ? amount : null;
+      }),
+      bonus_accrual_blocked_by_redeem: readValue("bonus_accrual_blocked_by_redeem", (value) => (
+        value === true || value === "true" || Number(value || 0) === 1
+      )),
+      bonus_account_id: readValue("bonus_account_id", (value) => {
+        const id = Number(value || 0);
+        return Number.isFinite(id) && id > 0 ? id : null;
+      }),
+      bonus_level_id: readValue("bonus_level_id", (value) => {
+        const id = Number(value || 0);
+        return Number.isFinite(id) && id > 0 ? id : null;
+      }),
     };
     if (!meta.selected_discount_id) meta.selected_discount_source = null;
     if (meta.selected_promo_source === "reward_promo" && !meta.selected_promo_reward_id) {
       meta.selected_promo_source = null;
     }
+    if (!meta.bonus_redeem_amount) meta.bonus_redeem_enabled = null;
+    if (!meta.bonus_accrual_blocked_by_redeem) meta.bonus_accrual_blocked_by_redeem = null;
     const hasValues = Object.values(meta).some((value) => value !== null);
     return hasValues ? JSON.stringify(meta) : null;
   }
@@ -2002,6 +2295,9 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       }
       safeRelease();
       console.error(e);
+      if (e && (e.code === "BONUS_ACCOUNT_NOT_FOUND" || e.code === "BONUS_BALANCE_NOT_ENOUGH")) {
+        return res.status(409).json({ ok: false, error: e.code });
+      }
       res.status(500).json({ ok: false, error: "DB_ERROR" });
     }
   });
@@ -2040,7 +2336,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       transactionStarted = true;
 
       const [statusRows] = await conn.query(
-        `SELECT id, code
+        `SELECT id, code, is_final
          FROM order_statuses
          WHERE tenant_id=? AND store_id=? AND id=?
          LIMIT 1`,
@@ -2085,6 +2381,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       }
       const targetStatusCode = String(statusRows[0]?.code || "").trim().toLowerCase();
       const isCanceledTarget = targetStatusCode === "canceled" || targetStatusCode === "cancelled";
+      const isSuccessfulFinalTarget = Number(statusRows[0]?.is_final || 0) === 1 && !isCanceledTarget;
       const isCurrentSuccessfulFinal = currentStatusIsFinal && currentStatusCode !== "canceled" && currentStatusCode !== "cancelled";
       if (isCurrentSuccessfulFinal && isCanceledTarget) {
         await conn.rollback();
@@ -2174,6 +2471,30 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
          WHERE tenant_id=? AND store_id=? AND id=?`,
         [statusId, stockDeductedAt, stockDocumentId, tenantId, storeId, id]
       );
+
+      if (isCanceledTarget) {
+        await releaseOrderBonusReserve(conn, {
+          tenantId,
+          orderId: id,
+          customerId: Number(orderRow?.customer_id || 0) || null,
+        });
+      } else if (isSuccessfulFinalTarget) {
+        await settleOrderBonus(conn, {
+          tenantId,
+          orderId: id,
+          customerId: Number(orderRow?.customer_id || 0) || null,
+          discountsJson: orderRow?.discounts_json || null,
+          benefitsMetaRaw: orderRow?.benefits_meta_json || null,
+        });
+      } else {
+        await reserveOrderBonusRedeem(conn, {
+          tenantId,
+          orderId: id,
+          customerId: Number(orderRow?.customer_id || 0) || null,
+          discountsJson: orderRow?.discounts_json || null,
+          benefitsMetaRaw: orderRow?.benefits_meta_json || null,
+        });
+      }
 
       if (isCanceledTarget) {
         let orderItems = [];
@@ -3156,6 +3477,40 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         }
       }
 
+      const [savedStatusRows] = await db.query(
+        `SELECT code, is_final
+           FROM order_statuses
+          WHERE tenant_id=? AND store_id=? AND id=?
+          LIMIT 1`,
+        [tenantId, storeId, Number(existing?.status_id || 0) || null]
+      );
+      const savedStatusCode = String(savedStatusRows?.[0]?.code || "").trim().toLowerCase();
+      const isSavedCanceled = savedStatusCode === "canceled" || savedStatusCode === "cancelled";
+      const isSavedSuccessfulFinal = Number(savedStatusRows?.[0]?.is_final || 0) === 1 && !isSavedCanceled;
+      if (isSavedCanceled) {
+        await releaseOrderBonusReserve(db, {
+          tenantId,
+          orderId: id,
+          customerId: Number(customerId || 0) || null,
+        });
+      } else if (isSavedSuccessfulFinal) {
+        await settleOrderBonus(db, {
+          tenantId,
+          orderId: id,
+          customerId: Number(customerId || 0) || null,
+          discountsJson,
+          benefitsMetaRaw: benefitsMetaJson,
+        });
+      } else {
+        await reserveOrderBonusRedeem(db, {
+          tenantId,
+          orderId: id,
+          customerId: Number(customerId || 0) || null,
+          discountsJson,
+          benefitsMetaRaw: benefitsMetaJson,
+        });
+      }
+
       const updateFields = [
         "customer_id=?",
         "customer_name=?",
@@ -3292,6 +3647,9 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       });
     } catch (e) {
       console.error(e);
+      if (e && (e.code === "BONUS_ACCOUNT_NOT_FOUND" || e.code === "BONUS_BALANCE_NOT_ENOUGH")) {
+        return res.status(409).json({ ok: false, error: e.code });
+      }
       res.status(500).json({ ok: false, error: "DB_ERROR" });
     }
   });

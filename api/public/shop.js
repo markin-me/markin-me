@@ -13586,11 +13586,27 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       selected_promo_source: normalizeCheckoutPromoSource(parsed?.selected_promo_source),
       selected_promo_reward_id: normalizeSelectedDiscountId(parsed?.selected_promo_reward_id),
       benefits_preview_mode: normalizeStoredCheckoutBenefitsPreviewMode(parsed?.benefits_preview_mode),
+      bonus_redeem_enabled: parsed?.bonus_redeem_enabled === true || parsed?.bonus_redeem_enabled === 'true' || Number(parsed?.bonus_redeem_enabled || 0) === 1,
+      bonus_redeem_amount: Number.isFinite(Number(parsed?.bonus_redeem_amount)) && Number(parsed?.bonus_redeem_amount) > 0
+        ? Number(parsed.bonus_redeem_amount)
+        : null,
+      bonus_accrual_amount: Number.isFinite(Number(parsed?.bonus_accrual_amount)) && Number(parsed?.bonus_accrual_amount) > 0
+        ? Number(parsed.bonus_accrual_amount)
+        : null,
+      bonus_accrual_blocked_by_redeem: parsed?.bonus_accrual_blocked_by_redeem === true || parsed?.bonus_accrual_blocked_by_redeem === 'true' || Number(parsed?.bonus_accrual_blocked_by_redeem || 0) === 1,
+      bonus_account_id: Number.isFinite(Number(parsed?.bonus_account_id)) && Number(parsed?.bonus_account_id) > 0
+        ? Number(parsed.bonus_account_id)
+        : null,
+      bonus_level_id: Number.isFinite(Number(parsed?.bonus_level_id)) && Number(parsed?.bonus_level_id) > 0
+        ? Number(parsed.bonus_level_id)
+        : null,
     };
     if (!meta.selected_discount_id) meta.selected_discount_source = null;
     if (meta.selected_promo_source === 'reward_promo' && !meta.selected_promo_reward_id) {
       meta.selected_promo_source = null;
     }
+    if (!meta.bonus_redeem_amount) meta.bonus_redeem_enabled = null;
+    if (!meta.bonus_accrual_blocked_by_redeem) meta.bonus_accrual_blocked_by_redeem = null;
     const hasValues = Object.values(meta).some((value) => value !== null);
     return hasValues ? meta : null;
   }
@@ -13602,13 +13618,120 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       selected_promo_source: normalizeCheckoutPromoSource(draft?.selected_promo_source),
       selected_promo_reward_id: normalizeSelectedDiscountId(draft?.selected_promo_reward_id),
       benefits_preview_mode: normalizeStoredCheckoutBenefitsPreviewMode(draft?.benefits_preview_mode),
+      bonus_redeem_enabled: draft?.bonus_redeem_enabled === true || draft?.bonus_redeem_enabled === 'true' || Number(draft?.bonus_redeem_enabled || 0) === 1,
+      bonus_redeem_amount: Number.isFinite(Number(draft?.bonus_redeem_amount)) && Number(draft?.bonus_redeem_amount) > 0
+        ? Number(draft.bonus_redeem_amount)
+        : null,
+      bonus_accrual_amount: Number.isFinite(Number(draft?.bonus_accrual_amount)) && Number(draft?.bonus_accrual_amount) > 0
+        ? Number(draft.bonus_accrual_amount)
+        : null,
+      bonus_accrual_blocked_by_redeem: draft?.bonus_accrual_blocked_by_redeem === true || draft?.bonus_accrual_blocked_by_redeem === 'true' || Number(draft?.bonus_accrual_blocked_by_redeem || 0) === 1,
+      bonus_account_id: Number.isFinite(Number(draft?.bonus_account_id)) && Number(draft?.bonus_account_id) > 0
+        ? Number(draft.bonus_account_id)
+        : null,
+      bonus_level_id: Number.isFinite(Number(draft?.bonus_level_id)) && Number(draft?.bonus_level_id) > 0
+        ? Number(draft.bonus_level_id)
+        : null,
     };
     if (!meta.selected_discount_id) meta.selected_discount_source = null;
     if (meta.selected_promo_source === 'reward_promo' && !meta.selected_promo_reward_id) {
       meta.selected_promo_source = null;
     }
+    if (!meta.bonus_redeem_amount) meta.bonus_redeem_enabled = null;
+    if (!meta.bonus_accrual_blocked_by_redeem) meta.bonus_accrual_blocked_by_redeem = null;
     const hasValues = Object.values(meta).some((value) => value !== null);
     return hasValues ? JSON.stringify(meta) : null;
+  }
+
+  function getOrderBonusRedeemAmount(rawDiscounts, benefitsMetaRaw = null) {
+    const benefitsMeta = benefitsMetaRaw && typeof benefitsMetaRaw === 'object' && !Array.isArray(benefitsMetaRaw)
+      ? benefitsMetaRaw
+      : parseOrderBenefitsMetaJson(benefitsMetaRaw);
+    let amount = 0;
+    for (const entry of normalizeStoredCheckoutDiscountEntries(rawDiscounts)) {
+      const key = publicDiscountText(entry?.key).toLowerCase();
+      const sourceKind = publicDiscountText(entry?.source_kind || entry?.sourceKind).toLowerCase();
+      if (key !== 'bonus_redeem' && sourceKind !== 'bonus') continue;
+      amount = roundPromoMoney(amount + Math.max(0, Number(entry?.discount_amount ?? entry?.amount ?? 0)));
+    }
+    if (!(amount > 0)) {
+      amount = roundPromoMoney(Math.max(0, Number(benefitsMeta?.bonus_redeem_amount || 0)));
+    }
+    return amount;
+  }
+
+  async function getBonusTransactionAmount(queryable, tenantId, orderId, type, reason) {
+    const [rows] = await queryable.query(
+      `SELECT COALESCE(SUM(amount), 0) AS amount
+         FROM mkt_customer_bonus_transactions
+        WHERE tenant_id=? AND type=? AND reason=?`,
+      [tenantId, type, reason]
+    );
+    return roundPromoMoney(Math.max(0, Number(rows?.[0]?.amount || 0)));
+  }
+
+  async function reserveOrderBonusRedeem(queryable, {
+    tenantId,
+    orderId,
+    customerId,
+    discountsJson = null,
+    benefitsMetaRaw = null,
+  } = {}) {
+    const normalizedTenantId = Number(tenantId || 0);
+    const normalizedOrderId = Number(orderId || 0);
+    const normalizedCustomerId = Number(customerId || 0);
+    if (!(normalizedTenantId > 0) || !(normalizedOrderId > 0) || !(normalizedCustomerId > 0)) return { reserved: 0 };
+
+    const targetAmount = getOrderBonusRedeemAmount(discountsJson, benefitsMetaRaw);
+    if (!(targetAmount > 0)) return { reserved: 0 };
+
+    const reserveReason = `order:${normalizedOrderId}:bonus_reserve`;
+    const releaseReason = `order:${normalizedOrderId}:bonus_release`;
+    const redeemReason = `order:${normalizedOrderId}:bonus_redeem`;
+    const alreadyRedeemed = await getBonusTransactionAmount(queryable, normalizedTenantId, normalizedOrderId, 'redeem', redeemReason);
+    if (alreadyRedeemed > 0) return { reserved: alreadyRedeemed };
+
+    const reservedAmount = await getBonusTransactionAmount(queryable, normalizedTenantId, normalizedOrderId, 'adjustment', reserveReason);
+    const releasedAmount = await getBonusTransactionAmount(queryable, normalizedTenantId, normalizedOrderId, 'refund', releaseReason);
+    const activeReserved = roundPromoMoney(Math.max(0, reservedAmount - releasedAmount));
+    const diff = roundPromoMoney(targetAmount - activeReserved);
+    if (!(diff > 0)) return { reserved: targetAmount };
+
+    const [accountRows] = await queryable.query(
+      `SELECT id, customer_id, level_id, balance, status, joined_at
+         FROM mkt_customer_bonus_accounts
+        WHERE tenant_id=? AND customer_id=?
+        LIMIT 1
+        FOR UPDATE`,
+      [normalizedTenantId, normalizedCustomerId]
+    );
+    const account = Array.isArray(accountRows) && accountRows.length ? accountRows[0] : null;
+    if (!account?.joined_at || Number(account?.id || 0) <= 0) {
+      const err = new Error('BONUS_ACCOUNT_NOT_FOUND');
+      err.code = 'BONUS_ACCOUNT_NOT_FOUND';
+      throw err;
+    }
+    const currentBalance = roundPromoMoney(Number(account.balance || 0));
+    if (currentBalance < diff) {
+      const err = new Error('BONUS_BALANCE_NOT_ENOUGH');
+      err.code = 'BONUS_BALANCE_NOT_ENOUGH';
+      throw err;
+    }
+
+    const nextBalance = roundPromoMoney(currentBalance - diff);
+    await queryable.query(
+      `UPDATE mkt_customer_bonus_accounts
+          SET balance=?
+        WHERE tenant_id=? AND id=?`,
+      [nextBalance, normalizedTenantId, Number(account.id)]
+    );
+    await queryable.query(
+      `INSERT INTO mkt_customer_bonus_transactions
+         (tenant_id, account_id, customer_id, level_id, type, amount, balance_after, reason, created_at)
+       VALUES (?, ?, ?, ?, 'adjustment', ?, ?, ?, NOW())`,
+      [normalizedTenantId, Number(account.id), normalizedCustomerId, account.level_id || null, diff, nextBalance, reserveReason]
+    );
+    return { reserved: targetAmount };
   }
 
   function buildOrderPromoReservationKey({
@@ -18991,6 +19114,12 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         selected_promo_source: selectedPromoSource,
         selected_promo_reward_id: selectedPromoRewardId,
         benefits_preview_mode: benefitsPreviewMode,
+        bonus_redeem_enabled: req.body?.bonus_redeem_enabled,
+        bonus_redeem_amount: req.body?.bonus_redeem_amount,
+        bonus_accrual_amount: req.body?.bonus_accrual_amount,
+        bonus_accrual_blocked_by_redeem: req.body?.bonus_accrual_blocked_by_redeem,
+        bonus_account_id: req.body?.bonus_account_id,
+        bonus_level_id: req.body?.bonus_level_id,
       });
 
       const itemsJson = JSON.stringify(normItems);
@@ -19284,6 +19413,14 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
         orderId = Number(r.insertId || 0);
 
+        await reserveOrderBonusRedeem(conn, {
+          tenantId,
+          orderId,
+          customerId,
+          discountsJson,
+          benefitsMetaRaw: benefitsMetaJson,
+        });
+
         if (stockDocumentId) {
           await conn.query(
             `UPDATE prod_stock_documents
@@ -19332,6 +19469,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             error: 'OUT_OF_STOCK',
             data: { shortages: Array.isArray(txErr.shortages) ? txErr.shortages : [] },
           });
+        }
+        if (txErr && (txErr.code === 'BONUS_ACCOUNT_NOT_FOUND' || txErr.code === 'BONUS_BALANCE_NOT_ENOUGH')) {
+          return res.status(409).json({ ok: false, error: txErr.code });
         }
         throw txErr;
       }

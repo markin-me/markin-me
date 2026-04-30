@@ -644,6 +644,9 @@
       promoCode: queryAll(root, '[data-info="promo-code"]'),
       deliveryRow: queryAll(root, '[data-info="delivery-row"]'),
       deliveryCost: queryAll(root, '[data-info="delivery-cost"]'),
+      bonusRow: queryAll(root, '[data-info="bonus-row"]'),
+      bonusAmount: queryAll(root, '[data-info="bonus-amount"]'),
+      bonusNote: queryAll(root, '[data-info="bonus-note"]'),
       total: queryAll(root, '[data-info="order-total"]'),
       deliveryType: queryAll(root, '[data-info="delivery-type"]'),
       deliveryDatetime: queryAll(root, '[data-info="delivery-datetime"]'),
@@ -722,6 +725,42 @@
       return '<i class="fas ' + escapeHtml(iconClass || "fa-credit-card") + '"></i>';
     }
 
+    function parseDiscountRows(order) {
+      var raw = order && order.discounts_json;
+      if (Array.isArray(raw)) return raw;
+      if (!raw) return [];
+      try {
+        var parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+        return Array.isArray(parsed) ? parsed : [];
+      } catch (_) {
+        return [];
+      }
+    }
+
+    function parseBenefitsMeta(order) {
+      var raw = order && (order.benefits_meta || order.benefits_meta_json);
+      if (!raw) return {};
+      if (raw && typeof raw === "object" && !Array.isArray(raw)) return raw;
+      try {
+        var parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+        return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+      } catch (_) {
+        return {};
+      }
+    }
+
+    function buildFallbackBonusSummary(order) {
+      var meta = parseBenefitsMeta(order);
+      var accrualAmount = Math.round(Math.max(0, Number(meta.bonus_accrual_amount || 0)) * 100) / 100;
+      var blocked = meta.bonus_accrual_blocked_by_redeem === true
+        || meta.bonus_accrual_blocked_by_redeem === "true"
+        || Number(meta.bonus_accrual_blocked_by_redeem || 0) === 1;
+      if (accrualAmount > 0 || blocked) {
+        return { visible: true, amount: accrualAmount, type: "accrual", blocked: blocked };
+      }
+      return { visible: false, amount: 0, type: "", blocked: false };
+    }
+
     function setOrder(order) {
       bindDiscountToggles();
 
@@ -748,6 +787,7 @@
         setTextAll(infoEls.discountAmount, "—");
         setTextAll(infoEls.promoCode, "—");
         setTextAll(infoEls.deliveryCost, "—");
+        setTextAll(infoEls.bonusAmount, "—");
         setTextAll(infoEls.total, "—");
         setTextAll(infoEls.deliveryType, "—");
         setTextAll(infoEls.deliveryDatetime, "—");
@@ -770,6 +810,8 @@
         setHiddenAll(infoEls.discountRow, true);
         setHiddenAll(infoEls.promoCodeRow, true);
         setHiddenAll(infoEls.deliveryRow, true);
+        setHiddenAll(infoEls.bonusRow, true);
+        setHiddenAll(infoEls.bonusNote, true);
         setHiddenAll(infoEls.refundBadge, true);
         setHiddenAll(infoEls.refundStateRow, true);
         setHiddenAll(infoEls.refundedTotalRow, true);
@@ -851,6 +893,19 @@
       setTextAll(infoEls.deliveryCost, money(deliveryCost));
       setHiddenAll(infoEls.deliveryRow, !isDelivery);
       setTextAll(infoEls.total, money(displayOrder && displayOrder.total_price || 0));
+      var bonusSummary = typeof helpers.buildOrderBonusSummary === "function"
+        ? (helpers.buildOrderBonusSummary(displayOrder) || buildFallbackBonusSummary(displayOrder))
+        : buildFallbackBonusSummary(displayOrder);
+      var bonusVisible = !!bonusSummary.visible;
+      var bonusAmount = Number(bonusSummary.amount || 0);
+      setTextAll(infoEls.bonusAmount, "+" + money(bonusAmount));
+      setHiddenAll(infoEls.bonusRow, !bonusVisible);
+      setHiddenAll(infoEls.bonusNote, !(bonusVisible && bonusSummary.blocked));
+      toArray(infoEls.bonusAmount).forEach(function (el) {
+        if (!el) return;
+        el.classList.remove("order-summary-discount");
+        el.classList.toggle("order-summary-bonus-blocked", bonusVisible && !!bonusSummary.blocked);
+      });
 
       var changeFrom = Number(order.change_from || 0) || 0;
       var totalPrice = Number(displayOrder && displayOrder.total_price || 0) || 0;

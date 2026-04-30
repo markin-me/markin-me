@@ -2237,6 +2237,7 @@
   const clientOrderInfoFooter = right$("#clientOrderInfoFooter");
   const clientBenefitsFooter = right$("#clientBenefitsFooter");
   const clientBenefitsOpenBtn = right$("#clientBenefitsOpenBtn");
+  const clientBonusesOpenBtn = right$("#clientBonusesOpenBtn");
 
   if (bannerEmpty) {
     const emptyTitle = bannerEmpty.querySelector('.empty-title');
@@ -2376,6 +2377,7 @@
     activeContentTab: "addresses",
     clientBenefitsModal: {
       customerId: null,
+      context: "benefits",
       mode: "customer",
       screen: "main",
       title: "Выгоды",
@@ -2383,6 +2385,11 @@
       loading: false,
       error: "",
       data: null,
+      bonusCardData: null,
+      bonusCardLoading: false,
+      bonusCardError: "",
+      bonusCardScreen: "main",
+      bonusTransactionFilter: "all",
       busyActionKey: "",
       selection: {
         promoCode: null,
@@ -3913,8 +3920,19 @@
     });
   }
 
+  if (clientBonusesOpenBtn) {
+    clientBonusesOpenBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      void openClientBonusesOverlay();
+    });
+  }
+
   function normalizeClientBenefitsMode(value) {
     return String(value || "").trim().toLowerCase() === "all" ? "all" : "customer";
+  }
+
+  function isClientBenefitsBonusContext() {
+    return String(state.clientBenefitsModal.context || "benefits") === "bonus";
   }
 
   function normalizeClientBenefitsDiscountSource(value) {
@@ -4044,12 +4062,18 @@
     }
     window.AdminBenefitsModal?.hide({ clearBody: false });
     state.clientBenefitsModal.customerId = null;
+    state.clientBenefitsModal.context = "benefits";
     state.clientBenefitsModal.mode = "customer";
     state.clientBenefitsModal.screen = "main";
     state.clientBenefitsModal.title = "Выгоды";
     state.clientBenefitsModal.payload = null;
     state.clientBenefitsModal.loading = false;
     state.clientBenefitsModal.error = "";
+    state.clientBenefitsModal.bonusCardData = null;
+    state.clientBenefitsModal.bonusCardLoading = false;
+    state.clientBenefitsModal.bonusCardError = "";
+    state.clientBenefitsModal.bonusCardScreen = "main";
+    state.clientBenefitsModal.bonusTransactionFilter = "all";
     state.clientBenefitsModal.busyActionKey = "";
     setClientBenefitsModeToggleState("customer");
   }
@@ -5325,9 +5349,354 @@
     return card;
   }
 
+  function getClientBonusCardProgress(data) {
+    const level = data?.level || {};
+    const levels = Array.isArray(data?.levels) ? data.levels : [];
+    const activeLevels = levels
+      .filter((item) => item && item.is_active !== false)
+      .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0) || Number(a.id || 0) - Number(b.id || 0));
+    const currentIndex = activeLevels.findIndex((item) => Number(item?.id || 0) === Number(level?.id || 0));
+    const nextLevel = currentIndex >= 0 ? (activeLevels[currentIndex + 1] || null) : null;
+    if (!nextLevel) {
+      return { percent: 0, text: "" };
+    }
+    const progress = nextLevel.progress && typeof nextLevel.progress === "object" ? nextLevel.progress : null;
+    if (!progress) return { percent: 0, text: "" };
+    const values = [
+      [progress.amount_current, progress.amount_target],
+      [progress.orders_current, progress.orders_target],
+      [progress.referrals_current, progress.referrals_target],
+    ].map(([current, target]) => {
+      const targetValue = Number(target || 0);
+      if (!(targetValue > 0)) return 0;
+      return Math.max(0, Math.min(1, Number(current || 0) / targetValue));
+    });
+    return { percent: Math.round(Math.max(0, ...values) * 100), text: "" };
+  }
+
+  function renderClientBonusCategoryBadge(category) {
+    const badge = document.createElement("span");
+    badge.className = "client-bonus-category-badge";
+    const title = String(category?.title || "").trim();
+    if (title) badge.title = title;
+    const icon = String(category?.icon || "").trim();
+    if (icon && (/^https?:\/\//i.test(icon) || icon.startsWith("/") || /\.(png|jpe?g|webp|gif|svg)$/i.test(icon))) {
+      const img = document.createElement("img");
+      img.src = icon;
+      img.alt = title;
+      badge.appendChild(img);
+    } else {
+      const i = document.createElement("i");
+      i.className = icon || "fas fa-layer-group";
+      i.setAttribute("aria-hidden", "true");
+      badge.appendChild(i);
+    }
+    return badge;
+  }
+
+  function getClientBonusTransactionTypeMeta(type) {
+    const key = String(type || "").trim();
+    if (key === "accrual") return { label: "Начисление", sign: "+", tone: "plus" };
+    if (key === "referral_accrual") return { label: "Рефералы", sign: "+", tone: "plus" };
+    if (key === "redeem") return { label: "Списание", sign: "-", tone: "minus" };
+    if (key === "expire") return { label: "Сгорание", sign: "-", tone: "minus" };
+    if (key === "refund") return { label: "Возврат", sign: "+", tone: "plus" };
+    if (key === "level_up") return { label: "Новый уровень", sign: "", tone: "neutral" };
+    if (key === "join") return { label: "Вступление", sign: "", tone: "neutral" };
+    return { label: "Корректировка", sign: "", tone: "neutral" };
+  }
+
+  function renderClientBonusAccrualsOverlayBody(body) {
+    body.innerHTML = "";
+    const frame = createClientBenefitsFrame();
+    if (!frame?.root || !frame.scrollEl) return;
+    body.appendChild(frame.root);
+
+    const shell = document.createElement("div");
+    shell.className = "client-bonus-card-sheet client-bonus-subscreen";
+    frame.scrollEl.appendChild(shell);
+
+    const data = state.clientBenefitsModal.bonusCardData || {};
+    const activeFilter = String(state.clientBenefitsModal.bonusTransactionFilter || "all");
+    const filters = [
+      ["all", "Все"],
+      ["accrual", "Начисления"],
+      ["redeem", "Списания"],
+      ["expire", "Сгорания"],
+      ["referral_accrual", "Рефералы"],
+    ];
+    const chips = document.createElement("div");
+    chips.className = "client-bonus-filter-chips";
+    filters.forEach(([value, label]) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = `client-bonus-filter-chip${value === activeFilter ? " is-active" : ""}`;
+      btn.textContent = label;
+      btn.addEventListener("click", () => {
+        state.clientBenefitsModal.bonusTransactionFilter = value;
+        renderClientBenefitsOverlay();
+      });
+      chips.appendChild(btn);
+    });
+    shell.appendChild(chips);
+
+    const transactions = Array.isArray(data.transactions) ? data.transactions : [];
+    const visibleTransactions = activeFilter === "all"
+      ? transactions
+      : transactions.filter((item) => String(item?.type || "") === activeFilter);
+    if (!visibleTransactions.length) {
+      const empty = document.createElement("div");
+      empty.className = "shop-profile-card shop-checkout-benefits-empty";
+      empty.textContent = "Движений пока нет";
+      shell.appendChild(empty);
+      return;
+    }
+
+    const list = document.createElement("div");
+    list.className = "client-bonus-accruals-list";
+    visibleTransactions.forEach((item) => {
+      const meta = getClientBonusTransactionTypeMeta(item?.type);
+      const amount = Math.abs(Number(item?.amount || 0));
+      const amountText = amount > 0 ? `${meta.sign}${money(amount)}` : money(0);
+      const reason = String(item?.reason || item?.level_title || meta.label).trim();
+      const row = document.createElement("div");
+      row.className = "client-bonus-accrual-row";
+      row.innerHTML = `
+        <div class="client-bonus-accrual-main">
+          <strong>${escapeHtml(meta.label)}</strong>
+          <span>${escapeHtml(reason)}</span>
+        </div>
+        <div class="client-bonus-accrual-side">
+          <strong class="is-${escapeHtml(meta.tone)}">${escapeHtml(amountText)}</strong>
+          <span>${escapeHtml(fmtDateTime(item?.created_at))}</span>
+        </div>
+      `;
+      list.appendChild(row);
+    });
+    shell.appendChild(list);
+  }
+
+  function renderClientBonusCategoriesOverlayBody(body) {
+    body.innerHTML = "";
+    const frame = createClientBenefitsFrame();
+    if (!frame?.root || !frame.scrollEl) return;
+    body.appendChild(frame.root);
+
+    const shell = document.createElement("div");
+    shell.className = "client-bonus-card-sheet client-bonus-subscreen";
+    frame.scrollEl.appendChild(shell);
+
+    const data = state.clientBenefitsModal.bonusCardData || {};
+    const categories = Array.isArray(data.favorite_categories) ? data.favorite_categories : [];
+    const selected = categories.filter((category) => category?.selected);
+    const locked = selected.length > 0;
+
+    const note = document.createElement("div");
+    note.className = "client-bonus-categories-note";
+    note.textContent = locked ? "Выбранные категории" : "Доступные категории";
+    shell.appendChild(note);
+
+    if (!categories.length) {
+      const empty = document.createElement("div");
+      empty.className = "shop-profile-card shop-checkout-benefits-empty";
+      empty.textContent = "Категории не настроены";
+      shell.appendChild(empty);
+      return;
+    }
+
+    const list = document.createElement("div");
+    list.className = "client-bonus-category-list";
+    categories.forEach((category) => {
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = `client-bonus-category-row${category?.selected ? " is-selected" : ""}`;
+      row.disabled = true;
+      row.appendChild(renderClientBonusCategoryBadge(category));
+      const title = document.createElement("span");
+      title.textContent = String(category?.title || "").trim();
+      row.appendChild(title);
+      list.appendChild(row);
+    });
+    shell.appendChild(list);
+  }
+
+  function renderClientBonusCardOverlayBody(body) {
+    body.innerHTML = "";
+    const frame = createClientBenefitsFrame();
+    if (!frame?.root || !frame.scrollEl) return;
+    body.appendChild(frame.root);
+
+    const shell = document.createElement("div");
+    shell.className = "client-bonus-card-sheet";
+    frame.scrollEl.appendChild(shell);
+
+    if (state.clientBenefitsModal.bonusCardLoading) {
+      const loading = document.createElement("div");
+      loading.className = "shop-checkout-benefits-loading";
+      loading.textContent = "Загрузка бонусов...";
+      shell.appendChild(loading);
+      return;
+    }
+
+    if (state.clientBenefitsModal.bonusCardError) {
+      const errorCard = document.createElement("div");
+      errorCard.className = "shop-profile-card shop-checkout-benefits-empty";
+      errorCard.textContent = getClientBenefitsActionErrorMessage({ message: state.clientBenefitsModal.bonusCardError });
+      shell.appendChild(errorCard);
+      return;
+    }
+
+    const data = state.clientBenefitsModal.bonusCardData || {};
+    const customer = data.customer || state.activeClient || {};
+    const account = data.account || {};
+    const isJoined = !!account?.joined_at && Number(account?.id || 0) > 0;
+    const level = data.level || {};
+    const progress = getClientBonusCardProgress(data);
+    const categoriesSource = Array.isArray(data.favorite_categories) ? data.favorite_categories : [];
+    const selectedCategories = categoriesSource.filter((category) => category?.selected);
+    const categories = selectedCategories.length ? selectedCategories : categoriesSource;
+    const cashbackPercent = Number(level.cashback_percent || 0);
+    const categoryPercent = Number(level.favorite_categories_bonus_percent || 0);
+    const categoryLimit = Number(level.favorite_categories_limit || 0);
+
+    const title = document.createElement("div");
+    title.className = "client-bonus-level-title";
+    title.textContent = String(level.title || "Бонусный уровень").trim();
+    shell.appendChild(title);
+
+    const clientCard = document.createElement("div");
+    clientCard.className = "client-bonus-card client-bonus-client";
+    const avatar = document.createElement("div");
+    avatar.className = "client-bonus-avatar";
+    if (customer.photo) {
+      const img = document.createElement("img");
+      img.src = customer.photo;
+      img.alt = String(customer.name || "");
+      avatar.appendChild(img);
+    } else {
+      avatar.innerHTML = '<i class="fas fa-user" aria-hidden="true"></i>';
+    }
+    clientCard.appendChild(avatar);
+    const clientMain = document.createElement("div");
+    clientMain.className = "client-bonus-client-main";
+    const name = document.createElement("strong");
+    name.textContent = String(customer.name || "Клиент").trim();
+    clientMain.appendChild(name);
+    const progressTrack = document.createElement("div");
+    progressTrack.className = "client-bonus-progress";
+    const progressFill = document.createElement("span");
+    progressFill.style.width = `${progress.percent}%`;
+    progressTrack.appendChild(progressFill);
+    clientMain.appendChild(progressTrack);
+    const progressText = document.createElement("div");
+    progressText.className = "client-bonus-progress-text";
+    progressText.textContent = progress.text;
+    clientMain.appendChild(progressText);
+    clientCard.appendChild(clientMain);
+    shell.appendChild(clientCard);
+
+    if (!isJoined) {
+      const joinCard = document.createElement("div");
+      joinCard.className = "client-bonus-card client-bonus-join-card";
+      const joinText = document.createElement("div");
+      joinText.className = "client-bonus-join-text";
+      joinText.innerHTML = "<strong>Клиент не подключен</strong><span>Подключите бонусную программу, чтобы начислять и списывать бонусы.</span>";
+      joinCard.appendChild(joinText);
+      const joinBtn = document.createElement("button");
+      joinBtn.type = "button";
+      joinBtn.className = "client-bonus-join-btn";
+      joinBtn.textContent = state.clientBenefitsModal.busyActionKey === "bonus-join" ? "Подключаем..." : "Подключить";
+      joinBtn.disabled = state.clientBenefitsModal.busyActionKey === "bonus-join";
+      joinBtn.addEventListener("click", () => {
+        void joinClientBonusProgram();
+      });
+      joinCard.appendChild(joinBtn);
+      shell.appendChild(joinCard);
+    }
+
+    const balanceCard = document.createElement("div");
+    balanceCard.className = "client-bonus-card client-bonus-balance";
+    balanceCard.innerHTML = `<div><span>Бонусы</span><strong>${escapeHtml(money(account.balance || 0))}</strong></div><button type="button" class="client-bonus-accruals-btn">Начисления <i class="fas fa-chevron-right" aria-hidden="true"></i></button>`;
+    shell.appendChild(balanceCard);
+    balanceCard.querySelector(".client-bonus-accruals-btn")?.addEventListener("click", () => {
+      state.clientBenefitsModal.bonusCardScreen = "accruals";
+      state.clientBenefitsModal.bonusTransactionFilter = "all";
+      renderClientBenefitsOverlay();
+    });
+
+    const stats = document.createElement("div");
+    stats.className = "client-bonus-stats";
+    const cashback = document.createElement("div");
+    cashback.className = "client-bonus-card client-bonus-stat";
+    cashback.innerHTML = `<span>Кешбэк</span><strong><i class="fas fa-undo-alt" aria-hidden="true"></i> ${escapeHtml(String(cashbackPercent))}%</strong>`;
+    stats.appendChild(cashback);
+
+    const categoriesCard = document.createElement("div");
+    categoriesCard.className = "client-bonus-card client-bonus-categories";
+    categoriesCard.setAttribute("role", "button");
+    categoriesCard.setAttribute("tabindex", "0");
+    const categoriesTitle = document.createElement("span");
+    categoriesTitle.textContent = categoryLimit > 0
+      ? `${categoryLimit} категорий · ${categoryPercent}%`
+      : `Категории · ${categoryPercent}%`;
+    categoriesCard.appendChild(categoriesTitle);
+    const badges = document.createElement("div");
+    badges.className = "client-bonus-category-badges";
+    categories.slice(0, 6).forEach((category) => {
+      badges.appendChild(renderClientBonusCategoryBadge(category));
+    });
+    if (!categories.length) {
+      const empty = document.createElement("div");
+      empty.className = "client-bonus-muted";
+      empty.textContent = "Категории не выбраны";
+      badges.appendChild(empty);
+    }
+    categoriesCard.appendChild(badges);
+    categoriesCard.addEventListener("click", () => {
+      state.clientBenefitsModal.bonusCardScreen = "categories";
+      renderClientBenefitsOverlay();
+    });
+    categoriesCard.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      state.clientBenefitsModal.bonusCardScreen = "categories";
+      renderClientBenefitsOverlay();
+    });
+    stats.appendChild(categoriesCard);
+    shell.appendChild(stats);
+  }
+
   function renderClientBenefitsOverlay() {
     {
       ensureClientBenefitsOverlay();
+      if (isClientBenefitsBonusContext()) {
+        const bonusScreen = String(state.clientBenefitsModal.bonusCardScreen || "main");
+        const isBonusSubscreen = bonusScreen !== "main";
+        window.AdminBenefitsModal?.show({
+          title: bonusScreen === "accruals" ? "Начисления" : (bonusScreen === "categories" ? "Выбрать категории" : "Бонусы"),
+          showBack: isBonusSubscreen,
+          showModeToggle: false,
+          mode: state.clientBenefitsModal.mode,
+          onClose: closeClientBenefitsOverlay,
+          onBack: () => {
+            state.clientBenefitsModal.bonusCardScreen = "main";
+            renderClientBenefitsOverlay();
+          },
+        });
+        const { body, closeBtn } = getClientBenefitsOverlayElements();
+        if (closeBtn) closeBtn.classList.toggle("hidden", isBonusSubscreen);
+        if (!body) return;
+        if (bonusScreen === "accruals") {
+          renderClientBonusAccrualsOverlayBody(body);
+        } else if (bonusScreen === "categories") {
+          renderClientBonusCategoriesOverlayBody(body);
+        } else {
+          renderClientBonusCardOverlayBody(body);
+        }
+        return;
+      }
+      const { closeBtn } = getClientBenefitsOverlayElements();
+      if (closeBtn) closeBtn.classList.remove("hidden");
       window.AdminBenefitsModal?.show({
         title: "Выгоды",
         showBack: false,
@@ -5541,6 +5910,7 @@
     if (!(customerId > 0)) return;
     ensureClientBenefitsOverlay();
     state.clientBenefitsModal.customerId = customerId;
+    state.clientBenefitsModal.context = "benefits";
     if (state.clientBenefitsModal.mainView && Number(state.clientBenefitsModal.mainView.customerId || 0) === customerId) {
       state.clientBenefitsModal.mode = normalizeClientBenefitsMode(state.clientBenefitsModal.mainView.mode || "customer");
     } else {
@@ -5563,6 +5933,71 @@
     }
     renderClientBenefitsOverlay();
     await loadClientBenefitsPreview();
+  }
+
+  async function loadClientBonusCard() {
+    const customerId = Number(state.clientBenefitsModal.customerId || 0);
+    if (!(customerId > 0)) {
+      state.clientBenefitsModal.bonusCardLoading = false;
+      state.clientBenefitsModal.bonusCardError = "DISCOUNT_INVALID";
+      renderClientBenefitsOverlay();
+      return null;
+    }
+    state.clientBenefitsModal.bonusCardLoading = true;
+    state.clientBenefitsModal.bonusCardError = "";
+    renderClientBenefitsOverlay();
+    try {
+      const json = await apiJson(`/api/admin/bonus/customers/${customerId}/card`);
+      state.clientBenefitsModal.bonusCardData = json?.data || null;
+      state.clientBenefitsModal.bonusCardError = "";
+      return state.clientBenefitsModal.bonusCardData;
+    } catch (error) {
+      state.clientBenefitsModal.bonusCardError = String(error?.message || "API_ERROR");
+      return null;
+    } finally {
+      state.clientBenefitsModal.bonusCardLoading = false;
+      renderClientBenefitsOverlay();
+    }
+  }
+
+  async function joinClientBonusProgram() {
+    const customerId = Number(state.clientBenefitsModal.customerId || 0);
+    if (!(customerId > 0) || state.clientBenefitsModal.busyActionKey) return;
+    state.clientBenefitsModal.busyActionKey = "bonus-join";
+    state.clientBenefitsModal.bonusCardError = "";
+    renderClientBenefitsOverlay();
+    try {
+      await apiJson(`/api/admin/bonus/customers/${customerId}/join`, { method: "POST", body: {} });
+      await loadClientBonusCard();
+    } catch (error) {
+      state.clientBenefitsModal.bonusCardError = String(error?.message || "API_ERROR");
+      renderClientBenefitsOverlay();
+    } finally {
+      if (state.clientBenefitsModal.busyActionKey === "bonus-join") {
+        state.clientBenefitsModal.busyActionKey = "";
+        renderClientBenefitsOverlay();
+      }
+    }
+  }
+
+  async function openClientBonusesOverlay(customerIdOverride = null) {
+    const customerId = Number(customerIdOverride || state.activeClientId || 0);
+    if (!(customerId > 0)) return;
+    ensureClientBenefitsOverlay();
+    state.clientBenefitsModal.customerId = customerId;
+    state.clientBenefitsModal.context = "bonus";
+    state.clientBenefitsModal.mode = "customer";
+    state.clientBenefitsModal.screen = "main";
+    state.clientBenefitsModal.title = "Бонусы";
+    state.clientBenefitsModal.payload = null;
+    state.clientBenefitsModal.error = "";
+    state.clientBenefitsModal.busyActionKey = "";
+    state.clientBenefitsModal.bonusCardData = null;
+    state.clientBenefitsModal.bonusCardError = "";
+    state.clientBenefitsModal.bonusCardScreen = "main";
+    state.clientBenefitsModal.bonusTransactionFilter = "all";
+    renderClientBenefitsOverlay();
+    await loadClientBonusCard();
   }
 
   function getClientBenefitsSelectionState() {

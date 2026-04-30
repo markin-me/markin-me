@@ -265,6 +265,9 @@
     promoCode: $$('[data-info="promo-code"]'),
     deliveryRow: $$('[data-info="delivery-row"]'),
     deliveryCost: $$('[data-info="delivery-cost"]'),
+    bonusRow: $$('[data-info="bonus-row"]'),
+    bonusAmount: $$('[data-info="bonus-amount"]'),
+    bonusNote: $$('[data-info="bonus-note"]'),
     total: $$('[data-info="order-total"]'),
 
     deliveryType: $$('[data-info="delivery-type"]'),
@@ -336,6 +339,7 @@
           formatScheduleText,
           totalQty,
           buildOrderDiscountSummary,
+          buildOrderBonusSummary,
           renderOrderDiscountBreakdownHtml,
         renderOrderPaymentIcon,
         paymentIcon,
@@ -368,6 +372,7 @@
           formatScheduleText,
           totalQty,
           buildOrderDiscountSummary,
+          buildOrderBonusSummary,
           renderOrderDiscountBreakdownHtml,
         renderOrderPaymentIcon,
         paymentIcon,
@@ -2774,6 +2779,30 @@
     }
   }
 
+  function parseOrderBenefitsMeta(order) {
+    const raw = order?.benefits_meta || order?.benefits_meta_json;
+    if (!raw) return {};
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) return raw;
+    try {
+      const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
+  function buildOrderBonusSummary(order) {
+    const meta = parseOrderBenefitsMeta(order);
+    const accrualAmount = roundMoney(Math.max(0, Number(meta?.bonus_accrual_amount || 0)));
+    const blocked = meta?.bonus_accrual_blocked_by_redeem === true
+      || meta?.bonus_accrual_blocked_by_redeem === "true"
+      || Number(meta?.bonus_accrual_blocked_by_redeem || 0) === 1;
+    if (accrualAmount > 0 || blocked) {
+      return { visible: true, type: "accrual", amount: accrualAmount, blocked };
+    }
+    return { visible: false, type: "", amount: 0, blocked: false };
+  }
+
   function normalizeOrderDiscountBreakdownSourceKind(entry) {
     const raw = String(entry?.source_kind || entry?.source || entry?.kind || "").trim().toLowerCase();
     if (raw === "promo_code" || raw === "reward_promo") return "promo_code";
@@ -4574,6 +4603,9 @@
       setHiddenAll(infoEls.orderCommentBlock, true);
       setTextAll(infoEls.promoCode, "?");
       setHiddenAll(infoEls.promoCodeRow, true);
+      setTextAll(infoEls.bonusAmount, "?");
+      setHiddenAll(infoEls.bonusRow, true);
+      setHiddenAll(infoEls.bonusNote, true);
       setHiddenAll(infoEls.clientExtra, true);
       setHiddenAll(infoEls.discountInfoBtn, true);
       setHtmlAll(infoEls.discountBreakdown, "");
@@ -4619,6 +4651,17 @@
     setTextAll(infoEls.deliveryCost, money(deliveryCost));
     setHiddenAll(infoEls.deliveryRow, !isDelivery);
     setTextAll(infoEls.total, money(order.total_price || 0));
+    const bonusSummary = buildOrderBonusSummary(order);
+    const showBonusRow = Boolean(bonusSummary.visible);
+    const bonusText = `+${money(bonusSummary.amount || 0)}`;
+    setTextAll(infoEls.bonusAmount, bonusText);
+    setHiddenAll(infoEls.bonusRow, !showBonusRow);
+    setHiddenAll(infoEls.bonusNote, !(showBonusRow && bonusSummary.blocked));
+    infoEls.bonusAmount.forEach((el) => {
+      if (!el) return;
+      el.classList.remove("order-summary-discount");
+      el.classList.toggle("order-summary-bonus-blocked", showBonusRow && bonusSummary.blocked);
+    });
     infoEls.payIcon.forEach((el) => {
       if (!el) return;
       el.innerHTML = `<i class="fas ${paymentIcon(order.payment_code)}"></i>`;
