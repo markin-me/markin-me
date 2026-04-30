@@ -911,10 +911,11 @@
     if (orders > 0) rows.push({ icon: "🛒", title: "Количество заказов", value: `0 / ${orders}` });
     if (referrals > 0) rows.push({ icon: "👥", title: "Рефералы", value: `0 / ${referrals}` });
     if (!rows.length) return "";
+    const matchCount = Math.min(rows.length, Math.max(1, Math.floor(Number(level?.requirement_match_count || 1))));
     return `
       <div class="shop-bonus-cards-conditions">
         <div class="shop-bonus-cards-conditions-title">До нового уровня</div>
-        <div class="shop-bonus-cards-conditions-subtitle">Выполните любое условие:</div>
+        <div class="shop-bonus-cards-conditions-subtitle">Выполните ${matchCount} из ${rows.length} условий:</div>
         <div class="shop-bonus-cards-conditions-list">
           ${rows.map((row) => `
             <div class="shop-bonus-cards-progress-item">
@@ -986,12 +987,13 @@
       target: referrals,
     });
     if (!rows.length) return "";
+    const matchCount = Math.min(rows.length, Math.max(1, Math.floor(Number(progress.match_count || level?.requirement_match_count || 1))));
 
     const isRetention = String(progress.scope || "").trim() === "retention";
     return `
       <div class="shop-bonus-cards-conditions">
         <div class="shop-bonus-cards-conditions-title">${isRetention ? "Удержание уровня" : "До нового уровня"}</div>
-        <div class="shop-bonus-cards-conditions-subtitle">Выполните любое условие:</div>
+        <div class="shop-bonus-cards-conditions-subtitle">Выполните ${matchCount} из ${rows.length} условий:</div>
         <div class="shop-bonus-cards-conditions-list">
           ${rows.map(buildBonusCardsProgressItemHtml).join("")}
         </div>

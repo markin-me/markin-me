@@ -18618,11 +18618,99 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   align-items:end;
 }
 
+.bonus-level-condition-editor{
+  display:grid;
+  gap:8px;
+}
+
+.bonus-level-match-count-field{
+  margin-top:0;
+  overflow:visible;
+}
+
+.bonus-level-match-count-field .field-label{
+  display:block;
+  position:relative !important;
+  top:0 !important;
+  left:0 !important;
+  padding:0;
+  margin-bottom:10px !important;
+  background:transparent;
+  font-size:12px;
+  font-weight:600;
+}
+
+.bonus-level-match-count-field .bonus-level-rule-input{
+  height:40px;
+  border-radius:999px !important;
+}
+
+.bonus-level-condition-rows{
+  display:grid;
+  gap:8px;
+}
+
+.bonus-level-condition-row{
+  display:grid;
+  grid-template-columns:minmax(0,1fr) minmax(0,1fr) 40px;
+  gap:8px;
+  align-items:center;
+}
+
+.bonus-level-unit-select.bonus-level-condition-type-wrap{
+  width:100%;
+  min-width:0;
+  max-width:none;
+}
+
+.bonus-level-unit-select.bonus-level-condition-type-wrap .new-order-right-select-trigger{
+  width:100%;
+}
+
+.bonus-level-unit-select.bonus-level-condition-type-wrap .new-order-right-select-menu{
+  width:100%;
+  min-width:100%;
+}
+
+.bonus-level-condition-type-text{
+  min-width:0;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+.bonus-level-condition-value-input{
+  height:40px;
+  border-radius:999px !important;
+}
+
+.bonus-range-editor-add-btn.is-disabled,
+.bonus-range-editor-add-btn:disabled{
+  cursor:not-allowed;
+  opacity:.55;
+  border-color:var(--color-border);
+  color:var(--color-muted);
+}
+
 .bonus-level-requirements-top-grid{
   display:grid;
   grid-template-columns:minmax(0,1fr);
   gap:8px;
   align-items:end;
+}
+
+.bonus-level-requirements-top-grid--match{
+  grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+}
+
+.bonus-level-requirements-top-grid--match .bonus-level-unit-select{
+  width:100%;
+  min-width:0;
+}
+
+.bonus-level-requirements-top-grid--match .bonus-level-unit-select .new-order-right-select-menu{
+  width:100%;
+  min-width:100%;
 }
 
 .bonus-level-requirements-top-grid .field-wrap,
@@ -18806,7 +18894,7 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
 
 .bonus-range-editor-input-row{
   display:grid;
-  grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+  grid-template-columns:minmax(0,1fr) minmax(0,1fr) 40px;
   gap:8px;
 }
 
@@ -18830,6 +18918,24 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
 }
 
 .bonus-range-editor-add-btn:hover{
+  border-color:var(--shop-buy);
+  color:var(--shop-buy);
+}
+
+.bonus-range-editor-delete-btn{
+  width:40px;
+  height:40px;
+  border:1px solid var(--color-border);
+  border-radius:999px;
+  background:var(--color-surface-2);
+  color:var(--color-muted);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  cursor:pointer;
+}
+
+.bonus-range-editor-delete-btn:hover{
   border-color:var(--shop-buy);
   color:var(--shop-buy);
 }
@@ -20353,9 +20459,16 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   gap:8px;
 }
 
+.bonus-level-access-row{
+  display:grid;
+  grid-template-columns:repeat(2, minmax(0, 1fr));
+  gap:8px;
+  align-items:center;
+}
+
 .bonus-level-access-chips{
   display:grid;
-  grid-template-columns:repeat(3, minmax(0, 1fr));
+  grid-template-columns:minmax(0, 1fr);
   gap:8px;
 }
 
@@ -20387,6 +20500,41 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
 .bonus-level-access-chip:disabled{
   cursor:not-allowed;
   opacity:.7;
+}
+
+.bonus-level-reward-pill{
+  min-width:0;
+  height:40px;
+  border:1px solid var(--color-border);
+  border-radius:999px;
+  background:var(--color-surface-2);
+  display:flex;
+  align-items:center;
+  padding:0 12px;
+  gap:4px;
+}
+
+.bonus-level-reward-input{
+  min-width:0;
+  width:100%;
+  border:0;
+  outline:0;
+  background:transparent;
+  color:var(--color-text);
+  font-size:12px;
+  font-weight:800;
+  text-align:center;
+}
+
+.bonus-level-reward-input:disabled{
+  cursor:not-allowed;
+}
+
+.bonus-level-reward-pill span{
+  flex:0 0 auto;
+  font-size:12px;
+  font-weight:800;
+  color:var(--color-muted);
 }
 
 .bonus-level-range-pill{

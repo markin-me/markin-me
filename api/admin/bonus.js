@@ -225,6 +225,7 @@ function normalizeBonusLevels(items) {
       subtitle: textOrNull(pick(item, 'subtitle')),
       description: textOrNull(pick(item, 'description')),
       access_type: enumValue(pick(item, 'access_type', 'accessType'), BONUS_LEVEL_ACCESS_TYPES, 'INVALID_LEVELS', 'conditions'),
+      reward_bonus_amount: nonNegativeNumber(pick(item, 'reward_bonus_amount', 'rewardBonusAmount'), 'INVALID_LEVELS', 0),
       min_spent: nonNegativeNumber(pick(item, 'min_spent', 'minSpent'), 'INVALID_LEVELS', 0),
       min_orders: nonNegativeInt(pick(item, 'min_orders', 'minOrders'), 'INVALID_LEVELS', 0),
       requirement_amount: nullableNonNegativeNumber(pick(item, 'requirement_amount', 'requirementAmount'), 'INVALID_LEVELS'),
@@ -232,6 +233,7 @@ function normalizeBonusLevels(items) {
       requirement_orders: nullableNonNegativeInt(pick(item, 'requirement_orders', 'requirementOrders'), 'INVALID_LEVELS'),
       requirement_referral_mode: enumValue(pick(item, 'requirement_referral_mode', 'requirementReferralMode'), BONUS_LEVEL_REQUIREMENT_MODES, 'INVALID_LEVELS', 'and'),
       requirement_referrals: nullableNonNegativeInt(pick(item, 'requirement_referrals', 'requirementReferrals'), 'INVALID_LEVELS'),
+      requirement_match_count: Math.max(1, nonNegativeInt(pick(item, 'requirement_match_count', 'requirementMatchCount'), 'INVALID_LEVELS', 1)),
       requirement_period_days: nullableNonNegativeInt(pick(item, 'requirement_period_days', 'requirementPeriodDays'), 'INVALID_LEVELS'),
       retention_strategy: enumValue(pick(item, 'retention_strategy', 'retentionStrategy'), BONUS_LEVEL_RETENTION_STRATEGIES, 'INVALID_LEVELS', 'match'),
       retention_amount: nullableNonNegativeNumber(pick(item, 'retention_amount', 'retentionAmount'), 'INVALID_LEVELS'),
@@ -239,6 +241,7 @@ function normalizeBonusLevels(items) {
       retention_orders: nullableNonNegativeInt(pick(item, 'retention_orders', 'retentionOrders'), 'INVALID_LEVELS'),
       retention_referral_mode: enumValue(pick(item, 'retention_referral_mode', 'retentionReferralMode'), BONUS_LEVEL_REQUIREMENT_MODES, 'INVALID_LEVELS', 'and'),
       retention_referrals: nullableNonNegativeInt(pick(item, 'retention_referrals', 'retentionReferrals'), 'INVALID_LEVELS'),
+      retention_match_count: Math.max(1, nonNegativeInt(pick(item, 'retention_match_count', 'retentionMatchCount'), 'INVALID_LEVELS', 1)),
       cashback_percent: nonNegativeNumber(pick(item, 'cashback_percent', 'cashbackPercent'), 'INVALID_LEVELS', 0),
       redeem_percent: nonNegativeNumber(pick(item, 'redeem_percent', 'redeemPercent'), 'INVALID_LEVELS', 0),
       referral_bonus_percent: nonNegativeNumber(pick(item, 'referral_bonus_percent', 'referralBonusPercent'), 'INVALID_LEVELS', 0),
@@ -330,6 +333,7 @@ function mapBonusLevelRow(row, children) {
     subtitle: row.subtitle || '',
     description: row.description || '',
     access_type: row.access_type,
+    reward_bonus_amount: Number(row.reward_bonus_amount || 0),
     min_spent: Number(row.min_spent || 0),
     min_orders: Number(row.min_orders || 0),
     requirement_amount: row.requirement_amount == null ? null : Number(row.requirement_amount),
@@ -337,6 +341,7 @@ function mapBonusLevelRow(row, children) {
     requirement_orders: row.requirement_orders == null ? null : Number(row.requirement_orders),
     requirement_referral_mode: row.requirement_referral_mode,
     requirement_referrals: row.requirement_referrals == null ? null : Number(row.requirement_referrals),
+    requirement_match_count: Number(row.requirement_match_count || 1),
     requirement_period_days: row.requirement_period_days == null ? null : Number(row.requirement_period_days),
     retention_strategy: row.retention_strategy,
     retention_amount: row.retention_amount == null ? null : Number(row.retention_amount),
@@ -344,6 +349,7 @@ function mapBonusLevelRow(row, children) {
     retention_orders: row.retention_orders == null ? null : Number(row.retention_orders),
     retention_referral_mode: row.retention_referral_mode,
     retention_referrals: row.retention_referrals == null ? null : Number(row.retention_referrals),
+    retention_match_count: Number(row.retention_match_count || 1),
     cashback_percent: Number(row.cashback_percent || 0),
     redeem_percent: Number(row.redeem_percent || 0),
     referral_bonus_percent: Number(row.referral_bonus_percent || 0),
@@ -678,6 +684,7 @@ async function saveConfig(db, tenantId, payload) {
         level.subtitle,
         level.description,
         level.access_type,
+        level.reward_bonus_amount,
         level.min_spent,
         level.min_orders,
         level.requirement_amount,
@@ -685,6 +692,7 @@ async function saveConfig(db, tenantId, payload) {
         level.requirement_orders,
         level.requirement_referral_mode,
         level.requirement_referrals,
+        level.requirement_match_count,
         level.requirement_period_days,
         level.retention_strategy,
         level.retention_amount,
@@ -692,6 +700,7 @@ async function saveConfig(db, tenantId, payload) {
         level.retention_orders,
         level.retention_referral_mode,
         level.retention_referrals,
+        level.retention_match_count,
         level.cashback_percent,
         level.redeem_percent,
         level.referral_bonus_percent,
@@ -718,12 +727,12 @@ async function saveConfig(db, tenantId, payload) {
       if (levelId > 0) {
         await conn.query(
           `UPDATE mkt_bonus_levels SET
-            sort_order = ?, title = ?, subtitle = ?, description = ?, access_type = ?,
+            sort_order = ?, title = ?, subtitle = ?, description = ?, access_type = ?, reward_bonus_amount = ?,
             min_spent = ?, min_orders = ?, requirement_amount = ?, requirement_mode = ?,
             requirement_orders = ?, requirement_referral_mode = ?, requirement_referrals = ?,
-            requirement_period_days = ?, retention_strategy = ?, retention_amount = ?,
+            requirement_match_count = ?, requirement_period_days = ?, retention_strategy = ?, retention_amount = ?,
             retention_mode = ?, retention_orders = ?, retention_referral_mode = ?, retention_referrals = ?,
-            cashback_percent = ?, redeem_percent = ?, referral_bonus_percent = ?,
+            retention_match_count = ?, cashback_percent = ?, redeem_percent = ?, referral_bonus_percent = ?,
             favorite_categories_bonus_percent = ?, favorite_categories_limit = ?,
             activation_delay_value = ?, activation_delay_unit = ?, lifetime_value = ?, lifetime_unit = ?,
             qr_enabled = ?, show_title_on_card = ?, design_color = ?, accent_color = ?, main_color = ?,
@@ -735,18 +744,18 @@ async function saveConfig(db, tenantId, payload) {
       } else {
         const [result] = await conn.query(
           `INSERT INTO mkt_bonus_levels (
-            tenant_id, code, sort_order, title, subtitle, description, access_type,
+            tenant_id, code, sort_order, title, subtitle, description, access_type, reward_bonus_amount,
             min_spent, min_orders, requirement_amount, requirement_mode,
             requirement_orders, requirement_referral_mode, requirement_referrals,
-            requirement_period_days, retention_strategy, retention_amount,
+            requirement_match_count, requirement_period_days, retention_strategy, retention_amount,
             retention_mode, retention_orders, retention_referral_mode, retention_referrals,
-            cashback_percent, redeem_percent, referral_bonus_percent,
+            retention_match_count, cashback_percent, redeem_percent, referral_bonus_percent,
             favorite_categories_bonus_percent, favorite_categories_limit,
             activation_delay_value, activation_delay_unit, lifetime_value, lifetime_unit,
             qr_enabled, show_title_on_card, design_color, accent_color, main_color,
             base_color, content_color, title_color, title_background_enabled,
             title_background_color, title_background_opacity, is_active
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [tenantId, level.code, ...levelParams]
         );
         levelId = Number(result.insertId || 0);
@@ -811,6 +820,7 @@ function getBonusRequirementTargets(levelRow, accountRow) {
       amount: levelRow.retention_amount == null ? null : Number(levelRow.retention_amount),
       orders: levelRow.retention_orders == null ? null : Number(levelRow.retention_orders),
       referrals: levelRow.retention_referrals == null ? null : Number(levelRow.retention_referrals),
+      matchCount: Number(levelRow.retention_match_count || 1),
     };
   }
   return {
@@ -818,6 +828,7 @@ function getBonusRequirementTargets(levelRow, accountRow) {
     amount: levelRow.requirement_amount == null ? null : Number(levelRow.requirement_amount),
     orders: levelRow.requirement_orders == null ? null : Number(levelRow.requirement_orders),
     referrals: levelRow.requirement_referrals == null ? null : Number(levelRow.requirement_referrals),
+    matchCount: Number(levelRow.requirement_match_count || 1),
   };
 }
 
@@ -878,6 +889,7 @@ async function loadBonusProgressByLevel(db, tenantId, customerId, accountRow, le
       orders_target: ordersTarget || null,
       referrals_current: Number(referralStats?.referrals_count || 0),
       referrals_target: referralsTarget || null,
+      match_count: Math.max(1, Number(targets.matchCount || 1)),
     });
   }
 
@@ -919,7 +931,7 @@ module.exports = function makeAdminBonusRouter({ db, helpers }) {
       }
 
       const [[joinLevel]] = await db.query(
-        `SELECT id, title
+        `SELECT id, title, reward_bonus_amount
            FROM mkt_bonus_levels
           WHERE tenant_id = ? AND is_active = 1 AND access_type = 'join'
           ORDER BY sort_order ASC, id ASC
@@ -927,6 +939,7 @@ module.exports = function makeAdminBonusRouter({ db, helpers }) {
         [tenantId]
       );
       const joinLevelId = Number(joinLevel?.id || 0);
+      const joinRewardAmount = Math.max(0, Number(joinLevel?.reward_bonus_amount || 0));
       if (!(joinLevelId > 0)) {
         return res.status(409).json({ ok: false, error: 'BONUS_JOIN_LEVEL_NOT_FOUND' });
       }
@@ -945,22 +958,27 @@ module.exports = function makeAdminBonusRouter({ db, helpers }) {
 
       let accountId = Number(existingAccount?.id || 0);
       const alreadyJoined = !!existingAccount?.joined_at;
+      let rewardBalanceAfter = joinRewardAmount;
       if (accountId > 0) {
+        const currentBalance = Math.max(0, Number(existingAccount?.balance || 0));
+        rewardBalanceAfter = alreadyJoined ? currentBalance : currentBalance + joinRewardAmount;
         await conn.query(
           `UPDATE mkt_customer_bonus_accounts
               SET level_id = COALESCE(level_id, ?),
+                  balance = CASE WHEN joined_at IS NULL THEN COALESCE(balance, 0) + ? ELSE balance END,
+                  total_accrued = CASE WHEN joined_at IS NULL THEN COALESCE(total_accrued, 0) + ? ELSE total_accrued END,
                   status = 'active',
                   joined_at = COALESCE(joined_at, NOW()),
                   level_assigned_at = COALESCE(level_assigned_at, NOW())
             WHERE tenant_id = ? AND customer_id = ?`,
-          [joinLevelId, tenantId, customerId]
+          [joinLevelId, joinRewardAmount, joinRewardAmount, tenantId, customerId]
         );
       } else {
         const [insertResult] = await conn.query(
           `INSERT INTO mkt_customer_bonus_accounts
              (tenant_id, customer_id, level_id, balance, total_accrued, total_redeemed, total_expired, status, joined_at, level_assigned_at)
-           VALUES (?, ?, ?, 0, 0, 0, 0, 'active', NOW(), NOW())`,
-          [tenantId, customerId, joinLevelId]
+           VALUES (?, ?, ?, ?, ?, 0, 0, 'active', NOW(), NOW())`,
+          [tenantId, customerId, joinLevelId, joinRewardAmount, joinRewardAmount]
         );
         accountId = Number(insertResult.insertId || 0);
       }
@@ -969,8 +987,8 @@ module.exports = function makeAdminBonusRouter({ db, helpers }) {
         await conn.query(
           `INSERT INTO mkt_customer_bonus_transactions
              (tenant_id, account_id, customer_id, level_id, type, amount, balance_after, reason, created_at)
-           VALUES (?, ?, ?, ?, 'join', 0, 0, ?, NOW())`,
-          [tenantId, accountId || null, customerId, joinLevelId, 'join']
+           VALUES (?, ?, ?, ?, 'join', ?, ?, ?, NOW())`,
+          [tenantId, accountId || null, customerId, joinLevelId, joinRewardAmount, rewardBalanceAfter, 'join']
         );
       }
 

@@ -181,6 +181,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       sort_order: Number(row.sort_order || 0),
       title: row.title || '',
       access_type: row.access_type || 'conditions',
+      reward_bonus_amount: Number(row.reward_bonus_amount || 0),
       cashback_percent: Number(row.cashback_percent || 0),
       redeem_percent: Number(row.redeem_percent || 0),
       referral_bonus_percent: Number(row.referral_bonus_percent || 0),
@@ -191,6 +192,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       requirement_orders: row.requirement_orders == null ? null : Number(row.requirement_orders),
       requirement_referral_mode: row.requirement_referral_mode || 'and',
       requirement_referrals: row.requirement_referrals == null ? null : Number(row.requirement_referrals),
+      requirement_match_count: Number(row.requirement_match_count || 1),
       requirement_period_days: row.requirement_period_days == null ? null : Number(row.requirement_period_days),
       retention_strategy: row.retention_strategy || 'match',
       retention_amount: row.retention_amount == null ? null : Number(row.retention_amount),
@@ -198,6 +200,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       retention_orders: row.retention_orders == null ? null : Number(row.retention_orders),
       retention_referral_mode: row.retention_referral_mode || 'and',
       retention_referrals: row.retention_referrals == null ? null : Number(row.retention_referrals),
+      retention_match_count: Number(row.retention_match_count || 1),
       progress: children.progressByLevel?.get(levelId) || null,
       activation_delay_value: Number(row.activation_delay_value || 0),
       activation_delay_unit: row.activation_delay_unit || 'immediate',
@@ -271,6 +274,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         referrals: levelRow.retention_referrals == null ? null : Number(levelRow.retention_referrals),
         mode: levelRow.retention_mode || 'and',
         referralMode: levelRow.retention_referral_mode || 'and',
+        matchCount: Number(levelRow.retention_match_count || 1),
       };
     }
     return {
@@ -280,6 +284,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       referrals: levelRow.requirement_referrals == null ? null : Number(levelRow.requirement_referrals),
       mode: levelRow.requirement_mode || 'and',
       referralMode: levelRow.requirement_referral_mode || 'and',
+      matchCount: Number(levelRow.requirement_match_count || 1),
     };
   }
 
@@ -350,6 +355,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         orders_target: ordersTarget || null,
         referrals_current: Number(referralStats?.referrals_count || 0),
         referrals_target: referralsTarget || null,
+        match_count: Math.max(1, Number(targets.matchCount || 1)),
       });
     }
 
@@ -1776,13 +1782,13 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         [tenantId]
       );
       const [levelRows] = await db.query(
-        `SELECT id, code, sort_order, title, access_type,
+        `SELECT id, code, sort_order, title, access_type, reward_bonus_amount,
                 cashback_percent, redeem_percent, referral_bonus_percent,
                 favorite_categories_bonus_percent, favorite_categories_limit,
                 requirement_amount, requirement_mode, requirement_orders,
-                requirement_referral_mode, requirement_referrals, requirement_period_days,
+                requirement_referral_mode, requirement_referrals, requirement_match_count, requirement_period_days,
                 retention_strategy, retention_amount, retention_mode, retention_orders,
-                retention_referral_mode, retention_referrals,
+                retention_referral_mode, retention_referrals, retention_match_count,
                 activation_delay_value, activation_delay_unit, lifetime_value, lifetime_unit,
                 qr_enabled, show_title_on_card,
                 design_color, main_color, base_color, content_color,
@@ -1890,7 +1896,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       }
 
       const [[joinLevel]] = await db.query(
-        `SELECT id, title
+        `SELECT id, title, reward_bonus_amount
          FROM mkt_bonus_levels
          WHERE tenant_id=? AND is_active=1 AND access_type='join'
          ORDER BY sort_order ASC, id ASC
@@ -1898,6 +1904,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         [tenantId]
       );
       const joinLevelId = Number(joinLevel?.id || 0);
+      const joinRewardAmount = Math.max(0, Number(joinLevel?.reward_bonus_amount || 0));
       if (!(joinLevelId > 0)) {
         return res.status(409).json({ ok: false, error: 'BONUS_JOIN_LEVEL_NOT_FOUND' });
       }
@@ -1916,22 +1923,27 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
 
       let accountId = Number(existingAccount?.id || 0);
       const alreadyJoined = !!existingAccount?.joined_at;
+      let rewardBalanceAfter = joinRewardAmount;
       if (accountId > 0) {
+        const currentBalance = Math.max(0, Number(existingAccount?.balance || 0));
+        rewardBalanceAfter = alreadyJoined ? currentBalance : currentBalance + joinRewardAmount;
         await conn.query(
           `UPDATE mkt_customer_bonus_accounts
            SET level_id = COALESCE(level_id, ?),
+               balance = CASE WHEN joined_at IS NULL THEN COALESCE(balance, 0) + ? ELSE balance END,
+               total_accrued = CASE WHEN joined_at IS NULL THEN COALESCE(total_accrued, 0) + ? ELSE total_accrued END,
                status = 'active',
                joined_at = COALESCE(joined_at, NOW()),
                level_assigned_at = COALESCE(level_assigned_at, NOW())
            WHERE tenant_id=? AND customer_id=?`,
-          [joinLevelId, tenantId, customerId]
+          [joinLevelId, joinRewardAmount, joinRewardAmount, tenantId, customerId]
         );
       } else {
         const [insertResult] = await conn.query(
           `INSERT INTO mkt_customer_bonus_accounts
              (tenant_id, customer_id, level_id, balance, total_accrued, total_redeemed, total_expired, status, joined_at, level_assigned_at)
-           VALUES (?, ?, ?, 0, 0, 0, 0, 'active', NOW(), NOW())`,
-          [tenantId, customerId, joinLevelId]
+           VALUES (?, ?, ?, ?, ?, 0, 0, 'active', NOW(), NOW())`,
+          [tenantId, customerId, joinLevelId, joinRewardAmount, joinRewardAmount]
         );
         accountId = Number(insertResult.insertId || 0);
       }
@@ -1940,8 +1952,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         await conn.query(
           `INSERT INTO mkt_customer_bonus_transactions
              (tenant_id, account_id, customer_id, level_id, type, amount, balance_after, reason, created_at)
-           VALUES (?, ?, ?, ?, 'join', 0, 0, ?, NOW())`,
-          [tenantId, accountId || null, customerId, joinLevelId, 'join']
+           VALUES (?, ?, ?, ?, 'join', ?, ?, ?, NOW())`,
+          [tenantId, accountId || null, customerId, joinLevelId, joinRewardAmount, rewardBalanceAfter, 'join']
         );
       }
 

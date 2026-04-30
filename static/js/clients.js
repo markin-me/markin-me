@@ -538,9 +538,9 @@
 
   function createDefaultBonusLevels() {
     return [
-      { id: 'starter', title: 'Стартовый', subtitle: 'от 0 ₽', description: '', designColor: '#f8fafc', accentColor: '#f97316', minSpent: 0, minOrders: 0, accessType: 'conditions', tariffPrice: 0, tariffDiscountPercent: 0, tariffPeriodValue: 1, tariffPeriodUnit: 'months', tariffPayWithBonus: false, showTitleOnCard: true, titleColor: '#1f2937', titleBackgroundEnabled: true, titleBackgroundColor: '#ffffff', titleBackgroundOpacity: 90, cashbackPercent: 1, redeemPercent: 0, referralBonusPercent: 0, qrEnabled: true, mainColor: '#46b13b', baseColor: '#1f8d2e', contentColor: '#ffffff', activationDelayValue: 0, activationDelayUnit: 'immediate', lifetimeValue: 0, lifetimeUnit: 'forever', orderBonusRanges: [], favoriteCategoriesBonusPercent: 0, favoriteCategoriesLimit: 0, favoriteCategoryIds: [] },
-      { id: 'silver', title: 'Серебряный', subtitle: 'от 10 000 ₽', description: '', designColor: '#f1f5f9', accentColor: '#f97316', minSpent: 10000, minOrders: 5, accessType: 'conditions', tariffPrice: 0, tariffDiscountPercent: 0, tariffPeriodValue: 1, tariffPeriodUnit: 'months', tariffPayWithBonus: false, showTitleOnCard: true, titleColor: '#1f2937', titleBackgroundEnabled: true, titleBackgroundColor: '#ffffff', titleBackgroundOpacity: 90, cashbackPercent: 3, redeemPercent: 0, referralBonusPercent: 0, qrEnabled: true, mainColor: '#46b13b', baseColor: '#1f8d2e', contentColor: '#ffffff', activationDelayValue: 0, activationDelayUnit: 'immediate', lifetimeValue: 0, lifetimeUnit: 'forever', orderBonusRanges: [], favoriteCategoriesBonusPercent: 0, favoriteCategoriesLimit: 0, favoriteCategoryIds: [] },
-      { id: 'gold', title: 'Золотой', subtitle: 'от 25 000 ₽', description: '', designColor: '#e2e8f0', accentColor: '#f97316', minSpent: 25000, minOrders: 10, accessType: 'conditions', tariffPrice: 0, tariffDiscountPercent: 0, tariffPeriodValue: 1, tariffPeriodUnit: 'months', tariffPayWithBonus: false, showTitleOnCard: true, titleColor: '#1f2937', titleBackgroundEnabled: true, titleBackgroundColor: '#ffffff', titleBackgroundOpacity: 90, cashbackPercent: 5, redeemPercent: 0, referralBonusPercent: 0, qrEnabled: true, mainColor: '#46b13b', baseColor: '#1f8d2e', contentColor: '#ffffff', activationDelayValue: 0, activationDelayUnit: 'immediate', lifetimeValue: 0, lifetimeUnit: 'forever', orderBonusRanges: [], favoriteCategoriesBonusPercent: 0, favoriteCategoriesLimit: 0, favoriteCategoryIds: [] },
+      { id: 'starter', title: 'Стартовый', subtitle: 'от 0 ₽', description: '', designColor: '#f8fafc', accentColor: '#f97316', minSpent: 0, minOrders: 0, accessType: 'conditions', rewardBonusAmount: 0, tariffPrice: 0, tariffDiscountPercent: 0, tariffPeriodValue: 1, tariffPeriodUnit: 'months', tariffPayWithBonus: false, showTitleOnCard: true, titleColor: '#1f2937', titleBackgroundEnabled: true, titleBackgroundColor: '#ffffff', titleBackgroundOpacity: 90, cashbackPercent: 1, redeemPercent: 0, referralBonusPercent: 0, qrEnabled: true, mainColor: '#46b13b', baseColor: '#1f8d2e', contentColor: '#ffffff', activationDelayValue: 0, activationDelayUnit: 'immediate', lifetimeValue: 0, lifetimeUnit: 'forever', orderBonusRanges: [], favoriteCategoriesBonusPercent: 0, favoriteCategoriesLimit: 0, favoriteCategoryIds: [] },
+      { id: 'silver', title: 'Серебряный', subtitle: 'от 10 000 ₽', description: '', designColor: '#f1f5f9', accentColor: '#f97316', minSpent: 10000, minOrders: 5, accessType: 'conditions', rewardBonusAmount: 0, tariffPrice: 0, tariffDiscountPercent: 0, tariffPeriodValue: 1, tariffPeriodUnit: 'months', tariffPayWithBonus: false, showTitleOnCard: true, titleColor: '#1f2937', titleBackgroundEnabled: true, titleBackgroundColor: '#ffffff', titleBackgroundOpacity: 90, cashbackPercent: 3, redeemPercent: 0, referralBonusPercent: 0, qrEnabled: true, mainColor: '#46b13b', baseColor: '#1f8d2e', contentColor: '#ffffff', activationDelayValue: 0, activationDelayUnit: 'immediate', lifetimeValue: 0, lifetimeUnit: 'forever', orderBonusRanges: [], favoriteCategoriesBonusPercent: 0, favoriteCategoriesLimit: 0, favoriteCategoryIds: [] },
+      { id: 'gold', title: 'Золотой', subtitle: 'от 25 000 ₽', description: '', designColor: '#e2e8f0', accentColor: '#f97316', minSpent: 25000, minOrders: 10, accessType: 'conditions', rewardBonusAmount: 0, tariffPrice: 0, tariffDiscountPercent: 0, tariffPeriodValue: 1, tariffPeriodUnit: 'months', tariffPayWithBonus: false, showTitleOnCard: true, titleColor: '#1f2937', titleBackgroundEnabled: true, titleBackgroundColor: '#ffffff', titleBackgroundOpacity: 90, cashbackPercent: 5, redeemPercent: 0, referralBonusPercent: 0, qrEnabled: true, mainColor: '#46b13b', baseColor: '#1f8d2e', contentColor: '#ffffff', activationDelayValue: 0, activationDelayUnit: 'immediate', lifetimeValue: 0, lifetimeUnit: 'forever', orderBonusRanges: [], favoriteCategoriesBonusPercent: 0, favoriteCategoriesLimit: 0, favoriteCategoryIds: [] },
     ];
   }
 
@@ -619,6 +619,17 @@
     return ['conditions', 'join', 'paid'].includes(normalized) ? normalized : 'conditions';
   }
 
+  function getBaseBonusLevelAccessType(index) {
+    return Number(index || 0) <= 0 ? 'join' : 'conditions';
+  }
+
+  function applyBaseBonusLevelAccessRules(levels) {
+    return (Array.isArray(levels) ? levels : []).map((level, index) => ({
+      ...level,
+      accessType: getBaseBonusLevelAccessType(index),
+    }));
+  }
+
   function normalizeBonusLevelTariffPeriodUnit(value) {
     const normalized = String(value || '').trim().toLowerCase();
     return ['days', 'months', 'forever'].includes(normalized) ? normalized : 'months';
@@ -680,6 +691,7 @@
           minSpent: normalizeNumberInputValue(item?.minSpent, 0),
           minOrders: normalizeNumberInputValue(item?.minOrders, 0),
           accessType: normalizeBonusLevelAccessType(item?.accessType),
+          rewardBonusAmount: normalizeNumberInputValue(item?.rewardBonusAmount, 0),
           tariffPrice: normalizeNumberInputValue(item?.tariffPrice, 0),
           tariffDiscountPercent: normalizeBonusPercentInputValue(item?.tariffDiscountPercent, 0),
           tariffPeriodValue: normalizeBonusLevelTimingValue(item?.tariffPeriodValue, 1),
@@ -716,6 +728,7 @@
           requirementOrders: normalizeBonusLevelRequirementValue(item?.requirementOrders),
           requirementReferralMode: normalizeBonusLevelRequirementMode(item?.requirementReferralMode),
           requirementReferrals: normalizeBonusLevelRequirementValue(item?.requirementReferrals),
+          requirementMatchCount: Math.max(1, normalizeNumberInputValue(item?.requirementMatchCount, 1)),
           requirementPeriodDays: normalizeBonusLevelRequirementValue(item?.requirementPeriodDays),
           retentionStrategy: normalizeBonusLevelRetentionStrategy(item?.retentionStrategy || (
             normalizeBonusLevelRequirementValue(item?.retentionAmount) != null ||
@@ -729,10 +742,13 @@
           retentionOrders: normalizeBonusLevelRequirementValue(item?.retentionOrders),
           retentionReferralMode: normalizeBonusLevelRequirementMode(item?.retentionReferralMode),
           retentionReferrals: normalizeBonusLevelRequirementValue(item?.retentionReferrals),
+          retentionMatchCount: Math.max(1, normalizeNumberInputValue(item?.retentionMatchCount, 1)),
         };
       })
       .filter(Boolean);
-    return next.length || !withDefaults ? next : createDefaultBonusLevels();
+    if (next.length) return applyBaseBonusLevelAccessRules(next);
+    const defaultLevels = createDefaultBonusLevels();
+    return applyBaseBonusLevelAccessRules(withDefaults ? defaultLevels : defaultLevels.slice(0, 1));
   }
 
   function sanitizeBonusClientEvents(items, options = {}) {
@@ -782,6 +798,7 @@
       minSpent: item?.min_spent ?? item?.minSpent,
       minOrders: item?.min_orders ?? item?.minOrders,
       accessType: item?.access_type || item?.accessType,
+      rewardBonusAmount: item?.reward_bonus_amount ?? item?.rewardBonusAmount,
       tariffPrice: item?.tariff_price ?? item?.tariffPrice,
       tariffDiscountPercent: item?.tariff_discount_percent ?? item?.tariffDiscountPercent,
       tariffPeriodValue: item?.tariff_period_value ?? item?.tariffPeriodValue,
@@ -821,6 +838,7 @@
       requirementOrders: item?.requirement_orders ?? item?.requirementOrders,
       requirementReferralMode: item?.requirement_referral_mode || item?.requirementReferralMode,
       requirementReferrals: item?.requirement_referrals ?? item?.requirementReferrals,
+      requirementMatchCount: item?.requirement_match_count ?? item?.requirementMatchCount,
       requirementPeriodDays: item?.requirement_period_days ?? item?.requirementPeriodDays,
       retentionStrategy: item?.retention_strategy || item?.retentionStrategy,
       retentionAmount: item?.retention_amount ?? item?.retentionAmount,
@@ -828,6 +846,7 @@
       retentionOrders: item?.retention_orders ?? item?.retentionOrders,
       retentionReferralMode: item?.retention_referral_mode || item?.retentionReferralMode,
       retentionReferrals: item?.retention_referrals ?? item?.retentionReferrals,
+      retentionMatchCount: item?.retention_match_count ?? item?.retentionMatchCount,
     };
   }
 
@@ -900,6 +919,7 @@
         minSpent: level.minSpent,
         minOrders: level.minOrders,
         accessType: level.accessType,
+        rewardBonusAmount: level.rewardBonusAmount,
         tariffPrice: level.tariffPrice,
         tariffDiscountPercent: level.tariffDiscountPercent,
         tariffPeriodValue: level.tariffPeriodValue,
@@ -931,6 +951,7 @@
         requirementOrders: level.requirementOrders,
         requirementReferralMode: level.requirementReferralMode,
         requirementReferrals: level.requirementReferrals,
+        requirementMatchCount: level.requirementMatchCount,
         requirementPeriodDays: level.requirementPeriodDays,
         retentionStrategy: level.retentionStrategy,
         retentionAmount: level.retentionAmount,
@@ -938,6 +959,7 @@
         retentionOrders: level.retentionOrders,
         retentionReferralMode: level.retentionReferralMode,
         retentionReferrals: level.retentionReferrals,
+        retentionMatchCount: level.retentionMatchCount,
       })),
       referral_levels: (Array.isArray(referralLevelsSource) ? referralLevelsSource : [])
         .filter((level) => level?.isExample !== true && Number(level?.invitedCount || 0) >= 1 && Number(level?.invitedCount || 0) <= 3)
@@ -1827,9 +1849,15 @@
   const elAddBtn = $("#clientsAddBtn");
   const elOpenFilterCategoriesBtn = $("#openFilterCategoriesBtn");
   const elBonusCardsBtn = $("#bonusCardsBtn");
+  const elBonusPaidTariffBtn = $("#bonusPaidTariffBtn");
   const elBonusReferralsBtn = $("#bonusReferralsBtn");
   const elBonusProgramsBtn = $("#bonusProgramsBtn");
   const elClientsScroll = elList ? elList.closest(".panel-body") : null;
+
+  if (elBonusCardsBtn) {
+    const label = elBonusCardsBtn.querySelector(".stage-text b");
+    if (label) label.textContent = "Базовый тариф";
+  }
 
   // Discounts accordion
   const elDiscountsFilters = $("#discountsFiltersList");
@@ -2176,6 +2204,7 @@
   const bonusLevelRequirementsField = right$("#bonusLevelRequirementsField");
   const bonusLevelRequirementsTitle = right$("#bonusLevelRequirementsTitle");
   const bonusLevelAccessChips = right$("#bonusLevelAccessChips");
+  const bonusLevelRewardBonusAmountInput = right$("#bonusLevelRewardBonusAmountInput");
   const bonusLevelCashbackPercentInput = right$("#bonusLevelCashbackPercentInput");
   const bonusLevelRedeemPercentInput = right$("#bonusLevelRedeemPercentInput");
   const bonusLevelReferralBonusField = right$("#bonusLevelReferralBonusField");
@@ -2425,8 +2454,8 @@
     bonusPointRate: 1,
     bonusPointRateDraft: 1,
     bonusCardsEditing: false,
-    bonusLevels: createDefaultBonusLevels(),
-    bonusLevelsDraft: createDefaultBonusLevels(),
+    bonusLevels: sanitizeBonusLevels(createDefaultBonusLevels()),
+    bonusLevelsDraft: sanitizeBonusLevels(createDefaultBonusLevels()),
     bonusClientEvents: [],
     referralProgramEnabled: false,
     referralProgramEnabledDraft: false,
@@ -7251,6 +7280,9 @@
     if (elBonusCardsBtn) {
       elBonusCardsBtn.classList.toggle('is-active', state.currentView === 'bonus-cards');
     }
+    if (elBonusPaidTariffBtn) {
+      elBonusPaidTariffBtn.classList.remove('is-active');
+    }
     if (elBonusReferralsBtn) {
       elBonusReferralsBtn.classList.toggle('is-active', state.currentView === 'bonus-referrals');
     }
@@ -7268,6 +7300,13 @@
     if (!targetId) return null;
     const list = Array.isArray(levels) ? levels : [];
     return list.find((item) => String(item?.id || '').trim() === targetId) || null;
+  }
+
+  function getBonusLevelIndexById(levelId, levels = getCurrentBonusLevels()) {
+    const targetId = String(levelId || '').trim();
+    if (!targetId) return -1;
+    const list = Array.isArray(levels) ? levels : [];
+    return list.findIndex((item) => String(item?.id || '').trim() === targetId);
   }
 
   function updateBonusLevelInCollections(levelId, updater) {
@@ -8020,7 +8059,13 @@
     alert(message);
   }
 
+  let bonusLevelRequirementsOutsideClickHandler = null;
+
   function closeBonusLevelRequirementsEditor() {
+    if (bonusLevelRequirementsOutsideClickHandler) {
+      document.removeEventListener('click', bonusLevelRequirementsOutsideClickHandler);
+      bonusLevelRequirementsOutsideClickHandler = null;
+    }
     const { backdrop } = getClientBenefitsOverlayElements();
     if (backdrop) backdrop.classList.remove('bonus-range-editor-overlay');
     window.AdminBenefitsModal?.hide();
@@ -8315,18 +8360,18 @@
 
     const referralRequirementsEnabled = isReferralSystemEnabled();
     const initialPeriodDays = normalizeBonusLevelRequirementValue(current.requirementPeriodDays);
-    let selectedMode = normalizeBonusLevelRequirementMode(current.requirementMode);
-    let selectedReferralMode = normalizeBonusLevelRequirementMode(current.requirementReferralMode);
+    let selectedMode = 'or';
+    let selectedReferralMode = 'or';
     let selectedRetentionStrategy = normalizeBonusLevelRetentionStrategy(current.retentionStrategy);
-    let selectedRetentionMode = normalizeBonusLevelRequirementMode(current.retentionMode);
-    let selectedRetentionReferralMode = normalizeBonusLevelRequirementMode(current.retentionReferralMode);
+    let selectedRetentionMode = 'or';
+    let selectedRetentionReferralMode = 'or';
     let selectedPeriodUnit = initialPeriodDays == null ? 'forever' : 'days';
     const initialRetentionAmount = normalizeBonusLevelRequirementValue(current.retentionAmount);
     const initialRetentionOrders = normalizeBonusLevelRequirementValue(current.retentionOrders);
     const initialRetentionReferrals = normalizeBonusLevelRequirementValue(current.retentionReferrals);
 
     const periodControls = document.createElement('div');
-    periodControls.className = 'bonus-level-requirements-top-grid';
+    periodControls.className = 'bonus-level-requirements-top-grid bonus-level-requirements-top-grid--match';
     periodControls.innerHTML = `
       <div class="field-wrap bonus-level-requirement-period-field">
         <span class="field-label" for="bonusLevelRequirementModalPeriodInput">\u041f\u0435\u0440\u0438\u043e\u0434</span>
@@ -8352,39 +8397,187 @@
         </div>
       </div>
     `;
+    const matchControl = document.createElement('label');
+    matchControl.className = 'field-wrap bonus-level-match-count-field';
+    matchControl.innerHTML = `
+      <span class="field-label" for="bonusLevelRequirementMatchCountTrigger">\u0412\u044b\u043f\u043e\u043b\u043d\u0438\u0442\u044c \u043f\u0443\u043d\u043a\u0442\u043e\u0432</span>
+      <div class="new-order-right-select-wrap settings-delivery-city-selector bonus-level-unit-select bonus-level-match-count-select" id="bonusLevelRequirementMatchCountWrap">
+        <button class="new-order-right-select-trigger bonus-level-unit-select-trigger" id="bonusLevelRequirementMatchCountTrigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-label="\u0412\u044b\u043f\u043e\u043b\u043d\u0438\u0442\u044c \u043f\u0443\u043d\u043a\u0442\u043e\u0432">
+          <span class="cash-toolbar-filter-main"><span id="bonusLevelRequirementMatchCountText">${escapeHtml(String(Math.max(1, normalizeNumberInputValue(current.requirementMatchCount, 1))))}</span></span>
+          <i class="fas fa-chevron-down"></i>
+        </button>
+        <div class="new-order-right-select-menu no-scrollbar hidden" id="bonusLevelRequirementMatchCountMenu" role="listbox" aria-label="\u0412\u044b\u043f\u043e\u043b\u043d\u0438\u0442\u044c \u043f\u0443\u043d\u043a\u0442\u043e\u0432"></div>
+      </div>
+    `;
+    periodControls.appendChild(matchControl);
     shell.appendChild(periodControls);
 
     const fields = document.createElement('div');
-    fields.className = 'bonus-level-requirements-editor-grid';
-    fields.innerHTML = `
-      <label class="field-wrap">
-        <span class="field-label" for="bonusLevelRequirementModalAmountInput">\u0421\u0443\u043c\u043c\u0430 \u0437\u0430\u043a\u0430\u0437\u043e\u0432</span>
-        <input id="bonusLevelRequirementModalAmountInput" class="control bonus-level-rule-input" type="number" min="0" step="1" placeholder="\u041d\u0435 \u0443\u0447\u0438\u0442\u044b\u0432\u0430\u0442\u044c" autocomplete="off" value="${escapeHtml(String(normalizeBonusLevelRequirementValue(current.requirementAmount) ?? ''))}" />
-      </label>
-      <label class="field-wrap">
-        <span class="field-label">\u0423\u0441\u043b\u043e\u0432\u0438\u0435</span>
-        <div class="bonus-level-requirement-mode" aria-label="\u0421\u0432\u044f\u0437\u044c \u0443\u0441\u043b\u043e\u0432\u0438\u0439 \u0443\u0440\u043e\u0432\u043d\u044f">
-          <button type="button" class="bonus-level-requirement-mode-btn" id="bonusLevelRequirementModeToggle" aria-pressed="false">\u0438</button>
-        </div>
-      </label>
-      <label class="field-wrap">
-        <span class="field-label" for="bonusLevelRequirementModalOrdersInput">\u041a\u043e\u043b\u0438\u0447\u0435\u0441\u0442\u0432\u043e \u0437\u0430\u043a\u0430\u0437\u043e\u0432</span>
-        <input id="bonusLevelRequirementModalOrdersInput" class="control bonus-level-rule-input" type="number" min="0" step="1" placeholder="\u041d\u0435 \u0443\u0447\u0438\u0442\u044b\u0432\u0430\u0442\u044c" autocomplete="off" value="${escapeHtml(String(normalizeBonusLevelRequirementValue(current.requirementOrders) ?? ''))}" />
-      </label>
-      ${referralRequirementsEnabled ? `
-      <label class="field-wrap">
-        <span class="field-label">\u0423\u0441\u043b\u043e\u0432\u0438\u0435</span>
-        <div class="bonus-level-requirement-mode" aria-label="\u0421\u0432\u044f\u0437\u044c \u0437\u0430\u043a\u0430\u0437\u043e\u0432 \u0438 \u0440\u0435\u0444\u0435\u0440\u0430\u043b\u043e\u0432">
-          <button type="button" class="bonus-level-requirement-mode-btn" id="bonusLevelRequirementReferralModeToggle" aria-pressed="false">\u0438</button>
-        </div>
-      </label>
-      <label class="field-wrap">
-        <span class="field-label" for="bonusLevelRequirementModalReferralsInput">\u041f\u0440\u0438\u0433\u043b. \u0440\u0435\u0444\u0435\u0440\u0430\u043b\u044b</span>
-        <input id="bonusLevelRequirementModalReferralsInput" class="control bonus-level-rule-input" type="number" min="0" step="1" placeholder="\u041d\u0435 \u0443\u0447\u0438\u0442\u044b\u0432\u0430\u0442\u044c" autocomplete="off" value="${escapeHtml(String(normalizeBonusLevelRequirementValue(current.requirementReferrals) ?? ''))}" />
-      </label>
-      ` : ''}
-    `;
+    fields.className = 'bonus-level-condition-editor';
     shell.appendChild(fields);
+
+    const conditionRowsRoot = document.createElement('div');
+    conditionRowsRoot.className = 'bonus-level-condition-rows';
+    fields.appendChild(conditionRowsRoot);
+    const requirementMatchCountWrap = matchControl.querySelector('#bonusLevelRequirementMatchCountWrap');
+    const requirementMatchCountTrigger = matchControl.querySelector('#bonusLevelRequirementMatchCountTrigger');
+    const requirementMatchCountMenu = matchControl.querySelector('#bonusLevelRequirementMatchCountMenu');
+    const requirementMatchCountText = matchControl.querySelector('#bonusLevelRequirementMatchCountText');
+    let selectedRequirementMatchCount = Math.max(1, normalizeNumberInputValue(current.requirementMatchCount, 1));
+
+    const conditionTypes = [
+      { key: 'amount', label: '\u0421\u0443\u043c\u043c\u0430 \u0437\u0430\u043a\u0430\u0437\u043e\u0432', value: normalizeBonusLevelRequirementValue(current.requirementAmount) },
+      { key: 'orders', label: '\u041a\u043e\u043b-\u0432\u043e \u0437\u0430\u043a\u0430\u0437\u043e\u0432', value: normalizeBonusLevelRequirementValue(current.requirementOrders) },
+      { key: 'referrals', label: '\u041f\u0440\u0438\u0433\u043b. \u0440\u0435\u0444\u0435\u0440\u0430\u043b\u044b', value: normalizeBonusLevelRequirementValue(current.requirementReferrals) },
+    ].filter((item) => item.key !== 'referrals' || referralRequirementsEnabled);
+
+    const getConditionTypeLabel = (type) => (
+      conditionTypes.find((item) => item.key === type)?.label || conditionTypes[0]?.label || ''
+    );
+    const closeConditionMenus = (exceptMenu = null) => {
+      shell.querySelectorAll('.bonus-level-condition-type-menu').forEach((menu) => {
+        if (menu === exceptMenu) return;
+        menu.classList.add('hidden');
+      });
+      shell.querySelectorAll('.bonus-level-condition-type-wrap').forEach((wrap) => {
+        const menu = wrap.querySelector('.bonus-level-condition-type-menu');
+        if (menu === exceptMenu) return;
+        wrap.classList.remove('is-open');
+        wrap.querySelector('.bonus-level-condition-type-trigger')?.setAttribute('aria-expanded', 'false');
+      });
+    };
+    if (bonusLevelRequirementsOutsideClickHandler) {
+      document.removeEventListener('click', bonusLevelRequirementsOutsideClickHandler);
+    }
+    bonusLevelRequirementsOutsideClickHandler = (event) => {
+      if (event.target.closest('.bonus-level-condition-type-wrap')) return;
+      closeConditionMenus();
+    };
+    document.addEventListener('click', bonusLevelRequirementsOutsideClickHandler);
+    let addConditionBtn = null;
+    const getUsedConditionTypes = (exceptRow = null) => new Set(
+      Array.from(conditionRowsRoot.querySelectorAll('.bonus-level-condition-row'))
+        .filter((row) => row !== exceptRow)
+        .map((row) => String(row.dataset.conditionType || ''))
+        .filter(Boolean)
+    );
+    const syncConditionAvailability = () => {
+      const usedCount = getUsedConditionTypes().size || 1;
+      selectedRequirementMatchCount = Math.min(Math.max(1, selectedRequirementMatchCount), usedCount);
+      if (requirementMatchCountText) requirementMatchCountText.textContent = String(selectedRequirementMatchCount);
+      if (requirementMatchCountMenu) {
+        requirementMatchCountMenu.innerHTML = Array.from({ length: usedCount }, (_, idx) => {
+          const value = idx + 1;
+          return `<button class="new-order-right-select-option${value === selectedRequirementMatchCount ? ' is-selected' : ''}" type="button" data-match-count="${value}">${value}</button>`;
+        }).join('');
+      }
+      conditionRowsRoot.querySelectorAll('.bonus-level-condition-row').forEach((row) => {
+        const usedTypes = getUsedConditionTypes(row);
+        row.querySelectorAll('[data-condition-type-option]').forEach((button) => {
+          const type = String(button.dataset.conditionTypeOption || '');
+          const isDisabled = usedTypes.has(type);
+          button.classList.toggle('hidden', isDisabled);
+          button.disabled = isDisabled;
+          button.classList.toggle('is-disabled', isDisabled);
+          button.setAttribute('aria-disabled', isDisabled ? 'true' : 'false');
+        });
+      });
+      if (!addConditionBtn) return;
+      const hasFreeType = conditionTypes.some((item) => !getUsedConditionTypes().has(item.key));
+      addConditionBtn.disabled = !hasFreeType;
+      addConditionBtn.classList.toggle('is-disabled', !hasFreeType);
+    };
+    const syncConditionTypeRow = (rowEl, type) => {
+      if (!(rowEl instanceof Element)) return;
+      const normalizedType = conditionTypes.some((item) => item.key === type) ? type : conditionTypes[0]?.key;
+      rowEl.dataset.conditionType = normalizedType || '';
+      const textEl = rowEl.querySelector('.bonus-level-condition-type-text');
+      if (textEl) textEl.textContent = getConditionTypeLabel(normalizedType);
+      rowEl.querySelectorAll('[data-condition-type-option]').forEach((button) => {
+        const isSelected = String(button.dataset.conditionTypeOption || '') === normalizedType;
+        button.classList.toggle('is-selected', isSelected);
+        button.setAttribute('aria-selected', isSelected ? 'true' : 'false');
+      });
+    };
+    const appendRequirementConditionRow = (type = '', value = '') => {
+      const normalizedType = conditionTypes.some((item) => item.key === type) ? type : conditionTypes[0]?.key;
+      if (!normalizedType) return null;
+      const rowEl = document.createElement('div');
+      rowEl.className = 'bonus-level-condition-row';
+      rowEl.dataset.conditionType = normalizedType;
+      rowEl.innerHTML = `
+        <div class="new-order-right-select-wrap settings-delivery-city-selector bonus-level-unit-select bonus-level-condition-type-wrap">
+          <button class="new-order-right-select-trigger bonus-level-unit-select-trigger bonus-level-condition-type-trigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-label="\u0423\u0441\u043b\u043e\u0432\u0438\u0435">
+            <span class="cash-toolbar-filter-main"><span class="bonus-level-condition-type-text">${escapeHtml(getConditionTypeLabel(normalizedType))}</span></span>
+            <i class="fas fa-chevron-down"></i>
+          </button>
+          <div class="new-order-right-select-menu no-scrollbar hidden bonus-level-condition-type-menu" role="listbox" aria-label="\u0423\u0441\u043b\u043e\u0432\u0438\u0435">
+            ${conditionTypes.map((item) => `
+              <button class="new-order-right-select-option" type="button" data-condition-type-option="${escapeHtml(item.key)}">${escapeHtml(item.label)}</button>
+            `).join('')}
+          </div>
+        </div>
+        <input class="control bonus-level-rule-input bonus-level-condition-value-input" type="number" min="0" step="1" placeholder="\u0417\u043d\u0430\u0447\u0435\u043d\u0438\u0435" autocomplete="off" value="${escapeHtml(String(value ?? ''))}" />
+        <button type="button" class="bonus-range-editor-delete-btn" aria-label="\u0423\u0434\u0430\u043b\u0438\u0442\u044c \u0443\u0441\u043b\u043e\u0432\u0438\u0435" title="\u0423\u0434\u0430\u043b\u0438\u0442\u044c \u0443\u0441\u043b\u043e\u0432\u0438\u0435">
+          <i class="fas fa-times" aria-hidden="true"></i>
+        </button>
+      `;
+      const trigger = rowEl.querySelector('.bonus-level-condition-type-trigger');
+      const wrap = rowEl.querySelector('.bonus-level-condition-type-wrap');
+      const menu = rowEl.querySelector('.bonus-level-condition-type-menu');
+      trigger?.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const shouldOpen = menu?.classList.contains('hidden');
+        closeConditionMenus();
+        if (!shouldOpen || !menu) return;
+        syncConditionAvailability();
+        wrap?.classList.add('is-open');
+        menu.classList.remove('hidden');
+        trigger.setAttribute('aria-expanded', 'true');
+      });
+      rowEl.querySelectorAll('[data-condition-type-option]').forEach((button) => {
+        button.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (button.disabled) return;
+          syncConditionTypeRow(rowEl, String(button.dataset.conditionTypeOption || ''));
+          syncConditionAvailability();
+          syncMatchedRetentionValues();
+          closeConditionMenus();
+        });
+      });
+      rowEl.querySelector('.bonus-range-editor-delete-btn')?.addEventListener('click', () => {
+        rowEl.remove();
+        syncConditionAvailability();
+        syncMatchedRetentionValues();
+      });
+      rowEl.querySelector('.bonus-level-condition-value-input')?.addEventListener('input', () => {
+        syncMatchedRetentionValues();
+      });
+      conditionRowsRoot.appendChild(rowEl);
+      syncConditionTypeRow(rowEl, normalizedType);
+      syncConditionAvailability();
+      return rowEl;
+    };
+    conditionTypes
+      .filter((item) => item.value != null)
+      .forEach((item) => appendRequirementConditionRow(item.key, item.value));
+    if (!conditionRowsRoot.children.length) appendRequirementConditionRow(conditionTypes[0]?.key || 'amount', '');
+
+    addConditionBtn = document.createElement('button');
+    addConditionBtn.type = 'button';
+    addConditionBtn.className = 'bonus-range-editor-add-btn';
+    addConditionBtn.textContent = '+';
+    addConditionBtn.setAttribute('aria-label', '\u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u0443\u0441\u043b\u043e\u0432\u0438\u0435');
+    addConditionBtn.addEventListener('click', () => {
+      const usedTypes = new Set(Array.from(conditionRowsRoot.querySelectorAll('.bonus-level-condition-row')).map((row) => row.dataset.conditionType));
+      const nextType = conditionTypes.find((item) => !usedTypes.has(item.key))?.key;
+      if (!nextType) return;
+      appendRequirementConditionRow(nextType, '');
+    });
+    fields.appendChild(addConditionBtn);
+    syncConditionAvailability();
 
     const retentionSection = document.createElement('div');
     retentionSection.className = 'bonus-level-retention-section hidden';
@@ -8392,7 +8585,7 @@
       <div class="bonus-level-modal-section-title">
         <span>\u0423\u0441\u043b\u043e\u0432\u0438\u044f \u0443\u0434\u0435\u0440\u0436\u0430\u043d\u0438\u044f \u0443\u0440\u043e\u0432\u043d\u044f</span>
       </div>
-      <div class="bonus-level-requirements-top-grid">
+      <div class="bonus-level-requirements-top-grid bonus-level-requirements-top-grid--match">
         <div class="field-wrap bonus-level-retention-strategy-field">
           <span class="field-label" for="bonusLevelRetentionStrategyTrigger">\u0423\u0434\u0435\u0440\u0436\u0430\u043d\u0438\u0435</span>
           <div class="new-order-right-select-wrap settings-delivery-city-selector bonus-level-unit-select bonus-level-retention-strategy-select" id="bonusLevelRetentionStrategyWrap">
@@ -8406,34 +8599,25 @@
             </div>
           </div>
         </div>
+        <label class="field-wrap bonus-level-match-count-field">
+          <span class="field-label" for="bonusLevelRetentionMatchCountTrigger">\u0412\u044b\u043f\u043e\u043b\u043d\u0438\u0442\u044c \u043f\u0443\u043d\u043a\u0442\u043e\u0432</span>
+          <div class="new-order-right-select-wrap settings-delivery-city-selector bonus-level-unit-select bonus-level-match-count-select" id="bonusLevelRetentionMatchCountWrap">
+            <button class="new-order-right-select-trigger bonus-level-unit-select-trigger" id="bonusLevelRetentionMatchCountTrigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-label="\u0412\u044b\u043f\u043e\u043b\u043d\u0438\u0442\u044c \u043f\u0443\u043d\u043a\u0442\u043e\u0432">
+              <span class="cash-toolbar-filter-main"><span id="bonusLevelRetentionMatchCountText">${escapeHtml(String(Math.max(1, normalizeNumberInputValue(current.retentionMatchCount, 1))))}</span></span>
+              <i class="fas fa-chevron-down"></i>
+            </button>
+            <div class="new-order-right-select-menu no-scrollbar hidden" id="bonusLevelRetentionMatchCountMenu" role="listbox" aria-label="\u0412\u044b\u043f\u043e\u043b\u043d\u0438\u0442\u044c \u043f\u0443\u043d\u043a\u0442\u043e\u0432"></div>
+          </div>
+        </label>
       </div>
-      <div class="bonus-level-retention-editor-grid">
-        <label class="field-wrap">
-          <span class="field-label" for="bonusLevelRetentionModalAmountInput">\u0421\u0443\u043c\u043c\u0430 \u0437\u0430\u043a\u0430\u0437\u043e\u0432</span>
-          <input id="bonusLevelRetentionModalAmountInput" class="control bonus-level-rule-input" type="number" min="0" step="1" placeholder="\u041d\u0435 \u0443\u0447\u0438\u0442\u044b\u0432\u0430\u0442\u044c" autocomplete="off" value="${escapeHtml(String(normalizeBonusLevelRequirementValue(current.retentionAmount) ?? ''))}" />
-        </label>
-        <label class="field-wrap">
-          <span class="field-label">\u0423\u0441\u043b\u043e\u0432\u0438\u0435</span>
-          <div class="bonus-level-requirement-mode" aria-label="\u0421\u0432\u044f\u0437\u044c \u0443\u0441\u043b\u043e\u0432\u0438\u0439 \u0443\u0434\u0435\u0440\u0436\u0430\u043d\u0438\u044f">
-            <button type="button" class="bonus-level-requirement-mode-btn" id="bonusLevelRetentionModeToggle" aria-pressed="false">\u0438</button>
-          </div>
-        </label>
-        <label class="field-wrap">
-          <span class="field-label" for="bonusLevelRetentionModalOrdersInput">\u041a\u043e\u043b\u0438\u0447\u0435\u0441\u0442\u0432\u043e \u0437\u0430\u043a\u0430\u0437\u043e\u0432</span>
-          <input id="bonusLevelRetentionModalOrdersInput" class="control bonus-level-rule-input" type="number" min="0" step="1" placeholder="\u041d\u0435 \u0443\u0447\u0438\u0442\u044b\u0432\u0430\u0442\u044c" autocomplete="off" value="${escapeHtml(String(normalizeBonusLevelRequirementValue(current.retentionOrders) ?? ''))}" />
-        </label>
-        ${referralRequirementsEnabled ? `
-        <label class="field-wrap">
-          <span class="field-label">\u0423\u0441\u043b\u043e\u0432\u0438\u0435</span>
-          <div class="bonus-level-requirement-mode" aria-label="\u0421\u0432\u044f\u0437\u044c \u0437\u0430\u043a\u0430\u0437\u043e\u0432 \u0438 \u0440\u0435\u0444\u0435\u0440\u0430\u043b\u043e\u0432">
-            <button type="button" class="bonus-level-requirement-mode-btn" id="bonusLevelRetentionReferralModeToggle" aria-pressed="false">\u0438</button>
-          </div>
-        </label>
-        <label class="field-wrap">
-          <span class="field-label" for="bonusLevelRetentionModalReferralsInput">\u041f\u0440\u0438\u0433\u043b. \u0440\u0435\u0444\u0435\u0440\u0430\u043b\u044b</span>
-          <input id="bonusLevelRetentionModalReferralsInput" class="control bonus-level-rule-input" type="number" min="0" step="1" placeholder="\u041d\u0435 \u0443\u0447\u0438\u0442\u044b\u0432\u0430\u0442\u044c" autocomplete="off" value="${escapeHtml(String(normalizeBonusLevelRequirementValue(current.retentionReferrals) ?? ''))}" />
-        </label>
-        ` : ''}
+      <div class="bonus-level-condition-editor bonus-level-retention-condition-editor">
+        <div class="bonus-level-condition-rows" id="bonusLevelRetentionConditionRows"></div>
+        <button type="button" class="bonus-range-editor-add-btn" id="bonusLevelRetentionAddConditionBtn" aria-label="\u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u0443\u0441\u043b\u043e\u0432\u0438\u0435">+</button>
+      </div>
+      <div class="hidden">
+        <input id="bonusLevelRetentionModalAmountInput" value="${escapeHtml(String(normalizeBonusLevelRequirementValue(current.retentionAmount) ?? ''))}" />
+        <input id="bonusLevelRetentionModalOrdersInput" value="${escapeHtml(String(normalizeBonusLevelRequirementValue(current.retentionOrders) ?? ''))}" />
+        <input id="bonusLevelRetentionModalReferralsInput" value="${escapeHtml(String(normalizeBonusLevelRequirementValue(current.retentionReferrals) ?? ''))}" />
       </div>
     `;
     shell.appendChild(retentionSection);
@@ -8506,17 +8690,159 @@
     }
     syncRetentionReferralModeButton();
 
-    const amountInput = fields.querySelector('#bonusLevelRequirementModalAmountInput');
-    const ordersInput = fields.querySelector('#bonusLevelRequirementModalOrdersInput');
-    const referralsInput = fields.querySelector('#bonusLevelRequirementModalReferralsInput');
+    const collectRequirementConditionValues = () => {
+      const values = { amountRaw: '', ordersRaw: '', referralsRaw: '' };
+      conditionRowsRoot.querySelectorAll('.bonus-level-condition-row').forEach((row) => {
+        const type = String(row.dataset.conditionType || '');
+        const raw = String(row.querySelector('.bonus-level-condition-value-input')?.value ?? '').trim();
+        if (type === 'amount') values.amountRaw = raw;
+        if (type === 'orders') values.ordersRaw = raw;
+        if (type === 'referrals') values.referralsRaw = raw;
+      });
+      return values;
+    };
     const retentionAmountInput = retentionSection.querySelector('#bonusLevelRetentionModalAmountInput');
     const retentionOrdersInput = retentionSection.querySelector('#bonusLevelRetentionModalOrdersInput');
     const retentionReferralsInput = retentionSection.querySelector('#bonusLevelRetentionModalReferralsInput');
+    const retentionMatchCountWrap = retentionSection.querySelector('#bonusLevelRetentionMatchCountWrap');
+    const retentionMatchCountTrigger = retentionSection.querySelector('#bonusLevelRetentionMatchCountTrigger');
+    const retentionMatchCountMenu = retentionSection.querySelector('#bonusLevelRetentionMatchCountMenu');
+    const retentionMatchCountText = retentionSection.querySelector('#bonusLevelRetentionMatchCountText');
+    const retentionRowsRoot = retentionSection.querySelector('#bonusLevelRetentionConditionRows');
+    const retentionAddConditionBtn = retentionSection.querySelector('#bonusLevelRetentionAddConditionBtn');
     const retentionStrategyWrap = retentionSection.querySelector('#bonusLevelRetentionStrategyWrap');
     const retentionStrategyTrigger = retentionSection.querySelector('#bonusLevelRetentionStrategyTrigger');
     const retentionStrategyMenu = retentionSection.querySelector('#bonusLevelRetentionStrategyMenu');
     const retentionStrategyText = retentionSection.querySelector('#bonusLevelRetentionStrategyText');
+    let selectedRetentionMatchCount = Math.max(1, normalizeNumberInputValue(current.retentionMatchCount, 1));
     const getRetentionStrategyLabel = (strategy) => strategy === 'custom' ? '\u0421\u0432\u043e\u0438' : '\u0421\u043e\u0432\u043f\u0430\u0434\u0430\u044e\u0442';
+    const syncRetentionHiddenInputs = () => {
+      const values = { amountRaw: '', ordersRaw: '', referralsRaw: '' };
+      retentionRowsRoot?.querySelectorAll('.bonus-level-condition-row').forEach((row) => {
+        const type = String(row.dataset.conditionType || '');
+        const raw = String(row.querySelector('.bonus-level-condition-value-input')?.value ?? '').trim();
+        if (type === 'amount') values.amountRaw = raw;
+        if (type === 'orders') values.ordersRaw = raw;
+        if (type === 'referrals') values.referralsRaw = raw;
+      });
+      if (retentionAmountInput) retentionAmountInput.value = values.amountRaw;
+      if (retentionOrdersInput) retentionOrdersInput.value = values.ordersRaw;
+      if (retentionReferralsInput) retentionReferralsInput.value = values.referralsRaw;
+    };
+    const getRetentionUsedConditionTypes = (exceptRow = null) => new Set(
+      Array.from(retentionRowsRoot?.querySelectorAll('.bonus-level-condition-row') || [])
+        .filter((row) => row !== exceptRow)
+        .map((row) => String(row.dataset.conditionType || ''))
+        .filter(Boolean)
+    );
+    const syncRetentionConditionAvailability = () => {
+      const isCustom = selectedRetentionStrategy === 'custom';
+      const usedCount = getRetentionUsedConditionTypes().size || 1;
+      selectedRetentionMatchCount = Math.min(Math.max(1, selectedRetentionMatchCount), usedCount);
+      if (retentionMatchCountText) retentionMatchCountText.textContent = String(selectedRetentionMatchCount);
+      if (retentionMatchCountMenu) {
+        retentionMatchCountMenu.innerHTML = Array.from({ length: usedCount }, (_, index) => {
+          const value = index + 1;
+          return `<button class="new-order-right-select-option${value === selectedRetentionMatchCount ? ' is-selected' : ''}" type="button" data-retention-match-count="${value}">${value}</button>`;
+        }).join('');
+      }
+      if (retentionMatchCountTrigger) retentionMatchCountTrigger.disabled = !isCustom;
+      if (retentionMatchCountWrap) retentionMatchCountWrap.classList.toggle('is-disabled', !isCustom);
+      retentionRowsRoot?.querySelectorAll('.bonus-level-condition-row').forEach((row) => {
+        const usedTypes = getRetentionUsedConditionTypes(row);
+        row.querySelectorAll('[data-condition-type-option]').forEach((button) => {
+          const type = String(button.dataset.conditionTypeOption || '');
+          const isDisabled = !isCustom || usedTypes.has(type);
+          button.classList.toggle('hidden', usedTypes.has(type));
+          button.disabled = isDisabled;
+          button.classList.toggle('is-disabled', isDisabled);
+          button.setAttribute('aria-disabled', isDisabled ? 'true' : 'false');
+        });
+        row.querySelector('.bonus-level-condition-type-trigger')?.toggleAttribute('disabled', !isCustom);
+        row.querySelector('.bonus-level-condition-value-input')?.toggleAttribute('disabled', !isCustom);
+        row.querySelector('.bonus-range-editor-delete-btn')?.toggleAttribute('disabled', !isCustom);
+      });
+      if (!retentionAddConditionBtn) return;
+      const hasFreeType = conditionTypes.some((item) => !getRetentionUsedConditionTypes().has(item.key));
+      retentionAddConditionBtn.disabled = !isCustom || !hasFreeType;
+      retentionAddConditionBtn.classList.toggle('is-disabled', !isCustom || !hasFreeType);
+    };
+    const appendRetentionConditionRow = (type = '', value = '') => {
+      if (!(retentionRowsRoot instanceof Element)) return null;
+      const normalizedType = conditionTypes.some((item) => item.key === type) ? type : conditionTypes[0]?.key;
+      if (!normalizedType) return null;
+      const rowEl = document.createElement('div');
+      rowEl.className = 'bonus-level-condition-row';
+      rowEl.dataset.conditionType = normalizedType;
+      rowEl.innerHTML = `
+        <div class="new-order-right-select-wrap settings-delivery-city-selector bonus-level-unit-select bonus-level-condition-type-wrap">
+          <button class="new-order-right-select-trigger bonus-level-unit-select-trigger bonus-level-condition-type-trigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-label="\u0423\u0441\u043b\u043e\u0432\u0438\u0435">
+            <span class="cash-toolbar-filter-main"><span class="bonus-level-condition-type-text">${escapeHtml(getConditionTypeLabel(normalizedType))}</span></span>
+            <i class="fas fa-chevron-down"></i>
+          </button>
+          <div class="new-order-right-select-menu no-scrollbar hidden bonus-level-condition-type-menu" role="listbox" aria-label="\u0423\u0441\u043b\u043e\u0432\u0438\u0435">
+            ${conditionTypes.map((item) => `
+              <button class="new-order-right-select-option" type="button" data-condition-type-option="${escapeHtml(item.key)}">${escapeHtml(item.label)}</button>
+            `).join('')}
+          </div>
+        </div>
+        <input class="control bonus-level-rule-input bonus-level-condition-value-input" type="number" min="0" step="1" placeholder="\u0417\u043d\u0430\u0447\u0435\u043d\u0438\u0435" autocomplete="off" value="${escapeHtml(String(value ?? ''))}" />
+        <button type="button" class="bonus-range-editor-delete-btn" aria-label="\u0423\u0434\u0430\u043b\u0438\u0442\u044c \u0443\u0441\u043b\u043e\u0432\u0438\u0435" title="\u0423\u0434\u0430\u043b\u0438\u0442\u044c \u0443\u0441\u043b\u043e\u0432\u0438\u0435">
+          <i class="fas fa-times" aria-hidden="true"></i>
+        </button>
+      `;
+      const trigger = rowEl.querySelector('.bonus-level-condition-type-trigger');
+      const wrap = rowEl.querySelector('.bonus-level-condition-type-wrap');
+      const menu = rowEl.querySelector('.bonus-level-condition-type-menu');
+      trigger?.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (selectedRetentionStrategy !== 'custom') return;
+        const shouldOpen = menu?.classList.contains('hidden');
+        closeConditionMenus();
+        if (!shouldOpen || !menu) return;
+        syncRetentionConditionAvailability();
+        wrap?.classList.add('is-open');
+        menu.classList.remove('hidden');
+        trigger.setAttribute('aria-expanded', 'true');
+      });
+      rowEl.querySelectorAll('[data-condition-type-option]').forEach((button) => {
+        button.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (button.disabled) return;
+          rowEl.dataset.conditionType = String(button.dataset.conditionTypeOption || '');
+          rowEl.querySelector('.bonus-level-condition-type-text').textContent = getConditionTypeLabel(rowEl.dataset.conditionType);
+          syncRetentionHiddenInputs();
+          syncRetentionConditionAvailability();
+          closeConditionMenus();
+        });
+      });
+      rowEl.querySelector('.bonus-range-editor-delete-btn')?.addEventListener('click', () => {
+        rowEl.remove();
+        syncRetentionHiddenInputs();
+        syncRetentionConditionAvailability();
+      });
+      rowEl.querySelector('.bonus-level-condition-value-input')?.addEventListener('input', () => {
+        syncRetentionHiddenInputs();
+      });
+      retentionRowsRoot.appendChild(rowEl);
+      syncRetentionConditionAvailability();
+      return rowEl;
+    };
+    const renderRetentionConditionRows = (values) => {
+      if (!(retentionRowsRoot instanceof Element)) return;
+      retentionRowsRoot.innerHTML = '';
+      const rows = [
+        { type: 'amount', value: values.amountRaw },
+        { type: 'orders', value: values.ordersRaw },
+        { type: 'referrals', value: values.referralsRaw },
+      ].filter((row) => conditionTypes.some((item) => item.key === row.type) && String(row.value ?? '').trim() !== '');
+      (rows.length ? rows : [{ type: conditionTypes[0]?.key || 'amount', value: '' }])
+        .forEach((row) => appendRetentionConditionRow(row.type, row.value));
+      syncRetentionHiddenInputs();
+      syncRetentionConditionAvailability();
+    };
     const closeRetentionStrategyMenu = () => {
       if (retentionStrategyMenu) retentionStrategyMenu.classList.add('hidden');
       if (retentionStrategyWrap) retentionStrategyWrap.classList.remove('is-open');
@@ -8525,32 +8851,24 @@
     const syncRetentionStrategyUi = () => {
       const isCustom = selectedRetentionStrategy === 'custom';
       if (retentionStrategyText) retentionStrategyText.textContent = getRetentionStrategyLabel(selectedRetentionStrategy);
-      if (retentionAmountInput) {
-        retentionAmountInput.value = isCustom
-          ? String(initialRetentionAmount ?? '')
-          : String(amountInput?.value ?? '');
-      }
-      if (retentionOrdersInput) {
-        retentionOrdersInput.value = isCustom
-          ? String(initialRetentionOrders ?? '')
-          : String(ordersInput?.value ?? '');
-      }
-      if (retentionReferralsInput) {
-        retentionReferralsInput.value = isCustom
-          ? String(initialRetentionReferrals ?? '')
-          : String(referralsInput?.value ?? '');
-      }
+      renderRetentionConditionRows(isCustom
+        ? {
+            amountRaw: String(initialRetentionAmount ?? ''),
+            ordersRaw: String(initialRetentionOrders ?? ''),
+            referralsRaw: String(initialRetentionReferrals ?? ''),
+          }
+        : collectRequirementConditionValues()
+      );
+      selectedRetentionMatchCount = isCustom
+        ? Math.max(1, normalizeNumberInputValue(current.retentionMatchCount, 1))
+        : selectedRequirementMatchCount;
       if (!isCustom) {
         selectedRetentionMode = normalizeBonusLevelRequirementMode(selectedMode);
         selectedRetentionReferralMode = normalizeBonusLevelRequirementMode(selectedReferralMode);
         syncRetentionModeButton();
         syncRetentionReferralModeButton();
       }
-      [retentionAmountInput, retentionOrdersInput, retentionReferralsInput, retentionModeToggleBtn, retentionReferralModeToggleBtn].forEach((control) => {
-        if (!control) return;
-        control.disabled = !isCustom;
-        control.classList.toggle('is-disabled', !isCustom);
-      });
+      syncRetentionConditionAvailability();
       retentionSection.querySelectorAll('[data-retention-strategy]').forEach((button) => {
         const isSelected = String(button.dataset.retentionStrategy || '') === selectedRetentionStrategy;
         button.classList.toggle('is-selected', isSelected);
@@ -8593,12 +8911,19 @@
 
     const getPeriodUnitLabel = (unit) => unit === 'days' ? '\u0414\u043d\u0438' : '\u0411\u0435\u0441\u0441\u0440\u043e\u0447\u043d\u043e';
     const closePeriodMenus = () => {
+      closeConditionMenus();
       if (periodUnitMenu) periodUnitMenu.classList.add('hidden');
       if (periodInlineMenu) periodInlineMenu.classList.add('hidden');
+      if (requirementMatchCountMenu) requirementMatchCountMenu.classList.add('hidden');
+      if (retentionMatchCountMenu) retentionMatchCountMenu.classList.add('hidden');
       closeRetentionStrategyMenu();
       if (periodUnitWrap) periodUnitWrap.classList.remove('is-open');
       if (periodUnitTrigger) periodUnitTrigger.setAttribute('aria-expanded', 'false');
       if (periodDotsBtn) periodDotsBtn.setAttribute('aria-expanded', 'false');
+      if (requirementMatchCountWrap) requirementMatchCountWrap.classList.remove('is-open');
+      if (requirementMatchCountTrigger) requirementMatchCountTrigger.setAttribute('aria-expanded', 'false');
+      if (retentionMatchCountWrap) retentionMatchCountWrap.classList.remove('is-open');
+      if (retentionMatchCountTrigger) retentionMatchCountTrigger.setAttribute('aria-expanded', 'false');
     };
     const syncPeriodUi = () => {
       const isDays = selectedPeriodUnit === 'days';
@@ -8620,13 +8945,14 @@
 
     const syncMatchedRetentionValues = () => {
       if (selectedRetentionStrategy !== 'match') return;
-      if (retentionAmountInput) retentionAmountInput.value = String(amountInput?.value ?? '');
-      if (retentionOrdersInput) retentionOrdersInput.value = String(ordersInput?.value ?? '');
-      if (retentionReferralsInput) retentionReferralsInput.value = String(referralsInput?.value ?? '');
+      const conditionValues = collectRequirementConditionValues();
+      renderRetentionConditionRows(conditionValues);
+      selectedRetentionMatchCount = selectedRequirementMatchCount;
       selectedRetentionMode = normalizeBonusLevelRequirementMode(selectedMode);
       selectedRetentionReferralMode = normalizeBonusLevelRequirementMode(selectedReferralMode);
       syncRetentionModeButton();
       syncRetentionReferralModeButton();
+      syncRetentionConditionAvailability();
     };
 
     if (periodUnitTrigger && periodUnitMenu) {
@@ -8659,9 +8985,48 @@
         selectPeriodUnit(String(button.dataset.periodUnit || 'forever'));
       });
     });
-    amountInput?.addEventListener('input', syncMatchedRetentionValues);
-    ordersInput?.addEventListener('input', syncMatchedRetentionValues);
-    referralsInput?.addEventListener('input', syncMatchedRetentionValues);
+    requirementMatchCountTrigger?.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const shouldOpen = requirementMatchCountMenu?.classList.contains('hidden');
+      closePeriodMenus();
+      if (!shouldOpen || !requirementMatchCountMenu) return;
+      syncConditionAvailability();
+      requirementMatchCountWrap?.classList.add('is-open');
+      requirementMatchCountMenu.classList.remove('hidden');
+      requirementMatchCountTrigger.setAttribute('aria-expanded', 'true');
+    });
+    requirementMatchCountMenu?.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-match-count]');
+      if (!button) return;
+      event.preventDefault();
+      event.stopPropagation();
+      selectedRequirementMatchCount = Math.max(1, normalizeNumberInputValue(button.dataset.matchCount, 1));
+      syncConditionAvailability();
+      syncMatchedRetentionValues();
+      closePeriodMenus();
+    });
+    retentionMatchCountTrigger?.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (selectedRetentionStrategy !== 'custom') return;
+      const shouldOpen = retentionMatchCountMenu?.classList.contains('hidden');
+      closePeriodMenus();
+      if (!shouldOpen || !retentionMatchCountMenu) return;
+      syncRetentionConditionAvailability();
+      retentionMatchCountWrap?.classList.add('is-open');
+      retentionMatchCountMenu.classList.remove('hidden');
+      retentionMatchCountTrigger.setAttribute('aria-expanded', 'true');
+    });
+    retentionMatchCountMenu?.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-retention-match-count]');
+      if (!button) return;
+      event.preventDefault();
+      event.stopPropagation();
+      selectedRetentionMatchCount = Math.max(1, normalizeNumberInputValue(button.dataset.retentionMatchCount, 1));
+      syncRetentionConditionAvailability();
+      closePeriodMenus();
+    });
     syncPeriodUi();
 
     const actions = document.createElement('div');
@@ -8681,16 +9046,11 @@
     saveBtn.className = 'shop-checkout-benefits-promo-entry-btn is-active';
     saveBtn.textContent = '\u0421\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c';
     saveBtn.addEventListener('click', () => {
-      const amountInput = fields.querySelector('#bonusLevelRequirementModalAmountInput');
-      const ordersInput = fields.querySelector('#bonusLevelRequirementModalOrdersInput');
-      const referralsInput = fields.querySelector('#bonusLevelRequirementModalReferralsInput');
       const periodInput = periodControls.querySelector('#bonusLevelRequirementModalPeriodInput');
       const retentionAmountInput = retentionSection.querySelector('#bonusLevelRetentionModalAmountInput');
       const retentionOrdersInput = retentionSection.querySelector('#bonusLevelRetentionModalOrdersInput');
       const retentionReferralsInput = retentionSection.querySelector('#bonusLevelRetentionModalReferralsInput');
-      const amountRaw = String(amountInput?.value ?? '').trim();
-      const ordersRaw = String(ordersInput?.value ?? '').trim();
-      const referralsRaw = referralRequirementsEnabled ? String(referralsInput?.value ?? '').trim() : '';
+      const { amountRaw, ordersRaw, referralsRaw } = collectRequirementConditionValues();
       const periodRaw = String(periodInput?.value ?? '').trim();
       const retentionAmountRaw = String(retentionAmountInput?.value ?? '').trim();
       const retentionOrdersRaw = String(retentionOrdersInput?.value ?? '').trim();
@@ -8708,6 +9068,16 @@
       const retentionAmountFilled = retentionAmountRaw !== '' && retentionAmount != null;
       const retentionOrdersFilled = retentionOrdersRaw !== '' && retentionOrders != null;
       const retentionReferralsFilled = retentionReferralsRaw !== '' && retentionReferrals != null;
+      const requirementFilledCount = [amountFilled, ordersFilled, referralsFilled].filter(Boolean).length;
+      const retentionFilledCount = [retentionAmountFilled, retentionOrdersFilled, retentionReferralsFilled].filter(Boolean).length;
+      const requirementMatchCount = Math.min(
+        Math.max(1, selectedRequirementMatchCount),
+        Math.max(1, requirementFilledCount)
+      );
+      const retentionMatchCount = Math.min(
+        Math.max(1, selectedRetentionMatchCount || requirementMatchCount),
+        Math.max(1, retentionFilledCount)
+      );
 
       if ((amountRaw !== '' && amount == null) || (ordersRaw !== '' && orders == null) || (referralsRaw !== '' && referrals == null)) {
         showBonusLevelRequirementsValidationMessage('\u0417\u0430\u043f\u043e\u043b\u043d\u0438\u0442\u0435 \u0443\u0441\u043b\u043e\u0432\u0438\u044f \u043a\u043e\u0440\u0440\u0435\u043a\u0442\u043d\u044b\u043c\u0438 \u0447\u0438\u0441\u043b\u0430\u043c\u0438.');
@@ -8751,6 +9121,7 @@
         requirementOrders: ordersFilled ? orders : null,
         requirementReferralMode: referralRequirementsEnabled ? normalizeBonusLevelRequirementMode(selectedReferralMode) : 'and',
         requirementReferrals: referralRequirementsEnabled && referralsFilled ? referrals : null,
+        requirementMatchCount,
         requirementPeriodDays: selectedPeriodUnit === 'days' ? periodDays : null,
         retentionStrategy: selectedPeriodUnit === 'days' ? normalizeBonusLevelRetentionStrategy(selectedRetentionStrategy) : 'match',
         retentionAmount: selectedPeriodUnit === 'days' && selectedRetentionStrategy === 'custom' && retentionAmountFilled ? retentionAmount : null,
@@ -8758,6 +9129,7 @@
         retentionOrders: selectedPeriodUnit === 'days' && selectedRetentionStrategy === 'custom' && retentionOrdersFilled ? retentionOrders : null,
         retentionReferralMode: referralRequirementsEnabled ? normalizeBonusLevelRequirementMode(selectedRetentionReferralMode) : 'and',
         retentionReferrals: referralRequirementsEnabled && selectedPeriodUnit === 'days' && selectedRetentionStrategy === 'custom' && retentionReferralsFilled ? retentionReferrals : null,
+        retentionMatchCount: selectedPeriodUnit === 'days' && selectedRetentionStrategy === 'custom' ? retentionMatchCount : requirementMatchCount,
       };
       applyBonusLevelEditorDraftPatch(nextPatch);
       updateBonusLevelInCollections(current.id, (level) => ({
@@ -8814,7 +9186,21 @@
         data-bonus-range-field="percent"
         value="${escapeHtml(String(normalizeBonusRangePercent(nextRow.percent, 0) || ''))}"
       />
+      <button
+        type="button"
+        class="bonus-range-editor-delete-btn"
+        aria-label="Удалить порог"
+        title="Удалить порог"
+      >
+        <i class="fas fa-times" aria-hidden="true"></i>
+      </button>
     `;
+    const deleteBtn = rowEl.querySelector('.bonus-range-editor-delete-btn');
+    if (deleteBtn) {
+      deleteBtn.addEventListener('click', () => {
+        rowEl.remove();
+      });
+    }
     rowsRoot.appendChild(rowEl);
     return rowEl;
   }
@@ -9275,16 +9661,26 @@
       bonusLevelContentColorInput.value = normalizeHexColor(current.contentColor, '#ffffff');
       bonusLevelContentColorInput.disabled = !isEditing;
     }
+    const levelIndex = getBonusLevelIndexById(current.id, state.bonusCardsEditing ? state.bonusLevelsDraft : state.bonusLevels);
+    const accessType = getBaseBonusLevelAccessType(levelIndex >= 0 ? levelIndex : 0);
+    if (current.accessType !== accessType) {
+      current.accessType = accessType;
+    }
     if (bonusLevelAccessChips) {
-      const accessType = normalizeBonusLevelAccessType(current.accessType);
       bonusLevelAccessChips.querySelectorAll('[data-bonus-access-type]').forEach((chip) => {
-        const isActive = String(chip.getAttribute('data-bonus-access-type') || '') === accessType;
+        const chipAccessType = String(chip.getAttribute('data-bonus-access-type') || '');
+        const isAllowed = chipAccessType === accessType;
+        const isActive = isAllowed;
+        chip.classList.toggle('hidden', !isAllowed);
         chip.classList.toggle('is-active', isActive);
         chip.setAttribute('aria-pressed', isActive ? 'true' : 'false');
-        chip.disabled = !isEditing;
+        chip.disabled = !isEditing || !isAllowed;
       });
     }
-    const accessType = normalizeBonusLevelAccessType(current.accessType);
+    if (bonusLevelRewardBonusAmountInput) {
+      bonusLevelRewardBonusAmountInput.value = String(normalizeNumberInputValue(current.rewardBonusAmount, 0) || 0);
+      bonusLevelRewardBonusAmountInput.disabled = !isEditing;
+    }
     if (bonusLevelRequirementsField) {
       bonusLevelRequirementsField.classList.toggle('hidden', accessType === 'join');
     }
@@ -9431,6 +9827,7 @@
       ? state.bonusLevelEditorDraft
       : null;
     if (!draft) return;
+    const levelIndex = getBonusLevelIndexById(activeId, state.bonusLevelsDraft);
     const nextLevel = {
       ...draft,
       title: String(draft.title || '').trim() || 'Уровень',
@@ -9441,7 +9838,8 @@
       showTitleOnCard: draft.showTitleOnCard !== false,
       titleBackgroundEnabled: draft.titleBackgroundEnabled !== false,
       qrEnabled: draft.qrEnabled !== false,
-      accessType: normalizeBonusLevelAccessType(draft.accessType),
+      accessType: getBaseBonusLevelAccessType(levelIndex >= 0 ? levelIndex : 0),
+      rewardBonusAmount: normalizeNumberInputValue(draft.rewardBonusAmount, 0),
       tariffPrice: normalizeNumberInputValue(draft.tariffPrice, 0),
       tariffDiscountPercent: normalizeBonusPercentInputValue(draft.tariffDiscountPercent, 0),
       tariffPeriodValue: normalizeBonusLevelTimingValue(draft.tariffPeriodValue, 1),
@@ -9472,6 +9870,7 @@
       requirementOrders: normalizeBonusLevelRequirementValue(draft.requirementOrders),
       requirementReferralMode: normalizeBonusLevelRequirementMode(draft.requirementReferralMode),
       requirementReferrals: normalizeBonusLevelRequirementValue(draft.requirementReferrals),
+      requirementMatchCount: Math.max(1, normalizeNumberInputValue(draft.requirementMatchCount, 1)),
       requirementPeriodDays: normalizeBonusLevelRequirementValue(draft.requirementPeriodDays),
       retentionStrategy: normalizeBonusLevelRetentionStrategy(draft.retentionStrategy),
       retentionAmount: normalizeBonusLevelRequirementValue(draft.retentionAmount),
@@ -9479,6 +9878,7 @@
       retentionOrders: normalizeBonusLevelRequirementValue(draft.retentionOrders),
       retentionReferralMode: normalizeBonusLevelRequirementMode(draft.retentionReferralMode),
       retentionReferrals: normalizeBonusLevelRequirementValue(draft.retentionReferrals),
+      retentionMatchCount: Math.max(1, normalizeNumberInputValue(draft.retentionMatchCount, 1)),
     };
     updateBonusLevelInCollections(activeId, () => nextLevel);
     state.editingBonusLevelId = null;
@@ -19182,6 +19582,9 @@
     });
 
     if (elToolbarText) {
+      if (viewName === 'bonus-cards') {
+        elToolbarText.textContent = 'Базовый тариф';
+      } else {
       const titles = {
         clients: 'Клиенты',
         'filter-categories': 'Категории',
@@ -19191,6 +19594,7 @@
         'bonus-referrals': 'Рефералы',
       };
       elToolbarText.textContent = titles[viewName] || 'Клиенты';
+    }
     }
     if (elToolbarTitle) {
       const icon = elToolbarTitle.querySelector('i');
@@ -22205,7 +22609,10 @@
         return;
       }
       state.editingBonusLevelId = level.id;
-      state.bonusLevelEditorDraft = { ...level };
+      state.bonusLevelEditorDraft = {
+        ...level,
+        accessType: getBaseBonusLevelAccessType(getBonusLevelIndexById(level.id, state.bonusLevels)),
+      };
       renderBonusLevelInfo();
     });
   }
@@ -22361,6 +22768,7 @@
     bonusLevelAccessChips.querySelectorAll('[data-bonus-access-type]').forEach((chip) => {
       chip.addEventListener('click', () => {
         if (chip.disabled) return;
+        if (chip.classList.contains('hidden')) return;
         applyBonusLevelEditorDraftPatch({
           accessType: normalizeBonusLevelAccessType(chip.getAttribute('data-bonus-access-type')),
         });
@@ -22372,6 +22780,14 @@
     bonusLevelCashbackPercentInput.addEventListener('input', () => {
       applyBonusLevelEditorDraftPatch({
         cashbackPercent: normalizeNumberInputValue(bonusLevelCashbackPercentInput.value, 1),
+      });
+    });
+  }
+
+  if (bonusLevelRewardBonusAmountInput) {
+    bonusLevelRewardBonusAmountInput.addEventListener('input', () => {
+      applyBonusLevelEditorDraftPatch({
+        rewardBonusAmount: normalizeNumberInputValue(bonusLevelRewardBonusAmountInput.value, 0),
       });
     });
   }
