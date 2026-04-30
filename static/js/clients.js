@@ -1842,7 +1842,6 @@
   const elBonusProgramSwitch = $("#clientsBonusProgramSwitch");
   const elReferralProgramSwitchWrap = $("#clientsReferralProgramSwitchWrap");
   const elReferralProgramSwitch = $("#clientsReferralProgramSwitch");
-  const elBonusFlipAllBtn = $("#clientsBonusFlipAllBtn");
   const elBonusEditBtn = $("#clientsBonusEditBtn");
   const elBonusEditSaveBtn = $("#clientsBonusEditSaveBtn");
   const elBonusEditCancelBtn = $("#clientsBonusEditCancelBtn");
@@ -7423,13 +7422,6 @@
     if (elBonusPointRateWrap) elBonusPointRateWrap.classList.toggle('hidden', !isBonusCardsView);
     if (elBonusProgramSwitchWrap) elBonusProgramSwitchWrap.classList.toggle('hidden', !isBonusCardsView);
     if (elReferralProgramSwitchWrap) elReferralProgramSwitchWrap.classList.toggle('hidden', !isBonusReferralsView);
-    if (elBonusFlipAllBtn) {
-      elBonusFlipAllBtn.classList.toggle('hidden', !isBonusCardsView);
-      const allFlipped = areAllBonusLevelsFlipped(getCurrentBonusLevels());
-      elBonusFlipAllBtn.classList.toggle('is-active', allFlipped);
-      elBonusFlipAllBtn.setAttribute('title', allFlipped ? 'Показать лицевую сторону всех' : 'Показать условия всех');
-      elBonusFlipAllBtn.setAttribute('aria-label', allFlipped ? 'Показать лицевую сторону всех' : 'Показать условия всех');
-    }
     const isEditingCurrent = isBonusCardsView ? state.bonusCardsEditing === true : state.referralEditing === true;
     if (elBonusEditBtn) {
       elBonusEditBtn.classList.toggle('hidden', !isEditableBonusView);
@@ -9965,9 +9957,6 @@
         <div class="bonus-level-flip-scene">
           <div class="bonus-level-flip-inner">
             <div class="bonus-level-face bonus-level-face--front">
-              <button class="bonus-level-flip-btn" type="button" data-bonus-flip-id="${escapeHtml(levelId)}" aria-label="Перевернуть карточку" title="Перевернуть карточку">
-                <i class="fas fa-sync-alt"></i>
-              </button>
               <div class="bonus-level-preview-card" style="background:${escapeHtml(baseColor)};">
                 <div class="bonus-level-preview-main" style="background:${escapeHtml(mainColor)};color:${escapeHtml(contentColor)};">
                   ${
@@ -9995,9 +9984,6 @@
               </div>
             </div>
             <div class="bonus-level-face bonus-level-face--back">
-              <button class="bonus-level-flip-btn" type="button" data-bonus-flip-id="${escapeHtml(levelId)}" aria-label="Перевернуть карточку" title="Перевернуть карточку">
-                <i class="fas fa-sync-alt"></i>
-              </button>
               <div class="bonus-level-back-head">Условия</div>
               <div class="bonus-level-back-grid">
                 <label class="bonus-level-back-field">
@@ -10032,13 +10018,11 @@
         }
       }
       card.addEventListener('click', (event) => {
-        if (event.target.closest('[data-bonus-flip-id]')) return;
         if (event.target.closest('.bonus-level-field')) return;
         openBonusLevelTab(levelId);
       });
       card.addEventListener('keydown', (event) => {
         if (event.key !== 'Enter' && event.key !== ' ') return;
-        if (event.target.closest('[data-bonus-flip-id]')) return;
         if (event.target.closest('.bonus-level-field')) return;
         event.preventDefault();
         openBonusLevelTab(levelId);
@@ -22358,23 +22342,7 @@
     });
   });
 
-  if (elBonusFlipAllBtn) {
-    elBonusFlipAllBtn.addEventListener('click', () => {
-      if (state.currentView !== 'bonus-cards') return;
-      toggleAllBonusLevelsFlip();
-    });
-  }
-
   if (elBonusLevelsTrack) {
-    elBonusLevelsTrack.addEventListener('click', (event) => {
-      const flipBtn = event.target.closest('[data-bonus-flip-id]');
-      if (!flipBtn) return;
-      const levelId = String(flipBtn.getAttribute('data-bonus-flip-id') || '').trim();
-      if (!levelId) return;
-      event.preventDefault();
-      event.stopPropagation();
-      toggleBonusLevelFlip(levelId);
-    });
     elBonusLevelsTrack.addEventListener('input', (event) => {
       if (!state.bonusCardsEditing) return;
       const input = event.target.closest('.bonus-level-field');
