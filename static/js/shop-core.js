@@ -1545,6 +1545,132 @@
     }
   }
 
+  function openHomeBonusCashbackSheet(level) {
+    if (!window.AppModal || typeof window.AppModal.open !== "function") return;
+    const wrap = document.createElement("div");
+    wrap.className = "shop-cart-sheet shop-bonus-cards-sheet shop-bonus-cashback-sheet";
+    
+    const favoriteBonus = Math.max(0, Number(level?.favorite_categories_bonus_percent || 0));
+    const favoriteLimit = Math.max(0, Math.floor(Number(level?.favorite_categories_limit || 0)));
+    const favoriteText = favoriteBonus > 0 || favoriteLimit > 0
+      ? `${favoriteLimit} кат. / +${formatShopBonusPercent(favoriteBonus)}`
+      : "Не настроено";
+
+    wrap.innerHTML = `
+      <div class="shop-bonus-level-sheet" style="padding: 5px 15px;">
+        <div class="shop-bonus-level-metric-card" style="width: 100%; margin-bottom: 12px;">
+          <div class="shop-bonus-level-metric-label">Кэшбек, %</div>
+          <div class="shop-bonus-level-metric-value"><span>${escapeHtml(formatShopBonusPercent(level?.cashback_percent, 0))}</span></div>
+        </div>
+        
+        <div class="shop-bonus-level-metric-card" style="width: 100%; margin-bottom: 12px;">
+          <div class="shop-bonus-level-metric-label">Списание, %</div>
+          <div class="shop-bonus-level-metric-value"><span>${escapeHtml(formatShopBonusPercent(level?.redeem_percent, 0))}</span></div>
+        </div>
+
+        <div class="shop-bonus-level-metric-card" style="width: 100%; margin-bottom: 12px;">
+          <div class="shop-bonus-level-metric-label">Доп % за рефералов</div>
+          <div class="shop-bonus-level-metric-value"><span>+${escapeHtml(formatShopBonusPercent(level?.referral_bonus_percent, 0))}</span></div>
+        </div>
+
+        <div class="shop-bonus-level-metric-card" style="width: 100%; margin-bottom: 12px;">
+          <div class="shop-bonus-level-metric-label">Любимые категории</div>
+          <div class="shop-bonus-level-metric-value"><span>${escapeHtml(favoriteText)}</span></div>
+        </div>
+
+        <div class="shop-bonus-level-metric-card" style="width: 100%; margin-bottom: 12px; min-height: 80px;">
+          <div class="shop-bonus-level-metric-label">Бонусы за сумму заказа</div>
+          <div class="shop-bonus-level-metric-value" style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
+             <span style="font-size: 0.85em; text-align: left; padding-right: 10px;">${escapeHtml(getShopBonusRangeSummary(level))}</span>
+             ${getShopBonusRanges(level).length > 0 ? '<button type="button" class="shop-bonus-range-info-btn" data-bonus-ranges-info-btn style="background: #f0f0f0; border: none; border-radius: 50%; width: 28px; height: 28px; color: #666; flex-shrink: 0;"><i class="fas fa-info" style="font-size: 12px;"></i></button>' : ""}
+          </div>
+        </div>
+      </div>
+    `;
+
+    // Логика поповера рядом с кнопкой "i"
+    wrap.querySelector("[data-bonus-ranges-info-btn]")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const btn = e.currentTarget;
+      
+      // Если поповер уже открыт, закрываем его
+      const existing = document.querySelector(".shop-bonus-active-popover");
+      if (existing) {
+        existing.remove();
+        if (existing._sourceBtn === btn) return; // Если кликнули по той же кнопке, просто закрыли
+      }
+
+      const rows = getShopBonusRangeDetails(level);
+      
+      const popover = document.createElement("div");
+      popover.className = "shop-bonus-active-popover";
+      popover._sourceBtn = btn;
+      popover.style = "position: fixed; background: #fff; border-radius: 12px; padding: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.15); z-index: 100000; font-size: 13px; line-height: 1.5; border: 1px solid #eee; max-width: 260px; pointer-events: auto;";
+      popover.innerHTML = `
+        <div style="font-weight: bold; margin-bottom: 8px; color: #111;">Пороги начисления:</div>
+        ${rows.map((row) => `<div style="margin-bottom: 4px; color: #444;">${escapeHtml(row)}</div>`).join("")}
+      `;
+      
+      // Запрещаем кликам внутри поповера закрывать его
+      popover.addEventListener("click", (ev) => ev.stopPropagation());
+      
+      document.body.appendChild(popover);
+      
+      const rect = btn.getBoundingClientRect();
+      const popRect = popover.getBoundingClientRect();
+      
+      let top = rect.top - popRect.height - 8;
+      if (top < 10) top = rect.bottom + 8;
+      
+      let left = rect.right - popRect.width;
+      if (left < 10) left = 10;
+      
+      popover.style.top = `${top}px`;
+      popover.style.left = `${left}px`;
+      
+      const close = () => {
+        popover.remove();
+        document.removeEventListener("click", close);
+      };
+      setTimeout(() => document.addEventListener("click", close), 0);
+    });
+
+    sheetNavigationState.type = "bonus-cashback";
+    sheetNavigationState.screen = "main";
+    sheetNavigationState.data = { levelId: Number(level?.id || 0) || null };
+    window.AppModal.open({
+      title: "Кэшбек",
+      content: wrap,
+      showCancel: false,
+      showSave: false,
+      onClose: (event) => {
+        setBonusCardsSheetHeader(false);
+        if (window.AppModal?.body) {
+          window.AppModal.body.classList.remove(
+            "shop-cart-sheet-body",
+            "shop-cart-sheet-screen-benefits",
+            "shop-bonus-cards-sheet-body"
+          );
+        }
+        sheetNavigationState.type = null;
+        sheetNavigationState.screen = null;
+        sheetNavigationState.data = null;
+        if (shouldReturnToBonusLevelOnClose(event)) {
+          returnToBonusLevelSheet(level);
+        }
+      },
+    });
+    if (window.AppModal?.body) {
+      window.AppModal.body.classList.add(
+        "shop-cart-sheet-body",
+        "shop-cart-sheet-screen-benefits",
+        "shop-bonus-cards-sheet-body"
+      );
+    }
+    setBonusCardsSheetHeader(true);
+    syncMobileUiState("bonus-cashback-sheet-open");
+  }
+
   function openHomeBonusLevelSheet(level) {
     if (!window.AppModal || typeof window.AppModal.open !== "function") return;
     const title = String(level?.title || "Уровень").trim() || "Уровень";
@@ -1565,7 +1691,7 @@
     `;
     wrap.insertAdjacentHTML("beforeend", `
       <div class="shop-bonus-level-metric-row">
-        <div class="shop-bonus-level-metric-card">
+        <div class="shop-bonus-level-metric-card" data-open-bonus-cashback style="cursor:pointer;">
           <div class="shop-bonus-level-metric-label">Кэшбек</div>
           <div class="shop-bonus-level-metric-value">
             <i class="fas fa-undo-alt" aria-hidden="true"></i>
@@ -1617,6 +1743,9 @@
     });
     wrap.querySelector(".shop-bonus-level-accruals-link")?.addEventListener("click", () => {
       void openHomeBonusAccrualsSheet({ sourceLevel: level });
+    });
+    wrap.querySelector("[data-open-bonus-cashback]")?.addEventListener("click", () => {
+      openHomeBonusCashbackSheet(level);
     });
     updateHomeBonusFavoriteCategoriesSlot(wrap, level);
     void loadHomeBonusFavoriteCategories(level).then(() => {
