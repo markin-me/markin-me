@@ -1582,7 +1582,7 @@
           <div class="shop-bonus-level-metric-label">Бонусы за сумму заказа</div>
           <div class="shop-bonus-level-metric-value" style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
              <span style="font-size: 0.85em; text-align: left; padding-right: 10px;">${escapeHtml(getShopBonusRangeSummary(level))}</span>
-             ${getShopBonusRanges(level).length > 0 ? '<button type="button" class="shop-bonus-range-info-btn" data-bonus-ranges-info-btn style="background: #f0f0f0; border: none; border-radius: 50%; width: 28px; height: 28px; color: #666; flex-shrink: 0;"><i class="fas fa-info" style="font-size: 12px;"></i></button>' : ""}
+             ${getShopBonusRanges(level).length > 0 ? '<button type="button" class="shop-bonus-range-info-btn" data-bonus-ranges-info-btn style="background: #f0f0f0; border: none; border-radius: 50%; width: 28px; height: 28px; color: #666; flex-shrink: 0; display: flex; align-items: center; justify-content: center; padding: 0;"><i class="fas fa-info" style="font-size: 12px;"></i></button>' : ""}
           </div>
         </div>
       </div>
@@ -9869,16 +9869,15 @@ async function initAddresses() {
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
     if (isMobile) {
       const headerH = Number(getComputedStyle(document.documentElement).getPropertyValue("--header-height")) || 0;
-      const chipsPanel = document.querySelector(".center-stack > .panel:first-child");
-      const chipsH = chipsPanel?.getBoundingClientRect ? chipsPanel.getBoundingClientRect().height : 0;
-      const offset = headerH + chipsH + 45;
+      const chipsH = elCatChipsWrap?.getBoundingClientRect ? elCatChipsWrap.getBoundingClientRect().height : 0;
+      const offset = headerH + chipsH + 55;
       const rect = header.getBoundingClientRect();
       const top = window.scrollY + rect.top - offset;
       window.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
     } else {
       const scroller = elProductsScroller;
       const padTop = scroller ? Number.parseFloat(getComputedStyle(scroller).paddingTop || "0") : 0;
-      const offset = Math.max(0, padTop || 0) + 120;
+      const offset = Math.max(0, padTop || 0) + 55;
       if (elProductsScroller && typeof elProductsScroller.scrollTo === "function") {
         const top = header.offsetTop - offset;
         elProductsScroller.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
@@ -9934,9 +9933,8 @@ async function initAddresses() {
     let offset = 0;
     if (isMobile) {
       const headerH = Number(getComputedStyle(document.documentElement).getPropertyValue("--header-height")) || 0;
-      const chipsPanel = document.querySelector(".center-stack > .panel:first-child");
-      const chipsH = chipsPanel?.getBoundingClientRect ? chipsPanel.getBoundingClientRect().height : 0;
-      offset = headerH + chipsH + 70;
+      const chipsH = elCatChipsWrap?.getBoundingClientRect ? elCatChipsWrap.getBoundingClientRect().height : 0;
+      offset = headerH + chipsH + 105;
       containerTop = 0;
     } else {
       containerTop = elProductsScroller?.getBoundingClientRect
@@ -9944,7 +9942,7 @@ async function initAddresses() {
         : 0;
       const scroller = elProductsScroller;
       const padTop = scroller ? Number.parseFloat(getComputedStyle(scroller).paddingTop || "0") : 0;
-      offset = Math.max(0, padTop || 0) + 120;
+      offset = Math.max(0, padTop || 0) + 105;
     }
 
     let activeHeader = categoryHeaders[0];
