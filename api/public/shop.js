@@ -288,22 +288,53 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     };
   }
 
-  async function loadPublicBonusProgressByLevel(tenantId, customer, levelRows) {
+  function isPublicBonusProgressComplete(progress) {
+    if (!progress || typeof progress !== 'object') return false;
+    const rows = [
+      [progress.amount_current, progress.amount_target],
+      [progress.orders_current, progress.orders_target],
+      [progress.referrals_current, progress.referrals_target],
+    ].filter(([, target]) => Number(target || 0) > 0);
+    if (!rows.length) return false;
+    const required = Math.min(rows.length, Math.max(1, Math.floor(Number(progress.match_count || 1))));
+    const matched = rows.filter(([current, target]) => Number(current || 0) >= Number(target || 0)).length;
+    return matched >= required;
+  }
+
+  function getPublicBonusProgressLevelIds(accountRow, levelRows) {
+    const rows = Array.isArray(levelRows) ? levelRows : [];
+    const result = new Set();
+    if (!accountRow?.joined_at || !rows.length) return result;
+    const currentLevelId = Number(accountRow.level_id || 0);
+    const currentIndex = rows.findIndex((row) => Number(row?.id || 0) === currentLevelId);
+    if (currentIndex >= 0) result.add(currentLevelId);
+    const nextLevel = rows.slice(currentIndex + 1).find((row) => String(row?.access_type || '').trim() === 'conditions');
+    if (nextLevel) result.add(Number(nextLevel.id || 0));
+    return result;
+  }
+
+  async function loadPublicBonusProgressByLevel(tenantId, customer, levelRows, accountOverride = null, queryable = db) {
     const customerId = Number(customer?.id || 0);
     const rows = Array.isArray(levelRows) ? levelRows : [];
     const progressByLevel = new Map();
     if (!(tenantId > 0) || !(customerId > 0) || !rows.length) return progressByLevel;
 
-    const [[accountRow]] = await db.query(
-      `SELECT id, customer_id, level_id, joined_at, level_assigned_at
-       FROM mkt_customer_bonus_accounts
-       WHERE tenant_id=? AND customer_id=?
-       LIMIT 1`,
-      [tenantId, customerId]
-    );
+    let accountRow = accountOverride;
+    if (!accountRow) {
+      const [[loadedAccountRow]] = await queryable.query(
+        `SELECT id, customer_id, level_id, joined_at, level_assigned_at
+         FROM mkt_customer_bonus_accounts
+         WHERE tenant_id=? AND customer_id=?
+         LIMIT 1`,
+        [tenantId, customerId]
+      );
+      accountRow = loadedAccountRow;
+    }
     if (!accountRow?.joined_at) return progressByLevel;
+    const allowedLevelIds = getPublicBonusProgressLevelIds(accountRow, rows);
 
     for (const levelRow of rows) {
+      if (!allowedLevelIds.has(Number(levelRow.id || 0))) continue;
       const targets = getPublicBonusRequirementTargets(levelRow, accountRow);
       const amountTarget = Math.max(0, Number(targets.amount || 0));
       const ordersTarget = Math.max(0, Math.floor(Number(targets.orders || 0)));
@@ -312,14 +343,12 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
 
       const periodDays = Math.max(0, Math.floor(Number(levelRow.requirement_period_days || 0)));
       const periodStart = periodDays > 0 ? new Date(Date.now() - periodDays * 24 * 60 * 60 * 1000) : null;
-      const baseStart = targets.scope === 'retention'
-        ? (accountRow.level_assigned_at || accountRow.joined_at)
-        : accountRow.joined_at;
+      const baseStart = accountRow.level_assigned_at || accountRow.joined_at;
       const sinceDate = periodStart ? maxDateOrNull(baseStart, periodStart) : maxDateOrNull(baseStart);
       const sinceAt = toMysqlDateTime(sinceDate);
       if (!sinceAt) continue;
 
-      const [[orderStats]] = await db.query(
+      const [[orderStats]] = await queryable.query(
         `SELECT COUNT(*) AS orders_count,
                 COALESCE(SUM(COALESCE(o.total_price, 0)), 0) AS orders_amount
          FROM order_orders o
@@ -335,7 +364,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
            AND (o.is_paid=1 OR COALESCE(os.is_final, 0)=1)`,
         [tenantId, customerId, sinceAt]
       );
-      const [[referralStats]] = await db.query(
+      const [[referralStats]] = await queryable.query(
         `SELECT COUNT(*) AS referrals_count
          FROM mkt_customer_referrals
          WHERE tenant_id=?
@@ -360,6 +389,54 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     }
 
     return progressByLevel;
+  }
+
+  async function promotePublicBonusAccountIfEligible(queryable, tenantId, customer, accountRow, levelRows) {
+    const customerId = Number(customer?.id || 0);
+    const accountId = Number(accountRow?.id || 0);
+    const rows = Array.isArray(levelRows) ? levelRows : [];
+    if (!(tenantId > 0) || !(customerId > 0) || !(accountId > 0) || !accountRow?.joined_at || !rows.length) {
+      return accountRow || null;
+    }
+    const currentLevelId = Number(accountRow.level_id || 0);
+    const currentIndex = rows.findIndex((row) => Number(row?.id || 0) === currentLevelId);
+    if (currentIndex < 0) return accountRow;
+    const nextLevel = rows.slice(currentIndex + 1).find((row) => String(row?.access_type || '').trim() === 'conditions');
+    if (!nextLevel) return accountRow;
+
+    const progressByLevel = await loadPublicBonusProgressByLevel(tenantId, customer, rows, accountRow, queryable);
+    const progress = progressByLevel.get(Number(nextLevel.id || 0));
+    if (!isPublicBonusProgressComplete(progress)) return accountRow;
+
+    const rewardAmount = Math.max(0, Number(nextLevel.reward_bonus_amount || 0));
+    const currentBalance = Math.max(0, Number(accountRow.balance || 0));
+    const nextBalance = currentBalance + rewardAmount;
+    const [updateResult] = await queryable.query(
+      `UPDATE mkt_customer_bonus_accounts
+       SET level_id=?,
+           balance=COALESCE(balance, 0) + ?,
+           total_accrued=COALESCE(total_accrued, 0) + ?,
+           level_assigned_at=NOW()
+       WHERE tenant_id=? AND id=? AND customer_id=? AND level_id=?`,
+      [Number(nextLevel.id), rewardAmount, rewardAmount, tenantId, accountId, customerId, currentLevelId]
+    );
+    if (!(Number(updateResult?.affectedRows || 0) > 0)) return accountRow;
+
+    await queryable.query(
+      `INSERT INTO mkt_customer_bonus_transactions
+         (tenant_id, account_id, customer_id, level_id, type, amount, balance_after, reason, created_at)
+       VALUES (?, ?, ?, ?, 'level_up', ?, ?, ?, NOW())`,
+      [tenantId, accountId, customerId, Number(nextLevel.id), rewardAmount, nextBalance, 'level_up']
+    );
+
+    const [[updatedAccountRow]] = await queryable.query(
+      `SELECT id, customer_id, level_id, balance, status, joined_at, level_assigned_at
+       FROM mkt_customer_bonus_accounts
+       WHERE tenant_id=? AND customer_id=?
+       LIMIT 1`,
+      [tenantId, customerId]
+    );
+    return updatedAccountRow || accountRow;
   }
 
   function normalizeProductBlocksConfig(rawValue, fallbackValue = null) {
@@ -1815,8 +1892,10 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
           sort_order: Number(row.sort_order || 0),
         });
       });
-      const progressByLevel = await loadPublicBonusProgressByLevel(tenantId, customer, levelRows);
-      const account = await loadPublicBonusAccount(tenantId, customer);
+      const loadedAccount = await loadPublicBonusAccount(tenantId, customer);
+      const promotedAccount = await promotePublicBonusAccountIfEligible(db, tenantId, customer, loadedAccount, levelRows);
+      const account = mapPublicBonusAccountRow(promotedAccount);
+      const progressByLevel = await loadPublicBonusProgressByLevel(tenantId, customer, levelRows, promotedAccount);
       const [referralRows] = await db.query(
         `SELECT id, code, title, invited_count, percent, sort_order, is_active
          FROM mkt_referral_levels

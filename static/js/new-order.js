@@ -10320,7 +10320,17 @@
   function calculateRightOrderBonusAccrual(cartItems, lineStates, bonusData) {
     const level = getRightBonusActiveLevel(bonusData);
     if (!level) return 0;
-    const cashbackPercent = Math.max(0, Number(level?.cashback_percent || 0));
+    const orderTotal = (Array.isArray(lineStates) ? lineStates : []).reduce((sum, row) => (
+      sum + roundPrice(Math.max(0, Number(row?.currentTotal || 0)))
+    ), 0);
+    const orderRangePercent = (Array.isArray(level?.order_bonus_ranges) ? level.order_bonus_ranges : [])
+      .map((row) => ({
+        amount: Math.max(0, Number(row?.amount || 0)),
+        percent: Math.max(0, Number(row?.percent || 0)),
+      }))
+      .filter((row) => row.amount > 0 && row.percent > 0 && orderTotal >= row.amount)
+      .sort((a, b) => b.amount - a.amount)[0]?.percent || 0;
+    const cashbackPercent = Math.max(0, Number(level?.cashback_percent || 0)) + orderRangePercent;
     const favoritePercent = Math.max(0, Number(level?.favorite_categories_bonus_percent || 0));
     const selectedCategoryIds = favoritePercent > 0 ? getRightBonusSelectedCategoryIds(bonusData) : new Set();
     let rawBonus = 0;
@@ -10329,7 +10339,7 @@
       const lineTotal = roundPrice(Math.max(0, Number(lineStates?.[index]?.currentTotal || 0)));
       if (!(lineTotal > 0)) return;
       const percent = rightBonusCartItemMatchesFavoriteCategory(item, selectedCategoryIds)
-        ? favoritePercent
+        ? favoritePercent + orderRangePercent
         : cashbackPercent;
       if (!(percent > 0)) return;
       rawBonus += lineTotal * percent / 100;

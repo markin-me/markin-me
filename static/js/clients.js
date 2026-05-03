@@ -906,7 +906,7 @@
         referral_card_title_background_enabled: overrides.referralCardTitleBackgroundEnabled ?? state.referralCardTitleBackgroundEnabled,
         referral_card_title_background_color: overrides.referralCardTitleBackgroundColor ?? state.referralCardTitleBackgroundColor,
         referral_card_title_background_opacity: overrides.referralCardTitleBackgroundOpacity ?? state.referralCardTitleBackgroundOpacity,
-        allow_redeem_and_accrue: false,
+        allow_redeem_and_accrue: overrides.allowRedeemAndAccrue ?? state.bonusAllowRedeemAndAccrue,
       },
       levels: sanitizeBonusLevels(levelsSource, { withDefaults: false }).map((level, idx) => ({
         code: String(level.id || `level_${idx + 1}`),
@@ -1030,6 +1030,7 @@
     state.bonusRubleAmountDraft = state.bonusRubleAmount;
     state.bonusPointRate = normalizeBonusPointRateValue(settings.bonus_point_rate, state.bonusRubleAmount / state.bonusPointAmount);
     state.bonusPointRateDraft = state.bonusPointRate;
+    state.bonusAllowRedeemAndAccrue = settings.allow_redeem_and_accrue === true;
     state.bonusLevels = sanitizeBonusLevels(levels, { withDefaults: false });
     state.bonusLevelsDraft = state.bonusLevels.map((level) => ({ ...level }));
     state.bonusClientEvents = sanitizeBonusClientEvents(json?.bonus_events, { withDefaults: false });
@@ -2206,6 +2207,7 @@
   const bonusLevelRewardBonusAmountInput = right$("#bonusLevelRewardBonusAmountInput");
   const bonusLevelCashbackPercentInput = right$("#bonusLevelCashbackPercentInput");
   const bonusLevelRedeemPercentInput = right$("#bonusLevelRedeemPercentInput");
+  const bonusLevelAllowSimultaneousSwitch = right$("#bonusLevelAllowSimultaneousSwitch");
   const bonusLevelReferralBonusField = right$("#bonusLevelReferralBonusField");
   const bonusLevelReferralBonusPercentInput = right$("#bonusLevelReferralBonusPercentInput");
   const bonusLevelActivationFieldWrap = right$("#bonusLevelActivationFieldWrap");
@@ -2452,6 +2454,7 @@
     bonusRubleAmountDraft: 1,
     bonusPointRate: 1,
     bonusPointRateDraft: 1,
+    bonusAllowRedeemAndAccrue: false,
     bonusCardsEditing: false,
     bonusLevels: sanitizeBonusLevels(createDefaultBonusLevels()),
     bonusLevelsDraft: sanitizeBonusLevels(createDefaultBonusLevels()),
@@ -9692,6 +9695,12 @@
       bonusLevelRedeemPercentInput.value = String(normalizeNumberInputValue(current.redeemPercent, 0) || 0);
       bonusLevelRedeemPercentInput.disabled = !isEditing;
     }
+    if (bonusLevelAllowSimultaneousSwitch) {
+      bonusLevelAllowSimultaneousSwitch.checked = current.allowRedeemAndAccrue === true || (
+        current.allowRedeemAndAccrue == null && state.bonusAllowRedeemAndAccrue === true
+      );
+      bonusLevelAllowSimultaneousSwitch.disabled = !isEditing;
+    }
     if (bonusLevelReferralBonusField) {
       bonusLevelReferralBonusField.classList.toggle('hidden', !isReferralSystemEnabled());
     }
@@ -9845,6 +9854,7 @@
       tariffPayWithBonus: draft.tariffPayWithBonus === true,
       cashbackPercent: normalizeNumberInputValue(draft.cashbackPercent, 1),
       redeemPercent: normalizeNumberInputValue(draft.redeemPercent, 0),
+      allowRedeemAndAccrue: draft.allowRedeemAndAccrue === true,
       referralBonusPercent: normalizeBonusPercentInputValue(draft.referralBonusPercent, 0),
       mainColor: normalizeHexColor(draft.mainColor, '#46b13b'),
       baseColor: normalizeHexColor(draft.baseColor, '#1f8d2e'),
@@ -9873,10 +9883,11 @@
       retentionMatchCount: Math.max(1, normalizeNumberInputValue(draft.retentionMatchCount, 1)),
     };
     updateBonusLevelInCollections(activeId, () => nextLevel);
+    state.bonusAllowRedeemAndAccrue = nextLevel.allowRedeemAndAccrue === true;
     state.editingBonusLevelId = null;
     state.bonusLevelEditorDraft = null;
     syncBonusLevelTabTitle(activeId, nextLevel.title);
-    persistBonusCardsStorageSoon();
+    persistBonusCardsStorageSoon({ allowRedeemAndAccrue: state.bonusAllowRedeemAndAccrue });
     renderBonusLevels();
     renderBonusLevelInfo();
   }
@@ -22579,6 +22590,7 @@
       state.editingBonusLevelId = level.id;
       state.bonusLevelEditorDraft = {
         ...level,
+        allowRedeemAndAccrue: state.bonusAllowRedeemAndAccrue === true,
         accessType: getBaseBonusLevelAccessType(getBonusLevelIndexById(level.id, state.bonusLevels)),
       };
       renderBonusLevelInfo();
@@ -22764,6 +22776,14 @@
     bonusLevelRedeemPercentInput.addEventListener('input', () => {
       applyBonusLevelEditorDraftPatch({
         redeemPercent: normalizeNumberInputValue(bonusLevelRedeemPercentInput.value, 0),
+      });
+    });
+  }
+
+  if (bonusLevelAllowSimultaneousSwitch) {
+    bonusLevelAllowSimultaneousSwitch.addEventListener('change', () => {
+      applyBonusLevelEditorDraftPatch({
+        allowRedeemAndAccrue: bonusLevelAllowSimultaneousSwitch.checked === true,
       });
     });
   }

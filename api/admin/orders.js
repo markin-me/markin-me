@@ -312,6 +312,240 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
     };
   }
 
+  function toMysqlDateTime(value) {
+    const date = value instanceof Date ? value : new Date(value);
+    if (!Number.isFinite(date.getTime())) return null;
+    const pad = (part) => String(part).padStart(2, "0");
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+  }
+
+  function getBonusLevelRequirementProgressRows(progress) {
+    if (!progress || typeof progress !== "object") return [];
+    return [
+      [progress.amountCurrent, progress.amountTarget],
+      [progress.ordersCurrent, progress.ordersTarget],
+      [progress.referralsCurrent, progress.referralsTarget],
+    ].filter(([, target]) => Number(target || 0) > 0);
+  }
+
+  function isBonusLevelRequirementComplete(progress) {
+    const rows = getBonusLevelRequirementProgressRows(progress);
+    if (!rows.length) return false;
+    const required = Math.min(rows.length, Math.max(1, Math.floor(Number(progress.matchCount || 1))));
+    const matched = rows.filter(([current, target]) => Number(current || 0) >= Number(target || 0)).length;
+    return matched >= required;
+  }
+
+  async function loadBonusLevelRequirementProgress(queryable, tenantId, customerId, account, level) {
+    const amountTarget = Math.max(0, Number(level?.requirement_amount || 0));
+    const ordersTarget = Math.max(0, Math.floor(Number(level?.requirement_orders || 0)));
+    const referralsTarget = Math.max(0, Math.floor(Number(level?.requirement_referrals || 0)));
+    const baseStart = account?.level_assigned_at || account?.joined_at;
+    let sinceAt = toMysqlDateTime(baseStart);
+    if (!sinceAt) return null;
+    const periodDays = Math.max(0, Math.floor(Number(level?.requirement_period_days || 0)));
+    if (periodDays > 0) {
+      const periodStart = new Date(Date.now() - periodDays * 24 * 60 * 60 * 1000);
+      const baseDate = new Date(baseStart);
+      sinceAt = toMysqlDateTime(baseDate > periodStart ? baseDate : periodStart);
+    }
+
+    const [[orderStats]] = await queryable.query(
+      `SELECT COUNT(*) AS orders_count,
+              COALESCE(SUM(COALESCE(o.total_price, 0)), 0) AS orders_amount
+         FROM order_orders o
+         LEFT JOIN order_statuses os
+           ON os.tenant_id = o.tenant_id
+          AND os.store_id = o.store_id
+          AND os.id = o.status_id
+        WHERE o.tenant_id = ?
+          AND o.customer_id = ?
+          AND o.is_active = 1
+          AND o.created_at >= ?
+          AND LOWER(COALESCE(os.code, '')) NOT IN ('canceled', 'cancelled')
+          AND (o.is_paid = 1 OR COALESCE(os.is_final, 0) = 1)`,
+      [tenantId, customerId, sinceAt]
+    );
+    const [[referralStats]] = await queryable.query(
+      `SELECT COUNT(*) AS referrals_count
+         FROM mkt_customer_referrals
+        WHERE tenant_id = ?
+          AND inviter_customer_id = ?
+          AND status IN ('registered', 'first_purchase_paid')
+          AND registered_at >= ?`,
+      [tenantId, customerId, sinceAt]
+    );
+    return {
+      amountCurrent: Number(orderStats?.orders_amount || 0),
+      amountTarget,
+      ordersCurrent: Number(orderStats?.orders_count || 0),
+      ordersTarget,
+      referralsCurrent: Number(referralStats?.referrals_count || 0),
+      referralsTarget,
+      matchCount: Math.max(1, Number(level?.requirement_match_count || 1)),
+    };
+  }
+
+  async function promoteOrderBonusAccountIfEligible(queryable, tenantId, customerId) {
+    const [accountRows] = await queryable.query(
+      `SELECT id, customer_id, level_id, balance, joined_at, level_assigned_at
+         FROM mkt_customer_bonus_accounts
+        WHERE tenant_id = ? AND customer_id = ?
+        LIMIT 1
+        FOR UPDATE`,
+      [tenantId, customerId]
+    );
+    const account = Array.isArray(accountRows) && accountRows.length ? accountRows[0] : null;
+    if (!account?.joined_at || !(Number(account?.id || 0) > 0)) return null;
+
+    const [levels] = await queryable.query(
+      `SELECT id, sort_order, access_type, reward_bonus_amount,
+              requirement_amount, requirement_orders, requirement_referrals,
+              requirement_match_count, requirement_period_days
+         FROM mkt_bonus_levels
+        WHERE tenant_id = ? AND is_active = 1
+        ORDER BY sort_order ASC, id ASC`,
+      [tenantId]
+    );
+    const rows = Array.isArray(levels) ? levels : [];
+    const currentLevelId = Number(account.level_id || 0);
+    const currentIndex = rows.findIndex((row) => Number(row?.id || 0) === currentLevelId);
+    if (currentIndex < 0) return account;
+    const nextLevel = rows.slice(currentIndex + 1).find((row) => String(row?.access_type || "").trim() === "conditions");
+    if (!nextLevel) return account;
+
+    const progress = await loadBonusLevelRequirementProgress(queryable, tenantId, customerId, account, nextLevel);
+    if (!isBonusLevelRequirementComplete(progress)) return account;
+
+    const rewardAmount = roundMoney(Math.max(0, Number(nextLevel.reward_bonus_amount || 0)));
+    const nextBalance = roundMoney(Number(account.balance || 0) + rewardAmount);
+    const [updateResult] = await queryable.query(
+      `UPDATE mkt_customer_bonus_accounts
+          SET level_id = ?,
+              balance = COALESCE(balance, 0) + ?,
+              total_accrued = COALESCE(total_accrued, 0) + ?,
+              level_assigned_at = NOW()
+        WHERE tenant_id = ? AND id = ? AND customer_id = ? AND level_id = ?`,
+      [Number(nextLevel.id), rewardAmount, rewardAmount, tenantId, Number(account.id), customerId, currentLevelId]
+    );
+    if (!(Number(updateResult?.affectedRows || 0) > 0)) return account;
+
+    await queryable.query(
+      `INSERT INTO mkt_customer_bonus_transactions
+         (tenant_id, account_id, customer_id, level_id, type, amount, balance_after, reason, created_at)
+       VALUES (?, ?, ?, ?, 'level_up', ?, ?, ?, NOW())`,
+      [tenantId, Number(account.id), customerId, Number(nextLevel.id), rewardAmount, nextBalance, "level_up"]
+    );
+    return { ...account, level_id: Number(nextLevel.id), balance: nextBalance };
+  }
+
+  function parseOrderItemsJson(rawValue) {
+    if (Array.isArray(rawValue)) return rawValue;
+    if (!rawValue) return [];
+    try {
+      const parsed = typeof rawValue === "string" ? JSON.parse(rawValue) : rawValue;
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function getOrderBonusItemCategoryIds(item) {
+    const ids = new Set();
+    [
+      item?.category_id,
+      item?._category_id,
+      item?.combo_category_id,
+      item?.product?.category_id,
+      item?.product_category_id,
+    ].forEach((id) => {
+      const numericId = Number(id || 0);
+      if (numericId > 0) ids.add(numericId);
+    });
+    if (Array.isArray(item?.category_ids)) {
+      item.category_ids.forEach((id) => {
+        const numericId = Number(id || 0);
+        if (numericId > 0) ids.add(numericId);
+      });
+    }
+    return ids;
+  }
+
+  function orderBonusItemMatchesFavoriteCategory(item, selectedCategoryIds) {
+    if (!(selectedCategoryIds instanceof Set) || !selectedCategoryIds.size) return false;
+    const ids = getOrderBonusItemCategoryIds(item);
+    if (!ids.size) return false;
+    return Array.from(ids).some((id) => selectedCategoryIds.has(id));
+  }
+
+  async function calculateStoredOrderBonusAccrual(queryable, tenantId, orderId, customerId, levelId) {
+    if (!(tenantId > 0) || !(orderId > 0) || !(customerId > 0) || !(levelId > 0)) return null;
+    const [[orderRow]] = await queryable.query(
+      `SELECT items
+         FROM order_orders
+        WHERE tenant_id = ? AND id = ?
+        LIMIT 1`,
+      [tenantId, orderId]
+    );
+    const items = parseOrderItemsJson(orderRow?.items).filter((item) => Number(item?.is_gift_reward || 0) !== 1);
+    if (!items.length) return null;
+
+    const [[levelRow]] = await queryable.query(
+      `SELECT id, cashback_percent, favorite_categories_bonus_percent
+         FROM mkt_bonus_levels
+        WHERE tenant_id = ? AND id = ? AND is_active = 1
+        LIMIT 1`,
+      [tenantId, levelId]
+    );
+    if (!(Number(levelRow?.id || 0) > 0)) return null;
+
+    const [rangeRows] = await queryable.query(
+      `SELECT amount, percent
+         FROM mkt_bonus_level_order_ranges
+        WHERE tenant_id = ? AND level_id = ?
+        ORDER BY amount DESC, sort_order DESC, id DESC`,
+      [tenantId, levelId]
+    );
+    const orderTotal = roundMoney(items.reduce((sum, item) => (
+      sum + Math.max(0, Number(item?.line_total || 0))
+    ), 0));
+    const orderRangePercent = (Array.isArray(rangeRows) ? rangeRows : [])
+      .map((row) => ({
+        amount: Math.max(0, Number(row?.amount || 0)),
+        percent: Math.max(0, Number(row?.percent || 0)),
+      }))
+      .find((row) => row.amount > 0 && row.percent > 0 && orderTotal >= row.amount)?.percent || 0;
+
+    const favoritePercent = Math.max(0, Number(levelRow.favorite_categories_bonus_percent || 0));
+    let selectedCategoryIds = new Set();
+    if (favoritePercent > 0) {
+      const [categoryRows] = await queryable.query(
+        `SELECT category_id
+           FROM mkt_customer_bonus_favorite_categories
+          WHERE tenant_id = ? AND customer_id = ? AND level_id = ?`,
+        [tenantId, customerId, levelId]
+      );
+      selectedCategoryIds = new Set(
+        (Array.isArray(categoryRows) ? categoryRows : [])
+          .map((row) => Number(row?.category_id || 0))
+          .filter((id) => id > 0)
+      );
+    }
+
+    const cashbackPercent = Math.max(0, Number(levelRow.cashback_percent || 0)) + orderRangePercent;
+    let rawBonus = 0;
+    items.forEach((item) => {
+      const lineTotal = roundMoney(Math.max(0, Number(item?.line_total || 0)));
+      if (!(lineTotal > 0)) return;
+      const percent = orderBonusItemMatchesFavoriteCategory(item, selectedCategoryIds)
+        ? favoritePercent + orderRangePercent
+        : cashbackPercent;
+      if (!(percent > 0)) return;
+      rawBonus += lineTotal * percent / 100;
+    });
+    return Math.floor(Math.max(0, rawBonus));
+  }
+
   async function getBonusTransactionAmount(queryable, tenantId, orderId, type, reason) {
     const [rows] = await queryable.query(
       `SELECT COALESCE(SUM(amount), 0) AS amount
@@ -507,7 +741,19 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
     const settings = await loadBonusProgramSettings(queryable, normalizedTenantId);
     const blockedByRedeem = Boolean(benefitsMeta?.bonus_accrual_blocked_by_redeem)
       || (redeemAmount > 0 && !settings.allowRedeemAndAccrue);
-    const accrualAmount = blockedByRedeem ? 0 : roundMoney(Math.max(0, Number(benefitsMeta?.bonus_accrual_amount || 0)));
+    const recalculatedAccrualAmount = blockedByRedeem ? null : await calculateStoredOrderBonusAccrual(
+      queryable,
+      normalizedTenantId,
+      normalizedOrderId,
+      normalizedCustomerId,
+      Number(benefitsMeta?.bonus_level_id || account.level_id || 0)
+    );
+    const accrualAmount = blockedByRedeem ? 0 : roundMoney(Math.max(
+      0,
+      recalculatedAccrualAmount == null
+        ? Number(benefitsMeta?.bonus_accrual_amount || 0)
+        : Number(recalculatedAccrualAmount || 0)
+    ));
     const accrualReason = `order:${normalizedOrderId}:bonus_accrual`;
     const existingAccrual = await getBonusTransactionAmount(queryable, normalizedTenantId, normalizedOrderId, "accrual", accrualReason);
     let accrued = 0;
@@ -528,6 +774,9 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         [normalizedTenantId, Number(account.id), normalizedCustomerId, account.level_id || null, accrualAmount, nextBalance, accrualReason]
       );
       accrued = accrualAmount;
+    }
+    if (settings.enabled) {
+      await promoteOrderBonusAccountIfEligible(queryable, normalizedTenantId, normalizedCustomerId);
     }
     return { redeemed, accrued };
   }

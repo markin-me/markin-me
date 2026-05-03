@@ -832,12 +832,39 @@ function getBonusRequirementTargets(levelRow, accountRow) {
   };
 }
 
+function isBonusProgressComplete(progress) {
+  if (!progress || typeof progress !== 'object') return false;
+  const rows = [
+    [progress.amount_current, progress.amount_target],
+    [progress.orders_current, progress.orders_target],
+    [progress.referrals_current, progress.referrals_target],
+  ].filter(([, target]) => Number(target || 0) > 0);
+  if (!rows.length) return false;
+  const required = Math.min(rows.length, Math.max(1, Math.floor(Number(progress.match_count || 1))));
+  const matched = rows.filter(([current, target]) => Number(current || 0) >= Number(target || 0)).length;
+  return matched >= required;
+}
+
+function getBonusProgressLevelIds(accountRow, levels) {
+  const rows = Array.isArray(levels) ? levels : [];
+  const result = new Set();
+  if (!accountRow?.joined_at || !rows.length) return result;
+  const currentLevelId = Number(accountRow.level_id || 0);
+  const currentIndex = rows.findIndex((row) => Number(row?.id || 0) === currentLevelId);
+  if (currentIndex >= 0) result.add(currentLevelId);
+  const nextLevel = rows.slice(currentIndex + 1).find((row) => String(row?.access_type || '').trim() === 'conditions');
+  if (nextLevel) result.add(Number(nextLevel.id || 0));
+  return result;
+}
+
 async function loadBonusProgressByLevel(db, tenantId, customerId, accountRow, levels) {
   const rows = Array.isArray(levels) ? levels : [];
   const progressByLevel = new Map();
   if (!(tenantId > 0) || !(customerId > 0) || !accountRow?.joined_at || !rows.length) return progressByLevel;
+  const allowedLevelIds = getBonusProgressLevelIds(accountRow, rows);
 
   for (const levelRow of rows) {
+    if (!allowedLevelIds.has(Number(levelRow.id || 0))) continue;
     const targets = getBonusRequirementTargets(levelRow, accountRow);
     const amountTarget = Math.max(0, Number(targets.amount || 0));
     const ordersTarget = Math.max(0, Math.floor(Number(targets.orders || 0)));
@@ -846,9 +873,7 @@ async function loadBonusProgressByLevel(db, tenantId, customerId, accountRow, le
 
     const periodDays = Math.max(0, Math.floor(Number(levelRow.requirement_period_days || 0)));
     const periodStart = periodDays > 0 ? new Date(Date.now() - periodDays * 24 * 60 * 60 * 1000) : null;
-    const baseStart = targets.scope === 'retention'
-      ? (accountRow.level_assigned_at || accountRow.joined_at)
-      : accountRow.joined_at;
+    const baseStart = accountRow.level_assigned_at || accountRow.joined_at;
     const sinceDate = periodStart ? maxDateOrNull(baseStart, periodStart) : maxDateOrNull(baseStart);
     const sinceAt = toMysqlDateTime(sinceDate);
     if (!sinceAt) continue;
@@ -894,6 +919,54 @@ async function loadBonusProgressByLevel(db, tenantId, customerId, accountRow, le
   }
 
   return progressByLevel;
+}
+
+async function promoteBonusAccountIfEligible(db, tenantId, customerId, accountRow, levels) {
+  const accountId = Number(accountRow?.id || 0);
+  const rows = Array.isArray(levels) ? levels : [];
+  if (!(tenantId > 0) || !(customerId > 0) || !(accountId > 0) || !accountRow?.joined_at || !rows.length) {
+    return accountRow || null;
+  }
+  const currentLevelId = Number(accountRow.level_id || 0);
+  const currentIndex = rows.findIndex((row) => Number(row?.id || 0) === currentLevelId);
+  if (currentIndex < 0) return accountRow;
+  const nextLevel = rows.slice(currentIndex + 1).find((row) => String(row?.access_type || '').trim() === 'conditions');
+  if (!nextLevel) return accountRow;
+
+  const progressByLevel = await loadBonusProgressByLevel(db, tenantId, customerId, accountRow, rows);
+  const progress = progressByLevel.get(Number(nextLevel.id || 0));
+  if (!isBonusProgressComplete(progress)) return accountRow;
+
+  const rewardAmount = Math.max(0, Number(nextLevel.reward_bonus_amount || 0));
+  const currentBalance = Math.max(0, Number(accountRow.balance || 0));
+  const nextBalance = currentBalance + rewardAmount;
+  const [updateResult] = await db.query(
+    `UPDATE mkt_customer_bonus_accounts
+        SET level_id = ?,
+            balance = COALESCE(balance, 0) + ?,
+            total_accrued = COALESCE(total_accrued, 0) + ?,
+            level_assigned_at = NOW()
+      WHERE tenant_id = ? AND id = ? AND customer_id = ? AND level_id = ?`,
+    [Number(nextLevel.id), rewardAmount, rewardAmount, tenantId, accountId, customerId, currentLevelId]
+  );
+  if (!(Number(updateResult?.affectedRows || 0) > 0)) return accountRow;
+
+  await db.query(
+    `INSERT INTO mkt_customer_bonus_transactions
+       (tenant_id, account_id, customer_id, level_id, type, amount, balance_after, reason, created_at)
+     VALUES (?, ?, ?, ?, 'level_up', ?, ?, ?, NOW())`,
+    [tenantId, accountId, customerId, Number(nextLevel.id), rewardAmount, nextBalance, 'level_up']
+  );
+
+  const [[updatedAccountRow]] = await db.query(
+    `SELECT id, customer_id, level_id, balance, total_accrued, total_redeemed,
+            total_expired, status, joined_at, level_assigned_at
+       FROM mkt_customer_bonus_accounts
+      WHERE tenant_id = ? AND customer_id = ?
+      LIMIT 1`,
+    [tenantId, customerId]
+  );
+  return updatedAccountRow || accountRow;
 }
 
 module.exports = function makeAdminBonusRouter({ db, helpers }) {
@@ -1074,13 +1147,14 @@ module.exports = function makeAdminBonusRouter({ db, helpers }) {
           LIMIT 1`,
         [tenantId, customerId]
       );
-      const accountLevelId = Number(accountRow?.level_id || 0);
+      const promotedAccountRow = await promoteBonusAccountIfEligible(db, tenantId, customerId, accountRow, config.levels);
+      const accountLevelId = Number(promotedAccountRow?.level_id || 0);
       const level = config.levels.find((item) => Number(item?.id || 0) === accountLevelId)
         || config.levels.find((item) => item?.is_active)
         || config.levels[0]
         || null;
       const levelId = Number(level?.id || accountLevelId || 0);
-      const progressByLevel = await loadBonusProgressByLevel(db, tenantId, customerId, accountRow, config.levels);
+      const progressByLevel = await loadBonusProgressByLevel(db, tenantId, customerId, promotedAccountRow, config.levels);
       const levelsWithProgress = config.levels.map((item) => ({
         ...item,
         progress: progressByLevel.get(Number(item?.id || 0)) || null,
@@ -1137,17 +1211,17 @@ module.exports = function makeAdminBonusRouter({ db, helpers }) {
             total_orders: Number(customerRow.total_orders || 0),
             total_spent: Number(customerRow.total_spent || 0),
           },
-          account: accountRow ? {
-            id: Number(accountRow.id || 0),
-            customer_id: Number(accountRow.customer_id || 0),
-            level_id: accountRow.level_id == null ? null : Number(accountRow.level_id),
-            balance: Number(accountRow.balance || 0),
-            total_accrued: Number(accountRow.total_accrued || 0),
-            total_redeemed: Number(accountRow.total_redeemed || 0),
-            total_expired: Number(accountRow.total_expired || 0),
-            status: accountRow.status || 'active',
-            joined_at: accountRow.joined_at || null,
-            level_assigned_at: accountRow.level_assigned_at || null,
+          account: promotedAccountRow ? {
+            id: Number(promotedAccountRow.id || 0),
+            customer_id: Number(promotedAccountRow.customer_id || 0),
+            level_id: promotedAccountRow.level_id == null ? null : Number(promotedAccountRow.level_id),
+            balance: Number(promotedAccountRow.balance || 0),
+            total_accrued: Number(promotedAccountRow.total_accrued || 0),
+            total_redeemed: Number(promotedAccountRow.total_redeemed || 0),
+            total_expired: Number(promotedAccountRow.total_expired || 0),
+            status: promotedAccountRow.status || 'active',
+            joined_at: promotedAccountRow.joined_at || null,
+            level_assigned_at: promotedAccountRow.level_assigned_at || null,
           } : null,
           level: currentLevel,
           levels: levelsWithProgress,
