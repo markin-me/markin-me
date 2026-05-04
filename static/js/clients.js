@@ -1852,6 +1852,8 @@
   const elBonusPaidTariffBtn = $("#bonusPaidTariffBtn");
   const elBonusReferralsBtn = $("#bonusReferralsBtn");
   const elBonusProgramsBtn = $("#bonusProgramsBtn");
+  const elBonusSettingsNavBtn = $("#bonusSettingsNavBtn");
+  const elBonusSettingsEditBtn = $("#bonusSettingsEditBtn");
   const elClientsScroll = elList ? elList.closest(".panel-body") : null;
 
   if (elBonusCardsBtn) {
@@ -2128,6 +2130,11 @@
   const bannerEmpty = right$("#bannerEmpty");
   const bonusLevelEmpty = right$("#bonusLevelEmpty");
   const bonusReferralsEmpty = right$("#bonusReferralsEmpty");
+  const bonusSettingsEmpty = right$("#bonusSettingsEmpty");
+  const bonusSettingsBrandWrap = right$("#bonusSettingsBrandWrap");
+  const bonusSettingsLogoPreview = right$("#bonusSettingsLogoPreview");
+  const bonusSettingsLogoUploadBtn = right$("#bonusSettingsLogoUploadBtn");
+  const bonusSettingsLogoInput = right$("#bonusSettingsLogoInput");
   const bonusReferralCardInfoWrap = right$("#bonusReferralCardInfoWrap");
   const bonusReferralLevelsSettings = right$("#bonusReferralLevelsSettings");
   const bonusReferralFirstPurchaseRewardInput = right$("#bonusReferralFirstPurchaseRewardInput");
@@ -2452,6 +2459,11 @@
     bonusPointAmountDraft: 1,
     bonusRubleAmount: 1,
     bonusRubleAmountDraft: 1,
+    bonusProgramName: 'Бонусная программа',
+    bonusProgramNameDraft: 'Бонусная программа',
+    bonusProgramLogo: null,
+    bonusProgramLogoDraft: null,
+    bonusSettingsEditing: false,
     bonusPointRate: 1,
     bonusPointRateDraft: 1,
     bonusAllowRedeemAndAccrue: false,
@@ -3563,17 +3575,21 @@
     if (!clientTabsHeader || !clientTabs) return;
     const hasTabs = tabsState.tabs.length > 0;
     const isBonusReferralsView = state.currentView === 'bonus-referrals';
+    const isBonusSettingsView = state.currentView === 'bonus-settings';
+    const isHomeBtnView = isBonusReferralsView || isBonusSettingsView;
     const visibleTabs = isBonusReferralsView
       ? tabsState.tabs.filter((tab) => tab.type === 'bonus-referral-card')
-      : tabsState.tabs;
+      : isBonusSettingsView
+        ? tabsState.tabs.filter((tab) => tab.type === 'bonus-settings-brand')
+        : tabsState.tabs;
     const hasVisibleTabs = visibleTabs.length > 0;
-    clientTabsHeader.classList.toggle("hidden", !hasVisibleTabs && !isBonusReferralsView);
+    clientTabsHeader.classList.toggle("hidden", !hasVisibleTabs && !isHomeBtnView);
     if (clientTabsHomeBtn) {
-      clientTabsHomeBtn.classList.toggle('hidden', !isBonusReferralsView);
-      clientTabsHomeBtn.classList.toggle('is-active', isBonusReferralsView && !hasVisibleTabs);
+      clientTabsHomeBtn.classList.toggle('hidden', !isHomeBtnView);
+      clientTabsHomeBtn.classList.toggle('is-active', isHomeBtnView && !hasVisibleTabs);
     }
-    clientTabs.classList.toggle('hidden', isBonusReferralsView && !hasVisibleTabs);
-    if (isBonusReferralsView && !hasVisibleTabs) {
+    clientTabs.classList.toggle('hidden', isHomeBtnView && !hasVisibleTabs);
+    if (isHomeBtnView && !hasVisibleTabs) {
       clientTabs.innerHTML = "";
       showEmptyState();
       return;
@@ -3629,6 +3645,8 @@
             ? 'bonus-cards'
           : tab.type === 'bonus-referral-card'
             ? 'bonus-referrals'
+          : tab.type === 'bonus-settings-brand'
+            ? 'bonus-settings'
           : 'clients';
     if (state.currentView !== targetView) {
       switchView(targetView);
@@ -3800,11 +3818,19 @@
   if (clientTabsHomeBtn) {
     clientTabsHomeBtn.addEventListener('click', (e) => {
       e.preventDefault();
-      if (state.currentView !== 'bonus-referrals') return;
-      tabsState.tabs = tabsState.tabs.filter((tab) => tab.type !== 'bonus-referral-card');
-      tabsState.activeKey = null;
-      renderTabs();
-      updateRightPanel();
+      if (state.currentView === 'bonus-referrals') {
+        tabsState.tabs = tabsState.tabs.filter((tab) => tab.type !== 'bonus-referral-card');
+        tabsState.activeKey = null;
+        renderTabs();
+        updateRightPanel();
+        return;
+      }
+      if (state.currentView === 'bonus-settings') {
+        tabsState.tabs = tabsState.tabs.filter((tab) => tab.type !== 'bonus-settings-brand');
+        tabsState.activeKey = null;
+        renderTabs();
+        updateRightPanel();
+      }
     });
   }
 
@@ -7421,18 +7447,26 @@
   function syncBonusToolbarState() {
     const isBonusCardsView = state.currentView === 'bonus-cards';
     const isBonusReferralsView = state.currentView === 'bonus-referrals';
-    const isEditableBonusView = isBonusCardsView || isBonusReferralsView;
+    const isBonusSettingsView = state.currentView === 'bonus-settings';
+    const isEditableBonusView = isBonusCardsView || isBonusReferralsView || isBonusSettingsView;
     if (elBonusPointRateWrap) elBonusPointRateWrap.classList.toggle('hidden', !isBonusCardsView);
     if (elBonusProgramSwitchWrap) elBonusProgramSwitchWrap.classList.toggle('hidden', !isBonusCardsView);
     if (elReferralProgramSwitchWrap) elReferralProgramSwitchWrap.classList.toggle('hidden', !isBonusReferralsView);
-    const isEditingCurrent = isBonusCardsView ? state.bonusCardsEditing === true : state.referralEditing === true;
+    
+    let isEditingCurrent = false;
+    if (isBonusCardsView) isEditingCurrent = state.bonusCardsEditing === true;
+    else if (isBonusReferralsView) isEditingCurrent = state.referralEditing === true;
+    else if (isBonusSettingsView) isEditingCurrent = state.bonusSettingsEditing === true;
     if (elBonusEditBtn) {
-      elBonusEditBtn.classList.toggle('hidden', !isEditableBonusView);
+      elBonusEditBtn.classList.toggle('hidden', isEditingCurrent || !isEditableBonusView || isBonusSettingsView);
       elBonusEditBtn.setAttribute('title', isBonusReferralsView ? 'Редактировать рефералы' : 'Режим редактирования');
       elBonusEditBtn.setAttribute('aria-label', isBonusReferralsView ? 'Редактировать рефералы' : 'Режим редактирования');
     }
-    if (elBonusEditSaveBtn) elBonusEditSaveBtn.classList.toggle('hidden', !isEditableBonusView || !isEditingCurrent);
-    if (elBonusEditCancelBtn) elBonusEditCancelBtn.classList.toggle('hidden', !isEditableBonusView || !isEditingCurrent);
+    if (elBonusSettingsEditBtn) {
+      elBonusSettingsEditBtn.classList.toggle('hidden', isEditingCurrent || !isBonusSettingsView);
+    }
+    if (elBonusEditSaveBtn) elBonusEditSaveBtn.classList.toggle('hidden', !isEditingCurrent);
+    if (elBonusEditCancelBtn) elBonusEditCancelBtn.classList.toggle('hidden', !isEditingCurrent);
     if (elBonusProgramSwitch) {
       elBonusProgramSwitch.checked = (state.bonusCardsEditing ? state.bonusProgramEnabledDraft : state.bonusProgramEnabled) === true;
       elBonusProgramSwitch.disabled = !state.bonusCardsEditing;
@@ -7703,10 +7737,55 @@
     ensureTab({
       type: 'bonus-referral-card',
       id: 'referral-card',
-      title: 'Уровни рефералов',
+      title: 'Дизайн карточки',
       onActivate: activateBonusReferralCardTab,
     });
   }
+
+  function openBonusSettingsBrandTab() {
+    if (state.currentView !== 'bonus-settings') {
+      switchView('bonus-settings');
+    }
+    ensureTab({
+      type: 'bonus-settings-brand',
+      id: 'brand',
+      title: 'Название и логотип',
+      onActivate: activateBonusSettingsBrandTab,
+    });
+  }
+
+  function activateBonusSettingsBrandTab() {
+    renderBonusSettingsBrandTabContent();
+  }
+
+  function renderBonusSettingsBrandTabContent() {
+    const elInput = $('#bonusSettingsProgramNameInput');
+    if (elInput) {
+      elInput.value = state.bonusSettingsEditing ? (state.bonusProgramNameDraft || '') : (state.bonusProgramName || 'Бонусная программа');
+      elInput.disabled = !state.bonusSettingsEditing;
+    }
+
+    const logoUrl = state.bonusSettingsEditing ? state.bonusProgramLogoDraft : state.bonusProgramLogo;
+    if (bonusSettingsLogoPreview) {
+      if (logoUrl) {
+        bonusSettingsLogoPreview.innerHTML = `<img src="${logoUrl}" alt="Logo" />`;
+      } else {
+        bonusSettingsLogoPreview.innerHTML = `<i class="fas fa-image"></i>`;
+      }
+    }
+    if (bonusSettingsLogoUploadBtn) {
+      bonusSettingsLogoUploadBtn.classList.toggle('hidden', !state.bonusSettingsEditing);
+    }
+  }
+
+
+
+
+
+
+
+
+
 
   function getBonusLevelTimingUnitLabel(unit) {
     const normalized = String(unit || '').trim().toLowerCase();
@@ -10293,6 +10372,71 @@
     renderBonusReferralCardPreview();
   }
 
+  function renderBonusSettings() {
+    const elContainer = $('[data-view-content="bonus-settings"]');
+    if (!elContainer) return;
+    
+    elContainer.innerHTML = `
+      <div class="bonus-settings-content">
+        <div class="orders-list settings-cards">
+          <button class="settings-home-card settings-card" id="bonusSettingsBrandCard" type="button">
+            <div class="product-avatar"><i class="fas fa-id-card"></i></div>
+            <div class="order-col">
+              <div class="product-title">Название и логотип</div>
+              <div class="muted">Настройка отображения в приложении</div>
+            </div>
+            <div class="order-col"></div>
+          </button>
+        </div>
+      </div>
+    `;
+
+    const card = elContainer.querySelector('#bonusSettingsBrandCard');
+    if (card) {
+      card.addEventListener('click', () => {
+        openBonusSettingsBrandTab();
+      });
+    }
+  }
+
+
+  function renderBonusSettingsRightPanel() {
+    const elTabsContainer = $('#bonusSettingsTabs');
+    const elContentContainer = $('#bonusSettingsTabContent');
+    if (!elTabsContainer || !elContentContainer) return;
+
+    const currentTab = state.bonusSettingsTab || 'general';
+    
+    // Обновляем активную вкладку
+    elTabsContainer.querySelectorAll('.bonus-settings-tab').forEach(btn => {
+      btn.classList.toggle('is-active', btn.dataset.tab === currentTab);
+    });
+
+    // Отрисовываем контент вкладки
+    if (currentTab === 'general') {
+      elContentContainer.innerHTML = `
+        <div class="bonus-settings-group">
+          <div class="bonus-settings-group-title">Общие параметры</div>
+          <div class="bonus-settings-field">
+            <label class="switch">
+              <input class="switch-input" type="checkbox" ${state.bonusProgramEnabled ? 'checked' : ''} disabled>
+              <span class="switch-ui"></span>
+              <span class="switch-text">Бонусная программа активна</span>
+            </label>
+          </div>
+        </div>
+      `;
+    } else {
+      elContentContainer.innerHTML = `
+        <div class="empty-state">
+          <div class="empty-icon"><i class="fas fa-tools"></i></div>
+          <div class="empty-title">Раздел в разработке</div>
+          <div class="empty-text">Настройки для "${currentTab}" появятся здесь позже.</div>
+        </div>
+      `;
+    }
+  }
+
   function renderBonusReferralLevels() {
     if (!elBonusReferralLevelsTrack) return;
     elBonusReferralLevelsTrack.innerHTML = '';
@@ -10438,6 +10582,41 @@
     renderBonusLevels();
     setBonusConfigSaving(false);
   }
+
+  function enterBonusSettingsEditMode() {
+    state.bonusSettingsEditing = true;
+    state.bonusProgramNameDraft = state.bonusProgramName || 'Бонусная программа';
+    state.bonusProgramLogoDraft = state.bonusProgramLogo;
+    syncBonusToolbarState();
+    renderBonusSettings();
+    const activeTab = tabsState.tabs.find(t => t.key === tabsState.activeKey);
+    if (activeTab?.onActivate) activeTab.onActivate();
+  }
+
+  function cancelBonusSettingsEdit() {
+    state.bonusSettingsEditing = false;
+    state.bonusProgramNameDraft = state.bonusProgramName || 'Бонусная программа';
+    state.bonusProgramLogoDraft = state.bonusProgramLogo;
+    syncBonusToolbarState();
+    renderBonusSettings();
+    const activeTab = tabsState.tabs.find(t => t.key === tabsState.activeKey);
+    if (activeTab?.onActivate) activeTab.onActivate();
+  }
+
+  async function saveBonusSettings() {
+    const elInput = $('#bonusSettingsProgramNameInput');
+    if (elInput && state.bonusSettingsEditing) {
+      state.bonusProgramName = elInput.value.trim() || 'Бонусная программа';
+      state.bonusProgramNameDraft = state.bonusProgramName;
+      state.bonusProgramLogo = state.bonusProgramLogoDraft;
+    }
+    state.bonusSettingsEditing = false;
+    syncBonusToolbarState();
+    renderBonusSettings();
+    const activeTab = tabsState.tabs.find(t => t.key === tabsState.activeKey);
+    if (activeTab?.onActivate) activeTab.onActivate();
+  }
+
 
   function enterReferralEditMode() {
     state.referralEditing = true;
@@ -19132,6 +19311,8 @@
     updateCustomerPickerSelectAll();
   }
 
+
+
   // Рендеринг списка клиентов
   function renderDiscountCustomerList() {
     if (!elDiscountCustomerPickerList) return;
@@ -19517,57 +19698,7 @@
     refreshSavedCustomFilterCounts().catch(console.error);
   }
 
-  // Переключение между views
-  function switchView(viewName) {
-    state.currentView = viewName;
-    if (viewName !== 'clients') {
-      closeClientBenefitsOverlay();
-    }
 
-    // Переключаем контент в центральной колонке
-    $$('[data-view-content]').forEach(el => {
-      el.classList.toggle('hidden', el.dataset.viewContent !== viewName);
-    });
-
-    // Обновляем toolbar
-    if (elToolbarText) {
-      const titles = {
-        'clients': 'Клиенты',
-        'filter-categories': 'Выборки',
-        'discounts': 'Скидки'
-      };
-      elToolbarText.textContent = titles[viewName] || 'Клиенты';
-    }
-    if (elToolbarTitle) {
-      const icon = elToolbarTitle.querySelector('i');
-      if (icon) {
-        const icons = {
-          'clients': 'fas fa-users',
-          'filter-categories': 'fas fa-filter',
-          'discounts': 'fas fa-percentage'
-        };
-        icon.className = icons[viewName] || 'fas fa-users';
-      }
-    }
-
-    // Показываем/скрываем элементы toolbar в зависимости от view
-    if (elSearchWrap) elSearchWrap.style.display = viewName === 'clients' ? '' : 'none';
-    if (elSortWrap) elSortWrap.style.display = viewName === 'clients' ? '' : 'none';
-
-    // Обновляем правую колонку
-    updateRightPanel();
-
-    // Загружаем данные
-    if (viewName === 'filter-categories') {
-      renderFilterCategoriesList();
-      refreshSavedCustomFilterCounts().catch(console.error);
-    } else if (viewName === 'discounts') {
-      renderDiscountsList();
-    } else if (viewName === 'clients') {
-      maybeLoadMoreClientsOnScroll();
-      ensureClientsScrollable().catch(console.error);
-    }
-  }
 
   function switchView(viewName) {
     state.currentView = viewName;
@@ -19577,20 +19708,18 @@
     });
 
     if (elToolbarText) {
-      if (viewName === 'bonus-cards') {
-        elToolbarText.textContent = 'Базовый тариф';
-      } else {
       const titles = {
         clients: 'Клиенты',
-        'filter-categories': 'Категории',
+        'filter-categories': 'Выборки',
         discounts: 'Скидки',
         banners: 'Баннеры',
-        'bonus-cards': 'Бонусные карты',
+        'bonus-cards': 'Базовый тариф',
         'bonus-referrals': 'Рефералы',
+        'bonus-settings': 'Настройки',
       };
       elToolbarText.textContent = titles[viewName] || 'Клиенты';
     }
-    }
+
     if (elToolbarTitle) {
       const icon = elToolbarTitle.querySelector('i');
       if (icon) {
@@ -19601,6 +19730,7 @@
           banners: 'fas fa-images',
           'bonus-cards': 'fas fa-gift',
           'bonus-referrals': 'fas fa-user-friends',
+          'bonus-settings': 'fas fa-cog',
         };
         icon.className = icons[viewName] || 'fas fa-users';
       }
@@ -19610,9 +19740,11 @@
     if (elSortWrap) elSortWrap.style.display = viewName === 'clients' ? '' : 'none';
     if (elBannersSwitchWrap) elBannersSwitchWrap.classList.toggle('hidden', viewName !== 'banners');
     if (elBannersEnabledSwitch) elBannersEnabledSwitch.checked = state.bannersEnabled === true;
-    if (elAddBtn) elAddBtn.classList.toggle('hidden', viewName === 'bonus-cards' || viewName === 'bonus-referrals');
+    if (elAddBtn) elAddBtn.classList.toggle('hidden', viewName === 'bonus-cards' || viewName === 'bonus-referrals' || viewName === 'bonus-settings');
+    
     syncBonusToolbarState();
     syncBonusMenuState();
+
     if (viewName !== 'clients') {
       closeClientBenefitsOverlay();
     }
@@ -19622,6 +19754,7 @@
 
     if (viewName === 'filter-categories') {
       renderFilterCategoriesList();
+      refreshSavedCustomFilterCounts().catch(console.error);
     } else if (viewName === 'discounts') {
       renderDiscountCenterContent();
     } else if (viewName === 'banners') {
@@ -19635,6 +19768,8 @@
     } else if (viewName === 'bonus-referrals') {
       renderBonusReferralLevels();
       renderBonusReferralsList();
+    } else if (viewName === 'bonus-settings') {
+      renderBonusSettings();
     } else if (viewName === 'clients') {
       maybeLoadMoreClientsOnScroll();
       ensureClientsScrollable().catch(console.error);
@@ -19648,16 +19783,20 @@
     syncDiscountToolbarState();
     const isBonusCardsView = state.currentView === 'bonus-cards';
     const isBonusReferralsView = state.currentView === 'bonus-referrals';
+    const isBonusSettingsView = state.currentView === 'bonus-settings';
     const hasBonusReferralCardTab = tabsState.tabs.some((tab) => tab.type === 'bonus-referral-card');
+    const hasBonusSettingsBrandTab = tabsState.tabs.some((tab) => tab.type === 'bonus-settings-brand');
+    const isHomeBtnView = isBonusReferralsView || isBonusSettingsView;
+    const hasVisibleHomeBtnTab = isBonusReferralsView ? hasBonusReferralCardTab : isBonusSettingsView ? hasBonusSettingsBrandTab : false;
     if (clientTabsHeader) {
-      clientTabsHeader.classList.toggle('hidden', isBonusReferralsView ? false : tabsState.tabs.length === 0);
+      clientTabsHeader.classList.toggle('hidden', isHomeBtnView ? false : tabsState.tabs.length === 0);
     }
     if (clientTabsHomeBtn) {
-      clientTabsHomeBtn.classList.toggle('hidden', !isBonusReferralsView);
-      clientTabsHomeBtn.classList.toggle('is-active', isBonusReferralsView && !hasBonusReferralCardTab);
+      clientTabsHomeBtn.classList.toggle('hidden', !isHomeBtnView);
+      clientTabsHomeBtn.classList.toggle('is-active', isHomeBtnView && !hasVisibleHomeBtnTab);
     }
     if (clientTabs) {
-      clientTabs.classList.toggle('hidden', isBonusReferralsView && !hasBonusReferralCardTab);
+      clientTabs.classList.toggle('hidden', isHomeBtnView && !hasVisibleHomeBtnTab);
     }
     const isChatPage = !!document.body?.classList?.contains('page-chat');
     if (isChatPage && chatRightForceEmpty) {
@@ -19682,10 +19821,12 @@
       if (bannerInfoFooter) bannerInfoFooter.classList.add('hidden');
       if (bonusLevelEmpty) bonusLevelEmpty.classList.toggle('hidden', state.currentView !== 'bonus-cards');
       if (bonusReferralsEmpty) bonusReferralsEmpty.classList.toggle('hidden', state.currentView !== 'bonus-referrals');
+      if (bonusSettingsEmpty) bonusSettingsEmpty.classList.toggle('hidden', state.currentView !== 'bonus-settings');
       if (state.currentView === 'bonus-referrals') renderBonusReferralRightHome();
       if (bonusLevelInfoWrap) bonusLevelInfoWrap.classList.add('hidden');
       if (bonusLevelInfoFooter) bonusLevelInfoFooter.classList.add('hidden');
       if (bonusReferralCardInfoWrap) bonusReferralCardInfoWrap.classList.add('hidden');
+      if (bonusSettingsBrandWrap) bonusSettingsBrandWrap.classList.add('hidden');
       if (clientBenefitsFooter) clientBenefitsFooter.classList.add('hidden');
       return;
     }
@@ -19699,6 +19840,7 @@
     const isBannerTab = activeTab?.type === 'banner';
     const isBonusLevelTab = activeTab?.type === 'bonus-level';
     const isBonusReferralCardTab = activeTab?.type === 'bonus-referral-card';
+    const isBonusSettingsBrandTab = activeTab?.type === 'bonus-settings-brand';
     const hasClientId = Number(state.activeClientId || 0) > 0;
     const noTabs = !activeTab;
     // In chat mode right panel must be driven only by right tabs state.
@@ -19711,7 +19853,7 @@
       && hasClientId
       && state.currentView === 'clients';
 
-    if (isBonusCardsView || isBonusReferralsView) {
+    if (isBonusCardsView || isBonusReferralsView || isBonusSettingsView) {
       if (clientEmpty) clientEmpty.classList.add('hidden');
       if (clientInfoWrap) clientInfoWrap.classList.add('hidden');
       if (clientOrderInfoWrap) clientOrderInfoWrap.classList.add('hidden');
@@ -19731,7 +19873,11 @@
       if (bannerInfoFooter) bannerInfoFooter.classList.add('hidden');
       if (bonusLevelEmpty) bonusLevelEmpty.classList.toggle('hidden', !noTabs || state.currentView !== 'bonus-cards');
       if (bonusReferralsEmpty) bonusReferralsEmpty.classList.toggle('hidden', state.currentView !== 'bonus-referrals' || isBonusReferralCardTab);
+      if (bonusSettingsEmpty) {
+        bonusSettingsEmpty.classList.toggle('hidden', state.currentView !== 'bonus-settings' || !!activeTab);
+      }
       if (bonusReferralCardInfoWrap) bonusReferralCardInfoWrap.classList.toggle('hidden', !isBonusReferralCardTab || state.currentView !== 'bonus-referrals');
+      if (bonusSettingsBrandWrap) bonusSettingsBrandWrap.classList.toggle('hidden', !isBonusSettingsBrandTab || state.currentView !== 'bonus-settings');
       if (state.currentView === 'bonus-referrals') renderBonusReferralRightHome();
       if (bonusLevelInfoWrap) bonusLevelInfoWrap.classList.toggle('hidden', !isBonusLevelTab || state.currentView !== 'bonus-cards');
       if (bonusLevelInfoFooter) bonusLevelInfoFooter.classList.toggle('hidden', !isBonusLevelTab || state.currentView !== 'bonus-cards');
@@ -20272,6 +20418,19 @@
       trigger.classList.toggle("is-open", !isOpen);
       panel.classList.toggle("is-open", !isOpen);
       panel.style.maxHeight = !isOpen ? panel.scrollHeight + "px" : "0px";
+    });
+  }
+
+  function initBonusSettingsListeners() {
+    const elContainer = $('#bonusSettingsEmpty');
+    if (!elContainer) return;
+
+    elContainer.addEventListener('click', (e) => {
+      const tabBtn = e.target.closest('.bonus-settings-tab');
+      if (tabBtn) {
+        state.bonusSettingsTab = tabBtn.dataset.tab;
+        renderBonusSettingsRightPanel();
+      }
     });
   }
 
@@ -22089,6 +22248,12 @@
     });
   }
 
+  if (elBonusSettingsNavBtn) {
+    elBonusSettingsNavBtn.addEventListener('click', () => {
+      switchView('bonus-settings');
+    });
+  }
+
   // Кнопка "Скидки" — переключить на view скидок
   if (elAddDiscountBtn) {
     elAddDiscountBtn.addEventListener('click', () => {
@@ -22114,7 +22279,17 @@
       }
       if (state.currentView === 'bonus-referrals') {
         enterReferralEditMode();
+        return;
       }
+      if (state.currentView === 'bonus-settings') {
+        enterBonusSettingsEditMode();
+      }
+    });
+  }
+
+  if (elBonusSettingsEditBtn) {
+    elBonusSettingsEditBtn.addEventListener('click', () => {
+      enterBonusSettingsEditMode();
     });
   }
 
@@ -22126,6 +22301,10 @@
       }
       if (state.currentView === 'bonus-referrals') {
         cancelReferralEditMode();
+        return;
+      }
+      if (state.currentView === 'bonus-settings') {
+        cancelBonusSettingsEdit();
       }
     });
   }
@@ -22138,9 +22317,36 @@
       }
       if (state.currentView === 'bonus-referrals') {
         void saveReferralEditMode();
+        return;
+      }
+      if (state.currentView === 'bonus-settings') {
+        void saveBonusSettings();
       }
     });
   }
+
+  if (bonusSettingsLogoUploadBtn) {
+    bonusSettingsLogoUploadBtn.addEventListener('click', () => {
+      if (bonusSettingsLogoInput) bonusSettingsLogoInput.click();
+    });
+  }
+
+  if (bonusSettingsLogoInput) {
+    bonusSettingsLogoInput.addEventListener('change', async (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      try {
+        const uploadResult = await apiUploadBannerImages([file]);
+        if (uploadResult?.urls?.[0]) {
+          state.bonusProgramLogoDraft = uploadResult.urls[0];
+          renderBonusSettingsBrandTabContent();
+        }
+      } catch (err) {
+        alert('Ошибка при загрузке логотипа: ' + err.message);
+      }
+    });
+  }
+
 
   if (elBonusProgramSwitch) {
     elBonusProgramSwitch.addEventListener('change', () => {
@@ -23830,6 +24036,9 @@
         openDiscountSlotPicker('progress_reward', slot);
         return;
       }
+      if (state.currentView === 'bonus-settings') {
+        saveBonusSettings();
+      }
     });
   }
 
@@ -24592,6 +24801,7 @@
 
   if (!isOrdersBenefitsBridgeMode) {
     initClientsAccordion();
+    initBonusSettingsListeners();
 
     // Инициализируем кастомный select для логики условий
     const logicSelectWrap = $('#fe_logic');
