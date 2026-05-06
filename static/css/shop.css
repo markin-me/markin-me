@@ -14967,9 +14967,9 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
   font-weight: 700;
   color: #f8fafc;
   background: rgba(15, 23, 42, 0.28);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
 }
 
 .shop-home-bonus-card .bonus-level-preview-title[role="button"]{
@@ -15201,12 +15201,12 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
 
 .shop-bonus-level-progress-name{
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
   color: var(--color-text);
   font-size: 14px;
-  line-height: 1.15;
+  line-height: 1.2;
   font-weight: 900;
 }
 
@@ -15377,6 +15377,10 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
   gap: 10px;
 }
 
+.shop-bonus-level-metric-row--single{
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .shop-bonus-level-metric-card{
   min-width: 0;
   min-height: 88px;
@@ -15391,9 +15395,9 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
 
 .shop-bonus-level-metric-label{
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
   color: var(--color-text-muted);
   font-size: 13px;
   line-height: 1.2;
@@ -15476,6 +15480,74 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
   line-height: 28px;
   font-weight: 900;
   text-align: center;
+}
+
+.shop-bonus-site-menu-scroll{
+  margin: 16px 20px 0;
+  display: flex;
+  gap: 14px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  scroll-snap-type: x proximity;
+  padding: 0 0 6px;
+}
+
+.shop-bonus-site-menu-item{
+  flex: 0 0 72px;
+  width: 72px;
+  border: none;
+  background: transparent;
+  padding: 0;
+  display: grid;
+  justify-items: center;
+  align-content: start;
+  gap: 8px;
+  scroll-snap-align: start;
+  color: var(--color-text);
+  cursor: pointer;
+  font: inherit;
+}
+
+.shop-bonus-site-menu-icon{
+  width: 72px;
+  height: 72px;
+  border-radius: 18px;
+  background: var(--color-surface-muted, #f3f4f6);
+  box-shadow: inset 0 0 0 1px rgba(148, 163, 184, .18);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  color: var(--color-text);
+  font-size: 24px;
+}
+
+.shop-bonus-site-menu-icon img{
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.shop-bonus-site-menu-title{
+  width: 100%;
+  min-height: 28px;
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  line-height: 14px;
+  font-weight: 900;
+  text-align: center;
+  word-break: normal;
+  overflow-wrap: normal;
+}
+
+.shop-bonus-site-menu-title span{
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .shop-bonus-sheet-empty{
@@ -21692,6 +21764,7 @@ body.page-shop .app-modal-body::after{
     font-size: 22px;
     line-height: 1.2;
     font-weight: 700;
+    white-space: normal;
   }
 
   body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-benefits) #shopSheetBackBtn{

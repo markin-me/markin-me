@@ -175,6 +175,14 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
 
   function mapPublicBonusLevelRow(row, children = {}) {
     const levelId = Number(row.id || 0);
+    const favoriteGroupId = Number(row.favorite_category_group_id || 0);
+    const favoriteGroup = favoriteGroupId > 0 ? children.favoriteGroupsById?.get(favoriteGroupId) : null;
+    const favoriteCategoriesEnabled = Boolean(
+      favoriteGroup
+      && favoriteGroup.categoryIds.length
+      && favoriteGroup.categoriesLimit > 0
+      && favoriteGroup.bonusPercent > 0
+    );
     return {
       id: levelId,
       code: row.code || '',
@@ -185,13 +193,18 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       cashback_percent: Number(row.cashback_percent || 0),
       redeem_percent: Number(row.redeem_percent || 0),
       referral_bonus_percent: Number(row.referral_bonus_percent || 0),
-      favorite_categories_bonus_percent: Number(row.favorite_categories_bonus_percent || 0),
-      favorite_categories_limit: Number(row.favorite_categories_limit || 0),
+      favorite_category_group_id: favoriteGroupId > 0 ? favoriteGroupId : null,
+      favorite_categories_enabled: favoriteCategoriesEnabled,
+      favorite_categories_bonus_percent: favoriteCategoriesEnabled ? favoriteGroup.bonusPercent : 0,
+      favorite_categories_limit: favoriteCategoriesEnabled ? favoriteGroup.categoriesLimit : 0,
+      favorite_categories_count: favoriteCategoriesEnabled ? favoriteGroup.categoryIds.length : 0,
       requirement_amount: row.requirement_amount == null ? null : Number(row.requirement_amount),
       requirement_mode: row.requirement_mode || 'and',
       requirement_orders: row.requirement_orders == null ? null : Number(row.requirement_orders),
       requirement_referral_mode: row.requirement_referral_mode || 'and',
       requirement_referrals: row.requirement_referrals == null ? null : Number(row.requirement_referrals),
+      requirement_bonus_accrued: row.requirement_bonus_accrued == null ? null : Number(row.requirement_bonus_accrued),
+      requirement_bonus_redeemed: row.requirement_bonus_redeemed == null ? null : Number(row.requirement_bonus_redeemed),
       requirement_match_count: Number(row.requirement_match_count || 1),
       requirement_period_days: row.requirement_period_days == null ? null : Number(row.requirement_period_days),
       retention_strategy: row.retention_strategy || 'match',
@@ -200,6 +213,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       retention_orders: row.retention_orders == null ? null : Number(row.retention_orders),
       retention_referral_mode: row.retention_referral_mode || 'and',
       retention_referrals: row.retention_referrals == null ? null : Number(row.retention_referrals),
+      retention_bonus_accrued: row.retention_bonus_accrued == null ? null : Number(row.retention_bonus_accrued),
+      retention_bonus_redeemed: row.retention_bonus_redeemed == null ? null : Number(row.retention_bonus_redeemed),
       retention_match_count: Number(row.retention_match_count || 1),
       progress: children.progressByLevel?.get(levelId) || null,
       activation_delay_value: Number(row.activation_delay_value || 0),
@@ -218,6 +233,50 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       title_background_color: row.title_background_color || null,
       title_background_opacity: Number(row.title_background_opacity || 0),
     };
+  }
+
+  function parseBonusCategoryGroupIds(value) {
+    return safeJsonArray(value)
+      .map((id) => Number(id || 0))
+      .filter((id, index, list) => id > 0 && list.indexOf(id) === index);
+  }
+
+  function mapBonusCategoryGroupRow(row) {
+    if (!row) return null;
+    return {
+      id: Number(row.id || 0),
+      bonusPercent: Math.max(0, Number(row.bonus_percent || 0)),
+      categoriesLimit: Math.max(0, Math.floor(Number(row.categories_limit || 0))),
+      categoryIds: parseBonusCategoryGroupIds(row.category_ids),
+    };
+  }
+
+  async function loadBonusFavoriteCategoryGroupForLevel(tenantId, levelId) {
+    const [[levelRow]] = await db.query(
+      `SELECT id, favorite_category_group_id
+       FROM mkt_bonus_levels
+       WHERE tenant_id=? AND id=? AND is_active=1
+       LIMIT 1`,
+      [tenantId, levelId]
+    );
+    if (!levelRow) return { levelRow: null, group: null, enabled: false };
+    const groupId = Number(levelRow.favorite_category_group_id || 0);
+    if (!(groupId > 0)) return { levelRow, group: null, enabled: false };
+    const [[groupRow]] = await db.query(
+      `SELECT id, bonus_percent, categories_limit, category_ids
+       FROM mkt_bonus_category_groups
+       WHERE tenant_id=? AND id=?
+       LIMIT 1`,
+      [tenantId, groupId]
+    );
+    const group = mapBonusCategoryGroupRow(groupRow);
+    const enabled = Boolean(
+      group
+      && group.categoryIds.length
+      && group.categoriesLimit > 0
+      && group.bonusPercent > 0
+    );
+    return { levelRow, group: enabled ? group : null, enabled };
   }
 
   function mapPublicBonusAccountRow(row) {
@@ -272,6 +331,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         amount: levelRow.retention_amount == null ? null : Number(levelRow.retention_amount),
         orders: levelRow.retention_orders == null ? null : Number(levelRow.retention_orders),
         referrals: levelRow.retention_referrals == null ? null : Number(levelRow.retention_referrals),
+        bonusAccrued: levelRow.retention_bonus_accrued == null ? null : Number(levelRow.retention_bonus_accrued),
+        bonusRedeemed: levelRow.retention_bonus_redeemed == null ? null : Number(levelRow.retention_bonus_redeemed),
         mode: levelRow.retention_mode || 'and',
         referralMode: levelRow.retention_referral_mode || 'and',
         matchCount: Number(levelRow.retention_match_count || 1),
@@ -282,6 +343,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       amount: levelRow.requirement_amount == null ? null : Number(levelRow.requirement_amount),
       orders: levelRow.requirement_orders == null ? null : Number(levelRow.requirement_orders),
       referrals: levelRow.requirement_referrals == null ? null : Number(levelRow.requirement_referrals),
+      bonusAccrued: levelRow.requirement_bonus_accrued == null ? null : Number(levelRow.requirement_bonus_accrued),
+      bonusRedeemed: levelRow.requirement_bonus_redeemed == null ? null : Number(levelRow.requirement_bonus_redeemed),
       mode: levelRow.requirement_mode || 'and',
       referralMode: levelRow.requirement_referral_mode || 'and',
       matchCount: Number(levelRow.requirement_match_count || 1),
@@ -294,6 +357,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       [progress.amount_current, progress.amount_target],
       [progress.orders_current, progress.orders_target],
       [progress.referrals_current, progress.referrals_target],
+      [progress.bonus_accrued_current, progress.bonus_accrued_target],
+      [progress.bonus_redeemed_current, progress.bonus_redeemed_target],
     ].filter(([, target]) => Number(target || 0) > 0);
     if (!rows.length) return false;
     const required = Math.min(rows.length, Math.max(1, Math.floor(Number(progress.match_count || 1))));
@@ -339,7 +404,9 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       const amountTarget = Math.max(0, Number(targets.amount || 0));
       const ordersTarget = Math.max(0, Math.floor(Number(targets.orders || 0)));
       const referralsTarget = Math.max(0, Math.floor(Number(targets.referrals || 0)));
-      if (!(amountTarget > 0) && !(ordersTarget > 0) && !(referralsTarget > 0)) continue;
+      const bonusAccruedTarget = Math.max(0, Number(targets.bonusAccrued || 0));
+      const bonusRedeemedTarget = Math.max(0, Number(targets.bonusRedeemed || 0));
+      if (!(amountTarget > 0) && !(ordersTarget > 0) && !(referralsTarget > 0) && !(bonusAccruedTarget > 0) && !(bonusRedeemedTarget > 0)) continue;
 
       const periodDays = Math.max(0, Math.floor(Number(levelRow.requirement_period_days || 0)));
       const periodStart = periodDays > 0 ? new Date(Date.now() - periodDays * 24 * 60 * 60 * 1000) : null;
@@ -373,6 +440,16 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
            AND registered_at >= ?`,
         [tenantId, customerId, sinceAt]
       );
+      const [[bonusStats]] = await queryable.query(
+        `SELECT
+            COALESCE(SUM(CASE WHEN type IN ('accrual', 'join', 'level_up', 'referral_accrual') THEN amount ELSE 0 END), 0) AS bonus_accrued,
+            COALESCE(SUM(CASE WHEN type = 'redeem' THEN amount ELSE 0 END), 0) AS bonus_redeemed
+         FROM mkt_customer_bonus_transactions
+         WHERE tenant_id=?
+           AND customer_id=?
+           AND created_at >= ?`,
+        [tenantId, customerId, sinceAt]
+      );
 
       progressByLevel.set(Number(levelRow.id || 0), {
         scope: targets.scope,
@@ -384,6 +461,10 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         orders_target: ordersTarget || null,
         referrals_current: Number(referralStats?.referrals_count || 0),
         referrals_target: referralsTarget || null,
+        bonus_accrued_current: Number(bonusStats?.bonus_accrued || 0),
+        bonus_accrued_target: bonusAccruedTarget || null,
+        bonus_redeemed_current: Number(bonusStats?.bonus_redeemed || 0),
+        bonus_redeemed_target: bonusRedeemedTarget || null,
         match_count: Math.max(1, Number(targets.matchCount || 1)),
       });
     }
@@ -1130,6 +1211,42 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     return [];
   }
 
+  const defaultSiteMenuItems = Object.freeze([
+    { key: 'my-orders', title: '\u041c\u043e\u0438 \u0437\u0430\u043a\u0430\u0437\u044b', icon_class: 'fas fa-receipt', enabled: true, sort_order: 0 },
+    { key: 'favorites', title: '\u0418\u0437\u0431\u0440\u0430\u043d\u043d\u043e\u0435', icon_class: 'fas fa-heart', enabled: true, sort_order: 1 },
+    { key: 'benefits', title: '\u0412\u044b\u0433\u043e\u0434\u044b', icon_class: 'fas fa-tags', enabled: true, sort_order: 2 },
+    { key: 'promocodes', title: '\u041f\u0440\u043e\u043c\u043e\u043a\u043e\u0434\u044b', icon_class: 'fas fa-ticket-alt', enabled: true, sort_order: 3 },
+    { key: 'discounts', title: '\u0421\u043a\u0438\u0434\u043a\u0438', icon_class: 'fas fa-percent', enabled: true, sort_order: 4 },
+    { key: 'gifts', title: '\u041f\u043e\u0434\u0430\u0440\u043a\u0438', icon_class: 'fas fa-gift', enabled: true, sort_order: 5 },
+    { key: 'addresses', title: '\u0410\u0434\u0440\u0435\u0441\u0430', icon_class: 'fas fa-map-marker-alt', enabled: true, sort_order: 6 },
+    { key: 'bought-before', title: '\u0423\u0436\u0435 \u043f\u043e\u043a\u0443\u043f\u0430\u043b\u0438', icon_class: 'fas fa-shopping-bag', enabled: true, sort_order: 7 },
+    { key: 'tasks', title: '\u0417\u0430\u0434\u0430\u043d\u0438\u044f', icon_class: 'fas fa-tasks', enabled: true, sort_order: 8 },
+    { key: 'product-rating', title: '\u041e\u0446\u0435\u043d\u043a\u0430 \u0442\u043e\u0432\u0430\u0440\u043e\u0432', icon_class: 'fas fa-star-half-alt', enabled: true, sort_order: 9 },
+  ]);
+
+  function normalizePublicSiteMenuItems(rawValue) {
+    const incoming = safeJsonArray(rawValue);
+    const byKey = new Map();
+    incoming.forEach((item) => {
+      if (!item || typeof item !== 'object') return;
+      const key = String(item.key || '').trim();
+      if (key) byKey.set(key, item);
+    });
+    return defaultSiteMenuItems.map((defaults) => {
+      const item = byKey.get(defaults.key) || {};
+      const title = String(item.title || '').trim();
+      const iconUrl = String(item.icon_url || '').trim();
+      return {
+        key: defaults.key,
+        title: title ? title.slice(0, 80) : defaults.title,
+        enabled: item.enabled === undefined ? Boolean(defaults.enabled) : helpers.toBool(item.enabled, true),
+        icon_url: iconUrl ? iconUrl.slice(0, 512) : null,
+        icon_class: defaults.icon_class,
+        sort_order: Number(defaults.sort_order) || 0,
+      };
+    });
+  }
+
   function getThumbUrl(url) {
     if (!url) return null;
     if (typeof helpers.getThumbUrlIfExists === 'function') {
@@ -1849,6 +1966,9 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         `SELECT bonus_program_enabled, referral_program_enabled,
                 bonus_point_amount, bonus_ruble_amount, bonus_point_rate,
                 allow_redeem_and_accrue,
+                bonus_program_name_base, bonus_program_logo_base,
+                bonus_program_name_paid, bonus_program_logo_paid,
+                bonus_coin_name, bonus_coin_logo,
                 referral_card_main_color, referral_card_base_color,
                 referral_card_content_color, referral_card_button_color,
                 referral_card_qr_enabled, referral_card_title_background_enabled,
@@ -1863,18 +1983,41 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
                 cashback_percent, redeem_percent, referral_bonus_percent,
                 favorite_categories_bonus_percent, favorite_categories_limit,
                 requirement_amount, requirement_mode, requirement_orders,
-                requirement_referral_mode, requirement_referrals, requirement_match_count, requirement_period_days,
+                requirement_referral_mode, requirement_referrals,
+                requirement_bonus_accrued, requirement_bonus_redeemed,
+                requirement_match_count, requirement_period_days,
                 retention_strategy, retention_amount, retention_mode, retention_orders,
-                retention_referral_mode, retention_referrals, retention_match_count,
+                retention_referral_mode, retention_referrals,
+                retention_bonus_accrued, retention_bonus_redeemed,
+                retention_match_count,
                 activation_delay_value, activation_delay_unit, lifetime_value, lifetime_unit,
                 qr_enabled, show_title_on_card,
                 design_color, main_color, base_color, content_color,
-                title_color, title_background_enabled, title_background_color, title_background_opacity
+                title_color, title_background_enabled, title_background_color, title_background_opacity,
+                favorite_category_group_id
          FROM mkt_bonus_levels
          WHERE tenant_id=? AND is_active=1
          ORDER BY sort_order ASC, id ASC`,
         [tenantId]
       );
+      const favoriteGroupIds = [...new Set((Array.isArray(levelRows) ? levelRows : [])
+        .map((row) => Number(row.favorite_category_group_id || 0))
+        .filter((id) => id > 0))];
+      let favoriteGroupsById = new Map();
+      if (favoriteGroupIds.length) {
+        const [groupRows] = await db.query(
+          `SELECT id, bonus_percent, categories_limit, category_ids
+           FROM mkt_bonus_category_groups
+           WHERE tenant_id=? AND id IN (${favoriteGroupIds.map(() => '?').join(',')})`,
+          [tenantId, ...favoriteGroupIds]
+        );
+        favoriteGroupsById = new Map(
+          (Array.isArray(groupRows) ? groupRows : [])
+            .map(mapBonusCategoryGroupRow)
+            .filter((group) => group && group.id > 0)
+            .map((group) => [group.id, group])
+        );
+      }
       const [rangeRows] = await db.query(
         `SELECT level_id, amount, percent, sort_order
          FROM mkt_bonus_level_order_ranges
@@ -1903,10 +2046,18 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
          ORDER BY sort_order ASC, invited_count ASC, id ASC`,
         [tenantId]
       );
+      const [[tenantRow]] = await db.query(
+        `SELECT site_menu_items_json
+         FROM ten_tenants
+         WHERE id=?
+         LIMIT 1`,
+        [tenantId]
+      );
 
       return res.json({
         ok: true,
         data: {
+          site_menu_items: normalizePublicSiteMenuItems(tenantRow?.site_menu_items_json),
           settings: {
             bonus_program_enabled: Number(settingsRow?.bonus_program_enabled || 0) === 1,
             referral_program_enabled: Number(settingsRow?.referral_program_enabled || 0) === 1,
@@ -1914,6 +2065,14 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
             bonus_ruble_amount: Number(settingsRow?.bonus_ruble_amount || settingsRow?.bonus_point_rate || 1),
             bonus_point_rate: Number(settingsRow?.bonus_point_rate || 1),
             allow_redeem_and_accrue: Number(settingsRow?.allow_redeem_and_accrue || 0) === 1,
+            bonus_program_name: settingsRow?.bonus_program_name_base || 'Бонусная программа',
+            bonus_program_logo: settingsRow?.bonus_program_logo_base || null,
+            bonus_program_name_base: settingsRow?.bonus_program_name_base || 'Бонусная программа',
+            bonus_program_logo_base: settingsRow?.bonus_program_logo_base || null,
+            bonus_program_name_paid: settingsRow?.bonus_program_name_paid || 'Привилегии Plus',
+            bonus_program_logo_paid: settingsRow?.bonus_program_logo_paid || null,
+            bonus_coin_name: settingsRow?.bonus_coin_name || 'Бонусы',
+            bonus_coin_logo: settingsRow?.bonus_coin_logo || null,
             referral_card_main_color: settingsRow?.referral_card_main_color || '#f3f4f6',
             referral_card_base_color: settingsRow?.referral_card_base_color || '#d1d5db',
             referral_card_content_color: settingsRow?.referral_card_content_color || '#64748b',
@@ -1924,7 +2083,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
             referral_card_title_background_opacity: Number(settingsRow?.referral_card_title_background_opacity || 90),
           },
           account,
-          levels: (Array.isArray(levelRows) ? levelRows : []).map((row) => mapPublicBonusLevelRow(row, { rangesByLevel, progressByLevel })),
+          levels: (Array.isArray(levelRows) ? levelRows : []).map((row) => mapPublicBonusLevelRow(row, { rangesByLevel, progressByLevel, favoriteGroupsById })),
           referral_levels: (Array.isArray(referralRows) ? referralRows : []).map((row) => ({
             id: Number(row.id || 0),
             code: row.code || '',
@@ -2124,25 +2283,20 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       const customer = token ? await getCustomerByToken(tenantId, token) : null;
       const customerId = Number(customer?.id || 0);
 
-      const [[levelRow]] = await db.query(
-        `SELECT id, favorite_categories_limit, favorite_categories_bonus_percent
-         FROM mkt_bonus_levels
-         WHERE tenant_id=? AND id=? AND is_active=1
-         LIMIT 1`,
-        [tenantId, levelId]
-      );
+      const { levelRow, group, enabled } = await loadBonusFavoriteCategoryGroupForLevel(tenantId, levelId);
       if (!levelRow) return res.status(404).json({ ok: false, error: 'LEVEL_NOT_FOUND' });
 
-      const [categoryRows] = await db.query(
-        `SELECT pc.id, pc.title, pc.icon, pc.sort_order
-         FROM mkt_bonus_level_favorite_categories lfc
-         JOIN prod_categories pc
-           ON pc.tenant_id = lfc.tenant_id
-          AND pc.id = lfc.category_id
-         WHERE lfc.tenant_id=? AND lfc.level_id=? AND pc.is_active=1
-         ORDER BY pc.sort_order ASC, pc.id ASC`,
-        [tenantId, levelId]
-      );
+      let categoryRows = [];
+      if (enabled && group.categoryIds.length) {
+        const [rows] = await db.query(
+          `SELECT pc.id, pc.title, pc.icon, pc.sort_order
+           FROM prod_categories pc
+           WHERE pc.tenant_id=? AND pc.id IN (${group.categoryIds.map(() => '?').join(',')}) AND pc.is_active=1
+           ORDER BY pc.sort_order ASC, pc.id ASC`,
+          [tenantId, ...group.categoryIds]
+        );
+        categoryRows = Array.isArray(rows) ? rows : [];
+      }
       let selectedRows = [];
       if (customerId > 0) {
         const [rows] = await db.query(
@@ -2154,13 +2308,17 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         );
         selectedRows = Array.isArray(rows) ? rows : [];
       }
-      const selectedIds = selectedRows.map((row) => Number(row.category_id || 0)).filter((id) => id > 0);
+      const allowedIds = new Set((Array.isArray(categoryRows) ? categoryRows : []).map((row) => Number(row.id || 0)));
+      const selectedIds = selectedRows
+        .map((row) => Number(row.category_id || 0))
+        .filter((id) => id > 0 && allowedIds.has(id));
       return res.json({
         ok: true,
         data: {
           level_id: levelId,
-          limit: Math.max(0, Math.floor(Number(levelRow.favorite_categories_limit || 0))),
-          bonus_percent: Number(levelRow.favorite_categories_bonus_percent || 0),
+          enabled,
+          limit: enabled ? group.categoriesLimit : 0,
+          bonus_percent: enabled ? group.bonusPercent : 0,
           selected_ids: selectedIds,
           locked: selectedIds.length > 0,
           categories: (Array.isArray(categoryRows) ? categoryRows : []).map((row) => ({
@@ -2191,26 +2349,22 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         ? [...new Set((req.body.category_ids || req.body.categoryIds).map((id) => Number(id || 0)).filter((id) => id > 0))]
         : [];
 
-      const [[levelRow]] = await db.query(
-        `SELECT id, favorite_categories_limit
-         FROM mkt_bonus_levels
-         WHERE tenant_id=? AND id=? AND is_active=1
-         LIMIT 1`,
-        [tenantId, levelId]
-      );
+      const { levelRow, group, enabled } = await loadBonusFavoriteCategoryGroupForLevel(tenantId, levelId);
       if (!levelRow) return res.status(404).json({ ok: false, error: 'LEVEL_NOT_FOUND' });
-      const limit = Math.max(0, Math.floor(Number(levelRow.favorite_categories_limit || 0)));
+      const limit = enabled ? group.categoriesLimit : 0;
       if (!(limit > 0) || !requestedIds.length || requestedIds.length > limit) {
         return res.status(400).json({ ok: false, error: 'INVALID_CATEGORIES' });
       }
 
+      const groupAllowedIds = new Set(group.categoryIds);
       const [allowedRows] = await db.query(
-        `SELECT category_id
-         FROM mkt_bonus_level_favorite_categories
-         WHERE tenant_id=? AND level_id=? AND category_id IN (${requestedIds.map(() => '?').join(',')})`,
-        [tenantId, levelId, ...requestedIds]
+        `SELECT id
+         FROM prod_categories
+         WHERE tenant_id=? AND id IN (${requestedIds.map(() => '?').join(',')}) AND is_active=1`,
+        [tenantId, ...requestedIds]
       );
-      const allowedIds = new Set((Array.isArray(allowedRows) ? allowedRows : []).map((row) => Number(row.category_id || 0)));
+      const activeIds = new Set((Array.isArray(allowedRows) ? allowedRows : []).map((row) => Number(row.id || 0)));
+      const allowedIds = new Set(requestedIds.filter((id) => groupAllowedIds.has(id) && activeIds.has(id)));
       const categoryIds = requestedIds.filter((id) => allowedIds.has(id));
       if (categoryIds.length !== requestedIds.length) {
         return res.status(400).json({ ok: false, error: 'INVALID_CATEGORIES' });
@@ -2227,15 +2381,25 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         [tenantId, customerId, levelId]
       );
       if (Array.isArray(existingRows) && existingRows.length) {
-        await conn.commit();
-        return res.json({
-          ok: true,
-          data: {
-            level_id: levelId,
-            selected_ids: existingRows.map((row) => Number(row.category_id || 0)).filter((id) => id > 0),
-            locked: true,
-          },
-        });
+        const existingValidIds = existingRows
+          .map((row) => Number(row.category_id || 0))
+          .filter((id) => id > 0 && allowedIds.has(id));
+        if (existingValidIds.length) {
+          await conn.commit();
+          return res.json({
+            ok: true,
+            data: {
+              level_id: levelId,
+              selected_ids: existingValidIds,
+              locked: true,
+            },
+          });
+        }
+        await conn.query(
+          `DELETE FROM mkt_customer_bonus_favorite_categories
+           WHERE tenant_id=? AND customer_id=? AND level_id=?`,
+          [tenantId, customerId, levelId]
+        );
       }
       for (const categoryId of categoryIds) {
         await conn.query(
@@ -16243,7 +16407,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
     const data = {
       discount_id: Number(effectiveProgressCard?.discount_id || effectiveProgressCard?.id || 0) || null,
-      title: publicDiscountText(loyaltyDiscount?.title) || 'Накопительная акция',
+      title: publicDiscountText(loyaltyDiscount?.title) || 'Задание',
       description: publicDiscountText(effectiveLoyaltyDiscount?.description),
       pending_reward_count: selectionLimit,
       selection_limit: selectionLimit,
@@ -16251,7 +16415,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       pending_reward_mode: normalizePublicProgressPendingRewardMode(effectiveProgressCard?.pending_reward_mode),
       items,
     };
-    if (!publicDiscountText(loyaltyDiscount?.title).trim()) data.title = 'Накопительная акция';
+    if (!publicDiscountText(loyaltyDiscount?.title).trim()) data.title = 'Задание';
     if (!publicDiscountText(loyaltyDiscount?.title).trim()) {
       data.title = "\u041d\u0430\u043a\u043e\u043f\u0438\u0442\u0435\u043b\u044c\u043d\u0430\u044f \u0430\u043a\u0446\u0438\u044f";
     }

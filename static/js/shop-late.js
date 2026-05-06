@@ -10646,7 +10646,20 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
 
   function normalizeCheckoutBenefitsInitialSection(value) {
     const normalized = str(value || "").trim().toLowerCase();
-    return normalized === "discounts" || normalized === "gifts" || normalized === "promos" ? normalized : null;
+    return normalized === "discounts" || normalized === "gifts" || normalized === "promos" || normalized === "progress" ? normalized : null;
+  }
+
+  function normalizeCheckoutBenefitsSectionFilter(value) {
+    return normalizeCheckoutBenefitsInitialSection(value);
+  }
+
+  function getCheckoutBenefitsSectionTitle(sectionFilter = null) {
+    const normalized = normalizeCheckoutBenefitsSectionFilter(sectionFilter);
+    if (normalized === "discounts") return "Скидки";
+    if (normalized === "promos") return "Промокоды";
+    if (normalized === "gifts") return "Подарки";
+    if (normalized === "progress") return "Задания";
+    return "Выгоды";
   }
 
   function calculateAvailableDiscountBenefitsCount(previewData) {
@@ -10781,13 +10794,18 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     previewRequest = null,
     sourceScreen = "checkout",
     initialSection = null,
+    section = null,
+    returnContext = null,
   } = {}) {
     const normalizedSourceScreen = normalizeCheckoutBenefitsSourceScreen(sourceScreen, "checkout");
     const normalizedInitialSection = normalizeCheckoutBenefitsInitialSection(initialSection);
+    const normalizedSectionFilter = normalizeCheckoutBenefitsSectionFilter(section);
     if (typeof openCartSheetCtx?.showSheetBenefits === "function" && hasLiveCartSheetContext()) {
       await openCartSheetCtx.showSheetBenefits(previewRequest, {
         sourceScreen: normalizedSourceScreen,
         initialSection: normalizedInitialSection,
+        sectionFilter: normalizedSectionFilter,
+        returnContext,
       });
       return true;
     }
@@ -10795,6 +10813,8 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       await showDesktopBenefitsView(previewRequest, {
         sourceScreen: normalizedSourceScreen,
         initialSection: normalizedInitialSection,
+        sectionFilter: normalizedSectionFilter,
+        returnContext,
       });
       return true;
     }
@@ -14981,7 +15001,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
           ...baseDiscountDetailItems,
           {
             key: "bonus_redeem",
-            title: "\u0411\u043e\u043d\u0443\u0441\u044b",
+            title: state.homeBonusConfig?.settings?.bonus_coin_name || "Бонусы",
             amount: bonusRedeemAmount,
             sourceKind: "bonus",
             promoCode: null,
@@ -15135,7 +15155,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
             ...baseDiscountDetails,
             {
               key: "bonus_redeem",
-              title: "\u0411\u043e\u043d\u0443\u0441\u044b",
+              title: state.homeBonusConfig?.settings?.bonus_coin_name || "Бонусы",
               amount: bonusRedeemAmount,
               sourceKind: "bonus",
               promoCode: null,
@@ -15380,7 +15400,8 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       updateRowByLabel(summary, "Стоимость доставки", money(snapshot.deliveryCost || 0), snapshot.isDelivery ? "" : "none");
       updateRowByLabel(summary, "Сумма товаров", money(snapshot.subtotalBeforeDiscount || 0));
       updateRowByLabel(summary, "Скидка", `-${money(snapshot.discountAmount || 0)}`, Number(snapshot.discountAmount || 0) > 0 ? "" : "none");
-      updateRowByLabel(summary, "Бонусы", `+${money(snapshot.bonusAccrualAmount || 0)}`, Number(snapshot.bonusAccrualAmount || 0) > 0 ? "" : "none");
+      const coinName = state.homeBonusConfig?.settings?.bonus_coin_name || "Бонусы";
+      updateRowByLabel(summary, coinName, `+${formatShopBonusNumber(snapshot.bonusAccrualAmount || 0)} ${getShopBonusCoinIconHtml('1em', '2px')}`, Number(snapshot.bonusAccrualAmount || 0) > 0 ? "" : "none");
       const totalValue = summary.querySelector(".shop-order-summary-total-value");
       if (totalValue) totalValue.textContent = money(snapshot.total || 0);
     });
@@ -15644,6 +15665,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       normalized === "cart"
       || normalized === "cart-service"
       || normalized === "checkout"
+      || normalized === "bonus-level"
       || normalized === "nav"
     ) {
       return normalized;
@@ -15659,6 +15681,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       sheetSource === "cart"
       || sheetSource === "cart-service"
       || sheetSource === "checkout"
+      || sheetSource === "bonus-level"
       || sheetSource === "nav"
     ) {
       return sheetSource;
@@ -15668,6 +15691,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       desktopSource === "cart"
       || desktopSource === "cart-service"
       || desktopSource === "checkout"
+      || desktopSource === "bonus-level"
       || desktopSource === "nav"
     ) {
       return desktopSource;
@@ -15682,17 +15706,35 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     );
   }
 
-  async function reopenCheckoutBenefitsHost({ sourceScreen, previewRequest = null } = {}) {
+  async function reopenCheckoutBenefitsHost({ sourceScreen, previewRequest = null, sectionFilter = null, returnContext = null } = {}) {
     const resolvedSourceScreen = normalizeCheckoutBenefitsSourceScreen(
       sourceScreen,
       getActiveCheckoutBenefitsSourceScreen("checkout")
     );
+    const resolvedSectionFilter = normalizeCheckoutBenefitsSectionFilter(
+      sectionFilter
+      || openCartSheetCtx?.benefitsSectionFilter
+      || sheetNavigationState?.data?.sectionFilter
+      || null
+    );
+    const resolvedReturnContext = returnContext
+      || openCartSheetCtx?.benefitsReturnContext
+      || sheetNavigationState?.data?.returnContext
+      || null;
     if (typeof openCartSheetCtx?.showSheetBenefits === "function" && hasLiveCartSheetContext()) {
-      await openCartSheetCtx.showSheetBenefits(previewRequest, { sourceScreen: resolvedSourceScreen });
+      await openCartSheetCtx.showSheetBenefits(previewRequest, {
+        sourceScreen: resolvedSourceScreen,
+        sectionFilter: resolvedSectionFilter,
+        returnContext: resolvedReturnContext,
+      });
       return true;
     }
     if (typeof showDesktopBenefitsView === "function") {
-      await showDesktopBenefitsView(previewRequest, { sourceScreen: resolvedSourceScreen });
+      await showDesktopBenefitsView(previewRequest, {
+        sourceScreen: resolvedSourceScreen,
+        sectionFilter: resolvedSectionFilter,
+        returnContext: resolvedReturnContext,
+      });
       return true;
     }
     return false;
@@ -19335,12 +19377,14 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     manualPromoPlacement = "inline",
     prefetchedData = null,
     initialSection = null,
+    sectionFilter = null,
   }) {
     if (!container) return;
     container.innerHTML = "";
     const resolvedManualPromoHost = manualPromoHost && typeof manualPromoHost === "object"
       ? manualPromoHost
       : null;
+    const normalizedSectionFilter = normalizeCheckoutBenefitsSectionFilter(sectionFilter);
     if (resolvedManualPromoHost) {
       resolvedManualPromoHost.innerHTML = "";
     }
@@ -19458,6 +19502,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     discountSection.section.dataset.benefitsSection = "discounts";
     promoSection.section.dataset.benefitsSection = "promos";
     giftSection.section.dataset.benefitsSection = "gifts";
+    progressSection.section.dataset.benefitsSection = "progress";
 
     discountSection.section.querySelector(".shop-checkout-benefits-section-title").textContent = "\u0421\u043a\u0438\u0434\u043a\u0438";
     discountSection.empty.textContent = "\u0414\u043b\u044f \u044d\u0442\u043e\u0433\u043e \u0437\u0430\u043a\u0430\u0437\u0430 \u043d\u0435\u0442 \u0434\u043e\u0441\u0442\u0443\u043f\u043d\u044b\u0445 \u0430\u043a\u0446\u0438\u0439.";
@@ -19477,7 +19522,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     shell.appendChild(emptyState);
 
     let syncManualPromoApplyState = null;
-    if (typeof onApplyManualPromo === "function") {
+    if (typeof onApplyManualPromo === "function" && (!normalizedSectionFilter || normalizedSectionFilter === "promos")) {
       const promoEntryState = typeof getManualPromoInputState === "function"
         ? (getManualPromoInputState() || {})
         : {};
@@ -19643,6 +19688,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
         manualPromoHost,
         manualPromoPlacement,
         prefetchedData: nextPrefetchedData,
+        sectionFilter: normalizedSectionFilter,
       });
     };
     const buildSelectionPreviewState = ({
@@ -20206,6 +20252,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
               manualPromoHost,
               manualPromoPlacement,
               prefetchedData: nextData,
+              sectionFilter: normalizedSectionFilter,
             });
             return;
           }
@@ -20491,7 +20538,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
           nextSelectedPromoRewardId: nextSelection.nextSelectedPromoRewardId,
         });
       },
-    }), { hideWhenEmpty: true });
+    }), { hideWhenEmpty: !normalizedSectionFilter || normalizedSectionFilter !== "discounts" });
     setCheckoutBenefitsSectionItems(promoSection, promoCards, (item) => renderCheckoutBenefitPromoCard(item, {
       onOpenDetails: (promoCard) => {
         openCheckoutBenefitPromoScreen(promoCard);
@@ -20514,6 +20561,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
               manualPromoHost,
               manualPromoPlacement,
               prefetchedData: nextData,
+              sectionFilter: normalizedSectionFilter,
             });
           } catch (err) {
             if (typeof showToast === "function") showToast(getCheckoutBenefitsActionErrorMessage(err));
@@ -20538,7 +20586,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
           nextSelectedPromoRewardId: nextSelection.nextSelectedPromoRewardId,
         });
       },
-    }), { hideWhenEmpty: true });
+    }), { hideWhenEmpty: !normalizedSectionFilter || normalizedSectionFilter !== "promos" });
     setCheckoutBenefitsSectionItems(giftSection, data.gifts, (item) => renderCheckoutBenefitGiftCard(item, {
       onOpen: (giftItem) => {
         openCheckoutBenefitGiftScreen(giftItem);
@@ -20563,12 +20611,13 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
             manualPromoHost,
             manualPromoPlacement,
             prefetchedData: actionResult?.previewData || null,
+            sectionFilter: normalizedSectionFilter,
           });
         } catch (err) {
           if (typeof showToast === "function") showToast(getCheckoutBenefitsActionErrorMessage(err));
         }
       },
-    }), { hideWhenEmpty: true });
+    }), { hideWhenEmpty: !normalizedSectionFilter || normalizedSectionFilter !== "gifts" });
     bindCheckoutBenefitProgressTrack(giftSection.list);
     const openProgressGiftClaimDetails = async (progressItem) => {
       await openCheckoutBenefitProgressGiftClaimScreen({
@@ -20594,6 +20643,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
             manualPromoHost,
             manualPromoPlacement,
             prefetchedData: nextData,
+            sectionFilter: normalizedSectionFilter,
           });
         },
       });
@@ -20638,16 +20688,23 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
             manualPromoHost,
             manualPromoPlacement,
             prefetchedData: nextData,
+            sectionFilter: normalizedSectionFilter,
           });
         } catch (err) {
           if (typeof showToast === "function") showToast(getCheckoutBenefitsActionErrorMessage(err));
         }
       },
-    }), { hideWhenEmpty: true });
+    }), { hideWhenEmpty: !normalizedSectionFilter || normalizedSectionFilter !== "progress" });
+    if (normalizedSectionFilter) {
+      [discountSection, promoSection, giftSection, progressSection].forEach((entry) => {
+        const key = String(entry?.section?.dataset?.benefitsSection || "").trim();
+        if (key && key !== normalizedSectionFilter) entry.section.classList.add("hidden");
+      });
+    }
     const hasVisibleSections = [discountSection, promoSection, giftSection, progressSection]
       .some((entry) => entry?.section && !entry.section.classList.contains("hidden"));
     emptyState.classList.toggle("hidden", hasVisibleSections);
-    scrollCheckoutBenefitsToInitialSection(container, initialSection);
+    scrollCheckoutBenefitsToInitialSection(container, normalizedSectionFilter || initialSection);
   }
 
   async function renderCheckoutBenefitsSheetLegacy({
@@ -20727,7 +20784,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     const discountSection = createCheckoutBenefitsSection("Скидки", "Для этого заказа автоматические скидки не найдены.");
     const promoSection = createCheckoutBenefitsSection("Промокоды", "Для этого заказа нет доступных промокодов.");
     const giftSection = createCheckoutBenefitsSection("Подарки", "Здесь появятся доступные подарки.");
-    const progressSection = createCheckoutBenefitsSection("Накопления", "Здесь появится прогресс накопительных акций.");
+    const progressSection = createCheckoutBenefitsSection("Задания", "Здесь появится прогресс заданий.");
 
     shell.appendChild(discountSection.section);
     shell.appendChild(promoSection.section);
@@ -22119,6 +22176,7 @@ function applySheetAddressTitle(backMode = "cart") {
         explicitSource === "cart"
         || explicitSource === "cart-service"
         || explicitSource === "checkout"
+        || explicitSource === "bonus-level"
         || explicitSource === "nav"
       ) {
         return explicitSource;
@@ -22130,6 +22188,7 @@ function applySheetAddressTitle(backMode = "cart") {
         savedSource === "cart"
         || savedSource === "cart-service"
         || savedSource === "checkout"
+        || savedSource === "bonus-level"
         || savedSource === "nav"
       ) {
         return savedSource;
@@ -22139,8 +22198,16 @@ function applySheetAddressTitle(backMode = "cart") {
     const benefitsSourceScreen = resolveBenefitsSourceScreen();
     const previousSheetScreen = str(sheetNavigationState?.screen || "").trim().toLowerCase();
     let pendingInitialSection = normalizeCheckoutBenefitsInitialSection(options?.initialSection);
+    const sectionFilter = normalizeCheckoutBenefitsSectionFilter(options?.sectionFilter);
+    const benefitsSheetTitle = getCheckoutBenefitsSectionTitle(sectionFilter);
+    const returnContext = options?.returnContext && typeof options.returnContext === "object"
+      ? options.returnContext
+      : null;
+    if (sectionFilter) pendingInitialSection = sectionFilter;
     if (openCartSheetCtx && typeof openCartSheetCtx === "object") {
       openCartSheetCtx.benefitsSourceScreen = benefitsSourceScreen;
+      openCartSheetCtx.benefitsSectionFilter = sectionFilter;
+      openCartSheetCtx.benefitsReturnContext = returnContext;
     }
     __forceHideCheckoutDeliveryProgress = true;
     hideHeaderToggle();
@@ -22233,6 +22300,20 @@ function applySheetAddressTitle(backMode = "cart") {
       persistBenefitsState();
       restoreCheckoutDeliveryProgressAfterBenefits();
       const nextScreen = str(openCartSheetCtx?.benefitsSourceScreen || benefitsSourceScreen).trim().toLowerCase();
+      if (nextScreen === "bonus-level") {
+        const levelId = Number(
+          openCartSheetCtx?.benefitsReturnContext?.levelId
+          || sheetNavigationState?.data?.returnContext?.levelId
+          || returnContext?.levelId
+          || 0
+        );
+        if (typeof window.returnToShopBonusLevelSheet === "function") {
+          window.returnToShopBonusLevelSheet(levelId);
+          return;
+        }
+        closeShopSheetIfOpen();
+        return;
+      }
       if (nextScreen === "nav") {
         closeShopSheetIfOpen();
         return;
@@ -22289,7 +22370,7 @@ function applySheetAddressTitle(backMode = "cart") {
     };
 
     clearSheetAddressTitleMode();
-    if (window.AppModal?.setTitle) window.AppModal.setTitle("Выгоды");
+    if (window.AppModal?.setTitle) window.AppModal.setTitle(benefitsSheetTitle);
     setSheetHeaderMode("subscreen", {
       onBack: () => {
         void closeBenefitsModal();
@@ -22317,7 +22398,7 @@ function applySheetAddressTitle(backMode = "cart") {
 
     sheetNavigationState.type = "cart";
     sheetNavigationState.screen = "benefits";
-    sheetNavigationState.data = { benefitsSourceScreen };
+    sheetNavigationState.data = { benefitsSourceScreen, sectionFilter, returnContext };
     if (typeof queueMobileUiStateSync === "function") {
       queueMobileUiStateSync("showSheetBenefits");
     } else if (typeof window.queueShopMobileUiStateSync === "function") {
@@ -22362,6 +22443,7 @@ function applySheetAddressTitle(backMode = "cart") {
         },
         manualPromoHost: benefitsFooterEl,
         manualPromoPlacement: "external",
+        sectionFilter,
         onChangeSelection: async ({
           selectedDiscountId,
           selectedDiscountSource,
@@ -22437,6 +22519,14 @@ function applySheetAddressTitle(backMode = "cart") {
     onBack,
     detailMode = "",
   } = {}) {
+    const detailReturnSectionFilter = normalizeCheckoutBenefitsSectionFilter(
+      openCartSheetCtx?.benefitsSectionFilter
+      || sheetNavigationState?.data?.sectionFilter
+      || null
+    );
+    const detailReturnContext = openCartSheetCtx?.benefitsReturnContext
+      || sheetNavigationState?.data?.returnContext
+      || null;
     const isMobileDetail = window.matchMedia("(max-width: 768px)").matches;
     const useFooterActionLayout = (
       detailMode === "gift-claim"
@@ -22456,10 +22546,16 @@ function applySheetAddressTitle(backMode = "cart") {
       if (!isMobileDetail && typeof showDesktopBenefitsView === "function") {
         await showDesktopBenefitsView(null, {
           sourceScreen: getActiveCheckoutBenefitsSourceScreen("cart"),
+          sectionFilter: detailReturnSectionFilter,
+          returnContext: detailReturnContext,
         });
         return;
       }
-      await showSheetBenefits();
+      await showSheetBenefits(null, {
+        sourceScreen: getActiveCheckoutBenefitsSourceScreen("checkout"),
+        sectionFilter: detailReturnSectionFilter,
+        returnContext: detailReturnContext,
+      });
     };
     captureCheckoutBenefitsDetailReturnState();
     if (isDesktopBenefitsHostActive() && elCheckoutBenefitsContent && elCheckoutBenefitDetailContent) {
@@ -22478,7 +22574,7 @@ function applySheetAddressTitle(backMode = "cart") {
       elCheckoutBenefitDetailContent.innerHTML = "";
       elCheckoutBenefitDetailContent.scrollTop = 0;
       setCartHeader({
-        title: "Выгоды",
+        title: getCheckoutBenefitsSectionTitle(detailReturnSectionFilter),
         showAddressChip: false,
         showProfileActions: false,
         showBack: false,
@@ -22627,6 +22723,8 @@ function applySheetAddressTitle(backMode = "cart") {
     sheetNavigationState.screen = "benefitDetail";
     sheetNavigationState.data = {
       benefitDetailMode: detailMode ? String(detailMode || "").trim() || null : null,
+      sectionFilter: detailReturnSectionFilter,
+      returnContext: detailReturnContext,
       customBackHandler: returnFromDetail,
     };
     if (typeof queueMobileUiStateSync === "function") {
@@ -25641,7 +25739,7 @@ function renderSheetAddressList() {
     hideDesktopCheckoutBenefitDetailView({ clearContent: true });
 
     setCartHeader({
-      title: "Выгоды",
+      title: getCheckoutBenefitsSectionTitle(options?.sectionFilter),
       showAddressChip: false,
       showProfileActions: false,
       showBack: false,
@@ -25694,6 +25792,8 @@ function renderSheetAddressList() {
     await ctx.showSheetBenefits(previewRequest, {
       sourceScreen: resolvedSourceScreen,
       initialSection: normalizeCheckoutBenefitsInitialSection(options?.initialSection),
+      sectionFilter: normalizeCheckoutBenefitsSectionFilter(options?.sectionFilter),
+      returnContext: options?.returnContext || null,
     });
     return true;
   }
@@ -28163,7 +28263,7 @@ function renderSheetAddressList() {
     const discountBenefitsSection = createBenefitsSection("Скидки", "У вас пока нет активных скидок");
     const promoBenefitsSection = createBenefitsSection("Промокоды", "У вас пока нет доступных промокодов");
     const giftsBenefitsSection = createBenefitsSection("Подарки", "Здесь появятся доступные подарки.");
-    const progressBenefitsSection = createBenefitsSection("Накопления", "Здесь появится прогресс накопительных акций.");
+    const progressBenefitsSection = createBenefitsSection("Задания", "Здесь появится прогресс заданий.");
     const benefitsEmptyState = createBenefitsEmptyState({
       className: "shop-benefits-empty-state shop-profile-benefits-empty-state",
     });
@@ -30384,6 +30484,7 @@ function setActiveNav(key) {
     cart: elNavCart,
     profile: elNavProfile,
     fav: $("#shopNavFav"),
+    chat: $("#shopCompanyChatOpenBtn"),
   };
 
   Object.keys(map).forEach((k) => {
@@ -37827,6 +37928,7 @@ window.getAvailableBenefitsCount = getAvailableBenefitsCount;
 window.syncBenefitsBadgesUi = syncBenefitsBadgesUi;
 window.syncShopCartBenefitsServiceUi = syncCartBenefitsServiceBlocksUi;
 window.handleShopBenefitsOrderStateChange = handleShopBenefitsOrderStateChange;
+window.openShopBenefitsSheet = openUnifiedBenefitsSheet;
 window.openCategoriesSheet = openCategoriesSheet;
 
 

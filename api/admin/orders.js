@@ -450,6 +450,13 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
     }
   }
 
+  function parseBonusCategoryGroupIds(rawValue) {
+    const values = parseOrderItemsJson(rawValue);
+    return values
+      .map((id) => Number(id || 0))
+      .filter((id, index, list) => id > 0 && list.indexOf(id) === index);
+  }
+
   function getOrderBonusItemCategoryIds(item) {
     const ids = new Set();
     [
@@ -491,7 +498,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
     if (!items.length) return null;
 
     const [[levelRow]] = await queryable.query(
-      `SELECT id, cashback_percent, favorite_categories_bonus_percent
+      `SELECT id, cashback_percent, favorite_categories_bonus_percent, favorite_category_group_id
          FROM mkt_bonus_levels
         WHERE tenant_id = ? AND id = ? AND is_active = 1
         LIMIT 1`,
@@ -516,7 +523,22 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       }))
       .find((row) => row.amount > 0 && row.percent > 0 && orderTotal >= row.amount)?.percent || 0;
 
-    const favoritePercent = Math.max(0, Number(levelRow.favorite_categories_bonus_percent || 0));
+    let favoritePercent = 0;
+    const favoriteGroupId = Number(levelRow.favorite_category_group_id || 0);
+    if (favoriteGroupId > 0) {
+      const [[groupRow]] = await queryable.query(
+        `SELECT bonus_percent, categories_limit, category_ids
+           FROM mkt_bonus_category_groups
+          WHERE tenant_id = ? AND id = ?
+          LIMIT 1`,
+        [tenantId, favoriteGroupId]
+      );
+      const groupCategoryIds = parseBonusCategoryGroupIds(groupRow?.category_ids);
+      const groupLimit = Math.max(0, Math.floor(Number(groupRow?.categories_limit || 0)));
+      favoritePercent = groupCategoryIds.length && groupLimit > 0
+        ? Math.max(0, Number(groupRow?.bonus_percent || 0))
+        : 0;
+    }
     let selectedCategoryIds = new Set();
     if (favoritePercent > 0) {
       const [categoryRows] = await queryable.query(

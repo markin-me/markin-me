@@ -106,6 +106,10 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
     {
       name: 'pwa_qr_badge_text',
       sql: "varchar(120) DEFAULT NULL COMMENT 'Custom PWA QR card badge text'"
+    },
+    {
+      name: 'site_menu_items_json',
+      sql: "text DEFAULT NULL COMMENT 'Tenant storefront menu items JSON'"
     }
   ];
   const MAP_PROVIDER_KEEP_VALUE = '__saved__';
@@ -1001,6 +1005,8 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
       custom_domain: primaryDomain ? (primaryDomain.domain || primaryDomain.domain_ascii) : null,
       custom_domain_ascii: primaryDomain ? primaryDomain.domain_ascii : null
     };
+    const siteMenuItems = serializeSiteMenuItems(nextTenant.site_menu_items_json);
+    delete nextTenant.site_menu_items_json;
     const forwardedProto = req.headers['x-forwarded-proto'];
     const forwardedHost = req.headers['x-forwarded-host'];
     const protocol = firstHeaderValue(forwardedProto, req.protocol || 'https');
@@ -1014,6 +1020,7 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
     });
     return {
       ...nextTenant,
+      site_menu_items: siteMenuItems,
       domains,
       subdomain_shop_url: subdomainShopUrl,
       pwa_install_targets: pwaInstallTargets,
@@ -1566,10 +1573,65 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
     }));
   }
 
+  const defaultSiteMenuItems = Object.freeze([
+    { key: 'my-orders', title: 'Мои заказы', icon_class: 'fas fa-receipt', enabled: true, sort_order: 0 },
+    { key: 'favorites', title: 'Избранное', icon_class: 'fas fa-heart', enabled: true, sort_order: 1 },
+    { key: 'benefits', title: 'Выгоды', icon_class: 'fas fa-tags', enabled: true, sort_order: 2 },
+    { key: 'promocodes', title: 'Промокоды', icon_class: 'fas fa-ticket-alt', enabled: true, sort_order: 3 },
+    { key: 'discounts', title: 'Скидки', icon_class: 'fas fa-percent', enabled: true, sort_order: 4 },
+    { key: 'gifts', title: 'Подарки', icon_class: 'fas fa-gift', enabled: true, sort_order: 5 },
+    { key: 'addresses', title: 'Адреса', icon_class: 'fas fa-map-marker-alt', enabled: true, sort_order: 6 },
+    { key: 'bought-before', title: 'Уже покупали', icon_class: 'fas fa-shopping-bag', enabled: true, sort_order: 7 },
+    { key: 'tasks', title: 'Задания', icon_class: 'fas fa-tasks', enabled: true, sort_order: 8 },
+    { key: 'product-rating', title: 'Оценка товаров', icon_class: 'fas fa-star-half-alt', enabled: true, sort_order: 9 },
+  ]);
+
+  function normalizeSiteMenuItems(rawValue, { fallbackToDefault = true } = {}) {
+    let parsed = rawValue;
+    if (typeof rawValue === 'string') {
+      const trimmed = rawValue.trim();
+      if (!trimmed) parsed = [];
+      else {
+        try {
+          parsed = JSON.parse(trimmed);
+        } catch (_) {
+          parsed = [];
+        }
+      }
+    }
+    const incoming = Array.isArray(parsed) ? parsed : [];
+    const byKey = new Map();
+    incoming.forEach((item) => {
+      if (!item || typeof item !== 'object') return;
+      const key = String(item.key || '').trim();
+      if (!key) return;
+      byKey.set(key, item);
+    });
+    const normalized = defaultSiteMenuItems.map((defaults) => {
+      const item = byKey.get(defaults.key) || {};
+      const title = helpers.strOrNull(item.title);
+      const iconUrl = helpers.strOrNull(item.icon_url);
+      return {
+        key: defaults.key,
+        title: title ? title.slice(0, 80) : defaults.title,
+        enabled: item.enabled === undefined ? Boolean(defaults.enabled) : helpers.toBool(item.enabled, true),
+        icon_url: iconUrl ? iconUrl.slice(0, 512) : null,
+        icon_class: defaults.icon_class,
+        sort_order: Number(defaults.sort_order) || 0,
+      };
+    });
+    return fallbackToDefault || incoming.length ? normalized : [];
+  }
+
+  function serializeSiteMenuItems(rawValue) {
+    return normalizeSiteMenuItems(rawValue, { fallbackToDefault: true });
+  }
+
   function serializeTenantForClient(tenant, extra = {}) {
     if (!tenant || typeof tenant !== 'object') return null;
     const source = { ...tenant };
     delete source.map_provider_accounts_json;
+    delete source.site_menu_items_json;
     return { ...source, ...extra };
   }
 
@@ -2948,7 +3010,8 @@ async function fetchStoreWithHours(tenantId, storeId) {
         'favicon_light_url',
         'favicon_dark_url',
         'apple_touch_icon_url',
-        'android_icon_url'
+        'android_icon_url',
+        'site_menu_item_icon'
       ]);
       if (!field || !allowed.has(field)) {
         return res.status(400).json({ ok: false, error: 'FIELD_INVALID' });
@@ -2960,6 +3023,14 @@ async function fetchStoreWithHours(tenantId, storeId) {
       );
 
       const url = `/static/uploads/tenants/${tenantId}/${file.filename.replace(/\.(jpe?g|png|gif)$/i, '.webp')}`;
+
+      if (field === 'site_menu_item_icon') {
+        const [rows] = await db.query(
+          'SELECT * FROM ten_tenants WHERE id=? LIMIT 1',
+          [tenantId]
+        );
+        return res.json({ ok: true, url, tenant: await buildTenantResponse(rows[0] || null, req) });
+      }
 
       await db.query(
         `UPDATE ten_tenants SET ${field}=? WHERE id=?`,
@@ -3513,6 +3584,11 @@ async function fetchStoreWithHours(tenantId, storeId) {
       const siteName = req.body.site_name !== undefined ? helpers.strOrNull(req.body.site_name) : undefined;
       const siteDescription = req.body.site_description !== undefined ? helpers.strOrNull(req.body.site_description) : undefined;
       const pwaQrBadgeTextRaw = req.body.pwa_qr_badge_text !== undefined ? helpers.strOrNull(req.body.pwa_qr_badge_text) : undefined;
+      let siteMenuItemsJson = undefined;
+      if (req.body.site_menu_items !== undefined) {
+        const normalizedSiteMenuItems = normalizeSiteMenuItems(req.body.site_menu_items, { fallbackToDefault: false });
+        siteMenuItemsJson = JSON.stringify(normalizedSiteMenuItems);
+      }
       const subdomain = req.body.subdomain !== undefined ? normalizeSubdomain(req.body.subdomain) : undefined;
       await ensureTenantDomainsTable();
 
@@ -3699,6 +3775,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
       }
       const nextSiteName = siteName !== undefined ? siteName : current.site_name;
       const nextSiteDescription = siteDescription !== undefined ? siteDescription : current.site_description;
+      const nextSiteMenuItemsJson = siteMenuItemsJson !== undefined ? siteMenuItemsJson : (current.site_menu_items_json ?? null);
       const nextPwaQrBadgeText = pwaQrBadgeTextRaw !== undefined
         ? (String(pwaQrBadgeTextRaw || '').replace(/\s+/g, ' ').trim().slice(0, 56) || null)
         : (current.pwa_qr_badge_text ?? null);
@@ -3794,8 +3871,8 @@ async function fetchStoreWithHours(tenantId, storeId) {
       }
 
       await db.query(
-        'UPDATE ten_tenants SET name=?, email=?, phone=?, timezone=?, logo_light_url=?, logo_dark_url=?, favicon_light_url=?, favicon_dark_url=?, apple_touch_icon_url=?, android_icon_url=?, price_rounding_mode=?, price_rounding_precision=?, order_stock_deduct_mode=?, order_stock_deduct_status_id=?, site_name=?, site_description=?, pwa_qr_badge_text=?, subdomain=?, custom_domain=?, custom_domain_ascii=?, sound_new_order_url=?, sound_order_cancelled_url=?, sound_new_message_url=?, img_webp_quality=?, img_thumb_quality=?, img_thumb_width=?, img_main_width=?, img_webp_aggressive=?, img_delete_original=?, max_bot_id=?, max_bot_token=?, max_mini_app_enabled=?, max_login_enabled=?, telegram_bot_username=?, telegram_bot_token=?, tg_mini_app_enabled=?, tg_login_enabled=?, chat_welcome_message=?, chat_welcome_enabled=?, chat_assistant_name=?, chat_operator_name=?, chat_assistant_gender=?, chat_quick_questions_json=?, chat_quick_questions_enabled=?, chat_widget_enabled=?, chat_guest_thread_ttl_days=?, chat_thread_ttl_days=? WHERE id=?',
-        [nextName, nextEmail, nextPhone, nextTimezone, nextLogoLight, nextLogoDark, nextFaviconLight, nextFaviconDark, nextAppleTouchIcon, nextAndroidIcon, nextRoundingMode, nextRoundingPrecision, nextStockDeductMode, nextStockDeductStatusId, nextSiteName, nextSiteDescription, nextPwaQrBadgeText, nextSubdomain, nextCustomDomain, nextCustomDomainAscii, nextSoundNewOrder, nextSoundCancelled, nextSoundNewMessage, nextImgWebpQuality, nextImgThumbQuality, nextImgThumbWidth, nextImgMainWidth, nextImgWebpAggressive, nextImgDeleteOriginal, nextMaxBotId, nextMaxBotToken, nextMaxMiniAppEnabled, nextMaxLoginEnabled, nextTelegramBotUsername, nextTelegramBotToken, nextTgMiniAppEnabled, nextTgLoginEnabled, nextChatWelcomeMessage, nextChatWelcomeEnabled, nextChatAssistantName, nextChatOperatorName, nextChatAssistantGender, nextChatQuickQuestionsJson, nextChatQuickQuestionsEnabled, nextChatWidgetEnabled, nextChatGuestThreadTtlDays, nextChatThreadTtlDays, tenantId]
+        'UPDATE ten_tenants SET name=?, email=?, phone=?, timezone=?, logo_light_url=?, logo_dark_url=?, favicon_light_url=?, favicon_dark_url=?, apple_touch_icon_url=?, android_icon_url=?, price_rounding_mode=?, price_rounding_precision=?, order_stock_deduct_mode=?, order_stock_deduct_status_id=?, site_name=?, site_description=?, pwa_qr_badge_text=?, site_menu_items_json=?, subdomain=?, custom_domain=?, custom_domain_ascii=?, sound_new_order_url=?, sound_order_cancelled_url=?, sound_new_message_url=?, img_webp_quality=?, img_thumb_quality=?, img_thumb_width=?, img_main_width=?, img_webp_aggressive=?, img_delete_original=?, max_bot_id=?, max_bot_token=?, max_mini_app_enabled=?, max_login_enabled=?, telegram_bot_username=?, telegram_bot_token=?, tg_mini_app_enabled=?, tg_login_enabled=?, chat_welcome_message=?, chat_welcome_enabled=?, chat_assistant_name=?, chat_operator_name=?, chat_assistant_gender=?, chat_quick_questions_json=?, chat_quick_questions_enabled=?, chat_widget_enabled=?, chat_guest_thread_ttl_days=?, chat_thread_ttl_days=? WHERE id=?',
+        [nextName, nextEmail, nextPhone, nextTimezone, nextLogoLight, nextLogoDark, nextFaviconLight, nextFaviconDark, nextAppleTouchIcon, nextAndroidIcon, nextRoundingMode, nextRoundingPrecision, nextStockDeductMode, nextStockDeductStatusId, nextSiteName, nextSiteDescription, nextPwaQrBadgeText, nextSiteMenuItemsJson, nextSubdomain, nextCustomDomain, nextCustomDomainAscii, nextSoundNewOrder, nextSoundCancelled, nextSoundNewMessage, nextImgWebpQuality, nextImgThumbQuality, nextImgThumbWidth, nextImgMainWidth, nextImgWebpAggressive, nextImgDeleteOriginal, nextMaxBotId, nextMaxBotToken, nextMaxMiniAppEnabled, nextMaxLoginEnabled, nextTelegramBotUsername, nextTelegramBotToken, nextTgMiniAppEnabled, nextTgLoginEnabled, nextChatWelcomeMessage, nextChatWelcomeEnabled, nextChatAssistantName, nextChatOperatorName, nextChatAssistantGender, nextChatQuickQuestionsJson, nextChatQuickQuestionsEnabled, nextChatWidgetEnabled, nextChatGuestThreadTtlDays, nextChatThreadTtlDays, tenantId]
       );
 
       const [rows] = await db.query(

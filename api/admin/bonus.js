@@ -148,6 +148,12 @@ function normalizeSettings(payload = {}) {
       90
     ),
     allow_redeem_and_accrue: boolFlag(pick(payload, 'allow_redeem_and_accrue', 'allowRedeemAndAccrue'), false) ? 1 : 0,
+    bonus_program_name_base: toText(pick(payload, 'bonus_program_name_base', 'bonusProgramNameBase')) || 'Бонусная программа',
+    bonus_program_logo_base: textOrNull(pick(payload, 'bonus_program_logo_base', 'bonusProgramLogoBase')),
+    bonus_program_name_paid: toText(pick(payload, 'bonus_program_name_paid', 'bonusProgramNamePaid')) || 'Привилегии Plus',
+    bonus_program_logo_paid: textOrNull(pick(payload, 'bonus_program_logo_paid', 'bonusProgramLogoPaid')),
+    bonus_coin_name: toText(pick(payload, 'bonus_coin_name', 'bonusCoinName')) || 'Бонусы',
+    bonus_coin_logo: textOrNull(pick(payload, 'bonus_coin_logo', 'bonusCoinLogo')),
   };
 }
 
@@ -233,6 +239,8 @@ function normalizeBonusLevels(items) {
       requirement_orders: nullableNonNegativeInt(pick(item, 'requirement_orders', 'requirementOrders'), 'INVALID_LEVELS'),
       requirement_referral_mode: enumValue(pick(item, 'requirement_referral_mode', 'requirementReferralMode'), BONUS_LEVEL_REQUIREMENT_MODES, 'INVALID_LEVELS', 'and'),
       requirement_referrals: nullableNonNegativeInt(pick(item, 'requirement_referrals', 'requirementReferrals'), 'INVALID_LEVELS'),
+      requirement_bonus_accrued: nullableNonNegativeNumber(pick(item, 'requirement_bonus_accrued', 'requirementBonusAccrued'), 'INVALID_LEVELS'),
+      requirement_bonus_redeemed: nullableNonNegativeNumber(pick(item, 'requirement_bonus_redeemed', 'requirementBonusRedeemed'), 'INVALID_LEVELS'),
       requirement_match_count: Math.max(1, nonNegativeInt(pick(item, 'requirement_match_count', 'requirementMatchCount'), 'INVALID_LEVELS', 1)),
       requirement_period_days: nullableNonNegativeInt(pick(item, 'requirement_period_days', 'requirementPeriodDays'), 'INVALID_LEVELS'),
       retention_strategy: enumValue(pick(item, 'retention_strategy', 'retentionStrategy'), BONUS_LEVEL_RETENTION_STRATEGIES, 'INVALID_LEVELS', 'match'),
@@ -241,6 +249,8 @@ function normalizeBonusLevels(items) {
       retention_orders: nullableNonNegativeInt(pick(item, 'retention_orders', 'retentionOrders'), 'INVALID_LEVELS'),
       retention_referral_mode: enumValue(pick(item, 'retention_referral_mode', 'retentionReferralMode'), BONUS_LEVEL_REQUIREMENT_MODES, 'INVALID_LEVELS', 'and'),
       retention_referrals: nullableNonNegativeInt(pick(item, 'retention_referrals', 'retentionReferrals'), 'INVALID_LEVELS'),
+      retention_bonus_accrued: nullableNonNegativeNumber(pick(item, 'retention_bonus_accrued', 'retentionBonusAccrued'), 'INVALID_LEVELS'),
+      retention_bonus_redeemed: nullableNonNegativeNumber(pick(item, 'retention_bonus_redeemed', 'retentionBonusRedeemed'), 'INVALID_LEVELS'),
       retention_match_count: Math.max(1, nonNegativeInt(pick(item, 'retention_match_count', 'retentionMatchCount'), 'INVALID_LEVELS', 1)),
       cashback_percent: nonNegativeNumber(pick(item, 'cashback_percent', 'cashbackPercent'), 'INVALID_LEVELS', 0),
       redeem_percent: nonNegativeNumber(pick(item, 'redeem_percent', 'redeemPercent'), 'INVALID_LEVELS', 0),
@@ -274,6 +284,7 @@ function normalizeBonusLevels(items) {
       )),
       is_active: boolFlag(pick(item, 'is_active', 'isActive'), true) ? 1 : 0,
       tariff_rows: normalizeTariffRows(pick(item, 'tariff_rows', 'tariffRows')),
+      favorite_category_group_id: nullableNonNegativeInt(pick(item, 'favorite_category_group_id', 'favoriteCategoryGroupId'), 'INVALID_LEVELS'),
       order_bonus_ranges: normalizeOrderRanges(pick(item, 'order_bonus_ranges', 'orderBonusRanges')),
       favorite_category_ids: normalizeFavoriteCategoryIds(pick(item, 'favorite_category_ids', 'favoriteCategoryIds')),
     };
@@ -302,6 +313,21 @@ function normalizeReferralLevels(items) {
   });
 }
 
+function normalizeCategoryGroups(items) {
+  if (!Array.isArray(items)) return [];
+  return items.map((item) => {
+    const rawId = pick(item, 'id');
+    const id = Number(rawId);
+    return {
+      ...(Number.isInteger(id) && id > 0 ? { id } : {}),
+      title: toText(pick(item, 'title')) || 'Группа категорий',
+      bonus_percent: nonNegativeNumber(pick(item, 'favoriteCategoriesBonusPercent', 'bonus_percent'), 'INVALID_SETTINGS', 0),
+      categories_limit: nonNegativeInt(pick(item, 'favoriteCategoriesLimit', 'categories_limit'), 'INVALID_SETTINGS', 1),
+      category_ids: normalizeFavoriteCategoryIds(pick(item, 'favoriteCategoryIds', 'category_ids')),
+    };
+  });
+}
+
 function mapSettingsRow(row) {
   return {
     bonus_program_enabled: Number(row?.bonus_program_enabled || 0) === 1,
@@ -320,6 +346,12 @@ function mapSettingsRow(row) {
     referral_card_title_background_color: row?.referral_card_title_background_color || '#ffffff',
     referral_card_title_background_opacity: Number(row?.referral_card_title_background_opacity || 90),
     allow_redeem_and_accrue: Number(row?.allow_redeem_and_accrue || 0) === 1,
+    bonus_program_name_base: row?.bonus_program_name_base || 'Бонусная программа',
+    bonus_program_logo_base: row?.bonus_program_logo_base || null,
+    bonus_program_name_paid: row?.bonus_program_name_paid || 'Привилегии Plus',
+    bonus_program_logo_paid: row?.bonus_program_logo_paid || null,
+    bonus_coin_name: row?.bonus_coin_name || 'Бонусы',
+    bonus_coin_logo: row?.bonus_coin_logo || null,
   };
 }
 
@@ -341,6 +373,8 @@ function mapBonusLevelRow(row, children) {
     requirement_orders: row.requirement_orders == null ? null : Number(row.requirement_orders),
     requirement_referral_mode: row.requirement_referral_mode,
     requirement_referrals: row.requirement_referrals == null ? null : Number(row.requirement_referrals),
+    requirement_bonus_accrued: row.requirement_bonus_accrued == null ? null : Number(row.requirement_bonus_accrued),
+    requirement_bonus_redeemed: row.requirement_bonus_redeemed == null ? null : Number(row.requirement_bonus_redeemed),
     requirement_match_count: Number(row.requirement_match_count || 1),
     requirement_period_days: row.requirement_period_days == null ? null : Number(row.requirement_period_days),
     retention_strategy: row.retention_strategy,
@@ -349,6 +383,8 @@ function mapBonusLevelRow(row, children) {
     retention_orders: row.retention_orders == null ? null : Number(row.retention_orders),
     retention_referral_mode: row.retention_referral_mode,
     retention_referrals: row.retention_referrals == null ? null : Number(row.retention_referrals),
+    retention_bonus_accrued: row.retention_bonus_accrued == null ? null : Number(row.retention_bonus_accrued),
+    retention_bonus_redeemed: row.retention_bonus_redeemed == null ? null : Number(row.retention_bonus_redeemed),
     retention_match_count: Number(row.retention_match_count || 1),
     cashback_percent: Number(row.cashback_percent || 0),
     redeem_percent: Number(row.redeem_percent || 0),
@@ -374,6 +410,7 @@ function mapBonusLevelRow(row, children) {
     tariff_rows: children.tariffsByLevel.get(levelId) || [],
     order_bonus_ranges: children.rangesByLevel.get(levelId) || [],
     favorite_category_ids: children.categoriesByLevel.get(levelId) || [],
+    favorite_category_group_id: row.favorite_category_group_id == null ? null : Number(row.favorite_category_group_id),
   };
 }
 
@@ -450,7 +487,10 @@ async function loadConfig(db, tenantId) {
             referral_card_content_color, referral_card_button_color,
             referral_card_qr_enabled, referral_card_title_background_enabled,
             referral_card_title_background_color, referral_card_title_background_opacity,
-            allow_redeem_and_accrue
+            allow_redeem_and_accrue,
+            bonus_program_name_base, bonus_program_logo_base,
+            bonus_program_name_paid, bonus_program_logo_paid,
+            bonus_coin_name, bonus_coin_logo
        FROM mkt_bonus_program_settings
       WHERE tenant_id = ?
       LIMIT 1`,
@@ -468,6 +508,13 @@ async function loadConfig(db, tenantId) {
        FROM mkt_bonus_level_tariffs
       WHERE tenant_id = ?
       ORDER BY level_id ASC, sort_order ASC, id ASC`,
+    [tenantId]
+  );
+  const [categoryGroupRows] = await db.query(
+    `SELECT id, title, bonus_percent, categories_limit, category_ids
+       FROM mkt_bonus_category_groups
+      WHERE tenant_id = ?
+      ORDER BY id ASC`,
     [tenantId]
   );
   const [rangeRows] = await db.query(
@@ -569,6 +616,13 @@ async function loadConfig(db, tenantId) {
     })),
     bonus_events: bonusEventRows.map(mapBonusTransactionRow),
     referral_events: referralEventRows.map(mapReferralEventRow),
+    category_groups: categoryGroupRows.map((row) => ({
+      id: row.id,
+      title: row.title,
+      favoriteCategoriesBonusPercent: Number(row.bonus_percent || 0),
+      favoriteCategoriesLimit: Number(row.categories_limit || 0),
+      favoriteCategoryIds: Array.isArray(row.category_ids) ? row.category_ids : JSON.parse(row.category_ids || '[]'),
+    })),
   };
 }
 
@@ -603,6 +657,7 @@ async function saveConfig(db, tenantId, payload) {
   const settings = normalizeSettings(payload?.settings || {});
   const levels = normalizeBonusLevels(payload?.levels || []);
   const referralLevels = normalizeReferralLevels(payload?.referral_levels || payload?.referralLevels || []);
+  const categoryGroups = normalizeCategoryGroups(payload?.category_groups || payload?.categoryGroups || []);
   const conn = await db.getConnection();
   let inTransaction = false;
   try {
@@ -618,8 +673,11 @@ async function saveConfig(db, tenantId, payload) {
          referral_card_content_color, referral_card_button_color,
          referral_card_qr_enabled, referral_card_title_background_enabled,
          referral_card_title_background_color, referral_card_title_background_opacity,
-         allow_redeem_and_accrue)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         allow_redeem_and_accrue,
+         bonus_program_name_base, bonus_program_logo_base,
+         bonus_program_name_paid, bonus_program_logo_paid,
+         bonus_coin_name, bonus_coin_logo)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE
          bonus_program_enabled = VALUES(bonus_program_enabled),
          referral_program_enabled = VALUES(referral_program_enabled),
@@ -636,7 +694,13 @@ async function saveConfig(db, tenantId, payload) {
          referral_card_title_background_enabled = VALUES(referral_card_title_background_enabled),
          referral_card_title_background_color = VALUES(referral_card_title_background_color),
          referral_card_title_background_opacity = VALUES(referral_card_title_background_opacity),
-         allow_redeem_and_accrue = VALUES(allow_redeem_and_accrue)`,
+         allow_redeem_and_accrue = VALUES(allow_redeem_and_accrue),
+         bonus_program_name_base = VALUES(bonus_program_name_base),
+         bonus_program_logo_base = VALUES(bonus_program_logo_base),
+         bonus_program_name_paid = VALUES(bonus_program_name_paid),
+         bonus_program_logo_paid = VALUES(bonus_program_logo_paid),
+         bonus_coin_name = VALUES(bonus_coin_name),
+         bonus_coin_logo = VALUES(bonus_coin_logo)`,
       [
         tenantId,
         settings.bonus_program_enabled,
@@ -655,7 +719,50 @@ async function saveConfig(db, tenantId, payload) {
         settings.referral_card_title_background_color,
         settings.referral_card_title_background_opacity,
         settings.allow_redeem_and_accrue,
+        settings.bonus_program_name_base,
+        settings.bonus_program_logo_base,
+        settings.bonus_program_name_paid,
+        settings.bonus_program_logo_paid,
+        settings.bonus_coin_name,
+        settings.bonus_coin_logo,
       ]
+    );
+
+    const payloadGroups = categoryGroups || [];
+    const groupIdsToKeep = payloadGroups.map(g => g.id).filter(id => id && typeof id === 'number');
+    
+    if (groupIdsToKeep.length > 0) {
+      await conn.query(`DELETE FROM mkt_bonus_category_groups WHERE tenant_id = ? AND id NOT IN (?)`, [tenantId, groupIdsToKeep]);
+    } else {
+      await conn.query(`DELETE FROM mkt_bonus_category_groups WHERE tenant_id = ?`, [tenantId]);
+    }
+
+    for (const group of payloadGroups) {
+      if (group.id && typeof group.id === 'number') {
+        await conn.query(
+          `UPDATE mkt_bonus_category_groups SET 
+            title = ?, bonus_percent = ?, categories_limit = ?, category_ids = ?
+           WHERE tenant_id = ? AND id = ?`,
+          [group.title, group.bonus_percent, group.categories_limit, JSON.stringify(group.category_ids), tenantId, group.id]
+        );
+      } else {
+        await conn.query(
+          `INSERT INTO mkt_bonus_category_groups
+            (tenant_id, title, bonus_percent, categories_limit, category_ids)
+           VALUES (?, ?, ?, ?, ?)`,
+          [tenantId, group.title, group.bonus_percent, group.categories_limit, JSON.stringify(group.category_ids)]
+        );
+      }
+    }
+
+    const [savedGroupRows] = await conn.query(
+      `SELECT id FROM mkt_bonus_category_groups WHERE tenant_id = ?`,
+      [tenantId]
+    );
+    const savedGroupIds = new Set(
+      (Array.isArray(savedGroupRows) ? savedGroupRows : [])
+        .map((row) => Number(row.id || 0))
+        .filter((id) => id > 0)
     );
 
     const [existingLevelRows] = await conn.query(
@@ -692,6 +799,8 @@ async function saveConfig(db, tenantId, payload) {
         level.requirement_orders,
         level.requirement_referral_mode,
         level.requirement_referrals,
+        level.requirement_bonus_accrued,
+        level.requirement_bonus_redeemed,
         level.requirement_match_count,
         level.requirement_period_days,
         level.retention_strategy,
@@ -700,6 +809,8 @@ async function saveConfig(db, tenantId, payload) {
         level.retention_orders,
         level.retention_referral_mode,
         level.retention_referrals,
+        level.retention_bonus_accrued,
+        level.retention_bonus_redeemed,
         level.retention_match_count,
         level.cashback_percent,
         level.redeem_percent,
@@ -721,6 +832,9 @@ async function saveConfig(db, tenantId, payload) {
         level.title_background_enabled,
         level.title_background_color,
         level.title_background_opacity,
+        savedGroupIds.has(Number(level.favorite_category_group_id || 0))
+          ? Number(level.favorite_category_group_id)
+          : null,
         level.is_active,
       ];
       let levelId = existingLevelIdsByCode.get(level.code) || 0;
@@ -730,14 +844,17 @@ async function saveConfig(db, tenantId, payload) {
             sort_order = ?, title = ?, subtitle = ?, description = ?, access_type = ?, reward_bonus_amount = ?,
             min_spent = ?, min_orders = ?, requirement_amount = ?, requirement_mode = ?,
             requirement_orders = ?, requirement_referral_mode = ?, requirement_referrals = ?,
+            requirement_bonus_accrued = ?, requirement_bonus_redeemed = ?,
             requirement_match_count = ?, requirement_period_days = ?, retention_strategy = ?, retention_amount = ?,
             retention_mode = ?, retention_orders = ?, retention_referral_mode = ?, retention_referrals = ?,
+            retention_bonus_accrued = ?, retention_bonus_redeemed = ?,
             retention_match_count = ?, cashback_percent = ?, redeem_percent = ?, referral_bonus_percent = ?,
             favorite_categories_bonus_percent = ?, favorite_categories_limit = ?,
             activation_delay_value = ?, activation_delay_unit = ?, lifetime_value = ?, lifetime_unit = ?,
             qr_enabled = ?, show_title_on_card = ?, design_color = ?, accent_color = ?, main_color = ?,
             base_color = ?, content_color = ?, title_color = ?, title_background_enabled = ?,
-            title_background_color = ?, title_background_opacity = ?, is_active = ?
+            title_background_color = ?, title_background_opacity = ?,
+            favorite_category_group_id = ?, is_active = ?
            WHERE tenant_id = ? AND id = ?`,
           [...levelParams, tenantId, levelId]
         );
@@ -747,15 +864,18 @@ async function saveConfig(db, tenantId, payload) {
             tenant_id, code, sort_order, title, subtitle, description, access_type, reward_bonus_amount,
             min_spent, min_orders, requirement_amount, requirement_mode,
             requirement_orders, requirement_referral_mode, requirement_referrals,
+            requirement_bonus_accrued, requirement_bonus_redeemed,
             requirement_match_count, requirement_period_days, retention_strategy, retention_amount,
             retention_mode, retention_orders, retention_referral_mode, retention_referrals,
+            retention_bonus_accrued, retention_bonus_redeemed,
             retention_match_count, cashback_percent, redeem_percent, referral_bonus_percent,
             favorite_categories_bonus_percent, favorite_categories_limit,
             activation_delay_value, activation_delay_unit, lifetime_value, lifetime_unit,
             qr_enabled, show_title_on_card, design_color, accent_color, main_color,
             base_color, content_color, title_color, title_background_enabled,
-            title_background_color, title_background_opacity, is_active
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            title_background_color, title_background_opacity,
+            favorite_category_group_id, is_active
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [tenantId, level.code, ...levelParams]
         );
         levelId = Number(result.insertId || 0);
@@ -820,6 +940,8 @@ function getBonusRequirementTargets(levelRow, accountRow) {
       amount: levelRow.retention_amount == null ? null : Number(levelRow.retention_amount),
       orders: levelRow.retention_orders == null ? null : Number(levelRow.retention_orders),
       referrals: levelRow.retention_referrals == null ? null : Number(levelRow.retention_referrals),
+      bonusAccrued: levelRow.retention_bonus_accrued == null ? null : Number(levelRow.retention_bonus_accrued),
+      bonusRedeemed: levelRow.retention_bonus_redeemed == null ? null : Number(levelRow.retention_bonus_redeemed),
       matchCount: Number(levelRow.retention_match_count || 1),
     };
   }
@@ -828,6 +950,8 @@ function getBonusRequirementTargets(levelRow, accountRow) {
     amount: levelRow.requirement_amount == null ? null : Number(levelRow.requirement_amount),
     orders: levelRow.requirement_orders == null ? null : Number(levelRow.requirement_orders),
     referrals: levelRow.requirement_referrals == null ? null : Number(levelRow.requirement_referrals),
+    bonusAccrued: levelRow.requirement_bonus_accrued == null ? null : Number(levelRow.requirement_bonus_accrued),
+    bonusRedeemed: levelRow.requirement_bonus_redeemed == null ? null : Number(levelRow.requirement_bonus_redeemed),
     matchCount: Number(levelRow.requirement_match_count || 1),
   };
 }
@@ -838,6 +962,8 @@ function isBonusProgressComplete(progress) {
     [progress.amount_current, progress.amount_target],
     [progress.orders_current, progress.orders_target],
     [progress.referrals_current, progress.referrals_target],
+    [progress.bonus_accrued_current, progress.bonus_accrued_target],
+    [progress.bonus_redeemed_current, progress.bonus_redeemed_target],
   ].filter(([, target]) => Number(target || 0) > 0);
   if (!rows.length) return false;
   const required = Math.min(rows.length, Math.max(1, Math.floor(Number(progress.match_count || 1))));
@@ -869,7 +995,9 @@ async function loadBonusProgressByLevel(db, tenantId, customerId, accountRow, le
     const amountTarget = Math.max(0, Number(targets.amount || 0));
     const ordersTarget = Math.max(0, Math.floor(Number(targets.orders || 0)));
     const referralsTarget = Math.max(0, Math.floor(Number(targets.referrals || 0)));
-    if (!(amountTarget > 0) && !(ordersTarget > 0) && !(referralsTarget > 0)) continue;
+    const bonusAccruedTarget = Math.max(0, Number(targets.bonusAccrued || 0));
+    const bonusRedeemedTarget = Math.max(0, Number(targets.bonusRedeemed || 0));
+    if (!(amountTarget > 0) && !(ordersTarget > 0) && !(referralsTarget > 0) && !(bonusAccruedTarget > 0) && !(bonusRedeemedTarget > 0)) continue;
 
     const periodDays = Math.max(0, Math.floor(Number(levelRow.requirement_period_days || 0)));
     const periodStart = periodDays > 0 ? new Date(Date.now() - periodDays * 24 * 60 * 60 * 1000) : null;
@@ -903,6 +1031,16 @@ async function loadBonusProgressByLevel(db, tenantId, customerId, accountRow, le
           AND registered_at >= ?`,
       [tenantId, customerId, sinceAt]
     );
+    const [[bonusStats]] = await db.query(
+      `SELECT
+          COALESCE(SUM(CASE WHEN type IN ('accrual', 'join', 'level_up', 'referral_accrual') THEN amount ELSE 0 END), 0) AS bonus_accrued,
+          COALESCE(SUM(CASE WHEN type = 'redeem' THEN amount ELSE 0 END), 0) AS bonus_redeemed
+         FROM mkt_customer_bonus_transactions
+        WHERE tenant_id = ?
+          AND customer_id = ?
+          AND created_at >= ?`,
+      [tenantId, customerId, sinceAt]
+    );
 
     progressByLevel.set(Number(levelRow.id || 0), {
       scope: targets.scope,
@@ -914,6 +1052,10 @@ async function loadBonusProgressByLevel(db, tenantId, customerId, accountRow, le
       orders_target: ordersTarget || null,
       referrals_current: Number(referralStats?.referrals_count || 0),
       referrals_target: referralsTarget || null,
+      bonus_accrued_current: Number(bonusStats?.bonus_accrued || 0),
+      bonus_accrued_target: bonusAccruedTarget || null,
+      bonus_redeemed_current: Number(bonusStats?.bonus_redeemed || 0),
+      bonus_redeemed_target: bonusRedeemedTarget || null,
       match_count: Math.max(1, Number(targets.matchCount || 1)),
     });
   }

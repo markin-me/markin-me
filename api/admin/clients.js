@@ -160,7 +160,7 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
       id: Number(discount?.id || 0),
       discount_id: Number(discount?.id || 0) || null,
       kind: 'progress',
-      title: benefitText(discount?.title) || 'Накопительная акция',
+      title: benefitText(discount?.title) || 'Задание',
       description: benefitText(discount?.description) || `Прогресс: ${progressText}`,
       badge_text: progressText,
       apply_scope_text: `Следующая награда: ${rewardText}`,

@@ -54,6 +54,12 @@
       <div class="empty-text">Нажмите на первую карточку слева, чтобы настроить стиль и приглашения</div>
     </div>
 
+    <div id="bonusSettingsEmpty" class="empty-state hidden">
+      <div class="empty-icon"><i class="fas fa-cog"></i></div>
+      <div class="empty-title">Выберите настройки</div>
+      <div class="empty-text">Нажмите на карточку настроек слева</div>
+    </div>
+
     <div id="bonusReferralCardInfoWrap" class="banner-settings-panel hidden bonus-referral-card-settings">
       <div class="bonus-level-preview-wrap" id="bonusReferralCardPreviewWrap">
         <div class="bonus-level-preview-row">
@@ -189,28 +195,106 @@
       </section>
     </div>
 
-    <div id="bonusSettingsEmpty" class="empty-state hidden">
-      <div class="empty-icon"><i class="fas fa-cog"></i></div>
-      <div class="empty-title">Выберите пункт настроек</div>
-      <div class="empty-text">Нажмите на нужный раздел слева для его настройки</div>
+    <div id="bonusSettingsCoinWrap" class="banner-settings-panel hidden">
+      <div class="bonus-tariff-settings-grid">
+        <div class="bonus-tariff-settings-card">
+          <div class="bonus-tariff-settings-head">
+            <div class="bonus-tariff-settings-icon"><i class="fas fa-coins"></i></div>
+            <div class="bonus-tariff-settings-info">
+              <div class="bonus-tariff-settings-title">Дизайн монеты</div>
+              <div class="bonus-tariff-settings-subtitle">Настройка отображения бонусов</div>
+            </div>
+          </div>
+          <div class="bonus-tariff-settings-body">
+            <label class="bonus-tariff-settings-field">
+              <span>Название монеты</span>
+              <input class="control" id="bonusSettingsCoinNameInput" type="text" placeholder="Бонусы" />
+            </label>
+            <div class="bonus-tariff-settings-field">
+              <span>Курс бонусов</span>
+              <div class="bonus-coin-rate-row">
+                <input class="control bonus-coin-rate-input" id="bonusSettingsCoinPointAmountInput" type="text" inputmode="decimal" value="1" />
+                <span class="bonus-coin-rate-sep">Б =</span>
+                <input class="control bonus-coin-rate-input" id="bonusSettingsCoinRubleAmountInput" type="text" inputmode="decimal" value="1" />
+                <span class="bonus-coin-rate-sep">₽</span>
+              </div>
+            </div>
+            <div class="bonus-tariff-settings-field">
+              <span>Логотип монеты</span>
+              <div class="bonus-tariff-logo-preview-container">
+                <div class="bonus-brand-logo-preview clickable" id="bonusSettingsCoinLogoPreview" title="Нажмите для загрузки">
+                  <i class="fas fa-image"></i>
+                </div>
+                <input type="file" id="bonusSettingsCoinLogoInput" class="hidden" accept="image/*" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="bonusSettingsFavoriteCategoriesWrap" class="banner-settings-panel hidden">
+      <!-- Группы любимых категорий -->
     </div>
 
     <div id="bonusSettingsBrandWrap" class="banner-settings-panel hidden">
-       <section class="bonus-referrals-right-section">
-         <h3 class="bonus-referrals-right-title">Название программы</h3>
-         <input type="text" class="control" id="bonusSettingsProgramNameInput" placeholder="Введите название..." />
-       </section>
-
-       <section class="bonus-referrals-right-section">
-         <h3 class="bonus-referrals-right-title">Логотип</h3>
-         <div class="bonus-brand-logo-upload-wrap">
-            <div class="bonus-brand-logo-preview" id="bonusSettingsLogoPreview">
-               <i class="fas fa-image"></i>
+      <div class="bonus-tariff-settings-grid">
+        <!-- Base Tariff Section -->
+        <section class="bonus-tariff-section bonus-tariff-base">
+          <div class="bonus-tariff-header">
+            <div class="bonus-tariff-icon"><i class="fas fa-certificate"></i></div>
+            <div class="bonus-tariff-title-wrap">
+              <h3 class="bonus-tariff-title">Базовый тариф</h3>
+              <p class="bonus-tariff-subtitle">Настройки для бесплатного участия</p>
             </div>
-            <button type="button" class="btn btn-sm" id="bonusSettingsLogoUploadBtn">Загрузить логотип</button>
-            <input type="file" id="bonusSettingsLogoInput" class="hidden" accept="image/*" />
-         </div>
-       </section>
+          </div>
+          
+          <div class="bonus-tariff-body">
+            <div class="field-wrap">
+              <label class="field-label" for="bonusSettingsProgramNameInputBase">Название программы</label>
+              <input type="text" class="control" id="bonusSettingsProgramNameInputBase" placeholder="Например: Бонусы Маркина" />
+            </div>
+
+            <div class="field-wrap">
+              <label class="field-label">Логотип программы</label>
+              <div class="bonus-brand-logo-upload-container">
+                <div class="bonus-brand-logo-preview clickable" id="bonusSettingsLogoPreviewBase" title="Нажмите, чтобы загрузить логотип">
+                  <i class="fas fa-image"></i>
+                </div>
+                <input type="file" id="bonusSettingsLogoInputBase" class="hidden" accept="image/*" />
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Paid Tariff Section -->
+        <section class="bonus-tariff-section bonus-tariff-paid">
+          <div class="bonus-tariff-header">
+            <div class="bonus-tariff-icon"><i class="fas fa-crown"></i></div>
+            <div class="bonus-tariff-title-wrap">
+              <h3 class="bonus-tariff-title">Платный тариф</h3>
+              <p class="bonus-tariff-subtitle">Настройки для премиум уровней</p>
+            </div>
+          </div>
+          
+          <div class="bonus-tariff-body">
+            <div class="field-wrap">
+              <label class="field-label" for="bonusSettingsProgramNameInputPaid">Название программы</label>
+              <input type="text" class="control" id="bonusSettingsProgramNameInputPaid" placeholder="Например: Markin VIP" />
+            </div>
+
+            <div class="field-wrap">
+              <label class="field-label">Логотип программы</label>
+              <div class="bonus-brand-logo-upload-container">
+                <div class="bonus-brand-logo-preview clickable" id="bonusSettingsLogoPreviewPaid" title="Нажмите, чтобы загрузить логотип">
+                  <i class="fas fa-image"></i>
+                </div>
+                <input type="file" id="bonusSettingsLogoInputPaid" class="hidden" accept="image/*" />
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
     </div>
 
     <div id="filterEditorWrap" class="hidden">
@@ -286,7 +370,7 @@
               <button class="cash-payment-method-pill discount-choice-pill" type="button"
                 data-discount-mechanic-choice="loyalty_progress" aria-pressed="false">
                 <span class="cash-payment-method-pill-icon"><i class="fas fa-chart-line"></i></span>
-                <span class="cash-payment-method-pill-title">Накопительная</span>
+                <span class="cash-payment-method-pill-title">Задания</span>
               </button>
               <button class="cash-payment-method-pill discount-choice-pill" type="button"
                 data-discount-mechanic-choice="threshold" aria-pressed="false">
@@ -298,7 +382,7 @@
           <select class="control hidden" id="de_mechanic_type" name="mechanic_type">
             <option value="simple_discount">Скидка</option>
             <option value="buy_x_get_y">1+1</option>
-            <option value="loyalty_progress">Накопительная</option>
+            <option value="loyalty_progress">Задания</option>
             <option value="threshold">Пороговая</option>
           </select>
         </div>
@@ -1511,6 +1595,18 @@
               class="control bonus-level-rule-input bonus-level-percent-spinner-input" type="number" min="0" max="100"
               step="0.1" placeholder="0" autocomplete="off" />
           </label>
+          <label class="field-wrap">
+            <span class="field-label" for="bonusLevelFavoriteCategoriesBonusPercentInput">Доп % за любимые</span>
+            <input id="bonusLevelFavoriteCategoriesBonusPercentInput"
+              class="control bonus-level-rule-input bonus-level-percent-spinner-input" type="number" min="0" max="100"
+              step="1" placeholder="0" autocomplete="off" />
+          </label>
+          <label class="field-wrap">
+            <span class="field-label" for="bonusLevelFavoriteCategoriesLimitInput">Лимит категорий</span>
+            <input id="bonusLevelFavoriteCategoriesLimitInput"
+              class="control bonus-level-rule-input bonus-level-percent-spinner-input" type="number" min="0" max="10"
+              step="1" placeholder="0" autocomplete="off" />
+          </label>
         </div>
 
         <div class="field-wrap bonus-level-rules-switch-row">
@@ -1804,30 +1900,152 @@
   </div>
 </div>
 <style>
-.bonus-brand-logo-upload-wrap {
+.bonus-tariff-settings-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  padding: 20px;
+}
+
+.bonus-tariff-section {
+  background: var(--bg-primary, #ffffff);
+  border-radius: 16px;
+  border: 1px solid var(--border-color, #e5e7eb);
+  overflow: hidden;
+  transition: all 0.3s ease;
+  display: flex;
+  flex-direction: column;
+}
+
+.bonus-tariff-section:hover {
+  border-color: var(--primary-color, #ff6a00);
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+}
+
+.bonus-tariff-header {
+  padding: 20px;
   display: flex;
   align-items: center;
   gap: 16px;
-  margin-top: 12px;
+  border-bottom: 1px solid var(--border-color, #e5e7eb);
 }
+
+.bonus-tariff-base .bonus-tariff-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  background: #f3f4f6;
+  color: #6b7280;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+}
+
+.bonus-tariff-paid .bonus-tariff-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  background: #fff7ed;
+  color: #f97316;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+}
+
+.bonus-tariff-title-wrap {
+  display: flex;
+  flex-direction: column;
+}
+
+.bonus-tariff-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary, #111827);
+  margin: 0;
+}
+
+.bonus-tariff-subtitle {
+  font-size: 13px;
+  color: var(--text-muted, #6b7280);
+  margin: 2px 0 0 0;
+}
+
+.bonus-tariff-body {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  flex: 1;
+}
+
+.bonus-brand-logo-upload-container {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 8px;
+}
+
 .bonus-brand-logo-preview {
-  width: 64px;
-  height: 64px;
-  border-radius: 8px;
-  background: var(--bg-secondary, #f3f4f6);
+  width: 100px;
+  height: 100px;
+  border-radius: 16px;
+  background: var(--bg-secondary, #f9fafb);
   display: flex;
   align-items: center;
   justify-content: center;
   overflow: hidden;
-  border: 1px solid var(--border-color, #e5e7eb);
+  border: 1px dashed var(--border-color, #d1d5db);
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
 }
+
+.bonus-brand-logo-preview.clickable {
+  cursor: pointer;
+}
+
+.bonus-brand-logo-preview.clickable:hover {
+  border-color: var(--primary-color, #ff6a00);
+  background: #fff7ed;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(255, 106, 0, 0.1);
+}
+
+.bonus-brand-logo-preview.clickable:active {
+  transform: translateY(0);
+}
+
 .bonus-brand-logo-preview img {
   width: 100%;
   height: 100%;
   object-fit: contain;
+  padding: 8px;
 }
+
 .bonus-brand-logo-preview i {
   font-size: 24px;
   color: var(--text-muted, #9ca3af);
 }
+
+
+
+@media (max-width: 1024px) {
+  .bonus-tariff-settings-grid {
+    grid-template-columns: 1fr;
+  }
+}
+  .bonus-coin-rate-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .bonus-coin-rate-input {
+    width: 60px !important;
+    text-align: center;
+  }
+  .bonus-coin-rate-sep {
+    font-weight: 500;
+    color: var(--color-muted);
+  }
 </style>

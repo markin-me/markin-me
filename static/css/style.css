@@ -4962,9 +4962,9 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
   box-shadow:0 0 0 4px var(--primary-12), inset 0 1px 0 rgba(255,255,255,.55);
 }
 .settings-home-card.is-active{
-  border-color:var(--primary-45);
+  border-color:var(--color-border);
   background:var(--color-surface);
-  box-shadow:0 0 0 4px var(--primary-12), inset 0 1px 0 rgba(255,255,255,.55);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.55);
 }
 .site-panel .settings-home-card.is-active{
   border-color:var(--color-border);
@@ -5048,10 +5048,28 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
   flex:1 1 auto;
   min-height:0;
 }
+.settings-right-body > .settings-right-panel.info-card{
+  border:0;
+  border-radius:0;
+  padding:0;
+  background:transparent;
+  box-shadow:none;
+}
 .settings-right-panel{
   display:flex;
   flex-direction:column;
   gap:8px;
+}
+.settings-right-panel:not(.settings-right-panel-fixed-footer){
+  overflow:hidden;
+}
+.settings-right-panel:not(.settings-right-panel-fixed-footer) > :is(.settings-logo-grid, .settings-site-form, .settings-panel-scroll, .settings-list, form){
+  flex:1 1 auto;
+  min-height:0;
+  overflow-y:auto;
+  overflow-x:hidden;
+  align-content:start;
+  padding-bottom:8px;
 }
 .settings-right-panel-fixed-footer{
   display:flex;
@@ -6814,6 +6832,66 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
 .settings-sound-actions{display:flex;gap:8px}
 .settings-site-form{display:grid;gap:12px}
 .settings-site-field .field-label{margin-bottom:6px;display:block}
+.settings-site-menu-item-row{
+  display:grid;
+  grid-template-columns:72px minmax(0,1fr);
+  align-items:end;
+  gap:12px;
+}
+.settings-site-menu-icon-btn{
+  width:72px;
+  aspect-ratio:1 / 1;
+  border:1px dashed var(--color-border);
+  border-radius:18px;
+  background:var(--color-surface-2);
+  color:var(--color-text);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:0;
+  overflow:hidden;
+  cursor:pointer;
+  transition:border-color var(--dur-fast) var(--ease-smooth), background var(--dur-fast) var(--ease-smooth);
+}
+.settings-site-menu-icon-btn:hover{
+  border-color:var(--primary-45);
+  background:var(--primary-10);
+}
+.settings-site-menu-icon-btn i{
+  font-size:26px;
+}
+.settings-site-menu-icon-img{
+  width:100%;
+  height:100%;
+  object-fit:contain;
+}
+.settings-site-menu-title-field{
+  min-width:0;
+}
+#settingsSiteMenuItemsPanel{
+  overflow:hidden;
+}
+#settingsSiteMenuItemsPanel .settings-site-form{
+  flex:1 1 auto;
+  min-height:0;
+  overflow-y:auto;
+  overflow-x:hidden;
+  align-content:start;
+  padding-bottom:8px;
+}
+.settings-site-menu-title-head{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  margin-bottom:6px;
+}
+.settings-site-menu-title-head .field-label{
+  margin-bottom:0;
+}
+.settings-site-menu-visible-switch{
+  flex:0 0 auto;
+}
 .settings-site-inline-switch{
   display:flex;
   align-items:center;
@@ -18349,6 +18427,15 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   color:var(--color-text);
 }
 
+.bonus-range-editor-footer-actions{
+  display:flex;
+  align-items:center;
+  gap:10px;
+}
+.bonus-range-editor-footer-actions button:not(.is-danger){
+  flex:1;
+}
+
 .banners-placement-meta{
   margin-top:4px;
   font-size:12px;
@@ -29677,3 +29764,8 @@ body.page-new-order .page-col-left > .panel:not(#cashierQueuePanel){
 .bonus-settings-group { margin-bottom: 24px; }
 .bonus-settings-group-title { font-size: 14px; font-weight: 600; margin-bottom: 12px; color: var(--color-text); }
 .bonus-settings-field { padding: 8px 0; }
+
+.bonus-level-favorite-categories-pill.is-empty{border-style:dashed;cursor:pointer;background:var(--color-surface);transition:border-color var(--dur-fast), background var(--dur-fast);}
+.bonus-level-favorite-categories-pill.is-empty:hover{border-color:var(--color-primary);background:var(--primary-10);}
+.bonus-level-favorite-categories-plus i{color:var(--color-text-muted);font-size:14px;}
+.bonus-level-favorite-categories-pill.is-empty:hover .bonus-level-favorite-categories-plus i{color:var(--color-primary);}

@@ -9190,7 +9190,7 @@
     const mechanicType = normalizeRightOrderBenefitDiscountMechanicType(discount);
     if (mechanicType === "buy_x_get_y") return "Акция 1+1";
     if (mechanicType === "threshold") return "Пороговая акция";
-    if (mechanicType === "loyalty_progress") return "Накопительная акция";
+    if (mechanicType === "loyalty_progress") return "Задание";
     const applyTo = String(discount?.apply_to || fallbackItem?.apply_to || "").trim().toLowerCase();
     const targetMap = {
       order: "весь заказ",
@@ -11335,7 +11335,7 @@
     const discountSection = createRightOrderBenefitsSection("Скидки", "Для этого заказа доступных скидок нет.");
     const promoSection = createRightOrderBenefitsSection("Промокоды", "Для этого заказа доступных промокодов нет.");
     const giftSection = createRightOrderBenefitsSection("Подарки", "Здесь появятся доступные подарки.", { horizontal: true });
-    const progressSection = createRightOrderBenefitsSection("Накопления", "Здесь появится прогресс накопительных акций.");
+    const progressSection = createRightOrderBenefitsSection("Задания", "Здесь появится прогресс заданий.");
     const completedSection = createRightOrderBenefitsSection("Завершенные", "Здесь появятся завершённые выгоды.");
 
     shell.appendChild(discountSection.section);

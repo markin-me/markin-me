@@ -249,6 +249,7 @@
   const elNavCart = $("#shopNavCart");
   const elNavProfile = $("#shopNavProfile");
   const elNavFav = $("#shopNavFav");
+  const elNavChat = $("#shopCompanyChatOpenBtn");
   const elCatalogDeliveryWidget = $("#shopCatalogDeliveryWidget");
   const elHomeBonusCard = $("#shopHomeBonusCard");
 
@@ -590,8 +591,16 @@
     }).format(safe);
   }
 
+  function getShopBonusCoinIconHtml(size = '1.1em', margin = '4px') {
+    const logo = state.homeBonusConfig?.settings?.bonus_coin_logo;
+    if (logo) {
+      return `<img src="${escapeHtml(logo)}" class="bonus-coin-icon" style="width:${size};height:${size};display:inline-block;vertical-align:middle;margin-top:-2px;margin-left:${margin};" alt="" />`;
+    }
+    return '₽';
+  }
+
   function formatShopBonusMoney(value) {
-    return `${formatShopBonusNumber(Math.max(0, Math.floor(Number(value || 0))))} ₽`;
+    return `${formatShopBonusNumber(Math.max(0, Math.floor(Number(value || 0))))} ${getShopBonusCoinIconHtml()}`;
   }
 
   function formatShopBonusPercent(value, fallback = 0) {
@@ -630,7 +639,7 @@
     const percentText = minPercent === maxPercent
       ? `+${formatShopBonusPercent(minPercent)}`
       : `от ${formatShopBonusPercent(minPercent)} до ${formatShopBonusPercent(maxPercent)}`;
-    return `от ${formatShopBonusMoney(first.amount)} и выше / ${percentText}`;
+    return `от ${money(first.amount)} и выше / ${percentText}`;
   }
 
   function getShopBonusRangeDetails(level) {
@@ -638,8 +647,8 @@
     return rows.map((row, index) => {
       const next = rows[index + 1] || null;
       const amountText = next
-        ? `от ${formatShopBonusMoney(row.amount)} до ${formatShopBonusMoney(Math.max(row.amount, next.amount - 1))}`
-        : `от ${formatShopBonusMoney(row.amount)} и более`;
+        ? `от ${money(row.amount)} до ${money(Math.max(row.amount, next.amount - 1))}`
+        : `от ${money(row.amount)} и более`;
       return `${index + 1}. ${amountText} / +${formatShopBonusPercent(row.percent)}`;
     });
   }
@@ -693,20 +702,21 @@
     }
     const section = document.createElement("section");
     section.className = "shop-cart-bonus-redeem-section";
+    const coinName = state.homeBonusConfig?.settings?.bonus_coin_name || "Бонусы";
     section.innerHTML = `
       <div class="shop-bonus-level-balance-card shop-cart-bonus-redeem-card">
         <div class="shop-bonus-level-balance-main">
-          <div class="shop-bonus-level-balance-label">\u0411\u043e\u043d\u0443\u0441\u044b</div>
-          <div class="shop-bonus-level-balance-value">${escapeHtml(formatShopBonusMoney(balance))}</div>
+          <div class="shop-bonus-level-balance-label">${escapeHtml(coinName)}</div>
+          <div class="shop-bonus-level-balance-value">${formatShopBonusMoney(balance)}</div>
         </div>
         <div class="shop-cart-bonus-redeem-available">
-          <div class="shop-cart-bonus-redeem-available-label">\u041c\u043e\u0436\u043d\u043e \u0441\u043f\u0438\u0441\u0430\u0442\u044c</div>
-          <div class="shop-cart-bonus-redeem-available-value" data-cart-bonus-redeem-available>${escapeHtml(formatShopBonusMoney(0))}</div>
+          <div class="shop-cart-bonus-redeem-available-label">Можно списать</div>
+          <div class="shop-cart-bonus-redeem-available-value" data-cart-bonus-redeem-available>${formatShopBonusMoney(0)}</div>
         </div>
         <label class="shop-cart-bonus-redeem-switch${canRedeem ? "" : " is-disabled"}">
           <input type="checkbox" data-cart-bonus-redeem-toggle ${state.cartBonusRedeemEnabled && canRedeem ? "checked" : ""} ${canRedeem ? "" : "disabled"} />
           <span class="shop-cart-bonus-redeem-slider" aria-hidden="true"></span>
-          <span>\u0421\u043f\u0438\u0441\u0430\u0442\u044c</span>
+          <span>Списать</span>
         </label>
       </div>
     `;
@@ -775,12 +785,27 @@
       : `color:${escapeHtml(titleColor)};background:${escapeHtml(buildShopRgbaColor(level?.title_background_color || "#ffffff", level?.title_background_opacity))};padding:2px 10px;border-radius:999px;${showTitle ? "" : "display:none;"}`;
     const qrStyle = level?.qr_enabled === false ? "display:none;" : "";
 
+    const coinName = state.homeBonusConfig?.settings?.bonus_coin_name || "Бонусы";
+    const isPaid = level?.access_type === "paid";
+    const programName = isPaid
+      ? (state.homeBonusConfig?.settings?.bonus_program_name_paid || state.homeBonusConfig?.settings?.bonus_program_name || "")
+      : (state.homeBonusConfig?.settings?.bonus_program_name_base || state.homeBonusConfig?.settings?.bonus_program_name || "");
+    const programLogo = isPaid
+      ? (state.homeBonusConfig?.settings?.bonus_program_logo_paid || state.homeBonusConfig?.settings?.bonus_program_logo || "")
+      : (state.homeBonusConfig?.settings?.bonus_program_logo_base || state.homeBonusConfig?.settings?.bonus_program_logo || "");
+    const levelTitle = level?.title || "Уровень";
+    const logoHtml = programLogo ? `<img src="${escapeHtml(programLogo)}" style="width:1.1em;height:1.1em;border-radius:2px;margin-right:4px;object-fit:contain;display:inline-block;vertical-align:middle;">` : "";
+
     return `
       <div class="bonus-level-preview-card" style="background:${escapeHtml(baseColor)};">
         <div class="bonus-level-preview-main" style="background:${escapeHtml(mainColor)};color:${escapeHtml(contentColor)};">
-          <div class="bonus-level-preview-title" style="${titleStyle}">${escapeHtml(level?.title || "Уровень")}</div>
-          <div class="bonus-level-preview-bonus-label" style="color:${escapeHtml(contentColor)};">Бонусы</div>
-          <div class="bonus-level-preview-bonus-value" style="color:${escapeHtml(contentColor)};">0 ₽</div>
+          <div class="bonus-level-preview-title" style="${titleStyle}">
+            ${logoHtml}
+            <span style="font-weight:600;margin-right:4px;">${escapeHtml(programName)}</span>
+            <span style="opacity:0.8;">${escapeHtml(levelTitle)}</span>
+          </div>
+          <div class="bonus-level-preview-bonus-label" style="color:${escapeHtml(contentColor)};">${escapeHtml(coinName)}</div>
+          <div class="bonus-level-preview-bonus-value" style="color:${escapeHtml(contentColor)};">0 ${getShopBonusCoinIconHtml('1em', '2px')}</div>
           <div class="bonus-level-preview-qr" style="${qrStyle}"><span>QR</span></div>
         </div>
         <div class="bonus-level-preview-sub" style="color:${escapeHtml(contentColor)};">
@@ -853,7 +878,7 @@
       <div class="shop-bonus-cards-advantage-row">
         <div class="shop-bonus-cards-advantage-label">${escapeHtml(label)}</div>
         <div class="shop-bonus-cards-advantage-value">
-          <span>${escapeHtml(value)}</span>
+          <span>${value}</span>
           ${delta ? `<span class="shop-bonus-cards-advantage-delta">${escapeHtml(delta)}</span>` : ""}
           ${info ? '<button class="shop-bonus-cards-info-btn" type="button" data-bonus-range-info aria-label="Подробнее">i</button>' : ""}
         </div>
@@ -945,7 +970,7 @@
         <div class="shop-bonus-cards-progress-icon" aria-hidden="true">${escapeHtml(row.icon)}</div>
         <div class="shop-bonus-cards-progress-main">
           <div class="shop-bonus-cards-progress-title">${escapeHtml(row.title)}</div>
-          <div class="shop-bonus-cards-progress-value">${escapeHtml(row.value)}</div>
+          <div class="shop-bonus-cards-progress-value">${row.value}</div>
           <div class="shop-bonus-cards-progress-bar" aria-hidden="true">
             <div class="shop-bonus-cards-progress-fill" style="width:${ratio}%;"></div>
           </div>
@@ -964,11 +989,15 @@
     const amountCurrent = Math.max(0, Number(progress.amount_current || 0));
     const ordersCurrent = Math.max(0, Math.floor(Number(progress.orders_current || 0)));
     const referralsCurrent = Math.max(0, Math.floor(Number(progress.referrals_current || 0)));
+    const bonusAccrued = Math.max(0, Number(progress.bonus_accrued_target || level?.requirement_bonus_accrued || 0));
+    const bonusRedeemed = Math.max(0, Number(progress.bonus_redeemed_target || level?.requirement_bonus_redeemed || 0));
+    const bonusAccruedCurrent = Math.max(0, Number(progress.bonus_accrued_current || 0));
+    const bonusRedeemedCurrent = Math.max(0, Number(progress.bonus_redeemed_current || 0));
 
     if (amount > 0) rows.push({
       icon: "💰",
       title: "Сумма заказов",
-      value: `${formatShopBonusMoney(amountCurrent)} / ${formatShopBonusMoney(amount)}`,
+      value: `${money(amountCurrent)} / ${money(amount)}`,
       current: amountCurrent,
       target: amount,
     });
@@ -985,6 +1014,20 @@
       value: `${referralsCurrent} / ${referrals}`,
       current: referralsCurrent,
       target: referrals,
+    });
+    if (bonusAccrued > 0) rows.push({
+      icon: "+",
+      title: "Накопить бонусов",
+      value: `${formatShopBonusMoney(bonusAccruedCurrent)} / ${formatShopBonusMoney(bonusAccrued)}`,
+      current: bonusAccruedCurrent,
+      target: bonusAccrued,
+    });
+    if (bonusRedeemed > 0) rows.push({
+      icon: "-",
+      title: "Потратить бонусов",
+      value: `${formatShopBonusMoney(bonusRedeemedCurrent)} / ${formatShopBonusMoney(bonusRedeemed)}`,
+      current: bonusRedeemedCurrent,
+      target: bonusRedeemed,
     });
     if (!rows.length) return "";
     const matchCount = Math.min(rows.length, Math.max(1, Math.floor(Number(progress.match_count || level?.requirement_match_count || 1))));
@@ -1043,6 +1086,10 @@
     if (!levels.length) {
       wrap.innerHTML = "";
       return;
+    }
+    if (data?.settings?.bonus_program_name) {
+      const modalTitle = document.querySelector(".app-modal-title");
+      if (modalTitle) modalTitle.textContent = data.settings.bonus_program_name;
     }
 
     wrap.innerHTML = `
@@ -1129,7 +1176,7 @@
     sheetNavigationState.screen = "main";
     sheetNavigationState.data = null;
     window.AppModal.open({
-      title: "Бонусные карты",
+      title: state.homeBonusConfig?.settings?.bonus_program_name || "Бонусная программа",
       content: wrap,
       showCancel: false,
       showSave: false,
@@ -1201,7 +1248,7 @@
           ${customerPhoto ? `<img src="${escapeHtml(customerPhoto)}" alt="" loading="lazy" />` : '<i class="fas fa-user"></i>'}
         </div>
         <div class="shop-bonus-level-progress-main">
-          <div class="shop-bonus-level-progress-name">${escapeHtml(customerName)}</div>
+          <div class="shop-bonus-level-progress-name">${escapeHtml(customerName)} • <span style="font-weight:400;opacity:0.8;">${escapeHtml(level?.title || "Уровень")}</span></div>
           <div class="shop-bonus-level-progress-track" aria-label="Прогресс до следующего уровня">
             <div class="shop-bonus-level-progress-fill" style="width:${escapeHtml(String(progressPercent))}%;"></div>
           </div>
@@ -1246,7 +1293,7 @@
           const amount = Math.abs(Number(item?.amount || 0));
           const reason = String(item?.reason || item?.level_title || meta.label).trim();
           const dateText = formatShopBonusDateTime(item?.created_at);
-          const amountText = amount > 0 ? `${meta.sign}${formatShopBonusMoney(amount)}` : "0 ₽";
+          const amountText = amount > 0 ? `${meta.sign}${formatShopBonusMoney(amount)}` : `0 ${getShopBonusCoinIconHtml()}`;
           return `
             <div class="shop-bonus-accrual-row">
               <div class="shop-bonus-accrual-main">
@@ -1254,7 +1301,7 @@
                 <div class="shop-bonus-accrual-subtitle">${escapeHtml(reason)}</div>
               </div>
               <div class="shop-bonus-accrual-side">
-                <div class="shop-bonus-accrual-amount is-${escapeHtml(meta.tone)}">${escapeHtml(amountText)}</div>
+                <div class="shop-bonus-accrual-amount is-${escapeHtml(meta.tone)}">${amountText}</div>
                 <div class="shop-bonus-accrual-date">${escapeHtml(dateText)}</div>
               </div>
             </div>
@@ -1393,6 +1440,86 @@
     return `<span class="shop-bonus-category-icon" title="${escapeHtml(title)}"><i class="fas fa-tag" aria-hidden="true"></i></span>`;
   }
 
+  function buildHomeBonusSiteMenuTitleHtml(title) {
+    const words = String(title || "").trim().split(/\s+/).filter(Boolean).slice(0, 2);
+    if (!words.length) return "";
+    return words.map((word) => `<span>${escapeHtml(word)}</span>`).join("");
+  }
+
+  function getHomeBonusSiteMenuBenefitsSection(key) {
+    const normalizedKey = String(key || "").trim();
+    if (normalizedKey === "promocodes") return "promos";
+    if (normalizedKey === "discounts") return "discounts";
+    if (normalizedKey === "gifts") return "gifts";
+    if (normalizedKey === "tasks") return "progress";
+    return "";
+  }
+
+  function buildHomeBonusSiteMenuRowHtml(config = state.homeBonusConfig) {
+    const allowedKeys = new Set(["benefits", "promocodes", "discounts", "gifts", "tasks"]);
+    const items = (Array.isArray(config?.site_menu_items) ? config.site_menu_items : [])
+      .filter((item) => item && allowedKeys.has(String(item.key || "")) && item.enabled !== false)
+      .sort((a, b) => Number(a?.sort_order || 0) - Number(b?.sort_order || 0));
+    if (!items.length) return "";
+    return `
+      <div class="shop-bonus-site-menu-scroll no-scrollbar" aria-label="\u041f\u0443\u043d\u043a\u0442\u044b \u043c\u0435\u043d\u044e">
+        ${items.map((item) => {
+          const title = String(item?.title || "").trim();
+          const iconUrl = String(item?.icon_url || "").trim();
+          const iconClass = String(item?.icon_class || "fas fa-circle").trim();
+          const benefitsSection = getHomeBonusSiteMenuBenefitsSection(item?.key);
+          return `
+            <button class="shop-bonus-site-menu-item" type="button" data-open-shop-benefits-section="${escapeHtml(benefitsSection)}">
+              <span class="shop-bonus-site-menu-icon" aria-hidden="true">
+                ${iconUrl
+                  ? `<img src="${escapeHtml(iconUrl)}" alt="" loading="lazy" />`
+                  : `<i class="${escapeHtml(iconClass)}"></i>`}
+              </span>
+              <span class="shop-bonus-site-menu-title">${buildHomeBonusSiteMenuTitleHtml(title)}</span>
+            </button>
+          `;
+        }).join("")}
+      </div>
+    `;
+  }
+
+  async function openHomeBonusSiteMenuBenefits(section = "", sourceLevel = null) {
+    try {
+      await ensureShopLateLoaded();
+      if (typeof window.openShopBenefitsSheet === "function") {
+        await window.openShopBenefitsSheet({
+          sourceScreen: "bonus-level",
+          section: String(section || "").trim(),
+          returnContext: {
+            levelId: Number(sourceLevel?.id || 0) || null,
+          },
+        });
+      }
+    } catch (err) {
+      console.error("open shop benefits from bonus menu error:", err);
+      showToast("Не удалось открыть выгоды");
+    }
+  }
+
+  function bindHomeBonusSiteMenuRow(wrap, sourceLevel = null) {
+    if (!wrap || !wrap.querySelectorAll) return;
+    wrap.querySelectorAll("[data-open-shop-benefits-section]").forEach((button) => {
+      if (button.dataset.shopBenefitsBound === "1") return;
+      button.addEventListener("click", () => {
+        void openHomeBonusSiteMenuBenefits(button.dataset.openShopBenefitsSection || "", sourceLevel);
+      });
+      button.dataset.shopBenefitsBound = "1";
+    });
+  }
+
+  function isHomeBonusFavoriteCategoriesEnabled(level) {
+    return level?.favorite_categories_enabled === true
+      && Number(level?.favorite_category_group_id || 0) > 0
+      && Math.max(0, Math.floor(Number(level?.favorite_categories_limit || 0))) > 0
+      && Math.max(0, Number(level?.favorite_categories_bonus_percent || 0)) > 0
+      && Math.max(0, Math.floor(Number(level?.favorite_categories_count || 0))) > 0;
+  }
+
   function buildHomeBonusFavoriteCategoriesSlotHtml(level) {
     const levelId = Number(level?.id || 0);
     const cache = getHomeBonusFavoriteCategoriesCache(levelId);
@@ -1427,6 +1554,7 @@
     if (!window.AppModal || typeof window.AppModal.open !== "function") return;
     const levelId = Number(level?.id || 0);
     if (!(levelId > 0)) return;
+    if (!isHomeBonusFavoriteCategoriesEnabled(level)) return;
     const wrap = document.createElement("div");
     wrap.className = "shop-cart-sheet shop-bonus-cards-sheet shop-bonus-favorite-categories-sheet";
     const renderLoading = () => {
@@ -1549,6 +1677,7 @@
     if (!window.AppModal || typeof window.AppModal.open !== "function") return;
     const wrap = document.createElement("div");
     wrap.className = "shop-cart-sheet shop-bonus-cards-sheet shop-bonus-cashback-sheet";
+    const coinName = state.homeBonusConfig?.settings?.bonus_coin_name || "Бонусы";
     
     const favoriteBonus = Math.max(0, Number(level?.favorite_categories_bonus_percent || 0));
     const favoriteLimit = Math.max(0, Math.floor(Number(level?.favorite_categories_limit || 0)));
@@ -1579,9 +1708,9 @@
         </div>
 
         <div class="shop-bonus-level-metric-card" style="width: 100%; margin-bottom: 12px; min-height: 80px;">
-          <div class="shop-bonus-level-metric-label">Бонусы за сумму заказа</div>
+          <div class="shop-bonus-level-metric-label">${escapeHtml(coinName)} за сумму заказа</div>
           <div class="shop-bonus-level-metric-value" style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
-             <span style="font-size: 0.85em; text-align: left; padding-right: 10px;">${escapeHtml(getShopBonusRangeSummary(level))}</span>
+             <span style="font-size: 0.85em; text-align: left; padding-right: 10px;">${getShopBonusRangeSummary(level)}</span>
              ${getShopBonusRanges(level).length > 0 ? '<button type="button" class="shop-bonus-range-info-btn" data-bonus-ranges-info-btn style="background: #f0f0f0; border: none; border-radius: 50%; width: 28px; height: 28px; color: #666; flex-shrink: 0; display: flex; align-items: center; justify-content: center; padding: 0;"><i class="fas fa-info" style="font-size: 12px;"></i></button>' : ""}
           </div>
         </div>
@@ -1677,20 +1806,22 @@
     const favoriteLimit = Math.max(0, Math.floor(Number(level?.favorite_categories_limit || 0)));
     const favoriteBonusText = formatShopBonusPercent(level?.favorite_categories_bonus_percent, 0);
     const favoriteCategoriesText = `${favoriteLimit} категорий · ${favoriteBonusText}`;
+    const favoriteCategoriesEnabled = isHomeBonusFavoriteCategoriesEnabled(level);
     const wrap = document.createElement("div");
     wrap.className = "shop-cart-sheet shop-bonus-cards-sheet shop-bonus-level-sheet";
+    const coinName = state.homeBonusConfig?.settings?.bonus_coin_name || "Бонусы";
     wrap.innerHTML = `
       ${buildHomeBonusLevelProgressHtml(level)}
       <div class="shop-bonus-level-balance-card">
         <div class="shop-bonus-level-balance-main">
-          <div class="shop-bonus-level-balance-label">\u0411\u043e\u043d\u0443\u0441\u044b</div>
-          <div class="shop-bonus-level-balance-value">${escapeHtml(formatShopBonusMoney(getBonusLevelPreviewBalance(level)))}</div>
+          <div class="shop-bonus-level-balance-label">${escapeHtml(coinName)}</div>
+          <div class="shop-bonus-level-balance-value">${formatShopBonusMoney(getBonusLevelPreviewBalance(level))}</div>
         </div>
         <button class="shop-bonus-level-accruals-link" type="button">Начисления &gt;</button>
       </div>
     `;
     wrap.insertAdjacentHTML("beforeend", `
-      <div class="shop-bonus-level-metric-row">
+      <div class="shop-bonus-level-metric-row${favoriteCategoriesEnabled ? "" : " shop-bonus-level-metric-row--single"}">
         <div class="shop-bonus-level-metric-card" data-open-bonus-cashback style="cursor:pointer;">
           <div class="shop-bonus-level-metric-label">Кэшбек</div>
           <div class="shop-bonus-level-metric-value">
@@ -1698,19 +1829,20 @@
             <span>${escapeHtml(formatShopBonusPercent(level?.cashback_percent, 0))}</span>
           </div>
         </div>
-        <div class="shop-bonus-level-metric-card">
+        ${favoriteCategoriesEnabled ? `<div class="shop-bonus-level-metric-card">
           <div class="shop-bonus-level-metric-label">${escapeHtml(favoriteCategoriesText)}</div>
           <div data-bonus-favorite-categories-slot>
             ${buildHomeBonusFavoriteCategoriesSlotHtml(level)}
           </div>
-        </div>
+        </div>` : ""}
       </div>
+      ${buildHomeBonusSiteMenuRowHtml()}
     `);
     sheetNavigationState.type = "bonus-level";
     sheetNavigationState.screen = "main";
     sheetNavigationState.data = { levelId: Number(level?.id || 0) || null };
     window.AppModal.open({
-      title,
+      title: state.homeBonusConfig?.settings?.bonus_program_name || "Бонусная программа",
       content: wrap,
       showCancel: false,
       showSave: false,
@@ -1747,13 +1879,24 @@
     wrap.querySelector("[data-open-bonus-cashback]")?.addEventListener("click", () => {
       openHomeBonusCashbackSheet(level);
     });
-    updateHomeBonusFavoriteCategoriesSlot(wrap, level);
-    void loadHomeBonusFavoriteCategories(level).then(() => {
+    bindHomeBonusSiteMenuRow(wrap, level);
+    if (favoriteCategoriesEnabled) {
       updateHomeBonusFavoriteCategoriesSlot(wrap, level);
-    }).catch((err) => {
-      console.error("load bonus favorite categories error:", err);
-    });
+      void loadHomeBonusFavoriteCategories(level).then(() => {
+        updateHomeBonusFavoriteCategoriesSlot(wrap, level);
+      }).catch((err) => {
+        console.error("load bonus favorite categories error:", err);
+      });
+    }
   }
+
+  window.returnToShopBonusLevelSheet = function returnToShopBonusLevelSheet(levelId = null) {
+    const numericLevelId = Number(levelId || 0);
+    const levels = Array.isArray(state.homeBonusConfig?.levels) ? state.homeBonusConfig.levels : [];
+    const level = levels.find((item) => Number(item?.id || 0) === numericLevelId)
+      || getHomeBonusFirstLevel(state.homeBonusConfig);
+    if (level) openHomeBonusLevelSheet(level);
+  };
 
   function bindHomeBonusLevelTitle(level) {
     const titleEl = elHomeBonusCard?.querySelector?.(".bonus-level-preview-title");
@@ -2844,7 +2987,7 @@
     if (!active) return null;
     const raw = String(active.getAttribute("data-tab") || "").trim().toLowerCase();
     if (raw === "categories") return "menu";
-    if (raw === "home" || raw === "menu" || raw === "benefits" || raw === "cart" || raw === "fav" || raw === "profile") {
+    if (raw === "home" || raw === "menu" || raw === "benefits" || raw === "cart" || raw === "fav" || raw === "chat" || raw === "profile") {
       return raw;
     }
     return null;
@@ -2924,7 +3067,7 @@
     if (panelName === "benefits") {
       if (!isCartSheetOpen) return "nav";
       if (benefitsSourceScreen === "nav") return "benefits-nav-actions";
-      if (benefitsSourceScreen === "cart-service") return "nav";
+      if (benefitsSourceScreen === "cart-service" || benefitsSourceScreen === "bonus-level") return "nav";
       return "benefits-actions";
     }
     if (panelName === "checkout") return isCartSheetOpen ? "checkout-actions" : "nav";
@@ -2965,7 +3108,7 @@
     const normalizeTab = (rawTab) => {
       const t = String(rawTab || "").toLowerCase();
       if (t === "categories") return "menu";
-      if (t === "home" || t === "menu" || t === "benefits" || t === "cart" || t === "fav" || t === "profile") return t;
+      if (t === "home" || t === "menu" || t === "benefits" || t === "cart" || t === "fav" || t === "chat" || t === "profile") return t;
       return "menu";
     };
 
@@ -2976,6 +3119,7 @@
       benefits: elNavCategories,
       cart: elNavCart,
       fav: elNavFav,
+      chat: elNavChat,
       profile: elNavProfile,
     };
 
@@ -3341,6 +3485,13 @@
       const benefitsBackScreen = String(openCartSheetCtx?.benefitsSourceScreen || "").trim().toLowerCase();
       if (benefitsBackScreen === "nav") {
         closeShopSheetIfOpen();
+      } else if (benefitsBackScreen === "bonus-level") {
+        const levelId = Number(openCartSheetCtx?.benefitsReturnContext?.levelId || sheetNavigationState?.data?.returnContext?.levelId || 0);
+        if (typeof window.returnToShopBonusLevelSheet === "function") {
+          window.returnToShopBonusLevelSheet(levelId);
+        } else {
+          closeShopSheetIfOpen();
+        }
       } else if (benefitsBackScreen === "cart" || benefitsBackScreen === "cart-service") {
         showCartSheetScreen();
       } else {
@@ -7326,7 +7477,7 @@
         </div>
       `;
       const balanceEl = elHomeBonusCard.querySelector(".shop-home-bonus-card__preview .bonus-level-preview-bonus-value");
-      if (balanceEl) balanceEl.textContent = formatShopBonusMoney(getBonusLevelPreviewBalance(level));
+      if (balanceEl) balanceEl.innerHTML = formatShopBonusMoney(getBonusLevelPreviewBalance(level));
       if (level) bindHomeBonusLevelTitle(level);
       elHomeBonusCard.classList.remove("hidden");
       return;
@@ -7346,10 +7497,24 @@
     const qrStyle = level?.qr_enabled === false ? "display:none;" : "";
     const actionText = "Присоединиться";
 
+    const isPaid = level?.access_type === "paid";
+    const programName = isPaid
+      ? (state.homeBonusConfig?.settings?.bonus_program_name_paid || state.homeBonusConfig?.settings?.bonus_program_name || "")
+      : (state.homeBonusConfig?.settings?.bonus_program_name_base || state.homeBonusConfig?.settings?.bonus_program_name || "");
+    const programLogo = isPaid
+      ? (state.homeBonusConfig?.settings?.bonus_program_logo_paid || state.homeBonusConfig?.settings?.bonus_program_logo || "")
+      : (state.homeBonusConfig?.settings?.bonus_program_logo_base || state.homeBonusConfig?.settings?.bonus_program_logo || "");
+    const levelTitle = level?.title || "Уровень";
+    const logoHtml = programLogo ? `<img src="${escapeHtml(programLogo)}" style="width:1.1em;height:1.1em;border-radius:2px;margin-right:4px;object-fit:contain;display:inline-block;vertical-align:middle;">` : "";
+
     const bonusCardHtml = level ? `
       <div class="bonus-level-preview-card shop-home-bonus-card__preview" style="background:${escapeHtml(baseColor)};">
         <div class="bonus-level-preview-main" style="background:${escapeHtml(mainColor)};color:${escapeHtml(contentColor)};">
-          <div class="bonus-level-preview-title" style="${titleStyle}">${escapeHtml(level.title || "Уровень")}</div>
+          <div class="bonus-level-preview-title" style="${titleStyle}">
+            ${logoHtml}
+            <span style="font-weight:600;margin-right:4px;">${escapeHtml(programName)}</span>
+            <span style="opacity:0.8;">${escapeHtml(levelTitle)}</span>
+          </div>
           <button class="shop-home-bonus-card__action" type="button">${escapeHtml(actionText)}</button>
           <div class="bonus-level-preview-qr" style="${qrStyle}"><span>QR</span></div>
         </div>

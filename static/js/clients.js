@@ -723,17 +723,22 @@
           favoriteCategoriesBonusPercent: normalizeNumberInputValue(item?.favoriteCategoriesBonusPercent, 0),
           favoriteCategoriesLimit: normalizeNumberInputValue(item?.favoriteCategoriesLimit, 0),
           favoriteCategoryIds: normalizeBonusLevelFavoriteCategoryIds(item?.favoriteCategoryIds),
+          favoriteCategoryGroupId: (item?.favoriteCategoryGroupId != null && !isNaN(parseInt(item.favoriteCategoryGroupId))) ? Math.max(0, parseInt(item.favoriteCategoryGroupId)) : null,
           requirementAmount: normalizeBonusLevelRequirementValue(item?.requirementAmount),
           requirementMode: normalizeBonusLevelRequirementMode(item?.requirementMode),
           requirementOrders: normalizeBonusLevelRequirementValue(item?.requirementOrders),
           requirementReferralMode: normalizeBonusLevelRequirementMode(item?.requirementReferralMode),
           requirementReferrals: normalizeBonusLevelRequirementValue(item?.requirementReferrals),
+          requirementBonusAccrued: normalizeBonusLevelRequirementValue(item?.requirementBonusAccrued),
+          requirementBonusRedeemed: normalizeBonusLevelRequirementValue(item?.requirementBonusRedeemed),
           requirementMatchCount: Math.max(1, normalizeNumberInputValue(item?.requirementMatchCount, 1)),
           requirementPeriodDays: normalizeBonusLevelRequirementValue(item?.requirementPeriodDays),
           retentionStrategy: normalizeBonusLevelRetentionStrategy(item?.retentionStrategy || (
             normalizeBonusLevelRequirementValue(item?.retentionAmount) != null ||
             normalizeBonusLevelRequirementValue(item?.retentionOrders) != null ||
-            normalizeBonusLevelRequirementValue(item?.retentionReferrals) != null
+            normalizeBonusLevelRequirementValue(item?.retentionReferrals) != null ||
+            normalizeBonusLevelRequirementValue(item?.retentionBonusAccrued) != null ||
+            normalizeBonusLevelRequirementValue(item?.retentionBonusRedeemed) != null
               ? 'custom'
               : 'match'
           )),
@@ -742,6 +747,8 @@
           retentionOrders: normalizeBonusLevelRequirementValue(item?.retentionOrders),
           retentionReferralMode: normalizeBonusLevelRequirementMode(item?.retentionReferralMode),
           retentionReferrals: normalizeBonusLevelRequirementValue(item?.retentionReferrals),
+          retentionBonusAccrued: normalizeBonusLevelRequirementValue(item?.retentionBonusAccrued),
+          retentionBonusRedeemed: normalizeBonusLevelRequirementValue(item?.retentionBonusRedeemed),
           retentionMatchCount: Math.max(1, normalizeNumberInputValue(item?.retentionMatchCount, 1)),
         };
       })
@@ -833,11 +840,14 @@
       favoriteCategoriesBonusPercent: item?.favorite_categories_bonus_percent ?? item?.favoriteCategoriesBonusPercent,
       favoriteCategoriesLimit: item?.favorite_categories_limit ?? item?.favoriteCategoriesLimit,
       favoriteCategoryIds: item?.favorite_category_ids || item?.favoriteCategoryIds || [],
+      favoriteCategoryGroupId: item?.favorite_category_group_id ?? item?.favoriteCategoryGroupId ?? null,
       requirementAmount: item?.requirement_amount ?? item?.requirementAmount,
       requirementMode: item?.requirement_mode || item?.requirementMode,
       requirementOrders: item?.requirement_orders ?? item?.requirementOrders,
       requirementReferralMode: item?.requirement_referral_mode || item?.requirementReferralMode,
       requirementReferrals: item?.requirement_referrals ?? item?.requirementReferrals,
+      requirementBonusAccrued: item?.requirement_bonus_accrued ?? item?.requirementBonusAccrued,
+      requirementBonusRedeemed: item?.requirement_bonus_redeemed ?? item?.requirementBonusRedeemed,
       requirementMatchCount: item?.requirement_match_count ?? item?.requirementMatchCount,
       requirementPeriodDays: item?.requirement_period_days ?? item?.requirementPeriodDays,
       retentionStrategy: item?.retention_strategy || item?.retentionStrategy,
@@ -846,6 +856,8 @@
       retentionOrders: item?.retention_orders ?? item?.retentionOrders,
       retentionReferralMode: item?.retention_referral_mode || item?.retentionReferralMode,
       retentionReferrals: item?.retention_referrals ?? item?.retentionReferrals,
+      retentionBonusAccrued: item?.retention_bonus_accrued ?? item?.retentionBonusAccrued,
+      retentionBonusRedeemed: item?.retention_bonus_redeemed ?? item?.retentionBonusRedeemed,
       retentionMatchCount: item?.retention_match_count ?? item?.retentionMatchCount,
     };
   }
@@ -887,7 +899,7 @@
   }
 
   function buildBonusConfigPayload(overrides = {}) {
-    const levelsSource = overrides.levels || state.bonusLevels;
+    const levelsSource = overrides.levels || (state.bonusCardsEditing ? state.bonusLevelsDraft : state.bonusLevels);
     const referralLevelsSource = overrides.referralLevels || state.bonusReferralLevels;
     return {
       settings: {
@@ -907,7 +919,14 @@
         referral_card_title_background_color: overrides.referralCardTitleBackgroundColor ?? state.referralCardTitleBackgroundColor,
         referral_card_title_background_opacity: overrides.referralCardTitleBackgroundOpacity ?? state.referralCardTitleBackgroundOpacity,
         allow_redeem_and_accrue: overrides.allowRedeemAndAccrue ?? state.bonusAllowRedeemAndAccrue,
+        bonusProgramNameBase: overrides.bonusProgramNameBase ?? state.bonusProgramNameBase,
+        bonusProgramLogoBase: overrides.bonusProgramLogoBase ?? state.bonusProgramLogoBase,
+        bonusProgramNamePaid: overrides.bonusProgramNamePaid ?? state.bonusProgramNamePaid,
+        bonusProgramLogoPaid: overrides.bonusProgramLogoPaid ?? state.bonusProgramLogoPaid,
+        bonusCoinName: overrides.bonusProgramCoinName ?? state.bonusProgramCoinName,
+        bonusCoinLogo: overrides.bonusProgramCoinLogo ?? state.bonusProgramCoinLogo,
       },
+      category_groups: overrides.bonusCategoryGroups || (state.bonusSettingsEditing ? state.bonusCategoryGroupsDraft : state.bonusCategoryGroups),
       levels: sanitizeBonusLevels(levelsSource, { withDefaults: false }).map((level, idx) => ({
         code: String(level.id || `level_${idx + 1}`),
         sort_order: idx,
@@ -942,6 +961,7 @@
         activationDelayUnit: level.activationDelayUnit,
         lifetimeValue: level.lifetimeValue,
         lifetimeUnit: level.lifetimeUnit,
+        favoriteCategoryGroupId: level.favoriteCategoryGroupId,
         orderBonusRanges: level.orderBonusRanges,
         favoriteCategoriesBonusPercent: level.favoriteCategoriesBonusPercent,
         favoriteCategoriesLimit: level.favoriteCategoriesLimit,
@@ -951,6 +971,8 @@
         requirementOrders: level.requirementOrders,
         requirementReferralMode: level.requirementReferralMode,
         requirementReferrals: level.requirementReferrals,
+        requirementBonusAccrued: level.requirementBonusAccrued,
+        requirementBonusRedeemed: level.requirementBonusRedeemed,
         requirementMatchCount: level.requirementMatchCount,
         requirementPeriodDays: level.requirementPeriodDays,
         retentionStrategy: level.retentionStrategy,
@@ -959,6 +981,8 @@
         retentionOrders: level.retentionOrders,
         retentionReferralMode: level.retentionReferralMode,
         retentionReferrals: level.retentionReferrals,
+        retentionBonusAccrued: level.retentionBonusAccrued,
+        retentionBonusRedeemed: level.retentionBonusRedeemed,
         retentionMatchCount: level.retentionMatchCount,
       })),
       referral_levels: (Array.isArray(referralLevelsSource) ? referralLevelsSource : [])
@@ -975,6 +999,7 @@
             is_active: level?.enabled === true,
           };
         }),
+      categoryGroups: overrides.bonusCategoryGroups || [],
     };
   }
 
@@ -1030,9 +1055,23 @@
     state.bonusRubleAmountDraft = state.bonusRubleAmount;
     state.bonusPointRate = normalizeBonusPointRateValue(settings.bonus_point_rate, state.bonusRubleAmount / state.bonusPointAmount);
     state.bonusPointRateDraft = state.bonusPointRate;
+    state.bonusProgramCoinName = settings.bonus_coin_name || 'Бонусы';
+    state.bonusProgramCoinNameDraft = state.bonusProgramCoinName;
+    state.bonusProgramCoinLogo = settings.bonus_coin_logo || null;
+    state.bonusProgramCoinLogoDraft = state.bonusProgramCoinLogo;
+    state.bonusProgramNameBase = settings.bonus_program_name_base || 'Бонусная программа';
+    state.bonusProgramNameBaseDraft = state.bonusProgramNameBase;
+    state.bonusProgramLogoBase = settings.bonus_program_logo_base || null;
+    state.bonusProgramLogoBaseDraft = state.bonusProgramLogoBase;
+    state.bonusProgramNamePaid = settings.bonus_program_name_paid || 'Привилегии Plus';
+    state.bonusProgramNamePaidDraft = state.bonusProgramNamePaid;
+    state.bonusProgramLogoPaid = settings.bonus_program_logo_paid || null;
+    state.bonusProgramLogoPaidDraft = state.bonusProgramLogoPaid;
     state.bonusAllowRedeemAndAccrue = settings.allow_redeem_and_accrue === true;
     state.bonusLevels = sanitizeBonusLevels(levels, { withDefaults: false });
     state.bonusLevelsDraft = state.bonusLevels.map((level) => ({ ...level }));
+    state.bonusCategoryGroups = Array.isArray(json?.category_groups) ? json.category_groups : [];
+    state.bonusCategoryGroupsDraft = []; // Reset draft on load
     state.bonusClientEvents = sanitizeBonusClientEvents(json?.bonus_events, { withDefaults: false });
     state.referralProgramEnabled = settings.referral_program_enabled === true;
     state.referralProgramEnabledDraft = state.referralProgramEnabled;
@@ -2132,9 +2171,21 @@
   const bonusReferralsEmpty = right$("#bonusReferralsEmpty");
   const bonusSettingsEmpty = right$("#bonusSettingsEmpty");
   const bonusSettingsBrandWrap = right$("#bonusSettingsBrandWrap");
-  const bonusSettingsLogoPreview = right$("#bonusSettingsLogoPreview");
-  const bonusSettingsLogoUploadBtn = right$("#bonusSettingsLogoUploadBtn");
-  const bonusSettingsLogoInput = right$("#bonusSettingsLogoInput");
+  
+  const bonusSettingsLogoPreviewBase = right$("#bonusSettingsLogoPreviewBase");
+  const bonusSettingsLogoInputBase = right$("#bonusSettingsLogoInputBase");
+
+  const bonusSettingsLogoPreviewPaid = right$("#bonusSettingsLogoPreviewPaid");
+  const bonusSettingsLogoInputPaid = right$("#bonusSettingsLogoInputPaid");
+
+  const bonusSettingsCoinWrap = right$("#bonusSettingsCoinWrap");
+  const bonusSettingsFavoriteCategoriesWrap = right$("#bonusSettingsFavoriteCategoriesWrap");
+  const bonusSettingsCoinLogoPreview = right$("#bonusSettingsCoinLogoPreview");
+  const bonusSettingsCoinLogoInput = right$("#bonusSettingsCoinLogoInput");
+  const bonusSettingsCoinNameInput = right$("#bonusSettingsCoinNameInput");
+  const bonusSettingsCoinPointAmountInput = right$("#bonusSettingsCoinPointAmountInput");
+  const bonusSettingsCoinRubleAmountInput = right$("#bonusSettingsCoinRubleAmountInput");
+
   const bonusReferralCardInfoWrap = right$("#bonusReferralCardInfoWrap");
   const bonusReferralLevelsSettings = right$("#bonusReferralLevelsSettings");
   const bonusReferralFirstPurchaseRewardInput = right$("#bonusReferralFirstPurchaseRewardInput");
@@ -2217,6 +2268,8 @@
   const bonusLevelAllowSimultaneousSwitch = right$("#bonusLevelAllowSimultaneousSwitch");
   const bonusLevelReferralBonusField = right$("#bonusLevelReferralBonusField");
   const bonusLevelReferralBonusPercentInput = right$("#bonusLevelReferralBonusPercentInput");
+  const bonusLevelFavoriteCategoriesBonusPercentInput = right$("#bonusLevelFavoriteCategoriesBonusPercentInput");
+  const bonusLevelFavoriteCategoriesLimitInput = right$("#bonusLevelFavoriteCategoriesLimitInput");
   const bonusLevelActivationFieldWrap = right$("#bonusLevelActivationFieldWrap");
   const bonusLevelActivationDelayValueWrap = right$("#bonusLevelActivationDelayValueWrap");
   const bonusLevelActivationDelayValueInput = right$("#bonusLevelActivationDelayValueInput");
@@ -2459,11 +2512,24 @@
     bonusPointAmountDraft: 1,
     bonusRubleAmount: 1,
     bonusRubleAmountDraft: 1,
-    bonusProgramName: 'Бонусная программа',
-    bonusProgramNameDraft: 'Бонусная программа',
-    bonusProgramLogo: null,
-    bonusProgramLogoDraft: null,
+    bonusProgramNameBase: 'Бонусная программа',
+    bonusProgramNameBaseDraft: 'Бонусная программа',
+    bonusProgramLogoBase: null,
+    bonusProgramLogoBaseDraft: null,
+    bonusProgramNamePaid: 'Markin VIP',
+    bonusProgramNamePaidDraft: 'Markin VIP',
+    bonusProgramLogoPaid: null,
+    bonusProgramLogoPaidDraft: null,
+    bonusProgramLogoBaseFile: null,
+    bonusProgramLogoPaidFile: null,
+    bonusProgramCoinName: 'Бонусы',
+    bonusProgramCoinNameDraft: 'Бонусы',
+    bonusProgramCoinLogo: null,
+    bonusProgramCoinLogoDraft: null,
+    bonusProgramCoinLogoFile: null,
     bonusSettingsEditing: false,
+    bonusCategoryGroups: [],
+    bonusCategoryGroupsDraft: [],
     bonusPointRate: 1,
     bonusPointRateDraft: 1,
     bonusAllowRedeemAndAccrue: false,
@@ -3289,7 +3355,7 @@
     { key: 'simple_discount', title: 'Скидка' },
     { key: 'promo_code', title: 'Промокод' },
     { key: 'buy_x_get_y', title: '1+1' },
-    { key: 'loyalty_progress', title: 'Накопительная' },
+    { key: 'loyalty_progress', title: 'Задания' },
     { key: 'threshold', title: 'Пороговая' },
   ];
 
@@ -3580,7 +3646,7 @@
     const visibleTabs = isBonusReferralsView
       ? tabsState.tabs.filter((tab) => tab.type === 'bonus-referral-card')
       : isBonusSettingsView
-        ? tabsState.tabs.filter((tab) => tab.type === 'bonus-settings-brand')
+        ? tabsState.tabs.filter((tab) => tab.type === 'bonus-settings-brand' || tab.type === 'bonus-settings-coin' || tab.type === 'bonus-settings-favorite-categories')
         : tabsState.tabs;
     const hasVisibleTabs = visibleTabs.length > 0;
     clientTabsHeader.classList.toggle("hidden", !hasVisibleTabs && !isHomeBtnView);
@@ -3645,7 +3711,7 @@
             ? 'bonus-cards'
           : tab.type === 'bonus-referral-card'
             ? 'bonus-referrals'
-          : tab.type === 'bonus-settings-brand'
+          : tab.type === 'bonus-settings-brand' || tab.type === 'bonus-settings-coin' || tab.type === 'bonus-settings-favorite-categories'
             ? 'bonus-settings'
           : 'clients';
     if (state.currentView !== targetView) {
@@ -3826,7 +3892,7 @@
         return;
       }
       if (state.currentView === 'bonus-settings') {
-        tabsState.tabs = tabsState.tabs.filter((tab) => tab.type !== 'bonus-settings-brand');
+        tabsState.tabs = tabsState.tabs.filter((tab) => tab.type !== 'bonus-settings-brand' && tab.type !== 'bonus-settings-coin');
         tabsState.activeKey = null;
         renderTabs();
         updateRightPanel();
@@ -5514,7 +5580,7 @@
     visibleTransactions.forEach((item) => {
       const meta = getClientBonusTransactionTypeMeta(item?.type);
       const amount = Math.abs(Number(item?.amount || 0));
-      const amountText = amount > 0 ? `${meta.sign}${money(amount)}` : money(0);
+      const amountText = amount > 0 ? `${meta.sign}${formatBonusBalance(amount)}` : formatBonusBalance(0);
       const reason = String(item?.reason || item?.level_title || meta.label).trim();
       const row = document.createElement("div");
       row.className = "client-bonus-accrual-row";
@@ -5524,7 +5590,7 @@
           <span>${escapeHtml(reason)}</span>
         </div>
         <div class="client-bonus-accrual-side">
-          <strong class="is-${escapeHtml(meta.tone)}">${escapeHtml(amountText)}</strong>
+          <strong class="is-${escapeHtml(meta.tone)}">${amountText}</strong>
           <span>${escapeHtml(fmtDateTime(item?.created_at))}</span>
         </div>
       `;
@@ -5673,7 +5739,8 @@
 
     const balanceCard = document.createElement("div");
     balanceCard.className = "client-bonus-card client-bonus-balance";
-    balanceCard.innerHTML = `<div><span>Бонусы</span><strong>${escapeHtml(money(account.balance || 0))}</strong></div><button type="button" class="client-bonus-accruals-btn">Начисления <i class="fas fa-chevron-right" aria-hidden="true"></i></button>`;
+    const coinName = state.bonusProgramCoinName || "Бонусы";
+    balanceCard.innerHTML = `<div><span>${escapeHtml(coinName)}</span><strong>${formatBonusBalance(account.balance || 0)}</strong></div><button type="button" class="client-bonus-accruals-btn">Начисления <i class="fas fa-chevron-right" aria-hidden="true"></i></button>`;
     shell.appendChild(balanceCard);
     balanceCard.querySelector(".client-bonus-accruals-btn")?.addEventListener("click", () => {
       state.clientBenefitsModal.bonusCardScreen = "accruals";
@@ -5823,7 +5890,7 @@
         shell.appendChild(discountsSection.section);
         shell.appendChild(promosSection.section);
         const giftsSection = createClientBenefitsSection("Подарки", "Здесь появятся доступные подарки.", { horizontal: true });
-        const progressSection = createClientBenefitsSection("Накопления", "Здесь появится прогресс накопительных акций.");
+        const progressSection = createClientBenefitsSection("Задания", "Здесь появится прогресс заданий.");
         const completedSection = createClientBenefitsSection("Завершенные", "Здесь появятся завершенные выгоды.");
         shell.appendChild(giftsSection.section);
         shell.appendChild(progressSection.section);
@@ -5874,7 +5941,7 @@
     const discountsSection = createClientBenefitsSection("Скидки", "Для этого клиента доступных скидок нет.");
     const promosSection = createClientBenefitsSection("Промокоды", "Для этого клиента доступных промокодов нет.");
     const giftsSection = createClientBenefitsSection("Подарки", "Здесь появятся доступные подарки.", { horizontal: true });
-    const progressSection = createClientBenefitsSection("Накопления", "Здесь появится прогресс накопительных акций.");
+    const progressSection = createClientBenefitsSection("Задания", "Здесь появится прогресс заданий.");
     const completedSection = createClientBenefitsSection("Завершенные", "Здесь появятся завершенные выгоды.");
 
     shell.appendChild(discountsSection.section);
@@ -6316,6 +6383,18 @@
   // Helpers
   // -----------------------------
   const moneyFmt = new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 });
+
+  function getBonusCoinIconHtml(size = '14px', margin = '2px') {
+    if (state.bonusProgramCoinLogo) {
+      return `<img src="${escapeHtml(state.bonusProgramCoinLogo)}" class="bonus-coin-icon" style="width:${size};height:${size};display:inline-block;vertical-align:middle;margin-top:-2px;margin-left:${margin};" alt="" />`;
+    }
+    return '₽';
+  }
+
+  function formatBonusBalance(v) {
+    const n = Number(v || 0);
+    return `${n.toLocaleString('ru-RU')} ${getBonusCoinIconHtml('1.1em', '4px')}`;
+  }
 
   function money(v) {
     const n = Number(v || 0);
@@ -6829,7 +6908,7 @@
   function formatDiscountMechanicText(discount) {
     const mechanic = getDiscountMechanic(discount);
     if (mechanic.type === 'buy_x_get_y') return '1+1';
-    if (mechanic.type === 'loyalty_progress') return 'Накопительная';
+    if (mechanic.type === 'loyalty_progress') return 'Задания';
     if (mechanic.type === 'threshold') return 'Пороговая';
     return 'Скидка';
   }
@@ -7449,7 +7528,7 @@
     const isBonusReferralsView = state.currentView === 'bonus-referrals';
     const isBonusSettingsView = state.currentView === 'bonus-settings';
     const isEditableBonusView = isBonusCardsView || isBonusReferralsView || isBonusSettingsView;
-    if (elBonusPointRateWrap) elBonusPointRateWrap.classList.toggle('hidden', !isBonusCardsView);
+    if (elBonusPointRateWrap) elBonusPointRateWrap.classList.add('hidden');
     if (elBonusProgramSwitchWrap) elBonusProgramSwitchWrap.classList.toggle('hidden', !isBonusCardsView);
     if (elReferralProgramSwitchWrap) elReferralProgramSwitchWrap.classList.toggle('hidden', !isBonusReferralsView);
     
@@ -7754,27 +7833,442 @@
     });
   }
 
+  function openBonusSettingsCoinTab() {
+    if (state.currentView !== 'bonus-settings') {
+      switchView('bonus-settings');
+    }
+    ensureTab({
+      type: 'bonus-settings-coin',
+      id: 'coin',
+      title: 'Курс и дизайн монеты',
+      onActivate: activateBonusSettingsCoinTab,
+    });
+  }
+
+  function openBonusSettingsFavoriteCategoriesTab() {
+    if (state.currentView !== 'bonus-settings') {
+      switchView('bonus-settings');
+    }
+    ensureTab({
+      type: 'bonus-settings-favorite-categories',
+      id: 'favorite-categories',
+      title: 'Группы любимых категорий',
+      onActivate: activateBonusSettingsFavoriteCategoriesTab,
+    });
+  }
+
+  async function activateBonusSettingsFavoriteCategoriesTab() {
+    await loadCatalogCategories();
+    renderBonusSettingsFavoriteCategoriesTabContent();
+  }
+
+  function renderBonusSettingsFavoriteCategoriesTabContent() {
+    if (!bonusSettingsFavoriteCategoriesWrap) return;
+    
+    const groups = state.bonusSettingsEditing ? state.bonusCategoryGroupsDraft : state.bonusCategoryGroups;
+    const isEditing = state.bonusSettingsEditing;
+    
+    let html = `
+      <div class="bonus-settings-favorite-categories-list">
+    `;
+    
+    if (groups.length === 0) {
+      html += `
+        <div class="empty-state">
+          <div class="empty-icon"><i class="fas fa-layer-group"></i></div>
+          <div class="empty-title">Группы любимых категорий</div>
+          <div class="empty-text">Здесь вы сможете управлять группами категорий, которые клиенты могут выбирать как «любимые» для повышенного кешбэка.</div>
+        </div>
+      `;
+    } else {
+      groups.forEach((group, index) => {
+        const iconsHtml = renderBonusFavoriteCategoryIconsHtml(group.favoriteCategoryIds || []);
+        html += `
+          <div class="field-wrap bonus-level-range-field bonus-level-range-pill--right">
+            <div class="bonus-level-rules-title">${escapeHtml(group.title || 'Новая группа')}</div>
+            <div class="bonus-level-range-pill bonus-level-favorite-categories-pill">
+              <div class="bonus-level-favorite-categories-icons">${iconsHtml}</div>
+              <div class="bonus-level-range-pill-actions">
+                <button class="bonus-level-range-action-btn" type="button" data-group-info="${index}" title="Подробно">
+                  <i class="fas fa-info"></i>
+                </button>
+                <button class="bonus-level-range-action-btn" type="button" data-group-edit="${index}" ${isEditing ? '' : 'disabled'} title="Редактировать">
+                  <i class="fas fa-ellipsis-h"></i>
+                </button>
+              </div>
+            </div>
+          </div>
+        `;
+      });
+    }
+    
+    html += `
+      </div>
+      <div class="bonus-settings-favorite-categories-actions" style="margin-top: 16px;">
+        <button class="bonus-level-range-pill bonus-category-group-add-btn" type="button" id="addBonusCategoryGroupBtn" ${isEditing ? '' : 'disabled'} style="width: 100%; justify-content: center;">
+          <div class="bonus-level-range-pill-text"><i class="fas fa-plus"></i> Добавить группу категорий</div>
+        </button>
+      </div>
+    `;
+    
+    bonusSettingsFavoriteCategoriesWrap.innerHTML = html;
+    
+    // Handlers
+    const addBtn = bonusSettingsFavoriteCategoriesWrap.querySelector('#addBonusCategoryGroupBtn');
+    if (addBtn && isEditing) {
+      addBtn.addEventListener('click', () => {
+        addBonusCategoryGroup();
+      });
+    }
+    
+    groups.forEach((group, index) => {
+      const editBtn = bonusSettingsFavoriteCategoriesWrap.querySelector(`[data-group-edit="${index}"]`);
+      if (editBtn && isEditing) {
+        editBtn.addEventListener('click', () => {
+          openBonusCategoryGroupEditor(index);
+        });
+      }
+      
+      const infoBtn = bonusSettingsFavoriteCategoriesWrap.querySelector(`[data-group-info="${index}"]`);
+      if (infoBtn) {
+        infoBtn.addEventListener('click', (event) => {
+          openBonusCategoryGroupHelpPopover(infoBtn, index);
+        });
+      }
+    });
+  }
+
+  function addBonusCategoryGroup() {
+    if (!state.bonusSettingsEditing) return;
+    
+    const newGroup = {
+      id: `new_${Date.now()}`,
+      title: `Группа #${state.bonusCategoryGroupsDraft.length + 1}`,
+      favoriteCategoriesBonusPercent: 5,
+      favoriteCategoriesLimit: 3,
+      favoriteCategoryIds: [],
+    };
+    
+    state.bonusCategoryGroupsDraft.push(newGroup);
+    renderBonusSettingsFavoriteCategoriesTabContent();
+  }
+
+  function renderBonusFavoriteCategoryIconsHtml(ids) {
+    if (!ids || ids.length === 0) {
+      return '<div class="bonus-level-range-pill-text">Не выбрано</div>';
+    }
+    const limit = 4;
+    let html = ids.slice(0, limit).map(() => '<i class="fas fa-tag"></i>').join('');
+    if (ids.length > limit) {
+      html += `<span class="bonus-level-favorite-categories-more">+${ids.length - limit}</span>`;
+    }
+    return html;
+  }
+
+  function openBonusCategoryGroupHelpPopover(btn, index) {
+    const groups = state.bonusSettingsEditing ? state.bonusCategoryGroupsDraft : state.bonusCategoryGroups;
+    const group = groups[index];
+    if (!group) return;
+    
+    // Using the same formatting function as in levels
+    const content = formatBonusLevelFavoriteCategoriesHelpText(group);
+    
+    if (typeof openBonusLevelHelpPopover === 'function') {
+      openBonusLevelHelpPopover(btn, content);
+    }
+  }
+
+  async function openBonusCategoryGroupEditor(index) {
+    if (!state.bonusSettingsEditing) return;
+    const groups = state.bonusCategoryGroupsDraft;
+    const current = groups[index];
+    if (!current) return;
+
+    const categories = await loadCatalogCategories();
+
+    window.AdminBenefitsModal?.show({
+      title: 'Категории на выбор',
+      showBack: false,
+      showModeToggle: false,
+      onClose: () => {
+        renderBonusSettingsFavoriteCategoriesTabContent();
+      },
+    });
+
+    const { backdrop, body } = getClientBenefitsOverlayElements();
+    if (!body) return;
+    if (backdrop) backdrop.classList.add('bonus-range-editor-overlay');
+    body.innerHTML = '';
+
+    const frame = window.AdminBenefitsModal?.createScrollableFrame({ hasFooter: true });
+    if (!frame?.root || !frame.scrollEl || !frame.footerEl) return;
+    body.appendChild(frame.root);
+
+    const shell = document.createElement('div');
+    shell.className = 'bonus-range-editor-modal';
+    frame.scrollEl.appendChild(shell);
+
+    const nameRow = document.createElement('div');
+    nameRow.className = 'bonus-range-editor-row';
+    nameRow.style.marginBottom = '20px';
+    nameRow.innerHTML = `
+      <input
+        class="control banner-title-input"
+        type="text"
+        placeholder="Название группы"
+        data-bonus-favorite-field="title"
+        value="${escapeHtml(current.title || '')}"
+        style="width: 100%; text-align: left; padding: 12px 20px; height: 48px; border-radius: 24px;"
+      />
+    `;
+    shell.appendChild(nameRow);
+
+    const title = document.createElement('div');
+    title.className = 'bonus-range-editor-title';
+    title.textContent = 'Настройка условий';
+    shell.appendChild(title);
+
+    const note = document.createElement('div');
+    note.className = 'bonus-range-editor-row';
+    note.textContent = 'Укажите процент кэшбека и количество любимых категорий.';
+    shell.appendChild(note);
+
+    const rowEl = document.createElement('div');
+    rowEl.className = 'bonus-range-editor-input-row';
+    rowEl.innerHTML = `
+      <input
+        class="control bonus-range-editor-input"
+        type="number"
+        min="0"
+        step="0.1"
+        placeholder="Кэшбек, %"
+        data-bonus-favorite-field="percent"
+        value="${escapeHtml(String(normalizeNumberInputValue(current.favoriteCategoriesBonusPercent, 0) || ''))}"
+      />
+      <input
+        class="control bonus-range-editor-input"
+        type="number"
+        min="0"
+        step="1"
+        placeholder="Количество категорий"
+        data-bonus-favorite-field="limit"
+        value="${escapeHtml(String(Math.max(0, Math.floor(Number(current.favoriteCategoriesLimit || 0))) || ''))}"
+      />
+    `;
+    shell.appendChild(rowEl);
+
+    const categoriesTitle = document.createElement('div');
+    categoriesTitle.className = 'bonus-range-editor-title';
+    categoriesTitle.textContent = 'Категории тенанта';
+    shell.appendChild(categoriesTitle);
+
+    const selectedCategoryIds = new Set(normalizeBonusLevelFavoriteCategoryIds(current.favoriteCategoryIds));
+    const categoriesToolbar = document.createElement('div');
+    categoriesToolbar.className = 'bonus-level-favorite-categories-toolbar';
+
+    const selectAllBtn = document.createElement('button');
+    selectAllBtn.type = 'button';
+    selectAllBtn.className = 'shop-chip-btn discount-promo-apply-chip';
+    selectAllBtn.textContent = 'Выделить все';
+    categoriesToolbar.appendChild(selectAllBtn);
+
+    const resetAllBtn = document.createElement('button');
+    resetAllBtn.type = 'button';
+    resetAllBtn.className = 'shop-chip-btn discount-promo-apply-chip';
+    resetAllBtn.textContent = 'Сбросить все';
+    categoriesToolbar.appendChild(resetAllBtn);
+
+    shell.appendChild(categoriesToolbar);
+    const categoriesList = document.createElement('div');
+    categoriesList.className = 'option-picker-list';
+    if (Array.isArray(categories) && categories.length) {
+      categoriesList.innerHTML = categories.map((category) => {
+        const categoryId = Number(category?.id || 0);
+        const isChecked = selectedCategoryIds.has(categoryId);
+        const titleText = String(category?.title || `Категория #${categoryId}`).trim();
+        const photo = getDiscountEntityPhoto({ type: 'category', id: categoryId });
+        const icon = String(category?.icon || '').trim();
+        const media = photo
+          ? `<span class="option-picker-photo"><img src="${escapeHtml(photo)}" alt="${escapeHtml(titleText)}"></span>`
+          : `<span class="option-picker-photo">${icon ? (isDiscountEntityImageUrl(icon) ? `<img src="${escapeHtml(icon)}" alt="${escapeHtml(titleText)}">` : `<i class="${escapeHtml(icon)}" aria-hidden="true"></i>`) : '<i class="fas fa-layer-group" aria-hidden="true"></i>'}</span>`;
+        return `
+          <label class="option-picker-row bonus-level-favorite-category-card${isChecked ? ' is-selected' : ''}">
+            <input type="checkbox" data-bonus-favorite-category-id="${categoryId}" ${isChecked ? 'checked' : ''} />
+            ${media}
+            <span class="option-picker-title">${escapeHtml(String(category?.title || `Категория #${categoryId}`).trim())}</span>
+          </label>
+        `;
+      }).join('');
+      const syncCategorySelectionUi = () => {
+        categoriesList.querySelectorAll('input[type="checkbox"][data-bonus-favorite-category-id]').forEach((input) => {
+          const row = input.closest('.option-picker-row');
+          if (row) row.classList.toggle('is-selected', input.checked);
+        });
+      };
+      categoriesList.querySelectorAll('input[type="checkbox"][data-bonus-favorite-category-id]').forEach((input) => {
+        input.addEventListener('change', syncCategorySelectionUi);
+      });
+      selectAllBtn.addEventListener('click', () => {
+        categoriesList.querySelectorAll('input[type="checkbox"][data-bonus-favorite-category-id]').forEach((input) => {
+          input.checked = true;
+        });
+        syncCategorySelectionUi();
+      });
+      resetAllBtn.addEventListener('click', () => {
+        categoriesList.querySelectorAll('input[type="checkbox"][data-bonus-favorite-category-id]').forEach((input) => {
+          input.checked = false;
+        });
+        syncCategorySelectionUi();
+      });
+      syncCategorySelectionUi();
+    } else {
+      categoriesList.innerHTML = '<div class="option-picker-empty">Категории не найдены</div>';
+      selectAllBtn.disabled = true;
+      resetAllBtn.disabled = true;
+    }
+    shell.appendChild(categoriesList);
+
+    const actions = document.createElement('div');
+    actions.className = 'bonus-range-editor-footer-actions';
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'shop-checkout-benefits-promo-entry-btn';
+    cancelBtn.textContent = 'Отмена';
+    cancelBtn.addEventListener('click', () => {
+      window.AdminBenefitsModal?.hide();
+    });
+    actions.appendChild(cancelBtn);
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.type = 'button';
+    deleteBtn.className = 'shop-checkout-benefits-promo-entry-btn is-danger';
+    deleteBtn.innerHTML = '<i class="fas fa-trash"></i>';
+    deleteBtn.style.minWidth = '48px';
+    deleteBtn.style.width = '48px';
+    deleteBtn.style.padding = '0';
+    deleteBtn.style.marginLeft = 'auto';
+    deleteBtn.title = 'Удалить группу';
+    deleteBtn.addEventListener('click', () => {
+      if (confirm('Удалить эту группу категорий?')) {
+        state.bonusCategoryGroupsDraft.splice(index, 1);
+        window.AdminBenefitsModal?.hide();
+      }
+    });
+    actions.appendChild(deleteBtn);
+
+    const saveBtn = document.createElement('button');
+    saveBtn.type = 'button';
+    saveBtn.className = 'shop-checkout-benefits-promo-entry-btn is-active';
+    saveBtn.textContent = 'Сохранить';
+    saveBtn.addEventListener('click', () => {
+      const nameInput = nameRow.querySelector('[data-bonus-favorite-field="title"]');
+      const percentInput = rowEl.querySelector('[data-bonus-favorite-field="percent"]');
+      const limitInput = rowEl.querySelector('[data-bonus-favorite-field="limit"]');
+      const nextCategoryIds = normalizeBonusLevelFavoriteCategoryIds(
+        Array.from(categoriesList.querySelectorAll('input[type="checkbox"][data-bonus-favorite-category-id]:checked'))
+          .map((input) => input.getAttribute('data-bonus-favorite-category-id'))
+      );
+      
+      current.title = (nameInput?.value || '').trim() || current.title;
+      current.favoriteCategoriesBonusPercent = normalizeNumberInputValue(percentInput?.value, 0);
+      current.favoriteCategoriesLimit = normalizeNumberInputValue(limitInput?.value, 0);
+      current.favoriteCategoryIds = nextCategoryIds;
+      
+      renderBonusSettingsFavoriteCategoriesTabContent();
+      window.AdminBenefitsModal?.hide();
+    });
+    actions.appendChild(saveBtn);
+    actions.appendChild(deleteBtn);
+    
+    actions.style.display = 'flex';
+    actions.style.alignItems = 'center';
+    actions.style.gap = '10px';
+    cancelBtn.style.flex = '1';
+    saveBtn.style.flex = '1';
+    deleteBtn.style.flex = '0 0 48px';
+
+    frame.footerEl.appendChild(actions);
+  }
+
+  function activateBonusSettingsCoinTab() {
+    renderBonusSettingsCoinTabContent();
+  }
+
   function activateBonusSettingsBrandTab() {
     renderBonusSettingsBrandTabContent();
   }
 
   function renderBonusSettingsBrandTabContent() {
-    const elInput = $('#bonusSettingsProgramNameInput');
-    if (elInput) {
-      elInput.value = state.bonusSettingsEditing ? (state.bonusProgramNameDraft || '') : (state.bonusProgramName || 'Бонусная программа');
-      elInput.disabled = !state.bonusSettingsEditing;
+    // Base Tariff
+    const elInputBase = $('#bonusSettingsProgramNameInputBase');
+    const elPreviewBase = $('#bonusSettingsLogoPreviewBase');
+    const elUploadBtnBase = $('#bonusSettingsLogoUploadBtnBase');
+    
+    if (elInputBase) {
+      elInputBase.value = state.bonusSettingsEditing ? (state.bonusProgramNameBaseDraft || '') : (state.bonusProgramNameBase || 'Бонусная программа');
+      elInputBase.disabled = !state.bonusSettingsEditing;
     }
 
-    const logoUrl = state.bonusSettingsEditing ? state.bonusProgramLogoDraft : state.bonusProgramLogo;
-    if (bonusSettingsLogoPreview) {
-      if (logoUrl) {
-        bonusSettingsLogoPreview.innerHTML = `<img src="${logoUrl}" alt="Logo" />`;
+    const logoUrlBase = state.bonusSettingsEditing ? state.bonusProgramLogoBaseDraft : state.bonusProgramLogoBase;
+    if (elPreviewBase) {
+      elPreviewBase.classList.toggle('clickable', state.bonusSettingsEditing);
+      if (logoUrlBase) {
+        elPreviewBase.innerHTML = `<img src="${logoUrlBase}" alt="Logo Base" />`;
       } else {
-        bonusSettingsLogoPreview.innerHTML = `<i class="fas fa-image"></i>`;
+        elPreviewBase.innerHTML = `<i class="fas fa-image"></i>`;
       }
     }
-    if (bonusSettingsLogoUploadBtn) {
-      bonusSettingsLogoUploadBtn.classList.toggle('hidden', !state.bonusSettingsEditing);
+
+    // Paid Tariff
+    const elInputPaid = $('#bonusSettingsProgramNameInputPaid');
+    const elPreviewPaid = $('#bonusSettingsLogoPreviewPaid');
+
+    if (elInputPaid) {
+      elInputPaid.value = state.bonusSettingsEditing ? (state.bonusProgramNamePaidDraft || '') : (state.bonusProgramNamePaid || 'Markin VIP');
+      elInputPaid.disabled = !state.bonusSettingsEditing;
+    }
+
+    const logoUrlPaid = state.bonusSettingsEditing ? state.bonusProgramLogoPaidDraft : state.bonusProgramLogoPaid;
+    if (elPreviewPaid) {
+      elPreviewPaid.classList.toggle('clickable', state.bonusSettingsEditing);
+      if (logoUrlPaid) {
+        elPreviewPaid.innerHTML = `<img src="${logoUrlPaid}" alt="Logo Paid" />`;
+      } else {
+        elPreviewPaid.innerHTML = `<i class="fas fa-image"></i>`;
+      }
+    }
+  }
+
+  function renderBonusSettingsCoinTabContent() {
+    const elInputName = $('#bonusSettingsCoinNameInput');
+    const elInputPointAmount = $('#bonusSettingsCoinPointAmountInput');
+    const elInputRubleAmount = $('#bonusSettingsCoinRubleAmountInput');
+    const elPreview = $('#bonusSettingsCoinLogoPreview');
+
+    if (elInputName) {
+      elInputName.value = state.bonusSettingsEditing ? (state.bonusProgramCoinNameDraft || '') : (state.bonusProgramCoinName || 'Бонусы');
+      elInputName.disabled = !state.bonusSettingsEditing;
+    }
+
+    if (elInputPointAmount) {
+      elInputPointAmount.value = state.bonusSettingsEditing ? state.bonusPointAmountDraft : state.bonusPointAmount;
+      elInputPointAmount.disabled = !state.bonusSettingsEditing;
+    }
+
+    if (elInputRubleAmount) {
+      elInputRubleAmount.value = state.bonusSettingsEditing ? state.bonusRubleAmountDraft : state.bonusRubleAmount;
+      elInputRubleAmount.disabled = !state.bonusSettingsEditing;
+    }
+
+    const logoUrl = state.bonusSettingsEditing ? state.bonusProgramCoinLogoDraft : state.bonusProgramCoinLogo;
+    if (elPreview) {
+      elPreview.classList.toggle('clickable', state.bonusSettingsEditing);
+      if (logoUrl) {
+        elPreview.innerHTML = `<img src="${logoUrl}" alt="Logo" />`;
+      } else {
+        elPreview.innerHTML = `<i class="fas fa-image"></i>`;
+      }
     }
   }
 
@@ -7995,6 +8489,8 @@
     const amount = normalizeBonusLevelRequirementValue(current?.requirementAmount);
     const orders = normalizeBonusLevelRequirementValue(current?.requirementOrders);
     const referrals = isReferralSystemEnabled() ? normalizeBonusLevelRequirementValue(current?.requirementReferrals) : null;
+    const bonusAccrued = normalizeBonusLevelRequirementValue(current?.requirementBonusAccrued);
+    const bonusRedeemed = normalizeBonusLevelRequirementValue(current?.requirementBonusRedeemed);
     const periodDays = normalizeBonusLevelRequirementValue(current?.requirementPeriodDays);
     const mode = normalizeBonusLevelRequirementMode(current?.requirementMode) === 'or' ? '\u0438\u043b\u0438' : '\u0438';
     const referralMode = normalizeBonusLevelRequirementMode(current?.requirementReferralMode) === 'or' ? '\u0438\u043b\u0438' : '\u0438';
@@ -8002,16 +8498,12 @@
       amount != null ? `${amount.toLocaleString('ru-RU')} \u20bd` : null,
       orders != null ? `${orders.toLocaleString('ru-RU')} \u0437\u0430\u043a.` : null,
       referrals != null ? `${referrals.toLocaleString('ru-RU')} \u0440\u0435\u0444.` : null,
+      bonusAccrued != null ? `+${bonusAccrued.toLocaleString('ru-RU')} \u0431.` : null,
+      bonusRedeemed != null ? `-${bonusRedeemed.toLocaleString('ru-RU')} \u0431.` : null,
     ];
     const filledCount = parts.filter(Boolean).length;
     if (!filledCount) return '\u041d\u0435 \u043d\u0430\u0441\u0442\u0440\u043e\u0435\u043d\u043e';
-    const expression = parts[0] && parts[1] && parts[2]
-      ? `${parts[0]} ${mode} ${parts[1]} ${referralMode} ${parts[2]}`
-      : parts[0] && parts[1]
-        ? `${parts[0]} ${mode} ${parts[1]}`
-        : parts[1] && parts[2]
-          ? `${parts[1]} ${referralMode} ${parts[2]}`
-          : parts.filter(Boolean).join('');
+    const expression = parts.filter(Boolean).join(` ${mode} `);
     return `${expression} / ${periodDays != null ? `${periodDays} \u0434\u043d.` : '\u0431\u0435\u0441\u0441\u0440\u043e\u0447\u043d\u043e'}`;
   }
 
@@ -8020,6 +8512,8 @@
     const amount = normalizeBonusLevelRequirementValue(current?.requirementAmount);
     const orders = normalizeBonusLevelRequirementValue(current?.requirementOrders);
     const referrals = isReferralSystemEnabled() ? normalizeBonusLevelRequirementValue(current?.requirementReferrals) : null;
+    const bonusAccrued = normalizeBonusLevelRequirementValue(current?.requirementBonusAccrued);
+    const bonusRedeemed = normalizeBonusLevelRequirementValue(current?.requirementBonusRedeemed);
     const periodDays = normalizeBonusLevelRequirementValue(current?.requirementPeriodDays);
     const mode = normalizeBonusLevelRequirementMode(current?.requirementMode) === 'or' ? '\u0438\u043b\u0438' : '\u0438';
     const referralMode = normalizeBonusLevelRequirementMode(current?.requirementReferralMode) === 'or' ? '\u0438\u043b\u0438' : '\u0438';
@@ -8033,6 +8527,12 @@
     const retentionReferrals = isReferralSystemEnabled() && retentionStrategy === 'custom'
       ? normalizeBonusLevelRequirementValue(current?.retentionReferrals)
       : (isReferralSystemEnabled() ? referrals : null);
+    const retentionBonusAccrued = retentionStrategy === 'custom'
+      ? normalizeBonusLevelRequirementValue(current?.retentionBonusAccrued)
+      : bonusAccrued;
+    const retentionBonusRedeemed = retentionStrategy === 'custom'
+      ? normalizeBonusLevelRequirementValue(current?.retentionBonusRedeemed)
+      : bonusRedeemed;
     const retentionMode = retentionStrategy === 'custom'
       ? (normalizeBonusLevelRequirementMode(current?.retentionMode) === 'or' ? '\u0438\u043b\u0438' : '\u0438')
       : mode;
@@ -8053,6 +8553,8 @@
       '\u041f\u0435\u0440\u0435\u0445\u043e\u0434 \u043d\u0430 \u0443\u0440\u043e\u0432\u0435\u043d\u044c',
       `\u0421\u0443\u043c\u043c\u0430 \u0437\u0430\u043a\u0430\u0437\u043e\u0432: ${formatMoneyRequirement(amount)}`,
       `\u041a\u043e\u043b\u0438\u0447\u0435\u0441\u0442\u0432\u043e \u0437\u0430\u043a\u0430\u0437\u043e\u0432: ${formatCountRequirement(orders)}`,
+      `\u041d\u0430\u043a\u043e\u043f\u0438\u0442\u044c \u0431\u043e\u043d\u0443\u0441\u043e\u0432: ${formatCountRequirement(bonusAccrued)}`,
+      `\u041f\u043e\u0442\u0440\u0430\u0442\u0438\u0442\u044c \u0431\u043e\u043d\u0443\u0441\u043e\u0432: ${formatCountRequirement(bonusRedeemed)}`,
     ];
     if (isReferralSystemEnabled()) {
       details.push(
@@ -8069,6 +8571,8 @@
       `\u0422\u0438\u043f: ${retentionStrategy === 'custom' ? '\u0421\u0432\u043e\u0438' : '\u0421\u043e\u0432\u043f\u0430\u0434\u0430\u044e\u0442'}`,
       `\u0421\u0443\u043c\u043c\u0430 \u0437\u0430\u043a\u0430\u0437\u043e\u0432: ${formatMoneyRequirement(retentionAmount)}`,
       `\u041a\u043e\u043b\u0438\u0447\u0435\u0441\u0442\u0432\u043e \u0437\u0430\u043a\u0430\u0437\u043e\u0432: ${formatCountRequirement(retentionOrders)}`,
+      `\u041d\u0430\u043a\u043e\u043f\u0438\u0442\u044c \u0431\u043e\u043d\u0443\u0441\u043e\u0432: ${formatCountRequirement(retentionBonusAccrued)}`,
+      `\u041f\u043e\u0442\u0440\u0430\u0442\u0438\u0442\u044c \u0431\u043e\u043d\u0443\u0441\u043e\u0432: ${formatCountRequirement(retentionBonusRedeemed)}`,
     );
     if (isReferralSystemEnabled()) {
       details.push(
@@ -8443,6 +8947,8 @@
     const initialRetentionAmount = normalizeBonusLevelRequirementValue(current.retentionAmount);
     const initialRetentionOrders = normalizeBonusLevelRequirementValue(current.retentionOrders);
     const initialRetentionReferrals = normalizeBonusLevelRequirementValue(current.retentionReferrals);
+    const initialRetentionBonusAccrued = normalizeBonusLevelRequirementValue(current.retentionBonusAccrued);
+    const initialRetentionBonusRedeemed = normalizeBonusLevelRequirementValue(current.retentionBonusRedeemed);
 
     const periodControls = document.createElement('div');
     periodControls.className = 'bonus-level-requirements-top-grid bonus-level-requirements-top-grid--match';
@@ -8503,6 +9009,8 @@
       { key: 'amount', label: '\u0421\u0443\u043c\u043c\u0430 \u0437\u0430\u043a\u0430\u0437\u043e\u0432', value: normalizeBonusLevelRequirementValue(current.requirementAmount) },
       { key: 'orders', label: '\u041a\u043e\u043b-\u0432\u043e \u0437\u0430\u043a\u0430\u0437\u043e\u0432', value: normalizeBonusLevelRequirementValue(current.requirementOrders) },
       { key: 'referrals', label: '\u041f\u0440\u0438\u0433\u043b. \u0440\u0435\u0444\u0435\u0440\u0430\u043b\u044b', value: normalizeBonusLevelRequirementValue(current.requirementReferrals) },
+      { key: 'bonusAccrued', label: '\u041d\u0430\u043a\u043e\u043f\u0438\u0442\u044c \u0431\u043e\u043d\u0443\u0441\u043e\u0432', value: normalizeBonusLevelRequirementValue(current.requirementBonusAccrued) },
+      { key: 'bonusRedeemed', label: '\u041f\u043e\u0442\u0440\u0430\u0442\u0438\u0442\u044c \u0431\u043e\u043d\u0443\u0441\u043e\u0432', value: normalizeBonusLevelRequirementValue(current.requirementBonusRedeemed) },
     ].filter((item) => item.key !== 'referrals' || referralRequirementsEnabled);
 
     const getConditionTypeLabel = (type) => (
@@ -8692,6 +9200,8 @@
         <input id="bonusLevelRetentionModalAmountInput" value="${escapeHtml(String(normalizeBonusLevelRequirementValue(current.retentionAmount) ?? ''))}" />
         <input id="bonusLevelRetentionModalOrdersInput" value="${escapeHtml(String(normalizeBonusLevelRequirementValue(current.retentionOrders) ?? ''))}" />
         <input id="bonusLevelRetentionModalReferralsInput" value="${escapeHtml(String(normalizeBonusLevelRequirementValue(current.retentionReferrals) ?? ''))}" />
+        <input id="bonusLevelRetentionModalBonusAccruedInput" value="${escapeHtml(String(normalizeBonusLevelRequirementValue(current.retentionBonusAccrued) ?? ''))}" />
+        <input id="bonusLevelRetentionModalBonusRedeemedInput" value="${escapeHtml(String(normalizeBonusLevelRequirementValue(current.retentionBonusRedeemed) ?? ''))}" />
       </div>
     `;
     shell.appendChild(retentionSection);
@@ -8765,19 +9275,23 @@
     syncRetentionReferralModeButton();
 
     const collectRequirementConditionValues = () => {
-      const values = { amountRaw: '', ordersRaw: '', referralsRaw: '' };
+      const values = { amountRaw: '', ordersRaw: '', referralsRaw: '', bonusAccruedRaw: '', bonusRedeemedRaw: '' };
       conditionRowsRoot.querySelectorAll('.bonus-level-condition-row').forEach((row) => {
         const type = String(row.dataset.conditionType || '');
         const raw = String(row.querySelector('.bonus-level-condition-value-input')?.value ?? '').trim();
         if (type === 'amount') values.amountRaw = raw;
         if (type === 'orders') values.ordersRaw = raw;
         if (type === 'referrals') values.referralsRaw = raw;
+        if (type === 'bonusAccrued') values.bonusAccruedRaw = raw;
+        if (type === 'bonusRedeemed') values.bonusRedeemedRaw = raw;
       });
       return values;
     };
     const retentionAmountInput = retentionSection.querySelector('#bonusLevelRetentionModalAmountInput');
     const retentionOrdersInput = retentionSection.querySelector('#bonusLevelRetentionModalOrdersInput');
     const retentionReferralsInput = retentionSection.querySelector('#bonusLevelRetentionModalReferralsInput');
+    const retentionBonusAccruedInput = retentionSection.querySelector('#bonusLevelRetentionModalBonusAccruedInput');
+    const retentionBonusRedeemedInput = retentionSection.querySelector('#bonusLevelRetentionModalBonusRedeemedInput');
     const retentionMatchCountWrap = retentionSection.querySelector('#bonusLevelRetentionMatchCountWrap');
     const retentionMatchCountTrigger = retentionSection.querySelector('#bonusLevelRetentionMatchCountTrigger');
     const retentionMatchCountMenu = retentionSection.querySelector('#bonusLevelRetentionMatchCountMenu');
@@ -8791,17 +9305,21 @@
     let selectedRetentionMatchCount = Math.max(1, normalizeNumberInputValue(current.retentionMatchCount, 1));
     const getRetentionStrategyLabel = (strategy) => strategy === 'custom' ? '\u0421\u0432\u043e\u0438' : '\u0421\u043e\u0432\u043f\u0430\u0434\u0430\u044e\u0442';
     const syncRetentionHiddenInputs = () => {
-      const values = { amountRaw: '', ordersRaw: '', referralsRaw: '' };
+      const values = { amountRaw: '', ordersRaw: '', referralsRaw: '', bonusAccruedRaw: '', bonusRedeemedRaw: '' };
       retentionRowsRoot?.querySelectorAll('.bonus-level-condition-row').forEach((row) => {
         const type = String(row.dataset.conditionType || '');
         const raw = String(row.querySelector('.bonus-level-condition-value-input')?.value ?? '').trim();
         if (type === 'amount') values.amountRaw = raw;
         if (type === 'orders') values.ordersRaw = raw;
         if (type === 'referrals') values.referralsRaw = raw;
+        if (type === 'bonusAccrued') values.bonusAccruedRaw = raw;
+        if (type === 'bonusRedeemed') values.bonusRedeemedRaw = raw;
       });
       if (retentionAmountInput) retentionAmountInput.value = values.amountRaw;
       if (retentionOrdersInput) retentionOrdersInput.value = values.ordersRaw;
       if (retentionReferralsInput) retentionReferralsInput.value = values.referralsRaw;
+      if (retentionBonusAccruedInput) retentionBonusAccruedInput.value = values.bonusAccruedRaw;
+      if (retentionBonusRedeemedInput) retentionBonusRedeemedInput.value = values.bonusRedeemedRaw;
     };
     const getRetentionUsedConditionTypes = (exceptRow = null) => new Set(
       Array.from(retentionRowsRoot?.querySelectorAll('.bonus-level-condition-row') || [])
@@ -8911,6 +9429,8 @@
         { type: 'amount', value: values.amountRaw },
         { type: 'orders', value: values.ordersRaw },
         { type: 'referrals', value: values.referralsRaw },
+        { type: 'bonusAccrued', value: values.bonusAccruedRaw },
+        { type: 'bonusRedeemed', value: values.bonusRedeemedRaw },
       ].filter((row) => conditionTypes.some((item) => item.key === row.type) && String(row.value ?? '').trim() !== '');
       (rows.length ? rows : [{ type: conditionTypes[0]?.key || 'amount', value: '' }])
         .forEach((row) => appendRetentionConditionRow(row.type, row.value));
@@ -8930,6 +9450,8 @@
             amountRaw: String(initialRetentionAmount ?? ''),
             ordersRaw: String(initialRetentionOrders ?? ''),
             referralsRaw: String(initialRetentionReferrals ?? ''),
+            bonusAccruedRaw: String(initialRetentionBonusAccrued ?? ''),
+            bonusRedeemedRaw: String(initialRetentionBonusRedeemed ?? ''),
           }
         : collectRequirementConditionValues()
       );
@@ -9124,26 +9646,38 @@
       const retentionAmountInput = retentionSection.querySelector('#bonusLevelRetentionModalAmountInput');
       const retentionOrdersInput = retentionSection.querySelector('#bonusLevelRetentionModalOrdersInput');
       const retentionReferralsInput = retentionSection.querySelector('#bonusLevelRetentionModalReferralsInput');
-      const { amountRaw, ordersRaw, referralsRaw } = collectRequirementConditionValues();
+      const retentionBonusAccruedInput = retentionSection.querySelector('#bonusLevelRetentionModalBonusAccruedInput');
+      const retentionBonusRedeemedInput = retentionSection.querySelector('#bonusLevelRetentionModalBonusRedeemedInput');
+      const { amountRaw, ordersRaw, referralsRaw, bonusAccruedRaw, bonusRedeemedRaw } = collectRequirementConditionValues();
       const periodRaw = String(periodInput?.value ?? '').trim();
       const retentionAmountRaw = String(retentionAmountInput?.value ?? '').trim();
       const retentionOrdersRaw = String(retentionOrdersInput?.value ?? '').trim();
       const retentionReferralsRaw = referralRequirementsEnabled ? String(retentionReferralsInput?.value ?? '').trim() : '';
+      const retentionBonusAccruedRaw = String(retentionBonusAccruedInput?.value ?? '').trim();
+      const retentionBonusRedeemedRaw = String(retentionBonusRedeemedInput?.value ?? '').trim();
       const amount = normalizeBonusLevelRequirementValue(amountRaw);
       const orders = normalizeBonusLevelRequirementValue(ordersRaw);
       const referrals = normalizeBonusLevelRequirementValue(referralsRaw);
+      const bonusAccrued = normalizeBonusLevelRequirementValue(bonusAccruedRaw);
+      const bonusRedeemed = normalizeBonusLevelRequirementValue(bonusRedeemedRaw);
       const periodDays = selectedPeriodUnit === 'days' ? normalizeBonusLevelRequirementValue(periodRaw) : null;
       const retentionAmount = normalizeBonusLevelRequirementValue(retentionAmountRaw);
       const retentionOrders = normalizeBonusLevelRequirementValue(retentionOrdersRaw);
       const retentionReferrals = normalizeBonusLevelRequirementValue(retentionReferralsRaw);
+      const retentionBonusAccrued = normalizeBonusLevelRequirementValue(retentionBonusAccruedRaw);
+      const retentionBonusRedeemed = normalizeBonusLevelRequirementValue(retentionBonusRedeemedRaw);
       const amountFilled = amountRaw !== '' && amount != null;
       const ordersFilled = ordersRaw !== '' && orders != null;
       const referralsFilled = referralsRaw !== '' && referrals != null;
+      const bonusAccruedFilled = bonusAccruedRaw !== '' && bonusAccrued != null;
+      const bonusRedeemedFilled = bonusRedeemedRaw !== '' && bonusRedeemed != null;
       const retentionAmountFilled = retentionAmountRaw !== '' && retentionAmount != null;
       const retentionOrdersFilled = retentionOrdersRaw !== '' && retentionOrders != null;
       const retentionReferralsFilled = retentionReferralsRaw !== '' && retentionReferrals != null;
-      const requirementFilledCount = [amountFilled, ordersFilled, referralsFilled].filter(Boolean).length;
-      const retentionFilledCount = [retentionAmountFilled, retentionOrdersFilled, retentionReferralsFilled].filter(Boolean).length;
+      const retentionBonusAccruedFilled = retentionBonusAccruedRaw !== '' && retentionBonusAccrued != null;
+      const retentionBonusRedeemedFilled = retentionBonusRedeemedRaw !== '' && retentionBonusRedeemed != null;
+      const requirementFilledCount = [amountFilled, ordersFilled, referralsFilled, bonusAccruedFilled, bonusRedeemedFilled].filter(Boolean).length;
+      const retentionFilledCount = [retentionAmountFilled, retentionOrdersFilled, retentionReferralsFilled, retentionBonusAccruedFilled, retentionBonusRedeemedFilled].filter(Boolean).length;
       const requirementMatchCount = Math.min(
         Math.max(1, selectedRequirementMatchCount),
         Math.max(1, requirementFilledCount)
@@ -9153,20 +9687,18 @@
         Math.max(1, retentionFilledCount)
       );
 
-      if ((amountRaw !== '' && amount == null) || (ordersRaw !== '' && orders == null) || (referralsRaw !== '' && referrals == null)) {
+      if (
+        (amountRaw !== '' && amount == null)
+        || (ordersRaw !== '' && orders == null)
+        || (referralsRaw !== '' && referrals == null)
+        || (bonusAccruedRaw !== '' && bonusAccrued == null)
+        || (bonusRedeemedRaw !== '' && bonusRedeemed == null)
+      ) {
         showBonusLevelRequirementsValidationMessage('\u0417\u0430\u043f\u043e\u043b\u043d\u0438\u0442\u0435 \u0443\u0441\u043b\u043e\u0432\u0438\u044f \u043a\u043e\u0440\u0440\u0435\u043a\u0442\u043d\u044b\u043c\u0438 \u0447\u0438\u0441\u043b\u0430\u043c\u0438.');
         return;
       }
-      if (selectedMode === 'and' && (!amountFilled || !ordersFilled)) {
-        showBonusLevelRequirementsValidationMessage('\u0414\u043b\u044f \u0440\u0435\u0436\u0438\u043c\u0430 "\u0438" \u0437\u0430\u043f\u043e\u043b\u043d\u0438\u0442\u0435 \u0441\u0443\u043c\u043c\u0443 \u0438 \u043a\u043e\u043b\u0438\u0447\u0435\u0441\u0442\u0432\u043e \u0437\u0430\u043a\u0430\u0437\u043e\u0432.');
-        return;
-      }
-      if (referralRequirementsEnabled && selectedReferralMode === 'and' && (!ordersFilled || !referralsFilled)) {
-        showBonusLevelRequirementsValidationMessage('\u0414\u043b\u044f \u0440\u0435\u0436\u0438\u043c\u0430 "\u0438" \u0437\u0430\u043f\u043e\u043b\u043d\u0438\u0442\u0435 \u043a\u043e\u043b\u0438\u0447\u0435\u0441\u0442\u0432\u043e \u0437\u0430\u043a\u0430\u0437\u043e\u0432 \u0438 \u0440\u0435\u0444\u0435\u0440\u0430\u043b\u043e\u0432.');
-        return;
-      }
-      if (selectedMode === 'or' && (!referralRequirementsEnabled || selectedReferralMode === 'or') && !amountFilled && !ordersFilled && !referralsFilled) {
-        showBonusLevelRequirementsValidationMessage('\u0414\u043b\u044f \u0440\u0435\u0436\u0438\u043c\u0430 "\u0438\u043b\u0438" \u0437\u0430\u043f\u043e\u043b\u043d\u0438\u0442\u0435 \u0445\u043e\u0442\u044f \u0431\u044b \u043e\u0434\u043d\u043e \u0443\u0441\u043b\u043e\u0432\u0438\u0435.');
+      if (!requirementFilledCount) {
+        showBonusLevelRequirementsValidationMessage('\u0417\u0430\u043f\u043e\u043b\u043d\u0438\u0442\u0435 \u0445\u043e\u0442\u044f \u0431\u044b \u043e\u0434\u043d\u043e \u0443\u0441\u043b\u043e\u0432\u0438\u0435.');
         return;
       }
       if (selectedPeriodUnit === 'days' && periodDays == null) {
@@ -9174,16 +9706,16 @@
         return;
       }
       if (selectedPeriodUnit === 'days' && selectedRetentionStrategy === 'custom') {
-        if ((retentionAmountRaw !== '' && retentionAmount == null) || (retentionOrdersRaw !== '' && retentionOrders == null) || (retentionReferralsRaw !== '' && retentionReferrals == null)) {
+        if (
+          (retentionAmountRaw !== '' && retentionAmount == null)
+          || (retentionOrdersRaw !== '' && retentionOrders == null)
+          || (retentionReferralsRaw !== '' && retentionReferrals == null)
+          || (retentionBonusAccruedRaw !== '' && retentionBonusAccrued == null)
+          || (retentionBonusRedeemedRaw !== '' && retentionBonusRedeemed == null)
+        ) {
           showBonusLevelRequirementsValidationMessage('\u0417\u0430\u043f\u043e\u043b\u043d\u0438\u0442\u0435 \u0443\u0441\u043b\u043e\u0432\u0438\u044f \u0443\u0434\u0435\u0440\u0436\u0430\u043d\u0438\u044f \u043a\u043e\u0440\u0440\u0435\u043a\u0442\u043d\u044b\u043c\u0438 \u0447\u0438\u0441\u043b\u0430\u043c\u0438.');
           return;
-        } else if (selectedRetentionMode === 'and' && (!retentionAmountFilled || !retentionOrdersFilled)) {
-          showBonusLevelRequirementsValidationMessage('\u0414\u043b\u044f \u0443\u0434\u0435\u0440\u0436\u0430\u043d\u0438\u044f \u0443\u0440\u043e\u0432\u043d\u044f \u0437\u0430\u043f\u043e\u043b\u043d\u0438\u0442\u0435 \u0441\u0443\u043c\u043c\u0443 \u0438 \u043a\u043e\u043b\u0438\u0447\u0435\u0441\u0442\u0432\u043e \u0437\u0430\u043a\u0430\u0437\u043e\u0432.');
-          return;
-        } else if (referralRequirementsEnabled && selectedRetentionReferralMode === 'and' && (!retentionOrdersFilled || !retentionReferralsFilled)) {
-          showBonusLevelRequirementsValidationMessage('\u0414\u043b\u044f \u0443\u0434\u0435\u0440\u0436\u0430\u043d\u0438\u044f \u0443\u0440\u043e\u0432\u043d\u044f \u0437\u0430\u043f\u043e\u043b\u043d\u0438\u0442\u0435 \u043a\u043e\u043b\u0438\u0447\u0435\u0441\u0442\u0432\u043e \u0437\u0430\u043a\u0430\u0437\u043e\u0432 \u0438 \u0440\u0435\u0444\u0435\u0440\u0430\u043b\u043e\u0432.');
-          return;
-        } else if (selectedRetentionMode === 'or' && (!referralRequirementsEnabled || selectedRetentionReferralMode === 'or') && !retentionAmountFilled && !retentionOrdersFilled && !retentionReferralsFilled) {
+        } else if (!retentionFilledCount) {
           showBonusLevelRequirementsValidationMessage('\u0414\u043b\u044f \u0443\u0434\u0435\u0440\u0436\u0430\u043d\u0438\u044f \u0443\u0440\u043e\u0432\u043d\u044f \u0437\u0430\u043f\u043e\u043b\u043d\u0438\u0442\u0435 \u0445\u043e\u0442\u044f \u0431\u044b \u043e\u0434\u043d\u043e \u0443\u0441\u043b\u043e\u0432\u0438\u0435.');
           return;
         }
@@ -9195,6 +9727,8 @@
         requirementOrders: ordersFilled ? orders : null,
         requirementReferralMode: referralRequirementsEnabled ? normalizeBonusLevelRequirementMode(selectedReferralMode) : 'and',
         requirementReferrals: referralRequirementsEnabled && referralsFilled ? referrals : null,
+        requirementBonusAccrued: bonusAccruedFilled ? bonusAccrued : null,
+        requirementBonusRedeemed: bonusRedeemedFilled ? bonusRedeemed : null,
         requirementMatchCount,
         requirementPeriodDays: selectedPeriodUnit === 'days' ? periodDays : null,
         retentionStrategy: selectedPeriodUnit === 'days' ? normalizeBonusLevelRetentionStrategy(selectedRetentionStrategy) : 'match',
@@ -9203,6 +9737,8 @@
         retentionOrders: selectedPeriodUnit === 'days' && selectedRetentionStrategy === 'custom' && retentionOrdersFilled ? retentionOrders : null,
         retentionReferralMode: referralRequirementsEnabled ? normalizeBonusLevelRequirementMode(selectedRetentionReferralMode) : 'and',
         retentionReferrals: referralRequirementsEnabled && selectedPeriodUnit === 'days' && selectedRetentionStrategy === 'custom' && retentionReferralsFilled ? retentionReferrals : null,
+        retentionBonusAccrued: selectedPeriodUnit === 'days' && selectedRetentionStrategy === 'custom' && retentionBonusAccruedFilled ? retentionBonusAccrued : null,
+        retentionBonusRedeemed: selectedPeriodUnit === 'days' && selectedRetentionStrategy === 'custom' && retentionBonusRedeemedFilled ? retentionBonusRedeemed : null,
         retentionMatchCount: selectedPeriodUnit === 'days' && selectedRetentionStrategy === 'custom' ? retentionMatchCount : requirementMatchCount,
       };
       applyBonusLevelEditorDraftPatch(nextPatch);
@@ -9370,13 +9906,27 @@
 
   function formatBonusLevelFavoriteCategoriesHelpText(level = null) {
     const current = level && typeof level === 'object' ? level : getActiveBonusLevelForInfo();
-    const bonusPercent = normalizeNumberInputValue(current?.favoriteCategoriesBonusPercent, 0);
-    const limit = Math.max(0, Math.floor(Number(current?.favoriteCategoriesLimit || 0)));
-    const favoriteCategoryIds = normalizeBonusLevelFavoriteCategoryIds(current?.favoriteCategoryIds);
+    const groupId = Number(current?.favoriteCategoryGroupId || 0);
+    const groups = state.bonusSettingsEditing ? state.bonusCategoryGroupsDraft : state.bonusCategoryGroups;
+    const selectedGroup = groups.find(g => Number(g.id) === groupId);
+
+    const bonusPercent = selectedGroup
+      ? normalizeNumberInputValue(selectedGroup.favoriteCategoriesBonusPercent, 0)
+      : normalizeNumberInputValue(current?.favoriteCategoriesBonusPercent, 0);
+    const limit = selectedGroup
+      ? Math.max(0, Math.floor(Number(selectedGroup.favoriteCategoriesLimit || 0)))
+      : Math.max(0, Math.floor(Number(current?.favoriteCategoriesLimit || 0)));
+    const favoriteCategoryIds = selectedGroup
+      ? normalizeBonusLevelFavoriteCategoryIds(selectedGroup.favoriteCategoryIds)
+      : normalizeBonusLevelFavoriteCategoryIds(current?.favoriteCategoryIds);
+
     if (!(bonusPercent > 0) && !(limit > 0)) {
       return 'Дополнительный бонус за любимые категории не настроен.';
     }
     const lines = [];
+    if (selectedGroup) {
+      lines.push(`Группа: ${escapeHtml(selectedGroup.title)}`);
+    }
     if (bonusPercent > 0) lines.push(`Кэшбек: +${bonusPercent}%`);
     if (limit > 0) lines.push(`Количество категорий: ${limit}`);
     if (favoriteCategoryIds.length) {
@@ -9389,18 +9939,87 @@
     return lines.join('\n');
   }
 
+  function renderBonusFavoriteCategoryIconsHtml(categoryIds = []) {
+    const selectedIds = normalizeBonusLevelFavoriteCategoryIds(categoryIds);
+    const visibleCount = Math.min(selectedIds.length, 4);
+    let html = '';
+    for (let i = 0; i < visibleCount; i += 1) {
+      const categoryId = selectedIds[i];
+      const category = (state.catalogCategories || []).find((entry) => Number(entry?.id || 0) === Number(categoryId));
+      const titleText = String(category?.title || `Категория #${categoryId}`).trim();
+      const photo = getDiscountEntityPhoto({ type: 'category', id: categoryId });
+      const icon = String(category?.icon || '').trim();
+      let inner = '';
+      if (photo) {
+        inner = `<img src="${escapeHtml(photo)}" alt="${escapeHtml(titleText)}">`;
+      } else if (icon && isDiscountEntityImageUrl(icon)) {
+        inner = `<img src="${escapeHtml(icon)}" alt="${escapeHtml(titleText)}">`;
+      } else if (icon) {
+        inner = `<i class="${escapeHtml(icon)}" aria-hidden="true"></i>`;
+      } else {
+        inner = '<i class="fas fa-tag" aria-hidden="true"></i>';
+      }
+      html += `<span class="bonus-level-favorite-category-icon" title="${escapeHtml(titleText)}">${inner}</span>`;
+    }
+    if (selectedIds.length > visibleCount) {
+      html += `<span class="bonus-level-favorite-category-icon">+${selectedIds.length - visibleCount}</span>`;
+    }
+    return html;
+  }
+
   function renderBonusLevelFavoriteCategoryIcons(level = null) {
-    if (!bonusLevelFavoriteCategoriesIcons) return;
+    if (!bonusLevelFavoriteCategoriesIcons || !bonusLevelFavoriteCategoriesPill) return;
     const current = level && typeof level === 'object' ? level : getActiveBonusLevelForInfo();
-    const selectedIds = normalizeBonusLevelFavoriteCategoryIds(current?.favoriteCategoryIds);
-    const limit = Math.max(0, Math.floor(Number(current?.favoriteCategoriesLimit || 0)));
-    const bonusPercent = normalizeNumberInputValue(current?.favoriteCategoriesBonusPercent, 0);
+    const isEditing = String(state.editingBonusLevelId || '').trim() === String(current?.id || '').trim();
+    
+    const groupId = Number(current?.favoriteCategoryGroupId || 0);
+    const groups = state.bonusSettingsEditing ? state.bonusCategoryGroupsDraft : state.bonusCategoryGroups;
+    const selectedGroup = groups.find(g => Number(g.id) === groupId);
+    
+    const selectedIds = selectedGroup 
+      ? normalizeBonusLevelFavoriteCategoryIds(selectedGroup.favoriteCategoryIds)
+      : normalizeBonusLevelFavoriteCategoryIds(current?.favoriteCategoryIds);
+    
+    const limit = selectedGroup
+      ? Math.max(0, Math.floor(Number(selectedGroup.favoriteCategoriesLimit || 0)))
+      : Math.max(0, Math.floor(Number(current?.favoriteCategoriesLimit || 0)));
+      
+    const bonusPercent = selectedGroup
+      ? normalizeNumberInputValue(selectedGroup.favoriteCategoriesBonusPercent, 0)
+      : normalizeNumberInputValue(current?.favoriteCategoriesBonusPercent, 0);
+
     bonusLevelFavoriteCategoriesIcons.innerHTML = '';
-    const visibleSourceCount = selectedIds.length || limit;
-    if (!(visibleSourceCount > 0) || !(bonusPercent > 0)) {
-      bonusLevelFavoriteCategoriesIcons.textContent = '—';
+    
+    // Check if empty
+    if (!groupId && (!selectedIds.length && !(limit > 0) || !(bonusPercent > 0))) {
+      bonusLevelFavoriteCategoriesIcons.innerHTML = `
+        <div class="bonus-level-favorite-categories-plus" style="width: 100%; display: flex; justify-content: center; align-items: center; cursor: ${isEditing ? 'pointer' : 'default'};">
+          <i class="fas fa-plus"></i>
+        </div>
+      `;
+      bonusLevelFavoriteCategoriesPill.classList.add('is-empty');
+      // Hide standard actions if empty
+      const actions = bonusLevelFavoriteCategoriesPill.querySelector('.bonus-level-range-pill-actions');
+      if (actions) actions.style.display = 'none';
+      
+      if (isEditing) {
+        bonusLevelFavoriteCategoriesIcons.onclick = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          openBonusLevelFavoriteCategoryGroupPicker();
+        };
+      } else {
+        bonusLevelFavoriteCategoriesIcons.onclick = null;
+      }
       return;
     }
+
+    bonusLevelFavoriteCategoriesPill.classList.remove('is-empty');
+    const actions = bonusLevelFavoriteCategoriesPill.querySelector('.bonus-level-range-pill-actions');
+    if (actions) actions.style.display = '';
+    bonusLevelFavoriteCategoriesIcons.onclick = null;
+
+    const visibleSourceCount = selectedIds.length || limit;
     const visibleCount = Math.min(visibleSourceCount, 4);
     for (let i = 0; i < visibleCount; i += 1) {
       const badge = document.createElement('span');
@@ -9440,14 +10059,15 @@
     window.AdminBenefitsModal?.hide();
   }
 
-  async function openBonusLevelFavoriteCategoriesEditor() {
+  async function openBonusLevelFavoriteCategoryGroupPicker() {
     if (String(state.editingBonusLevelId || '').trim() !== String(state.activeBonusLevelId || '').trim()) return;
     const current = getActiveBonusLevelForInfo();
     if (!current) return;
-    const categories = await loadCatalogCategories();
+    
+    const groups = state.bonusSettingsEditing ? state.bonusCategoryGroupsDraft : state.bonusCategoryGroups;
 
     window.AdminBenefitsModal?.show({
-      title: 'Категории на выбор',
+      title: 'Группы любимых категорий',
       showBack: false,
       showModeToggle: false,
       onClose: closeBonusLevelFavoriteCategoriesEditor,
@@ -9468,108 +10088,50 @@
 
     const title = document.createElement('div');
     title.className = 'bonus-range-editor-title';
-    title.textContent = 'Доп. бонус за покупку любимых категорий';
+    title.textContent = 'Выберите группу категорий';
     shell.appendChild(title);
 
     const note = document.createElement('div');
     note.className = 'bonus-range-editor-row';
-    note.textContent = 'Укажите процент кэшбека и количество любимых категорий.';
+    note.textContent = 'Для уровня можно выбрать только одну группу.';
     shell.appendChild(note);
 
-    const rowEl = document.createElement('div');
-    rowEl.className = 'bonus-range-editor-input-row';
-    rowEl.innerHTML = `
-      <input
-        class="control bonus-range-editor-input"
-        type="number"
-        min="0"
-        step="0.1"
-        placeholder="Кэшбек, %"
-        data-bonus-favorite-field="percent"
-        value="${escapeHtml(String(normalizeNumberInputValue(current.favoriteCategoriesBonusPercent, 0) || ''))}"
-      />
-      <input
-        class="control bonus-range-editor-input"
-        type="number"
-        min="0"
-        step="1"
-        placeholder="Количество категорий"
-        data-bonus-favorite-field="limit"
-        value="${escapeHtml(String(Math.max(0, Math.floor(Number(current.favoriteCategoriesLimit || 0))) || ''))}"
-      />
-    `;
-    shell.appendChild(rowEl);
-
-    const categoriesTitle = document.createElement('div');
-    categoriesTitle.className = 'bonus-range-editor-title';
-    categoriesTitle.textContent = 'Категории тенанта';
-    shell.appendChild(categoriesTitle);
-
-    const selectedCategoryIds = new Set(normalizeBonusLevelFavoriteCategoryIds(current.favoriteCategoryIds));
-    const categoriesToolbar = document.createElement('div');
-    categoriesToolbar.className = 'bonus-level-favorite-categories-toolbar';
-
-    const selectAllBtn = document.createElement('button');
-    selectAllBtn.type = 'button';
-    selectAllBtn.className = 'shop-chip-btn discount-promo-apply-chip';
-    selectAllBtn.textContent = 'Выделить все';
-    categoriesToolbar.appendChild(selectAllBtn);
-
-    const resetAllBtn = document.createElement('button');
-    resetAllBtn.type = 'button';
-    resetAllBtn.className = 'shop-chip-btn discount-promo-apply-chip';
-    resetAllBtn.textContent = 'Сбросить все';
-    categoriesToolbar.appendChild(resetAllBtn);
-
-    shell.appendChild(categoriesToolbar);
-    const categoriesList = document.createElement('div');
-    categoriesList.className = 'option-picker-list';
-    if (Array.isArray(categories) && categories.length) {
-      categoriesList.innerHTML = categories.map((category) => {
-        const categoryId = Number(category?.id || 0);
-        const isChecked = selectedCategoryIds.has(categoryId);
-        const titleText = String(category?.title || `Категория #${categoryId}`).trim();
-        const photo = getDiscountEntityPhoto({ type: 'category', id: categoryId });
-        const icon = String(category?.icon || '').trim();
-        const media = photo
-          ? `<span class="option-picker-photo"><img src="${escapeHtml(photo)}" alt="${escapeHtml(titleText)}"></span>`
-          : `<span class="option-picker-photo">${icon ? (isDiscountEntityImageUrl(icon) ? `<img src="${escapeHtml(icon)}" alt="${escapeHtml(titleText)}">` : `<i class="${escapeHtml(icon)}" aria-hidden="true"></i>`) : '<i class="fas fa-layer-group" aria-hidden="true"></i>'}</span>`;
+    const groupsList = document.createElement('div');
+    groupsList.className = 'option-picker-list';
+    
+    let selectedGroupId = Number(current.favoriteCategoryGroupId || 0);
+    let groupsHtml = '';
+    
+    if (Array.isArray(groups) && groups.length) {
+      groupsHtml = groups.map((group) => {
+        const groupId = Number(group?.id || 0);
+        if (!(groupId > 0)) return '';
+        const isChecked = selectedGroupId === groupId;
+        const titleText = String(group?.title || `Группа #${groupId}`).trim();
+        const iconsHtml = renderBonusFavoriteCategoryIconsHtml(group.favoriteCategoryIds || []);
+        
         return `
-          <label class="option-picker-row bonus-level-favorite-category-card${isChecked ? ' is-selected' : ''}">
-            <input type="checkbox" data-bonus-favorite-category-id="${categoryId}" ${isChecked ? 'checked' : ''} />
-            ${media}
-            <span class="option-picker-title">${escapeHtml(String(category?.title || `Категория #${categoryId}`).trim())}</span>
-          </label>
+          <button class="option-picker-row bonus-level-favorite-category-card${isChecked ? ' is-selected' : ''}" type="button" data-group-id="${groupId}">
+            <div class="bonus-level-favorite-categories-icons" style="margin-right: 12px; transform: scale(0.8);">${iconsHtml}</div>
+            <span class="option-picker-title">${escapeHtml(titleText)}</span>
+          </button>
         `;
       }).join('');
-      const syncCategorySelectionUi = () => {
-        categoriesList.querySelectorAll('input[type="checkbox"][data-bonus-favorite-category-id]').forEach((input) => {
-          const row = input.closest('.option-picker-row');
-          if (row) row.classList.toggle('is-selected', input.checked);
-        });
-      };
-      categoriesList.querySelectorAll('input[type="checkbox"][data-bonus-favorite-category-id]').forEach((input) => {
-        input.addEventListener('change', syncCategorySelectionUi);
-      });
-      selectAllBtn.addEventListener('click', () => {
-        categoriesList.querySelectorAll('input[type="checkbox"][data-bonus-favorite-category-id]').forEach((input) => {
-          input.checked = true;
-        });
-        syncCategorySelectionUi();
-      });
-      resetAllBtn.addEventListener('click', () => {
-        categoriesList.querySelectorAll('input[type="checkbox"][data-bonus-favorite-category-id]').forEach((input) => {
-          input.checked = false;
-        });
-        syncCategorySelectionUi();
-      });
-      syncCategorySelectionUi();
     } else {
-      categoriesList.innerHTML = '<div class="option-picker-empty">Категории не найдены</div>';
-      selectAllBtn.disabled = true;
-      resetAllBtn.disabled = true;
+      groupsHtml = '<div class="empty-hint">Группы категорий не созданы.</div>';
     }
-    shell.appendChild(categoriesList);
+    groupsList.innerHTML = groupsHtml;
+    
+    groupsList.querySelectorAll('[data-group-id]').forEach((row) => {
+      row.addEventListener('click', () => {
+        const groupId = Number(row.getAttribute('data-group-id') || 0);
+        selectedGroupId = selectedGroupId === groupId ? 0 : groupId;
+        groupsList.querySelectorAll('[data-group-id]').forEach((item) => {
+          item.classList.toggle('is-selected', Number(item.getAttribute('data-group-id') || 0) === selectedGroupId);
+        });
+      });
+    });
+    shell.appendChild(groupsList);
 
     const actions = document.createElement('div');
     actions.className = 'bonus-range-editor-footer-actions';
@@ -9586,19 +10148,12 @@
     const saveBtn = document.createElement('button');
     saveBtn.type = 'button';
     saveBtn.className = 'shop-checkout-benefits-promo-entry-btn is-active';
-    saveBtn.textContent = 'Сохранить';
+    saveBtn.textContent = 'Выбрать';
     saveBtn.addEventListener('click', () => {
-      const percentInput = rowEl.querySelector('[data-bonus-favorite-field="percent"]');
-      const limitInput = rowEl.querySelector('[data-bonus-favorite-field="limit"]');
-      const nextCategoryIds = normalizeBonusLevelFavoriteCategoryIds(
-        Array.from(categoriesList.querySelectorAll('input[type="checkbox"][data-bonus-favorite-category-id]:checked'))
-          .map((input) => input.getAttribute('data-bonus-favorite-category-id'))
-      );
       const nextPatch = {
-        favoriteCategoriesBonusPercent: normalizeNumberInputValue(percentInput?.value, 0),
-        favoriteCategoriesLimit: normalizeNumberInputValue(limitInput?.value, 0),
-        favoriteCategoryIds: nextCategoryIds,
+        favoriteCategoryGroupId: selectedGroupId > 0 ? selectedGroupId : null
       };
+      
       applyBonusLevelEditorDraftPatch(nextPatch);
       updateBonusLevelInCollections(current.id, (level) => ({
         ...level,
@@ -9612,6 +10167,10 @@
     actions.appendChild(saveBtn);
 
     frame.footerEl.appendChild(actions);
+  }
+
+  async function openBonusLevelFavoriteCategoriesEditor() {
+    return openBonusLevelFavoriteCategoryGroupPicker();
   }
 
   function syncBonusLevelSwatchButtons(level = null) {
@@ -9787,6 +10346,32 @@
       bonusLevelReferralBonusPercentInput.value = String(normalizeBonusPercentInputValue(current.referralBonusPercent, 0) || 0);
       bonusLevelReferralBonusPercentInput.disabled = !isEditing || !isReferralSystemEnabled();
     }
+    
+    const groupId = Number(current?.favoriteCategoryGroupId || 0);
+    if (bonusLevelFavoriteCategoriesBonusPercentInput) {
+      const groups = state.bonusSettingsEditing ? state.bonusCategoryGroupsDraft : state.bonusCategoryGroups;
+      const selectedGroup = groups.find(g => Number(g.id) === groupId);
+      
+      const bonusPercent = selectedGroup
+        ? normalizeNumberInputValue(selectedGroup.favoriteCategoriesBonusPercent, 0)
+        : normalizeNumberInputValue(current.favoriteCategoriesBonusPercent, 0);
+        
+      bonusLevelFavoriteCategoriesBonusPercentInput.value = String(bonusPercent || 0);
+      bonusLevelFavoriteCategoriesBonusPercentInput.disabled = !isEditing || !!groupId;
+      bonusLevelFavoriteCategoriesBonusPercentInput.title = groupId ? 'Настраивается в группе категорий' : '';
+    }
+    if (bonusLevelFavoriteCategoriesLimitInput) {
+      const groups = state.bonusSettingsEditing ? state.bonusCategoryGroupsDraft : state.bonusCategoryGroups;
+      const selectedGroup = groups.find(g => Number(g.id) === groupId);
+      
+      const limit = selectedGroup
+        ? Math.max(0, Math.floor(Number(selectedGroup.favoriteCategoriesLimit || 0)))
+        : Math.max(0, Math.floor(Number(current.favoriteCategoriesLimit || 0)));
+        
+      bonusLevelFavoriteCategoriesLimitInput.value = String(limit || 0);
+      bonusLevelFavoriteCategoriesLimitInput.disabled = !isEditing || !!groupId;
+      bonusLevelFavoriteCategoriesLimitInput.title = groupId ? 'Настраивается в группе категорий' : '';
+    }
     if (bonusLevelRangeSummary) {
       const rangeSummaryText = formatBonusLevelRangeSummary(current);
       const rangeHelpText = formatBonusLevelRangeHelpText(current);
@@ -9825,59 +10410,95 @@
   function renderBonusLevelPreview(level = null) {
     const current = level && typeof level === 'object' ? level : getActiveBonusLevelForInfo();
     if (!current) return;
-    if (bonusLevelPreviewTitle) {
-      bonusLevelPreviewTitle.textContent = String(current.title || '').trim() || 'Уровень';
-      bonusLevelPreviewTitle.style.color = normalizeHexColor(current.titleColor, '#1f2937');
+    const previewRoot = bonusLevelInfoWrap instanceof Element ? bonusLevelInfoWrap : clientRightRoot;
+    const previewCard = previewRoot?.querySelector('#bonusLevelPreviewCard') || bonusLevelPreviewCard;
+    const previewMain = previewRoot?.querySelector('#bonusLevelPreviewMain') || bonusLevelPreviewMain;
+    const previewTitle = previewRoot?.querySelector('#bonusLevelPreviewTitle') || bonusLevelPreviewTitle;
+    const previewBonusValue = previewRoot?.querySelector('#bonusLevelPreviewBonusValue') || bonusLevelPreviewBonusValue;
+    const previewCashbackValue = previewRoot?.querySelector('#bonusLevelPreviewCashbackValue') || bonusLevelPreviewCashbackValue;
+    const previewCategorySide = previewRoot?.querySelector('.bonus-level-preview-category-side') || bonusLevelPreviewCategorySide;
+    const previewCategoryCount = previewRoot?.querySelector('#bonusLevelPreviewCategoryCount') || bonusLevelPreviewCategoryCount;
+    const previewCategoryValue = previewRoot?.querySelector('#bonusLevelPreviewCategoryValue') || bonusLevelPreviewCategoryValue;
+    const previewQr = previewRoot?.querySelector('#bonusLevelPreviewQr') || bonusLevelPreviewQr;
+    if (previewTitle) {
+      const isPaid = current.accessType === 'paid' || current.access_type === 'paid';
+      const programName = isPaid
+        ? (state.bonusProgramNamePaid || state.bonusProgramNameBase || '')
+        : (state.bonusProgramNameBase || state.bonusProgramNamePaid || '');
+      const programLogo = isPaid ? (state.bonusProgramLogoPaid || '') : (state.bonusProgramLogoBase || '');
+      const levelTitle = String(current.title || '').trim() || 'Уровень';
+      const logoHtml = programLogo ? `<img src="${escapeHtml(programLogo)}" style="width:1.1em;height:1.1em;border-radius:2px;margin-right:4px;object-fit:contain;display:inline-block;vertical-align:middle;">` : '';
+      previewTitle.innerHTML = `
+        ${logoHtml}
+        <span style="font-weight:600;margin-right:4px;">${escapeHtml(programName)}</span>
+        <span style="opacity:0.8;">${escapeHtml(levelTitle)}</span>
+      `;
+      previewTitle.style.color = normalizeHexColor(current.titleColor, '#1f2937');
       if (current.titleBackgroundEnabled === false) {
-        bonusLevelPreviewTitle.style.background = 'transparent';
-        bonusLevelPreviewTitle.style.padding = '0';
-        bonusLevelPreviewTitle.style.borderRadius = '0';
+        previewTitle.style.background = 'transparent';
+        previewTitle.style.padding = '0';
+        previewTitle.style.borderRadius = '0';
       } else {
-        bonusLevelPreviewTitle.style.background = buildBannerTitleBackgroundColor(
+        previewTitle.style.background = buildBannerTitleBackgroundColor(
           current.titleBackgroundColor || '#ffffff',
           current.titleBackgroundOpacity
         );
-        bonusLevelPreviewTitle.style.padding = '2px 10px';
-        bonusLevelPreviewTitle.style.borderRadius = '999px';
+        previewTitle.style.padding = '2px 10px';
+        previewTitle.style.borderRadius = '999px';
       }
-      bonusLevelPreviewTitle.style.display = current.showTitleOnCard === false ? 'none' : 'inline-flex';
+      previewTitle.style.display = current.showTitleOnCard === false ? 'none' : 'inline-flex';
     }
-    if (bonusLevelPreviewBonusValue) {
-      bonusLevelPreviewBonusValue.textContent = '0 ₽';
+    if (previewMain) {
+      const labelNode = previewMain.querySelector('.bonus-level-preview-bonus-label');
+      if (labelNode) {
+        labelNode.textContent = state.bonusProgramCoinName || 'Бонусы';
+      }
     }
-    if (bonusLevelPreviewCashbackValue) {
+    if (previewBonusValue) {
+      previewBonusValue.innerHTML = `0 ${getBonusCoinIconHtml('1em', '2px')}`;
+    }
+    if (previewCashbackValue) {
       const cashback = normalizeNumberInputValue(current.cashbackPercent, 1);
-      bonusLevelPreviewCashbackValue.textContent = `${cashback}%`;
+      previewCashbackValue.textContent = `${cashback}%`;
     }
-    const previewCategoryLimit = Math.max(0, Math.floor(Number(current.favoriteCategoriesLimit || 0)));
-    if (bonusLevelPreviewCategorySide) {
-      bonusLevelPreviewCategorySide.classList.toggle('hidden', previewCategoryLimit <= 0);
+    const groupId = Number(current.favoriteCategoryGroupId || 0);
+    const groups = state.bonusSettingsEditing ? state.bonusCategoryGroupsDraft : state.bonusCategoryGroups;
+    const selectedGroup = groups.find(g => Number(g.id) === groupId);
+
+    const previewCategoryLimit = selectedGroup
+      ? Math.max(0, Math.floor(Number(selectedGroup.favoriteCategoriesLimit || 0)))
+      : Math.max(0, Math.floor(Number(current.favoriteCategoriesLimit || 0)));
+      
+    if (previewCategorySide) {
+      previewCategorySide.classList.toggle('hidden', previewCategoryLimit <= 0);
     }
-    if (bonusLevelPreviewCategoryCount) {
-      bonusLevelPreviewCategoryCount.textContent = String(previewCategoryLimit);
+    if (previewCategoryCount) {
+      previewCategoryCount.textContent = String(previewCategoryLimit);
     }
-    if (bonusLevelPreviewCategoryValue) {
-      const categoryBonus = normalizeNumberInputValue(current.favoriteCategoriesBonusPercent, 0);
-      bonusLevelPreviewCategoryValue.textContent = `${categoryBonus}%`;
+    if (previewCategoryValue) {
+      const categoryBonus = selectedGroup
+        ? normalizeNumberInputValue(selectedGroup.favoriteCategoriesBonusPercent, 0)
+        : normalizeNumberInputValue(current.favoriteCategoriesBonusPercent, 0);
+      previewCategoryValue.textContent = `${categoryBonus}%`;
     }
-    if (bonusLevelPreviewQr) {
-      bonusLevelPreviewQr.style.display = current.qrEnabled === false ? 'none' : 'flex';
-      bonusLevelPreviewQr.style.color = '#111827';
-      bonusLevelPreviewQr.style.background = 'rgba(255,255,255,.94)';
+    if (previewQr) {
+      previewQr.style.display = current.qrEnabled === false ? 'none' : 'flex';
+      previewQr.style.color = '#111827';
+      previewQr.style.background = 'rgba(255,255,255,.94)';
     }
     const mainColor = normalizeHexColor(current.mainColor, '#46b13b');
     const baseColor = normalizeHexColor(current.baseColor, '#1f8d2e');
     const contentColor = normalizeHexColor(current.contentColor, '#ffffff');
-    if (bonusLevelPreviewCard) {
-      bonusLevelPreviewCard.style.background = baseColor;
+    if (previewCard) {
+      previewCard.style.background = baseColor;
     }
-    if (bonusLevelPreviewMain) {
-      bonusLevelPreviewMain.style.background = mainColor;
-      bonusLevelPreviewMain.style.color = contentColor;
-      bonusLevelPreviewMain.querySelectorAll('.bonus-level-preview-bonus-label, .bonus-level-preview-bonus-value').forEach((node) => {
+    if (previewMain) {
+      previewMain.style.background = mainColor;
+      previewMain.style.color = contentColor;
+      previewMain.querySelectorAll('.bonus-level-preview-bonus-label, .bonus-level-preview-bonus-value').forEach((node) => {
         node.style.color = contentColor;
       });
-      const previewSub = bonusLevelPreviewCard?.querySelector('.bonus-level-preview-sub');
+      const previewSub = previewCard?.querySelector('.bonus-level-preview-sub');
       if (previewSub) {
         previewSub.style.background = 'transparent';
         previewSub.querySelectorAll('.bonus-level-preview-cashback-icon, .bonus-level-preview-cashback-value, .bonus-level-preview-category-icon, .bonus-level-preview-category-count, .bonus-level-preview-category-value').forEach((node) => {
@@ -9946,6 +10567,7 @@
       favoriteCategoriesBonusPercent: normalizeNumberInputValue(draft.favoriteCategoriesBonusPercent, 0),
       favoriteCategoriesLimit: normalizeNumberInputValue(draft.favoriteCategoriesLimit, 0),
       favoriteCategoryIds: normalizeBonusLevelFavoriteCategoryIds(draft.favoriteCategoryIds),
+      favoriteCategoryGroupId: draft.favoriteCategoryGroupId ?? null,
       requirementAmount: normalizeBonusLevelRequirementValue(draft.requirementAmount),
       requirementMode: normalizeBonusLevelRequirementMode(draft.requirementMode),
       requirementOrders: normalizeBonusLevelRequirementValue(draft.requirementOrders),
@@ -10054,8 +10676,8 @@
                       ? `<input class="control bonus-level-field bonus-level-title-input" type="text" data-bonus-level-index="${index}" data-bonus-level-field="title" value="${escapeHtml(level.title)}" style="width:${escapeHtml(getBonusLevelTitleInputWidth(level.title))};" />`
                       : `<div class="bonus-level-preview-title">${escapeHtml(level.title)}</div>`
                   }
-                  <div class="bonus-level-preview-bonus-label">Бонусы</div>
-                  <div class="bonus-level-preview-bonus-value">0 ₽</div>
+                  <div class="bonus-level-preview-bonus-label">${escapeHtml(state.bonusProgramCoinName || 'Бонусы')}</div>
+                  <div class="bonus-level-preview-bonus-value">0 ${getBonusCoinIconHtml('1em', '2px')}</div>
                   <div class="bonus-level-preview-qr"><span>QR</span></div>
                 </div>
                 <div class="bonus-level-preview-sub" style="color:${escapeHtml(contentColor)};">
@@ -10387,14 +11009,44 @@
             </div>
             <div class="order-col"></div>
           </button>
+          <button class="settings-home-card settings-card" id="bonusSettingsCoinCard" type="button">
+            <div class="product-avatar"><i class="fas fa-coins"></i></div>
+            <div class="order-col">
+              <div class="product-title">Курс бонусов и дизайн монеты</div>
+              <div class="muted">Настройка курса и иконки бонусов</div>
+            </div>
+            <div class="order-col"></div>
+          </button>
+          <button class="settings-home-card settings-card" id="bonusSettingsFavoriteCategoriesCard" type="button">
+            <div class="product-avatar"><i class="fas fa-layer-group"></i></div>
+            <div class="order-col">
+              <div class="product-title">Группы любимых категорий</div>
+              <div class="muted">Управление подборками категорий для бонусов</div>
+            </div>
+            <div class="order-col"></div>
+          </button>
         </div>
       </div>
     `;
 
-    const card = elContainer.querySelector('#bonusSettingsBrandCard');
-    if (card) {
-      card.addEventListener('click', () => {
+    const brandCard = elContainer.querySelector('#bonusSettingsBrandCard');
+    if (brandCard) {
+      brandCard.addEventListener('click', () => {
         openBonusSettingsBrandTab();
+      });
+    }
+
+    const coinCard = elContainer.querySelector('#bonusSettingsCoinCard');
+    if (coinCard) {
+      coinCard.addEventListener('click', () => {
+        openBonusSettingsCoinTab();
+      });
+    }
+
+    const favoriteCategoriesCard = elContainer.querySelector('#bonusSettingsFavoriteCategoriesCard');
+    if (favoriteCategoriesCard) {
+      favoriteCategoriesCard.addEventListener('click', () => {
+        openBonusSettingsFavoriteCategoriesTab();
       });
     }
   }
@@ -10585,8 +11237,15 @@
 
   function enterBonusSettingsEditMode() {
     state.bonusSettingsEditing = true;
-    state.bonusProgramNameDraft = state.bonusProgramName || 'Бонусная программа';
-    state.bonusProgramLogoDraft = state.bonusProgramLogo;
+    state.bonusProgramNameBaseDraft = state.bonusProgramNameBase;
+    state.bonusProgramLogoBaseDraft = state.bonusProgramLogoBase;
+    state.bonusProgramNamePaidDraft = state.bonusProgramNamePaid;
+    state.bonusProgramLogoPaidDraft = state.bonusProgramLogoPaid;
+    state.bonusProgramCoinNameDraft = state.bonusProgramCoinName || 'Бонусы';
+    state.bonusProgramCoinLogoDraft = state.bonusProgramCoinLogo;
+    state.bonusPointAmountDraft = state.bonusPointAmount;
+    state.bonusRubleAmountDraft = state.bonusRubleAmount;
+    state.bonusCategoryGroupsDraft = JSON.parse(JSON.stringify(state.bonusCategoryGroups || []));
     syncBonusToolbarState();
     renderBonusSettings();
     const activeTab = tabsState.tabs.find(t => t.key === tabsState.activeKey);
@@ -10595,8 +11254,18 @@
 
   function cancelBonusSettingsEdit() {
     state.bonusSettingsEditing = false;
-    state.bonusProgramNameDraft = state.bonusProgramName || 'Бонусная программа';
-    state.bonusProgramLogoDraft = state.bonusProgramLogo;
+    state.bonusProgramNameBaseDraft = state.bonusProgramNameBase;
+    state.bonusProgramLogoBaseDraft = state.bonusProgramLogoBase;
+    state.bonusProgramNamePaidDraft = state.bonusProgramNamePaid;
+    state.bonusProgramLogoPaidDraft = state.bonusProgramLogoPaid;
+    state.bonusProgramCoinNameDraft = state.bonusProgramCoinName || 'Бонусы';
+    state.bonusProgramCoinLogoDraft = state.bonusProgramCoinLogo;
+    state.bonusPointAmountDraft = state.bonusPointAmount;
+    state.bonusRubleAmountDraft = state.bonusRubleAmount;
+    state.bonusCategoryGroupsDraft = [];
+    state.bonusProgramLogoBaseFile = null;
+    state.bonusProgramLogoPaidFile = null;
+    state.bonusProgramCoinLogoFile = null;
     syncBonusToolbarState();
     renderBonusSettings();
     const activeTab = tabsState.tabs.find(t => t.key === tabsState.activeKey);
@@ -10604,15 +11273,103 @@
   }
 
   async function saveBonusSettings() {
-    const elInput = $('#bonusSettingsProgramNameInput');
-    if (elInput && state.bonusSettingsEditing) {
-      state.bonusProgramName = elInput.value.trim() || 'Бонусная программа';
-      state.bonusProgramNameDraft = state.bonusProgramName;
-      state.bonusProgramLogo = state.bonusProgramLogoDraft;
+    const elInputBase = $('#bonusSettingsProgramNameInputBase');
+    const elInputPaid = $('#bonusSettingsProgramNameInputPaid');
+    
+    let nextLogoBase = state.bonusProgramLogoBaseDraft;
+    let nextLogoPaid = state.bonusProgramLogoPaidDraft;
+
+    setBonusConfigSaving(true, 'Сохраняем настройки бренда...');
+    
+    try {
+      // Upload Base Logo if changed
+      if (state.bonusProgramLogoBaseFile) {
+        const uploadResult = await apiUploadBannerImages([state.bonusProgramLogoBaseFile]);
+        if (uploadResult?.urls?.[0]) {
+          nextLogoBase = uploadResult.urls[0];
+        }
+      }
+
+      // Upload Paid Logo if changed
+      if (state.bonusProgramLogoPaidFile) {
+        const uploadResult = await apiUploadBannerImages([state.bonusProgramLogoPaidFile]);
+        if (uploadResult?.urls?.[0]) {
+          nextLogoPaid = uploadResult.urls[0];
+        }
+      }
+
+      const nextNameBase = (elInputBase?.value || '').trim() || 'Бонусная программа';
+      const nextNamePaid = (elInputPaid?.value || '').trim() || 'Markin VIP';
+
+      // Coin settings
+      const elInputCoinName = $('#bonusSettingsCoinNameInput');
+      const elInputCoinPointAmount = $('#bonusSettingsCoinPointAmountInput');
+      const elInputCoinRubleAmount = $('#bonusSettingsCoinRubleAmountInput');
+
+      let nextCoinLogo = state.bonusProgramCoinLogoDraft;
+      if (state.bonusProgramCoinLogoFile) {
+        const uploadResult = await apiUploadBannerImages([state.bonusProgramCoinLogoFile]);
+        if (uploadResult?.urls?.[0]) {
+          nextCoinLogo = uploadResult.urls[0];
+        }
+      }
+
+      const nextCoinName = (elInputCoinName?.value || '').trim() || 'Бонусы';
+      const nextPointAmount = normalizeBonusPointRateValue(elInputCoinPointAmount?.value || state.bonusPointAmountDraft, 1);
+      const nextRubleAmount = normalizeBonusPointRateValue(elInputCoinRubleAmount?.value || state.bonusRubleAmountDraft, 1);
+      const nextPointRate = normalizeBonusPointRateValue(nextRubleAmount / nextPointAmount, 1);
+
+      await persistBonusCardsStorage({
+        bonusProgramNameBase: nextNameBase,
+        bonusProgramLogoBase: nextLogoBase,
+        bonusProgramNamePaid: nextNamePaid,
+        bonusProgramLogoPaid: nextLogoPaid,
+        bonusProgramCoinName: nextCoinName,
+        bonusProgramCoinLogo: nextCoinLogo,
+        bonusPointAmount: nextPointAmount,
+        bonusRubleAmount: nextRubleAmount,
+        bonusPointRate: nextPointRate,
+        bonusCategoryGroups: state.bonusCategoryGroupsDraft,
+      });
+
+      state.bonusCategoryGroups = JSON.parse(JSON.stringify(state.bonusCategoryGroupsDraft || []));
+      state.bonusCategoryGroupsDraft = [];
+
+      state.bonusProgramNameBase = nextNameBase;
+      state.bonusProgramNameBaseDraft = nextNameBase;
+      state.bonusProgramLogoBase = nextLogoBase;
+      state.bonusProgramLogoBaseDraft = nextLogoBase;
+      state.bonusProgramLogoBaseFile = null;
+
+      state.bonusProgramNamePaid = nextNamePaid;
+      state.bonusProgramNamePaidDraft = nextNamePaid;
+      state.bonusProgramLogoPaid = nextLogoPaid;
+      state.bonusProgramLogoPaidDraft = nextLogoPaid;
+      state.bonusProgramLogoPaidFile = null;
+
+      state.bonusProgramCoinName = nextCoinName;
+      state.bonusProgramCoinNameDraft = nextCoinName;
+      state.bonusProgramCoinLogo = nextCoinLogo;
+      state.bonusProgramCoinLogoDraft = nextCoinLogo;
+      state.bonusProgramCoinLogoFile = null;
+
+      state.bonusPointAmount = nextPointAmount;
+      state.bonusPointAmountDraft = nextPointAmount;
+      state.bonusRubleAmount = nextRubleAmount;
+      state.bonusRubleAmountDraft = nextRubleAmount;
+      state.bonusPointRate = nextPointRate;
+      state.bonusPointRateDraft = nextPointRate;
+
+      state.bonusSettingsEditing = false;
+      await loadBonusCardsStorage();
+      syncBonusToolbarState();
+      renderBonusSettings();
+    } catch (err) {
+      alert('Ошибка при сохранении: ' + err.message);
+    } finally {
+      setBonusConfigSaving(false);
     }
-    state.bonusSettingsEditing = false;
-    syncBonusToolbarState();
-    renderBonusSettings();
+    
     const activeTab = tabsState.tabs.find(t => t.key === tabsState.activeKey);
     if (activeTab?.onActivate) activeTab.onActivate();
   }
@@ -14197,7 +14954,7 @@
   function formatDiscountMechanicText(discount) {
     const mechanic = getDiscountMechanic(discount);
     if (mechanic.type === 'buy_x_get_y') return '1+1';
-    if (mechanic.type === 'loyalty_progress') return 'Накопительная';
+    if (mechanic.type === 'loyalty_progress') return 'Задания';
     if (mechanic.type === 'threshold') return 'Пороговая';
     return 'Скидка';
   }
@@ -16969,7 +17726,7 @@
     }
     if (mechanic.type === 'buy_x_get_y') return 'Акция 1+1';
     if (mechanic.type === 'threshold') return 'Пороговая акция';
-    if (mechanic.type === 'loyalty_progress') return 'Накопительная акция';
+    if (mechanic.type === 'loyalty_progress') return 'Задание';
     return 'Акция';
   }
 
@@ -19713,7 +20470,7 @@
         'filter-categories': 'Выборки',
         discounts: 'Скидки',
         banners: 'Баннеры',
-        'bonus-cards': 'Базовый тариф',
+        'bonus-cards': state.bonusProgramNameBase || 'Бонусная программа',
         'bonus-referrals': 'Рефералы',
         'bonus-settings': 'Настройки',
       };
@@ -19722,17 +20479,37 @@
 
     if (elToolbarTitle) {
       const icon = elToolbarTitle.querySelector('i');
-      if (icon) {
-        const icons = {
-          clients: 'fas fa-users',
-          'filter-categories': 'fas fa-filter',
-          discounts: 'fas fa-percentage',
-          banners: 'fas fa-images',
-          'bonus-cards': 'fas fa-gift',
-          'bonus-referrals': 'fas fa-user-friends',
-          'bonus-settings': 'fas fa-cog',
-        };
-        icon.className = icons[viewName] || 'fas fa-users';
+      let img = elToolbarTitle.querySelector('.toolbar-title-logo');
+
+      if (viewName === 'bonus-cards' && state.bonusProgramLogoBase) {
+        if (icon) icon.classList.add('hidden');
+        if (!img) {
+          img = document.createElement('img');
+          img.className = 'toolbar-title-logo';
+          img.style.width = '20px';
+          img.style.height = '20px';
+          img.style.objectFit = 'contain';
+          img.style.borderRadius = '4px';
+          img.style.marginRight = '8px';
+          elToolbarTitle.insertBefore(img, icon || elToolbarText);
+        }
+        img.src = state.bonusProgramLogoBase;
+        img.classList.remove('hidden');
+      } else {
+        if (img) img.classList.add('hidden');
+        if (icon) {
+          icon.classList.remove('hidden');
+          const icons = {
+            clients: 'fas fa-users',
+            'filter-categories': 'fas fa-filter',
+            discounts: 'fas fa-percentage',
+            banners: 'fas fa-images',
+            'bonus-cards': 'fas fa-gift',
+            'bonus-referrals': 'fas fa-user-friends',
+            'bonus-settings': 'fas fa-cog',
+          };
+          icon.className = icons[viewName] || 'fas fa-users';
+        }
       }
     }
 
@@ -19786,8 +20563,10 @@
     const isBonusSettingsView = state.currentView === 'bonus-settings';
     const hasBonusReferralCardTab = tabsState.tabs.some((tab) => tab.type === 'bonus-referral-card');
     const hasBonusSettingsBrandTab = tabsState.tabs.some((tab) => tab.type === 'bonus-settings-brand');
+    const hasBonusSettingsCoinTab = tabsState.tabs.some((tab) => tab.type === 'bonus-settings-coin');
+    const hasBonusSettingsFavoriteCategoriesTab = tabsState.tabs.some((tab) => tab.type === 'bonus-settings-favorite-categories');
     const isHomeBtnView = isBonusReferralsView || isBonusSettingsView;
-    const hasVisibleHomeBtnTab = isBonusReferralsView ? hasBonusReferralCardTab : isBonusSettingsView ? hasBonusSettingsBrandTab : false;
+    const hasVisibleHomeBtnTab = isBonusReferralsView ? hasBonusReferralCardTab : isBonusSettingsView ? (hasBonusSettingsBrandTab || hasBonusSettingsCoinTab || hasBonusSettingsFavoriteCategoriesTab) : false;
     if (clientTabsHeader) {
       clientTabsHeader.classList.toggle('hidden', isHomeBtnView ? false : tabsState.tabs.length === 0);
     }
@@ -19827,6 +20606,8 @@
       if (bonusLevelInfoFooter) bonusLevelInfoFooter.classList.add('hidden');
       if (bonusReferralCardInfoWrap) bonusReferralCardInfoWrap.classList.add('hidden');
       if (bonusSettingsBrandWrap) bonusSettingsBrandWrap.classList.add('hidden');
+      if (bonusSettingsCoinWrap) bonusSettingsCoinWrap.classList.add('hidden');
+      if (bonusSettingsFavoriteCategoriesWrap) bonusSettingsFavoriteCategoriesWrap.classList.add('hidden');
       if (clientBenefitsFooter) clientBenefitsFooter.classList.add('hidden');
       return;
     }
@@ -19841,6 +20622,8 @@
     const isBonusLevelTab = activeTab?.type === 'bonus-level';
     const isBonusReferralCardTab = activeTab?.type === 'bonus-referral-card';
     const isBonusSettingsBrandTab = activeTab?.type === 'bonus-settings-brand';
+    const isBonusSettingsCoinTab = activeTab?.type === 'bonus-settings-coin';
+    const isBonusSettingsFavoriteCategoriesTab = activeTab?.type === 'bonus-settings-favorite-categories';
     const hasClientId = Number(state.activeClientId || 0) > 0;
     const noTabs = !activeTab;
     // In chat mode right panel must be driven only by right tabs state.
@@ -19878,6 +20661,8 @@
       }
       if (bonusReferralCardInfoWrap) bonusReferralCardInfoWrap.classList.toggle('hidden', !isBonusReferralCardTab || state.currentView !== 'bonus-referrals');
       if (bonusSettingsBrandWrap) bonusSettingsBrandWrap.classList.toggle('hidden', !isBonusSettingsBrandTab || state.currentView !== 'bonus-settings');
+      if (bonusSettingsCoinWrap) bonusSettingsCoinWrap.classList.toggle('hidden', !isBonusSettingsCoinTab || state.currentView !== 'bonus-settings');
+      if (bonusSettingsFavoriteCategoriesWrap) bonusSettingsFavoriteCategoriesWrap.classList.toggle('hidden', !isBonusSettingsFavoriteCategoriesTab || state.currentView !== 'bonus-settings');
       if (state.currentView === 'bonus-referrals') renderBonusReferralRightHome();
       if (bonusLevelInfoWrap) bonusLevelInfoWrap.classList.toggle('hidden', !isBonusLevelTab || state.currentView !== 'bonus-cards');
       if (bonusLevelInfoFooter) bonusLevelInfoFooter.classList.toggle('hidden', !isBonusLevelTab || state.currentView !== 'bonus-cards');
@@ -22325,24 +23110,96 @@
     });
   }
 
-  if (bonusSettingsLogoUploadBtn) {
-    bonusSettingsLogoUploadBtn.addEventListener('click', () => {
-      if (bonusSettingsLogoInput) bonusSettingsLogoInput.click();
+  // Base Tariff Logo
+  if (bonusSettingsLogoPreviewBase) {
+    bonusSettingsLogoPreviewBase.addEventListener('click', () => {
+      if (state.bonusSettingsEditing && bonusSettingsLogoInputBase) {
+        bonusSettingsLogoInputBase.click();
+      }
+    });
+  }
+  if (bonusSettingsLogoInputBase) {
+    bonusSettingsLogoInputBase.addEventListener('change', (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        state.bonusProgramLogoBaseDraft = event.target.result;
+        state.bonusProgramLogoBaseFile = file;
+        renderBonusSettingsBrandTabContent();
+      };
+      reader.readAsDataURL(file);
+      e.target.value = '';
     });
   }
 
-  if (bonusSettingsLogoInput) {
-    bonusSettingsLogoInput.addEventListener('change', async (e) => {
+  // Paid Tariff Logo
+  if (bonusSettingsLogoPreviewPaid) {
+    bonusSettingsLogoPreviewPaid.addEventListener('click', () => {
+      if (state.bonusSettingsEditing && bonusSettingsLogoInputPaid) {
+        bonusSettingsLogoInputPaid.click();
+      }
+    });
+  }
+  if (bonusSettingsLogoInputPaid) {
+    bonusSettingsLogoInputPaid.addEventListener('change', (e) => {
       const file = e.target.files?.[0];
       if (!file) return;
-      try {
-        const uploadResult = await apiUploadBannerImages([file]);
-        if (uploadResult?.urls?.[0]) {
-          state.bonusProgramLogoDraft = uploadResult.urls[0];
-          renderBonusSettingsBrandTabContent();
-        }
-      } catch (err) {
-        alert('Ошибка при загрузке логотипа: ' + err.message);
+
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        state.bonusProgramLogoPaidDraft = event.target.result;
+        state.bonusProgramLogoPaidFile = file;
+        renderBonusSettingsBrandTabContent();
+      };
+      reader.readAsDataURL(file);
+      e.target.value = '';
+    });
+  }
+
+  // Coin Logo
+  if (bonusSettingsCoinLogoPreview) {
+    bonusSettingsCoinLogoPreview.addEventListener('click', () => {
+      if (state.bonusSettingsEditing && bonusSettingsCoinLogoInput) {
+        bonusSettingsCoinLogoInput.click();
+      }
+    });
+  }
+  if (bonusSettingsCoinLogoInput) {
+    bonusSettingsCoinLogoInput.addEventListener('change', (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        state.bonusProgramCoinLogoDraft = event.target.result;
+        state.bonusProgramCoinLogoFile = file;
+        renderBonusSettingsCoinTabContent();
+      };
+      reader.readAsDataURL(file);
+      e.target.value = '';
+    });
+  }
+
+  if (bonusSettingsCoinNameInput) {
+    bonusSettingsCoinNameInput.addEventListener('input', () => {
+      if (state.bonusSettingsEditing) {
+        state.bonusProgramCoinNameDraft = bonusSettingsCoinNameInput.value;
+      }
+    });
+  }
+  if (bonusSettingsCoinPointAmountInput) {
+    bonusSettingsCoinPointAmountInput.addEventListener('input', () => {
+      if (state.bonusSettingsEditing) {
+        state.bonusPointAmountDraft = normalizeBonusPointRateValue(bonusSettingsCoinPointAmountInput.value, state.bonusPointAmountDraft);
+      }
+    });
+  }
+  if (bonusSettingsCoinRubleAmountInput) {
+    bonusSettingsCoinRubleAmountInput.addEventListener('input', () => {
+      if (state.bonusSettingsEditing) {
+        state.bonusRubleAmountDraft = normalizeBonusPointRateValue(bonusSettingsCoinRubleAmountInput.value, state.bonusRubleAmountDraft);
       }
     });
   }
@@ -23002,6 +23859,22 @@
     });
   }
 
+  if (bonusLevelFavoriteCategoriesBonusPercentInput) {
+    bonusLevelFavoriteCategoriesBonusPercentInput.addEventListener('input', () => {
+      applyBonusLevelEditorDraftPatch({
+        favoriteCategoriesBonusPercent: normalizeNumberInputValue(bonusLevelFavoriteCategoriesBonusPercentInput.value, 0),
+      });
+    });
+  }
+
+  if (bonusLevelFavoriteCategoriesLimitInput) {
+    bonusLevelFavoriteCategoriesLimitInput.addEventListener('input', () => {
+      applyBonusLevelEditorDraftPatch({
+        favoriteCategoriesLimit: Math.max(0, Math.floor(Number(bonusLevelFavoriteCategoriesLimitInput.value || 0))),
+      });
+    });
+  }
+
   if (bonusLevelActivationDelayValueInput) {
     bonusLevelActivationDelayValueInput.addEventListener('input', () => {
       applyBonusLevelEditorDraftPatch({
@@ -23554,7 +24427,8 @@
       !e.target.closest('#bonusLevelRangeInfoBtn') &&
       !e.target.closest('#bonusLevelFavoriteCategoriesInfoBtn') &&
       !e.target.closest('#bonusLevelRequirementsInfoBtn') &&
-      !e.target.closest('#bonusLevelRequirementsDetailsInfoBtn')
+      !e.target.closest('#bonusLevelRequirementsDetailsInfoBtn') &&
+      !e.target.closest('[data-group-info]')
     ) {
       closeBonusLevelHelpPopover();
     }

@@ -4937,6 +4937,7 @@
 
 
       updateShopLink(tenant);
+      applySiteMenuItemsFromTenant(tenant);
 
 
 
@@ -7266,6 +7267,10 @@
 
 
 
+    const siteMenuItemsCard = document.getElementById("settingsSiteMenuItemsCard");
+
+
+
     const printApiCard = document.getElementById("settingsPrintApiCard");
 
 
@@ -7357,6 +7362,11 @@
 
 
     const imagesPanel = document.getElementById("settingsImagesPanel");
+
+
+
+    const siteMenuItemsPanel = document.getElementById("settingsSiteMenuItemsPanel");
+    const settingsSiteMenuItemsSaveBtn = document.getElementById("settingsSiteMenuItemsSaveBtn");
 
 
 
@@ -19738,6 +19748,10 @@
 
 
 
+      if (siteMenuItemsPanel) siteMenuItemsPanel.classList.toggle("hidden", tabId !== "site-menu-items");
+
+
+
       if (printApiPanel) printApiPanel.classList.toggle("hidden", tabId !== "print-api");
 
 
@@ -20135,6 +20149,10 @@
 
 
 
+          if (tabId === "site-menu-items" && siteMenuItemsCard) siteMenuItemsCard.classList.remove("is-active");
+
+
+
           if (tabId === "print-api" && printApiCard) printApiCard.classList.remove("is-active");
 
 
@@ -20326,6 +20344,10 @@
 
 
       if (tabId === "images" && imagesCard) imagesCard.classList.add("is-active");
+
+
+
+      if (tabId === "site-menu-items" && siteMenuItemsCard) siteMenuItemsCard.classList.add("is-active");
 
 
 
@@ -26569,6 +26591,191 @@
 
 
 
+
+
+
+    function getSiteMenuIconWebpQuality() {
+      const input = document.getElementById("settingsImgWebpQuality");
+      const value = Number(input && input.value);
+      if (!Number.isFinite(value)) return 0.82;
+      return Math.max(1, Math.min(100, value)) / 100;
+    }
+
+
+
+    function getSiteMenuIconMaxSize() {
+      const input = document.getElementById("settingsImgThumbWidth");
+      const value = Number(input && input.value);
+      return Number.isFinite(value) && value > 0 ? value : 300;
+    }
+
+
+
+    function loadSiteMenuIconImage(url) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = () => reject(new Error("Не удалось загрузить изображение."));
+        img.src = url;
+      });
+    }
+
+
+
+    async function convertSiteMenuIconFileToWebpBlob(file) {
+      if (!file || !String(file.type || "").startsWith("image/")) {
+        throw new Error("Выберите файл изображения.");
+      }
+      const objectUrl = URL.createObjectURL(file);
+      try {
+        const img = await loadSiteMenuIconImage(objectUrl);
+        const sourceWidth = Number(img.naturalWidth || img.width || 0);
+        const sourceHeight = Number(img.naturalHeight || img.height || 0);
+        if (!sourceWidth || !sourceHeight) {
+          throw new Error("Не удалось определить размер изображения.");
+        }
+        const maxSize = getSiteMenuIconMaxSize();
+        const scale = Math.min(1, maxSize / Math.max(sourceWidth, sourceHeight));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(sourceWidth * scale));
+        canvas.height = Math.max(1, Math.round(sourceHeight * scale));
+        const ctx = canvas.getContext("2d");
+        if (!ctx) throw new Error("Браузер не дал canvas-контекст.");
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/webp", getSiteMenuIconWebpQuality()));
+        if (!blob) throw new Error("Не удалось конвертировать изображение в WebP.");
+        return blob;
+      } finally {
+        URL.revokeObjectURL(objectUrl);
+      }
+    }
+
+
+
+    function applySiteMenuItemsFromTenant(tenant) {
+      const items = Array.isArray(tenant && tenant.site_menu_items) ? tenant.site_menu_items : [];
+      const byKey = new Map(items.map((item) => [String(item && item.key || ""), item]));
+      document.querySelectorAll("[data-site-menu-item]").forEach((row) => {
+        const key = String(row.getAttribute("data-site-menu-item") || "");
+        const item = byKey.get(key);
+        if (!item) return;
+        const titleInput = row.querySelector(".settings-site-menu-title-field .control");
+        const visibleInput = row.querySelector("[data-site-menu-visible]");
+        const img = row.querySelector("[data-site-menu-icon-img]");
+        const defaultIcon = row.querySelector("[data-site-menu-icon-default]");
+        if (titleInput) titleInput.value = String(item.title || "");
+        if (visibleInput) visibleInput.checked = item.enabled !== false && Number(item.enabled) !== 0;
+        row.dataset.siteMenuIconUrl = String(item.icon_url || "");
+        if (img) {
+          img.src = item.icon_url ? String(item.icon_url) : "";
+          img.classList.toggle("hidden", !item.icon_url);
+        }
+        if (defaultIcon) defaultIcon.classList.toggle("hidden", Boolean(item.icon_url));
+      });
+    }
+
+
+
+    function collectSiteMenuItemsFromPanel() {
+      return Array.from(document.querySelectorAll("[data-site-menu-item]")).map((row, index) => {
+        const titleInput = row.querySelector(".settings-site-menu-title-field .control");
+        const visibleInput = row.querySelector("[data-site-menu-visible]");
+        const defaultIcon = row.querySelector("[data-site-menu-icon-default]");
+        return {
+          key: String(row.getAttribute("data-site-menu-item") || ""),
+          title: String(titleInput && titleInput.value || "").trim(),
+          enabled: visibleInput ? visibleInput.checked : true,
+          icon_url: String(row.dataset.siteMenuIconUrl || "").trim() || null,
+          icon_class: defaultIcon ? String(defaultIcon.getAttribute("class") || "").trim() : "",
+          sort_order: index
+        };
+      }).filter((item) => item.key);
+    }
+
+
+
+    if (siteMenuItemsCard) {
+
+
+
+      siteMenuItemsCard.addEventListener("click", () => {
+
+
+
+        ensureTab("site-menu-items", "Пункты меню на сайте");
+
+
+
+      });
+
+
+
+    }
+
+    document.querySelectorAll("[data-site-menu-icon-btn]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const row = btn.closest("[data-site-menu-item]");
+        const input = row ? row.querySelector("[data-site-menu-icon-input]") : null;
+        if (input) input.click();
+      });
+    });
+
+
+
+    document.querySelectorAll("[data-site-menu-icon-input]").forEach((input) => {
+      input.addEventListener("change", async () => {
+        const row = input.closest("[data-site-menu-item]");
+        const file = input.files && input.files[0];
+        if (!file) return;
+        try {
+          const blob = await convertSiteMenuIconFileToWebpBlob(file);
+          const webpFile = new File([blob], "site-menu-icon.webp", { type: "image/webp" });
+          const uploaded = await uploadTenantAsset("site_menu_item_icon", webpFile);
+          const iconUrl = uploaded && uploaded.url ? String(uploaded.url) : "";
+          if (!iconUrl) throw new Error("Не удалось загрузить иконку.");
+          const img = row ? row.querySelector("[data-site-menu-icon-img]") : null;
+          const defaultIcon = row ? row.querySelector("[data-site-menu-icon-default]") : null;
+          if (row) row.dataset.siteMenuIconUrl = iconUrl;
+          if (img) {
+            img.src = iconUrl;
+            img.classList.remove("hidden");
+          }
+          if (defaultIcon) {
+            defaultIcon.classList.add("hidden");
+          }
+        } catch (err) {
+          console.error("site menu icon convert error:", err);
+          alert(err && err.message ? err.message : "Не удалось загрузить иконку.");
+        } finally {
+          input.value = "";
+        }
+      });
+    });
+
+
+
+    if (settingsSiteMenuItemsSaveBtn) {
+      settingsSiteMenuItemsSaveBtn.addEventListener("click", async () => {
+        const idleText = String(settingsSiteMenuItemsSaveBtn.textContent || "Сохранить");
+        settingsSiteMenuItemsSaveBtn.disabled = true;
+        settingsSiteMenuItemsSaveBtn.textContent = "Сохранение...";
+        try {
+          const data = await updateTenantFields({
+            site_menu_items: collectSiteMenuItemsFromPanel()
+          });
+          if (!data || !data.ok || !data.tenant) {
+            alert("Не удалось сохранить пункты меню.");
+            return;
+          }
+          updateTenantCache(data.tenant);
+          applySiteMenuItemsFromTenant(data.tenant);
+        } finally {
+          settingsSiteMenuItemsSaveBtn.disabled = false;
+          settingsSiteMenuItemsSaveBtn.textContent = idleText || "Сохранить";
+        }
+      });
+    }
 
 
 

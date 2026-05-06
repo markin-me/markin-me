@@ -384,7 +384,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
 
   const upload = multer({
     storage: uploadStorage,
-    limits: { files: 10, fileSize: 5 * 1024 * 1024 },
+    limits: { files: 10, fileSize: 20 * 1024 * 1024 },
     fileFilter(req, file, cb) {
       const mime = String(file.mimetype || '').toLowerCase();
       const name = String(file.originalname || '').toLowerCase();

@@ -1,3 +1,13 @@
+<%
+  const mobileNavTenantChatWidgetRaw = (typeof tenant !== 'undefined' && tenant) ? tenant.chat_widget_enabled : undefined;
+  const mobileNavTenantChatWidgetNorm = String(mobileNavTenantChatWidgetRaw == null ? '' : mobileNavTenantChatWidgetRaw).trim().toLowerCase();
+  const isMobileNavCompanyChatEnabled = !(
+    mobileNavTenantChatWidgetRaw === 0
+    || mobileNavTenantChatWidgetRaw === false
+    || mobileNavTenantChatWidgetNorm === '0'
+    || mobileNavTenantChatWidgetNorm === 'false'
+  );
+%>
 <div class="shop-mobile-bottom-container">
   <!-- Кнопки добавления в корзину (показываются только в карточке товара) -->
   <div class="shop-mobile-product-actions hidden" id="shopMobileProductActions">
@@ -139,11 +149,6 @@
       </span>
     </button>
 
-    <button class="shop-nav-btn" id="shopNavCategories" type="button" data-tab="benefits" aria-label="Выгоды">
-      <i class="fas fa-tags"></i>
-      <span class="shop-benefits-badge hidden" id="shopNavBenefitsBadge">0</span>
-    </button>
-
     <button class="shop-nav-btn" id="shopNavCart" type="button" data-tab="cart" aria-label="Корзина">
       <i class="fas fa-shopping-cart"></i>
       <span class="shop-nav-badge hidden" id="shopNavCartBadge">0</span>
@@ -151,6 +156,11 @@
 
     <button class="shop-nav-btn" id="shopNavFav" type="button" data-tab="fav" aria-label="Избранное">
       <i class="far fa-heart"></i>
+    </button>
+
+    <button class="shop-nav-btn<%= isMobileNavCompanyChatEnabled ? '' : ' hidden' %>" id="shopCompanyChatOpenBtn" type="button" data-tab="chat" aria-label="Чат с компанией" title="Чат с компанией"<% if (!isMobileNavCompanyChatEnabled) { %> aria-hidden="true" tabindex="-1"<% } %>>
+      <i class="fas fa-comment-dots"></i>
+      <span class="shop-company-chat-unread hidden" id="shopCompanyChatUnreadBadge" aria-live="polite" aria-atomic="true"></span>
     </button>
 
     <button class="shop-nav-btn" id="shopNavProfile" type="button" data-tab="profile" aria-label="Профиль">

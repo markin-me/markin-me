@@ -1304,6 +1304,187 @@
         </div>
       </div>
 
+      <div class="info-card settings-right-panel hidden" id="settingsSiteMenuItemsPanel">
+        <div class="settings-list-header">
+          <div class="settings-list-title">Пункты меню на сайте</div>
+        </div>
+        <div class="settings-site-form settings-panel-scroll no-scrollbar">
+          <div class="settings-site-menu-item-row" data-site-menu-item="my-orders">
+            <button class="settings-site-menu-icon-btn" type="button" data-site-menu-icon-btn aria-label="Загрузить иконку пункта Мои заказы">
+              <img class="settings-site-menu-icon-img hidden" data-site-menu-icon-img alt="" />
+              <i class="fas fa-receipt" data-site-menu-icon-default aria-hidden="true"></i>
+            </button>
+            <input class="hidden" type="file" data-site-menu-icon-input accept="image/png,image/webp,image/jpeg,image/svg+xml,image/*" />
+            <div class="settings-site-field settings-site-menu-title-field">
+              <div class="settings-site-menu-title-head">
+                <label class="field-label" for="settingsSiteMenuMyOrdersTitle">Название пункта Мои заказы</label>
+                <label class="switch settings-site-menu-visible-switch" aria-label="Показывать пункт Мои заказы">
+                  <input class="switch-input" type="checkbox" data-site-menu-visible checked />
+                  <span class="switch-ui" aria-hidden="true"></span>
+                </label>
+              </div>
+              <input class="control" type="text" id="settingsSiteMenuMyOrdersTitle" value="Мои заказы" />
+            </div>
+          </div>
+          <div class="settings-site-menu-item-row" data-site-menu-item="favorites">
+            <button class="settings-site-menu-icon-btn" type="button" data-site-menu-icon-btn aria-label="Загрузить иконку пункта Избранное">
+              <img class="settings-site-menu-icon-img hidden" data-site-menu-icon-img alt="" />
+              <i class="fas fa-heart" data-site-menu-icon-default aria-hidden="true"></i>
+            </button>
+            <input class="hidden" type="file" data-site-menu-icon-input accept="image/png,image/webp,image/jpeg,image/svg+xml,image/*" />
+            <div class="settings-site-field settings-site-menu-title-field">
+              <div class="settings-site-menu-title-head">
+                <label class="field-label" for="settingsSiteMenuFavoritesTitle">Название пункта Избранное</label>
+                <label class="switch settings-site-menu-visible-switch" aria-label="Показывать пункт Избранное">
+                  <input class="switch-input" type="checkbox" data-site-menu-visible checked />
+                  <span class="switch-ui" aria-hidden="true"></span>
+                </label>
+              </div>
+              <input class="control" type="text" id="settingsSiteMenuFavoritesTitle" value="Избранное" />
+            </div>
+          </div>
+          <div class="settings-site-menu-item-row" data-site-menu-item="benefits">
+            <button class="settings-site-menu-icon-btn" type="button" data-site-menu-icon-btn aria-label="Загрузить иконку пункта Выгоды">
+              <img class="settings-site-menu-icon-img hidden" data-site-menu-icon-img alt="" />
+              <i class="fas fa-tags" data-site-menu-icon-default aria-hidden="true"></i>
+            </button>
+            <input class="hidden" type="file" data-site-menu-icon-input accept="image/png,image/webp,image/jpeg,image/svg+xml,image/*" />
+            <div class="settings-site-field settings-site-menu-title-field">
+              <div class="settings-site-menu-title-head">
+                <label class="field-label" for="settingsSiteMenuBenefitsTitle">Название пункта Выгоды</label>
+                <label class="switch settings-site-menu-visible-switch" aria-label="Показывать пункт Выгоды">
+                  <input class="switch-input" type="checkbox" data-site-menu-visible checked />
+                  <span class="switch-ui" aria-hidden="true"></span>
+                </label>
+              </div>
+              <input class="control" type="text" id="settingsSiteMenuBenefitsTitle" value="Выгоды" />
+            </div>
+          </div>
+          <div class="settings-site-menu-item-row" data-site-menu-item="promocodes">
+            <button class="settings-site-menu-icon-btn" type="button" data-site-menu-icon-btn aria-label="Загрузить иконку пункта Промокоды">
+              <img class="settings-site-menu-icon-img hidden" data-site-menu-icon-img alt="" />
+              <i class="fas fa-ticket-alt" data-site-menu-icon-default aria-hidden="true"></i>
+            </button>
+            <input class="hidden" type="file" data-site-menu-icon-input accept="image/png,image/webp,image/jpeg,image/svg+xml,image/*" />
+            <div class="settings-site-field settings-site-menu-title-field">
+              <div class="settings-site-menu-title-head">
+                <label class="field-label" for="settingsSiteMenuPromocodesTitle">Название пункта Промокоды</label>
+                <label class="switch settings-site-menu-visible-switch" aria-label="Показывать пункт Промокоды">
+                  <input class="switch-input" type="checkbox" data-site-menu-visible checked />
+                  <span class="switch-ui" aria-hidden="true"></span>
+                </label>
+              </div>
+              <input class="control" type="text" id="settingsSiteMenuPromocodesTitle" value="Промокоды" />
+            </div>
+          </div>
+          <div class="settings-site-menu-item-row" data-site-menu-item="discounts">
+            <button class="settings-site-menu-icon-btn" type="button" data-site-menu-icon-btn aria-label="Загрузить иконку пункта Скидки">
+              <img class="settings-site-menu-icon-img hidden" data-site-menu-icon-img alt="" />
+              <i class="fas fa-percent" data-site-menu-icon-default aria-hidden="true"></i>
+            </button>
+            <input class="hidden" type="file" data-site-menu-icon-input accept="image/png,image/webp,image/jpeg,image/svg+xml,image/*" />
+            <div class="settings-site-field settings-site-menu-title-field">
+              <div class="settings-site-menu-title-head">
+                <label class="field-label" for="settingsSiteMenuDiscountsTitle">Название пункта Скидки</label>
+                <label class="switch settings-site-menu-visible-switch" aria-label="Показывать пункт Скидки">
+                  <input class="switch-input" type="checkbox" data-site-menu-visible checked />
+                  <span class="switch-ui" aria-hidden="true"></span>
+                </label>
+              </div>
+              <input class="control" type="text" id="settingsSiteMenuDiscountsTitle" value="Скидки" />
+            </div>
+          </div>
+          <div class="settings-site-menu-item-row" data-site-menu-item="gifts">
+            <button class="settings-site-menu-icon-btn" type="button" data-site-menu-icon-btn aria-label="Загрузить иконку пункта Подарки">
+              <img class="settings-site-menu-icon-img hidden" data-site-menu-icon-img alt="" />
+              <i class="fas fa-gift" data-site-menu-icon-default aria-hidden="true"></i>
+            </button>
+            <input class="hidden" type="file" data-site-menu-icon-input accept="image/png,image/webp,image/jpeg,image/svg+xml,image/*" />
+            <div class="settings-site-field settings-site-menu-title-field">
+              <div class="settings-site-menu-title-head">
+                <label class="field-label" for="settingsSiteMenuGiftsTitle">Название пункта Подарки</label>
+                <label class="switch settings-site-menu-visible-switch" aria-label="Показывать пункт Подарки">
+                  <input class="switch-input" type="checkbox" data-site-menu-visible checked />
+                  <span class="switch-ui" aria-hidden="true"></span>
+                </label>
+              </div>
+              <input class="control" type="text" id="settingsSiteMenuGiftsTitle" value="Подарки" />
+            </div>
+          </div>
+          <div class="settings-site-menu-item-row" data-site-menu-item="addresses">
+            <button class="settings-site-menu-icon-btn" type="button" data-site-menu-icon-btn aria-label="Загрузить иконку пункта Адреса">
+              <img class="settings-site-menu-icon-img hidden" data-site-menu-icon-img alt="" />
+              <i class="fas fa-map-marker-alt" data-site-menu-icon-default aria-hidden="true"></i>
+            </button>
+            <input class="hidden" type="file" data-site-menu-icon-input accept="image/png,image/webp,image/jpeg,image/svg+xml,image/*" />
+            <div class="settings-site-field settings-site-menu-title-field">
+              <div class="settings-site-menu-title-head">
+                <label class="field-label" for="settingsSiteMenuAddressesTitle">Название пункта Адреса</label>
+                <label class="switch settings-site-menu-visible-switch" aria-label="Показывать пункт Адреса">
+                  <input class="switch-input" type="checkbox" data-site-menu-visible checked />
+                  <span class="switch-ui" aria-hidden="true"></span>
+                </label>
+              </div>
+              <input class="control" type="text" id="settingsSiteMenuAddressesTitle" value="Адреса" />
+            </div>
+          </div>
+          <div class="settings-site-menu-item-row" data-site-menu-item="bought-before">
+            <button class="settings-site-menu-icon-btn" type="button" data-site-menu-icon-btn aria-label="Загрузить иконку пункта Уже покупали">
+              <img class="settings-site-menu-icon-img hidden" data-site-menu-icon-img alt="" />
+              <i class="fas fa-shopping-bag" data-site-menu-icon-default aria-hidden="true"></i>
+            </button>
+            <input class="hidden" type="file" data-site-menu-icon-input accept="image/png,image/webp,image/jpeg,image/svg+xml,image/*" />
+            <div class="settings-site-field settings-site-menu-title-field">
+              <div class="settings-site-menu-title-head">
+                <label class="field-label" for="settingsSiteMenuBoughtBeforeTitle">Название пункта Уже покупали</label>
+                <label class="switch settings-site-menu-visible-switch" aria-label="Показывать пункт Уже покупали">
+                  <input class="switch-input" type="checkbox" data-site-menu-visible checked />
+                  <span class="switch-ui" aria-hidden="true"></span>
+                </label>
+              </div>
+              <input class="control" type="text" id="settingsSiteMenuBoughtBeforeTitle" value="Уже покупали" />
+            </div>
+          </div>
+          <div class="settings-site-menu-item-row" data-site-menu-item="tasks">
+            <button class="settings-site-menu-icon-btn" type="button" data-site-menu-icon-btn aria-label="Загрузить иконку пункта Задания">
+              <img class="settings-site-menu-icon-img hidden" data-site-menu-icon-img alt="" />
+              <i class="fas fa-tasks" data-site-menu-icon-default aria-hidden="true"></i>
+            </button>
+            <input class="hidden" type="file" data-site-menu-icon-input accept="image/png,image/webp,image/jpeg,image/svg+xml,image/*" />
+            <div class="settings-site-field settings-site-menu-title-field">
+              <div class="settings-site-menu-title-head">
+                <label class="field-label" for="settingsSiteMenuTasksTitle">Название пункта Задания</label>
+                <label class="switch settings-site-menu-visible-switch" aria-label="Показывать пункт Задания">
+                  <input class="switch-input" type="checkbox" data-site-menu-visible checked />
+                  <span class="switch-ui" aria-hidden="true"></span>
+                </label>
+              </div>
+              <input class="control" type="text" id="settingsSiteMenuTasksTitle" value="Задания" />
+            </div>
+          </div>
+          <div class="settings-site-menu-item-row" data-site-menu-item="product-rating">
+            <button class="settings-site-menu-icon-btn" type="button" data-site-menu-icon-btn aria-label="Загрузить иконку пункта Оценка товаров">
+              <img class="settings-site-menu-icon-img hidden" data-site-menu-icon-img alt="" />
+              <i class="fas fa-star-half-alt" data-site-menu-icon-default aria-hidden="true"></i>
+            </button>
+            <input class="hidden" type="file" data-site-menu-icon-input accept="image/png,image/webp,image/jpeg,image/svg+xml,image/*" />
+            <div class="settings-site-field settings-site-menu-title-field">
+              <div class="settings-site-menu-title-head">
+                <label class="field-label" for="settingsSiteMenuProductRatingTitle">Название пункта Оценка товаров</label>
+                <label class="switch settings-site-menu-visible-switch" aria-label="Показывать пункт Оценка товаров">
+                  <input class="switch-input" type="checkbox" data-site-menu-visible checked />
+                  <span class="switch-ui" aria-hidden="true"></span>
+                </label>
+              </div>
+              <input class="control" type="text" id="settingsSiteMenuProductRatingTitle" value="Оценка товаров" />
+            </div>
+          </div>
+        </div>
+        <div class="stores-form-actions settings-footer-actions">
+          <button class="settings-footer-btn settings-footer-btn--save" type="button" id="settingsSiteMenuItemsSaveBtn">Сохранить</button>
+        </div>
+      </div>
+
       <div class="info-card settings-right-panel hidden" id="settingsOrderStatusesPanel">
         <div class="settings-list-header">
           <div class="settings-list-title">Этапы заказов</div>
