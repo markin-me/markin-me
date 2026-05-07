@@ -3369,6 +3369,15 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     return `${yyyy}-${MM}-${DD}`;
   }
 
+  function parseBirthdayInput(input) {
+    const s = str(input).trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+      const [yyyyRaw, mmRaw, ddRaw] = s.split('-');
+      return parseBirthdayDDMMYYYY(`${ddRaw}.${mmRaw}.${yyyyRaw}`);
+    }
+    return parseBirthdayDDMMYYYY(s);
+  }
+
   function isPlaceholderCustomerNameValue(rawName) {
     const value = str(rawName).trim().toLowerCase();
     return value === 'клиент';
@@ -5783,7 +5792,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     }
   });
 
-  // PUT /api/public/me  body: { name }
+  // PUT /api/public/me  body: { name?, birthday? }
   router.put('/me', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
@@ -5791,14 +5800,30 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const customer = await getCustomerByToken(tenantId, token);
       if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
 
-      const name = normalizeRequiredCustomerName(req.body.name);
-      if (!name) return res.status(400).json({ ok: false, error: 'NAME_REQUIRED' });
+      const updates = [];
+      const params = [];
+
+      if (Object.prototype.hasOwnProperty.call(req.body || {}, 'name')) {
+        const name = normalizeRequiredCustomerName(req.body.name);
+        if (!name) return res.status(400).json({ ok: false, error: 'NAME_REQUIRED' });
+        updates.push('name=?');
+        params.push(name);
+      }
+
+      if (Object.prototype.hasOwnProperty.call(req.body || {}, 'birthday')) {
+        const birthday = parseBirthdayInput(req.body.birthday);
+        if (!birthday) return res.status(400).json({ ok: false, error: 'BAD_BIRTHDAY' });
+        updates.push('birthday=?');
+        params.push(birthday);
+      }
+
+      if (!updates.length) return res.status(400).json({ ok: false, error: 'NO_CHANGES' });
 
       await db.query(
         `UPDATE cust_customers
-         SET name=?
+         SET ${updates.join(', ')}
          WHERE tenant_id=? AND id=?`,
-        [name, tenantId, customer.id]
+        [...params, tenantId, customer.id]
       );
 
       res.json({ ok: true });
@@ -6245,14 +6270,19 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         `SELECT
            o.id,
            DATE_FORMAT(o.created_at, '%Y-%m-%d %H:%i:%s') AS created_at_utc,
-           o.total_price, o.items, o.public_id,
+           o.total_price, o.items, o.public_id, o.address,
            s.title AS status_title, s.code AS status_code, s.is_final AS status_is_final,
-           p.title AS payment_title, p.code AS payment_code
+           p.title AS payment_title, p.code AS payment_code,
+           ca.street AS deliveryAddressStreet,
+           ca.house AS deliveryAddressHouse,
+           ca.apartment AS deliveryAddressApartment
          FROM order_orders o
          LEFT JOIN order_statuses s
            ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id
          LEFT JOIN order_payments p
            ON p.tenant_id=o.tenant_id AND p.store_id=o.store_id AND p.id=o.payment_id
+         LEFT JOIN cust_customer_addresses ca
+           ON ca.tenant_id=o.tenant_id AND ca.id=o.delivery_address_id AND ca.is_active=1
          LEFT JOIN cust_customers c
            ON c.tenant_id=o.tenant_id AND c.id=o.customer_id
          WHERE o.tenant_id=? AND o.store_id=? AND o.is_active=1
@@ -6279,6 +6309,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           id: Number(r.id),
           public_id: r.public_id || null,
           created_at: helpers.utcToStoreDateTime(r.created_at_utc ?? r.created_at, storeTimezone),
+          address: r.address || null,
+          delivery_address_street: r.deliveryAddressStreet || null,
+          delivery_address_house: r.deliveryAddressHouse || null,
+          delivery_address_apartment: r.deliveryAddressApartment || null,
           total_price: Number(r.total_price || 0),
           status_title: r.status_title || null,
           status_code: r.status_code || null,
@@ -6357,14 +6391,19 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         `SELECT
            o.id,
            DATE_FORMAT(o.created_at, '%Y-%m-%d %H:%i:%s') AS created_at_utc,
-           o.total_price, o.items, o.public_id,
+           o.total_price, o.items, o.public_id, o.address,
            s.title AS status_title, s.code AS status_code, s.is_final AS status_is_final,
-           p.title AS payment_title, p.code AS payment_code
+           p.title AS payment_title, p.code AS payment_code,
+           ca.street AS deliveryAddressStreet,
+           ca.house AS deliveryAddressHouse,
+           ca.apartment AS deliveryAddressApartment
          FROM order_orders o
          LEFT JOIN order_statuses s
            ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id
          LEFT JOIN order_payments p
            ON p.tenant_id=o.tenant_id AND p.store_id=o.store_id AND p.id=o.payment_id
+         LEFT JOIN cust_customer_addresses ca
+           ON ca.tenant_id=o.tenant_id AND ca.id=o.delivery_address_id AND ca.is_active=1
          WHERE o.tenant_id=? AND o.store_id=? AND o.customer_id=? AND o.is_active=1
            AND (? IS NULL OR COALESCE(s.is_final, 0)=?)
          ORDER BY o.created_at DESC, o.id DESC
@@ -6386,6 +6425,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           id: Number(r.id),
           public_id: r.public_id || null,
           created_at: helpers.utcToStoreDateTime(r.created_at_utc ?? r.created_at, storeTimezone),
+          address: r.address || null,
+          delivery_address_street: r.deliveryAddressStreet || null,
+          delivery_address_house: r.deliveryAddressHouse || null,
+          delivery_address_apartment: r.deliveryAddressApartment || null,
           total_price: Number(r.total_price || 0),
           status_title: r.status_title || null,
           status_code: r.status_code || null,

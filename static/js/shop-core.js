@@ -176,6 +176,7 @@
   const elCatChipsWrap = $("#shopCatChipsWrap");
   const elCatSheetTriggerBtn = $("#shopCatSheetTriggerBtn");
   const elCatChips = $("#shopCatChips");
+  const elCatalogPromoBlock = $("#shopCatalogPromoBlock");
 
   const elCartList =
     $("#shopCartList") ||
@@ -697,6 +698,8 @@
     if (!level) return null;
     const balance = Math.max(0, Number(state.homeBonusConfig?.account?.balance || 0));
     const canRedeem = balance > 0;
+    const allowRedeemAndAccrue = Number(state.homeBonusConfig?.settings?.allow_redeem_and_accrue || 0) === 1;
+    const redeemLabel = allowRedeemAndAccrue ? "Списать и начислить" : "Списать";
     if (!canRedeem && state.cartBonusRedeemEnabled) {
       state.cartBonusRedeemEnabled = false;
     }
@@ -705,19 +708,27 @@
     const coinName = state.homeBonusConfig?.settings?.bonus_coin_name || "Бонусы";
     section.innerHTML = `
       <div class="shop-bonus-level-balance-card shop-cart-bonus-redeem-card">
-        <div class="shop-bonus-level-balance-main">
-          <div class="shop-bonus-level-balance-label">${escapeHtml(coinName)}</div>
-          <div class="shop-bonus-level-balance-value">${formatShopBonusMoney(balance)}</div>
+        <div class="shop-cart-bonus-redeem-head">
+          <div class="shop-bonus-level-balance-main">
+            <div class="shop-bonus-level-balance-label">${escapeHtml(coinName)}</div>
+            <div class="shop-bonus-level-balance-value">${formatShopBonusMoney(balance)}</div>
+          </div>
+          <div class="shop-cart-bonus-redeem-available">
+            <div class="shop-cart-bonus-redeem-available-label">Можно списать</div>
+            <div class="shop-cart-bonus-redeem-available-value" data-cart-bonus-redeem-available>${formatShopBonusMoney(0)}</div>
+          </div>
         </div>
-        <div class="shop-cart-bonus-redeem-available">
-          <div class="shop-cart-bonus-redeem-available-label">Можно списать</div>
-          <div class="shop-cart-bonus-redeem-available-value" data-cart-bonus-redeem-available>${formatShopBonusMoney(0)}</div>
+        <div class="shop-cart-bonus-redeem-actions">
+          <button class="shop-cart-bonus-action-pill shop-cart-bonus-action-pill--accrual${state.cartBonusRedeemEnabled && canRedeem ? "" : " is-active"}" type="button" data-cart-bonus-accrual-button>
+            <span class="shop-cart-bonus-action-pill__label">Начислить</span>
+            <span class="shop-cart-bonus-action-pill__amount" data-cart-bonus-accrual-amount>+${formatShopBonusMoney(0)}</span>
+          </button>
+          <button class="shop-cart-bonus-action-pill shop-cart-bonus-action-pill--redeem${state.cartBonusRedeemEnabled && canRedeem ? " is-active" : ""}${canRedeem ? "" : " is-disabled"}" type="button" data-cart-bonus-redeem-button ${canRedeem ? "" : "disabled"}>
+            <span class="shop-cart-bonus-action-pill__label" data-cart-bonus-redeem-label>${escapeHtml(redeemLabel)}</span>
+            <span class="shop-cart-bonus-action-pill__amount" data-cart-bonus-redeem-button-amount>-${formatShopBonusMoney(0)}</span>
+          </button>
+          <input class="shop-cart-bonus-redeem-input" type="checkbox" data-cart-bonus-redeem-toggle ${state.cartBonusRedeemEnabled && canRedeem ? "checked" : ""} ${canRedeem ? "" : "disabled"} />
         </div>
-        <label class="shop-cart-bonus-redeem-switch${canRedeem ? "" : " is-disabled"}">
-          <input type="checkbox" data-cart-bonus-redeem-toggle ${state.cartBonusRedeemEnabled && canRedeem ? "checked" : ""} ${canRedeem ? "" : "disabled"} />
-          <span class="shop-cart-bonus-redeem-slider" aria-hidden="true"></span>
-          <span>Списать</span>
-        </label>
       </div>
     `;
     return section;
@@ -761,6 +772,33 @@
         } else if (typeof window.syncShopCartPricingSummaryUi === "function") {
           Promise.resolve(window.syncShopCartPricingSummaryUi()).catch(() => {});
         }
+      });
+    });
+    rootEl.querySelectorAll("[data-cart-bonus-redeem-button]").forEach((button) => {
+      if (button.dataset.cartBonusRedeemButtonBound === "1") return;
+      button.dataset.cartBonusRedeemButtonBound = "1";
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (button.disabled || button.classList.contains("is-disabled")) return;
+        const section = button.closest(".shop-cart-bonus-redeem-section");
+        const input = section?.querySelector("[data-cart-bonus-redeem-toggle]");
+        if (!input || input.disabled) return;
+        input.checked = !input.checked;
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+    });
+    rootEl.querySelectorAll("[data-cart-bonus-accrual-button]").forEach((button) => {
+      if (button.dataset.cartBonusAccrualButtonBound === "1") return;
+      button.dataset.cartBonusAccrualButtonBound = "1";
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const section = button.closest(".shop-cart-bonus-redeem-section");
+        const input = section?.querySelector("[data-cart-bonus-redeem-toggle]");
+        if (!input) return;
+        input.checked = false;
+        input.dispatchEvent(new Event("change", { bubbles: true }));
       });
     });
   }
@@ -1541,6 +1579,22 @@
   }
 
   function buildHomeActiveOrderCardHtml(order) {
+    return `
+      <button class="shop-profile-card shop-home-active-order-card shop-order-summary-card" type="button" data-home-active-order-id="${escapeHtml(String(Number(order?.id || 0) || ""))}">
+        ${buildShopOrderSummaryCardInnerHtml(order)}
+      </button>
+    `;
+  }
+
+  function buildCatalogActiveOrderCardHtml(order) {
+    return `
+      <button class="shop-profile-card shop-home-active-order-card shop-order-summary-card shop-catalog-active-order-card" type="button" data-home-active-order-id="${escapeHtml(String(Number(order?.id || 0) || ""))}">
+        ${buildShopOrderSummaryCardInnerHtml(order)}
+      </button>
+    `;
+  }
+
+  function buildShopOrderSummaryCardInnerHtml(order, options = {}) {
     const createdAt = new Date(order?.created_at || "");
     const dateText = Number.isFinite(createdAt.getTime())
       ? createdAt.toLocaleString("ru-RU", {
@@ -1549,21 +1603,49 @@
           hour: "2-digit",
           minute: "2-digit",
         })
-      : "—";
-    const previewPhotos = collectHomeActiveOrderPreviewPhotos(order?.items, 8);
+      : "\u2014";
+    const addressText = formatCatalogActiveOrderAddress(order);
+    const maxPhotos = Math.max(1, Number(options?.maxPhotos || 8) || 8);
+    const previewPhotos = collectHomeActiveOrderPreviewPhotos(order?.items, maxPhotos);
     return `
-      <button class="shop-profile-card shop-home-active-order-card" type="button" data-home-active-order-id="${escapeHtml(String(Number(order?.id || 0) || ""))}">
-        <div><strong>Заказ #${escapeHtml(String(order?.id || ""))}</strong> <span class="muted">• ${escapeHtml(order?.status_title || "—")}</span></div>
-        <div class="muted">${escapeHtml(dateText)}</div>
-        <div><strong>${money(order?.total_price || 0)}</strong></div>
+        <div class="shop-order-summary-card__head">
+          <strong>\u0417\u0430\u043a\u0430\u0437 #${escapeHtml(String(order?.id || ""))}</strong>
+          <span>${escapeHtml(dateText)}</span>
+        </div>
+        ${addressText ? `
+          <div class="shop-order-summary-card__address">
+            <i class="fas fa-location-dot" aria-hidden="true"></i>
+            <span>${escapeHtml(addressText)}</span>
+          </div>
+        ` : ""}
         ${previewPhotos.length ? `
           <div class="shop-profile-order-photos">
             ${previewPhotos.map((src) => `<img class="shop-profile-order-photo" src="${escapeHtml(src)}" alt="" loading="lazy" decoding="async" />`).join("")}
           </div>
         ` : ""}
-      </button>
+        <div class="shop-order-summary-card__actions">
+          <span class="shop-order-summary-card__pill shop-order-summary-card__status">${escapeHtml(order?.status_title || "\u2014")}</span>
+          <span class="shop-order-summary-card__pill shop-order-summary-card__price">${money(order?.total_price || 0)}</span>
+        </div>
     `;
   }
+
+  function formatCatalogActiveOrderAddress(order) {
+    const street = String(order?.delivery_address_street || order?.address_street || "").trim();
+    const house = String(order?.delivery_address_house || order?.address_house || "").trim();
+    const apartment = String(order?.delivery_address_apartment || order?.address_apartment || "").trim();
+    if (street || house) {
+      const line = [street, house].filter(Boolean).join(" ");
+      return apartment ? `${line}, \u043a\u0432 ${apartment}` : line;
+    }
+    const fullAddress = String(order?.address || order?.delivery_address || "").trim();
+    if (!fullAddress) return "";
+    const parts = fullAddress.split(",").map((part) => part.trim()).filter(Boolean);
+    if (parts.length > 1) return parts.slice(1, 3).join(", ");
+    return fullAddress;
+  }
+
+  window.buildShopOrderSummaryCardInnerHtml = buildShopOrderSummaryCardInnerHtml;
 
   function renderHomeActiveOrdersBlock() {
     const host = elHomeBonusCard?.querySelector?.("[data-home-active-orders]");
@@ -1598,6 +1680,41 @@
         }
       });
       button.dataset.homeActiveOrderBound = "1";
+    });
+  }
+
+  function renderCatalogPromoBlock() {
+    const host = elCatalogPromoBlock;
+    if (!host) return;
+    const orders = Array.isArray(window._activeOrders) ? window._activeOrders : [];
+    if (!orders.length) {
+      host.classList.add("hidden");
+      host.innerHTML = "";
+      return;
+    }
+    host.innerHTML = `
+      <div class="shop-catalog-promo-block__scroll no-scrollbar">
+        ${orders.map((order) => buildCatalogActiveOrderCardHtml(order)).join("")}
+      </div>
+    `;
+    host.classList.remove("hidden");
+    host.querySelectorAll("[data-home-active-order-id]").forEach((button) => {
+      if (button.dataset.catalogActiveOrderBound === "1") return;
+      button.addEventListener("click", async () => {
+        const orderId = Number(button.dataset.homeActiveOrderId || 0);
+        if (!(orderId > 0)) return;
+        try {
+          await ensureShopLateLoaded();
+          if (typeof window.openShopActiveOrderDetails === "function") {
+            window._activeOrdersSourceScreen = "catalog";
+            await window.openShopActiveOrderDetails(orderId);
+            if (typeof setActiveNav === "function") setActiveNav("menu");
+          }
+        } catch (err) {
+          console.error("open catalog active order error:", err);
+        }
+      });
+      button.dataset.catalogActiveOrderBound = "1";
     });
   }
 
@@ -7692,6 +7809,7 @@
       bindHomeMainSiteMenuRow(elHomeBonusCard);
       void updateHomeBonusSiteMenuBadges(elHomeBonusCard);
       renderHomeActiveOrdersBlock();
+      renderCatalogPromoBlock();
       elHomeBonusCard.classList.remove("hidden");
       return;
     }
@@ -7763,10 +7881,14 @@
     bindHomeMainSiteMenuRow(elHomeBonusCard);
     void updateHomeBonusSiteMenuBadges(elHomeBonusCard);
     renderHomeActiveOrdersBlock();
+    renderCatalogPromoBlock();
     elHomeBonusCard.classList.remove("hidden");
   }
 
-  window.renderShopHomeActiveOrdersBlock = renderHomeActiveOrdersBlock;
+  window.renderShopHomeActiveOrdersBlock = () => {
+    renderHomeActiveOrdersBlock();
+    renderCatalogPromoBlock();
+  };
 
   async function loadHomeBonusConfig() {
     if (!elHomeBonusCard) return null;
@@ -12854,6 +12976,8 @@ async function initAddresses() {
 
     if (listEl) {
       listEl.appendChild(buildCartBenefitsServiceSection());
+      const bonusRedeemSection = buildCartBonusRedeemSection();
+      if (bonusRedeemSection) listEl.appendChild(bonusRedeemSection);
 
       const pricingSummarySection = document.createElement("section");
       pricingSummarySection.className = "shop-cart-pricing-summary-section hidden";
@@ -12865,8 +12989,6 @@ async function initAddresses() {
         </div>
       `;
       listEl.appendChild(pricingSummarySection);
-      const bonusRedeemSection = buildCartBonusRedeemSection();
-      if (bonusRedeemSection) listEl.appendChild(bonusRedeemSection);
     }
 
     if (totalEl) totalEl.textContent = money(total);

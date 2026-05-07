@@ -10888,6 +10888,14 @@ body.page-shop .shop-toolbar-cart{
   display: none;
 }
 
+.shop-catalog-promo-block{
+  display: none;
+}
+
+.shop-catalog-promo-block.hidden{
+  display: none;
+}
+
 .shop-catalog-delivery-widget__modes{
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -11182,6 +11190,55 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
     border-radius: 22px;
     background: var(--color-surface);
     box-shadow: 0 10px 22px rgba(20, 29, 48, 0.08);
+  }
+
+  body.page-shop.shop-main:not(.modal-open):not(.sheet-open) .shop-catalog-promo-block:not(.hidden){
+    width: 100%;
+    height: 200px;
+    display: block;
+    margin-bottom: 8px;
+    padding: 0;
+    border-radius: 22px;
+    background: var(--color-surface);
+    box-shadow: 0 10px 22px rgba(20, 29, 48, 0.08);
+    overflow: visible;
+  }
+
+  .shop-catalog-promo-block__title{
+    padding: 0 4px;
+    color: var(--color-text);
+    font-size: 16px;
+    line-height: 1.2;
+    font-weight: 900;
+  }
+
+  .shop-catalog-promo-block__scroll{
+    height: 100%;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    overflow-x: auto;
+    overflow-y: visible;
+    -webkit-overflow-scrolling: touch;
+    scroll-snap-type: x proximity;
+    padding: 12px 10px 16px;
+  }
+
+  .shop-catalog-promo-block .shop-home-active-order-card{
+    flex-basis: 300px;
+    width: 300px;
+    min-width: 300px;
+    min-height: 0;
+    height: calc(100% - 8px);
+    align-self: center;
+  }
+
+  .shop-catalog-promo-block .shop-home-active-order-card:first-child{
+    margin-left: 10px;
+  }
+
+  .shop-catalog-promo-block .shop-home-active-order-card:last-child{
+    margin-right: 10px;
   }
 
   body.page-shop .center-stack > .panel:first-child .toolbar{
@@ -13974,6 +14031,7 @@ body.page-shop .shop-cart-content .shop-cart-mode-header.is-condensed .shop-cart
   body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-benefits) .modal-backdrop,
   body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-address) .modal-backdrop,
   body:has(.app-modal-body.shop-active-order-details-sheet-body) .modal-backdrop,
+  body:has(.app-modal-body.shop-profile-sheet-body) .modal-backdrop,
   body:has(.app-modal-body.shop-profile-orders-sheet-body) .modal-backdrop,
   body:has(.app-modal-body.shop-favorites-sheet-body) .modal-backdrop{
     z-index: 10018;
@@ -13983,6 +14041,7 @@ body.page-shop .shop-cart-content .shop-cart-mode-header.is-condensed .shop-cart
   body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-benefits) .shop-mobile-bottom-container,
   body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-address) .shop-mobile-bottom-container,
   body:has(.app-modal-body.shop-active-order-details-sheet-body) .shop-mobile-bottom-container,
+  body:has(.app-modal-body.shop-profile-sheet-body) .shop-mobile-bottom-container,
   body:has(.app-modal-body.shop-profile-orders-sheet-body) .shop-mobile-bottom-container,
   body:has(.app-modal-body.shop-favorites-sheet-body) .shop-mobile-bottom-container{
     z-index: 10020;
@@ -13992,6 +14051,7 @@ body.page-shop .shop-cart-content .shop-cart-mode-header.is-condensed .shop-cart
   body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-benefits) .app-modal,
   body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-address) .app-modal,
   body:has(.app-modal-body.shop-active-order-details-sheet-body) .app-modal,
+  body:has(.app-modal-body.shop-profile-sheet-body) .app-modal,
   body:has(.app-modal-body.shop-profile-orders-sheet-body) .app-modal,
   body:has(.app-modal-body.shop-favorites-sheet-body) .app-modal{
     z-index: 10019;
@@ -14974,11 +15034,11 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
   display: flex;
   gap: 10px;
   overflow-x: auto;
-  overflow-y: hidden;
+  overflow-y: visible;
   overscroll-behavior-x: contain;
   scroll-snap-type: x proximity;
   -webkit-overflow-scrolling: touch;
-  padding-bottom: 4px;
+  padding: 8px 14px 16px;
 }
 
 .shop-home-active-order-card{
@@ -14991,6 +15051,111 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
   cursor: pointer;
   border: 1px solid var(--color-border);
   scroll-snap-align: start;
+}
+
+.shop-order-summary-card{
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  gap: 6px;
+  border-radius: 30px !important;
+  box-shadow: 0 14px 28px rgba(20, 29, 48, 0.16);
+  overflow: hidden;
+}
+
+.shop-order-summary-card .shop-profile-order-photos{
+  align-self: start;
+  margin-top: 0;
+}
+
+.shop-order-summary-card__head{
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.shop-order-summary-card__head strong{
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shop-order-summary-card__head span{
+  flex: 0 0 auto;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  line-height: 1.1;
+}
+
+.shop-order-summary-card__address{
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  align-items: center;
+  gap: 5px;
+  color: var(--color-text);
+  font-size: 13px;
+  line-height: 1.15;
+  font-weight: 800;
+}
+
+.shop-order-summary-card__address i{
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+
+.shop-order-summary-card__address span{
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shop-order-summary-card__actions{
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+
+.shop-order-summary-card__pill{
+  min-width: 0;
+  min-height: 38px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 14px;
+  font-size: 13px;
+  line-height: 1;
+  font-weight: 900;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-shadow: 0 8px 18px rgba(20, 29, 48, 0.08);
+}
+
+.shop-order-summary-card__status{
+  background: var(--color-surface-2);
+  color: var(--color-text);
+}
+
+.shop-order-summary-card__price{
+  background: var(--shop-buy);
+  border-color: var(--shop-buy);
+  color: var(--shop-buy-text);
+  box-shadow: 0 10px 22px rgba(255, 106, 19, 0.22);
+}
+
+.shop-profile-order-summary-card{
+  width: 100%;
+}
+
+.shop-profile-orders-section .shop-profile-list{
+  overflow: visible;
 }
 
 @media (min-width: 769px){
@@ -15346,7 +15511,20 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
 .shop-cart-bonus-redeem-card{
   margin: 0;
   width: 100%;
-  min-height: 74px;
+  min-height: 104px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  align-items: stretch;
+  justify-items: stretch;
+  justify-content: stretch;
+}
+
+.shop-cart-bonus-redeem-head{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .shop-cart-bonus-redeem-available{
@@ -15369,6 +15547,85 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
   line-height: 1;
   font-weight: 900;
   color: var(--color-text);
+}
+
+.shop-cart-bonus-redeem-actions{
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  justify-self: stretch;
+  justify-content: stretch;
+}
+
+.shop-cart-bonus-action-pill{
+  width: 100%;
+  min-height: 46px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-2);
+  color: var(--color-text);
+  display: inline-grid;
+  align-items: center;
+  align-content: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 11px;
+  line-height: 1;
+  font-weight: 900;
+  cursor: pointer;
+  white-space: nowrap;
+  box-shadow: 0 8px 18px rgba(20, 29, 48, 0.08);
+  min-width: 0;
+  max-width: 100%;
+  justify-self: stretch;
+}
+
+.shop-cart-bonus-action-pill.is-active{
+  border-color: var(--color-primary);
+  background: var(--color-primary);
+  color: var(--color-primary-contrast, #fff);
+  box-shadow: 0 10px 22px rgba(255, 106, 19, 0.22);
+}
+
+.shop-cart-bonus-action-pill.is-disabled,
+.shop-cart-bonus-action-pill:disabled{
+  cursor: default;
+  opacity: .55;
+}
+
+.shop-cart-bonus-action-pill__label,
+.shop-cart-bonus-action-pill__amount{
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: center;
+}
+
+.shop-cart-bonus-action-pill__amount{
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  font-size: 12px;
+}
+
+.shop-cart-bonus-action-pill__delta{
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 5px;
+}
+
+.shop-cart-bonus-redeem-input{
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .shop-cart-bonus-redeem-switch{
@@ -19326,9 +19583,14 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
 }
 
 .shop-profile-photo-menu{
+  position: absolute;
+  top: calc(100% + 8px);
   left: 0;
   right: auto;
-  z-index: 20;
+  max-width: min(220px, calc(100vw - 48px));
+  max-height: none;
+  overflow: hidden;
+  z-index: 40;
 }
 
 .shop-profile-menu.hidden{
@@ -19393,6 +19655,7 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
   align-content: start;
   position: relative;
   overflow: visible;
+  z-index: 3;
 }
 
 .shop-profile-photo-actions{
@@ -21834,6 +22097,33 @@ body.page-shop .app-modal-body::after{
   background: var(--color-surface);
 }
 
+.app-modal-body.shop-profile-sheet-body{
+  padding: 12px;
+  overflow: hidden;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-surface);
+}
+
+.app-modal-body.shop-profile-sheet-body::after{
+  display: none;
+}
+
+.app-modal-body.shop-profile-sheet-body > .shop-profile-content{
+  flex: 0 0 auto;
+  min-height: 0;
+  overflow: visible;
+  padding: 0;
+}
+
+.app-modal-body.shop-profile-sheet-body .shop-profile{
+  min-height: 0;
+  align-content: start;
+  overflow: visible;
+}
+
 .app-modal-body.shop-profile-orders-sheet-body .shop-profile-orders-sheet-content{
   flex: 1;
   min-height: 0;
@@ -22195,6 +22485,7 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
   .app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-cart .shop-cart-mode-header-sticky-host{
     top: -2px;
   }
+
 }
 @media (max-width: 768px){
   .shop-profile-content,

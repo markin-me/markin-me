@@ -15293,8 +15293,22 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
       amount = Math.floor(Math.max(0, Number(state.cartBonusRedeemAvailableAmount || 0)));
     }
     document.querySelectorAll(".shop-cart-bonus-redeem-section").forEach((section) => {
+      const accrualAmount = Math.floor(Math.max(0, Number(safeState?.bonusAccrualAmount || 0)));
+      const allowRedeemAndAccrue = Number(state.homeBonusConfig?.settings?.allow_redeem_and_accrue || 0) === 1;
       section.querySelectorAll("[data-cart-bonus-redeem-available]").forEach((node) => {
         node.textContent = money(amount);
+      });
+      section.querySelectorAll("[data-cart-bonus-accrual-amount]").forEach((node) => {
+        node.innerHTML = `+${formatShopBonusMoney(accrualAmount)}`;
+      });
+      section.querySelectorAll("[data-cart-bonus-redeem-button-amount]").forEach((node) => {
+        const accrualHtml = allowRedeemAndAccrue && accrualAmount > 0
+          ? ` <span class="shop-cart-bonus-action-pill__delta">+${formatShopBonusMoney(accrualAmount)}</span>`
+          : "";
+        node.innerHTML = `-${formatShopBonusMoney(amount)}${accrualHtml}`;
+      });
+      section.querySelectorAll("[data-cart-bonus-redeem-label]").forEach((node) => {
+        node.textContent = allowRedeemAndAccrue ? "Списать и начислить" : "Списать";
       });
       section.querySelectorAll("[data-cart-bonus-redeem-toggle]").forEach((input) => {
         const balance = Math.max(0, Number(state.homeBonusConfig?.account?.balance || 0));
@@ -15305,6 +15319,18 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
         }
         input.checked = !!state.cartBonusRedeemEnabled && !disabled;
         input.closest(".shop-cart-bonus-redeem-switch")?.classList.toggle("is-disabled", disabled);
+      });
+      section.querySelectorAll("[data-cart-bonus-redeem-button]").forEach((button) => {
+        const balance = Math.max(0, Number(state.homeBonusConfig?.account?.balance || 0));
+        const disabled = !(balance > 0) || !(amount > 0);
+        button.disabled = disabled;
+        button.classList.toggle("is-disabled", disabled);
+        button.classList.toggle("is-active", !!state.cartBonusRedeemEnabled && !disabled);
+      });
+      section.querySelectorAll("[data-cart-bonus-accrual-button]").forEach((button) => {
+        button.disabled = false;
+        button.classList.remove("is-disabled");
+        button.classList.toggle("is-active", !state.cartBonusRedeemEnabled);
       });
     });
   }
@@ -27928,7 +27954,49 @@ function renderSheetAddressList() {
     info.appendChild(nameLine);
 
     addLine("Телефон", me?.phone ? formatPhonePlus7(me.phone) : "—");
-    addLine("Дата рождения", formatBirthdayDisplay(me?.birthday || ""));
+
+    const birthdayLine = document.createElement("div");
+    birthdayLine.className = "shop-profile-line";
+    const birthdayTitle = document.createElement("div");
+    birthdayTitle.className = "shop-profile-line-title";
+    birthdayTitle.textContent = "Дата рождения";
+    const birthdayValue = document.createElement("div");
+    birthdayValue.className = "shop-profile-line-value shop-profile-name-value";
+    const birthdayText = document.createElement("span");
+    birthdayText.className = "shop-profile-birthday-text";
+    birthdayText.textContent = formatBirthdayDisplay(me?.birthday || "");
+    const birthdayEditBtn = document.createElement("button");
+    birthdayEditBtn.type = "button";
+    birthdayEditBtn.className = "btn btn-icon shop-profile-name-edit";
+    birthdayEditBtn.setAttribute("aria-label", "Изменить дату рождения");
+    birthdayEditBtn.innerHTML = `<i class="fas fa-pencil"></i>`;
+    const birthdayInput = document.createElement("input");
+    birthdayInput.type = "text";
+    birthdayInput.className = "control shop-profile-name-input hidden";
+    birthdayInput.inputMode = "numeric";
+    birthdayInput.autocomplete = "bday";
+    birthdayInput.placeholder = "дд.мм.гггг";
+    birthdayInput.maxLength = 10;
+    birthdayInput.value = formatBirthdayDisplay(me?.birthday || "");
+    const birthdayActions = document.createElement("div");
+    birthdayActions.className = "shop-profile-name-actions shop-address-form-actions hidden";
+    const birthdaySave = document.createElement("button");
+    birthdaySave.type = "button";
+    birthdaySave.className = "btn btn-primary";
+    birthdaySave.textContent = "Сохранить";
+    const birthdayCancel = document.createElement("button");
+    birthdayCancel.type = "button";
+    birthdayCancel.className = "btn";
+    birthdayCancel.textContent = "Отмена";
+    birthdayActions.appendChild(birthdaySave);
+    birthdayActions.appendChild(birthdayCancel);
+    birthdayValue.appendChild(birthdayText);
+    birthdayValue.appendChild(birthdayEditBtn);
+    birthdayValue.appendChild(birthdayInput);
+    birthdayValue.appendChild(birthdayActions);
+    birthdayLine.appendChild(birthdayTitle);
+    birthdayLine.appendChild(birthdayValue);
+    info.appendChild(birthdayLine);
 
     top.appendChild(info);
     wrap.appendChild(top);
@@ -27983,7 +28051,6 @@ function renderSheetAddressList() {
     tabs.appendChild(tabOrders);
     tabs.appendChild(tabSettings);
     bindProfileTabsWheelScroll();
-    wrap.appendChild(tabs);
 
     const addressesPanel = document.createElement("div");
     addressesPanel.className = "shop-profile-tab-panel is-active";
@@ -28840,9 +28907,9 @@ function renderSheetAddressList() {
 
     settingsPanel.appendChild(settingsWrap);
 
-    wrap.appendChild(addressesPanel);
-    wrap.appendChild(ordersPanel);
-    wrap.appendChild(settingsPanel);
+    if (ordersOnly) {
+      wrap.appendChild(ordersPanel);
+    }
 
     host.appendChild(wrap);
 
@@ -29719,40 +29786,9 @@ function renderSheetAddressList() {
 
     function renderProfileOrderRow(o) {
       const row = document.createElement("div");
-      row.className = "shop-profile-card";
+      row.className = "shop-profile-card shop-order-summary-card shop-profile-order-summary-card";
       row.style.cursor = "pointer";
-
-      const previewPhotos = collectOrderPreviewPhotos(o?.items, 40);
-      const orderDate = new Date(o.created_at);
-      const orderDateText = Number.isFinite(orderDate.getTime())
-        ? orderDate.toLocaleString("ru-RU", {
-            day: "2-digit",
-            month: "2-digit",
-            hour: "2-digit",
-            minute: "2-digit",
-          })
-        : "—";
-
-      row.innerHTML = `
-        <div><strong>Заказ #${o.id}</strong> <span class="muted">• ${o.status_title || "—"}</span></div>
-        <div class="muted">${orderDateText}</div>
-        <div><strong>${money(o.total_price || 0)}</strong></div>
-      `;
-
-      if (previewPhotos.length) {
-        const photosRow = document.createElement("div");
-        photosRow.className = "shop-profile-order-photos";
-        previewPhotos.forEach((src) => {
-          const img = document.createElement("img");
-          img.className = "shop-profile-order-photo";
-          img.src = src;
-          img.alt = "";
-          img.loading = "lazy";
-          img.decoding = "async";
-          photosRow.appendChild(img);
-        });
-        row.appendChild(photosRow);
-      }
+      row.innerHTML = window.buildShopOrderSummaryCardInnerHtml(o, { maxPhotos: 8 });
 
       row.addEventListener("click", () => {
         showOrderDetails(o.id);
@@ -29999,7 +30035,9 @@ function renderSheetAddressList() {
     }
 
     let currentName = str(me?.name || "");
+    let currentBirthday = formatBirthdayDisplay(me?.birthday || "");
     let isEditing = false;
+    let isBirthdayEditing = false;
 
     function setProfilePhoto(url) {
       const v = str(url || "").trim();
@@ -30022,6 +30060,7 @@ function renderSheetAddressList() {
 
     function setEditingMode(next) {
       isEditing = Boolean(next);
+      if (isEditing) setBirthdayEditingMode(false);
       wrap.classList.toggle("is-editing", isEditing);
       nameText.classList.toggle("hidden", isEditing);
       nameEditBtn.classList.toggle("hidden", isEditing);
@@ -30041,7 +30080,7 @@ function renderSheetAddressList() {
             elMobileAddressCancelBtn.disabled = false;
             elMobileAddressCancelBtn.onclick = () => nameCancel.click();
           }
-        } else {
+        } else if (!isBirthdayEditing) {
           elMobileAddressActions.classList.add("hidden");
           if (elMobileAddressSaveBtn) elMobileAddressSaveBtn.onclick = null;
           if (elMobileAddressCancelBtn) elMobileAddressCancelBtn.onclick = null;
@@ -30054,6 +30093,53 @@ function renderSheetAddressList() {
     }
 
     setEditingMode(false);
+
+    birthdayEditBtn.addEventListener("click", () => setBirthdayEditingMode(true));
+
+    function setBirthdayEditingMode(next) {
+      isBirthdayEditing = Boolean(next);
+      if (isBirthdayEditing) setEditingMode(false);
+      birthdayText.classList.toggle("hidden", isBirthdayEditing);
+      birthdayEditBtn.classList.toggle("hidden", isBirthdayEditing);
+      birthdayInput.classList.toggle("hidden", !isBirthdayEditing);
+      const isMobile = window.matchMedia("(max-width: 768px)").matches;
+      birthdayActions.classList.toggle("hidden", !isBirthdayEditing || isMobile);
+      if (isMobile && elMobileAddressActions) {
+        if (isBirthdayEditing) {
+          elMobileAddressActions.classList.remove("hidden");
+          if (elMobileAddressSaveBtn) {
+            elMobileAddressSaveBtn.textContent = "Сохранить";
+            elMobileAddressSaveBtn.disabled = false;
+            elMobileAddressSaveBtn.onclick = () => birthdaySave.click();
+          }
+          if (elMobileAddressCancelBtn) {
+            elMobileAddressCancelBtn.textContent = "Отмена";
+            elMobileAddressCancelBtn.disabled = false;
+            elMobileAddressCancelBtn.onclick = () => birthdayCancel.click();
+          }
+        } else if (!isEditing) {
+          elMobileAddressActions.classList.add("hidden");
+          if (elMobileAddressSaveBtn) elMobileAddressSaveBtn.onclick = null;
+          if (elMobileAddressCancelBtn) elMobileAddressCancelBtn.onclick = null;
+        }
+      }
+      if (isBirthdayEditing) {
+        birthdayInput.value = currentBirthday;
+        setTimeout(() => birthdayInput.focus(), 0);
+      }
+    }
+
+    setBirthdayEditingMode(false);
+
+    birthdayInput.addEventListener("input", () => {
+      const digits = str(birthdayInput.value || "").replace(/\D/g, "").slice(0, 8);
+      const next = [
+        digits.slice(0, 2),
+        digits.slice(2, 4),
+        digits.slice(4, 8),
+      ].filter(Boolean).join(".");
+      birthdayInput.value = next;
+    });
 
     function startPhotoUpload() {
       photoInput.click();
@@ -30202,16 +30288,54 @@ function renderSheetAddressList() {
       setEditingMode(false);
     });
 
-    reloadAddresses();
-    reloadOrders({ reset: true });
+    birthdaySave.addEventListener("click", async () => {
+      const v = str(birthdayInput.value || "").trim();
+      if (!v) {
+        alert("Укажите дату рождения");
+        return;
+      }
+      const isMobile = window.matchMedia("(max-width: 768px)").matches;
+      birthdaySave.disabled = true;
+      birthdaySave.textContent = "Сохраняем…";
+      if (isMobile && elMobileAddressSaveBtn) {
+        elMobileAddressSaveBtn.disabled = true;
+        elMobileAddressSaveBtn.textContent = "Сохраняем…";
+      }
+      try {
+        await apiJson("/api/public/me", { method: "PUT", body: { birthday: v } });
+        const me2 = await fetchMeSafe({ force: true });
+        currentBirthday = formatBirthdayDisplay(me2?.birthday || v);
+        if (me2) setCustomerCache(me2);
+        birthdayInput.value = currentBirthday;
+        birthdayText.textContent = formatBirthdayDisplay(currentBirthday);
+        setBirthdayEditingMode(false);
+      } catch (e) {
+        alert("Не удалось сохранить дату рождения");
+      } finally {
+        birthdaySave.disabled = false;
+        birthdaySave.textContent = "Сохранить";
+        if (isMobile && elMobileAddressSaveBtn) {
+          elMobileAddressSaveBtn.disabled = false;
+          elMobileAddressSaveBtn.textContent = "Сохранить";
+        }
+      }
+    });
+
+    birthdayCancel.addEventListener("click", () => {
+      birthdayInput.value = currentBirthday;
+      setBirthdayEditingMode(false);
+    });
+
+    if (ordersOnly) {
+      reloadOrders({ reset: true });
+    }
 
     // Устанавливаем начальную вкладку, если указана
-    if (initialTab) {
+    if (ordersOnly && initialTab) {
       setActiveTab(initialTab);
     }
     if (ordersOnly) {
       if (top) top.classList.add("hidden");
-      if (tabs) tabs.classList.add("hidden");
       setActiveTab("orders");
     }
 
@@ -30476,6 +30600,7 @@ function renderSheetAddressList() {
       onClose: () => {
         if (window.AppModal?.body) {
           window.AppModal.body.classList.remove("shop-profile-orders-sheet-body");
+          window.AppModal.body.classList.remove("shop-profile-sheet-body");
         }
         setActiveNav(ordersOnly && sourceScreen === "home" ? "home" : "menu");
         // Сбрасываем состояние навигации
@@ -30490,6 +30615,7 @@ function renderSheetAddressList() {
     });
     if (window.AppModal?.body) {
       window.AppModal.body.classList.toggle("shop-profile-orders-sheet-body", !!ordersOnly);
+      window.AppModal.body.classList.toggle("shop-profile-sheet-body", !ordersOnly);
     }
     if (ordersOnly) {
       const settingsBtn = document.querySelector(".shop-profile-modal-settings");
@@ -37548,6 +37674,7 @@ function initShopLate() {
       async function openActiveOrdersSheet() {
         if (!window.AppModal) return;
         resetShopModalHeaderUi();
+        window._activeOrdersSourceScreen = "active-orders-list";
       
         // Скрываем приоткрытый bottom sheet при открытии полноценного
       
@@ -37579,6 +37706,7 @@ function initShopLate() {
         resetOrderDetailsTransientUi();
         resetShopModalHeaderUi();
         setActiveOrderDetailsSheetBodyState(false);
+        window._activeOrdersSourceScreen = "active-orders-list";
       
         // Обновляем состояние навигации
         sheetNavigationState.type = 'activeOrders';
@@ -37628,6 +37756,12 @@ function initShopLate() {
               if (window._activeOrdersSourceScreen === "home" && typeof setActiveNav === "function") {
                 setActiveNav("home");
               }
+              if (window._activeOrdersSourceScreen === "catalog") {
+                window.requestAnimationFrame(() => {
+                  const catalogActiveOrdersScroll = document.querySelector(".shop-catalog-promo-block__scroll");
+                  if (catalogActiveOrdersScroll) catalogActiveOrdersScroll.scrollLeft = 0;
+                });
+              }
               if (elActiveOrdersSheetCollapsed && typeof window.updateActiveOrdersBadge === "function") {
                 window.updateActiveOrdersBadge();
               }
@@ -37663,6 +37797,8 @@ function initShopLate() {
         const activeOrders = window._activeOrders || [];
         window._savedActiveOrdersForBack = [...activeOrders]; // Сохраняем копию
         const hasMultipleOrders = activeOrders.length > 1;
+        const directDetailsSource = window._activeOrdersSourceScreen === "home" || window._activeOrdersSourceScreen === "catalog";
+        const shouldShowBack = hasMultipleOrders && !directDetailsSource;
       
         // Обновляем состояние навигации
         sheetNavigationState.type = 'activeOrders';
@@ -37707,7 +37843,7 @@ function initShopLate() {
         if (modalHeader && modalTitle && modalActions) {
           // Создаем кнопку назад слева
           let backBtn = modalHeader.querySelector(".app-modal-back-btn");
-          if (!backBtn && hasMultipleOrders) {
+          if (!backBtn && shouldShowBack) {
             backBtn = document.createElement("button");
             backBtn.className = "btn btn-icon app-modal-back-btn";
             backBtn.type = "button";
@@ -37752,8 +37888,8 @@ function initShopLate() {
                 }
               }
             });
-          } else if (backBtn && !hasMultipleOrders) {
-            // Удаляем кнопку назад, если заказ один
+          } else if (backBtn && !shouldShowBack) {
+            // Удаляем кнопку назад, если детали открыты напрямую или заказ один
             backBtn.remove();
           }
         
