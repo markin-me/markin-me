@@ -7968,7 +7968,8 @@ function sortRepeatOrderItemsForDisplay(items) {
     .map((entry) => entry.item);
 }
 
-function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
+function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = "" } = {}) {
+  const favoritesSourceScreen = str(sourceScreen || "");
   const isMobileSheet = window.matchMedia("(max-width: 1100px)").matches;
   if (isMobileSheet && !window.AppModal) return;
   const isAnySheetOpen =
@@ -9114,7 +9115,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
 
   setAppModalMode("shop");
   setSheetHeaderMode("");
-  setActiveNav("fav");
+  setActiveNav(favoritesSourceScreen === "home-site-menu" || favoritesSourceScreen === "home" ? "home" : "fav");
   window.AppModal.open({
     title: "Избранное",
     content: wrap,
@@ -9122,7 +9123,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       closeCurrentSwiped(false);
       currentSwipedContainer = null;
       document.removeEventListener("pointerdown", handleOutsidePointerDown, true);
-      setActiveNav("menu");
+      setActiveNav(favoritesSourceScreen === "home-site-menu" || favoritesSourceScreen === "home" ? "home" : "menu");
       sheetNavigationState.type = null;
       sheetNavigationState.screen = null;
       sheetNavigationState.data = null;
@@ -10675,6 +10676,40 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
   function calculateAvailableGiftBenefitsCount(previewData) {
     const gifts = Array.isArray(previewData?.gifts) ? previewData.gifts : [];
     return gifts.filter((item) => isCheckoutBenefitGiftAvailableForBadge(item)).length;
+  }
+
+  function calculateAvailableProgressBenefitsCount(previewData) {
+    const progress = Array.isArray(previewData?.progress) ? previewData.progress : [];
+    return progress.filter((item) => isCheckoutBenefitProgressAvailableForBadge(item)).length;
+  }
+
+  function buildShopBenefitsSectionCounts(previewData) {
+    const discounts = calculateAvailableDiscountBenefitsCount(previewData);
+    const promos = calculateAvailablePromoBenefitsCount(previewData);
+    const gifts = calculateAvailableGiftBenefitsCount(previewData);
+    const progress = calculateAvailableProgressBenefitsCount(previewData);
+    return {
+      benefits: discounts + promos + gifts + progress,
+      discounts,
+      promos,
+      gifts,
+      progress,
+    };
+  }
+
+  async function getShopBenefitsSectionCounts(previewRequest = null) {
+    const effectivePreviewRequest = cloneCheckoutBenefitsStorePreviewRequest(
+      previewRequest && typeof previewRequest === "object"
+        ? previewRequest
+        : buildCheckoutBenefitsCurrentPreviewRequest()
+    );
+    const snapshot = await ensureBenefitsStoreHydrated({
+      previewRequest: effectivePreviewRequest,
+      force: false,
+      warmDetails: false,
+    });
+    const previewData = snapshot?.derivedPreview || snapshot?.basePreview || null;
+    return buildShopBenefitsSectionCounts(previewData);
   }
 
   function hasGiftRewardItemsInCart(cartItems = null) {
@@ -15666,6 +15701,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       || normalized === "cart-service"
       || normalized === "checkout"
       || normalized === "bonus-level"
+      || normalized === "home-site-menu"
       || normalized === "nav"
     ) {
       return normalized;
@@ -15682,6 +15718,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       || sheetSource === "cart-service"
       || sheetSource === "checkout"
       || sheetSource === "bonus-level"
+      || sheetSource === "home-site-menu"
       || sheetSource === "nav"
     ) {
       return sheetSource;
@@ -15692,6 +15729,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       || desktopSource === "cart-service"
       || desktopSource === "checkout"
       || desktopSource === "bonus-level"
+      || desktopSource === "home-site-menu"
       || desktopSource === "nav"
     ) {
       return desktopSource;
@@ -21107,7 +21145,9 @@ function openCartSheet() {
         sheetNavigationState.screen = null;
         sheetNavigationState.data = null;
         schedulePostModalCloseUiSync();
-        if (typeof setActiveNav === "function") setActiveNav("menu");
+        if (typeof setActiveNav === "function") {
+          setActiveNav(openCartSheetCtx?.sourceScreen === "home" ? "home" : "menu");
+        }
       },
     });
     if (window.AppModal?.body) window.AppModal.body.classList.add("shop-cart-sheet-body");
@@ -22034,7 +22074,9 @@ function applySheetAddressTitle(backMode = "cart") {
       clearSheetAddressTitleMode();
 
       // bottom nav: после закрытия возвращаем "Главная"
-      if (typeof setActiveNav === "function") setActiveNav("menu");
+      if (typeof setActiveNav === "function") {
+        setActiveNav(openCartSheetCtx?.sourceScreen === "home" ? "home" : "menu");
+      }
     },
   });
   
@@ -22062,6 +22104,7 @@ function applySheetAddressTitle(backMode = "cart") {
     productEl: productWrap,
     addressBackMode: null,
     addressFormReturnScreen: null,
+    sourceScreen: "",
     showSheetAddressForm,
     showSheetProduct,
     showSheetCombo,
@@ -22177,6 +22220,7 @@ function applySheetAddressTitle(backMode = "cart") {
         || explicitSource === "cart-service"
         || explicitSource === "checkout"
         || explicitSource === "bonus-level"
+        || explicitSource === "home-site-menu"
         || explicitSource === "nav"
       ) {
         return explicitSource;
@@ -22189,6 +22233,7 @@ function applySheetAddressTitle(backMode = "cart") {
         || savedSource === "cart-service"
         || savedSource === "checkout"
         || savedSource === "bonus-level"
+        || savedSource === "home-site-menu"
         || savedSource === "nav"
       ) {
         return savedSource;
@@ -22314,8 +22359,11 @@ function applySheetAddressTitle(backMode = "cart") {
         closeShopSheetIfOpen();
         return;
       }
-      if (nextScreen === "nav") {
+      if (nextScreen === "nav" || nextScreen === "home-site-menu") {
         closeShopSheetIfOpen();
+        if (nextScreen === "home-site-menu" && typeof setActiveNav === "function") {
+          setActiveNav("home");
+        }
         return;
       }
       if (nextScreen === "cart" || nextScreen === "cart-service") {
@@ -27753,11 +27801,12 @@ function renderSheetAddressList() {
     window.bindRepeatOrderItemRows = bindRepeatOrderItemRows;
   }
 
-  function buildProfileContent({ host, me, onLogout, initialTab }) {
+  function buildProfileContent({ host, me, onLogout, initialTab, ordersOnly = false, sourceScreen = "" } = {}) {
     host.innerHTML = "";
 
     const wrap = document.createElement("div");
     wrap.className = "shop-profile";
+    wrap.classList.toggle("shop-profile--orders-only", !!ordersOnly);
 
     const top = document.createElement("div");
     top.className = "shop-profile-top";
@@ -28173,7 +28222,7 @@ function renderSheetAddressList() {
       title: "Завершенные",
       emptyText: "Завершенных заказов пока нет.",
       collapsible: true,
-      collapsed: true,
+      collapsed: !ordersOnly,
     });
     ordersList.appendChild(ordersActiveSection.root);
     ordersList.appendChild(ordersCompletedSection.root);
@@ -29488,8 +29537,8 @@ function renderSheetAddressList() {
           void showOrderDetails(orderId);
           return;
         }
-        if (typeof setActiveNav === "function") setActiveNav("profile");
-        const reopenedCtx = openProfileModal(me, { initialTab: "orders" });
+        if (typeof setActiveNav === "function") setActiveNav(ordersOnly && sourceScreen === "home" ? "home" : "profile");
+        const reopenedCtx = openProfileModal(me, { initialTab: "orders", ordersOnly, sourceScreen });
         setTimeout(() => {
           const ctx =
             reopenedCtx && typeof reopenedCtx.showOrderDetails === "function"
@@ -29564,8 +29613,8 @@ function renderSheetAddressList() {
       window._showOrdersListCallback = null;
       
       // Показываем верхнюю часть профиля и вкладки обратно
-      if (top) top.classList.remove("hidden");
-      if (tabs) tabs.classList.remove("hidden");
+      if (top) top.classList.toggle("hidden", !!ordersOnly);
+      if (tabs) tabs.classList.toggle("hidden", !!ordersOnly);
       
       // Активируем вкладку "История заказов"
       setActiveTab("orders");
@@ -29594,22 +29643,22 @@ function renderSheetAddressList() {
         // Модальное окно: восстанавливаем заголовок и скрываем кнопку "Назад"
         const titleEl = document.querySelector(".app-modal-title") || document.querySelector(".modal-title") || document.querySelector("[data-modal-title]");
         if (titleEl) {
-          titleEl.textContent = "Профиль";
+          titleEl.textContent = ordersOnly ? "Мои заказы" : "Профиль";
         }
         
         // Показываем шестеренку обратно
         const settingsBtn = document.querySelector(".shop-profile-modal-settings");
-        if (settingsBtn) settingsBtn.classList.remove("hidden");
+        if (settingsBtn) settingsBtn.classList.toggle("hidden", !!ordersOnly);
         const profileActions = document.querySelector(".shop-profile-header-actions");
-        if (profileActions) profileActions.classList.remove("hidden");
+        if (profileActions) profileActions.classList.toggle("hidden", !!ordersOnly);
         
         setSheetHeaderMode("", {});
       } else {
         // Десктоп: восстанавливаем заголовок
         setCartHeader({ 
-          title: "Профиль", 
+          title: ordersOnly ? "Мои заказы" : "Профиль",
           showAddressChip: false, 
-          showProfileActions: true, 
+          showProfileActions: !ordersOnly,
           showBack: false 
         });
       }
@@ -29892,12 +29941,15 @@ function renderSheetAddressList() {
       if (reset) {
         resetOrdersSection("active");
         resetOrdersSection("completed");
-        setCompletedSectionCollapsed(true);
+        setCompletedSectionCollapsed(!ordersOnly);
         profileOrdersSummary.activeCount = 0;
         profileOrdersSummary.completedCount = 0;
         updateOrdersSectionHeaders();
       }
       await loadOrdersSection("active", { reset: true });
+      if (ordersOnly && !ordersCompletedSection.collapsed) {
+        await loadOrdersSection("completed", { reset: true });
+      }
     }
 
     ordersCompletedSection.header.addEventListener("click", () => {
@@ -30157,6 +30209,11 @@ function renderSheetAddressList() {
     if (initialTab) {
       setActiveTab(initialTab);
     }
+    if (ordersOnly) {
+      if (top) top.classList.add("hidden");
+      if (tabs) tabs.classList.add("hidden");
+      setActiveTab("orders");
+    }
 
     return {
       showEdit: () => setEditingMode(true),
@@ -30359,7 +30416,7 @@ function renderSheetAddressList() {
     };
   }
 
-  async function openProfileSheet({ initialTab, onLoginSuccess } = {}) {
+  async function openProfileSheet({ initialTab, onLoginSuccess, ordersOnly = false, sourceScreen = "" } = {}) {
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
     if (!isMobile) {
       await openProfilePanel(null, { initialTab, onLoginSuccess });
@@ -30376,25 +30433,28 @@ function renderSheetAddressList() {
             onLoginSuccess(me2);
             return;
           }
-          openProfileModal(me2);
+          openProfileModal(me2, { initialTab, ordersOnly, sourceScreen });
         },
       });
       return;
     }
-    setActiveNav("profile");
-    openProfileModal(me, { initialTab });
+    setActiveNav(ordersOnly && sourceScreen === "home" ? "home" : "profile");
+    openProfileModal(me, { initialTab, ordersOnly, sourceScreen });
   }
 
-  function openProfileModal(me, { initialTab } = {}) {
+  function openProfileModal(me, { initialTab, ordersOnly = false, sourceScreen = "" } = {}) {
     if (!window.AppModal) return;
 
     const wrap = document.createElement("div");
     wrap.className = "shop-profile-content";
+    wrap.classList.toggle("shop-profile-orders-sheet-content", !!ordersOnly);
     const ctx = buildProfileContent({
       host: wrap,
       me,
       onLogout: () => handleProfileLogout({ closeModal: true }),
       initialTab,
+      ordersOnly,
+      sourceScreen,
     });
     window._profileContext = ctx;
 
@@ -30411,10 +30471,13 @@ function renderSheetAddressList() {
     setAppModalMode("shop");
 
     window.AppModal.open({
-      title: "Профиль",
+      title: ordersOnly ? "Мои заказы" : "Профиль",
       content: wrap,
       onClose: () => {
-        setActiveNav("menu");
+        if (window.AppModal?.body) {
+          window.AppModal.body.classList.remove("shop-profile-orders-sheet-body");
+        }
+        setActiveNav(ordersOnly && sourceScreen === "home" ? "home" : "menu");
         // Сбрасываем состояние навигации
         sheetNavigationState.type = null;
         sheetNavigationState.screen = null;
@@ -30425,6 +30488,15 @@ function renderSheetAddressList() {
         }
       },
     });
+    if (window.AppModal?.body) {
+      window.AppModal.body.classList.toggle("shop-profile-orders-sheet-body", !!ordersOnly);
+    }
+    if (ordersOnly) {
+      const settingsBtn = document.querySelector(".shop-profile-modal-settings");
+      if (settingsBtn) settingsBtn.classList.add("hidden");
+      const profileActions = document.querySelector(".shop-profile-header-actions");
+      if (profileActions) profileActions.classList.add("hidden");
+    }
     
     // Обновляем бейдж сразу после открытия модального окна
     if (typeof window.updateActiveOrdersBadge === "function") {
@@ -30434,6 +30506,12 @@ function renderSheetAddressList() {
     }
     return ctx;
   }
+
+  async function openProfileOrdersSheet({ sourceScreen = "" } = {}) {
+    await openProfileSheet({ initialTab: "orders", ordersOnly: true, sourceScreen });
+  }
+
+  window.openProfileOrdersSheet = openProfileOrdersSheet;
 
   async function requireAuthForCheckout({ isSheet }) {
     const me = await fetchMeSafe();
@@ -37139,6 +37217,9 @@ function initShopLate() {
           if (!token) {
             badges.forEach(badge => badge.classList.add("hidden"));
             window._activeOrders = [];
+            if (typeof window.renderShopHomeActiveOrdersBlock === "function") {
+              window.renderShopHomeActiveOrdersBlock();
+            }
             return;
           }
 
@@ -37154,6 +37235,9 @@ function initShopLate() {
 
           // Сохраняем активные заказы в глобальную переменную
           window._activeOrders = activeOrders;
+          if (typeof window.renderShopHomeActiveOrdersBlock === "function") {
+            window.renderShopHomeActiveOrdersBlock();
+          }
           activeOrdersBadgeLastSyncAt = Date.now();
 
           const count = activeOrders.length;
@@ -37213,11 +37297,17 @@ function initShopLate() {
           } else {
             badges.forEach(badge => badge.classList.add("hidden"));
             window._activeOrders = [];
+            if (typeof window.renderShopHomeActiveOrdersBlock === "function") {
+              window.renderShopHomeActiveOrdersBlock();
+            }
           }
         } catch (e) {
           // Если ошибка (не авторизован и т.д.), скрываем бейджи
           badges.forEach(badge => badge.classList.add("hidden"));
           window._activeOrders = [];
+          if (typeof window.renderShopHomeActiveOrdersBlock === "function") {
+            window.renderShopHomeActiveOrdersBlock();
+          }
         } finally {
           activeOrdersBadgeLoading = false;
           if (typeof queueMobileUiStateSync === "function") {
@@ -37235,6 +37325,13 @@ function initShopLate() {
       let activeOrdersDetailsHost = null;
       let activeOrdersEmptyView = null;
       let activeOrdersListSignature = "";
+      const activeOrderDetailsSheetBodyClass = "shop-active-order-details-sheet-body";
+
+      function setActiveOrderDetailsSheetBodyState(active) {
+        const body = window.AppModal?.body;
+        if (!body) return;
+        body.classList.toggle(activeOrderDetailsSheetBodyClass, !!active);
+      }
 
       function ensureActiveOrdersSheetShell() {
         if (activeOrdersSheetWrap && activeOrdersListView && activeOrdersDetailsHost && activeOrdersEmptyView) {
@@ -37473,12 +37570,15 @@ function initShopLate() {
         // Если заказов несколько - показываем список
         showActiveOrdersList(activeOrders);
       }
+
+      window.openShopActiveOrdersSheet = openActiveOrdersSheet;
     
       // Показать список активных заказов
       function showActiveOrdersList(orders) {
         if (!window.AppModal) return;
         resetOrderDetailsTransientUi();
         resetShopModalHeaderUi();
+        setActiveOrderDetailsSheetBodyState(false);
       
         // Обновляем состояние навигации
         sheetNavigationState.type = 'activeOrders';
@@ -37524,6 +37624,10 @@ function initShopLate() {
               sheetNavigationState.type = null;
               sheetNavigationState.screen = null;
               sheetNavigationState.data = null;
+              setActiveOrderDetailsSheetBodyState(false);
+              if (window._activeOrdersSourceScreen === "home" && typeof setActiveNav === "function") {
+                setActiveNav("home");
+              }
               if (elActiveOrdersSheetCollapsed && typeof window.updateActiveOrdersBadge === "function") {
                 window.updateActiveOrdersBadge();
               }
@@ -37548,6 +37652,7 @@ function initShopLate() {
         if (!window.AppModal) return;
         resetOrderDetailsTransientUi();
         resetShopModalHeaderUi();
+        setActiveOrderDetailsSheetBodyState(true);
         const shell = ensureActiveOrdersSheetShell();
         shell.listView.classList.add("hidden");
         shell.emptyView.classList.add("hidden");
@@ -37581,12 +37686,17 @@ function initShopLate() {
               sheetNavigationState.type = null;
               sheetNavigationState.screen = null;
               sheetNavigationState.data = null;
+              setActiveOrderDetailsSheetBodyState(false);
+              if (window._activeOrdersSourceScreen === "home" && typeof setActiveNav === "function") {
+                setActiveNav("home");
+              }
               if (elActiveOrdersSheetCollapsed && typeof window.updateActiveOrdersBadge === "function") {
                 window.updateActiveOrdersBadge();
               }
             },
           });
         }
+        setActiveOrderDetailsSheetBodyState(true);
         setSheetHeaderMode("", {});
       
         // Настраиваем кастомный хедер: стрелка слева, "Детали заказа" по центру, крестик справа
@@ -37783,6 +37893,8 @@ function initShopLate() {
         }
       }
 
+      window.openShopActiveOrderDetails = showActiveOrderDetails;
+
       // Обработчик клика на десктоп бейдж
       if (elActiveOrdersBadge) {
         elActiveOrdersBadge.removeEventListener("click", handleActiveOrdersBadgeClick);
@@ -37925,6 +38037,7 @@ window.ensureBenefitsStoreHydrated = ensureBenefitsStoreHydrated;
 window.refreshBenefitsStore = refreshBenefitsStore;
 window.invalidateBenefitsStore = invalidateBenefitsStore;
 window.getAvailableBenefitsCount = getAvailableBenefitsCount;
+window.getShopBenefitsSectionCounts = getShopBenefitsSectionCounts;
 window.syncBenefitsBadgesUi = syncBenefitsBadgesUi;
 window.syncShopCartBenefitsServiceUi = syncCartBenefitsServiceBlocksUi;
 window.handleShopBenefitsOrderStateChange = handleShopBenefitsOrderStateChange;

@@ -4884,6 +4884,30 @@
 
 
 
+  function applySiteMenuItemsFromTenant(tenant) {
+    const items = Array.isArray(tenant && tenant.site_menu_items) ? tenant.site_menu_items : [];
+    const byKey = new Map(items.map((item) => [String(item && item.key || ""), item]));
+    document.querySelectorAll("[data-site-menu-item]").forEach((row) => {
+      const key = String(row.getAttribute("data-site-menu-item") || "");
+      const item = byKey.get(key);
+      if (!item) return;
+      const titleInput = row.querySelector(".settings-site-menu-title-field .control");
+      const visibleInput = row.querySelector("[data-site-menu-visible]");
+      const img = row.querySelector("[data-site-menu-icon-img]");
+      const defaultIcon = row.querySelector("[data-site-menu-icon-default]");
+      const iconUrl = String(item.icon_url || "").trim();
+      if (titleInput) titleInput.value = String(item.title || "");
+      if (visibleInput) visibleInput.checked = item.enabled !== false && Number(item.enabled) !== 0;
+      row.dataset.siteMenuIconUrl = iconUrl;
+      if (img) {
+        img.removeAttribute("src");
+        if (iconUrl) img.src = iconUrl;
+        img.classList.toggle("hidden", !iconUrl);
+      }
+      if (defaultIcon) defaultIcon.classList.toggle("hidden", Boolean(iconUrl));
+    });
+  }
+
   async function loadTenantProfile() {
 
 
@@ -26652,31 +26676,6 @@
     }
 
 
-
-    function applySiteMenuItemsFromTenant(tenant) {
-      const items = Array.isArray(tenant && tenant.site_menu_items) ? tenant.site_menu_items : [];
-      const byKey = new Map(items.map((item) => [String(item && item.key || ""), item]));
-      document.querySelectorAll("[data-site-menu-item]").forEach((row) => {
-        const key = String(row.getAttribute("data-site-menu-item") || "");
-        const item = byKey.get(key);
-        if (!item) return;
-        const titleInput = row.querySelector(".settings-site-menu-title-field .control");
-        const visibleInput = row.querySelector("[data-site-menu-visible]");
-        const img = row.querySelector("[data-site-menu-icon-img]");
-        const defaultIcon = row.querySelector("[data-site-menu-icon-default]");
-        if (titleInput) titleInput.value = String(item.title || "");
-        if (visibleInput) visibleInput.checked = item.enabled !== false && Number(item.enabled) !== 0;
-        row.dataset.siteMenuIconUrl = String(item.icon_url || "");
-        if (img) {
-          img.src = item.icon_url ? String(item.icon_url) : "";
-          img.classList.toggle("hidden", !item.icon_url);
-        }
-        if (defaultIcon) defaultIcon.classList.toggle("hidden", Boolean(item.icon_url));
-      });
-    }
-
-
-
     function collectSiteMenuItemsFromPanel() {
       return Array.from(document.querySelectorAll("[data-site-menu-item]")).map((row, index) => {
         const titleInput = row.querySelector(".settings-site-menu-title-field .control");
@@ -26744,6 +26743,14 @@
           if (defaultIcon) {
             defaultIcon.classList.add("hidden");
           }
+          const data = await updateTenantFields({
+            site_menu_items: collectSiteMenuItemsFromPanel()
+          });
+          if (!data || !data.ok || !data.tenant) {
+            throw new Error("Не удалось сохранить иконку пункта меню.");
+          }
+          updateTenantCache(data.tenant);
+          applySiteMenuItemsFromTenant(data.tenant);
         } catch (err) {
           console.error("site menu icon convert error:", err);
           alert(err && err.message ? err.message : "Не удалось загрузить иконку.");

@@ -129,13 +129,6 @@
   <div class="shop-mobile-address-confirm hidden" id="shopMobileAddressConfirm">
     <button class="shop-checkout-btn shop-mobile-address-confirm-btn" id="shopMobileAddressConfirmBtn" type="button">Доставить сюда</button>
   </div>
-  <div class="shop-active-orders-sheet-collapsed hidden" id="shopActiveOrdersSheetCollapsed">
-    <div class="shop-active-orders-handle"></div>
-    <div class="shop-active-orders-collapsed-content">
-      <span class="shop-active-orders-text">Активный заказ</span>
-      <span class="shop-active-orders-count"></span>
-    </div>
-  </div>
 
   <!-- Навигация (всегда видна) -->
   <nav class="shop-nav" aria-label="Навигация">
@@ -152,10 +145,6 @@
     <button class="shop-nav-btn" id="shopNavCart" type="button" data-tab="cart" aria-label="Корзина">
       <i class="fas fa-shopping-cart"></i>
       <span class="shop-nav-badge hidden" id="shopNavCartBadge">0</span>
-    </button>
-
-    <button class="shop-nav-btn" id="shopNavFav" type="button" data-tab="fav" aria-label="Избранное">
-      <i class="far fa-heart"></i>
     </button>
 
     <button class="shop-nav-btn<%= isMobileNavCompanyChatEnabled ? '' : ' hidden' %>" id="shopCompanyChatOpenBtn" type="button" data-tab="chat" aria-label="Чат с компанией" title="Чат с компанией"<% if (!isMobileNavCompanyChatEnabled) { %> aria-hidden="true" tabindex="-1"<% } %>>
