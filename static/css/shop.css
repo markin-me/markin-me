@@ -1889,6 +1889,36 @@ html[data-sidebar-collapsed="1"] .sidebar-edge-toggle .sidebar-edge-expanded{dis
   object-fit:contain;
   background:var(--color-surface);
 }
+
+.settings-icon-popover{
+  position:fixed;
+  z-index:10060;
+  min-width:180px;
+  padding:6px;
+  border:1px solid var(--color-border);
+  border-radius:12px;
+  background:var(--color-surface);
+  box-shadow:0 14px 34px rgba(15,23,42,.16);
+  display:grid;
+  gap:4px;
+}
+
+.settings-icon-popover button{
+  width:100%;
+  min-height:38px;
+  border:0;
+  border-radius:8px;
+  background:transparent;
+  color:var(--color-text);
+  padding:0 12px;
+  text-align:left;
+  font-weight:800;
+  cursor:pointer;
+}
+
+.settings-icon-popover button:hover{
+  background:var(--color-surface-2);
+}
 .settings-row-title .control{width:100%}
 .settings-row-switches{
   display:flex;
@@ -15913,13 +15943,262 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
   text-align: center;
 }
 
+.shop-referrals-stats-row{
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 12px;
+}
+
+.shop-referrals-stat-card{
+  aspect-ratio: 1 / 1;
+  min-width: 0;
+  border-radius: 22px;
+  background: var(--color-surface);
+  box-shadow: 0 12px 34px rgba(15, 23, 42, .10);
+  display: grid;
+  align-content: space-between;
+  gap: 10px;
+  padding: 14px;
+}
+
+.shop-referrals-stat-title{
+  color: var(--color-text);
+  font-size: 15px;
+  line-height: 1.15;
+  font-weight: 900;
+}
+
+.shop-referrals-stat-line{
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.shop-referrals-stat-line span{
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1.15;
+  font-weight: 800;
+}
+
+.shop-referrals-stat-line strong{
+  color: var(--color-text);
+  font-size: 18px;
+  line-height: 1;
+  font-weight: 900;
+}
+
+.shop-referrals-invite-card{
+  margin: 0 12px;
+  padding: 12px;
+  border-radius: 24px;
+  background: var(--color-surface);
+  box-shadow: 0 12px 34px rgba(15, 23, 42, .10);
+  display: grid;
+  gap: 10px;
+}
+
+.shop-referrals-link-row{
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 42px;
+  gap: 8px;
+  align-items: center;
+}
+
+.shop-referrals-link-text{
+  min-height: 42px;
+  min-width: 0;
+  border-radius: 999px;
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  color: var(--color-text);
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  font-size: 13px;
+  line-height: 1;
+  font-weight: 800;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shop-referrals-copy-btn{
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-2);
+  color: var(--color-text);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  cursor: pointer;
+}
+
+.shop-referrals-invite-btn{
+  width: 100%;
+  min-height: 42px;
+  border: none;
+  border-radius: 999px;
+  background: var(--shop-accent, #ff6b18);
+  color: #fff;
+  font-size: 14px;
+  line-height: 1;
+  font-weight: 900;
+  cursor: pointer;
+  box-shadow: 0 10px 22px rgba(255, 106, 19, .22);
+}
+
+.shop-referrals-sheet{
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: calc(76px + env(safe-area-inset-bottom));
+}
+
+.shop-referrals-filter-sticky{
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--color-surface);
+  padding: 12px 12px 8px;
+}
+
+.shop-referrals-filter-chips{
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.shop-referrals-filter-chips::-webkit-scrollbar{
+  display: none;
+}
+
+.shop-referrals-filter-chip{
+  flex: 0 0 auto;
+  min-height: 34px;
+  border: none;
+  border-radius: 999px;
+  background: var(--color-surface-muted, #f3f4f6);
+  color: var(--color-text-muted);
+  padding: 0 14px;
+  font-size: 13px;
+  line-height: 1;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.shop-referrals-filter-chip.is-active{
+  background: var(--shop-accent, #ff6b18);
+  color: #fff;
+  box-shadow: 0 8px 18px rgba(255, 107, 24, .22);
+}
+
+.shop-referrals-list{
+  margin: 0 12px;
+}
+
+.shop-referrals-row{
+  min-height: 68px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 0;
+  border-bottom: 1px solid rgba(15, 23, 42, .08);
+}
+
+.shop-referrals-row:first-child{
+  border-top: 1px solid rgba(15, 23, 42, .08);
+}
+
+.shop-referrals-row-main,
+.shop-referrals-row-side{
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.shop-referrals-avatar{
+  flex: 0 0 auto;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  color: var(--color-text);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 17px;
+}
+
+.shop-referrals-row-main{
+  flex: 1 1 auto;
+}
+
+.shop-referrals-row-main strong{
+  color: var(--color-text);
+  font-size: 15px;
+  line-height: 1.15;
+  font-weight: 900;
+}
+
+.shop-referrals-row-main span,
+.shop-referrals-row-side span{
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1.2;
+  font-weight: 800;
+}
+
+.shop-referrals-row-side{
+  flex: 0 0 auto;
+  justify-items: end;
+  text-align: right;
+}
+
+.shop-referrals-row-side strong{
+  color: var(--shop-accent, #ff6b18);
+  font-size: 15px;
+  line-height: 1;
+  font-weight: 900;
+}
+
 .shop-bonus-sheet-chips{
   display: flex;
   gap: 8px;
   overflow-x: auto;
   scrollbar-width: none;
   -webkit-overflow-scrolling: touch;
-  padding: 12px 20px 8px;
+  padding: 0;
+}
+
+.shop-bonus-accruals-sheet{
+  height: 100%;
+  min-height: 0;
+  display: block;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  background: var(--color-surface);
+  padding: 12px 20px calc(76px + env(safe-area-inset-bottom));
+}
+
+.shop-bonus-accruals-filter-bar{
+  position: static;
+  background: var(--color-surface);
+  padding: 0 0 8px;
+}
+
+.shop-bonus-accruals-host{
+  min-height: initial;
+  overflow: visible;
+  background: var(--color-surface);
+  padding: 0;
 }
 
 .shop-bonus-sheet-chips::-webkit-scrollbar{
@@ -15947,24 +16226,31 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
 }
 
 .shop-bonus-accruals-list{
-  margin: 8px 20px 96px;
-  border-radius: 24px;
-  overflow: hidden;
-  background: var(--color-surface);
-  box-shadow: 0 12px 34px rgba(15, 23, 42, .08);
+  margin: 0;
+  background: transparent;
+}
+
+.shop-bonus-accruals-list::after{
+  content: none;
 }
 
 .shop-bonus-accrual-row{
   min-height: 64px;
-  padding: 12px 14px;
+  padding: 14px 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  border-bottom: 1px solid rgba(15, 23, 42, .08);
+  background: transparent;
 }
 
 .shop-bonus-accrual-row:nth-child(even){
-  background: rgba(15, 23, 42, .035);
+  background: transparent;
+}
+
+.shop-bonus-accrual-row:first-child{
+  border-top: 1px solid rgba(15, 23, 42, .08);
 }
 
 .shop-bonus-accrual-main{
@@ -19623,6 +19909,15 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
   gap: 16px;
   align-items: start;
   overflow: visible;
+}
+
+.shop-profile-bonus-progress{
+  min-width: 0;
+}
+
+.shop-profile-bonus-progress .shop-bonus-level-progress-card{
+  width: 100%;
+  margin: 0;
 }
 
 .shop-profile-top.hidden,

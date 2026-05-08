@@ -3290,6 +3290,36 @@ html[data-sidebar-collapsed="1"] .sidebar-edge-toggle .sidebar-edge-expanded{dis
   object-fit:contain;
   background:var(--color-surface);
 }
+
+.settings-icon-popover{
+  position:fixed;
+  z-index:10060;
+  min-width:180px;
+  padding:6px;
+  border:1px solid var(--color-border);
+  border-radius:12px;
+  background:var(--color-surface);
+  box-shadow:0 14px 34px rgba(15,23,42,.16);
+  display:grid;
+  gap:4px;
+}
+
+.settings-icon-popover button{
+  width:100%;
+  min-height:38px;
+  border:0;
+  border-radius:8px;
+  background:transparent;
+  color:var(--color-text);
+  padding:0 12px;
+  text-align:left;
+  font-weight:800;
+  cursor:pointer;
+}
+
+.settings-icon-popover button:hover{
+  background:var(--color-surface-2);
+}
 .settings-row-title .control{width:100%}
 .settings-row-switches{
   display:flex;

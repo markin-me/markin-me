@@ -889,7 +889,7 @@
       : `color:${escapeHtml(design.contentColor)};background:transparent;padding:0;border-radius:0;`;
     const qrStyle = design.qrEnabled ? "" : "display:none;";
     return `
-      <div class="bonus-level-preview-card shop-home-referral-card__preview" style="background:${escapeHtml(design.baseColor)};">
+      <div class="bonus-level-preview-card shop-home-referral-card__preview" data-open-referrals-sheet style="background:${escapeHtml(design.baseColor)};">
         <div class="bonus-level-preview-main" style="background:${escapeHtml(design.mainColor)};color:${escapeHtml(design.contentColor)};">
           <div class="bonus-level-preview-title" style="${titleStyle}">Рефералы</div>
           <div class="bonus-level-preview-bonus-label" style="color:${escapeHtml(design.contentColor)};">Приглашения</div>
@@ -1376,12 +1376,14 @@
     let transactions = [];
     const render = (status = "") => {
       wrap.innerHTML = `
-        <div class="shop-bonus-sheet-chips">
-          ${filters.map(([value, label]) => `
-            <button class="shop-bonus-sheet-chip${value === activeFilter ? " is-active" : ""}" type="button" data-bonus-transaction-filter="${escapeHtml(value)}">${escapeHtml(label)}</button>
-          `).join("")}
+        <div class="shop-bonus-accruals-filter-bar">
+          <div class="shop-bonus-sheet-chips">
+            ${filters.map(([value, label]) => `
+              <button class="shop-bonus-sheet-chip${value === activeFilter ? " is-active" : ""}" type="button" data-bonus-transaction-filter="${escapeHtml(value)}">${escapeHtml(label)}</button>
+            `).join("")}
+          </div>
         </div>
-        <div class="shop-bonus-accruals-host">
+        <div class="shop-bonus-accruals-host no-scrollbar">
           ${status || buildBonusTransactionsHtml(transactions, activeFilter)}
         </div>
       `;
@@ -1522,6 +1524,153 @@
       </div>
     `;
   }
+
+  function openHomeReferralsSheet() {
+    if (!window.AppModal || typeof window.AppModal.open !== "function") return;
+    const wrap = document.createElement("div");
+    wrap.className = "shop-cart-sheet shop-bonus-cards-sheet shop-referrals-sheet";
+    wrap.innerHTML = `
+      <div class="shop-referrals-stats-row">
+        <div class="shop-referrals-stat-card">
+          <div class="shop-referrals-stat-title">Бонусы</div>
+          <div class="shop-referrals-stat-line">
+            <span>Всего</span>
+            <strong>0 ${getShopBonusCoinIconHtml('1em', '2px')}</strong>
+          </div>
+          <div class="shop-referrals-stat-line">
+            <span>В этом месяце</span>
+            <strong>0 ${getShopBonusCoinIconHtml('1em', '2px')}</strong>
+          </div>
+        </div>
+        <div class="shop-referrals-stat-card">
+          <div class="shop-referrals-stat-title">Рефералы</div>
+          <div class="shop-referrals-stat-line">
+            <span>Всего</span>
+            <strong>0</strong>
+          </div>
+          <div class="shop-referrals-stat-line">
+            <span>В этом месяце</span>
+            <strong>0</strong>
+          </div>
+        </div>
+      </div>
+      <div class="shop-referrals-invite-card">
+        <div class="shop-referrals-link-row">
+          <div class="shop-referrals-link-text">https://example.com/ref</div>
+          <button class="shop-referrals-copy-btn" type="button" aria-label="Скопировать ссылку">
+            <i class="fas fa-copy" aria-hidden="true"></i>
+          </button>
+        </div>
+        <button class="shop-referrals-invite-btn" type="button">Пригласить</button>
+      </div>
+      <div class="shop-referrals-filter-sticky">
+        <div class="shop-referrals-filter-chips no-scrollbar" role="tablist" aria-label="Фильтр рефералов">
+          <button class="shop-referrals-filter-chip is-active" type="button" data-referrals-filter="all">Все</button>
+          <button class="shop-referrals-filter-chip" type="button" data-referrals-filter="1">1-го уровня</button>
+          <button class="shop-referrals-filter-chip" type="button" data-referrals-filter="2">2-го уровня</button>
+          <button class="shop-referrals-filter-chip" type="button" data-referrals-filter="3">3-го уровня</button>
+        </div>
+      </div>
+      <div class="shop-referrals-list" aria-label="Список рефералов">
+        <div class="shop-referrals-row" data-referral-level="1">
+          <div class="shop-referrals-avatar" aria-hidden="true">
+            <i class="fas fa-user"></i>
+          </div>
+          <div class="shop-referrals-row-main">
+            <strong>Анна</strong>
+            <span>0 заказов</span>
+          </div>
+          <div class="shop-referrals-row-side">
+            <span>1-й ур.</span>
+            <strong>0 ${getShopBonusCoinIconHtml('1em', '2px')}</strong>
+          </div>
+        </div>
+        <div class="shop-referrals-row" data-referral-level="1">
+          <div class="shop-referrals-avatar" aria-hidden="true">
+            <i class="fas fa-user-check"></i>
+          </div>
+          <div class="shop-referrals-row-main">
+            <strong>Иван</strong>
+            <span>1 заказ</span>
+          </div>
+          <div class="shop-referrals-row-side">
+            <span>1-й ур.</span>
+            <strong>+35 ${getShopBonusCoinIconHtml('1em', '2px')}</strong>
+          </div>
+        </div>
+        <div class="shop-referrals-row" data-referral-level="2">
+          <div class="shop-referrals-avatar" aria-hidden="true">
+            <i class="fas fa-users"></i>
+          </div>
+          <div class="shop-referrals-row-main">
+            <strong>Мария</strong>
+            <span>2 заказа</span>
+          </div>
+          <div class="shop-referrals-row-side">
+            <span>2-й ур.</span>
+            <strong>+12 ${getShopBonusCoinIconHtml('1em', '2px')}</strong>
+          </div>
+        </div>
+      </div>
+    `;
+    wrap.querySelectorAll("[data-referrals-filter]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const filter = button.dataset.referralsFilter || "all";
+        wrap.querySelectorAll("[data-referrals-filter]").forEach((item) => {
+          item.classList.toggle("is-active", item === button);
+        });
+        wrap.querySelectorAll("[data-referral-level]").forEach((row) => {
+          row.classList.toggle("hidden", filter !== "all" && row.dataset.referralLevel !== filter);
+        });
+      });
+    });
+    sheetNavigationState.type = "referrals";
+    sheetNavigationState.screen = "main";
+    sheetNavigationState.data = null;
+    window.AppModal.open({
+      title: "Рефералы",
+      content: wrap,
+      showCancel: false,
+      showSave: false,
+      onClose: () => {
+        setBonusCardsSheetHeader(false);
+        if (window.AppModal?.body) {
+          window.AppModal.body.classList.remove(
+            "shop-cart-sheet-body",
+            "shop-cart-sheet-screen-benefits",
+            "shop-bonus-cards-sheet-body"
+          );
+        }
+        sheetNavigationState.type = null;
+        sheetNavigationState.screen = null;
+        sheetNavigationState.data = null;
+      },
+    });
+    if (window.AppModal?.body) {
+      window.AppModal.body.classList.add(
+        "shop-cart-sheet-body",
+        "shop-cart-sheet-screen-benefits",
+        "shop-bonus-cards-sheet-body"
+      );
+    }
+    setBonusCardsSheetHeader(true);
+    syncMobileUiState("referrals-sheet-open");
+  }
+
+  function bindHomeReferralCard(root = document) {
+    const host = root && typeof root.querySelectorAll === "function" ? root : document;
+    host.querySelectorAll("[data-open-referrals-sheet]").forEach((card) => {
+      if (card.dataset.referralsSheetBound === "1") return;
+      card.dataset.referralsSheetBound = "1";
+      card.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        openHomeReferralsSheet();
+      });
+    });
+  }
+
+  window.buildHomeBonusLevelProgressHtml = buildHomeBonusLevelProgressHtml;
 
   function buildHomeMainSiteMenuRowHtml(config = state.homeBonusConfig) {
     const allowedKeys = new Set(["my-orders", "favorites", "benefits", "addresses", "bought-before", "tasks", "product-rating"]);
@@ -7806,6 +7955,7 @@
       const balanceEl = elHomeBonusCard.querySelector(".shop-home-bonus-card__preview .bonus-level-preview-bonus-value");
       if (balanceEl) balanceEl.innerHTML = formatShopBonusMoney(getBonusLevelPreviewBalance(level));
       if (level) bindHomeBonusLevelTitle(level);
+      bindHomeReferralCard(elHomeBonusCard);
       bindHomeMainSiteMenuRow(elHomeBonusCard);
       void updateHomeBonusSiteMenuBadges(elHomeBonusCard);
       renderHomeActiveOrdersBlock();
@@ -7878,6 +8028,7 @@
     if (actionBtn) actionBtn.addEventListener("click", () => {
       openHomeBonusCardsSheet();
     });
+    bindHomeReferralCard(elHomeBonusCard);
     bindHomeMainSiteMenuRow(elHomeBonusCard);
     void updateHomeBonusSiteMenuBadges(elHomeBonusCard);
     renderHomeActiveOrdersBlock();

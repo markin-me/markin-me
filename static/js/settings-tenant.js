@@ -26716,7 +26716,7 @@
       btn.addEventListener("click", () => {
         const row = btn.closest("[data-site-menu-item]");
         const input = row ? row.querySelector("[data-site-menu-icon-input]") : null;
-        if (input) input.click();
+        openSettingsIconPopover({ kind: "site-menu", row, input, button: btn });
       });
     });
 
@@ -40378,7 +40378,35 @@
 
 
 
-      defaultField: "is_default"
+      defaultField: "is_default",
+
+
+
+      defaultIcons: {
+
+
+
+        delivery: "fas fa-truck",
+
+
+
+        pickup: "fas fa-store",
+
+
+
+        takeaway: "fas fa-store",
+
+
+
+        hall: "fas fa-utensils",
+
+
+
+        dine_in: "fas fa-utensils"
+
+
+
+      }
 
 
 
@@ -45096,6 +45124,106 @@
 
 
 
+    let settingsIconPopover = null;
+    let settingsIconPopoverTarget = null;
+
+    function ensureSettingsIconPopover() {
+      if (settingsIconPopover) return settingsIconPopover;
+      const popover = document.createElement("div");
+      popover.className = "settings-icon-popover hidden";
+      popover.innerHTML = `
+        <button type="button" data-settings-icon-action="upload">Загрузить фото</button>
+        <button type="button" data-settings-icon-action="delete">Удалить фото</button>
+      `;
+      document.body.appendChild(popover);
+      popover.addEventListener("click", async (event) => {
+        const actionBtn = event.target.closest("[data-settings-icon-action]");
+        if (!actionBtn || !settingsIconPopoverTarget) return;
+        const action = actionBtn.getAttribute("data-settings-icon-action");
+        const target = settingsIconPopoverTarget;
+        closeSettingsIconPopover();
+        if (action === "upload") {
+          if (target.kind === "site-menu") {
+            if (target.input) target.input.click();
+            return;
+          }
+          iconUploadTarget = target;
+          iconUploadInput.click();
+          return;
+        }
+        if (action === "delete") {
+          if (target.kind === "site-menu") {
+            const row = target.row;
+            const img = row ? row.querySelector("[data-site-menu-icon-img]") : null;
+            const defaultIcon = row ? row.querySelector("[data-site-menu-icon-default]") : null;
+            if (row) row.dataset.siteMenuIconUrl = "";
+            if (img) {
+              img.removeAttribute("src");
+              img.classList.add("hidden");
+            }
+            if (defaultIcon) defaultIcon.classList.remove("hidden");
+            const data = await updateTenantFields({
+              site_menu_items: collectSiteMenuItemsFromPanel()
+            });
+            if (!data || !data.ok || !data.tenant) {
+              alert("Не удалось удалить иконку.");
+              return;
+            }
+            updateTenantCache(data.tenant);
+            applySiteMenuItemsFromTenant(data.tenant);
+            return;
+          }
+          const data = await updateSettingsItem(target.type, target.id, { icon: null });
+          if (!data || !data.ok) {
+            alert("Не удалось удалить иконку.");
+            return;
+          }
+          target.button.dataset.currentIcon = "";
+          updateIconButton(target.button, null, target.button.dataset.fallbackIcon || null);
+        }
+      });
+      settingsIconPopover = popover;
+      document.addEventListener("click", (event) => {
+        if (
+          !settingsIconPopover
+          || settingsIconPopover.classList.contains("hidden")
+          || settingsIconPopover.contains(event.target)
+          || (settingsIconPopoverTarget && settingsIconPopoverTarget.button && settingsIconPopoverTarget.button.contains(event.target))
+        ) {
+          return;
+        }
+        closeSettingsIconPopover();
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") closeSettingsIconPopover();
+      });
+      return settingsIconPopover;
+    }
+
+    function closeSettingsIconPopover() {
+      if (settingsIconPopover) settingsIconPopover.classList.add("hidden");
+      settingsIconPopoverTarget = null;
+    }
+
+    function openSettingsIconPopover(target) {
+      const popover = ensureSettingsIconPopover();
+      settingsIconPopoverTarget = target;
+      const deleteBtn = popover.querySelector('[data-settings-icon-action="delete"]');
+      const currentIcon = String(
+        target.kind === "site-menu" && target.row
+          ? target.row.dataset.siteMenuIconUrl || ""
+          : target.button.dataset.currentIcon || ""
+      ).trim();
+      if (deleteBtn) deleteBtn.classList.toggle("hidden", !currentIcon || (!currentIcon.includes("/") && !currentIcon.startsWith("http")));
+      const rect = target.button.getBoundingClientRect();
+      popover.classList.remove("hidden");
+      const width = Math.max(180, popover.offsetWidth || 180);
+      const left = Math.min(window.innerWidth - width - 8, Math.max(8, rect.left));
+      const top = Math.min(window.innerHeight - 8, Math.max(8, rect.bottom + 8));
+      popover.style.left = `${left}px`;
+      popover.style.top = `${top}px`;
+    }
+
     function updateIconButton(btn, iconValue, fallbackIconValue = null) {
 
 
@@ -45240,7 +45368,31 @@
 
 
 
-      return cfg.defaultIcons[code] || null;
+      if (cfg.defaultIcons[code]) return cfg.defaultIcons[code];
+
+
+
+      if (type === "order-delivery") {
+
+
+
+        if (code.includes("delivery") || code.includes("courier")) return "fas fa-truck";
+
+
+
+        if (code.includes("pickup") || code.includes("takeaway") || code.includes("self")) return "fas fa-store";
+
+
+
+        if (code.includes("hall") || code.includes("dine")) return "fas fa-utensils";
+
+
+
+      }
+
+
+
+      return null;
 
 
 
@@ -45445,6 +45597,8 @@
 
 
         if (fallbackIcon) iconBtn.dataset.fallbackIcon = fallbackIcon;
+
+        iconBtn.dataset.currentIcon = String(item.icon || "");
 
 
 
@@ -46072,11 +46226,7 @@
 
 
 
-          iconUploadTarget = { type, id: item.id, button: iconBtn };
-
-
-
-          iconUploadInput.click();
+          openSettingsIconPopover({ type, id: item.id, button: iconBtn });
 
 
 
@@ -46532,7 +46682,21 @@
 
 
 
-      const data = await uploadSettingsIcon(type, id, file);
+      let uploadFile = file;
+      try {
+        const blob = await convertSiteMenuIconFileToWebpBlob(file);
+        uploadFile = new File([blob], "settings-list-icon.webp", { type: "image/webp" });
+      } catch (err) {
+        console.error("settings icon convert error:", err);
+        alert(err && err.message ? err.message : "Не удалось подготовить иконку.");
+        iconUploadInput.value = "";
+        iconUploadTarget = null;
+        return;
+      }
+
+
+
+      const data = await uploadSettingsIcon(type, id, uploadFile);
 
 
 
@@ -46549,6 +46713,10 @@
 
 
       }
+
+
+
+      button.dataset.currentIcon = String(data.url || "");
 
 
 

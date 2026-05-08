@@ -2271,6 +2271,46 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
     return listConfigs[type] || null;
   }
 
+  async function removeTenantUploadUrl(tenantId, url) {
+    const raw = helpers.strOrNull(url);
+    if (!tenantId || !raw || raw.startsWith('http://') || raw.startsWith('https://')) return;
+    const prefix = `/static/uploads/tenants/${tenantId}/`;
+    if (!raw.startsWith(prefix)) return;
+    const relative = raw.slice('/static/uploads/'.length).split(/[?#]/)[0];
+    if (!relative || relative.includes('..')) return;
+    const filePath = path.resolve(__dirname, '..', '..', 'static', 'uploads', relative);
+    const uploadsRoot = path.resolve(__dirname, '..', '..', 'static', 'uploads', 'tenants', String(tenantId));
+    if (!filePath.startsWith(uploadsRoot + path.sep)) return;
+    try {
+      await fs.promises.unlink(filePath);
+    } catch (err) {
+      if (!err || err.code !== 'ENOENT') {
+        console.warn('Failed to remove tenant upload:', err && err.message ? err.message : err);
+      }
+    }
+  }
+
+  function collectSiteMenuIconUrls(value) {
+    let items = [];
+    if (Array.isArray(value)) {
+      items = value;
+    } else if (typeof value === 'string' && value.trim()) {
+      try {
+        const parsed = JSON.parse(value);
+        if (Array.isArray(parsed)) items = parsed;
+      } catch {
+        items = [];
+      }
+    }
+    const urls = new Set();
+    items.forEach((item) => {
+      if (!item || typeof item !== 'object') return;
+      const url = helpers.strOrNull(item.icon_url);
+      if (url) urls.add(url);
+    });
+    return urls;
+  }
+
   function normalizeStoreTime(value) {
     if (value === undefined || value === null) return null;
     const asStr = String(value);
@@ -3870,10 +3910,25 @@ async function fetchStoreWithHours(tenantId, storeId) {
         }
       }
 
+      const previousSiteMenuIconUrls = siteMenuItemsJson !== undefined
+        ? collectSiteMenuIconUrls(current.site_menu_items_json)
+        : null;
+      const nextSiteMenuIconUrls = siteMenuItemsJson !== undefined
+        ? collectSiteMenuIconUrls(nextSiteMenuItemsJson)
+        : null;
+
       await db.query(
         'UPDATE ten_tenants SET name=?, email=?, phone=?, timezone=?, logo_light_url=?, logo_dark_url=?, favicon_light_url=?, favicon_dark_url=?, apple_touch_icon_url=?, android_icon_url=?, price_rounding_mode=?, price_rounding_precision=?, order_stock_deduct_mode=?, order_stock_deduct_status_id=?, site_name=?, site_description=?, pwa_qr_badge_text=?, site_menu_items_json=?, subdomain=?, custom_domain=?, custom_domain_ascii=?, sound_new_order_url=?, sound_order_cancelled_url=?, sound_new_message_url=?, img_webp_quality=?, img_thumb_quality=?, img_thumb_width=?, img_main_width=?, img_webp_aggressive=?, img_delete_original=?, max_bot_id=?, max_bot_token=?, max_mini_app_enabled=?, max_login_enabled=?, telegram_bot_username=?, telegram_bot_token=?, tg_mini_app_enabled=?, tg_login_enabled=?, chat_welcome_message=?, chat_welcome_enabled=?, chat_assistant_name=?, chat_operator_name=?, chat_assistant_gender=?, chat_quick_questions_json=?, chat_quick_questions_enabled=?, chat_widget_enabled=?, chat_guest_thread_ttl_days=?, chat_thread_ttl_days=? WHERE id=?',
         [nextName, nextEmail, nextPhone, nextTimezone, nextLogoLight, nextLogoDark, nextFaviconLight, nextFaviconDark, nextAppleTouchIcon, nextAndroidIcon, nextRoundingMode, nextRoundingPrecision, nextStockDeductMode, nextStockDeductStatusId, nextSiteName, nextSiteDescription, nextPwaQrBadgeText, nextSiteMenuItemsJson, nextSubdomain, nextCustomDomain, nextCustomDomainAscii, nextSoundNewOrder, nextSoundCancelled, nextSoundNewMessage, nextImgWebpQuality, nextImgThumbQuality, nextImgThumbWidth, nextImgMainWidth, nextImgWebpAggressive, nextImgDeleteOriginal, nextMaxBotId, nextMaxBotToken, nextMaxMiniAppEnabled, nextMaxLoginEnabled, nextTelegramBotUsername, nextTelegramBotToken, nextTgMiniAppEnabled, nextTgLoginEnabled, nextChatWelcomeMessage, nextChatWelcomeEnabled, nextChatAssistantName, nextChatOperatorName, nextChatAssistantGender, nextChatQuickQuestionsJson, nextChatQuickQuestionsEnabled, nextChatWidgetEnabled, nextChatGuestThreadTtlDays, nextChatThreadTtlDays, tenantId]
       );
+
+      if (previousSiteMenuIconUrls && nextSiteMenuIconUrls) {
+        for (const url of previousSiteMenuIconUrls) {
+          if (!nextSiteMenuIconUrls.has(url)) {
+            await removeTenantUploadUrl(tenantId, url);
+          }
+        }
+      }
 
       const [rows] = await db.query(
         'SELECT * FROM ten_tenants WHERE id=? LIMIT 1',
@@ -4549,6 +4604,15 @@ async function fetchStoreWithHours(tenantId, storeId) {
         return res.json({ ok: true });
       }
 
+      let previousIcon = null;
+      if (icon !== undefined) {
+        const [previousRows] = await db.query(
+          `SELECT icon FROM ${cfg.table} WHERE tenant_id=? AND store_id=1 AND id=? LIMIT 1`,
+          [tenantId, id]
+        );
+        previousIcon = previousRows && previousRows[0] ? previousRows[0].icon : null;
+      }
+
       if (isDefault === 1) {
         await db.query(
           `UPDATE ${cfg.table} SET ${defaultField}=0
@@ -4562,6 +4626,10 @@ async function fetchStoreWithHours(tenantId, storeId) {
         `UPDATE ${cfg.table} SET ${updates.join(', ')} WHERE tenant_id=? AND store_id=1 AND id=?`,
         params
       );
+
+      if (icon !== undefined && previousIcon && previousIcon !== icon) {
+        await removeTenantUploadUrl(tenantId, previousIcon);
+      }
 
       const baseFields = ['id', 'code', 'title'];
       if (cfg.hasIcon !== false) baseFields.push('icon');
@@ -4661,6 +4729,12 @@ async function fetchStoreWithHours(tenantId, storeId) {
       if (!file) return res.status(400).json({ ok: false, error: 'FILE_REQUIRED' });
       if (cfg.hasIcon === false) return res.status(400).json({ ok: false, error: 'ICON_NOT_SUPPORTED' });
 
+      const [previousRows] = await db.query(
+        `SELECT icon FROM ${cfg.table} WHERE tenant_id=? AND store_id=1 AND id=? LIMIT 1`,
+        [tenantId, id]
+      );
+      const previousIcon = previousRows && previousRows[0] ? previousRows[0].icon : null;
+
       // Создаём WebP-вариант иконки списка (оригинал остаётся как fallback)
       await helpers.ensureWebpVariant(
         file.path ||
@@ -4672,6 +4746,9 @@ async function fetchStoreWithHours(tenantId, storeId) {
         `UPDATE ${cfg.table} SET icon=? WHERE tenant_id=? AND store_id=1 AND id=?`,
         [url, tenantId, id]
       );
+      if (previousIcon && previousIcon !== url) {
+        await removeTenantUploadUrl(tenantId, previousIcon);
+      }
 
       const baseIconFields = ['id', 'code', 'title', 'icon', 'sort', 'is_active'];
       if (cfg.hasFinal) baseIconFields.push('is_final');

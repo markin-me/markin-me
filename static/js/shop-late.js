@@ -27999,6 +27999,29 @@ function renderSheetAddressList() {
     info.appendChild(birthdayLine);
 
     top.appendChild(info);
+    if (!ordersOnly) {
+      const activeBonusLevel = getCartBonusActiveLevel();
+      const buildProgressHtml = typeof window.buildHomeBonusLevelProgressHtml === "function"
+        ? window.buildHomeBonusLevelProgressHtml
+        : null;
+      const progressHtml = activeBonusLevel && buildProgressHtml
+        ? buildProgressHtml(activeBonusLevel)
+        : "";
+      if (progressHtml) {
+        const bonusProgress = document.createElement("div");
+        bonusProgress.className = "shop-profile-bonus-progress";
+        bonusProgress.innerHTML = progressHtml;
+        const progressButton = bonusProgress.querySelector("[data-open-bonus-cards-current]");
+        if (progressButton) {
+          progressButton.type = "button";
+          progressButton.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          });
+        }
+        wrap.appendChild(bonusProgress);
+      }
+    }
     wrap.appendChild(top);
 
     const tabs = document.createElement("div");
