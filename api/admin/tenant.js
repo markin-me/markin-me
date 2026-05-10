@@ -3051,7 +3051,8 @@ async function fetchStoreWithHours(tenantId, storeId) {
         'favicon_dark_url',
         'apple_touch_icon_url',
         'android_icon_url',
-        'site_menu_item_icon'
+        'site_menu_item_icon',
+        'bonus_modal_image'
       ]);
       if (!field || !allowed.has(field)) {
         return res.status(400).json({ ok: false, error: 'FIELD_INVALID' });
@@ -3064,7 +3065,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
 
       const url = `/static/uploads/tenants/${tenantId}/${file.filename.replace(/\.(jpe?g|png|gif)$/i, '.webp')}`;
 
-      if (field === 'site_menu_item_icon') {
+      if (field === 'site_menu_item_icon' || field === 'bonus_modal_image') {
         const [rows] = await db.query(
           'SELECT * FROM ten_tenants WHERE id=? LIMIT 1',
           [tenantId]

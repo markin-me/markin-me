@@ -25286,3 +25286,135 @@ body.page-shop-install{
     bottom:calc(env(safe-area-inset-bottom, 0px) + 14px);
   }
 }
+
+.shop-bonus-program-modal-overlay{
+  position:fixed;
+  inset:0;
+  z-index:100500;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:22px;
+  background:rgba(15, 23, 42, 0.42);
+}
+
+.shop-bonus-program-modal{
+  width:min(340px, calc(100vw - 44px));
+  border-radius:28px;
+  background:#fff;
+  box-shadow:0 18px 50px rgba(15, 23, 42, 0.22);
+  padding:24px 18px 18px;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  gap:12px;
+  color:#1f2937;
+}
+
+.shop-bonus-program-modal-image{
+  width:92px;
+  height:92px;
+  border-radius:24px;
+  background:#f3f4f6;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  overflow:hidden;
+  color:#0f172a;
+  font-size:42px;
+}
+
+.shop-bonus-program-modal-image img{
+  width:100%;
+  height:100%;
+  object-fit:contain;
+  display:block;
+}
+
+.shop-bonus-program-modal-title{
+  width:100%;
+  text-align:center;
+  font-size:19px;
+  line-height:1.22;
+  font-weight:800;
+}
+
+.shop-bonus-program-modal-description{
+  width:100%;
+  text-align:center;
+  font-size:14px;
+  line-height:1.35;
+  color:#4b5563;
+  white-space:pre-line;
+}
+
+.shop-bonus-program-modal-transition{
+  width:100%;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:10px;
+  min-height:40px;
+  padding:8px 10px;
+  border-radius:999px;
+  background:#f3f4f6;
+  font-size:14px;
+  font-weight:800;
+  color:#111827;
+}
+
+.shop-bonus-program-modal-transition i{
+  color:#ff6a00;
+}
+
+.shop-bonus-program-modal-stats{
+  width:100%;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:16px;
+}
+
+.shop-bonus-program-modal-stat{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:5px;
+  min-width:0;
+  color:#111827;
+  font-size:17px;
+}
+
+.shop-bonus-program-modal-stat strong{
+  color:#111827;
+  font-size:17px;
+  font-weight:900;
+  display:flex;
+  align-items:center;
+  gap:4px;
+  line-height:1;
+}
+
+.shop-bonus-program-modal-stat > i{
+  color:#ff6a00;
+  font-size:15px;
+  line-height:1;
+}
+
+.shop-bonus-program-modal-confirm{
+  width:100%;
+  height:48px;
+  border:0;
+  border-radius:999px;
+  background:#ff6a00;
+  color:#fff;
+  font-size:16px;
+  font-weight:900;
+  cursor:pointer;
+  box-shadow:0 10px 24px rgba(255, 106, 0, 0.24);
+}
+
+.shop-bonus-program-modal-confirm:disabled{
+  opacity:.68;
+  cursor:default;
+}

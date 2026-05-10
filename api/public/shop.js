@@ -62,6 +62,11 @@ const TELEGRAM_API = 'https://api.telegram.org/bot';
 
 module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
   const router = express.Router();
+  const PUBLIC_BONUS_MODAL_DEFAULTS = [
+    { key: 'join', title: '\u041f\u0440\u0438\u0441\u043e\u0435\u0434\u0438\u043d\u0435\u043d\u0438\u0435 \u043a \u043f\u0440\u043e\u0433\u0440\u0430\u043c\u043c\u0435', description: '', image_url: null, is_enabled: 1, sort_order: 0 },
+    { key: 'level-up', title: '\u041f\u043e\u0432\u044b\u0448\u0435\u043d\u0438\u0435 \u0443\u0440\u043e\u0432\u043d\u044f', description: '', image_url: null, is_enabled: 1, sort_order: 1 },
+    { key: 'level-down', title: '\u041f\u043e\u043d\u0438\u0436\u0435\u043d\u0438\u0435 \u0443\u0440\u043e\u0432\u043d\u044f', description: '', image_url: null, is_enabled: 1, sort_order: 2 },
+  ];
   let orderDeliveryTypeColumnsReady = false;
   let ensureOrderDeliveryTypeColumnsPromise = null;
   let orderBenefitsMetaColumnReady = false;
@@ -915,6 +920,36 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     return progressByLevel;
   }
 
+  function mapPublicBonusModalSettingsRows(rows = []) {
+    const byKey = new Map((Array.isArray(rows) ? rows : []).map((row) => [String(row.modal_key || ''), row]));
+    return PUBLIC_BONUS_MODAL_DEFAULTS.map((fallback) => {
+      const row = byKey.get(fallback.key) || {};
+      return {
+        key: fallback.key,
+        title: str(row.title || fallback.title),
+        description: str(row.description || fallback.description),
+        image_url: row.image_url || fallback.image_url || null,
+        is_enabled: row.is_enabled == null ? Number(fallback.is_enabled) === 1 : Number(row.is_enabled || 0) === 1,
+        sort_order: Number(row.sort_order ?? fallback.sort_order ?? 0),
+      };
+    });
+  }
+
+  function mapPublicBonusModalEventRow(row) {
+    if (!row || !(Number(row.id || 0) > 0)) return null;
+    const type = String(row.event_type || '').trim();
+    if (type !== 'level_up' && type !== 'level_down') return null;
+    return {
+      id: Number(row.id || 0),
+      event_type: type,
+      modal_key: type === 'level_down' ? 'level-down' : 'level-up',
+      from_level_id: row.from_level_id == null ? null : Number(row.from_level_id || 0),
+      to_level_id: row.to_level_id == null ? null : Number(row.to_level_id || 0),
+      from_level_title: row.from_level_title || '',
+      to_level_title: row.to_level_title || '',
+    };
+  }
+
   async function promotePublicBonusAccountIfEligible(queryable, tenantId, customer, accountRow, levelRows) {
     const customerId = Number(customer?.id || 0);
     const accountId = Number(accountRow?.id || 0);
@@ -951,6 +986,12 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
          (tenant_id, account_id, customer_id, level_id, type, amount, balance_after, reason, created_at)
        VALUES (?, ?, ?, ?, 'level_up', ?, ?, ?, NOW())`,
       [tenantId, accountId, customerId, Number(nextLevel.id), rewardAmount, nextBalance, 'level_up']
+    );
+    await queryable.query(
+      `INSERT INTO mkt_customer_bonus_modal_events
+         (tenant_id, customer_id, event_type, from_level_id, to_level_id, created_at)
+       VALUES (?, ?, 'level_up', ?, ?, NOW())`,
+      [tenantId, customerId, currentLevelId || null, Number(nextLevel.id)]
     );
 
     const [[updatedAccountRow]] = await queryable.query(
@@ -2496,11 +2537,39 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
          LIMIT 1`,
         [tenantId]
       );
+      const [modalRows] = await db.query(
+        `SELECT modal_key, title, description, image_url, is_enabled, sort_order
+         FROM mkt_bonus_modal_settings
+         WHERE tenant_id=?
+         ORDER BY sort_order ASC, id ASC`,
+        [tenantId]
+      );
+      let pendingModalEvent = null;
+      const customerId = Number(customer?.id || 0);
+      if (customerId > 0) {
+        const [[eventRow]] = await db.query(
+          `SELECT e.id, e.event_type, e.from_level_id, e.to_level_id,
+                  from_level.title AS from_level_title,
+                  to_level.title AS to_level_title
+           FROM mkt_customer_bonus_modal_events e
+           LEFT JOIN mkt_bonus_levels from_level
+             ON from_level.tenant_id = e.tenant_id AND from_level.id = e.from_level_id
+           LEFT JOIN mkt_bonus_levels to_level
+             ON to_level.tenant_id = e.tenant_id AND to_level.id = e.to_level_id
+           WHERE e.tenant_id=? AND e.customer_id=? AND e.confirmed_at IS NULL
+           ORDER BY e.created_at ASC, e.id ASC
+           LIMIT 1`,
+          [tenantId, customerId]
+        );
+        pendingModalEvent = mapPublicBonusModalEventRow(eventRow);
+      }
 
       return res.json({
         ok: true,
         data: {
           site_menu_items: normalizePublicSiteMenuItems(tenantRow?.site_menu_items_json),
+          modal_settings: mapPublicBonusModalSettingsRows(modalRows),
+          pending_modal_event: pendingModalEvent,
           settings: {
             bonus_program_enabled: Number(settingsRow?.bonus_program_enabled || 0) === 1,
             referral_program_enabled: Number(settingsRow?.referral_program_enabled || 0) === 1,
@@ -2540,6 +2609,28 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       });
     } catch (e) {
       console.error('GET /api/public/bonus/config error:', e);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.post('/bonus/modal-events/confirm', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const token = str(req.headers['x-customer-token']);
+      const customer = token ? await getCustomerByToken(tenantId, token) : null;
+      const customerId = Number(customer?.id || 0);
+      if (!(customerId > 0)) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+      const eventId = Number(req.body?.event_id || req.body?.eventId || 0);
+      if (!(eventId > 0)) return res.status(400).json({ ok: false, error: 'INVALID_EVENT' });
+      const [result] = await db.query(
+        `UPDATE mkt_customer_bonus_modal_events
+         SET confirmed_at=NOW()
+         WHERE tenant_id=? AND customer_id=? AND id=? AND confirmed_at IS NULL`,
+        [tenantId, customerId, eventId]
+      );
+      return res.json({ ok: true, data: { confirmed: Number(result?.affectedRows || 0) > 0 } });
+    } catch (e) {
+      console.error('POST /api/public/bonus/modal-events/confirm error:', e);
       return res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });
@@ -14603,9 +14694,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     );
     await queryable.query(
       `INSERT INTO mkt_customer_bonus_transactions
-         (tenant_id, account_id, customer_id, level_id, type, amount, balance_after, reason, created_at)
-       VALUES (?, ?, ?, ?, 'adjustment', ?, ?, ?, NOW())`,
-      [normalizedTenantId, Number(account.id), normalizedCustomerId, account.level_id || null, diff, nextBalance, reserveReason]
+         (tenant_id, account_id, customer_id, level_id, order_id, type, amount, balance_after, reason, created_at)
+       VALUES (?, ?, ?, ?, ?, 'adjustment', ?, ?, ?, NOW())`,
+      [normalizedTenantId, Number(account.id), normalizedCustomerId, account.level_id || null, normalizedOrderId, diff, nextBalance, reserveReason]
     );
     return { reserved: targetAmount };
   }

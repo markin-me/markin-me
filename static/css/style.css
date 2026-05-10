@@ -6922,6 +6922,43 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
 .settings-site-menu-visible-switch{
   flex:0 0 auto;
 }
+.bonus-modal-settings-form{
+  padding:0 0 8px;
+}
+.bonus-modal-settings-row{
+  align-items:start;
+}
+.bonus-modal-settings-fields{
+  display:grid;
+  gap:6px;
+}
+.bonus-modal-settings-row .settings-site-menu-title-head{
+  align-items:start;
+  margin-bottom:0;
+}
+.bonus-modal-settings-control{
+  border-radius:999px;
+  padding:0 18px;
+  min-height:42px;
+  background:var(--color-surface-2);
+}
+.bonus-modal-settings-description{
+  min-height:42px;
+  max-height:160px;
+  resize:none;
+  overflow:hidden;
+  line-height:1.35;
+  white-space:pre-wrap;
+  border-radius:21px;
+  padding:11px 18px;
+}
+.bonus-modal-settings-row .settings-site-menu-icon-btn:disabled{
+  cursor:default;
+}
+.bonus-modal-settings-row .settings-site-menu-icon-btn:disabled:hover{
+  border-color:var(--color-border);
+  background:var(--color-surface-2);
+}
 .settings-site-inline-switch{
   display:flex;
   align-items:center;
@@ -20078,7 +20115,7 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   align-items:stretch;
   justify-content:flex-start;
   text-align:left;
-  padding:10px 12px 12px;
+  padding:10px 6px 12px;
 }
 
 .banner-settings-panel .empty-icon,

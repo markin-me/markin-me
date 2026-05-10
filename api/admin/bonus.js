@@ -6,6 +6,13 @@ const BONUS_LEVEL_RETENTION_STRATEGIES = new Set(['match', 'custom']);
 const BONUS_LEVEL_ACTIVATION_UNITS = new Set(['immediate', 'hours', 'days']);
 const BONUS_LEVEL_LIFETIME_UNITS = new Set(['forever', 'hours', 'days', 'months']);
 const BONUS_LEVEL_TARIFF_UNITS = new Set(['days', 'months', 'forever']);
+const BONUS_MODAL_KEYS = new Set(['join', 'level-up', 'level-down']);
+
+const DEFAULT_BONUS_MODAL_SETTINGS = [
+  { key: 'join', title: 'Присоединение к программе', description: '', image_url: null, is_enabled: 1, sort_order: 0 },
+  { key: 'level-up', title: 'Повышение уровня', description: '', image_url: null, is_enabled: 1, sort_order: 1 },
+  { key: 'level-down', title: 'Понижение уровня', description: '', image_url: null, is_enabled: 1, sort_order: 2 },
+];
 
 function makeHttpError(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -324,6 +331,42 @@ function normalizeCategoryGroups(items) {
   });
 }
 
+function normalizeBonusModalSettings(items) {
+  const source = Array.isArray(items) ? items : [];
+  const byKey = new Map();
+  source.forEach((item, idx) => {
+    const key = toText(pick(item, 'modal_key', 'key'));
+    if (!BONUS_MODAL_KEYS.has(key)) return;
+    byKey.set(key, {
+      key,
+      title: toText(pick(item, 'title')) || DEFAULT_BONUS_MODAL_SETTINGS.find((row) => row.key === key)?.title || '',
+      description: toText(pick(item, 'description')),
+      image_url: textOrNull(pick(item, 'image_url', 'imageUrl')),
+      is_enabled: boolFlag(pick(item, 'is_enabled', 'enabled'), true) ? 1 : 0,
+      sort_order: nonNegativeInt(pick(item, 'sort_order', 'sortOrder'), 'INVALID_MODAL_SETTINGS', idx),
+    });
+  });
+  return DEFAULT_BONUS_MODAL_SETTINGS.map((row) => ({
+    ...row,
+    ...(byKey.get(row.key) || {}),
+  }));
+}
+
+function mapBonusModalSettingsRows(rows) {
+  const byKey = new Map((Array.isArray(rows) ? rows : []).map((row) => [String(row.modal_key || ''), row]));
+  return DEFAULT_BONUS_MODAL_SETTINGS.map((fallback) => {
+    const row = byKey.get(fallback.key) || {};
+    return {
+      key: fallback.key,
+      title: row.title || fallback.title,
+      description: row.description || '',
+      image_url: row.image_url || null,
+      enabled: row.id == null ? fallback.is_enabled === 1 : Number(row.is_enabled || 0) === 1,
+      sort_order: row.sort_order == null ? fallback.sort_order : Number(row.sort_order || 0),
+    };
+  });
+}
+
 function mapSettingsRow(row) {
   return {
     bonus_program_enabled: Number(row?.bonus_program_enabled || 0) === 1,
@@ -536,6 +579,13 @@ async function loadConfig(db, tenantId) {
       ORDER BY sort_order ASC, invited_count ASC, id ASC`,
     [tenantId]
   );
+  const [modalRows] = await db.query(
+    `SELECT id, modal_key, title, description, image_url, is_enabled, sort_order
+       FROM mkt_bonus_modal_settings
+      WHERE tenant_id = ?
+      ORDER BY sort_order ASC, id ASC`,
+    [tenantId]
+  );
   const [bonusEventRows] = await db.query(
     `SELECT t.id, t.customer_id, t.type, t.amount, t.balance_after, t.reason, t.created_at,
             c.name AS customer_name, c.phone AS customer_phone,
@@ -627,6 +677,7 @@ async function loadConfig(db, tenantId) {
     })),
     bonus_events: bonusEventRows.map(mapBonusTransactionRow),
     referral_events: referralEventRows.map(mapReferralEventRow),
+    modal_settings: mapBonusModalSettingsRows(modalRows),
     category_groups: categoryGroups.map((row) => ({
       id: row.id,
       title: row.title,
@@ -669,6 +720,11 @@ async function saveConfig(db, tenantId, payload) {
   const levels = normalizeBonusLevels(payload?.levels || []);
   const referralLevels = normalizeReferralLevels(payload?.referral_levels || payload?.referralLevels || []);
   const categoryGroups = normalizeCategoryGroups(payload?.category_groups || payload?.categoryGroups || []);
+  const hasModalSettingsPayload = Object.prototype.hasOwnProperty.call(payload || {}, 'modal_settings')
+    || Object.prototype.hasOwnProperty.call(payload || {}, 'modalSettings');
+  const modalSettings = hasModalSettingsPayload
+    ? normalizeBonusModalSettings(payload?.modal_settings || payload?.modalSettings || [])
+    : [];
   const conn = await db.getConnection();
   let inTransaction = false;
   try {
@@ -915,6 +971,31 @@ async function saveConfig(db, tenantId, payload) {
       );
     }
 
+    if (hasModalSettingsPayload) {
+      for (const item of modalSettings) {
+        await conn.query(
+          `INSERT INTO mkt_bonus_modal_settings
+            (tenant_id, modal_key, title, description, image_url, is_enabled, sort_order)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
+           ON DUPLICATE KEY UPDATE
+             title = VALUES(title),
+             description = VALUES(description),
+             image_url = VALUES(image_url),
+             is_enabled = VALUES(is_enabled),
+             sort_order = VALUES(sort_order)`,
+          [
+            tenantId,
+            item.key,
+            item.title,
+            item.description,
+            item.image_url,
+            item.is_enabled,
+            item.sort_order,
+          ]
+        );
+      }
+    }
+
     await conn.commit();
     inTransaction = false;
   } catch (err) {
@@ -1112,6 +1193,12 @@ async function promoteBonusAccountIfEligible(db, tenantId, customerId, accountRo
        (tenant_id, account_id, customer_id, level_id, type, amount, balance_after, reason, created_at)
      VALUES (?, ?, ?, ?, 'level_up', ?, ?, ?, NOW())`,
     [tenantId, accountId, customerId, Number(nextLevel.id), rewardAmount, nextBalance, 'level_up']
+  );
+  await db.query(
+    `INSERT INTO mkt_customer_bonus_modal_events
+       (tenant_id, customer_id, event_type, from_level_id, to_level_id, created_at)
+     VALUES (?, ?, 'level_up', ?, ?, NOW())`,
+    [tenantId, customerId, currentLevelId || null, Number(nextLevel.id)]
   );
 
   const [[updatedAccountRow]] = await db.query(

@@ -436,6 +436,12 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
        VALUES (?, ?, ?, ?, 'level_up', ?, ?, ?, NOW())`,
       [tenantId, Number(account.id), customerId, Number(nextLevel.id), rewardAmount, nextBalance, "level_up"]
     );
+    await queryable.query(
+      `INSERT INTO mkt_customer_bonus_modal_events
+         (tenant_id, customer_id, event_type, from_level_id, to_level_id, created_at)
+       VALUES (?, ?, 'level_up', ?, ?, NOW())`,
+      [tenantId, customerId, currentLevelId || null, Number(nextLevel.id)]
+    );
     return { ...account, level_id: Number(nextLevel.id), balance: nextBalance };
   }
 
@@ -478,9 +484,14 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
     return ids;
   }
 
-  function orderBonusItemMatchesFavoriteCategory(item, selectedCategoryIds) {
+  function orderBonusItemMatchesFavoriteCategory(item, selectedCategoryIds, comboCategoryIdsById = new Map()) {
     if (!(selectedCategoryIds instanceof Set) || !selectedCategoryIds.size) return false;
     const ids = getOrderBonusItemCategoryIds(item);
+    const comboId = Number(item?.combo_id || item?.combo?.id || 0);
+    if (comboId > 0 && comboCategoryIdsById instanceof Map) {
+      const comboCategoryId = Number(comboCategoryIdsById.get(comboId) || 0);
+      if (comboCategoryId > 0) ids.add(comboCategoryId);
+    }
     if (!ids.size) return false;
     return Array.from(ids).some((id) => selectedCategoryIds.has(id));
   }
@@ -540,6 +551,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         : 0;
     }
     let selectedCategoryIds = new Set();
+    let comboCategoryIdsById = new Map();
     if (favoritePercent > 0) {
       const [categoryRows] = await queryable.query(
         `SELECT category_id
@@ -552,6 +564,27 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           .map((row) => Number(row?.category_id || 0))
           .filter((id) => id > 0)
       );
+      const unresolvedComboIds = [...new Set(items
+        .filter((item) => String(item?.type || '').trim().toLowerCase() === 'combo' || Number(item?.combo_id || item?.combo?.id || 0) > 0)
+        .filter((item) => !getOrderBonusItemCategoryIds(item).size)
+        .map((item) => Number(item?.combo_id || item?.combo?.id || 0))
+        .filter((id) => id > 0))];
+      if (selectedCategoryIds.size && unresolvedComboIds.length) {
+        const [comboRows] = await queryable.query(
+          `SELECT combo.id AS combo_id, category.id AS category_id
+             FROM prod_combos combo
+             JOIN prod_categories category
+               ON category.tenant_id = combo.tenant_id
+              AND LOWER(TRIM(category.code)) = LOWER(TRIM(combo.category_code))
+            WHERE combo.tenant_id = ? AND combo.id IN (?)`,
+          [tenantId, unresolvedComboIds]
+        );
+        comboCategoryIdsById = new Map(
+          (Array.isArray(comboRows) ? comboRows : [])
+            .map((row) => [Number(row?.combo_id || 0), Number(row?.category_id || 0)])
+            .filter(([comboId, categoryId]) => comboId > 0 && categoryId > 0)
+        );
+      }
     }
 
     const cashbackPercent = Math.max(0, Number(levelRow.cashback_percent || 0)) + orderRangePercent;
@@ -559,7 +592,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
     items.forEach((item) => {
       const lineTotal = roundMoney(Math.max(0, Number(item?.line_total || 0)));
       if (!(lineTotal > 0)) return;
-      const percent = orderBonusItemMatchesFavoriteCategory(item, selectedCategoryIds)
+      const percent = orderBonusItemMatchesFavoriteCategory(item, selectedCategoryIds, comboCategoryIdsById)
         ? favoritePercent + orderRangePercent
         : cashbackPercent;
       if (!(percent > 0)) return;
@@ -572,8 +605,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
     const [rows] = await queryable.query(
       `SELECT COALESCE(SUM(amount), 0) AS amount
          FROM mkt_customer_bonus_transactions
-        WHERE tenant_id=? AND type=? AND reason=?`,
-      [tenantId, type, reason]
+        WHERE tenant_id=? AND type=? AND (order_id=? OR reason=?)`,
+      [tenantId, type, orderId, reason]
     );
     return roundMoney(Math.max(0, Number(rows?.[0]?.amount || 0)));
   }
@@ -633,9 +666,9 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       );
       await queryable.query(
         `INSERT INTO mkt_customer_bonus_transactions
-           (tenant_id, account_id, customer_id, level_id, type, amount, balance_after, reason, created_at)
-         VALUES (?, ?, ?, ?, 'refund', ?, ?, ?, NOW())`,
-        [normalizedTenantId, Number(account.id), normalizedCustomerId, account.level_id || null, diff, nextBalance, releaseReason]
+           (tenant_id, account_id, customer_id, level_id, order_id, type, amount, balance_after, reason, created_at)
+         VALUES (?, ?, ?, ?, ?, 'refund', ?, ?, ?, NOW())`,
+        [normalizedTenantId, Number(account.id), normalizedCustomerId, account.level_id || null, normalizedOrderId, diff, nextBalance, releaseReason]
       );
       return { reserved: targetAmount };
     }
@@ -657,9 +690,9 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
     );
       await queryable.query(
         `INSERT INTO mkt_customer_bonus_transactions
-           (tenant_id, account_id, customer_id, level_id, type, amount, balance_after, reason, created_at)
-         VALUES (?, ?, ?, ?, 'adjustment', ?, ?, ?, NOW())`,
-        [normalizedTenantId, Number(account.id), normalizedCustomerId, account.level_id || null, diff, nextBalance, reserveReason]
+           (tenant_id, account_id, customer_id, level_id, order_id, type, amount, balance_after, reason, created_at)
+         VALUES (?, ?, ?, ?, ?, 'adjustment', ?, ?, ?, NOW())`,
+        [normalizedTenantId, Number(account.id), normalizedCustomerId, account.level_id || null, normalizedOrderId, diff, nextBalance, reserveReason]
       );
     return { reserved: targetAmount };
   }
@@ -701,9 +734,9 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
     );
     await queryable.query(
       `INSERT INTO mkt_customer_bonus_transactions
-         (tenant_id, account_id, customer_id, level_id, type, amount, balance_after, reason, created_at)
-       VALUES (?, ?, ?, ?, 'refund', ?, ?, ?, NOW())`,
-      [normalizedTenantId, Number(account.id), normalizedCustomerId, account.level_id || null, activeReserved, nextBalance, releaseReason]
+         (tenant_id, account_id, customer_id, level_id, order_id, type, amount, balance_after, reason, created_at)
+       VALUES (?, ?, ?, ?, ?, 'refund', ?, ?, ?, NOW())`,
+      [normalizedTenantId, Number(account.id), normalizedCustomerId, account.level_id || null, normalizedOrderId, activeReserved, nextBalance, releaseReason]
     );
     return { released: activeReserved };
   }
@@ -766,9 +799,9 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       );
       await queryable.query(
         `INSERT INTO mkt_customer_bonus_transactions
-           (tenant_id, account_id, customer_id, level_id, type, amount, balance_after, reason, created_at)
-         VALUES (?, ?, ?, ?, 'redeem', ?, ?, ?, NOW())`,
-        [normalizedTenantId, Number(account.id), normalizedCustomerId, account.level_id || null, redeemAmount, Number(account.balance || 0), redeemReason]
+           (tenant_id, account_id, customer_id, level_id, order_id, type, amount, balance_after, reason, created_at)
+         VALUES (?, ?, ?, ?, ?, 'redeem', ?, ?, ?, NOW())`,
+        [normalizedTenantId, Number(account.id), normalizedCustomerId, account.level_id || null, normalizedOrderId, redeemAmount, Number(account.balance || 0), redeemReason]
       );
       redeemed = redeemAmount;
     }
@@ -804,9 +837,9 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       );
       await queryable.query(
         `INSERT INTO mkt_customer_bonus_transactions
-           (tenant_id, account_id, customer_id, level_id, type, amount, balance_after, reason, created_at)
-         VALUES (?, ?, ?, ?, 'accrual', ?, ?, ?, NOW())`,
-        [normalizedTenantId, Number(account.id), normalizedCustomerId, account.level_id || null, accrualAmount, nextBalance, accrualReason]
+           (tenant_id, account_id, customer_id, level_id, order_id, type, amount, balance_after, reason, created_at)
+         VALUES (?, ?, ?, ?, ?, 'accrual', ?, ?, ?, NOW())`,
+        [normalizedTenantId, Number(account.id), normalizedCustomerId, account.level_id || null, normalizedOrderId, accrualAmount, nextBalance, accrualReason]
       );
       accrued = accrualAmount;
     }

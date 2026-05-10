@@ -1003,8 +1003,100 @@
     };
   }
 
+  let bonusConfigLoadPromise = null;
+
+  async function ensureBonusConfigLoaded() {
+    if (state.bonusConfigLoaded === true) return;
+    if (!bonusConfigLoadPromise) {
+      bonusConfigLoadPromise = loadBonusCardsStorage().finally(() => {
+        bonusConfigLoadPromise = null;
+      });
+    }
+    await bonusConfigLoadPromise;
+  }
+
+  async function uploadTenantAsset(field, file) {
+    const token = typeof getAuthToken === 'function' ? getAuthToken() : null;
+    const form = new FormData();
+    form.append('file', file);
+    form.append('field', field);
+    const res = await fetch('/api/admin/tenant/upload', {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: form,
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data || data.ok === false || !data.url) {
+      throw new Error(data?.error || 'UPLOAD_ERROR');
+    }
+    return data;
+  }
+
+  function getSiteMenuIconWebpQuality() {
+    const input = document.getElementById('settingsImgWebpQuality');
+    const value = Number(input && input.value);
+    if (!Number.isFinite(value)) return 0.82;
+    return Math.max(1, Math.min(100, value)) / 100;
+  }
+
+  function getSiteMenuIconMaxSize() {
+    const input = document.getElementById('settingsImgThumbWidth');
+    const value = Number(input && input.value);
+    return Number.isFinite(value) && value > 0 ? value : 300;
+  }
+
+  function loadSiteMenuIconImage(url) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error('IMAGE_LOAD_FAILED'));
+      img.src = url;
+    });
+  }
+
+  async function convertSiteMenuIconFileToWebpBlob(file) {
+    if (!file || !String(file.type || '').startsWith('image/')) {
+      throw new Error('ONLY_IMAGES');
+    }
+    const objectUrl = URL.createObjectURL(file);
+    try {
+      const img = await loadSiteMenuIconImage(objectUrl);
+      const sourceWidth = Number(img.naturalWidth || img.width || 0);
+      const sourceHeight = Number(img.naturalHeight || img.height || 0);
+      if (!sourceWidth || !sourceHeight) throw new Error('IMAGE_SIZE_FAILED');
+      const maxSize = getSiteMenuIconMaxSize();
+      const scale = Math.min(1, maxSize / Math.max(sourceWidth, sourceHeight));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(sourceWidth * scale));
+      canvas.height = Math.max(1, Math.round(sourceHeight * scale));
+      const ctx = canvas.getContext('2d');
+      if (!ctx) throw new Error('CANVAS_FAILED');
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/webp', getSiteMenuIconWebpQuality()));
+      if (!blob) throw new Error('WEBP_CONVERT_FAILED');
+      return blob;
+    } finally {
+      URL.revokeObjectURL(objectUrl);
+    }
+  }
+
+  function buildBonusModalSettingsPayload() {
+    const source = state.bonusSettingsEditing ? state.bonusModalSettingsDraft : state.bonusModalSettings;
+    return getBonusModalSettingsSource(source).map((item, idx) => ({
+      key: item.key,
+      title: item.title,
+      description: item.description,
+      imageUrl: item.imageUrl,
+      enabled: item.enabled !== false,
+      sortOrder: idx,
+    }));
+  }
+
   async function persistBonusCardsStorage(overrides = {}) {
+    await ensureBonusConfigLoaded();
     const payload = buildBonusConfigPayload(overrides);
+    payload.modal_settings = overrides.modalSettings || buildBonusModalSettingsPayload();
     await apiJson('/api/admin/bonus/config', { method: 'PUT', body: payload });
   }
 
@@ -1072,6 +1164,16 @@
     state.bonusLevelsDraft = state.bonusLevels.map((level) => ({ ...level }));
     state.bonusCategoryGroups = Array.isArray(json?.category_groups) ? json.category_groups : [];
     state.bonusCategoryGroupsDraft = []; // Reset draft on load
+    state.bonusModalSettings = cloneBonusModalSettings(
+      (Array.isArray(json?.modal_settings) ? json.modal_settings : []).map((item) => ({
+        key: item?.key,
+        title: item?.title,
+        description: item?.description,
+        imageUrl: item?.image_url || item?.imageUrl || '',
+        enabled: item?.enabled !== false && item?.is_enabled !== false,
+      }))
+    );
+    state.bonusModalSettingsDraft = [];
     state.bonusClientEvents = sanitizeBonusClientEvents(json?.bonus_events, { withDefaults: false });
     state.referralProgramEnabled = settings.referral_program_enabled === true;
     state.referralProgramEnabledDraft = state.referralProgramEnabled;
@@ -1098,6 +1200,7 @@
     state.bonusReferralLevels = mergeBonusReferralLevels(referralLevels);
     state.bonusReferralLevelsDraft = (Array.isArray(state.bonusReferralLevels) ? state.bonusReferralLevels : []).map((level) => ({ ...level }));
     state.bonusReferralEvents = sanitizeBonusReferralEvents(json?.referral_events);
+    state.bonusConfigLoaded = true;
   }
 
   function getBannerDraftsByType(type = state.activeBannerType) {
@@ -2180,6 +2283,7 @@
 
   const bonusSettingsCoinWrap = right$("#bonusSettingsCoinWrap");
   const bonusSettingsFavoriteCategoriesWrap = right$("#bonusSettingsFavoriteCategoriesWrap");
+  const bonusSettingsModalsWrap = right$("#bonusSettingsModalsWrap");
   const bonusSettingsCoinLogoPreview = right$("#bonusSettingsCoinLogoPreview");
   const bonusSettingsCoinLogoInput = right$("#bonusSettingsCoinLogoInput");
   const bonusSettingsCoinNameInput = right$("#bonusSettingsCoinNameInput");
@@ -2506,6 +2610,7 @@
     bannerDragState: null,
     bonusProgramEnabled: false,
     bonusProgramEnabledDraft: false,
+    bonusConfigLoaded: false,
     bonusPointAmount: 1,
     bonusPointAmountDraft: 1,
     bonusRubleAmount: 1,
@@ -2528,6 +2633,8 @@
     bonusSettingsEditing: false,
     bonusCategoryGroups: [],
     bonusCategoryGroupsDraft: [],
+    bonusModalSettings: createDefaultBonusModalSettings(),
+    bonusModalSettingsDraft: [],
     bonusPointRate: 1,
     bonusPointRateDraft: 1,
     bonusAllowRedeemAndAccrue: false,
@@ -3644,7 +3751,7 @@
     const visibleTabs = isBonusReferralsView
       ? tabsState.tabs.filter((tab) => tab.type === 'bonus-referral-card')
       : isBonusSettingsView
-        ? tabsState.tabs.filter((tab) => tab.type === 'bonus-settings-brand' || tab.type === 'bonus-settings-coin' || tab.type === 'bonus-settings-favorite-categories')
+        ? tabsState.tabs.filter((tab) => tab.type === 'bonus-settings-brand' || tab.type === 'bonus-settings-coin' || tab.type === 'bonus-settings-favorite-categories' || tab.type === 'bonus-settings-modals')
         : tabsState.tabs;
     const hasVisibleTabs = visibleTabs.length > 0;
     clientTabsHeader.classList.toggle("hidden", !hasVisibleTabs && !isHomeBtnView);
@@ -3709,7 +3816,7 @@
             ? 'bonus-cards'
           : tab.type === 'bonus-referral-card'
             ? 'bonus-referrals'
-          : tab.type === 'bonus-settings-brand' || tab.type === 'bonus-settings-coin' || tab.type === 'bonus-settings-favorite-categories'
+          : tab.type === 'bonus-settings-brand' || tab.type === 'bonus-settings-coin' || tab.type === 'bonus-settings-favorite-categories' || tab.type === 'bonus-settings-modals'
             ? 'bonus-settings'
           : 'clients';
     if (state.currentView !== targetView) {
@@ -3890,7 +3997,7 @@
         return;
       }
       if (state.currentView === 'bonus-settings') {
-        tabsState.tabs = tabsState.tabs.filter((tab) => tab.type !== 'bonus-settings-brand' && tab.type !== 'bonus-settings-coin');
+        tabsState.tabs = tabsState.tabs.filter((tab) => tab.type !== 'bonus-settings-brand' && tab.type !== 'bonus-settings-coin' && tab.type !== 'bonus-settings-favorite-categories' && tab.type !== 'bonus-settings-modals');
         tabsState.activeKey = null;
         renderTabs();
         updateRightPanel();
@@ -7855,6 +7962,224 @@
     });
   }
 
+  function openBonusSettingsModalsTab() {
+    if (state.currentView !== 'bonus-settings') {
+      switchView('bonus-settings');
+    }
+    ensureTab({
+      type: 'bonus-settings-modals',
+      id: 'modals',
+      title: '\u041c\u043e\u0434\u0430\u043b\u044c\u043d\u044b\u0435 \u043e\u043a\u043d\u0430',
+      onActivate: activateBonusSettingsModalsTab,
+    });
+  }
+
+  function activateBonusSettingsModalsTab() {
+    renderBonusSettingsModalsTabContent();
+  }
+
+  function createDefaultBonusModalSettings() {
+    return [
+      {
+        key: 'join',
+        icon: 'fas fa-user-plus',
+        title: '\u041f\u0440\u0438\u0441\u043e\u0435\u0434\u0438\u043d\u0435\u043d\u0438\u0435 \u043a \u043f\u0440\u043e\u0433\u0440\u0430\u043c\u043c\u0435',
+        description: '',
+        enabled: true,
+        imageUrl: '',
+      },
+      {
+        key: 'level-up',
+        icon: 'fas fa-arrow-up',
+        title: '\u041f\u043e\u0432\u044b\u0448\u0435\u043d\u0438\u0435 \u0443\u0440\u043e\u0432\u043d\u044f',
+        description: '',
+        enabled: true,
+        imageUrl: '',
+      },
+      {
+        key: 'level-down',
+        icon: 'fas fa-arrow-down',
+        title: '\u041f\u043e\u043d\u0438\u0436\u0435\u043d\u0438\u0435 \u0443\u0440\u043e\u0432\u043d\u044f',
+        description: '',
+        enabled: true,
+        imageUrl: '',
+      },
+    ];
+  }
+
+  function cloneBonusModalSettings(settings) {
+    const source = Array.isArray(settings) && settings.length ? settings : createDefaultBonusModalSettings();
+    const defaults = createDefaultBonusModalSettings();
+    const byKey = new Map(source.map((item) => [String(item.key || ''), item]));
+    return defaults.map((item) => ({ ...item, ...(byKey.get(item.key) || {}) }));
+  }
+
+  function getBonusModalSettingsSource(sourceOverride = null) {
+    const source = sourceOverride || (state.bonusSettingsEditing ? state.bonusModalSettingsDraft : state.bonusModalSettings);
+    const defaults = createDefaultBonusModalSettings();
+    const byKey = new Map((Array.isArray(source) ? source : []).map((item) => [String(item.key || ''), item]));
+    return defaults.map((item) => ({ ...item, ...(byKey.get(item.key) || {}) }));
+  }
+
+  let bonusModalPhotoPopover = null;
+  let bonusModalPhotoPopoverTarget = null;
+
+  function closeBonusModalPhotoPopover() {
+    if (bonusModalPhotoPopover) bonusModalPhotoPopover.classList.add('hidden');
+    bonusModalPhotoPopoverTarget = null;
+  }
+
+  function ensureBonusModalPhotoPopover() {
+    if (bonusModalPhotoPopover && document.body.contains(bonusModalPhotoPopover)) return bonusModalPhotoPopover;
+    const popover = document.createElement('div');
+    popover.className = 'settings-icon-popover hidden';
+    popover.innerHTML = `
+      <button type="button" data-bonus-modal-photo-action="upload">${'\u0417\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c \u0444\u043e\u0442\u043e'}</button>
+      <button type="button" data-bonus-modal-photo-action="delete">${'\u0423\u0434\u0430\u043b\u0438\u0442\u044c \u0444\u043e\u0442\u043e'}</button>
+    `;
+    document.body.appendChild(popover);
+    popover.addEventListener('click', (event) => {
+      const actionBtn = event.target.closest('[data-bonus-modal-photo-action]');
+      if (!actionBtn || !bonusModalPhotoPopoverTarget) return;
+      const action = actionBtn.getAttribute('data-bonus-modal-photo-action');
+      const target = bonusModalPhotoPopoverTarget;
+      closeBonusModalPhotoPopover();
+      if (action === 'upload') {
+        target.input?.click();
+        return;
+      }
+      if (action === 'delete') {
+        const key = String(target.key || '');
+        const item = state.bonusModalSettingsDraft.find((entry) => entry.key === key);
+        if (!item) return;
+        item.imageUrl = '';
+        renderBonusSettingsModalsTabContent();
+      }
+    });
+    document.addEventListener('click', (event) => {
+      if (
+        !bonusModalPhotoPopover
+        || bonusModalPhotoPopover.classList.contains('hidden')
+        || bonusModalPhotoPopover.contains(event.target)
+        || (bonusModalPhotoPopoverTarget?.button && bonusModalPhotoPopoverTarget.button.contains(event.target))
+      ) {
+        return;
+      }
+      closeBonusModalPhotoPopover();
+    });
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') closeBonusModalPhotoPopover();
+    });
+    bonusModalPhotoPopover = popover;
+    return popover;
+  }
+
+  function openBonusModalPhotoPopover(button, input, key) {
+    if (!state.bonusSettingsEditing) return;
+    const popover = ensureBonusModalPhotoPopover();
+    bonusModalPhotoPopoverTarget = { button, input, key };
+    const deleteBtn = popover.querySelector('[data-bonus-modal-photo-action="delete"]');
+    const item = state.bonusModalSettingsDraft.find((entry) => entry.key === key);
+    if (deleteBtn) deleteBtn.classList.toggle('hidden', !String(item?.imageUrl || '').trim());
+    const rect = button.getBoundingClientRect();
+    popover.classList.remove('hidden');
+    const width = Math.max(180, popover.offsetWidth || 180);
+    const left = Math.min(window.innerWidth - width - 8, Math.max(8, rect.left));
+    const top = Math.min(window.innerHeight - 8, Math.max(8, rect.bottom + 8));
+    popover.style.left = `${left}px`;
+    popover.style.top = `${top}px`;
+  }
+
+  function updateBonusModalSetting(key, patch) {
+    if (!state.bonusSettingsEditing) return;
+    const item = state.bonusModalSettingsDraft.find((entry) => entry.key === key);
+    if (!item) return;
+    Object.assign(item, patch);
+  }
+
+  function bindBonusModalSettingsEvents() {
+    if (!bonusSettingsModalsWrap) return;
+    bonusSettingsModalsWrap.querySelectorAll('[data-bonus-modal-photo-btn]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const row = button.closest('[data-bonus-modal-setting]');
+        const key = String(row?.getAttribute('data-bonus-modal-setting') || '');
+        const input = row?.querySelector('[data-bonus-modal-photo-input]');
+        openBonusModalPhotoPopover(button, input, key);
+      });
+    });
+    bonusSettingsModalsWrap.querySelectorAll('[data-bonus-modal-photo-input]').forEach((input) => {
+      input.addEventListener('change', async (event) => {
+        if (!state.bonusSettingsEditing) return;
+        const row = input.closest('[data-bonus-modal-setting]');
+        const key = String(row?.getAttribute('data-bonus-modal-setting') || '');
+        const file = event.target.files?.[0];
+        if (!file) return;
+        try {
+          const blob = await convertSiteMenuIconFileToWebpBlob(file);
+          const webpFile = new File([blob], 'bonus-modal-image.webp', { type: 'image/webp' });
+          const uploaded = await uploadTenantAsset('bonus_modal_image', webpFile);
+          updateBonusModalSetting(key, { imageUrl: uploaded.url || '' });
+          renderBonusSettingsModalsTabContent();
+        } catch (err) {
+          console.error('bonus modal image upload error:', err);
+          alert('Не удалось загрузить фото модалки.');
+        } finally {
+          event.target.value = '';
+        }
+      });
+    });
+    bonusSettingsModalsWrap.querySelectorAll('[data-bonus-modal-title]').forEach((input) => {
+      input.addEventListener('input', () => updateBonusModalSetting(input.dataset.bonusModalTitle, { title: input.value }));
+    });
+    bonusSettingsModalsWrap.querySelectorAll('[data-bonus-modal-description]').forEach((input) => {
+      const resize = () => {
+        input.style.height = 'auto';
+        input.style.height = `${Math.max(44, input.scrollHeight)}px`;
+      };
+      resize();
+      input.addEventListener('input', () => {
+        updateBonusModalSetting(input.dataset.bonusModalDescription, { description: input.value });
+        resize();
+      });
+    });
+    bonusSettingsModalsWrap.querySelectorAll('[data-bonus-modal-enabled]').forEach((input) => {
+      input.addEventListener('change', () => updateBonusModalSetting(input.dataset.bonusModalEnabled, { enabled: input.checked }));
+    });
+  }
+
+  function renderBonusSettingsModalsTabContent() {
+    if (!bonusSettingsModalsWrap) return;
+    const rows = getBonusModalSettingsSource();
+    const isEditing = state.bonusSettingsEditing === true;
+    bonusSettingsModalsWrap.innerHTML = `
+      <div class="settings-site-form bonus-modal-settings-form">
+        ${rows.map((row) => {
+          const imageUrl = String(row.imageUrl || '').trim();
+          return `
+          <div class="settings-site-menu-item-row bonus-modal-settings-row" data-bonus-modal-setting="${escapeHtml(row.key)}">
+            <button class="settings-site-menu-icon-btn" type="button" data-bonus-modal-photo-btn ${isEditing ? '' : 'disabled'} aria-label="${'\u0417\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c \u0444\u043e\u0442\u043e'} ${escapeHtml(row.title || '')}">
+              <img class="settings-site-menu-icon-img ${imageUrl ? '' : 'hidden'}" data-bonus-modal-photo-img src="${escapeHtml(imageUrl)}" alt="" />
+              <i class="${escapeHtml(row.icon)} ${imageUrl ? 'hidden' : ''}" aria-hidden="true"></i>
+            </button>
+            <input class="hidden" type="file" data-bonus-modal-photo-input accept="image/png,image/webp,image/jpeg,image/svg+xml,image/*" />
+            <div class="settings-site-field settings-site-menu-title-field bonus-modal-settings-fields">
+              <div class="settings-site-menu-title-head">
+                <label class="field-label" for="bonusModalTitle_${escapeHtml(row.key)}">${'\u041d\u0430\u0437\u0432\u0430\u043d\u0438\u0435 \u043c\u043e\u0434\u0430\u043b\u043a\u0438'} ${escapeHtml(row.title || '')}</label>
+                <label class="switch settings-site-menu-visible-switch" aria-label="${'\u041f\u043e\u043a\u0430\u0437\u044b\u0432\u0430\u0442\u044c'} ${escapeHtml(row.title || '')}">
+                  <input class="switch-input" type="checkbox" data-bonus-modal-enabled="${escapeHtml(row.key)}" ${row.enabled !== false ? 'checked' : ''} ${isEditing ? '' : 'disabled'} />
+                  <span class="switch-ui" aria-hidden="true"></span>
+                </label>
+              </div>
+              <input class="control bonus-modal-settings-control" type="text" id="bonusModalTitle_${escapeHtml(row.key)}" data-bonus-modal-title="${escapeHtml(row.key)}" value="${escapeHtml(row.title || '')}" ${isEditing ? '' : 'disabled'} />
+              <textarea class="control bonus-modal-settings-control bonus-modal-settings-description" id="bonusModalDescription_${escapeHtml(row.key)}" data-bonus-modal-description="${escapeHtml(row.key)}" placeholder="${'\u041e\u043f\u0438\u0441\u0430\u043d\u0438\u0435'}" rows="1" ${isEditing ? '' : 'disabled'}>${escapeHtml(row.description || '')}</textarea>
+            </div>
+          </div>
+        `;}).join('')}
+      </div>
+    `;
+    bindBonusModalSettingsEvents();
+  }
+
   async function activateBonusSettingsFavoriteCategoriesTab() {
     await loadCatalogCategories();
     renderBonusSettingsFavoriteCategoriesTabContent();
@@ -10983,6 +11308,14 @@
             </div>
             <div class="order-col"></div>
           </button>
+          <button class="settings-home-card settings-card" id="bonusSettingsModalsCard" type="button">
+            <div class="product-avatar"><i class="fas fa-window-restore"></i></div>
+            <div class="order-col">
+              <div class="product-title">${'\u041c\u043e\u0434\u0430\u043b\u044c\u043d\u044b\u0435 \u043e\u043a\u043d\u0430'}</div>
+              <div class="muted">${'\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438 \u043c\u043e\u0434\u0430\u043b\u043e\u043a \u0431\u043e\u043d\u0443\u0441\u043d\u043e\u0439 \u043f\u0440\u043e\u0433\u0440\u0430\u043c\u043c\u044b'}</div>
+            </div>
+            <div class="order-col"></div>
+          </button>
         </div>
       </div>
     `;
@@ -11005,6 +11338,13 @@
     if (favoriteCategoriesCard) {
       favoriteCategoriesCard.addEventListener('click', () => {
         openBonusSettingsFavoriteCategoriesTab();
+      });
+    }
+
+    const modalsCard = elContainer.querySelector('#bonusSettingsModalsCard');
+    if (modalsCard) {
+      modalsCard.addEventListener('click', () => {
+        openBonusSettingsModalsTab();
       });
     }
   }
@@ -11204,6 +11544,7 @@
     state.bonusPointAmountDraft = state.bonusPointAmount;
     state.bonusRubleAmountDraft = state.bonusRubleAmount;
     state.bonusCategoryGroupsDraft = JSON.parse(JSON.stringify(state.bonusCategoryGroups || []));
+    state.bonusModalSettingsDraft = cloneBonusModalSettings(state.bonusModalSettings);
     syncBonusToolbarState();
     renderBonusSettings();
     const activeTab = tabsState.tabs.find(t => t.key === tabsState.activeKey);
@@ -11221,9 +11562,11 @@
     state.bonusPointAmountDraft = state.bonusPointAmount;
     state.bonusRubleAmountDraft = state.bonusRubleAmount;
     state.bonusCategoryGroupsDraft = [];
+    state.bonusModalSettingsDraft = [];
     state.bonusProgramLogoBaseFile = null;
     state.bonusProgramLogoPaidFile = null;
     state.bonusProgramCoinLogoFile = null;
+    closeBonusModalPhotoPopover();
     syncBonusToolbarState();
     renderBonusSettings();
     const activeTab = tabsState.tabs.find(t => t.key === tabsState.activeKey);
@@ -11317,6 +11660,8 @@
       state.bonusRubleAmountDraft = nextRubleAmount;
       state.bonusPointRate = nextPointRate;
       state.bonusPointRateDraft = nextPointRate;
+      state.bonusModalSettings = cloneBonusModalSettings(state.bonusModalSettingsDraft);
+      state.bonusModalSettingsDraft = [];
 
       state.bonusSettingsEditing = false;
       await loadBonusCardsStorage();
@@ -20523,8 +20868,9 @@
     const hasBonusSettingsBrandTab = tabsState.tabs.some((tab) => tab.type === 'bonus-settings-brand');
     const hasBonusSettingsCoinTab = tabsState.tabs.some((tab) => tab.type === 'bonus-settings-coin');
     const hasBonusSettingsFavoriteCategoriesTab = tabsState.tabs.some((tab) => tab.type === 'bonus-settings-favorite-categories');
+    const hasBonusSettingsModalsTab = tabsState.tabs.some((tab) => tab.type === 'bonus-settings-modals');
     const isHomeBtnView = isBonusReferralsView || isBonusSettingsView;
-    const hasVisibleHomeBtnTab = isBonusReferralsView ? hasBonusReferralCardTab : isBonusSettingsView ? (hasBonusSettingsBrandTab || hasBonusSettingsCoinTab || hasBonusSettingsFavoriteCategoriesTab) : false;
+    const hasVisibleHomeBtnTab = isBonusReferralsView ? hasBonusReferralCardTab : isBonusSettingsView ? (hasBonusSettingsBrandTab || hasBonusSettingsCoinTab || hasBonusSettingsFavoriteCategoriesTab || hasBonusSettingsModalsTab) : false;
     if (clientTabsHeader) {
       clientTabsHeader.classList.toggle('hidden', isHomeBtnView ? false : tabsState.tabs.length === 0);
     }
@@ -20566,6 +20912,7 @@
       if (bonusSettingsBrandWrap) bonusSettingsBrandWrap.classList.add('hidden');
       if (bonusSettingsCoinWrap) bonusSettingsCoinWrap.classList.add('hidden');
       if (bonusSettingsFavoriteCategoriesWrap) bonusSettingsFavoriteCategoriesWrap.classList.add('hidden');
+      if (bonusSettingsModalsWrap) bonusSettingsModalsWrap.classList.add('hidden');
       if (clientBenefitsFooter) clientBenefitsFooter.classList.add('hidden');
       return;
     }
@@ -20582,6 +20929,7 @@
     const isBonusSettingsBrandTab = activeTab?.type === 'bonus-settings-brand';
     const isBonusSettingsCoinTab = activeTab?.type === 'bonus-settings-coin';
     const isBonusSettingsFavoriteCategoriesTab = activeTab?.type === 'bonus-settings-favorite-categories';
+    const isBonusSettingsModalsTab = activeTab?.type === 'bonus-settings-modals';
     const hasClientId = Number(state.activeClientId || 0) > 0;
     const noTabs = !activeTab;
     // In chat mode right panel must be driven only by right tabs state.
@@ -20621,6 +20969,7 @@
       if (bonusSettingsBrandWrap) bonusSettingsBrandWrap.classList.toggle('hidden', !isBonusSettingsBrandTab || state.currentView !== 'bonus-settings');
       if (bonusSettingsCoinWrap) bonusSettingsCoinWrap.classList.toggle('hidden', !isBonusSettingsCoinTab || state.currentView !== 'bonus-settings');
       if (bonusSettingsFavoriteCategoriesWrap) bonusSettingsFavoriteCategoriesWrap.classList.toggle('hidden', !isBonusSettingsFavoriteCategoriesTab || state.currentView !== 'bonus-settings');
+      if (bonusSettingsModalsWrap) bonusSettingsModalsWrap.classList.toggle('hidden', !isBonusSettingsModalsTab || state.currentView !== 'bonus-settings');
       if (state.currentView === 'bonus-referrals') renderBonusReferralRightHome();
       if (bonusLevelInfoWrap) bonusLevelInfoWrap.classList.toggle('hidden', !isBonusLevelTab || state.currentView !== 'bonus-cards');
       if (bonusLevelInfoFooter) bonusLevelInfoFooter.classList.toggle('hidden', !isBonusLevelTab || state.currentView !== 'bonus-cards');
@@ -25636,7 +25985,10 @@
     }
     renderBannerFilters();
     renderBannerPlacement();
-    void loadBonusCardsStorage()
+    bonusConfigLoadPromise = loadBonusCardsStorage().finally(() => {
+      bonusConfigLoadPromise = null;
+    });
+    void bonusConfigLoadPromise
       .catch((err) => {
         console.error('Failed to load bonus config:', err);
       })

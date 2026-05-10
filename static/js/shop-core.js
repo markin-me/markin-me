@@ -609,6 +609,140 @@
     return `${formatShopBonusNumber(value, fallback)}%`;
   }
 
+  function getShopBonusModalSetting(key) {
+    const settings = Array.isArray(state.homeBonusConfig?.modal_settings) ? state.homeBonusConfig.modal_settings : [];
+    const item = settings.find((row) => String(row?.key || "") === key) || null;
+    if (!item) return null;
+    return {
+      ...item,
+      image_url: item.image_url || item.imageUrl || "",
+      description: item.description || "",
+      is_enabled: item.is_enabled === false || item.enabled === false ? false : true,
+    };
+  }
+
+  function getShopBonusLevelById(levelId) {
+    const numericId = Number(levelId || 0);
+    const levels = Array.isArray(state.homeBonusConfig?.levels) ? state.homeBonusConfig.levels : [];
+    return levels.find((level) => Number(level?.id || 0) === numericId) || null;
+  }
+
+  function getShopBonusModalDefaultIcon(key) {
+    if (key === "level-up") return "fa-arrow-up";
+    if (key === "level-down") return "fa-arrow-down";
+    return "fa-user-plus";
+  }
+
+  function buildShopBonusProgramModalImageHtml(setting, key) {
+    const imageUrl = String(setting?.image_url || "").trim();
+    if (imageUrl) {
+      return `<img src="${escapeHtml(imageUrl)}" alt="" />`;
+    }
+    return `<i class="fas ${escapeHtml(getShopBonusModalDefaultIcon(key))}" aria-hidden="true"></i>`;
+  }
+
+  function buildShopBonusProgramModalStatsHtml(level) {
+    const reward = Math.max(0, Number(level?.reward_bonus_amount || 0));
+    const cashback = formatShopBonusPercent(level?.cashback_percent, 0);
+    const redeem = formatShopBonusPercent(level?.redeem_percent, 0);
+    return `
+      <div class="shop-bonus-program-modal-stats">
+        <div class="shop-bonus-program-modal-stat">
+          <strong>${formatShopBonusMoney(reward)}</strong>
+        </div>
+        <div class="shop-bonus-program-modal-stat">
+          <i class="fas fa-undo-alt" aria-hidden="true"></i>
+          <strong>${escapeHtml(cashback)}</strong>
+        </div>
+        <div class="shop-bonus-program-modal-stat">
+          <i class="fas fa-minus-circle" aria-hidden="true"></i>
+          <strong>${escapeHtml(redeem)}</strong>
+        </div>
+      </div>
+    `;
+  }
+
+  function openShopBonusProgramModal(options = {}) {
+    const modalKey = String(options.modalKey || "join");
+    const setting = getShopBonusModalSetting(modalKey);
+    if (setting && setting.is_enabled === false) {
+      if (typeof options.onConfirm === "function") void options.onConfirm();
+      return;
+    }
+    document.querySelectorAll(".shop-bonus-program-modal-overlay").forEach((node) => node.remove());
+    const level = options.level || options.toLevel || getHomeBonusFirstLevel(state.homeBonusConfig);
+    const title = String(setting?.title || options.title || "").trim() || (
+      modalKey === "level-up" ? "\u041f\u043e\u0432\u044b\u0448\u0435\u043d\u0438\u0435 \u0443\u0440\u043e\u0432\u043d\u044f"
+        : modalKey === "level-down" ? "\u041f\u043e\u043d\u0438\u0436\u0435\u043d\u0438\u0435 \u0443\u0440\u043e\u0432\u043d\u044f"
+          : "\u041f\u0440\u0438\u0441\u043e\u0435\u0434\u0438\u043d\u0435\u043d\u0438\u0435 \u043a \u043f\u0440\u043e\u0433\u0440\u0430\u043c\u043c\u0435"
+    );
+    const description = String(setting?.description || options.description || "").trim();
+    const fromTitle = String(options.fromLevel?.title || options.fromLevelTitle || "").trim();
+    const toTitle = String(options.toLevel?.title || level?.title || options.toLevelTitle || "").trim();
+    const transitionHtml = (modalKey === "level-up" || modalKey === "level-down") && (fromTitle || toTitle)
+      ? `<div class="shop-bonus-program-modal-transition">
+          <span>${escapeHtml(fromTitle || "\u0423\u0440\u043e\u0432\u0435\u043d\u044c")}</span>
+          <i class="fas ${modalKey === "level-down" ? "fa-arrow-down" : "fa-arrow-right"}" aria-hidden="true"></i>
+          <span>${escapeHtml(toTitle || "\u0423\u0440\u043e\u0432\u0435\u043d\u044c")}</span>
+        </div>`
+      : "";
+    const overlay = document.createElement("div");
+    overlay.className = "shop-bonus-program-modal-overlay";
+    overlay.innerHTML = `
+      <div class="shop-bonus-program-modal" role="dialog" aria-modal="true">
+        <div class="shop-bonus-program-modal-image">${buildShopBonusProgramModalImageHtml(setting, modalKey)}</div>
+        <div class="shop-bonus-program-modal-title">${escapeHtml(title)}</div>
+        ${description ? `<div class="shop-bonus-program-modal-description">${escapeHtml(description)}</div>` : ""}
+        ${transitionHtml}
+        ${buildShopBonusProgramModalStatsHtml(level)}
+        <button class="shop-bonus-program-modal-confirm" type="button">${"\u041f\u043e\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0442\u044c"}</button>
+      </div>
+    `;
+    const confirmBtn = overlay.querySelector(".shop-bonus-program-modal-confirm");
+    confirmBtn?.addEventListener("click", async () => {
+      if (confirmBtn.disabled) return;
+      confirmBtn.disabled = true;
+      try {
+        if (typeof options.onConfirm === "function") {
+          await options.onConfirm();
+        }
+        overlay.remove();
+      } finally {
+        if (document.body.contains(overlay)) confirmBtn.disabled = false;
+      }
+    });
+    document.body.appendChild(overlay);
+  }
+
+  function maybeShowPendingBonusModalEvent() {
+    const event = state.homeBonusConfig?.pending_modal_event;
+    const eventId = Number(event?.id || 0);
+    if (!(eventId > 0) || state._homeBonusModalEventId === eventId) return;
+    const modalKey = String(event.modal_key || (event.event_type === "level_down" ? "level-down" : "level-up"));
+    const setting = getShopBonusModalSetting(modalKey);
+    if (setting && setting.is_enabled === false) return;
+    const fromLevel = getShopBonusLevelById(event.from_level_id) || { title: event.from_level_title || "" };
+    const toLevel = getShopBonusLevelById(event.to_level_id) || { title: event.to_level_title || "" };
+    state._homeBonusModalEventId = eventId;
+    openShopBonusProgramModal({
+      modalKey,
+      fromLevel,
+      toLevel,
+      level: toLevel,
+      fromLevelTitle: event.from_level_title || "",
+      toLevelTitle: event.to_level_title || "",
+      onConfirm: async () => {
+        await apiJson("/api/public/bonus/modal-events/confirm", {
+          method: "POST",
+          body: { event_id: eventId },
+        });
+        if (state.homeBonusConfig?.pending_modal_event?.id === eventId) {
+          state.homeBonusConfig.pending_modal_event = null;
+        }
+      },
+    });
+  }
+
   function formatShopBonusPeriod(value, unit) {
     const n = Math.max(0, Math.floor(Number(value || 0)));
     const u = String(unit || "").trim();
@@ -2574,6 +2708,17 @@
       }
       return;
     }
+    if (!joinOptions.confirmed) {
+      const config = await loadHomeBonusConfig({ force: true, skipPendingModal: true });
+      const levels = Array.isArray(config?.levels) ? config.levels : [];
+      const level = levels.find((item) => String(item?.access_type || "") === "join") || getHomeBonusFirstLevel(config);
+      openShopBonusProgramModal({
+        modalKey: "join",
+        level,
+        onConfirm: () => joinHomeBonusProgram({ ...joinOptions, confirmed: true }),
+      });
+      return;
+    }
     if (joinHomeBonusProgram._busy) return;
     joinHomeBonusProgram._busy = true;
     if (elMobileBonusCardsActionBtn) elMobileBonusCardsActionBtn.disabled = true;
@@ -3009,6 +3154,7 @@
     homeBonusConfig: null,
     _homeBonusToken: "",
     _homeBonusLoading: null,
+    _homeBonusModalEventId: null,
     homeBonusFavoriteCategoriesByLevel: new Map(),
     _homeBonusFavoriteCategoriesLoading: new Map(),
     cartBonusRedeemEnabled: false,
@@ -8220,9 +8366,14 @@
     renderCatalogPromoBlock();
   };
 
-  async function loadHomeBonusConfig() {
+  async function loadHomeBonusConfig(options = {}) {
+    const loadOptions = options && typeof options === "object" ? options : {};
     if (!elHomeBonusCard) return null;
     const token = getCustomerToken();
+    if (loadOptions.force) {
+      state.homeBonusConfig = null;
+      state._homeBonusLoading = null;
+    }
     if (state.homeBonusConfig && state._homeBonusToken === token) return state.homeBonusConfig;
     if (state._homeBonusLoading) return state._homeBonusLoading;
     if (state._homeBonusToken !== token) state.homeBonusConfig = null;
@@ -8231,6 +8382,7 @@
       .then((json) => {
         state.homeBonusConfig = json?.data && typeof json.data === "object" ? json.data : null;
         renderHomeBonusCard();
+        if (!loadOptions.skipPendingModal) maybeShowPendingBonusModalEvent();
         return state.homeBonusConfig;
       })
       .catch((err) => {
