@@ -28024,6 +28024,17 @@ function renderSheetAddressList() {
     }
     wrap.appendChild(top);
 
+    if (!ordersOnly && typeof onLogout === "function") {
+      const profileLogoutBtn = document.createElement("button");
+      profileLogoutBtn.type = "button";
+      profileLogoutBtn.className = "btn shop-profile-logout-btn";
+      profileLogoutBtn.textContent = "Выйти из учетной записи";
+      profileLogoutBtn.addEventListener("click", async () => {
+        await onLogout();
+      });
+      wrap.appendChild(profileLogoutBtn);
+    }
+
     const tabs = document.createElement("div");
     tabs.className = "shop-profile-tabs";
 

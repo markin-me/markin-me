@@ -312,6 +312,446 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
   }
 
+  let referralRewardColumnsReady = false;
+  let ensureReferralRewardColumnsPromise = null;
+  async function ensureReferralRewardColumns(queryable = db) {
+    if (referralRewardColumnsReady) return;
+    if (!ensureReferralRewardColumnsPromise) {
+      ensureReferralRewardColumnsPromise = (async () => {
+        const ignoreAlterError = (e) => {
+          const code = String(e?.code || '').trim();
+          const message = String(e?.message || '');
+          return code === 'ER_DUP_FIELDNAME'
+            || code === 'ER_DUP_KEYNAME'
+            || code === 'ER_DUP_ENTRY'
+            || message.includes('Duplicate column')
+            || message.includes('Duplicate key name');
+        };
+        try {
+          await queryable.query(
+            `ALTER TABLE mkt_referral_rewards
+             ADD COLUMN reward_key VARCHAR(160) DEFAULT NULL AFTER reward_type`
+          );
+        } catch (e) {
+          if (!ignoreAlterError(e)) throw e;
+        }
+        try {
+          await queryable.query(
+            `ALTER TABLE mkt_referral_rewards
+             ADD COLUMN level_depth TINYINT UNSIGNED DEFAULT NULL AFTER percent`
+          );
+        } catch (e) {
+          if (!ignoreAlterError(e)) throw e;
+        }
+        try {
+          await queryable.query(
+            `ALTER TABLE mkt_referral_rewards
+             ADD UNIQUE KEY uq_mkt_referral_rewards_reward_key (tenant_id, reward_key)`
+          );
+        } catch (e) {
+          if (!ignoreAlterError(e)) throw e;
+        }
+        try {
+          await queryable.query(
+            `ALTER TABLE mkt_referral_rewards
+             ADD KEY idx_mkt_referral_rewards_level_depth (tenant_id, level_depth, status)`
+          );
+        } catch (e) {
+          if (!ignoreAlterError(e)) throw e;
+        }
+        referralRewardColumnsReady = true;
+      })().finally(() => {
+        ensureReferralRewardColumnsPromise = null;
+      });
+    }
+    await ensureReferralRewardColumnsPromise;
+  }
+
+  function roundReferralMoney(value) {
+    const num = Number(value || 0);
+    if (!Number.isFinite(num)) return 0;
+    return Math.round(num * 100) / 100;
+  }
+
+  function normalizeReferralCode(value) {
+    const code = String(value || '').trim().slice(0, 96);
+    if (!code || !/^[a-zA-Z0-9_-]+$/.test(code)) return '';
+    return code;
+  }
+
+  function getIncomingReferralCode(req) {
+    return normalizeReferralCode(
+      req?.query?.ref
+      || req?.query?.referral
+      || req?.query?.referral_code
+      || req?.query?.referralCode
+      || req?.body?.ref
+      || req?.body?.referral
+      || req?.body?.referral_code
+      || req?.body?.referralCode
+      || req?.headers?.['x-referral-code']
+    );
+  }
+
+  function buildReferralInviteUrl(req, code) {
+    const normalizedCode = normalizeReferralCode(code);
+    if (!normalizedCode) return '';
+    const protoHeader = String(req?.headers?.['x-forwarded-proto'] || '').split(',')[0].trim();
+    const proto = protoHeader || req?.protocol || 'http';
+    const host = req?.get ? req.get('host') : '';
+    if (!host) return `?ref=${encodeURIComponent(normalizedCode)}`;
+    return `${proto}://${host}/?ref=${encodeURIComponent(normalizedCode)}`;
+  }
+
+  async function loadReferralSettings(queryable, tenantId) {
+    const [[row]] = await queryable.query(
+      `SELECT referral_program_enabled, referral_registration_reward, referral_first_purchase_reward
+       FROM mkt_bonus_program_settings
+       WHERE tenant_id=?
+       LIMIT 1`,
+      [tenantId]
+    );
+    return {
+      enabled: Number(row?.referral_program_enabled || 0) === 1,
+      registrationReward: roundReferralMoney(row?.referral_registration_reward || 0),
+      firstPurchaseReward: roundReferralMoney(row?.referral_first_purchase_reward || 0),
+    };
+  }
+
+  async function getOrCreateCustomerReferralCode(queryable, tenantId, customerId) {
+    const normalizedTenantId = Number(tenantId || 0);
+    const normalizedCustomerId = Number(customerId || 0);
+    if (!(normalizedTenantId > 0) || !(normalizedCustomerId > 0)) return null;
+    const [[existing]] = await queryable.query(
+      `SELECT id, code, is_active
+       FROM mkt_customer_referral_codes
+       WHERE tenant_id=? AND customer_id=?
+       LIMIT 1`,
+      [normalizedTenantId, normalizedCustomerId]
+    );
+    if (existing?.code) return existing;
+
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const code = normalizeReferralCode(`r${normalizedTenantId}_${normalizedCustomerId}_${crypto.randomBytes(4).toString('hex')}`);
+      try {
+        const [insertResult] = await queryable.query(
+          `INSERT INTO mkt_customer_referral_codes (tenant_id, customer_id, code, is_active)
+           VALUES (?, ?, ?, 1)`,
+          [normalizedTenantId, normalizedCustomerId, code]
+        );
+        return { id: Number(insertResult.insertId || 0), code, is_active: 1 };
+      } catch (e) {
+        if (String(e?.code || '') !== 'ER_DUP_ENTRY') throw e;
+      }
+    }
+    const [[created]] = await queryable.query(
+      `SELECT id, code, is_active
+       FROM mkt_customer_referral_codes
+       WHERE tenant_id=? AND customer_id=?
+       LIMIT 1`,
+      [normalizedTenantId, normalizedCustomerId]
+    );
+    return created || null;
+  }
+
+  async function ensureReferralBonusAccount(queryable, tenantId, customerId) {
+    const normalizedTenantId = Number(tenantId || 0);
+    const normalizedCustomerId = Number(customerId || 0);
+    if (!(normalizedTenantId > 0) || !(normalizedCustomerId > 0)) return null;
+    const [[account]] = await queryable.query(
+      `SELECT id, customer_id, level_id, balance
+       FROM mkt_customer_bonus_accounts
+       WHERE tenant_id=? AND customer_id=?
+       LIMIT 1
+       FOR UPDATE`,
+      [normalizedTenantId, normalizedCustomerId]
+    );
+    if (Number(account?.id || 0) > 0) return account;
+
+    const [[level]] = await queryable.query(
+      `SELECT id
+       FROM mkt_bonus_levels
+       WHERE tenant_id=? AND is_active=1
+       ORDER BY CASE WHEN access_type='join' THEN 0 ELSE 1 END, sort_order ASC, id ASC
+       LIMIT 1`,
+      [normalizedTenantId]
+    );
+    const levelId = Number(level?.id || 0);
+    if (!(levelId > 0)) return null;
+    const [insertResult] = await queryable.query(
+      `INSERT INTO mkt_customer_bonus_accounts
+         (tenant_id, customer_id, level_id, balance, total_accrued, total_redeemed, total_expired, status, joined_at, level_assigned_at)
+       VALUES (?, ?, ?, 0, 0, 0, 0, 'active', NOW(), NOW())`,
+      [normalizedTenantId, normalizedCustomerId, levelId]
+    );
+    return { id: Number(insertResult.insertId || 0), customer_id: normalizedCustomerId, level_id: levelId, balance: 0 };
+  }
+
+  async function accrueReferralReward(queryable, {
+    tenantId,
+    storeId = null,
+    referralId,
+    recipientCustomerId,
+    sourceCustomerId = null,
+    orderId = null,
+    rewardType,
+    amount,
+    percent = null,
+    levelDepth = null,
+    rewardKey,
+  } = {}) {
+    const normalizedTenantId = Number(tenantId || 0);
+    const normalizedReferralId = Number(referralId || 0);
+    const normalizedRecipientId = Number(recipientCustomerId || 0);
+    const normalizedAmount = roundReferralMoney(amount);
+    const normalizedRewardKey = String(rewardKey || '').trim().slice(0, 160);
+    if (!(normalizedTenantId > 0) || !(normalizedReferralId > 0) || !(normalizedRecipientId > 0) || !(normalizedAmount > 0) || !normalizedRewardKey) {
+      return null;
+    }
+    await ensureReferralRewardColumns(db);
+    const [insertRewardResult] = await queryable.query(
+      `INSERT IGNORE INTO mkt_referral_rewards
+         (tenant_id, store_id, referral_id, recipient_customer_id, source_customer_id, order_id,
+          reward_type, reward_key, amount, percent, level_depth, status, accrued_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'accrued', NOW())`,
+      [
+        normalizedTenantId,
+        Number(storeId || 0) > 0 ? Number(storeId) : null,
+        normalizedReferralId,
+        normalizedRecipientId,
+        Number(sourceCustomerId || 0) > 0 ? Number(sourceCustomerId) : null,
+        Number(orderId || 0) > 0 ? Number(orderId) : null,
+        String(rewardType || 'level_percent'),
+        normalizedRewardKey,
+        normalizedAmount,
+        percent == null ? null : Number(percent || 0),
+        levelDepth == null ? null : Number(levelDepth || 0),
+      ]
+    );
+    if (Number(insertRewardResult?.affectedRows || 0) !== 1) return null;
+    const rewardId = Number(insertRewardResult.insertId || 0);
+    const account = await ensureReferralBonusAccount(queryable, normalizedTenantId, normalizedRecipientId);
+    if (!(Number(account?.id || 0) > 0)) return { reward_id: rewardId, transaction_id: null };
+    const currentBalance = roundReferralMoney(account.balance || 0);
+    const nextBalance = roundReferralMoney(currentBalance + normalizedAmount);
+    await queryable.query(
+      `UPDATE mkt_customer_bonus_accounts
+       SET balance=?, total_accrued=COALESCE(total_accrued,0)+?
+       WHERE tenant_id=? AND id=?`,
+      [nextBalance, normalizedAmount, normalizedTenantId, Number(account.id)]
+    );
+    const [insertTxResult] = await queryable.query(
+      `INSERT INTO mkt_customer_bonus_transactions
+         (tenant_id, store_id, account_id, customer_id, level_id, order_id, referral_id, reward_id,
+          type, amount, balance_after, reason, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'referral_accrual', ?, ?, ?, NOW())`,
+      [
+        normalizedTenantId,
+        Number(storeId || 0) > 0 ? Number(storeId) : null,
+        Number(account.id),
+        normalizedRecipientId,
+        account.level_id || null,
+        Number(orderId || 0) > 0 ? Number(orderId) : null,
+        normalizedReferralId,
+        rewardId,
+        normalizedAmount,
+        nextBalance,
+        normalizedRewardKey,
+      ]
+    );
+    const transactionId = Number(insertTxResult.insertId || 0);
+    await queryable.query(
+      `UPDATE mkt_referral_rewards
+       SET bonus_transaction_id=?
+       WHERE tenant_id=? AND id=?`,
+      [transactionId || null, normalizedTenantId, rewardId]
+    );
+    return { reward_id: rewardId, transaction_id: transactionId || null };
+  }
+
+  async function bindCustomerReferral(queryable, { tenantId, storeId, customerId, referralCode } = {}) {
+    const normalizedTenantId = Number(tenantId || 0);
+    const normalizedCustomerId = Number(customerId || 0);
+    const code = normalizeReferralCode(referralCode);
+    if (!(normalizedTenantId > 0) || !(normalizedCustomerId > 0) || !code) return null;
+    const settings = await loadReferralSettings(queryable, normalizedTenantId);
+    if (!settings.enabled) return null;
+    const [[codeRow]] = await queryable.query(
+      `SELECT id, customer_id, code, is_active
+       FROM mkt_customer_referral_codes
+       WHERE tenant_id=? AND code=? AND is_active=1
+       LIMIT 1`,
+      [normalizedTenantId, code]
+    );
+    const inviterCustomerId = Number(codeRow?.customer_id || 0);
+    if (!(inviterCustomerId > 0) || inviterCustomerId === normalizedCustomerId) return null;
+    const [[existing]] = await queryable.query(
+      `SELECT id
+       FROM mkt_customer_referrals
+       WHERE tenant_id=? AND referral_customer_id=?
+       LIMIT 1`,
+      [normalizedTenantId, normalizedCustomerId]
+    );
+    if (Number(existing?.id || 0) > 0) return existing;
+
+    let referralId = 0;
+    try {
+      const [insertResult] = await queryable.query(
+        `INSERT INTO mkt_customer_referrals
+           (tenant_id, store_id, inviter_customer_id, referral_customer_id, referral_code_id, status, registered_at)
+         VALUES (?, ?, ?, ?, ?, 'registered', NOW())`,
+        [
+          normalizedTenantId,
+          Number(storeId || 0) > 0 ? Number(storeId) : null,
+          inviterCustomerId,
+          normalizedCustomerId,
+          Number(codeRow.id || 0) || null,
+        ]
+      );
+      referralId = Number(insertResult.insertId || 0);
+    } catch (e) {
+      if (String(e?.code || '') !== 'ER_DUP_ENTRY') throw e;
+      const [[created]] = await queryable.query(
+        `SELECT id
+         FROM mkt_customer_referrals
+         WHERE tenant_id=? AND referral_customer_id=?
+         LIMIT 1`,
+        [normalizedTenantId, normalizedCustomerId]
+      );
+      referralId = Number(created?.id || 0);
+    }
+    if (referralId > 0 && settings.registrationReward > 0) {
+      await accrueReferralReward(queryable, {
+        tenantId: normalizedTenantId,
+        storeId,
+        referralId,
+        recipientCustomerId: normalizedCustomerId,
+        sourceCustomerId: inviterCustomerId,
+        rewardType: 'registration',
+        amount: settings.registrationReward,
+        rewardKey: `registration:${referralId}:${normalizedCustomerId}`,
+      });
+    }
+    return referralId > 0 ? { id: referralId } : null;
+  }
+
+  async function settleReferralFirstPurchaseRewards(queryable, { tenantId, storeId, orderId, customerId } = {}) {
+    const normalizedTenantId = Number(tenantId || 0);
+    const normalizedOrderId = Number(orderId || 0);
+    const normalizedCustomerId = Number(customerId || 0);
+    if (!(normalizedTenantId > 0) || !(normalizedOrderId > 0) || !(normalizedCustomerId > 0)) return null;
+    const settings = await loadReferralSettings(queryable, normalizedTenantId);
+    if (!settings.enabled) return null;
+    const [[orderRow]] = await queryable.query(
+      `SELECT id, store_id, total_price
+       FROM order_orders
+       WHERE tenant_id=? AND id=? AND customer_id=? AND is_active=1
+       LIMIT 1`,
+      [normalizedTenantId, normalizedOrderId, normalizedCustomerId]
+    );
+    if (!orderRow) return null;
+    const effectiveStoreId = Number(storeId || orderRow.store_id || 0) || null;
+    const orderTotal = roundReferralMoney(orderRow.total_price || 0);
+    if (!(orderTotal > 0)) return null;
+    const [[referralRow]] = await queryable.query(
+      `SELECT id, inviter_customer_id, referral_customer_id, first_purchase_order_id
+       FROM mkt_customer_referrals
+       WHERE tenant_id=? AND referral_customer_id=? AND status <> 'cancelled'
+       LIMIT 1
+       FOR UPDATE`,
+      [normalizedTenantId, normalizedCustomerId]
+    );
+    const referralId = Number(referralRow?.id || 0);
+    const directInviterId = Number(referralRow?.inviter_customer_id || 0);
+    if (!(referralId > 0) || !(directInviterId > 0)) return null;
+    const [[previousFinal]] = await queryable.query(
+      `SELECT COUNT(*) AS cnt
+       FROM order_orders o
+       LEFT JOIN order_statuses os
+         ON os.tenant_id=o.tenant_id
+        AND os.store_id=o.store_id
+        AND os.id=o.status_id
+       WHERE o.tenant_id=?
+         AND o.customer_id=?
+         AND o.is_active=1
+         AND o.id<>?
+         AND LOWER(COALESCE(os.code, '')) NOT IN ('canceled', 'cancelled')
+         AND (o.is_paid=1 OR COALESCE(os.is_final, 0)=1)`,
+      [normalizedTenantId, normalizedCustomerId, normalizedOrderId]
+    );
+    if (Number(previousFinal?.cnt || 0) > 0 && !(Number(referralRow.first_purchase_order_id || 0) === normalizedOrderId)) {
+      return null;
+    }
+    if (settings.firstPurchaseReward > 0) {
+      await accrueReferralReward(queryable, {
+        tenantId: normalizedTenantId,
+        storeId: effectiveStoreId,
+        referralId,
+        recipientCustomerId: directInviterId,
+        sourceCustomerId: normalizedCustomerId,
+        orderId: normalizedOrderId,
+        rewardType: 'first_purchase',
+        amount: settings.firstPurchaseReward,
+        rewardKey: `first_purchase:${referralId}:${normalizedOrderId}:${directInviterId}`,
+      });
+    }
+    await queryable.query(
+      `UPDATE mkt_customer_referrals
+       SET status='first_purchase_paid',
+           first_purchase_order_id=COALESCE(first_purchase_order_id, ?),
+           first_purchase_paid_at=COALESCE(first_purchase_paid_at, NOW())
+       WHERE tenant_id=? AND id=?`,
+      [normalizedOrderId, normalizedTenantId, referralId]
+    );
+
+    const [levelRows] = await queryable.query(
+      `SELECT id, invited_count, percent
+       FROM mkt_referral_levels
+       WHERE tenant_id=? AND is_active=1 AND percent > 0
+       ORDER BY invited_count ASC, sort_order ASC, id ASC`,
+      [normalizedTenantId]
+    );
+    const levelsByDepth = new Map();
+    (Array.isArray(levelRows) ? levelRows : []).forEach((row) => {
+      const depth = Math.max(1, Math.floor(Number(row.invited_count || 0)));
+      if (!levelsByDepth.has(depth)) levelsByDepth.set(depth, row);
+    });
+    const maxDepth = Math.max(0, ...Array.from(levelsByDepth.keys()));
+    let recipientCustomerId = directInviterId;
+    for (let depth = 1; depth <= maxDepth && recipientCustomerId > 0; depth += 1) {
+      const level = levelsByDepth.get(depth);
+      if (level) {
+        const percent = Number(level.percent || 0);
+        const amount = roundReferralMoney(orderTotal * percent / 100);
+        if (amount > 0) {
+          await accrueReferralReward(queryable, {
+            tenantId: normalizedTenantId,
+            storeId: effectiveStoreId,
+            referralId,
+            recipientCustomerId,
+            sourceCustomerId: normalizedCustomerId,
+            orderId: normalizedOrderId,
+            rewardType: 'level_percent',
+            amount,
+            percent,
+            levelDepth: depth,
+            rewardKey: `level_percent:${referralId}:${normalizedOrderId}:L${depth}:${recipientCustomerId}`,
+          });
+        }
+      }
+      if (depth >= maxDepth) break;
+      const [[parentReferral]] = await queryable.query(
+        `SELECT inviter_customer_id
+         FROM mkt_customer_referrals
+         WHERE tenant_id=? AND referral_customer_id=? AND status <> 'cancelled'
+         LIMIT 1`,
+        [normalizedTenantId, recipientCustomerId]
+      );
+      recipientCustomerId = Number(parentReferral?.inviter_customer_id || 0);
+    }
+    return { referral_id: referralId };
+  }
+
   function maxDateOrNull(...values) {
     const dates = values
       .map((value) => (value instanceof Date ? value : new Date(value)))
@@ -324,6 +764,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     const isCurrentLevel = Number(accountRow?.level_id || 0) > 0
       && Number(accountRow?.level_id || 0) === Number(levelRow?.id || 0);
     const useRetention = isCurrentLevel;
+    const periodDays = Math.max(0, Math.floor(Number(levelRow?.requirement_period_days || 0)));
+    if (useRetention && !(periodDays > 0)) return null;
     const retentionStrategy = String(levelRow?.retention_strategy || 'match');
     if (useRetention && retentionStrategy === 'custom') {
       return {
@@ -401,6 +843,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     for (const levelRow of rows) {
       if (!allowedLevelIds.has(Number(levelRow.id || 0))) continue;
       const targets = getPublicBonusRequirementTargets(levelRow, accountRow);
+      if (!targets) continue;
       const amountTarget = Math.max(0, Number(targets.amount || 0));
       const ordersTarget = Math.max(0, Math.floor(Number(targets.orders || 0)));
       const referralsTarget = Math.max(0, Math.floor(Number(targets.referrals || 0)));
@@ -442,7 +885,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       );
       const [[bonusStats]] = await queryable.query(
         `SELECT
-            COALESCE(SUM(CASE WHEN type IN ('accrual', 'join', 'level_up', 'referral_accrual') THEN amount ELSE 0 END), 0) AS bonus_accrued,
+            COALESCE(SUM(CASE WHEN type IN ('accrual', 'referral_accrual') THEN amount ELSE 0 END), 0) AS bonus_accrued,
             COALESCE(SUM(CASE WHEN type = 'redeem' THEN amount ELSE 0 END), 0) AS bonus_redeemed
          FROM mkt_customer_bonus_transactions
          WHERE tenant_id=?
@@ -2101,6 +2544,132 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     }
   });
 
+  router.get('/bonus/referrals', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const token = str(req.headers['x-customer-token']);
+      const customer = token ? await getCustomerByToken(tenantId, token) : null;
+      const customerId = Number(customer?.id || 0);
+      if (!(customerId > 0)) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+
+      await ensureReferralRewardColumns(db);
+      const incomingReferralCode = getIncomingReferralCode(req);
+      if (incomingReferralCode) {
+        await bindCustomerReferral(db, {
+          tenantId,
+          storeId: helpers.getStoreId(req),
+          customerId,
+          referralCode: incomingReferralCode,
+        });
+      }
+      const referralCode = await getOrCreateCustomerReferralCode(db, tenantId, customerId);
+      const [levelRows] = await db.query(
+        `SELECT id, code, title, invited_count, percent, sort_order, is_active
+         FROM mkt_referral_levels
+         WHERE tenant_id=? AND is_active=1
+         ORDER BY invited_count ASC, sort_order ASC, id ASC`,
+        [tenantId]
+      );
+      const activeLevels = (Array.isArray(levelRows) ? levelRows : [])
+        .map((row) => ({
+          id: Number(row.id || 0),
+          code: row.code || '',
+          title: row.title || '',
+          depth: Math.max(1, Math.floor(Number(row.invited_count || 0))),
+          percent: Number(row.percent || 0),
+          sort_order: Number(row.sort_order || 0),
+        }))
+        .filter((row) => row.depth > 0);
+      const maxDepth = Math.max(1, ...activeLevels.map((row) => row.depth));
+      const referrals = [];
+      let frontier = [{ customerId, inviterPath: [] }];
+      for (let depth = 1; depth <= maxDepth && frontier.length; depth += 1) {
+        const inviterIds = [...new Set(frontier.map((item) => Number(item.customerId || 0)).filter((id) => id > 0))];
+        if (!inviterIds.length) break;
+        const placeholders = inviterIds.map(() => '?').join(',');
+        const [rows] = await db.query(
+          `SELECT r.id AS referral_id, r.inviter_customer_id, r.referral_customer_id, r.status,
+                  r.registered_at, r.first_purchase_order_id, r.first_purchase_paid_at,
+                  c.name, c.phone, c.photo, COALESCE(c.total_orders, 0) AS total_orders,
+                  COALESCE(reward_stats.reward_amount, 0) AS reward_amount
+           FROM mkt_customer_referrals r
+           JOIN cust_customers c
+             ON c.tenant_id=r.tenant_id
+            AND c.id=r.referral_customer_id
+           LEFT JOIN (
+             SELECT source_customer_id, COALESCE(SUM(amount), 0) AS reward_amount
+             FROM mkt_referral_rewards
+             WHERE tenant_id=?
+               AND recipient_customer_id=?
+               AND status='accrued'
+             GROUP BY source_customer_id
+           ) reward_stats
+             ON reward_stats.source_customer_id=r.referral_customer_id
+           WHERE r.tenant_id=?
+             AND r.status <> 'cancelled'
+             AND r.inviter_customer_id IN (${placeholders})
+           ORDER BY r.registered_at DESC, r.id DESC`,
+          [tenantId, customerId, tenantId, ...inviterIds]
+        );
+        const nextFrontier = [];
+        (Array.isArray(rows) ? rows : []).forEach((row) => {
+          const referralCustomerId = Number(row.referral_customer_id || 0);
+          referrals.push({
+            id: Number(row.referral_id || 0),
+            customer_id: referralCustomerId,
+            level_depth: depth,
+            level_title: activeLevels.find((level) => level.depth === depth)?.title || `${depth}-й уровень`,
+            name: row.name || 'Клиент',
+            phone: row.phone || '',
+            photo: row.photo || '',
+            orders_count: Number(row.total_orders || 0),
+            reward_amount: Number(row.reward_amount || 0),
+            status: row.status || 'registered',
+            registered_at: row.registered_at || null,
+            first_purchase_order_id: row.first_purchase_order_id == null ? null : Number(row.first_purchase_order_id),
+            first_purchase_paid_at: row.first_purchase_paid_at || null,
+          });
+          if (referralCustomerId > 0) nextFrontier.push({ customerId: referralCustomerId });
+        });
+        frontier = nextFrontier;
+      }
+
+      const [[rewardStats]] = await db.query(
+        `SELECT
+            COALESCE(SUM(amount), 0) AS total_amount,
+            COALESCE(SUM(CASE WHEN created_at >= DATE_FORMAT(CURDATE(), '%Y-%m-01') THEN amount ELSE 0 END), 0) AS month_amount
+         FROM mkt_referral_rewards
+         WHERE tenant_id=? AND recipient_customer_id=? AND status='accrued'`,
+        [tenantId, customerId]
+      );
+      const monthReferralCount = referrals.filter((row) => {
+        const date = row.registered_at ? new Date(row.registered_at) : null;
+        if (!date || !Number.isFinite(date.getTime())) return false;
+        const now = new Date();
+        return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth();
+      }).length;
+
+      return res.json({
+        ok: true,
+        data: {
+          invite_url: buildReferralInviteUrl(req, referralCode?.code || ''),
+          code: referralCode?.code || '',
+          stats: {
+            bonuses_total: Number(rewardStats?.total_amount || 0),
+            bonuses_month: Number(rewardStats?.month_amount || 0),
+            referrals_total: referrals.length,
+            referrals_month: monthReferralCount,
+          },
+          levels: activeLevels,
+          referrals,
+        },
+      });
+    } catch (e) {
+      console.error('GET /api/public/bonus/referrals error:', e);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
   router.post('/bonus/join', async (req, res) => {
     let conn = null;
     try {
@@ -2110,6 +2679,15 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
       const customerId = Number(customer.id || 0);
       if (!(customerId > 0)) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+      const incomingReferralCode = getIncomingReferralCode(req);
+      if (incomingReferralCode) {
+        await bindCustomerReferral(db, {
+          tenantId,
+          storeId: helpers.getStoreId(req),
+          customerId,
+          referralCode: incomingReferralCode,
+        });
+      }
 
       const [[settingsRow]] = await db.query(
         `SELECT bonus_program_enabled
@@ -17699,6 +18277,18 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       }
 
       // product_ids РЎвЂљР С•Р В»РЎРЉР С”Р С• РЎС“ Р С•Р В±РЎвЂ№РЎвЂЎР Р…РЎвЂ№РЎвЂ¦ РЎвЂљР С•Р Р†Р В°РЎР‚Р С•Р Р†; Р С”Р С•Р СР В±Р С• Р С—РЎР‚Р С‘РЎвЂ¦Р С•Р Т‘РЎРЏРЎвЂљ РЎРѓ type === 'combo'
+      if (customerId) {
+        const incomingReferralCode = getIncomingReferralCode(req);
+        if (incomingReferralCode) {
+          await bindCustomerReferral(db, {
+            tenantId,
+            storeId,
+            customerId,
+            referralCode: incomingReferralCode,
+          });
+        }
+      }
+
       const ids = items
         .filter(it => it.type !== 'combo')
         .map(it => Number(it.product_id))
@@ -20010,6 +20600,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
   });
   registerOrderBenefitsAccrualProvider({
     accrueOrderBenefits: (params = {}) => accrueOrderBenefitProgress(params || {}),
+    settleReferralRewards: (params = {}) => settleReferralFirstPurchaseRewards(params?.queryable || db, params || {}),
   });
 
   return router;

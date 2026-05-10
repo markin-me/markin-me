@@ -255,12 +255,8 @@ function normalizeBonusLevels(items) {
       cashback_percent: nonNegativeNumber(pick(item, 'cashback_percent', 'cashbackPercent'), 'INVALID_LEVELS', 0),
       redeem_percent: nonNegativeNumber(pick(item, 'redeem_percent', 'redeemPercent'), 'INVALID_LEVELS', 0),
       referral_bonus_percent: nonNegativeNumber(pick(item, 'referral_bonus_percent', 'referralBonusPercent'), 'INVALID_LEVELS', 0),
-      favorite_categories_bonus_percent: nonNegativeNumber(
-        pick(item, 'favorite_categories_bonus_percent', 'favoriteCategoriesBonusPercent'),
-        'INVALID_LEVELS',
-        0
-      ),
-      favorite_categories_limit: nonNegativeInt(pick(item, 'favorite_categories_limit', 'favoriteCategoriesLimit'), 'INVALID_LEVELS', 0),
+      favorite_categories_bonus_percent: 0,
+      favorite_categories_limit: 0,
       activation_delay_value: nonNegativeInt(pick(item, 'activation_delay_value', 'activationDelayValue'), 'INVALID_LEVELS', 0),
       activation_delay_unit: activationUnit,
       lifetime_value: lifetimeUnit === 'forever'
@@ -357,6 +353,8 @@ function mapSettingsRow(row) {
 
 function mapBonusLevelRow(row, children) {
   const levelId = Number(row.id || 0);
+  const favoriteGroupId = row.favorite_category_group_id == null ? null : Number(row.favorite_category_group_id);
+  const favoriteGroup = favoriteGroupId > 0 ? children.categoryGroupsById?.get(favoriteGroupId) : null;
   return {
     id: levelId,
     code: row.code,
@@ -389,8 +387,8 @@ function mapBonusLevelRow(row, children) {
     cashback_percent: Number(row.cashback_percent || 0),
     redeem_percent: Number(row.redeem_percent || 0),
     referral_bonus_percent: Number(row.referral_bonus_percent || 0),
-    favorite_categories_bonus_percent: Number(row.favorite_categories_bonus_percent || 0),
-    favorite_categories_limit: Number(row.favorite_categories_limit || 0),
+    favorite_categories_bonus_percent: favoriteGroup ? Number(favoriteGroup.bonus_percent || 0) : 0,
+    favorite_categories_limit: favoriteGroup ? Number(favoriteGroup.categories_limit || 0) : 0,
     activation_delay_value: Number(row.activation_delay_value || 0),
     activation_delay_unit: row.activation_delay_unit,
     lifetime_value: Number(row.lifetime_value || 0),
@@ -409,8 +407,8 @@ function mapBonusLevelRow(row, children) {
     is_active: Number(row.is_active || 0) === 1,
     tariff_rows: children.tariffsByLevel.get(levelId) || [],
     order_bonus_ranges: children.rangesByLevel.get(levelId) || [],
-    favorite_category_ids: children.categoriesByLevel.get(levelId) || [],
-    favorite_category_group_id: row.favorite_category_group_id == null ? null : Number(row.favorite_category_group_id),
+    favorite_category_ids: favoriteGroup ? favoriteGroup.category_ids : [],
+    favorite_category_group_id: favoriteGroupId,
   };
 }
 
@@ -602,9 +600,22 @@ async function loadConfig(db, tenantId) {
     categoriesByLevel.get(levelId).push(Number(row.category_id || 0));
   });
 
+  const categoryGroups = categoryGroupRows.map((row) => ({
+    id: row.id,
+    title: row.title,
+    bonus_percent: Number(row.bonus_percent || 0),
+    categories_limit: Number(row.categories_limit || 0),
+    category_ids: Array.isArray(row.category_ids) ? row.category_ids : JSON.parse(row.category_ids || '[]'),
+  }));
+  const categoryGroupsById = new Map(
+    categoryGroups
+      .map((row) => [Number(row.id || 0), row])
+      .filter(([id]) => id > 0)
+  );
+
   return {
     settings: settingsRow ? mapSettingsRow(settingsRow) : mapSettingsRow(null),
-    levels: levelRows.map((row) => mapBonusLevelRow(row, { tariffsByLevel, rangesByLevel, categoriesByLevel })),
+    levels: levelRows.map((row) => mapBonusLevelRow(row, { tariffsByLevel, rangesByLevel, categoriesByLevel, categoryGroupsById })),
     referral_levels: referralRows.map((row) => ({
       id: Number(row.id || 0),
       code: row.code,
@@ -616,12 +627,12 @@ async function loadConfig(db, tenantId) {
     })),
     bonus_events: bonusEventRows.map(mapBonusTransactionRow),
     referral_events: referralEventRows.map(mapReferralEventRow),
-    category_groups: categoryGroupRows.map((row) => ({
+    category_groups: categoryGroups.map((row) => ({
       id: row.id,
       title: row.title,
-      favoriteCategoriesBonusPercent: Number(row.bonus_percent || 0),
-      favoriteCategoriesLimit: Number(row.categories_limit || 0),
-      favoriteCategoryIds: Array.isArray(row.category_ids) ? row.category_ids : JSON.parse(row.category_ids || '[]'),
+      favoriteCategoriesBonusPercent: row.bonus_percent,
+      favoriteCategoriesLimit: row.categories_limit,
+      favoriteCategoryIds: row.category_ids,
     })),
   };
 }
@@ -933,6 +944,8 @@ function getBonusRequirementTargets(levelRow, accountRow) {
   const isCurrentLevel = Number(accountRow?.level_id || 0) > 0
     && Number(accountRow?.level_id || 0) === Number(levelRow?.id || 0);
   const useRetention = isCurrentLevel;
+  const periodDays = Math.max(0, Math.floor(Number(levelRow?.requirement_period_days || 0)));
+  if (useRetention && !(periodDays > 0)) return null;
   const retentionStrategy = String(levelRow?.retention_strategy || 'match');
   if (useRetention && retentionStrategy === 'custom') {
     return {
@@ -992,6 +1005,7 @@ async function loadBonusProgressByLevel(db, tenantId, customerId, accountRow, le
   for (const levelRow of rows) {
     if (!allowedLevelIds.has(Number(levelRow.id || 0))) continue;
     const targets = getBonusRequirementTargets(levelRow, accountRow);
+    if (!targets) continue;
     const amountTarget = Math.max(0, Number(targets.amount || 0));
     const ordersTarget = Math.max(0, Math.floor(Number(targets.orders || 0)));
     const referralsTarget = Math.max(0, Math.floor(Number(targets.referrals || 0)));
@@ -1033,7 +1047,7 @@ async function loadBonusProgressByLevel(db, tenantId, customerId, accountRow, le
     );
     const [[bonusStats]] = await db.query(
       `SELECT
-          COALESCE(SUM(CASE WHEN type IN ('accrual', 'join', 'level_up', 'referral_accrual') THEN amount ELSE 0 END), 0) AS bonus_accrued,
+          COALESCE(SUM(CASE WHEN type IN ('accrual', 'referral_accrual') THEN amount ELSE 0 END), 0) AS bonus_accrued,
           COALESCE(SUM(CASE WHEN type = 'redeem' THEN amount ELSE 0 END), 0) AS bonus_redeemed
          FROM mkt_customer_bonus_transactions
         WHERE tenant_id = ?

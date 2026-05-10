@@ -963,9 +963,9 @@
         lifetimeUnit: level.lifetimeUnit,
         favoriteCategoryGroupId: level.favoriteCategoryGroupId,
         orderBonusRanges: level.orderBonusRanges,
-        favoriteCategoriesBonusPercent: level.favoriteCategoriesBonusPercent,
-        favoriteCategoriesLimit: level.favoriteCategoriesLimit,
-        favoriteCategoryIds: level.favoriteCategoryIds,
+        favoriteCategoriesBonusPercent: 0,
+        favoriteCategoriesLimit: 0,
+        favoriteCategoryIds: [],
         requirementAmount: level.requirementAmount,
         requirementMode: level.requirementMode,
         requirementOrders: level.requirementOrders,
@@ -2268,8 +2268,6 @@
   const bonusLevelAllowSimultaneousSwitch = right$("#bonusLevelAllowSimultaneousSwitch");
   const bonusLevelReferralBonusField = right$("#bonusLevelReferralBonusField");
   const bonusLevelReferralBonusPercentInput = right$("#bonusLevelReferralBonusPercentInput");
-  const bonusLevelFavoriteCategoriesBonusPercentInput = right$("#bonusLevelFavoriteCategoriesBonusPercentInput");
-  const bonusLevelFavoriteCategoriesLimitInput = right$("#bonusLevelFavoriteCategoriesLimitInput");
   const bonusLevelActivationFieldWrap = right$("#bonusLevelActivationFieldWrap");
   const bonusLevelActivationDelayValueWrap = right$("#bonusLevelActivationDelayValueWrap");
   const bonusLevelActivationDelayValueInput = right$("#bonusLevelActivationDelayValueInput");
@@ -9904,21 +9902,27 @@
     frame.footerEl.appendChild(actions);
   }
 
+  function getBonusCategoryGroupById(groupId) {
+    const id = Number(groupId || 0);
+    if (!(id > 0)) return null;
+    const groups = state.bonusSettingsEditing ? state.bonusCategoryGroupsDraft : state.bonusCategoryGroups;
+    return (Array.isArray(groups) ? groups : []).find((group) => Number(group?.id || 0) === id) || null;
+  }
+
+  function getBonusLevelFavoriteCategoryConfig(level = null) {
+    const current = level && typeof level === 'object' ? level : getActiveBonusLevelForInfo();
+    const selectedGroup = getBonusCategoryGroupById(current?.favoriteCategoryGroupId);
+    return {
+      group: selectedGroup,
+      bonusPercent: selectedGroup ? normalizeNumberInputValue(selectedGroup.favoriteCategoriesBonusPercent, 0) : 0,
+      limit: selectedGroup ? Math.max(0, Math.floor(Number(selectedGroup.favoriteCategoriesLimit || 0))) : 0,
+      categoryIds: selectedGroup ? normalizeBonusLevelFavoriteCategoryIds(selectedGroup.favoriteCategoryIds) : [],
+    };
+  }
+
   function formatBonusLevelFavoriteCategoriesHelpText(level = null) {
     const current = level && typeof level === 'object' ? level : getActiveBonusLevelForInfo();
-    const groupId = Number(current?.favoriteCategoryGroupId || 0);
-    const groups = state.bonusSettingsEditing ? state.bonusCategoryGroupsDraft : state.bonusCategoryGroups;
-    const selectedGroup = groups.find(g => Number(g.id) === groupId);
-
-    const bonusPercent = selectedGroup
-      ? normalizeNumberInputValue(selectedGroup.favoriteCategoriesBonusPercent, 0)
-      : normalizeNumberInputValue(current?.favoriteCategoriesBonusPercent, 0);
-    const limit = selectedGroup
-      ? Math.max(0, Math.floor(Number(selectedGroup.favoriteCategoriesLimit || 0)))
-      : Math.max(0, Math.floor(Number(current?.favoriteCategoriesLimit || 0)));
-    const favoriteCategoryIds = selectedGroup
-      ? normalizeBonusLevelFavoriteCategoryIds(selectedGroup.favoriteCategoryIds)
-      : normalizeBonusLevelFavoriteCategoryIds(current?.favoriteCategoryIds);
+    const { group: selectedGroup, bonusPercent, limit, categoryIds: favoriteCategoryIds } = getBonusLevelFavoriteCategoryConfig(current);
 
     if (!(bonusPercent > 0) && !(limit > 0)) {
       return 'Дополнительный бонус за любимые категории не настроен.';
@@ -9973,20 +9977,7 @@
     const isEditing = String(state.editingBonusLevelId || '').trim() === String(current?.id || '').trim();
     
     const groupId = Number(current?.favoriteCategoryGroupId || 0);
-    const groups = state.bonusSettingsEditing ? state.bonusCategoryGroupsDraft : state.bonusCategoryGroups;
-    const selectedGroup = groups.find(g => Number(g.id) === groupId);
-    
-    const selectedIds = selectedGroup 
-      ? normalizeBonusLevelFavoriteCategoryIds(selectedGroup.favoriteCategoryIds)
-      : normalizeBonusLevelFavoriteCategoryIds(current?.favoriteCategoryIds);
-    
-    const limit = selectedGroup
-      ? Math.max(0, Math.floor(Number(selectedGroup.favoriteCategoriesLimit || 0)))
-      : Math.max(0, Math.floor(Number(current?.favoriteCategoriesLimit || 0)));
-      
-    const bonusPercent = selectedGroup
-      ? normalizeNumberInputValue(selectedGroup.favoriteCategoriesBonusPercent, 0)
-      : normalizeNumberInputValue(current?.favoriteCategoriesBonusPercent, 0);
+    const { bonusPercent, limit, categoryIds: selectedIds } = getBonusLevelFavoriteCategoryConfig(current);
 
     bonusLevelFavoriteCategoriesIcons.innerHTML = '';
     
@@ -10346,32 +10337,6 @@
       bonusLevelReferralBonusPercentInput.value = String(normalizeBonusPercentInputValue(current.referralBonusPercent, 0) || 0);
       bonusLevelReferralBonusPercentInput.disabled = !isEditing || !isReferralSystemEnabled();
     }
-    
-    const groupId = Number(current?.favoriteCategoryGroupId || 0);
-    if (bonusLevelFavoriteCategoriesBonusPercentInput) {
-      const groups = state.bonusSettingsEditing ? state.bonusCategoryGroupsDraft : state.bonusCategoryGroups;
-      const selectedGroup = groups.find(g => Number(g.id) === groupId);
-      
-      const bonusPercent = selectedGroup
-        ? normalizeNumberInputValue(selectedGroup.favoriteCategoriesBonusPercent, 0)
-        : normalizeNumberInputValue(current.favoriteCategoriesBonusPercent, 0);
-        
-      bonusLevelFavoriteCategoriesBonusPercentInput.value = String(bonusPercent || 0);
-      bonusLevelFavoriteCategoriesBonusPercentInput.disabled = !isEditing || !!groupId;
-      bonusLevelFavoriteCategoriesBonusPercentInput.title = groupId ? 'Настраивается в группе категорий' : '';
-    }
-    if (bonusLevelFavoriteCategoriesLimitInput) {
-      const groups = state.bonusSettingsEditing ? state.bonusCategoryGroupsDraft : state.bonusCategoryGroups;
-      const selectedGroup = groups.find(g => Number(g.id) === groupId);
-      
-      const limit = selectedGroup
-        ? Math.max(0, Math.floor(Number(selectedGroup.favoriteCategoriesLimit || 0)))
-        : Math.max(0, Math.floor(Number(current.favoriteCategoriesLimit || 0)));
-        
-      bonusLevelFavoriteCategoriesLimitInput.value = String(limit || 0);
-      bonusLevelFavoriteCategoriesLimitInput.disabled = !isEditing || !!groupId;
-      bonusLevelFavoriteCategoriesLimitInput.title = groupId ? 'Настраивается в группе категорий' : '';
-    }
     if (bonusLevelRangeSummary) {
       const rangeSummaryText = formatBonusLevelRangeSummary(current);
       const rangeHelpText = formatBonusLevelRangeHelpText(current);
@@ -10461,13 +10426,8 @@
       const cashback = normalizeNumberInputValue(current.cashbackPercent, 1);
       previewCashbackValue.textContent = `${cashback}%`;
     }
-    const groupId = Number(current.favoriteCategoryGroupId || 0);
-    const groups = state.bonusSettingsEditing ? state.bonusCategoryGroupsDraft : state.bonusCategoryGroups;
-    const selectedGroup = groups.find(g => Number(g.id) === groupId);
-
-    const previewCategoryLimit = selectedGroup
-      ? Math.max(0, Math.floor(Number(selectedGroup.favoriteCategoriesLimit || 0)))
-      : Math.max(0, Math.floor(Number(current.favoriteCategoriesLimit || 0)));
+    const favoriteCategoryConfig = getBonusLevelFavoriteCategoryConfig(current);
+    const previewCategoryLimit = favoriteCategoryConfig.limit;
       
     if (previewCategorySide) {
       previewCategorySide.classList.toggle('hidden', previewCategoryLimit <= 0);
@@ -10476,10 +10436,7 @@
       previewCategoryCount.textContent = String(previewCategoryLimit);
     }
     if (previewCategoryValue) {
-      const categoryBonus = selectedGroup
-        ? normalizeNumberInputValue(selectedGroup.favoriteCategoriesBonusPercent, 0)
-        : normalizeNumberInputValue(current.favoriteCategoriesBonusPercent, 0);
-      previewCategoryValue.textContent = `${categoryBonus}%`;
+      previewCategoryValue.textContent = `${favoriteCategoryConfig.bonusPercent}%`;
     }
     if (previewQr) {
       previewQr.style.display = current.qrEnabled === false ? 'none' : 'flex';
@@ -10564,9 +10521,9 @@
       lifetimeValue: normalizeBonusLevelTimingValue(draft.lifetimeValue, 0),
       lifetimeUnit: normalizeBonusLevelLifetimeUnit(draft.lifetimeUnit),
       orderBonusRanges: sanitizeBonusRangeRows(draft.orderBonusRanges),
-      favoriteCategoriesBonusPercent: normalizeNumberInputValue(draft.favoriteCategoriesBonusPercent, 0),
-      favoriteCategoriesLimit: normalizeNumberInputValue(draft.favoriteCategoriesLimit, 0),
-      favoriteCategoryIds: normalizeBonusLevelFavoriteCategoryIds(draft.favoriteCategoryIds),
+      favoriteCategoriesBonusPercent: 0,
+      favoriteCategoriesLimit: 0,
+      favoriteCategoryIds: [],
       favoriteCategoryGroupId: draft.favoriteCategoryGroupId ?? null,
       requirementAmount: normalizeBonusLevelRequirementValue(draft.requirementAmount),
       requirementMode: normalizeBonusLevelRequirementMode(draft.requirementMode),
@@ -10660,8 +10617,9 @@
       const baseColor = normalizeHexColor(level.baseColor, '#1f8d2e');
       const contentColor = normalizeHexColor(level.contentColor, '#ffffff');
       const cashbackValue = normalizeNumberInputValue(level.cashbackPercent, 1);
-      const favoriteCategoryBonus = normalizeNumberInputValue(level.favoriteCategoriesBonusPercent, 0);
-      const favoriteCategoryLimit = Math.max(0, Math.floor(Number(level.favoriteCategoriesLimit || 0)));
+      const favoriteCategoryConfig = getBonusLevelFavoriteCategoryConfig(level);
+      const favoriteCategoryBonus = favoriteCategoryConfig.bonusPercent;
+      const favoriteCategoryLimit = favoriteCategoryConfig.limit;
       const card = document.createElement('div');
       card.className = `banner-placement-card bonus-level-card${isActive ? ' is-active' : ''}${isFlipped ? ' is-flipped' : ''}${isFlipping ? ' is-flipping' : ''}`;
       card.dataset.bonusLevelId = levelId;
@@ -23855,22 +23813,6 @@
     bonusLevelReferralBonusPercentInput.addEventListener('input', () => {
       applyBonusLevelEditorDraftPatch({
         referralBonusPercent: normalizeBonusPercentInputValue(bonusLevelReferralBonusPercentInput.value, 0),
-      });
-    });
-  }
-
-  if (bonusLevelFavoriteCategoriesBonusPercentInput) {
-    bonusLevelFavoriteCategoriesBonusPercentInput.addEventListener('input', () => {
-      applyBonusLevelEditorDraftPatch({
-        favoriteCategoriesBonusPercent: normalizeNumberInputValue(bonusLevelFavoriteCategoriesBonusPercentInput.value, 0),
-      });
-    });
-  }
-
-  if (bonusLevelFavoriteCategoriesLimitInput) {
-    bonusLevelFavoriteCategoriesLimitInput.addEventListener('input', () => {
-      applyBonusLevelEditorDraftPatch({
-        favoriteCategoriesLimit: Math.max(0, Math.floor(Number(bonusLevelFavoriteCategoriesLimitInput.value || 0))),
       });
     });
   }

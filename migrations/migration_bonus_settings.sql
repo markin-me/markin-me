@@ -31,9 +31,14 @@ ALTER TABLE mkt_bonus_levels
   ADD COLUMN retention_bonus_accrued DECIMAL(14,2) DEFAULT NULL AFTER retention_referrals,
   ADD COLUMN retention_bonus_redeemed DECIMAL(14,2) DEFAULT NULL AFTER retention_bonus_accrued;
 
+ALTER TABLE mkt_referral_rewards
+  ADD COLUMN reward_key VARCHAR(160) DEFAULT NULL AFTER reward_type,
+  ADD COLUMN level_depth TINYINT UNSIGNED DEFAULT NULL AFTER percent,
+  ADD UNIQUE KEY uq_mkt_referral_rewards_reward_key (tenant_id, reward_key),
+  ADD KEY idx_mkt_referral_rewards_level_depth (tenant_id, level_depth, status);
+
 ALTER TABLE ten_tenants
   ADD COLUMN site_menu_items_json TEXT DEFAULT NULL COMMENT 'Tenant storefront menu items JSON';
-
 
 
 

@@ -377,6 +377,7 @@
 
   const CUSTOMER_TOKEN_KEY = `shop_customer_token_t${tenantId}`;
   const CUSTOMER_CACHE_KEY = `shop_customer_cache_t${tenantId}`;
+  const REFERRAL_CODE_KEY = `shop_referral_code_t${tenantId}`;
   let meBootstrapPromise = null;
   let meBootstrapToken = "";
   let meBootstrapLoaded = false;
@@ -1019,7 +1020,11 @@
 
   function buildBonusCardsConditionsProgressHtml(level) {
     if (String(level?.access_type || "").trim() !== "conditions") return "";
-    const progress = level?.progress && typeof level.progress === "object" ? level.progress : {};
+    const hasProgress = !!(level?.progress && typeof level.progress === "object");
+    const progress = hasProgress ? level.progress : {};
+    const accountLevelId = Number(state.homeBonusConfig?.account?.level_id || 0);
+    const isCurrentLevel = accountLevelId > 0 && accountLevelId === Number(level?.id || 0);
+    if (isCurrentLevel && !hasProgress) return "";
     const rows = [];
     const amount = Math.max(0, Number(progress.amount_target || level?.requirement_amount || 0));
     const orders = Math.max(0, Math.floor(Number(progress.orders_target || level?.requirement_orders || 0)));
@@ -1525,6 +1530,146 @@
     `;
   }
 
+  function formatReferralBonusValue(value, signed = false) {
+    const amount = Math.round(Number(value || 0));
+    if (signed && amount > 0) return `+${moneyFmt.format(amount)}`;
+    return moneyFmt.format(amount);
+  }
+
+  function formatReferralOrdersText(count) {
+    const value = Math.max(0, Math.floor(Number(count || 0)));
+    const mod10 = value % 10;
+    const mod100 = value % 100;
+    if (mod10 === 1 && mod100 !== 11) return `${value} заказ`;
+    if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return `${value} заказа`;
+    return `${value} заказов`;
+  }
+
+  function buildReferralAvatarHtml(referral) {
+    const photo = str(referral?.photo || "").trim();
+    if (photo) return `<img src="${escapeHtml(photo)}" alt="" loading="lazy" />`;
+    const orders = Number(referral?.orders_count || 0);
+    const depth = Math.max(1, Math.floor(Number(referral?.level_depth || 1)));
+    const icon = depth > 1 ? "fas fa-users" : (orders > 0 ? "fas fa-user-check" : "fas fa-user");
+    return `<i class="${icon}" aria-hidden="true"></i>`;
+  }
+
+  function buildHomeReferralsSheetHtml(data = null, loading = false, error = "") {
+    const stats = data?.stats || {};
+    const inviteUrl = str(data?.invite_url || "");
+    const levels = Array.isArray(data?.levels) ? data.levels : [];
+    const referrals = Array.isArray(data?.referrals) ? data.referrals : [];
+    const chips = [
+      `<button class="shop-referrals-filter-chip is-active" type="button" data-referrals-filter="all">Все</button>`,
+      ...levels.map((level) => {
+        const depth = Math.max(1, Math.floor(Number(level?.depth || level?.invited_count || 0)));
+        const title = str(level?.title || `${depth}-го уровня`);
+        return `<button class="shop-referrals-filter-chip" type="button" data-referrals-filter="${escapeHtml(depth)}">${escapeHtml(title)}</button>`;
+      }),
+    ].join("");
+    const rowsHtml = referrals.length
+      ? referrals.map((referral) => {
+        const depth = Math.max(1, Math.floor(Number(referral?.level_depth || 1)));
+        const name = str(referral?.name || "Клиент");
+        const levelTitle = str(referral?.level_title || `${depth}-й ур.`);
+        const rewardAmount = Number(referral?.reward_amount || 0);
+        return `
+          <div class="shop-referrals-row" data-referral-level="${escapeHtml(depth)}">
+            <div class="shop-referrals-avatar" aria-hidden="true">${buildReferralAvatarHtml(referral)}</div>
+            <div class="shop-referrals-row-main">
+              <strong>${escapeHtml(name)}</strong>
+              <span>${escapeHtml(formatReferralOrdersText(referral?.orders_count))}</span>
+            </div>
+            <div class="shop-referrals-row-side">
+              <span>${escapeHtml(levelTitle)}</span>
+              <strong>${formatReferralBonusValue(rewardAmount, true)} ${getShopBonusCoinIconHtml('1em', '2px')}</strong>
+            </div>
+          </div>
+        `;
+      }).join("")
+      : `<div class="shop-referrals-empty">${escapeHtml(loading ? "Загрузка..." : (error || "Рефералов пока нет"))}</div>`;
+    return `
+      <div class="shop-referrals-stats-row">
+        <div class="shop-referrals-stat-card">
+          <div class="shop-referrals-stat-title">Бонусы</div>
+          <div class="shop-referrals-stat-line">
+            <span>Всего</span>
+            <strong>${formatReferralBonusValue(stats.bonuses_total)} ${getShopBonusCoinIconHtml('1em', '2px')}</strong>
+          </div>
+          <div class="shop-referrals-stat-line">
+            <span>В этом месяце</span>
+            <strong>${formatReferralBonusValue(stats.bonuses_month)} ${getShopBonusCoinIconHtml('1em', '2px')}</strong>
+          </div>
+        </div>
+        <div class="shop-referrals-stat-card">
+          <div class="shop-referrals-stat-title">Рефералы</div>
+          <div class="shop-referrals-stat-line">
+            <span>Всего</span>
+            <strong>${moneyFmt.format(Number(stats.referrals_total || 0))}</strong>
+          </div>
+          <div class="shop-referrals-stat-line">
+            <span>В этом месяце</span>
+            <strong>${moneyFmt.format(Number(stats.referrals_month || 0))}</strong>
+          </div>
+        </div>
+      </div>
+      <div class="shop-referrals-invite-card">
+        <div class="shop-referrals-link-row">
+          <div class="shop-referrals-link-text">${escapeHtml(inviteUrl || "Ссылка появится после загрузки")}</div>
+          <button class="shop-referrals-copy-btn" type="button" data-referrals-copy-link aria-label="Скопировать ссылку">
+            <i class="fas fa-copy" aria-hidden="true"></i>
+          </button>
+        </div>
+        <button class="shop-referrals-invite-btn" type="button" data-referrals-share-link>Пригласить</button>
+      </div>
+      <div class="shop-referrals-filter-sticky">
+        <div class="shop-referrals-filter-chips no-scrollbar" role="tablist" aria-label="Фильтр рефералов">
+          ${chips}
+        </div>
+      </div>
+      <div class="shop-referrals-list" aria-label="Список рефералов">
+        ${rowsHtml}
+      </div>
+    `;
+  }
+
+  function bindHomeReferralsSheetActions(wrap, data = null) {
+    if (!wrap) return;
+    const inviteUrl = str(data?.invite_url || "");
+    const copyInviteUrl = async () => {
+      if (!inviteUrl) return;
+      try {
+        await navigator.clipboard.writeText(inviteUrl);
+      } catch {}
+    };
+    wrap.querySelectorAll("[data-referrals-copy-link]").forEach((button) => {
+      button.addEventListener("click", copyInviteUrl);
+    });
+    wrap.querySelectorAll("[data-referrals-share-link]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        if (!inviteUrl) return;
+        if (navigator.share) {
+          try {
+            await navigator.share({ title: document.title || "Приглашение", url: inviteUrl });
+            return;
+          } catch {}
+        }
+        await copyInviteUrl();
+      });
+    });
+    wrap.querySelectorAll("[data-referrals-filter]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const filter = button.dataset.referralsFilter || "all";
+        wrap.querySelectorAll("[data-referrals-filter]").forEach((item) => {
+          item.classList.toggle("is-active", item === button);
+        });
+        wrap.querySelectorAll("[data-referral-level]").forEach((row) => {
+          row.classList.toggle("hidden", filter !== "all" && row.dataset.referralLevel !== filter);
+        });
+      });
+    });
+  }
+
   function openHomeReferralsSheet() {
     if (!window.AppModal || typeof window.AppModal.open !== "function") return;
     const wrap = document.createElement("div");
@@ -1613,6 +1758,7 @@
         </div>
       </div>
     `;
+    wrap.innerHTML = buildHomeReferralsSheetHtml(null, true);
     wrap.querySelectorAll("[data-referrals-filter]").forEach((button) => {
       button.addEventListener("click", () => {
         const filter = button.dataset.referralsFilter || "all";
@@ -1624,6 +1770,17 @@
         });
       });
     });
+    bindHomeReferralsSheetActions(wrap, null);
+    apiJson("/api/public/bonus/referrals")
+      .then((json) => {
+        const data = json?.data || {};
+        wrap.innerHTML = buildHomeReferralsSheetHtml(data, false);
+        bindHomeReferralsSheetActions(wrap, data);
+      })
+      .catch(() => {
+        wrap.innerHTML = buildHomeReferralsSheetHtml(null, false, "Не удалось загрузить рефералов");
+        bindHomeReferralsSheetActions(wrap, null);
+      });
     sheetNavigationState.type = "referrals";
     sheetNavigationState.screen = "main";
     sheetNavigationState.data = null;
@@ -2757,6 +2914,25 @@
       return raw ? JSON.parse(raw) : null;
     } catch { return null; }
   }
+  function normalizeReferralCode(value) {
+    const code = str(value || "").trim().slice(0, 96);
+    return /^[a-zA-Z0-9_-]+$/.test(code) ? code : "";
+  }
+  function captureReferralCodeFromUrl() {
+    try {
+      const params = new URLSearchParams(window.location.search || "");
+      const code = normalizeReferralCode(
+        params.get("ref")
+        || params.get("referral")
+        || params.get("referral_code")
+        || params.get("referralCode")
+      );
+      if (code) localStorage.setItem(REFERRAL_CODE_KEY, code);
+    } catch {}
+  }
+  function getStoredReferralCode() {
+    try { return normalizeReferralCode(localStorage.getItem(REFERRAL_CODE_KEY) || ""); } catch { return ""; }
+  }
   function clearCustomer() {
     setCustomerToken("");
     setCustomerCache(null);
@@ -2773,17 +2949,20 @@
       window.syncBenefitsBadgesUi(0);
     }
   }
+  captureReferralCodeFromUrl();
 
   // -----------------------------
   // API
   // -----------------------------
   async function apiJson(url, opts = {}) {
     const token = getCustomerToken();
+    const referralCode = getStoredReferralCode();
     const headers = {
       "x-tenant-id": String(tenantId),
       "x-store-id": String(getActiveStoreId()),
       ...(opts.body ? { "Content-Type": "application/json" } : {}),
       ...(token ? { "x-customer-token": token } : {}),
+      ...(referralCode ? { "x-referral-code": referralCode } : {}),
       ...(opts.headers || {}),
     };
 

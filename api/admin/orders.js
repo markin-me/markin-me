@@ -719,6 +719,16 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
     const normalizedOrderId = Number(orderId || 0);
     const normalizedCustomerId = Number(customerId || 0);
     if (!(normalizedTenantId > 0) || !(normalizedOrderId > 0) || !(normalizedCustomerId > 0)) return { redeemed: 0, accrued: 0 };
+    const settleReferralRewards = async () => {
+      const provider = getOrderBenefitsAccrualProvider();
+      if (!provider || typeof provider.settleReferralRewards !== "function") return null;
+      return provider.settleReferralRewards({
+        queryable,
+        tenantId: normalizedTenantId,
+        orderId: normalizedOrderId,
+        customerId: normalizedCustomerId,
+      });
+    };
     const benefitsMeta = parseOrderBenefitsMetaJson(benefitsMetaRaw);
     const redeemAmount = getOrderBonusRedeemAmount(discountsJson, benefitsMeta);
     if (redeemAmount > 0) {
@@ -739,7 +749,10 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       [normalizedTenantId, normalizedCustomerId]
     );
     const account = Array.isArray(accountRows) && accountRows.length ? accountRows[0] : null;
-    if (!(Number(account?.id || 0) > 0)) return { redeemed: 0, accrued: 0 };
+    if (!(Number(account?.id || 0) > 0)) {
+      await settleReferralRewards();
+      return { redeemed: 0, accrued: 0 };
+    }
 
     const redeemReason = `order:${normalizedOrderId}:bonus_redeem`;
     const existingRedeem = await getBonusTransactionAmount(queryable, normalizedTenantId, normalizedOrderId, "redeem", redeemReason);
@@ -800,6 +813,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
     if (settings.enabled) {
       await promoteOrderBonusAccountIfEligible(queryable, normalizedTenantId, normalizedCustomerId);
     }
+    await settleReferralRewards();
     return { redeemed, accrued };
   }
 
