@@ -398,13 +398,90 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     );
   }
 
-  function buildReferralInviteUrl(req, code) {
+  function firstHeaderValue(raw, fallback = '') {
+    if (!raw) return fallback;
+    if (Array.isArray(raw)) return String(raw[0] || '').trim();
+    return String(raw || '').split(',')[0].trim();
+  }
+
+  function normalizePublicHost(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+    try {
+      const parsed = new URL(raw.includes('://') ? raw : `https://${raw}`);
+      return String(parsed.host || '').trim().toLowerCase();
+    } catch (_) {
+      return raw
+        .replace(/^https?:\/\//i, '')
+        .split('/')[0]
+        .trim()
+        .toLowerCase();
+    }
+  }
+
+  function resolveTenantSubdomainBaseHost(req, subdomain = '') {
+    const candidates = [
+      process.env.TENANT_SUBDOMAIN_BASE_DOMAIN,
+      process.env.TENANT_BASE_DOMAIN,
+      process.env.APP_BASE_DOMAIN,
+      process.env.PUBLIC_BASE_DOMAIN,
+      process.env.SITE_BASE_DOMAIN,
+    ];
+    for (const candidate of candidates) {
+      const host = normalizePublicHost(candidate);
+      if (host) return host;
+    }
+    const currentHost = normalizePublicHost(firstHeaderValue(req?.headers?.['x-forwarded-host'], req?.get ? req.get('host') : ''));
+    if (!currentHost) return '';
+    const normalizedSubdomain = String(subdomain || '').trim().toLowerCase();
+    if (normalizedSubdomain && currentHost.startsWith(`${normalizedSubdomain}.`)) {
+      return currentHost.slice(normalizedSubdomain.length + 1);
+    }
+    return currentHost;
+  }
+
+  function resolveTenantPublicProtocol(req, host) {
+    const explicit = String(process.env.TENANT_SUBDOMAIN_PROTOCOL || '').trim().toLowerCase();
+    if (explicit === 'http' || explicit === 'https') return explicit;
+    const normalizedHost = String(host || '').trim().toLowerCase();
+    const protoHeader = firstHeaderValue(req?.headers?.['x-forwarded-proto'], '');
+    const currentProtocol = String(protoHeader || req?.protocol || '').trim().toLowerCase().replace(/:$/, '');
+    if (normalizedHost.includes('localhost') || /^\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?$/.test(normalizedHost)) {
+      return currentProtocol === 'https' ? 'https' : 'http';
+    }
+    return 'https';
+  }
+
+  function resolveTenantDomainProtocol(req, host) {
+    const normalizedHost = String(host || '').trim().toLowerCase();
+    const protoHeader = firstHeaderValue(req?.headers?.['x-forwarded-proto'], '');
+    const currentProtocol = String(protoHeader || req?.protocol || '').trim().toLowerCase().replace(/:$/, '');
+    if (normalizedHost.includes('localhost') || /^\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?$/.test(normalizedHost)) {
+      return currentProtocol === 'https' ? 'https' : 'http';
+    }
+    return 'https';
+  }
+
+  async function buildReferralInviteUrl(queryable, req, tenantId, code) {
     const normalizedCode = normalizeReferralCode(code);
     if (!normalizedCode) return '';
-    const protoHeader = String(req?.headers?.['x-forwarded-proto'] || '').split(',')[0].trim();
-    const proto = protoHeader || req?.protocol || 'http';
-    const host = req?.get ? req.get('host') : '';
+    const [[tenantRow]] = await queryable.query(
+      `SELECT subdomain, custom_domain, custom_domain_ascii
+       FROM ten_tenants
+       WHERE id=?
+       LIMIT 1`,
+      [tenantId]
+    );
+    const customHost = normalizePublicHost(tenantRow?.custom_domain_ascii || tenantRow?.custom_domain || '');
+    if (customHost) {
+      const proto = resolveTenantDomainProtocol(req, customHost);
+      return `${proto}://${customHost}/?ref=${encodeURIComponent(normalizedCode)}`;
+    }
+    const subdomain = String(tenantRow?.subdomain || '').trim().toLowerCase();
+    const baseHost = resolveTenantSubdomainBaseHost(req, subdomain);
+    const host = subdomain && baseHost ? `${subdomain}.${baseHost}` : baseHost;
     if (!host) return `?ref=${encodeURIComponent(normalizedCode)}`;
+    const proto = resolveTenantPublicProtocol(req, host);
     return `${proto}://${host}/?ref=${encodeURIComponent(normalizedCode)}`;
   }
 
@@ -590,6 +667,20 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     );
     const inviterCustomerId = Number(codeRow?.customer_id || 0);
     if (!(inviterCustomerId > 0) || inviterCustomerId === normalizedCustomerId) return null;
+    const ancestrySeen = new Set([normalizedCustomerId]);
+    let parentCustomerId = inviterCustomerId;
+    for (let guard = 0; guard < 50 && parentCustomerId > 0; guard += 1) {
+      if (parentCustomerId === normalizedCustomerId || ancestrySeen.has(parentCustomerId)) return null;
+      ancestrySeen.add(parentCustomerId);
+      const [[parentReferral]] = await queryable.query(
+        `SELECT inviter_customer_id
+         FROM mkt_customer_referrals
+         WHERE tenant_id=? AND referral_customer_id=? AND status <> 'cancelled'
+         LIMIT 1`,
+        [normalizedTenantId, parentCustomerId]
+      );
+      parentCustomerId = Number(parentReferral?.inviter_customer_id || 0);
+    }
     const [[existing]] = await queryable.query(
       `SELECT id
        FROM mkt_customer_referrals
@@ -723,7 +814,10 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     });
     const maxDepth = Math.max(0, ...Array.from(levelsByDepth.keys()));
     let recipientCustomerId = directInviterId;
+    const referralChainSeen = new Set([normalizedCustomerId]);
     for (let depth = 1; depth <= maxDepth && recipientCustomerId > 0; depth += 1) {
+      if (referralChainSeen.has(recipientCustomerId)) break;
+      referralChainSeen.add(recipientCustomerId);
       const level = levelsByDepth.get(depth);
       if (level) {
         const percent = Number(level.percent || 0);
@@ -2673,7 +2767,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         .filter((row) => row.depth > 0);
       const maxDepth = Math.max(1, ...activeLevels.map((row) => row.depth));
       const referrals = [];
-      let frontier = [{ customerId, inviterPath: [] }];
+      const seenReferralCustomerIds = new Set([customerId]);
+      let frontier = [{ customerId }];
       for (let depth = 1; depth <= maxDepth && frontier.length; depth += 1) {
         const inviterIds = [...new Set(frontier.map((item) => Number(item.customerId || 0)).filter((id) => id > 0))];
         if (!inviterIds.length) break;
@@ -2689,11 +2784,12 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
             AND c.id=r.referral_customer_id
            LEFT JOIN (
              SELECT source_customer_id, COALESCE(SUM(amount), 0) AS reward_amount
-             FROM mkt_referral_rewards
-             WHERE tenant_id=?
-               AND recipient_customer_id=?
-               AND status='accrued'
-             GROUP BY source_customer_id
+              FROM mkt_referral_rewards
+              WHERE tenant_id=?
+                AND recipient_customer_id=?
+                AND status='accrued'
+                AND reward_type IN ('first_purchase', 'level_percent')
+              GROUP BY source_customer_id
            ) reward_stats
              ON reward_stats.source_customer_id=r.referral_customer_id
            WHERE r.tenant_id=?
@@ -2705,6 +2801,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         const nextFrontier = [];
         (Array.isArray(rows) ? rows : []).forEach((row) => {
           const referralCustomerId = Number(row.referral_customer_id || 0);
+          if (!(referralCustomerId > 0) || seenReferralCustomerIds.has(referralCustomerId)) return;
+          seenReferralCustomerIds.add(referralCustomerId);
           referrals.push({
             id: Number(row.referral_id || 0),
             customer_id: referralCustomerId,
@@ -2720,7 +2818,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
             first_purchase_order_id: row.first_purchase_order_id == null ? null : Number(row.first_purchase_order_id),
             first_purchase_paid_at: row.first_purchase_paid_at || null,
           });
-          if (referralCustomerId > 0) nextFrontier.push({ customerId: referralCustomerId });
+          nextFrontier.push({ customerId: referralCustomerId });
         });
         frontier = nextFrontier;
       }
@@ -2730,7 +2828,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
             COALESCE(SUM(amount), 0) AS total_amount,
             COALESCE(SUM(CASE WHEN created_at >= DATE_FORMAT(CURDATE(), '%Y-%m-01') THEN amount ELSE 0 END), 0) AS month_amount
          FROM mkt_referral_rewards
-         WHERE tenant_id=? AND recipient_customer_id=? AND status='accrued'`,
+         WHERE tenant_id=? AND recipient_customer_id=? AND status='accrued'
+           AND reward_type IN ('first_purchase', 'level_percent')`,
         [tenantId, customerId]
       );
       const monthReferralCount = referrals.filter((row) => {
@@ -2743,7 +2842,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       return res.json({
         ok: true,
         data: {
-          invite_url: buildReferralInviteUrl(req, referralCode?.code || ''),
+          invite_url: await buildReferralInviteUrl(db, req, tenantId, referralCode?.code || ''),
           code: referralCode?.code || '',
           stats: {
             bonuses_total: Number(rewardStats?.total_amount || 0),

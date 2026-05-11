@@ -25164,6 +25164,9 @@ function renderSheetAddressList() {
           fetchMeSafeVerifiedToken = String(json.token);
         }
         if (json.customer) setCustomerCache(json.customer);
+        if (typeof window.refreshShopHomeBonusConfigUi === "function") {
+          await window.refreshShopHomeBonusConfigUi({ force: true });
+        }
 
         const me = json.customer || await fetchMeSafe();
         await refreshAddressState({ force: true });
@@ -30410,7 +30413,7 @@ function renderSheetAddressList() {
     clearCheckoutPromoAuthResume();
     saveCheckoutDraft({});
     try { await apiJson("/api/public/auth/logout", { method: "POST", body: {} }); } catch {}
-    clearCustomer();
+    clearCustomer({ fullReset: true });
     await refreshAddressState();
     if (closeModal && window.AppModal) window.AppModal.close("sheet");
     return true;

@@ -20455,6 +20455,51 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   opacity:.9;
 }
 
+.bonus-level-preview-title.bonus-level-preview-title--stacked{
+  align-items:flex-start;
+  gap:7px;
+  overflow:visible;
+  text-overflow:clip;
+  white-space:normal;
+}
+
+.bonus-level-preview-title--stacked .bonus-level-preview-title-logo{
+  display:block;
+  flex:0 0 auto;
+  width:32px;
+  height:32px;
+  border-radius:3px;
+  object-fit:contain;
+}
+
+.bonus-level-preview-title--stacked .bonus-level-preview-title-text{
+  display:flex;
+  min-width:0;
+  flex-direction:column;
+  gap:2px;
+  overflow:hidden;
+}
+
+.bonus-level-preview-title--stacked .bonus-level-preview-program-name,
+.bonus-level-preview-title--stacked .bonus-level-preview-level-name{
+  display:block;
+  max-width:100%;
+  font-size:11px;
+  line-height:1.1;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+.bonus-level-preview-title--stacked .bonus-level-preview-program-name{
+  font-weight:700;
+}
+
+.bonus-level-preview-title--stacked .bonus-level-preview-level-name{
+  font-weight:600;
+  opacity:.84;
+}
+
 .bonus-level-preview-bonus-label{
   margin-top:14px;
   font-size:12px;

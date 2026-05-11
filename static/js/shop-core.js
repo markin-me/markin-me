@@ -944,7 +944,10 @@
     header.classList.toggle("is-shop-sheet-shell", !!active);
   }
 
-  function buildBonusLevelPreviewCardHtml(level) {
+  function buildBonusLevelPreviewCardHtml(level, options = {}) {
+    const isHomeCard = options.homeCard === true;
+    const stackedTitle = options.stackedTitle !== false;
+    const showQr = options.showQr !== false;
     const mainColor = normalizeShopHexColor(level?.main_color || level?.design_color, "#46b13b");
     const baseColor = normalizeShopHexColor(level?.base_color, "#1f8d2e");
     const contentColor = normalizeShopHexColor(level?.content_color, "#ffffff");
@@ -967,19 +970,19 @@
       ? (state.homeBonusConfig?.settings?.bonus_program_logo_paid || state.homeBonusConfig?.settings?.bonus_program_logo || "")
       : (state.homeBonusConfig?.settings?.bonus_program_logo_base || state.homeBonusConfig?.settings?.bonus_program_logo || "");
     const levelTitle = level?.title || "Уровень";
-    const logoHtml = programLogo ? `<img src="${escapeHtml(programLogo)}" style="width:1.1em;height:1.1em;border-radius:2px;margin-right:4px;object-fit:contain;display:inline-block;vertical-align:middle;">` : "";
+    const logoSize = stackedTitle ? "2.6em" : "1.1em";
+    const logoHtml = programLogo ? `<img class="shop-home-bonus-card__program-logo" src="${escapeHtml(programLogo)}" style="width:${logoSize};height:${logoSize};border-radius:2px;margin-right:${stackedTitle ? "0" : "4px"};object-fit:contain;display:inline-block;vertical-align:middle;">` : "";
+    const titleHtml = stackedTitle
+      ? `${logoHtml}<span class="shop-home-bonus-card__title-text"><span class="shop-home-bonus-card__program-name">${escapeHtml(programName)}</span><span class="shop-home-bonus-card__level-name">${escapeHtml(levelTitle)}</span></span>`
+      : `${logoHtml}<span style="font-weight:600;margin-right:4px;">${escapeHtml(programName)}</span><span style="opacity:0.8;">${escapeHtml(levelTitle)}</span>`;
 
     return `
       <div class="bonus-level-preview-card" style="background:${escapeHtml(baseColor)};">
         <div class="bonus-level-preview-main" style="background:${escapeHtml(mainColor)};color:${escapeHtml(contentColor)};">
-          <div class="bonus-level-preview-title" style="${titleStyle}">
-            ${logoHtml}
-            <span style="font-weight:600;margin-right:4px;">${escapeHtml(programName)}</span>
-            <span style="opacity:0.8;">${escapeHtml(levelTitle)}</span>
-          </div>
+          <div class="bonus-level-preview-title${stackedTitle ? " shop-home-bonus-card__title" : ""}" style="${titleStyle}">${titleHtml}</div>
           <div class="bonus-level-preview-bonus-label" style="color:${escapeHtml(contentColor)};">${escapeHtml(coinName)}</div>
           <div class="bonus-level-preview-bonus-value" style="color:${escapeHtml(contentColor)};">0 ${getShopBonusCoinIconHtml('1em', '2px')}</div>
-          <div class="bonus-level-preview-qr" style="${qrStyle}"><span>QR</span></div>
+          ${showQr ? `<div class="bonus-level-preview-qr" style="${qrStyle}"><span>QR</span></div>` : ""}
         </div>
         <div class="bonus-level-preview-sub" style="color:${escapeHtml(contentColor)};">
           <div class="bonus-level-preview-cashback-side">
@@ -1003,6 +1006,7 @@
     if (settings.referral_program_enabled !== true) return null;
     const levels = Array.isArray(config?.referral_levels) ? config.referral_levels : [];
     const firstLevel = levels.find((level) => level?.is_active !== false) || null;
+    const totalPercent = getHomeReferralPercentTotal(firstLevel?.percent, config);
     return {
       mainColor: normalizeShopHexColor(settings.referral_card_main_color, "#f3f4f6"),
       baseColor: normalizeShopHexColor(settings.referral_card_base_color, "#d1d5db"),
@@ -1012,8 +1016,31 @@
       titleBackgroundEnabled: settings.referral_card_title_background_enabled !== false,
       titleBackgroundColor: normalizeShopHexColor(settings.referral_card_title_background_color, "#ffffff"),
       titleBackgroundOpacity: normalizeShopOpacity(settings.referral_card_title_background_opacity, 90),
-      percent: normalizeShopCardPercent(firstLevel?.percent, 0),
+      percent: formatShopBonusNumber(totalPercent, 0),
     };
+  }
+
+  function getHomeCurrentBonusLevelForReferral(config = state.homeBonusConfig) {
+    const levels = Array.isArray(config?.levels) ? config.levels : [];
+    if (!levels.length) return null;
+    const accountLevelId = Number(config?.account?.level_id || 0);
+    if (accountLevelId > 0) {
+      const current = levels.find((level) => Number(level?.id || 0) === accountLevelId);
+      if (current) return current;
+    }
+    return levels.find((level) => level?.is_active !== false) || levels[0] || null;
+  }
+
+  function getHomeReferralBonusExtraPercent(config = state.homeBonusConfig) {
+    const level = getHomeCurrentBonusLevelForReferral(config);
+    const value = Number(level?.referral_bonus_percent || 0);
+    return Number.isFinite(value) ? Math.max(0, value) : 0;
+  }
+
+  function getHomeReferralPercentTotal(basePercent, config = state.homeBonusConfig) {
+    const base = Number(basePercent || 0);
+    const safeBase = Number.isFinite(base) ? Math.max(0, base) : 0;
+    return safeBase + getHomeReferralBonusExtraPercent(config);
   }
 
   function buildHomeReferralCardHtml(config = state.homeBonusConfig) {
@@ -1028,8 +1055,8 @@
         <div class="bonus-level-preview-main" style="background:${escapeHtml(design.mainColor)};color:${escapeHtml(design.contentColor)};">
           <div class="bonus-level-preview-title" style="${titleStyle}">Рефералы</div>
           <div class="bonus-level-preview-bonus-label" style="color:${escapeHtml(design.contentColor)};">Приглашения</div>
-          <div class="bonus-level-preview-bonus-value" style="color:${escapeHtml(design.contentColor)};">0</div>
-          <div class="bonus-level-preview-qr" style="${qrStyle}"><span>QR</span></div>
+          <div class="bonus-level-preview-bonus-value" data-home-referral-invite-count style="color:${escapeHtml(design.contentColor)};">${escapeHtml(String(Number(config?.referral_stats?.referrals_total || 0)))}</div>
+          <div class="bonus-level-preview-qr" data-home-referral-qr style="${qrStyle}"><span>QR</span></div>
         </div>
         <div class="bonus-level-preview-sub" style="color:${escapeHtml(design.contentColor)};">
           <div class="bonus-level-preview-cashback-side">
@@ -1042,6 +1069,92 @@
         </div>
       </div>
     `;
+  }
+
+  let homeReferralQrLibraryPromise = null;
+  function ensureHomeReferralQrLibrary() {
+    if (typeof window.QRCode === "function") return Promise.resolve(true);
+    if (homeReferralQrLibraryPromise) return homeReferralQrLibraryPromise;
+    homeReferralQrLibraryPromise = new Promise((resolve) => {
+      const existing = document.querySelector('script[data-shop-referral-qr-lib="1"]');
+      if (existing) {
+        existing.addEventListener("load", () => resolve(typeof window.QRCode === "function"), { once: true });
+        existing.addEventListener("error", () => resolve(false), { once: true });
+        return;
+      }
+      const script = document.createElement("script");
+      script.src = "/static/vendor/qrcode/qrcode.min.js?v=20260406a";
+      script.async = true;
+      script.dataset.shopReferralQrLib = "1";
+      script.addEventListener("load", () => resolve(typeof window.QRCode === "function"), { once: true });
+      script.addEventListener("error", () => resolve(false), { once: true });
+      document.head.appendChild(script);
+    });
+    return homeReferralQrLibraryPromise;
+  }
+
+  function renderHomeReferralQr(mount, inviteUrl) {
+    if (!mount) return;
+    const url = str(inviteUrl || "");
+    mount.dataset.qrUrl = url;
+    mount.innerHTML = "";
+    mount.classList.remove("is-rendered");
+    if (!url) {
+      mount.innerHTML = "<span>QR</span>";
+      return;
+    }
+    mount.title = url;
+    if (typeof window.QRCode !== "function") {
+      mount.innerHTML = "<span>QR</span>";
+      ensureHomeReferralQrLibrary().then((ready) => {
+        if (ready && mount.isConnected && mount.dataset.qrUrl === url) {
+          renderHomeReferralQr(mount, url);
+        }
+      });
+      return;
+    }
+    try {
+      new window.QRCode(mount, {
+        text: url,
+        width: 72,
+        height: 72,
+        colorDark: "#111827",
+        colorLight: "#ffffff",
+        correctLevel: window.QRCode.CorrectLevel?.M || 0,
+      });
+      mount.classList.add("is-rendered");
+    } catch {
+      mount.innerHTML = "<span>QR</span>";
+    }
+  }
+
+  function renderHomeReferralCardData(data = null) {
+    if (!elHomeBonusCard || !data) return;
+    const countNode = elHomeBonusCard.querySelector("[data-home-referral-invite-count]");
+    if (countNode) countNode.textContent = String(Math.max(0, Math.floor(Number(data?.stats?.referrals_total || 0))));
+    renderHomeReferralQr(elHomeBonusCard.querySelector("[data-home-referral-qr]"), data?.invite_url || "");
+  }
+
+  function refreshHomeReferralCardData() {
+    const token = getCustomerToken();
+    if (!token || !isHomeBonusJoined()) return;
+    if (state._homeReferralStatsToken === token && state._homeReferralStats) {
+      renderHomeReferralCardData(state._homeReferralStats);
+      return;
+    }
+    if (state._homeReferralStatsLoading) return;
+    state._homeReferralStatsToken = token;
+    state._homeReferralStatsLoading = apiJson("/api/public/bonus/referrals")
+      .then((json) => {
+        state._homeReferralStats = json?.data || null;
+        renderHomeReferralCardData(state._homeReferralStats);
+      })
+      .catch((err) => {
+        console.error("Failed to load referral card stats:", err);
+      })
+      .finally(() => {
+        state._homeReferralStatsLoading = null;
+      });
   }
 
   function buildBonusCardsAdvantageRow(label, value, options = {}) {
@@ -1693,6 +1806,27 @@
     const inviteUrl = str(data?.invite_url || "");
     const levels = Array.isArray(data?.levels) ? data.levels : [];
     const referrals = Array.isArray(data?.referrals) ? data.referrals : [];
+    const referralExtraPercent = getHomeReferralBonusExtraPercent();
+    const levelBonusBlocksHtml = levels.length
+      ? `
+        <div class="shop-referrals-level-bonus-row" style="grid-template-columns:repeat(${escapeHtml(String(Math.max(1, levels.length)))},minmax(0,1fr));">
+          ${levels.map((level) => {
+            const depth = Math.max(1, Math.floor(Number(level?.depth || level?.invited_count || 0)));
+            const title = str(level?.title || `${depth}-й уровень`);
+            const basePercentText = formatShopBonusPercent(level?.percent, 0);
+            const extraPercentText = referralExtraPercent > 0
+              ? `<span class="shop-referrals-level-bonus-extra">+${escapeHtml(formatShopBonusPercent(referralExtraPercent, 0))}</span>`
+              : "";
+            return `
+              <div class="shop-referrals-level-bonus-card">
+                <span class="shop-referrals-level-bonus-title">${escapeHtml(title)}</span>
+                <strong>${escapeHtml(basePercentText)}${extraPercentText}</strong>
+              </div>
+            `;
+          }).join("")}
+        </div>
+      `
+      : "";
     const chips = [
       `<button class="shop-referrals-filter-chip is-active" type="button" data-referrals-filter="all">Все</button>`,
       ...levels.map((level) => {
@@ -1747,6 +1881,7 @@
           </div>
         </div>
       </div>
+      ${levelBonusBlocksHtml}
       <div class="shop-referrals-invite-card">
         <div class="shop-referrals-link-row">
           <div class="shop-referrals-link-text">${escapeHtml(inviteUrl || "Ссылка появится после загрузки")}</div>
@@ -1908,6 +2043,9 @@
     apiJson("/api/public/bonus/referrals")
       .then((json) => {
         const data = json?.data || {};
+        state._homeReferralStats = data;
+        state._homeReferralStatsToken = getCustomerToken();
+        renderHomeReferralCardData(data);
         wrap.innerHTML = buildHomeReferralsSheetHtml(data, false);
         bindHomeReferralsSheetActions(wrap, data);
       })
@@ -2682,14 +2820,15 @@
     state._homeBonusLoading = null;
   }
 
-  async function refreshHomeBonusConfigUi() {
+  async function refreshHomeBonusConfigUi(options = {}) {
     invalidateHomeBonusConfig();
-    const config = await loadHomeBonusConfig();
+    const config = await loadHomeBonusConfig(options);
     const sheet = document.querySelector(".shop-bonus-cards-sheet");
     if (sheet) renderBonusCardsSheetContent(sheet);
     syncMobileUiState("bonus-config-refresh");
     return config;
   }
+  window.refreshShopHomeBonusConfigUi = refreshHomeBonusConfigUi;
 
   async function joinHomeBonusProgram(options = {}) {
     const joinOptions = options && typeof options === "object" ? options : {};
@@ -2702,7 +2841,7 @@
             if (window.AppModal?.isOpen?.() && sheetNavigationState.type === "profile") {
               window.AppModal.close("sheet");
             }
-            void joinHomeBonusProgram({ reopenBonusSheet });
+            void joinHomeBonusProgram({ reopenBonusSheet, confirmed: true, showJoinModalAfterSuccess: true });
           },
         });
       }
@@ -2725,12 +2864,19 @@
     const homeActionBtn = elHomeBonusCard?.querySelector?.(".shop-home-bonus-card__action");
     if (homeActionBtn) homeActionBtn.disabled = true;
     try {
-      await apiJson("/api/public/bonus/join", { method: "POST", body: {} });
+      const joinJson = await apiJson("/api/public/bonus/join", { method: "POST", body: {} });
       await refreshHomeBonusConfigUi();
+      const joinedNow = !joinJson?.data?.already_joined;
       if (joinOptions.reopenBonusSheet) {
         openHomeBonusCardsSheet();
       }
-      if (typeof showToast === "function") showToast("Вы присоединились к бонусной программе");
+      if (joinedNow && joinOptions.showJoinModalAfterSuccess) {
+        openShopBonusProgramModal({
+          modalKey: "join",
+          level: getHomeBonusFirstLevel(state.homeBonusConfig),
+        });
+      }
+      if (!joinJson?.data?.already_joined && typeof showToast === "function") showToast("Вы присоединились к бонусной программе");
     } catch (err) {
       const msg = String(err?.message || "");
       if (err?.httpStatus === 401 || msg === "UNAUTHORIZED") {
@@ -2742,7 +2888,7 @@
               if (window.AppModal?.isOpen?.() && sheetNavigationState.type === "profile") {
                 window.AppModal.close("sheet");
               }
-              void joinHomeBonusProgram({ reopenBonusSheet });
+              void joinHomeBonusProgram({ reopenBonusSheet, confirmed: true, showJoinModalAfterSuccess: true });
             },
           });
         }
@@ -3078,14 +3224,53 @@
   function getStoredReferralCode() {
     try { return normalizeReferralCode(localStorage.getItem(REFERRAL_CODE_KEY) || ""); } catch { return ""; }
   }
-  function clearCustomer() {
+  function clearCustomer(options = {}) {
+    const fullReset = !!(options && options.fullReset);
     setCustomerToken("");
+    try { localStorage.removeItem("shop_customer_token"); } catch {}
     setCustomerCache(null);
     resetFavoritesCache();
     meBootstrapPromise = null;
     meBootstrapToken = "";
     meBootstrapLoaded = false;
+    state.homeBonusConfig = null;
+    state._homeBonusToken = "";
+    state._homeBonusLoading = null;
+    state._homeBonusModalEventId = null;
+    state._homeReferralStats = null;
+    state._homeReferralStatsToken = "";
+    state._homeReferralStatsLoading = null;
+    if (state.homeBonusFavoriteCategoriesByLevel instanceof Map) {
+      state.homeBonusFavoriteCategoriesByLevel.clear();
+    }
+    if (state._homeBonusFavoriteCategoriesLoading instanceof Map) {
+      state._homeBonusFavoriteCategoriesLoading.clear();
+    }
+    state.cartBonusRedeemEnabled = false;
+    state.cartBonusRedeemAvailableAmount = 0;
+    state.addresses = [];
+    state.selectedAddress = null;
     state._addressesInitialized = false;
+    state.addressEditingId = null;
+    state._addressFormResolved = null;
+    state._addressFormBackMode = null;
+    state._addressListBackMode = null;
+    state._addressPendingAddress = null;
+    state._addressPendingPickupStoreId = null;
+    if (fullReset) {
+      clearAddressDraft();
+      try { window._activeOrders = []; } catch {}
+      try { window._savedActiveOrdersForBack = []; } catch {}
+      try { window._activeOrdersSourceScreen = ""; } catch {}
+      setSelectedAddress(null);
+      renderHomeActiveOrdersBlock();
+      renderCatalogPromoBlock();
+      renderHomeBonusCard();
+      void loadHomeBonusConfig({ force: true, skipPendingModal: true });
+      if (typeof window.updateActiveOrdersBadge === "function") {
+        window.updateActiveOrdersBadge({ force: true }).catch(() => {});
+      }
+    }
     dispatchCustomerProfileChanged("clear");
     if (typeof window.invalidateBenefitsStore === "function") {
       window.invalidateBenefitsStore({ orderChanged: true, detailsChanged: true });
@@ -8257,7 +8442,8 @@
   function renderHomeBonusCard() {
     if (!elHomeBonusCard) return;
     const level = getHomeBonusFirstLevel(state.homeBonusConfig);
-    const referralCardHtml = buildHomeReferralCardHtml(state.homeBonusConfig);
+    const showReferralCard = !!getCustomerToken() && isHomeBonusJoined();
+    const referralCardHtml = showReferralCard ? buildHomeReferralCardHtml(state.homeBonusConfig) : "";
     if (!level && !referralCardHtml) {
       elHomeBonusCard.classList.add("hidden");
       elHomeBonusCard.innerHTML = "";
@@ -8265,7 +8451,7 @@
     }
 
     if (isHomeBonusJoined()) {
-      const bonusCardHtml = level ? buildBonusLevelPreviewCardHtml(level)
+      const bonusCardHtml = level ? buildBonusLevelPreviewCardHtml(level, { homeCard: true, showQr: false })
         .replace('class="bonus-level-preview-card"', 'class="bonus-level-preview-card shop-home-bonus-card__preview"') : "";
       elHomeBonusCard.innerHTML = `
         <div class="shop-home-cards-scroll no-scrollbar">
@@ -8281,6 +8467,7 @@
       if (balanceEl) balanceEl.innerHTML = formatShopBonusMoney(getBonusLevelPreviewBalance(level));
       if (level) bindHomeBonusLevelTitle(level);
       bindHomeReferralCard(elHomeBonusCard);
+      refreshHomeReferralCardData();
       bindHomeMainSiteMenuRow(elHomeBonusCard);
       void updateHomeBonusSiteMenuBadges(elHomeBonusCard);
       renderHomeActiveOrdersBlock();
@@ -8311,18 +8498,15 @@
       ? (state.homeBonusConfig?.settings?.bonus_program_logo_paid || state.homeBonusConfig?.settings?.bonus_program_logo || "")
       : (state.homeBonusConfig?.settings?.bonus_program_logo_base || state.homeBonusConfig?.settings?.bonus_program_logo || "");
     const levelTitle = level?.title || "Уровень";
-    const logoHtml = programLogo ? `<img src="${escapeHtml(programLogo)}" style="width:1.1em;height:1.1em;border-radius:2px;margin-right:4px;object-fit:contain;display:inline-block;vertical-align:middle;">` : "";
+    const logoHtml = programLogo ? `<img class="shop-home-bonus-card__program-logo" src="${escapeHtml(programLogo)}" style="width:2.6em;height:2.6em;border-radius:2px;margin-right:0;object-fit:contain;display:inline-block;vertical-align:middle;">` : "";
 
     const bonusCardHtml = level ? `
       <div class="bonus-level-preview-card shop-home-bonus-card__preview" style="background:${escapeHtml(baseColor)};">
         <div class="bonus-level-preview-main" style="background:${escapeHtml(mainColor)};color:${escapeHtml(contentColor)};">
-          <div class="bonus-level-preview-title" style="${titleStyle}">
-            ${logoHtml}
-            <span style="font-weight:600;margin-right:4px;">${escapeHtml(programName)}</span>
-            <span style="opacity:0.8;">${escapeHtml(levelTitle)}</span>
+          <div class="bonus-level-preview-title shop-home-bonus-card__title" style="${titleStyle}">
+            ${logoHtml}<span class="shop-home-bonus-card__title-text"><span class="shop-home-bonus-card__program-name">${escapeHtml(programName)}</span><span class="shop-home-bonus-card__level-name">${escapeHtml(levelTitle)}</span></span>
           </div>
           <button class="shop-home-bonus-card__action" type="button">${escapeHtml(actionText)}</button>
-          <div class="bonus-level-preview-qr" style="${qrStyle}"><span>QR</span></div>
         </div>
         <div class="bonus-level-preview-sub" style="color:${escapeHtml(contentColor)};">
           <div class="bonus-level-preview-cashback-side">
@@ -11688,10 +11872,22 @@ async function initAddresses() {
     elProductsGrid.appendChild(frag);
   }
 
-  function collectInitialCatalogWarmIds() {
+  function collectInitialCatalogWarmIds(opts = {}) {
     const productIds = [];
     const comboIds = [];
-    const categories = getVisibleCategories();
+    const productLimit = Math.max(1, Number(opts.productLimit || INITIAL_CATALOG_PREFETCH_PRODUCTS));
+    const comboLimit = Math.max(0, Number(opts.comboLimit || INITIAL_CATALOG_PREFETCH_COMBOS));
+    const wantedCategoryIds = Array.isArray(opts.categoryIds)
+      ? new Set(
+        opts.categoryIds
+          .map((id) => Number(id))
+          .filter((id) => Number.isFinite(id) && id > 0)
+      )
+      : null;
+    const categories = getVisibleCategories().filter((c) => {
+      if (!wantedCategoryIds || !wantedCategoryIds.size) return true;
+      return wantedCategoryIds.has(Number(c?.id || 0));
+    });
 
     for (const c of categories) {
       const cid = Number(c?.id || 0);
@@ -11704,7 +11900,7 @@ async function initAddresses() {
         const pid = Number(p?.id || 0);
         if (!Number.isFinite(pid) || pid <= 0) continue;
         productIds.push(pid);
-        if (productIds.length >= INITIAL_CATALOG_PREFETCH_PRODUCTS) break;
+        if (productIds.length >= productLimit) break;
       }
 
       const combos = Array.isArray(state.combosByCategory?.get(cid))
@@ -11714,31 +11910,38 @@ async function initAddresses() {
         const comboId = Number(combo?.id || 0);
         if (!Number.isFinite(comboId) || comboId <= 0) continue;
         comboIds.push(comboId);
-        if (comboIds.length >= INITIAL_CATALOG_PREFETCH_COMBOS) break;
+        if (comboIds.length >= comboLimit) break;
       }
 
       if (
-        productIds.length >= INITIAL_CATALOG_PREFETCH_PRODUCTS &&
-        comboIds.length >= INITIAL_CATALOG_PREFETCH_COMBOS
+        productIds.length >= productLimit &&
+        comboIds.length >= comboLimit
       ) {
         break;
       }
     }
 
     return {
-      productIds: Array.from(new Set(productIds)).slice(0, INITIAL_CATALOG_PREFETCH_PRODUCTS),
-      comboIds: Array.from(new Set(comboIds)).slice(0, INITIAL_CATALOG_PREFETCH_COMBOS),
+      productIds: Array.from(new Set(productIds)).slice(0, productLimit),
+      comboIds: Array.from(new Set(comboIds)).slice(0, comboLimit),
     };
   }
 
-  async function warmInitialCatalogInteractionData() {
-    const { productIds, comboIds } = collectInitialCatalogWarmIds();
-    if (!productIds.length && !comboIds.length) return;
+  async function warmInitialCatalogInteractionData(opts = {}) {
+    const productLimit = Math.max(1, Number(opts.productLimit || INITIAL_CATALOG_PREFETCH_PRODUCTS));
+    const comboLimit = Math.max(0, Number(opts.comboLimit || INITIAL_CATALOG_PREFETCH_COMBOS));
+    const { productIds, comboIds } = collectInitialCatalogWarmIds({
+      categoryIds: opts.categoryIds,
+      productLimit,
+      comboLimit,
+    });
+    if (!productIds.length && !comboIds.length) return true;
 
     try {
       await ensureShopLateLoaded();
-    } catch {
-      return;
+    } catch (err) {
+      console.warn("warmInitialCatalogInteractionData: shop-late load failed", err);
+      return false;
     }
 
     const warmTask = (async () => {
@@ -11746,8 +11949,8 @@ async function initAddresses() {
         await window.warmInitialCatalogPayload({
           productIds,
           comboIds,
-          productLimit: INITIAL_CATALOG_PREFETCH_PRODUCTS,
-          comboLimit: INITIAL_CATALOG_PREFETCH_COMBOS,
+          productLimit,
+          comboLimit,
         });
         return;
       }
@@ -11769,10 +11972,23 @@ async function initAddresses() {
       await new Promise((resolve) => setTimeout(resolve, 120));
     })();
 
-    await Promise.race([
-      warmTask.catch(() => {}),
-      new Promise((resolve) => setTimeout(resolve, INITIAL_CATALOG_WARM_TIMEOUT_MS)),
-    ]);
+    const timeoutMs = Math.max(
+      0,
+      Number(opts.timeoutMs || INITIAL_CATALOG_WARM_TIMEOUT_MS)
+    );
+    try {
+      const result = await Promise.race([
+        warmTask.then(() => true),
+        new Promise((resolve) => setTimeout(() => resolve(false), timeoutMs)),
+      ]);
+      if (!result) {
+        console.warn("warmInitialCatalogInteractionData: first screen warm timed out");
+      }
+      return !!result;
+    } catch (err) {
+      console.warn("warmInitialCatalogInteractionData: first screen warm failed", err);
+      return false;
+    }
   }
 
   function scheduleComboDetailsPrefetch(comboIds, opts = {}) {
@@ -14687,6 +14903,11 @@ function updateCartBadge() {
       await loadProductsForCategory(cid, { limit: reqLimit, lite: true });
       renderProducts({ appendOnly: true });
       prioritizeAboveFoldCardImages();
+      void warmInitialCatalogInteractionData({
+        categoryIds: [cid],
+        productLimit: INITIAL_CATALOG_PREFETCH_PRODUCTS,
+        comboLimit: INITIAL_CATALOG_PREFETCH_COMBOS,
+      });
       return state.productsByCategory.get(cid) || [];
     } finally {
       __loadingCategoryIds.delete(cid);
@@ -15973,6 +16194,13 @@ function updateCartBadge() {
         state.combosByCategory = new Map();
       }
       renderProducts();
+      if (Number.isFinite(Number(state.activeCategoryId)) && Number(state.activeCategoryId) > 0) {
+        void warmInitialCatalogInteractionData({
+          categoryIds: [Number(state.activeCategoryId)],
+          productLimit: INITIAL_CATALOG_PREFETCH_PRODUCTS,
+          comboLimit: INITIAL_CATALOG_PREFETCH_COMBOS,
+        });
+      }
       renderCart();
       updateCartBadge();
       saveCatalogSnapshotFromState();
@@ -16045,6 +16273,7 @@ async function initCore() {
     }
 
     const orderConfigBootstrapPromise = ensureOrderConfigForHeader().catch(() => null);
+    const homeBonusConfigPromise = loadHomeBonusConfig().catch(() => null);
 
     await loadCategories();
     renderCategories();
@@ -16076,15 +16305,18 @@ async function initCore() {
       state.combosByCategory = new Map();
     }
 
-    if (!hasSnapshotPaint) {
-      await warmInitialCatalogInteractionData();
-    }
-
     await orderConfigBootstrapPromise;
 
     renderProducts();
     prioritizeAboveFoldCardImages();
-    void loadHomeBonusConfig();
+    if (Number.isFinite(Number(state.activeCategoryId)) && Number(state.activeCategoryId) > 0) {
+      void warmInitialCatalogInteractionData({
+        categoryIds: [Number(state.activeCategoryId)],
+        productLimit: INITIAL_CATALOG_PREFETCH_PRODUCTS,
+        comboLimit: INITIAL_CATALOG_PREFETCH_COMBOS,
+      });
+    }
+    void homeBonusConfigPromise;
     await cartEnhancersStartupPromise;
     const startupAutoChanged = applyAutoAddRules();
     clearAutoAddDismissedIfCartEmpty();

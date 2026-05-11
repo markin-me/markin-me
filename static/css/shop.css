@@ -15247,6 +15247,34 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
   opacity: .9;
 }
 
+:where(.shop-home-bonus-card, .shop-bonus-cards-sheet) .bonus-level-preview-card .shop-home-bonus-card__title{
+  max-width: calc(100% - 24px);
+  align-items: flex-start;
+  gap: 7px;
+}
+
+:where(.shop-home-bonus-card, .shop-bonus-cards-sheet) .bonus-level-preview-card .shop-home-bonus-card__title-text{
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+:where(.shop-home-bonus-card, .shop-bonus-cards-sheet) .bonus-level-preview-card .shop-home-bonus-card__program-name,
+:where(.shop-home-bonus-card, .shop-bonus-cards-sheet) .bonus-level-preview-card .shop-home-bonus-card__level-name{
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+:where(.shop-home-bonus-card, .shop-bonus-cards-sheet) .bonus-level-preview-card .shop-home-bonus-card__program-name{
+  font-weight: 700;
+}
+
+:where(.shop-home-bonus-card, .shop-bonus-cards-sheet) .bonus-level-preview-card .shop-home-bonus-card__level-name{
+  font-weight: 600;
+  opacity: .84;
+}
+
 :where(.shop-home-bonus-card, .shop-bonus-cards-sheet) .bonus-level-preview-bonus-label{
   margin-top: 14px;
   font-size: 12px;
@@ -15284,6 +15312,20 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
   align-items: flex-end;
   justify-content: center;
   padding-bottom: 7px;
+}
+
+:where(.shop-home-bonus-card, .shop-bonus-cards-sheet) .bonus-level-preview-qr.is-rendered{
+  align-items: center;
+  padding: 0;
+}
+
+:where(.shop-home-bonus-card, .shop-bonus-cards-sheet) .bonus-level-preview-qr canvas,
+:where(.shop-home-bonus-card, .shop-bonus-cards-sheet) .bonus-level-preview-qr img,
+:where(.shop-home-bonus-card, .shop-bonus-cards-sheet) .bonus-level-preview-qr svg{
+  width: 72px !important;
+  height: 72px !important;
+  display: block;
+  border-radius: 8px;
 }
 
 :where(.shop-home-bonus-card, .shop-bonus-cards-sheet) .bonus-level-preview-qr span{
@@ -15987,6 +16029,47 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
   font-size: 18px;
   line-height: 1;
   font-weight: 900;
+}
+
+.shop-referrals-level-bonus-row{
+  display: grid;
+  gap: 8px;
+  padding: 0 12px 12px;
+}
+
+.shop-referrals-level-bonus-card{
+  min-width: 0;
+  border-radius: 18px;
+  background: var(--color-surface);
+  box-shadow: 0 10px 26px rgba(15, 23, 42, .08);
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+}
+
+.shop-referrals-level-bonus-title{
+  min-width: 0;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  line-height: 1.1;
+  font-weight: 900;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.shop-referrals-level-bonus-card strong{
+  color: var(--color-text);
+  font-size: 18px;
+  line-height: 1;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.shop-referrals-level-bonus-extra{
+  margin-left: 3px;
+  color: var(--color-primary);
+  font-size: 12px;
 }
 
 .shop-referrals-invite-card{

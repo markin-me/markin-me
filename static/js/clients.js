@@ -10697,6 +10697,25 @@
     renderBonusLevelPreview(current);
   }
 
+  function getBonusLevelProgramMeta(level = {}) {
+    const isPaid = level.accessType === 'paid' || level.access_type === 'paid';
+    return {
+      programName: isPaid
+        ? (state.bonusProgramNamePaid || state.bonusProgramNameBase || '')
+        : (state.bonusProgramNameBase || state.bonusProgramNamePaid || ''),
+      programLogo: isPaid ? (state.bonusProgramLogoPaid || '') : (state.bonusProgramLogoBase || ''),
+      levelTitle: String(level.title || '').trim() || 'Уровень',
+    };
+  }
+
+  function buildBonusLevelPreviewTitleHtml(level = {}) {
+    const meta = getBonusLevelProgramMeta(level);
+    const logoHtml = meta.programLogo
+      ? `<img class="bonus-level-preview-title-logo" src="${escapeHtml(meta.programLogo)}" alt="" />`
+      : '';
+    return `${logoHtml}<span class="bonus-level-preview-title-text"><span class="bonus-level-preview-program-name">${escapeHtml(meta.programName)}</span><span class="bonus-level-preview-level-name">${escapeHtml(meta.levelTitle)}</span></span>`;
+  }
+
   function renderBonusLevelPreview(level = null) {
     const current = level && typeof level === 'object' ? level : getActiveBonusLevelForInfo();
     if (!current) return;
@@ -10711,18 +10730,8 @@
     const previewCategoryValue = previewRoot?.querySelector('#bonusLevelPreviewCategoryValue') || bonusLevelPreviewCategoryValue;
     const previewQr = previewRoot?.querySelector('#bonusLevelPreviewQr') || bonusLevelPreviewQr;
     if (previewTitle) {
-      const isPaid = current.accessType === 'paid' || current.access_type === 'paid';
-      const programName = isPaid
-        ? (state.bonusProgramNamePaid || state.bonusProgramNameBase || '')
-        : (state.bonusProgramNameBase || state.bonusProgramNamePaid || '');
-      const programLogo = isPaid ? (state.bonusProgramLogoPaid || '') : (state.bonusProgramLogoBase || '');
-      const levelTitle = String(current.title || '').trim() || 'Уровень';
-      const logoHtml = programLogo ? `<img src="${escapeHtml(programLogo)}" style="width:1.1em;height:1.1em;border-radius:2px;margin-right:4px;object-fit:contain;display:inline-block;vertical-align:middle;">` : '';
-      previewTitle.innerHTML = `
-        ${logoHtml}
-        <span style="font-weight:600;margin-right:4px;">${escapeHtml(programName)}</span>
-        <span style="opacity:0.8;">${escapeHtml(levelTitle)}</span>
-      `;
+      previewTitle.classList.add('bonus-level-preview-title--stacked');
+      previewTitle.innerHTML = buildBonusLevelPreviewTitleHtml(current);
       previewTitle.style.color = normalizeHexColor(current.titleColor, '#1f2937');
       if (current.titleBackgroundEnabled === false) {
         previewTitle.style.background = 'transparent';
@@ -10957,7 +10966,7 @@
                   ${
                     isEditing
                       ? `<input class="control bonus-level-field bonus-level-title-input" type="text" data-bonus-level-index="${index}" data-bonus-level-field="title" value="${escapeHtml(level.title)}" style="width:${escapeHtml(getBonusLevelTitleInputWidth(level.title))};" />`
-                      : `<div class="bonus-level-preview-title">${escapeHtml(level.title)}</div>`
+                      : `<div class="bonus-level-preview-title bonus-level-preview-title--stacked">${buildBonusLevelPreviewTitleHtml(level)}</div>`
                   }
                   <div class="bonus-level-preview-bonus-label">${escapeHtml(state.bonusProgramCoinName || 'Бонусы')}</div>
                   <div class="bonus-level-preview-bonus-value">0 ${getBonusCoinIconHtml('1em', '2px')}</div>
