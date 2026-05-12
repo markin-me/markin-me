@@ -23857,6 +23857,7 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
 .shop-favorites-list .shop-cart-items .order-item-thumb-wrap,
 .shop-favorites-list .shop-cart-items .cart-combo-thumb {
   grid-area: thumb;
+  align-self: start;
 }
 
 .shop-order-details .shop-cart-items .cart-mid,
@@ -23868,9 +23869,10 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
 .shop-order-details .shop-cart-items .cart-right,
 .shop-favorites-list .shop-cart-items .cart-right {
   grid-area: right;
-  justify-self: end;
+  justify-self: stretch;
   align-self: start;
   margin-top: 6px;
+  width: 100%;
 }
 
 .shop-order-details .shop-cart-items .cart-price-group,
@@ -24024,15 +24026,19 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
   }
 
   .app-modal .shop-order-details .shop-cart-items .cart-row {
-    grid-template-columns: 70px minmax(0, 1fr) auto;
-    grid-template-areas: "thumb mid right";
-    align-items: center;
+    grid-template-columns: 70px minmax(0, 1fr);
+    grid-template-areas:
+      "thumb mid"
+      "thumb right";
+    align-items: start;
     margin-bottom: 0;
   }
 
   .app-modal .shop-order-details .shop-cart-items .cart-right {
-    align-self: center;
-    margin-top: 0;
+    justify-self: stretch;
+    align-self: start;
+    margin-top: 6px;
+    width: 100%;
   }
 
   .shop-order-details .shop-cart-items .cart-row.cart-row--repeat-desktop-actions .shop-order-repeat-desktop-actions {

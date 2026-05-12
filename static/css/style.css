@@ -18064,6 +18064,7 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
 .order-items .cart-row--readonly-order > .order-item-thumb-wrap,
 .order-items .cart-row--readonly-order > .cart-combo-thumb{
   grid-area:thumb;
+  align-self:start;
 }
 
 .order-items .cart-row--readonly-order .cart-mid{
@@ -18073,9 +18074,10 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
 
 .order-items .cart-row--readonly-order .cart-right{
   grid-area:right;
-  justify-self:end;
+  justify-self:stretch;
   align-self:start;
   margin-top:6px;
+  width:100%;
 }
 
 .order-items .cart-row--readonly-order .cart-title{
