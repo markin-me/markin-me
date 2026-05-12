@@ -15298,7 +15298,7 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
   top: 10px;
   width: 96px;
   aspect-ratio: 1/1;
-  border-radius: 30px;
+  border-radius: 18px;
   border: 2px solid rgba(255, 255, 255, 0.96);
   outline: 1px solid rgba(255, 255, 255, 0.34);
   outline-offset: 0;
@@ -15317,15 +15317,18 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
 :where(.shop-home-bonus-card, .shop-bonus-cards-sheet) .bonus-level-preview-qr.is-rendered{
   align-items: center;
   padding: 0;
+  border-color: transparent;
+  outline: 0;
+  background: transparent;
 }
 
 :where(.shop-home-bonus-card, .shop-bonus-cards-sheet) .bonus-level-preview-qr canvas,
 :where(.shop-home-bonus-card, .shop-bonus-cards-sheet) .bonus-level-preview-qr img,
 :where(.shop-home-bonus-card, .shop-bonus-cards-sheet) .bonus-level-preview-qr svg{
-  width: 72px !important;
-  height: 72px !important;
+  width: 92px !important;
+  height: 92px !important;
   display: block;
-  border-radius: 8px;
+  border-radius: 6px;
 }
 
 :where(.shop-home-bonus-card, .shop-bonus-cards-sheet) .bonus-level-preview-qr span{
@@ -15351,6 +15354,7 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
   display: flex;
   align-items: center;
   min-width: 0;
+  cursor: pointer;
 }
 
 :where(.shop-home-bonus-card, .shop-bonus-cards-sheet) .bonus-level-preview-cashback-side{
@@ -15394,6 +15398,56 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
   border-radius: 2px;
   background: currentColor;
   opacity: .95;
+}
+
+:where(.shop-home-bonus-card, .shop-bonus-cards-sheet) .bonus-level-preview-category-icons{
+  position: relative;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  padding-right: 2px;
+}
+
+:where(.shop-home-bonus-card, .shop-bonus-cards-sheet) .bonus-level-preview-category-thumb{
+  width: 23px;
+  height: 23px;
+  margin-left: -7px;
+  border-radius: 8px;
+  background: rgba(248, 250, 252, .96);
+  box-shadow: 0 0 0 1px rgba(255,255,255,.62), 0 2px 6px rgba(15,23,42,.18);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  color: currentColor;
+  flex: 0 0 auto;
+}
+
+:where(.shop-home-bonus-card, .shop-bonus-cards-sheet) .bonus-level-preview-category-thumb:first-child{
+  margin-left: 0;
+}
+
+:where(.shop-home-bonus-card, .shop-bonus-cards-sheet) .bonus-level-preview-category-thumb img{
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+:where(.shop-home-bonus-card, .shop-bonus-cards-sheet) .bonus-level-preview-category-more{
+  min-width: 18px;
+  height: 18px;
+  margin-left: -5px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: rgba(255,255,255,.86);
+  color: var(--shop-accent, #ff6b18);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  line-height: 1;
+  font-weight: 900;
 }
 
 :where(.shop-home-bonus-card, .shop-bonus-cards-sheet) .bonus-level-preview-cashback-value,
@@ -15443,10 +15497,10 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
 }
 
 .shop-home-referral-invite-pill{
-  min-width: 0;
-  max-width: 112px;
+  min-width: 132px;
+  max-width: none;
   height: 26px;
-  padding: 0 14px;
+  padding: 0 16px;
   border: none;
   border-radius: 999px;
   background: #ff6a00;
@@ -15455,8 +15509,6 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
   line-height: 1;
   font-weight: 900;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
   box-shadow: 0 8px 18px rgba(255, 106, 0, .18);
 }
 
@@ -15590,6 +15642,78 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
   align-items: stretch;
   justify-items: stretch;
   justify-content: stretch;
+}
+
+.shop-cart-bonus-join-card{
+  min-height: 152px;
+  gap: 12px;
+  align-content: stretch;
+}
+
+.shop-cart-bonus-join-copy{
+  display: grid;
+  gap: 4px;
+}
+
+.shop-cart-bonus-join-title{
+  color: var(--color-text);
+  font-size: 16px;
+  line-height: 1.18;
+  font-weight: 900;
+}
+
+.shop-cart-bonus-join-text{
+  color: var(--color-text-muted);
+  font-size: 13px;
+  line-height: 1.25;
+  font-weight: 700;
+}
+
+.shop-cart-bonus-join-stats{
+  display: grid;
+  gap: 6px;
+}
+
+.shop-cart-bonus-join-reward{
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--color-text);
+  font-size: 16px;
+  line-height: 1.15;
+  font-weight: 900;
+}
+
+.shop-cart-bonus-join-reward span{
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.shop-cart-bonus-join-percents{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--color-text);
+  font-size: 12px;
+  line-height: 1.2;
+  font-weight: 900;
+}
+
+.shop-cart-bonus-join-btn{
+  width: 100%;
+  min-height: 48px;
+  border: none;
+  border-radius: 999px;
+  background: var(--color-primary);
+  color: var(--color-primary-contrast, #fff);
+  font: inherit;
+  font-size: 15px;
+  line-height: 1;
+  font-weight: 900;
+  cursor: pointer;
+  box-shadow: 0 10px 22px rgba(255, 106, 19, 0.22);
 }
 
 .shop-cart-bonus-redeem-head{
@@ -16473,6 +16597,8 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
 }
 
 .shop-bonus-cards-carousel__track{
+  position: relative;
+  z-index: 1;
   display: flex;
   gap: 14px;
   overflow-x: auto;
@@ -16498,7 +16624,7 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
 .shop-bonus-cards-carousel__arrow{
   position: absolute;
   top: 50%;
-  z-index: 2;
+  z-index: 5;
   width: 34px;
   height: 34px;
   border: none;
@@ -16523,6 +16649,14 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
 
 .shop-bonus-cards-advantages-host{
   padding: 0 0 24px;
+}
+
+.shop-bonus-cards-conditions-host{
+  padding: 0 0 12px;
+}
+
+.shop-bonus-cards-conditions-host.hidden{
+  display: none;
 }
 
 .shop-bonus-cards-advantages{
@@ -16639,7 +16773,6 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
 }
 
 .shop-bonus-cards-conditions{
-  margin-top: 12px;
   padding: 14px 16px;
   border: 1px solid var(--color-border);
   border-radius: 16px;

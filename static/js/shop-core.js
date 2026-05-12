@@ -814,7 +814,7 @@
 
   function getBonusLevelPreviewBalance(level) {
     const account = state.homeBonusConfig?.account || null;
-    if (!account || Number(account.level_id || 0) !== Number(level?.id || 0)) return 0;
+    if (!account) return 0;
     return Number(account.balance || 0);
   }
 
@@ -828,9 +828,39 @@
     return levels.find((level) => Number(level?.id || 0) === levelId) || null;
   }
 
+  function buildCartBonusJoinSection() {
+    const config = state.homeBonusConfig && typeof state.homeBonusConfig === "object" ? state.homeBonusConfig : null;
+    if (!getCustomerToken() || !config?.settings?.bonus_program_enabled || isHomeBonusJoined(config)) return null;
+    const levels = Array.isArray(config?.levels) ? config.levels : [];
+    const level = levels.find((item) => String(item?.access_type || "") === "join") || getHomeBonusFirstLevel(config);
+    if (!level) return null;
+    const reward = Math.max(0, Number(level?.reward_bonus_amount || 0));
+    const cashback = formatShopBonusPercent(level?.cashback_percent, 0);
+    const redeem = formatShopBonusPercent(level?.redeem_percent, 0);
+    const section = document.createElement("section");
+    section.className = "shop-cart-bonus-redeem-section shop-cart-bonus-join-section";
+    section.innerHTML = `
+      <div class="shop-bonus-level-balance-card shop-cart-bonus-redeem-card shop-cart-bonus-join-card">
+        <div class="shop-cart-bonus-join-copy">
+          <div class="shop-cart-bonus-join-title">Присоединитесь к бонусной программе</div>
+          <div class="shop-cart-bonus-join-text">и получайте бонусы за заказы</div>
+        </div>
+        <div class="shop-cart-bonus-join-stats">
+          <div class="shop-cart-bonus-join-reward">${formatShopBonusMoney(reward)} <span>за вступление</span></div>
+          <div class="shop-cart-bonus-join-percents">
+            <span>Кэшбэк: ${escapeHtml(cashback)}</span>
+            <span>Списание: до ${escapeHtml(redeem)}</span>
+          </div>
+        </div>
+        <button class="shop-cart-bonus-join-btn" type="button" data-cart-bonus-join-button>Присоединиться</button>
+      </div>
+    `;
+    return section;
+  }
+
   function buildCartBonusRedeemSection() {
     const level = getCartBonusAccountLevel();
-    if (!level) return null;
+    if (!level) return buildCartBonusJoinSection();
     const balance = Math.max(0, Number(state.homeBonusConfig?.account?.balance || 0));
     const canRedeem = balance > 0;
     const allowRedeemAndAccrue = Number(state.homeBonusConfig?.settings?.allow_redeem_and_accrue || 0) === 1;
@@ -936,6 +966,31 @@
         input.dispatchEvent(new Event("change", { bubbles: true }));
       });
     });
+    rootEl.querySelectorAll("[data-cart-bonus-join-button]").forEach((button) => {
+      if (button.dataset.cartBonusJoinButtonBound === "1") return;
+      button.dataset.cartBonusJoinButtonBound = "1";
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (button.disabled) return;
+        void joinHomeBonusProgram({
+          onSuccess: () => {
+            if (!openCartSheetCtx?.listEl || !openCartSheetCtx?.totalEl) return;
+            const { items } = renderCartInto(openCartSheetCtx.listEl, openCartSheetCtx.totalEl, null);
+            if (openCartSheetCtx.footerEl) openCartSheetCtx.footerEl.classList.toggle("hidden", items.length === 0);
+            if (openCartSheetCtx.checkoutBtn) {
+              openCartSheetCtx.checkoutBtn.disabled = items.length === 0;
+              const tspan = $(".shop-sheet-checkout-total", openCartSheetCtx.checkoutBtn);
+              if (tspan) tspan.textContent = money(computeCartTotals(items).total);
+            }
+            appendUpsellToList(openCartSheetCtx.listEl);
+            if (typeof window.syncShopCartPricingSummaryUi === "function") {
+              Promise.resolve(window.syncShopCartPricingSummaryUi()).catch(() => {});
+            }
+          },
+        });
+      });
+    });
   }
 
   function setBonusCardsSheetHeader(active) {
@@ -955,6 +1010,7 @@
     const cashbackValue = normalizeShopCardPercent(level?.cashback_percent, 1);
     const favoriteCategoryBonus = normalizeShopCardPercent(level?.favorite_categories_bonus_percent, 0);
     const favoriteCategoryLimit = Math.max(0, Math.floor(Number(level?.favorite_categories_limit || 0)));
+    const favoriteCategoryPreviewHtml = buildBonusLevelPreviewFavoriteCategoriesHtml(level, contentColor, favoriteCategoryLimit);
     const showTitle = level?.show_title_on_card !== false;
     const titleStyle = level?.title_background_enabled === false
       ? `color:${escapeHtml(titleColor)};background:transparent;padding:0;border-radius:0;${showTitle ? "" : "display:none;"}`
@@ -981,19 +1037,16 @@
         <div class="bonus-level-preview-main" style="background:${escapeHtml(mainColor)};color:${escapeHtml(contentColor)};">
           <div class="bonus-level-preview-title${stackedTitle ? " shop-home-bonus-card__title" : ""}" style="${titleStyle}">${titleHtml}</div>
           <div class="bonus-level-preview-bonus-label" style="color:${escapeHtml(contentColor)};">${escapeHtml(coinName)}</div>
-          <div class="bonus-level-preview-bonus-value" style="color:${escapeHtml(contentColor)};">0 ${getShopBonusCoinIconHtml('1em', '2px')}</div>
+          <div class="bonus-level-preview-bonus-value" style="color:${escapeHtml(contentColor)};">${formatShopBonusMoney(getBonusLevelPreviewBalance(level))}</div>
           ${showQr ? `<div class="bonus-level-preview-qr" style="${qrStyle}"><span>QR</span></div>` : ""}
         </div>
         <div class="bonus-level-preview-sub" style="color:${escapeHtml(contentColor)};">
-          <div class="bonus-level-preview-cashback-side">
+          <div class="bonus-level-preview-cashback-side" role="button" tabindex="0" data-open-bonus-preview-cashback>
             <div class="bonus-level-preview-cashback-icon" style="color:${escapeHtml(contentColor)};"><i class="fas fa-undo-alt" aria-hidden="true"></i></div>
             <div class="bonus-level-preview-cashback-value" style="color:${escapeHtml(contentColor)};">${escapeHtml(`${cashbackValue}%`)}</div>
           </div>
-          <div class="bonus-level-preview-category-side${favoriteCategoryLimit > 0 ? "" : " hidden"}">
-            <div class="bonus-level-preview-category-icon" style="color:${escapeHtml(contentColor)};" aria-hidden="true">
-              <span></span><span></span><span></span><span></span>
-              <div class="bonus-level-preview-category-count" style="color:${escapeHtml(contentColor)};">${escapeHtml(String(favoriteCategoryLimit))}</div>
-            </div>
+          <div class="bonus-level-preview-category-side${favoriteCategoryLimit > 0 ? "" : " hidden"}" role="button" tabindex="0" data-open-bonus-preview-favorite-categories>
+            ${favoriteCategoryPreviewHtml}
             <div class="bonus-level-preview-category-value" style="color:${escapeHtml(contentColor)};">${escapeHtml(`${favoriteCategoryBonus}%`)}</div>
           </div>
         </div>
@@ -1054,7 +1107,7 @@
       <div class="bonus-level-preview-card shop-home-referral-card__preview" data-open-referrals-sheet style="background:${escapeHtml(design.baseColor)};">
         <div class="bonus-level-preview-main" style="background:${escapeHtml(design.mainColor)};color:${escapeHtml(design.contentColor)};">
           <div class="bonus-level-preview-title" style="${titleStyle}">Рефералы</div>
-          <div class="bonus-level-preview-bonus-label" style="color:${escapeHtml(design.contentColor)};">Приглашения</div>
+          <div class="bonus-level-preview-bonus-label" style="color:${escapeHtml(design.contentColor)};">Рефералов</div>
           <div class="bonus-level-preview-bonus-value" data-home-referral-invite-count style="color:${escapeHtml(design.contentColor)};">${escapeHtml(String(Number(config?.referral_stats?.referrals_total || 0)))}</div>
           <div class="bonus-level-preview-qr" data-home-referral-qr style="${qrStyle}"><span>QR</span></div>
         </div>
@@ -1064,7 +1117,7 @@
             <div class="bonus-level-preview-cashback-value" style="color:${escapeHtml(design.contentColor)};">${escapeHtml(`${design.percent}%`)}</div>
           </div>
           <div class="shop-home-referral-invite-side">
-            <button class="shop-home-referral-invite-pill" type="button" style="background:${escapeHtml(design.buttonColor)};">Пригласить</button>
+            <button class="shop-home-referral-invite-pill" type="button" data-home-referral-share style="background:${escapeHtml(design.buttonColor)};">Пригласить друга</button>
           </div>
         </div>
       </div>
@@ -1072,23 +1125,49 @@
   }
 
   let homeReferralQrLibraryPromise = null;
-  function ensureHomeReferralQrLibrary() {
-    if (typeof window.QRCode === "function") return Promise.resolve(true);
-    if (homeReferralQrLibraryPromise) return homeReferralQrLibraryPromise;
-    homeReferralQrLibraryPromise = new Promise((resolve) => {
-      const existing = document.querySelector('script[data-shop-referral-qr-lib="1"]');
+  function getHomeReferralQrStylingCtor() {
+    return typeof window.QRCodeStyling === "function"
+      ? window.QRCodeStyling
+      : (window.QRCodeStyling && typeof window.QRCodeStyling.default === "function"
+        ? window.QRCodeStyling.default
+        : (window.QRCodeStyling && typeof window.QRCodeStyling.QRCodeStyling === "function"
+          ? window.QRCodeStyling.QRCodeStyling
+          : null));
+  }
+
+  function loadHomeReferralQrScript(src, key, isReady) {
+    if (isReady()) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      const existing = document.querySelector(`script[data-shop-referral-qr-lib="${key}"]`);
       if (existing) {
-        existing.addEventListener("load", () => resolve(typeof window.QRCode === "function"), { once: true });
+        existing.addEventListener("load", () => resolve(isReady()), { once: true });
         existing.addEventListener("error", () => resolve(false), { once: true });
         return;
       }
       const script = document.createElement("script");
-      script.src = "/static/vendor/qrcode/qrcode.min.js?v=20260406a";
+      script.src = src;
       script.async = true;
-      script.dataset.shopReferralQrLib = "1";
-      script.addEventListener("load", () => resolve(typeof window.QRCode === "function"), { once: true });
+      script.dataset.shopReferralQrLib = key;
+      script.addEventListener("load", () => resolve(isReady()), { once: true });
       script.addEventListener("error", () => resolve(false), { once: true });
       document.head.appendChild(script);
+    });
+  }
+
+  function ensureHomeReferralQrLibrary() {
+    if (getHomeReferralQrStylingCtor() || typeof window.QRCode === "function") return Promise.resolve(true);
+    if (homeReferralQrLibraryPromise) return homeReferralQrLibraryPromise;
+    homeReferralQrLibraryPromise = loadHomeReferralQrScript(
+      "/static/vendor/qr-code-styling.min.js",
+      "styling",
+      () => !!getHomeReferralQrStylingCtor()
+    ).then((styledReady) => {
+      if (styledReady) return true;
+      return loadHomeReferralQrScript(
+        "/static/vendor/qrcode/qrcode.min.js?v=20260406a",
+        "basic",
+        () => typeof window.QRCode === "function"
+      );
     });
     return homeReferralQrLibraryPromise;
   }
@@ -1098,13 +1177,14 @@
     const url = str(inviteUrl || "");
     mount.dataset.qrUrl = url;
     mount.innerHTML = "";
-    mount.classList.remove("is-rendered");
+    mount.classList.remove("is-rendered", "is-styled");
     if (!url) {
       mount.innerHTML = "<span>QR</span>";
       return;
     }
     mount.title = url;
-    if (typeof window.QRCode !== "function") {
+    const QrCodeStylingCtor = getHomeReferralQrStylingCtor();
+    if (!QrCodeStylingCtor && typeof window.QRCode !== "function") {
       mount.innerHTML = "<span>QR</span>";
       ensureHomeReferralQrLibrary().then((ready) => {
         if (ready && mount.isConnected && mount.dataset.qrUrl === url) {
@@ -1114,10 +1194,40 @@
       return;
     }
     try {
+      if (typeof QrCodeStylingCtor === "function") {
+        const qr = new QrCodeStylingCtor({
+          width: 92,
+          height: 92,
+          type: "svg",
+          data: url,
+          margin: 0,
+          qrOptions: {
+            errorCorrectionLevel: "M",
+          },
+          dotsOptions: {
+            color: "#000000",
+            type: "classy-rounded",
+          },
+          cornersSquareOptions: {
+            color: "#000000",
+            type: "extra-rounded",
+          },
+          cornersDotOptions: {
+            color: "#000000",
+            type: "dot",
+          },
+          backgroundOptions: {
+            color: "#ffffff",
+          },
+        });
+        qr.append(mount);
+        mount.classList.add("is-rendered", "is-styled");
+        return;
+      }
       new window.QRCode(mount, {
         text: url,
-        width: 72,
-        height: 72,
+        width: 92,
+        height: 92,
         colorDark: "#111827",
         colorLight: "#ffffff",
         correctLevel: window.QRCode.CorrectLevel?.M || 0,
@@ -1132,28 +1242,65 @@
     if (!elHomeBonusCard || !data) return;
     const countNode = elHomeBonusCard.querySelector("[data-home-referral-invite-count]");
     if (countNode) countNode.textContent = String(Math.max(0, Math.floor(Number(data?.stats?.referrals_total || 0))));
+    elHomeBonusCard.querySelectorAll("[data-home-referral-share]").forEach((button) => {
+      button.dataset.referralInviteUrl = str(data?.invite_url || "");
+    });
     renderHomeReferralQr(elHomeBonusCard.querySelector("[data-home-referral-qr]"), data?.invite_url || "");
+  }
+
+  function resetHomeReferralStatsCache() {
+    resetHomeReferralStatsCache();
+    state._homeReferralStatsLoadedAt = 0;
+  }
+
+  function getCachedHomeReferralStats(maxAgeMs = 60000) {
+    const token = getCustomerToken();
+    if (!token || state._homeReferralStatsToken !== token || !state._homeReferralStats) return null;
+    const loadedAt = Number(state._homeReferralStatsLoadedAt || 0);
+    if (maxAgeMs > 0 && loadedAt > 0 && Date.now() - loadedAt > maxAgeMs) return null;
+    return state._homeReferralStats;
+  }
+
+  function loadHomeReferralStats(options = {}) {
+    const loadOptions = options && typeof options === "object" ? options : {};
+    const token = getCustomerToken();
+    if (!token || !isHomeBonusJoined()) return Promise.resolve(null);
+    if (state._homeReferralStatsToken && state._homeReferralStatsToken !== token) {
+      resetHomeReferralStatsCache();
+    }
+    const cached = loadOptions.force ? null : getCachedHomeReferralStats(loadOptions.maxAgeMs ?? 60000);
+    if (cached) return Promise.resolve(cached);
+    if (state._homeReferralStatsLoading) return state._homeReferralStatsLoading;
+    state._homeReferralStatsToken = token;
+    state._homeReferralStatsLoading = apiJson("/api/public/bonus/referrals")
+      .then((json) => {
+        state._homeReferralStats = json?.data || null;
+        state._homeReferralStatsToken = token;
+        state._homeReferralStatsLoadedAt = Date.now();
+        renderHomeReferralCardData(state._homeReferralStats);
+        return state._homeReferralStats;
+      })
+      .catch((err) => {
+        console.error("Failed to load referral stats:", err);
+        throw err;
+      })
+      .finally(() => {
+        state._homeReferralStatsLoading = null;
+      });
+    return state._homeReferralStatsLoading;
   }
 
   function refreshHomeReferralCardData() {
     const token = getCustomerToken();
     if (!token || !isHomeBonusJoined()) return;
-    if (state._homeReferralStatsToken === token && state._homeReferralStats) {
-      renderHomeReferralCardData(state._homeReferralStats);
+    const cached = getCachedHomeReferralStats(60000);
+    if (cached) {
+      renderHomeReferralCardData(cached);
       return;
     }
-    if (state._homeReferralStatsLoading) return;
-    state._homeReferralStatsToken = token;
-    state._homeReferralStatsLoading = apiJson("/api/public/bonus/referrals")
-      .then((json) => {
-        state._homeReferralStats = json?.data || null;
-        renderHomeReferralCardData(state._homeReferralStats);
-      })
+    loadHomeReferralStats()
       .catch((err) => {
         console.error("Failed to load referral card stats:", err);
-      })
-      .finally(() => {
-        state._homeReferralStatsLoading = null;
       });
   }
 
@@ -1249,6 +1396,78 @@
     return Math.max(0, Math.min(100, (currentValue / targetValue) * 100));
   }
 
+  function getHomeBonusConditionRows(level) {
+    const hasProgress = !!(level?.progress && typeof level.progress === "object");
+    const progress = hasProgress ? level.progress : {};
+    const rows = [];
+    const amount = Math.max(0, Number(progress.amount_target || level?.requirement_amount || 0));
+    const orders = Math.max(0, Math.floor(Number(progress.orders_target || level?.requirement_orders || 0)));
+    const referrals = Math.max(0, Math.floor(Number(progress.referrals_target || level?.requirement_referrals || 0)));
+    const amountCurrent = Math.max(0, Number(progress.amount_current || 0));
+    const ordersCurrent = Math.max(0, Math.floor(Number(progress.orders_current || 0)));
+    const referralsCurrent = Math.max(0, Math.floor(Number(progress.referrals_current || 0)));
+    const bonusAccrued = Math.max(0, Number(progress.bonus_accrued_target || level?.requirement_bonus_accrued || 0));
+    const bonusRedeemed = Math.max(0, Number(progress.bonus_redeemed_target || level?.requirement_bonus_redeemed || 0));
+    const bonusAccruedCurrent = Math.max(0, Number(progress.bonus_accrued_current || 0));
+    const bonusRedeemedCurrent = Math.max(0, Number(progress.bonus_redeemed_current || 0));
+
+    if (amount > 0) rows.push({
+      icon: "рџ’°",
+      title: "РЎСѓРјРјР° Р·Р°РєР°Р·РѕРІ",
+      value: `${money(amountCurrent)} / ${money(amount)}`,
+      current: amountCurrent,
+      target: amount,
+    });
+    if (orders > 0) rows.push({
+      icon: "рџ›’",
+      title: "РљРѕР»РёС‡РµСЃС‚РІРѕ Р·Р°РєР°Р·РѕРІ",
+      value: `${ordersCurrent} / ${orders}`,
+      current: ordersCurrent,
+      target: orders,
+    });
+    if (referrals > 0) rows.push({
+      icon: "рџ‘Ґ",
+      title: "Р РµС„РµСЂР°Р»С‹",
+      value: `${referralsCurrent} / ${referrals}`,
+      current: referralsCurrent,
+      target: referrals,
+    });
+    if (bonusAccrued > 0) rows.push({
+      icon: "+",
+      title: "РќР°РєРѕРїРёС‚СЊ Р±РѕРЅСѓСЃРѕРІ",
+      value: `${formatShopBonusMoney(bonusAccruedCurrent)} / ${formatShopBonusMoney(bonusAccrued)}`,
+      current: bonusAccruedCurrent,
+      target: bonusAccrued,
+    });
+    if (bonusRedeemed > 0) rows.push({
+      icon: "-",
+      title: "РџРѕС‚СЂР°С‚РёС‚СЊ Р±РѕРЅСѓСЃРѕРІ",
+      value: `${formatShopBonusMoney(bonusRedeemedCurrent)} / ${formatShopBonusMoney(bonusRedeemed)}`,
+      current: bonusRedeemedCurrent,
+      target: bonusRedeemed,
+    });
+    return rows;
+  }
+
+  function getHomeBonusConditionMatchCount(level, rows = null) {
+    const list = Array.isArray(rows) ? rows : getHomeBonusConditionRows(level);
+    if (!list.length) return 0;
+    const progress = level?.progress && typeof level.progress === "object" ? level.progress : {};
+    return Math.min(list.length, Math.max(1, Math.floor(Number(progress.match_count || level?.requirement_match_count || 1))));
+  }
+
+  function getHomeBonusConditionsProgressRatio(level) {
+    const rows = getHomeBonusConditionRows(level);
+    const matchCount = getHomeBonusConditionMatchCount(level, rows);
+    if (!rows.length || !(matchCount > 0)) return 0;
+    const ratios = rows
+      .map((row) => getShopBonusProgressRatio(row.current, row.target) / 100)
+      .sort((a, b) => b - a)
+      .slice(0, matchCount);
+    const total = ratios.reduce((sum, value) => sum + Math.max(0, Math.min(1, value)), 0);
+    return Math.max(0, Math.min(1, total / matchCount));
+  }
+
   function buildBonusCardsProgressItemHtml(row) {
     const ratio = getShopBonusProgressRatio(row.current, row.target);
     return `
@@ -1270,6 +1489,13 @@
     const hasProgress = !!(level?.progress && typeof level.progress === "object");
     const progress = hasProgress ? level.progress : {};
     const accountLevelId = Number(state.homeBonusConfig?.account?.level_id || 0);
+    const isRetention = String(progress.scope || "").trim() === "retention";
+    if (accountLevelId > 0) {
+      const nextLevel = getHomeBonusNextLevelById(accountLevelId);
+      const isNextLevel = nextLevel && Number(nextLevel?.id || 0) === Number(level?.id || 0);
+      const isCurrentRetention = isRetention && accountLevelId === Number(level?.id || 0);
+      if (!isNextLevel && !isCurrentRetention) return "";
+    }
     const isCurrentLevel = accountLevelId > 0 && accountLevelId === Number(level?.id || 0);
     if (isCurrentLevel && !hasProgress) return "";
     const rows = [];
@@ -1320,9 +1546,8 @@
       target: bonusRedeemed,
     });
     if (!rows.length) return "";
-    const matchCount = Math.min(rows.length, Math.max(1, Math.floor(Number(progress.match_count || level?.requirement_match_count || 1))));
+    const matchCount = getHomeBonusConditionMatchCount(level, rows);
 
-    const isRetention = String(progress.scope || "").trim() === "retention";
     return `
       <div class="shop-bonus-cards-conditions">
         <div class="shop-bonus-cards-conditions-title">${isRetention ? "Удержание уровня" : "До нового уровня"}</div>
@@ -1336,6 +1561,7 @@
 
   function updateBonusCardsSheetAdvantages(wrap, levels, activeIndex) {
     const host = wrap?.querySelector("[data-bonus-cards-advantages-host]");
+    const conditionsHost = wrap?.querySelector("[data-bonus-cards-conditions-host]");
     if (!host) return;
     const index = Math.max(0, Math.min(levels.length - 1, Number(activeIndex || 0)));
     const level = levels[index];
@@ -1343,7 +1569,12 @@
     const baseLevel = baseLevelId > 0
       ? levels.find((item) => Number(item?.id || 0) === baseLevelId) || null
       : null;
-    host.innerHTML = buildBonusCardsAdvantagesHtml(level, state.homeBonusConfig?.settings || {}, baseLevel) + buildBonusCardsConditionsProgressHtml(level);
+    if (conditionsHost) {
+      const conditionsHtml = buildBonusCardsConditionsProgressHtml(level);
+      conditionsHost.innerHTML = conditionsHtml;
+      conditionsHost.classList.toggle("hidden", !conditionsHtml);
+    }
+    host.innerHTML = buildBonusCardsAdvantagesHtml(level, state.homeBonusConfig?.settings || {}, baseLevel);
     if (elMobileBonusCardsActionBtn) {
       elMobileBonusCardsActionBtn.textContent = getHomeBonusSheetActionText(level);
       elMobileBonusCardsActionBtn.onclick = () => {
@@ -1398,6 +1629,7 @@
           <i class="fas fa-chevron-right" aria-hidden="true"></i>
         </button>
       </div>
+      <div class="shop-bonus-cards-conditions-host" data-bonus-cards-conditions-host></div>
       <div class="shop-bonus-cards-advantages-host" data-bonus-cards-advantages-host></div>
     `;
 
@@ -1455,6 +1687,21 @@
     }, { passive: true });
     requestAnimationFrame(() => scrollToIndex(activeIndex));
     updateBonusCardsSheetAdvantages(wrap, levels, activeIndex);
+    bindBonusCardsPreviewActions(wrap, levels, {
+      returnTo: "bonus-cards",
+      bonusCardsReturnTo: options.returnTo,
+      bonusCardsSourceLevel: options.sourceLevel,
+    });
+    levels.filter(isHomeBonusFavoriteCategoriesEnabled).forEach((level) => {
+      void loadHomeBonusFavoriteCategories(level).then(() => {
+        updateBonusLevelPreviewFavoriteCategories(wrap, level);
+        bindBonusCardsPreviewActions(wrap, levels, {
+          returnTo: "bonus-cards",
+          bonusCardsReturnTo: options.returnTo,
+          bonusCardsSourceLevel: options.sourceLevel,
+        });
+      }).catch(() => {});
+    });
   }
 
   function openHomeBonusCardsSheet(options = {}) {
@@ -1464,13 +1711,18 @@
     renderBonusCardsSheetContent(wrap, options);
     sheetNavigationState.type = "bonus-cards";
     sheetNavigationState.screen = "main";
-    sheetNavigationState.data = null;
+    sheetNavigationState.data = {
+      returnTo: options.returnTo || null,
+      sourceLevel: options.sourceLevel || null,
+    };
     window.AppModal.open({
       title: state.homeBonusConfig?.settings?.bonus_program_name || "Бонусная программа",
       content: wrap,
       showCancel: false,
       showSave: false,
-      onClose: () => {
+      onClose: (event) => {
+        const returnTo = options.returnTo || sheetNavigationState.data?.returnTo || null;
+        const sourceLevel = options.sourceLevel || sheetNavigationState.data?.sourceLevel || null;
         setBonusCardsSheetHeader(false);
         if (elMobileCartActions) elMobileCartActions.classList.add("hidden");
         if (elMobileBonusCardsActions) elMobileBonusCardsActions.classList.add("hidden");
@@ -1484,6 +1736,9 @@
         sheetNavigationState.type = null;
         sheetNavigationState.screen = null;
         sheetNavigationState.data = null;
+        if (shouldReturnToBonusLevelOnClose(event) && returnTo === "bonus-level") {
+          returnToBonusLevelSheet(sourceLevel);
+        }
       },
     });
     if (window.AppModal?.body) {
@@ -1498,31 +1753,28 @@
     void loadHomeBonusConfig().then(() => renderBonusCardsSheetContent(wrap, options));
   }
 
-  function getHomeBonusNextLevel(level) {
+  function getHomeBonusOrderedLevels() {
     const levels = Array.isArray(state.homeBonusConfig?.levels) ? state.homeBonusConfig.levels : [];
-    if (!levels.length) return null;
-    const currentId = Number(level?.id || 0);
-    const ordered = levels
+    return levels
       .filter((item) => item && String(item.title || "").trim())
       .slice()
       .sort((a, b) => (Number(a?.sort_order || 0) - Number(b?.sort_order || 0)) || (Number(a?.id || 0) - Number(b?.id || 0)));
+  }
+
+  function getHomeBonusNextLevelById(levelId) {
+    const currentId = Number(levelId || 0);
+    if (!(currentId > 0)) return null;
+    const ordered = getHomeBonusOrderedLevels();
     const index = ordered.findIndex((item) => Number(item?.id || 0) === currentId);
     return index >= 0 ? (ordered[index + 1] || null) : null;
   }
 
+  function getHomeBonusNextLevel(level) {
+    return getHomeBonusNextLevelById(Number(level?.id || 0));
+  }
+
   function getHomeBonusLevelProgressRatio(level) {
-    const progress = level?.progress && typeof level.progress === "object" ? level.progress : null;
-    if (!progress) return 0;
-    const values = [
-      [progress.amount_current, progress.amount_target],
-      [progress.orders_current, progress.orders_target],
-      [progress.referrals_current, progress.referrals_target],
-    ].map(([current, target]) => {
-      const targetValue = Number(target || 0);
-      if (!(targetValue > 0)) return 0;
-      return Math.max(0, Math.min(1, Number(current || 0) / targetValue));
-    });
-    return Math.max(0, ...values);
+    return getHomeBonusConditionsProgressRatio(level);
   }
 
   function buildHomeBonusLevelProgressHtml(level) {
@@ -1612,6 +1864,36 @@
     }, 0);
   }
 
+  function returnToBonusCardsSheet(level, options = {}) {
+    setTimeout(() => {
+      openHomeBonusCardsSheet({
+        initialLevelId: Number(level?.id || 0) || 0,
+        returnTo: options.bonusCardsReturnTo,
+        sourceLevel: options.bonusCardsSourceLevel,
+      });
+    }, 0);
+  }
+
+  function returnFromBonusNestedSheet(level, options = {}) {
+    const returnTo = options && typeof options === "object" ? options.returnTo : null;
+    if (returnTo === false || returnTo === "none") {
+      if (window.AppModal?.isOpen?.()) window.AppModal.close("sheet");
+      return;
+    }
+    if (returnTo === "bonus-cards") {
+      returnToBonusCardsSheet(level, options);
+      return;
+    }
+    returnToBonusLevelSheet(level);
+  }
+
+  function maybeReturnFromBonusNestedSheet(event, level, options = {}) {
+    if (!shouldReturnToBonusLevelOnClose(event)) return;
+    const returnTo = options && typeof options === "object" ? options.returnTo : null;
+    if (returnTo === false || returnTo === "none") return;
+    returnFromBonusNestedSheet(level, options);
+  }
+
   async function openHomeBonusAccrualsSheet(options = {}) {
     if (!window.AppModal || typeof window.AppModal.open !== "function") return;
     const sourceLevel = options && typeof options === "object" ? options.sourceLevel : null;
@@ -1698,6 +1980,51 @@
   function getHomeBonusFavoriteCategoriesCache(levelId) {
     const key = String(Number(levelId || 0) || 0);
     return state.homeBonusFavoriteCategoriesByLevel.get(key) || null;
+  }
+
+  function getHomeBonusSelectedFavoriteCategories(level) {
+    const cache = getHomeBonusFavoriteCategoriesCache(Number(level?.id || 0));
+    const selectedIds = Array.isArray(cache?.selected_ids) ? cache.selected_ids.map((id) => Number(id || 0)) : [];
+    const categories = Array.isArray(cache?.categories) ? cache.categories : [];
+    return selectedIds
+      .map((id) => categories.find((item) => Number(item?.id || 0) === id))
+      .filter(Boolean);
+  }
+
+  function buildBonusLevelPreviewFavoriteCategoriesHtml(level, contentColor, fallbackCount = 0) {
+    const selected = getHomeBonusSelectedFavoriteCategories(level);
+    if (selected.length) {
+      const visible = selected.slice(0, 3);
+      const hiddenCount = Math.max(0, selected.length - visible.length);
+      return `
+        <div class="bonus-level-preview-category-icons" data-bonus-level-preview-favorites="${escapeHtml(String(Number(level?.id || 0)))}" style="color:${escapeHtml(contentColor)};" aria-hidden="true">
+          ${visible.map((category) => {
+            const icon = String(category?.icon || "").trim();
+            const title = String(category?.title || "").trim();
+            return `<span class="bonus-level-preview-category-thumb" title="${escapeHtml(title)}">${icon ? `<img src="${escapeHtml(icon)}" alt="" loading="lazy" />` : '<i class="fas fa-tag" aria-hidden="true"></i>'}</span>`;
+          }).join("")}
+          ${hiddenCount > 0 ? `<span class="bonus-level-preview-category-more">+${escapeHtml(String(hiddenCount))}</span>` : ""}
+        </div>
+      `;
+    }
+    return `
+      <div class="bonus-level-preview-category-icon" data-bonus-level-preview-favorites="${escapeHtml(String(Number(level?.id || 0)))}" style="color:${escapeHtml(contentColor)};" aria-hidden="true">
+        <span></span><span></span><span></span><span></span>
+        <div class="bonus-level-preview-category-count" style="color:${escapeHtml(contentColor)};">${escapeHtml(String(fallbackCount))}</div>
+      </div>
+    `;
+  }
+
+  function updateBonusLevelPreviewFavoriteCategories(root, level) {
+    if (!root || typeof root.querySelectorAll !== "function") return;
+    const levelId = Number(level?.id || 0);
+    if (!(levelId > 0)) return;
+    const contentColor = normalizeShopHexColor(level?.content_color, "#ffffff");
+    const favoriteCategoryLimit = Math.max(0, Math.floor(Number(level?.favorite_categories_limit || 0)));
+    const html = buildBonusLevelPreviewFavoriteCategoriesHtml(level, contentColor, favoriteCategoryLimit);
+    root.querySelectorAll(`[data-bonus-level-preview-favorites="${String(levelId)}"]`).forEach((node) => {
+      node.outerHTML = html;
+    });
   }
 
   async function loadHomeBonusFavoriteCategories(level, options = {}) {
@@ -1889,7 +2216,7 @@
             <i class="fas fa-copy" aria-hidden="true"></i>
           </button>
         </div>
-        <button class="shop-referrals-invite-btn" type="button" data-referrals-share-link>Пригласить</button>
+        <button class="shop-referrals-invite-btn" type="button" data-referrals-share-link>Пригласить друга</button>
       </div>
       <div class="shop-referrals-filter-sticky">
         <div class="shop-referrals-filter-chips no-scrollbar" role="tablist" aria-label="Фильтр рефералов">
@@ -1902,14 +2229,44 @@
     `;
   }
 
+  async function getHomeReferralInviteUrl() {
+    const token = getCustomerToken();
+    if (!token) return "";
+    const data = await loadHomeReferralStats();
+    return str(data?.invite_url || "");
+  }
+
+  async function copyHomeReferralInviteUrl(inviteUrl) {
+    const url = str(inviteUrl || "");
+    if (!url) return false;
+    try {
+      await navigator.clipboard.writeText(url);
+      if (typeof showToast === "function") showToast("Ссылка скопирована");
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function shareHomeReferralInviteUrl(inviteUrl) {
+    const url = str(inviteUrl || "");
+    if (!url) return false;
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: document.title || "Приглашение", url });
+        return true;
+      } catch (err) {
+        if (String(err?.name || "") === "AbortError") return false;
+      }
+    }
+    return copyHomeReferralInviteUrl(url);
+  }
+
   function bindHomeReferralsSheetActions(wrap, data = null) {
     if (!wrap) return;
     const inviteUrl = str(data?.invite_url || "");
     const copyInviteUrl = async () => {
-      if (!inviteUrl) return;
-      try {
-        await navigator.clipboard.writeText(inviteUrl);
-      } catch {}
+      await copyHomeReferralInviteUrl(inviteUrl);
     };
     wrap.querySelectorAll("[data-referrals-copy-link]").forEach((button) => {
       button.addEventListener("click", copyInviteUrl);
@@ -1917,13 +2274,7 @@
     wrap.querySelectorAll("[data-referrals-share-link]").forEach((button) => {
       button.addEventListener("click", async () => {
         if (!inviteUrl) return;
-        if (navigator.share) {
-          try {
-            await navigator.share({ title: document.title || "Приглашение", url: inviteUrl });
-            return;
-          } catch {}
-        }
-        await copyInviteUrl();
+        await shareHomeReferralInviteUrl(inviteUrl);
       });
     });
     wrap.querySelectorAll("[data-referrals-filter]").forEach((button) => {
@@ -1975,7 +2326,7 @@
             <i class="fas fa-copy" aria-hidden="true"></i>
           </button>
         </div>
-        <button class="shop-referrals-invite-btn" type="button">Пригласить</button>
+        <button class="shop-referrals-invite-btn" type="button">Пригласить друга</button>
       </div>
       <div class="shop-referrals-filter-sticky">
         <div class="shop-referrals-filter-chips no-scrollbar" role="tablist" aria-label="Фильтр рефералов">
@@ -2027,29 +2378,17 @@
         </div>
       </div>
     `;
-    wrap.innerHTML = buildHomeReferralsSheetHtml(null, true);
-    wrap.querySelectorAll("[data-referrals-filter]").forEach((button) => {
-      button.addEventListener("click", () => {
-        const filter = button.dataset.referralsFilter || "all";
-        wrap.querySelectorAll("[data-referrals-filter]").forEach((item) => {
-          item.classList.toggle("is-active", item === button);
-        });
-        wrap.querySelectorAll("[data-referral-level]").forEach((row) => {
-          row.classList.toggle("hidden", filter !== "all" && row.dataset.referralLevel !== filter);
-        });
-      });
-    });
-    bindHomeReferralsSheetActions(wrap, null);
-    apiJson("/api/public/bonus/referrals")
+    const cachedReferralsData = getCachedHomeReferralStats(0);
+    wrap.innerHTML = buildHomeReferralsSheetHtml(cachedReferralsData, !cachedReferralsData);
+    bindHomeReferralsSheetActions(wrap, cachedReferralsData);
+    loadHomeReferralStats()
       .then((json) => {
-        const data = json?.data || {};
-        state._homeReferralStats = data;
-        state._homeReferralStatsToken = getCustomerToken();
-        renderHomeReferralCardData(data);
+        const data = json || {};
         wrap.innerHTML = buildHomeReferralsSheetHtml(data, false);
         bindHomeReferralsSheetActions(wrap, data);
       })
       .catch(() => {
+        if (cachedReferralsData) return;
         wrap.innerHTML = buildHomeReferralsSheetHtml(null, false, "Не удалось загрузить рефералов");
         bindHomeReferralsSheetActions(wrap, null);
       });
@@ -2073,6 +2412,9 @@
         sheetNavigationState.type = null;
         sheetNavigationState.screen = null;
         sheetNavigationState.data = null;
+        if (shouldReturnToBonusLevelOnClose(event) && returnTo === "bonus-level") {
+          returnToBonusLevelSheet(sourceLevel);
+        }
       },
     });
     if (window.AppModal?.body) {
@@ -2088,10 +2430,30 @@
 
   function bindHomeReferralCard(root = document) {
     const host = root && typeof root.querySelectorAll === "function" ? root : document;
+    host.querySelectorAll("[data-home-referral-share]").forEach((button) => {
+      if (button.dataset.homeReferralShareBound === "1") return;
+      button.dataset.homeReferralShareBound = "1";
+      button.addEventListener("click", async (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        let inviteUrl = str(button.dataset.referralInviteUrl || "");
+        try {
+          if (!inviteUrl) inviteUrl = await getHomeReferralInviteUrl();
+        } catch (err) {
+          console.error("Failed to load referral invite url:", err);
+        }
+        if (!inviteUrl) {
+          if (typeof showToast === "function") showToast("Не удалось получить ссылку приглашения");
+          return;
+        }
+        await shareHomeReferralInviteUrl(inviteUrl);
+      });
+    });
     host.querySelectorAll("[data-open-referrals-sheet]").forEach((card) => {
       if (card.dataset.referralsSheetBound === "1") return;
       card.dataset.referralsSheetBound = "1";
       card.addEventListener("click", (event) => {
+        if (event.target?.closest?.("[data-home-referral-share]")) return;
         event.preventDefault();
         event.stopPropagation();
         openHomeReferralsSheet();
@@ -2449,7 +2811,43 @@
     });
   }
 
-  async function openHomeBonusFavoriteCategoriesSheet(level) {
+  function bindBonusLevelPreviewCardActions(root, level, options = {}) {
+    if (!root || !level) return;
+    const bindAction = (selector, handler) => {
+      root.querySelectorAll(selector).forEach((node) => {
+        if (node.dataset.bonusPreviewActionBound === "1") return;
+        node.dataset.bonusPreviewActionBound = "1";
+        node.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          handler();
+        });
+        node.addEventListener("keydown", (event) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          event.stopPropagation();
+          handler();
+        });
+      });
+    };
+    bindAction("[data-open-bonus-preview-cashback]", () => {
+      openHomeBonusCashbackSheet(level, options);
+    });
+    if (isHomeBonusFavoriteCategoriesEnabled(level)) {
+      bindAction("[data-open-bonus-preview-favorite-categories]", () => {
+        void openHomeBonusFavoriteCategoriesSheet(level, options);
+      });
+    }
+  }
+
+  function bindBonusCardsPreviewActions(wrap, levels, options = {}) {
+    if (!wrap || !Array.isArray(levels)) return;
+    Array.from(wrap.querySelectorAll(".shop-bonus-cards-carousel__slide")).forEach((slide, index) => {
+      bindBonusLevelPreviewCardActions(slide, levels[index], options);
+    });
+  }
+
+  async function openHomeBonusFavoriteCategoriesSheet(level, options = {}) {
     if (!window.AppModal || typeof window.AppModal.open !== "function") return;
     const levelId = Number(level?.id || 0);
     if (!(levelId > 0)) return;
@@ -2504,7 +2902,7 @@
           if (typeof openProfileSheet === "function") {
             openProfileSheet({
               onLoginSuccess: () => {
-                void openHomeBonusFavoriteCategoriesSheet(level);
+                void openHomeBonusFavoriteCategoriesSheet(level, options);
               },
             });
           }
@@ -2521,7 +2919,7 @@
             locked: true,
           };
           state.homeBonusFavoriteCategoriesByLevel.set(String(levelId), nextData);
-          openHomeBonusLevelSheet(level);
+          returnFromBonusNestedSheet(level, options);
         } catch (err) {
           console.error("save bonus favorite categories error:", err);
         }
@@ -2549,9 +2947,7 @@
         sheetNavigationState.type = null;
         sheetNavigationState.screen = null;
         sheetNavigationState.data = null;
-        if (shouldReturnToBonusLevelOnClose(event)) {
-          returnToBonusLevelSheet(level);
-        }
+        maybeReturnFromBonusNestedSheet(event, level, options);
       },
     });
     if (window.AppModal?.body) {
@@ -2572,7 +2968,7 @@
     }
   }
 
-  function openHomeBonusCashbackSheet(level) {
+  function openHomeBonusCashbackSheet(level, options = {}) {
     if (!window.AppModal || typeof window.AppModal.open !== "function") return;
     const wrap = document.createElement("div");
     wrap.className = "shop-cart-sheet shop-bonus-cards-sheet shop-bonus-cashback-sheet";
@@ -2683,9 +3079,7 @@
         sheetNavigationState.type = null;
         sheetNavigationState.screen = null;
         sheetNavigationState.data = null;
-        if (shouldReturnToBonusLevelOnClose(event)) {
-          returnToBonusLevelSheet(level);
-        }
+        maybeReturnFromBonusNestedSheet(event, level, options);
       },
     });
     if (window.AppModal?.body) {
@@ -2770,7 +3164,11 @@
     syncMobileUiState("bonus-level-sheet-open");
     wrap.querySelector("[data-open-bonus-cards-current]")?.addEventListener("click", () => {
       const accountLevelId = Number(state.homeBonusConfig?.account?.level_id || 0);
-      openHomeBonusCardsSheet({ initialLevelId: accountLevelId || Number(level?.id || 0) || 0 });
+      openHomeBonusCardsSheet({
+        initialLevelId: accountLevelId || Number(level?.id || 0) || 0,
+        returnTo: "bonus-level",
+        sourceLevel: level,
+      });
     });
     wrap.querySelector(".shop-bonus-level-accruals-link")?.addEventListener("click", () => {
       void openHomeBonusAccrualsSheet({ sourceLevel: level });
@@ -2866,11 +3264,12 @@
     try {
       const joinJson = await apiJson("/api/public/bonus/join", { method: "POST", body: {} });
       await refreshHomeBonusConfigUi();
+      if (typeof joinOptions.onSuccess === "function") joinOptions.onSuccess(joinJson);
       const joinedNow = !joinJson?.data?.already_joined;
       if (joinOptions.reopenBonusSheet) {
         openHomeBonusCardsSheet();
       }
-      if (joinedNow && joinOptions.showJoinModalAfterSuccess) {
+      if ((joinedNow || joinOptions.showJoinModalAfterSuccess) && joinOptions.showJoinModalAfterSuccess) {
         openShopBonusProgramModal({
           modalKey: "join",
           level: getHomeBonusFirstLevel(state.homeBonusConfig),
@@ -3340,6 +3739,10 @@
     _homeBonusToken: "",
     _homeBonusLoading: null,
     _homeBonusModalEventId: null,
+    _homeReferralStats: null,
+    _homeReferralStatsToken: "",
+    _homeReferralStatsLoading: null,
+    _homeReferralStatsLoadedAt: 0,
     homeBonusFavoriteCategoriesByLevel: new Map(),
     _homeBonusFavoriteCategoriesLoading: new Map(),
     cartBonusRedeemEnabled: false,
@@ -8466,8 +8869,15 @@
       const balanceEl = elHomeBonusCard.querySelector(".shop-home-bonus-card__preview .bonus-level-preview-bonus-value");
       if (balanceEl) balanceEl.innerHTML = formatShopBonusMoney(getBonusLevelPreviewBalance(level));
       if (level) bindHomeBonusLevelTitle(level);
+      if (level) bindBonusLevelPreviewCardActions(elHomeBonusCard, level, { returnTo: "none" });
       bindHomeReferralCard(elHomeBonusCard);
       refreshHomeReferralCardData();
+      if (level && isHomeBonusFavoriteCategoriesEnabled(level)) {
+        void loadHomeBonusFavoriteCategories(level).then(() => {
+          updateBonusLevelPreviewFavoriteCategories(elHomeBonusCard, level);
+          bindBonusLevelPreviewCardActions(elHomeBonusCard, level, { returnTo: "none" });
+        }).catch(() => {});
+      }
       bindHomeMainSiteMenuRow(elHomeBonusCard);
       void updateHomeBonusSiteMenuBadges(elHomeBonusCard);
       renderHomeActiveOrdersBlock();
@@ -8509,11 +8919,11 @@
           <button class="shop-home-bonus-card__action" type="button">${escapeHtml(actionText)}</button>
         </div>
         <div class="bonus-level-preview-sub" style="color:${escapeHtml(contentColor)};">
-          <div class="bonus-level-preview-cashback-side">
+          <div class="bonus-level-preview-cashback-side" role="button" tabindex="0" data-open-bonus-preview-cashback>
             <div class="bonus-level-preview-cashback-icon" style="color:${escapeHtml(contentColor)};"><i class="fas fa-undo-alt" aria-hidden="true"></i></div>
             <div class="bonus-level-preview-cashback-value" style="color:${escapeHtml(contentColor)};">${escapeHtml(`${cashbackValue}%`)}</div>
           </div>
-          <div class="bonus-level-preview-category-side${favoriteCategoryLimit > 0 ? "" : " hidden"}">
+          <div class="bonus-level-preview-category-side${favoriteCategoryLimit > 0 ? "" : " hidden"}" role="button" tabindex="0" data-open-bonus-preview-favorite-categories>
             <div class="bonus-level-preview-category-icon" style="color:${escapeHtml(contentColor)};" aria-hidden="true">
               <span></span><span></span><span></span><span></span>
               <div class="bonus-level-preview-category-count" style="color:${escapeHtml(contentColor)};">${escapeHtml(String(favoriteCategoryLimit))}</div>
@@ -8537,6 +8947,7 @@
     if (actionBtn) actionBtn.addEventListener("click", () => {
       openHomeBonusCardsSheet();
     });
+    if (level) bindBonusLevelPreviewCardActions(elHomeBonusCard, level, { returnTo: "none" });
     bindHomeReferralCard(elHomeBonusCard);
     bindHomeMainSiteMenuRow(elHomeBonusCard);
     void updateHomeBonusSiteMenuBadges(elHomeBonusCard);
