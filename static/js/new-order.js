@@ -9186,9 +9186,16 @@
     return "simple_discount";
   }
 
+  function formatRightOrderBuyXGetYText(discount) {
+    const mechanic = discount?.mechanic && typeof discount.mechanic === "object" ? discount.mechanic : {};
+    const buyQty = Math.max(1, Number(mechanic?.buy_qty || 0) || 1);
+    const rewardQty = Math.max(1, Number(mechanic?.reward_qty || 0) || 1);
+    return `${buyQty + rewardQty}=${buyQty}`;
+  }
+
   function buildRightOrderBenefitDiscountSubtitle(discount, fallbackItem = null) {
     const mechanicType = normalizeRightOrderBenefitDiscountMechanicType(discount);
-    if (mechanicType === "buy_x_get_y") return "Акция 1+1";
+    if (mechanicType === "buy_x_get_y") return `Акция ${formatRightOrderBuyXGetYText(discount)}`;
     if (mechanicType === "threshold") return "Пороговая акция";
     if (mechanicType === "loyalty_progress") return "Задание";
     const applyTo = String(discount?.apply_to || fallbackItem?.apply_to || "").trim().toLowerCase();
@@ -9207,10 +9214,7 @@
   function buildRightOrderBenefitDiscountApplyText(discount, fallbackItem = null) {
     const mechanicType = normalizeRightOrderBenefitDiscountMechanicType(discount);
     if (mechanicType === "buy_x_get_y") {
-      const mechanic = discount?.mechanic && typeof discount.mechanic === "object" ? discount.mechanic : {};
-      const buyQty = Math.max(1, Number(mechanic?.buy_qty || 0) || 1);
-      const rewardQty = Math.max(1, Number(mechanic?.reward_qty || 0) || 1);
-      return `${buyQty}+${rewardQty}`;
+      return formatRightOrderBuyXGetYText(discount);
     }
     if (mechanicType === "threshold") return "по порогам суммы";
     if (mechanicType === "loyalty_progress") return "по накопительному порогу";
@@ -13407,7 +13411,15 @@
   function getNewOrderBuyXGetYBadgeText(source) {
     const badge = getNewOrderBuyXGetYBadgeSource(source);
     const text = String(badge?.badge_text || "").trim();
-    return text || "";
+    if (!badge || typeof badge !== "object") return text || "";
+    const plusMatch = text.match(/^(\d+)\s*\+\s*(\d+)$/);
+    const equalsMatch = text.match(/^(\d+)\s*=\s*(\d+)$/);
+    const hasQty = badge?.buy_qty != null || badge?.reward_qty != null || !!plusMatch || !!equalsMatch;
+    if (!hasQty) return text || "";
+    const buyQty = Math.max(1, Math.floor(Number(badge?.buy_qty ?? plusMatch?.[1] ?? equalsMatch?.[2] ?? 0)) || 1);
+    const rewardFromEquals = equalsMatch ? Math.max(1, Number(equalsMatch[1] || 0) - Number(equalsMatch[2] || 0)) : 0;
+    const rewardQty = Math.max(1, Math.floor(Number(badge?.reward_qty ?? plusMatch?.[2] ?? rewardFromEquals ?? 0)) || 1);
+    return buyQty > 0 && rewardQty > 0 ? `${buyQty + rewardQty}=${buyQty}` : text || "";
   }
 
   function cloneNewOrderBuyXGetYBadge(source) {
@@ -13418,9 +13430,14 @@
   function getNewOrderBuyXGetYRule(source) {
     const badge = getNewOrderBuyXGetYBadgeSource(source);
     if (!badge) return null;
-    const badgeMatch = String(badge?.badge_text || "").trim().match(/^(\d+)\s*\+\s*(\d+)$/);
-    const buyQty = Math.max(1, Math.floor(Number(badge?.buy_qty ?? badgeMatch?.[1] ?? 0)) || 1);
-    const rewardQty = Math.max(1, Math.floor(Number(badge?.reward_qty ?? badgeMatch?.[2] ?? 0)) || 1);
+    const badgeText = String(badge?.badge_text || "").trim();
+    const plusMatch = badgeText.match(/^(\d+)\s*\+\s*(\d+)$/);
+    const equalsMatch = badgeText.match(/^(\d+)\s*=\s*(\d+)$/);
+    const hasQty = badge?.buy_qty != null || badge?.reward_qty != null || !!plusMatch || !!equalsMatch;
+    if (!hasQty) return null;
+    const buyQty = Math.max(1, Math.floor(Number(badge?.buy_qty ?? plusMatch?.[1] ?? equalsMatch?.[2] ?? 0)) || 1);
+    const rewardFromEquals = equalsMatch ? Math.max(1, Number(equalsMatch[1] || 0) - Number(equalsMatch[2] || 0)) : 0;
+    const rewardQty = Math.max(1, Math.floor(Number(badge?.reward_qty ?? plusMatch?.[2] ?? rewardFromEquals ?? 0)) || 1);
     const repeatMode = String(badge?.repeat_mode || "").trim().toLowerCase() === "repeat" ? "repeat" : "single";
     return {
       id: Number(badge?.id || 0) || null,

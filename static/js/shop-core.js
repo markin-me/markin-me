@@ -11865,7 +11865,18 @@ async function initAddresses() {
   }
 
   function getCatalogBuyXGetYBadgeText(product) {
-    return str(product?.buy_x_get_y_badge?.badge_text || "").trim();
+    const source = product?.buy_x_get_y_badge;
+    if (!source || typeof source !== "object") return "";
+    const directText = str(source.badge_text || "").trim();
+    const plusMatch = directText.match(/^(\d+)\s*\+\s*(\d+)$/);
+    const equalsMatch = directText.match(/^(\d+)\s*=\s*(\d+)$/);
+    const hasQty = source.buy_qty != null || source.reward_qty != null || !!plusMatch || !!equalsMatch;
+    if (!hasQty) return directText;
+    const buyQty = Math.max(1, Math.floor(Number(source.buy_qty ?? plusMatch?.[1] ?? equalsMatch?.[2] ?? 0)) || 1);
+    const rewardQtyFromEquals = equalsMatch ? Math.max(1, Number(equalsMatch[1] || 0) - Number(equalsMatch[2] || 0)) : 0;
+    const rewardQty = Math.max(1, Math.floor(Number(source.reward_qty ?? plusMatch?.[2] ?? rewardQtyFromEquals ?? 0)) || 1);
+    if (buyQty > 0 && rewardQty > 0) return `${buyQty + rewardQty}=${buyQty}`;
+    return directText;
   }
 
   function createCatalogBuyXGetYBadge(product) {
@@ -11880,9 +11891,14 @@ async function initAddresses() {
   function getCatalogBuyXGetYRule(product) {
     const source = product?.buy_x_get_y_badge;
     if (!source || typeof source !== "object") return null;
-    const badgeMatch = str(source.badge_text || "").trim().match(/^(\d+)\s*\+\s*(\d+)$/);
-    const buyQty = Math.max(1, Math.floor(Number(source.buy_qty ?? badgeMatch?.[1] ?? 0)) || 1);
-    const rewardQty = Math.max(1, Math.floor(Number(source.reward_qty ?? badgeMatch?.[2] ?? 0)) || 1);
+    const badgeText = str(source.badge_text || "").trim();
+    const plusMatch = badgeText.match(/^(\d+)\s*\+\s*(\d+)$/);
+    const equalsMatch = badgeText.match(/^(\d+)\s*=\s*(\d+)$/);
+    const hasQty = source.buy_qty != null || source.reward_qty != null || !!plusMatch || !!equalsMatch;
+    if (!hasQty) return null;
+    const buyQty = Math.max(1, Math.floor(Number(source.buy_qty ?? plusMatch?.[1] ?? equalsMatch?.[2] ?? 0)) || 1);
+    const rewardQtyFromEquals = equalsMatch ? Math.max(1, Number(equalsMatch[1] || 0) - Number(equalsMatch[2] || 0)) : 0;
+    const rewardQty = Math.max(1, Math.floor(Number(source.reward_qty ?? plusMatch?.[2] ?? rewardQtyFromEquals ?? 0)) || 1);
     const repeatMode = str(source.repeat_mode || "").trim().toLowerCase() === "repeat" ? "repeat" : "single";
     return {
       id: Number(source.id || 0) || null,

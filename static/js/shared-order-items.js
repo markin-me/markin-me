@@ -360,7 +360,17 @@
 
   function getBuyXGetYBadgeText(item) {
     var badge = item && item.buy_x_get_y_badge;
-    if (badge && typeof badge === "object") return str(badge.badge_text || "").trim();
+    if (badge && typeof badge === "object") {
+      var text = str(badge.badge_text || "").trim();
+      var plusMatch = text.match(/^(\d+)\s*\+\s*(\d+)$/);
+      var equalsMatch = text.match(/^(\d+)\s*=\s*(\d+)$/);
+      var hasQty = badge.buy_qty != null || badge.reward_qty != null || !!plusMatch || !!equalsMatch;
+      if (!hasQty) return text;
+      var buyQty = Math.max(1, Math.floor(Number(badge.buy_qty != null ? badge.buy_qty : (plusMatch ? plusMatch[1] : equalsMatch && equalsMatch[2]))) || 1);
+      var rewardFromEquals = equalsMatch ? Math.max(1, Number(equalsMatch[1] || 0) - Number(equalsMatch[2] || 0)) : 0;
+      var rewardQty = Math.max(1, Math.floor(Number(badge.reward_qty != null ? badge.reward_qty : (plusMatch ? plusMatch[2] : rewardFromEquals))) || 1);
+      return buyQty > 0 && rewardQty > 0 ? (buyQty + rewardQty) + "=" + buyQty : text;
+    }
     return "";
   }
 

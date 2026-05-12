@@ -7483,7 +7483,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
   function formatPublicBuyXGetYBadge(mechanic) {
     const buyQty = Math.max(1, Number(mechanic?.buy_qty || 0) || 0);
     const rewardQty = Math.max(1, Number(mechanic?.reward_qty || 0) || 0);
-    return `${buyQty}+${rewardQty}`;
+    return `${buyQty + rewardQty}=${buyQty}`;
   }
 
   async function ensureOrderBenefitsMetaColumn() {

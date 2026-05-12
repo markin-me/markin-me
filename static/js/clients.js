@@ -7001,6 +7001,12 @@
     return fallback;
   }
 
+  function formatDiscountBuyXGetYRatio(mechanic) {
+    const buyQty = Math.max(1, Number(mechanic?.buy_qty || 0) || 1);
+    const rewardQty = Math.max(1, Number(mechanic?.reward_qty || 0) || 1);
+    return `${buyQty + rewardQty}=${buyQty}`;
+  }
+
   function formatDiscountApplyToText(applyTo) {
     return {
       order: 'Заказ',
@@ -7012,7 +7018,7 @@
 
   function formatDiscountMechanicText(discount) {
     const mechanic = getDiscountMechanic(discount);
-    if (mechanic.type === 'buy_x_get_y') return '1+1';
+    if (mechanic.type === 'buy_x_get_y') return formatDiscountBuyXGetYRatio(mechanic);
     if (mechanic.type === 'loyalty_progress') return 'Задания';
     if (mechanic.type === 'threshold') return 'Пороговая';
     return 'Скидка';
@@ -7022,7 +7028,7 @@
     if (!discount) return "—";
     const mechanic = getDiscountMechanic(discount);
     if (mechanic.type === 'buy_x_get_y') {
-      return `${mechanic.buy_qty}+${mechanic.reward_qty}`;
+      return formatDiscountBuyXGetYRatio(mechanic);
     }
     if (mechanic.type === 'threshold') {
       return `${Array.isArray(mechanic.tiers) ? mechanic.tiers.length : 0} ступ.`;
@@ -15265,7 +15271,7 @@
 
   function formatDiscountMechanicText(discount) {
     const mechanic = getDiscountMechanic(discount);
-    if (mechanic.type === 'buy_x_get_y') return '1+1';
+    if (mechanic.type === 'buy_x_get_y') return formatDiscountBuyXGetYRatio(mechanic);
     if (mechanic.type === 'loyalty_progress') return 'Задания';
     if (mechanic.type === 'threshold') return 'Пороговая';
     return 'Скидка';
@@ -15275,7 +15281,7 @@
     if (!discount) return '—';
     const mechanic = getDiscountMechanic(discount);
     if (mechanic.type === 'buy_x_get_y') {
-      return `${mechanic.buy_qty}+${mechanic.reward_qty}`;
+      return formatDiscountBuyXGetYRatio(mechanic);
     }
     if (mechanic.type === 'threshold') {
       return `${Array.isArray(mechanic.tiers) ? mechanic.tiers.length : 0} ступ.`;
@@ -15297,7 +15303,7 @@
     if (!discount) return '—';
     const mechanic = getDiscountMechanic(discount);
     if (mechanic.type === 'buy_x_get_y') {
-      return `${mechanic.buy_qty}+${mechanic.reward_qty}`;
+      return formatDiscountBuyXGetYRatio(mechanic);
     }
     if (mechanic.type === 'loyalty_progress') {
       return formatDiscountProgressThresholdValue(mechanic);
@@ -17866,7 +17872,7 @@
       const buyQty = Math.max(1, Number(mechanic.buy_qty || 0));
       const rewardQty = Math.max(1, Number(mechanic.reward_qty || 0));
       if (buyQty > 0 && rewardQty > 0) {
-        return `${buyQty}=${rewardQty}`;
+        return formatDiscountBuyXGetYRatio({ buy_qty: buyQty, reward_qty: rewardQty });
       }
     }
     if (mechanic.type === 'buy_x_get_y') {
@@ -17882,7 +17888,7 @@
       const buyQty = Math.max(1, Number(mechanic.buy_qty || 0));
       const rewardQty = Math.max(1, Number(mechanic.reward_qty || 0));
       if (buyQty > 0 && rewardQty > 0) {
-        return `${buyQty}+${rewardQty}`;
+        return formatDiscountBuyXGetYRatio({ buy_qty: buyQty, reward_qty: rewardQty });
       }
     }
     if (mechanic.type === 'threshold') {
@@ -18036,7 +18042,7 @@
         ? `Промокод на ${target}`
         : `Скидка на ${target}`;
     }
-    if (mechanic.type === 'buy_x_get_y') return 'Акция 1+1';
+    if (mechanic.type === 'buy_x_get_y') return `Акция ${formatDiscountBuyXGetYRatio(mechanic)}`;
     if (mechanic.type === 'threshold') return 'Пороговая акция';
     if (mechanic.type === 'loyalty_progress') return 'Задание';
     return 'Акция';
@@ -18054,7 +18060,7 @@
       return targetMap[mechanic.apply_to] || 'на заказ';
     }
     if (mechanic.type === 'buy_x_get_y') {
-      return `${mechanic.buy_qty}+${mechanic.reward_qty}`;
+      return formatDiscountBuyXGetYRatio(mechanic);
     }
     if (mechanic.type === 'threshold') return 'по порогам суммы';
     if (mechanic.type === 'loyalty_progress') return 'по накопительному порогу';

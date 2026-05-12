@@ -867,7 +867,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
   function formatOrderBuyXGetYBadge(mechanic) {
     const buyQty = Math.max(1, Number(mechanic?.buy_qty || 0) || 1);
     const rewardQty = Math.max(1, Number(mechanic?.reward_qty || 0) || 1);
-    return `${buyQty}+${rewardQty}`;
+    return `${buyQty + rewardQty}=${buyQty}`;
   }
 
   function getOrderDiscountTargetEntityType(row) {
