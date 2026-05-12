@@ -16729,21 +16729,11 @@ function updateCartBadge() {
 
   async function runShopPullRefresh() {
     setShopPullRefreshProgress(76, true);
-    try {
-      await refreshShopData();
-      await refreshHomeBonusConfigUi({ force: true, skipPendingModal: true }).catch(() => null);
-      if (getCustomerToken() && isHomeBonusJoined()) {
-        await loadHomeReferralStats({ force: true }).catch(() => null);
-      }
-      if (typeof window.syncShopCartPricingSummaryUi === "function") {
-        await Promise.resolve(window.syncShopCartPricingSummaryUi()).catch(() => {});
-      }
-    } finally {
-      setTimeout(() => {
-        setShopPullRefreshProgress(0, false);
-        if (shopPullRefreshState) shopPullRefreshState.refreshing = false;
-      }, 180);
-    }
+    window.location.reload();
+    setTimeout(() => {
+      setShopPullRefreshProgress(0, false);
+      if (shopPullRefreshState) shopPullRefreshState.refreshing = false;
+    }, 1200);
   }
 
   function bindShopPullToRefresh() {

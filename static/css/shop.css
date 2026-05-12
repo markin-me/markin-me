@@ -14099,9 +14099,8 @@ body.page-shop .shop-cart-content .shop-cart-mode-header.is-condensed .shop-cart
 }
 
 @media (max-width: 768px){
-  body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-cart) .modal-backdrop,
-  body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-benefits) .modal-backdrop,
-  body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-address) .modal-backdrop,
+  body:has(.app-modal-body.shop-cart-sheet-body) .modal-backdrop,
+  body:has(.app-modal-body .shop-auth) .modal-backdrop,
   body:has(.app-modal-body.shop-active-order-details-sheet-body) .modal-backdrop,
   body:has(.app-modal-body.shop-profile-sheet-body) .modal-backdrop,
   body:has(.app-modal-body.shop-profile-orders-sheet-body) .modal-backdrop,
@@ -14109,9 +14108,8 @@ body.page-shop .shop-cart-content .shop-cart-mode-header.is-condensed .shop-cart
     z-index: 10018;
   }
 
-  body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-cart) .shop-mobile-bottom-container,
-  body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-benefits) .shop-mobile-bottom-container,
-  body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-address) .shop-mobile-bottom-container,
+  body:has(.app-modal-body.shop-cart-sheet-body) .shop-mobile-bottom-container,
+  body:has(.app-modal-body .shop-auth) .shop-mobile-bottom-container,
   body:has(.app-modal-body.shop-active-order-details-sheet-body) .shop-mobile-bottom-container,
   body:has(.app-modal-body.shop-profile-sheet-body) .shop-mobile-bottom-container,
   body:has(.app-modal-body.shop-profile-orders-sheet-body) .shop-mobile-bottom-container,
@@ -14119,9 +14117,8 @@ body.page-shop .shop-cart-content .shop-cart-mode-header.is-condensed .shop-cart
     z-index: 10020;
   }
 
-  body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-cart) .app-modal,
-  body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-benefits) .app-modal,
-  body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-address) .app-modal,
+  body:has(.app-modal-body.shop-cart-sheet-body) .app-modal,
+  body:has(.app-modal-body .shop-auth) .app-modal,
   body:has(.app-modal-body.shop-active-order-details-sheet-body) .app-modal,
   body:has(.app-modal-body.shop-profile-sheet-body) .app-modal,
   body:has(.app-modal-body.shop-profile-orders-sheet-body) .app-modal,

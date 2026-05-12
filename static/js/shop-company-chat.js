@@ -6924,7 +6924,15 @@
   }
 
   var emojiPickerInitialized = false;
+  function closeOpenAppModalBeforeChat() {
+    if (!window.AppModal || typeof window.AppModal.isOpen !== "function" || typeof window.AppModal.close !== "function") return;
+    if (window.AppModal.isOpen()) {
+      window.AppModal.close("sheet");
+    }
+  }
+
   function openCompanyChat() {
+    closeOpenAppModalBeforeChat();
     suppressIncomingAlertsFor(1800);
     cancelDeferredClosedFeedPersist();
     preloadEmojiAtlas();
