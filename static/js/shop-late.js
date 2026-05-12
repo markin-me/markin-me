@@ -28020,6 +28020,9 @@ function renderSheetAddressList() {
           progressButton.addEventListener("click", (event) => {
             event.preventDefault();
             event.stopPropagation();
+            if (typeof window.openShopProfileBonusConditionsPopover === "function") {
+              window.openShopProfileBonusConditionsPopover(progressButton, activeBonusLevel);
+            }
           });
         }
         wrap.appendChild(bonusProgress);

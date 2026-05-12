@@ -1799,6 +1799,50 @@
     `;
   }
 
+  function closeShopProfileBonusConditionsPopover() {
+    document.querySelectorAll(".shop-profile-bonus-conditions-popover").forEach((node) => node.remove());
+  }
+
+  function openShopProfileBonusConditionsPopover(trigger, level) {
+    if (!trigger) return;
+    const nextLevel = getHomeBonusNextLevel(level);
+    if (!nextLevel) return;
+    const conditionsHtml = buildBonusCardsConditionsProgressHtml(nextLevel);
+    if (!conditionsHtml) return;
+    const existing = document.querySelector(".shop-profile-bonus-conditions-popover");
+    if (existing && existing._sourceTrigger === trigger) {
+      existing.remove();
+      return;
+    }
+    closeShopProfileBonusConditionsPopover();
+    const popover = document.createElement("div");
+    popover.className = "shop-profile-bonus-conditions-popover";
+    popover._sourceTrigger = trigger;
+    popover.innerHTML = conditionsHtml;
+    popover.addEventListener("click", (event) => event.stopPropagation());
+    document.body.appendChild(popover);
+
+    const triggerRect = trigger.getBoundingClientRect();
+    const popoverRect = popover.getBoundingClientRect();
+    const gap = 8;
+    const left = Math.max(12, Math.min(window.innerWidth - popoverRect.width - 12, triggerRect.left + (triggerRect.width - popoverRect.width) / 2));
+    const top = Math.max(12, Math.min(window.innerHeight - popoverRect.height - 12, triggerRect.bottom + gap));
+    popover.style.left = `${left}px`;
+    popover.style.top = `${top}px`;
+
+    setTimeout(() => {
+      const close = (event) => {
+        if (popover.contains(event.target) || trigger.contains(event.target)) return;
+        popover.remove();
+        document.removeEventListener("click", close, true);
+        document.removeEventListener("touchstart", close, true);
+      };
+      document.addEventListener("click", close, true);
+      document.addEventListener("touchstart", close, true);
+    }, 0);
+  }
+  window.openShopProfileBonusConditionsPopover = openShopProfileBonusConditionsPopover;
+
   function formatShopBonusDateTime(value) {
     const date = value instanceof Date ? value : new Date(value);
     if (!Number.isFinite(date.getTime())) return "";
@@ -1822,9 +1866,36 @@
     return { label: "Корректировка", sign: "", tone: "neutral" };
   }
 
+  function getBonusTransactionReasonText(item, meta) {
+    const raw = String(item?.reason || item?.source || "").trim();
+    const orderMatch = raw.match(/^order:(\d+):([^:]+)$/);
+    if (orderMatch) {
+      const orderId = orderMatch[1];
+      const action = orderMatch[2];
+      if (action === "bonus_accrual") return `Бонусы за заказ #${orderId}`;
+      if (action === "bonus_redeem") return `Списано в заказе #${orderId}`;
+      return `Заказ #${orderId}`;
+    }
+    const referralLevelMatch = raw.match(/^level_percent:[^:]*:(\d+):L(\d+):/);
+    if (referralLevelMatch) {
+      return `Бонус за заказ реферала ${referralLevelMatch[2]}-го уровня`;
+    }
+    if (/^first_purchase:/.test(raw)) return "Бонус за первую покупку друга";
+    if (raw === "level_up" || item?.type === "level_up") return "Переход на новый уровень";
+    if (raw === "join" || item?.type === "join") return "Бонус за присоединение к программе";
+    if (item?.level_title) return String(item.level_title || "").trim();
+    return meta?.label || "Движение бонусов";
+  }
+
+  function isVisibleBonusTransaction(item) {
+    const raw = String(item?.reason || item?.source || "").trim();
+    return raw !== "bonus_reserve" && !/^order:\d+:bonus_reserve$/.test(raw);
+  }
+
   function buildBonusTransactionsHtml(items, filter = "all") {
     const rows = Array.isArray(items) ? items : [];
-    const filtered = filter === "all" ? rows : rows.filter((item) => String(item?.type || "") === filter);
+    const visibleRows = rows.filter(isVisibleBonusTransaction);
+    const filtered = filter === "all" ? visibleRows : visibleRows.filter((item) => String(item?.type || "") === filter);
     if (!filtered.length) {
       return '<div class="shop-bonus-sheet-empty">Движений пока нет</div>';
     }
@@ -1833,7 +1904,7 @@
         ${filtered.map((item) => {
           const meta = getBonusTransactionTypeMeta(item?.type);
           const amount = Math.abs(Number(item?.amount || 0));
-          const reason = String(item?.reason || item?.level_title || meta.label).trim();
+          const reason = getBonusTransactionReasonText(item, meta);
           const dateText = formatShopBonusDateTime(item?.created_at);
           const amountText = amount > 0 ? `${meta.sign}${formatShopBonusMoney(amount)}` : `0 ${getShopBonusCoinIconHtml()}`;
           return `
@@ -16620,6 +16691,113 @@ function updateCartBadge() {
     }
   }
 
+  let shopPullRefreshState = null;
+
+  function isMobilePullRefreshAvailable() {
+    if (!isShopPage()) return false;
+    if (!("ontouchstart" in window) && Number(navigator.maxTouchPoints || 0) <= 0) return false;
+    if (window.matchMedia && !window.matchMedia("(max-width: 768px)").matches) return false;
+    if (document.body?.classList.contains("modal-open") || document.body?.classList.contains("sheet-open")) return false;
+    if (window.AppModal?.isOpen?.()) return false;
+    return true;
+  }
+
+  function getShopPullRefreshScrollTop() {
+    return Math.max(0, Number(window.scrollY || document.documentElement?.scrollTop || document.body?.scrollTop || 0));
+  }
+
+  function ensureShopPullRefreshIndicator() {
+    let indicator = document.querySelector("[data-shop-pull-refresh]");
+    if (indicator) return indicator;
+    indicator = document.createElement("div");
+    indicator.className = "shop-pull-refresh";
+    indicator.setAttribute("data-shop-pull-refresh", "1");
+    indicator.setAttribute("aria-hidden", "true");
+    indicator.innerHTML = '<span class="shop-pull-refresh__spinner"></span>';
+    document.body.appendChild(indicator);
+    return indicator;
+  }
+
+  function setShopPullRefreshProgress(distance, refreshing = false) {
+    const indicator = ensureShopPullRefreshIndicator();
+    const clamped = Math.max(0, Math.min(96, Number(distance || 0)));
+    indicator.classList.toggle("is-visible", clamped > 4 || refreshing);
+    indicator.classList.toggle("is-ready", clamped >= 76 || refreshing);
+    indicator.classList.toggle("is-refreshing", !!refreshing);
+    indicator.style.setProperty("--shop-pull-refresh-y", `${Math.round(clamped)}px`);
+  }
+
+  async function runShopPullRefresh() {
+    setShopPullRefreshProgress(76, true);
+    try {
+      await refreshShopData();
+      await refreshHomeBonusConfigUi({ force: true, skipPendingModal: true }).catch(() => null);
+      if (getCustomerToken() && isHomeBonusJoined()) {
+        await loadHomeReferralStats({ force: true }).catch(() => null);
+      }
+      if (typeof window.syncShopCartPricingSummaryUi === "function") {
+        await Promise.resolve(window.syncShopCartPricingSummaryUi()).catch(() => {});
+      }
+    } finally {
+      setTimeout(() => {
+        setShopPullRefreshProgress(0, false);
+        if (shopPullRefreshState) shopPullRefreshState.refreshing = false;
+      }, 180);
+    }
+  }
+
+  function bindShopPullToRefresh() {
+    if (shopPullRefreshState) return;
+    shopPullRefreshState = {
+      startX: 0,
+      startY: 0,
+      pulling: false,
+      refreshing: false,
+      distance: 0,
+    };
+    const stateRef = shopPullRefreshState;
+    const threshold = 76;
+
+    document.addEventListener("touchstart", (event) => {
+      if (stateRef.refreshing || !isMobilePullRefreshAvailable()) return;
+      const touch = event.touches && event.touches[0];
+      if (!touch || getShopPullRefreshScrollTop() > 1) return;
+      stateRef.startX = touch.clientX;
+      stateRef.startY = touch.clientY;
+      stateRef.distance = 0;
+      stateRef.pulling = false;
+    }, { passive: true });
+
+    document.addEventListener("touchmove", (event) => {
+      if (stateRef.refreshing || !isMobilePullRefreshAvailable()) return;
+      const touch = event.touches && event.touches[0];
+      if (!touch || getShopPullRefreshScrollTop() > 1) return;
+      const dy = touch.clientY - stateRef.startY;
+      const dx = Math.abs(touch.clientX - stateRef.startX);
+      if (dy <= 0 || dx > dy) return;
+      stateRef.pulling = true;
+      stateRef.distance = Math.min(96, dy * 0.55);
+      setShopPullRefreshProgress(stateRef.distance, false);
+      if (stateRef.distance > 8) event.preventDefault();
+    }, { passive: false });
+
+    const finishPull = () => {
+      if (!stateRef.pulling || stateRef.refreshing) return;
+      const shouldRefresh = stateRef.distance >= threshold;
+      stateRef.pulling = false;
+      stateRef.distance = 0;
+      if (shouldRefresh) {
+        stateRef.refreshing = true;
+        void runShopPullRefresh();
+      } else {
+        setShopPullRefreshProgress(0, false);
+      }
+    };
+
+    document.addEventListener("touchend", finishPull, { passive: true });
+    document.addEventListener("touchcancel", finishPull, { passive: true });
+  }
+
 
 // -----------------------------
 // Init (core)
@@ -16770,6 +16948,7 @@ async function initCore() {
 
     bindCategoryScrollSpy();
     bindShopWarmups();
+    bindShopPullToRefresh();
     syncStorefrontChatWidgetStateOnBoot().catch(function () {});
     startStockSync();
 

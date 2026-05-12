@@ -7398,6 +7398,48 @@ body.page-shop{
   --column-scroll-pad: 400px;
 }
 
+.shop-pull-refresh{
+  --shop-pull-refresh-y: 0px;
+  position: fixed;
+  left: 50%;
+  top: calc(env(safe-area-inset-top) + 10px);
+  z-index: 260;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--color-surface);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, .16);
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, calc(-56px + var(--shop-pull-refresh-y))) scale(.86);
+  transition: opacity .16s ease, transform .16s ease;
+}
+
+.shop-pull-refresh.is-visible{
+  opacity: 1;
+  transform: translate(-50%, calc(-18px + var(--shop-pull-refresh-y))) scale(1);
+}
+
+.shop-pull-refresh__spinner{
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 3px solid color-mix(in srgb, var(--color-primary), transparent 72%);
+  border-top-color: var(--color-primary);
+  transform: rotate(0deg);
+}
+
+.shop-pull-refresh.is-refreshing .shop-pull-refresh__spinner,
+.shop-pull-refresh.is-ready .shop-pull-refresh__spinner{
+  animation: shopPullRefreshSpin .72s linear infinite;
+}
+
+@keyframes shopPullRefreshSpin{
+  to{transform:rotate(360deg)}
+}
+
 /* ==========================================================================
    Layout
    ========================================================================== */
@@ -20150,6 +20192,25 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
 .shop-profile-bonus-progress .shop-bonus-level-progress-card{
   width: 100%;
   margin: 0;
+}
+
+.shop-profile-bonus-conditions-popover{
+  position: fixed;
+  z-index: 100000;
+  width: min(340px, calc(100vw - 24px));
+  max-height: min(420px, calc(100dvh - 120px));
+  overflow: auto;
+  padding: 0;
+  border-radius: 24px;
+  background: var(--color-surface);
+  box-shadow: 0 18px 42px rgba(15, 23, 42, .22);
+  border: 1px solid var(--color-border);
+}
+
+.shop-profile-bonus-conditions-popover .shop-bonus-cards-conditions{
+  margin: 0;
+  border: none;
+  box-shadow: none;
 }
 
 .shop-profile-top.hidden,
