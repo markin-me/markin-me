@@ -9073,6 +9073,32 @@ body.page-cash #clientAddresses .shop-address-actions{
     grid-template-columns:1fr;
   }
 
+  body[data-admin-active-page]:not(.page-chat) .main-container,
+  body[data-admin-active-page]:not(.page-chat) .app-grid,
+  body[data-admin-active-page]:not(.page-chat) .page-col-center,
+  body[data-admin-active-page]:not(.page-chat) .page-col-center > *,
+  body[data-admin-active-page]:not(.page-chat) .center-stack,
+  body[data-admin-active-page]:not(.page-chat) .center-stack > .panel,
+  body[data-admin-active-page]:not(.page-chat) .panel,
+  body[data-admin-active-page]:not(.page-chat) .panel-header,
+  body[data-admin-active-page]:not(.page-chat) .panel-body,
+  body[data-admin-active-page]:not(.page-chat) .content-view,
+  body[data-admin-active-page]:not(.page-chat) .orders-list,
+  body[data-admin-active-page]:not(.page-chat) .stage-list,
+  body[data-admin-active-page]:not(.page-chat) .products-accordion,
+  body[data-admin-active-page]:not(.page-chat) .acc-panel-inner{
+    width:100%;
+    max-width:100%;
+    min-width:0;
+    box-sizing:border-box;
+  }
+
+  body[data-admin-active-page]:not(.page-chat) .main-container,
+  body[data-admin-active-page]:not(.page-chat) .app-grid,
+  body[data-admin-active-page]:not(.page-chat) .page-col-center{
+    overflow-x:hidden;
+  }
+
   body:not(.page-chat) .app-grid{
     height:auto;
     min-height:0;
@@ -9080,7 +9106,12 @@ body.page-cash #clientAddresses .shop-address-actions{
   }
 
   .app-sidebar{grid-column:1;grid-row:1}
-  .page-col-center{grid-column:1;grid-row:1}
+  .page-col-center{
+    grid-column:1;
+    grid-row:1;
+    justify-self:stretch;
+    align-self:stretch;
+  }
 
   body:not(.page-chat) .page-col,
   body:not(.page-chat) .app-grid > .panel,
@@ -28466,6 +28497,36 @@ body.page-new-order .page-col-left > #cashierQueuePanel{
 body.page-new-order .page-col-left > .panel:not(#cashierQueuePanel){
   flex:1 1 auto;
   min-height:0;
+}
+
+@media (max-width:768px){
+  body[data-admin-active-page]:not(.page-chat) .main-container.app-grid{
+    display:grid;
+    grid-template-columns:minmax(0, 1fr) !important;
+    align-items:stretch;
+    width:100%;
+    max-width:100%;
+    min-width:0;
+    overflow-x:hidden;
+  }
+
+  body[data-admin-active-page]:not(.page-chat) .page-col-center,
+  body[data-admin-active-page]:not(.page-chat) #ordersCenterPane,
+  body[data-admin-active-page]:not(.page-chat) #ordersCheckoutCenterPane,
+  body[data-admin-active-page]:not(.page-chat) #ordersCenterPane > .center-stack,
+  body[data-admin-active-page]:not(.page-chat) #ordersCheckoutCenterPane > .center-stack,
+  body[data-admin-active-page]:not(.page-chat) .center-stack,
+  body[data-admin-active-page]:not(.page-chat) .center-stack > .panel{
+    width:100% !important;
+    max-width:100% !important;
+    min-width:0 !important;
+    box-sizing:border-box;
+  }
+
+  body[data-admin-active-page]:not(.page-chat) .page-col-left,
+  body[data-admin-active-page]:not(.page-chat) .page-col-right{
+    display:none !important;
+  }
 }
 
 .cashier-toolbar-meta{
