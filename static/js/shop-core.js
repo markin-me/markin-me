@@ -580,9 +580,11 @@
   }
 
   function normalizeShopCardPercent(value, fallback = 0) {
-    const parsed = Number(value);
+    const parsed = Number(String(value ?? "").replace(",", "."));
     if (!Number.isFinite(parsed)) return Math.max(0, Number(fallback) || 0);
-    return Math.max(0, Math.round(parsed));
+    return new Intl.NumberFormat("ru-RU", {
+      maximumFractionDigits: 1,
+    }).format(Math.max(0, Math.round(parsed * 10) / 10));
   }
 
   function formatShopBonusNumber(value, fallback = 0) {

@@ -708,8 +708,8 @@
           titleBackgroundEnabled: item?.titleBackgroundEnabled !== false,
           titleBackgroundColor: normalizeHexColor(item?.titleBackgroundColor, '#ffffff'),
           titleBackgroundOpacity: normalizeBannerOpacity(item?.titleBackgroundOpacity, 90),
-          cashbackPercent: normalizeNumberInputValue(item?.cashbackPercent, 1),
-          redeemPercent: normalizeNumberInputValue(item?.redeemPercent, 0),
+          cashbackPercent: normalizeBonusPercentInputValue(item?.cashbackPercent, 1),
+          redeemPercent: normalizeBonusPercentInputValue(item?.redeemPercent, 0),
           referralBonusPercent: normalizeBonusPercentInputValue(item?.referralBonusPercent, 0),
           qrEnabled: item?.qrEnabled !== false,
           mainColor: normalizeHexColor(item?.mainColor ?? item?.designColor, '#46b13b'),
@@ -10648,11 +10648,11 @@
     if (bonusLevelContentColorBtn) bonusLevelContentColorBtn.disabled = !isEditing;
     if (!isEditing) closeBonusLevelInlinePopovers();
     if (bonusLevelCashbackPercentInput) {
-      bonusLevelCashbackPercentInput.value = String(normalizeNumberInputValue(current.cashbackPercent, 1) || 0);
+      bonusLevelCashbackPercentInput.value = String(normalizeBonusPercentInputValue(current.cashbackPercent, 1) || 0);
       bonusLevelCashbackPercentInput.disabled = !isEditing;
     }
     if (bonusLevelRedeemPercentInput) {
-      bonusLevelRedeemPercentInput.value = String(normalizeNumberInputValue(current.redeemPercent, 0) || 0);
+      bonusLevelRedeemPercentInput.value = String(normalizeBonusPercentInputValue(current.redeemPercent, 0) || 0);
       bonusLevelRedeemPercentInput.disabled = !isEditing;
     }
     if (bonusLevelAllowSimultaneousSwitch) {
@@ -10763,7 +10763,7 @@
       previewBonusValue.innerHTML = `0 ${getBonusCoinIconHtml('1em', '2px')}`;
     }
     if (previewCashbackValue) {
-      const cashback = normalizeNumberInputValue(current.cashbackPercent, 1);
+      const cashback = normalizeBonusPercentInputValue(current.cashbackPercent, 1);
       previewCashbackValue.textContent = `${cashback}%`;
     }
     const favoriteCategoryConfig = getBonusLevelFavoriteCategoryConfig(current);
@@ -10849,8 +10849,8 @@
         periodUnit: draft.tariffPeriodUnit,
       }),
       tariffPayWithBonus: draft.tariffPayWithBonus === true,
-      cashbackPercent: normalizeNumberInputValue(draft.cashbackPercent, 1),
-      redeemPercent: normalizeNumberInputValue(draft.redeemPercent, 0),
+      cashbackPercent: normalizeBonusPercentInputValue(draft.cashbackPercent, 1),
+      redeemPercent: normalizeBonusPercentInputValue(draft.redeemPercent, 0),
       allowRedeemAndAccrue: draft.allowRedeemAndAccrue === true,
       referralBonusPercent: normalizeBonusPercentInputValue(draft.referralBonusPercent, 0),
       mainColor: normalizeHexColor(draft.mainColor, '#46b13b'),
@@ -10956,7 +10956,7 @@
       const mainColor = normalizeHexColor(level.mainColor ?? level.designColor, '#46b13b');
       const baseColor = normalizeHexColor(level.baseColor, '#1f8d2e');
       const contentColor = normalizeHexColor(level.contentColor, '#ffffff');
-      const cashbackValue = normalizeNumberInputValue(level.cashbackPercent, 1);
+      const cashbackValue = normalizeBonusPercentInputValue(level.cashbackPercent, 1);
       const favoriteCategoryConfig = getBonusLevelFavoriteCategoryConfig(level);
       const favoriteCategoryBonus = favoriteCategoryConfig.bonusPercent;
       const favoriteCategoryLimit = favoriteCategoryConfig.limit;
@@ -24144,7 +24144,7 @@
   if (bonusLevelCashbackPercentInput) {
     bonusLevelCashbackPercentInput.addEventListener('input', () => {
       applyBonusLevelEditorDraftPatch({
-        cashbackPercent: normalizeNumberInputValue(bonusLevelCashbackPercentInput.value, 1),
+        cashbackPercent: normalizeBonusPercentInputValue(bonusLevelCashbackPercentInput.value, 1),
       });
     });
   }
@@ -24160,7 +24160,7 @@
   if (bonusLevelRedeemPercentInput) {
     bonusLevelRedeemPercentInput.addEventListener('input', () => {
       applyBonusLevelEditorDraftPatch({
-        redeemPercent: normalizeNumberInputValue(bonusLevelRedeemPercentInput.value, 0),
+        redeemPercent: normalizeBonusPercentInputValue(bonusLevelRedeemPercentInput.value, 0),
       });
     });
   }
