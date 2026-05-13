@@ -809,17 +809,24 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
     const settings = await loadBonusProgramSettings(queryable, normalizedTenantId);
     const blockedByRedeem = Boolean(benefitsMeta?.bonus_accrual_blocked_by_redeem)
       || (redeemAmount > 0 && !settings.allowRedeemAndAccrue);
-    const recalculatedAccrualAmount = blockedByRedeem ? null : await calculateStoredOrderBonusAccrual(
-      queryable,
-      normalizedTenantId,
-      normalizedOrderId,
-      normalizedCustomerId,
-      Number(benefitsMeta?.bonus_level_id || account.level_id || 0)
-    );
+    const storedAccrualAmount = Number.isFinite(Number(benefitsMeta?.bonus_accrual_amount))
+      ? Number(benefitsMeta.bonus_accrual_amount)
+      : null;
+    const recalculatedAccrualAmount = blockedByRedeem || storedAccrualAmount != null
+      ? null
+      : await calculateStoredOrderBonusAccrual(
+        queryable,
+        normalizedTenantId,
+        normalizedOrderId,
+        normalizedCustomerId,
+        Number(benefitsMeta?.bonus_level_id || account.level_id || 0)
+      );
     const accrualAmount = blockedByRedeem ? 0 : roundMoney(Math.max(
       0,
-      recalculatedAccrualAmount == null
-        ? Number(benefitsMeta?.bonus_accrual_amount || 0)
+      storedAccrualAmount != null
+        ? storedAccrualAmount
+        : recalculatedAccrualAmount == null
+          ? 0
         : Number(recalculatedAccrualAmount || 0)
     ));
     const accrualReason = `order:${normalizedOrderId}:bonus_accrual`;

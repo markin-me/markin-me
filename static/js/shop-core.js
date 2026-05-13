@@ -1779,8 +1779,12 @@
 
   function buildHomeBonusLevelProgressHtml(level) {
     const nextLevel = getHomeBonusNextLevel(level);
-    if (!nextLevel) return "";
-    const progressPercent = Math.round(getHomeBonusLevelProgressRatio(nextLevel) * 100);
+    const progressLevel = nextLevel || level;
+    const progressRows = getHomeBonusConditionRows(progressLevel);
+    const rawProgressPercent = Math.round(getHomeBonusLevelProgressRatio(progressLevel) * 100);
+    const progressPercent = nextLevel || progressRows.length
+      ? rawProgressPercent
+      : 100;
     const customer = getCustomerCache() || {};
     const customerPhoto = String(customer?.photo || "").trim();
     const customerName = String(customer?.name || customer?.full_name || customer?.phone || "Профиль").trim() || "Профиль";
@@ -1806,8 +1810,14 @@
   function openShopProfileBonusConditionsPopover(trigger, level) {
     if (!trigger) return;
     const nextLevel = getHomeBonusNextLevel(level);
-    if (!nextLevel) return;
-    const conditionsHtml = buildBonusCardsConditionsProgressHtml(nextLevel);
+    const conditionsHtml = nextLevel
+      ? buildBonusCardsConditionsProgressHtml(nextLevel)
+      : buildBonusCardsConditionsProgressHtml(level) || `
+        <div class="shop-bonus-cards-conditions">
+          <div class="shop-bonus-cards-conditions-title">Максимальный уровень достигнут</div>
+          <div class="shop-bonus-cards-conditions-subtitle">Вы уже на последнем уровне бонусной программы.</div>
+        </div>
+      `;
     if (!conditionsHtml) return;
     const existing = document.querySelector(".shop-profile-bonus-conditions-popover");
     if (existing && existing._sourceTrigger === trigger) {

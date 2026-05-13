@@ -5965,7 +5965,7 @@ optionGroups.forEach((group) => {
       comboHydratedOnce = true;
       applyRandomizedInitialSelections();
       await Promise.all(blocks.map((_, blockIndex) => hydrateBlockSelection(blockIndex, {
-        useRandomizer: shouldRandomizeInitialPreset,
+        useRandomizer: false,
         preferSavedState: true,
       })));
     }

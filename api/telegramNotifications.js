@@ -75,6 +75,150 @@ function isAutoAddItem(item) {
   return name === 'приборы';
 }
 
+function roundMoney(value) {
+  const n = Number(value || 0);
+  if (!Number.isFinite(n)) return 0;
+  return Math.round(n * 100) / 100;
+}
+
+function getOrderItemLineTotal(item) {
+  const lineTotal = Number(item?.line_total ?? item?.total ?? item?.total_price);
+  if (Number.isFinite(lineTotal)) return roundMoney(lineTotal);
+  const unitPrice = Number(item?.price || 0);
+  const qty = Math.max(0, Number(item?.qty || item?.quantity || 0));
+  return roundMoney(unitPrice * qty);
+}
+
+function parseOrderDiscountsJson(order) {
+  const raw = order?.discounts_json;
+  if (Array.isArray(raw)) return raw;
+  if (!raw) return [];
+  try {
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function normalizeOrderDiscountBreakdownSourceKind(entry) {
+  const raw = String(entry?.source_kind ?? entry?.sourceKind ?? entry?.source ?? entry?.kind ?? '').trim().toLowerCase();
+  if (raw === 'promo_code' || raw === 'reward_promo') return 'promo_code';
+  if (raw === 'reward_discount' || raw === 'discount') return 'discount';
+  const key = String(entry?.key || '').trim().toLowerCase();
+  if (key.startsWith('promo_')) return 'promo_code';
+  if (key.startsWith('discount_')) return 'discount';
+  return null;
+}
+
+function buildOrderStoredDiscountBreakdown(order) {
+  const fallbackPromoCode = String(order?.promo_code || '').trim() || null;
+  return parseOrderDiscountsJson(order)
+    .map((entry) => {
+      const sourceKind = normalizeOrderDiscountBreakdownSourceKind(entry);
+      const promoCode = sourceKind === 'promo_code'
+        ? (String(entry?.promo_code || entry?.code || '').trim() || fallbackPromoCode)
+        : null;
+      return {
+        title: String(entry?.title || entry?.name || 'Скидка').trim() || 'Скидка',
+        amount: roundMoney(Number(entry?.discount_amount ?? entry?.amount ?? 0)),
+        sourceKind,
+        promoCode,
+      };
+    })
+    .filter((entry) => entry.amount > 0 && entry.sourceKind);
+}
+
+function buildOrderDiscountSummary(order) {
+  const orderTotal = roundMoney(Number(order?.total_price || order?.total || 0));
+  const deliveryCost = roundMoney(Number(order?.delivery_cost || 0));
+  const items = Array.isArray(order?.items) ? order.items : [];
+
+  let itemsTotalAfterItemDiscounts = 0;
+  let comboDiscount = 0;
+  let productDiscount = 0;
+  let autoAddDiscount = 0;
+
+  items.forEach((item) => {
+    const lineTotal = getOrderItemLineTotal(item);
+    itemsTotalAfterItemDiscounts += lineTotal;
+    const originalLineTotal = Math.max(
+      0,
+      Number(item?.old_line_total || 0),
+      Number(item?.original_line_total || 0),
+      Number(item?.discount?.original_line_total || 0)
+    );
+    const itemDiscount = originalLineTotal > lineTotal
+      ? roundMoney(originalLineTotal - lineTotal)
+      : 0;
+    if (!(itemDiscount > 0)) return;
+    if (String(item?.type || '') === 'combo') comboDiscount = roundMoney(comboDiscount + itemDiscount);
+    else if (isAutoAddItem(item)) autoAddDiscount = roundMoney(autoAddDiscount + itemDiscount);
+    else productDiscount = roundMoney(productDiscount + itemDiscount);
+  });
+
+  const storedDiscount = roundMoney(Math.max(0, Number(order?.discount_amount || 0)));
+  let breakdown = storedDiscount > 0
+    ? [
+        { title: 'Комбо', amount: comboDiscount },
+        { title: 'Товарные скидки', amount: productDiscount },
+        { title: 'Автодобавление', amount: autoAddDiscount },
+      ].filter((entry) => entry.amount > 0)
+    : [];
+  let knownDiscount = breakdown.reduce((sum, entry) => roundMoney(sum + entry.amount), 0);
+
+  buildOrderStoredDiscountBreakdown(order).forEach((entry) => {
+    const title = entry.sourceKind === 'promo_code'
+      ? (entry.promoCode ? `Промокод ${entry.promoCode}` : entry.title)
+      : entry.title;
+    const existing = breakdown.find((item) => item.title === title);
+    if (existing) existing.amount = roundMoney(existing.amount + entry.amount);
+    else breakdown.push({ title, amount: entry.amount });
+  });
+  knownDiscount = breakdown.reduce((sum, entry) => roundMoney(sum + entry.amount), 0);
+
+  const customerOrderDiscount = Math.max(0, roundMoney(storedDiscount - knownDiscount));
+  if (customerOrderDiscount > 0) {
+    breakdown = [
+      { title: 'Клиентская скидка', amount: customerOrderDiscount },
+      ...breakdown,
+    ];
+    knownDiscount = roundMoney(knownDiscount + customerOrderDiscount);
+  }
+
+  const otherDiscount = Math.max(0, roundMoney(storedDiscount - knownDiscount));
+  if (otherDiscount > 0) breakdown.push({ title: 'Прочие скидки', amount: otherDiscount });
+
+  const totalDiscount = storedDiscount;
+  const subtotalBeforeDiscount = totalDiscount > 0
+    ? roundMoney(itemsTotalAfterItemDiscounts + totalDiscount)
+    : roundMoney(orderTotal - deliveryCost);
+
+  return { subtotalBeforeDiscount, totalDiscount, breakdown };
+}
+
+function parseOrderBenefitsMeta(order) {
+  const raw = order?.benefits_meta || order?.benefits_meta_json;
+  if (!raw) return {};
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw;
+  try {
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function buildOrderBonusSummary(order) {
+  const meta = parseOrderBenefitsMeta(order);
+  const accrualAmount = roundMoney(Math.max(0, Number(meta?.bonus_accrual_amount || 0)));
+  const blocked = meta?.bonus_accrual_blocked_by_redeem === true
+    || meta?.bonus_accrual_blocked_by_redeem === 'true'
+    || Number(meta?.bonus_accrual_blocked_by_redeem || 0) === 1;
+  if (accrualAmount > 0 || blocked) return { visible: true, amount: accrualAmount, blocked };
+  return { visible: false, amount: 0, blocked: false };
+}
+
 /** Формат времени/даты для "Ко времени" и "На дату" — без часового пояса. */
 function formatScheduledAt(scheduledAt, timeOptionCode) {
   if (scheduledAt == null) return '';
@@ -185,7 +329,15 @@ function formatOrderMessage(p, opts = {}) {
     return 0;
   });
 
+  let lastItemGroupKey = '';
   items.forEach((item) => {
+    const itemGroupKey = item.type === 'combo' ? 'combo' : 'product';
+    if (itemGroupKey !== lastItemGroupKey) {
+      if (lastItemGroupKey) lines.push('—');
+      lines.push(itemGroupKey === 'combo' ? 'КОМБО' : 'ТОВАРЫ');
+      lastItemGroupKey = itemGroupKey;
+    }
+
     if (item.type === 'combo') {
       const name = item.name || item.combo_title || 'Комбо';
       const qty = Math.max(1, Number(item.quantity || item.qty || 1));
@@ -272,11 +424,24 @@ function formatOrderMessage(p, opts = {}) {
   const changeAmount = Math.max(0, changeFrom - total);
   const showChange = changeAmount > 0;
   const paymentTitle = p.payment_method_title || p.payment_title || '';
+  const discountSummary = buildOrderDiscountSummary(p);
+  const discountAmount = Number(discountSummary.totalDiscount || 0);
+  const subtotal = Number(discountSummary.subtotalBeforeDiscount || 0);
+  const receiptPromoCode = String(p?.promo_code || '').trim();
+  const bonusSummary = buildOrderBonusSummary(p);
+  const showBonusRow = Boolean(bonusSummary.visible);
+  const bonusValue = bonusSummary.blocked && !(bonusSummary.amount > 0)
+    ? '0 ₽'
+    : `+${money(bonusSummary.amount || 0)}`;
 
   if (paymentTitle) lines.push(`Оплата ${escapeTg(paymentTitle)}`);
   if (showChange) lines.push(`Сдача с ${money(changeFrom)}`);
   if (showChange) lines.push(`Сдача ${money(changeAmount)}`);
+  if (discountAmount > 0) lines.push(`Сумма товаров ${money(subtotal)}`);
+  if (discountAmount > 0) lines.push(`Скидка -${money(discountAmount)}`);
+  if (receiptPromoCode) lines.push(`Промокод ${escapeTg(receiptPromoCode)}`);
   lines.push(`Доставка ${money(deliveryCost)}`);
+  if (showBonusRow) lines.push(`Бонусы ${bonusValue}`);
   lines.push(`ИТОГО: ${money(total)}`);
 
   lines.push('');

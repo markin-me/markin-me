@@ -144,7 +144,7 @@ function createOrderPrintTemplateBuilder({ db, helpers }) {
         o.customer_id, o.customer_name, o.customer_phone,
         o.address, o.comment, o.address_comment, o.cutlery_qty,
         o.change_from, o.total_price, o.delivery_cost,
-        o.discount_amount, o.discounts_json, o.items, o.promo_code,
+        o.discount_amount, o.discounts_json, o.benefits_meta_json, o.items, o.promo_code,
         DATE_FORMAT(o.scheduled_at, '%Y-%m-%d %H:%i:%s') AS scheduled_at,
         o.delivery_type_id, o.payment_id, o.time_option_id, o.status_id,
         o.pickup_store_id,
@@ -356,6 +356,30 @@ function createOrderPrintTemplateBuilder({ db, helpers }) {
     } catch {
       return [];
     }
+  }
+
+  function parseOrderBenefitsMeta(order) {
+    const raw = order?.benefits_meta || order?.benefits_meta_json;
+    if (!raw) return {};
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) return raw;
+    try {
+      const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
+  function buildOrderBonusSummary(order) {
+    const meta = parseOrderBenefitsMeta(order);
+    const accrualAmount = roundMoney(Math.max(0, Number(meta?.bonus_accrual_amount || 0)));
+    const blocked = meta?.bonus_accrual_blocked_by_redeem === true
+      || meta?.bonus_accrual_blocked_by_redeem === "true"
+      || Number(meta?.bonus_accrual_blocked_by_redeem || 0) === 1;
+    if (accrualAmount > 0 || blocked) {
+      return { visible: true, amount: accrualAmount, blocked };
+    }
+    return { visible: false, amount: 0, blocked: false };
   }
 
   function normalizeOrderDiscountBreakdownSourceKind(entry) {
@@ -838,6 +862,11 @@ function createOrderPrintTemplateBuilder({ db, helpers }) {
     const discountAmount = Number(receiptDiscountSummary.totalDiscount || 0);
     const subtotal = Number(receiptDiscountSummary.subtotalBeforeDiscount || 0);
     const receiptPromoCode = String(receiptOrder?.promo_code || "").trim();
+    const bonusSummary = buildOrderBonusSummary(receiptOrder);
+    const showBonusRow = Boolean(bonusSummary.visible);
+    const bonusValue = bonusSummary.blocked && !(bonusSummary.amount > 0)
+      ? "0 ₽"
+      : `+${money(bonusSummary.amount || 0)}`;
     return `
 <!DOCTYPE html>
 <html>
@@ -1049,6 +1078,7 @@ function createOrderPrintTemplateBuilder({ db, helpers }) {
     ${discountAmount > 0 ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Скидка</div><div class="receipt-summary-value">-${money(discountAmount)}</div></div>` : ""}
     ${receiptPromoCode ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Промокод</div><div class="receipt-summary-value">${escapeHtml(receiptPromoCode)}</div></div>` : ""}
     <div class="receipt-summary-row"><div class="receipt-summary-label">Доставка</div><div class="receipt-summary-value">${money(deliveryCost)}</div></div>
+    ${showBonusRow ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Бонусы</div><div class="receipt-summary-value">${bonusValue}</div></div>` : ""}
     <div class="receipt-total">ИТОГО: ${money(total)}</div>
   </div>
   <div style="margin-top: 20px; text-align: center; font-size: 10pt;">
@@ -1475,6 +1505,30 @@ function makePrintApiRouter({ db, helpers }) {
     } catch {
       return [];
     }
+  }
+
+  function parseOrderBenefitsMeta(order) {
+    const raw = order?.benefits_meta || order?.benefits_meta_json;
+    if (!raw) return {};
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) return raw;
+    try {
+      const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
+  function buildOrderBonusSummary(order) {
+    const meta = parseOrderBenefitsMeta(order);
+    const accrualAmount = roundMoney(Math.max(0, Number(meta?.bonus_accrual_amount || 0)));
+    const blocked = meta?.bonus_accrual_blocked_by_redeem === true
+      || meta?.bonus_accrual_blocked_by_redeem === "true"
+      || Number(meta?.bonus_accrual_blocked_by_redeem || 0) === 1;
+    if (accrualAmount > 0 || blocked) {
+      return { visible: true, amount: accrualAmount, blocked };
+    }
+    return { visible: false, amount: 0, blocked: false };
   }
 
   function isAutoAddItem(item) {
@@ -2339,6 +2393,11 @@ function makePrintApiRouter({ db, helpers }) {
       const discountAmount = Number(receiptDiscountSummary.totalDiscount || 0);
       const subtotal = Number(receiptDiscountSummary.subtotalBeforeDiscount || 0);
       const receiptPromoCode = String(receiptOrder?.promo_code || "").trim();
+      const bonusSummary = buildOrderBonusSummary(receiptOrder);
+      const showBonusRow = Boolean(bonusSummary.visible);
+      const bonusValue = bonusSummary.blocked && !(bonusSummary.amount > 0)
+        ? "0 ₽"
+        : `+${money(bonusSummary.amount || 0)}`;
 
       return `
 <!DOCTYPE html>
@@ -2563,6 +2622,7 @@ function makePrintApiRouter({ db, helpers }) {
     ${discountAmount > 0 ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Скидка</div><div class="receipt-summary-value">-${money(discountAmount)}</div></div>` : ""}
     ${receiptPromoCode ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Промокод</div><div class="receipt-summary-value">${escapeHtml(receiptPromoCode)}</div></div>` : ""}
     <div class="receipt-summary-row"><div class="receipt-summary-label">Доставка</div><div class="receipt-summary-value">${money(deliveryCost)}</div></div>
+    ${showBonusRow ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Бонусы</div><div class="receipt-summary-value">${bonusValue}</div></div>` : ""}
     <div class="receipt-total">ИТОГО: ${money(total)}</div>
   </div>
   
