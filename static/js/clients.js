@@ -7527,6 +7527,12 @@
     return list.findIndex((item) => String(item?.id || '').trim() === targetId);
   }
 
+  function isBonusLevelEditorActive(levelId = state.activeBonusLevelId) {
+    const targetId = String(levelId || '').trim();
+    if (!targetId) return false;
+    return state.bonusCardsEditing === true || String(state.editingBonusLevelId || '').trim() === targetId;
+  }
+
   function updateBonusLevelInCollections(levelId, updater) {
     const targetId = String(levelId || '').trim();
     if (!targetId || typeof updater !== 'function') return null;
@@ -7539,14 +7545,19 @@
         return nextItem;
       })
     );
-    state.bonusLevels = applyList(state.bonusLevels);
     state.bonusLevelsDraft = applyList(state.bonusLevelsDraft);
+    if (state.bonusCardsEditing !== true) {
+      state.bonusLevels = applyList(state.bonusLevels);
+    }
     return appliedLevel;
   }
 
   function getActiveBonusLevelForInfo() {
     const activeId = String(state.activeBonusLevelId || '').trim();
     if (!activeId) return null;
+    if (state.bonusCardsEditing === true) {
+      return getBonusLevelById(activeId, state.bonusLevelsDraft) || getBonusLevelById(activeId, state.bonusLevels);
+    }
     if (String(state.editingBonusLevelId || '').trim() === activeId && state.bonusLevelEditorDraft && String(state.bonusLevelEditorDraft.id || '').trim() === activeId) {
       return state.bonusLevelEditorDraft;
     }
@@ -7651,6 +7662,10 @@
       elBonusEditBtn.classList.toggle('hidden', isEditingCurrent || !isEditableBonusView || isBonusSettingsView);
       elBonusEditBtn.setAttribute('title', isBonusReferralsView ? 'Редактировать рефералы' : 'Режим редактирования');
       elBonusEditBtn.setAttribute('aria-label', isBonusReferralsView ? 'Редактировать рефералы' : 'Режим редактирования');
+      const editIcon = elBonusEditBtn.querySelector('i');
+      if (editIcon && isBonusCardsView) {
+        editIcon.className = 'fas fa-pencil-alt';
+      }
     }
     if (elBonusSettingsEditBtn) {
       elBonusSettingsEditBtn.classList.toggle('hidden', isEditingCurrent || !isBonusSettingsView);
@@ -7692,7 +7707,7 @@
   function bindBonusLevelInlinePopover(triggerEl, popoverEl) {
     if (!triggerEl || !popoverEl) return;
     triggerEl.addEventListener('click', (event) => {
-      if (String(state.editingBonusLevelId || '').trim() !== String(state.activeBonusLevelId || '').trim()) return;
+      if (!isBonusLevelEditorActive()) return;
       event.preventDefault();
       event.stopPropagation();
       const shouldOpen = popoverEl.classList.contains('hidden');
@@ -8684,11 +8699,11 @@
 
     if (bonusLevelActivationDelayValueInput) {
       bonusLevelActivationDelayValueInput.value = String(normalizeBonusLevelTimingValue(current.activationDelayValue, 0));
-      bonusLevelActivationDelayValueInput.disabled = !activationValueMode || String(state.editingBonusLevelId || '').trim() !== String(current.id || '').trim();
+      bonusLevelActivationDelayValueInput.disabled = !activationValueMode || !isBonusLevelEditorActive(current.id);
     }
     if (bonusLevelLifetimeValueInput) {
       bonusLevelLifetimeValueInput.value = String(normalizeBonusLevelTimingValue(current.lifetimeValue, 0));
-      bonusLevelLifetimeValueInput.disabled = !lifetimeValueMode || String(state.editingBonusLevelId || '').trim() !== String(current.id || '').trim();
+      bonusLevelLifetimeValueInput.disabled = !lifetimeValueMode || !isBonusLevelEditorActive(current.id);
     }
 
     if (bonusLevelActivationDelayUnitSelect) bonusLevelActivationDelayUnitSelect.value = activationUnit;
@@ -8700,7 +8715,7 @@
     syncBonusLevelTimingMenuSelection(bonusLevelActivationDelayInputUnitMenu, activationUnit);
     syncBonusLevelTimingMenuSelection(bonusLevelLifetimeInputUnitMenu, lifetimeUnit);
 
-    const isEditing = String(state.editingBonusLevelId || '').trim() === String(current.id || '').trim();
+    const isEditing = isBonusLevelEditorActive(current.id);
     if (bonusLevelActivationDelayUnitTrigger) bonusLevelActivationDelayUnitTrigger.disabled = !isEditing || activationValueMode;
     if (bonusLevelLifetimeUnitTrigger) bonusLevelLifetimeUnitTrigger.disabled = !isEditing || lifetimeValueMode;
     if (bonusLevelActivationDelayUnitDotsBtn) bonusLevelActivationDelayUnitDotsBtn.disabled = !isEditing || !activationValueMode;
@@ -8714,7 +8729,7 @@
   function bindBonusLevelUnitSelect(triggerEl, wrapEl, menuEl, onSelect) {
     if (!triggerEl || !wrapEl || !menuEl || typeof onSelect !== 'function') return;
     triggerEl.addEventListener('click', (event) => {
-      if (String(state.editingBonusLevelId || '').trim() !== String(state.activeBonusLevelId || '').trim()) return;
+      if (!isBonusLevelEditorActive()) return;
       event.preventDefault();
       event.stopPropagation();
       const willOpen = menuEl.classList.contains('hidden');
@@ -8738,7 +8753,7 @@
   function bindBonusLevelInlineUnitMenu(triggerEl, menuEl, onSelect) {
     if (!triggerEl || !menuEl || typeof onSelect !== 'function') return;
     triggerEl.addEventListener('click', (event) => {
-      if (String(state.editingBonusLevelId || '').trim() !== String(state.activeBonusLevelId || '').trim()) return;
+      if (!isBonusLevelEditorActive()) return;
       event.preventDefault();
       event.stopPropagation();
       const willOpen = menuEl.classList.contains('hidden');
@@ -8985,7 +9000,7 @@
   }
 
   function openBonusLevelTariffEditor() {
-    if (String(state.editingBonusLevelId || '').trim() !== String(state.activeBonusLevelId || '').trim()) return;
+    if (!isBonusLevelEditorActive()) return;
     const current = getActiveBonusLevelForInfo();
     if (!current) return;
 
@@ -9201,7 +9216,7 @@
         ...level,
         ...nextPatch,
       }));
-      persistBonusCardsStorageSoon();
+      if (state.bonusCardsEditing !== true) persistBonusCardsStorageSoon();
       renderBonusLevels();
       renderBonusLevelInfo();
       closeBonusLevelTariffEditor();
@@ -9211,7 +9226,7 @@
   }
 
   function openBonusLevelRequirementsEditor() {
-    if (String(state.editingBonusLevelId || '').trim() !== String(state.activeBonusLevelId || '').trim()) return;
+    if (!isBonusLevelEditorActive()) return;
     const current = getActiveBonusLevelForInfo();
     if (!current) return;
 
@@ -10075,7 +10090,7 @@
         ...level,
         ...nextPatch,
       }));
-      persistBonusCardsStorageSoon();
+      if (state.bonusCardsEditing !== true) persistBonusCardsStorageSoon();
       renderBonusLevels();
       renderBonusLevelInfo();
       closeBonusLevelRequirementsEditor();
@@ -10145,7 +10160,7 @@
   }
 
   function openBonusLevelRangeEditor() {
-    if (String(state.editingBonusLevelId || '').trim() !== String(state.activeBonusLevelId || '').trim()) return;
+    if (!isBonusLevelEditorActive()) return;
     const current = getActiveBonusLevelForInfo();
     if (!current) return;
 
@@ -10223,7 +10238,7 @@
         ...level,
         orderBonusRanges: nextRows,
       }));
-      persistBonusCardsStorageSoon();
+      if (state.bonusCardsEditing !== true) persistBonusCardsStorageSoon();
       renderBonusLevels();
       renderBonusLevelInfo();
       closeBonusLevelRangeEditor();
@@ -10305,7 +10320,7 @@
   function renderBonusLevelFavoriteCategoryIcons(level = null) {
     if (!bonusLevelFavoriteCategoriesIcons || !bonusLevelFavoriteCategoriesPill) return;
     const current = level && typeof level === 'object' ? level : getActiveBonusLevelForInfo();
-    const isEditing = String(state.editingBonusLevelId || '').trim() === String(current?.id || '').trim();
+    const isEditing = isBonusLevelEditorActive(current?.id);
     
     const groupId = Number(current?.favoriteCategoryGroupId || 0);
     const { bonusPercent, limit, categoryIds: selectedIds } = getBonusLevelFavoriteCategoryConfig(current);
@@ -10382,7 +10397,7 @@
   }
 
   async function openBonusLevelFavoriteCategoryGroupPicker() {
-    if (String(state.editingBonusLevelId || '').trim() !== String(state.activeBonusLevelId || '').trim()) return;
+    if (!isBonusLevelEditorActive()) return;
     const current = getActiveBonusLevelForInfo();
     if (!current) return;
     
@@ -10481,7 +10496,7 @@
         ...level,
         ...nextPatch,
       }));
-      persistBonusCardsStorageSoon();
+      if (state.bonusCardsEditing !== true) persistBonusCardsStorageSoon();
       renderBonusLevels();
       renderBonusLevelInfo();
       closeBonusLevelFavoriteCategoriesEditor();
@@ -10563,7 +10578,7 @@
   function renderBonusLevelInfo(level = null) {
     const current = level && typeof level === 'object' ? level : getActiveBonusLevelForInfo();
     if (!current) return;
-    const isEditing = String(state.editingBonusLevelId || '').trim() === String(current.id || '').trim();
+    const isEditing = isBonusLevelEditorActive(current.id);
     if (bonusLevelTitleInput) {
       bonusLevelTitleInput.value = String(current.title || '');
       bonusLevelTitleInput.disabled = !isEditing;
@@ -10695,6 +10710,7 @@
     renderBonusLevelFavoriteCategoryIcons(current);
     syncBonusLevelSwatchButtons(current);
     if (bonusLevelInfoEditBtn) {
+      bonusLevelInfoEditBtn.classList.toggle('hidden', state.bonusCardsEditing === true);
       bonusLevelInfoEditBtn.textContent = isEditing ? '\u0421\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c' : '\u0420\u0435\u0434\u0430\u043a\u0442\u0438\u0440\u043e\u0432\u0430\u0442\u044c';
     }
     if (!isEditing && bonusLevelTitlePopover) {
@@ -10808,6 +10824,15 @@
   function applyBonusLevelEditorDraftPatch(patch = {}) {
     const activeId = String(state.activeBonusLevelId || '').trim();
     if (!activeId) return;
+    if (state.bonusCardsEditing === true) {
+      updateBonusLevelInCollections(activeId, (level) => ({
+        ...level,
+        ...patch,
+      }));
+      renderBonusLevelInfo();
+      renderBonusLevels();
+      return;
+    }
     if (String(state.editingBonusLevelId || '').trim() !== activeId) return;
     if (!state.bonusLevelEditorDraft || String(state.bonusLevelEditorDraft.id || '').trim() !== activeId) return;
     state.bonusLevelEditorDraft = {
@@ -10921,17 +10946,19 @@
       alert('Нужен минимум один уровень');
       return;
     }
-    state.bonusLevels = sanitizeBonusLevels(
-      state.bonusLevels.filter((item) => String(item?.id || '').trim() !== activeId)
-    );
     state.bonusLevelsDraft = sanitizeBonusLevels(
       state.bonusLevelsDraft.filter((item) => String(item?.id || '').trim() !== activeId)
     );
+    if (state.bonusCardsEditing !== true) {
+      state.bonusLevels = sanitizeBonusLevels(
+        state.bonusLevels.filter((item) => String(item?.id || '').trim() !== activeId)
+      );
+    }
     state.bonusFlippedLevelIds.delete(activeId);
     state.bonusAnimatingLevelIds.delete(activeId);
     state.editingBonusLevelId = null;
     state.bonusLevelEditorDraft = null;
-    persistBonusCardsStorageSoon();
+    if (state.bonusCardsEditing !== true) persistBonusCardsStorageSoon();
     renderBonusLevels();
     await closeTab(buildTabKey('bonus-level', activeId));
   }
@@ -10939,6 +10966,48 @@
   function getBonusLevelTitleInputWidth(title) {
     const length = Array.from(String(title || '')).length;
     return `${Math.min(34, Math.max(6, length + 5))}ch`;
+  }
+
+  function buildNewBonusLevelDraft(draftLevels = []) {
+    const list = Array.isArray(draftLevels) ? draftLevels : [];
+    const source = list.length ? list[list.length - 1] : null;
+    const clonedSource = source && typeof source === 'object'
+      ? JSON.parse(JSON.stringify(source))
+      : {};
+    const nextIndex = list.length + 1;
+    const fallbackLevel = {
+      subtitle: 'Порог не задан',
+      description: '',
+      showTitleOnCard: true,
+      titleColor: '#1f2937',
+      titleBackgroundEnabled: true,
+      titleBackgroundColor: '#ffffff',
+      titleBackgroundOpacity: 90,
+      designColor: '#f3f4f6',
+      accentColor: '#64748b',
+      mainColor: '#f3f4f6',
+      baseColor: '#d1d5db',
+      contentColor: '#64748b',
+      accessType: 'conditions',
+      tariffPrice: 0,
+      tariffDiscountPercent: 0,
+      tariffPeriodValue: 1,
+      tariffPeriodUnit: 'months',
+      tariffRows: [{ price: 0, discountPercent: 0, periodValue: 1, periodUnit: 'months' }],
+      tariffPayWithBonus: false,
+      cashbackPercent: 1,
+      redeemPercent: 0,
+      referralBonusPercent: 0,
+    };
+    const level = {
+      ...fallbackLevel,
+      ...clonedSource,
+      id: `level_${Date.now()}_${nextIndex}`,
+      title: `${nextIndex}-й ур.`,
+    };
+    delete level.code;
+    delete level.sourceCode;
+    return sanitizeBonusLevels([level], { withDefaults: false })[0] || level;
   }
 
   function renderBonusLevels() {
@@ -11067,32 +11136,8 @@
           enterBonusCardsEditMode();
         }
         const draftLevels = Array.isArray(state.bonusLevelsDraft) ? state.bonusLevelsDraft : [];
-        const next = [...draftLevels, {
-          id: `level_${Date.now()}`,
-          title: `Новый уровень ${draftLevels.length + 1}`,
-          subtitle: 'Порог не задан',
-          description: '',
-          showTitleOnCard: true,
-          titleColor: '#1f2937',
-          titleBackgroundEnabled: true,
-          titleBackgroundColor: '#ffffff',
-          titleBackgroundOpacity: 90,
-          designColor: '#f3f4f6',
-          accentColor: '#64748b',
-          mainColor: '#f3f4f6',
-          baseColor: '#d1d5db',
-          contentColor: '#64748b',
-          accessType: 'conditions',
-          tariffPrice: 0,
-          tariffDiscountPercent: 0,
-          tariffPeriodValue: 1,
-          tariffPeriodUnit: 'months',
-          tariffRows: [{ price: 0, discountPercent: 0, periodValue: 1, periodUnit: 'months' }],
-          tariffPayWithBonus: false,
-          cashbackPercent: 1,
-          redeemPercent: 0,
-          referralBonusPercent: 0,
-        }];
+        const nextLevel = buildNewBonusLevelDraft(draftLevels);
+        const next = [...draftLevels, nextLevel];
         state.bonusLevelsDraft = sanitizeBonusLevels(next);
         renderBonusLevels();
       });
@@ -11502,8 +11547,11 @@
     state.bonusRubleAmountDraft = state.bonusRubleAmount;
     state.bonusPointRateDraft = state.bonusPointRate;
     state.bonusLevelsDraft = sanitizeBonusLevels(state.bonusLevels, { withDefaults: false });
+    state.editingBonusLevelId = null;
+    state.bonusLevelEditorDraft = null;
     syncBonusToolbarState();
     renderBonusLevels();
+    renderBonusLevelInfo();
   }
 
   function cancelBonusCardsEditMode() {
@@ -11513,8 +11561,11 @@
     state.bonusRubleAmountDraft = state.bonusRubleAmount;
     state.bonusPointRateDraft = state.bonusPointRate;
     state.bonusLevelsDraft = sanitizeBonusLevels(state.bonusLevels, { withDefaults: false });
+    state.editingBonusLevelId = null;
+    state.bonusLevelEditorDraft = null;
     syncBonusToolbarState();
     renderBonusLevels();
+    renderBonusLevelInfo();
   }
 
   async function saveBonusCardsEditMode() {
@@ -11542,9 +11593,13 @@
     state.bonusRubleAmount = nextBonusRubleAmount;
     state.bonusPointRate = nextBonusPointRate;
     state.bonusLevels = nextLevels;
+    state.bonusLevelsDraft = sanitizeBonusLevels(nextLevels, { withDefaults: false });
     state.bonusCardsEditing = false;
+    state.editingBonusLevelId = null;
+    state.bonusLevelEditorDraft = null;
     syncBonusToolbarState();
     renderBonusLevels();
+    renderBonusLevelInfo();
     setBonusConfigSaving(false);
   }
 
@@ -24001,7 +24056,7 @@
 
   if (bonusLevelTitleSettingsBtn && bonusLevelTitlePopover) {
     bonusLevelTitleSettingsBtn.addEventListener('click', (event) => {
-      if (String(state.editingBonusLevelId || '').trim() !== String(state.activeBonusLevelId || '').trim()) return;
+      if (!isBonusLevelEditorActive()) return;
       event.preventDefault();
       event.stopPropagation();
       bonusLevelTitlePopover.classList.toggle('hidden');
