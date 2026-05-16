@@ -180,13 +180,12 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
 
   function mapPublicBonusLevelRow(row, children = {}) {
     const levelId = Number(row.id || 0);
-    const favoriteGroupId = Number(row.favorite_category_group_id || 0);
-    const favoriteGroup = favoriteGroupId > 0 ? children.favoriteGroupsById?.get(favoriteGroupId) : null;
+    const favoriteGroup = children.activeFavoriteGroup || null;
+    const favoriteCategoryLimit = Math.max(0, Math.floor(Number(row.favorite_categories_limit || 0)));
     const favoriteCategoriesEnabled = Boolean(
       favoriteGroup
       && favoriteGroup.categoryIds.length
-      && favoriteGroup.categoriesLimit > 0
-      && favoriteGroup.bonusPercent > 0
+      && favoriteCategoryLimit > 0
     );
     return {
       id: levelId,
@@ -198,10 +197,12 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       cashback_percent: Number(row.cashback_percent || 0),
       redeem_percent: Number(row.redeem_percent || 0),
       referral_bonus_percent: Number(row.referral_bonus_percent || 0),
-      favorite_category_group_id: favoriteGroupId > 0 ? favoriteGroupId : null,
+      favorite_category_group_id: favoriteCategoriesEnabled ? favoriteGroup.id : null,
       favorite_categories_enabled: favoriteCategoriesEnabled,
-      favorite_categories_bonus_percent: favoriteCategoriesEnabled ? favoriteGroup.bonusPercent : 0,
-      favorite_categories_limit: favoriteCategoriesEnabled ? favoriteGroup.categoriesLimit : 0,
+      favorite_categories_bonus_percent: favoriteCategoriesEnabled ? favoriteGroup.maxBonusPercent : 0,
+      favorite_categories_min_bonus_percent: favoriteCategoriesEnabled ? favoriteGroup.minBonusPercent : 0,
+      favorite_categories_max_bonus_percent: favoriteCategoriesEnabled ? favoriteGroup.maxBonusPercent : 0,
+      favorite_categories_limit: favoriteCategoriesEnabled ? favoriteCategoryLimit : 0,
       favorite_categories_count: favoriteCategoriesEnabled ? favoriteGroup.categoryIds.length : 0,
       requirement_amount: row.requirement_amount == null ? null : Number(row.requirement_amount),
       requirement_mode: row.requirement_mode || 'and',
@@ -246,40 +247,93 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       .filter((id, index, list) => id > 0 && list.indexOf(id) === index);
   }
 
-  function mapBonusCategoryGroupRow(row) {
+  function normalizeBonusCategoryGroupItems(itemRows = [], fallbackIds = [], fallbackPercent = 0) {
+    const byCategoryId = new Map();
+    const safeFallbackPercent = Math.max(0, Number(fallbackPercent || 0));
+    (Array.isArray(itemRows) ? itemRows : []).forEach((item) => {
+      const categoryId = Number(item.category_id || item.categoryId || item.id || 0);
+      if (!(categoryId > 0)) return;
+      byCategoryId.set(categoryId, {
+        categoryId,
+        title: item.title || '',
+        icon: item.icon || '',
+        sortOrder: Number(item.sort_order || item.sortOrder || 0),
+        bonusPercent: Math.max(0, Number(item.bonus_percent || item.bonusPercent || 0)),
+      });
+    });
+    (Array.isArray(fallbackIds) ? fallbackIds : []).forEach((id) => {
+      const categoryId = Number(id || 0);
+      if (!(categoryId > 0) || byCategoryId.has(categoryId)) return;
+      byCategoryId.set(categoryId, {
+        categoryId,
+        title: '',
+        icon: '',
+        sortOrder: 0,
+        bonusPercent: safeFallbackPercent,
+      });
+    });
+    return Array.from(byCategoryId.values());
+  }
+
+  function mapBonusCategoryGroupRow(row, itemRows = []) {
     if (!row) return null;
+    const fallbackIds = parseBonusCategoryGroupIds(row.category_ids);
+    const fallbackPercent = Math.max(0, Number(row.bonus_percent || 0));
+    const categoryItems = normalizeBonusCategoryGroupItems(itemRows, fallbackIds, fallbackPercent);
+    const percents = categoryItems
+      .map((item) => Math.max(0, Number(item.bonusPercent || 0)))
+      .filter((value) => value > 0);
+    const minBonusPercent = percents.length ? Math.min(...percents) : 0;
+    const maxBonusPercent = percents.length ? Math.max(...percents) : 0;
     return {
       id: Number(row.id || 0),
-      bonusPercent: Math.max(0, Number(row.bonus_percent || 0)),
+      monthNumber: Math.max(0, Math.floor(Number(row.month_number || 0))),
+      bonusPercent: maxBonusPercent,
+      minBonusPercent,
+      maxBonusPercent,
       categoriesLimit: Math.max(0, Math.floor(Number(row.categories_limit || 0))),
-      categoryIds: parseBonusCategoryGroupIds(row.category_ids),
+      categoryIds: categoryItems.map((item) => item.categoryId),
+      categoryItems,
     };
+  }
+
+  async function loadActiveBonusCategoryGroup(tenantId) {
+    const [[groupRow]] = await db.query(
+      `SELECT id, month_number, bonus_percent, categories_limit, category_ids
+       FROM mkt_bonus_category_groups
+       WHERE tenant_id=? AND month_number=MONTH(CURDATE())
+       LIMIT 1`,
+      [tenantId]
+    );
+    if (!groupRow) return null;
+    const [itemRows] = await db.query(
+      `SELECT i.category_id, i.bonus_percent, pc.title, pc.icon, pc.sort_order
+       FROM mkt_bonus_category_group_items i
+       JOIN prod_categories pc
+         ON pc.tenant_id = i.tenant_id AND pc.id = i.category_id
+       WHERE i.tenant_id=? AND i.group_id=? AND pc.is_active=1
+       ORDER BY pc.sort_order ASC, pc.id ASC`,
+      [tenantId, Number(groupRow.id || 0)]
+    );
+    return mapBonusCategoryGroupRow(groupRow, itemRows);
   }
 
   async function loadBonusFavoriteCategoryGroupForLevel(tenantId, levelId) {
     const [[levelRow]] = await db.query(
-      `SELECT id, favorite_category_group_id
+      `SELECT id, favorite_categories_limit
        FROM mkt_bonus_levels
        WHERE tenant_id=? AND id=? AND is_active=1
        LIMIT 1`,
       [tenantId, levelId]
     );
     if (!levelRow) return { levelRow: null, group: null, enabled: false };
-    const groupId = Number(levelRow.favorite_category_group_id || 0);
-    if (!(groupId > 0)) return { levelRow, group: null, enabled: false };
-    const [[groupRow]] = await db.query(
-      `SELECT id, bonus_percent, categories_limit, category_ids
-       FROM mkt_bonus_category_groups
-       WHERE tenant_id=? AND id=?
-       LIMIT 1`,
-      [tenantId, groupId]
-    );
-    const group = mapBonusCategoryGroupRow(groupRow);
+    const limit = Math.max(0, Math.floor(Number(levelRow.favorite_categories_limit || 0)));
+    const activeGroup = await loadActiveBonusCategoryGroup(tenantId);
+    const group = activeGroup ? { ...activeGroup, categoriesLimit: limit } : null;
     const enabled = Boolean(
       group
       && group.categoryIds.length
       && group.categoriesLimit > 0
-      && group.bonusPercent > 0
     );
     return { levelRow, group: enabled ? group : null, enabled };
   }
@@ -2578,24 +2632,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
          ORDER BY sort_order ASC, id ASC`,
         [tenantId]
       );
-      const favoriteGroupIds = [...new Set((Array.isArray(levelRows) ? levelRows : [])
-        .map((row) => Number(row.favorite_category_group_id || 0))
-        .filter((id) => id > 0))];
-      let favoriteGroupsById = new Map();
-      if (favoriteGroupIds.length) {
-        const [groupRows] = await db.query(
-          `SELECT id, bonus_percent, categories_limit, category_ids
-           FROM mkt_bonus_category_groups
-           WHERE tenant_id=? AND id IN (${favoriteGroupIds.map(() => '?').join(',')})`,
-          [tenantId, ...favoriteGroupIds]
-        );
-        favoriteGroupsById = new Map(
-          (Array.isArray(groupRows) ? groupRows : [])
-            .map(mapBonusCategoryGroupRow)
-            .filter((group) => group && group.id > 0)
-            .map((group) => [group.id, group])
-        );
-      }
+      const activeFavoriteGroup = await loadActiveBonusCategoryGroup(tenantId);
       const [rangeRows] = await db.query(
         `SELECT level_id, amount, percent, sort_order
          FROM mkt_bonus_level_order_ranges
@@ -2689,7 +2726,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
             referral_card_title_background_opacity: Number(settingsRow?.referral_card_title_background_opacity || 90),
           },
           account,
-          levels: (Array.isArray(levelRows) ? levelRows : []).map((row) => mapPublicBonusLevelRow(row, { rangesByLevel, progressByLevel, favoriteGroupsById })),
+          levels: (Array.isArray(levelRows) ? levelRows : []).map((row) => mapPublicBonusLevelRow(row, { rangesByLevel, progressByLevel, activeFavoriteGroup })),
           referral_levels: (Array.isArray(referralRows) ? referralRows : []).map((row) => ({
             id: Number(row.id || 0),
             code: row.code || '',
@@ -3054,17 +3091,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       const { levelRow, group, enabled } = await loadBonusFavoriteCategoryGroupForLevel(tenantId, levelId);
       if (!levelRow) return res.status(404).json({ ok: false, error: 'LEVEL_NOT_FOUND' });
 
-      let categoryRows = [];
-      if (enabled && group.categoryIds.length) {
-        const [rows] = await db.query(
-          `SELECT pc.id, pc.title, pc.icon, pc.sort_order
-           FROM prod_categories pc
-           WHERE pc.tenant_id=? AND pc.id IN (${group.categoryIds.map(() => '?').join(',')}) AND pc.is_active=1
-           ORDER BY pc.sort_order ASC, pc.id ASC`,
-          [tenantId, ...group.categoryIds]
-        );
-        categoryRows = Array.isArray(rows) ? rows : [];
-      }
+      const categoryRows = enabled ? group.categoryItems : [];
       let selectedRows = [];
       if (customerId > 0) {
         const [rows] = await db.query(
@@ -3076,7 +3103,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         );
         selectedRows = Array.isArray(rows) ? rows : [];
       }
-      const allowedIds = new Set((Array.isArray(categoryRows) ? categoryRows : []).map((row) => Number(row.id || 0)));
+      const allowedIds = new Set((Array.isArray(categoryRows) ? categoryRows : []).map((row) => Number(row.id || row.categoryId || 0)));
       const selectedIds = selectedRows
         .map((row) => Number(row.category_id || 0))
         .filter((id) => id > 0 && allowedIds.has(id));
@@ -3090,10 +3117,11 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
           selected_ids: selectedIds,
           locked: selectedIds.length > 0,
           categories: (Array.isArray(categoryRows) ? categoryRows : []).map((row) => ({
-            id: Number(row.id || 0),
+            id: Number(row.id || row.categoryId || 0),
             title: row.title || '',
             icon: row.icon || '',
-            sort_order: Number(row.sort_order || 0),
+            sort_order: Number(row.sort_order || row.sortOrder || 0),
+            bonus_percent: Math.max(0, Number(row.bonus_percent || row.bonusPercent || 0)),
           })),
         },
       });
@@ -3151,7 +3179,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       if (Array.isArray(existingRows) && existingRows.length) {
         const existingValidIds = existingRows
           .map((row) => Number(row.category_id || 0))
-          .filter((id) => id > 0 && allowedIds.has(id));
+          .filter((id) => id > 0 && groupAllowedIds.has(id) && activeIds.has(id));
         if (existingValidIds.length) {
           await conn.commit();
           return res.json({
@@ -18968,6 +18996,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             : roundPrice(0);
           total = roundPrice(total + lineTotal);
           const oldLineTotalFromRequest = Number(it.old_line_total) || 0;
+          const benefitsExcludedLineTotalFromRequest = roundPrice(Math.min(
+            lineTotal,
+            Math.max(0, Number(it?.benefits_excluded_line_total ?? it?.discount_excluded_line_total ?? 0) || 0)
+          ));
           const selections = Array.isArray(it.selections) ? it.selections : [];
           const photos = [];
           selections.forEach((s) => {
@@ -18976,12 +19008,20 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           normItems.push({
             type: 'combo',
             combo_id: it.combo_id,
+            combo_category_id: Number(it.combo_category_id || 0) || null,
+            category_ids: [
+              Number(it.combo_category_id || 0),
+              ...(Array.isArray(it.category_ids) ? it.category_ids.map((categoryId) => Number(categoryId || 0)) : []),
+              ...(Array.isArray(it.checkout_category_ids) ? it.checkout_category_ids.map((categoryId) => Number(categoryId || 0)) : []),
+              ...(Array.isArray(it.sections) ? it.sections.map((section) => Number(section?.category_id || 0)) : []),
+            ].filter((categoryId, index, list) => categoryId > 0 && list.indexOf(categoryId) === index),
             name: it.combo_title || '\u041a\u043e\u043c\u0431\u043e',
             qty,
             price: qty > 0 ? roundPrice(lineTotal / qty) : 0,
             old_price: oldLineTotalFromRequest > 0 && qty > 0 ? roundPrice(oldLineTotalFromRequest / qty) : 0,
             line_total: lineTotal,
             old_line_total: oldLineTotalFromRequest,
+            benefits_excluded_line_total: benefitsExcludedLineTotalFromRequest,
             photos,
             selections: selections.map((s) => ({
               product_id: s.product_id,
@@ -19454,6 +19494,15 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           lineTotalAfterDiscount,
           Math.max(0, Number(it?.benefits_excluded_line_total ?? it?.discount_excluded_line_total ?? 0) || 0)
         ));
+        const itemCategoryIds = [
+          Number(it?.category_id || it?._category_id || it?.product_category_id || 0),
+          ...(Array.isArray(it?.category_ids) ? it.category_ids.map((categoryId) => Number(categoryId || 0)) : []),
+          ...(productCategoriesMap.get(pid) || []),
+        ].filter((categoryId, index, list) => categoryId > 0 && list.indexOf(categoryId) === index);
+        if (itemCategoryIds.length) {
+          itemEntry.category_id = itemCategoryIds[0];
+          itemEntry.category_ids = itemCategoryIds;
+        }
         if (benefitsExcludedLineTotalFromRequest > 0) {
           itemEntry.benefits_excluded_line_total = benefitsExcludedLineTotalFromRequest;
         }

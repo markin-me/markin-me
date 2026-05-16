@@ -496,6 +496,25 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
     return Array.from(ids).some((id) => selectedCategoryIds.has(id));
   }
 
+  function getOrderBonusItemFavoritePercent(item, selectedCategoryPercents, comboCategoryIdsById = new Map()) {
+    if (!(selectedCategoryPercents instanceof Map) || !selectedCategoryPercents.size) return 0;
+    const comboId = Number(item?.combo_id || item?.combo?.id || 0);
+    const isCombo = String(item?.type || '').trim().toLowerCase() === 'combo' || comboId > 0;
+    if (isCombo) {
+      const comboCategoryId = Number(item?.combo_category_id || comboCategoryIdsById.get(comboId) || 0);
+      if (comboCategoryId > 0) return Math.max(0, Number(selectedCategoryPercents.get(comboCategoryId) || 0));
+      const ids = getOrderBonusItemCategoryIds(item);
+      const categoryId = Array.from(ids)[0] || 0;
+      return categoryId > 0 ? Math.max(0, Number(selectedCategoryPercents.get(categoryId) || 0)) : 0;
+    }
+    const ids = getOrderBonusItemCategoryIds(item);
+    let percent = 0;
+    ids.forEach((id) => {
+      percent = Math.max(percent, Number(selectedCategoryPercents.get(id) || 0));
+    });
+    return Math.max(0, percent);
+  }
+
   async function calculateStoredOrderBonusAccrual(queryable, tenantId, orderId, customerId, levelId) {
     if (!(tenantId > 0) || !(orderId > 0) || !(customerId > 0) || !(levelId > 0)) return null;
     const [[orderRow]] = await queryable.query(
@@ -509,7 +528,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
     if (!items.length) return null;
 
     const [[levelRow]] = await queryable.query(
-      `SELECT id, cashback_percent, favorite_categories_bonus_percent, favorite_category_group_id
+      `SELECT id, cashback_percent, favorite_categories_limit
          FROM mkt_bonus_levels
         WHERE tenant_id = ? AND id = ? AND is_active = 1
         LIMIT 1`,
@@ -534,42 +553,44 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       }))
       .find((row) => row.amount > 0 && row.percent > 0 && orderTotal >= row.amount)?.percent || 0;
 
-    let favoritePercent = 0;
-    const favoriteGroupId = Number(levelRow.favorite_category_group_id || 0);
-    if (favoriteGroupId > 0) {
-      const [[groupRow]] = await queryable.query(
-        `SELECT bonus_percent, categories_limit, category_ids
-           FROM mkt_bonus_category_groups
-          WHERE tenant_id = ? AND id = ?
-          LIMIT 1`,
-        [tenantId, favoriteGroupId]
-      );
-      const groupCategoryIds = parseBonusCategoryGroupIds(groupRow?.category_ids);
-      const groupLimit = Math.max(0, Math.floor(Number(groupRow?.categories_limit || 0)));
-      favoritePercent = groupCategoryIds.length && groupLimit > 0
-        ? Math.max(0, Number(groupRow?.bonus_percent || 0))
-        : 0;
-    }
-    let selectedCategoryIds = new Set();
+    let selectedCategoryPercents = new Map();
     let comboCategoryIdsById = new Map();
-    if (favoritePercent > 0) {
-      const [categoryRows] = await queryable.query(
+    const favoriteLimit = Math.max(0, Math.floor(Number(levelRow.favorite_categories_limit || 0)));
+    if (favoriteLimit > 0) {
+      const [groupItemRows] = await queryable.query(
+        `SELECT i.category_id, i.bonus_percent
+           FROM mkt_bonus_category_groups g
+           JOIN mkt_bonus_category_group_items i
+             ON i.tenant_id = g.tenant_id AND i.group_id = g.id
+           JOIN prod_categories pc
+             ON pc.tenant_id = i.tenant_id AND pc.id = i.category_id
+          WHERE g.tenant_id = ? AND g.month_number = MONTH(CURDATE()) AND pc.is_active = 1`,
+        [tenantId]
+      );
+      const activeCategoryPercents = new Map(
+        (Array.isArray(groupItemRows) ? groupItemRows : [])
+          .map((row) => [Number(row?.category_id || 0), Math.max(0, Number(row?.bonus_percent || 0))])
+          .filter(([categoryId]) => categoryId > 0)
+      );
+      const [categoryRows] = activeCategoryPercents.size ? await queryable.query(
         `SELECT category_id
            FROM mkt_customer_bonus_favorite_categories
           WHERE tenant_id = ? AND customer_id = ? AND level_id = ?`,
         [tenantId, customerId, levelId]
-      );
-      selectedCategoryIds = new Set(
-        (Array.isArray(categoryRows) ? categoryRows : [])
-          .map((row) => Number(row?.category_id || 0))
-          .filter((id) => id > 0)
+      ) : [[]];
+      const selectedIds = (Array.isArray(categoryRows) ? categoryRows : [])
+        .map((row) => Number(row?.category_id || 0))
+        .filter((id, index, list) => id > 0 && activeCategoryPercents.has(id) && list.indexOf(id) === index)
+        .slice(0, favoriteLimit);
+      selectedCategoryPercents = new Map(
+        selectedIds.map((id) => [id, activeCategoryPercents.get(id) || 0])
       );
       const unresolvedComboIds = [...new Set(items
         .filter((item) => String(item?.type || '').trim().toLowerCase() === 'combo' || Number(item?.combo_id || item?.combo?.id || 0) > 0)
         .filter((item) => !getOrderBonusItemCategoryIds(item).size)
         .map((item) => Number(item?.combo_id || item?.combo?.id || 0))
         .filter((id) => id > 0))];
-      if (selectedCategoryIds.size && unresolvedComboIds.length) {
+      if (selectedCategoryPercents.size && unresolvedComboIds.length) {
         const [comboRows] = await queryable.query(
           `SELECT combo.id AS combo_id, category.id AS category_id
              FROM prod_combos combo
@@ -592,9 +613,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
     items.forEach((item) => {
       const lineTotal = roundMoney(Math.max(0, Number(item?.line_total || 0)));
       if (!(lineTotal > 0)) return;
-      const percent = orderBonusItemMatchesFavoriteCategory(item, selectedCategoryIds, comboCategoryIdsById)
-        ? favoritePercent + orderRangePercent
-        : cashbackPercent;
+      const favoritePercent = getOrderBonusItemFavoritePercent(item, selectedCategoryPercents, comboCategoryIdsById);
+      const percent = cashbackPercent + favoritePercent;
       if (!(percent > 0)) return;
       rawBonus += lineTotal * percent / 100;
     });
@@ -3166,9 +3186,17 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
 
         if (String(rawItem?.type || "").toLowerCase() === "combo" || Number(rawItem?.combo_id || 0) > 0) {
           const comboId = Number(rawItem?.combo_id || 0);
+          const comboCategoryIds = [
+            Number(rawItem?.combo_category_id || 0),
+            ...(Array.isArray(rawItem?.category_ids) ? rawItem.category_ids.map((categoryId) => Number(categoryId || 0)) : []),
+            ...(Array.isArray(rawItem?.checkout_category_ids) ? rawItem.checkout_category_ids.map((categoryId) => Number(categoryId || 0)) : []),
+            ...(Array.isArray(rawItem?.sections) ? rawItem.sections.map((section) => Number(section?.category_id || 0)) : []),
+          ].filter((categoryId, index, list) => categoryId > 0 && list.indexOf(categoryId) === index);
           items.push({
             type: "combo",
             combo_id: comboId > 0 ? comboId : null,
+            combo_category_id: Number(rawItem?.combo_category_id || comboCategoryIds[0] || 0) || null,
+            category_ids: comboCategoryIds,
             name: String(rawItem?.name || rawItem?.combo_title || "Комбо").trim() || "Комбо",
             qty,
             line_total: lineTotal,
@@ -3211,6 +3239,10 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
 
         items.push({
           product_id: productId,
+          category_id: Number(rawItem?.category_id || rawItem?._category_id || rawItem?.product_category_id || 0) || null,
+          category_ids: Array.isArray(rawItem?.category_ids)
+            ? rawItem.category_ids.map((categoryId) => Number(categoryId || 0)).filter((categoryId, index, list) => categoryId > 0 && list.indexOf(categoryId) === index)
+            : [],
           qty,
           option_item_ids: optionItemIds,
           option_items: optionItems,
@@ -3230,6 +3262,11 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       const productIds = [...new Set(
         items
           .map((item) => Number(item?.product_id || 0))
+          .filter((id) => id > 0)
+      )];
+      const comboIds = [...new Set(
+        items
+          .map((item) => Number(item?.combo_id || 0))
           .filter((id) => id > 0)
       )];
       const optionIds = [...new Set(
@@ -3257,6 +3294,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       )];
 
       const productMetaById = new Map();
+      const productCategoryIdsById = new Map();
       if (productIds.length) {
         const [productRows] = await db.query(
           `SELECT id, name, price, old_price, photos_json
@@ -3276,6 +3314,38 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
             old_price: Number(row?.old_price || 0),
             photos,
           });
+        });
+        const [productCategoryRows] = await db.query(
+          `SELECT product_id, category_id
+           FROM prod_product_categories
+           WHERE tenant_id=? AND product_id IN (${productIds.map(() => "?").join(",")})`,
+          [tenantId, ...productIds]
+        );
+        productCategoryRows.forEach((row) => {
+          const productId = Number(row?.product_id || 0);
+          const categoryId = Number(row?.category_id || 0);
+          if (!(productId > 0) || !(categoryId > 0)) return;
+          if (!productCategoryIdsById.has(productId)) productCategoryIdsById.set(productId, []);
+          const ids = productCategoryIdsById.get(productId);
+          if (!ids.includes(categoryId)) ids.push(categoryId);
+        });
+      }
+
+      const comboCategoryIdsById = new Map();
+      if (comboIds.length) {
+        const [comboCategoryRows] = await db.query(
+          `SELECT combo.id AS combo_id, category.id AS category_id
+             FROM prod_combos combo
+             JOIN prod_categories category
+               ON category.tenant_id = combo.tenant_id
+              AND LOWER(TRIM(category.code)) = LOWER(TRIM(combo.category_code))
+            WHERE combo.tenant_id = ? AND combo.id IN (${comboIds.map(() => "?").join(",")})`,
+          [tenantId, ...comboIds]
+        );
+        comboCategoryRows.forEach((row) => {
+          const comboId = Number(row?.combo_id || 0);
+          const categoryId = Number(row?.category_id || 0);
+          if (comboId > 0 && categoryId > 0) comboCategoryIdsById.set(comboId, categoryId);
         });
       }
 
@@ -3424,6 +3494,18 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           item.photos = comboRawPhotos.length ? comboRawPhotos : comboDerivedPhotos;
           item.price = qty > 0 ? roundMoney(lineTotal / qty) : 0;
           item.old_price = qty > 0 ? roundMoney(oldLineTotal / qty) : 0;
+          const comboId = Number(item?.combo_id || 0);
+          const comboCategoryId = Number(item?.combo_category_id || comboCategoryIdsById.get(comboId) || 0);
+          const sectionCategoryIds = (Array.isArray(item?.sections) ? item.sections : [])
+            .map((section) => Number(section?.category_id || 0))
+            .filter((categoryId, index, list) => categoryId > 0 && list.indexOf(categoryId) === index);
+          const comboCategoryIds = [
+            comboCategoryId,
+            ...(Array.isArray(item?.category_ids) ? item.category_ids.map((categoryId) => Number(categoryId || 0)) : []),
+            ...sectionCategoryIds,
+          ].filter((categoryId, index, list) => categoryId > 0 && list.indexOf(categoryId) === index);
+          item.combo_category_id = comboCategoryId > 0 ? comboCategoryId : (comboCategoryIds[0] || null);
+          item.category_ids = comboCategoryIds;
           continue;
         }
 
@@ -3539,6 +3621,13 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         item.variant_value_index = Number.isFinite(variantValueIndex) && variantValueIndex >= 0 ? variantValueIndex : null;
         item.variant_label = variantLabel || null;
         item.variants = variants;
+        const categoryIds = [
+          Number(item?.category_id || item?._category_id || item?.product_category_id || 0),
+          ...(Array.isArray(item?.category_ids) ? item.category_ids.map((categoryId) => Number(categoryId || 0)) : []),
+          ...(productCategoryIdsById.get(productId) || []),
+        ].filter((categoryId, index, list) => categoryId > 0 && list.indexOf(categoryId) === index);
+        item.category_id = categoryIds[0] || null;
+        item.category_ids = categoryIds;
         if (oldLineTotal > lineTotal) {
           item.discount = { original_line_total: oldLineTotal };
         } else if (item.discount && typeof item.discount === "object") {

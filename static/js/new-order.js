@@ -232,7 +232,9 @@
     rightBenefitsDiscountDetailReqSeq: 0,
     rightBonusCardByClientId: new Map(),
     rightBonusCardLoadingByClientId: new Set(),
+    rightBonusCardPromiseByClientId: new Map(),
     rightBonusRedeemEnabledByOrder: new Map(),
+    rightLiveSummaryByOrder: new Map(),
     rightAutoAddDismissedByOrder: new Map(),
     autoAdd: {
       groups: [],
@@ -435,7 +437,7 @@
     ) {
       void ensureRightClientDiscountsLoaded(activeClientId).then(() => {
         if (Number(state.rightActiveOrderId || 0) === Number(active?.id || 0)) {
-          renderRightOrderTabs();
+          queueRenderRightOrderTabs();
         }
       });
     }
@@ -446,15 +448,10 @@
     ) {
       void ensureRightBonusCardLoaded(activeClientId, { render: true });
     }
-    const cartSummary = getRightOrderCheckoutSummary(active);
+    const cartSummary = getRightOrderLiveSummary(active);
     void ensureRightDeliveryQuoteFresh(active, cartSummary, { render: true });
     const cartItems = cartSummary.cartItems;
-    const snapshotForLinePricing = (
-      isEditCheckout
-      && active?.editCartTouched !== true
-      && active?.editPricingSnapshot
-      && typeof active.editPricingSnapshot === "object"
-    ) ? active.editPricingSnapshot : null;
+    const snapshotForLinePricing = isEditCheckout ? getRightOrderActiveEditPricingSnapshot(active) : null;
     const snapshotItemsTotalAfterDiscount = snapshotForLinePricing
       ? Number(
           snapshotForLinePricing?.subtotalAfterDiscount
@@ -2073,6 +2070,7 @@
     const id = Number(orderId || 0);
     if (!(id > 0)) return;
     const hadQuote = state.rightDeliveryQuoteByOrder.has(id);
+    invalidateRightOrderLiveSummary(id);
     state.rightDeliveryQuoteByOrder.delete(id);
     state.rightDeliveryQuoteLoadingByOrder.delete(id);
     if (requestKey == null) {
@@ -2324,6 +2322,7 @@
       const previousQuote = state.rightDeliveryQuoteByOrder.get(orderId) || null;
       const nextSerialized = JSON.stringify(localQuote);
       const prevSerialized = previousQuote ? JSON.stringify(previousQuote) : "";
+      invalidateRightOrderLiveSummary(orderId);
       state.rightDeliveryQuoteByOrder.set(orderId, localQuote);
       state.rightDeliveryQuoteKeyByOrder.set(orderId, request.key);
       state.rightDeliveryQuoteLoadingByOrder.delete(orderId);
@@ -2363,6 +2362,7 @@
       });
       if (Number(state.rightDeliveryQuoteReqSeqByOrder.get(orderId) || 0) !== requestSeq) return null;
       const quote = normalizeRightDeliveryQuote(json?.data || null);
+      invalidateRightOrderLiveSummary(orderId);
       state.rightDeliveryQuoteByOrder.set(orderId, quote);
       state.rightDeliveryQuoteKeyByOrder.set(orderId, request.key);
       state.rightDeliveryQuoteLoadingByOrder.delete(orderId);
@@ -2545,9 +2545,11 @@
       const rows = Array.isArray(json?.data) ? json.data : [];
       const normalized = rows.map((row) => normalizeRightClientDiscountRow(row)).filter((row) => row.id > 0);
       state.rightClientDiscountsByClientId.set(id, normalized);
+      invalidateRightOrderLiveSummaryByClientId(id);
       return normalized;
     } catch {
       state.rightClientDiscountsByClientId.set(id, []);
+      invalidateRightOrderLiveSummaryByClientId(id);
       return [];
     } finally {
       state.rightClientDiscountsLoadingByClientId.delete(id);
@@ -3175,10 +3177,11 @@
       form,
       editCartTouched: shouldMarkTouched ? true : Boolean(order?.editCartTouched),
     };
+    invalidateRightOrderLiveSummary(id);
     invalidateRightDeliveryQuote(id);
     seedRightOrderBenefitsPreviewLocally(id);
     scheduleRightOrderBenefitsRefresh(id);
-    if (opts?.render) renderRightOrderTabs();
+    if (opts?.render) queueRenderRightOrderTabs();
     return true;
   }
 
@@ -4492,6 +4495,7 @@
   function invalidateRightOrderBenefitsPreview(orderId) {
     const id = Number(orderId || 0);
     if (!(id > 0)) return;
+    invalidateRightOrderLiveSummary(id);
     ["customer", "all"].forEach((mode) => {
       const slot = getRightOrderBenefitsCacheSlot(id, mode);
       if (!slot) return;
@@ -4696,6 +4700,7 @@
       const requestKey = buildRightOrderBenefitsPreviewKey(order, mode);
       state.rightBenefitsPreviewByOrder.set(cacheSlot, derivedPreview);
       state.rightBenefitsPreviewKeyByOrder.set(cacheSlot, requestKey);
+      invalidateRightOrderLiveSummary(id);
       seeded = true;
     });
     return seeded;
@@ -4907,9 +4912,10 @@
         if (clonedCached) {
           state.rightBenefitsPreviewByOrder.set(cacheSlot, clonedCached);
           state.rightBenefitsPreviewKeyByOrder.set(cacheSlot, requestKey);
+          invalidateRightOrderLiveSummary(id);
           seededFromClientCache = true;
           if (opts?.render) {
-            renderRightOrderTabs();
+            queueRenderRightOrderTabs();
             if (opts?.renderOverlay !== false) queueRenderRightBenefitsModal(id);
           }
           if (opts?.skipServerWhenCached) return clonedCached;
@@ -4955,6 +4961,7 @@
           prefetchedData: nextData,
         });
       }
+      invalidateRightOrderLiveSummary(id);
       state.rightBenefitsPreviewByOrder.set(cacheSlot, nextData || {});
       state.rightBenefitsPreviewKeyByOrder.set(cacheSlot, requestKey);
       if (clientCacheSlot) {
@@ -4965,7 +4972,7 @@
       }
       state.rightBenefitsLoadingByOrder.delete(cacheSlot);
       if (opts?.render) {
-        renderRightOrderTabs();
+        queueRenderRightOrderTabs();
         if (opts?.renderOverlay !== false) queueRenderRightBenefitsModal(id);
       }
       return nextData;
@@ -4979,8 +4986,9 @@
         state.rightBenefitsPreviewByOrder.delete(cacheSlot);
         state.rightBenefitsPreviewKeyByOrder.delete(cacheSlot);
       }
+      invalidateRightOrderLiveSummary(id);
       if (opts?.render) {
-        renderRightOrderTabs();
+        queueRenderRightOrderTabs();
         if (opts?.renderOverlay !== false) queueRenderRightBenefitsModal(id);
       }
       throw error;
@@ -5031,9 +5039,10 @@
     if (nextItems.length === currentItems.length) return false;
     form.cartItems = nextItems;
     state.rightOrders[index] = { ...order, form };
+    invalidateRightOrderLiveSummary(id);
     invalidateRightDeliveryQuote(id);
     invalidateRightOrderBenefitsPreview(id);
-    if (opts?.render) renderRightOrderTabs();
+    if (opts?.render) queueRenderRightOrderTabs();
     return true;
   }
 
@@ -5056,12 +5065,13 @@
       form,
       editCartTouched: shouldMarkTouched ? true : Boolean(order?.editCartTouched),
     };
+    invalidateRightOrderLiveSummary(id);
     invalidateRightOrderBenefitsPreview(id);
     clearRightOrderBenefitsRefreshTimer(id);
     if (opts?.clearGiftItems) {
       clearRightOrderGiftRewardItems(id, { render: false });
     }
-    if (opts?.render) renderRightOrderTabs();
+    if (opts?.render) queueRenderRightOrderTabs();
     return true;
   }
 
@@ -5326,6 +5336,84 @@
       methodCode,
       settings,
     };
+  }
+
+  function getRightOrderLiveSummaryOrderId(order) {
+    return Number(order?.id || 0);
+  }
+
+  function getRightOrderLiveSummaryCacheKey(order) {
+    const targetOrder = order && typeof order === "object" ? order : {};
+    const form = targetOrder.form && typeof targetOrder.form === "object" ? targetOrder.form : {};
+    const orderId = getRightOrderLiveSummaryOrderId(targetOrder);
+    const clientId = Number(form?.clientId || 0) || 0;
+    const customerBenefitsSlot = getRightOrderBenefitsCacheSlot(orderId, "customer");
+    const allBenefitsSlot = getRightOrderBenefitsCacheSlot(orderId, "all");
+    const activeSnapshot = getRightOrderActiveEditPricingSnapshot(targetOrder);
+    return JSON.stringify({
+      mode: String(targetOrder?.mode || "").trim().toLowerCase(),
+      editCartTouched: targetOrder?.editCartTouched === true,
+      editPricingSnapshotActive: Boolean(activeSnapshot),
+      editPricingBaselineSignature: activeSnapshot ? String(targetOrder?.editPricingBaselineSignature || "") : "",
+      clientId,
+      phone: normalizePhoneRu(form?.phone),
+      pickupMethod: String(form?.pickupMethod || "").trim() || "delivery",
+      deliveryAddressId: Number(state.rightAddressSelectedIdByOrder.get(orderId) || form?.deliveryAddressId || 0) || 0,
+      deliveryAddressDraft: getRightOrderStoredAddressDraft(orderId, targetOrder),
+      address: String(form?.address || "").trim(),
+      cookWhen: String(form?.cookWhen || "").trim() || "asap",
+      scheduledDate: String(form?.scheduledDate || "").trim() || "",
+      dateTime: String(form?.dateTime || "").trim() || "",
+      promoCode: normalizeRightOrderBenefitsPromoCode(form?.promo_code),
+      selectedDiscountId: normalizeRightOrderBenefitsSelectedId(form?.selected_discount_id),
+      selectedDiscountSource: normalizeRightOrderBenefitsDiscountSource(form?.selected_discount_source),
+      selectedPromoSource: normalizeRightOrderBenefitsPromoSource(form?.selected_promo_source),
+      selectedPromoRewardId: normalizeRightOrderBenefitsSelectedId(form?.selected_promo_reward_id),
+      benefitsPreviewMode: String(form?.benefits_preview_mode || "").trim()
+        ? normalizeRightOrderBenefitsMode(form.benefits_preview_mode)
+        : null,
+      bonusRedeemEnabled: state.rightBonusRedeemEnabledByOrder.has(orderId)
+        ? state.rightBonusRedeemEnabledByOrder.get(orderId) === true
+        : null,
+      cartItems: buildRightOrderPayloadItems(Array.isArray(form?.cartItems) ? form.cartItems : []),
+      benefitsCustomerKey: String(state.rightBenefitsPreviewKeyByOrder.get(customerBenefitsSlot) || ""),
+      benefitsCustomerData: state.rightBenefitsPreviewByOrder.get(customerBenefitsSlot) || null,
+      benefitsAllKey: String(state.rightBenefitsPreviewKeyByOrder.get(allBenefitsSlot) || ""),
+      benefitsAllData: state.rightBenefitsPreviewByOrder.get(allBenefitsSlot) || null,
+      deliveryQuoteKey: String(state.rightDeliveryQuoteKeyByOrder.get(orderId) || ""),
+      deliveryQuote: state.rightDeliveryQuoteByOrder.get(orderId) || null,
+      bonusCard: clientId > 0 ? (state.rightBonusCardByClientId.get(clientId) || null) : null,
+      clientDiscounts: clientId > 0 ? (state.rightClientDiscountsByClientId.get(clientId) || null) : null,
+    });
+  }
+
+  function invalidateRightOrderLiveSummary(orderId) {
+    const id = Number(orderId || 0);
+    if (!(id > 0)) return;
+    state.rightLiveSummaryByOrder.delete(id);
+  }
+
+  function invalidateRightOrderLiveSummaryByClientId(customerId) {
+    const id = Number(customerId || 0);
+    if (!(id > 0)) return;
+    (Array.isArray(state.rightOrders) ? state.rightOrders : []).forEach((order) => {
+      if (Number(order?.form?.clientId || 0) === id) {
+        invalidateRightOrderLiveSummary(Number(order?.id || 0));
+      }
+    });
+  }
+
+  function getRightOrderLiveSummary(order, opts = {}) {
+    const orderId = getRightOrderLiveSummaryOrderId(order);
+    if (!(orderId > 0)) return getRightOrderCheckoutSummary(order);
+    const key = getRightOrderLiveSummaryCacheKey(order);
+    const cached = state.rightLiveSummaryByOrder.get(orderId) || null;
+    if (!opts?.force && cached && cached.key === key && cached.summary) {
+      return cached.summary;
+    }
+    const summary = getRightOrderCheckoutSummary(order);
+    state.rightLiveSummaryByOrder.set(orderId, { key, summary });
+    return summary;
   }
 
   function getRightOrderPaymentIconClass(code) {
@@ -6059,7 +6147,7 @@
         settings: state.rightDeliverySettings || null,
       };
     }
-    return getRightOrderCheckoutSummary(order);
+    return getRightOrderLiveSummary(order);
   }
 
   function getRightOrderIndexById(orderId) {
@@ -6176,6 +6264,30 @@
       const candidate = roundPrice(Math.max(0, Number(normalizedLocalLineTotals[key] || 0)));
       return Number.isFinite(candidate) ? candidate : fallback;
     };
+    const collectCategoryIdsForPayload = (item) => {
+      const ids = [];
+      const pushId = (value) => {
+        const id = Number(value || 0);
+        if (id > 0 && !ids.includes(id)) ids.push(id);
+      };
+      pushId(item?.category_id);
+      pushId(item?._category_id);
+      pushId(item?.product_category_id);
+      pushId(item?.combo_category_id);
+      (Array.isArray(item?.category_ids) ? item.category_ids : []).forEach(pushId);
+      (Array.isArray(item?.checkout_category_ids) ? item.checkout_category_ids : []).forEach(pushId);
+      (Array.isArray(item?.sections) ? item.sections : []).forEach((section) => pushId(section?.category_id));
+      const productId = Number(item?.product_id || 0);
+      const product = productId > 0 ? getProductById(productId) : null;
+      pushId(product?.category_id);
+      pushId(product?._category_id);
+      pushId(product?.product_category_id);
+      (Array.isArray(product?.category_ids) ? product.category_ids : []).forEach(pushId);
+      (Array.isArray(product?.categories) ? product.categories : []).forEach((category) => {
+        pushId(category?.id || category?.category_id || category);
+      });
+      return ids;
+    };
     const out = [];
 
     source.forEach((item) => {
@@ -6191,6 +6303,10 @@
           currentLineTotal: baseLineTotal,
         });
         const oldLineTotal = oldLineTotalRaw > lineTotal ? oldLineTotalRaw : 0;
+        const benefitsExcludedLineTotal = roundPrice(Math.min(
+          lineTotal,
+          Math.max(0, Number(item?.benefits_excluded_line_total ?? item?.discount_excluded_line_total ?? 0) || 0)
+        ));
         const seedSelections = getComboSeedSelectionsFromCartItem(item);
         if (!(comboId > 0) && !seedSelections.length) return;
         const selections = seedSelections.map((row) => ({
@@ -6223,8 +6339,14 @@
           qty,
           line_total: lineTotal,
           old_line_total: oldLineTotal,
+          benefits_excluded_line_total: benefitsExcludedLineTotal,
           selections,
         };
+        const comboCategoryIds = collectCategoryIdsForPayload(item);
+        if (comboCategoryIds.length) {
+          comboPayload.category_ids = comboCategoryIds;
+          comboPayload.combo_category_id = Number(item?.combo_category_id || comboCategoryIds[0] || 0) || null;
+        }
         if (comboId > 0) comboPayload.combo_id = comboId;
         out.push(comboPayload);
         return;
@@ -6266,7 +6388,8 @@
       const variantValueIndex = Number.isFinite(Number(item?.variant?.selected_index))
         ? Number(item.variant.selected_index)
         : null;
-      out.push({
+      const categoryIds = collectCategoryIdsForPayload(item);
+      const payloadItem = {
         cart_key: cartKey || null,
         product_id: productId,
         qty,
@@ -6283,7 +6406,12 @@
         line_total: lineTotal,
         original_line_total: originalLineTotal,
         benefits_excluded_line_total: benefitsExcludedLineTotal,
-      });
+      };
+      if (categoryIds.length) {
+        payloadItem.category_id = categoryIds[0];
+        payloadItem.category_ids = categoryIds;
+      }
+      out.push(payloadItem);
     });
 
     return out;
@@ -6309,6 +6437,18 @@
   function setRightCheckoutSendingOverlayVisible(visible) {
     const overlay = ensureRightCheckoutSendingOverlay();
     overlay.classList.toggle("hidden", !visible);
+  }
+
+  function setRightOrderSubmitFeedback(orderId, visible, opts = {}) {
+    const id = Number(orderId || 0);
+    if (!(id > 0)) return;
+    if (visible) {
+      state.rightCheckoutSubmittingByOrder.set(id, true);
+    } else {
+      state.rightCheckoutSubmittingByOrder.delete(id);
+    }
+    setRightCheckoutSendingOverlayVisible(Boolean(visible) && opts?.overlay !== false);
+    queueRenderRightOrderTabs();
   }
 
   let newOrderAlertOverlay = null;
@@ -6565,7 +6705,7 @@
       showNewOrderAlert("Не удалось открыть модалку оплаты");
       return null;
     }
-    const summary = getRightOrderCheckoutSummary(order);
+    const summary = getRightOrderLiveSummary(order);
     return sharedOrderPayment.open({
       order: buildRightPaymentModalOrder(order, summary),
       apiJson,
@@ -6639,8 +6779,9 @@
     const timeOptionCode = cookWhenOptions.includes(rawTimeOptionCode) ? rawTimeOptionCode : fallbackCookWhenCode;
     const isDeliveryMethod = isDeliveryMethodCode(methodCode);
     const isPickupMethod = isPickupLikeMethod(methodCode);
+    setRightOrderSubmitFeedback(id, true, { overlay: !withPayment });
     if (isDeliveryMethod) {
-      const refreshBaseSummary = getRightOrderCheckoutSummary(order);
+      const refreshBaseSummary = getRightOrderLiveSummary(order, { force: true });
       await ensureRightDeliveryQuoteFresh(order, refreshBaseSummary, { force: true, render: true });
       order = state.rightOrders[index] || order;
     }
@@ -6650,17 +6791,25 @@
         renderOverlay: Number(state.benefitsModal.orderId || 0) === id,
       });
       order = state.rightOrders[index] || order;
+      const resolvedClientId = Number(order?.form?.clientId || 0);
+      if (resolvedClientId > 0 && !state.rightBonusCardByClientId.has(resolvedClientId)) {
+        await ensureRightBonusCardLoaded(resolvedClientId);
+        order = state.rightOrders[index] || order;
+      }
     } catch (error) {
+      setRightOrderSubmitFeedback(id, false);
       showNewOrderAlert(getRightOrderBenefitsActionErrorMessage(error));
       return;
     }
-    const summary = getRightOrderCheckoutSummary(order);
+    const summary = getRightOrderLiveSummary(order, { force: true });
     const deliveryAddress = String(form.address || "").trim();
     if (isDeliveryMethod && !deliveryAddress) {
+      setRightOrderSubmitFeedback(id, false);
       showNewOrderAlert("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0430\u0434\u0440\u0435\u0441 \u0434\u043e\u0441\u0442\u0430\u0432\u043a\u0438");
       return;
     }
     if (isDeliveryMethod && Number(summary.minOrderAmount || 0) > 0 && Number(summary.subtotalAfterCustomerDiscount || 0) < Number(summary.minOrderAmount || 0)) {
+      setRightOrderSubmitFeedback(id, false);
       showNewOrderAlert(`\u041c\u0438\u043d\u0438\u043c\u0430\u043b\u044c\u043d\u0430\u044f \u0441\u0443\u043c\u043c\u0430 \u0437\u0430\u043a\u0430\u0437\u0430 ${toMoney(summary.minOrderAmount)}`);
       return;
     }
@@ -6668,12 +6817,14 @@
     if (isPickupMethod) {
       const resolvedStoreId = getRightOrderPreferredPickupStoreId();
       if (!(resolvedStoreId > 0)) {
+        setRightOrderSubmitFeedback(id, false);
         showNewOrderAlert("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u043f\u0440\u0435\u0434\u0435\u043b\u0438\u0442\u044c \u0442\u043e\u0447\u043a\u0443 \u0441\u0430\u043c\u043e\u0432\u044b\u0432\u043e\u0437\u0430");
         return;
       }
       pickupStoreId = resolvedStoreId;
     }
     if (!paymentCode) {
+      setRightOrderSubmitFeedback(id, false);
       showNewOrderAlert("\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u0441\u043f\u043e\u0441\u043e\u0431 \u043e\u043f\u043b\u0430\u0442\u044b");
       return;
     }
@@ -6690,6 +6841,7 @@
       const currentTimeValue = String(form.dateTime || "").trim();
       const timeValue = timeSlots.includes(currentTimeValue) ? currentTimeValue : (timeSlots[0] || currentTimeValue);
       if (!/^\d{1,2}:\d{2}$/.test(timeValue)) {
+        setRightOrderSubmitFeedback(id, false);
         showNewOrderAlert("\u0423\u043a\u0430\u0436\u0438\u0442\u0435 \u0432\u0440\u0435\u043c\u044f \u043f\u0440\u0438\u0433\u043e\u0442\u043e\u0432\u043b\u0435\u043d\u0438\u044f");
         return;
       }
@@ -6697,6 +6849,7 @@
         ? baseDateValue
         : formatIsoDate(getTodayDate());
       if (!/^\d{4}-\d{2}-\d{2}$/.test(dateValue)) {
+        setRightOrderSubmitFeedback(id, false);
         showNewOrderAlert("\u0423\u043a\u0430\u0436\u0438\u0442\u0435 \u0434\u0430\u0442\u0443 \u043f\u0440\u0438\u0433\u043e\u0442\u043e\u0432\u043b\u0435\u043d\u0438\u044f");
         return;
       }
@@ -6710,6 +6863,7 @@
         if (changeType === "other") {
           const numeric = Number(String(form.changeAmount || "").replace(/[^\d]/g, ""));
           if (!Number.isFinite(numeric) || numeric <= 0) {
+            setRightOrderSubmitFeedback(id, false);
             showNewOrderAlert("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0441\u0443\u043c\u043c\u0443 \u0434\u043b\u044f \u0441\u0434\u0430\u0447\u0438");
             return;
           }
@@ -6720,6 +6874,7 @@
         }
       }
       if (changeFrom != null && changeFrom <= summary.payableTotal) {
+        setRightOrderSubmitFeedback(id, false);
         showNewOrderAlert(`\u0421\u0443\u043c\u043c\u0430 \u0434\u043b\u044f \u0441\u0434\u0430\u0447\u0438 \u0434\u043e\u043b\u0436\u043d\u0430 \u0431\u044b\u0442\u044c \u0431\u043e\u043b\u044c\u0448\u0435 ${toMoney(summary.payableTotal)}`);
         return;
       }
@@ -6750,6 +6905,7 @@
     })();
     const items = buildRightOrderPayloadItems(cartItems, { localLineTotalsByCartKey });
     if (!items.length) {
+      setRightOrderSubmitFeedback(id, false);
       showNewOrderAlert("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0441\u043e\u0431\u0440\u0430\u0442\u044c \u043f\u043e\u0437\u0438\u0446\u0438\u0438 \u0437\u0430\u043a\u0430\u0437\u0430");
       return;
     }
@@ -6854,7 +7010,10 @@
 
     if (withPayment) {
       const paymentPayload = await openRightOrderPaymentDraft(order);
-      if (!paymentPayload) return;
+      if (!paymentPayload) {
+        setRightOrderSubmitFeedback(id, false);
+        return;
+      }
       payload.payment_code = String(paymentPayload.payment_code || payload.payment_code || "").trim() || payload.payment_code;
       payload.change_from = isCashPaymentCode(payload.payment_code)
         ? (Number(paymentPayload.change_from || 0) > 0 ? Number(paymentPayload.change_from || 0) : null)
@@ -6862,9 +7021,7 @@
       syncRightOrderFormPayment(id, paymentPayload);
     }
 
-    state.rightCheckoutSubmittingByOrder.set(id, true);
-    setRightCheckoutSendingOverlayVisible(true);
-    renderRightOrderTabs();
+    setRightOrderSubmitFeedback(id, true);
     try {
       let submittedPublicId = "";
       let submittedId = 0;
@@ -6955,9 +7112,7 @@
           : (e?.message || "UNKNOWN");
       showNewOrderAlert(`\u041e\u0448\u0438\u0431\u043a\u0430 ${action} \u0437\u0430\u043a\u0430\u0437\u0430: ${errorMessage}`);
     } finally {
-      state.rightCheckoutSubmittingByOrder.delete(id);
-      setRightCheckoutSendingOverlayVisible(false);
-      renderRightOrderTabs();
+      setRightOrderSubmitFeedback(id, false);
     }
   }
 
@@ -7343,6 +7498,10 @@
       }
       const discounts = Array.isArray(payload.discounts) ? payload.discounts : [];
       state.rightClientDiscountsByClientId.set(Number(payload.clientId || 0), discounts);
+      invalidateRightOrderLiveSummaryByClientId(Number(payload.clientId || 0));
+      if (Number(payload.clientId || 0) > 0) {
+        void ensureRightBonusCardLoaded(Number(payload.clientId || 0), { render: true });
+      }
       if (previousClientId && previousClientId !== Number(payload.clientId || 0)) {
         await restoreRightOrderGiftRewardsFromItems(Number(orderId || 0), previousGiftItems, {
           clientId: previousClientId,
@@ -7398,12 +7557,17 @@
       form[key] = value;
     }
     state.rightOrders[index] = { ...order, form };
+    invalidateRightOrderLiveSummary(id);
     if (key === "pickupMethod" || key === "address" || key === "clientId") {
       invalidateRightDeliveryQuote(id);
     }
     if (key === "pickupMethod" || key === "clientId" || key === "phone") {
       invalidateRightOrderBenefitsPreview(id);
       scheduleRightOrderBenefitsRefresh(id);
+    }
+    if (key === "clientId") {
+      const clientId = Number(value || 0);
+      if (clientId > 0) void ensureRightBonusCardLoaded(clientId, { render: true });
     }
   }
 
@@ -7990,7 +8154,8 @@
     const badge = document.createElement("span");
     badge.className = "client-bonus-category-badge";
     const title = String(category?.title || "").trim();
-    if (title) badge.title = title;
+    const percent = Math.max(0, Number(category?.bonus_percent || category?.bonusPercent || 0));
+    if (title) badge.title = percent > 0 ? `${title} +${percent}%` : title;
     const icon = String(category?.icon || "").trim();
     if (icon && (/^https?:\/\//i.test(icon) || icon.startsWith("/") || /\.(png|jpe?g|webp|gif|svg)$/i.test(icon))) {
       const img = document.createElement("img");
@@ -8125,7 +8290,10 @@
       row.className = `client-bonus-category-row${category?.selected ? " is-selected" : ""}`;
       row.appendChild(renderRightBonusCategoryBadge(category));
       const title = document.createElement("span");
-      title.textContent = String(category?.title || "").trim();
+      const bonusPercent = Math.max(0, Number(category?.bonus_percent || category?.bonusPercent || 0));
+      title.textContent = bonusPercent > 0
+        ? `${String(category?.title || "").trim()} · +${bonusPercent}%`
+        : String(category?.title || "").trim();
       row.appendChild(title);
       list.appendChild(row);
     });
@@ -8165,7 +8333,12 @@
     const selectedCategories = categoriesSource.filter((category) => category?.selected);
     const categories = selectedCategories.length ? selectedCategories : categoriesSource;
     const categoryLimit = Number(level.favorite_categories_limit || 0);
-    const categoryPercent = Number(level.favorite_categories_bonus_percent || 0);
+    const categoryPercents = categoriesSource
+      .map((category) => Math.max(0, Number(category?.bonus_percent || category?.bonusPercent || 0)))
+      .filter((value) => value > 0);
+    const categoryPercentText = categoryPercents.length
+      ? `${Math.min(...categoryPercents)}-${Math.max(...categoryPercents)}%`
+      : `${Number(level.favorite_categories_bonus_percent || 0)}%`;
 
     const title = document.createElement("div");
     title.className = "client-bonus-level-title";
@@ -8239,7 +8412,7 @@
     categoriesCard.setAttribute("role", "button");
     categoriesCard.setAttribute("tabindex", "0");
     const categoriesTitle = document.createElement("span");
-    categoriesTitle.textContent = categoryLimit > 0 ? `${categoryLimit} категорий · ${categoryPercent}%` : `Категории · ${categoryPercent}%`;
+    categoriesTitle.textContent = categoryLimit > 0 ? `${categoryLimit} категорий · ${categoryPercentText}` : `Категории · ${categoryPercentText}`;
     categoriesCard.appendChild(categoriesTitle);
     const badges = document.createElement("div");
     badges.className = "client-bonus-category-badges";
@@ -8294,19 +8467,54 @@
   async function loadRightBonusCard(customerId, opts = {}) {
     const id = Number(customerId || 0);
     if (!(id > 0)) return null;
+    if (!opts?.force && state.rightBonusCardByClientId.has(id)) {
+      const cached = state.rightBonusCardByClientId.get(id) || null;
+      state.bonusCardModal.customerId = id;
+      state.bonusCardModal.data = cached;
+      state.bonusCardModal.loading = false;
+      state.bonusCardModal.error = "";
+      if (opts?.render) renderRightBonusCardOverlay();
+      return cached;
+    }
+    const existingPromise = state.rightBonusCardPromiseByClientId.get(id);
+    if (!opts?.force && existingPromise) {
+      state.bonusCardModal.customerId = id;
+      state.bonusCardModal.loading = true;
+      state.bonusCardModal.error = "";
+      if (opts?.render) renderRightBonusCardOverlay();
+      try {
+        const data = await existingPromise;
+        state.bonusCardModal.data = data;
+        return data;
+      } catch (error) {
+        state.bonusCardModal.error = String(error?.message || "API_ERROR");
+        throw error;
+      } finally {
+        state.bonusCardModal.loading = false;
+        if (opts?.render) renderRightBonusCardOverlay();
+      }
+    }
     state.bonusCardModal.customerId = id;
     state.bonusCardModal.loading = true;
     state.bonusCardModal.error = "";
     if (opts?.render) renderRightBonusCardOverlay();
-    try {
+    const requestPromise = (async () => {
       const json = await apiJson(`/api/admin/bonus/customers/${id}/card`);
       state.bonusCardModal.data = json?.data && typeof json.data === "object" ? json.data : null;
       state.rightBonusCardByClientId.set(id, state.bonusCardModal.data);
+      invalidateRightOrderLiveSummaryByClientId(id);
       return state.bonusCardModal.data;
+    })();
+    state.rightBonusCardPromiseByClientId.set(id, requestPromise);
+    try {
+      return await requestPromise;
     } catch (error) {
       state.bonusCardModal.error = String(error?.message || "API_ERROR");
       throw error;
     } finally {
+      if (state.rightBonusCardPromiseByClientId.get(id) === requestPromise) {
+        state.rightBonusCardPromiseByClientId.delete(id);
+      }
       state.bonusCardModal.loading = false;
       if (opts?.render) renderRightBonusCardOverlay();
     }
@@ -8318,21 +8526,32 @@
     if (!opts?.force && state.rightBonusCardByClientId.has(id)) {
       return state.rightBonusCardByClientId.get(id) || null;
     }
+    const existingPromise = state.rightBonusCardPromiseByClientId.get(id);
+    if (!opts?.force && existingPromise) return existingPromise;
     if (state.rightBonusCardLoadingByClientId.has(id)) return null;
     state.rightBonusCardLoadingByClientId.add(id);
-    try {
+    const requestPromise = (async () => {
       const json = await apiJson(`/api/admin/bonus/customers/${id}/card`);
       const data = json?.data && typeof json.data === "object" ? json.data : null;
       state.rightBonusCardByClientId.set(id, data);
+      invalidateRightOrderLiveSummaryByClientId(id);
       if (Number(state.bonusCardModal.customerId || 0) === id) {
         state.bonusCardModal.data = data;
       }
-      if (opts?.render) renderRightOrderTabs();
+      return data;
+    })();
+    state.rightBonusCardPromiseByClientId.set(id, requestPromise);
+    try {
+      const data = await requestPromise;
+      if (opts?.render) queueRenderRightOrderTabs();
       return data;
     } catch (error) {
       if (opts?.showError) showNewOrderAlert("Не удалось загрузить бонусы клиента");
       return null;
     } finally {
+      if (state.rightBonusCardPromiseByClientId.get(id) === requestPromise) {
+        state.rightBonusCardPromiseByClientId.delete(id);
+      }
       state.rightBonusCardLoadingByClientId.delete(id);
     }
   }
@@ -8348,11 +8567,13 @@
         body: "{}",
       });
       state.rightBonusCardByClientId.delete(customerId);
+      invalidateRightOrderLiveSummaryByClientId(customerId);
       await loadRightBonusCard(customerId, { render: true });
       if (state.bonusCardModal.data) {
         state.rightBonusCardByClientId.set(customerId, state.bonusCardModal.data);
+        invalidateRightOrderLiveSummaryByClientId(customerId);
       }
-      renderRightOrderTabs();
+      queueRenderRightOrderTabs();
     } catch (error) {
       showNewOrderAlert("Не удалось подключить бонусы");
     } finally {
@@ -8371,12 +8592,14 @@
     }
     state.bonusCardModal.orderId = id;
     state.bonusCardModal.customerId = customerId;
-    state.bonusCardModal.data = null;
+    const cached = state.rightBonusCardByClientId.get(customerId) || null;
+    state.bonusCardModal.data = cached;
     state.bonusCardModal.error = "";
-    state.bonusCardModal.loading = true;
+    state.bonusCardModal.loading = !cached;
     state.bonusCardModal.screen = "main";
     state.bonusCardModal.transactionFilter = "all";
     renderRightBonusCardOverlay();
+    if (cached) return;
     try {
       await loadRightBonusCard(customerId, { render: true });
     } catch (error) {
@@ -8421,6 +8644,7 @@
       });
       state.clientBenefitsCatalogModal.data = json?.data && typeof json.data === "object" ? json.data : {};
       state.rightClientDiscountsByClientId.delete(customerId);
+      invalidateRightOrderLiveSummaryByClientId(customerId);
       void ensureRightClientDiscountsLoaded(customerId);
     } finally {
       state.clientBenefitsCatalogModal.busyActionKey = "";
@@ -10293,6 +10517,16 @@
     return selected;
   }
 
+  function getRightBonusSelectedCategoryPercents(bonusData) {
+    const selected = new Map();
+    (Array.isArray(bonusData?.favorite_categories) ? bonusData.favorite_categories : []).forEach((category) => {
+      if (!category?.selected) return;
+      const id = Number(category?.id || 0);
+      if (id > 0) selected.set(id, Math.max(0, Number(category?.bonus_percent || category?.bonusPercent || 0)));
+    });
+    return selected;
+  }
+
   function getRightBonusCartItemCategoryIds(item) {
     const ids = new Set();
     [
@@ -10314,11 +10548,23 @@
     return ids;
   }
 
-  function rightBonusCartItemMatchesFavoriteCategory(item, selectedCategoryIds) {
-    if (!(selectedCategoryIds instanceof Set) || !selectedCategoryIds.size) return false;
+  function getRightBonusCartItemFavoritePercent(item, selectedCategoryPercents) {
+    if (!(selectedCategoryPercents instanceof Map) || !selectedCategoryPercents.size) return 0;
+    const comboCategoryId = Number(item?.combo_category_id || 0);
+    const comboId = Number(item?.combo_id || item?.combo?.id || 0);
+    const isCombo = String(item?.type || "").trim().toLowerCase() === "combo" || comboId > 0;
+    if (isCombo) {
+      if (comboCategoryId > 0) return Math.max(0, Number(selectedCategoryPercents.get(comboCategoryId) || 0));
+      const ids = getRightBonusCartItemCategoryIds(item);
+      const categoryId = Array.from(ids)[0] || 0;
+      return categoryId > 0 ? Math.max(0, Number(selectedCategoryPercents.get(categoryId) || 0)) : 0;
+    }
     const ids = getRightBonusCartItemCategoryIds(item);
-    if (!ids.size) return false;
-    return Array.from(ids).some((id) => selectedCategoryIds.has(id));
+    let percent = 0;
+    ids.forEach((id) => {
+      percent = Math.max(percent, Number(selectedCategoryPercents.get(id) || 0));
+    });
+    return Math.max(0, percent);
   }
 
   function calculateRightOrderBonusAccrual(cartItems, lineStates, bonusData) {
@@ -10335,16 +10581,14 @@
       .filter((row) => row.amount > 0 && row.percent > 0 && orderTotal >= row.amount)
       .sort((a, b) => b.amount - a.amount)[0]?.percent || 0;
     const cashbackPercent = Math.max(0, Number(level?.cashback_percent || 0)) + orderRangePercent;
-    const favoritePercent = Math.max(0, Number(level?.favorite_categories_bonus_percent || 0));
-    const selectedCategoryIds = favoritePercent > 0 ? getRightBonusSelectedCategoryIds(bonusData) : new Set();
+    const selectedCategoryPercents = getRightBonusSelectedCategoryPercents(bonusData);
     let rawBonus = 0;
     (Array.isArray(cartItems) ? cartItems : []).forEach((item, index) => {
       if (isGiftRewardCartItem(item)) return;
       const lineTotal = roundPrice(Math.max(0, Number(lineStates?.[index]?.currentTotal || 0)));
       if (!(lineTotal > 0)) return;
-      const percent = rightBonusCartItemMatchesFavoriteCategory(item, selectedCategoryIds)
-        ? favoritePercent + orderRangePercent
-        : cashbackPercent;
+      const favoritePercent = getRightBonusCartItemFavoritePercent(item, selectedCategoryPercents);
+      const percent = cashbackPercent + favoritePercent;
       if (!(percent > 0)) return;
       rawBonus += lineTotal * percent / 100;
     });
@@ -13669,6 +13913,22 @@
       auto_add: 0,
       auto_add_group_id: null,
     };
+    const categoryIds = [];
+    const addCategoryId = (value) => {
+      const id = Number(value || 0);
+      if (id > 0 && !categoryIds.includes(id)) categoryIds.push(id);
+    };
+    addCategoryId(product?.category_id);
+    addCategoryId(product?._category_id);
+    addCategoryId(product?.product_category_id);
+    (Array.isArray(product?.category_ids) ? product.category_ids : []).forEach(addCategoryId);
+    (Array.isArray(product?.categories) ? product.categories : []).forEach((category) => {
+      addCategoryId(category?.id || category?.category_id || category);
+    });
+    if (categoryIds.length) {
+      item.category_id = categoryIds[0];
+      item.category_ids = categoryIds;
+    }
     return recalculateCartItemTotals(item);
   }
 
@@ -18229,6 +18489,14 @@
           } else {
             state.rightBonusRedeemEnabledByOrder.set(orderId, true);
           }
+          if (String(order?.mode || "").trim().toLowerCase() === "edit" && orderIndex >= 0) {
+            state.rightOrders[orderIndex] = {
+              ...order,
+              editCartTouched: true,
+              editPricingSnapshot: null,
+              editPricingBaselineSignature: "",
+            };
+          }
           renderRightOrderTabs();
           return;
         }
@@ -19827,6 +20095,10 @@
       auto_add_group_id: autoAddGroupId,
       is_gift_reward: Number(orderItem?.is_gift_reward || 0) === 1 ? 1 : 0,
       gift_reward_id: Number(orderItem?.gift_reward_id || 0) > 0 ? Number(orderItem.gift_reward_id) : null,
+      category_id: Number(orderItem?.category_id || orderItem?._category_id || orderItem?.product_category_id || 0) || null,
+      category_ids: Array.isArray(orderItem?.category_ids)
+        ? orderItem.category_ids.map((id) => Number(id || 0)).filter((id, index, list) => id > 0 && list.indexOf(id) === index)
+        : [],
       old_line_total: oldLineTotal > lineTotal ? oldLineTotal : 0,
       unit_price_before_discount: oldUnitPrice > unitPrice ? oldUnitPrice : 0,
       unit_price: unitPrice,
@@ -19865,6 +20137,19 @@
       : null;
     cartItem.is_gift_reward = Number(orderItem?.is_gift_reward || 0) === 1 ? 1 : 0;
     cartItem.gift_reward_id = Number(orderItem?.gift_reward_id || 0) > 0 ? Number(orderItem.gift_reward_id) : null;
+    const orderCategoryIds = [];
+    const addOrderCategoryId = (value) => {
+      const id = Number(value || 0);
+      if (id > 0 && !orderCategoryIds.includes(id)) orderCategoryIds.push(id);
+    };
+    addOrderCategoryId(orderItem?.category_id);
+    addOrderCategoryId(orderItem?._category_id);
+    addOrderCategoryId(orderItem?.product_category_id);
+    (Array.isArray(orderItem?.category_ids) ? orderItem.category_ids : []).forEach(addOrderCategoryId);
+    if (orderCategoryIds.length) {
+      cartItem.category_id = orderCategoryIds[0];
+      cartItem.category_ids = orderCategoryIds;
+    }
     cartItem.buy_x_get_y_badge = cloneNewOrderBuyXGetYBadge(orderItem) || cloneNewOrderBuyXGetYBadge(product);
     cartItem.old_line_total = oldLineTotal > lineTotal ? oldLineTotal : 0;
     cartItem.unit_price = qty > 0 ? roundPrice(lineTotal / qty) : 0;
@@ -20259,6 +20544,16 @@
       selections: mappedSelections,
       sections,
     };
+    const comboCategoryIds = [...new Set([
+      Number(orderItem?.combo_category_id || 0),
+      ...(Array.isArray(orderItem?.category_ids) ? orderItem.category_ids.map((id) => Number(id || 0)) : []),
+      ...(Array.isArray(orderItem?.checkout_category_ids) ? orderItem.checkout_category_ids.map((id) => Number(id || 0)) : []),
+      ...(Array.isArray(sections) ? sections.map((section) => Number(section?.category_id || 0)) : []),
+    ].filter((id) => Number.isFinite(id) && id > 0))];
+    if (comboCategoryIds.length) {
+      comboCartItem.combo_category_id = Number(orderItem?.combo_category_id || comboCategoryIds[0] || 0) || null;
+      comboCartItem.category_ids = comboCategoryIds;
+    }
     if (!(comboId > 0)) {
       const checkoutCategoryIds = [...new Set(
         (Array.isArray(sections) ? sections : [])
@@ -20452,6 +20747,7 @@
     state.rightDeliveryQuoteKeyByOrder = new Map();
     state.rightDeliveryQuoteLoadingByOrder = new Set();
     state.rightDeliveryQuoteReqSeqByOrder = new Map();
+    state.rightLiveSummaryByOrder = new Map();
     state.rightOrders = Array.isArray(src.rightOrders)
       ? deepCloneJson(src.rightOrders, []).map((row) => normalizeRightOrderDraft(row))
       : [];

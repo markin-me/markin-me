@@ -263,7 +263,7 @@ function normalizeBonusLevels(items) {
       redeem_percent: nonNegativeNumber(pick(item, 'redeem_percent', 'redeemPercent'), 'INVALID_LEVELS', 0),
       referral_bonus_percent: nonNegativeNumber(pick(item, 'referral_bonus_percent', 'referralBonusPercent'), 'INVALID_LEVELS', 0),
       favorite_categories_bonus_percent: 0,
-      favorite_categories_limit: 0,
+      favorite_categories_limit: nonNegativeInt(pick(item, 'favorite_categories_limit', 'favoriteCategoriesLimit'), 'INVALID_LEVELS', 0),
       activation_delay_value: nonNegativeInt(pick(item, 'activation_delay_value', 'activationDelayValue'), 'INVALID_LEVELS', 0),
       activation_delay_unit: activationUnit,
       lifetime_value: lifetimeUnit === 'forever'
@@ -287,9 +287,9 @@ function normalizeBonusLevels(items) {
       )),
       is_active: boolFlag(pick(item, 'is_active', 'isActive'), true) ? 1 : 0,
       tariff_rows: normalizeTariffRows(pick(item, 'tariff_rows', 'tariffRows')),
-      favorite_category_group_id: nullableNonNegativeInt(pick(item, 'favorite_category_group_id', 'favoriteCategoryGroupId'), 'INVALID_LEVELS'),
+      favorite_category_group_id: null,
       order_bonus_ranges: normalizeOrderRanges(pick(item, 'order_bonus_ranges', 'orderBonusRanges')),
-      favorite_category_ids: normalizeFavoriteCategoryIds(pick(item, 'favorite_category_ids', 'favoriteCategoryIds')),
+      favorite_category_ids: [],
     };
   });
 }
@@ -316,17 +316,75 @@ function normalizeReferralLevels(items) {
   });
 }
 
+const BONUS_CATEGORY_MONTHS = [
+  'Январь',
+  'Февраль',
+  'Март',
+  'Апрель',
+  'Май',
+  'Июнь',
+  'Июль',
+  'Август',
+  'Сентябрь',
+  'Октябрь',
+  'Ноябрь',
+  'Декабрь',
+];
+
+function getBonusCategoryMonthTitle(monthNumber) {
+  return BONUS_CATEGORY_MONTHS[Number(monthNumber || 0) - 1] || 'Подборка категорий';
+}
+
+function normalizeCategoryGroupItems(items, fallbackIds = [], fallbackPercent = 0) {
+  const source = Array.isArray(items) && items.length
+    ? items
+    : normalizeFavoriteCategoryIds(fallbackIds).map((categoryId) => ({
+        category_id: categoryId,
+        bonus_percent: fallbackPercent,
+      }));
+  const byCategoryId = new Map();
+  source.forEach((item) => {
+    const categoryId = Number(pick(item, 'category_id', 'categoryId', 'id'));
+    if (!Number.isInteger(categoryId) || categoryId <= 0) return;
+    byCategoryId.set(categoryId, {
+      category_id: categoryId,
+      bonus_percent: nonNegativeNumber(pick(item, 'bonus_percent', 'bonusPercent', 'percent'), 'INVALID_SETTINGS', fallbackPercent),
+    });
+  });
+  return Array.from(byCategoryId.values());
+}
+
+function normalizeMonthNumber(value, fallback) {
+  const monthNumber = Number(value);
+  if (Number.isInteger(monthNumber) && monthNumber >= 1 && monthNumber <= 12) return monthNumber;
+  if (Number.isInteger(fallback) && fallback >= 1 && fallback <= 12) return fallback;
+  throw makeHttpError('INVALID_SETTINGS');
+}
+
 function normalizeCategoryGroups(items) {
   if (!Array.isArray(items)) return [];
-  return items.map((item) => {
+  const seenMonths = new Set();
+  return items.map((item, idx) => {
     const rawId = pick(item, 'id');
     const id = Number(rawId);
+    const month_number = normalizeMonthNumber(pick(item, 'month_number', 'monthNumber'), idx + 1);
+    if (seenMonths.has(month_number)) throw makeHttpError('DUPLICATE_CATEGORY_GROUP_MONTH');
+    seenMonths.add(month_number);
+    const fallbackPercent = nonNegativeNumber(pick(item, 'favoriteCategoriesBonusPercent', 'bonus_percent'), 'INVALID_SETTINGS', 0);
+    const category_items = normalizeCategoryGroupItems(
+      pick(item, 'category_items', 'categoryItems'),
+      pick(item, 'favoriteCategoryIds', 'category_ids'),
+      fallbackPercent
+    );
+    const category_ids = category_items.map((row) => row.category_id);
     return {
       ...(Number.isInteger(id) && id > 0 ? { id } : {}),
-      title: toText(pick(item, 'title')) || 'Группа категорий',
-      bonus_percent: nonNegativeNumber(pick(item, 'favoriteCategoriesBonusPercent', 'bonus_percent'), 'INVALID_SETTINGS', 0),
-      categories_limit: nonNegativeInt(pick(item, 'favoriteCategoriesLimit', 'categories_limit'), 'INVALID_SETTINGS', 1),
-      category_ids: normalizeFavoriteCategoryIds(pick(item, 'favoriteCategoryIds', 'category_ids')),
+      month_number,
+      title: getBonusCategoryMonthTitle(month_number),
+      bonus_percent: category_items.reduce((max, row) => Math.max(max, Number(row.bonus_percent || 0)), fallbackPercent),
+      categories_limit: nonNegativeInt(pick(item, 'favoriteCategoriesLimit', 'categories_limit'), 'INVALID_SETTINGS', 0),
+      category_ids,
+      category_items,
     };
   });
 }
@@ -396,8 +454,7 @@ function mapSettingsRow(row) {
 
 function mapBonusLevelRow(row, children) {
   const levelId = Number(row.id || 0);
-  const favoriteGroupId = row.favorite_category_group_id == null ? null : Number(row.favorite_category_group_id);
-  const favoriteGroup = favoriteGroupId > 0 ? children.categoryGroupsById?.get(favoriteGroupId) : null;
+  const favoriteGroup = children.activeFavoriteGroup || null;
   return {
     id: levelId,
     code: row.code,
@@ -431,7 +488,9 @@ function mapBonusLevelRow(row, children) {
     redeem_percent: Number(row.redeem_percent || 0),
     referral_bonus_percent: Number(row.referral_bonus_percent || 0),
     favorite_categories_bonus_percent: favoriteGroup ? Number(favoriteGroup.bonus_percent || 0) : 0,
-    favorite_categories_limit: favoriteGroup ? Number(favoriteGroup.categories_limit || 0) : 0,
+    favorite_categories_min_bonus_percent: favoriteGroup ? Number(favoriteGroup.min_bonus_percent || 0) : 0,
+    favorite_categories_max_bonus_percent: favoriteGroup ? Number(favoriteGroup.max_bonus_percent || 0) : 0,
+    favorite_categories_limit: Number(row.favorite_categories_limit || 0),
     activation_delay_value: Number(row.activation_delay_value || 0),
     activation_delay_unit: row.activation_delay_unit,
     lifetime_value: Number(row.lifetime_value || 0),
@@ -451,7 +510,7 @@ function mapBonusLevelRow(row, children) {
     tariff_rows: children.tariffsByLevel.get(levelId) || [],
     order_bonus_ranges: children.rangesByLevel.get(levelId) || [],
     favorite_category_ids: favoriteGroup ? favoriteGroup.category_ids : [],
-    favorite_category_group_id: favoriteGroupId,
+    favorite_category_group_id: null,
   };
 }
 
@@ -552,10 +611,17 @@ async function loadConfig(db, tenantId) {
     [tenantId]
   );
   const [categoryGroupRows] = await db.query(
-    `SELECT id, title, bonus_percent, categories_limit, category_ids
+    `SELECT id, title, month_number, bonus_percent, categories_limit, category_ids
        FROM mkt_bonus_category_groups
       WHERE tenant_id = ?
-      ORDER BY id ASC`,
+      ORDER BY COALESCE(month_number, 99) ASC, id ASC`,
+    [tenantId]
+  );
+  const [categoryGroupItemRows] = await db.query(
+    `SELECT group_id, category_id, bonus_percent
+       FROM mkt_bonus_category_group_items
+      WHERE tenant_id = ?
+      ORDER BY group_id ASC, id ASC`,
     [tenantId]
   );
   const [rangeRows] = await db.query(
@@ -650,22 +716,61 @@ async function loadConfig(db, tenantId) {
     categoriesByLevel.get(levelId).push(Number(row.category_id || 0));
   });
 
-  const categoryGroups = categoryGroupRows.map((row) => ({
-    id: row.id,
-    title: row.title,
-    bonus_percent: Number(row.bonus_percent || 0),
-    categories_limit: Number(row.categories_limit || 0),
-    category_ids: Array.isArray(row.category_ids) ? row.category_ids : JSON.parse(row.category_ids || '[]'),
-  }));
+  const categoryItemsByGroupId = new Map();
+  categoryGroupItemRows.forEach((row) => {
+    const groupId = Number(row.group_id || 0);
+    if (!(groupId > 0)) return;
+    if (!categoryItemsByGroupId.has(groupId)) categoryItemsByGroupId.set(groupId, []);
+    categoryItemsByGroupId.get(groupId).push({
+      category_id: Number(row.category_id || 0),
+      bonus_percent: Number(row.bonus_percent || 0),
+    });
+  });
+  const categoryGroupsByMonth = new Map();
+  categoryGroupRows.forEach((row) => {
+    const monthNumber = Number(row.month_number || 0);
+    const groupId = Number(row.id || 0);
+    const legacyCategoryIds = Array.isArray(row.category_ids) ? row.category_ids : JSON.parse(row.category_ids || '[]');
+    const categoryItems = categoryItemsByGroupId.get(groupId) || normalizeCategoryGroupItems([], legacyCategoryIds, Number(row.bonus_percent || 0));
+    const itemPercents = categoryItems
+      .map((item) => Math.max(0, Number(item.bonus_percent || 0)))
+      .filter((value) => value > 0);
+    const group = {
+      id: row.id,
+      title: getBonusCategoryMonthTitle(monthNumber),
+      month_number: monthNumber,
+      bonus_percent: itemPercents.length ? Math.max(...itemPercents) : Number(row.bonus_percent || 0),
+      min_bonus_percent: itemPercents.length ? Math.min(...itemPercents) : 0,
+      max_bonus_percent: itemPercents.length ? Math.max(...itemPercents) : Number(row.bonus_percent || 0),
+      categories_limit: Number(row.categories_limit || 0),
+      category_ids: categoryItems.map((item) => Number(item.category_id || 0)).filter((id) => id > 0),
+      category_items: categoryItems,
+    };
+    if (monthNumber >= 1 && monthNumber <= 12 && !categoryGroupsByMonth.has(monthNumber)) {
+      categoryGroupsByMonth.set(monthNumber, group);
+    }
+  });
+  const categoryGroups = BONUS_CATEGORY_MONTHS.map((title, idx) => {
+    const monthNumber = idx + 1;
+    return categoryGroupsByMonth.get(monthNumber) || {
+      title,
+      month_number: monthNumber,
+      bonus_percent: 0,
+      categories_limit: 0,
+      category_ids: [],
+      category_items: [],
+    };
+  });
   const categoryGroupsById = new Map(
     categoryGroups
       .map((row) => [Number(row.id || 0), row])
       .filter(([id]) => id > 0)
   );
+  const activeFavoriteGroup = categoryGroups.find((row) => Number(row.month_number || 0) === (new Date().getMonth() + 1)) || null;
 
   return {
     settings: settingsRow ? mapSettingsRow(settingsRow) : mapSettingsRow(null),
-    levels: levelRows.map((row) => mapBonusLevelRow(row, { tariffsByLevel, rangesByLevel, categoriesByLevel, categoryGroupsById })),
+    levels: levelRows.map((row) => mapBonusLevelRow(row, { tariffsByLevel, rangesByLevel, categoriesByLevel, categoryGroupsById, activeFavoriteGroup })),
     referral_levels: referralRows.map((row) => ({
       id: Number(row.id || 0),
       code: row.code,
@@ -681,9 +786,14 @@ async function loadConfig(db, tenantId) {
     category_groups: categoryGroups.map((row) => ({
       id: row.id,
       title: row.title,
+      monthNumber: row.month_number,
       favoriteCategoriesBonusPercent: row.bonus_percent,
       favoriteCategoriesLimit: row.categories_limit,
       favoriteCategoryIds: row.category_ids,
+      categoryItems: row.category_items.map((item) => ({
+        categoryId: item.category_id,
+        bonusPercent: item.bonus_percent,
+      })),
     })),
   };
 }
@@ -703,14 +813,6 @@ async function saveLevelChildren(conn, tenantId, levelId, level) {
         (tenant_id, level_id, amount, percent, sort_order)
        VALUES (?, ?, ?, ?, ?)`,
       [tenantId, levelId, row.amount, row.percent, row.sort_order]
-    );
-  }
-  for (const categoryId of level.favorite_category_ids) {
-    await conn.query(
-      `INSERT INTO mkt_bonus_level_favorite_categories
-        (tenant_id, level_id, category_id)
-       VALUES (?, ?, ?)`,
-      [tenantId, levelId, categoryId]
     );
   }
 }
@@ -796,6 +898,17 @@ async function saveConfig(db, tenantId, payload) {
     );
 
     const payloadGroups = categoryGroups || [];
+    const allGroupCategoryIds = Array.from(new Set(payloadGroups.flatMap((group) => group.category_ids || [])));
+    if (allGroupCategoryIds.length) {
+      const [categoryValidationRows] = await conn.query(
+        `SELECT id FROM prod_categories WHERE tenant_id = ? AND id IN (?)`,
+        [tenantId, allGroupCategoryIds]
+      );
+      const validCategoryIds = new Set((Array.isArray(categoryValidationRows) ? categoryValidationRows : []).map((row) => Number(row.id || 0)));
+      if (allGroupCategoryIds.some((categoryId) => !validCategoryIds.has(Number(categoryId)))) {
+        throw makeHttpError('INVALID_SETTINGS');
+      }
+    }
     const groupIdsToKeep = payloadGroups.map(g => g.id).filter(id => id && typeof id === 'number');
     
     if (groupIdsToKeep.length > 0) {
@@ -808,17 +921,35 @@ async function saveConfig(db, tenantId, payload) {
       if (group.id && typeof group.id === 'number') {
         await conn.query(
           `UPDATE mkt_bonus_category_groups SET 
-            title = ?, bonus_percent = ?, categories_limit = ?, category_ids = ?
+            title = ?, month_number = ?, bonus_percent = ?, categories_limit = ?, category_ids = ?
            WHERE tenant_id = ? AND id = ?`,
-          [group.title, group.bonus_percent, group.categories_limit, JSON.stringify(group.category_ids), tenantId, group.id]
+          [group.title, group.month_number, group.bonus_percent, group.categories_limit, JSON.stringify(group.category_ids), tenantId, group.id]
         );
+        await conn.query(`DELETE FROM mkt_bonus_category_group_items WHERE tenant_id = ? AND group_id = ?`, [tenantId, group.id]);
+        for (const item of group.category_items) {
+          await conn.query(
+            `INSERT INTO mkt_bonus_category_group_items
+              (tenant_id, group_id, category_id, bonus_percent)
+             VALUES (?, ?, ?, ?)`,
+            [tenantId, group.id, item.category_id, item.bonus_percent]
+          );
+        }
       } else {
-        await conn.query(
+        const [result] = await conn.query(
           `INSERT INTO mkt_bonus_category_groups
-            (tenant_id, title, bonus_percent, categories_limit, category_ids)
-           VALUES (?, ?, ?, ?, ?)`,
-          [tenantId, group.title, group.bonus_percent, group.categories_limit, JSON.stringify(group.category_ids)]
+            (tenant_id, title, month_number, bonus_percent, categories_limit, category_ids)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+          [tenantId, group.title, group.month_number, group.bonus_percent, group.categories_limit, JSON.stringify(group.category_ids)]
         );
+        const groupId = Number(result.insertId || 0);
+        for (const item of group.category_items) {
+          await conn.query(
+            `INSERT INTO mkt_bonus_category_group_items
+              (tenant_id, group_id, category_id, bonus_percent)
+             VALUES (?, ?, ?, ?)`,
+            [tenantId, groupId, item.category_id, item.bonus_percent]
+          );
+        }
       }
     }
 
@@ -899,9 +1030,7 @@ async function saveConfig(db, tenantId, payload) {
         level.title_background_enabled,
         level.title_background_color,
         level.title_background_opacity,
-        savedGroupIds.has(Number(level.favorite_category_group_id || 0))
-          ? Number(level.favorite_category_group_id)
-          : null,
+        null,
         level.is_active,
       ];
       let levelId = existingLevelIdsByCode.get(level.code) || 0;
@@ -1408,27 +1537,37 @@ module.exports = function makeAdminBonusRouter({ db, helpers }) {
 
       let favoriteCategories = [];
       if (levelId > 0) {
+        const favoriteLimit = Math.max(0, Math.floor(Number(currentLevel?.favorite_categories_limit || 0)));
         const [categoryRows] = await db.query(
-          `SELECT pc.id, pc.title, pc.icon,
-                  CASE WHEN selected.category_id IS NULL THEN 0 ELSE 1 END AS selected
-             FROM mkt_bonus_level_favorite_categories lfc
+          `SELECT pc.id, pc.title, pc.icon, pc.sort_order, i.bonus_percent,
+                  CASE WHEN selected.category_id IS NULL THEN 0 ELSE 1 END AS selected,
+                  selected.created_at AS selected_at
+             FROM mkt_bonus_category_groups g
+             JOIN mkt_bonus_category_group_items i
+               ON i.tenant_id = g.tenant_id AND i.group_id = g.id
              JOIN prod_categories pc
-               ON pc.tenant_id = lfc.tenant_id AND pc.id = lfc.category_id
+               ON pc.tenant_id = i.tenant_id AND pc.id = i.category_id
              LEFT JOIN mkt_customer_bonus_favorite_categories selected
-               ON selected.tenant_id = lfc.tenant_id
+               ON selected.tenant_id = i.tenant_id
               AND selected.customer_id = ?
-              AND selected.level_id = lfc.level_id
-              AND selected.category_id = lfc.category_id
-            WHERE lfc.tenant_id = ? AND lfc.level_id = ? AND pc.is_active = 1
+              AND selected.level_id = ?
+              AND selected.category_id = i.category_id
+            WHERE g.tenant_id = ? AND g.month_number = MONTH(CURDATE()) AND pc.is_active = 1
             ORDER BY selected.category_id IS NULL ASC, selected.created_at ASC, pc.sort_order ASC, pc.id ASC`,
-          [customerId, tenantId, levelId]
+          [customerId, levelId, tenantId]
         );
-        favoriteCategories = (Array.isArray(categoryRows) ? categoryRows : []).map((row) => ({
+        let selectedCount = 0;
+        favoriteCategories = (Array.isArray(categoryRows) ? categoryRows : []).map((row) => {
+          const selected = Number(row.selected || 0) === 1 && favoriteLimit > 0 && selectedCount < favoriteLimit;
+          if (selected) selectedCount += 1;
+          return {
           id: Number(row.id || 0),
           title: row.title || '',
           icon: row.icon || null,
-          selected: Number(row.selected || 0) === 1,
-        }));
+          bonus_percent: Math.max(0, Number(row.bonus_percent || 0)),
+          selected,
+        };
+        });
       }
 
       const [transactionRows] = await db.query(

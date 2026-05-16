@@ -611,6 +611,15 @@
     return `${formatShopBonusNumber(value, fallback)}%`;
   }
 
+  function formatShopBonusFavoriteCategoriesRange(level) {
+    const min = Math.max(0, Number(level?.favorite_categories_min_bonus_percent || 0));
+    const max = Math.max(0, Number(level?.favorite_categories_max_bonus_percent || level?.favorite_categories_bonus_percent || 0));
+    if (min > 0 && max > 0 && Math.abs(max - min) >= 0.0001) {
+      return `${formatShopBonusNumber(min, 0)}-${formatShopBonusNumber(max, 0)}%`;
+    }
+    return formatShopBonusPercent(max, 0);
+  }
+
   function getShopBonusModalSetting(key) {
     const settings = Array.isArray(state.homeBonusConfig?.modal_settings) ? state.homeBonusConfig.modal_settings : [];
     const item = settings.find((row) => String(row?.key || "") === key) || null;
@@ -825,9 +834,43 @@
     const account = config?.account && typeof config.account === "object" ? config.account : null;
     if (!account?.joined_at || !(Number(account?.id || 0) > 0)) return null;
     const levelId = Number(account?.level_id || 0);
-    if (!(levelId > 0)) return null;
     const levels = Array.isArray(config?.levels) ? config.levels : [];
-    return levels.find((level) => Number(level?.id || 0) === levelId) || null;
+    if (levelId > 0) {
+      const currentLevel = levels.find((level) => Number(level?.id || 0) === levelId);
+      if (currentLevel) return currentLevel;
+    }
+    return getHomeBonusFirstLevel(config);
+  }
+
+  function refreshCartBonusSectionAfterConfigLoad(listEl = null, totalEl = null) {
+    const targetList = listEl || openCartSheetCtx?.listEl || elCartList;
+    const targetTotal = totalEl || openCartSheetCtx?.totalEl || elCartTotal;
+    if (!targetList || !targetTotal) return;
+    if (targetList.dataset.cartBonusConfigRefreshPending === "1") return;
+    const token = getCustomerToken();
+    if (!token || typeof loadHomeBonusConfig !== "function") return;
+    targetList.dataset.cartBonusConfigRefreshPending = "1";
+    loadHomeBonusConfig()
+      .then(() => {
+        if (!targetList.isConnected) return;
+        const rendered = renderCartInto(targetList, targetTotal, null);
+        if (openCartSheetCtx?.listEl === targetList) {
+          if (openCartSheetCtx.footerEl) openCartSheetCtx.footerEl.classList.toggle("hidden", rendered.items.length === 0);
+          if (openCartSheetCtx.checkoutBtn) {
+            openCartSheetCtx.checkoutBtn.disabled = rendered.items.length === 0;
+            const totalSpan = $(".shop-sheet-checkout-total", openCartSheetCtx.checkoutBtn);
+            if (totalSpan) totalSpan.textContent = money(computeCartTotals(rendered.items).total);
+          }
+          appendUpsellToList(targetList);
+        }
+        if (typeof window.syncShopCartPricingSummaryUi === "function") {
+          Promise.resolve(window.syncShopCartPricingSummaryUi()).catch(() => {});
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        delete targetList.dataset.cartBonusConfigRefreshPending;
+      });
   }
 
   function buildCartBonusJoinSection() {
@@ -1010,7 +1053,7 @@
     const contentColor = normalizeShopHexColor(level?.content_color, "#ffffff");
     const titleColor = normalizeShopHexColor(level?.title_color, "#1f2937");
     const cashbackValue = normalizeShopCardPercent(level?.cashback_percent, 1);
-    const favoriteCategoryBonus = normalizeShopCardPercent(level?.favorite_categories_bonus_percent, 0);
+    const favoriteCategoryBonusText = formatShopBonusFavoriteCategoriesRange(level);
     const favoriteCategoryLimit = Math.max(0, Math.floor(Number(level?.favorite_categories_limit || 0)));
     const favoriteCategoryPreviewHtml = buildBonusLevelPreviewFavoriteCategoriesHtml(level, contentColor, favoriteCategoryLimit);
     const showTitle = level?.show_title_on_card !== false;
@@ -1049,7 +1092,7 @@
           </div>
           <div class="bonus-level-preview-category-side${favoriteCategoryLimit > 0 ? "" : " hidden"}" role="button" tabindex="0" data-open-bonus-preview-favorite-categories>
             ${favoriteCategoryPreviewHtml}
-            <div class="bonus-level-preview-category-value" style="color:${escapeHtml(contentColor)};">${escapeHtml(`${favoriteCategoryBonus}%`)}</div>
+            <div class="bonus-level-preview-category-value" style="color:${escapeHtml(contentColor)};">${escapeHtml(favoriteCategoryBonusText)}</div>
           </div>
         </div>
       </div>
@@ -1335,15 +1378,15 @@
   }
 
   function buildBonusCardsAdvantagesHtml(level, settings, baseLevel = null) {
-    const favoriteBonus = Math.max(0, Number(level?.favorite_categories_bonus_percent || 0));
+    const favoriteBonus = Math.max(0, Number(level?.favorite_categories_max_bonus_percent || level?.favorite_categories_bonus_percent || 0));
     const favoriteLimit = Math.max(0, Math.floor(Number(level?.favorite_categories_limit || 0)));
-    const baseFavoriteBonus = Math.max(0, Number(baseLevel?.favorite_categories_bonus_percent || 0));
+    const baseFavoriteBonus = Math.max(0, Number(baseLevel?.favorite_categories_max_bonus_percent || baseLevel?.favorite_categories_bonus_percent || 0));
     const baseFavoriteLimit = Math.max(0, Math.floor(Number(baseLevel?.favorite_categories_limit || 0)));
     const favoriteBonusDelta = baseLevel ? formatShopBonusCompareDelta(favoriteBonus, baseFavoriteBonus) : "";
     const favoriteLimitDelta = baseLevel ? formatShopBonusCompareDelta(favoriteLimit, baseFavoriteLimit, "") : "";
     const favoriteDelta = [favoriteBonusDelta ? `кэшбек ${favoriteBonusDelta}` : "", favoriteLimitDelta ? `категории ${favoriteLimitDelta}` : ""].filter(Boolean).join(" · ");
     const favoriteText = favoriteBonus > 0 || favoriteLimit > 0
-      ? `Кэшбек: +${formatShopBonusPercent(favoriteBonus)} / Количество категорий: ${favoriteLimit}`
+      ? `Кэшбек: +${formatShopBonusFavoriteCategoriesRange(level)} / Количество категорий: ${favoriteLimit}`
       : "Не настроено";
     return `
       <div class="shop-bonus-cards-advantages" data-bonus-cards-advantages>
@@ -2951,10 +2994,12 @@
           ${categories.length ? categories.map((category) => {
             const categoryId = Number(category?.id || 0);
             const checked = selectedIds.has(categoryId);
+            const bonusPercent = Math.max(0, Number(category?.bonus_percent || category?.bonusPercent || 0));
             return `
               <button class="shop-bonus-favorite-category${checked ? " is-selected" : ""}${locked ? " is-locked" : ""}" type="button" data-bonus-favorite-category-id="${escapeHtml(String(categoryId))}" ${locked ? "disabled" : ""}>
                 ${buildBonusCategoryIconHtml(category)}
-                <span>${escapeHtml(category?.title || "")}</span>
+                <span class="shop-bonus-favorite-category-title">${escapeHtml(category?.title || "")}</span>
+                ${bonusPercent > 0 ? `<span class="shop-bonus-favorite-category-percent">+${escapeHtml(formatShopBonusPercent(bonusPercent, 0))}</span>` : ""}
               </button>
             `;
           }).join("") : '<div class="shop-bonus-sheet-empty">Категории не настроены</div>'}
@@ -3057,10 +3102,10 @@
     wrap.className = "shop-cart-sheet shop-bonus-cards-sheet shop-bonus-cashback-sheet";
     const coinName = state.homeBonusConfig?.settings?.bonus_coin_name || "Бонусы";
     
-    const favoriteBonus = Math.max(0, Number(level?.favorite_categories_bonus_percent || 0));
+    const favoriteBonus = Math.max(0, Number(level?.favorite_categories_max_bonus_percent || level?.favorite_categories_bonus_percent || 0));
     const favoriteLimit = Math.max(0, Math.floor(Number(level?.favorite_categories_limit || 0)));
     const favoriteText = favoriteBonus > 0 || favoriteLimit > 0
-      ? `${favoriteLimit} кат. / +${formatShopBonusPercent(favoriteBonus)}`
+      ? `${favoriteLimit} кат. / +${formatShopBonusFavoriteCategoriesRange(level)}`
       : "Не настроено";
 
     wrap.innerHTML = `
@@ -3180,7 +3225,7 @@
     if (!window.AppModal || typeof window.AppModal.open !== "function") return;
     const title = String(level?.title || "Уровень").trim() || "Уровень";
     const favoriteLimit = Math.max(0, Math.floor(Number(level?.favorite_categories_limit || 0)));
-    const favoriteBonusText = formatShopBonusPercent(level?.favorite_categories_bonus_percent, 0);
+    const favoriteBonusText = formatShopBonusFavoriteCategoriesRange(level);
     const favoriteCategoriesText = `${favoriteLimit} категорий · ${favoriteBonusText}`;
     const favoriteCategoriesEnabled = isHomeBonusFavoriteCategoriesEnabled(level);
     const wrap = document.createElement("div");
@@ -8974,7 +9019,7 @@
     const contentColor = "#64748b";
     const titleColor = "#64748b";
     const cashbackValue = normalizeShopCardPercent(level?.cashback_percent, 1);
-    const favoriteCategoryBonus = normalizeShopCardPercent(level?.favorite_categories_bonus_percent, 0);
+    const favoriteCategoryBonusText = formatShopBonusFavoriteCategoriesRange(level);
     const favoriteCategoryLimit = Math.max(0, Math.floor(Number(level?.favorite_categories_limit || 0)));
     const showTitle = level?.show_title_on_card !== false;
     const titleStyle = level?.title_background_enabled === false
@@ -9011,7 +9056,7 @@
               <span></span><span></span><span></span><span></span>
               <div class="bonus-level-preview-category-count" style="color:${escapeHtml(contentColor)};">${escapeHtml(String(favoriteCategoryLimit))}</div>
             </div>
-            <div class="bonus-level-preview-category-value" style="color:${escapeHtml(contentColor)};">${escapeHtml(`${favoriteCategoryBonus}%`)}</div>
+            <div class="bonus-level-preview-category-value" style="color:${escapeHtml(contentColor)};">${escapeHtml(favoriteCategoryBonusText)}</div>
           </div>
         </div>
       </div>
@@ -9060,6 +9105,19 @@
       .then((json) => {
         state.homeBonusConfig = json?.data && typeof json.data === "object" ? json.data : null;
         renderHomeBonusCard();
+        if (openCartSheetCtx?.listEl && openCartSheetCtx?.totalEl) {
+          const rendered = renderCartInto(openCartSheetCtx.listEl, openCartSheetCtx.totalEl, null);
+          if (openCartSheetCtx.footerEl) openCartSheetCtx.footerEl.classList.toggle("hidden", rendered.items.length === 0);
+          if (openCartSheetCtx.checkoutBtn) {
+            openCartSheetCtx.checkoutBtn.disabled = rendered.items.length === 0;
+            const totalSpan = $(".shop-sheet-checkout-total", openCartSheetCtx.checkoutBtn);
+            if (totalSpan) totalSpan.textContent = money(computeCartTotals(rendered.items).total);
+          }
+          appendUpsellToList(openCartSheetCtx.listEl);
+          if (typeof window.syncShopCartPricingSummaryUi === "function") {
+            Promise.resolve(window.syncShopCartPricingSummaryUi()).catch(() => {});
+          }
+        }
         if (!loadOptions.skipPendingModal) maybeShowPendingBonusModalEvent();
         return state.homeBonusConfig;
       })
@@ -14186,6 +14244,7 @@ async function initAddresses() {
       listEl.appendChild(buildCartBenefitsServiceSection());
       const bonusRedeemSection = buildCartBonusRedeemSection();
       if (bonusRedeemSection) listEl.appendChild(bonusRedeemSection);
+      else refreshCartBonusSectionAfterConfigLoad(listEl, totalEl);
 
       const pricingSummarySection = document.createElement("section");
       pricingSummarySection.className = "shop-cart-pricing-summary-section hidden";

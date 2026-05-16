@@ -29940,6 +29940,20 @@ body.page-new-order .page-col-left > .panel:not(#cashierQueuePanel){
 .bonus-settings-group-title { font-size: 14px; font-weight: 600; margin-bottom: 12px; color: var(--color-text); }
 .bonus-settings-field { padding: 8px 0; }
 
+#bonusSettingsFavoriteCategoriesWrap.banner-settings-panel:not(.hidden){
+  flex:1 1 auto;
+  min-height:0;
+  overflow-y:auto;
+  overflow-x:hidden;
+}
+
+#bonusSettingsFavoriteCategoriesWrap .bonus-settings-favorite-categories-list{
+  display:flex;
+  flex-direction:column;
+  gap:0;
+  min-height:0;
+}
+
 .bonus-level-favorite-categories-pill.is-empty{border-style:dashed;cursor:pointer;background:var(--color-surface);transition:border-color var(--dur-fast), background var(--dur-fast);}
 .bonus-level-favorite-categories-pill.is-empty:hover{border-color:var(--color-primary);background:var(--primary-10);}
 .bonus-level-favorite-categories-plus i{color:var(--color-text-muted);font-size:14px;}

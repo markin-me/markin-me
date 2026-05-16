@@ -793,6 +793,94 @@
       .filter((item) => item.referralName);
   }
 
+  const BONUS_CATEGORY_MONTHS = [
+    'Январь',
+    'Февраль',
+    'Март',
+    'Апрель',
+    'Май',
+    'Июнь',
+    'Июль',
+    'Август',
+    'Сентябрь',
+    'Октябрь',
+    'Ноябрь',
+    'Декабрь',
+  ];
+
+  function getBonusCategoryMonthTitle(monthNumber) {
+    return BONUS_CATEGORY_MONTHS[Number(monthNumber || 0) - 1] || 'Подборка категорий';
+  }
+
+  function normalizeBonusCategoryGroupItems(items, fallbackIds = [], fallbackPercent = 0) {
+    const source = Array.isArray(items) && items.length
+      ? items
+      : normalizeBonusLevelFavoriteCategoryIds(fallbackIds).map((categoryId) => ({
+          categoryId,
+          bonusPercent: fallbackPercent,
+        }));
+    const byCategoryId = new Map();
+    source.forEach((item) => {
+      const categoryId = Number(item?.categoryId ?? item?.category_id ?? item?.id ?? 0);
+      if (!(categoryId > 0)) return;
+      byCategoryId.set(categoryId, {
+        categoryId,
+        bonusPercent: Math.max(0, normalizeNumberInputValue(item?.bonusPercent ?? item?.bonus_percent ?? item?.percent, fallbackPercent)),
+      });
+    });
+    return Array.from(byCategoryId.values());
+  }
+
+  function getBonusCategoryGroupCategoryIds(group) {
+    const itemIds = normalizeBonusCategoryGroupItems(group?.categoryItems, group?.favoriteCategoryIds, group?.favoriteCategoriesBonusPercent)
+      .map((item) => item.categoryId);
+    return normalizeBonusLevelFavoriteCategoryIds(itemIds);
+  }
+
+  function createBonusCategoryMonthGroup(monthNumber, source = {}) {
+    const normalizedMonth = Math.min(12, Math.max(1, Math.floor(Number(monthNumber || source.monthNumber || source.month_number || 1))));
+    const categoryItems = normalizeBonusCategoryGroupItems(
+      source.categoryItems || source.category_items,
+      source.favoriteCategoryIds || source.category_ids,
+      source.favoriteCategoriesBonusPercent || source.bonus_percent || 0
+    );
+    const favoriteCategoriesBonusPercent = categoryItems.reduce((max, item) => Math.max(max, Number(item.bonusPercent || 0)), 0);
+    return {
+      ...(Number(source.id || 0) > 0 ? { id: Number(source.id) } : {}),
+      title: getBonusCategoryMonthTitle(normalizedMonth),
+      monthNumber: normalizedMonth,
+      favoriteCategoriesBonusPercent,
+      favoriteCategoriesLimit: normalizeNumberInputValue(source.favoriteCategoriesLimit ?? source.categories_limit, 0),
+      favoriteCategoryIds: categoryItems.map((item) => item.categoryId),
+      categoryItems,
+    };
+  }
+
+  function ensureBonusMonthlyCategoryGroups(groups) {
+    const byMonth = new Map();
+    (Array.isArray(groups) ? groups : []).forEach((group, idx) => {
+      const monthNumber = Number(group?.monthNumber ?? group?.month_number ?? idx + 1);
+      if (monthNumber >= 1 && monthNumber <= 12 && !byMonth.has(monthNumber)) {
+        byMonth.set(monthNumber, createBonusCategoryMonthGroup(monthNumber, group));
+      }
+    });
+    return BONUS_CATEGORY_MONTHS.map((_, idx) => {
+      const monthNumber = idx + 1;
+      return byMonth.get(monthNumber) || createBonusCategoryMonthGroup(monthNumber);
+    });
+  }
+
+  function getBonusCategoryGroupPercentSummary(group) {
+    const percents = normalizeBonusCategoryGroupItems(group?.categoryItems, group?.favoriteCategoryIds, group?.favoriteCategoriesBonusPercent)
+      .map((item) => normalizeNumberInputValue(item.bonusPercent, 0))
+      .filter((value) => value > 0);
+    if (!percents.length) return '';
+    const min = Math.min(...percents);
+    const max = Math.max(...percents);
+    if (min === max) return `+${formatBonusRangePercentValue(min)}%`;
+    return `+${formatBonusRangePercentValue(min)}–${formatBonusRangePercentValue(max)}%`;
+  }
+
   function mapBonusApiLevelToState(item, idx = 0) {
     const code = String(item?.code || item?.id || `level_${idx + 1}`).trim();
     return {
@@ -926,7 +1014,7 @@
         bonusCoinName: overrides.bonusProgramCoinName ?? state.bonusProgramCoinName,
         bonusCoinLogo: overrides.bonusProgramCoinLogo ?? state.bonusProgramCoinLogo,
       },
-      category_groups: overrides.bonusCategoryGroups || (state.bonusSettingsEditing ? state.bonusCategoryGroupsDraft : state.bonusCategoryGroups),
+      category_groups: ensureBonusMonthlyCategoryGroups(overrides.bonusCategoryGroups || (state.bonusSettingsEditing ? state.bonusCategoryGroupsDraft : state.bonusCategoryGroups)),
       levels: sanitizeBonusLevels(levelsSource, { withDefaults: false }).map((level, idx) => ({
         code: String(level.id || `level_${idx + 1}`),
         sort_order: idx,
@@ -964,7 +1052,7 @@
         favoriteCategoryGroupId: level.favoriteCategoryGroupId,
         orderBonusRanges: level.orderBonusRanges,
         favoriteCategoriesBonusPercent: 0,
-        favoriteCategoriesLimit: 0,
+        favoriteCategoriesLimit: level.favoriteCategoriesLimit,
         favoriteCategoryIds: [],
         requirementAmount: level.requirementAmount,
         requirementMode: level.requirementMode,
@@ -1162,7 +1250,7 @@
     state.bonusAllowRedeemAndAccrue = settings.allow_redeem_and_accrue === true;
     state.bonusLevels = sanitizeBonusLevels(levels, { withDefaults: false });
     state.bonusLevelsDraft = state.bonusLevels.map((level) => ({ ...level }));
-    state.bonusCategoryGroups = Array.isArray(json?.category_groups) ? json.category_groups : [];
+    state.bonusCategoryGroups = ensureBonusMonthlyCategoryGroups(Array.isArray(json?.category_groups) ? json.category_groups : []);
     state.bonusCategoryGroupsDraft = []; // Reset draft on load
     state.bonusModalSettings = cloneBonusModalSettings(
       (Array.isArray(json?.modal_settings) ? json.modal_settings : []).map((item) => ({
@@ -2372,6 +2460,7 @@
   const bonusLevelAllowSimultaneousSwitch = right$("#bonusLevelAllowSimultaneousSwitch");
   const bonusLevelReferralBonusField = right$("#bonusLevelReferralBonusField");
   const bonusLevelReferralBonusPercentInput = right$("#bonusLevelReferralBonusPercentInput");
+  const bonusLevelFavoriteCategoriesLimitInput = right$("#bonusLevelFavoriteCategoriesLimitInput");
   const bonusLevelActivationFieldWrap = right$("#bonusLevelActivationFieldWrap");
   const bonusLevelActivationDelayValueWrap = right$("#bonusLevelActivationDelayValueWrap");
   const bonusLevelActivationDelayValueInput = right$("#bonusLevelActivationDelayValueInput");
@@ -5606,7 +5695,8 @@
     const badge = document.createElement("span");
     badge.className = "client-bonus-category-badge";
     const title = String(category?.title || "").trim();
-    if (title) badge.title = title;
+    const percent = Math.max(0, Number(category?.bonus_percent || category?.bonusPercent || 0));
+    if (title) badge.title = percent > 0 ? `${title} +${percent}%` : title;
     const icon = String(category?.icon || "").trim();
     if (icon && (/^https?:\/\//i.test(icon) || icon.startsWith("/") || /\.(png|jpe?g|webp|gif|svg)$/i.test(icon))) {
       const img = document.createElement("img");
@@ -5741,7 +5831,10 @@
       row.disabled = true;
       row.appendChild(renderClientBonusCategoryBadge(category));
       const title = document.createElement("span");
-      title.textContent = String(category?.title || "").trim();
+      const bonusPercent = Math.max(0, Number(category?.bonus_percent || category?.bonusPercent || 0));
+      title.textContent = bonusPercent > 0
+        ? `${String(category?.title || "").trim()} · +${bonusPercent}%`
+        : String(category?.title || "").trim();
       row.appendChild(title);
       list.appendChild(row);
     });
@@ -5784,7 +5877,12 @@
     const selectedCategories = categoriesSource.filter((category) => category?.selected);
     const categories = selectedCategories.length ? selectedCategories : categoriesSource;
     const cashbackPercent = Number(level.cashback_percent || 0);
-    const categoryPercent = Number(level.favorite_categories_bonus_percent || 0);
+    const categoryPercents = categoriesSource
+      .map((category) => Math.max(0, Number(category?.bonus_percent || category?.bonusPercent || 0)))
+      .filter((value) => value > 0);
+    const categoryPercentText = categoryPercents.length
+      ? `${Math.min(...categoryPercents)}-${Math.max(...categoryPercents)}%`
+      : `${Number(level.favorite_categories_bonus_percent || 0)}%`;
     const categoryLimit = Number(level.favorite_categories_limit || 0);
 
     const title = document.createElement("div");
@@ -5866,8 +5964,8 @@
     categoriesCard.setAttribute("tabindex", "0");
     const categoriesTitle = document.createElement("span");
     categoriesTitle.textContent = categoryLimit > 0
-      ? `${categoryLimit} категорий · ${categoryPercent}%`
-      : `Категории · ${categoryPercent}%`;
+      ? `${categoryLimit} категорий · ${categoryPercentText}`
+      : `Категории · ${categoryPercentText}`;
     categoriesCard.appendChild(categoriesTitle);
     const badges = document.createElement("div");
     badges.className = "client-bonus-category-badges";
@@ -7978,7 +8076,7 @@
     ensureTab({
       type: 'bonus-settings-favorite-categories',
       id: 'favorite-categories',
-      title: 'Группы любимых категорий',
+      title: 'Подборки категорий',
       onActivate: activateBonusSettingsFavoriteCategoriesTab,
     });
   }
@@ -8209,61 +8307,47 @@
   function renderBonusSettingsFavoriteCategoriesTabContent() {
     if (!bonusSettingsFavoriteCategoriesWrap) return;
     
-    const groups = state.bonusSettingsEditing ? state.bonusCategoryGroupsDraft : state.bonusCategoryGroups;
+    const sourceGroups = state.bonusSettingsEditing ? state.bonusCategoryGroupsDraft : state.bonusCategoryGroups;
+    const groups = ensureBonusMonthlyCategoryGroups(sourceGroups);
+    if (state.bonusSettingsEditing) {
+      state.bonusCategoryGroupsDraft = groups;
+    } else {
+      state.bonusCategoryGroups = groups;
+    }
     const isEditing = state.bonusSettingsEditing;
     
     let html = `
       <div class="bonus-settings-favorite-categories-list">
     `;
-    
-    if (groups.length === 0) {
+
+    groups.forEach((group, index) => {
+      const selectedIds = getBonusCategoryGroupCategoryIds(group);
+      const iconsHtml = renderBonusFavoriteCategoryIconsHtml(selectedIds) || '<div class="bonus-level-range-pill-text">Категории не выбраны</div>';
+      const percentSummary = getBonusCategoryGroupPercentSummary(group);
       html += `
-        <div class="empty-state">
-          <div class="empty-icon"><i class="fas fa-layer-group"></i></div>
-          <div class="empty-title">Группы любимых категорий</div>
-          <div class="empty-text">Здесь вы сможете управлять группами категорий, которые клиенты могут выбирать как «любимые» для повышенного кешбэка.</div>
-        </div>
-      `;
-    } else {
-      groups.forEach((group, index) => {
-        const iconsHtml = renderBonusFavoriteCategoryIconsHtml(group.favoriteCategoryIds || []);
-        html += `
-          <div class="field-wrap bonus-level-range-field bonus-level-range-pill--right">
-            <div class="bonus-level-rules-title">${escapeHtml(group.title || 'Новая группа')}</div>
-            <div class="bonus-level-range-pill bonus-level-favorite-categories-pill">
-              <div class="bonus-level-favorite-categories-icons">${iconsHtml}</div>
-              <div class="bonus-level-range-pill-actions">
-                <button class="bonus-level-range-action-btn" type="button" data-group-info="${index}" title="Подробно">
-                  <i class="fas fa-info"></i>
-                </button>
-                <button class="bonus-level-range-action-btn" type="button" data-group-edit="${index}" ${isEditing ? '' : 'disabled'} title="Редактировать">
-                  <i class="fas fa-ellipsis-h"></i>
-                </button>
-              </div>
+        <div class="field-wrap bonus-level-range-field bonus-level-range-pill--right">
+          <div class="bonus-level-rules-title">${escapeHtml(group.title || getBonusCategoryMonthTitle(group.monthNumber))}</div>
+          <div class="bonus-level-range-pill bonus-level-favorite-categories-pill">
+            <div class="bonus-level-favorite-categories-icons">${iconsHtml}</div>
+            ${percentSummary ? `<div class="bonus-level-range-pill-text">${escapeHtml(percentSummary)}</div>` : ''}
+            <div class="bonus-level-range-pill-actions">
+              <button class="bonus-level-range-action-btn" type="button" data-group-info="${index}" title="Подробно">
+                <i class="fas fa-info"></i>
+              </button>
+              <button class="bonus-level-range-action-btn" type="button" data-group-edit="${index}" ${isEditing ? '' : 'disabled'} title="Редактировать">
+                <i class="fas fa-ellipsis-h"></i>
+              </button>
             </div>
           </div>
-        `;
-      });
-    }
+        </div>
+      `;
+    });
     
     html += `
-      </div>
-      <div class="bonus-settings-favorite-categories-actions" style="margin-top: 16px;">
-        <button class="bonus-level-range-pill bonus-category-group-add-btn" type="button" id="addBonusCategoryGroupBtn" ${isEditing ? '' : 'disabled'} style="width: 100%; justify-content: center;">
-          <div class="bonus-level-range-pill-text"><i class="fas fa-plus"></i> Добавить группу категорий</div>
-        </button>
       </div>
     `;
     
     bonusSettingsFavoriteCategoriesWrap.innerHTML = html;
-    
-    // Handlers
-    const addBtn = bonusSettingsFavoriteCategoriesWrap.querySelector('#addBonusCategoryGroupBtn');
-    if (addBtn && isEditing) {
-      addBtn.addEventListener('click', () => {
-        addBonusCategoryGroup();
-      });
-    }
     
     groups.forEach((group, index) => {
       const editBtn = bonusSettingsFavoriteCategoriesWrap.querySelector(`[data-group-edit="${index}"]`);
@@ -8283,17 +8367,6 @@
   }
 
   function addBonusCategoryGroup() {
-    if (!state.bonusSettingsEditing) return;
-    
-    const newGroup = {
-      id: `new_${Date.now()}`,
-      title: `Группа #${state.bonusCategoryGroupsDraft.length + 1}`,
-      favoriteCategoriesBonusPercent: 5,
-      favoriteCategoriesLimit: 3,
-      favoriteCategoryIds: [],
-    };
-    
-    state.bonusCategoryGroupsDraft.push(newGroup);
     renderBonusSettingsFavoriteCategoriesTabContent();
   }
 
@@ -8324,6 +8397,7 @@
 
   async function openBonusCategoryGroupEditor(index) {
     if (!state.bonusSettingsEditing) return;
+    state.bonusCategoryGroupsDraft = ensureBonusMonthlyCategoryGroups(state.bonusCategoryGroupsDraft);
     const groups = state.bonusCategoryGroupsDraft;
     const current = groups[index];
     if (!current) return;
@@ -8352,61 +8426,26 @@
     shell.className = 'bonus-range-editor-modal';
     frame.scrollEl.appendChild(shell);
 
-    const nameRow = document.createElement('div');
-    nameRow.className = 'bonus-range-editor-row';
-    nameRow.style.marginBottom = '20px';
-    nameRow.innerHTML = `
-      <input
-        class="control banner-title-input"
-        type="text"
-        placeholder="Название группы"
-        data-bonus-favorite-field="title"
-        value="${escapeHtml(current.title || '')}"
-        style="width: 100%; text-align: left; padding: 12px 20px; height: 48px; border-radius: 24px;"
-      />
-    `;
-    shell.appendChild(nameRow);
-
     const title = document.createElement('div');
     title.className = 'bonus-range-editor-title';
-    title.textContent = 'Настройка условий';
+    title.textContent = current.title || getBonusCategoryMonthTitle(current.monthNumber);
     shell.appendChild(title);
 
     const note = document.createElement('div');
     note.className = 'bonus-range-editor-row';
-    note.textContent = 'Укажите процент кэшбека и количество любимых категорий.';
+    note.textContent = 'Выберите категории месяца и укажите доп. кэшбек для каждой категории.';
     shell.appendChild(note);
-
-    const rowEl = document.createElement('div');
-    rowEl.className = 'bonus-range-editor-input-row';
-    rowEl.innerHTML = `
-      <input
-        class="control bonus-range-editor-input"
-        type="number"
-        min="0"
-        step="0.1"
-        placeholder="Кэшбек, %"
-        data-bonus-favorite-field="percent"
-        value="${escapeHtml(String(normalizeNumberInputValue(current.favoriteCategoriesBonusPercent, 0) || ''))}"
-      />
-      <input
-        class="control bonus-range-editor-input"
-        type="number"
-        min="0"
-        step="1"
-        placeholder="Количество категорий"
-        data-bonus-favorite-field="limit"
-        value="${escapeHtml(String(Math.max(0, Math.floor(Number(current.favoriteCategoriesLimit || 0))) || ''))}"
-      />
-    `;
-    shell.appendChild(rowEl);
 
     const categoriesTitle = document.createElement('div');
     categoriesTitle.className = 'bonus-range-editor-title';
     categoriesTitle.textContent = 'Категории тенанта';
     shell.appendChild(categoriesTitle);
 
-    const selectedCategoryIds = new Set(normalizeBonusLevelFavoriteCategoryIds(current.favoriteCategoryIds));
+    const itemPercentByCategoryId = new Map(
+      normalizeBonusCategoryGroupItems(current.categoryItems, current.favoriteCategoryIds, current.favoriteCategoriesBonusPercent)
+        .map((item) => [Number(item.categoryId), normalizeNumberInputValue(item.bonusPercent, 0)])
+    );
+    const selectedCategoryIds = new Set(Array.from(itemPercentByCategoryId.keys()));
     const categoriesToolbar = document.createElement('div');
     categoriesToolbar.className = 'bonus-level-favorite-categories-toolbar';
 
@@ -8429,6 +8468,9 @@
       categoriesList.innerHTML = categories.map((category) => {
         const categoryId = Number(category?.id || 0);
         const isChecked = selectedCategoryIds.has(categoryId);
+        const percentValue = itemPercentByCategoryId.has(categoryId)
+          ? itemPercentByCategoryId.get(categoryId)
+          : normalizeNumberInputValue(current.favoriteCategoriesBonusPercent, 0);
         const titleText = String(category?.title || `Категория #${categoryId}`).trim();
         const photo = getDiscountEntityPhoto({ type: 'category', id: categoryId });
         const icon = String(category?.icon || '').trim();
@@ -8440,6 +8482,17 @@
             <input type="checkbox" data-bonus-favorite-category-id="${categoryId}" ${isChecked ? 'checked' : ''} />
             ${media}
             <span class="option-picker-title">${escapeHtml(String(category?.title || `Категория #${categoryId}`).trim())}</span>
+            <input
+              class="control bonus-range-editor-input"
+              type="number"
+              min="0"
+              step="0.1"
+              placeholder="%"
+              data-bonus-favorite-category-percent="${categoryId}"
+              value="${escapeHtml(String(percentValue || ''))}"
+              ${isChecked ? '' : 'disabled'}
+              style="width: 92px; min-width: 92px; height: 40px; border-radius: 20px; margin-left: auto;"
+            />
           </label>
         `;
       }).join('');
@@ -8447,10 +8500,15 @@
         categoriesList.querySelectorAll('input[type="checkbox"][data-bonus-favorite-category-id]').forEach((input) => {
           const row = input.closest('.option-picker-row');
           if (row) row.classList.toggle('is-selected', input.checked);
+          const percentInput = row?.querySelector('[data-bonus-favorite-category-percent]');
+          if (percentInput) percentInput.disabled = !input.checked;
         });
       };
       categoriesList.querySelectorAll('input[type="checkbox"][data-bonus-favorite-category-id]').forEach((input) => {
         input.addEventListener('change', syncCategorySelectionUi);
+      });
+      categoriesList.querySelectorAll('input[data-bonus-favorite-category-percent]').forEach((input) => {
+        input.addEventListener('click', (event) => event.stopPropagation());
       });
       selectAllBtn.addEventListener('click', () => {
         categoriesList.querySelectorAll('input[type="checkbox"][data-bonus-favorite-category-id]').forEach((input) => {
@@ -8492,10 +8550,12 @@
     deleteBtn.style.width = '48px';
     deleteBtn.style.padding = '0';
     deleteBtn.style.marginLeft = 'auto';
-    deleteBtn.title = 'Удалить группу';
+    deleteBtn.title = 'Сбросить подборку';
     deleteBtn.addEventListener('click', () => {
-      if (confirm('Удалить эту группу категорий?')) {
-        state.bonusCategoryGroupsDraft.splice(index, 1);
+      if (confirm('Сбросить категории этого месяца?')) {
+        current.favoriteCategoryIds = [];
+        current.categoryItems = [];
+        current.favoriteCategoriesBonusPercent = 0;
         window.AdminBenefitsModal?.hide();
       }
     });
@@ -8506,24 +8566,27 @@
     saveBtn.className = 'shop-checkout-benefits-promo-entry-btn is-active';
     saveBtn.textContent = 'Сохранить';
     saveBtn.addEventListener('click', () => {
-      const nameInput = nameRow.querySelector('[data-bonus-favorite-field="title"]');
-      const percentInput = rowEl.querySelector('[data-bonus-favorite-field="percent"]');
-      const limitInput = rowEl.querySelector('[data-bonus-favorite-field="limit"]');
       const nextCategoryIds = normalizeBonusLevelFavoriteCategoryIds(
         Array.from(categoriesList.querySelectorAll('input[type="checkbox"][data-bonus-favorite-category-id]:checked'))
           .map((input) => input.getAttribute('data-bonus-favorite-category-id'))
       );
-      
-      current.title = (nameInput?.value || '').trim() || current.title;
-      current.favoriteCategoriesBonusPercent = normalizeNumberInputValue(percentInput?.value, 0);
-      current.favoriteCategoriesLimit = normalizeNumberInputValue(limitInput?.value, 0);
+      const nextItems = nextCategoryIds.map((categoryId) => {
+        const percentInput = categoriesList.querySelector(`[data-bonus-favorite-category-percent="${categoryId}"]`);
+        return {
+          categoryId,
+          bonusPercent: normalizeNumberInputValue(percentInput?.value, 0),
+        };
+      });
+
+      current.title = getBonusCategoryMonthTitle(current.monthNumber);
+      current.categoryItems = nextItems;
+      current.favoriteCategoriesBonusPercent = nextItems.reduce((max, item) => Math.max(max, Number(item.bonusPercent || 0)), 0);
       current.favoriteCategoryIds = nextCategoryIds;
       
       renderBonusSettingsFavoriteCategoriesTabContent();
       window.AdminBenefitsModal?.hide();
     });
     actions.appendChild(saveBtn);
-    actions.appendChild(deleteBtn);
     
     actions.style.display = 'flex';
     actions.style.alignItems = 'center';
@@ -10255,15 +10318,37 @@
     return (Array.isArray(groups) ? groups : []).find((group) => Number(group?.id || 0) === id) || null;
   }
 
+  function getActiveBonusCategoryGroup() {
+    const groups = state.bonusSettingsEditing ? state.bonusCategoryGroupsDraft : state.bonusCategoryGroups;
+    const monthNumber = new Date().getMonth() + 1;
+    return (Array.isArray(groups) ? groups : []).find((group) => Number(group?.monthNumber || group?.month_number || 0) === monthNumber) || null;
+  }
+
   function getBonusLevelFavoriteCategoryConfig(level = null) {
     const current = level && typeof level === 'object' ? level : getActiveBonusLevelForInfo();
-    const selectedGroup = getBonusCategoryGroupById(current?.favoriteCategoryGroupId);
+    const selectedGroup = getActiveBonusCategoryGroup();
     return {
       group: selectedGroup,
       bonusPercent: selectedGroup ? normalizeNumberInputValue(selectedGroup.favoriteCategoriesBonusPercent, 0) : 0,
-      limit: selectedGroup ? Math.max(0, Math.floor(Number(selectedGroup.favoriteCategoriesLimit || 0))) : 0,
-      categoryIds: selectedGroup ? normalizeBonusLevelFavoriteCategoryIds(selectedGroup.favoriteCategoryIds) : [],
+      limit: Math.max(0, Math.floor(Number(current?.favoriteCategoriesLimit || 0))),
+      categoryIds: selectedGroup ? getBonusCategoryGroupCategoryIds(selectedGroup) : [],
     };
+  }
+
+  function formatBonusLevelFavoriteCategoryPercentText(level = null) {
+    const { group: selectedGroup } = getBonusLevelFavoriteCategoryConfig(level);
+    const percents = normalizeBonusCategoryGroupItems(
+      selectedGroup?.categoryItems,
+      selectedGroup?.favoriteCategoryIds,
+      selectedGroup?.favoriteCategoriesBonusPercent
+    )
+      .map((item) => normalizeNumberInputValue(item.bonusPercent, 0))
+      .filter((value) => value > 0);
+    if (!percents.length) return '0%';
+    const min = Math.min(...percents);
+    const max = Math.max(...percents);
+    if (Math.abs(max - min) < 0.0001) return `${formatBonusRangePercentValue(max)}%`;
+    return `${formatBonusRangePercentValue(min)}-${formatBonusRangePercentValue(max)}%`;
   }
 
   function formatBonusLevelFavoriteCategoriesHelpText(level = null) {
@@ -10328,7 +10413,7 @@
     bonusLevelFavoriteCategoriesIcons.innerHTML = '';
     
     // Check if empty
-    if (!groupId && (!selectedIds.length && !(limit > 0) || !(bonusPercent > 0))) {
+    if (!groupId && !selectedIds.length && !(limit > 0)) {
       bonusLevelFavoriteCategoriesIcons.innerHTML = `
         <div class="bonus-level-favorite-categories-plus" style="width: 100%; display: flex; justify-content: center; align-items: center; cursor: ${isEditing ? 'pointer' : 'default'};">
           <i class="fas fa-plus"></i>
@@ -10400,11 +10485,9 @@
     if (!isBonusLevelEditorActive()) return;
     const current = getActiveBonusLevelForInfo();
     if (!current) return;
-    
-    const groups = state.bonusSettingsEditing ? state.bonusCategoryGroupsDraft : state.bonusCategoryGroups;
 
     window.AdminBenefitsModal?.show({
-      title: 'Группы любимых категорий',
+      title: 'Лимит категорий',
       showBack: false,
       showModeToggle: false,
       onClose: closeBonusLevelFavoriteCategoriesEditor,
@@ -10425,50 +10508,28 @@
 
     const title = document.createElement('div');
     title.className = 'bonus-range-editor-title';
-    title.textContent = 'Выберите группу категорий';
+    title.textContent = 'Сколько категорий можно выбрать';
     shell.appendChild(title);
 
     const note = document.createElement('div');
     note.className = 'bonus-range-editor-row';
-    note.textContent = 'Для уровня можно выбрать только одну группу.';
+    note.textContent = 'Сами подборки и проценты настраиваются по месяцам в настройках бонусной программы.';
     shell.appendChild(note);
 
-    const groupsList = document.createElement('div');
-    groupsList.className = 'option-picker-list';
-    
-    let selectedGroupId = Number(current.favoriteCategoryGroupId || 0);
-    let groupsHtml = '';
-    
-    if (Array.isArray(groups) && groups.length) {
-      groupsHtml = groups.map((group) => {
-        const groupId = Number(group?.id || 0);
-        if (!(groupId > 0)) return '';
-        const isChecked = selectedGroupId === groupId;
-        const titleText = String(group?.title || `Группа #${groupId}`).trim();
-        const iconsHtml = renderBonusFavoriteCategoryIconsHtml(group.favoriteCategoryIds || []);
-        
-        return `
-          <button class="option-picker-row bonus-level-favorite-category-card${isChecked ? ' is-selected' : ''}" type="button" data-group-id="${groupId}">
-            <div class="bonus-level-favorite-categories-icons" style="margin-right: 12px; transform: scale(0.8);">${iconsHtml}</div>
-            <span class="option-picker-title">${escapeHtml(titleText)}</span>
-          </button>
-        `;
-      }).join('');
-    } else {
-      groupsHtml = '<div class="empty-hint">Группы категорий не созданы.</div>';
-    }
-    groupsList.innerHTML = groupsHtml;
-    
-    groupsList.querySelectorAll('[data-group-id]').forEach((row) => {
-      row.addEventListener('click', () => {
-        const groupId = Number(row.getAttribute('data-group-id') || 0);
-        selectedGroupId = selectedGroupId === groupId ? 0 : groupId;
-        groupsList.querySelectorAll('[data-group-id]').forEach((item) => {
-          item.classList.toggle('is-selected', Number(item.getAttribute('data-group-id') || 0) === selectedGroupId);
-        });
-      });
-    });
-    shell.appendChild(groupsList);
+    const rowEl = document.createElement('div');
+    rowEl.className = 'bonus-range-editor-input-row';
+    rowEl.innerHTML = `
+      <input
+        class="control bonus-range-editor-input"
+        type="number"
+        min="0"
+        step="1"
+        placeholder="Лимит категорий"
+        data-bonus-favorite-field="limit"
+        value="${escapeHtml(String(Math.max(0, Math.floor(Number(current.favoriteCategoriesLimit || 0))) || ''))}"
+      />
+    `;
+    shell.appendChild(rowEl);
 
     const actions = document.createElement('div');
     actions.className = 'bonus-range-editor-footer-actions';
@@ -10485,10 +10546,11 @@
     const saveBtn = document.createElement('button');
     saveBtn.type = 'button';
     saveBtn.className = 'shop-checkout-benefits-promo-entry-btn is-active';
-    saveBtn.textContent = 'Выбрать';
+    saveBtn.textContent = 'Сохранить';
     saveBtn.addEventListener('click', () => {
+      const limitInput = rowEl.querySelector('[data-bonus-favorite-field="limit"]');
       const nextPatch = {
-        favoriteCategoryGroupId: selectedGroupId > 0 ? selectedGroupId : null
+        favoriteCategoriesLimit: Math.max(0, Math.floor(Number(normalizeNumberInputValue(limitInput?.value, 0) || 0))),
       };
       
       applyBonusLevelEditorDraftPatch(nextPatch);
@@ -10683,6 +10745,10 @@
       bonusLevelReferralBonusPercentInput.value = String(normalizeBonusPercentInputValue(current.referralBonusPercent, 0) || 0);
       bonusLevelReferralBonusPercentInput.disabled = !isEditing || !isReferralSystemEnabled();
     }
+    if (bonusLevelFavoriteCategoriesLimitInput) {
+      bonusLevelFavoriteCategoriesLimitInput.value = String(Math.max(0, Math.floor(Number(current.favoriteCategoriesLimit || 0))) || 0);
+      bonusLevelFavoriteCategoriesLimitInput.disabled = !isEditing;
+    }
     if (bonusLevelRangeSummary) {
       const rangeSummaryText = formatBonusLevelRangeSummary(current);
       const rangeHelpText = formatBonusLevelRangeHelpText(current);
@@ -10792,7 +10858,7 @@
       previewCategoryCount.textContent = String(previewCategoryLimit);
     }
     if (previewCategoryValue) {
-      previewCategoryValue.textContent = `${favoriteCategoryConfig.bonusPercent}%`;
+      previewCategoryValue.textContent = formatBonusLevelFavoriteCategoryPercentText(current);
     }
     if (previewQr) {
       previewQr.style.display = current.qrEnabled === false ? 'none' : 'flex';
@@ -10887,9 +10953,9 @@
       lifetimeUnit: normalizeBonusLevelLifetimeUnit(draft.lifetimeUnit),
       orderBonusRanges: sanitizeBonusRangeRows(draft.orderBonusRanges),
       favoriteCategoriesBonusPercent: 0,
-      favoriteCategoriesLimit: 0,
+      favoriteCategoriesLimit: normalizeNumberInputValue(draft.favoriteCategoriesLimit, 0),
       favoriteCategoryIds: [],
-      favoriteCategoryGroupId: draft.favoriteCategoryGroupId ?? null,
+      favoriteCategoryGroupId: null,
       requirementAmount: normalizeBonusLevelRequirementValue(draft.requirementAmount),
       requirementMode: normalizeBonusLevelRequirementMode(draft.requirementMode),
       requirementOrders: normalizeBonusLevelRequirementValue(draft.requirementOrders),
@@ -11027,7 +11093,7 @@
       const contentColor = normalizeHexColor(level.contentColor, '#ffffff');
       const cashbackValue = normalizeBonusPercentInputValue(level.cashbackPercent, 1);
       const favoriteCategoryConfig = getBonusLevelFavoriteCategoryConfig(level);
-      const favoriteCategoryBonus = favoriteCategoryConfig.bonusPercent;
+      const favoriteCategoryBonus = formatBonusLevelFavoriteCategoryPercentText(level);
       const favoriteCategoryLimit = favoriteCategoryConfig.limit;
       const card = document.createElement('div');
       card.className = `banner-placement-card bonus-level-card${isActive ? ' is-active' : ''}${isFlipped ? ' is-flipped' : ''}${isFlipping ? ' is-flipping' : ''}`;
@@ -11057,7 +11123,7 @@
                       <span></span><span></span><span></span><span></span>
                       <div class="bonus-level-preview-category-count" style="color:${escapeHtml(contentColor)};">${escapeHtml(String(favoriteCategoryLimit))}</div>
                     </div>
-                    <div class="bonus-level-preview-category-value" style="color:${escapeHtml(contentColor)};">${escapeHtml(`${favoriteCategoryBonus}%`)}</div>
+                    <div class="bonus-level-preview-category-value" style="color:${escapeHtml(contentColor)};">${escapeHtml(favoriteCategoryBonus)}</div>
                   </div>
                 </div>
               </div>
@@ -11363,8 +11429,8 @@
           <button class="settings-home-card settings-card" id="bonusSettingsFavoriteCategoriesCard" type="button">
             <div class="product-avatar"><i class="fas fa-layer-group"></i></div>
             <div class="order-col">
-              <div class="product-title">Группы любимых категорий</div>
-              <div class="muted">Управление подборками категорий для бонусов</div>
+              <div class="product-title">Подборки категорий</div>
+              <div class="muted">Месячные подборки категорий для бонусов</div>
             </div>
             <div class="order-col"></div>
           </button>
@@ -11613,7 +11679,7 @@
     state.bonusProgramCoinLogoDraft = state.bonusProgramCoinLogo;
     state.bonusPointAmountDraft = state.bonusPointAmount;
     state.bonusRubleAmountDraft = state.bonusRubleAmount;
-    state.bonusCategoryGroupsDraft = JSON.parse(JSON.stringify(state.bonusCategoryGroups || []));
+    state.bonusCategoryGroupsDraft = ensureBonusMonthlyCategoryGroups(JSON.parse(JSON.stringify(state.bonusCategoryGroups || [])));
     state.bonusModalSettingsDraft = cloneBonusModalSettings(state.bonusModalSettings);
     syncBonusToolbarState();
     renderBonusSettings();
@@ -11700,10 +11766,10 @@
         bonusPointAmount: nextPointAmount,
         bonusRubleAmount: nextRubleAmount,
         bonusPointRate: nextPointRate,
-        bonusCategoryGroups: state.bonusCategoryGroupsDraft,
+        bonusCategoryGroups: ensureBonusMonthlyCategoryGroups(state.bonusCategoryGroupsDraft),
       });
 
-      state.bonusCategoryGroups = JSON.parse(JSON.stringify(state.bonusCategoryGroupsDraft || []));
+      state.bonusCategoryGroups = ensureBonusMonthlyCategoryGroups(JSON.parse(JSON.stringify(state.bonusCategoryGroupsDraft || [])));
       state.bonusCategoryGroupsDraft = [];
 
       state.bonusProgramNameBase = nextNameBase;
@@ -24232,6 +24298,14 @@
     bonusLevelReferralBonusPercentInput.addEventListener('input', () => {
       applyBonusLevelEditorDraftPatch({
         referralBonusPercent: normalizeBonusPercentInputValue(bonusLevelReferralBonusPercentInput.value, 0),
+      });
+    });
+  }
+
+  if (bonusLevelFavoriteCategoriesLimitInput) {
+    bonusLevelFavoriteCategoriesLimitInput.addEventListener('input', () => {
+      applyBonusLevelEditorDraftPatch({
+        favoriteCategoriesLimit: Math.max(0, Math.floor(Number(normalizeNumberInputValue(bonusLevelFavoriteCategoriesLimitInput.value, 0) || 0))),
       });
     });
   }

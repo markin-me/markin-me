@@ -13687,9 +13687,12 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
     const account = data?.account && typeof data.account === "object" ? data.account : null;
     if (!account?.joined_at || !(Number(account?.id || 0) > 0)) return null;
     const levelId = Number(account?.level_id || 0);
-    if (!(levelId > 0)) return null;
     const levels = Array.isArray(data?.levels) ? data.levels : [];
-    return levels.find((level) => Number(level?.id || 0) === levelId) || null;
+    if (levelId > 0) {
+      const currentLevel = levels.find((level) => Number(level?.id || 0) === levelId);
+      if (currentLevel) return currentLevel;
+    }
+    return levels.find((level) => level && String(level.title || "").trim()) || null;
   }
 
   function getCartBonusFavoriteCategoryIds(levelId) {
@@ -13700,6 +13703,25 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
     return Array.isArray(cache?.selected_ids)
       ? new Set(cache.selected_ids.map((id) => Number(id || 0)).filter((id) => id > 0))
       : new Set();
+  }
+
+  function getCartBonusFavoriteCategoryPercents(levelId) {
+    const key = String(Number(levelId || 0) || 0);
+    const cache = state.homeBonusFavoriteCategoriesByLevel instanceof Map
+      ? state.homeBonusFavoriteCategoriesByLevel.get(key)
+      : null;
+    const selectedIds = new Set(
+      (Array.isArray(cache?.selected_ids) ? cache.selected_ids : [])
+        .map((id) => Number(id || 0))
+        .filter((id) => id > 0)
+    );
+    const percents = new Map();
+    (Array.isArray(cache?.categories) ? cache.categories : []).forEach((category) => {
+      const categoryId = Number(category?.id || 0);
+      if (!(categoryId > 0) || !selectedIds.has(categoryId)) return;
+      percents.set(categoryId, Math.max(0, Number(category?.bonus_percent || category?.bonusPercent || 0)));
+    });
+    return percents;
   }
 
   function getCartBonusProductCategoryIds(product) {
@@ -13742,6 +13764,30 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
     return Array.from(productCategoryIds).some((id) => selectedCategoryIds.has(id));
   }
 
+  function getCartBonusItemFavoritePercent(item, selectedCategoryPercents) {
+    if (!(selectedCategoryPercents instanceof Map) || !selectedCategoryPercents.size) return 0;
+    if (str(item?.type || "").trim() === "combo") {
+      const comboCategoryIds = [
+        item?.category_id,
+        item?.combo_category_id,
+        item?._category_id,
+      ].map((id) => Number(id || 0)).filter((id) => id > 0);
+      if (!comboCategoryIds.length && state.combosByCategory instanceof Map) {
+        const comboId = Number(item?.combo_id || 0);
+        state.combosByCategory.forEach((combos, categoryId) => {
+          if (!(comboId > 0) || !Array.isArray(combos)) return;
+          if (combos.some((combo) => Number(combo?.id || 0) === comboId)) {
+            const numericCategoryId = Number(categoryId || 0);
+            if (numericCategoryId > 0) comboCategoryIds.push(numericCategoryId);
+          }
+        });
+      }
+      return comboCategoryIds.reduce((max, id) => Math.max(max, Number(selectedCategoryPercents.get(id) || 0)), 0);
+    }
+    const productCategoryIds = getCartBonusProductCategoryIds(item?.product || {});
+    return Array.from(productCategoryIds).reduce((max, id) => Math.max(max, Number(selectedCategoryPercents.get(id) || 0)), 0);
+  }
+
   function calculateCartBonusPreview(cartItems, lineStates, itemsTotal, level) {
     const safeItems = Array.isArray(cartItems) ? cartItems : [];
     const safeLineStates = Array.isArray(lineStates) ? lineStates : [];
@@ -13758,10 +13804,7 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
       .filter((row) => row.amount > 0 && row.percent > 0 && Number(itemsTotal || 0) >= row.amount)
       .sort((a, b) => b.amount - a.amount)[0]?.percent || 0;
     const cashbackPercent = Math.max(0, Number(level?.cashback_percent || 0)) + orderRangePercent;
-    const favoritePercent = Math.max(0, Number(level?.favorite_categories_bonus_percent || 0));
-    const selectedCategoryIds = favoritePercent > 0
-      ? getCartBonusFavoriteCategoryIds(level?.id)
-      : new Set();
+    const selectedCategoryPercents = getCartBonusFavoriteCategoryPercents(level?.id);
     let rawBonus = 0;
 
     safeItems.forEach((item) => {
@@ -13769,9 +13812,8 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
       if (!key) return;
       const lineTotal = roundPrice(Math.max(0, Number(lineTotalsByKey.get(key) || 0)));
       if (!(lineTotal > 0)) return;
-      const percent = cartBonusItemMatchesFavoriteCategory(item, selectedCategoryIds)
-        ? favoritePercent + orderRangePercent
-        : cashbackPercent;
+      const favoritePercent = getCartBonusItemFavoritePercent(item, selectedCategoryPercents);
+      const percent = cashbackPercent + favoritePercent;
       if (!(percent > 0)) return;
       rawBonus += lineTotal * percent / 100;
     });
