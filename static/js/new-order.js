@@ -186,6 +186,7 @@
     checkoutSelectedProductByCategory: new Map(),
     checkoutProductsScrollByCategory: new Map(),
     checkoutVariantsScrollByCategory: new Map(),
+    checkoutTouchedSectionByBlock: new Map(),
     checkoutIngredientsPopoverKey: null,
     checkoutIngredientsPopoverPos: null,
     checkoutMergedPreviewByBlock: new Map(),
@@ -13421,6 +13422,18 @@
     return Number(product?.is_available ?? 1) === 1;
   }
 
+  function setCheckoutProductDefaultVariant(productId) {
+    const safeProductId = Number(productId || 0);
+    if (!(safeProductId > 0)) return;
+    const variants = state.productVariants.get(safeProductId) || [];
+    const primary = Array.isArray(variants) && variants.length ? variants[0] : null;
+    const values = Array.isArray(primary?.values) ? primary.values : [];
+    if (!values.length) return;
+    const rawDefault = primary?.default_value_index != null ? Number(primary.default_value_index) : 0;
+    const safeDefault = Number.isFinite(rawDefault) && rawDefault >= 0 && rawDefault < values.length ? rawDefault : 0;
+    state.selectedVariants.set(safeProductId, safeDefault);
+  }
+
   function getSelectedVariantLabelFromChips(chips) {
     const list = Array.isArray(chips) ? chips : [];
     const selected = list.find((chip) => chip && chip.isSelected);
@@ -15879,12 +15892,67 @@
     if (cartItem && state.rightActiveOrderId) {
       addCartItemToRightOrder(state.rightActiveOrderId, cartItem);
       resetCheckoutBlockSelection(block);
+      state.checkoutTouchedSectionByBlock.delete(safeBlockId);
       state.checkoutIngredientsPopoverKey = null;
       state.checkoutIngredientsPopoverPos = null;
     }
     renderRightOrderTabs();
     renderCheckoutEditorContent();
     return true;
+  }
+
+  function getCheckoutBlockBySectionKey(sectionKey) {
+    const blockId = Number(String(sectionKey || "").split(":")[0] || 0);
+    if (!(blockId > 0)) return null;
+    return getCheckoutBlocks().find((item) => Number(item?.id || 0) === blockId) || null;
+  }
+
+  function markCheckoutSectionTouched(blockId, sectionKey) {
+    const safeBlockId = Number(blockId || 0);
+    const key = String(sectionKey || "").trim();
+    if (!(safeBlockId > 0) || !key) return;
+    const touched = state.checkoutTouchedSectionByBlock.get(safeBlockId) || new Set();
+    touched.add(key);
+    state.checkoutTouchedSectionByBlock.set(safeBlockId, touched);
+  }
+
+  function isCheckoutBlockReadyByTouchedSections(block) {
+    const safeBlock = normalizeBlock(block);
+    if (!safeBlock || !safeBlock.requireAll) return false;
+    const requiredKeys = safeBlock.categoryIds.map((categoryId) => getCheckoutSectionKey(safeBlock.id, categoryId));
+    if (!requiredKeys.length) return false;
+    const touched = state.checkoutTouchedSectionByBlock.get(Number(safeBlock.id || 0)) || new Set();
+    return requiredKeys.every((key) => touched.has(key) && Number(state.checkoutSelectedProductByCategory.get(key) || 0) > 0);
+  }
+
+  function getCheckoutTouchedSelectedSectionKeys(block) {
+    const safeBlock = normalizeBlock(block);
+    if (!safeBlock) return [];
+    const touched = state.checkoutTouchedSectionByBlock.get(Number(safeBlock.id || 0)) || new Set();
+    return safeBlock.categoryIds
+      .map((categoryId) => getCheckoutSectionKey(safeBlock.id, categoryId))
+      .filter((key) => touched.has(key) && Number(state.checkoutSelectedProductByCategory.get(key) || 0) > 0);
+  }
+
+  function addCheckoutBlockSubsetToRightCart(block, sectionKeys) {
+    const safeBlock = normalizeBlock(block);
+    const allowedKeys = new Set((Array.isArray(sectionKeys) ? sectionKeys : []).map((key) => String(key || "").trim()).filter(Boolean));
+    if (!safeBlock || !allowedKeys.size) return false;
+
+    const previousSelections = new Map();
+    safeBlock.categoryIds.forEach((categoryId) => {
+      const key = getCheckoutSectionKey(safeBlock.id, categoryId);
+      previousSelections.set(key, state.checkoutSelectedProductByCategory.get(key));
+      if (!allowedKeys.has(key)) state.checkoutSelectedProductByCategory.delete(key);
+    });
+    const added = addCheckoutBlockToRightCartById(safeBlock.id);
+    if (!added) {
+      previousSelections.forEach((value, key) => {
+        if (value == null) state.checkoutSelectedProductByCategory.delete(key);
+        else state.checkoutSelectedProductByCategory.set(key, value);
+      });
+    }
+    return added;
   }
 
   function renderCheckoutEditorContent() {
@@ -15927,6 +15995,9 @@
             const buyXGetYBadgeText = getNewOrderBuyXGetYBadgeText(product);
             const isUnavailable = !isProductAvailableFlag(product);
             const hasComposition = Array.isArray(state.productIngredients.get(productId)) && (state.productIngredients.get(productId) || []).length > 0;
+            const productPricing = getCurrentProductUnitPricing(product, productId);
+            const productPrice = roundPrice(Number(productPricing?.unitPrice || 0));
+            const productStockLabel = getCheckoutSelectedVariantStockLabel(productId, product);
             const popoverKey = getCheckoutIngredientsPopoverKey(sectionKey, productId);
             const isCompositionOpen = !isUnavailable && state.checkoutIngredientsPopoverKey === popoverKey;
             const compositionRows = isCompositionOpen ? getCheckoutIngredientRowsForProduct(productId, sectionKey) : [];
@@ -15936,9 +16007,19 @@
               : "";
             return `
               <article class="new-order-checkout-product-item ${productId === selectedProductId ? "is-selected" : ""} ${hasComposition ? "has-composition" : ""} ${isUnavailable ? "is-unavailable" : ""}" data-product-id="${productId}" data-category-id="${categoryId}" data-section-key="${sectionKey}" data-is-available="${isUnavailable ? "0" : "1"}">
-                <span class="new-order-checkout-product-photo-wrap">
-                  ${buyXGetYBadgeText ? `<span class="new-order-checkout-bogo-badge">${escapeHtml(buyXGetYBadgeText)}</span>` : ""}
-                  ${photoUrl ? `<img class="new-order-checkout-product-photo" src="${escapeHtml(photoUrl)}" alt="" />` : `<span class="new-order-checkout-product-photo-placeholder"><i class="fas fa-image"></i></span>`}
+                <span class="new-order-checkout-product-top">
+                  <span class="new-order-checkout-product-photo-wrap">
+                    ${photoUrl ? `<img class="new-order-checkout-product-photo" src="${escapeHtml(photoUrl)}" alt="" />` : `<span class="new-order-checkout-product-photo-placeholder"><i class="fas fa-image"></i></span>`}
+                  </span>
+                  <span class="new-order-checkout-product-side">
+                    <span class="new-order-checkout-product-badges">
+                      ${buyXGetYBadgeText ? `<span class="new-order-checkout-bogo-badge">${escapeHtml(buyXGetYBadgeText)}</span>` : ""}
+                    </span>
+                    <span class="new-order-checkout-product-meta">
+                      <span class="new-order-checkout-product-stock">${productStockLabel ? escapeHtml(productStockLabel) : ""}</span>
+                      <span class="new-order-checkout-product-price">${escapeHtml(toMoney(productPrice))}</span>
+                    </span>
+                  </span>
                 </span>
                 <span class="new-order-checkout-product-name" title="${escapeHtml(name)}">${escapeHtml(name)}</span>
                 ${hasComposition ? `
@@ -19165,11 +19246,30 @@
             saveCheckoutScrollBySection(sectionKey, productCard);
             const sectionEl = productCard.closest(".new-order-checkout-category-section");
             const requireAll = String(sectionEl?.getAttribute("data-require-all") || "1") === "1";
-            const currentSelectedProductId = Number(state.checkoutSelectedProductByCategory.get(sectionKey) || 0);
-            if (!requireAll && currentSelectedProductId === productId) {
-              state.checkoutSelectedProductByCategory.delete(sectionKey);
-            } else {
-              state.checkoutSelectedProductByCategory.set(sectionKey, productId);
+            const block = getCheckoutBlockBySectionKey(sectionKey);
+            const blockId = Number(block?.id || 0);
+            const categoryCount = Array.isArray(block?.categoryIds) ? block.categoryIds.length : 0;
+            setCheckoutProductDefaultVariant(productId);
+            state.checkoutSelectedProductByCategory.set(sectionKey, productId);
+            if (blockId > 0) markCheckoutSectionTouched(blockId, sectionKey);
+            if (blockId > 0 && categoryCount <= 1) {
+              addCheckoutBlockToRightCartById(blockId);
+              return;
+            }
+            if (blockId > 0 && requireAll && isCheckoutBlockReadyByTouchedSections(block)) {
+              addCheckoutBlockToRightCartById(blockId);
+              return;
+            }
+            if (blockId > 0 && !requireAll) {
+              const selectedSectionKeys = getCheckoutTouchedSelectedSectionKeys(block);
+              if (Number(e.detail || 0) >= 2) {
+                addCheckoutBlockSubsetToRightCart(block, [sectionKey]);
+                return;
+              }
+              if (categoryCount > 1 && selectedSectionKeys.length >= categoryCount) {
+                addCheckoutBlockSubsetToRightCart(block, selectedSectionKeys);
+                return;
+              }
             }
             renderCheckoutEditorContent();
             return;
@@ -19241,6 +19341,7 @@
           state.checkoutDraft.blocks = (Array.isArray(state.checkoutDraft.blocks) ? state.checkoutDraft.blocks : [])
             .filter((item) => Number(item?.id || 0) !== blockId);
           state.checkoutMergedPreviewByBlock.delete(blockId);
+          state.checkoutTouchedSectionByBlock.delete(blockId);
           sectionKeys.forEach((key) => {
             state.checkoutSelectedProductByCategory.delete(key);
             state.checkoutProductsScrollByCategory.delete(key);
