@@ -16037,59 +16037,12 @@
             `;
           }).join("")
         : `<div class="new-order-checkout-products-empty">Р’ РєР°С‚РµРіРѕСЂРёРё РїРѕРєР° РЅРµС‚ С‚РѕРІР°СЂРѕРІ</div>`;
-      const selectedVariantChips = selectedProductId > 0 ? getVariantChipsForProduct(selectedProductId) : [];
-      const selectedProduct = products.find((p) => Number(p?.id || 0) === selectedProductId) || null;
-      const selectedPricing = selectedProductId > 0 && selectedProduct
-        ? getCurrentProductUnitPricing(selectedProduct, selectedProductId)
-        : { unitPrice: 0 };
-      const priceToShow = roundPrice(Number(selectedPricing?.unitPrice || 0));
-      const selectedVariantStockLabel = selectedProductId > 0 && selectedProduct
-        ? getCheckoutSelectedVariantStockLabel(selectedProductId, selectedProduct)
-        : "";
-      const inlineActionsHtml = isLastSection
-        ? `
-          <div class="new-order-checkout-inline-actions">
-            <span class="new-order-checkout-block-total">${escapeHtml(toMoney(blockSelection.total))}</span>
-            <button type="button" class="new-order-checkout-add-to-cart-btn" data-action="checkout-block-add" data-block-id="${block.id}">
-              Р”РѕР±Р°РІРёС‚СЊ РІ РєРѕСЂР·РёРЅСѓ
-            </button>
-          </div>
-        `
-        : "";
-      const variantsHtml = `
-        <div class="new-order-checkout-variants-wrap ${selectedVariantChips.length ? "" : "is-empty"} ${selectedVariantStockLabel ? "has-stock" : ""} ${isLastSection ? "has-inline-actions" : ""}">
-          <div class="new-order-checkout-variants-price">${priceToShow > 0 ? escapeHtml(toMoney(priceToShow)) : ""}</div>
-          ${selectedVariantStockLabel
-            ? `<div class="new-order-checkout-variants-stock">Остаток: ${escapeHtml(selectedVariantStockLabel)}</div>`
-            : ""}
-          <div class="new-order-checkout-variants-scroll no-scrollbar" data-section-key="${sectionKey}">
-            <div class="new-order-checkout-variants-row">
-              ${selectedVariantChips.length
-                ? selectedVariantChips.map((chip) => `
-                  <button
-                    type="button"
-                    class="new-order-checkout-variant-chip ${chip.isSelected ? "is-selected" : ""}"
-                    data-action="checkout-variant-select"
-                    data-product-id="${selectedProductId}"
-                    data-section-key="${sectionKey}"
-                    data-variant-index="${chip.index}"
-                    title="${escapeHtml(chip.label)}"
-                  >${escapeHtml(chip.label)}</button>
-                `).join("")
-                : `<span class="new-order-checkout-variants-placeholder" aria-hidden="true"></span>`
-              }
-            </div>
-          </div>
-          ${inlineActionsHtml}
-        </div>
-      `;
       return `
         <section class="new-order-checkout-category-section" data-category-id="${categoryId}" data-block-id="${block.id}" data-section-key="${sectionKey}" data-require-all="${block.requireAll ? "1" : "0"}">
           <h3 class="new-order-checkout-category-title">${escapeHtml(catTitle)}</h3>
           <div class="new-order-checkout-products-scroll no-scrollbar" data-section-key="${sectionKey}">
             <div class="new-order-checkout-products-row">${productsHtml}</div>
           </div>
-          ${variantsHtml}
         </section>
       `;
       }).join("");
@@ -19926,30 +19879,6 @@
       { passive: false }
     );
 
-    document.addEventListener(
-      "wheel",
-      (e) => {
-        const target = e.target instanceof Element
-          ? e.target
-          : (e.target && e.target.parentElement ? e.target.parentElement : null);
-        if (!target) return;
-        const row = target.closest(".new-order-checkout-products-scroll, .new-order-checkout-products-row");
-        const variantRow = target.closest(".new-order-checkout-variants-scroll, .new-order-checkout-variants-row");
-        const targetRow = row || variantRow;
-        if (!targetRow) return;
-        const scrollEl = targetRow.classList.contains("new-order-checkout-products-scroll") || targetRow.classList.contains("new-order-checkout-variants-scroll")
-          ? targetRow
-          : (targetRow.closest(".new-order-checkout-products-scroll") || targetRow.closest(".new-order-checkout-variants-scroll"));
-        if (!scrollEl) return;
-
-        e.preventDefault();
-        e.stopPropagation();
-        if (scrollEl.scrollWidth <= scrollEl.clientWidth) return;
-        const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
-        scrollEl.scrollLeft += delta * 1.0;
-      },
-      { passive: false, capture: true }
-    );
   }
 
   async function fetchNewOrderManifest() {

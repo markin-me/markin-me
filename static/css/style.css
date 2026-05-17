@@ -10796,8 +10796,7 @@ body.page-cash #cashOrdersRightPane .orders-info > #cashPaymentFooter{
   width:100%;
   overflow-x:hidden;
   overflow-y:visible;
-  overscroll-behavior-x:contain;
-  overscroll-behavior-y:contain;
+  overscroll-behavior:auto;
   scrollbar-width:none;
   -ms-overflow-style:none;
   padding-bottom:2px;
