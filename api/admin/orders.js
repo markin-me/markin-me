@@ -3141,6 +3141,13 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       const benefitsMetaJson = hasBenefitsMetaColumn
         ? buildOrderBenefitsMetaJson(req.body, existing?.benefits_meta_json)
         : null;
+      const hasExplicitBonusRedeemDisabled = (
+        Object.prototype.hasOwnProperty.call(req.body || {}, "bonus_redeem_enabled")
+        && !(req.body.bonus_redeem_enabled === true || req.body.bonus_redeem_enabled === "true" || Number(req.body.bonus_redeem_enabled || 0) === 1)
+      ) || (
+        Object.prototype.hasOwnProperty.call(req.body || {}, "bonus_redeem_amount")
+        && !(Number(req.body.bonus_redeem_amount || 0) > 0)
+      );
       const cutleryQty = Object.prototype.hasOwnProperty.call(req.body || {}, "cutlery_qty")
         ? Math.max(0, Number(req.body?.cutlery_qty || 0))
         : Math.max(0, Number(existing?.cutlery_qty || 0));
@@ -3832,6 +3839,13 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         discountsJson = parseOrderDiscountsJson(existing?.discounts_json);
       }
       discountsJson = Array.isArray(discountsJson) ? discountsJson : [];
+      if (hasExplicitBonusRedeemDisabled) {
+        discountsJson = discountsJson.filter((row) => {
+          const key = String(row?.key || "").trim().toLowerCase();
+          const sourceKind = String(row?.source_kind || row?.sourceKind || "").trim().toLowerCase();
+          return key !== "bonus_redeem" && sourceKind !== "bonus";
+        });
+      }
       if (!hasProvidedDiscountSnapshot && !hasItemsTotalOverride) {
         discountsJson = discountsJson
           .filter((row) => String(row?.apply_to || "").trim().toLowerCase() !== "order");
@@ -3901,25 +3915,32 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       const savedStatusCode = String(savedStatusRows?.[0]?.code || "").trim().toLowerCase();
       const isSavedCanceled = savedStatusCode === "canceled" || savedStatusCode === "cancelled";
       const isSavedSuccessfulFinal = Number(savedStatusRows?.[0]?.is_final || 0) === 1 && !isSavedCanceled;
+      const previousBonusCustomerId = Number(existing?.customer_id || 0) || null;
+      const nextBonusCustomerId = Number(customerId || 0) || null;
       if (isSavedCanceled) {
         await releaseOrderBonusReserve(db, {
           tenantId,
           orderId: id,
-          customerId: Number(customerId || 0) || null,
+          customerId: previousBonusCustomerId || nextBonusCustomerId,
         });
       } else if (isSavedSuccessfulFinal) {
         await settleOrderBonus(db, {
           tenantId,
           orderId: id,
-          customerId: Number(customerId || 0) || null,
+          customerId: nextBonusCustomerId,
           discountsJson,
           benefitsMetaRaw: benefitsMetaJson,
         });
       } else {
+        await releaseOrderBonusReserve(db, {
+          tenantId,
+          orderId: id,
+          customerId: previousBonusCustomerId || nextBonusCustomerId,
+        });
         await reserveOrderBonusRedeem(db, {
           tenantId,
           orderId: id,
-          customerId: Number(customerId || 0) || null,
+          customerId: nextBonusCustomerId,
           discountsJson,
           benefitsMetaRaw: benefitsMetaJson,
         });

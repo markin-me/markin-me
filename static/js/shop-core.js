@@ -965,8 +965,13 @@
       input.addEventListener("change", (event) => {
         event.stopPropagation();
         const balance = Math.max(0, Number(state.homeBonusConfig?.account?.balance || 0));
-        state.cartBonusRedeemEnabled = balance > 0 && !!input.checked;
+        const nextEnabled = balance > 0 && !!input.checked;
+        state.cartBonusRedeemChoiceVersion = Number(state.cartBonusRedeemChoiceVersion || 0) + 1;
+        state.cartBonusRedeemEnabled = nextEnabled;
         input.checked = state.cartBonusRedeemEnabled;
+        if (typeof window.invalidateShopCartPricingSnapshotCache === "function") {
+          window.invalidateShopCartPricingSnapshotCache();
+        }
         if (typeof window.refreshShopCartBonusRedeemUi === "function") {
           try {
             window.refreshShopCartBonusRedeemUi();
@@ -994,7 +999,8 @@
         const section = button.closest(".shop-cart-bonus-redeem-section");
         const input = section?.querySelector("[data-cart-bonus-redeem-toggle]");
         if (!input || input.disabled) return;
-        input.checked = !input.checked;
+        state.cartBonusRedeemChoiceVersion = Number(state.cartBonusRedeemChoiceVersion || 0) + 1;
+        input.checked = true;
         input.dispatchEvent(new Event("change", { bubbles: true }));
       });
     });
@@ -1007,6 +1013,7 @@
         const section = button.closest(".shop-cart-bonus-redeem-section");
         const input = section?.querySelector("[data-cart-bonus-redeem-toggle]");
         if (!input) return;
+        state.cartBonusRedeemChoiceVersion = Number(state.cartBonusRedeemChoiceVersion || 0) + 1;
         input.checked = false;
         input.dispatchEvent(new Event("change", { bubbles: true }));
       });
@@ -3875,6 +3882,7 @@
     _homeBonusFavoriteCategoriesLoading: new Map(),
     cartBonusRedeemEnabled: false,
     cartBonusRedeemAvailableAmount: 0,
+    cartBonusRedeemChoiceVersion: 0,
 
     // addresses (cart header chip)
     addresses: [],
@@ -6302,7 +6310,7 @@
   let __cartStockRecheckTimer = null;
   let __cartStockRecheckSnapshot = [];
   let __cartStockRecheckOpts = {};
-  const ENABLE_LIVE_CART_STOCK_RECHECK = false;
+  const ENABLE_LIVE_CART_STOCK_RECHECK = true;
   function queueCartStockRecheck(previousCartSnapshot, opts = {}) {
     if (!ENABLE_LIVE_CART_STOCK_RECHECK) return;
     __cartStockRecheckSnapshot = cloneCartState(previousCartSnapshot || []);
@@ -6550,7 +6558,7 @@
     return { allowed, targetKey: key, currentQty, nextQty };
   }
 
-  async function canIncreaseRegularCartItemBeforeApply(pid, delta, targetKey, opts = {}) {
+  function canIncreaseRegularCartItemBeforeApply(pid, delta, targetKey, opts = {}) {
     const safePid = Number(pid || 0);
     const safeDelta = Number(delta || 0);
     const showToastOnOut = opts.showToastOnOut !== false;
@@ -15071,8 +15079,10 @@ function updateCartBadge() {
 
   function syncImmediateCartPricingUi(reason = "") {
     const normalizedReason = String(reason || "").trim() || "cart.fastUpdate";
-    if (typeof window.syncShopCartPricingSummaryUi === "function") {
-      Promise.resolve(window.syncShopCartPricingSummaryUi()).catch(() => {});
+    if (typeof window.queueShopCartPricingSummaryUi === "function") {
+      window.queueShopCartPricingSummaryUi(normalizedReason);
+    } else if (typeof window.syncShopCartPricingSummaryUi === "function") {
+      Promise.resolve(window.syncShopCartPricingSummaryUi({ reason: normalizedReason })).catch(() => {});
     } else if (typeof updateMobileDeliveryProgress === "function") {
       updateMobileDeliveryProgress();
     }
@@ -15183,6 +15193,7 @@ function updateCartBadge() {
     if (emptyPlaceholderEl) emptyPlaceholderEl.classList.toggle("hidden", rendered.items.length > 0);
     bindCartItemsSectionControls(listEl);
     bindCartModeHeaderSticky(listEl);
+    bindCartBonusRedeemSection(listEl);
     return rendered;
   }
 
@@ -15292,6 +15303,9 @@ function updateCartBadge() {
     }
 
     updateCartTotalsUiOnly();
+    if (typeof window.refreshShopCartPricingLocalUi === "function") {
+      window.refreshShopCartPricingLocalUi();
+    }
     updateCartBadge();
     queueMobileUiStateSync(reason || "cart.fastMutation");
   }
@@ -15318,18 +15332,13 @@ function updateCartBadge() {
     if (!targetKey) return Number(cartQty(pid) || 0);
 
     if (qtyDelta > 0) {
-      try {
-        const gate = await canIncreaseRegularCartItemBeforeApply(pid, qtyDelta, targetKey);
-        if (!gate.allowed) {
-          const limitChanged = setCartQtyHardLimit(targetKey, Math.max(0, Number(gate.currentQty || 0)));
-          if (limitChanged) refreshQtyLimitUi();
-          return Number(gate.currentQty || cartQty(pid) || 0);
-        }
-        clearCartQtyHardLimit(targetKey);
-      } catch (e) {
-        console.warn("Stock precheck before qty+ failed:", e);
-        return Number(cartQty(pid) || 0);
+      const gate = canIncreaseRegularCartItemBeforeApply(pid, qtyDelta, targetKey);
+      if (!gate.allowed) {
+        const limitChanged = setCartQtyHardLimit(targetKey, Math.max(0, Number(gate.currentQty || 0)));
+        if (limitChanged) refreshQtyLimitUi();
+        return Number(gate.currentQty || cartQty(pid) || 0);
       }
+      clearCartQtyHardLimit(targetKey);
     } else if (qtyDelta < 0) {
       clearCartQtyHardLimit(targetKey);
     }

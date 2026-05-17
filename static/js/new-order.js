@@ -234,6 +234,8 @@
     rightBonusCardLoadingByClientId: new Set(),
     rightBonusCardPromiseByClientId: new Map(),
     rightBonusRedeemEnabledByOrder: new Map(),
+    rightBonusRedeemAmountByOrder: new Map(),
+    rightBonusRedeemAccountIdByOrder: new Map(),
     rightLiveSummaryByOrder: new Map(),
     rightAutoAddDismissedByOrder: new Map(),
     autoAdd: {
@@ -475,7 +477,13 @@
     const baseCartLineStates = buildRightOrderCartLineStates(
       cartItems,
       linePricingTargetItemsTotal,
-      cartSummary?.benefitsPreview
+      cartSummary?.allowLineDiscountDistribution ? cartSummary?.benefitsPreview : null,
+      {
+        allowOrderDiscountDistribution: Boolean(
+          Number.isFinite(snapshotItemsTotalAfterDiscount)
+          || cartSummary?.allowLineDiscountDistribution
+        ),
+      }
     );
     const cartLineStates = Number.isFinite(snapshotItemsTotalAfterDiscount)
       ? baseCartLineStates
@@ -3172,14 +3180,19 @@
     const form = order.form && typeof order.form === "object" ? { ...order.form } : {};
     form.cartItems = normalizeRightOrderCartItemsWithAutoAdd(id, cartItems);
     const shouldMarkTouched = String(order?.mode || "").trim().toLowerCase() === "edit";
-    state.rightOrders[index] = {
+    const nextOrder = {
       ...order,
       form,
       editCartTouched: shouldMarkTouched ? true : Boolean(order?.editCartTouched),
     };
+    if (shouldMarkTouched) {
+      nextOrder.editPricingSnapshot = null;
+      nextOrder.editPricingBaselineSignature = "";
+    }
+    state.rightOrders[index] = nextOrder;
     invalidateRightOrderLiveSummary(id);
     invalidateRightDeliveryQuote(id);
-    seedRightOrderBenefitsPreviewLocally(id);
+    seedRightOrderBenefitsPreviewLocally(id, { strictCurrentSelection: true });
     scheduleRightOrderBenefitsRefresh(id);
     if (opts?.render) queueRenderRightOrderTabs();
     return true;
@@ -5084,11 +5097,12 @@
     const subtotal = roundPrice(cartItems.reduce((sum, item) => sum + getRightOrderCartLineTotal(item), 0));
     const subtotalEligibleForBenefits = getRightOrderCartBenefitsEligibleTotal(cartItems);
     const cartItemsCount = cartItems.reduce((sum, item) => sum + Math.max(1, Number(item?.qty || 1)), 0);
+    const hasSelectedOrderBenefit = hasRightOrderBenefitsSelection(form);
     const benefitsPreview = clientId > 0
       ? getRightOrderBenefitsPreviewSnapshot(order, {
           mode: "customer",
           preferApplied: true,
-          allowStale: true,
+          allowStale: false,
           allowClientCache: true,
         })
       : null;
@@ -5145,7 +5159,7 @@
       next.items_total = itemsTotalValue;
       return next;
     })();
-    const hasBenefitsPreview = benefitsPreviewSummary && Number.isFinite(Number(benefitsPreviewSummary?.items_total));
+    const hasBenefitsPreview = hasSelectedOrderBenefit && benefitsPreviewSummary && Number.isFinite(Number(benefitsPreviewSummary?.items_total));
     const customerDiscountSummary = hasBenefitsPreview ? null : getRightOrderCustomerDiscountSummary(order, subtotalEligibleForBenefits);
     const customerOrderDiscount = hasBenefitsPreview
       ? roundPrice(Number(benefitsPreviewSummary?.discount_total || 0))
@@ -5156,7 +5170,10 @@
     const baseBonusLineStates = buildRightOrderCartLineStates(
       cartItems,
       subtotalAfterCustomerDiscountBeforeBonus,
-      benefitsPreview
+      hasBenefitsPreview ? benefitsPreview : null,
+      {
+        allowOrderDiscountDistribution: hasBenefitsPreview || customerOrderDiscount > 0,
+      }
     );
     const bonusState = getRightOrderBonusState(order, subtotalAfterCustomerDiscountBeforeBonus, baseBonusLineStates);
     const bonusRedeemAmount = roundPrice(Math.max(0, Number(bonusState.bonusRedeemAmount || 0)));
@@ -5289,6 +5306,7 @@
         isDeliveryMethod,
         methodCode,
         settings,
+        allowLineDiscountDistribution: true,
       };
     }
     return {
@@ -5335,6 +5353,7 @@
       isDeliveryMethod,
       methodCode,
       settings,
+      allowLineDiscountDistribution: hasBenefitsPreview || customerOrderDiscount > 0,
     };
   }
 
@@ -5374,6 +5393,12 @@
         : null,
       bonusRedeemEnabled: state.rightBonusRedeemEnabledByOrder.has(orderId)
         ? state.rightBonusRedeemEnabledByOrder.get(orderId) === true
+        : null,
+      bonusRedeemAmount: state.rightBonusRedeemAmountByOrder.has(orderId)
+        ? roundPrice(Math.max(0, Number(state.rightBonusRedeemAmountByOrder.get(orderId) || 0)))
+        : null,
+      bonusRedeemAccountId: state.rightBonusRedeemAccountIdByOrder.has(orderId)
+        ? Number(state.rightBonusRedeemAccountIdByOrder.get(orderId) || 0)
         : null,
       cartItems: buildRightOrderPayloadItems(Array.isArray(form?.cartItems) ? form.cartItems : []),
       benefitsCustomerKey: String(state.rightBenefitsPreviewKeyByOrder.get(customerBenefitsSlot) || ""),
@@ -5598,9 +5623,10 @@
     return discountsByIndex;
   }
 
-  function buildRightOrderCartLineStates(cartItems, finalItemsTotal, previewData = null) {
+  function buildRightOrderCartLineStates(cartItems, finalItemsTotal, previewData = null, opts = {}) {
     const source = Array.isArray(cartItems) ? cartItems : [];
-    const rawLocalLineTotals = previewData?.local_line_totals_by_cart_key
+    const allowOrderDiscountDistribution = opts?.allowOrderDiscountDistribution === true;
+    const rawLocalLineTotals = allowOrderDiscountDistribution && previewData?.local_line_totals_by_cart_key
       && typeof previewData.local_line_totals_by_cart_key === "object"
       ? previewData.local_line_totals_by_cart_key
       : null;
@@ -5690,10 +5716,12 @@
     const baseLinesTotal = roundPrice(
       lineStates.reduce((sum, entry) => sum + Number(entry?.baseTotal || 0), 0)
     );
-    const extraOrderDiscount = roundPrice(Math.max(
-      0,
-      baseLinesTotal - roundPrice(Number(finalItemsTotal || 0))
-    ));
+    const extraOrderDiscount = allowOrderDiscountDistribution
+      ? roundPrice(Math.max(
+          0,
+          baseLinesTotal - roundPrice(Number(finalItemsTotal || 0))
+        ))
+      : 0;
     const distributedByIndex = distributeRightOrderDiscountAcrossLines(lineStates, extraOrderDiscount);
 
     return lineStates.map((entry, index) => {
@@ -5978,6 +6006,78 @@
     return Number.isFinite(numeric) && numeric > 0 ? numeric : 0;
   }
 
+  function renderRightOrderShopBonusRedeemHtml(orderId, cartSummary) {
+    const bonusData = cartSummary?.bonusData && typeof cartSummary.bonusData === "object" ? cartSummary.bonusData : null;
+    const bonusAccount = bonusData?.account && typeof bonusData.account === "object" ? bonusData.account : null;
+    const showBonusBlock = Boolean(bonusAccount?.joined_at && Number(bonusAccount?.id || 0) > 0);
+    if (!showBonusBlock) return "";
+    const settings = bonusData?.settings && typeof bonusData.settings === "object" ? bonusData.settings : {};
+    const coinName = String(settings?.bonus_coin_name || "Бонусы").trim() || "Бонусы";
+    const allowRedeemAndAccrue = settings?.allow_redeem_and_accrue === true
+      || Number(settings?.allow_redeem_and_accrue || 0) === 1;
+    const redeemLabel = allowRedeemAndAccrue ? "Списать и начислить" : "Списать";
+    const storedRedeemAmount = getRightOrderStoredBonusRedeemAmount(orderId);
+    const bonusBalance = Math.floor(Math.max(0, Number(bonusAccount?.balance || 0))) + Math.floor(Math.max(0, storedRedeemAmount));
+    const bonusAccrualAmount = Math.floor(Math.max(0, Number(cartSummary?.bonusAccrualAmount || 0)));
+    const bonusRedeemAvailableAmount = Math.floor(Math.max(0, Number(cartSummary?.bonusRedeemAvailableAmount || 0)));
+    const bonusRedeemEnabled = Boolean(cartSummary?.bonusRedeemEnabled) && bonusRedeemAvailableAmount > 0;
+    const bonusRedeemAmount = Math.floor(Math.max(0, Number(cartSummary?.bonusRedeemAmount || 0)));
+    const canRedeem = bonusRedeemAvailableAmount > 0;
+    const redeemAmountText = bonusRedeemAmount > 0 ? bonusRedeemAmount : bonusRedeemAvailableAmount;
+    const redeemDeltaHtml = allowRedeemAndAccrue && bonusAccrualAmount > 0
+      ? ` <span class="shop-cart-bonus-action-pill__delta">+${escapeHtml(toMoney(bonusAccrualAmount))}</span>`
+      : "";
+    return `
+      <section class="shop-cart-bonus-redeem-section right-order-shop-bonus-section">
+        <div class="shop-bonus-level-balance-card shop-cart-bonus-redeem-card">
+          <div class="shop-cart-bonus-redeem-head">
+            <div class="shop-bonus-level-balance-main">
+              <div class="shop-bonus-level-balance-label">${escapeHtml(coinName)}</div>
+              <div class="shop-bonus-level-balance-value">${escapeHtml(toMoney(bonusBalance))}</div>
+            </div>
+            <div class="shop-cart-bonus-redeem-available">
+              <div class="shop-cart-bonus-redeem-available-label">Можно списать</div>
+              <div class="shop-cart-bonus-redeem-available-value" data-cart-bonus-redeem-available>${escapeHtml(toMoney(bonusRedeemAvailableAmount))}</div>
+            </div>
+          </div>
+          <div class="shop-cart-bonus-redeem-actions">
+            <button
+              class="shop-cart-bonus-action-pill shop-cart-bonus-action-pill--accrual${bonusRedeemEnabled ? "" : " is-active"}"
+              type="button"
+              data-action="right-bonus-accrual-mode"
+              data-cart-bonus-accrual-button
+              data-order-id="${orderId}"
+              aria-pressed="${bonusRedeemEnabled ? "false" : "true"}"
+            >
+              <span class="shop-cart-bonus-action-pill__label">Начислить</span>
+              <span class="shop-cart-bonus-action-pill__amount" data-cart-bonus-accrual-amount>+${escapeHtml(toMoney(bonusAccrualAmount))}</span>
+            </button>
+            <button
+              class="shop-cart-bonus-action-pill shop-cart-bonus-action-pill--redeem${bonusRedeemEnabled ? " is-active" : ""}${canRedeem ? "" : " is-disabled"}"
+              type="button"
+              data-action="right-bonus-redeem-mode"
+              data-cart-bonus-redeem-button
+              data-order-id="${orderId}"
+              ${canRedeem ? "" : "disabled"}
+              aria-pressed="${bonusRedeemEnabled ? "true" : "false"}"
+            >
+              <span class="shop-cart-bonus-action-pill__label" data-cart-bonus-redeem-label>${escapeHtml(redeemLabel)}</span>
+              <span class="shop-cart-bonus-action-pill__amount" data-cart-bonus-redeem-button-amount>-${escapeHtml(toMoney(redeemAmountText))}${redeemDeltaHtml}</span>
+            </button>
+            <input
+              class="shop-cart-bonus-redeem-input"
+              type="checkbox"
+              data-cart-bonus-redeem-toggle
+              data-order-id="${orderId}"
+              ${bonusRedeemEnabled ? "checked" : ""}
+              ${canRedeem ? "" : "disabled"}
+            />
+          </div>
+        </div>
+      </section>
+    `;
+  }
+
   function buildRightOrderSummaryCardHtml(order, cartSummary, paymentLabel, paymentCode) {
     const orderId = Number(order?.id || 0);
     const cartItems = Array.isArray(cartSummary?.cartItems) ? cartSummary.cartItems : [];
@@ -6090,24 +6190,7 @@
           <span class="order-summary-total-value">${escapeHtml(toMoney(total))}</span>
         </div>
       </div>
-      <div class="info-card order-summary order-bonus-redeem-card ${showBonusBlock ? "" : "hidden"}">
-        <div>
-          <div class="order-summary-bonus-label">Бонусы</div>
-          <div class="order-summary-bonus-balance">${escapeHtml(toMoney(bonusBalance))}</div>
-        </div>
-        <div class="order-summary-bonus-redeem-side">
-          <div class="order-summary-bonus-label">Можно списать</div>
-          <div class="order-summary-bonus-available">${escapeHtml(toMoney(bonusRedeemAvailableAmount))}</div>
-          <button
-            class="order-summary-bonus-toggle ${bonusRedeemEnabled ? "is-active" : ""}"
-            type="button"
-            data-action="right-bonus-redeem-toggle"
-            data-order-id="${orderId}"
-            ${bonusRedeemAvailableAmount > 0 ? "" : "disabled"}
-            aria-pressed="${bonusRedeemEnabled ? "true" : "false"}"
-          >${bonusRedeemEnabled ? `Списано ${escapeHtml(toMoney(bonusRedeemAmount))}` : "Списать"}</button>
-        </div>
-      </div>
+      ${renderRightOrderShopBonusRedeemHtml(orderId, cartSummary)}
     `;
   }
 
@@ -6154,6 +6237,54 @@
     const id = Number(orderId || 0);
     if (!(id > 0)) return -1;
     return (Array.isArray(state.rightOrders) ? state.rightOrders : []).findIndex((order) => Number(order?.id || 0) === id);
+  }
+
+  function setRightOrderBonusRedeemMode(orderId, enabled) {
+    const id = Number(orderId || 0);
+    if (!(id > 0)) return false;
+    const orderIndex = getRightOrderIndexById(id);
+    const order = orderIndex >= 0 ? (state.rightOrders[orderIndex] || {}) : {};
+    if (enabled) {
+      const currentSummary = getRightOrderCheckoutSummaryByOrderId(id);
+      state.rightBonusRedeemEnabledByOrder.set(id, true);
+      const nextRedeemAmount = roundPrice(Math.max(
+        0,
+        Number(currentSummary?.bonusRedeemAmount || 0)
+          || Number(currentSummary?.bonusRedeemAvailableAmount || 0)
+          || Number(order?.editPricingSnapshot?.bonusRedeemAmount || 0)
+      ));
+      if (nextRedeemAmount > 0) state.rightBonusRedeemAmountByOrder.set(id, nextRedeemAmount);
+      const nextBonusAccountId = Number(
+        currentSummary?.bonusData?.account?.id
+          || order?.editPricingSnapshot?.bonusAccountId
+          || 0
+      );
+      if (nextBonusAccountId > 0) state.rightBonusRedeemAccountIdByOrder.set(id, nextBonusAccountId);
+    } else {
+      const hasStoredEditBonus = String(order?.mode || "").trim().toLowerCase() === "edit"
+        && (
+          Number(order?.editPricingSnapshot?.bonusRedeemAmount || 0) > 0
+          || getRightOrderStoredBonusRedeemAmount(id) > 0
+        );
+      if (hasStoredEditBonus) {
+        state.rightBonusRedeemEnabledByOrder.set(id, false);
+      } else {
+        state.rightBonusRedeemEnabledByOrder.delete(id);
+        state.rightBonusRedeemAmountByOrder.delete(id);
+        state.rightBonusRedeemAccountIdByOrder.delete(id);
+      }
+    }
+    if (String(order?.mode || "").trim().toLowerCase() === "edit" && orderIndex >= 0) {
+      state.rightOrders[orderIndex] = {
+        ...order,
+        editCartTouched: true,
+        editPricingSnapshot: null,
+        editPricingBaselineSignature: "",
+      };
+    }
+    invalidateRightOrderLiveSummary(id);
+    renderRightOrderTabs();
+    return true;
   }
 
   function invalidateRightDeliveryQuote(orderId) {
@@ -6887,7 +7018,10 @@
         ?? summary?.subtotalAfterCustomerDiscount
         ?? 0
       )),
-      summary?.benefitsPreview
+      summary?.allowLineDiscountDistribution ? summary?.benefitsPreview : null,
+      {
+        allowOrderDiscountDistribution: Boolean(summary?.allowLineDiscountDistribution),
+      }
     );
     const displayedLineStates = buildRightOrderBonusRedeemDisplayLineStates(
       baseDisplayedLineStates,
@@ -6973,21 +7107,22 @@
     } else if (benefitsPreviewSummary) {
       payload.benefits_items_total_override = roundPrice(Number(summary?.subtotalAfterCustomerDiscount || benefitsPreviewSummary?.items_total || 0));
     }
+    const payloadDiscountsJson = (Array.isArray(discountSummary?.breakdown) ? discountSummary.breakdown : [])
+      .map((entry) => ({
+        key: entry.key || null,
+        title: entry.title,
+        discount_amount: roundPrice(Number(entry?.amount || 0)),
+        amount: roundPrice(Number(entry?.amount || 0)),
+        apply_to: entry?.key === "combo_discount"
+          ? "combo"
+          : (entry?.key === "product_discount" || entry?.key === "auto_add_discount" ? "product" : "order"),
+        source_kind: entry.sourceKind || null,
+        promo_code: entry.promoCode || null,
+      }))
+      .filter((entry) => Number(entry.discount_amount || 0) > 0);
+    payload.discounts_json = payloadDiscountsJson;
     if (Number(discountSummary?.totalDiscount || 0) > 0) {
       payload.discount_amount_override = roundPrice(Number(discountSummary?.totalDiscount || 0));
-      payload.discounts_json = (Array.isArray(discountSummary?.breakdown) ? discountSummary.breakdown : [])
-        .map((entry) => ({
-          key: entry.key || null,
-          title: entry.title,
-          discount_amount: roundPrice(Number(entry?.amount || 0)),
-          amount: roundPrice(Number(entry?.amount || 0)),
-          apply_to: entry?.key === "combo_discount"
-            ? "combo"
-            : (entry?.key === "product_discount" || entry?.key === "auto_add_discount" ? "product" : "order"),
-          source_kind: entry.sourceKind || null,
-          promo_code: entry.promoCode || null,
-        }))
-        .filter((entry) => Number(entry.discount_amount || 0) > 0);
     }
     if (isDeliveryMethod && deliveryAddressDraft) {
       payload.delivery_address_city = deliveryAddressDraft.city || null;
@@ -10606,20 +10741,55 @@
     return Math.max(0, Math.min(balance, limit));
   }
 
+  function getRightOrderStoredBonusRedeemAmount(orderId) {
+    const id = Number(orderId || 0);
+    if (!(id > 0) || !state.rightBonusRedeemAmountByOrder.has(id)) return 0;
+    return roundPrice(Math.max(0, Number(state.rightBonusRedeemAmountByOrder.get(id) || 0)));
+  }
+
+  function getRightOrderFallbackBonusData(orderId, sourceData = null) {
+    const id = Number(orderId || 0);
+    const storedRedeemAmount = getRightOrderStoredBonusRedeemAmount(id);
+    const storedAccountId = Number(state.rightBonusRedeemAccountIdByOrder.get(id) || 0);
+    if (!(storedRedeemAmount > 0) || !(storedAccountId > 0)) return sourceData || null;
+    const source = sourceData && typeof sourceData === "object" ? sourceData : {};
+    const account = source.account && typeof source.account === "object" ? source.account : {};
+    return {
+      ...source,
+      account: {
+        ...account,
+        id: Number(account.id || storedAccountId),
+        joined_at: account.joined_at || true,
+        balance: Math.max(
+          Math.floor(Math.max(0, Number(account.balance || 0))),
+          Math.floor(storedRedeemAmount)
+        ),
+      },
+    };
+  }
+
   function getRightOrderBonusState(order, itemsTotalBeforeBonus, baseLineStates) {
     const form = order?.form && typeof order.form === "object" ? order.form : {};
     const orderId = Number(order?.id || 0);
     const clientId = Number(form?.clientId || 0);
     const bonusData = clientId > 0 ? (state.rightBonusCardByClientId.get(clientId) || null) : null;
     const level = getRightBonusActiveLevel(bonusData);
+    const storedRedeemAmount = getRightOrderStoredBonusRedeemAmount(orderId);
+    const hasRedeemFlag = state.rightBonusRedeemEnabledByOrder.has(orderId);
+    const redeemRequested = hasRedeemFlag
+      ? state.rightBonusRedeemEnabledByOrder.get(orderId) === true
+      : storedRedeemAmount > 0;
     if (!level) {
+      const fallbackBonusData = redeemRequested
+        ? getRightOrderFallbackBonusData(orderId, bonusData)
+        : bonusData;
       return {
-        bonusData,
+        bonusData: fallbackBonusData,
         level: null,
         bonusAccrualAmount: 0,
-        bonusRedeemAvailableAmount: 0,
-        bonusRedeemEnabled: false,
-        bonusRedeemAmount: 0,
+        bonusRedeemAvailableAmount: redeemRequested ? storedRedeemAmount : 0,
+        bonusRedeemEnabled: redeemRequested && storedRedeemAmount > 0,
+        bonusRedeemAmount: redeemRequested ? storedRedeemAmount : 0,
         bonusAccrualBlockedByRedeem: false,
       };
     }
@@ -10628,9 +10798,21 @@
       baseLineStates,
       bonusData
     );
-    const bonusRedeemAvailableAmount = calculateRightOrderBonusRedeemAvailable(itemsTotalBeforeBonus, bonusData);
-    const bonusRedeemEnabled = !!state.rightBonusRedeemEnabledByOrder.get(orderId) && bonusRedeemAvailableAmount > 0;
-    const bonusRedeemAmount = bonusRedeemEnabled ? bonusRedeemAvailableAmount : 0;
+    const bonusDataForRedeem = storedRedeemAmount > 0 && bonusData?.account
+      ? {
+          ...bonusData,
+          account: {
+            ...bonusData.account,
+            balance: Math.floor(Math.max(0, Number(bonusData.account.balance || 0))) + Math.floor(storedRedeemAmount),
+          },
+        }
+      : bonusData;
+    const bonusRedeemAvailableAmount = calculateRightOrderBonusRedeemAvailable(itemsTotalBeforeBonus, bonusDataForRedeem);
+    const bonusRedeemEnabled = redeemRequested && bonusRedeemAvailableAmount > 0;
+    const requestedRedeemAmount = storedRedeemAmount > 0 ? storedRedeemAmount : bonusRedeemAvailableAmount;
+    const bonusRedeemAmount = bonusRedeemEnabled
+      ? roundPrice(Math.min(bonusRedeemAvailableAmount, requestedRedeemAmount))
+      : 0;
     const allowRedeemAndAccrue = bonusData?.settings?.allow_redeem_and_accrue === true || Number(bonusData?.settings?.allow_redeem_and_accrue || 0) === 1;
     return {
       bonusData,
@@ -18472,32 +18654,27 @@
           return;
         }
 
+        const bonusAccrualModeBtn = e.target.closest("[data-action='right-bonus-accrual-mode'][data-order-id]");
+        if (bonusAccrualModeBtn) {
+          const orderId = Number(bonusAccrualModeBtn.getAttribute("data-order-id") || 0);
+          if (!(orderId > 0)) return;
+          setRightOrderBonusRedeemMode(orderId, false);
+          return;
+        }
+
+        const bonusRedeemModeBtn = e.target.closest("[data-action='right-bonus-redeem-mode'][data-order-id]");
+        if (bonusRedeemModeBtn) {
+          const orderId = Number(bonusRedeemModeBtn.getAttribute("data-order-id") || 0);
+          if (!(orderId > 0) || bonusRedeemModeBtn.disabled || bonusRedeemModeBtn.classList.contains("is-disabled")) return;
+          setRightOrderBonusRedeemMode(orderId, true);
+          return;
+        }
+
         const bonusRedeemBtn = e.target.closest("[data-action='right-bonus-redeem-toggle'][data-order-id]");
         if (bonusRedeemBtn) {
           const orderId = Number(bonusRedeemBtn.getAttribute("data-order-id") || 0);
           if (!(orderId > 0) || bonusRedeemBtn.disabled) return;
-          const orderIndex = getRightOrderIndexById(orderId);
-          const order = orderIndex >= 0 ? (state.rightOrders[orderIndex] || {}) : {};
-          const hasStoredEditBonus = String(order?.mode || "").trim().toLowerCase() === "edit"
-            && Number(order?.editPricingSnapshot?.bonusRedeemAmount || 0) > 0;
-          if (state.rightBonusRedeemEnabledByOrder.get(orderId)) {
-            if (hasStoredEditBonus) {
-              state.rightBonusRedeemEnabledByOrder.set(orderId, false);
-            } else {
-              state.rightBonusRedeemEnabledByOrder.delete(orderId);
-            }
-          } else {
-            state.rightBonusRedeemEnabledByOrder.set(orderId, true);
-          }
-          if (String(order?.mode || "").trim().toLowerCase() === "edit" && orderIndex >= 0) {
-            state.rightOrders[orderIndex] = {
-              ...order,
-              editCartTouched: true,
-              editPricingSnapshot: null,
-              editPricingBaselineSignature: "",
-            };
-          }
-          renderRightOrderTabs();
+          setRightOrderBonusRedeemMode(orderId, !state.rightBonusRedeemEnabledByOrder.get(orderId));
           return;
         }
 
@@ -20685,10 +20862,16 @@
       addressDraft: hasSessionAddressDraft ? sessionAddressDraft : null,
       selectedAddressId: deliveryAddressId > 0 ? deliveryAddressId : 0,
     });
-    if (Number(draft.editPricingSnapshot?.bonusRedeemAmount || 0) > 0) {
+    const editBonusRedeemAmount = roundPrice(Math.max(0, Number(draft.editPricingSnapshot?.bonusRedeemAmount || 0)));
+    if (editBonusRedeemAmount > 0) {
       state.rightBonusRedeemEnabledByOrder.set(Number(draft.id || 0), true);
+      state.rightBonusRedeemAmountByOrder.set(Number(draft.id || 0), editBonusRedeemAmount);
+      const editBonusAccountId = Number(draft.editPricingSnapshot?.bonusAccountId || 0);
+      if (editBonusAccountId > 0) state.rightBonusRedeemAccountIdByOrder.set(Number(draft.id || 0), editBonusAccountId);
     } else {
       state.rightBonusRedeemEnabledByOrder.delete(Number(draft.id || 0));
+      state.rightBonusRedeemAmountByOrder.delete(Number(draft.id || 0));
+      state.rightBonusRedeemAccountIdByOrder.delete(Number(draft.id || 0));
     }
 
     return {
@@ -20700,6 +20883,11 @@
       rightOrders: [{ ...draft, editCartTouched: false }],
       rightAddressDraftByOrder: hasSessionAddressDraft ? { [draft.id]: sessionAddressDraft } : {},
       rightAddressSelectedIdByOrder: deliveryAddressId > 0 ? { [draft.id]: deliveryAddressId } : {},
+      rightBonusRedeemEnabledByOrder: editBonusRedeemAmount > 0 ? { [draft.id]: true } : {},
+      rightBonusRedeemAmountByOrder: editBonusRedeemAmount > 0 ? { [draft.id]: editBonusRedeemAmount } : {},
+      rightBonusRedeemAccountIdByOrder: editBonusRedeemAmount > 0 && Number(draft.editPricingSnapshot?.bonusAccountId || 0) > 0
+        ? { [draft.id]: Number(draft.editPricingSnapshot.bonusAccountId) }
+        : {},
       rightActiveOrderId: Number(draft.id || 0) || null,
     };
   }
@@ -20713,6 +20901,9 @@
       optionSelections: serializeOptionSelectionsMap(state.optionSelections),
       rightAddressDraftByOrder: mapToObject(state.rightAddressDraftByOrder),
       rightAddressSelectedIdByOrder: mapToObject(state.rightAddressSelectedIdByOrder),
+      rightBonusRedeemEnabledByOrder: mapToObject(state.rightBonusRedeemEnabledByOrder),
+      rightBonusRedeemAmountByOrder: mapToObject(state.rightBonusRedeemAmountByOrder),
+      rightBonusRedeemAccountIdByOrder: mapToObject(state.rightBonusRedeemAccountIdByOrder),
       rightOrders: deepCloneJson(Array.isArray(state.rightOrders) ? state.rightOrders : [], []),
       rightActiveOrderId: Number(state.rightActiveOrderId || 0) || null,
     };
@@ -20739,6 +20930,34 @@
         state.rightAddressSelectedIdByOrder.set(key, numeric);
       } else {
         state.rightAddressSelectedIdByOrder.delete(key);
+      }
+    });
+    state.rightBonusRedeemAmountByOrder = objectToMap(src.rightBonusRedeemAmountByOrder || {});
+    state.rightBonusRedeemAmountByOrder.forEach((value, key) => {
+      const amount = roundPrice(Math.max(0, Number(value || 0)));
+      if (amount > 0) {
+        state.rightBonusRedeemAmountByOrder.set(key, amount);
+      } else {
+        state.rightBonusRedeemAmountByOrder.delete(key);
+      }
+    });
+    state.rightBonusRedeemEnabledByOrder = objectToMap(src.rightBonusRedeemEnabledByOrder || {});
+    state.rightBonusRedeemEnabledByOrder.forEach((value, key) => {
+      if (value === true || value === "true" || Number(value || 0) === 1) {
+        state.rightBonusRedeemEnabledByOrder.set(key, true);
+      } else if (value === false || value === "false") {
+        state.rightBonusRedeemEnabledByOrder.set(key, false);
+      } else {
+        state.rightBonusRedeemEnabledByOrder.delete(key);
+      }
+    });
+    state.rightBonusRedeemAccountIdByOrder = objectToMap(src.rightBonusRedeemAccountIdByOrder || {});
+    state.rightBonusRedeemAccountIdByOrder.forEach((value, key) => {
+      const accountId = Number(value || 0);
+      if (accountId > 0) {
+        state.rightBonusRedeemAccountIdByOrder.set(key, accountId);
+      } else {
+        state.rightBonusRedeemAccountIdByOrder.delete(key);
       }
     });
     state.rightAddressEditingIdByOrder = new Map();

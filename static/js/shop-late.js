@@ -11197,7 +11197,12 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
   function handleShopBenefitsOrderStateChange(reason = "") {
     const normalizedReason = str(reason || "").trim().toLowerCase();
     if (shouldQueueCheckoutPrewarmForOrderChange(normalizedReason)) {
-      Promise.resolve(queueCheckoutOpenPrewarm(`order:${normalizedReason}`, { delayMs: 80 })).catch(() => {});
+      const prewarmDelayMs = (
+        normalizedReason.startsWith("changeqty")
+        || normalizedReason === "updatecarttotalsuionly"
+        || normalizedReason.startsWith("cart.")
+      ) ? 180 : 80;
+      Promise.resolve(queueCheckoutOpenPrewarm(`order:${normalizedReason}`, { delayMs: prewarmDelayMs })).catch(() => {});
     }
     const previewRequest = buildCheckoutBenefitsCurrentPreviewRequest();
     const snapshot = getBenefitsStoreSnapshot(previewRequest);
@@ -11239,7 +11244,7 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
         force: false,
         warmDetails: false,
       }).catch(() => {});
-    }, reason === "updateCartBadge" ? 120 : 40);
+    }, reason === "updateCartBadge" ? 120 : 180);
   }
 
   function buildCheckoutBenefitsCacheScope() {
@@ -13598,14 +13603,15 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
     return discountsByIndex;
   }
 
-  function buildCartPricingLineStates(cartItems, finalItemsTotal, previewData = null) {
+  function buildCartPricingLineStates(cartItems, finalItemsTotal, previewData = null, opts = {}) {
     const safeItems = Array.isArray(cartItems) ? cartItems : [];
     const cartTotals = computeCartTotals(safeItems);
+    const allowOrderDiscountDistribution = opts?.allowOrderDiscountDistribution === true;
     const pricingTotals = {
       nonAutoTotal: Number(cartTotals?.nonAutoTotal || 0),
       autoEligibleTotal: Number(cartTotals?.autoEligibleTotal || 0),
     };
-    const localLineTotalsByCartKey = previewData?.local_line_totals_by_cart_key && typeof previewData.local_line_totals_by_cart_key === "object"
+    const localLineTotalsByCartKey = allowOrderDiscountDistribution && previewData?.local_line_totals_by_cart_key && typeof previewData.local_line_totals_by_cart_key === "object"
       ? previewData.local_line_totals_by_cart_key
       : null;
     const lineStates = [];
@@ -13663,10 +13669,12 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
     const baseLinesTotal = roundPrice(
       lineStates.reduce((sum, entry) => sum + Number(entry?.baseTotal || 0), 0)
     );
-    const extraOrderDiscount = roundPrice(Math.max(
-      0,
-      baseLinesTotal - roundPrice(Number(finalItemsTotal || 0))
-    ));
+    const extraOrderDiscount = allowOrderDiscountDistribution
+      ? roundPrice(Math.max(
+          0,
+          baseLinesTotal - roundPrice(Number(finalItemsTotal || 0))
+        ))
+      : 0;
     const distributedByIndex = distributeCartPricingDiscountAcrossLines(lineStates, extraOrderDiscount);
 
     return lineStates.map((entry, index) => {
@@ -14372,15 +14380,14 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
     const calculationFallbackPreview = hasCheckoutBenefitsLocalCalculationPayload(checkoutBenefitsStore?.calculationPreview)
       ? checkoutBenefitsStore.calculationPreview
       : null;
-    const previewData = exactPreviewData
-      || storeSnapshot?.basePreview
+    const deriveSourcePreview = storeSnapshot?.basePreview
       || scopePreviewData
       || fallbackStoreBasePreview
       || calculationFallbackPreview
       || null;
-    const localDeriveSourcePreview = hasCheckoutBenefitsLocalCalculationPayload(previewData)
-      ? previewData
-      : (calculationFallbackPreview || previewData);
+    const localDeriveSourcePreview = hasCheckoutBenefitsLocalCalculationPayload(deriveSourcePreview)
+      ? deriveSourcePreview
+      : (calculationFallbackPreview || deriveSourcePreview);
     const localPreviewData = exactPreviewData
       || storeSnapshot?.derivedPreview
       || (localDeriveSourcePreview
@@ -14393,7 +14400,7 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
             selectedPromoRewardId: draft?.selected_promo_reward_id,
           })
         : null);
-    if (!localPreviewData && !previewData) {
+    if (!localPreviewData && !exactPreviewData) {
       const appliedSnapshot = getCheckoutBenefitsAppliedSnapshotFromDraft(draft, previewRequest);
       const snapshotPreviewData = buildCheckoutBenefitsPreviewDataFromAppliedSnapshot(appliedSnapshot);
       return {
@@ -14405,10 +14412,10 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
       };
     }
     return {
-      previewData,
+      previewData: exactPreviewData || null,
       localPreviewData,
       previewSummary: localPreviewData?.summary
-        || (previewData?.summary ? cloneCheckoutBenefitsSummary(previewData.summary) : null),
+        || (exactPreviewData?.summary ? cloneCheckoutBenefitsSummary(exactPreviewData.summary) : null),
     };
   }
 
@@ -15001,7 +15008,15 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
     content.appendChild(summary);
   }
 
-  function buildCartPricingSnapshot() {
+  let cartPricingSnapshotCacheKey = "";
+  let cartPricingSnapshotCacheValue = null;
+
+  function invalidateCartPricingSnapshotCache() {
+    cartPricingSnapshotCacheKey = "";
+    cartPricingSnapshotCacheValue = null;
+  }
+
+  function buildCartPricingSnapshotUncached() {
     const cartItems = cartItemsResolved();
     if (!Array.isArray(cartItems) || !cartItems.length) {
       return {
@@ -15014,7 +15029,13 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
     const draft = loadCheckoutDraft();
     const methodCode = resolveCartPricingMethodCode(draft);
     const previewBundle = getCartPricingCachedPreviewBundle(cartItems, methodCode, draft);
-    const previewSummary = previewBundle.previewSummary;
+    const hasSelectedOrderBenefit = Boolean(
+      normalizeCheckoutSelectedDiscountId(draft?.selected_discount_id)
+      || normalizeCheckoutBenefitsPromoInputValue(draft?.promo_code || "", { trim: true })
+      || normalizeCheckoutSelectedDiscountId(draft?.selected_promo_reward_id)
+    );
+    const canApplyPreviewSummary = hasSelectedOrderBenefit && !!previewBundle.previewSummary;
+    const previewSummary = canApplyPreviewSummary ? previewBundle.previewSummary : null;
     const totalsForPricing = {
       nonAutoTotal: Number(cartTotals.nonAutoTotal || 0),
       autoEligibleTotal: Number(cartTotals.autoEligibleTotal || 0),
@@ -15063,7 +15084,8 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
     const lineStates = buildCartPricingLineStates(
       cartItems,
       itemsTotal,
-      previewBundle.localPreviewData || previewBundle.previewData || null
+      canApplyPreviewSummary ? (previewBundle.localPreviewData || previewBundle.previewData || null) : null,
+      { allowOrderDiscountDistribution: canApplyPreviewSummary }
     );
     const bonusLevel = getCartBonusActiveLevel();
     const bonusRedeemAvailableAmount = bonusLevel
@@ -15125,6 +15147,17 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
       lineStates,
       displayLineStates,
     };
+  }
+
+  function buildCartPricingSnapshot() {
+    const key = buildCartPricingLiveKey();
+    if (key && cartPricingSnapshotCacheKey === key && cartPricingSnapshotCacheValue) {
+      return cartPricingSnapshotCacheValue;
+    }
+    const snapshot = buildCartPricingSnapshotUncached();
+    cartPricingSnapshotCacheKey = key;
+    cartPricingSnapshotCacheValue = snapshot;
+    return snapshot;
   }
 
   function applyCartPricingCheckoutTotals(summaryState = null) {
@@ -15204,6 +15237,7 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
       } catch (_) {}
     }
 
+    invalidateCartPricingSnapshotCache();
     const summaryState = buildCartPricingSnapshot();
     if (!summaryState || summaryState.visible === false) {
       return summaryState;
@@ -15326,17 +15360,34 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
     return effectiveSummaryState;
   }
 
+  function applyCartPricingLineStatesToConnectedRows(summaryState = null) {
+    const effectiveSummaryState = summaryState && typeof summaryState === "object"
+      ? summaryState
+      : buildCartPricingSnapshot();
+    const displayLineStates = Array.isArray(effectiveSummaryState?.displayLineStates)
+      ? effectiveSummaryState.displayLineStates
+      : effectiveSummaryState?.lineStates;
+    if (!Array.isArray(displayLineStates) || !displayLineStates.length) return effectiveSummaryState;
+    applyCartPricingLineStatesToList(document, displayLineStates);
+    return effectiveSummaryState;
+  }
+
   function updateCartBonusRedeemSections(summaryState = null) {
     const safeState = summaryState && typeof summaryState === "object" ? summaryState : buildCartPricingSnapshot();
     let amount = Math.floor(Math.max(0, Number(safeState?.bonusRedeemAvailableAmount || 0)));
     if (amount > 0) {
       state.cartBonusRedeemAvailableAmount = amount;
-    } else if (state.cartBonusRedeemEnabled && Number(state.cartBonusRedeemAvailableAmount || 0) > 0) {
-      amount = Math.floor(Math.max(0, Number(state.cartBonusRedeemAvailableAmount || 0)));
     }
     document.querySelectorAll(".shop-cart-bonus-redeem-section").forEach((section) => {
       const accrualAmount = Math.floor(Math.max(0, Number(safeState?.bonusAccrualAmount || 0)));
       const allowRedeemAndAccrue = Number(state.homeBonusConfig?.settings?.allow_redeem_and_accrue || 0) === 1;
+      const balance = Math.max(0, Number(state.homeBonusConfig?.account?.balance || 0));
+      const hasBalance = balance > 0;
+      const canRedeemAmount = amount > 0;
+      if (!hasBalance && state.cartBonusRedeemEnabled) {
+        state.cartBonusRedeemEnabled = false;
+      }
+      const redeemActive = !!state.cartBonusRedeemEnabled && hasBalance && canRedeemAmount;
       section.querySelectorAll("[data-cart-bonus-redeem-available]").forEach((node) => {
         node.textContent = money(amount);
       });
@@ -15353,26 +15404,21 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
         node.textContent = allowRedeemAndAccrue ? "Списать и начислить" : "Списать";
       });
       section.querySelectorAll("[data-cart-bonus-redeem-toggle]").forEach((input) => {
-        const balance = Math.max(0, Number(state.homeBonusConfig?.account?.balance || 0));
-        const disabled = !(balance > 0);
+        const disabled = !hasBalance;
         input.disabled = disabled;
-        if (disabled) {
-          state.cartBonusRedeemEnabled = false;
-        }
-        input.checked = !!state.cartBonusRedeemEnabled && !disabled;
+        input.checked = redeemActive;
         input.closest(".shop-cart-bonus-redeem-switch")?.classList.toggle("is-disabled", disabled);
       });
       section.querySelectorAll("[data-cart-bonus-redeem-button]").forEach((button) => {
-        const balance = Math.max(0, Number(state.homeBonusConfig?.account?.balance || 0));
-        const disabled = !(balance > 0) || !(amount > 0);
+        const disabled = !hasBalance || !canRedeemAmount;
         button.disabled = disabled;
         button.classList.toggle("is-disabled", disabled);
-        button.classList.toggle("is-active", !!state.cartBonusRedeemEnabled && !disabled);
+        button.classList.toggle("is-active", redeemActive);
       });
       section.querySelectorAll("[data-cart-bonus-accrual-button]").forEach((button) => {
         button.disabled = false;
         button.classList.remove("is-disabled");
-        button.classList.toggle("is-active", !state.cartBonusRedeemEnabled);
+        button.classList.toggle("is-active", !redeemActive);
       });
     });
   }
@@ -15450,6 +15496,7 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
     applyCartPricingCheckoutTotals(effectiveSummaryState);
     syncCartBenefitsServiceBlocksUi();
     applyCartPricingStateToSummarySections(effectiveSummaryState);
+    applyCartPricingLineStatesToConnectedRows(effectiveSummaryState);
     updateCartBonusRedeemSections(effectiveSummaryState);
     return effectiveSummaryState;
   }
@@ -15536,6 +15583,7 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
   function refreshCartBonusRedeemUi() {
     const scrollState = cartBonusRedeemPreToggleScrollState || captureCartBonusRedeemScrollState();
     cartBonusRedeemPreToggleScrollState = null;
+    invalidateCartPricingSnapshotCache();
     let summaryState = null;
     try {
       summaryState = buildCartPricingSnapshot();
@@ -15554,6 +15602,11 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
       console.warn("Failed to update cart summary for bonus redeem:", error);
     }
     try {
+      applyCartPricingLineStatesToConnectedRows(summaryState);
+    } catch (error) {
+      console.warn("Failed to update cart lines for bonus redeem:", error);
+    }
+    try {
       updateCartBonusRedeemSections(summaryState);
       restoreCartBonusRedeemScrollState(scrollState);
     } catch (error) {
@@ -15569,10 +15622,53 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
     return summaryState;
   }
 
+  function buildCartPricingLiveKey(cartItems = null, draft = null) {
+    const safeItems = Array.isArray(cartItems) ? cartItems : cartItemsResolved();
+    const safeDraft = draft && typeof draft === "object" ? draft : loadCheckoutDraft();
+    const normalizedItems = (Array.isArray(safeItems) ? safeItems : [])
+      .map((item) => ({
+        key: str(item?.key || "").trim(),
+        product_id: Number(item?.product_id || item?.product?.id || 0) || 0,
+        combo_id: Number(item?.combo_id || 0) || 0,
+        type: str(item?.type || "").trim(),
+        qty: Math.max(0, Number(item?.qty || 0)),
+        line_total: roundPrice(Number(item?.line_total || 0) || 0),
+      }))
+      .filter((entry) => entry.key && entry.qty > 0)
+      .sort((a, b) => a.key.localeCompare(b.key));
+    const token = typeof getCustomerToken === "function"
+      ? str(getCustomerToken() || "").trim()
+      : "";
+    const customerCache = typeof getCustomerCache === "function" ? getCustomerCache() : null;
+    let addressId = 0;
+    try {
+      addressId = Number(state?.selectedAddress?.id || 0) || 0;
+    } catch {}
+    return JSON.stringify({
+      items: normalizedItems,
+      tokenPresent: !!token,
+      customerId: Number(customerCache?.id || 0) || 0,
+      methodCode: resolveCartPricingMethodCode(safeDraft),
+      addressId,
+      promoCode: normalizeCheckoutBenefitsPromoInputValue(safeDraft?.promo_code || "", { trim: true }),
+      selectedDiscountId: normalizeCheckoutSelectedDiscountId(safeDraft?.selected_discount_id),
+      selectedDiscountSource: normalizeCheckoutDiscountSource(safeDraft?.selected_discount_source),
+      selectedPromoSource: normalizeCheckoutPromoSource(safeDraft?.selected_promo_source),
+      selectedPromoRewardId: normalizeCheckoutSelectedDiscountId(safeDraft?.selected_promo_reward_id),
+      bonusRedeemEnabled: !!state.cartBonusRedeemEnabled,
+      bonusRedeemChoiceVersion: Number(state.cartBonusRedeemChoiceVersion || 0),
+    });
+  }
+
   let cartPricingAsyncRefreshTimer = 0;
   let cartPricingAsyncRefreshRunning = false;
   let cartPricingAsyncRefreshPending = false;
   let cartPricingAsyncRefreshSeq = 0;
+  let cartPricingAsyncRefreshDelayMs = 160;
+  let cartPricingSettleTimer = 0;
+  let cartPricingSettleRunning = false;
+  let cartPricingSettleSeq = 0;
+  let cartPricingSettleDelayMs = 160;
 
   async function runQueuedCartPricingAsyncRefresh() {
     if (cartPricingAsyncRefreshRunning) return null;
@@ -15582,6 +15678,7 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
       while (cartPricingAsyncRefreshPending) {
         cartPricingAsyncRefreshPending = false;
         const runSeq = cartPricingAsyncRefreshSeq;
+        const runKey = buildCartPricingLiveKey();
         let summaryState = null;
         try {
           summaryState = await buildCartPricingSummaryState({
@@ -15593,6 +15690,9 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
           summaryState = buildCartPricingSnapshot();
         }
         if (runSeq !== cartPricingAsyncRefreshSeq) {
+          continue;
+        }
+        if (runKey !== buildCartPricingLiveKey()) {
           continue;
         }
         appliedState = applyCartPricingStateImmediately(summaryState);
@@ -15607,7 +15707,7 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
         cartPricingAsyncRefreshTimer = window.setTimeout(() => {
           cartPricingAsyncRefreshTimer = 0;
           void runQueuedCartPricingAsyncRefresh();
-        }, 0);
+        }, cartPricingAsyncRefreshDelayMs);
       }
     }
   }
@@ -15616,6 +15716,7 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
     if (!reason) {
       // keep interface flexible for silent callers
     }
+    cartPricingAsyncRefreshDelayMs = Math.max(0, Number(delayMs || 0));
     cartPricingAsyncRefreshPending = true;
     cartPricingAsyncRefreshSeq += 1;
     if (cartPricingAsyncRefreshTimer) {
@@ -15628,18 +15729,98 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
     return Promise.resolve(null);
   }
 
-  async function syncCartPricingSummaryUi() {
+  async function runCartPricingSettle(seq, expectedKey) {
+    if (cartPricingSettleRunning) {
+      if (seq === cartPricingSettleSeq) {
+        queueCartPricingSettle("settle-running", cartPricingSettleDelayMs);
+      }
+      return null;
+    }
+
+    cartPricingSettleRunning = true;
+    try {
+      if (seq !== cartPricingSettleSeq) return null;
+      const runKey = str(expectedKey || buildCartPricingLiveKey()).trim();
+      let summaryState = null;
+      try {
+        summaryState = await buildCartPricingSummaryState({
+          forceBenefits: false,
+          hydrateBenefits: true,
+        });
+      } catch (error) {
+        console.warn("Failed to settle cart pricing summary:", error);
+        summaryState = buildCartPricingSnapshot();
+      }
+      if (seq !== cartPricingSettleSeq) return null;
+      if (runKey && runKey !== buildCartPricingLiveKey()) {
+        queueCartPricingSettle("settle-key-changed", cartPricingSettleDelayMs);
+        return null;
+      }
+      const appliedState = applyCartPricingStateImmediately(summaryState);
+      if (typeof applyDeliveryProgressSnapshot === "function") {
+        applyDeliveryProgressSnapshot(appliedState);
+      }
+      return appliedState;
+    } finally {
+      cartPricingSettleRunning = false;
+      if (seq !== cartPricingSettleSeq && !cartPricingSettleTimer) {
+        queueCartPricingSettle("settle-after-running", cartPricingSettleDelayMs);
+      }
+    }
+  }
+
+  function queueCartPricingSettle(reason = "", delayMs = 160) {
+    if (!reason) {
+      // keep interface flexible for silent callers
+    }
+    cartPricingSettleDelayMs = Math.max(0, Number(delayMs || 0));
+    const seq = ++cartPricingSettleSeq;
+    if (cartPricingSettleTimer) {
+      window.clearTimeout(cartPricingSettleTimer);
+    }
+    cartPricingSettleTimer = window.setTimeout(() => {
+      cartPricingSettleTimer = 0;
+      void runCartPricingSettle(seq, buildCartPricingLiveKey());
+    }, cartPricingSettleDelayMs);
+    return Promise.resolve(null);
+  }
+
+  async function syncCartPricingSummaryUi(opts = {}) {
     const summaryState = applyCartPricingStateImmediately(buildCartPricingSnapshot());
     if (typeof applyDeliveryProgressSnapshot === "function") {
       applyDeliveryProgressSnapshot(summaryState);
     }
-    queueCartPricingAsyncRefresh("syncCartPricingSummaryUi", 70);
+    const reason = str(opts?.reason || "").trim();
+    const delayMs = reason === "changeQty.light" || reason === "updateCartTotalsUiOnly"
+      ? 180
+      : 120;
+    queueCartPricingSettle("syncCartPricingSummaryUi", delayMs);
     return summaryState;
   }
 
+  let cartPricingSummaryUiFrame = 0;
+  let cartPricingSummaryUiQueuedReason = "";
+
+  function queueCartPricingSummaryUi(reason = "cart") {
+    cartPricingSummaryUiQueuedReason = str(reason || cartPricingSummaryUiQueuedReason || "cart").trim() || "cart";
+    if (cartPricingSummaryUiFrame) return Promise.resolve(null);
+    const scheduleFrame = typeof window.requestAnimationFrame === "function"
+      ? window.requestAnimationFrame.bind(window)
+      : (fn) => window.setTimeout(fn, 16);
+    cartPricingSummaryUiFrame = scheduleFrame(() => {
+      cartPricingSummaryUiFrame = 0;
+      const queuedReason = cartPricingSummaryUiQueuedReason;
+      cartPricingSummaryUiQueuedReason = "";
+      Promise.resolve(syncCartPricingSummaryUi({ reason: queuedReason })).catch(() => {});
+    });
+    return Promise.resolve(null);
+  }
+
   window.syncShopCartPricingSummaryUi = syncCartPricingSummaryUi;
+  window.queueShopCartPricingSummaryUi = queueCartPricingSummaryUi;
   window.refreshShopCartPricingLocalUi = refreshCartPricingLocalUi;
   window.refreshShopCartBonusRedeemUi = refreshCartBonusRedeemUi;
+  window.invalidateShopCartPricingSnapshotCache = invalidateCartPricingSnapshotCache;
   window.applyShopCartPricingTotalsToButtons = applyCartPricingCheckoutTotals;
   window.getShopCartPricingSnapshot = buildCartPricingSnapshot;
 
@@ -31853,6 +32034,7 @@ function setBottomNavActive(tab) {
       // keep interface flexible for silent callers
     }
 
+    const warmKey = typeof buildCartPricingLiveKey === "function" ? buildCartPricingLiveKey() : "";
     const pricingSnapshot = buildCartPricingSnapshot();
     const subtotal = pricingSnapshot && pricingSnapshot.visible !== false
       ? roundPrice(Number(pricingSnapshot.itemsTotal || 0))
@@ -31872,6 +32054,9 @@ function setBottomNavActive(tab) {
     }
 
     return Promise.all(tasks).then(() => {
+      if (warmKey && typeof buildCartPricingLiveKey === "function" && warmKey !== buildCartPricingLiveKey()) {
+        return null;
+      }
       const nextSnapshot = applyCartPricingStateImmediately(buildCartPricingSnapshot());
       if (typeof applyDeliveryProgressSnapshot === "function") {
         applyDeliveryProgressSnapshot(nextSnapshot);
@@ -36379,6 +36564,19 @@ function setBottomNavActive(tab) {
       overlay.classList.toggle("hidden", !isSubmitting);
     }
 
+    function buildFinalCheckoutPricingSnapshotForSubmit() {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const beforeKey = buildCartPricingLiveKey();
+        invalidateCartPricingSnapshotCache();
+        const snapshot = buildCartPricingSnapshot();
+        const afterKey = buildCartPricingLiveKey();
+        if (beforeKey === afterKey) {
+          return { ok: true, key: afterKey, snapshot };
+        }
+      }
+      return { ok: false, key: buildCartPricingLiveKey(), snapshot: null };
+    }
+
     function showOrderSuccess(orderId, publicId, totalPrice) {
       resultWrap.innerHTML = `
         <div class="shop-order-result-card">
@@ -36493,8 +36691,8 @@ function setBottomNavActive(tab) {
 
     if (actions?.submitBtn) {
       actions.submitBtn.onclick = async () => {
-        const resolvedItems = cartItemsResolved();
-        const totals = computeCartTotals(resolvedItems);
+        let resolvedItems = cartItemsResolved();
+        let totals = computeCartTotals(resolvedItems);
         const currentDraft = loadCheckoutDraft();
         const methodCode = methodSelect.getValue() || methodDefault || "takeaway";
         const normalizedPromoCode = normalizeCheckoutBenefitsPromoInputValue(promo.value, { trim: true });
@@ -36506,7 +36704,15 @@ function setBottomNavActive(tab) {
         const normalizedSelectedPromoSource = (normalizedPromoCode || normalizedSelectedPromoRewardId)
           ? (normalizeCheckoutPromoSource(currentDraft?.selected_promo_source) || "promo_code")
           : null;
-        const pricingSnapshotState = buildCartPricingSnapshot();
+        const finalPricing = buildFinalCheckoutPricingSnapshotForSubmit();
+        if (!finalPricing.ok || !finalPricing.snapshot || finalPricing.snapshot.visible === false) {
+          alert("Заказ пересчитывается. Попробуйте оформить ещё раз.");
+          queueCartPricingSummaryUi("submit-final-snapshot-mismatch");
+          return;
+        }
+        const pricingSnapshotState = finalPricing.snapshot;
+        resolvedItems = cartItemsResolved();
+        totals = computeCartTotals(resolvedItems);
         const snapshotBonusRedeemAmount = roundPrice(Math.max(0, Number(pricingSnapshotState?.bonusRedeemAmount || 0)));
         const snapshotBonusLevel = getCartBonusActiveLevel();
         const snapshotBonusAccountId = Number(state.homeBonusConfig?.account?.id || 0);
@@ -36783,6 +36989,18 @@ function setBottomNavActive(tab) {
         );
         payload.pricing_snapshot.summary.items_total = distributedItemsTotal;
         payload.pricing_snapshot.summary.total = roundPrice(distributedItemsTotal + snapshotDeliveryCost);
+      }
+      const payloadItemsTotal = roundPrice(
+        payload.items.reduce((sum, item) => sum + Number(item?.line_total || 0), 0)
+      );
+      const payloadSnapshotItemsTotal = roundPrice(Number(payload.pricing_snapshot?.summary?.items_total || 0));
+      if (
+        Math.abs(payloadItemsTotal - payloadSnapshotItemsTotal) > 1
+        || buildCartPricingLiveKey() !== finalPricing.key
+      ) {
+        alert("Заказ пересчитывается. Попробуйте оформить ещё раз.");
+        queueCartPricingSummaryUi("submit-payload-snapshot-mismatch");
+        return;
       }
 
       const isAuthed = !!(getCustomerToken() && me);
