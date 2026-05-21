@@ -1971,6 +1971,39 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     return row;
   }
 
+  async function attachPublicProductCategoryIds(rows, tenantId) {
+    const list = Array.isArray(rows) ? rows : [];
+    const productIds = [...new Set(list
+      .map((row) => Number(row?.id || row?.product_id || 0))
+      .filter((id) => id > 0))];
+    if (!(tenantId > 0) || !productIds.length) return list;
+    const [categoryRows] = await db.query(
+      `SELECT product_id, category_id
+         FROM prod_product_categories
+        WHERE tenant_id=? AND product_id IN (?)`,
+      [tenantId, productIds]
+    );
+    const categoryIdsByProductId = new Map();
+    (Array.isArray(categoryRows) ? categoryRows : []).forEach((row) => {
+      const productId = Number(row?.product_id || 0);
+      const categoryId = Number(row?.category_id || 0);
+      if (!(productId > 0) || !(categoryId > 0)) return;
+      if (!categoryIdsByProductId.has(productId)) categoryIdsByProductId.set(productId, []);
+      categoryIdsByProductId.get(productId).push(categoryId);
+    });
+    list.forEach((row) => {
+      const productId = Number(row?.id || row?.product_id || 0);
+      const ids = [
+        ...(Array.isArray(row?.category_ids) ? row.category_ids.map((id) => Number(id || 0)) : []),
+        Number(row?._category_id || row?.category_id || 0),
+        ...(categoryIdsByProductId.get(productId) || []),
+      ].filter((id, index, source) => id > 0 && source.indexOf(id) === index);
+      row.category_ids = ids;
+      if (!(Number(row.category_id || 0) > 0) && ids.length) row.category_id = ids[0];
+    });
+    return list;
+  }
+
   function attachComboThumbs(combo) {
     combo.image_thumb = getThumbUrl(combo.image_url);
     if (Array.isArray(combo.grid_photos)) {
@@ -3132,16 +3165,17 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         const [rows] = await db.query(
           `SELECT category_id
            FROM mkt_customer_bonus_favorite_categories
-           WHERE tenant_id=? AND customer_id=? AND level_id=?
+           WHERE tenant_id=? AND customer_id=? AND period_key=DATE_FORMAT(CURDATE(), '%Y-%m')
            ORDER BY id ASC`,
-          [tenantId, customerId, levelId]
+          [tenantId, customerId]
         );
         selectedRows = Array.isArray(rows) ? rows : [];
       }
       const allowedIds = new Set((Array.isArray(categoryRows) ? categoryRows : []).map((row) => Number(row.id || row.categoryId || 0)));
       const selectedIds = selectedRows
         .map((row) => Number(row.category_id || 0))
-        .filter((id) => id > 0 && allowedIds.has(id));
+        .filter((id, index, list) => id > 0 && allowedIds.has(id) && list.indexOf(id) === index)
+        .slice(0, enabled ? group.categoriesLimit : 0);
       return res.json({
         ok: true,
         data: {
@@ -3150,7 +3184,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
           limit: enabled ? group.categoriesLimit : 0,
           bonus_percent: enabled ? group.bonusPercent : 0,
           selected_ids: selectedIds,
-          locked: selectedIds.length > 0,
+          locked: enabled ? selectedIds.length >= group.categoriesLimit : false,
           categories: (Array.isArray(categoryRows) ? categoryRows : []).map((row) => ({
             id: Number(row.id || row.categoryId || 0),
             title: row.title || '',
@@ -3206,37 +3240,34 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       const [existingRows] = await conn.query(
         `SELECT category_id
          FROM mkt_customer_bonus_favorite_categories
-         WHERE tenant_id=? AND customer_id=? AND level_id=?
+         WHERE tenant_id=? AND customer_id=? AND period_key=DATE_FORMAT(CURDATE(), '%Y-%m')
          ORDER BY id ASC
          FOR UPDATE`,
-        [tenantId, customerId, levelId]
+        [tenantId, customerId]
       );
-      if (Array.isArray(existingRows) && existingRows.length) {
-        const existingValidIds = existingRows
-          .map((row) => Number(row.category_id || 0))
-          .filter((id) => id > 0 && groupAllowedIds.has(id) && activeIds.has(id));
-        if (existingValidIds.length) {
-          await conn.commit();
-          return res.json({
-            ok: true,
-            data: {
-              level_id: levelId,
-              selected_ids: existingValidIds,
-              locked: true,
-            },
-          });
-        }
-        await conn.query(
-          `DELETE FROM mkt_customer_bonus_favorite_categories
-           WHERE tenant_id=? AND customer_id=? AND level_id=?`,
-          [tenantId, customerId, levelId]
-        );
+      const existingValidIds = (Array.isArray(existingRows) ? existingRows : [])
+        .map((row) => Number(row.category_id || 0))
+        .filter((id, index, list) => id > 0 && groupAllowedIds.has(id) && list.indexOf(id) === index)
+        .slice(0, limit);
+      const existingSet = new Set(existingValidIds);
+      const nextCategoryIds = Array.from(new Set([...existingValidIds, ...categoryIds])).slice(0, limit);
+      const idsToInsert = nextCategoryIds.filter((id) => !existingSet.has(id));
+      if (!idsToInsert.length) {
+        await conn.commit();
+        return res.json({
+          ok: true,
+          data: {
+            level_id: levelId,
+            selected_ids: nextCategoryIds,
+            locked: nextCategoryIds.length >= limit,
+          },
+        });
       }
-      for (const categoryId of categoryIds) {
+      for (const categoryId of idsToInsert) {
         await conn.query(
           `INSERT INTO mkt_customer_bonus_favorite_categories
-             (tenant_id, customer_id, level_id, category_id)
-           VALUES (?, ?, ?, ?)`,
+             (tenant_id, customer_id, level_id, period_key, category_id)
+           VALUES (?, ?, ?, DATE_FORMAT(CURDATE(), '%Y-%m'), ?)`,
           [tenantId, customerId, levelId, categoryId]
         );
       }
@@ -3245,8 +3276,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         ok: true,
         data: {
           level_id: levelId,
-          selected_ids: categoryIds,
-          locked: true,
+          selected_ids: nextCategoryIds,
+          locked: nextCategoryIds.length >= limit,
         },
       });
     } catch (e) {
@@ -12138,6 +12169,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           await applyPublicProductBlocksToRows(rows, tenantId, storeId);
           await enrichProductsWithDisplayPrice(rows, tenantId, storeId);
           await enrichProductsWithDiscounts(rows, tenantId, storeId);
+          await attachPublicProductCategoryIds(rows, tenantId);
           const payload = { ok: true, data: rows, combos: [], category_id: categoryId, lite: true };
           setPublicCache(cacheKey, payload, PUBLIC_CACHE_TTL_MS.products);
           res.set('x-public-cache', 'MISS');
@@ -12168,6 +12200,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         await applyPublicProductBlocksToRows(rows, tenantId, storeId);
         await enrichProductsWithDisplayPrice(rows, tenantId, storeId);
         await enrichProductsWithDiscounts(rows, tenantId, storeId);
+        await attachPublicProductCategoryIds(rows, tenantId);
         const payload = { ok: true, data: rows, combos: [], category_id: categoryId, lite: true };
         setPublicCache(cacheKey, payload, PUBLIC_CACHE_TTL_MS.products);
         res.set('x-public-cache', 'MISS');
@@ -12247,6 +12280,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         await applyPublicProductBlocksToRows(rows, tenantId, storeId);
         await enrichProductsWithDisplayPrice(rows, tenantId, storeId);
         await enrichProductsWithDiscounts(rows, tenantId, storeId);
+        await attachPublicProductCategoryIds(rows, tenantId);
         const combos = await getCombosForCategoryCached(tenantId, storeId, categoryId);
         const payload = { ok: true, data: rows, combos, category_id: categoryId };
         setPublicCache(cacheKey, payload, PUBLIC_CACHE_TTL_MS.products);
@@ -12320,6 +12354,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       await applyPublicProductBlocksToRows(rows, tenantId, storeId);
       await enrichProductsWithDisplayPrice(rows, tenantId, storeId);
       await enrichProductsWithDiscounts(rows, tenantId, storeId);
+      await attachPublicProductCategoryIds(rows, tenantId);
       const combos = await getCombosForCategoryCached(tenantId, storeId, categoryId);
       const payload = { ok: true, data: rows, combos, category_id: categoryId };
       setPublicCache(cacheKey, payload, PUBLIC_CACHE_TTL_MS.products);
@@ -12465,6 +12500,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       await applyPublicProductAvailability(allProducts, tenantId, storeId);
       await enrichProductsWithDisplayPrice(allProducts, tenantId, storeId);
       await enrichProductsWithDiscounts(allProducts, tenantId, storeId);
+      await attachPublicProductCategoryIds(allProducts, tenantId);
 
       // Р вЂњРЎР‚РЎС“Р С—Р С—Р С‘РЎР‚РЎС“Р ВµР С Р С—Р С• category_id
       const productsByCategory = {};
@@ -12573,6 +12609,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
       await enrichProductsWithDisplayPrice([p], tenantId, storeId);
       await enrichProductsWithDiscounts([p], tenantId, storeId);
+      await attachPublicProductCategoryIds([p], tenantId);
 
       const payload = { ok: true, data: p };
       setPublicCache(cacheKey, payload, PUBLIC_CACHE_TTL_MS.productById);

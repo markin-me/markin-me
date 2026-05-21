@@ -4997,6 +4997,9 @@ optionGroups.forEach((group) => {
         openCartSheet();
       }
       if (openCartSheetCtx?.showSheetProduct) {
+        if (!cartKey && !hasCustomOnBack && openCartSheetCtx && typeof openCartSheetCtx === "object") {
+          openCartSheetCtx.sourceScreen = "menu";
+        }
         const sheetArgs = { cartKey, prefillItem, readOnly: readOnly === true };
         if (hasCustomOnBack) {
           sheetArgs.onBack = resolvedOnBack;
@@ -7608,6 +7611,9 @@ optionGroups.forEach((group) => {
         openCartSheet();
       }
       if (openCartSheetCtx?.showSheetCombo) {
+        if (!cartKey && !hasCustomOnBack && openCartSheetCtx && typeof openCartSheetCtx === "object") {
+          openCartSheetCtx.sourceScreen = "menu";
+        }
         const sheetArgs = { cartKey, prefillItem };
         if (hasCustomOnBack) {
           sheetArgs.onBack = onBack;
@@ -13703,8 +13709,12 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
     return levels.find((level) => level && String(level.title || "").trim()) || null;
   }
 
+  function getCartBonusFavoriteCategoryCacheKey() {
+    return "current";
+  }
+
   function getCartBonusFavoriteCategoryIds(levelId) {
-    const key = String(Number(levelId || 0) || 0);
+    const key = getCartBonusFavoriteCategoryCacheKey(levelId);
     const cache = state.homeBonusFavoriteCategoriesByLevel instanceof Map
       ? state.homeBonusFavoriteCategoriesByLevel.get(key)
       : null;
@@ -13714,7 +13724,7 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
   }
 
   function getCartBonusFavoriteCategoryPercents(levelId) {
-    const key = String(Number(levelId || 0) || 0);
+    const key = getCartBonusFavoriteCategoryCacheKey(levelId);
     const cache = state.homeBonusFavoriteCategoriesByLevel instanceof Map
       ? state.homeBonusFavoriteCategoriesByLevel.get(key)
       : null;

@@ -2110,8 +2110,12 @@
     }
   }
 
+  function getHomeBonusFavoriteCategoriesCacheKey() {
+    return "current";
+  }
+
   function getHomeBonusFavoriteCategoriesCache(levelId) {
-    const key = String(Number(levelId || 0) || 0);
+    const key = getHomeBonusFavoriteCategoriesCacheKey(levelId);
     return state.homeBonusFavoriteCategoriesByLevel.get(key) || null;
   }
 
@@ -2163,11 +2167,12 @@
   async function loadHomeBonusFavoriteCategories(level, options = {}) {
     const levelId = Number(level?.id || 0);
     if (!(levelId > 0)) return null;
-    const key = String(levelId);
+    const key = getHomeBonusFavoriteCategoriesCacheKey(levelId);
+    const pendingKey = `${key}:${levelId}`;
     if (!options.force) {
       const cached = state.homeBonusFavoriteCategoriesByLevel.get(key);
-      if (cached) return cached;
-      const pending = state._homeBonusFavoriteCategoriesLoading.get(key);
+      if (cached && Number(cached?.level_id || 0) === levelId) return cached;
+      const pending = state._homeBonusFavoriteCategoriesLoading.get(pendingKey);
       if (pending) return pending;
     }
     const pending = apiJson(`/api/public/bonus/favorite-categories?level_id=${encodeURIComponent(String(levelId))}`)
@@ -2177,9 +2182,9 @@
         return data;
       })
       .finally(() => {
-        state._homeBonusFavoriteCategoriesLoading.delete(key);
+        state._homeBonusFavoriteCategoriesLoading.delete(pendingKey);
       });
-    state._homeBonusFavoriteCategoriesLoading.set(key, pending);
+    state._homeBonusFavoriteCategoriesLoading.set(pendingKey, pending);
     return pending;
   }
 
@@ -2994,16 +2999,17 @@
       const categories = Array.isArray(data?.categories) ? data.categories : [];
       const limit = Math.max(0, Math.floor(Number(data?.limit || level?.favorite_categories_limit || 0)));
       const selectedIds = new Set((Array.isArray(data?.selected_ids) ? data.selected_ids : []).map((id) => Number(id || 0)).filter((id) => id > 0));
-      const locked = selectedIds.size > 0 || data?.locked === true;
+      const locked = data?.locked === true || (limit > 0 && selectedIds.size >= limit);
+      const remaining = Math.max(0, limit - selectedIds.size);
       wrap.innerHTML = `
-        <div class="shop-bonus-favorite-categories-note">${locked ? "Выбранные категории" : `Можно выбрать: ${escapeHtml(String(limit))}`}</div>
+        <div class="shop-bonus-favorite-categories-note">${locked ? "Выбранные категории" : `Можно выбрать: ${escapeHtml(String(remaining || limit))}`}</div>
         <div class="shop-bonus-favorite-categories-list">
           ${categories.length ? categories.map((category) => {
             const categoryId = Number(category?.id || 0);
             const checked = selectedIds.has(categoryId);
             const bonusPercent = Math.max(0, Number(category?.bonus_percent || category?.bonusPercent || 0));
             return `
-              <button class="shop-bonus-favorite-category${checked ? " is-selected" : ""}${locked ? " is-locked" : ""}" type="button" data-bonus-favorite-category-id="${escapeHtml(String(categoryId))}" ${locked ? "disabled" : ""}>
+              <button class="shop-bonus-favorite-category${checked ? " is-selected" : ""}${checked || locked ? " is-locked" : ""}" type="button" data-bonus-favorite-category-id="${escapeHtml(String(categoryId))}" ${checked || locked ? "disabled" : ""}>
                 ${buildBonusCategoryIconHtml(category)}
                 <span class="shop-bonus-favorite-category-title">${escapeHtml(category?.title || "")}</span>
                 ${bonusPercent > 0 ? `<span class="shop-bonus-favorite-category-percent">+${escapeHtml(formatShopBonusPercent(bonusPercent, 0))}</span>` : ""}
@@ -3014,19 +3020,20 @@
         ${locked || !categories.length || !(limit > 0) ? "" : `<button class="shop-bonus-favorite-categories-save" type="button" data-save-bonus-favorite-categories>${getCustomerToken() ? "Сохранить" : "Войти и выбрать"}</button>`}
       `;
       if (locked || !categories.length || !(limit > 0)) return;
-      const picked = new Set();
+      const picked = new Set(selectedIds);
       const syncPicked = () => {
         wrap.querySelectorAll("[data-bonus-favorite-category-id]").forEach((btn) => {
           const categoryId = Number(btn.dataset.bonusFavoriteCategoryId || 0);
           btn.classList.toggle("is-selected", picked.has(categoryId));
         });
         const saveBtn = wrap.querySelector("[data-save-bonus-favorite-categories]");
-        if (saveBtn) saveBtn.disabled = picked.size !== limit;
+        if (saveBtn) saveBtn.disabled = picked.size <= selectedIds.size || picked.size > limit;
       };
       wrap.querySelectorAll("[data-bonus-favorite-category-id]").forEach((btn) => {
         btn.addEventListener("click", () => {
           const categoryId = Number(btn.dataset.bonusFavoriteCategoryId || 0);
           if (!(categoryId > 0)) return;
+          if (selectedIds.has(categoryId)) return;
           if (picked.has(categoryId)) picked.delete(categoryId);
           else if (picked.size < limit) picked.add(categoryId);
           syncPicked();
@@ -3051,9 +3058,9 @@
           const nextData = {
             ...data,
             selected_ids: Array.isArray(json?.data?.selected_ids) ? json.data.selected_ids : Array.from(picked),
-            locked: true,
+            locked: json?.data?.locked === true,
           };
-          state.homeBonusFavoriteCategoriesByLevel.set(String(levelId), nextData);
+          state.homeBonusFavoriteCategoriesByLevel.set(getHomeBonusFavoriteCategoriesCacheKey(levelId), nextData);
           returnFromBonusNestedSheet(level, options);
         } catch (err) {
           console.error("save bonus favorite categories error:", err);
@@ -16622,6 +16629,21 @@ function updateCartBadge() {
     return factor != null ? Number(qty || 0) * factor : null;
   }
 
+  function ensureCachedProductCategoryIds(product, fallbackCategoryId = 0) {
+    if (!product || typeof product !== "object") return product;
+    const ids = [
+      ...(Array.isArray(product.category_ids) ? product.category_ids.map((categoryId) => Number(categoryId || 0)) : []),
+      Number(product.category_id || 0),
+      Number(product._category_id || 0),
+      Number(fallbackCategoryId || 0),
+    ].filter((categoryId, index, source) => categoryId > 0 && source.indexOf(categoryId) === index);
+    if (ids.length) {
+      product.category_ids = ids;
+      if (!(Number(product.category_id || 0) > 0)) product.category_id = ids[0];
+    }
+    return product;
+  }
+
   async function loadProductsByCategory() {
     const categories = getVisibleCategories();
     const categoryIds = categories.map(c => Number(c.id));
@@ -16657,6 +16679,7 @@ function updateCartBadge() {
     const entries = categoryIds.map(id => {
       const list = Array.isArray(productsByCategory[id]) ? productsByCategory[id] : [];
       for (const p of list) {
+        ensureCachedProductCategoryIds(p, id);
         if (!Array.isArray(p.photos)) p.photos = safePhotos(p);
         cacheStockFromProductPayload(p, "products_by_category");
         p.is_available = isProductAvailable(p);
@@ -16700,6 +16723,8 @@ function updateCartBadge() {
       const json = await apiJson(url);
       const list = Array.isArray(json.data) ? json.data : [];
       for (const p of list) {
+        const fallbackCategoryId = Number(p?._category_id || json?.category_id || cid || 0);
+        ensureCachedProductCategoryIds(p, fallbackCategoryId);
         if (!Array.isArray(p.photos)) p.photos = safePhotos(p);
         cacheStockFromProductPayload(p, "products_for_category");
         p.is_available = isProductAvailable(p);

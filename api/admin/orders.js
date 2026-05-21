@@ -631,8 +631,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       const [categoryRows] = activeCategoryPercents.size ? await queryable.query(
         `SELECT category_id
            FROM mkt_customer_bonus_favorite_categories
-          WHERE tenant_id = ? AND customer_id = ? AND level_id = ?`,
-        [tenantId, customerId, levelId]
+          WHERE tenant_id = ? AND customer_id = ? AND period_key = DATE_FORMAT(CURDATE(), '%Y-%m')`,
+        [tenantId, customerId]
       ) : [[]];
       const selectedIds = (Array.isArray(categoryRows) ? categoryRows : [])
         .map((row) => Number(row?.category_id || 0))

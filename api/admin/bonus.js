@@ -1585,11 +1585,11 @@ module.exports = function makeAdminBonusRouter({ db, helpers }) {
              LEFT JOIN mkt_customer_bonus_favorite_categories selected
                ON selected.tenant_id = i.tenant_id
               AND selected.customer_id = ?
-              AND selected.level_id = ?
+              AND selected.period_key = DATE_FORMAT(CURDATE(), '%Y-%m')
               AND selected.category_id = i.category_id
             WHERE g.tenant_id = ? AND g.month_number = MONTH(CURDATE()) AND pc.is_active = 1
             ORDER BY selected.category_id IS NULL ASC, selected.created_at ASC, pc.sort_order ASC, pc.id ASC`,
-          [customerId, levelId, tenantId]
+          [customerId, tenantId]
         );
         let selectedCount = 0;
         favoriteCategories = (Array.isArray(categoryRows) ? categoryRows : []).map((row) => {
