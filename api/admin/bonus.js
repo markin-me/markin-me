@@ -1206,6 +1206,22 @@ function getBonusProgressLevelIds(accountRow, levels) {
   return result;
 }
 
+function getBonusAccruedTarget(levelRow) {
+  if (!levelRow || String(levelRow?.access_type || '').trim() !== 'conditions') return 0;
+  return Math.max(0, Number(levelRow.requirement_bonus_accrued || 0));
+}
+
+function getBonusAccruedConsumedBeforeLevel(levels, targetLevelId) {
+  const rows = Array.isArray(levels) ? levels : [];
+  const targetId = Number(targetLevelId || 0);
+  let consumed = 0;
+  for (const row of rows) {
+    if (Number(row?.id || 0) === targetId) break;
+    consumed += getBonusAccruedTarget(row);
+  }
+  return consumed;
+}
+
 async function loadBonusProgressByLevel(db, tenantId, customerId, accountRow, levels) {
   const rows = Array.isArray(levels) ? levels : [];
   const progressByLevel = new Map();
@@ -1229,6 +1245,16 @@ async function loadBonusProgressByLevel(db, tenantId, customerId, accountRow, le
     const sinceDate = periodStart ? maxDateOrNull(baseStart, periodStart) : maxDateOrNull(baseStart);
     const sinceAt = toMysqlDateTime(sinceDate);
     if (!sinceAt) continue;
+    const useCumulativeBonusAccrued = bonusAccruedTarget > 0
+      && targets.scope !== 'retention'
+      && !(periodDays > 0);
+    const bonusAccruedSinceAt = useCumulativeBonusAccrued
+      ? toMysqlDateTime(maxDateOrNull(accountRow.joined_at))
+      : sinceAt;
+    const bonusStatsSinceAt = bonusAccruedSinceAt && bonusAccruedSinceAt < sinceAt ? bonusAccruedSinceAt : sinceAt;
+    const bonusAccruedConsumed = useCumulativeBonusAccrued
+      ? getBonusAccruedConsumedBeforeLevel(rows, Number(levelRow.id || 0))
+      : 0;
 
     const [[orderStats]] = await db.query(
       `SELECT COUNT(*) AS orders_count,
@@ -1257,13 +1283,13 @@ async function loadBonusProgressByLevel(db, tenantId, customerId, accountRow, le
     );
     const [[bonusStats]] = await db.query(
       `SELECT
-          COALESCE(SUM(CASE WHEN type IN ('accrual', 'referral_accrual') THEN amount ELSE 0 END), 0) AS bonus_accrued,
-          COALESCE(SUM(CASE WHEN type = 'redeem' THEN amount ELSE 0 END), 0) AS bonus_redeemed
+          COALESCE(SUM(CASE WHEN type IN ('join', 'accrual', 'referral_accrual', 'level_up') AND created_at >= ? THEN amount ELSE 0 END), 0) AS bonus_accrued,
+          COALESCE(SUM(CASE WHEN type = 'redeem' AND created_at >= ? THEN amount ELSE 0 END), 0) AS bonus_redeemed
          FROM mkt_customer_bonus_transactions
         WHERE tenant_id = ?
           AND customer_id = ?
           AND created_at >= ?`,
-      [tenantId, customerId, sinceAt]
+      [bonusAccruedSinceAt || sinceAt, sinceAt, tenantId, customerId, bonusStatsSinceAt]
     );
 
     progressByLevel.set(Number(levelRow.id || 0), {
@@ -1276,7 +1302,7 @@ async function loadBonusProgressByLevel(db, tenantId, customerId, accountRow, le
       orders_target: ordersTarget || null,
       referrals_current: Number(referralStats?.referrals_count || 0),
       referrals_target: referralsTarget || null,
-      bonus_accrued_current: Number(bonusStats?.bonus_accrued || 0),
+      bonus_accrued_current: Math.max(0, Number(bonusStats?.bonus_accrued || 0) - bonusAccruedConsumed),
       bonus_accrued_target: bonusAccruedTarget || null,
       bonus_redeemed_current: Number(bonusStats?.bonus_redeemed || 0),
       bonus_redeemed_target: bonusRedeemedTarget || null,
@@ -1293,42 +1319,51 @@ async function promoteBonusAccountIfEligible(db, tenantId, customerId, accountRo
   if (!(tenantId > 0) || !(customerId > 0) || !(accountId > 0) || !accountRow?.joined_at || !rows.length) {
     return accountRow || null;
   }
-  const currentLevelId = Number(accountRow.level_id || 0);
-  const currentIndex = rows.findIndex((row) => Number(row?.id || 0) === currentLevelId);
-  if (currentIndex < 0) return accountRow;
-  const nextLevel = rows.slice(currentIndex + 1).find((row) => String(row?.access_type || '').trim() === 'conditions');
-  if (!nextLevel) return accountRow;
+  let currentAccount = { ...accountRow };
+  for (let guard = 0; guard < rows.length; guard += 1) {
+    const currentLevelId = Number(currentAccount.level_id || 0);
+    const currentIndex = rows.findIndex((row) => Number(row?.id || 0) === currentLevelId);
+    if (currentIndex < 0) break;
+    const nextLevel = rows.slice(currentIndex + 1).find((row) => String(row?.access_type || '').trim() === 'conditions');
+    if (!nextLevel) break;
 
-  const progressByLevel = await loadBonusProgressByLevel(db, tenantId, customerId, accountRow, rows);
-  const progress = progressByLevel.get(Number(nextLevel.id || 0));
-  if (!isBonusProgressComplete(progress)) return accountRow;
+    const progressByLevel = await loadBonusProgressByLevel(db, tenantId, customerId, currentAccount, rows);
+    const progress = progressByLevel.get(Number(nextLevel.id || 0));
+    if (!isBonusProgressComplete(progress)) break;
 
-  const rewardAmount = Math.max(0, Number(nextLevel.reward_bonus_amount || 0));
-  const currentBalance = Math.max(0, Number(accountRow.balance || 0));
-  const nextBalance = currentBalance + rewardAmount;
-  const [updateResult] = await db.query(
-    `UPDATE mkt_customer_bonus_accounts
-        SET level_id = ?,
-            balance = COALESCE(balance, 0) + ?,
-            total_accrued = COALESCE(total_accrued, 0) + ?,
-            level_assigned_at = NOW()
-      WHERE tenant_id = ? AND id = ? AND customer_id = ? AND level_id = ?`,
-    [Number(nextLevel.id), rewardAmount, rewardAmount, tenantId, accountId, customerId, currentLevelId]
-  );
-  if (!(Number(updateResult?.affectedRows || 0) > 0)) return accountRow;
+    const rewardAmount = Math.max(0, Number(nextLevel.reward_bonus_amount || 0));
+    const currentBalance = Math.max(0, Number(currentAccount.balance || 0));
+    const nextBalance = currentBalance + rewardAmount;
+    const [updateResult] = await db.query(
+      `UPDATE mkt_customer_bonus_accounts
+          SET level_id = ?,
+              balance = COALESCE(balance, 0) + ?,
+              total_accrued = COALESCE(total_accrued, 0) + ?,
+              level_assigned_at = NOW()
+        WHERE tenant_id = ? AND id = ? AND customer_id = ? AND level_id = ?`,
+      [Number(nextLevel.id), rewardAmount, rewardAmount, tenantId, accountId, customerId, currentLevelId]
+    );
+    if (!(Number(updateResult?.affectedRows || 0) > 0)) break;
 
-  await db.query(
-    `INSERT INTO mkt_customer_bonus_transactions
-       (tenant_id, account_id, customer_id, level_id, type, amount, balance_after, reason, created_at)
-     VALUES (?, ?, ?, ?, 'level_up', ?, ?, ?, NOW())`,
-    [tenantId, accountId, customerId, Number(nextLevel.id), rewardAmount, nextBalance, 'level_up']
-  );
-  await db.query(
-    `INSERT INTO mkt_customer_bonus_modal_events
-       (tenant_id, customer_id, event_type, from_level_id, to_level_id, created_at)
-     VALUES (?, ?, 'level_up', ?, ?, NOW())`,
-    [tenantId, customerId, currentLevelId || null, Number(nextLevel.id)]
-  );
+    await db.query(
+      `INSERT INTO mkt_customer_bonus_transactions
+         (tenant_id, account_id, customer_id, level_id, type, amount, balance_after, reason, created_at)
+       VALUES (?, ?, ?, ?, 'level_up', ?, ?, ?, NOW())`,
+      [tenantId, accountId, customerId, Number(nextLevel.id), rewardAmount, nextBalance, 'level_up']
+    );
+    await db.query(
+      `INSERT INTO mkt_customer_bonus_modal_events
+         (tenant_id, customer_id, event_type, from_level_id, to_level_id, created_at)
+       VALUES (?, ?, 'level_up', ?, ?, NOW())`,
+      [tenantId, customerId, currentLevelId || null, Number(nextLevel.id)]
+    );
+    currentAccount = {
+      ...currentAccount,
+      level_id: Number(nextLevel.id),
+      balance: nextBalance,
+      level_assigned_at: new Date(),
+    };
+  }
 
   const [[updatedAccountRow]] = await db.query(
     `SELECT id, customer_id, level_id, balance, total_accrued, total_redeemed,

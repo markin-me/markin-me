@@ -325,6 +325,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       [progress.amountCurrent, progress.amountTarget],
       [progress.ordersCurrent, progress.ordersTarget],
       [progress.referralsCurrent, progress.referralsTarget],
+      [progress.bonusAccruedCurrent, progress.bonusAccruedTarget],
+      [progress.bonusRedeemedCurrent, progress.bonusRedeemedTarget],
     ].filter(([, target]) => Number(target || 0) > 0);
   }
 
@@ -340,6 +342,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
     const amountTarget = Math.max(0, Number(level?.requirement_amount || 0));
     const ordersTarget = Math.max(0, Math.floor(Number(level?.requirement_orders || 0)));
     const referralsTarget = Math.max(0, Math.floor(Number(level?.requirement_referrals || 0)));
+    const bonusAccruedTarget = Math.max(0, Number(level?.requirement_bonus_accrued || 0));
+    const bonusRedeemedTarget = Math.max(0, Number(level?.requirement_bonus_redeemed || 0));
     const baseStart = account?.level_assigned_at || account?.joined_at;
     let sinceAt = toMysqlDateTime(baseStart);
     if (!sinceAt) return null;
@@ -375,6 +379,22 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           AND registered_at >= ?`,
       [tenantId, customerId, sinceAt]
     );
+    const useCumulativeBonusAccrued = bonusAccruedTarget > 0 && !(periodDays > 0);
+    const bonusAccruedSinceAt = useCumulativeBonusAccrued ? toMysqlDateTime(account?.joined_at) : sinceAt;
+    const bonusStatsSinceAt = bonusAccruedSinceAt && bonusAccruedSinceAt < sinceAt ? bonusAccruedSinceAt : sinceAt;
+    const bonusAccruedConsumed = useCumulativeBonusAccrued
+      ? getBonusAccruedConsumedBeforeLevel(level?._allLevels, Number(level?.id || 0))
+      : 0;
+    const [[bonusStats]] = await queryable.query(
+      `SELECT
+          COALESCE(SUM(CASE WHEN type IN ('join', 'accrual', 'referral_accrual', 'level_up') AND created_at >= ? THEN amount ELSE 0 END), 0) AS bonus_accrued,
+          COALESCE(SUM(CASE WHEN type = 'redeem' AND created_at >= ? THEN amount ELSE 0 END), 0) AS bonus_redeemed
+         FROM mkt_customer_bonus_transactions
+        WHERE tenant_id = ?
+          AND customer_id = ?
+          AND created_at >= ?`,
+      [bonusAccruedSinceAt || sinceAt, sinceAt, tenantId, customerId, bonusStatsSinceAt]
+    );
     return {
       amountCurrent: Number(orderStats?.orders_amount || 0),
       amountTarget,
@@ -382,8 +402,28 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       ordersTarget,
       referralsCurrent: Number(referralStats?.referrals_count || 0),
       referralsTarget,
+      bonusAccruedCurrent: Math.max(0, Number(bonusStats?.bonus_accrued || 0) - bonusAccruedConsumed),
+      bonusAccruedTarget,
+      bonusRedeemedCurrent: Number(bonusStats?.bonus_redeemed || 0),
+      bonusRedeemedTarget,
       matchCount: Math.max(1, Number(level?.requirement_match_count || 1)),
     };
+  }
+
+  function getBonusAccruedTarget(level) {
+    if (!level || String(level?.access_type || "").trim() !== "conditions") return 0;
+    return Math.max(0, Number(level.requirement_bonus_accrued || 0));
+  }
+
+  function getBonusAccruedConsumedBeforeLevel(levels, targetLevelId) {
+    const rows = Array.isArray(levels) ? levels : [];
+    const targetId = Number(targetLevelId || 0);
+    let consumed = 0;
+    for (const row of rows) {
+      if (Number(row?.id || 0) === targetId) break;
+      consumed += getBonusAccruedTarget(row);
+    }
+    return consumed;
   }
 
   async function promoteOrderBonusAccountIfEligible(queryable, tenantId, customerId) {
@@ -401,6 +441,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
     const [levels] = await queryable.query(
       `SELECT id, sort_order, access_type, reward_bonus_amount,
               requirement_amount, requirement_orders, requirement_referrals,
+              requirement_bonus_accrued, requirement_bonus_redeemed,
               requirement_match_count, requirement_period_days
          FROM mkt_bonus_levels
         WHERE tenant_id = ? AND is_active = 1
@@ -408,41 +449,56 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       [tenantId]
     );
     const rows = Array.isArray(levels) ? levels : [];
-    const currentLevelId = Number(account.level_id || 0);
-    const currentIndex = rows.findIndex((row) => Number(row?.id || 0) === currentLevelId);
-    if (currentIndex < 0) return account;
-    const nextLevel = rows.slice(currentIndex + 1).find((row) => String(row?.access_type || "").trim() === "conditions");
-    if (!nextLevel) return account;
+    let currentAccount = { ...account };
+    for (let guard = 0; guard < rows.length; guard += 1) {
+      const currentLevelId = Number(currentAccount.level_id || 0);
+      const currentIndex = rows.findIndex((row) => Number(row?.id || 0) === currentLevelId);
+      if (currentIndex < 0) break;
+      const nextLevel = rows.slice(currentIndex + 1).find((row) => String(row?.access_type || "").trim() === "conditions");
+      if (!nextLevel) break;
 
-    const progress = await loadBonusLevelRequirementProgress(queryable, tenantId, customerId, account, nextLevel);
-    if (!isBonusLevelRequirementComplete(progress)) return account;
+      const progress = await loadBonusLevelRequirementProgress(
+        queryable,
+        tenantId,
+        customerId,
+        currentAccount,
+        { ...nextLevel, _allLevels: rows }
+      );
+      if (!isBonusLevelRequirementComplete(progress)) break;
 
-    const rewardAmount = roundMoney(Math.max(0, Number(nextLevel.reward_bonus_amount || 0)));
-    const nextBalance = roundMoney(Number(account.balance || 0) + rewardAmount);
-    const [updateResult] = await queryable.query(
-      `UPDATE mkt_customer_bonus_accounts
-          SET level_id = ?,
-              balance = COALESCE(balance, 0) + ?,
-              total_accrued = COALESCE(total_accrued, 0) + ?,
-              level_assigned_at = NOW()
-        WHERE tenant_id = ? AND id = ? AND customer_id = ? AND level_id = ?`,
-      [Number(nextLevel.id), rewardAmount, rewardAmount, tenantId, Number(account.id), customerId, currentLevelId]
-    );
-    if (!(Number(updateResult?.affectedRows || 0) > 0)) return account;
+      const rewardAmount = roundMoney(Math.max(0, Number(nextLevel.reward_bonus_amount || 0)));
+      const nextBalance = roundMoney(Number(currentAccount.balance || 0) + rewardAmount);
+      const [updateResult] = await queryable.query(
+        `UPDATE mkt_customer_bonus_accounts
+            SET level_id = ?,
+                balance = COALESCE(balance, 0) + ?,
+                total_accrued = COALESCE(total_accrued, 0) + ?,
+                level_assigned_at = NOW()
+          WHERE tenant_id = ? AND id = ? AND customer_id = ? AND level_id = ?`,
+        [Number(nextLevel.id), rewardAmount, rewardAmount, tenantId, Number(account.id), customerId, currentLevelId]
+      );
+      if (!(Number(updateResult?.affectedRows || 0) > 0)) break;
 
-    await queryable.query(
-      `INSERT INTO mkt_customer_bonus_transactions
-         (tenant_id, account_id, customer_id, level_id, type, amount, balance_after, reason, created_at)
-       VALUES (?, ?, ?, ?, 'level_up', ?, ?, ?, NOW())`,
-      [tenantId, Number(account.id), customerId, Number(nextLevel.id), rewardAmount, nextBalance, "level_up"]
-    );
-    await queryable.query(
-      `INSERT INTO mkt_customer_bonus_modal_events
-         (tenant_id, customer_id, event_type, from_level_id, to_level_id, created_at)
-       VALUES (?, ?, 'level_up', ?, ?, NOW())`,
-      [tenantId, customerId, currentLevelId || null, Number(nextLevel.id)]
-    );
-    return { ...account, level_id: Number(nextLevel.id), balance: nextBalance };
+      await queryable.query(
+        `INSERT INTO mkt_customer_bonus_transactions
+           (tenant_id, account_id, customer_id, level_id, type, amount, balance_after, reason, created_at)
+         VALUES (?, ?, ?, ?, 'level_up', ?, ?, ?, NOW())`,
+        [tenantId, Number(account.id), customerId, Number(nextLevel.id), rewardAmount, nextBalance, "level_up"]
+      );
+      await queryable.query(
+        `INSERT INTO mkt_customer_bonus_modal_events
+           (tenant_id, customer_id, event_type, from_level_id, to_level_id, created_at)
+         VALUES (?, ?, 'level_up', ?, ?, NOW())`,
+        [tenantId, customerId, currentLevelId || null, Number(nextLevel.id)]
+      );
+      currentAccount = {
+        ...currentAccount,
+        level_id: Number(nextLevel.id),
+        balance: nextBalance,
+        level_assigned_at: new Date(),
+      };
+    }
+    return currentAccount;
   }
 
   function parseOrderItemsJson(rawValue) {
@@ -587,7 +643,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       );
       const unresolvedComboIds = [...new Set(items
         .filter((item) => String(item?.type || '').trim().toLowerCase() === 'combo' || Number(item?.combo_id || item?.combo?.id || 0) > 0)
-        .filter((item) => !getOrderBonusItemCategoryIds(item).size)
+        .filter((item) => !(Number(item?.combo_category_id || item?.combo?.combo_category_id || item?.combo?.category_id || 0) > 0))
         .map((item) => Number(item?.combo_id || item?.combo?.id || 0))
         .filter((id) => id > 0))];
       if (selectedCategoryPercents.size && unresolvedComboIds.length) {
@@ -3190,6 +3246,10 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           lineTotal,
           Math.max(0, Number(rawItem?.benefits_excluded_line_total ?? rawItem?.discount_excluded_line_total ?? 0) || 0)
         ));
+        const bonusRedeemLineAmount = roundMoney(Math.min(
+          Math.max(0, originalLineTotal - lineTotal),
+          Math.max(0, Number(rawItem?.bonus_redeem_line_amount ?? rawItem?.bonusRedeemLineAmount ?? 0) || 0)
+        ));
 
         if (String(rawItem?.type || "").toLowerCase() === "combo" || Number(rawItem?.combo_id || 0) > 0) {
           const comboId = Number(rawItem?.combo_id || 0);
@@ -3208,6 +3268,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
             qty,
             line_total: lineTotal,
             old_line_total: originalLineTotal,
+            bonus_redeem_line_amount: bonusRedeemLineAmount,
             benefits_excluded_line_total: benefitsExcludedLineTotal,
             sections: Array.isArray(rawItem?.sections) ? rawItem.sections : [],
             selections: Array.isArray(rawItem?.selections) ? rawItem.selections : [],
@@ -3261,6 +3322,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           gift_reward_id: Number(rawItem?.gift_reward_id || 0) > 0 ? Number(rawItem.gift_reward_id) : null,
           line_total: lineTotal,
           old_line_total: originalLineTotal,
+          bonus_redeem_line_amount: bonusRedeemLineAmount,
           benefits_excluded_line_total: benefitsExcludedLineTotal,
         });
       }
@@ -3449,6 +3511,10 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         item.qty = qty;
         item.line_total = lineTotal;
         item.old_line_total = oldLineTotal;
+        item.bonus_redeem_line_amount = roundMoney(Math.min(
+          Math.max(0, oldLineTotal - lineTotal),
+          Math.max(0, Number(item?.bonus_redeem_line_amount ?? item?.bonusRedeemLineAmount ?? 0) || 0)
+        ));
         item.benefits_excluded_line_total = roundMoney(Math.min(
           lineTotal,
           Math.max(0, Number(item?.benefits_excluded_line_total ?? item?.discount_excluded_line_total ?? 0) || 0)
@@ -3502,7 +3568,11 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           item.price = qty > 0 ? roundMoney(lineTotal / qty) : 0;
           item.old_price = qty > 0 ? roundMoney(oldLineTotal / qty) : 0;
           const comboId = Number(item?.combo_id || 0);
-          const comboCategoryId = Number(item?.combo_category_id || comboCategoryIdsById.get(comboId) || 0);
+          const comboCategoryId = Number(
+            (comboId > 0 ? comboCategoryIdsById.get(comboId) : 0)
+            || item?.combo_category_id
+            || 0
+          );
           const sectionCategoryIds = (Array.isArray(item?.sections) ? item.sections : [])
             .map((section) => Number(section?.category_id || 0))
             .filter((categoryId, index, list) => categoryId > 0 && list.indexOf(categoryId) === index);
@@ -3658,7 +3728,9 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       const oldItemsTotal = roundMoney(items.reduce((sum, item) => {
         const line = Number(item?.line_total || 0);
         const old = Number(item?.old_line_total || line);
-        return sum + (old > line ? old : line);
+        const bonusLineAmount = Math.max(0, Number(item?.bonus_redeem_line_amount || 0));
+        const itemDiscountBase = old > line ? Math.max(line, old - bonusLineAmount) : line;
+        return sum + itemDiscountBase;
       }, 0));
       const itemLevelDiscountAmount = roundMoney(Math.max(0, oldItemsTotal - itemsTotal));
       const itemsTotalOverrideRaw = Number(req.body?.benefits_items_total_override);

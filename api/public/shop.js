@@ -961,6 +961,22 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     return matched >= required;
   }
 
+  function getPublicBonusLevelAccruedTarget(levelRow) {
+    if (!levelRow || String(levelRow?.access_type || '').trim() !== 'conditions') return 0;
+    return Math.max(0, Number(levelRow.requirement_bonus_accrued || 0));
+  }
+
+  function getPublicBonusAccruedConsumedBeforeLevel(levelRows, targetLevelId) {
+    const rows = Array.isArray(levelRows) ? levelRows : [];
+    const targetId = Number(targetLevelId || 0);
+    let consumed = 0;
+    for (const row of rows) {
+      if (Number(row?.id || 0) === targetId) break;
+      consumed += getPublicBonusLevelAccruedTarget(row);
+    }
+    return consumed;
+  }
+
   function getPublicBonusProgressLevelIds(accountRow, levelRows) {
     const rows = Array.isArray(levelRows) ? levelRows : [];
     const result = new Set();
@@ -1010,6 +1026,16 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       const sinceDate = periodStart ? maxDateOrNull(baseStart, periodStart) : maxDateOrNull(baseStart);
       const sinceAt = toMysqlDateTime(sinceDate);
       if (!sinceAt) continue;
+      const useCumulativeBonusAccrued = bonusAccruedTarget > 0
+        && targets.scope !== 'retention'
+        && !(periodDays > 0);
+      const bonusAccruedSinceAt = useCumulativeBonusAccrued
+        ? toMysqlDateTime(maxDateOrNull(accountRow.joined_at))
+        : sinceAt;
+      const bonusStatsSinceAt = bonusAccruedSinceAt && bonusAccruedSinceAt < sinceAt ? bonusAccruedSinceAt : sinceAt;
+      const bonusAccruedConsumed = useCumulativeBonusAccrued
+        ? getPublicBonusAccruedConsumedBeforeLevel(rows, Number(levelRow.id || 0))
+        : 0;
 
       const [[orderStats]] = await queryable.query(
         `SELECT COUNT(*) AS orders_count,
@@ -1038,13 +1064,13 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       );
       const [[bonusStats]] = await queryable.query(
         `SELECT
-            COALESCE(SUM(CASE WHEN type IN ('accrual', 'referral_accrual') THEN amount ELSE 0 END), 0) AS bonus_accrued,
-            COALESCE(SUM(CASE WHEN type = 'redeem' THEN amount ELSE 0 END), 0) AS bonus_redeemed
+            COALESCE(SUM(CASE WHEN type IN ('join', 'accrual', 'referral_accrual', 'level_up') AND created_at >= ? THEN amount ELSE 0 END), 0) AS bonus_accrued,
+            COALESCE(SUM(CASE WHEN type = 'redeem' AND created_at >= ? THEN amount ELSE 0 END), 0) AS bonus_redeemed
          FROM mkt_customer_bonus_transactions
          WHERE tenant_id=?
            AND customer_id=?
            AND created_at >= ?`,
-        [tenantId, customerId, sinceAt]
+        [bonusAccruedSinceAt || sinceAt, sinceAt, tenantId, customerId, bonusStatsSinceAt]
       );
 
       progressByLevel.set(Number(levelRow.id || 0), {
@@ -1057,7 +1083,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         orders_target: ordersTarget || null,
         referrals_current: Number(referralStats?.referrals_count || 0),
         referrals_target: referralsTarget || null,
-        bonus_accrued_current: Number(bonusStats?.bonus_accrued || 0),
+        bonus_accrued_current: Math.max(0, Number(bonusStats?.bonus_accrued || 0) - bonusAccruedConsumed),
         bonus_accrued_target: bonusAccruedTarget || null,
         bonus_redeemed_current: Number(bonusStats?.bonus_redeemed || 0),
         bonus_redeemed_target: bonusRedeemedTarget || null,
@@ -1105,42 +1131,51 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     if (!(tenantId > 0) || !(customerId > 0) || !(accountId > 0) || !accountRow?.joined_at || !rows.length) {
       return accountRow || null;
     }
-    const currentLevelId = Number(accountRow.level_id || 0);
-    const currentIndex = rows.findIndex((row) => Number(row?.id || 0) === currentLevelId);
-    if (currentIndex < 0) return accountRow;
-    const nextLevel = rows.slice(currentIndex + 1).find((row) => String(row?.access_type || '').trim() === 'conditions');
-    if (!nextLevel) return accountRow;
+    let currentAccount = { ...accountRow };
+    for (let guard = 0; guard < rows.length; guard += 1) {
+      const currentLevelId = Number(currentAccount.level_id || 0);
+      const currentIndex = rows.findIndex((row) => Number(row?.id || 0) === currentLevelId);
+      if (currentIndex < 0) break;
+      const nextLevel = rows.slice(currentIndex + 1).find((row) => String(row?.access_type || '').trim() === 'conditions');
+      if (!nextLevel) break;
 
-    const progressByLevel = await loadPublicBonusProgressByLevel(tenantId, customer, rows, accountRow, queryable);
-    const progress = progressByLevel.get(Number(nextLevel.id || 0));
-    if (!isPublicBonusProgressComplete(progress)) return accountRow;
+      const progressByLevel = await loadPublicBonusProgressByLevel(tenantId, customer, rows, currentAccount, queryable);
+      const progress = progressByLevel.get(Number(nextLevel.id || 0));
+      if (!isPublicBonusProgressComplete(progress)) break;
 
-    const rewardAmount = Math.max(0, Number(nextLevel.reward_bonus_amount || 0));
-    const currentBalance = Math.max(0, Number(accountRow.balance || 0));
-    const nextBalance = currentBalance + rewardAmount;
-    const [updateResult] = await queryable.query(
-      `UPDATE mkt_customer_bonus_accounts
-       SET level_id=?,
-           balance=COALESCE(balance, 0) + ?,
-           total_accrued=COALESCE(total_accrued, 0) + ?,
-           level_assigned_at=NOW()
-       WHERE tenant_id=? AND id=? AND customer_id=? AND level_id=?`,
-      [Number(nextLevel.id), rewardAmount, rewardAmount, tenantId, accountId, customerId, currentLevelId]
-    );
-    if (!(Number(updateResult?.affectedRows || 0) > 0)) return accountRow;
+      const rewardAmount = Math.max(0, Number(nextLevel.reward_bonus_amount || 0));
+      const currentBalance = Math.max(0, Number(currentAccount.balance || 0));
+      const nextBalance = currentBalance + rewardAmount;
+      const [updateResult] = await queryable.query(
+        `UPDATE mkt_customer_bonus_accounts
+         SET level_id=?,
+             balance=COALESCE(balance, 0) + ?,
+             total_accrued=COALESCE(total_accrued, 0) + ?,
+             level_assigned_at=NOW()
+         WHERE tenant_id=? AND id=? AND customer_id=? AND level_id=?`,
+        [Number(nextLevel.id), rewardAmount, rewardAmount, tenantId, accountId, customerId, currentLevelId]
+      );
+      if (!(Number(updateResult?.affectedRows || 0) > 0)) break;
 
-    await queryable.query(
-      `INSERT INTO mkt_customer_bonus_transactions
-         (tenant_id, account_id, customer_id, level_id, type, amount, balance_after, reason, created_at)
-       VALUES (?, ?, ?, ?, 'level_up', ?, ?, ?, NOW())`,
-      [tenantId, accountId, customerId, Number(nextLevel.id), rewardAmount, nextBalance, 'level_up']
-    );
-    await queryable.query(
-      `INSERT INTO mkt_customer_bonus_modal_events
-         (tenant_id, customer_id, event_type, from_level_id, to_level_id, created_at)
-       VALUES (?, ?, 'level_up', ?, ?, NOW())`,
-      [tenantId, customerId, currentLevelId || null, Number(nextLevel.id)]
-    );
+      await queryable.query(
+        `INSERT INTO mkt_customer_bonus_transactions
+           (tenant_id, account_id, customer_id, level_id, type, amount, balance_after, reason, created_at)
+         VALUES (?, ?, ?, ?, 'level_up', ?, ?, ?, NOW())`,
+        [tenantId, accountId, customerId, Number(nextLevel.id), rewardAmount, nextBalance, 'level_up']
+      );
+      await queryable.query(
+        `INSERT INTO mkt_customer_bonus_modal_events
+           (tenant_id, customer_id, event_type, from_level_id, to_level_id, created_at)
+         VALUES (?, ?, 'level_up', ?, ?, NOW())`,
+        [tenantId, customerId, currentLevelId || null, Number(nextLevel.id)]
+      );
+      currentAccount = {
+        ...currentAccount,
+        level_id: Number(nextLevel.id),
+        balance: nextBalance,
+        level_assigned_at: new Date(),
+      };
+    }
 
     const [[updatedAccountRow]] = await queryable.query(
       `SELECT id, customer_id, level_id, balance, status, joined_at, level_assigned_at
@@ -19000,6 +19035,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             lineTotal,
             Math.max(0, Number(it?.benefits_excluded_line_total ?? it?.discount_excluded_line_total ?? 0) || 0)
           ));
+          const bonusRedeemLineAmountFromRequest = roundPrice(Math.min(
+            Math.max(0, oldLineTotalFromRequest - lineTotal),
+            Math.max(0, Number(it?.bonus_redeem_line_amount ?? it?.bonusRedeemLineAmount ?? 0) || 0)
+          ));
           const selections = Array.isArray(it.selections) ? it.selections : [];
           const photos = [];
           selections.forEach((s) => {
@@ -19021,6 +19060,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             old_price: oldLineTotalFromRequest > 0 && qty > 0 ? roundPrice(oldLineTotalFromRequest / qty) : 0,
             line_total: lineTotal,
             old_line_total: oldLineTotalFromRequest,
+            bonus_redeem_line_amount: bonusRedeemLineAmountFromRequest,
             benefits_excluded_line_total: benefitsExcludedLineTotalFromRequest,
             photos,
             selections: selections.map((s) => ({
@@ -19482,6 +19522,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             : (normalizedOriginalLineTotalFromRequest > lineTotalAfterDiscount
               ? normalizedOriginalLineTotalFromRequest
               : 0),
+          bonus_redeem_line_amount: roundPrice(Math.min(
+            Math.max(0, (normalizedOriginalLineTotalFromRequest || snapshotOldLineTotal || lineTotalAfterDiscount) - lineTotalAfterDiscount),
+            Math.max(0, Number(it?.bonus_redeem_line_amount ?? it?.bonusRedeemLineAmount ?? 0) || 0)
+          )),
           photos, // Р РЋР С•РЎвЂ¦РЎР‚Р В°Р Р…РЎРЏР ВµР С РЎвЂћР С•РЎвЂљР С• Р Т‘Р В»РЎРЏ Р С•РЎвЂљРЎвЂЎР ВµРЎвЂљР С•Р Р†
           options: options.length > 0 ? options : undefined, // Р РЋР С•РЎвЂ¦РЎР‚Р В°Р Р…РЎРЏР ВµР С Р С•Р С—РЎвЂ Р С‘Р С‘ РЎвЂљР С•Р В»РЎРЉР С”Р С• Р ВµРЎРѓР В»Р С‘ Р С•Р Р…Р С‘ Р ВµРЎРѓРЎвЂљРЎРЉ
           ingredients: ingredients.length > 0 ? ingredients : undefined, // Р РЋР С•РЎвЂ¦РЎР‚Р В°Р Р…РЎРЏР ВµР С Р С‘Р Р…Р С–РЎР‚Р ВµР Т‘Р С‘Р ВµР Р…РЎвЂљРЎвЂ№ РЎвЂљР С•Р В»РЎРЉР С”Р С• Р ВµРЎРѓР В»Р С‘ Р С•Р Р…Р С‘ Р ВµРЎРѓРЎвЂљРЎРЉ

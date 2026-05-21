@@ -5095,7 +5095,7 @@
     const clientId = Number(form?.clientId || 0);
     const cartItems = Array.isArray(form?.cartItems) ? form.cartItems : [];
     const activeEditPricingSnapshot = getRightOrderActiveEditPricingSnapshot(order);
-    const subtotal = roundPrice(cartItems.reduce((sum, item) => sum + getRightOrderCartLineTotal(item), 0));
+    const subtotal = roundPrice(cartItems.reduce((sum, item) => sum + getRightOrderCartBaseLineTotal(item), 0));
     const subtotalEligibleForBenefits = getRightOrderCartBenefitsEligibleTotal(cartItems);
     const cartItemsCount = cartItems.reduce((sum, item) => sum + Math.max(1, Number(item?.qty || 1)), 0);
     const hasSelectedOrderBenefit = hasRightOrderBenefitsSelection(form);
@@ -5226,22 +5226,42 @@
       const snapshotSubtotalAfterDiscount = roundPrice(Number(activeEditPricingSnapshot?.subtotalAfterDiscount || 0));
       const snapshotDeliveryApplied = roundPrice(Number(activeEditPricingSnapshot?.deliveryCost || 0));
       const snapshotPayableTotal = roundPrice(Number(activeEditPricingSnapshot?.payableTotal || 0));
-      const snapshotBonusRedeemAmount = roundPrice(Math.max(0, Number(activeEditPricingSnapshot?.bonusRedeemAmount || 0)));
+      const snapshotBreakdown = Array.isArray(activeEditPricingSnapshot?.breakdown)
+        ? activeEditPricingSnapshot.breakdown
+        : [];
+      const snapshotBonusBreakdownAmount = roundPrice(
+        snapshotBreakdown.reduce((sum, entry) => (
+          sum + (isRightOrderBonusRedeemDiscountEntry(entry) ? Math.max(0, Number(entry?.amount || 0)) : 0)
+        ), 0)
+      );
+      const snapshotBonusRedeemAmount = roundPrice(Math.max(
+        0,
+        Number(activeEditPricingSnapshot?.bonusRedeemAmount || 0),
+        snapshotBonusBreakdownAmount
+      ));
       const snapshotBonusRedeemStored = snapshotBonusRedeemAmount > 0 || activeEditPricingSnapshot?.bonusRedeemEnabled === true;
       const snapshotBonusRedeemMapValue = state.rightBonusRedeemEnabledByOrder.get(orderId);
       const snapshotBonusRedeemEnabled = snapshotBonusRedeemStored
         ? snapshotBonusRedeemMapValue !== false
         : snapshotBonusRedeemMapValue === true;
       const snapshotBonusRedeemAppliedAmount = snapshotBonusRedeemEnabled ? snapshotBonusRedeemAmount : 0;
+      const snapshotEffectiveBreakdown = snapshotBonusRedeemEnabled
+        ? snapshotBreakdown
+        : snapshotBreakdown.filter((entry) => !isRightOrderBonusRedeemDiscountEntry(entry));
+      const snapshotEffectiveBreakdownTotal = getRightOrderDiscountBreakdownTotal(snapshotEffectiveBreakdown);
       const snapshotEffectiveTotalDiscount = snapshotBonusRedeemEnabled
         ? snapshotTotalDiscount
-        : roundPrice(Math.max(0, snapshotTotalDiscount - snapshotBonusRedeemAmount));
+        : (
+            snapshotBreakdown.length > 0
+              ? snapshotEffectiveBreakdownTotal
+              : roundPrice(Math.max(0, snapshotTotalDiscount - snapshotBonusRedeemAmount))
+          );
       const snapshotEffectiveSubtotalAfterDiscount = snapshotBonusRedeemEnabled
         ? snapshotSubtotalAfterDiscount
-        : roundPrice(snapshotSubtotalAfterDiscount + snapshotBonusRedeemAmount);
+        : roundPrice(Math.max(0, snapshotSubtotalBeforeDiscount - snapshotEffectiveTotalDiscount));
       const snapshotEffectivePayableTotal = snapshotBonusRedeemEnabled
         ? snapshotPayableTotal
-        : roundPrice(snapshotPayableTotal + snapshotBonusRedeemAmount);
+        : roundPrice(snapshotEffectiveSubtotalAfterDiscount + snapshotDeliveryApplied);
       const snapshotBonusAccrualAmount = Math.floor(Math.max(0, Number(activeEditPricingSnapshot?.bonusAccrualAmount || 0)));
       const snapshotBonusData = clientId > 0 ? (state.rightBonusCardByClientId.get(clientId) || null) : null;
       const snapshotBonusAccount = snapshotBonusData?.account && typeof snapshotBonusData.account === "object"
@@ -5270,13 +5290,7 @@
         savedDiscountSummary: {
           subtotalBeforeDiscount: snapshotSubtotalBeforeDiscount,
           totalDiscount: snapshotEffectiveTotalDiscount,
-          breakdown: Array.isArray(activeEditPricingSnapshot?.breakdown)
-            ? (
-                snapshotBonusRedeemEnabled
-                  ? activeEditPricingSnapshot.breakdown
-                  : activeEditPricingSnapshot.breakdown.filter((entry) => String(entry?.key || "").trim().toLowerCase() !== "bonus_redeem")
-              )
-            : [],
+          breakdown: snapshotEffectiveBreakdown,
           orderDiscountTitles: [],
         },
         deliveryQuote: quote,
@@ -5498,8 +5512,19 @@
     return roundPrice(unitPrice * qty);
   }
 
-  function getRightOrderCartBenefitsExcludedLineTotal(item) {
+  function getRightOrderCartBaseLineTotal(item) {
     const lineTotal = getRightOrderCartLineTotal(item);
+    const bonusRedeemLineAmount = getRightOrderCartBonusRedeemLineAmount(item);
+    if (!(bonusRedeemLineAmount > 0)) return lineTotal;
+    const storedOriginalLineTotal = getRightOrderStoredOriginalLineTotal(item);
+    if (storedOriginalLineTotal > lineTotal) {
+      return roundPrice(Math.min(storedOriginalLineTotal, lineTotal + bonusRedeemLineAmount));
+    }
+    return lineTotal;
+  }
+
+  function getRightOrderCartBenefitsExcludedLineTotal(item) {
+    const lineTotal = getRightOrderCartBaseLineTotal(item);
     const excluded = roundPrice(Math.max(
       0,
       Number(item?.benefits_excluded_line_total ?? item?.discount_excluded_line_total ?? 0) || 0
@@ -5508,7 +5533,7 @@
   }
 
   function getRightOrderCartBenefitsEligibleLineTotal(item) {
-    const lineTotal = getRightOrderCartLineTotal(item);
+    const lineTotal = getRightOrderCartBaseLineTotal(item);
     return roundPrice(Math.max(0, lineTotal - getRightOrderCartBenefitsExcludedLineTotal(item)));
   }
 
@@ -5545,6 +5570,44 @@
       if (originalFromUnit > currentLineTotal) return originalFromUnit;
     }
     return currentLineTotal;
+  }
+
+  function getRightOrderCartBonusRedeemLineAmount(item) {
+    const rawValue = Number(item?.bonus_redeem_line_amount ?? item?.bonusRedeemLineAmount ?? 0);
+    if (!Number.isFinite(rawValue) || rawValue <= 0) return 0;
+    return roundPrice(rawValue);
+  }
+
+  function restoreRightOrderCartItemsBeforeBonusRedeem(cartItems) {
+    if (!Array.isArray(cartItems)) return [];
+    return cartItems.map((item) => {
+      if (!item || typeof item !== "object") return item;
+      const bonusRedeemLineAmount = getRightOrderCartBonusRedeemLineAmount(item);
+      if (!(bonusRedeemLineAmount > 0)) return item;
+      const next = { ...item };
+      const currentLineTotal = getRightOrderCartLineTotal(item);
+      const storedOriginalLineTotal = getRightOrderStoredOriginalLineTotal(item);
+      const restoredLineTotal = storedOriginalLineTotal > currentLineTotal
+        ? roundPrice(Math.min(storedOriginalLineTotal, currentLineTotal + bonusRedeemLineAmount))
+        : currentLineTotal;
+      next.sum = restoredLineTotal;
+      next.line_total = restoredLineTotal;
+      next.total = restoredLineTotal;
+      next.total_price = restoredLineTotal;
+      const qty = Math.max(1, Number(next.qty || next.quantity || 1));
+      next.unit_price = roundPrice(restoredLineTotal / qty);
+      next.bonus_redeem_line_amount = 0;
+      next.bonusRedeemLineAmount = 0;
+      if (next.benefits_excluded_line_total != null || next.discount_excluded_line_total != null) {
+        const excluded = roundPrice(Math.min(
+          restoredLineTotal,
+          Math.max(0, Number(next.benefits_excluded_line_total ?? next.discount_excluded_line_total ?? 0) || 0)
+        ));
+        next.benefits_excluded_line_total = excluded;
+        next.discount_excluded_line_total = excluded;
+      }
+      return next;
+    });
   }
 
   function distributeRightOrderDiscountAcrossLines(lineStates, extraOrderDiscount) {
@@ -5649,7 +5712,7 @@
     };
     const lineStates = source.map((item) => {
       const qty = Math.max(0, Number(item?.qty || item?.quantity || 0));
-      const baseTotal = roundPrice(Math.max(0, Number(getRightOrderCartLineTotal(item) || 0)));
+      const baseTotal = roundPrice(Math.max(0, Number(getRightOrderCartBaseLineTotal(item) || 0)));
       const storedOriginalLineTotal = getRightOrderStoredOriginalLineTotal(item);
       const cartLineKey = resolveCartLineKey(item);
       const localLineTotalRaw = cartLineKey && localLineTotalsByCartKey
@@ -5759,6 +5822,69 @@
     return null;
   }
 
+  function isRightOrderBonusRedeemDiscountEntry(entry) {
+    const key = String(entry?.key || "").trim().toLowerCase();
+    const sourceKind = String(entry?.sourceKind || entry?.source_kind || entry?.source || "").trim().toLowerCase();
+    const title = String(entry?.title || entry?.name || "").trim().toLowerCase();
+    return key === "bonus_redeem" || sourceKind === "bonus" || title === "бонусы";
+  }
+
+  function getRightOrderDiscountBreakdownTotal(entries) {
+    return roundPrice(
+      (Array.isArray(entries) ? entries : []).reduce((sum, entry) => (
+        sum + Math.max(0, Number(entry?.amount ?? entry?.discount_amount ?? 0) || 0)
+      ), 0)
+    );
+  }
+
+  function normalizeRightOrderDiscountSummaryForBonusRedeemMode(summary, orderId, redeemEnabled, redeemAmount = 0) {
+    if (!summary || typeof summary !== "object") return summary;
+    if (redeemEnabled) return summary;
+    const storedRedeemAmount = roundPrice(Math.max(
+      0,
+      Number(redeemAmount || 0),
+      getRightOrderStoredBonusRedeemAmount(orderId)
+    ));
+    const sourceRows = Array.isArray(summary?.breakdown) ? summary.breakdown : [];
+    let removedBonusAmount = 0;
+    const rowsWithoutBonus = [];
+    sourceRows.forEach((entry) => {
+      const amount = roundPrice(Math.max(0, Number(entry?.amount ?? entry?.discount_amount ?? 0) || 0));
+      if (isRightOrderBonusRedeemDiscountEntry(entry)) {
+        removedBonusAmount = roundPrice(removedBonusAmount + amount);
+        return;
+      }
+      rowsWithoutBonus.push(entry);
+    });
+    const rowsWithoutStaleOther = [];
+    rowsWithoutBonus.forEach((entry) => {
+      const key = String(entry?.key || "").trim().toLowerCase();
+      const amount = roundPrice(Math.max(0, Number(entry?.amount ?? entry?.discount_amount ?? 0) || 0));
+      const looksLikeRemovedBonus = storedRedeemAmount > 0
+        && key === "other_discount"
+        && Math.abs(amount - storedRedeemAmount) < 0.01;
+      if (looksLikeRemovedBonus) {
+        removedBonusAmount = roundPrice(removedBonusAmount + amount);
+        return;
+      }
+      rowsWithoutStaleOther.push(entry);
+    });
+    if (!(removedBonusAmount > 0) && rowsWithoutStaleOther.length === sourceRows.length) return summary;
+    const breakdownTotal = getRightOrderDiscountBreakdownTotal(rowsWithoutStaleOther);
+    const currentTotal = roundPrice(Math.max(0, Number(summary?.totalDiscount || 0)));
+    const fallbackTotal = storedRedeemAmount > 0
+      ? roundPrice(Math.max(0, currentTotal - storedRedeemAmount))
+      : currentTotal;
+    const totalDiscount = rowsWithoutStaleOther.length > 0
+      ? breakdownTotal
+      : fallbackTotal;
+    return {
+      ...summary,
+      totalDiscount,
+      breakdown: rowsWithoutStaleOther,
+    };
+  }
+
   function buildRightOrderDiscountBreakdownEntries(sourceEntries, opts = {}) {
     const promoCode = normalizeRightOrderBenefitsPromoCode(opts?.promoCode);
     return (Array.isArray(sourceEntries) ? sourceEntries : [])
@@ -5858,14 +5984,17 @@
         currentLineTotal: lineTotal,
       });
 
-      const lineDiscount = roundPrice(Math.max(0, originalLineTotal - lineTotal));
+      const bonusRedeemLineAmount = getRightOrderCartBonusRedeemLineAmount(item);
+      const lineDiscount = roundPrice(Math.max(0, originalLineTotal - lineTotal - bonusRedeemLineAmount));
       if (!(lineDiscount > 0)) return;
 
-      if (String(item?.type || "") === "combo") {
+      const isComboItem = String(item?.type || "") === "combo";
+      const isCheckoutComposedCombo = isComboItem && Number(item?.combo_id || 0) <= 0;
+      if (isComboItem && !isCheckoutComposedCombo) {
         comboDiscount += lineDiscount;
       } else if (isRightOrderAutoAddItem(item)) {
         autoAddDiscount += lineDiscount;
-      } else {
+      } else if (!isCheckoutComposedCombo) {
         productDiscount += lineDiscount;
       }
     });
@@ -6087,7 +6216,7 @@
     const savedDiscountSummary = cartSummary?.savedDiscountSummary && typeof cartSummary.savedDiscountSummary === "object"
       ? cartSummary.savedDiscountSummary
       : null;
-    const discountSummary = savedDiscountSummary || buildRightOrderDiscountSummaryFromCart(
+    let discountSummary = savedDiscountSummary || buildRightOrderDiscountSummaryFromCart(
       cartItems,
       cartSummary?.subtotalAfterCustomerDiscount,
       {
@@ -6098,6 +6227,12 @@
         bonusRedeemAmount: cartSummary?.bonusRedeemAmount,
         subtotalAfterBonus: cartSummary?.subtotalAfterCustomerDiscount,
       }
+    );
+    discountSummary = normalizeRightOrderDiscountSummaryForBonusRedeemMode(
+      discountSummary,
+      orderId,
+      Boolean(cartSummary?.bonusRedeemEnabled),
+      cartSummary?.bonusRedeemAmount
     );
     const discountAmount = roundPrice(Number(discountSummary?.totalDiscount || 0));
     const hasDiscount = discountAmount > 0;
@@ -6275,13 +6410,24 @@
         state.rightBonusRedeemAccountIdByOrder.delete(id);
       }
     }
-    if (String(order?.mode || "").trim().toLowerCase() === "edit" && orderIndex >= 0) {
-      state.rightOrders[orderIndex] = {
-        ...order,
-        editCartTouched: true,
-        editPricingSnapshot: null,
-        editPricingBaselineSignature: "",
-      };
+    if (orderIndex >= 0) {
+      const nextForm = order?.form && typeof order.form === "object" ? { ...order.form } : {};
+      if (!enabled) {
+        nextForm.cartItems = restoreRightOrderCartItemsBeforeBonusRedeem(nextForm.cartItems);
+      }
+      const isEditOrder = String(order?.mode || "").trim().toLowerCase() === "edit";
+      state.rightOrders[orderIndex] = isEditOrder
+        ? {
+            ...order,
+            form: nextForm,
+            editCartTouched: true,
+            editPricingSnapshot: null,
+            editPricingBaselineSignature: "",
+          }
+        : {
+            ...order,
+            form: nextForm,
+          };
     }
     invalidateRightOrderLiveSummary(id);
     renderRightOrderTabs();
@@ -6372,6 +6518,19 @@
           return acc;
         }, {})
       : null;
+    const bonusRedeemLineAmountsRaw = opts?.bonusRedeemLineAmountByCartKey && typeof opts.bonusRedeemLineAmountByCartKey === "object"
+      ? opts.bonusRedeemLineAmountByCartKey
+      : null;
+    const normalizedBonusRedeemLineAmounts = bonusRedeemLineAmountsRaw
+      ? Object.entries(bonusRedeemLineAmountsRaw).reduce((acc, [rawKey, rawValue]) => {
+          const key = String(rawKey || "").trim();
+          if (!key) return acc;
+          const value = roundPrice(Math.max(0, Number(rawValue || 0)));
+          if (!Number.isFinite(value)) return acc;
+          acc[key] = value;
+          return acc;
+        }, {})
+      : null;
     const resolveCartLineKey = (item) => String(item?.cart_key || item?.key || item?.id || "").trim();
     const localEligibleItems = source.filter((item) => (
       item
@@ -6395,6 +6554,16 @@
       if (!key) return fallback;
       const candidate = roundPrice(Math.max(0, Number(normalizedLocalLineTotals[key] || 0)));
       return Number.isFinite(candidate) ? candidate : fallback;
+    };
+    const resolveBonusRedeemLineAmountForPayload = (item, lineTotal, originalLineTotal) => {
+      const fallback = getRightOrderCartBonusRedeemLineAmount(item);
+      const key = resolveCartLineKey(item);
+      const rawCandidate = key && normalizedBonusRedeemLineAmounts
+        ? Number(normalizedBonusRedeemLineAmounts[key])
+        : fallback;
+      const candidate = Number.isFinite(rawCandidate) ? rawCandidate : fallback;
+      const maxByLine = Math.max(0, Number(originalLineTotal || 0) - Number(lineTotal || 0));
+      return roundPrice(Math.min(Math.max(0, candidate), maxByLine));
     };
     const collectCategoryIdsForPayload = (item) => {
       const ids = [];
@@ -6435,6 +6604,7 @@
           currentLineTotal: baseLineTotal,
         });
         const oldLineTotal = oldLineTotalRaw > lineTotal ? oldLineTotalRaw : 0;
+        const bonusRedeemLineAmount = resolveBonusRedeemLineAmountForPayload(item, lineTotal, oldLineTotalRaw);
         const benefitsExcludedLineTotal = roundPrice(Math.min(
           lineTotal,
           Math.max(0, Number(item?.benefits_excluded_line_total ?? item?.discount_excluded_line_total ?? 0) || 0)
@@ -6471,6 +6641,7 @@
           qty,
           line_total: lineTotal,
           old_line_total: oldLineTotal,
+          bonus_redeem_line_amount: bonusRedeemLineAmount,
           benefits_excluded_line_total: benefitsExcludedLineTotal,
           selections,
         };
@@ -6497,6 +6668,7 @@
         currentLineTotal: baseLineTotal,
       });
       const originalLineTotal = originalLineTotalRaw > lineTotal ? originalLineTotalRaw : lineTotal;
+      const bonusRedeemLineAmount = resolveBonusRedeemLineAmountForPayload(item, lineTotal, originalLineTotalRaw);
       const optionItemsSource = Array.isArray(item?.option_items) ? item.option_items : [];
       const optionItems = optionItemsSource
         .map((opt) => {
@@ -6537,6 +6709,7 @@
         auto_add_group_id: Number(item?.auto_add_group_id || 0) > 0 ? Number(item.auto_add_group_id) : null,
         line_total: lineTotal,
         original_line_total: originalLineTotal,
+        bonus_redeem_line_amount: bonusRedeemLineAmount,
         benefits_excluded_line_total: benefitsExcludedLineTotal,
       };
       if (categoryIds.length) {
@@ -7026,7 +7199,7 @@
     );
     const displayedLineStates = buildRightOrderBonusRedeemDisplayLineStates(
       baseDisplayedLineStates,
-      summary?.bonusRedeemAmount || 0
+      roundPrice(Number(summary?.bonusRedeemAmount || 0))
     );
     const localLineTotalsByCartKey = (() => {
       const map = {};
@@ -7038,7 +7211,21 @@
       });
       return Object.keys(map).length ? map : null;
     })();
-    const items = buildRightOrderPayloadItems(cartItems, { localLineTotalsByCartKey });
+    const bonusRedeemLineAmountByCartKey = (() => {
+      const map = {};
+      cartItems.forEach((item, index) => {
+        const baseRow = baseDisplayedLineStates[index] || null;
+        const displayRow = displayedLineStates[index] || null;
+        const key = String(item?.cart_key || item?.key || item?.id || "").trim();
+        if (!key || !baseRow || !displayRow) return;
+        const amount = roundPrice(
+          Math.max(0, Number(baseRow?.currentTotal || 0) - Number(displayRow?.currentTotal || 0))
+        );
+        if (amount > 0) map[key] = amount;
+      });
+      return Object.keys(map).length ? map : null;
+    })();
+    const items = buildRightOrderPayloadItems(cartItems, { localLineTotalsByCartKey, bonusRedeemLineAmountByCartKey });
     if (!items.length) {
       setRightOrderSubmitFeedback(id, false);
       showNewOrderAlert("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0441\u043e\u0431\u0440\u0430\u0442\u044c \u043f\u043e\u0437\u0438\u0446\u0438\u0438 \u0437\u0430\u043a\u0430\u0437\u0430");
@@ -7055,7 +7242,7 @@
       : (summary?.benefitsPreviewSummary && typeof summary.benefitsPreviewSummary === "object"
         ? summary.benefitsPreviewSummary
         : null);
-    const discountSummary = savedDiscountSummary || buildRightOrderDiscountSummaryFromCart(
+    let discountSummary = savedDiscountSummary || buildRightOrderDiscountSummaryFromCart(
       cartItems,
       summary?.subtotalAfterCustomerDiscount,
       {
@@ -7066,6 +7253,12 @@
         bonusRedeemAmount: summary?.bonusRedeemAmount,
         subtotalAfterBonus: summary?.subtotalAfterCustomerDiscount,
       }
+    );
+    discountSummary = normalizeRightOrderDiscountSummaryForBonusRedeemMode(
+      discountSummary,
+      id,
+      Boolean(summary?.bonusRedeemEnabled),
+      summary?.bonusRedeemAmount
     );
 
     const payload = {
@@ -7122,6 +7315,36 @@
       }))
       .filter((entry) => Number(entry.discount_amount || 0) > 0);
     payload.discounts_json = payloadDiscountsJson;
+    const payloadItemsTotal = roundPrice(
+      items.reduce((sum, item) => sum + Number(item?.line_total || 0), 0)
+    );
+    const payloadDeliveryCost = isDeliveryMethod
+      ? roundPrice(Number(summary?.deliveryApplied ?? summary?.deliveryCost ?? 0))
+      : 0;
+    payload.use_client_pricing_snapshot = true;
+    payload.pricing_snapshot = {
+      version: 1,
+      source: "admin_checkout",
+      context: {
+        method_code: methodCode,
+        generated_at: Date.now(),
+      },
+      selections: {
+        selected_discount_id: normalizeRightOrderBenefitsSelectedId(form.selected_discount_id),
+        selected_discount_source: normalizeRightOrderBenefitsDiscountSource(form.selected_discount_source),
+        selected_promo_source: normalizeRightOrderBenefitsPromoSource(form.selected_promo_source),
+        selected_promo_reward_id: normalizeRightOrderBenefitsSelectedId(form.selected_promo_reward_id),
+        promo_code: normalizeRightOrderBenefitsPromoCode(form.promo_code),
+      },
+      summary: {
+        subtotal: roundPrice(Number(discountSummary?.subtotalBeforeDiscount || payloadItemsTotal)),
+        items_total: payloadItemsTotal,
+        delivery: payloadDeliveryCost,
+        discount_total: roundPrice(Number(discountSummary?.totalDiscount || 0)),
+        total: roundPrice(payloadItemsTotal + payloadDeliveryCost),
+        discount_breakdown: payloadDiscountsJson,
+      },
+    };
     if (Number(discountSummary?.totalDiscount || 0) > 0) {
       payload.discount_amount_override = roundPrice(Number(discountSummary?.totalDiscount || 0));
     }
@@ -7484,7 +7707,7 @@
       const categoryId = Number(key || 0);
       if (!(categoryId > 0)) return;
       const raw = categoryProductsById[key] || {};
-      const payload = buildCategoryPayload(raw.source, raw.combos);
+      const payload = buildCategoryPayload(raw.source, raw.combos, categoryId);
       state.categoryProductsCache.set(categoryId, payload);
       state.checkoutCategoryProducts.set(categoryId, payload.activeOnly);
     });
@@ -10665,31 +10888,54 @@
 
   function getRightBonusCartItemCategoryIds(item) {
     const ids = new Set();
+    const addId = (id) => {
+      const numericId = Number(id || 0);
+      if (numericId > 0) ids.add(numericId);
+    };
     [
       item?.category_id,
       item?._category_id,
       item?.combo_category_id,
       item?.product?.category_id,
       item?.product_category_id,
-    ].forEach((id) => {
-      const numericId = Number(id || 0);
-      if (numericId > 0) ids.add(numericId);
-    });
+    ].forEach(addId);
     if (Array.isArray(item?.category_ids)) {
-      item.category_ids.forEach((id) => {
-        const numericId = Number(id || 0);
-        if (numericId > 0) ids.add(numericId);
-      });
+      item.category_ids.forEach(addId);
+    }
+    if (Array.isArray(item?.checkout_category_ids)) {
+      item.checkout_category_ids.forEach(addId);
+    }
+    if (Array.isArray(item?.sections)) {
+      item.sections.forEach((section) => addId(section?.category_id));
     }
     return ids;
   }
 
+  function resolveRightBonusComboCategoryId(item) {
+    const directId = Number(item?.combo_category_id || item?.combo?.combo_category_id || item?.combo?.category_id || 0);
+    if (directId > 0) return directId;
+    const comboId = Number(item?.combo_id || item?.combo?.id || 0);
+    if (!(comboId > 0) || !(state.categoryProductsCache instanceof Map)) return 0;
+    for (const payload of state.categoryProductsCache.values()) {
+      const cards = Array.isArray(payload?.comboCards) ? payload.comboCards : [];
+      const found = cards.find((row) => Number(row?.combo_id || 0) === comboId);
+      const categoryId = Number(found?.combo_category_id || found?.category_id || 0);
+      if (categoryId > 0) return categoryId;
+    }
+    return 0;
+  }
+
   function getRightBonusCartItemFavoritePercent(item, selectedCategoryPercents) {
     if (!(selectedCategoryPercents instanceof Map) || !selectedCategoryPercents.size) return 0;
-    const comboCategoryId = Number(item?.combo_category_id || 0);
     const comboId = Number(item?.combo_id || item?.combo?.id || 0);
-    const isCombo = String(item?.type || "").trim().toLowerCase() === "combo" || comboId > 0;
-    if (isCombo) {
+    const isComboLike = String(item?.type || "").trim().toLowerCase() === "combo" || comboId > 0;
+    if (comboId > 0) {
+      const comboCategoryId = resolveRightBonusComboCategoryId(item);
+      if (comboCategoryId > 0) return Math.max(0, Number(selectedCategoryPercents.get(comboCategoryId) || 0));
+      return 0;
+    }
+    if (isComboLike) {
+      const comboCategoryId = Number(item?.combo_category_id || 0);
       if (comboCategoryId > 0) return Math.max(0, Number(selectedCategoryPercents.get(comboCategoryId) || 0));
       const ids = getRightBonusCartItemCategoryIds(item);
       const categoryId = Array.from(ids)[0] || 0;
@@ -15249,6 +15495,11 @@
       id: Date.now() + Math.floor(Math.random() * 10000),
       type: "combo",
       combo_id: comboId,
+      combo_category_id: Number(combo?.combo_category_id || combo?.category_id || state.comboModal.comboCategoryId || 0) || null,
+      category_id: Number(combo?.combo_category_id || combo?.category_id || state.comboModal.comboCategoryId || 0) || null,
+      category_ids: Number(combo?.combo_category_id || combo?.category_id || state.comboModal.comboCategoryId || 0) > 0
+        ? [Number(combo?.combo_category_id || combo?.category_id || state.comboModal.comboCategoryId || 0)]
+        : [],
       combo_title: String(combo?.title || "РљРѕРјР±Рѕ").trim(),
       name: String(combo?.title || "РљРѕРјР±Рѕ").trim(),
       qty,
@@ -15275,8 +15526,14 @@
       return;
     }
     closeProductOverlay();
+    const comboCategoryId = Number(opts?.comboCategoryId || opts?.categoryId || combo?.combo_category_id || combo?.category_id || opts?.cartItem?.combo_category_id || opts?.cartItem?.category_id || 0) || 0;
+    if (comboCategoryId > 0) {
+      combo.combo_category_id = comboCategoryId;
+      combo.category_id = comboCategoryId;
+    }
     state.comboModal.comboId = id;
     state.comboModal.combo = combo;
+    state.comboModal.comboCategoryId = comboCategoryId;
     state.comboModal.qty = Math.max(1, Number(opts?.mode === "edit" ? opts?.cartItem?.qty : 1) || 1);
     state.comboModal.mode = String(opts?.mode || "add") === "edit" ? "edit" : "add";
     state.comboModal.editOrderId = Number(opts?.orderId || 0);
@@ -16136,7 +16393,7 @@
       }
       const cached = readCategoryProductsCache(cid);
       if (Array.isArray(cached)) {
-        const payload = buildCategoryPayload(cached, []);
+        const payload = buildCategoryPayload(cached, [], cid);
         state.categoryProductsCache.set(cid, payload);
         state.checkoutCategoryProducts.set(cid, payload.activeOnly);
         allProducts.push(...payload.activeOnly);
@@ -16150,7 +16407,7 @@
         const json = await apiJson(`/api/public/products?category_id=${encodeURIComponent(String(categoryId))}`);
         const source = Array.isArray(json?.data) ? json.data : [];
         const combos = Array.isArray(json?.combos) ? json.combos : [];
-        const payload = buildCategoryPayload(source, combos);
+        const payload = buildCategoryPayload(source, combos, cid);
         state.categoryProductsCache.set(categoryId, payload);
         state.checkoutCategoryProducts.set(categoryId, payload.activeOnly);
         writeCategoryProductsCache(categoryId, source);
@@ -16994,10 +17251,12 @@
       card.setAttribute("data-is-available", isUnavailable ? "0" : "1");
       if (isComboCard) {
         const comboId = Number(product?.combo_id || product?.id || 0);
+        const comboCategoryId = Number(product?.combo_category_id || product?.category_id || 0);
         const comboPrice = Number(product?.min_price ?? product?.price ?? 0);
         const comboDiscountPercent = Math.max(0, Number(product?.discount_percent || 0));
         const comboDiscountLabel = formatDiscountPercentLabel(comboDiscountPercent);
         card.setAttribute("data-combo-id", String(comboId));
+        if (comboCategoryId > 0) card.setAttribute("data-combo-category-id", String(comboCategoryId));
         card.setAttribute("tabindex", isUnavailable ? "-1" : "0");
         card.innerHTML = `
           ${comboDiscountLabel ? `<span class="shop-sheet-discount-badge new-order-card-discount-badge">-${escapeHtml(comboDiscountLabel)}%</span>` : ""}
@@ -17968,33 +18227,39 @@
     schedulePersistBootstrapSnapshot();
   }
 
-  function buildComboCardsFromPayload(combos) {
+  function buildComboCardsFromPayload(combos, categoryId = 0) {
     return (Array.isArray(combos) ? combos : [])
       .filter((c) => Number(c?.is_active ?? 1) === 1)
-      .map((c, idx) => ({
-        id: 100000000 + Number(c?.id || idx + 1),
-        combo_id: Number(c?.id || 0),
-        type: "combo",
-        is_combo: 1,
-        title: String(c?.title || c?.name || "РљРѕРјР±Рѕ"),
-        name: String(c?.title || c?.name || "РљРѕРјР±Рѕ"),
-        description: String(c?.description || ""),
-        discount_percent: Number(c?.discount_percent || 0),
-        is_available: Number(c?.is_available ?? 1) === 1 ? 1 : 0,
-        min_price: Number(c?.min_price || 0),
-        price: Number(c?.min_price || 0),
-        image_thumb: c?.image_thumb || null,
-        image_url: c?.image_url || null,
-        grid_photos: Array.isArray(c?.grid_photos) ? c.grid_photos : [],
-        grid_photos_thumb: Array.isArray(c?.grid_photos_thumb) ? c.grid_photos_thumb : [],
-      }));
+      .map((c, idx) => {
+        const comboCategoryId = Number(c?.combo_category_id || c?.category_id || categoryId || 0) || 0;
+        return {
+          id: 100000000 + Number(c?.id || idx + 1),
+          combo_id: Number(c?.id || 0),
+          type: "combo",
+          is_combo: 1,
+          combo_category_id: comboCategoryId || null,
+          category_id: comboCategoryId || null,
+          category_ids: comboCategoryId > 0 ? [comboCategoryId] : [],
+          title: String(c?.title || c?.name || "РљРѕРјР±Рѕ"),
+          name: String(c?.title || c?.name || "РљРѕРјР±Рѕ"),
+          description: String(c?.description || ""),
+          discount_percent: Number(c?.discount_percent || 0),
+          is_available: Number(c?.is_available ?? 1) === 1 ? 1 : 0,
+          min_price: Number(c?.min_price || 0),
+          price: Number(c?.min_price || 0),
+          image_thumb: c?.image_thumb || null,
+          image_url: c?.image_url || null,
+          grid_photos: Array.isArray(c?.grid_photos) ? c.grid_photos : [],
+          grid_photos_thumb: Array.isArray(c?.grid_photos_thumb) ? c.grid_photos_thumb : [],
+        };
+      });
   }
 
-  function buildCategoryPayload(productsSource, combosSource) {
+  function buildCategoryPayload(productsSource, combosSource, categoryId = 0) {
     const source = Array.isArray(productsSource) ? productsSource : [];
     const combos = Array.isArray(combosSource) ? combosSource : [];
     const activeOnly = source.filter((p) => Number(p?.is_active || 0) === 1 && isSiteVisibleProduct(p));
-    const comboCards = buildComboCardsFromPayload(combos);
+    const comboCards = buildComboCardsFromPayload(combos, categoryId);
     return {
       source,
       combos,
@@ -18020,7 +18285,7 @@
       ids.forEach((cid) => {
         const source = Array.isArray(productsByCategory[String(cid)]) ? productsByCategory[String(cid)] : [];
         const combos = Array.isArray(combosByCategory[String(cid)]) ? combosByCategory[String(cid)] : [];
-        const payload = buildCategoryPayload(source, combos);
+        const payload = buildCategoryPayload(source, combos, cid);
         state.categoryProductsCache.set(cid, payload);
         state.checkoutCategoryProducts.set(cid, payload.activeOnly);
         seedRightOrderProductsByIdCache(payload.activeOnly);
@@ -18065,7 +18330,7 @@
       const json = await apiJson(`/api/public/products?category_id=${encodeURIComponent(String(categoryId))}`);
       const source = Array.isArray(json?.data) ? json.data : [];
       const combos = Array.isArray(json?.combos) ? json.combos : [];
-      const payload = buildCategoryPayload(source, combos);
+      const payload = buildCategoryPayload(source, combos, cid);
       state.categoryProductsCache.set(cid, payload);
       state.checkoutCategoryProducts.set(cid, payload.activeOnly);
       seedRightOrderProductsByIdCache(payload.activeOnly);
@@ -19334,7 +19599,8 @@
         const comboCard = actionBtn.closest(".new-order-product-card[data-combo-id]");
         if (comboCard && comboCard.classList.contains("is-unavailable")) return;
         const comboId = Number(actionBtn.getAttribute("data-combo-id") || comboCard?.getAttribute("data-combo-id") || 0);
-        if (comboId > 0) void openComboOverlay(comboId);
+        const comboCategoryId = Number(comboCard?.getAttribute("data-combo-category-id") || 0);
+        if (comboId > 0) void openComboOverlay(comboId, { comboCategoryId });
         return;
       }
       const card = e.target.closest("[data-product-id]");
@@ -19447,7 +19713,8 @@
       if (comboCard.classList.contains("is-unavailable")) return;
       const comboId = Number(comboCard.getAttribute("data-combo-id") || 0);
       if (!(comboId > 0)) return;
-      void openComboOverlay(comboId);
+      const comboCategoryId = Number(comboCard.getAttribute("data-combo-category-id") || 0);
+      void openComboOverlay(comboId, { comboCategoryId });
     });
 
     productsGridEl.addEventListener("keydown", (e) => {
@@ -19460,7 +19727,8 @@
       const comboId = Number(comboCard.getAttribute("data-combo-id") || 0);
       if (!(comboId > 0)) return;
       e.preventDefault();
-      void openComboOverlay(comboId);
+      const comboCategoryId = Number(comboCard.getAttribute("data-combo-category-id") || 0);
+      void openComboOverlay(comboId, { comboCategoryId });
     });
 
     document.addEventListener("click", (e) => {
@@ -20266,9 +20534,11 @@
     const autoAddGroupId = autoAdd && autoAddGroupIdRaw > 0 ? autoAddGroupIdRaw : null;
     const qty = Math.max(1, Number(orderItem?.qty || orderItem?.quantity || 1));
     const lineTotal = roundPrice(Number(orderItem?.line_total ?? orderItem?.total ?? orderItem?.total_price ?? orderItem?.price ?? 0));
-    const unitPrice = qty > 0 ? roundPrice(lineTotal / qty) : 0;
+    const bonusRedeemLineAmount = roundPrice(Math.max(0, Number(orderItem?.bonus_redeem_line_amount || 0)));
+    const restoredLineTotal = roundPrice(lineTotal + bonusRedeemLineAmount);
+    const unitPrice = qty > 0 ? roundPrice(restoredLineTotal / qty) : 0;
     const oldLineTotal = roundPrice(Number(orderItem?.discount?.original_line_total || orderItem?.old_line_total || 0));
-    const oldUnitPrice = oldLineTotal > lineTotal && qty > 0 ? roundPrice(oldLineTotal / qty) : 0;
+    const oldUnitPrice = oldLineTotal > restoredLineTotal && qty > 0 ? roundPrice(oldLineTotal / qty) : 0;
 
     const variants = Array.isArray(orderItem?.variants) ? orderItem.variants : [];
     const firstVariant = variants[0] || null;
@@ -20306,10 +20576,12 @@
       category_ids: Array.isArray(orderItem?.category_ids)
         ? orderItem.category_ids.map((id) => Number(id || 0)).filter((id, index, list) => id > 0 && list.indexOf(id) === index)
         : [],
-      old_line_total: oldLineTotal > lineTotal ? oldLineTotal : 0,
+      bonus_redeem_line_amount: 0,
+      saved_bonus_redeem_line_amount: bonusRedeemLineAmount,
+      old_line_total: oldLineTotal > restoredLineTotal ? oldLineTotal : 0,
       unit_price_before_discount: oldUnitPrice > unitPrice ? oldUnitPrice : 0,
       unit_price: unitPrice,
-      sum: lineTotal,
+      sum: restoredLineTotal,
     };
   }
 
@@ -20335,6 +20607,8 @@
     const qty = Math.max(1, Number(orderItem?.qty || orderItem?.quantity || 1));
     const lineTotal = roundPrice(Number(orderItem?.line_total ?? orderItem?.total ?? orderItem?.total_price ?? 0));
     const oldLineTotal = roundPrice(Number(orderItem?.discount?.original_line_total || orderItem?.old_line_total || 0));
+    const bonusRedeemLineAmount = roundPrice(Math.max(0, Number(orderItem?.bonus_redeem_line_amount || 0)));
+    const restoredLineTotal = roundPrice(lineTotal + bonusRedeemLineAmount);
     const cartItem = buildCartItemFromProduct(productId, qty);
     if (!cartItem) return buildFallbackCartProductItem(orderItem);
     cartItem.id = Date.now() + Math.floor(Math.random() * 10000);
@@ -20358,10 +20632,12 @@
       cartItem.category_ids = orderCategoryIds;
     }
     cartItem.buy_x_get_y_badge = cloneNewOrderBuyXGetYBadge(orderItem) || cloneNewOrderBuyXGetYBadge(product);
-    cartItem.old_line_total = oldLineTotal > lineTotal ? oldLineTotal : 0;
-    cartItem.unit_price = qty > 0 ? roundPrice(lineTotal / qty) : 0;
-    cartItem.unit_price_before_discount = oldLineTotal > lineTotal && qty > 0 ? roundPrice(oldLineTotal / qty) : 0;
-    cartItem.sum = lineTotal;
+    cartItem.bonus_redeem_line_amount = 0;
+    cartItem.saved_bonus_redeem_line_amount = bonusRedeemLineAmount;
+    cartItem.old_line_total = oldLineTotal > restoredLineTotal ? oldLineTotal : 0;
+    cartItem.unit_price = qty > 0 ? roundPrice(restoredLineTotal / qty) : 0;
+    cartItem.unit_price_before_discount = oldLineTotal > restoredLineTotal && qty > 0 ? roundPrice(oldLineTotal / qty) : 0;
+    cartItem.sum = restoredLineTotal;
     return cartItem;
   }
 
@@ -20384,8 +20660,10 @@
     const qty = Math.max(1, Number(orderItem?.qty || orderItem?.quantity || 1));
     const lineTotal = roundPrice(Number(orderItem?.line_total ?? orderItem?.total ?? orderItem?.total_price ?? 0));
     const oldLineTotalRaw = roundPrice(Number(orderItem?.old_line_total || orderItem?.discount?.original_line_total || 0));
-    const unitPrice = qty > 0 ? roundPrice(lineTotal / qty) : 0;
-    const unitOldPrice = oldLineTotalRaw > lineTotal && qty > 0 ? roundPrice(oldLineTotalRaw / qty) : unitPrice;
+    const bonusRedeemLineAmount = roundPrice(Math.max(0, Number(orderItem?.bonus_redeem_line_amount || 0)));
+    const restoredLineTotal = roundPrice(lineTotal + bonusRedeemLineAmount);
+    const unitPrice = qty > 0 ? roundPrice(restoredLineTotal / qty) : 0;
+    const unitOldPrice = oldLineTotalRaw > restoredLineTotal && qty > 0 ? roundPrice(oldLineTotalRaw / qty) : unitPrice;
     const explicitDiscount = Number(orderItem?.combo_discount_percent ?? orderItem?.discount_percent ?? 0);
     const calculatedDiscount = unitOldPrice > unitPrice && unitOldPrice > 0
       ? Number((((unitOldPrice - unitPrice) / unitOldPrice) * 100).toFixed(6))
@@ -20743,10 +21021,12 @@
       name: String(orderItem?.name || orderItem?.combo_title || "РљРѕРјР±Рѕ"),
       qty,
       combo_discount_percent: comboDiscountPercent,
-      old_line_total: oldLineTotalRaw > lineTotal ? oldLineTotalRaw : 0,
+      bonus_redeem_line_amount: 0,
+      saved_bonus_redeem_line_amount: bonusRedeemLineAmount,
+      old_line_total: oldLineTotalRaw > restoredLineTotal ? oldLineTotalRaw : 0,
       unit_price_before_discount: roundPrice(unitOldPrice),
       unit_price: roundPrice(unitPrice),
-      sum: roundPrice(lineTotal),
+      sum: roundPrice(restoredLineTotal),
       photos: (Array.isArray(orderItem?.photos) ? orderItem.photos : []).filter(Boolean).slice(0, 4),
       selections: mappedSelections,
       sections,

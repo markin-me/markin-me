@@ -36725,6 +36725,11 @@ function setBottomNavActive(tab) {
             .map((entry) => [str(entry?.key || "").trim(), entry])
             .filter(([key]) => key)
         );
+        const baseLineStatesByKey = new Map(
+          (Array.isArray(pricingSnapshotState?.lineStates) ? pricingSnapshotState.lineStates : [])
+            .map((entry) => [str(entry?.key || "").trim(), entry])
+            .filter(([key]) => key)
+        );
         const previewBundle = getCartPricingCachedPreviewBundle(resolvedItems, methodCode, currentDraft);
         const previewSummary = previewBundle?.previewSummary && typeof previewBundle.previewSummary === "object"
           ? previewBundle.previewSummary
@@ -36778,6 +36783,9 @@ function setBottomNavActive(tab) {
 
             const nextLineTotal = roundPrice(Math.max(0, entry.lineTotal - share));
             entry.item.line_total = nextLineTotal;
+            entry.item.bonus_redeem_line_amount = roundPrice(
+              Number(entry.item?.bonus_redeem_line_amount || 0) + share
+            );
             if (entry.item.benefits_excluded_line_total != null) {
               entry.item.benefits_excluded_line_total = roundPrice(Math.min(
                 nextLineTotal,
@@ -36902,10 +36910,16 @@ function setBottomNavActive(tab) {
           const lineState = lineStatesByKey.get(str(x?.key || "").trim()) || null;
           if (x.type === "combo") {
             const pricing = computeItemPricing(x, totals);
+            const cartLineKey = str(x?.key || "").trim();
             // Старая цена до скидки комбо
             const comboLineTotal = lineState
               ? roundPrice(Number(lineState.currentTotal || 0))
               : roundPrice(Number(pricing.lineTotal || 0));
+            const comboBaseLineState = baseLineStatesByKey.get(cartLineKey) || null;
+            const comboBonusRedeemLineAmount = roundPrice(Math.max(
+              0,
+              Number(comboBaseLineState?.currentTotal ?? comboLineTotal) - comboLineTotal
+            ));
             const comboOldLineTotalRaw = lineState
               ? roundPrice(Number(lineState.originalTotal || 0))
               : roundPrice((Number(x.unit_price_before_discount) || 0) * (x.qty || 1));
@@ -36917,6 +36931,7 @@ function setBottomNavActive(tab) {
               qty: x.qty,
               line_total: comboLineTotal,
               old_line_total: comboOldLineTotal,
+              bonus_redeem_line_amount: comboBonusRedeemLineAmount,
               selections: Array.isArray(x.selections)
                 ? x.selections.map((s) => ({
                     product_id: s.product_id,
@@ -36935,9 +36950,15 @@ function setBottomNavActive(tab) {
           }
           // Рассчитываем итоговую цену товара (базовая + опции + разница ингредиентов + варианты)
           const pricing = computeItemPricing(x, totals);
+          const cartLineKey = str(x?.key || "").trim();
           const lineTotal = lineState
             ? roundPrice(Number(lineState.currentTotal || 0))
             : roundPrice(Number(pricing.lineTotal || 0));
+          const baseLineState = baseLineStatesByKey.get(cartLineKey) || null;
+          const bonusRedeemLineAmount = roundPrice(Math.max(
+            0,
+            Number(baseLineState?.currentTotal ?? lineTotal) - lineTotal
+          ));
           const benefitsExcludedLineTotal = roundPrice(Math.min(
             lineTotal,
             Math.max(0, Number(pricing?.benefitsExcludedLineTotal || 0))
@@ -36970,6 +36991,7 @@ function setBottomNavActive(tab) {
             is_gift_reward: Number(x.is_gift_reward || 0) === 1 ? 1 : 0,
             gift_reward_id: Number(x.gift_reward_id || 0) > 0 ? Number(x.gift_reward_id) : null,
             line_total: lineTotal, // Отправляем уже посчитанную итоговую цену
+            bonus_redeem_line_amount: bonusRedeemLineAmount,
             benefits_excluded_line_total: benefitsExcludedLineTotal,
             original_line_total: safeOriginalLineTotal, // Цена до скидки
           };
