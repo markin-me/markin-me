@@ -160,7 +160,7 @@
   const CHECKOUT_DRAFT_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
   const CHECKOUT_PRODUCTS_CACHE_VERSION = 4;
   const CHECKOUT_PRODUCTS_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
-  const NEW_ORDER_CLIENT_CACHE_VERSION = 3;
+  const NEW_ORDER_CLIENT_CACHE_VERSION = 4;
   const NEW_ORDER_CLIENT_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
   const state = {
@@ -1540,10 +1540,10 @@
         const missingRuleIds = uniqueRuleIds.filter((pid) => !getProductById(pid));
         const fetchedProducts = [];
         if (missingRuleIds.length) {
-          const settled = await Promise.allSettled(missingRuleIds.map((pid) => ensureProductById(pid)));
-          settled.forEach((entry) => {
-            if (entry.status !== "fulfilled") return;
-            if (entry.value && typeof entry.value === "object") fetchedProducts.push(entry.value);
+          const productsById = await ensureProductsByIds(missingRuleIds);
+          missingRuleIds.forEach((pid) => {
+            const product = productsById.get(pid);
+            if (product && typeof product === "object") fetchedProducts.push(product);
           });
         }
 
@@ -6678,12 +6678,20 @@
           const groupId = Number(opt?.group_id || 0);
           const variantValueIndex = Number.isFinite(Number(opt?.variantIndex)) ? Number(opt.variantIndex) : null;
           const variantGroupId = resolveOptionItemVariantGroupId(groupId, optionId);
+          let variantLabel = "";
+          if (variantValueIndex != null) {
+            const details = state.optionGroupDetails.get(groupId);
+            const detailItems = Array.isArray(details?.items) ? details.items : [];
+            const detailItem = detailItems.find((x) => Number(x?.id || 0) === optionId) || null;
+            variantLabel = String(formatOptionVariantLabel(detailItem, variantValueIndex) || "").trim();
+          }
           return {
             id: optionId,
             group_id: groupId > 0 ? groupId : null,
             qty: optionQty,
             variant_group_id: variantGroupId,
             variant_value_index: variantValueIndex,
+            variant_label: variantLabel || null,
           };
         })
         .filter(Boolean);
@@ -14107,6 +14115,88 @@
     return buyQty > 0 && rewardQty > 0 ? `${buyQty + rewardQty}=${buyQty}` : text || "";
   }
 
+  function getProductStockLimit(productId) {
+    const pid = Number(productId || 0);
+    if (!(pid > 0)) return null;
+    const product = getProductById(pid);
+    const stockRaw = product?.stock_qty;
+    if (stockRaw == null || stockRaw === "") return null;
+    const stockQty = Number(stockRaw);
+    if (!Number.isFinite(stockQty)) return null;
+    return Math.max(0, stockQty);
+  }
+
+  function getProductStockLimitMessage(limit) {
+    return `Доступно только ${formatQtyPlain(limit)} шт.`;
+  }
+
+  function getCartItemProductStockUsagePerUnit(item) {
+    if (!item || typeof item !== "object") return 1;
+    const productId = Number(item?.product_id || 0);
+    const product = productId > 0 ? getProductById(productId) : null;
+    const pricing = item?.pricing && typeof item.pricing === "object" ? item.pricing : {};
+    const variant = item?.variant && typeof item.variant === "object" ? item.variant : {};
+    const selectedIndex = Number.isFinite(Number(variant?.selected_index)) ? Number(variant.selected_index) : null;
+    const variantGroup = pricing?.variant_group
+      || ((productId > 0 && Array.isArray(state.productVariants.get(productId))) ? state.productVariants.get(productId)[0] : null);
+    const variantValues = Array.isArray(variantGroup?.values) ? variantGroup.values : [];
+    const variantValue = selectedIndex != null && variantValues[selectedIndex] != null
+      ? variantValues[selectedIndex]
+      : variant?.label;
+    const numericValue = parseVariantValueNumber(variantValue);
+    if (Number.isFinite(numericValue) && numericValue > 0) {
+      const variantUnitId = Number(variantGroup?.unit_id || pricing?.unit_id || 0);
+      const baseUnitId = Number(product?.base_unit_id || product?.unit_id || pricing?.base_unit_id || 0);
+      const factor = variantUnitId && baseUnitId ? getConversionFactor(variantUnitId, baseUnitId) : null;
+      const usage = factor != null ? numericValue * Number(factor || 0) : numericValue;
+      if (Number.isFinite(usage) && usage > 0) return usage;
+    }
+    const baseQty = Number(product?.base_qty || pricing?.base_qty || 1);
+    return Number.isFinite(baseQty) && baseQty > 0 ? baseQty : 1;
+  }
+
+  function getRightOrderProductStockUsageInCart(cartItems, productId, excludeCartItemId = 0) {
+    const pid = Number(productId || 0);
+    if (!(pid > 0)) return 0;
+    const excludedId = Number(excludeCartItemId || 0);
+    return (Array.isArray(cartItems) ? cartItems : []).reduce((sum, item) => {
+      if (excludedId > 0 && Number(item?.id || 0) === excludedId) return sum;
+      if (String(item?.type || "product") !== "product") return sum;
+      if (Number(item?.product_id || 0) !== pid) return sum;
+      const qty = Math.max(0, Number(item?.qty || 0));
+      return sum + (qty * getCartItemProductStockUsagePerUnit(item));
+    }, 0);
+  }
+
+  function enforceProductStockLimitForCartItem(cartItems, cartItem, opts = {}) {
+    if (!cartItem || typeof cartItem !== "object") return { ok: true, item: cartItem };
+    if (String(cartItem?.type || "product") !== "product") return { ok: true, item: cartItem };
+    const productId = Number(cartItem?.product_id || 0);
+    if (!(productId > 0)) return { ok: true, item: cartItem };
+    const limit = getProductStockLimit(productId);
+    if (limit == null) return { ok: true, item: cartItem };
+    const currentUsage = getRightOrderProductStockUsageInCart(cartItems, productId, opts?.excludeCartItemId);
+    const requestedUsagePerUnit = getCartItemProductStockUsagePerUnit(cartItem);
+    const requestedQty = Math.max(0, Number(cartItem?.qty || 0));
+    const requestedUsage = requestedQty * requestedUsagePerUnit;
+    const availableUsage = Math.max(0, limit - currentUsage);
+    if (requestedUsage <= availableUsage + 1e-9) return { ok: true, item: cartItem };
+    if (opts?.showAlert !== false) {
+      const messageLimit = requestedUsagePerUnit > 1
+        ? Math.floor((limit + 1e-9) / requestedUsagePerUnit)
+        : limit;
+      showNewOrderAlert(getProductStockLimitMessage(messageLimit));
+    }
+    if (availableUsage <= 0 || requestedUsagePerUnit <= 0) return { ok: false, item: null };
+    const availableQty = Math.floor((availableUsage + 1e-9) / requestedUsagePerUnit);
+    if (availableQty <= 0) return { ok: false, item: null };
+    return {
+      ok: true,
+      capped: true,
+      item: recalculateCartItemTotals({ ...cartItem, qty: availableQty }),
+    };
+  }
+
   function cloneNewOrderBuyXGetYBadge(source) {
     const badge = getNewOrderBuyXGetYBadgeSource(source);
     return badge && typeof badge === "object" ? { ...badge } : null;
@@ -14199,14 +14289,16 @@
 
   function addCartItemToRightOrder(orderId, cartItem) {
     const id = Number(orderId || 0);
-    if (!(id > 0) || !cartItem) return;
+    if (!(id > 0) || !cartItem) return false;
     const idx = state.rightOrders.findIndex((o) => Number(o?.id || 0) === id);
-    if (idx < 0) return;
+    if (idx < 0) return false;
     const order = state.rightOrders[idx] || {};
     const form = order.form && typeof order.form === "object" ? { ...order.form } : {};
     const list = Array.isArray(form.cartItems) ? [...form.cartItems] : [];
-    list.push(cartItem);
-    updateRightOrderCartItems(id, list, { render: false });
+    const limited = enforceProductStockLimitForCartItem(list, cartItem, { showAlert: true });
+    if (!limited.ok || !limited.item) return false;
+    list.push(limited.item);
+    return updateRightOrderCartItems(id, list, { render: false });
   }
 
   function getProductById(productId) {
@@ -14384,7 +14476,12 @@
   function setProductCardQty(productId, qtyRaw) {
     const pid = Number(productId || 0);
     if (!(pid > 0)) return;
-    const qty = Math.max(1, Math.trunc(Number(qtyRaw || 0)));
+    let qty = Math.max(1, Math.trunc(Number(qtyRaw || 0)));
+    const limit = getProductStockLimit(pid);
+    if (limit != null && qty > limit) {
+      qty = Math.max(1, Math.trunc(limit));
+      showNewOrderAlert(getProductStockLimitMessage(limit));
+    }
     state.quantities.set(pid, qty);
   }
 
@@ -14467,9 +14564,16 @@
       if (!nextItem) return false;
       if (existingIndex >= 0) {
         nextItem.id = Number(cartItems[existingIndex]?.id || nextItem.id);
-        cartItems[existingIndex] = nextItem;
+        const limited = enforceProductStockLimitForCartItem(cartItems, nextItem, {
+          excludeCartItemId: nextItem.id,
+          showAlert: true,
+        });
+        if (!limited.ok || !limited.item) return false;
+        cartItems[existingIndex] = limited.item;
       } else {
-        cartItems.push(nextItem);
+        const limited = enforceProductStockLimitForCartItem(cartItems, nextItem, { showAlert: true });
+        if (!limited.ok || !limited.item) return false;
+        cartItems.push(limited.item);
       }
     }
 
@@ -14523,7 +14627,8 @@
     const qtyToAdd = getProductCardQty(pid);
     const cartItem = buildCartItemFromProduct(pid, qtyToAdd);
     if (!cartItem) return false;
-    addCartItemToRightOrder(orderId, cartItem);
+    const added = addCartItemToRightOrder(orderId, cartItem);
+    if (!added) return false;
     resetProductCardToDefault(pid);
     renderRightOrderTabs();
     renderProducts(state.currentProducts);
@@ -14554,6 +14659,36 @@
       state.productByIdCache.set(pid, null);
       return null;
     }
+  }
+
+  async function ensureProductsByIds(productIds) {
+    const ids = [...new Set((Array.isArray(productIds) ? productIds : [])
+      .map((id) => Number(id || 0))
+      .filter((id) => Number.isFinite(id) && id > 0))];
+    const missingIds = ids.filter((id) => !getProductById(id) && !state.productByIdCache.has(id));
+    if (!missingIds.length) {
+      const out = new Map();
+      ids.forEach((id) => out.set(id, getProductById(id) || state.productByIdCache.get(id) || null));
+      return out;
+    }
+    try {
+      const json = await apiJson("/api/public/products/batch/by-ids", {
+        method: "POST",
+        body: JSON.stringify({ ids: missingIds }),
+      });
+      const data = json && typeof json.data === "object" && json.data ? json.data : {};
+      missingIds.forEach((id) => {
+        const product = data[String(id)] || null;
+        state.productByIdCache.set(id, product);
+      });
+    } catch {
+      missingIds.forEach((id) => {
+        state.productByIdCache.set(id, null);
+      });
+    }
+    const out = new Map();
+    ids.forEach((id) => out.set(id, getProductById(id) || state.productByIdCache.get(id) || null));
+    return out;
   }
 
   async function resolveComboDetails(comboId) {
@@ -16402,23 +16537,23 @@
       missingIds.push(cid);
     });
 
-    await Promise.all(missingIds.map(async (categoryId) => {
-      try {
-        const json = await apiJson(`/api/public/products?category_id=${encodeURIComponent(String(categoryId))}`);
-        const source = Array.isArray(json?.data) ? json.data : [];
-        const combos = Array.isArray(json?.combos) ? json.combos : [];
-        const payload = buildCategoryPayload(source, combos, cid);
-        state.categoryProductsCache.set(categoryId, payload);
-        state.checkoutCategoryProducts.set(categoryId, payload.activeOnly);
-        writeCategoryProductsCache(categoryId, source);
-        allProducts.push(...payload.activeOnly);
-      } catch {
-        state.checkoutCategoryProducts.set(categoryId, []);
-      }
-    }));
-    await loadVariantsForProducts(allProducts);
-    await loadIngredientsForProducts(allProducts);
-    await loadOptionsForProducts(allProducts);
+    if (missingIds.length) {
+      await preloadAllCategoryProducts(missingIds);
+      missingIds.forEach((categoryId) => {
+        const cid = Number(categoryId || 0);
+        const payload = state.categoryProductsCache.get(cid);
+        if (payload && Array.isArray(payload.activeOnly)) {
+          state.checkoutCategoryProducts.set(cid, payload.activeOnly);
+          allProducts.push(...payload.activeOnly);
+        } else {
+          state.checkoutCategoryProducts.set(cid, []);
+        }
+      });
+    }
+    await warmRightOrderProductPricingContext(allProducts, {
+      includeOptionDetails: true,
+      includeOptionTargets: true,
+    });
     state.checkoutIngredientsPopoverKey = null;
     state.checkoutIngredientsPopoverPos = null;
     schedulePersistBootstrapSnapshot(0);
@@ -16775,18 +16910,14 @@
       .filter((id) => Number.isFinite(id) && id > 0 && !state.optionTargetProductCache.has(id));
     const unique = [...new Set(productIds)];
     if (!unique.length) return;
-    await Promise.all(unique.map(async (pid) => {
-      try {
-        const json = await apiJson(`/api/public/products/${pid}`);
-        const product = json?.data || null;
-        state.optionTargetProductCache.set(pid, product);
-        if (product && typeof product === "object") {
-          state.productByIdCache.set(pid, product);
-        }
-      } catch {
-        state.optionTargetProductCache.set(pid, null);
+    const productsById = await ensureProductsByIds(unique);
+    unique.forEach((pid) => {
+      const product = productsById.get(pid) || null;
+      state.optionTargetProductCache.set(pid, product);
+      if (product && typeof product === "object") {
+        state.productByIdCache.set(pid, product);
       }
-    }));
+    });
   }
 
   function getOptionItemVariantUnitPrice(item, selectedIndex) {
@@ -18214,7 +18345,22 @@
     });
     const unique = [...new Set(groupIds)];
     if (!unique.length) return;
-    await Promise.all(unique.map((gid) => loadOptionGroupDetails(gid)));
+    try {
+      const json = await apiJson("/api/public/options/groups/batch", {
+        method: "POST",
+        body: JSON.stringify({ ids: unique }),
+      });
+      const data = json && typeof json.data === "object" && json.data ? json.data : {};
+      unique.forEach((gid) => {
+        const raw = data[String(gid)] || { group: null, items: [] };
+        state.optionGroupDetails.set(gid, {
+          group: raw.group || null,
+          items: Array.isArray(raw.items) ? raw.items : [],
+        });
+      });
+    } catch {
+      await Promise.all(unique.map((gid) => loadOptionGroupDetails(gid)));
+    }
   }
 
   async function loadUnitConversions() {
@@ -18536,7 +18682,17 @@
               item.variant = variant;
             }
           }
-          cartItems[itemIndex] = recalculateCartItemTotals(item);
+          const nextItem = recalculateCartItemTotals(item);
+          if (rowKind !== "combo" && rowKind !== "option") {
+            const limited = enforceProductStockLimitForCartItem(cartItems, nextItem, {
+              excludeCartItemId: nextItem.id,
+              showAlert: true,
+            });
+            if (!limited.ok || !limited.item) return;
+            cartItems[itemIndex] = recalculateCartItemTotals(limited.item);
+          } else {
+            cartItems[itemIndex] = nextItem;
+          }
           updateRightOrderCartItems(orderId, cartItems, { render: true });
           return;
         }
@@ -18624,7 +18780,12 @@
             return;
           }
           item.qty = nextQty;
-          cartItems[itemIndex] = recalculateCartItemTotals(item);
+          const limited = enforceProductStockLimitForCartItem(cartItems, item, {
+            excludeCartItemId: item.id,
+            showAlert: action === "right-cart-qty-plus",
+          });
+          if (!limited.ok || !limited.item) return;
+          cartItems[itemIndex] = recalculateCartItemTotals(limited.item);
           updateRightOrderCartItems(orderId, cartItems, { render: true });
           return;
         }
@@ -18743,8 +18904,10 @@
           copiedItem.id = Date.now() + Math.floor(Math.random() * 10000);
           copiedItem.qty = 1;
           copiedItem = recalculateCartItemTotals(copiedItem);
+          const limited = enforceProductStockLimitForCartItem(cartItems, copiedItem, { showAlert: true });
+          if (!limited.ok || !limited.item) return;
 
-          cartItems.splice(itemIndex + 1, 0, copiedItem);
+          cartItems.splice(itemIndex + 1, 0, limited.item);
           updateRightOrderCartItems(orderId, cartItems, { render: true });
           return;
         }
@@ -19998,7 +20161,13 @@
       }
       if (action === "product-overlay-qty-minus" || action === "product-overlay-qty-plus") {
         const delta = action === "product-overlay-qty-plus" ? 1 : -1;
-        state.productModal.qty = Math.max(1, Number(state.productModal.qty || 1) + delta);
+        let nextQty = Math.max(1, Number(state.productModal.qty || 1) + delta);
+        const limit = getProductStockLimit(pid);
+        if (limit != null && nextQty > limit) {
+          nextQty = Math.max(1, Math.trunc(limit));
+          showNewOrderAlert(getProductStockLimitMessage(limit));
+        }
+        state.productModal.qty = nextQty;
         renderProductOverlay();
         return;
       }
@@ -20109,7 +20278,12 @@
               const idx = cartItems.findIndex((x) => Number(x?.id || 0) === cartItemId);
               if (idx >= 0) {
                 cartItem.id = cartItemId;
-                cartItems[idx] = cartItem;
+                const limited = enforceProductStockLimitForCartItem(cartItems, cartItem, {
+                  excludeCartItemId: cartItemId,
+                  showAlert: true,
+                });
+                if (!limited.ok || !limited.item) return;
+                cartItems[idx] = limited.item;
                 updateRightOrderCartItems(orderId, cartItems, { render: true });
                 closeProductOverlay();
                 return;
@@ -20119,7 +20293,8 @@
         }
         if (!state.rightActiveOrderId) openRightNewOrderTab();
         if (!state.rightActiveOrderId) return;
-        addCartItemToRightOrder(state.rightActiveOrderId, cartItem);
+        const added = addCartItemToRightOrder(state.rightActiveOrderId, cartItem);
+        if (!added) return;
         renderRightOrderTabs();
         closeProductOverlay();
         return;
@@ -20140,8 +20315,14 @@
       (e) => {
         const row = findHorizontalScrollTarget(e.target);
         if (!row || row.scrollWidth <= row.clientWidth) return;
-        const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
-        row.scrollLeft += delta * 0.45;
+        const horizontalDelta = Number(e.deltaX || 0);
+        const verticalDelta = Number(e.deltaY || 0);
+        if (Math.abs(horizontalDelta) <= Math.abs(verticalDelta)) return;
+        const maxLeft = Math.max(0, row.scrollWidth - row.clientWidth);
+        const currentLeft = Number(row.scrollLeft || 0);
+        const nextLeft = Math.max(0, Math.min(maxLeft, currentLeft + horizontalDelta));
+        if (nextLeft === currentLeft) return;
+        row.scrollLeft = nextLeft;
         e.preventDefault();
       },
       { passive: false }
@@ -20155,6 +20336,65 @@
       return json && typeof json.data === "object" && json.data ? json.data : null;
     } catch {
       return null;
+    }
+  }
+
+  async function loadNewOrderBootstrapFromApi() {
+    try {
+      const json = await apiJson("/api/new-order/bootstrap");
+      const data = json && typeof json.data === "object" && json.data ? json.data : null;
+      if (!data) return false;
+
+      const categoriesSource = Array.isArray(data.categories) ? data.categories : [];
+      state.productCategories = categoriesSource
+        .filter((c) => Number(c?.is_active || 0) === 1)
+        .sort((a, b) => (Number(a?.sort_order || 0) - Number(b?.sort_order || 0)) || (Number(a?.id || 0) - Number(b?.id || 0)));
+      state.categories = categoriesSource
+        .filter((c) => Number(c?.is_active || 0) === 1 && isCheckoutVisible(c))
+        .sort((a, b) => (Number(a?.sort_order || 0) - Number(b?.sort_order || 0)) || (Number(a?.id || 0) - Number(b?.id || 0)));
+
+      const refs = data.refs && typeof data.refs === "object" ? data.refs : {};
+      state.unitConversions = Array.isArray(refs.unit_conversions) ? refs.unit_conversions : [];
+      state.rightDeliveryTypes = (Array.isArray(refs.delivery_types) ? refs.delivery_types : [])
+        .map(normalizeRightDeliveryTypeRef)
+        .filter((item) => item.code)
+        .sort((a, b) => (a.sort - b.sort) || (a.id - b.id));
+      state.rightPaymentTypes = (Array.isArray(refs.payment_types) ? refs.payment_types : [])
+        .map(normalizeRightPaymentTypeRef)
+        .filter((item) => item.code)
+        .sort((a, b) => (a.sort - b.sort) || (a.id - b.id));
+      state.rightTimeOptions = (Array.isArray(refs.time_options) ? refs.time_options : [])
+        .map(normalizeRightTimeOptionRef)
+        .filter((item) => item.code)
+        .sort((a, b) => (a.sort - b.sort) || (a.id - b.id));
+      state.rightOrderStatuses = (Array.isArray(refs.order_statuses) ? refs.order_statuses : [])
+        .map((item) => ({
+          id: Number(item?.id || 0),
+          code: String(item?.code || "").trim(),
+          title: String(item?.title || "").trim(),
+          sort: Number(item?.sort || 0),
+        }))
+        .filter((item) => item.id > 0 && item.title)
+        .sort((a, b) => (a.sort - b.sort) || (a.id - b.id));
+      state.rightPickupStores = (Array.isArray(refs.stores) ? refs.stores : [])
+        .map((s) => ({
+          id: Number(s?.id || 0),
+          name: String(s?.name || "").trim(),
+          address: String(s?.address || "").trim(),
+          city: String(s?.city || s?.city_name || "").trim(),
+          is_active: Number(s?.is_active || 0),
+        }))
+        .filter((s) => Number(s.is_active || 0) === 1)
+        .sort((a, b) => (a.id - b.id));
+
+      const blocks = Array.isArray(data.checkout?.blocks) ? data.checkout.blocks : [];
+      const normalizedBlocks = blocks.map(normalizeBlock).filter(Boolean);
+      state.checkoutSavedDraft = { blocks: normalizedBlocks };
+      writeDraftCache(normalizedBlocks);
+      schedulePersistBootstrapSnapshot(0);
+      return true;
+    } catch {
+      return false;
     }
   }
 
@@ -20210,6 +20450,18 @@
     renderRightOrderTabs();
   }
 
+  function clearNewOrderProductCaches() {
+    state.categoryProductsCache.clear();
+    state.checkoutCategoryProducts.clear();
+    state.productVariants.clear();
+    state.productIngredients.clear();
+    state.ingredientStateByProduct.clear();
+    state.productOptionGroups.clear();
+    state.optionGroupDetails.clear();
+    state.productByIdCache.clear();
+    state.selectedVariants.clear();
+  }
+
   async function syncDataByManifest(nextManifest, prevManifest, forceFull = false) {
     const categoriesChanged = forceFull || isManifestDomainChanged(prevManifest, nextManifest, "categories");
     const productsChanged = forceFull || isManifestDomainChanged(prevManifest, nextManifest, "products");
@@ -20243,8 +20495,12 @@
     }
 
     if (productsChanged || !state.categoryProductsCache.size) {
-      state.categoryProductsCache.clear();
-      state.checkoutCategoryProducts.clear();
+      if (productsChanged) {
+        clearNewOrderProductCaches();
+      } else {
+        state.categoryProductsCache.clear();
+        state.checkoutCategoryProducts.clear();
+      }
       await preloadAllCategoryProducts(getPreloadCategoryIds());
     }
 
@@ -21337,6 +21593,7 @@
       const bootstrapSnapshot = readBootstrapSnapshot();
       const hydrated = hydrateStateFromBootstrapSnapshot(bootstrapSnapshot);
       if (!state.activeCategoryId) state.activeCategoryId = CHECKOUT_SCREEN_ID;
+      const bootstrapped = !hydrated ? await loadNewOrderBootstrapFromApi() : false;
 
       if (hydrated) {
         if (!Array.isArray(state.unitConversions) || !state.unitConversions.length) {
@@ -21348,7 +21605,7 @@
       }
 
       const freshManifest = await fetchNewOrderManifest();
-      const prevManifest = state.cacheManifest || cachedManifest || null;
+      const prevManifest = state.cacheManifest || cachedManifest || (bootstrapped ? freshManifest : null);
       const nextManifest = freshManifest || state.cacheManifest || cachedManifest || null;
       if (freshManifest) {
         state.cacheManifest = freshManifest;
@@ -21356,7 +21613,7 @@
       }
 
       if (!nextManifest) {
-        if (!hydrated) {
+        if (!hydrated && !bootstrapped) {
           await loadRefsFromApi();
           await loadCategoriesFromApi();
           try {
@@ -21367,7 +21624,7 @@
           await preloadAllCategoryProducts(getPreloadCategoryIds());
         } else {
           try {
-            await loadRefsFromApi();
+            await loadRightAutoAdd({ force: true });
           } catch {}
           try {
             await loadCheckoutDraftFromApi(true);
@@ -21375,16 +21632,20 @@
         }
       } else {
         const manifestChanged = !areManifestTokensEqual(prevManifest, nextManifest);
-        if (!hydrated || manifestChanged) {
-          await syncDataByManifest(nextManifest, prevManifest, !hydrated);
+        if ((!hydrated && !bootstrapped) || manifestChanged) {
+          await syncDataByManifest(nextManifest, prevManifest, !hydrated && !bootstrapped);
         } else {
           try {
-            await loadRefsFromApi();
+            await loadRightAutoAdd({ force: true });
           } catch {}
           try {
             await loadCheckoutDraftFromApi(true);
           } catch {}
         }
+      }
+
+      if (bootstrapped && !state.categoryProductsCache.size) {
+        await preloadAllCategoryProducts(getPreloadCategoryIds());
       }
 
       ensureValidActiveCategory();

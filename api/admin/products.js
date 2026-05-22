@@ -548,10 +548,12 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
             variantsAssignmentsStamp,
             variantGroupsStamp,
             variantDiscountTiersStamp,
+            variantValueExclusionsStamp,
             ingredientsStamp,
             optionAssignmentsStamp,
             optionGroupsStamp,
             optionItemsStamp,
+            optionItemExclusionsStamp,
             combosStamp,
             comboSetBlocksStamp,
             comboBlocksStamp,
@@ -609,10 +611,12 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
                 variantsAssignmentsStamp,
                 variantGroupsStamp,
                 variantDiscountTiersStamp,
+                variantValueExclusionsStamp,
                 ingredientsStamp,
                 optionAssignmentsStamp,
                 optionGroupsStamp,
                 optionItemsStamp,
+                optionItemExclusionsStamp,
                 combosStamp,
                 comboSetBlocksStamp,
                 comboBlocksStamp,
@@ -3869,6 +3873,133 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       return res.status(500).json({ ok: false, error: 'DB_ERROR' });
     } finally {
       conn.release();
+    }
+  });
+
+  router.get('/new-order/bootstrap', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const cacheKey = makeAdminCacheKey("new-order-bootstrap", { tenantId, storeId });
+      const { payload, cacheState } = await loadAdminCachedPayload(
+        cacheKey,
+        5_000,
+        async () => {
+          const [
+            categories,
+            checkoutBlocksRows,
+            unitConversionsRows,
+            deliveryTypesRows,
+            paymentTypesRows,
+            timeOptionsRows,
+            orderStatusesRows,
+            storesRows,
+          ] = await Promise.all([
+            helpers.ensureDefaultCategories(db, tenantId),
+            db.query(
+              `SELECT id, title, require_all, sort_order
+               FROM prod_checkout_constructor_blocks
+               WHERE tenant_id=? AND is_active=1
+               ORDER BY sort_order ASC, id ASC`,
+              [tenantId]
+            ),
+            db.query(
+              `SELECT id, from_unit_id, to_unit_id, factor, is_active
+               FROM prod_unit_conversions
+               WHERE tenant_id=? AND is_active=1`,
+              [tenantId]
+            ),
+            db.query(
+              `SELECT id, code, title, icon, sort, is_active, is_default, require_client_data, show_on_site
+               FROM order_delivery_types
+               WHERE tenant_id=? AND store_id=1
+               ORDER BY sort ASC, id ASC`,
+              [tenantId]
+            ),
+            db.query(
+              `SELECT id, code, title, icon, sort, is_active
+               FROM order_payments
+               WHERE tenant_id=? AND store_id=1
+               ORDER BY sort ASC, id ASC`,
+              [tenantId]
+            ),
+            db.query(
+              `SELECT id, code, title, icon, description, sort, is_active,
+                      has_time_window, starts_at, ends_at, step_minutes, lead_minutes
+               FROM order_time_options
+               WHERE tenant_id=? AND store_id=1
+               ORDER BY sort ASC, id ASC`,
+              [tenantId]
+            ),
+            db.query(
+              `SELECT id, code, title, subtitle, icon, color, sort
+               FROM order_statuses
+               WHERE tenant_id=? AND store_id=? AND is_active=1
+               ORDER BY sort ASC, id ASC`,
+              [tenantId, storeId]
+            ),
+            db.query(
+              `SELECT id, name, address, city, is_active
+               FROM ten_stores
+               WHERE tenant_id=?
+               ORDER BY id ASC`,
+              [tenantId]
+            ),
+          ]);
+
+          const blocksRows = Array.isArray(checkoutBlocksRows?.[0]) ? checkoutBlocksRows[0] : [];
+          const blockIds = blocksRows.map((row) => Number(row.id)).filter((id) => Number.isFinite(id) && id > 0);
+          let blockCategoriesRows = [];
+          if (blockIds.length) {
+            const [rows] = await db.query(
+              `SELECT block_id, category_id, sort_order
+               FROM prod_checkout_constructor_block_categories
+               WHERE tenant_id=? AND block_id IN (?)
+               ORDER BY sort_order ASC, id ASC`,
+              [tenantId, blockIds]
+            );
+            blockCategoriesRows = Array.isArray(rows) ? rows : [];
+          }
+          const categoriesByBlock = new Map();
+          blockCategoriesRows.forEach((row) => {
+            const blockId = Number(row.block_id || 0);
+            const categoryId = Number(row.category_id || 0);
+            if (!(blockId > 0) || !(categoryId > 0)) return;
+            if (!categoriesByBlock.has(blockId)) categoriesByBlock.set(blockId, []);
+            categoriesByBlock.get(blockId).push(categoryId);
+          });
+          const checkoutBlocks = blocksRows.map((row) => {
+            const id = Number(row.id || 0);
+            return {
+              id,
+              title: String(row.title || ''),
+              requireAll: Number(row.require_all || 0) !== 0,
+              categoryIds: categoriesByBlock.get(id) || [],
+            };
+          });
+
+          return {
+            ok: true,
+            data: {
+              categories: Array.isArray(categories) ? categories : [],
+              checkout: { blocks: checkoutBlocks },
+              refs: {
+                unit_conversions: Array.isArray(unitConversionsRows?.[0]) ? unitConversionsRows[0] : [],
+                delivery_types: Array.isArray(deliveryTypesRows?.[0]) ? deliveryTypesRows[0] : [],
+                payment_types: Array.isArray(paymentTypesRows?.[0]) ? paymentTypesRows[0] : [],
+                time_options: Array.isArray(timeOptionsRows?.[0]) ? timeOptionsRows[0] : [],
+                order_statuses: Array.isArray(orderStatusesRows?.[0]) ? orderStatusesRows[0] : [],
+                stores: Array.isArray(storesRows?.[0]) ? storesRows[0] : [],
+              },
+            },
+          };
+        }
+      );
+      res.set("x-admin-cache", cacheState);
+      return res.json(payload);
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ ok: false, error: "DB_ERROR" });
     }
   });
 

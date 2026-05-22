@@ -1,7 +1,10 @@
 
 const express = require("express");
 const { sendOrderToPrintBot } = require("../printPush");
-const { applyStockDeductionForOrderItems } = require("../helpers/orderStock");
+const {
+  applyStockDeductionForOrderItems,
+  checkStockAvailabilityForOrderItems,
+} = require("../helpers/orderStock");
 const discountHelpers = require("../helpers/discounts");
 const {
   roundMoney,
@@ -3104,7 +3107,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       const [existingRows] = await db.query(
         `SELECT id, public_id, customer_id, promo_code, address_comment, cutlery_qty, discounts_json, status_id,
                 ${hasBenefitsMetaColumn ? "benefits_meta_json," : ""}
-                items
+                items,
+                stock_deducted_at
          FROM order_orders
          WHERE tenant_id=? AND store_id=? AND id=? AND is_active=1
          LIMIT 1`,
@@ -3714,6 +3718,22 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
 
       if (!items.length) {
         return res.status(400).json({ ok: false, error: "EMPTY_ITEMS" });
+      }
+
+      if (!existing?.stock_deducted_at) {
+        const stockCheck = await checkStockAvailabilityForOrderItems({
+          db,
+          tenantId,
+          storeId,
+          items,
+        });
+        if (!stockCheck.available) {
+          return res.status(409).json({
+            ok: false,
+            error: "OUT_OF_STOCK",
+            data: { shortages: Array.isArray(stockCheck.shortages) ? stockCheck.shortages : [] },
+          });
+        }
       }
 
       const itemsTotal = roundMoney(items.reduce((sum, item) => sum + Number(item?.line_total || 0), 0));

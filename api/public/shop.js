@@ -1109,6 +1109,46 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     });
   }
 
+  function mapPublicBonusModalEventRows(rows = []) {
+    const events = Array.isArray(rows) ? rows.filter((row) => Number(row?.id || 0) > 0) : [];
+    if (!events.length) return null;
+    const first = events[0];
+    const type = String(first.event_type || '').trim();
+    if (type !== 'level_up' && type !== 'level_down') return null;
+    const groupedRows = [first];
+    if (type === 'level_up') {
+      let currentToLevelId = Number(first.to_level_id || 0);
+      for (const row of events.slice(1)) {
+        const rowType = String(row.event_type || '').trim();
+        const rowFromLevelId = Number(row.from_level_id || 0);
+        if (rowType !== type || !(currentToLevelId > 0) || rowFromLevelId !== currentToLevelId) break;
+        groupedRows.push(row);
+        currentToLevelId = Number(row.to_level_id || 0);
+      }
+    }
+    const last = groupedRows[groupedRows.length - 1];
+    const steps = groupedRows.map((row) => ({
+      id: Number(row.id || 0),
+      from_level_id: row.from_level_id == null ? null : Number(row.from_level_id || 0),
+      to_level_id: row.to_level_id == null ? null : Number(row.to_level_id || 0),
+      from_level_title: row.from_level_title || '',
+      to_level_title: row.to_level_title || '',
+      reward_bonus_amount: Number(row.to_level_reward_bonus_amount || 0),
+    }));
+    return {
+      id: Number(first.id || 0),
+      event_ids: groupedRows.map((row) => Number(row.id || 0)).filter((id) => id > 0),
+      event_type: type,
+      modal_key: type === 'level_down' ? 'level-down' : 'level-up',
+      from_level_id: first.from_level_id == null ? null : Number(first.from_level_id || 0),
+      to_level_id: last.to_level_id == null ? null : Number(last.to_level_id || 0),
+      from_level_title: first.from_level_title || '',
+      to_level_title: last.to_level_title || '',
+      level_steps: steps,
+      total_reward_bonus_amount: steps.reduce((sum, step) => sum + Math.max(0, Number(step.reward_bonus_amount || 0)), 0),
+    };
+  }
+
   function mapPublicBonusModalEventRow(row) {
     if (!row || !(Number(row.id || 0) > 0)) return null;
     const type = String(row.event_type || '').trim();
@@ -2746,21 +2786,22 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       let pendingModalEvent = null;
       const customerId = Number(customer?.id || 0);
       if (customerId > 0) {
-        const [[eventRow]] = await db.query(
+        const [eventRows] = await db.query(
           `SELECT e.id, e.event_type, e.from_level_id, e.to_level_id,
-                  from_level.title AS from_level_title,
-                  to_level.title AS to_level_title
-           FROM mkt_customer_bonus_modal_events e
-           LEFT JOIN mkt_bonus_levels from_level
-             ON from_level.tenant_id = e.tenant_id AND from_level.id = e.from_level_id
+                   from_level.title AS from_level_title,
+                   to_level.title AS to_level_title,
+                   to_level.reward_bonus_amount AS to_level_reward_bonus_amount
+            FROM mkt_customer_bonus_modal_events e
+            LEFT JOIN mkt_bonus_levels from_level
+              ON from_level.tenant_id = e.tenant_id AND from_level.id = e.from_level_id
            LEFT JOIN mkt_bonus_levels to_level
              ON to_level.tenant_id = e.tenant_id AND to_level.id = e.to_level_id
-           WHERE e.tenant_id=? AND e.customer_id=? AND e.confirmed_at IS NULL
-           ORDER BY e.created_at ASC, e.id ASC
-           LIMIT 1`,
+            WHERE e.tenant_id=? AND e.customer_id=? AND e.confirmed_at IS NULL
+            ORDER BY e.created_at ASC, e.id ASC
+            LIMIT 20`,
           [tenantId, customerId]
         );
-        pendingModalEvent = mapPublicBonusModalEventRow(eventRow);
+        pendingModalEvent = mapPublicBonusModalEventRows(eventRows);
       }
 
       return res.json({
@@ -2819,13 +2860,17 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       const customer = token ? await getCustomerByToken(tenantId, token) : null;
       const customerId = Number(customer?.id || 0);
       if (!(customerId > 0)) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+      const eventIds = Array.isArray(req.body?.event_ids || req.body?.eventIds)
+        ? (req.body.event_ids || req.body.eventIds).map((id) => Number(id || 0)).filter((id) => id > 0)
+        : [];
       const eventId = Number(req.body?.event_id || req.body?.eventId || 0);
-      if (!(eventId > 0)) return res.status(400).json({ ok: false, error: 'INVALID_EVENT' });
+      const ids = eventIds.length ? Array.from(new Set(eventIds)) : (eventId > 0 ? [eventId] : []);
+      if (!ids.length) return res.status(400).json({ ok: false, error: 'INVALID_EVENT' });
       const [result] = await db.query(
         `UPDATE mkt_customer_bonus_modal_events
          SET confirmed_at=NOW()
-         WHERE tenant_id=? AND customer_id=? AND id=? AND confirmed_at IS NULL`,
-        [tenantId, customerId, eventId]
+         WHERE tenant_id=? AND customer_id=? AND id IN (?) AND confirmed_at IS NULL`,
+        [tenantId, customerId, ids]
       );
       return res.json({ ok: true, data: { confirmed: Number(result?.affectedRows || 0) > 0 } });
     } catch (e) {
@@ -12532,6 +12577,103 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     }
   });
 
+  router.post('/products/batch/by-ids', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const rawIds = Array.isArray(req.body?.ids) ? req.body.ids : [];
+      const ids = [...new Set(rawIds.map(Number).filter((id) => Number.isFinite(id) && id > 0))];
+      if (!ids.length) return res.json({ ok: true, data: {} });
+      if (ids.length > 300) return res.status(400).json({ ok: false, error: 'TOO_MANY' });
+
+      const sortedIds = [...ids].sort((a, b) => a - b);
+      const cacheKey = makePublicCacheKey('products-batch-by-ids', { tenantId, storeId, ids: sortedIds });
+      const cached = getPublicCache(cacheKey);
+      if (cached) {
+        res.set('x-public-cache', 'HIT');
+        return res.json(cached);
+      }
+
+      const placeholders = ids.map(() => '?').join(',');
+      const [rows] = await db.query(
+        `SELECT p.*,
+            s.qty AS stock_qty,
+            CASE
+              WHEN (s.qty IS NULL OR s.qty > 0) AND NOT EXISTS (
+                SELECT 1
+                FROM prod_product_ingredients i
+                JOIN prod_product_stocks si
+                  ON si.tenant_id=i.tenant_id AND si.store_id=? AND si.product_id=i.ingredient_id
+                WHERE i.tenant_id=p.tenant_id AND i.product_id=p.id
+                  AND si.qty IS NOT NULL AND si.qty <= 0
+              ) AND NOT EXISTS (
+                SELECT 1
+                FROM prod_option_assignments oa
+                JOIN prod_option_groups og
+                  ON og.tenant_id=oa.tenant_id AND og.id=oa.group_id
+                WHERE oa.tenant_id=p.tenant_id
+                  AND oa.assign_type='product' AND oa.assign_id=p.id
+                  AND oa.is_active=1
+                  AND og.is_active=1
+                  AND COALESCE(og.out_of_stock_action, 1)=0
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM prod_option_items oi
+                    JOIN prod_products op
+                      ON op.tenant_id=oi.tenant_id AND op.id=oi.target_product_id
+                    LEFT JOIN prod_product_stocks ops
+                      ON ops.tenant_id=op.tenant_id AND ops.store_id=? AND ops.product_id=op.id
+                    WHERE oi.tenant_id=oa.tenant_id AND oi.group_id=oa.group_id
+                      AND oi.target_type='product'
+                      AND oi.is_active=1
+                      AND op.is_active=1
+                      AND op.site_visibility=1
+                      AND (ops.qty IS NULL OR ops.qty > 0)
+                      AND NOT EXISTS (
+                        SELECT 1
+                        FROM prod_product_ingredients ip
+                        JOIN prod_product_stocks ips
+                          ON ips.tenant_id=ip.tenant_id AND ips.store_id=? AND ips.product_id=ip.ingredient_id
+                        WHERE ip.tenant_id=op.tenant_id AND ip.product_id=op.id
+                          AND ips.qty IS NOT NULL AND ips.qty <= 0
+                      )
+                  )
+              )
+              THEN 1 ELSE 0
+            END AS is_available
+         FROM prod_products p
+         LEFT JOIN prod_product_stocks s
+           ON s.tenant_id = p.tenant_id AND s.store_id = ? AND s.product_id = p.id
+         WHERE p.tenant_id=? AND p.id IN (${placeholders}) AND p.is_active=1 AND p.site_visibility=1`,
+        [storeId, storeId, storeId, storeId, tenantId, ...ids]
+      );
+
+      for (const p of rows) {
+        p.photos = safeJsonArray(p.photos_json);
+        attachProductThumbs(p);
+        p.is_available = Number(p.is_available || 0) === 1;
+      }
+      await applyPublicProductAvailability(rows, tenantId, storeId);
+      await applyPublicProductBlocksToRows(rows, tenantId, storeId);
+      await enrichProductsWithDisplayPrice(rows, tenantId, storeId);
+      await enrichProductsWithDiscounts(rows, tenantId, storeId);
+      await attachPublicProductCategoryIds(rows, tenantId);
+
+      const data = {};
+      rows.forEach((product) => {
+        const id = Number(product?.id || 0);
+        if (id > 0) data[String(id)] = product;
+      });
+      const payload = { ok: true, data };
+      setPublicCache(cacheKey, payload, PUBLIC_CACHE_TTL_MS.productById);
+      res.set('x-public-cache', 'MISS');
+      res.json(payload);
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
   router.get('/products/:id', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
@@ -13659,6 +13801,238 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });
+  router.post('/options/groups/batch', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const rawIds = Array.isArray(req.body?.ids) ? req.body.ids : [];
+      const ids = [...new Set(rawIds.map(Number).filter((id) => Number.isFinite(id) && id > 0))];
+      if (!ids.length) return res.json({ ok: true, data: {} });
+      if (ids.length > 300) return res.status(400).json({ ok: false, error: 'TOO_MANY' });
+
+      const sortedIds = [...ids].sort((a, b) => a - b);
+      const cacheKey = makePublicCacheKey('option-groups-batch', { tenantId, storeId, ids: sortedIds });
+      const cached = getPublicCache(cacheKey);
+      if (cached) {
+        res.set('x-public-cache', 'HIT');
+        return res.json(cached);
+      }
+
+      const placeholders = ids.map(() => '?').join(',');
+      const [groups] = await db.query(
+        `SELECT *
+         FROM prod_option_groups
+         WHERE tenant_id=? AND id IN (${placeholders}) AND is_active=1`,
+        [tenantId, ...ids]
+      );
+      const groupById = new Map((Array.isArray(groups) ? groups : []).map((group) => [Number(group.id), group]));
+
+      const [items] = await db.query(
+        `SELECT
+           i.id,
+           i.group_id,
+           i.target_product_id,
+           i.target_type,
+           i.price_mode,
+           i.price_value,
+           i.qty_min,
+           i.qty_max,
+           i.is_active,
+           i.sort_order,
+           p.name AS product_name,
+           p.price AS product_price,
+           p.photos_json AS product_photos_json
+         FROM prod_option_items i
+         JOIN prod_products p ON p.tenant_id=i.tenant_id AND p.id=i.target_product_id
+         LEFT JOIN prod_product_stocks ps
+           ON ps.tenant_id = p.tenant_id AND ps.store_id = ? AND ps.product_id = p.id
+         WHERE i.tenant_id=?
+           AND i.group_id IN (${placeholders})
+           AND i.target_type='product'
+           AND i.is_active=1
+           AND p.is_active=1
+           AND p.site_visibility=1
+           AND (ps.qty IS NULL OR ps.qty > 0)
+           AND NOT EXISTS (
+             SELECT 1
+             FROM prod_product_ingredients pi
+             JOIN prod_product_stocks psi
+               ON psi.tenant_id=pi.tenant_id AND psi.store_id=? AND psi.product_id=pi.ingredient_id
+             WHERE pi.tenant_id=p.tenant_id AND pi.product_id=p.id
+               AND psi.qty IS NOT NULL AND psi.qty <= 0
+           )
+           AND NOT EXISTS (
+             SELECT 1
+             FROM prod_option_assignments oa
+             JOIN prod_option_groups og
+               ON og.tenant_id=oa.tenant_id AND og.id=oa.group_id
+             WHERE oa.tenant_id=p.tenant_id
+               AND oa.assign_type='product' AND oa.assign_id=p.id
+               AND oa.is_active=1
+               AND og.is_active=1
+               AND COALESCE(og.out_of_stock_action, 1)=0
+               AND NOT EXISTS (
+                 SELECT 1
+                 FROM prod_option_items oi
+                 JOIN prod_products op
+                   ON op.tenant_id=oi.tenant_id AND op.id=oi.target_product_id
+                 LEFT JOIN prod_product_stocks ops
+                   ON ops.tenant_id=op.tenant_id AND ops.store_id=? AND ops.product_id=op.id
+                 WHERE oi.tenant_id=oa.tenant_id AND oi.group_id=oa.group_id
+                   AND oi.target_type='product'
+                   AND oi.is_active=1
+                   AND op.is_active=1
+                   AND op.site_visibility=1
+                   AND (ops.qty IS NULL OR ops.qty > 0)
+                   AND NOT EXISTS (
+                     SELECT 1
+                     FROM prod_product_ingredients ip
+                     JOIN prod_product_stocks ips
+                       ON ips.tenant_id=ip.tenant_id AND ips.store_id=? AND ips.product_id=ip.ingredient_id
+                     WHERE ip.tenant_id=op.tenant_id AND ip.product_id=op.id
+                       AND ips.qty IS NOT NULL AND ips.qty <= 0
+                   )
+               )
+           )
+         ORDER BY i.group_id ASC, i.sort_order ASC, i.id ASC`,
+        [storeId, tenantId, ...ids, storeId, storeId, storeId]
+      );
+
+      const productIds = [...new Set((Array.isArray(items) ? items : [])
+        .map((item) => Number(item.target_product_id))
+        .filter((id) => Number.isFinite(id) && id > 0))];
+
+      const variantsByProductId = new Map();
+      if (productIds.length > 0) {
+        const [variantAssignments] = await db.query(
+          `SELECT
+             va.product_id,
+             vg.id AS variant_group_id,
+             vg.title AS variant_title,
+             vg.unit_id,
+             vg.values AS variant_values,
+             vg.default_value_index AS group_default_value_index,
+             va.default_value_index AS assignment_default_value_index,
+             u.code AS unit_code,
+             u.title AS unit_title,
+             u.short_title AS unit_short_title,
+             va.sort_order
+           FROM prod_variant_assignments va
+           JOIN prod_variant_groups vg ON vg.id = va.variant_group_id
+           LEFT JOIN prod_units u ON u.id = vg.unit_id
+           WHERE va.tenant_id = ?
+             AND va.product_id IN (${productIds.map(() => '?').join(',')})
+             AND va.is_active = 1 AND vg.is_active = 1
+           ORDER BY va.product_id, va.sort_order ASC`,
+          [tenantId, ...productIds]
+        );
+        const variantGroupIds = Array.from(
+          new Set(variantAssignments.map((va) => Number(va.variant_group_id)).filter(Number.isFinite))
+        );
+        const tiersByGroupId = new Map();
+        const variantValueExclusionsByScope = await loadVariantValueExclusionsMap(tenantId, productIds, variantGroupIds);
+        if (variantGroupIds.length > 0) {
+          const [tiers] = await db.query(
+            `SELECT variant_group_id, min_quantity, discount_percent, sort_order
+             FROM prod_variant_discount_tiers
+             WHERE tenant_id=? AND variant_group_id IN (${variantGroupIds.map(() => '?').join(',')})
+             ORDER BY variant_group_id ASC, sort_order ASC, min_quantity ASC`,
+            [tenantId, ...variantGroupIds]
+          );
+          for (const t of tiers) {
+            const gid = Number(t.variant_group_id);
+            if (!tiersByGroupId.has(gid)) tiersByGroupId.set(gid, []);
+            tiersByGroupId.get(gid).push({
+              min_quantity: t.min_quantity,
+              discount_percent: t.discount_percent,
+              sort_order: t.sort_order,
+            });
+          }
+        }
+        for (const va of variantAssignments) {
+          const pid = Number(va.product_id);
+          if (!variantsByProductId.has(pid)) variantsByProductId.set(pid, []);
+          const groupDefaultIdx = va.group_default_value_index != null ? Number(va.group_default_value_index) : null;
+          const assignmentDefaultIdx = va.assignment_default_value_index != null ? Number(va.assignment_default_value_index) : null;
+          const defaultIdx = assignmentDefaultIdx != null ? assignmentDefaultIdx : groupDefaultIdx;
+          const groupId = Number(va.variant_group_id);
+          const variantData = buildVisibleVariantData(
+            safeJsonArray(va.variant_values),
+            tiersByGroupId.get(groupId) || [],
+            defaultIdx,
+            getVariantValueExclusionSet(variantValueExclusionsByScope, pid, groupId)
+          );
+          if (!variantData) continue;
+          variantsByProductId.get(pid).push({
+            variant_group_id: groupId,
+            title: str(va.variant_title || ""),
+            unit_id: va.unit_id ? Number(va.unit_id) : null,
+            unit_code: str(va.unit_code || ""),
+            unit_title: str(va.unit_title || ""),
+            unit_short_title: str(va.unit_short_title || ""),
+            values: variantData.values,
+            default_value_index: variantData.default_value_index,
+            discount_tiers: variantData.discount_tiers,
+          });
+        }
+      }
+
+      const itemsByGroupId = new Map();
+      (Array.isArray(items) ? items : []).forEach((item) => {
+        const gid = Number(item.group_id || 0);
+        if (!(gid > 0)) return;
+        if (!itemsByGroupId.has(gid)) itemsByGroupId.set(gid, []);
+        const photos = safeJsonArray(item.product_photos_json);
+        const productId = Number(item.target_product_id);
+        itemsByGroupId.get(gid).push({
+          id: Number(item.id),
+          target_product_id: productId,
+          name: str(item.product_name || ""),
+          product_name: str(item.product_name || ""),
+          product_price: Number(item.product_price || 0),
+          product_photos_json: photos,
+          price_mode: item.price_mode || "from_target",
+          price_value: Number(item.price_value || 0),
+          qty_min: Number(item.qty_min ?? 1),
+          qty_max: Number(item.qty_max ?? 1),
+          is_active: Number(item.is_active || 0) === 1,
+          sort_order: Number(item.sort_order || 0),
+          variants: variantsByProductId.get(productId) || [],
+        });
+      });
+
+      const data = {};
+      ids.forEach((id) => {
+        const group = groupById.get(id) || null;
+        if (!group) {
+          data[String(id)] = { group: null, items: [] };
+          return;
+        }
+        data[String(id)] = {
+          group: {
+            id: Number(group.id),
+            title: str(group.title || ""),
+            selection_type: group.selection_type || "single",
+            min_select: group.min_select ?? 0,
+            max_select: group.max_select ?? null,
+            is_required: Number(group.is_required ?? 0) === 1,
+            allow_variants: Number(group.allow_variants ?? 0) === 1,
+            is_active: Number(group.is_active || 0) === 1,
+          },
+          items: itemsByGroupId.get(id) || [],
+        };
+      });
+
+      const payload = { ok: true, data };
+      setPublicCache(cacheKey, payload, PUBLIC_CACHE_TTL_MS.optionGroupById);
+      res.set('x-public-cache', 'MISS');
+      res.json(payload);
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
   router.get('/options/groups/:id', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);

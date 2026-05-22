@@ -2290,7 +2290,7 @@
             statusText: paymentStatusText
           })
           : '';
-        return '<div class="order-row order-list-card js-order js-cash-order-row ' + (isActive ? 'is-active' : '') + '" role="button" tabindex="0" data-order-id="' + String(orderId) + '">' +
+        return '<div class="order-row order-list-card js-order js-cash-order-row shared-order-summary-row ' + (isActive ? 'is-active' : '') + '" role="button" tabindex="0" data-order-id="' + String(orderId) + '">' +
           sharedOrderPanel.buildOrderListRowInnerHtml({
             orderId: orderId,
             orderNumberText: String(getOrderNumber(order)),

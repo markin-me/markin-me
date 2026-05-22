@@ -25693,6 +25693,70 @@ body.page-shop-install{
   line-height:1;
 }
 
+.shop-bonus-program-modal-details{
+  width:100%;
+}
+
+.shop-bonus-program-modal-details-toggle{
+  width:100%;
+  min-height:34px;
+  border:0;
+  background:transparent;
+  color:#4b5563;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:6px;
+  font-size:14px;
+  font-weight:800;
+  cursor:pointer;
+}
+
+.shop-bonus-program-modal-details-toggle i{
+  font-size:12px;
+  transition:transform .16s ease;
+}
+
+.shop-bonus-program-modal-details-toggle[aria-expanded="true"] i{
+  transform:rotate(180deg);
+}
+
+.shop-bonus-program-modal-details-list{
+  width:100%;
+  display:grid;
+  gap:6px;
+  padding:8px 10px;
+  border-radius:14px;
+  background:#f9fafb;
+}
+
+.shop-bonus-program-modal-details-list[hidden]{
+  display:none;
+}
+
+.shop-bonus-program-modal-details-row{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  color:#374151;
+  font-size:14px;
+  line-height:1.25;
+}
+
+.shop-bonus-program-modal-details-row span{
+  min-width:0;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+.shop-bonus-program-modal-details-row strong{
+  flex:0 0 auto;
+  color:#111827;
+  font-weight:900;
+}
+
 .shop-bonus-program-modal-confirm{
   width:100%;
   height:48px;

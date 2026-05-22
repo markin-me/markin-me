@@ -10618,12 +10618,12 @@ body.page-cash #cashOrdersRightPane .orders-info > #cashPaymentFooter{
 
 .new-order-checkout-content{
   display:grid;
-  gap:12px;
+  gap:22px;
 }
 
 .new-order-checkout-category-block{
   position:relative;
-  border:1px solid var(--color-border);
+  border:2px solid #000;
   border-radius:12px;
   background:var(--color-surface);
   padding:8px;
@@ -10851,7 +10851,7 @@ body.page-cash #cashOrdersRightPane .orders-info > #cashPaymentFooter{
 
 @media (hover:hover) and (pointer:fine){
   .new-order-checkout-category-block:hover{
-    border-color:var(--primary-25);
+    border-color:var(--primary-45);
     box-shadow:0 6px 14px rgba(15,23,42,.06);
   }
 

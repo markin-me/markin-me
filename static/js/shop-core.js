@@ -652,8 +652,8 @@
     return `<i class="fas ${escapeHtml(getShopBonusModalDefaultIcon(key))}" aria-hidden="true"></i>`;
   }
 
-  function buildShopBonusProgramModalStatsHtml(level) {
-    const reward = Math.max(0, Number(level?.reward_bonus_amount || 0));
+  function buildShopBonusProgramModalStatsHtml(level, options = {}) {
+    const reward = Math.max(0, Number(options.totalRewardBonusAmount ?? level?.reward_bonus_amount ?? 0));
     const cashback = formatShopBonusPercent(level?.cashback_percent, 0);
     const redeem = formatShopBonusPercent(level?.redeem_percent, 0);
     return `
@@ -668,6 +668,31 @@
         <div class="shop-bonus-program-modal-stat">
           <i class="fas fa-minus-circle" aria-hidden="true"></i>
           <strong>${escapeHtml(redeem)}</strong>
+        </div>
+      </div>
+    `;
+  }
+
+  function buildShopBonusProgramModalDetailsHtml(steps = []) {
+    const rows = Array.isArray(steps) ? steps.filter((step) => Number(step?.to_level_id || 0) > 0) : [];
+    if (rows.length < 2) return "";
+    return `
+      <div class="shop-bonus-program-modal-details" data-bonus-modal-details>
+        <button class="shop-bonus-program-modal-details-toggle" type="button" data-bonus-modal-details-toggle aria-expanded="false">
+          <span>Подробнее</span>
+          <i class="fas fa-chevron-down" aria-hidden="true"></i>
+        </button>
+        <div class="shop-bonus-program-modal-details-list" data-bonus-modal-details-list hidden>
+          ${rows.map((step) => {
+            const title = String(step?.to_level_title || "").trim() || "Уровень";
+            const reward = Math.max(0, Number(step?.reward_bonus_amount || 0));
+            return `
+              <div class="shop-bonus-program-modal-details-row">
+                <span>${escapeHtml(title)}</span>
+                <strong>+${formatShopBonusMoney(reward)}</strong>
+              </div>
+            `;
+          }).join("")}
         </div>
       </div>
     `;
@@ -705,11 +730,19 @@
         <div class="shop-bonus-program-modal-title">${escapeHtml(title)}</div>
         ${description ? `<div class="shop-bonus-program-modal-description">${escapeHtml(description)}</div>` : ""}
         ${transitionHtml}
-        ${buildShopBonusProgramModalStatsHtml(level)}
+        ${buildShopBonusProgramModalStatsHtml(level, options)}
+        ${buildShopBonusProgramModalDetailsHtml(options.levelSteps)}
         <button class="shop-bonus-program-modal-confirm" type="button">${"\u041f\u043e\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0442\u044c"}</button>
       </div>
     `;
     const confirmBtn = overlay.querySelector(".shop-bonus-program-modal-confirm");
+    const detailsToggle = overlay.querySelector("[data-bonus-modal-details-toggle]");
+    const detailsList = overlay.querySelector("[data-bonus-modal-details-list]");
+    detailsToggle?.addEventListener("click", () => {
+      const expanded = detailsToggle.getAttribute("aria-expanded") === "true";
+      detailsToggle.setAttribute("aria-expanded", expanded ? "false" : "true");
+      if (detailsList) detailsList.hidden = expanded;
+    });
     confirmBtn?.addEventListener("click", async () => {
       if (confirmBtn.disabled) return;
       confirmBtn.disabled = true;
@@ -734,6 +767,7 @@
     if (setting && setting.is_enabled === false) return;
     const fromLevel = getShopBonusLevelById(event.from_level_id) || { title: event.from_level_title || "" };
     const toLevel = getShopBonusLevelById(event.to_level_id) || { title: event.to_level_title || "" };
+    const eventIds = Array.isArray(event.event_ids) ? event.event_ids.map((id) => Number(id || 0)).filter((id) => id > 0) : [];
     state._homeBonusModalEventId = eventId;
     openShopBonusProgramModal({
       modalKey,
@@ -742,10 +776,12 @@
       level: toLevel,
       fromLevelTitle: event.from_level_title || "",
       toLevelTitle: event.to_level_title || "",
+      levelSteps: event.level_steps || [],
+      totalRewardBonusAmount: event.total_reward_bonus_amount,
       onConfirm: async () => {
         await apiJson("/api/public/bonus/modal-events/confirm", {
           method: "POST",
-          body: { event_id: eventId },
+          body: { event_id: eventId, event_ids: eventIds.length ? eventIds : [eventId] },
         });
         if (state.homeBonusConfig?.pending_modal_event?.id === eventId) {
           state.homeBonusConfig.pending_modal_event = null;
