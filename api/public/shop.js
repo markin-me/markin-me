@@ -147,6 +147,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     cartUpsell: 15000,
     products: 15000,
     productsBatchCategories: 30000,
+    productsBatchDetails: 30000,
     productsBatchIngredients: 30000,
     productsBatchVariants: 30000,
     productsBatchOptionAssignments: 30000,
@@ -2681,16 +2682,20 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     }
   });
 
+  async function loadPublicUnitConversionsPayload(req) {
+    const tenantId = helpers.getTenantId(req);
+    const [rows] = await db.query(
+      `SELECT id, from_unit_id, to_unit_id, factor, is_active
+       FROM prod_unit_conversions
+       WHERE tenant_id=? AND is_active=1`,
+      [tenantId]
+    );
+    return rows || [];
+  }
+
   router.get('/unit-conversions', async (req, res) => {
     try {
-      const tenantId = helpers.getTenantId(req);
-      const [rows] = await db.query(
-        `SELECT id, from_unit_id, to_unit_id, factor, is_active
-         FROM prod_unit_conversions
-         WHERE tenant_id=? AND is_active=1`,
-        [tenantId]
-      );
-      return res.json({ ok: true, data: rows || [] });
+      return res.json({ ok: true, data: await loadPublicUnitConversionsPayload(req) });
     } catch (e) {
       console.error(e);
       return res.status(500).json({ ok: false, error: 'DB_ERROR' });
@@ -11595,29 +11600,53 @@ window.location.replace(${JSON.stringify(redirectUrl)});
   // PUBLIC SHOP: categories/products
   // ------------------------------
 
+  async function loadPublicCategoriesPayload(req) {
+    const tenantId = helpers.getTenantId(req);
+    const storeId = helpers.getStoreId(req);
+    const cacheKey = makePublicCacheKey('categories', { tenantId, storeId });
+    const cached = getPublicCache(cacheKey);
+    if (cached) return { payload: cached, cacheHit: true };
+
+    const [rows] = await db.query(
+      `SELECT id, tenant_id, code, title, icon, site_visibility, is_active, sort_order
+       FROM prod_categories
+       WHERE tenant_id=? AND is_active=1 AND site_visibility=1
+       ORDER BY sort_order ASC, id ASC`,
+      [tenantId]
+    );
+
+    const payload = { ok: true, data: rows };
+    setPublicCache(cacheKey, payload, PUBLIC_CACHE_TTL_MS.categories);
+    return { payload, cacheHit: false };
+  }
+
   router.get('/categories', async (req, res) => {
     try {
-      const tenantId = helpers.getTenantId(req);
-      const storeId = helpers.getStoreId(req);
-      const cacheKey = makePublicCacheKey('categories', { tenantId, storeId });
-      const cached = getPublicCache(cacheKey);
-      if (cached) {
-        res.set('x-public-cache', 'HIT');
-        return res.json(cached);
-      }
+      const result = await loadPublicCategoriesPayload(req);
+      res.set('x-public-cache', result.cacheHit ? 'HIT' : 'MISS');
+      res.json(result.payload);
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
 
-      const [rows] = await db.query(
-        `SELECT id, tenant_id, code, title, icon, site_visibility, is_active, sort_order
-         FROM prod_categories
-         WHERE tenant_id=? AND is_active=1 AND site_visibility=1
-         ORDER BY sort_order ASC, id ASC`,
-        [tenantId]
-      );
+  router.get('/shop/bootstrap', async (req, res) => {
+    try {
+      const [categoriesResult, orderConfig, unitConversions] = await Promise.all([
+        loadPublicCategoriesPayload(req),
+        loadPublicOrderConfigPayload(req),
+        loadPublicUnitConversionsPayload(req),
+      ]);
 
-      const payload = { ok: true, data: rows };
-      setPublicCache(cacheKey, payload, PUBLIC_CACHE_TTL_MS.categories);
-      res.set('x-public-cache', 'MISS');
-      res.json(payload);
+      res.json({
+        ok: true,
+        data: {
+          categories: Array.isArray(categoriesResult.payload?.data) ? categoriesResult.payload.data : [],
+          orderConfig,
+          unitConversions,
+        },
+      });
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
@@ -13141,6 +13170,377 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     }
   });
 
+  router.post('/products/batch/details', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const ids = Array.isArray(req.body?.ids)
+        ? Array.from(new Set(req.body.ids.map(Number).filter((n) => Number.isFinite(n) && n > 0)))
+        : [];
+      if (!ids.length) return res.json({ ok: true, data: { assignments: {}, ingredients: {}, variants: {}, option_groups: {} } });
+      if (ids.length > 200) return res.status(400).json({ ok: false, error: 'TOO_MANY' });
+
+      const sortedIds = ids.slice().sort((a, b) => a - b);
+      const cacheKey = makePublicCacheKey('products-batch-details', { tenantId, storeId, ids: sortedIds });
+      const { payload, cacheState } = await loadPublicCachedPayload(
+        cacheKey,
+        PUBLIC_CACHE_TTL_MS.productsBatchDetails,
+        async () => {
+          const blocksConfigMap = await resolveProductBlocksConfigMap(
+            tenantId,
+            storeId,
+            sortedIds.map((id) => ({ id }))
+          );
+
+          const placeholders = sortedIds.map(() => '?').join(',');
+          const [assignmentRows] = await db.query(
+            `SELECT
+               a.assign_id AS product_id,
+               a.id AS assignment_id,
+               a.group_id,
+               a.priority,
+               a.sort_order,
+               a.is_active,
+               a.selection_type AS assignment_selection_type,
+               a.min_select AS assignment_min_select,
+               a.max_select AS assignment_max_select,
+               g.title,
+               g.selection_type AS group_selection_type,
+               g.min_select AS group_min_select,
+               g.max_select AS group_max_select,
+               g.is_required,
+               g.out_of_stock_action
+             FROM prod_option_assignments a
+             JOIN prod_option_groups g ON g.tenant_id=a.tenant_id AND g.id=a.group_id
+             WHERE a.tenant_id=?
+               AND a.assign_type='product'
+               AND a.assign_id IN (${placeholders})
+               AND a.is_active=1
+               AND g.is_active=1
+             ORDER BY a.assign_id ASC, a.sort_order ASC, a.id ASC`,
+            [tenantId, ...sortedIds]
+          );
+
+          const assignments = {};
+          sortedIds.forEach((pid) => { assignments[pid] = []; });
+          assignmentRows.forEach((r) => {
+            const pid = Number(r.product_id);
+            if (!Number.isFinite(pid) || pid <= 0) return;
+            if (!assignments[pid]) assignments[pid] = [];
+            assignments[pid].push({
+              assignment_id: Number(r.assignment_id),
+              group_id: Number(r.group_id),
+              title: str(r.title || ''),
+              selection_type: r.assignment_selection_type || r.group_selection_type || 'single',
+              min_select: r.assignment_min_select ?? r.group_min_select ?? 0,
+              max_select: r.assignment_max_select ?? r.group_max_select ?? null,
+              is_required: Number(r.is_required ?? 0) === 1,
+              is_active: Number(r.is_active || 0) === 1,
+              out_of_stock_action: r.out_of_stock_action == null ? 1 : Number(r.out_of_stock_action),
+              priority: Number(r.priority || 0),
+              sort_order: Number(r.sort_order || 0),
+            });
+          });
+          sortedIds.forEach((pid) => {
+            const blocksConfig = blocksConfigMap.get(Number(pid)) || getDefaultProductBlocksConfig();
+            if (!blocksConfig.options) assignments[pid] = [];
+          });
+
+          const [pcsRows] = await db.query(
+            `SELECT id FROM prod_units WHERE tenant_id=? AND code='pcs' LIMIT 1`,
+            [tenantId]
+          );
+          const pcsUnitId = pcsRows.length ? Number(pcsRows[0].id) : null;
+
+          const [ingredientRows] = await db.query(
+            `SELECT
+               i.product_id,
+               i.id,
+               i.ingredient_id,
+               i.quantity,
+               i.unit_id,
+               i.quantity_min,
+               i.quantity_max,
+               i.quantity_step,
+               i.price_override,
+               i.is_variable,
+               i.sort_order,
+               p.name AS ingredient_name,
+               p.price AS ingredient_price,
+               p.base_unit_id AS ingredient_base_unit_id,
+               p.base_qty AS ingredient_base_qty,
+               p.unit_id AS ingredient_unit_id,
+               p.photos_json AS ingredient_photos,
+               u.code AS unit_code,
+               u.title AS unit_title,
+               u.short_title AS unit_short_title,
+               pul.factor AS ingredient_pcs_factor
+             FROM prod_product_ingredients i
+             JOIN prod_products p ON p.tenant_id=i.tenant_id AND p.id=i.ingredient_id
+             JOIN prod_units u ON u.id=i.unit_id
+             LEFT JOIN prod_product_unit_links pul
+               ON pul.tenant_id=i.tenant_id
+              AND pul.product_id=i.ingredient_id
+              AND pul.base_unit_id=p.base_unit_id
+              AND pul.unit_id=?
+             WHERE i.tenant_id=? AND i.product_id IN (${placeholders})
+               AND (i.is_variable = 1 OR i.is_variable IS NULL)
+             ORDER BY i.product_id ASC, i.sort_order ASC, i.id ASC`,
+            [pcsUnitId || 0, tenantId, ...sortedIds]
+          );
+
+          const ingredients = {};
+          sortedIds.forEach((pid) => { ingredients[pid] = []; });
+          ingredientRows.forEach((r) => {
+            r.ingredient_photos = safeJsonArray(r.ingredient_photos);
+            const pid = Number(r.product_id);
+            if (!ingredients[pid]) ingredients[pid] = [];
+            ingredients[pid].push(r);
+          });
+          sortedIds.forEach((pid) => {
+            const blocksConfig = blocksConfigMap.get(Number(pid)) || getDefaultProductBlocksConfig();
+            if (!blocksConfig.ingredients) ingredients[pid] = [];
+          });
+
+          const [variantRows] = await db.query(
+            `SELECT
+               va.product_id,
+               vg.id,
+               vg.title,
+               vg.unit_id,
+               vg.values,
+               vg.default_value_index AS group_default_value_index,
+               va.default_value_index AS assignment_default_value_index,
+               u.code AS unit_code,
+               u.title AS unit_title,
+               u.short_title AS unit_short_title
+             FROM prod_variant_assignments va
+             JOIN prod_variant_groups vg ON vg.id=va.variant_group_id
+             LEFT JOIN prod_units u ON u.id=vg.unit_id
+             WHERE va.tenant_id=?
+               AND va.product_id IN (${placeholders})
+               AND va.is_active=1 AND vg.is_active=1
+             ORDER BY va.product_id ASC, va.sort_order ASC, vg.sort_order ASC`,
+            [tenantId, ...sortedIds]
+          );
+
+          const rootGroupIds = Array.from(new Set(variantRows.map((r) => Number(r.id)).filter((n) => Number.isFinite(n) && n > 0)));
+          const rootVariantValueExclusionsByScope = await loadVariantValueExclusionsMap(tenantId, sortedIds, rootGroupIds);
+          const tiersByGroupId = new Map();
+          if (rootGroupIds.length) {
+            const tierPlaceholders = rootGroupIds.map(() => '?').join(',');
+            const [tiers] = await db.query(
+              `SELECT variant_group_id, min_quantity, discount_percent, sort_order
+               FROM prod_variant_discount_tiers
+               WHERE tenant_id=? AND variant_group_id IN (${tierPlaceholders})
+               ORDER BY variant_group_id ASC, sort_order ASC, min_quantity ASC`,
+              [tenantId, ...rootGroupIds]
+            );
+            for (const t of tiers) {
+              const gid = Number(t.variant_group_id);
+              if (!tiersByGroupId.has(gid)) tiersByGroupId.set(gid, []);
+              tiersByGroupId.get(gid).push(t);
+            }
+          }
+
+          const variants = {};
+          sortedIds.forEach((pid) => { variants[pid] = []; });
+          for (const v of variantRows) {
+            const pid = Number(v.product_id);
+            if (!variants[pid]) variants[pid] = [];
+            const groupDefaultIdx = v.group_default_value_index != null ? Number(v.group_default_value_index) : null;
+            const assignmentDefaultIdx = v.assignment_default_value_index != null ? Number(v.assignment_default_value_index) : null;
+            const groupId = Number(v.id);
+            const variantData = buildVisibleVariantData(
+              safeJsonArray(v.values),
+              tiersByGroupId.get(groupId) || [],
+              assignmentDefaultIdx != null ? assignmentDefaultIdx : groupDefaultIdx,
+              getVariantValueExclusionSet(rootVariantValueExclusionsByScope, pid, groupId)
+            );
+            if (!variantData) continue;
+            variants[pid].push({
+              id: groupId,
+              title: str(v.title || ""),
+              unit_id: v.unit_id ? Number(v.unit_id) : null,
+              unit_code: str(v.unit_code || ""),
+              unit_title: str(v.unit_title || ""),
+              unit_short_title: str(v.unit_short_title || ""),
+              values: variantData.values,
+              default_value_index: variantData.default_value_index,
+              discount_tiers: variantData.discount_tiers,
+            });
+          }
+          sortedIds.forEach((pid) => {
+            const blocksConfig = blocksConfigMap.get(Number(pid)) || getDefaultProductBlocksConfig();
+            if (!blocksConfig.variants) variants[pid] = [];
+          });
+
+          const optionGroupIds = Array.from(new Set(Object.values(assignments).flat().map((row) => Number(row.group_id)).filter((id) => id > 0)));
+          const optionGroups = {};
+          if (optionGroupIds.length) {
+            const groupPlaceholders = optionGroupIds.map(() => '?').join(',');
+            const [groupRows] = await db.query(
+              `SELECT *
+               FROM prod_option_groups
+               WHERE tenant_id=? AND id IN (${groupPlaceholders}) AND is_active=1`,
+              [tenantId, ...optionGroupIds]
+            );
+            const groupById = new Map(groupRows.map((group) => [Number(group.id), group]));
+            const [items] = await db.query(
+              `SELECT
+                 i.id,
+                 i.group_id,
+                 i.target_product_id,
+                 i.target_type,
+                 i.price_mode,
+                 i.price_value,
+                 i.qty_min,
+                 i.qty_max,
+                 i.is_active,
+                 i.sort_order,
+                 p.name AS product_name,
+                 p.price AS product_price,
+                 p.photos_json AS product_photos_json
+               FROM prod_option_items i
+               JOIN prod_products p ON p.tenant_id=i.tenant_id AND p.id=i.target_product_id
+               LEFT JOIN prod_product_stocks ps
+                 ON ps.tenant_id = p.tenant_id AND ps.store_id = ? AND ps.product_id = p.id
+               WHERE i.tenant_id=?
+                 AND i.group_id IN (${groupPlaceholders})
+                 AND i.target_type='product'
+                 AND i.is_active=1
+                 AND p.is_active=1
+                 AND p.site_visibility=1
+                 AND (ps.qty IS NULL OR ps.qty > 0)
+               ORDER BY i.group_id ASC, i.sort_order ASC, i.id ASC`,
+              [storeId, tenantId, ...optionGroupIds]
+            );
+            const optionTargetProductIds = Array.from(new Set(items.map((item) => Number(item.target_product_id)).filter((id) => id > 0)));
+            const optionVariantsByProductId = new Map();
+            if (optionTargetProductIds.length) {
+              const optionVariantPlaceholders = optionTargetProductIds.map(() => '?').join(',');
+              const [optionVariantRows] = await db.query(
+                `SELECT
+                   va.product_id,
+                   vg.id AS variant_group_id,
+                   vg.title AS variant_title,
+                   vg.unit_id,
+                   vg.values AS variant_values,
+                   vg.default_value_index AS group_default_value_index,
+                   va.default_value_index AS assignment_default_value_index,
+                   u.code AS unit_code,
+                   u.title AS unit_title,
+                   u.short_title AS unit_short_title,
+                   va.sort_order
+                 FROM prod_variant_assignments va
+                 JOIN prod_variant_groups vg ON vg.id = va.variant_group_id
+                 LEFT JOIN prod_units u ON u.id = vg.unit_id
+                 WHERE va.tenant_id = ?
+                   AND va.product_id IN (${optionVariantPlaceholders})
+                   AND va.is_active = 1 AND vg.is_active = 1
+                 ORDER BY va.product_id, va.sort_order ASC`,
+                [tenantId, ...optionTargetProductIds]
+              );
+              const optionVariantGroupIds = Array.from(new Set(optionVariantRows.map((va) => Number(va.variant_group_id)).filter(Number.isFinite)));
+              const optionTiersByGroupId = new Map();
+              const optionVariantValueExclusionsByScope = await loadVariantValueExclusionsMap(tenantId, optionTargetProductIds, optionVariantGroupIds);
+              if (optionVariantGroupIds.length) {
+                const optionTierPlaceholders = optionVariantGroupIds.map(() => '?').join(',');
+                const [optionTiers] = await db.query(
+                  `SELECT variant_group_id, min_quantity, discount_percent, sort_order
+                   FROM prod_variant_discount_tiers
+                   WHERE tenant_id=? AND variant_group_id IN (${optionTierPlaceholders})
+                   ORDER BY variant_group_id ASC, sort_order ASC, min_quantity ASC`,
+                  [tenantId, ...optionVariantGroupIds]
+                );
+                for (const t of optionTiers) {
+                  const gid = Number(t.variant_group_id);
+                  if (!optionTiersByGroupId.has(gid)) optionTiersByGroupId.set(gid, []);
+                  optionTiersByGroupId.get(gid).push(t);
+                }
+              }
+              for (const va of optionVariantRows) {
+                const pid = Number(va.product_id);
+                if (!optionVariantsByProductId.has(pid)) optionVariantsByProductId.set(pid, []);
+                const groupDefaultIdx = va.group_default_value_index != null ? Number(va.group_default_value_index) : null;
+                const assignmentDefaultIdx = va.assignment_default_value_index != null ? Number(va.assignment_default_value_index) : null;
+                const defaultIdx = assignmentDefaultIdx != null ? assignmentDefaultIdx : groupDefaultIdx;
+                const groupId = Number(va.variant_group_id);
+                const variantData = buildVisibleVariantData(
+                  safeJsonArray(va.variant_values),
+                  optionTiersByGroupId.get(groupId) || [],
+                  defaultIdx,
+                  getVariantValueExclusionSet(optionVariantValueExclusionsByScope, pid, groupId)
+                );
+                if (!variantData) continue;
+                optionVariantsByProductId.get(pid).push({
+                  variant_group_id: groupId,
+                  title: str(va.variant_title || ""),
+                  unit_id: va.unit_id ? Number(va.unit_id) : null,
+                  unit_code: str(va.unit_code || ""),
+                  unit_title: str(va.unit_title || ""),
+                  unit_short_title: str(va.unit_short_title || ""),
+                  values: variantData.values,
+                  default_value_index: variantData.default_value_index,
+                  discount_tiers: variantData.discount_tiers,
+                });
+              }
+            }
+            const itemsByGroupId = new Map();
+            items.forEach((item) => {
+              const gid = Number(item.group_id || 0);
+              if (!(gid > 0)) return;
+              if (!itemsByGroupId.has(gid)) itemsByGroupId.set(gid, []);
+              const photos = safeJsonArray(item.product_photos_json);
+              const productId = Number(item.target_product_id);
+              itemsByGroupId.get(gid).push({
+                id: Number(item.id),
+                target_product_id: productId,
+                name: str(item.product_name || ""),
+                product_name: str(item.product_name || ""),
+                product_price: Number(item.product_price || 0),
+                product_photos_json: photos,
+                price_mode: item.price_mode || "from_target",
+                price_value: Number(item.price_value || 0),
+                qty_min: Number(item.qty_min ?? 1),
+                qty_max: Number(item.qty_max ?? 1),
+                is_active: Number(item.is_active || 0) === 1,
+                sort_order: Number(item.sort_order || 0),
+                variants: optionVariantsByProductId.get(productId) || [],
+              });
+            });
+            optionGroupIds.forEach((id) => {
+              const group = groupById.get(id) || null;
+              optionGroups[String(id)] = group
+                ? {
+                    group: {
+                      id: Number(group.id),
+                      title: str(group.title || ""),
+                      selection_type: group.selection_type || "single",
+                      min_select: group.min_select ?? 0,
+                      max_select: group.max_select ?? null,
+                      is_required: Number(group.is_required ?? 0) === 1,
+                      allow_variants: Number(group.allow_variants ?? 0) === 1,
+                      is_active: Number(group.is_active || 0) === 1,
+                    },
+                    items: itemsByGroupId.get(id) || [],
+                  }
+                : { group: null, items: [] };
+            });
+          }
+
+          return { ok: true, data: { assignments, ingredients, variants, option_groups: optionGroups } };
+        }
+      );
+
+      res.set('x-public-cache', cacheState);
+      return res.json(payload);
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
   router.post('/products/batch/default-cart-config', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
@@ -14445,11 +14845,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
   // order-config (Р Т‘Р В»РЎРЏ Р С•РЎвЂћР С•РЎР‚Р СР В»Р ВµР Р…Р С‘РЎРЏ)
   // Р вЂ™Р С’Р вЂ“Р СњР С›: РЎвЂљР Р†Р С•Р в„– РЎвЂћРЎР‚Р С•Р Р…РЎвЂљ Р В¶Р Т‘РЎвЂРЎвЂљ methods / payments / timeOptions
   // ------------------------------
-  router.get('/order-config', async (req, res) => {
-    try {
-      const tenantId = helpers.getTenantId(req);
-      const storeId = helpers.getStoreId(req);
-      await ensureOrderDeliveryTypeColumns();
+  async function loadPublicOrderConfigPayload(req) {
+    const tenantId = helpers.getTenantId(req);
+    const storeId = helpers.getStoreId(req);
+    await ensureOrderDeliveryTypeColumns();
 
       const [statuses] = await db.query(
         `SELECT id, code, title, subtitle, icon, color, sort
@@ -14524,25 +14923,27 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const deliveryIsOpen = isStoreDeliveryOpenNow(deliveryHours, storeTimezone);
       const tenantMapConfig = await getTenantMapConfig(db, tenantId);
 
-      res.json({
-        ok: true,
-        data: {
-          statuses,
-          payments,
-          methods,
-          timeOptions,
-          storeHours,
-          storeDeliveryHours: deliveryHours,
-          storeTimezone,
-          storeIsOpen,
-          deliveryIsOpen,
-          storeAddressMapEnabled: isStoreAddressMapModeEnabled(tenantMapConfig),
-          price_rounding_mode: roundingMode,
-          price_rounding_precision: roundingPrecision,
-          priceRoundingMode: roundingMode,
-          priceRoundingPrecision: roundingPrecision,
-        }
-      });
+    return {
+      statuses,
+      payments,
+      methods,
+      timeOptions,
+      storeHours,
+      storeDeliveryHours: deliveryHours,
+      storeTimezone,
+      storeIsOpen,
+      deliveryIsOpen,
+      storeAddressMapEnabled: isStoreAddressMapModeEnabled(tenantMapConfig),
+      price_rounding_mode: roundingMode,
+      price_rounding_precision: roundingPrecision,
+      priceRoundingMode: roundingMode,
+      priceRoundingPrecision: roundingPrecision,
+    };
+  }
+
+  router.get('/order-config', async (req, res) => {
+    try {
+      res.json({ ok: true, data: await loadPublicOrderConfigPayload(req) });
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });

@@ -7355,8 +7355,8 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
 
   /* ===== РњР°СЃС€С‚Р°Р±РёСЂРѕРІР°РЅРёРµ UI РєР°СЂС‚РѕС‡РµРє (container queries) ===== */
   --sp-pad: 12px;
-  --sp-title-size: 14px;
-  --sp-sub-size: 12px;
+  --sp-title-size: 12px;
+  --sp-sub-size: 10px;
   --sp-gap: 8px;
   --sp-pill-h: 32px;
   --sp-pill-side: 44px;
@@ -11201,6 +11201,12 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
 .shop-col-products .panel-body{
   container-type: inline-size;
   padding-bottom: 400px;
+  background: #f3f4f6;
+}
+
+body.page-shop .shop-products-panel,
+body.page-shop .shop-products-panel .panel-body{
+  background: #f3f4f6;
 }
 
 
@@ -11684,8 +11690,8 @@ body.page-shop #shopCartPanel > .panel-body.shop-cart-body > .shop-cart > .shop-
 /* container query: С€РёСЂРёРЅР° РїР°РЅРµР»Рё С‚РѕРІР°СЂРѕРІ */
 /* РєР°СЂС‚РѕС‡РєР° */
 .sp-card{
-  border: 1px solid var(--color-border);
-  background: var(--color-surface);
+  border: 0;
+  background: #fff;
   border-radius: var(--shop-radius);
   overflow: hidden;
   display: flex;

@@ -14,6 +14,7 @@ db-tools/
 AGENTS.md
 a1186497_test.sql
 shop-1.localhost-1774347949861.log
+shop-2.localhost.har
 # Временные скрипты для настройки
 setup-tenant-1-login.js
 setup-tenant-1-quick.js

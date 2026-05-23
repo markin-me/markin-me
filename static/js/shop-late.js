@@ -21,8 +21,12 @@
     const id = Number(pid);
     if (state.productCache.has(id)) return state.productCache.get(id);
 
-    const json = await apiJson(`/api/public/products/${id}`);
-    const p = json.data;
+    const json = await apiJson('/api/public/products/batch/by-ids', {
+      method: 'POST',
+      body: { ids: [id] },
+    });
+    const p = json?.data?.[id] || json?.data?.[String(id)];
+    if (!p) return null;
     if (!Array.isArray(p.photos)) p.photos = safePhotos(p);
     if (typeof cacheStockFromProductPayload === "function") {
       cacheStockFromProductPayload(p, "product_ensure_late");
@@ -51,13 +55,13 @@
     if (!Number.isFinite(pid)) return [];
     if (state.productOptionsCache.has(pid)) return state.productOptionsCache.get(pid);
     try {
-      const res = await fetch(`/api/public/products/${pid}/option-assignments`);
-      const data = await res.json().catch(() => null);
-      if (!res.ok || !data || data.ok === false) {
-        state.productOptionsCache.set(pid, []);
-        return [];
-      }
-      const list = Array.isArray(data.data) ? data.data : [];
+      const json = await apiJson('/api/public/products/batch/option-assignments', {
+        method: 'POST',
+        body: { ids: [pid] },
+      });
+      const list = Array.isArray(json?.data?.[pid])
+        ? json.data[pid]
+        : (Array.isArray(json?.data?.[String(pid)]) ? json.data[String(pid)] : []);
       state.productOptionsCache.set(pid, list);
       return list;
     } catch {
@@ -284,10 +288,48 @@ const comboDetailsCache = new Map();
 const comboProductPreviewSharedCache = new Map();
 const comboBlockPreviewWarmCache = new Map();
 const comboBlockPreviewResolvedCache = new Map();
+const productDetailsBatchInflight = new Map();
 let productDetailsPrefetchTimer = null;
 let comboDetailsPrefetchTimer = null;
 const COMBO_DETAILS_CACHE_TTL_MS = 60000;
 const COMBO_PREVIEW_SHARED_TTL_MS = 5 * 60 * 1000;
+
+function normalizeProductDetailIds(productIds, limit = 0) {
+  const ids = Array.isArray(productIds)
+    ? Array.from(new Set(productIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)))
+    : [];
+  const safeLimit = Number(limit || 0);
+  return Number.isFinite(safeLimit) && safeLimit > 0 ? ids.slice(0, safeLimit) : ids;
+}
+
+function productDetailsBatchKey(productIds) {
+  return normalizeProductDetailIds(productIds).sort((a, b) => a - b).join(",");
+}
+
+async function preloadProductsByIdsToCache(productIds) {
+  const ids = normalizeProductDetailIds(productIds).filter((id) => !state.productCache.has(id));
+  if (!ids.length) return;
+
+  try {
+    const json = await apiJson('/api/public/products/batch/by-ids', {
+      method: 'POST',
+      body: { ids },
+    });
+    const data = json?.data && typeof json.data === "object" ? json.data : {};
+    ids.forEach((id) => {
+      const product = data[id] || data[String(id)] || null;
+      if (!product || typeof product !== "object") return;
+      if (!Array.isArray(product.photos)) product.photos = safePhotos(product);
+      if (typeof cacheStockFromProductPayload === "function") {
+        cacheStockFromProductPayload(product, "product_details_batch_target");
+      }
+      product.is_available = isProductAvailable(product);
+      state.productCache.set(id, product);
+    });
+  } catch (e) {
+    console.warn("Failed to preload products batch:", e);
+  }
+}
 
 function collectComboProductIds(comboData) {
   const ids = new Set();
@@ -551,6 +593,200 @@ async function warmComboProductConfigById(productId) {
   return task;
 }
 
+function buildProductOptionGroupsFromBatch(productId, assignments, optionGroupsById) {
+  const activeAssignments = (Array.isArray(assignments) ? assignments : [])
+    .filter((a) => Number(a?.is_active || 0) === 1);
+  const groups = [];
+
+  activeAssignments.forEach((assignment) => {
+    const groupId = Number(assignment?.group_id || 0);
+    if (!Number.isFinite(groupId) || groupId <= 0) return;
+    const details = optionGroupsById[groupId] || optionGroupsById[String(groupId)] || null;
+    const items = Array.isArray(details?.items) ? details.items : [];
+    const activeItems = items.filter((item) => Number(item?.is_active || 0) === 1);
+    if (!activeItems.length) return;
+
+    const groupSelectionType = details?.group?.selection_type || assignment.selection_type || "single";
+    const groupMinSelect = details?.group?.min_select ?? assignment.min_select ?? 0;
+    const groupMaxSelect = details?.group?.max_select ?? assignment.max_select ?? null;
+
+    groups.push({
+      id: groupId,
+      title: str(assignment.title || details?.group?.title || ""),
+      selection_type: groupSelectionType,
+      min_select: groupMinSelect,
+      max_select: groupMaxSelect,
+      allow_variants: Boolean(details?.group?.allow_variants),
+      is_required:
+        groupSelectionType === "single"
+          ? (Number(details?.group?.is_required ?? 1) === 1)
+          : false,
+      items: activeItems.map((item) => {
+        let photo = "";
+        try {
+          const arr =
+            typeof item.product_photos_json === "string"
+              ? JSON.parse(item.product_photos_json)
+              : Array.isArray(item.product_photos_json)
+                ? item.product_photos_json
+                : [];
+          if (Array.isArray(arr) && arr[0]) photo = arr[0];
+        } catch {}
+
+        return {
+          id: Number(item.id),
+          target_product_id: Number(item.target_product_id || 0),
+          title: str(item.product_name || item.name || ""),
+          price: getOptionItemPrice(item),
+          product_price: Number(item.product_price || 0),
+          qty_min: item.qty_min ?? 1,
+          qty_max: item.qty_max ?? 1,
+          photo,
+          variants: Array.isArray(item?.variants) ? item.variants : [],
+        };
+      }),
+    });
+  });
+
+  return groups;
+}
+
+async function preloadProductDetailsConfigBatch(productIds) {
+  const ids = normalizeProductDetailIds(productIds)
+    .filter((id) => !productDetailsConfigCache.has(id));
+  if (!ids.length) return;
+  const batchKey = productDetailsBatchKey(ids);
+  if (batchKey && productDetailsBatchInflight.has(batchKey)) {
+    await productDetailsBatchInflight.get(batchKey);
+    return;
+  }
+
+  const task = (async () => {
+    let combinedData = null;
+    try {
+      const detailsJson = await apiJson('/api/public/products/batch/details', {
+        method: 'POST',
+        body: { ids },
+      });
+      combinedData = detailsJson?.data && typeof detailsJson.data === "object" ? detailsJson.data : null;
+    } catch {}
+
+    let assignmentsByProduct = combinedData?.assignments || null;
+    let ingredientsByProduct = combinedData?.ingredients || null;
+    let variantsByProduct = combinedData?.variants || null;
+    let optionGroupsById = combinedData?.option_groups || null;
+
+    if (!assignmentsByProduct || !ingredientsByProduct || !variantsByProduct) {
+      const [assignmentsRes, ingredientsRes, variantsRes] = await Promise.allSettled([
+        apiJson('/api/public/products/batch/option-assignments', {
+          method: 'POST',
+          body: { ids },
+        }),
+        apiJson('/api/public/products/batch/ingredients', {
+          method: 'POST',
+          body: { ids },
+        }),
+        apiJson('/api/public/products/batch/variants', {
+          method: 'POST',
+          body: { ids },
+        }),
+      ]);
+
+      if (
+        assignmentsRes.status !== "fulfilled" ||
+        ingredientsRes.status !== "fulfilled" ||
+        variantsRes.status !== "fulfilled"
+      ) {
+        console.warn("preloadProductDetailsConfigBatch: product details batch failed");
+        return;
+      }
+
+      assignmentsByProduct = assignmentsRes.value?.data ? assignmentsRes.value.data : {};
+      ingredientsByProduct = ingredientsRes.value?.data ? ingredientsRes.value.data : {};
+      variantsByProduct = variantsRes.value?.data ? variantsRes.value.data : {};
+    }
+
+    const groupIds = [];
+    ids.forEach((id) => {
+      const assignments = Array.isArray(assignmentsByProduct[id])
+        ? assignmentsByProduct[id]
+        : (Array.isArray(assignmentsByProduct[String(id)]) ? assignmentsByProduct[String(id)] : []);
+      assignments.forEach((assignment) => {
+        const groupId = Number(assignment?.group_id || 0);
+        if (Number.isFinite(groupId) && groupId > 0) groupIds.push(groupId);
+      });
+    });
+
+    optionGroupsById = optionGroupsById && typeof optionGroupsById === "object" ? optionGroupsById : {};
+    const uniqueGroupIds = normalizeProductDetailIds(groupIds);
+    const missingGroupIds = uniqueGroupIds.filter((groupId) => !optionGroupsById[groupId] && !optionGroupsById[String(groupId)]);
+    if (missingGroupIds.length) {
+      try {
+        const groupsJson = await apiJson('/api/public/options/groups/batch', {
+          method: 'POST',
+          body: { ids: missingGroupIds },
+        });
+        optionGroupsById = {
+          ...optionGroupsById,
+          ...(groupsJson?.data && typeof groupsJson.data === "object" ? groupsJson.data : {}),
+        };
+      } catch (e) {
+        console.warn("Failed to preload option groups batch:", e);
+        return;
+      }
+    }
+    if (uniqueGroupIds.length) {
+      uniqueGroupIds.forEach((groupId) => {
+          const details = optionGroupsById[groupId] || optionGroupsById[String(groupId)] || null;
+          state.optionGroupCache.set(`${groupId}:0`, details);
+      });
+    }
+
+    const targetProductIds = [];
+    Object.values(optionGroupsById).forEach((details) => {
+      const items = Array.isArray(details?.items) ? details.items : [];
+      items.forEach((item) => {
+        const targetProductId = Number(item?.target_product_id || 0);
+        if (Number.isFinite(targetProductId) && targetProductId > 0) targetProductIds.push(targetProductId);
+      });
+    });
+    await preloadProductsByIdsToCache(targetProductIds);
+
+    ids.forEach((id) => {
+      const assignments = Array.isArray(assignmentsByProduct[id])
+        ? assignmentsByProduct[id]
+        : (Array.isArray(assignmentsByProduct[String(id)]) ? assignmentsByProduct[String(id)] : []);
+      const ingredients = Array.isArray(ingredientsByProduct[id])
+        ? ingredientsByProduct[id]
+        : (Array.isArray(ingredientsByProduct[String(id)]) ? ingredientsByProduct[String(id)] : []);
+      const variantsRaw = Array.isArray(variantsByProduct[id])
+        ? variantsByProduct[id]
+        : (Array.isArray(variantsByProduct[String(id)]) ? variantsByProduct[String(id)] : []);
+      const variants = normalizeComboVariantList(variantsRaw);
+      const optionGroups = buildProductOptionGroupsFromBatch(id, assignments, optionGroupsById);
+
+      assignments.forEach((assignment) => {
+        const groupId = Number(assignment?.group_id || 0);
+        if (!Number.isFinite(groupId) || groupId <= 0) return;
+        const details = optionGroupsById[groupId] || optionGroupsById[String(groupId)] || null;
+        state.optionGroupCache.set(`${groupId}:${id}`, details);
+      });
+      state.productOptionsCache.set(id, assignments);
+      comboProductIngredientsCache.set(id, Promise.resolve(ingredients));
+      comboProductVariantsCache.set(id, Promise.resolve(variants));
+      productDetailsConfigCache.set(id, {
+        promise: Promise.resolve({ optionGroups, ingredients, variants }),
+        ts: Date.now(),
+      });
+    });
+  })().finally(() => {
+    if (batchKey) productDetailsBatchInflight.delete(batchKey);
+  });
+
+  if (batchKey) productDetailsBatchInflight.set(batchKey, task);
+  await task;
+}
+
 async function resolveProductIngredients(productId) {
   const pid = Number(productId || 0);
   if (!Number.isFinite(pid) || pid <= 0) return [];
@@ -803,15 +1039,7 @@ function prefetchProductDetailsConfig(productIds, opts = {}) {
   if (!queue.length) return;
 
   const run = async () => {
-    await Promise.allSettled([
-      preloadProductOptionAssignmentsBatch(queue),
-      preloadComboProductsData(queue),
-    ]);
-    for (const id of queue) {
-      try {
-        await resolveProductDetailsConfig(id);
-      } catch {}
-    }
+    await preloadProductDetailsConfigBatch(queue);
   };
 
   if (productDetailsPrefetchTimer) {
@@ -844,9 +1072,7 @@ async function warmInitialCatalogPayload(opts = {}) {
 
   const productTask = (async () => {
     if (!productIds.length) return;
-    await Promise.allSettled(productIds.map(async (id) => {
-      await resolveProductDetailsConfig(id);
-    }));
+    await preloadProductDetailsConfigBatch(productIds);
   })();
 
   const comboTask = (async () => {
@@ -24679,8 +24905,12 @@ function renderSheetAddressList() {
     const cached = !force ? getCustomerCache() : null;
     if (cached && fetchMeSafeVerifiedToken === token) return cached;
     try {
-      const boot = await apiJson("/api/public/me/bootstrap");
-      const payload = boot?.data || {};
+      const sharedBoot = typeof window.loadShopMeBootstrap === "function"
+        ? await window.loadShopMeBootstrap({ force })
+        : null;
+      const payload = sharedBoot
+        ? { customer: sharedBoot.customer, addresses: sharedBoot.addresses }
+        : ((await apiJson("/api/public/me/bootstrap"))?.data || {});
       if (payload.customer) {
         setCustomerCache(payload.customer);
         if (Array.isArray(payload.addresses)) {

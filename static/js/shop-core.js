@@ -5975,8 +5975,13 @@
 
     const promise = (async () => {
       try {
-        const json = await apiJson(`/api/public/products/${pid}/ingredients`);
-        const rows = Array.isArray(json?.data) ? json.data : [];
+        const json = await apiJson('/api/public/products/batch/ingredients', {
+          method: 'POST',
+          body: { ids: [pid] },
+        });
+        const rows = Array.isArray(json?.data?.[pid])
+          ? json.data[pid]
+          : (Array.isArray(json?.data?.[String(pid)]) ? json.data[String(pid)] : []);
         const requirements = new Map();
         for (const ing of rows) {
           const depPid = Number(ing?.ingredient_id || 0);
@@ -6258,21 +6263,25 @@
 
   async function refreshProductsByIds(productIds) {
     const ids = Array.isArray(productIds)
-      ? productIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)
+      ? Array.from(new Set(productIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)))
       : [];
     if (!ids.length) return;
 
-    await Promise.all(ids.map(async (pid) => {
-      try {
-        const json = await apiJson(`/api/public/products/${pid}`);
-        const product = json?.data || null;
-        if (!product) return;
+    try {
+      const json = await apiJson('/api/public/products/batch/by-ids', {
+        method: 'POST',
+        body: { ids },
+      });
+      const data = json?.data && typeof json.data === "object" ? json.data : {};
+      ids.forEach((pid) => {
+        const product = data[pid] || data[String(pid)] || null;
+        if (!product || typeof product !== "object") return;
         if (!Array.isArray(product.photos)) product.photos = safePhotos(product);
         cacheStockFromProductPayload(product, "product_refresh_by_id");
         product.is_available = isProductAvailable(product);
         state.productCache.set(pid, product);
-      } catch {}
-    }));
+      });
+    } catch {}
   }
 
   function syncCartUiAfterStateChange() {
@@ -7552,16 +7561,11 @@
     }
     if (!missing.length) return;
 
-    await Promise.all(
-      missing.map(async (pid) => {
-        try {
-          await ensureProductForWarmup(pid);
-        } catch (e) {
-          // ???? ????? ?????? ??? API ?????????? ? ?? ??????, ?????? ??????????.
-          console.warn("warmupCartProducts: failed to load product", pid, e);
-        }
-      })
-    );
+    try {
+      await refreshProductsByIds(missing);
+    } catch (e) {
+      console.warn("warmupCartProducts: failed to load products", e);
+    }
   }
 
   function mergeProductIntoCache(product, stockSource = "product_cache_merge") {
@@ -8783,8 +8787,7 @@
 
   async function ensureOrderConfigForHeader() {
     const existingConfig = getShopOrderConfigSnapshot();
-    const hasExistingRounding = hasExplicitPriceRoundingSettings(existingConfig);
-    if (existingConfig && hasExistingRounding) {
+    if (existingConfig) {
       applyPriceRoundingSettingsFromOrderConfig(existingConfig, { persist: true });
       return existingConfig;
     }
@@ -10540,6 +10543,7 @@ function showProductView() {
 
     return meBootstrapPromise;
   }
+  window.loadShopMeBootstrap = loadMeBootstrap;
 
   function pickDefaultAddress(list) {
     const arr = Array.isArray(list) ? list : [];
@@ -15654,6 +15658,32 @@ function updateCartBadge() {
     state.categories = Array.isArray(json.data) ? json.data : [];
   }
 
+  let shopBootstrapPromise = null;
+
+  function applyShopBootstrapData(data) {
+    if (!data || typeof data !== "object") return null;
+    if (Array.isArray(data.categories)) {
+      state.categories = data.categories;
+    }
+    if (data.orderConfig && typeof data.orderConfig === "object") {
+      setShopOrderConfigSnapshot(data.orderConfig, { persistRounding: true });
+    }
+    if (Array.isArray(data.unitConversions)) {
+      state.unitConversions = data.unitConversions;
+    }
+    return data;
+  }
+
+  async function loadShopBootstrap() {
+    if (shopBootstrapPromise) return shopBootstrapPromise;
+    shopBootstrapPromise = apiJson("/api/public/shop/bootstrap")
+      .then((json) => applyShopBootstrapData(json?.data || null))
+      .finally(() => {
+        shopBootstrapPromise = null;
+      });
+    return shopBootstrapPromise;
+  }
+
   async function loadAutoAdd() {
     if (autoAddLoaded) return;
     if (autoAddLoadPromise) return autoAddLoadPromise;
@@ -15894,31 +15924,62 @@ function updateCartBadge() {
     if (!unresolved.length) return;
 
     const byId = productsById instanceof Map ? productsById : new Map();
+    const inflight = unresolved
+      .map((id) => upsellDefaultConfigCache.get(id)?.promise)
+      .filter(Boolean);
+    const requestIds = unresolved.filter((id) => !upsellDefaultConfigCache.get(id)?.promise);
+    if (!requestIds.length) {
+      await Promise.allSettled(inflight);
+      return;
+    }
+
+    let resolveShared;
+    let rejectShared;
+    const sharedPromise = new Promise((resolve, reject) => {
+      resolveShared = resolve;
+      rejectShared = reject;
+    });
+    requestIds.forEach((id) => {
+      upsellDefaultConfigCache.set(id, { promise: sharedPromise, data: null, ts: Date.now() });
+    });
+
     const resolved = new Set();
 
     try {
       const json = await apiJson('/api/public/products/batch/default-cart-config', {
         method: 'POST',
-        body: { ids: unresolved },
+        body: { ids: requestIds },
       });
       const data = json?.data && typeof json.data === "object" ? json.data : {};
-      unresolved.forEach((pid) => {
+      requestIds.forEach((pid) => {
         const cfg = data[pid];
         if (!cfg || typeof cfg !== "object") return;
         upsellDefaultConfigCache.set(pid, { promise: Promise.resolve(cfg), data: cfg, ts: Date.now() });
         resolved.add(pid);
       });
-    } catch {}
+    } catch (err) {
+      requestIds.forEach((pid) => upsellDefaultConfigCache.delete(pid));
+      rejectShared(err);
+      await Promise.allSettled(inflight);
+      return;
+    }
 
-    const fallbackIds = unresolved.filter((id) => !resolved.has(id));
-    if (!fallbackIds.length) return;
+    const fallbackIds = requestIds.filter((id) => !resolved.has(id));
+    if (!fallbackIds.length) {
+      resolveShared(true);
+      await Promise.allSettled(inflight);
+      return;
+    }
 
+    fallbackIds.forEach((pid) => upsellDefaultConfigCache.delete(pid));
     await Promise.all(fallbackIds.map(async (pid) => {
       const src = byId.get(pid) || null;
       try {
         await warmUpsellDefaultConfig(pid, src);
       } catch {}
     }));
+    resolveShared(true);
+    await Promise.allSettled(inflight);
   }
 
   function queueUpsellConfigBatch(productIds, productsById, opts = {}) {
@@ -16195,18 +16256,27 @@ function updateCartBadge() {
     let optionAssignments = [];
     let ingredientsRaw = [];
     const [variantsRes, assignmentsRes, ingredientsRes] = await Promise.allSettled([
-      apiJson(`/api/public/products/${productId}/variants`),
-      apiJson(`/api/public/products/${productId}/option-assignments`),
-      apiJson(`/api/public/products/${productId}/ingredients`),
+      apiJson('/api/public/products/batch/variants', {
+        method: 'POST',
+        body: { ids: [productId] },
+      }),
+      apiJson('/api/public/products/batch/option-assignments', {
+        method: 'POST',
+        body: { ids: [productId] },
+      }),
+      apiJson('/api/public/products/batch/ingredients', {
+        method: 'POST',
+        body: { ids: [productId] },
+      }),
     ]);
     if (variantsRes.status === "fulfilled") {
-      variants = Array.isArray(variantsRes.value?.data) ? variantsRes.value.data : [];
+      variants = Array.isArray(variantsRes.value?.data?.[productId]) ? variantsRes.value.data[productId] : [];
     }
     if (assignmentsRes.status === "fulfilled") {
-      optionAssignments = Array.isArray(assignmentsRes.value?.data) ? assignmentsRes.value.data : [];
+      optionAssignments = Array.isArray(assignmentsRes.value?.data?.[productId]) ? assignmentsRes.value.data[productId] : [];
     }
     if (ingredientsRes.status === "fulfilled") {
-      ingredientsRaw = Array.isArray(ingredientsRes.value?.data) ? ingredientsRes.value.data : [];
+      ingredientsRaw = Array.isArray(ingredientsRes.value?.data?.[productId]) ? ingredientsRes.value.data[productId] : [];
     }
 
     let variantGroupId = null;
@@ -16237,18 +16307,24 @@ function updateCartBadge() {
     const selectedOptionItems = [];
     const activeAssignments = (Array.isArray(optionAssignments) ? optionAssignments : [])
       .filter((assignment) => Number(assignment?.is_active ?? 1) === 1);
-    const groups = await Promise.all(
-      activeAssignments.map(async (assignment) => {
-        const groupId = Number(assignment?.group_id || 0);
-        if (!Number.isFinite(groupId) || groupId <= 0) return null;
-        try {
-          const groupJson = await apiJson(`/api/public/options/groups/${groupId}`);
-          return { assignment, details: groupJson?.data || null };
-        } catch {
-          return null;
-        }
-      })
-    );
+    const assignmentGroupIds = activeAssignments
+      .map((assignment) => Number(assignment?.group_id || 0))
+      .filter((groupId, index, source) => Number.isFinite(groupId) && groupId > 0 && source.indexOf(groupId) === index);
+    let optionGroupsById = {};
+    if (assignmentGroupIds.length) {
+      try {
+        const groupsJson = await apiJson('/api/public/options/groups/batch', {
+          method: 'POST',
+          body: { ids: assignmentGroupIds },
+        });
+        optionGroupsById = groupsJson?.data && typeof groupsJson.data === "object" ? groupsJson.data : {};
+      } catch {}
+    }
+    const groups = activeAssignments.map((assignment) => {
+      const groupId = Number(assignment?.group_id || 0);
+      if (!Number.isFinite(groupId) || groupId <= 0) return null;
+      return { assignment, details: optionGroupsById[groupId] || optionGroupsById[String(groupId)] || null };
+    });
 
     groups.forEach((entry) => {
       if (!entry || !entry.details) return;
@@ -16504,6 +16580,7 @@ function updateCartBadge() {
   }
 
   async function loadUnitConversions() {
+    if (Array.isArray(state.unitConversions) && state.unitConversions.length) return;
     try {
       const json = await apiJson("/api/public/unit-conversions");
       state.unitConversions = Array.isArray(json.data) ? json.data : [];
@@ -16810,7 +16887,9 @@ function updateCartBadge() {
     };
     showStatus("Загружаем...");
     try {
-      await loadCategories();
+      if (!await loadShopBootstrap().catch(() => null)) {
+        await loadCategories();
+      }
       renderCategories();
       renderCategoryChips();
       if (typeof updateStoreStatus === "function") if (typeof updateStoreStatus === "function") updateStoreStatus();
@@ -16950,6 +17029,9 @@ function updateCartBadge() {
 // Init (core)
 // -----------------------------
 const SHOP_SPLASH_MIN_VISIBLE_MS = 1500;
+const SHOP_SPLASH_INTERACTION_READY_MIN_MS = 2500;
+const SHOP_SPLASH_INTERACTION_READY_MAX_MS = 7000;
+const SHOP_SPLASH_PRODUCTS_READY_MAX_MS = 4500;
 const SHOP_SPLASH_FADE_OUT_MS = 350;
 const __shopSplashStartedAt = Date.now();
 let __shopSplashHideScheduled = false;
@@ -16981,6 +17063,27 @@ function scheduleHideShopSplash(minVisibleMs = SHOP_SPLASH_MIN_VISIBLE_MS) {
   }, waitMs);
 }
 
+function withShopSplashTimeout(promise, timeoutMs) {
+  const waitMs = Math.max(0, Number(timeoutMs || 0));
+  return Promise.race([
+    Promise.resolve(promise),
+    new Promise((resolve) => setTimeout(() => resolve(false), waitMs)),
+  ]);
+}
+
+function scheduleAllProductIngredientBatch() {
+  const allProductIds = [];
+  if (state.productsByCategory instanceof Map) {
+    state.productsByCategory.forEach(function(products) {
+      for (var i = 0; i < products.length; i++) {
+        var pid = Number(products[i]?.id);
+        if (Number.isFinite(pid) && pid > 0) allProductIds.push(pid);
+      }
+    });
+  }
+  if (allProductIds.length) batchLoadIngredientRequirements(allProductIds).catch(function() {});
+}
+
 async function initCore() {
   try {
     if ("scrollRestoration" in history) {
@@ -17001,17 +17104,19 @@ async function initCore() {
         if (typeof updateStoreStatus === "function") updateStoreStatus();
       } catch {}
       try { prioritizeAboveFoldCardImages(); } catch {}
-      scheduleHideShopSplash();
     } else {
       renderCategoriesSkeleton();
       renderProductsSkeleton();
-      scheduleHideShopSplash();
     }
 
-    const orderConfigBootstrapPromise = ensureOrderConfigForHeader().catch(() => null);
+    const shopBootstrapData = await loadShopBootstrap().catch(() => null);
+    if (!shopBootstrapData) {
+      await loadCategories();
+    }
+    const orderConfigBootstrapPromise = shopBootstrapData?.orderConfig
+      ? Promise.resolve(shopBootstrapData.orderConfig)
+      : ensureOrderConfigForHeader().catch(() => null);
     const homeBonusConfigPromise = loadHomeBonusConfig().catch(() => null);
-
-    await loadCategories();
     renderCategories();
     renderCategoryChips();
     if (typeof updateStoreStatus === "function") if (typeof updateStoreStatus === "function") updateStoreStatus();
@@ -17034,8 +17139,19 @@ async function initCore() {
 
     // ????? ?????? ??В корзине пусто???? (?????? + ?????),
     // ????? ??????? ??? ????????? ????? ??? ?????????.
+    let productsReadyForFirstPaint = true;
+    let productsLoadPromise = Promise.resolve(true);
     if (visibleCategories.length) {
-      await loadProductsByCategory();
+      productsLoadPromise = loadProductsByCategory()
+        .then(() => true)
+        .catch((err) => {
+          console.warn("loadProductsByCategory: initial load failed", err);
+          return false;
+        });
+      productsReadyForFirstPaint = await withShopSplashTimeout(
+        productsLoadPromise,
+        SHOP_SPLASH_PRODUCTS_READY_MAX_MS
+      );
     } else {
       state.productsByCategory = new Map();
       state.combosByCategory = new Map();
@@ -17043,46 +17159,69 @@ async function initCore() {
 
     await orderConfigBootstrapPromise;
 
-    renderProducts();
-    prioritizeAboveFoldCardImages();
-    if (Number.isFinite(Number(state.activeCategoryId)) && Number(state.activeCategoryId) > 0) {
-      void warmInitialCatalogInteractionData({
+    if (productsReadyForFirstPaint) {
+      renderProducts();
+      prioritizeAboveFoldCardImages();
+    } else {
+      productsLoadPromise.then((ok) => {
+        if (!ok) return;
+        renderProducts();
+        prioritizeAboveFoldCardImages();
+        scheduleAllProductIngredientBatch();
+        if (Number.isFinite(Number(state.activeCategoryId)) && Number(state.activeCategoryId) > 0) {
+          void warmInitialCatalogInteractionData({
+            categoryIds: [Number(state.activeCategoryId)],
+            productLimit: INITIAL_CATALOG_PREFETCH_PRODUCTS,
+            comboLimit: INITIAL_CATALOG_PREFETCH_COMBOS,
+          });
+        }
+      }).catch(() => {});
+    }
+    const shopLateReadyPromise = ensureShopLateLoaded().catch(() => false);
+    let firstInteractionWarmPromise = Promise.resolve(false);
+    if (productsReadyForFirstPaint && Number.isFinite(Number(state.activeCategoryId)) && Number(state.activeCategoryId) > 0) {
+      firstInteractionWarmPromise = warmInitialCatalogInteractionData({
         categoryIds: [Number(state.activeCategoryId)],
         productLimit: INITIAL_CATALOG_PREFETCH_PRODUCTS,
         comboLimit: INITIAL_CATALOG_PREFETCH_COMBOS,
-      });
+      }).catch(() => false);
     }
     void homeBonusConfigPromise;
-    await cartEnhancersStartupPromise;
-    const startupAutoChanged = applyAutoAddRules();
-    clearAutoAddDismissedIfCartEmpty();
-    if (startupAutoChanged) {
-      saveCart();
-      scheduleSyncAllProductCardsFromCart();
-    }
-    cartEnhancersLastRefreshSignature = getCartEnhancersRefreshSignature();
+    cartEnhancersStartupPromise.then(() => {
+      const startupAutoChanged = applyAutoAddRules();
+      clearAutoAddDismissedIfCartEmpty();
+      if (startupAutoChanged) {
+        saveCart();
+        scheduleSyncAllProductCardsFromCart();
+      }
+      cartEnhancersLastRefreshSignature = getCartEnhancersRefreshSignature();
+      renderCart(true);
+      updateCartBadge();
+    }).catch(() => {});
 
     // Убираем loader — контент готов
-    scheduleHideShopSplash();
+    await withShopSplashTimeout(
+      Promise.allSettled([
+        shopLateReadyPromise,
+        firstInteractionWarmPromise,
+        addressPromise,
+      ]),
+      SHOP_SPLASH_INTERACTION_READY_MAX_MS
+    );
+    scheduleHideShopSplash(SHOP_SPLASH_INTERACTION_READY_MIN_MS);
 
     // Batch-загрузка ингредиентов для всех товаров одним запросом
-    const allProductIds = [];
-    if (state.productsByCategory instanceof Map) {
-      state.productsByCategory.forEach(function(products) {
-        for (var i = 0; i < products.length; i++) {
-          var pid = Number(products[i]?.id);
-          if (Number.isFinite(pid) && pid > 0) allProductIds.push(pid);
-        }
-      });
-    }
-    if (allProductIds.length) batchLoadIngredientRequirements(allProductIds).catch(function() {});
+    if (productsReadyForFirstPaint) scheduleAllProductIngredientBatch();
 
-    await addressPromise;
+    void addressPromise;
 
     // Перед первым "боевым" рендером корзины прогреваем товары из корзины,
     // чтобы сразу использовать тот же путь и те же данные, что и при
     // последующих обновлениях (после любых действий пользователя).
-    await warmupCartProducts();
+    void warmupCartProducts().then(() => {
+      renderCart(true);
+      updateCartBadge();
+    }).catch(() => {});
     renderCart();
     // Apply cart-header address mode immediately on first paint.
     showCartView();
