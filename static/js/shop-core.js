@@ -5666,21 +5666,10 @@
   }
 
   function pruneUnavailableCartItems() {
-    const before = state.cart.length;
-    state.cart = state.cart.filter((item) => {
-      // ????? ?? ???????? ?? product_id ? ?? ?????? ????????? ???? ????????
-      if (item?.type === "combo") return true;
-      const pid = Number(item.product_id || item.id);
-      if (!Number.isFinite(pid)) return false;
-      const p = state.productCache.get(pid);
-      if (p && !isProductAvailable(p)) return false;
-      return true;
-    });
-    if (state.cart.length !== before) {
-      saveCart();
-      return true;
-    }
-    return false;
+    const displayItems = cartItemsResolved(state.cart, { includeDormantAutoAdd: true, includeUnavailable: true });
+    const hasUnavailable = displayItems.some((item) => item?.is_unavailable === true);
+    if (hasUnavailable) markCartUiDirty();
+    return hasUnavailable;
   }
 
   function makeCartKey(productId, optionItemsOrIds, ingredients = [], variantSelection = null) {
@@ -6098,8 +6087,22 @@
     return state.cart.find((item) => item.key === key) || null;
   }
 
+  function isResolvedCartItemUnavailable(item) {
+    if (!item) return false;
+    if (item.type === "combo") {
+      return !canUseCartDraftForProductIds(state.cart, collectComboCartAffectedProductIds(item));
+    }
+
+    const product = item.product || null;
+    const pid = Number(product?.id || item.product_id || 0);
+    if (!Number.isFinite(pid) || pid <= 0) return false;
+    if (product && !isProductAvailable(product)) return true;
+    return !canUseCartDraftForProductIds(state.cart, collectRegularCartAffectedProductIds(pid));
+  }
+
   function cartItemsResolved(sourceCart = state.cart, opts = {}) {
     const includeDormantAutoAdd = opts?.includeDormantAutoAdd === true;
+    const includeUnavailable = opts?.includeUnavailable === true;
     const items = [];
     const safeCart = Array.isArray(sourceCart) ? sourceCart : [];
     for (const item of safeCart) {
@@ -6107,7 +6110,7 @@
         const qty = Math.max(0, Number(item.qty || 0));
         if (!qty) continue;
         const unitPrice = (item.selections || []).reduce((s, sel) => s + Number(sel.unit_price_override || 0), 0);
-        items.push({
+        const resolvedCombo = {
           key: item.key,
           type: "combo",
           combo_id: item.combo_id,
@@ -6120,7 +6123,9 @@
           unit_price_before_discount: item.unit_price_before_discount != null ? Number(item.unit_price_before_discount) : null,
           auto_add: 0,
           auto_add_group_id: null,
-        });
+        };
+        resolvedCombo.is_unavailable = isResolvedCartItemUnavailable(resolvedCombo);
+        if (includeUnavailable || !resolvedCombo.is_unavailable) items.push(resolvedCombo);
         continue;
       }
       const pid = Number(item.product_id);
@@ -6132,7 +6137,7 @@
       const variantGroupId = toFiniteNumberOrNull(item.variant_group_id);
       const variantValueIndex = toFiniteNumberOrNull(item.variant_value_index);
       const hasVariantSelection = variantGroupId !== null && variantValueIndex !== null;
-      items.push({
+      const resolvedItem = {
         key: item.key,
         product: p,
         qty,
@@ -6151,7 +6156,9 @@
         gift_reward_id: toFiniteNumberOrNull(item.gift_reward_id),
         auto_add: Number(item.auto_add || 0),
         auto_add_group_id: toFiniteNumberOrNull(item.auto_add_group_id),
-      });
+      };
+      resolvedItem.is_unavailable = isResolvedCartItemUnavailable(resolvedItem);
+      if (includeUnavailable || !resolvedItem.is_unavailable) items.push(resolvedItem);
     }
     return items;
   }
@@ -13578,7 +13585,8 @@ async function initAddresses() {
   function renderCartInto(listEl, totalEl, emptyPlaceholderEl, opts = {}) {
     const bindInteractive = opts?.bindInteractive !== false;
     const activeItems = cartItemsResolved();
-    const items = sortCartItemsForDisplay(cartItemsResolved(state.cart, { includeDormantAutoAdd: true }));
+    const items = sortCartItemsForDisplay(cartItemsResolved(state.cart, { includeDormantAutoAdd: true, includeUnavailable: true }))
+      .sort((a, b) => Number(a?.is_unavailable === true) - Number(b?.is_unavailable === true));
     const comboIdsForPrefetch = activeItems
       .filter((item) => item && item.type === "combo")
       .map((item) => Number(item.combo_id || 0))
@@ -13657,10 +13665,11 @@ async function initAddresses() {
 
     items.forEach((item) => {
       if (item.type === "combo") {
+        const isUnavailable = item?.is_unavailable === true;
         const { key, combo_id: comboId, combo_title: comboTitle, qty, selections } = item;
         const unitPrice = Number(item.unit_price_override || 0);
         const lineTotal = roundPrice(unitPrice * qty);
-        total += lineTotal;
+        if (!isUnavailable) total += lineTotal;
         const unitPriceOld = Number(item.unit_price_before_discount || 0) || unitPrice;
         const lineTotalOld = roundPrice(unitPriceOld * qty);
 
@@ -13689,6 +13698,7 @@ async function initAddresses() {
 
         const row = document.createElement("div");
         row.className = "cart-row cart-swipe-content cart-row--combo shop-cart-item-row";
+        if (isUnavailable) row.classList.add("is-unavailable");
         row.setAttribute("data-cart-key", String(key || ""));
         row.addEventListener("click", (e) => {
           if (swipeContainer.classList.contains("is-swiped")) {
@@ -13696,6 +13706,7 @@ async function initAddresses() {
             resetSwipe(swipeContainer);
             return;
           }
+          if (isUnavailable) return;
           if (comboId != null && Number.isFinite(Number(comboId))) {
             openComboDetails(Number(comboId), { cartKey: key });
           }
@@ -13864,7 +13875,14 @@ async function initAddresses() {
           }
           updateCartTotalsUiOnly();
         });
-        q.appendChild(pill);
+        if (isUnavailable) {
+          const soldOutBadge = document.createElement("div");
+          soldOutBadge.className = "cart-sold-out-badge";
+          soldOutBadge.textContent = "\u0420\u0430\u0441\u043a\u0443\u043f\u0438\u043b\u0438";
+          q.appendChild(soldOutBadge);
+        } else {
+          q.appendChild(pill);
+        }
         const bottomRow = document.createElement("div");
         bottomRow.className = "cart-bottom-row";
         const bottomMain = document.createElement("div");
@@ -13895,6 +13913,7 @@ async function initAddresses() {
         variant_label: variantLabel,
         variant_unit_price: variantUnitPrice,
       } = item;
+      const isUnavailable = item?.is_unavailable === true;
       const pricing = computeItemPricing(
         {
           product,
@@ -13920,7 +13939,7 @@ async function initAddresses() {
       const old = Number(product.old_price || 0);
       const parts = pricing.parts;
       const oldUnit = old > 0 ? (old + parts.optionTotal + parts.ingredientDiff) : 0;
-      total += pricing.lineTotal;
+      if (!isUnavailable) total += pricing.lineTotal;
 
       // ?????-?????????
       const swipeContainer = document.createElement("div");
@@ -13960,6 +13979,7 @@ async function initAddresses() {
       // ???????? ?????????? ????????
       const row = document.createElement("div");
       row.className = "cart-row cart-swipe-content shop-cart-item-row";
+      if (isUnavailable) row.classList.add("is-unavailable");
       row.setAttribute("data-product-id", String(product.id));
       row.setAttribute("data-cart-key", String(key || ""));
       row.addEventListener("click", (e) => {
@@ -13969,6 +13989,7 @@ async function initAddresses() {
           resetSwipe(swipeContainer);
           return;
         }
+        if (isUnavailable) return;
         if (isGiftReward) {
           openProductDetails(product.id, { cartKey: key, prefillItem: item, readOnly: true });
           return;
@@ -14084,7 +14105,12 @@ async function initAddresses() {
       });
       pill.classList.toggle("is-empty", qty <= 0);
       let qtyControlNode = pill;
-      if (isGiftReward) {
+      if (isUnavailable) {
+        const soldOutBadge = document.createElement("div");
+        soldOutBadge.className = "cart-sold-out-badge";
+        soldOutBadge.textContent = "\u0420\u0430\u0441\u043a\u0443\u043f\u0438\u043b\u0438";
+        qtyControlNode = soldOutBadge;
+      } else if (isGiftReward) {
         const fixedQty = document.createElement("div");
         fixedQty.className = "qty-pill qty-pill--muted cart-gift-fixed-qty is-disabled";
         const fixedCenter = document.createElement("span");
@@ -14267,7 +14293,7 @@ async function initAddresses() {
       appendCartNode(swipeContainer);
     });
 
-    const hasBaseItems = items.some((item) => {
+    const hasBaseItems = activeItems.some((item) => {
       const qty = Number(item?.qty || 0);
       if (qty <= 0) return false;
       if (item?.type === "combo") return true;
@@ -14278,7 +14304,7 @@ async function initAddresses() {
 
     if (listEl && hasBaseItems && state.autoAddDismissed.size) {
       const cartProductIds = new Set(
-        items
+        activeItems
           .map((item) => Number(item?.product?.id || item?.product_id))
           .filter((pid) => Number.isFinite(pid))
       );

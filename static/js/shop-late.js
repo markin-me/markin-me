@@ -36940,6 +36940,10 @@ function setBottomNavActive(tab) {
     if (actions?.submitBtn) {
       actions.submitBtn.onclick = async () => {
         let resolvedItems = cartItemsResolved();
+        if (!resolvedItems.length) {
+          alert("В корзине нет доступных товаров для оформления");
+          return;
+        }
         let totals = computeCartTotals(resolvedItems);
         const currentDraft = loadCheckoutDraft();
         const methodCode = methodSelect.getValue() || methodDefault || "takeaway";
