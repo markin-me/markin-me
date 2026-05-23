@@ -11830,6 +11830,35 @@ body.page-shop #shopCartPanel > .panel-body.shop-cart-body > .shop-cart > .shop-
   opacity: 1;
 }
 
+.sp-media-pill{
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  z-index: 4;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 22px;
+  max-width: calc(100% - 20px);
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(241, 244, 248, 0.94);
+  color: var(--color-text);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.2;
+  white-space: nowrap;
+  box-shadow: 0 8px 18px rgba(20, 29, 48, 0.14);
+  pointer-events: none;
+}
+
+.sp-media-pill__chevron{
+  font-size: 14px;
+  line-height: 1;
+  transform: translateY(-1px);
+}
+
 /* qty overlay */
 .sp-qtyOverlay{
   position: absolute;
@@ -11905,6 +11934,21 @@ body.page-shop #shopCartPanel > .panel-body.shop-cart-body > .shop-cart > .shop-
   min-height: 14px;
 }
 
+.sp-sub--defaults{
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: calc(var(--sp-sub-size) * 2.4 + 2px);
+  white-space: normal;
+}
+
+.sp-sub-line{
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* РљРѕРјР±Рѕ-РєР°СЂС‚РѕС‡РєР° РІ РєР°С‚Р°Р»РѕРіРµ */
 .sp-card--combo .sp-media--combo{ position: relative; }
 .sp-combo-grid{
@@ -11955,24 +11999,28 @@ body.page-shop #shopCartPanel > .panel-body.shop-cart-body > .shop-cart > .shop-
 .sp-card-discount-badge,
 .sp-combo-discount{
   position: absolute;
-  left: 10px;
-  bottom: 10px;
+  top: 10px;
+  right: 10px;
   z-index: 4;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 30px;
+  min-height: 22px;
   max-width: calc(100% - 20px);
-  padding: 6px 12px;
+  padding: 4px 8px;
   border-radius: 999px;
   background: linear-gradient(135deg, var(--shop-buy), #ffb15a);
   color: var(--shop-buy-text);
-  font-size: 13px;
+  font-size: 11px;
   font-weight: 800;
   line-height: 1.2;
   white-space: nowrap;
   box-shadow: 0 8px 18px rgba(20, 29, 48, 0.16);
   pointer-events: none;
+}
+
+.sp-media:has(.sp-card-discount-badge) .sp-card-bogo-badge{
+  top: 36px;
 }
 
 .sp-card-bogo-badge{
@@ -11983,13 +12031,13 @@ body.page-shop #shopCartPanel > .panel-body.shop-cart-body > .shop-cart > .shop-
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 30px;
+  min-height: 22px;
   max-width: calc(100% - 20px);
-  padding: 6px 12px;
+  padding: 4px 8px;
   border-radius: 999px;
   background: linear-gradient(135deg, var(--shop-buy), #ffb15a);
   color: var(--shop-buy-text);
-  font-size: 13px;
+  font-size: 11px;
   font-weight: 800;
   line-height: 1.2;
   white-space: nowrap;
@@ -12012,20 +12060,32 @@ body.page-shop #shopCartPanel > .panel-body.shop-cart-body > .shop-cart > .shop-
 .sp-combo-btn{
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 0 14px;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0;
   height: var(--qty-pill-h);
   border-radius: 999px;
-  background: var(--shop-buy);
-  color: var(--shop-buy-text);
-  font-weight: 700;
-  font-size: var(--sp-sub-size);
+  background: transparent;
+  color: var(--color-text);
+  font-weight: 900;
+  font-size: 18px;
   border: 0;
+  width: 100%;
   cursor: pointer;
   transition: background var(--dur-fast) var(--ease-smooth);
 }
-.sp-combo-btn:hover{ background: var(--shop-buy-hover); }
-.sp-combo-btn__arrow{ font-size: 1.1em; }
+.sp-combo-btn:hover{ background: transparent; }
+.sp-combo-btn__arrow{
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  display: inline-grid;
+  place-items: center;
+  background: var(--shop-buy);
+  color: var(--shop-buy-text);
+  font-size: 18px;
+  line-height: 1;
+}
 
 /* Р­РєСЂР°РЅ РґРµС‚Р°Р»Рё РєРѕРјР±Рѕ (РїСЂР°РІР°СЏ РїР°РЅРµР»СЊ / sheet) */
 .shop-combo-detail{
@@ -12903,6 +12963,87 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   --qty-pill-side: 48px;
 }
 .qty-pill--big .qty-pill__center{ font-size: 16px; }
+
+.sp-card .qty-pill{
+  width: 100%;
+  gap: 10px;
+  justify-content: space-between;
+  background: transparent;
+  color: var(--color-text);
+  overflow: visible;
+}
+
+.sp-card .qty-pill:hover{
+  background: transparent;
+}
+
+.sp-card .qty-pill__center{
+  position: relative;
+  min-height: var(--qty-pill-h);
+  height: var(--qty-pill-h);
+  padding: 0;
+  font-size: 21px;
+  font-weight: 900;
+  color: var(--color-text);
+  line-height: 1;
+  align-items: center;
+}
+
+.sp-card .qty-pill__center .sp-old-price{
+  position: absolute;
+  top: -4px;
+  right: 0;
+  margin-right: 0;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.sp-card .qty-pill__btn{
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, var(--shop-buy), #ffb15a);
+  color: var(--shop-buy-text);
+  box-shadow: 0 8px 18px rgba(20, 29, 48, 0.16);
+}
+
+.sp-card .qty-pill__btn:not(.is-disabled):hover{
+  background: linear-gradient(135deg, var(--shop-buy-hover), #ffb15a);
+}
+
+.sp-card .qty-pill__btn--minus{
+  background: linear-gradient(135deg, var(--shop-buy), #ffb15a);
+  color: var(--shop-buy-text);
+}
+
+.sp-card .qty-pill__btn i{
+  font-size: 13px;
+}
+
+.sp-card .qty-pill--muted .qty-pill__center{
+  color: var(--color-text-muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.sp-card .qty-pill--muted .qty-pill__btn{
+  display: none;
+}
+
+.sp-card .qty-pill--no-action .qty-pill__center{
+  color: var(--color-text);
+  font-size: 21px;
+  font-weight: 900;
+}
+
+.sp-card .qty-pill--no-action{
+  background: transparent;
+  border: 0;
+}
+
+.sp-card .qty-pill--no-action .qty-pill__btn{
+  display: none;
+}
 
 /* ==========================================================================
    Cart (desktop panel + sheet)

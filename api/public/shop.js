@@ -3758,6 +3758,32 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     return roundPrice(resolvedPrice);
   }
 
+  function formatCatalogDefaultQtyLine(qtyRaw, unitRaw, nameRaw) {
+    const qtyNum = Number(qtyRaw);
+    if (!Number.isFinite(qtyNum) || qtyNum <= 0) return '';
+    const qty = Number.isInteger(qtyNum) ? String(qtyNum) : String(qtyNum).replace(/\.?0+$/, '');
+    const unit = str(unitRaw || '').trim();
+    const name = str(nameRaw || '').trim();
+    return [qty, unit, name].filter(Boolean).join(' ');
+  }
+
+  function formatCatalogDefaultOptionLine(optionItem, qty = 1) {
+    const title = str(optionItem?.title || optionItem?.name || '').trim();
+    if (!title) return '';
+    const variants = Array.isArray(optionItem?.variants) ? optionItem.variants : [];
+    const variantGroup = variants[0];
+    const values = Array.isArray(variantGroup?.values) ? variantGroup.values : [];
+    const rawIdx = variantGroup?.default_value_index != null ? Number(variantGroup.default_value_index) : 0;
+    const idx = Number.isFinite(rawIdx) && rawIdx >= 0 && rawIdx < values.length ? rawIdx : 0;
+    if (variantGroup && values.length) {
+      const variantLabel = [str(values[idx] ?? '').trim(), str(variantGroup.unit_short_title || '').trim()]
+        .filter(Boolean)
+        .join(' ');
+      return [variantLabel, title].filter(Boolean).join(' ');
+    }
+    return formatCatalogDefaultQtyLine(qty, optionItem?.product_unit_short_title || 'шт', title);
+  }
+
   /**
    * Р СљР С‘Р Р…Р С‘Р СР В°Р В»РЎРЉР Р…Р В°РЎРЏ Р Р†Р С•Р В·Р СР С•Р В¶Р Р…Р В°РЎРЏ РЎвЂ Р ВµР Р…Р В° РЎвЂљР С•Р Р†Р В°РЎР‚Р В° РЎРѓ РЎС“РЎвЂЎРЎвЂРЎвЂљР С•Р С Р Р†Р В°РЎР‚Р С‘Р В°Р Р…РЎвЂљР С•Р Р† (Р С—Р С•РЎР‚РЎвЂ Р С‘Р в„–/Р С•Р В±РЎР‰РЎвЂР СР С•Р Р†).
    * Р вЂўРЎРѓР В»Р С‘ РЎС“ РЎвЂљР С•Р Р†Р В°РЎР‚Р В° Р ВµРЎРѓРЎвЂљРЎРЉ Р Р†Р В°РЎР‚Р С‘Р В°Р Р…РЎвЂљРЎвЂ№ РІР‚вЂќ Р С—Р ВµРЎР‚Р ВµР В±Р С‘РЎР‚Р В°Р ВµР С Р Р†РЎРѓР Вµ Р В·Р Р…Р В°РЎвЂЎР ВµР Р…Р С‘РЎРЏ Р С‘ Р Р†Р С•Р В·Р Р†РЎР‚Р В°РЎвЂ°Р В°Р ВµР С Р СР С‘Р Р…Р С‘Р СРЎС“Р С; Р С‘Р Р…Р В°РЎвЂЎР Вµ РІР‚вЂќ Р В±Р В°Р В·Р С•Р Р†РЎС“РЎР‹ РЎвЂ Р ВµР Р…РЎС“.
@@ -3827,9 +3853,11 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     const [vaRows] = await db.query(
       `SELECT va.product_id, va.variant_group_id,
               COALESCE(va.default_value_index, vg.default_value_index) AS default_value_index,
-              vg.unit_id, vg.values, vg.sort_order
+              vg.unit_id, vg.values, vg.sort_order,
+              u.short_title AS unit_short_title
        FROM prod_variant_assignments va
        JOIN prod_variant_groups vg ON vg.id = va.variant_group_id AND vg.tenant_id = va.tenant_id
+       LEFT JOIN prod_units u ON u.id = vg.unit_id
        WHERE va.tenant_id = ? AND va.product_id IN (${placeholders})
          AND va.is_active = 1 AND vg.is_active = 1
        ORDER BY va.sort_order ASC, vg.sort_order ASC`,
@@ -3874,10 +3902,12 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       );
       if (!variantData) continue;
       variantByProductId.set(pid, {
+        variant_group_id: Number(r.variant_group_id),
         unit_id: r.unit_id,
         values: variantData.values,
         default_value_index: variantData.default_value_index,
         discount_tiers: variantData.discount_tiers,
+        unit_short_title: r.unit_short_title || '',
       });
     }
 
@@ -3941,9 +3971,13 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
            p.price AS product_price,
            p.base_unit_id AS product_base_unit_id,
            p.base_qty AS product_base_qty,
-           p.unit_id AS product_unit_id
+           p.unit_id AS product_unit_id,
+           p.name AS product_name,
+           pu.short_title AS product_unit_short_title,
+           i.qty_min
          FROM prod_option_items i
          JOIN prod_products p ON p.tenant_id=i.tenant_id AND p.id=i.target_product_id
+         LEFT JOIN prod_units pu ON pu.id=p.unit_id
          LEFT JOIN prod_product_stocks ps
            ON ps.tenant_id = p.tenant_id AND ps.store_id = ? AND ps.product_id = p.id
          WHERE i.tenant_id=?
@@ -3968,9 +4002,11 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
              vg.id,
              vg.unit_id,
              vg.values,
-             COALESCE(va.default_value_index, vg.default_value_index) AS default_value_index
+             COALESCE(va.default_value_index, vg.default_value_index) AS default_value_index,
+             u.short_title AS unit_short_title
            FROM prod_variant_assignments va
            JOIN prod_variant_groups vg ON vg.id = va.variant_group_id AND vg.tenant_id = va.tenant_id
+           LEFT JOIN prod_units u ON u.id = vg.unit_id
            WHERE va.tenant_id = ?
              AND va.product_id IN (${optionTargetProductIds.map(() => '?').join(',')})
              AND va.is_active = 1
@@ -4013,6 +4049,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
           optionVariantsByProductId.set(pid, [{
             id: Number(optionVariantRow.id),
             unit_id: optionVariantRow.unit_id ? Number(optionVariantRow.unit_id) : null,
+            unit_short_title: optionVariantRow.unit_short_title || '',
             values: variantData.values,
             default_value_index: variantData.default_value_index,
             discount_tiers: variantData.discount_tiers,
@@ -4028,9 +4065,13 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         optionItemsByGroupId.get(gid).push({
           id: Number(optionItemRow.id),
           target_product_id: targetProductId,
+          title: str(optionItemRow.product_name || ''),
+          name: str(optionItemRow.product_name || ''),
           price: String(optionItemRow.price_mode || '').trim() === 'fixed'
             ? Number(optionItemRow.price_value || 0)
             : Number(optionItemRow.product_price || 0),
+          qty_min: Number(optionItemRow.qty_min ?? 1),
+          product_unit_short_title: optionItemRow.product_unit_short_title || 'шт',
           variants: optionVariantsByProductId.get(targetProductId) || [],
           target_product: {
             id: targetProductId,
@@ -4056,10 +4097,40 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       }
     }
 
+    const ingredientLinesByProductId = new Map();
+    {
+      const [ingredientRows] = await db.query(
+        `SELECT i.product_id,
+                i.quantity,
+                i.quantity_min,
+                i.is_variable,
+                p.name AS ingredient_name,
+                u.short_title AS unit_short_title
+         FROM prod_product_ingredients i
+         JOIN prod_products p ON p.tenant_id=i.tenant_id AND p.id=i.ingredient_id
+         LEFT JOIN prod_units u ON u.id=i.unit_id
+         WHERE i.tenant_id=? AND i.product_id IN (${placeholders})
+           AND i.is_variable = 1
+         ORDER BY i.product_id ASC, i.sort_order ASC, i.id ASC`,
+        [tenantId, ...productIds]
+      );
+      (Array.isArray(ingredientRows) ? ingredientRows : []).forEach((ing) => {
+        if (!(Number(ing.quantity || 0) > 0)) return;
+        const pid = Number(ing.product_id || 0);
+        if (!Number.isFinite(pid) || pid <= 0) return;
+        const qty = Number(ing.quantity || 0);
+        const line = formatCatalogDefaultQtyLine(qty, ing.unit_short_title || '', ing.ingredient_name || '');
+        if (!line) return;
+        if (!ingredientLinesByProductId.has(pid)) ingredientLinesByProductId.set(pid, []);
+        ingredientLinesByProductId.get(pid).push(line);
+      });
+    }
+
     for (const row of rows) {
       const variant = variantByProductId.get(Number(row.id));
       let displayPrice = await computeDisplayPriceForProduct(row, variant, getConversionFactor, roundPrice);
       const optionAssignments = optionAssignmentsByProductId.get(Number(row.id)) || [];
+      const catalogDefaultLines = [...(ingredientLinesByProductId.get(Number(row.id)) || [])];
       for (const assignment of optionAssignments) {
         const groupId = Number(assignment?.group_id || 0);
         if (!Number.isFinite(groupId) || groupId <= 0) continue;
@@ -4074,9 +4145,28 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         const minSelect = Number(groupMeta.min_select ?? assignment.min_select ?? 0);
         const requiredSingle = selectionType === 'single' && (Number(groupMeta.is_required || 0) === 1 || minSelect > 0);
         if (!requiredSingle) continue;
-        displayPrice += await computeOptionItemResolvedDefaultPrice(items[0], getConversionFactor, roundPrice);
+        const defaultItem = items[0];
+        displayPrice += await computeOptionItemResolvedDefaultPrice(defaultItem, getConversionFactor, roundPrice);
+        const line = formatCatalogDefaultOptionLine(defaultItem, 1);
+        if (line) catalogDefaultLines.push(line);
       }
       row.display_price = roundPrice(displayPrice);
+      row.catalog_default_lines = catalogDefaultLines.slice(0, 12);
+      if (variant && Array.isArray(variant.values)) {
+        const idx = Number(variant.default_value_index);
+        const value = Number.isFinite(idx) && idx >= 0 && idx < variant.values.length ? variant.values[idx] : null;
+        const variantLabel = [str(value ?? '').trim(), str(variant.unit_short_title || '').trim()]
+          .filter(Boolean)
+          .join(' ');
+        if (variantLabel) {
+          row.default_variant = {
+            variant_group_id: Number(variant.variant_group_id),
+            variant_value_index: idx,
+            variant_label: variantLabel,
+            variant_unit_price: row.display_price,
+          };
+        }
+      }
     }
   }
 

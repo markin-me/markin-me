@@ -36893,6 +36893,14 @@ function setBottomNavActive(tab) {
         if (elMobileDeliveryProgressWrap) elMobileDeliveryProgressWrap.classList.add("hidden");
       }
       if (elDesktopDeliveryProgressWrap) elDesktopDeliveryProgressWrap.classList.add("hidden");
+
+      window.setTimeout(() => {
+        const createdOrderId = Number(orderId || 0);
+        if (!(createdOrderId > 0) || typeof window.openShopActiveOrderDetails !== "function") return;
+        window._activeOrdersSourceScreen = "catalog";
+        window._shopReturnToCatalogTopAfterOrderDetailsClose = true;
+        void window.openShopActiveOrderDetails(createdOrderId);
+      }, 700);
     }
 
     function showOrderConflict(existingOrder, onCreateNew, onCancel) {
@@ -37725,10 +37733,22 @@ function initShopLate() {
       }
       if (originalClose && typeof originalClose === "function") {
         window.AppModal.close = function(type) {
+          const returnToCatalogTop = window._shopReturnToCatalogTopAfterOrderDetailsClose === true;
           const result = originalClose.call(this, type);
           if (!window.AppModal.isOpen || !window.AppModal.isOpen()) {
             hasSheetHistoryEntry = false;
             resetShopModalHeaderUi();
+            if (returnToCatalogTop) {
+              window._shopReturnToCatalogTopAfterOrderDetailsClose = false;
+              if (typeof setActiveNav === "function") setActiveNav("menu");
+              window.requestAnimationFrame(() => {
+                try {
+                  const scroller = document.querySelector(".shop-products-panel .panel-body");
+                  if (scroller && typeof scroller.scrollTo === "function") scroller.scrollTo({ top: 0, behavior: "smooth" });
+                  else window.scrollTo({ top: 0, behavior: "smooth" });
+                } catch {}
+              });
+            }
             if (typeof schedulePostModalCloseUiSync === "function") {
               schedulePostModalCloseUiSync();
             } else {
