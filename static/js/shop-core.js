@@ -5746,10 +5746,10 @@
 
   function getCatalogProductCartAggregate(product) {
     const pid = Number(product?.id || product?.product_id || 0);
-    if (!Number.isFinite(pid) || pid <= 0) return { qty: 0, total: 0 };
+    if (!Number.isFinite(pid) || pid <= 0) return { qty: 0, total: 0, oldTotal: 0 };
     const allItems = cartItemsResolved();
     const items = allItems.filter((item) => Number(item?.product?.id || item?.product_id || 0) === pid);
-    if (!items.length) return { qty: 0, total: 0 };
+    if (!items.length) return { qty: 0, total: 0, oldTotal: 0 };
     const totals = {
       nonAutoTotal: computeNonAutoTotal(allItems),
       autoEligibleTotal: computeAutoEligibleTotal(allItems),
@@ -5762,9 +5762,26 @@
         return acc;
       }
       const pricing = computeItemPricing(item, totals);
-      acc.total = roundPrice(acc.total + Number(pricing?.lineTotal || 0));
+      const lineTotal = Number(pricing?.lineTotal || 0);
+      acc.total = roundPrice(acc.total + lineTotal);
+
+      const itemProduct = item?.product || product;
+      const parts = pricing?.parts || {};
+      let originalUnit = Number(pricing?.unitPrice || 0);
+      if (itemProduct?.original_price && Number(itemProduct.original_price) > 0) {
+        originalUnit = roundPrice(Number(itemProduct.original_price) + (parts.optionTotal || 0) + (parts.ingredientDiff || 0));
+      } else if (itemProduct?.old_price && Number(itemProduct.old_price) > Number(pricing?.unitPrice || 0)) {
+        originalUnit = roundPrice(Number(itemProduct.old_price) + (parts.optionTotal || 0) + (parts.ingredientDiff || 0));
+      }
+      const paidQty = Number.isFinite(Number(pricing?.paidQty))
+        ? Math.max(0, Number(pricing.paidQty))
+        : qty;
+      const oldLineTotal = roundPrice(originalUnit * paidQty);
+      if (oldLineTotal > lineTotal) {
+        acc.oldTotal = roundPrice(acc.oldTotal + oldLineTotal);
+      }
       return acc;
-    }, { qty: 0, total: 0 });
+    }, { qty: 0, total: 0, oldTotal: 0 });
   }
 
   // ---------------------------------------------------------------------------
@@ -12192,8 +12209,13 @@ async function initAddresses() {
         : getCatalogProductCartAggregate(product);
       const total = Number(aggregate?.total || 0);
       const displayTotal = total > 0 ? total : price;
+      const oldTotal = Number(aggregate?.oldTotal || 0);
       const totalText = `${catalogMoneyNoKopeks(displayTotal)} ₽`;
       const totalClass = String(Math.round(displayTotal)).length > 5 ? " sp-cart-total--compact" : "";
+      if (oldTotal > displayTotal) {
+        const oldTotalText = `${catalogMoneyNoKopeks(oldTotal)} ₽`;
+        return `<span class="sp-cart-total-stack${totalClass}"><span class="sp-cart-old-total">${escapeHtml(oldTotalText)}</span><span class="sp-cart-total">${escapeHtml(totalText)}</span></span>`;
+      }
       return `<span class="sp-cart-total${totalClass}">${escapeHtml(totalText)}</span>`;
     }
     if (showOld) {
@@ -13122,6 +13144,10 @@ async function initAddresses() {
 
         const comboDiscountBadge = createCatalogDiscountBadge(getCatalogComboDiscountBadge(combo));
         if (comboDiscountBadge) media.appendChild(comboDiscountBadge);
+        const comboMediaPill = document.createElement("div");
+        comboMediaPill.className = "sp-media-pill";
+        comboMediaPill.innerHTML = '<span class="sp-media-pill__text">Собрать комбо</span><span class="sp-media-pill__chevron" aria-hidden="true">›</span>';
+        media.appendChild(comboMediaPill);
 
         card.appendChild(media);
 

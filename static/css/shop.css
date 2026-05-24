@@ -12084,13 +12084,17 @@ body.page-shop #shopCartPanel > .panel-body.shop-cart-body > .shop-cart > .shop-
 .sp-combo-btn__arrow{
   width: 32px;
   height: 32px;
-  border-radius: 10px;
+  border-radius: 8px;
   display: inline-grid;
   place-items: center;
-  background: var(--shop-buy);
+  background: linear-gradient(135deg, var(--shop-buy), #ffb15a);
   color: var(--shop-buy-text);
+  box-shadow: 0 8px 18px rgba(20, 29, 48, 0.16);
   font-size: 18px;
   line-height: 1;
+}
+.sp-combo-btn:hover .sp-combo-btn__arrow{
+  background: linear-gradient(135deg, var(--shop-buy-hover), #ffb15a);
 }
 
 /* Р­РєСЂР°РЅ РґРµС‚Р°Р»Рё РєРѕРјР±Рѕ (РїСЂР°РІР°СЏ РїР°РЅРµР»СЊ / sheet) */
@@ -13004,6 +13008,35 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   max-width: 100%;
   font-size: 15px;
   line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: clip;
+}
+
+.sp-card .qty-pill__center .sp-cart-total-stack{
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  max-width: 100%;
+  min-width: 0;
+  gap: 1px;
+  line-height: 1;
+}
+
+.sp-card .qty-pill__center .sp-cart-total-stack .sp-cart-total{
+  display: inline-block;
+  max-width: 100%;
+}
+
+.sp-card .qty-pill__center .sp-cart-old-total{
+  display: inline-block;
+  max-width: 100%;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  text-decoration: line-through;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: clip;
