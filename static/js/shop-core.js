@@ -5744,6 +5744,29 @@
     }, 0);
   }
 
+  function getCatalogProductCartAggregate(product) {
+    const pid = Number(product?.id || product?.product_id || 0);
+    if (!Number.isFinite(pid) || pid <= 0) return { qty: 0, total: 0 };
+    const allItems = cartItemsResolved();
+    const items = allItems.filter((item) => Number(item?.product?.id || item?.product_id || 0) === pid);
+    if (!items.length) return { qty: 0, total: 0 };
+    const totals = {
+      nonAutoTotal: computeNonAutoTotal(allItems),
+      autoEligibleTotal: computeAutoEligibleTotal(allItems),
+    };
+    return items.reduce((acc, item) => {
+      const qty = Math.max(0, Number(item?.qty || 0));
+      acc.qty += qty;
+      if (item?.type === "combo") {
+        acc.total = roundPrice(acc.total + Number(item?.unit_price_override || 0) * qty);
+        return acc;
+      }
+      const pricing = computeItemPricing(item, totals);
+      acc.total = roundPrice(acc.total + Number(pricing?.lineTotal || 0));
+      return acc;
+    }, { qty: 0, total: 0 });
+  }
+
   // ---------------------------------------------------------------------------
   // Локальный расчёт потребления stock
   // ---------------------------------------------------------------------------
@@ -12039,8 +12062,8 @@ async function initAddresses() {
     );
   }
 
-  function getCatalogMediaPillLabel(product, availableForAdd = true) {
-    if (!availableForAdd) return "Раскупили";
+  function getCatalogMediaPillLabel(product, availableForAdd = true, qty = 0) {
+    if (!availableForAdd) return Number(qty || 0) > 0 ? "Больше нет" : "Раскупили";
     return isCatalogProductConfigurable(product) ? "Настроить" : "";
   }
 
@@ -12144,7 +12167,7 @@ async function initAddresses() {
     if (badge) media.appendChild(badge);
   }
 
-  function catalogCenterHtml(product, qty, calculatedPrice = null) {
+  function catalogCenterHtml(product, qty, calculatedPrice = null, cartAggregate = null) {
     const old = Number(product.old_price || 0);
     let price = calculatedPrice != null
       ? calculatedPrice
@@ -12163,12 +12186,40 @@ async function initAddresses() {
       }
     }
 
-    if (qty > 0) return `${catalogMoneyNoKopeks(price)} ₽`;
+    if (qty > 0) {
+      const aggregate = cartAggregate && typeof cartAggregate === "object"
+        ? cartAggregate
+        : getCatalogProductCartAggregate(product);
+      const total = Number(aggregate?.total || 0);
+      const displayTotal = total > 0 ? total : price;
+      const totalText = `${catalogMoneyNoKopeks(displayTotal)} ₽`;
+      const totalClass = String(Math.round(displayTotal)).length > 5 ? " sp-cart-total--compact" : "";
+      return `<span class="sp-cart-total${totalClass}">${escapeHtml(totalText)}</span>`;
+    }
     if (showOld) {
       const oldPrice = product.discount ? Number(product.original_price) : old;
-      return `<span class="sp-old-price">${catalogMoneyNoKopeks(oldPrice)} ₽</span>${catalogMoneyNoKopeks(price)} ₽`;
+      return `<span class="sp-price-stack"><span class="sp-old-price">${catalogMoneyNoKopeks(oldPrice)} ₽</span><span class="sp-current-price">${catalogMoneyNoKopeks(price)} ₽</span></span>`;
     }
-    return `${catalogMoneyNoKopeks(price)} ₽`;
+    return `<span class="sp-current-price">${catalogMoneyNoKopeks(price)} ₽</span>`;
+  }
+
+  function syncCatalogUnitPriceLabel(pill, product, qty, calculatedPrice = null) {
+    if (!pill) return;
+    let label = pill.querySelector(".sp-unit-price-label");
+    const shouldShow = Number(qty || 0) > 0;
+    if (!shouldShow) {
+      if (label) label.remove();
+      return;
+    }
+    if (!label) {
+      label = document.createElement("div");
+      label.className = "sp-unit-price-label";
+      pill.appendChild(label);
+    }
+    const price = calculatedPrice != null
+      ? calculatedPrice
+      : (product?.display_price != null ? Number(product.display_price) : Number(product?.price || 0));
+    label.textContent = `${catalogMoneyNoKopeks(price)} ₽`;
   }
 
   function isProductAvailable(product) {
@@ -12284,7 +12335,9 @@ async function initAddresses() {
     
     const center = card.querySelector(".qty-pill__center");
     if (center) {
-      center.innerHTML = catalogCenterHtml(product, qty, calculatedPrice);
+      const cartAggregate = getCatalogProductCartAggregate(product);
+      center.innerHTML = catalogCenterHtml(product, qty, calculatedPrice, cartAggregate);
+      syncCatalogUnitPriceLabel(card.querySelector(".qty-pill"), product, qty, calculatedPrice);
     }
     syncCatalogProductDiscountBadge(card, product, calculatedPrice);
   }
@@ -12890,16 +12943,19 @@ async function initAddresses() {
         const bottom = document.createElement("div");
         bottom.className = "sp-bottom";
 
+        const cartAggregate = getCatalogProductCartAggregate(p);
         const { pill, btnMinus, btnPlus, center } = createQtyPill({
           variant: available ? "buy" : "muted",
-          centerHtml: catalogCenterHtml(p, qty),
-          minusEnabled: qty > 0 && available,
+          centerHtml: catalogCenterHtml(p, qty, null, cartAggregate),
+          minusEnabled: qty > 0,
           plusEnabled: available,
         });
+        syncCatalogUnitPriceLabel(pill, p, qty);
 
         if (qty <= 0) pill.classList.add("is-empty");
         else pill.classList.add("has-qty");
-        if (!available) pill.classList.add("qty-pill--no-action");
+        if (!available && qty > 0) pill.classList.add("qty-pill--cart-unavailable");
+        if (!available && qty <= 0) pill.classList.add("qty-pill--no-action");
         if (!available) card.classList.add("is-unavailable");
 
         bottom.appendChild(pill);
@@ -12917,6 +12973,7 @@ async function initAddresses() {
             added = true;
           } finally {
             const nextQty = cartQty(id);
+            if (added) syncAllProductCardsFromCart();
             elProductsGrid
               .querySelectorAll(`.sp-card[data-product-id="${id}"]`)
               .forEach((cardEl) => applyCardState(cardEl, p, nextQty, added ? "inc" : null));
@@ -13151,10 +13208,13 @@ async function initAddresses() {
       stockAvailable && Number.isFinite(pid) && pid > 0 ? isProductBlockedByIngredientRequirements(pid) : false;
     const availableForAdd = stockAvailable && !plusBlockedByLimit && !plusBlockedByIngredients;
 
-    card.setAttribute("data-qty", String(qty));
-    card.classList.toggle("is-unavailable", !availableForAdd);
+    const hasCartQty = Number(qty || 0) > 0;
+    const unavailableOnly = !availableForAdd && !hasCartQty;
 
-    if (qty > 0) {
+    card.setAttribute("data-qty", String(qty));
+    card.classList.toggle("is-unavailable", unavailableOnly);
+
+    if (hasCartQty) {
       card.classList.add("is-in-cart");
       if (overlay) overlay.classList.remove("hidden");
       if (qtyBox) {
@@ -13172,14 +13232,15 @@ async function initAddresses() {
         qtyBox.textContent = "";
         qtyBox.setAttribute("data-v", "0");
       }
-      if (media) media.classList.toggle("is-dim", !availableForAdd);
+      if (media) media.classList.toggle("is-dim", unavailableOnly);
     }
 
     if (pill) {
       pill.classList.toggle("is-empty", qty <= 0);
       pill.classList.toggle("has-qty", qty > 0);
       pill.classList.toggle("qty-pill--muted", !stockAvailable);
-      pill.classList.toggle("qty-pill--no-action", !availableForAdd);
+      pill.classList.toggle("qty-pill--cart-unavailable", qty > 0 && !availableForAdd);
+      pill.classList.toggle("qty-pill--no-action", qty <= 0 && !availableForAdd);
     }
     if (btnMinus) {
       const minusDisabled = qty <= 0;
@@ -13196,10 +13257,12 @@ async function initAddresses() {
     if (center) {
       syncCatalogProductDiscountBadge(card, product, defaultPriceCache.get(product.id));
       const cachedPrice = defaultPriceCache.get(product.id);
-      center.innerHTML = catalogCenterHtml(product, qty, cachedPrice);
+      const cartAggregate = getCatalogProductCartAggregate(product);
+      center.innerHTML = catalogCenterHtml(product, qty, cachedPrice, cartAggregate);
+      syncCatalogUnitPriceLabel(pill, product, qty, cachedPrice);
     }
     if (media) {
-      const mediaPillLabel = getCatalogMediaPillLabel(product, availableForAdd);
+      const mediaPillLabel = getCatalogMediaPillLabel(product, availableForAdd, qty);
       if (mediaPillLabel) {
         if (!mediaPill) {
           mediaPill = createCatalogMediaPill(product, availableForAdd);
