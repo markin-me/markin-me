@@ -15251,6 +15251,29 @@ function updateCartBadge() {
   }
 
   let __syncAllCardsTimer = null;
+  function syncProductCardStaticContent(card, product) {
+    if (!card || !product) return;
+    const title = $(".sp-title", card);
+    if (title) title.textContent = getCatalogProductTitle(product);
+
+    const sub = $(".sp-sub", card);
+    if (sub) {
+      const defaultLines = getCatalogProductDefaultLines(product);
+      sub.classList.toggle("sp-sub--defaults", defaultLines.length > 0);
+      if (defaultLines.length) {
+        sub.textContent = "";
+        defaultLines.forEach((lineText) => {
+          const line = document.createElement("div");
+          line.className = "sp-sub-line";
+          line.textContent = "\u2022 " + lineText;
+          sub.appendChild(line);
+        });
+      } else {
+        sub.textContent = str(product.description_short || "");
+      }
+    }
+  }
+
   function syncAllProductCardsFromCart() {
     if (!elProductsGrid) return;
     const cards = elProductsGrid.querySelectorAll(".sp-card[data-product-id]");
@@ -15259,6 +15282,7 @@ function updateCartBadge() {
       if (!Number.isFinite(pid)) return;
       const p = state.productCache.get(pid);
       if (!p) return;
+      syncProductCardStaticContent(card, p);
       applyCardState(card, p, cartQty(pid));
     });
   }
@@ -17350,8 +17374,13 @@ async function initCore() {
     await orderConfigBootstrapPromise;
 
     if (productsReadyForFirstPaint) {
-      renderProducts();
+      if (hasSnapshotPaint && elProductsGrid?.querySelector(".sp-card[data-product-id]")) {
+        syncAllProductCardsFromCart();
+      } else {
+        renderProducts();
+      }
       prioritizeAboveFoldCardImages();
+      scheduleAllProductIngredientBatch();
     } else {
       productsLoadPromise.then((ok) => {
         if (!ok) return;
