@@ -11705,6 +11705,12 @@ body.page-shop #shopCartPanel > .panel-body.shop-cart-body > .shop-cart > .shop-
   transition: transform var(--dur-fast) var(--ease-smooth), background var(--dur-fast) var(--ease-smooth);
 }
 
+@media (min-width: 769px){
+  .sp-card{
+    aspect-ratio: 2 / 3;
+  }
+}
+
 .sp-card:hover{
   transform: translateY(-1px);
   background: var(--color-surface);
