@@ -12216,10 +12216,8 @@ async function initAddresses() {
         .map((item) => {
           item.entry.index = item.nextIndex;
           const next = createComboGridImageNode(item.nextUrl, item.entry.isCriticalCard);
-          if (item.current) {
-            item.current.classList.add("is-leaving");
-            item.current.classList.remove("is-visible");
-          }
+          next.classList.remove("is-visible");
+          next.classList.add("is-entering");
           return { ...item.entry, current: item.current, next };
         });
       preloadComboGridImagesInBackground(active.flatMap((entry) => entry.photos));
@@ -12227,22 +12225,37 @@ async function initAddresses() {
         isSwitching = false;
         return;
       }
-      setTimeout(() => {
-        nextEntries.forEach(({ cell, current, next }) => {
-          if (!document.body.contains(cell)) return;
-          if (current && current.parentNode === cell) current.remove();
-          next.classList.add("is-entering");
-          cell.appendChild(next);
-        });
+      nextEntries.forEach(({ cell, next }) => {
+        if (!document.body.contains(cell)) return;
+        cell.appendChild(next);
+      });
+      requestAnimationFrame(() => {
         requestAnimationFrame(() => {
-          nextEntries.forEach(({ cell, next }) => {
+          nextEntries.forEach(({ cell, current }) => {
             if (!document.body.contains(cell)) return;
-            next.classList.add("is-visible");
-            next.classList.remove("is-entering");
+            if (current) {
+              current.classList.add("is-leaving");
+              current.classList.remove("is-visible");
+            }
           });
-          isSwitching = false;
+          setTimeout(() => {
+            nextEntries.forEach(({ cell, current }) => {
+              if (!document.body.contains(cell)) return;
+              if (current && current.parentNode === cell) current.remove();
+            });
+            requestAnimationFrame(() => {
+              nextEntries.forEach(({ cell, next }) => {
+                if (!document.body.contains(cell)) return;
+                next.classList.add("is-visible");
+                next.classList.remove("is-entering");
+              });
+              setTimeout(() => {
+                isSwitching = false;
+              }, 920);
+            });
+          }, 920);
         });
-      }, 920);
+      });
     }, intervalMs);
   }
 
