@@ -152,7 +152,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     productsBatchVariants: 30000,
     productsBatchOptionAssignments: 30000,
     productById: 15000,
-    comboById: 8000,
+    comboById: 120000,
     productIngredients: 30000,
     productVariants: 30000,
     productOptionAssignments: 30000,
@@ -11968,6 +11968,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
       let minPriceSum = 0;
       const gridPhotos = [];
+      const gridPhotoSets = [];
       let comboIsAvailable = true;
       const blockIds = setBlocks.map((sb) => Number(sb.block_id)).filter((id) => Number.isFinite(id) && id > 0);
       if (!blockIds.length) continue;
@@ -12080,7 +12081,13 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           blockSum += Number(r.minPrice || 0);
           if (gridPhotos.length < 4) {
             const photos = safeJsonArray(r.photos_json);
-            if (photos.length) gridPhotos.push(photos[0]);
+            if (photos.length) {
+              const blockPhotos = pricingCandidatesRaw
+                .flatMap((row) => safeJsonArray(row.photos_json).slice(0, 1))
+                .filter(Boolean);
+              gridPhotos.push(photos[0]);
+              gridPhotoSets.push([...new Set([photos[0], ...blockPhotos])].slice(0, 8));
+            }
           }
         }
         minPriceSum += roundPrice(blockSum);
@@ -12102,6 +12109,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         image_url: combo.image_url || null,
         min_price: minPrice,
         grid_photos: gridPhotosFinal,
+        grid_photo_sets: gridPhotoSets.slice(0, 4),
         block_product_ids: setBlocks.map((sb) => {
           const rows = blockProductsById.get(Number(sb.block_id)) || [];
           return rows

@@ -12065,6 +12065,79 @@ async function initAddresses() {
     return badge;
   }
 
+  function createComboGridImageNode(src, isCriticalCard = false) {
+    return createOptimizedImage(src, {
+      type: "product-grid",
+      className: "sp-img sp-img-full sp-combo-grid__img is-visible",
+      alt: "",
+      priority: isCriticalCard,
+    });
+  }
+
+  function normalizeComboGridPhotoUrls(photoUrls) {
+    const photos = Array.from(new Set((Array.isArray(photoUrls) ? photoUrls : [])
+      .map((url) => str(url || "").trim())
+      .filter(Boolean)));
+    return photos;
+  }
+
+  function startComboGridRotation(cells) {
+    const rotators = (Array.isArray(cells) ? cells : [])
+      .map((entry) => {
+        const cell = entry?.cell || null;
+        const photos = normalizeComboGridPhotoUrls(entry?.photos || []);
+        if (!cell || photos.length < 2) return null;
+        cell.dataset.comboSlideDir = entry?.direction || "up";
+        return {
+          cell,
+          photos,
+          index: 0,
+          isCriticalCard: !!entry?.isCriticalCard,
+        };
+      })
+      .filter(Boolean);
+    if (!rotators.length) return;
+    if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+
+    const intervalMs = 6800;
+    const timer = setInterval(() => {
+      const active = rotators.filter((entry) => document.body.contains(entry.cell));
+      if (!active.length) {
+        clearInterval(timer);
+        return;
+      }
+      const nextEntries = active.map((entry) => {
+        const current = entry.cell.querySelector(".sp-combo-grid__img.is-visible");
+        if (entry.photos.length > 1) {
+          let nextIndex = Math.floor(Math.random() * entry.photos.length);
+          if (nextIndex === entry.index) nextIndex = (nextIndex + 1) % entry.photos.length;
+          entry.index = nextIndex;
+        }
+        const next = createComboGridImageNode(entry.photos[entry.index], entry.isCriticalCard);
+        if (current) {
+          current.classList.add("is-leaving");
+          current.classList.remove("is-visible");
+        }
+        return { ...entry, current, next };
+      });
+      setTimeout(() => {
+        nextEntries.forEach(({ cell, current, next }) => {
+          if (!document.body.contains(cell)) return;
+          if (current && current.parentNode === cell) current.remove();
+          next.classList.add("is-entering");
+          cell.appendChild(next);
+        });
+        requestAnimationFrame(() => {
+          nextEntries.forEach(({ cell, next }) => {
+            if (!document.body.contains(cell)) return;
+            next.classList.add("is-visible");
+            next.classList.remove("is-entering");
+          });
+        });
+      }, 920);
+    }, intervalMs);
+  }
+
   function isCatalogProductConfigurable(product) {
     const cfg = product?.blocks_config && typeof product.blocks_config === "object"
       ? product.blocks_config
@@ -13079,6 +13152,9 @@ async function initAddresses() {
         } else if (gridPhotos.length > 0) {
           const grid = document.createElement("div");
           grid.className = "sp-combo-grid";
+          const gridPhotoSets = Array.isArray(combo.grid_photo_sets) ? combo.grid_photo_sets : [];
+          const comboSlideDirections = ["up", "right", "left", "down"];
+          const comboGridRotators = [];
           for (let i = 0; i < 4; i++) {
             const cell = document.createElement("div");
             cell.className = "sp-combo-grid__cell";
@@ -13086,25 +13162,10 @@ async function initAddresses() {
             const thumb = gridThumbs[comboGridOrder[i]] || "";
             const finalSrc = thumb || src;
             if (finalSrc) {
-              const previewUrl = finalSrc; // ??? ??????? ???? ????? ?????????? ????????? LQIP ??? ??????
               if (isCriticalCard) {
                 preloadImageOnce(finalSrc, { fetchPriority: 'high' });
               }
-
-              const imgPreview = createOptimizedImage(previewUrl, {
-                type: "product-grid",
-                className: "sp-img sp-img-lqip",
-                alt: "",
-                priority: isCriticalCard,
-              });
-              cell.appendChild(imgPreview);
-
-              const imgFull = createOptimizedImage(finalSrc, {
-                type: "product-grid",
-                className: "sp-img sp-img-full",
-                alt: "",
-                priority: isCriticalCard,
-              });
+              const imgFull = createComboGridImageNode(finalSrc, isCriticalCard);
               const fullImgEl = imgFull.tagName === 'PICTURE' ? imgFull.querySelector('img') : imgFull;
               if (fullImgEl) {
                 fullImgEl.addEventListener("load", () => cell.classList.add("is-loaded"));
@@ -13112,11 +13173,21 @@ async function initAddresses() {
               }
               cell.appendChild(imgFull);
               if (fullImgEl && fullImgEl.complete) cell.classList.add("is-loaded");
+              const alternatives = Array.isArray(gridPhotoSets[comboGridOrder[i]])
+                ? gridPhotoSets[comboGridOrder[i]]
+                : [];
+              comboGridRotators.push({
+                cell,
+                photos: [finalSrc, ...alternatives],
+                direction: comboSlideDirections[i],
+                isCriticalCard,
+              });
             } else {
               cell.classList.add("sp-combo-grid__cell--empty");
             }
             grid.appendChild(cell);
           }
+          startComboGridRotation(comboGridRotators);
           media.appendChild(grid);
         } else {
           const imgPreview = createOptimizedImage("/static/img/placeholder.png", {
@@ -13196,7 +13267,7 @@ async function initAddresses() {
 
       if (prefetchComboIds.length) {
         scheduleComboDetailsPrefetch(prefetchComboIds, {
-          limit: appendOnly ? 4 : 12,
+          limit: appendOnly ? 2 : 4,
           delayMs: appendOnly ? 100 : 180,
         });
       }
