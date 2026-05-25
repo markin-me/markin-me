@@ -37810,6 +37810,11 @@ function initShopLate() {
 
           if (isAnySheetOpen) closeShopSheetIfOpen();
           setActiveNav("home");
+          requestAnimationFrame(() => {
+            const root = document.scrollingElement || document.documentElement || document.body;
+            if (root) root.scrollTop = 0;
+            window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+          });
         });
       }
 

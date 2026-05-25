@@ -11929,7 +11929,7 @@ body.page-shop #shopCartPanel > .panel-body.shop-cart-body > .shop-cart > .shop-
   -webkit-line-clamp: 2;             /* 2 СЃС‚СЂРѕРєРё */
   line-clamp: 2;
   -webkit-box-orient: vertical;
-  overflow: visible;
+  overflow: hidden;
   min-height: 2.15em;
 }
 
