@@ -7521,6 +7521,12 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
   -webkit-tap-highlight-color: transparent;
 }
 
+@media (max-width: 768px){
+  body.page-shop #shopHeaderCompanyChatOpenBtn{
+    display: none;
+  }
+}
+
 .shop-company-chat-overlay{
   --shop-chat-mobile-glass-control-border: rgba(255, 255, 255, 0.86);
   --shop-chat-mobile-glass-control-bg: rgba(255, 255, 255, 0.68);
