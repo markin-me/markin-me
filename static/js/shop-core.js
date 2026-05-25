@@ -3654,6 +3654,78 @@
     }
   }
 
+  const comboGridImageReadyCache = new Map();
+  const COMBO_GRID_IMAGE_READY_LIMIT = 240;
+
+  function rememberComboGridImageReady(url, promise) {
+    const key = str(url || "").trim();
+    if (!key || !promise) return promise;
+    if (comboGridImageReadyCache.has(key)) comboGridImageReadyCache.delete(key);
+    comboGridImageReadyCache.set(key, promise);
+    while (comboGridImageReadyCache.size > COMBO_GRID_IMAGE_READY_LIMIT) {
+      const oldestKey = comboGridImageReadyCache.keys().next().value;
+      if (!oldestKey) break;
+      comboGridImageReadyCache.delete(oldestKey);
+    }
+    return promise;
+  }
+
+  function preloadComboGridImage(url) {
+    const key = str(url || "").trim();
+    if (!key) return Promise.resolve(false);
+    const cached = comboGridImageReadyCache.get(key);
+    if (cached) return cached;
+
+    const readyPromise = new Promise((resolve) => {
+      try {
+        const img = new Image();
+        const done = (ok) => resolve(!!ok);
+        img.onload = () => {
+          if (img.decode) {
+            img.decode().then(() => done(true)).catch(() => done(true));
+          } else {
+            done(true);
+          }
+        };
+        img.onerror = () => done(false);
+        img.src = key;
+        if (img.complete && img.naturalWidth > 0) {
+          if (img.decode) {
+            img.decode().then(() => done(true)).catch(() => done(true));
+          } else {
+            done(true);
+          }
+        }
+      } catch {
+        resolve(false);
+      }
+    }).then((ok) => {
+      if (!ok) comboGridImageReadyCache.delete(key);
+      return ok;
+    });
+
+    return rememberComboGridImageReady(key, readyPromise);
+  }
+
+  function preloadComboGridImagesInBackground(urls) {
+    const uniqueUrls = normalizeComboGridPhotoUrls(urls);
+    if (!uniqueUrls.length) return;
+    const run = () => uniqueUrls.forEach((url) => { preloadComboGridImage(url); });
+    if (window.requestIdleCallback) {
+      window.requestIdleCallback(run, { timeout: 1800 });
+    } else {
+      setTimeout(run, 0);
+    }
+  }
+
+  function waitForComboGridImage(url, timeoutMs = 1400) {
+    const imageReady = preloadComboGridImage(url);
+    const timeout = new Promise((resolve) => {
+      setTimeout(() => resolve(false), timeoutMs);
+    });
+    return Promise.race([imageReady, timeout]).then(Boolean).catch(() => false);
+  }
+
   function prioritizeAboveFoldCardImages(maxCards = 16, extraPx = 200) {
     try {
       if (!elProductsGrid) return;
@@ -12100,26 +12172,48 @@ async function initAddresses() {
     if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
 
     const intervalMs = 6800;
-    const timer = setInterval(() => {
+    preloadComboGridImagesInBackground(rotators.flatMap((entry) => entry.photos));
+    let isSwitching = false;
+    const timer = setInterval(async () => {
+      if (isSwitching) return;
       const active = rotators.filter((entry) => document.body.contains(entry.cell));
       if (!active.length) {
         clearInterval(timer);
         return;
       }
-      const nextEntries = active.map((entry) => {
+      isSwitching = true;
+      const candidates = active.map((entry) => {
         const current = entry.cell.querySelector(".sp-combo-grid__img.is-visible");
+        let nextIndex = entry.index;
         if (entry.photos.length > 1) {
-          let nextIndex = Math.floor(Math.random() * entry.photos.length);
+          nextIndex = Math.floor(Math.random() * entry.photos.length);
           if (nextIndex === entry.index) nextIndex = (nextIndex + 1) % entry.photos.length;
-          entry.index = nextIndex;
         }
-        const next = createComboGridImageNode(entry.photos[entry.index], entry.isCriticalCard);
-        if (current) {
-          current.classList.add("is-leaving");
-          current.classList.remove("is-visible");
-        }
-        return { ...entry, current, next };
+        return {
+          entry,
+          cell: entry.cell,
+          current,
+          nextIndex,
+          nextUrl: entry.photos[nextIndex],
+        };
       });
+      const readiness = await Promise.all(candidates.map((item) => waitForComboGridImage(item.nextUrl)));
+      const nextEntries = candidates
+        .filter((item, index) => readiness[index] && document.body.contains(item.cell))
+        .map((item) => {
+          item.entry.index = item.nextIndex;
+          const next = createComboGridImageNode(item.nextUrl, item.entry.isCriticalCard);
+          if (item.current) {
+            item.current.classList.add("is-leaving");
+            item.current.classList.remove("is-visible");
+          }
+          return { ...item.entry, current: item.current, next };
+        });
+      preloadComboGridImagesInBackground(active.flatMap((entry) => entry.photos));
+      if (!nextEntries.length) {
+        isSwitching = false;
+        return;
+      }
       setTimeout(() => {
         nextEntries.forEach(({ cell, current, next }) => {
           if (!document.body.contains(cell)) return;
@@ -12133,6 +12227,7 @@ async function initAddresses() {
             next.classList.add("is-visible");
             next.classList.remove("is-entering");
           });
+          isSwitching = false;
         });
       }, 920);
     }, intervalMs);
