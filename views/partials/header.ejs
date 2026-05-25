@@ -47,6 +47,10 @@
             <i class="fas fa-tags"></i>
             <span class="shop-benefits-badge hidden" id="shopCartBenefitsBadge">0</span>
           </button>
+          <button class="header-btn shop-company-chat-btn<%= isCompanyChatEnabled ? '' : ' hidden' %>" id="shopHeaderCompanyChatOpenBtn" type="button" aria-label="Чат с компанией" title="Чат с компанией"<% if (!isCompanyChatEnabled) { %> aria-hidden="true" tabindex="-1"<% } %>>
+            <i class="fas fa-comment-dots" aria-hidden="true"></i>
+            <span class="shop-company-chat-unread hidden" id="shopHeaderCompanyChatUnreadBadge" aria-live="polite" aria-atomic="true"></span>
+          </button>
           <% if (hasCitySelector) { %>
             <button class="header-btn" id="shopHeaderFavBtn" type="button" aria-label="Избранное">
               <i class="far fa-heart"></i>

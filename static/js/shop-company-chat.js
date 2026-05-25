@@ -1,6 +1,9 @@
 (function () {
-  const openBtn = document.getElementById("shopCompanyChatOpenBtn");
-  const unreadBadge = document.getElementById("shopCompanyChatUnreadBadge");
+  const mobileOpenBtn = document.getElementById("shopCompanyChatOpenBtn");
+  const headerOpenBtn = document.getElementById("shopHeaderCompanyChatOpenBtn");
+  const openBtn = mobileOpenBtn || headerOpenBtn;
+  const unreadBadge = document.getElementById("shopCompanyChatUnreadBadge")
+    || document.getElementById("shopHeaderCompanyChatUnreadBadge");
   const overlay = document.getElementById("shopCompanyChatOverlay");
   const modal = overlay ? overlay.querySelector(".shop-company-chat-modal") : null;
   const modalHeader = overlay ? overlay.querySelector(".shop-company-chat-modal__header") : null;
@@ -44,6 +47,19 @@
 
   if (!openBtn || !overlay || !modal || !modalHeader || !modalBody || !modalTitle || !closeBtn) return;
   if (!feed || !thread || !composer || !selectionToolbar || !selectionCloseBtn || !selectionCountEl || !selectionCopyBtn || !selectionDeleteBtn || !attachBtn || !attachInput || !attachPreviewOverlay || !attachPreviewCloseBtn || !attachPreviewTitle || !attachPreviewImage || !attachPreviewThumbs || !attachPreviewEmojiBtn || !attachPreviewCaption || !attachPreviewSendBtn || !imageViewerOverlay || !imageViewerCloseBtn || !imageViewerImage || !imageViewerCard || !input || !emojiBtn || !emojiPopover || !scrollDownBtn || !reactionBar) return;
+
+  function getChatOpenButtons() {
+    return [mobileOpenBtn, headerOpenBtn].filter(function (btn, index, list) {
+      return btn && list.indexOf(btn) === index;
+    });
+  }
+
+  function getChatUnreadBadges() {
+    return getChatOpenButtons().map(function (btn) {
+      return btn.querySelector(".shop-company-chat-unread");
+    }).filter(Boolean);
+  }
+
   const initialModalTitleText = String(modalTitle.textContent || "").trim() || "\u0427\u0430\u0442";
 
   const EMOJI_ASSET_BASE_URL = "https://cdn.jsdelivr.net/npm/emoji-datasource-apple@15.1.2/img/apple/64";
@@ -508,17 +524,21 @@
   const ORDER_CARD_WHEEL_FACTOR = 1;
 
   function ensureUnreadBadge() {
+    const existingBadges = getChatUnreadBadges();
+    if (existingBadges.length) return existingBadges[0];
     if (unreadBadge && unreadBadge.isConnected) return unreadBadge;
-    const existing = openBtn.querySelector("#shopCompanyChatUnreadBadge");
-    if (existing) return existing;
 
-    const node = document.createElement("span");
-    node.id = "shopCompanyChatUnreadBadge";
-    node.className = "shop-company-chat-unread hidden";
-    node.setAttribute("aria-live", "polite");
-    node.setAttribute("aria-atomic", "true");
-    openBtn.appendChild(node);
-    return node;
+    let firstNode = null;
+    getChatOpenButtons().forEach(function (button, index) {
+      const node = document.createElement("span");
+      node.id = index === 0 ? "shopCompanyChatUnreadBadge" : "shopHeaderCompanyChatUnreadBadge";
+      node.className = "shop-company-chat-unread hidden";
+      node.setAttribute("aria-live", "polite");
+      node.setAttribute("aria-atomic", "true");
+      button.appendChild(node);
+      if (!firstNode) firstNode = node;
+    });
+    return firstNode;
   }
 
   function ensureScrollDownBadge() {
@@ -1711,24 +1731,36 @@
     const displayCount = isOpen
       ? getFeedScrollDownBadgeCount(entries)
       : unreadCount;
+    const badges = getChatUnreadBadges();
+    const buttons = getChatOpenButtons();
 
     if (displayCount <= 0) {
-      badge.textContent = "";
-      badge.classList.add("hidden");
-      openBtn.removeAttribute("data-unread-count");
+      badges.forEach(function (item) {
+        item.textContent = "";
+        item.classList.add("hidden");
+      });
+      buttons.forEach(function (button) {
+        button.removeAttribute("data-unread-count");
+      });
       return;
     }
 
     const value = displayCount > 99 ? "99+" : String(displayCount);
-    badge.textContent = value;
-    badge.classList.remove("hidden");
-    openBtn.setAttribute("data-unread-count", value);
+    badges.forEach(function (item) {
+      item.textContent = value;
+      item.classList.remove("hidden");
+    });
+    buttons.forEach(function (button) {
+      button.setAttribute("data-unread-count", value);
+    });
   }
 
   function syncOpenButtonActiveState() {
     const isOpen = overlay.classList.contains("is-open");
-    openBtn.classList.toggle("is-active", isOpen);
-    openBtn.setAttribute("aria-expanded", isOpen ? "true" : "false");
+    getChatOpenButtons().forEach(function (button) {
+      button.classList.toggle("is-active", isOpen);
+      button.setAttribute("aria-expanded", isOpen ? "true" : "false");
+    });
   }
 
   function isChatTabActiveForRead() {
@@ -3057,10 +3089,15 @@
 
   function applyChatWidgetEnabledState(isEnabled) {
     const enabled = isEnabled !== false;
-    openBtn.classList.toggle("hidden", !enabled);
+    const buttons = getChatOpenButtons();
+    buttons.forEach(function (button) {
+      button.classList.toggle("hidden", !enabled);
+    });
     if (enabled) {
-      openBtn.removeAttribute("aria-hidden");
-      openBtn.removeAttribute("tabindex");
+      buttons.forEach(function (button) {
+        button.removeAttribute("aria-hidden");
+        button.removeAttribute("tabindex");
+      });
       syncOpenButtonActiveState();
       if (!overlay.classList.contains("is-open")) {
         startUnreadPolling();
@@ -3074,15 +3111,17 @@
     webPushSyncRequestedWithPermission = false;
     webPushSyncForceRequested = false;
     webPushSyncQueuedClientId = "";
-    openBtn.setAttribute("aria-hidden", "true");
-    openBtn.setAttribute("tabindex", "-1");
-    openBtn.classList.remove("is-active");
-    openBtn.setAttribute("aria-expanded", "false");
-    openBtn.removeAttribute("data-unread-count");
-    if (unreadBadge) {
-      unreadBadge.textContent = "";
-      unreadBadge.classList.add("hidden");
-    }
+    buttons.forEach(function (button) {
+      button.setAttribute("aria-hidden", "true");
+      button.setAttribute("tabindex", "-1");
+      button.classList.remove("is-active");
+      button.setAttribute("aria-expanded", "false");
+      button.removeAttribute("data-unread-count");
+    });
+    getChatUnreadBadges().forEach(function (badge) {
+      badge.textContent = "";
+      badge.classList.add("hidden");
+    });
     if (overlay.classList.contains("is-open")) {
       closeCompanyChat();
     }
@@ -12778,17 +12817,19 @@
       .catch(function () {});
   }
 
-  openBtn.addEventListener("click", function (event) {
-    if (!chatRuntimeSettings.isEnabled) {
+  getChatOpenButtons().forEach(function (button) {
+    button.addEventListener("click", function (event) {
+      if (!chatRuntimeSettings.isEnabled) {
+        event.preventDefault();
+        event.stopPropagation();
+        applyChatWidgetEnabledState(false);
+        return;
+      }
       event.preventDefault();
       event.stopPropagation();
-      applyChatWidgetEnabledState(false);
-      return;
-    }
-    event.preventDefault();
-    event.stopPropagation();
-    initChatRuntimeSettings({ fetchRemote: true, force: true, refreshUi: true }).catch(function () {});
-    openCompanyChat();
+      initChatRuntimeSettings({ fetchRemote: true, force: true, refreshUi: true }).catch(function () {});
+      openCompanyChat();
+    });
   });
 
   closeBtn.addEventListener("click", function (event) {

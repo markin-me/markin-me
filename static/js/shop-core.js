@@ -4322,8 +4322,11 @@
     if (tenant && typeof tenant === "object" && Object.prototype.hasOwnProperty.call(tenant, "chat_widget_enabled")) {
       return normalizeTenantChatWidgetEnabled(tenant.chat_widget_enabled);
     }
-    const button = document.getElementById("shopCompanyChatOpenBtn");
-    return !!(button && !button.classList.contains("hidden"));
+    const buttons = [
+      document.getElementById("shopCompanyChatOpenBtn"),
+      document.getElementById("shopHeaderCompanyChatOpenBtn"),
+    ].filter(Boolean);
+    return buttons.some((button) => !button.classList.contains("hidden"));
   }
 
   function persistStorefrontChatWidgetEnabled(enabled) {
@@ -4336,22 +4339,32 @@
   }
 
   function syncStorefrontChatButtonVisibility(enabled) {
-    const button = document.getElementById("shopCompanyChatOpenBtn");
-    const unreadBadge = document.getElementById("shopCompanyChatUnreadBadge");
-    if (!button) return;
-    button.classList.toggle("hidden", enabled === false);
+    const buttons = [
+      document.getElementById("shopCompanyChatOpenBtn"),
+      document.getElementById("shopHeaderCompanyChatOpenBtn"),
+    ].filter(Boolean);
+    const unreadBadges = [
+      document.getElementById("shopCompanyChatUnreadBadge"),
+      document.getElementById("shopHeaderCompanyChatUnreadBadge"),
+    ].filter(Boolean);
+    if (!buttons.length) return;
+    buttons.forEach((button) => {
+      button.classList.toggle("hidden", enabled === false);
+      if (enabled === false) {
+        button.setAttribute("aria-hidden", "true");
+        button.setAttribute("tabindex", "-1");
+        button.removeAttribute("data-unread-count");
+        return;
+      }
+      button.removeAttribute("aria-hidden");
+      button.removeAttribute("tabindex");
+    });
     if (enabled === false) {
-      button.setAttribute("aria-hidden", "true");
-      button.setAttribute("tabindex", "-1");
-      button.removeAttribute("data-unread-count");
-      if (unreadBadge) {
+      unreadBadges.forEach((unreadBadge) => {
         unreadBadge.textContent = "";
         unreadBadge.classList.add("hidden");
-      }
-      return;
+      });
     }
-    button.removeAttribute("aria-hidden");
-    button.removeAttribute("tabindex");
   }
 
   function broadcastStorefrontChatWidgetChanged(enabled) {
