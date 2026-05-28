@@ -17333,7 +17333,7 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
   min-height: 0;
   overflow: auto;
   display: grid;
-  gap: 8px;
+  gap: 14px;
   grid-auto-rows: minmax(min-content, auto);
   align-content: start;
 }
@@ -17473,7 +17473,15 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
   line-height: 1.2;
 }
 
-.shop-pd-nutrition-badge{
+.shop-pd-nutrition-actions{
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.shop-pd-nutrition-badge,
+.shop-pd-nutrition-mode{
   flex: 0 0 auto;
   min-height: 30px;
   padding: 0 12px;
@@ -17487,6 +17495,16 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
   font-size: 12px;
   font-weight: 900;
   white-space: nowrap;
+}
+
+.shop-pd-nutrition-mode{
+  cursor: pointer;
+  background: var(--color-surface);
+}
+
+.shop-pd-nutrition-mode.is-active{
+  color: #fff;
+  background: var(--shop-buy);
 }
 
 .shop-pd-nutrition-grid{
@@ -17627,7 +17645,7 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
 }
 .shop-pd-options{
   display: grid;
-  gap: 6px;
+  gap: 8px;
 }
 .shop-pd-option-accordion{
   border: 0;
@@ -17891,8 +17909,8 @@ div.shop-pd-option-thumb{
 /* ================= Ingredients ================= */
 .shop-pd-ingredients{
   display: grid;
-  gap: 6px;
-  margin-top: 4px;
+  gap: 8px;
+  margin-top: 0;
 }
 
 .shop-pd-section-title{

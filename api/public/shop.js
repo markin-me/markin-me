@@ -1491,6 +1491,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       return {
         values,
         portion: null,
+        portionGrams: resolvePublicProductBaseQtyInGrams(product, tree),
         incomplete: values.protein == null || values.fat == null || values.carbs == null,
       };
     }
@@ -1518,7 +1519,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     const values = per100BaseGrams && per100BaseGrams > 0
       ? normalizePublicNutrition({ protein: protein / per100BaseGrams * 100, fat: fat / per100BaseGrams * 100, carbs: carbs / per100BaseGrams * 100 })
       : normalizePublicNutrition({ protein, fat, carbs });
-    return { values, portion, incomplete };
+    return { values, portion, portionGrams: totalGrams, incomplete };
   }
 
   async function applyPublicProductNutrition(rows, tenantId) {
@@ -1535,19 +1536,125 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       }
       const tree = await loadPublicNutritionTree(tenantId, productId);
       const result = buildPublicNutritionResult(productId, tree);
+      const product = tree.products.get(productId) || null;
+      const baseQtyGrams = product ? resolvePublicProductBaseQtyInGrams(product, tree) : null;
       const fallback = normalizePublicNutrition({
         protein: row.nutrition_protein_100g,
         fat: row.nutrition_fat_100g,
         carbs: row.nutrition_carbs_100g,
       });
       const per100 = result.values.protein == null && result.values.fat == null && result.values.carbs == null ? fallback : result.values;
-      const portionQty = readPublicNutritionNumber(row.base_qty);
       row.nutrition_kcal_100g = per100.kcal;
       row.nutrition_per_100g = per100;
-      row.nutrition_per_portion = result.portion || (portionQty && portionQty > 0
-        ? normalizePublicNutrition({ protein: per100.protein * portionQty / 100, fat: per100.fat * portionQty / 100, carbs: per100.carbs * portionQty / 100 })
+      row.nutrition_per_portion = result.portion || (baseQtyGrams && baseQtyGrams > 0
+        ? normalizePublicNutrition({ protein: per100.protein * baseQtyGrams / 100, fat: per100.fat * baseQtyGrams / 100, carbs: per100.carbs * baseQtyGrams / 100 })
         : null);
       row.nutrition_incomplete = Boolean(result.incomplete);
+      row.base_qty_grams = baseQtyGrams;
+      row.nutrition_portion_grams = result.portionGrams || baseQtyGrams;
+    }
+  }
+
+  async function getPublicProductNutritionDetails(tenantId, productId, cache = new Map()) {
+    const id = Number(productId || 0);
+    if (!Number.isFinite(id) || id <= 0) return null;
+    if (cache.has(id)) return cache.get(id);
+    const tree = await loadPublicNutritionTree(tenantId, id);
+    const result = buildPublicNutritionResult(id, tree);
+    const product = tree.products.get(id) || null;
+    const baseQtyGrams = product ? resolvePublicProductBaseQtyInGrams(product, tree) : null;
+    const per100 = result.values || normalizePublicNutrition({});
+    const portion = result.portion || (baseQtyGrams && baseQtyGrams > 0
+      ? normalizePublicNutrition({
+          protein: per100.protein != null ? per100.protein * baseQtyGrams / 100 : null,
+          fat: per100.fat != null ? per100.fat * baseQtyGrams / 100 : null,
+          carbs: per100.carbs != null ? per100.carbs * baseQtyGrams / 100 : null,
+        })
+      : null);
+    const details = {
+      tree,
+      per100,
+      portion,
+      incomplete: Boolean(result.incomplete),
+      baseQtyGrams,
+      portionGrams: result.portionGrams || baseQtyGrams,
+    };
+    cache.set(id, details);
+    return details;
+  }
+
+  function getPublicProductUnitToGramFactor(productId, unitId, details, baseUnitId = null, productUnitId = null) {
+    const id = Number(productId || 0);
+    const fromUnitId = Number(unitId || 0);
+    if (!id || !fromUnitId || !details?.tree) return null;
+    return resolvePublicIngredientQtyInGrams({
+      ingredient_id: id,
+      quantity: 1,
+      unit_id: fromUnitId,
+      ingredient_base_unit_id: baseUnitId,
+      ingredient_unit_id: productUnitId,
+    }, details.tree);
+  }
+
+  async function attachPublicNutritionToIngredientRows(rows, tenantId, cache = new Map()) {
+    const list = Array.isArray(rows) ? rows : [];
+    for (const row of list) {
+      const productId = Number(row?.ingredient_id || 0);
+      if (!productId) continue;
+      const details = await getPublicProductNutritionDetails(tenantId, productId, cache);
+      if (!details) continue;
+      row.nutrition_per_100g = details.per100;
+      row.nutrition_per_portion = details.portion;
+      row.nutrition_incomplete = details.incomplete;
+      row.unit_to_grams_factor = getPublicProductUnitToGramFactor(
+        productId,
+        row.unit_id,
+        details,
+        row.ingredient_base_unit_id,
+        row.ingredient_unit_id
+      );
+      row.base_qty_grams = details.baseQtyGrams;
+      row.nutrition_portion_grams = details.portionGrams;
+    }
+  }
+
+  async function attachPublicNutritionToOptionItemRows(rows, tenantId, cache = new Map()) {
+    const list = Array.isArray(rows) ? rows : [];
+    for (const row of list) {
+      const productId = Number(row?.target_product_id || 0);
+      if (!productId) continue;
+      const details = await getPublicProductNutritionDetails(tenantId, productId, cache);
+      if (!details) continue;
+      row.nutrition_per_100g = details.per100;
+      row.nutrition_per_portion = details.portion;
+      row.nutrition_incomplete = details.incomplete;
+      row.base_qty_grams = details.baseQtyGrams;
+      row.nutrition_portion_grams = details.portionGrams;
+      row.unit_to_grams_factor = getPublicProductUnitToGramFactor(
+        productId,
+        row.product_unit_id || row.product_base_unit_id,
+        details,
+        row.product_base_unit_id,
+        row.product_unit_id
+      );
+    }
+  }
+
+  async function attachPublicVariantGramFactors(groupsByProductId, tenantId, cache = new Map()) {
+    const map = groupsByProductId instanceof Map ? groupsByProductId : null;
+    if (!map) return;
+    for (const [productId, groups] of map.entries()) {
+      const details = await getPublicProductNutritionDetails(tenantId, productId, cache);
+      if (!details || !Array.isArray(groups)) continue;
+      groups.forEach((group) => {
+        group.unit_to_grams_factor = getPublicProductUnitToGramFactor(
+          productId,
+          group.unit_id,
+          details,
+          details.tree.products.get(Number(productId))?.base_unit_id,
+          details.tree.products.get(Number(productId))?.unit_id
+        );
+      });
     }
   }
 
@@ -13122,6 +13229,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
                p.base_unit_id AS ingredient_base_unit_id,
                p.base_qty AS ingredient_base_qty,
                p.unit_id AS ingredient_unit_id,
+               p.nutrition_protein_100g,
+               p.nutrition_fat_100g,
+               p.nutrition_carbs_100g,
                p.photos_json AS ingredient_photos,
                u.code AS unit_code,
                u.title AS unit_title,
@@ -13144,6 +13254,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           for (const r of rows) {
             r.ingredient_photos = safeJsonArray(r.ingredient_photos);
           }
+          await attachPublicNutritionToIngredientRows(rows, tenantId);
 
           return { ok: true, data: rows };
         }
@@ -13199,6 +13310,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
                p.base_unit_id AS ingredient_base_unit_id,
                p.base_qty AS ingredient_base_qty,
                p.unit_id AS ingredient_unit_id,
+               p.nutrition_protein_100g,
+               p.nutrition_fat_100g,
+               p.nutrition_carbs_100g,
                p.photos_json AS ingredient_photos,
                u.code AS unit_code,
                u.title AS unit_title,
@@ -13219,6 +13333,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           );
 
           const result = {};
+          await attachPublicNutritionToIngredientRows(rows, tenantId);
           for (const r of rows) {
             r.ingredient_photos = safeJsonArray(r.ingredient_photos);
             const pid = Number(r.product_id);
@@ -13534,6 +13649,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
                p.base_unit_id AS ingredient_base_unit_id,
                p.base_qty AS ingredient_base_qty,
                p.unit_id AS ingredient_unit_id,
+               p.nutrition_protein_100g,
+               p.nutrition_fat_100g,
+               p.nutrition_carbs_100g,
                p.photos_json AS ingredient_photos,
                u.code AS unit_code,
                u.title AS unit_title,
@@ -13555,6 +13673,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
           const ingredients = {};
           sortedIds.forEach((pid) => { ingredients[pid] = []; });
+          await attachPublicNutritionToIngredientRows(ingredientRows, tenantId);
           ingredientRows.forEach((r) => {
             r.ingredient_photos = safeJsonArray(r.ingredient_photos);
             const pid = Number(r.product_id);
@@ -13634,6 +13753,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
               discount_tiers: variantData.discount_tiers,
             });
           }
+          await attachPublicVariantGramFactors(new Map(sortedIds.map((pid) => [Number(pid), variants[pid] || []])), tenantId);
           sortedIds.forEach((pid) => {
             const blocksConfig = blocksConfigMap.get(Number(pid)) || getDefaultProductBlocksConfig();
             if (!blocksConfig.variants) variants[pid] = [];
@@ -13664,6 +13784,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
                  i.sort_order,
                  p.name AS product_name,
                  p.price AS product_price,
+                 p.base_unit_id AS product_base_unit_id,
+                 p.base_qty AS product_base_qty,
+                 p.unit_id AS product_unit_id,
                  p.photos_json AS product_photos_json
                FROM prod_option_items i
                JOIN prod_products p ON p.tenant_id=i.tenant_id AND p.id=i.target_product_id
@@ -13749,7 +13872,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
                   discount_tiers: variantData.discount_tiers,
                 });
               }
+              await attachPublicVariantGramFactors(optionVariantsByProductId, tenantId);
             }
+            await attachPublicNutritionToOptionItemRows(items, tenantId);
             const itemsByGroupId = new Map();
             items.forEach((item) => {
               const gid = Number(item.group_id || 0);
@@ -13763,7 +13888,16 @@ window.location.replace(${JSON.stringify(redirectUrl)});
                 name: str(item.product_name || ""),
                 product_name: str(item.product_name || ""),
                 product_price: Number(item.product_price || 0),
+                product_base_unit_id: item.product_base_unit_id ? Number(item.product_base_unit_id) : null,
+                product_base_qty: Number(item.product_base_qty || 1) || 1,
+                product_unit_id: item.product_unit_id ? Number(item.product_unit_id) : null,
                 product_photos_json: photos,
+                nutrition_per_100g: item.nutrition_per_100g || null,
+                nutrition_per_portion: item.nutrition_per_portion || null,
+                nutrition_incomplete: Boolean(item.nutrition_incomplete),
+                base_qty_grams: item.base_qty_grams,
+                nutrition_portion_grams: item.nutrition_portion_grams,
+                unit_to_grams_factor: item.unit_to_grams_factor,
                 price_mode: item.price_mode || "from_target",
                 price_value: Number(item.price_value || 0),
                 qty_min: Number(item.qty_min ?? 1),
@@ -14502,6 +14636,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
            i.sort_order,
            p.name AS product_name,
            p.price AS product_price,
+           p.base_unit_id AS product_base_unit_id,
+           p.base_qty AS product_base_qty,
+           p.unit_id AS product_unit_id,
            p.photos_json AS product_photos_json
          FROM prod_option_items i
          JOIN prod_products p ON p.tenant_id=i.tenant_id AND p.id=i.target_product_id
@@ -14636,8 +14773,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             discount_tiers: variantData.discount_tiers,
           });
         }
+        await attachPublicVariantGramFactors(variantsByProductId, tenantId);
       }
 
+      await attachPublicNutritionToOptionItemRows(items, tenantId);
       const itemsByGroupId = new Map();
       (Array.isArray(items) ? items : []).forEach((item) => {
         const gid = Number(item.group_id || 0);
@@ -14651,7 +14790,16 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           name: str(item.product_name || ""),
           product_name: str(item.product_name || ""),
           product_price: Number(item.product_price || 0),
+          product_base_unit_id: item.product_base_unit_id ? Number(item.product_base_unit_id) : null,
+          product_base_qty: Number(item.product_base_qty || 1) || 1,
+          product_unit_id: item.product_unit_id ? Number(item.product_unit_id) : null,
           product_photos_json: photos,
+          nutrition_per_100g: item.nutrition_per_100g || null,
+          nutrition_per_portion: item.nutrition_per_portion || null,
+          nutrition_incomplete: Boolean(item.nutrition_incomplete),
+          base_qty_grams: item.base_qty_grams,
+          nutrition_portion_grams: item.nutrition_portion_grams,
+          unit_to_grams_factor: item.unit_to_grams_factor,
           price_mode: item.price_mode || "from_target",
           price_value: Number(item.price_value || 0),
           qty_min: Number(item.qty_min ?? 1),
@@ -14752,6 +14900,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
            i.sort_order,
            p.name AS product_name,
            p.price AS product_price,
+           p.base_unit_id AS product_base_unit_id,
+           p.base_qty AS product_base_qty,
+           p.unit_id AS product_unit_id,
            p.photos_json AS product_photos_json
          FROM prod_option_items i
          JOIN prod_products p ON p.tenant_id=i.tenant_id AND p.id=i.target_product_id
@@ -14896,6 +15047,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       }
 
       // Р СњР С•РЎР‚Р СР В°Р В»Р С‘Р В·РЎС“Р ВµР С РЎРЊР В»Р ВµР СР ВµР Р…РЎвЂљРЎвЂ№
+      await attachPublicVariantGramFactors(variantsByProductId, tenantId);
       let excludedItemIds = new Set();
       if (Number.isFinite(scopedProductId) && scopedProductId > 0) {
         excludedItemIds = getOptionItemExclusionSet(
@@ -14904,6 +15056,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           id
         );
       }
+      await attachPublicNutritionToOptionItemRows(items, tenantId);
       const normalizedItems = items
         .filter((item) => !excludedItemIds.has(Number(item?.id || 0)))
         .map((item) => {
@@ -14917,7 +15070,16 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           name: str(item.product_name || ""),
           product_name: str(item.product_name || ""),
           product_price: Number(item.product_price || 0),
+          product_base_unit_id: item.product_base_unit_id ? Number(item.product_base_unit_id) : null,
+          product_base_qty: Number(item.product_base_qty || 1) || 1,
+          product_unit_id: item.product_unit_id ? Number(item.product_unit_id) : null,
           product_photos_json: photos,
+          nutrition_per_100g: item.nutrition_per_100g || null,
+          nutrition_per_portion: item.nutrition_per_portion || null,
+          nutrition_incomplete: Boolean(item.nutrition_incomplete),
+          base_qty_grams: item.base_qty_grams,
+          nutrition_portion_grams: item.nutrition_portion_grams,
+          unit_to_grams_factor: item.unit_to_grams_factor,
           price_mode: item.price_mode || "from_target",
           price_value: Number(item.price_value || 0),
           qty_min: Number(item.qty_min ?? 1),
