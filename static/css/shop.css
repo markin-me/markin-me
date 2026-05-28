@@ -17440,6 +17440,114 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
   color: var(--color-text-muted);
 }
 
+.shop-pd-nutrition-card,
+.shop-pd-info-card{
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 18px;
+  background: var(--color-surface);
+  box-shadow: 0 10px 24px rgba(20, 29, 48, 0.06);
+}
+
+.shop-pd-nutrition-head{
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.shop-pd-nutrition-title,
+.shop-pd-info-card-title{
+  color: var(--color-text);
+  font-size: 15px;
+  font-weight: 900;
+  line-height: 1.2;
+}
+
+.shop-pd-nutrition-subtitle{
+  margin-top: 2px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.shop-pd-nutrition-badge{
+  flex: 0 0 auto;
+  min-height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--shop-buy);
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--shop-buy);
+  background: var(--color-surface);
+  font-size: 12px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.shop-pd-nutrition-grid{
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.shop-pd-nutrition-cell{
+  min-width: 0;
+  min-height: 44px;
+  padding: 6px 8px;
+  border-radius: 12px;
+  background: var(--color-surface-2);
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 2px;
+}
+
+.shop-pd-nutrition-cell span{
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--color-text-muted);
+  font-size: 10px;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.shop-pd-nutrition-cell strong{
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--color-text);
+  font-size: 14px;
+  font-weight: 900;
+  line-height: 1.15;
+  white-space: nowrap;
+}
+
+.shop-pd-info-card-body{
+  color: var(--color-text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 380px){
+  .shop-pd-nutrition-grid{
+    gap: 6px;
+  }
+  .shop-pd-nutrition-cell{
+    padding-right: 6px;
+    padding-left: 6px;
+  }
+  .shop-pd-nutrition-cell strong{
+    font-size: 13px;
+  }
+}
+
 .shop-product-action-card{
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

@@ -1119,6 +1119,82 @@ function buildProductDetailsContent(
   const scroll = document.createElement("div");
   scroll.className = "shop-pd-scroll";
 
+  const productBlocksConfig = product?.blocks_config && typeof product.blocks_config === "object"
+    ? product.blocks_config
+    : {};
+
+  function formatProductNutritionValue(value) {
+    const num = Number(value);
+    if (!Number.isFinite(num)) return "0";
+    const rounded = Math.round(num * 100) / 100;
+    return String(rounded).replace(".", ",");
+  }
+
+  function appendProductNutritionCard() {
+    if (productBlocksConfig.nutrition !== true) return;
+    const nutrition = product?.nutrition_per_100g && typeof product.nutrition_per_100g === "object"
+      ? product.nutrition_per_100g
+      : null;
+    if (!nutrition) return;
+    const hasAnyValue = ["kcal", "protein", "fat", "carbs"].some((key) => Number.isFinite(Number(nutrition[key])));
+    if (!hasAnyValue) return;
+
+    const card = document.createElement("div");
+    card.className = "shop-pd-nutrition-card";
+    card.innerHTML = `
+      <div class="shop-pd-nutrition-head">
+        <div>
+          <div class="shop-pd-nutrition-title">КБЖУ</div>
+          <div class="shop-pd-nutrition-subtitle">Значения на 100 г</div>
+        </div>
+        <div class="shop-pd-nutrition-badge">100 г</div>
+      </div>
+      <div class="shop-pd-nutrition-grid">
+        <div class="shop-pd-nutrition-cell"><span>Ккал</span><strong>${escapeHtml(formatProductNutritionValue(nutrition.kcal))}</strong></div>
+        <div class="shop-pd-nutrition-cell"><span>Белки</span><strong>${escapeHtml(formatProductNutritionValue(nutrition.protein))}</strong></div>
+        <div class="shop-pd-nutrition-cell"><span>Жиры</span><strong>${escapeHtml(formatProductNutritionValue(nutrition.fat))}</strong></div>
+        <div class="shop-pd-nutrition-cell"><span>Углеводы</span><strong>${escapeHtml(formatProductNutritionValue(nutrition.carbs))}</strong></div>
+      </div>
+    `;
+    scroll.appendChild(card);
+  }
+
+  function appendProductDescriptionCard() {
+    if (productBlocksConfig.description !== true) return;
+    const text = str(product?.description || "").trim();
+    if (!text) return;
+
+    const card = document.createElement("div");
+    card.className = "shop-pd-info-card shop-pd-description-card";
+    const title = document.createElement("div");
+    title.className = "shop-pd-info-card-title";
+    title.textContent = "Описание";
+    const body = document.createElement("div");
+    body.className = "shop-pd-info-card-body";
+    body.textContent = text;
+    card.appendChild(title);
+    card.appendChild(body);
+    scroll.appendChild(card);
+  }
+
+  function appendProductClientCompositionCard() {
+    if (productBlocksConfig.ingredients !== true) return;
+    const text = str(product?.client_composition || "").trim();
+    if (!text) return;
+
+    const card = document.createElement("div");
+    card.className = "shop-pd-info-card shop-pd-composition-card";
+    const title = document.createElement("div");
+    title.className = "shop-pd-info-card-title";
+    title.textContent = "Состав";
+    const body = document.createElement("div");
+    body.className = "shop-pd-info-card-body";
+    body.textContent = text;
+    card.appendChild(title);
+    card.appendChild(body);
+    scroll.appendChild(card);
+  }
+
   // Умный скролл: при раскрытии секций (например, опций) доскролливаем так,
   // чтобы блок оказался сразу под хедером на мобильных.
   function smartScrollIntoView(targetEl) {
@@ -3355,20 +3431,9 @@ function buildProductDetailsContent(
     scroll.appendChild(optionsWrap);
   }
 
-  if (product.description) {
-    const acc = document.createElement("details");
-    acc.className = "shop-pd-accordion";
-    acc.innerHTML = `
-      <summary class="shop-pd-accordion-summary">
-        <span>Описание</span>
-        <span class="shop-pd-accordion-toggle">
-          <i class="fas fa-chevron-down"></i>
-        </span>
-      </summary>
-      <div class="shop-pd-accordion-body">${str(product.description)}</div>
-    `;
-    scroll.appendChild(acc);
-  }
+  appendProductDescriptionCard();
+  appendProductNutritionCard();
+  appendProductClientCompositionCard();
 
   const actionCard = createProductBuyXGetYActionCard(product);
   if (actionCard) scroll.appendChild(actionCard);

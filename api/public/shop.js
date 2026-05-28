@@ -162,6 +162,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
   const publicResponseInflight = new Map();
   const PUBLIC_CACHE_MAX_KEYS = 2000;
   const PRODUCT_BLOCK_KEYS = Object.freeze([
+    'nutrition',
     'description',
     'variants',
     'options',
@@ -171,6 +172,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
 
   function getDefaultProductBlocksConfig() {
     return {
+      nutrition: false,
       description: false,
       variants: false,
       options: false,
@@ -1274,94 +1276,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     }
     if (!unresolvedIds.length) return result;
 
-    const computedById = new Map();
     unresolvedIds.forEach((productId) => {
-      const row = rowById.get(productId) || {};
-      computedById.set(productId, {
-        ...getDefaultProductBlocksConfig(),
-        description: Boolean(
-          String(row.description_short || '').trim()
-          || String(row.description || '').trim()
-        ),
-      });
-    });
-
-    await ensureDiscountDeletedColumns();
-    const placeholders = unresolvedIds.map(() => '?').join(',');
-
-    const [variantRows] = await db.query(
-      `SELECT DISTINCT product_id
-       FROM prod_variant_assignments
-       WHERE tenant_id=? AND product_id IN (${placeholders}) AND is_active=1`,
-      [tenantId, ...unresolvedIds]
-    );
-    variantRows.forEach((row) => {
-      const cfg = computedById.get(Number(row.product_id));
-      if (cfg) cfg.variants = true;
-    });
-
-    const [optionRows] = await db.query(
-      `SELECT DISTINCT assign_id AS product_id
-       FROM prod_option_assignments
-       WHERE tenant_id=? AND assign_type='product' AND assign_id IN (${placeholders}) AND is_active=1`,
-      [tenantId, ...unresolvedIds]
-    );
-    optionRows.forEach((row) => {
-      const cfg = computedById.get(Number(row.product_id));
-      if (cfg) cfg.options = true;
-    });
-
-    const [ingredientRows] = await db.query(
-      `SELECT DISTINCT product_id
-       FROM prod_product_ingredients
-       WHERE tenant_id=? AND product_id IN (${placeholders})`,
-      [tenantId, ...unresolvedIds]
-    );
-    ingredientRows.forEach((row) => {
-      const cfg = computedById.get(Number(row.product_id));
-      if (cfg) cfg.ingredients = true;
-    });
-
-    const [promotionRows] = await db.query(
-      `SELECT p.id AS product_id,
-              CASE
-                WHEN EXISTS (
-                  SELECT 1
-                  FROM mkt_discount_products dp
-                  JOIN mkt_discounts d
-                    ON d.id = dp.discount_id
-                   AND d.tenant_id = dp.tenant_id
-                  WHERE dp.tenant_id = p.tenant_id
-                    AND d.store_id = ?
-                    AND d.is_deleted = 0
-                    AND dp.product_id = p.id
-                ) OR EXISTS (
-                  SELECT 1
-                  FROM prod_product_categories pc
-                  JOIN mkt_discount_products dp
-                    ON dp.tenant_id = pc.tenant_id
-                   AND dp.category_id = pc.category_id
-                  JOIN mkt_discounts d
-                    ON d.id = dp.discount_id
-                   AND d.tenant_id = dp.tenant_id
-                  WHERE pc.tenant_id = p.tenant_id
-                    AND d.store_id = ?
-                    AND d.is_deleted = 0
-                    AND pc.product_id = p.id
-                )
-                THEN 1 ELSE 0
-              END AS has_promotions
-       FROM prod_products p
-       WHERE p.tenant_id=? AND p.id IN (${placeholders})`,
-      [storeId, storeId, tenantId, ...unresolvedIds]
-    );
-    promotionRows.forEach((row) => {
-      const cfg = computedById.get(Number(row.product_id));
-      if (cfg) cfg.promotions = Number(row.has_promotions || 0) === 1;
-    });
-
-    unresolvedIds.forEach((productId) => {
-      result.set(productId, normalizeProductBlocksConfig(computedById.get(productId)));
+      result.set(productId, getDefaultProductBlocksConfig());
     });
 
     return result;
@@ -1370,6 +1286,21 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
   async function getResolvedProductBlocksConfig(tenantId, storeId, productRow) {
     const map = await resolveProductBlocksConfigMap(tenantId, storeId, [productRow]);
     return map.get(Number(productRow?.id || productRow?.product_id || 0)) || getDefaultProductBlocksConfig();
+  }
+
+  async function loadPublicProductBlockRows(tenantId, productIds = []) {
+    const ids = Array.isArray(productIds)
+      ? Array.from(new Set(productIds.map(Number).filter((id) => Number.isFinite(id) && id > 0)))
+      : [];
+    if (!ids.length) return [];
+    const placeholders = ids.map(() => '?').join(',');
+    const [rows] = await db.query(
+      `SELECT id, blocks_config_json
+       FROM prod_products
+       WHERE tenant_id=? AND id IN (${placeholders})`,
+      [tenantId, ...ids]
+    );
+    return Array.isArray(rows) ? rows : [];
   }
 
   async function applyPublicProductBlocksToRows(rows, tenantId, storeId) {
@@ -1384,7 +1315,240 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         row.description_short = null;
         row.description = null;
       }
+      if (!blocksConfig.ingredients) {
+        row.client_composition = null;
+      }
+      if (!blocksConfig.nutrition) {
+        row.nutrition_kcal_100g = null;
+        row.nutrition_per_100g = null;
+        row.nutrition_per_portion = null;
+        row.nutrition_incomplete = false;
+      }
+      if (Number(row.show_description_short) === 0) row.description_short = null;
+      if (Number(row.show_description) === 0) row.description = null;
+      if (Number(row.show_client_composition) === 0) row.client_composition = null;
+      if (Number(row.show_tech_process) === 0) row.tech_process = null;
     });
+  }
+
+  function readPublicNutritionNumber(value) {
+    if (value === null || value === undefined || value === '') return null;
+    const num = Number(String(value).replace(',', '.'));
+    return Number.isFinite(num) ? num : null;
+  }
+
+  function calcPublicNutritionKcal(protein, fat, carbs) {
+    const p = readPublicNutritionNumber(protein);
+    const f = readPublicNutritionNumber(fat);
+    const c = readPublicNutritionNumber(carbs);
+    if (p == null || f == null || c == null) return null;
+    return Math.round((p * 4 + f * 9 + c * 4) * 100) / 100;
+  }
+
+  function normalizePublicNutrition(values) {
+    const protein = readPublicNutritionNumber(values?.protein);
+    const fat = readPublicNutritionNumber(values?.fat);
+    const carbs = readPublicNutritionNumber(values?.carbs);
+    return {
+      protein,
+      fat,
+      carbs,
+      kcal: calcPublicNutritionKcal(protein, fat, carbs),
+    };
+  }
+
+  async function loadPublicNutritionTree(tenantId, rootProductId) {
+    const products = new Map();
+    const ingredientsByProductId = new Map();
+    const unitLinks = new Map();
+    const unitConversions = new Map();
+    let gramUnitId = null;
+
+    async function ensureProduct(productId) {
+      const id = Number(productId || 0);
+      if (!Number.isFinite(id) || id <= 0 || products.has(id)) return;
+      const [rows] = await db.query(
+        `SELECT id, name, base_unit_id, unit_id, base_qty,
+                nutrition_protein_100g, nutrition_fat_100g, nutrition_carbs_100g
+         FROM prod_products
+         WHERE tenant_id=? AND id=? LIMIT 1`,
+        [tenantId, id]
+      );
+      const product = Array.isArray(rows) ? rows[0] : null;
+      if (!product) return;
+      products.set(id, product);
+      const [ingredients] = await db.query(
+        `SELECT i.product_id, i.ingredient_id, i.quantity, i.unit_id,
+                p.name AS ingredient_name, p.base_unit_id AS ingredient_base_unit_id,
+                p.unit_id AS ingredient_unit_id
+         FROM prod_product_ingredients i
+         JOIN prod_products p ON p.tenant_id=i.tenant_id AND p.id=i.ingredient_id
+         WHERE i.tenant_id=? AND i.product_id=?
+         ORDER BY i.sort_order ASC, i.id ASC`,
+        [tenantId, id]
+      );
+      const list = Array.isArray(ingredients) ? ingredients : [];
+      ingredientsByProductId.set(id, list);
+      for (const ing of list) await ensureProduct(Number(ing.ingredient_id));
+    }
+
+    await ensureProduct(rootProductId);
+    const [gramRows] = await db.query(
+      `SELECT id FROM prod_units WHERE tenant_id=? AND code='g' LIMIT 1`,
+      [tenantId]
+    );
+    gramUnitId = Array.isArray(gramRows) && gramRows.length ? Number(gramRows[0].id) : null;
+    const [conversionRows] = await db.query(
+      `SELECT from_unit_id, to_unit_id, factor
+       FROM prod_unit_conversions
+       WHERE tenant_id=? AND is_active=1`,
+      [tenantId]
+    );
+    (Array.isArray(conversionRows) ? conversionRows : []).forEach((row) => {
+      const factor = readPublicNutritionNumber(row.factor);
+      if (factor == null) return;
+      unitConversions.set(`${Number(row.from_unit_id)}:${Number(row.to_unit_id)}`, factor);
+    });
+    const productIds = Array.from(products.keys());
+    if (productIds.length) {
+      const placeholders = productIds.map(() => '?').join(',');
+      const [links] = await db.query(
+        `SELECT product_id, unit_id, base_unit_id, factor
+         FROM prod_product_unit_links
+         WHERE tenant_id=? AND product_id IN (${placeholders})`,
+        [tenantId, ...productIds]
+      );
+      (Array.isArray(links) ? links : []).forEach((link) => {
+        unitLinks.set(`${Number(link.product_id)}:${Number(link.unit_id)}:${Number(link.base_unit_id)}`, readPublicNutritionNumber(link.factor));
+      });
+    }
+    return { products, ingredientsByProductId, unitLinks, unitConversions, gramUnitId };
+  }
+
+  function getPublicNutritionUnitFactor(fromUnitId, toUnitId, tree) {
+    const from = Number(fromUnitId || 0);
+    const to = Number(toUnitId || 0);
+    if (!from || !to) return null;
+    if (from === to) return 1;
+    const direct = tree.unitConversions.get(`${from}:${to}`);
+    if (direct != null) return direct;
+    const inverse = tree.unitConversions.get(`${to}:${from}`);
+    return inverse ? 1 / inverse : null;
+  }
+
+  function resolvePublicIngredientQtyInGrams(ingredientRow, tree) {
+    const ingredientId = Number(ingredientRow?.ingredient_id || 0);
+    const fromUnitId = Number(ingredientRow?.unit_id || 0);
+    const baseUnitId = Number(ingredientRow?.ingredient_base_unit_id || ingredientRow?.ingredient_unit_id || 0);
+    const quantity = readPublicNutritionNumber(ingredientRow?.quantity);
+    const gramUnitId = Number(tree.gramUnitId || 0);
+    if (!ingredientId || !fromUnitId || quantity == null || !gramUnitId) return null;
+    const productGramFactor = tree.unitLinks.get(`${ingredientId}:${fromUnitId}:${gramUnitId}`);
+    if (productGramFactor != null) return quantity * productGramFactor;
+    const directGramFactor = getPublicNutritionUnitFactor(fromUnitId, gramUnitId, tree);
+    if (directGramFactor != null) return quantity * directGramFactor;
+    if (!baseUnitId) return null;
+    let qtyInBase = null;
+    if (fromUnitId === baseUnitId) {
+      qtyInBase = quantity;
+    } else {
+      const productFactor = tree.unitLinks.get(`${ingredientId}:${fromUnitId}:${baseUnitId}`);
+      if (productFactor != null) qtyInBase = quantity * productFactor;
+      else {
+        const genericFactor = getPublicNutritionUnitFactor(fromUnitId, baseUnitId, tree);
+        if (genericFactor != null) qtyInBase = quantity * genericFactor;
+      }
+    }
+    if (qtyInBase == null) return null;
+    const productBaseToGramFactor = tree.unitLinks.get(`${ingredientId}:${baseUnitId}:${gramUnitId}`);
+    const baseToGramFactor = productBaseToGramFactor != null ? productBaseToGramFactor : getPublicNutritionUnitFactor(baseUnitId, gramUnitId, tree);
+    return baseToGramFactor == null ? null : qtyInBase * baseToGramFactor;
+  }
+
+  function resolvePublicProductBaseQtyInGrams(product, tree) {
+    const baseQty = readPublicNutritionNumber(product?.base_qty);
+    const baseUnitId = Number(product?.base_unit_id || product?.unit_id || 0);
+    const gramUnitId = Number(tree.gramUnitId || 0);
+    if (baseQty == null || baseQty <= 0 || !baseUnitId || !gramUnitId) return null;
+    const productId = Number(product?.id || 0);
+    const productFactor = productId ? tree.unitLinks.get(`${productId}:${baseUnitId}:${gramUnitId}`) : null;
+    const factor = productFactor != null ? productFactor : getPublicNutritionUnitFactor(baseUnitId, gramUnitId, tree);
+    return factor == null ? null : baseQty * factor;
+  }
+
+  function buildPublicNutritionResult(productId, tree, stack = []) {
+    const id = Number(productId || 0);
+    const product = tree.products.get(id);
+    if (!product) return { values: normalizePublicNutrition({}), portion: null, incomplete: true };
+    if (stack.includes(id)) return { values: normalizePublicNutrition({}), portion: null, incomplete: true };
+    const ingredients = tree.ingredientsByProductId.get(id) || [];
+    if (!ingredients.length) {
+      const values = normalizePublicNutrition({
+        protein: product.nutrition_protein_100g,
+        fat: product.nutrition_fat_100g,
+        carbs: product.nutrition_carbs_100g,
+      });
+      return {
+        values,
+        portion: null,
+        incomplete: values.protein == null || values.fat == null || values.carbs == null,
+      };
+    }
+    let protein = 0;
+    let fat = 0;
+    let carbs = 0;
+    let totalGrams = 0;
+    let incomplete = false;
+    for (const ing of ingredients) {
+      const qtyInGrams = resolvePublicIngredientQtyInGrams(ing, tree);
+      if (qtyInGrams == null) {
+        incomplete = true;
+        continue;
+      }
+      totalGrams += qtyInGrams;
+      const child = buildPublicNutritionResult(Number(ing.ingredient_id), tree, [...stack, id]);
+      if (child.incomplete) incomplete = true;
+      if (child.values.protein != null) protein += child.values.protein * qtyInGrams / 100;
+      if (child.values.fat != null) fat += child.values.fat * qtyInGrams / 100;
+      if (child.values.carbs != null) carbs += child.values.carbs * qtyInGrams / 100;
+    }
+    const portion = normalizePublicNutrition({ protein, fat, carbs });
+    const baseQtyGrams = resolvePublicProductBaseQtyInGrams(product, tree);
+    const per100BaseGrams = baseQtyGrams && baseQtyGrams > 0 ? baseQtyGrams : totalGrams;
+    const values = per100BaseGrams && per100BaseGrams > 0
+      ? normalizePublicNutrition({ protein: protein / per100BaseGrams * 100, fat: fat / per100BaseGrams * 100, carbs: carbs / per100BaseGrams * 100 })
+      : normalizePublicNutrition({ protein, fat, carbs });
+    return { values, portion, incomplete };
+  }
+
+  async function applyPublicProductNutrition(rows, tenantId) {
+    const list = Array.isArray(rows) ? rows : [];
+    for (const row of list) {
+      const productId = Number(row?.id || row?.product_id || 0);
+      if (!productId) continue;
+      if (row.blocks_config && row.blocks_config.nutrition === false) {
+        row.nutrition_kcal_100g = null;
+        row.nutrition_per_100g = null;
+        row.nutrition_per_portion = null;
+        row.nutrition_incomplete = false;
+        continue;
+      }
+      const tree = await loadPublicNutritionTree(tenantId, productId);
+      const result = buildPublicNutritionResult(productId, tree);
+      const fallback = normalizePublicNutrition({
+        protein: row.nutrition_protein_100g,
+        fat: row.nutrition_fat_100g,
+        carbs: row.nutrition_carbs_100g,
+      });
+      const per100 = result.values.protein == null && result.values.fat == null && result.values.carbs == null ? fallback : result.values;
+      const portionQty = readPublicNutritionNumber(row.base_qty);
+      row.nutrition_kcal_100g = per100.kcal;
+      row.nutrition_per_100g = per100;
+      row.nutrition_per_portion = result.portion || (portionQty && portionQty > 0
+        ? normalizePublicNutrition({ protein: per100.protein * portionQty / 100, fat: per100.fat * portionQty / 100, carbs: per100.carbs * portionQty / 100 })
+        : null);
+      row.nutrition_incomplete = Boolean(result.incomplete);
+    }
   }
 
   async function ensureOrderDeliveryTypeColumns() {
@@ -12320,6 +12484,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         if (allCategoryId && categoryId === allCategoryId) {
           const [rows] = await db.query(
             `SELECT p.id, p.tenant_id, p.name, p.description_short, p.price, p.base_qty, p.base_unit_id, p.unit_id, p.photos_json, p.blocks_config_json,
+              p.nutrition_protein_100g, p.nutrition_fat_100g, p.nutrition_carbs_100g,
+              p.client_composition, p.tech_process,
+              p.show_description_short, p.show_description, p.show_client_composition, p.show_tech_process,
               s.qty AS stock_qty,
               pc.sort_order AS link_sort_order
              FROM prod_products p
@@ -12339,6 +12506,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           }
           await applyPublicProductAvailability(rows, tenantId, storeId);
           await applyPublicProductBlocksToRows(rows, tenantId, storeId);
+          await applyPublicProductNutrition(rows, tenantId);
           await enrichProductsWithDisplayPrice(rows, tenantId, storeId);
           await enrichProductsWithDiscounts(rows, tenantId, storeId);
           await attachPublicProductCategoryIds(rows, tenantId);
@@ -12350,6 +12518,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
         const [rows] = await db.query(
           `SELECT p.id, p.tenant_id, p.name, p.description_short, p.price, p.base_qty, p.base_unit_id, p.unit_id, p.photos_json, p.blocks_config_json,
+            p.nutrition_protein_100g, p.nutrition_fat_100g, p.nutrition_carbs_100g,
+            p.client_composition, p.tech_process,
+            p.show_description_short, p.show_description, p.show_client_composition, p.show_tech_process,
             s.qty AS stock_qty,
             pc.sort_order AS link_sort_order
            FROM prod_product_categories pc
@@ -12370,6 +12541,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         }
         await applyPublicProductAvailability(rows, tenantId, storeId);
         await applyPublicProductBlocksToRows(rows, tenantId, storeId);
+        await applyPublicProductNutrition(rows, tenantId);
         await enrichProductsWithDisplayPrice(rows, tenantId, storeId);
         await enrichProductsWithDiscounts(rows, tenantId, storeId);
         await attachPublicProductCategoryIds(rows, tenantId);
@@ -12450,6 +12622,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         }
         await applyPublicProductAvailability(rows, tenantId, storeId);
         await applyPublicProductBlocksToRows(rows, tenantId, storeId);
+        await applyPublicProductNutrition(rows, tenantId);
         await enrichProductsWithDisplayPrice(rows, tenantId, storeId);
         await enrichProductsWithDiscounts(rows, tenantId, storeId);
         await attachPublicProductCategoryIds(rows, tenantId);
@@ -12524,6 +12697,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       }
       await applyPublicProductAvailability(rows, tenantId, storeId);
       await applyPublicProductBlocksToRows(rows, tenantId, storeId);
+      await applyPublicProductNutrition(rows, tenantId);
       await enrichProductsWithDisplayPrice(rows, tenantId, storeId);
       await enrichProductsWithDiscounts(rows, tenantId, storeId);
       await attachPublicProductCategoryIds(rows, tenantId);
@@ -12670,6 +12844,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
       // Р С›Р В±Р С•Р С–Р В°РЎвЂ°Р В°Р ВµР С Р Р†РЎРѓР Вµ Р С—РЎР‚Р С•Р Т‘РЎС“Р С”РЎвЂљРЎвЂ№ Р В·Р В° Р С•Р Т‘Р С‘Р Р… Р С—РЎР‚Р С•РЎвЂ¦Р С•Р Т‘
       await applyPublicProductAvailability(allProducts, tenantId, storeId);
+      await applyPublicProductBlocksToRows(allProducts, tenantId, storeId);
+      await applyPublicProductNutrition(allProducts, tenantId);
       await enrichProductsWithDisplayPrice(allProducts, tenantId, storeId);
       await enrichProductsWithDiscounts(allProducts, tenantId, storeId);
       await attachPublicProductCategoryIds(allProducts, tenantId);
@@ -12782,6 +12958,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       }
       await applyPublicProductAvailability(rows, tenantId, storeId);
       await applyPublicProductBlocksToRows(rows, tenantId, storeId);
+      await applyPublicProductNutrition(rows, tenantId);
       await enrichProductsWithDisplayPrice(rows, tenantId, storeId);
       await enrichProductsWithDiscounts(rows, tenantId, storeId);
       await attachPublicProductCategoryIds(rows, tenantId);
@@ -12875,6 +13052,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       p.is_available = Number(p.is_available || 0) === 1;
       await applyPublicProductAvailability([p], tenantId, storeId);
       await applyPublicProductBlocksToRows([p], tenantId, storeId);
+      await applyPublicProductNutrition([p], tenantId);
 
       await enrichProductsWithDisplayPrice([p], tenantId, storeId);
       await enrichProductsWithDiscounts([p], tenantId, storeId);
@@ -13047,11 +13225,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             if (!result[pid]) result[pid] = [];
             result[pid].push(r);
           }
-          const blocksConfigMap = await resolveProductBlocksConfigMap(
-            tenantId,
-            0,
-            sortedIds.map((id) => ({ id }))
-          );
+          const productBlockRows = await loadPublicProductBlockRows(tenantId, sortedIds);
+          const blocksConfigMap = await resolveProductBlocksConfigMap(tenantId, 0, productBlockRows);
           sortedIds.forEach((pid) => {
             const blocksConfig = blocksConfigMap.get(Number(pid)) || getDefaultProductBlocksConfig();
             if (!blocksConfig.ingredients) result[pid] = [];
@@ -13155,11 +13330,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
               discount_tiers: variantData.discount_tiers,
             });
           }
-          const blocksConfigMap = await resolveProductBlocksConfigMap(
-            tenantId,
-            0,
-            sortedIds.map((id) => ({ id }))
-          );
+          const productBlockRows = await loadPublicProductBlockRows(tenantId, sortedIds);
+          const blocksConfigMap = await resolveProductBlocksConfigMap(tenantId, 0, productBlockRows);
           sortedIds.forEach((pid) => {
             const blocksConfig = blocksConfigMap.get(Number(pid)) || getDefaultProductBlocksConfig();
             if (!blocksConfig.variants) result[pid] = [];
@@ -13246,11 +13418,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
               sort_order: Number(r.sort_order || 0),
             });
           });
-          const blocksConfigMap = await resolveProductBlocksConfigMap(
-            tenantId,
-            storeId,
-            sortedIds.map((id) => ({ id }))
-          );
+          const productBlockRows = await loadPublicProductBlockRows(tenantId, sortedIds);
+          const blocksConfigMap = await resolveProductBlocksConfigMap(tenantId, storeId, productBlockRows);
           sortedIds.forEach((pid) => {
             const blocksConfig = blocksConfigMap.get(Number(pid)) || getDefaultProductBlocksConfig();
             if (!blocksConfig.options) result[pid] = [];
@@ -13284,11 +13453,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         cacheKey,
         PUBLIC_CACHE_TTL_MS.productsBatchDetails,
         async () => {
-          const blocksConfigMap = await resolveProductBlocksConfigMap(
-            tenantId,
-            storeId,
-            sortedIds.map((id) => ({ id }))
-          );
+          const productBlockRows = await loadPublicProductBlockRows(tenantId, sortedIds);
+          const blocksConfigMap = await resolveProductBlocksConfigMap(tenantId, storeId, productBlockRows);
 
           const placeholders = sortedIds.map(() => '?').join(',');
           const [assignmentRows] = await db.query(
@@ -14159,11 +14325,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         };
       }
 
-      const blocksConfigMap = await resolveProductBlocksConfigMap(
-        tenantId,
-        storeId,
-        ids.map((id) => ({ id }))
-      );
+      const productBlockRows = await loadPublicProductBlockRows(tenantId, ids);
+      const blocksConfigMap = await resolveProductBlocksConfigMap(tenantId, storeId, productBlockRows);
       ids.forEach((pid) => {
         const config = blocksConfigMap.get(Number(pid)) || getDefaultProductBlocksConfig();
         const entry = result[pid] || {

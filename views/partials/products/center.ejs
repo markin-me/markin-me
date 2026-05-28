@@ -309,6 +309,37 @@
       </div>
     </div>
 
+    <div class="product-nutrition-card" id="peNutritionBlock">
+      <div class="product-nutrition-head">
+        <div>
+          <div class="product-nutrition-title">КБЖУ</div>
+          <div class="product-nutrition-subtitle">Значения на 100 г</div>
+        </div>
+        <div class="product-nutrition-actions">
+          <button class="product-nutrition-warning hidden" id="peNutritionWarning" type="button" title="КБЖУ не заполнено">!</button>
+          <div class="product-nutrition-badge">100 г</div>
+        </div>
+      </div>
+      <div class="product-nutrition-grid">
+        <div class="field-wrap product-nutrition-field">
+          <label class="field-label" for="pe_nutrition_kcal">Ккал</label>
+          <input class="control" id="pe_nutrition_kcal" type="text" inputmode="decimal" autocomplete="off" placeholder="0" readonly />
+        </div>
+        <div class="field-wrap product-nutrition-field">
+          <label class="field-label" for="pe_nutrition_protein">Белки</label>
+          <input class="control" id="pe_nutrition_protein" type="text" inputmode="decimal" autocomplete="off" data-numeric-input placeholder="0" />
+        </div>
+        <div class="field-wrap product-nutrition-field">
+          <label class="field-label" for="pe_nutrition_fat">Жиры</label>
+          <input class="control" id="pe_nutrition_fat" type="text" inputmode="decimal" autocomplete="off" data-numeric-input placeholder="0" />
+        </div>
+        <div class="field-wrap product-nutrition-field">
+          <label class="field-label" for="pe_nutrition_carbs">Углеводы</label>
+          <input class="control" id="pe_nutrition_carbs" type="text" inputmode="decimal" autocomplete="off" data-numeric-input placeholder="0" />
+        </div>
+      </div>
+    </div>
+
     <div class="info-card info-accordion" id="peDescriptionAccordion" data-product-block="description">
       <div class="acc-item">
         <button class="stage-item acc-trigger" type="button" data-acc-trigger>
@@ -319,14 +350,55 @@
         </button>
         <div class="acc-panel" data-acc-panel>
           <div class="acc-panel-inner">
-            <div class="field-wrap" style="margin-top:0;">
-              <label class="field-label" for="pe_desc_short">Короткое описание</label>
+            <div class="product-description-field">
+              <div class="product-description-field-head">
+                <label class="product-description-label" for="pe_desc_short">Короткое описание</label>
+                <label class="product-description-switch">
+                  <input class="switch-input" id="pe_show_description_short" name="show_description_short" type="checkbox" checked />
+                  <span class="switch-ui" aria-hidden="true"></span>
+                  <span class="product-description-switch-text">Витрина</span>
+                </label>
+              </div>
               <textarea class="textarea" id="pe_desc_short" name="description_short" rows="3"></textarea>
             </div>
 
-            <div class="field-wrap" style="margin-top:12px;">
-              <label class="field-label" for="pe_desc">Описание</label>
+            <div class="product-description-field">
+              <div class="product-description-field-head">
+                <label class="product-description-label" for="pe_desc">Описание</label>
+                <label class="product-description-switch">
+                  <input class="switch-input" id="pe_show_description" name="show_description" type="checkbox" checked />
+                  <span class="switch-ui" aria-hidden="true"></span>
+                  <span class="product-description-switch-text">Витрина</span>
+                </label>
+              </div>
               <textarea class="textarea" id="pe_desc" name="description" rows="5"></textarea>
+            </div>
+
+            <div class="product-description-field">
+              <div class="product-description-field-head">
+                <label class="product-description-label" for="pe_client_composition">Состав</label>
+                <div class="product-description-actions">
+                  <button class="btn btn-sm" type="button" id="peGenerateCompositionBtn">Сгенерировать</button>
+                  <label class="product-description-switch">
+                    <input class="switch-input" id="pe_show_client_composition" name="show_client_composition" type="checkbox" checked />
+                    <span class="switch-ui" aria-hidden="true"></span>
+                    <span class="product-description-switch-text">Витрина</span>
+                  </label>
+                </div>
+              </div>
+              <textarea class="textarea" id="pe_client_composition" name="client_composition" rows="4"></textarea>
+            </div>
+
+            <div class="product-description-field">
+              <div class="product-description-field-head">
+                <label class="product-description-label" for="pe_tech_process">Тех процесс</label>
+                <label class="product-description-switch">
+                  <input class="switch-input" id="pe_show_tech_process" name="show_tech_process" type="checkbox" checked />
+                  <span class="switch-ui" aria-hidden="true"></span>
+                  <span class="product-description-switch-text">Витрина</span>
+                </label>
+              </div>
+              <textarea class="textarea" id="pe_tech_process" name="tech_process" rows="5"></textarea>
             </div>
           </div>
         </div>

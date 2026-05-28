@@ -100,3 +100,7 @@ curl http://127.0.0.1:3400/health
 
 cd mobile-apps/mobile-user && npx expo start
 cd mobile-apps/mobile-admin && npx expo start
+
+
+
+npm --prefix mobile-apps/mobile-user run start

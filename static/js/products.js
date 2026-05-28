@@ -14,12 +14,14 @@
     return 1;
   })();
   const PRODUCT_BLOCK_DEFINITIONS = Object.freeze([
+    { key: "nutrition", label: "КБЖУ" },
     { key: "description", label: "Описание" },
     { key: "variants", label: "Варианты товара" },
     { key: "options", label: "Опции" },
     { key: "ingredients", label: "Состав" },
     { key: "promotions", label: "Участие в акциях" },
   ]);
+  const PRODUCT_FOOTER_BLOCK_CHIP_DEFINITIONS = PRODUCT_BLOCK_DEFINITIONS;
   const PRODUCT_FULFILLMENT_MODES = Object.freeze([
     { value: "stock", label: "Со склада" },
     { value: "made_to_order", label: "Под заказ" },
@@ -36,6 +38,7 @@
 
   function getDefaultProductBlocksConfig() {
     return {
+      nutrition: false,
       description: false,
       variants: false,
       options: false,
@@ -624,6 +627,7 @@
     productRowVariantsExpanded: new Set(),
     productRowVariantsCache: new Map(),
     productRowVariantsLoading: new Set(),
+    productOpenInflight: new Map(),
     productsToolbar: (() => {
       const stored = loadStoredProductsToolbarFilters();
       return {
@@ -1409,6 +1413,10 @@
 
   async function apiGetProductsUsingAsIngredient(ingredientId) {
     return api(`/api/admin/products/used-as-ingredient/${ingredientId}`);
+  }
+
+  async function apiGenerateProductComposition(productId) {
+    return api(`/api/admin/products/${productId}/generate-composition`, { method: "POST" });
   }
 
   async function apiGetProduct(id) {
@@ -4641,6 +4649,26 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     return Number.isFinite(n) ? n : null;
   }
 
+  function formatNumberForInputFixed(v, decimals = 2) {
+    if (v === "" || v == null) return "";
+    const n = Number(v);
+    if (!Number.isFinite(n)) return "";
+    const places = Math.max(0, Number(decimals) || 0);
+    return n.toFixed(places).replace(/\.?0+$/, "").replace(".", ",");
+  }
+
+  function normalizeLimitedDecimalInput(value, decimals = 2) {
+    const places = Math.max(0, Number(decimals) || 0);
+    let raw = String(value || "").replace(/\./g, ",").replace(/[^\d,]/g, "");
+    const firstComma = raw.indexOf(",");
+    if (firstComma !== -1) {
+      raw = raw.slice(0, firstComma + 1) + raw.slice(firstComma + 1).replace(/,/g, "");
+      const parts = raw.split(",");
+      raw = `${parts[0]},${String(parts[1] || "").slice(0, places)}`;
+    }
+    return raw;
+  }
+
   function setHeaderMode(mode) {
     if (productHeaderActions) productHeaderActions.classList.toggle("hidden", mode !== "product");
     if (optionHeaderActions) optionHeaderActions.classList.toggle("hidden", mode !== "option");
@@ -6399,7 +6427,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
         return `
           <div class="acc-item">
             <div class="stage-item ingredient-acc-trigger">
-              ${ingredientPhoto ? `<div class="ingredient-acc-photo"><img src="${escapeHtml(ingredientPhoto)}" alt="" /></div>` : '<div class="ingredient-acc-photo"></div>'}
+              ${ingredientPhoto ? `<div class="ingredient-acc-photo" data-ing-open-product="${ing.ingredient_id}" title="Открыть товар"><img src="${escapeHtml(ingredientPhoto)}" alt="" /></div>` : `<div class="ingredient-acc-photo" data-ing-open-product="${ing.ingredient_id}" title="Открыть товар"></div>`}
               <span class="stage-meta stage-text">
                 <b>${escapeHtml(ing.ingredient_name || "")}</b>
                 <small>${buildSummary(ing)}</small>
@@ -6408,6 +6436,17 @@ function openAutoAddGroupModal({ mode, group } = {}) {
           </div>
         `;
       }).join("");
+      productIngredientsAccordion.querySelectorAll("[data-ing-open-product]").forEach((photo) => {
+        photo.addEventListener("click", async (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const ingredientId = Number(photo.dataset.ingOpenProduct);
+          if (!Number.isFinite(ingredientId) || ingredientId <= 0) return;
+          const ing = list.find((item) => Number(item.ingredient_id) === ingredientId);
+          await openProductById(ingredientId);
+          openProductTab({ id: ingredientId, name: ing?.ingredient_name || "Товар" }, { activate: false });
+        });
+      });
     } catch (e) {
       console.error("Failed to load ingredients for view", e);
       productIngredientsAccordion.innerHTML = `<div class="empty-hint">Ошибка загрузки состава</div>`;
@@ -11673,12 +11712,17 @@ const isViewMode = state.comboPanel.mode === "view";
     const footer = $("#productInfoFooter");
     const viewMode = $("#productFooterView");
     const editMode = $("#productFooterEditMode");
+    const blockChips = $("#productFooterBlockChips");
     if (!footer || !viewMode || !editMode) return;
     
     resetFooterConfirmButtons();
     footer.classList.remove("hidden");
     viewMode.classList.remove("hidden");
     editMode.classList.add("hidden");
+    if (blockChips) {
+      blockChips.classList.add("hidden");
+      blockChips.innerHTML = "";
+    }
     
     // Обновляем состояние футера активного таба
     updateActiveTabFooterState();
@@ -11701,8 +11745,13 @@ const isViewMode = state.comboPanel.mode === "view";
 
   function hideProductFooter() {
     const footer = $("#productInfoFooter");
+    const blockChips = $("#productFooterBlockChips");
     resetFooterConfirmButtons();
     if (footer) footer.classList.add("hidden");
+    if (blockChips) {
+      blockChips.classList.add("hidden");
+      blockChips.innerHTML = "";
+    }
     
     // Обновляем состояние футера активного таба
     updateActiveTabFooterState();
@@ -12052,6 +12101,11 @@ const isViewMode = state.comboPanel.mode === "view";
   async function openProductById(productId, { forceReload = false } = {}) {
     if (!Number.isFinite(Number(productId))) return;
     const id = Number(productId);
+    if (!(state.productOpenInflight instanceof Map)) state.productOpenInflight = new Map();
+    const inflightKey = `${id}:${forceReload ? 1 : 0}`;
+    const inflight = state.productOpenInflight.get(inflightKey);
+    if (inflight) return inflight;
+    const task = (async () => {
     if (forceReload) {
       clearCachedProductView(id);
       clearCachedProductDetails(id);
@@ -12074,6 +12128,14 @@ const isViewMode = state.comboPanel.mode === "view";
     let p = state.products.find((x) => Number(x.id) === id);
     if (!p && cachedDetails?.product) {
       p = cachedDetails.product;
+    }
+    if (!forceReload && p && !p.nutrition_per_100g) {
+      try {
+        const res = await apiGetProduct(id);
+        if (res && res.data) p = res.data;
+      } catch (e) {
+        console.warn('openProductById: failed to fetch full product', id, e);
+      }
     }
     if (!p) {
       // Товар из другой категории — загружаем по API (чтобы табы работали при смене категории)
@@ -12116,6 +12178,11 @@ const isViewMode = state.comboPanel.mode === "view";
       optionAssignments: state.selectedProductOptionAssignments,
     });
     schedulePersistProductsCache();
+    })().finally(() => {
+      state.productOpenInflight.delete(inflightKey);
+    });
+    state.productOpenInflight.set(inflightKey, task);
+    return task;
   }
 
   function openProductTab(product, { activate = true } = {}) {
@@ -12131,6 +12198,42 @@ const isViewMode = state.comboPanel.mode === "view";
       },
       activate,
     });
+  }
+
+  async function collectParentProductIds(productId, visited = new Set()) {
+    const id = Number(productId || 0);
+    if (!Number.isFinite(id) || id <= 0 || visited.has(id)) return [];
+    visited.add(id);
+    let directIds = [];
+    try {
+      const res = await apiGetProductsUsingAsIngredient(id);
+      directIds = Array.isArray(res?.product_ids) ? res.product_ids.map(Number).filter((n) => Number.isFinite(n) && n > 0) : [];
+    } catch (e) {
+      console.error("Failed to load parent products", e);
+      return [];
+    }
+    const result = new Set();
+    for (const parentId of directIds) {
+      if (visited.has(parentId)) continue;
+      result.add(parentId);
+      const upperIds = await collectParentProductIds(parentId, visited);
+      upperIds.forEach((upperId) => result.add(upperId));
+    }
+    return Array.from(result);
+  }
+
+  async function invalidateProductParents(productId) {
+    const parentIds = await collectParentProductIds(productId);
+    parentIds.forEach((parentId) => {
+      clearCachedProductDetails(parentId);
+      clearCachedProductView(parentId);
+    });
+    const activeTab = tabsState.tabs.find((tab) => tab.key === tabsState.activeKey);
+    const activeProductId = activeTab?.type === "product" ? Number(activeTab.id || 0) : 0;
+    if (parentIds.includes(activeProductId) && !editingProducts.has(activeProductId)) {
+      await openProductById(activeProductId, { forceReload: true });
+    }
+    return parentIds;
   }
 
   function openOptionGroupTab(groupId, title, { activate = true } = {}) {
@@ -12399,6 +12502,8 @@ const isViewMode = state.comboPanel.mode === "view";
       photos: initialPhotos.map((url) => ({ kind: "url", url })), // {kind:'url'|'file', url|file, preview}
       activePhotoIdx: initialPhotos.length > 0 ? 0 : -1,
       blocksConfig: normalizeProductBlocksConfig(product?.blocks_config),
+      nutritionProblems: Array.isArray(product?.nutrition_problems) ? product.nutrition_problems : [],
+      nutritionIncomplete: Boolean(product?.nutrition_incomplete),
       optionGroups: new Set(),
       initialOptionGroups: new Set(),
       variantGroupId: null,
@@ -12573,6 +12678,15 @@ const isViewMode = state.comboPanel.mode === "view";
             sku: String(form.sku.value || "").trim(),
             description_short: String(form.description_short.value || "").trim(),
             description: String(form.description.value || "").trim(),
+            client_composition: String(form.client_composition?.value || "").trim(),
+            tech_process: String(form.tech_process?.value || "").trim(),
+            nutrition_protein_100g: parseNumberFromInput(form.querySelector("#pe_nutrition_protein")?.value),
+            nutrition_fat_100g: parseNumberFromInput(form.querySelector("#pe_nutrition_fat")?.value),
+            nutrition_carbs_100g: parseNumberFromInput(form.querySelector("#pe_nutrition_carbs")?.value),
+            show_description_short: form.show_description_short?.checked ? 1 : 0,
+            show_description: form.show_description?.checked ? 1 : 0,
+            show_client_composition: form.show_client_composition?.checked ? 1 : 0,
+            show_tech_process: form.show_tech_process?.checked ? 1 : 0,
             price: priceValue,
             old_price: parseNumberFromInput(form.old_price.value),
             cost_price: costPriceValue,
@@ -12759,6 +12873,12 @@ const isViewMode = state.comboPanel.mode === "view";
             }
           } catch (e) {
             console.error('Failed to update saved product row', e);
+          }
+
+          try {
+            await invalidateProductParents(productId);
+          } catch (e) {
+            console.error("Failed to invalidate parent products", e);
           }
           
           // Return to product details if editing
@@ -12950,6 +13070,21 @@ const isViewMode = state.comboPanel.mode === "view";
       form.sku.value = product.sku || "";
       form.description_short.value = product.description_short || "";
       form.description.value = product.description || "";
+      if (form.client_composition) form.client_composition.value = product.client_composition || "";
+      if (form.tech_process) form.tech_process.value = product.tech_process || "";
+      if (form.show_description_short) form.show_description_short.checked = Number(product.show_description_short ?? 1) === 1;
+      if (form.show_description) form.show_description.checked = Number(product.show_description ?? 1) === 1;
+      if (form.show_client_composition) form.show_client_composition.checked = Number(product.show_client_composition ?? 1) === 1;
+      if (form.show_tech_process) form.show_tech_process.checked = Number(product.show_tech_process ?? 1) === 1;
+      const nutritionSource = product.nutrition_per_100g || product;
+      const nutritionProteinInput = $("#pe_nutrition_protein", wrapper);
+      const nutritionFatInput = $("#pe_nutrition_fat", wrapper);
+      const nutritionCarbsInput = $("#pe_nutrition_carbs", wrapper);
+      const nutritionKcalInput = $("#pe_nutrition_kcal", wrapper);
+      if (nutritionProteinInput) nutritionProteinInput.value = nutritionSource.protein != null ? formatNumberForInputFixed(nutritionSource.protein, 2) : (product.nutrition_protein_100g != null ? formatNumberForInputFixed(product.nutrition_protein_100g, 2) : "");
+      if (nutritionFatInput) nutritionFatInput.value = nutritionSource.fat != null ? formatNumberForInputFixed(nutritionSource.fat, 2) : (product.nutrition_fat_100g != null ? formatNumberForInputFixed(product.nutrition_fat_100g, 2) : "");
+      if (nutritionCarbsInput) nutritionCarbsInput.value = nutritionSource.carbs != null ? formatNumberForInputFixed(nutritionSource.carbs, 2) : (product.nutrition_carbs_100g != null ? formatNumberForInputFixed(product.nutrition_carbs_100g, 2) : "");
+      if (nutritionKcalInput) nutritionKcalInput.value = nutritionSource.kcal != null ? formatNumberForInputFixed(nutritionSource.kcal, 2) : (product.nutrition_kcal_100g != null ? formatNumberForInputFixed(product.nutrition_kcal_100g, 2) : "");
       draft.blocksConfig = normalizeProductBlocksConfig(product.blocks_config);
       form.price.value = product.price != null ? formatNumberForInput(product.price) : "";
       form.old_price.value = product.old_price != null ? formatNumberForInput(product.old_price) : "";
@@ -13093,6 +13228,14 @@ const isViewMode = state.comboPanel.mode === "view";
       ingredientCostTotal: $("#peIngredientCostTotal", wrapper),
       ingredientPriceTotal: $("#peIngredientPriceTotal", wrapper),
       ingredientWeightTotal: $("#peIngredientWeightTotal", wrapper),
+      nutritionBlock: $("#peNutritionBlock", wrapper),
+      nutritionWarning: $("#peNutritionWarning", wrapper),
+      nutritionKcalInput: $("#pe_nutrition_kcal", wrapper),
+      nutritionProteinInput: $("#pe_nutrition_protein", wrapper),
+      nutritionFatInput: $("#pe_nutrition_fat", wrapper),
+      nutritionCarbsInput: $("#pe_nutrition_carbs", wrapper),
+      generateCompositionBtn: $("#peGenerateCompositionBtn", wrapper),
+      clientCompositionInput: $("#pe_client_composition", wrapper),
       ingredientBackdrop: $("#peIngredientBackdrop", wrapper),
       ingredientModal: $("#peIngredientModal", wrapper),
       ingredientModalClose: $("#peIngredientModalClose", wrapper),
@@ -13116,6 +13259,40 @@ const isViewMode = state.comboPanel.mode === "view";
       bindAccordionContainer(descriptionAccordion);
     }
 
+    function syncProductFooterBlockChips() {
+      const chips = $("#productFooterBlockChips");
+      if (!chips) return;
+      if (isView) {
+        chips.classList.add("hidden");
+        chips.innerHTML = "";
+        return;
+      }
+      const blocksConfig = normalizeProductBlocksConfig(draft.blocksConfig);
+      chips.classList.remove("hidden");
+      chips.innerHTML = PRODUCT_FOOTER_BLOCK_CHIP_DEFINITIONS.map(({ key, label }) => {
+        const isActive = Boolean(blocksConfig[key]);
+        const hasWarning = key === "nutrition" && draft.nutritionIncomplete;
+        return `<button class="product-footer-block-chip ${isActive ? "is-active" : ""} ${hasWarning ? "has-warning" : ""}" type="button" data-product-footer-block-chip="${key}">${escapeHtml(label)}${hasWarning ? '<span class="product-footer-block-chip-warning">!</span>' : ''}</button>`;
+      }).join("");
+      chips.querySelectorAll("[data-product-footer-block-chip]").forEach((button) => {
+        button.addEventListener("click", () => {
+          const key = String(button.dataset.productFooterBlockChip || "");
+          if (Object.prototype.hasOwnProperty.call(draft.blocksConfig, key)) {
+            draft.blocksConfig[key] = !Boolean(draft.blocksConfig[key]);
+          }
+          syncProductBlocksVisibility();
+        });
+      });
+      if (!chips.dataset.wheelBound) {
+        chips.dataset.wheelBound = "1";
+        chips.addEventListener("wheel", (event) => {
+          if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+          event.preventDefault();
+          chips.scrollLeft += event.deltaY;
+        }, { passive: false });
+      }
+    }
+
     function syncProductBlocksVisibility() {
       const blocksConfig = normalizeProductBlocksConfig(draft.blocksConfig);
       draft.blocksConfig = blocksConfig;
@@ -13125,6 +13302,7 @@ const isViewMode = state.comboPanel.mode === "view";
         options: ui.optionBlock,
         ingredients: ui.ingredientBlock,
         promotions: ui.promotionsBlock,
+        nutrition: ui.nutritionBlock,
       };
       Object.entries(blocksMap).forEach(([key, element]) => {
         if (!element) return;
@@ -13141,8 +13319,169 @@ const isViewMode = state.comboPanel.mode === "view";
           },
         };
       }
+      syncProductFooterBlockChips();
     }
     syncProductBlocksVisibility();
+
+    if (ui.generateCompositionBtn && !isView) {
+      ui.generateCompositionBtn.addEventListener("click", async (event) => {
+        event.preventDefault();
+        const productId = Number(product?.id || 0);
+        if (!Number.isFinite(productId) || productId <= 0) {
+          showToast("Сначала сохраните товар");
+          return;
+        }
+        ui.generateCompositionBtn.disabled = true;
+        try {
+          const res = await apiGenerateProductComposition(productId);
+          const text = String(res?.data?.client_composition || "");
+          if (ui.clientCompositionInput) {
+            ui.clientCompositionInput.value = text;
+            ui.clientCompositionInput.dispatchEvent(new Event("input", { bubbles: true }));
+          }
+          if (product) product.client_composition = text;
+          clearCachedProductDetails(productId);
+          clearCachedProductView(productId);
+          showToast("Состав сгенерирован", "success");
+        } catch (e) {
+          if (e?.message === "NO_INGREDIENTS") {
+            showToast("Состав товара не заполнен");
+          } else {
+            console.error("Failed to generate product composition", e);
+            showToast("Не удалось сгенерировать состав");
+          }
+        } finally {
+          ui.generateCompositionBtn.disabled = false;
+        }
+      });
+    }
+
+    function calcNutritionKcalFromInputs() {
+      const protein = parseNumberFromInput(ui.nutritionProteinInput?.value);
+      const fat = parseNumberFromInput(ui.nutritionFatInput?.value);
+      const carbs = parseNumberFromInput(ui.nutritionCarbsInput?.value);
+      if (protein == null || fat == null || carbs == null) return null;
+      return Math.round((protein * 4 + fat * 9 + carbs * 4) * 100) / 100;
+    }
+
+    function syncNutritionKcalInput() {
+      if (!ui.nutritionKcalInput) return;
+      const kcal = calcNutritionKcalFromInputs();
+      ui.nutritionKcalInput.value = kcal == null ? "" : formatNumberForInputFixed(kcal, 2);
+    }
+
+    function closeNutritionProblemPopover() {
+      document.querySelectorAll(".product-nutrition-popover").forEach((el) => el.remove());
+    }
+
+    function showNutritionProblemPopover(anchor, problems) {
+      closeNutritionProblemPopover();
+      const list = Array.isArray(problems) ? problems : [];
+      const popover = document.createElement("div");
+      popover.className = "product-nutrition-popover";
+      const items = list.length ? list : [{ message: "Не заполнено КБЖУ" }];
+      popover.innerHTML = `
+        <div class="product-nutrition-popover-title">Не заполнено КБЖУ</div>
+        <div class="product-nutrition-popover-list">
+          ${items.map((problem) => {
+            const path = Array.isArray(problem.path) ? problem.path.filter(Boolean).join(" > ") : "";
+            const text = path || problem.product_name || problem.message || "Не заполнено КБЖУ";
+            return `<div class="product-nutrition-popover-item">${escapeHtml(text)}</div>`;
+          }).join("")}
+        </div>
+      `;
+      document.body.appendChild(popover);
+      const rect = anchor?.getBoundingClientRect?.() || { left: 16, bottom: 16 };
+      const left = Math.min(window.innerWidth - popover.offsetWidth - 12, Math.max(12, rect.left));
+      const top = Math.min(window.innerHeight - popover.offsetHeight - 12, Math.max(12, rect.bottom + 8));
+      popover.style.left = `${left}px`;
+      popover.style.top = `${top}px`;
+      setTimeout(() => {
+        document.addEventListener("click", closeNutritionProblemPopover, { once: true });
+      }, 0);
+    }
+
+    function syncNutritionWarning() {
+      if (!ui.nutritionWarning) return;
+      ui.nutritionWarning.classList.toggle("hidden", !draft.nutritionIncomplete);
+    }
+
+    function getProductOutputGramsFromDraft(totalGrams) {
+      const gramUnit = unitsList.find((u) => String(u.code || "").toLowerCase() === "g");
+      const gramUnitId = Number(gramUnit?.id || 0);
+      const baseUnitId = Number(ui.baseUnitSelect?.value || 0);
+      const baseQty = parseNumberFromInput(form.base_qty?.value);
+      if (!gramUnitId || !baseUnitId || baseQty == null || baseQty <= 0) return totalGrams;
+      if (pcsUnitId && baseUnitId === Number(pcsUnitId) && Number(ui.pcsToUnitSelect?.value || 0) === gramUnitId) {
+        const draftFactor = parseNumberFromInput(ui.pcsToUnitFactorInput?.value);
+        if (draftFactor != null && draftFactor > 0) return baseQty * draftFactor;
+      }
+      const link = productUnitLinks.find((l) => Number(l.unit_id) === baseUnitId && Number(l.base_unit_id) === gramUnitId);
+      const linkFactor = link && Number(link.factor) ? Number(link.factor) : null;
+      const factor = linkFactor ?? getConversionFactor(baseUnitId, gramUnitId);
+      return factor != null ? baseQty * factor : totalGrams;
+    }
+
+    function syncDraftNutritionFromIngredients() {
+      if (!draftIngredients || draftIngredients.size === 0) {
+        syncNutritionKcalInput();
+        return;
+      }
+      let protein = 0;
+      let fat = 0;
+      let carbs = 0;
+      let totalGrams = 0;
+      let hasValue = false;
+      draftIngredients.forEach((ing) => {
+        const qtyGrams = getIngredientQuantityInGrams(ing);
+        if (qtyGrams == null) return;
+        totalGrams += qtyGrams;
+        const nutrition = ing.nutrition_per_100g && typeof ing.nutrition_per_100g === "object"
+          ? ing.nutrition_per_100g
+          : {
+              protein: ing.nutrition_protein_100g,
+              fat: ing.nutrition_fat_100g,
+              carbs: ing.nutrition_carbs_100g,
+            };
+        const p = nutrition.protein != null ? Number(nutrition.protein) : null;
+        const f = nutrition.fat != null ? Number(nutrition.fat) : null;
+        const c = nutrition.carbs != null ? Number(nutrition.carbs) : null;
+        if (p != null && Number.isFinite(p)) { protein += p * qtyGrams / 100; hasValue = true; }
+        if (f != null && Number.isFinite(f)) { fat += f * qtyGrams / 100; hasValue = true; }
+        if (c != null && Number.isFinite(c)) { carbs += c * qtyGrams / 100; hasValue = true; }
+      });
+      if (!hasValue) {
+        syncNutritionKcalInput();
+        return;
+      }
+      const outputGrams = getProductOutputGramsFromDraft(totalGrams);
+      const base = outputGrams && outputGrams > 0 ? outputGrams : totalGrams;
+      if (!base || base <= 0) return;
+      if (ui.nutritionProteinInput) ui.nutritionProteinInput.value = formatNumberForInputFixed(protein / base * 100, 2);
+      if (ui.nutritionFatInput) ui.nutritionFatInput.value = formatNumberForInputFixed(fat / base * 100, 2);
+      if (ui.nutritionCarbsInput) ui.nutritionCarbsInput.value = formatNumberForInputFixed(carbs / base * 100, 2);
+      syncNutritionKcalInput();
+    }
+
+    [ui.nutritionProteinInput, ui.nutritionFatInput, ui.nutritionCarbsInput].forEach((input) => {
+      input?.addEventListener("input", () => {
+        const nextValue = normalizeLimitedDecimalInput(input.value, 2);
+        if (input.value !== nextValue) input.value = nextValue;
+        syncNutritionKcalInput();
+      });
+      input?.addEventListener("blur", () => {
+        const num = parseNumberFromInput(input.value);
+        input.value = num == null ? "" : formatNumberForInputFixed(num, 2);
+        syncNutritionKcalInput();
+      });
+    });
+    ui.nutritionWarning?.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      showNutritionProblemPopover(ui.nutritionWarning, draft.nutritionProblems);
+    });
+    syncNutritionKcalInput();
+    syncNutritionWarning();
 
     function openCatPicker() {
       if (isView) return;
@@ -16089,10 +16428,26 @@ const isViewMode = state.comboPanel.mode === "view";
 
     let pcsUnitId = null;
     let productUnitLinks = [];
+    const ingredientUnitLinksCache = new Map();
 
     function getUnitLabel(unitId) {
       const unit = unitsList.find(u => Number(u.id) === Number(unitId));
       return unit?.short_title || unit?.code || unit?.title || "";
+    }
+
+    async function loadIngredientUnitLinks(ingredientId) {
+      const id = Number(ingredientId || 0);
+      if (!Number.isFinite(id) || id <= 0) return [];
+      if (ingredientUnitLinksCache.has(id)) return ingredientUnitLinksCache.get(id);
+      try {
+        const res = await apiGetProductUnitLinks(id);
+        const links = Array.isArray(res?.data) ? res.data : [];
+        ingredientUnitLinksCache.set(id, links);
+        return links;
+      } catch {
+        ingredientUnitLinksCache.set(id, []);
+        return [];
+      }
     }
 
     function updatePcsLinkVisibility() {
@@ -16192,6 +16547,49 @@ const isViewMode = state.comboPanel.mode === "view";
       });
     }
 
+    function getIngredientUnitLinkFactor(ing, fromUnitId, toUnitId) {
+      const from = Number(fromUnitId || 0);
+      const to = Number(toUnitId || 0);
+      if (!from || !to) return null;
+      if (from === to) return 1;
+      const links = Array.isArray(ing?.ingredient_unit_links) ? ing.ingredient_unit_links : [];
+      const direct = links.find((link) => Number(link.unit_id) === from && Number(link.base_unit_id) === to);
+      if (direct && Number(direct.factor)) return Number(direct.factor);
+      const inverse = links.find((link) => Number(link.unit_id) === to && Number(link.base_unit_id) === from);
+      if (inverse && Number(inverse.factor)) return 1 / Number(inverse.factor);
+      return null;
+    }
+
+    function getIngredientQuantityInBase(ing) {
+      const baseUnitId = ing?.ingredient_base_unit_id || ing?.ingredient_unit_id || ing?.unit_id;
+      const fromUnitId = Number(ing?.unit_id || 0);
+      if (!baseUnitId || !fromUnitId) return null;
+      if (Number(fromUnitId) === Number(baseUnitId)) return Number(ing.quantity || 0);
+      const linkFactor = getIngredientUnitLinkFactor(ing, fromUnitId, baseUnitId);
+      if (linkFactor != null) return Number(ing.quantity || 0) * linkFactor;
+      if (pcsUnitId && Number(fromUnitId) === Number(pcsUnitId) && ing.ingredient_pcs_factor != null) {
+        return Number(ing.quantity || 0) * Number(ing.ingredient_pcs_factor);
+      }
+      const factor = getConversionFactor(fromUnitId, baseUnitId);
+      return factor != null ? Number(ing.quantity || 0) * factor : null;
+    }
+
+    function getIngredientQuantityInGrams(ing) {
+      const gramUnit = unitsList.find((u) => String(u.code || "").toLowerCase() === "g");
+      const gramUnitId = Number(gramUnit?.id || 0);
+      const fromUnitId = Number(ing?.unit_id || 0);
+      if (!gramUnitId || !fromUnitId) return null;
+      if (fromUnitId === gramUnitId) return Number(ing.quantity || 0);
+      const directFactor = getConversionFactor(fromUnitId, gramUnitId);
+      if (directFactor != null) return Number(ing.quantity || 0) * directFactor;
+      const linkFactor = getIngredientUnitLinkFactor(ing, fromUnitId, gramUnitId);
+      if (linkFactor != null) return Number(ing.quantity || 0) * linkFactor;
+      const qtyInBase = getIngredientQuantityInBase(ing);
+      const baseUnitId = ing?.ingredient_base_unit_id || ing?.ingredient_unit_id || ing?.unit_id;
+      const baseToGram = getConversionFactor(baseUnitId, gramUnitId) ?? getIngredientUnitLinkFactor(ing, baseUnitId, gramUnitId);
+      return qtyInBase != null && baseToGram != null ? qtyInBase * baseToGram : null;
+    }
+
     async function loadUnits() {
       try {
         const res = await apiGetUnits();
@@ -16249,6 +16647,7 @@ const isViewMode = state.comboPanel.mode === "view";
             qtyInBase = factor != null ? Number(ing.quantity || 0) * factor : null;
           }
           
+          qtyInBase = getIngredientQuantityInBase(ing);
           if (qtyInBase != null) {
             const cost = costBase * qtyInBase;
             total += cost;
@@ -16295,6 +16694,7 @@ const isViewMode = state.comboPanel.mode === "view";
             qtyInBase = factor != null ? Number(ing.quantity || 0) * factor : null;
           }
           
+          qtyInBase = getIngredientQuantityInBase(ing);
           if (qtyInBase != null) {
             const price = priceBase * qtyInBase;
             total += price;
@@ -16516,6 +16916,13 @@ const isViewMode = state.comboPanel.mode === "view";
             ingredient_base_qty: ing.ingredient_base_qty != null ? Number(ing.ingredient_base_qty) : null,
             ingredient_pcs_factor: ing.ingredient_pcs_factor != null ? Number(ing.ingredient_pcs_factor) : null,
             ingredient_photos: Array.isArray(ing.ingredient_photos) ? ing.ingredient_photos : [],
+            nutrition_incomplete: Boolean(ing.nutrition_incomplete),
+            nutrition_problems: Array.isArray(ing.nutrition_problems) ? ing.nutrition_problems : [],
+            nutrition_per_100g: ing.nutrition_per_100g && typeof ing.nutrition_per_100g === "object" ? ing.nutrition_per_100g : null,
+            nutrition_kcal_100g: ing.nutrition_kcal_100g != null ? Number(ing.nutrition_kcal_100g) : null,
+            nutrition_protein_100g: ing.nutrition_protein_100g != null ? Number(ing.nutrition_protein_100g) : null,
+            nutrition_fat_100g: ing.nutrition_fat_100g != null ? Number(ing.nutrition_fat_100g) : null,
+            nutrition_carbs_100g: ing.nutrition_carbs_100g != null ? Number(ing.nutrition_carbs_100g) : null,
             ingredient_unit_id: Number(ing.ingredient_unit_id || 0),
             quantity: Number(ing.quantity || 1),
             unit_id: unitId,
@@ -16531,10 +16938,19 @@ const isViewMode = state.comboPanel.mode === "view";
             sort_order: Number(ing.sort_order || 0),
           });
         });
+        await Promise.all(Array.from(draftIngredients.values()).map(async (ing) => {
+          ing.ingredient_unit_links = await loadIngredientUnitLinks(ing.ingredient_id);
+          if (pcsUnitId && ing.ingredient_pcs_factor == null) {
+            const recipeBaseUnitId = Number(ui.baseUnitSelect?.value || 0);
+            const link = ing.ingredient_unit_links.find((l) => Number(l.unit_id) === Number(pcsUnitId) && Number(l.base_unit_id) === recipeBaseUnitId);
+            if (link && link.factor != null) ing.ingredient_pcs_factor = Number(link.factor);
+          }
+        }));
         renderIngredientAccordion();
         updateCostPricePlaceholderGlobal();
         updatePricePlaceholderGlobal();
         updateWeightTotalDisplayGlobal();
+        syncDraftNutritionFromIngredients();
         snapshotIngredients();
       } catch (e) {
         console.error('Failed to load ingredients', e);
@@ -16603,16 +17019,7 @@ const isViewMode = state.comboPanel.mode === "view";
       const getIngredientBaseQty = (ing) => (ing.ingredient_base_qty != null ? Number(ing.ingredient_base_qty) : 1);
 
       const getQtyInBase = (ing) => {
-        const baseUnitId = getIngredientBaseUnitId(ing);
-        const fromUnitId = Number(ing.unit_id || 0);
-        if (!baseUnitId || !fromUnitId) return null;
-        if (Number(fromUnitId) === Number(baseUnitId)) return Number(ing.quantity || 0);
-        if (pcsUnitId && Number(baseUnitId) === Number(pcsUnitId)) return null;
-        if (pcsUnitId && Number(fromUnitId) === Number(pcsUnitId)) {
-          return ing.ingredient_pcs_factor != null ? Number(ing.quantity || 0) * Number(ing.ingredient_pcs_factor) : null;
-        }
-        const factor = getConversionFactor(fromUnitId, baseUnitId);
-        return factor != null ? Number(ing.quantity || 0) * factor : null;
+        return getIngredientQuantityInBase(ing);
       };
 
       const getAllowedUnits = (ing) => {
@@ -16620,9 +17027,7 @@ const isViewMode = state.comboPanel.mode === "view";
         if (!baseUnitId) return unitsList;
         return unitsList.filter((u) => {
           if (Number(u.id) === Number(baseUnitId)) return true;
-          if (pcsUnitId && Number(baseUnitId) === Number(pcsUnitId)) {
-            return Number(u.id) === Number(pcsUnitId);
-          }
+          if (getIngredientUnitLinkFactor(ing, u.id, baseUnitId) != null) return true;
           if (pcsUnitId && Number(u.id) === Number(pcsUnitId)) {
             return ing.ingredient_pcs_factor != null;
           }
@@ -16675,9 +17080,13 @@ const isViewMode = state.comboPanel.mode === "view";
 
         const ingredientPhoto = ing.ingredient_photos && ing.ingredient_photos.length > 0 ? ing.ingredient_photos[0] : null;
         const disabledAttr = isView ? "disabled" : "";
+        const nutritionWarningHtml = ing.nutrition_incomplete
+          ? `<span class="product-nutrition-warning ingredient-nutrition-warning" role="button" tabindex="0" data-ing-nutrition-warning="${ing.ingredient_id}" title="КБЖУ не заполнено">!</span>`
+          : "";
         const controlsHtml = isView
-          ? `<span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>`
+          ? `${nutritionWarningHtml}<span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>`
           : `
+              ${nutritionWarningHtml}
               <label class="switch switch-compact ingredient-variable-switch">
                 <input class="switch-input" type="checkbox" data-ing-variable="${ing.ingredient_id}" ${isVariable ? 'checked' : ''} />
                 <span class="switch-ui" aria-hidden="true"></span>
@@ -16690,7 +17099,7 @@ const isViewMode = state.comboPanel.mode === "view";
         return `
           <div class="acc-item" data-ingredient-id="${ing.ingredient_id}">
             <button class="stage-item acc-trigger ingredient-acc-trigger" type="button" data-acc-trigger>
-              ${ingredientPhoto ? `<div class="ingredient-acc-photo"><img src="${escapeHtml(ingredientPhoto)}" alt="" /></div>` : '<div class="ingredient-acc-photo"></div>'}
+              ${ingredientPhoto ? `<div class="ingredient-acc-photo" data-ing-open-product="${ing.ingredient_id}" title="Открыть товар"><img src="${escapeHtml(ingredientPhoto)}" alt="" /></div>` : `<div class="ingredient-acc-photo" data-ing-open-product="${ing.ingredient_id}" title="Открыть товар"></div>`}
               <span class="stage-meta stage-text">
                 <b>${escapeHtml(ing.ingredient_name || '')}</b>
                 <small data-ing-summary="${ing.ingredient_id}">${buildIngredientSummary(ing)}</small>
@@ -16767,6 +17176,35 @@ const isViewMode = state.comboPanel.mode === "view";
       updatePricePlaceholderGlobal();
       updateWeightTotalDisplayGlobal();
 
+      ui.ingredientAccordion.querySelectorAll("[data-ing-nutrition-warning]").forEach((btn) => {
+        btn.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const ingredientId = Number(btn.dataset.ingNutritionWarning);
+          const ing = draftIngredients.get(ingredientId);
+          showNutritionProblemPopover(btn, ing?.nutrition_problems || []);
+        });
+        btn.addEventListener("keydown", (event) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          event.stopPropagation();
+          const ingredientId = Number(btn.dataset.ingNutritionWarning);
+          const ing = draftIngredients.get(ingredientId);
+          showNutritionProblemPopover(btn, ing?.nutrition_problems || []);
+        });
+      });
+      ui.ingredientAccordion.querySelectorAll("[data-ing-open-product]").forEach((photo) => {
+        photo.addEventListener("click", async (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const ingredientId = Number(photo.dataset.ingOpenProduct);
+          if (!Number.isFinite(ingredientId) || ingredientId <= 0) return;
+          const ing = draftIngredients.get(ingredientId);
+          await openProductById(ingredientId);
+          openProductTab({ id: ingredientId, name: ing?.ingredient_name || "Товар" }, { activate: false });
+        });
+      });
+
       if (isView) return;
 
       const parseNumOrNull = (value) => {
@@ -16787,6 +17225,7 @@ const isViewMode = state.comboPanel.mode === "view";
         updateCostPricePlaceholderGlobal();
         updatePricePlaceholderGlobal();
         updateWeightTotalDisplayGlobal();
+        syncDraftNutritionFromIngredients();
       };
 
       // Toggle variable fields on switch change
@@ -16894,6 +17333,7 @@ const isViewMode = state.comboPanel.mode === "view";
           const ingredientId = Number(btn.dataset.ingRemove);
           draftIngredients.delete(ingredientId);
           renderIngredientAccordion();
+          syncDraftNutritionFromIngredients();
         });
       });
     }
@@ -17125,10 +17565,16 @@ const isViewMode = state.comboPanel.mode === "view";
 
               for (const productId of toAdd) {
                 const selectedProduct = productMap.get(productId);
+                let fullProduct = selectedProduct;
+                try {
+                  const productRes = await apiGetProduct(productId);
+                  if (productRes?.data) fullProduct = productRes.data;
+                } catch (_) {}
+                const ingredientUnitLinks = await loadIngredientUnitLinks(productId);
                 let unitId = null;
 
-                if (selectedProduct && selectedProduct.unit_id) {
-                  unitId = Number(selectedProduct.unit_id);
+                if (fullProduct && fullProduct.unit_id) {
+                  unitId = Number(fullProduct.unit_id);
                 } else if (unitsList.length > 0) {
                   unitId = unitsList[0].id;
                 }
@@ -17138,24 +17584,20 @@ const isViewMode = state.comboPanel.mode === "view";
                   continue;
                 }
 
-                const productName = selectedProduct?.name || '';
-                const productPrice = Number(selectedProduct?.price || 0);
-                const productCostPrice = Number(selectedProduct?.cost_price || 0);
-                const productPhotos = Array.isArray(selectedProduct?.photos_json) ? selectedProduct.photos_json : [];
-                const baseUnitId = Number(selectedProduct?.base_unit_id || selectedProduct?.unit_id || unitId || 0);
-                const baseQty = selectedProduct?.base_qty != null ? Number(selectedProduct.base_qty) : null;
+                const productName = fullProduct?.name || '';
+                const productPrice = Number(fullProduct?.price || 0);
+                const productCostPrice = Number(fullProduct?.cost_price || 0);
+                const productPhotos = Array.isArray(fullProduct?.photos) ? fullProduct.photos : (Array.isArray(fullProduct?.photos_json) ? fullProduct.photos_json : []);
+                const baseUnitId = Number(fullProduct?.base_unit_id || fullProduct?.unit_id || unitId || 0);
+                const baseQty = fullProduct?.base_qty != null ? Number(fullProduct.base_qty) : null;
                 const unit = unitsList.find(u => u.id === (baseUnitId || unitId));
 
                 let ingredientPcsFactor = null;
                 if (pcsUnitId && baseUnitId === pcsUnitId) {
                   const recipeBaseUnitId = Number(ui.baseUnitSelect?.value || 0);
                   if (recipeBaseUnitId && recipeBaseUnitId !== pcsUnitId) {
-                    try {
-                      const linkRes = await apiGetProductUnitLinks(productId);
-                      const links = Array.isArray(linkRes?.data) ? linkRes.data : [];
-                      const link = links.find((l) => Number(l.unit_id) === Number(pcsUnitId) && Number(l.base_unit_id) === recipeBaseUnitId);
-                      if (link && link.factor != null) ingredientPcsFactor = Number(link.factor);
-                    } catch (_) {}
+                    const link = ingredientUnitLinks.find((l) => Number(l.unit_id) === Number(pcsUnitId) && Number(l.base_unit_id) === recipeBaseUnitId);
+                    if (link && link.factor != null) ingredientPcsFactor = Number(link.factor);
                   }
                 }
 
@@ -17169,7 +17611,13 @@ const isViewMode = state.comboPanel.mode === "view";
                   ingredient_base_unit_id: baseUnitId || null,
                   ingredient_base_qty: baseQty,
                   ingredient_pcs_factor: ingredientPcsFactor,
+                  ingredient_unit_links: ingredientUnitLinks,
                   ingredient_photos: productPhotos,
+                  nutrition_per_100g: fullProduct?.nutrition_per_100g && typeof fullProduct.nutrition_per_100g === "object" ? fullProduct.nutrition_per_100g : null,
+                  nutrition_kcal_100g: fullProduct?.nutrition_kcal_100g != null ? Number(fullProduct.nutrition_kcal_100g) : null,
+                  nutrition_protein_100g: fullProduct?.nutrition_protein_100g != null ? Number(fullProduct.nutrition_protein_100g) : null,
+                  nutrition_fat_100g: fullProduct?.nutrition_fat_100g != null ? Number(fullProduct.nutrition_fat_100g) : null,
+                  nutrition_carbs_100g: fullProduct?.nutrition_carbs_100g != null ? Number(fullProduct.nutrition_carbs_100g) : null,
                   ingredient_unit_id: baseUnitId || unitId,
                   quantity: 1,
                   unit_id: baseUnitId || unitId,
@@ -17189,6 +17637,7 @@ const isViewMode = state.comboPanel.mode === "view";
               updateCostPricePlaceholderGlobal();
               updatePricePlaceholderGlobal();
               updateWeightTotalDisplayGlobal();
+              syncDraftNutritionFromIngredients();
             } catch (e) {
               console.error('Failed to save ingredients', e);
               alert('Ошибка при сохранении состава');
@@ -17335,10 +17784,16 @@ const isViewMode = state.comboPanel.mode === "view";
             const res = await apiGetCatalogProducts({});
             const catalogProducts = Array.isArray(res.data) ? res.data : [];
             const selectedProduct = catalogProducts.find(p => Number(p.id) === productId);
+            let fullProduct = selectedProduct;
+            try {
+              const productRes = await apiGetProduct(productId);
+              if (productRes?.data) fullProduct = productRes.data;
+            } catch (_) {}
+            const ingredientUnitLinks = await loadIngredientUnitLinks(productId);
             let unitId = null;
             
-            if (selectedProduct && selectedProduct.unit_id) {
-              unitId = Number(selectedProduct.unit_id);
+            if (fullProduct && fullProduct.unit_id) {
+              unitId = Number(fullProduct.unit_id);
             } else if (unitsList.length > 0) {
               unitId = unitsList[0].id;
             }
@@ -17349,12 +17804,12 @@ const isViewMode = state.comboPanel.mode === "view";
             }
 
             // Get product name and price from catalog
-            const productName = selectedProduct?.name || '';
-            const productPrice = Number(selectedProduct?.price || 0);
-            const productCostPrice = Number(selectedProduct?.cost_price || 0);
-            const productPhotos = Array.isArray(selectedProduct?.photos_json) ? selectedProduct.photos_json : [];
-            const baseUnitId = Number(selectedProduct?.base_unit_id || selectedProduct?.unit_id || unitId || 0);
-            const baseQty = selectedProduct?.base_qty != null ? Number(selectedProduct.base_qty) : null;
+            const productName = fullProduct?.name || '';
+            const productPrice = Number(fullProduct?.price || 0);
+            const productCostPrice = Number(fullProduct?.cost_price || 0);
+            const productPhotos = Array.isArray(fullProduct?.photos) ? fullProduct.photos : (Array.isArray(fullProduct?.photos_json) ? fullProduct.photos_json : []);
+            const baseUnitId = Number(fullProduct?.base_unit_id || fullProduct?.unit_id || unitId || 0);
+            const baseQty = fullProduct?.base_qty != null ? Number(fullProduct.base_qty) : null;
 
             let nextSort = 0;
             draftIngredients.forEach((item) => {
@@ -17366,12 +17821,8 @@ const isViewMode = state.comboPanel.mode === "view";
             if (pcsUnitId && baseUnitId === pcsUnitId) {
               const recipeBaseUnitId = Number(ui.baseUnitSelect?.value || 0);
               if (recipeBaseUnitId && recipeBaseUnitId !== pcsUnitId) {
-                try {
-                  const linkRes = await apiGetProductUnitLinks(productId);
-                  const links = Array.isArray(linkRes?.data) ? linkRes.data : [];
-                  const link = links.find((l) => Number(l.unit_id) === Number(pcsUnitId) && Number(l.base_unit_id) === recipeBaseUnitId);
-                  if (link && link.factor != null) ingredientPcsFactor = Number(link.factor);
-                } catch (_) {}
+                const link = ingredientUnitLinks.find((l) => Number(l.unit_id) === Number(pcsUnitId) && Number(l.base_unit_id) === recipeBaseUnitId);
+                if (link && link.factor != null) ingredientPcsFactor = Number(link.factor);
               }
             }
 
@@ -17385,7 +17836,13 @@ const isViewMode = state.comboPanel.mode === "view";
               ingredient_base_unit_id: baseUnitId || null,
               ingredient_base_qty: baseQty,
               ingredient_pcs_factor: ingredientPcsFactor,
+              ingredient_unit_links: ingredientUnitLinks,
               ingredient_photos: productPhotos,
+              nutrition_per_100g: fullProduct?.nutrition_per_100g && typeof fullProduct.nutrition_per_100g === "object" ? fullProduct.nutrition_per_100g : null,
+              nutrition_kcal_100g: fullProduct?.nutrition_kcal_100g != null ? Number(fullProduct.nutrition_kcal_100g) : null,
+              nutrition_protein_100g: fullProduct?.nutrition_protein_100g != null ? Number(fullProduct.nutrition_protein_100g) : null,
+              nutrition_fat_100g: fullProduct?.nutrition_fat_100g != null ? Number(fullProduct.nutrition_fat_100g) : null,
+              nutrition_carbs_100g: fullProduct?.nutrition_carbs_100g != null ? Number(fullProduct.nutrition_carbs_100g) : null,
               ingredient_unit_id: baseUnitId || unitId,
               quantity: 1,
               unit_id: baseUnitId || unitId,
@@ -17403,6 +17860,7 @@ const isViewMode = state.comboPanel.mode === "view";
             updateCostPricePlaceholderGlobal();
             updatePricePlaceholderGlobal();
             updateWeightTotalDisplayGlobal();
+            syncDraftNutritionFromIngredients();
           });
         });
       } catch (e) {
@@ -17438,8 +17896,13 @@ const isViewMode = state.comboPanel.mode === "view";
         updatePcsLinkVisibility();
         updatePcsToUnitVisibility();
         updateWeightTotalDisplayGlobal();
+        syncDraftNutritionFromIngredients();
       });
     }
+    [ui.baseQtyInput, ui.pcsFactorInput, ui.pcsToUnitFactorInput, ui.pcsToUnitSelect].forEach((input) => {
+      input?.addEventListener("input", syncDraftNutritionFromIngredients);
+      input?.addEventListener("change", syncDraftNutritionFromIngredients);
+    });
 
     // ========== END INGREDIENTS ==========
 
@@ -19018,8 +19481,7 @@ const isViewMode = state.comboPanel.mode === "view";
         e.stopPropagation();
         const isProductEdit = currentNavigationState?.type === "product-edit";
         const recalc = window.__productEditorRecalc;
-        const blocks = window.__productEditorBlocks;
-        if (!isProductEdit || (!recalc && !blocks)) return;
+        if (!isProductEdit || !recalc) return;
 
         const closeDropdown = () => {
           const existing = document.getElementById("productFooterMoreDropdown");
@@ -19037,26 +19499,6 @@ const isViewMode = state.comboPanel.mode === "view";
         const dropdown = document.createElement("div");
         dropdown.id = "productFooterMoreDropdown";
         dropdown.className = "product-footer-more-dropdown";
-        const blocksConfig = blocks?.getConfig ? blocks.getConfig() : getDefaultProductBlocksConfig();
-        const blocksHtml = blocks ? `
-          <div class="product-footer-more-blocks">
-            <button type="button" class="product-footer-more-dropdown-item product-footer-more-blocks-trigger" data-action="toggle-blocks">
-              <span class="product-footer-more-blocks-trigger-main">
-                <i class="fas fa-chevron-down" aria-hidden="true"></i>
-                <span>Блоки</span>
-              </span>
-            </button>
-            <div class="product-footer-more-blocks-panel hidden" data-blocks-panel>
-              ${PRODUCT_BLOCK_DEFINITIONS.map(({ key, label }) => `
-                <label class="product-footer-more-block-row">
-                  <input type="checkbox" data-product-block-toggle="${key}" ${blocksConfig[key] ? "checked" : ""}>
-                  <span>${escapeHtml(label)}</span>
-                </label>
-              `).join("")}
-            </div>
-          </div>
-          ${recalc ? '<div class="product-footer-more-dropdown-sep" aria-hidden="true"></div>' : ''}
-        ` : "";
         dropdown.innerHTML = `
           <button type="button" class="product-footer-more-dropdown-item" data-action="recalc-cost">
             <i class="fas fa-sync-alt" aria-hidden="true"></i>
@@ -19075,27 +19517,6 @@ const isViewMode = state.comboPanel.mode === "view";
             <span>Пересчитать в составе</span>
           </button>
         `;
-        if (blocksHtml) {
-          dropdown.innerHTML = `${blocksHtml}${dropdown.innerHTML}`;
-        }
-
-        const blocksTrigger = dropdown.querySelector("[data-action=toggle-blocks]");
-        const blocksPanel = dropdown.querySelector("[data-blocks-panel]");
-        if (blocksTrigger && blocksPanel) {
-          blocksTrigger.addEventListener("click", (event) => {
-            event.stopPropagation();
-            blocksPanel.classList.toggle("hidden");
-            blocksTrigger.classList.toggle("is-open", !blocksPanel.classList.contains("hidden"));
-            positionDropdown();
-          });
-        }
-        dropdown.querySelectorAll("[data-product-block-toggle]").forEach((checkbox) => {
-          checkbox.addEventListener("click", (event) => event.stopPropagation());
-          checkbox.addEventListener("change", () => {
-            if (blocks?.setBlock) blocks.setBlock(checkbox.dataset.productBlockToggle, checkbox.checked);
-          });
-        });
-
         function positionDropdown() {
           const rect = footerMoreEditBtn.getBoundingClientRect();
           const dropdownRect = dropdown.getBoundingClientRect();
