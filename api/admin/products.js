@@ -184,6 +184,26 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
     return String(value || "").replace(/\s+/g, " ").trim();
   }
 
+  function normalizeProductValueSource(value) {
+    return String(value || "").trim() === "auto" ? "auto" : "manual";
+  }
+
+  function calcProductMarginPercent(costPrice, price) {
+    const cost = helpers.numOrNull(costPrice);
+    const sale = helpers.numOrNull(price);
+    if (cost == null || sale == null || sale <= 0) return null;
+    return Math.round((((sale - cost) / sale) * 100) * 1000) / 1000;
+  }
+
+  function firstProductPhoto(photosJson) {
+    try {
+      const arr = typeof photosJson === "string" ? JSON.parse(photosJson || "[]") : photosJson;
+      return Array.isArray(arr) && arr.length ? arr[0] : null;
+    } catch {
+      return null;
+    }
+  }
+
   async function collectGeneratedCompositionItems(tenantId, productId, stack = [], seenNames = new Set()) {
     const id = Number(productId);
     if (!Number.isFinite(id) || id <= 0) return [];
@@ -446,6 +466,260 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       nutrition_problems: result.problems || [],
       ingredientsByProductId: tree.ingredientsByProductId,
     };
+  }
+
+  async function calculateProductCompositionTotals(tenantId, productId) {
+    const id = Number(productId || 0);
+    if (!Number.isFinite(id) || id <= 0) return null;
+    const [[product]] = await db.query(
+      `SELECT id, base_unit_id, unit_id, base_qty
+       FROM prod_products
+       WHERE tenant_id=? AND id=? LIMIT 1`,
+      [tenantId, id]
+    );
+    if (!product) return null;
+    const [ingredients] = await db.query(
+      `SELECT i.ingredient_id, i.quantity, i.unit_id, i.price_override,
+              p.price AS ingredient_price, p.cost_price AS ingredient_cost_price,
+              p.base_qty AS ingredient_base_qty,
+              p.base_unit_id AS ingredient_base_unit_id,
+              p.unit_id AS ingredient_unit_id
+       FROM prod_product_ingredients i
+       JOIN prod_products p ON p.tenant_id=i.tenant_id AND p.id=i.ingredient_id
+       WHERE i.tenant_id=? AND i.product_id=?
+       ORDER BY i.sort_order ASC, i.id ASC`,
+      [tenantId, id]
+    );
+    const list = Array.isArray(ingredients) ? ingredients : [];
+    if (!list.length) return null;
+    const productIds = Array.from(new Set([id, ...list.map((row) => Number(row.ingredient_id)).filter((n) => Number.isFinite(n) && n > 0)]));
+    const placeholders = productIds.map(() => "?").join(",");
+    const [links] = placeholders
+      ? await db.query(
+          `SELECT product_id, unit_id, base_unit_id, factor
+           FROM prod_product_unit_links
+           WHERE tenant_id=? AND product_id IN (${placeholders})`,
+          [tenantId, ...productIds]
+        )
+      : [[]];
+    const [conversionRows] = await db.query(
+      `SELECT from_unit_id, to_unit_id, factor
+       FROM prod_unit_conversions
+       WHERE tenant_id=? AND is_active=1`,
+      [tenantId]
+    );
+    const [[pcsUnitRow]] = await db.query(
+      `SELECT id FROM prod_units WHERE tenant_id=? AND code='pcs' LIMIT 1`,
+      [tenantId]
+    );
+    const pcsUnitId = Number(pcsUnitRow?.id || 0);
+    const linkMap = new Map();
+    (Array.isArray(links) ? links : []).forEach((link) => {
+      const factor = helpers.numOrNull(link.factor);
+      if (factor == null) return;
+      linkMap.set(`${Number(link.product_id)}:${Number(link.unit_id)}:${Number(link.base_unit_id)}`, factor);
+    });
+    const conversionMap = new Map();
+    (Array.isArray(conversionRows) ? conversionRows : []).forEach((row) => {
+      const factor = helpers.numOrNull(row.factor);
+      if (factor == null) return;
+      conversionMap.set(`${Number(row.from_unit_id)}:${Number(row.to_unit_id)}`, factor);
+    });
+    const getFactor = (fromUnitId, toUnitId, linkProductId = null) => {
+      const from = Number(fromUnitId || 0);
+      const to = Number(toUnitId || 0);
+      if (!from || !to) return null;
+      if (from === to) return 1;
+      if (linkProductId) {
+        const productFactor = linkMap.get(`${Number(linkProductId)}:${from}:${to}`);
+        if (productFactor != null) return productFactor;
+      }
+      const direct = conversionMap.get(`${from}:${to}`);
+      if (direct != null) return direct;
+      const inverse = conversionMap.get(`${to}:${from}`);
+      return inverse ? 1 / inverse : null;
+    };
+    const toUnitQty = (quantity, fromUnitId, toUnitId, linkProductId = null) => {
+      const qty = helpers.numOrNull(quantity);
+      if (qty == null) return null;
+      const factor = getFactor(fromUnitId, toUnitId, linkProductId);
+      return factor == null ? null : qty * factor;
+    };
+    let cost = 0;
+    let price = 0;
+    let weight = 0;
+    let hasCost = false;
+    let hasPrice = false;
+    let hasWeight = false;
+    const recipeBaseUnitId = Number(product.base_unit_id || product.unit_id || 0);
+    let measureUnitId = recipeBaseUnitId;
+    let targetQty = helpers.numOrNull(product.base_qty);
+    if (targetQty != null && pcsUnitId && Number(measureUnitId) === Number(pcsUnitId)) {
+      const productPcsLink = (Array.isArray(links) ? links : []).find((link) => (
+        Number(link.product_id) === id
+        && Number(link.unit_id) === Number(pcsUnitId)
+        && helpers.numOrNull(link.factor) != null
+      ));
+      if (productPcsLink) {
+        measureUnitId = Number(productPcsLink.base_unit_id);
+        targetQty *= Number(productPcsLink.factor);
+      }
+    }
+    for (const ing of list) {
+      const ingredientId = Number(ing.ingredient_id || 0);
+      const fromUnitId = Number(ing.unit_id || 0);
+      const ingredientBaseUnitId = Number(ing.ingredient_base_unit_id || ing.ingredient_unit_id || 0);
+      const qtyInIngredientBase = toUnitQty(ing.quantity, fromUnitId, ingredientBaseUnitId, ingredientId);
+      if (qtyInIngredientBase != null) {
+        const ingredientBaseQty = helpers.numOrNull(ing.ingredient_base_qty) || 1;
+        const costBase = ingredientBaseQty > 0 ? Number(ing.ingredient_cost_price || 0) / ingredientBaseQty : Number(ing.ingredient_cost_price || 0);
+        const catalogPriceBase = ingredientBaseQty > 0 ? Number(ing.ingredient_price || 0) / ingredientBaseQty : Number(ing.ingredient_price || 0);
+        const priceBase = ing.price_override != null ? Number(ing.price_override) : catalogPriceBase;
+        cost += costBase * qtyInIngredientBase;
+        price += priceBase * qtyInIngredientBase;
+        hasCost = true;
+        hasPrice = true;
+      }
+      if (measureUnitId) {
+        const qtyInMeasureUnit = toUnitQty(ing.quantity, fromUnitId, measureUnitId, ingredientId);
+        if (qtyInMeasureUnit != null) {
+          weight += qtyInMeasureUnit;
+          hasWeight = true;
+        }
+      }
+    }
+    const scale = hasWeight && weight > 0 && targetQty != null && targetQty > 0 ? targetQty / weight : 1;
+    const costPrice = hasCost ? Math.round(cost * scale * 100) / 100 : null;
+    const salePrice = hasPrice ? Math.round(price * scale * 100) / 100 : null;
+    return {
+      cost_price: costPrice,
+      price: salePrice,
+      margin_percent: calcProductMarginPercent(costPrice, salePrice),
+      base_qty: hasWeight ? Math.round(weight * 1000) / 1000 : null,
+    };
+  }
+
+  async function buildDependentProductsPreview(tenantId, ingredientProductId) {
+    const rootId = Number(ingredientProductId || 0);
+    if (!Number.isFinite(rootId) || rootId <= 0) return [];
+    const [[root]] = await db.query(
+      `SELECT id, name FROM prod_products WHERE tenant_id=? AND id=? LIMIT 1`,
+      [tenantId, rootId]
+    );
+    const rootName = root?.name || `#${rootId}`;
+    const rowsByProduct = new Map();
+    const visitedEdges = new Set();
+    async function loadDefaultVariantMap(productIds) {
+      const ids = Array.from(new Set((productIds || []).map(Number).filter((id) => Number.isFinite(id) && id > 0)));
+      if (!ids.length) return new Map();
+      const [rows] = await db.query(
+        `SELECT va.product_id, vg.title, vg.unit_id, vg.values,
+                vg.default_value_index AS group_default_value_index,
+                va.default_value_index AS assignment_default_value_index,
+                u.code AS unit_code, u.short_title AS unit_short_title, u.title AS unit_title
+         FROM prod_variant_assignments va
+         JOIN prod_variant_groups vg ON vg.id=va.variant_group_id AND vg.tenant_id=va.tenant_id
+         LEFT JOIN prod_units u ON u.id=vg.unit_id AND u.tenant_id=vg.tenant_id
+         WHERE va.tenant_id=? AND va.product_id IN (${ids.map(() => "?").join(",")})
+           AND va.is_active=1 AND vg.is_active=1
+         ORDER BY va.sort_order ASC, vg.sort_order ASC, vg.id ASC`,
+        [tenantId, ...ids]
+      );
+      const map = new Map();
+      (Array.isArray(rows) ? rows : []).forEach((row) => {
+        const productId = Number(row.product_id);
+        if (map.has(productId)) return;
+        const values = helpers.safeJsonArray(row.values);
+        const defaultIndex = row.assignment_default_value_index != null
+          ? Number(row.assignment_default_value_index)
+          : (row.group_default_value_index != null ? Number(row.group_default_value_index) : null);
+        const defaultValue = defaultIndex != null && values[defaultIndex] != null ? values[defaultIndex] : null;
+        map.set(productId, {
+          title: row.title || "",
+          unit_id: row.unit_id != null ? Number(row.unit_id) : null,
+          unit_code: row.unit_code || "",
+          unit_short_title: row.unit_short_title || "",
+          unit_title: row.unit_title || "",
+          default_value_index: defaultIndex,
+          default_value: defaultValue,
+        });
+      });
+      return map;
+    }
+    async function walk(childId, pathIds, pathNames, depth) {
+      const [parents] = await db.query(
+        `SELECT p.id, p.name, p.price, p.cost_price, p.margin_percent, p.base_qty,
+                p.unit_id, p.base_unit_id, p.photos_json,
+                p.price_source, p.cost_price_source, p.base_qty_source,
+                u.code AS unit_code, u.short_title AS unit_short_title, u.title AS unit_title,
+                pul.factor AS product_pcs_factor,
+                pul.base_unit_id AS product_pcs_base_unit_id
+         FROM prod_product_ingredients i
+         JOIN prod_products p ON p.tenant_id=i.tenant_id AND p.id=i.product_id
+         LEFT JOIN prod_units u ON u.id=COALESCE(p.base_unit_id, p.unit_id) AND u.tenant_id=p.tenant_id
+         LEFT JOIN prod_units pcs ON pcs.tenant_id=p.tenant_id AND pcs.code='pcs'
+         LEFT JOIN prod_product_unit_links pul
+           ON pul.tenant_id=p.tenant_id
+          AND pul.product_id=p.id
+          AND pul.unit_id=pcs.id
+         WHERE i.tenant_id=? AND i.ingredient_id=?
+         ORDER BY p.name ASC, p.id ASC`,
+        [tenantId, childId]
+      );
+      for (const parent of Array.isArray(parents) ? parents : []) {
+        const parentId = Number(parent.id);
+        if (!Number.isFinite(parentId) || parentId <= 0) continue;
+        const edgeKey = `${childId}:${parentId}`;
+        if (visitedEdges.has(edgeKey)) continue;
+        visitedEdges.add(edgeKey);
+        const nextPathNames = pathNames.concat(parent.name || `#${parentId}`);
+        const nextPathIds = pathIds.concat(parentId);
+        let row = rowsByProduct.get(parentId);
+        if (!row) {
+          row = {
+            product_id: parentId,
+            name: parent.name || "",
+            depth,
+            paths: [],
+            current: {
+              cost_price: parent.cost_price,
+              price: parent.price,
+              margin_percent: parent.margin_percent,
+              base_qty: parent.base_qty,
+            },
+            base_qty: parent.base_qty,
+            unit_id: parent.unit_id,
+            base_unit_id: parent.base_unit_id,
+            unit_code: parent.unit_code || "",
+            unit_short_title: parent.unit_short_title || "",
+            unit_title: parent.unit_title || "",
+            product_pcs_factor: parent.product_pcs_factor,
+            product_pcs_base_unit_id: parent.product_pcs_base_unit_id,
+            calculated: null,
+            photo: firstProductPhoto(parent.photos_json),
+            sources: {
+              cost_price: normalizeProductValueSource(parent.cost_price_source),
+              price: normalizeProductValueSource(parent.price_source),
+              base_qty: normalizeProductValueSource(parent.base_qty_source),
+            },
+          };
+          rowsByProduct.set(parentId, row);
+        } else {
+          row.depth = Math.min(Number(row.depth || depth), depth);
+        }
+        row.paths.push(nextPathNames);
+        if (!pathIds.includes(parentId)) {
+          await walk(parentId, nextPathIds, nextPathNames, depth + 1);
+        }
+      }
+    }
+    await walk(rootId, [rootId], [rootName], 1);
+    const rows = Array.from(rowsByProduct.values()).sort((a, b) => a.depth - b.depth || String(a.name).localeCompare(String(b.name), "ru"));
+    const defaultVariantMap = await loadDefaultVariantMap(rows.map((row) => row.product_id));
+    rows.forEach((row) => {
+      row.default_variant = defaultVariantMap.get(Number(row.product_id)) || null;
+    });
+    return rows;
   }
 
   async function ensureDiscountDeletedColumnsKnown() {
@@ -1142,6 +1416,131 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
     }
   });
 
+  router.post('/admin/products/recalculate-dependents', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const items = Array.isArray(req.body?.items) ? req.body.items : [];
+      const normalized = items
+        .map((item) => ({
+          product_id: Number(item?.product_id),
+          depth: Number(item?.depth || 0),
+          fields: item?.fields && typeof item.fields === "object" ? item.fields : {},
+          calculated: item?.calculated && typeof item.calculated === "object" ? item.calculated : null,
+          sources: item?.sources && typeof item.sources === "object" ? item.sources : {},
+        }))
+        .filter((item) => Number.isFinite(item.product_id) && item.product_id > 0)
+        .sort((a, b) => a.depth - b.depth);
+      const updatedIds = [];
+      const visited = new Set();
+      for (const item of normalized) {
+        if (visited.has(item.product_id)) continue;
+        visited.add(item.product_id);
+        const fields = item.fields || {};
+        const updates = [];
+        const params = [];
+        if (fields.cost_price || fields.price) {
+          const provided = item.calculated && typeof item.calculated === "object" ? item.calculated : {};
+          let totals = {
+            cost_price: helpers.numOrNull(provided.cost_price),
+            price: helpers.numOrNull(provided.price),
+            margin_percent: helpers.numOrNull(provided.margin_percent),
+          };
+          if ((fields.cost_price && totals.cost_price == null) || (fields.price && totals.price == null)) {
+            const calculatedTotals = await calculateProductCompositionTotals(tenantId, item.product_id);
+            totals = calculatedTotals || totals;
+          }
+          if (fields.cost_price && totals?.cost_price != null) {
+            updates.push("cost_price=?", "cost_price_source=?");
+            params.push(totals.cost_price, normalizeProductValueSource(item.sources?.cost_price));
+          }
+          if (fields.price && totals?.price != null) {
+            updates.push("price=?", "price_source=?");
+            params.push(totals.price, normalizeProductValueSource(item.sources?.price));
+          }
+          if (totals?.margin_percent != null) {
+            updates.push("margin_percent=?");
+            params.push(totals.margin_percent);
+          }
+        }
+        if (fields.composition) {
+          const compositionItems = await collectGeneratedCompositionItems(tenantId, item.product_id);
+          updates.push("client_composition=?");
+          params.push(compositionItems.join(", "));
+        }
+        if (updates.length) {
+          params.push(tenantId, item.product_id);
+          await db.query(
+            `UPDATE prod_products SET ${updates.join(", ")} WHERE tenant_id=? AND id=?`,
+            params
+          );
+        }
+        if (fields.nutrition || updates.length) {
+          updatedIds.push(item.product_id);
+        }
+      }
+      const updatedRows = updatedIds.length
+        ? await db.query(
+            `SELECT id, name, price, cost_price, margin_percent, price_source, cost_price_source,
+                    client_composition, base_qty, base_qty_source, photos_json, is_active, site_visibility, fulfillment_mode
+             FROM prod_products
+             WHERE tenant_id=? AND id IN (${updatedIds.map(() => "?").join(",")})`,
+            [tenantId, ...updatedIds]
+          )
+        : [[]];
+      res.json({
+        ok: true,
+        updated_ids: updatedIds,
+        products: (Array.isArray(updatedRows[0]) ? updatedRows[0] : []).map((row) => ({
+          ...row,
+          photos: (() => {
+            try { const arr = JSON.parse(row.photos_json || "[]"); return Array.isArray(arr) ? arr : []; } catch { return []; }
+          })(),
+        })),
+      });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.post('/admin/products/dependent-recalc-values', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const ids = Array.isArray(req.body?.product_ids) ? req.body.product_ids : [];
+      const productIds = Array.from(new Set(
+        ids.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)
+      ));
+      const items = [];
+      for (const productId of productIds) {
+        const totals = await calculateProductCompositionTotals(tenantId, productId);
+        items.push({
+          product_id: productId,
+          calculated: {
+            cost_price: totals?.cost_price ?? null,
+            price: totals?.price ?? null,
+            margin_percent: totals?.margin_percent ?? null,
+          },
+        });
+      }
+      res.json({ ok: true, items });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.get('/admin/products/:id/dependent-recalc-preview', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      res.json({ ok: true, items: await buildDependentProductsPreview(tenantId, id) });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
   // GET one product (for recalc: need base_unit_id, base_qty)
   router.get('/prod_products/:id', async (req, res) => {
     try {
@@ -1151,7 +1550,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
       const [rows] = await db.query(
         `SELECT p.id, p.name, p.sku, p.description_short, p.description, p.price, p.old_price, p.cost_price,
-                p.unit_id, p.base_unit_id, p.base_qty, p.photos_json, p.blocks_config_json, p.is_active, p.site_visibility,
+                p.unit_id, p.base_unit_id, p.base_qty, p.price_source, p.cost_price_source, p.base_qty_source, p.margin_percent, p.photos_json, p.blocks_config_json, p.is_active, p.site_visibility,
                 p.fulfillment_mode,
                 p.nutrition_protein_100g, p.nutrition_fat_100g, p.nutrition_carbs_100g,
                 p.client_composition, p.tech_process,
@@ -1296,6 +1695,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       const listSelectFields = `
         p.id, p.tenant_id, p.name, p.sku, p.description_short, p.description,
         p.price, p.old_price, p.cost_price,
+        p.price_source, p.cost_price_source, p.base_qty_source, p.margin_percent,
         p.unit_id, p.base_unit_id, p.base_qty,
         p.photos_json, p.blocks_config_json,
         p.is_active, p.site_visibility,
@@ -1454,6 +1854,10 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       const price = helpers.numOrNull(req.body.price) ?? 0;
       const old_price = helpers.numOrNull(req.body.old_price);
       const cost_price = helpers.numOrNull(req.body.cost_price);
+      const margin_percent = helpers.numOrNull(req.body.margin_percent);
+      const price_source = normalizeProductValueSource(req.body.price_source);
+      const cost_price_source = normalizeProductValueSource(req.body.cost_price_source);
+      const base_qty_source = normalizeProductValueSource(req.body.base_qty_source);
       const unit_id = helpers.numOrNull(req.body.unit_id);
       const base_unit_id = helpers.numOrNull(req.body.base_unit_id);
       const base_qty = helpers.numOrNull(req.body.base_qty);
@@ -1474,13 +1878,13 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
 
       const [result] = await db.query(
         `INSERT INTO prod_products
-          (tenant_id, name, sku, description_short, description, price, old_price, cost_price, unit_id, base_unit_id, base_qty, fulfillment_mode, photos_json, blocks_config_json, is_active, site_visibility,
+          (tenant_id, name, sku, description_short, description, price, old_price, cost_price, price_source, margin_percent, cost_price_source, unit_id, base_unit_id, base_qty, base_qty_source, fulfillment_mode, photos_json, blocks_config_json, is_active, site_visibility,
            nutrition_protein_100g, nutrition_fat_100g, nutrition_carbs_100g, client_composition, tech_process,
            show_description_short, show_description, show_client_composition, show_tech_process)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [
           tenantId, name, sku, description_short, description,
-          price, old_price, cost_price, unit_id, base_unit_id, base_qty, fulfillment_mode, photos_json, blocks_config_json,
+          price, old_price, cost_price, price_source, margin_percent, cost_price_source, unit_id, base_unit_id, base_qty, base_qty_source, fulfillment_mode, photos_json, blocks_config_json,
           is_active, site_visibility,
           nutrition_protein_100g, nutrition_fat_100g, nutrition_carbs_100g, client_composition, tech_process,
           show_description_short, show_description, show_client_composition, show_tech_process
@@ -1526,6 +1930,10 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       const price = helpers.numOrNull(req.body.price) ?? 0;
       const old_price = helpers.numOrNull(req.body.old_price);
       const cost_price = helpers.numOrNull(req.body.cost_price);
+      const margin_percent = helpers.numOrNull(req.body.margin_percent);
+      const price_source = normalizeProductValueSource(req.body.price_source);
+      const cost_price_source = normalizeProductValueSource(req.body.cost_price_source);
+      const base_qty_source = normalizeProductValueSource(req.body.base_qty_source);
       const unit_id = helpers.numOrNull(req.body.unit_id);
       const base_unit_id = helpers.numOrNull(req.body.base_unit_id);
       const base_qty = helpers.numOrNull(req.body.base_qty);
@@ -1559,13 +1967,13 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
 
       await db.query(
         `UPDATE prod_products
-         SET name=?, sku=?, description_short=?, description=?, price=?, old_price=?, cost_price=?, unit_id=?, base_unit_id=?, base_qty=?, fulfillment_mode=?, photos_json=?, blocks_config_json=COALESCE(?, blocks_config_json), is_active=?, site_visibility=?,
+         SET name=?, sku=?, description_short=?, description=?, price=?, old_price=?, cost_price=?, price_source=?, margin_percent=?, cost_price_source=?, unit_id=?, base_unit_id=?, base_qty=?, base_qty_source=?, fulfillment_mode=?, photos_json=?, blocks_config_json=COALESCE(?, blocks_config_json), is_active=?, site_visibility=?,
              nutrition_protein_100g=?, nutrition_fat_100g=?, nutrition_carbs_100g=?, client_composition=?, tech_process=?,
              show_description_short=?, show_description=?, show_client_composition=?, show_tech_process=?
          WHERE tenant_id=? AND id=?`,
         [
           name, sku, description_short, description,
-          price, old_price, cost_price, unit_id, base_unit_id, base_qty, fulfillment_mode, photos_json, blocks_config_json,
+          price, old_price, cost_price, price_source, margin_percent, cost_price_source, unit_id, base_unit_id, base_qty, base_qty_source, fulfillment_mode, photos_json, blocks_config_json,
           is_active, site_visibility,
           nutrition_protein_100g, nutrition_fat_100g, nutrition_carbs_100g, client_composition, tech_process,
           show_description_short, show_description, show_client_composition, show_tech_process,
@@ -1583,7 +1991,8 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
         [tenantId, storeId, id, stock_qty]
       );
 
-      res.json({ ok: true });
+      const dependent_recalc = { items: await buildDependentProductsPreview(tenantId, id) };
+      res.json({ ok: true, dependent_recalc });
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
@@ -1601,6 +2010,9 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       const hasPrice = Object.prototype.hasOwnProperty.call(req.body || {}, 'price');
       const hasOldPrice = Object.prototype.hasOwnProperty.call(req.body || {}, 'old_price');
       const hasBaseQty = Object.prototype.hasOwnProperty.call(req.body || {}, 'base_qty');
+      const hasCostPriceSource = Object.prototype.hasOwnProperty.call(req.body || {}, 'cost_price_source');
+      const hasPriceSource = Object.prototype.hasOwnProperty.call(req.body || {}, 'price_source');
+      const hasBaseQtySource = Object.prototype.hasOwnProperty.call(req.body || {}, 'base_qty_source');
       const hasIsActive = Object.prototype.hasOwnProperty.call(req.body || {}, 'is_active');
       const hasSiteVisibility = Object.prototype.hasOwnProperty.call(req.body || {}, 'site_visibility');
       const hasFulfillmentMode = Object.prototype.hasOwnProperty.call(req.body || {}, 'fulfillment_mode');
@@ -1619,6 +2031,9 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       if (hasPrice) { updates.push('price=?'); params.push(price ?? 0); }
       if (hasOldPrice) { updates.push('old_price=?'); params.push(old_price); }
       if (hasBaseQty) { updates.push('base_qty=?'); params.push(base_qty); }
+      if (hasCostPriceSource) { updates.push('cost_price_source=?'); params.push(normalizeProductValueSource(req.body.cost_price_source)); }
+      if (hasPriceSource) { updates.push('price_source=?'); params.push(normalizeProductValueSource(req.body.price_source)); }
+      if (hasBaseQtySource) { updates.push('base_qty_source=?'); params.push(normalizeProductValueSource(req.body.base_qty_source)); }
       if (hasIsActive) { updates.push('is_active=?'); params.push(is_active); }
       if (hasSiteVisibility) { updates.push('site_visibility=?'); params.push(site_visibility); }
       if (hasFulfillmentMode) { updates.push('fulfillment_mode=?'); params.push(fulfillment_mode); }

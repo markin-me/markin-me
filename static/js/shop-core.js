@@ -13372,7 +13372,9 @@ async function initAddresses() {
           openComboDetails(comboId);
         });
         card.addEventListener("click", (e) => {
-          if (!e.target.closest(".sp-combo-btn")) openComboDetails(comboId);
+          if (!e.target.closest(".sp-combo-btn")) {
+            openComboDetails(comboId);
+          }
         });
         const warmComboDetailsOnIntent = () => {
           scheduleComboDetailsPrefetch([comboId], { limit: 1, delayMs: 0 });
@@ -17513,6 +17515,7 @@ function scheduleAllProductIngredientBatch() {
       }
     });
   }
+
   if (allProductIds.length) batchLoadIngredientRequirements(allProductIds).catch(function() {});
 }
 
@@ -17615,9 +17618,8 @@ async function initCore() {
       }).catch(() => {});
     }
     const shopLateReadyPromise = ensureShopLateLoaded().catch(() => false);
-    let firstInteractionWarmPromise = Promise.resolve(false);
     if (productsReadyForFirstPaint && Number.isFinite(Number(state.activeCategoryId)) && Number(state.activeCategoryId) > 0) {
-      firstInteractionWarmPromise = warmInitialCatalogInteractionData({
+      warmInitialCatalogInteractionData({
         categoryIds: [Number(state.activeCategoryId)],
         productLimit: INITIAL_CATALOG_PREFETCH_PRODUCTS,
         comboLimit: INITIAL_CATALOG_PREFETCH_COMBOS,
@@ -17640,7 +17642,6 @@ async function initCore() {
     await withShopSplashTimeout(
       Promise.allSettled([
         shopLateReadyPromise,
-        firstInteractionWarmPromise,
         addressPromise,
       ]),
       SHOP_SPLASH_INTERACTION_READY_MAX_MS

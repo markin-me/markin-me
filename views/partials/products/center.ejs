@@ -229,21 +229,33 @@
       </div>
     </div>
 
-    <!-- Цены в один ряд: Себестоимость / Цена / Старая цена -->
-    <div class="form-row-3">
-      <div class="field-wrap">
-        <label class="field-label" for="pe_cost_price">Себестоимость</label>
-        <input class="control" id="pe_cost_price" name="cost_price" type="text" inputmode="decimal" autocomplete="off" data-numeric-input placeholder="0" />
+    <div class="product-nutrition-card product-price-card" id="pePriceBlock">
+      <div class="product-nutrition-head">
+        <div>
+          <div class="product-nutrition-title">Цена</div>
+          <div class="product-nutrition-subtitle" id="pePriceSourceHint">Ручной ввод</div>
+        </div>
+        <div class="product-price-source-toggle" role="group" aria-label="Источник цены">
+          <button class="product-price-source-btn" id="pePriceSourceAuto" type="button" data-price-source="auto">Из состава</button>
+          <button class="product-price-source-btn" id="pePriceSourceManual" type="button" data-price-source="manual">Ручное</button>
+        </div>
       </div>
-      <div class="field-wrap">
-        <label class="field-label" for="pe_price">Цена</label>
-        <input class="control" id="pe_price" name="price" type="text" inputmode="decimal" autocomplete="off" data-numeric-input placeholder="0" />
-      </div>
-      <div class="field-wrap">
-        <label class="field-label" for="pe_old_price">Старая цена</label>
-        <input class="control" id="pe_old_price" name="old_price" type="text" inputmode="decimal" autocomplete="off" data-numeric-input placeholder="0" />
+      <div class="product-price-grid">
+        <div class="field-wrap product-nutrition-field product-price-field">
+          <label class="field-label" for="pe_cost_price">Себест.</label>
+          <input class="control" id="pe_cost_price" name="cost_price" type="text" inputmode="decimal" autocomplete="off" data-numeric-input placeholder="0" />
+        </div>
+        <div class="field-wrap product-nutrition-field product-price-field">
+          <label class="field-label" for="pe_margin_percent">Маржа %</label>
+          <input class="control" id="pe_margin_percent" name="margin_percent" type="text" inputmode="decimal" autocomplete="off" data-numeric-input placeholder="0" />
+        </div>
+        <div class="field-wrap product-nutrition-field product-price-field">
+          <label class="field-label" for="pe_price">Цена</label>
+          <input class="control" id="pe_price" name="price" type="text" inputmode="decimal" autocomplete="off" data-numeric-input placeholder="0" />
+        </div>
       </div>
     </div>
+    <input id="pe_old_price" name="old_price" type="hidden" value="0" />
 
     <!-- Единицы в один ряд: Норма / Ед. изм / Остаток -->
     <div class="form-row-3">

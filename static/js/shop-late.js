@@ -309,7 +309,7 @@ const comboBlockPreviewResolvedCache = new Map();
 const productDetailsBatchInflight = new Map();
 let productDetailsPrefetchTimer = null;
 let comboDetailsPrefetchTimer = null;
-const COMBO_DETAILS_CACHE_TTL_MS = 60000;
+const COMBO_DETAILS_CACHE_TTL_MS = 5 * 60 * 1000;
 const COMBO_PREVIEW_SHARED_TTL_MS = 5 * 60 * 1000;
 
 function normalizeProductDetailIds(productIds, limit = 0) {
@@ -368,7 +368,7 @@ function getComboBlockPreviewCacheKey(block, discountPercent) {
     .map((prod) => Number(prod?.product_id || 0))
     .filter((id) => Number.isFinite(id) && id > 0)
     .sort((a, b) => a - b);
-  return `${blockId}:${Number(discountPercent || 0)}:${productIds.join(",")}`;
+  return `${blockId}:${productIds.join(",")}`;
 }
 
 function getSharedComboProductPreview(cacheKey) {
@@ -434,6 +434,94 @@ function setSharedComboBlockPreviewResolved(cacheKey, previewMap) {
   });
 }
 
+function seedComboPreviewCachesFromComboData(comboData) {
+  const safeCombo = comboData && typeof comboData === "object" ? comboData : null;
+  if (!safeCombo) return;
+  const blocks = Array.isArray(safeCombo.blocks) ? safeCombo.blocks : [];
+  const discountPercent = Number(safeCombo.discount_percent || 0);
+
+  blocks.forEach((block) => {
+    const products = Array.isArray(block?.products) ? block.products : [];
+    const previewMap = new Map();
+
+    products.forEach((prod) => {
+      const productId = Number(prod?.product_id || 0);
+      if (!Number.isFinite(productId) || productId <= 0) return;
+
+      const preview = prod?.preview && typeof prod.preview === "object" ? prod.preview : null;
+      if (!preview) return;
+
+      if (!state.productCache.has(productId)) {
+        const productPhoto = str(prod.product_photo || "").trim();
+        const cachedProduct = {
+          id: productId,
+          name: str(prod.product_name || ""),
+          title: str(prod.product_name || ""),
+          description_short: str(prod.product_description_short || ""),
+          price: Number(prod.price || 0),
+          base_qty: Number(prod.base_qty || 1) || 1,
+          base_unit_id: prod.base_unit_id != null ? Number(prod.base_unit_id) : null,
+          unit_id: prod.unit_id != null ? Number(prod.unit_id) : null,
+          photos: productPhoto ? [productPhoto] : [],
+          photos_json: productPhoto ? [productPhoto] : [],
+          is_available: preview.is_available !== false,
+        };
+        state.productCache.set(productId, cachedProduct);
+      }
+
+      const ingredients = Array.isArray(preview.ingredients) ? preview.ingredients : [];
+      const variants = normalizeComboVariantList(Array.isArray(preview.variants) ? preview.variants : []);
+      comboProductIngredientsCache.set(productId, Promise.resolve(ingredients));
+      comboProductVariantsCache.set(productId, Promise.resolve(variants));
+
+      const rawUnitPriceBeforeDiscount =
+        preview.unit_price_before_discount != null && Number.isFinite(Number(preview.unit_price_before_discount))
+          ? Number(preview.unit_price_before_discount)
+          : null;
+      const publicPreview = {
+        variant_label: str(preview.variant_label || ""),
+        variant_group_id: preview.variant_group_id != null ? Number(preview.variant_group_id) : null,
+        variant_value_index: preview.variant_value_index != null ? Number(preview.variant_value_index) : null,
+        variant_group_title: str(preview.variant_group_title || ""),
+        variant_unit: str(preview.variant_unit || ""),
+        unit_id: preview.unit_id != null ? Number(preview.unit_id) : null,
+        ingredients_display: Array.isArray(preview.ingredients_display)
+          ? preview.ingredients_display.map((ing) => clonePlainComboPreviewValue(ing))
+          : [],
+        hasConfigurable: Boolean(preview.hasConfigurable),
+        unit_price_override:
+          rawUnitPriceBeforeDiscount == null && preview.unit_price_override != null && Number.isFinite(Number(preview.unit_price_override))
+            ? Number(preview.unit_price_override)
+            : null,
+        unit_price_before_discount: rawUnitPriceBeforeDiscount,
+        is_available: preview.is_available !== false,
+      };
+      const promise = Promise.resolve(publicPreview);
+      setSharedComboProductPreview(String(productId), promise);
+      previewMap.set(productId, publicPreview);
+    });
+
+    if (previewMap.size) {
+      setSharedComboBlockPreviewResolved(
+        getComboBlockPreviewCacheKey(block, discountPercent),
+        previewMap
+      );
+    }
+  });
+}
+
+function clonePlainComboPreviewValue(value) {
+  if (Array.isArray(value)) return value.map((item) => clonePlainComboPreviewValue(item));
+  if (value && typeof value === "object") {
+    const out = {};
+    Object.keys(value).forEach((key) => {
+      out[key] = clonePlainComboPreviewValue(value[key]);
+    });
+    return out;
+  }
+  return value;
+}
+
 async function resolveComboDetails(comboId) {
   const safeComboId = Number(comboId || 0);
   if (!Number.isFinite(safeComboId) || safeComboId <= 0) return null;
@@ -446,7 +534,9 @@ async function resolveComboDetails(comboId) {
 
   const promise = (async () => {
     const json = await apiJson("/api/public/combos/" + encodeURIComponent(safeComboId));
-    return json?.data || null;
+    const data = json?.data || null;
+    seedComboPreviewCachesFromComboData(data);
+    return data;
   })();
 
   comboDetailsCache.set(safeComboId, {
@@ -468,8 +558,15 @@ async function resolveComboDetails(comboId) {
 async function warmComboDetailsData(comboData, opts = {}) {
   const ids = collectComboProductIds(comboData);
   if (!ids.length) return;
-  await preloadComboProductsData(ids);
-  if (opts.preloadProductConfigs) {
+  const hasEmbeddedPreviews = Array.isArray(comboData?.blocks)
+    && comboData.blocks.some((block) =>
+      Array.isArray(block?.products)
+      && block.products.some((product) => product?.preview && typeof product.preview === "object")
+    );
+  if (!hasEmbeddedPreviews) {
+    await preloadComboProductsData(ids);
+  }
+  if (opts.preloadProductConfigs && !hasEmbeddedPreviews) {
     prefetchProductDetailsConfig(ids, {
       limit: Math.max(1, Math.min(24, ids.length)),
       delayMs: 0,
@@ -538,6 +635,7 @@ function normalizeComboVariantList(rawList) {
       values: Array.isArray(v.values) ? v.values : [],
       discount_tiers: Array.isArray(v.discount_tiers) ? v.discount_tiers : [],
       default_value_index: v.default_value_index != null ? Number(v.default_value_index) : null,
+      unit_to_grams_factor: v.unit_to_grams_factor,
     };
   });
 }
@@ -903,9 +1001,17 @@ async function resolveProductOptionGroups(productId) {
           title: str(item.product_name || item.name || ""),
           price: getOptionItemPrice(item),
           product_price: Number(item.product_price || 0),
+          product_base_qty: Number(item.product_base_qty || 1) || 1,
+          product_base_unit_id: item.product_base_unit_id ? Number(item.product_base_unit_id) : null,
+          product_unit_id: item.product_unit_id ? Number(item.product_unit_id) : null,
           qty_min: item.qty_min ?? 1,
           qty_max: item.qty_max ?? 1,
           photo,
+          nutrition_per_100g: item.nutrition_per_100g || null,
+          nutrition_per_portion: item.nutrition_per_portion || null,
+          base_qty_grams: item.base_qty_grams,
+          nutrition_portion_grams: item.nutrition_portion_grams,
+          unit_to_grams_factor: item.unit_to_grams_factor,
           // Варианты для этого товара-опции
           variants: variants,
         };
@@ -1205,6 +1311,25 @@ function buildProductDetailsContent(
     });
   }
 
+  function cloneNutritionTotals(values = {}) {
+    const nutrition = normalizeProductNutrition(values);
+    return {
+      protein: nutrition.protein != null ? nutrition.protein : 0,
+      fat: nutrition.fat != null ? nutrition.fat : 0,
+      carbs: nutrition.carbs != null ? nutrition.carbs : 0,
+    };
+  }
+
+  function nutritionPer100FromTotals(totals, grams) {
+    const qtyGrams = readProductNutritionNumber(grams);
+    if (qtyGrams == null || qtyGrams <= 0) return null;
+    return normalizeProductNutrition({
+      protein: Number(totals?.protein || 0) / qtyGrams * 100,
+      fat: Number(totals?.fat || 0) / qtyGrams * 100,
+      carbs: Number(totals?.carbs || 0) / qtyGrams * 100,
+    });
+  }
+
   function parseProductNutritionVariantValue(value) {
     const match = String(value ?? "").replace(",", ".").match(/-?\d+(?:\.\d+)?/);
     return match ? Number(match[0]) : NaN;
@@ -1222,6 +1347,31 @@ function buildProductDetailsContent(
     return value * factor;
   }
 
+  function getProductBaseNutritionGrams(sourceProduct) {
+    return readProductNutritionNumber(sourceProduct?.nutrition_portion_grams ?? sourceProduct?.base_qty_grams);
+  }
+
+  function addConfiguredProductNutrition(target, sourceProduct, sourceVariants, sourceVariantState, multiplier = 1) {
+    const selectedGrams = getSelectedVariantGrams(sourceVariants, sourceVariantState);
+    const baseGrams = getProductBaseNutritionGrams(sourceProduct);
+    const grams = selectedGrams != null ? selectedGrams : baseGrams;
+    const per100 = sourceProduct?.nutrition_per_100g && typeof sourceProduct.nutrition_per_100g === "object"
+      ? sourceProduct.nutrition_per_100g
+      : null;
+    const portion = sourceProduct?.nutrition_per_portion && typeof sourceProduct.nutrition_per_portion === "object"
+      ? sourceProduct.nutrition_per_portion
+      : null;
+    const qtyMultiplier = Number(multiplier || 1);
+    if (grams != null && per100) {
+      return addNutritionPortion(target, per100, grams, qtyMultiplier);
+    }
+    if (portion) {
+      addNutritionValues(target, portion, qtyMultiplier);
+      return baseGrams != null ? baseGrams * qtyMultiplier : 0;
+    }
+    return 0;
+  }
+
   function getCurrentProductNutritionTotals() {
     const totals = { protein: 0, fat: 0, carbs: 0 };
     let totalGrams = 0;
@@ -1230,11 +1380,10 @@ function buildProductDetailsContent(
       const basePortion = product?.nutrition_per_portion && typeof product.nutrition_per_portion === "object"
         ? product.nutrition_per_portion
         : null;
-      if (basePortion) {
-        addNutritionValues(totals, basePortion);
-        const baseQtyGrams = readProductNutritionNumber(product?.nutrition_portion_grams ?? product?.base_qty_grams);
-        if (baseQtyGrams != null) totalGrams += baseQtyGrams;
-      }
+      const recipeTotals = basePortion
+        ? cloneNutritionTotals(basePortion)
+        : { protein: 0, fat: 0, carbs: 0 };
+      let recipeGrams = getProductBaseNutritionGrams(product) || 0;
       activeIngredients.forEach((ing) => {
         const ingId = Number(ing.ingredient_id || 0);
         const stateEntry = ingredientState?.get(ingId);
@@ -1242,45 +1391,25 @@ function buildProductDetailsContent(
         const baseQty = Number(ing.quantity ?? 1);
         const calcQty = basePortion ? qty - baseQty : qty;
         const unitToGrams = readProductNutritionNumber(ing.unit_to_grams_factor);
-        totalGrams += addNutritionPortion(totals, ing.nutrition_per_100g, unitToGrams != null ? calcQty * unitToGrams : null);
+        const diffGrams = unitToGrams != null ? calcQty * unitToGrams : null;
+        recipeGrams += addNutritionPortion(recipeTotals, ing.nutrition_per_100g, diffGrams);
       });
-    } else {
+      const recipePer100 = nutritionPer100FromTotals(recipeTotals, recipeGrams);
       const selectedVariantGrams = getSelectedVariantGrams(variants, variantState);
-      const portion = product?.nutrition_per_portion && typeof product.nutrition_per_portion === "object"
-        ? product.nutrition_per_portion
-        : null;
-      if (selectedVariantGrams != null) {
-        totalGrams += addNutritionPortion(totals, product?.nutrition_per_100g, selectedVariantGrams);
-      } else if (portion) {
-        addNutritionValues(totals, portion);
-        const baseQtyGrams = readProductNutritionNumber(product?.nutrition_portion_grams ?? product?.base_qty_grams);
-        if (baseQtyGrams != null) totalGrams += baseQtyGrams;
+      const selectedGrams = selectedVariantGrams != null ? selectedVariantGrams : recipeGrams;
+      if (recipePer100 && selectedGrams > 0) {
+        totalGrams += addNutritionPortion(totals, recipePer100, selectedGrams);
       } else {
-        const baseQtyGrams = readProductNutritionNumber(product?.nutrition_portion_grams ?? product?.base_qty_grams);
-        if (baseQtyGrams != null) totalGrams += addNutritionPortion(totals, product?.nutrition_per_100g, baseQtyGrams);
+        addNutritionValues(totals, recipeTotals);
+        totalGrams += recipeGrams;
       }
+    } else {
+      totalGrams += addConfiguredProductNutrition(totals, product, variants, variantState);
     }
 
     collectSelectedOptionItems(optionGroups, selectionState).forEach((item) => {
       const itemQty = Number(item.qty || 1) || 1;
-      const itemVariantGrams = getSelectedVariantGrams(item.variants, item);
-      if (itemVariantGrams != null) {
-        totalGrams += addNutritionPortion(totals, item.nutrition_per_100g, itemVariantGrams, itemQty);
-        return;
-      }
-      const portion = item.nutrition_per_portion && typeof item.nutrition_per_portion === "object"
-        ? item.nutrition_per_portion
-        : null;
-      if (portion) {
-        addNutritionValues(totals, portion, itemQty);
-        const baseQtyGrams = readProductNutritionNumber(item.nutrition_portion_grams ?? item.base_qty_grams);
-        if (baseQtyGrams != null) totalGrams += baseQtyGrams * itemQty;
-        return;
-      }
-      const baseQtyGrams = readProductNutritionNumber(item.nutrition_portion_grams ?? item.base_qty_grams);
-      if (baseQtyGrams != null) {
-        totalGrams += addNutritionPortion(totals, item.nutrition_per_100g, baseQtyGrams, itemQty);
-      }
+      totalGrams += addConfiguredProductNutrition(totals, item, item.variants, item, itemQty);
     });
 
     totals.kcal = calcProductNutritionKcal(totals);
@@ -5577,6 +5706,35 @@ optionGroups.forEach((group) => {
       return defaultIdx >= 0 ? defaultIdx : 0;
     });
 
+    function getComboPreviewFromProductPayload(prod) {
+      const preview = prod?.preview && typeof prod.preview === "object" ? prod.preview : null;
+      if (!preview) return null;
+      const rawUnitPrice = preview.unit_price_before_discount != null && Number.isFinite(Number(preview.unit_price_before_discount))
+        ? Number(preview.unit_price_before_discount)
+        : null;
+      return {
+        variant_label: String(preview.variant_label || ""),
+        variant_group_id: preview.variant_group_id != null ? Number(preview.variant_group_id) : null,
+        variant_value_index: preview.variant_value_index != null ? Number(preview.variant_value_index) : null,
+        variant_group_title: String(preview.variant_group_title || ""),
+        variant_unit: String(preview.variant_unit || ""),
+        unit_id: preview.unit_id != null ? Number(preview.unit_id) : null,
+        ingredients_display: Array.isArray(preview.ingredients_display)
+          ? preview.ingredients_display.map((ing) => cloneComboDraftValue(ing))
+          : [],
+        hasConfigurable: Boolean(preview.hasConfigurable),
+        unit_price_before_discount: rawUnitPrice,
+        unit_price_override: rawUnitPrice != null
+          ? roundPrice(comboDiscountedPrice(rawUnitPrice, discountPercent))
+          : (
+            preview.unit_price_override != null && Number.isFinite(Number(preview.unit_price_override))
+              ? Number(preview.unit_price_override)
+              : null
+          ),
+        is_available: preview.is_available !== false,
+      };
+    }
+
     function resolveDesktopComboPanelBackHandler(overrideBack = null) {
       if (typeof overrideBack === "function") {
         return (event) => {
@@ -6209,6 +6367,14 @@ optionGroups.forEach((group) => {
       if (!prod) return false;
       const productId = Number(prod.product_id || 0);
       if (!Number.isFinite(productId) || productId <= 0) return false;
+      if (prod.is_available === false || Number(prod.is_available) === 0) return false;
+      const cachedProduct = state.productCache instanceof Map ? state.productCache.get(productId) : null;
+      if (cachedProduct && !isProductAvailable(cachedProduct)) return false;
+      const stockEntry = typeof getStockLevelEntry === "function" ? getStockLevelEntry(productId) : null;
+      if (stockEntry) {
+        if (stockEntry.isAvailable !== undefined && stockEntry.isAvailable !== null && !stockEntry.isAvailable) return false;
+        if (stockEntry.qty !== undefined && stockEntry.qty !== null && !stockEntry.isUnlimited && Number(stockEntry.qty) <= 0) return false;
+      }
 
       const snapshot = snapshotComboDraftState();
       try {
@@ -6336,6 +6502,25 @@ optionGroups.forEach((group) => {
       const productId = Number(prod.product_id);
       if (!Number.isFinite(productId) || productId <= 0) return;
 
+      const state = selectionStateByBlock[blockIndex] || {};
+      const payloadPreview = !useRandomizer ? getComboPreviewFromProductPayload(prod) : null;
+      const hasSavedDetailsForProduct =
+        state.product_id === productId &&
+        (str(state.variant_label || "").trim() !== "" ||
+          (Array.isArray(state.ingredients_display) && state.ingredients_display.length > 0));
+      const hasSavedPriceForProduct =
+        (state.unit_price_before_discount != null && Number.isFinite(Number(state.unit_price_before_discount))) ||
+        (state.unit_price_override != null && Number.isFinite(Number(state.unit_price_override)));
+      if (!useRandomizer && preferSavedState && hasSavedDetailsForProduct && hasSavedPriceForProduct) {
+        return;
+      }
+
+      if (payloadPreview && payloadPreview.is_available !== false) {
+        applyComboPreviewToBlockState(state, productId, payloadPreview);
+        selectionStateByBlock[blockIndex] = state;
+        return;
+      }
+
       try {
         const [product, variants, ingredients] = await Promise.all([
           ensureProduct(productId),
@@ -6344,16 +6529,12 @@ optionGroups.forEach((group) => {
         ]);
         if (!product) return;
 
-        const state = selectionStateByBlock[blockIndex] || {};
         const vGroup = Array.isArray(variants) && variants.length ? variants[0] : null;
         const values = Array.isArray(vGroup?.values) ? vGroup.values : [];
         let vIdx;
 
         // Если в состоянии уже сохранён вариант именно для этого товара — используем его.
-        const hasSavedStateForProduct =
-          state.product_id === productId &&
-          (state.variant_value_index != null || (Array.isArray(state.ingredients_display) && state.ingredients_display.length > 0));
-        const useSavedStateForProduct = preferSavedState && hasSavedStateForProduct;
+        const useSavedStateForProduct = preferSavedState && hasSavedDetailsForProduct;
 
         if (useSavedStateForProduct && state.variant_value_index != null) {
           vIdx = Number(state.variant_value_index);
@@ -6569,7 +6750,7 @@ optionGroups.forEach((group) => {
       if (comboProductPreviewCache.has(id)) {
         return comboProductPreviewCache.get(id);
       }
-      const previewSharedKey = `${id}:${Number(discountPercent || 0)}`;
+      const previewSharedKey = String(id);
       const sharedPreviewPromise = getSharedComboProductPreview(previewSharedKey);
       if (sharedPreviewPromise) {
         comboProductPreviewCache.set(id, sharedPreviewPromise);
@@ -6584,18 +6765,7 @@ optionGroups.forEach((group) => {
             resolveProductIngredients(id),
           ]);
           if (!product) {
-            return {
-              variant_label: "",
-              variant_group_id: null,
-              variant_value_index: null,
-              variant_group_title: "",
-              variant_unit: "",
-              unit_id: null,
-              ingredients_display: [],
-              hasConfigurable: false,
-              unit_price_override: null,
-              unit_price_before_discount: null,
-            };
+            throw new Error("PRODUCT_NOT_FOUND");
           }
 
           const vGroup = Array.isArray(variants) && variants.length ? variants[0] : null;
@@ -6676,7 +6846,7 @@ optionGroups.forEach((group) => {
             // Разрешаем цене опускаться ниже базовой при уменьшении состава, но не ниже нуля.
             unit = Math.max(0, unit);
             unit_price_before_discount = roundPrice(unit);
-            unit_price_override = roundPrice(comboDiscountedPrice(unit, discountPercent));
+            unit_price_override = null;
           } catch (e) {
             // оставляем null — в карточке останется базовая цена
           }
@@ -6692,27 +6862,22 @@ optionGroups.forEach((group) => {
             hasConfigurable: Boolean(hasVariantChoices || hasAdjustableIngredients),
             unit_price_override: unit_price_override,
             unit_price_before_discount: unit_price_before_discount,
+            is_ready: true,
           };
         } catch (e) {
           console.warn("getComboProductPreview failed for product", id, e);
-          return {
-            variant_label: "",
-            variant_group_id: null,
-            variant_value_index: null,
-            variant_group_title: "",
-            variant_unit: "",
-            unit_id: null,
-            ingredients_display: [],
-            hasConfigurable: false,
-            unit_price_override: null,
-            unit_price_before_discount: null,
-          };
+          throw e;
         }
       })();
 
-      comboProductPreviewCache.set(id, promise);
-      setSharedComboProductPreview(previewSharedKey, promise);
-      return promise;
+      const guardedPromise = promise.catch((e) => {
+        comboProductPreviewCache.delete(id);
+        comboProductPreviewSharedCache.delete(previewSharedKey);
+        throw e;
+      });
+      comboProductPreviewCache.set(id, guardedPromise);
+      setSharedComboProductPreview(previewSharedKey, guardedPromise);
+      return guardedPromise;
     }
 
     function warmBlockPickerPreviews(block) {
@@ -6726,22 +6891,17 @@ optionGroups.forEach((group) => {
 
       const localWarmPromise = (async () => {
         const products = Array.isArray(safeBlock.products) ? safeBlock.products : [];
-        const previewEntries = await Promise.all(
-          products.map(async (prod) => {
-            const pid = Number(prod?.product_id || 0);
-            if (!Number.isFinite(pid) || pid <= 0) return null;
-            try {
-              const preview = await getComboProductPreview(pid);
-              return [pid, preview];
-            } catch {
-              return null;
-            }
-          })
+        const ids = products
+          .map((prod) => Number(prod?.product_id || 0))
+          .filter((pid) => Number.isFinite(pid) && pid > 0);
+        await preloadProductDetailsConfigBatch(ids).catch(() => {});
+        const previewEntries = await Promise.allSettled(
+          ids.map(async (pid) => [pid, await getComboProductPreview(pid)])
         );
         const previewMap = new Map();
         previewEntries.forEach((entry) => {
-          if (!entry) return;
-          previewMap.set(entry[0], entry[1]);
+          if (entry.status !== "fulfilled" || !entry.value) return;
+          previewMap.set(entry.value[0], entry.value[1]);
         });
         setSharedComboBlockPreviewResolved(blockCacheKey, previewMap);
         return previewMap;
@@ -6857,8 +7017,23 @@ optionGroups.forEach((group) => {
         if (!prod) return;
 
         const state = selectionStateByBlock[blockIndex] || {};
-        const variantLabel = str(state.variant_label || "").trim();
-        const ingredientsDisplay = Array.isArray(state.ingredients_display) ? state.ingredients_display : [];
+        let variantLabel = str(state.variant_label || "").trim();
+        let ingredientsDisplay = Array.isArray(state.ingredients_display) ? state.ingredients_display : [];
+        let variantGroupTitle = state.variant_group_title || "";
+        let variantUnit = state.variant_unit || "";
+        if (!variantLabel && !ingredientsDisplay.length) {
+          const payloadPreview = getComboPreviewFromProductPayload(prod);
+          if (payloadPreview && payloadPreview.is_available !== false) {
+            variantLabel = str(payloadPreview.variant_label || "").trim();
+            ingredientsDisplay = Array.isArray(payloadPreview.ingredients_display) ? payloadPreview.ingredients_display : [];
+            variantGroupTitle = payloadPreview.variant_group_title || "";
+            variantUnit = payloadPreview.variant_unit || "";
+            if (variantLabel || ingredientsDisplay.length) {
+              applyComboPreviewToBlockState(state, Number(prod.product_id || 0), payloadPreview);
+              selectionStateByBlock[blockIndex] = state;
+            }
+          }
+        }
         const displayPrice = state.unit_price_override != null && Number.isFinite(state.unit_price_override)
           ? Number(state.unit_price_override)
           : comboDiscountedPrice(prod.price, discountPercent);
@@ -6894,8 +7069,8 @@ optionGroups.forEach((group) => {
           const detailsWrap = document.createElement("div");
           detailsWrap.className = "cart-sub-container";
           renderComboDetailsLines(detailsWrap, variantLabel, ingredientsDisplay, {
-            variantGroupTitle: state.variant_group_title || "",
-            variantUnit: state.variant_unit || "",
+            variantGroupTitle,
+            variantUnit,
           });
           if (detailsWrap.childNodes.length) {
             mid.appendChild(detailsWrap);
@@ -7096,6 +7271,19 @@ optionGroups.forEach((group) => {
 
       const block = blocks[blockIndex];
       if (!block || !block.products || !block.products.length) return;
+      const isComboPickerProductAvailable = (prod) => {
+        const productId = Number(prod?.product_id || 0);
+        if (!Number.isFinite(productId) || productId <= 0) return false;
+        if (prod?.is_available === false || Number(prod?.is_available) === 0) return false;
+        const cachedProduct = state.productCache instanceof Map ? state.productCache.get(productId) : null;
+        if (cachedProduct && !isProductAvailable(cachedProduct)) return false;
+        const stockEntry = typeof getStockLevelEntry === "function" ? getStockLevelEntry(productId) : null;
+        if (stockEntry) {
+          if (stockEntry.isAvailable !== undefined && stockEntry.isAvailable !== null && !stockEntry.isAvailable) return false;
+          if (stockEntry.qty !== undefined && stockEntry.qty !== null && !stockEntry.isUnlimited && Number(stockEntry.qty) <= 0) return false;
+        }
+        return true;
+      };
       const shouldForceDefaultStateInPicker = isStaticComboView && !seedComboItem;
       if (
         shouldForceDefaultStateInPicker &&
@@ -7146,23 +7334,24 @@ optionGroups.forEach((group) => {
       }
       container.__shopRenderedComboMain = false;
       const blockPreviewWarmKey = getComboBlockPreviewCacheKey(block, discountPercent);
+      const initialResolvedPreviewMapForBlock = getSharedComboBlockPreviewResolved(blockPreviewWarmKey);
       const prewarmedBlockPromise = getSharedComboBlockPreviewWarm(blockPreviewWarmKey);
-      const prefetchComboPickerBlockConfig = (products) => {
-        const ids = new Set();
-        (Array.isArray(products) ? products : []).forEach((prod) => {
-          const pid = Number(prod?.product_id || 0);
-          if (Number.isFinite(pid) && pid > 0) ids.add(pid);
-        });
-        ids.forEach((pid) => {
-          resolveProductVariants(pid).catch(() => {});
-          resolveProductIngredients(pid).catch(() => {});
-        });
-      };
-      prefetchComboPickerBlockConfig(block.products);
-      if (prewarmedBlockPromise && typeof prewarmedBlockPromise.then === "function") {
-        prewarmedBlockPromise.catch(() => {});
-      } else {
-        warmBlockPickerPreviews(block).catch(() => {});
+      if (!(initialResolvedPreviewMapForBlock instanceof Map)) {
+        const previewLoadTask =
+          prewarmedBlockPromise && typeof prewarmedBlockPromise.then === "function"
+            ? prewarmedBlockPromise
+            : warmBlockPickerPreviews(block);
+        Promise.resolve(previewLoadTask).catch(() => {});
+        const previewLoadKey = Number(blockIndex);
+        if (!pickerBlockPreviewLoading.has(previewLoadKey)) {
+          pickerBlockPreviewLoading.add(previewLoadKey);
+          Promise.resolve(previewLoadTask)
+            .catch(() => {})
+            .finally(() => {
+              pickerBlockPreviewLoading.delete(previewLoadKey);
+              renderBlockPicker(blockIndex, scrollToRestore);
+            });
+        }
       }
 
       // Десктоп: кнопка «Назад» возвращает на шаг назад (в основное представление комбо), а не закрывает панель
@@ -7175,57 +7364,24 @@ optionGroups.forEach((group) => {
         syncDesktopComboPanelHeader(doStepBack);
       }
 
-      const resolvedPreviewMapForBlock = getSharedComboBlockPreviewResolved(blockPreviewWarmKey);
-      if (!(resolvedPreviewMapForBlock instanceof Map)) {
-        const previewLoadKey = Number(blockIndex);
-        const previewLoadTask =
-          prewarmedBlockPromise && typeof prewarmedBlockPromise.then === "function"
-            ? prewarmedBlockPromise
-            : warmBlockPickerPreviews(block);
-        if (!pickerBlockPreviewLoading.has(previewLoadKey)) {
-          pickerBlockPreviewLoading.add(previewLoadKey);
-          Promise.resolve(previewLoadTask)
-            .catch(() => {})
-            .finally(() => {
-              pickerBlockPreviewLoading.delete(previewLoadKey);
-              renderBlockPicker(blockIndex, scrollToRestore);
-            });
-        }
-
-        container.innerHTML = "";
-        const loadingViewWrap = document.createElement("div");
-        loadingViewWrap.className = "shop-combo-view";
-        const loadingWrap = document.createElement("div");
-        loadingWrap.className = "shop-combo-detail shop-combo-detail--picker shop-combo-detail-scroll";
-        const loadingState = document.createElement("div");
-        loadingState.className = "shop-combo-picker-empty";
-        loadingState.textContent = "Загрузка вариантов...";
-        loadingWrap.appendChild(loadingState);
-        loadingViewWrap.appendChild(loadingWrap);
-        container.appendChild(loadingViewWrap);
-        if (openCartSheetCtx) {
-          const doStepBack = () => {
-            renderMainView();
-            setSheetHeaderMode("product", {
-              onBack,
-              discountBadge: discountBadgeText,
-              favoriteBuildSnapshot: buildCurrentComboFavoriteSnapshot,
-            });
-            openCartSheetCtx.comboStepBack = null;
-            sheetNavigationState.screen = "combo";
-          };
-          openCartSheetCtx.comboStepBack = doStepBack;
-          setSheetHeaderMode("product", {
-            onBack: doStepBack,
-            discountBadge: discountBadgeText,
-            favoriteBuildSnapshot: buildCurrentComboFavoriteSnapshot,
-          });
-          sheetNavigationState.screen = "comboPicker";
-        }
-        return;
-      }
-
+      const resolvedPreviewMapForBlock = initialResolvedPreviewMapForBlock;
       const pickerStateKey = buildComboPickerStateKey(blockIndex);
+      const prewarmedPreviewMap = resolvedPreviewMapForBlock instanceof Map ? resolvedPreviewMapForBlock : new Map();
+      const getPickerProductPreview = (prod) => {
+        const productId = Number(prod?.product_id || 0);
+        if (!Number.isFinite(productId) || productId <= 0) return null;
+        return (prewarmedPreviewMap instanceof Map ? prewarmedPreviewMap.get(productId) : null)
+          || getComboPreviewFromProductPayload(prod);
+      };
+      const canRenderPickerProduct = (prod, idx) => {
+        if (!isComboPickerProductAvailable(prod)) return false;
+        const productId = Number(prod?.product_id || 0);
+        if (!Number.isFinite(productId) || productId <= 0) return false;
+        const preview = getPickerProductPreview(prod);
+        if (!preview || typeof preview !== "object") return false;
+        return preview.is_available !== false;
+      };
+      const hasLoadablePickerProducts = (block.products || []).some((prod) => isComboPickerProductAvailable(prod));
 
       container.innerHTML = "";
       const wrap = document.createElement("div");
@@ -7236,10 +7392,30 @@ optionGroups.forEach((group) => {
 
       let currentSelected = Number(selectedIndexByBlock[blockIndex]);
       if (!Number.isFinite(currentSelected)) {
-        const defaultIdx = (Array.isArray(block.products) ? block.products : []).findIndex((p) => Number(p?.is_default) === 1);
+        const defaultIdx = (Array.isArray(block.products) ? block.products : []).findIndex((p, idx) => Number(p?.is_default) === 1 && canRenderPickerProduct(p, idx));
         currentSelected = defaultIdx >= 0 ? defaultIdx : 0;
       }
       currentSelected = Math.max(0, Math.min(currentSelected, block.products.length - 1));
+      if (!canRenderPickerProduct(block.products[currentSelected], currentSelected)) {
+        const firstAvailableIdx = block.products.findIndex((p, idx) => canRenderPickerProduct(p, idx));
+        if (firstAvailableIdx < 0 && !hasLoadablePickerProducts) {
+          container.innerHTML = "";
+          const emptyViewWrap = document.createElement("div");
+          emptyViewWrap.className = "shop-combo-view";
+          const emptyWrap = document.createElement("div");
+          emptyWrap.className = "shop-combo-detail shop-combo-detail--picker shop-combo-detail-scroll";
+          const emptyState = document.createElement("div");
+          emptyState.className = "shop-combo-picker-empty";
+          emptyState.textContent = "Нет товаров в наличии";
+          emptyWrap.appendChild(emptyState);
+          emptyViewWrap.appendChild(emptyWrap);
+          container.appendChild(emptyViewWrap);
+          return;
+        }
+        if (firstAvailableIdx >= 0) {
+          currentSelected = firstAvailableIdx;
+        }
+      }
       selectedIndexByBlock[blockIndex] = currentSelected;
 
       const animateOpenPickerCardCollapse = () => {
@@ -7261,32 +7437,46 @@ optionGroups.forEach((group) => {
         return true;
       };
 
-      const prewarmedPreviewMap = getSharedComboBlockPreviewResolved(blockPreviewWarmKey);
       (block.products || []).forEach((prod, idx) => {
-        const isSelected = idx === currentSelected;
+        if (!isComboPickerProductAvailable(prod)) return;
         const pickerProductId = Number(prod.product_id || 0);
         const hasPickerProductId = Number.isFinite(pickerProductId) && pickerProductId > 0;
+        const pickerPreview = getPickerProductPreview(prod);
+        const isPreviewReady = pickerPreview && typeof pickerPreview === "object";
+        if (isPreviewReady && !canRenderPickerProduct(prod, idx)) return;
+        const isSelected = isPreviewReady && idx === currentSelected;
         const isPickerUnavailableNow = () => {
+          if (!isPreviewReady) return true;
           if (!hasPickerProductId) return false;
           if (idx === selectedIndexByBlock[blockIndex]) return false;
-          return !canUseComboBlockSelectionAtIndex(blockIndex, idx);
+          return !canUseComboBlockSelectionAtIndex(blockIndex, idx, { preview: pickerPreview });
         };
-        const pickerUnavailable = !isSelected && isPickerUnavailableNow();
+        const pickerUnavailable = false;
         if (pickerUnavailable) return;
         const state = isSelected ? (selectionStateByBlock[blockIndex] || {}) : {};
         const initialVariantLabel = str(state.variant_label || "").trim();
         const initialIngredientsDisplay = Array.isArray(state.ingredients_display) ? state.ingredients_display : [];
+        const previewRawPrice = isPreviewReady && pickerPreview.unit_price_before_discount != null && Number.isFinite(Number(pickerPreview.unit_price_before_discount))
+          ? Number(pickerPreview.unit_price_before_discount)
+          : null;
+        const previewDiscountedPrice = previewRawPrice != null
+          ? roundPrice(comboDiscountedPrice(previewRawPrice, discountPercent))
+          : null;
         const displayPrice = isSelected && state.unit_price_override != null && Number.isFinite(state.unit_price_override)
           ? Number(state.unit_price_override)
-          : comboDiscountedPrice(prod.price, discountPercent);
+          : (previewDiscountedPrice != null ? previewDiscountedPrice : comboDiscountedPrice(prod.price, discountPercent));
         const oldPrice = isSelected && state.unit_price_before_discount != null && Number.isFinite(state.unit_price_before_discount)
           ? Number(state.unit_price_before_discount)
-          : Number(prod.price) || 0;
+          : (previewRawPrice != null ? previewRawPrice : (Number(prod.price) || 0));
 
         const card = document.createElement("div");
         card.className = "cart-row shop-combo-picker-row";
         card.setAttribute("role", "button");
         card.tabIndex = 0;
+        if (!isPreviewReady) {
+          card.classList.add("is-loading");
+          card.setAttribute("aria-disabled", "true");
+        }
         if (isSelected) card.classList.add("is-selected");
 
         const img = createOptimizedImage(prod.product_photo || "/static/img/placeholder.png", {
@@ -7316,10 +7506,20 @@ optionGroups.forEach((group) => {
         const detailsWrap = document.createElement("div");
         detailsWrap.className = "cart-sub-container";
 
-        if (initialVariantLabel || initialIngredientsDisplay.length) {
+        if (!isPreviewReady) {
+          const loadingSub = document.createElement("div");
+          loadingSub.className = "cart-sub";
+          loadingSub.textContent = "Загрузка состава...";
+          detailsWrap.appendChild(loadingSub);
+        } else if (initialVariantLabel || initialIngredientsDisplay.length) {
           renderComboDetailsLines(detailsWrap, initialVariantLabel, initialIngredientsDisplay, {
             variantGroupTitle: state.variant_group_title || "",
             variantUnit: state.variant_unit || "",
+          });
+        } else if (pickerPreview && typeof pickerPreview === "object") {
+          renderComboDetailsLines(detailsWrap, str(pickerPreview.variant_label || "").trim(), Array.isArray(pickerPreview.ingredients_display) ? pickerPreview.ingredients_display : [], {
+            variantGroupTitle: pickerPreview.variant_group_title || "",
+            variantUnit: pickerPreview.variant_unit || "",
           });
         } else {
           renderComboFallbackDetailLines(detailsWrap, prod.product_description_short || "");
@@ -7351,10 +7551,13 @@ optionGroups.forEach((group) => {
         gearBtn.type = "button";
         gearBtn.className = "shop-combo-picker-gear" + (expandedPickerProductIndex === idx ? " is-open" : "");
         gearBtn.title = "Настройка состава и вариантов";
+        gearBtn.disabled = !isPreviewReady;
+        if (!isPreviewReady) gearBtn.style.opacity = "0.45";
         gearBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>`;
         gearBtn.addEventListener("click", async (e) => {
           e.stopPropagation();
           e.preventDefault();
+          if (!isPreviewReady) return;
           if (idx !== currentSelected && isPickerUnavailableNow()) {
             showToast("\u0411\u043e\u043b\u044c\u0448\u0435 \u043d\u0435\u0442 \u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438");
             return;
@@ -7413,10 +7616,15 @@ optionGroups.forEach((group) => {
         radio.className = "shop-combo-radio";
         radio.setAttribute("aria-hidden", "true");
         radio.title = expandedPickerProductIndex === idx ? "Сохранить и применить" : "";
+        if (!isPreviewReady) {
+          radio.style.opacity = "0.35";
+          radio.style.pointerEvents = "none";
+        }
         if (idx === currentSelected) radio.classList.add("is-selected");
         radio.addEventListener("click", async (e) => {
           e.preventDefault();
           e.stopPropagation();
+          if (!isPreviewReady) return;
           if (idx !== currentSelected && isPickerUnavailableNow()) {
             showToast("\u0411\u043e\u043b\u044c\u0448\u0435 \u043d\u0435\u0442 \u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438");
             return;
@@ -7458,6 +7666,7 @@ optionGroups.forEach((group) => {
 
         card.addEventListener("click", async (e) => {
           if (e.target.closest(".shop-combo-picker-gear") || e.target.closest(".shop-combo-radio")) return;
+          if (!isPreviewReady) return;
           if (idx !== currentSelected && isPickerUnavailableNow()) {
             showToast("\u0411\u043e\u043b\u044c\u0448\u0435 \u043d\u0435\u0442 \u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438");
             return;
@@ -7525,11 +7734,11 @@ optionGroups.forEach((group) => {
             selectedState.variant_unit = str(preview.variant_unit || "");
             selectedState.unit_id = preview.unit_id != null ? Number(preview.unit_id) : null;
             selectedState.ingredients_display = previewIngredientsDisplay.map((ing) => cloneComboDraftValue(ing));
-            if (preview.unit_price_override != null && Number.isFinite(preview.unit_price_override)) {
-              selectedState.unit_price_override = Number(preview.unit_price_override);
-            }
             if (preview.unit_price_before_discount != null && Number.isFinite(preview.unit_price_before_discount)) {
               selectedState.unit_price_before_discount = Number(preview.unit_price_before_discount);
+              selectedState.unit_price_override = roundPrice(comboDiscountedPrice(selectedState.unit_price_before_discount, discountPercent));
+            } else if (preview.unit_price_override != null && Number.isFinite(preview.unit_price_override)) {
+              selectedState.unit_price_override = Number(preview.unit_price_override);
             }
             selectionStateByBlock[blockIndex] = selectedState;
           }
@@ -7539,11 +7748,17 @@ optionGroups.forEach((group) => {
               variantGroupTitle: preview.variant_group_title || "",
               variantUnit: preview.variant_unit || "",
             });
-            if (preview.unit_price_override != null && Number.isFinite(preview.unit_price_override)) {
+            const previewOldVal = preview.unit_price_before_discount != null && Number.isFinite(Number(preview.unit_price_before_discount))
+              ? Number(preview.unit_price_before_discount)
+              : null;
+            const previewNewVal = previewOldVal != null
+              ? roundPrice(comboDiscountedPrice(previewOldVal, discountPercent))
+              : (preview.unit_price_override != null && Number.isFinite(Number(preview.unit_price_override)) ? Number(preview.unit_price_override) : null);
+            if (previewNewVal != null) {
               const newSpan = priceWrap.querySelector(".shop-combo-price");
-              if (newSpan) newSpan.textContent = moneyNoSign(preview.unit_price_override) + " ₽";
-              const oldVal = preview.unit_price_before_discount != null && Number.isFinite(preview.unit_price_before_discount) ? preview.unit_price_before_discount : 0;
-              if (oldVal > preview.unit_price_override) {
+              if (newSpan) newSpan.textContent = moneyNoSign(previewNewVal) + " ₽";
+              const oldVal = previewOldVal != null ? previewOldVal : 0;
+              if (oldVal > previewNewVal) {
                 let oldSpan = priceWrap.querySelector(".shop-combo-old");
                 if (!oldSpan) {
                   oldSpan = document.createElement("span");
@@ -7574,21 +7789,13 @@ optionGroups.forEach((group) => {
             !initialVariantLabel &&
             !initialIngredientsDisplay.length &&
             !previewHasRenderableDetails(prewarmedPreview);
-          if (needsFreshPreview) {
+          if (needsFreshPreview && resolvedPreviewMapForBlock instanceof Map) {
             getComboProductPreview(prod.product_id)
               .then((preview) => {
                 applyPreviewToCard(preview);
               })
               .catch(() => {});
           }
-        } else {
-          // Универсальная подгрузка превью: и для состава (у невыбранных, если нет state),
-          // и для решения, показывать ли шестерёнку.
-          getComboProductPreview(prod.product_id)
-            .then((preview) => {
-              applyPreviewToCard(preview);
-            })
-            .catch(() => {});
         }
 
         listWrap.appendChild(card);

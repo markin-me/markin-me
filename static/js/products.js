@@ -70,6 +70,10 @@
     return out;
   }
 
+  function normalizeProductValueSource(value) {
+    return String(value || "").trim() === "auto" ? "auto" : "manual";
+  }
+
   const PRODUCTS_TOOLBAR_FILTERS_STORAGE_KEY = "products:toolbar-filters:v1";
   const PRODUCTS_TOOLBAR_MODE_KEYS = Object.freeze(["products", "options", "variants"]);
   const PRODUCTS_TOOLBAR_SEARCH_DEBOUNCE_MS = 220;
@@ -896,6 +900,7 @@
       product: cached.product && typeof cached.product === "object" ? cached.product : null,
       categories: Array.isArray(cached.categories) ? cached.categories : [],
       optionAssignments: Array.isArray(cached.optionAssignments) ? cached.optionAssignments : [],
+      ingredients: Array.isArray(cached.ingredients) ? cached.ingredients : null,
     };
   }
 
@@ -905,10 +910,12 @@
     }
     const id = Number(productId || 0);
     if (!(id > 0)) return;
+    const existing = state.productDetailsCache.get(id) || {};
     state.productDetailsCache.set(id, {
-      product: payload?.product && typeof payload.product === "object" ? payload.product : null,
-      categories: Array.isArray(payload?.categories) ? payload.categories : [],
-      optionAssignments: Array.isArray(payload?.optionAssignments) ? payload.optionAssignments : [],
+      product: payload?.product && typeof payload.product === "object" ? payload.product : (existing.product || null),
+      categories: Array.isArray(payload?.categories) ? payload.categories : (Array.isArray(existing.categories) ? existing.categories : []),
+      optionAssignments: Array.isArray(payload?.optionAssignments) ? payload.optionAssignments : (Array.isArray(existing.optionAssignments) ? existing.optionAssignments : []),
+      ingredients: Array.isArray(payload?.ingredients) ? payload.ingredients : (Array.isArray(existing.ingredients) ? existing.ingredients : null),
       ts: Date.now(),
     });
   }
@@ -1419,12 +1426,30 @@
     return api(`/api/admin/products/${productId}/generate-composition`, { method: "POST" });
   }
 
+  async function apiGetProductDependentRecalcPreview(productId) {
+    return api(`/api/admin/products/${productId}/dependent-recalc-preview`);
+  }
+
   async function apiGetProduct(id) {
     return api(`/api/prod_products/${id}`);
   }
 
   async function apiPatchProductRecalc(id, payload) {
     return api(`/api/prod_products/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
+  }
+
+  async function apiRecalculateProductDependents(payload) {
+    return api("/api/admin/products/recalculate-dependents", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async function apiGetProductDependentRecalcValues(productIds) {
+    return api("/api/admin/products/dependent-recalc-values", {
+      method: "POST",
+      body: JSON.stringify({ product_ids: productIds }),
+    });
   }
 
   async function apiAddProductIngredient(productId, payload) {
@@ -4657,6 +4682,21 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     return n.toFixed(places).replace(/\.?0+$/, "").replace(".", ",");
   }
 
+  function calcPriceFromMargin(cost, marginPercent) {
+    const costNum = Number(cost);
+    const marginNum = Number(marginPercent);
+    if (!Number.isFinite(costNum) || costNum < 0) return null;
+    if (!Number.isFinite(marginNum) || marginNum >= 100) return null;
+    return Math.round((costNum / (1 - marginNum / 100)) * 100) / 100;
+  }
+
+  function calcMarginFromPrice(cost, price) {
+    const costNum = Number(cost);
+    const priceNum = Number(price);
+    if (!Number.isFinite(costNum) || !Number.isFinite(priceNum) || costNum < 0 || priceNum <= 0) return null;
+    return Math.round((((priceNum - costNum) / priceNum) * 100) * 100) / 100;
+  }
+
   function normalizeLimitedDecimalInput(value, decimals = 2) {
     const places = Math.max(0, Number(decimals) || 0);
     let raw = String(value || "").replace(/\./g, ",").replace(/[^\d,]/g, "");
@@ -6382,8 +6422,10 @@ function openAutoAddGroupModal({ mode, group } = {}) {
       return;
     }
     try {
-      const res = await apiGetProductIngredients(productId);
-      const list = Array.isArray(res.data) ? res.data : [];
+      const list = await ensureProductIngredientsCached(
+        productId,
+        state.products.find((p) => Number(p.id) === Number(productId)) || getCachedProductDetails(productId)?.product || null
+      );
       if (!list.length) {
         productIngredientsAccordion.innerHTML = `<div class="empty-hint">Состав не задан...</div>`;
         return;
@@ -12163,6 +12205,7 @@ const isViewMode = state.comboPanel.mode === "view";
         product: p,
         categories: state.selectedProductCategories,
         optionAssignments: state.selectedProductOptionAssignments,
+        ingredients: cachedDetails.ingredients,
       });
       schedulePersistProductsCache();
       return;
@@ -12176,6 +12219,7 @@ const isViewMode = state.comboPanel.mode === "view";
       product: p,
       categories: state.selectedProductCategories,
       optionAssignments: state.selectedProductOptionAssignments,
+      ingredients: cachedDetails?.ingredients || null,
     });
     schedulePersistProductsCache();
     })().finally(() => {
@@ -12234,6 +12278,680 @@ const isViewMode = state.comboPanel.mode === "view";
       await openProductById(activeProductId, { forceReload: true });
     }
     return parentIds;
+  }
+
+  let productDependentRecalcEscHandler = null;
+  const productIngredientsLoadPromises = new Map();
+
+  async function ensureProductIngredientsCached(productId, productHint = null) {
+    const id = Number(productId || 0);
+    if (!Number.isFinite(id) || id <= 0) return [];
+    const cached = getCachedProductDetails(id);
+    if (Array.isArray(cached?.ingredients)) return cached.ingredients;
+    if (productIngredientsLoadPromises.has(id)) return productIngredientsLoadPromises.get(id);
+    const promise = apiGetProductIngredients(id)
+      .then((res) => {
+        const list = Array.isArray(res?.data) ? res.data : [];
+        setCachedProductDetails(id, {
+          product: productHint || cached?.product || state.products.find((p) => Number(p.id) === id) || null,
+          ingredients: list,
+        });
+        return list;
+      })
+      .finally(() => {
+        productIngredientsLoadPromises.delete(id);
+      });
+    productIngredientsLoadPromises.set(id, promise);
+    return promise;
+  }
+
+  function closeProductDependentRecalcModal() {
+    document.querySelectorAll(".product-photo-grid-modal-overlay[data-product-dependent-recalc-modal='1']").forEach((el) => el.remove());
+    if (productDependentRecalcEscHandler) {
+      document.removeEventListener("keydown", productDependentRecalcEscHandler);
+      productDependentRecalcEscHandler = null;
+    }
+  }
+
+  function formatRecalcValue(value, suffix = "") {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return "—";
+    return `${formatNumberForInputFixed(n, 2)}${suffix}`;
+  }
+
+  function calcCachedProductCompositionTotals(product, ingredients) {
+    if (!product || !Array.isArray(ingredients) || !ingredients.length) return null;
+    const pcsUnitId = state.units.find((u) => u.code === "pcs")?.id || null;
+    const recipeBaseUnitId = Number(product.base_unit_id || product.unit_id || 0);
+    const variant = product.default_variant || null;
+    const variantQty = variant?.default_value != null ? Number(variant.default_value) : null;
+    const normQty = Number(product.base_qty || 0);
+    let measureUnitId = recipeBaseUnitId;
+    let targetQty = normQty > 0 ? normQty : null;
+    if (targetQty == null && Number.isFinite(variantQty) && variantQty > 0) {
+      targetQty = variantQty;
+      measureUnitId = Number(variant.unit_id || 0);
+    }
+    if (targetQty != null && pcsUnitId && Number(measureUnitId) === Number(pcsUnitId) && product.product_pcs_factor != null && product.product_pcs_base_unit_id) {
+      measureUnitId = Number(product.product_pcs_base_unit_id);
+      targetQty *= Number(product.product_pcs_factor);
+    }
+    let cost = 0;
+    let price = 0;
+    let weight = 0;
+    let hasCost = false;
+    let hasPrice = false;
+    let hasWeight = false;
+    const lines = [];
+    ingredients.forEach((ing) => {
+      const baseUnitId = ing.ingredient_base_unit_id || ing.ingredient_unit_id || ing.unit_id;
+      const fromUnitId = Number(ing.unit_id || 0);
+      const qty = Number(ing.quantity || 0);
+      let qtyInBase = null;
+      if (baseUnitId && fromUnitId) {
+        if (Number(fromUnitId) === Number(baseUnitId)) {
+          qtyInBase = qty;
+        } else if (pcsUnitId && Number(fromUnitId) === Number(pcsUnitId)) {
+          if (Number(baseUnitId) === Number(pcsUnitId)) qtyInBase = qty;
+          else if (ing.ingredient_pcs_factor != null) qtyInBase = qty * Number(ing.ingredient_pcs_factor);
+        } else if (!(pcsUnitId && Number(baseUnitId) === Number(pcsUnitId))) {
+          const factor = getConversionFactor(fromUnitId, baseUnitId);
+          if (factor != null) qtyInBase = qty * factor;
+        }
+      }
+      let qtyInMeasureUnit = null;
+      if (measureUnitId && fromUnitId) {
+        if (Number(fromUnitId) === Number(measureUnitId)) {
+          qtyInMeasureUnit = qty;
+        } else if (pcsUnitId && Number(fromUnitId) === Number(pcsUnitId) && ing.ingredient_pcs_factor != null) {
+          qtyInMeasureUnit = qty * Number(ing.ingredient_pcs_factor);
+        } else {
+          const factor = getConversionFactor(fromUnitId, measureUnitId);
+          if (factor != null) qtyInMeasureUnit = qty * factor;
+        }
+      }
+      if (qtyInMeasureUnit != null) {
+        weight += qtyInMeasureUnit;
+        hasWeight = true;
+      }
+      if (qtyInBase == null) return;
+      const baseQty = ing.ingredient_base_qty != null ? Number(ing.ingredient_base_qty) : 1;
+      const costBase = baseQty > 0 ? Number(ing.ingredient_cost_price || 0) / baseQty : Number(ing.ingredient_cost_price || 0);
+      const catalogPriceBase = baseQty > 0 ? Number(ing.ingredient_price || 0) / baseQty : Number(ing.ingredient_price || 0);
+      const priceBase = ing.price_override != null ? Number(ing.price_override) : catalogPriceBase;
+      const lineCost = costBase * qtyInBase;
+      const linePrice = priceBase * qtyInBase;
+      cost += lineCost;
+      price += linePrice;
+      hasCost = true;
+      hasPrice = true;
+      lines.push({
+        name: ing.ingredient_name || "",
+        quantity: qty,
+        unit: ing.unit_short_title || ing.unit_title || ing.unit_code || "",
+        cost: Math.round(lineCost * 100) / 100,
+        price: Math.round(linePrice * 100) / 100,
+      });
+    });
+    const scale = hasWeight && weight > 0 && targetQty > 0 ? targetQty / weight : 1;
+    const costPrice = hasCost ? Math.round(cost * scale * 100) / 100 : null;
+    const salePrice = hasPrice ? Math.round(price * scale * 100) / 100 : null;
+    return {
+      cost_price: costPrice,
+      price: salePrice,
+      margin_percent: calcMarginFromPrice(costPrice, salePrice),
+      base_qty: hasWeight ? Math.round(weight * scale * 1000) / 1000 : null,
+      scale,
+      breakdown: lines.map((line) => ({
+        ...line,
+        cost: Math.round(line.cost * scale * 100) / 100,
+        price: Math.round(line.price * scale * 100) / 100,
+      })),
+    };
+  }
+
+  function valuesDifferentForRecalc(a, b, precision = 0.001) {
+    const an = Number(a);
+    const bn = Number(b);
+    const aEmpty = a == null || a === "";
+    const bEmpty = b == null || b === "";
+    if (aEmpty && bEmpty) return false;
+    if (Number.isFinite(an) || Number.isFinite(bn)) {
+      if (!Number.isFinite(an) || !Number.isFinite(bn)) return true;
+      return Math.abs(an - bn) > precision;
+    }
+    return String(a ?? "").trim() !== String(b ?? "").trim();
+  }
+
+  function normalizeIngredientForRecalcCompare(ing) {
+    return {
+      ingredient_id: Number(ing?.ingredient_id || 0),
+      quantity: Number(ing?.quantity || 0),
+      unit_id: Number(ing?.unit_id || ing?.ingredient_unit_id || 0),
+      is_variable: ing?.is_variable ? 1 : 0,
+      quantity_min: ing?.is_variable ? (ing.quantity_min != null ? Number(ing.quantity_min) : null) : null,
+      quantity_max: ing?.is_variable ? (ing.quantity_max != null ? Number(ing.quantity_max) : null) : null,
+      quantity_step: ing?.is_variable ? (ing.quantity_step != null ? Number(ing.quantity_step) : null) : null,
+      price_override: ing?.price_override != null ? Number(ing.price_override) : null,
+      sort_order: Number(ing?.sort_order || 0),
+    };
+  }
+
+  function ingredientsChangedForRecalc(initialSnapshot, currentDraft) {
+    const initial = initialSnapshot instanceof Map ? initialSnapshot : new Map();
+    const current = currentDraft instanceof Map ? currentDraft : new Map();
+    if (initial.size !== current.size) return true;
+    for (const [ingredientId, ing] of current.entries()) {
+      const snapshot = initial.get(ingredientId);
+      if (!snapshot) return true;
+      if (JSON.stringify(normalizeIngredientForRecalcCompare(ing)) !== JSON.stringify(normalizeIngredientForRecalcCompare(snapshot))) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function buildProductDependentRecalcChanges(product, payload, initialSnapshot, currentDraft) {
+    if (!product || !payload) return null;
+    const ingredientsChanged = ingredientsChangedForRecalc(initialSnapshot, currentDraft);
+    const nameChanged = String(product.name || "").trim() !== String(payload.name || "").trim();
+    const clientCompositionChanged = String(product.client_composition || "").trim() !== String(payload.client_composition || "").trim();
+    const unitChanged = valuesDifferentForRecalc(product.base_unit_id ?? product.unit_id, payload.base_unit_id ?? payload.unit_id, 0);
+    const baseQtyChanged = valuesDifferentForRecalc(product.base_qty, payload.base_qty);
+    const nutritionChanged = ["nutrition_protein_100g", "nutrition_fat_100g", "nutrition_carbs_100g"]
+      .some((field) => valuesDifferentForRecalc(product[field], payload[field]));
+    const costChanged = valuesDifferentForRecalc(product.cost_price, payload.cost_price)
+      || normalizeProductValueSource(product.cost_price_source) !== normalizeProductValueSource(payload.cost_price_source);
+    const priceChanged = valuesDifferentForRecalc(product.price, payload.price)
+      || normalizeProductValueSource(product.price_source) !== normalizeProductValueSource(payload.price_source);
+    const baseAffectsComposition = ingredientsChanged || unitChanged || baseQtyChanged;
+    const fields = {
+      nutrition: nutritionChanged || baseAffectsComposition,
+      composition: ingredientsChanged || nameChanged || clientCompositionChanged || unitChanged,
+      cost_price: costChanged || baseAffectsComposition,
+      price: priceChanged || baseAffectsComposition,
+    };
+    const labels = [];
+    if (fields.nutrition) labels.push("КБЖУ");
+    if (fields.composition) labels.push("состав");
+    if (fields.cost_price) labels.push("себестоимость");
+    if (fields.price) labels.push("цена");
+    return { fields, labels, hasChanges: labels.length > 0 };
+  }
+
+  function getRecalcUnitLabel(item) {
+    return item?.unit_short_title || item?.unit_title || item?.unit_code || "";
+  }
+
+  function getRecalcVariantLabel(item) {
+    const variant = item?.default_variant;
+    if (!variant || variant.default_value == null) return "";
+    const unit = variant.unit_short_title || variant.unit_title || variant.unit_code || "";
+    const value = formatQuantity(variant.default_value);
+    const title = String(variant.title || "").trim();
+    return `${title ? `${title}: ` : ""}${value}${unit ? ` ${unit}` : ""}`;
+  }
+
+  function getRecalcBasisLabels(item) {
+    const unit = getRecalcUnitLabel(item);
+    const normQty = Number(item?.base_qty || 0);
+    const labels = [];
+    if (normQty > 0) labels.push(`Норма: ${formatQuantity(normQty)}${unit ? ` ${unit}` : ""}`);
+    const variantLabel = getRecalcVariantLabel(item);
+    if (variantLabel) labels.push(`Вариант по умолчанию: ${variantLabel}`);
+    if (normQty > 0 && variantLabel) labels.push("Считаем по норме");
+    return labels;
+  }
+
+  function renderRecalcBreakdown(calculated) {
+    const lines = Array.isArray(calculated?.breakdown) ? calculated.breakdown.slice(0, 4) : [];
+    if (!lines.length) return "";
+    return lines.map((line) => {
+      const unit = line.unit ? ` ${line.unit}` : "";
+      return `${line.name || "Ингредиент"}: ${formatQuantity(line.quantity)}${unit} = себест. ${formatRecalcValue(line.cost, " ₽")}, цена ${formatRecalcValue(line.price, " ₽")}`;
+    }).join("\n");
+  }
+
+  function openProductDependentRecalcModal(items) {
+    const list = (Array.isArray(items) ? items : [])
+      .filter((item) => Number(item?.product_id) > 0)
+      .sort((a, b) => Number(a.depth || 0) - Number(b.depth || 0));
+    if (!list.length) return;
+    closeProductDependentRecalcModal();
+    const overlay = document.createElement("div");
+    overlay.className = "product-photo-grid-modal-overlay";
+    overlay.setAttribute("data-product-dependent-recalc-modal", "1");
+    const card = document.createElement("div");
+    card.className = "product-photo-grid-modal-card product-recalc-modal-card";
+    const fieldDefs = [
+      { key: "nutrition", label: "КБЖУ", defaultOn: (item) => item.changed_fields ? Boolean(item.changed_fields.nutrition) : true },
+      { key: "composition", label: "Состав", defaultOn: (item) => item.changed_fields ? Boolean(item.changed_fields.composition) : true },
+      { key: "cost_price", label: "Себест.", defaultOn: (item) => item.changed_fields ? Boolean(item.changed_fields.cost_price) && normalizeProductValueSource(item?.sources?.cost_price) === "auto" : normalizeProductValueSource(item?.sources?.cost_price) === "auto" },
+      { key: "price", label: "Цена", defaultOn: (item) => item.changed_fields ? Boolean(item.changed_fields.price) && normalizeProductValueSource(item?.sources?.price) === "auto" : normalizeProductValueSource(item?.sources?.price) === "auto" },
+    ];
+    card.innerHTML = `
+      <div class="product-photo-grid-modal-head">
+        <div class="product-photo-grid-modal-title">Пересчитать связанные товары</div>
+        <button type="button" class="product-photo-grid-modal-close" aria-label="Закрыть"><i class="fas fa-times"></i></button>
+      </div>
+      <div class="product-photo-grid-modal-body">
+        <div class="product-recalc-modal-list">
+          ${list.map((item, index) => {
+            const path = Array.isArray(item.paths) && item.paths.length
+              ? item.paths[0].join(" > ")
+              : String(item.name || "");
+            const sources = item.sources || {};
+            const isAuto = normalizeProductValueSource(sources.cost_price) === "auto" && normalizeProductValueSource(sources.price) === "auto";
+            const photo = item.photo || "";
+            const reasonText = Array.isArray(item.change_labels) && item.change_labels.length
+              ? `Изменилось: ${item.change_labels.join(", ")}`
+              : "";
+            const basisLabels = getRecalcBasisLabels(item);
+            return `
+              <div class="product-recalc-modal-row" data-recalc-index="${index}">
+                <div class="product-recalc-modal-main">
+                  <div class="product-recalc-modal-left">
+                    <label class="product-recalc-modal-row-head">
+                      <input type="checkbox" data-role="row-check" checked>
+                      <span class="product-recalc-modal-photo">${photo ? `<img src="${escapeHtml(photo)}" alt="" />` : ""}</span>
+                      <span>
+                        <strong>${escapeHtml(item.name || "Товар")}</strong>
+                        <small>${escapeHtml(path)}</small>
+                        ${basisLabels.map((label) => `<em class="product-recalc-modal-basis">${escapeHtml(label)}</em>`).join("")}
+                        ${reasonText ? `<em class="product-recalc-modal-reasons">${escapeHtml(reasonText)}</em>` : ""}
+                      </span>
+                    </label>
+                    <div class="product-recalc-modal-fields">
+                      ${fieldDefs.map((field) => {
+                        const checked = field.defaultOn(item) ? " checked" : "";
+                        const source = sources[field.key];
+                        const badge = source === "manual" && ["cost_price", "price"].includes(field.key)
+                          ? `<span class="product-recalc-modal-badge">ручное</span>`
+                          : "";
+                        return `<label class="product-recalc-modal-field"><input type="checkbox" data-role="field-check" data-field="${field.key}"${checked}>${escapeHtml(field.label)}${badge}</label>`;
+                      }).join("")}
+                    </div>
+                  </div>
+                  <div class="product-nutrition-card product-price-card product-recalc-price-card ${isAuto ? "is-auto" : ""}">
+                    <div class="product-nutrition-head">
+                      <div>
+                        <div class="product-nutrition-title">Цена</div>
+                        <div class="product-nutrition-subtitle" data-role="price-source-hint">${isAuto ? "Считается из состава" : "Ручной ввод"}</div>
+                      </div>
+                      <div class="product-price-source-toggle">
+                        <button class="product-price-source-btn ${isAuto ? "is-active" : ""}" type="button" data-role="source-auto">Из состава</button>
+                        <button class="product-price-source-btn ${!isAuto ? "is-active" : ""}" type="button" data-role="source-manual">Ручное</button>
+                      </div>
+                    </div>
+                    <div class="product-price-grid">
+                      <div class="field-wrap product-nutrition-field product-price-field">
+                        <label class="field-label">Себест.</label>
+                        <input class="control" data-role="cost-input" type="text" inputmode="decimal" autocomplete="off" />
+                        <small data-role="cost-preview">Себест.: ${escapeHtml(formatRecalcValue(item.current?.cost_price, " ₽"))} → считается...</small>
+                      </div>
+                      <div class="field-wrap product-nutrition-field product-price-field">
+                        <label class="field-label">Маржа %</label>
+                        <input class="control" data-role="margin-input" type="text" inputmode="decimal" autocomplete="off" />
+                        <small data-role="margin-preview">Маржа: ${escapeHtml(formatRecalcValue(item.current?.margin_percent, "%"))} → считается...</small>
+                      </div>
+                      <div class="field-wrap product-nutrition-field product-price-field">
+                        <label class="field-label">Цена</label>
+                        <input class="control" data-role="price-input" type="text" inputmode="decimal" autocomplete="off" />
+                        <small data-role="price-preview">Цена: ${escapeHtml(formatRecalcValue(item.current?.price, " ₽"))} → считается...</small>
+                      </div>
+                    </div>
+                    <div class="product-recalc-modal-breakdown" data-role="breakdown"></div>
+                  </div>
+                </div>
+              </div>
+            `;
+          }).join("")}
+        </div>
+      </div>
+      <div class="product-photo-grid-modal-foot">
+        <button type="button" class="btn" data-role="close">Закрыть</button>
+        <button type="button" class="btn btn-primary" data-role="confirm">Пересчитать</button>
+      </div>
+    `;
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+    list.forEach((item) => {
+      const productId = Number(item.product_id);
+      if (!Number.isFinite(productId) || productId <= 0) return;
+      const cached = getCachedProductDetails(productId);
+      setCachedProductDetails(productId, {
+        product: {
+          ...(cached?.product || {}),
+          id: productId,
+          name: item.name || cached?.product?.name || "",
+          base_qty: item.base_qty ?? cached?.product?.base_qty,
+          base_unit_id: item.base_unit_id ?? cached?.product?.base_unit_id,
+          unit_id: item.unit_id ?? cached?.product?.unit_id,
+          default_variant: item.default_variant ?? cached?.product?.default_variant,
+          product_pcs_factor: item.product_pcs_factor ?? cached?.product?.product_pcs_factor,
+          product_pcs_base_unit_id: item.product_pcs_base_unit_id ?? cached?.product?.product_pcs_base_unit_id,
+          price: item.current?.price ?? cached?.product?.price,
+          cost_price: item.current?.cost_price ?? cached?.product?.cost_price,
+          margin_percent: item.current?.margin_percent ?? cached?.product?.margin_percent,
+          price_source: item.sources?.price ?? cached?.product?.price_source,
+          cost_price_source: item.sources?.cost_price ?? cached?.product?.cost_price_source,
+        },
+      });
+    });
+    const roundMoney = (value) => {
+      const n = Number(value);
+      return Number.isFinite(n) ? Math.round(n * 100) / 100 : null;
+    };
+    const virtualValues = new Map();
+    const getRowByIndex = (index) => card.querySelector(`.product-recalc-modal-row[data-recalc-index="${index}"]`);
+    const getIngredientsForItem = (item) => {
+      const cached = getCachedProductDetails(item?.product_id);
+      return Array.isArray(cached?.ingredients) ? cached.ingredients : [];
+    };
+    const calcItemFromComposition = (item) => {
+      const ingredients = getIngredientsForItem(item);
+      if (!ingredients.length) return item.calculated || {};
+      const cached = getCachedProductDetails(item?.product_id);
+      const productForCalc = {
+        ...(cached?.product || {}),
+        id: item.product_id,
+        base_qty: item.base_qty ?? cached?.product?.base_qty,
+        base_unit_id: item.base_unit_id ?? cached?.product?.base_unit_id,
+        unit_id: item.unit_id ?? cached?.product?.unit_id,
+        default_variant: item.default_variant ?? cached?.product?.default_variant,
+        product_pcs_factor: item.product_pcs_factor ?? cached?.product?.product_pcs_factor,
+        product_pcs_base_unit_id: item.product_pcs_base_unit_id ?? cached?.product?.product_pcs_base_unit_id,
+      };
+      const patched = ingredients.map((ing) => {
+        const next = { ...ing };
+        const virtual = virtualValues.get(Number(next.ingredient_id));
+        if (virtual) {
+          next.ingredient_cost_price = virtual.cost_price ?? next.ingredient_cost_price;
+          next.ingredient_price = virtual.price ?? next.ingredient_price;
+          next.margin_percent = virtual.margin_percent ?? next.margin_percent;
+        }
+        return next;
+      });
+      return calcCachedProductCompositionTotals(productForCalc, patched) || item.calculated || {};
+    };
+    const setItemSourceMode = (item, mode) => {
+      const source = mode === "auto" ? "auto" : "manual";
+      item.sources = item.sources || {};
+      item.sources.cost_price = source;
+      item.sources.price = source;
+    };
+    const syncRowSourceMode = (row, item) => {
+      const isAuto = normalizeProductValueSource(item?.sources?.cost_price) === "auto" && normalizeProductValueSource(item?.sources?.price) === "auto";
+      row.querySelector(".product-recalc-price-card")?.classList.toggle("is-auto", isAuto);
+      row.querySelector('[data-role="source-auto"]')?.classList.toggle("is-active", isAuto);
+      row.querySelector('[data-role="source-manual"]')?.classList.toggle("is-active", !isAuto);
+      const hint = row.querySelector('[data-role="price-source-hint"]');
+      if (hint) hint.textContent = isAuto ? "Считается из состава" : "Ручной ввод";
+      row.querySelectorAll('[data-role="cost-input"],[data-role="margin-input"],[data-role="price-input"]').forEach((input) => {
+        input.readOnly = isAuto;
+      });
+    };
+    const renderCalculatedValues = () => {
+      card.querySelectorAll(".product-recalc-modal-row").forEach((row) => {
+        const index = Number(row.getAttribute("data-recalc-index"));
+        const item = list[index];
+        if (!item) return;
+        const calculated = item.calculated || {};
+        const cost = roundMoney(calculated.cost_price);
+        const price = roundMoney(calculated.price);
+        const margin = calculated.margin_percent != null ? roundMoney(calculated.margin_percent) : calcMarginFromPrice(cost, price);
+        const costEl = row.querySelector('[data-role="cost-preview"]');
+        const priceEl = row.querySelector('[data-role="price-preview"]');
+        const marginEl = row.querySelector('[data-role="margin-preview"]');
+        const costInput = row.querySelector('[data-role="cost-input"]');
+        const priceInput = row.querySelector('[data-role="price-input"]');
+        const marginInput = row.querySelector('[data-role="margin-input"]');
+        const breakdownEl = row.querySelector('[data-role="breakdown"]');
+        if (costInput) costInput.value = cost != null ? formatNumberForInputFixed(cost, 2) : "";
+        if (priceInput) priceInput.value = price != null ? formatNumberForInputFixed(price, 2) : "";
+        if (marginInput) marginInput.value = margin != null ? formatNumberForInputFixed(margin, 2) : "";
+        if (costEl) {
+          costEl.textContent = `Себест.: ${formatRecalcValue(item.current?.cost_price, " ₽")} → ${formatRecalcValue(cost, " ₽")}`;
+        }
+        if (priceEl) {
+          priceEl.textContent = `Цена: ${formatRecalcValue(item.current?.price, " ₽")} → ${formatRecalcValue(price, " ₽")}`;
+        }
+        if (marginEl) marginEl.textContent = `Маржа: ${formatRecalcValue(item.current?.margin_percent, "%")} → ${formatRecalcValue(margin, "%")}`;
+        if (breakdownEl) breakdownEl.textContent = renderRecalcBreakdown(calculated);
+        syncRowSourceMode(row, item);
+      });
+    };
+    const recalcModalCascade = () => {
+      virtualValues.clear();
+      list.forEach((item, index) => {
+        const row = getRowByIndex(index);
+        const isAuto = normalizeProductValueSource(item?.sources?.cost_price) === "auto" && normalizeProductValueSource(item?.sources?.price) === "auto";
+        if (isAuto) {
+          item.calculated = calcItemFromComposition(item);
+        } else if (row) {
+          item.calculated = {
+            ...(item.calculated || {}),
+            cost_price: parseNumberFromInput(row.querySelector('[data-role="cost-input"]')?.value),
+            price: parseNumberFromInput(row.querySelector('[data-role="price-input"]')?.value),
+            margin_percent: parseNumberFromInput(row.querySelector('[data-role="margin-input"]')?.value),
+          };
+        }
+        virtualValues.set(Number(item.product_id), item.calculated || {});
+      });
+      renderCalculatedValues();
+    };
+    (async () => {
+      try {
+        const missingIds = [];
+        list.forEach((item) => {
+          const productId = Number(item.product_id);
+          const cached = getCachedProductDetails(productId);
+          const totals = calcCachedProductCompositionTotals(
+            {
+              ...(cached?.product || {}),
+              id: productId,
+              base_qty: item.base_qty ?? cached?.product?.base_qty,
+              base_unit_id: item.base_unit_id ?? cached?.product?.base_unit_id,
+              unit_id: item.unit_id ?? cached?.product?.unit_id,
+              default_variant: item.default_variant ?? cached?.product?.default_variant,
+              product_pcs_factor: item.product_pcs_factor ?? cached?.product?.product_pcs_factor,
+              product_pcs_base_unit_id: item.product_pcs_base_unit_id ?? cached?.product?.product_pcs_base_unit_id,
+            },
+            cached?.ingredients
+          );
+          if (totals) {
+            item.calculated = totals;
+          } else if (Number.isFinite(productId) && productId > 0) {
+            missingIds.push(productId);
+          }
+        });
+        for (const productId of missingIds.slice()) {
+          try {
+            const ingredientRes = await apiGetProductIngredients(productId);
+            const ingredients = Array.isArray(ingredientRes?.data) ? ingredientRes.data : [];
+            if (ingredients.length) {
+              const item = list.find((row) => Number(row.product_id) === Number(productId));
+              setCachedProductDetails(productId, {
+                product: {
+                  ...(getCachedProductDetails(productId)?.product || {}),
+                  id: productId,
+                  name: item?.name || "",
+                  base_qty: item?.base_qty,
+                  base_unit_id: item?.base_unit_id,
+                  unit_id: item?.unit_id,
+                  default_variant: item?.default_variant || null,
+                  product_pcs_factor: item?.product_pcs_factor,
+                  product_pcs_base_unit_id: item?.product_pcs_base_unit_id,
+                },
+                ingredients,
+              });
+            }
+          } catch (e) {
+            console.warn("Failed to prefetch dependent ingredients", productId, e);
+          }
+        }
+        recalcModalCascade();
+        const stillMissingIds = missingIds.filter((productId) => !getIngredientsForItem({ product_id: productId }).length);
+        if (!stillMissingIds.length) {
+          if (document.body.contains(card)) recalcModalCascade();
+          return;
+        }
+        const res = await apiGetProductDependentRecalcValues(stillMissingIds);
+        const byId = new Map((Array.isArray(res?.items) ? res.items : []).map((item) => [Number(item.product_id), item.calculated || {}]));
+        list.forEach((item) => {
+          if (!item.calculated) item.calculated = byId.get(Number(item.product_id)) || {};
+        });
+        if (document.body.contains(card)) recalcModalCascade();
+      } catch (e) {
+        console.error("Failed to load dependent recalc values", e);
+        card.querySelectorAll('[data-role="cost-preview"], [data-role="price-preview"]').forEach((el) => {
+          el.textContent = el.textContent.replace("считается...", "не удалось посчитать");
+        });
+      }
+    })();
+    list.forEach((item, index) => {
+      item.calculated = {
+        cost_price: item.current?.cost_price ?? null,
+        price: item.current?.price ?? null,
+        margin_percent: item.current?.margin_percent ?? null,
+        ...(item.calculated || {}),
+      };
+      const row = getRowByIndex(index);
+      if (!row) return;
+      row.querySelector('[data-role="source-auto"]')?.addEventListener("click", () => {
+        setItemSourceMode(item, "auto");
+        const costCheck = row.querySelector('[data-field="cost_price"]');
+        const priceCheck = row.querySelector('[data-field="price"]');
+        if (costCheck) costCheck.checked = true;
+        if (priceCheck) priceCheck.checked = true;
+        recalcModalCascade();
+      });
+      row.querySelector('[data-role="source-manual"]')?.addEventListener("click", () => {
+        setItemSourceMode(item, "manual");
+        const costCheck = row.querySelector('[data-field="cost_price"]');
+        const priceCheck = row.querySelector('[data-field="price"]');
+        if (costCheck) costCheck.checked = true;
+        if (priceCheck) priceCheck.checked = true;
+        recalcModalCascade();
+      });
+      const costInput = row.querySelector('[data-role="cost-input"]');
+      const priceInput = row.querySelector('[data-role="price-input"]');
+      const marginInput = row.querySelector('[data-role="margin-input"]');
+      costInput?.addEventListener("input", () => {
+        setItemSourceMode(item, "manual");
+        const costCheck = row.querySelector('[data-field="cost_price"]');
+        if (costCheck) costCheck.checked = true;
+        const margin = calcMarginFromPrice(parseNumberFromInput(costInput.value), parseNumberFromInput(priceInput?.value));
+        if (marginInput && margin != null) marginInput.value = formatNumberForInputFixed(margin, 2);
+        recalcModalCascade();
+      });
+      priceInput?.addEventListener("input", () => {
+        setItemSourceMode(item, "manual");
+        const priceCheck = row.querySelector('[data-field="price"]');
+        if (priceCheck) priceCheck.checked = true;
+        const margin = calcMarginFromPrice(parseNumberFromInput(costInput?.value), parseNumberFromInput(priceInput.value));
+        if (marginInput && margin != null) marginInput.value = formatNumberForInputFixed(margin, 2);
+        recalcModalCascade();
+      });
+      marginInput?.addEventListener("input", () => {
+        setItemSourceMode(item, "manual");
+        const priceCheck = row.querySelector('[data-field="price"]');
+        if (priceCheck) priceCheck.checked = true;
+        const nextValue = normalizeLimitedDecimalInput(marginInput.value, 2);
+        if (marginInput.value !== nextValue) marginInput.value = nextValue;
+        const price = calcPriceFromMargin(parseNumberFromInput(costInput?.value), parseNumberFromInput(marginInput.value));
+        if (priceInput && price != null) priceInput.value = formatNumberForInputFixed(price, 2);
+        recalcModalCascade();
+      });
+    });
+    recalcModalCascade();
+    const onClose = () => closeProductDependentRecalcModal();
+    card.querySelector(".product-photo-grid-modal-close")?.addEventListener("click", onClose);
+    card.querySelector('[data-role="close"]')?.addEventListener("click", onClose);
+    overlay.addEventListener("click", (event) => {
+      if (event.target === overlay) onClose();
+    });
+    card.querySelector('[data-role="confirm"]')?.addEventListener("click", async () => {
+      const selected = [];
+      card.querySelectorAll(".product-recalc-modal-row").forEach((row) => {
+        const index = Number(row.getAttribute("data-recalc-index"));
+        const item = list[index];
+        if (!item || !row.querySelector('[data-role="row-check"]')?.checked) return;
+        const fields = {};
+        row.querySelectorAll('[data-role="field-check"]').forEach((checkbox) => {
+          fields[String(checkbox.getAttribute("data-field") || "")] = Boolean(checkbox.checked);
+        });
+        if (!Object.values(fields).some(Boolean)) return;
+        selected.push({
+          product_id: Number(item.product_id),
+          depth: Number(item.depth || 0),
+          fields,
+          sources: item.sources || {},
+          calculated: item.calculated || null,
+        });
+      });
+      if (!selected.length) {
+        onClose();
+        return;
+      }
+      const confirmBtn = card.querySelector('[data-role="confirm"]');
+      if (confirmBtn) confirmBtn.disabled = true;
+      try {
+        const res = await apiRecalculateProductDependents({ items: selected });
+        const updatedIds = Array.isArray(res?.updated_ids) ? res.updated_ids.map(Number).filter((id) => Number.isFinite(id)) : selected.map((item) => item.product_id);
+        const updatedProducts = Array.isArray(res?.products) ? res.products : [];
+        updatedProducts.forEach((product) => {
+          const productId = Number(product.id);
+          const existingIndex = (state.products || []).findIndex((item) => Number(item.id) === productId);
+          if (existingIndex >= 0) {
+            state.products[existingIndex] = { ...state.products[existingIndex], ...product };
+            const row = productsList?.querySelector(`.order-row.product-row[data-id="${productId}"]`);
+            if (row) {
+              const canSortProducts = !state.productsHasMore && !state.productsLoading;
+              const template = document.createElement("template");
+              template.innerHTML = buildProductRowHtml(state.products[existingIndex], canSortProducts).trim();
+              const nextRow = template.content.firstElementChild;
+              if (nextRow) {
+                row.replaceWith(nextRow);
+                bindProductRowClickHandlers(productsList);
+                bindProductRowInlineEditors(productsList);
+              }
+            }
+          }
+          const cached = getCachedProductDetails(product.id);
+          setCachedProductDetails(product.id, { product: { ...(cached?.product || {}), ...product } });
+          clearCachedProductView(product.id);
+        });
+        if (state.productDetailsCache instanceof Map) {
+          state.productDetailsCache.forEach((cached) => {
+            if (!Array.isArray(cached?.ingredients)) return;
+            cached.ingredients.forEach((ing) => {
+              const updated = updatedProducts.find((product) => Number(product.id) === Number(ing.ingredient_id));
+              if (!updated) return;
+              ing.ingredient_price = updated.price;
+              ing.ingredient_cost_price = updated.cost_price;
+              ing.margin_percent = updated.margin_percent;
+            });
+          });
+        }
+        const activeTab = tabsState.tabs.find((tab) => tab.key === tabsState.activeKey);
+        const activeProductId = activeTab?.type === "product" ? Number(activeTab.id || 0) : 0;
+        const activeUpdated = updatedProducts.find((product) => Number(product.id) === activeProductId);
+        if (activeUpdated && !editingProducts.has(activeProductId)) {
+          showProductDetails({ ...(getCachedProductDetails(activeProductId)?.product || {}), ...activeUpdated });
+        }
+        showToast("Связанные товары пересчитаны", "success");
+        onClose();
+      } catch (e) {
+        console.error("Failed to recalculate dependent products", e);
+        showToast("Не удалось пересчитать связанные товары");
+        if (confirmBtn) confirmBtn.disabled = false;
+      }
+    });
+    productDependentRecalcEscHandler = (event) => {
+      if (event.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", productDependentRecalcEscHandler);
   }
 
   function openOptionGroupTab(groupId, title, { activate = true } = {}) {
@@ -12502,6 +13220,11 @@ const isViewMode = state.comboPanel.mode === "view";
       photos: initialPhotos.map((url) => ({ kind: "url", url })), // {kind:'url'|'file', url|file, preview}
       activePhotoIdx: initialPhotos.length > 0 ? 0 : -1,
       blocksConfig: normalizeProductBlocksConfig(product?.blocks_config),
+      valueSources: {
+        cost_price: normalizeProductValueSource(product?.cost_price_source),
+        price: normalizeProductValueSource(product?.price_source),
+        base_qty: normalizeProductValueSource(product?.base_qty_source),
+      },
       nutritionProblems: Array.isArray(product?.nutrition_problems) ? product.nutrition_problems : [],
       nutritionIncomplete: Boolean(product?.nutrition_incomplete),
       optionGroups: new Set(),
@@ -12671,6 +13394,7 @@ const isViewMode = state.comboPanel.mode === "view";
           
           // Сохраняем себестоимость и цену как введено в форме (пересчёт только через меню «три точки»)
           const costPriceValue = parseNumberFromInput(form.cost_price.value) ?? 0;
+          const marginPercentValue = parseNumberFromInput(form.margin_percent?.value);
           const priceValue = parseNumberFromInput(form.price.value) ?? 0;
           const payload = {
             tenant_id: TENANT_ID,
@@ -12690,9 +13414,13 @@ const isViewMode = state.comboPanel.mode === "view";
             price: priceValue,
             old_price: parseNumberFromInput(form.old_price.value),
             cost_price: costPriceValue,
+            price_source: normalizeProductValueSource(draft.valueSources?.price),
+            margin_percent: marginPercentValue,
+            cost_price_source: normalizeProductValueSource(draft.valueSources?.cost_price),
             unit_id: baseUnitId,
             base_unit_id: baseUnitId,
             base_qty: parseNumberFromInput(form.base_qty?.value),
+            base_qty_source: normalizeProductValueSource(draft.valueSources?.base_qty),
             stock: parseNumberFromInput(form.stock?.value),
             is_active: form.is_active.checked ? 1 : 0,
             site_visibility: form.site_visibility.checked ? 1 : 0,
@@ -12712,13 +13440,18 @@ const isViewMode = state.comboPanel.mode === "view";
           }
 
           let productId = product && product.id;
+          let saveResult = null;
+          const dependentRecalcChanges = isEdit && product
+            ? buildProductDependentRecalcChanges(product, payload, initialIngredientsSnapshot, draftIngredients)
+            : null;
           
           // Сохранение товара
           try {
             if (isEdit && product) {
-              await api(`/api/prod_products/${product.id}`, { method: "PUT", body: JSON.stringify(payload) });
+              saveResult = await api(`/api/prod_products/${product.id}`, { method: "PUT", body: JSON.stringify(payload) });
             } else {
               const created = await api("/api/prod_products", { method: "POST", body: JSON.stringify(payload) });
+              saveResult = created;
               productId = created && created.id;
             }
           } catch (e) {
@@ -12862,25 +13595,54 @@ const isViewMode = state.comboPanel.mode === "view";
             }
           }
 
-          let savedProductForView = null;
-          try {
-            const productRes = await apiGetProduct(productId);
-            savedProductForView = productRes?.data || null;
-            if (savedProductForView) {
-              upsertSavedProductInList(savedProductForView, payload.category_ids);
-              clearCachedProductDetails(productId);
-              clearCachedProductView(productId);
-            }
-          } catch (e) {
-            console.error('Failed to update saved product row', e);
+          const savedIngredientsForCache = Array.from(draftIngredients.values()).map((ing) => deepClone(ing));
+          let savedProductForView = {
+            ...(product || {}),
+            ...payload,
+            id: productId,
+            photos: finalUrls,
+            photos_json: JSON.stringify(finalUrls),
+            stock_qty: payload.stock,
+            blocks_config: normalizeProductBlocksConfig(draft.blocksConfig),
+            nutrition_per_100g: {
+              kcal: parseNumberFromInput(form.querySelector("#pe_nutrition_kcal")?.value),
+              protein: payload.nutrition_protein_100g,
+              fat: payload.nutrition_fat_100g,
+              carbs: payload.nutrition_carbs_100g,
+            },
+          };
+          upsertSavedProductInList(savedProductForView, payload.category_ids);
+          if (state.productDetailsCache instanceof Map) {
+            state.productDetailsCache.forEach((cached) => {
+              if (!Array.isArray(cached?.ingredients)) return;
+              cached.ingredients.forEach((ing) => {
+                if (Number(ing?.ingredient_id) !== Number(productId)) return;
+                ing.ingredient_name = savedProductForView.name;
+                ing.ingredient_price = savedProductForView.price;
+                ing.ingredient_cost_price = savedProductForView.cost_price;
+                ing.margin_percent = savedProductForView.margin_percent;
+                ing.ingredient_base_unit_id = savedProductForView.base_unit_id;
+                ing.ingredient_base_qty = savedProductForView.base_qty;
+                ing.nutrition_protein_100g = savedProductForView.nutrition_protein_100g;
+                ing.nutrition_fat_100g = savedProductForView.nutrition_fat_100g;
+                ing.nutrition_carbs_100g = savedProductForView.nutrition_carbs_100g;
+                ing.nutrition_per_100g = savedProductForView.nutrition_per_100g;
+              });
+            });
           }
+          const existingCachedDetails = getCachedProductDetails(productId);
+          setCachedProductDetails(productId, {
+            product: savedProductForView,
+            categories: Array.isArray(existingCachedDetails?.categories) && existingCachedDetails.categories.length
+              ? existingCachedDetails.categories
+              : Array.from(draft.categories).map((id) => ({ id: Number(id) })).filter((item) => Number.isFinite(item.id)),
+            optionAssignments: Array.isArray(existingCachedDetails?.optionAssignments) && existingCachedDetails.optionAssignments.length
+              ? existingCachedDetails.optionAssignments
+              : state.selectedProductOptionAssignments,
+            ingredients: savedIngredientsForCache,
+          });
+          clearCachedProductView(productId);
 
-          try {
-            await invalidateProductParents(productId);
-          } catch (e) {
-            console.error("Failed to invalidate parent products", e);
-          }
-          
           // Return to product details if editing
           if (isEdit && product) {
             // Remove from editing state BEFORE showing details (important!)
@@ -12937,7 +13699,6 @@ const isViewMode = state.comboPanel.mode === "view";
                 activate: false,
               });
               clearCachedProductView(updatedProduct.id);
-              clearCachedProductDetails(updatedProduct.id);
               showProductDetails(updatedProduct);
               showProductFooterView();
             } else {
@@ -12974,6 +13735,29 @@ const isViewMode = state.comboPanel.mode === "view";
           } else {
             // No product ID - clear navigation
             clearNavigationStack();
+          }
+
+          let dependentItems = [];
+          if (productId && dependentRecalcChanges?.hasChanges) {
+            try {
+              const previewRes = await apiGetProductDependentRecalcPreview(productId);
+              dependentItems = Array.isArray(previewRes?.items) ? previewRes.items : [];
+            } catch (e) {
+              console.error("Failed to load dependent product preview", e);
+              dependentItems = Array.isArray(saveResult?.dependent_recalc?.items)
+                ? saveResult.dependent_recalc.items
+                : [];
+            }
+          }
+          if (dependentItems.length && dependentRecalcChanges?.hasChanges) {
+            dependentItems = dependentItems.map((item) => ({
+              ...item,
+              changed_fields: dependentRecalcChanges.fields,
+              change_labels: dependentRecalcChanges.labels,
+            }));
+          }
+          if (dependentItems.length) {
+            openProductDependentRecalcModal(dependentItems);
           }
           
           if (window.__productEditorRecalc) window.__productEditorRecalc = null;
@@ -13089,6 +13873,12 @@ const isViewMode = state.comboPanel.mode === "view";
       form.price.value = product.price != null ? formatNumberForInput(product.price) : "";
       form.old_price.value = product.old_price != null ? formatNumberForInput(product.old_price) : "";
       form.cost_price.value = product.cost_price != null ? formatNumberForInput(product.cost_price) : "";
+      if (form.margin_percent) {
+        const marginValue = product.margin_percent != null
+          ? Number(product.margin_percent)
+          : calcMarginFromPrice(product.cost_price, product.price);
+        form.margin_percent.value = marginValue != null ? formatNumberForInputFixed(marginValue, 2) : "";
+      }
       if (form.base_unit_id) {
         form.base_unit_id.value = product.base_unit_id || product.unit_id || "";
       }
@@ -13106,6 +13896,9 @@ const isViewMode = state.comboPanel.mode === "view";
     } else {
       if (form.cost_price) {
         form.cost_price.value = formatNumberForInput(0);
+      }
+      if (form.margin_percent) {
+        form.margin_percent.value = "";
       }
       if (form.fulfillment_mode) {
         form.fulfillment_mode.value = "stock";
@@ -13228,6 +14021,10 @@ const isViewMode = state.comboPanel.mode === "view";
       ingredientCostTotal: $("#peIngredientCostTotal", wrapper),
       ingredientPriceTotal: $("#peIngredientPriceTotal", wrapper),
       ingredientWeightTotal: $("#peIngredientWeightTotal", wrapper),
+      priceBlock: $("#pePriceBlock", wrapper),
+      priceSourceHint: $("#pePriceSourceHint", wrapper),
+      priceSourceAutoBtn: $("#pePriceSourceAuto", wrapper),
+      priceSourceManualBtn: $("#pePriceSourceManual", wrapper),
       nutritionBlock: $("#peNutritionBlock", wrapper),
       nutritionWarning: $("#peNutritionWarning", wrapper),
       nutritionKcalInput: $("#pe_nutrition_kcal", wrapper),
@@ -13244,6 +14041,7 @@ const isViewMode = state.comboPanel.mode === "view";
       ingredientModalSearch: $("#peIngredientModalSearch", wrapper),
       ingredientModalList: $("#peIngredientModalList", wrapper),
       costPriceInput: $("#pe_cost_price", wrapper),
+      marginPercentInput: $("#pe_margin_percent", wrapper),
       priceInput: $("#pe_price", wrapper),
       discountAccordion: $("#peDiscountAccordion", wrapper),
       discountEmpty: $("#peDiscountEmpty", wrapper),
@@ -13253,6 +14051,116 @@ const isViewMode = state.comboPanel.mode === "view";
       ingredientBlock: $("#peIngredientBlock", wrapper),
       promotionsBlock: $("#pePromotionsBlock", wrapper),
     };
+
+    function isCompositionPriceMode() {
+      return normalizeProductValueSource(draft.valueSources?.cost_price) === "auto"
+        && normalizeProductValueSource(draft.valueSources?.price) === "auto";
+    }
+
+    function getMarginPercentValue() {
+      return parseNumberFromInput(ui.marginPercentInput?.value);
+    }
+
+    function updatePriceFromCostAndMargin(costOverride = null) {
+      if (!ui.priceInput) return null;
+      const cost = costOverride != null ? costOverride : parseNumberFromInput(ui.costPriceInput?.value);
+      const price = calcPriceFromMargin(cost, getMarginPercentValue());
+      if (price != null) {
+        ui.priceInput.value = formatNumberForInputFixed(price, 2);
+      }
+      return price;
+    }
+
+    function updateMarginFromCostAndPrice() {
+      if (!ui.marginPercentInput) return null;
+      const margin = calcMarginFromPrice(
+        parseNumberFromInput(ui.costPriceInput?.value),
+        parseNumberFromInput(ui.priceInput?.value)
+      );
+      if (margin != null) {
+        ui.marginPercentInput.value = formatNumberForInputFixed(margin, 2);
+      }
+      return margin;
+    }
+
+    function applyCompositionPriceValues() {
+      if (!isCompositionPriceMode()) return;
+      const cost = calcTotalCostFromIngredientsGlobal();
+      const price = calcTotalPriceFromIngredientsGlobal();
+      if (cost != null && ui.costPriceInput) {
+        ui.costPriceInput.value = formatNumberForInput(Math.round(cost * 100) / 100);
+      }
+      if (price != null && ui.priceInput) {
+        ui.priceInput.value = formatNumberForInput(Math.round(price * 100) / 100);
+      }
+      const margin = calcMarginFromPrice(cost, price);
+      if (margin != null && ui.marginPercentInput) {
+        ui.marginPercentInput.value = formatNumberForInputFixed(margin, 2);
+      }
+    }
+
+    function syncPriceSourceMode({ applyValues = false } = {}) {
+      const isAuto = isCompositionPriceMode();
+      ui.priceBlock?.classList.toggle("is-auto", isAuto);
+      ui.priceSourceAutoBtn?.classList.toggle("is-active", isAuto);
+      ui.priceSourceManualBtn?.classList.toggle("is-active", !isAuto);
+      if (ui.priceSourceHint) {
+        ui.priceSourceHint.textContent = isAuto ? "Считается из состава" : "Ручной ввод";
+      }
+      if (ui.costPriceInput) ui.costPriceInput.readOnly = isView || isAuto;
+      if (ui.marginPercentInput) ui.marginPercentInput.readOnly = isView || isAuto;
+      if (ui.priceInput) ui.priceInput.readOnly = isView || isAuto;
+      if (ui.priceSourceAutoBtn) ui.priceSourceAutoBtn.disabled = isView;
+      if (ui.priceSourceManualBtn) ui.priceSourceManualBtn.disabled = isView;
+      if (applyValues) applyCompositionPriceValues();
+    }
+
+    function setPriceSourceMode(mode) {
+      const isAuto = mode === "auto";
+      draft.valueSources.cost_price = isAuto ? "auto" : "manual";
+      draft.valueSources.price = isAuto ? "auto" : "manual";
+      syncPriceSourceMode({ applyValues: isAuto });
+    }
+
+    if (!isView) {
+      ui.costPriceInput?.addEventListener("input", () => {
+        draft.valueSources.cost_price = "manual";
+        draft.valueSources.price = "manual";
+        updateMarginFromCostAndPrice();
+        syncPriceSourceMode();
+      });
+      ui.priceInput?.addEventListener("input", () => {
+        draft.valueSources.cost_price = "manual";
+        draft.valueSources.price = "manual";
+        updateMarginFromCostAndPrice();
+        syncPriceSourceMode();
+      });
+      ui.priceInput?.addEventListener("blur", () => {
+        const num = parseNumberFromInput(ui.priceInput.value);
+        ui.priceInput.value = num == null ? "" : formatNumberForInputFixed(num, 2);
+        updateMarginFromCostAndPrice();
+        syncPriceSourceMode();
+      });
+      ui.marginPercentInput?.addEventListener("input", () => {
+        const nextValue = normalizeLimitedDecimalInput(ui.marginPercentInput.value, 2);
+        if (ui.marginPercentInput.value !== nextValue) ui.marginPercentInput.value = nextValue;
+        draft.valueSources.cost_price = "manual";
+        draft.valueSources.price = "manual";
+        updatePriceFromCostAndMargin();
+        syncPriceSourceMode();
+      });
+      ui.marginPercentInput?.addEventListener("blur", () => {
+        const num = parseNumberFromInput(ui.marginPercentInput.value);
+        ui.marginPercentInput.value = num == null ? "" : formatNumberForInputFixed(num, 2);
+        updatePriceFromCostAndMargin();
+      });
+      ui.baseQtyInput?.addEventListener("input", () => {
+        draft.valueSources.base_qty = "manual";
+      });
+      ui.priceSourceAutoBtn?.addEventListener("click", () => setPriceSourceMode("auto"));
+      ui.priceSourceManualBtn?.addEventListener("click", () => setPriceSourceMode("manual"));
+    }
+    syncPriceSourceMode({ applyValues: true });
 
     const descriptionAccordion = $("#peDescriptionAccordion", wrapper);
     if (descriptionAccordion) {
@@ -16783,6 +17691,9 @@ const isViewMode = state.comboPanel.mode === "view";
       // Обновляем placeholder себестоимости товара
       if (costInput) {
         costInput.placeholder = calculatedCost != null ? formatMoney(calculatedCost) : "0";
+        if (isCompositionPriceMode() && calculatedCost != null) {
+          costInput.value = formatNumberForInput(Math.round(calculatedCost * 100) / 100);
+        }
       }
       
       // Обновляем отображение суммы себестоимости состава
@@ -16802,10 +17713,18 @@ const isViewMode = state.comboPanel.mode === "view";
     function updatePricePlaceholderGlobal() {
       const priceInput = ui.priceInput;
       const calculatedPrice = calcTotalPriceFromIngredientsGlobal();
+      const calculatedCost = calcTotalCostFromIngredientsGlobal();
       
       // Обновляем placeholder цены товара
       if (priceInput) {
         priceInput.placeholder = calculatedPrice != null ? formatMoney(calculatedPrice) : "0";
+        if (isCompositionPriceMode() && calculatedPrice != null) {
+          priceInput.value = formatNumberForInputFixed(calculatedPrice, 2);
+        }
+      }
+      const margin = calcMarginFromPrice(calculatedCost, calculatedPrice);
+      if (isCompositionPriceMode() && margin != null && ui.marginPercentInput) {
+        ui.marginPercentInput.value = formatNumberForInputFixed(margin, 2);
       }
       
       // Обновляем отображение суммы цены состава
@@ -16842,13 +17761,18 @@ const isViewMode = state.comboPanel.mode === "view";
         const v = calcTotalCostFromIngredientsGlobal();
         if (v != null && ui.costPriceInput) {
           ui.costPriceInput.value = formatNumberForInput(Math.round(v * 100) / 100);
+          draft.valueSources.cost_price = "auto";
           updateCostPricePlaceholderGlobal();
         }
       },
       recalcPrice: function() {
+        const cost = calcTotalCostFromIngredientsGlobal();
         const v = calcTotalPriceFromIngredientsGlobal();
         if (v != null && ui.priceInput) {
-          ui.priceInput.value = formatNumberForInput(Math.round(v * 100) / 100);
+          ui.priceInput.value = formatNumberForInputFixed(v, 2);
+          draft.valueSources.price = "auto";
+          const margin = calcMarginFromPrice(cost, v);
+          if (margin != null && ui.marginPercentInput) ui.marginPercentInput.value = formatNumberForInputFixed(margin, 2);
           updatePricePlaceholderGlobal();
         }
       },
@@ -16856,6 +17780,7 @@ const isViewMode = state.comboPanel.mode === "view";
         const v = calcTotalWeightInBaseUnitGlobal();
         if (v != null && ui.baseQtyInput) {
           ui.baseQtyInput.value = formatNumberForInput(Math.round(v * 1000) / 1000);
+          draft.valueSources.base_qty = "auto";
           updateWeightTotalDisplayGlobal();
         }
       },
@@ -16880,9 +17805,9 @@ const isViewMode = state.comboPanel.mode === "view";
             const totals = calcTotalsFromComposition(prod.base_unit_id, ingredients);
             if (!totals) continue;
             const payload = {};
-            if (totals.cost != null) payload.cost_price = totals.cost;
-            if (totals.price != null) payload.price = totals.price;
-            if (totals.weight != null) payload.base_qty = totals.weight;
+            if (totals.cost != null) { payload.cost_price = totals.cost; payload.cost_price_source = "auto"; }
+            if (totals.price != null) { payload.price = totals.price; payload.price_source = "auto"; }
+            if (totals.weight != null) { payload.base_qty = totals.weight; payload.base_qty_source = "auto"; }
             if (Object.keys(payload).length === 0) continue;
             await apiPatchProductRecalc(productId, payload);
             updated++;
@@ -16898,8 +17823,9 @@ const isViewMode = state.comboPanel.mode === "view";
     async function loadIngredients() {
       if ((!isEdit && !isView) || !product) return;
       try {
-        const res = await apiGetProductIngredients(product.id);
-        ingredientsList = Array.isArray(res.data) ? res.data : [];
+        const cachedDetails = getCachedProductDetails(product.id);
+        const loadedIngredients = await ensureProductIngredientsCached(product.id, cachedDetails?.product || product);
+        ingredientsList = deepClone(loadedIngredients);
         draftIngredients.clear();
         ingredientsList.forEach(ing => {
           // Используем unit_id из prod_product_ingredients (единица в составе), 
@@ -18931,6 +19857,11 @@ const isViewMode = state.comboPanel.mode === "view";
               }
             } else {
               // Open new editor
+              try {
+                await ensureProductIngredientsCached(p.id, p);
+              } catch (e) {
+                console.warn("Failed to warm product ingredients cache before edit", e);
+              }
               openProductModal({ mode: "edit", product: p });
             }
           }
@@ -19043,7 +19974,7 @@ const isViewMode = state.comboPanel.mode === "view";
     }
 
     if (footerEditBtn) {
-      footerEditBtn.addEventListener("click", () => {
+      footerEditBtn.addEventListener("click", async () => {
         // Check current mode and edit accordingly
         if (state.mode === "categories" && state.selectedCategoryId) {
           const cat = state.categories.find((x) => x.id === state.selectedCategoryId);
@@ -19079,6 +20010,11 @@ const isViewMode = state.comboPanel.mode === "view";
             const editingState = editingProducts.get(p.id);
             pushNavigationState(editingState.navigationState);
           } else {
+            try {
+              await ensureProductIngredientsCached(p.id, p);
+            } catch (e) {
+              console.warn("Failed to warm product ingredients cache before edit", e);
+            }
             openProductModal({ mode: "edit", product: p });
             }
           }
