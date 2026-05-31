@@ -12906,17 +12906,25 @@ body.page-shop #shopCartPanel > .panel-body.shop-cart-body > .shop-cart > .shop-
 /* Р±Р°Р·РѕРІС‹Р№ pill */
 @media (max-width: 768px){
   .sp-card{
-    min-height: 0;
+    aspect-ratio: auto;
+    height: clamp(252px, 69vw, 286px);
+    min-height: clamp(252px, 69vw, 286px);
+    max-height: clamp(252px, 69vw, 286px);
   }
 
   .sp-media{
-    flex: 0 0 auto;
+    flex: 0 0 clamp(132px, 39vw, 156px);
+    height: clamp(132px, 39vw, 156px);
+    min-height: clamp(132px, 39vw, 156px);
+    max-height: clamp(132px, 39vw, 156px);
+    aspect-ratio: auto;
   }
 
   .sp-info{
-    min-height: 0;
-    overflow: hidden;
     flex: 1 1 auto;
+    min-height: 0;
+    max-height: 100%;
+    overflow: hidden;
   }
 
   .sp-title{
@@ -12945,6 +12953,7 @@ body.page-shop #shopCartPanel > .panel-body.shop-cart-body > .shop-cart > .shop-
 
   .sp-sub-line{
     line-height: 1.2;
+    min-height: calc(var(--sp-sub-size) * 1.2);
   }
 
   .sp-bottom{
