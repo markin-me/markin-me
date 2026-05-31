@@ -12904,6 +12904,56 @@ body.page-shop #shopCartPanel > .panel-body.shop-cart-body > .shop-cart > .shop-
 
 /* РѕР±С‰РёРµ СЂР°Р·РјРµСЂС‹ С‡РµСЂРµР· РїРµСЂРµРјРµРЅРЅС‹Рµ (РїРѕРґС…РІР°С‚С‹РІР°СЋС‚ container query РІС‹С€Рµ) */
 /* Р±Р°Р·РѕРІС‹Р№ pill */
+@media (max-width: 768px){
+  .sp-card{
+    min-height: 0;
+  }
+
+  .sp-media{
+    flex: 0 0 auto;
+  }
+
+  .sp-info{
+    min-height: 0;
+    overflow: hidden;
+    flex: 1 1 auto;
+  }
+
+  .sp-title{
+    flex: 0 0 calc(var(--sp-title-size) * 1.15 * 2);
+    min-height: calc(var(--sp-title-size) * 1.15 * 2);
+    max-height: calc(var(--sp-title-size) * 1.15 * 2);
+  }
+
+  .sp-sub{
+    flex: 0 0 calc(var(--sp-sub-size) * 1.2 * 2 + 1px);
+    min-height: calc(var(--sp-sub-size) * 1.2 * 2 + 1px);
+    max-height: calc(var(--sp-sub-size) * 1.2 * 2 + 1px);
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+
+  .sp-sub--defaults{
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+    gap: 1px;
+  }
+
+  .sp-sub-line{
+    line-height: 1.2;
+  }
+
+  .sp-bottom{
+    flex: 0 0 var(--qty-pill-h);
+    min-height: var(--qty-pill-h);
+    align-items: center;
+  }
+}
+
 .qty-pill{
   height: var(--qty-pill-h);
   border-radius: 999px;
