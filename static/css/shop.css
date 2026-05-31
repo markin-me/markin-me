@@ -11328,17 +11328,18 @@ body.page-shop .shop-products-panel .panel-body{
 
   .shop-catalog-promo-block .shop-catalog-bonus-card .bonus-level-preview-card{
     width: auto;
-    height: 192px;
+    aspect-ratio: 16 / 9;
+    height: 190px;
     max-width: none;
     min-width: 0;
   }
 
   .shop-catalog-promo-block .shop-home-active-order-card{
-    flex: 0 0 calc(100% - 88px);
-    width: calc(100% - 88px);
+    flex: 0 0 auto;
+    width: auto;
     min-width: 0;
-    min-height: 0;
-    aspect-ratio: 300 / 170;
+    height: 190px;
+    aspect-ratio: 16 / 9;
     align-self: flex-start;
   }
 
