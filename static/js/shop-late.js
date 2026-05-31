@@ -19,7 +19,17 @@
 
   async function ensureProduct(pid) {
     const id = Number(pid);
-    if (state.productCache.has(id)) return state.productCache.get(id);
+    if (state.productCache.has(id)) {
+      const cached = state.productCache.get(id);
+      if (typeof mergeProductPassport === "function") {
+        mergeProductPassport(id, { product: cached });
+      }
+      return cached;
+    }
+    if (typeof preloadProductPassportsBatch === "function") {
+      await preloadProductPassportsBatch([id], { details: false }).catch(() => {});
+      if (state.productCache.has(id)) return state.productCache.get(id);
+    }
 
     const json = await apiJson('/api/public/products/batch/by-ids', {
       method: 'POST',
@@ -33,6 +43,9 @@
     }
     p.is_available = isProductAvailable(p);
     state.productCache.set(id, p);
+    if (typeof mergeProductPassport === "function") {
+      mergeProductPassport(id, { product: p });
+    }
     if (!p.is_available && pruneUnavailableCartItems()) {
       renderCart();
       updateCartBadge();
@@ -54,6 +67,19 @@
     const pid = Number(productId);
     if (!Number.isFinite(pid)) return [];
     if (state.productOptionsCache.has(pid)) return state.productOptionsCache.get(pid);
+    const passport = typeof getProductPassport === "function" ? getProductPassport(pid) : null;
+    if (Array.isArray(passport?.optionAssignments)) {
+      state.productOptionsCache.set(pid, passport.optionAssignments);
+      return passport.optionAssignments;
+    }
+    if (typeof preloadProductPassportsBatch === "function") {
+      await preloadProductPassportsBatch([pid], { details: true }).catch(() => {});
+      const warmedPassport = typeof getProductPassport === "function" ? getProductPassport(pid) : null;
+      if (Array.isArray(warmedPassport?.optionAssignments)) {
+        state.productOptionsCache.set(pid, warmedPassport.optionAssignments);
+        return warmedPassport.optionAssignments;
+      }
+    }
     try {
       const json = await apiJson('/api/public/products/batch/option-assignments', {
         method: 'POST',
@@ -63,9 +89,15 @@
         ? json.data[pid]
         : (Array.isArray(json?.data?.[String(pid)]) ? json.data[String(pid)] : []);
       state.productOptionsCache.set(pid, list);
+      if (typeof mergeProductPassport === "function") {
+        mergeProductPassport(pid, { optionAssignments: list });
+      }
       return list;
     } catch {
       state.productOptionsCache.set(pid, []);
+      if (typeof mergeProductPassport === "function") {
+        mergeProductPassport(pid, { optionAssignments: [] });
+      }
       return [];
     }
   }
@@ -76,18 +108,40 @@
       : [];
     if (!ids.length) return;
 
-    const missingIds = ids.filter((id) => !state.productOptionsCache.has(id));
+    const missingIds = ids.filter((id) => {
+      if (state.productOptionsCache.has(id)) return false;
+      const passport = typeof getProductPassport === "function" ? getProductPassport(id) : null;
+      if (Array.isArray(passport?.optionAssignments)) {
+        state.productOptionsCache.set(id, passport.optionAssignments);
+        return false;
+      }
+      return true;
+    });
     if (!missingIds.length) return;
+
+    await preloadProductPassportsBatch(missingIds, { details: true }).catch(() => {});
+    const remainingIds = missingIds.filter((id) => {
+      const passport = typeof getProductPassport === "function" ? getProductPassport(id) : null;
+      if (Array.isArray(passport?.optionAssignments)) {
+        state.productOptionsCache.set(id, passport.optionAssignments);
+        return false;
+      }
+      return true;
+    });
+    if (!remainingIds.length) return;
 
     try {
       const json = await apiJson('/api/public/products/batch/option-assignments', {
         method: 'POST',
-        body: { ids: missingIds },
+        body: { ids: remainingIds },
       });
       const data = json?.data && typeof json.data === "object" ? json.data : {};
-      missingIds.forEach((id) => {
+      remainingIds.forEach((id) => {
         const list = Array.isArray(data[id]) ? data[id] : [];
         state.productOptionsCache.set(id, list);
+        if (typeof mergeProductPassport === "function") {
+          mergeProductPassport(id, { optionAssignments: list });
+        }
       });
     } catch (e) {
       console.warn("Failed to preload product option assignments batch:", e);
@@ -307,6 +361,7 @@ const comboProductPreviewSharedCache = new Map();
 const comboBlockPreviewWarmCache = new Map();
 const comboBlockPreviewResolvedCache = new Map();
 const productDetailsBatchInflight = new Map();
+const productPassportBatchInflight = new Map();
 let productDetailsPrefetchTimer = null;
 let comboDetailsPrefetchTimer = null;
 const COMBO_DETAILS_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -324,17 +379,157 @@ function productDetailsBatchKey(productIds) {
   return normalizeProductDetailIds(productIds).sort((a, b) => a - b).join(",");
 }
 
-async function preloadProductsByIdsToCache(productIds) {
-  const ids = normalizeProductDetailIds(productIds).filter((id) => !state.productCache.has(id));
+function productPassportHasDetails(productId) {
+  const pid = Number(productId || 0);
+  if (!Number.isFinite(pid) || pid <= 0) return false;
+  const passport = typeof getProductPassport === "function" ? getProductPassport(pid) : null;
+  return Boolean(
+    passport &&
+    passport.product &&
+    Array.isArray(passport.ingredients) &&
+    Array.isArray(passport.variants) &&
+    Array.isArray(passport.optionAssignments) &&
+    Array.isArray(passport.optionGroups) &&
+    Object.prototype.hasOwnProperty.call(passport, "defaultConfig") &&
+    passport.defaultConfig &&
+    typeof passport.defaultConfig === "object"
+  );
+}
+
+function applyProductPassportPayload(productId, payload) {
+  const pid = Number(productId || 0);
+  if (!Number.isFinite(pid) || pid <= 0 || !payload || typeof payload !== "object") return;
+
+  const product = payload.product && typeof payload.product === "object" ? payload.product : null;
+  if (product) {
+    if (!Array.isArray(product.photos)) product.photos = safePhotos(product);
+    if (typeof cacheStockFromProductPayload === "function") {
+      cacheStockFromProductPayload(product, "product_passport_batch");
+    }
+    product.is_available = isProductAvailable(product);
+    state.productCache.set(pid, product);
+  }
+
+  const patch = { product };
+  if (Array.isArray(payload.ingredients)) patch.ingredients = payload.ingredients;
+  if (Array.isArray(payload.variants)) patch.variants = normalizeComboVariantList(payload.variants);
+  if (Array.isArray(payload.optionAssignments)) patch.optionAssignments = payload.optionAssignments;
+  if (Array.isArray(payload.option_groups)) {
+    patch.optionGroups = payload.option_groups;
+  } else if (Array.isArray(payload.optionGroups)) {
+    patch.optionGroups = payload.optionGroups;
+  } else if (payload.option_groups && typeof payload.option_groups === "object") {
+    patch.optionGroups = buildProductOptionGroupsFromBatch(
+      pid,
+      Array.isArray(patch.optionAssignments) ? patch.optionAssignments : [],
+      payload.option_groups
+    );
+  }
+  if (payload.defaultConfig && typeof payload.defaultConfig === "object") patch.defaultConfig = payload.defaultConfig;
+  if (payload.default_config && typeof payload.default_config === "object") patch.defaultConfig = payload.default_config;
+  if (payload.updated_at != null) patch.updated_at = payload.updated_at;
+
+  if (typeof mergeProductPassport === "function") {
+    mergeProductPassport(pid, patch);
+  }
+
+  const passport = typeof getProductPassport === "function" ? getProductPassport(pid) : null;
+  if (Array.isArray(passport?.optionAssignments)) state.productOptionsCache.set(pid, passport.optionAssignments);
+  if (Array.isArray(passport?.ingredients)) comboProductIngredientsCache.set(pid, Promise.resolve(passport.ingredients));
+  if (Array.isArray(passport?.variants)) comboProductVariantsCache.set(pid, Promise.resolve(normalizeComboVariantList(passport.variants)));
+  if (passport?.defaultConfig && typeof passport.defaultConfig === "object" && typeof window.cacheUpsellDefaultConfig === "function") {
+    window.cacheUpsellDefaultConfig(pid, passport.defaultConfig);
+  }
+  if (Array.isArray(passport?.optionGroups)) {
+    passport.optionGroups.forEach((group) => {
+      const groupId = Number(group?.id || group?.group?.id || 0);
+      if (!Number.isFinite(groupId) || groupId <= 0) return;
+      const details = group?.group && Array.isArray(group?.items)
+        ? group
+        : {
+            group: {
+              id: groupId,
+              title: str(group?.title || ""),
+              selection_type: group?.selection_type || "single",
+              min_select: group?.min_select ?? 0,
+              max_select: group?.max_select ?? null,
+              is_required: Boolean(group?.is_required),
+              allow_variants: Boolean(group?.allow_variants),
+              is_active: true,
+            },
+            items: Array.isArray(group?.items) ? group.items : [],
+          };
+      state.optionGroupCache.set(`${groupId}:${pid}`, details);
+      state.optionGroupCache.set(`${groupId}:0`, details);
+    });
+  }
+  if (
+    Array.isArray(passport?.optionGroups) &&
+    Array.isArray(passport?.ingredients) &&
+    Array.isArray(passport?.variants)
+  ) {
+    productDetailsConfigCache.set(pid, {
+      promise: Promise.resolve({
+        optionGroups: passport.optionGroups,
+        ingredients: passport.ingredients,
+        variants: normalizeComboVariantList(passport.variants),
+      }),
+      ts: Date.now(),
+    });
+  }
+}
+
+async function preloadProductPassportsBatch(productIds, opts = {}) {
+  const ids = normalizeProductDetailIds(productIds)
+    .filter((id) => {
+      const passport = typeof getProductPassport === "function" ? getProductPassport(id) : null;
+      if (!passport) return true;
+      if (!passport.product) return true;
+      return Boolean(opts.details) && !productPassportHasDetails(id);
+    });
   if (!ids.length) return;
 
-  try {
-    const json = await apiJson('/api/public/products/batch/by-ids', {
+  const batchKey = productDetailsBatchKey(ids);
+  if (batchKey && productPassportBatchInflight.has(batchKey)) {
+    await productPassportBatchInflight.get(batchKey);
+    return;
+  }
+
+  const task = (async () => {
+    const json = await apiJson('/api/public/products/batch/passports', {
       method: 'POST',
       body: { ids },
     });
     const data = json?.data && typeof json.data === "object" ? json.data : {};
     ids.forEach((id) => {
+      const payload = data[id] || data[String(id)] || null;
+      if (payload && typeof payload === "object") applyProductPassportPayload(id, payload);
+    });
+  })().finally(() => {
+    if (batchKey) productPassportBatchInflight.delete(batchKey);
+  });
+
+  if (batchKey) productPassportBatchInflight.set(batchKey, task);
+  await task;
+}
+
+window.preloadProductPassportsBatch = preloadProductPassportsBatch;
+
+async function preloadProductsByIdsToCache(productIds) {
+  const ids = normalizeProductDetailIds(productIds).filter((id) => !state.productCache.has(id));
+  if (!ids.length) return;
+
+  await preloadProductPassportsBatch(ids, { details: true }).catch(() => {});
+  const missingIds = ids.filter((id) => !state.productCache.has(id));
+  if (!missingIds.length) return;
+
+  try {
+    const json = await apiJson('/api/public/products/batch/by-ids', {
+      method: 'POST',
+      body: { ids: missingIds },
+    });
+    const data = json?.data && typeof json.data === "object" ? json.data : {};
+    missingIds.forEach((id) => {
       const product = data[id] || data[String(id)] || null;
       if (!product || typeof product !== "object") return;
       if (!Array.isArray(product.photos)) product.photos = safePhotos(product);
@@ -343,6 +538,9 @@ async function preloadProductsByIdsToCache(productIds) {
       }
       product.is_available = isProductAvailable(product);
       state.productCache.set(id, product);
+      if (typeof mergeProductPassport === "function") {
+        mergeProductPassport(id, { product });
+      }
     });
   } catch (e) {
     console.warn("Failed to preload products batch:", e);
@@ -473,6 +671,13 @@ function seedComboPreviewCachesFromComboData(comboData) {
       const variants = normalizeComboVariantList(Array.isArray(preview.variants) ? preview.variants : []);
       comboProductIngredientsCache.set(productId, Promise.resolve(ingredients));
       comboProductVariantsCache.set(productId, Promise.resolve(variants));
+      if (typeof mergeProductPassport === "function") {
+        mergeProductPassport(productId, {
+          product: state.productCache.get(productId) || null,
+          ingredients,
+          variants,
+        });
+      }
 
       const rawUnitPriceBeforeDiscount =
         preview.unit_price_before_discount != null && Number.isFinite(Number(preview.unit_price_before_discount))
@@ -536,6 +741,12 @@ async function resolveComboDetails(comboId) {
     const json = await apiJson("/api/public/combos/" + encodeURIComponent(safeComboId));
     const data = json?.data || null;
     seedComboPreviewCachesFromComboData(data);
+    if (data && typeof window.queueProductStockAvailabilityRefresh === "function") {
+      window.queueProductStockAvailabilityRefresh(collectComboProductIds(data), {
+        reason: "combo_details",
+        delayMs: 0,
+      });
+    }
     return data;
   })();
 
@@ -646,8 +857,26 @@ async function preloadComboProductsData(productIds) {
     : [];
   if (!ids.length) return;
 
-  const missingIngredients = ids.filter((id) => !comboProductIngredientsCache.has(id));
-  const missingVariants = ids.filter((id) => !comboProductVariantsCache.has(id));
+  await preloadProductPassportsBatch(ids, { details: true }).catch(() => {});
+
+  const missingIngredients = ids.filter((id) => {
+    if (comboProductIngredientsCache.has(id)) return false;
+    const passport = typeof getProductPassport === "function" ? getProductPassport(id) : null;
+    if (Array.isArray(passport?.ingredients)) {
+      comboProductIngredientsCache.set(id, Promise.resolve(passport.ingredients));
+      return false;
+    }
+    return true;
+  });
+  const missingVariants = ids.filter((id) => {
+    if (comboProductVariantsCache.has(id)) return false;
+    const passport = typeof getProductPassport === "function" ? getProductPassport(id) : null;
+    if (Array.isArray(passport?.variants)) {
+      comboProductVariantsCache.set(id, Promise.resolve(normalizeComboVariantList(passport.variants)));
+      return false;
+    }
+    return true;
+  });
 
   const tasks = [];
 
@@ -662,6 +891,9 @@ async function preloadComboProductsData(productIds) {
           missingIngredients.forEach((id) => {
             const list = Array.isArray(data[id]) ? data[id] : [];
             comboProductIngredientsCache.set(id, Promise.resolve(list));
+            if (typeof mergeProductPassport === "function") {
+              mergeProductPassport(id, { ingredients: list });
+            }
           });
         })
         .catch((e) => {
@@ -681,6 +913,9 @@ async function preloadComboProductsData(productIds) {
           missingVariants.forEach((id) => {
             const list = normalizeComboVariantList(Array.isArray(data[id]) ? data[id] : []);
             comboProductVariantsCache.set(id, Promise.resolve(list));
+            if (typeof mergeProductPassport === "function") {
+              mergeProductPassport(id, { variants: list });
+            }
           });
         })
         .catch((e) => {
@@ -776,8 +1011,31 @@ function buildProductOptionGroupsFromBatch(productId, assignments, optionGroupsB
 }
 
 async function preloadProductDetailsConfigBatch(productIds) {
-  const ids = normalizeProductDetailIds(productIds)
-    .filter((id) => !productDetailsConfigCache.has(id));
+  let ids = normalizeProductDetailIds(productIds)
+    .filter((id) => {
+      if (productDetailsConfigCache.has(id)) return false;
+      const passport = typeof getProductPassport === "function" ? getProductPassport(id) : null;
+      if (
+        Array.isArray(passport?.optionGroups) &&
+        Array.isArray(passport?.ingredients) &&
+        Array.isArray(passport?.variants)
+      ) {
+        const details = {
+          optionGroups: passport.optionGroups,
+          ingredients: passport.ingredients,
+          variants: normalizeComboVariantList(passport.variants),
+        };
+        productDetailsConfigCache.set(id, { promise: Promise.resolve(details), ts: Date.now() });
+        state.productOptionsCache.set(id, Array.isArray(passport.optionAssignments) ? passport.optionAssignments : []);
+        comboProductIngredientsCache.set(id, Promise.resolve(details.ingredients));
+        comboProductVariantsCache.set(id, Promise.resolve(details.variants));
+        return false;
+      }
+      return true;
+    });
+  if (!ids.length) return;
+  await preloadProductPassportsBatch(ids, { details: true }).catch(() => {});
+  ids = ids.filter((id) => !productDetailsConfigCache.has(id));
   if (!ids.length) return;
   const batchKey = productDetailsBatchKey(ids);
   if (batchKey && productDetailsBatchInflight.has(batchKey)) {
@@ -902,6 +1160,15 @@ async function preloadProductDetailsConfigBatch(productIds) {
         promise: Promise.resolve({ optionGroups, ingredients, variants }),
         ts: Date.now(),
       });
+      if (typeof mergeProductPassport === "function") {
+        mergeProductPassport(id, {
+          product: state.productCache.get(id) || null,
+          optionAssignments: assignments,
+          optionGroups,
+          ingredients,
+          variants,
+        });
+      }
     });
   })().finally(() => {
     if (batchKey) productDetailsBatchInflight.delete(batchKey);
@@ -914,6 +1181,12 @@ async function preloadProductDetailsConfigBatch(productIds) {
 async function resolveProductIngredients(productId) {
   const pid = Number(productId || 0);
   if (!Number.isFinite(pid) || pid <= 0) return [];
+  const passport = typeof getProductPassport === "function" ? getProductPassport(pid) : null;
+  if (Array.isArray(passport?.ingredients)) {
+    const cachedIngredients = passport.ingredients;
+    comboProductIngredientsCache.set(pid, Promise.resolve(cachedIngredients));
+    return cachedIngredients;
+  }
   if (comboProductIngredientsCache.has(pid)) {
     return comboProductIngredientsCache.get(pid);
   }
@@ -941,6 +1214,12 @@ async function resolveProductIngredients(productId) {
 }
 
 async function resolveProductOptionGroups(productId) {
+  const pid = Number(productId || 0);
+  const passport = typeof getProductPassport === "function" ? getProductPassport(pid) : null;
+  if (Array.isArray(passport?.optionGroups)) return passport.optionGroups;
+  await preloadProductPassportsBatch([pid], { details: true }).catch(() => {});
+  const warmedPassport = typeof getProductPassport === "function" ? getProductPassport(pid) : null;
+  if (Array.isArray(warmedPassport?.optionGroups)) return warmedPassport.optionGroups;
   const assignments = await loadProductOptionAssignments(productId);
   const activeAssignments = assignments.filter((a) => Number(a.is_active || 0) === 1);
   const groups = [];
@@ -1019,12 +1298,21 @@ async function resolveProductOptionGroups(productId) {
     });
   }
 
+  if (typeof mergeProductPassport === "function") {
+    mergeProductPassport(pid, { optionGroups: groups });
+  }
   return groups;
 }
 
 async function resolveProductVariants(productId) {
   const pid = Number(productId || 0);
   if (!Number.isFinite(pid) || pid <= 0) return [];
+  const passport = typeof getProductPassport === "function" ? getProductPassport(pid) : null;
+  if (Array.isArray(passport?.variants)) {
+    const cachedVariants = normalizeComboVariantList(passport.variants);
+    comboProductVariantsCache.set(pid, Promise.resolve(cachedVariants));
+    return cachedVariants;
+  }
   if (comboProductVariantsCache.has(pid)) {
     return comboProductVariantsCache.get(pid);
   }
@@ -1056,6 +1344,35 @@ async function resolveProductDetailsConfig(productId) {
   }
   const cached = productDetailsConfigCache.get(pid);
   if (cached && cached.promise) return cached.promise;
+  const passport = typeof getProductPassport === "function" ? getProductPassport(pid) : null;
+  if (
+    Array.isArray(passport?.optionGroups) &&
+    Array.isArray(passport?.ingredients) &&
+    Array.isArray(passport?.variants)
+  ) {
+    const details = {
+      optionGroups: passport.optionGroups,
+      ingredients: passport.ingredients,
+      variants: normalizeComboVariantList(passport.variants),
+    };
+    productDetailsConfigCache.set(pid, { promise: Promise.resolve(details), ts: Date.now() });
+    return details;
+  }
+  await preloadProductPassportsBatch([pid], { details: true }).catch(() => {});
+  const warmedPassport = typeof getProductPassport === "function" ? getProductPassport(pid) : null;
+  if (
+    Array.isArray(warmedPassport?.optionGroups) &&
+    Array.isArray(warmedPassport?.ingredients) &&
+    Array.isArray(warmedPassport?.variants)
+  ) {
+    const details = {
+      optionGroups: warmedPassport.optionGroups,
+      ingredients: warmedPassport.ingredients,
+      variants: normalizeComboVariantList(warmedPassport.variants),
+    };
+    productDetailsConfigCache.set(pid, { promise: Promise.resolve(details), ts: Date.now() });
+    return details;
+  }
 
   const promise = (async () => {
     const [optionGroups, ingredients, variants] = await Promise.all([
@@ -1072,7 +1389,16 @@ async function resolveProductDetailsConfig(productId) {
 
   productDetailsConfigCache.set(pid, { promise, ts: Date.now() });
   try {
-    return await promise;
+    const details = await promise;
+    if (typeof mergeProductPassport === "function") {
+      mergeProductPassport(pid, {
+        product: state.productCache.get(pid) || null,
+        optionGroups: details.optionGroups,
+        ingredients: details.ingredients,
+        variants: details.variants,
+      });
+    }
+    return details;
   } catch (e) {
     productDetailsConfigCache.delete(pid);
     throw e;
@@ -7271,6 +7597,12 @@ optionGroups.forEach((group) => {
 
       const block = blocks[blockIndex];
       if (!block || !block.products || !block.products.length) return;
+      if (typeof window.queueProductStockAvailabilityRefresh === "function") {
+        window.queueProductStockAvailabilityRefresh(
+          block.products.map((prod) => Number(prod?.product_id || 0)).filter((id) => Number.isFinite(id) && id > 0),
+          { reason: "combo_picker", delayMs: 0 }
+        );
+      }
       const isComboPickerProductAvailable = (prod) => {
         const productId = Number(prod?.product_id || 0);
         if (!Number.isFinite(productId) || productId <= 0) return false;

@@ -148,6 +148,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     products: 15000,
     productsBatchCategories: 30000,
     productsBatchDetails: 30000,
+    productsBatchPassports: 30000,
+    productsBatchAvailability: 5000,
     productsBatchIngredients: 30000,
     productsBatchVariants: 30000,
     productsBatchOptionAssignments: 30000,
@@ -13336,6 +13338,769 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       });
       const payload = { ok: true, data };
       setPublicCache(cacheKey, payload, PUBLIC_CACHE_TTL_MS.productById);
+      res.set('x-public-cache', 'MISS');
+      res.json(payload);
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.post('/products/batch/availability', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const rawIds = Array.isArray(req.body?.ids) ? req.body.ids : [];
+      const ids = [...new Set(rawIds.map(Number).filter((id) => Number.isFinite(id) && id > 0))];
+      if (!ids.length) return res.json({ ok: true, data: {}, stock_levels: [] });
+      if (ids.length > 500) return res.status(400).json({ ok: false, error: 'TOO_MANY' });
+
+      const sortedIds = [...ids].sort((a, b) => a - b);
+      const cacheKey = makePublicCacheKey('products-batch-availability', { tenantId, storeId, ids: sortedIds });
+      const cached = getPublicCache(cacheKey);
+      if (cached) {
+        res.set('x-public-cache', 'HIT');
+        return res.json(cached);
+      }
+
+      const placeholders = ids.map(() => '?').join(',');
+      const [rowsRaw] = await db.query(
+        `SELECT p.id, p.name, p.fulfillment_mode, p.is_active, p.site_visibility, s.qty AS stock_qty
+         FROM prod_products p
+         LEFT JOIN prod_product_stocks s
+           ON s.tenant_id = p.tenant_id AND s.store_id = ? AND s.product_id = p.id
+         WHERE p.tenant_id=? AND p.id IN (${placeholders})`,
+        [storeId, tenantId, ...ids]
+      );
+
+      const rows = (Array.isArray(rowsRaw) ? rowsRaw : [])
+        .filter((row) => Number(row?.is_active || 0) === 1 && Number(row?.site_visibility || 0) === 1)
+        .map((row) => ({
+          id: Number(row.id),
+          product_id: Number(row.id),
+          product_name: row.name || '',
+          stock_qty: row.stock_qty != null ? Number(row.stock_qty) : null,
+          fulfillment_mode: row.fulfillment_mode || null,
+          is_available: row.stock_qty == null || Number(row.stock_qty) > 0,
+        }));
+
+      await applyPublicProductAvailability(rows, tenantId, storeId);
+
+      const data = {};
+      const stockLevels = [];
+      rows.forEach((row) => {
+        const id = Number(row.id || row.product_id || 0);
+        if (!(id > 0)) return;
+        const isAvailable = row.is_available === true || Number(row.is_available || 0) === 1;
+        const payloadRow = {
+          product_id: id,
+          productId: id,
+          product_name: row.product_name || '',
+          productName: row.product_name || '',
+          stock_qty: row.stock_qty,
+          qty: row.stock_qty,
+          is_available: isAvailable,
+          isAvailable,
+          unavailable_reason: isAvailable ? null : 'OUT_OF_STOCK',
+        };
+        data[String(id)] = payloadRow;
+        stockLevels.push(payloadRow);
+      });
+
+      ids.forEach((id) => {
+        if (data[String(id)]) return;
+        const payloadRow = {
+          product_id: id,
+          productId: id,
+          stock_qty: 0,
+          qty: 0,
+          is_available: false,
+          isAvailable: false,
+          unavailable_reason: 'NOT_AVAILABLE',
+        };
+        data[String(id)] = payloadRow;
+        stockLevels.push(payloadRow);
+      });
+
+      const payload = { ok: true, data, stock_levels: stockLevels };
+      setPublicCache(cacheKey, payload, PUBLIC_CACHE_TTL_MS.productsBatchAvailability);
+      res.set('x-public-cache', 'MISS');
+      res.json(payload);
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  async function buildPublicProductPassportDetails(tenantId, storeId, sortedIds) {
+    const empty = { assignments: {}, ingredients: {}, variants: {}, optionGroupsByProduct: {}, defaultConfigs: {} };
+    const ids = Array.isArray(sortedIds)
+      ? sortedIds.map(Number).filter((id) => Number.isFinite(id) && id > 0)
+      : [];
+    if (!ids.length) return empty;
+
+    const placeholders = ids.map(() => '?').join(',');
+    const productBlockRows = await loadPublicProductBlockRows(tenantId, ids);
+    const blocksConfigMap = await resolveProductBlocksConfigMap(tenantId, storeId, productBlockRows);
+
+    const [productRows] = await db.query(
+      `SELECT id, name, price, base_unit_id, base_qty, unit_id
+       FROM prod_products
+       WHERE tenant_id=? AND id IN (${placeholders})`,
+      [tenantId, ...ids]
+    );
+    const productsById = new Map((Array.isArray(productRows) ? productRows : []).map((row) => [Number(row.id), row]));
+
+    const [assignmentRows] = await db.query(
+      `SELECT
+         a.assign_id AS product_id,
+         a.id AS assignment_id,
+         a.group_id,
+         a.priority,
+         a.sort_order,
+         a.is_active,
+         a.selection_type AS assignment_selection_type,
+         a.min_select AS assignment_min_select,
+         a.max_select AS assignment_max_select,
+         g.title,
+         g.selection_type AS group_selection_type,
+         g.min_select AS group_min_select,
+         g.max_select AS group_max_select,
+         g.is_required,
+         g.out_of_stock_action
+       FROM prod_option_assignments a
+       JOIN prod_option_groups g ON g.tenant_id=a.tenant_id AND g.id=a.group_id
+       WHERE a.tenant_id=?
+         AND a.assign_type='product'
+         AND a.assign_id IN (${placeholders})
+         AND a.is_active=1
+         AND g.is_active=1
+       ORDER BY a.assign_id ASC, a.sort_order ASC, a.id ASC`,
+      [tenantId, ...ids]
+    );
+
+    const assignments = {};
+    ids.forEach((pid) => { assignments[pid] = []; });
+    assignmentRows.forEach((r) => {
+      const pid = Number(r.product_id);
+      if (!Number.isFinite(pid) || pid <= 0) return;
+      if (!assignments[pid]) assignments[pid] = [];
+      assignments[pid].push({
+        assignment_id: Number(r.assignment_id),
+        group_id: Number(r.group_id),
+        title: str(r.title || ''),
+        selection_type: r.assignment_selection_type || r.group_selection_type || 'single',
+        min_select: r.assignment_min_select ?? r.group_min_select ?? 0,
+        max_select: r.assignment_max_select ?? r.group_max_select ?? null,
+        is_required: Number(r.is_required ?? 0) === 1,
+        is_active: Number(r.is_active || 0) === 1,
+        out_of_stock_action: r.out_of_stock_action == null ? 1 : Number(r.out_of_stock_action),
+        priority: Number(r.priority || 0),
+        sort_order: Number(r.sort_order || 0),
+      });
+    });
+    ids.forEach((pid) => {
+      const blocksConfig = blocksConfigMap.get(Number(pid)) || getDefaultProductBlocksConfig();
+      if (!blocksConfig.options) assignments[pid] = [];
+    });
+
+    const [pcsRows] = await db.query(
+      `SELECT id FROM prod_units WHERE tenant_id=? AND code='pcs' LIMIT 1`,
+      [tenantId]
+    );
+    const pcsUnitId = pcsRows.length ? Number(pcsRows[0].id) : null;
+
+    const [ingredientRows] = await db.query(
+      `SELECT
+         i.product_id,
+         i.id,
+         i.ingredient_id,
+         i.quantity,
+         i.unit_id,
+         i.quantity_min,
+         i.quantity_max,
+         i.quantity_step,
+         i.price_override,
+         i.is_variable,
+         i.sort_order,
+         p.name AS ingredient_name,
+         p.price AS ingredient_price,
+         p.base_unit_id AS ingredient_base_unit_id,
+         p.base_qty AS ingredient_base_qty,
+         p.unit_id AS ingredient_unit_id,
+         p.nutrition_protein_100g,
+         p.nutrition_fat_100g,
+         p.nutrition_carbs_100g,
+         p.photos_json AS ingredient_photos,
+         u.code AS unit_code,
+         u.title AS unit_title,
+         u.short_title AS unit_short_title,
+         pul.factor AS ingredient_pcs_factor
+       FROM prod_product_ingredients i
+       JOIN prod_products p ON p.tenant_id=i.tenant_id AND p.id=i.ingredient_id
+       JOIN prod_units u ON u.id=i.unit_id
+       LEFT JOIN prod_product_unit_links pul
+         ON pul.tenant_id=i.tenant_id
+        AND pul.product_id=i.ingredient_id
+        AND pul.base_unit_id=p.base_unit_id
+        AND pul.unit_id=?
+       WHERE i.tenant_id=? AND i.product_id IN (${placeholders})
+         AND (i.is_variable = 1 OR i.is_variable IS NULL)
+       ORDER BY i.product_id ASC, i.sort_order ASC, i.id ASC`,
+      [pcsUnitId || 0, tenantId, ...ids]
+    );
+
+    const ingredients = {};
+    ids.forEach((pid) => { ingredients[pid] = []; });
+    await attachPublicNutritionToIngredientRows(ingredientRows, tenantId);
+    ingredientRows.forEach((r) => {
+      r.ingredient_photos = safeJsonArray(r.ingredient_photos);
+      const pid = Number(r.product_id);
+      if (!ingredients[pid]) ingredients[pid] = [];
+      ingredients[pid].push(r);
+    });
+    ids.forEach((pid) => {
+      const blocksConfig = blocksConfigMap.get(Number(pid)) || getDefaultProductBlocksConfig();
+      if (!blocksConfig.ingredients) ingredients[pid] = [];
+    });
+
+    const [variantRows] = await db.query(
+      `SELECT
+         va.product_id,
+         vg.id,
+         vg.title,
+         vg.unit_id,
+         vg.values,
+         vg.default_value_index AS group_default_value_index,
+         va.default_value_index AS assignment_default_value_index,
+         u.code AS unit_code,
+         u.title AS unit_title,
+         u.short_title AS unit_short_title
+       FROM prod_variant_assignments va
+       JOIN prod_variant_groups vg ON vg.id=va.variant_group_id
+       LEFT JOIN prod_units u ON u.id=vg.unit_id
+       WHERE va.tenant_id=?
+         AND va.product_id IN (${placeholders})
+         AND va.is_active=1 AND vg.is_active=1
+       ORDER BY va.product_id ASC, va.sort_order ASC, vg.sort_order ASC`,
+      [tenantId, ...ids]
+    );
+
+    const groupIds = Array.from(new Set(variantRows.map((r) => Number(r.id)).filter((n) => Number.isFinite(n) && n > 0)));
+    const variantValueExclusionsByScope = await loadVariantValueExclusionsMap(tenantId, ids, groupIds);
+    const tiersByGroupId = new Map();
+    if (groupIds.length) {
+      const tierPlaceholders = groupIds.map(() => '?').join(',');
+      const [tiers] = await db.query(
+        `SELECT variant_group_id, min_quantity, discount_percent, sort_order
+         FROM prod_variant_discount_tiers
+         WHERE tenant_id=? AND variant_group_id IN (${tierPlaceholders})
+         ORDER BY variant_group_id ASC, sort_order ASC, min_quantity ASC`,
+        [tenantId, ...groupIds]
+      );
+      for (const t of tiers) {
+        const gid = Number(t.variant_group_id);
+        if (!tiersByGroupId.has(gid)) tiersByGroupId.set(gid, []);
+        tiersByGroupId.get(gid).push(t);
+      }
+    }
+
+    const variants = {};
+    ids.forEach((pid) => { variants[pid] = []; });
+    for (const v of variantRows) {
+      const pid = Number(v.product_id);
+      if (!variants[pid]) variants[pid] = [];
+      const groupDefaultIdx = v.group_default_value_index != null ? Number(v.group_default_value_index) : null;
+      const assignmentDefaultIdx = v.assignment_default_value_index != null ? Number(v.assignment_default_value_index) : null;
+      const groupId = Number(v.id);
+      const variantData = buildVisibleVariantData(
+        safeJsonArray(v.values),
+        tiersByGroupId.get(groupId) || [],
+        assignmentDefaultIdx != null ? assignmentDefaultIdx : groupDefaultIdx,
+        getVariantValueExclusionSet(variantValueExclusionsByScope, pid, groupId)
+      );
+      if (!variantData) continue;
+      variants[pid].push({
+        id: groupId,
+        variant_group_id: groupId,
+        title: str(v.title || ""),
+        unit_id: v.unit_id ? Number(v.unit_id) : null,
+        unit_code: str(v.unit_code || ""),
+        unit_title: str(v.unit_title || ""),
+        unit_short_title: str(v.unit_short_title || ""),
+        values: variantData.values,
+        default_value_index: variantData.default_value_index,
+        discount_tiers: variantData.discount_tiers,
+      });
+    }
+    await attachPublicVariantGramFactors(new Map(ids.map((pid) => [Number(pid), variants[pid] || []])), tenantId);
+    ids.forEach((pid) => {
+      const blocksConfig = blocksConfigMap.get(Number(pid)) || getDefaultProductBlocksConfig();
+      if (!blocksConfig.variants) variants[pid] = [];
+    });
+
+    const optionGroupIds = Array.from(new Set(Object.values(assignments).flat().map((row) => Number(row.group_id)).filter((id) => id > 0)));
+    const optionGroupsById = {};
+    if (optionGroupIds.length) {
+      const groupPlaceholders = optionGroupIds.map(() => '?').join(',');
+      const [groupRows] = await db.query(
+        `SELECT *
+         FROM prod_option_groups
+         WHERE tenant_id=? AND id IN (${groupPlaceholders}) AND is_active=1`,
+        [tenantId, ...optionGroupIds]
+      );
+      const groupById = new Map(groupRows.map((group) => [Number(group.id), group]));
+      const [items] = await db.query(
+        `SELECT
+           i.id,
+           i.group_id,
+           i.target_product_id,
+           i.target_type,
+           i.price_mode,
+           i.price_value,
+           i.qty_min,
+           i.qty_max,
+           i.is_active,
+           i.sort_order,
+           p.name AS product_name,
+           p.price AS product_price,
+           p.base_unit_id AS product_base_unit_id,
+           p.base_qty AS product_base_qty,
+           p.unit_id AS product_unit_id,
+           p.photos_json AS product_photos_json
+         FROM prod_option_items i
+         JOIN prod_products p ON p.tenant_id=i.tenant_id AND p.id=i.target_product_id
+         LEFT JOIN prod_product_stocks ps
+           ON ps.tenant_id = p.tenant_id AND ps.store_id = ? AND ps.product_id = p.id
+         WHERE i.tenant_id=?
+           AND i.group_id IN (${groupPlaceholders})
+           AND i.target_type='product'
+           AND i.is_active=1
+           AND p.is_active=1
+           AND p.site_visibility=1
+           AND (ps.qty IS NULL OR ps.qty > 0)
+         ORDER BY i.group_id ASC, i.sort_order ASC, i.id ASC`,
+        [storeId, tenantId, ...optionGroupIds]
+      );
+
+      const optionTargetProductIds = Array.from(new Set(items.map((item) => Number(item.target_product_id)).filter((id) => id > 0)));
+      const optionVariantsByProductId = new Map();
+      if (optionTargetProductIds.length) {
+        const optionVariantPlaceholders = optionTargetProductIds.map(() => '?').join(',');
+        const [optionVariantRows] = await db.query(
+          `SELECT
+             va.product_id,
+             vg.id AS variant_group_id,
+             vg.title AS variant_title,
+             vg.unit_id,
+             vg.values AS variant_values,
+             vg.default_value_index AS group_default_value_index,
+             va.default_value_index AS assignment_default_value_index,
+             u.code AS unit_code,
+             u.title AS unit_title,
+             u.short_title AS unit_short_title,
+             va.sort_order
+           FROM prod_variant_assignments va
+           JOIN prod_variant_groups vg ON vg.id = va.variant_group_id
+           LEFT JOIN prod_units u ON u.id = vg.unit_id
+           WHERE va.tenant_id = ?
+             AND va.product_id IN (${optionVariantPlaceholders})
+             AND va.is_active = 1 AND vg.is_active = 1
+           ORDER BY va.product_id, va.sort_order ASC`,
+          [tenantId, ...optionTargetProductIds]
+        );
+        const optionVariantGroupIds = Array.from(new Set(optionVariantRows.map((va) => Number(va.variant_group_id)).filter(Number.isFinite)));
+        const optionVariantValueExclusionsByScope = await loadVariantValueExclusionsMap(tenantId, optionTargetProductIds, optionVariantGroupIds);
+        const optionTiersByGroupId = new Map();
+        if (optionVariantGroupIds.length) {
+          const optionTierPlaceholders = optionVariantGroupIds.map(() => '?').join(',');
+          const [optionTiers] = await db.query(
+            `SELECT variant_group_id, min_quantity, discount_percent, sort_order
+             FROM prod_variant_discount_tiers
+             WHERE tenant_id=? AND variant_group_id IN (${optionTierPlaceholders})
+             ORDER BY variant_group_id ASC, sort_order ASC, min_quantity ASC`,
+            [tenantId, ...optionVariantGroupIds]
+          );
+          for (const t of optionTiers) {
+            const gid = Number(t.variant_group_id);
+            if (!optionTiersByGroupId.has(gid)) optionTiersByGroupId.set(gid, []);
+            optionTiersByGroupId.get(gid).push(t);
+          }
+        }
+        for (const va of optionVariantRows) {
+          const pid = Number(va.product_id);
+          if (!optionVariantsByProductId.has(pid)) optionVariantsByProductId.set(pid, []);
+          const groupDefaultIdx = va.group_default_value_index != null ? Number(va.group_default_value_index) : null;
+          const assignmentDefaultIdx = va.assignment_default_value_index != null ? Number(va.assignment_default_value_index) : null;
+          const groupId = Number(va.variant_group_id);
+          const variantData = buildVisibleVariantData(
+            safeJsonArray(va.variant_values),
+            optionTiersByGroupId.get(groupId) || [],
+            assignmentDefaultIdx != null ? assignmentDefaultIdx : groupDefaultIdx,
+            getVariantValueExclusionSet(optionVariantValueExclusionsByScope, pid, groupId)
+          );
+          if (!variantData) continue;
+          optionVariantsByProductId.get(pid).push({
+            id: groupId,
+            variant_group_id: groupId,
+            title: str(va.variant_title || ""),
+            unit_id: va.unit_id ? Number(va.unit_id) : null,
+            unit_code: str(va.unit_code || ""),
+            unit_title: str(va.unit_title || ""),
+            unit_short_title: str(va.unit_short_title || ""),
+            values: variantData.values,
+            default_value_index: variantData.default_value_index,
+            discount_tiers: variantData.discount_tiers,
+          });
+        }
+        await attachPublicVariantGramFactors(optionVariantsByProductId, tenantId);
+      }
+
+      await attachPublicNutritionToOptionItemRows(items, tenantId);
+      const itemsByGroupId = new Map();
+      items.forEach((item) => {
+        const gid = Number(item.group_id || 0);
+        if (!(gid > 0)) return;
+        if (!itemsByGroupId.has(gid)) itemsByGroupId.set(gid, []);
+        const photos = safeJsonArray(item.product_photos_json);
+        const productId = Number(item.target_product_id);
+        itemsByGroupId.get(gid).push({
+          id: Number(item.id),
+          target_product_id: productId,
+          name: str(item.product_name || ""),
+          product_name: str(item.product_name || ""),
+          title: str(item.product_name || ""),
+          product_price: Number(item.product_price || 0),
+          product_base_unit_id: item.product_base_unit_id ? Number(item.product_base_unit_id) : null,
+          product_base_qty: Number(item.product_base_qty || 1) || 1,
+          product_unit_id: item.product_unit_id ? Number(item.product_unit_id) : null,
+          product_photos_json: photos,
+          nutrition_per_100g: item.nutrition_per_100g || null,
+          nutrition_per_portion: item.nutrition_per_portion || null,
+          nutrition_incomplete: Boolean(item.nutrition_incomplete),
+          base_qty_grams: item.base_qty_grams,
+          nutrition_portion_grams: item.nutrition_portion_grams,
+          unit_to_grams_factor: item.unit_to_grams_factor,
+          price_mode: item.price_mode || "from_target",
+          price_value: Number(item.price_value || 0),
+          price: item.price_mode === "fixed" ? Number(item.price_value || 0) : Number(item.product_price || 0),
+          qty_min: Number(item.qty_min ?? 1),
+          qty_max: Number(item.qty_max ?? 1),
+          is_active: Number(item.is_active || 0) === 1,
+          sort_order: Number(item.sort_order || 0),
+          variants: optionVariantsByProductId.get(productId) || [],
+        });
+      });
+
+      optionGroupIds.forEach((id) => {
+        const group = groupById.get(id) || null;
+        optionGroupsById[String(id)] = group
+          ? {
+              group: {
+                id: Number(group.id),
+                title: str(group.title || ""),
+                selection_type: group.selection_type || "single",
+                min_select: group.min_select ?? 0,
+                max_select: group.max_select ?? null,
+                is_required: Number(group.is_required ?? 0) === 1,
+                allow_variants: Number(group.allow_variants ?? 0) === 1,
+                is_active: Number(group.is_active || 0) === 1,
+              },
+              items: itemsByGroupId.get(id) || [],
+            }
+          : { group: null, items: [] };
+      });
+    }
+
+    const formatVariantValueLabel = (value, unitShortTitle) => {
+      const rawValue = str(value || '').trim();
+      const unit = str(unitShortTitle || '').trim();
+      if (!rawValue) return '';
+      if (!unit) return rawValue;
+      const hasLetters = /[a-z\u0400-\u04FF]/i.test(rawValue);
+      return hasLetters ? rawValue : `${rawValue} ${unit}`;
+    };
+    const parseVariantValueNumber = (value) => {
+      const match = String(value ?? '').replace(',', '.').match(/-?\d+(?:\.\d+)?/);
+      return match ? Number(match[0]) : NaN;
+    };
+    const getSimpleVariantPrice = (basePrice, baseQty, values, selectedIndex, discountTiers) => {
+      const price = Number(basePrice || 0);
+      const productBaseQty = Number(baseQty || 1) || 1;
+      const idx = Number(selectedIndex);
+      const list = Array.isArray(values) ? values : [];
+      if (!list.length || !Number.isFinite(idx) || idx < 0 || idx >= list.length) return price;
+      const selectedValue = parseVariantValueNumber(list[idx]);
+      if (Number.isFinite(productBaseQty) && productBaseQty > 0 && Number.isFinite(selectedValue) && selectedValue > 0) {
+        let out = price * (selectedValue / productBaseQty);
+        const tier = (Array.isArray(discountTiers) ? discountTiers : []).find((t) => Number(t.sort_order) === idx);
+        const discountPercent = Number(tier?.discount_percent || 0) || 0;
+        if (discountPercent !== 0) out *= (1 - discountPercent / 100);
+        return out;
+      }
+      return price;
+    };
+
+    const optionGroupsByProduct = {};
+    const defaultConfigs = {};
+    ids.forEach((pid) => {
+      const product = productsById.get(Number(pid)) || null;
+      const productAssignments = assignments[pid] || [];
+      const productIngredients = ingredients[pid] || [];
+      const productVariants = variants[pid] || [];
+
+      const groups = [];
+      productAssignments.forEach((assignment) => {
+        const groupId = Number(assignment?.group_id || 0);
+        const details = optionGroupsById[String(groupId)] || optionGroupsById[groupId] || null;
+        const activeItems = (Array.isArray(details?.items) ? details.items : []).filter((item) => Number(item?.is_active || 0) === 1);
+        if (!details || !activeItems.length) return;
+        groups.push({
+          id: groupId,
+          title: str(assignment.title || details.group?.title || ""),
+          selection_type: details.group?.selection_type || assignment.selection_type || "single",
+          min_select: details.group?.min_select ?? assignment.min_select ?? 0,
+          max_select: details.group?.max_select ?? assignment.max_select ?? null,
+          allow_variants: Boolean(details.group?.allow_variants),
+          is_required: (details.group?.selection_type || assignment.selection_type || "single") === "single"
+            ? (Number(details.group?.is_required ?? 1) === 1)
+            : false,
+          items: activeItems,
+        });
+      });
+      optionGroupsByProduct[pid] = groups;
+
+      let variantGroupId = null;
+      let variantValueIndex = null;
+      let variantLabel = '';
+      let variantUnitPrice = Number(product?.price || 0);
+      const firstVariantGroup = productVariants.length ? productVariants[0] : null;
+      const variantValues = Array.isArray(firstVariantGroup?.values) ? firstVariantGroup.values : [];
+      if (product && firstVariantGroup && variantValues.length) {
+        const rawIdx = firstVariantGroup.default_value_index != null ? Number(firstVariantGroup.default_value_index) : 0;
+        const safeIdx = Number.isFinite(rawIdx) && rawIdx >= 0 && rawIdx < variantValues.length ? rawIdx : 0;
+        const valueLabel = formatVariantValueLabel(
+          variantValues[safeIdx],
+          firstVariantGroup.unit_short_title || firstVariantGroup.unit_code || firstVariantGroup.unit_title || ''
+        );
+        variantGroupId = Number(firstVariantGroup.id || firstVariantGroup.variant_group_id || 0) || null;
+        variantValueIndex = safeIdx;
+        variantLabel = valueLabel;
+        variantUnitPrice = getSimpleVariantPrice(
+          Number(product.price || 0),
+          Number(product.base_qty || 1) || 1,
+          variantValues,
+          safeIdx,
+          firstVariantGroup.discount_tiers || []
+        );
+      }
+
+      const selectedOptionItems = [];
+      groups.forEach((group) => {
+        const items = Array.isArray(group.items) ? group.items : [];
+        if (!items.length) return;
+        const selectionType = str(group.selection_type || 'single').trim().toLowerCase() || 'single';
+        const minSelect = Number(group.min_select ?? 0);
+        const requiredSingle = selectionType === 'single' && (Number(group.is_required || 0) === 1 || minSelect > 0);
+        const addDefaultOptionItem = (item, qty) => {
+          const safeQty = Math.max(1, Number(qty || 1));
+          const targetProductId = Number(item?.target_product_id || item?.product_id || 0);
+          const out = {
+            id: Number(item.id),
+            title: str(item.title || item.name || item.product_name || ''),
+            name: str(item.name || item.title || item.product_name || ''),
+            price: Number(item.price || item.product_price || 0),
+            qty: safeQty,
+            quantity: safeQty,
+            target_product_id: Number.isFinite(targetProductId) && targetProductId > 0 ? targetProductId : null,
+            product_id: Number.isFinite(targetProductId) && targetProductId > 0 ? targetProductId : null,
+          };
+          const itemVariants = Array.isArray(item?.variants) ? item.variants : [];
+          const firstItemVariantGroup = itemVariants.length ? itemVariants[0] : null;
+          const itemVariantValues = Array.isArray(firstItemVariantGroup?.values) ? firstItemVariantGroup.values : [];
+          if (firstItemVariantGroup && itemVariantValues.length) {
+            const rawVariantIdx = firstItemVariantGroup.default_value_index != null ? Number(firstItemVariantGroup.default_value_index) : 0;
+            const safeVariantIdx = Number.isFinite(rawVariantIdx) && rawVariantIdx >= 0 && rawVariantIdx < itemVariantValues.length ? rawVariantIdx : 0;
+            const variantUnitPriceForOption = getSimpleVariantPrice(
+              Number(out.price || 0),
+              Number(item.product_base_qty || 1) || 1,
+              itemVariantValues,
+              safeVariantIdx,
+              firstItemVariantGroup.discount_tiers || []
+            );
+            out.variant_group_id = Number(firstItemVariantGroup.id || firstItemVariantGroup.variant_group_id || 0) || null;
+            out.variant_value_index = safeVariantIdx;
+            out.variant_label = formatVariantValueLabel(
+              itemVariantValues[safeVariantIdx],
+              firstItemVariantGroup.unit_short_title || firstItemVariantGroup.unit_code || firstItemVariantGroup.unit_title || ''
+            );
+            out.variant_price_diff = Number(variantUnitPriceForOption || 0) - Number(out.price || 0);
+            out.price = Number(variantUnitPriceForOption || 0);
+          }
+          selectedOptionItems.push(out);
+        };
+
+        if (selectionType === 'single') {
+          if (requiredSingle) addDefaultOptionItem(items[0], 1);
+          return;
+        }
+        if (selectionType === 'multiple_group' || selectionType === 'multiple_item' || selectionType === 'multiple') {
+          const requiredCount = Number.isFinite(minSelect) ? Math.max(0, Math.floor(minSelect)) : 0;
+          let selectedCount = 0;
+          items.forEach((item) => {
+            if (selectedCount >= requiredCount) return;
+            const qtyMin = Number(item?.qty_min ?? 0);
+            addDefaultOptionItem(item, qtyMin > 0 ? qtyMin : 1);
+            selectedCount += 1;
+          });
+        }
+      });
+
+      defaultConfigs[pid] = {
+        option_item_ids: selectedOptionItems.map((it) => Number(it.id)).filter((id) => Number.isFinite(id) && id > 0),
+        option_items: selectedOptionItems,
+        ingredients: productIngredients
+          .map((ing) => {
+            const ingredientId = Number(ing?.ingredient_id || ing?.id || 0);
+            const quantity = Number(ing?.quantity ?? ing?.qty ?? 0);
+            if (!Number.isFinite(ingredientId) || ingredientId <= 0 || !(quantity > 0)) return null;
+            return {
+              ingredient_id: ingredientId,
+              ingredient_name: str(ing?.ingredient_name || ing?.name || ''),
+              name: str(ing?.name || ing?.ingredient_name || ''),
+              quantity,
+              qty: quantity,
+              unit_id: ing?.unit_id != null ? Number(ing.unit_id) : null,
+              unit_label: str(ing?.unit_short_title || ing?.unit_label || ing?.unit_title || ing?.unit_code || ing?.unit || ''),
+              unit: str(ing?.unit || ing?.unit_short_title || ing?.unit_label || ing?.unit_title || ing?.unit_code || ''),
+            };
+          })
+          .filter(Boolean),
+        ingredient_price_diff: 0,
+        variant_group_id: variantGroupId,
+        variant_value_index: variantValueIndex,
+        variant_label: variantLabel,
+        variant_unit_price: Number(variantUnitPrice || 0),
+      };
+    });
+
+    return { assignments, ingredients, variants, optionGroupsByProduct, defaultConfigs };
+  }
+
+  router.post('/products/batch/passports', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const rawIds = Array.isArray(req.body?.ids) ? req.body.ids : [];
+      const ids = [...new Set(rawIds.map(Number).filter((id) => Number.isFinite(id) && id > 0))];
+      if (!ids.length) return res.json({ ok: true, data: {}, versions: {} });
+      if (ids.length > 300) return res.status(400).json({ ok: false, error: 'TOO_MANY' });
+
+      const sortedIds = [...ids].sort((a, b) => a - b);
+      const cacheKey = makePublicCacheKey('products-batch-passports-v2', { tenantId, storeId, ids: sortedIds });
+      const cached = getPublicCache(cacheKey);
+      if (cached) {
+        res.set('x-public-cache', 'HIT');
+        return res.json(cached);
+      }
+
+      const placeholders = ids.map(() => '?').join(',');
+      const [rows] = await db.query(
+        `SELECT p.*,
+            s.qty AS stock_qty,
+            CASE
+              WHEN (s.qty IS NULL OR s.qty > 0) AND NOT EXISTS (
+                SELECT 1
+                FROM prod_product_ingredients i
+                JOIN prod_product_stocks si
+                  ON si.tenant_id=i.tenant_id AND si.store_id=? AND si.product_id=i.ingredient_id
+                WHERE i.tenant_id=p.tenant_id AND i.product_id=p.id
+                  AND si.qty IS NOT NULL AND si.qty <= 0
+              ) AND NOT EXISTS (
+                SELECT 1
+                FROM prod_option_assignments oa
+                JOIN prod_option_groups og
+                  ON og.tenant_id=oa.tenant_id AND og.id=oa.group_id
+                WHERE oa.tenant_id=p.tenant_id
+                  AND oa.assign_type='product' AND oa.assign_id=p.id
+                  AND oa.is_active=1
+                  AND og.is_active=1
+                  AND COALESCE(og.out_of_stock_action, 1)=0
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM prod_option_items oi
+                    JOIN prod_products op
+                      ON op.tenant_id=oi.tenant_id AND op.id=oi.target_product_id
+                    LEFT JOIN prod_product_stocks ops
+                      ON ops.tenant_id=op.tenant_id AND ops.store_id=? AND ops.product_id=op.id
+                    WHERE oi.tenant_id=oa.tenant_id AND oi.group_id=oa.group_id
+                      AND oi.target_type='product'
+                      AND oi.is_active=1
+                      AND op.is_active=1
+                      AND op.site_visibility=1
+                      AND (ops.qty IS NULL OR ops.qty > 0)
+                      AND NOT EXISTS (
+                        SELECT 1
+                        FROM prod_product_ingredients ip
+                        JOIN prod_product_stocks ips
+                          ON ips.tenant_id=ip.tenant_id AND ips.store_id=? AND ips.product_id=ip.ingredient_id
+                        WHERE ip.tenant_id=op.tenant_id AND ip.product_id=op.id
+                          AND ips.qty IS NOT NULL AND ips.qty <= 0
+                      )
+                  )
+              )
+              THEN 1 ELSE 0
+            END AS is_available
+         FROM prod_products p
+         LEFT JOIN prod_product_stocks s
+           ON s.tenant_id = p.tenant_id AND s.store_id = ? AND s.product_id = p.id
+         WHERE p.tenant_id=? AND p.id IN (${placeholders}) AND p.is_active=1 AND p.site_visibility=1`,
+        [storeId, storeId, storeId, storeId, tenantId, ...ids]
+      );
+
+      for (const p of rows) {
+        p.photos = safeJsonArray(p.photos_json);
+        attachProductThumbs(p);
+        p.is_available = Number(p.is_available || 0) === 1;
+      }
+      await applyPublicProductAvailability(rows, tenantId, storeId);
+      await applyPublicProductBlocksToRows(rows, tenantId, storeId);
+      await applyPublicProductNutrition(rows, tenantId);
+      await enrichProductsWithDisplayPrice(rows, tenantId, storeId);
+      await enrichProductsWithDiscounts(rows, tenantId, storeId);
+      await attachPublicProductCategoryIds(rows, tenantId);
+      const details = await buildPublicProductPassportDetails(tenantId, storeId, sortedIds);
+
+      const data = {};
+      const versions = {};
+      rows.forEach((product) => {
+        const id = Number(product?.id || 0);
+        if (!(id > 0)) return;
+        data[String(id)] = {
+          product,
+          ingredients: Array.isArray(details.ingredients?.[id]) ? details.ingredients[id] : [],
+          variants: Array.isArray(details.variants?.[id]) ? details.variants[id] : [],
+          optionAssignments: Array.isArray(details.assignments?.[id]) ? details.assignments[id] : [],
+          optionGroups: Array.isArray(details.optionGroupsByProduct?.[id]) ? details.optionGroupsByProduct[id] : [],
+          defaultConfig: details.defaultConfigs?.[id] && typeof details.defaultConfigs[id] === 'object'
+            ? details.defaultConfigs[id]
+            : {
+                option_item_ids: [],
+                option_items: [],
+                ingredients: [],
+                ingredient_price_diff: 0,
+                variant_group_id: null,
+                variant_value_index: null,
+                variant_label: '',
+                variant_unit_price: 0,
+              },
+          updated_at: product.updated_at || product.updatedAt || null,
+        };
+        versions[String(id)] = product.updated_at || product.updatedAt || null;
+      });
+
+      const payload = { ok: true, data, versions };
+      setPublicCache(cacheKey, payload, PUBLIC_CACHE_TTL_MS.productsBatchPassports);
       res.set('x-public-cache', 'MISS');
       res.json(payload);
     } catch (e) {
