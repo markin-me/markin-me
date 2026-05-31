@@ -2727,12 +2727,10 @@
           <strong>\u0417\u0430\u043a\u0430\u0437 #${escapeHtml(String(order?.id || ""))}</strong>
           <span>${escapeHtml(dateText)}</span>
         </div>
-        ${addressText ? `
-          <div class="shop-order-summary-card__address">
-            <i class="fas fa-location-dot" aria-hidden="true"></i>
-            <span>${escapeHtml(addressText)}</span>
-          </div>
-        ` : ""}
+        <div class="shop-order-summary-card__address${addressText ? "" : " is-empty"}">
+          <i class="fas fa-location-dot" aria-hidden="true"></i>
+          <span>${addressText ? escapeHtml(addressText) : "&nbsp;"}</span>
+        </div>
         ${previewPhotos.length ? `
           <div class="shop-profile-order-photos">
             ${previewPhotos.map((src) => `<img class="shop-profile-order-photo" src="${escapeHtml(src)}" alt="" loading="lazy" decoding="async" />`).join("")}
@@ -2802,17 +2800,29 @@
     const host = elCatalogPromoBlock;
     if (!host) return;
     const orders = Array.isArray(window._activeOrders) ? window._activeOrders : [];
-    if (!orders.length) {
+    const level = getHomeBonusFirstLevel(state.homeBonusConfig);
+    const bonusCardHtml = level ? buildBonusLevelPreviewCardHtml(level, { homeCard: true, showQr: false })
+      .replace('class="bonus-level-preview-card"', 'class="bonus-level-preview-card shop-home-bonus-card__preview"') : "";
+    if (!orders.length && !bonusCardHtml) {
       host.classList.add("hidden");
       host.innerHTML = "";
       return;
     }
     host.innerHTML = `
       <div class="shop-catalog-promo-block__scroll no-scrollbar">
+        ${bonusCardHtml ? `<div class="shop-catalog-bonus-card shop-home-bonus-card">${bonusCardHtml}</div>` : ""}
         ${orders.map((order) => buildCatalogActiveOrderCardHtml(order)).join("")}
       </div>
     `;
     host.classList.remove("hidden");
+    if (level) bindBonusLevelPreviewCardActions(host, level, { returnTo: "none" });
+    const catalogBonusCard = host.querySelector(".shop-catalog-bonus-card");
+    if (catalogBonusCard && catalogBonusCard.dataset.catalogBonusCardBound !== "1") {
+      catalogBonusCard.addEventListener("click", () => {
+        openHomeBonusLevelSheet(level);
+      });
+      catalogBonusCard.dataset.catalogBonusCardBound = "1";
+    }
     host.querySelectorAll("[data-home-active-order-id]").forEach((button) => {
       if (button.dataset.catalogActiveOrderBound === "1") return;
       button.addEventListener("click", async () => {
