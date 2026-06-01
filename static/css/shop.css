@@ -11378,9 +11378,11 @@ body.page-shop .shop-products-panel .panel-body{
     width: 100%;
     max-width: 100%;
     min-width: 0;
-    border-top-left-radius: 30px;
-    border-top-right-radius: 30px;
-    overflow: hidden;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    overflow: visible;
   }
   body.page-shop .shop-products-panel .panel-body{
     width: 100%;
@@ -11388,6 +11390,7 @@ body.page-shop .shop-products-panel .panel-body{
     min-width: 0;
     padding-left: 8px;
     padding-right: 8px;
+    background: transparent;
   }
   body.page-shop .shop-products-grid{
     width: 100%;
@@ -11408,6 +11411,7 @@ body.page-shop .shop-products-panel .panel-body{
   .shop-col-products .panel-body{
     padding-bottom: 400px;
     overflow: visible;
+    background: #eef0f4;
   }
 
   body.page-shop .shop-products-panel .panel-body,
