@@ -17889,11 +17889,15 @@ function updateCartBadge() {
   }
 
   let shopPullRefreshState = null;
+  const SHOP_PULL_REFRESH_THRESHOLD = 140;
+  const SHOP_PULL_REFRESH_MAX_DISTANCE = 168;
+  const SHOP_PULL_REFRESH_CANCEL_DISTANCE = 10;
 
   function isMobilePullRefreshAvailable() {
     if (!isShopPage()) return false;
     if (!("ontouchstart" in window) && Number(navigator.maxTouchPoints || 0) <= 0) return false;
     if (window.matchMedia && !window.matchMedia("(max-width: 768px)").matches) return false;
+    if (document.body?.classList.contains("shop-company-chat-open")) return false;
     if (document.body?.classList.contains("modal-open") || document.body?.classList.contains("sheet-open")) return false;
     if (window.AppModal?.isOpen?.()) return false;
     return true;
@@ -17917,15 +17921,15 @@ function updateCartBadge() {
 
   function setShopPullRefreshProgress(distance, refreshing = false) {
     const indicator = ensureShopPullRefreshIndicator();
-    const clamped = Math.max(0, Math.min(96, Number(distance || 0)));
+    const clamped = Math.max(0, Math.min(SHOP_PULL_REFRESH_MAX_DISTANCE, Number(distance || 0)));
     indicator.classList.toggle("is-visible", clamped > 4 || refreshing);
-    indicator.classList.toggle("is-ready", clamped >= 76 || refreshing);
+    indicator.classList.toggle("is-ready", clamped >= SHOP_PULL_REFRESH_THRESHOLD || refreshing);
     indicator.classList.toggle("is-refreshing", !!refreshing);
     indicator.style.setProperty("--shop-pull-refresh-y", `${Math.round(clamped)}px`);
   }
 
   async function runShopPullRefresh() {
-    setShopPullRefreshProgress(76, true);
+    setShopPullRefreshProgress(SHOP_PULL_REFRESH_THRESHOLD, true);
     window.location.reload();
     setTimeout(() => {
       setShopPullRefreshProgress(0, false);
@@ -17943,7 +17947,14 @@ function updateCartBadge() {
       distance: 0,
     };
     const stateRef = shopPullRefreshState;
-    const threshold = 76;
+    const threshold = SHOP_PULL_REFRESH_THRESHOLD;
+
+    const cancelPull = () => {
+      if (!stateRef.pulling && stateRef.distance <= 0) return;
+      stateRef.pulling = false;
+      stateRef.distance = 0;
+      setShopPullRefreshProgress(0, false);
+    };
 
     document.addEventListener("touchstart", (event) => {
       if (stateRef.refreshing || !isMobilePullRefreshAvailable()) return;
@@ -17956,14 +17967,24 @@ function updateCartBadge() {
     }, { passive: true });
 
     document.addEventListener("touchmove", (event) => {
-      if (stateRef.refreshing || !isMobilePullRefreshAvailable()) return;
+      if (stateRef.refreshing) return;
+      if (!isMobilePullRefreshAvailable()) {
+        cancelPull();
+        return;
+      }
       const touch = event.touches && event.touches[0];
-      if (!touch || getShopPullRefreshScrollTop() > 1) return;
+      if (!touch || getShopPullRefreshScrollTop() > 1) {
+        cancelPull();
+        return;
+      }
       const dy = touch.clientY - stateRef.startY;
       const dx = Math.abs(touch.clientX - stateRef.startX);
-      if (dy <= 0 || dx > dy) return;
+      if (dy <= SHOP_PULL_REFRESH_CANCEL_DISTANCE || dx > dy) {
+        cancelPull();
+        return;
+      }
       stateRef.pulling = true;
-      stateRef.distance = Math.min(96, dy * 0.55);
+      stateRef.distance = Math.min(SHOP_PULL_REFRESH_MAX_DISTANCE, dy * 0.55);
       setShopPullRefreshProgress(stateRef.distance, false);
       if (stateRef.distance > 8) event.preventDefault();
     }, { passive: false });
