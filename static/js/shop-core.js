@@ -1136,7 +1136,7 @@
           </div>
           <div class="bonus-level-preview-category-side${favoriteCategoryLimit > 0 ? "" : " hidden"}" role="button" tabindex="0" data-open-bonus-preview-favorite-categories>
             ${favoriteCategoryPreviewHtml}
-            <div class="bonus-level-preview-category-value" style="color:${escapeHtml(contentColor)};">${escapeHtml(favoriteCategoryBonusText)}</div>
+            <div class="bonus-level-preview-category-value" data-bonus-level-preview-favorites-value="${escapeHtml(String(Number(level?.id || 0)))}" style="color:${escapeHtml(contentColor)};">${buildBonusLevelPreviewFavoriteCategoriesValueHtml(level, contentColor)}</div>
           </div>
         </div>
       </div>
@@ -2153,7 +2153,46 @@
 
   function getHomeBonusFavoriteCategoriesCache(levelId) {
     const key = getHomeBonusFavoriteCategoriesCacheKey(levelId);
-    return state.homeBonusFavoriteCategoriesByLevel.get(key) || null;
+    const cached = state.homeBonusFavoriteCategoriesByLevel.get(key) || null;
+    if (cached) return cached;
+    const stored = readHomeBonusFavoriteCategoriesStorage(levelId);
+    if (stored) {
+      state.homeBonusFavoriteCategoriesByLevel.set(key, stored);
+      return stored;
+    }
+    return null;
+  }
+
+  function getHomeBonusFavoriteCategoriesStorageKey(levelId) {
+    const token = getCustomerToken();
+    if (!token) return "";
+    const customer = getCustomerCache();
+    const customerId = Number(customer?.id || customer?.customer_id || 0);
+    const identity = customerId > 0 ? `c${customerId}` : `t${String(token).slice(-16)}`;
+    return `shop_home_bonus_favorite_categories_v1:${Number(tenantId) || 0}:${identity}:${Number(levelId) || 0}`;
+  }
+
+  function readHomeBonusFavoriteCategoriesStorage(levelId) {
+    try {
+      const storageKey = getHomeBonusFavoriteCategoriesStorageKey(levelId);
+      if (!storageKey) return null;
+      const raw = localStorage.getItem(storageKey);
+      if (!raw) return null;
+      const data = JSON.parse(raw);
+      if (!data || typeof data !== "object") return null;
+      if (Number(data.level_id || 0) !== Number(levelId || 0)) return null;
+      return data;
+    } catch {
+      return null;
+    }
+  }
+
+  function writeHomeBonusFavoriteCategoriesStorage(levelId, data) {
+    try {
+      const storageKey = getHomeBonusFavoriteCategoriesStorageKey(levelId);
+      if (!storageKey || !data || typeof data !== "object") return;
+      localStorage.setItem(storageKey, JSON.stringify(data));
+    } catch {}
   }
 
   function getHomeBonusSelectedFavoriteCategories(level) {
@@ -2189,6 +2228,14 @@
     `;
   }
 
+  function buildBonusLevelPreviewFavoriteCategoriesValueHtml(level, contentColor) {
+    const selected = getHomeBonusSelectedFavoriteCategories(level);
+    if (!selected.length) {
+      return `<button class="bonus-level-preview-category-select" type="button" data-open-bonus-preview-favorite-categories style="color:${escapeHtml(contentColor)};">${escapeHtml("\u0412\u044b\u0431\u0440\u0430\u0442\u044c")}</button>`;
+    }
+    return escapeHtml(formatShopBonusFavoriteCategoriesRange(level));
+  }
+
   function updateBonusLevelPreviewFavoriteCategories(root, level) {
     if (!root || typeof root.querySelectorAll !== "function") return;
     const levelId = Number(level?.id || 0);
@@ -2198,6 +2245,10 @@
     const html = buildBonusLevelPreviewFavoriteCategoriesHtml(level, contentColor, favoriteCategoryLimit);
     root.querySelectorAll(`[data-bonus-level-preview-favorites="${String(levelId)}"]`).forEach((node) => {
       node.outerHTML = html;
+    });
+    const valueHtml = buildBonusLevelPreviewFavoriteCategoriesValueHtml(level, contentColor);
+    root.querySelectorAll(`[data-bonus-level-preview-favorites-value="${String(levelId)}"]`).forEach((node) => {
+      node.innerHTML = valueHtml;
     });
   }
 
@@ -2209,6 +2260,11 @@
     if (!options.force) {
       const cached = state.homeBonusFavoriteCategoriesByLevel.get(key);
       if (cached && Number(cached?.level_id || 0) === levelId) return cached;
+      const stored = readHomeBonusFavoriteCategoriesStorage(levelId);
+      if (stored) {
+        state.homeBonusFavoriteCategoriesByLevel.set(key, stored);
+        return stored;
+      }
       const pending = state._homeBonusFavoriteCategoriesLoading.get(pendingKey);
       if (pending) return pending;
     }
@@ -2216,6 +2272,7 @@
       .then((json) => {
         const data = json?.data && typeof json.data === "object" ? json.data : null;
         state.homeBonusFavoriteCategoriesByLevel.set(key, data);
+        writeHomeBonusFavoriteCategoriesStorage(levelId, data);
         return data;
       })
       .finally(() => {
@@ -2801,8 +2858,12 @@
     if (!host) return;
     const orders = Array.isArray(window._activeOrders) ? window._activeOrders : [];
     const level = getHomeBonusFirstLevel(state.homeBonusConfig);
-    const bonusCardHtml = level ? buildBonusLevelPreviewCardHtml(level, { homeCard: true, showQr: false })
-      .replace('class="bonus-level-preview-card"', 'class="bonus-level-preview-card shop-home-bonus-card__preview"') : "";
+    const bonusCardHtml = level
+      ? (isHomeBonusJoined()
+        ? buildBonusLevelPreviewCardHtml(level, { homeCard: true, showQr: false })
+          .replace('class="bonus-level-preview-card"', 'class="bonus-level-preview-card shop-home-bonus-card__preview"')
+        : buildHomeGuestBonusCardHtml(level))
+      : "";
     if (!orders.length && !bonusCardHtml) {
       host.classList.add("hidden");
       host.innerHTML = "";
@@ -2815,10 +2876,16 @@
       </div>
     `;
     host.classList.remove("hidden");
-    if (level) bindBonusLevelPreviewCardActions(host, level, { returnTo: "none" });
+    if (level && isHomeBonusJoined()) bindBonusLevelPreviewCardActions(host, level, { returnTo: "none" });
+    else bindHomeGuestBonusCardActions(host);
     const catalogBonusCard = host.querySelector(".shop-catalog-bonus-card");
     if (catalogBonusCard && catalogBonusCard.dataset.catalogBonusCardBound !== "1") {
-      catalogBonusCard.addEventListener("click", () => {
+      catalogBonusCard.addEventListener("click", (event) => {
+        if (!isHomeBonusJoined()) {
+          event.preventDefault();
+          openHomeGuestBonusAction();
+          return;
+        }
         openHomeBonusLevelSheet(level);
       });
       catalogBonusCard.dataset.catalogBonusCardBound = "1";
@@ -3025,6 +3092,49 @@
     }
   }
 
+  function bindHomeGuestBonusCardActions(root) {
+    if (!root || !root.querySelectorAll) return;
+    root.querySelectorAll("[data-open-bonus-preview-cashback], [data-open-bonus-preview-favorite-categories]").forEach((node) => {
+      if (node.dataset.guestBonusPreviewActionBound === "1") return;
+      node.dataset.guestBonusPreviewActionBound = "1";
+      node.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      });
+      node.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        event.stopPropagation();
+      });
+    });
+    root.querySelectorAll(".shop-home-bonus-card__action").forEach((button) => {
+      if (button.dataset.guestBonusJoinBound === "1") return;
+      button.dataset.guestBonusJoinBound = "1";
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        openHomeGuestBonusAction();
+      });
+    });
+  }
+
+  function openHomeGuestBonusAction() {
+    if (!getCustomerToken()) {
+      if (typeof openProfileSheet === "function") {
+        openProfileSheet({
+          onLoginSuccess: () => {
+            if (window.AppModal?.isOpen?.() && sheetNavigationState.type === "profile") {
+              window.AppModal.close("sheet");
+            }
+            void refreshHomeBonusConfigUi({ skipPendingModal: true });
+          },
+        });
+      }
+      return;
+    }
+    openHomeBonusCardsSheet();
+  }
+
   function bindBonusCardsPreviewActions(wrap, levels, options = {}) {
     if (!wrap || !Array.isArray(levels)) return;
     Array.from(wrap.querySelectorAll(".shop-bonus-cards-carousel__slide")).forEach((slide, index) => {
@@ -3108,6 +3218,7 @@
             locked: json?.data?.locked === true,
           };
           state.homeBonusFavoriteCategoriesByLevel.set(getHomeBonusFavoriteCategoriesCacheKey(levelId), nextData);
+          writeHomeBonusFavoriteCategoriesStorage(levelId, nextData);
           returnFromBonusNestedSheet(level, options);
         } catch (err) {
           console.error("save bonus favorite categories error:", err);
@@ -3115,7 +3226,9 @@
       });
       syncPicked();
     };
-    renderLoading();
+    const cachedData = getHomeBonusFavoriteCategoriesCache(levelId);
+    if (cachedData) render(cachedData);
+    else renderLoading();
     sheetNavigationState.type = "bonus-favorite-categories";
     sheetNavigationState.screen = "main";
     sheetNavigationState.data = { levelId };
@@ -3149,7 +3262,7 @@
     setBonusCardsSheetHeader(true);
     syncMobileUiState("bonus-favorite-categories-sheet-open");
     try {
-      const data = await loadHomeBonusFavoriteCategories(level, { force: true });
+      const data = await loadHomeBonusFavoriteCategories(level);
       render(data || {});
     } catch (err) {
       console.error("load bonus favorite categories error:", err);
@@ -9370,6 +9483,58 @@
     return levels.find((level) => level && String(level.title || "").trim()) || null;
   }
 
+  function buildHomeGuestBonusCardHtml(level) {
+    if (!level) return "";
+    const mainColor = "#f3f4f6";
+    const baseColor = "#d1d5db";
+    const contentColor = "#64748b";
+    const titleColor = "#64748b";
+    const cashbackValue = normalizeShopCardPercent(level?.cashback_percent, 1);
+    const favoriteCategoryBonusText = formatShopBonusFavoriteCategoriesRange(level);
+    const favoriteCategoryLimit = Math.max(0, Math.floor(Number(level?.favorite_categories_limit || 0)));
+    const showTitle = level?.show_title_on_card !== false;
+    const titleStyle = level?.title_background_enabled === false
+      ? `color:${escapeHtml(titleColor)};background:transparent;padding:0;border-radius:0;${showTitle ? "" : "display:none;"}`
+      : `color:${escapeHtml(titleColor)};background:#ffffff;padding:2px 10px;border-radius:999px;${showTitle ? "" : "display:none;"}`;
+    const actionText = getCustomerToken()
+      ? "\u041f\u0440\u0438\u0441\u043e\u0435\u0434\u0438\u043d\u0438\u0442\u044c\u0441\u044f"
+      : "\u041d\u0435\u043e\u0431\u0445\u043e\u0434\u0438\u043c\u043e \u0432\u043e\u0439\u0442\u0438";
+
+    const isPaid = level?.access_type === "paid";
+    const programName = isPaid
+      ? (state.homeBonusConfig?.settings?.bonus_program_name_paid || state.homeBonusConfig?.settings?.bonus_program_name || "")
+      : (state.homeBonusConfig?.settings?.bonus_program_name_base || state.homeBonusConfig?.settings?.bonus_program_name || "");
+    const programLogo = isPaid
+      ? (state.homeBonusConfig?.settings?.bonus_program_logo_paid || state.homeBonusConfig?.settings?.bonus_program_logo || "")
+      : (state.homeBonusConfig?.settings?.bonus_program_logo_base || state.homeBonusConfig?.settings?.bonus_program_logo || "");
+    const levelTitle = level?.title || "\u0423\u0440\u043e\u0432\u0435\u043d\u044c";
+    const logoHtml = programLogo ? `<img class="shop-home-bonus-card__program-logo" src="${escapeHtml(programLogo)}" style="width:2.6em;height:2.6em;border-radius:2px;margin-right:0;object-fit:contain;display:inline-block;vertical-align:middle;">` : "";
+
+    return `
+      <div class="bonus-level-preview-card shop-home-bonus-card__preview" style="background:${escapeHtml(baseColor)};">
+        <div class="bonus-level-preview-main" style="background:${escapeHtml(mainColor)};color:${escapeHtml(contentColor)};">
+          <div class="bonus-level-preview-title shop-home-bonus-card__title" style="${titleStyle}">
+            ${logoHtml}<span class="shop-home-bonus-card__title-text"><span class="shop-home-bonus-card__program-name">${escapeHtml(programName)}</span><span class="shop-home-bonus-card__level-name">${escapeHtml(levelTitle)}</span></span>
+          </div>
+          <button class="shop-home-bonus-card__action" type="button">${escapeHtml(actionText)}</button>
+        </div>
+        <div class="bonus-level-preview-sub" style="color:${escapeHtml(contentColor)};">
+          <div class="bonus-level-preview-cashback-side" role="button" tabindex="0" data-open-bonus-preview-cashback>
+            <div class="bonus-level-preview-cashback-icon" style="color:${escapeHtml(contentColor)};"><i class="fas fa-undo-alt" aria-hidden="true"></i></div>
+            <div class="bonus-level-preview-cashback-value" style="color:${escapeHtml(contentColor)};">${escapeHtml(`${cashbackValue}%`)}</div>
+          </div>
+          <div class="bonus-level-preview-category-side${favoriteCategoryLimit > 0 ? "" : " hidden"}" role="button" tabindex="0" data-open-bonus-preview-favorite-categories>
+            <div class="bonus-level-preview-category-icon" style="color:${escapeHtml(contentColor)};" aria-hidden="true">
+              <span></span><span></span><span></span><span></span>
+              <div class="bonus-level-preview-category-count" style="color:${escapeHtml(contentColor)};">${escapeHtml(String(favoriteCategoryLimit))}</div>
+            </div>
+            <div class="bonus-level-preview-category-value" style="color:${escapeHtml(contentColor)};">${escapeHtml(favoriteCategoryBonusText)}</div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
   function renderHomeBonusCard() {
     if (!elHomeBonusCard) return;
     const level = getHomeBonusFirstLevel(state.homeBonusConfig);
@@ -9404,6 +9569,9 @@
         void loadHomeBonusFavoriteCategories(level).then(() => {
           updateBonusLevelPreviewFavoriteCategories(elHomeBonusCard, level);
           bindBonusLevelPreviewCardActions(elHomeBonusCard, level, { returnTo: "none" });
+          const catalogPromoBlock = document.querySelector("[data-catalog-promo-block]");
+          updateBonusLevelPreviewFavoriteCategories(catalogPromoBlock, level);
+          bindBonusLevelPreviewCardActions(catalogPromoBlock, level, { returnTo: "none" });
         }).catch(() => {});
       }
       bindHomeMainSiteMenuRow(elHomeBonusCard);
@@ -9426,7 +9594,9 @@
       ? `color:${escapeHtml(titleColor)};background:transparent;padding:0;border-radius:0;${showTitle ? "" : "display:none;"}`
       : `color:${escapeHtml(titleColor)};background:#ffffff;padding:2px 10px;border-radius:999px;${showTitle ? "" : "display:none;"}`;
     const qrStyle = level?.qr_enabled === false ? "display:none;" : "";
-    const actionText = "Присоединиться";
+    const actionText = getCustomerToken()
+      ? "\u041f\u0440\u0438\u0441\u043e\u0435\u0434\u0438\u043d\u0438\u0442\u044c\u0441\u044f"
+      : "\u041d\u0435\u043e\u0431\u0445\u043e\u0434\u0438\u043c\u043e \u0432\u043e\u0439\u0442\u0438";
 
     const isPaid = level?.access_type === "paid";
     const programName = isPaid
@@ -9471,11 +9641,7 @@
       ${buildHomeMainSiteMenuRowHtml()}
       <div class="shop-home-active-orders hidden" data-home-active-orders></div>
     `;
-    const actionBtn = elHomeBonusCard.querySelector(".shop-home-bonus-card__action");
-    if (actionBtn) actionBtn.addEventListener("click", () => {
-      openHomeBonusCardsSheet();
-    });
-    if (level) bindBonusLevelPreviewCardActions(elHomeBonusCard, level, { returnTo: "none" });
+    bindHomeGuestBonusCardActions(elHomeBonusCard);
     bindHomeReferralCard(elHomeBonusCard);
     bindHomeMainSiteMenuRow(elHomeBonusCard);
     void updateHomeBonusSiteMenuBadges(elHomeBonusCard);
