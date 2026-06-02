@@ -149,6 +149,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     productsBatchCategories: 30000,
     productsBatchDetails: 30000,
     productsBatchPassports: 30000,
+    mobileCatalogSnapshot: 5000,
     productsBatchAvailability: 5000,
     productsBatchIngredients: 30000,
     productsBatchVariants: 30000,
@@ -2357,6 +2358,51 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
 
   function makePublicCacheKey(prefix, parts) {
     return `${String(prefix || 'public')}::${JSON.stringify(stableCachePart(parts || {}))}`;
+  }
+
+  async function readPublicTableStamp(table, whereSql, params = []) {
+    const safeTable = String(table || '').trim();
+    if (!/^[a-zA-Z0-9_]+$/.test(safeTable)) return '0:0';
+    const whereClause = String(whereSql || '1');
+    const queries = [
+      `SELECT UNIX_TIMESTAMP(MAX(updated_at)) AS stamp, COUNT(*) AS cnt FROM \`${safeTable}\` WHERE ${whereClause}`,
+      `SELECT UNIX_TIMESTAMP(MAX(created_at)) AS stamp, COUNT(*) AS cnt FROM \`${safeTable}\` WHERE ${whereClause}`,
+      `SELECT MAX(id) AS stamp, COUNT(*) AS cnt FROM \`${safeTable}\` WHERE ${whereClause}`,
+    ];
+
+    for (const sql of queries) {
+      try {
+        const [rows] = await db.query(sql, params);
+        const row = Array.isArray(rows) ? (rows[0] || {}) : {};
+        const stamp = Number(row.stamp || 0);
+        const cnt = Number(row.cnt || 0);
+        return `${Number.isFinite(stamp) ? stamp : 0}:${Number.isFinite(cnt) ? cnt : 0}`;
+      } catch {}
+    }
+
+    return '0:0';
+  }
+
+  async function buildMobileCatalogSnapshotVersion(tenantId, storeId) {
+    const parts = await Promise.all([
+      readPublicTableStamp('prod_categories', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_products', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_product_categories', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_product_stocks', 'tenant_id=? AND store_id=?', [tenantId, storeId]),
+      readPublicTableStamp('prod_product_ingredients', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_option_assignments', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_option_groups', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_option_items', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_variant_assignments', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_variant_groups', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_variant_discount_tiers', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_variant_value_exclusions', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_combos', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_combo_set_blocks', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_combo_blocks', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_combo_block_products', 'tenant_id=?', [tenantId]),
+    ]);
+    return crypto.createHash('sha1').update(JSON.stringify(parts)).digest('hex').slice(0, 20);
   }
 
   function getPublicCache(key) {
@@ -12020,6 +12066,137 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           unitConversions,
         },
       });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.get('/mobile/catalog-snapshot', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const version = await buildMobileCatalogSnapshotVersion(tenantId, storeId);
+      const cacheKey = makePublicCacheKey('mobile-catalog-snapshot-v1', { tenantId, storeId, version });
+      const cached = getPublicCache(cacheKey);
+      if (cached) {
+        res.set('x-public-cache', 'HIT');
+        return res.json(cached);
+      }
+
+      const categoriesResult = await loadPublicCategoriesPayload(req);
+      const categories = Array.isArray(categoriesResult.payload?.data) ? categoriesResult.payload.data : [];
+      const categoryIds = categories.map((category) => Number(category.id)).filter((id) => Number.isFinite(id) && id > 0);
+      const [allRows] = await db.query(
+        `SELECT id FROM prod_categories WHERE tenant_id=? AND code='all' LIMIT 1`,
+        [tenantId]
+      );
+      const allCategoryId = allRows.length ? Number(allRows[0].id) : null;
+      const normalIds = categoryIds.filter((id) => id !== allCategoryId);
+      const hasAll = Boolean(allCategoryId && categoryIds.includes(allCategoryId));
+      const productIsAvailableSql = getProductIsAvailableSql('p', 's');
+      const allProducts = [];
+
+      if (normalIds.length) {
+        const ph = normalIds.map(() => '?').join(',');
+        const [rows] = await db.query(
+          `SELECT p.*, pc.category_id AS _category_id, pc.sort_order AS link_sort_order,
+            s.qty AS stock_qty,
+            ${productIsAvailableSql} AS is_available
+           FROM prod_product_categories pc
+           JOIN prod_products p ON p.tenant_id=pc.tenant_id AND p.id=pc.product_id
+           LEFT JOIN prod_product_stocks s ON s.tenant_id=p.tenant_id AND s.store_id=? AND s.product_id=p.id
+           WHERE pc.tenant_id=? AND pc.category_id IN (${ph})
+             AND p.is_active=1 AND p.site_visibility=1
+           ORDER BY pc.category_id ASC, pc.sort_order ASC, pc.id ASC`,
+          [storeId, storeId, storeId, storeId, tenantId, ...normalIds]
+        );
+        for (const r of rows) {
+          r.photos = safeJsonArray(r.photos_json);
+          r.is_available = Number(r.is_available || 0) === 1;
+          attachProductThumbs(r);
+          allProducts.push(r);
+        }
+      }
+
+      if (hasAll) {
+        const [rows] = await db.query(
+          `SELECT p.*, ? AS _category_id, pc.sort_order AS link_sort_order,
+            s.qty AS stock_qty,
+            ${productIsAvailableSql} AS is_available
+           FROM prod_products p
+           LEFT JOIN prod_product_stocks s ON s.tenant_id=p.tenant_id AND s.store_id=? AND s.product_id=p.id
+           LEFT JOIN prod_product_categories pc ON pc.tenant_id=p.tenant_id AND pc.product_id=p.id AND pc.category_id=?
+           WHERE p.tenant_id=? AND p.is_active=1 AND p.site_visibility=1
+           ORDER BY COALESCE(pc.sort_order, 999999) ASC, p.id ASC`,
+          [allCategoryId, storeId, storeId, storeId, storeId, allCategoryId, tenantId]
+        );
+        for (const r of rows) {
+          r.photos = safeJsonArray(r.photos_json);
+          r.is_available = Number(r.is_available || 0) === 1;
+          attachProductThumbs(r);
+          allProducts.push(r);
+        }
+      }
+
+      await applyPublicProductAvailability(allProducts, tenantId, storeId);
+      await applyPublicProductBlocksToRows(allProducts, tenantId, storeId);
+      await applyPublicProductNutrition(allProducts, tenantId);
+      await enrichProductsWithDisplayPrice(allProducts, tenantId, storeId);
+      await enrichProductsWithDiscounts(allProducts, tenantId, storeId);
+      await attachPublicProductCategoryIds(allProducts, tenantId);
+
+      const productsByCategory = {};
+      categoryIds.forEach((id) => {
+        productsByCategory[String(id)] = [];
+      });
+      allProducts.forEach((product) => {
+        const categoryId = Number(product._category_id);
+        if (productsByCategory[String(categoryId)]) productsByCategory[String(categoryId)].push(product);
+      });
+
+      const combosResults = await mapWithConcurrency(categoryIds, 4, async (id) => {
+        try {
+          const combos = await getCombosForCategoryCached(tenantId, storeId, id);
+          return [id, combos];
+        } catch {
+          return [id, []];
+        }
+      });
+      const combosByCategory = {};
+      combosResults.forEach(([id, combos]) => {
+        combosByCategory[String(id)] = Array.isArray(combos) ? combos : [];
+      });
+
+      const productById = new Map();
+      allProducts.forEach((product) => {
+        const id = Number(product.id || 0);
+        if (id > 0 && !productById.has(id)) productById.set(id, product);
+      });
+      const productPassports = {};
+      productById.forEach((product, id) => {
+        productPassports[String(id)] = {
+          product,
+          updated_at: product.updated_at || product.updatedAt || null,
+        };
+      });
+
+      const payload = {
+        ok: true,
+        data: {
+          version,
+          generated_at: new Date().toISOString(),
+          tenant_id: tenantId,
+          store_id: storeId,
+          categories,
+          productsByCategory,
+          combosByCategory,
+          productPassports,
+        },
+      };
+      setPublicCache(cacheKey, payload, PUBLIC_CACHE_TTL_MS.mobileCatalogSnapshot);
+      res.set('x-public-cache', 'MISS');
+      res.json(payload);
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });

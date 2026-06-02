@@ -102,7 +102,11 @@ html[data-theme="dark"]{
 
 *{margin:0;padding:0;box-sizing:border-box}
 html,body{height:100%}
-html{color-scheme:light}
+html{
+  color-scheme:light;
+  -webkit-text-size-adjust:100%;
+  text-size-adjust:100%;
+}
 html[data-theme="dark"]{color-scheme:light}
 button,input,textarea,select{font:inherit;color:inherit}
 

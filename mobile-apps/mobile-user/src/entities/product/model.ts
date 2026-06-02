@@ -4,3 +4,104 @@ export type Product = {
   price: number;
   imageUrl?: string;
 };
+
+export type CatalogCategory = {
+  id: number;
+  code?: string;
+  title: string;
+  icon?: string | null;
+  sort_order?: number | null;
+};
+
+export type CatalogDiscount = {
+  discount_amount?: number;
+  discount_type?: string;
+  discount_value?: number;
+};
+
+export type CatalogProduct = {
+  id: number;
+  name: string;
+  description?: string | null;
+  description_short?: string | null;
+  client_composition?: string | null;
+  catalog_default_lines?: string[];
+  price: number;
+  display_price?: number | null;
+  old_price?: number | null;
+  original_price?: number | null;
+  discounted_price?: number | null;
+  nutrition_per_100g?: CatalogNutrition | null;
+  nutrition_per_portion?: CatalogNutrition | null;
+  nutrition_portion_grams?: number | null;
+  photos?: string[];
+  photo_thumb?: string | null;
+  photo_lqip?: string | null;
+  is_available?: boolean | number;
+  discount?: CatalogDiscount | null;
+  category_ids?: number[];
+  blocks_config?: {
+    variants?: unknown;
+    options?: unknown;
+    ingredients?: unknown;
+  } | null;
+  default_variant?: {
+    variant_label?: string | null;
+  } | null;
+  ingredients?: unknown[];
+  options?: unknown[];
+  variants?: unknown[];
+};
+
+export type CatalogNutrition = {
+  kcal?: number | null;
+  protein?: number | null;
+  fat?: number | null;
+  carbs?: number | null;
+};
+
+export type CatalogProductPassport = {
+  product: CatalogProduct;
+  ingredients?: unknown[];
+  variants?: unknown[];
+  optionAssignments?: unknown[];
+  optionGroups?: unknown[];
+  defaultConfig?: {
+    option_item_ids?: number[];
+    option_items?: unknown[];
+    ingredients?: unknown[];
+    ingredient_price_diff?: number;
+    variant_group_id?: number | null;
+    variant_value_index?: number | null;
+    variant_label?: string;
+    variant_unit_price?: number;
+  } | null;
+  updated_at?: string | null;
+};
+
+export type CatalogCombo = {
+  id: number;
+  category_id?: number | null;
+  title: string;
+  description?: string | null;
+  discount_percent?: number | null;
+  image_url?: string | null;
+  image_thumb?: string | null;
+  grid_photos?: string[];
+  grid_photos_thumb?: string[];
+  grid_photo_sets?: string[][];
+  min_price?: number | null;
+  is_available?: boolean | number;
+  block_product_ids?: number[][];
+};
+
+export type MobileCatalogSnapshot = {
+  version: string;
+  generated_at?: string;
+  tenant_id?: number;
+  store_id?: number;
+  categories: CatalogCategory[];
+  productsByCategory: Record<string, CatalogProduct[]>;
+  combosByCategory: Record<string, CatalogCombo[]>;
+  productPassports: Record<string, CatalogProductPassport>;
+};
