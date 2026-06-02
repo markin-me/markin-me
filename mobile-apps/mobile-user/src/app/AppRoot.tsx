@@ -10,6 +10,8 @@ import { CartPage } from '../pages/cart';
 import { CatalogPage } from '../pages/catalog';
 import { CategoriesPage } from '../pages/categories';
 import { ChatPage } from '../pages/chat';
+import { ComboPage } from '../pages/combo';
+import { ComboReplacePage } from '../pages/combo-replace';
 import { ProductPage } from '../pages/product';
 import { ProfilePage } from '../pages/profile';
 import { theme } from '../shared/config/theme';
@@ -88,6 +90,12 @@ export function AppRoot() {
         <Stack.Screen name="main" component={MainTabs} options={{ headerShown: false }} />
         <Stack.Screen name={routes.product} component={ProductPage} options={{ title: 'Товар' }} />
         <Stack.Screen name={routes.categories} component={CategoriesPage} options={{ title: 'Категории' }} />
+        <Stack.Screen name={routes.combo} component={ComboPage} options={{ title: 'Комбо' }} />
+        <Stack.Screen
+          name={routes.comboReplace}
+          component={ComboReplacePage}
+          options={({ route }) => ({ title: route.params.blockTitle || 'Замена' })}
+        />
       </Stack.Navigator>
       <StatusBar style="auto" />
     </NavigationContainer>

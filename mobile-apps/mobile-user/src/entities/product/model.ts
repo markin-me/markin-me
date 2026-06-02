@@ -95,6 +95,57 @@ export type CatalogCombo = {
   block_product_ids?: number[][];
 };
 
+export type CatalogComboProductPreview = {
+  is_available?: boolean;
+  variant_label?: string;
+  variant_group_id?: number | null;
+  variant_value_index?: number | null;
+  variant_group_title?: string;
+  variant_unit?: string;
+  unit_id?: number | null;
+  ingredients_display?: Array<{
+    ingredient_id?: number;
+    name?: string;
+    quantity?: number;
+    qty?: number;
+    unit_id?: number | null;
+    unit?: string;
+  }>;
+  hasConfigurable?: boolean;
+  unit_price_before_discount?: number;
+  unit_price_override?: number;
+  variants?: unknown[];
+  ingredients?: unknown[];
+};
+
+export type CatalogComboBlockProduct = {
+  product_id: number;
+  product_name: string;
+  product_description_short?: string | null;
+  price?: number | null;
+  base_qty?: number | null;
+  base_unit_id?: number | null;
+  unit_id?: number | null;
+  sort_order?: number | null;
+  is_default?: boolean | number;
+  is_available?: boolean | number;
+  product_photo?: string | null;
+  product_photos_json?: string[] | string | null;
+  preview?: CatalogComboProductPreview | null;
+};
+
+export type CatalogComboBlock = {
+  block_id: number;
+  block_title: string;
+  min_select?: number | null;
+  max_select?: number | null;
+  products: CatalogComboBlockProduct[];
+};
+
+export type CatalogComboDetails = CatalogCombo & {
+  blocks: CatalogComboBlock[];
+};
+
 export type MobileCatalogSnapshot = {
   version: string;
   generated_at?: string;

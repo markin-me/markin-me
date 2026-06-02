@@ -1,8 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import {
+  Animated,
+  Easing,
   Image,
   Modal,
+  PanResponder,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -13,11 +16,24 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ReactNode } from 'react';
 
 import type { RootStackParamList } from '../../app/navigation/routes';
-import type { CatalogNutrition, CatalogProduct, CatalogProductPassport } from '../../entities/product';
+import type {
+  CatalogComboDetails,
+  CatalogNutrition,
+  CatalogProduct,
+  CatalogProductPassport,
+} from '../../entities/product';
+import type { ComboConfiguredProduct, ComboDraft } from '../../features/combo-builder';
+import {
+  buildComboConfiguredLines,
+  getComboDraft,
+  saveComboDraft,
+} from '../../features/combo-builder';
 import {
   fetchCatalogProduct,
   ensureMobileCatalogProductPassport,
   getCatalogProductPassport,
+  getMemoryCatalogComboDetails,
+  readCachedCatalogComboDetails,
   readCachedMobileCatalogSnapshot,
   resolveAssetUrl,
 } from '../../shared/api';
@@ -28,6 +44,7 @@ import { Screen } from '../../shared/ui/Screen';
 type ProductPageProps = NativeStackScreenProps<RootStackParamList, 'product'>;
 type AnyRecord = Record<string, unknown>;
 type OptionGroupType = 'single' | 'multiple_group' | 'multiple_item';
+type NutritionMode = 'per100' | 'portion';
 
 type OptionItemVariantState = {
   variant_group_id: number;
@@ -118,6 +135,40 @@ function getIngredientTitle(item: unknown) {
   return trimText(source.ingredient_name || source.name || source.title);
 }
 
+function getIngredientImage(item: unknown) {
+  const source = asRecord(item);
+  const photo = trimText(
+    source.photo_thumb ||
+    source.photo_lqip ||
+    source.photo ||
+    source.image_thumb ||
+    source.image_url ||
+    source.ingredient_photo_thumb ||
+    source.ingredient_photo ||
+    asArray(source.ingredient_photos)[0],
+  );
+  return resolveAssetUrl(photo);
+}
+
+function getOptionItemImage(item: unknown) {
+  const source = asRecord(item);
+  const targetProduct = asRecord(source.target_product || source.product);
+  const photo = trimText(
+    source.photo_thumb ||
+    source.photo_lqip ||
+    source.photo ||
+    source.image_thumb ||
+    source.image_url ||
+    source.product_photo ||
+    asArray(source.photos)[0] ||
+    asArray(source.product_photos_json)[0] ||
+    targetProduct.photo_thumb ||
+    targetProduct.photo_lqip ||
+    asArray(targetProduct.photos)[0],
+  );
+  return resolveAssetUrl(photo);
+}
+
 function getIngredientUnit(item: unknown) {
   const source = asRecord(item);
   return trimText(source.unit_short_title || source.unit_label || source.unit_title || source.unit);
@@ -165,6 +216,24 @@ function getBlocksConfig(product: CatalogProduct | null) {
 function isBlockEnabled(product: CatalogProduct | null, key: string) {
   const blocks = getBlocksConfig(product);
   return blocks[key] !== false;
+}
+
+function getBlockTitle(product: CatalogProduct | null, key: string, fallback: string) {
+  const blocks = getBlocksConfig(product);
+  const blockValue = blocks[key];
+  if (blockValue && typeof blockValue === 'object') {
+    const block = blockValue as AnyRecord;
+    const title = trimText(block.title || block.label || block.name || block.heading);
+    if (title) return title;
+  }
+
+  const directTitle = trimText(
+    blocks[`${key}_title`] ||
+    blocks[`${key}Title`] ||
+    blocks[`${key}_label`] ||
+    blocks[`${key}Label`],
+  );
+  return directTitle || fallback;
 }
 
 function getOptionItemPrice(item: unknown) {
@@ -380,6 +449,49 @@ function getSelectedOptionItems(optionGroups: unknown[], selections: Record<stri
   return selectedItems;
 }
 
+function getSelectedOptionItemsForGroup(groupRaw: unknown, selection: OptionSelection | undefined) {
+  if (!selection) return [];
+  const group = asRecord(groupRaw);
+  const items = asArray(group.items);
+  const selected: Array<AnyRecord & { qty: number }> = [];
+
+  const pushItem = (item: unknown, qty = 1) => {
+    selected.push({ ...asRecord(item), qty });
+  };
+
+  if (selection.type === 'single' && selection.selectedId) {
+    const item = items.find((entry) => Number(asRecord(entry).id) === Number(selection.selectedId));
+    if (item) pushItem(item, 1);
+  } else if (selection.type === 'multiple_group') {
+    selection.selectedIds.forEach((id) => {
+      const item = items.find((entry) => Number(asRecord(entry).id) === Number(id));
+      if (item) pushItem(item, 1);
+    });
+  } else {
+    Object.entries(selection.qtyById).forEach(([id, qty]) => {
+      if (qty <= 0) return;
+      const item = items.find((entry) => Number(asRecord(entry).id) === Number(id));
+      if (item) pushItem(item, qty);
+    });
+  }
+
+  return selected;
+}
+
+function getOptionItemMetaText(item: unknown, selection: OptionSelection | undefined) {
+  const source = asRecord(item);
+  const itemId = toPositiveId(source.id);
+  const variant = itemId ? selection?.variantByItemId[String(itemId)] : null;
+  const qty = toFiniteNumber(source.quantity ?? source.qty ?? source.product_quantity, 0);
+  const unit = trimText(source.unit_short_title || source.unit_label || source.unit_title || source.unit);
+  const variantLabel = trimText(variant?.variant_label);
+  const parts = [
+    variantLabel,
+    qty > 0 ? `${String(qty).replace('.', ',')}${unit ? ` ${unit}` : ''}` : '',
+  ].filter(Boolean);
+  return parts.join(' · ');
+}
+
 function getIngredientPriceDiff(ingredients: unknown[], ingredientState: IngredientState) {
   return ingredients.reduce<number>((sum, item) => {
     const source = asRecord(item);
@@ -467,7 +579,7 @@ function getCurrentNutrition(
 
 function ProductInfoCard({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <View style={styles.infoCard}>
+    <View style={[styles.infoCard, styles.stackedInfoCard]}>
       <Text style={styles.infoTitle}>{title}</Text>
       {children}
     </View>
@@ -481,6 +593,7 @@ function Stepper({
   onChange,
   step,
   value,
+  valueLabel,
 }: {
   disabled?: boolean;
   max: number;
@@ -488,6 +601,7 @@ function Stepper({
   onChange: (value: number) => void;
   step: number;
   value: number;
+  valueLabel?: string;
 }) {
   const canDecrease = !disabled && value > min;
   const canIncrease = !disabled && value < max;
@@ -501,7 +615,7 @@ function Stepper({
       >
         <Ionicons name="remove" color={theme.colors.primaryText} size={16} />
       </Pressable>
-      <Text style={styles.stepperValue}>{String(value).replace('.', ',')}</Text>
+      <Text style={styles.stepperValue}>{valueLabel || String(value).replace('.', ',')}</Text>
       <Pressable
         disabled={!canIncrease}
         onPress={() => onChange(Math.min(max, value + step))}
@@ -513,16 +627,36 @@ function Stepper({
   );
 }
 
-export function ProductPage({ route }: ProductPageProps) {
+export function ProductPage({ navigation, route }: ProductPageProps) {
   const productId = route.params.productId;
+  const comboContext = Number(route.params.comboId || 0) > 0 &&
+    Number.isFinite(Number(route.params.comboBlockIndex)) &&
+    Number.isFinite(Number(route.params.comboProductIndex))
+    ? {
+      blockIndex: Number(route.params.comboBlockIndex),
+      comboId: Number(route.params.comboId),
+      productIndex: Number(route.params.comboProductIndex),
+    }
+    : null;
+  const comboContextId = comboContext?.comboId || 0;
   const [passport, setPassport] = useState<CatalogProductPassport | null>(() => getCatalogProductPassport(productId));
   const [fallbackProduct, setFallbackProduct] = useState<CatalogProduct | null>(null);
+  const [comboContextDetails, setComboContextDetails] = useState<CatalogComboDetails | null>(() =>
+    comboContext ? getMemoryCatalogComboDetails(comboContext.comboId) : null,
+  );
   const [errorText, setErrorText] = useState('');
   const [quantity, setQuantity] = useState(0);
   const [variantState, setVariantState] = useState<VariantState>({ groupId: null, label: '', selectedIndex: null, value: null });
   const [ingredientState, setIngredientState] = useState<IngredientState>({});
   const [optionSelections, setOptionSelections] = useState<Record<string, OptionSelection>>({});
   const [isOptionsSheetOpen, setOptionsSheetOpen] = useState(false);
+  const [isOptionsSheetMounted, setOptionsSheetMounted] = useState(false);
+  const [activeOptionGroupId, setActiveOptionGroupId] = useState<number | null>(null);
+  const [expandedOptionVariantKey, setExpandedOptionVariantKey] = useState('');
+  const [nutritionMode, setNutritionMode] = useState<NutritionMode>('per100');
+  const sheetTranslateY = useRef(new Animated.Value(420)).current;
+  const sheetBackdropOpacity = useRef(new Animated.Value(0)).current;
+  const sheetScrollY = useRef(0);
 
   useEffect(() => {
     let isMounted = true;
@@ -562,6 +696,22 @@ export function ProductPage({ route }: ProductPageProps) {
     };
   }, [productId]);
 
+  useEffect(() => {
+    if (!comboContextId) return;
+    let isMounted = true;
+
+    async function hydrateComboContext() {
+      const cached = getMemoryCatalogComboDetails(comboContextId) || await readCachedCatalogComboDetails(comboContextId);
+      if (cached && isMounted) setComboContextDetails(cached);
+    }
+
+    void hydrateComboContext();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [comboContextId]);
+
   const product = passport?.product || fallbackProduct;
   const ingredients = useMemo(() => asArray(passport?.ingredients), [passport?.ingredients]);
   const variants = useMemo(() => asArray(passport?.variants), [passport?.variants]);
@@ -571,7 +721,7 @@ export function ProductPage({ route }: ProductPageProps) {
 
   useEffect(() => {
     if (!product) return;
-    setQuantity(0);
+    setQuantity(1);
     setVariantState(createInitialVariantState(product, variants, defaultConfig));
     setIngredientState(createInitialIngredientState(ingredients));
     setOptionSelections(createInitialOptionSelections(optionGroups, defaultConfig));
@@ -587,20 +737,178 @@ export function ProductPage({ route }: ProductPageProps) {
   const unitBeforeDiscount = roundPrice(variantUnitPrice + optionTotal + ingredientPriceDiff);
   const discountAmount = calculateProductDiscountAmount(unitBeforeDiscount, product?.discount || null);
   const unitPrice = roundPrice(Math.max(0, unitBeforeDiscount - discountAmount));
+  const comboDiscountPercent = comboContext ? Number(comboContextDetails?.discount_percent || 0) : 0;
+  const comboUnitPrice = comboContext
+    ? roundPrice(Math.max(0, comboDiscountPercent >= 100 ? 0 : unitBeforeDiscount * (1 - comboDiscountPercent / 100)))
+    : unitPrice;
   const displayQuantity = Math.max(1, quantity);
-  const totalPrice = roundPrice(unitPrice * displayQuantity);
+  const totalPrice = roundPrice((comboContext ? comboUnitPrice : unitPrice) * displayQuantity);
   const totalOldByDiscount = discountAmount > 0 ? roundPrice(unitBeforeDiscount * displayQuantity) : 0;
   const oldBase = getOldPrice(product);
   const totalOldFromProduct = oldBase > unitPrice ? roundPrice((oldBase + optionTotal + ingredientPriceDiff) * displayQuantity) : 0;
-  const totalOldPrice = totalOldByDiscount || totalOldFromProduct;
+  const totalOldPrice = comboContext && unitBeforeDiscount > comboUnitPrice
+    ? roundPrice(unitBeforeDiscount * displayQuantity)
+    : totalOldByDiscount || totalOldFromProduct;
   const available = isAvailable(product);
   const compositionText = getCompositionText(product, passport);
   const description = trimText(product?.description || product?.description_short);
   const nutrition = getCurrentNutrition(product, ingredients, ingredientState);
   const showNutrition = isBlockEnabled(product, 'nutrition') && (nutrition.per100 || nutrition.portion);
+  const currentNutrition = nutritionMode === 'portion' ? nutrition.portion : nutrition.per100;
   const selectedOptionsLabel = selectedOptionItems.length
     ? selectedOptionItems.map((item) => trimText(item.title || item.name)).filter(Boolean).slice(0, 3).join(', ')
     : 'Не выбраны';
+  const activeOptionGroup = activeOptionGroupId
+    ? optionGroups.find((group) => Number(asRecord(group).id) === activeOptionGroupId)
+    : null;
+
+  const applyComboProductConfig = () => {
+    if (!comboContext || !product || !comboContextDetails) return;
+    const draft = getComboDraft(comboContextDetails);
+    const selectedProduct = comboContextDetails.blocks[comboContext.blockIndex]?.products[comboContext.productIndex] || null;
+    const lines = buildComboConfiguredLines(ingredients, ingredientState, selectedProduct);
+    const configured: ComboConfiguredProduct = {
+      lines,
+      product_id: Number(product.id),
+      product_name: product.name,
+      product_photo: product.photos?.[0] || product.photo_thumb || product.photo_lqip || selectedProduct?.product_photo || '',
+      unit_id: variantState.groupId,
+      unit_price_before_discount: roundPrice(unitBeforeDiscount),
+      unit_price_override: roundPrice(comboUnitPrice),
+      variant_group_id: variantState.groupId,
+      variant_group_title: trimText(asRecord(variants[0]).title || asRecord(variants[0]).title_label),
+      variant_label: variantState.label,
+      variant_unit: trimText(asRecord(variants[0]).unit_short_title || asRecord(variants[0]).unit_code || asRecord(variants[0]).unit_title),
+      variant_value_index: variantState.selectedIndex,
+    };
+    const nextDraft: ComboDraft = {
+      configuredByBlock: {
+        ...draft.configuredByBlock,
+        [String(comboContext.blockIndex)]: configured,
+      },
+      quantity: draft.quantity,
+      selectedByBlock: {
+        ...draft.selectedByBlock,
+        [String(comboContext.blockIndex)]: comboContext.productIndex,
+      },
+    };
+    saveComboDraft(comboContext.comboId, nextDraft);
+    navigation.goBack();
+  };
+
+  useEffect(() => {
+    if (!isOptionsSheetMounted || !isOptionsSheetOpen) return;
+
+    sheetTranslateY.setValue(420);
+    sheetBackdropOpacity.setValue(0);
+    Animated.parallel([
+      Animated.timing(sheetBackdropOpacity, {
+        duration: 180,
+        easing: Easing.out(Easing.cubic),
+        toValue: 1,
+        useNativeDriver: true,
+      }),
+      Animated.timing(sheetTranslateY, {
+        duration: 240,
+        easing: Easing.out(Easing.cubic),
+        toValue: 0,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [isOptionsSheetMounted, isOptionsSheetOpen, sheetBackdropOpacity, sheetTranslateY]);
+
+  const closeOptionsSheet = useCallback(() => {
+    Animated.parallel([
+      Animated.timing(sheetBackdropOpacity, {
+        duration: 150,
+        easing: Easing.out(Easing.cubic),
+        toValue: 0,
+        useNativeDriver: true,
+      }),
+      Animated.timing(sheetTranslateY, {
+        duration: 190,
+        easing: Easing.in(Easing.cubic),
+        toValue: 420,
+        useNativeDriver: true,
+      }),
+    ]).start(({ finished }) => {
+      if (!finished) return;
+      setOptionsSheetOpen(false);
+      setOptionsSheetMounted(false);
+      setExpandedOptionVariantKey('');
+    });
+  }, [sheetBackdropOpacity, sheetTranslateY]);
+
+  const resetSheetPosition = useCallback(() => {
+    Animated.spring(sheetTranslateY, {
+      bounciness: 0,
+      speed: 18,
+      toValue: 0,
+      useNativeDriver: true,
+    }).start();
+  }, [sheetTranslateY]);
+
+  const handleSheetDragMove = useCallback((dy: number) => {
+    if (dy > 0) sheetTranslateY.setValue(dy);
+  }, [sheetTranslateY]);
+
+  const handleSheetDragRelease = useCallback((dy: number, vy: number) => {
+    if (dy > 88 || vy > 0.85) {
+      closeOptionsSheet();
+      return;
+    }
+
+    resetSheetPosition();
+  }, [closeOptionsSheet, resetSheetPosition]);
+
+  const headerPanResponder = useMemo(
+    () => PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onStartShouldSetPanResponderCapture: () => true,
+      onMoveShouldSetPanResponder: (_, gesture) =>
+        gesture.dy > 8 &&
+        Math.abs(gesture.dy) > Math.abs(gesture.dx),
+      onMoveShouldSetPanResponderCapture: (_, gesture) =>
+        gesture.dy > 4 &&
+        Math.abs(gesture.dy) > Math.abs(gesture.dx),
+      onPanResponderMove: (_, gesture) => handleSheetDragMove(gesture.dy),
+      onPanResponderRelease: (_, gesture) => handleSheetDragRelease(gesture.dy, gesture.vy),
+      onPanResponderTerminate: resetSheetPosition,
+    }),
+    [handleSheetDragMove, handleSheetDragRelease, resetSheetPosition],
+  );
+
+  const contentPanResponder = useMemo(
+    () => PanResponder.create({
+      onMoveShouldSetPanResponderCapture: (_, gesture) =>
+        sheetScrollY.current <= 0 &&
+        gesture.dy > 8 &&
+        Math.abs(gesture.dy) > Math.abs(gesture.dx),
+      onPanResponderMove: (_, gesture) => handleSheetDragMove(gesture.dy),
+      onPanResponderRelease: (_, gesture) => handleSheetDragRelease(gesture.dy, gesture.vy),
+      onPanResponderTerminate: resetSheetPosition,
+    }),
+    [handleSheetDragMove, handleSheetDragRelease, resetSheetPosition],
+  );
+
+  const openOptionsSheet = (groupId: number) => {
+    setActiveOptionGroupId(groupId);
+    const group = optionGroups.find((item) => Number(asRecord(item).id) === groupId);
+    const selection = optionSelections[String(groupId)];
+    const selectedWithVariants = getSelectedOptionItemsForGroup(group, selection)
+      .find((item) => asArray(item.variants).length > 0);
+    const selectedId = toPositiveId(selectedWithVariants?.id);
+
+    if (group && selectedWithVariants && selectedId) {
+      setExpandedOptionVariantKey(`${groupId}:${selectedId}`);
+      selectOptionAndOpenVariants(group, selectedWithVariants, `${groupId}:${selectedId}`);
+    } else {
+      setExpandedOptionVariantKey('');
+    }
+    sheetScrollY.current = 0;
+    setOptionsSheetMounted(true);
+    setOptionsSheetOpen(true);
+  };
 
   const updateIngredientQuantity = (item: unknown, nextValue: number) => {
     const id = toPositiveId(asRecord(item).ingredient_id);
@@ -666,6 +974,11 @@ export function ProductPage({ route }: ProductPageProps) {
     });
   };
 
+  const selectOptionAndOpenVariants = (groupRaw: unknown, itemRaw: unknown, variantKey: string) => {
+    updateOptionSelection(groupRaw, itemRaw, 1);
+    setExpandedOptionVariantKey(variantKey);
+  };
+
   if (!product) {
     return (
       <Screen>
@@ -690,76 +1003,140 @@ export function ProductPage({ route }: ProductPageProps) {
             {product.description_short ? <Text style={styles.subtitle}>{product.description_short}</Text> : null}
 
             {variants.length ? (
-              <ProductInfoCard title={trimText(asRecord(variants[0]).title) || 'Варианты'}>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.horizontalPicker}>
-                  {asArray(asRecord(variants[0]).values).map((value, index) => {
-                    const selected = variantState.selectedIndex === index;
-                    const label = formatVariantValue(value, asRecord(variants[0]).unit_short_title || asRecord(variants[0]).unit_code || asRecord(variants[0]).unit_title);
-                    return (
-                      <Pressable
-                        key={`${label}-${index}`}
-                        onPress={() => setVariantState({
-                          groupId: toPositiveId(asRecord(variants[0]).id ?? asRecord(variants[0]).variant_group_id),
-                          label,
-                          selectedIndex: index,
-                          value,
-                        })}
-                        style={[styles.choiceChip, selected && styles.choiceChipActive]}
-                      >
-                        <Text style={[styles.choiceChipText, selected && styles.choiceChipTextActive]}>{label}</Text>
-                      </Pressable>
-                    );
-                  })}
-                </ScrollView>
-              </ProductInfoCard>
+              <View style={styles.sectionBlock}>
+                <Text style={styles.sectionTitle}>{trimText(asRecord(variants[0]).title) || 'Варианты'}</Text>
+                <View style={styles.infoCard}>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                    {asArray(asRecord(variants[0]).values).map((value, index) => {
+                      const selected = variantState.selectedIndex === index;
+                      const label = formatVariantValue(value, asRecord(variants[0]).unit_short_title || asRecord(variants[0]).unit_code || asRecord(variants[0]).unit_title);
+                      return (
+                        <Pressable
+                          key={`${label}-${index}`}
+                          onPress={() => setVariantState({
+                            groupId: toPositiveId(asRecord(variants[0]).id ?? asRecord(variants[0]).variant_group_id),
+                            label,
+                            selectedIndex: index,
+                            value,
+                          })}
+                          style={[styles.choiceChip, selected && styles.choiceChipActive]}
+                        >
+                          <Text style={[styles.choiceChipText, selected && styles.choiceChipTextActive]}>{label}</Text>
+                        </Pressable>
+                      );
+                    })}
+                  </ScrollView>
+                </View>
+              </View>
             ) : null}
 
             {ingredients.length && isBlockEnabled(product, 'ingredients') ? (
-              <ProductInfoCard title="Изменить состав">
-                {ingredients.map((item) => {
-                  const source = asRecord(item);
-                  const id = toPositiveId(source.ingredient_id);
-                  if (!id) return null;
-                  const title = getIngredientTitle(source);
-                  const unit = getIngredientUnit(source);
-                  const limits = getIngredientLimits(source);
-                  const value = ingredientState[String(id)]?.quantity ?? limits.defaultQty;
-                  return (
-                    <View key={id} style={styles.ingredientRow}>
-                      <View style={styles.ingredientText}>
-                        <Text style={styles.ingredientTitle}>{title}</Text>
-                        <Text style={styles.ingredientMeta}>
-                          Базово {String(limits.defaultQty).replace('.', ',')}{unit ? ` ${unit}` : ''}
-                        </Text>
+              <View style={styles.sectionBlock}>
+                <Text style={styles.sectionTitle}>{getBlockTitle(product, 'ingredients', 'Состав (можно настроить):')}</Text>
+                <View style={styles.infoCard}>
+                  {ingredients.map((item) => {
+                    const source = asRecord(item);
+                    const id = toPositiveId(source.ingredient_id);
+                    if (!id) return null;
+                    const title = getIngredientTitle(source);
+                    const unit = getIngredientUnit(source);
+                    const ingredientImage = getIngredientImage(source);
+                    const limits = getIngredientLimits(source);
+                    const value = ingredientState[String(id)]?.quantity ?? limits.defaultQty;
+                    return (
+                      <View key={id} style={styles.ingredientRow}>
+                        <View style={styles.ingredientThumb}>
+                          {ingredientImage ? (
+                            <Image resizeMode="contain" source={{ uri: ingredientImage }} style={styles.ingredientImage} />
+                          ) : (
+                            <View style={styles.ingredientImagePlaceholder} />
+                          )}
+                        </View>
+                        <View style={styles.ingredientText}>
+                          <Text style={styles.ingredientTitle}>{title}</Text>
+                        </View>
+                        <Stepper
+                          disabled={!limits.isVariable}
+                          max={limits.max}
+                          min={limits.min}
+                          onChange={(next) => updateIngredientQuantity(source, next)}
+                          step={limits.step}
+                          value={value}
+                          valueLabel={`${String(value).replace('.', ',')}${unit ? ` ${unit}` : ''}`}
+                        />
                       </View>
-                      <Stepper
-                        disabled={!limits.isVariable}
-                        max={limits.max}
-                        min={limits.min}
-                        onChange={(next) => updateIngredientQuantity(source, next)}
-                        step={limits.step}
-                        value={value}
-                      />
-                    </View>
-                  );
-                })}
-              </ProductInfoCard>
+                    );
+                  })}
+                </View>
+              </View>
             ) : null}
 
             {optionGroups.length && isBlockEnabled(product, 'options') ? (
-              <Pressable style={styles.optionSummaryCard} onPress={() => setOptionsSheetOpen(true)}>
-                <View style={styles.optionSummaryText}>
-                  <Text style={styles.infoTitle}>Опции</Text>
-                  <Text numberOfLines={2} style={styles.optionSummaryValue}>{selectedOptionsLabel}</Text>
-                </View>
-                <View style={styles.optionSummaryIcon}>
-                  <Ionicons name="chevron-up" color={theme.colors.text} size={18} />
-                </View>
-              </Pressable>
+              <View style={styles.optionGroupsBlock}>
+                {optionGroups.map((groupRaw) => {
+                  const group = asRecord(groupRaw);
+                  const groupId = toPositiveId(group.id);
+                  if (!groupId) return null;
+                  const selection = optionSelections[String(groupId)];
+                  const selectedItems = getSelectedOptionItemsForGroup(group, selection);
+                  const firstSelected = selectedItems[0];
+                  const selectedTitle = firstSelected
+                    ? selectedItems.map((item) => trimText(item.title || item.name)).filter(Boolean).join(', ')
+                    : 'Выбрать';
+                  const selectedMeta = firstSelected ? getOptionItemMetaText(firstSelected, selection) : '';
+                  const hasSelectedVariants = selectedItems.some((item) => asArray(item.variants).length > 0);
+                  const selectedImage = firstSelected ? getOptionItemImage(firstSelected) : '';
+
+                  return (
+                    <View key={groupId} style={styles.optionGroupSection}>
+                      <Text style={styles.sectionTitle}>{trimText(group.title) || 'Опция'}</Text>
+                      <Pressable style={styles.optionSummaryCard} onPress={() => openOptionsSheet(groupId)}>
+                        <View style={styles.optionThumb}>
+                          {selectedImage ? (
+                            <Image resizeMode="contain" source={{ uri: selectedImage }} style={styles.optionImage} />
+                          ) : (
+                            <View style={styles.optionImagePlaceholder} />
+                          )}
+                        </View>
+                        <View style={styles.optionSummaryText}>
+                          <Text numberOfLines={2} style={styles.optionSummaryValue}>{selectedTitle}</Text>
+                          {selectedMeta ? <Text style={styles.optionSummaryMeta}>{selectedMeta}</Text> : null}
+                        </View>
+                        <View style={hasSelectedVariants ? styles.optionGearButton : styles.optionChangeButton}>
+                          {hasSelectedVariants ? (
+                            <Ionicons name="settings-outline" color={theme.colors.accent} size={19} />
+                          ) : (
+                            <Text style={styles.optionChangeText}>Изменить ›</Text>
+                          )}
+                        </View>
+                      </Pressable>
+                    </View>
+                  );
+                })}
+              </View>
             ) : null}
 
             {showNutrition ? (
               <ProductInfoCard title="КБЖУ">
+                <View style={styles.nutritionHead}>
+                  <Text style={styles.nutritionHint}>
+                    {nutritionMode === 'portion' ? 'Значения на порцию' : 'Значения на 100 г'}
+                  </Text>
+                  <View style={styles.nutritionToggle}>
+                    <Pressable
+                      onPress={() => setNutritionMode('per100')}
+                      style={[styles.nutritionToggleButton, nutritionMode === 'per100' && styles.nutritionToggleButtonActive]}
+                    >
+                      <Text style={[styles.nutritionToggleText, nutritionMode === 'per100' && styles.nutritionToggleTextActive]}>100 г</Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={() => setNutritionMode('portion')}
+                      style={[styles.nutritionToggleButton, nutritionMode === 'portion' && styles.nutritionToggleButtonActive]}
+                    >
+                      <Text style={[styles.nutritionToggleText, nutritionMode === 'portion' && styles.nutritionToggleTextActive]}>Порция</Text>
+                    </Pressable>
+                  </View>
+                </View>
                 <View style={styles.nutritionRow}>
                   {[
                     ['Ккал', 'kcal'],
@@ -769,8 +1146,7 @@ export function ProductPage({ route }: ProductPageProps) {
                   ].map(([label, key]) => (
                     <View key={key} style={styles.nutritionCell}>
                       <Text style={styles.nutritionLabel}>{label}</Text>
-                      <Text style={styles.nutritionValue}>{formatNutrition((nutrition.per100 as AnyRecord | null)?.[key])}</Text>
-                      <Text style={styles.nutritionSubValue}>{formatNutrition((nutrition.portion as AnyRecord | null)?.[key])} порц.</Text>
+                      <Text style={styles.nutritionValue}>{formatNutrition((currentNutrition as AnyRecord | null)?.[key])}</Text>
                     </View>
                   ))}
                 </View>
@@ -792,137 +1168,186 @@ export function ProductPage({ route }: ProductPageProps) {
         </ScrollView>
 
         <View style={styles.footer}>
-          <View style={styles.priceStack}>
-            {totalOldPrice > totalPrice ? <Text style={styles.oldPrice}>{formatPrice(totalOldPrice)}</Text> : null}
-            <Text style={styles.price}>{formatPrice(totalPrice)}</Text>
-            {quantity > 1 ? <Text style={styles.unitPriceText}>{formatPrice(unitPrice)} за 1 шт.</Text> : null}
-          </View>
-          {quantity > 0 ? (
-            <View style={styles.footerQty}>
-              <Pressable style={styles.footerQtyButton} onPress={() => setQuantity((value) => Math.max(0, value - 1))}>
-                <Ionicons name={quantity > 1 ? 'remove' : 'trash'} color={theme.colors.primaryText} size={18} />
-              </Pressable>
-              <Text style={styles.footerQtyText}>{quantity}</Text>
-              <Pressable style={styles.footerQtyButton} onPress={() => setQuantity((value) => value + 1)}>
-                <Ionicons name="add" color={theme.colors.primaryText} size={18} />
-              </Pressable>
-            </View>
-          ) : (
+          <View style={styles.footerQty}>
             <Pressable
-              disabled={!available}
-              onPress={() => setQuantity(1)}
-              style={[styles.actionButton, !available && styles.actionButtonDisabled]}
+              disabled={quantity <= 1}
+              style={[styles.footerQtyButton, quantity <= 1 && styles.footerQtyButtonDisabled]}
+              onPress={() => setQuantity((value) => Math.max(1, value - 1))}
             >
-              <Text style={styles.actionButtonText}>{available ? 'Добавить' : 'Нет в наличии'}</Text>
+              <Ionicons name="remove" color={theme.colors.muted} size={18} />
             </Pressable>
-          )}
+            <Text style={styles.footerQtyText}>{displayQuantity}</Text>
+            <Pressable style={styles.footerQtyButton} onPress={() => setQuantity((value) => value + 1)}>
+              <Ionicons name="add" color={theme.colors.text} size={18} />
+            </Pressable>
+          </View>
+          <Pressable
+            disabled={!available}
+            onPress={comboContext ? applyComboProductConfig : () => setQuantity((value) => Math.max(1, value))}
+            style={[styles.actionButton, !available && styles.actionButtonDisabled]}
+          >
+            {totalOldPrice > totalPrice ? <Text style={styles.actionOldPrice}>{formatPrice(totalOldPrice)}</Text> : null}
+            <Text style={styles.actionButtonText}>{available ? formatPrice(totalPrice) : 'Нет в наличии'}</Text>
+            {available ? <Text style={styles.actionButtonSubText}>{comboContext ? 'выбрать' : 'в корзину'}</Text> : null}
+          </Pressable>
         </View>
 
         <Modal
-          animationType="slide"
-          onRequestClose={() => setOptionsSheetOpen(false)}
+          animationType="none"
+          onRequestClose={closeOptionsSheet}
           transparent
-          visible={isOptionsSheetOpen}
+          visible={isOptionsSheetMounted}
         >
           <View style={styles.sheetHost}>
-            <Pressable style={styles.sheetBackdrop} onPress={() => setOptionsSheetOpen(false)} />
-            <View style={styles.sheet}>
-              <View style={styles.sheetHeader}>
-                <Text style={styles.sheetTitle}>Опции</Text>
-                <Pressable style={styles.sheetClose} onPress={() => setOptionsSheetOpen(false)}>
-                  <Ionicons name="close" color={theme.colors.text} size={22} />
-                </Pressable>
+            <Animated.View style={[styles.sheetBackdrop, { opacity: sheetBackdropOpacity }]}>
+              <Pressable style={styles.sheetBackdropPressable} onPress={closeOptionsSheet} />
+            </Animated.View>
+            <Animated.View
+              style={[styles.sheet, { transform: [{ translateY: sheetTranslateY }] }]}
+            >
+              <View {...headerPanResponder.panHandlers}>
+                <View style={styles.sheetGrabberWrap}>
+                  <View style={styles.sheetGrabber} />
+                </View>
+                <View style={styles.sheetHeader}>
+                  <Text style={styles.sheetTitle}>{trimText(asRecord(activeOptionGroup).title) || 'Опции'}</Text>
+                </View>
               </View>
-              <ScrollView contentContainerStyle={styles.sheetContent}>
-                {optionGroups.map((groupRaw) => {
-                  const group = asRecord(groupRaw);
+              <ScrollView
+                alwaysBounceVertical={false}
+                bounces={false}
+                contentContainerStyle={styles.sheetContent}
+                onScroll={(event) => {
+                  sheetScrollY.current = event.nativeEvent.contentOffset.y;
+                }}
+                scrollEventThrottle={16}
+                {...contentPanResponder.panHandlers}
+              >
+                {activeOptionGroup ? (() => {
+                  const group = asRecord(activeOptionGroup);
                   const groupId = toPositiveId(group.id);
                   if (!groupId) return null;
                   const selection = optionSelections[String(groupId)];
                   const items = asArray(group.items);
-                  return (
-                    <View key={groupId} style={styles.sheetGroup}>
-                      <Text style={styles.sheetGroupTitle}>{trimText(group.title) || 'Опция'}</Text>
-                      {items.map((itemRaw) => {
-                        const item = asRecord(itemRaw);
-                        const itemId = toPositiveId(item.id);
-                        if (!itemId || !selection) return null;
-                        const selected = selection.type === 'single'
-                          ? selection.selectedId === itemId
-                          : selection.type === 'multiple_group'
-                            ? selection.selectedIds.includes(itemId)
-                            : (selection.qtyById[String(itemId)] || 0) > 0;
-                        const itemQty = selection.qtyById[String(itemId)] || 0;
-                        const variantsForItem = asArray(item.variants);
-                        const itemVariant = selection.variantByItemId[String(itemId)];
-                        return (
-                          <View key={itemId} style={[styles.optionItem, selected && styles.optionItemSelected]}>
-                            <Pressable
-                              onPress={() => updateOptionSelection(group, item, 1)}
-                              style={styles.optionItemMain}
-                            >
-                              <View style={styles.optionItemText}>
-                                <Text style={styles.optionItemTitle}>{trimText(item.title || item.name)}</Text>
-                                <Text style={styles.optionItemMeta}>
-                                  {formatPrice(getOptionItemPrice(item) + (itemVariant?.variant_price_diff || 0))}
-                                </Text>
-                              </View>
-                              {selection.type === 'multiple_item' ? (
-                                <View style={styles.optionQty}>
-                                  <Pressable
-                                    style={styles.optionQtyButton}
-                                    onPress={(event) => {
-                                      event.stopPropagation();
-                                      updateOptionSelection(group, item, -1);
-                                    }}
-                                  >
-                                    <Ionicons name="remove" color={theme.colors.primaryText} size={14} />
-                                  </Pressable>
-                                  <Text style={styles.optionQtyText}>{itemQty}</Text>
-                                  <Pressable
-                                    style={styles.optionQtyButton}
-                                    onPress={(event) => {
-                                      event.stopPropagation();
-                                      updateOptionSelection(group, item, 1);
-                                    }}
-                                  >
-                                    <Ionicons name="add" color={theme.colors.primaryText} size={14} />
-                                  </Pressable>
-                                </View>
-                              ) : (
-                                <Ionicons
-                                  name={selected ? 'checkmark-circle' : 'ellipse-outline'}
-                                  color={selected ? theme.colors.accent : theme.colors.muted}
-                                  size={22}
-                                />
-                              )}
-                            </Pressable>
-
-                            {selected && variantsForItem.length ? (
-                              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.optionVariantPicker}>
-                                {asArray(asRecord(variantsForItem[0]).values).map((value, index) => {
-                                  const selectedVariant = itemVariant?.variant_value_index === index;
-                                  const label = formatVariantValue(value, asRecord(variantsForItem[0]).unit_short_title || asRecord(variantsForItem[0]).unit_code || asRecord(variantsForItem[0]).unit_title);
-                                  return (
-                                    <Pressable
-                                      key={`${label}-${index}`}
-                                      onPress={() => updateOptionItemVariant(group, item, variantsForItem[0], index)}
-                                      style={[styles.optionVariantChip, selectedVariant && styles.choiceChipActive]}
-                                    >
-                                      <Text style={[styles.choiceChipText, selectedVariant && styles.choiceChipTextActive]}>{label}</Text>
-                                    </Pressable>
-                                  );
-                                })}
-                              </ScrollView>
-                            ) : null}
+                  return items.map((itemRaw) => {
+                    const item = asRecord(itemRaw);
+                    const itemId = toPositiveId(item.id);
+                    if (!itemId || !selection) return null;
+                    const selected = selection.type === 'single'
+                      ? selection.selectedId === itemId
+                      : selection.type === 'multiple_group'
+                        ? selection.selectedIds.includes(itemId)
+                        : (selection.qtyById[String(itemId)] || 0) > 0;
+                    const itemQty = selection.qtyById[String(itemId)] || 0;
+                    const variantsForItem = asArray(item.variants);
+                    const itemVariant = selection.variantByItemId[String(itemId)];
+                    const optionImage = getOptionItemImage(item);
+                    const variantKey = `${groupId}:${itemId}`;
+                    const variantsExpanded = expandedOptionVariantKey === variantKey;
+                    const metaText = getOptionItemMetaText(item, selection);
+                    return (
+                      <View key={itemId} style={[styles.optionItem, selected && styles.optionItemSelected]}>
+                        <Pressable
+                          onPress={() => {
+                            if (variantsForItem.length) {
+                              selectOptionAndOpenVariants(group, item, variantKey);
+                              return;
+                            }
+                            updateOptionSelection(group, item, 1);
+                          }}
+                          style={styles.optionItemMain}
+                        >
+                          <View style={styles.optionThumb}>
+                            {optionImage ? (
+                              <Image resizeMode="contain" source={{ uri: optionImage }} style={styles.optionImage} />
+                            ) : (
+                              <View style={styles.optionImagePlaceholder} />
+                            )}
                           </View>
-                        );
-                      })}
-                    </View>
-                  );
-                })}
+                          <View style={styles.optionItemText}>
+                            <Text style={styles.optionItemTitle}>{trimText(item.title || item.name)}</Text>
+                            {metaText ? <Text style={styles.optionItemVariantText}>{metaText}</Text> : null}
+                            <Text style={styles.optionItemMeta}>
+                              {formatPrice(getOptionItemPrice(item) + (itemVariant?.variant_price_diff || 0))}
+                            </Text>
+                          </View>
+                          {selection.type === 'multiple_item' ? (
+                            <View style={styles.optionItemActions}>
+                              <View style={styles.optionQty}>
+                                <Pressable
+                                  style={styles.optionQtyButton}
+                                  onPress={(event) => {
+                                    event.stopPropagation();
+                                    updateOptionSelection(group, item, -1);
+                                  }}
+                                >
+                                  <Ionicons name="remove" color={theme.colors.primaryText} size={14} />
+                                </Pressable>
+                                <Text style={styles.optionQtyText}>{itemQty}</Text>
+                                <Pressable
+                                  style={styles.optionQtyButton}
+                                  onPress={(event) => {
+                                    event.stopPropagation();
+                                    updateOptionSelection(group, item, 1);
+                                  }}
+                                >
+                                  <Ionicons name="add" color={theme.colors.primaryText} size={14} />
+                                </Pressable>
+                              </View>
+                              {variantsForItem.length ? (
+                                <Pressable
+                                  style={styles.optionGearButton}
+                                  onPress={(event) => {
+                                    event.stopPropagation();
+                                    selectOptionAndOpenVariants(group, item, variantKey);
+                                  }}
+                                >
+                                  <Ionicons name="settings-outline" color={theme.colors.accent} size={19} />
+                                </Pressable>
+                              ) : null}
+                            </View>
+                          ) : variantsForItem.length ? (
+                            <Pressable
+                              style={styles.optionGearButton}
+                              onPress={(event) => {
+                                event.stopPropagation();
+                                selectOptionAndOpenVariants(group, item, variantKey);
+                              }}
+                            >
+                              <Ionicons name="settings-outline" color={theme.colors.accent} size={19} />
+                            </Pressable>
+                          ) : (
+                            <Ionicons
+                              name={selected ? 'checkmark-circle' : 'ellipse-outline'}
+                              color={selected ? theme.colors.accent : theme.colors.muted}
+                              size={22}
+                            />
+                          )}
+                        </Pressable>
+
+                        {selected && variantsForItem.length && variantsExpanded ? (
+                          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.optionVariantPicker}>
+                            {asArray(asRecord(variantsForItem[0]).values).map((value, index) => {
+                              const selectedVariant = itemVariant?.variant_value_index === index;
+                              const label = formatVariantValue(value, asRecord(variantsForItem[0]).unit_short_title || asRecord(variantsForItem[0]).unit_code || asRecord(variantsForItem[0]).unit_title);
+                              return (
+                                <Pressable
+                                  key={`${label}-${index}`}
+                                  onPress={() => updateOptionItemVariant(group, item, variantsForItem[0], index)}
+                                  style={[styles.optionVariantChip, selectedVariant && styles.choiceChipActive]}
+                                >
+                                  <Text style={[styles.choiceChipText, selectedVariant && styles.choiceChipTextActive]}>{label}</Text>
+                                </Pressable>
+                              );
+                            })}
+                          </ScrollView>
+                        ) : null}
+                      </View>
+                    );
+                  });
+                })() : null}
               </ScrollView>
-            </View>
+            </Animated.View>
           </View>
         </Modal>
       </View>
@@ -934,10 +1359,10 @@ const styles = StyleSheet.create({
   actionButton: {
     alignItems: 'center',
     backgroundColor: theme.colors.accent,
-    borderRadius: 16,
-    minWidth: 148,
+    borderRadius: theme.radius.pill,
+    flex: 1,
     paddingHorizontal: theme.spacing.lg,
-    paddingVertical: theme.spacing.md,
+    paddingVertical: 9,
   },
   actionButtonDisabled: {
     opacity: 0.55,
@@ -946,6 +1371,19 @@ const styles = StyleSheet.create({
     color: theme.colors.primaryText,
     fontSize: 16,
     fontWeight: '900',
+  },
+  actionButtonSubText: {
+    color: theme.colors.primaryText,
+    fontSize: 11,
+    fontWeight: '900',
+    marginTop: -1,
+  },
+  actionOldPrice: {
+    color: theme.colors.primaryText,
+    fontSize: 10,
+    fontWeight: '800',
+    opacity: 0.75,
+    textDecorationLine: 'line-through',
   },
   body: {
     padding: theme.spacing.lg,
@@ -989,6 +1427,7 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     bottom: 0,
     flexDirection: 'row',
+    gap: theme.spacing.sm,
     justifyContent: 'space-between',
     left: 0,
     paddingHorizontal: theme.spacing.lg,
@@ -998,10 +1437,12 @@ const styles = StyleSheet.create({
   },
   footerQty: {
     alignItems: 'center',
-    backgroundColor: theme.colors.accent,
-    borderRadius: 16,
+    backgroundColor: theme.colors.mutedBackground,
+    borderColor: theme.colors.border,
+    borderRadius: theme.radius.pill,
+    borderWidth: 1,
     flexDirection: 'row',
-    minWidth: 148,
+    minWidth: 122,
     padding: 4,
   },
   footerQtyButton: {
@@ -1010,10 +1451,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     width: 42,
   },
+  footerQtyButtonDisabled: {
+    opacity: 0.45,
+  },
   footerQtyText: {
-    color: theme.colors.primaryText,
+    color: theme.colors.text,
     flex: 1,
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '900',
     textAlign: 'center',
   },
@@ -1035,7 +1479,6 @@ const styles = StyleSheet.create({
   infoCard: {
     backgroundColor: theme.colors.card,
     borderRadius: 16,
-    marginTop: theme.spacing.md,
     padding: theme.spacing.md,
   },
   infoText: {
@@ -1057,15 +1500,34 @@ const styles = StyleSheet.create({
   },
   ingredientRow: {
     alignItems: 'center',
-    borderTopColor: theme.colors.border,
-    borderTopWidth: 1,
+    borderColor: theme.colors.border,
+    borderRadius: 14,
+    borderWidth: 1,
     flexDirection: 'row',
     justifyContent: 'space-between',
-    paddingVertical: theme.spacing.md,
+    marginTop: theme.spacing.sm,
+    padding: theme.spacing.sm,
+  },
+  ingredientImage: {
+    height: '100%',
+    width: '100%',
+  },
+  ingredientImagePlaceholder: {
+    backgroundColor: theme.colors.mutedBackground,
+    borderRadius: 8,
+    flex: 1,
   },
   ingredientText: {
     flex: 1,
     paddingRight: theme.spacing.md,
+  },
+  ingredientThumb: {
+    backgroundColor: theme.colors.mutedBackground,
+    borderRadius: 8,
+    height: 42,
+    marginRight: theme.spacing.sm,
+    overflow: 'hidden',
+    width: 42,
   },
   ingredientTitle: {
     color: theme.colors.text,
@@ -1077,8 +1539,19 @@ const styles = StyleSheet.create({
     borderRadius: theme.radius.md,
     flex: 1,
     minWidth: 0,
-    paddingHorizontal: theme.spacing.xs,
+    paddingHorizontal: 3,
     paddingVertical: theme.spacing.sm,
+  },
+  nutritionHead: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 2,
+  },
+  nutritionHint: {
+    color: theme.colors.muted,
+    fontSize: 12,
+    fontWeight: '700',
   },
   nutritionLabel: {
     color: theme.colors.muted,
@@ -1104,6 +1577,28 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     marginTop: theme.spacing.xs,
     textAlign: 'center',
+  },
+  nutritionToggle: {
+    flexDirection: 'row',
+    gap: theme.spacing.xs,
+  },
+  nutritionToggleButton: {
+    borderColor: theme.colors.accent,
+    borderRadius: theme.radius.pill,
+    borderWidth: 1,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: 7,
+  },
+  nutritionToggleButtonActive: {
+    backgroundColor: theme.colors.accent,
+  },
+  nutritionToggleText: {
+    color: theme.colors.accent,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  nutritionToggleTextActive: {
+    color: theme.colors.primaryText,
   },
   oldPrice: {
     color: theme.colors.muted,
@@ -1131,6 +1626,11 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     marginTop: 3,
   },
+  optionItemActions: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: theme.spacing.sm,
+  },
   optionItemSelected: {
     borderColor: theme.colors.accent,
   },
@@ -1141,6 +1641,12 @@ const styles = StyleSheet.create({
     color: theme.colors.text,
     fontSize: 14,
     fontWeight: '900',
+  },
+  optionItemVariantText: {
+    color: theme.colors.muted,
+    fontSize: 12,
+    fontWeight: '800',
+    marginTop: 3,
   },
   optionQty: {
     alignItems: 'center',
@@ -1168,8 +1674,39 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginTop: theme.spacing.md,
     padding: theme.spacing.md,
+  },
+  optionChangeButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  optionChangeText: {
+    color: theme.colors.muted,
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  optionGearButton: {
+    alignItems: 'center',
+    backgroundColor: theme.colors.mutedBackground,
+    borderRadius: theme.radius.pill,
+    height: 36,
+    justifyContent: 'center',
+    width: 36,
+  },
+  optionImage: {
+    height: '100%',
+    width: '100%',
+  },
+  optionImagePlaceholder: {
+    backgroundColor: theme.colors.mutedBackground,
+    borderRadius: 8,
+    flex: 1,
+  },
+  optionGroupsBlock: {
+    marginTop: theme.spacing.md,
+  },
+  optionGroupSection: {
+    marginTop: theme.spacing.md,
   },
   optionSummaryIcon: {
     alignItems: 'center',
@@ -1189,6 +1726,20 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     lineHeight: 18,
     marginTop: 4,
+  },
+  optionSummaryMeta: {
+    color: theme.colors.muted,
+    fontSize: 12,
+    fontWeight: '700',
+    marginTop: 2,
+  },
+  optionThumb: {
+    backgroundColor: theme.colors.mutedBackground,
+    borderRadius: 8,
+    height: 42,
+    marginRight: theme.spacing.sm,
+    overflow: 'hidden',
+    width: 42,
   },
   optionVariantChip: {
     backgroundColor: theme.colors.mutedBackground,
@@ -1223,6 +1774,15 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.mutedBackground,
     flex: 1,
   },
+  sectionBlock: {
+    marginTop: theme.spacing.md,
+  },
+  sectionTitle: {
+    color: theme.colors.text,
+    fontSize: 15,
+    fontWeight: '900',
+    marginBottom: theme.spacing.sm,
+  },
   sheet: {
     backgroundColor: theme.colors.card,
     borderTopLeftRadius: 24,
@@ -1231,6 +1791,10 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   sheetBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(17, 24, 39, 0.45)',
+  },
+  sheetBackdropPressable: {
     flex: 1,
   },
   sheetClose: {
@@ -1254,23 +1818,35 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   sheetHeader: {
-    alignItems: 'center',
+    alignItems: 'flex-start',
     borderBottomColor: theme.colors.border,
     borderBottomWidth: 1,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
     paddingHorizontal: theme.spacing.lg,
-    paddingVertical: theme.spacing.md,
+    paddingBottom: theme.spacing.md,
+    paddingTop: theme.spacing.xs,
   },
   sheetHost: {
-    backgroundColor: 'rgba(17, 24, 39, 0.45)',
     flex: 1,
     justifyContent: 'flex-end',
+  },
+  sheetGrabber: {
+    backgroundColor: theme.colors.border,
+    borderRadius: theme.radius.pill,
+    height: 5,
+    width: 46,
+  },
+  sheetGrabberWrap: {
+    alignItems: 'center',
+    paddingBottom: theme.spacing.sm,
+    paddingTop: theme.spacing.md,
   },
   sheetTitle: {
     color: theme.colors.text,
     fontSize: 20,
     fontWeight: '900',
+  },
+  stackedInfoCard: {
+    marginTop: theme.spacing.md,
   },
   stateText: {
     color: theme.colors.muted,
@@ -1280,13 +1856,14 @@ const styles = StyleSheet.create({
   },
   stepper: {
     alignItems: 'center',
-    backgroundColor: theme.colors.accent,
     borderRadius: theme.radius.pill,
     flexDirection: 'row',
-    padding: 3,
+    gap: theme.spacing.sm,
   },
   stepperButton: {
     alignItems: 'center',
+    backgroundColor: theme.colors.accent,
+    borderRadius: theme.radius.pill,
     height: 32,
     justifyContent: 'center',
     width: 32,
@@ -1295,10 +1872,10 @@ const styles = StyleSheet.create({
     opacity: 0.35,
   },
   stepperValue: {
-    color: theme.colors.primaryText,
+    color: theme.colors.text,
     fontSize: 14,
     fontWeight: '900',
-    minWidth: 34,
+    minWidth: 48,
     textAlign: 'center',
   },
   subtitle: {
@@ -1320,3 +1897,5 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
 });
+
+

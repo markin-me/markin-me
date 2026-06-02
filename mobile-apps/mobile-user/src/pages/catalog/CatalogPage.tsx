@@ -24,6 +24,7 @@ import {
   fetchMobileCatalogSnapshot,
   readCachedMobileCatalogSnapshot,
   resolveAssetUrl,
+  warmCatalogComboDetails,
   warmMobileCatalogPassports,
 } from '../../shared/api';
 import { theme } from '../../shared/config/theme';
@@ -61,6 +62,17 @@ function getCatalogStateFromSnapshot(snapshot: MobileCatalogSnapshot): CatalogSt
     combosByCategory: mapSnapshotRecordToCategoryMap<CatalogCombo>(snapshot.combosByCategory, categories),
     productsByCategory: mapSnapshotRecordToCategoryMap<CatalogProduct>(snapshot.productsByCategory, categories),
   };
+}
+
+function collectCatalogComboIds(snapshot: MobileCatalogSnapshot) {
+  const ids = new Set<number>();
+  Object.values(snapshot.combosByCategory || {}).forEach((list) => {
+    (Array.isArray(list) ? list : []).forEach((combo) => {
+      const id = Number(combo?.id || 0);
+      if (Number.isFinite(id) && id > 0) ids.add(id);
+    });
+  });
+  return Array.from(ids);
 }
 
 function isAvailable(value: CatalogProduct['is_available'] | CatalogCombo['is_available']) {
@@ -273,14 +285,14 @@ function ProductCard({
   );
 }
 
-function ComboCard({ combo }: { combo: CatalogCombo }) {
+function ComboCard({ combo, onPress }: { combo: CatalogCombo; onPress: () => void }) {
   const images = getComboImages(combo);
   const discountPercent = Number(combo.discount_percent || 0);
   const minPrice = Number(combo.min_price || 0);
   const available = isAvailable(combo.is_available);
 
   return (
-    <View style={[styles.card, !available && styles.cardDisabled]}>
+    <Pressable style={[styles.card, !available && styles.cardDisabled]} onPress={onPress}>
       <View style={styles.media}>
         {images.length === 1 ? (
           <Image resizeMode="contain" source={{ uri: images[0] }} style={styles.image} />
@@ -314,7 +326,7 @@ function ComboCard({ combo }: { combo: CatalogCombo }) {
           </View>
         </View>
       </View>
-    </View>
+    </Pressable>
   );
 }
 
@@ -363,6 +375,7 @@ export function CatalogPage() {
         hasRenderedSnapshot = true;
       }
       void warmMobileCatalogPassports(freshSnapshot);
+      void warmCatalogComboDetails(collectCatalogComboIds(freshSnapshot));
     } catch (error) {
       if (!hasRenderedSnapshot) {
         setCatalog(emptyCatalogState);
@@ -537,7 +550,11 @@ export function CatalogPage() {
                       />
                     ))}
                     {combos.map((combo) => (
-                      <ComboCard key={`combo-${category.id}-${combo.id}`} combo={combo} />
+                      <ComboCard
+                        key={`combo-${category.id}-${combo.id}`}
+                        combo={combo}
+                        onPress={() => navigation.navigate('combo', { comboId: Number(combo.id), openNonce: Date.now() })}
+                      />
                     ))}
                   </View>
                 ) : (

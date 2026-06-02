@@ -5,6 +5,8 @@ import type { CatalogCategory } from '../../entities/product';
 export const routes = {
   home: 'home',
   product: 'product',
+  combo: 'combo',
+  comboReplace: 'comboReplace',
   categories: 'categories',
   cart: 'cart',
   chat: 'chat',
@@ -15,7 +17,9 @@ export type AppRouteName = keyof typeof routes;
 
 export type RootStackParamList = {
   main: NavigatorScreenParams<MainTabParamList> | undefined;
-  product: { productId: number };
+  product: { productId: number; comboId?: number; comboBlockIndex?: number; comboProductIndex?: number };
+  combo: { comboId: number; openNonce?: number };
+  comboReplace: { comboId: number; blockIndex: number; blockTitle?: string };
   categories: { categories: CatalogCategory[]; activeCategoryId?: number | null };
 };
 

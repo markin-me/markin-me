@@ -3,6 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import type {
   CatalogCategory,
   CatalogCombo,
+  CatalogComboDetails,
   CatalogProduct,
   CatalogProductPassport,
   MobileCatalogSnapshot,
@@ -27,6 +28,7 @@ export type CatalogByCategoryPayload = {
 };
 
 let memoryCatalogSnapshot: MobileCatalogSnapshot | null = null;
+const memoryComboDetails = new Map<number, CatalogComboDetails>();
 
 function buildUrl(path: string) {
   const normalizedPath = path.startsWith('/') ? path : `/${path}`;
@@ -88,6 +90,10 @@ function getMobileSnapshotStorageKey() {
   return `mobile_catalog_snapshot_v1_t${apiConfig.tenantId}_s${apiConfig.storeId}`;
 }
 
+function getComboDetailsStorageKey(comboId: number) {
+  return `mobile_combo_details_v1_t${apiConfig.tenantId}_s${apiConfig.storeId}_c${comboId}`;
+}
+
 function normalizeMobileCatalogSnapshot(value: unknown): MobileCatalogSnapshot | null {
   const source = value && typeof value === 'object' ? (value as Partial<MobileCatalogSnapshot>) : null;
   if (!source || !source.version) return null;
@@ -104,8 +110,27 @@ function normalizeMobileCatalogSnapshot(value: unknown): MobileCatalogSnapshot |
   };
 }
 
+function normalizeCatalogComboDetails(value: unknown): CatalogComboDetails | null {
+  const source = value && typeof value === 'object' ? (value as Partial<CatalogComboDetails>) : null;
+  const id = Number(source?.id || 0);
+  if (!source || !Number.isFinite(id) || id <= 0) return null;
+
+  return {
+    ...source,
+    blocks: Array.isArray(source.blocks) ? source.blocks : [],
+    id,
+    title: String(source.title || ''),
+  };
+}
+
 export function getMemoryMobileCatalogSnapshot() {
   return memoryCatalogSnapshot;
+}
+
+export function getMemoryCatalogComboDetails(comboId: number) {
+  const id = Number(comboId);
+  if (!Number.isFinite(id) || id <= 0) return null;
+  return memoryComboDetails.get(id) || null;
 }
 
 export function getCatalogProductPassport(productId: number): CatalogProductPassport | null {
@@ -130,6 +155,28 @@ export async function saveMobileCatalogSnapshot(snapshot: MobileCatalogSnapshot)
   if (!normalized) return null;
   memoryCatalogSnapshot = normalized;
   await AsyncStorage.setItem(getMobileSnapshotStorageKey(), JSON.stringify(normalized));
+  return normalized;
+}
+
+export async function readCachedCatalogComboDetails(comboId: number) {
+  const id = Number(comboId);
+  if (!Number.isFinite(id) || id <= 0) return null;
+
+  try {
+    const raw = await AsyncStorage.getItem(getComboDetailsStorageKey(id));
+    const combo = normalizeCatalogComboDetails(raw ? JSON.parse(raw) : null);
+    if (combo) memoryComboDetails.set(id, combo);
+    return combo;
+  } catch {
+    return null;
+  }
+}
+
+export async function saveCatalogComboDetails(combo: CatalogComboDetails) {
+  const normalized = normalizeCatalogComboDetails(combo);
+  if (!normalized) return null;
+  memoryComboDetails.set(normalized.id, normalized);
+  await AsyncStorage.setItem(getComboDetailsStorageKey(normalized.id), JSON.stringify(normalized));
   return normalized;
 }
 
@@ -203,6 +250,29 @@ export async function fetchMobileCatalogSnapshot() {
   if (!normalized) throw new Error('BAD_MOBILE_SNAPSHOT');
   await saveMobileCatalogSnapshot(normalized);
   return normalized;
+}
+
+export async function fetchCatalogComboDetails(comboId: number) {
+  const id = Number(comboId);
+  if (!Number.isFinite(id) || id <= 0) throw new Error('BAD_COMBO_ID');
+
+  const combo = await requestJson<CatalogComboDetails>(`/api/public/combos/${encodeURIComponent(String(id))}`);
+  const normalized = normalizeCatalogComboDetails(combo);
+  if (!normalized) throw new Error('BAD_COMBO_DETAILS');
+  await saveCatalogComboDetails(normalized);
+  return normalized;
+}
+
+export async function warmCatalogComboDetails(comboIds: number[]) {
+  const ids = Array.from(new Set(comboIds.map(Number).filter((id) => Number.isFinite(id) && id > 0)));
+  for (const id of ids) {
+    if (memoryComboDetails.has(id)) continue;
+    try {
+      await fetchCatalogComboDetails(id);
+    } catch {
+      // Background warming must not block catalog rendering.
+    }
+  }
 }
 
 export function resolveAssetUrl(url?: string | null) {
