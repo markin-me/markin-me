@@ -3033,6 +3033,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
                 bonus_program_name_base, bonus_program_logo_base,
                 bonus_program_name_paid, bonus_program_logo_paid,
                 bonus_coin_name, bonus_coin_logo,
+                referral_registration_reward, referral_first_purchase_reward,
                 referral_card_main_color, referral_card_base_color,
                 referral_card_content_color, referral_card_button_color,
                 referral_card_qr_enabled, referral_card_title_background_enabled,
@@ -3149,6 +3150,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
             bonus_program_logo_paid: settingsRow?.bonus_program_logo_paid || null,
             bonus_coin_name: settingsRow?.bonus_coin_name || 'Бонусы',
             bonus_coin_logo: settingsRow?.bonus_coin_logo || null,
+            referral_registration_reward: Number(settingsRow?.referral_registration_reward || 0),
+            referral_first_purchase_reward: Number(settingsRow?.referral_first_purchase_reward || 0),
             referral_card_main_color: settingsRow?.referral_card_main_color || '#f3f4f6',
             referral_card_base_color: settingsRow?.referral_card_base_color || '#d1d5db',
             referral_card_content_color: settingsRow?.referral_card_content_color || '#64748b',
@@ -3475,23 +3478,30 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       const type = str(req.query.type).trim();
       const allowedTypes = new Set(['join', 'level_up', 'accrual', 'redeem', 'expire', 'adjustment', 'referral_accrual', 'refund']);
       const typeFilter = allowedTypes.has(type) ? type : '';
+      const limitRaw = Number(req.query.limit || 100);
+      const offsetRaw = Number(req.query.offset || 0);
+      const limit = Math.max(1, Math.min(100, Number.isFinite(limitRaw) ? Math.floor(limitRaw) : 100));
+      const offset = Math.max(0, Number.isFinite(offsetRaw) ? Math.floor(offsetRaw) : 0);
       const params = [tenantId, customerId];
       let whereType = '';
       if (typeFilter) {
         whereType = ' AND t.type = ?';
         params.push(typeFilter);
       }
+      params.push(limit, offset);
       const [rows] = await db.query(
         `SELECT t.id, t.level_id, t.order_id, t.referral_id, t.reward_id,
                 t.type, t.amount, t.balance_after, t.reason, t.created_at,
                 bl.title AS level_title
          FROM mkt_customer_bonus_transactions t
          LEFT JOIN mkt_bonus_levels bl
-           ON bl.tenant_id = t.tenant_id
+          ON bl.tenant_id = t.tenant_id
           AND bl.id = t.level_id
          WHERE t.tenant_id=? AND t.customer_id=?${whereType}
+           AND COALESCE(t.reason, '') <> 'bonus_reserve'
+           AND COALESCE(t.reason, '') NOT REGEXP '^order:[0-9]+:bonus_reserve$'
          ORDER BY t.created_at DESC, t.id DESC
-         LIMIT 100`,
+         LIMIT ? OFFSET ?`,
         params
       );
       return res.json({

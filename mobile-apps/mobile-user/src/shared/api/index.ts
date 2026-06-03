@@ -27,8 +27,158 @@ export type CatalogByCategoryPayload = {
   combosByCategory: Map<number, CatalogCombo[]>;
 };
 
+export type CustomerProfile = {
+  id: number;
+  name?: string | null;
+  phone?: string | null;
+  birthday?: string | null;
+  photo?: string | null;
+  total_orders?: number | null;
+};
+
+export type CustomerAddress = Record<string, unknown> & {
+  id?: number;
+  city?: string | null;
+  street?: string | null;
+  house?: string | null;
+  entrance?: string | null;
+  floor?: string | null;
+  apartment?: string | null;
+  comment?: string | null;
+  is_default?: boolean | number | string | null;
+  address_ref?: string | null;
+  selected_object_type?: string | null;
+  resolved_city_source_key?: string | null;
+  address_context_locality?: string | null;
+  address_normalized_display?: string | null;
+  lat?: number | string | null;
+  lng?: number | string | null;
+  delivery_zone_id?: number | string | null;
+  delivery_store_id?: number | string | null;
+};
+
+export type CustomerAddressPayload = {
+  city?: string | null;
+  street?: string | null;
+  house?: string | null;
+  entrance?: string | null;
+  floor?: string | null;
+  apartment?: string | null;
+  comment?: string | null;
+  address_ref?: string | null;
+  selected_object_type?: string | null;
+  resolved_city_source_key?: string | null;
+  address_context_locality?: string | null;
+  context_locality?: string | null;
+  address_normalized_display?: string | null;
+  lat?: number | string | null;
+  lng?: number | string | null;
+  delivery_zone_id?: number | string | null;
+  delivery_store_id?: number | string | null;
+  is_default?: boolean | number | string | null;
+};
+
+export type AddressSuggestion = Record<string, unknown> & {
+  source_key?: string | null;
+  object_type?: string | null;
+  selected_object_type?: string | null;
+  city_name?: string | null;
+  context_locality?: string | null;
+  street_name?: string | null;
+  house_number?: string | null;
+  value?: string | null;
+  label?: string | null;
+  full_address?: string | null;
+  lat?: number | string | null;
+  lng?: number | string | null;
+};
+
+export type ResolvedAddress = CustomerAddressPayload & {
+  context_locality?: string | null;
+  delivery_cost?: number | null;
+  delivery_zone_name?: string | null;
+  free_delivery_from?: number | null;
+  min_order_amount?: number | null;
+};
+
+export type PublicOrderConfig = Record<string, unknown> & {
+  storeAddressMapEnabled?: boolean | number | string | null;
+};
+
+export type TenantStore = Record<string, unknown> & {
+  id?: number;
+  name?: string | null;
+  city?: string | null;
+  address?: string | null;
+  phone?: string | null;
+  timezone?: string | null;
+  is_active?: boolean | number | null;
+  isOpen?: boolean | null;
+  deliveryIsOpen?: boolean | null;
+  storeHours?: Array<Record<string, unknown>>;
+  delivery_hours?: Array<Record<string, unknown>>;
+};
+
+export type BonusConfig = Record<string, unknown> & {
+  account?: Record<string, unknown> | null;
+  levels?: Array<Record<string, unknown>>;
+  referral_levels?: Array<Record<string, unknown>>;
+  settings?: Record<string, unknown>;
+};
+
+export type BonusReferrals = Record<string, unknown> & {
+  code?: string;
+  invite_url?: string;
+  levels?: Array<Record<string, unknown>>;
+  referrals?: Array<Record<string, unknown>>;
+  stats?: Record<string, unknown>;
+};
+
+export type BonusFavoriteCategories = Record<string, unknown> & {
+  bonus_percent?: number;
+  categories?: Array<Record<string, unknown>>;
+  enabled?: boolean;
+  level_id?: number;
+  limit?: number;
+  selected_ids?: number[];
+};
+
+export type BonusTransaction = Record<string, unknown> & {
+  amount?: number;
+  balance_after?: number | null;
+  created_at?: string | null;
+  id?: number;
+  level_title?: string;
+  reason?: string;
+  source?: string;
+  type?: string;
+};
+
+export type CustomerPassport = {
+  token: string;
+  customer: CustomerProfile | null;
+  addresses: CustomerAddress[];
+  bonusConfig: BonusConfig | null;
+  bonusFavoriteCategories: BonusFavoriteCategories | null;
+  bonusReferrals: BonusReferrals | null;
+  updatedAt: string;
+};
+
+export type AuthPhoneStatus = {
+  exists: boolean;
+  has_name: boolean;
+  needs_name_input: boolean;
+  requires_messenger_login: boolean;
+};
+
+type AuthSuccessPayload = {
+  token?: string;
+  customer?: CustomerProfile | null;
+};
+
 let memoryCatalogSnapshot: MobileCatalogSnapshot | null = null;
 const memoryComboDetails = new Map<number, CatalogComboDetails>();
+let memoryCustomerPassport: CustomerPassport | null = null;
 
 function buildUrl(path: string) {
   const normalizedPath = path.startsWith('/') ? path : `/${path}`;
@@ -94,6 +244,10 @@ function getComboDetailsStorageKey(comboId: number) {
   return `mobile_combo_details_v1_t${apiConfig.tenantId}_s${apiConfig.storeId}_c${comboId}`;
 }
 
+function getCustomerPassportStorageKey() {
+  return `mobile_customer_passport_v1_t${apiConfig.tenantId}_s${apiConfig.storeId}`;
+}
+
 function normalizeMobileCatalogSnapshot(value: unknown): MobileCatalogSnapshot | null {
   const source = value && typeof value === 'object' ? (value as Partial<MobileCatalogSnapshot>) : null;
   if (!source || !source.version) return null;
@@ -123,8 +277,41 @@ function normalizeCatalogComboDetails(value: unknown): CatalogComboDetails | nul
   };
 }
 
+function normalizeCustomer(value: unknown): CustomerProfile | null {
+  const source = value && typeof value === 'object' ? value as CustomerProfile : null;
+  const id = Number(source?.id || 0);
+  if (!source || !Number.isFinite(id) || id <= 0) return null;
+  return {
+    ...source,
+    birthday: source.birthday || null,
+    id,
+    name: source.name || null,
+    phone: source.phone || null,
+    photo: source.photo || null,
+  };
+}
+
+function normalizeCustomerPassport(value: unknown): CustomerPassport | null {
+  const source = value && typeof value === 'object' ? value as Partial<CustomerPassport> : null;
+  const token = String(source?.token || '').trim();
+  if (!source || !token) return null;
+  return {
+    addresses: Array.isArray(source.addresses) ? source.addresses : [],
+    bonusConfig: source.bonusConfig && typeof source.bonusConfig === 'object' ? source.bonusConfig : null,
+    bonusFavoriteCategories: source.bonusFavoriteCategories && typeof source.bonusFavoriteCategories === 'object' ? source.bonusFavoriteCategories : null,
+    bonusReferrals: source.bonusReferrals && typeof source.bonusReferrals === 'object' ? source.bonusReferrals : null,
+    customer: normalizeCustomer(source.customer),
+    token,
+    updatedAt: source.updatedAt || new Date().toISOString(),
+  };
+}
+
 export function getMemoryMobileCatalogSnapshot() {
   return memoryCatalogSnapshot;
+}
+
+export function getMemoryCustomerPassport() {
+  return memoryCustomerPassport;
 }
 
 export function getMemoryCatalogComboDetails(comboId: number) {
@@ -178,6 +365,324 @@ export async function saveCatalogComboDetails(combo: CatalogComboDetails) {
   memoryComboDetails.set(normalized.id, normalized);
   await AsyncStorage.setItem(getComboDetailsStorageKey(normalized.id), JSON.stringify(normalized));
   return normalized;
+}
+
+export async function readCachedCustomerPassport() {
+  try {
+    const raw = await AsyncStorage.getItem(getCustomerPassportStorageKey());
+    const passport = normalizeCustomerPassport(raw ? JSON.parse(raw) : null);
+    if (passport) memoryCustomerPassport = passport;
+    return passport;
+  } catch {
+    return null;
+  }
+}
+
+export async function saveCustomerPassport(passport: CustomerPassport) {
+  const normalized = normalizeCustomerPassport(passport);
+  if (!normalized) return null;
+  memoryCustomerPassport = normalized;
+  await AsyncStorage.setItem(getCustomerPassportStorageKey(), JSON.stringify(normalized));
+  return normalized;
+}
+
+export async function clearCustomerPassport() {
+  memoryCustomerPassport = null;
+  await AsyncStorage.removeItem(getCustomerPassportStorageKey());
+}
+
+export async function authPhoneStatus(phone: string) {
+  const response = await requestApi<AuthPhoneStatus>('/api/public/auth/phone-status', {
+    body: JSON.stringify({ phone }),
+    headers: { 'x-customer-token': '' },
+    method: 'POST',
+  });
+  return {
+    exists: Boolean((response as AuthPhoneStatus).exists),
+    has_name: Boolean((response as AuthPhoneStatus).has_name),
+    needs_name_input: Boolean((response as AuthPhoneStatus).needs_name_input),
+    requires_messenger_login: Boolean((response as AuthPhoneStatus).requires_messenger_login),
+  };
+}
+
+export async function authLogin(params: { phone: string; birthday: string; name?: string | null }) {
+  const response = await requestApi<AuthSuccessPayload>('/api/public/auth/login', {
+    body: JSON.stringify(params),
+    headers: { 'x-customer-token': '' },
+    method: 'POST',
+  }) as ApiResponse<AuthSuccessPayload> & AuthSuccessPayload;
+  return {
+    customer: normalizeCustomer(response.customer),
+    token: String(response.token || '').trim(),
+  };
+}
+
+export async function authMessengerCodeSend(phone: string) {
+  await requestApi('/api/public/auth/messenger-code/send', {
+    body: JSON.stringify({ phone }),
+    headers: { 'x-customer-token': '' },
+    method: 'POST',
+  });
+}
+
+export async function authMessengerCodeVerify(params: { phone: string; code: string; name?: string | null }) {
+  const response = await requestApi<AuthSuccessPayload>('/api/public/auth/messenger-code/verify', {
+    body: JSON.stringify(params),
+    headers: { 'x-customer-token': '' },
+    method: 'POST',
+  }) as ApiResponse<AuthSuccessPayload> & AuthSuccessPayload;
+  return {
+    customer: normalizeCustomer(response.customer),
+    token: String(response.token || '').trim(),
+  };
+}
+
+export async function logoutCustomer(token: string) {
+  await requestApi('/api/public/auth/logout', {
+    body: JSON.stringify({}),
+    headers: { 'x-customer-token': token },
+    method: 'POST',
+  });
+}
+
+export async function fetchCustomerMe(token: string) {
+  const response = await requestApi<{ customer?: CustomerProfile }>('/api/public/me', {
+    headers: { 'x-customer-token': token },
+  }) as ApiResponse<{ customer?: CustomerProfile }> & { customer?: CustomerProfile };
+  return normalizeCustomer(response.customer || response.data?.customer);
+}
+
+export async function fetchCustomerAddresses(token: string) {
+  const response = await requestApi<CustomerAddress[]>('/api/public/me/addresses', {
+    headers: { 'x-customer-token': token },
+  });
+  const data = response.data;
+  return Array.isArray(data) ? data : [];
+}
+
+export async function fetchPublicOrderConfig() {
+  const data = await requestJson<PublicOrderConfig>('/api/public/order-config');
+  return data && typeof data === 'object' ? data : null;
+}
+
+export async function suggestPublicAddresses(params: {
+  city: string;
+  query: string;
+  selectedSourceKey?: string | null;
+  stage?: 'address' | 'house';
+}) {
+  const query = new URLSearchParams({
+    city: params.city,
+    q: params.query,
+    stage: params.stage || 'address',
+  });
+  if (params.selectedSourceKey) query.set('selected_source_key', params.selectedSourceKey);
+  const response = await requestApi<{ items?: AddressSuggestion[] }>(`/api/public/address-suggest?${query.toString()}`);
+  const items = response.data?.items;
+  return Array.isArray(items) ? items : [];
+}
+
+export async function resolvePublicAddress(payload: CustomerAddressPayload & { subtotal?: number }) {
+  const response = await requestApi<ResolvedAddress>('/api/public/address-resolve', {
+    body: JSON.stringify(payload),
+    method: 'POST',
+  });
+  return response.data && typeof response.data === 'object' ? response.data : null;
+}
+
+export async function createCustomerAddress(token: string, payload: CustomerAddressPayload) {
+  await requestApi('/api/public/me/addresses', {
+    body: JSON.stringify(payload),
+    headers: { 'x-customer-token': token },
+    method: 'POST',
+  });
+}
+
+export async function updateCustomerAddress(token: string, addressId: number, payload: CustomerAddressPayload) {
+  const safeAddressId = Number(addressId || 0);
+  if (!(safeAddressId > 0)) throw new Error('BAD_ADDRESS_ID');
+  await requestApi(`/api/public/me/addresses/${encodeURIComponent(String(safeAddressId))}`, {
+    body: JSON.stringify(payload),
+    headers: { 'x-customer-token': token },
+    method: 'PUT',
+  });
+}
+
+export async function deleteCustomerAddress(token: string, addressId: number) {
+  const safeAddressId = Number(addressId || 0);
+  if (!(safeAddressId > 0)) throw new Error('BAD_ADDRESS_ID');
+  await requestApi(`/api/public/me/addresses/${encodeURIComponent(String(safeAddressId))}`, {
+    headers: { 'x-customer-token': token },
+    method: 'DELETE',
+  });
+}
+
+export async function setDefaultCustomerAddress(token: string, addressId: number) {
+  const safeAddressId = Number(addressId || 0);
+  if (!(safeAddressId > 0)) throw new Error('BAD_ADDRESS_ID');
+  await requestApi(`/api/public/me/addresses/${encodeURIComponent(String(safeAddressId))}/default`, {
+    headers: { 'x-customer-token': token },
+    method: 'PUT',
+  });
+}
+
+export async function fetchTenantStores() {
+  const response = await requestApi<{ stores?: TenantStore[] }>(`/api/public/tenant/stores?tenant_id=${encodeURIComponent(apiConfig.tenantId)}`) as ApiResponse<{ stores?: TenantStore[] }> & { stores?: TenantStore[] };
+  const stores = response.stores || response.data?.stores;
+  return Array.isArray(stores) ? stores : [];
+}
+
+export async function fetchBonusConfig(token: string) {
+  const data = await requestJson<BonusConfig>('/api/public/bonus/config', {
+    headers: { 'x-customer-token': token },
+  });
+  return data && typeof data === 'object' ? data : null;
+}
+
+export async function fetchBonusReferrals(token: string) {
+  const data = await requestJson<BonusReferrals>('/api/public/bonus/referrals', {
+    headers: { 'x-customer-token': token },
+  });
+  return data && typeof data === 'object' ? data : null;
+}
+
+function getCurrentBonusLevelId(config: BonusConfig | null) {
+  const account = config?.account && typeof config.account === 'object' ? config.account : null;
+  const levels = Array.isArray(config?.levels) ? config.levels : [];
+  const accountLevelId = Number(account?.level_id || account?.bonus_level_id || 0);
+  if (accountLevelId > 0) return accountLevelId;
+  const firstLevelId = Number(levels[0]?.id || 0);
+  return firstLevelId > 0 ? firstLevelId : 0;
+}
+
+export async function fetchBonusFavoriteCategories(token: string, levelId: number) {
+  const safeLevelId = Number(levelId || 0);
+  if (!(safeLevelId > 0)) return null;
+  const data = await requestJson<BonusFavoriteCategories>(`/api/public/bonus/favorite-categories?level_id=${encodeURIComponent(String(safeLevelId))}`, {
+    headers: { 'x-customer-token': token },
+  });
+  return data && typeof data === 'object' ? data : null;
+}
+
+export async function saveBonusFavoriteCategories(token: string, levelId: number, categoryIds: number[]) {
+  const safeLevelId = Number(levelId || 0);
+  if (!(safeLevelId > 0)) throw new Error('INVALID_LEVEL');
+  const response = await requestApi<BonusFavoriteCategories>('/api/public/bonus/favorite-categories', {
+    body: JSON.stringify({ category_ids: categoryIds, level_id: safeLevelId }),
+    headers: { 'x-customer-token': token },
+    method: 'POST',
+  });
+  return response.data && typeof response.data === 'object' ? response.data : null;
+}
+
+export async function fetchBonusTransactions(token: string, type?: string, limit?: number, offset?: number) {
+  const params = new URLSearchParams();
+  if (type && type !== 'all') params.set('type', type);
+  if (Number(limit || 0) > 0) params.set('limit', String(Math.floor(Number(limit))));
+  if (Number(offset || 0) > 0) params.set('offset', String(Math.floor(Number(offset))));
+  const query = params.toString();
+  const suffix = query ? `?${query}` : '';
+  const data = await requestJson<BonusTransaction[]>(`/api/public/bonus/transactions${suffix}`, {
+    headers: { 'x-customer-token': token },
+  });
+  return Array.isArray(data) ? data : [];
+}
+
+export async function joinBonusProgram(token: string) {
+  await requestApi('/api/public/bonus/join', {
+    body: JSON.stringify({}),
+    headers: { 'x-customer-token': token },
+    method: 'POST',
+  });
+}
+
+export async function refreshCustomerPassport(token: string, seedCustomer?: CustomerProfile | null) {
+  const safeToken = String(token || '').trim();
+  if (!safeToken) throw new Error('UNAUTHORIZED');
+
+  const [customer, addresses, bonusConfig, bonusReferrals] = await Promise.all([
+    fetchCustomerMe(safeToken),
+    fetchCustomerAddresses(safeToken).catch(() => []),
+    fetchBonusConfig(safeToken).catch(() => null),
+    fetchBonusReferrals(safeToken).catch(() => null),
+  ]);
+  const bonusFavoriteCategories = await fetchBonusFavoriteCategories(safeToken, getCurrentBonusLevelId(bonusConfig)).catch(() => null);
+  const passport: CustomerPassport = {
+    addresses,
+    bonusConfig,
+    bonusFavoriteCategories,
+    bonusReferrals,
+    customer: customer || normalizeCustomer(seedCustomer),
+    token: safeToken,
+    updatedAt: new Date().toISOString(),
+  };
+  await saveCustomerPassport(passport);
+  return passport;
+}
+
+export async function updateCustomerMe(token: string, body: { name?: string; birthday?: string }) {
+  await requestApi('/api/public/me', {
+    body: JSON.stringify(body),
+    headers: { 'x-customer-token': token },
+    method: 'PUT',
+  });
+}
+
+export async function uploadCustomerPhoto(
+  token: string,
+  image: { uri: string; name?: string | null; type?: string | null },
+) {
+  const formData = new FormData();
+  formData.append('photo', {
+    name: image.name || 'profile-photo.jpg',
+    type: image.type || 'image/jpeg',
+    uri: image.uri,
+  } as unknown as Blob);
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 45000);
+  try {
+    const response = await fetch(buildUrl('/api/public/me/photo'), {
+      body: formData,
+      headers: {
+        Accept: 'application/json',
+        'x-customer-token': token,
+        'x-store-id': apiConfig.storeId,
+        'x-tenant-id': apiConfig.tenantId,
+      },
+      method: 'POST',
+      signal: controller.signal,
+    });
+    const json = await response.json() as ApiResponse<{ photoUrl?: string; photo?: string; url?: string; customer?: CustomerProfile }> & {
+      customer?: CustomerProfile;
+      photo?: string;
+      photoUrl?: string;
+      url?: string;
+    };
+    if (!response.ok || json.ok === false) {
+      throw new Error(json.error || `HTTP_${response.status}`);
+    }
+    return String(
+      json.photoUrl ||
+      json.photo ||
+      json.url ||
+      json.customer?.photo ||
+      json.data?.photoUrl ||
+      json.data?.photo ||
+      json.data?.url ||
+      json.data?.customer?.photo ||
+      '',
+    ).trim();
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export async function deleteCustomerPhoto(token: string) {
+  await requestApi('/api/public/me/photo', {
+    headers: { 'x-customer-token': token },
+    method: 'DELETE',
+  });
 }
 
 function collectSnapshotProductIds(snapshot: MobileCatalogSnapshot) {

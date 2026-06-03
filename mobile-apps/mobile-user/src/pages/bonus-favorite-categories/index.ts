@@ -1,0 +1,1 @@
+export { BonusFavoriteCategoriesPage } from './BonusFavoriteCategoriesPage';

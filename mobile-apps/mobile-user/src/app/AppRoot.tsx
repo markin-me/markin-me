@@ -6,7 +6,15 @@ import { StatusBar } from 'expo-status-bar';
 
 import type { MainTabParamList, RootStackParamList } from './navigation/routes';
 import { routes } from './navigation/routes';
+import { AddressFormPage } from '../pages/address-form';
+import { AddressesPage } from '../pages/addresses';
 import { CartPage } from '../pages/cart';
+import { BonusProgramPage } from '../pages/bonus-program';
+import { BonusCashbackPage } from '../pages/bonus-cashback';
+import { BonusFavoriteCategoriesPage } from '../pages/bonus-favorite-categories';
+import { BonusLevelsPage } from '../pages/bonus-levels';
+import { BonusReferralsPage } from '../pages/bonus-referrals';
+import { BonusTransactionsPage } from '../pages/bonus-transactions';
 import { CatalogPage } from '../pages/catalog';
 import { CategoriesPage } from '../pages/categories';
 import { ChatPage } from '../pages/chat';
@@ -14,6 +22,7 @@ import { ComboPage } from '../pages/combo';
 import { ComboReplacePage } from '../pages/combo-replace';
 import { ProductPage } from '../pages/product';
 import { ProfilePage } from '../pages/profile';
+import { ProfileSettingsPage } from '../pages/profile-settings';
 import { theme } from '../shared/config/theme';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -91,6 +100,15 @@ export function AppRoot() {
         <Stack.Screen name={routes.product} component={ProductPage} options={{ title: 'Товар' }} />
         <Stack.Screen name={routes.categories} component={CategoriesPage} options={{ title: 'Категории' }} />
         <Stack.Screen name={routes.combo} component={ComboPage} options={{ title: 'Комбо' }} />
+        <Stack.Screen name={routes.bonusProgram} component={BonusProgramPage} options={{ title: 'Бонусная программа' }} />
+        <Stack.Screen name={routes.bonusTransactions} component={BonusTransactionsPage} options={{ title: 'Начисления' }} />
+        <Stack.Screen name={routes.bonusCashback} component={BonusCashbackPage} options={{ title: 'Кэшбек' }} />
+        <Stack.Screen name={routes.bonusFavoriteCategories} component={BonusFavoriteCategoriesPage} options={{ title: 'Выбрать категории' }} />
+        <Stack.Screen name={routes.bonusLevels} component={BonusLevelsPage} options={{ title: 'Уровни' }} />
+        <Stack.Screen name={routes.bonusReferrals} component={BonusReferralsPage} options={{ title: 'Рефералы' }} />
+        <Stack.Screen name={routes.addresses} component={AddressesPage} options={{ title: 'Мои адреса' }} />
+        <Stack.Screen name={routes.addressForm} component={AddressFormPage} options={{ title: 'Адрес' }} />
+        <Stack.Screen name={routes.profileSettings} component={ProfileSettingsPage} options={{ title: 'Настройки профиля' }} />
         <Stack.Screen
           name={routes.comboReplace}
           component={ComboReplacePage}

@@ -1,11 +1,7 @@
-﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+﻿import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import {
-  Animated,
-  Easing,
   Image,
-  Modal,
-  PanResponder,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -39,6 +35,7 @@ import {
 } from '../../shared/api';
 import { theme } from '../../shared/config/theme';
 import { formatPrice } from '../../shared/lib/formatPrice';
+import { BottomSheet } from '../../shared/ui/BottomSheet';
 import { Screen } from '../../shared/ui/Screen';
 
 type ProductPageProps = NativeStackScreenProps<RootStackParamList, 'product'>;
@@ -649,14 +646,10 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
   const [variantState, setVariantState] = useState<VariantState>({ groupId: null, label: '', selectedIndex: null, value: null });
   const [ingredientState, setIngredientState] = useState<IngredientState>({});
   const [optionSelections, setOptionSelections] = useState<Record<string, OptionSelection>>({});
-  const [isOptionsSheetOpen, setOptionsSheetOpen] = useState(false);
-  const [isOptionsSheetMounted, setOptionsSheetMounted] = useState(false);
+  const [isOptionsSheetVisible, setOptionsSheetVisible] = useState(false);
   const [activeOptionGroupId, setActiveOptionGroupId] = useState<number | null>(null);
   const [expandedOptionVariantKey, setExpandedOptionVariantKey] = useState('');
   const [nutritionMode, setNutritionMode] = useState<NutritionMode>('per100');
-  const sheetTranslateY = useRef(new Animated.Value(420)).current;
-  const sheetBackdropOpacity = useRef(new Animated.Value(0)).current;
-  const sheetScrollY = useRef(0);
 
   useEffect(() => {
     let isMounted = true;
@@ -796,100 +789,10 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
     navigation.goBack();
   };
 
-  useEffect(() => {
-    if (!isOptionsSheetMounted || !isOptionsSheetOpen) return;
-
-    sheetTranslateY.setValue(420);
-    sheetBackdropOpacity.setValue(0);
-    Animated.parallel([
-      Animated.timing(sheetBackdropOpacity, {
-        duration: 180,
-        easing: Easing.out(Easing.cubic),
-        toValue: 1,
-        useNativeDriver: true,
-      }),
-      Animated.timing(sheetTranslateY, {
-        duration: 240,
-        easing: Easing.out(Easing.cubic),
-        toValue: 0,
-        useNativeDriver: true,
-      }),
-    ]).start();
-  }, [isOptionsSheetMounted, isOptionsSheetOpen, sheetBackdropOpacity, sheetTranslateY]);
-
   const closeOptionsSheet = useCallback(() => {
-    Animated.parallel([
-      Animated.timing(sheetBackdropOpacity, {
-        duration: 150,
-        easing: Easing.out(Easing.cubic),
-        toValue: 0,
-        useNativeDriver: true,
-      }),
-      Animated.timing(sheetTranslateY, {
-        duration: 190,
-        easing: Easing.in(Easing.cubic),
-        toValue: 420,
-        useNativeDriver: true,
-      }),
-    ]).start(({ finished }) => {
-      if (!finished) return;
-      setOptionsSheetOpen(false);
-      setOptionsSheetMounted(false);
-      setExpandedOptionVariantKey('');
-    });
-  }, [sheetBackdropOpacity, sheetTranslateY]);
-
-  const resetSheetPosition = useCallback(() => {
-    Animated.spring(sheetTranslateY, {
-      bounciness: 0,
-      speed: 18,
-      toValue: 0,
-      useNativeDriver: true,
-    }).start();
-  }, [sheetTranslateY]);
-
-  const handleSheetDragMove = useCallback((dy: number) => {
-    if (dy > 0) sheetTranslateY.setValue(dy);
-  }, [sheetTranslateY]);
-
-  const handleSheetDragRelease = useCallback((dy: number, vy: number) => {
-    if (dy > 88 || vy > 0.85) {
-      closeOptionsSheet();
-      return;
-    }
-
-    resetSheetPosition();
-  }, [closeOptionsSheet, resetSheetPosition]);
-
-  const headerPanResponder = useMemo(
-    () => PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onStartShouldSetPanResponderCapture: () => true,
-      onMoveShouldSetPanResponder: (_, gesture) =>
-        gesture.dy > 8 &&
-        Math.abs(gesture.dy) > Math.abs(gesture.dx),
-      onMoveShouldSetPanResponderCapture: (_, gesture) =>
-        gesture.dy > 4 &&
-        Math.abs(gesture.dy) > Math.abs(gesture.dx),
-      onPanResponderMove: (_, gesture) => handleSheetDragMove(gesture.dy),
-      onPanResponderRelease: (_, gesture) => handleSheetDragRelease(gesture.dy, gesture.vy),
-      onPanResponderTerminate: resetSheetPosition,
-    }),
-    [handleSheetDragMove, handleSheetDragRelease, resetSheetPosition],
-  );
-
-  const contentPanResponder = useMemo(
-    () => PanResponder.create({
-      onMoveShouldSetPanResponderCapture: (_, gesture) =>
-        sheetScrollY.current <= 0 &&
-        gesture.dy > 8 &&
-        Math.abs(gesture.dy) > Math.abs(gesture.dx),
-      onPanResponderMove: (_, gesture) => handleSheetDragMove(gesture.dy),
-      onPanResponderRelease: (_, gesture) => handleSheetDragRelease(gesture.dy, gesture.vy),
-      onPanResponderTerminate: resetSheetPosition,
-    }),
-    [handleSheetDragMove, handleSheetDragRelease, resetSheetPosition],
-  );
+    setOptionsSheetVisible(false);
+    setExpandedOptionVariantKey('');
+  }, []);
 
   const openOptionsSheet = (groupId: number) => {
     setActiveOptionGroupId(groupId);
@@ -905,9 +808,7 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
     } else {
       setExpandedOptionVariantKey('');
     }
-    sheetScrollY.current = 0;
-    setOptionsSheetMounted(true);
-    setOptionsSheetOpen(true);
+    setOptionsSheetVisible(true);
   };
 
   const updateIngredientQuantity = (item: unknown, nextValue: number) => {
@@ -1192,37 +1093,11 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
           </Pressable>
         </View>
 
-        <Modal
-          animationType="none"
-          onRequestClose={closeOptionsSheet}
-          transparent
-          visible={isOptionsSheetMounted}
+        <BottomSheet
+          onClose={closeOptionsSheet}
+          title={trimText(asRecord(activeOptionGroup).title) || 'Опции'}
+          visible={isOptionsSheetVisible}
         >
-          <View style={styles.sheetHost}>
-            <Animated.View style={[styles.sheetBackdrop, { opacity: sheetBackdropOpacity }]}>
-              <Pressable style={styles.sheetBackdropPressable} onPress={closeOptionsSheet} />
-            </Animated.View>
-            <Animated.View
-              style={[styles.sheet, { transform: [{ translateY: sheetTranslateY }] }]}
-            >
-              <View {...headerPanResponder.panHandlers}>
-                <View style={styles.sheetGrabberWrap}>
-                  <View style={styles.sheetGrabber} />
-                </View>
-                <View style={styles.sheetHeader}>
-                  <Text style={styles.sheetTitle}>{trimText(asRecord(activeOptionGroup).title) || 'Опции'}</Text>
-                </View>
-              </View>
-              <ScrollView
-                alwaysBounceVertical={false}
-                bounces={false}
-                contentContainerStyle={styles.sheetContent}
-                onScroll={(event) => {
-                  sheetScrollY.current = event.nativeEvent.contentOffset.y;
-                }}
-                scrollEventThrottle={16}
-                {...contentPanResponder.panHandlers}
-              >
                 {activeOptionGroup ? (() => {
                   const group = asRecord(activeOptionGroup);
                   const groupId = toPositiveId(group.id);
@@ -1346,10 +1221,7 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
                     );
                   });
                 })() : null}
-              </ScrollView>
-            </Animated.View>
-          </View>
-        </Modal>
+        </BottomSheet>
       </View>
     </Screen>
   );
@@ -1782,68 +1654,6 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '900',
     marginBottom: theme.spacing.sm,
-  },
-  sheet: {
-    backgroundColor: theme.colors.card,
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    maxHeight: '82%',
-    overflow: 'hidden',
-  },
-  sheetBackdrop: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(17, 24, 39, 0.45)',
-  },
-  sheetBackdropPressable: {
-    flex: 1,
-  },
-  sheetClose: {
-    alignItems: 'center',
-    backgroundColor: theme.colors.mutedBackground,
-    borderRadius: theme.radius.pill,
-    height: 38,
-    justifyContent: 'center',
-    width: 38,
-  },
-  sheetContent: {
-    padding: theme.spacing.lg,
-    paddingBottom: theme.spacing.xl,
-  },
-  sheetGroup: {
-    marginBottom: theme.spacing.lg,
-  },
-  sheetGroupTitle: {
-    color: theme.colors.text,
-    fontSize: 16,
-    fontWeight: '900',
-  },
-  sheetHeader: {
-    alignItems: 'flex-start',
-    borderBottomColor: theme.colors.border,
-    borderBottomWidth: 1,
-    paddingHorizontal: theme.spacing.lg,
-    paddingBottom: theme.spacing.md,
-    paddingTop: theme.spacing.xs,
-  },
-  sheetHost: {
-    flex: 1,
-    justifyContent: 'flex-end',
-  },
-  sheetGrabber: {
-    backgroundColor: theme.colors.border,
-    borderRadius: theme.radius.pill,
-    height: 5,
-    width: 46,
-  },
-  sheetGrabberWrap: {
-    alignItems: 'center',
-    paddingBottom: theme.spacing.sm,
-    paddingTop: theme.spacing.md,
-  },
-  sheetTitle: {
-    color: theme.colors.text,
-    fontSize: 20,
-    fontWeight: '900',
   },
   stackedInfoCard: {
     marginTop: theme.spacing.md,

@@ -1,0 +1,1 @@
+export { BonusCashbackPage } from './BonusCashbackPage';

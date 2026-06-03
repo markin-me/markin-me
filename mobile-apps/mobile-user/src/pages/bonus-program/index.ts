@@ -1,0 +1,1 @@
+export { BonusProgramPage } from './BonusProgramPage';

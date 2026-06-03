@@ -11,6 +11,15 @@ export const routes = {
   cart: 'cart',
   chat: 'chat',
   profile: 'profile',
+  profileSettings: 'profileSettings',
+  bonusProgram: 'bonusProgram',
+  bonusTransactions: 'bonusTransactions',
+  bonusCashback: 'bonusCashback',
+  bonusFavoriteCategories: 'bonusFavoriteCategories',
+  bonusLevels: 'bonusLevels',
+  bonusReferrals: 'bonusReferrals',
+  addresses: 'addresses',
+  addressForm: 'addressForm',
 } as const;
 
 export type AppRouteName = keyof typeof routes;
@@ -21,6 +30,15 @@ export type RootStackParamList = {
   combo: { comboId: number; openNonce?: number };
   comboReplace: { comboId: number; blockIndex: number; blockTitle?: string };
   categories: { categories: CatalogCategory[]; activeCategoryId?: number | null };
+  profileSettings: undefined;
+  bonusProgram: undefined;
+  bonusTransactions: undefined;
+  bonusCashback: undefined;
+  bonusFavoriteCategories: undefined;
+  bonusLevels: undefined;
+  bonusReferrals: undefined;
+  addresses: undefined;
+  addressForm: { addressId?: number } | undefined;
 };
 
 export type MainTabParamList = {
