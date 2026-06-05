@@ -1,17 +1,23 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import {
   ActivityIndicator,
   Animated,
   Easing,
+  FlatList,
   Image,
   Pressable,
   ScrollView,
   StyleSheet,
-  Text,
+  useWindowDimensions,
   View,
 } from 'react-native';
-import type { GestureResponderEvent } from 'react-native';
+import type { GestureResponderEvent, ViewToken } from 'react-native';
 import type { RouteProp } from '@react-navigation/native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -31,6 +37,7 @@ import { theme } from '../../shared/config/theme';
 import { formatPrice } from '../../shared/lib/formatPrice';
 import { Screen } from '../../shared/ui/Screen';
 
+import { AppText as Text } from '../../shared/ui';
 type CatalogNavigation = NativeStackNavigationProp<RootStackParamList>;
 type CatalogRoute = RouteProp<MainTabParamList, 'home'>;
 
@@ -38,6 +45,21 @@ type CatalogState = {
   categories: CatalogCategory[];
   productsByCategory: Map<number, CatalogProduct[]>;
   combosByCategory: Map<number, CatalogCombo[]>;
+};
+
+type CatalogCardItem =
+  | { cardKey: string; categoryId: number; product: CatalogProduct; type: 'product' }
+  | { cardKey: string; categoryId: number; combo: CatalogCombo; type: 'combo' };
+
+type CatalogListItem =
+  | { categoryId: number; itemKey: string; title: string; type: 'header' }
+  | { categoryId: number; itemKey: string; cards: CatalogCardItem[]; type: 'row' }
+  | { categoryId: number; itemKey: string; type: 'empty' };
+
+type CatalogItemLayout = {
+  index: number;
+  length: number;
+  offset: number;
 };
 
 const emptyCatalogState: CatalogState = {
@@ -50,6 +72,7 @@ const comboGridOrder = [0, 2, 3, 1];
 const comboSlideDirections = ['up', 'right', 'left', 'down'] as const;
 const comboRotationIntervalMs = 6800;
 const comboRotationStepDurationMs = 760;
+const comboRotationPrepareDelayMs = 180;
 
 type ComboSlideDirection = typeof comboSlideDirections[number];
 type ComboSlidePhase = 'idle' | 'ready' | 'leaving' | 'entering';
@@ -152,6 +175,83 @@ function getComboImageSets(combo: CatalogCombo) {
   return [0, 1, 2, 3].map((index) => normalizeComboCellPhotos(combo, index));
 }
 
+function buildCatalogListItems(catalog: CatalogState, categories: CatalogCategory[]) {
+  const items: CatalogListItem[] = [];
+  const categoryIndexById = new Map<number, number>();
+
+  categories.forEach((category) => {
+    const categoryId = Number(category.id);
+    if (!Number.isFinite(categoryId) || categoryId <= 0) return;
+
+    categoryIndexById.set(categoryId, items.length);
+    items.push({
+      categoryId,
+      itemKey: `header-${categoryId}`,
+      title: category.title,
+      type: 'header',
+    });
+
+    const products = catalog.productsByCategory.get(categoryId) || [];
+    const combos = catalog.combosByCategory.get(categoryId) || [];
+    const cards: CatalogCardItem[] = [
+      ...products.map((product) => ({
+        cardKey: `product-${categoryId}-${product.id}`,
+        categoryId,
+        product,
+        type: 'product' as const,
+      })),
+      ...combos.map((combo) => ({
+        cardKey: `combo-${categoryId}-${combo.id}`,
+        categoryId,
+        combo,
+        type: 'combo' as const,
+      })),
+    ];
+
+    if (!cards.length) {
+      items.push({
+        categoryId,
+        itemKey: `empty-${categoryId}`,
+        type: 'empty',
+      });
+      return;
+    }
+
+    for (let index = 0; index < cards.length; index += 2) {
+      items.push({
+        cards: cards.slice(index, index + 2),
+        categoryId,
+        itemKey: `row-${categoryId}-${index}`,
+        type: 'row',
+      });
+    }
+  });
+
+  return { categoryIndexById, items };
+}
+
+function buildCatalogItemLayouts(items: CatalogListItem[], screenWidth: number) {
+  const contentWidth = Math.max(0, screenWidth - theme.spacing.lg * 2);
+  const cardWidth = contentWidth * 0.48;
+  const rowLength = Math.ceil(cardWidth / 0.56 + theme.spacing.md);
+  const headerLength = 44;
+  const emptyLength = 38;
+  const layouts: CatalogItemLayout[] = [];
+  let offset = 0;
+
+  items.forEach((item, index) => {
+    const length = item.type === 'row'
+      ? rowLength
+      : item.type === 'header'
+        ? headerLength
+        : emptyLength;
+    layouts[index] = { index, length, offset };
+    offset += length;
+  });
+
+  return layouts;
+}
+
 function getComboSlideOffset(direction: ComboSlideDirection, width: number, height: number) {
   const safeWidth = width || 120;
   const safeHeight = height || 120;
@@ -223,6 +323,7 @@ function QuantityOverlayText({ quantity }: { quantity: number }) {
 
   return (
     <Animated.Text
+      allowFontScaling={false}
       style={[
         styles.quantityOverlayText,
         {
@@ -354,6 +455,7 @@ function AnimatedComboGridCell({
   const leaveAnimation = useRef(new Animated.Value(0)).current;
   const enterAnimation = useRef(new Animated.Value(1)).current;
   const mountedRef = useRef(true);
+  const prepareTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [slideState, setSlideState] = useState<{
     activeLayer: ComboImageLayer;
     back: ComboLayerState | null;
@@ -377,6 +479,7 @@ function AnimatedComboGridCell({
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      if (prepareTimer.current) clearTimeout(prepareTimer.current);
       leaveAnimation.stopAnimation();
       enterAnimation.stopAnimation();
     };
@@ -398,6 +501,7 @@ function AnimatedComboGridCell({
     if (!rotationKey || !nextUrl || nextIndex == null || photos.length < 2) return;
     if (nextIndex === activeIndex) return;
 
+    if (prepareTimer.current) clearTimeout(prepareTimer.current);
     leaveAnimation.setValue(0);
     enterAnimation.setValue(0);
     const incomingLayer: ComboImageLayer = slideState.activeLayer === 'front' ? 'back' : 'front';
@@ -408,41 +512,44 @@ function AnimatedComboGridCell({
       phase: 'ready',
     }));
 
-    requestAnimationFrame(() => {
+    prepareTimer.current = setTimeout(() => {
+      prepareTimer.current = null;
       requestAnimationFrame(() => {
-        if (!mountedRef.current) return;
+        requestAnimationFrame(() => {
+          if (!mountedRef.current) return;
 
-        setSlideState((current) => ({ ...current, phase: 'leaving' }));
+          setSlideState((current) => ({ ...current, phase: 'leaving' }));
 
-        Animated.timing(leaveAnimation, {
-          duration: comboRotationStepDurationMs,
-          easing: Easing.bezier(0.22, 0.61, 0.36, 1),
-          toValue: 1,
-          useNativeDriver: true,
-        }).start(({ finished }) => {
-          if (!mountedRef.current || !finished) return;
-
-          setSlideState((current) => ({ ...current, phase: 'entering' }));
-
-          Animated.timing(enterAnimation, {
+          Animated.timing(leaveAnimation, {
             duration: comboRotationStepDurationMs,
             easing: Easing.bezier(0.22, 0.61, 0.36, 1),
             toValue: 1,
             useNativeDriver: true,
-          }).start(() => {
-            if (!mountedRef.current) return;
-            leaveAnimation.setValue(0);
-            enterAnimation.setValue(1);
-            setSlideState((current) => ({
-              ...current,
-              activeLayer: incomingLayer,
-              incomingLayer: null,
-              phase: 'idle',
-            }));
+          }).start(({ finished }) => {
+            if (!mountedRef.current || !finished) return;
+
+            setSlideState((current) => ({ ...current, phase: 'entering' }));
+
+            Animated.timing(enterAnimation, {
+              duration: comboRotationStepDurationMs,
+              easing: Easing.bezier(0.22, 0.61, 0.36, 1),
+              toValue: 1,
+              useNativeDriver: true,
+            }).start(() => {
+              if (!mountedRef.current) return;
+              leaveAnimation.setValue(0);
+              enterAnimation.setValue(1);
+              setSlideState((current) => ({
+                ...current,
+                activeLayer: incomingLayer,
+                incomingLayer: null,
+                phase: 'idle',
+              }));
+            });
           });
         });
       });
-    });
+    }, comboRotationPrepareDelayMs);
   }, [activeIndex, enterAnimation, leaveAnimation, nextIndex, nextUrl, photos.length, rotationKey, slideState.activeLayer]);
 
   if (!currentUrl) return null;
@@ -450,6 +557,7 @@ function AnimatedComboGridCell({
   const getLayerStyle = (layer: ComboImageLayer) => {
     const isActive = layer === slideState.activeLayer;
     const isIncoming = layer === slideState.incomingLayer;
+    const isActiveResting = isActive && (slideState.phase === 'idle' || slideState.phase === 'ready');
     const isLeaving = isActive && slideState.phase === 'leaving';
     const isEntering = isIncoming && slideState.phase === 'entering';
     const opacity = isLeaving
@@ -459,7 +567,7 @@ function AnimatedComboGridCell({
       })
       : isEntering
         ? enterAnimation
-        : isActive && slideState.phase === 'idle'
+        : isActiveResting
           ? 1
           : 0;
     const translateX = isLeaving
@@ -472,7 +580,7 @@ function AnimatedComboGridCell({
           inputRange: [0, 1],
           outputRange: [offset.x, 0],
         })
-        : isActive && slideState.phase === 'idle'
+        : isActiveResting
           ? 0
           : offset.x;
     const translateY = isLeaving
@@ -485,7 +593,7 @@ function AnimatedComboGridCell({
           inputRange: [0, 1],
           outputRange: [offset.y, 0],
         })
-        : isActive && slideState.phase === 'idle'
+        : isActiveResting
           ? 0
           : offset.y;
 
@@ -516,7 +624,7 @@ function AnimatedComboGridCell({
   );
 }
 
-function ComboCard({ combo, onPress }: { combo: CatalogCombo; onPress: () => void }) {
+function ComboCard({ combo, isAnimatedActive, onPress }: { combo: CatalogCombo; isAnimatedActive: boolean; onPress: () => void }) {
   const images = getComboImages(combo);
   const imageSets = useMemo(() => getComboImageSets(combo), [combo]);
   const [comboImageIndexes, setComboImageIndexes] = useState([0, 0, 0, 0]);
@@ -531,6 +639,15 @@ function ComboCard({ combo, onPress }: { combo: CatalogCombo; onPress: () => voi
   }, [imageSets]);
 
   useEffect(() => {
+    if (!isAnimatedActive) return;
+    const urls = Array.from(new Set(imageSets.flat().filter(Boolean)));
+    urls.forEach((url) => {
+      void Image.prefetch(url);
+    });
+  }, [imageSets, isAnimatedActive]);
+
+  useEffect(() => {
+    if (!isAnimatedActive) return;
     if (!imageSets.some((photos) => photos.length > 1)) return;
 
     let isMounted = true;
@@ -574,7 +691,7 @@ function ComboCard({ combo, onPress }: { combo: CatalogCombo; onPress: () => voi
       isMounted = false;
       clearInterval(timer);
     };
-  }, [imageSets]);
+  }, [imageSets, isAnimatedActive]);
 
   return (
     <Pressable style={[styles.card, !available && styles.cardDisabled]} onPress={onPress}>
@@ -624,19 +741,45 @@ function ComboCard({ combo, onPress }: { combo: CatalogCombo; onPress: () => voi
 export function CatalogPage() {
   const navigation = useNavigation<CatalogNavigation>();
   const route = useRoute<CatalogRoute>();
-  const scrollRef = useRef<ScrollView>(null);
+  const { width: screenWidth } = useWindowDimensions();
+  const listRef = useRef<FlatList<CatalogListItem>>(null);
   const chipsScrollRef = useRef<ScrollView>(null);
-  const sectionOffsets = useRef(new Map<number, number>());
   const chipOffsets = useRef(new Map<number, number>());
+  const scrollIdleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const programmaticScrollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const programmaticCategoryId = useRef<number | null>(null);
   const [activeCategoryId, setActiveCategoryId] = useState<number | null>(null);
   const [catalog, setCatalog] = useState<CatalogState>(emptyCatalogState);
   const [productQuantities, setProductQuantities] = useState<Record<number, number>>({});
+  const [visibleComboKeys, setVisibleComboKeys] = useState<Set<string>>(() => new Set());
+  const [isCatalogScrolling, setCatalogScrolling] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [errorText, setErrorText] = useState('');
 
   const visibleCategories = useMemo(
     () => catalog.categories.filter((category) => Number(category.id) > 0),
     [catalog.categories],
+  );
+  const { categoryIndexById, items: catalogItems } = useMemo(
+    () => buildCatalogListItems(catalog, visibleCategories),
+    [catalog, visibleCategories],
+  );
+  const catalogItemLayouts = useMemo(
+    () => buildCatalogItemLayouts(catalogItems, screenWidth),
+    [catalogItems, screenWidth],
+  );
+  const categoryHeaderLayouts = useMemo(
+    () => visibleCategories
+      .map((category) => {
+        const categoryId = Number(category.id);
+        const index = categoryIndexById.get(categoryId);
+        const layout = index == null ? null : catalogItemLayouts[index];
+        return layout && Number.isFinite(categoryId) && categoryId > 0
+          ? { categoryId, offset: layout.offset }
+          : null;
+      })
+      .filter((item): item is { categoryId: number; offset: number } => item !== null),
+    [catalogItemLayouts, categoryIndexById, visibleCategories],
   );
 
   const loadCatalog = useCallback(async () => {
@@ -681,6 +824,11 @@ export function CatalogPage() {
     void loadCatalog();
   }, [loadCatalog]);
 
+  useEffect(() => () => {
+    if (scrollIdleTimer.current) clearTimeout(scrollIdleTimer.current);
+    if (programmaticScrollTimer.current) clearTimeout(programmaticScrollTimer.current);
+  }, []);
+
   const scrollChipToCategory = useCallback((categoryId: number) => {
     const offset = chipOffsets.current.get(categoryId);
     if (offset != null) {
@@ -693,12 +841,17 @@ export function CatalogPage() {
   }, [activeCategoryId, scrollChipToCategory]);
 
   const scrollToCategoryId = useCallback((categoryId: number) => {
+    if (programmaticScrollTimer.current) clearTimeout(programmaticScrollTimer.current);
+    programmaticCategoryId.current = categoryId;
     setActiveCategoryId(categoryId);
-    const offset = sectionOffsets.current.get(categoryId);
-    if (offset != null) {
-      scrollRef.current?.scrollTo({ animated: true, y: Math.max(0, offset - 8) });
+    const index = categoryIndexById.get(categoryId);
+    if (index != null) {
+      listRef.current?.scrollToIndex({ animated: true, index, viewOffset: 8 });
+      programmaticScrollTimer.current = setTimeout(() => {
+        programmaticCategoryId.current = null;
+      }, 1200);
     }
-  }, []);
+  }, [categoryIndexById]);
 
   useEffect(() => {
     const selectedCategoryId = Number(route.params?.selectedCategoryId || 0);
@@ -709,22 +862,51 @@ export function CatalogPage() {
     return () => clearTimeout(timer);
   }, [route.params?.selectedCategoryId, scrollToCategoryId, visibleCategories]);
 
-  const handleCatalogScroll = useCallback((event: { nativeEvent: { contentOffset: { y: number } } }) => {
-    const y = event.nativeEvent.contentOffset.y;
-    let nextActiveId = activeCategoryId;
+  const markCatalogScrolling = useCallback(() => {
+    if (scrollIdleTimer.current) clearTimeout(scrollIdleTimer.current);
+    setCatalogScrolling(true);
+  }, []);
 
-    visibleCategories.forEach((category) => {
-      const categoryId = Number(category.id);
-      const offset = sectionOffsets.current.get(categoryId);
-      if (offset != null && offset <= y + 48) {
-        nextActiveId = categoryId;
-      }
+  const scheduleCatalogScrollIdle = useCallback(() => {
+    if (scrollIdleTimer.current) clearTimeout(scrollIdleTimer.current);
+    scrollIdleTimer.current = setTimeout(() => {
+      setCatalogScrolling(false);
+      if (programmaticScrollTimer.current) clearTimeout(programmaticScrollTimer.current);
+      programmaticCategoryId.current = null;
+    }, 180);
+  }, []);
+
+  const handleViewableItemsChanged = useRef((info: { viewableItems: Array<ViewToken<CatalogListItem>> }) => {
+    const visibleItems = info.viewableItems.map((entry) => entry.item).filter(Boolean);
+    const nextComboKeys = new Set<string>();
+    visibleItems.forEach((item) => {
+      if (item.type !== 'row') return;
+      item.cards.forEach((card) => {
+        if (card.type === 'combo') nextComboKeys.add(card.cardKey);
+      });
+    });
+    setVisibleComboKeys(nextComboKeys);
+  }).current;
+
+  const viewabilityConfig = useRef({
+    itemVisiblePercentThreshold: 25,
+    minimumViewTime: 80,
+  }).current;
+
+  const handleCatalogScroll = useCallback((event: { nativeEvent: { contentOffset: { y: number } } }) => {
+    if (programmaticCategoryId.current != null) return;
+
+    const activationOffset = event.nativeEvent.contentOffset.y + theme.spacing.lg + 1;
+    let nextCategoryId = categoryHeaderLayouts[0]?.categoryId ?? null;
+
+    categoryHeaderLayouts.forEach((item) => {
+      if (item.offset <= activationOffset) nextCategoryId = item.categoryId;
     });
 
-    if (nextActiveId != null && nextActiveId !== activeCategoryId) {
-      setActiveCategoryId(nextActiveId);
+    if (nextCategoryId != null) {
+      setActiveCategoryId((current) => (current === nextCategoryId ? current : nextCategoryId));
     }
-  }, [activeCategoryId, visibleCategories]);
+  }, [categoryHeaderLayouts]);
 
   const increaseProductQuantity = useCallback((productId: number) => {
     setProductQuantities((current) => ({
@@ -748,8 +930,64 @@ export function CatalogPage() {
     });
   }, []);
 
+  const renderCatalogCard = useCallback((card: CatalogCardItem) => {
+    if (card.type === 'product') {
+      return (
+        <ProductCard
+          key={card.cardKey}
+          product={card.product}
+          quantity={productQuantities[Number(card.product.id)] || 0}
+          onDecrease={() => decreaseProductQuantity(Number(card.product.id))}
+          onIncrease={() => increaseProductQuantity(Number(card.product.id))}
+          onPress={() => navigation.navigate('product', { productId: Number(card.product.id) })}
+        />
+      );
+    }
+
+    return (
+      <ComboCard
+        key={card.cardKey}
+        combo={card.combo}
+        isAnimatedActive={visibleComboKeys.has(card.cardKey) && !isCatalogScrolling}
+        onPress={() => navigation.navigate('combo', { comboId: Number(card.combo.id), openNonce: Date.now() })}
+      />
+    );
+  }, [
+    decreaseProductQuantity,
+    increaseProductQuantity,
+    isCatalogScrolling,
+    navigation,
+    productQuantities,
+    visibleComboKeys,
+  ]);
+
+  const renderCatalogItem = useCallback(({ item }: { item: CatalogListItem }) => {
+    if (item.type === 'header') {
+      return (
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>{item.title}</Text>
+        </View>
+      );
+    }
+
+    if (item.type === 'empty') {
+      return <Text style={styles.emptySection}>В этой категории пока нет товаров</Text>;
+    }
+
+    return (
+      <View style={styles.grid}>
+        {item.cards.map(renderCatalogCard)}
+      </View>
+    );
+  }, [renderCatalogCard]);
+
+  const getCatalogItemLayout = useCallback((_data: ArrayLike<CatalogListItem> | null | undefined, index: number) => {
+    const layout = catalogItemLayouts[index];
+    return layout || { index, length: 0, offset: 0 };
+  }, [catalogItemLayouts]);
+
   return (
-    <Screen>
+    <Screen edges={['top']}>
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Каталог</Text>
         <Text style={styles.headerCaption}>Товары и комбо из текущей базы</Text>
@@ -807,54 +1045,34 @@ export function CatalogPage() {
           </Pressable>
         </View>
       ) : (
-        <ScrollView
-          ref={scrollRef}
+        <FlatList
+          ref={listRef}
+          data={catalogItems}
           style={styles.content}
           contentContainerStyle={styles.contentInner}
+          getItemLayout={getCatalogItemLayout}
+          keyExtractor={(item) => item.itemKey}
+          maxToRenderPerBatch={8}
+          onMomentumScrollBegin={markCatalogScrolling}
+          onMomentumScrollEnd={scheduleCatalogScrollIdle}
           onScroll={handleCatalogScroll}
+          onScrollBeginDrag={markCatalogScrolling}
+          onScrollEndDrag={scheduleCatalogScrollIdle}
+          onScrollToIndexFailed={(info) => {
+            const layout = catalogItemLayouts[info.index];
+            listRef.current?.scrollToOffset({
+              animated: true,
+              offset: Math.max(0, layout?.offset ?? info.averageItemLength * info.index),
+            });
+          }}
+          onViewableItemsChanged={handleViewableItemsChanged}
+          renderItem={renderCatalogItem}
+          removeClippedSubviews
           scrollEventThrottle={80}
-        >
-          {visibleCategories.map((category) => {
-            const categoryId = Number(category.id);
-            const products = catalog.productsByCategory.get(categoryId) || [];
-            const combos = catalog.combosByCategory.get(categoryId) || [];
-            const hasItems = products.length > 0 || combos.length > 0;
-
-            return (
-              <View
-                key={category.id}
-                onLayout={(event) => {
-                  sectionOffsets.current.set(categoryId, event.nativeEvent.layout.y);
-                }}
-              >
-                <Text style={styles.sectionTitle}>{category.title}</Text>
-                {hasItems ? (
-                  <View style={styles.grid}>
-                    {products.map((product) => (
-                      <ProductCard
-                        key={`product-${category.id}-${product.id}`}
-                        product={product}
-                        quantity={productQuantities[Number(product.id)] || 0}
-                        onDecrease={() => decreaseProductQuantity(Number(product.id))}
-                        onIncrease={() => increaseProductQuantity(Number(product.id))}
-                        onPress={() => navigation.navigate('product', { productId: Number(product.id) })}
-                      />
-                    ))}
-                    {combos.map((combo) => (
-                      <ComboCard
-                        key={`combo-${category.id}-${combo.id}`}
-                        combo={combo}
-                        onPress={() => navigation.navigate('combo', { comboId: Number(combo.id), openNonce: Date.now() })}
-                      />
-                    ))}
-                  </View>
-                ) : (
-                  <Text style={styles.emptySection}>В этой категории пока нет товаров</Text>
-                )}
-              </View>
-            );
-          })}
-        </ScrollView>
+          updateCellsBatchingPeriod={50}
+          viewabilityConfig={viewabilityConfig}
+          windowSize={7}
+        />
       )}
     </Screen>
   );
@@ -905,7 +1123,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     lineHeight: 16,
-    height: 32,
+    height: 36,
   },
   categoriesButton: {
     alignItems: 'center',
@@ -1172,12 +1390,17 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
   },
+  sectionHeader: {
+    backgroundColor: theme.colors.mutedBackground,
+    paddingBottom: theme.spacing.md,
+    paddingTop: theme.spacing.sm,
+    zIndex: 2,
+  },
   sectionTitle: {
     color: theme.colors.text,
     fontSize: 20,
     fontWeight: '800',
-    marginBottom: theme.spacing.md,
-    marginTop: theme.spacing.sm,
+    lineHeight: 24,
   },
   stateText: {
     color: theme.colors.muted,

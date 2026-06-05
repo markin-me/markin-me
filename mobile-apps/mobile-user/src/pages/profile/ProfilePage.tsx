@@ -1,9 +1,23 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import * as Brightness from 'expo-brightness';
-import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import { useFocusEffect,
+  useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { ActivityIndicator, Image, Keyboard, Pressable, ScrollView, Share, StyleSheet, Text, TextInput, TouchableWithoutFeedback, View } from 'react-native';
+import { ActivityIndicator,
+  Image,
+  Keyboard,
+  Pressable,
+  ScrollView,
+  Share,
+  StyleSheet,
+  TouchableWithoutFeedback,
+  View,
+} from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
 
 import {
@@ -27,6 +41,7 @@ import { BottomSheet } from '../../shared/ui/BottomSheet';
 import { Screen } from '../../shared/ui/Screen';
 import { routes, type RootStackParamList } from '../../app/navigation/routes';
 
+import { AppText as Text, AppTextInput as TextInput } from '../../shared/ui';
 type AuthStep = 'phone' | 'birthday' | 'code';
 
 function normalizePhoneDigits(value: string) {
@@ -122,24 +137,19 @@ function getBonusSummary(config: BonusConfig | null) {
   return { balance, coinName, levelTitle };
 }
 
-function getBonusProgressPercent(progress: Record<string, unknown> | null) {
-  if (!progress) return 48;
-  const pairs: Array<[unknown, unknown]> = [
-    [progress.amount_current, progress.amount_target],
-    [progress.orders_current, progress.orders_target],
-    [progress.referrals_current, progress.referrals_target],
-    [progress.bonus_accrued_current, progress.bonus_accrued_target],
-    [progress.bonus_redeemed_current, progress.bonus_redeemed_target],
-  ];
-  const values = pairs
-    .map(([current, target]) => {
-      const targetNumber = Number(target || 0);
-      if (!(targetNumber > 0)) return null;
-      return Math.max(0, Math.min(100, Number(current || 0) / targetNumber * 100));
-    })
-    .filter((value): value is number => value !== null);
-  if (!values.length) return 48;
-  return Math.max(0, Math.min(100, Math.min(...values)));
+function getOrderedBonusLevels(levels: Array<Record<string, unknown>>) {
+  return levels
+    .filter((level) => level && level.is_active !== false)
+    .slice()
+    .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0) || Number(a.id || 0) - Number(b.id || 0));
+}
+
+function getNextBonusLevel(levels: Array<Record<string, unknown>>, currentLevel: Record<string, unknown> | null) {
+  const currentId = Number(currentLevel?.id || 0);
+  if (!(currentId > 0)) return null;
+  const ordered = getOrderedBonusLevels(levels);
+  const currentIndex = ordered.findIndex((level) => Number(level?.id || 0) === currentId);
+  return currentIndex >= 0 ? ordered[currentIndex + 1] || null : null;
 }
 
 function getLevelConditionRows(level: Record<string, unknown> | null) {
@@ -160,16 +170,41 @@ function getLevelConditionRows(level: Record<string, unknown> | null) {
     .filter((row) => row.targetNumber > 0);
 }
 
+function getLevelConditionMatchCount(level: Record<string, unknown> | null, rows: ReturnType<typeof getLevelConditionRows>) {
+  const progress = level?.progress && typeof level.progress === 'object' ? level.progress as Record<string, unknown> : {};
+  return Math.min(rows.length, Math.max(1, Math.floor(Number(progress.match_count || level?.requirement_match_count || 1))));
+}
+
+function getLevelConditionsProgressPercent(level: Record<string, unknown> | null) {
+  const rows = getLevelConditionRows(level);
+  const matchCount = getLevelConditionMatchCount(level, rows);
+  if (!rows.length || !(matchCount > 0)) return 0;
+  const ratios = rows
+    .map((row) => row.currentNumber / row.targetNumber)
+    .sort((a, b) => b - a)
+    .slice(0, matchCount);
+  const total = ratios.reduce((sum, value) => sum + Math.max(0, Math.min(1, value)), 0);
+  return Math.max(0, Math.min(100, Math.round(total / matchCount * 100)));
+}
+
+function getProfileLevelProgressPercent(levels: Array<Record<string, unknown>>, level: Record<string, unknown> | null) {
+  const nextLevel = getNextBonusLevel(levels, level);
+  const progressLevel = nextLevel || level;
+  const rows = getLevelConditionRows(progressLevel);
+  if (!nextLevel && !rows.length) return 100;
+  return getLevelConditionsProgressPercent(progressLevel);
+}
+
 function getLevelPopoverSummary(config: BonusConfig | null) {
   if (!config) return null;
   const account = config.account && typeof config.account === 'object' ? config.account : null;
   const levels = Array.isArray(config.levels) ? config.levels : [];
   const currentLevelId = Number(account?.level_id ?? account?.bonus_level_id ?? 0);
-  const currentIndex = levels.findIndex((level) => Number(level?.id || 0) === currentLevelId);
-  const nextLevel = currentIndex >= 0 ? levels[currentIndex + 1] || null : levels[1] || null;
+  const orderedLevels = getOrderedBonusLevels(levels);
+  const currentLevel = orderedLevels.find((level) => Number(level?.id || 0) === currentLevelId) || orderedLevels[0] || null;
+  const nextLevel = getNextBonusLevel(orderedLevels, currentLevel) || currentLevel;
   const rows = getLevelConditionRows(nextLevel);
-  const progress = nextLevel?.progress && typeof nextLevel.progress === 'object' ? nextLevel.progress as Record<string, unknown> : {};
-  const matchCount = Math.min(rows.length, Math.max(1, Math.floor(Number(progress.match_count || nextLevel?.requirement_match_count || 1))));
+  const matchCount = getLevelConditionMatchCount(nextLevel, rows);
   if (!rows.length) return null;
   return { matchCount, rows };
 }
@@ -220,7 +255,6 @@ function getBonusCardSummary(config: BonusConfig | null, favorites: BonusFavorit
   const settings = config.settings && typeof config.settings === 'object' ? config.settings : {};
   const levelId = Number(account?.level_id ?? account?.bonus_level_id ?? 0);
   const level = levels.find((item) => Number(item.id || 0) === levelId) || levels[0] || null;
-  const progress = level?.progress && typeof level.progress === 'object' ? level.progress as Record<string, unknown> : null;
   const favoriteMin = Number(level?.favorite_categories_min_bonus_percent || 0);
   const favoriteMax = Number(level?.favorite_categories_max_bonus_percent || level?.favorite_categories_bonus_percent || favorites?.bonus_percent || 0);
   const favoriteLabel = favoriteMax > 0
@@ -249,7 +283,7 @@ function getBonusCardSummary(config: BonusConfig | null, favorites: BonusFavorit
     programLogo,
     programName: String(settings.bonus_program_name || settings.bonus_program_name_base || 'Бонусная программа'),
     programDisplayName: programName,
-    progressPercent: getBonusProgressPercent(progress),
+    progressPercent: getProfileLevelProgressPercent(levels, level),
     qrEnabled: level?.qr_enabled !== false,
     redeemPercent: Number(level?.redeem_percent || 0),
     showTitleOnCard: level?.show_title_on_card !== false,
@@ -422,6 +456,10 @@ export function ProfilePage() {
   const handleProfileMenuPress = useCallback((key: string) => {
     if (key === 'addresses') {
       navigation.navigate(routes.addresses);
+      return;
+    }
+    if (key === 'my-orders') {
+      navigation.navigate(routes.orders);
     }
   }, [navigation]);
 
@@ -456,10 +494,14 @@ export function ProfilePage() {
     return () => clearTimeout(timer);
   }, [levelPopoverVisible]);
 
-  const showLevelPopover = useCallback(() => {
+  const toggleLevelPopover = useCallback(() => {
     if (!levelPopoverSummary) return;
-    setLevelPopoverVisible(true);
+    setLevelPopoverVisible((value) => !value);
   }, [levelPopoverSummary]);
+
+  const closeLevelPopover = useCallback(() => {
+    setLevelPopoverVisible(false);
+  }, []);
 
   const resetAuthForm = () => {
     setStep('phone');
@@ -562,7 +604,7 @@ export function ProfilePage() {
 
   if (!passport) {
     return (
-      <Screen>
+      <Screen edges={['top']}>
         <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
           <View style={styles.authRoot}>
           <View style={styles.authHeader}>
@@ -661,7 +703,7 @@ export function ProfilePage() {
     : 'transparent';
 
   return (
-    <Screen>
+    <Screen edges={['top']}>
       <ScrollView style={styles.profileRoot} contentContainerStyle={styles.profileContent}>
         <View style={styles.profileHeader}>
           <Text style={styles.profileTitle}>Профиль</Text>
@@ -672,9 +714,11 @@ export function ProfilePage() {
 
         {refreshing ? <Text style={styles.refreshText}>Обновляем данные...</Text> : null}
 
+        {levelPopoverVisible ? <Pressable onPress={closeLevelPopover} style={styles.levelPopoverBackdrop} /> : null}
+
         {bonusSummary ? (
           <View style={styles.levelPopoverAnchor}>
-          <Pressable onPress={showLevelPopover} style={[styles.bonusCard, levelPopoverVisible ? styles.bonusCardActive : null]}>
+          <Pressable onPress={toggleLevelPopover} style={[styles.bonusCard, levelPopoverVisible ? styles.bonusCardActive : null]}>
             <View style={styles.bonusAvatar}>
               {photo ? <Image source={{ uri: photo }} style={styles.bonusAvatarImage} /> : <Ionicons name="person" color={theme.colors.accent} size={24} />}
             </View>
@@ -880,7 +924,7 @@ export function ProfilePage() {
             return (
               <Pressable
                 key={item.key}
-                disabled={item.key !== 'addresses'}
+                disabled={!['addresses', 'my-orders'].includes(item.key)}
                 onPress={() => handleProfileMenuPress(item.key)}
                 style={styles.profileMenuItem}
               >
@@ -1188,6 +1232,14 @@ const styles = StyleSheet.create({
   levelPopoverAnchor: {
     position: 'relative',
     zIndex: 20,
+  },
+  levelPopoverBackdrop: {
+    bottom: 0,
+    left: 0,
+    position: 'absolute',
+    right: 0,
+    top: 0,
+    zIndex: 10,
   },
   levelPopoverSubtitle: {
     color: theme.colors.text,
@@ -1582,6 +1634,7 @@ const styles = StyleSheet.create({
   profileContent: {
     padding: theme.spacing.lg,
     paddingBottom: theme.spacing.xl,
+    position: 'relative',
   },
   profileRoot: {
     backgroundColor: theme.colors.mutedBackground,

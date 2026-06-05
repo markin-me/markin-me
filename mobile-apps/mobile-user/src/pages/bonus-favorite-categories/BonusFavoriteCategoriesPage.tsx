@@ -1,7 +1,16 @@
-import { useCallback, useMemo, useState } from 'react';
+import {
+  useCallback,
+  useMemo,
+  useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
-import { useFocusEffect, useNavigation } from '@react-navigation/native';
-import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useFocusEffect,
+  useNavigation } from '@react-navigation/native';
+import { Image,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  View,
+} from 'react-native';
 
 import {
   readCachedCustomerPassport,
@@ -14,6 +23,7 @@ import {
 import { theme } from '../../shared/config/theme';
 import { Screen } from '../../shared/ui/Screen';
 
+import { AppText as Text } from '../../shared/ui';
 function getCurrentLevelId(passport: CustomerPassport | null) {
   const config = passport?.bonusConfig || null;
   const account = config?.account && typeof config.account === 'object' ? config.account : null;

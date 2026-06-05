@@ -1,5 +1,10 @@
-import { Ionicons } from '@expo/vector-icons';
-import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import {
+  Ionicons } from '@expo/vector-icons';
+import { Image,
+  Pressable,
+  StyleSheet,
+  View,
+} from 'react-native';
 
 import type { CatalogComboBlockProduct } from '../../entities/product';
 import { theme } from '../../shared/config/theme';
@@ -13,6 +18,7 @@ import {
   getComboProductTitle,
 } from './model';
 
+import { AppText as Text } from '../../shared/ui';
 export function ComboLineCard({
   config,
   onGearPress,

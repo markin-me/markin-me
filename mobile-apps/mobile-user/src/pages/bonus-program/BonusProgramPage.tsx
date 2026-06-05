@@ -1,8 +1,17 @@
-import { useCallback, useMemo, useState } from 'react';
+import {
+  useCallback,
+  useMemo,
+  useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
-import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import { useFocusEffect,
+  useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Image,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  View,
+} from 'react-native';
 
 import {
   joinBonusProgram,
@@ -16,6 +25,7 @@ import { routes, type RootStackParamList } from '../../app/navigation/routes';
 import { theme } from '../../shared/config/theme';
 import { Screen } from '../../shared/ui/Screen';
 
+import { AppText as Text } from '../../shared/ui';
 function formatBonusNumber(value: unknown, digits = 0) {
   const number = Number(value || 0);
   if (!Number.isFinite(number)) return '0';

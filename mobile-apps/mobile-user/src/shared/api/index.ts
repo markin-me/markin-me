@@ -154,6 +154,73 @@ export type BonusTransaction = Record<string, unknown> & {
   type?: string;
 };
 
+export type CustomerOrderItem = Record<string, unknown> & {
+  combo_title?: string | null;
+  ingredients?: Array<Record<string, unknown>>;
+  ingredients_display?: Array<Record<string, unknown>>;
+  line_total?: number | string | null;
+  name?: string | null;
+  old_line_total?: number | string | null;
+  old_price?: number | string | null;
+  options?: Array<Record<string, unknown>>;
+  combo_items?: Array<Record<string, unknown>>;
+  photo?: string | null;
+  photos?: string[] | null;
+  product_photo?: string | null;
+  qty?: number | string | null;
+  quantity?: number | string | null;
+  selections?: Array<Record<string, unknown>>;
+  type?: string | null;
+  variant_group_title?: string | null;
+  variant_label?: string | null;
+  variant_unit?: string | null;
+  variants?: Array<Record<string, unknown>>;
+};
+
+export type CustomerOrder = Record<string, unknown> & {
+  address?: string | null;
+  address_apartment?: string | null;
+  address_house?: string | null;
+  address_street?: string | null;
+  created_at?: string | null;
+  change_from?: number | string | null;
+  comment?: string | null;
+  cutlery_qty?: number | string | null;
+  delivery_address?: string | null;
+  delivery_address_apartment?: string | null;
+  delivery_address_house?: string | null;
+  delivery_address_street?: string | null;
+  delivery_cost?: number | string | null;
+  discount_amount?: number | string | null;
+  discounts_json?: unknown;
+  id?: number;
+  items?: CustomerOrderItem[];
+  method_title?: string | null;
+  payment_title?: string | null;
+  promo_code?: string | null;
+  scheduled_at?: string | null;
+  status_id?: number | string | null;
+  status_title?: string | null;
+  time_option_title?: string | null;
+  total?: number | string | null;
+  total_amount?: number | string | null;
+  total_price?: number | string | null;
+  updated_at?: string | null;
+};
+
+export type CustomerOrdersPayload = {
+  data: CustomerOrder[];
+  paging: {
+    has_more: boolean;
+  };
+  summary: {
+    active_count?: number;
+    activeCount?: number;
+    completed_count?: number;
+    completedCount?: number;
+  };
+};
+
 export type CustomerPassport = {
   token: string;
   customer: CustomerProfile | null;
@@ -458,6 +525,33 @@ export async function fetchCustomerAddresses(token: string) {
   });
   const data = response.data;
   return Array.isArray(data) ? data : [];
+}
+
+export async function fetchCustomerOrders(token: string, params: { limit: number; offset: number; statusIsFinal: 0 | 1 }) {
+  const query = new URLSearchParams({
+    limit: String(Math.max(1, Math.floor(Number(params.limit || 10)))),
+    offset: String(Math.max(0, Math.floor(Number(params.offset || 0)))),
+    status_is_final: String(params.statusIsFinal),
+  });
+  const response = await requestApi<CustomerOrder[]>(`/api/public/me/orders?${query.toString()}`, {
+    headers: { 'x-customer-token': token },
+  }) as ApiResponse<CustomerOrder[]> & Partial<CustomerOrdersPayload>;
+  return {
+    data: Array.isArray(response.data) ? response.data : [],
+    paging: response.paging && typeof response.paging === 'object'
+      ? { has_more: Boolean(response.paging.has_more) }
+      : { has_more: Array.isArray(response.data) && response.data.length >= Math.max(1, Math.floor(Number(params.limit || 10))) },
+    summary: response.summary && typeof response.summary === 'object' ? response.summary : {},
+  };
+}
+
+export async function fetchCustomerOrder(token: string, orderId: number) {
+  const safeOrderId = Number(orderId || 0);
+  if (!(safeOrderId > 0)) throw new Error('BAD_ORDER_ID');
+  const response = await requestApi<CustomerOrder>(`/api/public/me/orders/${encodeURIComponent(String(safeOrderId))}`, {
+    headers: { 'x-customer-token': token },
+  });
+  return response.data && typeof response.data === 'object' ? response.data : null;
 }
 
 export async function fetchPublicOrderConfig() {

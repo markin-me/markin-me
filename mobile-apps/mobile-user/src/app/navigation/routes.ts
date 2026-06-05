@@ -18,8 +18,11 @@ export const routes = {
   bonusFavoriteCategories: 'bonusFavoriteCategories',
   bonusLevels: 'bonusLevels',
   bonusReferrals: 'bonusReferrals',
+  orders: 'orders',
+  orderDetails: 'orderDetails',
   addresses: 'addresses',
   addressForm: 'addressForm',
+  citySelect: 'citySelect',
 } as const;
 
 export type AppRouteName = keyof typeof routes;
@@ -37,8 +40,11 @@ export type RootStackParamList = {
   bonusFavoriteCategories: undefined;
   bonusLevels: undefined;
   bonusReferrals: undefined;
-  addresses: undefined;
-  addressForm: { addressId?: number } | undefined;
+  orders: undefined;
+  orderDetails: { orderId: number };
+  addresses: { selectedCity?: string } | undefined;
+  addressForm: { addressId?: number; selectedCity?: string } | undefined;
+  citySelect: { addressId?: number; returnTo: 'addresses' | 'addressForm'; selectedCity?: string };
 };
 
 export type MainTabParamList = {

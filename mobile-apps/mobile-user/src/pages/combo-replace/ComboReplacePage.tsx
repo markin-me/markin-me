@@ -1,6 +1,13 @@
-import { useEffect, useMemo, useState } from 'react';
+import {
+  useEffect,
+  useMemo,
+  useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable,
+  ScrollView,
+  StyleSheet,
+  View,
+} from 'react-native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import type { RootStackParamList } from '../../app/navigation/routes';
@@ -25,6 +32,7 @@ import {
 import { theme } from '../../shared/config/theme';
 import { Screen } from '../../shared/ui/Screen';
 
+import { AppText as Text } from '../../shared/ui';
 type ComboReplacePageProps = NativeStackScreenProps<RootStackParamList, 'comboReplace'>;
 
 export function ComboReplacePage({ navigation, route }: ComboReplacePageProps) {

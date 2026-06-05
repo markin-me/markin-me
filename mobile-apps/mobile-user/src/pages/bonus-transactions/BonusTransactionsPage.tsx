@@ -1,10 +1,19 @@
-import { useCallback, useEffect, useState } from 'react';
-import { FlatList, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import {
+  useCallback,
+  useEffect,
+  useState } from 'react';
+import { FlatList,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  View,
+} from 'react-native';
 
 import { fetchBonusTransactions, readCachedCustomerPassport, type BonusTransaction } from '../../shared/api';
 import { theme } from '../../shared/config/theme';
 import { Screen } from '../../shared/ui/Screen';
 
+import { AppText as Text } from '../../shared/ui';
 const PAGE_SIZE = 50;
 
 const filters = [

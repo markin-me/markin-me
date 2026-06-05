@@ -1,8 +1,11 @@
+import { useEffect } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
+import { StatusBar as NativeStatusBar } from 'react-native';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import type { MainTabParamList, RootStackParamList } from './navigation/routes';
 import { routes } from './navigation/routes';
@@ -18,8 +21,11 @@ import { BonusTransactionsPage } from '../pages/bonus-transactions';
 import { CatalogPage } from '../pages/catalog';
 import { CategoriesPage } from '../pages/categories';
 import { ChatPage } from '../pages/chat';
+import { CitySelectPage } from '../pages/city-select';
 import { ComboPage } from '../pages/combo';
 import { ComboReplacePage } from '../pages/combo-replace';
+import { OrderDetailsPage } from '../pages/order-details';
+import { OrdersPage } from '../pages/orders';
 import { ProductPage } from '../pages/product';
 import { ProfilePage } from '../pages/profile';
 import { ProfileSettingsPage } from '../pages/profile-settings';
@@ -29,6 +35,9 @@ const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<MainTabParamList>();
 
 function MainTabs() {
+  const insets = useSafeAreaInsets();
+  const bottomInset = Math.max(0, insets.bottom);
+
   return (
     <Tab.Navigator
       screenOptions={{
@@ -43,8 +52,8 @@ function MainTabs() {
         },
         tabBarStyle: {
           borderTopColor: theme.colors.border,
-          height: theme.sizes.tabBarHeight,
-          paddingBottom: 8,
+          height: theme.sizes.tabBarHeight + bottomInset,
+          paddingBottom: 8 + bottomInset,
           paddingTop: 2,
         },
         tabBarItemStyle: {
@@ -93,8 +102,15 @@ function MainTabs() {
 }
 
 export function AppRoot() {
+  useEffect(() => {
+    NativeStatusBar.setTranslucent(false);
+    NativeStatusBar.setBackgroundColor(theme.colors.background);
+    NativeStatusBar.setBarStyle('dark-content');
+  }, []);
+
   return (
-    <NavigationContainer>
+    <SafeAreaProvider>
+      <NavigationContainer>
       <Stack.Navigator>
         <Stack.Screen name="main" component={MainTabs} options={{ headerShown: false }} />
         <Stack.Screen name={routes.product} component={ProductPage} options={{ title: 'Товар' }} />
@@ -106,8 +122,11 @@ export function AppRoot() {
         <Stack.Screen name={routes.bonusFavoriteCategories} component={BonusFavoriteCategoriesPage} options={{ title: 'Выбрать категории' }} />
         <Stack.Screen name={routes.bonusLevels} component={BonusLevelsPage} options={{ title: 'Уровни' }} />
         <Stack.Screen name={routes.bonusReferrals} component={BonusReferralsPage} options={{ title: 'Рефералы' }} />
+        <Stack.Screen name={routes.orders} component={OrdersPage} options={{ title: 'Мои заказы' }} />
+        <Stack.Screen name={routes.orderDetails} component={OrderDetailsPage} options={{ headerShown: false }} />
         <Stack.Screen name={routes.addresses} component={AddressesPage} options={{ title: 'Мои адреса' }} />
         <Stack.Screen name={routes.addressForm} component={AddressFormPage} options={{ title: 'Адрес' }} />
+        <Stack.Screen name={routes.citySelect} component={CitySelectPage} options={{ title: 'Город' }} />
         <Stack.Screen name={routes.profileSettings} component={ProfileSettingsPage} options={{ title: 'Настройки профиля' }} />
         <Stack.Screen
           name={routes.comboReplace}
@@ -115,7 +134,8 @@ export function AppRoot() {
           options={({ route }) => ({ title: route.params.blockTitle || 'Замена' })}
         />
       </Stack.Navigator>
-      <StatusBar style="auto" />
-    </NavigationContainer>
+      <StatusBar backgroundColor={theme.colors.background} style="dark" translucent={false} />
+      </NavigationContainer>
+    </SafeAreaProvider>
   );
 }

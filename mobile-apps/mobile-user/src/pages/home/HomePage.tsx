@@ -1,4 +1,7 @@
-import { StyleSheet, Text, View } from 'react-native';
+import {
+  StyleSheet,
+  View,
+} from 'react-native';
 
 import { ProductList } from '../../widgets/product-list';
 import { AppHeader } from '../../widgets/app-header';
@@ -6,6 +9,7 @@ import { BottomTabs } from '../../widgets/bottom-tabs';
 import { Screen } from '../../shared/ui/Screen';
 import { theme } from '../../shared/config/theme';
 
+import { AppText as Text } from '../../shared/ui';
 export function HomePage() {
   return (
     <Screen>

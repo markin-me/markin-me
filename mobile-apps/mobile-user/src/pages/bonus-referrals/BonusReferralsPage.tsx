@@ -1,8 +1,17 @@
-import { useCallback, useMemo, useState } from 'react';
+import {
+  useCallback,
+  useMemo,
+  useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 import { useFocusEffect } from '@react-navigation/native';
-import { Image, Pressable, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
+import { Image,
+  Pressable,
+  ScrollView,
+  Share,
+  StyleSheet,
+  View,
+} from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
 
 import {
@@ -16,6 +25,7 @@ import {
 import { theme } from '../../shared/config/theme';
 import { Screen } from '../../shared/ui/Screen';
 
+import { AppText as Text } from '../../shared/ui';
 function formatNumber(value: unknown) {
   const number = Number(value || 0);
   return Number.isFinite(number) ? number.toLocaleString('ru-RU', { maximumFractionDigits: 0 }) : '0';

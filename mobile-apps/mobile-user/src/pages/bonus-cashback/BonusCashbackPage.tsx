@@ -1,11 +1,19 @@
-import { useCallback, useMemo, useState } from 'react';
+import {
+  useCallback,
+  useMemo,
+  useState } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable,
+  ScrollView,
+  StyleSheet,
+  View,
+} from 'react-native';
 
 import { readCachedCustomerPassport, type CustomerPassport } from '../../shared/api';
 import { theme } from '../../shared/config/theme';
 import { Screen } from '../../shared/ui/Screen';
 
+import { AppText as Text } from '../../shared/ui';
 function formatPercent(value: unknown) {
   const number = Number(value || 0);
   return Number.isFinite(number) ? Math.max(0, number).toLocaleString('ru-RU', { maximumFractionDigits: 1 }) : '0';

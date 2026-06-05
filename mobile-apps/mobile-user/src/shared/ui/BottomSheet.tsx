@@ -1,9 +1,22 @@
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef } from 'react';
 import type { ReactNode } from 'react';
-import { Animated, Easing, Modal, PanResponder, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Animated,
+  Easing,
+  Modal,
+  PanResponder,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  View,
+} from 'react-native';
 
 import { theme } from '../config/theme';
 
+import { AppText as Text } from './AppText';
 type BottomSheetProps = {
   children: ReactNode;
   onClose: () => void;

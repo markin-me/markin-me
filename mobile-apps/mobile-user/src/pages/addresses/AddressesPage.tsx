@@ -1,8 +1,20 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
-import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import { useFocusEffect,
+  useNavigation,
+  useRoute,
+  type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  View,
+} from 'react-native';
 
 import type { RootStackParamList } from '../../app/navigation/routes';
 import { routes } from '../../app/navigation/routes';
@@ -26,11 +38,23 @@ import {
   type FulfillmentSelection,
 } from '../../features/checkout';
 
+import { AppText as Text } from '../../shared/ui';
 type AddressesNavigation = NativeStackNavigationProp<RootStackParamList>;
+type AddressesRoute = RouteProp<RootStackParamList, 'addresses'>;
 
 function toPositiveId(value: unknown) {
   const id = Number(value || 0);
   return Number.isFinite(id) && id > 0 ? id : null;
+}
+
+function normalizeCity(value: unknown) {
+  return String(value || '').trim();
+}
+
+function getStoresForCity(stores: TenantStore[], city?: string | null) {
+  const selectedCity = normalizeCity(city);
+  if (!selectedCity) return stores;
+  return stores.filter((store) => normalizeCity(store.city) === selectedCity);
 }
 
 function isDefaultAddress(address: CustomerAddress) {
@@ -67,26 +91,33 @@ function formatStoreHours(store: TenantStore) {
   return opens && closes ? `${opens} - ${closes}` : '';
 }
 
-function getInitialSelection(selection: FulfillmentSelection, addresses: CustomerAddress[], stores: TenantStore[]) {
+function getInitialSelection(selection: FulfillmentSelection, addresses: CustomerAddress[], stores: TenantStore[]): FulfillmentSelection {
+  const cityStores = getStoresForCity(stores, selection.pickupCity);
+  const selectedPickupStore = cityStores.some((store) => toPositiveId(store.id) === selection.pickupStoreId)
+    ? selection.pickupStoreId
+    : null;
   const addressId = selection.addressId
     || toPositiveId(addresses.find(isDefaultAddress)?.id)
     || toPositiveId(addresses[0]?.id);
-  const pickupStoreId = selection.pickupStoreId || toPositiveId(stores[0]?.id);
+  const pickupStoreId = selectedPickupStore || toPositiveId(cityStores[0]?.id);
   return {
     addressId,
-    mode: selection.mode,
+    mode: 'delivery',
+    pickupCity: selection.pickupCity,
     pickupStoreId,
   };
 }
 
 export function AddressesPage() {
   const navigation = useNavigation<AddressesNavigation>();
+  const route = useRoute<AddressesRoute>();
   const [passport, setPassport] = useState<CustomerPassport | null>(null);
   const [addresses, setAddresses] = useState<CustomerAddress[]>([]);
   const [stores, setStores] = useState<TenantStore[]>([]);
   const [selection, setSelection] = useState<FulfillmentSelection>({
     addressId: null,
     mode: 'delivery',
+    pickupCity: null,
     pickupStoreId: null,
   });
   const [isLoading, setLoading] = useState(true);
@@ -128,9 +159,30 @@ export function AddressesPage() {
   }, [message]);
 
   const cities = useMemo(
-    () => Array.from(new Set(stores.map((store) => String(store.city || '').trim()).filter(Boolean))).sort(),
+    () => Array.from(new Set(stores.map((store) => normalizeCity(store.city)).filter(Boolean))).sort(),
     [stores],
   );
+  const visibleStores = useMemo(
+    () => getStoresForCity(stores, selection.pickupCity),
+    [selection.pickupCity, stores],
+  );
+
+  useEffect(() => {
+    const selectedCity = normalizeCity(route.params?.selectedCity);
+    if (!selectedCity) return;
+    const cityStores = getStoresForCity(stores, selectedCity);
+    setSelection((current) => {
+      const currentStoreAllowed = cityStores.some((store) => toPositiveId(store.id) === current.pickupStoreId);
+      const nextSelection: FulfillmentSelection = {
+        ...current,
+        mode: 'pickup',
+        pickupCity: selectedCity,
+        pickupStoreId: currentStoreAllowed ? current.pickupStoreId : toPositiveId(cityStores[0]?.id),
+      };
+      void saveFulfillmentSelection(nextSelection);
+      return nextSelection;
+    });
+  }, [route.params?.selectedCity, stores]);
 
   const confirmSelection = useCallback(async () => {
     setSaving(true);
@@ -151,8 +203,14 @@ export function AddressesPage() {
         const nextPassport = { ...passport, addresses: nextAddresses, updatedAt: new Date().toISOString() };
         setPassport(nextPassport);
         await saveCustomerPassport(nextPassport);
-        await saveFulfillmentSelection({ addressId: selection.addressId, mode: 'delivery', pickupStoreId: null });
+        await saveFulfillmentSelection({
+          addressId: selection.addressId,
+          mode: 'delivery',
+          pickupCity: selection.pickupCity,
+          pickupStoreId: null,
+        });
         setMessage('Адрес выбран.');
+        navigation.goBack();
         return;
       }
 
@@ -160,18 +218,38 @@ export function AddressesPage() {
         setErrorText('Выберите филиал самовывоза.');
         return;
       }
-      await saveFulfillmentSelection({ addressId: null, mode: 'pickup', pickupStoreId: selection.pickupStoreId });
+      await saveFulfillmentSelection({
+        addressId: null,
+        mode: 'pickup',
+        pickupCity: selection.pickupCity,
+        pickupStoreId: selection.pickupStoreId,
+      });
       setMessage('Филиал выбран.');
+      navigation.goBack();
     } catch (error) {
       setErrorText(error instanceof Error ? error.message : 'Не удалось сохранить выбор.');
     } finally {
       setSaving(false);
     }
-  }, [passport, selection]);
+  }, [navigation, passport, selection]);
 
   const openAddressForm = useCallback((addressId?: number) => {
-    navigation.navigate(routes.addressForm, addressId ? { addressId } : undefined);
-  }, [navigation]);
+    navigation.navigate(
+      routes.addressForm,
+      addressId
+        ? { addressId }
+        : selection.pickupCity
+          ? { selectedCity: selection.pickupCity }
+          : undefined,
+    );
+  }, [navigation, selection.pickupCity]);
+
+  const openCitySelect = useCallback(() => {
+    navigation.navigate(routes.citySelect, {
+      returnTo: 'addresses',
+      selectedCity: selection.pickupCity || undefined,
+    });
+  }, [navigation, selection.pickupCity]);
 
   const removeAddress = useCallback(async (address: CustomerAddress) => {
     const addressId = toPositiveId(address.id);
@@ -246,10 +324,10 @@ export function AddressesPage() {
   };
 
   const renderPickup = () => {
-    if (!stores.length) {
+    if (!visibleStores.length) {
       return <Text style={styles.emptyText}>Нет доступных филиалов.</Text>;
     }
-    return stores.map((store) => {
+    return visibleStores.map((store) => {
       const id = toPositiveId(store.id);
       const selected = id != null && id === selection.pickupStoreId;
       const hours = formatStoreHours(store);
@@ -318,8 +396,8 @@ export function AddressesPage() {
           ) : (
             <View style={styles.sectionHeader}>
               <Text style={styles.title}>Филиалы</Text>
-              <Pressable onPress={() => setMessage('Выбор города сделаем отдельной страницей.')} style={styles.smallButton}>
-                <Text style={styles.smallButtonText}>{cities.length ? 'Все города' : 'Города'}</Text>
+              <Pressable onPress={openCitySelect} style={styles.smallButton}>
+                <Text style={styles.smallButtonText}>{selection.pickupCity || (cities.length ? 'Все города' : 'Города')}</Text>
                 <Ionicons name="chevron-down" color={theme.colors.muted} size={16} />
               </Pressable>
             </View>

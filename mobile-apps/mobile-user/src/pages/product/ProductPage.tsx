@@ -1,11 +1,15 @@
-﻿import { useCallback, useEffect, useMemo, useState } from 'react';
+import { AppText as Text } from '../../shared/ui';
+﻿import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import {
   Image,
   Pressable,
   ScrollView,
   StyleSheet,
-  Text,
   View,
 } from 'react-native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
