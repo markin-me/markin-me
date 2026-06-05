@@ -46,6 +46,24 @@ const emptyCatalogState: CatalogState = {
   productsByCategory: new Map(),
 };
 
+const comboGridOrder = [0, 2, 3, 1];
+const comboSlideDirections = ['up', 'right', 'left', 'down'] as const;
+const comboRotationIntervalMs = 6800;
+const comboRotationStepDurationMs = 760;
+
+type ComboSlideDirection = typeof comboSlideDirections[number];
+type ComboSlidePhase = 'idle' | 'ready' | 'leaving' | 'entering';
+type ComboImageLayer = 'front' | 'back';
+type ComboLayerState = {
+  index: number;
+  url: string;
+};
+type ComboRotationCommand = {
+  key: number;
+  nextIndexes: number[];
+  nextUrls: string[];
+};
+
 function mapSnapshotRecordToCategoryMap<T>(record: Record<string, T[]> | undefined, categories: CatalogCategory[]) {
   const result = new Map<number, T[]>();
   categories.forEach((category) => {
@@ -110,11 +128,46 @@ function getComboImages(combo: CatalogCombo) {
   const single = resolveAssetUrl(combo.image_thumb || combo.image_url || '');
   if (single) return [single];
 
-  const order = [0, 2, 3, 1];
   const thumbs = Array.isArray(combo.grid_photos_thumb) ? combo.grid_photos_thumb : [];
   const photos = Array.isArray(combo.grid_photos) ? combo.grid_photos : [];
 
-  return order.map((index) => resolveAssetUrl(thumbs[index] || photos[index] || '')).filter(Boolean);
+  return comboGridOrder.map((index) => resolveAssetUrl(thumbs[index] || photos[index] || '')).filter(Boolean);
+}
+
+function normalizeComboCellPhotos(combo: CatalogCombo, visualIndex: number) {
+  const sourceIndex = comboGridOrder[visualIndex] ?? visualIndex;
+  const thumbs = Array.isArray(combo.grid_photos_thumb) ? combo.grid_photos_thumb : [];
+  const photos = Array.isArray(combo.grid_photos) ? combo.grid_photos : [];
+  const photoSets = Array.isArray(combo.grid_photo_sets) ? combo.grid_photo_sets : [];
+  const base = thumbs[sourceIndex] || photos[sourceIndex] || '';
+  const alternatives = Array.isArray(photoSets[sourceIndex]) ? photoSets[sourceIndex] : [];
+  const urls = [base, ...alternatives]
+    .map((url) => resolveAssetUrl(url))
+    .filter(Boolean);
+
+  return Array.from(new Set(urls));
+}
+
+function getComboImageSets(combo: CatalogCombo) {
+  return [0, 1, 2, 3].map((index) => normalizeComboCellPhotos(combo, index));
+}
+
+function getComboSlideOffset(direction: ComboSlideDirection, width: number, height: number) {
+  const safeWidth = width || 120;
+  const safeHeight = height || 120;
+  if (direction === 'right') return { x: safeWidth, y: 0 };
+  if (direction === 'down') return { x: 0, y: safeHeight };
+  if (direction === 'left') return { x: -safeWidth, y: 0 };
+  return { x: 0, y: -safeHeight };
+}
+
+function waitForComboImage(url: string, timeoutMs = 1400) {
+  return Promise.race([
+    Image.prefetch(url),
+    new Promise<boolean>((resolve) => {
+      setTimeout(() => resolve(false), timeoutMs);
+    }),
+  ]).then(Boolean).catch(() => false);
 }
 
 function isProductConfigurable(product: CatalogProduct) {
@@ -285,11 +338,243 @@ function ProductCard({
   );
 }
 
+function AnimatedComboGridCell({
+  direction,
+  nextIndex,
+  nextUrl,
+  photos,
+  rotationKey,
+}: {
+  direction: ComboSlideDirection;
+  nextIndex: number | null;
+  nextUrl: string;
+  photos: string[];
+  rotationKey: number;
+}) {
+  const leaveAnimation = useRef(new Animated.Value(0)).current;
+  const enterAnimation = useRef(new Animated.Value(1)).current;
+  const mountedRef = useRef(true);
+  const [slideState, setSlideState] = useState<{
+    activeLayer: ComboImageLayer;
+    back: ComboLayerState | null;
+    front: ComboLayerState | null;
+    incomingLayer: ComboImageLayer | null;
+    phase: ComboSlidePhase;
+  }>({
+    activeLayer: 'front',
+    back: null,
+    front: { index: 0, url: photos[0] || '' },
+    incomingLayer: null,
+    phase: 'idle',
+  });
+  const [size, setSize] = useState({ height: 0, width: 0 });
+  const activeLayerState = slideState[slideState.activeLayer];
+  const activeIndex = activeLayerState?.index || 0;
+  const currentUrl = activeLayerState?.url || photos[0] || '';
+  const offset = getComboSlideOffset(direction, size.width, size.height);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      leaveAnimation.stopAnimation();
+      enterAnimation.stopAnimation();
+    };
+  }, [enterAnimation, leaveAnimation]);
+
+  useEffect(() => {
+    setSlideState({
+      activeLayer: 'front',
+      back: null,
+      front: { index: 0, url: photos[0] || '' },
+      incomingLayer: null,
+      phase: 'idle',
+    });
+    leaveAnimation.setValue(0);
+    enterAnimation.setValue(1);
+  }, [enterAnimation, leaveAnimation, photos]);
+
+  useEffect(() => {
+    if (!rotationKey || !nextUrl || nextIndex == null || photos.length < 2) return;
+    if (nextIndex === activeIndex) return;
+
+    leaveAnimation.setValue(0);
+    enterAnimation.setValue(0);
+    const incomingLayer: ComboImageLayer = slideState.activeLayer === 'front' ? 'back' : 'front';
+    setSlideState((current) => ({
+      ...current,
+      [incomingLayer]: { index: nextIndex, url: nextUrl },
+      incomingLayer,
+      phase: 'ready',
+    }));
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (!mountedRef.current) return;
+
+        setSlideState((current) => ({ ...current, phase: 'leaving' }));
+
+        Animated.timing(leaveAnimation, {
+          duration: comboRotationStepDurationMs,
+          easing: Easing.bezier(0.22, 0.61, 0.36, 1),
+          toValue: 1,
+          useNativeDriver: true,
+        }).start(({ finished }) => {
+          if (!mountedRef.current || !finished) return;
+
+          setSlideState((current) => ({ ...current, phase: 'entering' }));
+
+          Animated.timing(enterAnimation, {
+            duration: comboRotationStepDurationMs,
+            easing: Easing.bezier(0.22, 0.61, 0.36, 1),
+            toValue: 1,
+            useNativeDriver: true,
+          }).start(() => {
+            if (!mountedRef.current) return;
+            leaveAnimation.setValue(0);
+            enterAnimation.setValue(1);
+            setSlideState((current) => ({
+              ...current,
+              activeLayer: incomingLayer,
+              incomingLayer: null,
+              phase: 'idle',
+            }));
+          });
+        });
+      });
+    });
+  }, [activeIndex, enterAnimation, leaveAnimation, nextIndex, nextUrl, photos.length, rotationKey, slideState.activeLayer]);
+
+  if (!currentUrl) return null;
+
+  const getLayerStyle = (layer: ComboImageLayer) => {
+    const isActive = layer === slideState.activeLayer;
+    const isIncoming = layer === slideState.incomingLayer;
+    const isLeaving = isActive && slideState.phase === 'leaving';
+    const isEntering = isIncoming && slideState.phase === 'entering';
+    const opacity = isLeaving
+      ? leaveAnimation.interpolate({
+        inputRange: [0, 1],
+        outputRange: [1, 0],
+      })
+      : isEntering
+        ? enterAnimation
+        : isActive && slideState.phase === 'idle'
+          ? 1
+          : 0;
+    const translateX = isLeaving
+      ? leaveAnimation.interpolate({
+        inputRange: [0, 1],
+        outputRange: [0, offset.x],
+      })
+      : isEntering
+        ? enterAnimation.interpolate({
+          inputRange: [0, 1],
+          outputRange: [offset.x, 0],
+        })
+        : isActive && slideState.phase === 'idle'
+          ? 0
+          : offset.x;
+    const translateY = isLeaving
+      ? leaveAnimation.interpolate({
+        inputRange: [0, 1],
+        outputRange: [0, offset.y],
+      })
+      : isEntering
+        ? enterAnimation.interpolate({
+          inputRange: [0, 1],
+          outputRange: [offset.y, 0],
+        })
+        : isActive && slideState.phase === 'idle'
+          ? 0
+          : offset.y;
+
+    return {
+      opacity,
+      transform: [
+        { translateX },
+        { translateY },
+      ],
+    };
+  };
+
+  return (
+    <View
+      style={styles.comboCellInner}
+      onLayout={(event) => {
+        const { height, width } = event.nativeEvent.layout;
+        if (height !== size.height || width !== size.width) setSize({ height, width });
+      }}
+    >
+      {slideState.front?.url ? (
+        <Animated.Image resizeMode="cover" source={{ uri: slideState.front.url }} style={[styles.comboImage, getLayerStyle('front')]} />
+      ) : null}
+      {slideState.back?.url ? (
+        <Animated.Image resizeMode="cover" source={{ uri: slideState.back.url }} style={[styles.comboImage, getLayerStyle('back')]} />
+      ) : null}
+    </View>
+  );
+}
+
 function ComboCard({ combo, onPress }: { combo: CatalogCombo; onPress: () => void }) {
   const images = getComboImages(combo);
+  const imageSets = useMemo(() => getComboImageSets(combo), [combo]);
+  const [comboImageIndexes, setComboImageIndexes] = useState([0, 0, 0, 0]);
+  const [rotationCommand, setRotationCommand] = useState<ComboRotationCommand | null>(null);
   const discountPercent = Number(combo.discount_percent || 0);
   const minPrice = Number(combo.min_price || 0);
   const available = isAvailable(combo.is_available);
+
+  useEffect(() => {
+    setComboImageIndexes([0, 0, 0, 0]);
+    setRotationCommand(null);
+  }, [imageSets]);
+
+  useEffect(() => {
+    if (!imageSets.some((photos) => photos.length > 1)) return;
+
+    let isMounted = true;
+    let isSwitching = false;
+    let currentIndexes = [0, 0, 0, 0];
+
+    const timer = setInterval(async () => {
+      if (isSwitching) return;
+      isSwitching = true;
+
+      const nextIndexes = imageSets.map((photos, index) => {
+        if (photos.length < 2) return currentIndexes[index] || 0;
+        let nextIndex = Math.floor(Math.random() * photos.length);
+        if (nextIndex === currentIndexes[index]) nextIndex = (nextIndex + 1) % photos.length;
+        return nextIndex;
+      });
+      const nextUrls = imageSets.map((photos, index) => photos[nextIndexes[index]] || '');
+      const readiness = await Promise.all(nextUrls.map((url, index) => (
+        imageSets[index].length > 1 && url ? waitForComboImage(url) : Promise.resolve(true)
+      )));
+
+      if (!isMounted) return;
+      if (!readiness.every(Boolean)) {
+        isSwitching = false;
+        return;
+      }
+
+      currentIndexes = nextIndexes;
+      setComboImageIndexes(nextIndexes);
+      setRotationCommand({
+        key: Date.now(),
+        nextIndexes,
+        nextUrls,
+      });
+      setTimeout(() => {
+        isSwitching = false;
+      }, comboRotationStepDurationMs * 2 + 120);
+    }, comboRotationIntervalMs);
+
+    return () => {
+      isMounted = false;
+      clearInterval(timer);
+    };
+  }, [imageSets]);
 
   return (
     <Pressable style={[styles.card, !available && styles.cardDisabled]} onPress={onPress}>
@@ -300,7 +585,13 @@ function ComboCard({ combo, onPress }: { combo: CatalogCombo; onPress: () => voi
           <View style={styles.comboGrid}>
             {[0, 1, 2, 3].map((index) => (
               <View key={index} style={styles.comboCell}>
-                {images[index] ? <Image resizeMode="contain" source={{ uri: images[index] }} style={styles.comboImage} /> : null}
+                <AnimatedComboGridCell
+                  direction={comboSlideDirections[index]}
+                  nextIndex={rotationCommand?.nextIndexes[index] ?? comboImageIndexes[index] ?? null}
+                  nextUrl={rotationCommand?.nextUrls[index] || ''}
+                  photos={imageSets[index]}
+                  rotationKey={rotationCommand?.key || 0}
+                />
               </View>
             ))}
           </View>
@@ -673,6 +964,10 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     width: '50%',
   },
+  comboCellInner: {
+    flex: 1,
+    overflow: 'hidden',
+  },
   comboGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -680,7 +975,12 @@ const styles = StyleSheet.create({
     width: '100%',
   },
   comboImage: {
+    bottom: 0,
     height: '100%',
+    left: 0,
+    position: 'absolute',
+    right: 0,
+    top: 0,
     width: '100%',
   },
   content: {
