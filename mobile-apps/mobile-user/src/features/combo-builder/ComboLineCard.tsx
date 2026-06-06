@@ -42,7 +42,15 @@ export function ComboLineCard({
   const lines = getComboProductLines(product, config);
   const price = getComboProductPrice(product, config);
   const oldPrice = getComboProductOldPrice(product, config);
-  const configurable = Boolean(product?.preview?.hasConfigurable);
+  const preview = product?.preview;
+  const previewRecord = preview && typeof preview === 'object' ? preview as Record<string, unknown> : {};
+  const optionGroups = previewRecord.optionGroups;
+  const configurable = Boolean(
+    preview?.hasConfigurable ||
+      (Array.isArray(preview?.ingredients) && preview.ingredients.length > 0) ||
+      (Array.isArray(preview?.variants) && preview.variants.length > 0) ||
+      (Array.isArray(optionGroups) && optionGroups.length > 0),
+  );
 
   return (
     <Pressable

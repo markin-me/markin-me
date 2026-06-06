@@ -154,6 +154,32 @@ export type BonusTransaction = Record<string, unknown> & {
   type?: string;
 };
 
+export type CustomerBenefitCard = Record<string, unknown> & {
+  apply_scope_text?: string | null;
+  badge_text?: string | null;
+  code?: string | null;
+  description?: string | null;
+  disabled_reason_text?: string | null;
+  expires_at?: string | null;
+  id?: number | string | null;
+  is_claimable?: boolean | null;
+  is_copyable?: boolean | null;
+  photo_url?: string | null;
+  progress_text?: string | null;
+  status_text?: string | null;
+  title?: string | null;
+  usage_count?: number | string | null;
+  usage_limit?: number | string | null;
+};
+
+export type CustomerBenefits = {
+  completed?: CustomerBenefitCard[];
+  discounts: CustomerBenefitCard[];
+  gifts: CustomerBenefitCard[];
+  progress: CustomerBenefitCard[];
+  promo_codes: CustomerBenefitCard[];
+};
+
 export type CustomerOrderItem = Record<string, unknown> & {
   combo_title?: string | null;
   ingredients?: Array<Record<string, unknown>>;
@@ -246,6 +272,8 @@ type AuthSuccessPayload = {
 let memoryCatalogSnapshot: MobileCatalogSnapshot | null = null;
 const memoryComboDetails = new Map<number, CatalogComboDetails>();
 let memoryCustomerPassport: CustomerPassport | null = null;
+const passportLoadRequests = new Map<number, Promise<CatalogProductPassport | null>>();
+const comboDetailsLoadRequests = new Map<number, Promise<CatalogComboDetails>>();
 
 function buildUrl(path: string) {
   const normalizedPath = path.startsWith('/') ? path : `/${path}`;
@@ -391,6 +419,17 @@ export function getCatalogProductPassport(productId: number): CatalogProductPass
   const id = Number(productId);
   if (!Number.isFinite(id) || id <= 0) return null;
   return memoryCatalogSnapshot?.productPassports?.[String(id)] || null;
+}
+
+export function getCatalogSnapshotProduct(productId: number): CatalogProduct | null {
+  const id = Number(productId);
+  if (!Number.isFinite(id) || id <= 0) return null;
+  const lists = Object.values(memoryCatalogSnapshot?.productsByCategory || {});
+  for (const list of lists) {
+    const product = (Array.isArray(list) ? list : []).find((item) => Number(item?.id || 0) === id);
+    if (product) return product;
+  }
+  return null;
 }
 
 export async function readCachedMobileCatalogSnapshot() {
@@ -682,6 +721,27 @@ export async function fetchBonusTransactions(token: string, type?: string, limit
   return Array.isArray(data) ? data : [];
 }
 
+export async function fetchCustomerBenefits(token: string): Promise<CustomerBenefits> {
+  const response = await requestApi<CustomerBenefits>('/api/public/me/benefits', {
+    headers: { 'x-customer-token': token },
+  });
+  const data: Partial<CustomerBenefits> = response.data && typeof response.data === 'object' ? response.data : {};
+  return {
+    completed: Array.isArray(data.completed) ? data.completed : [],
+    discounts: Array.isArray(data.discounts) ? data.discounts : [],
+    gifts: Array.isArray(data.gifts) ? data.gifts : [],
+    progress: Array.isArray(data.progress) ? data.progress : [],
+    promo_codes: Array.isArray(data.promo_codes) ? data.promo_codes : [],
+  };
+}
+
+export async function fetchCustomerDiscounts(token: string): Promise<CustomerBenefitCard[]> {
+  const response = await requestApi<CustomerBenefitCard[]>('/api/public/me/discounts', {
+    headers: { 'x-customer-token': token },
+  });
+  return Array.isArray(response.data) ? response.data : [];
+}
+
 export async function joinBonusProgram(token: string) {
   await requestApi('/api/public/bonus/join', {
     body: JSON.stringify({}),
@@ -829,6 +889,10 @@ export async function ensureMobileCatalogProductPassport(productId: number) {
   const id = Number(productId);
   if (!Number.isFinite(id) || id <= 0) return null;
 
+  const pending = passportLoadRequests.get(id);
+  if (pending) return pending;
+
+  const request = (async () => {
   const baseSnapshot = memoryCatalogSnapshot || await readCachedMobileCatalogSnapshot();
   if (!baseSnapshot) return null;
 
@@ -840,6 +904,14 @@ export async function ensureMobileCatalogProductPassport(productId: number) {
     return nextSnapshot.productPassports?.[String(id)] || existing || null;
   } catch {
     return existing || null;
+  }
+  })();
+
+  passportLoadRequests.set(id, request);
+  try {
+    return await request;
+  } finally {
+    passportLoadRequests.delete(id);
   }
 }
 
@@ -855,11 +927,23 @@ export async function fetchCatalogComboDetails(comboId: number) {
   const id = Number(comboId);
   if (!Number.isFinite(id) || id <= 0) throw new Error('BAD_COMBO_ID');
 
+  const pending = comboDetailsLoadRequests.get(id);
+  if (pending) return pending;
+
+  const request = (async () => {
   const combo = await requestJson<CatalogComboDetails>(`/api/public/combos/${encodeURIComponent(String(id))}`);
   const normalized = normalizeCatalogComboDetails(combo);
   if (!normalized) throw new Error('BAD_COMBO_DETAILS');
   await saveCatalogComboDetails(normalized);
   return normalized;
+  })();
+
+  comboDetailsLoadRequests.set(id, request);
+  try {
+    return await request;
+  } finally {
+    comboDetailsLoadRequests.delete(id);
+  }
 }
 
 export async function warmCatalogComboDetails(comboIds: number[]) {

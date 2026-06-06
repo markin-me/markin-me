@@ -1,0 +1,1 @@
+export { PromocodesPage } from './PromocodesPage';

@@ -18,6 +18,11 @@ export const routes = {
   bonusFavoriteCategories: 'bonusFavoriteCategories',
   bonusLevels: 'bonusLevels',
   bonusReferrals: 'bonusReferrals',
+  benefits: 'benefits',
+  discounts: 'discounts',
+  gifts: 'gifts',
+  promocodes: 'promocodes',
+  tasks: 'tasks',
   orders: 'orders',
   orderDetails: 'orderDetails',
   addresses: 'addresses',
@@ -29,8 +34,8 @@ export type AppRouteName = keyof typeof routes;
 
 export type RootStackParamList = {
   main: NavigatorScreenParams<MainTabParamList> | undefined;
-  product: { productId: number; comboId?: number; comboBlockIndex?: number; comboProductIndex?: number };
-  combo: { comboId: number; openNonce?: number };
+  product: { cartLineId?: string; productId: number; comboId?: number; comboBlockIndex?: number; comboProductIndex?: number };
+  combo: { cartLineId?: string; comboId: number; openNonce?: number };
   comboReplace: { comboId: number; blockIndex: number; blockTitle?: string };
   categories: { categories: CatalogCategory[]; activeCategoryId?: number | null };
   profileSettings: undefined;
@@ -40,6 +45,11 @@ export type RootStackParamList = {
   bonusFavoriteCategories: undefined;
   bonusLevels: undefined;
   bonusReferrals: undefined;
+  benefits: { initialSection: 'promocodes' | 'discounts' | 'gifts' | 'tasks' };
+  discounts: undefined;
+  gifts: undefined;
+  promocodes: undefined;
+  tasks: undefined;
   orders: undefined;
   orderDetails: { orderId: number };
   addresses: { selectedCity?: string } | undefined;

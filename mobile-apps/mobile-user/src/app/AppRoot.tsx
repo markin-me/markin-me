@@ -18,17 +18,22 @@ import { BonusFavoriteCategoriesPage } from '../pages/bonus-favorite-categories'
 import { BonusLevelsPage } from '../pages/bonus-levels';
 import { BonusReferralsPage } from '../pages/bonus-referrals';
 import { BonusTransactionsPage } from '../pages/bonus-transactions';
+import { BenefitsPage } from '../pages/benefits';
 import { CatalogPage } from '../pages/catalog';
 import { CategoriesPage } from '../pages/categories';
 import { ChatPage } from '../pages/chat';
 import { CitySelectPage } from '../pages/city-select';
 import { ComboPage } from '../pages/combo';
 import { ComboReplacePage } from '../pages/combo-replace';
+import { DiscountsPage } from '../pages/discounts';
+import { GiftsPage } from '../pages/gifts';
 import { OrderDetailsPage } from '../pages/order-details';
 import { OrdersPage } from '../pages/orders';
 import { ProductPage } from '../pages/product';
 import { ProfilePage } from '../pages/profile';
 import { ProfileSettingsPage } from '../pages/profile-settings';
+import { PromocodesPage } from '../pages/promocodes';
+import { TasksPage } from '../pages/tasks';
 import { theme } from '../shared/config/theme';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -122,6 +127,11 @@ export function AppRoot() {
         <Stack.Screen name={routes.bonusFavoriteCategories} component={BonusFavoriteCategoriesPage} options={{ title: 'Выбрать категории' }} />
         <Stack.Screen name={routes.bonusLevels} component={BonusLevelsPage} options={{ title: 'Уровни' }} />
         <Stack.Screen name={routes.bonusReferrals} component={BonusReferralsPage} options={{ title: 'Рефералы' }} />
+        <Stack.Screen name={routes.benefits} component={BenefitsPage} options={{ title: 'Выгоды' }} />
+        <Stack.Screen name={routes.discounts} component={DiscountsPage} options={{ title: 'Скидки' }} />
+        <Stack.Screen name={routes.gifts} component={GiftsPage} options={{ title: 'Подарки' }} />
+        <Stack.Screen name={routes.promocodes} component={PromocodesPage} options={{ title: 'Промокоды' }} />
+        <Stack.Screen name={routes.tasks} component={TasksPage} options={{ title: 'Задания' }} />
         <Stack.Screen name={routes.orders} component={OrdersPage} options={{ title: 'Мои заказы' }} />
         <Stack.Screen name={routes.orderDetails} component={OrderDetailsPage} options={{ headerShown: false }} />
         <Stack.Screen name={routes.addresses} component={AddressesPage} options={{ title: 'Мои адреса' }} />

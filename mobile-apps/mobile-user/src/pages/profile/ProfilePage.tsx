@@ -328,7 +328,7 @@ function getReferralSummary(referrals: BonusReferrals | null, config: BonusConfi
   };
 }
 
-const PROFILE_MENU_KEYS = ['addresses', 'my-orders', 'favorites', 'promocodes', 'discounts', 'gifts', 'tasks'];
+const PROFILE_MENU_KEYS = ['addresses', 'my-orders', 'promocodes', 'discounts', 'gifts', 'tasks'];
 
 const PROFILE_MENU_DEFAULTS: Record<string, { icon: string; title: string }> = {
   addresses: { icon: 'location-outline', title: 'Адреса' },
@@ -460,6 +460,22 @@ export function ProfilePage() {
     }
     if (key === 'my-orders') {
       navigation.navigate(routes.orders);
+      return;
+    }
+    if (key === 'promocodes') {
+      navigation.navigate(routes.promocodes);
+      return;
+    }
+    if (key === 'discounts') {
+      navigation.navigate(routes.discounts);
+      return;
+    }
+    if (key === 'gifts') {
+      navigation.navigate(routes.gifts);
+      return;
+    }
+    if (key === 'tasks') {
+      navigation.navigate(routes.tasks);
     }
   }, [navigation]);
 
@@ -924,7 +940,6 @@ export function ProfilePage() {
             return (
               <Pressable
                 key={item.key}
-                disabled={!['addresses', 'my-orders'].includes(item.key)}
                 onPress={() => handleProfileMenuPress(item.key)}
                 style={styles.profileMenuItem}
               >

@@ -102,7 +102,7 @@ function getInitialSelection(selection: FulfillmentSelection, addresses: Custome
   const pickupStoreId = selectedPickupStore || toPositiveId(cityStores[0]?.id);
   return {
     addressId,
-    mode: 'delivery',
+    mode: selection.mode === 'pickup' ? 'pickup' : 'delivery',
     pickupCity: selection.pickupCity,
     pickupStoreId,
   };

@@ -1,0 +1,1 @@
+export { GiftsPage } from './GiftsPage';

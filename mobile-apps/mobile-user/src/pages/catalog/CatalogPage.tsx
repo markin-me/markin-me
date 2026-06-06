@@ -19,14 +19,16 @@ import {
 } from 'react-native';
 import type { GestureResponderEvent, ViewToken } from 'react-native';
 import type { RouteProp } from '@react-navigation/native';
-import { useNavigation, useRoute } from '@react-navigation/native';
+import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 
 import type { MainTabParamList, RootStackParamList } from '../../app/navigation/routes';
 import { routes } from '../../app/navigation/routes';
-import type { CatalogCategory, CatalogCombo, CatalogProduct, MobileCatalogSnapshot } from '../../entities/product';
+import type { CatalogCategory, CatalogCombo, CatalogProduct, CatalogProductPassport, MobileCatalogSnapshot } from '../../entities/product';
+import { addCartLine, makeCartLineId, readCartLines, updateCartLineQuantity, type CartIngredient, type CartLine, type CartLineDraft, type CartOptionItem, type CartVariant } from '../../features/cart';
 import {
   apiConfig,
+  ensureMobileCatalogProductPassport,
   fetchMobileCatalogSnapshot,
   readCachedMobileCatalogSnapshot,
   resolveAssetUrl,
@@ -45,6 +47,7 @@ type CatalogState = {
   categories: CatalogCategory[];
   productsByCategory: Map<number, CatalogProduct[]>;
   combosByCategory: Map<number, CatalogCombo[]>;
+  productPassports: Map<number, CatalogProductPassport>;
 };
 
 type CatalogCardItem =
@@ -65,6 +68,7 @@ type CatalogItemLayout = {
 const emptyCatalogState: CatalogState = {
   categories: [],
   combosByCategory: new Map(),
+  productPassports: new Map(),
   productsByCategory: new Map(),
 };
 
@@ -98,9 +102,15 @@ function mapSnapshotRecordToCategoryMap<T>(record: Record<string, T[]> | undefin
 
 function getCatalogStateFromSnapshot(snapshot: MobileCatalogSnapshot): CatalogState {
   const categories = Array.isArray(snapshot.categories) ? snapshot.categories : [];
+  const productPassports = new Map<number, CatalogProductPassport>();
+  Object.entries(snapshot.productPassports || {}).forEach(([key, passport]) => {
+    const id = Number(key || passport?.product?.id || 0);
+    if (Number.isFinite(id) && id > 0 && passport) productPassports.set(id, passport);
+  });
   return {
     categories,
     combosByCategory: mapSnapshotRecordToCategoryMap<CatalogCombo>(snapshot.combosByCategory, categories),
+    productPassports,
     productsByCategory: mapSnapshotRecordToCategoryMap<CatalogProduct>(snapshot.productsByCategory, categories),
   };
 }
@@ -130,6 +140,17 @@ function getOldPrice(product: CatalogProduct) {
   return Number.isFinite(old) ? old : 0;
 }
 
+function roundPrice(value: number) {
+  return Math.round((Number.isFinite(value) ? value : 0) * 100) / 100;
+}
+
+function getDiscountedPrice(price: number, discount: CatalogProduct['discount']) {
+  const value = Number(discount?.discount_value || 0);
+  if (!(value > 0)) return price;
+  if (discount?.discount_type === 'percent') return roundPrice(price * (1 - Math.min(100, value) / 100));
+  return roundPrice(Math.max(0, price - value));
+}
+
 function getDiscountText(product: CatalogProduct) {
   const discount = product.discount;
   const value = Number(discount?.discount_value || 0);
@@ -145,6 +166,156 @@ function getDiscountText(product: CatalogProduct) {
 function getProductImage(product: CatalogProduct) {
   const photo = product.photo_thumb || product.photo_lqip || product.photos?.[0] || '';
   return resolveAssetUrl(photo);
+}
+
+function asPlainRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' ? value as Record<string, unknown> : {};
+}
+
+function asPlainArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function trimText(value: unknown) {
+  return String(value || '').trim();
+}
+
+function positiveId(value: unknown) {
+  const id = Number(value || 0);
+  return Number.isFinite(id) && id > 0 ? id : null;
+}
+
+function getPassportVariant(passport: CatalogProductPassport | null): CartVariant | null {
+  const config = asPlainRecord(passport?.defaultConfig);
+  const groupId = positiveId(config.variant_group_id);
+  const valueIndex = config.variant_value_index == null ? null : Number(config.variant_value_index);
+  const label = trimText(config.variant_label || passport?.product.default_variant?.variant_label);
+  if (!label && !groupId) return null;
+
+  const variantGroup = asPlainRecord(asPlainArray(passport?.variants)[0]);
+  return {
+    groupId,
+    groupTitle: trimText(variantGroup.title || variantGroup.title_label),
+    label,
+    unit: trimText(variantGroup.unit_short_title || variantGroup.unit_code || variantGroup.unit_title),
+    valueIndex: Number.isFinite(valueIndex) ? valueIndex : null,
+  };
+}
+
+function getPassportIngredients(passport: CatalogProductPassport | null): CartIngredient[] {
+  const config = asPlainRecord(passport?.defaultConfig);
+  return asPlainArray(config.ingredients)
+    .map((item): CartIngredient | null => {
+      const source = asPlainRecord(item);
+      const quantity = Number(source.quantity ?? source.qty ?? 0);
+      const name = trimText(source.name || source.ingredient_name);
+      if (!(quantity > 0) || !name) return null;
+      return {
+        id: positiveId(source.ingredient_id || source.id),
+        name,
+        quantity,
+        unit: trimText(source.unit || source.unit_label || source.unit_short_title || source.unit_title || source.unit_code),
+      };
+    })
+    .filter((item): item is CartIngredient => !!item);
+}
+
+function getPassportOptions(passport: CatalogProductPassport | null): CartOptionItem[] {
+  const config = asPlainRecord(passport?.defaultConfig);
+  return asPlainArray(config.option_items)
+    .map((item): CartOptionItem | null => {
+      const source = asPlainRecord(item);
+      const name = trimText(source.title || source.name);
+      if (!name) return null;
+      const variantLabel = trimText(source.variant_label);
+      return {
+        id: positiveId(source.id),
+        name,
+        quantity: Math.max(1, Number(source.qty ?? source.quantity ?? 1)),
+        unitPrice: Math.max(0, Number(source.price || 0)),
+        variant: variantLabel ? {
+          groupId: positiveId(source.variant_group_id),
+          groupTitle: trimText(source.variant_group_title || source.group_title),
+          label: variantLabel,
+          unit: trimText(source.variant_unit || source.unit),
+          valueIndex: source.variant_value_index == null ? null : Number(source.variant_value_index),
+        } : null,
+      };
+    })
+    .filter((item): item is CartOptionItem => !!item);
+}
+
+function getDefaultOptionTotal(passport: CatalogProductPassport | null) {
+  const config = asPlainRecord(passport?.defaultConfig);
+  return asPlainArray(config.option_items).reduce<number>((sum, item) => {
+    const source = asPlainRecord(item);
+    const quantity = Math.max(1, Number(source.qty ?? source.quantity ?? 1));
+    const price = Math.max(0, Number(source.price || 0));
+    return sum + (Number.isFinite(quantity) ? quantity : 1) * (Number.isFinite(price) ? price : 0);
+  }, 0);
+}
+
+function getCatalogLinePricing(product: CatalogProduct, passport: CatalogProductPassport | null) {
+  const config = asPlainRecord(passport?.defaultConfig);
+  const fallbackPrice = getProductPrice(product);
+  const overridePrice = Number(config.unit_price_override);
+  const configuredPrice = Number(config.unit_price ?? config.variant_unit_price);
+  const optionTotal = getDefaultOptionTotal(passport);
+  const ingredientDiff = Number(config.ingredient_price_diff || 0);
+  const beforeDiscountRaw = Number(config.unit_price_before_discount ?? config.base_unit_price ?? config.variant_unit_price);
+  const beforeDiscount = Number.isFinite(beforeDiscountRaw) && beforeDiscountRaw > 0
+    ? beforeDiscountRaw + optionTotal + (Number.isFinite(ingredientDiff) ? ingredientDiff : 0)
+    : fallbackPrice + optionTotal + (Number.isFinite(ingredientDiff) ? ingredientDiff : 0);
+  const configFinal = Number.isFinite(overridePrice) && overridePrice > 0
+    ? overridePrice
+    : Number.isFinite(configuredPrice) && configuredPrice > 0
+      ? configuredPrice + optionTotal + (Number.isFinite(ingredientDiff) ? ingredientDiff : 0)
+      : getDiscountedPrice(beforeDiscount, product.discount);
+  const unitPrice = roundPrice(configFinal);
+  const oldFromProduct = getOldPrice(product);
+  const oldUnitPrice = Math.max(
+    beforeDiscount > unitPrice ? beforeDiscount : 0,
+    oldFromProduct > unitPrice ? oldFromProduct + optionTotal : 0,
+  );
+  return {
+    oldUnitPrice: roundPrice(oldUnitPrice),
+    unitPrice,
+  };
+}
+
+function buildProductQuantitiesFromCart(lines: CartLine[]) {
+  return lines.reduce<Record<number, number>>((result, line) => {
+    if (line.type !== 'product') return result;
+    const productId = Number(line.sourceId || 0);
+    if (!Number.isFinite(productId) || productId <= 0) return result;
+    result[productId] = (result[productId] || 0) + Math.max(1, Number(line.quantity || 1));
+    return result;
+  }, {});
+}
+
+function buildCatalogProductCartLine(product: CatalogProduct, passport: CatalogProductPassport | null) {
+  const { oldUnitPrice, unitPrice } = getCatalogLinePricing(product, passport);
+  const variant = getPassportVariant(passport);
+  const ingredients = getPassportIngredients(passport);
+  const options = getPassportOptions(passport);
+  const line = {
+    detailLines: getProductDefaultLines(product),
+    ingredients,
+    isUnavailable: !isAvailable(product.is_available),
+    oldUnitPrice: oldUnitPrice > unitPrice ? oldUnitPrice : 0,
+    options,
+    photoUrl: getProductImage(product),
+    quantity: 1,
+    sourceId: Number(product.id),
+    title: trimText(product.name) || 'Товар',
+    type: 'product' as const,
+    unitPrice,
+    variant,
+  } as CartLineDraft;
+  return {
+    ...line,
+    id: makeCartLineId(line),
+  };
 }
 
 function getComboImages(combo: CatalogCombo) {
@@ -824,6 +995,20 @@ export function CatalogPage() {
     void loadCatalog();
   }, [loadCatalog]);
 
+  useFocusEffect(
+    useCallback(() => {
+      let isActive = true;
+      readCartLines().then((cartLines) => {
+        if (isActive) setProductQuantities(buildProductQuantitiesFromCart(cartLines));
+      }).catch(() => {
+        if (isActive) setProductQuantities({});
+      });
+      return () => {
+        isActive = false;
+      };
+    }, []),
+  );
+
   useEffect(() => () => {
     if (scrollIdleTimer.current) clearTimeout(scrollIdleTimer.current);
     if (programmaticScrollTimer.current) clearTimeout(programmaticScrollTimer.current);
@@ -908,26 +1093,23 @@ export function CatalogPage() {
     }
   }, [categoryHeaderLayouts]);
 
-  const increaseProductQuantity = useCallback((productId: number) => {
-    setProductQuantities((current) => ({
-      ...current,
-      [productId]: (current[productId] || 0) + 1,
-    }));
-  }, []);
+  const increaseProductQuantity = useCallback(async (product: CatalogProduct) => {
+    const productId = Number(product.id);
+    if (!Number.isFinite(productId) || productId <= 0 || !isAvailable(product.is_available)) return;
+    const nextLines = await addCartLine(buildCatalogProductCartLine(product, catalog.productPassports.get(productId) || null));
+    void ensureMobileCatalogProductPassport(productId);
+    setProductQuantities(buildProductQuantitiesFromCart(nextLines));
+  }, [catalog.productPassports]);
 
-  const decreaseProductQuantity = useCallback((productId: number) => {
-    setProductQuantities((current) => {
-      const nextQuantity = (current[productId] || 0) - 1;
-      const next = { ...current };
-
-      if (nextQuantity > 0) {
-        next[productId] = nextQuantity;
-      } else {
-        delete next[productId];
-      }
-
-      return next;
-    });
+  const decreaseProductQuantity = useCallback(async (productId: number) => {
+    const lines = await readCartLines();
+    const line = [...lines].reverse().find((item) => item.type === 'product' && Number(item.sourceId) === productId);
+    if (!line) {
+      setProductQuantities(buildProductQuantitiesFromCart(lines));
+      return;
+    }
+    const nextLines = await updateCartLineQuantity(line.id, line.quantity - 1);
+    setProductQuantities(buildProductQuantitiesFromCart(nextLines));
   }, []);
 
   const renderCatalogCard = useCallback((card: CatalogCardItem) => {
@@ -938,8 +1120,11 @@ export function CatalogPage() {
           product={card.product}
           quantity={productQuantities[Number(card.product.id)] || 0}
           onDecrease={() => decreaseProductQuantity(Number(card.product.id))}
-          onIncrease={() => increaseProductQuantity(Number(card.product.id))}
-          onPress={() => navigation.navigate('product', { productId: Number(card.product.id) })}
+          onIncrease={() => void increaseProductQuantity(card.product)}
+          onPress={() => {
+            void ensureMobileCatalogProductPassport(Number(card.product.id));
+            navigation.navigate('product', { productId: Number(card.product.id) });
+          }}
         />
       );
     }
