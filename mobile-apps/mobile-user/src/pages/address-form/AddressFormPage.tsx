@@ -26,6 +26,7 @@ import {
   fetchCustomerAddresses,
   fetchPublicOrderConfig,
   readCachedCustomerPassport,
+  readCachedPublicOrderConfig,
   resolvePublicAddress,
   saveCustomerPassport,
   suggestPublicAddresses,
@@ -212,17 +213,19 @@ export function AddressFormPage() {
   }, []);
 
   const loadData = useCallback(async () => {
-    setLoading(true);
     setErrorText('');
     try {
       const [cached, orderConfig] = await Promise.all([
         readCachedCustomerPassport(),
-        fetchPublicOrderConfig().catch(() => null),
+        readCachedPublicOrderConfig(),
       ]);
       setPassport(cached);
       setMapModeEnabled(isMapEnabled(orderConfig?.storeAddressMapEnabled));
       const address = findAddress(cached?.addresses || [], editingAddressId || undefined);
       hydrateForm(address);
+      setLoading(false);
+      const freshOrderConfig = await fetchPublicOrderConfig().catch(() => orderConfig);
+      setMapModeEnabled(isMapEnabled(freshOrderConfig?.storeAddressMapEnabled));
     } catch (error) {
       setErrorText(error instanceof Error ? error.message : 'Не удалось загрузить адрес.');
     } finally {

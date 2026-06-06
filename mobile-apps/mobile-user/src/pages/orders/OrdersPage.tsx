@@ -23,6 +23,8 @@ import {
 
 import {
   fetchCustomerOrders,
+  isSameCachedValue,
+  readCachedCustomerOrders,
   readCachedCustomerPassport,
   resolveAssetUrl,
   type CustomerOrder,
@@ -260,16 +262,37 @@ export function OrdersPage() {
   const loadOrders = useCallback(async (nextToken: string, options: { reset: boolean }) => {
     if (!nextToken) return;
     if (options.reset) {
-      setLoading(true);
       setErrorText('');
     }
     try {
+      const [cachedActivePayload, cachedCompletedPayload] = options.reset
+        ? await Promise.all([
+          readCachedCustomerOrders(nextToken, 0),
+          readCachedCustomerOrders(nextToken, 1),
+        ])
+        : [null, null];
+      if (cachedActivePayload || cachedCompletedPayload) {
+        const activePayload = cachedActivePayload || { data: [], paging: { has_more: false }, summary: {} };
+        const completedPayload = cachedCompletedPayload || { data: [], paging: { has_more: false }, summary: {} };
+        setActiveOrders(activePayload.data);
+        setCompletedOrders(completedPayload.data);
+        setActiveOffset(activePayload.data.length);
+        setActiveHasMore(Boolean(activePayload.paging.has_more));
+        setCompletedOffset(completedPayload.data.length);
+        setCompletedHasMore(Boolean(completedPayload.paging.has_more));
+        updateSummary(activePayload.summary);
+        updateSummary(completedPayload.summary);
+        if (!Object.keys(activePayload.summary || {}).length) setActiveCount(activePayload.data.length);
+        if (!Object.keys(completedPayload.summary || {}).length) setCompletedCount(completedPayload.data.length);
+        setLoading(false);
+        setRefreshing(false);
+      }
       const [activePayload, completedPayload] = await Promise.all([
         fetchCustomerOrders(nextToken, { limit: PAGE_SIZE, offset: 0, statusIsFinal: 0 }),
         fetchCustomerOrders(nextToken, { limit: PAGE_SIZE, offset: 0, statusIsFinal: 1 }),
       ]);
-      setActiveOrders(activePayload.data);
-      setCompletedOrders(completedPayload.data);
+      if (!isSameCachedValue(activePayload.data, cachedActivePayload?.data || [])) setActiveOrders(activePayload.data);
+      if (!isSameCachedValue(completedPayload.data, cachedCompletedPayload?.data || [])) setCompletedOrders(completedPayload.data);
       setActiveOffset(activePayload.data.length);
       setActiveHasMore(Boolean(activePayload.paging.has_more));
       setCompletedOffset(completedPayload.data.length);

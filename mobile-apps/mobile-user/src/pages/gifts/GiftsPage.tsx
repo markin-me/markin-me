@@ -11,6 +11,8 @@ import {
 
 import {
   fetchCustomerBenefits,
+  isSameCachedValue,
+  readCachedCustomerBenefits,
   readCachedCustomerPassport,
   resolveAssetUrl,
   type CustomerBenefitCard,
@@ -63,17 +65,24 @@ export function GiftsPage() {
   const [errorText, setErrorText] = useState('');
 
   const loadGifts = useCallback(async () => {
-    setLoading(true);
     setErrorText('');
     try {
       const passport = await readCachedCustomerPassport();
       if (!passport?.token) {
         setItems([]);
         setErrorText('Войдите в профиль, чтобы увидеть подарки.');
+        setLoading(false);
         return;
       }
+      const cachedBenefits = await readCachedCustomerBenefits(passport.token);
+      const cachedItems = Array.isArray(cachedBenefits?.gifts) ? cachedBenefits.gifts : [];
+      if (cachedBenefits) {
+        setItems(cachedItems);
+        setLoading(false);
+      }
       const benefits = await fetchCustomerBenefits(passport.token);
-      setItems(Array.isArray(benefits.gifts) ? benefits.gifts : []);
+      const freshItems = Array.isArray(benefits.gifts) ? benefits.gifts : [];
+      if (!isSameCachedValue(freshItems, cachedItems)) setItems(freshItems);
     } catch (error) {
       setErrorText(error instanceof Error ? error.message : 'Не удалось загрузить подарки.');
     } finally {

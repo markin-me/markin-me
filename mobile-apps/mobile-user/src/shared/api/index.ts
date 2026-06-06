@@ -272,6 +272,15 @@ type AuthSuccessPayload = {
 let memoryCatalogSnapshot: MobileCatalogSnapshot | null = null;
 const memoryComboDetails = new Map<number, CatalogComboDetails>();
 let memoryCustomerPassport: CustomerPassport | null = null;
+let memoryPublicOrderConfig: PublicOrderConfig | null = null;
+let memoryTenantStores: TenantStore[] | null = null;
+const memoryBonusReferrals = new Map<string, BonusReferrals>();
+const memoryBonusTransactions = new Map<string, BonusTransaction[]>();
+const memoryCustomerAddresses = new Map<string, CustomerAddress[]>();
+const memoryCustomerBenefits = new Map<string, CustomerBenefits>();
+const memoryCustomerDiscounts = new Map<string, CustomerBenefitCard[]>();
+const memoryCustomerOrderDetails = new Map<string, CustomerOrder | null>();
+const memoryCustomerOrders = new Map<string, CustomerOrdersPayload>();
 const passportLoadRequests = new Map<number, Promise<CatalogProductPassport | null>>();
 const comboDetailsLoadRequests = new Map<number, Promise<CatalogComboDetails>>();
 
@@ -319,6 +328,30 @@ function toNumberId(value: unknown) {
   return Number.isFinite(id) && id > 0 ? id : null;
 }
 
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .filter(([, entry]) => entry !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, entry]) => `${JSON.stringify(key)}:${stableStringify(entry)}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+export function isSameCachedValue(left: unknown, right: unknown) {
+  return stableStringify(left) === stableStringify(right);
+}
+
+function hashText(value: string) {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+  }
+  return hash.toString(36);
+}
+
 function mapRecordToCategoryMap<T>(record: unknown, ids: number[]) {
   const result = new Map<number, T[]>();
   const source = record && typeof record === 'object' ? (record as Record<string, T[]>) : {};
@@ -341,6 +374,32 @@ function getComboDetailsStorageKey(comboId: number) {
 
 function getCustomerPassportStorageKey() {
   return `mobile_customer_passport_v1_t${apiConfig.tenantId}_s${apiConfig.storeId}`;
+}
+
+function getPublicOrderConfigStorageKey() {
+  return `mobile_public_order_config_v1_t${apiConfig.tenantId}_s${apiConfig.storeId}`;
+}
+
+function getTenantStoresStorageKey() {
+  return `mobile_tenant_stores_v1_t${apiConfig.tenantId}_s${apiConfig.storeId}`;
+}
+
+function getCustomerScopedStorageKey(namespace: string, token: string, suffix = '') {
+  return `mobile_${namespace}_v1_t${apiConfig.tenantId}_s${apiConfig.storeId}_u${hashText(String(token || '').trim())}${suffix}`;
+}
+
+async function readCachedJson<T>(key: string, normalize: (value: unknown) => T | null) {
+  try {
+    const raw = await AsyncStorage.getItem(key);
+    return normalize(raw ? JSON.parse(raw) : null);
+  } catch {
+    return null;
+  }
+}
+
+async function saveCachedJson<T>(key: string, value: T) {
+  await AsyncStorage.setItem(key, JSON.stringify(value));
+  return value;
 }
 
 function normalizeMobileCatalogSnapshot(value: unknown): MobileCatalogSnapshot | null {
@@ -398,6 +457,58 @@ function normalizeCustomerPassport(value: unknown): CustomerPassport | null {
     customer: normalizeCustomer(source.customer),
     token,
     updatedAt: source.updatedAt || new Date().toISOString(),
+  };
+}
+
+function normalizePublicOrderConfig(value: unknown): PublicOrderConfig | null {
+  return value && typeof value === 'object' ? value as PublicOrderConfig : null;
+}
+
+function normalizeTenantStores(value: unknown): TenantStore[] | null {
+  return Array.isArray(value) ? value : null;
+}
+
+function normalizeCustomerAddresses(value: unknown): CustomerAddress[] | null {
+  return Array.isArray(value) ? value : null;
+}
+
+function normalizeBonusReferrals(value: unknown): BonusReferrals | null {
+  return value && typeof value === 'object' ? value as BonusReferrals : null;
+}
+
+function normalizeBonusTransactions(value: unknown): BonusTransaction[] | null {
+  return Array.isArray(value) ? value : null;
+}
+
+function normalizeCustomerBenefitCards(value: unknown): CustomerBenefitCard[] | null {
+  return Array.isArray(value) ? value : null;
+}
+
+function normalizeCustomerBenefits(value: unknown): CustomerBenefits | null {
+  const data = value && typeof value === 'object' ? value as Partial<CustomerBenefits> : null;
+  if (!data) return null;
+  return {
+    completed: Array.isArray(data.completed) ? data.completed : [],
+    discounts: Array.isArray(data.discounts) ? data.discounts : [],
+    gifts: Array.isArray(data.gifts) ? data.gifts : [],
+    progress: Array.isArray(data.progress) ? data.progress : [],
+    promo_codes: Array.isArray(data.promo_codes) ? data.promo_codes : [],
+  };
+}
+
+function normalizeCustomerOrder(value: unknown): CustomerOrder | null {
+  return value && typeof value === 'object' ? value as CustomerOrder : null;
+}
+
+function normalizeCustomerOrdersPayload(value: unknown): CustomerOrdersPayload | null {
+  const source = value && typeof value === 'object' ? value as Partial<CustomerOrdersPayload> : null;
+  if (!source) return null;
+  return {
+    data: Array.isArray(source.data) ? source.data : [],
+    paging: source.paging && typeof source.paging === 'object'
+      ? { has_more: Boolean(source.paging.has_more) }
+      : { has_more: false },
+    summary: source.summary && typeof source.summary === 'object' ? source.summary : {},
   };
 }
 
@@ -497,6 +608,191 @@ export async function clearCustomerPassport() {
   await AsyncStorage.removeItem(getCustomerPassportStorageKey());
 }
 
+export async function readCachedTenantStores() {
+  if (memoryTenantStores) return memoryTenantStores;
+  const stores = await readCachedJson(getTenantStoresStorageKey(), normalizeTenantStores);
+  if (stores) memoryTenantStores = stores;
+  return stores;
+}
+
+export async function saveTenantStores(stores: TenantStore[]) {
+  const normalized = normalizeTenantStores(stores) || [];
+  memoryTenantStores = normalized;
+  return saveCachedJson(getTenantStoresStorageKey(), normalized);
+}
+
+export async function readCachedPublicOrderConfig() {
+  if (memoryPublicOrderConfig) return memoryPublicOrderConfig;
+  const config = await readCachedJson(getPublicOrderConfigStorageKey(), normalizePublicOrderConfig);
+  if (config) memoryPublicOrderConfig = config;
+  return config;
+}
+
+export async function savePublicOrderConfig(config: PublicOrderConfig | null) {
+  const normalized = normalizePublicOrderConfig(config) || null;
+  memoryPublicOrderConfig = normalized;
+  return saveCachedJson(getPublicOrderConfigStorageKey(), normalized);
+}
+
+export async function readCachedCustomerAddresses(token: string) {
+  const safeToken = String(token || '').trim();
+  if (!safeToken) return [];
+  const key = getCustomerScopedStorageKey('customer_addresses', safeToken);
+  const memory = memoryCustomerAddresses.get(key);
+  if (memory) return memory;
+  const cached = await readCachedJson(key, normalizeCustomerAddresses);
+  if (cached) {
+    memoryCustomerAddresses.set(key, cached);
+    return cached;
+  }
+  const passport = memoryCustomerPassport || await readCachedCustomerPassport();
+  return passport?.token === safeToken ? passport.addresses : [];
+}
+
+export async function saveCustomerAddresses(token: string, addresses: CustomerAddress[]) {
+  const safeToken = String(token || '').trim();
+  const normalized = normalizeCustomerAddresses(addresses) || [];
+  if (!safeToken) return normalized;
+  const key = getCustomerScopedStorageKey('customer_addresses', safeToken);
+  memoryCustomerAddresses.set(key, normalized);
+  await saveCachedJson(key, normalized);
+  if (memoryCustomerPassport?.token === safeToken) {
+    await saveCustomerPassport({
+      ...memoryCustomerPassport,
+      addresses: normalized,
+      updatedAt: new Date().toISOString(),
+    });
+  }
+  return normalized;
+}
+
+export async function readCachedCustomerBenefits(token: string) {
+  const safeToken = String(token || '').trim();
+  if (!safeToken) return null;
+  const key = getCustomerScopedStorageKey('customer_benefits', safeToken);
+  const memory = memoryCustomerBenefits.get(key);
+  if (memory) return memory;
+  const cached = await readCachedJson(key, normalizeCustomerBenefits);
+  if (cached) memoryCustomerBenefits.set(key, cached);
+  return cached;
+}
+
+export async function saveCustomerBenefits(token: string, benefits: CustomerBenefits) {
+  const safeToken = String(token || '').trim();
+  const normalized = normalizeCustomerBenefits(benefits);
+  if (!safeToken || !normalized) return normalized;
+  const key = getCustomerScopedStorageKey('customer_benefits', safeToken);
+  memoryCustomerBenefits.set(key, normalized);
+  await saveCachedJson(key, normalized);
+  return normalized;
+}
+
+export async function readCachedCustomerDiscounts(token: string) {
+  const safeToken = String(token || '').trim();
+  if (!safeToken) return [];
+  const key = getCustomerScopedStorageKey('customer_discounts', safeToken);
+  const memory = memoryCustomerDiscounts.get(key);
+  if (memory) return memory;
+  const cached = await readCachedJson(key, normalizeCustomerBenefitCards);
+  if (cached) memoryCustomerDiscounts.set(key, cached);
+  return cached || [];
+}
+
+export async function saveCustomerDiscounts(token: string, discounts: CustomerBenefitCard[]) {
+  const safeToken = String(token || '').trim();
+  const normalized = normalizeCustomerBenefitCards(discounts) || [];
+  if (!safeToken) return normalized;
+  const key = getCustomerScopedStorageKey('customer_discounts', safeToken);
+  memoryCustomerDiscounts.set(key, normalized);
+  await saveCachedJson(key, normalized);
+  return normalized;
+}
+
+export async function readCachedBonusReferrals(token: string) {
+  const safeToken = String(token || '').trim();
+  if (!safeToken) return null;
+  const key = getCustomerScopedStorageKey('bonus_referrals', safeToken);
+  const memory = memoryBonusReferrals.get(key);
+  if (memory) return memory;
+  const cached = await readCachedJson(key, normalizeBonusReferrals);
+  if (cached) memoryBonusReferrals.set(key, cached);
+  return cached;
+}
+
+export async function saveBonusReferrals(token: string, referrals: BonusReferrals) {
+  const safeToken = String(token || '').trim();
+  const normalized = normalizeBonusReferrals(referrals);
+  if (!safeToken || !normalized) return normalized;
+  const key = getCustomerScopedStorageKey('bonus_referrals', safeToken);
+  memoryBonusReferrals.set(key, normalized);
+  await saveCachedJson(key, normalized);
+  return normalized;
+}
+
+export async function readCachedBonusTransactions(token: string, type?: string) {
+  const safeToken = String(token || '').trim();
+  if (!safeToken) return [];
+  const key = getCustomerScopedStorageKey('bonus_transactions', safeToken, `_f${hashText(String(type || 'all'))}`);
+  const memory = memoryBonusTransactions.get(key);
+  if (memory) return memory;
+  const cached = await readCachedJson(key, normalizeBonusTransactions);
+  if (cached) memoryBonusTransactions.set(key, cached);
+  return cached || [];
+}
+
+export async function saveBonusTransactions(token: string, transactions: BonusTransaction[], type?: string) {
+  const safeToken = String(token || '').trim();
+  const normalized = normalizeBonusTransactions(transactions) || [];
+  if (!safeToken) return normalized;
+  const key = getCustomerScopedStorageKey('bonus_transactions', safeToken, `_f${hashText(String(type || 'all'))}`);
+  memoryBonusTransactions.set(key, normalized);
+  await saveCachedJson(key, normalized);
+  return normalized;
+}
+
+export async function readCachedCustomerOrders(token: string, statusIsFinal: 0 | 1) {
+  const safeToken = String(token || '').trim();
+  if (!safeToken) return null;
+  const key = getCustomerScopedStorageKey('customer_orders', safeToken, `_s${statusIsFinal}`);
+  const memory = memoryCustomerOrders.get(key);
+  if (memory) return memory;
+  const cached = await readCachedJson(key, normalizeCustomerOrdersPayload);
+  if (cached) memoryCustomerOrders.set(key, cached);
+  return cached;
+}
+
+export async function saveCustomerOrders(token: string, statusIsFinal: 0 | 1, payload: CustomerOrdersPayload) {
+  const safeToken = String(token || '').trim();
+  const normalized = normalizeCustomerOrdersPayload(payload);
+  if (!safeToken || !normalized) return normalized;
+  const key = getCustomerScopedStorageKey('customer_orders', safeToken, `_s${statusIsFinal}`);
+  memoryCustomerOrders.set(key, normalized);
+  await saveCachedJson(key, normalized);
+  return normalized;
+}
+
+export async function readCachedCustomerOrder(token: string, orderId: number) {
+  const safeToken = String(token || '').trim();
+  const safeOrderId = Number(orderId || 0);
+  if (!safeToken || !(safeOrderId > 0)) return null;
+  const key = getCustomerScopedStorageKey('customer_order', safeToken, `_o${safeOrderId}`);
+  if (memoryCustomerOrderDetails.has(key)) return memoryCustomerOrderDetails.get(key) || null;
+  const cached = await readCachedJson(key, normalizeCustomerOrder);
+  if (cached) memoryCustomerOrderDetails.set(key, cached);
+  return cached;
+}
+
+export async function saveCustomerOrder(token: string, orderId: number, order: CustomerOrder | null) {
+  const safeToken = String(token || '').trim();
+  const safeOrderId = Number(orderId || 0);
+  const normalized = normalizeCustomerOrder(order);
+  if (!safeToken || !(safeOrderId > 0)) return normalized;
+  const key = getCustomerScopedStorageKey('customer_order', safeToken, `_o${safeOrderId}`);
+  memoryCustomerOrderDetails.set(key, normalized);
+  await saveCachedJson(key, normalized);
+  return normalized;
+}
+
 export async function authPhoneStatus(phone: string) {
   const response = await requestApi<AuthPhoneStatus>('/api/public/auth/phone-status', {
     body: JSON.stringify({ phone }),
@@ -563,7 +859,7 @@ export async function fetchCustomerAddresses(token: string) {
     headers: { 'x-customer-token': token },
   });
   const data = response.data;
-  return Array.isArray(data) ? data : [];
+  return saveCustomerAddresses(token, Array.isArray(data) ? data : []);
 }
 
 export async function fetchCustomerOrders(token: string, params: { limit: number; offset: number; statusIsFinal: 0 | 1 }) {
@@ -575,13 +871,15 @@ export async function fetchCustomerOrders(token: string, params: { limit: number
   const response = await requestApi<CustomerOrder[]>(`/api/public/me/orders?${query.toString()}`, {
     headers: { 'x-customer-token': token },
   }) as ApiResponse<CustomerOrder[]> & Partial<CustomerOrdersPayload>;
-  return {
+  const payload = {
     data: Array.isArray(response.data) ? response.data : [],
     paging: response.paging && typeof response.paging === 'object'
       ? { has_more: Boolean(response.paging.has_more) }
       : { has_more: Array.isArray(response.data) && response.data.length >= Math.max(1, Math.floor(Number(params.limit || 10))) },
     summary: response.summary && typeof response.summary === 'object' ? response.summary : {},
   };
+  if (Number(params.offset || 0) === 0) await saveCustomerOrders(token, params.statusIsFinal, payload);
+  return payload;
 }
 
 export async function fetchCustomerOrder(token: string, orderId: number) {
@@ -590,12 +888,12 @@ export async function fetchCustomerOrder(token: string, orderId: number) {
   const response = await requestApi<CustomerOrder>(`/api/public/me/orders/${encodeURIComponent(String(safeOrderId))}`, {
     headers: { 'x-customer-token': token },
   });
-  return response.data && typeof response.data === 'object' ? response.data : null;
+  return saveCustomerOrder(token, safeOrderId, response.data && typeof response.data === 'object' ? response.data : null);
 }
 
 export async function fetchPublicOrderConfig() {
   const data = await requestJson<PublicOrderConfig>('/api/public/order-config');
-  return data && typeof data === 'object' ? data : null;
+  return savePublicOrderConfig(data && typeof data === 'object' ? data : null);
 }
 
 export async function suggestPublicAddresses(params: {
@@ -662,7 +960,7 @@ export async function setDefaultCustomerAddress(token: string, addressId: number
 export async function fetchTenantStores() {
   const response = await requestApi<{ stores?: TenantStore[] }>(`/api/public/tenant/stores?tenant_id=${encodeURIComponent(apiConfig.tenantId)}`) as ApiResponse<{ stores?: TenantStore[] }> & { stores?: TenantStore[] };
   const stores = response.stores || response.data?.stores;
-  return Array.isArray(stores) ? stores : [];
+  return saveTenantStores(Array.isArray(stores) ? stores : []);
 }
 
 export async function fetchBonusConfig(token: string) {
@@ -676,7 +974,7 @@ export async function fetchBonusReferrals(token: string) {
   const data = await requestJson<BonusReferrals>('/api/public/bonus/referrals', {
     headers: { 'x-customer-token': token },
   });
-  return data && typeof data === 'object' ? data : null;
+  return saveBonusReferrals(token, data && typeof data === 'object' ? data : {});
 }
 
 function getCurrentBonusLevelId(config: BonusConfig | null) {
@@ -718,28 +1016,29 @@ export async function fetchBonusTransactions(token: string, type?: string, limit
   const data = await requestJson<BonusTransaction[]>(`/api/public/bonus/transactions${suffix}`, {
     headers: { 'x-customer-token': token },
   });
-  return Array.isArray(data) ? data : [];
+  const list = Array.isArray(data) ? data : [];
+  if (Number(offset || 0) <= 0) await saveBonusTransactions(token, list, type);
+  return list;
 }
 
 export async function fetchCustomerBenefits(token: string): Promise<CustomerBenefits> {
   const response = await requestApi<CustomerBenefits>('/api/public/me/benefits', {
     headers: { 'x-customer-token': token },
   });
-  const data: Partial<CustomerBenefits> = response.data && typeof response.data === 'object' ? response.data : {};
-  return {
-    completed: Array.isArray(data.completed) ? data.completed : [],
-    discounts: Array.isArray(data.discounts) ? data.discounts : [],
-    gifts: Array.isArray(data.gifts) ? data.gifts : [],
-    progress: Array.isArray(data.progress) ? data.progress : [],
-    promo_codes: Array.isArray(data.promo_codes) ? data.promo_codes : [],
-  };
+  return saveCustomerBenefits(token, normalizeCustomerBenefits(response.data) || {
+    completed: [],
+    discounts: [],
+    gifts: [],
+    progress: [],
+    promo_codes: [],
+  }) as Promise<CustomerBenefits>;
 }
 
 export async function fetchCustomerDiscounts(token: string): Promise<CustomerBenefitCard[]> {
   const response = await requestApi<CustomerBenefitCard[]>('/api/public/me/discounts', {
     headers: { 'x-customer-token': token },
   });
-  return Array.isArray(response.data) ? response.data : [];
+  return saveCustomerDiscounts(token, Array.isArray(response.data) ? response.data : []);
 }
 
 export async function joinBonusProgram(token: string) {

@@ -10,6 +10,8 @@ import {
 
 import {
   fetchCustomerBenefits,
+  isSameCachedValue,
+  readCachedCustomerBenefits,
   readCachedCustomerPassport,
   type CustomerBenefitCard,
 } from '../../shared/api';
@@ -80,17 +82,24 @@ export function PromocodesPage() {
   const [errorText, setErrorText] = useState('');
 
   const loadPromocodes = useCallback(async () => {
-    setLoading(true);
     setErrorText('');
     try {
       const passport = await readCachedCustomerPassport();
       if (!passport?.token) {
         setItems([]);
         setErrorText('Войдите в профиль, чтобы увидеть промокоды.');
+        setLoading(false);
         return;
       }
+      const cachedBenefits = await readCachedCustomerBenefits(passport.token);
+      const cachedItems = (Array.isArray(cachedBenefits?.promo_codes) ? cachedBenefits.promo_codes : []).filter(isVisiblePromo);
+      if (cachedBenefits) {
+        setItems(cachedItems);
+        setLoading(false);
+      }
       const benefits = await fetchCustomerBenefits(passport.token);
-      setItems((Array.isArray(benefits.promo_codes) ? benefits.promo_codes : []).filter(isVisiblePromo));
+      const freshItems = (Array.isArray(benefits.promo_codes) ? benefits.promo_codes : []).filter(isVisiblePromo);
+      if (!isSameCachedValue(freshItems, cachedItems)) setItems(freshItems);
     } catch (error) {
       setErrorText(error instanceof Error ? error.message : 'Не удалось загрузить промокоды.');
     } finally {

@@ -11,6 +11,9 @@ import {
 import {
   fetchCustomerDiscounts,
   fetchCustomerBenefits,
+  isSameCachedValue,
+  readCachedCustomerBenefits,
+  readCachedCustomerDiscounts,
   readCachedCustomerPassport,
   type CustomerBenefitCard,
 } from '../../shared/api';
@@ -81,20 +84,30 @@ export function DiscountsPage() {
   const [errorText, setErrorText] = useState('');
 
   const loadDiscounts = useCallback(async () => {
-    setLoading(true);
     setErrorText('');
     try {
       const passport = await readCachedCustomerPassport();
       if (!passport?.token) {
         setItems([]);
         setErrorText('Войдите в профиль, чтобы увидеть скидки.');
+        setLoading(false);
         return;
+      }
+      const [cachedDiscounts, cachedBenefits] = await Promise.all([
+        readCachedCustomerDiscounts(passport.token),
+        readCachedCustomerBenefits(passport.token),
+      ]);
+      const cachedItems = mergeDiscounts(cachedDiscounts, Array.isArray(cachedBenefits?.discounts) ? cachedBenefits.discounts : []);
+      if (cachedItems.length) {
+        setItems(cachedItems);
+        setLoading(false);
       }
       const [discounts, benefits] = await Promise.all([
         fetchCustomerDiscounts(passport.token),
         fetchCustomerBenefits(passport.token),
       ]);
-      setItems(mergeDiscounts(discounts, Array.isArray(benefits.discounts) ? benefits.discounts : []));
+      const freshItems = mergeDiscounts(discounts, Array.isArray(benefits.discounts) ? benefits.discounts : []);
+      if (!isSameCachedValue(freshItems, cachedItems)) setItems(freshItems);
     } catch (error) {
       setErrorText(error instanceof Error ? error.message : 'Не удалось загрузить скидки.');
     } finally {

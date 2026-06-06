@@ -918,6 +918,10 @@ export function CatalogPage() {
   const chipOffsets = useRef(new Map<number, number>());
   const scrollIdleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const programmaticScrollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const passportWarmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const passportWarmQueue = useRef<number[]>([]);
+  const passportWarmRequestedIds = useRef(new Set<number>());
+  const isPassportWarmRunning = useRef(false);
   const programmaticCategoryId = useRef<number | null>(null);
   const [activeCategoryId, setActiveCategoryId] = useState<number | null>(null);
   const [catalog, setCatalog] = useState<CatalogState>(emptyCatalogState);
@@ -1012,7 +1016,34 @@ export function CatalogPage() {
   useEffect(() => () => {
     if (scrollIdleTimer.current) clearTimeout(scrollIdleTimer.current);
     if (programmaticScrollTimer.current) clearTimeout(programmaticScrollTimer.current);
+    if (passportWarmTimer.current) clearTimeout(passportWarmTimer.current);
   }, []);
+
+  const runPassportWarmQueue = useCallback(async () => {
+    if (isPassportWarmRunning.current) return;
+    isPassportWarmRunning.current = true;
+    try {
+      while (passportWarmQueue.current.length) {
+        const batch = passportWarmQueue.current.splice(0, 4);
+        await Promise.all(batch.map((productId) => ensureMobileCatalogProductPassport(productId).catch(() => null)));
+      }
+    } finally {
+      isPassportWarmRunning.current = false;
+    }
+  }, []);
+
+  const scheduleProductPassportWarm = useCallback((productIds: number[]) => {
+    productIds.forEach((productId) => {
+      if (!Number.isFinite(productId) || productId <= 0 || passportWarmRequestedIds.current.has(productId)) return;
+      passportWarmRequestedIds.current.add(productId);
+      passportWarmQueue.current.push(productId);
+    });
+    if (!passportWarmQueue.current.length || passportWarmTimer.current) return;
+    passportWarmTimer.current = setTimeout(() => {
+      passportWarmTimer.current = null;
+      void runPassportWarmQueue();
+    }, 120);
+  }, [runPassportWarmQueue]);
 
   const scrollChipToCategory = useCallback((categoryId: number) => {
     const offset = chipOffsets.current.get(categoryId);
@@ -1064,13 +1095,16 @@ export function CatalogPage() {
   const handleViewableItemsChanged = useRef((info: { viewableItems: Array<ViewToken<CatalogListItem>> }) => {
     const visibleItems = info.viewableItems.map((entry) => entry.item).filter(Boolean);
     const nextComboKeys = new Set<string>();
+    const visibleProductIds: number[] = [];
     visibleItems.forEach((item) => {
       if (item.type !== 'row') return;
       item.cards.forEach((card) => {
         if (card.type === 'combo') nextComboKeys.add(card.cardKey);
+        if (card.type === 'product') visibleProductIds.push(Number(card.product.id));
       });
     });
     setVisibleComboKeys(nextComboKeys);
+    scheduleProductPassportWarm(visibleProductIds);
   }).current;
 
   const viewabilityConfig = useRef({

@@ -14,6 +14,8 @@ import {
 import type { RootStackParamList } from '../../app/navigation/routes';
 import {
   fetchCustomerBenefits,
+  isSameCachedValue,
+  readCachedCustomerBenefits,
   readCachedCustomerPassport,
   resolveAssetUrl,
   type CustomerBenefitCard,
@@ -175,16 +177,22 @@ export function BenefitsPage({ route }: BenefitsPageProps) {
   const [copiedCode, setCopiedCode] = useState('');
 
   const loadBenefits = useCallback(async () => {
-    setLoading(true);
     setErrorText('');
     try {
       const passport = await readCachedCustomerPassport();
       if (!passport?.token) {
         setBenefits(emptyBenefits);
         setErrorText('Войдите в профиль, чтобы увидеть выгоды.');
+        setLoading(false);
         return;
       }
-      setBenefits(await fetchCustomerBenefits(passport.token));
+      const cachedBenefits = await readCachedCustomerBenefits(passport.token);
+      if (cachedBenefits) {
+        setBenefits(cachedBenefits);
+        setLoading(false);
+      }
+      const freshBenefits = await fetchCustomerBenefits(passport.token);
+      if (!isSameCachedValue(freshBenefits, cachedBenefits || emptyBenefits)) setBenefits(freshBenefits);
     } catch (error) {
       setErrorText(error instanceof Error ? error.message : 'Не удалось загрузить выгоды.');
     } finally {

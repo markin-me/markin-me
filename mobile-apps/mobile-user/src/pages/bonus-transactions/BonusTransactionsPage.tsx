@@ -9,7 +9,13 @@ import { FlatList,
   View,
 } from 'react-native';
 
-import { fetchBonusTransactions, readCachedCustomerPassport, type BonusTransaction } from '../../shared/api';
+import {
+  fetchBonusTransactions,
+  isSameCachedValue,
+  readCachedBonusTransactions,
+  readCachedCustomerPassport,
+  type BonusTransaction,
+} from '../../shared/api';
 import { theme } from '../../shared/config/theme';
 import { Screen } from '../../shared/ui/Screen';
 
@@ -86,21 +92,28 @@ export function BonusTransactionsPage() {
     let isActive = true;
 
     async function loadTransactions() {
-      setLoading(true);
       setErrorText('');
-      setTransactions([]);
       setHasMore(false);
       try {
         const cached = await readCachedCustomerPassport();
         if (!cached?.token) {
           if (isActive) {
             setErrorText('Войдите, чтобы увидеть начисления');
+            setLoading(false);
           }
           return;
         }
+        const cachedList = await readCachedBonusTransactions(cached.token, activeFilter);
+        const cachedVisible = cachedList.filter(isVisibleBonusTransaction);
+        if (isActive && cachedVisible.length) {
+          setTransactions(cachedVisible);
+          setHasMore(cachedList.length === PAGE_SIZE);
+          setLoading(false);
+        }
         const list = await fetchBonusTransactions(cached.token, activeFilter, PAGE_SIZE, 0);
+        const visibleList = list.filter(isVisibleBonusTransaction);
         if (isActive) {
-          setTransactions(list.filter(isVisibleBonusTransaction));
+          if (!isSameCachedValue(visibleList, cachedVisible)) setTransactions(visibleList);
           setHasMore(list.length === PAGE_SIZE);
         }
       } catch {

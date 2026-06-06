@@ -31,17 +31,36 @@ import {
 } from '../../features/checkout';
 import {
   fetchCustomerAddresses,
+  fetchBonusConfig,
+  fetchBonusFavoriteCategories,
+  fetchCustomerBenefits,
+  fetchCustomerDiscounts,
   fetchPublicOrderConfig,
   fetchTenantStores,
+  isSameCachedValue,
+  readCachedCustomerBenefits,
+  readCachedCustomerAddresses,
+  readCachedCustomerDiscounts,
   readCachedCustomerPassport,
+  readCachedMobileCatalogSnapshot,
+  readCachedPublicOrderConfig,
+  readCachedTenantStores,
   resolvePublicAddress,
+  resolveAssetUrl,
+  saveCustomerPassport,
+  joinBonusProgram,
+  type BonusConfig,
+  type BonusFavoriteCategories,
   type CustomerAddress,
+  type CustomerBenefitCard,
+  type CustomerPassport,
+  type CustomerBenefits,
   type PublicOrderConfig,
   type TenantStore,
 } from '../../shared/api';
 import { theme } from '../../shared/config/theme';
 import { formatPrice } from '../../shared/lib/formatPrice';
-import { AppText as Text } from '../../shared/ui';
+import { AppText as Text, AppTextInput, BottomSheet } from '../../shared/ui';
 import { Screen } from '../../shared/ui/Screen';
 
 type CartNavigation = NativeStackNavigationProp<RootStackParamList>;
@@ -55,6 +74,57 @@ type DeliveryProgressState = {
   free: boolean;
   label: string;
   value: number;
+};
+type CartBenefitsCounts = {
+  discounts: number;
+  gifts: number;
+  promocodes: number;
+};
+type CartBonusState = {
+  accrualAmount: number;
+  allowRedeemAndAccrue: boolean;
+  balance: number;
+  coinName: string;
+  coinLogoUrl: string;
+  isJoined: boolean;
+  isProgramEnabled: boolean;
+  joinCashbackText: string;
+  joinRedeemText: string;
+  joinRewardAmount: number;
+  level: Record<string, unknown> | null;
+  redeemAvailableAmount: number;
+};
+type CartSummaryState = {
+  bonusAccrualAmount: number;
+  bonusAccrualBlockedByRedeem: boolean;
+  bonusRedeemAmount: number;
+  deliveryCost: number;
+  discountAmount: number;
+  itemDiscountAmount: number;
+  itemsTotal: number;
+  subtotalBeforeDiscount: number;
+  total: number;
+};
+
+const emptyBenefitsCounts: CartBenefitsCounts = {
+  discounts: 0,
+  gifts: 0,
+  promocodes: 0,
+};
+
+const emptyBonusState: CartBonusState = {
+  accrualAmount: 0,
+  allowRedeemAndAccrue: false,
+  balance: 0,
+  coinName: 'Бонусы',
+  coinLogoUrl: '',
+  isJoined: false,
+  isProgramEnabled: false,
+  joinCashbackText: '0%',
+  joinRedeemText: '0%',
+  joinRewardAmount: 0,
+  level: null,
+  redeemAvailableAmount: 0,
 };
 
 function toPositiveId(value: unknown) {
@@ -194,6 +264,231 @@ function getDiscountPercent(total: number, oldTotal: number) {
   return Math.round((1 - total / oldTotal) * 100);
 }
 
+function asText(value: unknown) {
+  return String(value || '').trim();
+}
+
+function isVisiblePromo(item: CustomerBenefitCard) {
+  const usageLimit = Number(item.usage_limit || 0);
+  const usageCount = Number(item.usage_count || 0);
+  return usageLimit <= 0 || usageCount < usageLimit;
+}
+
+function mergeDiscounts(primary: CustomerBenefitCard[], secondary: CustomerBenefitCard[]) {
+  const result = new Map<string, CustomerBenefitCard>();
+  [...primary, ...secondary].forEach((item, index) => {
+    const id = asText(item.id);
+    const key = id || `${asText(item.title)}:${asText(item.discount_type)}:${asText(item.discount_value)}:${index}`;
+    if (!result.has(key)) result.set(key, item);
+  });
+  return Array.from(result.values());
+}
+
+function getCartBenefitsCounts(benefits: CustomerBenefits | null, discounts: CustomerBenefitCard[]) {
+  const sourceBenefits = benefits || {
+    completed: [],
+    discounts: [],
+    gifts: [],
+    progress: [],
+    promo_codes: [],
+  };
+  const discountItems = mergeDiscounts(discounts, Array.isArray(sourceBenefits.discounts) ? sourceBenefits.discounts : []);
+  const promocodeItems = (Array.isArray(sourceBenefits.promo_codes) ? sourceBenefits.promo_codes : []).filter(isVisiblePromo);
+  const giftItems = Array.isArray(sourceBenefits.gifts) ? sourceBenefits.gifts : [];
+  return {
+    discounts: discountItems.length,
+    gifts: giftItems.length,
+    promocodes: promocodeItems.length,
+  };
+}
+
+function roundPrice(value: unknown) {
+  const number = Number(value || 0);
+  if (!Number.isFinite(number)) return 0;
+  return Math.round(number * 100) / 100;
+}
+
+function formatPercent(value: unknown) {
+  const number = Number(value || 0);
+  if (!Number.isFinite(number) || number <= 0) return '0%';
+  return `${Number(number.toFixed(2)).toLocaleString('ru-RU')}%`;
+}
+
+function getBonusSettings(config: BonusConfig | null) {
+  return config?.settings && typeof config.settings === 'object' ? config.settings as Record<string, unknown> : {};
+}
+
+function getBonusAccount(config: BonusConfig | null) {
+  return config?.account && typeof config.account === 'object' ? config.account as Record<string, unknown> : null;
+}
+
+function getBonusLevels(config: BonusConfig | null) {
+  return Array.isArray(config?.levels) ? config.levels.filter((level): level is Record<string, unknown> => !!level && typeof level === 'object') : [];
+}
+
+function getCartBonusActiveLevel(config: BonusConfig | null) {
+  const account = getBonusAccount(config);
+  if (!account?.joined_at || !(Number(account.id || 0) > 0)) return null;
+  const levelId = Number(account.level_id || account.bonus_level_id || 0);
+  const levels = getBonusLevels(config);
+  if (levelId > 0) {
+    const level = levels.find((item) => Number(item.id || 0) === levelId);
+    if (level) return level;
+  }
+  return levels.find((item) => asText(item.title)) || null;
+}
+
+function getCartBonusJoinLevel(config: BonusConfig | null) {
+  const levels = getBonusLevels(config);
+  return levels.find((item) => asText(item.access_type) === 'join') || levels[0] || null;
+}
+
+function getCartBonusCurrentLevelId(config: BonusConfig | null) {
+  const level = getCartBonusActiveLevel(config) || getCartBonusJoinLevel(config);
+  const id = Number(level?.id || 0);
+  return id > 0 ? id : 0;
+}
+
+function getFavoriteCategoryPercents(favorites: BonusFavoriteCategories | null) {
+  const selectedIds = new Set(
+    (Array.isArray(favorites?.selected_ids) ? favorites.selected_ids : [])
+      .map((id) => Number(id || 0))
+      .filter((id) => id > 0),
+  );
+  const percents = new Map<number, number>();
+  (Array.isArray(favorites?.categories) ? favorites.categories : []).forEach((category) => {
+    const id = Number(category?.id || 0);
+    if (!(id > 0) || !selectedIds.has(id)) return;
+    const percent = Math.max(0, Number(category?.bonus_percent || favorites?.bonus_percent || 0));
+    if (percent > 0) percents.set(id, percent);
+  });
+  return percents;
+}
+
+function getCartLineCategoryIds(line: CartLine, snapshot: Awaited<ReturnType<typeof readCachedMobileCatalogSnapshot>> | null) {
+  const ids = new Set<number>();
+  if (!snapshot) return ids;
+
+  if (line.type === 'combo') {
+    const comboId = Number(line.sourceId || 0);
+    Object.entries(snapshot.combosByCategory || {}).forEach(([categoryId, combos]) => {
+      const numericCategoryId = Number(categoryId || 0);
+      if (!(numericCategoryId > 0) || !Array.isArray(combos)) return;
+      if (combos.some((combo) => Number(combo?.id || 0) === comboId)) ids.add(numericCategoryId);
+    });
+    Object.values(snapshot.combosByCategory || {}).forEach((combos) => {
+      (Array.isArray(combos) ? combos : []).forEach((combo) => {
+        if (Number(combo?.id || 0) !== comboId) return;
+        const categoryId = Number(combo?.category_id || 0);
+        if (categoryId > 0) ids.add(categoryId);
+      });
+    });
+    return ids;
+  }
+
+  const productId = Number(line.sourceId || 0);
+  const passportProduct = snapshot.productPassports?.[String(productId)]?.product;
+  const product = passportProduct || Object.values(snapshot.productsByCategory || {})
+    .flatMap((products) => Array.isArray(products) ? products : [])
+    .find((item) => Number(item?.id || 0) === productId);
+  (Array.isArray(product?.category_ids) ? product.category_ids : []).forEach((id) => {
+    const numericId = Number(id || 0);
+    if (numericId > 0) ids.add(numericId);
+  });
+  Object.entries(snapshot.productsByCategory || {}).forEach(([categoryId, products]) => {
+    const numericCategoryId = Number(categoryId || 0);
+    if (!(numericCategoryId > 0) || !Array.isArray(products)) return;
+    if (products.some((item) => Number(item?.id || 0) === productId)) ids.add(numericCategoryId);
+  });
+  return ids;
+}
+
+function calculateCartBonusAccrual(lines: CartLine[], itemsTotal: number, level: Record<string, unknown>, favorites: BonusFavoriteCategories | null, snapshot: Awaited<ReturnType<typeof readCachedMobileCatalogSnapshot>> | null) {
+  const orderRangePercent = (Array.isArray(level.order_bonus_ranges) ? level.order_bonus_ranges : [])
+    .map((row) => row && typeof row === 'object' ? row as Record<string, unknown> : null)
+    .filter((row): row is Record<string, unknown> => !!row)
+    .map((row) => ({
+      amount: Math.max(0, Number(row.amount || 0)),
+      percent: Math.max(0, Number(row.percent || 0)),
+    }))
+    .filter((row) => row.amount > 0 && row.percent > 0 && itemsTotal >= row.amount)
+    .sort((left, right) => right.amount - left.amount)[0]?.percent || 0;
+  const cashbackPercent = Math.max(0, Number(level.cashback_percent || 0)) + orderRangePercent;
+  const favoritePercents = getFavoriteCategoryPercents(favorites);
+  let rawBonus = 0;
+
+  lines.forEach((line) => {
+    const lineTotal = roundPrice(getLineTotal(line));
+    if (!(lineTotal > 0)) return;
+    const categoryIds = getCartLineCategoryIds(line, snapshot);
+    const favoritePercent = Array.from(categoryIds).reduce((max, id) => Math.max(max, Number(favoritePercents.get(id) || 0)), 0);
+    const percent = cashbackPercent + favoritePercent;
+    if (percent > 0) rawBonus += lineTotal * percent / 100;
+  });
+
+  return Math.floor(Math.max(0, rawBonus));
+}
+
+function calculateCartBonusRedeemAmount(itemsTotal: number, config: BonusConfig | null, level: Record<string, unknown> | null) {
+  const account = getBonusAccount(config);
+  const balance = Math.floor(Math.max(0, Number(account?.balance || 0)));
+  const redeemPercent = Math.max(0, Number(level?.redeem_percent || 0));
+  if (!(balance > 0) || !(redeemPercent > 0)) return 0;
+  const limit = Math.floor(Math.max(0, itemsTotal) * redeemPercent / 100);
+  return Math.max(0, Math.min(balance, limit));
+}
+
+function buildCartBonusState(lines: CartLine[], config: BonusConfig | null, favorites: BonusFavoriteCategories | null, snapshot: Awaited<ReturnType<typeof readCachedMobileCatalogSnapshot>> | null): CartBonusState {
+  const settings = getBonusSettings(config);
+  const account = getBonusAccount(config);
+  const level = getCartBonusActiveLevel(config);
+  const joinLevel = getCartBonusJoinLevel(config);
+  const itemsTotal = lines.reduce((sum, line) => sum + getLineTotal(line), 0);
+  const balance = Math.floor(Math.max(0, Number(account?.balance || 0)));
+  const coinName = asText(settings.bonus_coin_name) || 'Бонусы';
+  const coinLogoUrl = resolveAssetUrl(asText(settings.bonus_coin_logo));
+  const isProgramEnabled = settings.bonus_program_enabled === true || Number(settings.bonus_program_enabled || 0) === 1;
+  const isJoined = Boolean(level);
+  return {
+    accrualAmount: level ? calculateCartBonusAccrual(lines, itemsTotal, level, favorites, snapshot) : 0,
+    allowRedeemAndAccrue: Number(settings.allow_redeem_and_accrue || 0) === 1,
+    balance,
+    coinName,
+    coinLogoUrl,
+    isJoined,
+    isProgramEnabled,
+    joinCashbackText: formatPercent(joinLevel?.cashback_percent),
+    joinRedeemText: formatPercent(joinLevel?.redeem_percent),
+    joinRewardAmount: Math.floor(Math.max(0, Number(joinLevel?.reward_bonus_amount || 0))),
+    level,
+    redeemAvailableAmount: level ? calculateCartBonusRedeemAmount(itemsTotal, config, level) : 0,
+  };
+}
+
+function buildCartSummaryState(lines: CartLine[], deliveryCost: number, bonusState: CartBonusState, redeemActive: boolean): CartSummaryState {
+  const itemsTotal = roundPrice(lines.reduce((sum, line) => sum + getLineTotal(line), 0));
+  const subtotalBeforeDiscount = roundPrice(lines.reduce((sum, line) => {
+    const total = getLineTotal(line);
+    const oldTotal = getLineOldTotal(line);
+    return sum + Math.max(total, oldTotal);
+  }, 0));
+  const itemDiscountAmount = roundPrice(Math.max(0, subtotalBeforeDiscount - itemsTotal));
+  const bonusRedeemAmount = redeemActive ? roundPrice(Math.min(itemsTotal, bonusState.redeemAvailableAmount)) : 0;
+  const discountAmount = roundPrice(itemDiscountAmount + bonusRedeemAmount);
+  const total = roundPrice(Math.max(0, itemsTotal - bonusRedeemAmount) + Math.max(0, Number(deliveryCost || 0)));
+  return {
+    bonusAccrualAmount: Math.floor(Math.max(0, Number(bonusState.accrualAmount || 0))),
+    bonusAccrualBlockedByRedeem: redeemActive && !bonusState.allowRedeemAndAccrue && Number(bonusState.accrualAmount || 0) > 0,
+    bonusRedeemAmount,
+    deliveryCost: roundPrice(Math.max(0, Number(deliveryCost || 0))),
+    discountAmount,
+    itemDiscountAmount,
+    itemsTotal,
+    subtotalBeforeDiscount,
+    total,
+  };
+}
+
 function getCartLineTitle(line: CartLine) {
   const variantLine = formatCartVariantLine(line.variant);
   return [variantLine, line.title].filter(Boolean).join(' ').trim() || line.title;
@@ -216,6 +511,39 @@ function getCartLineDetails(line: CartLine) {
   return structuredLines.length ? structuredLines : line.detailLines || [];
 }
 
+function BonusAmount({ amount, color, logoUrl, prefix = '', size = 'md', suffix }: {
+  amount: number;
+  color?: string;
+  logoUrl?: string;
+  prefix?: string;
+  size?: 'sm' | 'md' | 'lg';
+  suffix?: string;
+}) {
+  const iconSize = size === 'lg' ? 22 : size === 'sm' ? 14 : 16;
+  return (
+    <View style={styles.bonusAmount}>
+      <Text style={[
+        styles.bonusAmountText,
+        size === 'lg' && styles.bonusAmountTextLarge,
+        size === 'sm' && styles.bonusAmountTextSmall,
+        color ? { color } : null,
+      ]}>
+        {prefix}{Math.floor(Math.max(0, Number(amount || 0))).toLocaleString('ru-RU')}
+      </Text>
+      {logoUrl ? (
+        <Image resizeMode="contain" source={{ uri: logoUrl }} style={[styles.bonusAmountIcon, { height: iconSize, width: iconSize }]} />
+      ) : suffix ? (
+        <Text style={[
+          styles.bonusAmountSuffix,
+          size === 'lg' && styles.bonusAmountSuffixLarge,
+          size === 'sm' && styles.bonusAmountSuffixSmall,
+          color ? { color } : null,
+        ]}>{suffix}</Text>
+      ) : null}
+    </View>
+  );
+}
+
 export function CartPage() {
   const navigation = useNavigation<CartNavigation>();
   const [lines, setLines] = useState<CartLine[]>([]);
@@ -230,6 +558,14 @@ export function CartPage() {
   });
   const [deliveryMeta, setDeliveryMeta] = useState<DeliveryMeta | null>(null);
   const [lastDeliveryProgress, setLastDeliveryProgress] = useState<DeliveryProgressState | null>(null);
+  const [benefitsCounts, setBenefitsCounts] = useState<CartBenefitsCounts>(emptyBenefitsCounts);
+  const [bonusConfig, setBonusConfig] = useState<BonusConfig | null>(null);
+  const [bonusFavoriteCategories, setBonusFavoriteCategories] = useState<BonusFavoriteCategories | null>(null);
+  const [catalogSnapshot, setCatalogSnapshot] = useState<Awaited<ReturnType<typeof readCachedMobileCatalogSnapshot>> | null>(null);
+  const [bonusRedeemEnabled, setBonusRedeemEnabled] = useState(false);
+  const [discountDetailsVisible, setDiscountDetailsVisible] = useState(false);
+  const [bonusDetailsVisible, setBonusDetailsVisible] = useState(false);
+  const [promoCode, setPromoCode] = useState('');
   const [isLoading, setLoading] = useState(true);
   const [clearConfirm, setClearConfirm] = useState(false);
 
@@ -239,26 +575,94 @@ export function CartPage() {
   const selectedDeliveryStore = useMemo(() => findDeliveryStore(stores, selectedAddress), [selectedAddress, stores]);
   const isDelivery = selection.mode === 'delivery';
   const visibleDeliveryProgress = isDelivery ? buildDeliveryProgress(subtotal, deliveryMeta) || lastDeliveryProgress : null;
+  const bonusState = useMemo(
+    () => buildCartBonusState(lines, bonusConfig, bonusFavoriteCategories, catalogSnapshot),
+    [bonusConfig, bonusFavoriteCategories, catalogSnapshot, lines],
+  );
+  const redeemActive = bonusRedeemEnabled && bonusState.balance > 0 && bonusState.redeemAvailableAmount > 0;
+  const redeemLabel = bonusState.allowRedeemAndAccrue ? 'Списать и начислить' : 'Списать';
+  const cartSummary = useMemo(
+    () => buildCartSummaryState(lines, isDelivery ? Number(deliveryMeta?.cost || 0) : 0, bonusState, redeemActive),
+    [bonusState, deliveryMeta?.cost, isDelivery, lines, redeemActive],
+  );
+  const discountDetails = useMemo(() => [
+    cartSummary.itemDiscountAmount > 0
+      ? { key: 'items', title: 'Скидка товаров', value: cartSummary.itemDiscountAmount, type: 'money' as const }
+      : null,
+    cartSummary.bonusRedeemAmount > 0
+      ? { key: 'bonus', title: bonusState.coinName, value: cartSummary.bonusRedeemAmount, type: 'bonus' as const }
+      : null,
+  ].filter((item): item is { key: string; title: string; type: 'bonus' | 'money'; value: number } => !!item), [
+    bonusState.coinName,
+    cartSummary.bonusRedeemAmount,
+    cartSummary.itemDiscountAmount,
+  ]);
 
   const loadCart = useCallback(async () => {
-    setLoading(true);
-    const [nextLines, nextSelection, passport, nextStores, nextOrderConfig] = await Promise.all([
+    const [nextLines, nextSelection, passport, cachedStores, cachedOrderConfig, cachedCatalogSnapshot] = await Promise.all([
       readCartLines(),
       readFulfillmentSelection(),
       readCachedCustomerPassport(),
-      fetchTenantStores().catch(() => []),
-      fetchPublicOrderConfig().catch(() => null),
+      readCachedTenantStores(),
+      readCachedPublicOrderConfig(),
+      readCachedMobileCatalogSnapshot(),
     ]);
-    const nextAddresses = passport?.token
-      ? await fetchCustomerAddresses(passport.token).catch(() => passport.addresses || [])
+    const cachedAddresses = passport?.token
+      ? await readCachedCustomerAddresses(passport.token)
       : passport?.addresses || [];
 
     setLines(nextLines);
     setSelection(nextSelection);
-    setAddresses(nextAddresses);
-    setStores(nextStores);
-    setOrderConfig(nextOrderConfig);
+    setAddresses(cachedAddresses);
+    setStores(cachedStores || []);
+    setOrderConfig(cachedOrderConfig);
+    setBonusConfig(passport?.bonusConfig || null);
+    setBonusFavoriteCategories(passport?.bonusFavoriteCategories || null);
+    setCatalogSnapshot(cachedCatalogSnapshot);
     setLoading(false);
+
+    if (passport?.token) {
+      const [cachedBenefits, cachedDiscounts] = await Promise.all([
+        readCachedCustomerBenefits(passport.token),
+        readCachedCustomerDiscounts(passport.token),
+      ]);
+      setBenefitsCounts(getCartBenefitsCounts(cachedBenefits, cachedDiscounts));
+    } else {
+      setBenefitsCounts(emptyBenefitsCounts);
+    }
+
+    const levelId = getCartBonusCurrentLevelId(passport?.bonusConfig || null);
+    const [freshStores, freshOrderConfig, freshAddresses, freshBenefits, freshDiscounts, freshBonusConfig] = await Promise.all([
+      fetchTenantStores().catch(() => cachedStores || []),
+      fetchPublicOrderConfig().catch(() => cachedOrderConfig),
+      passport?.token ? fetchCustomerAddresses(passport.token).catch(() => cachedAddresses) : Promise.resolve(cachedAddresses),
+      passport?.token ? fetchCustomerBenefits(passport.token).catch(() => null) : Promise.resolve(null),
+      passport?.token ? fetchCustomerDiscounts(passport.token).catch(() => []) : Promise.resolve([]),
+      passport?.token ? fetchBonusConfig(passport.token).catch(() => passport.bonusConfig || null) : Promise.resolve(null),
+    ]);
+    const freshLevelId = getCartBonusCurrentLevelId(freshBonusConfig);
+    const favoriteLevelId = freshLevelId || levelId;
+    const freshBonusFavoriteCategories = passport?.token && favoriteLevelId > 0
+      ? await fetchBonusFavoriteCategories(passport.token, favoriteLevelId).catch(() => passport.bonusFavoriteCategories || null)
+      : passport?.bonusFavoriteCategories || null;
+    if (!isSameCachedValue(freshStores, cachedStores || [])) setStores(freshStores);
+    if (!isSameCachedValue(freshOrderConfig, cachedOrderConfig)) setOrderConfig(freshOrderConfig);
+    if (!isSameCachedValue(freshAddresses, cachedAddresses)) setAddresses(freshAddresses);
+    if (passport?.token) {
+      setBonusConfig(freshBonusConfig);
+      setBonusFavoriteCategories(freshBonusFavoriteCategories);
+      const freshCounts = getCartBenefitsCounts(freshBenefits, freshDiscounts);
+      setBenefitsCounts((currentCounts) => (
+        isSameCachedValue(freshCounts, currentCounts) ? currentCounts : freshCounts
+      ));
+      await saveCustomerPassport({
+        ...(passport as CustomerPassport),
+        addresses: freshAddresses,
+        bonusConfig: freshBonusConfig,
+        bonusFavoriteCategories: freshBonusFavoriteCategories,
+        updatedAt: new Date().toISOString(),
+      });
+    }
   }, []);
 
   useFocusEffect(
@@ -347,10 +751,55 @@ export function CartPage() {
     return () => clearTimeout(timer);
   }, [clearConfirm]);
 
+  useEffect(() => {
+    if (bonusState.balance > 0 && bonusState.redeemAvailableAmount > 0) return;
+    setBonusRedeemEnabled(false);
+  }, [bonusState.balance, bonusState.redeemAvailableAmount]);
+
   const openAddresses = useCallback(async () => {
     await saveFulfillmentSelection(selection);
     navigation.navigate(routes.addresses);
   }, [navigation, selection]);
+
+  const openBenefitPage = useCallback((page: keyof CartBenefitsCounts) => {
+    if (page === 'discounts') {
+      navigation.navigate(routes.discounts);
+      return;
+    }
+    if (page === 'promocodes') {
+      navigation.navigate(routes.promocodes);
+      return;
+    }
+    navigation.navigate(routes.gifts);
+  }, [navigation]);
+
+  const selectBonusAccrual = useCallback(() => {
+    setBonusRedeemEnabled(false);
+  }, []);
+
+  const selectBonusRedeem = useCallback(() => {
+    if (!(bonusState.balance > 0) || !(bonusState.redeemAvailableAmount > 0)) return;
+    setBonusRedeemEnabled(true);
+  }, [bonusState.balance, bonusState.redeemAvailableAmount]);
+
+  const joinBonus = useCallback(async () => {
+    const passport = await readCachedCustomerPassport();
+    if (!passport?.token) return;
+    await joinBonusProgram(passport.token);
+    const freshConfig = await fetchBonusConfig(passport.token);
+    const levelId = getCartBonusCurrentLevelId(freshConfig);
+    const freshFavorites = levelId > 0
+      ? await fetchBonusFavoriteCategories(passport.token, levelId).catch(() => null)
+      : null;
+    setBonusConfig(freshConfig);
+    setBonusFavoriteCategories(freshFavorites);
+    await saveCustomerPassport({
+      ...passport,
+      bonusConfig: freshConfig,
+      bonusFavoriteCategories: freshFavorites,
+      updatedAt: new Date().toISOString(),
+    });
+  }, []);
 
   const openLine = useCallback((line: CartLine) => {
     if (line.type === 'combo') {
@@ -538,8 +987,272 @@ export function CartPage() {
                 </View>
               )}
             </View>
+
+            {lines.length ? (
+              <View style={styles.benefitsCard}>
+                {benefitsCounts.discounts > 0 ? (
+                  <Pressable onPress={() => openBenefitPage('discounts')} style={styles.benefitRow}>
+                    <View style={styles.benefitRowMain}>
+                      <Text style={styles.benefitLabel}>Скидки</Text>
+                      <View style={styles.benefitCountBadge}>
+                        <Text style={styles.benefitCountText}>{benefitsCounts.discounts}</Text>
+                      </View>
+                    </View>
+                    <Ionicons name="chevron-forward" color={theme.colors.text} size={24} />
+                  </Pressable>
+                ) : null}
+
+                {benefitsCounts.gifts > 0 ? (
+                  <Pressable onPress={() => openBenefitPage('gifts')} style={styles.benefitRow}>
+                    <View style={styles.benefitRowMain}>
+                      <Text style={styles.benefitLabel}>Подарки</Text>
+                      <View style={styles.benefitCountBadge}>
+                        <Text style={styles.benefitCountText}>{benefitsCounts.gifts}</Text>
+                      </View>
+                    </View>
+                    <Ionicons name="chevron-forward" color={theme.colors.text} size={24} />
+                  </Pressable>
+                ) : null}
+
+                {benefitsCounts.discounts > 0 || benefitsCounts.gifts > 0 ? <View style={styles.benefitsDivider} /> : null}
+
+                <View style={styles.promoBlock}>
+                  {benefitsCounts.promocodes > 0 ? (
+                    <Pressable onPress={() => openBenefitPage('promocodes')} style={styles.benefitRow}>
+                      <View style={styles.benefitRowMain}>
+                        <Text style={styles.benefitLabel}>Промокоды</Text>
+                        <View style={styles.benefitCountBadge}>
+                          <Text style={styles.benefitCountText}>{benefitsCounts.promocodes}</Text>
+                        </View>
+                      </View>
+                      <Ionicons name="chevron-forward" color={theme.colors.text} size={24} />
+                    </Pressable>
+                  ) : null}
+
+                  <View style={styles.promoInputRow}>
+                    <View style={styles.promoInputSurface}>
+                      <AppTextInput
+                        autoCapitalize="characters"
+                        onChangeText={setPromoCode}
+                        placeholder="ВВЕДИТЕ ПРОМОКОД"
+                        placeholderTextColor={theme.colors.muted}
+                        style={styles.promoInput}
+                        value={promoCode}
+                      />
+                    </View>
+                    <Pressable disabled={!promoCode.trim()} style={[styles.promoApplyButton, !promoCode.trim() && styles.promoApplyButtonDisabled]}>
+                      <Text style={[styles.promoApplyText, !promoCode.trim() && styles.promoApplyTextDisabled]}>Применить</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              </View>
+            ) : null}
+
+            {lines.length && bonusState.isProgramEnabled ? (
+              bonusState.isJoined ? (
+                <View style={styles.bonusCard}>
+                  <View style={styles.bonusHead}>
+                    <View>
+                      <Text style={styles.bonusLabel}>{bonusState.coinName}</Text>
+                      <BonusAmount amount={bonusState.balance} logoUrl={bonusState.coinLogoUrl} size="lg" suffix={bonusState.coinName} />
+                    </View>
+                    <View style={styles.bonusAvailable}>
+                      <Text style={styles.bonusAvailableLabel}>Можно списать</Text>
+                      <BonusAmount amount={bonusState.redeemAvailableAmount} logoUrl={bonusState.coinLogoUrl} suffix={bonusState.coinName} />
+                    </View>
+                  </View>
+                  <View style={styles.bonusActions}>
+                    <Pressable
+                      onPress={selectBonusAccrual}
+                      style={[styles.bonusActionButton, !redeemActive && styles.bonusActionButtonActive]}
+                    >
+                      <Text style={[styles.bonusActionLabel, !redeemActive && styles.bonusActionTextActive]}>Начислить</Text>
+                      <BonusAmount
+                        amount={bonusState.accrualAmount}
+                        color={!redeemActive ? theme.colors.primaryText : theme.colors.text}
+                        logoUrl={bonusState.coinLogoUrl}
+                        prefix="+"
+                        size="sm"
+                        suffix={bonusState.coinName}
+                      />
+                    </Pressable>
+                    <Pressable
+                      disabled={!(bonusState.balance > 0 && bonusState.redeemAvailableAmount > 0)}
+                      onPress={selectBonusRedeem}
+                      style={[
+                        styles.bonusActionButton,
+                        redeemActive && styles.bonusActionButtonActive,
+                        !(bonusState.balance > 0 && bonusState.redeemAvailableAmount > 0) && styles.bonusActionButtonDisabled,
+                      ]}
+                    >
+                      <Text style={[styles.bonusActionLabel, redeemActive && styles.bonusActionTextActive]}>
+                        {redeemLabel}
+                      </Text>
+                      <View style={styles.bonusActionAmountGroup}>
+                        <BonusAmount
+                          amount={bonusState.redeemAvailableAmount}
+                          color={redeemActive ? theme.colors.primaryText : theme.colors.text}
+                          logoUrl={bonusState.coinLogoUrl}
+                          prefix="-"
+                          size="sm"
+                          suffix={bonusState.coinName}
+                        />
+                        {bonusState.allowRedeemAndAccrue && bonusState.accrualAmount > 0 ? (
+                          <BonusAmount
+                            amount={bonusState.accrualAmount}
+                            color={redeemActive ? theme.colors.primaryText : theme.colors.text}
+                            logoUrl={bonusState.coinLogoUrl}
+                            prefix="+"
+                            size="sm"
+                            suffix={bonusState.coinName}
+                          />
+                        ) : null}
+                      </View>
+                    </Pressable>
+                  </View>
+                </View>
+              ) : (
+                <View style={styles.bonusCard}>
+                  <View style={styles.bonusJoinCopy}>
+                    <Text style={styles.bonusJoinTitle}>Присоединитесь к бонусной программе</Text>
+                    <Text style={styles.bonusJoinText}>и получайте бонусы за заказы</Text>
+                  </View>
+                  <View style={styles.bonusJoinStats}>
+                    <View style={styles.bonusJoinReward}>
+                      <BonusAmount amount={bonusState.joinRewardAmount} logoUrl={bonusState.coinLogoUrl} suffix={bonusState.coinName} />
+                      <Text style={styles.bonusJoinRewardNote}>за вступление</Text>
+                    </View>
+                    <View style={styles.bonusJoinPercents}>
+                      <Text style={styles.bonusJoinPercentText}>Кэшбэк: {bonusState.joinCashbackText}</Text>
+                      <Text style={styles.bonusJoinPercentText}>Списание: до {bonusState.joinRedeemText}</Text>
+                    </View>
+                  </View>
+                  <Pressable onPress={joinBonus} style={styles.bonusJoinButton}>
+                    <Text style={styles.bonusJoinButtonText}>Присоединиться</Text>
+                  </Pressable>
+                </View>
+              )
+            ) : null}
+
+            {lines.length ? (
+              <View style={styles.summaryCard}>
+                {isDelivery ? (
+                  <View style={styles.summaryRow}>
+                    <Text style={styles.summaryLabel}>Стоимость доставки</Text>
+                    <Text style={styles.summaryValue}>{formatPrice(cartSummary.deliveryCost)}</Text>
+                  </View>
+                ) : null}
+
+                {visibleDeliveryProgress?.label ? (
+                  <Text style={styles.summaryNote}>{visibleDeliveryProgress.label}</Text>
+                ) : null}
+
+                <View style={styles.summaryRow}>
+                  <Text style={styles.summaryLabel}>Сумма товаров</Text>
+                  <Text style={styles.summaryValue}>{formatPrice(cartSummary.subtotalBeforeDiscount)}</Text>
+                </View>
+
+                {cartSummary.discountAmount > 0 ? (
+                  <View style={styles.summaryRow}>
+                    <View style={styles.summaryLabelWrap}>
+                      <Text style={styles.summaryLabel}>Скидка</Text>
+                      {discountDetails.length ? (
+                        <Pressable onPress={() => setDiscountDetailsVisible(true)} style={styles.summaryInfoButton}>
+                          <Ionicons name="information" color={theme.colors.muted} size={11} />
+                        </Pressable>
+                      ) : null}
+                    </View>
+                    <Text style={styles.summaryDiscountValue}>-{formatPrice(cartSummary.discountAmount)}</Text>
+                  </View>
+                ) : null}
+
+                {cartSummary.bonusAccrualAmount > 0 ? (
+                  <View style={[styles.summaryRow, styles.summaryBonusRow]}>
+                    <View style={styles.summaryLabelWrap}>
+                      <Text style={styles.summaryLabel}>{bonusState.coinName}</Text>
+                      {cartSummary.bonusAccrualBlockedByRedeem ? (
+                        <Pressable onPress={() => setBonusDetailsVisible(true)} style={styles.summaryInfoButton}>
+                          <Ionicons name="information" color={theme.colors.muted} size={11} />
+                        </Pressable>
+                      ) : null}
+                    </View>
+                    <View style={cartSummary.bonusAccrualBlockedByRedeem ? styles.summaryBonusBlocked : null}>
+                      <BonusAmount
+                        amount={cartSummary.bonusAccrualAmount}
+                        color={theme.colors.accent}
+                        logoUrl={bonusState.coinLogoUrl}
+                        prefix="+"
+                        size="sm"
+                        suffix={bonusState.coinName}
+                      />
+                    </View>
+                  </View>
+                ) : null}
+
+                <View style={styles.summaryDivider} />
+                <View style={styles.summaryTotalRow}>
+                  <Text style={styles.summaryTotalLabel}>Итого</Text>
+                  <Text style={styles.summaryTotalValue}>{formatPrice(cartSummary.total)}</Text>
+                </View>
+              </View>
+            ) : null}
           </ScrollView>
         )}
+        <BottomSheet
+          onClose={() => setDiscountDetailsVisible(false)}
+          title="Детали скидки"
+          visible={discountDetailsVisible}
+        >
+          <View style={styles.discountDetailsSheet}>
+            {discountDetails.map((detail) => (
+              <View key={detail.key} style={styles.discountDetailsRow}>
+                <Text style={styles.discountDetailsLabel}>{detail.title}</Text>
+                {detail.type === 'bonus' ? (
+                  <View style={styles.discountDetailsBonusValue}>
+                    <Text style={styles.discountDetailsValue}>-</Text>
+                    <BonusAmount
+                      amount={detail.value}
+                      color={theme.colors.accent}
+                      logoUrl={bonusState.coinLogoUrl}
+                      size="sm"
+                      suffix={bonusState.coinName}
+                    />
+                  </View>
+                ) : (
+                  <Text style={styles.discountDetailsValue}>-{formatPrice(detail.value)}</Text>
+                )}
+              </View>
+            ))}
+          </View>
+        </BottomSheet>
+        <BottomSheet
+          onClose={() => setBonusDetailsVisible(false)}
+          title="Детали бонусов"
+          visible={bonusDetailsVisible}
+        >
+          <View style={styles.discountDetailsSheet}>
+            <View style={styles.discountDetailsRow}>
+              <Text style={styles.discountDetailsLabel}>Начисление</Text>
+              <View style={styles.discountDetailsBonusValue}>
+                <BonusAmount
+                  amount={cartSummary.bonusAccrualAmount}
+                  color={theme.colors.accent}
+                  logoUrl={bonusState.coinLogoUrl}
+                  prefix="+"
+                  size="sm"
+                  suffix={bonusState.coinName}
+                />
+              </View>
+            </View>
+            <View style={styles.discountDetailsRow}>
+              <Text style={styles.discountDetailsLabel}>Статус</Text>
+              <Text style={styles.discountDetailsValue}>Не применяется</Text>
+            </View>
+            <Text style={styles.bonusDetailsNote}>
+              На вашем уровне недоступно одновременно списывать и начислять бонусы.
+            </Text>
+          </View>
+        </BottomSheet>
       </View>
     </Screen>
   );
@@ -557,6 +1270,225 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 16,
     fontWeight: '900',
+  },
+  benefitCountBadge: {
+    alignItems: 'center',
+    backgroundColor: theme.colors.accent,
+    borderRadius: theme.radius.pill,
+    justifyContent: 'center',
+    minHeight: 23,
+    minWidth: 23,
+    paddingHorizontal: 7,
+  },
+  benefitCountText: {
+    color: theme.colors.primaryText,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  benefitLabel: {
+    color: theme.colors.text,
+    fontSize: 23,
+    fontWeight: '900',
+  },
+  benefitRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: theme.spacing.sm,
+    minHeight: 38,
+  },
+  benefitRowMain: {
+    alignItems: 'center',
+    flex: 1,
+    flexDirection: 'row',
+    gap: theme.spacing.sm,
+    minWidth: 0,
+  },
+  benefitsDivider: {
+    backgroundColor: theme.colors.border,
+    height: 1,
+    marginBottom: theme.spacing.sm,
+    marginTop: theme.spacing.xs,
+  },
+  benefitsCard: {
+    backgroundColor: theme.colors.card,
+    borderRadius: 24,
+    marginTop: theme.spacing.lg,
+    paddingHorizontal: theme.spacing.lg,
+    paddingVertical: theme.spacing.md,
+    shadowColor: theme.colors.text,
+    shadowOffset: { height: 12, width: 0 },
+    shadowOpacity: 0.08,
+    shadowRadius: 24,
+    elevation: 3,
+  },
+  bonusActionAmountGroup: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 4,
+    justifyContent: 'center',
+  },
+  bonusAmount: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 4,
+    justifyContent: 'center',
+    minWidth: 0,
+  },
+  bonusAmountIcon: {
+    flexShrink: 0,
+  },
+  bonusAmountSuffix: {
+    color: theme.colors.text,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  bonusAmountSuffixLarge: {
+    fontSize: 18,
+  },
+  bonusAmountSuffixSmall: {
+    fontSize: 11,
+  },
+  bonusAmountText: {
+    color: theme.colors.text,
+    fontSize: 18,
+    fontWeight: '900',
+  },
+  bonusAmountTextLarge: {
+    fontSize: 26,
+  },
+  bonusAmountTextSmall: {
+    fontSize: 12,
+  },
+  bonusActionButton: {
+    alignItems: 'center',
+    backgroundColor: theme.colors.mutedBackground,
+    borderColor: theme.colors.border,
+    borderRadius: theme.radius.pill,
+    borderWidth: 1,
+    flex: 1,
+    gap: 3,
+    justifyContent: 'center',
+    minHeight: 46,
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: 8,
+  },
+  bonusActionButtonActive: {
+    backgroundColor: theme.colors.accent,
+    borderColor: theme.colors.accent,
+    shadowColor: theme.colors.accent,
+    shadowOffset: { height: 8, width: 0 },
+    shadowOpacity: 0.22,
+    shadowRadius: 18,
+    elevation: 2,
+  },
+  bonusActionButtonDisabled: {
+    opacity: 0.55,
+  },
+  bonusActionLabel: {
+    color: theme.colors.text,
+    fontSize: 11,
+    fontWeight: '900',
+    textAlign: 'center',
+  },
+  bonusActions: {
+    flexDirection: 'row',
+    gap: theme.spacing.sm,
+  },
+  bonusActionTextActive: {
+    color: theme.colors.primaryText,
+  },
+  bonusAvailable: {
+    alignItems: 'flex-end',
+    gap: 4,
+    marginLeft: 'auto',
+  },
+  bonusAvailableLabel: {
+    color: theme.colors.muted,
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  bonusCard: {
+    backgroundColor: theme.colors.card,
+    borderRadius: 24,
+    gap: 10,
+    marginTop: theme.spacing.lg,
+    minHeight: 104,
+    padding: theme.spacing.lg,
+    shadowColor: theme.colors.text,
+    shadowOffset: { height: 12, width: 0 },
+    shadowOpacity: 0.08,
+    shadowRadius: 24,
+    elevation: 3,
+  },
+  bonusHead: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: theme.spacing.md,
+  },
+  bonusJoinButton: {
+    alignItems: 'center',
+    backgroundColor: theme.colors.accent,
+    borderRadius: theme.radius.pill,
+    justifyContent: 'center',
+    minHeight: 48,
+    shadowColor: theme.colors.accent,
+    shadowOffset: { height: 8, width: 0 },
+    shadowOpacity: 0.22,
+    shadowRadius: 18,
+    elevation: 2,
+  },
+  bonusJoinButtonText: {
+    color: theme.colors.primaryText,
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  bonusJoinCopy: {
+    gap: 4,
+  },
+  bonusJoinPercents: {
+    flexDirection: 'row',
+    gap: theme.spacing.sm,
+    justifyContent: 'space-between',
+  },
+  bonusJoinPercentText: {
+    color: theme.colors.text,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  bonusJoinReward: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 4,
+  },
+  bonusJoinRewardNote: {
+    color: theme.colors.muted,
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  bonusJoinStats: {
+    gap: 6,
+  },
+  bonusJoinText: {
+    color: theme.colors.muted,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  bonusJoinTitle: {
+    color: theme.colors.text,
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  bonusDetailsNote: {
+    color: theme.colors.muted,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  bonusLabel: {
+    color: theme.colors.muted,
+    fontSize: 12,
+    fontWeight: '800',
   },
   centerState: {
     alignItems: 'center',
@@ -730,6 +1662,53 @@ const styles = StyleSheet.create({
   priceRow: {
     gap: 1,
   },
+  promoApplyButton: {
+    alignItems: 'center',
+    backgroundColor: theme.colors.text,
+    borderRadius: theme.radius.pill,
+    height: 47,
+    justifyContent: 'center',
+    minWidth: 116,
+    paddingHorizontal: theme.spacing.md,
+  },
+  promoApplyButtonDisabled: {
+    backgroundColor: '#f5f5f5',
+  },
+  promoApplyText: {
+    color: theme.colors.primaryText,
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  promoApplyTextDisabled: {
+    color: theme.colors.muted,
+  },
+  promoInput: {
+    color: theme.colors.text,
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '800',
+    height: 47,
+    padding: 0,
+  },
+  promoInputRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: theme.spacing.sm,
+    marginTop: theme.spacing.sm,
+  },
+  promoBlock: {
+    gap: theme.spacing.xs,
+  },
+  promoInputSurface: {
+    backgroundColor: theme.colors.mutedBackground,
+    borderColor: theme.colors.border,
+    borderRadius: theme.radius.pill,
+    borderWidth: 1,
+    flex: 1,
+    height: 47,
+    justifyContent: 'center',
+    paddingHorizontal: theme.spacing.md,
+  },
   priceGroup: {
     alignItems: 'center',
     flexDirection: 'row',
@@ -804,6 +1783,93 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: '900',
   },
+  summaryBonusBlocked: {
+    opacity: 0.72,
+    textDecorationLine: 'line-through',
+    textDecorationStyle: 'solid',
+  },
+  summaryBonusRow: {
+    alignItems: 'center',
+  },
+  summaryCard: {
+    backgroundColor: theme.colors.card,
+    borderRadius: 28,
+    gap: 10,
+    marginTop: theme.spacing.lg,
+    padding: 18,
+    shadowColor: theme.colors.text,
+    shadowOffset: { height: 14, width: 0 },
+    shadowOpacity: 0.08,
+    shadowRadius: 30,
+    elevation: 3,
+  },
+  summaryDiscountValue: {
+    color: theme.colors.text,
+    fontSize: 15,
+    fontWeight: '800',
+    textAlign: 'right',
+  },
+  summaryDivider: {
+    borderColor: theme.colors.border,
+    borderStyle: 'dashed',
+    borderTopWidth: 1,
+    marginBottom: 4,
+    marginTop: 8,
+  },
+  summaryLabel: {
+    color: theme.colors.muted,
+    fontSize: 15,
+  },
+  summaryLabelWrap: {
+    alignItems: 'center',
+    flex: 1,
+    flexDirection: 'row',
+    gap: 6,
+    minWidth: 0,
+  },
+  summaryInfoButton: {
+    alignItems: 'center',
+    backgroundColor: theme.colors.surface,
+    borderColor: theme.colors.border,
+    borderRadius: theme.radius.pill,
+    borderWidth: 1,
+    height: 18,
+    justifyContent: 'center',
+    width: 18,
+  },
+  summaryNote: {
+    color: theme.colors.muted,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  summaryRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: theme.spacing.md,
+    justifyContent: 'space-between',
+  },
+  summaryTotalLabel: {
+    color: theme.colors.text,
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  summaryTotalRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: theme.spacing.md,
+    justifyContent: 'space-between',
+  },
+  summaryTotalValue: {
+    color: theme.colors.text,
+    fontSize: 20,
+    fontWeight: '900',
+  },
+  summaryValue: {
+    color: theme.colors.text,
+    fontSize: 15,
+    fontWeight: '700',
+    textAlign: 'right',
+  },
   discountBadge: {
     alignItems: 'center',
     backgroundColor: theme.colors.accent,
@@ -816,6 +1882,32 @@ const styles = StyleSheet.create({
     color: theme.colors.primaryText,
     fontSize: 12,
     fontWeight: '900',
+  },
+  discountDetailsBonusValue: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 2,
+  },
+  discountDetailsLabel: {
+    color: theme.colors.muted,
+    flex: 1,
+    fontSize: 15,
+  },
+  discountDetailsRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: theme.spacing.md,
+    justifyContent: 'space-between',
+    paddingVertical: theme.spacing.xs,
+  },
+  discountDetailsSheet: {
+    gap: theme.spacing.md,
+  },
+  discountDetailsValue: {
+    color: theme.colors.accent,
+    fontSize: 15,
+    fontWeight: '900',
+    textAlign: 'right',
   },
   toggle: {
     alignSelf: 'center',

@@ -16,6 +16,8 @@ import QRCode from 'react-native-qrcode-svg';
 
 import {
   fetchBonusReferrals,
+  isSameCachedValue,
+  readCachedBonusReferrals,
   readCachedCustomerPassport,
   resolveAssetUrl,
   saveCustomerPassport,
@@ -81,20 +83,25 @@ export function BonusReferralsPage() {
       let isActive = true;
 
       async function loadReferrals() {
-        setLoading(true);
         setErrorText('');
         try {
           const cached = await readCachedCustomerPassport();
           if (!isActive) return;
           setPassport(cached);
-          setData(cached?.bonusReferrals || null);
+          const cachedReferrals = cached?.token
+            ? await readCachedBonusReferrals(cached.token)
+            : null;
+          const initialData = cachedReferrals || cached?.bonusReferrals || null;
+          setData(initialData);
+          if (initialData) setLoading(false);
           if (!cached?.token) {
             setErrorText('Войдите, чтобы увидеть рефералов');
+            setLoading(false);
             return;
           }
           const fresh = await fetchBonusReferrals(cached.token);
           if (!isActive) return;
-          setData(fresh);
+          if (!isSameCachedValue(fresh, initialData)) setData(fresh);
           await saveCustomerPassport({ ...cached, bonusReferrals: fresh, updatedAt: new Date().toISOString() });
         } catch {
           if (isActive) setErrorText('Не удалось загрузить рефералов');

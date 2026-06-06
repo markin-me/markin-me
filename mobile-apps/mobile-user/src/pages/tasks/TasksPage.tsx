@@ -10,6 +10,8 @@ import {
 
 import {
   fetchCustomerBenefits,
+  isSameCachedValue,
+  readCachedCustomerBenefits,
   readCachedCustomerPassport,
   type CustomerBenefitCard,
 } from '../../shared/api';
@@ -132,17 +134,24 @@ export function TasksPage() {
   const [errorText, setErrorText] = useState('');
 
   const loadTasks = useCallback(async () => {
-    setLoading(true);
     setErrorText('');
     try {
       const passport = await readCachedCustomerPassport();
       if (!passport?.token) {
         setItems([]);
         setErrorText('Войдите в профиль, чтобы увидеть задания.');
+        setLoading(false);
         return;
       }
+      const cachedBenefits = await readCachedCustomerBenefits(passport.token);
+      const cachedItems = Array.isArray(cachedBenefits?.progress) ? cachedBenefits.progress : [];
+      if (cachedBenefits) {
+        setItems(cachedItems);
+        setLoading(false);
+      }
       const benefits = await fetchCustomerBenefits(passport.token);
-      setItems(Array.isArray(benefits.progress) ? benefits.progress : []);
+      const freshItems = Array.isArray(benefits.progress) ? benefits.progress : [];
+      if (!isSameCachedValue(freshItems, cachedItems)) setItems(freshItems);
     } catch (error) {
       setErrorText(error instanceof Error ? error.message : 'Не удалось загрузить задания.');
     } finally {

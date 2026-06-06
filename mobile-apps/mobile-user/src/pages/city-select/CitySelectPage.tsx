@@ -16,7 +16,7 @@ import {
 
 import type { RootStackParamList } from '../../app/navigation/routes';
 import { routes } from '../../app/navigation/routes';
-import { fetchTenantStores } from '../../shared/api';
+import { fetchTenantStores, isSameCachedValue, readCachedTenantStores } from '../../shared/api';
 import { theme } from '../../shared/config/theme';
 import { Screen } from '../../shared/ui/Screen';
 import { AppText as Text } from '../../shared/ui';
@@ -41,11 +41,16 @@ export function CitySelectPage({ navigation, route }: CitySelectPageProps) {
   const activeCity = normalizeCity(selectedCity);
 
   const loadCities = useCallback(async () => {
-    setLoading(true);
     setErrorText('');
     try {
-      const stores = await fetchTenantStores();
-      setCities(buildCities(stores));
+      const cachedStores = await readCachedTenantStores();
+      const cachedCities = buildCities(cachedStores || []);
+      setCities(cachedCities);
+      setLoading(false);
+
+      const freshStores = await fetchTenantStores().catch(() => cachedStores || []);
+      const freshCities = buildCities(freshStores);
+      if (!isSameCachedValue(freshCities, cachedCities)) setCities(freshCities);
     } catch (error) {
       setErrorText(error instanceof Error ? error.message : 'Не удалось загрузить города.');
     } finally {

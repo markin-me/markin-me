@@ -22,7 +22,10 @@ import {
   deleteCustomerAddress,
   fetchCustomerAddresses,
   fetchTenantStores,
+  isSameCachedValue,
+  readCachedCustomerAddresses,
   readCachedCustomerPassport,
+  readCachedTenantStores,
   saveCustomerPassport,
   setDefaultCustomerAddress,
   type CustomerAddress,
@@ -126,19 +129,34 @@ export function AddressesPage() {
   const [errorText, setErrorText] = useState('');
 
   const loadData = useCallback(async () => {
-    setLoading(true);
     setErrorText('');
     try {
       const cached = await readCachedCustomerPassport();
       setPassport(cached);
-      const [storedSelection, nextStores, nextAddresses] = await Promise.all([
+      const [storedSelection, cachedStores] = await Promise.all([
         readFulfillmentSelection(),
-        fetchTenantStores(),
-        cached?.token ? fetchCustomerAddresses(cached.token) : Promise.resolve([]),
+        readCachedTenantStores(),
       ]);
+      const cachedAddresses = cached?.token
+        ? await readCachedCustomerAddresses(cached.token)
+        : [];
+      const nextStores = cachedStores || [];
       setStores(nextStores);
-      setAddresses(nextAddresses);
-      setSelection(getInitialSelection(storedSelection, nextAddresses, nextStores));
+      setAddresses(cachedAddresses);
+      setSelection(getInitialSelection(storedSelection, cachedAddresses, nextStores));
+      setLoading(false);
+
+      const [freshStores, freshAddresses] = await Promise.all([
+        fetchTenantStores().catch(() => nextStores),
+        cached?.token ? fetchCustomerAddresses(cached.token).catch(() => cachedAddresses) : Promise.resolve(cachedAddresses),
+      ]);
+      if (!isSameCachedValue(freshStores, nextStores)) setStores(freshStores);
+      if (!isSameCachedValue(freshAddresses, cachedAddresses)) {
+        setAddresses(freshAddresses);
+        setSelection(getInitialSelection(storedSelection, freshAddresses, freshStores));
+      } else if (!isSameCachedValue(freshStores, nextStores)) {
+        setSelection(getInitialSelection(storedSelection, cachedAddresses, freshStores));
+      }
     } catch (error) {
       setErrorText(error instanceof Error ? error.message : 'Не удалось загрузить адреса.');
     } finally {

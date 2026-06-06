@@ -32,6 +32,7 @@ import {
 import {
   fetchCatalogComboDetails,
   getMemoryCatalogComboDetails,
+  isSameCachedValue,
   readCachedCatalogComboDetails,
   resolveAssetUrl,
 } from '../../shared/api';
@@ -169,7 +170,7 @@ export function ComboPage({ navigation, route }: ComboPageProps) {
 
       try {
         const fresh = await fetchCatalogComboDetails(comboId);
-        if (isMounted) applyCombo(fresh, !appliedInitial);
+        if (isMounted && !isSameCachedValue(fresh, cached)) applyCombo(fresh, !appliedInitial);
       } catch (error) {
         if (!cached && isMounted) setErrorText(error instanceof Error ? error.message : 'Комбо не найдено');
       }

@@ -21,6 +21,8 @@ import {
 
 import {
   fetchCustomerOrder,
+  isSameCachedValue,
+  readCachedCustomerOrder,
   readCachedCustomerPassport,
   resolveAssetUrl,
   type CustomerOrder,
@@ -261,14 +263,18 @@ export function OrderDetailsPage() {
   useEffect(() => {
     let isActive = true;
     async function loadOrder() {
-      setLoading(true);
       setErrorText('');
       try {
         const passport = await readCachedCustomerPassport();
         const token = String(passport?.token || '').trim();
         if (!token) throw new Error('UNAUTHORIZED');
+        const cachedOrder = await readCachedCustomerOrder(token, orderId);
+        if (cachedOrder && isActive) {
+          setOrder(cachedOrder);
+          setLoading(false);
+        }
         const nextOrder = await fetchCustomerOrder(token, orderId);
-        if (isActive) setOrder(nextOrder);
+        if (isActive && !isSameCachedValue(nextOrder, cachedOrder)) setOrder(nextOrder);
       } catch {
         if (isActive) setErrorText('Не удалось загрузить детали заказа');
       } finally {

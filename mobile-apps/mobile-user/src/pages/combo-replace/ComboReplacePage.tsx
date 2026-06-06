@@ -27,6 +27,7 @@ import {
 import {
   fetchCatalogComboDetails,
   getMemoryCatalogComboDetails,
+  isSameCachedValue,
   readCachedCatalogComboDetails,
 } from '../../shared/api';
 import { theme } from '../../shared/config/theme';
@@ -56,7 +57,7 @@ export function ComboReplacePage({ navigation, route }: ComboReplacePageProps) {
 
       try {
         const fresh = await fetchCatalogComboDetails(comboId);
-        if (isMounted) {
+        if (isMounted && !isSameCachedValue(fresh, cached)) {
           setCombo(fresh);
           setDraft(cloneComboDraft(getComboDraft(fresh)));
         }
