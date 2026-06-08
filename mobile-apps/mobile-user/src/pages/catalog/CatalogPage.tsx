@@ -1067,6 +1067,7 @@ export function CatalogPage() {
   const passportWarmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const passportWarmQueue = useRef<number[]>([]);
   const passportWarmRequestedIds = useRef(new Set<number>());
+  const passportWarmSnapshotKeys = useRef(new Set<string>());
   const isPassportWarmRunning = useRef(false);
   const isStockAvailabilitySyncRunning = useRef(false);
   const stockAvailabilitySyncKey = useRef('');
@@ -1160,11 +1161,16 @@ export function CatalogPage() {
       setActiveCategoryId((current) => current || (Number.isFinite(firstCategoryId) && firstCategoryId > 0 ? firstCategoryId : null));
     };
     const warmSnapshotPassports = (snapshot: MobileCatalogSnapshot) => {
+      const warmKey = String(snapshot.version || `${snapshot.tenant_id || 0}:${snapshot.store_id || 0}:${snapshot.generated_at || ''}`);
+      if (passportWarmSnapshotKeys.current.has(warmKey)) return;
+      passportWarmSnapshotKeys.current.add(warmKey);
       void warmMobileCatalogPassports(snapshot).then((warmedSnapshot) => {
         const warmedCatalog = getCatalogStateFromSnapshot(warmedSnapshot);
-        mergeCatalogPassports(warmedCatalog.productPassports);
         mergeStockRows(collectStockRowsFromCatalog(warmedCatalog, unitConversions));
-      }).catch(() => null);
+        setPassportReadyVersion((version) => version + 1);
+      }).catch(() => {
+        passportWarmSnapshotKeys.current.delete(warmKey);
+      });
     };
 
     let hasRenderedSnapshot = false;
@@ -1194,7 +1200,7 @@ export function CatalogPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [mergeCatalogPassports, mergeStockRows, syncCatalogAvailability, unitConversions]);
+  }, [mergeStockRows, syncCatalogAvailability, unitConversions]);
 
   useEffect(() => {
     void loadCatalog();
@@ -1416,10 +1422,7 @@ export function CatalogPage() {
           canIncreaseOverride={canIncreaseOverride}
           onDecrease={() => decreaseProductQuantity(productId)}
           onIncrease={() => void increaseProductQuantity(card.product)}
-          onPress={() => {
-            void ensureMobileCatalogProductPassport(productId);
-            navigation.navigate('product', { productId });
-          }}
+          onPress={() => navigation.navigate('product', { productId })}
           stockLevels={stockLevels}
         />
       );
