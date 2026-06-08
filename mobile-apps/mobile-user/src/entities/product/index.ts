@@ -5,6 +5,7 @@ export type {
   CatalogComboBlockProduct,
   CatalogComboDetails,
   CatalogComboProductPreview,
+  CatalogBuyXGetYBadge,
   CatalogDiscount,
   CatalogNutrition,
   CatalogProduct,

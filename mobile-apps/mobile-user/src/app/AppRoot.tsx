@@ -36,10 +36,17 @@ import { ProfilePage } from '../pages/profile';
 import { ProfileSettingsPage } from '../pages/profile-settings';
 import { PromocodesPage } from '../pages/promocodes';
 import { TasksPage } from '../pages/tasks';
+import { getCartLineStockProductIds, readCartLines } from '../features/cart';
+import { readCachedCustomerPassport, refreshCustomerPassport, warmFullProductPassports } from '../shared/api';
 import { theme } from '../shared/config/theme';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<MainTabParamList>();
+const BACKGROUND_TAB_WARMUP_DELAY_MS = 1500;
+
+function collectCartWarmupProductIds(lines: Awaited<ReturnType<typeof readCartLines>>) {
+  return Array.from(new Set(lines.flatMap((line) => getCartLineStockProductIds(line))));
+}
 
 function MainTabs() {
   const insets = useSafeAreaInsets();
@@ -113,6 +120,32 @@ export function AppRoot() {
     NativeStatusBar.setTranslucent(false);
     NativeStatusBar.setBackgroundColor(theme.colors.background);
     NativeStatusBar.setBarStyle('dark-content');
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      void (async () => {
+        const [cartLines, passport] = await Promise.all([
+          readCartLines().catch(() => []),
+          readCachedCustomerPassport().catch(() => null),
+        ]);
+        if (cancelled) return;
+
+        const cartProductIds = collectCartWarmupProductIds(cartLines);
+        if (cartProductIds.length) {
+          void warmFullProductPassports(cartProductIds).catch(() => null);
+        }
+        if (passport?.token) {
+          void refreshCustomerPassport(passport.token, passport.customer).catch(() => null);
+        }
+      })().catch(() => null);
+    }, BACKGROUND_TAB_WARMUP_DELAY_MS);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   }, []);
 
   return (

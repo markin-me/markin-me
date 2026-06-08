@@ -39,6 +39,7 @@ import {
   warmMobileCatalogPassports,
 } from '../../shared/api';
 import { theme } from '../../shared/config/theme';
+import { calculateBuyXGetYLineTotals, getBuyXGetYBadgeText as getBuyXGetYBadgeTextFromRule } from '../../shared/lib/buyXGetY';
 import { formatPrice } from '../../shared/lib/formatPrice';
 import {
   getProductAvailabilityState,
@@ -89,6 +90,7 @@ const comboSlideDirections = ['up', 'right', 'left', 'down'] as const;
 const comboRotationIntervalMs = 6800;
 const comboRotationStepDurationMs = 760;
 const comboRotationPrepareDelayMs = 180;
+const catalogCardTapSlop = { bottom: 10, left: 10, right: 10, top: 10 };
 
 type ComboSlideDirection = typeof comboSlideDirections[number];
 type ComboSlidePhase = 'idle' | 'ready' | 'leaving' | 'entering';
@@ -273,9 +275,7 @@ function getDiscountText(product: CatalogProduct) {
 }
 
 function getBuyXGetYBadgeText(product: CatalogProduct) {
-  const badge = product.buy_x_get_y_badge;
-  if (!badge || typeof badge !== 'object') return '';
-  return trimText(badge.badge_text || badge.title);
+  return getBuyXGetYBadgeTextFromRule(product.buy_x_get_y_badge);
 }
 
 function getProductImage(product: CatalogProduct) {
@@ -433,6 +433,7 @@ function buildCatalogProductCartLine(product: CatalogProduct, passport: CatalogP
   const ingredients = getPassportIngredients(passport, unitConversions);
   const options = getPassportOptions(passport);
   const line = {
+    buyXGetYBadge: passport?.product?.buy_x_get_y_badge || product.buy_x_get_y_badge || null,
     detailLines: getProductDefaultLines(product),
     ingredients,
     isUnavailable: !isProductStockAvailable(product, stockLevels),
@@ -682,7 +683,14 @@ function ProductCard({
   const title = getProductTitle(product);
   const defaultLines = getProductDefaultLines(product);
   const mediaPillText = getProductMediaPillText(product, canIncrease, availability.cartQty, availability.hasKnownStock);
-  const totalPrice = price * Math.max(availability.cartQty, 1);
+  const totals = calculateBuyXGetYLineTotals({
+    badge: product.buy_x_get_y_badge,
+    oldUnitPrice: oldPrice > price ? oldPrice : 0,
+    quantity: Math.max(availability.cartQty, 1),
+    unitPrice: price,
+  });
+  const totalPrice = totals.total;
+  const totalOldPrice = totals.oldTotal;
 
   const handleDecrease = (event: GestureResponderEvent) => {
     event.stopPropagation();
@@ -726,16 +734,21 @@ function ProductCard({
               <View style={styles.unitPriceWrap}>
                 <Text style={styles.unitPriceText}>{formatPrice(price)}</Text>
               </View>
-              <Pressable style={styles.qtyPillButton} onPress={handleDecrease}>
+              <Pressable hitSlop={catalogCardTapSlop} style={styles.qtyPillButton} onPress={handleDecrease}>
                 <Ionicons name={availability.cartQty > 1 ? 'remove' : 'trash'} color={theme.colors.primaryText} size={14} />
               </Pressable>
               <View style={styles.qtyPillCenter}>
-                {oldPrice > price ? <Text style={styles.oldPrice}>{formatPrice(oldPrice * availability.cartQty)}</Text> : null}
+                {totalOldPrice > totalPrice ? <Text style={styles.oldPrice}>{formatPrice(totalOldPrice)}</Text> : null}
                 <Text numberOfLines={1} style={styles.price}>
                   {formatPrice(totalPrice)}
                 </Text>
               </View>
-              <Pressable disabled={!canIncrease} style={[styles.qtyPillButton, !canIncrease && styles.qtyPillButtonDisabled]} onPress={handleIncrease}>
+              <Pressable
+                disabled={!canIncrease}
+                hitSlop={catalogCardTapSlop}
+                style={[styles.qtyPillButton, !canIncrease && styles.qtyPillButtonDisabled]}
+                onPress={handleIncrease}
+              >
                 <Ionicons name="add" color={canIncrease ? theme.colors.primaryText : theme.colors.muted} size={16} />
               </Pressable>
             </View>
@@ -745,7 +758,12 @@ function ProductCard({
                 {oldPrice > price ? <Text style={styles.oldPrice}>{formatPrice(oldPrice)}</Text> : null}
                 <Text numberOfLines={1} style={styles.price}>{formatPrice(price)}</Text>
               </View>
-              <Pressable disabled={!canIncrease} style={[styles.plusButton, !canIncrease && styles.plusButtonDisabled]} onPress={handleIncrease}>
+              <Pressable
+                disabled={!canIncrease}
+                hitSlop={catalogCardTapSlop}
+                style={[styles.plusButton, !canIncrease && styles.plusButtonDisabled]}
+                onPress={handleIncrease}
+              >
                 <Ionicons name="add" color={canIncrease ? theme.colors.primaryText : theme.colors.muted} size={18} />
               </Pressable>
             </View>

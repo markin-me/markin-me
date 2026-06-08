@@ -69,6 +69,7 @@ import {
   type TenantStore,
 } from '../../shared/api';
 import { theme } from '../../shared/config/theme';
+import { calculateBuyXGetYLineTotals } from '../../shared/lib/buyXGetY';
 import { formatPrice } from '../../shared/lib/formatPrice';
 import { AppText as Text, AppTextInput, BottomSheet } from '../../shared/ui';
 import { Screen } from '../../shared/ui/Screen';
@@ -257,13 +258,38 @@ function findSelectedStore(stores: TenantStore[], selection: FulfillmentSelectio
   return cityStores[0] || stores[0] || null;
 }
 
-function getLineTotal(line: CartLine) {
-  return Math.max(0, Number(line.unitPrice || 0)) * Math.max(1, Number(line.quantity || 1));
+function getCartLineCatalogProduct(line: CartLine, snapshot: Awaited<ReturnType<typeof readCachedMobileCatalogSnapshot>> | null) {
+  if (!snapshot || line.type !== 'product') return null;
+  const productId = Number(line.sourceId || 0);
+  if (!(productId > 0)) return null;
+  const passportProduct = snapshot.productPassports?.[String(productId)]?.product;
+  if (passportProduct) return passportProduct;
+  return Object.values(snapshot.productsByCategory || {})
+    .flatMap((products) => Array.isArray(products) ? products : [])
+    .find((item) => Number(item?.id || 0) === productId)
+    || null;
 }
 
-function getLineOldTotal(line: CartLine) {
-  const oldUnit = Number(line.oldUnitPrice || 0);
-  return oldUnit > line.unitPrice ? oldUnit * Math.max(1, Number(line.quantity || 1)) : 0;
+function getCartLineBuyXGetYBadge(line: CartLine, snapshot: Awaited<ReturnType<typeof readCachedMobileCatalogSnapshot>> | null) {
+  if (line.type !== 'product') return null;
+  return line.buyXGetYBadge || getCartLineCatalogProduct(line, snapshot)?.buy_x_get_y_badge || null;
+}
+
+function getLineTotals(line: CartLine, snapshot: Awaited<ReturnType<typeof readCachedMobileCatalogSnapshot>> | null = null) {
+  return calculateBuyXGetYLineTotals({
+    badge: getCartLineBuyXGetYBadge(line, snapshot),
+    oldUnitPrice: Number(line.oldUnitPrice || 0),
+    quantity: Math.max(1, Number(line.quantity || 1)),
+    unitPrice: Math.max(0, Number(line.unitPrice || 0)),
+  });
+}
+
+function getLineTotal(line: CartLine, snapshot: Awaited<ReturnType<typeof readCachedMobileCatalogSnapshot>> | null = null) {
+  return getLineTotals(line, snapshot).total;
+}
+
+function getLineOldTotal(line: CartLine, snapshot: Awaited<ReturnType<typeof readCachedMobileCatalogSnapshot>> | null = null) {
+  return getLineTotals(line, snapshot).oldTotal;
 }
 
 function getActiveCartLines(lines: CartLine[]) {
@@ -395,14 +421,16 @@ function normalizeDiscountDetailItems(preview: CheckoutBenefitsPreviewData | nul
     : [];
 }
 
-function buildCheckoutPreviewItems(lines: CartLine[]) {
+function buildCheckoutPreviewItems(lines: CartLine[], snapshot: Awaited<ReturnType<typeof readCachedMobileCatalogSnapshot>> | null) {
   return getActiveCartLines(lines).map((line) => {
     const quantity = Math.max(1, Number(line.quantity || 1));
-    const lineTotal = roundPrice(Number(line.unitPrice || 0) * quantity);
-    const oldLineTotal = roundPrice(Math.max(lineTotal, Number(line.oldUnitPrice || 0) * quantity));
+    const lineTotal = roundPrice(getLineTotal(line, snapshot));
+    const oldLineTotal = roundPrice(Math.max(lineTotal, getLineOldTotal(line, snapshot)));
+    const buyXGetYBadge = getCartLineBuyXGetYBadge(line, snapshot);
     const variantGroupId = Number(line.variant?.groupId || 0);
     const variantValueIndex = Number(line.variant?.valueIndex);
     const baseItem: Record<string, unknown> = {
+      buy_x_get_y_badge: line.type === 'product' && buyXGetYBadge ? buyXGetYBadge : null,
       cart_key: line.id,
       line_total: lineTotal,
       old_line_total: oldLineTotal,
@@ -554,7 +582,7 @@ function calculateCartBonusAccrual(lines: CartLine[], itemsTotal: number, level:
   let rawBonus = 0;
 
   lines.forEach((line) => {
-    const lineTotal = roundPrice(getLineTotal(line));
+    const lineTotal = roundPrice(getLineTotal(line, snapshot));
     if (!(lineTotal > 0)) return;
     const categoryIds = getCartLineCategoryIds(line, snapshot);
     const favoritePercent = Array.from(categoryIds).reduce((max, id) => Math.max(max, Number(favoritePercents.get(id) || 0)), 0);
@@ -580,7 +608,7 @@ function buildCartBonusState(lines: CartLine[], config: BonusConfig | null, favo
   const account = getBonusAccount(config);
   const level = getCartBonusActiveLevel(config);
   const joinLevel = getCartBonusJoinLevel(config);
-  const itemsTotal = activeLines.reduce((sum, line) => sum + getLineTotal(line), 0);
+  const itemsTotal = activeLines.reduce((sum, line) => sum + getLineTotal(line, snapshot), 0);
   const balance = Math.floor(Math.max(0, Number(account?.balance || 0)));
   const coinName = asText(settings.bonus_coin_name) || 'Бонусы';
   const coinLogoUrl = resolveAssetUrl(asText(settings.bonus_coin_logo));
@@ -608,13 +636,14 @@ function buildCartSummaryState(
   bonusState: CartBonusState,
   redeemActive: boolean,
   benefitsPreview: CheckoutBenefitsPreviewData | null,
+  snapshot: Awaited<ReturnType<typeof readCachedMobileCatalogSnapshot>> | null,
 ): CartSummaryState {
   const activeLines = getActiveCartLines(lines);
   const previewSummary = benefitsPreview?.summary && typeof benefitsPreview.summary === 'object' ? benefitsPreview.summary : null;
-  const fallbackItemsTotal = roundPrice(activeLines.reduce((sum, line) => sum + getLineTotal(line), 0));
+  const fallbackItemsTotal = roundPrice(activeLines.reduce((sum, line) => sum + getLineTotal(line, snapshot), 0));
   const fallbackSubtotalBeforeDiscount = roundPrice(activeLines.reduce((sum, line) => {
-    const total = getLineTotal(line);
-    const oldTotal = getLineOldTotal(line);
+    const total = getLineTotal(line, snapshot);
+    const oldTotal = getLineOldTotal(line, snapshot);
     return sum + Math.max(total, oldTotal);
   }, 0));
   const previewItemsTotal = roundPrice(previewSummary?.items_total);
@@ -699,6 +728,7 @@ export function CartPage() {
   const navigation = useNavigation<CartNavigation>();
   const headerScrollY = useRef(new Animated.Value(0)).current;
   const { mergeStockRows, refreshMany, stockLevels } = useProductStock();
+  const cartHydratedRef = useRef(false);
   const [lines, setLines] = useState<CartLine[]>([]);
   const [addresses, setAddresses] = useState<CustomerAddress[]>([]);
   const [stores, setStores] = useState<TenantStore[]>([]);
@@ -727,7 +757,7 @@ export function CartPage() {
   const activeLines = useMemo(() => getActiveCartLines(lines), [lines]);
   const hasActiveLines = activeLines.length > 0;
   const hasProblemLines = lines.some((line) => line.isUnavailable === true);
-  const subtotal = useMemo(() => activeLines.reduce((sum, line) => sum + getLineTotal(line), 0), [activeLines]);
+  const subtotal = useMemo(() => activeLines.reduce((sum, line) => sum + getLineTotal(line, catalogSnapshot), 0), [activeLines, catalogSnapshot]);
   const selectedAddress = useMemo(() => findSelectedAddress(addresses, selection), [addresses, selection]);
   const selectedStore = useMemo(() => findSelectedStore(stores, selection), [selection, stores]);
   const selectedDeliveryStore = useMemo(() => findDeliveryStore(stores, selectedAddress), [selectedAddress, stores]);
@@ -780,8 +810,8 @@ export function CartPage() {
   const redeemActive = bonusRedeemEnabled && bonusState.balance > 0 && bonusState.redeemAvailableAmount > 0;
   const redeemLabel = bonusState.allowRedeemAndAccrue ? 'Списать и начислить' : 'Списать';
   const cartSummary = useMemo(
-    () => buildCartSummaryState(activeLines, isDelivery && hasActiveLines ? Number(deliveryMeta?.cost || 0) : 0, bonusState, redeemActive, benefitsPreview),
-    [activeLines, benefitsPreview, bonusState, deliveryMeta?.cost, hasActiveLines, isDelivery, redeemActive],
+    () => buildCartSummaryState(activeLines, isDelivery && hasActiveLines ? Number(deliveryMeta?.cost || 0) : 0, bonusState, redeemActive, benefitsPreview, catalogSnapshot),
+    [activeLines, benefitsPreview, bonusState, catalogSnapshot, deliveryMeta?.cost, hasActiveLines, isDelivery, redeemActive],
   );
   const discountDetails = useMemo(() => [
     cartSummary.itemDiscountAmount > 0
@@ -796,7 +826,7 @@ export function CartPage() {
     cartSummary.itemDiscountAmount,
   ]);
 
-  const loadCart = useCallback(async () => {
+  const syncCartFromCache = useCallback(async () => {
     const [nextLines, nextSelection, passport, cachedStores, cachedOrderConfig, cachedCatalogSnapshot] = await Promise.all([
       readCartLines(),
       readFulfillmentSelection(),
@@ -808,8 +838,7 @@ export function CartPage() {
     const cachedAddresses = passport?.token
       ? await readCachedCustomerAddresses(passport.token)
       : passport?.addresses || [];
-    await warmFullProductPassports(collectCartStockProductIds(nextLines)).catch(() => null);
-    const stockState = await evaluateCartStockState(nextLines, stockLevels, refreshMany);
+    const stockState = await evaluateCartStockState(nextLines, stockLevels);
     const syncedLines = stockState.lines;
 
     setLines(syncedLines);
@@ -821,65 +850,96 @@ export function CartPage() {
     setBonusConfig(passport?.bonusConfig || null);
     setBonusFavoriteCategories(passport?.bonusFavoriteCategories || null);
     setCatalogSnapshot(cachedCatalogSnapshot);
-    setLoading(false);
 
     if (passport?.token) {
       const [cachedBenefits, cachedDiscounts] = await Promise.all([
         readCachedCustomerBenefits(passport.token),
         readCachedCustomerDiscounts(passport.token),
       ]);
-      setBenefitsCounts(getCartBenefitsCounts(cachedBenefits, cachedDiscounts));
-      const previewItems = buildCheckoutPreviewItems(syncedLines);
-      const nextPreview = previewItems.length
-        ? await fetchCheckoutBenefitsPreview(passport.token, {
-          items: previewItems,
-          method_code: nextSelection.mode === 'delivery' ? 'delivery' : 'takeaway',
-        }).catch(() => null)
-        : null;
-      setBenefitsPreview(nextPreview);
+      const cachedCounts = getCartBenefitsCounts(cachedBenefits, cachedDiscounts);
+      setBenefitsCounts((currentCounts) => (
+        isSameCachedValue(cachedCounts, currentCounts) ? currentCounts : cachedCounts
+      ));
     } else {
       setBenefitsCounts(emptyBenefitsCounts);
       setBenefitsPreview(null);
     }
 
-    const levelId = getCartBonusCurrentLevelId(passport?.bonusConfig || null);
-    const [freshStores, freshOrderConfig, freshAddresses, freshBenefits, freshDiscounts, freshBonusConfig] = await Promise.all([
-      fetchTenantStores().catch(() => cachedStores || []),
-      fetchPublicOrderConfig().catch(() => cachedOrderConfig),
-      passport?.token ? fetchCustomerAddresses(passport.token).catch(() => cachedAddresses) : Promise.resolve(cachedAddresses),
-      passport?.token ? fetchCustomerBenefits(passport.token).catch(() => null) : Promise.resolve(null),
-      passport?.token ? fetchCustomerDiscounts(passport.token).catch(() => []) : Promise.resolve([]),
-      passport?.token ? fetchBonusConfig(passport.token).catch(() => passport.bonusConfig || null) : Promise.resolve(null),
-    ]);
-    const freshLevelId = getCartBonusCurrentLevelId(freshBonusConfig);
-    const favoriteLevelId = freshLevelId || levelId;
-    const freshBonusFavoriteCategories = passport?.token && favoriteLevelId > 0
-      ? await fetchBonusFavoriteCategories(passport.token, favoriteLevelId).catch(() => passport.bonusFavoriteCategories || null)
-      : passport?.bonusFavoriteCategories || null;
-    if (!isSameCachedValue(freshStores, cachedStores || [])) setStores(freshStores);
-    if (!isSameCachedValue(freshOrderConfig, cachedOrderConfig)) setOrderConfig(freshOrderConfig);
-    if (!isSameCachedValue(freshAddresses, cachedAddresses)) setAddresses(freshAddresses);
-    if (passport?.token) {
-      setBonusConfig(freshBonusConfig);
-      setBonusFavoriteCategories(freshBonusFavoriteCategories);
-      const freshCounts = getCartBenefitsCounts(freshBenefits, freshDiscounts);
-      setBenefitsCounts((currentCounts) => (
-        isSameCachedValue(freshCounts, currentCounts) ? currentCounts : freshCounts
-      ));
-      await saveCustomerPassport({
-        ...(passport as CustomerPassport),
-        addresses: freshAddresses,
-        bonusConfig: freshBonusConfig,
-        bonusFavoriteCategories: freshBonusFavoriteCategories,
-        updatedAt: new Date().toISOString(),
-      });
-    }
-  }, [refreshMany, stockLevels]);
+    return {
+      cachedAddresses,
+      cachedCatalogSnapshot,
+      cachedOrderConfig,
+      cachedStores: cachedStores || [],
+      nextSelection,
+      passport,
+      syncedLines,
+    };
+  }, [stockLevels]);
+
+  const loadCart = useCallback(async () => {
+    const cachedState = await syncCartFromCache();
+    cartHydratedRef.current = true;
+    setLoading(false);
+    void warmFullProductPassports(collectCartStockProductIds(cachedState.syncedLines)).catch(() => null);
+
+    void (async () => {
+      const { passport, cachedAddresses, cachedCatalogSnapshot, cachedStores, cachedOrderConfig, nextSelection, syncedLines } = cachedState;
+      const levelId = getCartBonusCurrentLevelId(passport?.bonusConfig || null);
+      const [freshStores, freshOrderConfig, freshAddresses, freshBenefits, freshDiscounts, freshBonusConfig] = await Promise.all([
+        fetchTenantStores().catch(() => cachedStores),
+        fetchPublicOrderConfig().catch(() => cachedOrderConfig),
+        passport?.token ? fetchCustomerAddresses(passport.token).catch(() => cachedAddresses) : Promise.resolve(cachedAddresses),
+        passport?.token ? fetchCustomerBenefits(passport.token).catch(() => null) : Promise.resolve(null),
+        passport?.token ? fetchCustomerDiscounts(passport.token).catch(() => []) : Promise.resolve([]),
+        passport?.token ? fetchBonusConfig(passport.token).catch(() => passport.bonusConfig || null) : Promise.resolve(null),
+      ]);
+      const freshLevelId = getCartBonusCurrentLevelId(freshBonusConfig);
+      const favoriteLevelId = freshLevelId || levelId;
+      const freshBonusFavoriteCategories = passport?.token && favoriteLevelId > 0
+        ? await fetchBonusFavoriteCategories(passport.token, favoriteLevelId).catch(() => passport.bonusFavoriteCategories || null)
+        : passport?.bonusFavoriteCategories || null;
+      if (!isSameCachedValue(freshStores, cachedStores)) setStores(freshStores);
+      if (!isSameCachedValue(freshOrderConfig, cachedOrderConfig)) setOrderConfig(freshOrderConfig);
+      if (!isSameCachedValue(freshAddresses, cachedAddresses)) setAddresses(freshAddresses);
+      if (passport?.token) {
+        setBonusConfig(freshBonusConfig);
+        setBonusFavoriteCategories(freshBonusFavoriteCategories);
+        const freshCounts = getCartBenefitsCounts(freshBenefits, freshDiscounts);
+        setBenefitsCounts((currentCounts) => (
+          isSameCachedValue(freshCounts, currentCounts) ? currentCounts : freshCounts
+        ));
+        const previewItems = buildCheckoutPreviewItems(syncedLines, cachedCatalogSnapshot);
+        const nextPreview = previewItems.length
+          ? await fetchCheckoutBenefitsPreview(passport.token, {
+            items: previewItems,
+            method_code: nextSelection.mode === 'delivery' ? 'delivery' : 'takeaway',
+          }).catch(() => null)
+          : null;
+        setBenefitsPreview(nextPreview);
+        await saveCustomerPassport({
+          ...(passport as CustomerPassport),
+          addresses: freshAddresses,
+          bonusConfig: freshBonusConfig,
+          bonusFavoriteCategories: freshBonusFavoriteCategories,
+          updatedAt: new Date().toISOString(),
+        });
+      }
+      void evaluateCartStockState(syncedLines, stockLevels, refreshMany).then((stockState) => {
+        setLines(stockState.lines);
+        setStockBlockedLineIds(stockState.blockedLineIds);
+      }).catch(() => null);
+    })().catch(() => null);
+  }, [refreshMany, stockLevels, syncCartFromCache]);
+
+  useEffect(() => {
+    void loadCart();
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
-      void loadCart();
-    }, [loadCart]),
+      if (!cartHydratedRef.current) return;
+      void syncCartFromCache().catch(() => null);
+    }, [syncCartFromCache]),
   );
 
   useFocusEffect(
@@ -1062,8 +1122,8 @@ export function CartPage() {
   }, [navigation]);
 
   const renderLine = (line: CartLine) => {
-    const total = getLineTotal(line);
-    const oldTotal = getLineOldTotal(line);
+    const total = getLineTotal(line, catalogSnapshot);
+    const oldTotal = getLineOldTotal(line, catalogSnapshot);
     const discountPercent = getDiscountPercent(total, oldTotal);
     const unavailable = line.isUnavailable === true;
     const plusBlocked = unavailable || stockBlockedLineIds.has(line.id);

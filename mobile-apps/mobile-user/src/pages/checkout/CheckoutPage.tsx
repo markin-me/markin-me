@@ -27,6 +27,7 @@ import {
   type PublicOrderConfig,
 } from '../../shared/api';
 import { theme } from '../../shared/config/theme';
+import { calculateBuyXGetYLineTotals } from '../../shared/lib/buyXGetY';
 import { formatPrice } from '../../shared/lib/formatPrice';
 import { AppText as Text, AppTextInput, BottomSheet } from '../../shared/ui';
 import { Screen } from '../../shared/ui/Screen';
@@ -87,7 +88,12 @@ function asOptions(value: unknown): CheckoutOption[] {
 }
 
 function getLineTotal(line: CartLine) {
-  return Math.max(0, Number(line.unitPrice || 0)) * Math.max(1, Number(line.quantity || 1));
+  return calculateBuyXGetYLineTotals({
+    badge: line.buyXGetYBadge || null,
+    oldUnitPrice: Number(line.oldUnitPrice || 0),
+    quantity: Math.max(1, Number(line.quantity || 1)),
+    unitPrice: Math.max(0, Number(line.unitPrice || 0)),
+  }).total;
 }
 
 function getCartTotal(lines: CartLine[]) {

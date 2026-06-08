@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import type { CatalogBuyXGetYBadge } from '../../entities/product';
 
 export type CartLineType = 'product' | 'combo';
 
@@ -42,6 +43,7 @@ export type CartComboSelection = {
 export type CartLine = {
   comboDraft?: unknown;
   comboSelections?: CartComboSelection[];
+  buyXGetYBadge?: CatalogBuyXGetYBadge | null;
   id: string;
   type: CartLineType;
   sourceId: number;
@@ -74,6 +76,39 @@ function normalizeOptionalId(value: unknown) {
 
 function normalizeText(value: unknown) {
   return String(value || '').trim();
+}
+
+function normalizeBuyXGetYBadge(value: unknown): CatalogBuyXGetYBadge | null {
+  const source = value && typeof value === 'object' ? value as Partial<CatalogBuyXGetYBadge> & Record<string, unknown> : null;
+  if (!source) return null;
+
+  const badgeText = normalizeText(source.badge_text);
+  const title = normalizeText(source.title);
+  const repeatMode = normalizeText(source.repeat_mode);
+  const buyQty = source.buy_qty == null ? null : normalizeOptionalId(source.buy_qty);
+  const rewardQty = source.reward_qty == null ? null : normalizeOptionalId(source.reward_qty);
+  const id = source.id == null ? null : normalizeOptionalId(source.id);
+  const isStackable = source.is_stackable == null
+    ? null
+    : source.is_stackable === true || source.is_stackable === 1 || source.is_stackable === '1'
+      ? true
+      : source.is_stackable === false || source.is_stackable === 0 || source.is_stackable === '0'
+        ? false
+        : String(source.is_stackable).trim() ? String(source.is_stackable).trim() : null;
+
+  if (!badgeText && !title && buyQty == null && rewardQty == null && id == null && !repeatMode && isStackable == null) {
+    return null;
+  }
+
+  return {
+    badge_text: badgeText || null,
+    buy_qty: buyQty,
+    id,
+    is_stackable: isStackable,
+    repeat_mode: repeatMode || null,
+    reward_qty: rewardQty,
+    title: title || null,
+  };
 }
 
 function normalizeVariant(value: unknown): CartVariant | null {
@@ -170,6 +205,7 @@ function normalizeCartLine(value: unknown): CartLine | null {
   return {
     comboDraft: source.comboDraft && typeof source.comboDraft === 'object' ? source.comboDraft : null,
     comboSelections: normalizeComboSelections(source.comboSelections),
+    buyXGetYBadge: normalizeBuyXGetYBadge((source as Record<string, unknown>).buyXGetYBadge ?? (source as Record<string, unknown>).buy_x_get_y_badge),
     detailLines: Array.isArray(source.detailLines)
       ? source.detailLines.map((line) => String(line || '').trim()).filter(Boolean)
       : [],

@@ -43,6 +43,12 @@ import { routes, type RootStackParamList } from '../../app/navigation/routes';
 
 import { AppText as Text, AppTextInput as TextInput } from '../../shared/ui';
 type AuthStep = 'phone' | 'birthday' | 'code';
+const PROFILE_PASSPORT_FRESH_MS = 30000;
+
+function isFreshPassport(passport: CustomerPassport) {
+  const updatedAtMs = Date.parse(passport.updatedAt || '');
+  return Number.isFinite(updatedAtMs) && Date.now() - updatedAtMs < PROFILE_PASSPORT_FRESH_MS;
+}
 
 function normalizePhoneDigits(value: string) {
   let digits = String(value || '').replace(/\D/g, '');
@@ -385,6 +391,7 @@ export function ProfilePage() {
   const [code, setCode] = useState('');
   const [needsNameInput, setNeedsNameInput] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [passportChecked, setPassportChecked] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [errorText, setErrorText] = useState('');
   const [levelPopoverVisible, setLevelPopoverVisible] = useState(false);
@@ -397,8 +404,10 @@ export function ProfilePage() {
     async function loadProfile() {
       const cached = await readCachedCustomerPassport();
       if (!isMounted) return;
+      setPassportChecked(true);
       if (cached) {
         setPassport(cached);
+        if (isFreshPassport(cached)) return;
         setRefreshing(true);
         try {
           const fresh = await refreshCustomerPassport(cached.token, cached.customer);
@@ -425,7 +434,10 @@ export function ProfilePage() {
     useCallback(() => {
       let isActive = true;
       void readCachedCustomerPassport().then((cached) => {
-        if (isActive) setPassport(cached);
+        if (isActive) {
+          setPassport(cached);
+          setPassportChecked(true);
+        }
       });
       return () => {
         isActive = false;
@@ -617,6 +629,16 @@ export function ProfilePage() {
       setLoading(false);
     }
   };
+
+  if (!passport && !passportChecked) {
+    return (
+      <Screen edges={['top']}>
+        <View style={styles.authRoot}>
+          <ActivityIndicator color={theme.colors.accent} />
+        </View>
+      </Screen>
+    );
+  }
 
   if (!passport) {
     return (

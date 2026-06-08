@@ -55,6 +55,7 @@ import {
   resolveAssetUrl,
 } from '../../shared/api';
 import { theme } from '../../shared/config/theme';
+import { calculateBuyXGetYLineTotals } from '../../shared/lib/buyXGetY';
 import { formatPrice } from '../../shared/lib/formatPrice';
 import {
   getStockLevelEntry,
@@ -1189,23 +1190,36 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
     ? roundPrice(Math.max(0, comboDiscountPercent >= 100 ? 0 : unitBeforeDiscount * (1 - comboDiscountPercent / 100)))
     : unitPrice;
   const displayQuantity = Math.max(1, quantity);
-  const totalPrice = roundPrice((comboContext ? comboUnitPrice : unitPrice) * displayQuantity);
   const totalOldByDiscount = discountAmount > 0 ? roundPrice(unitBeforeDiscount * displayQuantity) : 0;
   const oldBase = getOldPrice(product);
   const totalOldFromProduct = oldBase > unitPrice ? roundPrice((oldBase + optionTotal + ingredientPriceDiff) * displayQuantity) : 0;
+  const productOldUnitPrice = Math.max(
+    unitBeforeDiscount > unitPrice ? unitBeforeDiscount : 0,
+    oldBase > unitPrice ? oldBase + optionTotal + ingredientPriceDiff : 0,
+  );
+  const productBuyXGetYTotals = comboContext ? null : calculateBuyXGetYLineTotals({
+    badge: product?.buy_x_get_y_badge || null,
+    oldUnitPrice: productOldUnitPrice,
+    quantity: displayQuantity,
+    unitPrice,
+  });
+  const totalPrice = comboContext
+    ? roundPrice(comboUnitPrice * displayQuantity)
+    : productBuyXGetYTotals?.total ?? roundPrice(unitPrice * displayQuantity);
   const totalOldPrice = comboContext && unitBeforeDiscount > comboUnitPrice
     ? roundPrice(unitBeforeDiscount * displayQuantity)
-    : totalOldByDiscount || totalOldFromProduct;
+    : productBuyXGetYTotals?.oldTotal ?? (totalOldByDiscount || totalOldFromProduct);
   const stockQtyForSubmit = existingCartQty + displayQuantity - 1;
   const availabilityState = product ? getProductAvailabilityState(product, stockLevels, stockQtyForSubmit) : null;
   const available = product ? isProductStockAvailable(product, stockLevels) : false;
   const configuredCartLine = useMemo(() => {
     if (!product) return null;
     const line = {
+      buyXGetYBadge: product.buy_x_get_y_badge || null,
       detailLines: buildProductCartDetailLines(variantState.label, ingredients, ingredientState, selectedOptionItems),
       ingredients: currentCartIngredients,
       isUnavailable: !isProductStockAvailable(product, stockLevels),
-      oldUnitPrice: unitBeforeDiscount > unitPrice ? unitBeforeDiscount : 0,
+      oldUnitPrice: productOldUnitPrice,
       options: currentCartOptions,
       photoUrl: getImage(product),
       quantity: displayQuantity,
@@ -1223,9 +1237,9 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
     ingredientState,
     ingredients,
     product,
+    productOldUnitPrice,
     selectedOptionItems,
     stockLevels,
-    unitBeforeDiscount,
     unitPrice,
     variantState,
     variants,
@@ -1307,10 +1321,11 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
     const latestProduct = product;
     if (!getProductAvailabilityState(latestProduct, latestStockLevels, existingCartQty + displayQuantity - 1).availableForAdd) return;
     const line = {
+      buyXGetYBadge: latestProduct.buy_x_get_y_badge || null,
       detailLines: buildProductCartDetailLines(variantState.label, ingredients, ingredientState, selectedOptionItems),
       ingredients: currentCartIngredients,
       isUnavailable: !isProductStockAvailable(latestProduct, latestStockLevels),
-      oldUnitPrice: unitBeforeDiscount > unitPrice ? unitBeforeDiscount : 0,
+      oldUnitPrice: productOldUnitPrice,
       options: currentCartOptions,
       photoUrl: getImage(latestProduct),
       quantity: displayQuantity,
@@ -1368,11 +1383,11 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
     ingredients,
     navigation,
     product,
+    productOldUnitPrice,
     selectedOptionItems,
     mergeStockRows,
     refreshMany,
     stockLevels,
-    unitBeforeDiscount,
     unitPrice,
     variantState.label,
     variantState.selectedIndex,
