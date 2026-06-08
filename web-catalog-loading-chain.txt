@@ -1,0 +1,205 @@
+Цепочка загрузки каталога веб-витрины
+
+Источник разбора:
+- HAR: shop-2.localhost.har.
+- Клиентская цепочка: static/js/shop-core.js.
+- Серверная цепочка: api/public/shop.js из HEAD, потому что рабочий файл api/public/shop.js уже изменен прошлой попыткой и его рабочее содержимое не смотрел.
+
+Что важно по HAR
+
+1. Часть GET-запросов в HAR имеет статус 304. Это прямой признак, что браузер использовал валидированный кеш, но в HAR есть тела ответов, поэтому цепочка и поля видны.
+2. В HAR видно, что страница не ждет один большой "каталог со всем". Она поднимает каркас витрины, категории, товары, затем отдельными батчами уточняет доступность и остатки.
+3. Запрос /api/public/products/batch/availability в HAR идет уже через 125 мс после /api/public/shop/bootstrap. Это похоже на быстрый первый paint из localStorage snapshot: карточки уже были восстановлены из локального снимка, после чего клиент сразу обновил доступность для известных product id.
+
+Основная цепочка старта
+
+1. Страница витрины подключает static/js/shop-core.js.
+2. initCore() сначала пробует restoreCatalogSnapshotForFastPaint().
+   - Снимок хранится в localStorage по ключу вида shop_catalog_snapshot_v1_t{tenant}_s{store}.
+   - Если снимок свежий, applyCatalogSnapshot() кладет категории, productsByCategory, combosByCategory и productPassports в state.
+   - Для каждого продукта из снимка вызывается cacheStockFromProductPayload(), затем p.is_available = isProductAvailable(p).
+   - После этого сразу renderProducts() и queueCatalogPassportRefresh().
+3. Затем loadShopBootstrap() делает GET /api/public/shop/bootstrap.
+   - В HAR: первый запрос, status 304.
+   - Ответ: ok=true, data.categories[9], data.orderConfig, data.unitConversions[4].
+   - Серверная ручка собирает loadPublicCategoriesPayload(), loadPublicOrderConfigPayload(), loadPublicUnitConversionsPayload().
+4. После bootstrap клиент рисует категории и чипы:
+   - renderCategories()
+   - renderCategoryChips()
+   - setActiveCategory() выбирает первую видимую категорию.
+   - В HAR первая категория: id=7, "Вторые блюда".
+5. loadProductsByCategory() делает POST /api/public/products/batch/categories.
+   - В HAR тело: {"category_ids":[7,6,5,4,2,3,13,12,11]}.
+   - Ответ: data по category_id и combos по category_id.
+   - По HAR количество товаров:
+     - 2: 5
+     - 3: 3
+     - 4: 8
+     - 5: 5
+     - 6: 4
+     - 7: 23
+     - 11: 11
+     - 12: 2
+     - 13: 0
+   - Комбо в этом ответе лежат отдельно: category 13 содержит 3 комбо: "Второе+суп+напиток", "Второе+суп", "Завтрак".
+6. Для каждого товара из batch/categories клиент:
+   - ensureCachedProductCategoryIds(p, id)
+   - safePhotos(p)
+   - cacheStockFromProductPayload(p, "products_by_category")
+   - p.is_available = isProductAvailable(p)
+   - state.productCache.set(product_id, p)
+   - mergeProductPassport(product_id, { product: p })
+   - state.productsByCategory.set(category_id, list)
+   - saveCatalogSnapshotFromState()
+7. Когда товары готовы к первому отображению:
+   - renderProducts()
+   - queueVisibleProductStockRefresh("first_paint", 0)
+   - scheduleAllProductIngredientBatch()
+
+Как сервер отдает товары и sold out
+
+1. /api/public/products/batch/categories выбирает товары по категориям и сразу добавляет:
+   - s.qty AS stock_qty
+   - is_available
+2. is_available на сервере считается не только по s.qty.
+   - stock qty null означает "нет прямого лимита по самому товару".
+   - Но для составных/made_to_order товаров сервер дополнительно проверяет обязательные ингредиенты.
+   - Если обязательный ингредиент недоступен или у опционной группы нет доступного варианта, итоговый is_available становится false.
+3. Поэтому в HAR товар "Котлета по-домашнему с макаронами" имеет stock_qty=null, но is_available=false.
+   - В каталоге он сразу отображается как "Раскупили".
+   - Дальше /products/batch/availability подтверждает это: product_id=50, is_available=false, unavailable_reason="OUT_OF_STOCK".
+
+Как отдельный availability-батч обновляет карточки
+
+1. queueVisibleProductStockRefresh() собирает product id:
+   - видимые карточки .sp-card[data-product-id]
+   - товары в корзине
+   - товары внутри комбо в корзине
+   - открытый товар, если есть карточка/модалка товара
+2. flushProductStockAvailabilityRefresh() делает POST /api/public/products/batch/availability.
+3. В HAR были такие батчи:
+   - 61 id сразу после старта/snapshot.
+   - 19 id после загрузки/открытия комбо или видимой категории.
+   - 3 id для завтрака/комбо.
+4. Ответ содержит два одинаково полезных представления:
+   - data: объект по product_id.
+   - stock_levels: массив строк.
+5. applyStockAvailabilityRow() для каждой строки:
+   - кладет qty/isAvailable в state.stockLevels.
+   - обновляет cachedProduct.stock_qty.
+   - обновляет cachedProduct.is_available, если сервер прислал is_available.
+   - обновляет productPassport.
+6. После батча клиент вызывает:
+   - pruneUnavailableCartItems()
+   - scheduleSyncAllProductCardsFromCart()
+   - renderCart(true)
+   - updateCartBadge()
+
+Как карточка решает, доступен ли товар
+
+1. isProductAvailable(product) смотрит:
+   - product.is_available, если поле явно есть.
+   - state.stockLevels по product_id.
+   - product.stock_qty, если нет других данных.
+2. Если product.is_available === false, товар считается недоступным даже при stock_qty=null.
+3. При renderProducts():
+   - available = isProductAvailable(p)
+   - если !available, карточка получает класс is-unavailable.
+   - плюс создается disabled.
+   - media pill показывает "Раскупили".
+4. При обновлении карточки через applyCardState():
+   - stockAvailable = isProductAvailable(product)
+   - remaining = getAvailableStock(product_id)
+   - plusBlockedByLimit = remaining <= 0
+   - plusBlockedByIngredients = isProductBlockedByIngredientRequirements(product_id)
+   - availableForAdd = stockAvailable && !plusBlockedByLimit && !plusBlockedByIngredients
+5. Текст плашки:
+   - если availableForAdd=false и qty=0: "Раскупили"
+   - если availableForAdd=false и qty>0: "Больше нет"
+   - если товар настраиваемый и доступен: "Настроить"
+
+Как считается остаток на плюс/минус
+
+1. Остатки хранятся в state.stockLevels.
+2. getAvailableStock(productId) возвращает:
+   - Infinity, если остаток null/undefined или помечен unlimited.
+   - stockQty - calcProductStockConsumed(productId), если остаток конечный.
+3. calcProductStockConsumed(productId) считает потребление по всей корзине:
+   - основной товар
+   - option items
+   - ingredients
+   - combo selections
+   - ingredients внутри combo selections
+   - с учетом unit conversions, где они есть.
+4. Перед добавлением по "+" changeQty() вызывает canIncreaseRegularCartItemBeforeApply().
+5. canIncreaseRegularCartItemBeforeApply():
+   - сначала проверяет, не заблокирован ли сам товар.
+   - проверяет isProductBlockedByIngredientRequirements(product_id).
+   - клонирует корзину.
+   - применяет будущий + к черновику.
+   - собирает affectedProducts: сам product_id + ingredient_id из требований товара.
+   - canUseCartDraftForProductIds() проверяет, что потребление в черновике не превышает stock qty каждого affected product.
+6. Если черновик превышает остаток:
+   - добавление не происходит.
+   - показывается "Больше нет в наличии".
+   - для cart key ставится hard limit.
+   - карточки синхронизируются.
+7. Если "-" освобождает количество:
+   - hard limit очищается.
+   - state.cart сохраняется.
+   - scheduleSyncAllProductCardsFromCart() пересчитывает видимые карточки.
+
+Почему общий состав у разных товаров стопится вместе
+
+1. Для составных товаров клиент строит карту требований:
+   - product_id -> Map(ingredient_id -> required quantity)
+2. Эти требования берутся из productPassport.ingredients, если они уже есть, или догружаются через /api/public/products/batch/ingredients.
+3. Если два разных товара используют один ingredient_id, они смотрят на один и тот же stockLevels[ingredient_id].
+4. При добавлении товара A calcProductStockConsumed(ingredient_id) учитывает расход этого ингредиента в корзине.
+5. Товар B при applyCardState() видит уже уменьшенный getAvailableStock(ingredient_id).
+6. Когда remaining по общему ingredient_id становится меньше requiredAmount для товара B:
+   - isProductBlockedByIngredientRequirements(B)=true
+   - availableForAdd=false
+   - плюс блокируется
+   - плашка становится "Раскупили" или "Больше нет" в зависимости от qty B в корзине.
+
+Комбо
+
+1. Карточки комбо приходят в /products/batch/categories внутри поля combos для category_id=13.
+2. Детали конкретного комбо грузятся отдельно:
+   - GET /api/public/combos/9 -> "Второе+суп+напиток", discount 35
+   - GET /api/public/combos/10 -> "Второе+суп", discount 15
+   - GET /api/public/combos/11 -> "Завтрак", discount 5
+3. В ответе combo details есть blocks:
+   - block_id
+   - block_title
+   - min_select/max_select
+   - products
+   - у каждого продукта есть product_id, product_name, is_available и preview.ingredients/ingredients_display.
+4. Для комбо доступность каталожной карточки проверяется через isComboCatalogEntryAvailable():
+   - каждый обязательный блок должен иметь хотя бы один добавляемый продукт.
+5. При увеличении количества комбо canIncreaseComboCartItemBeforeApply() делает то же, что обычный товар:
+   - клонирует корзину.
+   - увеличивает qty в черновике.
+   - collectComboCartAffectedProductIds() собирает выбранные product_id и их ingredient_id.
+   - canUseCartDraftForProductIds() проверяет общий расход против stock qty.
+
+Критичные точки, которые нельзя терять при переносе логики
+
+1. Нельзя опираться только на product.stock_qty.
+   - sold out может прийти через product.is_available=false при stock_qty=null.
+2. Нельзя считать остаток только по самому product_id.
+   - надо учитывать ingredient_id, option target_product_id и combo selections.
+3. Нельзя делать отдельную независимую логику для карточки и детальной страницы.
+   - они должны смотреть на один productCache, productPassports, stockLevels и одни функции расчета.
+4. После изменения qty надо синхронизировать все карточки этого товара и карточки, зависящие от общих ингредиентов.
+5. Для первого paint надо учитывать snapshot:
+   - сначала может быть локальный снимок,
+   - затем bootstrap/products,
+   - затем availability-батч, который исправляет sold out/остатки.
+
+Что я не трогал
+
+- Код не менял.
+- Тесты не запускал.
+- Рабочее содержимое файлов, измененных прошлой попыткой, не анализировал.

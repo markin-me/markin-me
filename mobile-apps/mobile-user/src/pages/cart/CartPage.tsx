@@ -1,12 +1,12 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import {
   ActivityIndicator,
+  Animated,
   Image,
   Pressable,
-  ScrollView,
   StyleSheet,
   View,
 } from 'react-native';
@@ -14,18 +14,24 @@ import {
 import type { RootStackParamList } from '../../app/navigation/routes';
 import { routes } from '../../app/navigation/routes';
 import {
+  cartLinesToStockCheckItems,
   clearCartLines,
   formatCartIngredientLine,
   formatCartOptionLine,
   formatCartVariantLine,
+  getCartLineStockProductIds,
   readCartLines,
   removeCartLine,
+  saveCartLines,
   updateCartLineQuantity,
   type CartLine,
 } from '../../features/cart';
+import { calculateCartStockLimit, getStockProductIdsForLines, useProductStock } from '../../features/stock';
 import {
+  saveCheckoutCartSummary,
   readFulfillmentSelection,
   saveFulfillmentSelection,
+  type CheckoutCartSummary,
   type FulfillmentMode,
   type FulfillmentSelection,
 } from '../../features/checkout';
@@ -35,6 +41,8 @@ import {
   fetchBonusFavoriteCategories,
   fetchCustomerBenefits,
   fetchCustomerDiscounts,
+  fetchCheckoutBenefitsPreview,
+  checkOrderStock,
   fetchPublicOrderConfig,
   fetchTenantStores,
   isSameCachedValue,
@@ -49,12 +57,14 @@ import {
   resolveAssetUrl,
   saveCustomerPassport,
   joinBonusProgram,
+  warmFullProductPassports,
   type BonusConfig,
   type BonusFavoriteCategories,
   type CustomerAddress,
   type CustomerBenefitCard,
   type CustomerPassport,
   type CustomerBenefits,
+  type CheckoutBenefitsPreviewData,
   type PublicOrderConfig,
   type TenantStore,
 } from '../../shared/api';
@@ -94,17 +104,7 @@ type CartBonusState = {
   level: Record<string, unknown> | null;
   redeemAvailableAmount: number;
 };
-type CartSummaryState = {
-  bonusAccrualAmount: number;
-  bonusAccrualBlockedByRedeem: boolean;
-  bonusRedeemAmount: number;
-  deliveryCost: number;
-  discountAmount: number;
-  itemDiscountAmount: number;
-  itemsTotal: number;
-  subtotalBeforeDiscount: number;
-  total: number;
-};
+type CartSummaryState = CheckoutCartSummary;
 
 const emptyBenefitsCounts: CartBenefitsCounts = {
   discounts: 0,
@@ -126,6 +126,13 @@ const emptyBonusState: CartBonusState = {
   level: null,
   redeemAvailableAmount: 0,
 };
+
+const CART_HEADER_TOGGLE_HEIGHT = 44;
+const CART_HEADER_META_HEIGHT = 58;
+const CART_HEADER_TOGGLE_SCROLL = 54;
+const CART_HEADER_FULL_HEIGHT = 199;
+const CART_HEADER_COMPACT_HEIGHT = 77;
+const CART_HEADER_META_SCROLL = CART_HEADER_FULL_HEIGHT - CART_HEADER_COMPACT_HEIGHT;
 
 function toPositiveId(value: unknown) {
   const id = Number(value || 0);
@@ -259,6 +266,66 @@ function getLineOldTotal(line: CartLine) {
   return oldUnit > line.unitPrice ? oldUnit * Math.max(1, Number(line.quantity || 1)) : 0;
 }
 
+function getActiveCartLines(lines: CartLine[]) {
+  return lines.filter((line) => line.isUnavailable !== true);
+}
+
+function replaceCartLine(lines: CartLine[], nextLine: CartLine) {
+  return lines.map((line) => line.id === nextLine.id ? nextLine : line);
+}
+
+type RefreshManyStock = (ids: number[]) => Promise<unknown>;
+
+function collectCartStockProductIds(lines: CartLine[]) {
+  return Array.from(new Set(lines.flatMap((line) => getCartLineStockProductIds(line))));
+}
+
+function collectKnownCartStockProductIds(lines: CartLine[], stockLevels: ReturnType<typeof useProductStock>['stockLevels']) {
+  return Array.from(new Set([
+    ...collectCartStockProductIds(lines),
+    ...getStockProductIdsForLines(lines, stockLevels),
+  ]));
+}
+
+function getRefreshStockLevels(result: unknown, fallback: ReturnType<typeof useProductStock>['stockLevels']) {
+  const source = result && typeof result === 'object' ? result as { stockLevels?: ReturnType<typeof useProductStock>['stockLevels'] } : null;
+  return source?.stockLevels instanceof Map ? source.stockLevels : fallback;
+}
+
+async function evaluateCartStockState(
+  lines: CartLine[],
+  stockLevels: ReturnType<typeof useProductStock>['stockLevels'],
+  refreshMany?: RefreshManyStock,
+) {
+  if (!lines.length) return { blockedLineIds: new Set<string>(), lines };
+
+  const affectedProductIds = collectKnownCartStockProductIds(lines, stockLevels);
+  const refreshResult = affectedProductIds.length ? await refreshMany?.(affectedProductIds).catch(() => null) : null;
+  const latestStockLevels = getRefreshStockLevels(refreshResult, stockLevels);
+  let changed = false;
+  const nextLines = lines.map((line) => {
+    const currentLimit = calculateCartStockLimit(lines, latestStockLevels, line.id);
+    const isUnavailable = !currentLimit.canAdd && currentLimit.reason !== 'unknown_stock';
+    if (line.isUnavailable === isUnavailable) return line;
+    changed = true;
+    return { ...line, isUnavailable };
+  });
+
+  const blockedLineIds = new Set<string>();
+  for (const line of nextLines) {
+    if (line.isUnavailable === true) {
+      blockedLineIds.add(line.id);
+      continue;
+    }
+    const plusLine = { ...line, quantity: Math.max(1, Number(line.quantity || 1)) + 1 };
+    const plusLimit = calculateCartStockLimit(replaceCartLine(nextLines, plusLine), latestStockLevels, line.id);
+    if (!plusLimit.canAdd) blockedLineIds.add(line.id);
+  }
+
+  const savedLines = changed ? await saveCartLines(nextLines) : nextLines;
+  return { blockedLineIds, lines: savedLines };
+}
+
 function getDiscountPercent(total: number, oldTotal: number) {
   if (!(oldTotal > total) || !(oldTotal > 0)) return 0;
   return Math.round((1 - total / oldTotal) * 100);
@@ -306,6 +373,75 @@ function roundPrice(value: unknown) {
   const number = Number(value || 0);
   if (!Number.isFinite(number)) return 0;
   return Math.round(number * 100) / 100;
+}
+
+function normalizeDiscountDetailItems(preview: CheckoutBenefitsPreviewData | null): Array<Record<string, unknown>> {
+  const breakdown = preview?.summary?.discount_breakdown;
+  return Array.isArray(breakdown)
+    ? breakdown.map((entry, index) => {
+      const amount = roundPrice(entry?.amount);
+      if (!(amount > 0)) return null;
+      return {
+        amount,
+        discount_id: Number(entry?.discount_id || 0) || null,
+        key: asText(entry?.key) || asText(entry?.title) || `discount_${index}`,
+        promo_code: asText(entry?.promo_code) || null,
+        promo_code_id: Number(entry?.promo_code_id || 0) || null,
+        reward_id: Number(entry?.reward_id || 0) || null,
+        source_kind: asText(entry?.source_kind) || null,
+        title: asText(entry?.title) || 'Скидка',
+      };
+    }).filter((entry) => !!entry) as Array<Record<string, unknown>>
+    : [];
+}
+
+function buildCheckoutPreviewItems(lines: CartLine[]) {
+  return getActiveCartLines(lines).map((line) => {
+    const quantity = Math.max(1, Number(line.quantity || 1));
+    const lineTotal = roundPrice(Number(line.unitPrice || 0) * quantity);
+    const oldLineTotal = roundPrice(Math.max(lineTotal, Number(line.oldUnitPrice || 0) * quantity));
+    const variantGroupId = Number(line.variant?.groupId || 0);
+    const variantValueIndex = Number(line.variant?.valueIndex);
+    const baseItem: Record<string, unknown> = {
+      cart_key: line.id,
+      line_total: lineTotal,
+      old_line_total: oldLineTotal,
+      qty: quantity,
+      type: line.type,
+    };
+
+    if (line.type === 'combo') {
+      return {
+        ...baseItem,
+        combo_id: Number(line.sourceId || 0) || null,
+        combo_title: line.title,
+      };
+    }
+
+    return {
+      ...baseItem,
+      ingredients: (Array.isArray(line.ingredients) ? line.ingredients : []).map((ingredient) => ({
+        ingredient_id: Number(ingredient.id || 0) || null,
+        qty: Number(ingredient.quantity || 0) || 0,
+      })).filter((ingredient) => Number(ingredient.ingredient_id || 0) > 0),
+      option_items: (Array.isArray(line.options) ? line.options : []).map((option) => {
+        const optionVariantGroupId = Number(option.variant?.groupId || 0);
+        const optionVariantValueIndex = Number(option.variant?.valueIndex);
+        return {
+          id: Number(option.id || 0) || null,
+          qty: Math.max(1, Number(option.quantity || 1)),
+          variant_group_id: optionVariantGroupId > 0 ? optionVariantGroupId : null,
+          variant_value_index: Number.isFinite(optionVariantValueIndex) && optionVariantValueIndex >= 0
+            ? optionVariantValueIndex
+            : null,
+        };
+      }).filter((option) => Number(option.id || 0) > 0),
+      product_id: Number(line.sourceId || 0) || null,
+      product_name: line.title,
+      variant_group_id: variantGroupId > 0 ? variantGroupId : null,
+      variant_value_index: Number.isFinite(variantValueIndex) && variantValueIndex >= 0 ? variantValueIndex : null,
+    };
+  });
 }
 
 function formatPercent(value: unknown) {
@@ -439,18 +575,19 @@ function calculateCartBonusRedeemAmount(itemsTotal: number, config: BonusConfig 
 }
 
 function buildCartBonusState(lines: CartLine[], config: BonusConfig | null, favorites: BonusFavoriteCategories | null, snapshot: Awaited<ReturnType<typeof readCachedMobileCatalogSnapshot>> | null): CartBonusState {
+  const activeLines = getActiveCartLines(lines);
   const settings = getBonusSettings(config);
   const account = getBonusAccount(config);
   const level = getCartBonusActiveLevel(config);
   const joinLevel = getCartBonusJoinLevel(config);
-  const itemsTotal = lines.reduce((sum, line) => sum + getLineTotal(line), 0);
+  const itemsTotal = activeLines.reduce((sum, line) => sum + getLineTotal(line), 0);
   const balance = Math.floor(Math.max(0, Number(account?.balance || 0)));
   const coinName = asText(settings.bonus_coin_name) || 'Бонусы';
   const coinLogoUrl = resolveAssetUrl(asText(settings.bonus_coin_logo));
   const isProgramEnabled = settings.bonus_program_enabled === true || Number(settings.bonus_program_enabled || 0) === 1;
   const isJoined = Boolean(level);
   return {
-    accrualAmount: level ? calculateCartBonusAccrual(lines, itemsTotal, level, favorites, snapshot) : 0,
+    accrualAmount: level ? calculateCartBonusAccrual(activeLines, itemsTotal, level, favorites, snapshot) : 0,
     allowRedeemAndAccrue: Number(settings.allow_redeem_and_accrue || 0) === 1,
     balance,
     coinName,
@@ -465,13 +602,25 @@ function buildCartBonusState(lines: CartLine[], config: BonusConfig | null, favo
   };
 }
 
-function buildCartSummaryState(lines: CartLine[], deliveryCost: number, bonusState: CartBonusState, redeemActive: boolean): CartSummaryState {
-  const itemsTotal = roundPrice(lines.reduce((sum, line) => sum + getLineTotal(line), 0));
-  const subtotalBeforeDiscount = roundPrice(lines.reduce((sum, line) => {
+function buildCartSummaryState(
+  lines: CartLine[],
+  deliveryCost: number,
+  bonusState: CartBonusState,
+  redeemActive: boolean,
+  benefitsPreview: CheckoutBenefitsPreviewData | null,
+): CartSummaryState {
+  const activeLines = getActiveCartLines(lines);
+  const previewSummary = benefitsPreview?.summary && typeof benefitsPreview.summary === 'object' ? benefitsPreview.summary : null;
+  const fallbackItemsTotal = roundPrice(activeLines.reduce((sum, line) => sum + getLineTotal(line), 0));
+  const fallbackSubtotalBeforeDiscount = roundPrice(activeLines.reduce((sum, line) => {
     const total = getLineTotal(line);
     const oldTotal = getLineOldTotal(line);
     return sum + Math.max(total, oldTotal);
   }, 0));
+  const previewItemsTotal = roundPrice(previewSummary?.items_total);
+  const previewSubtotalBeforeDiscount = roundPrice(previewSummary?.subtotal);
+  const itemsTotal = previewItemsTotal > 0 ? previewItemsTotal : fallbackItemsTotal;
+  const subtotalBeforeDiscount = previewSubtotalBeforeDiscount > 0 ? previewSubtotalBeforeDiscount : fallbackSubtotalBeforeDiscount;
   const itemDiscountAmount = roundPrice(Math.max(0, subtotalBeforeDiscount - itemsTotal));
   const bonusRedeemAmount = redeemActive ? roundPrice(Math.min(itemsTotal, bonusState.redeemAvailableAmount)) : 0;
   const discountAmount = roundPrice(itemDiscountAmount + bonusRedeemAmount);
@@ -481,9 +630,11 @@ function buildCartSummaryState(lines: CartLine[], deliveryCost: number, bonusSta
     bonusAccrualBlockedByRedeem: redeemActive && !bonusState.allowRedeemAndAccrue && Number(bonusState.accrualAmount || 0) > 0,
     bonusRedeemAmount,
     deliveryCost: roundPrice(Math.max(0, Number(deliveryCost || 0))),
+    discountDetailItems: normalizeDiscountDetailItems(benefitsPreview),
     discountAmount,
     itemDiscountAmount,
     itemsTotal,
+    lineStates: [],
     subtotalBeforeDiscount,
     total,
   };
@@ -546,6 +697,8 @@ function BonusAmount({ amount, color, logoUrl, prefix = '', size = 'md', suffix 
 
 export function CartPage() {
   const navigation = useNavigation<CartNavigation>();
+  const headerScrollY = useRef(new Animated.Value(0)).current;
+  const { mergeStockRows, refreshMany, stockLevels } = useProductStock();
   const [lines, setLines] = useState<CartLine[]>([]);
   const [addresses, setAddresses] = useState<CustomerAddress[]>([]);
   const [stores, setStores] = useState<TenantStore[]>([]);
@@ -559,6 +712,7 @@ export function CartPage() {
   const [deliveryMeta, setDeliveryMeta] = useState<DeliveryMeta | null>(null);
   const [lastDeliveryProgress, setLastDeliveryProgress] = useState<DeliveryProgressState | null>(null);
   const [benefitsCounts, setBenefitsCounts] = useState<CartBenefitsCounts>(emptyBenefitsCounts);
+  const [benefitsPreview, setBenefitsPreview] = useState<CheckoutBenefitsPreviewData | null>(null);
   const [bonusConfig, setBonusConfig] = useState<BonusConfig | null>(null);
   const [bonusFavoriteCategories, setBonusFavoriteCategories] = useState<BonusFavoriteCategories | null>(null);
   const [catalogSnapshot, setCatalogSnapshot] = useState<Awaited<ReturnType<typeof readCachedMobileCatalogSnapshot>> | null>(null);
@@ -568,22 +722,66 @@ export function CartPage() {
   const [promoCode, setPromoCode] = useState('');
   const [isLoading, setLoading] = useState(true);
   const [clearConfirm, setClearConfirm] = useState(false);
+  const [stockBlockedLineIds, setStockBlockedLineIds] = useState<Set<string>>(() => new Set());
 
-  const subtotal = useMemo(() => lines.reduce((sum, line) => sum + getLineTotal(line), 0), [lines]);
+  const activeLines = useMemo(() => getActiveCartLines(lines), [lines]);
+  const hasActiveLines = activeLines.length > 0;
+  const hasProblemLines = lines.some((line) => line.isUnavailable === true);
+  const subtotal = useMemo(() => activeLines.reduce((sum, line) => sum + getLineTotal(line), 0), [activeLines]);
   const selectedAddress = useMemo(() => findSelectedAddress(addresses, selection), [addresses, selection]);
   const selectedStore = useMemo(() => findSelectedStore(stores, selection), [selection, stores]);
   const selectedDeliveryStore = useMemo(() => findDeliveryStore(stores, selectedAddress), [selectedAddress, stores]);
   const isDelivery = selection.mode === 'delivery';
   const visibleDeliveryProgress = isDelivery ? buildDeliveryProgress(subtotal, deliveryMeta) || lastDeliveryProgress : null;
+  const toggleOpacity = headerScrollY.interpolate({
+    inputRange: [0, CART_HEADER_TOGGLE_SCROLL],
+    outputRange: [1, 0],
+    extrapolate: 'clamp',
+  });
+  const toggleHeight = headerScrollY.interpolate({
+    inputRange: [0, CART_HEADER_TOGGLE_SCROLL],
+    outputRange: [CART_HEADER_TOGGLE_HEIGHT, 0],
+    extrapolate: 'clamp',
+  });
+  const toggleTranslateY = headerScrollY.interpolate({
+    inputRange: [0, CART_HEADER_TOGGLE_SCROLL],
+    outputRange: [0, -12],
+    extrapolate: 'clamp',
+  });
+  const addressMarginTop = headerScrollY.interpolate({
+    inputRange: [0, CART_HEADER_TOGGLE_SCROLL],
+    outputRange: [theme.spacing.md, 0],
+    extrapolate: 'clamp',
+  });
+  const metaOpacity = headerScrollY.interpolate({
+    inputRange: [CART_HEADER_TOGGLE_SCROLL, CART_HEADER_META_SCROLL],
+    outputRange: [1, 0],
+    extrapolate: 'clamp',
+  });
+  const metaHeight = headerScrollY.interpolate({
+    inputRange: [CART_HEADER_TOGGLE_SCROLL, CART_HEADER_META_SCROLL],
+    outputRange: [CART_HEADER_META_HEIGHT, 0],
+    extrapolate: 'clamp',
+  });
+  const metaTranslateY = headerScrollY.interpolate({
+    inputRange: [CART_HEADER_TOGGLE_SCROLL, CART_HEADER_META_SCROLL],
+    outputRange: [0, -10],
+    extrapolate: 'clamp',
+  });
+  const progressMarginTop = headerScrollY.interpolate({
+    inputRange: [CART_HEADER_TOGGLE_SCROLL, CART_HEADER_META_SCROLL],
+    outputRange: [theme.spacing.md, theme.spacing.xs],
+    extrapolate: 'clamp',
+  });
   const bonusState = useMemo(
-    () => buildCartBonusState(lines, bonusConfig, bonusFavoriteCategories, catalogSnapshot),
-    [bonusConfig, bonusFavoriteCategories, catalogSnapshot, lines],
+    () => buildCartBonusState(activeLines, bonusConfig, bonusFavoriteCategories, catalogSnapshot),
+    [activeLines, bonusConfig, bonusFavoriteCategories, catalogSnapshot],
   );
   const redeemActive = bonusRedeemEnabled && bonusState.balance > 0 && bonusState.redeemAvailableAmount > 0;
   const redeemLabel = bonusState.allowRedeemAndAccrue ? 'Списать и начислить' : 'Списать';
   const cartSummary = useMemo(
-    () => buildCartSummaryState(lines, isDelivery ? Number(deliveryMeta?.cost || 0) : 0, bonusState, redeemActive),
-    [bonusState, deliveryMeta?.cost, isDelivery, lines, redeemActive],
+    () => buildCartSummaryState(activeLines, isDelivery && hasActiveLines ? Number(deliveryMeta?.cost || 0) : 0, bonusState, redeemActive, benefitsPreview),
+    [activeLines, benefitsPreview, bonusState, deliveryMeta?.cost, hasActiveLines, isDelivery, redeemActive],
   );
   const discountDetails = useMemo(() => [
     cartSummary.itemDiscountAmount > 0
@@ -610,8 +808,12 @@ export function CartPage() {
     const cachedAddresses = passport?.token
       ? await readCachedCustomerAddresses(passport.token)
       : passport?.addresses || [];
+    await warmFullProductPassports(collectCartStockProductIds(nextLines)).catch(() => null);
+    const stockState = await evaluateCartStockState(nextLines, stockLevels, refreshMany);
+    const syncedLines = stockState.lines;
 
-    setLines(nextLines);
+    setLines(syncedLines);
+    setStockBlockedLineIds(stockState.blockedLineIds);
     setSelection(nextSelection);
     setAddresses(cachedAddresses);
     setStores(cachedStores || []);
@@ -627,8 +829,17 @@ export function CartPage() {
         readCachedCustomerDiscounts(passport.token),
       ]);
       setBenefitsCounts(getCartBenefitsCounts(cachedBenefits, cachedDiscounts));
+      const previewItems = buildCheckoutPreviewItems(syncedLines);
+      const nextPreview = previewItems.length
+        ? await fetchCheckoutBenefitsPreview(passport.token, {
+          items: previewItems,
+          method_code: nextSelection.mode === 'delivery' ? 'delivery' : 'takeaway',
+        }).catch(() => null)
+        : null;
+      setBenefitsPreview(nextPreview);
     } else {
       setBenefitsCounts(emptyBenefitsCounts);
+      setBenefitsPreview(null);
     }
 
     const levelId = getCartBonusCurrentLevelId(passport?.bonusConfig || null);
@@ -663,7 +874,7 @@ export function CartPage() {
         updatedAt: new Date().toISOString(),
       });
     }
-  }, []);
+  }, [refreshMany, stockLevels]);
 
   useFocusEffect(
     useCallback(() => {
@@ -726,14 +937,32 @@ export function CartPage() {
   }, [selectedAddress?.id, selectedStore?.id, selection]);
 
   const changeQuantity = useCallback(async (line: CartLine, delta: number) => {
-    const nextLines = await updateCartLineQuantity(line.id, line.quantity + delta);
-    setLines(nextLines);
-  }, []);
+    const nextQuantity = line.quantity + delta;
+    if (delta > 0) {
+      const draftLines = replaceCartLine(lines, { ...line, quantity: nextQuantity });
+      const affectedProductIds = collectKnownCartStockProductIds(draftLines, stockLevels);
+      const refreshResult = affectedProductIds.length ? await refreshMany(affectedProductIds).catch(() => null) : null;
+      const latestStockLevels = refreshResult && typeof refreshResult === 'object' && 'stockLevels' in refreshResult
+        ? refreshResult.stockLevels
+        : stockLevels;
+      const localStockLimit = calculateCartStockLimit(draftLines, latestStockLevels, line.id);
+      if (!localStockLimit.canAdd) {
+        setStockBlockedLineIds((current) => new Set(current).add(line.id));
+        return;
+      }
+    }
+    const savedLines = await updateCartLineQuantity(line.id, nextQuantity);
+    const stockState = await evaluateCartStockState(savedLines, stockLevels, refreshMany);
+    setLines(stockState.lines);
+    setStockBlockedLineIds(stockState.blockedLineIds);
+  }, [lines, refreshMany, stockLevels]);
 
   const removeLine = useCallback(async (line: CartLine) => {
     const nextLines = await removeCartLine(line.id);
-    setLines(nextLines);
-  }, []);
+    const stockState = await evaluateCartStockState(nextLines, stockLevels, refreshMany);
+    setLines(stockState.lines);
+    setStockBlockedLineIds(stockState.blockedLineIds);
+  }, [refreshMany, stockLevels]);
 
   const clearCart = useCallback(async () => {
     if (!clearConfirm) {
@@ -742,6 +971,7 @@ export function CartPage() {
     }
     const nextLines = await clearCartLines();
     setLines(nextLines);
+    setStockBlockedLineIds(new Set());
     setClearConfirm(false);
   }, [clearConfirm]);
 
@@ -760,6 +990,29 @@ export function CartPage() {
     await saveFulfillmentSelection(selection);
     navigation.navigate(routes.addresses);
   }, [navigation, selection]);
+
+  const openCheckout = useCallback(async () => {
+    if (!hasActiveLines || hasProblemLines) return;
+    let stockState = await evaluateCartStockState(lines, stockLevels, refreshMany);
+    setLines(stockState.lines);
+    setStockBlockedLineIds(stockState.blockedLineIds);
+    if (stockState.lines.some((line) => line.isUnavailable === true)) return;
+    const stockCheckLines = stockState.lines.filter((line) => line.isUnavailable !== true);
+    const stockCheck = await checkOrderStock(cartLinesToStockCheckItems(stockCheckLines)).catch(() => null);
+    if (Array.isArray(stockCheck?.stock_levels) && stockCheck.stock_levels.length) {
+      const checkedStockLevels = mergeStockRows(stockCheck.stock_levels);
+      stockState = await evaluateCartStockState(stockState.lines, checkedStockLevels, refreshMany);
+      setLines(stockState.lines);
+      setStockBlockedLineIds(stockState.blockedLineIds);
+      if (stockState.lines.some((line) => line.isUnavailable === true)) return;
+    }
+    if (stockCheck && stockCheck.available === false) return;
+    await Promise.all([
+      saveFulfillmentSelection(selection),
+      saveCheckoutCartSummary(cartSummary),
+    ]);
+    navigation.navigate(routes.checkout);
+  }, [cartSummary, hasActiveLines, hasProblemLines, lines, mergeStockRows, navigation, refreshMany, selection, stockLevels]);
 
   const openBenefitPage = useCallback((page: keyof CartBenefitsCounts) => {
     if (page === 'discounts') {
@@ -813,6 +1066,8 @@ export function CartPage() {
     const total = getLineTotal(line);
     const oldTotal = getLineOldTotal(line);
     const discountPercent = getDiscountPercent(total, oldTotal);
+    const unavailable = line.isUnavailable === true;
+    const plusBlocked = unavailable || stockBlockedLineIds.has(line.id);
     const title = getCartLineTitle(line);
     const detailLines = getCartLineDetails(line);
     const comboPhotos = line.type === 'combo' && Array.isArray(line.photoUrls)
@@ -844,6 +1099,8 @@ export function CartPage() {
         )}
         <View style={styles.itemMain}>
           <Text numberOfLines={2} style={styles.itemTitle}>{line.quantity} x {title}</Text>
+          {unavailable ? <Text style={styles.itemUnavailableText}>Больше нет</Text> : null}
+          {plusBlocked && !unavailable ? <Text style={styles.itemUnavailableText}>Больше нет</Text> : null}
           {detailLines.length ? (
             <View style={styles.itemDetails}>
               {detailLines.map((detail, index) => {
@@ -878,13 +1135,15 @@ export function CartPage() {
               </Pressable>
               <Text style={styles.qtyText}>{line.quantity}</Text>
               <Pressable
+                disabled={plusBlocked}
                 onPress={(event) => {
                   event.stopPropagation();
+                  if (plusBlocked) return undefined;
                   return changeQuantity(line, 1);
                 }}
-                style={styles.qtyButton}
+                style={[styles.qtyButton, plusBlocked && styles.qtyButtonDisabled]}
               >
-                <Ionicons name="add" color={theme.colors.text} size={16} />
+                <Ionicons name="add" color={plusBlocked ? theme.colors.muted : theme.colors.text} size={16} />
               </Pressable>
             </View>
           </View>
@@ -901,8 +1160,14 @@ export function CartPage() {
             <ActivityIndicator color={theme.colors.accent} />
           </View>
         ) : (
-          <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
-            <View style={styles.modeCard}>
+          <>
+            <Animated.View style={styles.modeCard}>
+              <Animated.View
+                style={[
+                  styles.toggleClip,
+                  { height: toggleHeight, opacity: toggleOpacity, transform: [{ translateY: toggleTranslateY }] },
+                ]}
+              >
               <View style={styles.toggle}>
                 {(['delivery', 'pickup'] as FulfillmentMode[]).map((mode) => {
                   const active = selection.mode === mode;
@@ -919,7 +1184,9 @@ export function CartPage() {
                   );
                 })}
               </View>
+              </Animated.View>
 
+              <Animated.View style={{ marginTop: addressMarginTop }}>
               <Pressable onPress={openAddresses} style={styles.addressRow}>
                 <Ionicons name={isDelivery ? 'location' : 'storefront'} color={theme.colors.accent} size={21} />
                 <Text numberOfLines={1} style={styles.addressText}>
@@ -929,7 +1196,14 @@ export function CartPage() {
                 </Text>
                 <Ionicons name="chevron-forward" color={theme.colors.text} size={20} />
               </Pressable>
+              </Animated.View>
 
+              <Animated.View
+                style={[
+                  styles.metaClip,
+                  { height: metaHeight, opacity: metaOpacity, transform: [{ translateY: metaTranslateY }] },
+                ]}
+              >
               <View style={styles.metaWrap}>
                 <View style={styles.metaRow}>
                   <Ionicons name={isDelivery ? 'car' : 'bag-handle'} color={theme.colors.accent} size={16} />
@@ -951,17 +1225,27 @@ export function CartPage() {
                   </Text>
                 </View>
               </View>
+              </Animated.View>
 
               {visibleDeliveryProgress ? (
-                <View style={styles.progressSurface}>
+                <Animated.View style={[styles.progressSurface, { marginTop: progressMarginTop }]}>
                   <View style={[styles.progressFill, { width: `${visibleDeliveryProgress.value}%` }]} />
                   <Text style={[styles.progressLabel, visibleDeliveryProgress.free && styles.progressLabelFree]}>
                     {visibleDeliveryProgress.label}
                   </Text>
-                </View>
+                </Animated.View>
               ) : null}
-            </View>
+            </Animated.View>
 
+            <Animated.ScrollView
+              style={styles.scroll}
+              contentContainerStyle={[styles.content, styles.contentWithHeader]}
+              onScroll={Animated.event(
+                [{ nativeEvent: { contentOffset: { y: headerScrollY } } }],
+                { useNativeDriver: false },
+              )}
+              scrollEventThrottle={16}
+            >
             <View style={styles.itemsSection}>
               <View style={styles.sectionHeader}>
                 <Text style={styles.sectionTitle}>Товары</Text>
@@ -988,7 +1272,7 @@ export function CartPage() {
               )}
             </View>
 
-            {lines.length ? (
+            {hasActiveLines ? (
               <View style={styles.benefitsCard}>
                 {benefitsCounts.discounts > 0 ? (
                   <Pressable onPress={() => openBenefitPage('discounts')} style={styles.benefitRow}>
@@ -1048,7 +1332,7 @@ export function CartPage() {
               </View>
             ) : null}
 
-            {lines.length && bonusState.isProgramEnabled ? (
+            {hasActiveLines && bonusState.isProgramEnabled ? (
               bonusState.isJoined ? (
                 <View style={styles.bonusCard}>
                   <View style={styles.bonusHead}>
@@ -1134,7 +1418,7 @@ export function CartPage() {
               )
             ) : null}
 
-            {lines.length ? (
+            {hasActiveLines ? (
               <View style={styles.summaryCard}>
                 {isDelivery ? (
                   <View style={styles.summaryRow}>
@@ -1194,9 +1478,14 @@ export function CartPage() {
                   <Text style={styles.summaryTotalLabel}>Итого</Text>
                   <Text style={styles.summaryTotalValue}>{formatPrice(cartSummary.total)}</Text>
                 </View>
+                <Pressable disabled={hasProblemLines} onPress={openCheckout} style={[styles.checkoutButton, hasProblemLines && styles.checkoutButtonDisabled]}>
+                  <Text style={styles.checkoutButtonText}>Оформить</Text>
+                  <Text style={styles.checkoutButtonText}>· {formatPrice(cartSummary.total)}</Text>
+                </Pressable>
               </View>
             ) : null}
-          </ScrollView>
+            </Animated.ScrollView>
+          </>
         )}
         <BottomSheet
           onClose={() => setDiscountDetailsVisible(false)}
@@ -1263,7 +1552,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flexDirection: 'row',
     gap: theme.spacing.sm,
-    marginTop: theme.spacing.md,
   },
   addressText: {
     color: theme.colors.text,
@@ -1515,6 +1803,24 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '900',
   },
+  checkoutButton: {
+    alignItems: 'center',
+    backgroundColor: theme.colors.accent,
+    borderRadius: theme.radius.pill,
+    flexDirection: 'row',
+    gap: 5,
+    justifyContent: 'center',
+    minHeight: 50,
+    marginTop: theme.spacing.md,
+  },
+  checkoutButtonDisabled: {
+    opacity: 0.45,
+  },
+  checkoutButtonText: {
+    color: theme.colors.primaryText,
+    fontSize: 16,
+    fontWeight: '900',
+  },
   comboImage: {
     height: '100%',
     width: '100%',
@@ -1538,6 +1844,9 @@ const styles = StyleSheet.create({
   },
   content: {
     paddingBottom: theme.sizes.tabBarHeight + theme.spacing.xl,
+  },
+  contentWithHeader: {
+    paddingTop: CART_HEADER_FULL_HEIGHT,
   },
   emptyCart: {
     alignItems: 'center',
@@ -1617,6 +1926,12 @@ const styles = StyleSheet.create({
   itemUnavailable: {
     opacity: 0.55,
   },
+  itemUnavailableText: {
+    color: theme.colors.muted,
+    fontSize: 12,
+    fontWeight: '900',
+    marginTop: 3,
+  },
   itemsList: {
     gap: theme.spacing.md,
   },
@@ -1652,12 +1967,21 @@ const styles = StyleSheet.create({
     gap: theme.spacing.sm,
     marginTop: theme.spacing.md,
   },
+  metaClip: {
+    overflow: 'hidden',
+  },
   modeCard: {
     backgroundColor: theme.colors.card,
     borderBottomLeftRadius: 24,
     borderBottomRightRadius: 24,
+    elevation: 3,
+    left: 0,
     padding: theme.spacing.lg,
     paddingTop: theme.spacing.md,
+    position: 'absolute',
+    right: 0,
+    top: 0,
+    zIndex: 2,
   },
   priceRow: {
     gap: 1,
@@ -1740,7 +2064,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     height: 24,
     justifyContent: 'center',
-    marginTop: theme.spacing.md,
     overflow: 'hidden',
   },
   qtyButton: {
@@ -1748,6 +2071,9 @@ const styles = StyleSheet.create({
     height: 28,
     justifyContent: 'center',
     width: 30,
+  },
+  qtyButtonDisabled: {
+    opacity: 0.45,
   },
   qtyPill: {
     alignItems: 'center',
@@ -1915,6 +2241,9 @@ const styles = StyleSheet.create({
     borderRadius: theme.radius.pill,
     flexDirection: 'row',
     padding: 3,
+  },
+  toggleClip: {
+    overflow: 'hidden',
   },
   toggleButton: {
     borderRadius: theme.radius.pill,

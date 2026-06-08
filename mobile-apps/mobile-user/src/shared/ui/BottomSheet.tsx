@@ -147,6 +147,7 @@ export function BottomSheet({ children, onClose, title, visible }: BottomSheetPr
             alwaysBounceVertical={false}
             bounces={false}
             contentContainerStyle={styles.content}
+            keyboardShouldPersistTaps="handled"
             onScroll={(event) => {
               scrollY.current = event.nativeEvent.contentOffset.y;
             }}

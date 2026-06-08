@@ -9,9 +9,11 @@ import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-cont
 
 import type { MainTabParamList, RootStackParamList } from './navigation/routes';
 import { routes } from './navigation/routes';
+import { StockProvider } from '../features/stock';
 import { AddressFormPage } from '../pages/address-form';
 import { AddressesPage } from '../pages/addresses';
 import { CartPage } from '../pages/cart';
+import { CheckoutPage } from '../pages/checkout';
 import { BonusProgramPage } from '../pages/bonus-program';
 import { BonusCashbackPage } from '../pages/bonus-cashback';
 import { BonusFavoriteCategoriesPage } from '../pages/bonus-favorite-categories';
@@ -115,7 +117,8 @@ export function AppRoot() {
 
   return (
     <SafeAreaProvider>
-      <NavigationContainer>
+      <StockProvider>
+        <NavigationContainer>
       <Stack.Navigator>
         <Stack.Screen name="main" component={MainTabs} options={{ headerShown: false }} />
         <Stack.Screen name={routes.product} component={ProductPage} options={{ title: 'Товар' }} />
@@ -134,6 +137,7 @@ export function AppRoot() {
         <Stack.Screen name={routes.tasks} component={TasksPage} options={{ title: 'Задания' }} />
         <Stack.Screen name={routes.orders} component={OrdersPage} options={{ title: 'Мои заказы' }} />
         <Stack.Screen name={routes.orderDetails} component={OrderDetailsPage} options={{ headerShown: false }} />
+        <Stack.Screen name={routes.checkout} component={CheckoutPage} options={{ title: 'Оформление заказа' }} />
         <Stack.Screen name={routes.addresses} component={AddressesPage} options={{ title: 'Мои адреса' }} />
         <Stack.Screen name={routes.addressForm} component={AddressFormPage} options={{ title: 'Адрес' }} />
         <Stack.Screen name={routes.citySelect} component={CitySelectPage} options={{ title: 'Город' }} />
@@ -145,7 +149,8 @@ export function AppRoot() {
         />
       </Stack.Navigator>
       <StatusBar backgroundColor={theme.colors.background} style="dark" translucent={false} />
-      </NavigationContainer>
+        </NavigationContainer>
+      </StockProvider>
     </SafeAreaProvider>
   );
 }

@@ -7,6 +7,7 @@ export type CartVariant = {
   groupTitle?: string;
   label?: string;
   unit?: string;
+  unitId?: number | null;
   valueIndex?: number | null;
 };
 
@@ -14,12 +15,15 @@ export type CartIngredient = {
   id?: number | null;
   name: string;
   quantity: number;
+  stockQuantity?: number | null;
   unit?: string;
+  unitId?: number | null;
 };
 
 export type CartOptionItem = {
   id?: number | null;
   name: string;
+  targetProductId?: number | null;
   quantity: number;
   unitPrice?: number;
   variant?: CartVariant | null;
@@ -79,6 +83,7 @@ function normalizeVariant(value: unknown): CartVariant | null {
   const unit = normalizeText(source.unit);
   const groupTitle = normalizeText(source.groupTitle);
   const groupId = normalizeOptionalId(source.groupId);
+  const unitId = normalizeOptionalId(source.unitId ?? (source as Record<string, unknown>).unit_id);
   const valueIndex = source.valueIndex == null ? null : normalizeNumber(source.valueIndex, NaN);
   if (!label && !unit && !groupTitle && !groupId) return null;
   return {
@@ -86,6 +91,7 @@ function normalizeVariant(value: unknown): CartVariant | null {
     groupTitle,
     label,
     unit,
+    unitId,
     valueIndex: Number.isFinite(Number(valueIndex)) ? Number(valueIndex) : null,
   };
 }
@@ -97,12 +103,15 @@ function normalizeIngredients(value: unknown): CartIngredient[] {
       if (!source) return null;
       const name = normalizeText(source.name);
       const quantity = normalizeNumber(source.quantity, NaN);
+      const stockQuantity = source.stockQuantity == null ? null : normalizeNumber(source.stockQuantity, NaN);
       if (!name || !Number.isFinite(quantity) || quantity <= 0) return null;
       return {
         id: normalizeOptionalId(source.id),
         name,
         quantity,
+        stockQuantity: stockQuantity != null && Number.isFinite(stockQuantity) && stockQuantity > 0 ? stockQuantity : null,
         unit: normalizeText(source.unit),
+        unitId: normalizeOptionalId(source.unitId ?? (source as Record<string, unknown>).unit_id),
       };
     }).filter((item): item is CartIngredient => !!item)
     : [];
@@ -119,6 +128,7 @@ function normalizeOptions(value: unknown): CartOptionItem[] {
       return {
         id: normalizeOptionalId(source.id),
         name,
+        targetProductId: normalizeOptionalId(source.targetProductId ?? (source as Record<string, unknown>).target_product_id),
         quantity,
         unitPrice: Math.max(0, normalizeNumber(source.unitPrice)),
         variant: normalizeVariant(source.variant),
@@ -209,6 +219,7 @@ export function makeCartLineId(line: Pick<CartLineDraft, 'comboDraft' | 'comboSe
       id: item.id || null,
       name: item.name,
       quantity: item.quantity,
+      targetProductId: item.targetProductId || null,
       variant: normalizeVariant(item.variant),
     }))
     .sort((left, right) => (left.id || 0) - (right.id || 0) || left.name.localeCompare(right.name));
@@ -307,6 +318,125 @@ export async function removeCartLine(lineId: string) {
 export async function clearCartLines() {
   await AsyncStorage.removeItem(CART_STORAGE_KEY);
   return [];
+}
+
+function variantToStockCheckPayload(variant?: CartVariant | null) {
+  const normalized = normalizeVariant(variant);
+  if (!normalized) return null;
+  return {
+    label: normalized.label,
+    unit: normalized.unit,
+    unit_id: normalized.unitId,
+    value: normalized.label,
+    variant_group_id: normalized.groupId,
+    variant_label: normalized.label,
+    variant_value: normalized.label,
+    variant_value_index: normalized.valueIndex,
+  };
+}
+
+function ingredientToStockCheckPayload(ingredient: CartIngredient) {
+  return {
+    ingredient_id: ingredient.id,
+    product_id: ingredient.id,
+    quantity: ingredient.quantity,
+    qty: ingredient.quantity,
+    stock_quantity: ingredient.stockQuantity,
+    unit: ingredient.unit,
+    unit_id: ingredient.unitId,
+  };
+}
+
+function optionToStockCheckPayload(option: CartOptionItem) {
+  const variant = variantToStockCheckPayload(option.variant);
+  return {
+    id: option.id,
+    option_item_id: option.id,
+    product_id: option.targetProductId,
+    target_product_id: option.targetProductId,
+    quantity: option.quantity,
+    qty: option.quantity,
+    ...(variant ? {
+      unit: variant.unit,
+      unit_id: variant.unit_id,
+      variant_group_id: variant.variant_group_id,
+      variant_label: variant.variant_label,
+      variant_value: variant.variant_value,
+      variant_value_index: variant.variant_value_index,
+    } : {}),
+  };
+}
+
+export function cartLineToStockCheckItem(line: CartLine) {
+  const qty = Math.max(1, Number(line.quantity || 1));
+  if (line.type === 'combo') {
+    return {
+      type: 'combo',
+      cart_key: line.id,
+      combo_id: line.sourceId,
+      qty,
+      quantity: qty,
+      selections: (Array.isArray(line.comboSelections) ? line.comboSelections : [])
+        .map((selection) => {
+          const variant = variantToStockCheckPayload(selection.variant);
+          return {
+            product_id: selection.productId,
+            product_name: selection.productName,
+            ingredients: (Array.isArray(selection.ingredients) ? selection.ingredients : []).map(ingredientToStockCheckPayload),
+            ingredients_display: (Array.isArray(selection.ingredients) ? selection.ingredients : []).map(ingredientToStockCheckPayload),
+            ...(variant ? {
+              unit_id: variant.variant_group_id,
+              variant_unit_id: variant.unit_id,
+              variant_group_id: variant.variant_group_id,
+              variant_label: variant.variant_label,
+              variant_value: variant.variant_value,
+              variant_value_index: variant.variant_value_index,
+            } : {}),
+          };
+        })
+        .filter((selection) => Number(selection.product_id || 0) > 0),
+    };
+  }
+
+  const variant = variantToStockCheckPayload(line.variant);
+  return {
+    type: 'product',
+    cart_key: line.id,
+    product_id: line.sourceId,
+    qty,
+    quantity: qty,
+    ingredients: (Array.isArray(line.ingredients) ? line.ingredients : []).map(ingredientToStockCheckPayload),
+    options: (Array.isArray(line.options) ? line.options : []).map(optionToStockCheckPayload),
+    option_items: (Array.isArray(line.options) ? line.options : []).map(optionToStockCheckPayload),
+    option_item_ids: (Array.isArray(line.options) ? line.options : [])
+      .map((option) => option.id)
+      .filter((id) => Number(id || 0) > 0),
+    variants: variant ? [variant] : [],
+  };
+}
+
+export function cartLinesToStockCheckItems(lines: CartLine[]) {
+  return (Array.isArray(lines) ? lines : [])
+    .filter((line) => line && Number(line.quantity || 0) > 0)
+    .map(cartLineToStockCheckItem);
+}
+
+export function getCartLineStockProductIds(line: CartLine) {
+  const ids = new Set<number>();
+  const addId = (value: unknown) => {
+    const id = normalizeOptionalId(value);
+    if (id) ids.add(id);
+  };
+
+  if (line.type === 'product') addId(line.sourceId);
+  (Array.isArray(line.ingredients) ? line.ingredients : []).forEach((ingredient) => addId(ingredient.id));
+  (Array.isArray(line.options) ? line.options : []).forEach((option) => addId(option.targetProductId));
+  (Array.isArray(line.comboSelections) ? line.comboSelections : []).forEach((selection) => {
+    addId(selection.productId);
+    (Array.isArray(selection.ingredients) ? selection.ingredients : []).forEach((ingredient) => addId(ingredient.id));
+  });
+
+  return Array.from(ids);
 }
 
 function formatQuantity(value: number) {

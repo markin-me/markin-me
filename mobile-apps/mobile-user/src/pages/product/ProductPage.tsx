@@ -21,9 +21,11 @@ import type {
   CatalogNutrition,
   CatalogProduct,
   CatalogProductPassport,
+  UnitConversion,
 } from '../../entities/product';
 import {
   addCartLine,
+  cartLinesToStockCheckItems,
   makeCartLineId,
   readCartLines,
   saveCartLine,
@@ -33,6 +35,7 @@ import {
   type CartOptionItem,
   type CartVariant,
 } from '../../features/cart';
+import { calculateCartStockLimit, getStockProductIdsForLines, useProductStock } from '../../features/stock';
 import type { ComboConfiguredProduct, ComboDraft } from '../../features/combo-builder';
 import {
   buildComboConfiguredLines,
@@ -41,6 +44,7 @@ import {
   saveComboDraft,
 } from '../../features/combo-builder';
 import {
+  checkOrderStock,
   fetchCatalogProduct,
   ensureMobileCatalogProductPassport,
   getCatalogProductPassport,
@@ -52,6 +56,15 @@ import {
 } from '../../shared/api';
 import { theme } from '../../shared/config/theme';
 import { formatPrice } from '../../shared/lib/formatPrice';
+import {
+  getStockLevelEntry,
+  getProductAvailabilityState,
+  getUnitConversionFactor,
+  isProductStockAvailable,
+  extractStockRowsFromCatalogPassports,
+  stockLevelFromProduct,
+  type ProductStockLevel,
+} from '../../shared/lib/productStock';
 import { BottomSheet } from '../../shared/ui/BottomSheet';
 import { Screen } from '../../shared/ui/Screen';
 
@@ -82,6 +95,7 @@ type OptionSelection = {
 
 type VariantState = {
   groupId: number | null;
+  unitId: number | null;
   selectedIndex: number | null;
   value: unknown;
   label: string;
@@ -130,8 +144,33 @@ function getOldPrice(product: CatalogProduct | null) {
   return Number.isFinite(price) ? price : 0;
 }
 
-function isAvailable(product: CatalogProduct | null) {
-  return product?.is_available === true || product?.is_available === 1 || product?.is_available == null;
+function getAvailabilityRecord(value: unknown) {
+  return value && typeof value === 'object' ? value as Record<string, unknown> : null;
+}
+
+function normalizeAvailabilityPatch(value: unknown): Pick<CatalogProduct, 'fulfillment_mode' | 'is_available' | 'stock_qty'> | null {
+  const row = getAvailabilityRecord(value);
+  if (!row) return null;
+  const rawAvailable = row.is_available ?? row.isAvailable;
+  const stockRaw = row.stock_qty ?? row.qty;
+  const fulfillmentMode = row.fulfillment_mode ?? row.fulfillmentMode;
+  const stockQty = stockRaw == null ? null : Number(stockRaw);
+  const availabilityText = String(rawAvailable ?? '').trim().toLowerCase();
+  const isAvailableValue = rawAvailable === false || rawAvailable === 0 || rawAvailable === '0'
+    || availabilityText === 'false' || availabilityText === 'no' || availabilityText === 'off'
+    ? false
+    : rawAvailable === true || rawAvailable === 1 || rawAvailable === '1'
+      || availabilityText === 'true' || availabilityText === 'yes' || availabilityText === 'on'
+      ? true
+      : stockQty == null || !Number.isFinite(stockQty) || stockQty > 0;
+  const patch: Pick<CatalogProduct, 'fulfillment_mode' | 'is_available' | 'stock_qty'> = {
+    is_available: isAvailableValue,
+    stock_qty: stockQty == null || !Number.isFinite(stockQty) ? null : stockQty,
+  };
+  if (fulfillmentMode !== undefined) {
+    patch.fulfillment_mode = fulfillmentMode == null ? null : String(fulfillmentMode || '').trim() || null;
+  }
+  return patch;
 }
 
 function getNutritionValue(value: unknown) {
@@ -359,6 +398,7 @@ function createInitialVariantState(product: CatalogProduct | null, variants: unk
     groupId: Number(group.id ?? group.variant_group_id ?? defaultConfig.variant_group_id) || null,
     label: trimText(defaultConfig.variant_label) || (selectedIndex == null ? '' : formatVariantValue(value, unit)),
     selectedIndex,
+    unitId: toPositiveId(group.unit_id),
     value,
   };
 }
@@ -616,6 +656,7 @@ function createVariantStateFromCart(product: CatalogProduct | null, variants: un
     groupId: toPositiveId(variant.groupId ?? group.id ?? group.variant_group_id),
     label: trimText(variant.label),
     selectedIndex,
+    unitId: toPositiveId(variant.unitId ?? group.unit_id),
     value: selectedIndex == null ? null : values[selectedIndex],
   };
 }
@@ -665,6 +706,15 @@ function createOptionSelectionsFromCart(optionGroups: unknown[], defaultConfig: 
   });
 
   return selections;
+}
+
+function getProductCartQuantity(lines: CartLine[], productId: number, excludeLineId = '') {
+  return (Array.isArray(lines) ? lines : []).reduce((sum, line) => {
+    if (line.type !== 'product') return sum;
+    if (excludeLineId && line.id === excludeLineId) return sum;
+    if (Number(line.sourceId || 0) !== Number(productId || 0)) return sum;
+    return sum + Math.max(1, Number(line.quantity || 1));
+  }, 0);
 }
 
 function createCartLineFromComboConfig(
@@ -744,7 +794,19 @@ function buildProductCartDetailLines(
   return lines;
 }
 
-function buildCartIngredients(ingredients: unknown[], ingredientState: IngredientState): CartIngredient[] {
+function getIngredientStockQuantity(source: AnyRecord, quantity: number, unitConversions: UnitConversion[]) {
+  const explicitStockQuantity = Number(source.stock_quantity ?? source.stockQuantity);
+  if (Number.isFinite(explicitStockQuantity) && explicitStockQuantity > 0) return explicitStockQuantity;
+
+  const factor = getUnitConversionFactor(
+    unitConversions,
+    source.unit_id ?? source.ingredient_unit_id,
+    source.ingredient_base_unit_id ?? source.base_unit_id,
+  );
+  return factor == null ? quantity : quantity * factor;
+}
+
+function buildCartIngredients(ingredients: unknown[], ingredientState: IngredientState, unitConversions: UnitConversion[]): CartIngredient[] {
   return ingredients
     .map((item): CartIngredient | null => {
       const source = asRecord(item);
@@ -758,7 +820,9 @@ function buildCartIngredients(ingredients: unknown[], ingredientState: Ingredien
         id,
         name,
         quantity,
+        stockQuantity: getIngredientStockQuantity(source, quantity, unitConversions),
         unit: getIngredientUnit(source),
+        unitId: toPositiveId(source.unit_id ?? source.ingredient_unit_id),
       };
     })
     .filter((item): item is CartIngredient => !!item);
@@ -775,17 +839,64 @@ function buildCartOptions(selectedOptionItems: Array<AnyRecord & { qty: number; 
         id: toPositiveId(item.id),
         name,
         quantity: Math.max(1, toFiniteNumber(item.qty, 1)),
+        targetProductId: toPositiveId(item.target_product_id || item.product_id),
         unitPrice: toFiniteNumber(item.resolvedPrice ?? item.price, 0),
         variant: hasVariant ? {
           groupId: toPositiveId(selectedVariant.variant_group_id),
           groupTitle: trimText(selectedVariant.variant_group_title),
           label: trimText(selectedVariant.variant_label),
           unit: trimText(selectedVariant.variant_unit),
+          unitId: toPositiveId(selectedVariant.unit_id),
           valueIndex: selectedVariant.variant_value_index == null ? null : Number(selectedVariant.variant_value_index),
         } : null,
       };
     })
     .filter((item): item is CartOptionItem => !!item);
+}
+
+function hasConfiguredStockCapacity({
+  cartQtyBeforeAdd,
+  ingredients,
+  options,
+  product,
+  stockLevels,
+}: {
+  cartQtyBeforeAdd: number;
+  ingredients: CartIngredient[];
+  options: CartOptionItem[];
+  product: CatalogProduct;
+  stockLevels: Map<number, ProductStockLevel>;
+}) {
+  if (!getProductAvailabilityState(product, stockLevels, cartQtyBeforeAdd).availableForAdd) return false;
+  const targetQty = Math.max(1, Math.floor(Number(cartQtyBeforeAdd || 0)) + 1);
+  const componentRows: Array<{ productId: number | null; requiredQty: number }> = [];
+
+  ingredients.forEach((ingredient) => {
+    componentRows.push({
+      productId: toPositiveId(ingredient.id),
+      requiredQty: Math.max(0, toFiniteNumber(ingredient.stockQuantity ?? ingredient.quantity, 0)),
+    });
+  });
+
+  options.forEach((option) => {
+    componentRows.push({
+      productId: toPositiveId(option.targetProductId),
+      requiredQty: Math.max(1, toFiniteNumber(option.quantity, 1)),
+    });
+  });
+
+  for (const row of componentRows) {
+    if (!row.productId || !(row.requiredQty > 0)) continue;
+    const entry = getStockLevelEntry(stockLevels, row.productId);
+    if (!entry) continue;
+    if (entry.isAvailable === false || entry.canFulfill === false) return false;
+    if (entry.qty === null || entry.isUnlimited === true) continue;
+    const componentQty = Number(entry.qty);
+    if (!Number.isFinite(componentQty)) continue;
+    if (componentQty + 1e-9 < row.requiredQty * targetQty) return false;
+  }
+
+  return true;
 }
 
 function buildCartVariant(variants: unknown[], variantState: VariantState): CartVariant | null {
@@ -796,8 +907,15 @@ function buildCartVariant(variants: unknown[], variantState: VariantState): Cart
     groupTitle: trimText(group.title || group.title_label),
     label: trimText(variantState.label),
     unit: trimText(group.unit_short_title || group.unit_code || group.unit_title),
+    unitId: toPositiveId(group.unit_id ?? variantState.unitId),
     valueIndex: variantState.selectedIndex,
   };
+}
+
+function getPassportStockRows(passport: CatalogProductPassport | null, unitConversions: UnitConversion[]) {
+  const productId = Number(passport?.product?.id || 0);
+  if (!passport || !Number.isFinite(productId) || productId <= 0) return [];
+  return extractStockRowsFromCatalogPassports(new Map([[productId, passport]]), unitConversions);
 }
 
 function ProductInfoCard({ title, children }: { title: string; children: ReactNode }) {
@@ -871,13 +989,26 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
   const [editingLine, setEditingLine] = useState<CartLine | null>(null);
   const [errorText, setErrorText] = useState('');
   const [quantity, setQuantity] = useState(0);
-  const [variantState, setVariantState] = useState<VariantState>({ groupId: null, label: '', selectedIndex: null, value: null });
+  const [variantState, setVariantState] = useState<VariantState>({ groupId: null, label: '', selectedIndex: null, unitId: null, value: null });
   const [ingredientState, setIngredientState] = useState<IngredientState>({});
   const [optionSelections, setOptionSelections] = useState<Record<string, OptionSelection>>({});
   const [isOptionsSheetVisible, setOptionsSheetVisible] = useState(false);
   const [activeOptionGroupId, setActiveOptionGroupId] = useState<number | null>(null);
   const [expandedOptionVariantKey, setExpandedOptionVariantKey] = useState('');
   const [nutritionMode, setNutritionMode] = useState<NutritionMode>('per100');
+  const [existingCartQty, setExistingCartQty] = useState(0);
+  const [currentCartLines, setCurrentCartLines] = useState<CartLine[]>([]);
+  const { mergeStockRows, refreshMany, stockLevels, unitConversions } = useProductStock();
+
+  const applyAvailabilityPatch = useCallback((patch: Pick<CatalogProduct, 'fulfillment_mode' | 'is_available' | 'stock_qty'> | null) => {
+    if (!patch) return;
+    setPassport((current) => current?.product && Number(current.product.id) === Number(productId)
+      ? { ...current, product: { ...current.product, ...patch } }
+      : current);
+    setFallbackProduct((current) => current && Number(current.id) === Number(productId)
+      ? { ...current, ...patch }
+      : current);
+  }, [productId]);
 
   useEffect(() => {
     let isMounted = true;
@@ -885,30 +1016,54 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
     async function hydrateFromCache() {
       const memoryPassport = getCatalogProductPassport(productId);
       if (memoryPassport) {
-        if (isMounted) setPassport(memoryPassport);
+        if (isMounted) {
+          setPassport(memoryPassport);
+          const rows = getPassportStockRows(memoryPassport, unitConversions);
+          if (rows.length) mergeStockRows(rows);
+        }
         if (Array.isArray(memoryPassport.ingredients) && Array.isArray(memoryPassport.optionGroups)) return;
       }
       const memoryProduct = getCatalogSnapshotProduct(productId);
-      if (memoryProduct && isMounted) setFallbackProduct(memoryProduct);
+      if (memoryProduct && isMounted) {
+        setFallbackProduct(memoryProduct);
+        const row = stockLevelFromProduct(memoryProduct);
+        if (row) mergeStockRows([row]);
+      }
 
       await readCachedMobileCatalogSnapshot();
       const cachedPassport = getCatalogProductPassport(productId);
       if (cachedPassport) {
-        if (isMounted) setPassport(cachedPassport);
+        if (isMounted) {
+          setPassport(cachedPassport);
+          const rows = getPassportStockRows(cachedPassport, unitConversions);
+          if (rows.length) mergeStockRows(rows);
+        }
         if (Array.isArray(cachedPassport.ingredients) && Array.isArray(cachedPassport.optionGroups)) return;
       }
       const cachedProduct = getCatalogSnapshotProduct(productId);
-      if (cachedProduct && isMounted) setFallbackProduct(cachedProduct);
+      if (cachedProduct && isMounted) {
+        setFallbackProduct(cachedProduct);
+        const row = stockLevelFromProduct(cachedProduct);
+        if (row) mergeStockRows([row]);
+      }
 
       const warmedPassport = await ensureMobileCatalogProductPassport(productId);
       if (warmedPassport) {
-        if (isMounted) setPassport(warmedPassport);
+        if (isMounted) {
+          setPassport(warmedPassport);
+          const rows = getPassportStockRows(warmedPassport, unitConversions);
+          if (rows.length) mergeStockRows(rows);
+        }
         return;
       }
 
       try {
         const product = await fetchCatalogProduct(productId);
-        if (isMounted) setFallbackProduct(product);
+        if (isMounted) {
+          setFallbackProduct(product);
+          const row = stockLevelFromProduct(product);
+          if (row) mergeStockRows([row]);
+        }
       } catch (error) {
         if (isMounted) setErrorText(error instanceof Error ? error.message : 'Данные товара не найдены в кэше');
       }
@@ -919,7 +1074,24 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
     return () => {
       isMounted = false;
     };
-  }, [productId]);
+  }, [mergeStockRows, productId, unitConversions]);
+
+  useEffect(() => {
+    let isMounted = true;
+    async function syncAvailability() {
+      const result = await refreshMany([productId]).catch(() => null);
+      if (!isMounted) return;
+      const availability = result?.payload || null;
+      const data = availability?.data && typeof availability.data === 'object'
+        ? availability.data as Record<string, unknown>
+        : {};
+      applyAvailabilityPatch(normalizeAvailabilityPatch(data[String(productId)]));
+    }
+    void syncAvailability();
+    return () => {
+      isMounted = false;
+    };
+  }, [applyAvailabilityPatch, productId, refreshMany]);
 
   useEffect(() => {
     if (!comboContextId) return;
@@ -969,6 +1141,23 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
   }, [cartLineId]);
 
   useEffect(() => {
+    let isMounted = true;
+    readCartLines().then((lines) => {
+      if (!isMounted) return;
+      setCurrentCartLines(lines);
+      setExistingCartQty(getProductCartQuantity(lines, productId, cartLineId));
+    }).catch(() => {
+      if (isMounted) {
+        setCurrentCartLines([]);
+        setExistingCartQty(0);
+      }
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, [cartLineId, productId]);
+
+  useEffect(() => {
     if (!product) return;
     const restoreLine = comboContextLine || editingLine;
     setQuantity(Math.max(1, Number(restoreLine?.quantity || 1)));
@@ -980,6 +1169,14 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
   const selectedOptionItems = useMemo(
     () => getSelectedOptionItems(optionGroups, optionSelections),
     [optionGroups, optionSelections],
+  );
+  const currentCartIngredients = useMemo(
+    () => buildCartIngredients(ingredients, ingredientState, unitConversions),
+    [ingredients, ingredientState, unitConversions],
+  );
+  const currentCartOptions = useMemo(
+    () => buildCartOptions(selectedOptionItems),
+    [selectedOptionItems],
   );
   const optionTotal = selectedOptionItems.reduce((sum, item) => sum + item.resolvedPrice * Math.max(1, item.qty), 0);
   const variantUnitPrice = getVariantUnitPrice(product, variants, variantState);
@@ -999,7 +1196,65 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
   const totalOldPrice = comboContext && unitBeforeDiscount > comboUnitPrice
     ? roundPrice(unitBeforeDiscount * displayQuantity)
     : totalOldByDiscount || totalOldFromProduct;
-  const available = isAvailable(product);
+  const stockQtyForSubmit = existingCartQty + displayQuantity - 1;
+  const availabilityState = product ? getProductAvailabilityState(product, stockLevels, stockQtyForSubmit) : null;
+  const available = product ? isProductStockAvailable(product, stockLevels) : false;
+  const configuredCartLine = useMemo(() => {
+    if (!product) return null;
+    const line = {
+      detailLines: buildProductCartDetailLines(variantState.label, ingredients, ingredientState, selectedOptionItems),
+      ingredients: currentCartIngredients,
+      isUnavailable: !isProductStockAvailable(product, stockLevels),
+      oldUnitPrice: unitBeforeDiscount > unitPrice ? unitBeforeDiscount : 0,
+      options: currentCartOptions,
+      photoUrl: getImage(product),
+      quantity: displayQuantity,
+      sourceId: product.id,
+      title: trimText(product.name) || 'Товар',
+      type: 'product',
+      unitPrice,
+      variant: buildCartVariant(variants, variantState),
+    } as CartLineDraft;
+    return { ...line, id: makeCartLineId(line) } as CartLine;
+  }, [
+    currentCartIngredients,
+    currentCartOptions,
+    displayQuantity,
+    ingredientState,
+    ingredients,
+    product,
+    selectedOptionItems,
+    stockLevels,
+    unitBeforeDiscount,
+    unitPrice,
+    variantState,
+    variants,
+  ]);
+  const increaseCartLine = useMemo(() => (
+    configuredCartLine ? { ...configuredCartLine, quantity: displayQuantity + 1 } : null
+  ), [configuredCartLine, displayQuantity]);
+  const configuredFutureLines = useMemo(() => (
+    configuredCartLine
+      ? (cartLineId
+        ? currentCartLines.map((line) => line.id === cartLineId ? configuredCartLine : line)
+        : [...currentCartLines, configuredCartLine])
+      : currentCartLines
+  ), [cartLineId, configuredCartLine, currentCartLines]);
+  const increaseFutureLines = useMemo(() => (
+    increaseCartLine
+      ? (cartLineId
+        ? currentCartLines.map((line) => line.id === cartLineId ? increaseCartLine : line)
+        : [...currentCartLines, increaseCartLine])
+      : currentCartLines
+  ), [cartLineId, currentCartLines, increaseCartLine]);
+  const configuredStockLimit = configuredCartLine
+    ? calculateCartStockLimit(configuredFutureLines, stockLevels, configuredCartLine.id)
+    : null;
+  const increaseStockLimit = increaseCartLine
+    ? calculateCartStockLimit(increaseFutureLines, stockLevels, increaseCartLine.id)
+    : null;
+  const canIncreaseQuantity = Boolean(product && increaseStockLimit?.canAdd);
+  const canSubmit = Boolean(product && availabilityState?.availableForAdd && configuredStockLimit?.canAdd);
   const compositionText = getCompositionText(product, passport);
   const description = trimText(product?.description || product?.description_short);
   const nutrition = getCurrentNutrition(product, ingredients, ingredientState);
@@ -1013,7 +1268,7 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
     : null;
 
   const applyComboProductConfig = () => {
-    if (!comboContext || !product || !comboContextDetails) return;
+    if (!comboContext || !product || !comboContextDetails || !canSubmit) return;
     const draft = getComboDraft(comboContextDetails);
     const selectedProduct = comboContextDetails.blocks[comboContext.blockIndex]?.products[comboContext.productIndex] || null;
     const lines = buildComboConfiguredLines(ingredients, ingredientState, selectedProduct);
@@ -1022,7 +1277,7 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
       product_id: Number(product.id),
       product_name: product.name,
       product_photo: product.photos?.[0] || product.photo_thumb || product.photo_lqip || selectedProduct?.product_photo || '',
-      unit_id: variantState.groupId,
+      unit_id: variantState.unitId,
       unit_price_before_discount: roundPrice(unitBeforeDiscount),
       unit_price_override: roundPrice(comboUnitPrice),
       variant_group_id: variantState.groupId,
@@ -1047,17 +1302,27 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
   };
 
   const addProductToCart = useCallback(async () => {
-    if (!product || !available) return;
+    if (!product || !canSubmit) return;
+    const result = await refreshMany([product.id]).catch(() => null);
+    const availability = result?.payload || null;
+    const latestStockLevels = result?.stockLevels || stockLevels;
+    const data = availability?.data && typeof availability.data === 'object'
+      ? availability.data as Record<string, unknown>
+      : {};
+    const latestPatch = normalizeAvailabilityPatch(data[String(product.id)]);
+    applyAvailabilityPatch(latestPatch);
+    const latestProduct = latestPatch ? { ...product, ...latestPatch } : product;
+    if (!getProductAvailabilityState(latestProduct, latestStockLevels, existingCartQty + displayQuantity - 1).availableForAdd) return;
     const line = {
       detailLines: buildProductCartDetailLines(variantState.label, ingredients, ingredientState, selectedOptionItems),
-      ingredients: buildCartIngredients(ingredients, ingredientState),
-      isUnavailable: !available,
+      ingredients: currentCartIngredients,
+      isUnavailable: !isProductStockAvailable(latestProduct, latestStockLevels),
       oldUnitPrice: unitBeforeDiscount > unitPrice ? unitBeforeDiscount : 0,
-      options: buildCartOptions(selectedOptionItems),
-      photoUrl: getImage(product),
+      options: currentCartOptions,
+      photoUrl: getImage(latestProduct),
       quantity: displayQuantity,
-      sourceId: product.id,
-      title: trimText(product.name) || 'Товар',
+      sourceId: latestProduct.id,
+      title: trimText(latestProduct.name) || 'Товар',
       type: 'product',
       unitPrice,
       variant: buildCartVariant(variants, variantState),
@@ -1066,6 +1331,21 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
       ...line,
       id: makeCartLineId(line),
     };
+    const currentLines = await readCartLines();
+    const nextLinesForCheck = cartLineId
+      ? currentLines.map((item) => item.id === cartLineId ? nextLine : item)
+      : [...currentLines, nextLine];
+    const affectedProductIds = Array.from(new Set([
+      product.id,
+      ...getStockProductIdsForLines(nextLinesForCheck, latestStockLevels),
+    ]));
+    const localRefresh = affectedProductIds.length ? await refreshMany(affectedProductIds).catch(() => null) : null;
+    const localStockLevels = localRefresh?.stockLevels || latestStockLevels;
+    const localStockLimit = calculateCartStockLimit(nextLinesForCheck, localStockLevels, nextLine.id);
+    if (!localStockLimit.canAdd) return;
+    const stockCheck = await checkOrderStock(cartLinesToStockCheckItems(nextLinesForCheck)).catch(() => null);
+    if (Array.isArray(stockCheck?.stock_levels) && stockCheck.stock_levels.length) mergeStockRows(stockCheck.stock_levels);
+    if (stockCheck && stockCheck.available === false) return;
     if (cartLineId) {
       await saveCartLine(nextLine, cartLineId);
       navigation.goBack();
@@ -1074,18 +1354,26 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
     await addCartLine(nextLine);
     navigation.navigate('main', { screen: 'cart' });
   }, [
-    available,
+    applyAvailabilityPatch,
+    canSubmit,
     cartLineId,
+    currentCartIngredients,
+    currentCartOptions,
     displayQuantity,
+    existingCartQty,
     ingredientState,
     ingredients,
     navigation,
     product,
     selectedOptionItems,
+    mergeStockRows,
+    refreshMany,
+    stockLevels,
     unitBeforeDiscount,
     unitPrice,
     variantState.label,
     variantState.selectedIndex,
+    variantState.unitId,
     variants,
   ]);
 
@@ -1218,6 +1506,7 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
                             groupId: toPositiveId(asRecord(variants[0]).id ?? asRecord(variants[0]).variant_group_id),
                             label,
                             selectedIndex: index,
+                            unitId: toPositiveId(asRecord(variants[0]).unit_id),
                             value,
                           })}
                           style={[styles.choiceChip, selected && styles.choiceChipActive]}
@@ -1378,18 +1667,22 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
               <Ionicons name="remove" color={theme.colors.muted} size={18} />
             </Pressable>
             <Text style={styles.footerQtyText}>{displayQuantity}</Text>
-            <Pressable style={styles.footerQtyButton} onPress={() => setQuantity((value) => value + 1)}>
-              <Ionicons name="add" color={theme.colors.text} size={18} />
+            <Pressable
+              disabled={!canIncreaseQuantity}
+              style={[styles.footerQtyButton, !canIncreaseQuantity && styles.footerQtyButtonDisabled]}
+              onPress={() => setQuantity((value) => value + 1)}
+            >
+              <Ionicons name="add" color={canIncreaseQuantity ? theme.colors.text : theme.colors.muted} size={18} />
             </Pressable>
           </View>
           <Pressable
-            disabled={!available}
+            disabled={!canSubmit}
             onPress={comboContext ? applyComboProductConfig : addProductToCart}
-            style={[styles.actionButton, !available && styles.actionButtonDisabled]}
+            style={[styles.actionButton, !canSubmit && styles.actionButtonDisabled]}
           >
-            {totalOldPrice > totalPrice ? <Text style={styles.actionOldPrice}>{formatPrice(totalOldPrice)}</Text> : null}
-            <Text style={styles.actionButtonText}>{available ? formatPrice(totalPrice) : 'Нет в наличии'}</Text>
-            {available ? <Text style={styles.actionButtonSubText}>{comboContext ? 'выбрать' : cartLineId ? 'Сохранить' : 'в корзину'}</Text> : null}
+            {canSubmit && totalOldPrice > totalPrice ? <Text style={styles.actionOldPrice}>{formatPrice(totalOldPrice)}</Text> : null}
+            <Text style={styles.actionButtonText}>{canSubmit ? formatPrice(totalPrice) : available ? 'Больше нет' : 'Раскупили'}</Text>
+            {canSubmit ? <Text style={styles.actionButtonSubText}>{comboContext ? 'выбрать' : cartLineId ? 'Сохранить' : 'в корзину'}</Text> : null}
           </Pressable>
         </View>
 

@@ -50,6 +50,7 @@ const {
 } = require('../maxIntegration');
 const {
   applyStockDeductionForOrderItems,
+  buildStockAvailabilityForOrderItems,
   checkStockAvailabilityForOrderItems,
 } = require('../helpers/orderStock');
 const {
@@ -14173,6 +14174,567 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
     return { assignments, ingredients, variants, optionGroupsByProduct, defaultConfigs };
   }
+
+  async function buildPublicFullProductPassportSupport(tenantId, storeId, sortedIds) {
+    const ids = getPositiveIds(sortedIds);
+    const empty = {
+      unitsById: {},
+      unitConversions: [],
+      productUnitLinksByProductId: {},
+      ingredientsByProductId: {},
+      nestedIngredientsByProductId: {},
+      stockByProductId: {},
+      comboRefsByProductId: {},
+    };
+    if (!ids.length) return empty;
+
+    const placeholders = ids.map(() => '?').join(',');
+    const [ingredientRows] = await db.query(
+      `SELECT
+         i.product_id,
+         i.id,
+         i.ingredient_id,
+         i.quantity,
+         i.unit_id,
+         i.quantity_min,
+         i.quantity_max,
+         i.quantity_step,
+         i.price_override,
+         i.is_variable,
+         i.sort_order,
+         i.created_at,
+         i.updated_at,
+         p.name AS ingredient_name,
+         p.price AS ingredient_price,
+         p.cost_price AS ingredient_cost_price,
+         p.fulfillment_mode AS ingredient_fulfillment_mode,
+         p.base_unit_id AS ingredient_base_unit_id,
+         p.base_qty AS ingredient_base_qty,
+         p.unit_id AS ingredient_unit_id,
+         p.photos_json AS ingredient_photos_json,
+         s.qty AS ingredient_stock_qty,
+         u.code AS unit_code,
+         u.title AS unit_title,
+         u.short_title AS unit_short_title
+       FROM prod_product_ingredients i
+       JOIN prod_products p ON p.tenant_id=i.tenant_id AND p.id=i.ingredient_id
+       LEFT JOIN prod_product_stocks s
+         ON s.tenant_id=p.tenant_id AND s.store_id=? AND s.product_id=p.id
+       LEFT JOIN prod_units u ON u.tenant_id=i.tenant_id AND u.id=i.unit_id
+       WHERE i.tenant_id=? AND i.product_id IN (${placeholders})
+       ORDER BY i.product_id ASC, i.sort_order ASC, i.id ASC`,
+      [storeId, tenantId, ...ids]
+    );
+
+    const ingredientsByProductId = {};
+    ids.forEach((id) => { ingredientsByProductId[id] = []; });
+    const relatedProductIds = new Set(ids);
+    (Array.isArray(ingredientRows) ? ingredientRows : []).forEach((row) => {
+      const productId = Number(row.product_id || 0);
+      const ingredientId = Number(row.ingredient_id || 0);
+      if (!(productId > 0) || !(ingredientId > 0)) return;
+      if (!ingredientsByProductId[productId]) ingredientsByProductId[productId] = [];
+      const photos = safeJsonArray(row.ingredient_photos_json);
+      ingredientsByProductId[productId].push({
+        id: Number(row.id),
+        product_id: productId,
+        ingredient_id: ingredientId,
+        ingredient_name: str(row.ingredient_name || ''),
+        quantity: Number(row.quantity || 0),
+        qty: Number(row.quantity || 0),
+        unit_id: row.unit_id != null ? Number(row.unit_id) : null,
+        unit_code: str(row.unit_code || ''),
+        unit_title: str(row.unit_title || ''),
+        unit_short_title: str(row.unit_short_title || ''),
+        quantity_min: row.quantity_min != null ? Number(row.quantity_min) : null,
+        quantity_max: row.quantity_max != null ? Number(row.quantity_max) : null,
+        quantity_step: row.quantity_step != null ? Number(row.quantity_step) : null,
+        price_override: row.price_override != null ? Number(row.price_override) : null,
+        is_variable: Number(row.is_variable || 0) === 1,
+        sort_order: Number(row.sort_order || 0),
+        ingredient_price: Number(row.ingredient_price || 0),
+        ingredient_cost_price: row.ingredient_cost_price != null ? Number(row.ingredient_cost_price) : null,
+        ingredient_fulfillment_mode: row.ingredient_fulfillment_mode || null,
+        ingredient_base_unit_id: row.ingredient_base_unit_id != null ? Number(row.ingredient_base_unit_id) : null,
+        ingredient_base_qty: row.ingredient_base_qty != null ? Number(row.ingredient_base_qty) : null,
+        ingredient_unit_id: row.ingredient_unit_id != null ? Number(row.ingredient_unit_id) : null,
+        ingredient_stock_qty: row.ingredient_stock_qty != null ? Number(row.ingredient_stock_qty) : null,
+        ingredient_photos_json: photos,
+        created_at: row.created_at || null,
+        updated_at: row.updated_at || null,
+      });
+      relatedProductIds.add(ingredientId);
+    });
+
+    const firstLevelIngredientIds = getPositiveIds([...relatedProductIds].filter((id) => !ids.includes(id)));
+    const nestedIngredientsByProductId = {};
+    firstLevelIngredientIds.forEach((id) => { nestedIngredientsByProductId[id] = []; });
+    if (firstLevelIngredientIds.length) {
+      const nestedPlaceholders = firstLevelIngredientIds.map(() => '?').join(',');
+      const [nestedRows] = await db.query(
+        `SELECT
+           i.product_id,
+           i.id,
+           i.ingredient_id,
+           i.quantity,
+           i.unit_id,
+           i.quantity_min,
+           i.quantity_max,
+           i.quantity_step,
+           i.price_override,
+           i.is_variable,
+           i.sort_order,
+           p.name AS ingredient_name,
+           p.price AS ingredient_price,
+           p.cost_price AS ingredient_cost_price,
+           p.fulfillment_mode AS ingredient_fulfillment_mode,
+           p.base_unit_id AS ingredient_base_unit_id,
+           p.base_qty AS ingredient_base_qty,
+           p.unit_id AS ingredient_unit_id,
+           s.qty AS ingredient_stock_qty,
+           u.code AS unit_code,
+           u.title AS unit_title,
+           u.short_title AS unit_short_title
+         FROM prod_product_ingredients i
+         JOIN prod_products p ON p.tenant_id=i.tenant_id AND p.id=i.ingredient_id
+         LEFT JOIN prod_product_stocks s
+           ON s.tenant_id=p.tenant_id AND s.store_id=? AND s.product_id=p.id
+         LEFT JOIN prod_units u ON u.tenant_id=i.tenant_id AND u.id=i.unit_id
+         WHERE i.tenant_id=? AND i.product_id IN (${nestedPlaceholders})
+         ORDER BY i.product_id ASC, i.sort_order ASC, i.id ASC`,
+        [storeId, tenantId, ...firstLevelIngredientIds]
+      );
+      (Array.isArray(nestedRows) ? nestedRows : []).forEach((row) => {
+        const productId = Number(row.product_id || 0);
+        const ingredientId = Number(row.ingredient_id || 0);
+        if (!(productId > 0) || !(ingredientId > 0)) return;
+        if (!nestedIngredientsByProductId[productId]) nestedIngredientsByProductId[productId] = [];
+        nestedIngredientsByProductId[productId].push({
+          id: Number(row.id),
+          parent_product_id: productId,
+          ingredient_id: ingredientId,
+          ingredient_name: str(row.ingredient_name || ''),
+          quantity: Number(row.quantity || 0),
+          qty: Number(row.quantity || 0),
+          unit_id: row.unit_id != null ? Number(row.unit_id) : null,
+          unit_code: str(row.unit_code || ''),
+          unit_title: str(row.unit_title || ''),
+          unit_short_title: str(row.unit_short_title || ''),
+          quantity_min: row.quantity_min != null ? Number(row.quantity_min) : null,
+          quantity_max: row.quantity_max != null ? Number(row.quantity_max) : null,
+          quantity_step: row.quantity_step != null ? Number(row.quantity_step) : null,
+          price_override: row.price_override != null ? Number(row.price_override) : null,
+          is_variable: Number(row.is_variable || 0) === 1,
+          sort_order: Number(row.sort_order || 0),
+          ingredient_price: Number(row.ingredient_price || 0),
+          ingredient_cost_price: row.ingredient_cost_price != null ? Number(row.ingredient_cost_price) : null,
+          ingredient_fulfillment_mode: row.ingredient_fulfillment_mode || null,
+          ingredient_base_unit_id: row.ingredient_base_unit_id != null ? Number(row.ingredient_base_unit_id) : null,
+          ingredient_base_qty: row.ingredient_base_qty != null ? Number(row.ingredient_base_qty) : null,
+          ingredient_unit_id: row.ingredient_unit_id != null ? Number(row.ingredient_unit_id) : null,
+          ingredient_stock_qty: row.ingredient_stock_qty != null ? Number(row.ingredient_stock_qty) : null,
+        });
+        relatedProductIds.add(ingredientId);
+      });
+    }
+
+    const relatedIds = getPositiveIds([...relatedProductIds]);
+    const [stockRows] = relatedIds.length
+      ? await db.query(
+          `SELECT product_id, store_id, qty, updated_at
+           FROM prod_product_stocks
+           WHERE tenant_id=? AND store_id=? AND product_id IN (?)`,
+          [tenantId, storeId, relatedIds]
+        )
+      : [[]];
+    const stockByProductId = {};
+    relatedIds.forEach((id) => {
+      stockByProductId[id] = {
+        product_id: id,
+        store_id: storeId,
+        stock_qty: null,
+        qty: null,
+        is_unlimited: true,
+        updated_at: null,
+      };
+    });
+    (Array.isArray(stockRows) ? stockRows : []).forEach((row) => {
+      const productId = Number(row.product_id || 0);
+      if (!(productId > 0)) return;
+      stockByProductId[productId] = {
+        product_id: productId,
+        store_id: row.store_id != null ? Number(row.store_id) : storeId,
+        stock_qty: row.qty != null ? Number(row.qty) : null,
+        qty: row.qty != null ? Number(row.qty) : null,
+        is_unlimited: row.qty == null,
+        updated_at: row.updated_at || null,
+      };
+    });
+
+    const [unitRows] = await db.query(
+      `SELECT id, code, title, short_title, created_at, updated_at
+       FROM prod_units
+       WHERE tenant_id=?
+       ORDER BY id ASC`,
+      [tenantId]
+    );
+    const unitsById = {};
+    (Array.isArray(unitRows) ? unitRows : []).forEach((row) => {
+      const id = Number(row.id || 0);
+      if (!(id > 0)) return;
+      unitsById[id] = {
+        id,
+        code: str(row.code || ''),
+        title: str(row.title || ''),
+        short_title: str(row.short_title || ''),
+        created_at: row.created_at || null,
+        updated_at: row.updated_at || null,
+      };
+    });
+
+    const [unitConversions] = await db.query(
+      `SELECT id, from_unit_id, to_unit_id, factor, is_active, created_at, updated_at
+       FROM prod_unit_conversions
+       WHERE tenant_id=? AND is_active=1
+       ORDER BY id ASC`,
+      [tenantId]
+    );
+
+    const [productUnitLinks] = relatedIds.length
+      ? await db.query(
+          `SELECT id, product_id, unit_id, base_unit_id, factor, created_at, updated_at
+           FROM prod_product_unit_links
+           WHERE tenant_id=? AND product_id IN (?)
+           ORDER BY product_id ASC, id ASC`,
+          [tenantId, relatedIds]
+        )
+      : [[]];
+    const productUnitLinksByProductId = {};
+    relatedIds.forEach((id) => { productUnitLinksByProductId[id] = []; });
+    (Array.isArray(productUnitLinks) ? productUnitLinks : []).forEach((row) => {
+      const productId = Number(row.product_id || 0);
+      if (!(productId > 0)) return;
+      if (!productUnitLinksByProductId[productId]) productUnitLinksByProductId[productId] = [];
+      productUnitLinksByProductId[productId].push({
+        id: Number(row.id),
+        product_id: productId,
+        unit_id: row.unit_id != null ? Number(row.unit_id) : null,
+        base_unit_id: row.base_unit_id != null ? Number(row.base_unit_id) : null,
+        factor: Number(row.factor || 0),
+        created_at: row.created_at || null,
+        updated_at: row.updated_at || null,
+      });
+    });
+
+    const [comboRows] = await db.query(
+      `SELECT
+         bp.product_id,
+         bp.block_id,
+         bp.sort_order AS product_sort_order,
+         bp.is_default,
+         b.title AS block_title,
+         csb.combo_id,
+         c.title AS combo_title,
+         c.is_active AS combo_is_active
+       FROM prod_combo_block_products bp
+       JOIN prod_combo_blocks b ON b.tenant_id=bp.tenant_id AND b.id=bp.block_id
+       LEFT JOIN prod_combo_set_blocks csb ON csb.tenant_id=bp.tenant_id AND csb.block_id=bp.block_id
+       LEFT JOIN prod_combos c ON c.tenant_id=bp.tenant_id AND c.id=csb.combo_id
+       WHERE bp.tenant_id=? AND bp.product_id IN (${placeholders})
+       ORDER BY bp.product_id ASC, csb.combo_id ASC, bp.sort_order ASC`,
+      [tenantId, ...ids]
+    );
+    const comboRefsByProductId = {};
+    ids.forEach((id) => { comboRefsByProductId[id] = []; });
+    (Array.isArray(comboRows) ? comboRows : []).forEach((row) => {
+      const productId = Number(row.product_id || 0);
+      if (!(productId > 0)) return;
+      if (!comboRefsByProductId[productId]) comboRefsByProductId[productId] = [];
+      comboRefsByProductId[productId].push({
+        product_id: productId,
+        combo_id: row.combo_id != null ? Number(row.combo_id) : null,
+        combo_title: str(row.combo_title || ''),
+        combo_is_active: row.combo_is_active == null ? null : Number(row.combo_is_active || 0) === 1,
+        block_id: row.block_id != null ? Number(row.block_id) : null,
+        block_title: str(row.block_title || ''),
+        sort_order: Number(row.product_sort_order || 0),
+        is_default: Number(row.is_default || 0) === 1,
+      });
+    });
+
+    return {
+      unitsById,
+      unitConversions: (Array.isArray(unitConversions) ? unitConversions : []).map((row) => ({
+        id: Number(row.id),
+        from_unit_id: row.from_unit_id != null ? Number(row.from_unit_id) : null,
+        to_unit_id: row.to_unit_id != null ? Number(row.to_unit_id) : null,
+        factor: Number(row.factor || 0),
+        is_active: Number(row.is_active || 0) === 1,
+        created_at: row.created_at || null,
+        updated_at: row.updated_at || null,
+      })),
+      productUnitLinksByProductId,
+      ingredientsByProductId,
+      nestedIngredientsByProductId,
+      stockByProductId,
+      comboRefsByProductId,
+    };
+  }
+
+  function buildPublicFullProductDefaultStockItem(product, details) {
+    const productId = Number(product?.id || 0);
+    const defaultConfig = details.defaultConfigs?.[productId] || {};
+    const item = {
+      product_id: productId,
+      qty: 1,
+      quantity: 1,
+    };
+
+    if (defaultConfig.variant_group_id != null || defaultConfig.variant_label) {
+      item.variants = [{
+        variant_group_id: defaultConfig.variant_group_id != null ? Number(defaultConfig.variant_group_id) : null,
+        variant_value_index: defaultConfig.variant_value_index != null ? Number(defaultConfig.variant_value_index) : null,
+        label: str(defaultConfig.variant_label || ''),
+        value: str(defaultConfig.variant_label || ''),
+      }];
+    }
+
+    const ingredients = Array.isArray(defaultConfig.ingredients) ? defaultConfig.ingredients : [];
+    if (ingredients.length) {
+      item.ingredients = ingredients
+        .map((ing) => {
+          const ingredientId = Number(ing?.ingredient_id || ing?.product_id || 0);
+          const quantity = Number(ing?.quantity ?? ing?.qty ?? 0);
+          if (!(ingredientId > 0) || !(quantity > 0)) return null;
+          return {
+            ingredient_id: ingredientId,
+            product_id: ingredientId,
+            quantity,
+            qty: quantity,
+            unit_id: ing?.unit_id != null ? Number(ing.unit_id) : null,
+          };
+        })
+        .filter(Boolean);
+    }
+
+    const optionItems = Array.isArray(defaultConfig.option_items) ? defaultConfig.option_items : [];
+    if (optionItems.length) {
+      item.options = optionItems
+        .map((option) => {
+          const targetProductId = Number(option?.target_product_id || option?.product_id || 0);
+          const optionItemId = Number(option?.id || option?.option_item_id || 0);
+          const qty = Number(option?.qty ?? option?.quantity ?? 1);
+          if (!(targetProductId > 0) && !(optionItemId > 0)) return null;
+          const out = {
+            id: optionItemId > 0 ? optionItemId : undefined,
+            option_item_id: optionItemId > 0 ? optionItemId : undefined,
+            target_product_id: targetProductId > 0 ? targetProductId : undefined,
+            product_id: targetProductId > 0 ? targetProductId : undefined,
+            qty: Number.isFinite(qty) && qty > 0 ? qty : 1,
+            quantity: Number.isFinite(qty) && qty > 0 ? qty : 1,
+          };
+          if (option?.variant_group_id != null || option?.variant_label) {
+            out.variant_group_id = option.variant_group_id != null ? Number(option.variant_group_id) : null;
+            out.variant_value_index = option.variant_value_index != null ? Number(option.variant_value_index) : null;
+            out.variant_label = str(option.variant_label || '');
+            out.variant_value = str(option.variant_label || '');
+          }
+          return out;
+        })
+        .filter(Boolean);
+    }
+
+    if (!Array.isArray(item.ingredients) || !item.ingredients.length) delete item.ingredients;
+    if (!Array.isArray(item.options) || !item.options.length) delete item.options;
+    return item;
+  }
+
+  async function buildPublicFullProductAvailabilityMap(tenantId, storeId, rows, details) {
+    const map = new Map();
+    for (const product of Array.isArray(rows) ? rows : []) {
+      const productId = Number(product?.id || 0);
+      if (!(productId > 0)) continue;
+      try {
+        const availability = await buildStockAvailabilityForOrderItems({
+          db,
+          tenantId,
+          storeId,
+          items: [buildPublicFullProductDefaultStockItem(product, details)],
+        });
+        map.set(productId, availability);
+      } catch (e) {
+        map.set(productId, {
+          product_id: productId,
+          productId,
+          is_available: false,
+          isAvailable: false,
+          is_unlimited: false,
+          isUnlimited: false,
+          max_qty: 0,
+          maxQty: 0,
+          remaining_qty: 0,
+          remainingQty: 0,
+          requirements: [{
+            product_id: productId,
+            productId,
+            product_name: str(product?.name || ''),
+            productName: str(product?.name || ''),
+            required_qty: 1,
+            requiredQty: 1,
+            available_qty: 0,
+            availableQty: 0,
+            remaining_qty: 0,
+            remainingQty: 0,
+            is_unlimited: false,
+            isUnlimited: false,
+            can_fulfill: false,
+            canFulfill: false,
+            error: 'AVAILABILITY_CALC_FAILED',
+          }],
+          error: 'AVAILABILITY_CALC_FAILED',
+        });
+      }
+    }
+    return map;
+  }
+
+  function buildPublicFullProductPassport(product, details, support, availabilityByProductId) {
+    const productId = Number(product?.id || 0);
+    const stock = support.stockByProductId?.[productId] || {
+      product_id: productId,
+      store_id: null,
+      stock_qty: product?.stock_qty != null ? Number(product.stock_qty) : null,
+      qty: product?.stock_qty != null ? Number(product.stock_qty) : null,
+      is_unlimited: product?.stock_qty == null,
+      updated_at: null,
+    };
+    const availability = availabilityByProductId?.get(productId) || null;
+    const isAvailable = availability
+      ? availability.isAvailable !== false && availability.is_available !== false
+      : (product?.is_available === true || Number(product?.is_available || 0) === 1);
+    return {
+      product,
+      units: support.unitsById || {},
+      unitConversions: support.unitConversions || [],
+      productUnitLinks: support.productUnitLinksByProductId?.[productId] || [],
+      stock,
+      availability: availability || {
+        product_id: productId,
+        productId,
+        stock_qty: stock.stock_qty,
+        qty: stock.qty,
+        is_unlimited: stock.is_unlimited,
+        isUnlimited: stock.is_unlimited,
+        is_available: isAvailable,
+        isAvailable,
+        max_qty: stock.stock_qty == null ? null : Number(stock.stock_qty),
+        maxQty: stock.stock_qty == null ? null : Number(stock.stock_qty),
+        remaining_qty: stock.stock_qty == null ? null : Number(stock.stock_qty),
+        remainingQty: stock.stock_qty == null ? null : Number(stock.stock_qty),
+        requirements: [],
+      },
+      ingredients: support.ingredientsByProductId?.[productId] || [],
+      nestedIngredients: support.nestedIngredientsByProductId || {},
+      variants: Array.isArray(details.variants?.[productId]) ? details.variants[productId] : [],
+      options: Array.isArray(details.optionGroupsByProduct?.[productId]) ? details.optionGroupsByProduct[productId] : [],
+      optionAssignments: Array.isArray(details.assignments?.[productId]) ? details.assignments[productId] : [],
+      defaultConfig: details.defaultConfigs?.[productId] || null,
+      comboRefs: support.comboRefsByProductId?.[productId] || [],
+      benefits: {
+        discount: product?.discount || null,
+        buy_x_get_y_badge: product?.buy_x_get_y_badge || null,
+      },
+      texts: {
+        description_short: product?.description_short || null,
+        description: product?.description || null,
+        client_composition: product?.client_composition || null,
+        tech_process: product?.tech_process || null,
+        show_description_short: product?.show_description_short,
+        show_description: product?.show_description,
+        show_client_composition: product?.show_client_composition,
+        show_tech_process: product?.show_tech_process,
+      },
+      visibility: {
+        is_active: Number(product?.is_active || 0) === 1,
+        site_visibility: Number(product?.site_visibility || 0) === 1,
+        is_available: isAvailable,
+      },
+      nutrition: {
+        nutrition_per_100g: product?.nutrition_per_100g || null,
+        nutrition_per_portion: product?.nutrition_per_portion || null,
+        nutrition_portion_grams: product?.nutrition_portion_grams ?? null,
+        nutrition_incomplete: Boolean(product?.nutrition_incomplete),
+      },
+      revision: {
+        updated_at: product?.updated_at || product?.updatedAt || null,
+        revision: product?.updated_at || product?.updatedAt || null,
+        data_version: 'full-product-passport-v1',
+      },
+    };
+  }
+
+  router.post('/products/batch/full-passports', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const rawIds = Array.isArray(req.body?.ids) ? req.body.ids : [];
+      const ids = getPositiveIds(rawIds);
+      if (!ids.length) return res.json({ ok: true, data: {}, versions: {} });
+      if (ids.length > 300) return res.status(400).json({ ok: false, error: 'TOO_MANY' });
+
+      const sortedIds = [...ids].sort((a, b) => a - b);
+      const cacheKey = makePublicCacheKey('products-batch-full-passports-v1', { tenantId, storeId, ids: sortedIds });
+      const cached = getPublicCache(cacheKey);
+      if (cached) {
+        res.set('x-public-cache', 'HIT');
+        return res.json(cached);
+      }
+
+      const placeholders = ids.map(() => '?').join(',');
+      const [rows] = await db.query(
+        `SELECT p.*, s.qty AS stock_qty
+         FROM prod_products p
+         LEFT JOIN prod_product_stocks s
+           ON s.tenant_id = p.tenant_id AND s.store_id = ? AND s.product_id = p.id
+         WHERE p.tenant_id=? AND p.id IN (${placeholders}) AND p.is_active=1 AND p.site_visibility=1`,
+        [storeId, tenantId, ...ids]
+      );
+
+      for (const p of rows) {
+        p.photos = safeJsonArray(p.photos_json);
+        attachProductThumbs(p);
+        p.is_available = p.stock_qty == null || Number(p.stock_qty) > 0;
+      }
+      await applyPublicProductAvailability(rows, tenantId, storeId);
+      await applyPublicProductBlocksToRows(rows, tenantId, storeId);
+      await applyPublicProductNutrition(rows, tenantId);
+      await enrichProductsWithDisplayPrice(rows, tenantId, storeId);
+      await enrichProductsWithDiscounts(rows, tenantId, storeId);
+      await attachPublicProductCategoryIds(rows, tenantId);
+
+      const rowIds = rows.map((row) => Number(row.id || 0)).filter((id) => id > 0).sort((a, b) => a - b);
+      const details = await buildPublicProductPassportDetails(tenantId, storeId, rowIds);
+      const support = await buildPublicFullProductPassportSupport(tenantId, storeId, rowIds);
+      const availabilityByProductId = await buildPublicFullProductAvailabilityMap(tenantId, storeId, rows, details);
+
+      const data = {};
+      const versions = {};
+      rows.forEach((product) => {
+        const id = Number(product?.id || 0);
+        if (!(id > 0)) return;
+        data[String(id)] = buildPublicFullProductPassport(product, details, support, availabilityByProductId);
+        versions[String(id)] = product.updated_at || product.updatedAt || null;
+      });
+
+      const payload = { ok: true, data, versions };
+      setPublicCache(cacheKey, payload, PUBLIC_CACHE_TTL_MS.productsBatchPassports);
+      res.set('x-public-cache', 'MISS');
+      res.json(payload);
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
 
   router.post('/products/batch/passports', async (req, res) => {
     try {

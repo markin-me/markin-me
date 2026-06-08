@@ -13,7 +13,22 @@ export type FulfillmentSelection = {
   pickupStoreId: number | null;
 };
 
+export type CheckoutCartSummary = {
+  bonusAccrualAmount: number;
+  bonusAccrualBlockedByRedeem: boolean;
+  bonusRedeemAmount: number;
+  deliveryCost: number;
+  discountDetailItems?: Array<Record<string, unknown>>;
+  discountAmount: number;
+  itemDiscountAmount: number;
+  itemsTotal: number;
+  lineStates?: Array<Record<string, unknown>>;
+  subtotalBeforeDiscount: number;
+  total: number;
+};
+
 const FULFILLMENT_SELECTION_KEY = 'mobile_fulfillment_selection_v1';
+const CHECKOUT_CART_SUMMARY_KEY = 'mobile_checkout_cart_summary_v1';
 
 const defaultFulfillmentSelection: FulfillmentSelection = {
   addressId: null,
@@ -36,6 +51,29 @@ function normalizeFulfillmentSelection(value: unknown): FulfillmentSelection {
   };
 }
 
+function toMoney(value: unknown) {
+  const numberValue = Number(value || 0);
+  return Number.isFinite(numberValue) && numberValue > 0 ? numberValue : 0;
+}
+
+function normalizeCheckoutCartSummary(value: unknown): CheckoutCartSummary | null {
+  if (!value || typeof value !== 'object') return null;
+  const source = value as Partial<CheckoutCartSummary>;
+  return {
+    bonusAccrualAmount: toMoney(source.bonusAccrualAmount),
+    bonusAccrualBlockedByRedeem: source.bonusAccrualBlockedByRedeem === true,
+    bonusRedeemAmount: toMoney(source.bonusRedeemAmount),
+    deliveryCost: toMoney(source.deliveryCost),
+    discountDetailItems: Array.isArray(source.discountDetailItems) ? source.discountDetailItems : [],
+    discountAmount: toMoney(source.discountAmount),
+    itemDiscountAmount: toMoney(source.itemDiscountAmount),
+    itemsTotal: toMoney(source.itemsTotal),
+    lineStates: Array.isArray(source.lineStates) ? source.lineStates : [],
+    subtotalBeforeDiscount: toMoney(source.subtotalBeforeDiscount),
+    total: toMoney(source.total),
+  };
+}
+
 export async function readFulfillmentSelection() {
   try {
     const raw = await AsyncStorage.getItem(FULFILLMENT_SELECTION_KEY);
@@ -48,5 +86,21 @@ export async function readFulfillmentSelection() {
 export async function saveFulfillmentSelection(selection: FulfillmentSelection) {
   const normalized = normalizeFulfillmentSelection(selection);
   await AsyncStorage.setItem(FULFILLMENT_SELECTION_KEY, JSON.stringify(normalized));
+  return normalized;
+}
+
+export async function readCheckoutCartSummary() {
+  try {
+    const raw = await AsyncStorage.getItem(CHECKOUT_CART_SUMMARY_KEY);
+    return normalizeCheckoutCartSummary(raw ? JSON.parse(raw) : null);
+  } catch {
+    return null;
+  }
+}
+
+export async function saveCheckoutCartSummary(summary: CheckoutCartSummary) {
+  const normalized = normalizeCheckoutCartSummary(summary);
+  if (!normalized) return null;
+  await AsyncStorage.setItem(CHECKOUT_CART_SUMMARY_KEY, JSON.stringify(normalized));
   return normalized;
 }

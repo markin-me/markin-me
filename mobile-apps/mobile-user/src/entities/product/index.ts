@@ -11,4 +11,15 @@ export type {
   CatalogProductPassport,
   MobileCatalogSnapshot,
   Product,
+  UnitConversion,
 } from './model';
+export type {
+  FullProductAvailabilityRequirement,
+  FullProductPassport,
+  FullProductPassportsPayload,
+} from './fullPassport';
+export {
+  catalogPassportFromFullProductPassport,
+  normalizeFullProductPassport,
+  normalizeFullProductPassportMap,
+} from './fullPassport';

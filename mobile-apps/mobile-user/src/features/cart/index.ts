@@ -1,9 +1,11 @@
 export {
   addCartLine,
+  cartLinesToStockCheckItems,
   clearCartLines,
   formatCartIngredientLine,
   formatCartOptionLine,
   formatCartVariantLine,
+  getCartLineStockProductIds,
   makeCartLineId,
   readCartLines,
   removeCartLine,

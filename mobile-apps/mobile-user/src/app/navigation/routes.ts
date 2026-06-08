@@ -9,6 +9,7 @@ export const routes = {
   comboReplace: 'comboReplace',
   categories: 'categories',
   cart: 'cart',
+  checkout: 'checkout',
   chat: 'chat',
   profile: 'profile',
   profileSettings: 'profileSettings',
@@ -52,6 +53,7 @@ export type RootStackParamList = {
   tasks: undefined;
   orders: undefined;
   orderDetails: { orderId: number };
+  checkout: undefined;
   addresses: { selectedCity?: string } | undefined;
   addressForm: { addressId?: number; selectedCity?: string } | undefined;
   citySelect: { addressId?: number; returnTo: 'addresses' | 'addressForm'; selectedCity?: string };

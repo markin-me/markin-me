@@ -19,6 +19,16 @@ export type CatalogDiscount = {
   discount_value?: number;
 };
 
+export type CatalogBuyXGetYBadge = {
+  badge_text?: string | null;
+  buy_qty?: number | string | null;
+  id?: number | string | null;
+  is_stackable?: boolean | number | string | null;
+  repeat_mode?: string | null;
+  reward_qty?: number | string | null;
+  title?: string | null;
+};
+
 export type CatalogProduct = {
   id: number;
   name: string;
@@ -37,8 +47,11 @@ export type CatalogProduct = {
   photos?: string[];
   photo_thumb?: string | null;
   photo_lqip?: string | null;
-  is_available?: boolean | number;
+  fulfillment_mode?: string | null;
+  is_available?: boolean | number | string;
+  stock_qty?: number | string | null;
   discount?: CatalogDiscount | null;
+  buy_x_get_y_badge?: CatalogBuyXGetYBadge | null;
   category_ids?: number[];
   blocks_config?: {
     variants?: unknown;
@@ -58,6 +71,15 @@ export type CatalogNutrition = {
   protein?: number | null;
   fat?: number | null;
   carbs?: number | null;
+};
+
+export type UnitConversion = {
+  factor?: number | string | null;
+  from_unit_id?: number | string | null;
+  id?: number | string | null;
+  is_active?: boolean | number | string | null;
+  tenant_id?: number | string | null;
+  to_unit_id?: number | string | null;
 };
 
 export type CatalogProductPassport = {
@@ -91,7 +113,7 @@ export type CatalogCombo = {
   grid_photos_thumb?: string[];
   grid_photo_sets?: string[][];
   min_price?: number | null;
-  is_available?: boolean | number;
+  is_available?: boolean | number | string;
   block_product_ids?: number[][];
 };
 
@@ -128,7 +150,7 @@ export type CatalogComboBlockProduct = {
   unit_id?: number | null;
   sort_order?: number | null;
   is_default?: boolean | number;
-  is_available?: boolean | number;
+  is_available?: boolean | number | string;
   product_photo?: string | null;
   product_photos_json?: string[] | string | null;
   preview?: CatalogComboProductPreview | null;

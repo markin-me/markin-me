@@ -14,8 +14,8 @@ import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import type { RootStackParamList } from '../../app/navigation/routes';
-import type { CatalogComboDetails } from '../../entities/product';
-import { addCartLine, makeCartLineId, readCartLines, saveCartLine, type CartComboSelection, type CartIngredient, type CartLine, type CartLineDraft, type CartVariant } from '../../features/cart';
+import type { CatalogComboDetails, UnitConversion } from '../../entities/product';
+import { addCartLine, cartLinesToStockCheckItems, getCartLineStockProductIds, makeCartLineId, readCartLines, saveCartLine, type CartComboSelection, type CartIngredient, type CartLine, type CartLineDraft, type CartVariant } from '../../features/cart';
 import {
   cloneComboDraft,
   ComboLineCard,
@@ -29,8 +29,10 @@ import {
   resetComboDraft,
   saveComboDraft,
 } from '../../features/combo-builder';
+import { calculateCartStockLimit, getStockProductIdsForLines, useProductStock } from '../../features/stock';
 import {
   fetchCatalogComboDetails,
+  checkOrderStock,
   getMemoryCatalogComboDetails,
   isSameCachedValue,
   readCachedCatalogComboDetails,
@@ -38,6 +40,7 @@ import {
 } from '../../shared/api';
 import { theme } from '../../shared/config/theme';
 import { formatPrice } from '../../shared/lib/formatPrice';
+import { getUnitConversionFactor } from '../../shared/lib/productStock';
 import { Screen } from '../../shared/ui/Screen';
 
 import { AppText as Text } from '../../shared/ui';
@@ -71,11 +74,24 @@ function buildComboSelectionVariant(config: ReturnType<typeof getComboBlockConfi
     groupTitle: trimText(config?.variant_group_title),
     label,
     unit,
+    unitId: toPositiveId(config?.unit_id || preview?.unit_id),
     valueIndex: config?.variant_value_index ?? null,
   };
 }
 
-function buildComboSelectionIngredients(config: ReturnType<typeof getComboBlockConfig> | null, product: CatalogComboDetails['blocks'][number]['products'][number] | null): CartIngredient[] {
+function getIngredientStockQuantity(source: Record<string, unknown>, quantity: number, unitConversions: UnitConversion[]) {
+  const explicitStockQuantity = Number(source.stock_quantity ?? source.stockQuantity);
+  if (Number.isFinite(explicitStockQuantity) && explicitStockQuantity > 0) return explicitStockQuantity;
+
+  const factor = getUnitConversionFactor(
+    unitConversions,
+    source.unit_id ?? source.ingredient_unit_id,
+    source.ingredient_base_unit_id ?? source.base_unit_id,
+  );
+  return factor == null ? quantity : quantity * factor;
+}
+
+function buildComboSelectionIngredients(config: ReturnType<typeof getComboBlockConfig> | null, product: CatalogComboDetails['blocks'][number]['products'][number] | null, unitConversions: UnitConversion[]): CartIngredient[] {
   const preview = product?.preview || null;
   const ingredients = Array.isArray(preview?.ingredients) ? preview.ingredients : [];
   if (ingredients.length) {
@@ -92,7 +108,9 @@ function buildComboSelectionIngredients(config: ReturnType<typeof getComboBlockC
           id,
           name,
           quantity,
+          stockQuantity: getIngredientStockQuantity(source, quantity, unitConversions),
           unit: trimText(source.unit_short_title || source.unit_label || source.unit_title || source.unit),
+          unitId: toPositiveId(source.unit_id || source.ingredient_unit_id),
         };
       })
       .filter((item): item is CartIngredient => !!item);
@@ -108,13 +126,15 @@ function buildComboSelectionIngredients(config: ReturnType<typeof getComboBlockC
         id: toPositiveId(source.ingredient_id || source.id),
         name,
         quantity,
+        stockQuantity: getIngredientStockQuantity(source, quantity, unitConversions),
         unit: trimText(source.unit || source.unit_label || source.unit_short_title || source.unit_title),
+        unitId: toPositiveId(source.unit_id || source.ingredient_unit_id),
       };
     }).filter((item): item is CartIngredient => !!item)
     : [];
 }
 
-function buildComboSelections(combo: CatalogComboDetails, draft: NonNullable<ReturnType<typeof getComboDraft>>): CartComboSelection[] {
+function buildComboSelections(combo: CatalogComboDetails, draft: NonNullable<ReturnType<typeof getComboDraft>>, unitConversions: UnitConversion[]): CartComboSelection[] {
   return combo.blocks
     .map((block, blockIndex): CartComboSelection | null => {
       const selectedIndex = draft.selectedByBlock[String(blockIndex)] ?? 0;
@@ -124,7 +144,7 @@ function buildComboSelections(combo: CatalogComboDetails, draft: NonNullable<Ret
       const productName = getComboProductTitle(product, config);
       if (!productName) return null;
       return {
-        ingredients: buildComboSelectionIngredients(config, product),
+        ingredients: buildComboSelectionIngredients(config, product, unitConversions),
         oldUnitPrice: getComboProductOldPrice(product, config),
         productId: toPositiveId(config?.product_id || product.product_id),
         productName,
@@ -140,12 +160,15 @@ export function ComboPage({ navigation, route }: ComboPageProps) {
   const comboId = route.params.comboId;
   const cartLineId = route.params.cartLineId || '';
   const openNonce = route.params.openNonce || 0;
+  const { mergeStockRows, refreshMany, stockLevels, unitConversions } = useProductStock();
   const randomizedOpenKeyRef = useRef('');
   const restoredCartLineIdRef = useRef('');
   const [combo, setCombo] = useState<CatalogComboDetails | null>(() => getMemoryCatalogComboDetails(comboId));
   const [draft, setDraft] = useState(() => (combo ? cloneComboDraft(getComboDraft(combo)) : null));
   const [editingLine, setEditingLine] = useState<CartLine | null>(null);
   const [errorText, setErrorText] = useState('');
+  const [comboCanSubmit, setComboCanSubmit] = useState(true);
+  const [comboCanIncrease, setComboCanIncrease] = useState(true);
 
   const applyCombo = useCallback((nextCombo: CatalogComboDetails, resetForOpen = false) => {
     const openKey = `${Number(nextCombo.id || 0)}:${openNonce}`;
@@ -222,20 +245,116 @@ export function ComboPage({ navigation, route }: ComboPageProps) {
 
   const totals = useMemo(() => getComboTotals(combo, draft), [combo, draft]);
 
-  const changeQuantity = (delta: number) => {
+  useEffect(() => {
+    if (!combo || !draft) {
+      setComboCanSubmit(true);
+      setComboCanIncrease(true);
+      return undefined;
+    }
+    const safeCombo = combo;
+    const safeDraft = draft;
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      async function syncComboStock() {
+        const buildProbeLine = (nextDraft: typeof safeDraft) => {
+          const nextTotals = getComboTotals(safeCombo, nextDraft);
+          const line = {
+            comboDraft: nextDraft,
+            comboSelections: buildComboSelections(safeCombo, nextDraft, unitConversions),
+            ingredients: [],
+            oldUnitPrice: nextTotals.oldPrice > nextTotals.price ? nextTotals.oldPrice / nextTotals.quantity : 0,
+            options: [],
+            quantity: nextTotals.quantity,
+            sourceId: safeCombo.id,
+            title: safeCombo.title || 'Комбо',
+            type: 'combo',
+            unitPrice: nextTotals.price / nextTotals.quantity,
+            variant: null,
+          } as CartLineDraft;
+          return { ...line, id: makeCartLineId(line) } as CartLine;
+        };
+        const submitLine = buildProbeLine(safeDraft);
+        const increaseLine = buildProbeLine({ ...safeDraft, quantity: Math.max(1, safeDraft.quantity + 1) });
+        const currentLines = await readCartLines();
+        const submitLines = cartLineId
+          ? currentLines.map((item) => item.id === cartLineId ? submitLine : item)
+          : [...currentLines, submitLine];
+        const increaseLines = cartLineId
+          ? currentLines.map((item) => item.id === cartLineId ? increaseLine : item)
+          : [...currentLines, increaseLine];
+        const affectedProductIds = Array.from(new Set([
+          ...getStockProductIdsForLines(submitLines, stockLevels),
+          ...getStockProductIdsForLines(increaseLines, stockLevels),
+        ]));
+        const refreshResult = affectedProductIds.length ? await refreshMany(affectedProductIds).catch(() => null) : null;
+        const latestStockLevels = refreshResult?.stockLevels || stockLevels;
+        const submitLocal = calculateCartStockLimit(submitLines, latestStockLevels, submitLine.id);
+        const increaseLocal = calculateCartStockLimit(increaseLines, latestStockLevels, increaseLine.id);
+        const [submitCheck, increaseCheck] = await Promise.all([
+          submitLocal.canAdd ? checkOrderStock(cartLinesToStockCheckItems(submitLines)).catch(() => null) : Promise.resolve(null),
+          increaseLocal.canAdd ? checkOrderStock(cartLinesToStockCheckItems(increaseLines)).catch(() => null) : Promise.resolve(null),
+        ]);
+        if (cancelled) return;
+        if (Array.isArray(submitCheck?.stock_levels)) mergeStockRows(submitCheck.stock_levels);
+        if (Array.isArray(increaseCheck?.stock_levels)) mergeStockRows(increaseCheck.stock_levels);
+        setComboCanSubmit(submitLocal.canAdd && (submitCheck ? submitCheck.available !== false : false));
+        setComboCanIncrease(increaseLocal.canAdd && (increaseCheck ? increaseCheck.available !== false : false));
+      }
+      void syncComboStock();
+    }, 180);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [cartLineId, combo, draft, mergeStockRows, refreshMany, stockLevels, unitConversions]);
+
+  const changeQuantity = async (delta: number) => {
     if (!combo || !draft) return;
+    if (delta > 0 && !comboCanIncrease) return;
     const nextDraft = {
       ...draft,
       quantity: Math.max(1, draft.quantity + delta),
     };
+    if (delta > 0) {
+      const nextTotals = getComboTotals(combo, nextDraft);
+      const line = {
+        comboDraft: nextDraft,
+        comboSelections: buildComboSelections(combo, nextDraft, unitConversions),
+        ingredients: [],
+        oldUnitPrice: nextTotals.oldPrice > nextTotals.price ? nextTotals.oldPrice / nextTotals.quantity : 0,
+        options: [],
+        quantity: nextTotals.quantity,
+        sourceId: combo.id,
+        title: combo.title || 'Комбо',
+        type: 'combo',
+        unitPrice: nextTotals.price / nextTotals.quantity,
+        variant: null,
+      } as CartLineDraft;
+      const nextLine = {
+        ...line,
+        id: makeCartLineId(line),
+      };
+      const currentLines = await readCartLines();
+      const nextLinesForCheck = cartLineId
+        ? currentLines.map((item) => item.id === cartLineId ? nextLine : item)
+        : [...currentLines, nextLine];
+      const affectedProductIds = Array.from(new Set([
+        ...nextLinesForCheck.flatMap((item) => getCartLineStockProductIds(item)),
+        ...getStockProductIdsForLines(nextLinesForCheck, stockLevels),
+      ]));
+      const refreshResult = affectedProductIds.length ? await refreshMany(affectedProductIds).catch(() => null) : null;
+      const latestStockLevels = refreshResult?.stockLevels || stockLevels;
+      const localStockLimit = calculateCartStockLimit(nextLinesForCheck, latestStockLevels, nextLine.id);
+      if (!localStockLimit.canAdd) return;
+    }
     saveComboDraft(combo.id, nextDraft);
     setDraft(nextDraft);
   };
 
   const addComboToCart = useCallback(async () => {
-    if (!combo || !draft) return;
+    if (!combo || !draft || !comboCanSubmit) return;
     const photoUrls: string[] = [];
-    const comboSelections = buildComboSelections(combo, draft);
+    const comboSelections = buildComboSelections(combo, draft, unitConversions);
     const detailLines = combo.blocks
       .map((block, blockIndex) => {
         const selectedIndex = draft.selectedByBlock[String(blockIndex)] ?? 0;
@@ -272,6 +391,21 @@ export function ComboPage({ navigation, route }: ComboPageProps) {
       ...line,
       id: makeCartLineId(line),
     };
+    const currentLines = await readCartLines();
+    const nextLinesForCheck = cartLineId
+      ? currentLines.map((item) => item.id === cartLineId ? nextLine : item)
+      : [...currentLines, nextLine];
+    const affectedProductIds = Array.from(new Set([
+      ...nextLinesForCheck.flatMap((item) => getCartLineStockProductIds(item)),
+      ...getStockProductIdsForLines(nextLinesForCheck, stockLevels),
+    ]));
+    const refreshResult = affectedProductIds.length ? await refreshMany(affectedProductIds).catch(() => null) : null;
+    const latestStockLevels = refreshResult?.stockLevels || stockLevels;
+    const localStockLimit = calculateCartStockLimit(nextLinesForCheck, latestStockLevels, nextLine.id);
+    if (!localStockLimit.canAdd) return;
+    const stockCheck = await checkOrderStock(cartLinesToStockCheckItems(nextLinesForCheck)).catch(() => null);
+    if (Array.isArray(stockCheck?.stock_levels)) mergeStockRows(stockCheck.stock_levels);
+    if (stockCheck && stockCheck.available === false) return;
     if (cartLineId) {
       await saveCartLine(nextLine, cartLineId);
       navigation.goBack();
@@ -279,7 +413,7 @@ export function ComboPage({ navigation, route }: ComboPageProps) {
     }
     await addCartLine(nextLine);
     navigation.navigate('main', { screen: 'cart' });
-  }, [cartLineId, combo, draft, navigation, totals.oldPrice, totals.price, totals.quantity]);
+  }, [cartLineId, combo, comboCanSubmit, draft, mergeStockRows, navigation, refreshMany, stockLevels, totals.oldPrice, totals.price, totals.quantity, unitConversions]);
 
   if (!combo || !draft) {
     return (
@@ -327,22 +461,26 @@ export function ComboPage({ navigation, route }: ComboPageProps) {
           <View style={styles.footerQty}>
             <Pressable
               disabled={totals.quantity <= 1}
-              onPress={() => changeQuantity(-1)}
+              onPress={() => void changeQuantity(-1)}
               style={[styles.footerQtyButton, totals.quantity <= 1 && styles.footerQtyButtonDisabled]}
             >
               <Ionicons name="remove" color={theme.colors.text} size={16} />
             </Pressable>
             <Text style={styles.footerQtyText}>{totals.quantity}</Text>
-            <Pressable onPress={() => changeQuantity(1)} style={styles.footerQtyButton}>
-              <Ionicons name="add" color={theme.colors.text} size={16} />
+            <Pressable
+              disabled={!comboCanIncrease}
+              onPress={() => void changeQuantity(1)}
+              style={[styles.footerQtyButton, !comboCanIncrease && styles.footerQtyButtonDisabled]}
+            >
+              <Ionicons name="add" color={comboCanIncrease ? theme.colors.text : theme.colors.muted} size={16} />
             </Pressable>
           </View>
-          <Pressable onPress={addComboToCart} style={styles.actionButton}>
+          <Pressable disabled={!comboCanSubmit} onPress={addComboToCart} style={[styles.actionButton, !comboCanSubmit && styles.actionButtonDisabled]}>
             <View style={styles.actionPriceRow}>
-              <Text style={styles.actionButtonText}>{formatPrice(totals.price)}</Text>
-              {totals.oldPrice > totals.price ? <Text style={styles.actionOldPrice}>{formatPrice(totals.oldPrice)}</Text> : null}
+              <Text style={styles.actionButtonText}>{comboCanSubmit ? formatPrice(totals.price) : 'Больше нет'}</Text>
+              {comboCanSubmit && totals.oldPrice > totals.price ? <Text style={styles.actionOldPrice}>{formatPrice(totals.oldPrice)}</Text> : null}
             </View>
-              <Text style={styles.actionButtonSubText}>{cartLineId ? 'Сохранить' : 'в корзину'}</Text>
+            {comboCanSubmit ? <Text style={styles.actionButtonSubText}>{cartLineId ? 'Сохранить' : 'в корзину'}</Text> : null}
           </Pressable>
         </View>
       </View>
@@ -358,6 +496,9 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingHorizontal: theme.spacing.lg,
     paddingVertical: 9,
+  },
+  actionButtonDisabled: {
+    opacity: 0.55,
   },
   actionButtonSubText: {
     color: theme.colors.primaryText,

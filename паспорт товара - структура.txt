@@ -1,0 +1,609 @@
+Паспорт товара: единая структура данных
+=======================================
+
+Цель
+----
+
+Сделать единый паспорт товара, из которого веб, витрина и мобильное приложение берут одинаковые данные о товаре:
+название, цену, состав, единицы измерения, конвертации, остатки, варианты, опции, комбо, скидки, тексты и видимость.
+
+Ключевое правило:
+не размазывать данные по разным endpoint'ам и локальным догадкам. Паспорт должен быть объектом с секциями:
+
+product,
+units,
+unitConversions,
+stock,
+availability,
+ingredients,
+nestedIngredients,
+variants,
+options,
+comboRefs,
+benefits,
+texts,
+visibility,
+nutrition,
+revision.
+
+Тогда если позже появится, например:
+
+- акции нового типа;
+- доп. настройки опций;
+- ограничения по времени;
+- разные склады;
+- разные цены для приложения/сайта;
+- модификаторы состава;
+- платные/бесплатные замены;
+- ограничения "не больше N в заказ";
+- новые единицы измерения;
+- аллергены;
+- теги;
+- стоп-лист;
+- остатки по филиалам;
+
+это добавляется новой секцией или новым полем внутри существующей секции, без поломки старой логики.
+
+
+Общая схема паспорта
+--------------------
+
+{
+  "product": {},
+  "units": {},
+  "unitConversions": [],
+  "productUnitLinks": [],
+  "stock": {},
+  "availability": {},
+  "ingredients": [],
+  "nestedIngredients": [],
+  "variants": [],
+  "options": [],
+  "comboRefs": [],
+  "benefits": {},
+  "texts": {},
+  "visibility": {},
+  "nutrition": {},
+  "revision": {}
+}
+
+
+1. product
+----------
+
+Основные данные товара.
+
+Поля:
+
+- id;
+- tenantId;
+- name;
+- sku;
+- categoryIds;
+- price;
+- priceSource;
+- oldPrice;
+- costPrice;
+- costPriceSource;
+- marginPercent;
+- unitId;
+- baseUnitId;
+- baseQty;
+- baseQtySource;
+- fulfillmentMode: "stock" или "made_to_order";
+- photos;
+- blocksConfig;
+- isActive;
+- siteVisibility;
+- createdAt;
+- updatedAt.
+
+
+2. units
+--------
+
+Единицы измерения, которые нужны этому товару, его составу, вариантам и опциям.
+
+Важно: текст "г", "кг", "шт", "порц" должен приходить из базы, а не быть нарисованным в коде приложения.
+
+Пример:
+
+{
+  "byId": {
+    "1": { "id": 1, "code": "pcs", "title": "Штука", "shortTitle": "шт" },
+    "2": { "id": 2, "code": "kg", "title": "Килограмм", "shortTitle": "кг" },
+    "3": { "id": 3, "code": "g", "title": "Грамм", "shortTitle": "г" },
+    "6": { "id": 6, "code": "portion", "title": "Порция", "shortTitle": "порц" }
+  }
+}
+
+
+3. unitConversions
+------------------
+
+Общие конвертации единиц измерения.
+
+Пример:
+
+[
+  { "fromUnitId": 2, "toUnitId": 3, "factor": 1000 },
+  { "fromUnitId": 3, "toUnitId": 2, "factor": 0.001 }
+]
+
+
+4. productUnitLinks
+-------------------
+
+Конвертации конкретного товара.
+
+Например: для одного товара 1 штука = 80 г, для другого 1 штука = 180 г.
+
+Поля:
+
+- productId;
+- fromUnitId;
+- toUnitId;
+- factor.
+
+
+5. stock
+--------
+
+Собственный остаток товара.
+
+Поля:
+
+- productId;
+- storeId;
+- stockQty;
+- isUnlimited;
+- updatedAt.
+
+Правила:
+
+- stockQty === null означает бесконечный собственный остаток;
+- stockQty === 0 означает собственного остатка нет;
+- если товар имеет состав, то даже при stockQty === null товар может быть ограничен составом.
+
+
+6. availability
+---------------
+
+Готовый расчет доступности товара для быстрого UI.
+
+Поля:
+
+- productId;
+- isAvailable;
+- maxQty;
+- remainingQty;
+- isUnlimited;
+- reason;
+- requirements.
+
+requirements содержит скрытые лимитирующие компоненты. Их не обязательно показывать пользователю, но приложение должно использовать их для блокировки "+" и расчета "Раскупили" / "Больше нет".
+
+Пример requirement:
+
+{
+  "productId": 12,
+  "productName": "Картофельное пюре",
+  "requiredQty": 150,
+  "requiredUnitId": 3,
+  "availableQty": 10000,
+  "availableUnitId": 3,
+  "maxQty": 66,
+  "isUnlimited": false
+}
+
+
+7. ingredients
+--------------
+
+Прямой состав товара.
+
+Поля:
+
+- id;
+- productId;
+- ingredientProductId;
+- ingredientName;
+- quantity;
+- unitId;
+- quantityMin;
+- quantityMax;
+- quantityStep;
+- priceOverride;
+- isVariable;
+- sortOrder.
+
+Важно:
+если в карточке товара пользователь меняет состав, например 150 г пюре на 350 г, приложение должно пересчитать лимит сразу локально по паспорту.
+
+
+8. nestedIngredients
+--------------------
+
+Вложенный состав компонентов.
+
+Например:
+
+Товар "Куриная отбивная под грибами и сыром с пюре" содержит "Картофельное пюре".
+А "Картофельное пюре" само содержит картофель, молоко, масло и соль.
+
+Эти данные нужны, чтобы понимать реальный расход склада.
+
+
+9. variants
+-----------
+
+Варианты товара.
+
+Поля:
+
+- groupId;
+- groupTitle;
+- valueIndex;
+- label;
+- unitId;
+- priceDelta;
+- costDelta;
+- quantityDelta;
+- discountTiers;
+- exclusions.
+
+Если вариант меняет количество или единицу измерения, это должно попадать в расчет доступности.
+
+
+10. options
+-----------
+
+Опции товара.
+
+Поля:
+
+- groupId;
+- groupTitle;
+- minSelected;
+- maxSelected;
+- items.
+
+У item:
+
+- id;
+- title;
+- price;
+- quantity;
+- unitId;
+- targetProductId;
+- targetProductName;
+- variants;
+- exclusions.
+
+Если опция имеет targetProductId, она списывает остаток связанного товара.
+
+
+11. comboRefs
+-------------
+
+Участие товара в комбо.
+
+Поля:
+
+- comboId;
+- comboTitle;
+- blockId;
+- blockTitle;
+- sortOrder;
+- isDefault.
+
+Если товар участвует в комбо, паспорт должен давать достаточно данных, чтобы комбо могло проверить выбранные товары, варианты, опции и состав.
+
+
+12. benefits
+------------
+
+Акции, скидки и выгоды, связанные с товаром.
+
+Секция должна быть расширяемой, потому что скидки могут быть разного типа.
+
+Пример:
+
+{
+  "productDiscounts": [],
+  "categoryDiscounts": [],
+  "comboBenefits": [],
+  "orderBenefits": [],
+  "personalBenefits": []
+}
+
+Поля скидки:
+
+- id;
+- title;
+- type;
+- value;
+- startsAt;
+- endsAt;
+- isActive;
+- source;
+- conditions.
+
+Важно:
+если сейчас у товара нет прямой скидки, секция все равно должна быть в паспорте пустой. Тогда приложение не будет гадать, забыли скидки загрузить или их действительно нет.
+
+
+13. texts
+---------
+
+Тексты товара.
+
+Поля:
+
+- descriptionShort;
+- description;
+- clientComposition;
+- techProcess;
+- showDescriptionShort;
+- showDescription;
+- showClientComposition;
+- showTechProcess.
+
+
+14. visibility
+--------------
+
+Видимость и публикация.
+
+Поля:
+
+- isActive;
+- siteVisibility;
+- appVisibility;
+- stopList;
+- hiddenReason.
+
+
+15. nutrition
+-------------
+
+КБЖУ.
+
+Поля:
+
+- calories100g;
+- protein100g;
+- fat100g;
+- carbs100g.
+
+
+16. revision
+------------
+
+Версия паспорта.
+
+Поля:
+
+- updatedAt;
+- revision;
+- dataVersion;
+- source;
+
+revision нужен, чтобы приложение понимало, устарел паспорт или нет. Это позволит грузить паспорта десятками, хранить их в кэше и обновлять только измененные товары.
+
+
+Пример: "Куриная отбивная под грибами и сыром с пюре"
+----------------------------------------------------
+
+По дампу базы товар имеет id 51.
+
+Основной товар:
+
+{
+  "product": {
+    "id": 51,
+    "name": "Куриная отбивная под грибами и сыром с пюре",
+    "price": 492.84,
+    "priceSource": "auto",
+    "costPrice": 20.88,
+    "costPriceSource": "auto",
+    "marginPercent": 95.76,
+    "unitId": 6,
+    "baseUnitId": 6,
+    "fulfillmentMode": "stock",
+    "isActive": true,
+    "siteVisibility": true,
+    "photos": [
+      "/static/uploads/products/1/2cb08d751796be51255796d4e3bcd314.webp"
+    ],
+    "blocksConfig": {
+      "ingredients": true
+    },
+    "updatedAt": "2026-06-01 08:33:54"
+  }
+}
+
+Категории:
+
+[
+  { "id": 1 },
+  { "id": 7, "name": "Вторые блюда" }
+]
+
+Собственный остаток:
+
+{
+  "stock": {
+    "productId": 51,
+    "storeId": 1,
+    "stockQty": null,
+    "isUnlimited": true
+  }
+}
+
+Это значит: сам товар по собственному складу бесконечный, но его все равно может ограничивать состав.
+
+Состав:
+
+[
+  {
+    "ingredientProductId": 12,
+    "ingredientName": "Картофельное пюре",
+    "quantity": 150,
+    "unitId": 3,
+    "unit": "г",
+    "quantityMin": 150,
+    "quantityMax": 350,
+    "quantityStep": 100,
+    "isVariable": true,
+    "stockQty": 10000
+  },
+  {
+    "ingredientProductId": 31,
+    "ingredientName": "Куринная отбивная под грибами и сыром",
+    "quantity": 1,
+    "unitId": 1,
+    "unit": "шт",
+    "quantityMin": 1,
+    "quantityMax": 2,
+    "quantityStep": 1,
+    "isVariable": true,
+    "stockQty": null
+  }
+]
+
+Вложенный состав для "Картофельное пюре":
+
+[
+  {
+    "parentProductId": 12,
+    "ingredientProductId": 15,
+    "ingredientName": "Картофель",
+    "quantity": 1.2,
+    "unitId": 2,
+    "unit": "кг",
+    "stockQty": 23
+  },
+  {
+    "parentProductId": 12,
+    "ingredientProductId": 17,
+    "ingredientName": "Молоко",
+    "quantity": 400,
+    "unitId": 3,
+    "unit": "г",
+    "stockQty": null
+  },
+  {
+    "parentProductId": 12,
+    "ingredientProductId": 16,
+    "ingredientName": "Масло сливочное",
+    "quantity": 400,
+    "unitId": 3,
+    "unit": "г",
+    "stockQty": null
+  },
+  {
+    "parentProductId": 12,
+    "ingredientProductId": 19,
+    "ingredientName": "Соль",
+    "quantity": 13,
+    "unitId": 3,
+    "unit": "г",
+    "stockQty": null
+  }
+]
+
+Расчет доступности:
+
+{
+  "availability": {
+    "productId": 51,
+    "isAvailable": true,
+    "isUnlimited": false,
+    "maxQty": 66,
+    "reason": "limited_by_ingredient",
+    "requirements": [
+      {
+        "productId": 12,
+        "productName": "Картофельное пюре",
+        "requiredQty": 150,
+        "requiredUnitId": 3,
+        "requiredUnit": "г",
+        "availableQty": 10000,
+        "availableUnitId": 3,
+        "availableUnit": "г",
+        "maxQty": 66,
+        "isUnlimited": false
+      },
+      {
+        "productId": 31,
+        "productName": "Куринная отбивная под грибами и сыром",
+        "requiredQty": 1,
+        "requiredUnitId": 1,
+        "requiredUnit": "шт",
+        "availableQty": null,
+        "isUnlimited": true
+      }
+    ]
+  }
+}
+
+Почему maxQty = 66:
+
+У товара свой остаток бесконечный.
+Но на одну порцию нужно 150 г картофельного пюре.
+Картофельного пюре осталось 10000 г.
+
+10000 / 150 = 66 порций.
+
+Если пользователь в карточке товара поменяет пюре на 350 г:
+
+10000 / 350 = 28 порций.
+
+Если пользователь поменяет отбивную с 1 шт на 2 шт, сейчас это не ограничит товар, потому что у "Куринная отбивная под грибами и сыром" stockQty === null.
+
+Если у "Куринная отбивная под грибами и сыром" потом станет stockQty === 0, родительский товар должен стать недоступен:
+
+- в каталоге: "Раскупили";
+- кнопка "+" disabled;
+- в карточке товара нельзя добавить;
+- в комбо нельзя выбрать или нельзя увеличить количество;
+- в корзине нельзя увеличить количество;
+- перед checkout серверная проверка должна заблокировать заказ.
+
+
+Как приложение должно использовать паспорт
+------------------------------------------
+
+1. При загрузке приложения загрузить паспорта товаров пачкой.
+2. Сохранить паспорта в общий cache.
+3. Каталог, карточка товара, комбо и корзина читают один и тот же cache.
+4. Все быстрые расчеты делать локально из паспорта:
+   - сколько можно добавить;
+   - можно ли нажать "+";
+   - показывать "Раскупили" или "Больше нет";
+   - учитывать уже лежащую корзину;
+   - учитывать состав, варианты, опции и комбо.
+5. Перед checkout обязательно вызвать серверную проверку stock-check.
+6. Если сервер вернул новые остатки, обновить cache и пересчитать UI.
+
+
+Главное поведение
+-----------------
+
+Паспорт не должен быть только карточкой товара для отображения.
+
+Он должен быть полной машинной моделью товара:
+
+- что это за товар;
+- как он продается;
+- в каких единицах;
+- сколько он требует склада;
+- какие товары участвуют в составе;
+- какие есть вложенные составы;
+- какие варианты и опции меняют расход;
+- где товар участвует в комбо;
+- какие скидки и акции к нему относятся;
+- какая версия данных сейчас актуальна.
+
+Тогда мобильное приложение, веб и витрина будут считать одинаково, а не каждый экран по-своему.

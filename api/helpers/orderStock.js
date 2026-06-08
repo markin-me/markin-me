@@ -437,7 +437,6 @@ async function buildDeductions({ db, tenantId, items }) {
 
     if (normalizeProductFulfillmentMode(product.fulfillment_mode) !== 'made_to_order') {
       addDeduction(pid, qty);
-      return;
     }
 
     const baseQty = toPositiveNumber(product.base_qty, 1);
@@ -678,6 +677,86 @@ async function checkStockAvailabilityForOrderItems({
   };
 }
 
+function buildAvailabilityFromStockLevels(productId, stockLevels) {
+  const levels = Array.isArray(stockLevels) ? stockLevels : [];
+  let maxQty = null;
+  let remainingQty = null;
+  let hasFiniteRequirement = false;
+  let hasUnfulfilled = false;
+
+  const requirements = levels.map((level) => {
+    const requiredQty = roundQty(level?.requiredQty);
+    const availableQty = level?.qty == null ? null : roundQty(level.qty);
+    const isUnlimited = level?.isUnlimited === true || availableQty == null;
+    const canFulfill = level?.canFulfill !== false;
+
+    if (!isUnlimited && requiredQty > 0) {
+      hasFiniteRequirement = true;
+      const maxForRequirement = Math.floor(Math.max(0, Number(availableQty || 0)) / requiredQty);
+      maxQty = maxQty == null ? maxForRequirement : Math.min(maxQty, maxForRequirement);
+      const remainingForRequirement = roundQty(Number(availableQty || 0) - requiredQty);
+      remainingQty = remainingQty == null ? remainingForRequirement : Math.min(remainingQty, remainingForRequirement);
+    }
+    if (!canFulfill) hasUnfulfilled = true;
+
+    return {
+      product_id: Number(level?.productId || 0),
+      productId: Number(level?.productId || 0),
+      product_name: String(level?.productName || ''),
+      productName: String(level?.productName || ''),
+      required_qty: requiredQty,
+      requiredQty,
+      available_qty: availableQty,
+      availableQty,
+      remaining_qty: level?.remainingQty == null ? null : roundQty(level.remainingQty),
+      remainingQty: level?.remainingQty == null ? null : roundQty(level.remainingQty),
+      is_unlimited: isUnlimited,
+      isUnlimited,
+      can_fulfill: canFulfill,
+      canFulfill,
+    };
+  });
+
+  const isUnlimited = !hasFiniteRequirement;
+  const safeMaxQty = hasFiniteRequirement ? Math.max(0, Number(maxQty || 0)) : null;
+  const isAvailable = !hasUnfulfilled && (safeMaxQty == null || safeMaxQty > 0);
+
+  return {
+    product_id: Number(productId || 0),
+    productId: Number(productId || 0),
+    is_available: isAvailable,
+    isAvailable,
+    is_unlimited: isUnlimited,
+    isUnlimited,
+    max_qty: safeMaxQty,
+    maxQty: safeMaxQty,
+    remaining_qty: isUnlimited ? null : Math.max(0, Number(remainingQty || 0)),
+    remainingQty: isUnlimited ? null : Math.max(0, Number(remainingQty || 0)),
+    requirements,
+  };
+}
+
+async function buildStockAvailabilityForOrderItems({
+  db,
+  tenantId,
+  storeId,
+  items,
+}) {
+  const check = await checkStockAvailabilityForOrderItems({
+    db,
+    tenantId,
+    storeId,
+    items,
+  });
+  const firstItem = Array.isArray(items) ? items[0] : null;
+  return {
+    ...buildAvailabilityFromStockLevels(Number(firstItem?.product_id || 0), check.stockLevels),
+    stock_levels: check.stockLevels,
+    shortages: check.shortages,
+    available: check.available,
+  };
+}
+
 async function applyStockUpdates({ db, tenantId, storeId, deductions }) {
   for (const item of deductions) {
     const productId = Number(item.productId);
@@ -819,5 +898,6 @@ async function applyStockDeductionForOrderItems({
 
 module.exports = {
   applyStockDeductionForOrderItems,
+  buildStockAvailabilityForOrderItems,
   checkStockAvailabilityForOrderItems,
 };

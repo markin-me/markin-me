@@ -6,8 +6,12 @@ import type {
   CatalogComboDetails,
   CatalogProduct,
   CatalogProductPassport,
+  FullProductAvailabilityRequirement,
+  FullProductPassport,
   MobileCatalogSnapshot,
+  UnitConversion,
 } from '../../entities/product';
+import { normalizeFullProductPassportMap } from '../../entities/product';
 import { apiConfig } from './config';
 
 export { apiConfig } from './config';
@@ -180,6 +184,61 @@ export type CustomerBenefits = {
   promo_codes: CustomerBenefitCard[];
 };
 
+export type CheckoutBenefitDiscountBreakdown = Record<string, unknown> & {
+  amount?: number | string | null;
+  discount_id?: number | string | null;
+  key?: string | null;
+  promo_code?: string | null;
+  promo_code_id?: number | string | null;
+  reward_id?: number | string | null;
+  source_kind?: string | null;
+  title?: string | null;
+};
+
+export type CheckoutBenefitsSummary = Record<string, unknown> & {
+  delivery?: number | string | null;
+  discount_breakdown?: CheckoutBenefitDiscountBreakdown[];
+  discount_total?: number | string | null;
+  items_total?: number | string | null;
+  subtotal?: number | string | null;
+  total?: number | string | null;
+};
+
+export type CheckoutBenefitsPreviewData = Record<string, unknown> & {
+  client_calculation?: Record<string, unknown> | null;
+  completed?: CustomerBenefitCard[];
+  details?: Record<string, unknown> | null;
+  discounts?: CustomerBenefitCard[];
+  gifts?: CustomerBenefitCard[];
+  mode?: string | null;
+  progress?: CustomerBenefitCard[];
+  promo_codes?: CustomerBenefitCard[];
+  summary?: CheckoutBenefitsSummary | null;
+};
+
+export type CheckoutBenefitsPreviewRequest = Record<string, unknown> & {
+  items?: Array<Record<string, unknown>>;
+  method_code?: 'delivery' | 'takeaway' | string | null;
+  promo_code?: string | null;
+  selected_discount_id?: number | string | null;
+  selected_discount_source?: string | null;
+  selected_promo_reward_id?: number | string | null;
+  selected_promo_source?: string | null;
+};
+
+export type OrderStockCheckPayload = {
+  available: boolean;
+  line_requirements?: Array<Record<string, unknown>>;
+  lineRequirements?: Array<Record<string, unknown>>;
+  shortages?: Array<Record<string, unknown>>;
+  stock_levels?: Array<Record<string, unknown>>;
+};
+
+export type ProductsBatchAvailabilityPayload = {
+  data?: Record<string, Record<string, unknown>>;
+  stock_levels?: Array<Record<string, unknown>>;
+};
+
 export type CustomerOrderItem = Record<string, unknown> & {
   combo_title?: string | null;
   ingredients?: Array<Record<string, unknown>>;
@@ -270,7 +329,9 @@ type AuthSuccessPayload = {
 };
 
 let memoryCatalogSnapshot: MobileCatalogSnapshot | null = null;
+let memoryFullProductPassports: Record<string, FullProductPassport> = {};
 const memoryComboDetails = new Map<number, CatalogComboDetails>();
+let memoryUnitConversions: UnitConversion[] | null = null;
 let memoryCustomerPassport: CustomerPassport | null = null;
 let memoryPublicOrderConfig: PublicOrderConfig | null = null;
 let memoryTenantStores: TenantStore[] | null = null;
@@ -282,6 +343,8 @@ const memoryCustomerDiscounts = new Map<string, CustomerBenefitCard[]>();
 const memoryCustomerOrderDetails = new Map<string, CustomerOrder | null>();
 const memoryCustomerOrders = new Map<string, CustomerOrdersPayload>();
 const passportLoadRequests = new Map<number, Promise<CatalogProductPassport | null>>();
+const fullPassportLoadRequests = new Map<number, Promise<FullProductPassport | null>>();
+const fullPassportBatchLoadRequests = new Map<string, Promise<Record<string, FullProductPassport>>>();
 const comboDetailsLoadRequests = new Map<number, Promise<CatalogComboDetails>>();
 
 function buildUrl(path: string) {
@@ -368,8 +431,16 @@ function getMobileSnapshotStorageKey() {
   return `mobile_catalog_snapshot_v1_t${apiConfig.tenantId}_s${apiConfig.storeId}`;
 }
 
+function getFullProductPassportsStorageKey() {
+  return `mobile_full_product_passports_v1_t${apiConfig.tenantId}_s${apiConfig.storeId}`;
+}
+
 function getComboDetailsStorageKey(comboId: number) {
   return `mobile_combo_details_v1_t${apiConfig.tenantId}_s${apiConfig.storeId}_c${comboId}`;
+}
+
+function getUnitConversionsStorageKey() {
+  return `mobile_unit_conversions_v1_t${apiConfig.tenantId}_s${apiConfig.storeId}`;
 }
 
 function getCustomerPassportStorageKey() {
@@ -464,6 +535,10 @@ function normalizePublicOrderConfig(value: unknown): PublicOrderConfig | null {
   return value && typeof value === 'object' ? value as PublicOrderConfig : null;
 }
 
+function normalizeUnitConversions(value: unknown): UnitConversion[] | null {
+  return Array.isArray(value) ? value.filter((item): item is UnitConversion => Boolean(item && typeof item === 'object')) : null;
+}
+
 function normalizeTenantStores(value: unknown): TenantStore[] | null {
   return Array.isArray(value) ? value : null;
 }
@@ -526,10 +601,20 @@ export function getMemoryCatalogComboDetails(comboId: number) {
   return memoryComboDetails.get(id) || null;
 }
 
+export function getMemoryUnitConversions() {
+  return memoryUnitConversions || [];
+}
+
 export function getCatalogProductPassport(productId: number): CatalogProductPassport | null {
   const id = Number(productId);
   if (!Number.isFinite(id) || id <= 0) return null;
   return memoryCatalogSnapshot?.productPassports?.[String(id)] || null;
+}
+
+export function getFullProductPassport(productId: number): FullProductPassport | null {
+  const id = Number(productId);
+  if (!Number.isFinite(id) || id <= 0) return null;
+  return memoryFullProductPassports[String(id)] || null;
 }
 
 export function getCatalogSnapshotProduct(productId: number): CatalogProduct | null {
@@ -562,6 +647,22 @@ export async function saveMobileCatalogSnapshot(snapshot: MobileCatalogSnapshot)
   return normalized;
 }
 
+export async function readCachedFullProductPassports() {
+  const cached = await readCachedJson(getFullProductPassportsStorageKey(), normalizeFullProductPassportMap);
+  if (cached) memoryFullProductPassports = { ...memoryFullProductPassports, ...cached };
+  return cached || {};
+}
+
+export async function saveFullProductPassports(passports: Record<string, FullProductPassport>) {
+  const normalized = normalizeFullProductPassportMap(passports);
+  memoryFullProductPassports = {
+    ...memoryFullProductPassports,
+    ...normalized,
+  };
+  await saveCachedJson(getFullProductPassportsStorageKey(), memoryFullProductPassports);
+  return memoryFullProductPassports;
+}
+
 export async function readCachedCatalogComboDetails(comboId: number) {
   const id = Number(comboId);
   if (!Number.isFinite(id) || id <= 0) return null;
@@ -581,6 +682,19 @@ export async function saveCatalogComboDetails(combo: CatalogComboDetails) {
   if (!normalized) return null;
   memoryComboDetails.set(normalized.id, normalized);
   await AsyncStorage.setItem(getComboDetailsStorageKey(normalized.id), JSON.stringify(normalized));
+  return normalized;
+}
+
+export async function readCachedUnitConversions() {
+  const cached = await readCachedJson(getUnitConversionsStorageKey(), normalizeUnitConversions);
+  if (cached) memoryUnitConversions = cached;
+  return cached || [];
+}
+
+async function saveUnitConversions(conversions: UnitConversion[]) {
+  const normalized = normalizeUnitConversions(conversions) || [];
+  memoryUnitConversions = normalized;
+  await saveCachedJson(getUnitConversionsStorageKey(), normalized);
   return normalized;
 }
 
@@ -896,6 +1010,11 @@ export async function fetchPublicOrderConfig() {
   return savePublicOrderConfig(data && typeof data === 'object' ? data : null);
 }
 
+export async function fetchUnitConversions() {
+  const data = await requestJson<UnitConversion[]>('/api/public/unit-conversions');
+  return saveUnitConversions(Array.isArray(data) ? data : []);
+}
+
 export async function suggestPublicAddresses(params: {
   city: string;
   query: string;
@@ -1041,6 +1160,52 @@ export async function fetchCustomerDiscounts(token: string): Promise<CustomerBen
   return saveCustomerDiscounts(token, Array.isArray(response.data) ? response.data : []);
 }
 
+export async function fetchCheckoutBenefitsPreview(token: string, payload: CheckoutBenefitsPreviewRequest) {
+  const safeToken = String(token || '').trim();
+  if (!safeToken) throw new Error('UNAUTHORIZED');
+  const response = await requestApi<CheckoutBenefitsPreviewData>('/api/public/checkout/benefits/preview', {
+    body: JSON.stringify(payload && typeof payload === 'object' ? payload : {}),
+    headers: { 'x-customer-token': safeToken },
+    method: 'POST',
+  });
+  return response.data && typeof response.data === 'object' ? response.data : null;
+}
+
+export async function attachCheckoutPromo(token: string, code: string) {
+  const safeToken = String(token || '').trim();
+  const normalizedCode = String(code || '').replace(/\s+/g, '').toUpperCase();
+  if (!safeToken) throw new Error('UNAUTHORIZED');
+  if (!normalizedCode) throw new Error('PROMO_CODE_REQUIRED');
+  const response = await requestApi<Record<string, unknown>>('/api/public/checkout/benefits/attach-promo', {
+    body: JSON.stringify({ code: normalizedCode }),
+    headers: { 'x-customer-token': safeToken },
+    method: 'POST',
+  });
+  return response.data && typeof response.data === 'object' ? response.data : null;
+}
+
+export async function checkOrderStock(items: Array<Record<string, unknown>>) {
+  const response = await requestApi<OrderStockCheckPayload>('/api/public/orders/stock-check', {
+    body: JSON.stringify({ items: Array.isArray(items) ? items : [] }),
+    method: 'POST',
+  });
+  return response.data || { available: true, shortages: [], stock_levels: [] };
+}
+
+export async function fetchProductsBatchAvailability(productIds: number[]) {
+  const ids = Array.from(new Set(
+    (Array.isArray(productIds) ? productIds : [])
+      .map((id) => Number(id || 0))
+      .filter((id) => Number.isFinite(id) && id > 0),
+  ));
+  if (!ids.length) return { data: {}, stock_levels: [] };
+  const response = await requestApi<ProductsBatchAvailabilityPayload>('/api/public/products/batch/availability', {
+    body: JSON.stringify({ ids }),
+    method: 'POST',
+  });
+  return response.data || { data: {}, stock_levels: [] };
+}
+
 export async function joinBonusProgram(token: string) {
   await requestApi('/api/public/bonus/join', {
     body: JSON.stringify({}),
@@ -1147,6 +1312,148 @@ function collectSnapshotProductIds(snapshot: MobileCatalogSnapshot) {
     });
   });
   return Array.from(ids).sort((a, b) => a - b);
+}
+
+function getIngredientRequirementRows(ingredients: unknown[]): FullProductAvailabilityRequirement[] {
+  return (Array.isArray(ingredients) ? ingredients : [])
+    .map((item): FullProductAvailabilityRequirement | null => {
+      const source = item && typeof item === 'object' ? item as Record<string, unknown> : null;
+      const productId = Number(source?.ingredient_id || source?.product_id || source?.id || 0);
+      const requiredQty = Number(source?.quantity ?? source?.qty ?? 0);
+      if (!Number.isFinite(productId) || productId <= 0 || !Number.isFinite(requiredQty) || requiredQty <= 0) return null;
+      const productName = String(source?.ingredient_name || source?.name || '').trim();
+      return {
+        product_id: productId,
+        productId,
+        product_name: productName,
+        productName,
+        required_qty: requiredQty,
+        requiredQty,
+      };
+    })
+    .filter((item): item is FullProductAvailabilityRequirement => !!item);
+}
+
+function fullProductPassportFromCatalogPassport(passport: CatalogProductPassport | null | undefined): FullProductPassport | null {
+  if (!passport?.product) return null;
+  const productId = Number(passport.product.id || 0);
+  if (!Number.isFinite(productId) || productId <= 0) return null;
+  const stockQty = passport.product.stock_qty == null || passport.product.stock_qty === ''
+    ? null
+    : Number(passport.product.stock_qty);
+  const isAvailable = passport.product.is_available == null
+    ? undefined
+    : passport.product.is_available === true || passport.product.is_available === 1 || passport.product.is_available === '1';
+  return {
+    availability: {
+      is_available: isAvailable,
+      isAvailable,
+      product_id: productId,
+      productId,
+      qty: Number.isFinite(stockQty) ? stockQty : null,
+      requirements: getIngredientRequirementRows(passport.ingredients || []),
+      stock_qty: Number.isFinite(stockQty) ? stockQty : null,
+    },
+    benefits: {},
+    comboRefs: [],
+    defaultConfig: passport.defaultConfig && typeof passport.defaultConfig === 'object' ? passport.defaultConfig : null,
+    ingredients: Array.isArray(passport.ingredients) ? passport.ingredients : [],
+    nestedIngredients: {},
+    nutrition: {},
+    optionAssignments: Array.isArray(passport.optionAssignments) ? passport.optionAssignments : [],
+    options: Array.isArray(passport.optionGroups) ? passport.optionGroups : [],
+    product: passport.product,
+    productUnitLinks: [],
+    revision: {
+      data_version: 'catalog-product-passport-v1',
+      revision: passport.updated_at || null,
+      updated_at: passport.updated_at || null,
+    },
+    stock: {},
+    texts: {},
+    unitConversions: [],
+    units: {},
+    variants: Array.isArray(passport.variants) ? passport.variants : [],
+    visibility: {},
+  };
+}
+
+export async function fetchFullProductPassports(productIds: number[]) {
+  const ids = [...new Set((Array.isArray(productIds) ? productIds : [])
+    .map(Number)
+    .filter((id) => Number.isFinite(id) && id > 0))];
+  if (!ids.length) return {};
+  const requestKey = ids.slice().sort((a, b) => a - b).join(',');
+  const pending = fullPassportBatchLoadRequests.get(requestKey);
+  if (pending) return pending;
+
+  const request = (async () => {
+    const response = await requestApi<Record<string, CatalogProductPassport>>('/api/public/products/batch/passports', {
+      body: JSON.stringify({ ids }),
+      method: 'POST',
+    });
+    const catalogPassports = response.data || {};
+    const data = normalizeFullProductPassportMap(Object.fromEntries(
+      Object.entries(catalogPassports).map(([id, passport]) => [id, fullProductPassportFromCatalogPassport(passport)]),
+    ));
+    await saveFullProductPassports(data);
+    return data;
+  })();
+
+  fullPassportBatchLoadRequests.set(requestKey, request);
+  try {
+    return await request;
+  } finally {
+    fullPassportBatchLoadRequests.delete(requestKey);
+  }
+}
+
+export async function warmFullProductPassports(productIds: number[]) {
+  const cached = Object.keys(memoryFullProductPassports).length
+    ? memoryFullProductPassports
+    : await readCachedFullProductPassports();
+  const missingIds = [...new Set((Array.isArray(productIds) ? productIds : [])
+    .map(Number)
+    .filter((id) => Number.isFinite(id) && id > 0 && !cached[String(id)] && !fullPassportLoadRequests.has(id)))];
+  const chunks: number[][] = [];
+  for (let index = 0; index < missingIds.length; index += 4) {
+    chunks.push(missingIds.slice(index, index + 4));
+  }
+
+  for (const chunk of chunks) {
+    await fetchFullProductPassports(chunk);
+  }
+  return memoryFullProductPassports;
+}
+
+export async function warmFullProductPassportsFromSnapshot(snapshot: MobileCatalogSnapshot) {
+  return warmFullProductPassports(collectSnapshotProductIds(snapshot));
+}
+
+export async function ensureFullProductPassport(productId: number) {
+  const id = Number(productId);
+  if (!Number.isFinite(id) || id <= 0) return null;
+
+  const existing = getFullProductPassport(id);
+  if (existing) return existing;
+
+  const pending = fullPassportLoadRequests.get(id);
+  if (pending) return pending;
+
+  const request = (async () => {
+    const cached = await readCachedFullProductPassports();
+    if (cached[String(id)]) return cached[String(id)];
+
+    const loaded = await fetchFullProductPassports([id]);
+    return loaded[String(id)] || null;
+  })();
+
+  fullPassportLoadRequests.set(id, request);
+  try {
+    return await request;
+  } finally {
+    fullPassportLoadRequests.delete(id);
+  }
 }
 
 async function mergeMobileCatalogPassports(snapshot: MobileCatalogSnapshot, productIds: number[]) {

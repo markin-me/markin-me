@@ -24,19 +24,30 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 
 import type { MainTabParamList, RootStackParamList } from '../../app/navigation/routes';
 import { routes } from '../../app/navigation/routes';
-import type { CatalogCategory, CatalogCombo, CatalogProduct, CatalogProductPassport, MobileCatalogSnapshot } from '../../entities/product';
+import type { CatalogCategory, CatalogCombo, CatalogProduct, CatalogProductPassport, MobileCatalogSnapshot, UnitConversion } from '../../entities/product';
 import { addCartLine, makeCartLineId, readCartLines, updateCartLineQuantity, type CartIngredient, type CartLine, type CartLineDraft, type CartOptionItem, type CartVariant } from '../../features/cart';
+import { calculateCartStockLimit, getStockProductIdsForLines, useProductStock } from '../../features/stock';
 import {
   apiConfig,
   ensureMobileCatalogProductPassport,
   fetchMobileCatalogSnapshot,
+  getCatalogProductPassport,
   readCachedMobileCatalogSnapshot,
   resolveAssetUrl,
+  saveMobileCatalogSnapshot,
   warmCatalogComboDetails,
-  warmMobileCatalogPassports,
 } from '../../shared/api';
 import { theme } from '../../shared/config/theme';
 import { formatPrice } from '../../shared/lib/formatPrice';
+import {
+  getProductAvailabilityState,
+  getUnitConversionFactor,
+  isAvailableValue,
+  isProductStockAvailable,
+  extractStockRowsFromCatalogPassports,
+  stockLevelFromProduct,
+  type ProductStockLevel,
+} from '../../shared/lib/productStock';
 import { Screen } from '../../shared/ui/Screen';
 
 import { AppText as Text } from '../../shared/ui';
@@ -126,8 +137,105 @@ function collectCatalogComboIds(snapshot: MobileCatalogSnapshot) {
   return Array.from(ids);
 }
 
-function isAvailable(value: CatalogProduct['is_available'] | CatalogCombo['is_available']) {
-  return value === true || value === 1 || value == null;
+function collectCatalogProductIds(catalog: CatalogState) {
+  const ids = new Set<number>();
+  catalog.productsByCategory.forEach((products) => {
+    products.forEach((product) => {
+      const id = Number(product.id || 0);
+      if (Number.isFinite(id) && id > 0) ids.add(id);
+    });
+  });
+  return Array.from(ids).sort((left, right) => left - right);
+}
+
+function collectStockRowsFromCatalog(catalog: CatalogState, unitConversions: UnitConversion[]) {
+  const rows: ProductStockLevel[] = [];
+  catalog.productsByCategory.forEach((products) => {
+    products.forEach((product) => {
+      const row = stockLevelFromProduct(product);
+      if (row) rows.push(row);
+    });
+  });
+  return [
+    ...rows,
+    ...extractStockRowsFromCatalogPassports(catalog.productPassports, unitConversions),
+  ];
+}
+
+function getAvailabilityRecord(value: unknown) {
+  return value && typeof value === 'object' ? value as Record<string, unknown> : null;
+}
+
+function normalizeAvailabilityPatch(value: unknown): Pick<CatalogProduct, 'fulfillment_mode' | 'is_available' | 'stock_qty'> | null {
+  const row = getAvailabilityRecord(value);
+  if (!row) return null;
+  const rawAvailable = row.is_available ?? row.isAvailable;
+  const stockRaw = row.stock_qty ?? row.qty;
+  const fulfillmentMode = row.fulfillment_mode ?? row.fulfillmentMode;
+  const stockQty = stockRaw == null ? null : Number(stockRaw);
+  const availabilityText = String(rawAvailable ?? '').trim().toLowerCase();
+  const isAvailableValue = rawAvailable === false || rawAvailable === 0 || rawAvailable === '0'
+    || availabilityText === 'false' || availabilityText === 'no' || availabilityText === 'off'
+    ? false
+    : rawAvailable === true || rawAvailable === 1 || rawAvailable === '1'
+      || availabilityText === 'true' || availabilityText === 'yes' || availabilityText === 'on'
+      ? true
+      : stockQty == null || !Number.isFinite(stockQty) || stockQty > 0;
+  const patch: Pick<CatalogProduct, 'fulfillment_mode' | 'is_available' | 'stock_qty'> = {
+    is_available: isAvailableValue,
+    stock_qty: stockQty == null || !Number.isFinite(stockQty) ? null : stockQty,
+  };
+  if (fulfillmentMode !== undefined) {
+    patch.fulfillment_mode = fulfillmentMode == null ? null : String(fulfillmentMode || '').trim() || null;
+  }
+  return patch;
+}
+
+function applyCatalogAvailability(catalog: CatalogState, data: Record<string, unknown>) {
+  let changed = false;
+  const patchProduct = (product: CatalogProduct): CatalogProduct => {
+    const patch = normalizeAvailabilityPatch(data[String(product.id)]);
+    if (!patch) return product;
+    const sameMode = !Object.prototype.hasOwnProperty.call(patch, 'fulfillment_mode') || product.fulfillment_mode === patch.fulfillment_mode;
+    if (sameMode && product.is_available === patch.is_available && product.stock_qty === patch.stock_qty) return product;
+    changed = true;
+    return { ...product, ...patch };
+  };
+  const productsByCategory = new Map<number, CatalogProduct[]>();
+  catalog.productsByCategory.forEach((products, categoryId) => {
+    productsByCategory.set(categoryId, products.map(patchProduct));
+  });
+  const productPassports = new Map<number, CatalogProductPassport>();
+  catalog.productPassports.forEach((passport, productId) => {
+    const product = passport.product ? patchProduct(passport.product) : passport.product;
+    productPassports.set(productId, product && product !== passport.product ? { ...passport, product } : passport);
+  });
+  return changed ? { ...catalog, productPassports, productsByCategory } : catalog;
+}
+
+function applySnapshotAvailability(snapshot: MobileCatalogSnapshot, data: Record<string, unknown>) {
+  let changed = false;
+  const patchProduct = (product: CatalogProduct): CatalogProduct => {
+    const patch = normalizeAvailabilityPatch(data[String(product.id)]);
+    if (!patch) return product;
+    const sameMode = !Object.prototype.hasOwnProperty.call(patch, 'fulfillment_mode') || product.fulfillment_mode === patch.fulfillment_mode;
+    if (sameMode && product.is_available === patch.is_available && product.stock_qty === patch.stock_qty) return product;
+    changed = true;
+    return { ...product, ...patch };
+  };
+  const productsByCategory = Object.fromEntries(
+    Object.entries(snapshot.productsByCategory || {}).map(([categoryId, products]) => [
+      categoryId,
+      (Array.isArray(products) ? products : []).map(patchProduct),
+    ]),
+  );
+  const productPassports = Object.fromEntries(
+    Object.entries(snapshot.productPassports || {}).map(([productId, passport]) => {
+      const product = passport?.product ? patchProduct(passport.product) : passport?.product;
+      return [productId, product && product !== passport.product ? { ...passport, product } : passport];
+    }),
+  );
+  return changed ? { ...snapshot, productPassports, productsByCategory } : snapshot;
 }
 
 function getProductPrice(product: CatalogProduct) {
@@ -161,6 +269,12 @@ function getDiscountText(product: CatalogProduct) {
   if (old > price && price >= 0) return `-${Math.round(((old - price) / old) * 100)}%`;
 
   return '';
+}
+
+function getBuyXGetYBadgeText(product: CatalogProduct) {
+  const badge = product.buy_x_get_y_badge;
+  if (!badge || typeof badge !== 'object') return '';
+  return trimText(badge.badge_text || badge.title);
 }
 
 function getProductImage(product: CatalogProduct) {
@@ -198,23 +312,40 @@ function getPassportVariant(passport: CatalogProductPassport | null): CartVarian
     groupTitle: trimText(variantGroup.title || variantGroup.title_label),
     label,
     unit: trimText(variantGroup.unit_short_title || variantGroup.unit_code || variantGroup.unit_title),
+    unitId: positiveId(variantGroup.unit_id),
     valueIndex: Number.isFinite(valueIndex) ? valueIndex : null,
   };
 }
 
-function getPassportIngredients(passport: CatalogProductPassport | null): CartIngredient[] {
+function getIngredientStockQuantity(source: Record<string, unknown>, quantity: number, unitConversions: UnitConversion[]) {
+  const explicitStockQuantity = Number(source.stock_quantity ?? source.stockQuantity);
+  if (Number.isFinite(explicitStockQuantity) && explicitStockQuantity > 0) return explicitStockQuantity;
+
+  const factor = getUnitConversionFactor(
+    unitConversions,
+    source.unit_id ?? source.ingredient_unit_id,
+    source.ingredient_base_unit_id ?? source.base_unit_id,
+  );
+  return factor == null ? quantity : quantity * factor;
+}
+
+function getPassportIngredients(passport: CatalogProductPassport | null, unitConversions: UnitConversion[]): CartIngredient[] {
   const config = asPlainRecord(passport?.defaultConfig);
-  return asPlainArray(config.ingredients)
+  const configuredIngredients = asPlainArray(config.ingredients);
+  const sourceIngredients = configuredIngredients.length ? configuredIngredients : asPlainArray(passport?.ingredients);
+  return sourceIngredients
     .map((item): CartIngredient | null => {
       const source = asPlainRecord(item);
-      const quantity = Number(source.quantity ?? source.qty ?? 0);
+      const quantity = Number(source.quantity ?? source.qty ?? source.default_qty ?? source.quantity_default ?? 0);
       const name = trimText(source.name || source.ingredient_name);
       if (!(quantity > 0) || !name) return null;
       return {
         id: positiveId(source.ingredient_id || source.id),
         name,
         quantity,
+        stockQuantity: getIngredientStockQuantity(source, quantity, unitConversions),
         unit: trimText(source.unit || source.unit_label || source.unit_short_title || source.unit_title || source.unit_code),
+        unitId: positiveId(source.unit_id || source.ingredient_unit_id),
       };
     })
     .filter((item): item is CartIngredient => !!item);
@@ -232,12 +363,14 @@ function getPassportOptions(passport: CatalogProductPassport | null): CartOption
         id: positiveId(source.id),
         name,
         quantity: Math.max(1, Number(source.qty ?? source.quantity ?? 1)),
+        targetProductId: positiveId(source.target_product_id || source.product_id),
         unitPrice: Math.max(0, Number(source.price || 0)),
         variant: variantLabel ? {
           groupId: positiveId(source.variant_group_id),
           groupTitle: trimText(source.variant_group_title || source.group_title),
           label: variantLabel,
           unit: trimText(source.variant_unit || source.unit),
+          unitId: positiveId(source.unit_id),
           valueIndex: source.variant_value_index == null ? null : Number(source.variant_value_index),
         } : null,
       };
@@ -293,15 +426,15 @@ function buildProductQuantitiesFromCart(lines: CartLine[]) {
   }, {});
 }
 
-function buildCatalogProductCartLine(product: CatalogProduct, passport: CatalogProductPassport | null) {
+function buildCatalogProductCartLine(product: CatalogProduct, passport: CatalogProductPassport | null, stockLevels: Map<number, ProductStockLevel>, unitConversions: UnitConversion[]) {
   const { oldUnitPrice, unitPrice } = getCatalogLinePricing(product, passport);
   const variant = getPassportVariant(passport);
-  const ingredients = getPassportIngredients(passport);
+  const ingredients = getPassportIngredients(passport, unitConversions);
   const options = getPassportOptions(passport);
   const line = {
     detailLines: getProductDefaultLines(product),
     ingredients,
-    isUnavailable: !isAvailable(product.is_available),
+    isUnavailable: !isProductStockAvailable(product, stockLevels),
     oldUnitPrice: oldUnitPrice > unitPrice ? oldUnitPrice : 0,
     options,
     photoUrl: getProductImage(product),
@@ -316,6 +449,10 @@ function buildCatalogProductCartLine(product: CatalogProduct, passport: CatalogP
     ...line,
     id: makeCartLineId(line),
   };
+}
+
+function getReadyCatalogPassport(productId: number, catalogPassports: Map<number, CatalogProductPassport>) {
+  return getCatalogProductPassport(productId) || catalogPassports.get(productId) || null;
 }
 
 function getComboImages(combo: CatalogCombo) {
@@ -471,8 +608,9 @@ function getProductDefaultLines(product: CatalogProduct) {
     .slice(0, 2);
 }
 
-function getProductMediaPillText(product: CatalogProduct, available: boolean, quantity: number) {
-  if (!available) return quantity > 0 ? 'Больше нет' : 'Раскупили';
+function getProductMediaPillText(product: CatalogProduct, availableForAdd: boolean, quantity: number, hasKnownStock = true) {
+  if (!hasKnownStock) return isProductConfigurable(product) ? 'Настроить ›' : '';
+  if (!availableForAdd) return quantity > 0 ? 'Больше нет' : 'Раскупили';
   return isProductConfigurable(product) ? 'Настроить ›' : '';
 }
 
@@ -521,23 +659,29 @@ function ProductCard({
   onDecrease,
   onIncrease,
   onPress,
+  stockLevels,
+  canIncreaseOverride,
 }: {
   product: CatalogProduct;
   quantity: number;
   onDecrease: () => void;
   onIncrease: () => void;
   onPress: () => void;
+  stockLevels: Map<number, ProductStockLevel>;
+  canIncreaseOverride?: boolean;
 }) {
   const image = getProductImage(product);
   const price = getProductPrice(product);
   const oldPrice = getOldPrice(product);
-  const available = isAvailable(product.is_available);
   const discountText = getDiscountText(product);
-  const hasQuantity = quantity > 0;
+  const promoBadgeText = getBuyXGetYBadgeText(product);
+  const availability = getProductAvailabilityState(product, stockLevels, quantity);
+  const hasQuantity = availability.cartQty > 0;
+  const canIncrease = canIncreaseOverride ?? availability.availableForAdd;
   const title = getProductTitle(product);
   const defaultLines = getProductDefaultLines(product);
-  const mediaPillText = getProductMediaPillText(product, available, quantity);
-  const totalPrice = price * Math.max(quantity, 1);
+  const mediaPillText = getProductMediaPillText(product, canIncrease, availability.cartQty, availability.hasKnownStock);
+  const totalPrice = price * Math.max(availability.cartQty, 1);
 
   const handleDecrease = (event: GestureResponderEvent) => {
     event.stopPropagation();
@@ -546,11 +690,11 @@ function ProductCard({
 
   const handleIncrease = (event: GestureResponderEvent) => {
     event.stopPropagation();
-    if (available) onIncrease();
+    if (canIncrease) onIncrease();
   };
 
   return (
-    <Pressable style={[styles.card, !available && styles.cardDisabled]} onPress={onPress}>
+    <Pressable style={[styles.card, !canIncrease && !hasQuantity && availability.hasKnownStock && styles.cardDisabled]} onPress={onPress}>
       <View style={styles.media}>
         {image ? <Image resizeMode="contain" source={{ uri: image }} style={styles.image} /> : <View style={styles.imagePlaceholder} />}
         {hasQuantity ? (
@@ -558,9 +702,10 @@ function ProductCard({
             <QuantityOverlayText quantity={quantity} />
           </View>
         ) : null}
-        {discountText ? <Text style={styles.discountBadge}>{discountText}</Text> : null}
+        {promoBadgeText ? <Text style={styles.promoBadge}>{promoBadgeText}</Text> : null}
+        {discountText ? <Text style={[styles.discountBadge, promoBadgeText ? styles.discountBadgeWithPromo : null]}>{discountText}</Text> : null}
         {mediaPillText ? (
-          <Text style={[styles.mediaPill, !available && styles.mediaPillDisabled]}>{mediaPillText}</Text>
+          <Text style={[styles.mediaPill, !canIncrease && styles.mediaPillDisabled]}>{mediaPillText}</Text>
         ) : null}
       </View>
       <View style={styles.cardBody}>
@@ -581,16 +726,16 @@ function ProductCard({
                 <Text style={styles.unitPriceText}>{formatPrice(price)}</Text>
               </View>
               <Pressable style={styles.qtyPillButton} onPress={handleDecrease}>
-                <Ionicons name={quantity > 1 ? 'remove' : 'trash'} color={theme.colors.primaryText} size={14} />
+                <Ionicons name={availability.cartQty > 1 ? 'remove' : 'trash'} color={theme.colors.primaryText} size={14} />
               </Pressable>
               <View style={styles.qtyPillCenter}>
-                {oldPrice > price ? <Text style={styles.oldPrice}>{formatPrice(oldPrice * quantity)}</Text> : null}
+                {oldPrice > price ? <Text style={styles.oldPrice}>{formatPrice(oldPrice * availability.cartQty)}</Text> : null}
                 <Text numberOfLines={1} style={styles.price}>
                   {formatPrice(totalPrice)}
                 </Text>
               </View>
-              <Pressable style={styles.qtyPillButton} onPress={handleIncrease}>
-                <Ionicons name="add" color={theme.colors.primaryText} size={16} />
+              <Pressable disabled={!canIncrease} style={[styles.qtyPillButton, !canIncrease && styles.qtyPillButtonDisabled]} onPress={handleIncrease}>
+                <Ionicons name="add" color={canIncrease ? theme.colors.primaryText : theme.colors.muted} size={16} />
               </Pressable>
             </View>
           ) : (
@@ -599,8 +744,8 @@ function ProductCard({
                 {oldPrice > price ? <Text style={styles.oldPrice}>{formatPrice(oldPrice)}</Text> : null}
                 <Text numberOfLines={1} style={styles.price}>{formatPrice(price)}</Text>
               </View>
-              <Pressable style={[styles.plusButton, !available && styles.plusButtonDisabled]} onPress={handleIncrease}>
-                <Ionicons name="add" color={theme.colors.primaryText} size={18} />
+              <Pressable disabled={!canIncrease} style={[styles.plusButton, !canIncrease && styles.plusButtonDisabled]} onPress={handleIncrease}>
+                <Ionicons name="add" color={canIncrease ? theme.colors.primaryText : theme.colors.muted} size={18} />
               </Pressable>
             </View>
           )}
@@ -802,7 +947,7 @@ function ComboCard({ combo, isAnimatedActive, onPress }: { combo: CatalogCombo; 
   const [rotationCommand, setRotationCommand] = useState<ComboRotationCommand | null>(null);
   const discountPercent = Number(combo.discount_percent || 0);
   const minPrice = Number(combo.min_price || 0);
-  const available = isAvailable(combo.is_available);
+  const available = isAvailableValue(combo.is_available);
 
   useEffect(() => {
     setComboImageIndexes([0, 0, 0, 0]);
@@ -922,14 +1067,19 @@ export function CatalogPage() {
   const passportWarmQueue = useRef<number[]>([]);
   const passportWarmRequestedIds = useRef(new Set<number>());
   const isPassportWarmRunning = useRef(false);
+  const isStockAvailabilitySyncRunning = useRef(false);
+  const stockAvailabilitySyncKey = useRef('');
   const programmaticCategoryId = useRef<number | null>(null);
+  const { mergeStockRows, refreshMany, stockLevels, unitConversions } = useProductStock();
   const [activeCategoryId, setActiveCategoryId] = useState<number | null>(null);
   const [catalog, setCatalog] = useState<CatalogState>(emptyCatalogState);
+  const [cartLines, setCartLines] = useState<CartLine[]>([]);
   const [productQuantities, setProductQuantities] = useState<Record<number, number>>({});
   const [visibleComboKeys, setVisibleComboKeys] = useState<Set<string>>(() => new Set());
   const [isCatalogScrolling, setCatalogScrolling] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [errorText, setErrorText] = useState('');
+  const [passportReadyVersion, setPassportReadyVersion] = useState(0);
 
   const visibleCategories = useMemo(
     () => catalog.categories.filter((category) => Number(category.id) > 0),
@@ -957,6 +1107,32 @@ export function CatalogPage() {
     [catalogItemLayouts, categoryIndexById, visibleCategories],
   );
 
+  const syncCatalogAvailability = useCallback(async (sourceCatalog: CatalogState, force = false) => {
+    const productIds = collectCatalogProductIds(sourceCatalog);
+    if (!productIds.length) return;
+    const syncKey = productIds.join(',');
+    if (!force && stockAvailabilitySyncKey.current === syncKey) return;
+    if (isStockAvailabilitySyncRunning.current) return;
+    isStockAvailabilitySyncRunning.current = true;
+    try {
+      const result = await refreshMany(productIds).catch(() => null);
+      const availability = result?.payload || null;
+      if (!availability) return;
+      const data = availability.data && typeof availability.data === 'object'
+        ? availability.data as Record<string, unknown>
+        : {};
+      setCatalog((current) => applyCatalogAvailability(current, data));
+      const cachedSnapshot = await readCachedMobileCatalogSnapshot();
+      if (cachedSnapshot) {
+        const nextSnapshot = applySnapshotAvailability(cachedSnapshot, data);
+        if (nextSnapshot !== cachedSnapshot) await saveMobileCatalogSnapshot(nextSnapshot);
+      }
+      stockAvailabilitySyncKey.current = syncKey;
+    } finally {
+      isStockAvailabilitySyncRunning.current = false;
+    }
+  }, [refreshMany]);
+
   const loadCatalog = useCallback(async () => {
     setErrorText('');
     setIsLoading(true);
@@ -965,6 +1141,7 @@ export function CatalogPage() {
       const nextCatalog = getCatalogStateFromSnapshot(snapshot);
       const firstCategoryId = Number(nextCatalog.categories[0]?.id || 0);
       setCatalog(nextCatalog);
+      mergeStockRows(collectStockRowsFromCatalog(nextCatalog, unitConversions));
       setActiveCategoryId((current) => current || (Number.isFinite(firstCategoryId) && firstCategoryId > 0 ? firstCategoryId : null));
     };
 
@@ -983,7 +1160,7 @@ export function CatalogPage() {
         applySnapshot(freshSnapshot);
         hasRenderedSnapshot = true;
       }
-      void warmMobileCatalogPassports(freshSnapshot);
+      void syncCatalogAvailability(getCatalogStateFromSnapshot(freshSnapshot), true);
       void warmCatalogComboDetails(collectCatalogComboIds(freshSnapshot));
     } catch (error) {
       if (!hasRenderedSnapshot) {
@@ -993,19 +1170,35 @@ export function CatalogPage() {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [mergeStockRows, syncCatalogAvailability, unitConversions]);
 
   useEffect(() => {
     void loadCatalog();
   }, [loadCatalog]);
 
+  useEffect(() => {
+    void syncCatalogAvailability(catalog);
+  }, [catalog, syncCatalogAvailability]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void syncCatalogAvailability(catalog, true);
+    }, [catalog, syncCatalogAvailability]),
+  );
+
   useFocusEffect(
     useCallback(() => {
       let isActive = true;
       readCartLines().then((cartLines) => {
-        if (isActive) setProductQuantities(buildProductQuantitiesFromCart(cartLines));
+        if (isActive) {
+          setCartLines(cartLines);
+          setProductQuantities(buildProductQuantitiesFromCart(cartLines));
+        }
       }).catch(() => {
-        if (isActive) setProductQuantities({});
+        if (isActive) {
+          setCartLines([]);
+          setProductQuantities({});
+        }
       });
       return () => {
         isActive = false;
@@ -1025,12 +1218,20 @@ export function CatalogPage() {
     try {
       while (passportWarmQueue.current.length) {
         const batch = passportWarmQueue.current.splice(0, 4);
-        await Promise.all(batch.map((productId) => ensureMobileCatalogProductPassport(productId).catch(() => null)));
+        const passports = await Promise.all(batch.map((productId) => ensureMobileCatalogProductPassport(productId).catch(() => null)));
+        const passportMap = new Map<number, CatalogProductPassport>();
+        passports.forEach((passport) => {
+          const productId = Number(passport?.product?.id || 0);
+          if (Number.isFinite(productId) && productId > 0 && passport) passportMap.set(productId, passport);
+        });
+        const passportRows = extractStockRowsFromCatalogPassports(passportMap, unitConversions);
+        if (passportRows.length) mergeStockRows(passportRows);
+        setPassportReadyVersion((version) => version + 1);
       }
     } finally {
       isPassportWarmRunning.current = false;
     }
-  }, []);
+  }, [mergeStockRows, unitConversions]);
 
   const scheduleProductPassportWarm = useCallback((productIds: number[]) => {
     productIds.forEach((productId) => {
@@ -1129,36 +1330,74 @@ export function CatalogPage() {
 
   const increaseProductQuantity = useCallback(async (product: CatalogProduct) => {
     const productId = Number(product.id);
-    if (!Number.isFinite(productId) || productId <= 0 || !isAvailable(product.is_available)) return;
-    const nextLines = await addCartLine(buildCatalogProductCartLine(product, catalog.productPassports.get(productId) || null));
-    void ensureMobileCatalogProductPassport(productId);
+    if (!Number.isFinite(productId) || productId <= 0) return;
+    if (!getProductAvailabilityState(product, stockLevels, productQuantities[productId] || 0).availableForAdd) return;
+    const result = await refreshMany([productId]).catch(() => null);
+    const availability = result?.payload || null;
+    const data = availability?.data && typeof availability.data === 'object'
+      ? availability.data as Record<string, unknown>
+      : {};
+    const latestPatch = normalizeAvailabilityPatch(data[String(productId)]);
+    if (Object.keys(data).length) {
+      setCatalog((current) => applyCatalogAvailability(current, data));
+    }
+    const latestProduct = latestPatch ? { ...product, ...latestPatch } : product;
+    const latestStockLevels = result?.stockLevels || stockLevels;
+    if (!getProductAvailabilityState(latestProduct, latestStockLevels, productQuantities[productId] || 0).availableForAdd) return;
+    const passport = getReadyCatalogPassport(productId, catalog.productPassports) || await ensureMobileCatalogProductPassport(productId);
+    if (!passport) return;
+    const passportRows = extractStockRowsFromCatalogPassports(new Map([[productId, passport]]), unitConversions);
+    const stockLevelsWithPassport = passportRows.length ? mergeStockRows(passportRows) : latestStockLevels;
+    const nextLine = buildCatalogProductCartLine(latestProduct, passport || null, stockLevelsWithPassport, unitConversions);
+    const currentLines = await readCartLines();
+    const draftLines = [...currentLines, nextLine];
+    const affectedProductIds = Array.from(new Set([
+      productId,
+      ...getStockProductIdsForLines(draftLines, stockLevelsWithPassport),
+    ]));
+    const localRefresh = affectedProductIds.length ? await refreshMany(affectedProductIds).catch(() => null) : null;
+    const localStockLevels = localRefresh?.stockLevels || stockLevelsWithPassport;
+    const localStockLimit = calculateCartStockLimit(draftLines, localStockLevels, nextLine.id);
+    if (!localStockLimit.canAdd) return;
+    const nextLines = await addCartLine(nextLine);
+    setCartLines(nextLines);
     setProductQuantities(buildProductQuantitiesFromCart(nextLines));
-  }, [catalog.productPassports]);
+  }, [catalog.productPassports, mergeStockRows, productQuantities, refreshMany, stockLevels, unitConversions]);
 
   const decreaseProductQuantity = useCallback(async (productId: number) => {
     const lines = await readCartLines();
     const line = [...lines].reverse().find((item) => item.type === 'product' && Number(item.sourceId) === productId);
     if (!line) {
+      setCartLines(lines);
       setProductQuantities(buildProductQuantitiesFromCart(lines));
       return;
     }
     const nextLines = await updateCartLineQuantity(line.id, line.quantity - 1);
+    setCartLines(nextLines);
     setProductQuantities(buildProductQuantitiesFromCart(nextLines));
   }, []);
 
   const renderCatalogCard = useCallback((card: CatalogCardItem) => {
     if (card.type === 'product') {
+      const productId = Number(card.product.id);
+      const passport = getReadyCatalogPassport(productId, catalog.productPassports);
+      const nextLine = passport ? buildCatalogProductCartLine(card.product, passport, stockLevels, unitConversions) : null;
+      const canIncreaseOverride = nextLine
+        ? calculateCartStockLimit([...cartLines, nextLine], stockLevels, nextLine.id).canAdd
+        : undefined;
       return (
         <ProductCard
           key={card.cardKey}
           product={card.product}
-          quantity={productQuantities[Number(card.product.id)] || 0}
-          onDecrease={() => decreaseProductQuantity(Number(card.product.id))}
+          quantity={productQuantities[productId] || 0}
+          canIncreaseOverride={canIncreaseOverride}
+          onDecrease={() => decreaseProductQuantity(productId)}
           onIncrease={() => void increaseProductQuantity(card.product)}
           onPress={() => {
-            void ensureMobileCatalogProductPassport(Number(card.product.id));
-            navigation.navigate('product', { productId: Number(card.product.id) });
+            void ensureMobileCatalogProductPassport(productId);
+            navigation.navigate('product', { productId });
           }}
+          stockLevels={stockLevels}
         />
       );
     }
@@ -1175,8 +1414,13 @@ export function CatalogPage() {
     decreaseProductQuantity,
     increaseProductQuantity,
     isCatalogScrolling,
+    cartLines,
     navigation,
+    passportReadyVersion,
     productQuantities,
+    catalog.productPassports,
+    stockLevels,
+    unitConversions,
     visibleComboKeys,
   ]);
 
@@ -1447,6 +1691,9 @@ const styles = StyleSheet.create({
     right: 7,
     top: 7,
   },
+  discountBadgeWithPromo: {
+    right: 48,
+  },
   quantityOverlay: {
     alignItems: 'center',
     backgroundColor: 'rgba(17, 24, 39, 0.34)',
@@ -1554,6 +1801,19 @@ const styles = StyleSheet.create({
   plusButtonDisabled: {
     backgroundColor: theme.colors.muted,
   },
+  promoBadge: {
+    backgroundColor: theme.colors.accent,
+    borderRadius: theme.radius.pill,
+    color: theme.colors.primaryText,
+    fontSize: 11,
+    fontWeight: '900',
+    overflow: 'hidden',
+    paddingHorizontal: 7,
+    paddingVertical: 4,
+    position: 'absolute',
+    right: 7,
+    top: 7,
+  },
   price: {
     color: theme.colors.text,
     fontSize: 17,
@@ -1578,6 +1838,9 @@ const styles = StyleSheet.create({
     height: 32,
     justifyContent: 'center',
     width: 32,
+  },
+  qtyPillButtonDisabled: {
+    backgroundColor: theme.colors.surface,
   },
   qtyPillCenter: {
     alignItems: 'center',
