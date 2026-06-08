@@ -940,28 +940,27 @@ export function CartPage() {
     const nextQuantity = line.quantity + delta;
     if (delta > 0) {
       const draftLines = replaceCartLine(lines, { ...line, quantity: nextQuantity });
-      const affectedProductIds = collectKnownCartStockProductIds(draftLines, stockLevels);
-      const refreshResult = affectedProductIds.length ? await refreshMany(affectedProductIds).catch(() => null) : null;
-      const latestStockLevels = refreshResult && typeof refreshResult === 'object' && 'stockLevels' in refreshResult
-        ? refreshResult.stockLevels
-        : stockLevels;
-      const localStockLimit = calculateCartStockLimit(draftLines, latestStockLevels, line.id);
+      const localStockLimit = calculateCartStockLimit(draftLines, stockLevels, line.id);
       if (!localStockLimit.canAdd) {
         setStockBlockedLineIds((current) => new Set(current).add(line.id));
         return;
       }
     }
     const savedLines = await updateCartLineQuantity(line.id, nextQuantity);
-    const stockState = await evaluateCartStockState(savedLines, stockLevels, refreshMany);
-    setLines(stockState.lines);
-    setStockBlockedLineIds(stockState.blockedLineIds);
+    setLines(savedLines);
+    void evaluateCartStockState(savedLines, stockLevels, refreshMany).then((stockState) => {
+      setLines(stockState.lines);
+      setStockBlockedLineIds(stockState.blockedLineIds);
+    }).catch(() => null);
   }, [lines, refreshMany, stockLevels]);
 
   const removeLine = useCallback(async (line: CartLine) => {
     const nextLines = await removeCartLine(line.id);
-    const stockState = await evaluateCartStockState(nextLines, stockLevels, refreshMany);
-    setLines(stockState.lines);
-    setStockBlockedLineIds(stockState.blockedLineIds);
+    setLines(nextLines);
+    void evaluateCartStockState(nextLines, stockLevels, refreshMany).then((stockState) => {
+      setLines(stockState.lines);
+      setStockBlockedLineIds(stockState.blockedLineIds);
+    }).catch(() => null);
   }, [refreshMany, stockLevels]);
 
   const clearCart = useCallback(async () => {

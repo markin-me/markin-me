@@ -36,6 +36,7 @@ import {
   resolveAssetUrl,
   saveMobileCatalogSnapshot,
   warmCatalogComboDetails,
+  warmMobileCatalogPassports,
 } from '../../shared/api';
 import { theme } from '../../shared/config/theme';
 import { formatPrice } from '../../shared/lib/formatPrice';
@@ -1081,6 +1082,20 @@ export function CatalogPage() {
   const [errorText, setErrorText] = useState('');
   const [passportReadyVersion, setPassportReadyVersion] = useState(0);
 
+  const mergeCatalogPassports = useCallback((passports: Map<number, CatalogProductPassport>) => {
+    if (!passports.size) return;
+    setCatalog((current) => {
+      let changed = false;
+      const productPassports = new Map(current.productPassports);
+      passports.forEach((passport, productId) => {
+        if (productPassports.get(productId) === passport) return;
+        productPassports.set(productId, passport);
+        changed = true;
+      });
+      return changed ? { ...current, productPassports } : current;
+    });
+  }, []);
+
   const visibleCategories = useMemo(
     () => catalog.categories.filter((category) => Number(category.id) > 0),
     [catalog.categories],
@@ -1144,6 +1159,13 @@ export function CatalogPage() {
       mergeStockRows(collectStockRowsFromCatalog(nextCatalog, unitConversions));
       setActiveCategoryId((current) => current || (Number.isFinite(firstCategoryId) && firstCategoryId > 0 ? firstCategoryId : null));
     };
+    const warmSnapshotPassports = (snapshot: MobileCatalogSnapshot) => {
+      void warmMobileCatalogPassports(snapshot).then((warmedSnapshot) => {
+        const warmedCatalog = getCatalogStateFromSnapshot(warmedSnapshot);
+        mergeCatalogPassports(warmedCatalog.productPassports);
+        mergeStockRows(collectStockRowsFromCatalog(warmedCatalog, unitConversions));
+      }).catch(() => null);
+    };
 
     let hasRenderedSnapshot = false;
 
@@ -1151,6 +1173,7 @@ export function CatalogPage() {
       const cachedSnapshot = await readCachedMobileCatalogSnapshot();
       if (cachedSnapshot) {
         applySnapshot(cachedSnapshot);
+        warmSnapshotPassports(cachedSnapshot);
         hasRenderedSnapshot = true;
         setIsLoading(false);
       }
@@ -1162,6 +1185,7 @@ export function CatalogPage() {
       }
       void syncCatalogAvailability(getCatalogStateFromSnapshot(freshSnapshot), true);
       void warmCatalogComboDetails(collectCatalogComboIds(freshSnapshot));
+      warmSnapshotPassports(freshSnapshot);
     } catch (error) {
       if (!hasRenderedSnapshot) {
         setCatalog(emptyCatalogState);
@@ -1170,7 +1194,7 @@ export function CatalogPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [mergeStockRows, syncCatalogAvailability, unitConversions]);
+  }, [mergeCatalogPassports, mergeStockRows, syncCatalogAvailability, unitConversions]);
 
   useEffect(() => {
     void loadCatalog();
@@ -1224,6 +1248,7 @@ export function CatalogPage() {
           const productId = Number(passport?.product?.id || 0);
           if (Number.isFinite(productId) && productId > 0 && passport) passportMap.set(productId, passport);
         });
+        mergeCatalogPassports(passportMap);
         const passportRows = extractStockRowsFromCatalogPassports(passportMap, unitConversions);
         if (passportRows.length) mergeStockRows(passportRows);
         setPassportReadyVersion((version) => version + 1);
@@ -1231,7 +1256,7 @@ export function CatalogPage() {
     } finally {
       isPassportWarmRunning.current = false;
     }
-  }, [mergeStockRows, unitConversions]);
+  }, [mergeCatalogPassports, mergeStockRows, unitConversions]);
 
   const scheduleProductPassportWarm = useCallback((productIds: number[]) => {
     productIds.forEach((productId) => {
@@ -1332,36 +1357,34 @@ export function CatalogPage() {
     const productId = Number(product.id);
     if (!Number.isFinite(productId) || productId <= 0) return;
     if (!getProductAvailabilityState(product, stockLevels, productQuantities[productId] || 0).availableForAdd) return;
-    const result = await refreshMany([productId]).catch(() => null);
-    const availability = result?.payload || null;
-    const data = availability?.data && typeof availability.data === 'object'
-      ? availability.data as Record<string, unknown>
-      : {};
-    const latestPatch = normalizeAvailabilityPatch(data[String(productId)]);
-    if (Object.keys(data).length) {
-      setCatalog((current) => applyCatalogAvailability(current, data));
+    const passport = getReadyCatalogPassport(productId, catalog.productPassports) || getCatalogProductPassport(productId);
+    if (!passport) {
+      void ensureMobileCatalogProductPassport(productId);
+      return;
     }
-    const latestProduct = latestPatch ? { ...product, ...latestPatch } : product;
-    const latestStockLevels = result?.stockLevels || stockLevels;
-    if (!getProductAvailabilityState(latestProduct, latestStockLevels, productQuantities[productId] || 0).availableForAdd) return;
-    const passport = getReadyCatalogPassport(productId, catalog.productPassports) || await ensureMobileCatalogProductPassport(productId);
-    if (!passport) return;
     const passportRows = extractStockRowsFromCatalogPassports(new Map([[productId, passport]]), unitConversions);
-    const stockLevelsWithPassport = passportRows.length ? mergeStockRows(passportRows) : latestStockLevels;
-    const nextLine = buildCatalogProductCartLine(latestProduct, passport || null, stockLevelsWithPassport, unitConversions);
+    const stockLevelsWithPassport = passportRows.length ? mergeStockRows(passportRows) : stockLevels;
+    const nextLine = buildCatalogProductCartLine(product, passport || null, stockLevelsWithPassport, unitConversions);
     const currentLines = await readCartLines();
     const draftLines = [...currentLines, nextLine];
     const affectedProductIds = Array.from(new Set([
       productId,
       ...getStockProductIdsForLines(draftLines, stockLevelsWithPassport),
     ]));
-    const localRefresh = affectedProductIds.length ? await refreshMany(affectedProductIds).catch(() => null) : null;
-    const localStockLevels = localRefresh?.stockLevels || stockLevelsWithPassport;
-    const localStockLimit = calculateCartStockLimit(draftLines, localStockLevels, nextLine.id);
+    const localStockLimit = calculateCartStockLimit(draftLines, stockLevelsWithPassport, nextLine.id);
     if (!localStockLimit.canAdd) return;
     const nextLines = await addCartLine(nextLine);
     setCartLines(nextLines);
     setProductQuantities(buildProductQuantitiesFromCart(nextLines));
+    void refreshMany(affectedProductIds).then((result) => {
+      const availability = result?.payload || null;
+      const data = availability?.data && typeof availability.data === 'object'
+        ? availability.data as Record<string, unknown>
+        : {};
+      if (Object.keys(data).length) {
+        setCatalog((current) => applyCatalogAvailability(current, data));
+      }
+    }).catch(() => null);
   }, [catalog.productPassports, mergeStockRows, productQuantities, refreshMany, stockLevels, unitConversions]);
 
   const decreaseProductQuantity = useCallback(async (productId: number) => {

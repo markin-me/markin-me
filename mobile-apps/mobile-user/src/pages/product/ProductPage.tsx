@@ -1303,15 +1303,8 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
 
   const addProductToCart = useCallback(async () => {
     if (!product || !canSubmit) return;
-    const result = await refreshMany([product.id]).catch(() => null);
-    const availability = result?.payload || null;
-    const latestStockLevels = result?.stockLevels || stockLevels;
-    const data = availability?.data && typeof availability.data === 'object'
-      ? availability.data as Record<string, unknown>
-      : {};
-    const latestPatch = normalizeAvailabilityPatch(data[String(product.id)]);
-    applyAvailabilityPatch(latestPatch);
-    const latestProduct = latestPatch ? { ...product, ...latestPatch } : product;
+    const latestStockLevels = stockLevels;
+    const latestProduct = product;
     if (!getProductAvailabilityState(latestProduct, latestStockLevels, existingCartQty + displayQuantity - 1).availableForAdd) return;
     const line = {
       detailLines: buildProductCartDetailLines(variantState.label, ingredients, ingredientState, selectedOptionItems),
@@ -1339,19 +1332,29 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
       product.id,
       ...getStockProductIdsForLines(nextLinesForCheck, latestStockLevels),
     ]));
-    const localRefresh = affectedProductIds.length ? await refreshMany(affectedProductIds).catch(() => null) : null;
-    const localStockLevels = localRefresh?.stockLevels || latestStockLevels;
+    const localStockLevels = latestStockLevels;
     const localStockLimit = calculateCartStockLimit(nextLinesForCheck, localStockLevels, nextLine.id);
     if (!localStockLimit.canAdd) return;
-    const stockCheck = await checkOrderStock(cartLinesToStockCheckItems(nextLinesForCheck)).catch(() => null);
-    if (Array.isArray(stockCheck?.stock_levels) && stockCheck.stock_levels.length) mergeStockRows(stockCheck.stock_levels);
-    if (stockCheck && stockCheck.available === false) return;
+    const syncSavedLineStock = () => {
+      void refreshMany(affectedProductIds).then((result) => {
+        const availability = result?.payload || null;
+        const data = availability?.data && typeof availability.data === 'object'
+          ? availability.data as Record<string, unknown>
+          : {};
+        applyAvailabilityPatch(normalizeAvailabilityPatch(data[String(product.id)]));
+        return checkOrderStock(cartLinesToStockCheckItems(nextLinesForCheck));
+      }).then((stockCheck) => {
+        if (Array.isArray(stockCheck?.stock_levels) && stockCheck.stock_levels.length) mergeStockRows(stockCheck.stock_levels);
+      }).catch(() => null);
+    };
     if (cartLineId) {
       await saveCartLine(nextLine, cartLineId);
+      syncSavedLineStock();
       navigation.goBack();
       return;
     }
     await addCartLine(nextLine);
+    syncSavedLineStock();
     navigation.navigate('main', { screen: 'cart' });
   }, [
     applyAvailabilityPatch,
