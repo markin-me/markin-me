@@ -9,16 +9,23 @@ import {
 } from 'react-native';
 
 import {
+  attachCheckoutPromo,
+  fetchCheckoutBenefitsPreview,
   fetchCustomerBenefits,
   isSameCachedValue,
   readCachedCustomerBenefits,
   readCachedCustomerPassport,
   type CustomerBenefitCard,
 } from '../../shared/api';
+import {
+  readCheckoutPromoCode,
+  readFulfillmentSelection,
+  saveCheckoutPromoCode,
+} from '../../features/checkout';
+import { readCartLines, type CartLine } from '../../features/cart';
 import { theme } from '../../shared/config/theme';
+import { calculateBuyXGetYLineTotals } from '../../shared/lib/buyXGetY';
 import { AppText as Text, Screen } from '../../shared/ui';
-
-const PROMO_DISABLED_REASON = 'Промокод не подходит к текущему заказу.';
 
 function asText(value: unknown) {
   return String(value || '').trim();
@@ -42,11 +49,85 @@ function isVisiblePromo(item: CustomerBenefitCard) {
   return usageLimit <= 0 || usageCount < usageLimit;
 }
 
-function PromocodeCard({ item }: { item: CustomerBenefitCard }) {
+function roundPrice(value: unknown) {
+  const number = Number(value || 0);
+  if (!Number.isFinite(number)) return 0;
+  return Math.round(number * 100) / 100;
+}
+
+function getLineTotals(line: CartLine) {
+  return calculateBuyXGetYLineTotals({
+    badge: line.type === 'product' ? line.buyXGetYBadge || null : null,
+    oldUnitPrice: Number(line.oldUnitPrice || 0),
+    quantity: Math.max(1, Number(line.quantity || 1)),
+    unitPrice: Math.max(0, Number(line.unitPrice || 0)),
+  });
+}
+
+function buildPromocodePreviewItems(lines: CartLine[]) {
+  return lines.filter((line) => line.isUnavailable !== true).map((line) => {
+    const quantity = Math.max(1, Number(line.quantity || 1));
+    const totals = getLineTotals(line);
+    const lineTotal = roundPrice(totals.total);
+    const oldLineTotal = roundPrice(Math.max(lineTotal, totals.oldTotal));
+    const variantGroupId = Number(line.variant?.groupId || 0);
+    const variantValueIndex = Number(line.variant?.valueIndex);
+    const baseItem: Record<string, unknown> = {
+      buy_x_get_y_badge: line.type === 'product' && line.buyXGetYBadge ? line.buyXGetYBadge : null,
+      cart_key: line.id,
+      line_total: lineTotal,
+      old_line_total: oldLineTotal,
+      qty: quantity,
+      type: line.type,
+    };
+
+    if (line.type === 'combo') {
+      return {
+        ...baseItem,
+        combo_id: Number(line.sourceId || 0) || null,
+        combo_title: line.title,
+      };
+    }
+
+    return {
+      ...baseItem,
+      ingredients: (Array.isArray(line.ingredients) ? line.ingredients : []).map((ingredient) => ({
+        ingredient_id: Number(ingredient.id || 0) || null,
+        qty: Number(ingredient.quantity || 0) || 0,
+      })).filter((ingredient) => Number(ingredient.ingredient_id || 0) > 0),
+      option_items: (Array.isArray(line.options) ? line.options : []).map((option) => {
+        const optionVariantGroupId = Number(option.variant?.groupId || 0);
+        const optionVariantValueIndex = Number(option.variant?.valueIndex);
+        return {
+          id: Number(option.id || 0) || null,
+          qty: Math.max(1, Number(option.quantity || 1)),
+          variant_group_id: optionVariantGroupId > 0 ? optionVariantGroupId : null,
+          variant_value_index: Number.isFinite(optionVariantValueIndex) && optionVariantValueIndex >= 0
+            ? optionVariantValueIndex
+            : null,
+        };
+      }).filter((option) => Number(option.id || 0) > 0),
+      product_id: Number(line.sourceId || 0) || null,
+      product_name: line.title,
+      variant_group_id: variantGroupId > 0 ? variantGroupId : null,
+      variant_value_index: Number.isFinite(variantValueIndex) && variantValueIndex >= 0 ? variantValueIndex : null,
+    };
+  });
+}
+
+function PromocodeCard({ item, onApply }: { item: CustomerBenefitCard; onApply?: (item: CustomerBenefitCard) => void }) {
   const code = asText(item.code) || '—';
   const title = asText(item.title) || 'Уникальная скидка по промокоду';
   const badgeText = formatPromoBadge(item);
-  const disabledReason = asText(item.disabled_reason_text) || PROMO_DISABLED_REASON;
+  const disabledReason = asText(item.disabled_reason) || asText(item.disabled_reason_text);
+  const isSelected = item.is_selected === true;
+  const isApplicable = item.is_applicable !== false;
+  const isDisabled = !isSelected && !isApplicable;
+  const reasonText = isSelected
+    ? 'Промокод активен.'
+    : isApplicable
+      ? asText(item.progress_text) || asText(item.status_text) || asText(item.apply_scope_text) || 'Можно применить к текущему заказу.'
+      : disabledReason;
 
   return (
     <View style={styles.card}>
@@ -66,12 +147,28 @@ function PromocodeCard({ item }: { item: CustomerBenefitCard }) {
 
       <View style={styles.cardBottom}>
         <Text numberOfLines={1} adjustsFontSizeToFit style={styles.codeText}>{code}</Text>
-        <Pressable disabled style={styles.applyButton}>
-          <Text style={styles.applyButtonText}>Применить</Text>
+        <Pressable
+          disabled={isDisabled}
+          onPress={() => onApply?.(item)}
+          style={[
+            styles.applyButton,
+            isDisabled && styles.applyButtonDisabled,
+            isSelected && styles.applyButtonSelected,
+          ]}
+        >
+          <Text style={[
+            styles.applyButtonText,
+            isDisabled && styles.applyButtonTextDisabled,
+            isSelected && styles.applyButtonTextSelected,
+          ]}>
+            {isSelected ? 'Активен' : 'Применить'}
+          </Text>
         </Pressable>
       </View>
 
-      <Text style={styles.disabledReason}>{disabledReason}</Text>
+      {reasonText ? (
+        <Text style={[styles.disabledReason, isApplicable && styles.availableReason]}>{reasonText}</Text>
+      ) : null}
     </View>
   );
 }
@@ -80,6 +177,7 @@ export function PromocodesPage() {
   const [items, setItems] = useState<CustomerBenefitCard[]>([]);
   const [isLoading, setLoading] = useState(true);
   const [errorText, setErrorText] = useState('');
+  const [activeCode, setActiveCode] = useState('');
 
   const loadPromocodes = useCallback(async () => {
     setErrorText('');
@@ -91,14 +189,31 @@ export function PromocodesPage() {
         setLoading(false);
         return;
       }
-      const cachedBenefits = await readCachedCustomerBenefits(passport.token);
+      const [cachedBenefits, savedCode, cartLines, fulfillmentSelection] = await Promise.all([
+        readCachedCustomerBenefits(passport.token),
+        readCheckoutPromoCode().catch(() => ''),
+        readCartLines().catch(() => []),
+        readFulfillmentSelection(),
+      ]);
       const cachedItems = (Array.isArray(cachedBenefits?.promo_codes) ? cachedBenefits.promo_codes : []).filter(isVisiblePromo);
+      setActiveCode(savedCode);
       if (cachedBenefits) {
         setItems(cachedItems);
         setLoading(false);
       }
-      const benefits = await fetchCustomerBenefits(passport.token);
-      const freshItems = (Array.isArray(benefits.promo_codes) ? benefits.promo_codes : []).filter(isVisiblePromo);
+      const previewPayload = {
+        items: buildPromocodePreviewItems(cartLines),
+        method_code: fulfillmentSelection.mode === 'delivery' ? 'delivery' : 'takeaway',
+        promo_code: savedCode || null,
+        selected_promo_source: savedCode ? 'promo_code' : null,
+      };
+      const [benefits, preview] = await Promise.all([
+        fetchCustomerBenefits(passport.token),
+        fetchCheckoutBenefitsPreview(passport.token, previewPayload).catch(() => null),
+      ]);
+      const previewItems = Array.isArray(preview?.promo_codes) ? preview.promo_codes : [];
+      const sourceItems = previewItems.length ? previewItems : benefits.promo_codes;
+      const freshItems = (Array.isArray(sourceItems) ? sourceItems : []).filter(isVisiblePromo);
       if (!isSameCachedValue(freshItems, cachedItems)) setItems(freshItems);
     } catch (error) {
       setErrorText(error instanceof Error ? error.message : 'Не удалось загрузить промокоды.');
@@ -110,6 +225,34 @@ export function PromocodesPage() {
   useEffect(() => {
     void loadPromocodes();
   }, [loadPromocodes]);
+
+  const applyPromoCode = useCallback(async (item: CustomerBenefitCard) => {
+    const code = asText(item.code).toUpperCase();
+    if (!code) return;
+    if (activeCode === code) {
+      await saveCheckoutPromoCode('');
+      setActiveCode('');
+      setItems((current) => current.map((row) => ({ ...row, is_selected: false })));
+      return;
+    }
+    const passport = await readCachedCustomerPassport();
+    if (!passport?.token) {
+      setErrorText('Войдите в профиль, чтобы применить промокод.');
+      return;
+    }
+    setErrorText('');
+    try {
+      await attachCheckoutPromo(passport.token, code);
+      await saveCheckoutPromoCode(code);
+      setActiveCode(code);
+      setItems((current) => current.map((row) => ({
+        ...row,
+        is_selected: asText(row.code).toUpperCase() === code,
+      })));
+    } catch (error) {
+      setErrorText(error instanceof Error ? error.message : 'Не удалось применить промокод.');
+    }
+  }, [activeCode]);
 
   const countText = useMemo(() => String(items.length), [items.length]);
 
@@ -140,7 +283,14 @@ export function PromocodesPage() {
         {!isLoading && !errorText && items.length ? (
           <View style={styles.list}>
             {items.map((item, index) => (
-              <PromocodeCard key={`${item.id || item.code || index}`} item={item} />
+              <PromocodeCard
+                key={`${item.id || item.code || index}`}
+                item={{
+                  ...item,
+                  is_selected: asText(item.code).toUpperCase() === activeCode || item.is_selected === true,
+                }}
+                onApply={applyPromoCode}
+              />
             ))}
           </View>
         ) : null}
@@ -152,7 +302,7 @@ export function PromocodesPage() {
 const styles = StyleSheet.create({
   applyButton: {
     alignItems: 'center',
-    backgroundColor: '#f2f3f5',
+    backgroundColor: theme.colors.accent,
     borderRadius: 14,
     height: 40,
     justifyContent: 'center',
@@ -160,9 +310,21 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
   applyButtonText: {
-    color: '#4b5563',
+    color: theme.colors.primaryText,
     fontSize: 14,
     fontWeight: '900',
+  },
+  applyButtonDisabled: {
+    backgroundColor: '#f2f3f5',
+  },
+  applyButtonTextDisabled: {
+    color: '#4b5563',
+  },
+  applyButtonSelected: {
+    backgroundColor: '#fff1e8',
+  },
+  applyButtonTextSelected: {
+    color: theme.colors.accent,
   },
   badges: {
     alignItems: 'center',
@@ -230,6 +392,9 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     lineHeight: 20,
     marginTop: 10,
+  },
+  availableReason: {
+    color: '#15803d',
   },
   discountBadge: {
     alignItems: 'center',

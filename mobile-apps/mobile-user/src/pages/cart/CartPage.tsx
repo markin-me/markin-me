@@ -29,7 +29,9 @@ import {
 import { calculateCartStockLimit, getStockProductIdsForLines, useProductStock } from '../../features/stock';
 import {
   saveCheckoutCartSummary,
+  readCheckoutPromoCode,
   readFulfillmentSelection,
+  saveCheckoutPromoCode,
   saveFulfillmentSelection,
   type CheckoutCartSummary,
   type FulfillmentMode,
@@ -42,6 +44,7 @@ import {
   fetchCustomerBenefits,
   fetchCustomerDiscounts,
   fetchCheckoutBenefitsPreview,
+  attachCheckoutPromo,
   checkOrderStock,
   fetchPublicOrderConfig,
   fetchTenantStores,
@@ -69,9 +72,9 @@ import {
   type TenantStore,
 } from '../../shared/api';
 import { theme } from '../../shared/config/theme';
-import { calculateBuyXGetYLineTotals } from '../../shared/lib/buyXGetY';
+import { calculateBuyXGetYLineTotals, getBuyXGetYBadgeText } from '../../shared/lib/buyXGetY';
 import { formatPrice } from '../../shared/lib/formatPrice';
-import { AppText as Text, AppTextInput, BottomSheet } from '../../shared/ui';
+import { AppText as Text, AppTextInput, BottomSheet, ProductBadge } from '../../shared/ui';
 import { Screen } from '../../shared/ui/Screen';
 
 type CartNavigation = NativeStackNavigationProp<RootStackParamList>;
@@ -128,12 +131,59 @@ const emptyBonusState: CartBonusState = {
   redeemAvailableAmount: 0,
 };
 
+function normalizePromoCodeInput(value: unknown) {
+  return String(value || '').toUpperCase();
+}
+
+function normalizePromoCode(value: unknown) {
+  return normalizePromoCodeInput(value).trim();
+}
+
+function getPromoErrorMessage(error: unknown) {
+  const code = error instanceof Error ? error.message : String(error || '');
+  switch (code) {
+    case 'PROMO_CODE_REQUIRED':
+      return 'Введите промокод';
+    case 'PROMO_INVALID':
+      return 'Промокод не найден или недействителен';
+    case 'PROMO_NOT_AVAILABLE':
+      return 'Этот промокод сейчас недоступен';
+    case 'PROMO_LIMIT_REACHED':
+      return 'Лимит использования промокода исчерпан';
+    case 'PROMO_CUSTOMER_LIMIT_REACHED':
+      return 'Вы уже использовали этот промокод';
+    case 'PROMO_RESERVED':
+      return 'Промокод уже зарезервирован в активном заказе';
+    case 'PROMO_NOT_APPLICABLE':
+      return 'Промокод не подходит к текущему заказу';
+    case 'FIRST_ORDER_LIMIT_REACHED':
+      return 'Промокод доступен только для первого заказа';
+    case 'UNAUTHORIZED':
+      return 'Войдите в профиль, чтобы применить промокод';
+    default:
+      return 'Не удалось применить промокод';
+  }
+}
+
+function findSelectedPromoCard(preview: CheckoutBenefitsPreviewData | null) {
+  return Array.isArray(preview?.promo_codes)
+    ? preview.promo_codes.find((item) => item?.is_selected === true) || null
+    : null;
+}
+
+function findPromoCardByCode(preview: CheckoutBenefitsPreviewData | null, code: string) {
+  const normalizedCode = normalizePromoCode(code);
+  if (!normalizedCode || !Array.isArray(preview?.promo_codes)) return null;
+  return preview.promo_codes.find((item) => normalizePromoCode(item?.code) === normalizedCode) || null;
+}
+
 const CART_HEADER_TOGGLE_HEIGHT = 44;
 const CART_HEADER_META_HEIGHT = 58;
 const CART_HEADER_TOGGLE_SCROLL = 54;
 const CART_HEADER_FULL_HEIGHT = 199;
 const CART_HEADER_COMPACT_HEIGHT = 77;
 const CART_HEADER_META_SCROLL = CART_HEADER_FULL_HEIGHT - CART_HEADER_COMPACT_HEIGHT;
+const cartQuantityTapSlop = { bottom: 10, left: 10, right: 10, top: 10 };
 
 function toPositiveId(value: unknown) {
   const id = Number(value || 0);
@@ -377,7 +427,11 @@ function mergeDiscounts(primary: CustomerBenefitCard[], secondary: CustomerBenef
   return Array.from(result.values());
 }
 
-function getCartBenefitsCounts(benefits: CustomerBenefits | null, discounts: CustomerBenefitCard[]) {
+function getCartBenefitsCounts(
+  benefits: CustomerBenefits | null,
+  discounts: CustomerBenefitCard[],
+  preview: CheckoutBenefitsPreviewData | null = null,
+) {
   const sourceBenefits = benefits || {
     completed: [],
     discounts: [],
@@ -385,12 +439,16 @@ function getCartBenefitsCounts(benefits: CustomerBenefits | null, discounts: Cus
     progress: [],
     promo_codes: [],
   };
-  const discountItems = mergeDiscounts(discounts, Array.isArray(sourceBenefits.discounts) ? sourceBenefits.discounts : []);
-  const promocodeItems = (Array.isArray(sourceBenefits.promo_codes) ? sourceBenefits.promo_codes : []).filter(isVisiblePromo);
-  const giftItems = Array.isArray(sourceBenefits.gifts) ? sourceBenefits.gifts : [];
+  const previewDiscounts = Array.isArray(preview?.discounts) ? preview.discounts : [];
+  const previewPromocodes = Array.isArray(preview?.promo_codes) ? preview.promo_codes : [];
+  const previewGifts = Array.isArray(preview?.gifts) ? preview.gifts : [];
+  const discountItems = mergeDiscounts(previewDiscounts, mergeDiscounts(discounts, Array.isArray(sourceBenefits.discounts) ? sourceBenefits.discounts : []));
+  const promocodeSource = previewPromocodes.length ? previewPromocodes : (Array.isArray(sourceBenefits.promo_codes) ? sourceBenefits.promo_codes : []);
+  const giftSource = previewGifts.length ? previewGifts : (Array.isArray(sourceBenefits.gifts) ? sourceBenefits.gifts : []);
+  const promocodeItems = promocodeSource.filter(isVisiblePromo);
   return {
     discounts: discountItems.length,
-    gifts: giftItems.length,
+    gifts: giftSource.length,
     promocodes: promocodeItems.length,
   };
 }
@@ -750,9 +808,16 @@ export function CartPage() {
   const [discountDetailsVisible, setDiscountDetailsVisible] = useState(false);
   const [bonusDetailsVisible, setBonusDetailsVisible] = useState(false);
   const [promoCode, setPromoCode] = useState('');
+  const [appliedPromoCode, setAppliedPromoCode] = useState('');
+  const [selectedPromoSource, setSelectedPromoSource] = useState<string | null>(null);
+  const [selectedPromoRewardId, setSelectedPromoRewardId] = useState<number | null>(null);
+  const [isApplyingPromo, setApplyingPromo] = useState(false);
+  const [promoError, setPromoError] = useState('');
   const [isLoading, setLoading] = useState(true);
   const [clearConfirm, setClearConfirm] = useState(false);
   const [stockBlockedLineIds, setStockBlockedLineIds] = useState<Set<string>>(() => new Set());
+  const benefitsPreviewSeqRef = useRef(0);
+  const cartMutationSeqRef = useRef(0);
 
   const activeLines = useMemo(() => getActiveCartLines(lines), [lines]);
   const hasActiveLines = activeLines.length > 0;
@@ -809,6 +874,9 @@ export function CartPage() {
   );
   const redeemActive = bonusRedeemEnabled && bonusState.balance > 0 && bonusState.redeemAvailableAmount > 0;
   const redeemLabel = bonusState.allowRedeemAndAccrue ? 'Списать и начислить' : 'Списать';
+  const normalizedPromoCode = normalizePromoCode(promoCode);
+  const promoIsCurrent = !!normalizedPromoCode && normalizedPromoCode === appliedPromoCode;
+  const promoApplyDisabled = !normalizedPromoCode || promoIsCurrent || isApplyingPromo;
   const cartSummary = useMemo(
     () => buildCartSummaryState(activeLines, isDelivery && hasActiveLines ? Number(deliveryMeta?.cost || 0) : 0, bonusState, redeemActive, benefitsPreview, catalogSnapshot),
     [activeLines, benefitsPreview, bonusState, catalogSnapshot, deliveryMeta?.cost, hasActiveLines, isDelivery, redeemActive],
@@ -826,6 +894,53 @@ export function CartPage() {
     cartSummary.itemDiscountAmount,
   ]);
 
+  const invalidateBenefitsPreview = useCallback(() => {
+    benefitsPreviewSeqRef.current += 1;
+    setBenefitsPreview(null);
+  }, []);
+
+  const refreshBenefitsPreview = useCallback(async ({
+    cartLines = lines,
+    promo = appliedPromoCode,
+    promoRewardId = selectedPromoRewardId,
+    promoSource = selectedPromoSource,
+    selectedFulfillment = selection,
+    snapshot = catalogSnapshot,
+  }: {
+    cartLines?: CartLine[];
+    promo?: string;
+    promoRewardId?: number | null;
+    promoSource?: string | null;
+    selectedFulfillment?: FulfillmentSelection;
+    snapshot?: Awaited<ReturnType<typeof readCachedMobileCatalogSnapshot>> | null;
+  } = {}) => {
+    const passport = await readCachedCustomerPassport();
+    const safePromo = normalizePromoCode(promo);
+    const activeCartLines = getActiveCartLines(cartLines);
+    const seq = ++benefitsPreviewSeqRef.current;
+    if (!passport?.token || !activeCartLines.length) {
+      setBenefitsPreview(null);
+      return null;
+    }
+    const preview = await fetchCheckoutBenefitsPreview(passport.token, {
+      items: buildCheckoutPreviewItems(activeCartLines, snapshot || null),
+      method_code: selectedFulfillment.mode === 'delivery' ? 'delivery' : 'takeaway',
+      promo_code: safePromo || null,
+      selected_promo_reward_id: promoRewardId || null,
+      selected_promo_source: safePromo ? (promoSource || 'promo_code') : null,
+    }).catch(() => null);
+    if (seq === benefitsPreviewSeqRef.current) {
+      setBenefitsPreview(preview);
+      if (preview) {
+        const previewCounts = getCartBenefitsCounts(null, [], preview);
+        setBenefitsCounts((currentCounts) => (
+          isSameCachedValue(previewCounts, currentCounts) ? currentCounts : previewCounts
+        ));
+      }
+    }
+    return preview;
+  }, [appliedPromoCode, catalogSnapshot, lines, selectedPromoRewardId, selectedPromoSource, selection]);
+
   const syncCartFromCache = useCallback(async () => {
     const [nextLines, nextSelection, passport, cachedStores, cachedOrderConfig, cachedCatalogSnapshot] = await Promise.all([
       readCartLines(),
@@ -835,6 +950,7 @@ export function CartPage() {
       readCachedPublicOrderConfig(),
       readCachedMobileCatalogSnapshot(),
     ]);
+    const savedPromoCode = normalizePromoCode(await readCheckoutPromoCode().catch(() => ''));
     const cachedAddresses = passport?.token
       ? await readCachedCustomerAddresses(passport.token)
       : passport?.addresses || [];
@@ -850,6 +966,17 @@ export function CartPage() {
     setBonusConfig(passport?.bonusConfig || null);
     setBonusFavoriteCategories(passport?.bonusFavoriteCategories || null);
     setCatalogSnapshot(cachedCatalogSnapshot);
+    if (savedPromoCode) {
+      setPromoCode(savedPromoCode);
+      setAppliedPromoCode(savedPromoCode);
+      setSelectedPromoSource('promo_code');
+      setSelectedPromoRewardId(null);
+    } else {
+      setPromoCode('');
+      setAppliedPromoCode('');
+      setSelectedPromoSource(null);
+      setSelectedPromoRewardId(null);
+    }
 
     if (passport?.token) {
       const [cachedBenefits, cachedDiscounts] = await Promise.all([
@@ -862,7 +989,7 @@ export function CartPage() {
       ));
     } else {
       setBenefitsCounts(emptyBenefitsCounts);
-      setBenefitsPreview(null);
+      invalidateBenefitsPreview();
     }
 
     return {
@@ -874,7 +1001,7 @@ export function CartPage() {
       passport,
       syncedLines,
     };
-  }, [stockLevels]);
+  }, [invalidateBenefitsPreview, stockLevels]);
 
   const loadCart = useCallback(async () => {
     const cachedState = await syncCartFromCache();
@@ -909,13 +1036,22 @@ export function CartPage() {
           isSameCachedValue(freshCounts, currentCounts) ? currentCounts : freshCounts
         ));
         const previewItems = buildCheckoutPreviewItems(syncedLines, cachedCatalogSnapshot);
+        const previewSeq = ++benefitsPreviewSeqRef.current;
         const nextPreview = previewItems.length
           ? await fetchCheckoutBenefitsPreview(passport.token, {
             items: previewItems,
             method_code: nextSelection.mode === 'delivery' ? 'delivery' : 'takeaway',
           }).catch(() => null)
           : null;
-        setBenefitsPreview(nextPreview);
+        if (previewSeq === benefitsPreviewSeqRef.current) {
+          setBenefitsPreview(nextPreview);
+          if (nextPreview) {
+            const previewCounts = getCartBenefitsCounts(freshBenefits, freshDiscounts, nextPreview);
+            setBenefitsCounts((currentCounts) => (
+              isSameCachedValue(previewCounts, currentCounts) ? currentCounts : previewCounts
+            ));
+          }
+        }
         await saveCustomerPassport({
           ...(passport as CustomerPassport),
           addresses: freshAddresses,
@@ -997,42 +1133,62 @@ export function CartPage() {
   }, [selectedAddress?.id, selectedStore?.id, selection]);
 
   const changeQuantity = useCallback(async (line: CartLine, delta: number) => {
+    const mutationSeq = ++cartMutationSeqRef.current;
     const nextQuantity = line.quantity + delta;
+    const nextLine = { ...line, quantity: nextQuantity };
+    const optimisticLines = replaceCartLine(lines, nextLine);
     if (delta > 0) {
-      const draftLines = replaceCartLine(lines, { ...line, quantity: nextQuantity });
-      const localStockLimit = calculateCartStockLimit(draftLines, stockLevels, line.id);
+      const localStockLimit = calculateCartStockLimit(optimisticLines, stockLevels, line.id);
       if (!localStockLimit.canAdd) {
         setStockBlockedLineIds((current) => new Set(current).add(line.id));
         return;
       }
     }
+    invalidateBenefitsPreview();
+    setLines(optimisticLines);
     const savedLines = await updateCartLineQuantity(line.id, nextQuantity);
+    if (mutationSeq !== cartMutationSeqRef.current) return;
     setLines(savedLines);
     void evaluateCartStockState(savedLines, stockLevels, refreshMany).then((stockState) => {
+      if (mutationSeq !== cartMutationSeqRef.current) return;
       setLines(stockState.lines);
       setStockBlockedLineIds(stockState.blockedLineIds);
     }).catch(() => null);
-  }, [lines, refreshMany, stockLevels]);
+  }, [invalidateBenefitsPreview, lines, refreshMany, stockLevels]);
 
   const removeLine = useCallback(async (line: CartLine) => {
+    const mutationSeq = ++cartMutationSeqRef.current;
+    const optimisticLines = lines.filter((item) => item.id !== line.id);
+    invalidateBenefitsPreview();
+    setLines(optimisticLines);
     const nextLines = await removeCartLine(line.id);
+    if (mutationSeq !== cartMutationSeqRef.current) return;
     setLines(nextLines);
     void evaluateCartStockState(nextLines, stockLevels, refreshMany).then((stockState) => {
+      if (mutationSeq !== cartMutationSeqRef.current) return;
       setLines(stockState.lines);
       setStockBlockedLineIds(stockState.blockedLineIds);
     }).catch(() => null);
-  }, [refreshMany, stockLevels]);
+  }, [invalidateBenefitsPreview, lines, refreshMany, stockLevels]);
 
   const clearCart = useCallback(async () => {
     if (!clearConfirm) {
       setClearConfirm(true);
       return;
     }
+    const mutationSeq = ++cartMutationSeqRef.current;
     const nextLines = await clearCartLines();
+    if (mutationSeq !== cartMutationSeqRef.current) return;
+    invalidateBenefitsPreview();
     setLines(nextLines);
+    setPromoCode('');
+    setAppliedPromoCode('');
+    setSelectedPromoSource(null);
+    setSelectedPromoRewardId(null);
+    setPromoError('');
     setStockBlockedLineIds(new Set());
     setClearConfirm(false);
-  }, [clearConfirm]);
+  }, [clearConfirm, invalidateBenefitsPreview]);
 
   useEffect(() => {
     if (!clearConfirm) return undefined;
@@ -1044,6 +1200,53 @@ export function CartPage() {
     if (bonusState.balance > 0 && bonusState.redeemAvailableAmount > 0) return;
     setBonusRedeemEnabled(false);
   }, [bonusState.balance, bonusState.redeemAvailableAmount]);
+
+  const changePromoCode = useCallback((value: string) => {
+    setPromoCode(normalizePromoCodeInput(value));
+    setPromoError('');
+  }, []);
+
+  const applyPromoCode = useCallback(async () => {
+    const safePromo = normalizePromoCode(promoCode);
+    if (!safePromo || promoApplyDisabled) return;
+    const passport = await readCachedCustomerPassport();
+    if (!passport?.token) {
+      setPromoError(getPromoErrorMessage(new Error('UNAUTHORIZED')));
+      return;
+    }
+    setApplyingPromo(true);
+    setPromoError('');
+    try {
+      await attachCheckoutPromo(passport.token, safePromo);
+      const preview = await refreshBenefitsPreview({
+        promo: safePromo,
+        promoRewardId: null,
+        promoSource: 'promo_code',
+      });
+      const selectedCard = findSelectedPromoCard(preview);
+      const requestedCard = findPromoCardByCode(preview, safePromo);
+      if (!selectedCard || normalizePromoCode(selectedCard.code) !== safePromo) {
+        const code = asText(requestedCard?.disabled_reason_code) || 'PROMO_NOT_APPLICABLE';
+        throw new Error(code);
+      }
+      setAppliedPromoCode(safePromo);
+      setSelectedPromoSource(asText(selectedCard.source) || 'promo_code');
+      setSelectedPromoRewardId(Number(selectedCard.reward_id || 0) > 0 ? Number(selectedCard.reward_id) : null);
+      setPromoCode(safePromo);
+    } catch (error) {
+      setAppliedPromoCode('');
+      setSelectedPromoSource(null);
+      setSelectedPromoRewardId(null);
+      setPromoError(getPromoErrorMessage(error));
+      void refreshBenefitsPreview({
+        promo: '',
+        promoRewardId: null,
+        promoSource: null,
+      }).catch(() => null);
+    } finally {
+      setApplyingPromo(false);
+    }
+  }, [promoApplyDisabled, promoCode, refreshBenefitsPreview]);
 
   const openAddresses = useCallback(async () => {
     await saveFulfillmentSelection(selection);
@@ -1125,6 +1328,8 @@ export function CartPage() {
     const total = getLineTotal(line, catalogSnapshot);
     const oldTotal = getLineOldTotal(line, catalogSnapshot);
     const discountPercent = getDiscountPercent(total, oldTotal);
+    const promoBadgeText = getBuyXGetYBadgeText(getCartLineBuyXGetYBadge(line, catalogSnapshot));
+    const unitPrice = Math.max(0, Number(line.unitPrice || 0));
     const unavailable = line.isUnavailable === true;
     const plusBlocked = unavailable || stockBlockedLineIds.has(line.id);
     const title = getCartLineTitle(line);
@@ -1134,6 +1339,12 @@ export function CartPage() {
       : [];
     return (
       <Pressable key={line.id} onPress={() => openLine(line)} style={[styles.itemCard, line.isUnavailable ? styles.itemUnavailable : null]}>
+        {discountPercent > 0 || promoBadgeText ? (
+          <View style={styles.itemBadgeStack}>
+            {discountPercent > 0 ? <ProductBadge text={`-${discountPercent}%`} tone="discount" /> : null}
+            {promoBadgeText ? <ProductBadge text={promoBadgeText} tone="promo" /> : null}
+          </View>
+        ) : null}
         {comboPhotos.length ? (
           <View style={styles.comboImageGrid}>
             {[0, 1, 2, 3].map((index) => {
@@ -1171,30 +1382,33 @@ export function CartPage() {
             </View>
           ) : null}
           <View style={styles.itemBottom}>
-            <View style={styles.priceGroup}>
-              <View style={styles.priceRow}>
-                <Text style={styles.itemPrice}>{formatPrice(total)}</Text>
-                {oldTotal > total ? <Text style={styles.itemOldPrice}>{formatPrice(oldTotal)}</Text> : null}
-              </View>
-              {discountPercent > 0 ? (
-                <View style={styles.discountBadge}>
-                  <Text style={styles.discountText}>-{discountPercent}%</Text>
-                </View>
-              ) : null}
+            <View style={styles.unitPriceWrap}>
+              <Text numberOfLines={1} style={styles.unitPriceText}>{formatPrice(unitPrice)}</Text>
             </View>
-            <View style={styles.qtyPill}>
+            <View style={styles.quantityStepper}>
               <Pressable
+                hitSlop={cartQuantityTapSlop}
                 onPress={(event) => {
                   event.stopPropagation();
                   return line.quantity <= 1 ? removeLine(line) : changeQuantity(line, -1);
                 }}
                 style={styles.qtyButton}
               >
-                <Ionicons name="remove" color={theme.colors.text} size={16} />
+                <Ionicons name={line.quantity <= 1 ? 'trash' : 'remove'} color={theme.colors.primaryText} size={line.quantity <= 1 ? 15 : 14} />
               </Pressable>
-              <Text style={styles.qtyText}>{line.quantity}</Text>
+              <View style={styles.quantityPriceCenter}>
+                <Text
+                  numberOfLines={1}
+                  style={[styles.itemOldPrice, oldTotal > total ? null : styles.itemOldPriceHidden]}
+                >
+                  {oldTotal > total ? formatPrice(oldTotal) : formatPrice(total)}
+                </Text>
+                <Text numberOfLines={1} style={[styles.itemPrice, styles.quantityPrice]}>{formatPrice(total)}</Text>
+                <Text numberOfLines={1} style={styles.qtyText}>{line.quantity} шт</Text>
+              </View>
               <Pressable
                 disabled={plusBlocked}
+                hitSlop={cartQuantityTapSlop}
                 onPress={(event) => {
                   event.stopPropagation();
                   if (plusBlocked) return undefined;
@@ -1202,7 +1416,7 @@ export function CartPage() {
                 }}
                 style={[styles.qtyButton, plusBlocked && styles.qtyButtonDisabled]}
               >
-                <Ionicons name="add" color={plusBlocked ? theme.colors.muted : theme.colors.text} size={16} />
+                <Ionicons name="add" color={plusBlocked ? theme.colors.muted : theme.colors.primaryText} size={16} />
               </Pressable>
             </View>
           </View>
@@ -1376,17 +1590,21 @@ export function CartPage() {
                     <View style={styles.promoInputSurface}>
                       <AppTextInput
                         autoCapitalize="characters"
-                        onChangeText={setPromoCode}
+                        autoCorrect={false}
+                        onChangeText={changePromoCode}
                         placeholder="ВВЕДИТЕ ПРОМОКОД"
                         placeholderTextColor={theme.colors.muted}
                         style={styles.promoInput}
                         value={promoCode}
                       />
                     </View>
-                    <Pressable disabled={!promoCode.trim()} style={[styles.promoApplyButton, !promoCode.trim() && styles.promoApplyButtonDisabled]}>
-                      <Text style={[styles.promoApplyText, !promoCode.trim() && styles.promoApplyTextDisabled]}>Применить</Text>
+                    <Pressable disabled={promoApplyDisabled} onPress={applyPromoCode} style={[styles.promoApplyButton, promoApplyDisabled && styles.promoApplyButtonDisabled, promoIsCurrent && styles.promoApplyButtonCurrent]}>
+                      <Text style={[styles.promoApplyText, promoApplyDisabled && styles.promoApplyTextDisabled, promoIsCurrent && styles.promoApplyTextCurrent]}>
+                        {isApplyingPromo ? 'Проверяем' : promoIsCurrent ? 'Активен' : 'Применить'}
+                      </Text>
                     </Pressable>
                   </View>
+                  {promoError ? <Text style={styles.promoErrorText}>{promoError}</Text> : null}
                 </View>
               </View>
             ) : null}
@@ -1927,6 +2145,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     marginTop: theme.spacing.sm,
+    gap: theme.spacing.sm,
   },
   itemCard: {
     backgroundColor: theme.colors.surface,
@@ -1936,6 +2155,16 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: theme.spacing.md,
     padding: theme.spacing.md,
+    position: 'relative',
+  },
+  itemBadgeStack: {
+    alignItems: 'flex-end',
+    flexDirection: 'row',
+    gap: 4,
+    position: 'absolute',
+    right: 8,
+    top: 8,
+    zIndex: 1,
   },
   itemDetail: {
     color: theme.colors.muted,
@@ -1965,22 +2194,33 @@ const styles = StyleSheet.create({
   },
   itemMain: {
     flex: 1,
+    minWidth: 0,
   },
   itemOldPrice: {
     color: theme.colors.muted,
-    fontSize: 12,
-    fontWeight: '700',
+    fontSize: 9,
+    fontWeight: '800',
+    lineHeight: 9,
+    minHeight: 9,
     textDecorationLine: 'line-through',
+  },
+  itemOldPriceHidden: {
+    opacity: 0,
   },
   itemPrice: {
     color: theme.colors.text,
-    fontSize: 18,
+    fontSize: 20,
     fontWeight: '900',
+  },
+  quantityPrice: {
+    fontSize: 16,
+    lineHeight: 16,
   },
   itemTitle: {
     color: theme.colors.text,
     fontSize: 16,
     fontWeight: '900',
+    paddingRight: 72,
   },
   itemUnavailable: {
     opacity: 0.55,
@@ -1990,6 +2230,16 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '900',
     marginTop: 3,
+  },
+  unitPriceText: {
+    color: theme.colors.text,
+    fontSize: 20,
+    fontWeight: '900',
+  },
+  unitPriceWrap: {
+    flex: 1,
+    minWidth: 0,
+    paddingRight: theme.spacing.sm,
   },
   itemsList: {
     gap: theme.spacing.md,
@@ -2057,6 +2307,9 @@ const styles = StyleSheet.create({
   promoApplyButtonDisabled: {
     backgroundColor: '#f5f5f5',
   },
+  promoApplyButtonCurrent: {
+    backgroundColor: '#fff1e8',
+  },
   promoApplyText: {
     color: theme.colors.primaryText,
     fontSize: 13,
@@ -2064,6 +2317,15 @@ const styles = StyleSheet.create({
   },
   promoApplyTextDisabled: {
     color: theme.colors.muted,
+  },
+  promoApplyTextCurrent: {
+    color: theme.colors.accent,
+  },
+  promoErrorText: {
+    color: theme.colors.danger,
+    fontSize: 12,
+    fontWeight: '700',
+    marginTop: theme.spacing.xs,
   },
   promoInput: {
     color: theme.colors.text,
@@ -2127,27 +2389,35 @@ const styles = StyleSheet.create({
   },
   qtyButton: {
     alignItems: 'center',
-    height: 28,
+    backgroundColor: theme.colors.accent,
+    borderRadius: theme.radius.sm,
+    flexShrink: 0,
+    height: 32,
     justifyContent: 'center',
-    width: 30,
+    width: 32,
   },
   qtyButtonDisabled: {
-    opacity: 0.45,
+    backgroundColor: theme.colors.surface,
   },
-  qtyPill: {
+  quantityPriceCenter: {
     alignItems: 'center',
-    backgroundColor: theme.colors.mutedBackground,
-    borderColor: theme.colors.border,
-    borderRadius: theme.radius.pill,
-    borderWidth: 1,
+    height: 32,
+    justifyContent: 'space-between',
+    minWidth: 86,
+    paddingHorizontal: 5,
+  },
+  quantityStepper: {
+    alignItems: 'center',
     flexDirection: 'row',
-    height: 28,
+    justifyContent: 'flex-end',
+    minWidth: 154,
+    height: 32,
   },
   qtyText: {
-    color: theme.colors.text,
-    fontSize: 14,
-    fontWeight: '900',
-    minWidth: 22,
+    color: theme.colors.muted,
+    fontSize: 9,
+    fontWeight: '800',
+    lineHeight: 9,
     textAlign: 'center',
   },
   root: {
@@ -2254,19 +2524,6 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '700',
     textAlign: 'right',
-  },
-  discountBadge: {
-    alignItems: 'center',
-    backgroundColor: theme.colors.accent,
-    borderRadius: theme.radius.pill,
-    justifyContent: 'center',
-    minHeight: 24,
-    paddingHorizontal: 10,
-  },
-  discountText: {
-    color: theme.colors.primaryText,
-    fontSize: 12,
-    fontWeight: '900',
   },
   discountDetailsBonusValue: {
     alignItems: 'center',

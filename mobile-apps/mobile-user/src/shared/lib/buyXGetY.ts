@@ -69,7 +69,7 @@ export function getBuyXGetYRule(source?: CatalogBuyXGetYBadge | null): BuyXGetYR
 
 export function getBuyXGetYBadgeText(source?: CatalogBuyXGetYBadge | null) {
   const rule = getBuyXGetYRule(source);
-  return rule ? rule.badgeText : asText(source?.badge_text);
+  return rule ? rule.badgeText : '';
 }
 
 export function calculateBuyXGetYApplication(quantity: number, rule?: BuyXGetYRule | null): BuyXGetYApplication {
@@ -111,7 +111,14 @@ export function calculateBuyXGetYLineTotals({
   unitPrice: number;
 }): BuyXGetYLineTotals {
   const rule = getBuyXGetYRule(badge);
-  const application = calculateBuyXGetYApplication(quantity, rule);
+  const application = rule
+    ? calculateBuyXGetYApplication(quantity, rule)
+    : {
+      applications: 0,
+      freeQty: 0,
+      paidParticipatingQty: 0,
+      participatingQty: 0,
+    };
   const price = Math.max(0, Number(unitPrice) || 0);
   const oldPrice = Math.max(0, Number(oldUnitPrice) || 0);
   const discountAmount = roundPrice(price * application.freeQty);

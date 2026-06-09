@@ -9,6 +9,7 @@ import {
 } from 'react-native';
 
 import {
+  fetchCheckoutBenefitsPreview,
   fetchCustomerDiscounts,
   fetchCustomerBenefits,
   isSameCachedValue,
@@ -17,7 +18,12 @@ import {
   readCachedCustomerPassport,
   type CustomerBenefitCard,
 } from '../../shared/api';
+import {
+  readFulfillmentSelection,
+} from '../../features/checkout';
+import { readCartLines, type CartLine } from '../../features/cart';
 import { theme } from '../../shared/config/theme';
+import { calculateBuyXGetYLineTotals } from '../../shared/lib/buyXGetY';
 import { AppText as Text, Screen } from '../../shared/ui';
 
 const DISCOUNT_DISABLED_REASON = 'Скидку пока нельзя применить к текущему заказу.';
@@ -35,6 +41,72 @@ function formatDiscountBadge(item: CustomerBenefitCard) {
   if (type === 'percent') return `-${Math.round(value)}%`;
   if (type === 'special_price') return `${Math.round(value).toLocaleString('ru-RU')} ₽`;
   return `-${Math.round(value).toLocaleString('ru-RU')} ₽`;
+}
+
+function roundPrice(value: unknown) {
+  const number = Number(value || 0);
+  if (!Number.isFinite(number)) return 0;
+  return Math.round(number * 100) / 100;
+}
+
+function getLineTotals(line: CartLine) {
+  return calculateBuyXGetYLineTotals({
+    badge: line.type === 'product' ? line.buyXGetYBadge || null : null,
+    oldUnitPrice: Number(line.oldUnitPrice || 0),
+    quantity: Math.max(1, Number(line.quantity || 1)),
+    unitPrice: Math.max(0, Number(line.unitPrice || 0)),
+  });
+}
+
+function buildDiscountPreviewItems(lines: CartLine[]) {
+  return lines.filter((line) => line.isUnavailable !== true).map((line) => {
+    const quantity = Math.max(1, Number(line.quantity || 1));
+    const totals = getLineTotals(line);
+    const lineTotal = roundPrice(totals.total);
+    const oldLineTotal = roundPrice(Math.max(lineTotal, totals.oldTotal));
+    const variantGroupId = Number(line.variant?.groupId || 0);
+    const variantValueIndex = Number(line.variant?.valueIndex);
+    const baseItem: Record<string, unknown> = {
+      buy_x_get_y_badge: line.type === 'product' && line.buyXGetYBadge ? line.buyXGetYBadge : null,
+      cart_key: line.id,
+      line_total: lineTotal,
+      old_line_total: oldLineTotal,
+      qty: quantity,
+      type: line.type,
+    };
+
+    if (line.type === 'combo') {
+      return {
+        ...baseItem,
+        combo_id: Number(line.sourceId || 0) || null,
+        combo_title: line.title,
+      };
+    }
+
+    return {
+      ...baseItem,
+      ingredients: (Array.isArray(line.ingredients) ? line.ingredients : []).map((ingredient) => ({
+        ingredient_id: Number(ingredient.id || 0) || null,
+        qty: Number(ingredient.quantity || 0) || 0,
+      })).filter((ingredient) => Number(ingredient.ingredient_id || 0) > 0),
+      option_items: (Array.isArray(line.options) ? line.options : []).map((option) => {
+        const optionVariantGroupId = Number(option.variant?.groupId || 0);
+        const optionVariantValueIndex = Number(option.variant?.valueIndex);
+        return {
+          id: Number(option.id || 0) || null,
+          qty: Math.max(1, Number(option.quantity || 1)),
+          variant_group_id: optionVariantGroupId > 0 ? optionVariantGroupId : null,
+          variant_value_index: Number.isFinite(optionVariantValueIndex) && optionVariantValueIndex >= 0
+            ? optionVariantValueIndex
+            : null,
+        };
+      }).filter((option) => Number(option.id || 0) > 0),
+      product_id: Number(line.sourceId || 0) || null,
+      product_name: line.title,
+      variant_group_id: variantGroupId > 0 ? variantGroupId : null,
+      variant_value_index: Number.isFinite(variantValueIndex) && variantValueIndex >= 0 ? variantValueIndex : null,
+    };
+  });
 }
 
 function DiscountCard({ item }: { item: CustomerBenefitCard }) {
@@ -93,20 +165,28 @@ export function DiscountsPage() {
         setLoading(false);
         return;
       }
-      const [cachedDiscounts, cachedBenefits] = await Promise.all([
+      const [cachedDiscounts, cachedBenefits, cartLines, fulfillmentSelection] = await Promise.all([
         readCachedCustomerDiscounts(passport.token),
         readCachedCustomerBenefits(passport.token),
+        readCartLines().catch(() => []),
+        readFulfillmentSelection(),
       ]);
       const cachedItems = mergeDiscounts(cachedDiscounts, Array.isArray(cachedBenefits?.discounts) ? cachedBenefits.discounts : []);
       if (cachedItems.length) {
         setItems(cachedItems);
         setLoading(false);
       }
-      const [discounts, benefits] = await Promise.all([
+      const previewPayload = {
+        items: buildDiscountPreviewItems(cartLines),
+        method_code: fulfillmentSelection.mode === 'delivery' ? 'delivery' : 'takeaway',
+      };
+      const [discounts, benefits, preview] = await Promise.all([
         fetchCustomerDiscounts(passport.token),
         fetchCustomerBenefits(passport.token),
+        fetchCheckoutBenefitsPreview(passport.token, previewPayload).catch(() => null),
       ]);
-      const freshItems = mergeDiscounts(discounts, Array.isArray(benefits.discounts) ? benefits.discounts : []);
+      const previewDiscounts = Array.isArray(preview?.discounts) ? preview.discounts : [];
+      const freshItems = mergeDiscounts(previewDiscounts, mergeDiscounts(discounts, Array.isArray(benefits.discounts) ? benefits.discounts : []));
       if (!isSameCachedValue(freshItems, cachedItems)) setItems(freshItems);
     } catch (error) {
       setErrorText(error instanceof Error ? error.message : 'Не удалось загрузить скидки.');

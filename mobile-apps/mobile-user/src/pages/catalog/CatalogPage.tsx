@@ -52,7 +52,7 @@ import {
 } from '../../shared/lib/productStock';
 import { Screen } from '../../shared/ui/Screen';
 
-import { AppText as Text } from '../../shared/ui';
+import { AppText as Text, ProductBadge } from '../../shared/ui';
 type CatalogNavigation = NativeStackNavigationProp<RootStackParamList>;
 type CatalogRoute = RouteProp<MainTabParamList, 'home'>;
 
@@ -711,8 +711,8 @@ function ProductCard({
             <QuantityOverlayText quantity={quantity} />
           </View>
         ) : null}
-        {promoBadgeText ? <Text style={styles.promoBadge}>{promoBadgeText}</Text> : null}
-        {discountText ? <Text style={[styles.discountBadge, promoBadgeText ? styles.discountBadgeWithPromo : null]}>{discountText}</Text> : null}
+        {promoBadgeText ? <ProductBadge style={styles.promoBadge} text={promoBadgeText} tone="promo" /> : null}
+        {discountText ? <ProductBadge style={[styles.discountBadge, promoBadgeText ? styles.discountBadgeWithPromo : null]} text={discountText} tone="discount" /> : null}
         {mediaPillText ? (
           <Text style={[styles.mediaPill, !canIncrease && styles.mediaPillDisabled]}>{mediaPillText}</Text>
         ) : null}
@@ -737,9 +737,9 @@ function ProductCard({
               <Pressable hitSlop={catalogCardTapSlop} style={styles.qtyPillButton} onPress={handleDecrease}>
                 <Ionicons name={availability.cartQty > 1 ? 'remove' : 'trash'} color={theme.colors.primaryText} size={14} />
               </Pressable>
-              <View style={styles.qtyPillCenter}>
+              <View style={[styles.qtyPillCenter, totalOldPrice > totalPrice ? styles.qtyPillCenterWithOld : null]}>
                 {totalOldPrice > totalPrice ? <Text style={styles.oldPrice}>{formatPrice(totalOldPrice)}</Text> : null}
-                <Text numberOfLines={1} style={styles.price}>
+                <Text numberOfLines={1} style={[styles.price, styles.qtyPrice]}>
                   {formatPrice(totalPrice)}
                 </Text>
               </View>
@@ -1831,6 +1831,7 @@ const styles = StyleSheet.create({
     color: theme.colors.muted,
     fontSize: 10,
     fontWeight: '800',
+    minHeight: 12,
     textDecorationLine: 'line-through',
   },
   plusButton: {
@@ -1860,8 +1861,12 @@ const styles = StyleSheet.create({
   },
   price: {
     color: theme.colors.text,
-    fontSize: 17,
+    fontSize: 20,
     fontWeight: '900',
+  },
+  qtyPrice: {
+    fontSize: 16,
+    lineHeight: 16,
   },
   priceStack: {
     flex: 1,
@@ -1889,9 +1894,13 @@ const styles = StyleSheet.create({
   qtyPillCenter: {
     alignItems: 'center',
     flex: 1,
+    height: 32,
     justifyContent: 'center',
     minWidth: 0,
     paddingHorizontal: 4,
+  },
+  qtyPillCenterWithOld: {
+    justifyContent: 'space-between',
   },
   unitPriceText: {
     color: theme.colors.muted,

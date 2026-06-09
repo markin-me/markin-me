@@ -29,6 +29,7 @@ export type CheckoutCartSummary = {
 
 const FULFILLMENT_SELECTION_KEY = 'mobile_fulfillment_selection_v1';
 const CHECKOUT_CART_SUMMARY_KEY = 'mobile_checkout_cart_summary_v1';
+const CHECKOUT_PROMO_CODE_KEY = 'mobile_checkout_promo_code_v1';
 
 const defaultFulfillmentSelection: FulfillmentSelection = {
   addressId: null,
@@ -102,5 +103,24 @@ export async function saveCheckoutCartSummary(summary: CheckoutCartSummary) {
   const normalized = normalizeCheckoutCartSummary(summary);
   if (!normalized) return null;
   await AsyncStorage.setItem(CHECKOUT_CART_SUMMARY_KEY, JSON.stringify(normalized));
+  return normalized;
+}
+
+export async function readCheckoutPromoCode() {
+  try {
+    const raw = await AsyncStorage.getItem(CHECKOUT_PROMO_CODE_KEY);
+    return String(raw || '').trim().toUpperCase();
+  } catch {
+    return '';
+  }
+}
+
+export async function saveCheckoutPromoCode(code: string) {
+  const normalized = String(code || '').trim().toUpperCase();
+  if (!normalized) {
+    await AsyncStorage.removeItem(CHECKOUT_PROMO_CODE_KEY);
+    return '';
+  }
+  await AsyncStorage.setItem(CHECKOUT_PROMO_CODE_KEY, normalized);
   return normalized;
 }
