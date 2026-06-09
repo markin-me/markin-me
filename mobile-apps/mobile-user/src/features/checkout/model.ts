@@ -27,9 +27,24 @@ export type CheckoutCartSummary = {
   total: number;
 };
 
+export type CheckoutDiscountSelection = {
+  discountId: number | null;
+  source: 'discount' | 'reward_discount' | null;
+};
+
+export type CheckoutBenefitsSelection = {
+  discountId: number | null;
+  discountSource: 'discount' | 'reward_discount' | null;
+  promoCode: string;
+  promoRewardId: number | null;
+  promoSource: 'promo_code' | 'reward_promo' | null;
+};
+
 const FULFILLMENT_SELECTION_KEY = 'mobile_fulfillment_selection_v1';
 const CHECKOUT_CART_SUMMARY_KEY = 'mobile_checkout_cart_summary_v1';
 const CHECKOUT_PROMO_CODE_KEY = 'mobile_checkout_promo_code_v1';
+const CHECKOUT_DISCOUNT_SELECTION_KEY = 'mobile_checkout_discount_selection_v1';
+const CHECKOUT_BENEFITS_SELECTION_KEY = 'mobile_checkout_benefits_selection_v1';
 
 const defaultFulfillmentSelection: FulfillmentSelection = {
   addressId: null,
@@ -75,6 +90,77 @@ function normalizeCheckoutCartSummary(value: unknown): CheckoutCartSummary | nul
   };
 }
 
+function normalizeCheckoutDiscountSelection(value: unknown): CheckoutDiscountSelection {
+  const source = value && typeof value === 'object' ? value as Partial<CheckoutDiscountSelection> : {};
+  const discountId = Number(source.discountId || 0);
+  const normalizedSource = source.source === 'reward_discount' ? 'reward_discount' : source.source === 'discount' ? 'discount' : null;
+  return {
+    discountId: discountId > 0 ? discountId : null,
+    source: discountId > 0 ? normalizedSource || 'discount' : null,
+  };
+}
+
+function normalizeCheckoutBenefitsSelection(value: unknown): CheckoutBenefitsSelection {
+  const source = value && typeof value === 'object' ? value as Partial<CheckoutBenefitsSelection> : {};
+  const discountId = Number(source.discountId || 0);
+  const discountSource = source.discountSource === 'reward_discount'
+    ? 'reward_discount'
+    : source.discountSource === 'discount'
+      ? 'discount'
+      : null;
+  const promoCode = String(source.promoCode || '').trim().toUpperCase();
+  const promoRewardId = Number(source.promoRewardId || 0);
+  const promoSource = source.promoSource === 'reward_promo'
+    ? 'reward_promo'
+    : source.promoSource === 'promo_code'
+      ? 'promo_code'
+      : null;
+
+  return {
+    discountId: discountId > 0 ? discountId : null,
+    discountSource: discountId > 0 ? discountSource || 'discount' : null,
+    promoCode,
+    promoRewardId: promoRewardId > 0 ? promoRewardId : null,
+    promoSource: promoCode || promoRewardId > 0 ? promoSource || 'promo_code' : null,
+  };
+}
+
+async function writeCheckoutPromoCode(code: string) {
+  const normalized = String(code || '').trim().toUpperCase();
+  if (!normalized) {
+    await AsyncStorage.removeItem(CHECKOUT_PROMO_CODE_KEY);
+    return '';
+  }
+  await AsyncStorage.setItem(CHECKOUT_PROMO_CODE_KEY, normalized);
+  return normalized;
+}
+
+async function writeCheckoutDiscountSelection(selection: CheckoutDiscountSelection) {
+  const normalized = normalizeCheckoutDiscountSelection(selection);
+  if (!normalized.discountId) {
+    await AsyncStorage.removeItem(CHECKOUT_DISCOUNT_SELECTION_KEY);
+    return normalized;
+  }
+  await AsyncStorage.setItem(CHECKOUT_DISCOUNT_SELECTION_KEY, JSON.stringify(normalized));
+  return normalized;
+}
+
+async function writeCheckoutBenefitsSelection(selection: CheckoutBenefitsSelection) {
+  const normalized = normalizeCheckoutBenefitsSelection(selection);
+  const hasSelection = normalized.discountId || normalized.promoCode || normalized.promoRewardId;
+  if (!hasSelection) {
+    await AsyncStorage.removeItem(CHECKOUT_BENEFITS_SELECTION_KEY);
+  } else {
+    await AsyncStorage.setItem(CHECKOUT_BENEFITS_SELECTION_KEY, JSON.stringify(normalized));
+  }
+  await writeCheckoutPromoCode(normalized.promoCode);
+  await writeCheckoutDiscountSelection({
+    discountId: normalized.discountId,
+    source: normalized.discountSource,
+  });
+  return normalized;
+}
+
 export async function readFulfillmentSelection() {
   try {
     const raw = await AsyncStorage.getItem(FULFILLMENT_SELECTION_KEY);
@@ -116,11 +202,65 @@ export async function readCheckoutPromoCode() {
 }
 
 export async function saveCheckoutPromoCode(code: string) {
-  const normalized = String(code || '').trim().toUpperCase();
-  if (!normalized) {
-    await AsyncStorage.removeItem(CHECKOUT_PROMO_CODE_KEY);
-    return '';
+  const current = await readCheckoutBenefitsSelection();
+  const normalized = normalizeCheckoutBenefitsSelection({
+    ...current,
+    promoCode: code,
+    promoRewardId: null,
+    promoSource: code ? 'promo_code' : null,
+  });
+  await writeCheckoutBenefitsSelection(normalized);
+  return normalized.promoCode;
+}
+
+export async function readCheckoutDiscountSelection() {
+  try {
+    const raw = await AsyncStorage.getItem(CHECKOUT_DISCOUNT_SELECTION_KEY);
+    return normalizeCheckoutDiscountSelection(raw ? JSON.parse(raw) : null);
+  } catch {
+    return normalizeCheckoutDiscountSelection(null);
   }
-  await AsyncStorage.setItem(CHECKOUT_PROMO_CODE_KEY, normalized);
-  return normalized;
+}
+
+export async function saveCheckoutDiscountSelection(selection: CheckoutDiscountSelection) {
+  const current = await readCheckoutBenefitsSelection();
+  const normalizedDiscount = normalizeCheckoutDiscountSelection(selection);
+  const normalized = normalizeCheckoutBenefitsSelection({
+    ...current,
+    discountId: normalizedDiscount.discountId,
+    discountSource: normalizedDiscount.source,
+  });
+  await writeCheckoutBenefitsSelection(normalized);
+  return {
+    discountId: normalized.discountId,
+    source: normalized.discountSource,
+  };
+}
+
+export async function readCheckoutBenefitsSelection() {
+  try {
+    const raw = await AsyncStorage.getItem(CHECKOUT_BENEFITS_SELECTION_KEY);
+    const fullSelection = normalizeCheckoutBenefitsSelection(raw ? JSON.parse(raw) : null);
+    if (fullSelection.discountId || fullSelection.promoCode || fullSelection.promoRewardId) {
+      return fullSelection;
+    }
+  } catch {
+    // Legacy keys below keep the checkout state recoverable.
+  }
+
+  const [promoCode, discountSelection] = await Promise.all([
+    readCheckoutPromoCode().catch(() => ''),
+    readCheckoutDiscountSelection().catch(() => ({ discountId: null, source: null })),
+  ]);
+  return normalizeCheckoutBenefitsSelection({
+    discountId: discountSelection.discountId,
+    discountSource: discountSelection.source,
+    promoCode,
+    promoRewardId: null,
+    promoSource: promoCode ? 'promo_code' : null,
+  });
+}
+
+export async function saveCheckoutBenefitsSelection(selection: CheckoutBenefitsSelection) {
+  return writeCheckoutBenefitsSelection(selection);
 }

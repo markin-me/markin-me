@@ -28,11 +28,15 @@ import {
 } from '../../features/cart';
 import { calculateCartStockLimit, getStockProductIdsForLines, useProductStock } from '../../features/stock';
 import {
+  applyCheckoutPromoCode as applyCheckoutPromoCodeSelection,
   saveCheckoutCartSummary,
-  readCheckoutPromoCode,
+  readCheckoutBenefitsSelection,
+  readCheckoutBenefitsState,
   readFulfillmentSelection,
-  saveCheckoutPromoCode,
+  saveCheckoutBenefitsSelection,
   saveFulfillmentSelection,
+  ensureCheckoutBenefitsState,
+  type CheckoutBenefitsSelection,
   type CheckoutCartSummary,
   type FulfillmentMode,
   type FulfillmentSelection,
@@ -41,17 +45,11 @@ import {
   fetchCustomerAddresses,
   fetchBonusConfig,
   fetchBonusFavoriteCategories,
-  fetchCustomerBenefits,
-  fetchCustomerDiscounts,
-  fetchCheckoutBenefitsPreview,
-  attachCheckoutPromo,
   checkOrderStock,
   fetchPublicOrderConfig,
   fetchTenantStores,
   isSameCachedValue,
-  readCachedCustomerBenefits,
   readCachedCustomerAddresses,
-  readCachedCustomerDiscounts,
   readCachedCustomerPassport,
   readCachedMobileCatalogSnapshot,
   readCachedPublicOrderConfig,
@@ -116,6 +114,14 @@ const emptyBenefitsCounts: CartBenefitsCounts = {
   promocodes: 0,
 };
 
+function toCartBenefitsCounts(counts: Partial<CartBenefitsCounts> | null | undefined): CartBenefitsCounts {
+  return {
+    discounts: Math.max(0, Number(counts?.discounts || 0)),
+    gifts: Math.max(0, Number(counts?.gifts || 0)),
+    promocodes: Math.max(0, Number(counts?.promocodes || 0)),
+  };
+}
+
 const emptyBonusState: CartBonusState = {
   accrualAmount: 0,
   allowRedeemAndAccrue: false,
@@ -175,6 +181,16 @@ function findPromoCardByCode(preview: CheckoutBenefitsPreviewData | null, code: 
   const normalizedCode = normalizePromoCode(code);
   if (!normalizedCode || !Array.isArray(preview?.promo_codes)) return null;
   return preview.promo_codes.find((item) => normalizePromoCode(item?.code) === normalizedCode) || null;
+}
+
+function findSelectedDiscountCard(preview: CheckoutBenefitsPreviewData | null) {
+  return Array.isArray(preview?.discounts)
+    ? preview.discounts.find((item) => item?.is_selected === true) || null
+    : null;
+}
+
+function isBenefitStackable(item: CustomerBenefitCard | null | undefined) {
+  return item?.is_stackable === true || Number(item?.is_stackable || 0) === 1;
 }
 
 const CART_HEADER_TOGGLE_HEIGHT = 44;
@@ -450,6 +466,14 @@ function getCartBenefitsCounts(
     discounts: discountItems.length,
     gifts: giftSource.length,
     promocodes: promocodeItems.length,
+  };
+}
+
+function mergeCartBenefitsCounts(base: CartBenefitsCounts, next: CartBenefitsCounts) {
+  return {
+    discounts: Math.max(base.discounts, next.discounts),
+    gifts: Math.max(base.gifts, next.gifts),
+    promocodes: Math.max(base.promocodes, next.promocodes),
   };
 }
 
@@ -809,7 +833,9 @@ export function CartPage() {
   const [bonusDetailsVisible, setBonusDetailsVisible] = useState(false);
   const [promoCode, setPromoCode] = useState('');
   const [appliedPromoCode, setAppliedPromoCode] = useState('');
-  const [selectedPromoSource, setSelectedPromoSource] = useState<string | null>(null);
+  const [selectedDiscountId, setSelectedDiscountId] = useState<number | null>(null);
+  const [selectedDiscountSource, setSelectedDiscountSource] = useState<'discount' | 'reward_discount' | null>(null);
+  const [selectedPromoSource, setSelectedPromoSource] = useState<'promo_code' | 'reward_promo' | null>(null);
   const [selectedPromoRewardId, setSelectedPromoRewardId] = useState<number | null>(null);
   const [isApplyingPromo, setApplyingPromo] = useState(false);
   const [promoError, setPromoError] = useState('');
@@ -827,7 +853,6 @@ export function CartPage() {
   const selectedStore = useMemo(() => findSelectedStore(stores, selection), [selection, stores]);
   const selectedDeliveryStore = useMemo(() => findDeliveryStore(stores, selectedAddress), [selectedAddress, stores]);
   const isDelivery = selection.mode === 'delivery';
-  const visibleDeliveryProgress = isDelivery ? buildDeliveryProgress(subtotal, deliveryMeta) || lastDeliveryProgress : null;
   const toggleOpacity = headerScrollY.interpolate({
     inputRange: [0, CART_HEADER_TOGGLE_SCROLL],
     outputRange: [1, 0],
@@ -881,6 +906,8 @@ export function CartPage() {
     () => buildCartSummaryState(activeLines, isDelivery && hasActiveLines ? Number(deliveryMeta?.cost || 0) : 0, bonusState, redeemActive, benefitsPreview, catalogSnapshot),
     [activeLines, benefitsPreview, bonusState, catalogSnapshot, deliveryMeta?.cost, hasActiveLines, isDelivery, redeemActive],
   );
+  const deliveryProgressSubtotal = Math.max(0, cartSummary.itemsTotal - cartSummary.bonusRedeemAmount);
+  const visibleDeliveryProgress = isDelivery ? buildDeliveryProgress(deliveryProgressSubtotal, deliveryMeta) || lastDeliveryProgress : null;
   const discountDetails = useMemo(() => [
     cartSummary.itemDiscountAmount > 0
       ? { key: 'items', title: 'Скидка товаров', value: cartSummary.itemDiscountAmount, type: 'money' as const }
@@ -901,6 +928,8 @@ export function CartPage() {
 
   const refreshBenefitsPreview = useCallback(async ({
     cartLines = lines,
+    discountId = selectedDiscountId,
+    discountSource = selectedDiscountSource,
     promo = appliedPromoCode,
     promoRewardId = selectedPromoRewardId,
     promoSource = selectedPromoSource,
@@ -908,38 +937,50 @@ export function CartPage() {
     snapshot = catalogSnapshot,
   }: {
     cartLines?: CartLine[];
+    discountId?: number | null;
+    discountSource?: 'discount' | 'reward_discount' | null;
     promo?: string;
     promoRewardId?: number | null;
-    promoSource?: string | null;
+    promoSource?: 'promo_code' | 'reward_promo' | null;
     selectedFulfillment?: FulfillmentSelection;
     snapshot?: Awaited<ReturnType<typeof readCachedMobileCatalogSnapshot>> | null;
   } = {}) => {
-    const passport = await readCachedCustomerPassport();
     const safePromo = normalizePromoCode(promo);
     const activeCartLines = getActiveCartLines(cartLines);
     const seq = ++benefitsPreviewSeqRef.current;
-    if (!passport?.token || !activeCartLines.length) {
+    const currentSelection: CheckoutBenefitsSelection = {
+      discountId: discountId || null,
+      discountSource: discountId ? (discountSource || 'discount') : null,
+      promoCode: safePromo,
+      promoRewardId: promoRewardId || null,
+      promoSource: safePromo
+        ? (promoSource || 'promo_code')
+        : (promoRewardId ? (promoSource || 'reward_promo') : null),
+    };
+    if (!activeCartLines.length) {
       setBenefitsPreview(null);
+      setBenefitsCounts(emptyBenefitsCounts);
       return null;
     }
-    const preview = await fetchCheckoutBenefitsPreview(passport.token, {
-      items: buildCheckoutPreviewItems(activeCartLines, snapshot || null),
-      method_code: selectedFulfillment.mode === 'delivery' ? 'delivery' : 'takeaway',
-      promo_code: safePromo || null,
-      selected_promo_reward_id: promoRewardId || null,
-      selected_promo_source: safePromo ? (promoSource || 'promo_code') : null,
+    const state = await ensureCheckoutBenefitsState({
+      cartLines: activeCartLines,
+      catalogSnapshot: snapshot || null,
+      fulfillmentSelection: selectedFulfillment,
+      selection: currentSelection,
     }).catch(() => null);
     if (seq === benefitsPreviewSeqRef.current) {
-      setBenefitsPreview(preview);
-      if (preview) {
-        const previewCounts = getCartBenefitsCounts(null, [], preview);
-        setBenefitsCounts((currentCounts) => (
-          isSameCachedValue(previewCounts, currentCounts) ? currentCounts : previewCounts
-        ));
+      setBenefitsPreview(state?.preview || null);
+      setBenefitsCounts(toCartBenefitsCounts(state?.counts || null));
+      if (state?.currentSelection) {
+        setSelectedDiscountId(state.currentSelection.discountId);
+        setSelectedDiscountSource(state.currentSelection.discountSource);
+        setSelectedPromoSource(state.currentSelection.promoSource);
+        setSelectedPromoRewardId(state.currentSelection.promoRewardId);
+        setAppliedPromoCode(state.currentSelection.promoCode);
       }
     }
-    return preview;
-  }, [appliedPromoCode, catalogSnapshot, lines, selectedPromoRewardId, selectedPromoSource, selection]);
+    return state?.preview || null;
+  }, [appliedPromoCode, catalogSnapshot, lines, selectedDiscountId, selectedDiscountSource, selectedPromoRewardId, selectedPromoSource, selection]);
 
   const syncCartFromCache = useCallback(async () => {
     const [nextLines, nextSelection, passport, cachedStores, cachedOrderConfig, cachedCatalogSnapshot] = await Promise.all([
@@ -950,7 +991,13 @@ export function CartPage() {
       readCachedPublicOrderConfig(),
       readCachedMobileCatalogSnapshot(),
     ]);
-    const savedPromoCode = normalizePromoCode(await readCheckoutPromoCode().catch(() => ''));
+    const savedBenefitsSelection = await readCheckoutBenefitsSelection().catch(() => ({
+      discountId: null,
+      discountSource: null,
+      promoCode: '',
+      promoRewardId: null,
+      promoSource: null,
+    }));
     const cachedAddresses = passport?.token
       ? await readCachedCustomerAddresses(passport.token)
       : passport?.addresses || [];
@@ -966,29 +1013,25 @@ export function CartPage() {
     setBonusConfig(passport?.bonusConfig || null);
     setBonusFavoriteCategories(passport?.bonusFavoriteCategories || null);
     setCatalogSnapshot(cachedCatalogSnapshot);
-    if (savedPromoCode) {
-      setPromoCode(savedPromoCode);
-      setAppliedPromoCode(savedPromoCode);
-      setSelectedPromoSource('promo_code');
-      setSelectedPromoRewardId(null);
-    } else {
-      setPromoCode('');
-      setAppliedPromoCode('');
-      setSelectedPromoSource(null);
-      setSelectedPromoRewardId(null);
-    }
+    setPromoCode(savedBenefitsSelection.promoCode || '');
+    setAppliedPromoCode(savedBenefitsSelection.promoCode || '');
+    setSelectedPromoSource(savedBenefitsSelection.promoSource);
+    setSelectedPromoRewardId(savedBenefitsSelection.promoRewardId);
+    setSelectedDiscountId(savedBenefitsSelection.discountId);
+    setSelectedDiscountSource(savedBenefitsSelection.discountSource);
 
     if (passport?.token) {
-      const [cachedBenefits, cachedDiscounts] = await Promise.all([
-        readCachedCustomerBenefits(passport.token),
-        readCachedCustomerDiscounts(passport.token),
-      ]);
-      const cachedCounts = getCartBenefitsCounts(cachedBenefits, cachedDiscounts);
-      setBenefitsCounts((currentCounts) => (
-        isSameCachedValue(cachedCounts, currentCounts) ? currentCounts : cachedCounts
-      ));
+      const cachedState = await readCheckoutBenefitsState({
+        cartLines: syncedLines,
+        catalogSnapshot: cachedCatalogSnapshot,
+        fulfillmentSelection: nextSelection,
+        selection: savedBenefitsSelection,
+      }).catch(() => null);
+      setBenefitsPreview(cachedState?.preview || null);
+      setBenefitsCounts(toCartBenefitsCounts(cachedState?.counts || null));
     } else {
       setBenefitsCounts(emptyBenefitsCounts);
+      setBenefitsPreview(null);
       invalidateBenefitsPreview();
     }
 
@@ -999,6 +1042,7 @@ export function CartPage() {
       cachedStores: cachedStores || [],
       nextSelection,
       passport,
+      savedBenefitsSelection,
       syncedLines,
     };
   }, [invalidateBenefitsPreview, stockLevels]);
@@ -1010,14 +1054,12 @@ export function CartPage() {
     void warmFullProductPassports(collectCartStockProductIds(cachedState.syncedLines)).catch(() => null);
 
     void (async () => {
-      const { passport, cachedAddresses, cachedCatalogSnapshot, cachedStores, cachedOrderConfig, nextSelection, syncedLines } = cachedState;
+      const { passport, cachedAddresses, cachedCatalogSnapshot, cachedStores, cachedOrderConfig, nextSelection, savedBenefitsSelection, syncedLines } = cachedState;
       const levelId = getCartBonusCurrentLevelId(passport?.bonusConfig || null);
-      const [freshStores, freshOrderConfig, freshAddresses, freshBenefits, freshDiscounts, freshBonusConfig] = await Promise.all([
+      const [freshStores, freshOrderConfig, freshAddresses, freshBonusConfig] = await Promise.all([
         fetchTenantStores().catch(() => cachedStores),
         fetchPublicOrderConfig().catch(() => cachedOrderConfig),
         passport?.token ? fetchCustomerAddresses(passport.token).catch(() => cachedAddresses) : Promise.resolve(cachedAddresses),
-        passport?.token ? fetchCustomerBenefits(passport.token).catch(() => null) : Promise.resolve(null),
-        passport?.token ? fetchCustomerDiscounts(passport.token).catch(() => []) : Promise.resolve([]),
         passport?.token ? fetchBonusConfig(passport.token).catch(() => passport.bonusConfig || null) : Promise.resolve(null),
       ]);
       const freshLevelId = getCartBonusCurrentLevelId(freshBonusConfig);
@@ -1031,27 +1073,16 @@ export function CartPage() {
       if (passport?.token) {
         setBonusConfig(freshBonusConfig);
         setBonusFavoriteCategories(freshBonusFavoriteCategories);
-        const freshCounts = getCartBenefitsCounts(freshBenefits, freshDiscounts);
-        setBenefitsCounts((currentCounts) => (
-          isSameCachedValue(freshCounts, currentCounts) ? currentCounts : freshCounts
-        ));
-        const previewItems = buildCheckoutPreviewItems(syncedLines, cachedCatalogSnapshot);
-        const previewSeq = ++benefitsPreviewSeqRef.current;
-        const nextPreview = previewItems.length
-          ? await fetchCheckoutBenefitsPreview(passport.token, {
-            items: previewItems,
-            method_code: nextSelection.mode === 'delivery' ? 'delivery' : 'takeaway',
-          }).catch(() => null)
-          : null;
-        if (previewSeq === benefitsPreviewSeqRef.current) {
-          setBenefitsPreview(nextPreview);
-          if (nextPreview) {
-            const previewCounts = getCartBenefitsCounts(freshBenefits, freshDiscounts, nextPreview);
-            setBenefitsCounts((currentCounts) => (
-              isSameCachedValue(previewCounts, currentCounts) ? currentCounts : previewCounts
-            ));
-          }
-        }
+        await refreshBenefitsPreview({
+          cartLines: syncedLines,
+          discountId: savedBenefitsSelection.discountId,
+          discountSource: savedBenefitsSelection.discountSource,
+          promo: savedBenefitsSelection.promoCode,
+          promoRewardId: savedBenefitsSelection.promoRewardId,
+          promoSource: savedBenefitsSelection.promoSource,
+          selectedFulfillment: nextSelection,
+          snapshot: cachedCatalogSnapshot,
+        });
         await saveCustomerPassport({
           ...(passport as CustomerPassport),
           addresses: freshAddresses,
@@ -1074,9 +1105,37 @@ export function CartPage() {
   useFocusEffect(
     useCallback(() => {
       if (!cartHydratedRef.current) return;
-      void syncCartFromCache().catch(() => null);
-    }, [syncCartFromCache]),
+      void (async () => {
+        const state = await syncCartFromCache().catch(() => null);
+        if (!state?.passport?.token) return;
+        void refreshBenefitsPreview({
+          cartLines: state.syncedLines,
+          discountId: state.savedBenefitsSelection.discountId,
+          discountSource: state.savedBenefitsSelection.discountSource,
+          promo: state.savedBenefitsSelection.promoCode,
+          promoRewardId: state.savedBenefitsSelection.promoRewardId,
+          promoSource: state.savedBenefitsSelection.promoSource,
+          selectedFulfillment: state.nextSelection,
+          snapshot: state.cachedCatalogSnapshot,
+        }).catch(() => null);
+      })();
+    }, [refreshBenefitsPreview, syncCartFromCache]),
   );
+
+  useEffect(() => {
+    if (!cartHydratedRef.current) return undefined;
+    const timer = setTimeout(() => {
+      void refreshBenefitsPreview().catch(() => null);
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [
+    activeLines,
+    catalogSnapshot,
+    refreshBenefitsPreview,
+    selection.addressId,
+    selection.mode,
+    selection.pickupStoreId,
+  ]);
 
   useFocusEffect(
     useCallback(() => {
@@ -1095,7 +1154,7 @@ export function CartPage() {
           lng: selectedAddress.lng || null,
           selected_object_type: selectedAddress.selected_object_type || null,
           street: selectedAddress.street || null,
-          subtotal,
+          subtotal: deliveryProgressSubtotal,
         }).catch(() => null);
         if (cancelled) return;
         const nextMeta: DeliveryMeta = {
@@ -1106,14 +1165,14 @@ export function CartPage() {
         };
         if (!Number.isFinite(Number(nextMeta.etaMinutes))) nextMeta.etaMinutes = null;
         setDeliveryMeta(nextMeta);
-        const nextProgress = buildDeliveryProgress(subtotal, nextMeta);
+        const nextProgress = buildDeliveryProgress(deliveryProgressSubtotal, nextMeta);
         if (nextProgress) setLastDeliveryProgress(nextProgress);
       }
       void resolveDelivery();
       return () => {
         cancelled = true;
       };
-    }, [isDelivery, orderConfig, selectedAddress, selectedDeliveryStore, subtotal]),
+    }, [deliveryProgressSubtotal, isDelivery, orderConfig, selectedAddress, selectedDeliveryStore]),
   );
 
   const changeMode = useCallback(async (mode: FulfillmentMode) => {
@@ -1183,11 +1242,21 @@ export function CartPage() {
     setLines(nextLines);
     setPromoCode('');
     setAppliedPromoCode('');
+    setSelectedDiscountId(null);
+    setSelectedDiscountSource(null);
     setSelectedPromoSource(null);
     setSelectedPromoRewardId(null);
+    setBenefitsCounts(emptyBenefitsCounts);
     setPromoError('');
     setStockBlockedLineIds(new Set());
     setClearConfirm(false);
+    await saveCheckoutBenefitsSelection({
+      discountId: null,
+      discountSource: null,
+      promoCode: '',
+      promoRewardId: null,
+      promoSource: null,
+    });
   }, [clearConfirm, invalidateBenefitsPreview]);
 
   useEffect(() => {
@@ -1209,20 +1278,29 @@ export function CartPage() {
   const applyPromoCode = useCallback(async () => {
     const safePromo = normalizePromoCode(promoCode);
     if (!safePromo || promoApplyDisabled) return;
-    const passport = await readCachedCustomerPassport();
-    if (!passport?.token) {
-      setPromoError(getPromoErrorMessage(new Error('UNAUTHORIZED')));
-      return;
-    }
+    const previousSelection: CheckoutBenefitsSelection = {
+      discountId: selectedDiscountId,
+      discountSource: selectedDiscountSource,
+      promoCode: appliedPromoCode,
+      promoRewardId: selectedPromoRewardId,
+      promoSource: selectedPromoSource,
+    };
     setApplyingPromo(true);
     setPromoError('');
     try {
-      await attachCheckoutPromo(passport.token, safePromo);
-      const preview = await refreshBenefitsPreview({
-        promo: safePromo,
-        promoRewardId: null,
-        promoSource: 'promo_code',
+      const state = await applyCheckoutPromoCodeSelection(safePromo, {
+        cartLines: lines,
+        catalogSnapshot,
+        fulfillmentSelection: selection,
+        selection: {
+          discountId: selectedDiscountId,
+          discountSource: selectedDiscountSource,
+          promoCode: appliedPromoCode,
+          promoRewardId: selectedPromoRewardId,
+          promoSource: selectedPromoSource,
+        },
       });
+      const preview = state.preview;
       const selectedCard = findSelectedPromoCard(preview);
       const requestedCard = findPromoCardByCode(preview, safePromo);
       if (!selectedCard || normalizePromoCode(selectedCard.code) !== safePromo) {
@@ -1230,23 +1308,26 @@ export function CartPage() {
         throw new Error(code);
       }
       setAppliedPromoCode(safePromo);
-      setSelectedPromoSource(asText(selectedCard.source) || 'promo_code');
-      setSelectedPromoRewardId(Number(selectedCard.reward_id || 0) > 0 ? Number(selectedCard.reward_id) : null);
+      setSelectedPromoSource(state.currentSelection.promoSource);
+      setSelectedPromoRewardId(state.currentSelection.promoRewardId);
+      setSelectedDiscountId(state.currentSelection.discountId);
+      setSelectedDiscountSource(state.currentSelection.discountSource);
       setPromoCode(safePromo);
+      setBenefitsPreview(preview);
+      setBenefitsCounts(toCartBenefitsCounts(state.counts));
     } catch (error) {
-      setAppliedPromoCode('');
-      setSelectedPromoSource(null);
-      setSelectedPromoRewardId(null);
+      await saveCheckoutBenefitsSelection(previousSelection);
+      setAppliedPromoCode(previousSelection.promoCode);
+      setSelectedPromoSource(previousSelection.promoSource);
+      setSelectedPromoRewardId(previousSelection.promoRewardId);
+      setSelectedDiscountId(previousSelection.discountId);
+      setSelectedDiscountSource(previousSelection.discountSource);
+      setPromoCode(previousSelection.promoCode);
       setPromoError(getPromoErrorMessage(error));
-      void refreshBenefitsPreview({
-        promo: '',
-        promoRewardId: null,
-        promoSource: null,
-      }).catch(() => null);
     } finally {
       setApplyingPromo(false);
     }
-  }, [promoApplyDisabled, promoCode, refreshBenefitsPreview]);
+  }, [appliedPromoCode, catalogSnapshot, lines, promoApplyDisabled, promoCode, selectedDiscountId, selectedDiscountSource, selectedPromoRewardId, selectedPromoSource, selection]);
 
   const openAddresses = useCallback(async () => {
     await saveFulfillmentSelection(selection);
@@ -2580,3 +2661,5 @@ const styles = StyleSheet.create({
     color: theme.colors.primaryText,
   },
 });
+
+

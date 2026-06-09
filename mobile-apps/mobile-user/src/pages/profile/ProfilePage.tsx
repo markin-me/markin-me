@@ -36,6 +36,7 @@ import {
   type CustomerPassport,
   type CustomerProfile,
 } from '../../shared/api';
+import { ensureCheckoutBenefitsState } from '../../features/checkout';
 import { theme } from '../../shared/config/theme';
 import { BottomSheet } from '../../shared/ui/BottomSheet';
 import { Screen } from '../../shared/ui/Screen';
@@ -554,6 +555,7 @@ export function ProfilePage() {
     };
     await saveCustomerPassport(seedPassport);
     setPassport(seedPassport);
+    void ensureCheckoutBenefitsState().catch(() => null);
     resetAuthForm();
     try {
       const fresh = await refreshCustomerPassport(token, customer);

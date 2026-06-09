@@ -1,32 +1,17 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+﻿import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
-import {
-  ActivityIndicator,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  View,
-} from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import {
-  fetchCheckoutBenefitsPreview,
-  fetchCustomerDiscounts,
-  fetchCustomerBenefits,
-  isSameCachedValue,
-  readCachedCustomerBenefits,
-  readCachedCustomerDiscounts,
-  readCachedCustomerPassport,
-  type CustomerBenefitCard,
-} from '../../shared/api';
-import {
-  readFulfillmentSelection,
+  applyCheckoutDiscountSelection,
+  clearCheckoutDiscountSelection,
+  ensureCheckoutBenefitsState,
+  readCheckoutBenefitsState,
 } from '../../features/checkout';
-import { readCartLines, type CartLine } from '../../features/cart';
+import { readCachedCustomerPassport, type CustomerBenefitCard } from '../../shared/api';
 import { theme } from '../../shared/config/theme';
-import { calculateBuyXGetYLineTotals } from '../../shared/lib/buyXGetY';
 import { AppText as Text, Screen } from '../../shared/ui';
-
-const DISCOUNT_DISABLED_REASON = 'Скидку пока нельзя применить к текущему заказу.';
 
 function asText(value: unknown) {
   return String(value || '').trim();
@@ -35,89 +20,56 @@ function asText(value: unknown) {
 function formatDiscountBadge(item: CustomerBenefitCard) {
   const direct = asText(item.badge_text);
   if (direct) return direct;
+
   const value = Number(item.discount_value ?? item.amount ?? 0);
   if (!(value > 0)) return '';
+
   const type = asText(item.discount_type).toLowerCase();
   if (type === 'percent') return `-${Math.round(value)}%`;
-  if (type === 'special_price') return `${Math.round(value).toLocaleString('ru-RU')} ₽`;
   return `-${Math.round(value).toLocaleString('ru-RU')} ₽`;
 }
 
-function roundPrice(value: unknown) {
-  const number = Number(value || 0);
-  if (!Number.isFinite(number)) return 0;
-  return Math.round(number * 100) / 100;
+function getDiscountSource(item: CustomerBenefitCard): 'discount' | 'reward_discount' {
+  return asText(item.source).toLowerCase() === 'reward_discount' ? 'reward_discount' : 'discount';
 }
 
-function getLineTotals(line: CartLine) {
-  return calculateBuyXGetYLineTotals({
-    badge: line.type === 'product' ? line.buyXGetYBadge || null : null,
-    oldUnitPrice: Number(line.oldUnitPrice || 0),
-    quantity: Math.max(1, Number(line.quantity || 1)),
-    unitPrice: Math.max(0, Number(line.unitPrice || 0)),
-  });
+function getDiscountSelectionId(item: CustomerBenefitCard) {
+  const source = getDiscountSource(item);
+  const id = Number(source === 'reward_discount' ? item.reward_id || item.id : item.id);
+  return id > 0 ? id : null;
 }
 
-function buildDiscountPreviewItems(lines: CartLine[]) {
-  return lines.filter((line) => line.isUnavailable !== true).map((line) => {
-    const quantity = Math.max(1, Number(line.quantity || 1));
-    const totals = getLineTotals(line);
-    const lineTotal = roundPrice(totals.total);
-    const oldLineTotal = roundPrice(Math.max(lineTotal, totals.oldTotal));
-    const variantGroupId = Number(line.variant?.groupId || 0);
-    const variantValueIndex = Number(line.variant?.valueIndex);
-    const baseItem: Record<string, unknown> = {
-      buy_x_get_y_badge: line.type === 'product' && line.buyXGetYBadge ? line.buyXGetYBadge : null,
-      cart_key: line.id,
-      line_total: lineTotal,
-      old_line_total: oldLineTotal,
-      qty: quantity,
-      type: line.type,
-    };
-
-    if (line.type === 'combo') {
-      return {
-        ...baseItem,
-        combo_id: Number(line.sourceId || 0) || null,
-        combo_title: line.title,
-      };
-    }
-
-    return {
-      ...baseItem,
-      ingredients: (Array.isArray(line.ingredients) ? line.ingredients : []).map((ingredient) => ({
-        ingredient_id: Number(ingredient.id || 0) || null,
-        qty: Number(ingredient.quantity || 0) || 0,
-      })).filter((ingredient) => Number(ingredient.ingredient_id || 0) > 0),
-      option_items: (Array.isArray(line.options) ? line.options : []).map((option) => {
-        const optionVariantGroupId = Number(option.variant?.groupId || 0);
-        const optionVariantValueIndex = Number(option.variant?.valueIndex);
-        return {
-          id: Number(option.id || 0) || null,
-          qty: Math.max(1, Number(option.quantity || 1)),
-          variant_group_id: optionVariantGroupId > 0 ? optionVariantGroupId : null,
-          variant_value_index: Number.isFinite(optionVariantValueIndex) && optionVariantValueIndex >= 0
-            ? optionVariantValueIndex
-            : null,
-        };
-      }).filter((option) => Number(option.id || 0) > 0),
-      product_id: Number(line.sourceId || 0) || null,
-      product_name: line.title,
-      variant_group_id: variantGroupId > 0 ? variantGroupId : null,
-      variant_value_index: Number.isFinite(variantValueIndex) && variantValueIndex >= 0 ? variantValueIndex : null,
-    };
-  });
+function getDiscountTitle(item: CustomerBenefitCard) {
+  return asText(item.title) || 'Скидка';
 }
 
-function DiscountCard({ item }: { item: CustomerBenefitCard }) {
-  const title = asText(item.title) || 'Скидка';
+function getDiscountReason(item: CustomerBenefitCard) {
+  return asText(item.disabled_reason_text || item.disabled_reason)
+    || asText(item.status_text)
+    || asText(item.apply_scope_text)
+    || 'Скидка недоступна';
+}
+
+function DiscountCard({
+  isApplying,
+  isSelected,
+  item,
+  onToggle,
+}: {
+  isApplying: boolean;
+  isSelected: boolean;
+  item: CustomerBenefitCard;
+  onToggle: (item: CustomerBenefitCard) => void;
+}) {
+  const title = getDiscountTitle(item);
   const badgeText = formatDiscountBadge(item) || 'Скидка';
-  const reason = asText(item.disabled_reason_text || item.disabled_reason) || DISCOUNT_DISABLED_REASON;
+  const reason = getDiscountReason(item);
+  const disabled = isApplying || !getDiscountSelectionId(item) || item.is_applicable === false;
 
   return (
-    <View style={styles.card}>
+    <View style={[styles.card, isSelected && styles.cardSelected]}>
       <View style={styles.cardTop}>
-        <Text style={styles.cardTitle}>{title}</Text>
+        <Text numberOfLines={2} style={styles.cardTitle}>{title}</Text>
         <View style={styles.badges}>
           <View style={styles.discountBadge}>
             <Text style={styles.discountBadgeText}>{badgeText}</Text>
@@ -130,64 +82,65 @@ function DiscountCard({ item }: { item: CustomerBenefitCard }) {
 
       <View style={styles.cardBottom}>
         <Text numberOfLines={1} adjustsFontSizeToFit style={styles.valueText}>{badgeText}</Text>
-        <Pressable disabled style={styles.applyButton}>
-          <Text style={styles.applyButtonText}>Применить</Text>
+        <Pressable
+          disabled={disabled}
+          onPress={() => onToggle(item)}
+          style={[styles.applyButton, disabled && styles.applyButtonDisabled, isSelected && styles.applyButtonSelected]}
+        >
+          <Text style={[styles.applyButtonText, isSelected && styles.applyButtonTextSelected]}>
+            {isSelected ? 'Выбрано' : 'Применить'}
+          </Text>
         </Pressable>
       </View>
 
-      <Text style={styles.disabledReason}>{reason}</Text>
+      {item.is_applicable === false || asText(item.disabled_reason_code) ? (
+        <Text style={styles.disabledReason}>{reason}</Text>
+      ) : null}
     </View>
   );
-}
-
-function mergeDiscounts(primary: CustomerBenefitCard[], secondary: CustomerBenefitCard[]) {
-  const result = new Map<string, CustomerBenefitCard>();
-  [...primary, ...secondary].forEach((item, index) => {
-    const id = asText(item.id);
-    const key = id || `${asText(item.title)}:${asText(item.discount_type)}:${asText(item.discount_value)}:${index}`;
-    if (!result.has(key)) result.set(key, item);
-  });
-  return Array.from(result.values());
 }
 
 export function DiscountsPage() {
   const [items, setItems] = useState<CustomerBenefitCard[]>([]);
   const [isLoading, setLoading] = useState(true);
   const [errorText, setErrorText] = useState('');
+  const [activeDiscountId, setActiveDiscountId] = useState<number | null>(null);
+  const [activeDiscountSource, setActiveDiscountSource] = useState<'discount' | 'reward_discount' | null>(null);
+  const [applyingDiscountId, setApplyingDiscountId] = useState<number | null>(null);
 
-  const loadDiscounts = useCallback(async () => {
+  const syncDiscounts = useCallback(async () => {
+    const passport = await readCachedCustomerPassport();
+    if (!passport?.token) {
+      setItems([]);
+      setErrorText('Войдите в профиль, чтобы увидеть скидки.');
+      setLoading(false);
+      return;
+    }
+
     setErrorText('');
     try {
-      const passport = await readCachedCustomerPassport();
-      if (!passport?.token) {
-        setItems([]);
-        setErrorText('Войдите в профиль, чтобы увидеть скидки.');
-        setLoading(false);
-        return;
-      }
-      const [cachedDiscounts, cachedBenefits, cartLines, fulfillmentSelection] = await Promise.all([
-        readCachedCustomerDiscounts(passport.token),
-        readCachedCustomerBenefits(passport.token),
-        readCartLines().catch(() => []),
-        readFulfillmentSelection(),
-      ]);
-      const cachedItems = mergeDiscounts(cachedDiscounts, Array.isArray(cachedBenefits?.discounts) ? cachedBenefits.discounts : []);
-      if (cachedItems.length) {
-        setItems(cachedItems);
+      const cachedState = await readCheckoutBenefitsState();
+      const cachedItems = Array.isArray(cachedState.preview?.discounts)
+        ? cachedState.preview.discounts
+        : Array.isArray(cachedState.sourceBenefits?.discounts)
+          ? cachedState.sourceBenefits.discounts
+          : [];
+      setItems(cachedItems);
+      setActiveDiscountId(cachedState.currentSelection.discountId);
+      setActiveDiscountSource(cachedState.currentSelection.discountSource);
+      if (cachedItems.length || cachedState.preview || cachedState.sourceBenefits?.discounts?.length) {
         setLoading(false);
       }
-      const previewPayload = {
-        items: buildDiscountPreviewItems(cartLines),
-        method_code: fulfillmentSelection.mode === 'delivery' ? 'delivery' : 'takeaway',
-      };
-      const [discounts, benefits, preview] = await Promise.all([
-        fetchCustomerDiscounts(passport.token),
-        fetchCustomerBenefits(passport.token),
-        fetchCheckoutBenefitsPreview(passport.token, previewPayload).catch(() => null),
-      ]);
-      const previewDiscounts = Array.isArray(preview?.discounts) ? preview.discounts : [];
-      const freshItems = mergeDiscounts(previewDiscounts, mergeDiscounts(discounts, Array.isArray(benefits.discounts) ? benefits.discounts : []));
-      if (!isSameCachedValue(freshItems, cachedItems)) setItems(freshItems);
+
+      const freshState = await ensureCheckoutBenefitsState();
+      const freshItems = Array.isArray(freshState.preview?.discounts)
+        ? freshState.preview.discounts
+        : Array.isArray(freshState.sourceBenefits?.discounts)
+          ? freshState.sourceBenefits.discounts
+          : [];
+      setItems(freshItems);
+      setActiveDiscountId(freshState.currentSelection.discountId);
+      setActiveDiscountSource(freshState.currentSelection.discountSource);
     } catch (error) {
       setErrorText(error instanceof Error ? error.message : 'Не удалось загрузить скидки.');
     } finally {
@@ -195,9 +148,38 @@ export function DiscountsPage() {
     }
   }, []);
 
-  useEffect(() => {
-    void loadDiscounts();
-  }, [loadDiscounts]);
+  useFocusEffect(
+    useCallback(() => {
+      void syncDiscounts();
+    }, [syncDiscounts]),
+  );
+
+  const toggleDiscount = useCallback(async (item: CustomerBenefitCard) => {
+    const discountId = getDiscountSelectionId(item);
+    const discountSource = getDiscountSource(item);
+    if (!discountId || applyingDiscountId) return;
+
+    setApplyingDiscountId(discountId);
+    setErrorText('');
+    try {
+      const isSelected = activeDiscountId === discountId && activeDiscountSource === discountSource;
+      const state = isSelected
+        ? await clearCheckoutDiscountSelection()
+        : await applyCheckoutDiscountSelection(item);
+      const nextItems = Array.isArray(state.preview?.discounts)
+        ? state.preview.discounts
+        : Array.isArray(state.sourceBenefits?.discounts)
+          ? state.sourceBenefits.discounts
+          : items;
+      setItems(nextItems);
+      setActiveDiscountId(state.currentSelection.discountId);
+      setActiveDiscountSource(state.currentSelection.discountSource);
+    } catch (error) {
+      setErrorText(error instanceof Error ? error.message : 'Не удалось применить скидку.');
+    } finally {
+      setApplyingDiscountId(null);
+    }
+  }, [activeDiscountId, activeDiscountSource, applyingDiscountId, items]);
 
   const countText = useMemo(() => String(items.length), [items.length]);
 
@@ -221,15 +203,26 @@ export function DiscountsPage() {
 
         {!isLoading && !errorText && !items.length ? (
           <View style={styles.stateCard}>
-            <Text style={styles.stateText}>У вас пока нет активных скидок</Text>
+            <Text style={styles.stateText}>У вас пока нет доступных скидок.</Text>
           </View>
         ) : null}
 
         {!isLoading && !errorText && items.length ? (
           <View style={styles.list}>
-            {items.map((item, index) => (
-              <DiscountCard key={`${item.id || item.title || index}`} item={item} />
-            ))}
+            {items.map((item, index) => {
+              const discountId = getDiscountSelectionId(item);
+              const discountSource = getDiscountSource(item);
+              const isSelected = activeDiscountId === discountId && activeDiscountSource === discountSource;
+              return (
+                <DiscountCard
+                  isApplying={applyingDiscountId === discountId}
+                  isSelected={isSelected}
+                  key={`${item.id || item.title || index}`}
+                  item={item}
+                  onToggle={toggleDiscount}
+                />
+              );
+            })}
           </View>
         ) : null}
       </ScrollView>
@@ -240,17 +233,26 @@ export function DiscountsPage() {
 const styles = StyleSheet.create({
   applyButton: {
     alignItems: 'center',
-    backgroundColor: '#f2f3f5',
+    backgroundColor: theme.colors.accent,
     borderRadius: 14,
     height: 40,
     justifyContent: 'center',
     minWidth: 118,
     paddingHorizontal: 16,
   },
+  applyButtonDisabled: {
+    opacity: 0.55,
+  },
+  applyButtonSelected: {
+    backgroundColor: '#fff1e8',
+  },
   applyButtonText: {
-    color: '#4b5563',
+    color: theme.colors.primaryText,
     fontSize: 14,
     fontWeight: '900',
+  },
+  applyButtonTextSelected: {
+    color: theme.colors.accent,
   },
   badges: {
     alignItems: 'center',
@@ -269,7 +271,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flexDirection: 'row',
     gap: 12,
-    marginTop: 12,
+    marginTop: 10,
+  },
+  cardSelected: {
+    borderColor: theme.colors.accent,
+    backgroundColor: '#fffaf6',
   },
   cardTitle: {
     color: theme.colors.text,
@@ -316,9 +322,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: theme.colors.accent,
     borderRadius: theme.radius.pill,
+    justifyContent: 'center',
     minHeight: 26,
     paddingHorizontal: 10,
-    justifyContent: 'center',
   },
   discountBadgeText: {
     color: theme.colors.primaryText,

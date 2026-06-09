@@ -1,34 +1,26 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+﻿import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
-import {
-  ActivityIndicator,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  View,
-} from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import {
-  attachCheckoutPromo,
-  fetchCheckoutBenefitsPreview,
-  fetchCustomerBenefits,
-  isSameCachedValue,
-  readCachedCustomerBenefits,
-  readCachedCustomerPassport,
-  type CustomerBenefitCard,
-} from '../../shared/api';
-import {
-  readCheckoutPromoCode,
-  readFulfillmentSelection,
-  saveCheckoutPromoCode,
+  applyCheckoutPromoCardSelection,
+  clearCheckoutPromoSelection,
+  ensureCheckoutBenefitsState,
+  readCheckoutBenefitsState,
+  type CheckoutBenefitsState,
+  type CheckoutBenefitsSelection,
 } from '../../features/checkout';
-import { readCartLines, type CartLine } from '../../features/cart';
+import { readCachedCustomerPassport, type CustomerBenefitCard } from '../../shared/api';
 import { theme } from '../../shared/config/theme';
-import { calculateBuyXGetYLineTotals } from '../../shared/lib/buyXGetY';
 import { AppText as Text, Screen } from '../../shared/ui';
 
 function asText(value: unknown) {
   return String(value || '').trim();
+}
+
+function normalizePromoCode(value: unknown) {
+  return String(value || '').replace(/\s+/g, '').toUpperCase();
 }
 
 function formatPromoBadge(item: CustomerBenefitCard) {
@@ -43,96 +35,62 @@ function formatPromoBadge(item: CustomerBenefitCard) {
   return `-${Math.round(value).toLocaleString('ru-RU')} ₽`;
 }
 
+function getPromoSource(item: CustomerBenefitCard): 'promo_code' | 'reward_promo' {
+  return asText(item.source).toLowerCase() === 'reward_promo' ? 'reward_promo' : 'promo_code';
+}
+
+function getPromoKey(item: CustomerBenefitCard) {
+  const source = getPromoSource(item);
+  if (source === 'reward_promo') {
+    const rewardId = Number(item.reward_id || item.id || 0);
+    return rewardId > 0 ? `${source}:${rewardId}` : '';
+  }
+  const code = normalizePromoCode(item.code);
+  return code ? `${source}:${code}` : '';
+}
+
+function getSelectionPromoKey(selection: CheckoutBenefitsSelection) {
+  if (selection.promoSource === 'reward_promo') {
+    return selection.promoRewardId ? `reward_promo:${selection.promoRewardId}` : '';
+  }
+  return selection.promoCode ? `promo_code:${normalizePromoCode(selection.promoCode)}` : '';
+}
+
+function getPromoReason(item: CustomerBenefitCard) {
+  return asText(item.disabled_reason_text || item.disabled_reason)
+    || asText(item.progress_text)
+    || asText(item.status_text)
+    || asText(item.apply_scope_text)
+    || '';
+}
+
 function isVisiblePromo(item: CustomerBenefitCard) {
   const usageLimit = Number(item.usage_limit || 0);
   const usageCount = Number(item.usage_count || 0);
   return usageLimit <= 0 || usageCount < usageLimit;
 }
 
-function roundPrice(value: unknown) {
-  const number = Number(value || 0);
-  if (!Number.isFinite(number)) return 0;
-  return Math.round(number * 100) / 100;
-}
-
-function getLineTotals(line: CartLine) {
-  return calculateBuyXGetYLineTotals({
-    badge: line.type === 'product' ? line.buyXGetYBadge || null : null,
-    oldUnitPrice: Number(line.oldUnitPrice || 0),
-    quantity: Math.max(1, Number(line.quantity || 1)),
-    unitPrice: Math.max(0, Number(line.unitPrice || 0)),
-  });
-}
-
-function buildPromocodePreviewItems(lines: CartLine[]) {
-  return lines.filter((line) => line.isUnavailable !== true).map((line) => {
-    const quantity = Math.max(1, Number(line.quantity || 1));
-    const totals = getLineTotals(line);
-    const lineTotal = roundPrice(totals.total);
-    const oldLineTotal = roundPrice(Math.max(lineTotal, totals.oldTotal));
-    const variantGroupId = Number(line.variant?.groupId || 0);
-    const variantValueIndex = Number(line.variant?.valueIndex);
-    const baseItem: Record<string, unknown> = {
-      buy_x_get_y_badge: line.type === 'product' && line.buyXGetYBadge ? line.buyXGetYBadge : null,
-      cart_key: line.id,
-      line_total: lineTotal,
-      old_line_total: oldLineTotal,
-      qty: quantity,
-      type: line.type,
-    };
-
-    if (line.type === 'combo') {
-      return {
-        ...baseItem,
-        combo_id: Number(line.sourceId || 0) || null,
-        combo_title: line.title,
-      };
-    }
-
-    return {
-      ...baseItem,
-      ingredients: (Array.isArray(line.ingredients) ? line.ingredients : []).map((ingredient) => ({
-        ingredient_id: Number(ingredient.id || 0) || null,
-        qty: Number(ingredient.quantity || 0) || 0,
-      })).filter((ingredient) => Number(ingredient.ingredient_id || 0) > 0),
-      option_items: (Array.isArray(line.options) ? line.options : []).map((option) => {
-        const optionVariantGroupId = Number(option.variant?.groupId || 0);
-        const optionVariantValueIndex = Number(option.variant?.valueIndex);
-        return {
-          id: Number(option.id || 0) || null,
-          qty: Math.max(1, Number(option.quantity || 1)),
-          variant_group_id: optionVariantGroupId > 0 ? optionVariantGroupId : null,
-          variant_value_index: Number.isFinite(optionVariantValueIndex) && optionVariantValueIndex >= 0
-            ? optionVariantValueIndex
-            : null,
-        };
-      }).filter((option) => Number(option.id || 0) > 0),
-      product_id: Number(line.sourceId || 0) || null,
-      product_name: line.title,
-      variant_group_id: variantGroupId > 0 ? variantGroupId : null,
-      variant_value_index: Number.isFinite(variantValueIndex) && variantValueIndex >= 0 ? variantValueIndex : null,
-    };
-  });
-}
-
-function PromocodeCard({ item, onApply }: { item: CustomerBenefitCard; onApply?: (item: CustomerBenefitCard) => void }) {
-  const code = asText(item.code) || '—';
-  const title = asText(item.title) || 'Уникальная скидка по промокоду';
+function PromocodeCard({
+  isApplying,
+  isSelected,
+  item,
+  onToggle,
+}: {
+  isApplying: boolean;
+  isSelected: boolean;
+  item: CustomerBenefitCard;
+  onToggle: (item: CustomerBenefitCard) => void;
+}) {
+  const code = normalizePromoCode(item.code) || '—';
+  const title = asText(item.title) || 'Промокод';
   const badgeText = formatPromoBadge(item);
-  const disabledReason = asText(item.disabled_reason) || asText(item.disabled_reason_text);
-  const isSelected = item.is_selected === true;
-  const isApplicable = item.is_applicable !== false;
-  const isDisabled = !isSelected && !isApplicable;
-  const reasonText = isSelected
-    ? 'Промокод активен.'
-    : isApplicable
-      ? asText(item.progress_text) || asText(item.status_text) || asText(item.apply_scope_text) || 'Можно применить к текущему заказу.'
-      : disabledReason;
+  const reasonText = getPromoReason(item);
+  const disabled = isApplying || (!isSelected && (item.is_applicable === false || !getPromoKey(item)));
 
   return (
-    <View style={styles.card}>
+    <View style={[styles.card, isSelected && styles.cardSelected]}>
       <View style={styles.cardTop}>
-        <Text style={styles.cardTitle}>{title}</Text>
+        <Text numberOfLines={2} style={styles.cardTitle}>{title}</Text>
         <View style={styles.badges}>
           {badgeText ? (
             <View style={styles.discountBadge}>
@@ -148,26 +106,18 @@ function PromocodeCard({ item, onApply }: { item: CustomerBenefitCard; onApply?:
       <View style={styles.cardBottom}>
         <Text numberOfLines={1} adjustsFontSizeToFit style={styles.codeText}>{code}</Text>
         <Pressable
-          disabled={isDisabled}
-          onPress={() => onApply?.(item)}
-          style={[
-            styles.applyButton,
-            isDisabled && styles.applyButtonDisabled,
-            isSelected && styles.applyButtonSelected,
-          ]}
+          disabled={disabled}
+          onPress={() => onToggle(item)}
+          style={[styles.applyButton, disabled && styles.applyButtonDisabled, isSelected && styles.applyButtonSelected]}
         >
-          <Text style={[
-            styles.applyButtonText,
-            isDisabled && styles.applyButtonTextDisabled,
-            isSelected && styles.applyButtonTextSelected,
-          ]}>
-            {isSelected ? 'Активен' : 'Применить'}
+          <Text style={[styles.applyButtonText, disabled && styles.applyButtonTextDisabled, isSelected && styles.applyButtonTextSelected]}>
+            {isSelected ? 'Выбрано' : 'Применить'}
           </Text>
         </Pressable>
       </View>
 
       {reasonText ? (
-        <Text style={[styles.disabledReason, isApplicable && styles.availableReason]}>{reasonText}</Text>
+        <Text style={[styles.disabledReason, item.is_applicable !== false && styles.availableReason]}>{reasonText}</Text>
       ) : null}
     </View>
   );
@@ -177,82 +127,71 @@ export function PromocodesPage() {
   const [items, setItems] = useState<CustomerBenefitCard[]>([]);
   const [isLoading, setLoading] = useState(true);
   const [errorText, setErrorText] = useState('');
-  const [activeCode, setActiveCode] = useState('');
+  const [activePromoKey, setActivePromoKey] = useState('');
+  const [applyingPromoKey, setApplyingPromoKey] = useState('');
+
+  const setStateFromBenefits = useCallback((state: CheckoutBenefitsState) => {
+    const nextItems = Array.isArray(state.preview?.promo_codes)
+      ? state.preview.promo_codes
+      : Array.isArray(state.sourceBenefits?.promo_codes)
+        ? state.sourceBenefits.promo_codes
+        : [];
+    setItems(nextItems);
+    setActivePromoKey(getSelectionPromoKey(state.currentSelection));
+  }, []);
 
   const loadPromocodes = useCallback(async () => {
+    const passport = await readCachedCustomerPassport();
+    if (!passport?.token) {
+      setItems([]);
+      setErrorText('Войдите в профиль, чтобы увидеть промокоды.');
+      setLoading(false);
+      return;
+    }
+
     setErrorText('');
     try {
-      const passport = await readCachedCustomerPassport();
-      if (!passport?.token) {
-        setItems([]);
-        setErrorText('Войдите в профиль, чтобы увидеть промокоды.');
-        setLoading(false);
-        return;
-      }
-      const [cachedBenefits, savedCode, cartLines, fulfillmentSelection] = await Promise.all([
-        readCachedCustomerBenefits(passport.token),
-        readCheckoutPromoCode().catch(() => ''),
-        readCartLines().catch(() => []),
-        readFulfillmentSelection(),
-      ]);
-      const cachedItems = (Array.isArray(cachedBenefits?.promo_codes) ? cachedBenefits.promo_codes : []).filter(isVisiblePromo);
-      setActiveCode(savedCode);
-      if (cachedBenefits) {
-        setItems(cachedItems);
+      const cachedState = await readCheckoutBenefitsState();
+      setStateFromBenefits(cachedState);
+      if (
+        (Array.isArray(cachedState.preview?.promo_codes) && cachedState.preview.promo_codes.length)
+        || (Array.isArray(cachedState.sourceBenefits?.promo_codes) && cachedState.sourceBenefits.promo_codes.length)
+      ) {
         setLoading(false);
       }
-      const previewPayload = {
-        items: buildPromocodePreviewItems(cartLines),
-        method_code: fulfillmentSelection.mode === 'delivery' ? 'delivery' : 'takeaway',
-        promo_code: savedCode || null,
-        selected_promo_source: savedCode ? 'promo_code' : null,
-      };
-      const [benefits, preview] = await Promise.all([
-        fetchCustomerBenefits(passport.token),
-        fetchCheckoutBenefitsPreview(passport.token, previewPayload).catch(() => null),
-      ]);
-      const previewItems = Array.isArray(preview?.promo_codes) ? preview.promo_codes : [];
-      const sourceItems = previewItems.length ? previewItems : benefits.promo_codes;
-      const freshItems = (Array.isArray(sourceItems) ? sourceItems : []).filter(isVisiblePromo);
-      if (!isSameCachedValue(freshItems, cachedItems)) setItems(freshItems);
+
+      const freshState = await ensureCheckoutBenefitsState();
+      setStateFromBenefits(freshState);
     } catch (error) {
       setErrorText(error instanceof Error ? error.message : 'Не удалось загрузить промокоды.');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [setStateFromBenefits]);
 
-  useEffect(() => {
-    void loadPromocodes();
-  }, [loadPromocodes]);
+  useFocusEffect(
+    useCallback(() => {
+      void loadPromocodes();
+    }, [loadPromocodes]),
+  );
 
-  const applyPromoCode = useCallback(async (item: CustomerBenefitCard) => {
-    const code = asText(item.code).toUpperCase();
-    if (!code) return;
-    if (activeCode === code) {
-      await saveCheckoutPromoCode('');
-      setActiveCode('');
-      setItems((current) => current.map((row) => ({ ...row, is_selected: false })));
-      return;
-    }
-    const passport = await readCachedCustomerPassport();
-    if (!passport?.token) {
-      setErrorText('Войдите в профиль, чтобы применить промокод.');
-      return;
-    }
+  const togglePromo = useCallback(async (item: CustomerBenefitCard) => {
+    const promoKey = getPromoKey(item);
+    if (!promoKey || applyingPromoKey) return;
+
+    setApplyingPromoKey(promoKey);
     setErrorText('');
     try {
-      await attachCheckoutPromo(passport.token, code);
-      await saveCheckoutPromoCode(code);
-      setActiveCode(code);
-      setItems((current) => current.map((row) => ({
-        ...row,
-        is_selected: asText(row.code).toUpperCase() === code,
-      })));
+      const state = promoKey === activePromoKey
+        ? await clearCheckoutPromoSelection()
+        : await applyCheckoutPromoCardSelection(item);
+      setStateFromBenefits(state);
     } catch (error) {
       setErrorText(error instanceof Error ? error.message : 'Не удалось применить промокод.');
+    } finally {
+      setApplyingPromoKey('');
     }
-  }, [activeCode]);
+  }, [activePromoKey, applyingPromoKey, setStateFromBenefits]);
 
   const countText = useMemo(() => String(items.length), [items.length]);
 
@@ -276,22 +215,25 @@ export function PromocodesPage() {
 
         {!isLoading && !errorText && !items.length ? (
           <View style={styles.stateCard}>
-            <Text style={styles.stateText}>У вас пока нет доступных промокодов</Text>
+            <Text style={styles.stateText}>У вас пока нет доступных промокодов.</Text>
           </View>
         ) : null}
 
         {!isLoading && !errorText && items.length ? (
           <View style={styles.list}>
-            {items.map((item, index) => (
-              <PromocodeCard
-                key={`${item.id || item.code || index}`}
-                item={{
-                  ...item,
-                  is_selected: asText(item.code).toUpperCase() === activeCode || item.is_selected === true,
-                }}
-                onApply={applyPromoCode}
-              />
-            ))}
+            {items.map((item, index) => {
+              const promoKey = getPromoKey(item);
+              const isSelected = promoKey === activePromoKey || item.is_selected === true;
+              return (
+                <PromocodeCard
+                  isApplying={applyingPromoKey === promoKey}
+                  isSelected={isSelected}
+                  key={`${item.id || item.code || index}`}
+                  item={item}
+                  onToggle={togglePromo}
+                />
+              );
+            })}
           </View>
         ) : null}
       </ScrollView>
@@ -309,22 +251,25 @@ const styles = StyleSheet.create({
     minWidth: 118,
     paddingHorizontal: 16,
   },
+  applyButtonDisabled: {
+    backgroundColor: '#f2f3f5',
+  },
+  applyButtonSelected: {
+    backgroundColor: '#fff1e8',
+  },
   applyButtonText: {
     color: theme.colors.primaryText,
     fontSize: 14,
     fontWeight: '900',
   },
-  applyButtonDisabled: {
-    backgroundColor: '#f2f3f5',
-  },
   applyButtonTextDisabled: {
     color: '#4b5563',
   },
-  applyButtonSelected: {
-    backgroundColor: '#fff1e8',
-  },
   applyButtonTextSelected: {
     color: theme.colors.accent,
+  },
+  availableReason: {
+    color: '#15803d',
   },
   badges: {
     alignItems: 'center',
@@ -344,6 +289,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 12,
     marginTop: 10,
+  },
+  cardSelected: {
+    borderColor: theme.colors.accent,
+    backgroundColor: '#fffaf6',
   },
   cardTitle: {
     color: theme.colors.text,
@@ -393,16 +342,13 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     marginTop: 10,
   },
-  availableReason: {
-    color: '#15803d',
-  },
   discountBadge: {
     alignItems: 'center',
     backgroundColor: theme.colors.accent,
     borderRadius: theme.radius.pill,
+    justifyContent: 'center',
     minHeight: 26,
     paddingHorizontal: 10,
-    justifyContent: 'center',
   },
   discountBadgeText: {
     color: theme.colors.primaryText,

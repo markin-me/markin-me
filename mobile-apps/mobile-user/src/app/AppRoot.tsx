@@ -37,6 +37,7 @@ import { ProfileSettingsPage } from '../pages/profile-settings';
 import { PromocodesPage } from '../pages/promocodes';
 import { TasksPage } from '../pages/tasks';
 import { getCartLineStockProductIds, readCartLines } from '../features/cart';
+import { ensureCheckoutBenefitsState } from '../features/checkout';
 import { readCachedCustomerPassport, refreshCustomerPassport, warmFullProductPassports } from '../shared/api';
 import { theme } from '../shared/config/theme';
 
@@ -138,6 +139,7 @@ export function AppRoot() {
         }
         if (passport?.token) {
           void refreshCustomerPassport(passport.token, passport.customer).catch(() => null);
+          void ensureCheckoutBenefitsState({ cartLines }).catch(() => null);
         }
       })().catch(() => null);
     }, BACKGROUND_TAB_WARMUP_DELAY_MS);

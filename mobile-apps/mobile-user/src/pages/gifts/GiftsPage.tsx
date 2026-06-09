@@ -1,22 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+﻿import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
-import {
-  ActivityIndicator,
-  Image,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  View,
-} from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
+import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
-import {
-  fetchCustomerBenefits,
-  isSameCachedValue,
-  readCachedCustomerBenefits,
-  readCachedCustomerPassport,
-  resolveAssetUrl,
-  type CustomerBenefitCard,
-} from '../../shared/api';
+import { ensureCheckoutBenefitsState, readCheckoutBenefitsState, type CheckoutBenefitsState } from '../../features/checkout';
+import { readCachedCustomerPassport, resolveAssetUrl, type CustomerBenefitCard } from '../../shared/api';
 import { theme } from '../../shared/config/theme';
 import { AppText as Text, Screen } from '../../shared/ui';
 
@@ -48,7 +36,7 @@ function GiftCard({ item }: { item: CustomerBenefitCard }) {
         {photoUrl ? (
           <Image source={{ uri: photoUrl }} style={styles.image} />
         ) : (
-          <Ionicons name="ticket" color={theme.colors.accent} size={42} />
+          <Ionicons name="gift" color={theme.colors.accent} size={42} />
         )}
       </View>
       <Text numberOfLines={2} style={styles.title}>{title}</Text>
@@ -64,35 +52,49 @@ export function GiftsPage() {
   const [isLoading, setLoading] = useState(true);
   const [errorText, setErrorText] = useState('');
 
+  const setStateFromBenefits = useCallback((state: CheckoutBenefitsState) => {
+    const nextItems = Array.isArray(state.preview?.gifts)
+      ? state.preview.gifts
+      : Array.isArray(state.sourceBenefits?.gifts)
+        ? state.sourceBenefits.gifts
+        : [];
+    setItems(nextItems);
+  }, []);
+
   const loadGifts = useCallback(async () => {
+    const passport = await readCachedCustomerPassport();
+    if (!passport?.token) {
+      setItems([]);
+      setErrorText('Войдите в профиль, чтобы увидеть подарки.');
+      setLoading(false);
+      return;
+    }
+
     setErrorText('');
     try {
-      const passport = await readCachedCustomerPassport();
-      if (!passport?.token) {
-        setItems([]);
-        setErrorText('Войдите в профиль, чтобы увидеть подарки.');
-        setLoading(false);
-        return;
-      }
-      const cachedBenefits = await readCachedCustomerBenefits(passport.token);
-      const cachedItems = Array.isArray(cachedBenefits?.gifts) ? cachedBenefits.gifts : [];
-      if (cachedBenefits) {
-        setItems(cachedItems);
+      const cachedState = await readCheckoutBenefitsState();
+      setStateFromBenefits(cachedState);
+      if (
+        (Array.isArray(cachedState.preview?.gifts) && cachedState.preview.gifts.length)
+        || (Array.isArray(cachedState.sourceBenefits?.gifts) && cachedState.sourceBenefits.gifts.length)
+      ) {
         setLoading(false);
       }
-      const benefits = await fetchCustomerBenefits(passport.token);
-      const freshItems = Array.isArray(benefits.gifts) ? benefits.gifts : [];
-      if (!isSameCachedValue(freshItems, cachedItems)) setItems(freshItems);
+
+      const freshState = await ensureCheckoutBenefitsState();
+      setStateFromBenefits(freshState);
     } catch (error) {
       setErrorText(error instanceof Error ? error.message : 'Не удалось загрузить подарки.');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [setStateFromBenefits]);
 
-  useEffect(() => {
-    void loadGifts();
-  }, [loadGifts]);
+  useFocusEffect(
+    useCallback(() => {
+      void loadGifts();
+    }, [loadGifts]),
+  );
 
   const countText = useMemo(() => String(items.length), [items.length]);
 

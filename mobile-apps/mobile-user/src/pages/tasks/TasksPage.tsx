@@ -1,20 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+﻿import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
-import {
-  ActivityIndicator,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  View,
-} from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
-import {
-  fetchCustomerBenefits,
-  isSameCachedValue,
-  readCachedCustomerBenefits,
-  readCachedCustomerPassport,
-  type CustomerBenefitCard,
-} from '../../shared/api';
+import { ensureCheckoutBenefitsState, readCheckoutBenefitsState, type CheckoutBenefitsState } from '../../features/checkout';
+import { readCachedCustomerPassport, type CustomerBenefitCard } from '../../shared/api';
 import { theme } from '../../shared/config/theme';
 import { AppText as Text, Screen } from '../../shared/ui';
 
@@ -133,35 +123,49 @@ export function TasksPage() {
   const [isLoading, setLoading] = useState(true);
   const [errorText, setErrorText] = useState('');
 
+  const setStateFromBenefits = useCallback((state: CheckoutBenefitsState) => {
+    const nextItems = Array.isArray(state.preview?.progress)
+      ? state.preview.progress
+      : Array.isArray(state.sourceBenefits?.progress)
+        ? state.sourceBenefits.progress
+        : [];
+    setItems(nextItems);
+  }, []);
+
   const loadTasks = useCallback(async () => {
+    const passport = await readCachedCustomerPassport();
+    if (!passport?.token) {
+      setItems([]);
+      setErrorText('Войдите в профиль, чтобы увидеть задания.');
+      setLoading(false);
+      return;
+    }
+
     setErrorText('');
     try {
-      const passport = await readCachedCustomerPassport();
-      if (!passport?.token) {
-        setItems([]);
-        setErrorText('Войдите в профиль, чтобы увидеть задания.');
-        setLoading(false);
-        return;
-      }
-      const cachedBenefits = await readCachedCustomerBenefits(passport.token);
-      const cachedItems = Array.isArray(cachedBenefits?.progress) ? cachedBenefits.progress : [];
-      if (cachedBenefits) {
-        setItems(cachedItems);
+      const cachedState = await readCheckoutBenefitsState();
+      setStateFromBenefits(cachedState);
+      if (
+        (Array.isArray(cachedState.preview?.progress) && cachedState.preview.progress.length)
+        || (Array.isArray(cachedState.sourceBenefits?.progress) && cachedState.sourceBenefits.progress.length)
+      ) {
         setLoading(false);
       }
-      const benefits = await fetchCustomerBenefits(passport.token);
-      const freshItems = Array.isArray(benefits.progress) ? benefits.progress : [];
-      if (!isSameCachedValue(freshItems, cachedItems)) setItems(freshItems);
+
+      const freshState = await ensureCheckoutBenefitsState();
+      setStateFromBenefits(freshState);
     } catch (error) {
       setErrorText(error instanceof Error ? error.message : 'Не удалось загрузить задания.');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [setStateFromBenefits]);
 
-  useEffect(() => {
-    void loadTasks();
-  }, [loadTasks]);
+  useFocusEffect(
+    useCallback(() => {
+      void loadTasks();
+    }, [loadTasks]),
+  );
 
   const countText = useMemo(() => String(items.length), [items.length]);
 
