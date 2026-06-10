@@ -6,11 +6,8 @@ import { readFulfillmentSelection, readCheckoutBenefitsSelection, saveCheckoutBe
 import {
   attachCheckoutPromo,
   fetchCheckoutBenefitsPreview,
-  fetchCustomerBenefits,
-  readCachedCustomerBenefits,
   readCachedCustomerPassport,
   readCachedMobileCatalogSnapshot,
-  saveCustomerBenefits,
   type CheckoutBenefitsPreviewData,
   type CheckoutBenefitsPreviewRequest,
   type CustomerBenefitCard,
@@ -34,6 +31,39 @@ type CheckoutBenefitsCache = {
   preview: CheckoutBenefitsPreviewData | null;
   sourceBenefits: CustomerBenefits | null;
   updatedAt: string;
+};
+
+type LocalCheckoutBenefitsPreviewItem = Record<string, unknown> & {
+  auto_add?: number;
+  benefits_excluded_line_total?: number;
+  cart_key?: string;
+  combo_id?: number | null;
+  discount?: Record<string, unknown> | null;
+  ingredients?: Array<Record<string, unknown>>;
+  line_total?: number;
+  option_items?: Array<Record<string, unknown>>;
+  product_config?: Record<string, unknown> | null;
+  product_id?: number | null;
+  qty?: number;
+  type?: string;
+};
+
+type LocalCheckoutBenefitsOutcome = {
+  disabledReason?: string;
+  disabledReasonCode?: string;
+  discountAmount: number;
+  errorCode?: string;
+  isApplicable: boolean;
+  items: LocalCheckoutBenefitsPreviewItem[];
+  itemsTotalAfterDiscount?: number;
+  itemsTotalAfterPromo?: number;
+};
+
+type LocalCheckoutBenefitsTargetSets = {
+  anyProductIds: Set<number>;
+  categoryIds: Set<number>;
+  comboIds: Set<number>;
+  exactProductConfigKeysByProductId: Map<number, Set<string>>;
 };
 
 export type CheckoutBenefitsState = {
@@ -137,6 +167,14 @@ function normalizeSelection(value: unknown): CheckoutBenefitsSelection {
     promoRewardId: promoRewardId > 0 ? promoRewardId : null,
     promoSource: promoCode || promoRewardId > 0 ? promoSource || 'promo_code' : null,
   };
+}
+
+function areCheckoutBenefitsSelectionsEqual(left: CheckoutBenefitsSelection | null | undefined, right: CheckoutBenefitsSelection | null | undefined) {
+  return normalizeSelection(left).discountId === normalizeSelection(right).discountId
+    && normalizeSelection(left).discountSource === normalizeSelection(right).discountSource
+    && normalizeSelection(left).promoCode === normalizeSelection(right).promoCode
+    && normalizeSelection(left).promoRewardId === normalizeSelection(right).promoRewardId
+    && normalizeSelection(left).promoSource === normalizeSelection(right).promoSource;
 }
 
 function getCartLineBuyXGetYBadge(line: CartLine, snapshot: MobileCatalogSnapshot | null) {
@@ -279,6 +317,717 @@ function buildSelectedPromoKey(selection: CheckoutBenefitsSelection, preview: Ch
   return buildSelectionKeyFromPromo(promoCard);
 }
 
+function normalizeLocalCheckoutBenefitProductConfig(value: unknown, fallbackProductId: number | null = null) {
+  const source = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  const productId = Number(source.product_id || fallbackProductId || 0);
+  if (!(productId > 0)) return null;
+  const variantGroupId = Number(source.variant_group_id || 0);
+  const variantValueIndex = Number(source.variant_value_index);
+  const optionSource = Array.isArray(source.options)
+    ? source.options
+    : Array.isArray(source.option_items)
+      ? source.option_items
+      : [];
+  const ingredientSource = Array.isArray(source.ingredients) ? source.ingredients : [];
+  const options = optionSource
+    .flatMap((option) => {
+      const entry = option && typeof option === 'object' ? option as Record<string, unknown> : {};
+      const id = Number(entry.id || entry.option_item_id || 0);
+      if (!(id > 0)) return [];
+      const optionVariantGroupId = Number(entry.variant_group_id || 0);
+      const optionVariantValueIndex = Number(entry.variant_value_index);
+      return [{
+        id,
+        qty: Math.max(1, Number(entry.qty ?? entry.quantity ?? 1) || 1),
+        target_product_id: Number(entry.target_product_id || entry.product_id || 0) || null,
+        variant_group_id: optionVariantGroupId > 0 ? optionVariantGroupId : null,
+        variant_value_index: Number.isFinite(optionVariantValueIndex) && optionVariantValueIndex >= 0
+          ? optionVariantValueIndex
+          : null,
+      }];
+    })
+    .sort((left, right) => (
+      Number(left.id || 0) - Number(right.id || 0)
+      || Number(left.variant_group_id || 0) - Number(right.variant_group_id || 0)
+      || Number(left.variant_value_index || 0) - Number(right.variant_value_index || 0)
+    ));
+  const ingredients = ingredientSource
+    .flatMap((ingredient) => {
+      const entry = ingredient && typeof ingredient === 'object' ? ingredient as Record<string, unknown> : {};
+      const ingredientId = Number(entry.ingredient_id || entry.product_id || 0);
+      if (!(ingredientId > 0)) return [];
+      return [{
+        ingredient_id: ingredientId,
+        qty: Number(entry.qty ?? entry.quantity ?? 0) || 0,
+      }];
+    })
+    .sort((left, right) => Number(left.ingredient_id || 0) - Number(right.ingredient_id || 0));
+  return {
+    ingredients,
+    options,
+    product_id: productId,
+    variant_group_id: variantGroupId > 0 ? variantGroupId : null,
+    variant_value_index: Number.isFinite(variantValueIndex) && variantValueIndex >= 0 ? variantValueIndex : null,
+  };
+}
+
+function buildLocalCheckoutBenefitProductConfigKey(value: unknown, fallbackProductId: number | null = null) {
+  const normalized = normalizeLocalCheckoutBenefitProductConfig(value, fallbackProductId);
+  if (!normalized) return '';
+  try {
+    return JSON.stringify(normalized);
+  } catch {
+    return '';
+  }
+}
+
+function buildLocalCheckoutBenefitsPreviewItems(request: CheckoutBenefitsPreviewRequest): LocalCheckoutBenefitsPreviewItem[] {
+  return (Array.isArray(request.items) ? request.items : [])
+    .map((rawItem) => {
+      if (!rawItem || typeof rawItem !== 'object') return null;
+      const source = rawItem as Record<string, unknown>;
+      const type = asText(source.type).toLowerCase() || 'product';
+      const qty = Math.max(1, Number(source.qty || 1) || 1);
+      const lineTotal = roundPrice(Math.max(0, Number(source.line_total || 0) || 0));
+      const benefitsExcludedLineTotal = roundPrice(Math.min(
+        lineTotal,
+        Math.max(0, Number(source.benefits_excluded_line_total ?? source.discount_excluded_line_total ?? 0) || 0),
+      ));
+      const originalLineTotal = roundPrice(Math.max(
+        lineTotal,
+        Number(source.original_line_total ?? source.old_line_total ?? (source.discount as Record<string, unknown> | undefined)?.original_line_total ?? lineTotal) || lineTotal,
+      ));
+      if (type === 'combo') {
+        const comboId = Number(source.combo_id || 0) || null;
+        if (!comboId) return null;
+        const comboItem: LocalCheckoutBenefitsPreviewItem = {
+          auto_add: Number(source.auto_add || 0) === 1 ? 1 : 0,
+          cart_key: asText(source.cart_key),
+          combo_id: comboId,
+          line_total: lineTotal,
+          qty,
+          type: 'combo',
+        };
+        if (originalLineTotal > lineTotal) comboItem.discount = { original_line_total: originalLineTotal };
+        if (benefitsExcludedLineTotal > 0) comboItem.benefits_excluded_line_total = benefitsExcludedLineTotal;
+        return comboItem;
+      }
+      const productId = Number(source.product_id || 0) || null;
+      if (!productId) return null;
+      const variantGroupId = Number(source.variant_group_id || 0);
+      const variantValueIndex = Number(source.variant_value_index);
+      const optionItems = (Array.isArray(source.option_items) ? source.option_items : [])
+        .flatMap((option) => {
+          const entry = option && typeof option === 'object' ? option as Record<string, unknown> : {};
+          const id = Number(entry.id || entry.option_item_id || 0);
+          if (!(id > 0)) return [];
+          const optionVariantGroupId = Number(entry.variant_group_id || 0);
+          const optionVariantValueIndex = Number(entry.variant_value_index);
+          return [{
+            id,
+            qty: Math.max(1, Number(entry.qty ?? entry.quantity ?? 1) || 1),
+            target_product_id: Number(entry.target_product_id || entry.product_id || 0) || null,
+            variant_group_id: optionVariantGroupId > 0 ? optionVariantGroupId : null,
+            variant_value_index: Number.isFinite(optionVariantValueIndex) && optionVariantValueIndex >= 0
+              ? optionVariantValueIndex
+              : null,
+          }];
+        });
+      const ingredients = (Array.isArray(source.ingredients) ? source.ingredients : [])
+        .flatMap((ingredient) => {
+          const entry = ingredient && typeof ingredient === 'object' ? ingredient as Record<string, unknown> : {};
+          const ingredientId = Number(entry.ingredient_id || entry.product_id || 0);
+          if (!(ingredientId > 0)) return [];
+          return [{
+            ingredient_id: ingredientId,
+            qty: Number(entry.qty ?? entry.quantity ?? 0) || 0,
+          }];
+        });
+      const productItem: LocalCheckoutBenefitsPreviewItem = {
+        auto_add: Number(source.auto_add || 0) === 1 ? 1 : 0,
+        cart_key: asText(source.cart_key),
+        ingredients,
+        line_total: lineTotal,
+        option_items: optionItems,
+        product_config: normalizeLocalCheckoutBenefitProductConfig(source.product_config || {
+          ingredients,
+          options: optionItems,
+          product_id: productId,
+          variant_group_id: variantGroupId > 0 ? variantGroupId : null,
+          variant_value_index: Number.isFinite(variantValueIndex) && variantValueIndex >= 0 ? variantValueIndex : null,
+        }, productId),
+        product_id: productId,
+        qty,
+        type: 'product',
+        variant_group_id: variantGroupId > 0 ? variantGroupId : null,
+        variant_value_index: Number.isFinite(variantValueIndex) && variantValueIndex >= 0 ? variantValueIndex : null,
+      };
+      if (originalLineTotal > lineTotal) productItem.discount = { original_line_total: originalLineTotal };
+      if (benefitsExcludedLineTotal > 0) productItem.benefits_excluded_line_total = benefitsExcludedLineTotal;
+      return productItem;
+    })
+    .filter((entry): entry is LocalCheckoutBenefitsPreviewItem => !!entry);
+}
+
+function addLocalCheckoutBenefitProductCategory(result: Map<number, Set<number>>, productId: unknown, categoryId: unknown) {
+  const normalizedProductId = Number(productId || 0);
+  const normalizedCategoryId = Number(categoryId || 0);
+  if (!(normalizedProductId > 0) || !(normalizedCategoryId > 0)) return;
+  if (!result.has(normalizedProductId)) result.set(normalizedProductId, new Set());
+  result.get(normalizedProductId)?.add(normalizedCategoryId);
+}
+
+function addLocalCheckoutBenefitProductCategories(result: Map<number, Set<number>>, product: unknown) {
+  if (!product || typeof product !== 'object') return;
+  const source = product as Record<string, unknown>;
+  const productId = Number(source.id || source.product_id || 0);
+  if (!(productId > 0)) return;
+  addLocalCheckoutBenefitProductCategory(result, productId, source.category_id);
+  addLocalCheckoutBenefitProductCategory(result, productId, source.categoryId);
+  (Array.isArray(source.category_ids) ? source.category_ids : []).forEach((categoryId) => {
+    addLocalCheckoutBenefitProductCategory(result, productId, categoryId);
+  });
+  (Array.isArray(source.categories) ? source.categories : []).forEach((category) => {
+    if (category && typeof category === 'object') {
+      addLocalCheckoutBenefitProductCategory(result, productId, (category as Record<string, unknown>).id || (category as Record<string, unknown>).category_id);
+      return;
+    }
+    addLocalCheckoutBenefitProductCategory(result, productId, category);
+  });
+}
+
+function buildLocalCheckoutBenefitsProductCategoriesMap(snapshot: MobileCatalogSnapshot | null) {
+  const result = new Map<number, Set<number>>();
+  Object.entries(snapshot?.productsByCategory || {}).forEach(([rawCategoryId, products]) => {
+    const categoryId = Number(rawCategoryId || 0);
+    if (!(categoryId > 0) || !Array.isArray(products)) return;
+    products.forEach((product) => {
+      addLocalCheckoutBenefitProductCategory(result, (product as Record<string, unknown>)?.id, categoryId);
+      addLocalCheckoutBenefitProductCategories(result, product);
+    });
+  });
+  Object.values(snapshot?.productPassports || {}).forEach((passport) => {
+    const product = passport && typeof passport === 'object'
+      ? (passport as Record<string, unknown>).product
+      : null;
+    addLocalCheckoutBenefitProductCategories(result, product);
+  });
+  return new Map(Array.from(result.entries()).map(([productId, categoryIds]) => [productId, Array.from(categoryIds.values())]));
+}
+
+function buildLocalCheckoutBenefitsTargetSets(targetSets: unknown): LocalCheckoutBenefitsTargetSets {
+  const source = targetSets && typeof targetSets === 'object' ? targetSets as Record<string, unknown> : {};
+  const exactProductConfigKeysByProductId = new Map<number, Set<string>>();
+  const exactConfigs = source.exact_product_configs_by_product_id && typeof source.exact_product_configs_by_product_id === 'object'
+    ? source.exact_product_configs_by_product_id as Record<string, unknown>
+    : {};
+  Object.entries(exactConfigs).forEach(([rawProductId, configs]) => {
+    const productId = Number(rawProductId || 0);
+    if (!(productId > 0)) return;
+    const keys = new Set(
+      (Array.isArray(configs) ? configs : [])
+        .map((config) => buildLocalCheckoutBenefitProductConfigKey(config, productId))
+        .filter(Boolean),
+    );
+    if (keys.size) exactProductConfigKeysByProductId.set(productId, keys);
+  });
+  return {
+    anyProductIds: new Set((Array.isArray(source.any_product_ids) ? source.any_product_ids : []).map((id) => Number(id || 0)).filter((id) => id > 0)),
+    categoryIds: new Set((Array.isArray(source.category_ids) ? source.category_ids : []).map((id) => Number(id || 0)).filter((id) => id > 0)),
+    comboIds: new Set((Array.isArray(source.combo_ids) ? source.combo_ids : []).map((id) => Number(id || 0)).filter((id) => id > 0)),
+    exactProductConfigKeysByProductId,
+  };
+}
+
+function matchLocalCheckoutBenefitsTargetScope(
+  targetSets: LocalCheckoutBenefitsTargetSets,
+  item: LocalCheckoutBenefitsPreviewItem,
+  productCategoriesMap: Map<number, number[]>,
+  scope: string,
+) {
+  const normalizedScope = asText(scope).toLowerCase() || 'product';
+  const productId = Number(item.product_id || 0);
+  const matchesProduct = item.type !== 'combo' && productId > 0 && (() => {
+    if (targetSets.anyProductIds.has(productId)) return true;
+    const exactConfigs = targetSets.exactProductConfigKeysByProductId.get(productId);
+    if (!exactConfigs?.size) return false;
+    const itemConfigKey = buildLocalCheckoutBenefitProductConfigKey(item.product_config || item, productId);
+    return !!(itemConfigKey && exactConfigs.has(itemConfigKey));
+  })();
+  const matchesCategory = item.type !== 'combo'
+    && productId > 0
+    && (productCategoriesMap.get(productId) || []).some((categoryId) => targetSets.categoryIds.has(Number(categoryId || 0)));
+  const matchesCombo = item.type === 'combo' && targetSets.comboIds.has(Number(item.combo_id || 0));
+  if (normalizedScope === 'product') return matchesProduct;
+  if (normalizedScope === 'category') return matchesCategory;
+  if (normalizedScope === 'combo') return matchesCombo;
+  return matchesProduct || matchesCategory || matchesCombo;
+}
+
+function calculateLocalCheckoutBenefitsDiscountAmount(price: unknown, discountType: unknown, discountValue: unknown, maxDiscountAmount: unknown = null) {
+  const sourcePrice = Number(price || 0);
+  if (!(sourcePrice > 0)) return 0;
+  const normalizedType = asText(discountType).toLowerCase();
+  const normalizedValue = Number(discountValue || 0);
+  let amount = 0;
+  if (normalizedType === 'percent') {
+    if (!(normalizedValue > 0)) return 0;
+    amount = sourcePrice * normalizedValue / 100;
+  } else if (normalizedType === 'fixed') {
+    if (!(normalizedValue > 0)) return 0;
+    amount = normalizedValue;
+  } else if (normalizedType === 'special_price') {
+    amount = Math.max(0, sourcePrice - normalizedValue);
+  } else {
+    return 0;
+  }
+  const maxDiscount = maxDiscountAmount != null ? Number(maxDiscountAmount || 0) : null;
+  if (Number.isFinite(maxDiscount) && Number(maxDiscount) > 0) amount = Math.min(amount, Number(maxDiscount));
+  return roundPrice(Math.min(amount, sourcePrice));
+}
+
+function getLocalCheckoutBenefitsExcludedLineTotal(item: LocalCheckoutBenefitsPreviewItem) {
+  const lineTotal = roundPrice(Math.max(0, Number(item.line_total || 0)));
+  const excluded = roundPrice(Math.max(0, Number(item.benefits_excluded_line_total ?? item.discount_excluded_line_total ?? 0) || 0));
+  return roundPrice(Math.min(lineTotal, excluded));
+}
+
+function getLocalCheckoutBenefitsEligibleLineTotal(item: LocalCheckoutBenefitsPreviewItem) {
+  const lineTotal = roundPrice(Math.max(0, Number(item.line_total || 0)));
+  return roundPrice(Math.max(0, lineTotal - getLocalCheckoutBenefitsExcludedLineTotal(item)));
+}
+
+function getLocalCheckoutBenefitsEligibleItemsTotal(items: LocalCheckoutBenefitsPreviewItem[]) {
+  return roundPrice(items.reduce((sum, item) => sum + getLocalCheckoutBenefitsEligibleLineTotal(item), 0));
+}
+
+function toLocalCheckoutPriceUnits(value: unknown) {
+  return Math.max(0, Math.round(roundPrice(Math.max(0, Number(value || 0))) * 100));
+}
+
+function fromLocalCheckoutPriceUnits(units: unknown) {
+  return roundPrice(Math.max(0, Number(units || 0)) / 100);
+}
+
+function cloneLocalCheckoutBenefitsItems(items: LocalCheckoutBenefitsPreviewItem[]) {
+  return items.map((item) => ({
+    ...item,
+    discount: item.discount ? { ...item.discount } : item.discount,
+  }));
+}
+
+function applyLocalOrderDiscountAcrossItemsNoRemainder(items: LocalCheckoutBenefitsPreviewItem[], discountAmount: unknown) {
+  const workingItems = cloneLocalCheckoutBenefitsItems(items);
+  const eligible: Array<{ eligibleLineUnits: number; index: number; lineTotalUnits: number; position: number; shareUnits: number; fractionalRemainder: number }> = [];
+  let baseItemsTotalUnits = 0;
+  let fullItemsTotalUnits = 0;
+  workingItems.forEach((item, index) => {
+    const lineTotalUnits = toLocalCheckoutPriceUnits(item.line_total);
+    const eligibleLineUnits = Math.min(lineTotalUnits, toLocalCheckoutPriceUnits(getLocalCheckoutBenefitsEligibleLineTotal(item)));
+    item.line_total = fromLocalCheckoutPriceUnits(lineTotalUnits);
+    fullItemsTotalUnits += lineTotalUnits;
+    if (!(eligibleLineUnits > 0)) return;
+    eligible.push({
+      eligibleLineUnits,
+      fractionalRemainder: 0,
+      index,
+      lineTotalUnits,
+      position: eligible.length,
+      shareUnits: 0,
+    });
+    baseItemsTotalUnits += eligibleLineUnits;
+  });
+  const fullItemsTotal = fromLocalCheckoutPriceUnits(fullItemsTotalUnits);
+  if (!(baseItemsTotalUnits > 0) || !eligible.length) {
+    return { discountAmount: 0, items: workingItems, itemsTotalAfterDiscount: fullItemsTotal };
+  }
+  const targetDiscountUnits = Math.min(toLocalCheckoutPriceUnits(discountAmount), baseItemsTotalUnits);
+  if (!(targetDiscountUnits > 0)) {
+    return { discountAmount: 0, items: workingItems, itemsTotalAfterDiscount: fullItemsTotal };
+  }
+  eligible.forEach((entry) => {
+    const proportionalUnits = targetDiscountUnits * entry.eligibleLineUnits / baseItemsTotalUnits;
+    const roundedDownUnits = Math.floor(proportionalUnits);
+    entry.shareUnits = Math.min(entry.eligibleLineUnits, Math.max(0, roundedDownUnits));
+    entry.fractionalRemainder = proportionalUnits - roundedDownUnits;
+  });
+  let appliedDiscountUnits = eligible.reduce((sum, entry) => sum + entry.shareUnits, 0);
+  let remainingDiscountUnits = Math.max(0, targetDiscountUnits - appliedDiscountUnits);
+  if (remainingDiscountUnits > 0) {
+    const sorted = eligible.slice().sort((left, right) => (
+      right.fractionalRemainder - left.fractionalRemainder
+      || right.eligibleLineUnits - left.eligibleLineUnits
+      || left.position - right.position
+    ));
+    while (remainingDiscountUnits > 0) {
+      let progressed = false;
+      for (const entry of sorted) {
+        const capUnits = Math.max(0, entry.eligibleLineUnits - entry.shareUnits);
+        if (!(capUnits > 0)) continue;
+        entry.shareUnits += 1;
+        remainingDiscountUnits -= 1;
+        appliedDiscountUnits += 1;
+        progressed = true;
+        if (!(remainingDiscountUnits > 0)) break;
+      }
+      if (!progressed) break;
+    }
+  }
+  eligible.forEach((entry) => {
+    const nextLineUnits = Math.max(0, entry.lineTotalUnits - Math.min(entry.eligibleLineUnits, entry.shareUnits));
+    workingItems[entry.index].line_total = fromLocalCheckoutPriceUnits(nextLineUnits);
+  });
+  return {
+    discountAmount: fromLocalCheckoutPriceUnits(appliedDiscountUnits),
+    items: workingItems,
+    itemsTotalAfterDiscount: roundPrice(workingItems.reduce((sum, item) => sum + Number(item.line_total || 0), 0)),
+  };
+}
+
+function buildLocalCheckoutBenefitsPromoNotApplicableOutcome(
+  previewItems: LocalCheckoutBenefitsPreviewItem[],
+  itemsTotalBeforePromo: unknown,
+  disabledReasonCode = 'PROMO_NOT_APPLICABLE',
+): LocalCheckoutBenefitsOutcome {
+  return {
+    disabledReasonCode,
+    discountAmount: 0,
+    isApplicable: false,
+    items: cloneLocalCheckoutBenefitsItems(previewItems),
+    itemsTotalAfterPromo: roundPrice(Number(itemsTotalBeforePromo || 0)),
+  };
+}
+
+function computeLocalCheckoutBenefitsDiscountOutcome(
+  rule: Record<string, unknown> | null,
+  previewItems: LocalCheckoutBenefitsPreviewItem[],
+  productCategoriesMap: Map<number, number[]>,
+): LocalCheckoutBenefitsOutcome {
+  const items = cloneLocalCheckoutBenefitsItems(previewItems);
+  const baseItemsTotal = roundPrice(items.reduce((sum, item) => sum + Number(item.line_total || 0), 0));
+  const eligibleItemsTotal = getLocalCheckoutBenefitsEligibleItemsTotal(items);
+  if (!rule) {
+    return { discountAmount: 0, errorCode: 'DISCOUNT_INVALID', isApplicable: false, items, itemsTotalAfterDiscount: baseItemsTotal };
+  }
+  if (rule.server_locked === true || Number(rule.server_locked || 0) === 1) {
+    const errorCode = asText(rule.server_disabled_reason_code).toUpperCase() || 'DISCOUNT_NOT_AVAILABLE';
+    return { discountAmount: 0, disabledReason: asText(rule.server_disabled_reason), errorCode, isApplicable: false, items, itemsTotalAfterDiscount: baseItemsTotal };
+  }
+  const applyTo = asText(rule.apply_to).toLowerCase() || 'order';
+  const minOrderAmount = rule.min_order_amount != null ? Number(rule.min_order_amount || 0) : 0;
+  if (applyTo === 'order') {
+    if (minOrderAmount > 0 && eligibleItemsTotal < minOrderAmount) {
+      return { discountAmount: 0, errorCode: 'DISCOUNT_NOT_APPLICABLE', isApplicable: false, items, itemsTotalAfterDiscount: baseItemsTotal };
+    }
+    const orderDiscountAmount = calculateLocalCheckoutBenefitsDiscountAmount(
+      eligibleItemsTotal,
+      rule.discount_type,
+      rule.discount_value,
+      rule.max_discount_amount,
+    );
+    const applied = applyLocalOrderDiscountAcrossItemsNoRemainder(items, orderDiscountAmount);
+    if (!(Number(applied.discountAmount || 0) > 0)) {
+      return { discountAmount: 0, errorCode: 'DISCOUNT_NOT_APPLICABLE', isApplicable: false, items, itemsTotalAfterDiscount: baseItemsTotal };
+    }
+    return {
+      discountAmount: roundPrice(applied.discountAmount),
+      isApplicable: true,
+      items: applied.items,
+      itemsTotalAfterDiscount: roundPrice(applied.itemsTotalAfterDiscount),
+    };
+  }
+  const targetSets = buildLocalCheckoutBenefitsTargetSets(rule.target_sets);
+  let itemsDiscount = 0;
+  items.forEach((item) => {
+    if (!matchLocalCheckoutBenefitsTargetScope(targetSets, item, productCategoriesMap, applyTo === 'combo' ? 'combo' : applyTo || 'any')) return;
+    const itemDiscount = calculateLocalCheckoutBenefitsDiscountAmount(
+      getLocalCheckoutBenefitsEligibleLineTotal(item),
+      rule.discount_type,
+      rule.discount_value,
+      rule.max_discount_amount,
+    );
+    if (!(itemDiscount > 0)) return;
+    item.line_total = roundPrice(Math.max(0, Number(item.line_total || 0) - itemDiscount));
+    itemsDiscount += itemDiscount;
+  });
+  if (!(itemsDiscount > 0)) {
+    return { discountAmount: 0, errorCode: 'DISCOUNT_NOT_APPLICABLE', isApplicable: false, items, itemsTotalAfterDiscount: baseItemsTotal };
+  }
+  return {
+    discountAmount: roundPrice(itemsDiscount),
+    isApplicable: true,
+    items,
+    itemsTotalAfterDiscount: roundPrice(items.reduce((sum, item) => sum + Number(item.line_total || 0), 0)),
+  };
+}
+
+function computeLocalCheckoutBenefitsPromoOutcome(
+  rule: Record<string, unknown> | null,
+  previewItems: LocalCheckoutBenefitsPreviewItem[],
+  itemsTotalBeforePromo: unknown,
+  productCategoriesMap: Map<number, number[]>,
+): LocalCheckoutBenefitsOutcome {
+  const items = cloneLocalCheckoutBenefitsItems(previewItems);
+  const baseItemsTotal = roundPrice(Number(itemsTotalBeforePromo != null
+    ? itemsTotalBeforePromo
+    : items.reduce((sum, item) => sum + Number(item.line_total || 0), 0)));
+  const eligibleItemsTotal = getLocalCheckoutBenefitsEligibleItemsTotal(items);
+  if (!rule) return buildLocalCheckoutBenefitsPromoNotApplicableOutcome(items, baseItemsTotal, 'PROMO_INVALID');
+  if (rule.server_locked === true || Number(rule.server_locked || 0) === 1) {
+    return buildLocalCheckoutBenefitsPromoNotApplicableOutcome(
+      items,
+      baseItemsTotal,
+      asText(rule.server_disabled_reason_code).toUpperCase() || 'PROMO_NOT_AVAILABLE',
+    );
+  }
+  const runtimeConfig = rule.runtime_config && typeof rule.runtime_config === 'object'
+    ? rule.runtime_config as Record<string, unknown>
+    : {};
+  const rewardType = asText(runtimeConfig.reward_type || 'discount').toLowerCase() || 'discount';
+  const productRewardType = asText(runtimeConfig.product_reward_type || 'gift').toLowerCase() || 'gift';
+  const applyTo = asText(runtimeConfig.apply_to || 'order').toLowerCase() || 'order';
+  const minOrderAmount = runtimeConfig.min_order_amount != null
+    ? Number(runtimeConfig.min_order_amount || 0)
+    : (rule.min_order_amount != null ? Number(rule.min_order_amount || 0) : 0);
+  if (minOrderAmount > 0 && eligibleItemsTotal < minOrderAmount) {
+    return buildLocalCheckoutBenefitsPromoNotApplicableOutcome(items, baseItemsTotal);
+  }
+  const targetSets = buildLocalCheckoutBenefitsTargetSets(rule.target_sets);
+  if (rewardType === 'discount') {
+    if (applyTo === 'order') {
+      const promoDiscountAmount = calculateLocalCheckoutBenefitsDiscountAmount(
+        eligibleItemsTotal,
+        runtimeConfig.discount_type,
+        runtimeConfig.discount_value,
+        runtimeConfig.max_discount_amount,
+      );
+      const applied = applyLocalOrderDiscountAcrossItemsNoRemainder(items, promoDiscountAmount);
+      if (!(Number(applied.discountAmount || 0) > 0)) return buildLocalCheckoutBenefitsPromoNotApplicableOutcome(items, baseItemsTotal);
+      return {
+        disabledReasonCode: '',
+        discountAmount: roundPrice(applied.discountAmount),
+        isApplicable: true,
+        items: applied.items,
+        itemsTotalAfterPromo: roundPrice(applied.itemsTotalAfterDiscount),
+      };
+    }
+    let promoItemsDiscount = 0;
+    items.forEach((item) => {
+      if (!matchLocalCheckoutBenefitsTargetScope(targetSets, item, productCategoriesMap, applyTo || 'any')) return;
+      const itemDiscount = calculateLocalCheckoutBenefitsDiscountAmount(
+        getLocalCheckoutBenefitsEligibleLineTotal(item),
+        runtimeConfig.discount_type,
+        runtimeConfig.discount_value,
+        runtimeConfig.max_discount_amount,
+      );
+      if (!(itemDiscount > 0)) return;
+      item.line_total = roundPrice(Math.max(0, Number(item.line_total || 0) - itemDiscount));
+      promoItemsDiscount += itemDiscount;
+    });
+    if (!(promoItemsDiscount > 0)) return buildLocalCheckoutBenefitsPromoNotApplicableOutcome(items, baseItemsTotal);
+    return {
+      disabledReasonCode: '',
+      discountAmount: roundPrice(promoItemsDiscount),
+      isApplicable: true,
+      items,
+      itemsTotalAfterPromo: roundPrice(items.reduce((sum, item) => sum + Number(item.line_total || 0), 0)),
+    };
+  }
+  if (productRewardType === 'gift') {
+    const hasTargets = targetSets.anyProductIds.size > 0
+      || targetSets.categoryIds.size > 0
+      || targetSets.comboIds.size > 0
+      || targetSets.exactProductConfigKeysByProductId.size > 0;
+    return hasTargets
+      ? { disabledReasonCode: '', discountAmount: 0, isApplicable: true, items, itemsTotalAfterPromo: baseItemsTotal }
+      : buildLocalCheckoutBenefitsPromoNotApplicableOutcome(items, baseItemsTotal);
+  }
+  let rewardItemsDiscount = 0;
+  items.forEach((item) => {
+    if (!matchLocalCheckoutBenefitsTargetScope(targetSets, item, productCategoriesMap, 'any')) return;
+    const itemDiscount = calculateLocalCheckoutBenefitsDiscountAmount(
+      getLocalCheckoutBenefitsEligibleLineTotal(item),
+      runtimeConfig.discount_type,
+      runtimeConfig.discount_value,
+      runtimeConfig.max_discount_amount,
+    );
+    if (!(itemDiscount > 0)) return;
+    item.line_total = roundPrice(Math.max(0, Number(item.line_total || 0) - itemDiscount));
+    rewardItemsDiscount += itemDiscount;
+  });
+  if (!(rewardItemsDiscount > 0)) return buildLocalCheckoutBenefitsPromoNotApplicableOutcome(items, baseItemsTotal);
+  return {
+    disabledReasonCode: '',
+    discountAmount: roundPrice(rewardItemsDiscount),
+    isApplicable: true,
+    items,
+    itemsTotalAfterPromo: roundPrice(items.reduce((sum, item) => sum + Number(item.line_total || 0), 0)),
+  };
+}
+
+function buildLocalCheckoutBenefitsLineTotalsByCartKey(items: LocalCheckoutBenefitsPreviewItem[]) {
+  return items.reduce((acc, item) => {
+    const cartKey = asText(item.cart_key);
+    if (!cartKey) return acc;
+    acc[cartKey] = roundPrice(item.line_total);
+    return acc;
+  }, {} as Record<string, number>);
+}
+
+function buildLocalCheckoutBenefitsSummarySnapshot(
+  preview: CheckoutBenefitsPreviewData,
+  subtotalBeforeDiscount: unknown,
+  itemsTotalAfterBenefits: unknown,
+  discountBreakdown: Array<Record<string, unknown>>,
+) {
+  const subtotal = roundPrice(subtotalBeforeDiscount);
+  const itemsTotal = roundPrice(itemsTotalAfterBenefits);
+  const delivery = roundPrice(preview.summary?.delivery);
+  return {
+    delivery,
+    discount_breakdown: discountBreakdown
+      .filter((entry) => Number(entry.amount || 0) > 0)
+      .map((entry) => ({
+        amount: roundPrice(entry.amount),
+        key: asText(entry.key),
+        promo_code: entry.promo_code ? normalizePromoCode(entry.promo_code) : null,
+        source_kind: asText(entry.source_kind).toLowerCase() || null,
+        title: asText(entry.title) || 'Discount',
+      })),
+    discount_total: roundPrice(Math.max(0, subtotal - itemsTotal)),
+    items_total: itemsTotal,
+    subtotal,
+    total: roundPrice(itemsTotal + delivery),
+  };
+}
+
+function buildLocalCheckoutBenefitsPreviewData(
+  preview: CheckoutBenefitsPreviewData | null,
+  request: CheckoutBenefitsPreviewRequest,
+  selection: CheckoutBenefitsSelection,
+  snapshot: MobileCatalogSnapshot | null,
+) {
+  if (!preview) return null;
+  const clientCalculation = preview.client_calculation && typeof preview.client_calculation === 'object'
+    ? preview.client_calculation as Record<string, unknown>
+    : null;
+  const discountRules = Array.isArray(clientCalculation?.discount_rules)
+    ? clientCalculation.discount_rules.filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === 'object')
+    : [];
+  const promoRules = Array.isArray(clientCalculation?.promo_rules)
+    ? clientCalculation.promo_rules.filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === 'object')
+    : [];
+  if (!(Number(clientCalculation?.version || 0) >= 2) || (!discountRules.length && !promoRules.length)) return null;
+
+  const discountKey = selection.discountId && selection.discountSource
+    ? `${selection.discountSource}:${selection.discountId}`
+    : '';
+  const promoKey = buildSelectedPromoKey(selection, preview);
+  const baseItems = buildLocalCheckoutBenefitsPreviewItems(request);
+  const baseItemsTotal = roundPrice(baseItems.reduce((sum, item) => sum + Number(item.line_total || 0), 0));
+  const subtotalBeforeDiscount = roundPrice(baseItems.reduce((sum, item) => {
+    const originalLineTotal = Number(item.discount?.original_line_total || item.line_total || 0);
+    return sum + Math.max(Number(item.line_total || 0), originalLineTotal);
+  }, 0));
+  const productCategoriesMap = buildLocalCheckoutBenefitsProductCategoriesMap(snapshot);
+  const discountRuleOutcomes = new Map(
+    discountRules
+      .map((rule) => [asText(rule.selection_key), computeLocalCheckoutBenefitsDiscountOutcome(rule, baseItems, productCategoriesMap)] as const)
+      .filter(([selectionKey]) => !!selectionKey),
+  );
+  const selectedDiscountRule = discountRules.find((rule) => asText(rule.selection_key) === discountKey) || null;
+  const selectedDiscountOutcome = discountKey ? (discountRuleOutcomes.get(discountKey) || null) : null;
+  const hasSelectedDiscount = selectedDiscountOutcome?.isApplicable === true;
+  const promoSourceItems = hasSelectedDiscount
+    ? selectedDiscountOutcome.items
+    : baseItems;
+  const promoSourceItemsTotal = hasSelectedDiscount
+    ? Number(selectedDiscountOutcome.itemsTotalAfterDiscount || baseItemsTotal)
+    : baseItemsTotal;
+  const promoRuleOutcomes = new Map(
+    promoRules
+      .map((rule) => [asText(rule.selection_key), computeLocalCheckoutBenefitsPromoOutcome(rule, promoSourceItems, promoSourceItemsTotal, productCategoriesMap)] as const)
+      .filter(([selectionKey]) => !!selectionKey),
+  );
+  const selectedPromoRule = promoRules.find((rule) => asText(rule.selection_key) === promoKey) || null;
+  const selectedPromoOutcome = promoKey ? (promoRuleOutcomes.get(promoKey) || null) : null;
+  const canCombineSelectedBenefits = !hasSelectedDiscount || !selectedPromoRule || !selectedDiscountRule
+    ? true
+    : (isCheckoutBenefitsStackable(selectedDiscountRule) && isCheckoutBenefitsStackable(selectedPromoRule));
+  const hasSelectedPromo = selectedPromoOutcome?.isApplicable === true && canCombineSelectedBenefits;
+  const finalItems = hasSelectedPromo
+    ? selectedPromoOutcome.items
+    : (hasSelectedDiscount ? promoSourceItems : baseItems);
+  const finalItemsTotal = hasSelectedPromo
+    ? Number(selectedPromoOutcome.itemsTotalAfterPromo || promoSourceItemsTotal)
+    : (hasSelectedDiscount ? promoSourceItemsTotal : baseItemsTotal);
+
+  const discountCards = Array.isArray(preview.discounts)
+    ? preview.discounts.map((entry) => {
+      const selectionKey = buildSelectionKeyFromDiscount(entry);
+      const outcome = selectionKey ? (discountRuleOutcomes.get(selectionKey) || null) : null;
+      const isApplicable = outcome ? outcome.isApplicable === true : entry?.is_applicable !== false;
+      const disabledReasonCode = outcome?.errorCode
+        ? asText(outcome.errorCode).toUpperCase()
+        : asText(entry?.disabled_reason_code).toUpperCase();
+      return {
+        ...entry,
+        disabled_reason: isApplicable ? '' : (asText(outcome?.disabledReason) || asText(entry?.disabled_reason)),
+        disabled_reason_code: isApplicable ? '' : disabledReasonCode,
+        is_applicable: isApplicable,
+        is_selected: isApplicable && selectionKey === discountKey,
+      };
+    })
+    : [];
+  const promoCards = Array.isArray(preview.promo_codes)
+    ? preview.promo_codes.map((entry) => {
+      const selectionKey = buildSelectionKeyFromPromo(entry);
+      const outcome = selectionKey ? (promoRuleOutcomes.get(selectionKey) || null) : null;
+      const isApplicable = outcome ? outcome.isApplicable === true : entry?.is_applicable !== false;
+      const disabledReasonCode = outcome?.disabledReasonCode
+        ? asText(outcome.disabledReasonCode).toUpperCase()
+        : asText(entry?.disabled_reason_code).toUpperCase();
+      return {
+        ...entry,
+        disabled_reason: isApplicable ? '' : (asText(outcome?.disabledReason) || asText(entry?.disabled_reason)),
+        disabled_reason_code: isApplicable ? '' : disabledReasonCode,
+        is_applicable: isApplicable,
+        is_selected: isApplicable && canCombineSelectedBenefits && selectionKey === promoKey,
+      };
+    })
+    : [];
+
+  const discountBreakdown: Array<Record<string, unknown>> = [];
+  if (hasSelectedDiscount && Number(selectedDiscountOutcome?.discountAmount || 0) > 0) {
+    const selectedCard = discountCards.find((entry) => entry?.is_selected) || null;
+    discountBreakdown.push({
+      amount: roundPrice(selectedDiscountOutcome.discountAmount),
+      key: `discount_${Number(selectedDiscountRule?.source_discount_id || selectedDiscountRule?.selection_id || 0) || 'selected'}`,
+      promo_code: null,
+      source_kind: asText(selectedDiscountRule?.source || 'discount').toLowerCase() || 'discount',
+      title: asText(selectedCard?.title) || 'Discount',
+    });
+  }
+  if (hasSelectedPromo && Number(selectedPromoOutcome?.discountAmount || 0) > 0) {
+    const selectedCard = promoCards.find((entry) => entry?.is_selected) || null;
+    discountBreakdown.push({
+      amount: roundPrice(selectedPromoOutcome.discountAmount),
+      key: `promo_${Number(selectedPromoRule?.selection_id || 0) || 'selected'}`,
+      promo_code: normalizePromoCode(selectedCard?.code || selection.promoCode),
+      source_kind: asText(selectedPromoRule?.source || 'promo_code').toLowerCase() || 'promo_code',
+      title: asText(selectedCard?.title || selectedCard?.code) || 'Promo',
+    });
+  }
+
+  return {
+    ...preview,
+    discounts: discountCards,
+    local_line_totals_by_cart_key: buildLocalCheckoutBenefitsLineTotalsByCartKey(finalItems),
+    promo_codes: promoCards,
+    summary: buildLocalCheckoutBenefitsSummarySnapshot(preview, subtotalBeforeDiscount, finalItemsTotal, discountBreakdown),
+  } satisfies CheckoutBenefitsPreviewData;
+}
+
 function getPreviewSummaryState(preview: CheckoutBenefitsPreviewData | null, selection: CheckoutBenefitsSelection) {
   const summaryStates = preview?.client_calculation?.summary_states && typeof preview.client_calculation.summary_states === 'object'
     ? preview.client_calculation.summary_states as Record<string, unknown>
@@ -348,25 +1097,68 @@ function findPromoCardByCode(preview: CheckoutBenefitsPreviewData | null, code: 
   return preview.promo_codes.find((item) => normalizePromoCode(item?.code) === normalizedCode) || null;
 }
 
-function getCheckoutBenefitsCounts(preview: CheckoutBenefitsPreviewData | null, benefits: CustomerBenefits | null) {
-  const source = preview || benefits || {
-    completed: [],
-    discounts: [],
-    gifts: [],
-    progress: [],
-    promo_codes: [],
-  };
+function toBenefitArray(value: unknown): CustomerBenefitCard[] {
+  return Array.isArray(value) ? value as CustomerBenefitCard[] : [];
+}
+
+function buildCustomerBenefitsFromPreview(preview: CheckoutBenefitsPreviewData | null): CustomerBenefits | null {
+  if (!preview) return null;
   return {
-    discounts: Array.isArray(source.discounts) ? source.discounts.length : 0,
-    gifts: Array.isArray(source.gifts) ? source.gifts.length : 0,
-    progress: Array.isArray(source.progress) ? source.progress.length : 0,
-    promocodes: Array.isArray(source.promo_codes) ? source.promo_codes.length : 0,
-    total: (
-      (Array.isArray(source.discounts) ? source.discounts.length : 0)
-      + (Array.isArray(source.gifts) ? source.gifts.length : 0)
-      + (Array.isArray(source.progress) ? source.progress.length : 0)
-      + (Array.isArray(source.promo_codes) ? source.promo_codes.length : 0)
-    ),
+    completed: toBenefitArray(preview.completed),
+    discounts: toBenefitArray(preview.discounts),
+    gifts: toBenefitArray(preview.gifts),
+    progress: toBenefitArray(preview.progress),
+    promo_codes: toBenefitArray(preview.promo_codes),
+  };
+}
+
+function getBenefitCardIdentity(kind: string, item: CustomerBenefitCard, index: number) {
+  if (kind === 'discounts') {
+    const selectionKey = buildSelectionKeyFromDiscount(item);
+    if (selectionKey) return selectionKey;
+  }
+  if (kind === 'promo_codes') {
+    const selectionKey = buildSelectionKeyFromPromo(item);
+    if (selectionKey) return selectionKey;
+    const code = normalizePromoCode(item.code);
+    if (code) return `promo_code:${code}`;
+  }
+
+  const id = asText(item.id);
+  if (id) return `${kind}:id:${id}`;
+  const rewardId = asText(item.reward_id);
+  if (rewardId) return `${kind}:reward:${rewardId}`;
+  const discountId = asText(item.discount_id);
+  if (discountId) return `${kind}:discount:${discountId}`;
+  const title = asText(item.title);
+  return title ? `${kind}:title:${title}` : `${kind}:index:${index}`;
+}
+
+function mergeBenefitCards(
+  kind: string,
+  primary: CustomerBenefitCard[] | undefined,
+  secondary: CustomerBenefitCard[] | undefined,
+) {
+  const result = new Map<string, CustomerBenefitCard>();
+  [...toBenefitArray(primary), ...toBenefitArray(secondary)].forEach((item, index) => {
+    const key = getBenefitCardIdentity(kind, item, index);
+    if (!result.has(key)) result.set(key, item);
+  });
+  return Array.from(result.values());
+}
+
+function getCheckoutBenefitsCounts(preview: CheckoutBenefitsPreviewData | null, benefits: CustomerBenefits | null) {
+  const previewBenefits = buildCustomerBenefitsFromPreview(preview);
+  const discounts = mergeBenefitCards('discounts', previewBenefits?.discounts, benefits?.discounts);
+  const gifts = mergeBenefitCards('gifts', previewBenefits?.gifts, benefits?.gifts);
+  const progress = mergeBenefitCards('progress', previewBenefits?.progress, benefits?.progress);
+  const promoCodes = mergeBenefitCards('promo_codes', previewBenefits?.promo_codes, benefits?.promo_codes);
+  return {
+    discounts: discounts.length,
+    gifts: gifts.length,
+    progress: progress.length,
+    promocodes: promoCodes.length,
+    total: discounts.length + gifts.length + progress.length + promoCodes.length,
   };
 }
 
@@ -442,11 +1234,13 @@ async function resolveCheckoutBenefitsContext(context: CheckoutBenefitsContext =
 function buildCheckoutBenefitsStateFromCache(
   resolved: Awaited<ReturnType<typeof resolveCheckoutBenefitsContext>>,
   cachedState: CheckoutBenefitsCache | null,
-  cachedBenefits: CustomerBenefits | null,
 ) {
-  const basePreview = cachedState?.basePreview || cachedState?.preview || null;
-  const preview = derivePreviewFromSelection(basePreview, resolved.selection);
-  const sourceBenefits = cachedState?.sourceBenefits || cachedBenefits || null;
+  const sourcePreview = cachedState?.preview || cachedState?.basePreview || null;
+  const preview = cachedState && areCheckoutBenefitsSelectionsEqual(cachedState.currentSelection, resolved.selection)
+    ? (cachedState.preview || sourcePreview)
+    : buildLocalCheckoutBenefitsPreviewData(sourcePreview || null, resolved.request, resolved.selection, resolved.catalogSnapshot)
+      || derivePreviewFromSelection(sourcePreview, resolved.selection);
+  const sourceBenefits = cachedState?.sourceBenefits || buildCustomerBenefitsFromPreview(sourcePreview) || null;
   return {
     counts: getCheckoutBenefitsCounts(preview, sourceBenefits),
     currentSelection: resolved.selection,
@@ -472,13 +1266,14 @@ async function saveLocalCheckoutBenefitsSelection(
     } satisfies CheckoutBenefitsState;
   }
 
-  const [cachedState, cachedBenefits] = await Promise.all([
-    readCachedCheckoutBenefits(resolved.token, resolved.request).catch(() => null),
-    readCachedCustomerBenefits(resolved.token).catch(() => null),
-  ]);
-  const basePreview = cachedState?.basePreview || cachedState?.preview || null;
-  const preview = derivePreviewFromSelection(basePreview, nextSelection);
-  const sourceBenefits = cachedState?.sourceBenefits || cachedBenefits || null;
+  const cachedState = await readCachedCheckoutBenefits(resolved.token, resolved.request).catch(() => null);
+  const sourcePreview = cachedState?.preview || cachedState?.basePreview || null;
+  const basePreview = buildLocalCheckoutBenefitsPreviewData(sourcePreview || null, resolved.request, emptySelection, resolved.catalogSnapshot)
+    || sourcePreview
+    || null;
+  const preview = buildLocalCheckoutBenefitsPreviewData(sourcePreview || basePreview, resolved.request, nextSelection, resolved.catalogSnapshot)
+    || derivePreviewFromSelection(basePreview, nextSelection);
+  const sourceBenefits = cachedState?.sourceBenefits || buildCustomerBenefitsFromPreview(preview || basePreview) || null;
   const cachedValue: CheckoutBenefitsCache = {
     basePreview,
     currentSelection: nextSelection,
@@ -508,6 +1303,51 @@ export function buildCheckoutBenefitsPreviewRequestForLines(
   });
 }
 
+export async function cacheCheckoutBenefitsPreviewForLines(
+  preview: CheckoutBenefitsPreviewData | null,
+  context: CheckoutBenefitsContext = {},
+) {
+  const resolved = await resolveCheckoutBenefitsContext(context);
+  if (!resolved.token || !preview) return null;
+  const nextSelection = normalizeSelection(resolved.selection);
+  const sourcePreview = preview;
+  const basePreview = buildLocalCheckoutBenefitsPreviewData(sourcePreview, resolved.request, emptySelection, resolved.catalogSnapshot)
+    || sourcePreview
+    || null;
+  const derivedPreview = buildLocalCheckoutBenefitsPreviewData(sourcePreview || basePreview, resolved.request, nextSelection, resolved.catalogSnapshot)
+    || derivePreviewFromSelection(basePreview, nextSelection)
+    || sourcePreview;
+  const cachedState = await readCachedCheckoutBenefits(resolved.token, resolved.request).catch(() => null);
+  const sourceBenefits = cachedState?.sourceBenefits || buildCustomerBenefitsFromPreview(derivedPreview || basePreview) || null;
+  const cachedValue: CheckoutBenefitsCache = {
+    basePreview,
+    currentSelection: nextSelection,
+    preview: derivedPreview,
+    sourceBenefits,
+    updatedAt: cachedState?.updatedAt || new Date().toISOString(),
+  };
+  await saveCheckoutBenefitsSelection(nextSelection);
+  await saveCachedCheckoutBenefits(resolved.token, resolved.request, cachedValue);
+  return derivedPreview;
+}
+
+export function deriveCheckoutBenefitsPreviewForLines(
+  preview: CheckoutBenefitsPreviewData | null,
+  selection: CheckoutBenefitsSelection,
+  cartLines: CartLine[],
+  fulfillmentSelection: FulfillmentSelection | null,
+  catalogSnapshot: MobileCatalogSnapshot | null = null,
+) {
+  if (!preview) return null;
+  const normalizedSelection = normalizeSelection(selection);
+  const request = buildCheckoutBenefitsPreviewRequestFromContext({
+    cartLines,
+    catalogSnapshot,
+    fulfillmentSelection,
+  });
+  return buildLocalCheckoutBenefitsPreviewData(preview, request, normalizedSelection, catalogSnapshot);
+}
+
 export function getCheckoutBenefitsSelectionKeyFromDiscount(item: CustomerBenefitCard) {
   return buildSelectionKeyFromDiscount(item);
 }
@@ -534,9 +1374,8 @@ export function findSelectedCheckoutBenefitPromo(preview: CheckoutBenefitsPrevie
 
 export async function readCheckoutBenefitsState(context: CheckoutBenefitsContext = {}) {
   const resolved = await resolveCheckoutBenefitsContext(context);
-  const cachedBenefits = resolved.token ? await readCachedCustomerBenefits(resolved.token).catch(() => null) : null;
   const cachedState = resolved.token ? await readCachedCheckoutBenefits(resolved.token, resolved.request).catch(() => null) : null;
-  return buildCheckoutBenefitsStateFromCache(resolved, cachedState, cachedBenefits);
+  return buildCheckoutBenefitsStateFromCache(resolved, cachedState);
 }
 
 export async function refreshCheckoutBenefitsState(context: CheckoutBenefitsContext = {}) {
@@ -551,48 +1390,39 @@ export async function refreshCheckoutBenefitsState(context: CheckoutBenefitsCont
     } satisfies CheckoutBenefitsState;
   }
 
-  const [cachedState, cachedBenefits] = await Promise.all([
-    readCachedCheckoutBenefits(resolved.token, resolved.request).catch(() => null),
-    readCachedCustomerBenefits(resolved.token).catch(() => null),
-  ]);
-  const [benefitsResult, previewResult] = await Promise.all([
-    fetchCustomerBenefits(resolved.token)
-      .then((value) => ({ fresh: true, value }))
-      .catch(() => ({ fresh: false, value: cachedState?.sourceBenefits || cachedBenefits || null })),
-    fetchCheckoutBenefitsPreview(resolved.token, {
-      ...resolved.request,
-      promo_code: null,
-      selected_discount_id: null,
-      selected_discount_source: null,
-      selected_promo_reward_id: null,
-      selected_promo_source: null,
-    })
-      .then((value) => ({ fresh: true, value }))
-      .catch(() => ({ fresh: false, value: cachedState?.basePreview || cachedState?.preview || null })),
-  ]);
-  const benefits = benefitsResult.value || null;
+  const cachedState = await readCachedCheckoutBenefits(resolved.token, resolved.request).catch(() => null);
+  const previewResult = await fetchCheckoutBenefitsPreview(resolved.token, {
+    ...resolved.request,
+    promo_code: null,
+    selected_discount_id: null,
+    selected_discount_source: null,
+    selected_promo_reward_id: null,
+    selected_promo_source: null,
+  })
+    .then((value) => ({ fresh: true, value }))
+    .catch(() => ({ fresh: false, value: cachedState?.basePreview || cachedState?.preview || null }));
   const basePreview = previewResult.value || null;
 
   const derivedPreview = derivePreviewFromSelection(basePreview, resolved.selection);
+  const sourceBenefits = buildCustomerBenefitsFromPreview(derivedPreview || basePreview)
+    || cachedState?.sourceBenefits
+    || null;
   const cachedValue: CheckoutBenefitsCache = {
     basePreview,
     currentSelection: resolved.selection,
     preview: derivedPreview,
-    sourceBenefits: benefits || null,
-    updatedAt: benefitsResult.fresh || previewResult.fresh
+    sourceBenefits,
+    updatedAt: previewResult.fresh
       ? new Date().toISOString()
       : cachedState?.updatedAt || new Date().toISOString(),
   };
   await saveCachedCheckoutBenefits(resolved.token, resolved.request, cachedValue);
-  if (benefits) {
-    await saveCustomerBenefits(resolved.token, benefits);
-  }
   return {
-    counts: getCheckoutBenefitsCounts(derivedPreview, benefits),
+    counts: getCheckoutBenefitsCounts(derivedPreview, sourceBenefits),
     currentSelection: resolved.selection,
     preview: derivedPreview,
     request: resolved.request,
-    sourceBenefits: benefits || null,
+    sourceBenefits,
   } satisfies CheckoutBenefitsState;
 }
 
@@ -608,11 +1438,8 @@ export async function ensureCheckoutBenefitsState(context: CheckoutBenefitsConte
     } satisfies CheckoutBenefitsState;
   }
 
-  const [cachedState, cachedBenefits] = await Promise.all([
-    readCachedCheckoutBenefits(resolved.token, resolved.request).catch(() => null),
-    readCachedCustomerBenefits(resolved.token).catch(() => null),
-  ]);
-  const cachedView = buildCheckoutBenefitsStateFromCache(resolved, cachedState, cachedBenefits);
+  const cachedState = await readCachedCheckoutBenefits(resolved.token, resolved.request).catch(() => null);
+  const cachedView = buildCheckoutBenefitsStateFromCache(resolved, cachedState);
   if (isFreshCheckoutBenefitsCache(cachedState)) return cachedView;
 
   const refreshKey = getCheckoutBenefitsStorageKey(resolved.token, resolved.request);

@@ -7,6 +7,7 @@ import {
   Animated,
   Image,
   Pressable,
+  ScrollView,
   StyleSheet,
   View,
 } from 'react-native';
@@ -29,6 +30,7 @@ import {
 import { calculateCartStockLimit, getStockProductIdsForLines, useProductStock } from '../../features/stock';
 import {
   applyCheckoutPromoCode as applyCheckoutPromoCodeSelection,
+  cacheCheckoutBenefitsPreviewForLines,
   saveCheckoutCartSummary,
   readCheckoutBenefitsSelection,
   readCheckoutBenefitsState,
@@ -36,6 +38,7 @@ import {
   saveCheckoutBenefitsSelection,
   saveFulfillmentSelection,
   ensureCheckoutBenefitsState,
+  deriveCheckoutBenefitsPreviewForLines,
   type CheckoutBenefitsSelection,
   type CheckoutCartSummary,
   type FulfillmentMode,
@@ -90,6 +93,7 @@ type DeliveryProgressState = {
 type CartBenefitsCounts = {
   discounts: number;
   gifts: number;
+  progress: number;
   promocodes: number;
 };
 type CartBonusState = {
@@ -107,10 +111,17 @@ type CartBonusState = {
   redeemAvailableAmount: number;
 };
 type CartSummaryState = CheckoutCartSummary;
+type CartDiscountDetailDisplayItem = {
+  key: string;
+  title: string;
+  type: 'bonus' | 'money';
+  value: number;
+};
 
 const emptyBenefitsCounts: CartBenefitsCounts = {
   discounts: 0,
   gifts: 0,
+  progress: 0,
   promocodes: 0,
 };
 
@@ -118,6 +129,7 @@ function toCartBenefitsCounts(counts: Partial<CartBenefitsCounts> | null | undef
   return {
     discounts: Math.max(0, Number(counts?.discounts || 0)),
     gifts: Math.max(0, Number(counts?.gifts || 0)),
+    progress: Math.max(0, Number(counts?.progress || 0)),
     promocodes: Math.max(0, Number(counts?.promocodes || 0)),
   };
 }
@@ -200,6 +212,7 @@ const CART_HEADER_FULL_HEIGHT = 199;
 const CART_HEADER_COMPACT_HEIGHT = 77;
 const CART_HEADER_META_SCROLL = CART_HEADER_FULL_HEIGHT - CART_HEADER_COMPACT_HEIGHT;
 const cartQuantityTapSlop = { bottom: 10, left: 10, right: 10, top: 10 };
+const cartSummaryInfoTapSlop = { bottom: 12, left: 12, right: 12, top: 12 };
 
 function toPositiveId(value: unknown) {
   const id = Number(value || 0);
@@ -354,6 +367,27 @@ function getLineTotal(line: CartLine, snapshot: Awaited<ReturnType<typeof readCa
   return getLineTotals(line, snapshot).total;
 }
 
+function getPreviewLineTotal(
+  preview: CheckoutBenefitsPreviewData | null,
+  line: CartLine,
+  fallbackTotal: number,
+) {
+  const lineTotals = preview?.local_line_totals_by_cart_key && typeof preview.local_line_totals_by_cart_key === 'object'
+    ? preview.local_line_totals_by_cart_key as Record<string, unknown>
+    : null;
+  const value = lineTotals ? Number(lineTotals[line.id]) : NaN;
+  return Number.isFinite(value) && value >= 0 ? roundPrice(value) : fallbackTotal;
+}
+
+function clearCheckoutPreviewMoneyState(preview: CheckoutBenefitsPreviewData | null) {
+  if (!preview) return null;
+  return {
+    ...preview,
+    local_line_totals_by_cart_key: {},
+    summary: null,
+  } satisfies CheckoutBenefitsPreviewData;
+}
+
 function getLineOldTotal(line: CartLine, snapshot: Awaited<ReturnType<typeof readCachedMobileCatalogSnapshot>> | null = null) {
   return getLineTotals(line, snapshot).oldTotal;
 }
@@ -458,13 +492,18 @@ function getCartBenefitsCounts(
   const previewDiscounts = Array.isArray(preview?.discounts) ? preview.discounts : [];
   const previewPromocodes = Array.isArray(preview?.promo_codes) ? preview.promo_codes : [];
   const previewGifts = Array.isArray(preview?.gifts) ? preview.gifts : [];
+  const previewProgress = Array.isArray(preview?.progress) ? preview.progress : [];
   const discountItems = mergeDiscounts(previewDiscounts, mergeDiscounts(discounts, Array.isArray(sourceBenefits.discounts) ? sourceBenefits.discounts : []));
   const promocodeSource = previewPromocodes.length ? previewPromocodes : (Array.isArray(sourceBenefits.promo_codes) ? sourceBenefits.promo_codes : []);
   const giftSource = previewGifts.length ? previewGifts : (Array.isArray(sourceBenefits.gifts) ? sourceBenefits.gifts : []);
+  const progressSource = previewProgress.length
+    ? previewProgress
+    : (Array.isArray(sourceBenefits.progress) ? sourceBenefits.progress : []);
   const promocodeItems = promocodeSource.filter(isVisiblePromo);
   return {
     discounts: discountItems.length,
     gifts: giftSource.length,
+    progress: progressSource.length,
     promocodes: promocodeItems.length,
   };
 }
@@ -473,6 +512,7 @@ function mergeCartBenefitsCounts(base: CartBenefitsCounts, next: CartBenefitsCou
   return {
     discounts: Math.max(base.discounts, next.discounts),
     gifts: Math.max(base.gifts, next.gifts),
+    progress: Math.max(base.progress, next.progress),
     promocodes: Math.max(base.promocodes, next.promocodes),
   };
 }
@@ -501,6 +541,68 @@ function normalizeDiscountDetailItems(preview: CheckoutBenefitsPreviewData | nul
       };
     }).filter((entry) => !!entry) as Array<Record<string, unknown>>
     : [];
+}
+
+function formatCartDiscountDetailTitle(entry: Record<string, unknown>) {
+  const title = asText(entry.title) || 'РЎРєРёРґРєР°';
+  const promoCode = normalizePromoCode(entry.promoCode || entry.promo_code);
+  return promoCode ? `${title} (${promoCode})` : title;
+}
+
+function buildFallbackDiscountDetailItems(
+  lines: CartLine[],
+  snapshot: Awaited<ReturnType<typeof readCachedMobileCatalogSnapshot>> | null,
+  targetAmount: number,
+) {
+  const activeLines = getActiveCartLines(lines);
+  let comboDiscount = 0;
+  let productDiscount = 0;
+  activeLines.forEach((line) => {
+    const total = roundPrice(getLineTotal(line, snapshot));
+    const oldTotal = roundPrice(getLineOldTotal(line, snapshot));
+    const amount = roundPrice(Math.max(0, oldTotal - total));
+    if (!(amount > 0)) return;
+    if (line.type === 'combo') {
+      comboDiscount += amount;
+      return;
+    }
+    productDiscount += amount;
+  });
+
+  let remaining = roundPrice(Math.max(0, targetAmount));
+  const items: Array<Record<string, unknown>> = [];
+  [
+    { amount: comboDiscount, key: 'combo', title: 'Комбо' },
+    { amount: productDiscount, key: 'product', title: 'Товарные скидки' },
+  ].forEach((entry) => {
+    if (!(remaining > 0)) return;
+    const amount = roundPrice(Math.min(Math.max(0, Number(entry.amount || 0)), remaining));
+    if (!(amount > 0)) return;
+    items.push({ amount, key: entry.key, title: entry.title });
+    remaining = roundPrice(Math.max(0, remaining - amount));
+  });
+  if (remaining > 0) {
+    items.push({ amount: remaining, key: 'other', title: 'Прочие скидки' });
+  }
+  return items;
+}
+
+function buildDiscountDetailItems(
+  lines: CartLine[],
+  snapshot: Awaited<ReturnType<typeof readCachedMobileCatalogSnapshot>> | null,
+  benefitsPreview: CheckoutBenefitsPreviewData | null,
+  itemDiscountAmount: number,
+) {
+  const previewItems = normalizeDiscountDetailItems(benefitsPreview);
+  const previewTotal = roundPrice(previewItems.reduce((sum, entry) => sum + Number(entry.amount || 0), 0));
+  const missingAmount = roundPrice(Math.max(0, Number(itemDiscountAmount || 0) - previewTotal));
+  if (previewItems.length) {
+    return [
+      ...previewItems,
+      ...buildFallbackDiscountDetailItems(lines, snapshot, missingAmount),
+    ];
+  }
+  return buildFallbackDiscountDetailItems(lines, snapshot, itemDiscountAmount);
 }
 
 function buildCheckoutPreviewItems(lines: CartLine[], snapshot: Awaited<ReturnType<typeof readCachedMobileCatalogSnapshot>> | null) {
@@ -712,6 +814,64 @@ function buildCartBonusState(lines: CartLine[], config: BonusConfig | null, favo
   };
 }
 
+function buildCartBonusRedeemDisplayLineStates(
+  lineStates: Array<Record<string, unknown>>,
+  bonusRedeemAmount: number,
+) {
+  const states = Array.isArray(lineStates)
+    ? lineStates.map((entry) => ({ ...entry }))
+    : [];
+  const totalRedeem = roundPrice(Math.max(0, Number(bonusRedeemAmount || 0)));
+  if (!(totalRedeem > 0) || !states.length) return states;
+
+  const eligible = states
+    .map((entry, index) => ({
+      index,
+      currentTotal: roundPrice(Math.max(0, Number(entry?.currentTotal || 0))),
+    }))
+    .filter((entry) => entry.currentTotal > 0);
+  const eligibleTotal = roundPrice(
+    eligible.reduce((sum, entry) => sum + Number(entry.currentTotal || 0), 0)
+  );
+  const appliedTotal = roundPrice(Math.min(totalRedeem, eligibleTotal));
+  if (!(appliedTotal > 0)) return states;
+
+  let distributed = 0;
+  eligible.forEach((entry, entryIndex) => {
+    const remaining = roundPrice(appliedTotal - distributed);
+    if (!(remaining > 0)) return;
+    const rawShare = entryIndex === eligible.length - 1
+      ? remaining
+      : roundPrice(appliedTotal * (entry.currentTotal / eligibleTotal));
+    const share = roundPrice(Math.min(remaining, entry.currentTotal, rawShare));
+    if (!(share > 0)) return;
+
+    const stateEntry = states[entry.index];
+    const currentTotal = roundPrice(Math.max(0, entry.currentTotal - share));
+    const originalTotal = roundPrice(Math.max(
+      Number(stateEntry?.originalTotal || 0),
+      Number(entry.currentTotal || 0),
+      currentTotal,
+    ));
+    let discountPercent = 0;
+    if (originalTotal > currentTotal && originalTotal > 0) {
+      discountPercent = Math.round(((originalTotal - currentTotal) / originalTotal) * 100);
+    }
+    if (!Number.isFinite(discountPercent) || discountPercent <= 0) discountPercent = 0;
+    if (discountPercent > 100) discountPercent = 100;
+
+    stateEntry.currentTotal = currentTotal;
+    stateEntry.originalTotal = originalTotal > currentTotal ? originalTotal : currentTotal;
+    stateEntry.discountPercent = discountPercent;
+    stateEntry.discountAmount = roundPrice(Math.max(0,
+      Number(stateEntry.originalTotal || 0) - Number(stateEntry.currentTotal || 0)
+    ));
+    distributed = roundPrice(distributed + share);
+  });
+
+  return states;
+}
+
 function buildCartSummaryState(
   lines: CartLine[],
   deliveryCost: number,
@@ -736,16 +896,30 @@ function buildCartSummaryState(
   const bonusRedeemAmount = redeemActive ? roundPrice(Math.min(itemsTotal, bonusState.redeemAvailableAmount)) : 0;
   const discountAmount = roundPrice(itemDiscountAmount + bonusRedeemAmount);
   const total = roundPrice(Math.max(0, itemsTotal - bonusRedeemAmount) + Math.max(0, Number(deliveryCost || 0)));
+  const baseLineStates = activeLines.map((line) => {
+    const baseTotal = roundPrice(getPreviewLineTotal(benefitsPreview, line, getLineTotal(line, snapshot)));
+    const originalTotal = roundPrice(Math.max(
+      getLineOldTotal(line, snapshot),
+      getLineTotal(line, snapshot),
+      baseTotal,
+    ));
+    return {
+      key: line.id,
+      currentTotal: baseTotal,
+      originalTotal,
+    };
+  });
+  const lineStates = buildCartBonusRedeemDisplayLineStates(baseLineStates, bonusRedeemAmount);
   return {
     bonusAccrualAmount: Math.floor(Math.max(0, Number(bonusState.accrualAmount || 0))),
     bonusAccrualBlockedByRedeem: redeemActive && !bonusState.allowRedeemAndAccrue && Number(bonusState.accrualAmount || 0) > 0,
     bonusRedeemAmount,
     deliveryCost: roundPrice(Math.max(0, Number(deliveryCost || 0))),
-    discountDetailItems: normalizeDiscountDetailItems(benefitsPreview),
+    discountDetailItems: buildDiscountDetailItems(lines, snapshot, benefitsPreview, itemDiscountAmount),
     discountAmount,
     itemDiscountAmount,
     itemsTotal,
-    lineStates: [],
+    lineStates,
     subtotalBeforeDiscount,
     total,
   };
@@ -843,7 +1017,27 @@ export function CartPage() {
   const [clearConfirm, setClearConfirm] = useState(false);
   const [stockBlockedLineIds, setStockBlockedLineIds] = useState<Set<string>>(() => new Set());
   const benefitsPreviewSeqRef = useRef(0);
+  const benefitsPreviewRef = useRef<CheckoutBenefitsPreviewData | null>(null);
   const cartMutationSeqRef = useRef(0);
+  const cartMutationQueueRef = useRef<Promise<unknown>>(Promise.resolve());
+  const linesRef = useRef<CartLine[]>([]);
+  const pendingLineQuantitiesRef = useRef<Map<string, number>>(new Map());
+  const syncCartFromCacheRef = useRef<(() => Promise<unknown>) | null>(null);
+
+  const setBenefitsPreviewValue = useCallback((preview: CheckoutBenefitsPreviewData | null) => {
+    benefitsPreviewRef.current = preview;
+    setBenefitsPreview(preview);
+  }, []);
+
+  const enqueueCartMutation = useCallback((task: () => Promise<CartLine[]>) => {
+    const nextTask = cartMutationQueueRef.current.then(task, task);
+    cartMutationQueueRef.current = nextTask.then(() => undefined, () => undefined);
+    return nextTask;
+  }, []);
+
+  useEffect(() => {
+    linesRef.current = lines;
+  }, [lines]);
 
   const activeLines = useMemo(() => getActiveCartLines(lines), [lines]);
   const hasActiveLines = activeLines.length > 0;
@@ -906,25 +1100,102 @@ export function CartPage() {
     () => buildCartSummaryState(activeLines, isDelivery && hasActiveLines ? Number(deliveryMeta?.cost || 0) : 0, bonusState, redeemActive, benefitsPreview, catalogSnapshot),
     [activeLines, benefitsPreview, bonusState, catalogSnapshot, deliveryMeta?.cost, hasActiveLines, isDelivery, redeemActive],
   );
+  const cartSummaryLineStatesById = useMemo(() => {
+    const entries = Array.isArray(cartSummary.lineStates) ? cartSummary.lineStates : [];
+    return new Map(
+      entries
+        .map((entry) => [String(entry?.key || '').trim(), entry] as const)
+        .filter(([key]) => !!key)
+    );
+  }, [cartSummary.lineStates]);
   const deliveryProgressSubtotal = Math.max(0, cartSummary.itemsTotal - cartSummary.bonusRedeemAmount);
   const visibleDeliveryProgress = isDelivery ? buildDeliveryProgress(deliveryProgressSubtotal, deliveryMeta) || lastDeliveryProgress : null;
-  const discountDetails = useMemo(() => [
-    cartSummary.itemDiscountAmount > 0
-      ? { key: 'items', title: 'Скидка товаров', value: cartSummary.itemDiscountAmount, type: 'money' as const }
-      : null,
-    cartSummary.bonusRedeemAmount > 0
-      ? { key: 'bonus', title: bonusState.coinName, value: cartSummary.bonusRedeemAmount, type: 'bonus' as const }
-      : null,
-  ].filter((item): item is { key: string; title: string; type: 'bonus' | 'money'; value: number } => !!item), [
+  const discountDetails = useMemo<CartDiscountDetailDisplayItem[]>(() => {
+    const detailItems = Array.isArray(cartSummary.discountDetailItems)
+      ? cartSummary.discountDetailItems
+        .flatMap((entry, index): CartDiscountDetailDisplayItem[] => {
+          const value = roundPrice(entry.amount);
+          if (!(value > 0)) return [];
+          return [{
+            key: asText(entry.key) || `discount_${index}`,
+            title: formatCartDiscountDetailTitle(entry),
+            type: 'money' as const,
+            value,
+          }];
+        })
+      : [];
+    const fallbackItems = detailItems.length || !(cartSummary.itemDiscountAmount > 0)
+      ? []
+      : [{
+        key: 'items',
+        title: 'Скидка товаров',
+        type: 'money' as const,
+        value: cartSummary.itemDiscountAmount,
+      }];
+    const bonusItems = cartSummary.bonusRedeemAmount > 0
+      ? [{
+        key: 'bonus',
+        title: bonusState.coinName,
+        type: 'bonus' as const,
+        value: cartSummary.bonusRedeemAmount,
+      }]
+      : [];
+    return [...detailItems, ...fallbackItems, ...bonusItems];
+  }, [
     bonusState.coinName,
     cartSummary.bonusRedeemAmount,
+    cartSummary.discountDetailItems,
     cartSummary.itemDiscountAmount,
   ]);
-
   const invalidateBenefitsPreview = useCallback(() => {
     benefitsPreviewSeqRef.current += 1;
-    setBenefitsPreview(null);
-  }, []);
+    setBenefitsPreviewValue(null);
+  }, [setBenefitsPreviewValue]);
+
+  const applyLocalBenefitsPreviewForLines = useCallback((nextLines: CartLine[]) => {
+    const activeCartLines = getActiveCartLines(nextLines);
+    benefitsPreviewSeqRef.current += 1;
+    if (!activeCartLines.length) {
+      setBenefitsPreviewValue(null);
+      setBenefitsCounts(emptyBenefitsCounts);
+      return;
+    }
+    const currentSelection: CheckoutBenefitsSelection = {
+      discountId: selectedDiscountId,
+      discountSource: selectedDiscountSource,
+      promoCode: appliedPromoCode,
+      promoRewardId: selectedPromoRewardId,
+      promoSource: selectedPromoSource,
+    };
+    const sourcePreview = benefitsPreviewRef.current;
+    const nextPreview = deriveCheckoutBenefitsPreviewForLines(
+      sourcePreview,
+      currentSelection,
+      activeCartLines,
+      selection,
+      catalogSnapshot,
+    );
+    if (nextPreview) {
+      setBenefitsPreviewValue(nextPreview);
+      void cacheCheckoutBenefitsPreviewForLines(nextPreview, {
+        cartLines: activeCartLines,
+        catalogSnapshot,
+        fulfillmentSelection: selection,
+        selection: currentSelection,
+      }).catch(() => null);
+      return;
+    }
+    setBenefitsPreviewValue(clearCheckoutPreviewMoneyState(sourcePreview));
+  }, [
+    appliedPromoCode,
+    catalogSnapshot,
+    selectedDiscountId,
+    selectedDiscountSource,
+    selectedPromoRewardId,
+    selectedPromoSource,
+    selection,
+    setBenefitsPreviewValue,
+  ]);
 
   const refreshBenefitsPreview = useCallback(async ({
     cartLines = lines,
@@ -948,6 +1219,7 @@ export function CartPage() {
     const safePromo = normalizePromoCode(promo);
     const activeCartLines = getActiveCartLines(cartLines);
     const seq = ++benefitsPreviewSeqRef.current;
+    const mutationSeq = cartMutationSeqRef.current;
     const currentSelection: CheckoutBenefitsSelection = {
       discountId: discountId || null,
       discountSource: discountId ? (discountSource || 'discount') : null,
@@ -958,7 +1230,7 @@ export function CartPage() {
         : (promoRewardId ? (promoSource || 'reward_promo') : null),
     };
     if (!activeCartLines.length) {
-      setBenefitsPreview(null);
+      setBenefitsPreviewValue(null);
       setBenefitsCounts(emptyBenefitsCounts);
       return null;
     }
@@ -968,8 +1240,8 @@ export function CartPage() {
       fulfillmentSelection: selectedFulfillment,
       selection: currentSelection,
     }).catch(() => null);
-    if (seq === benefitsPreviewSeqRef.current) {
-      setBenefitsPreview(state?.preview || null);
+    if (seq === benefitsPreviewSeqRef.current && mutationSeq === cartMutationSeqRef.current) {
+      setBenefitsPreviewValue(state?.preview || null);
       setBenefitsCounts(toCartBenefitsCounts(state?.counts || null));
       if (state?.currentSelection) {
         setSelectedDiscountId(state.currentSelection.discountId);
@@ -980,9 +1252,10 @@ export function CartPage() {
       }
     }
     return state?.preview || null;
-  }, [appliedPromoCode, catalogSnapshot, lines, selectedDiscountId, selectedDiscountSource, selectedPromoRewardId, selectedPromoSource, selection]);
+  }, [appliedPromoCode, catalogSnapshot, lines, selectedDiscountId, selectedDiscountSource, selectedPromoRewardId, selectedPromoSource, selection, setBenefitsPreviewValue]);
 
   const syncCartFromCache = useCallback(async () => {
+    const mutationSeq = cartMutationSeqRef.current;
     const [nextLines, nextSelection, passport, cachedStores, cachedOrderConfig, cachedCatalogSnapshot] = await Promise.all([
       readCartLines(),
       readFulfillmentSelection(),
@@ -1003,7 +1276,20 @@ export function CartPage() {
       : passport?.addresses || [];
     const stockState = await evaluateCartStockState(nextLines, stockLevels);
     const syncedLines = stockState.lines;
+    if (mutationSeq !== cartMutationSeqRef.current) {
+      return {
+        cachedAddresses,
+        cachedCatalogSnapshot,
+        cachedOrderConfig,
+        cachedStores: cachedStores || [],
+        nextSelection,
+        passport,
+        savedBenefitsSelection,
+        syncedLines: linesRef.current.length ? linesRef.current : syncedLines,
+      };
+    }
 
+    linesRef.current = syncedLines;
     setLines(syncedLines);
     setStockBlockedLineIds(stockState.blockedLineIds);
     setSelection(nextSelection);
@@ -1027,11 +1313,21 @@ export function CartPage() {
         fulfillmentSelection: nextSelection,
         selection: savedBenefitsSelection,
       }).catch(() => null);
-      setBenefitsPreview(cachedState?.preview || null);
+      setBenefitsPreviewValue(cachedState?.preview || null);
       setBenefitsCounts(toCartBenefitsCounts(cachedState?.counts || null));
+      void refreshBenefitsPreview({
+        cartLines: syncedLines,
+        discountId: savedBenefitsSelection.discountId,
+        discountSource: savedBenefitsSelection.discountSource,
+        promo: savedBenefitsSelection.promoCode,
+        promoRewardId: savedBenefitsSelection.promoRewardId,
+        promoSource: savedBenefitsSelection.promoSource,
+        selectedFulfillment: nextSelection,
+        snapshot: cachedCatalogSnapshot,
+      }).catch(() => null);
     } else {
       setBenefitsCounts(emptyBenefitsCounts);
-      setBenefitsPreview(null);
+      setBenefitsPreviewValue(null);
       invalidateBenefitsPreview();
     }
 
@@ -1045,16 +1341,21 @@ export function CartPage() {
       savedBenefitsSelection,
       syncedLines,
     };
-  }, [invalidateBenefitsPreview, stockLevels]);
+  }, [invalidateBenefitsPreview, refreshBenefitsPreview, setBenefitsPreviewValue, stockLevels]);
+
+  useEffect(() => {
+    syncCartFromCacheRef.current = syncCartFromCache;
+  }, [syncCartFromCache]);
 
   const loadCart = useCallback(async () => {
     const cachedState = await syncCartFromCache();
+    const mutationSeq = cartMutationSeqRef.current;
     cartHydratedRef.current = true;
     setLoading(false);
     void warmFullProductPassports(collectCartStockProductIds(cachedState.syncedLines)).catch(() => null);
 
     void (async () => {
-      const { passport, cachedAddresses, cachedCatalogSnapshot, cachedStores, cachedOrderConfig, nextSelection, savedBenefitsSelection, syncedLines } = cachedState;
+      const { passport, cachedAddresses, cachedStores, cachedOrderConfig, syncedLines } = cachedState;
       const levelId = getCartBonusCurrentLevelId(passport?.bonusConfig || null);
       const [freshStores, freshOrderConfig, freshAddresses, freshBonusConfig] = await Promise.all([
         fetchTenantStores().catch(() => cachedStores),
@@ -1073,16 +1374,6 @@ export function CartPage() {
       if (passport?.token) {
         setBonusConfig(freshBonusConfig);
         setBonusFavoriteCategories(freshBonusFavoriteCategories);
-        await refreshBenefitsPreview({
-          cartLines: syncedLines,
-          discountId: savedBenefitsSelection.discountId,
-          discountSource: savedBenefitsSelection.discountSource,
-          promo: savedBenefitsSelection.promoCode,
-          promoRewardId: savedBenefitsSelection.promoRewardId,
-          promoSource: savedBenefitsSelection.promoSource,
-          selectedFulfillment: nextSelection,
-          snapshot: cachedCatalogSnapshot,
-        });
         await saveCustomerPassport({
           ...(passport as CustomerPassport),
           addresses: freshAddresses,
@@ -1092,6 +1383,8 @@ export function CartPage() {
         });
       }
       void evaluateCartStockState(syncedLines, stockLevels, refreshMany).then((stockState) => {
+        if (mutationSeq !== cartMutationSeqRef.current) return;
+        linesRef.current = stockState.lines;
         setLines(stockState.lines);
         setStockBlockedLineIds(stockState.blockedLineIds);
       }).catch(() => null);
@@ -1105,37 +1398,11 @@ export function CartPage() {
   useFocusEffect(
     useCallback(() => {
       if (!cartHydratedRef.current) return;
-      void (async () => {
-        const state = await syncCartFromCache().catch(() => null);
-        if (!state?.passport?.token) return;
-        void refreshBenefitsPreview({
-          cartLines: state.syncedLines,
-          discountId: state.savedBenefitsSelection.discountId,
-          discountSource: state.savedBenefitsSelection.discountSource,
-          promo: state.savedBenefitsSelection.promoCode,
-          promoRewardId: state.savedBenefitsSelection.promoRewardId,
-          promoSource: state.savedBenefitsSelection.promoSource,
-          selectedFulfillment: state.nextSelection,
-          snapshot: state.cachedCatalogSnapshot,
-        }).catch(() => null);
-      })();
-    }, [refreshBenefitsPreview, syncCartFromCache]),
+      const sync = syncCartFromCacheRef.current;
+      if (!sync) return;
+      void sync().catch(() => null);
+    }, []),
   );
-
-  useEffect(() => {
-    if (!cartHydratedRef.current) return undefined;
-    const timer = setTimeout(() => {
-      void refreshBenefitsPreview().catch(() => null);
-    }, 250);
-    return () => clearTimeout(timer);
-  }, [
-    activeLines,
-    catalogSnapshot,
-    refreshBenefitsPreview,
-    selection.addressId,
-    selection.mode,
-    selection.pickupStoreId,
-  ]);
 
   useFocusEffect(
     useCallback(() => {
@@ -1193,9 +1460,12 @@ export function CartPage() {
 
   const changeQuantity = useCallback(async (line: CartLine, delta: number) => {
     const mutationSeq = ++cartMutationSeqRef.current;
-    const nextQuantity = line.quantity + delta;
-    const nextLine = { ...line, quantity: nextQuantity };
-    const optimisticLines = replaceCartLine(lines, nextLine);
+    const currentLines = linesRef.current.length ? linesRef.current : lines;
+    const currentLine = currentLines.find((item) => item.id === line.id) || line;
+    const baseQuantity = pendingLineQuantitiesRef.current.get(line.id) ?? Math.max(1, Number(currentLine.quantity || line.quantity || 1));
+    const nextQuantity = Math.max(1, baseQuantity + delta);
+    const nextLine = { ...currentLine, quantity: nextQuantity };
+    const optimisticLines = replaceCartLine(currentLines, nextLine);
     if (delta > 0) {
       const localStockLimit = calculateCartStockLimit(optimisticLines, stockLevels, line.id);
       if (!localStockLimit.canAdd) {
@@ -1203,32 +1473,56 @@ export function CartPage() {
         return;
       }
     }
-    invalidateBenefitsPreview();
+    pendingLineQuantitiesRef.current.set(line.id, nextQuantity);
+    linesRef.current = optimisticLines;
+    applyLocalBenefitsPreviewForLines(optimisticLines);
     setLines(optimisticLines);
-    const savedLines = await updateCartLineQuantity(line.id, nextQuantity);
+    setStockBlockedLineIds((current) => {
+      const next = new Set(current);
+      const plusLine = { ...nextLine, quantity: Math.max(1, Number(nextLine.quantity || 1)) + 1 };
+      const plusLimit = calculateCartStockLimit(replaceCartLine(optimisticLines, plusLine), stockLevels, line.id);
+      if (!plusLimit.canAdd) {
+        next.add(line.id);
+      } else {
+        next.delete(line.id);
+      }
+      return next;
+    });
+    const savedLines = await enqueueCartMutation(() => updateCartLineQuantity(line.id, nextQuantity));
     if (mutationSeq !== cartMutationSeqRef.current) return;
-    setLines(savedLines);
-    void evaluateCartStockState(savedLines, stockLevels, refreshMany).then((stockState) => {
-      if (mutationSeq !== cartMutationSeqRef.current) return;
-      setLines(stockState.lines);
-      setStockBlockedLineIds(stockState.blockedLineIds);
-    }).catch(() => null);
-  }, [invalidateBenefitsPreview, lines, refreshMany, stockLevels]);
+    pendingLineQuantitiesRef.current.delete(line.id);
+    if (!isSameCachedValue(savedLines, optimisticLines)) {
+      linesRef.current = savedLines;
+      applyLocalBenefitsPreviewForLines(savedLines);
+      setLines(savedLines);
+    }
+  }, [applyLocalBenefitsPreviewForLines, enqueueCartMutation, lines, stockLevels]);
 
   const removeLine = useCallback(async (line: CartLine) => {
     const mutationSeq = ++cartMutationSeqRef.current;
-    const optimisticLines = lines.filter((item) => item.id !== line.id);
-    invalidateBenefitsPreview();
+    const currentLines = linesRef.current.length ? linesRef.current : lines;
+    const optimisticLines = currentLines.filter((item) => item.id !== line.id);
+    pendingLineQuantitiesRef.current.delete(line.id);
+    linesRef.current = optimisticLines;
+    applyLocalBenefitsPreviewForLines(optimisticLines);
     setLines(optimisticLines);
-    const nextLines = await removeCartLine(line.id);
+    const nextLines = await enqueueCartMutation(() => removeCartLine(line.id));
     if (mutationSeq !== cartMutationSeqRef.current) return;
-    setLines(nextLines);
+    if (!isSameCachedValue(nextLines, optimisticLines)) {
+      linesRef.current = nextLines;
+      applyLocalBenefitsPreviewForLines(nextLines);
+      setLines(nextLines);
+    }
     void evaluateCartStockState(nextLines, stockLevels, refreshMany).then((stockState) => {
       if (mutationSeq !== cartMutationSeqRef.current) return;
-      setLines(stockState.lines);
+      if (!isSameCachedValue(stockState.lines, nextLines)) {
+        linesRef.current = stockState.lines;
+        applyLocalBenefitsPreviewForLines(stockState.lines);
+        setLines(stockState.lines);
+      }
       setStockBlockedLineIds(stockState.blockedLineIds);
     }).catch(() => null);
-  }, [invalidateBenefitsPreview, lines, refreshMany, stockLevels]);
+  }, [applyLocalBenefitsPreviewForLines, enqueueCartMutation, lines, refreshMany, stockLevels]);
 
   const clearCart = useCallback(async () => {
     if (!clearConfirm) {
@@ -1236,8 +1530,10 @@ export function CartPage() {
       return;
     }
     const mutationSeq = ++cartMutationSeqRef.current;
-    const nextLines = await clearCartLines();
+    const nextLines = await enqueueCartMutation(() => clearCartLines());
     if (mutationSeq !== cartMutationSeqRef.current) return;
+    pendingLineQuantitiesRef.current.clear();
+    linesRef.current = nextLines;
     invalidateBenefitsPreview();
     setLines(nextLines);
     setPromoCode('');
@@ -1257,7 +1553,7 @@ export function CartPage() {
       promoRewardId: null,
       promoSource: null,
     });
-  }, [clearConfirm, invalidateBenefitsPreview]);
+  }, [clearConfirm, enqueueCartMutation, invalidateBenefitsPreview]);
 
   useEffect(() => {
     if (!clearConfirm) return undefined;
@@ -1313,7 +1609,7 @@ export function CartPage() {
       setSelectedDiscountId(state.currentSelection.discountId);
       setSelectedDiscountSource(state.currentSelection.discountSource);
       setPromoCode(safePromo);
-      setBenefitsPreview(preview);
+      setBenefitsPreviewValue(preview);
       setBenefitsCounts(toCartBenefitsCounts(state.counts));
     } catch (error) {
       await saveCheckoutBenefitsSelection(previousSelection);
@@ -1327,7 +1623,7 @@ export function CartPage() {
     } finally {
       setApplyingPromo(false);
     }
-  }, [appliedPromoCode, catalogSnapshot, lines, promoApplyDisabled, promoCode, selectedDiscountId, selectedDiscountSource, selectedPromoRewardId, selectedPromoSource, selection]);
+  }, [appliedPromoCode, catalogSnapshot, lines, promoApplyDisabled, promoCode, selectedDiscountId, selectedDiscountSource, selectedPromoRewardId, selectedPromoSource, selection, setBenefitsPreviewValue]);
 
   const openAddresses = useCallback(async () => {
     await saveFulfillmentSelection(selection);
@@ -1337,6 +1633,7 @@ export function CartPage() {
   const openCheckout = useCallback(async () => {
     if (!hasActiveLines || hasProblemLines) return;
     let stockState = await evaluateCartStockState(lines, stockLevels, refreshMany);
+    linesRef.current = stockState.lines;
     setLines(stockState.lines);
     setStockBlockedLineIds(stockState.blockedLineIds);
     if (stockState.lines.some((line) => line.isUnavailable === true)) return;
@@ -1345,6 +1642,7 @@ export function CartPage() {
     if (Array.isArray(stockCheck?.stock_levels) && stockCheck.stock_levels.length) {
       const checkedStockLevels = mergeStockRows(stockCheck.stock_levels);
       stockState = await evaluateCartStockState(stockState.lines, checkedStockLevels, refreshMany);
+      linesRef.current = stockState.lines;
       setLines(stockState.lines);
       setStockBlockedLineIds(stockState.blockedLineIds);
       if (stockState.lines.some((line) => line.isUnavailable === true)) return;
@@ -1366,7 +1664,11 @@ export function CartPage() {
       navigation.navigate(routes.promocodes);
       return;
     }
-    navigation.navigate(routes.gifts);
+    if (page === 'gifts') {
+      navigation.navigate(routes.gifts);
+      return;
+    }
+    navigation.navigate(routes.tasks);
   }, [navigation]);
 
   const selectBonusAccrual = useCallback(() => {
@@ -1406,11 +1708,19 @@ export function CartPage() {
   }, [navigation]);
 
   const renderLine = (line: CartLine) => {
-    const total = getLineTotal(line, catalogSnapshot);
-    const oldTotal = getLineOldTotal(line, catalogSnapshot);
-    const discountPercent = getDiscountPercent(total, oldTotal);
+    const baseTotal = getLineTotal(line, catalogSnapshot);
+    const previewTotal = getPreviewLineTotal(benefitsPreview, line, baseTotal);
+    const summaryLineState = cartSummaryLineStatesById.get(line.id);
+    const total = summaryLineState && Number.isFinite(Number(summaryLineState.currentTotal))
+      ? roundPrice(Number(summaryLineState.currentTotal))
+      : previewTotal;
+    const oldTotal = summaryLineState && Number.isFinite(Number(summaryLineState.originalTotal))
+      ? roundPrice(Math.max(Number(summaryLineState.originalTotal), baseTotal, total))
+      : Math.max(getLineOldTotal(line, catalogSnapshot), baseTotal, total);
+    const discountPercent = summaryLineState && Number.isFinite(Number(summaryLineState.discountPercent))
+      ? Math.max(0, Math.min(100, Math.round(Number(summaryLineState.discountPercent))))
+      : getDiscountPercent(total, oldTotal);
     const promoBadgeText = getBuyXGetYBadgeText(getCartLineBuyXGetYBadge(line, catalogSnapshot));
-    const unitPrice = Math.max(0, Number(line.unitPrice || 0));
     const unavailable = line.isUnavailable === true;
     const plusBlocked = unavailable || stockBlockedLineIds.has(line.id);
     const title = getCartLineTitle(line);
@@ -1418,88 +1728,101 @@ export function CartPage() {
     const comboPhotos = line.type === 'combo' && Array.isArray(line.photoUrls)
       ? line.photoUrls.filter(Boolean).slice(0, 4)
       : [];
+    const lineBadges = [
+      discountPercent > 0 ? { key: 'discount', text: `-${discountPercent}%`, tone: 'discount' as const } : null,
+      promoBadgeText ? { key: 'promo', text: promoBadgeText, tone: 'promo' as const } : null,
+    ].filter((item): item is { key: string; text: string; tone: 'discount' | 'promo' } => !!item);
     return (
       <Pressable key={line.id} onPress={() => openLine(line)} style={[styles.itemCard, line.isUnavailable ? styles.itemUnavailable : null]}>
-        {discountPercent > 0 || promoBadgeText ? (
-          <View style={styles.itemBadgeStack}>
-            {discountPercent > 0 ? <ProductBadge text={`-${discountPercent}%`} tone="discount" /> : null}
-            {promoBadgeText ? <ProductBadge text={promoBadgeText} tone="promo" /> : null}
-          </View>
-        ) : null}
-        {comboPhotos.length ? (
-          <View style={styles.comboImageGrid}>
-            {[0, 1, 2, 3].map((index) => {
-              const uri = comboPhotos[index];
-              return (
-                <View key={index} style={styles.comboImageCell}>
-                  {uri ? <Image resizeMode="cover" source={{ uri }} style={styles.comboImage} /> : null}
-                </View>
-              );
-            })}
-          </View>
-        ) : (
-          <View style={styles.itemImageWrap}>
-            {line.photoUrl ? (
-            <Image resizeMode="cover" source={{ uri: line.photoUrl }} style={styles.itemImage} />
-            ) : (
-            <View style={styles.itemImagePlaceholder}>
-              <Ionicons name={line.type === 'combo' ? 'grid-outline' : 'restaurant-outline'} color={theme.colors.accent} size={26} />
-            </View>
-            )}
-          </View>
-        )}
-        <View style={styles.itemMain}>
-          <Text numberOfLines={2} style={styles.itemTitle}>{line.quantity} x {title}</Text>
-          {unavailable ? <Text style={styles.itemUnavailableText}>Больше нет</Text> : null}
-          {plusBlocked && !unavailable ? <Text style={styles.itemUnavailableText}>Больше нет</Text> : null}
-          {detailLines.length ? (
-            <View style={styles.itemDetails}>
-              {detailLines.map((detail, index) => {
-                const prefix = detail.trim().startsWith('1 x ') ? '' : '• ';
+        <View style={styles.itemTop}>
+          {comboPhotos.length ? (
+            <View style={styles.comboImageGrid}>
+              {[0, 1, 2, 3].map((index) => {
+                const uri = comboPhotos[index];
                 return (
-                  <Text key={`${index}:${detail}`} numberOfLines={1} style={styles.itemDetail}>{prefix}{detail}</Text>
+                  <View key={index} style={styles.comboImageCell}>
+                    {uri ? <Image resizeMode="cover" source={{ uri }} style={styles.comboImage} /> : null}
+                  </View>
                 );
               })}
             </View>
-          ) : null}
-          <View style={styles.itemBottom}>
-            <View style={styles.unitPriceWrap}>
-              <Text numberOfLines={1} style={styles.unitPriceText}>{formatPrice(unitPrice)}</Text>
+          ) : (
+            <View style={styles.itemImageWrap}>
+              {line.photoUrl ? (
+                <Image resizeMode="cover" source={{ uri: line.photoUrl }} style={styles.itemImage} />
+              ) : (
+                <View style={styles.itemImagePlaceholder}>
+                  <Ionicons name={line.type === 'combo' ? 'grid-outline' : 'restaurant-outline'} color={theme.colors.accent} size={26} />
+                </View>
+              )}
             </View>
-            <View style={styles.quantityStepper}>
-              <Pressable
-                hitSlop={cartQuantityTapSlop}
-                onPress={(event) => {
-                  event.stopPropagation();
-                  return line.quantity <= 1 ? removeLine(line) : changeQuantity(line, -1);
-                }}
-                style={styles.qtyButton}
-              >
-                <Ionicons name={line.quantity <= 1 ? 'trash' : 'remove'} color={theme.colors.primaryText} size={line.quantity <= 1 ? 15 : 14} />
-              </Pressable>
-              <View style={styles.quantityPriceCenter}>
-                <Text
-                  numberOfLines={1}
-                  style={[styles.itemOldPrice, oldTotal > total ? null : styles.itemOldPriceHidden]}
-                >
-                  {oldTotal > total ? formatPrice(oldTotal) : formatPrice(total)}
-                </Text>
-                <Text numberOfLines={1} style={[styles.itemPrice, styles.quantityPrice]}>{formatPrice(total)}</Text>
-                <Text numberOfLines={1} style={styles.qtyText}>{line.quantity} шт</Text>
+          )}
+          <View style={styles.itemMain}>
+            <Text numberOfLines={2} style={styles.itemTitle}>{line.quantity} x {title}</Text>
+            {unavailable ? <Text style={styles.itemUnavailableText}>Больше нет</Text> : null}
+            {plusBlocked && !unavailable ? <Text style={styles.itemUnavailableText}>Больше нет</Text> : null}
+            {detailLines.length ? (
+              <View style={styles.itemDetails}>
+                {detailLines.map((detail, index) => {
+                  const prefix = detail.trim().startsWith('1 x ') ? '' : '• ';
+                  return (
+                    <Text key={`${index}:${detail}`} numberOfLines={1} style={styles.itemDetail}>{prefix}{detail}</Text>
+                  );
+                })}
               </View>
-              <Pressable
-                disabled={plusBlocked}
-                hitSlop={cartQuantityTapSlop}
-                onPress={(event) => {
-                  event.stopPropagation();
-                  if (plusBlocked) return undefined;
-                  return changeQuantity(line, 1);
-                }}
-                style={[styles.qtyButton, plusBlocked && styles.qtyButtonDisabled]}
+            ) : null}
+          </View>
+        </View>
+        <View style={styles.itemBottom}>
+          <View style={styles.itemBadgeRail}>
+            {lineBadges.length ? (
+              <ScrollView
+                bounces={false}
+                contentContainerStyle={styles.itemBadgeRailContent}
+                horizontal
+                keyboardShouldPersistTaps="handled"
+                nestedScrollEnabled
+                showsHorizontalScrollIndicator={false}
               >
-                <Ionicons name="add" color={plusBlocked ? theme.colors.muted : theme.colors.primaryText} size={16} />
-              </Pressable>
+                {lineBadges.map((badge) => (
+                  <ProductBadge key={badge.key} text={badge.text} tone={badge.tone} />
+                ))}
+              </ScrollView>
+            ) : null}
+          </View>
+          <View style={styles.quantityStepper}>
+            <Pressable
+              hitSlop={cartQuantityTapSlop}
+              onPress={(event) => {
+                event.stopPropagation();
+                return line.quantity <= 1 ? removeLine(line) : changeQuantity(line, -1);
+              }}
+              style={styles.qtyButton}
+            >
+              <Ionicons name={line.quantity <= 1 ? 'trash' : 'remove'} color={theme.colors.primaryText} size={line.quantity <= 1 ? 15 : 14} />
+            </Pressable>
+            <View style={styles.quantityPriceCenter}>
+              <Text
+                numberOfLines={1}
+                style={[styles.itemOldPrice, oldTotal > total ? null : styles.itemOldPriceHidden]}
+              >
+                {oldTotal > total ? formatPrice(oldTotal) : formatPrice(total)}
+              </Text>
+              <Text numberOfLines={1} style={[styles.itemPrice, styles.quantityPrice]}>{formatPrice(total)}</Text>
+              <Text numberOfLines={1} style={styles.qtyText}>{line.quantity} шт</Text>
             </View>
+            <Pressable
+              disabled={plusBlocked}
+              hitSlop={cartQuantityTapSlop}
+              onPress={(event) => {
+                event.stopPropagation();
+                if (plusBlocked) return undefined;
+                return changeQuantity(line, 1);
+              }}
+              style={[styles.qtyButton, plusBlocked && styles.qtyButtonDisabled]}
+            >
+              <Ionicons name="add" color={plusBlocked ? theme.colors.muted : theme.colors.primaryText} size={16} />
+            </Pressable>
           </View>
         </View>
       </Pressable>
@@ -1652,7 +1975,19 @@ export function CartPage() {
                   </Pressable>
                 ) : null}
 
-                {benefitsCounts.discounts > 0 || benefitsCounts.gifts > 0 ? <View style={styles.benefitsDivider} /> : null}
+                {benefitsCounts.progress > 0 ? (
+                  <Pressable onPress={() => openBenefitPage('progress')} style={styles.benefitRow}>
+                    <View style={styles.benefitRowMain}>
+                      <Text style={styles.benefitLabel}>Задания</Text>
+                      <View style={styles.benefitCountBadge}>
+                        <Text style={styles.benefitCountText}>{benefitsCounts.progress}</Text>
+                      </View>
+                    </View>
+                    <Ionicons name="chevron-forward" color={theme.colors.text} size={24} />
+                  </Pressable>
+                ) : null}
+
+                {benefitsCounts.discounts > 0 || benefitsCounts.gifts > 0 || benefitsCounts.progress > 0 ? <View style={styles.benefitsDivider} /> : null}
 
                 <View style={styles.promoBlock}>
                   {benefitsCounts.promocodes > 0 ? (
@@ -1799,7 +2134,7 @@ export function CartPage() {
                     <View style={styles.summaryLabelWrap}>
                       <Text style={styles.summaryLabel}>Скидка</Text>
                       {discountDetails.length ? (
-                        <Pressable onPress={() => setDiscountDetailsVisible(true)} style={styles.summaryInfoButton}>
+                        <Pressable hitSlop={cartSummaryInfoTapSlop} onPress={() => setDiscountDetailsVisible(true)} style={styles.summaryInfoButton}>
                           <Ionicons name="information" color={theme.colors.muted} size={11} />
                         </Pressable>
                       ) : null}
@@ -1813,7 +2148,7 @@ export function CartPage() {
                     <View style={styles.summaryLabelWrap}>
                       <Text style={styles.summaryLabel}>{bonusState.coinName}</Text>
                       {cartSummary.bonusAccrualBlockedByRedeem ? (
-                        <Pressable onPress={() => setBonusDetailsVisible(true)} style={styles.summaryInfoButton}>
+                        <Pressable hitSlop={cartSummaryInfoTapSlop} onPress={() => setBonusDetailsVisible(true)} style={styles.summaryInfoButton}>
                           <Ionicons name="information" color={theme.colors.muted} size={11} />
                         </Pressable>
                       ) : null}
@@ -2233,19 +2568,25 @@ const styles = StyleSheet.create({
     borderColor: theme.colors.border,
     borderRadius: 20,
     borderWidth: 1,
-    flexDirection: 'row',
-    gap: theme.spacing.md,
+    flexDirection: 'column',
+    gap: theme.spacing.sm,
     padding: theme.spacing.md,
     position: 'relative',
   },
-  itemBadgeStack: {
-    alignItems: 'flex-end',
+  itemBadgeRail: {
+    flex: 1,
+    minWidth: 0,
+  },
+  itemBadgeRailContent: {
+    alignItems: 'center',
     flexDirection: 'row',
+    flexGrow: 1,
     gap: 4,
-    position: 'absolute',
-    right: 8,
-    top: 8,
-    zIndex: 1,
+  },
+  itemTop: {
+    alignItems: 'flex-start',
+    flexDirection: 'row',
+    gap: theme.spacing.md,
   },
   itemDetail: {
     color: theme.colors.muted,
@@ -2301,7 +2642,7 @@ const styles = StyleSheet.create({
     color: theme.colors.text,
     fontSize: 16,
     fontWeight: '900',
-    paddingRight: 72,
+    paddingRight: 0,
   },
   itemUnavailable: {
     opacity: 0.55,
@@ -2311,16 +2652,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '900',
     marginTop: 3,
-  },
-  unitPriceText: {
-    color: theme.colors.text,
-    fontSize: 20,
-    fontWeight: '900',
-  },
-  unitPriceWrap: {
-    flex: 1,
-    minWidth: 0,
-    paddingRight: theme.spacing.sm,
   },
   itemsList: {
     gap: theme.spacing.md,
@@ -2661,5 +2992,3 @@ const styles = StyleSheet.create({
     color: theme.colors.primaryText,
   },
 });
-
-

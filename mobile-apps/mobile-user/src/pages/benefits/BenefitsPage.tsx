@@ -13,19 +13,14 @@ import {
 
 import type { RootStackParamList } from '../../app/navigation/routes';
 import {
-  fetchCheckoutBenefitsPreview,
-  fetchCustomerBenefits,
   isSameCachedValue,
-  readCachedCustomerBenefits,
   readCachedCustomerPassport,
   resolveAssetUrl,
   type CustomerBenefitCard,
   type CustomerBenefits,
 } from '../../shared/api';
-import { readFulfillmentSelection } from '../../features/checkout';
-import { readCartLines, type CartLine } from '../../features/cart';
+import { ensureCheckoutBenefitsState, readCheckoutBenefitsState } from '../../features/checkout';
 import { theme } from '../../shared/config/theme';
-import { calculateBuyXGetYLineTotals } from '../../shared/lib/buyXGetY';
 import { AppText as Text, Screen } from '../../shared/ui';
 
 type BenefitsPageProps = NativeStackScreenProps<RootStackParamList, 'benefits'>;
@@ -62,102 +57,6 @@ const emptyBenefits: CustomerBenefits = {
 
 function asText(value: unknown) {
   return String(value || '').trim();
-}
-
-function roundPrice(value: unknown) {
-  const number = Number(value || 0);
-  if (!Number.isFinite(number)) return 0;
-  return Math.round(number * 100) / 100;
-}
-
-function getLineTotals(line: CartLine) {
-  return calculateBuyXGetYLineTotals({
-    badge: line.type === 'product' ? line.buyXGetYBadge || null : null,
-    oldUnitPrice: Number(line.oldUnitPrice || 0),
-    quantity: Math.max(1, Number(line.quantity || 1)),
-    unitPrice: Math.max(0, Number(line.unitPrice || 0)),
-  });
-}
-
-function mergeBenefitCards(primary: CustomerBenefitCard[], secondary: CustomerBenefitCard[]) {
-  const result = new Map<string, CustomerBenefitCard>();
-  [...primary, ...secondary].forEach((item, index) => {
-    const id = asText(item.id);
-    const key = id || `${asText(item.title)}:${asText(item.discount_type)}:${asText(item.discount_value)}:${asText(item.code)}:${index}`;
-    if (!result.has(key)) result.set(key, item);
-  });
-  return Array.from(result.values());
-}
-
-function buildBenefitsPreviewItems(lines: CartLine[]) {
-  return lines.filter((line) => line.isUnavailable !== true).map((line) => {
-    const quantity = Math.max(1, Number(line.quantity || 1));
-    const totals = getLineTotals(line);
-    const lineTotal = roundPrice(totals.total);
-    const oldLineTotal = roundPrice(Math.max(lineTotal, totals.oldTotal));
-    const variantGroupId = Number(line.variant?.groupId || 0);
-    const variantValueIndex = Number(line.variant?.valueIndex);
-    const baseItem: Record<string, unknown> = {
-      buy_x_get_y_badge: line.type === 'product' && line.buyXGetYBadge ? line.buyXGetYBadge : null,
-      cart_key: line.id,
-      line_total: lineTotal,
-      old_line_total: oldLineTotal,
-      qty: quantity,
-      type: line.type,
-    };
-
-    if (line.type === 'combo') {
-      return {
-        ...baseItem,
-        combo_id: Number(line.sourceId || 0) || null,
-        combo_title: line.title,
-      };
-    }
-
-    return {
-      ...baseItem,
-      ingredients: (Array.isArray(line.ingredients) ? line.ingredients : []).map((ingredient) => ({
-        ingredient_id: Number(ingredient.id || 0) || null,
-        qty: Number(ingredient.quantity || 0) || 0,
-      })).filter((ingredient) => Number(ingredient.ingredient_id || 0) > 0),
-      option_items: (Array.isArray(line.options) ? line.options : []).map((option) => {
-        const optionVariantGroupId = Number(option.variant?.groupId || 0);
-        const optionVariantValueIndex = Number(option.variant?.valueIndex);
-        return {
-          id: Number(option.id || 0) || null,
-          qty: Math.max(1, Number(option.quantity || 1)),
-          variant_group_id: optionVariantGroupId > 0 ? optionVariantGroupId : null,
-          variant_value_index: Number.isFinite(optionVariantValueIndex) && optionVariantValueIndex >= 0
-            ? optionVariantValueIndex
-            : null,
-        };
-      }).filter((option) => Number(option.id || 0) > 0),
-      product_id: Number(line.sourceId || 0) || null,
-      product_name: line.title,
-      variant_group_id: variantGroupId > 0 ? variantGroupId : null,
-      variant_value_index: Number.isFinite(variantValueIndex) && variantValueIndex >= 0 ? variantValueIndex : null,
-    };
-  });
-}
-
-function mergeBenefitsWithPreview(benefits: CustomerBenefits, preview: Record<string, unknown> | null): CustomerBenefits {
-  if (!preview || typeof preview !== 'object') return benefits;
-  return {
-    completed: benefits.completed || [],
-    discounts: mergeBenefitCards(
-      Array.isArray(preview.discounts) ? preview.discounts as CustomerBenefitCard[] : [],
-      Array.isArray(benefits.discounts) ? benefits.discounts : [],
-    ),
-    gifts: mergeBenefitCards(
-      Array.isArray(preview.gifts) ? preview.gifts as CustomerBenefitCard[] : [],
-      Array.isArray(benefits.gifts) ? benefits.gifts : [],
-    ),
-    progress: benefits.progress || [],
-    promo_codes: mergeBenefitCards(
-      Array.isArray(preview.promo_codes) ? preview.promo_codes as CustomerBenefitCard[] : [],
-      Array.isArray(benefits.promo_codes) ? benefits.promo_codes : [],
-    ),
-  };
 }
 
 function formatDate(value: unknown) {
@@ -286,25 +185,20 @@ export function BenefitsPage({ route }: BenefitsPageProps) {
         setLoading(false);
         return;
       }
-      const [cachedBenefits, cartLines, fulfillmentSelection] = await Promise.all([
-        readCachedCustomerBenefits(passport.token),
-        readCartLines().catch(() => []),
-        readFulfillmentSelection(),
-      ]);
-      if (cachedBenefits) {
+      const cachedState = await readCheckoutBenefitsState().catch(() => null);
+      const cachedBenefits = cachedState?.sourceBenefits || emptyBenefits;
+      const hasCachedBenefits = !!(cachedState?.preview || cachedState?.sourceBenefits);
+      if (hasCachedBenefits) {
         setBenefits(cachedBenefits);
         setLoading(false);
       }
-      const previewPayload = {
-        items: buildBenefitsPreviewItems(cartLines),
-        method_code: fulfillmentSelection.mode === 'delivery' ? 'delivery' : 'takeaway',
-      };
-      const [freshBenefits, preview] = await Promise.all([
-        fetchCustomerBenefits(passport.token),
-        fetchCheckoutBenefitsPreview(passport.token, previewPayload).catch(() => null),
-      ]);
-      const nextBenefits = mergeBenefitsWithPreview(freshBenefits, preview);
-      if (!isSameCachedValue(nextBenefits, cachedBenefits || emptyBenefits)) setBenefits(nextBenefits);
+
+      const freshState = await ensureCheckoutBenefitsState().catch((error) => {
+        if (!hasCachedBenefits) throw error;
+        return null;
+      });
+      const nextBenefits = freshState?.sourceBenefits || cachedBenefits;
+      if (!isSameCachedValue(nextBenefits, cachedBenefits)) setBenefits(nextBenefits);
     } catch (error) {
       setErrorText(error instanceof Error ? error.message : 'Не удалось загрузить выгоды.');
     } finally {
