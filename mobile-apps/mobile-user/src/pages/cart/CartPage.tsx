@@ -49,17 +49,20 @@ import {
   fetchBonusConfig,
   fetchBonusFavoriteCategories,
   checkOrderStock,
+  buildCustomerAddressCacheKey,
+  ensureCustomerAddressDeliveryQuote,
   fetchPublicOrderConfig,
   fetchTenantStores,
   isSameCachedValue,
+  isFreshDeliveryQuoteForAddress,
   readCachedCustomerAddresses,
   readCachedCustomerPassport,
   readCachedMobileCatalogSnapshot,
   readCachedPublicOrderConfig,
   readCachedTenantStores,
-  resolvePublicAddress,
   resolveAssetUrl,
   saveCustomerPassport,
+  summarizeDeliveryQuoteForSubtotal,
   joinBonusProgram,
   warmFullProductPassports,
   type BonusConfig,
@@ -989,14 +992,13 @@ export function CartPage() {
   const [addresses, setAddresses] = useState<CustomerAddress[]>([]);
   const [stores, setStores] = useState<TenantStore[]>([]);
   const [orderConfig, setOrderConfig] = useState<PublicOrderConfig | null>(null);
+  const [customerPassport, setCustomerPassport] = useState<CustomerPassport | null>(null);
   const [selection, setSelection] = useState<FulfillmentSelection>({
     addressId: null,
     mode: 'delivery',
     pickupCity: null,
     pickupStoreId: null,
   });
-  const [deliveryMeta, setDeliveryMeta] = useState<DeliveryMeta | null>(null);
-  const [lastDeliveryProgress, setLastDeliveryProgress] = useState<DeliveryProgressState | null>(null);
   const [benefitsCounts, setBenefitsCounts] = useState<CartBenefitsCounts>(emptyBenefitsCounts);
   const [benefitsPreview, setBenefitsPreview] = useState<CheckoutBenefitsPreviewData | null>(null);
   const [bonusConfig, setBonusConfig] = useState<BonusConfig | null>(null);
@@ -1023,6 +1025,7 @@ export function CartPage() {
   const linesRef = useRef<CartLine[]>([]);
   const pendingLineQuantitiesRef = useRef<Map<string, number>>(new Map());
   const syncCartFromCacheRef = useRef<(() => Promise<unknown>) | null>(null);
+  const deliveryQuoteRequestKeyRef = useRef<string | null>(null);
 
   const setBenefitsPreviewValue = useCallback((preview: CheckoutBenefitsPreviewData | null) => {
     benefitsPreviewRef.current = preview;
@@ -1096,6 +1099,34 @@ export function CartPage() {
   const normalizedPromoCode = normalizePromoCode(promoCode);
   const promoIsCurrent = !!normalizedPromoCode && normalizedPromoCode === appliedPromoCode;
   const promoApplyDisabled = !normalizedPromoCode || promoIsCurrent || isApplyingPromo;
+  const deliverySubtotalForMeta = useMemo(() => {
+    const previewSummary = benefitsPreview?.summary && typeof benefitsPreview.summary === 'object' ? benefitsPreview.summary : null;
+    const previewItemsTotal = roundPrice(previewSummary?.items_total);
+    const fallbackItemsTotal = roundPrice(activeLines.reduce((sum, line) => sum + getLineTotal(line, catalogSnapshot), 0));
+    const itemsTotal = previewItemsTotal > 0 ? previewItemsTotal : fallbackItemsTotal;
+    const bonusRedeemAmount = redeemActive ? roundPrice(Math.min(itemsTotal, bonusState.redeemAvailableAmount)) : 0;
+    return Math.max(0, itemsTotal - bonusRedeemAmount);
+  }, [activeLines, benefitsPreview, bonusState.redeemAvailableAmount, catalogSnapshot, redeemActive]);
+  const deliveryMeta = useMemo<DeliveryMeta | null>(() => {
+    if (!isDelivery) return null;
+    const quote = selectedAddress?.delivery_quote || null;
+    const quoteSummary = quote ? summarizeDeliveryQuoteForSubtotal(quote, deliverySubtotalForMeta) : null;
+    const fallbackCost = getConfigNumber(orderConfig, 'delivery_cost');
+    const fallbackFreeFrom = getConfigNumber(orderConfig, 'free_delivery_from');
+    const fallbackEta = getConfigNumber(orderConfig, 'eta_minutes');
+    if (!quoteSummary && fallbackCost == null && fallbackFreeFrom == null && fallbackEta == null) {
+      return null;
+    }
+    const etaMinutes = quote?.eta_minutes != null
+      ? Number(quote.eta_minutes)
+      : fallbackEta;
+    return {
+      cost: quoteSummary?.delivery_cost ?? fallbackCost,
+      etaMinutes: Number.isFinite(Number(etaMinutes)) ? Number(etaMinutes) : null,
+      freeFrom: quoteSummary?.free_delivery_from ?? fallbackFreeFrom,
+      hoursText: formatDeliveryHours(orderConfig, selectedDeliveryStore),
+    };
+  }, [deliverySubtotalForMeta, isDelivery, orderConfig, selectedAddress?.delivery_quote, selectedDeliveryStore]);
   const cartSummary = useMemo(
     () => buildCartSummaryState(activeLines, isDelivery && hasActiveLines ? Number(deliveryMeta?.cost || 0) : 0, bonusState, redeemActive, benefitsPreview, catalogSnapshot),
     [activeLines, benefitsPreview, bonusState, catalogSnapshot, deliveryMeta?.cost, hasActiveLines, isDelivery, redeemActive],
@@ -1109,7 +1140,7 @@ export function CartPage() {
     );
   }, [cartSummary.lineStates]);
   const deliveryProgressSubtotal = Math.max(0, cartSummary.itemsTotal - cartSummary.bonusRedeemAmount);
-  const visibleDeliveryProgress = isDelivery ? buildDeliveryProgress(deliveryProgressSubtotal, deliveryMeta) || lastDeliveryProgress : null;
+  const visibleDeliveryProgress = isDelivery ? buildDeliveryProgress(deliveryProgressSubtotal, deliveryMeta) : null;
   const discountDetails = useMemo<CartDiscountDetailDisplayItem[]>(() => {
     const detailItems = Array.isArray(cartSummary.discountDetailItems)
       ? cartSummary.discountDetailItems
@@ -1296,6 +1327,7 @@ export function CartPage() {
     setAddresses(cachedAddresses);
     setStores(cachedStores || []);
     setOrderConfig(cachedOrderConfig);
+    setCustomerPassport(passport);
     setBonusConfig(passport?.bonusConfig || null);
     setBonusFavoriteCategories(passport?.bonusFavoriteCategories || null);
     setCatalogSnapshot(cachedCatalogSnapshot);
@@ -1374,13 +1406,15 @@ export function CartPage() {
       if (passport?.token) {
         setBonusConfig(freshBonusConfig);
         setBonusFavoriteCategories(freshBonusFavoriteCategories);
-        await saveCustomerPassport({
+        const nextPassport = {
           ...(passport as CustomerPassport),
           addresses: freshAddresses,
           bonusConfig: freshBonusConfig,
           bonusFavoriteCategories: freshBonusFavoriteCategories,
           updatedAt: new Date().toISOString(),
-        });
+        };
+        setCustomerPassport(nextPassport);
+        await saveCustomerPassport(nextPassport);
       }
       void evaluateCartStockState(syncedLines, stockLevels, refreshMany).then((stockState) => {
         if (mutationSeq !== cartMutationSeqRef.current) return;
@@ -1404,43 +1438,37 @@ export function CartPage() {
     }, []),
   );
 
-  useFocusEffect(
-    useCallback(() => {
-      let cancelled = false;
-      async function resolveDelivery() {
-        if (!isDelivery || !selectedAddress) {
-          return;
+  useEffect(() => {
+    const token = String(customerPassport?.token || '').trim();
+    if (!isDelivery || !selectedAddress || !token) {
+      deliveryQuoteRequestKeyRef.current = null;
+      return undefined;
+    }
+    const addressCacheKey = buildCustomerAddressCacheKey(selectedAddress);
+    if (isFreshDeliveryQuoteForAddress(selectedAddress)) {
+      if (deliveryQuoteRequestKeyRef.current === addressCacheKey) deliveryQuoteRequestKeyRef.current = null;
+      return undefined;
+    }
+    if (deliveryQuoteRequestKeyRef.current === addressCacheKey) return undefined;
+    deliveryQuoteRequestKeyRef.current = addressCacheKey;
+    let cancelled = false;
+    void ensureCustomerAddressDeliveryQuote(token, selectedAddress, deliverySubtotalForMeta)
+      .then((quotedAddress) => {
+        if (cancelled || !quotedAddress) return;
+        setAddresses((current) => current.map((address) => (
+          toPositiveId(address.id) === toPositiveId(quotedAddress.id) ? quotedAddress : address
+        )));
+      })
+      .catch(() => null)
+      .finally(() => {
+        if (deliveryQuoteRequestKeyRef.current === addressCacheKey) {
+          deliveryQuoteRequestKeyRef.current = null;
         }
-        const resolved = await resolvePublicAddress({
-          address_context_locality: selectedAddress.address_context_locality || null,
-          address_normalized_display: selectedAddress.address_normalized_display || formatAddressLine(selectedAddress),
-          address_ref: selectedAddress.address_ref || null,
-          city: selectedAddress.city || null,
-          house: selectedAddress.house || null,
-          lat: selectedAddress.lat || null,
-          lng: selectedAddress.lng || null,
-          selected_object_type: selectedAddress.selected_object_type || null,
-          street: selectedAddress.street || null,
-          subtotal: deliveryProgressSubtotal,
-        }).catch(() => null);
-        if (cancelled) return;
-        const nextMeta: DeliveryMeta = {
-          cost: resolved?.delivery_cost != null ? Number(resolved.delivery_cost) : getConfigNumber(orderConfig, 'delivery_cost'),
-          etaMinutes: Number((resolved as Record<string, unknown> | null)?.eta_minutes ?? orderConfig?.eta_minutes ?? NaN),
-          freeFrom: resolved?.free_delivery_from != null ? Number(resolved.free_delivery_from) : getConfigNumber(orderConfig, 'free_delivery_from'),
-          hoursText: formatDeliveryHours(orderConfig, selectedDeliveryStore),
-        };
-        if (!Number.isFinite(Number(nextMeta.etaMinutes))) nextMeta.etaMinutes = null;
-        setDeliveryMeta(nextMeta);
-        const nextProgress = buildDeliveryProgress(deliveryProgressSubtotal, nextMeta);
-        if (nextProgress) setLastDeliveryProgress(nextProgress);
-      }
-      void resolveDelivery();
-      return () => {
-        cancelled = true;
-      };
-    }, [deliveryProgressSubtotal, isDelivery, orderConfig, selectedAddress, selectedDeliveryStore]),
-  );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [customerPassport?.token, deliverySubtotalForMeta, isDelivery, selectedAddress]);
 
   const changeMode = useCallback(async (mode: FulfillmentMode) => {
     const pickupStoreId = mode === 'pickup'

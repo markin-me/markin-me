@@ -4,7 +4,7 @@ import {
   useMemo,
   useRef,
   useState } from 'react';
-import { Ionicons } from '@expo/vector-icons';
+import { FontAwesome5, Ionicons } from '@expo/vector-icons';
 import {
   ActivityIndicator,
   Animated,
@@ -26,17 +26,38 @@ import type { MainTabParamList, RootStackParamList } from '../../app/navigation/
 import { routes } from '../../app/navigation/routes';
 import type { CatalogCategory, CatalogCombo, CatalogProduct, CatalogProductPassport, MobileCatalogSnapshot, UnitConversion } from '../../entities/product';
 import { addCartLine, makeCartLineId, readCartLines, updateCartLineQuantity, type CartIngredient, type CartLine, type CartLineDraft, type CartOptionItem, type CartVariant } from '../../features/cart';
+import {
+  readFulfillmentSelection,
+  saveFulfillmentSelection,
+  type FulfillmentMode,
+  type FulfillmentSelection,
+} from '../../features/checkout';
 import { calculateCartStockLimit, getStockProductIdsForLines, useProductStock } from '../../features/stock';
 import {
   apiConfig,
+  buildCustomerAddressCacheKey,
+  ensureCustomerAddressDeliveryQuote,
+  fetchCustomerAddresses,
+  fetchPublicOrderConfig,
+  fetchTenantStores,
   ensureMobileCatalogProductPassport,
   fetchMobileCatalogSnapshot,
   getCatalogProductPassport,
+  isFreshDeliveryQuoteForAddress,
+  isSameCachedValue,
+  readCachedCustomerAddresses,
+  readCachedCustomerPassport,
   readCachedMobileCatalogSnapshot,
+  readCachedPublicOrderConfig,
+  readCachedTenantStores,
   resolveAssetUrl,
   saveMobileCatalogSnapshot,
   warmCatalogComboDetails,
   warmMobileCatalogPassports,
+  type CustomerAddress,
+  type CustomerPassport,
+  type PublicOrderConfig,
+  type TenantStore,
 } from '../../shared/api';
 import { theme } from '../../shared/config/theme';
 import { calculateBuyXGetYLineTotals, getBuyXGetYBadgeText as getBuyXGetYBadgeTextFromRule } from '../../shared/lib/buyXGetY';
@@ -68,6 +89,8 @@ type CatalogCardItem =
   | { cardKey: string; categoryId: number; combo: CatalogCombo; type: 'combo' };
 
 type CatalogListItem =
+  | { itemKey: string; type: 'delivery' }
+  | { itemKey: string; type: 'categories' }
   | { categoryId: number; itemKey: string; title: string; type: 'header' }
   | { categoryId: number; itemKey: string; cards: CatalogCardItem[]; type: 'row' }
   | { categoryId: number; itemKey: string; type: 'empty' };
@@ -104,6 +127,113 @@ type ComboRotationCommand = {
   nextIndexes: number[];
   nextUrls: string[];
 };
+
+type CatalogDeliveryMode = FulfillmentMode;
+
+const CATALOG_DELIVERY_HEADER_HEIGHT = 132;
+const CATALOG_CATEGORIES_HEIGHT = theme.sizes.categoryChipHeight + theme.spacing.sm + theme.spacing.md;
+
+function toPositiveId(value: unknown) {
+  const id = Number(value || 0);
+  return Number.isFinite(id) && id > 0 ? id : null;
+}
+
+function normalizeCatalogText(value: unknown) {
+  return String(value || '').trim();
+}
+
+function isDefaultAddress(address: CustomerAddress) {
+  return address.is_default === true || address.is_default === 1 || address.is_default === '1';
+}
+
+function formatAddressLine(address: CustomerAddress | null | undefined) {
+  if (!address) return '';
+  const normalized = normalizeCatalogText(address.address_normalized_display);
+  if (normalized) return normalized;
+  return [address.city, address.street, address.house]
+    .map((item) => normalizeCatalogText(item))
+    .filter(Boolean)
+    .join(', ');
+}
+
+function formatHoursRange(hours: Array<Record<string, unknown>>) {
+  if (!Array.isArray(hours) || !hours.length) return '';
+  const now = new Date();
+  const today = now.getDay() === 0 ? 7 : now.getDay();
+  const row = hours.find((item) => Number(item.day_of_week || 0) === today);
+  if (!row || row.is_closed === true || row.is_closed === 1) return '';
+  const opens = normalizeCatalogText(row.opens_at).slice(0, 5);
+  const closes = normalizeCatalogText(row.closes_at).slice(0, 5);
+  if (opens && closes) return `с ${opens} до ${closes}`;
+  return '';
+}
+
+function getConfigHours(config: PublicOrderConfig | null, key: string) {
+  const value = config?.[key];
+  return Array.isArray(value) ? value as Array<Record<string, unknown>> : [];
+}
+
+function findSelectedAddress(addresses: CustomerAddress[], selection: FulfillmentSelection) {
+  const selectedId = toPositiveId(selection.addressId);
+  if (selectedId) {
+    const selected = addresses.find((address) => toPositiveId(address.id) === selectedId);
+    if (selected) return selected;
+  }
+  return addresses.find(isDefaultAddress) || addresses[0] || null;
+}
+
+function findSelectedStore(stores: TenantStore[], selection: FulfillmentSelection) {
+  const selectedId = toPositiveId(selection.pickupStoreId);
+  if (selectedId) {
+    const selected = stores.find((store) => toPositiveId(store.id) === selectedId);
+    if (selected) return selected;
+  }
+  const city = normalizeCatalogText(selection.pickupCity);
+  const cityStores = city ? stores.filter((store) => normalizeCatalogText(store.city) === city) : stores;
+  return cityStores[0] || stores[0] || null;
+}
+
+function resolveCatalogFulfillmentSelection(
+  selection: FulfillmentSelection,
+  addresses: CustomerAddress[],
+  stores: TenantStore[],
+): FulfillmentSelection {
+  const mode: CatalogDeliveryMode = selection.mode === 'pickup' ? 'pickup' : 'delivery';
+  const defaultAddressId = toPositiveId(addresses.find(isDefaultAddress)?.id) || toPositiveId(addresses[0]?.id);
+  const selectedAddressId = mode === 'delivery'
+    ? (selection.addressId && addresses.some((address) => toPositiveId(address.id) === selection.addressId)
+      ? selection.addressId
+      : defaultAddressId)
+    : null;
+  const pickupCity = normalizeCatalogText(selection.pickupCity) || normalizeCatalogText(stores[0]?.city) || null;
+  const cityStores = pickupCity ? stores.filter((store) => normalizeCatalogText(store.city) === pickupCity) : stores;
+  const selectedPickupStoreId = mode === 'pickup'
+    ? (selection.pickupStoreId && cityStores.some((store) => toPositiveId(store.id) === selection.pickupStoreId)
+      ? selection.pickupStoreId
+      : toPositiveId(cityStores[0]?.id) || toPositiveId(stores[0]?.id))
+    : null;
+
+  return {
+    addressId: selectedAddressId,
+    mode,
+    pickupCity,
+    pickupStoreId: selectedPickupStoreId,
+  };
+}
+
+function formatDeliveryHours(config: PublicOrderConfig | null, store: TenantStore | null) {
+  const storeDeliveryHours = Array.isArray(store?.delivery_hours) ? store.delivery_hours : [];
+  const range = formatHoursRange(storeDeliveryHours)
+    || formatHoursRange(getConfigHours(config, 'storeDeliveryHours'))
+    || formatHoursRange(Array.isArray(store?.storeHours) ? store.storeHours : [])
+    || formatHoursRange(getConfigHours(config, 'storeHours'));
+  return range;
+}
+
+function formatPickupHours(store: TenantStore | null) {
+  const range = formatHoursRange(Array.isArray(store?.storeHours) ? store.storeHours : []);
+  return range;
+}
 
 function mapSnapshotRecordToCategoryMap<T>(record: Record<string, T[]> | undefined, categories: CatalogCategory[]) {
   const result = new Map<number, T[]>();
@@ -486,7 +616,10 @@ function getComboImageSets(combo: CatalogCombo) {
 }
 
 function buildCatalogListItems(catalog: CatalogState, categories: CatalogCategory[]) {
-  const items: CatalogListItem[] = [];
+  const items: CatalogListItem[] = [
+    { itemKey: 'delivery', type: 'delivery' },
+    { itemKey: 'categories', type: 'categories' },
+  ];
   const categoryIndexById = new Map<number, number>();
 
   categories.forEach((category) => {
@@ -546,6 +679,8 @@ function buildCatalogItemLayouts(items: CatalogListItem[], screenWidth: number) 
   const rowLength = Math.ceil(cardWidth / 0.56 + theme.spacing.md);
   const headerLength = 44;
   const emptyLength = 38;
+  const deliveryLength = CATALOG_DELIVERY_HEADER_HEIGHT;
+  const categoriesLength = CATALOG_CATEGORIES_HEIGHT;
   const layouts: CatalogItemLayout[] = [];
   let offset = 0;
 
@@ -554,7 +689,11 @@ function buildCatalogItemLayouts(items: CatalogListItem[], screenWidth: number) 
       ? rowLength
       : item.type === 'header'
         ? headerLength
-        : emptyLength;
+        : item.type === 'delivery'
+          ? deliveryLength
+          : item.type === 'categories'
+            ? categoriesLength
+            : emptyLength;
     layouts[index] = { index, length, offset };
     offset += length;
   });
@@ -1082,6 +1221,7 @@ export function CatalogPage() {
   const chipOffsets = useRef(new Map<number, number>());
   const scrollIdleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const programmaticScrollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const deliveryQuoteRequestKeyRef = useRef<string | null>(null);
   const passportWarmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const passportWarmQueue = useRef<number[]>([]);
   const passportWarmRequestedIds = useRef(new Set<number>());
@@ -1100,6 +1240,17 @@ export function CatalogPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [errorText, setErrorText] = useState('');
   const [passportReadyVersion, setPassportReadyVersion] = useState(0);
+  const [catalogPassport, setCatalogPassport] = useState<CustomerPassport | null>(null);
+  const [fulfillmentSelection, setFulfillmentSelection] = useState<FulfillmentSelection>({
+    addressId: null,
+    mode: 'delivery',
+    pickupCity: null,
+    pickupStoreId: null,
+  });
+  const [catalogAddresses, setCatalogAddresses] = useState<CustomerAddress[]>([]);
+  const [catalogStores, setCatalogStores] = useState<TenantStore[]>([]);
+  const [catalogOrderConfig, setCatalogOrderConfig] = useState<PublicOrderConfig | null>(null);
+  const catalogFulfillmentLoadedRef = useRef(false);
 
   const mergeCatalogPassports = useCallback((passports: Map<number, CatalogProductPassport>) => {
     if (!passports.size) return;
@@ -1140,6 +1291,26 @@ export function CatalogPage() {
       .filter((item): item is { categoryId: number; offset: number } => item !== null),
     [catalogItemLayouts, categoryIndexById, visibleCategories],
   );
+  const selectedCatalogAddress = useMemo(
+    () => findSelectedAddress(catalogAddresses, fulfillmentSelection),
+    [catalogAddresses, fulfillmentSelection],
+  );
+  const selectedCatalogStore = useMemo(
+    () => findSelectedStore(catalogStores, fulfillmentSelection),
+    [catalogStores, fulfillmentSelection],
+  );
+  const catalogDeliveryHours = useMemo(
+    () => formatDeliveryHours(catalogOrderConfig, selectedCatalogStore),
+    [catalogOrderConfig, selectedCatalogStore],
+  );
+  const catalogPickupHours = useMemo(
+    () => formatPickupHours(selectedCatalogStore),
+    [selectedCatalogStore],
+  );
+  const isCatalogDeliveryMode = fulfillmentSelection.mode !== 'pickup';
+  const catalogAddressLabel = isCatalogDeliveryMode
+    ? formatAddressLine(selectedCatalogAddress) || 'Укажите адрес'
+    : normalizeCatalogText(selectedCatalogStore?.address || selectedCatalogStore?.name) || 'Выберите точку самовывоза';
 
   const syncCatalogAvailability = useCallback(async (sourceCatalog: CatalogState, force = false) => {
     const productIds = collectCatalogProductIds(sourceCatalog);
@@ -1224,14 +1395,81 @@ export function CatalogPage() {
     void loadCatalog();
   }, [loadCatalog]);
 
+  const loadCatalogFulfillmentState = useCallback(async (refreshFromServer = false) => {
+    try {
+      const cachedPassport = await readCachedCustomerPassport();
+      const storedSelection = await readFulfillmentSelection().catch(() => ({
+        addressId: null,
+        mode: 'delivery' as FulfillmentMode,
+        pickupCity: null,
+        pickupStoreId: null,
+      }));
+      const [cachedStores, cachedOrderConfig] = await Promise.all([
+        readCachedTenantStores(),
+        readCachedPublicOrderConfig(),
+      ]);
+      const cachedAddresses = cachedPassport?.token
+        ? await readCachedCustomerAddresses(cachedPassport.token)
+        : cachedPassport?.addresses || [];
+      const nextStores = cachedStores || [];
+      const nextOrderConfig = cachedOrderConfig || null;
+      const nextSelection = resolveCatalogFulfillmentSelection(storedSelection, cachedAddresses, nextStores);
+
+      setCatalogPassport(cachedPassport);
+      setCatalogStores(nextStores);
+      setCatalogOrderConfig(nextOrderConfig);
+      setCatalogAddresses(cachedAddresses);
+      setFulfillmentSelection(nextSelection);
+
+      if (!refreshFromServer) return;
+
+      const token = String(cachedPassport?.token || '').trim();
+      const [freshStores, freshOrderConfig, freshAddresses] = await Promise.all([
+        fetchTenantStores().catch(() => nextStores),
+        fetchPublicOrderConfig().catch(() => nextOrderConfig),
+        token ? fetchCustomerAddresses(token).catch(() => cachedAddresses) : Promise.resolve(cachedAddresses),
+      ]);
+      if (!isSameCachedValue(freshStores, nextStores)) setCatalogStores(freshStores);
+      if (!isSameCachedValue(freshOrderConfig, nextOrderConfig)) setCatalogOrderConfig(freshOrderConfig);
+      if (token) {
+        setCatalogPassport({
+          ...(cachedPassport as CustomerPassport),
+          addresses: freshAddresses,
+          updatedAt: new Date().toISOString(),
+        });
+      }
+      if (!isSameCachedValue(freshAddresses, cachedAddresses)) {
+        setCatalogAddresses(freshAddresses);
+        setFulfillmentSelection(resolveCatalogFulfillmentSelection(storedSelection, freshAddresses, freshStores));
+      } else if (!isSameCachedValue(freshStores, nextStores)) {
+        setFulfillmentSelection(resolveCatalogFulfillmentSelection(storedSelection, cachedAddresses, freshStores));
+      }
+    } catch {
+      return;
+    }
+  }, []);
+
   useEffect(() => {
     void syncCatalogAvailability(catalog);
   }, [catalog, syncCatalogAvailability]);
+
+  useEffect(() => {
+    void loadCatalogFulfillmentState(true).finally(() => {
+      catalogFulfillmentLoadedRef.current = true;
+    });
+  }, [loadCatalogFulfillmentState]);
 
   useFocusEffect(
     useCallback(() => {
       void syncCatalogAvailability(catalog, true);
     }, [catalog, syncCatalogAvailability]),
+  );
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!catalogFulfillmentLoadedRef.current) return;
+      void loadCatalogFulfillmentState(false).catch(() => null);
+    }, [loadCatalogFulfillmentState]),
   );
 
   useFocusEffect(
@@ -1253,6 +1491,38 @@ export function CatalogPage() {
       };
     }, []),
   );
+
+  useEffect(() => {
+    const token = String(catalogPassport?.token || '').trim();
+    if (!token || !isCatalogDeliveryMode || !selectedCatalogAddress) {
+      deliveryQuoteRequestKeyRef.current = null;
+      return undefined;
+    }
+    const addressCacheKey = buildCustomerAddressCacheKey(selectedCatalogAddress);
+    if (isFreshDeliveryQuoteForAddress(selectedCatalogAddress)) {
+      if (deliveryQuoteRequestKeyRef.current === addressCacheKey) deliveryQuoteRequestKeyRef.current = null;
+      return undefined;
+    }
+    if (deliveryQuoteRequestKeyRef.current === addressCacheKey) return undefined;
+    deliveryQuoteRequestKeyRef.current = addressCacheKey;
+    let cancelled = false;
+    void ensureCustomerAddressDeliveryQuote(token, selectedCatalogAddress)
+      .then((quotedAddress) => {
+        if (cancelled || !quotedAddress) return;
+        setCatalogAddresses((current) => current.map((address) => (
+          toPositiveId(address.id) === toPositiveId(quotedAddress.id) ? quotedAddress : address
+        )));
+      })
+      .catch(() => null)
+      .finally(() => {
+        if (deliveryQuoteRequestKeyRef.current === addressCacheKey) {
+          deliveryQuoteRequestKeyRef.current = null;
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [catalogPassport?.token, isCatalogDeliveryMode, selectedCatalogAddress]);
 
   useEffect(() => () => {
     if (scrollIdleTimer.current) clearTimeout(scrollIdleTimer.current);
@@ -1312,12 +1582,27 @@ export function CatalogPage() {
     setActiveCategoryId(categoryId);
     const index = categoryIndexById.get(categoryId);
     if (index != null) {
-      listRef.current?.scrollToIndex({ animated: true, index, viewOffset: 8 });
+      listRef.current?.scrollToIndex({ animated: true, index, viewOffset: CATALOG_CATEGORIES_HEIGHT });
       programmaticScrollTimer.current = setTimeout(() => {
         programmaticCategoryId.current = null;
       }, 1200);
     }
   }, [categoryIndexById]);
+
+  const changeCatalogMode = useCallback(async (mode: CatalogDeliveryMode) => {
+    const nextSelection = resolveCatalogFulfillmentSelection({
+      ...fulfillmentSelection,
+      mode,
+    }, catalogAddresses, catalogStores);
+    setFulfillmentSelection(nextSelection);
+    const savedSelection = await saveFulfillmentSelection(nextSelection).catch(() => nextSelection);
+    if (savedSelection !== nextSelection) setFulfillmentSelection(savedSelection);
+  }, [catalogAddresses, catalogStores, fulfillmentSelection]);
+
+  const openCatalogAddresses = useCallback(async () => {
+    await saveFulfillmentSelection(fulfillmentSelection).catch(() => fulfillmentSelection);
+    navigation.navigate(routes.addresses);
+  }, [fulfillmentSelection, navigation]);
 
   useEffect(() => {
     const selectedCategoryId = Number(route.params?.selectedCategoryId || 0);
@@ -1363,9 +1648,10 @@ export function CatalogPage() {
   }).current;
 
   const handleCatalogScroll = useCallback((event: { nativeEvent: { contentOffset: { y: number } } }) => {
+    const offsetY = Math.max(0, Number(event.nativeEvent.contentOffset.y || 0));
     if (programmaticCategoryId.current != null) return;
 
-    const activationOffset = event.nativeEvent.contentOffset.y + theme.spacing.lg + 1;
+    const activationOffset = offsetY + CATALOG_CATEGORIES_HEIGHT + theme.spacing.lg + 1;
     let nextCategoryId = categoryHeaderLayouts[0]?.categoryId ?? null;
 
     categoryHeaderLayouts.forEach((item) => {
@@ -1469,6 +1755,101 @@ export function CatalogPage() {
   ]);
 
   const renderCatalogItem = useCallback(({ item }: { item: CatalogListItem }) => {
+    if (item.type === 'delivery') {
+      return (
+        <View style={styles.deliverySurface}>
+          <View style={styles.deliverySurfaceInner}>
+            <View style={styles.deliveryModesRow}>
+              <Pressable
+                onPress={() => void changeCatalogMode('delivery')}
+                style={[styles.deliveryModeButton, styles.deliveryModeButtonLeft, isCatalogDeliveryMode && styles.deliveryModeButtonActive]}
+              >
+                <View style={[styles.deliveryModeIcon, isCatalogDeliveryMode && styles.deliveryModeIconActive]}>
+                  <FontAwesome5 name="truck" color={isCatalogDeliveryMode ? theme.colors.primaryText : theme.colors.accent} size={16} />
+                </View>
+                <View style={styles.deliveryModeTextWrap}>
+                  <Text style={[styles.deliveryModeTitle, isCatalogDeliveryMode && styles.deliveryModeTitleActive]}>Доставка</Text>
+                  <Text numberOfLines={1} style={[styles.deliveryModeSubtitle, isCatalogDeliveryMode && styles.deliveryModeSubtitleActive]}>
+                    Доставляем
+                  </Text>
+                  <Text numberOfLines={1} style={[styles.deliveryModeSubtitle, isCatalogDeliveryMode && styles.deliveryModeSubtitleActive]}>
+                    {catalogDeliveryHours || 'Время уточняется'}
+                  </Text>
+                </View>
+              </Pressable>
+              <Pressable
+                onPress={() => void changeCatalogMode('pickup')}
+                style={[styles.deliveryModeButton, !isCatalogDeliveryMode && styles.deliveryModeButtonActive]}
+              >
+                <View style={[styles.deliveryModeIcon, !isCatalogDeliveryMode && styles.deliveryModeIconActive]}>
+                  <Ionicons name="storefront" color={!isCatalogDeliveryMode ? theme.colors.primaryText : theme.colors.accent} size={18} />
+                </View>
+                <View style={styles.deliveryModeTextWrap}>
+                  <Text style={[styles.deliveryModeTitle, !isCatalogDeliveryMode && styles.deliveryModeTitleActive]}>Самовывоз</Text>
+                  <Text numberOfLines={1} style={[styles.deliveryModeSubtitle, !isCatalogDeliveryMode && styles.deliveryModeSubtitleActive]}>
+                    Время работы
+                  </Text>
+                  <Text numberOfLines={1} style={[styles.deliveryModeSubtitle, !isCatalogDeliveryMode && styles.deliveryModeSubtitleActive]}>
+                    {catalogPickupHours || 'Время уточняется'}
+                  </Text>
+                </View>
+              </Pressable>
+            </View>
+            <Pressable onPress={() => void openCatalogAddresses()} style={styles.deliveryAddressRow}>
+              <Ionicons name={isCatalogDeliveryMode ? 'location' : 'storefront'} color={theme.colors.accent} size={20} />
+              <Text numberOfLines={1} style={styles.deliveryAddressText}>{catalogAddressLabel}</Text>
+              <Ionicons name="chevron-forward" color={theme.colors.text} size={20} />
+            </Pressable>
+          </View>
+        </View>
+      );
+    }
+
+    if (item.type === 'categories') {
+      return (
+        <View style={styles.chipsWrap}>
+          <Pressable
+            style={styles.categoriesButton}
+            onPress={() => {
+              navigation.navigate(routes.categories, {
+                activeCategoryId,
+                categories: visibleCategories,
+              });
+            }}
+          >
+            <Ionicons name="list-outline" color={theme.colors.text} size={20} />
+          </Pressable>
+          <ScrollView
+            ref={chipsScrollRef}
+            directionalLockEnabled
+            horizontal
+            keyboardShouldPersistTaps="handled"
+            nestedScrollEnabled
+            showsHorizontalScrollIndicator={false}
+            style={styles.chipsScroller}
+            contentContainerStyle={styles.chipsScrollerContent}
+          >
+            {visibleCategories.map((category) => {
+              const categoryId = Number(category.id);
+              const isActive = categoryId === activeCategoryId;
+              return (
+                <Pressable
+                  key={category.id}
+                  style={[styles.chip, isActive && styles.chipActive]}
+                  onPress={() => scrollToCategoryId(categoryId)}
+                  onLayout={(event) => {
+                    chipOffsets.current.set(categoryId, event.nativeEvent.layout.x);
+                  }}
+                >
+                  <Text style={[styles.chipText, isActive && styles.chipTextActive]}>{category.title}</Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        </View>
+      );
+    }
+
     if (item.type === 'header') {
       return (
         <View style={styles.sectionHeader}>
@@ -1486,7 +1867,19 @@ export function CatalogPage() {
         {item.cards.map(renderCatalogCard)}
       </View>
     );
-  }, [renderCatalogCard]);
+  }, [
+    activeCategoryId,
+    catalogAddressLabel,
+    catalogDeliveryHours,
+    catalogPickupHours,
+    changeCatalogMode,
+    isCatalogDeliveryMode,
+    navigation,
+    openCatalogAddresses,
+    renderCatalogCard,
+    scrollToCategoryId,
+    visibleCategories,
+  ]);
 
   const getCatalogItemLayout = useCallback((_data: ArrayLike<CatalogListItem> | null | undefined, index: number) => {
     const layout = catalogItemLayouts[index];
@@ -1495,48 +1888,6 @@ export function CatalogPage() {
 
   return (
     <Screen edges={['top']}>
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>Каталог</Text>
-        <Text style={styles.headerCaption}>Товары и комбо из текущей базы</Text>
-      </View>
-
-      <View style={styles.chipsWrap}>
-        <Pressable
-          style={styles.categoriesButton}
-          onPress={() => {
-            navigation.navigate(routes.categories, {
-              activeCategoryId,
-              categories: visibleCategories,
-            });
-          }}
-        >
-          <Ionicons name="list-outline" color={theme.colors.text} size={20} />
-        </Pressable>
-        <ScrollView
-          ref={chipsScrollRef}
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          style={styles.chipsScroller}
-        >
-          {visibleCategories.map((category) => {
-            const categoryId = Number(category.id);
-            const isActive = categoryId === activeCategoryId;
-            return (
-              <Pressable
-                key={category.id}
-                style={[styles.chip, isActive && styles.chipActive]}
-                onPress={() => scrollToCategoryId(categoryId)}
-                onLayout={(event) => {
-                  chipOffsets.current.set(categoryId, event.nativeEvent.layout.x);
-                }}
-              >
-                <Text style={[styles.chipText, isActive && styles.chipTextActive]}>{category.title}</Text>
-              </Pressable>
-            );
-          })}
-        </ScrollView>
-      </View>
-
       {isLoading ? (
         <View style={styles.centerState}>
           <ActivityIndicator color={theme.colors.primary} />
@@ -1559,7 +1910,9 @@ export function CatalogPage() {
           contentContainerStyle={styles.contentInner}
           getItemLayout={getCatalogItemLayout}
           keyExtractor={(item) => item.itemKey}
+          keyboardShouldPersistTaps="handled"
           maxToRenderPerBatch={8}
+          nestedScrollEnabled
           onMomentumScrollBegin={markCatalogScrolling}
           onMomentumScrollEnd={scheduleCatalogScrollIdle}
           onScroll={handleCatalogScroll}
@@ -1575,7 +1928,8 @@ export function CatalogPage() {
           onViewableItemsChanged={handleViewableItemsChanged}
           renderItem={renderCatalogItem}
           removeClippedSubviews
-          scrollEventThrottle={80}
+          scrollEventThrottle={16}
+          stickyHeaderIndices={[1]}
           updateCellsBatchingPeriod={50}
           viewabilityConfig={viewabilityConfig}
           windowSize={7}
@@ -1675,13 +2029,91 @@ const styles = StyleSheet.create({
   chipsScroller: {
     flex: 1,
   },
+  chipsScrollerContent: {
+    alignItems: 'center',
+    paddingRight: theme.spacing.lg,
+  },
   chipsWrap: {
     alignItems: 'center',
-    borderBottomColor: theme.colors.border,
-    borderBottomWidth: 1,
+    backgroundColor: theme.colors.surface,
+    borderBottomLeftRadius: 20,
+    borderBottomRightRadius: 20,
     flexDirection: 'row',
+    height: CATALOG_CATEGORIES_HEIGHT,
+    marginHorizontal: -theme.spacing.lg,
+    overflow: 'hidden',
     paddingHorizontal: theme.spacing.lg,
+    paddingBottom: theme.spacing.md,
+    paddingTop: theme.spacing.sm,
+    zIndex: 3,
+  },
+  deliveryAddressRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    alignSelf: 'stretch',
+    marginTop: theme.spacing.sm,
+  },
+  deliveryAddressText: {
+    color: theme.colors.text,
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '700',
+    marginHorizontal: theme.spacing.sm,
+  },
+  deliveryModeButton: {
+    alignItems: 'center',
+    backgroundColor: theme.colors.surface,
+    borderColor: theme.colors.border,
+    borderRadius: 18,
+    borderWidth: 1,
+    flex: 1,
+    flexDirection: 'row',
+    minHeight: 74,
+    paddingHorizontal: theme.spacing.sm,
     paddingVertical: theme.spacing.sm,
+  },
+  deliveryModeButtonActive: {
+    backgroundColor: theme.colors.card,
+    borderColor: theme.colors.accent,
+  },
+  deliveryModeButtonLeft: {
+    marginRight: theme.spacing.sm,
+  },
+  deliveryModeIcon: {
+    alignItems: 'center',
+    backgroundColor: theme.colors.mutedBackground,
+    borderRadius: 12,
+    height: 34,
+    justifyContent: 'center',
+    width: 34,
+  },
+  deliveryModeIconActive: {
+    backgroundColor: theme.colors.accent,
+  },
+  deliveryModeSubtitle: {
+    color: theme.colors.muted,
+    fontSize: 10,
+    fontWeight: '600',
+    lineHeight: 12,
+  },
+  deliveryModeSubtitleActive: {
+    color: theme.colors.text,
+  },
+  deliveryModeTextWrap: {
+    flex: 1,
+    marginLeft: theme.spacing.sm,
+  },
+  deliveryModeTitle: {
+    color: theme.colors.text,
+    fontSize: 14,
+    fontWeight: '800',
+    lineHeight: 18,
+  },
+  deliveryModeTitleActive: {
+    color: theme.colors.text,
+  },
+  deliveryModesRow: {
+    flexDirection: 'row',
   },
   comboCell: {
     backgroundColor: theme.colors.card,
@@ -1713,8 +2145,21 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   contentInner: {
-    padding: theme.spacing.lg,
     paddingBottom: theme.spacing.xl,
+    paddingHorizontal: theme.spacing.lg,
+    paddingTop: 0,
+  },
+  deliverySurface: {
+    backgroundColor: theme.colors.surface,
+    height: CATALOG_DELIVERY_HEADER_HEIGHT,
+    marginHorizontal: -theme.spacing.lg,
+    paddingBottom: theme.spacing.sm,
+    paddingHorizontal: theme.spacing.lg,
+    paddingTop: theme.spacing.md,
+  },
+  deliverySurfaceInner: {
+    flex: 1,
+    justifyContent: 'center',
   },
   debugText: {
     color: theme.colors.muted,

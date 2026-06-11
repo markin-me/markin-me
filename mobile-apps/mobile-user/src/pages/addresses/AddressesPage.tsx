@@ -20,6 +20,7 @@ import type { RootStackParamList } from '../../app/navigation/routes';
 import { routes } from '../../app/navigation/routes';
 import {
   deleteCustomerAddress,
+  ensureCustomerAddressDeliveryQuote,
   fetchCustomerAddresses,
   fetchTenantStores,
   isSameCachedValue,
@@ -216,7 +217,14 @@ export function AddressesPage() {
           return;
         }
         await setDefaultCustomerAddress(passport.token, selection.addressId);
-        const nextAddresses = await fetchCustomerAddresses(passport.token);
+        let nextAddresses = await fetchCustomerAddresses(passport.token);
+        const selectedAddress = nextAddresses.find((address) => toPositiveId(address.id) === selection.addressId) || null;
+        const quotedAddress = await ensureCustomerAddressDeliveryQuote(passport.token, selectedAddress).catch(() => null);
+        if (quotedAddress?.id) {
+          nextAddresses = nextAddresses.map((address) => (
+            toPositiveId(address.id) === toPositiveId(quotedAddress.id) ? quotedAddress : address
+          ));
+        }
         setAddresses(nextAddresses);
         const nextPassport = { ...passport, addresses: nextAddresses, updatedAt: new Date().toISOString() };
         setPassport(nextPassport);

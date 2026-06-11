@@ -23,6 +23,7 @@ import type { RootStackParamList } from '../../app/navigation/routes';
 import { routes } from '../../app/navigation/routes';
 import {
   createCustomerAddress,
+  ensureCustomerAddressDeliveryQuote,
   fetchCustomerAddresses,
   fetchPublicOrderConfig,
   readCachedCustomerPassport,
@@ -446,7 +447,16 @@ export function AddressFormPage() {
         await createCustomerAddress(passport.token, { ...payload, is_default: 1 });
       }
 
-      const nextAddresses = await fetchCustomerAddresses(passport.token);
+      let nextAddresses = await fetchCustomerAddresses(passport.token);
+      const quoteTarget = editingAddressId
+        ? findAddress(nextAddresses, editingAddressId)
+        : nextAddresses.find(isDefaultAddress) || nextAddresses[nextAddresses.length - 1] || null;
+      const quotedAddress = await ensureCustomerAddressDeliveryQuote(passport.token, quoteTarget).catch(() => null);
+      if (quotedAddress?.id) {
+        nextAddresses = nextAddresses.map((item) => (
+          Number(item.id || 0) === Number(quotedAddress.id || 0) ? quotedAddress : item
+        ));
+      }
       const nextPassport = { ...passport, addresses: nextAddresses, updatedAt: new Date().toISOString() };
       await saveCustomerPassport(nextPassport);
       if (!editingAddressId) {

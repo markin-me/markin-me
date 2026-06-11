@@ -40,6 +40,35 @@ export type CustomerProfile = {
   total_orders?: number | null;
 };
 
+export type DeliveryPriceTier = {
+  delivery_cost: number;
+  min_order_amount: number;
+  sort_order?: number | null;
+};
+
+export type DeliveryQuoteCache = {
+  address_cache_key: string;
+  delivery_cost: number | null;
+  delivery_revision?: string | null;
+  delivery_store_id: number | null;
+  delivery_zone_id: number | null;
+  delivery_zone_name: string | null;
+  eta_minutes: number | null;
+  free_delivery_from: number | null;
+  has_settings?: boolean | null;
+  min_order_amount: number | null;
+  price_tiers: DeliveryPriceTier[];
+  resolved_at: string;
+  source?: string | null;
+};
+
+export type DeliveryQuoteSummary = {
+  delivery_cost: number;
+  free_delivery_from: number | null;
+  matched_tier: DeliveryPriceTier | null;
+  min_order_amount: number;
+};
+
 export type CustomerAddress = Record<string, unknown> & {
   id?: number;
   city?: string | null;
@@ -59,6 +88,7 @@ export type CustomerAddress = Record<string, unknown> & {
   lng?: number | string | null;
   delivery_zone_id?: number | string | null;
   delivery_store_id?: number | string | null;
+  delivery_quote?: DeliveryQuoteCache | null;
 };
 
 export type CustomerAddressPayload = {
@@ -100,8 +130,15 @@ export type AddressSuggestion = Record<string, unknown> & {
 export type ResolvedAddress = CustomerAddressPayload & {
   context_locality?: string | null;
   delivery_cost?: number | null;
+  delivery_revision?: string | null;
+  delivery_store_id?: number | string | null;
+  delivery_zone_id?: number | string | null;
   delivery_zone_name?: string | null;
+  eta_minutes?: number | null;
   free_delivery_from?: number | null;
+  price_tiers?: DeliveryPriceTier[];
+  quote_source?: string | null;
+  source?: string | null;
   min_order_amount?: number | null;
 };
 
@@ -346,6 +383,7 @@ const passportLoadRequests = new Map<number, Promise<CatalogProductPassport | nu
 const fullPassportLoadRequests = new Map<number, Promise<FullProductPassport | null>>();
 const fullPassportBatchLoadRequests = new Map<string, Promise<Record<string, FullProductPassport>>>();
 const comboDetailsLoadRequests = new Map<number, Promise<CatalogComboDetails>>();
+const DELIVERY_QUOTE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
 function buildUrl(path: string) {
   const normalizedPath = path.startsWith('/') ? path : `/${path}`;
@@ -413,6 +451,203 @@ function hashText(value: string) {
     hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
   }
   return hash.toString(36);
+}
+
+function toCacheText(value: unknown) {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function normalizeDeliveryMoneyValue(value: unknown) {
+  if (value == null || value === '') return null;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return null;
+  return Math.max(0, Number(numeric.toFixed(2)));
+}
+
+function normalizeDeliveryNumberId(value: unknown) {
+  const id = Number(value);
+  return Number.isFinite(id) && id > 0 ? id : null;
+}
+
+function normalizeDeliveryEtaValue(value: unknown) {
+  if (value == null || value === '') return null;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return null;
+  return Math.max(0, Math.round(numeric));
+}
+
+function normalizeDeliveryCoordinateValue(value: unknown) {
+  if (value == null || value === '') return null;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? Number(numeric.toFixed(6)) : null;
+}
+
+function normalizeDeliveryPriceTier(value: unknown, index = 0): DeliveryPriceTier | null {
+  const source = value && typeof value === 'object' ? value as Partial<DeliveryPriceTier> : null;
+  if (!source) return null;
+  const minOrderAmount = normalizeDeliveryMoneyValue(source.min_order_amount);
+  const deliveryCost = normalizeDeliveryMoneyValue(source.delivery_cost);
+  if (minOrderAmount == null || deliveryCost == null) return null;
+  return {
+    delivery_cost: deliveryCost,
+    min_order_amount: minOrderAmount,
+    sort_order: source.sort_order != null && Number.isFinite(Number(source.sort_order))
+      ? Number(source.sort_order)
+      : index,
+  };
+}
+
+function sortDeliveryPriceTiers(tiers: DeliveryPriceTier[]) {
+  return [...tiers].sort((left, right) => {
+    if (left.min_order_amount !== right.min_order_amount) return left.min_order_amount - right.min_order_amount;
+    if (Number(left.sort_order || 0) !== Number(right.sort_order || 0)) {
+      return Number(left.sort_order || 0) - Number(right.sort_order || 0);
+    }
+    return left.delivery_cost - right.delivery_cost;
+  });
+}
+
+function normalizeDeliveryPriceTiers(value: unknown) {
+  const tiers = Array.isArray(value)
+    ? value
+      .map((tier, index) => normalizeDeliveryPriceTier(tier, index))
+      .filter((tier): tier is DeliveryPriceTier => tier !== null)
+    : [];
+  return sortDeliveryPriceTiers(tiers);
+}
+
+function buildLegacyDeliveryPriceTiers(source: Partial<DeliveryQuoteCache> | Record<string, unknown>) {
+  const deliveryCost = normalizeDeliveryMoneyValue(source.delivery_cost) ?? 0;
+  const minOrderAmount = normalizeDeliveryMoneyValue(source.min_order_amount) ?? 0;
+  const freeDeliveryFrom = normalizeDeliveryMoneyValue(source.free_delivery_from);
+  const tiers: DeliveryPriceTier[] = [{
+    delivery_cost: deliveryCost,
+    min_order_amount: minOrderAmount,
+    sort_order: 0,
+  }];
+  if (freeDeliveryFrom != null) {
+    tiers.push({
+      delivery_cost: 0,
+      min_order_amount: freeDeliveryFrom,
+      sort_order: 1,
+    });
+  }
+  return sortDeliveryPriceTiers(tiers);
+}
+
+export function buildCustomerAddressCacheKey(address: Partial<CustomerAddress> | Partial<CustomerAddressPayload> | null | undefined) {
+  const source = address || {};
+  const sourceRecord = source as Record<string, unknown>;
+  return hashText(stableStringify({
+    address_context_locality: toCacheText(source.address_context_locality || sourceRecord.context_locality).toLowerCase(),
+    address_normalized_display: toCacheText(source.address_normalized_display).toLowerCase(),
+    address_ref: toCacheText(source.address_ref),
+    city: toCacheText(source.city).toLowerCase(),
+    delivery_store_id: normalizeDeliveryNumberId(source.delivery_store_id),
+    delivery_zone_id: normalizeDeliveryNumberId(source.delivery_zone_id),
+    house: toCacheText(source.house).toLowerCase(),
+    id: normalizeDeliveryNumberId((source as Partial<CustomerAddress>).id),
+    lat: normalizeDeliveryCoordinateValue(source.lat),
+    lng: normalizeDeliveryCoordinateValue(source.lng),
+    resolved_city_source_key: toCacheText(source.resolved_city_source_key),
+    selected_object_type: toCacheText(source.selected_object_type),
+    street: toCacheText(source.street).toLowerCase(),
+  }));
+}
+
+function normalizeDeliveryQuoteCache(value: unknown, addressCacheKey: string): DeliveryQuoteCache | null {
+  const source = value && typeof value === 'object' ? value as Partial<DeliveryQuoteCache> & Record<string, unknown> : null;
+  if (!source) return null;
+  const rawResolvedAt = toCacheText(source.resolved_at);
+  const resolvedAtTime = rawResolvedAt ? Date.parse(rawResolvedAt) : NaN;
+  const resolvedAt = Number.isFinite(resolvedAtTime) ? new Date(resolvedAtTime).toISOString() : new Date().toISOString();
+  const deliveryCost = normalizeDeliveryMoneyValue(source.delivery_cost);
+  const minOrderAmount = normalizeDeliveryMoneyValue(source.min_order_amount);
+  const freeDeliveryFrom = normalizeDeliveryMoneyValue(source.free_delivery_from);
+  let priceTiers = normalizeDeliveryPriceTiers(source.price_tiers);
+  if (!priceTiers.length) priceTiers = buildLegacyDeliveryPriceTiers({
+    delivery_cost: deliveryCost,
+    free_delivery_from: freeDeliveryFrom,
+    min_order_amount: minOrderAmount,
+  });
+  return {
+    address_cache_key: toCacheText(source.address_cache_key) || addressCacheKey,
+    delivery_cost: deliveryCost,
+    delivery_revision: toCacheText(source.delivery_revision) || null,
+    delivery_store_id: normalizeDeliveryNumberId(source.delivery_store_id),
+    delivery_zone_id: normalizeDeliveryNumberId(source.delivery_zone_id),
+    delivery_zone_name: toCacheText(source.delivery_zone_name) || null,
+    eta_minutes: normalizeDeliveryEtaValue(source.eta_minutes),
+    free_delivery_from: freeDeliveryFrom,
+    has_settings: source.has_settings == null ? null : Boolean(source.has_settings),
+    min_order_amount: minOrderAmount,
+    price_tiers: priceTiers,
+    resolved_at: resolvedAt,
+    source: toCacheText(source.source) || null,
+  };
+}
+
+export function summarizeDeliveryQuoteForSubtotal(
+  quote: Partial<DeliveryQuoteCache> | null | undefined,
+  subtotal: number,
+): DeliveryQuoteSummary | null {
+  if (!quote) return null;
+  const amount = Math.max(0, Number(subtotal || 0) || 0);
+  const tiers = normalizeDeliveryPriceTiers(quote.price_tiers).length
+    ? normalizeDeliveryPriceTiers(quote.price_tiers)
+    : buildLegacyDeliveryPriceTiers(quote as Partial<DeliveryQuoteCache>);
+  if (!tiers.length) return null;
+  const firstTier = tiers[0];
+  let matchedTier = firstTier;
+  tiers.forEach((tier) => {
+    if (amount >= Number(tier.min_order_amount || 0)) matchedTier = tier;
+  });
+  const freeTier = tiers.find((tier) => Number(tier.delivery_cost || 0) <= 0) || null;
+  return {
+    delivery_cost: Number(matchedTier?.delivery_cost || 0),
+    free_delivery_from: freeTier ? Number(freeTier.min_order_amount || 0) : null,
+    matched_tier: matchedTier || null,
+    min_order_amount: Number(firstTier?.min_order_amount || 0),
+  };
+}
+
+export function isFreshDeliveryQuoteForAddress(
+  address: Partial<CustomerAddress> | null | undefined,
+  ttlMs = DELIVERY_QUOTE_CACHE_TTL_MS,
+) {
+  if (!address?.delivery_quote) return false;
+  const quote = normalizeDeliveryQuoteCache(address.delivery_quote, buildCustomerAddressCacheKey(address));
+  if (!quote) return false;
+  if (quote.address_cache_key !== buildCustomerAddressCacheKey(address)) return false;
+  const resolvedAt = Date.parse(quote.resolved_at);
+  if (!Number.isFinite(resolvedAt)) return false;
+  return Date.now() - resolvedAt < ttlMs;
+}
+
+function mergeCustomerAddressesWithDeliveryQuotes(nextAddresses: CustomerAddress[], previousAddresses: CustomerAddress[]) {
+  const previousById = new Map<number, CustomerAddress>();
+  const previousByKey = new Map<string, CustomerAddress>();
+  previousAddresses.forEach((address) => {
+    const id = normalizeDeliveryNumberId(address.id);
+    const key = buildCustomerAddressCacheKey(address);
+    if (id) previousById.set(id, address);
+    if (key) previousByKey.set(key, address);
+  });
+
+  return nextAddresses.map((address) => {
+    const addressCacheKey = buildCustomerAddressCacheKey(address);
+    const ownQuote = normalizeDeliveryQuoteCache(address.delivery_quote, addressCacheKey);
+    if (ownQuote?.address_cache_key === addressCacheKey) {
+      return { ...address, delivery_quote: ownQuote };
+    }
+
+    const previous = previousById.get(normalizeDeliveryNumberId(address.id) || 0) || previousByKey.get(addressCacheKey);
+    const previousQuote = normalizeDeliveryQuoteCache(previous?.delivery_quote, addressCacheKey);
+    if (previousQuote?.address_cache_key === addressCacheKey) {
+      return { ...address, delivery_quote: previousQuote };
+    }
+    return { ...address, delivery_quote: null };
+  });
 }
 
 function mapRecordToCategoryMap<T>(record: unknown, ids: number[]) {
@@ -521,7 +756,7 @@ function normalizeCustomerPassport(value: unknown): CustomerPassport | null {
   const token = String(source?.token || '').trim();
   if (!source || !token) return null;
   return {
-    addresses: Array.isArray(source.addresses) ? source.addresses : [],
+    addresses: normalizeCustomerAddresses(source.addresses) || [],
     bonusConfig: source.bonusConfig && typeof source.bonusConfig === 'object' ? source.bonusConfig : null,
     bonusFavoriteCategories: source.bonusFavoriteCategories && typeof source.bonusFavoriteCategories === 'object' ? source.bonusFavoriteCategories : null,
     bonusReferrals: source.bonusReferrals && typeof source.bonusReferrals === 'object' ? source.bonusReferrals : null,
@@ -544,7 +779,16 @@ function normalizeTenantStores(value: unknown): TenantStore[] | null {
 }
 
 function normalizeCustomerAddresses(value: unknown): CustomerAddress[] | null {
-  return Array.isArray(value) ? value : null;
+  if (!Array.isArray(value)) return null;
+  return value
+    .filter((item): item is CustomerAddress => Boolean(item && typeof item === 'object'))
+    .map((address) => {
+      const addressCacheKey = buildCustomerAddressCacheKey(address);
+      return {
+        ...address,
+        delivery_quote: normalizeDeliveryQuoteCache(address.delivery_quote, addressCacheKey),
+      };
+    });
 }
 
 function normalizeBonusReferrals(value: unknown): BonusReferrals | null {
@@ -768,16 +1012,19 @@ export async function saveCustomerAddresses(token: string, addresses: CustomerAd
   const normalized = normalizeCustomerAddresses(addresses) || [];
   if (!safeToken) return normalized;
   const key = getCustomerScopedStorageKey('customer_addresses', safeToken);
-  memoryCustomerAddresses.set(key, normalized);
-  await saveCachedJson(key, normalized);
+  const previous = memoryCustomerAddresses.get(key)
+    || (memoryCustomerPassport?.token === safeToken ? normalizeCustomerAddresses(memoryCustomerPassport.addresses) || [] : []);
+  const merged = mergeCustomerAddressesWithDeliveryQuotes(normalized, previous);
+  memoryCustomerAddresses.set(key, merged);
+  await saveCachedJson(key, merged);
   if (memoryCustomerPassport?.token === safeToken) {
     await saveCustomerPassport({
       ...memoryCustomerPassport,
-      addresses: normalized,
+      addresses: merged,
       updatedAt: new Date().toISOString(),
     });
   }
-  return normalized;
+  return merged;
 }
 
 export async function readCachedCustomerBenefits(token: string) {
@@ -1038,6 +1285,75 @@ export async function resolvePublicAddress(payload: CustomerAddressPayload & { s
     method: 'POST',
   });
   return response.data && typeof response.data === 'object' ? response.data : null;
+}
+
+function buildDeliveryQuoteAddressPayload(address: Partial<CustomerAddress>): CustomerAddressPayload {
+  return {
+    address_context_locality: address.address_context_locality || null,
+    address_normalized_display: address.address_normalized_display || null,
+    address_ref: address.address_ref || null,
+    apartment: address.apartment || null,
+    city: address.city || null,
+    comment: address.comment || null,
+    delivery_store_id: address.delivery_store_id || null,
+    delivery_zone_id: address.delivery_zone_id || null,
+    entrance: address.entrance || null,
+    floor: address.floor || null,
+    house: address.house || null,
+    is_default: address.is_default || null,
+    lat: address.lat || null,
+    lng: address.lng || null,
+    resolved_city_source_key: address.resolved_city_source_key || null,
+    selected_object_type: address.selected_object_type || null,
+    street: address.street || null,
+  };
+}
+
+export async function fetchDeliveryQuoteForAddress(
+  address: Partial<CustomerAddress>,
+  subtotal = 0,
+  token?: string | null,
+) {
+  const safeToken = String(token || '').trim();
+  const addressId = normalizeDeliveryNumberId(address.id);
+  const body = addressId && safeToken
+    ? { delivery_address_id: addressId, subtotal: Math.max(0, Number(subtotal || 0) || 0) }
+    : { address: buildDeliveryQuoteAddressPayload(address), subtotal: Math.max(0, Number(subtotal || 0) || 0) };
+  const response = await requestApi<DeliveryQuoteCache>('/api/public/delivery-quote', {
+    body: JSON.stringify(body),
+    headers: safeToken ? { 'x-customer-token': safeToken } : undefined,
+    method: 'POST',
+  });
+  return normalizeDeliveryQuoteCache(response.data, buildCustomerAddressCacheKey(address));
+}
+
+export async function ensureCustomerAddressDeliveryQuote(
+  token: string,
+  address: CustomerAddress | null | undefined,
+  subtotal = 0,
+) {
+  const safeToken = String(token || '').trim();
+  if (!safeToken || !address) return address || null;
+  if (isFreshDeliveryQuoteForAddress(address)) return address;
+  const quote = await fetchDeliveryQuoteForAddress(address, subtotal, safeToken);
+  if (!quote) return address;
+  const nextAddress: CustomerAddress = {
+    ...address,
+    delivery_quote: quote,
+    delivery_store_id: quote.delivery_store_id ?? address.delivery_store_id ?? null,
+    delivery_zone_id: quote.delivery_zone_id ?? address.delivery_zone_id ?? null,
+  };
+  const cachedAddresses = await readCachedCustomerAddresses(safeToken);
+  const addressId = normalizeDeliveryNumberId(address.id);
+  const addressCacheKey = buildCustomerAddressCacheKey(address);
+  const nextAddresses = cachedAddresses.map((item) => {
+    const itemId = normalizeDeliveryNumberId(item.id);
+    const sameById = addressId && itemId === addressId;
+    const sameByKey = buildCustomerAddressCacheKey(item) === addressCacheKey;
+    return sameById || sameByKey ? nextAddress : item;
+  });
+  await saveCustomerAddresses(safeToken, nextAddresses.length ? nextAddresses : [nextAddress]);
+  return nextAddress;
 }
 
 export async function createCustomerAddress(token: string, payload: CustomerAddressPayload) {
