@@ -7,6 +7,7 @@ import {
   Animated,
   Image,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   View,
@@ -1016,6 +1017,7 @@ export function CartPage() {
   const [isApplyingPromo, setApplyingPromo] = useState(false);
   const [promoError, setPromoError] = useState('');
   const [isLoading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [clearConfirm, setClearConfirm] = useState(false);
   const [stockBlockedLineIds, setStockBlockedLineIds] = useState<Set<string>>(() => new Set());
   const benefitsPreviewSeqRef = useRef(0);
@@ -1386,7 +1388,7 @@ export function CartPage() {
     setLoading(false);
     void warmFullProductPassports(collectCartStockProductIds(cachedState.syncedLines)).catch(() => null);
 
-    void (async () => {
+    await (async () => {
       const { passport, cachedAddresses, cachedStores, cachedOrderConfig, syncedLines } = cachedState;
       const levelId = getCartBonusCurrentLevelId(passport?.bonusConfig || null);
       const [freshStores, freshOrderConfig, freshAddresses, freshBonusConfig] = await Promise.all([
@@ -1424,6 +1426,16 @@ export function CartPage() {
       }).catch(() => null);
     })().catch(() => null);
   }, [refreshMany, stockLevels, syncCartFromCache]);
+
+  const refreshCart = useCallback(async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      await loadCart().catch(() => null);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [loadCart, refreshing]);
 
   useEffect(() => {
     void loadCart();
@@ -1949,6 +1961,7 @@ export function CartPage() {
                 [{ nativeEvent: { contentOffset: { y: headerScrollY } } }],
                 { useNativeDriver: false },
               )}
+              refreshControl={<RefreshControl refreshing={refreshing} tintColor={theme.colors.accent} onRefresh={refreshCart} />}
               scrollEventThrottle={16}
             >
             <View style={styles.itemsSection}>

@@ -11,6 +11,7 @@ import {
   Easing,
   FlatList,
   Image,
+  RefreshControl,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -1238,6 +1239,7 @@ export function CatalogPage() {
   const [visibleComboKeys, setVisibleComboKeys] = useState<Set<string>>(() => new Set());
   const [isCatalogScrolling, setCatalogScrolling] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [errorText, setErrorText] = useState('');
   const [passportReadyVersion, setPassportReadyVersion] = useState(0);
   const [catalogPassport, setCatalogPassport] = useState<CustomerPassport | null>(null);
@@ -1338,9 +1340,12 @@ export function CatalogPage() {
     }
   }, [refreshMany]);
 
-  const loadCatalog = useCallback(async () => {
-    setErrorText('');
-    setIsLoading(true);
+  const loadCatalog = useCallback(async (options: { preserveContent?: boolean } = {}) => {
+    const preserveContent = Boolean(options.preserveContent);
+    if (!preserveContent) {
+      setErrorText('');
+      setIsLoading(true);
+    }
 
     const applySnapshot = (snapshot: MobileCatalogSnapshot) => {
       const nextCatalog = getCatalogStateFromSnapshot(snapshot);
@@ -1382,12 +1387,12 @@ export function CatalogPage() {
       void warmCatalogComboDetails(collectCatalogComboIds(freshSnapshot));
       warmSnapshotPassports(freshSnapshot);
     } catch (error) {
-      if (!hasRenderedSnapshot) {
+      if (!hasRenderedSnapshot && !preserveContent) {
         setCatalog(emptyCatalogState);
         setErrorText(error instanceof Error ? error.message : 'Не удалось загрузить каталог');
       }
     } finally {
-      setIsLoading(false);
+      if (!preserveContent) setIsLoading(false);
     }
   }, [mergeStockRows, syncCatalogAvailability, unitConversions]);
 
@@ -1448,6 +1453,26 @@ export function CatalogPage() {
       return;
     }
   }, []);
+
+  const refreshCatalog = useCallback(async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      await Promise.all([
+        loadCatalog({ preserveContent: true }),
+        loadCatalogFulfillmentState(true),
+        readCartLines().then((nextLines) => {
+          setCartLines(nextLines);
+          setProductQuantities(buildProductQuantitiesFromCart(nextLines));
+        }).catch(() => {
+          setCartLines([]);
+          setProductQuantities({});
+        }),
+      ]);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [loadCatalog, loadCatalogFulfillmentState, refreshing]);
 
   useEffect(() => {
     void syncCatalogAvailability(catalog);
@@ -1898,7 +1923,7 @@ export function CatalogPage() {
           <Text style={styles.errorTitle}>Каталог не загрузился</Text>
           <Text style={styles.stateText}>{errorText}</Text>
           <Text style={styles.debugText}>API: {apiConfig.baseUrl}</Text>
-          <Pressable style={styles.retryButton} onPress={loadCatalog}>
+          <Pressable style={styles.retryButton} onPress={() => loadCatalog()}>
             <Text style={styles.retryButtonText}>Повторить</Text>
           </Pressable>
         </View>
@@ -1928,6 +1953,7 @@ export function CatalogPage() {
           onViewableItemsChanged={handleViewableItemsChanged}
           renderItem={renderCatalogItem}
           removeClippedSubviews
+          refreshControl={<RefreshControl refreshing={refreshing} tintColor={theme.colors.accent} onRefresh={refreshCatalog} />}
           scrollEventThrottle={16}
           stickyHeaderIndices={[1]}
           updateCellsBatchingPeriod={50}

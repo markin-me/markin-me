@@ -12,6 +12,7 @@ import { ActivityIndicator,
   Image,
   Keyboard,
   Pressable,
+  RefreshControl,
   ScrollView,
   Share,
   StyleSheet,
@@ -446,6 +447,29 @@ export function ProfilePage() {
     }, []),
   );
 
+  const refreshProfile = useCallback(async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      const cached = await readCachedCustomerPassport();
+      setPassportChecked(true);
+      if (!cached) {
+        setPassport(null);
+        return;
+      }
+      setPassport(cached);
+      const fresh = await refreshCustomerPassport(cached.token, cached.customer);
+      setPassport(fresh);
+    } catch (error) {
+      if (error instanceof Error && error.message === 'UNAUTHORIZED') {
+        await clearCustomerPassport();
+        setPassport(null);
+      }
+    } finally {
+      setRefreshing(false);
+    }
+  }, [refreshing]);
+
   const bonusSummary = useMemo(
     () => getBonusCardSummary(passport?.bonusConfig || null, passport?.bonusFavoriteCategories || null),
     [passport?.bonusConfig, passport?.bonusFavoriteCategories],
@@ -744,7 +768,11 @@ export function ProfilePage() {
 
   return (
     <Screen edges={['top']}>
-      <ScrollView style={styles.profileRoot} contentContainerStyle={styles.profileContent}>
+      <ScrollView
+        style={styles.profileRoot}
+        contentContainerStyle={styles.profileContent}
+        refreshControl={<RefreshControl refreshing={refreshing} tintColor={theme.colors.accent} onRefresh={refreshProfile} />}
+      >
         <View style={styles.profileHeader}>
           <Text style={styles.profileTitle}>Профиль</Text>
           <Pressable onPress={() => navigation.navigate(routes.profileSettings)} style={styles.settingsButton}>
