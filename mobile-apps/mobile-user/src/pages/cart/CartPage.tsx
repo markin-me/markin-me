@@ -1381,12 +1381,13 @@ export function CartPage() {
     syncCartFromCacheRef.current = syncCartFromCache;
   }, [syncCartFromCache]);
 
-  const loadCart = useCallback(async () => {
+  const loadCart = useCallback(async (refreshFromServer = false) => {
     const cachedState = await syncCartFromCache();
     const mutationSeq = cartMutationSeqRef.current;
     cartHydratedRef.current = true;
     setLoading(false);
     void warmFullProductPassports(collectCartStockProductIds(cachedState.syncedLines)).catch(() => null);
+    if (!refreshFromServer) return;
 
     await (async () => {
       const { passport, cachedAddresses, cachedStores, cachedOrderConfig, syncedLines } = cachedState;
@@ -1431,14 +1432,14 @@ export function CartPage() {
     if (refreshing) return;
     setRefreshing(true);
     try {
-      await loadCart().catch(() => null);
+      await loadCart(true).catch(() => null);
     } finally {
       setRefreshing(false);
     }
   }, [loadCart, refreshing]);
 
   useEffect(() => {
-    void loadCart();
+    void loadCart(false);
   }, []);
 
   useFocusEffect(
@@ -1710,6 +1711,43 @@ export function CartPage() {
     }
     navigation.navigate(routes.tasks);
   }, [navigation]);
+
+  const benefitIconItems = useMemo(() => {
+    const sourceItems = Array.isArray(bonusConfig?.site_menu_items) ? bonusConfig.site_menu_items : [];
+    const byKey = new Map<string, Record<string, unknown>>();
+    sourceItems.forEach((item) => {
+      if (!item || typeof item !== 'object') return;
+      const key = String(item.key || '').trim();
+      if (key) byKey.set(key, item);
+    });
+    const buildItem = (
+      key: 'discounts' | 'gifts' | 'progress' | 'promocodes',
+      menuKey: string,
+      fallbackIcon: string,
+      fallbackLabel: string,
+    ) => {
+      const item = byKey.get(menuKey) || {};
+      return {
+        count: key === 'discounts'
+          ? benefitsCounts.discounts
+          : key === 'gifts'
+            ? benefitsCounts.gifts
+            : key === 'progress'
+              ? benefitsCounts.progress
+              : benefitsCounts.promocodes,
+        icon: fallbackIcon,
+        iconUrl: resolveAssetUrl(String(item.icon_url || '').trim()),
+        key,
+        label: String(item.title || fallbackLabel).trim() || fallbackLabel,
+      };
+    };
+    return [
+      buildItem('discounts', 'discounts', 'pricetag-outline', 'Скидки'),
+      buildItem('gifts', 'gifts', 'gift-outline', 'Подарки'),
+      buildItem('progress', 'tasks', 'checkbox-outline', 'Задания'),
+      buildItem('promocodes', 'promocodes', 'ticket-outline', 'Промокоды'),
+    ];
+  }, [bonusConfig?.site_menu_items, benefitsCounts.discounts, benefitsCounts.gifts, benefitsCounts.progress, benefitsCounts.promocodes]);
 
   const selectBonusAccrual = useCallback(() => {
     setBonusRedeemEnabled(false);
@@ -1992,57 +2030,42 @@ export function CartPage() {
 
             {hasActiveLines ? (
               <View style={styles.benefitsCard}>
-                {benefitsCounts.discounts > 0 ? (
-                  <Pressable onPress={() => openBenefitPage('discounts')} style={styles.benefitRow}>
-                    <View style={styles.benefitRowMain}>
-                      <Text style={styles.benefitLabel}>Скидки</Text>
-                      <View style={styles.benefitCountBadge}>
-                        <Text style={styles.benefitCountText}>{benefitsCounts.discounts}</Text>
-                      </View>
-                    </View>
-                    <Ionicons name="chevron-forward" color={theme.colors.text} size={24} />
-                  </Pressable>
-                ) : null}
-
-                {benefitsCounts.gifts > 0 ? (
-                  <Pressable onPress={() => openBenefitPage('gifts')} style={styles.benefitRow}>
-                    <View style={styles.benefitRowMain}>
-                      <Text style={styles.benefitLabel}>Подарки</Text>
-                      <View style={styles.benefitCountBadge}>
-                        <Text style={styles.benefitCountText}>{benefitsCounts.gifts}</Text>
-                      </View>
-                    </View>
-                    <Ionicons name="chevron-forward" color={theme.colors.text} size={24} />
-                  </Pressable>
-                ) : null}
-
-                {benefitsCounts.progress > 0 ? (
-                  <Pressable onPress={() => openBenefitPage('progress')} style={styles.benefitRow}>
-                    <View style={styles.benefitRowMain}>
-                      <Text style={styles.benefitLabel}>Задания</Text>
-                      <View style={styles.benefitCountBadge}>
-                        <Text style={styles.benefitCountText}>{benefitsCounts.progress}</Text>
-                      </View>
-                    </View>
-                    <Ionicons name="chevron-forward" color={theme.colors.text} size={24} />
-                  </Pressable>
-                ) : null}
-
-                {benefitsCounts.discounts > 0 || benefitsCounts.gifts > 0 || benefitsCounts.progress > 0 ? <View style={styles.benefitsDivider} /> : null}
-
-                <View style={styles.promoBlock}>
-                  {benefitsCounts.promocodes > 0 ? (
-                    <Pressable onPress={() => openBenefitPage('promocodes')} style={styles.benefitRow}>
-                      <View style={styles.benefitRowMain}>
-                        <Text style={styles.benefitLabel}>Промокоды</Text>
-                        <View style={styles.benefitCountBadge}>
-                          <Text style={styles.benefitCountText}>{benefitsCounts.promocodes}</Text>
+                <View style={styles.benefitIconRow}>
+                  {benefitIconItems.map((item) => {
+                    const active = item.count > 0;
+                    return (
+                      <Pressable
+                        accessibilityLabel={item.label}
+                        key={item.key}
+                        onPress={() => openBenefitPage(item.key)}
+                        style={styles.benefitIconItem}
+                      >
+                        <View style={[styles.benefitIconButton, active && styles.benefitIconButtonActive]}>
+                          {item.iconUrl ? (
+                            <Image
+                              resizeMode="contain"
+                              source={{ uri: item.iconUrl }}
+                              style={[styles.benefitIconImage, !active && styles.benefitIconImageInactive]}
+                            />
+                          ) : (
+                            <Ionicons
+                              name={item.icon as keyof typeof Ionicons.glyphMap}
+                              color={active ? theme.colors.accent : theme.colors.muted}
+                              size={24}
+                            />
+                          )}
+                          {active ? (
+                            <View style={styles.benefitIconBadge}>
+                              <Text style={styles.benefitIconBadgeText}>{item.count}</Text>
+                            </View>
+                          ) : null}
                         </View>
-                      </View>
-                      <Ionicons name="chevron-forward" color={theme.colors.text} size={24} />
-                    </Pressable>
-                  ) : null}
-
+                        <Text numberOfLines={1} style={styles.benefitIconLabel}>{item.label}</Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+                <View style={styles.promoBlock}>
                   <View style={styles.promoInputRow}>
                     <View style={styles.promoInputSurface}>
                       <AppTextInput
@@ -2306,6 +2329,74 @@ const styles = StyleSheet.create({
     color: theme.colors.primaryText,
     fontSize: 12,
     fontWeight: '900',
+  },
+  benefitIconBadge: {
+    alignItems: 'center',
+    backgroundColor: theme.colors.accent,
+    borderRadius: theme.radius.pill,
+    justifyContent: 'center',
+    minHeight: 24,
+    minWidth: 24,
+    paddingHorizontal: 7,
+    position: 'absolute',
+    right: 4,
+    top: 4,
+    zIndex: 2,
+  },
+  benefitIconBadgeText: {
+    color: theme.colors.primaryText,
+    fontSize: 12,
+    fontWeight: '900',
+    lineHeight: 14,
+  },
+  benefitIconImage: {
+    height: '100%',
+    width: '100%',
+  },
+  benefitIconImageInactive: {
+    opacity: 0.38,
+  },
+  benefitIconButton: {
+    alignItems: 'center',
+    backgroundColor: theme.colors.mutedBackground,
+    borderColor: theme.colors.border,
+    borderRadius: 18,
+    borderWidth: 1,
+    aspectRatio: 1,
+    justifyContent: 'center',
+    minWidth: 0,
+    overflow: 'hidden',
+    position: 'relative',
+    width: '100%',
+  },
+  benefitIconButtonActive: {
+    backgroundColor: '#fff3ea',
+    borderColor: '#ffd3b6',
+    shadowColor: theme.colors.accent,
+    shadowOffset: { height: 4, width: 0 },
+    shadowOpacity: 0.14,
+    shadowRadius: 10,
+    elevation: 2,
+  },
+  benefitIconRow: {
+    alignItems: 'flex-start',
+    flexDirection: 'row',
+    gap: theme.spacing.sm,
+    marginBottom: theme.spacing.sm,
+  },
+  benefitIconItem: {
+    alignItems: 'center',
+    flex: 1,
+    minWidth: 0,
+  },
+  benefitIconLabel: {
+    color: theme.colors.muted,
+    fontSize: 10,
+    fontWeight: '800',
+    lineHeight: 12,
+    marginTop: 5,
+    textAlign: 'center',
+    width: '100%',
   },
   benefitLabel: {
     color: theme.colors.text,

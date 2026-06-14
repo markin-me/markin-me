@@ -27,6 +27,14 @@ function toPositiveQty(value: unknown, fallback = 0) {
   return Number.isFinite(qty) && qty > 0 ? qty : fallback;
 }
 
+function getVariantStockQuantity(variant: CartLine['variant'] | undefined | null) {
+  return toPositiveQty(variant?.stockQuantity ?? variant?.quantityInBase, 0);
+}
+
+function getOptionStockQuantity(option: NonNullable<CartLine['options']>[number]) {
+  return toPositiveQty(option.stockQuantity ?? option.variant?.stockQuantity ?? option.variant?.quantityInBase, toPositiveQty(option.quantity, 1));
+}
+
 function addDeduction(target: DeductionSource[], lineId: string | undefined, productId: unknown, qty: unknown) {
   const id = toPositiveId(productId);
   const quantity = toPositiveQty(qty);
@@ -64,10 +72,11 @@ function collectLineDeductions(line: CartLine, stockLevels: Map<number, ProductS
   if (line.type === 'combo') {
     (Array.isArray(line.comboSelections) ? line.comboSelections : []).forEach((selection) => {
       const ingredients = Array.isArray(selection.ingredients) ? selection.ingredients : [];
+      const selectionQty = getVariantStockQuantity(selection.variant) || 1;
       if (ingredients.length) {
-        addProductOwnDeduction(deductions, line.id, selection.productId, lineQty);
+        addProductOwnDeduction(deductions, line.id, selection.productId, selectionQty * lineQty);
       } else {
-        addProductRequirements(deductions, line.id, selection.productId, lineQty, stockLevels);
+        addProductRequirements(deductions, line.id, selection.productId, selectionQty * lineQty, stockLevels);
       }
       ingredients.forEach((ingredient) => {
         addProductRequirements(deductions, line.id, ingredient.id, toPositiveQty(ingredient.stockQuantity ?? ingredient.quantity) * lineQty, stockLevels);
@@ -77,16 +86,18 @@ function collectLineDeductions(line: CartLine, stockLevels: Map<number, ProductS
   }
 
   const ingredients = Array.isArray(line.ingredients) ? line.ingredients : [];
+  const variantProductQty = getVariantStockQuantity(line.variant);
+  const productQty = variantProductQty ? variantProductQty * lineQty : lineQty;
   if (ingredients.length) {
-    addProductOwnDeduction(deductions, line.id, line.sourceId, lineQty);
+    addProductOwnDeduction(deductions, line.id, line.sourceId, productQty);
   } else {
-    addProductRequirements(deductions, line.id, line.sourceId, lineQty, stockLevels);
+    addProductRequirements(deductions, line.id, line.sourceId, productQty, stockLevels);
   }
   ingredients.forEach((ingredient) => {
     addProductRequirements(deductions, line.id, ingredient.id, toPositiveQty(ingredient.stockQuantity ?? ingredient.quantity) * lineQty, stockLevels);
   });
   (Array.isArray(line.options) ? line.options : []).forEach((option) => {
-    addProductRequirements(deductions, line.id, option.targetProductId, toPositiveQty(option.quantity, 1) * lineQty, stockLevels);
+    addProductRequirements(deductions, line.id, option.targetProductId, getOptionStockQuantity(option) * lineQty, stockLevels);
   });
 
   return deductions;

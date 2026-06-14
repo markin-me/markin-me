@@ -1,5 +1,6 @@
-import type { CatalogComboBlockProduct, CatalogComboDetails } from '../../entities/product';
+import type { CatalogComboBlockProduct, CatalogComboDetails, UnitConversion } from '../../entities/product';
 import { resolveAssetUrl } from '../../shared/api';
+import { calculateVariantUnitPrice } from '../../shared/lib/productStock';
 
 type AnyRecord = Record<string, unknown>;
 
@@ -15,6 +16,7 @@ export type ComboConfiguredProduct = {
   variant_value_index?: number | null;
   variant_label?: string;
   variant_group_title?: string;
+  variant_stock_quantity?: number | null;
   variant_unit?: string;
   unit_id?: number | null;
 };
@@ -120,25 +122,22 @@ export function getComboProductEditorState(product: CatalogComboBlockProduct | n
   return { ingredientQuantities, ingredients, variantIndex, variants };
 }
 
-function getVariantUnitPrice(product: CatalogComboBlockProduct | null, variants: unknown[], variantIndex: number | null) {
+function getVariantUnitPrice(product: CatalogComboBlockProduct | null, variants: unknown[], variantIndex: number | null, unitConversions: UnitConversion[]) {
   const basePrice = toFiniteNumber(product?.price, 0);
   if (!product || !variants.length || variantIndex == null) return basePrice;
 
   const group = asRecord(variants[0]);
   const values = Array.isArray(group.values) ? group.values : [];
-  const value = values[variantIndex];
-  const numericValue = Number(String(value).replace(',', '.'));
-  const baseQty = toFiniteNumber(product.base_qty, 1) || 1;
-  let unitPrice = Number.isFinite(numericValue) && numericValue > 0
-    ? basePrice * (numericValue / baseQty)
-    : basePrice;
-
-  const tiers = Array.isArray(group.discount_tiers) ? group.discount_tiers : [];
-  const tier = tiers.find((item) => Number(asRecord(item).sort_order) === variantIndex);
-  const discountPercent = toFiniteNumber(asRecord(tier).discount_percent, 0);
-  if (discountPercent) unitPrice *= 1 - discountPercent / 100;
-
-  return roundPrice(unitPrice);
+  return calculateVariantUnitPrice({
+    basePrice,
+    baseQty: product.base_qty,
+    baseUnitId: product.base_unit_id ?? product.unit_id ?? group.unit_id,
+    discountTiers: group.discount_tiers,
+    selectedIndex: variantIndex,
+    unitConversions,
+    variantUnitId: group.unit_id,
+    variantValue: values[variantIndex],
+  }).unitPrice;
 }
 
 function getIngredientPriceDiff(ingredients: unknown[], ingredientQuantities: Record<string, number>) {
@@ -169,6 +168,7 @@ export function buildComboConfiguredProduct(
   comboDiscountPercent: number,
   variantIndex: number | null,
   ingredientQuantities: Record<string, number>,
+  unitConversions: UnitConversion[] = [],
 ): ComboConfiguredProduct {
   const preview = product.preview || null;
   const variants = Array.isArray(preview?.variants) ? preview.variants : [];
@@ -181,8 +181,20 @@ export function buildComboConfiguredProduct(
   const variantLabel = safeVariantIndex == null
     ? ''
     : formatComboVariantValue(values[safeVariantIndex], variantGroup.unit_short_title || variantGroup.unit_code || variantGroup.unit_title);
+  const variantCalculation = safeVariantIndex == null
+    ? null
+    : calculateVariantUnitPrice({
+      basePrice: product.price,
+      baseQty: product.base_qty,
+      baseUnitId: product.base_unit_id ?? product.unit_id ?? variantGroup.unit_id,
+      discountTiers: variantGroup.discount_tiers,
+      selectedIndex: safeVariantIndex,
+      unitConversions,
+      variantUnitId: variantGroup.unit_id,
+      variantValue: values[safeVariantIndex],
+    });
   const beforeDiscount = Math.max(0, roundPrice(
-    getVariantUnitPrice(product, variants, safeVariantIndex) +
+    getVariantUnitPrice(product, variants, safeVariantIndex, unitConversions) +
       getIngredientPriceDiff(ingredients, ingredientQuantities),
   ));
   const discount = Math.max(0, Number(comboDiscountPercent || 0));
@@ -202,6 +214,7 @@ export function buildComboConfiguredProduct(
     variant_group_id: variantGroup.id != null ? Number(variantGroup.id) : null,
     variant_group_title: trimText(variantGroup.title || variantGroup.title_label),
     variant_label: variantLabel,
+    variant_stock_quantity: variantCalculation?.quantityInBase ?? null,
     variant_unit: trimText(variantGroup.unit_short_title || variantGroup.unit_code || variantGroup.unit_title),
     variant_value_index: safeVariantIndex,
   };

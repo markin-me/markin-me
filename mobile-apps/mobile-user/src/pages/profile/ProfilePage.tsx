@@ -45,7 +45,7 @@ import { routes, type RootStackParamList } from '../../app/navigation/routes';
 
 import { AppText as Text, AppTextInput as TextInput } from '../../shared/ui';
 type AuthStep = 'phone' | 'birthday' | 'code';
-const PROFILE_PASSPORT_FRESH_MS = 30000;
+const PROFILE_PASSPORT_FRESH_MS = 5 * 60 * 1000;
 
 function isFreshPassport(passport: CustomerPassport) {
   const updatedAtMs = Date.parse(passport.updatedAt || '');

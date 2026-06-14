@@ -34,7 +34,6 @@ import {
   fetchCatalogComboDetails,
   checkOrderStock,
   getMemoryCatalogComboDetails,
-  isSameCachedValue,
   readCachedCatalogComboDetails,
   resolveAssetUrl,
 } from '../../shared/api';
@@ -64,15 +63,37 @@ function toPositiveId(value: unknown) {
   return Number.isFinite(id) && id > 0 ? id : null;
 }
 
-function buildComboSelectionVariant(config: ReturnType<typeof getComboBlockConfig> | null, product: CatalogComboDetails['blocks'][number]['products'][number] | null): CartVariant | null {
+function buildComboSelectionVariant(
+  config: ReturnType<typeof getComboBlockConfig> | null,
+  product: CatalogComboDetails['blocks'][number]['products'][number] | null,
+  unitConversions: UnitConversion[],
+): CartVariant | null {
   const preview = product?.preview || null;
+  const previewRecord = asRecord(preview);
+  const variantGroup = asRecord(Array.isArray(preview?.variants) ? preview.variants[0] : null);
+  const values = Array.isArray(variantGroup.values) ? variantGroup.values : [];
+  const selectedIndex = config?.variant_value_index ?? preview?.variant_value_index ?? variantGroup.default_value_index ?? null;
   const label = trimText(config?.variant_label || preview?.variant_label);
   const unit = trimText(config?.variant_unit || preview?.variant_unit);
+  const sourceUnitId = variantGroup.unit_id;
+  const targetUnitId = config?.unit_id ?? preview?.unit_id ?? variantGroup.unit_id;
+  const stockQuantity = toFiniteNumber(config?.variant_stock_quantity ?? previewRecord.variant_stock_quantity, 0) > 0
+    ? toFiniteNumber(config?.variant_stock_quantity ?? previewRecord.variant_stock_quantity, 0)
+    : Number.isFinite(Number(selectedIndex)) && selectedIndex != null && values.length
+      ? (() => {
+        const numericValue = Number(String(values[Number(selectedIndex)]).replace(',', '.'));
+        if (!Number.isFinite(numericValue) || numericValue <= 0) return 0;
+        const factor = getUnitConversionFactor(unitConversions, sourceUnitId, targetUnitId);
+        return factor == null ? 0 : numericValue * factor;
+      })()
+      : 0;
   if (!label && !config?.variant_group_id) return null;
   return {
     groupId: config?.variant_group_id ?? null,
     groupTitle: trimText(config?.variant_group_title),
     label,
+    quantityInBase: stockQuantity > 0 ? stockQuantity : null,
+    stockQuantity: stockQuantity > 0 ? stockQuantity : null,
     unit,
     unitId: toPositiveId(config?.unit_id || preview?.unit_id),
     valueIndex: config?.variant_value_index ?? null,
@@ -85,8 +106,8 @@ function getIngredientStockQuantity(source: Record<string, unknown>, quantity: n
 
   const factor = getUnitConversionFactor(
     unitConversions,
-    source.unit_id ?? source.ingredient_unit_id,
-    source.ingredient_base_unit_id ?? source.base_unit_id,
+    source.unit_id ?? source.unitId ?? source.ingredient_unit_id ?? source.ingredientUnitId,
+    source.ingredient_base_unit_id ?? source.ingredientBaseUnitId ?? source.base_unit_id ?? source.baseUnitId ?? source.stock_unit_id ?? source.stockUnitId,
   );
   return factor == null ? quantity : quantity * factor;
 }
@@ -150,7 +171,7 @@ function buildComboSelections(combo: CatalogComboDetails, draft: NonNullable<Ret
         productName,
         productPhoto: resolveAssetUrl(config?.product_photo || product.product_photo || ''),
         unitPrice: getComboProductPrice(product, config),
-        variant: buildComboSelectionVariant(config, product),
+        variant: buildComboSelectionVariant(config, product, unitConversions),
       };
     })
     .filter((item): item is CartComboSelection => !!item);
@@ -185,15 +206,14 @@ export function ComboPage({ navigation, route }: ComboPageProps) {
     async function loadCombo() {
       setErrorText('');
       const cached = await readCachedCatalogComboDetails(comboId);
-      let appliedInitial = false;
       if (cached && isMounted) {
         applyCombo(cached, true);
-        appliedInitial = true;
+        return;
       }
 
       try {
         const fresh = await fetchCatalogComboDetails(comboId);
-        if (isMounted && !isSameCachedValue(fresh, cached)) applyCombo(fresh, !appliedInitial);
+        if (isMounted) applyCombo(fresh, true);
       } catch (error) {
         if (!cached && isMounted) setErrorText(error instanceof Error ? error.message : 'Комбо не найдено');
       }

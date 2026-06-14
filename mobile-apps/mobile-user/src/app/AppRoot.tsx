@@ -1,15 +1,15 @@
-import { useEffect } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
-import { StatusBar as NativeStatusBar } from 'react-native';
+import { ActivityIndicator, StyleSheet, StatusBar as NativeStatusBar, View } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import type { MainTabParamList, RootStackParamList } from './navigation/routes';
 import { routes } from './navigation/routes';
-import { StockProvider } from '../features/stock';
+import { StockProvider, useProductStock } from '../features/stock';
 import { AddressFormPage } from '../pages/address-form';
 import { AddressesPage } from '../pages/addresses';
 import { CartPage } from '../pages/cart';
@@ -36,17 +36,58 @@ import { ProfilePage } from '../pages/profile';
 import { ProfileSettingsPage } from '../pages/profile-settings';
 import { PromocodesPage } from '../pages/promocodes';
 import { TasksPage } from '../pages/tasks';
-import { getCartLineStockProductIds, readCartLines } from '../features/cart';
-import { ensureCheckoutBenefitsState } from '../features/checkout';
-import { readCachedCustomerPassport, refreshCustomerPassport, warmFullProductPassports } from '../shared/api';
+import { readCartLines } from '../features/cart';
+import { readFulfillmentSelection } from '../features/checkout';
+import {
+  readCachedCustomerPassport,
+  readCachedMobileCatalogSnapshot,
+} from '../shared/api';
 import { theme } from '../shared/config/theme';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<MainTabParamList>();
-const BACKGROUND_TAB_WARMUP_DELAY_MS = 1500;
 
-function collectCartWarmupProductIds(lines: Awaited<ReturnType<typeof readCartLines>>) {
-  return Array.from(new Set(lines.flatMap((line) => getCartLineStockProductIds(line))));
+function BootPreloadGate({ children }: { children: ReactNode }) {
+  const { hydrateFromCache } = useProductStock();
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function preload() {
+      await hydrateFromCache().catch(() => null);
+
+      await Promise.all([
+        readCartLines().catch(() => []),
+        readCachedCustomerPassport().catch(() => null),
+        readFulfillmentSelection().catch(() => null),
+        readCachedMobileCatalogSnapshot().catch(() => null),
+      ]);
+    }
+
+    void preload()
+      .then(() => {
+        if (cancelled) return;
+        setReady(true);
+      })
+      .catch(() => {
+        if (!cancelled) setReady(true);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [hydrateFromCache]);
+
+  if (!ready) {
+    return (
+      <View style={styles.bootPreload}>
+        <ActivityIndicator color={theme.colors.primary} />
+      </View>
+    );
+  }
+
+  return <>{children}</>;
 }
 
 function MainTabs() {
@@ -123,36 +164,10 @@ export function AppRoot() {
     NativeStatusBar.setBarStyle('dark-content');
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    const timer = setTimeout(() => {
-      void (async () => {
-        const [cartLines, passport] = await Promise.all([
-          readCartLines().catch(() => []),
-          readCachedCustomerPassport().catch(() => null),
-        ]);
-        if (cancelled) return;
-
-        const cartProductIds = collectCartWarmupProductIds(cartLines);
-        if (cartProductIds.length) {
-          void warmFullProductPassports(cartProductIds).catch(() => null);
-        }
-        if (passport?.token) {
-          void refreshCustomerPassport(passport.token, passport.customer).catch(() => null);
-          void ensureCheckoutBenefitsState({ cartLines }).catch(() => null);
-        }
-      })().catch(() => null);
-    }, BACKGROUND_TAB_WARMUP_DELAY_MS);
-
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, []);
-
   return (
     <SafeAreaProvider>
       <StockProvider>
+        <BootPreloadGate>
         <NavigationContainer>
       <Stack.Navigator>
         <Stack.Screen name="main" component={MainTabs} options={{ headerShown: false }} />
@@ -185,7 +200,17 @@ export function AppRoot() {
       </Stack.Navigator>
       <StatusBar backgroundColor={theme.colors.background} style="dark" translucent={false} />
         </NavigationContainer>
+        </BootPreloadGate>
       </StockProvider>
     </SafeAreaProvider>
   );
 }
+
+const styles = StyleSheet.create({
+  bootPreload: {
+    alignItems: 'center',
+    backgroundColor: theme.colors.background,
+    flex: 1,
+    justifyContent: 'center',
+  },
+});

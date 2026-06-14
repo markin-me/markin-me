@@ -1778,6 +1778,9 @@ async function mergeMobileCatalogPassports(snapshot: MobileCatalogSnapshot, prod
     method: 'POST',
   });
   const data = response.data || {};
+  const fullPassports = normalizeFullProductPassportMap(Object.fromEntries(
+    Object.entries(data).map(([id, passport]) => [id, fullProductPassportFromCatalogPassport(passport)]),
+  ));
   const nextSnapshot: MobileCatalogSnapshot = {
     ...snapshot,
     productPassports: {
@@ -1786,6 +1789,7 @@ async function mergeMobileCatalogPassports(snapshot: MobileCatalogSnapshot, prod
     },
   };
   await saveMobileCatalogSnapshot(nextSnapshot);
+  if (Object.keys(fullPassports).length) await saveFullProductPassports(fullPassports);
   return nextSnapshot;
 }
 

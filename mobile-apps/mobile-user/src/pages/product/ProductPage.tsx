@@ -1,5 +1,5 @@
 import { AppText as Text } from '../../shared/ui';
-﻿import {
+import {
   useCallback,
   useEffect,
   useMemo,
@@ -23,6 +23,7 @@ import type {
   CatalogProductPassport,
   UnitConversion,
 } from '../../entities/product';
+import { catalogPassportFromFullProductPassport } from '../../entities/product';
 import {
   addCartLine,
   cartLinesToStockCheckItems,
@@ -48,9 +49,11 @@ import {
   fetchCatalogProduct,
   ensureMobileCatalogProductPassport,
   getCatalogProductPassport,
+  getFullProductPassport,
   getCatalogSnapshotProduct,
   getMemoryCatalogComboDetails,
   readCachedCatalogComboDetails,
+  readCachedFullProductPassports,
   readCachedMobileCatalogSnapshot,
   resolveAssetUrl,
 } from '../../shared/api';
@@ -58,6 +61,7 @@ import { theme } from '../../shared/config/theme';
 import { calculateBuyXGetYLineTotals } from '../../shared/lib/buyXGetY';
 import { formatPrice } from '../../shared/lib/formatPrice';
 import {
+  calculateVariantUnitPrice,
   getStockLevelEntry,
   getProductAvailabilityState,
   getUnitConversionFactor,
@@ -82,6 +86,7 @@ type OptionItemVariantState = {
   variant_unit: string;
   unit_id: number | null;
   variant_price_diff: number;
+  stock_quantity?: number | null;
 };
 
 type OptionSelection = {
@@ -100,6 +105,8 @@ type VariantState = {
   selectedIndex: number | null;
   value: unknown;
   label: string;
+  quantityInBase: number | null;
+  stockQuantity: number | null;
 };
 
 type IngredientState = Record<string, { quantity: number }>;
@@ -313,39 +320,43 @@ function formatVariantValue(value: unknown, unit: unknown) {
   return `${raw} ${unitLabel}`;
 }
 
-function getVariantUnitPrice(product: CatalogProduct | null, variants: unknown[], variantState: VariantState) {
+function getVariantUnitPrice(product: CatalogProduct | null, variants: unknown[], variantState: VariantState, unitConversions: UnitConversion[]) {
   const basePrice = getProductBasePrice(product);
   if (!product || !variants.length || variantState.selectedIndex == null) return basePrice;
 
   const group = asRecord(variants[0]);
   const values = asArray(group.values);
   const selectedIndex = Number(variantState.selectedIndex);
-  const value = values[selectedIndex];
-  const numericValue = Number(String(value).replace(',', '.'));
-  const baseQty = toFiniteNumber((product as CatalogProduct & AnyRecord).base_qty, 1) || 1;
-  let unitPrice = Number.isFinite(numericValue) && numericValue > 0
-    ? basePrice * (numericValue / baseQty)
-    : basePrice;
+  const calculated = calculateVariantUnitPrice({
+    basePrice,
+    baseQty: (product as CatalogProduct & AnyRecord).base_qty,
+    baseUnitId: (product as CatalogProduct & AnyRecord).base_unit_id ?? (product as CatalogProduct & AnyRecord).unit_id ?? group.unit_id,
+    discountTiers: group.discount_tiers,
+    selectedIndex,
+    unitConversions,
+    variantUnitId: group.unit_id,
+    variantValue: values[selectedIndex],
+  });
 
-  const tiers = asArray(group.discount_tiers);
-  const tier = tiers.find((item) => Number(asRecord(item).sort_order) === selectedIndex);
-  const discountPercent = toFiniteNumber(asRecord(tier).discount_percent, 0);
-  if (discountPercent) unitPrice *= 1 - discountPercent / 100;
-
-  return roundPrice(unitPrice);
+  return roundPrice(calculated.unitPrice);
 }
 
-function getOptionItemVariantState(item: unknown, variantGroup: unknown, index: number): OptionItemVariantState {
+function getOptionItemVariantState(item: unknown, variantGroup: unknown, index: number, unitConversions: UnitConversion[]): OptionItemVariantState {
   const source = asRecord(item);
   const group = asRecord(variantGroup);
   const values = asArray(group.values);
   const basePrice = getOptionItemPrice(source);
   const value = values[index];
-  const numericValue = Number(String(value).replace(',', '.'));
-  const baseQty = toFiniteNumber(source.base_qty, 1) || 1;
-  const unitPrice = Number.isFinite(numericValue) && numericValue > 0
-    ? basePrice * (numericValue / baseQty)
-    : basePrice;
+  const calculated = calculateVariantUnitPrice({
+    basePrice,
+    baseQty: source.product_base_qty ?? source.base_qty,
+    baseUnitId: source.product_base_unit_id ?? source.base_unit_id ?? source.product_unit_id ?? source.unit_id ?? group.unit_id,
+    discountTiers: group.discount_tiers,
+    selectedIndex: index,
+    unitConversions,
+    variantUnitId: group.unit_id,
+    variantValue: value,
+  });
   const unit = trimText(group.unit_short_title || group.unit_code || group.unit_title);
 
   return {
@@ -353,13 +364,14 @@ function getOptionItemVariantState(item: unknown, variantGroup: unknown, index: 
     variant_group_id: Number(group.variant_group_id || group.id || 0),
     variant_group_title: trimText(group.title || group.title_label),
     variant_label: formatVariantValue(value, unit),
-    variant_price_diff: roundPrice(unitPrice - basePrice),
+    variant_price_diff: roundPrice(calculated.unitPrice - basePrice),
     variant_unit: unit,
     variant_value_index: Number.isFinite(index) ? index : null,
+    stock_quantity: calculated.quantityInBase,
   };
 }
 
-function withDefaultOptionVariant(item: unknown, selection: OptionSelection) {
+function withDefaultOptionVariant(item: unknown, selection: OptionSelection, unitConversions: UnitConversion[]) {
   const itemId = toPositiveId(asRecord(item).id);
   if (!itemId || selection.variantByItemId[String(itemId)]) return selection;
 
@@ -373,7 +385,7 @@ function withDefaultOptionVariant(item: unknown, selection: OptionSelection) {
     ...selection,
     variantByItemId: {
       ...selection.variantByItemId,
-      [String(itemId)]: getOptionItemVariantState(item, variantGroup, index),
+      [String(itemId)]: getOptionItemVariantState(item, variantGroup, index, unitConversions),
     },
   };
 }
@@ -387,24 +399,38 @@ function createInitialIngredientState(ingredients: unknown[]): IngredientState {
   }, {});
 }
 
-function createInitialVariantState(product: CatalogProduct | null, variants: unknown[], defaultConfig: AnyRecord): VariantState {
+function createInitialVariantState(product: CatalogProduct | null, variants: unknown[], defaultConfig: AnyRecord, unitConversions: UnitConversion[]): VariantState {
   const group = asRecord(variants[0]);
   const values = asArray(group.values);
   const rawIndex = Number(defaultConfig.variant_value_index ?? group.default_value_index ?? 0);
   const selectedIndex = values.length ? Math.max(0, Math.min(values.length - 1, Number.isFinite(rawIndex) ? rawIndex : 0)) : null;
   const unit = group.unit_short_title || group.unit_code || group.unit_title;
   const value = selectedIndex == null ? null : values[selectedIndex];
+  const calculated = selectedIndex == null
+    ? null
+    : calculateVariantUnitPrice({
+      basePrice: getProductBasePrice(product),
+      baseQty: (product as CatalogProduct & AnyRecord).base_qty,
+      baseUnitId: (product as CatalogProduct & AnyRecord).base_unit_id ?? (product as CatalogProduct & AnyRecord).unit_id ?? group.unit_id,
+      discountTiers: group.discount_tiers,
+      selectedIndex,
+      unitConversions,
+      variantUnitId: group.unit_id,
+      variantValue: value,
+    });
 
   return {
     groupId: Number(group.id ?? group.variant_group_id ?? defaultConfig.variant_group_id) || null,
     label: trimText(defaultConfig.variant_label) || (selectedIndex == null ? '' : formatVariantValue(value, unit)),
     selectedIndex,
     unitId: toPositiveId(group.unit_id),
+    quantityInBase: calculated?.quantityInBase ?? null,
+    stockQuantity: calculated?.quantityInBase ?? null,
     value,
   };
 }
 
-function createInitialOptionSelections(optionGroups: unknown[], defaultConfig: AnyRecord): Record<string, OptionSelection> {
+function createInitialOptionSelections(optionGroups: unknown[], defaultConfig: AnyRecord, unitConversions: UnitConversion[]): Record<string, OptionSelection> {
   const defaultIds = new Set(asArray(defaultConfig.option_item_ids).map(Number).filter(Number.isFinite));
   const result: Record<string, OptionSelection> = {};
 
@@ -430,7 +456,7 @@ function createInitialOptionSelections(optionGroups: unknown[], defaultConfig: A
       const requiredFallback = group.is_required ? items[0] : null;
       selection.selectedId = toPositiveId(asRecord(selected || requiredFallback).id);
       const selectedItem = items.find((item) => Number(asRecord(item).id) === Number(selection.selectedId));
-      if (selectedItem) selection = withDefaultOptionVariant(selectedItem, selection);
+      if (selectedItem) selection = withDefaultOptionVariant(selectedItem, selection, unitConversions);
     } else if (type === 'multiple_group') {
       const selectedIds = items
         .map((item) => Number(asRecord(item).id))
@@ -444,7 +470,7 @@ function createInitialOptionSelections(optionGroups: unknown[], defaultConfig: A
       selection.selectedIds = selectedIds;
       selectedIds.forEach((id) => {
         const item = items.find((entry) => Number(asRecord(entry).id) === id);
-        if (item) selection = withDefaultOptionVariant(item, selection);
+        if (item) selection = withDefaultOptionVariant(item, selection, unitConversions);
       });
     } else {
       items.forEach((item) => {
@@ -453,7 +479,7 @@ function createInitialOptionSelections(optionGroups: unknown[], defaultConfig: A
         const itemMin = toFiniteNumber(asRecord(item).qty_min, 0);
         if (defaultIds.has(id) || itemMin > 0) {
           selection.qtyById[String(id)] = Math.max(1, itemMin || 1);
-          selection = withDefaultOptionVariant(item, selection);
+          selection = withDefaultOptionVariant(item, selection, unitConversions);
         }
       });
     }
@@ -644,8 +670,8 @@ function createIngredientStateFromCart(ingredients: unknown[], line: CartLine | 
   return state;
 }
 
-function createVariantStateFromCart(product: CatalogProduct | null, variants: unknown[], defaultConfig: AnyRecord, line: CartLine | null): VariantState {
-  if (!line?.variant) return createInitialVariantState(product, variants, defaultConfig);
+function createVariantStateFromCart(product: CatalogProduct | null, variants: unknown[], defaultConfig: AnyRecord, line: CartLine | null, unitConversions: UnitConversion[]): VariantState {
+  if (!line?.variant) return createInitialVariantState(product, variants, defaultConfig, unitConversions);
   const variant = line.variant;
   const group = asRecord(variants[0]);
   const values = asArray(group.values);
@@ -653,17 +679,31 @@ function createVariantStateFromCart(product: CatalogProduct | null, variants: un
   const selectedIndex = Number.isFinite(valueIndex) && valueIndex != null && valueIndex >= 0 && valueIndex < values.length
     ? valueIndex
     : null;
+  const calculated = selectedIndex == null
+    ? null
+    : calculateVariantUnitPrice({
+      basePrice: getProductBasePrice(product),
+      baseQty: (product as CatalogProduct & AnyRecord).base_qty,
+      baseUnitId: (product as CatalogProduct & AnyRecord).base_unit_id ?? (product as CatalogProduct & AnyRecord).unit_id ?? group.unit_id,
+      discountTiers: group.discount_tiers,
+      selectedIndex,
+      unitConversions,
+      variantUnitId: variant.unitId ?? group.unit_id,
+      variantValue: values[selectedIndex],
+    });
   return {
     groupId: toPositiveId(variant.groupId ?? group.id ?? group.variant_group_id),
     label: trimText(variant.label),
     selectedIndex,
     unitId: toPositiveId(variant.unitId ?? group.unit_id),
+    quantityInBase: variant.quantityInBase ?? variant.stockQuantity ?? calculated?.quantityInBase ?? null,
+    stockQuantity: variant.stockQuantity ?? variant.quantityInBase ?? calculated?.quantityInBase ?? null,
     value: selectedIndex == null ? null : values[selectedIndex],
   };
 }
 
-function createOptionSelectionsFromCart(optionGroups: unknown[], defaultConfig: AnyRecord, line: CartLine | null) {
-  const selections = createInitialOptionSelections(optionGroups, defaultConfig);
+function createOptionSelectionsFromCart(optionGroups: unknown[], defaultConfig: AnyRecord, line: CartLine | null, unitConversions: UnitConversion[]) {
+  const selections = createInitialOptionSelections(optionGroups, defaultConfig, unitConversions);
   if (!line?.options?.length) return selections;
 
   optionGroups.forEach((groupRaw) => {
@@ -693,13 +733,14 @@ function createOptionSelectionsFromCart(optionGroups: unknown[], defaultConfig: 
 
       if (option.variant?.label) {
         selection.variantByItemId[String(id)] = {
-          unit_id: null,
+          unit_id: option.variant.unitId ?? null,
           variant_group_id: option.variant.groupId || 0,
           variant_group_title: option.variant.groupTitle || '',
           variant_label: option.variant.label || '',
           variant_price_diff: Number(option.unitPrice || 0) - getOptionItemPrice(items.find((item) => Number(asRecord(item).id) === id)),
           variant_unit: option.variant.unit || '',
           variant_value_index: option.variant.valueIndex ?? null,
+          stock_quantity: option.stockQuantity ?? option.variant.stockQuantity ?? option.variant.quantityInBase ?? null,
         };
       }
     });
@@ -801,8 +842,8 @@ function getIngredientStockQuantity(source: AnyRecord, quantity: number, unitCon
 
   const factor = getUnitConversionFactor(
     unitConversions,
-    source.unit_id ?? source.ingredient_unit_id,
-    source.ingredient_base_unit_id ?? source.base_unit_id,
+    source.unit_id ?? source.unitId ?? source.ingredient_unit_id ?? source.ingredientUnitId,
+    source.ingredient_base_unit_id ?? source.ingredientBaseUnitId ?? source.base_unit_id ?? source.baseUnitId ?? source.stock_unit_id ?? source.stockUnitId,
   );
   return factor == null ? quantity : quantity * factor;
 }
@@ -841,11 +882,14 @@ function buildCartOptions(selectedOptionItems: Array<AnyRecord & { qty: number; 
         name,
         quantity: Math.max(1, toFiniteNumber(item.qty, 1)),
         targetProductId: toPositiveId(item.target_product_id || item.product_id),
+        stockQuantity: hasVariant ? toFiniteNumber(selectedVariant.stock_quantity, 0) || null : null,
         unitPrice: toFiniteNumber(item.resolvedPrice ?? item.price, 0),
         variant: hasVariant ? {
           groupId: toPositiveId(selectedVariant.variant_group_id),
           groupTitle: trimText(selectedVariant.variant_group_title),
           label: trimText(selectedVariant.variant_label),
+          quantityInBase: toFiniteNumber(selectedVariant.stock_quantity, 0) || null,
+          stockQuantity: toFiniteNumber(selectedVariant.stock_quantity, 0) || null,
           unit: trimText(selectedVariant.variant_unit),
           unitId: toPositiveId(selectedVariant.unit_id),
           valueIndex: selectedVariant.variant_value_index == null ? null : Number(selectedVariant.variant_value_index),
@@ -882,7 +926,7 @@ function hasConfiguredStockCapacity({
   options.forEach((option) => {
     componentRows.push({
       productId: toPositiveId(option.targetProductId),
-      requiredQty: Math.max(1, toFiniteNumber(option.quantity, 1)),
+      requiredQty: Math.max(0, toFiniteNumber(option.stockQuantity ?? option.variant?.stockQuantity ?? option.variant?.quantityInBase ?? option.quantity, 1)),
     });
   });
 
@@ -907,6 +951,8 @@ function buildCartVariant(variants: unknown[], variantState: VariantState): Cart
     groupId: toPositiveId(group.id ?? group.variant_group_id ?? variantState.groupId),
     groupTitle: trimText(group.title || group.title_label),
     label: trimText(variantState.label),
+    quantityInBase: variantState.quantityInBase ?? variantState.stockQuantity ?? null,
+    stockQuantity: variantState.stockQuantity ?? variantState.quantityInBase ?? null,
     unit: trimText(group.unit_short_title || group.unit_code || group.unit_title),
     unitId: toPositiveId(group.unit_id ?? variantState.unitId),
     valueIndex: variantState.selectedIndex,
@@ -917,6 +963,14 @@ function getPassportStockRows(passport: CatalogProductPassport | null, unitConve
   const productId = Number(passport?.product?.id || 0);
   if (!passport || !Number.isFinite(productId) || productId <= 0) return [];
   return extractStockRowsFromCatalogPassports(new Map([[productId, passport]]), unitConversions);
+}
+
+function getCachedProductPassport(productId: number) {
+  return catalogPassportFromFullProductPassport(getFullProductPassport(productId)) || getCatalogProductPassport(productId);
+}
+
+function hasCompleteProductPassport(passport: CatalogProductPassport | null) {
+  return !!passport && Array.isArray(passport.ingredients) && Array.isArray(passport.optionGroups);
 }
 
 function ProductInfoCard({ title, children }: { title: string; children: ReactNode }) {
@@ -982,7 +1036,7 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
     }
     : null;
   const comboContextId = comboContext?.comboId || 0;
-  const [passport, setPassport] = useState<CatalogProductPassport | null>(() => getCatalogProductPassport(productId));
+  const [passport, setPassport] = useState<CatalogProductPassport | null>(() => getCachedProductPassport(productId));
   const [fallbackProduct, setFallbackProduct] = useState<CatalogProduct | null>(() => getCatalogSnapshotProduct(productId));
   const [comboContextDetails, setComboContextDetails] = useState<CatalogComboDetails | null>(() =>
     comboContext ? getMemoryCatalogComboDetails(comboContext.comboId) : null,
@@ -990,7 +1044,7 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
   const [editingLine, setEditingLine] = useState<CartLine | null>(null);
   const [errorText, setErrorText] = useState('');
   const [quantity, setQuantity] = useState(0);
-  const [variantState, setVariantState] = useState<VariantState>({ groupId: null, label: '', selectedIndex: null, unitId: null, value: null });
+  const [variantState, setVariantState] = useState<VariantState>({ groupId: null, label: '', quantityInBase: null, selectedIndex: null, stockQuantity: null, unitId: null, value: null });
   const [ingredientState, setIngredientState] = useState<IngredientState>({});
   const [optionSelections, setOptionSelections] = useState<Record<string, OptionSelection>>({});
   const [isOptionsSheetVisible, setOptionsSheetVisible] = useState(false);
@@ -1015,14 +1069,14 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
     let isMounted = true;
 
     async function hydrateFromCache() {
-      const memoryPassport = getCatalogProductPassport(productId);
+      const memoryPassport = getCachedProductPassport(productId);
       if (memoryPassport) {
         if (isMounted) {
           setPassport(memoryPassport);
           const rows = getPassportStockRows(memoryPassport, unitConversions);
           if (rows.length) mergeStockRows(rows);
         }
-        if (Array.isArray(memoryPassport.ingredients) && Array.isArray(memoryPassport.optionGroups)) return;
+        if (hasCompleteProductPassport(memoryPassport)) return;
       }
       const memoryProduct = getCatalogSnapshotProduct(productId);
       if (memoryProduct && isMounted) {
@@ -1031,15 +1085,26 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
         if (row) mergeStockRows([row]);
       }
 
+      await readCachedFullProductPassports();
+      const fullCachedPassport = getCachedProductPassport(productId);
+      if (fullCachedPassport) {
+        if (isMounted) {
+          setPassport(fullCachedPassport);
+          const rows = getPassportStockRows(fullCachedPassport, unitConversions);
+          if (rows.length) mergeStockRows(rows);
+        }
+        if (hasCompleteProductPassport(fullCachedPassport)) return;
+      }
+
       await readCachedMobileCatalogSnapshot();
-      const cachedPassport = getCatalogProductPassport(productId);
+      const cachedPassport = getCachedProductPassport(productId);
       if (cachedPassport) {
         if (isMounted) {
           setPassport(cachedPassport);
           const rows = getPassportStockRows(cachedPassport, unitConversions);
           if (rows.length) mergeStockRows(rows);
         }
-        if (Array.isArray(cachedPassport.ingredients) && Array.isArray(cachedPassport.optionGroups)) return;
+        if (hasCompleteProductPassport(cachedPassport)) return;
       }
       const cachedProduct = getCatalogSnapshotProduct(productId);
       if (cachedProduct && isMounted) {
@@ -1080,6 +1145,8 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
   useEffect(() => {
     let isMounted = true;
     async function syncAvailability() {
+      const cachedStock = getStockLevelEntry(stockLevels, productId);
+      if (cachedStock) return;
       const result = await refreshMany([productId]).catch(() => null);
       if (!isMounted) return;
       const availability = result?.payload || null;
@@ -1092,7 +1159,7 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
     return () => {
       isMounted = false;
     };
-  }, [applyAvailabilityPatch, productId, refreshMany]);
+  }, [applyAvailabilityPatch, productId, refreshMany, stockLevels]);
 
   useEffect(() => {
     if (!comboContextId) return;
@@ -1162,10 +1229,10 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
     if (!product) return;
     const restoreLine = comboContextLine || editingLine;
     setQuantity(Math.max(1, Number(restoreLine?.quantity || 1)));
-    setVariantState(createVariantStateFromCart(product, variants, defaultConfig, restoreLine));
+    setVariantState(createVariantStateFromCart(product, variants, defaultConfig, restoreLine, unitConversions));
     setIngredientState(createIngredientStateFromCart(ingredients, restoreLine));
-    setOptionSelections(createOptionSelectionsFromCart(optionGroups, defaultConfig, restoreLine));
-  }, [comboContextLine, defaultConfig, editingLine, ingredients, optionGroups, product, variants]);
+    setOptionSelections(createOptionSelectionsFromCart(optionGroups, defaultConfig, restoreLine, unitConversions));
+  }, [comboContextLine, defaultConfig, editingLine, ingredients, optionGroups, product, unitConversions, variants]);
 
   const selectedOptionItems = useMemo(
     () => getSelectedOptionItems(optionGroups, optionSelections),
@@ -1180,7 +1247,7 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
     [selectedOptionItems],
   );
   const optionTotal = selectedOptionItems.reduce((sum, item) => sum + item.resolvedPrice * Math.max(1, item.qty), 0);
-  const variantUnitPrice = getVariantUnitPrice(product, variants, variantState);
+  const variantUnitPrice = getVariantUnitPrice(product, variants, variantState, unitConversions);
   const ingredientPriceDiff = getIngredientPriceDiff(ingredients, ingredientState);
   const unitBeforeDiscount = roundPrice(variantUnitPrice + optionTotal + ingredientPriceDiff);
   const discountAmount = calculateProductDiscountAmount(unitBeforeDiscount, product?.discount || null);
@@ -1434,18 +1501,18 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
     if (!groupId || !itemId) return;
 
     setOptionSelections((current) => {
-      const previous = current[String(groupId)] || createInitialOptionSelections([group], {})[String(groupId)];
+      const previous = current[String(groupId)] || createInitialOptionSelections([group], {}, unitConversions)[String(groupId)];
       let next: OptionSelection = { ...previous, qtyById: { ...previous.qtyById }, selectedIds: [...previous.selectedIds], variantByItemId: { ...previous.variantByItemId } };
 
       if (next.type === 'single') {
         next.selectedId = itemId;
-        next = withDefaultOptionVariant(item, next);
+        next = withDefaultOptionVariant(item, next, unitConversions);
       } else if (next.type === 'multiple_group') {
         const exists = next.selectedIds.includes(itemId);
         next.selectedIds = exists
           ? next.selectedIds.filter((id) => id !== itemId)
           : [...next.selectedIds, itemId].slice(0, next.maxSelect || undefined);
-        if (!exists) next = withDefaultOptionVariant(item, next);
+        if (!exists) next = withDefaultOptionVariant(item, next, unitConversions);
       } else {
         const max = toFiniteNumber(item.qty_max, 99);
         const min = toFiniteNumber(item.qty_min, 0);
@@ -1453,7 +1520,7 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
         const nextQty = Math.max(min, Math.min(max, currentQty + delta));
         if (nextQty <= 0) delete next.qtyById[String(itemId)];
         else next.qtyById[String(itemId)] = nextQty;
-        if (nextQty > 0) next = withDefaultOptionVariant(item, next);
+        if (nextQty > 0) next = withDefaultOptionVariant(item, next, unitConversions);
       }
 
       return { ...current, [String(groupId)]: next };
@@ -1474,7 +1541,7 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
           ...previous,
           variantByItemId: {
             ...previous.variantByItemId,
-            [String(itemId)]: getOptionItemVariantState(itemRaw, variantGroupRaw, index),
+            [String(itemId)]: getOptionItemVariantState(itemRaw, variantGroupRaw, index, unitConversions),
           },
         },
       };
@@ -1515,18 +1582,33 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
                 <View style={styles.infoCard}>
                   <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                     {asArray(asRecord(variants[0]).values).map((value, index) => {
+                      const variantGroup = asRecord(variants[0]);
                       const selected = variantState.selectedIndex === index;
-                      const label = formatVariantValue(value, asRecord(variants[0]).unit_short_title || asRecord(variants[0]).unit_code || asRecord(variants[0]).unit_title);
+                      const label = formatVariantValue(value, variantGroup.unit_short_title || variantGroup.unit_code || variantGroup.unit_title);
                       return (
                         <Pressable
                           key={`${label}-${index}`}
-                          onPress={() => setVariantState({
-                            groupId: toPositiveId(asRecord(variants[0]).id ?? asRecord(variants[0]).variant_group_id),
-                            label,
-                            selectedIndex: index,
-                            unitId: toPositiveId(asRecord(variants[0]).unit_id),
-                            value,
-                          })}
+                          onPress={() => {
+                            const calculated = calculateVariantUnitPrice({
+                              basePrice: getProductBasePrice(product),
+                              baseQty: (product as CatalogProduct & AnyRecord).base_qty,
+                              baseUnitId: (product as CatalogProduct & AnyRecord).base_unit_id ?? (product as CatalogProduct & AnyRecord).unit_id ?? variantGroup.unit_id,
+                              discountTiers: variantGroup.discount_tiers,
+                              selectedIndex: index,
+                              unitConversions,
+                              variantUnitId: variantGroup.unit_id,
+                              variantValue: value,
+                            });
+                            setVariantState({
+                              groupId: toPositiveId(variantGroup.id ?? variantGroup.variant_group_id),
+                              label,
+                              quantityInBase: calculated.quantityInBase,
+                              selectedIndex: index,
+                              stockQuantity: calculated.quantityInBase,
+                              unitId: toPositiveId(variantGroup.unit_id),
+                              value,
+                            });
+                          }}
                           style={[styles.choiceChip, selected && styles.choiceChipActive]}
                         >
                           <Text style={[styles.choiceChipText, selected && styles.choiceChipTextActive]}>{label}</Text>

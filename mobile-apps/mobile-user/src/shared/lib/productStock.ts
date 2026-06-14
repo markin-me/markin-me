@@ -32,6 +32,12 @@ export type ProductAvailabilityState = {
   stockQty: number | null;
 };
 
+export type VariantUnitPriceResult = {
+  missingConversion: boolean;
+  quantityInBase: number | null;
+  unitPrice: number;
+};
+
 function normalizeStockQty(rawQty: unknown) {
   if (rawQty === undefined) return undefined;
   if (rawQty === null || rawQty === '') return null;
@@ -236,12 +242,88 @@ export function getUnitConversionFactor(unitConversions: UnitConversion[], fromU
   return null;
 }
 
+export function parseVariantValueNumber(value: unknown) {
+  const match = String(value ?? '').replace(',', '.').match(/-?\d+(?:\.\d+)?/);
+  return match ? Number(match[0]) : NaN;
+}
+
+function roundStockQty(value: number) {
+  return Math.round((Number.isFinite(value) ? value : 0) * 1000) / 1000;
+}
+
+function roundMoney(value: number) {
+  return Math.round((Number.isFinite(value) ? value : 0) * 100) / 100;
+}
+
+function getTierDiscountPercent(discountTiers: unknown, selectedIndex: number) {
+  const tiers = Array.isArray(discountTiers) ? discountTiers : [];
+  const tier = tiers.find((item) => {
+    const row = item && typeof item === 'object' ? item as Record<string, unknown> : {};
+    return Number(row.sort_order) === selectedIndex;
+  });
+  const row = tier && typeof tier === 'object' ? tier as Record<string, unknown> : {};
+  const discountPercent = Number(row.discount_percent || 0);
+  return Number.isFinite(discountPercent) ? discountPercent : 0;
+}
+
+export function calculateVariantUnitPrice({
+  basePrice,
+  baseQty,
+  baseUnitId,
+  discountTiers,
+  selectedIndex,
+  unitConversions,
+  variantUnitId,
+  variantValue,
+}: {
+  basePrice: unknown;
+  baseQty: unknown;
+  baseUnitId: unknown;
+  discountTiers?: unknown;
+  selectedIndex: unknown;
+  unitConversions: UnitConversion[];
+  variantUnitId: unknown;
+  variantValue: unknown;
+}): VariantUnitPriceResult {
+  const price = Number(basePrice || 0);
+  const safePrice = Number.isFinite(price) && price > 0 ? price : 0;
+  const safeBaseQty = toPositiveQty(baseQty) || 1;
+  const index = Number(selectedIndex);
+  const numericValue = parseVariantValueNumber(variantValue);
+  if (!Number.isFinite(index) || !Number.isFinite(numericValue) || numericValue <= 0) {
+    return { missingConversion: false, quantityInBase: null, unitPrice: roundMoney(safePrice) };
+  }
+
+  const fromUnitId = Number(variantUnitId || 0);
+  const toUnitId = Number(baseUnitId || 0);
+  const needsConversion = Number.isFinite(fromUnitId) && Number.isFinite(toUnitId) && fromUnitId > 0 && toUnitId > 0 && fromUnitId !== toUnitId;
+  const factor = needsConversion ? getUnitConversionFactor(unitConversions, fromUnitId, toUnitId) : 1;
+  if (needsConversion && factor == null) {
+    return { missingConversion: true, quantityInBase: null, unitPrice: roundMoney(safePrice) };
+  }
+
+  const quantityInBase = numericValue * Number(factor || 1);
+  if (!Number.isFinite(quantityInBase) || quantityInBase <= 0) {
+    return { missingConversion: false, quantityInBase: null, unitPrice: roundMoney(safePrice) };
+  }
+
+  let unitPrice = safePrice * (quantityInBase / safeBaseQty);
+  const discountPercent = getTierDiscountPercent(discountTiers, index);
+  if (discountPercent !== 0) unitPrice *= 1 - discountPercent / 100;
+
+  return {
+    missingConversion: false,
+    quantityInBase: roundStockQty(quantityInBase),
+    unitPrice: roundMoney(unitPrice),
+  };
+}
+
 function getIngredientRequiredQtyInBase(row: Record<string, unknown>, unitConversions: UnitConversion[]) {
   const quantity = toPositiveQty(row.quantity ?? row.qty ?? row.default_qty ?? row.quantity_default);
   if (!(quantity > 0)) return 0;
 
-  const fromUnitId = row.unit_id ?? row.ingredient_unit_id;
-  const toUnitId = row.ingredient_base_unit_id ?? row.base_unit_id;
+  const fromUnitId = row.unit_id ?? row.unitId ?? row.ingredient_unit_id ?? row.ingredientUnitId;
+  const toUnitId = row.ingredient_base_unit_id ?? row.ingredientBaseUnitId ?? row.base_unit_id ?? row.baseUnitId ?? row.stock_unit_id ?? row.stockUnitId;
   const factor = getUnitConversionFactor(unitConversions, fromUnitId, toUnitId);
   return factor == null ? quantity : Math.round(quantity * factor * 1000) / 1000;
 }

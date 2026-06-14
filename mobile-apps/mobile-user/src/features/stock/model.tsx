@@ -5,6 +5,7 @@ import {
   fetchUnitConversions,
   fetchProductsBatchAvailability,
   getMemoryMobileCatalogSnapshot,
+  getMemoryUnitConversions,
   readCachedUnitConversions,
   readCachedFullProductPassports,
   readCachedMobileCatalogSnapshot,
@@ -125,7 +126,7 @@ function areStockLevelsEqual(prev: Map<number, ProductStockLevel>, next: Map<num
 
 export function StockProvider({ children }: { children: ReactNode }) {
   const [stockLevels, setStockLevels] = useState<Map<number, ProductStockLevel>>(() => new Map());
-  const [unitConversions, setUnitConversions] = useState<UnitConversion[]>([]);
+  const [unitConversions, setUnitConversions] = useState<UnitConversion[]>(() => getMemoryUnitConversions());
   const [loading, setLoading] = useState(false);
   const [updatedAt, setUpdatedAt] = useState(0);
   const stockLevelsRef = useRef(stockLevels);
@@ -215,10 +216,7 @@ export function StockProvider({ children }: { children: ReactNode }) {
           setUpdatedAt(Number(parsed.updatedAt || 0));
         }
 
-        let conversions = await readCachedUnitConversions();
-        if (!conversions.length) {
-          conversions = await fetchUnitConversions().catch(() => []);
-        }
+        const conversions = await readCachedUnitConversions();
         setUnitConversions(conversions);
 
         const cachedFullPassports = await readCachedFullProductPassports();
@@ -244,8 +242,23 @@ export function StockProvider({ children }: { children: ReactNode }) {
             persistStockLevels(snapshotLevels);
           }
         }
-        const ids = collectSnapshotProductIds(snapshot);
-        if (ids.length) await refreshMany(ids);
+
+        if (!conversions.length) {
+          void fetchUnitConversions()
+            .then((freshConversions) => {
+              if (!freshConversions.length) return;
+              setUnitConversions(freshConversions);
+              const freshSnapshotRows = extractStockRowsFromMobileSnapshot(getMemoryMobileCatalogSnapshot(), freshConversions);
+              if (!freshSnapshotRows.length) return;
+              const freshSnapshotLevels = mergeStockLevels(new Map(stockLevelsRef.current), freshSnapshotRows);
+              if (areStockLevelsEqual(stockLevelsRef.current, freshSnapshotLevels)) return;
+              stockLevelsRef.current = freshSnapshotLevels;
+              setStockLevels(freshSnapshotLevels);
+              setUpdatedAt(Date.now());
+              persistStockLevels(freshSnapshotLevels);
+            })
+            .catch(() => null);
+        }
       } catch {
         // UI must stay usable if cache hydration fails; explicit refreshes still surface API errors.
       } finally {
@@ -254,7 +267,7 @@ export function StockProvider({ children }: { children: ReactNode }) {
       }
     })();
     return hydratingRef.current;
-  }, [refreshMany]);
+  }, [persistStockLevels]);
 
   useEffect(() => {
     hydrateFromCache();

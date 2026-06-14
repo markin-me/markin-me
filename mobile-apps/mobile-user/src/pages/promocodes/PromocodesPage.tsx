@@ -19,6 +19,14 @@ function asText(value: unknown) {
   return String(value || '').trim();
 }
 
+function getBenefitsPageErrorText(error: unknown, fallback: string) {
+  const message = error instanceof Error ? error.message : '';
+  if (/SQLITE_FULL|database or disk is full|code\s*13/i.test(message)) {
+    return 'Не удалось сохранить выбор. Локальное хранилище приложения переполнено.';
+  }
+  return message || fallback;
+}
+
 function normalizePromoCode(value: unknown) {
   return String(value || '').replace(/\s+/g, '').toUpperCase();
 }
@@ -163,7 +171,7 @@ export function PromocodesPage() {
       const freshState = await ensureCheckoutBenefitsState();
       setStateFromBenefits(freshState);
     } catch (error) {
-      setErrorText(error instanceof Error ? error.message : 'Не удалось загрузить промокоды.');
+      setErrorText(getBenefitsPageErrorText(error, 'Не удалось загрузить промокоды.'));
     } finally {
       setLoading(false);
     }
@@ -187,7 +195,7 @@ export function PromocodesPage() {
         : await applyCheckoutPromoCardSelection(item);
       setStateFromBenefits(state);
     } catch (error) {
-      setErrorText(error instanceof Error ? error.message : 'Не удалось применить промокод.');
+      setErrorText(getBenefitsPageErrorText(error, 'Не удалось применить промокод.'));
     } finally {
       setApplyingPromoKey('');
     }

@@ -17,6 +17,14 @@ function asText(value: unknown) {
   return String(value || '').trim();
 }
 
+function getBenefitsPageErrorText(error: unknown, fallback: string) {
+  const message = error instanceof Error ? error.message : '';
+  if (/SQLITE_FULL|database or disk is full|code\s*13/i.test(message)) {
+    return 'Не удалось сохранить выбор. Локальное хранилище приложения переполнено.';
+  }
+  return message || fallback;
+}
+
 function formatDiscountBadge(item: CustomerBenefitCard) {
   const direct = asText(item.badge_text);
   if (direct) return direct;
@@ -142,7 +150,7 @@ export function DiscountsPage() {
       setActiveDiscountId(freshState.currentSelection.discountId);
       setActiveDiscountSource(freshState.currentSelection.discountSource);
     } catch (error) {
-      setErrorText(error instanceof Error ? error.message : 'Не удалось загрузить скидки.');
+      setErrorText(getBenefitsPageErrorText(error, 'Не удалось загрузить скидки.'));
     } finally {
       setLoading(false);
     }
@@ -175,7 +183,7 @@ export function DiscountsPage() {
       setActiveDiscountId(state.currentSelection.discountId);
       setActiveDiscountSource(state.currentSelection.discountSource);
     } catch (error) {
-      setErrorText(error instanceof Error ? error.message : 'Не удалось применить скидку.');
+      setErrorText(getBenefitsPageErrorText(error, 'Не удалось применить скидку.'));
     } finally {
       setApplyingDiscountId(null);
     }

@@ -121,6 +121,17 @@ function getCheckoutBenefitsStorageKey(token: string, request: CheckoutBenefitsP
   return `mobile_checkout_benefits_v1_t${apiConfig.tenantId}_s${apiConfig.storeId}_u${hashText(String(token || '').trim())}_k${hashText(stableStringify(request || {}))}`;
 }
 
+function getCheckoutBenefitsStoragePrefix(token = '') {
+  const base = `mobile_checkout_benefits_v1_t${apiConfig.tenantId}_s${apiConfig.storeId}`;
+  const safeToken = String(token || '').trim();
+  return safeToken ? `${base}_u${hashText(safeToken)}_` : base;
+}
+
+function isStorageFullError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error || '');
+  return /SQLITE_FULL|database or disk is full|code\s*13/i.test(message);
+}
+
 function isFreshUpdatedAt(updatedAt: unknown) {
   const updatedAtMs = Date.parse(asText(updatedAt));
   return Number.isFinite(updatedAtMs) && Date.now() - updatedAtMs < CHECKOUT_BENEFITS_CACHE_TTL_MS;
@@ -1174,6 +1185,18 @@ function normalizeCachedBenefits(value: unknown): CheckoutBenefitsCache | null {
   };
 }
 
+async function pruneCheckoutBenefitsStorage(token = '', keepKey = '') {
+  const prefix = getCheckoutBenefitsStoragePrefix(token);
+  const keys = await AsyncStorage.getAllKeys().catch(() => []);
+  const removable = Array.from(keys)
+    .filter((key) => key.startsWith(prefix) && key !== keepKey);
+  if (!removable.length) return;
+  removable.forEach((key) => {
+    checkoutBenefitsMemory.delete(key);
+  });
+  await AsyncStorage.multiRemove(removable).catch(() => undefined);
+}
+
 async function readCachedCheckoutBenefits(token: string, request: CheckoutBenefitsPreviewRequest) {
   const safeToken = String(token || '').trim();
   if (!safeToken) return null;
@@ -1199,13 +1222,48 @@ async function saveCachedCheckoutBenefits(token: string, request: CheckoutBenefi
   const normalized: CheckoutBenefitsCache = {
     basePreview: value.basePreview || null,
     currentSelection: normalizeSelection(value.currentSelection),
-    preview: value.preview || null,
-    sourceBenefits: value.sourceBenefits || null,
+    preview: null,
+    sourceBenefits: value.basePreview || value.preview ? null : value.sourceBenefits || null,
     updatedAt: asText(value.updatedAt) || new Date().toISOString(),
   };
-  checkoutBenefitsMemory.set(key, normalized);
-  await AsyncStorage.setItem(key, JSON.stringify(normalized));
+  const memoryValue: CheckoutBenefitsCache = {
+    ...normalized,
+    preview: value.preview || normalized.basePreview,
+    sourceBenefits: value.sourceBenefits || buildCustomerBenefitsFromPreview(value.preview || normalized.basePreview) || null,
+  };
+  checkoutBenefitsMemory.set(key, memoryValue);
+  await pruneCheckoutBenefitsStorage(safeToken, key).catch(() => undefined);
+  try {
+    await AsyncStorage.setItem(key, JSON.stringify(normalized));
+  } catch (error) {
+    if (!isStorageFullError(error)) throw error;
+    await pruneCheckoutBenefitsStorage().catch(() => undefined);
+    checkoutBenefitsMemory.set(key, memoryValue);
+    try {
+      await AsyncStorage.setItem(key, JSON.stringify(normalized));
+    } catch (retryError) {
+      if (!isStorageFullError(retryError)) throw retryError;
+    }
+  }
   return normalized;
+}
+
+async function saveCheckoutBenefitsSelectionSafely(selection: CheckoutBenefitsSelection, token = '') {
+  try {
+    await saveCheckoutBenefitsSelection(selection);
+    return true;
+  } catch (error) {
+    if (!isStorageFullError(error)) throw error;
+    await pruneCheckoutBenefitsStorage(token).catch(() => undefined);
+    await pruneCheckoutBenefitsStorage().catch(() => undefined);
+    try {
+      await saveCheckoutBenefitsSelection(selection);
+      return true;
+    } catch (retryError) {
+      if (!isStorageFullError(retryError)) throw retryError;
+      return false;
+    }
+  }
 }
 
 async function resolveCheckoutBenefitsContext(context: CheckoutBenefitsContext = {}) {
@@ -1235,12 +1293,12 @@ function buildCheckoutBenefitsStateFromCache(
   resolved: Awaited<ReturnType<typeof resolveCheckoutBenefitsContext>>,
   cachedState: CheckoutBenefitsCache | null,
 ) {
-  const sourcePreview = cachedState?.preview || cachedState?.basePreview || null;
-  const preview = cachedState && areCheckoutBenefitsSelectionsEqual(cachedState.currentSelection, resolved.selection)
-    ? (cachedState.preview || sourcePreview)
-    : buildLocalCheckoutBenefitsPreviewData(sourcePreview || null, resolved.request, resolved.selection, resolved.catalogSnapshot)
-      || derivePreviewFromSelection(sourcePreview, resolved.selection);
-  const sourceBenefits = cachedState?.sourceBenefits || buildCustomerBenefitsFromPreview(sourcePreview) || null;
+  const sourcePreview = cachedState?.basePreview || cachedState?.preview || null;
+  const preview = buildLocalCheckoutBenefitsPreviewData(sourcePreview || null, resolved.request, resolved.selection, resolved.catalogSnapshot)
+    || (cachedState && areCheckoutBenefitsSelectionsEqual(cachedState.currentSelection, resolved.selection)
+      ? cachedState.preview || sourcePreview
+      : derivePreviewFromSelection(sourcePreview, resolved.selection));
+  const sourceBenefits = cachedState?.sourceBenefits || buildCustomerBenefitsFromPreview(sourcePreview || preview) || null;
   return {
     counts: getCheckoutBenefitsCounts(preview, sourceBenefits),
     currentSelection: resolved.selection,
@@ -1255,7 +1313,7 @@ async function saveLocalCheckoutBenefitsSelection(
   selection: CheckoutBenefitsSelection,
 ) {
   const nextSelection = normalizeSelection(selection);
-  await saveCheckoutBenefitsSelection(nextSelection);
+  await saveCheckoutBenefitsSelectionSafely(nextSelection, resolved.token);
   if (!resolved.token) {
     return {
       counts: getCheckoutBenefitsCounts(null, null),
@@ -1326,7 +1384,7 @@ export async function cacheCheckoutBenefitsPreviewForLines(
     sourceBenefits,
     updatedAt: cachedState?.updatedAt || new Date().toISOString(),
   };
-  await saveCheckoutBenefitsSelection(nextSelection);
+  await saveCheckoutBenefitsSelectionSafely(nextSelection, resolved.token);
   await saveCachedCheckoutBenefits(resolved.token, resolved.request, cachedValue);
   return derivedPreview;
 }
@@ -1527,7 +1585,7 @@ export async function applyCheckoutPromoCode(code: string, context: CheckoutBene
     promoRewardId: null,
     promoSource: 'promo_code',
   });
-  await saveCheckoutBenefitsSelection(nextSelection);
+  await saveCheckoutBenefitsSelectionSafely(nextSelection, passport.token);
   const nextState = await refreshCheckoutBenefitsState({
     ...context,
     selection: nextSelection,

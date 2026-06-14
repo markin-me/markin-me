@@ -24,10 +24,10 @@ import {
   normalizeComboIngredientQuantity,
   saveComboDraft,
 } from '../../features/combo-builder';
+import { useProductStock } from '../../features/stock';
 import {
   fetchCatalogComboDetails,
   getMemoryCatalogComboDetails,
-  isSameCachedValue,
   readCachedCatalogComboDetails,
 } from '../../shared/api';
 import { theme } from '../../shared/config/theme';
@@ -38,6 +38,7 @@ type ComboReplacePageProps = NativeStackScreenProps<RootStackParamList, 'comboRe
 
 export function ComboReplacePage({ navigation, route }: ComboReplacePageProps) {
   const { blockIndex, comboId } = route.params;
+  const { unitConversions } = useProductStock();
   const [combo, setCombo] = useState<CatalogComboDetails | null>(() => getMemoryCatalogComboDetails(comboId));
   const [draft, setDraft] = useState(() => (combo ? cloneComboDraft(getComboDraft(combo)) : null));
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
@@ -53,11 +54,12 @@ export function ComboReplacePage({ navigation, route }: ComboReplacePageProps) {
       if (cached && isMounted) {
         setCombo(cached);
         setDraft(cloneComboDraft(getComboDraft(cached)));
+        return;
       }
 
       try {
         const fresh = await fetchCatalogComboDetails(comboId);
-        if (isMounted && !isSameCachedValue(fresh, cached)) {
+        if (isMounted) {
           setCombo(fresh);
           setDraft(cloneComboDraft(getComboDraft(fresh)));
         }
@@ -130,7 +132,7 @@ export function ComboReplacePage({ navigation, route }: ComboReplacePageProps) {
     if (!combo || !draft || !block) return;
     const product = block.products[index];
     if (!product) return;
-    const configured = buildComboConfiguredProduct(product, Number(combo.discount_percent || 0), editingVariantIndex, editingIngredientQuantities);
+    const configured = buildComboConfiguredProduct(product, Number(combo.discount_percent || 0), editingVariantIndex, editingIngredientQuantities, unitConversions);
     const nextDraft = {
       ...draft,
       configuredByBlock: {
@@ -168,7 +170,7 @@ export function ComboReplacePage({ navigation, route }: ComboReplacePageProps) {
               const selected = index === selectedIndex;
               const config = getComboBlockConfig(draft, blockIndex, product);
               const liveConfig = editingIndex === index
-                ? buildComboConfiguredProduct(product, Number(combo.discount_percent || 0), editingVariantIndex, editingIngredientQuantities)
+                ? buildComboConfiguredProduct(product, Number(combo.discount_percent || 0), editingVariantIndex, editingIngredientQuantities, unitConversions)
                 : config;
               return (
                 <View key={`${product.product_id}-${index}`}>

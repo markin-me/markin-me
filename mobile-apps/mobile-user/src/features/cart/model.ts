@@ -7,6 +7,8 @@ export type CartVariant = {
   groupId?: number | null;
   groupTitle?: string;
   label?: string;
+  quantityInBase?: number | null;
+  stockQuantity?: number | null;
   unit?: string;
   unitId?: number | null;
   valueIndex?: number | null;
@@ -24,6 +26,7 @@ export type CartIngredient = {
 export type CartOptionItem = {
   id?: number | null;
   name: string;
+  stockQuantity?: number | null;
   targetProductId?: number | null;
   quantity: number;
   unitPrice?: number;
@@ -118,6 +121,8 @@ function normalizeVariant(value: unknown): CartVariant | null {
   const unit = normalizeText(source.unit);
   const groupTitle = normalizeText(source.groupTitle);
   const groupId = normalizeOptionalId(source.groupId);
+  const quantityInBase = source.quantityInBase == null ? null : normalizeNumber(source.quantityInBase, NaN);
+  const stockQuantity = source.stockQuantity == null ? null : normalizeNumber(source.stockQuantity, NaN);
   const unitId = normalizeOptionalId(source.unitId ?? (source as Record<string, unknown>).unit_id);
   const valueIndex = source.valueIndex == null ? null : normalizeNumber(source.valueIndex, NaN);
   if (!label && !unit && !groupTitle && !groupId) return null;
@@ -125,6 +130,8 @@ function normalizeVariant(value: unknown): CartVariant | null {
     groupId,
     groupTitle,
     label,
+    quantityInBase: quantityInBase != null && Number.isFinite(quantityInBase) && quantityInBase > 0 ? quantityInBase : null,
+    stockQuantity: stockQuantity != null && Number.isFinite(stockQuantity) && stockQuantity > 0 ? stockQuantity : null,
     unit,
     unitId,
     valueIndex: Number.isFinite(Number(valueIndex)) ? Number(valueIndex) : null,
@@ -159,12 +166,14 @@ function normalizeOptions(value: unknown): CartOptionItem[] {
       if (!source) return null;
       const name = normalizeText(source.name);
       const quantity = Math.max(1, normalizeNumber(source.quantity, 1));
+      const stockQuantity = source.stockQuantity == null ? null : normalizeNumber(source.stockQuantity, NaN);
       if (!name) return null;
       return {
         id: normalizeOptionalId(source.id),
         name,
         targetProductId: normalizeOptionalId(source.targetProductId ?? (source as Record<string, unknown>).target_product_id),
         quantity,
+        stockQuantity: stockQuantity != null && Number.isFinite(stockQuantity) && stockQuantity > 0 ? stockQuantity : null,
         unitPrice: Math.max(0, normalizeNumber(source.unitPrice)),
         variant: normalizeVariant(source.variant),
       };
