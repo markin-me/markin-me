@@ -969,10 +969,6 @@ function getCachedProductPassport(productId: number) {
   return catalogPassportFromFullProductPassport(getFullProductPassport(productId)) || getCatalogProductPassport(productId);
 }
 
-function hasCompleteProductPassport(passport: CatalogProductPassport | null) {
-  return !!passport && Array.isArray(passport.ingredients) && Array.isArray(passport.optionGroups);
-}
-
 function ProductInfoCard({ title, children }: { title: string; children: ReactNode }) {
   return (
     <View style={[styles.infoCard, styles.stackedInfoCard]}>
@@ -1067,78 +1063,90 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
 
   useEffect(() => {
     let isMounted = true;
+    const deferredTimers: ReturnType<typeof setTimeout>[] = [];
 
-    async function hydrateFromCache() {
-      const memoryPassport = getCachedProductPassport(productId);
-      if (memoryPassport) {
-        if (isMounted) {
-          setPassport(memoryPassport);
-          const rows = getPassportStockRows(memoryPassport, unitConversions);
-          if (rows.length) mergeStockRows(rows);
-        }
-        if (hasCompleteProductPassport(memoryPassport)) return;
+    const applyPassport = (nextPassport: CatalogProductPassport | null) => {
+      if (!nextPassport) return false;
+      if (isMounted) {
+        setPassport(nextPassport);
+        const rows = getPassportStockRows(nextPassport, unitConversions);
+        if (rows.length) mergeStockRows(rows);
       }
-      const memoryProduct = getCatalogSnapshotProduct(productId);
-      if (memoryProduct && isMounted) {
-        setFallbackProduct(memoryProduct);
-        const row = stockLevelFromProduct(memoryProduct);
+      return true;
+    };
+
+    const applyProduct = (nextProduct: CatalogProduct | null) => {
+      if (!nextProduct) return false;
+      if (isMounted) {
+        setFallbackProduct(nextProduct);
+        const row = stockLevelFromProduct(nextProduct);
         if (row) mergeStockRows([row]);
       }
+      return true;
+    };
 
-      await readCachedFullProductPassports();
-      const fullCachedPassport = getCachedProductPassport(productId);
-      if (fullCachedPassport) {
-        if (isMounted) {
-          setPassport(fullCachedPassport);
-          const rows = getPassportStockRows(fullCachedPassport, unitConversions);
-          if (rows.length) mergeStockRows(rows);
-        }
-        if (hasCompleteProductPassport(fullCachedPassport)) return;
-      }
+    async function readFullPassportCache() {
+      await readCachedFullProductPassports().catch(() => null);
+      return applyPassport(getCachedProductPassport(productId));
+    }
 
-      await readCachedMobileCatalogSnapshot();
-      const cachedPassport = getCachedProductPassport(productId);
-      if (cachedPassport) {
-        if (isMounted) {
-          setPassport(cachedPassport);
-          const rows = getPassportStockRows(cachedPassport, unitConversions);
-          if (rows.length) mergeStockRows(rows);
-        }
-        if (hasCompleteProductPassport(cachedPassport)) return;
-      }
-      const cachedProduct = getCatalogSnapshotProduct(productId);
-      if (cachedProduct && isMounted) {
-        setFallbackProduct(cachedProduct);
-        const row = stockLevelFromProduct(cachedProduct);
-        if (row) mergeStockRows([row]);
-      }
+    async function readSnapshotCache() {
+      await readCachedMobileCatalogSnapshot().catch(() => null);
+      const hasPassport = applyPassport(getCachedProductPassport(productId));
+      const hasProduct = applyProduct(getCatalogSnapshotProduct(productId));
+      return hasPassport || hasProduct;
+    }
 
-      const warmedPassport = await ensureMobileCatalogProductPassport(productId);
-      if (warmedPassport) {
-        if (isMounted) {
-          setPassport(warmedPassport);
-          const rows = getPassportStockRows(warmedPassport, unitConversions);
-          if (rows.length) mergeStockRows(rows);
-        }
-        return;
-      }
+    async function warmProductData(hasCachedProductData: boolean) {
+      let hasProductData = hasCachedProductData;
+
+      const warmedPassport = await ensureMobileCatalogProductPassport(productId).catch(() => null);
+      if (applyPassport(warmedPassport)) hasProductData = true;
 
       try {
         const product = await fetchCatalogProduct(productId);
         if (isMounted) {
           setFallbackProduct(product);
+          setPassport((current) => current?.product && Number(current.product.id) === Number(productId)
+            ? { ...current, product }
+            : current);
           const row = stockLevelFromProduct(product);
           if (row) mergeStockRows([row]);
         }
+        hasProductData = true;
       } catch (error) {
+        if (hasProductData) return;
         if (isMounted) setErrorText(error instanceof Error ? error.message : 'Данные товара не найдены в кэше');
       }
+    }
+
+    async function hydrateFromCache() {
+      let hasCachedProductData = false;
+      const memoryPassport = getCachedProductPassport(productId);
+      if (applyPassport(memoryPassport)) hasCachedProductData = true;
+      const memoryProduct = getCatalogSnapshotProduct(productId);
+      if (applyProduct(memoryProduct)) hasCachedProductData = true;
+
+      if (!hasCachedProductData) {
+        if (await readFullPassportCache()) hasCachedProductData = true;
+        if (await readSnapshotCache()) hasCachedProductData = true;
+        await warmProductData(hasCachedProductData);
+        return;
+      }
+
+      deferredTimers.push(setTimeout(() => {
+        void readFullPassportCache();
+      }, 40));
+      deferredTimers.push(setTimeout(() => {
+        void warmProductData(true);
+      }, 120));
     }
 
     void hydrateFromCache();
 
     return () => {
       isMounted = false;
+      deferredTimers.forEach((timer) => clearTimeout(timer));
     };
   }, [mergeStockRows, productId, unitConversions]);
 

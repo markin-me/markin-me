@@ -54,7 +54,6 @@ export function ComboReplacePage({ navigation, route }: ComboReplacePageProps) {
       if (cached && isMounted) {
         setCombo(cached);
         setDraft(cloneComboDraft(getComboDraft(cached)));
-        return;
       }
 
       try {

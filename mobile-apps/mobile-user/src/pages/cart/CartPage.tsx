@@ -353,6 +353,18 @@ function getCartLineCatalogProduct(line: CartLine, snapshot: Awaited<ReturnType<
     || null;
 }
 
+function getCartLineCatalogPhotoUrl(line: CartLine, snapshot: Awaited<ReturnType<typeof readCachedMobileCatalogSnapshot>> | null) {
+  const product = getCartLineCatalogProduct(line, snapshot);
+  const photo = product?.photo_thumb || product?.photo_lqip || (Array.isArray(product?.photos) ? product.photos[0] : '');
+  return photo ? resolveAssetUrl(String(photo)) : '';
+}
+
+function syncCartLineCatalogPhoto(line: CartLine, snapshot: Awaited<ReturnType<typeof readCachedMobileCatalogSnapshot>> | null) {
+  if (line.type !== 'product') return line;
+  const photoUrl = getCartLineCatalogPhotoUrl(line, snapshot);
+  return photoUrl && photoUrl !== line.photoUrl ? { ...line, photoUrl } : line;
+}
+
 function getCartLineBuyXGetYBadge(line: CartLine, snapshot: Awaited<ReturnType<typeof readCachedMobileCatalogSnapshot>> | null) {
   if (line.type !== 'product') return null;
   return line.buyXGetYBadge || getCartLineCatalogProduct(line, snapshot)?.buy_x_get_y_badge || null;
@@ -1307,7 +1319,9 @@ export function CartPage() {
     const cachedAddresses = passport?.token
       ? await readCachedCustomerAddresses(passport.token)
       : passport?.addresses || [];
-    const stockState = await evaluateCartStockState(nextLines, stockLevels);
+    const catalogSyncedLines = nextLines.map((line) => syncCartLineCatalogPhoto(line, cachedCatalogSnapshot));
+    const hasCatalogLineChanges = catalogSyncedLines.some((line, index) => line !== nextLines[index]);
+    const stockState = await evaluateCartStockState(catalogSyncedLines, stockLevels);
     const syncedLines = stockState.lines;
     if (mutationSeq !== cartMutationSeqRef.current) {
       return {
@@ -1321,6 +1335,7 @@ export function CartPage() {
         syncedLines: linesRef.current.length ? linesRef.current : syncedLines,
       };
     }
+    if (hasCatalogLineChanges) void saveCartLines(catalogSyncedLines).catch(() => null);
 
     linesRef.current = syncedLines;
     setLines(syncedLines);

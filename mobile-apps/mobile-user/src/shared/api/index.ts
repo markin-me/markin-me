@@ -31,6 +31,21 @@ export type CatalogByCategoryPayload = {
   combosByCategory: Map<number, CatalogCombo[]>;
 };
 
+export type CatalogCategoryCount = {
+  combo_count: number;
+  product_count: number;
+  total_count: number;
+};
+
+export type MobileCatalogIndex = {
+  categories: CatalogCategory[];
+  categoryCounts: Record<string, CatalogCategoryCount>;
+  generated_at?: string;
+  store_id?: number;
+  tenant_id?: number;
+  version: string;
+};
+
 export type CustomerProfile = {
   id: number;
   name?: string | null;
@@ -366,6 +381,8 @@ type AuthSuccessPayload = {
 };
 
 let memoryCatalogSnapshot: MobileCatalogSnapshot | null = null;
+let memoryCatalogIndex: MobileCatalogIndex | null = null;
+const memoryCatalogCategories = new Map<string, CatalogByCategoryPayload>();
 let memoryFullProductPassports: Record<string, FullProductPassport> = {};
 const memoryComboDetails = new Map<number, CatalogComboDetails>();
 let memoryUnitConversions: UnitConversion[] | null = null;
@@ -666,6 +683,14 @@ function getMobileSnapshotStorageKey() {
   return `mobile_catalog_snapshot_v1_t${apiConfig.tenantId}_s${apiConfig.storeId}`;
 }
 
+function getMobileCatalogIndexStorageKey() {
+  return `mobile_catalog_index_v1_t${apiConfig.tenantId}_s${apiConfig.storeId}`;
+}
+
+function getMobileCatalogCategoryStorageKey(version: string, categoryId: number) {
+  return `mobile_catalog_category_v1_t${apiConfig.tenantId}_s${apiConfig.storeId}_v${hashText(version)}_c${categoryId}`;
+}
+
 function getFullProductPassportsStorageKey() {
   return `mobile_full_product_passports_v1_t${apiConfig.tenantId}_s${apiConfig.storeId}`;
 }
@@ -721,6 +746,82 @@ function normalizeMobileCatalogSnapshot(value: unknown): MobileCatalogSnapshot |
     store_id: source.store_id,
     tenant_id: source.tenant_id,
     version: String(source.version),
+  };
+}
+
+function normalizeCatalogCategoryCount(value: unknown): CatalogCategoryCount {
+  const source = value && typeof value === 'object' ? value as Partial<CatalogCategoryCount> : {};
+  const productCount = Math.max(0, Math.floor(Number(source.product_count || 0)));
+  const comboCount = Math.max(0, Math.floor(Number(source.combo_count || 0)));
+  const totalCount = Math.max(0, Math.floor(Number(source.total_count || productCount + comboCount)));
+  return {
+    combo_count: comboCount,
+    product_count: productCount,
+    total_count: totalCount,
+  };
+}
+
+function normalizeMobileCatalogIndex(value: unknown): MobileCatalogIndex | null {
+  const source = value && typeof value === 'object' ? (value as Partial<MobileCatalogIndex>) : null;
+  if (!source || !source.version) return null;
+  const rawCounts = source.categoryCounts && typeof source.categoryCounts === 'object'
+    ? source.categoryCounts as Record<string, unknown>
+    : {};
+  const categoryCounts: Record<string, CatalogCategoryCount> = {};
+  Object.entries(rawCounts).forEach(([categoryId, count]) => {
+    const id = Number(categoryId || 0);
+    if (Number.isFinite(id) && id > 0) categoryCounts[String(id)] = normalizeCatalogCategoryCount(count);
+  });
+
+  return {
+    categories: Array.isArray(source.categories) ? source.categories : [],
+    categoryCounts,
+    generated_at: source.generated_at,
+    store_id: source.store_id,
+    tenant_id: source.tenant_id,
+    version: String(source.version),
+  };
+}
+
+function normalizeCatalogCategoryCache(value: unknown): { combos: CatalogCombo[]; products: CatalogProduct[]; version: string } | null {
+  const source = value && typeof value === 'object'
+    ? value as { combos?: unknown; products?: unknown; version?: unknown }
+    : null;
+  const version = String(source?.version || '').trim();
+  if (!source || !version) return null;
+  return {
+    combos: Array.isArray(source.combos) ? source.combos.filter((item): item is CatalogCombo => Boolean(item && typeof item === 'object')) : [],
+    products: Array.isArray(source.products) ? source.products.filter((item): item is CatalogProduct => Boolean(item && typeof item === 'object')) : [],
+    version,
+  };
+}
+
+function mergeFullProductPassportsWithSnapshotProducts(
+  snapshot: MobileCatalogSnapshot | null,
+  passports: Record<string, FullProductPassport>,
+) {
+  if (!snapshot || !passports || typeof passports !== 'object') {
+    return { changed: false, passports };
+  }
+
+  let changed = false;
+  const nextPassports = { ...passports };
+  Object.values(snapshot.productPassports || {}).forEach((passport) => {
+    const product = passport?.product;
+    const productId = Number(product?.id || 0);
+    if (!product || !Number.isFinite(productId) || productId <= 0) return;
+
+    const key = String(productId);
+    const current = nextPassports[key];
+    if (!current || isSameCachedValue(current.product, product)) return;
+
+    nextPassports[key] = { ...current, product };
+    changed = true;
+  });
+
+  return {
+    changed,
+    passports: changed ? normalizeFullProductPassportMap(nextPassports) : passports,
   };
 }
 
@@ -876,23 +977,101 @@ export async function readCachedMobileCatalogSnapshot() {
   try {
     const raw = await AsyncStorage.getItem(getMobileSnapshotStorageKey());
     const snapshot = normalizeMobileCatalogSnapshot(raw ? JSON.parse(raw) : null);
-    if (snapshot) memoryCatalogSnapshot = snapshot;
+    if (snapshot) {
+      memoryCatalogSnapshot = snapshot;
+      if (Object.keys(memoryFullProductPassports).length) {
+        const merged = mergeFullProductPassportsWithSnapshotProducts(snapshot, memoryFullProductPassports);
+        if (merged.changed) {
+          memoryFullProductPassports = merged.passports;
+          await saveCachedJson(getFullProductPassportsStorageKey(), memoryFullProductPassports);
+        }
+      }
+    }
     return snapshot;
   } catch {
     return null;
   }
 }
 
+export async function readCachedMobileCatalogIndex() {
+  const cached = await readCachedJson(getMobileCatalogIndexStorageKey(), normalizeMobileCatalogIndex);
+  if (cached) memoryCatalogIndex = cached;
+  return cached;
+}
+
+export async function saveMobileCatalogIndex(index: MobileCatalogIndex) {
+  const normalized = normalizeMobileCatalogIndex(index);
+  if (!normalized) return null;
+  memoryCatalogIndex = normalized;
+  await AsyncStorage.setItem(getMobileCatalogIndexStorageKey(), JSON.stringify(normalized));
+  return normalized;
+}
+
+function getCatalogCategoryMemoryKey(version: string, categoryId: number) {
+  return `${String(version || '').trim()}:${Number(categoryId || 0)}`;
+}
+
+export async function readCachedCatalogCategory(version: string, categoryId: number): Promise<CatalogByCategoryPayload | null> {
+  const id = toNumberId(categoryId);
+  const safeVersion = String(version || '').trim();
+  if (!id || !safeVersion) return null;
+  const memoryKey = getCatalogCategoryMemoryKey(safeVersion, id);
+  const memory = memoryCatalogCategories.get(memoryKey);
+  if (memory) return memory;
+
+  const cached = await readCachedJson(getMobileCatalogCategoryStorageKey(safeVersion, id), normalizeCatalogCategoryCache);
+  if (!cached || cached.version !== safeVersion) return null;
+  const payload = {
+    combosByCategory: new Map([[id, cached.combos]]),
+    productsByCategory: new Map([[id, cached.products]]),
+  };
+  memoryCatalogCategories.set(memoryKey, payload);
+  return payload;
+}
+
+export async function saveCatalogCategory(version: string, categoryId: number, payload: CatalogByCategoryPayload) {
+  const id = toNumberId(categoryId);
+  const safeVersion = String(version || '').trim();
+  if (!id || !safeVersion) return null;
+  const products = payload.productsByCategory.get(id) || [];
+  const combos = payload.combosByCategory.get(id) || [];
+  const memoryPayload = {
+    combosByCategory: new Map([[id, combos]]),
+    productsByCategory: new Map([[id, products]]),
+  };
+  memoryCatalogCategories.set(getCatalogCategoryMemoryKey(safeVersion, id), memoryPayload);
+  await saveCachedJson(getMobileCatalogCategoryStorageKey(safeVersion, id), {
+    combos,
+    products,
+    version: safeVersion,
+  });
+  return memoryPayload;
+}
+
 export async function saveMobileCatalogSnapshot(snapshot: MobileCatalogSnapshot) {
   const normalized = normalizeMobileCatalogSnapshot(snapshot);
   if (!normalized) return null;
   memoryCatalogSnapshot = normalized;
+  if (Object.keys(memoryFullProductPassports).length) {
+    const merged = mergeFullProductPassportsWithSnapshotProducts(normalized, memoryFullProductPassports);
+    if (merged.changed) {
+      memoryFullProductPassports = merged.passports;
+      await saveCachedJson(getFullProductPassportsStorageKey(), memoryFullProductPassports);
+    }
+  }
   await AsyncStorage.setItem(getMobileSnapshotStorageKey(), JSON.stringify(normalized));
   return normalized;
 }
 
 export async function readCachedFullProductPassports() {
-  const cached = await readCachedJson(getFullProductPassportsStorageKey(), normalizeFullProductPassportMap);
+  let cached = await readCachedJson(getFullProductPassportsStorageKey(), normalizeFullProductPassportMap);
+  if (cached && memoryCatalogSnapshot) {
+    const merged = mergeFullProductPassportsWithSnapshotProducts(memoryCatalogSnapshot, cached);
+    if (merged.changed) {
+      cached = merged.passports;
+      await saveCachedJson(getFullProductPassportsStorageKey(), cached);
+    }
+  }
   if (cached) memoryFullProductPassports = { ...memoryFullProductPassports, ...cached };
   return cached || {};
 }
@@ -1846,6 +2025,14 @@ export async function fetchMobileCatalogSnapshot() {
   const normalized = normalizeMobileCatalogSnapshot(snapshot);
   if (!normalized) throw new Error('BAD_MOBILE_SNAPSHOT');
   await saveMobileCatalogSnapshot(normalized);
+  return normalized;
+}
+
+export async function fetchMobileCatalogIndex() {
+  const index = await requestJson<MobileCatalogIndex>('/api/public/mobile/catalog-index');
+  const normalized = normalizeMobileCatalogIndex(index);
+  if (!normalized) throw new Error('BAD_MOBILE_CATALOG_INDEX');
+  await saveMobileCatalogIndex(normalized);
   return normalized;
 }
 

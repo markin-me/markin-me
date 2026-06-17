@@ -208,7 +208,6 @@ export function ComboPage({ navigation, route }: ComboPageProps) {
       const cached = await readCachedCatalogComboDetails(comboId);
       if (cached && isMounted) {
         applyCombo(cached, true);
-        return;
       }
 
       try {

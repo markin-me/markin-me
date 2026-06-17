@@ -1953,7 +1953,10 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       const photosArr = helpers.safeJsonArray(req.body.photos_json || req.body.photos);
       const photos_json = photosArr.length ? JSON.stringify(photosArr.slice(0, 10)) : null;
 
-      // Удаляем файлы фото, которые были удалены пользователем
+      let removedPhotos = [];
+
+      // Запоминаем файлы фото, которые были удалены пользователем.
+      // Физически удаляем их только после успешного сохранения товара.
       const [oldRows] = await db.query(
         'SELECT photos_json FROM prod_products WHERE tenant_id=? AND id=? LIMIT 1',
         [tenantId, id]
@@ -1961,15 +1964,14 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       if (oldRows.length) {
         const oldPhotos = helpers.safeJsonArray(oldRows[0].photos_json);
         const newSet = new Set(photosArr);
-        const removed = oldPhotos.filter((u) => !newSet.has(u));
-        if (removed.length) deletePhotoFiles(removed);
+        removedPhotos = oldPhotos.filter((u) => !newSet.has(u));
       }
 
       await db.query(
         `UPDATE prod_products
          SET name=?, sku=?, description_short=?, description=?, price=?, old_price=?, cost_price=?, price_source=?, margin_percent=?, cost_price_source=?, unit_id=?, base_unit_id=?, base_qty=?, base_qty_source=?, fulfillment_mode=?, photos_json=?, blocks_config_json=COALESCE(?, blocks_config_json), is_active=?, site_visibility=?,
              nutrition_protein_100g=?, nutrition_fat_100g=?, nutrition_carbs_100g=?, client_composition=?, tech_process=?,
-             show_description_short=?, show_description=?, show_client_composition=?, show_tech_process=?
+             show_description_short=?, show_description=?, show_client_composition=?, show_tech_process=?, updated_at=CURRENT_TIMESTAMP
          WHERE tenant_id=? AND id=?`,
         [
           name, sku, description_short, description,
@@ -1990,6 +1992,8 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
          ON DUPLICATE KEY UPDATE qty=VALUES(qty)`,
         [tenantId, storeId, id, stock_qty]
       );
+
+      if (removedPhotos.length) deletePhotoFiles(removedPhotos);
 
       const dependent_recalc = { items: await buildDependentProductsPreview(tenantId, id) };
       res.json({ ok: true, dependent_recalc });

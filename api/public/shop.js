@@ -150,6 +150,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     productsBatchCategories: 30000,
     productsBatchDetails: 30000,
     productsBatchPassports: 30000,
+    mobileCatalogIndex: 30000,
     mobileCatalogSnapshot: 5000,
     productsBatchAvailability: 5000,
     productsBatchIngredients: 30000,
@@ -2402,6 +2403,24 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       readPublicTableStamp('prod_combo_set_blocks', 'tenant_id=?', [tenantId]),
       readPublicTableStamp('prod_combo_blocks', 'tenant_id=?', [tenantId]),
       readPublicTableStamp('prod_combo_block_products', 'tenant_id=?', [tenantId]),
+    ]);
+    return crypto.createHash('sha1').update(JSON.stringify(parts)).digest('hex').slice(0, 20);
+  }
+
+  async function buildPublicProductsListVersion(tenantId, storeId) {
+    const parts = await Promise.all([
+      readPublicTableStamp('prod_categories', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_products', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_product_categories', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_product_stocks', 'tenant_id=? AND store_id=?', [tenantId, storeId]),
+      readPublicTableStamp('prod_combos', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_combo_set_blocks', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_combo_blocks', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_combo_block_products', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_variant_assignments', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_variant_groups', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_variant_discount_tiers', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_variant_value_exclusions', 'tenant_id=?', [tenantId]),
     ]);
     return crypto.createHash('sha1').update(JSON.stringify(parts)).digest('hex').slice(0, 20);
   }
@@ -12083,6 +12102,111 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     }
   });
 
+  async function loadMobileCatalogCategoryCounts(tenantId, categoryIds) {
+    const ids = Array.from(new Set((Array.isArray(categoryIds) ? categoryIds : [])
+      .map((id) => Number(id || 0))
+      .filter((id) => Number.isFinite(id) && id > 0)));
+    const counts = {};
+    ids.forEach((id) => {
+      counts[String(id)] = { combo_count: 0, product_count: 0, total_count: 0 };
+    });
+    if (!(tenantId > 0) || !ids.length) return counts;
+
+    const [allRows] = await db.query(
+      `SELECT id FROM prod_categories WHERE tenant_id=? AND code='all' LIMIT 1`,
+      [tenantId]
+    );
+    const allCategoryId = allRows.length ? Number(allRows[0].id) : null;
+    const normalIds = ids.filter((id) => id !== allCategoryId);
+
+    if (normalIds.length) {
+      const [productRows] = await db.query(
+        `SELECT pc.category_id, COUNT(DISTINCT p.id) AS cnt
+         FROM prod_product_categories pc
+         JOIN prod_products p ON p.tenant_id=pc.tenant_id AND p.id=pc.product_id
+         WHERE pc.tenant_id=? AND pc.category_id IN (?)
+           AND p.is_active=1 AND p.site_visibility=1
+         GROUP BY pc.category_id`,
+        [tenantId, normalIds]
+      );
+      (Array.isArray(productRows) ? productRows : []).forEach((row) => {
+        const categoryId = Number(row?.category_id || 0);
+        if (!counts[String(categoryId)]) return;
+        counts[String(categoryId)].product_count = Number(row?.cnt || 0);
+      });
+    }
+
+    if (allCategoryId && ids.includes(allCategoryId)) {
+      const [[productTotalRow]] = await db.query(
+        `SELECT COUNT(*) AS cnt
+         FROM prod_products
+         WHERE tenant_id=? AND is_active=1 AND site_visibility=1`,
+        [tenantId]
+      );
+      counts[String(allCategoryId)].product_count = Number(productTotalRow?.cnt || 0);
+    }
+
+    const [comboRows] = await db.query(
+      `SELECT c.id AS category_id, COUNT(co.id) AS cnt
+       FROM prod_categories c
+       LEFT JOIN prod_combos co
+         ON co.tenant_id=c.tenant_id
+        AND co.is_active=1
+        AND c.code <> 'all'
+        AND (co.category_code=c.code OR (co.category_code IS NULL AND c.code=''))
+       WHERE c.tenant_id=? AND c.id IN (?)
+       GROUP BY c.id`,
+      [tenantId, ids]
+    );
+    (Array.isArray(comboRows) ? comboRows : []).forEach((row) => {
+      const categoryId = Number(row?.category_id || 0);
+      if (!counts[String(categoryId)]) return;
+      counts[String(categoryId)].combo_count = Number(row?.cnt || 0);
+    });
+
+    Object.keys(counts).forEach((key) => {
+      const item = counts[key];
+      item.total_count = Math.max(0, Number(item.product_count || 0)) + Math.max(0, Number(item.combo_count || 0));
+    });
+    return counts;
+  }
+
+  router.get('/mobile/catalog-index', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const version = await buildMobileCatalogSnapshotVersion(tenantId, storeId);
+      const cacheKey = makePublicCacheKey('mobile-catalog-index-v1', { tenantId, storeId, version });
+      const cached = getPublicCache(cacheKey);
+      if (cached) {
+        res.set('x-public-cache', 'HIT');
+        return res.json(cached);
+      }
+
+      const categoriesResult = await loadPublicCategoriesPayload(req);
+      const categories = Array.isArray(categoriesResult.payload?.data) ? categoriesResult.payload.data : [];
+      const categoryIds = categories.map((category) => Number(category.id)).filter((id) => Number.isFinite(id) && id > 0);
+      const categoryCounts = await loadMobileCatalogCategoryCounts(tenantId, categoryIds);
+      const payload = {
+        ok: true,
+        data: {
+          version,
+          generated_at: new Date().toISOString(),
+          tenant_id: tenantId,
+          store_id: storeId,
+          categories,
+          categoryCounts,
+        },
+      };
+      setPublicCache(cacheKey, payload, PUBLIC_CACHE_TTL_MS.mobileCatalogIndex);
+      res.set('x-public-cache', 'MISS');
+      res.json(payload);
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
   router.get('/mobile/catalog-snapshot', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
@@ -12168,7 +12292,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
       const combosResults = await mapWithConcurrency(categoryIds, 4, async (id) => {
         try {
-          const combos = await getCombosForCategoryCached(tenantId, storeId, id);
+          const combos = await getCombosForCategoryCached(tenantId, storeId, id, version);
           return [id, combos];
         } catch {
           return [id, []];
@@ -12279,7 +12403,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const storeId = helpers.getStoreId(req);
       const id = Number(req.params.id);
       if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
-      const cacheKey = makePublicCacheKey('combo-by-id', { tenantId, storeId, id });
+      const version = await buildMobileCatalogSnapshotVersion(tenantId, storeId);
+      const cacheKey = makePublicCacheKey('combo-by-id', { tenantId, storeId, id, version });
       const { payload, cacheState } = await loadPublicCachedPayload(
         cacheKey,
         PUBLIC_CACHE_TTL_MS.comboById,
@@ -12848,12 +12973,12 @@ window.location.replace(${JSON.stringify(redirectUrl)});
   const combosByCategoryCache = new Map();
   const combosByCategoryInflight = new Map();
 
-  function getCombosCacheKey(tenantId, storeId, categoryId) {
-    return `${Number(tenantId) || 0}:${Number(storeId) || 0}:${Number(categoryId) || 0}`;
+  function getCombosCacheKey(tenantId, storeId, categoryId, version = '') {
+    return `${Number(tenantId) || 0}:${Number(storeId) || 0}:${Number(categoryId) || 0}:${String(version || '')}`;
   }
 
-  async function getCombosForCategoryCached(tenantId, storeId, categoryId) {
-    const key = getCombosCacheKey(tenantId, storeId, categoryId);
+  async function getCombosForCategoryCached(tenantId, storeId, categoryId, version = '') {
+    const key = getCombosCacheKey(tenantId, storeId, categoryId, version);
     const now = Date.now();
     const cached = combosByCategoryCache.get(key);
     if (cached && cached.expiresAt > now) return cached.data;
@@ -13009,7 +13134,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       }
       const lite = helpers.toBool(req.query.lite, false);
       const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 0)) || 0;
+      const catalogVersion = await buildPublicProductsListVersion(tenantId, storeId);
       const cacheKey = makePublicCacheKey('products', {
+        catalogVersion,
         tenantId,
         storeId,
         categoryId,
@@ -13182,7 +13309,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         await enrichProductsWithDisplayPrice(rows, tenantId, storeId);
         await enrichProductsWithDiscounts(rows, tenantId, storeId);
         await attachPublicProductCategoryIds(rows, tenantId);
-        const combos = await getCombosForCategoryCached(tenantId, storeId, categoryId);
+        const combos = await getCombosForCategoryCached(tenantId, storeId, categoryId, catalogVersion);
         const payload = { ok: true, data: rows, combos, category_id: categoryId };
         setPublicCache(cacheKey, payload, PUBLIC_CACHE_TTL_MS.products);
         res.set('x-public-cache', 'MISS');
@@ -13257,7 +13384,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       await enrichProductsWithDisplayPrice(rows, tenantId, storeId);
       await enrichProductsWithDiscounts(rows, tenantId, storeId);
       await attachPublicProductCategoryIds(rows, tenantId);
-      const combos = await getCombosForCategoryCached(tenantId, storeId, categoryId);
+      const combos = await getCombosForCategoryCached(tenantId, storeId, categoryId, catalogVersion);
       const payload = { ok: true, data: rows, combos, category_id: categoryId };
       setPublicCache(cacheKey, payload, PUBLIC_CACHE_TTL_MS.products);
       res.set('x-public-cache', 'MISS');
@@ -13279,7 +13406,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       if (!categoryIds.length) return res.json({ ok: true, data: {} });
       if (categoryIds.length > 50) return res.status(400).json({ ok: false, error: 'TOO_MANY' });
       const sortedCategoryIds = Array.from(new Set(categoryIds)).sort((a, b) => a - b);
+      const catalogVersion = await buildPublicProductsListVersion(tenantId, storeId);
       const cacheKey = makePublicCacheKey('products-batch-categories', {
+        catalogVersion,
         tenantId,
         storeId,
         categoryIds: sortedCategoryIds,
@@ -13417,7 +13546,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       // Р вЂ”Р В°Р С–РЎР‚РЎС“Р В¶Р В°Р ВµР С Р С”Р С•Р СР В±Р С• Р Т‘Р В»РЎРЏ Р Р†РЎРѓР ВµРЎвЂ¦ Р С”Р В°РЎвЂљР ВµР С–Р С•РЎР‚Р С‘Р в„– Р С—Р В°РЎР‚Р В°Р В»Р В»Р ВµР В»РЎРЉР Р…Р С•
       const combosResults = await mapWithConcurrency(categoryIds, 4, async (id) => {
         try {
-          const combos = await getCombosForCategoryCached(tenantId, storeId, id);
+          const combos = await getCombosForCategoryCached(tenantId, storeId, id, catalogVersion);
           return [id, combos];
         } catch {
           return [id, []];
@@ -13446,7 +13575,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       if (ids.length > 300) return res.status(400).json({ ok: false, error: 'TOO_MANY' });
 
       const sortedIds = [...ids].sort((a, b) => a - b);
-      const cacheKey = makePublicCacheKey('products-batch-by-ids', { tenantId, storeId, ids: sortedIds });
+      const productsStamp = await readPublicTableStamp('prod_products', 'tenant_id=? AND id IN (?)', [tenantId, sortedIds]);
+      const cacheKey = makePublicCacheKey('products-batch-by-ids', { tenantId, storeId, ids: sortedIds, productsStamp });
       const cached = getPublicCache(cacheKey);
       if (cached) {
         res.set('x-public-cache', 'HIT');
@@ -14683,7 +14813,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       if (ids.length > 300) return res.status(400).json({ ok: false, error: 'TOO_MANY' });
 
       const sortedIds = [...ids].sort((a, b) => a - b);
-      const cacheKey = makePublicCacheKey('products-batch-full-passports-v1', { tenantId, storeId, ids: sortedIds });
+      const productsStamp = await readPublicTableStamp('prod_products', 'tenant_id=? AND id IN (?)', [tenantId, sortedIds]);
+      const cacheKey = makePublicCacheKey('products-batch-full-passports-v1', { tenantId, storeId, ids: sortedIds, productsStamp });
       const cached = getPublicCache(cacheKey);
       if (cached) {
         res.set('x-public-cache', 'HIT');
@@ -14746,7 +14877,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       if (ids.length > 300) return res.status(400).json({ ok: false, error: 'TOO_MANY' });
 
       const sortedIds = [...ids].sort((a, b) => a - b);
-      const cacheKey = makePublicCacheKey('products-batch-passports-v2', { tenantId, storeId, ids: sortedIds });
+      const productsStamp = await readPublicTableStamp('prod_products', 'tenant_id=? AND id IN (?)', [tenantId, sortedIds]);
+      const cacheKey = makePublicCacheKey('products-batch-passports-v2', { tenantId, storeId, ids: sortedIds, productsStamp });
       const cached = getPublicCache(cacheKey);
       if (cached) {
         res.set('x-public-cache', 'HIT');
@@ -14864,7 +14996,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const storeId = helpers.getStoreId(req);
       const id = Number(req.params.id);
       if (!Number.isFinite(id)) return res.status(400).json({ ok: false, error: 'BAD_ID' });
-      const cacheKey = makePublicCacheKey('products-by-id', { tenantId, storeId, id });
+      const productsStamp = await readPublicTableStamp('prod_products', 'tenant_id=? AND id=?', [tenantId, id]);
+      const cacheKey = makePublicCacheKey('products-by-id', { tenantId, storeId, id, productsStamp });
       const cached = getPublicCache(cacheKey);
       if (cached) {
         res.set('x-public-cache', 'HIT');

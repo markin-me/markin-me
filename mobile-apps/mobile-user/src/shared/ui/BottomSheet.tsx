@@ -151,7 +151,7 @@ export function BottomSheet({ children, onClose, title, visible }: BottomSheetPr
             onScroll={(event) => {
               scrollY.current = event.nativeEvent.contentOffset.y;
             }}
-            scrollEventThrottle={16}
+            scrollEventThrottle={64}
             {...contentPanResponder.panHandlers}
           >
             {children}
