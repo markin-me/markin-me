@@ -182,6 +182,9 @@ const CATALOG_DELIVERY_HEADER_HEIGHT = 132;
 const CATALOG_CATEGORIES_HEIGHT = theme.sizes.categoryChipHeight + theme.spacing.sm + theme.spacing.md;
 const CATALOG_REFRESH_TRIGGER_DISTANCE = 110;
 const CATALOG_REFRESH_PROGRESS_OFFSET = 96;
+const CATALOG_FOCUS_RESUME_DELAY_MS = 280;
+const CATALOG_PROGRAMMATIC_SCROLL_RESET_MS = 420;
+const CATALOG_SCROLL_RETARGET_THRESHOLD = 32;
 const isAndroid = Platform.OS === 'android';
 
 function createNumberValueStore(initialValue: number | null = null): NumberValueStore {
@@ -1601,7 +1604,6 @@ const CategoryChipsBar = memo(forwardRef<CategoryChipsBarHandle, CategoryChipsBa
         directionalLockEnabled
         horizontal
         keyboardShouldPersistTaps="always"
-        nestedScrollEnabled
         onScrollBeginDrag={onMarkInteraction}
         onScrollEndDrag={onEndInteractionSoon}
         onMomentumScrollEnd={onEndInteractionSoon}
@@ -1632,11 +1634,13 @@ export function CatalogPage() {
   const { width: screenWidth } = useWindowDimensions();
   const listRef = useRef<FlatList<CatalogListItem>>(null);
   const categoryChipsBarRef = useRef<CategoryChipsBarHandle>(null);
+  const categoryOverlayTranslateY = useRef(new Animated.Value(CATALOG_DELIVERY_HEADER_HEIGHT)).current;
   const scrollIdleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const programmaticScrollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const chipInteractionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const categoryGestureEndTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const visibleWarmupTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const catalogFocusCartTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const catalogFocusFulfillmentTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const deliveryQuoteRequestKeyRef = useRef<string | null>(null);
   const passportWarmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const availabilityWarmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1654,16 +1658,16 @@ export function CatalogPage() {
   const refreshPullDistanceRef = useRef(0);
   const refreshPullArmedRef = useRef(false);
   const visibleCatalogRowsKey = useRef('');
-  const visibleComboKeysRef = useRef('');
   const pendingVisibleProductIds = useRef<number[]>([]);
   const pendingVisibleComboIds = useRef<number[]>([]);
   const isStockAvailabilitySyncRunning = useRef(false);
   const stockAvailabilitySyncKey = useRef('');
   const programmaticCategoryId = useRef<number | null>(null);
+  const programmaticScrollRequestId = useRef(0);
   const activeCategoryIdRef = useRef<number | null>(null);
   const activeCategoryStoreRef = useRef<NumberValueStore>(createNumberValueStore(null));
   const productRuntimeStoreRef = useRef<ProductRuntimeStore>(createProductRuntimeStore());
-  const categoryGestureStartRef = useRef({ x: 0, y: 0 });
+  const categoryOverlayTouchStartRef = useRef({ x: 0, y: 0 });
   const categoryHeaderLayoutsRef = useRef<Array<{ categoryId: number; offset: number }>>([]);
   const categoryDataCacheRef = useRef<CategoryDataCache>(getEmptyCategoryDataCache());
   const categoryLoadRequestsRef = useRef(new Map<number, Promise<void>>());
@@ -1684,13 +1688,11 @@ export function CatalogPage() {
   const scheduleProductPassportWarmRef = useRef<(productIds: number[]) => void>(() => undefined);
   const scheduleCatalogAvailabilityRefreshRef = useRef<(productIds: number[], delay?: number) => void>(() => undefined);
   const scheduleComboDetailsWarmRef = useRef<(comboIds: number[]) => void>(() => undefined);
-  const [isCategoryGestureActive, setIsCategoryGestureActive] = useState(false);
   const [catalog, setCatalog] = useState<CatalogState>(emptyCatalogState);
   const [catalogIndex, setCatalogIndex] = useState<MobileCatalogIndex | null>(null);
   const [categoryLoadStates, setCategoryLoadStates] = useState<CategoryLoadStateMap>({});
   const [cartLines, setCartLines] = useState<CartLine[]>([]);
   const [productQuantities, setProductQuantities] = useState<Record<number, number>>({});
-  const [visibleComboKeys, setVisibleComboKeys] = useState<Set<string>>(() => new Set());
   const [comboRotationKey, setComboRotationKey] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -1743,7 +1745,8 @@ export function CatalogPage() {
   useEffect(() => () => {
     if (visibleWarmupTimer.current) clearTimeout(visibleWarmupTimer.current);
     if (chipInteractionTimer.current) clearTimeout(chipInteractionTimer.current);
-    if (categoryGestureEndTimer.current) clearTimeout(categoryGestureEndTimer.current);
+    if (catalogFocusCartTimer.current) clearTimeout(catalogFocusCartTimer.current);
+    if (catalogFocusFulfillmentTimer.current) clearTimeout(catalogFocusFulfillmentTimer.current);
   }, []);
 
   const mergeCatalogPassports = useCallback((passports: Map<number, CatalogProductPassport>) => {
@@ -1769,9 +1772,11 @@ export function CatalogPage() {
       const categoryId = Number(category.id || 0);
       const products = catalog.productsByCategory.get(categoryId) || [];
       const combos = catalog.combosByCategory.get(categoryId) || [];
-      const productIds = products.map((product) => Number(product.id || 0)).join(',');
-      const comboIds = combos.map((combo) => Number(combo.id || 0)).join(',');
-      return `${categoryId}:${category.title}:${productIds}:${comboIds}`;
+      const firstProductId = Number(products[0]?.id || 0);
+      const lastProductId = Number(products[products.length - 1]?.id || 0);
+      const firstComboId = Number(combos[0]?.id || 0);
+      const lastComboId = Number(combos[combos.length - 1]?.id || 0);
+      return `${categoryId}:${category.title}:${products.length}:${firstProductId}:${lastProductId}:${combos.length}:${firstComboId}:${lastComboId}`;
     }).join('|'),
     [catalog.combosByCategory, catalog.productsByCategory, visibleCategories],
   );
@@ -1815,6 +1820,7 @@ export function CatalogPage() {
   }, [catalogItems]);
 
   useEffect(() => {
+    if (isAndroid) return undefined;
     let intervalTimer: ReturnType<typeof setInterval> | null = null;
     const firstTimer = setTimeout(() => {
       setComboRotationKey(Date.now());
@@ -2361,30 +2367,50 @@ export function CatalogPage() {
   useFocusEffect(
     useCallback(() => {
       if (!catalogFulfillmentLoadedRef.current) return;
-      void loadCatalogFulfillmentState(false).catch(() => null);
+      let isActive = true;
+      if (catalogFocusFulfillmentTimer.current) clearTimeout(catalogFocusFulfillmentTimer.current);
+      catalogFocusFulfillmentTimer.current = setTimeout(() => {
+        catalogFocusFulfillmentTimer.current = null;
+        if (isActive) void loadCatalogFulfillmentState(false).catch(() => null);
+      }, CATALOG_FOCUS_RESUME_DELAY_MS);
+      return () => {
+        isActive = false;
+        if (catalogFocusFulfillmentTimer.current) {
+          clearTimeout(catalogFocusFulfillmentTimer.current);
+          catalogFocusFulfillmentTimer.current = null;
+        }
+      };
     }, [loadCatalogFulfillmentState]),
   );
 
   useFocusEffect(
     useCallback(() => {
       let isActive = true;
-      readCartLines().then((cartLines) => {
-        if (isActive) {
-          setCartLines(cartLines);
-          setProductQuantities(buildProductQuantitiesFromCart(cartLines));
-          scheduleCatalogAvailabilityRefreshRef.current(
-            collectCartAvailabilityProductIds(cartLines, stockLevelsRef.current),
-            120,
-          );
-        }
-      }).catch(() => {
-        if (isActive) {
-          setCartLines([]);
-          setProductQuantities({});
-        }
-      });
+      if (catalogFocusCartTimer.current) clearTimeout(catalogFocusCartTimer.current);
+      catalogFocusCartTimer.current = setTimeout(() => {
+        catalogFocusCartTimer.current = null;
+        readCartLines().then((cartLines) => {
+          if (isActive) {
+            setCartLines(cartLines);
+            setProductQuantities(buildProductQuantitiesFromCart(cartLines));
+            scheduleCatalogAvailabilityRefreshRef.current(
+              collectCartAvailabilityProductIds(cartLines, stockLevelsRef.current),
+              120,
+            );
+          }
+        }).catch(() => {
+          if (isActive) {
+            setCartLines([]);
+            setProductQuantities({});
+          }
+        });
+      }, CATALOG_FOCUS_RESUME_DELAY_MS);
       return () => {
         isActive = false;
+        if (catalogFocusCartTimer.current) {
+          clearTimeout(catalogFocusCartTimer.current);
+          catalogFocusCartTimer.current = null;
+        }
       };
     }, []),
   );
@@ -2541,7 +2567,6 @@ export function CatalogPage() {
     const bottom = offsetY + viewportHeight * 1.15;
     const categoryIdsToLoad = new Set<number>();
     const comboIds: number[] = [];
-    const comboKeys: string[] = [];
     const imageUrls: string[] = [];
     const productIds: number[] = [];
 
@@ -2558,7 +2583,6 @@ export function CatalogPage() {
       if (item.type !== 'row') return;
       item.cards.forEach((card) => {
         if (card.type === 'combo') {
-          comboKeys.push(card.cardKey);
           comboIds.push(Number(card.combo.id || 0));
           return;
         }
@@ -2578,13 +2602,6 @@ export function CatalogPage() {
     if (visibleCatalogRowsKey.current === key) return;
     visibleCatalogRowsKey.current = key;
     prefetchCatalogImageUrls(imageUrls.slice(0, catalogInitialRenderCards));
-    if (isAndroid) {
-      const nextComboKeys = comboKeys.slice().sort().join(',');
-      if (visibleComboKeysRef.current !== nextComboKeys) {
-        visibleComboKeysRef.current = nextComboKeys;
-        setVisibleComboKeys(new Set(comboKeys));
-      }
-    }
     scheduleVisibleWarmups(normalizeCatalogProductIds(productIds), normalizeCatalogProductIds(comboIds));
   }, [catalogItemLayouts, catalogItems, ensureCategoryLoaded, prefetchCatalogImageUrls, scheduleVisibleWarmups]);
 
@@ -2628,35 +2645,24 @@ export function CatalogPage() {
     }, 160);
   }, []);
 
-  const beginCategoryGesture = useCallback((event: GestureResponderEvent) => {
-    categoryGestureStartRef.current = {
+  const beginCategoryOverlayTouch = useCallback((event: GestureResponderEvent) => {
+    categoryOverlayTouchStartRef.current = {
       x: Number(event.nativeEvent.pageX || 0),
       y: Number(event.nativeEvent.pageY || 0),
     };
-    if (categoryGestureEndTimer.current) {
-      clearTimeout(categoryGestureEndTimer.current);
-      categoryGestureEndTimer.current = null;
-    }
-    isChipInteractingRef.current = true;
-    setIsCategoryGestureActive((current) => (current ? current : true));
+    if (chipInteractionTimer.current) clearTimeout(chipInteractionTimer.current);
+    isChipInteractingRef.current = false;
   }, []);
 
-  const endCategoryGesture = useCallback(() => {
-    if (categoryGestureEndTimer.current) clearTimeout(categoryGestureEndTimer.current);
-    categoryGestureEndTimer.current = setTimeout(() => {
-      categoryGestureEndTimer.current = null;
-      setIsCategoryGestureActive(false);
-      endChipInteractionSoon();
-    }, 80);
-  }, [endChipInteractionSoon]);
-
-  const shouldCaptureVerticalCategoryMove = useCallback((event: GestureResponderEvent) => {
-    const dx = Math.abs(Number(event.nativeEvent.pageX || 0) - categoryGestureStartRef.current.x);
-    const dy = Math.abs(Number(event.nativeEvent.pageY || 0) - categoryGestureStartRef.current.y);
-    return dy > 4 && dy > dx;
+  const shouldCaptureCategoryOverlayMove = useCallback((event: GestureResponderEvent) => {
+    const dx = Math.abs(Number(event.nativeEvent.pageX || 0) - categoryOverlayTouchStartRef.current.x);
+    const dy = Math.abs(Number(event.nativeEvent.pageY || 0) - categoryOverlayTouchStartRef.current.y);
+    return dy > 5 && dy > dx;
   }, []);
 
   const scrollToCategoryId = useCallback((categoryId: number) => {
+    const scrollRequestId = programmaticScrollRequestId.current + 1;
+    programmaticScrollRequestId.current = scrollRequestId;
     if (programmaticScrollTimer.current) clearTimeout(programmaticScrollTimer.current);
     if (chipInteractionTimer.current) clearTimeout(chipInteractionTimer.current);
     isChipInteractingRef.current = false;
@@ -2671,22 +2677,30 @@ export function CatalogPage() {
     if (index != null) {
       const layout = catalogItemLayouts[index];
       listRef.current?.scrollToOffset({
-        animated: true,
+        animated: !isAndroid,
         offset: Math.max(0, (layout?.offset || 0) - CATALOG_CATEGORIES_HEIGHT),
       });
       programmaticScrollTimer.current = setTimeout(() => {
-        programmaticCategoryId.current = null;
-      }, 1200);
+        if (programmaticScrollRequestId.current === scrollRequestId) {
+          programmaticCategoryId.current = null;
+        }
+      }, CATALOG_PROGRAMMATIC_SCROLL_RESET_MS);
     }
     void ensureCategoryLoaded(categoryId).then(() => {
       setTimeout(() => {
+        if (programmaticScrollRequestId.current !== scrollRequestId) return;
+        if (isCatalogScrollingRef.current) return;
+        if (programmaticCategoryId.current !== categoryId) return;
         const nextIndex = categoryIndexById.get(categoryId);
         if (nextIndex != null) {
           const layout = catalogItemLayouts[nextIndex];
-          listRef.current?.scrollToOffset({
-            animated: false,
-            offset: Math.max(0, (layout?.offset || 0) - CATALOG_CATEGORIES_HEIGHT),
-          });
+          const nextOffset = Math.max(0, (layout?.offset || 0) - CATALOG_CATEGORIES_HEIGHT);
+          if (Math.abs(catalogScrollOffsetY.current - nextOffset) > CATALOG_SCROLL_RETARGET_THRESHOLD) {
+            listRef.current?.scrollToOffset({
+              animated: false,
+              offset: nextOffset,
+            });
+          }
         }
       }, 40);
     }).catch(() => null);
@@ -2786,12 +2800,19 @@ export function CatalogPage() {
     const offsetY = Math.max(0, rawOffsetY);
     const viewportHeight = Math.max(0, Number(event.nativeEvent.layoutMeasurement.height || 0));
     catalogScrollOffsetY.current = offsetY;
+    categoryOverlayTranslateY.setValue(Math.max(0, CATALOG_DELIVERY_HEADER_HEIGHT - offsetY));
     if (viewportHeight) catalogViewportHeight.current = viewportHeight;
     updateActiveCategoryFromScroll(offsetY);
-  }, [updateActiveCategoryFromScroll]);
+  }, [categoryOverlayTranslateY, updateActiveCategoryFromScroll]);
 
   const handleCatalogScrollBeginDrag = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const offsetY = Number(event.nativeEvent.contentOffset.y || 0);
+    programmaticScrollRequestId.current += 1;
+    if (programmaticScrollTimer.current) {
+      clearTimeout(programmaticScrollTimer.current);
+      programmaticScrollTimer.current = null;
+    }
+    programmaticCategoryId.current = null;
     if (offsetY <= 0) {
       refreshPullDistanceRef.current = 0;
       refreshPullArmedRef.current = false;
@@ -2882,7 +2903,7 @@ export function CatalogPage() {
         key={card.cardKey}
         combo={card.combo}
         onPress={() => navigation.navigate('combo', { comboId: Number(card.combo.id), openNonce: Date.now() })}
-        rotationKey={!isAndroid || visibleComboKeys.has(card.cardKey) ? comboRotationKey : 0}
+        rotationKey={isAndroid ? 0 : comboRotationKey}
       />
     );
   }, [
@@ -2892,7 +2913,6 @@ export function CatalogPage() {
     handleIncreaseProduct,
     navigation,
     openProduct,
-    visibleComboKeys,
   ]);
 
   const renderCatalogItem = useCallback(({ item }: { item: CatalogListItem }) => {
@@ -2947,29 +2967,7 @@ export function CatalogPage() {
     }
 
     if (item.type === 'categories') {
-      return (
-        <View
-          style={styles.chipsWrap}
-          onMoveShouldSetResponderCapture={shouldCaptureVerticalCategoryMove}
-          onResponderRelease={endCategoryGesture}
-          onResponderTerminate={endCategoryGesture}
-          onResponderTerminationRequest={() => false}
-          onTouchCancel={endCategoryGesture}
-          onTouchEnd={endCategoryGesture}
-          onTouchStart={beginCategoryGesture}
-        >
-          <CategoryChipsBar
-            ref={categoryChipsBarRef}
-            activeCategoryStore={activeCategoryStoreRef.current}
-            categories={visibleCategories}
-            isChipInteractingRef={isChipInteractingRef}
-            onEndInteractionSoon={endChipInteractionSoon}
-            onMarkInteraction={markChipInteraction}
-            onOpenCategories={openCategories}
-            onPressCategory={pressCategoryChip}
-          />
-        </View>
-      );
+      return <View style={styles.chipsPlaceholder} />;
     }
 
     if (item.type === 'header') {
@@ -3010,16 +3008,8 @@ export function CatalogPage() {
     catalogPickupHours,
     changeCatalogMode,
     isCatalogDeliveryMode,
-    beginCategoryGesture,
-    endChipInteractionSoon,
-    endCategoryGesture,
-    markChipInteraction,
-    openCategories,
     openCatalogAddresses,
     renderCatalogCard,
-    pressCategoryChip,
-    shouldCaptureVerticalCategoryMove,
-    visibleCategories,
   ]);
 
   const getCatalogItemLayout = useCallback((_data: ArrayLike<CatalogListItem> | null | undefined, index: number) => {
@@ -3054,13 +3044,13 @@ export function CatalogPage() {
           keyExtractor={(item) => item.itemKey}
           keyboardShouldPersistTaps="handled"
           maxToRenderPerBatch={6}
-          nestedScrollEnabled
           onLayout={(event) => {
             const height = event.nativeEvent.layout.height;
             if (height > 0) {
               catalogViewportHeight.current = height;
               updateVisibleCatalogRows(catalogScrollOffsetY.current, height);
             }
+            categoryOverlayTranslateY.setValue(Math.max(0, CATALOG_DELIVERY_HEADER_HEIGHT - catalogScrollOffsetY.current));
           }}
           onMomentumScrollBegin={markCatalogScrolling}
           onMomentumScrollEnd={scheduleCatalogScrollIdle}
@@ -3082,15 +3072,38 @@ export function CatalogPage() {
               onRefresh={refreshCatalogFromPull}
             />
           )}
-          removeClippedSubviews={isAndroid}
+          removeClippedSubviews={false}
           renderItem={renderCatalogItem}
-          scrollEnabled={!isCategoryGestureActive}
           scrollEventThrottle={16}
-          stickyHeaderIndices={[1]}
           updateCellsBatchingPeriod={16}
           windowSize={7}
         />
       )}
+      {!isLoading && !errorText && visibleCategories.length > 0 ? (
+        <Animated.View
+          style={[
+            styles.chipsOverlay,
+            { transform: [{ translateY: categoryOverlayTranslateY }] },
+          ]}
+          onTouchStart={beginCategoryOverlayTouch}
+          onMoveShouldSetResponderCapture={shouldCaptureCategoryOverlayMove}
+          onResponderRelease={endChipInteractionSoon}
+          onResponderTerminate={endChipInteractionSoon}
+        >
+          <View style={styles.chipsWrap}>
+            <CategoryChipsBar
+              ref={categoryChipsBarRef}
+              activeCategoryStore={activeCategoryStoreRef.current}
+              categories={visibleCategories}
+              isChipInteractingRef={isChipInteractingRef}
+              onEndInteractionSoon={endChipInteractionSoon}
+              onMarkInteraction={markChipInteraction}
+              onOpenCategories={openCategories}
+              onPressCategory={pressCategoryChip}
+            />
+          </View>
+        </Animated.View>
+      ) : null}
     </Screen>
   );
 }
@@ -3189,6 +3202,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingRight: theme.spacing.lg,
   },
+  chipsOverlay: {
+    elevation: 16,
+    left: 0,
+    position: 'absolute',
+    right: 0,
+    top: 0,
+    zIndex: 100,
+  },
+  chipsPlaceholder: {
+    height: CATALOG_CATEGORIES_HEIGHT,
+  },
   chipsWrap: {
     alignItems: 'center',
     backgroundColor: theme.colors.surface,
@@ -3197,8 +3221,6 @@ const styles = StyleSheet.create({
     elevation: 4,
     flexDirection: 'row',
     height: CATALOG_CATEGORIES_HEIGHT,
-    marginHorizontal: -theme.spacing.lg,
-    overflow: 'hidden',
     paddingBottom: theme.spacing.md,
     paddingHorizontal: theme.spacing.lg,
     paddingTop: theme.spacing.sm,
