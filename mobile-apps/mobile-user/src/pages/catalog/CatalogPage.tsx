@@ -1634,7 +1634,7 @@ export function CatalogPage() {
   const { width: screenWidth } = useWindowDimensions();
   const listRef = useRef<FlatList<CatalogListItem>>(null);
   const categoryChipsBarRef = useRef<CategoryChipsBarHandle>(null);
-  const categoryOverlayTranslateY = useRef(new Animated.Value(CATALOG_DELIVERY_HEADER_HEIGHT)).current;
+  const catalogScrollY = useRef(new Animated.Value(0)).current;
   const scrollIdleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const programmaticScrollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const chipInteractionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1818,6 +1818,14 @@ export function CatalogPage() {
   useEffect(() => {
     visibleCatalogRowsKey.current = '';
   }, [catalogItems]);
+  const categoryOverlayTranslateY = useMemo(
+    () => catalogScrollY.interpolate({
+      inputRange: [0, CATALOG_DELIVERY_HEADER_HEIGHT],
+      outputRange: [CATALOG_DELIVERY_HEADER_HEIGHT, 0],
+      extrapolate: 'clamp',
+    }),
+    [catalogScrollY],
+  );
 
   useEffect(() => {
     if (isAndroid) return undefined;
@@ -2800,10 +2808,20 @@ export function CatalogPage() {
     const offsetY = Math.max(0, rawOffsetY);
     const viewportHeight = Math.max(0, Number(event.nativeEvent.layoutMeasurement.height || 0));
     catalogScrollOffsetY.current = offsetY;
-    categoryOverlayTranslateY.setValue(Math.max(0, CATALOG_DELIVERY_HEADER_HEIGHT - offsetY));
     if (viewportHeight) catalogViewportHeight.current = viewportHeight;
     updateActiveCategoryFromScroll(offsetY);
-  }, [categoryOverlayTranslateY, updateActiveCategoryFromScroll]);
+  }, [updateActiveCategoryFromScroll]);
+
+  const handleAnimatedCatalogScroll = useMemo(
+    () => Animated.event(
+      [{ nativeEvent: { contentOffset: { y: catalogScrollY } } }],
+      {
+        listener: handleCatalogScroll,
+        useNativeDriver: true,
+      },
+    ),
+    [catalogScrollY, handleCatalogScroll],
+  );
 
   const handleCatalogScrollBeginDrag = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const offsetY = Number(event.nativeEvent.contentOffset.y || 0);
@@ -3034,7 +3052,7 @@ export function CatalogPage() {
           </Pressable>
         </View>
       ) : (
-        <FlatList
+        <Animated.FlatList
           ref={listRef}
           data={catalogItems}
           style={styles.content}
@@ -3050,11 +3068,10 @@ export function CatalogPage() {
               catalogViewportHeight.current = height;
               updateVisibleCatalogRows(catalogScrollOffsetY.current, height);
             }
-            categoryOverlayTranslateY.setValue(Math.max(0, CATALOG_DELIVERY_HEADER_HEIGHT - catalogScrollOffsetY.current));
           }}
           onMomentumScrollBegin={markCatalogScrolling}
           onMomentumScrollEnd={scheduleCatalogScrollIdle}
-          onScroll={handleCatalogScroll}
+          onScroll={handleAnimatedCatalogScroll}
           onScrollBeginDrag={handleCatalogScrollBeginDrag}
           onScrollEndDrag={scheduleCatalogScrollIdle}
           onScrollToIndexFailed={(info) => {
