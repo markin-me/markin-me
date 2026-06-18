@@ -1280,6 +1280,20 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
 
       const code = helpers.strOrNull(req.body.code) || helpers.makeCodeFromTitle(title);
       const icon = helpers.strOrNull(req.body.icon);
+      const parentId = helpers.numOrNull(req.body.parent_id);
+
+      if (parentId != null) {
+        const [parentRows] = await db.query(
+          `SELECT id
+           FROM prod_categories
+           WHERE tenant_id=? AND id=? AND parent_id IS NULL AND code<>'all'
+           LIMIT 1`,
+          [tenantId, parentId]
+        );
+        if (!parentRows.length) {
+          return res.status(400).json({ ok: false, error: 'BAD_PARENT_CATEGORY' });
+        }
+      }
 
       const site_visibility = helpers.toBool(req.body.site_visibility, true) ? 1 : 0;
       const is_active = helpers.toBool(req.body.is_active, true) ? 1 : 0;
@@ -1289,16 +1303,16 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
 
       const sort_order =
         helpers.numOrNull(req.body.sort_order) ??
-        (await helpers.nextSortOrderForCategories(db, tenantId, 10));
+        (await helpers.nextSortOrderForCategories(db, tenantId, 10, parentId));
 
       const [result] = hasCheckoutVisibilityColumn
         ? await db.query(
-          'INSERT INTO prod_categories (tenant_id, code, title, icon, site_visibility, is_active, cart_visibility, checkout_visibility, sort_order) VALUES (?,?,?,?,?,?,?,?,?)',
-          [tenantId, code, title, icon, site_visibility, is_active, cart_visibility, checkout_visibility, sort_order]
+          'INSERT INTO prod_categories (tenant_id, parent_id, code, title, icon, site_visibility, is_active, cart_visibility, checkout_visibility, sort_order) VALUES (?,?,?,?,?,?,?,?,?,?)',
+          [tenantId, parentId, code, title, icon, site_visibility, is_active, cart_visibility, checkout_visibility, sort_order]
         )
         : await db.query(
-          'INSERT INTO prod_categories (tenant_id, code, title, icon, site_visibility, is_active, cart_visibility, sort_order) VALUES (?,?,?,?,?,?,?,?)',
-          [tenantId, code, title, icon, site_visibility, is_active, cart_visibility, sort_order]
+          'INSERT INTO prod_categories (tenant_id, parent_id, code, title, icon, site_visibility, is_active, cart_visibility, sort_order) VALUES (?,?,?,?,?,?,?,?,?)',
+          [tenantId, parentId, code, title, icon, site_visibility, is_active, cart_visibility, sort_order]
         );
 
       res.json({ ok: true, id: result.insertId });

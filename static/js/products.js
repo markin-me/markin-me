@@ -3186,6 +3186,7 @@ function buildOptionGroupPayload(formValues) {
     if (!categoriesNav) return;
 
     const list = state.categories
+      .filter((c) => c.parent_id == null)
       .slice()
       .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.id - b.id);
 
@@ -6141,6 +6142,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     if (!categoriesMainList) return;
 
     const list = state.categories
+      .filter((c) => c.parent_id == null)
       .slice()
       .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.id - b.id);
 
@@ -6683,6 +6685,9 @@ function openAutoAddGroupModal({ mode, group } = {}) {
       iconPlaceholder: wrapper.querySelector("#ceIconPlaceholder"),
       iconUploadBtn: wrapper.querySelector("#ceIconUploadBtn"),
       iconDeleteBtn: wrapper.querySelector("#ceIconDeleteBtn"),
+      subcategoriesSection: wrapper.querySelector("[data-category-subcategories]"),
+      subcategoriesList: wrapper.querySelector("[data-category-subcategory-list]"),
+      subcategoryAddBtn: wrapper.querySelector("[data-category-subcategory-add]"),
     };
 
     // View mode: same layout as edit mode, but controls are inactive.
@@ -6703,6 +6708,14 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     if (viewState.iconDeleteBtn) {
       viewState.iconDeleteBtn.classList.remove("hidden");
       viewState.iconDeleteBtn.disabled = true;
+    }
+    if (viewState.subcategoriesSection) {
+      viewState.subcategoriesSection.classList.remove("hidden");
+      viewState.subcategoriesSection.classList.add("category-editor-subcategories--view");
+    }
+    if (viewState.subcategoryAddBtn) {
+      viewState.subcategoryAddBtn.classList.add("hidden");
+      viewState.subcategoryAddBtn.disabled = true;
     }
 
     categoryViewStates.set(id, viewState);
@@ -6747,6 +6760,19 @@ function openAutoAddGroupModal({ mode, group } = {}) {
         viewState.iconPlaceholder.classList.remove("hidden");
         viewState.iconPlaceholder.innerHTML = iconValue ? `<i class="${escapeHtml(iconValue)}"></i>` : "No image";
       }
+    }
+
+    if (viewState.subcategoriesList) {
+      const subcategories = state.categories
+        .filter((item) => Number(item.parent_id) === Number(cat.id))
+        .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.id - b.id);
+      viewState.subcategoriesList.innerHTML = subcategories.length
+        ? subcategories.map((item) => `
+            <div class="category-editor-subcategory-row is-saved">
+              <input class="control" type="text" value="${escapeHtml(item.title || "")}" readonly tabindex="-1" />
+            </div>
+          `).join("")
+        : '<div class="category-editor-subcategory-empty">Подкатегории не заданы</div>';
     }
 
     const navigationState = {
@@ -10182,6 +10208,9 @@ const isViewMode = state.comboPanel.mode === "view";
     const showCombo = state.mode === "combo-blocks";
     const showStock = state.mode === "stock-in" || state.mode === "stock-out" || state.mode === "stock-movements";
     hideAllDetailPanels();
+    if (productInfoBody) {
+      productInfoBody.querySelectorAll(".product-editor-wrapper").forEach((wrapper) => wrapper.classList.add("hidden"));
+    }
     if (productInfoHeader) productInfoHeader.classList.add("hidden");
     setHeaderMode("product");
     if (productEmpty) productEmpty.classList.toggle("hidden", showCategory || showOption || showAutoAdd || showUnit || showCombo || showStock);
@@ -18925,6 +18954,12 @@ const isViewMode = state.comboPanel.mode === "view";
     const draft = {
       iconFile: null,
       iconPreview: "",
+      subcategories: isEdit && cat
+        ? state.categories
+          .filter((item) => Number(item.parent_id) === Number(cat.id))
+          .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.id - b.id)
+          .map((item) => ({ id: Number(item.id), title: String(item.title || "") }))
+        : [],
     };
 
     // Clone template content
@@ -18943,9 +18978,57 @@ const isViewMode = state.comboPanel.mode === "view";
       iconPreview: wrapper.querySelector("#ceIconPreview"),
       iconPlaceholder: wrapper.querySelector("#ceIconPlaceholder"),
       iconFileInput: wrapper.querySelector("#ceIconFile"),
-      iconUploadBtn: wrapper.querySelector("#ceIconUploadBtn"),
-      iconDeleteBtn: wrapper.querySelector("#ceIconDeleteBtn"),
+      iconUploadBtn: null,
+      iconDeleteBtn: null,
     };
+
+    const subcategoriesSection = wrapper.querySelector("[data-category-subcategories]");
+    const subcategoriesList = wrapper.querySelector("[data-category-subcategory-list]");
+    const subcategoryAddBtn = wrapper.querySelector("[data-category-subcategory-add]");
+    const canHaveSubcategories = !isEdit || String(cat?.code || "") !== "all";
+
+    function renderSubcategoryInputs() {
+      if (!subcategoriesList) return;
+      subcategoriesList.innerHTML = draft.subcategories.map((item, index) => `
+        <div class="category-editor-subcategory-row ${item.id ? "is-saved" : ""}" data-subcategory-index="${index}">
+          <input class="control" type="text" value="${escapeHtml(item.title)}" placeholder="Название подкатегории" data-subcategory-title />
+          ${item.id ? "" : `
+            <button class="category-editor-subcategory-remove" type="button" data-subcategory-remove aria-label="Удалить строку">
+              <i class="fas fa-times" aria-hidden="true"></i>
+            </button>
+          `}
+        </div>
+      `).join("");
+
+      subcategoriesList.querySelectorAll("[data-subcategory-title]").forEach((input) => {
+        input.addEventListener("input", () => {
+          const row = input.closest("[data-subcategory-index]");
+          const index = Number(row?.dataset.subcategoryIndex);
+          if (!Number.isInteger(index) || !draft.subcategories[index]) return;
+          draft.subcategories[index].title = input.value;
+        });
+      });
+
+      subcategoriesList.querySelectorAll("[data-subcategory-remove]").forEach((button) => {
+        button.addEventListener("click", () => {
+          const row = button.closest("[data-subcategory-index]");
+          const index = Number(row?.dataset.subcategoryIndex);
+          if (!Number.isInteger(index)) return;
+          draft.subcategories.splice(index, 1);
+          renderSubcategoryInputs();
+        });
+      });
+    }
+
+    if (canHaveSubcategories && subcategoriesSection) {
+      subcategoriesSection.classList.remove("hidden");
+      renderSubcategoryInputs();
+      subcategoryAddBtn?.addEventListener("click", () => {
+        draft.subcategories.push({ id: null, title: "" });
+        renderSubcategoryInputs();
+        subcategoriesList?.querySelector("[data-subcategory-index]:last-child [data-subcategory-title]")?.focus();
+      });
+    }
 
     // Fill form if editing
     if (isEdit && cat) {
@@ -18989,6 +19072,313 @@ const isViewMode = state.comboPanel.mode === "view";
     const initialIcon = isEdit && cat ? (cat.icon || "") : "";
     renderIconPreview(initialIcon);
 
+    function getCategoryIconValue() {
+      return String(form.querySelector("#ce_icon")?.value || "").trim();
+    }
+
+    function setCategoryIconValue(value) {
+      const iconInput = form.querySelector("#ce_icon");
+      if (iconInput) iconInput.value = String(value || "").trim();
+      if (draft.iconPreview) {
+        try { URL.revokeObjectURL(draft.iconPreview); } catch {}
+      }
+      draft.iconPreview = "";
+      draft.iconFile = null;
+      renderIconPreview(value);
+    }
+
+    const categoryIconSizeCache = {};
+    function formatCategoryIconSize(bytes) {
+      if (!bytes || bytes <= 0) return "";
+      if (bytes < 1024) return bytes + " B";
+      const kb = bytes / 1024;
+      if (kb < 1024) return kb.toFixed(kb < 10 ? 1 : 0) + " KB";
+      return (kb / 1024).toFixed(1) + " MB";
+    }
+
+    async function fetchCategoryIconSize(url) {
+      const key = String(url || "");
+      if (!key) return 0;
+      if (categoryIconSizeCache[key] !== undefined) return categoryIconSizeCache[key];
+      try {
+        let size = 0;
+        const headRes = await fetch(key, { method: "HEAD" });
+        const contentLength = headRes.headers.get("content-length");
+        if (contentLength && Number(contentLength) > 0) {
+          size = Number(contentLength);
+        } else {
+          const blobRes = await fetch(key);
+          const blob = await blobRes.blob();
+          size = blob.size;
+        }
+        categoryIconSizeCache[key] = size;
+        return size;
+      } catch {
+        categoryIconSizeCache[key] = 0;
+        return 0;
+      }
+    }
+
+    let categoryPhotoModalEscHandler = null;
+    let categoryPhotoModalPasteHandler = null;
+    function closeCategoryPhotoGridModal() {
+      document.querySelectorAll(".product-photo-grid-modal-overlay[data-category-photo-modal='1']").forEach((el) => el.remove());
+      if (categoryPhotoModalEscHandler) {
+        document.removeEventListener("keydown", categoryPhotoModalEscHandler);
+        categoryPhotoModalEscHandler = null;
+      }
+      if (categoryPhotoModalPasteHandler) {
+        document.removeEventListener("paste", categoryPhotoModalPasteHandler);
+        categoryPhotoModalPasteHandler = null;
+      }
+    }
+
+    function openCategoryPhotoGridModal() {
+      closeCategoryPhotoGridModal();
+      const overlay = document.createElement("div");
+      overlay.className = "product-photo-grid-modal-overlay";
+      overlay.setAttribute("data-category-photo-modal", "1");
+      const card = document.createElement("div");
+      card.className = "product-photo-grid-modal-card";
+      card.innerHTML = `
+        <div class="product-photo-grid-modal-head">
+          <div class="product-photo-grid-modal-title">Фото категории</div>
+          <button type="button" class="product-photo-grid-modal-close" aria-label="Закрыть"><i class="fas fa-times"></i></button>
+        </div>
+        <div class="product-photo-grid-modal-body">
+          <div class="product-photo-grid-modal-grid"></div>
+        </div>
+        <div class="product-photo-grid-modal-foot">
+          <button type="button" class="btn" data-role="close">Закрыть</button>
+        </div>
+      `;
+      const grid = card.querySelector(".product-photo-grid-modal-grid");
+      const modalBody = card.querySelector(".product-photo-grid-modal-body");
+      if (modalBody) {
+        const dropHint = document.createElement("div");
+        dropHint.className = "product-photo-grid-modal-drop-hint";
+        dropHint.textContent = "Перетащите фото сюда или отпустите для загрузки";
+        modalBody.appendChild(dropHint);
+      }
+      const isCategoryImageFile = (file) => {
+        if (!file) return false;
+        const type = String(file.type || "").toLowerCase();
+        if (type.startsWith("image/")) return true;
+        return /\.(jpe?g|png|webp|gif|bmp|avif)$/i.test(String(file.name || ""));
+      };
+      const parseCategoryImageUrlsFromText = (text) => {
+        if (!text || typeof text !== "string") return [];
+        const result = [];
+        const seen = new Set();
+        const push = (value) => {
+          const raw = String(value || "").trim();
+          if (!raw || seen.has(raw)) return;
+          const low = raw.toLowerCase();
+          if (!low.startsWith("data:image/") && !low.startsWith("http://") && !low.startsWith("https://")) return;
+          seen.add(raw);
+          result.push(raw);
+        };
+        text.split(/\r?\n/).forEach(push);
+        const imgSrcRe = /<img[^>]+src=["']([^"']+)["']/gi;
+        let match;
+        while ((match = imgSrcRe.exec(text)) !== null) push(match[1]);
+        return result;
+      };
+      const fetchCategoryImageAsFile = async (url, idx = 0) => {
+        try {
+          const response = await fetch(url, { credentials: "omit", mode: "cors" });
+          if (!response.ok) return null;
+          const blob = await response.blob();
+          if (!String(blob.type || "").toLowerCase().startsWith("image/")) return null;
+          const lowType = String(blob.type || "").toLowerCase();
+          const ext = lowType.includes("png")
+            ? "png"
+            : lowType.includes("webp")
+              ? "webp"
+              : lowType.includes("gif")
+                ? "gif"
+                : "jpg";
+          return new File([blob], `category-drop-${Date.now()}-${idx}.${ext}`, { type: blob.type || "image/jpeg" });
+        } catch {
+          return null;
+        }
+      };
+      const fileFromCategoryItemEntry = (item) => new Promise((resolve) => {
+        try {
+          if (!item || typeof item.webkitGetAsEntry !== "function") return resolve(null);
+          const entry = item.webkitGetAsEntry();
+          if (!entry || !entry.isFile || typeof entry.file !== "function") return resolve(null);
+          entry.file((file) => resolve(file || null), () => resolve(null));
+        } catch {
+          resolve(null);
+        }
+      });
+      const extractCategoryImagesFromDataTransfer = async (dt) => {
+        try {
+          if (!dt) return [];
+          const dtFiles = Array.from(dt.files || []).filter((file) => isCategoryImageFile(file));
+          if (dtFiles.length) return dtFiles;
+          const items = Array.from(dt.items || []);
+          const itemFiles = items.map((item) => item && item.getAsFile && item.getAsFile()).filter((file) => isCategoryImageFile(file));
+          if (itemFiles.length) return itemFiles;
+          const entryFiles = (await Promise.all(items.map((item) => fileFromCategoryItemEntry(item)))).filter((file) => isCategoryImageFile(file));
+          if (entryFiles.length) return entryFiles;
+          const payload = [];
+          const uriList = dt.getData && dt.getData("text/uri-list");
+          const plain = dt.getData && dt.getData("text/plain");
+          const html = dt.getData && dt.getData("text/html");
+          if (uriList) payload.push(uriList);
+          if (plain) payload.push(plain);
+          if (html) payload.push(html);
+          const urls = parseCategoryImageUrlsFromText(payload.join("\n"));
+          if (!urls.length) return [];
+          const fetched = await Promise.all(urls.slice(0, 1).map((url, idx) => fetchCategoryImageAsFile(url, idx)));
+          return fetched.filter((file) => isCategoryImageFile(file));
+        } catch {
+          return [];
+        }
+      };
+      const extractCategoryImagesFromClipboard = (clipboardData) => {
+        try {
+          if (!clipboardData) return [];
+          const direct = Array.from(clipboardData.files || []).filter((file) => isCategoryImageFile(file));
+          if (direct.length) return direct;
+          const items = Array.from(clipboardData.items || []);
+          return items.map((item) => item && item.getAsFile && item.getAsFile()).filter((file) => isCategoryImageFile(file));
+        } catch {
+          return [];
+        }
+      };
+      const renderGrid = () => {
+        const iconValue = getCategoryIconValue();
+        const iconSize = Number(categoryIconSizeCache[iconValue] || 0);
+        const sizeLabel = formatCategoryIconSize(iconSize);
+        const photoHtml = iconValue
+          ? `
+            <div class="product-photo-grid-modal-item" data-photo-idx="0">
+              <div class="product-photo-grid-modal-tile">
+                <img src="${escapeHtml(iconValue)}" alt="">
+                <button type="button" class="product-photo-grid-modal-remove" data-role="remove-photo" aria-label="Удалить фото"><i class="fas fa-times"></i></button>
+              </div>
+              <div class="product-photo-grid-modal-size">${escapeHtml(sizeLabel)}</div>
+            </div>
+          `
+          : "";
+        const addTileHtml = `<button type="button" class="product-photo-grid-modal-tile product-photo-grid-modal-tile--add" data-role="add-photo" aria-label="Добавить фото"><i class="fas fa-plus"></i></button>`;
+        if (grid) grid.innerHTML = photoHtml + addTileHtml;
+        if (iconValue && categoryIconSizeCache[iconValue] === undefined) {
+          fetchCategoryIconSize(iconValue).then(() => {
+            if (getCategoryIconValue() === iconValue && document.body.contains(card)) renderGrid();
+          });
+        }
+      };
+      const uploadFiles = async (files) => {
+        const selected = Array.from(files || []).filter((file) => isCategoryImageFile(file)).slice(0, 1);
+        if (!selected.length) return;
+        const result = await apiUploadImages(selected);
+        const url = Array.isArray(result?.urls) ? result.urls[0] : "";
+        if (!url) throw new Error("UPLOAD_ERROR");
+        const size = Array.isArray(result?.sizes) ? Number(result.sizes[0] || 0) : 0;
+        if (size > 0) categoryIconSizeCache[url] = size;
+        setCategoryIconValue(url);
+        renderGrid();
+      };
+      const close = () => closeCategoryPhotoGridModal();
+
+      overlay.appendChild(card);
+      document.body.appendChild(overlay);
+      renderGrid();
+
+      card.querySelector(".product-photo-grid-modal-close")?.addEventListener("click", close);
+      card.querySelector('[data-role="close"]')?.addEventListener("click", close);
+      overlay.addEventListener("click", (event) => {
+        if (event.target === overlay) close();
+      });
+      card.addEventListener("click", async (event) => {
+        if (event.target.closest('[data-role="remove-photo"]')) {
+          setCategoryIconValue("");
+          renderGrid();
+          return;
+        }
+        if (event.target.closest('[data-role="add-photo"]') && ui.iconFileInput) {
+          ui.iconFileInput.click();
+        }
+      });
+      let categoryDragDepth = 0;
+      const hasCategoryExternalPayload = (dt) => {
+        if (!dt) return false;
+        const types = Array.from(dt.types || []).map((type) => String(type));
+        if (dt.files && dt.files.length > 0) return true;
+        return (
+          types.includes("Files") ||
+          types.includes("application/x-moz-file") ||
+          types.includes("public.file-url") ||
+          types.includes("text/uri-list") ||
+          types.includes("text/html") ||
+          types.includes("text/plain")
+        );
+      };
+      const clearCategoryDragState = () => {
+        categoryDragDepth = 0;
+        card.classList.remove("is-file-drag-over");
+      };
+      const onCategoryDragEnter = (event) => {
+        if (!hasCategoryExternalPayload(event.dataTransfer)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        categoryDragDepth += 1;
+        card.classList.add("is-file-drag-over");
+      };
+      const onCategoryDragOver = (event) => {
+        if (!hasCategoryExternalPayload(event.dataTransfer)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+        card.classList.add("is-file-drag-over");
+      };
+      const onCategoryDragLeave = (event) => {
+        if (!hasCategoryExternalPayload(event.dataTransfer)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        categoryDragDepth = Math.max(0, categoryDragDepth - 1);
+        if (!categoryDragDepth) card.classList.remove("is-file-drag-over");
+      };
+      const onCategoryDrop = async (event) => {
+        if (!hasCategoryExternalPayload(event.dataTransfer)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        clearCategoryDragState();
+        try {
+          const files = await extractCategoryImagesFromDataTransfer(event.dataTransfer);
+          if (!files.length) return;
+          await uploadFiles(files);
+        } catch {
+          showToast("Не удалось загрузить фото категории.");
+        }
+      };
+      overlay.addEventListener("dragenter", onCategoryDragEnter, true);
+      card.addEventListener("dragenter", onCategoryDragEnter, true);
+      overlay.addEventListener("dragover", onCategoryDragOver);
+      card.addEventListener("dragover", onCategoryDragOver);
+      overlay.addEventListener("dragleave", onCategoryDragLeave, true);
+      card.addEventListener("dragleave", onCategoryDragLeave, true);
+      overlay.addEventListener("drop", onCategoryDrop);
+      card.addEventListener("drop", onCategoryDrop);
+      categoryPhotoModalPasteHandler = (event) => {
+        const files = extractCategoryImagesFromClipboard(event.clipboardData);
+        if (!files.length) return;
+        event.preventDefault();
+        void uploadFiles(files).catch(() => {
+          showToast("Не удалось загрузить фото категории.");
+        });
+      };
+      document.addEventListener("paste", categoryPhotoModalPasteHandler);
+      categoryPhotoModalEscHandler = (event) => {
+        if (event.key === "Escape") close();
+      };
+      document.addEventListener("keydown", categoryPhotoModalEscHandler);
+    }
+
     // Setup icon upload
     if (ui.iconUploadBtn && ui.iconFileInput) {
       ui.iconUploadBtn.addEventListener("click", () => ui.iconFileInput.click());
@@ -19025,6 +19415,40 @@ const isViewMode = state.comboPanel.mode === "view";
         const iconInput = form.querySelector("#ce_icon");
         if (iconInput) iconInput.value = "";
         renderIconPreview("");
+      });
+    }
+
+    if (ui.iconFileInput) {
+      ui.iconFileInput.addEventListener("change", async () => {
+        const files = Array.from(ui.iconFileInput.files || []);
+        ui.iconFileInput.value = "";
+        if (!files.length) return;
+        try {
+          const result = await apiUploadImages(files.slice(0, 1));
+          const url = Array.isArray(result?.urls) ? result.urls[0] : "";
+          if (!url) throw new Error("UPLOAD_ERROR");
+          const size = Array.isArray(result?.sizes) ? Number(result.sizes[0] || 0) : 0;
+          if (size > 0) categoryIconSizeCache[url] = size;
+          setCategoryIconValue(url);
+          if (document.querySelector(".product-photo-grid-modal-overlay[data-category-photo-modal='1']")) {
+            closeCategoryPhotoGridModal();
+            openCategoryPhotoGridModal();
+          }
+        } catch {
+          showToast("Не удалось загрузить фото категории.");
+        }
+      });
+    }
+
+    const categoryPreviewBox = wrapper.querySelector(".category-editor-preview");
+    if (categoryPreviewBox) {
+      categoryPreviewBox.setAttribute("role", "button");
+      categoryPreviewBox.setAttribute("tabindex", "0");
+      categoryPreviewBox.addEventListener("click", openCategoryPhotoGridModal);
+      categoryPreviewBox.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        openCategoryPhotoGridModal();
       });
     }
 
@@ -19071,22 +19495,65 @@ const isViewMode = state.comboPanel.mode === "view";
 
         try {
           let savedCategory = null;
+          let savedCategoryId = isEdit && cat ? Number(cat.id) : null;
           if (isEdit && cat) {
             await api(`/api/prod_categories/${cat.id}`, { method: "PUT", body: JSON.stringify(payload) });
             savedCategory = cat; // Keep reference to updated category
           } else {
             const res = await api("/api/prod_categories", { method: "POST", body: JSON.stringify(payload) });
             savedCategory = res; // New category from API response
+            savedCategoryId = Number(res?.id || 0);
+          }
+
+          if (canHaveSubcategories && savedCategoryId > 0) {
+            for (const [index, item] of draft.subcategories.entries()) {
+              const title = String(item.title || "").trim();
+              if (!title) continue;
+
+              if (item.id) {
+                const existing = state.categories.find((categoryItem) => Number(categoryItem.id) === Number(item.id));
+                if (!existing || title === String(existing.title || "").trim()) continue;
+                await api(`/api/prod_categories/${item.id}`, {
+                  method: "PUT",
+                  body: JSON.stringify({
+                    title,
+                    code: existing.code || "",
+                    icon: existing.icon || "",
+                    sort_order: existing.sort_order == null ? null : Number(existing.sort_order),
+                    is_active: Number(existing.is_active) ? 1 : 0,
+                    site_visibility: Number(existing.site_visibility) ? 1 : 0,
+                    cart_visibility: Number(existing.cart_visibility) ? 1 : 0,
+                    checkout_visibility: Number(existing.checkout_visibility) ? 1 : 0,
+                  }),
+                });
+                continue;
+              }
+
+              await api("/api/prod_categories", {
+                method: "POST",
+                body: JSON.stringify({
+                  parent_id: savedCategoryId,
+                  title,
+                  code: `subcat-${savedCategoryId}-${Date.now().toString(36)}-${index}`,
+                  is_active: 1,
+                  site_visibility: 1,
+                  cart_visibility: 0,
+                  checkout_visibility: 1,
+                }),
+              });
+            }
           }
           await refreshAll();
+          if (isEdit && cat && cat.id) {
+            editingCategories.delete(cat.id);
+          }
+          if (savedCategoryId > 0) {
+            savedCategory = state.categories.find((categoryItem) => Number(categoryItem.id) === savedCategoryId) || savedCategory;
+          }
           // Update navigation state with saved category reference
           navigationState.category = savedCategory;
           
           // Remove from editing state after successful save
-          if (isEdit && cat && cat.id) {
-            editingCategories.delete(cat.id);
-          }
-          
           // For new categories, replace temporary tab with real one
           if (!isEdit && savedCategory && savedCategory.id) {
             replaceTabKey(tabKey, {
@@ -19107,6 +19574,10 @@ const isViewMode = state.comboPanel.mode === "view";
                 }
               },
             });
+          }
+
+          if (savedCategory && savedCategory.id) {
+            showCategoryDetails(savedCategory);
           }
           
           return true;

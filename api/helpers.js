@@ -262,10 +262,13 @@ async function nextSortOrderForCategory(db, tenantId, categoryId, step = 10) {
   return Number(rows?.[0]?.m || 0) + step;
 }
 
-async function nextSortOrderForCategories(db, tenantId, step = 10) {
+async function nextSortOrderForCategories(db, tenantId, step = 10, parentId = null) {
+  const hasParent = Number.isFinite(Number(parentId)) && Number(parentId) > 0;
   const [rows] = await db.query(
-    'SELECT COALESCE(MAX(sort_order), 0) AS m FROM prod_categories WHERE tenant_id=?',
-    [tenantId]
+    `SELECT COALESCE(MAX(sort_order), 0) AS m
+     FROM prod_categories
+     WHERE tenant_id=? AND ${hasParent ? 'parent_id=?' : 'parent_id IS NULL'}`,
+    hasParent ? [tenantId, Number(parentId)] : [tenantId]
   );
   return Number(rows?.[0]?.m || 0) + step;
 }

@@ -12059,7 +12059,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     const [rows] = await db.query(
       `SELECT id, tenant_id, code, title, icon, site_visibility, is_active, sort_order
        FROM prod_categories
-       WHERE tenant_id=? AND is_active=1 AND site_visibility=1
+       WHERE tenant_id=? AND parent_id IS NULL AND is_active=1 AND site_visibility=1
        ORDER BY sort_order ASC, id ASC`,
       [tenantId]
     );

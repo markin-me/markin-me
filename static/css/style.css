@@ -16055,6 +16055,17 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   place-items:center;
   overflow:hidden;
 }
+.category-editor-preview[role="button"]{
+  cursor:pointer;
+}
+.category-editor-preview[role="button"]:hover{
+  border-color:rgba(255, 122, 0, 0.45);
+}
+.category-editor-preview[role="button"]:focus-visible{
+  outline:none;
+  border-color:var(--color-primary);
+  box-shadow:0 0 0 2px rgba(255, 122, 0, 0.12);
+}
 
 .category-editor-img{
   width:100%;
@@ -16066,6 +16077,51 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
 .category-editor-actions{
   display:grid;
   gap:8px;
+}
+
+.category-editor-subcategories{
+  display:grid;
+  gap:8px;
+  grid-column:1 / -1;
+}
+
+.category-editor-subcategory-list{
+  display:grid;
+  gap:8px;
+}
+
+.category-editor-subcategory-row{
+  display:grid;
+  grid-template-columns:minmax(0, 1fr) 40px;
+  gap:8px;
+}
+
+.category-editor-subcategory-row.is-saved{
+  grid-template-columns:minmax(0, 1fr);
+}
+
+.category-editor-subcategory-remove{
+  width:40px;
+  height:40px;
+  border:1px solid var(--color-border);
+  border-radius:50%;
+  background:var(--color-surface-2);
+  color:var(--color-text);
+  cursor:pointer;
+}
+
+.category-editor-subcategory-add{
+  width:100%;
+  min-height:40px;
+  border:1px dashed var(--color-primary);
+  border-radius:14px;
+  background:transparent;
+  color:var(--color-primary);
+  cursor:pointer;
+}
+
+.category-editor-subcategory-add:hover{
+  background:rgba(255, 122, 0, 0.06);
 }
 
 @media (max-width:640px){

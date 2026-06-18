@@ -530,7 +530,7 @@
           <div class="product-photo-placeholder" id="ceIconPlaceholder">Нет изображения</div>
         </div>
         <input id="ceIconFile" type="file" accept="image/*" class="hidden" />
-        <div class="category-editor-actions">
+        <div class="category-editor-actions hidden">
           <button class="btn" type="button" id="ceIconUploadBtn">
             <i class="fas fa-image"></i> Загрузить
           </button>
@@ -571,7 +571,16 @@
             <span class="switch-text">Показывать при оформлении заказа</span>
           </label>
         </div>
+
       </div>
+    </div>
+
+    <div class="category-editor-subcategories hidden" data-category-subcategories>
+      <label class="field-label">Подкатегории</label>
+      <div class="category-editor-subcategory-list" data-category-subcategory-list></div>
+      <button class="category-editor-subcategory-add" type="button" data-category-subcategory-add aria-label="Добавить подкатегорию">
+        <i class="fas fa-plus" aria-hidden="true"></i>
+      </button>
     </div>
 
     <input id="ce_code" name="code" type="hidden" />
