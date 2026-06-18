@@ -27,6 +27,7 @@ import type { GestureResponderEvent, NativeScrollEvent, NativeSyntheticEvent } f
 import type { RouteProp } from '@react-navigation/native';
 import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import type { MainTabParamList, RootStackParamList } from '../../app/navigation/routes';
 import { routes } from '../../app/navigation/routes';
@@ -1915,6 +1916,7 @@ const CategoryChipsBar = memo(forwardRef<CategoryChipsBarHandle, CategoryChipsBa
 export function CatalogPage() {
   const navigation = useNavigation<CatalogNavigation>();
   const route = useRoute<CatalogRoute>();
+  const safeAreaInsets = useSafeAreaInsets();
   const { width: screenWidth } = useWindowDimensions();
   const listRef = useRef<FlatList<CatalogListItem>>(null);
   const categoryChipsBarRef = useRef<CategoryChipsBarHandle>(null);
@@ -3393,7 +3395,10 @@ export function CatalogPage() {
         <Animated.View
           style={[
             styles.chipsOverlay,
-            { transform: [{ translateY: categoryOverlayTranslateY }] },
+            {
+              top: safeAreaInsets.top,
+              transform: [{ translateY: categoryOverlayTranslateY }],
+            },
           ]}
           onTouchStart={beginCategoryOverlayTouch}
           onMoveShouldSetResponderCapture={shouldCaptureCategoryOverlayMove}
